@@ -761,3 +761,301 @@ pattern_rectangular(doc, sketch_id, entities, dx, dy, nx, ny) -> PatternId
   外のログを直接 `replay(document)` すると、作り直しがどのログを見るべきか決められないので
   **例外で止まる**（黙って別物の文書を作らないため）。M0のREADMEが書いている
   `doc = Document(); doc.log = OpLog.from_json(...); doc.log.replay(doc)` が正しい使い方。
+
+---
+
+# M3.5 — パーツ分解・可視性・差分送信のAPI契約（2026-08-11追記）
+
+`tests/test_import_split.py` / `tests/test_visibility.py` / `tests/test_incremental_update.py`
+がM3.5の契約。次タスク（M3.5ロジックの実装）は**これを全部緑にすることだけ**を目標にする。
+上のM0・M2・M3の節は当時のまま。
+
+## 何を直しているのか（実機で測った問題・2026-08-10）
+
+本人がM1のビューアでPCケースを操作した実測（`measure_log.jsonl`）:
+
+| モデル | 面数 | kernel(OCCT) | 幾何更新 合計 |
+|---|---|---|---|
+| 小さい部品 | 57 | 42–48ms | 107–113ms |
+| **PCケース** | **2895–2971** | **4326–5101ms** | **6602–7275ms** |
+
+加えて**ピック失敗12回／押し出し7回（失敗率63%）**。所見は「押し出しをEnterしてから反映まで
+5秒くらいかかる」「選択と押し出し自体は問題ない」「パーツごとの表示・非表示が実装されれば
+すべての面を選択できるようになるはず」。
+
+原因は `import_step` が **STEPを1つのBodyとして読んでいる**こと（`OneShape()` の compound を
+そのまま `Body(...)` に入れていた）。`extrude_face` は2835面の塊全体にOCCT演算をかけ、更新の
+たびに全面を測り直す。実際に触るのは1部品の数十〜233面だけである。
+**性能の問題ではなくデータモデルの問題であり、ソリッドごとにBodyへ分ける1つの変更が
+「選択できない」「遅い」「パーツを消せない」を同時に解く。**
+
+## 現状（2026-08-11・テスト先行の段階）
+
+**193件収集・収集エラー0・45 failed / 148 passed。**
+
+- **M0〜M3の141件は1行も触っておらず、この3ファイルを除いた単独実行でも 141 passed。**
+- 新規52件のうち **45件が赤・7件が緑**。赤の内訳は
+  **44件が `AssertionError`／1件が `NotImplementedError`** で、`ImportError` や収集失敗に
+  よる赤は0件。M2の節と違って「赤は全件NotImplementedError」とは書けない理由:
+  分解は**既存の `import_step` の振る舞いそのものを変える**変更なので、スタブに差し替える
+  ことができない（差し替えるとM0のテストが即座に赤くなり、「着手前は緑」を保てない）。
+  多くのテストは「17個／27個のBodyがあること」という前提の検査で落ちており、これは
+  収集事故ではなく**M3.5が変える対象そのもの**を指している。M3が
+  `test_numbers_become_named_values_and_entities_hold_references` 等3件を
+  `AssertionError` で赤にしたのと同じ位置づけである。
+- **1件の `NotImplementedError`** は `test_a_client_that_knows_nothing_receives_every_body`
+  （分解に依存せず `Session.delta` へ直接届くため）。
+- 緑の7件は**分解前でも真になるもの**だけで、実装後も真であり続ける回帰ガードである:
+  `test_split_preserves_the_total_face_count`（4モデル分。1 Bodyのときは自明に成立する）、
+  `test_every_measured_model_is_split_into_its_solids[plate_1by1_24]`（単一ソリッド）、
+  `test_split_bodies_are_reference_bodies`、
+  `test_m35_modules_are_covered_by_the_import_boundary_scan`。
+
+## モジュール一覧（M3.5で増える分）
+
+| モジュール | 役割 | OCP直接import | build123d直接import |
+|---|---|---|---|
+| `duocad/selection.py` | 選択機構（何が選べるか。可視性を含む） | 禁止 | 禁止 |
+| `duocad/verbs/visibility.py` | verb `set_visible` | 禁止 | 禁止 |
+
+変更するモジュール: `duocad/io_step.py`（分解）、`duocad/server.py`（差分送信）、
+`duocad/verbs/extrude_face.py`（不可視Bodyの拒否）。
+
+## `duocad/io_step.py` — ソリッド分解
+
+```python
+import_step(doc: Document, path: str | Path) -> list[BodyId]      # 戻り値が変わる
+```
+
+**契約**:
+
+- STEPの**SOLIDごとに1つの `Body`** を作る（`kind="reference"` は変わらない、`visible=True`）。
+  数え方は `TopExp.MapShapes_s(shape, TopAbs_SOLID)`（重複除去）。
+- **単一ソリッドでも1要素のリストを返す**。「1個のときだけ素のBodyIdを返す」にしない
+  （戻り値の型が入力に依存すると、呼び出し側が必ず分岐を書く羽目になる）。
+- 名前は既定で `<ファイル名(拡張子なし)>_1` … `_N`。**一意かつ非空**であることは名前の
+  付け方によらない契約。STEP由来の部品名が容易に取れるなら使ってよいが、
+  **そのためにXDE/XCAFへ移行しない**。
+- **操作ログは1行**（`verb="import_step"`,
+  `args={"path": str(path), "body_ids": [BodyId, ...]}`）。undo 1回で全Bodyがまとめて消え、
+  redo/replay は**記録したIDをそのまま使って**同じ順序で復元する。
+- SOLIDが1つも無いSTEP（面・シェルだけ）は、形状全体を1つのBodyにする（0個のBodyを
+  黙って作らない）。**この経路のテストは無い**（手元の4モデルは全てSOLIDを持つ）ので、
+  実装者の判断として残す。
+
+### 実装時に**書き換えが要る既存テスト**（重要・このタスクでは触っていない）
+
+戻り値が `BodyId` → `list[BodyId]`、ログの `args` が `body_id` → `body_ids` に変わるため、
+下記は実装と同じコミットで直す必要がある。**この一覧は2026-08-11に呼び出し箇所を実際に
+数えたもの**で、テストを先に書いた時点では1行も触っていない（着手前・完了時とも141件は緑）:
+
+| ファイル | テスト／行 | 何が起きるか |
+|---|---|---|
+| `test_io_step.py` | `test_import_step_face_breakdown_matches_measured_reference` | `next(b for b in doc.bodies if b.id == body_id)` がリスト比較になる。面56は**17 Bodyの合計**として数え直す |
+| `test_io_step.py` | `test_import_step_creates_reference_body` | 同じ `next(...)` の形。全Bodyの `kind` を見る形へ |
+| `test_io_step.py` | `test_import_step_logs_path_and_body_id_in_args` | `args["body_id"]` → `args["body_ids"]` |
+| `test_io_step.py` | `test_export_step_roundtrip_preserves_face_count` | `== 56` は成立しない（activeは最後の1ソリッド＝3〜4面） |
+| `test_io_step.py` | `test_export_step_roundtrip_preserves_volume` / `test_export_stl_smaller_deviation_yields_larger_file` / `test_export_stl_works_from_reference_body` | 書き出し対象が「最後のソリッド」に静かに変わる。M0の節が申し送っていた `export_step(doc, path, body_ids=None)` を入れるのが自然なタイミング |
+| `test_oplog.py` | `test_undo_reverts_document_state`(48行) / `test_redo_reapplies_undone_operation`(61行) / `test_redo_does_not_record_the_operation_twice`(81行) | `len(doc.bodies) == 1` → 17（3件とも） |
+| `test_extrude_face.py` | `session` フィクスチャ（38–40行）、`len(document.bodies) == 2`（57行）、`reference_id`（58/71/114/352行）、**`face_count == 56`（62/121/367行）** | `make_editable_copy(document, reference_id)` にリストが渡る。`len == 2` → 18。分解後は1ソリッド3〜4面なので56面の前提が全部崩れる |
+| `test_m2_regressions.py` | 161–172行 | `created.id != reference_id`（リスト比較）、`len(document.bodies) == 2` → 18 |
+| `test_m3_regressions.py` | 48–50行 | `make_editable_copy(document, reference, ...)` にリストが渡る |
+| `duocad/server.py` | `Session.load_step`（122–123行） | テストではないが同じ理由で壊れる。`make_editable_copy(self.document, reference_id)` にリストが渡る |
+
+`web/`（アプリ層）も `state` の形が変わるので追随が要る。**パーツ一覧パネルは次々タスクの
+範囲**だが、既存のビューアが動かなくなる点は認識しておくこと。
+
+## `duocad/verbs/visibility.py` — 可視性のverb
+
+```python
+set_visible(doc: Document, body_id: BodyId, visible: bool) -> Operation
+```
+
+- `args={"body_id":.., "visible": bool, "previous": bool}`。`previous` は undo が
+  **元の値へ**戻すため（M3の `set_parameter` と同じ流儀）。これが無いと undo は
+  「Trueに戻す」しかできず、元から不可視だったBodyを勝手に表示してしまう。
+- 存在しない `body_id` は **`KeyError`**、documentにもログにも変更を残さない
+  （`Document.is_editable` / `set_active_body` / `remove_body` と揃える）。
+- **アプリ層のチェックボックスとして作らない。** コアのverbにすればログに載り、undoでき、
+  M4で自動的にMCPから使える（実装計画書§2「コアはUIが無くても機能的に完全」）。
+
+## `duocad/selection.py` — 可視性は選択機構の一部
+
+```python
+selectable_bodies(doc) -> list[BodyId]                       # visible なBodyだけ・bodies順
+select_face(doc, body_id, face_index) -> dict                # §3.5 の ShapeRef
+```
+
+- ShapeRef の形は `{"body": BodyId, "kind": "face", "index": int, "provenance": None}`。
+- `select_face` の失敗: 存在しないBody → `KeyError`、`visible=False` → `ValueError`、
+  1..`face_count` の外 → `ValueError`。
+- **`extrude_face` も不可視Bodyを拒否する**（`ValueError`・文書は不変）。
+  「見えないものは指せない」がアプリ層だけの約束だと、MCP（M4）や再生経路から
+  画面に出ていない部品を黙って変形できてしまう。実機の失敗率63%の直接の対処がこれである。
+
+## `duocad/server.py` — 差分送信
+
+```python
+Session.state() -> {
+    "units", "active_body_id",
+    "bodies": [{"body_id","name","kind","visible","revision",
+                "face_count","volume","geometry": <tessellate結果 | None>}, ...],
+    "log", "can_undo", "can_redo", "applied_count", "measure_log",
+}
+Session.body_revision(body_id) -> int      # 形状の差し替え**と可視性の変更**で増える
+Session.geometry(body_id) -> dict          # キャッシュ付き。**同じオブジェクトを返す**
+Session.delta(known_revisions) -> {"bodies": [<上と同じ形・版が変わった分だけ>],
+                                   "unchanged": [BodyId, ...]}
+Session.extrude(face_index, distance, client_op=None, body_id=None) -> applied
+                                           # applied["changed_bodies"] = [BodyId, ...]
+```
+
+**契約**:
+
+- `Session.load_step` は**ソリッドの数だけ押し出せるBody（`kind="solid"`）**を作る。
+  参照ボディをどう扱うか（残す／隠す／作らない）は**実装の自由**とし、テストは
+  「1ソリッドにつき1つ押し出せるBodyがある」ことだけを縛る。
+- **同時に見える（`visible` かつ `geometry` を持つ）Bodyは1ソリッドにつき1つ**。
+  参照ボディと編集用コピーの両方を可視のまま出すと、同じ形が二重に測られて二重に送られ、
+  手前の部品を消しても参照側のメッシュが残ってピック失敗が再発する。
+- **不可視のBodyは測らない**。`state()` / `delta()` は `geometry: None` を出し、
+  `Session.geometry()` は **`ValueError`** を送出する（低い層を直接呼ぶ実装が隠したBodyを
+  測り続ける穴を、入口の側で閉じる）。テセレーションはこの系で最も高い処理
+  （PCケース全体で892.5ms）で、参照ボディを隠して保持する実装を選んでも費用が増えない
+  ための逃げ道でもある。
+- **版（`body_revision`）は形状の差し替えと可視性の変更のどちらでも増える。**
+  形状だけの版にすると、`set_visible` したBodyは `delta()` で `unchanged` に入り、
+  **非表示にしたことがクライアントへ一度も届かない**（＝このマイルストーンの目的が
+  差分プロトコルの上で成立しない）。undoで形状が戻った場合も同じ経路で再送される。
+- **テセレーションの再利用は版ではなく「形状」で決まる。** `geometry()` は形状が変わらない
+  限り**前回と同じオブジェクト**を返す（可視性を切り替えただけで測り直さない）。
+  「同じ内容を作り直す」は再利用ではない（費用が変わらない）ので、テストは `is` で縛り、
+  加えて `kernel.tessellate` の**呼ばれた回数**でも縛る（押し出し1回につき1回）。
+- `delta()` で、クライアントが知っているのに `bodies` にも `unchanged` にも現れないIDは
+  **文書から消えた**ことを意味する（専用の `removed` は持たない）。
+
+## 実測値の出どころ（すべて2026-08-11にOCPで直接測った）
+
+タスクファイル記載の値を独立に再測し、**全て一致**した。
+
+| 値 | 測り方 |
+|---|---|
+| PC_case_20251122.step: **27ソリッド / 2835面 / 最大233・中央94・最小6** | `TopExp.MapShapes_s` の SOLID と FACE（どちらも重複除去） |
+| shelf_attachment_GD.step: **17ソリッド / 56面** | 同上 |
+| monitor_attachment_for_24inch_GD.step: **26ソリッド / 92面** | 同上 |
+| plate_1by1_24.step: **1ソリッド / 74面** | 同上（単一ソリッドが壊れないことの確認用） |
+| 233面ソリッド1個の `extrude_face_on_shape`: **面1 726.0ms / 面2 517.7ms / 面3 757.9ms** | `time.perf_counter()`。94面ソリッドなら 169.5 / 203.2 / 244.8ms |
+| 27ソリッド全部のテセレーション **892.5ms**、STEP読み込み **1272.6ms** | `kernel.tessellate(solid, 0.2)` を27回 |
+| 全Body分のJSON **6,003,765B**、1Bodyで最大 **600,764B（10.0%）** | `len(json.dumps(...))` |
+
+**閾値の決め方**（推測ではなく上の実測から引いている）:
+
+- 押し出し **1000ms未満** … タスクファイル指定。分解前の4326–5101msに対して4〜5倍の余裕だが、
+  **実測726msに対しては約1.4倍しかない**。落ちたときは「閾値が厳しすぎる」ではなく、
+  実測値と比べてどれだけ悪化したかを見ること。
+- 再送データ量 **全Body分の1/4未満** … 実測の最悪値10.0%に対して2.5倍の余裕。
+
+**計測値はテスト出力に必ず出す**（タスクファイルの要求「閾値の合否より数値の推移が重要」）。
+`print` は通ったテストでは既定で表示されないため、`MeasurementReport`（`UserWarning` の
+サブクラス）で **warnings summary** に出す。`-s` を付ければ `print` 側でも読める。
+
+## テスト一覧とタスクファイル項番の対応（M3.5）
+
+| タスクファイルの項番 | テスト |
+|---|---|
+| 1（27個のBody） | `test_import_split.py::test_pc_case_is_split_into_27_bodies`, `::test_every_measured_model_is_split_into_its_solids` |
+| 2（面数の合計2835） | `test_import_split.py::test_split_preserves_the_total_face_count`, `::test_pc_case_face_counts_per_body_match_the_measured_spread` |
+| 3（単一ソリッド） | `test_import_split.py::test_a_single_solid_step_still_yields_exactly_one_body` |
+| 4（独立した visible） | `test_import_split.py::test_each_body_has_its_own_visible_flag` |
+| 5（一意のidと名前） | `test_import_split.py::test_split_bodies_have_unique_ids_and_non_empty_names`, `::test_split_body_names_are_the_file_stem_with_a_1_based_index`（＋`::test_split_bodies_are_reference_bodies`） |
+| 6（ログ1行・undoで全消し） | `test_import_split.py::test_the_split_import_is_a_single_operation`, `::test_undo_removes_every_body_of_the_split_import`, `::test_redo_restores_every_body_with_the_same_ids`, `::test_replay_reproduces_every_body_with_the_same_ids` |
+| 7（set_visible が visible を変える） | `test_visibility.py::test_set_visible_hides_one_body_and_leaves_the_others`, `::test_set_visible_can_show_a_hidden_body_again` |
+| 8（ログとundo） | `test_visibility.py::test_set_visible_is_logged_with_the_previous_value`, `::test_set_visible_is_undoable`, `::test_undo_of_set_visible_restores_a_body_that_was_already_hidden`, `::test_set_visible_survives_redo_and_replay` |
+| 9（存在しないbody_id） | `test_visibility.py::test_set_visible_rejects_an_unknown_body_and_changes_nothing` |
+| 10（不可視は選択対象外） | `test_visibility.py::test_selectable_bodies_lists_every_visible_body_in_order`, `::test_hidden_bodies_are_not_selectable`, `::test_select_face_returns_a_shape_ref_for_a_visible_body`, `::test_select_face_refuses_a_hidden_body`, `::test_select_face_rejects_an_unknown_body_and_an_out_of_range_index`, `::test_extrude_face_refuses_a_hidden_body`, `::test_redo_of_an_extrusion_refuses_a_hidden_body` |
+| 11（変更のあったBodyだけ再送） | `test_incremental_update.py::test_only_the_changed_body_is_resent_after_an_extrusion`, `::test_a_client_that_knows_nothing_receives_every_body`, `::test_the_revision_of_an_untouched_body_does_not_move`, `::test_hiding_a_body_is_delivered_as_a_delta`, `::test_showing_a_body_again_is_delivered_as_a_delta`, `::test_undo_and_redo_of_set_visible_are_delivered_as_deltas`, `::test_undo_resends_the_restored_body` |
+| 12（テセレーションの再利用） | `test_incremental_update.py::test_unchanged_bodies_reuse_their_tessellation`, `::test_tessellation_is_not_recomputed_for_unchanged_bodies`, `::test_showing_a_body_again_does_not_retessellate_it` |
+| 13（1部品1000ms未満） | `test_incremental_update.py::test_extruding_one_part_of_the_pc_case_stays_under_1000ms`, `::test_pc_case_part_sizes_stay_within_the_measured_spread` |
+| 14（再送データ量） | `test_incremental_update.py::test_the_delta_after_an_extrusion_is_much_smaller_than_the_full_state` |
+| 前提（サーバの状態の形） | `test_incremental_update.py::test_load_step_makes_one_editable_body_per_solid`, `::test_load_step_does_not_show_the_same_solid_twice`, `::test_state_lists_every_body_separately`, `::test_hidden_bodies_are_not_tessellated`, `::test_geometry_refuses_a_hidden_body` |
+| 境界（新規ファイル） | `test_visibility.py::test_m35_modules_are_covered_by_the_import_boundary_scan` |
+
+## M3.5の決定（仕様書から導かれないもの・M0の「export対象」と同じ位置づけ）
+
+1. **`import_step` の戻り値を `list[BodyId]` にした**（単一ソリッドでも1要素のリスト）。
+   入力によって型が変わるAPIは呼び出し側に必ず分岐を強いる。代償は上の「書き換えが要る
+   既存テスト」で、これは**契約の変更に伴う正当な代償**であって、テストを緩めた結果ではない。
+2. **不可視のBodyは押し出せない**（項番10を `extrude_face` まで広げた）。項番10の文面は
+   「選択の対象にならない」だが、選択機構の一部であるなら**選択を受け取るverbも同じ判定に
+   従う**のが筋である。ここを緩めると、画面から消したつもりの部品がM4のMCPから黙って変形する。
+3. **`Session.load_step` の参照ボディの扱いは縛らない**。縛るのは「1ソリッドにつき1つ
+   押し出せるBodyがある」ことだけ。参照を残す／隠す／作らないは、**不可視のBodyを
+   テセレーションしない**という契約があれば費用に差が出ない。
+4. **面の添字をテストに決め打ちしない**。`first_extrudable_face()` で「最初に押し出せる面」を
+   探す。決め打ちにすると、分解の順序が変わっただけでテストが**別の面を押している**状態に
+   静かに退化する（`extrude_face_on_shape` は入力の形状を変更しないので試行を繰り返せる）。
+5. **`delta` に `removed` を持たせない**。`bodies` と `unchanged` の和集合が現在の全Bodyなので、
+   クライアントが知っているのにどちらにも無いIDが「消えた」を意味する。テストで裏取り
+   できない項目を契約に足さないための選択。
+
+## M3.5で**契約にしなかった**こと（範囲の明示）
+
+- **パーツ一覧パネル（UI）** … 次々タスク。ここはコアとサーバまで。
+- **MCPツールとしての登録** … M4。ただし `set_visible` をコアのverbにしてあるので、
+  M4では自動的に使えるようになる。
+- **STEP由来の部品名** … 使ってよいが必須にしない（XDE/XCAFへの移行はしない）。
+- **`export_step` の複数ボディ対応** … M0の節が申し送ったまま未解決。分解によって
+  「activeの1ソリッドだけ書き出す」が実質的な後退になるため、実装時に併せて判断すること。
+
+## M3.5のQAで足した契約（2026-08-11・cursor のレビュー指摘を反映）
+
+レビューは3ラウンド。1回目に major 3件・minor 6件、2回目に major 1件・minor 1件、
+3回目に major 1件の指摘があり、**全件を反映した**（テストは44件→52件）。
+指摘のうち3件は「全部緑にしても実問題が残る」種類のもので、契約側の誤りだった:
+
+- **major: 可視性が差分に載らない** … 初版は「版は形状が変わったときだけ増える」と決めて
+  いたが、`delta()` は版の不一致だけを送るので、`set_visible` の結果がクライアントへ
+  **一度も届かない**。パーツを消して奥の面を選ぶという目的そのものが差分の上で成立して
+  いなかった。版を「形状**または**可視性」に直し、
+  `test_hiding_a_body_is_delivered_as_a_delta` と
+  `test_showing_a_body_again_does_not_retessellate_it`（版と再利用の判定を分ける）を足した。
+- **major: 参照ボディと編集用コピーの二重表示** … 「1ソリッドにつき1つ押し出せるBody」
+  しか縛っておらず、両方を可視のまま出す実装を許していた。同じ形が二重に測られ二重に
+  送られ、手前を消しても参照側のメッシュが残る。
+  `test_load_step_does_not_show_the_same_solid_twice` を足した。
+- **major: undo後の再送とキャッシュ無効化が未契約** … 差分を押し出し方向にしか見ておらず、
+  undoしても画面が押し出し後のまま残る経路が緑のまま通る（M3で実際に起きた事故と同型）。
+  `test_undo_resends_the_restored_body` を足した。
+- **minor** … `_do_extrude_face`（redo/replay経路）の可視性判定
+  （`test_redo_of_an_extrusion_refuses_a_hidden_body`）、`Session.geometry()` の不可視Body
+  に対する挙動（`test_geometry_refuses_a_hidden_body`）、不可視Bodyを実際に測っていない
+  ことの検査（`test_hidden_bodies_are_not_tessellated` に `kernel.tessellate` の spy を追加）、
+  上の「書き換えが要る既存テスト」の表の漏れ3件（`test_extrude_face.py` の56面前提・
+  `test_oplog.py` の3件目・`server.py::load_step`）、性能テストの計測区間の書き分け。
+
+2回目のレビューで追加された分:
+
+- **major: 再表示が差分に載らない** … 1回目の修正で「非表示」は届くようになったが、
+  **戻す方向を縛っていなかった**ため、「隠したときだけ版を上げる」実装でも全テストが通り、
+  消したパーツを画面へ戻せないまま緑になる。
+  `test_showing_a_body_again_is_delivered_as_a_delta` を足した。
+- **minor: redo拒否の対称性** … `test_redo_of_an_extrusion_refuses_a_hidden_body` が
+  「拒否される」ことしか見ておらず、可視に戻せば同じredoが通ることを確認していなかった
+  （＝そもそも押せない面を選んでいた場合でも緑になる）。後半に足した。
+
+3回目のレビューで追加された分:
+
+- **major: `set_visible` の undo/redo が差分に載らない** … 版を「verbを適用したとき」だけ
+  上げる実装（`_undo_set_visible` は `previous` に戻すだけ）でも全テストが通り、undoしても
+  画面から消えたままになる。`test_undo_and_redo_of_set_visible_are_delivered_as_deltas`
+  を足した。
+
+**この3ラウンドで同じ形の穴が経路を変えて3回出た**（非表示→再表示→undo/redo）。
+根本は「版を経路ごとに数え上げる」という発想そのものなので、`Session.body_revision` の
+docstringに **版は経路ではなく状態（`(形状オブジェクトの同一性, visible)` の組）から導くこと**
+と明記した。経路の数え上げを続ける限り、次のverbでまた同じ穴が開く。
+
+**QAの実施者について（2026-08-11の実情）**: `gpt-5.6-sol-high` と `gpt-5.6-terra-high`
+（cursorの個別モデル指定枠）は当日どちらも使用量制限に達していて呼べず、**cursor の
+auto 枠**でレビューした。auto は Composer/Grok 系へルーティングされるため「実行者
+（Claude）と別モデル」という条件は満たしている。

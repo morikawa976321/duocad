@@ -31,6 +31,22 @@
 成立しない。今は人間1人だが、経路は今作っておく)。操作を出したクライアントにだけ `applied`
 を付け、それ以外には同じ `state` だけを送る。
 
+**M3.5(2026-08-11)で `state` は部品ごとの配列になる — まだ未実装**。契約は
+`tests/test_incremental_update.py` と tests/README.md の「M3.5」節が正:
+
+    state() -> {
+      "units", "active_body_id",
+      "bodies": [{"body_id","name","kind","visible","revision",
+                  "face_count","volume","geometry": <tessellate結果|None>}, ...],
+      "log", "can_undo", "can_redo", "applied_count", "measure_log",
+    }
+    delta(known_revisions) -> {"bodies": [<上と同じ形・版が変わった分だけ>],
+                               "unchanged": [BodyId, ...]}
+
+現在の `state()` は単一ボディ前提(`body_id` / `geometry` を平らに持つ)のままで、
+`tests/test_incremental_update.py::test_state_lists_every_body_separately` が赤で
+それを指している。
+
 **計測ログ(measure_log.jsonl)はサーバが書く**。時刻はブラウザの単調時計
 (`performance.now()`)が正で、区間のms換算はここで一括して行う(クライアントとサーバで
 区間の定義が食い違わないようにするため)。5つの時刻のどれかが欠けた行は**受け付けない**
@@ -60,7 +76,7 @@ from .document import Document
 from .verbs import extrude_face, make_editable_copy
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_STEP = Path(r"C:\Users\tm976\mf\3d-models\shelf_attachment_GD.step")
+DEFAULT_STEP = Path(r"C:\Users\tm976\mf\3d-models\mATX_PC_case_20251122\PC_case_20251122.step")
 DEFAULT_WEB_DIST = REPO_ROOT / "web" / "dist"
 DEFAULT_MEASURE_LOG = REPO_ROOT / "measure_log.jsonl"
 
@@ -149,9 +165,90 @@ class Session:
             "measure_log": str(self.measure_log_path),
         }
 
+    # ---------------------------------------------------------------- M3.5: 差分送信
+    def body_revision(self, body_id: str) -> int:
+        """そのBodyの**版**。クライアントに見えるものが変わるたびに増える。
+
+        増えるのは **形状の差し替え**(押し出し・undo・redo)と **可視性の変更** の両方。
+        差分送信の鍵で、クライアントは受け取った版を覚えて次の `delta()` に渡す。
+
+        **版は「経路」ではなく「状態」から導くこと。** 「押し出したら上げる」「隠したら
+        上げる」と経路ごとに数え上げる実装は、undo・redo・再生・将来のverbのぶんを必ず
+        取りこぼす(2026-08-11のQAが同じ穴を3ラウンド続けて別の経路で見つけた)。
+        `(形状オブジェクトの同一性, visible)` の組が変わったら版が変わる、という形にすれば
+        経路が増えても自動的に追随する。
+
+        **可視性を版から外してはならない**(2026-08-11のQA指摘)。形状だけの版にすると、
+        `set_visible` したBodyは `delta()` で `unchanged` に入り、**非表示にしたことが
+        クライアントへ一度も届かない** — 「パーツを消して奥の面を選ぶ」という、この
+        マイルストーンの目的そのものが差分プロトコルの上で成立しなくなる。
+
+        テセレーションの再利用は版ではなく**形状**で決まる(`geometry` 参照)。
+        可視性だけが変わったときに測り直してはいけない。
+        """
+        raise NotImplementedError(
+            "M3.5: body_revision は未実装。"
+            "形状の差し替えと可視性の変更のどちらでも増える整数を返すこと"
+        )
+
+    def geometry(self, body_id: str) -> dict:
+        """1Bodyのテセレーション結果(**キャッシュ付き**)。
+
+        **形状**が変わっていない限り**前回と同じオブジェクトを返す**(再テセレーションしない)。
+        版(`body_revision`)ではなく形状で判定する — 可視性を変えただけで測り直すと、
+        表示を切り替えるたびにPCケース全体で892.5msを払うことになる。
+        PCケースは27部品2835面で、1部品を押し出すたびに全部を測り直すと6.6–7.3秒かかる
+        (2026-08-10実測)。再利用こそがこのメソッドの存在理由なので、
+        「同じ結果を作り直して返す」は契約違反である。
+
+        **不可視のBodyは測らない** — `visible=False` のBodyに対しては ValueError を送出する
+        (黙って測ると、隠したのに費用だけ払い続ける穴が静かに残る)。
+        """
+        raise NotImplementedError(
+            "M3.5: geometry は未実装。"
+            "形状が変わらない限り同じ dict オブジェクトを返し、不可視Bodyは ValueError"
+        )
+
+    def delta(self, known_revisions: dict) -> dict:
+        """クライアントが持っている版との差分だけを返す。
+
+        戻り値:
+            {
+              "bodies":    [<state()の bodies と同じ形。ただし版が変わったBodyだけ>],
+              "unchanged": [BodyId, ...],   # 版が一致したBody
+            }
+
+        `known_revisions` に無いBodyId(＝クライアントが知らないBody)は必ず `bodies` に入る。
+        逆に、クライアントが知っているのに `bodies` にも `unchanged` にも現れないIDは
+        **文書から消えた**ことを意味する(undoでの消滅がこれ。専用の "removed" は持たない)。
+
+        版が可視性の変更でも増える(`body_revision` 参照)ので、`set_visible` の結果も
+        undoで戻った形状も、このメソッド1つで届く。
+        """
+        raise NotImplementedError(
+            "M3.5: delta は未実装。"
+            "known_revisions と版が違うBodyだけを bodies に入れ、残りを unchanged に入れること"
+        )
+
     # ---------------------------------------------------------------- 操作
-    def extrude(self, face_index: int, distance: float, client_op: Optional[int]) -> dict:
-        """面を押し出す。サーバ側の所要msを控えて `applied` を返す。"""
+    def extrude(
+        self,
+        face_index: int,
+        distance: float,
+        client_op: Optional[int] = None,
+        body_id: Optional[str] = None,
+    ) -> dict:
+        """面を押し出す。サーバ側の所要msを控えて `applied` を返す。
+
+        M3.5で `body_id` を足した(STEPが部品ごとに分解されるので、どのBodyの面かを
+        指定できないと27部品のうち1つを選べない)。既定はアクティブボディ。
+        `applied` は `"changed_bodies": [BodyId, ...]` を持つ(差分送信の対象)。
+        """
+        if body_id is not None:
+            raise NotImplementedError(
+                "M3.5: Bodyを指定した押し出しは未実装。"
+                "指定されたBodyの面を押し出し、applied に changed_bodies を入れること"
+            )
         started = time.perf_counter()
         operation = extrude_face(self.document, int(face_index), float(distance))
         elapsed_ms = (time.perf_counter() - started) * 1000.0

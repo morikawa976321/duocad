@@ -10,8 +10,9 @@ M1でビューポート(WebSocketサーバ + web/)と面の押し出しが載る
     sketch   — スケッチ(M2)。Sketch/Entity/Patternのデータモデルとスケッチの4 verb
     parameters — 名前つきの寸法値(M3)。set_parameter と値の登録・解決
     region   — 領域(M2)。Region/RegionRefと領域検出
+    selection — 選択機構(M3.5)。可視性を含む「何が選べるか」の判定
     verbs    — verb層(1 verb 1モジュール)。M1で extrude_face / make_editable_copy、
-               M2で extrude、M3で pattern_rectangular
+               M2で extrude、M3で pattern_rectangular、M3.5で set_visible
     server   — WebSocketサーバ + web/dist の静的配信(アプリ層との唯一の接点)
 
 パッケージのimport時に**verbを定義したモジュールを読み込む**。oplogのレジストリ

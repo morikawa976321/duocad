@@ -13,5 +13,12 @@ from .extrude import extrude  # noqa: F401
 from .extrude_face import extrude_face  # noqa: F401
 from .make_editable_copy import make_editable_copy  # noqa: F401
 from .pattern import pattern_rectangular  # noqa: F401
+from .visibility import set_visible  # noqa: F401
 
-__all__ = ["extrude", "extrude_face", "make_editable_copy", "pattern_rectangular"]
+__all__ = [
+    "extrude",
+    "extrude_face",
+    "make_editable_copy",
+    "pattern_rectangular",
+    "set_visible",
+]
