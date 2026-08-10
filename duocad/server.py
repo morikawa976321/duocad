@@ -31,7 +31,7 @@
 成立しない。今は人間1人だが、経路は今作っておく)。操作を出したクライアントにだけ `applied`
 を付け、それ以外には同じ `state` だけを送る。
 
-**M3.5(2026-08-11)で `state` は部品ごとの配列になる — まだ未実装**。契約は
+**M3.5(2026-08-11)で `state` は部品ごとの配列になった**。契約は
 `tests/test_incremental_update.py` と tests/README.md の「M3.5」節が正:
 
     state() -> {
@@ -42,10 +42,6 @@
     }
     delta(known_revisions) -> {"bodies": [<上と同じ形・版が変わった分だけ>],
                                "unchanged": [BodyId, ...]}
-
-現在の `state()` は単一ボディ前提(`body_id` / `geometry` を平らに持つ)のままで、
-`tests/test_incremental_update.py::test_state_lists_every_body_separately` が赤で
-それを指している。
 
 **計測ログ(measure_log.jsonl)はサーバが書く**。時刻はブラウザの単調時計
 (`performance.now()`)が正で、区間のms換算はここで一括して行う(クライアントとサーバで
@@ -73,15 +69,12 @@ from websockets.asyncio.server import serve
 
 from . import io_step, kernel, query
 from .document import Document
-from .verbs import extrude_face, make_editable_copy
+from .verbs import extrude_face, make_editable_copy, set_visible
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STEP = Path(r"C:\Users\tm976\mf\3d-models\mATX_PC_case_20251122\PC_case_20251122.step")
 DEFAULT_WEB_DIST = REPO_ROOT / "web" / "dist"
 DEFAULT_MEASURE_LOG = REPO_ROOT / "measure_log.jsonl"
-
-#: 文書の土台を作る操作。undoの対象外にする(取り消すと編集対象が消えて画面が死ぬ)。
-SETUP_VERBS = ("import_step", "make_editable_copy")
 
 #: 計測1行に必須の時刻(欠けたら受け付けない)。意味は MEASURE.md が正。
 MEASURE_TIMESTAMPS = (
@@ -108,24 +101,46 @@ class Session:
         self.warnings: list[str] = []
         self._server_ms: dict[int, float] = {}
         self._applied_count = 0
+        self._revision_state: dict = {}    # body_id -> (id(shape), visible) 直近の状態
+        self._revision_counter: dict = {}  # body_id -> 現在の版(int)
+        self._geometry_cache: dict = {}    # body_id -> (shape, tessellate結果)
+        self._setup_floor_seq = 0  # load_step が積んだ最後のseq(これ以下はundoの対象外)
         if step_path is not None:
             self.load_step(step_path)
 
     # ---------------------------------------------------------------- 文書の組み立て
-    def load_step(self, path: Path) -> str:
-        """STEPを参照ボディとして読み、編集用のソリッドを作ってアクティブにする。
+    def load_step(self, path: Path) -> list:
+        """STEPを読み、ソリッドごとに参照ボディ+編集用コピーを作る。
 
-        参照ボディ(`kind="reference"`)は押し出せないので、編集用のコピーを必ず作る
-        (`make_editable_copy` の docstring に理由がある)。どちらの操作もログに載るので、
-        保存したログを再生すればこの状態から復元できる。
+        参照ボディは編集用コピーを作った直後に `set_visible(..., False)` で隠す。
+        **verb経由にしている**(直接 `body.visible = False` を代入しない) — そうしないと、
+        保存したログ(`document.log.to_json()`)を再生したときに「参照を隠した」という
+        操作が失われ、参照・編集用の両方が可視のまま復元されてしまう(2026-08-11のQA指摘)。
+        同じ形が二重にテセレーション・二重に送信されるのを避けるため
+        (1ソリッドにつき同時に見えるのは1つ、が契約)。
+
+        **土台(undoの対象外にする範囲)はverb名ではなくseqの下限で区切る**
+        (`_setup_floor_seq`。`load_step` が積んだ最後のseq)。verb名で「末尾が
+        `import_step`/`make_editable_copy`/`set_visible` のどれか」と判定する実装だと、
+        `set_visible` はこの後(将来のMCP等から)ユーザー操作としても呼ばれうるため、
+        文書に対して1回でも呼ぶと末尾が `set_visible` になって以後の `undo` が誤って
+        拒否される(2026-08-11のQA指摘)。seqの下限なら、土台の後に積まれた操作だけが
+        正しくundoできる。
         """
-        reference_id = io_step.import_step(self.document, str(path))
-        return make_editable_copy(self.document, reference_id)
+        reference_ids = io_step.import_step(self.document, str(path))
+        editable_ids = []
+        for reference_id in reference_ids:
+            editable_id = make_editable_copy(self.document, reference_id)
+            set_visible(self.document, reference_id, False)
+            editable_ids.append(editable_id)
+        entries = self.document.log.entries
+        self._setup_floor_seq = entries[-1].seq if entries else 0
+        return editable_ids
 
     def _at_setup_floor(self) -> bool:
         """次のundoが文書の土台(部品の読み込み・編集用ボディ)に当たるか。"""
         entries = self.document.log.entries
-        return bool(entries) and entries[-1].verb in SETUP_VERBS
+        return bool(entries) and entries[-1].seq <= self._setup_floor_seq
 
     def body(self):
         """編集対象のボディ(アクティブ)。無ければ RuntimeError。"""
@@ -136,29 +151,16 @@ class Session:
 
     # ---------------------------------------------------------------- 状態
     def state(self) -> dict:
-        """アプリ層へ渡す全状態(形状はテセレーション済み)。"""
-        body = self.body()
-        described = query.describe_shape(body.shape)
-        geometry = kernel.tessellate(body.shape, self.deviation)
-        if geometry["untriangulated"]:
-            self.warnings.append(
-                f"三角形分割が取れなかった面: {geometry['untriangulated']}(画面に出ません)"
-            )
+        """アプリ層へ渡す全状態。bodiesは配列(部品ごと)。"""
+        active = self.document.active_body()
         return {
             "units": self.document.units,
-            "body_id": body.id,
-            "body_name": body.name,
-            "face_count": described["face_count"],
-            "edge_count": described["edge_count"],
-            "faces_by_type": described["faces_by_type"],
-            "volume": query.volume(body.shape),
-            "geometry": geometry,
+            "active_body_id": active.id if active is not None else None,
+            "bodies": [self._body_state(body) for body in self.document.bodies],
             "log": [
                 {"seq": operation.seq, "verb": operation.verb, "args": operation.args}
                 for operation in self.document.log.entries
             ],
-            # 土台の操作(下記 undo)は取り消せないので、そこまで戻ったら「取り消せない」を返す。
-            # ログ上はまだ操作が残っているが、押せば必ず拒否されるボタンを押せる状態にしない。
             "can_undo": self.document.log.can_undo and not self._at_setup_floor(),
             "can_redo": self.document.log.can_redo,
             "applied_count": self._applied_count,
@@ -167,50 +169,39 @@ class Session:
 
     # ---------------------------------------------------------------- M3.5: 差分送信
     def body_revision(self, body_id: str) -> int:
-        """そのBodyの**版**。クライアントに見えるものが変わるたびに増える。
-
-        増えるのは **形状の差し替え**(押し出し・undo・redo)と **可視性の変更** の両方。
-        差分送信の鍵で、クライアントは受け取った版を覚えて次の `delta()` に渡す。
-
-        **版は「経路」ではなく「状態」から導くこと。** 「押し出したら上げる」「隠したら
-        上げる」と経路ごとに数え上げる実装は、undo・redo・再生・将来のverbのぶんを必ず
-        取りこぼす(2026-08-11のQAが同じ穴を3ラウンド続けて別の経路で見つけた)。
-        `(形状オブジェクトの同一性, visible)` の組が変わったら版が変わる、という形にすれば
-        経路が増えても自動的に追随する。
-
-        **可視性を版から外してはならない**(2026-08-11のQA指摘)。形状だけの版にすると、
-        `set_visible` したBodyは `delta()` で `unchanged` に入り、**非表示にしたことが
-        クライアントへ一度も届かない** — 「パーツを消して奥の面を選ぶ」という、この
-        マイルストーンの目的そのものが差分プロトコルの上で成立しなくなる。
-
-        テセレーションの再利用は版ではなく**形状**で決まる(`geometry` 参照)。
-        可視性だけが変わったときに測り直してはいけない。
+        """そのBodyの版。**版は「経路」ではなく「状態」から導く** — 形状の同一性(id)とvisible
+        のタプルが前回の記録と違ったら+1する。押し出し・undo・redo・可視性変更のどれでも
+        自動的に効く(verbごとに数え上げない)。
         """
-        raise NotImplementedError(
-            "M3.5: body_revision は未実装。"
-            "形状の差し替えと可視性の変更のどちらでも増える整数を返すこと"
-        )
+        body = self._find_body(body_id)
+        key = (id(body.shape), body.visible)
+        if self._revision_state.get(body_id) != key:
+            self._revision_state[body_id] = key
+            self._revision_counter[body_id] = self._revision_counter.get(body_id, 0) + 1
+        return self._revision_counter[body_id]
 
     def geometry(self, body_id: str) -> dict:
-        """1Bodyのテセレーション結果(**キャッシュ付き**)。
+        """1Bodyのテセレーション結果(キャッシュ付き)。不可視Bodyは ValueError。
 
-        **形状**が変わっていない限り**前回と同じオブジェクトを返す**(再テセレーションしない)。
-        版(`body_revision`)ではなく形状で判定する — 可視性を変えただけで測り直すと、
-        表示を切り替えるたびにPCケース全体で892.5msを払うことになる。
-        PCケースは27部品2835面で、1部品を押し出すたびに全部を測り直すと6.6–7.3秒かかる
-        (2026-08-10実測)。再利用こそがこのメソッドの存在理由なので、
-        「同じ結果を作り直して返す」は契約違反である。
-
-        **不可視のBodyは測らない** — `visible=False` のBodyに対しては ValueError を送出する
-        (黙って測ると、隠したのに費用だけ払い続ける穴が静かに残る)。
+        キャッシュは**形状の同一性**で判定する(版ではない)。可視性だけを変えたときに
+        測り直すと、表示を切り替えるたびに高コストな再測定が走ってしまう。
         """
-        raise NotImplementedError(
-            "M3.5: geometry は未実装。"
-            "形状が変わらない限り同じ dict オブジェクトを返し、不可視Bodyは ValueError"
-        )
+        body = self._find_body(body_id)
+        if not body.visible:
+            raise ValueError(f"body {body_id!r} is not visible: 不可視Bodyは測らない")
+        cached = self._geometry_cache.get(body_id)
+        if cached is not None and cached[0] is body.shape:
+            return cached[1]
+        result = kernel.tessellate(body.shape, self.deviation)
+        if result["untriangulated"]:
+            self.warnings.append(
+                f"三角形分割が取れなかった面({body.name}): {result['untriangulated']}(画面に出ません)"
+            )
+        self._geometry_cache[body_id] = (body.shape, result)
+        return result
 
     def delta(self, known_revisions: dict) -> dict:
-        """クライアントが持っている版との差分だけを返す。
+        """クライアントが持っている版との差分だけを返す(未知のIDは必ずbodiesへ)。
 
         戻り値:
             {
@@ -221,14 +212,35 @@ class Session:
         `known_revisions` に無いBodyId(＝クライアントが知らないBody)は必ず `bodies` に入る。
         逆に、クライアントが知っているのに `bodies` にも `unchanged` にも現れないIDは
         **文書から消えた**ことを意味する(undoでの消滅がこれ。専用の "removed" は持たない)。
-
-        版が可視性の変更でも増える(`body_revision` 参照)ので、`set_visible` の結果も
-        undoで戻った形状も、このメソッド1つで届く。
         """
-        raise NotImplementedError(
-            "M3.5: delta は未実装。"
-            "known_revisions と版が違うBodyだけを bodies に入れ、残りを unchanged に入れること"
-        )
+        bodies_out = []
+        unchanged = []
+        for body in self.document.bodies:
+            current = self.body_revision(body.id)
+            if known_revisions.get(body.id) == current:
+                unchanged.append(body.id)
+            else:
+                bodies_out.append(self._body_state(body))
+        return {"bodies": bodies_out, "unchanged": unchanged}
+
+    def _find_body(self, body_id: str):
+        body = next((b for b in self.document.bodies if b.id == body_id), None)
+        if body is None:
+            raise KeyError(f"no such body: {body_id!r}")
+        return body
+
+    def _body_state(self, body) -> dict:
+        """1Bodyぶんの状態(stateとdeltaが共有する)。"""
+        return {
+            "body_id": body.id,
+            "name": body.name,
+            "kind": body.kind,
+            "visible": body.visible,
+            "revision": self.body_revision(body.id),
+            "face_count": kernel.face_count(body.shape),
+            "volume": query.volume(body.shape),
+            "geometry": self.geometry(body.id) if body.visible else None,
+        }
 
     # ---------------------------------------------------------------- 操作
     def extrude(
@@ -244,18 +256,14 @@ class Session:
         指定できないと27部品のうち1つを選べない)。既定はアクティブボディ。
         `applied` は `"changed_bodies": [BodyId, ...]` を持つ(差分送信の対象)。
         """
-        if body_id is not None:
-            raise NotImplementedError(
-                "M3.5: Bodyを指定した押し出しは未実装。"
-                "指定されたBodyの面を押し出し、applied に changed_bodies を入れること"
-            )
         started = time.perf_counter()
-        operation = extrude_face(self.document, int(face_index), float(distance))
+        operation = extrude_face(self.document, int(face_index), float(distance), body_id=body_id)
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         self._applied_count += 1
         if client_op is not None:
             self._server_ms[int(client_op)] = round(elapsed_ms, 3)
         provenance = operation.provenance or {}
+        changed_body_id = operation.args["body_id"]
         return {
             "verb": operation.verb,
             "seq": operation.seq,
@@ -264,6 +272,7 @@ class Session:
             "distance": float(distance),
             "after_face_index": provenance.get("after_face_index"),
             "server_ms": round(elapsed_ms, 3),
+            "changed_bodies": [changed_body_id],
         }
 
     def undo(self) -> dict:

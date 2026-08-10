@@ -45,7 +45,8 @@ def test_set_parameter_keeps_the_active_body():
     ここが移ると**書き出し先と編集先が黙って変わる**。
     """
     document = Document()
-    reference = io_step.import_step(document, STEP_PATH)
+    reference_ids = io_step.import_step(document, STEP_PATH)
+    reference = reference_ids[0]
     first = make_editable_copy(document, reference, name="A")
     make_editable_copy(document, reference, name="B")
     document.set_active_body(first)

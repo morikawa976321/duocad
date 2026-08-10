@@ -46,7 +46,7 @@ import math
 import os
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
-from OCP.BRep import BRep_Tool
+from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
 from OCP.BRepBuilderAPI import (
@@ -73,7 +73,7 @@ from OCP.StlAPI import StlAPI_Writer
 from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
 from OCP.TopExp import TopExp
 from OCP.TopLoc import TopLoc_Location
-from OCP.TopoDS import TopoDS, TopoDS_Shape
+from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
 from OCP.TopTools import TopTools_IndexedMapOfShape, TopTools_ListOfShape
 from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pnt, gp_Vec
 
@@ -1000,6 +1000,42 @@ def _face_vertices_inside_bbox_2d(
         ):
             return False
     return True
+
+
+# --------------------------------------------------------------------------------------
+# M3.5: ソリッド分解・複数形状の書き出し(2026-08-11)
+# --------------------------------------------------------------------------------------
+def split_solids(shape: "TopoDS_Shape") -> List["TopoDS_Shape"]:
+    """形状をSOLIDごとに分解する(M3.5)。
+
+    `TopExp.MapShapes_s(shape, TopAbs_SOLID)` で重複除去済みのSOLID群を取り出し、
+    各SOLIDを個別の TopoDS_Shape として返す。**SOLIDが1つも無い形状(裸の面・シェルのみ)は
+    形状全体を1要素のリストにして返す**(0個のBodyを黙って作らない。io_step.pyの契約)。
+
+    列挙順は `TopExp.MapShapes_s` の走査順(同じ形状に対して決定的)。
+    """
+    if shape is None or shape.IsNull():
+        raise ValueError("cannot split an empty shape")
+    shape_map = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_SOLID, shape_map)
+    if shape_map.Extent() == 0:
+        return [shape]
+    return [
+        TopoDS.Solid_s(shape_map.FindKey(index))
+        for index in range(1, shape_map.Extent() + 1)
+    ]
+
+
+def make_compound(shapes: Sequence["TopoDS_Shape"]) -> "TopoDS_Shape":
+    """複数の形状を1つの TopoDS_Compound へまとめる(複数Bodyを1つのSTEP/STLへ書き出すため)。"""
+    if not shapes:
+        raise ValueError("cannot build a compound from an empty sequence of shapes")
+    builder = BRep_Builder()
+    compound = TopoDS_Compound()
+    builder.MakeCompound(compound)
+    for shape in shapes:
+        builder.Add(compound, shape)
+    return compound
 
 
 # --------------------------------------------------------------------------------------

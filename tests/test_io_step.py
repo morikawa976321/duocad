@@ -19,36 +19,43 @@ STEP_PATH = r"C:\Users\tm976\mf\3d-models\shelf_attachment_GD.step"
 
 
 def test_import_step_face_breakdown_matches_measured_reference():
-    """shelf_attachment_GD.step を読むと 面56/平面34/全周円筒22/トーラス0/円錐0/spline0 になる
-    (2026-08-10 OCPで直接実測した値。cad_v1_implementation_plan_2026-08-10.md §0/§7と一致)。"""
+    """shelf_attachment_GD.step を読むと17個のBodyに分解される。各Bodyの内訳を合計すると
+    面56/平面34/全周円筒22/トーラス0/円錐0/spline0 になる(2026-08-10 OCPで直接実測した値)。"""
     doc = Document()
-    body_id = import_step(doc, STEP_PATH)
-    body = next(b for b in doc.bodies if b.id == body_id)
+    body_ids = import_step(doc, STEP_PATH)
+    assert len(body_ids) == 17
 
-    desc = describe_shape(body.shape)
-    by_type = desc["faces_by_type"]
-    assert desc["face_count"] == 56
-    assert by_type["plane"] == 34
-    assert by_type["cylinder_full"] == 22
-    assert by_type["cylinder_partial"] == 0
-    assert by_type["torus"] == 0
-    assert by_type["cone"] == 0
-    assert by_type["bspline"] == 0
-    assert by_type["other"] == 0
-    # 内訳の合計がface_countと一致すること(数え漏れ・二重計上・未知キー混入を検出できる)
-    assert sum(by_type.values()) == desc["face_count"]
+    totals = {
+        "plane": 0, "cylinder_full": 0, "cylinder_partial": 0,
+        "torus": 0, "cone": 0, "bspline": 0, "other": 0,
+    }
+    face_count_total = 0
+    for body in doc.bodies:
+        desc = describe_shape(body.shape)
+        face_count_total += desc["face_count"]
+        for kind, count in desc["faces_by_type"].items():
+            totals[kind] += count
+
+    assert face_count_total == 56
+    assert totals["plane"] == 34
+    assert totals["cylinder_full"] == 22
+    assert totals["cylinder_partial"] == 0
+    assert totals["torus"] == 0
+    assert totals["cone"] == 0
+    assert totals["bspline"] == 0
+    assert sum(totals.values()) == face_count_total
 
 
 def test_import_step_creates_reference_body():
-    """import_stepで読み込んだボディのkindは"reference"(読み取り専用)である。"""
+    """import_stepで読み込んだ全ボディのkindは"reference"(読み取り専用)である。"""
     doc = Document()
-    body_id = import_step(doc, STEP_PATH)
-    body = next(b for b in doc.bodies if b.id == body_id)
-    assert body.kind == "reference"
+    body_ids = import_step(doc, STEP_PATH)
+    assert body_ids
+    assert all(b.kind == "reference" for b in doc.bodies)
 
 
 def test_import_step_is_logged_and_undoable():
-    """import_stepの読み込みは操作ログに1件載り、undoでボディが消える。"""
+    """import_stepの読み込みは操作ログに1件載り、undoで全ボディが消える。"""
     doc = Document()
     import_step(doc, STEP_PATH)
 
@@ -60,14 +67,14 @@ def test_import_step_is_logged_and_undoable():
 
 
 def test_import_step_logs_path_and_body_id_in_args():
-    """import_stepが積む操作のargsは{"path": <読み込んだパス>, "body_id": <返したBodyId>}を持つ
+    """import_stepが積む操作のargsは{"path":.., "body_ids": [返した全BodyId]}を持つ
     (tests/README.md記載のundo/redo/replayの契約が依存する具体的なargs形を、テスト側でも縛る)。"""
     doc = Document()
-    body_id = import_step(doc, STEP_PATH)
+    body_ids = import_step(doc, STEP_PATH)
 
     op = doc.log.entries[0]
     assert op.args["path"] == str(STEP_PATH)
-    assert op.args["body_id"] == body_id
+    assert op.args["body_ids"] == body_ids
 
 
 def test_import_step_missing_file_raises_and_does_not_mutate_document(tmp_path):
@@ -132,34 +139,29 @@ def test_export_from_empty_document_raises_and_writes_no_file(tmp_path):
 
 
 def test_export_step_roundtrip_preserves_volume(tmp_path):
-    """読んだ形状をexport_step→読み戻すと体積が一致する。
+    """読んだ全ボディ(分解後)の体積の合計をexport_step→読み戻すと一致する。
 
-    2026-08-10実測(監査で独立に再現): shelf_attachment_GD.step(56面・体積91018.2223598035)を
-    この環境でexport_step→再読込すると 91018.22235980343 になり、差は約7.276e-11
-    (相対約8.0e-16、IEEE double 1ULP級)で、bit-exactな==は成立しなかった。2回試行しても
-    同じ差(浮動小数点の積分順序に由来し、幾何欠損ではない)。同じファイルを2回読んだ体積は
-    完全一致するので、差はSTEP往復そのものが原因である。
-    実装計画書§7の「差 0.00e+00」は26面・体積23340.849375の**別形状**での実測であり、
-    この受入形状には当てはまらない(§8の「体積が完全一致」も同様に文字どおりには成立しない)。
-    そのため比較は相対誤差1e-6(実測誤差の約10億倍のマージン)で行う。1e-6を超える差は
-    面の欠落・重複など実際のジオメトリ破損を意味するので、この閾値は緩めていない。
+    M3.5でimport_stepがソリッドごとに分解するようになったため、doc.active_body()だけを
+    見ていた旧テストは1ソリッド(3〜4面)しか見なくなってしまう。export_step/export_stlは
+    body_ids省略時に「形状を持つ全Body」をcompoundにして書き出す設計にしたので(io_step.py)、
+    体積の合計は分解前と変わらず比較できる。
     """
     doc = Document()
     import_step(doc, STEP_PATH)
-    original_volume = volume(doc.active_body().shape)
+    original_volume = sum(volume(b.shape) for b in doc.bodies)
 
     out_path = tmp_path / "roundtrip.step"
     export_step(doc, out_path)
 
     doc2 = Document()
     import_step(doc2, out_path)
-    roundtrip_volume = volume(doc2.active_body().shape)
+    roundtrip_volume = sum(volume(b.shape) for b in doc2.bodies)
 
     assert math.isclose(original_volume, roundtrip_volume, rel_tol=1e-6)
 
 
 def test_export_step_roundtrip_preserves_face_count(tmp_path):
-    """読んだ形状をexport_step→読み戻すと面数が一致する(56面のまま)。"""
+    """読んだ全ボディ(分解後)の面数の合計をexport_step→読み戻すと一致する(56面のまま)。"""
     doc = Document()
     import_step(doc, STEP_PATH)
 
@@ -169,8 +171,8 @@ def test_export_step_roundtrip_preserves_face_count(tmp_path):
     doc2 = Document()
     import_step(doc2, out_path)
 
-    original_faces = describe_shape(doc.active_body().shape)["face_count"]
-    roundtrip_faces = describe_shape(doc2.active_body().shape)["face_count"]
+    original_faces = sum(describe_shape(b.shape)["face_count"] for b in doc.bodies)
+    roundtrip_faces = sum(describe_shape(b.shape)["face_count"] for b in doc2.bodies)
     assert original_faces == roundtrip_faces == 56
 
 

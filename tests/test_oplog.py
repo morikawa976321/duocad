@@ -45,7 +45,7 @@ def test_undo_reverts_document_state():
     """undoは直前の操作をdocumentから取り消す(importしたボディが消える)。"""
     doc = Document()
     import_step(doc, STEP_PATH)
-    assert len(doc.bodies) == 1
+    assert len(doc.bodies) == 17  # M3.5: shelf は17ソリッドに分解される
 
     doc.log.undo(doc)
     assert doc.bodies == []
@@ -58,7 +58,7 @@ def test_redo_reapplies_undone_operation():
 
     doc.log.undo(doc)
     doc.log.redo(doc)
-    assert len(doc.bodies) == 1
+    assert len(doc.bodies) == 17  # M3.5: shelf は17ソリッドに分解される
 
 
 def test_redo_does_not_record_the_operation_twice():
@@ -78,7 +78,7 @@ def test_redo_does_not_record_the_operation_twice():
     doc.log.redo(doc)
     assert len(doc.log.entries) == 1
     assert [op.seq for op in doc.log.entries] == seqs_before
-    assert len(doc.bodies) == 1
+    assert len(doc.bodies) == 17  # M3.5: shelf は17ソリッドに分解される
 
 
 def test_to_json_emits_actual_json_with_the_logged_fields():

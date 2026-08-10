@@ -31,23 +31,30 @@ VERB_SET_VISIBLE = "set_visible"
 
 def set_visible(doc: Document, body_id: BodyId, visible: bool) -> Operation:
     """Bodyの表示・非表示を切り替え、ログに積んで Operation を返す。"""
-    raise NotImplementedError(
-        "M3.5: set_visible は未実装。"
-        "存在しないbody_idはKeyErrorで、documentにもログにも変更を残さないこと"
+    body = _find_body(doc, body_id)
+    previous = body.visible
+    body.visible = bool(visible)
+    return doc.log.append(
+        VERB_SET_VISIBLE,
+        {"body_id": body_id, "visible": bool(visible), "previous": previous},
     )
 
 
-# --------------------------------------------------------------------------------------
-# verbの登録(oplog は verb名の分岐を持たない。登録は verb を定義したこちら側)
-# --------------------------------------------------------------------------------------
+def _find_body(doc: Document, body_id: BodyId):
+    body = next((b for b in doc.bodies if b.id == body_id), None)
+    if body is None:
+        raise KeyError(f"no such body: {body_id!r}")
+    return body
+
+
 def _do_set_visible(document: Document, operation: Operation) -> None:
-    """redo / replay: 記録された `visible` を当て直す(**ログには触らない**)。"""
-    raise NotImplementedError("M3.5: set_visible の do は未実装")
+    """redo / replay: 記録された `visible` を当て直す(ログには触らない)。"""
+    _find_body(document, operation.args["body_id"]).visible = operation.args["visible"]
 
 
 def _undo_set_visible(document: Document, operation: Operation) -> None:
     """undo: `args["previous"]` の値へ戻す。"""
-    raise NotImplementedError("M3.5: set_visible の undo は未実装")
+    _find_body(document, operation.args["body_id"]).visible = operation.args["previous"]
 
 
 register_verb(VERB_SET_VISIBLE, do=_do_set_visible, undo=_undo_set_visible)

@@ -1,19 +1,16 @@
 """STEP読み込み・STEP/STL書き出し(実装計画書 §5 入出力、§7 落とし穴、§8 M0検証)。
 
-M0の契約:
-- import_step(doc, path) -> BodyId
-    STEPを kind="reference" のボディとして doc.bodies へ追加し、
-    doc.log に verb="import_step", args={"path": str(path), "body_id": <新BodyId>} を積んで
-    そのBodyIdを返す。
-- export_step(doc, path) -> None
-    doc.active_body() の形状をSTEPとして書き出す。
-- export_stl(doc, path, deviation) -> None
-    doc.active_body() の形状をSTLとして書き出す。deviation(mm)は**絶対**の線形偏差。
-
-**書き出しの対象を `doc.active_body()` にするのは「M0の決定」であって仕様書由来ではない**
-(実装計画書§5は対象ボディを規定していない。tests/README.md に明記のとおり)。M0の文書は
-参照STEP1ボディだけなので「activeだけ」と「全ボディ」に差は出ない。複数ボディが同時に
-存在するようになったら(M2以降)`export_step(doc, path, body_ids=None)` の方向で拡張する。
+M3.5の契約:
+- import_step(doc, path) -> list[BodyId]
+    STEPをソリッドごとに分解し、各ソリッドを kind="reference" のボディとして
+    doc.bodies へ追加する。操作ログは1行
+    (verb="import_step", args={"path": str(path), "body_ids": [BodyId, ...]})。
+    undo1回で追加した全Bodyがまとめて消える。単一ソリッドでも1要素のリストを返す。
+- export_step(doc, path, body_ids=None) -> None
+    body_ids省略時は既定で kind="solid" の全Bodyを書き出す(1つも無ければ形状を持つ全Bodyに
+    フォールバック)。複数ならcompoundへまとめる。詳細は `_shape_to_export` のdocstring。
+- export_stl(doc, path, deviation, body_ids=None) -> None
+    body_ids省略時の対象は export_step と同じ。deviation(mm)は**絶対**の線形偏差。
 
 失敗時の契約(黙って通さない。実装計画書 §6予防6):
 - パスが存在しない            -> FileNotFoundError
@@ -50,82 +47,114 @@ PathLike = Union[str, Path]
 VERB_IMPORT_STEP = "import_step"
 
 
-def import_step(doc: Document, path: PathLike) -> BodyId:
-    """STEPを参照ボディとして読み込み、doc.bodiesへ追加してdoc.logに記録し、BodyIdを返す。
+def import_step(doc: Document, path: PathLike) -> list[BodyId]:
+    """STEPをソリッドごとに分解して参照ボディとして読み込み、doc.bodiesへ追加してdoc.logに記録し、
+    追加した全BodyIdをリストで返す(単一ソリッドでも1要素のリスト)。
 
-    失敗時は例外を送出し、documentにもログにも変更を残さないこと
+    操作ログは1行(verb="import_step", args={"path": str(path), "body_ids": [BodyId, ...]})。
+    undo1回で全Bodyがまとめて消える。
+
+    失敗時は例外を送出し、documentにもログにも変更を残さない
     (パス無し=FileNotFoundError / 中身が壊れている=ValueError)。
-    そのために **読み込み(失敗しうる処理)を先に済ませてから** append() する。
     """
-    body_id = _new_body_id()
-    # 読み込みに失敗すればここで送出され、doc.bodies も doc.log も無傷のまま抜ける。
-    _apply_import_step_to(doc, str(path), body_id)
-    doc.log.append(VERB_IMPORT_STEP, {"path": str(path), "body_id": body_id})
-    return body_id
+    shape = kernel.read_step(str(path))  # 失敗すればここで例外、doc/logは無傷
+    solids = kernel.split_solids(shape)
+    body_ids = [_new_body_id() for _ in solids]
+    stem = Path(path).stem
+    names = [f"{stem}_{n}" for n in range(1, len(solids) + 1)]
+    _apply_import_step_to(doc, body_ids, solids, names)
+    doc.log.append(VERB_IMPORT_STEP, {"path": str(path), "body_ids": body_ids})
+    return body_ids
 
 
-def export_step(doc: Document, path: PathLike) -> None:
-    """doc.active_body() の形状をSTEPとして書き出す。読み戻すと面数・体積が一致することが契約。
-
-    書き出す形状が無ければ ValueError を送出し、ファイルを作らない。
+def export_step(doc: Document, path: PathLike, body_ids: list[BodyId] | None = None) -> None:
+    """body_ids省略時の既定対象は `_shape_to_export` のdocstring参照
+    (kind="solid"優先・無ければ形状を持つ全Bodyにフォールバック)。
+    複数Bodyならcompoundへまとめる。書き出す形状が無ければValueError、ファイルは作らない。
     """
-    shape = _shape_to_export(doc)
+    shape = _shape_to_export(doc, body_ids)
     kernel.write_step(shape, str(path))
 
 
-def export_stl(doc: Document, path: PathLike, deviation: float) -> None:
-    """doc.active_body() の形状をSTLとして書き出す。deviationが小さいほどファイルは大きくなる。
-
-    deviation は**絶対**の線形偏差(mm)。BRepMesh_IncrementalMesh には isRelative=False で渡す。
-    書き出す形状が無ければ ValueError を送出し、ファイルを作らない。
+def export_stl(
+    doc: Document, path: PathLike, deviation: float, body_ids: list[BodyId] | None = None
+) -> None:
+    """body_ids省略時の既定対象は export_step と同じ(`_shape_to_export` 参照)。
+    deviation(mm)は絶対の線形偏差。
     """
-    shape = _shape_to_export(doc)
+    shape = _shape_to_export(doc, body_ids)
     kernel.write_stl(shape, str(path), deviation)
 
 
-# --------------------------------------------------------------------------------------
-# 内部ヘルパ
-# --------------------------------------------------------------------------------------
+def _shape_to_export(doc: Document, body_ids):
+    """書き出し対象の形状(複数なら compound)。無ければ ValueError(ファイルは作らない)。
+
+    `body_ids` 省略時は既定で **`kind="solid"` の全Body**(編集可能なもの)を対象にする。
+    `kind="solid"` が1つも無ければ(=まだ編集用コピーを作っていない、参照だけの文書)、
+    形状を持つ全Body(=参照)にフォールバックする。
+
+    **なぜ「形状を持つ全Body」を単純な既定にしなかったか(2026-08-11のQAで発見)**:
+    `Session.load_step` は各ソリッドについて参照ボディ(隠す)と編集用コピー(可視)の
+    両方を文書に持つ。単純に「形状を持つ全Body」を書き出すと、同じソリッドが参照側と
+    編集用コピー側の2回、二重に書き出されてしまう。`kind="solid"` を優先することで、
+    「実際に編集対象になっているもの」だけを書き出す。
+    """
+    if body_ids is not None:
+        bodies = []
+        for body_id in body_ids:
+            body = next((b for b in doc.bodies if b.id == body_id), None)
+            if body is None:
+                raise KeyError(f"no such body: {body_id!r}")
+            bodies.append(body)
+    else:
+        bodies = [b for b in doc.bodies if b.kind == "solid" and b.shape is not None]
+        if not bodies:
+            bodies = [b for b in doc.bodies if b.shape is not None]
+    if not bodies:
+        raise ValueError("nothing to export: no body with a shape")
+    shapes = [b.shape for b in bodies]
+    if len(shapes) == 1:
+        return shapes[0]
+    return kernel.make_compound(shapes)
+
+
 def _new_body_id() -> BodyId:
     """新しいBodyIdを作る。再生時は記録済みのIDをそのまま使うのでここは通らない。"""
     return f"body-{uuid4().hex[:12]}"
 
 
-def _shape_to_export(doc: Document):
-    """書き出し対象の形状を取り出す。無ければ ValueError(ファイルは1バイトも作らない)。"""
-    body = doc.active_body()
-    if body is None:
-        raise ValueError("nothing to export: the document has no active body")
-    if body.shape is None:
-        raise ValueError(f"nothing to export: body {body.id!r} has no shape")
-    return body.shape
-
-
-def _apply_import_step_to(doc: Document, path: str, body_id: BodyId) -> Body:
-    """STEPを読み、指定IDのボディとしてdocへ追加する(**ログには触らない**)。
+def _apply_import_step_to(
+    doc: Document, body_ids: list[BodyId], solids: list, names: list[str]
+) -> list[Body]:
+    """ソリッド群を指定IDのボディとしてdocへ追加する(ログには触らない)。
 
     公開APIの `import_step` と、redo/replay の実体が共有する非公開ヘルパ。
-    `import_step` 自身が `doc.log.append()` を行うので、redo/replay から `import_step` を
-    呼び直すと同じ操作が二重に記録され、保存・再生が破綻する(tests/README.md の契約)。
     """
-    shape = kernel.read_step(path)
-    body = Body(id=body_id, name=Path(path).stem, kind="reference", shape=shape)
-    doc.add_body(body)
-    return body
+    bodies = []
+    for body_id, solid, name in zip(body_ids, solids, names):
+        body = Body(id=body_id, name=name, kind="reference", shape=solid)
+        doc.add_body(body)
+        bodies.append(body)
+    return bodies
 
 
-# --------------------------------------------------------------------------------------
-# verbの登録(oplog は verb名の分岐を持たない。登録するのは verb を定義したこちら側)
-# --------------------------------------------------------------------------------------
 def _do_import_step(document: Document, operation: Operation) -> None:
-    """redo / replay 時の再適用: 記録されたパスを読み直し、記録されたBodyIdで復元する。"""
+    """redo / replay 時の再適用: パスを読み直して分解し、記録されたbody_idsをそのまま使って復元する。
+
+    **`io_step.import_step`(公開API)を呼び直してはいけない**(呼ぶとログに二重記録される)。
+    """
     args = operation.args
-    _apply_import_step_to(document, args["path"], args["body_id"])
+    shape = kernel.read_step(args["path"])
+    solids = kernel.split_solids(shape)
+    stem = Path(args["path"]).stem
+    names = [f"{stem}_{n}" for n in range(1, len(solids) + 1)]
+    _apply_import_step_to(document, args["body_ids"], solids, names)
 
 
 def _undo_import_step(document: Document, operation: Operation) -> None:
-    """undo 時の取り消し: 追加したボディを取り除く。"""
-    document.remove_body(operation.args["body_id"])
+    """undo 時の取り消し: 追加した全ボディを取り除く(1回のundoでまとめて消える)。"""
+    for body_id in operation.args["body_ids"]:
+        document.remove_body(body_id)
 
 
 register_verb(VERB_IMPORT_STEP, do=_do_import_step, undo=_undo_import_step)

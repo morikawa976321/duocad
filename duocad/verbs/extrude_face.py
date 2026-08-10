@@ -79,6 +79,10 @@ def _editable_body(doc: Document, body_id: Optional[BodyId]) -> Body:
             "make_editable_copy() で編集用のソリッドを作ってから押し出すこと"
         )
     body = next(candidate for candidate in doc.bodies if candidate.id == body_id)
+    if not body.visible:
+        raise ValueError(
+            f"body {body_id!r} is hidden: 見えないものは指せない(set_visible で表示すること)"
+        )
     if body.shape is None:
         raise ValueError(f"body {body_id!r} has no shape to extrude")
     return body

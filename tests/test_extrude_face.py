@@ -31,11 +31,30 @@ STEP_PATH = r"C:\Users\tm976\mf\3d-models\shelf_attachment_GD.step"
 VOLUME_REL_TOL = 1.0e-9
 
 
+def _reference_document() -> Document:
+    """参照STEPを読み(分解せず単一形状のまま)、固定ID "reference" の参照Bodyを持つ文書を作る。
+
+    M3.5でimport_stepはソリッドごとに分解するが(shelf_attachment_GD.stepは17ソリッドに
+    分かれ、1ソリッドあたり最大4面)、このファイルはextrude_face verb自体の振る舞い
+    (56面の複合形状に対する複数平面の連続押し出し・曲面の拒否・面の統合)を検証するもの
+    なので、分解を経由せず kernel.read_step を直接使って56面のままの参照Bodyを1つ作る。
+
+    **この参照Bodyの作成はログの外で行う**(import_stepを経由しないため)。したがって
+    再生系のテストは、素の `Document()` へ `OpLog.replay` するのではなく、この関数で
+    同じ土台を作ってからログを再生すること(`tests/test_m2_regressions.py::box_document`
+    と同じ流儀)。
+    """
+    document = Document()
+    shape = kernel.read_step(STEP_PATH)
+    document.add_body(Body(id="reference", name="shelf", kind="reference", shape=shape))
+    return document
+
+
 @pytest.fixture()
 def session():
-    """参照STEPを読み、編集用のソリッドをアクティブにした文書。"""
-    document = Document()
-    reference_id = io_step.import_step(document, STEP_PATH)
+    """参照STEPを読み(分解せず単一形状のまま)、編集用のソリッドをアクティブにした文書。"""
+    document = _reference_document()
+    reference_id = "reference"
     solid_id = make_editable_copy(document, reference_id)
     return document, reference_id, solid_id
 
@@ -63,10 +82,14 @@ def test_make_editable_copy_creates_an_editable_solid(session):
 
 
 def test_make_editable_copy_is_logged(session):
-    """操作ログに載る(文書の組み立てもログから再生できる。§3.1)。"""
+    """操作ログに載る(文書の組み立てもログから再生できる。§3.1)。
+
+    このファイルの参照Body自体はログの外で作る(`_reference_document` 参照。import_step経由だと
+    56面のままの単一Bodyを作れないため)ので、ログに載るのは `make_editable_copy` だけになる。
+    """
     document, reference_id, solid_id = session
     verbs = [operation.verb for operation in document.log.entries]
-    assert verbs == ["import_step", "make_editable_copy"]
+    assert verbs == ["make_editable_copy"]
     args = document.log.entries[-1].args
     assert args["source_body_id"] == reference_id
     assert args["body_id"] == solid_id
@@ -196,7 +219,9 @@ def test_replay_reproduces_the_extruded_shape(session):
     expected_volume = query.volume(body.shape)
     expected_faces = kernel.face_count(body.shape)
 
-    replayed = Document()
+    # 参照Bodyはログの外で作っているので、素の Document() ではなく同じ土台
+    # (_reference_document()) を作ってからログを再生する(_reference_document のdocstring参照)。
+    replayed = _reference_document()
     replayed.log = OpLog.from_json(document.log.to_json())
     replayed.log.replay(replayed)
 
@@ -226,8 +251,9 @@ def test_after_face_index_allows_chained_extrusion(session):
 
     assert volumes == sorted(volumes), f"体積が単調に増えていない: {volumes}"
 
-    # 連なった操作もログから再生できる(1回だけの再生では連鎖の取りこぼしが見えない)
-    replayed = Document()
+    # 連なった操作もログから再生できる(1回だけの再生では連鎖の取りこぼしが見えない)。
+    # 参照Bodyはログの外で作っているので、同じ土台(_reference_document())から再生する。
+    replayed = _reference_document()
     replayed.log = OpLog.from_json(document.log.to_json())
     replayed.log.replay(replayed)
     replayed_body = replayed.active_body()

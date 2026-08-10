@@ -37,16 +37,18 @@ SHAPE_KINDS = ("face", "edge", "vertex")
 
 def selectable_bodies(doc: Document) -> List[BodyId]:
     """選択の対象になりうるBodyのIDを `doc.bodies` の順で返す(不可視Bodyは含めない)。"""
-    raise NotImplementedError(
-        "M3.5: selectable_bodies は未実装。"
-        "doc.bodies のうち visible=True のものだけを順序を保って返すこと"
-    )
+    return [body.id for body in doc.bodies if body.visible]
 
 
 def select_face(doc: Document, body_id: BodyId, face_index: int) -> dict:
     """面を指す ShapeRef を作る。不可視Body・存在しないBody・範囲外の添字は例外。"""
-    raise NotImplementedError(
-        "M3.5: select_face は未実装。"
-        "存在しないbody_idはKeyError、visible=FalseのBodyはValueError、"
-        "1..face_count の範囲外はValueError"
-    )
+    body = next((b for b in doc.bodies if b.id == body_id), None)
+    if body is None:
+        raise KeyError(f"no such body: {body_id!r}")
+    if not body.visible:
+        raise ValueError(f"body {body_id!r} is hidden: 見えないものは指せない")
+    count = kernel.face_count(body.shape)
+    index = int(face_index)
+    if not 1 <= index <= count:
+        raise ValueError(f"face index out of range: {index} (1..{count})")
+    return {"body": body_id, "kind": "face", "index": index, "provenance": None}

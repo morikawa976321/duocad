@@ -158,7 +158,8 @@ def test_join_makes_the_first_solid_next_to_a_reference_body():
     (`test_extrude.py::test_extrude_rejects_a_reference_body`)。
     """
     document = Document()
-    reference_id = io_step.import_step(document, STEP_PATH)
+    reference_ids = io_step.import_step(document, STEP_PATH)
+    reference_id = reference_ids[0]
     sketch_id = sketch_create(document, "XY")
     add_rectangle(document, sketch_id, (0.0, 0.0), 40.0, 30.0)
 
@@ -169,5 +170,5 @@ def test_join_makes_the_first_solid_next_to_a_reference_body():
     created = next(body for body in document.bodies if body.id == operation.args["body_id"])
     assert created.kind == "solid"
     assert created.id != reference_id
-    assert len(document.bodies) == 2
+    assert len(document.bodies) == 18  # 17個の参照ボディ + 新しく作った板1個
     assert math.isclose(query.volume(created.shape), 12000.0, rel_tol=1e-9)
