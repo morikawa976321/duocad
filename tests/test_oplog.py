@@ -7,6 +7,7 @@ append/undo/redo/to_json/from_json/replay はNotImplementedErrorスタブなの�
 from __future__ import annotations
 
 import dataclasses
+import json
 
 import pytest
 
@@ -60,6 +61,51 @@ def test_redo_reapplies_undone_operation():
     assert len(doc.bodies) == 1
 
 
+def test_redo_does_not_record_the_operation_twice():
+    """redoは既存のエントリを有効化するだけで、新しい操作を積み直さない。
+
+    redo/replayの実装が公開API(io_step.import_step)を呼び直すと、その中でappend()が走り
+    同じ操作が二重にログへ乗る。ログは唯一の正(実装計画書§3.1)なので、二重記録は
+    そのまま保存・再生の破綻になる。seqが振り直されていないことまで見る。
+    """
+    doc = Document()
+    import_step(doc, STEP_PATH)
+    seqs_before = [op.seq for op in doc.log.entries]
+
+    doc.log.undo(doc)
+    assert doc.log.entries == []
+
+    doc.log.redo(doc)
+    assert len(doc.log.entries) == 1
+    assert [op.seq for op in doc.log.entries] == seqs_before
+    assert len(doc.bodies) == 1
+
+
+def test_to_json_emits_actual_json_with_the_logged_fields():
+    """to_json()の出力は本物のJSONで、各操作のseq/verb/args/selection/provenanceが読める形で入る
+    (保存形式はJSON。SQLiteもpickleもrepr+evalも不可。実装計画書§3.6 —
+    gitで差分が読める・AIが全履歴を読める、が理由なので「往復すれば何でもよい」ではない)。"""
+    log = OpLog()
+    log.append("import_step", {"path": "x.step", "body_id": "b1"})
+
+    parsed = json.loads(log.to_json())  # JSONでなければここで例外になる
+
+    # 外側の入れ物(素のリスト / {"operations": [...]} 等)は縛らない。
+    # 縛るのは「操作が1件ずつJSONオブジェクトとして読めること」。
+    if isinstance(parsed, dict):
+        candidates = [v for v in parsed.values() if isinstance(v, list)]
+        assert len(candidates) == 1, f"操作の配列を1つだけ含むこと: keys={sorted(parsed)}"
+        ops = candidates[0]
+    else:
+        ops = parsed
+    assert isinstance(ops, list) and len(ops) == 1
+    assert ops[0]["seq"] == 1
+    assert ops[0]["verb"] == "import_step"
+    assert ops[0]["args"] == {"path": "x.step", "body_id": "b1"}
+    assert ops[0]["selection"] == []
+    assert ops[0]["provenance"] is None
+
+
 def test_to_json_from_json_roundtrip_matches_exactly():
     """to_json()→from_json()の往復でログの内容(seq/verb/args/selection/provenance)が完全一致する
     (保存形式はJSON。SQLiteは使わない)。"""
@@ -90,3 +136,20 @@ def test_replay_reproduces_same_document_state():
     original_volumes = sorted(volume(b.shape) for b in original.bodies)
     replayed_volumes = sorted(volume(b.shape) for b in replayed.bodies)
     assert original_volumes == replayed_volumes
+
+
+def test_replay_does_not_append_to_the_log_it_replays():
+    """replayは自分のエントリを読んで文書を再構築するだけで、ログ自身を書き換えない。
+
+    「開くときはログから再生する」(実装計画書§3.1)運用では、再生したログがそのまま
+    その文書のログになる。再生のたびにエントリが増えるなら、開くたびに履歴が倍になる。
+    """
+    original = Document()
+    import_step(original, STEP_PATH)
+
+    restored_log = OpLog.from_json(original.log.to_json())
+    entries_before = [dataclasses.asdict(e) for e in restored_log.entries]
+
+    restored_log.replay(Document())
+
+    assert [dataclasses.asdict(e) for e in restored_log.entries] == entries_before

@@ -74,10 +74,11 @@ def test_import_step_missing_file_raises_and_does_not_mutate_document(tmp_path):
     """存在しないSTEPパスはFileNotFoundErrorを送出し、documentにもログにも変更が残らない
     (失敗を黙って通さない。実装計画書§7・§6予防6)。
 
-    実装時の注意(2026-08-10実測・再現確認済み): OCPのSTEPControl_Readerは、ReadFile()が
-    IFSelect_RetDone以外を返した状態のまま TransferRoots()/OneShape() を呼ぶと、Python例外に
-    ならずプロセスごとセグメンテーション違反で落ちる。import_stepの実装はReadFile()の戻り値を
-    必ず先に検査し、失敗ならTransferRoots()を呼ぶ前にraiseすること(詳細はtests/README.md)。
+    実装時の注意(2026-08-10実測・2026-08-10監査で再現確認): OCPのSTEPControl_Readerは、
+    ReadFile()がIFSelect_RetDone以外を返した状態のまま TransferRoots()/OneShape() を呼ぶと、
+    Python例外にならずプロセスごと落ちる(Windowsで終了コード0xC0000005 = アクセス違反)。
+    import_stepの実装はReadFile()の戻り値を必ず先に検査し、失敗ならTransferRoots()を呼ぶ前に
+    raiseすること(詳細はtests/README.md)。
     """
     doc = Document()
     bad_path = tmp_path / "does_not_exist.step"
@@ -89,13 +90,58 @@ def test_import_step_missing_file_raises_and_does_not_mutate_document(tmp_path):
     assert doc.log.entries == []
 
 
+def test_import_step_malformed_file_raises_value_error_and_does_not_mutate_document(tmp_path):
+    """STEPとして壊れているファイル(存在はする)はValueErrorを送出し、documentにもログにも
+    変更が残らない(失敗を黙って通さない。実装計画書§6予防6・§7)。
+
+    このテストが上の「存在しないパス」のテストと別に要るのは、**存在チェックだけでは
+    ReadFile()の戻り値検査を強制できない**ため。`Path.exists()` を見るだけの実装は上のテストを
+    通してしまうが、中身が壊れたファイルではReadFile()がIFSelect_RetFailを返し、そのまま
+    TransferRoots()を呼ぶと**プロセスごと落ちる**(2026-08-10監査で実測。存在しないパスは
+    IFSelect_RetError、壊れた中身はIFSelect_RetFail、いずれもTransferRoots()で0xC0000005)。
+    ReadFile()の戻り値を必ず検査させるのはこのテストの役目。
+    """
+    doc = Document()
+    broken = tmp_path / "broken.step"
+    broken.write_text("this is not a STEP file at all\njust plain text\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        import_step(doc, broken)
+
+    assert doc.bodies == []
+    assert doc.log.entries == []
+
+
+def test_export_from_empty_document_raises_and_writes_no_file(tmp_path):
+    """書き出す形状が無い文書からのexportは例外になり、半端なファイルを残さない
+    (失敗を黙って通さない。実装計画書§6予防6)。
+
+    黙って0バイトのSTEP/STLを吐くと、壊れた成果物が「成功」として残る。
+    """
+    doc = Document()
+    step_path = tmp_path / "empty.step"
+    stl_path = tmp_path / "empty.stl"
+
+    with pytest.raises(ValueError):
+        export_step(doc, step_path)
+    assert not step_path.exists()
+
+    with pytest.raises(ValueError):
+        export_stl(doc, stl_path, 0.1)
+    assert not stl_path.exists()
+
+
 def test_export_step_roundtrip_preserves_volume(tmp_path):
     """読んだ形状をexport_step→読み戻すと体積が一致する。
 
-    2026-08-10実測: shelf_attachment_GD.step(56面・体積91018.2223598035)をこの環境で
-    export_step→再読込すると差は約7.3e-11(相対約8e-16、IEEE double 1ULP級)で、bit-exactな
-    ==は成立しなかった(浮動小数点の数値積分順序に由来する誤差であり、幾何欠損ではない)。
-    そのため比較は相対誤差1e-6(実測誤差の10億倍のマージン)で行う。1e-6を超える差は
+    2026-08-10実測(監査で独立に再現): shelf_attachment_GD.step(56面・体積91018.2223598035)を
+    この環境でexport_step→再読込すると 91018.22235980343 になり、差は約7.276e-11
+    (相対約8.0e-16、IEEE double 1ULP級)で、bit-exactな==は成立しなかった。2回試行しても
+    同じ差(浮動小数点の積分順序に由来し、幾何欠損ではない)。同じファイルを2回読んだ体積は
+    完全一致するので、差はSTEP往復そのものが原因である。
+    実装計画書§7の「差 0.00e+00」は26面・体積23340.849375の**別形状**での実測であり、
+    この受入形状には当てはまらない(§8の「体積が完全一致」も同様に文字どおりには成立しない)。
+    そのため比較は相対誤差1e-6(実測誤差の約10億倍のマージン)で行う。1e-6を超える差は
     面の欠落・重複など実際のジオメトリ破損を意味するので、この閾値は緩めていない。
     """
     doc = Document()
@@ -131,9 +177,16 @@ def test_export_step_roundtrip_preserves_face_count(tmp_path):
 def test_export_stl_smaller_deviation_yields_larger_file(tmp_path):
     """deviationを指定でき、偏差を小さくするとファイルが大きくなる。
 
-    2026-08-10実測(この環境・このファイルでの参考値。厳密一致は求めない):
-    0.2mm→約110KB / 0.05mm→約141KB / 0.01mm→約296KB。絶対値は環境・実装で変わりうるため、
-    ここで縛るのは「偏差を下げるとファイルサイズが単調に増える」という関係だけ。
+    2026-08-10実測(監査で独立に再現。この環境・このファイルでの参考値。厳密一致は求めない):
+    バイナリSTLで 0.2mm→112084B(109.5KB) / 0.05mm→143884B(140.5KB) / 0.01mm→302684B(295.6KB)。
+    絶対値は環境・実装で変わりうるため、ここで縛るのは「偏差を下げるとファイルサイズが
+    単調に増える」という関係だけ(実装計画書§7の 30.7/47.2/170.6KB は別形状での実測で、
+    この形状ではバイナリ・ASCIIどちらとも一致しない。ASCIIだと569/730/1537KB)。
+
+    **実装上の落とし穴(2026-08-10監査で実測)**: deviationは**絶対**の線形偏差(mm)として
+    BRepMesh_IncrementalMeshに渡すこと(isRelative=False)。isRelative=Trueにすると
+    0.2/0.05/0.01のいずれでも同じ112084Bになり、**このテストは必ず落ちる**。
+    build123dの `export_stl` は内部で isRelative=True を使うので、そのまま流用してはいけない。
     """
     doc = Document()
     import_step(doc, STEP_PATH)
