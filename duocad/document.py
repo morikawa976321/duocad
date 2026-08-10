@@ -42,7 +42,7 @@ class Body:
 class Document:
     """文書。units="mm"固定、bodiesはリスト、logは操作ログ(唯一の正)。
 
-    契約(次タスクが実装する振る舞い):
+    契約:
         add_body(body)         -> BodyId   追加し、追加したボディを常にactiveにする
         remove_body(body_id)   -> None     bodiesから取り除く。activeだったら解除する
         active_body()          -> Body | None
