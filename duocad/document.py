@@ -6,8 +6,9 @@ M0の契約:
   参照STEPを読み込んだ時点で既に複数ボディになりうるため、day1でリストにしておく)。
 - Body.kind は "solid"(編集対象) か "reference"(読み込んだSTEP等・読み取り専用)のいずれか。
 
-このモジュールのメソッド本体(振る舞い)はスタブ(NotImplementedError)。
-データの入れ物としての Body / Document の生成そのものは実装済みで、M0コア実装タスクの対象外。
+M0で実装済み(2026-08-10)。存在しないBodyIdを渡された `remove_body` / `set_active_body` /
+`is_editable` は KeyError、ID重複の `add_body` は ValueError で落とす
+(黙って無視すると、取り消しや再生の空振りが静かに文書を壊すため。§6予防6)。
 """
 from __future__ import annotations
 

@@ -100,7 +100,12 @@ def write_step(shape: "TopoDS_Shape", path: str) -> None:
 
     filename = os.fspath(path)
     writer = STEPControl_Writer()
-    writer.Transfer(shape, STEPControl_StepModelType.STEPControl_AsIs)
+    # Transfer も IFSelect_ReturnStatus を返す。ここを捨てると「転送に失敗したのに
+    # Write は成功した(=中身の無いSTEP)」を成功として通しうる(§7「例外を投げずに黙って失敗する」)。
+    transfer_status = writer.Transfer(shape, STEPControl_StepModelType.STEPControl_AsIs)
+    if transfer_status != IFSelect_ReturnStatus.IFSelect_RetDone:
+        raise ValueError(f"failed to transfer shape to STEP: {filename} (Transfer -> {transfer_status})")
+
     status = writer.Write(filename)
     if status != IFSelect_ReturnStatus.IFSelect_RetDone:
         _unlink_quietly(filename)
@@ -229,6 +234,11 @@ def normalize_provenance(
     由来は発生しない(`Operation.provenance` は None のまま)。スロットと正規化の置き場所を
     day1に用意しておくのが目的で、後付けすると全操作の書き直しになる。
     M1以降で `extrude_face` 等を足すときに、この関数の戻り値をそのまま `provenance` へ入れる。
+
+    **M1への申し送り(2026-08-10のQAで指摘)**: 戻り値は `TopoDS_Shape` を直接含む
+    **メモリ上の形**であり、そのままでは `OpLog.to_json()` でJSONにできない
+    (M0は常に None なので今は壊れない)。M1で由来を実際に積むときは、
+    永続化用の射影(添字や安定名などのJSON化できる表現)をここに足すこと。
     """
     source = builder.History() if hasattr(builder, "History") else builder
 

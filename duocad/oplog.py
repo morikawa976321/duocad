@@ -150,7 +150,14 @@ class OpLog:
         return operation
 
     def to_json(self) -> str:
-        """現在有効なエントリ全部をJSON文字列へシリアライズする。"""
+        """現在有効なエントリ全部をJSON文字列へシリアライズする。
+
+        **前提**: `args` / `selection` / `provenance` はJSON化できる値であること。
+        M0では `provenance` は常に None。M1で `kernel.normalize_provenance()` の戻り
+        (TopoDS_Shape を含むメモリ上の形)をそのまま入れるとここで TypeError になるので、
+        永続化用の射影を挟むこと(kernel.normalize_provenance のdocstring参照)。
+        黙って落とすと由来が静かに失われるため、変換の失敗は例外のまま上げる。
+        """
         payload = {
             "version": self.FORMAT_VERSION,
             "operations": [asdict(operation) for operation in self.entries],
