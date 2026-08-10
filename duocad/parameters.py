@@ -5,9 +5,6 @@
 書き直しになる。**拘束ソルバは持たない**(§3.4) — 図形どうしの関係は解かず、各図形が
 自分の名前つき数値を持つだけで足りる、というのがv1の判断である。
 
-**M3のスタブ段階(2026-08-11)**: `Document.parameters` のデータモデルは実装済み、
-振る舞いは全部 `NotImplementedError`。
-
 契約:
     register_value(doc, value) -> str
         数値を新しい名前つきの値として登録し、その名前を返す。名前は `d1` `d2` … で、
@@ -39,54 +36,217 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+import math
+from typing import Any, Dict, Optional
 
 from .document import Document
-from .oplog import Operation, register_verb
+from .oplog import Operation, register_verb, verb_handler
 
 #: パラメータ名の接頭辞(Fusion360の d1/d2 と同じ流儀。将来の改名機能はv1の範囲外)
 PARAMETER_PREFIX = "d"
 
 VERB_SET_PARAMETER = "set_parameter"
 
+#: `rebuild` 実行中は `_do_set_parameter` が値の代入だけ行い、再帰的に rebuild しない
+_REBUILDING = False
+
 
 def register_value(doc: Document, value: float) -> str:
     """数値を名前つきの値として登録し、その名前(`d1` `d2` …)を返す。"""
-    raise NotImplementedError("M3で実装する: register_value")
+    number = 1
+    while f"{PARAMETER_PREFIX}{number}" in doc.parameters:
+        number += 1
+    name = f"{PARAMETER_PREFIX}{number}"
+    doc.parameters[name] = float(value)
+    return name
 
 
 def resolve(doc: Document, ref: Any) -> float:
     """パラメータ名なら現在の値を、素の数値ならそのまま返す。"""
-    raise NotImplementedError("M3で実装する: resolve")
+    if isinstance(ref, str):
+        return float(doc.parameters[ref])
+    return float(ref)
 
 
 def parameter_of(doc: Document, sketch_id: str, owner_id: str, key: str) -> str:
     """図形/反復の `key` に結びついたパラメータ名。無ければ KeyError。"""
-    raise NotImplementedError("M3で実装する: parameter_of")
+    from .sketch import get_sketch
+
+    sketch = get_sketch(doc, sketch_id)
+    for entity in sketch.entities:
+        if entity.id == owner_id:
+            if key not in entity.params:
+                raise KeyError(
+                    f"entity {owner_id!r} has no parameter {key!r}"
+                )
+            return entity.params[key]
+    for pattern in sketch.patterns:
+        if pattern.id == owner_id:
+            if key not in pattern.params:
+                raise KeyError(
+                    f"pattern {owner_id!r} has no parameter {key!r}"
+                )
+            return pattern.params[key]
+    raise KeyError(f"no such owner: {owner_id!r} in sketch {sketch_id!r}")
+
+
+def is_positive_int(value: Any) -> bool:
+    """1以上の整数か。boolは除外。floatでも整数値なら受ける(反復の個数の検査)。"""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return value >= 1
+    if isinstance(value, float):
+        return value >= 1 and value == int(value)
+    return False
+
+
+def _require_usable_value(doc: Document, name: str, value: float) -> None:
+    """`name` を `value` にしてよいかを、**その値を使っている図形/反復の側の規則**で検査する。
+
+    `add_circle` 等が作成時に弾く値(NaN・inf・半径0以下・辺0・長さ0の線分)と、
+    `pattern_rectangular` が弾く個数(1以上の整数)は、**後から書き込む経路でも同じように
+    弾かなければならない**。作成時だけ検査していると、`set_parameter` から同じ壊れ方を
+    作れてしまう(2026-08-11のQAで実測: 半径0は以後 `regions()` が毎回失敗し、NaNは
+    例外も出さずに**同じスケッチの正常な領域まで消し**、`to_json()` が裸のNaNを吐いて
+    JSONとして壊れる。復旧手段はundoだけで、保存したら終わり)。
+    """
+    from .sketch import require_valid_params
+
+    if not math.isfinite(value):
+        raise ValueError(f"parameter {name!r} must be a finite number, got {value!r}")
+
+    for sketch in doc.sketches:
+        for entity in sketch.entities:
+            if name in entity.params.values():
+                candidate = {
+                    key: (value if ref == name else resolve(doc, ref))
+                    for key, ref in entity.params.items()
+                }
+                require_valid_params(entity.kind, candidate)
+        for pattern in sketch.patterns:
+            for key, ref in pattern.params.items():
+                if ref == name and key in ("nx", "ny") and not is_positive_int(value):
+                    raise ValueError(
+                        f"pattern count {key} must be a positive integer, got {value!r}"
+                    )
 
 
 def set_parameter(doc: Document, name: str, value: float) -> Operation:
     """名前つきの値を書き換え、ログを再生して形状を追随させる。"""
-    raise NotImplementedError("M3で実装する: set_parameter")
+    if name not in doc.parameters:
+        raise KeyError(f"no such parameter: {name!r}")
+    previous = doc.parameters[name]
+    value = float(value)
+    _require_usable_value(doc, name, value)
+
+    upto_seq = doc.log.entries[-1].seq if doc.log.entries else 0
+    rebuild(doc, upto_seq, overrides={name: value})
+
+    return doc.log.append(
+        VERB_SET_PARAMETER,
+        {"name": name, "value": value, "previous": previous},
+    )
 
 
-def rebuild(doc: Document, upto_seq: int) -> None:
+def rebuild(
+    doc: Document,
+    upto_seq: int,
+    overrides: Optional[Dict[str, float]] = None,
+    log: Optional[Any] = None,
+) -> None:
     """`seq <= upto_seq` のログから文書(bodies / sketches / parameters)を作り直す。
 
     `set_parameter` と そのundoが共有する再生の実体。**ログには触らない**。
+    `overrides` はログへ積む前の試し再生用(成功したら採用、失敗したら元に戻す)。
+
+    **値を「先に」確定させてから幾何を作り直す**のが要点。`set_parameter` はログの上では
+    それが影響する図形や押し出しより**後ろ**に載るので、素直に順番どおり再生すると
+    「古い値で作った形状」ができ、最後に値だけ新しくなる(2026-08-11に実測: 半径を2.0から
+    2.5へ変えた文書を保存して再生すると、体積が2.0のときのまま戻った)。
+    そこで、範囲内の `set_parameter` を**先に走査して最終値の表を作り**、各操作の直後に
+    その表を当てながら再生する。パラメータ名は決定的に振り直されるので、
+    表の名前は再生後の同じスカラーを指す。
     """
-    raise NotImplementedError("M3で実装する: rebuild")
+    global _REBUILDING
+    source = doc.log if log is None else log
+
+    values: Dict[str, float] = {}
+    for operation in source._entries:
+        if operation.seq > upto_seq:
+            break
+        if operation.verb == VERB_SET_PARAMETER:
+            values[operation.args["name"]] = float(operation.args["value"])
+    if overrides:
+        values.update({key: float(value) for key, value in overrides.items()})
+
+    # 失敗しても文書を壊さないための退避。再生は必ず**新しい** Body / Sketch を作るので、
+    # ここで持つ参照は再生中に書き換わらない(だから元に戻せる)。退避が無いと、
+    # 再生が途中で失敗したときに「ログは5行あるがボディもスケッチも0」という
+    # 不整合な文書が残る(2026-08-11のQAで実測: 参照STEPを移動しただけで起きる)。
+    saved_bodies = list(doc.bodies)
+    saved_sketches = list(doc.sketches)
+    saved_parameters = dict(doc.parameters)
+    saved_active = doc._active_body_id
+
+    doc.bodies.clear()
+    doc._active_body_id = None
+    doc.sketches.clear()
+    doc.parameters.clear()
+
+    _REBUILDING = True
+    try:
+        # カーソルではなく seq で切る。undo 中はまだカーソルが戻っておらず、
+        # `.entries` に取り消す操作自身が残っているため。
+        for operation in list(source._entries):
+            if operation.seq > upto_seq:
+                break
+            verb_handler(operation.verb).do(doc, operation)
+            for key, value in values.items():
+                if key in doc.parameters:
+                    doc.parameters[key] = value
+    except Exception:
+        doc.bodies[:] = saved_bodies
+        doc.sketches[:] = saved_sketches
+        doc.parameters.clear()
+        doc.parameters.update(saved_parameters)
+        doc._active_body_id = saved_active
+        raise
+    finally:
+        _REBUILDING = False
+
+    # **アクティブボディの選択はログに載らない**ので、再生では復元されない。
+    # 放っておくと「最後に add_body されたボディ」に勝手に移り、以後の書き出し先
+    # (export_step は active を書く)と編集先が黙って変わる(2026-08-11のQAで実測)。
+    if saved_active is not None and any(body.id == saved_active for body in doc.bodies):
+        doc._active_body_id = saved_active
 
 
 # --------------------------------------------------------------------------------------
 # verbの登録(oplog は verb名の分岐を持たない)
 # --------------------------------------------------------------------------------------
 def _do_set_parameter(document: Document, operation: Operation) -> None:
-    raise NotImplementedError("M3で実装する: set_parameter の redo/replay")
+    name = operation.args["name"]
+    value = float(operation.args["value"])
+    document.parameters[name] = value
+    if _REBUILDING:
+        return
+    # redo / OpLog.replay: 値を入れたうえで、この操作まで含めて作り直す。
+    # **どのログを再生するか**が要る — `OpLog.replay(document)` は自分の entries を
+    # document へ適用するだけで document.log を差し替えないので、外のログを渡された
+    # 場合にここから document.log を見ると**中身の違うログを再生してしまう**
+    # (2026-08-11のQAで実測: 例外も出さずに空の文書ができた)。黙って壊すより止める。
+    if not any(entry is operation for entry in document.log._entries):
+        raise ValueError(
+            "set_parameter を含むログを再生するときは、そのログを document.log へ"
+            "束ねてから replay すること: doc.log = OpLog.from_json(...); doc.log.replay(doc)"
+        )
+    rebuild(document, operation.seq)
 
 
 def _undo_set_parameter(document: Document, operation: Operation) -> None:
-    raise NotImplementedError("M3で実装する: set_parameter の undo")
+    # OpLog.undo はハンドラのあとでカーソルを戻すので、再生は seq < operation.seq
+    rebuild(document, operation.seq - 1)
 
 
 register_verb(VERB_SET_PARAMETER, do=_do_set_parameter, undo=_undo_set_parameter)

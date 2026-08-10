@@ -4,8 +4,6 @@
 個数や間隔を後から変えられなくなり、**反復の存在理由そのものが消える**。
 スケッチが持つのは `Pattern` 1個で、nx×ny の図形は**幾何を作るときに展開される**導出物。
 
-**M3のスタブ段階(2026-08-11)**: 契約だけ置いて実体は `NotImplementedError`。
-
 契約:
     pattern_rectangular(doc, sketch_id, entities, dx, dy, nx, ny) -> PatternId
         `entities` は反復する図形のIDのリスト(同じスケッチのもの)。
@@ -31,12 +29,51 @@
 """
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Any, Sequence
+from uuid import uuid4
 
+from .. import parameters
 from ..document import Document
 from ..oplog import Operation, register_verb
+from ..sketch import Pattern, get_sketch
 
 VERB_PATTERN_RECTANGULAR = "pattern_rectangular"
+
+
+#: 個数の検査は `set_parameter` からも使うので parameters 側に置いてある
+#: (作成時だけ検査していると、後から書き込む経路が素通りする)
+_is_positive_int = parameters.is_positive_int
+
+
+def _release_param_refs(document: Document, params: dict) -> None:
+    for ref in params.values():
+        if isinstance(ref, str):
+            document.parameters.pop(ref, None)
+
+
+def _install_pattern(
+    document: Document,
+    sketch_id: str,
+    pattern_id: str,
+    entities: Sequence[str],
+    dx: float,
+    dy: float,
+    nx: int,
+    ny: int,
+) -> None:
+    """Pattern をスケッチへ足し、4つの数値を名前つきの値として登録する。ログには触らない。"""
+    sketch = get_sketch(document, sketch_id)
+    if any(pattern.id == pattern_id for pattern in sketch.patterns):
+        raise ValueError(f"pattern id already exists: {pattern_id!r}")
+    refs = {
+        "dx": parameters.register_value(document, float(dx)),
+        "dy": parameters.register_value(document, float(dy)),
+        "nx": parameters.register_value(document, float(nx)),
+        "ny": parameters.register_value(document, float(ny)),
+    }
+    sketch.patterns.append(
+        Pattern(id=pattern_id, sources=list(entities), params=refs)
+    )
 
 
 def pattern_rectangular(
@@ -49,7 +86,52 @@ def pattern_rectangular(
     ny: int,
 ) -> str:
     """図形群を nx × ny の矩形状に反復し、PatternId を返す。"""
-    raise NotImplementedError("M3で実装する: pattern_rectangular")
+    if not _is_positive_int(nx) or not _is_positive_int(ny):
+        raise ValueError(
+            f"nx/ny must be integers >= 1, got nx={nx!r}, ny={ny!r}"
+        )
+    nx_i = int(nx)
+    ny_i = int(ny)
+    entity_ids = list(entities)
+    if not entity_ids:
+        raise ValueError("pattern_rectangular requires at least one entity")
+
+    sketch = get_sketch(doc, sketch_id)
+    known = {entity.id for entity in sketch.entities}
+    for entity_id in entity_ids:
+        if entity_id not in known:
+            raise KeyError(
+                f"no such entity: {entity_id!r} in sketch {sketch_id!r}"
+            )
+
+    already_used = {
+        source
+        for pattern in sketch.patterns
+        for source in pattern.sources
+    }
+    for entity_id in entity_ids:
+        if entity_id in already_used:
+            raise ValueError(
+                f"entity {entity_id!r} is already used by another pattern"
+            )
+
+    pattern_id = f"pattern-{uuid4().hex[:12]}"
+    _install_pattern(
+        doc, sketch_id, pattern_id, entity_ids, float(dx), float(dy), nx_i, ny_i
+    )
+    doc.log.append(
+        VERB_PATTERN_RECTANGULAR,
+        {
+            "sketch_id": sketch_id,
+            "pattern_id": pattern_id,
+            "entities": list(entity_ids),
+            "dx": float(dx),
+            "dy": float(dy),
+            "nx": nx_i,
+            "ny": ny_i,
+        },
+    )
+    return pattern_id
 
 
 # --------------------------------------------------------------------------------------
@@ -57,12 +139,31 @@ def pattern_rectangular(
 # --------------------------------------------------------------------------------------
 def _do_pattern_rectangular(document: Document, operation: Operation) -> None:
     """redo / replay: 記録された PatternId と参照でパターンを作り直す。ログには触らない。"""
-    raise NotImplementedError("M3で実装する: pattern_rectangular の redo/replay")
+    args = operation.args
+    _install_pattern(
+        document,
+        args["sketch_id"],
+        args["pattern_id"],
+        args["entities"],
+        float(args["dx"]),
+        float(args["dy"]),
+        int(args["nx"]),
+        int(args["ny"]),
+    )
 
 
 def _undo_pattern_rectangular(document: Document, operation: Operation) -> None:
-    """undo: パターンを取り除く(元の図形は残る)。"""
-    raise NotImplementedError("M3で実装する: pattern_rectangular の undo")
+    """undo: パターンを取り除く(元の図形は残る)。その4つのパラメータも文書から消す。"""
+    args = operation.args
+    sketch = get_sketch(document, args["sketch_id"])
+    pattern_id = args["pattern_id"]
+    remaining = []
+    for pattern in sketch.patterns:
+        if pattern.id == pattern_id:
+            _release_param_refs(document, pattern.params)
+        else:
+            remaining.append(pattern)
+    sketch.patterns = remaining
 
 
 register_verb(

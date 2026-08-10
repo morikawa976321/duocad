@@ -33,6 +33,7 @@ from typing import Any, Dict, List
 from uuid import uuid4
 
 from . import kernel
+from . import parameters
 from .document import BodyId, Document
 from .oplog import Operation, register_verb
 
@@ -153,6 +154,13 @@ def get_sketch(doc: Document, sketch_id: SketchId) -> Sketch:
     raise KeyError(f"no such sketch: {sketch_id!r}")
 
 
+def _release_param_refs(document: Document, params: Dict[str, Any]) -> None:
+    """図形/反復が持っていたパラメータ名を文書から消す(undo用)。"""
+    for ref in params.values():
+        if isinstance(ref, str):
+            document.parameters.pop(ref, None)
+
+
 # --------------------------------------------------------------------------------------
 # verb
 # --------------------------------------------------------------------------------------
@@ -222,7 +230,10 @@ def entity_params(
     sketch = get_sketch(doc, sketch_id)
     for entity in sketch.entities:
         if entity.id == entity_id:
-            return dict(entity.params)
+            return {
+                key: parameters.resolve(doc, ref)
+                for key, ref in entity.params.items()
+            }
     raise KeyError(f"no such entity: {entity_id!r}")
 
 
@@ -268,11 +279,17 @@ def _add_entity(
     **モデルとログには別のdictを渡す**。同じ参照を共有すると、図形のパラメータを
     書き換えた瞬間に**唯一の正であるログ**(§3.1)が黙って書き換わる。M3は
     `Entity.params` の中身を変える予定なので、ここを共有したままにはできない。
+
+    M3: 数値を検査したあと `register_value` で名前つきにし、`Entity.params` には名前を入れる。
+    操作ログの `args["params"]` には打った数値をそのまま入れる(M2の契約)。
     """
-    _require_finite(kind, params)
+    require_valid_params(kind, params)
     sketch = get_sketch(doc, sketch_id)
     entity_id = f"entity-{uuid4().hex[:12]}"
-    sketch.entities.append(Entity(id=entity_id, kind=kind, params=dict(params)))
+    refs = {
+        key: parameters.register_value(doc, value) for key, value in params.items()
+    }
+    sketch.entities.append(Entity(id=entity_id, kind=kind, params=refs))
     doc.log.append(
         verb,
         {
@@ -285,8 +302,13 @@ def _add_entity(
     return entity_id
 
 
-def _require_finite(kind: str, params: Dict[str, float]) -> None:
-    """図形の数値が使える値かを検査する(壊れた図形をスケッチへ入れない)。"""
+def require_valid_params(kind: str, params: Dict[str, float]) -> None:
+    """図形の数値が使える値かを検査する(壊れた図形をスケッチへ入れない)。
+
+    **作成時と `set_parameter` の両方から呼ぶ**。作成時だけ検査していると、同じ値を
+    後から書き込む経路が素通りし、`add_circle` が拒否する半径0やNaNが文書に入る
+    (2026-08-11のQAで実測。NaNは同じスケッチの正常な領域まで黙って消す)。
+    """
     for name, value in params.items():
         if not math.isfinite(value):
             raise ValueError(f"{kind}.{name} must be a finite number, got {value!r}")
@@ -319,18 +341,35 @@ def _do_sketch_create(document: Document, operation: Operation) -> None:
 
 def _undo_sketch_create(document: Document, operation: Operation) -> None:
     sketch_id = operation.args["sketch_id"]
-    document.sketches = [sketch for sketch in document.sketches if sketch.id != sketch_id]
+    sketch = next(
+        (candidate for candidate in document.sketches if candidate.id == sketch_id),
+        None,
+    )
+    if sketch is not None:
+        for entity in sketch.entities:
+            _release_param_refs(document, entity.params)
+        for pattern in sketch.patterns:
+            _release_param_refs(document, pattern.params)
+    document.sketches = [s for s in document.sketches if s.id != sketch_id]
 
 
 def _do_add_entity(document: Document, operation: Operation) -> None:
-    """3つの図形追加verbで共有する再適用(記録された種別とparamsで図形を作り直す)。"""
+    """3つの図形追加verbで共有する再適用(記録された種別とparamsで図形を作り直す)。
+
+    ログの `params` は素の数値。再生時に `register_value` し直し、Entity には参照を入れる。
+    """
     args = operation.args
     sketch = get_sketch(document, args["sketch_id"])
     entity_id = args["entity_id"]
     if any(entity.id == entity_id for entity in sketch.entities):
         raise ValueError(f"entity id already exists: {entity_id!r}")
+    raw_params = dict(args["params"])
+    refs = {
+        key: parameters.register_value(document, float(value))
+        for key, value in raw_params.items()
+    }
     sketch.entities.append(
-        Entity(id=entity_id, kind=args["kind"], params=dict(args["params"]))
+        Entity(id=entity_id, kind=args["kind"], params=refs)
     )
 
 
@@ -338,7 +377,13 @@ def _undo_add_entity(document: Document, operation: Operation) -> None:
     args = operation.args
     sketch = get_sketch(document, args["sketch_id"])
     entity_id = args["entity_id"]
-    sketch.entities = [entity for entity in sketch.entities if entity.id != entity_id]
+    remaining = []
+    for entity in sketch.entities:
+        if entity.id == entity_id:
+            _release_param_refs(document, entity.params)
+        else:
+            remaining.append(entity)
+    sketch.entities = remaining
 
 
 register_verb(VERB_SKETCH_CREATE, do=_do_sketch_create, undo=_undo_sketch_create)

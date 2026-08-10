@@ -224,8 +224,8 @@ def test_extruding_a_pattern_opens_nx_times_ny_holes():
     )
 
 
-def test_changing_the_count_and_the_spacing_moves_the_holes():
-    """`nx` や `dx` を後から変更でき、**穴の数・間隔が追随する**。
+def test_changing_the_spacing_moves_the_holes():
+    """`dx` を後から変更すると、**開けた穴の間隔が追随する**(個数は変わらない)。
 
     形状はログからの導出物なので、`set_parameter` が再生して作り直す(§3.1)。
     穴の位置は全周円筒面の重心(=軸)で確かめる。
@@ -238,20 +238,79 @@ def test_changing_the_count_and_the_spacing_moves_the_holes():
         (10.0, 10.0), (10.0, 20.0), (20.0, 10.0), (20.0, 20.0), (30.0, 10.0), (30.0, 20.0),
     ]
 
-    set_parameter(document, parameter_of(document, sketch_id, pattern_id, "nx"), 2)
-
-    shape = document.active_body().shape
-    assert query.describe_shape(shape)["faces_by_type"]["cylinder_full"] == 2 * ROWS
-    assert hole_axes(shape) == [(10.0, 10.0), (10.0, 20.0), (20.0, 10.0), (20.0, 20.0)]
-
     set_parameter(document, parameter_of(document, sketch_id, pattern_id, "dx"), 8.0)
 
     shape = document.active_body().shape
-    assert hole_axes(shape) == [(10.0, 10.0), (10.0, 20.0), (18.0, 10.0), (18.0, 20.0)]
+    assert hole_axes(shape) == [
+        (10.0, 10.0), (10.0, 20.0), (18.0, 10.0), (18.0, 20.0), (26.0, 10.0), (26.0, 20.0),
+    ]
+    assert query.describe_shape(shape)["faces_by_type"]["cylinder_full"] == COLUMNS * ROWS
     assert math.isclose(
         query.volume(shape),
-        PLATE_VOLUME - 2 * ROWS * math.pi * HOLE_RADIUS**2 * PLATE_THICKNESS,
+        PLATE_VOLUME - COLUMNS * ROWS * math.pi * HOLE_RADIUS**2 * PLATE_THICKNESS,
         rel_tol=VOLUME_REL_TOL,
+    )
+
+
+def test_changing_the_count_changes_the_regions_and_the_next_extrusion():
+    """`nx` を後から変更すると**領域の個数が追随**し、そのあと押し出せば穴の数も追随する。
+
+    **押し出し済みの選択は追随しない**(既知の制限・下のテストが固定する): `extrude` は
+    領域を**添字の集合**として記録する(§3.5)ので、個数が増えても記録済みの選択は増えず、
+    減れば指す先が消えて失敗する。選択が「このスケッチの全領域」のような**述語**で
+    書けるようになるのはM4(§5 `propose_selection(predicate | refs)`)であり、
+    そこまでは「個数を変えたら押し出し直す」が正しい手順である。
+    """
+    document = Document()
+    plate(document)
+    sketch_id, _, pattern_id = hole_pattern(document)
+    assert len(regions(document, sketch_id)) == COLUMNS * ROWS
+
+    set_parameter(document, parameter_of(document, sketch_id, pattern_id, "nx"), 2)
+    assert len(regions(document, sketch_id)) == 2 * ROWS
+
+    set_parameter(document, parameter_of(document, sketch_id, pattern_id, "dx"), 8.0)
+    set_parameter(document, parameter_of(document, sketch_id, pattern_id, "nx"), 4)
+    assert len(regions(document, sketch_id)) == 4 * ROWS
+
+    drill_all(document, sketch_id)
+
+    shape = document.active_body().shape
+    assert query.describe_shape(shape)["faces_by_type"]["cylinder_full"] == 4 * ROWS
+    assert hole_axes(shape) == [
+        (10.0, 10.0), (10.0, 20.0), (18.0, 10.0), (18.0, 20.0),
+        (26.0, 10.0), (26.0, 20.0), (34.0, 10.0), (34.0, 20.0),
+    ]
+    assert math.isclose(
+        query.volume(shape),
+        PLATE_VOLUME - 4 * ROWS * math.pi * HOLE_RADIUS**2 * PLATE_THICKNESS,
+        rel_tol=VOLUME_REL_TOL,
+    )
+
+
+def test_reducing_the_count_below_an_extruded_selection_is_refused():
+    """押し出し済みの領域が反復の縮小で**消える**編集は、黙って通さず文書を元に戻す。
+
+    項番13(「領域が分裂・合体・消失した場合に黙って通さない」)がパラメータ経由で起きる典型。
+    6個の穴を開けたあとで `nx` を3から2へ減らすと、記録された押し出しが指していた
+    5番目・6番目の領域が消える。ここを通すと、**開けたはずの穴が黙って減った**モデルが残る。
+    """
+    document = Document()
+    plate(document)
+    sketch_id, _, pattern_id = hole_pattern(document)
+    drill_all(document, sketch_id)
+    volume_before = query.volume(document.active_body().shape)
+    entries_before = len(document.log.entries)
+    name = parameter_of(document, sketch_id, pattern_id, "nx")
+
+    with pytest.raises(ValueError):
+        set_parameter(document, name, 2)
+
+    assert document.parameters[name] == COLUMNS, "失敗したのに値が変わっている"
+    assert len(document.log.entries) == entries_before
+    assert len(regions(document, sketch_id)) == COLUMNS * ROWS
+    assert math.isclose(
+        query.volume(document.active_body().shape), volume_before, rel_tol=VOLUME_REL_TOL
     )
 
 

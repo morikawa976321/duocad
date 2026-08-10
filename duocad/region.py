@@ -18,9 +18,10 @@ kernel.py だけ。tests/test_boundaries.py が検査する)。
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from . import kernel
+from . import parameters
 from .document import Document
 from .sketch import SketchId, get_sketch
 
@@ -88,6 +89,75 @@ def regions(doc: Document, sketch_id: SketchId) -> List[Region]:
     ]
 
 
+def _translate_params(
+    kind: str, params: Dict[str, float], dx: float, dy: float
+) -> Dict[str, float]:
+    """図形の2D params を (dx, dy) だけ平行移動したコピーを返す。"""
+    moved = dict(params)
+    if kind == "line":
+        moved["x0"] = params["x0"] + dx
+        moved["x1"] = params["x1"] + dx
+        moved["y0"] = params["y0"] + dy
+        moved["y1"] = params["y1"] + dy
+    elif kind == "circle":
+        moved["cx"] = params["cx"] + dx
+        moved["cy"] = params["cy"] + dy
+    elif kind == "rectangle":
+        moved["x"] = params["x"] + dx
+        moved["y"] = params["y"] + dy
+    else:
+        raise ValueError(f"unknown entity kind: {kind!r}")
+    return moved
+
+
+def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
+    """パラメータを解決し、矩形反復を nx×ny に展開した素の図形リストを返す。
+
+    反復に参照されている図形は単独では出さない(格子の (0,0) が元の位置)。
+    kernel は名前を知らないので、ここですべて素の数値にする。
+    """
+    sketch = get_sketch(doc, sketch_id)
+    patterned = {
+        source
+        for pattern in sketch.patterns
+        for source in pattern.sources
+    }
+    entities: List[dict] = []
+
+    for entity in sketch.entities:
+        if entity.id in patterned:
+            continue
+        resolved = {
+            key: parameters.resolve(doc, ref)
+            for key, ref in entity.params.items()
+        }
+        entities.append({"kind": entity.kind, "params": resolved})
+
+    for pattern in sketch.patterns:
+        dx = parameters.resolve(doc, pattern.params["dx"])
+        dy = parameters.resolve(doc, pattern.params["dy"])
+        nx = int(parameters.resolve(doc, pattern.params["nx"]))
+        ny = int(parameters.resolve(doc, pattern.params["ny"]))
+        by_id = {entity.id: entity for entity in sketch.entities}
+        for source_id in pattern.sources:
+            entity = by_id[source_id]
+            base = {
+                key: parameters.resolve(doc, ref)
+                for key, ref in entity.params.items()
+            }
+            for j in range(ny):
+                for i in range(nx):
+                    entities.append(
+                        {
+                            "kind": entity.kind,
+                            "params": _translate_params(
+                                entity.kind, base, i * dx, j * dy
+                            ),
+                        }
+                    )
+    return entities
+
+
 def _regions_detailed(doc: Document, sketch_id: SketchId) -> List[dict]:
     """`kernel.sketch_regions` の結果をそのまま返す(面つき。`verbs/extrude.py` が使う)。
 
@@ -107,7 +177,7 @@ def _regions_detailed(doc: Document, sketch_id: SketchId) -> List[dict]:
         if body.shape is None:
             raise ValueError(f"body {body_id!r} has no shape")
         face = kernel.face_of(body.shape, int(sketch.plane["index"]))
-    entities = [
-        {"kind": entity.kind, "params": dict(entity.params)} for entity in sketch.entities
-    ]
+    entities = _expanded_entities(doc, sketch_id)
+    if not entities:
+        return []
     return kernel.sketch_regions(sketch.plane, entities, face=face)

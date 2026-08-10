@@ -589,7 +589,18 @@ MODES = ("join", "cut")
 `tests/test_parameters.py` / `tests/test_pattern.py` がM3の契約。次タスク（M3ロジックの実装）は
 **これを全部緑にすることだけ**を目標にする。上のM0・M2の節は当時のまま。
 
-## 現状（テスト先行の段階・2026-08-11）
+## 現状（2026-08-11・M3ロジック実装後）
+
+**141件収集・収集エラー0・141 passed。** M3のロジックは同日の後続タスクで実装された。
+内訳は M0〜M2 の115件（M2の回帰9件を含む）＋ M3の契約21件 ＋
+**`tests/test_m3_regressions.py` の5件**。最後のファイルは契約ではなく**再発防止**で、
+QAが「131件が全部緑のまま壊れていた経路」を4種類実測したことによる（`set_parameter` の
+作り直しがアクティブボディの選択を捨てる／作り直しの失敗で空の文書が残る／
+`add_circle` が弾く値を `set_parameter` から書き込める／外のログを `replay` すると
+黙って空の文書ができる）。いずれも**「全部消して作り直す」が、消してはいけないものと
+失敗したときの後始末を持っていなかった**ことに由来する。
+
+### テスト先行の段階でどうだったか（契約タスク完了時点の記録）
 
 **129件収集・収集エラー0・22 failed / 107 passed。**
 
@@ -689,7 +700,7 @@ pattern_rectangular(doc, sketch_id, entities, dx, dy, nx, ny) -> PatternId
 | 6（nx×ny個に増える） | `test_pattern.py::test_pattern_multiplies_the_entity_into_nx_times_ny_regions` |
 | 7（1 verb・1行・展開しない） | `test_pattern.py::test_pattern_is_one_operation_and_is_not_expanded_into_entities`（`Pattern.params` も参照であることを含む） |
 | 8（押し出すと穴がnx×ny個） | `test_pattern.py::test_extruding_a_pattern_opens_nx_times_ny_holes` |
-| 9（nx・dxの変更が追随） | `test_pattern.py::test_changing_the_count_and_the_spacing_moves_the_holes` |
+| 9（nx・dxの変更が追随） | `test_pattern.py::test_changing_the_spacing_moves_the_holes`, `::test_changing_the_count_changes_the_regions_and_the_next_extrusion`, `::test_reducing_the_count_below_an_extruded_selection_is_refused` |
 | 10（反復のundo） | `test_pattern.py::test_pattern_can_be_undone` |
 | 11（半径1箇所で全穴が追随） | `test_pattern.py::test_editing_one_radius_moves_every_hole`（＋再生は `::test_pattern_survives_save_load_and_replay`） |
 | 12（import境界） | `test_parameters.py::test_m3_modules_are_covered_by_the_import_boundary_scan` |
@@ -712,3 +723,41 @@ pattern_rectangular(doc, sketch_id, entities, dx, dy, nx, ny) -> PatternId
 - **失われた領域を指したまま再生 → `ValueError` で止まる**（M3が固定した）
 - **入れ替わった領域を指したまま再生 → 静かに新しい方へ適用される**（未解決。
   解くには `RegionRef.provenance` を実際に埋める＝L4化が要る。M4以降）
+
+
+## M3ロジック実装で判明した契約の誤りと、その直し方（2026-08-11）
+
+**テストを1件だけ書き直した。** 初版の `test_changing_the_count_and_the_spacing_moves_the_holes`
+は「6個の穴を開けたあとで `nx` を3→2に減らすと、穴の数が追随する」ことを要求していたが、
+これは**同じM3の項番13（押し出していた領域が消えたら黙って通さない）と両立しない** ——
+`extrude` は領域を**添字の集合**として記録する（§3.5）ので、個数を減らせば記録済みの
+選択が指す先が消える。実装がどちらかを裏切るしかない状態だった（「通らないから緩めた」
+のではなく、契約自身が矛盾していた）。
+
+そこで1件を**3件に割った**。範囲は狭めていない — 3件目は新しく足した拘束である:
+
+1. `test_changing_the_spacing_moves_the_holes` — `dx` の変更（個数は不変）は、
+   **開けた穴の位置まで**追随する
+2. `test_changing_the_count_changes_the_regions_and_the_next_extrusion` — `nx` の変更は
+   **領域の個数**に追随し、そのあと押し出せば穴の数も追随する
+3. `test_reducing_the_count_below_an_extruded_selection_is_refused` — 押し出し済みの領域が
+   反復の縮小で**消える**編集は `ValueError` で止まり、文書は元のまま
+
+**既知の制限（M4で解ける）**: 押し出し済みの選択は個数の変更に追随しない。増やしても
+記録済みの選択は増えず、減らせば上の3で止まる。選択を「このスケッチの全領域」のような
+**述語**で書けるようになるのは M4（§5 `propose_selection(predicate | refs)`）であり、
+それまでは「個数を変えたら押し出し直す」が正しい手順。
+
+## M3の実装で決めたこと（契約の外側・次に触る人向け）
+
+- **`parameters.rebuild` はログを2回走査する**。`set_parameter` はログの上では影響する
+  図形や押し出しより**後ろ**に載るので、順番どおり再生すると「古い値で作った形状」が
+  できてしまう。先に範囲内の `set_parameter` を走査して最終値の表を作り、各操作の直後に
+  当てる。
+- **`rebuild` は失敗したら文書を元へ戻す**（作り直しはログ全部の再生＝`import_step` の
+  読み直しを含むので、値と無関係な理由で失敗しうる）。
+- **`rebuild` はアクティブボディの選択を保つ**（選択はログに載らないため）。
+- **`set_parameter` を含むログは `document.log` へ束ねてから `replay` すること**。
+  外のログを直接 `replay(document)` すると、作り直しがどのログを見るべきか決められないので
+  **例外で止まる**（黙って別物の文書を作らないため）。M0のREADMEが書いている
+  `doc = Document(); doc.log = OpLog.from_json(...); doc.log.replay(doc)` が正しい使い方。
