@@ -5,7 +5,8 @@
 `C:\Users\tm976\mf\reports\cad_v1_implementation_plan_2026-08-10.md`（このREADMEと食い違ったら
 そちらを優先する）。
 
-**M2（スケッチ・領域検出・押し出し）の契約は本文書の末尾に追記してある（2026-08-11）。**
+**M2（スケッチ・領域検出・押し出し）と M3（パラメータ・矩形反復）の契約は、
+この順で本文書の末尾に追記してある（2026-08-11）。**
 M1（`extrude_face` / `make_editable_copy` / `tessellate`）の契約は
 `tests/test_extrude_face.py` のモジュールdocstringが持つ（ここには無い）。
 
@@ -569,7 +570,7 @@ MODES = ("join", "cut")
 | 14（import境界） | `test_sketch.py::test_m2_modules_are_covered_by_the_import_boundary_scan` |
 | 15（RegionRefの由来スロット） | `test_region.py::test_region_ref_declares_a_provenance_slot`（＋貼った面の側は `test_sketch.py::test_face_plane_ref_declares_a_provenance_slot`） |
 
-## QAで足した契約（2026-08-11・cursor auto のレビュー指摘を反映）
+## M2のQAで足した契約（2026-08-11・cursor auto のレビュー指摘を反映）
 
 初版に対して cursor(auto) が major 1件・minor 6件を指摘し、全件を反映した。**契約が増えた分**:
 
@@ -580,3 +581,134 @@ MODES = ("join", "cut")
 - 参照ボディ（`kind="reference"`）の拒否、領域添字 `0` / 負数の拒否
 - `Entity` / `Region` のフィールド検査を**完全一致から包含へ**（補助フィールドの追加まで
   禁じるのは過剰拘束）
+
+---
+
+# M3 — パラメータと矩形反復のAPI契約（2026-08-11追記）
+
+`tests/test_parameters.py` / `tests/test_pattern.py` がM3の契約。次タスク（M3ロジックの実装）は
+**これを全部緑にすることだけ**を目標にする。上のM0・M2の節は当時のまま。
+
+## 現状（テスト先行の段階・2026-08-11）
+
+**129件収集・収集エラー0・22 failed / 107 passed。**
+
+- **M0〜M2の106件は1行も触っておらず、単独実行でも 106 passed。**
+- 22件の赤の内訳: **19件が `NotImplementedError`（スタブ）由来**、
+  **3件が `AssertionError`** — いずれも
+  「M2の `add_*` はまだ素の数値を `Entity.params` に入れている」ことを検出している
+  （`test_numbers_become_named_values_and_entities_hold_references` /
+  `test_every_entity_kind_holds_references_not_numbers` /
+  `test_parameter_names_are_released_by_undo_and_reused`）。
+  **これは収集エラーやimport事故ではなく、M3が変える対象そのもの**（数値を座標に
+  焼き込まない、が未達であること）を指している。M2の節と違って
+  「赤は全件NotImplementedError」とは書けないので、ここに明記しておく。
+- 新たに緑になったのは1件（M3ファイルへのimport境界の走査）。
+
+## モジュール一覧（M3で増える分）
+
+| モジュール | 役割 | OCP直接import | build123d直接import |
+|---|---|---|---|
+| `duocad/parameters.py` | 名前つきの寸法値・`set_parameter`・再生 | 禁止 | 禁止 |
+| `duocad/verbs/pattern.py` | verb `pattern_rectangular` | 禁止 | 禁止 |
+
+データモデルの追加（テスト先行の段階で実装済み）: `Document.parameters`（§3.1）、
+`Sketch.patterns` と `Pattern`（`duocad/sketch.py`）。
+
+## `duocad/parameters.py`
+
+```python
+register_value(doc, value) -> str            # 名前つきの値を登録し名前を返す
+resolve(doc, ref) -> float                   # パラメータ名なら現在値、素の数値ならそのまま
+parameter_of(doc, sketch_id, owner_id, key) -> str   # 図形/反復のkeyに結びついた名前
+set_parameter(doc, name, value) -> Operation
+rebuild(doc, upto_seq) -> None               # seq<=upto_seq のログから文書を作り直す
+```
+
+**契約**:
+
+- **数値は図形の座標に焼き込まない**（§6予防5）。`add_circle(doc, sk, (0,0), 20)` は
+  `cx` / `cy` / `radius` の3つを名前つきの値として登録し、`Entity.params` には
+  **その名前（str）**を入れる。`entity_params()` は解決済みの数値を返し続ける（M2の契約）。
+- **名前は `d1` `d2` …**（Fusion360と同じ流儀）。使われていない**最小の正整数**を使う。
+  undoで消えた名前は再利用される。**決定的であることが要件** — 再生で名前の振られ方が
+  揺れると、`set_parameter` が記録した名前が別の値を指す。
+- **操作ログの `args` には打った数値がそのまま入る**（パラメータ名ではない）。M2の
+  `test_sketch_and_entities_are_logged_and_undoable` が固定しており、ログが唯一の正で
+  パラメータはそこから再生されるものだから、この形が正しい。
+- `set_parameter`:
+  - 存在しない名前は **`KeyError`**、文書にもログにも変更を残さない
+  - `args={"name":.., "value":.., "previous":..}`。`previous` は undo が値を戻すため
+  - **形状を追随させる**（§3.1「形状はログからの導出物」）。値を変えたらログを再生して
+    bodies を作り直す。作り直さなければ「形が追随する」は嘘になる
+  - **再生で押し出しの対象領域が失われたら `ValueError`。文書は変更前のまま戻す**
+    （§3.3の注意点・§7「領域はパラメータ編集で変わる」。壊れたモデルを静かに残さない）
+  - undo は `previous` に戻して同じく作り直す。
+    **落とし穴**: `OpLog.undo` はハンドラを呼んでからカーソルを戻すので、undoの中で
+    ログ全体を再生すると**取り消すはずの操作まで再適用される**。再生範囲は
+    `seq < operation.seq` に限ること
+
+## `duocad/verbs/pattern.py`
+
+```python
+pattern_rectangular(doc, sketch_id, entities, dx, dy, nx, ny) -> PatternId
+```
+
+**契約**:
+
+- **反復は1つのverb・ログ1行**。nx×ny個の図形へ展開しない（展開すると個数も間隔も
+  後から変えられなくなり、反復の存在理由が消える。§2「verbの粒度」）。
+  スケッチが持つのは `Pattern` 1個で、nx×ny個は**幾何を作るときの導出物**。
+- `nx` / `ny` は**元を含めた個数**（格子は (0,0) を含む）。したがって
+  **反復に参照されている図形は単独では描かない**（描くと (0,0) の辺が二重になる）。
+- `dx` / `dy` / `nx` / `ny` の4つとも名前つきの値になる（個数も間隔も後から変えられる）。
+- `args={"sketch_id":.., "pattern_id":.., "entities":[..], "dx":.., "dy":.., "nx":.., "ny":..}`。
+- 失敗（`nx`/`ny` が1以上の整数でない・`entities` が空・別スケッチの図形・二重反復）は
+  例外で、文書にもログにも残さない。
+
+## M3の決定（仕様書から導かれないもの）
+
+1. **`Sketch.patterns` を `entities` と分けた**。反復は「図形を参照する別のもの」で、
+   `Entity.params` がスカラーだけを持つ形（M3のパラメータ化がそのまま効く形）を保つため。
+   `Entity` に `sources` を足すと、線・円・長方形の全部が使わないフィールドを持つ。
+2. **パラメータ名は `d1` `d2` …**。改名機能はv1の範囲外（§9の「以降」）。
+3. **`set_parameter` が再生の起点**（アプリ層でもverbでもなく、この関数が bodies を作り直す）。
+   「値を変えたら形が追随する」をAPIの内側で閉じるため。
+4. **穴の位置の検証は全周円筒面の重心で行う**（`Region` に重心を足さない）。
+   §3.3の `Region : { index, area }` を広げずに間隔の追随を確かめられる。
+
+## テスト一覧とタスクファイル項番の対応（M3）
+
+| タスクファイルの項番 | テスト |
+|---|---|
+| 1（名前つきの値・参照を持つ） | `test_parameters.py::test_numbers_become_named_values_and_entities_hold_references`, `::test_every_entity_kind_holds_references_not_numbers`, `::test_parameter_names_are_d1_d2_d3_in_creation_order`, `::test_parameter_names_are_released_by_undo_and_reused`, `::test_parameter_of_rejects_unknown_keys_and_owners` |
+| 2（値の変更で形が変わる） | `test_parameters.py::test_set_parameter_changes_the_resulting_shape` |
+| 3（ログとundo） | `test_parameters.py::test_set_parameter_is_logged_and_undoable` |
+| 4（存在しない名前） | `test_parameters.py::test_set_parameter_rejects_an_unknown_name` |
+| 5（保存→読込→再生） | `test_parameters.py::test_parameters_survive_save_load_and_replay` |
+| 6（nx×ny個に増える） | `test_pattern.py::test_pattern_multiplies_the_entity_into_nx_times_ny_regions` |
+| 7（1 verb・1行・展開しない） | `test_pattern.py::test_pattern_is_one_operation_and_is_not_expanded_into_entities`（`Pattern.params` も参照であることを含む） |
+| 8（押し出すと穴がnx×ny個） | `test_pattern.py::test_extruding_a_pattern_opens_nx_times_ny_holes` |
+| 9（nx・dxの変更が追随） | `test_pattern.py::test_changing_the_count_and_the_spacing_moves_the_holes` |
+| 10（反復のundo） | `test_pattern.py::test_pattern_can_be_undone` |
+| 11（半径1箇所で全穴が追随） | `test_pattern.py::test_editing_one_radius_moves_every_hole`（＋再生は `::test_pattern_survives_save_load_and_replay`） |
+| 12（import境界） | `test_parameters.py::test_m3_modules_are_covered_by_the_import_boundary_scan` |
+| 13（領域が壊れたら黙って通さない） | `test_parameters.py::test_set_parameter_refuses_an_edit_that_destroys_an_extruded_region`（＋個数・二重反復の検査は `test_pattern.py::test_pattern_rejects_counts_that_are_not_positive_integers`, `::test_pattern_rejects_an_empty_or_foreign_entity_list`, `::test_pattern_rejects_patterning_the_same_entity_twice`） |
+
+## M3で**契約にしなかった**こと（範囲の明示・2026-08-11のQA指摘への回答）
+
+タスクファイルの項番13は「領域が**分裂・合体・消失**した場合に黙って通さない」だが、
+**M3が縛るのは「押し出しの対象が失われた（＝添字が消えた）」場合だけ**にした。
+
+理由: 領域の**取り違え**（添字は残っているが、指している領域が別物に入れ替わる）を
+検出するには、面積や添字ではなく**領域の同一性**を追う必要があり、それは実装計画書§6が
+「由来スロットの適用先は3つ」の3つ目として **`RegionRef.provenance` に空で用意してある**もの
+（＝後で埋める前提の穴）である。分割線を動かすと2領域の面積が入れ替わり、面積降順で並べる
+現在の列挙では添字も入れ替わるが、**これを一律に失敗にすると「値を編集したら形が追随する」
+というM3の目的そのものを潰す**（線を動かすのは正当な編集である）。
+
+したがって現状の位置づけは次のとおりで、これは既知の制限である:
+
+- **失われた領域を指したまま再生 → `ValueError` で止まる**（M3が固定した）
+- **入れ替わった領域を指したまま再生 → 静かに新しい方へ適用される**（未解決。
+  解くには `RegionRef.provenance` を実際に埋める＝L4化が要る。M4以降）

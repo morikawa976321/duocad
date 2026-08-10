@@ -38,6 +38,7 @@ from .oplog import Operation, register_verb
 
 SketchId = str
 EntityId = str
+PatternId = str
 
 #: 基準平面の名前(この3つだけ。実装計画書§1「平面(基準3面)」)
 BASE_PLANES = ("XY", "XZ", "YZ")
@@ -110,17 +111,38 @@ class Entity:
 
 
 @dataclass
+class Pattern:
+    """図形の矩形反復(M3で追加。実装計画書§1の `pattern_rectangular`)。
+
+    **1つの反復は1つのオブジェクト**であり、nx×ny 個の図形へ展開して持たない
+    (展開すると個数や間隔を後から変えられなくなり、反復の存在理由が消える。§2「verbの粒度」)。
+    展開は幾何を作るときだけ行う導出物。
+
+    `params` のキーは `dx` / `dy` / `nx` / `ny` で、値は `Entity.params` と同じく
+    **名前つきの値への参照**(§6予防5)。格子は (0,0) を含み、そこが `sources` の
+    元の位置になる。
+    """
+
+    id: PatternId
+    sources: List[EntityId] = field(default_factory=list)
+    params: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class Sketch:
     """1つのスケッチ。`plane` は PlaneRef、`entities` は追加順の図形。
 
     **領域(`Region`)は持たない** — 領域は描くものではなく計算されるもの(§3.3)なので、
     正は `duocad.region.regions(doc, sketch_id)` の戻り値であり、キャッシュを持つか
     どうかは実装の自由にしてある(tests/README.md「M2の決定」)。
+
+    `patterns` はM3で追加(反復は図形ではなく、図形を参照する別のもの)。
     """
 
     id: SketchId
     plane: dict
     entities: List[Entity] = field(default_factory=list)
+    patterns: List["Pattern"] = field(default_factory=list)
 
 
 def get_sketch(doc: Document, sketch_id: SketchId) -> Sketch:

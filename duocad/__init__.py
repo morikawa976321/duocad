@@ -7,9 +7,11 @@ M1でビューポート(WebSocketサーバ + web/)と面の押し出しが載る
     io_step  — STEP読み込み・STEP/STL書き出し
     query    — 問い合わせ層のインタフェース(build123dをラップする境界)
     kernel   — OCP(OCCT)を直接叩く層。duocad配下でOCP.*をimportしてよいのはここだけ
-    sketch   — スケッチ(M2)。Sketch/Entityのデータモデルとスケッチの4 verb
+    sketch   — スケッチ(M2)。Sketch/Entity/Patternのデータモデルとスケッチの4 verb
+    parameters — 名前つきの寸法値(M3)。set_parameter と値の登録・解決
     region   — 領域(M2)。Region/RegionRefと領域検出
-    verbs    — verb層(1 verb 1モジュール)。M1で extrude_face / make_editable_copy、M2で extrude
+    verbs    — verb層(1 verb 1モジュール)。M1で extrude_face / make_editable_copy、
+               M2で extrude、M3で pattern_rectangular
     server   — WebSocketサーバ + web/dist の静的配信(アプリ層との唯一の接点)
 
 パッケージのimport時に**verbを定義したモジュールを読み込む**。oplogのレジストリ
@@ -21,5 +23,6 @@ verbが増えたらここに1行足す(oplogにverb名の分岐を書かない�
 `python -m duocad.server` で起動すれば必要なものは自分でimportする)。
 """
 from . import io_step as _io_step  # noqa: F401  verb "import_step" をレジストリへ登録する
+from . import parameters as _parameters  # noqa: F401  verb "set_parameter" を登録する
 from . import sketch as _sketch  # noqa: F401  スケッチの4 verb を登録する
-from . import verbs as _verbs  # noqa: F401  extrude_face / make_editable_copy / extrude を登録する
+from . import verbs as _verbs  # noqa: F401  extrude_face / make_editable_copy / extrude / pattern_rectangular を登録する

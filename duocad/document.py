@@ -57,6 +57,11 @@ class Document:
         # 型は duocad.sketch.Sketch だが、document.py -> sketch.py の依存を作らないため
         # 注釈は付けない(sketch.py が document.py を import する一方向を保つ)。
         self.sketches: list = []
+        # M3追加。実装計画書§3.1の `parameters : { name: number }`(名前つきの寸法値)。
+        # 図形は値そのものではなくこの名前への参照を持つ(§6予防5)。
+        # 書き換えは `duocad.parameters.set_parameter` を通す(直接代入すると
+        # 操作ログに載らず、形状の再生と食い違う)。
+        self.parameters: dict = {}
         self._active_body_id: Optional[BodyId] = None
         # 遅延import: document.py -> oplog.py の一方向依存に留め、循環importを避ける。
         from .oplog import OpLog
