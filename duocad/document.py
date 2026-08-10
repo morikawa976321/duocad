@@ -64,21 +64,52 @@ class Document:
         return self._units
 
     def add_body(self, body: Body) -> BodyId:
-        """bodiesへ追加し、追加したボディを常にactiveにして body.id を返す。"""
-        raise NotImplementedError
+        """bodiesへ追加し、追加したボディを常にactiveにして body.id を返す。
+
+        v1のUIは単一フォーカスなので、最新の操作対象を自動でactiveにする。
+        同じIDのボディが既にある場合は ValueError(黙って上書き・重複させない。§6予防6)。
+        """
+        if self._find(body.id) is not None:
+            raise ValueError(f"body id already exists: {body.id!r}")
+        self.bodies.append(body)
+        self._active_body_id = body.id
+        return body.id
 
     def remove_body(self, body_id: BodyId) -> None:
-        """指定IDのボディをbodiesから取り除く。activeだった場合はactiveをNoneに戻す。"""
-        raise NotImplementedError
+        """指定IDのボディをbodiesから取り除く。activeだった場合はactiveをNoneに戻す。
+
+        存在しないIDは KeyError(取り消しや再生が空振りしたことを黙って見逃さない)。
+        """
+        body = self._find(body_id)
+        if body is None:
+            raise KeyError(f"no such body: {body_id!r}")
+        self.bodies.remove(body)
+        if self._active_body_id == body_id:
+            # 取り除いたボディを指したまま参照が残るのを防ぐ
+            self._active_body_id = None
 
     def active_body(self) -> Optional[Body]:
         """現在アクティブなボディを返す(無ければNone)。"""
-        raise NotImplementedError
+        if self._active_body_id is None:
+            return None
+        return self._find(self._active_body_id)
 
     def set_active_body(self, body_id: BodyId) -> None:
         """アクティブボディを切り替える。存在しないIDならKeyErrorを送出する。"""
-        raise NotImplementedError
+        if self._find(body_id) is None:
+            raise KeyError(f"no such body: {body_id!r}")
+        self._active_body_id = body_id
 
     def is_editable(self, body_id: BodyId) -> bool:
         """kind=="solid" のボディのみ True。参照ボディ(kind="reference")は編集操作の対象にならない。"""
-        raise NotImplementedError
+        body = self._find(body_id)
+        if body is None:
+            raise KeyError(f"no such body: {body_id!r}")
+        return body.kind == "solid"
+
+    def _find(self, body_id: BodyId) -> Optional[Body]:
+        """IDでボディを引く(無ければNone)。"""
+        for body in self.bodies:
+            if body.id == body_id:
+                return body
+        return None
