@@ -1,9 +1,7 @@
 """スケッチ(実装計画書 §3.3「スケッチと領域」・§1のスケッチverb)。M2で追加。
 
-**M2のスタブ段階(2026-08-11)**: データモデル(`Sketch` / `Entity` / PlaneRef と、その
-day1の由来スロット)は**実装済み**で、振る舞い(verb)は全部 `NotImplementedError`。
-M0が `Document.units` / `Body.kind` / `Operation.provenance` を先に実装したのと同じ位置づけで、
-**後付けすると全部書き直しになる形だけ**を先に固定している(tests/README.md 参照)。
+M2(2026-08-11)で実装済み。データモデル(`Sketch` / `Entity` / PlaneRef と、その day1 の
+由来スロット)はテスト先行の段階で先に置き、verbはこのタスクで埋めた(tests/README.md 参照)。
 
 契約:
     sketch_create(doc, plane) -> SketchId
@@ -29,9 +27,12 @@ M0が `Document.units` / `Body.kind` / `Operation.provenance` を先に実装し
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
+from uuid import uuid4
 
+from . import kernel
 from .document import BodyId, Document
 from .oplog import Operation, register_verb
 
@@ -131,7 +132,7 @@ def get_sketch(doc: Document, sketch_id: SketchId) -> Sketch:
 
 
 # --------------------------------------------------------------------------------------
-# verb(M2ではすべてスタブ)
+# verb
 # --------------------------------------------------------------------------------------
 def sketch_create(doc: Document, plane: Any) -> SketchId:
     """スケッチを作って SketchId を返す。
@@ -141,26 +142,49 @@ def sketch_create(doc: Document, plane: Any) -> SketchId:
     黙って通すと以後の領域検出が意味を失う。§6予防6)。失敗時は `doc.sketches` にも
     ログにも変更を残さないこと。
     """
-    raise NotImplementedError("M2で実装する: sketch_create")
+    plane_ref = _resolve_plane(doc, plane)
+    sketch_id = f"sketch-{uuid4().hex[:12]}"
+    # モデルとログには別のdictを渡す(共有すると、貼った面の由来スロットを後から埋めた
+    # 瞬間に、唯一の正であるログが黙って書き換わる)。
+    doc.sketches.append(Sketch(id=sketch_id, plane=dict(plane_ref)))
+    doc.log.append(VERB_SKETCH_CREATE, {"sketch_id": sketch_id, "plane": dict(plane_ref)})
+    return sketch_id
 
 
 def add_line(doc: Document, sketch_id: SketchId, p0: Any, p1: Any) -> EntityId:
     """スケッチ平面上の2点 `p0`/`p1` を結ぶ線分を足して EntityId を返す。"""
-    raise NotImplementedError("M2で実装する: add_line")
+    params = {
+        "x0": float(p0[0]),
+        "y0": float(p0[1]),
+        "x1": float(p1[0]),
+        "y1": float(p1[1]),
+    }
+    return _add_entity(doc, sketch_id, "line", params, VERB_ADD_LINE)
 
 
 def add_circle(
     doc: Document, sketch_id: SketchId, center: Any, radius: float
 ) -> EntityId:
     """スケッチ平面上の `center` を中心とする半径 `radius` の円を足して EntityId を返す。"""
-    raise NotImplementedError("M2で実装する: add_circle")
+    params = {
+        "cx": float(center[0]),
+        "cy": float(center[1]),
+        "radius": float(radius),
+    }
+    return _add_entity(doc, sketch_id, "circle", params, VERB_ADD_CIRCLE)
 
 
 def add_rectangle(
     doc: Document, sketch_id: SketchId, corner: Any, width: float, height: float
 ) -> EntityId:
     """`corner` を左下とする幅 `width`・高さ `height` の長方形を足して EntityId を返す。"""
-    raise NotImplementedError("M2で実装する: add_rectangle")
+    params = {
+        "x": float(corner[0]),
+        "y": float(corner[1]),
+        "width": float(width),
+        "height": float(height),
+    }
+    return _add_entity(doc, sketch_id, "rectangle", params, VERB_ADD_RECTANGLE)
 
 
 def entity_params(
@@ -173,27 +197,126 @@ def entity_params(
     `Entity.params` の中身は参照に変わるが、ここの戻り値(数値)は変わらない。
     テストがこの関数越しに読んでいれば、M3の変更でM2の契約は壊れない。
     """
-    raise NotImplementedError("M2で実装する: entity_params")
+    sketch = get_sketch(doc, sketch_id)
+    for entity in sketch.entities:
+        if entity.id == entity_id:
+            return dict(entity.params)
+    raise KeyError(f"no such entity: {entity_id!r}")
+
+
+def _resolve_plane(doc: Document, plane: Any) -> dict:
+    """引数の平面指定を PlaneRef のdictへ正規化する。失敗時は文書を触らない。"""
+    if isinstance(plane, str):
+        return base_plane(plane)
+    if isinstance(plane, dict) and plane.get("kind") == "base":
+        return base_plane(plane["name"])
+    if isinstance(plane, dict) and plane.get("kind") == "face":
+        body_id = plane["body"]
+        face_index = int(plane["index"])
+        body = next((candidate for candidate in doc.bodies if candidate.id == body_id), None)
+        if body is None:
+            raise KeyError(f"no such body: {body_id!r}")
+        if body.shape is None:
+            raise ValueError(f"body {body_id!r} has no shape")
+        kernel.require_planar_face(body.shape, face_index)
+        return {
+            "kind": "face",
+            "body": body_id,
+            "index": face_index,
+            "provenance": plane.get("provenance"),
+        }
+    raise ValueError(f"invalid sketch plane: {plane!r}")
+
+
+def _add_entity(
+    doc: Document,
+    sketch_id: SketchId,
+    kind: str,
+    params: Dict[str, float],
+    verb: str,
+) -> EntityId:
+    """図形を1つ足してログに積む(3つの add_* で共有)。
+
+    **数値は先に検査する**(§6予防6)。非有限値・半径0以下・長さ0の線分・辺0の長方形は
+    その場で `ValueError` にし、文書にもログにも残さない。黙って受け取ると、以後
+    `regions()` が毎回失敗する(M2に図形の削除verbは無いのでundo以外に復旧手段が無い)か、
+    NaN が混ざって**同じスケッチ上の正常な領域まで黙って消える**うえ、
+    `OpLog.to_json()` が裸の NaN を吐いてJSONとして壊れる(2026-08-11のQAで実測)。
+
+    **モデルとログには別のdictを渡す**。同じ参照を共有すると、図形のパラメータを
+    書き換えた瞬間に**唯一の正であるログ**(§3.1)が黙って書き換わる。M3は
+    `Entity.params` の中身を変える予定なので、ここを共有したままにはできない。
+    """
+    _require_finite(kind, params)
+    sketch = get_sketch(doc, sketch_id)
+    entity_id = f"entity-{uuid4().hex[:12]}"
+    sketch.entities.append(Entity(id=entity_id, kind=kind, params=dict(params)))
+    doc.log.append(
+        verb,
+        {
+            "sketch_id": sketch_id,
+            "entity_id": entity_id,
+            "kind": kind,
+            "params": dict(params),
+        },
+    )
+    return entity_id
+
+
+def _require_finite(kind: str, params: Dict[str, float]) -> None:
+    """図形の数値が使える値かを検査する(壊れた図形をスケッチへ入れない)。"""
+    for name, value in params.items():
+        if not math.isfinite(value):
+            raise ValueError(f"{kind}.{name} must be a finite number, got {value!r}")
+    if kind == "circle" and not params["radius"] > 0:
+        raise ValueError(f"circle radius must be positive, got {params['radius']!r}")
+    if kind == "line" and (params["x0"], params["y0"]) == (params["x1"], params["y1"]):
+        raise ValueError("line endpoints must differ (長さ0の線分は領域を割らない)")
+    if kind == "rectangle" and not (params["width"] > 0 and params["height"] > 0):
+        raise ValueError(
+            f"rectangle width/height must be positive, got "
+            f"{params['width']!r} x {params['height']!r}"
+        )
 
 
 # --------------------------------------------------------------------------------------
 # verbの登録(oplog は verb名の分岐を持たない。登録は verb を定義したこちら側)
 # --------------------------------------------------------------------------------------
 def _do_sketch_create(document: Document, operation: Operation) -> None:
-    raise NotImplementedError("M2で実装する: sketch_create の redo/replay")
+    """redo / replay: 記録された SketchId と平面でスケッチを作り直す。
+
+    同じIDが既にあるなら `ValueError`(`Document.add_body` と同じ理由 — 黙って重複させると
+    `get_sketch` がどちらを返すかで以後の図形追加・領域参照の指す先が静かに決まる)。
+    """
+    args = operation.args
+    sketch_id = args["sketch_id"]
+    if any(sketch.id == sketch_id for sketch in document.sketches):
+        raise ValueError(f"sketch id already exists: {sketch_id!r}")
+    document.sketches.append(Sketch(id=sketch_id, plane=dict(args["plane"])))
 
 
 def _undo_sketch_create(document: Document, operation: Operation) -> None:
-    raise NotImplementedError("M2で実装する: sketch_create の undo")
+    sketch_id = operation.args["sketch_id"]
+    document.sketches = [sketch for sketch in document.sketches if sketch.id != sketch_id]
 
 
 def _do_add_entity(document: Document, operation: Operation) -> None:
     """3つの図形追加verbで共有する再適用(記録された種別とparamsで図形を作り直す)。"""
-    raise NotImplementedError("M2で実装する: 図形追加の redo/replay")
+    args = operation.args
+    sketch = get_sketch(document, args["sketch_id"])
+    entity_id = args["entity_id"]
+    if any(entity.id == entity_id for entity in sketch.entities):
+        raise ValueError(f"entity id already exists: {entity_id!r}")
+    sketch.entities.append(
+        Entity(id=entity_id, kind=args["kind"], params=dict(args["params"]))
+    )
 
 
 def _undo_add_entity(document: Document, operation: Operation) -> None:
-    raise NotImplementedError("M2で実装する: 図形追加の undo")
+    args = operation.args
+    sketch = get_sketch(document, args["sketch_id"])
+    entity_id = args["entity_id"]
+    sketch.entities = [entity for entity in sketch.entities if entity.id != entity_id]
 
 
 register_verb(VERB_SKETCH_CREATE, do=_do_sketch_create, undo=_undo_sketch_create)

@@ -4,8 +4,6 @@
 **領域の集合**を対象に取り、`mode="join"` で足し、`mode="cut"` で引く。
 本人が日常的に使う「円を線で分けて片側だけ押し出す」がこのverbの存在理由。
 
-**M2のスタブ段階(2026-08-11)**: 契約だけ置いて実体は `NotImplementedError`。
-
 契約:
     extrude(doc, regions, distance, mode="join", body_id=None) -> Operation
         `regions` は `duocad.region.region_ref()` が返す `RegionRef` のリスト。
@@ -29,16 +27,23 @@
 """
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Any, List, Optional, Sequence
+from uuid import uuid4
+from weakref import WeakKeyDictionary
 
-from ..document import BodyId, Document
+from .. import kernel
+from ..document import Body, BodyId, Document
 from ..oplog import Operation, register_verb
-from ..region import RegionRef
+from ..region import RegionRef, _regions_detailed
+from ..sketch import get_sketch
 
 VERB_EXTRUDE = "extrude"
 
 #: 押し出しの向き(実装計画書§1「mode(join | cut)」)
 MODES = ("join", "cut")
+
+#: (document) -> {(body_id, seq): 押し出し前の形状 | None(新規作成)}。
+_SNAPSHOTS: "WeakKeyDictionary[Document, dict]" = WeakKeyDictionary()
 
 
 def extrude(
@@ -49,7 +54,143 @@ def extrude(
     body_id: Optional[BodyId] = None,
 ) -> Operation:
     """領域の集合を押し出し、ログに積んで Operation を返す。"""
-    raise NotImplementedError("M2で実装する: extrude")
+    distance = float(distance)
+    if distance == 0.0:
+        raise ValueError("distance must not be 0 (押し出し量0は形状を変えない)")
+    if mode not in MODES:
+        raise ValueError(f"unknown extrude mode: {mode!r} (one of {list(MODES)})")
+
+    refs = list(regions)
+    if not refs:
+        raise ValueError("extrude requires at least one region")
+
+    faces, normal = _resolve_faces_and_normal(doc, refs)
+    target_body, resolved_body_id = _resolve_target(doc, mode, body_id)
+    target_shape = None if target_body is None else target_body.shape
+
+    result = kernel.extrude_regions(
+        faces, distance, mode, normal, target_shape=target_shape
+    )
+
+    created_new = False
+    previous_shape: Any = None
+    if target_body is None:
+        resolved_body_id = f"body-{uuid4().hex[:12]}"
+        doc.add_body(
+            Body(
+                id=resolved_body_id,
+                name="solid",
+                kind="solid",
+                shape=result["shape"],
+            )
+        )
+        created_new = True
+    else:
+        previous_shape = target_body.shape
+        target_body.shape = result["shape"]
+
+    selection = [ref.to_dict() for ref in refs]
+    operation = doc.log.append(
+        VERB_EXTRUDE,
+        {
+            "regions": selection,
+            "distance": distance,
+            "mode": mode,
+            "body_id": resolved_body_id,
+        },
+        selection=selection,
+    )
+    _remember(doc, resolved_body_id, operation.seq, None if created_new else previous_shape)
+    return operation
+
+
+def _resolve_target(
+    doc: Document, mode: str, body_id: Optional[BodyId]
+) -> tuple[Optional[Body], Optional[BodyId]]:
+    """対象ボディを決める。cut で対象が無い・reference は ValueError。
+
+    `body_id` を省略したときのアクティブボディが**編集できない**(読み込んだ参照STEP)なら、
+    「対象が無い」として扱う — `import_step` はボディを常にアクティブにする(M0の契約)ので、
+    参照部品を読んだ直後の文書では join が最初の板を作れなくなる。受入対象(棚取付具を
+    参照として読み、その隣に板を作る)がまさにこの経路である(2026-08-11のQAで発見)。
+    **明示的に参照ボディを指定された場合は今までどおり ValueError**(取り違えを黙認しない)。
+    """
+    if body_id is None:
+        active = doc.active_body()
+        if active is not None and doc.is_editable(active.id):
+            body_id = active.id
+
+    if body_id is None:
+        if mode == "cut":
+            raise ValueError("cut requires a target body")
+        return None, None
+
+    if not doc.is_editable(body_id):
+        raise ValueError(
+            f"body {body_id!r} is not editable (kind='reference'). "
+            "make_editable_copy() で編集用のソリッドを作ってから押し出すこと"
+        )
+    body = next(candidate for candidate in doc.bodies if candidate.id == body_id)
+    if body.shape is None:
+        raise ValueError(f"body {body_id!r} has no shape to extrude")
+    return body, body_id
+
+
+def _resolve_faces_and_normal(
+    doc: Document, refs: Sequence[RegionRef]
+) -> tuple[List[Any], tuple]:
+    """領域参照から面と、スケッチ平面の法線を取り出す。範囲外は ValueError。
+
+    **1回の押し出しが対象にできるのは1つのスケッチの領域だけ**。押し出しの向きは
+    スケッチ平面の法線で決まるので、別平面の領域を混ぜると「最初のスケッチの法線」で
+    全部押すことになり、方向がその面に寝た領域は**体積0の退化ソリッド**になる。
+    それは `IsDone()` も `BRepCheck_Analyzer` も通ってしまう(2026-08-11のQAが実測。
+    体積は期待の半分なのに例外は出なかった)ので、ここで弾くのが唯一の関門である。
+    """
+    sketch_ids = {ref.sketch for ref in refs}
+    if len(sketch_ids) > 1:
+        raise ValueError(
+            f"extrude takes regions of a single sketch, got {sorted(sketch_ids)!r} "
+            "(押し出しの向きはスケッチ平面の法線で決まるため)"
+        )
+
+    sketch_id = refs[0].sketch
+    detailed = _regions_detailed(doc, sketch_id)  # Splitterは1スケッチにつき1回で足りる
+    faces: List[Any] = []
+    for ref in refs:
+        match = next((item for item in detailed if item["index"] == ref.index), None)
+        if match is None:
+            raise ValueError(
+                f"region index out of range: {ref.index} (sketch {ref.sketch!r})"
+            )
+        faces.append(match["face"])
+
+    sketch = get_sketch(doc, sketch_id)
+    support = None
+    if sketch.plane.get("kind") == "face":
+        body = next(
+            candidate for candidate in doc.bodies if candidate.id == sketch.plane["body"]
+        )
+        support = kernel.face_of(body.shape, int(sketch.plane["index"]))
+    normal = kernel.sketch_plane_normal(sketch.plane, face=support)
+    return faces, normal
+
+
+def _remember(doc: Document, body_id: BodyId, seq: int, shape: Any) -> None:
+    """押し出し前の形状を覚える(新規作成なら None。同じseqで再適用されたら上書き)。"""
+    _SNAPSHOTS.setdefault(doc, {})[(body_id, seq)] = shape
+
+
+def _recall(doc: Document, body_id: BodyId, seq: int) -> Any:
+    """覚えていた形状を取り出して忘れる。無ければ KeyError。"""
+    snapshots = _SNAPSHOTS.get(doc)
+    if snapshots is None or (body_id, seq) not in snapshots:
+        raise KeyError(
+            f"no snapshot for undo of seq={seq} on body {body_id!r}: "
+            "保存したログを再生せずにundoしようとしている(M1と同じ制限)。"
+            "OpLog.replay(document) してから undo すること"
+        )
+    return snapshots.pop((body_id, seq))
 
 
 # --------------------------------------------------------------------------------------
@@ -57,12 +198,51 @@ def extrude(
 # --------------------------------------------------------------------------------------
 def _do_extrude(document: Document, operation: Operation) -> None:
     """redo / replay 時の再適用。**ログには触らない**(触ると二重記録になる)。"""
-    raise NotImplementedError("M2で実装する: extrude の redo/replay")
+    args = operation.args
+    refs = [RegionRef.from_dict(item) for item in args["regions"]]
+    faces, normal = _resolve_faces_and_normal(document, refs)
+    body_id = args["body_id"]
+    mode = args["mode"]
+    distance = float(args["distance"])
+
+    existing = next(
+        (candidate for candidate in document.bodies if candidate.id == body_id), None
+    )
+    if existing is None:
+        if mode != "join":
+            raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
+        result = kernel.extrude_regions(
+            faces, distance, mode, normal, target_shape=None
+        )
+        document.add_body(
+            Body(id=body_id, name="solid", kind="solid", shape=result["shape"])
+        )
+        _remember(document, body_id, operation.seq, None)
+        return
+
+    if not document.is_editable(body_id):
+        raise ValueError(f"body {body_id!r} is not editable")
+    previous_shape = existing.shape
+    result = kernel.extrude_regions(
+        faces, distance, mode, normal, target_shape=existing.shape
+    )
+    existing.shape = result["shape"]
+    _remember(document, body_id, operation.seq, previous_shape)
 
 
 def _undo_extrude(document: Document, operation: Operation) -> None:
     """undo: 押し出す前の形状に戻す(新しく作ったボディなら取り除く)。"""
-    raise NotImplementedError("M2で実装する: extrude の undo")
+    body_id = operation.args["body_id"]
+    previous = _recall(document, body_id, operation.seq)
+    if previous is None:
+        document.remove_body(body_id)
+        return
+    body = next(
+        (candidate for candidate in document.bodies if candidate.id == body_id), None
+    )
+    if body is None:
+        raise KeyError(f"no such body: {body_id!r}")
+    body.shape = previous
 
 
 register_verb(VERB_EXTRUDE, do=_do_extrude, undo=_undo_extrude)

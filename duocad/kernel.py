@@ -25,24 +25,36 @@ M1で追加(2026-08-10。ビューポートと extrude_face のためにOCPが�
     tessellate(shape, deviation) -> dict    **面ごと**の三角形群(ピッキングに面単位のグループが要る)
     extrude_face_on_shape(shape, i, d) -> dict   面iを距離dだけ押し出した新形状＋由来の射影
 
+M2で追加(2026-08-11。スケッチ平面・領域検出・領域押し出しの幾何):
+    require_planar_face(shape, face_index) -> None
+    face_of(shape, face_index) -> TopoDS_Face
+    sketch_plane_normal(plane, face=None) -> (nx, ny, nz)
+    sketch_regions(plane, entities, face=None) -> list[dict]
+    extrude_regions(faces, distance, mode, normal, target_shape=None) -> dict
+
 **ocp_tessellate は使わない**(実装計画書§4は使うと書いているが、この venv に入っておらず、
 かつ面ピッキングには面ごとの三角形グループが要るので自前実装の方が制御できる。2026-08-10判断)。
 
 戻り値はいずれも **JSON化できる素の値(float/int/str/list/dict)だけ**にする。OCPのオブジェクトを
 kernel の外へ出さないための規律で、境界テスト(importの静的検査)では捕まえられない側の約束。
-唯一の例外は `extrude_face_on_shape` の戻り値の `"shape"`(新しい TopoDS_Shape そのもの。
-document.Body.shape に入る値であり、これは M0 から `Any` として通っている)。
+唯一の例外は `extrude_face_on_shape` / `sketch_regions` / `extrude_regions` /
+`face_of` の戻りに含まれる TopoDS_*(document.Body.shape や領域押し出しの入力になる値)。
 """
 from __future__ import annotations
 
 import math
 import os
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
 from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Surface
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse
-from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
+from OCP.BRepBuilderAPI import (
+    BRepBuilderAPI_Copy,
+    BRepBuilderAPI_MakeEdge,
+    BRepBuilderAPI_MakeFace,
+    BRepBuilderAPI_MakeWire,
+)
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepGProp import BRepGProp, BRepGProp_Face
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
@@ -62,8 +74,8 @@ from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
 from OCP.TopExp import TopExp
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Shape
-from OCP.TopTools import TopTools_IndexedMapOfShape
-from OCP.gp import gp_Pnt, gp_Vec
+from OCP.TopTools import TopTools_IndexedMapOfShape, TopTools_ListOfShape
+from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pnt, gp_Vec
 
 #: describe_shape の faces_by_type が持つキー(この順序が正。query.py が初期化に使う)
 FACE_KINDS = (
@@ -80,6 +92,13 @@ FACE_KINDS = (
 #: shelf_attachment_GD.step の円筒22面のU範囲は全て正確に360.0度で、しきい値付近に一件も無い
 #: (2026-08-10実測)ため、この値の選び方に結果は依存しない。
 FULL_CYLINDER_DEGREES = 350.0
+
+#: 基準平面の (origin, normal, xdir)。gp_Ax3 で組み立てると v は表のとおりになる。
+_BASE_PLANE_AXES = {
+    "XY": ((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (1.0, 0.0, 0.0)),  # v -> +Y
+    "XZ": ((0.0, 0.0, 0.0), (0.0, -1.0, 0.0), (1.0, 0.0, 0.0)),  # v -> +Z
+    "YZ": ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),  # v -> +Z
+}
 
 
 # --------------------------------------------------------------------------------------
@@ -583,6 +602,404 @@ def extrude_face_on_shape(
         "volume_after": volume(final),
         "provenance": provenance,
     }
+
+
+# --------------------------------------------------------------------------------------
+# M2: スケッチ平面・領域検出・領域押し出し
+# --------------------------------------------------------------------------------------
+def require_planar_face(shape: "TopoDS_Shape", face_index: int) -> None:
+    """面 `face_index` が平面でなければ ValueError(スケッチを貼れない)。"""
+    face = face_of(shape, face_index)
+    kind = classify_face(face)
+    if kind != "plane":
+        raise ValueError(
+            f"face {face_index} is {kind}: スケッチを貼れるのは平面の面だけ"
+        )
+
+
+def face_of(shape: "TopoDS_Shape", face_index: int) -> Any:
+    """形状の1始まり添字の面を返す。範囲外は ValueError。"""
+    shape_map = _face_map(shape)
+    if not 1 <= int(face_index) <= shape_map.Extent():
+        raise ValueError(
+            f"face index out of range: {face_index} (1..{shape_map.Extent()})"
+        )
+    return TopoDS.Face_s(shape_map.FindKey(int(face_index)))
+
+
+def sketch_plane_normal(plane: dict, face: Any = None) -> Tuple[float, float, float]:
+    """スケッチ平面の法線(単位)。押し出し方向の正の向き。"""
+    ax3 = _ax3_from_plane(plane, face=face)
+    direction = ax3.Direction()
+    return (direction.X(), direction.Y(), direction.Z())
+
+
+def sketch_regions(
+    plane: dict, entities: list, face: Any = None
+) -> List[dict]:
+    """スケッチの閉領域を返す。
+
+    戻り値: [{"index": int, "area": float, "face": <TopoDS_Face>, "centroid": [x,y,z]}, ...]
+    添字は1始まり。順序は面積の降順、同値なら重心の (u, v) の昇順(決定的)。
+    """
+    if not entities:
+        return []
+
+    ax3 = _ax3_from_plane(plane, face=face)
+    edges = []
+    for entity in entities:
+        edges.extend(_entity_edges(ax3, entity))
+    if not edges:
+        return []
+
+    u_min, u_max, v_min, v_max = _entities_bbox_2d(entities)
+    diagonal = math.hypot(u_max - u_min, v_max - v_min)
+    margin = max(10.0, diagonal)
+    aux = _plane_face(
+        ax3,
+        u_min - margin,
+        u_max + margin,
+        v_min - margin,
+        v_max + margin,
+    )
+
+    arguments = TopTools_ListOfShape()
+    arguments.Append(aux)
+    tools = TopTools_ListOfShape()
+    for edge in edges:
+        tools.Append(edge)
+
+    splitter = BRepAlgoAPI_Splitter()
+    splitter.SetArguments(arguments)
+    splitter.SetTools(tools)
+    splitter.Build()
+    if not splitter.IsDone():
+        raise ValueError("BRepAlgoAPI_Splitter failed (IsDone is false)")
+    result = splitter.Shape()
+    if result is None or result.IsNull():
+        raise ValueError("BRepAlgoAPI_Splitter produced an empty shape")
+
+    tol = 1.0e-6 * max(1.0, diagonal)
+    kept: List[tuple] = []
+    result_map = _face_map(result)
+    for index in range(1, result_map.Extent() + 1):
+        region_face = TopoDS.Face_s(result_map.FindKey(index))
+        if not _face_vertices_inside_bbox_2d(
+            region_face, ax3, u_min, u_max, v_min, v_max, tol
+        ):
+            continue
+        area, centroid = _face_props(region_face)
+        if area <= 0:
+            continue
+        u, v = _to_uv(ax3, centroid[0], centroid[1], centroid[2])
+        # 第1キーは**丸めた**面積。生の面積で比べると、幾何的に等しい2領域でも
+        # 1e-16級の積分残差で先に決着してしまい、docstringが約束するタイブレーク
+        # (重心の u,v)が事実上発火しない(2026-08-11のQAが実測: y=0で割った半円が
+        # 628.3185307179587 と ...584 になる)。順序は選択集合が指す先そのものなので、
+        # 残差ではなく座標で決まるようにする。
+        kept.append((-round(area, 6), u, v, area, centroid, region_face))
+
+    kept.sort(key=lambda item: (item[0], item[1], item[2]))
+    regions: List[dict] = []
+    for position, item in enumerate(kept, start=1):
+        _neg_area, _u, _v, area, centroid, region_face = item
+        regions.append(
+            {
+                "index": position,
+                "area": float(area),
+                "face": region_face,
+                "centroid": [float(centroid[0]), float(centroid[1]), float(centroid[2])],
+            }
+        )
+    return regions
+
+
+def extrude_regions(
+    faces: Sequence[Any],
+    distance: float,
+    mode: str,
+    normal: Sequence[float],
+    target_shape: Any = None,
+) -> dict:
+    """領域の面群を法線方向へ押し出し、join/cut した形状を返す。
+
+    戻り値: {"shape": TopoDS_Shape, "volume_before": float | None, "volume_after": float}
+    """
+    if not faces:
+        raise ValueError("extrude_regions requires at least one face")
+    distance = float(distance)
+    if distance == 0.0:
+        raise ValueError("distance must not be 0 (押し出し量0は形状を変えない)")
+    if mode not in ("join", "cut"):
+        raise ValueError(f"unknown extrude mode: {mode!r}")
+    if mode == "cut" and (target_shape is None or target_shape.IsNull()):
+        raise ValueError("cut requires a target shape")
+
+    nx, ny, nz = float(normal[0]), float(normal[1]), float(normal[2])
+    offset = gp_Vec(nx * distance, ny * distance, nz * distance)
+
+    prisms: List[TopoDS_Shape] = []
+    for face in faces:
+        prism = BRepPrimAPI_MakePrism(TopoDS.Face_s(face), offset)
+        if not prism.IsDone():
+            raise ValueError("failed to build a prism from a region face")
+        prism_shape = prism.Shape()
+        if prism_shape is None or prism_shape.IsNull():
+            raise ValueError("prism from a region face is empty")
+        # 押し出し方向が面の平面内に寝ていると**体積0の退化ソリッド**ができる。
+        # `IsDone()` も `IsNull()` も `BRepCheck_Analyzer` も全部通ってしまうので
+        # (2026-08-11のQAで実測)、体積を直接見るのがここでの唯一の関門。
+        if volume(prism_shape) <= 0:
+            raise ValueError(
+                "prism from a region face has no volume "
+                "(押し出し方向が領域の平面に寝ている)"
+            )
+        prisms.append(prism_shape)
+
+    combined = prisms[0]
+    for other in prisms[1:]:
+        fused = BRepAlgoAPI_Fuse(combined, other)
+        fused.Build()
+        if not fused.IsDone():
+            raise ValueError("failed to fuse region prisms")
+        combined = fused.Shape()
+        if combined is None or combined.IsNull():
+            raise ValueError("fusing region prisms produced an empty shape")
+
+    volume_before: Optional[float] = None
+    if mode == "join":
+        if target_shape is None or target_shape.IsNull():
+            result = combined
+        else:
+            volume_before = volume(target_shape)
+            builder = BRepAlgoAPI_Fuse(target_shape, combined)
+            builder.Build()
+            if not builder.IsDone():
+                raise ValueError("join (fuse) failed")
+            result = builder.Shape()
+            operation = "fuse"
+    else:
+        volume_before = volume(target_shape)
+        builder = BRepAlgoAPI_Cut(target_shape, combined)
+        builder.Build()
+        if not builder.IsDone():
+            raise ValueError("cut failed")
+        result = builder.Shape()
+        operation = "cut"
+
+    if result is None or result.IsNull():
+        raise ValueError(f"{mode} produced an empty shape")
+
+    volume_after = volume(result)
+    if volume_after <= 0:
+        raise ValueError(f"{mode} left nothing solid (volume={volume_after})")
+    if volume_before is not None:
+        if abs(volume_after - volume_before) <= 1e-9 * max(1.0, abs(volume_before)):
+            raise ValueError(
+                f"{operation} did not change the shape "
+                f"(volume {volume_before} -> {volume_after})"
+            )
+    if not BRepCheck_Analyzer(result).IsValid():
+        raise ValueError(f"{mode} produced an invalid shape (BRepCheck)")
+
+    return {
+        "shape": result,
+        "volume_before": volume_before,
+        "volume_after": volume_after,
+    }
+
+
+def _ax3_from_plane(plane: dict, face: Any = None) -> "gp_Ax3":
+    """PlaneRef から gp_Ax3 を作る。面参照で平面でなければ ValueError。"""
+    kind = plane.get("kind")
+    if kind == "base":
+        name = plane.get("name")
+        if name not in _BASE_PLANE_AXES:
+            raise ValueError(f"unknown base plane: {name!r}")
+        origin, normal, xdir = _BASE_PLANE_AXES[name]
+        return gp_Ax3(gp_Pnt(*origin), gp_Dir(*normal), gp_Dir(*xdir))
+    if kind == "face":
+        if face is None:
+            raise ValueError("face plane requires a TopoDS_Face")
+        return _ax3_from_face(face)
+    raise ValueError(f"invalid sketch plane: {plane!r}")
+
+
+def _ax3_from_face(face: Any) -> "gp_Ax3":
+    """平面の面から gp_Ax3 を取る。平面でなければ ValueError。REVERSED なら法線を反転。"""
+    face = TopoDS.Face_s(face)
+    adaptor = BRepAdaptor_Surface(face)
+    if adaptor.GetType() != GeomAbs_SurfaceType.GeomAbs_Plane:
+        raise ValueError(
+            f"face is {classify_face(face)}: スケッチ平面にできるのは平面だけ"
+        )
+    # `Position()` は既に gp_Ax3 だが、OCP には gp_Ax3(gp_Ax3) のコンストラクタが無いので
+    # 位置・法線・X方向から組み直す。反転面は `ZReverse`(OCCTの綴り。`ReverseZ` は存在しない)
+    # で法線だけを裏返す — XDirection/YDirection は変わらないので2D座標の意味は保たれる。
+    # 2026-08-11のQAで、ここが `TypeError`/`AttributeError` になり
+    # 「面に貼ったスケッチ」の経路が一度も動かないまま緑だったのを実測して直した。
+    position = adaptor.Plane().Position()
+    ax3 = gp_Ax3(position.Location(), position.Direction(), position.XDirection())
+    if face.Orientation() == TopAbs_Orientation.TopAbs_REVERSED:
+        ax3.ZReverse()
+    return ax3
+
+
+def _to_pnt(ax3: "gp_Ax3", u: float, v: float) -> "gp_Pnt":
+    """スケッチ平面上の (u, v) を 3D 点へ。"""
+    origin = ax3.Location()
+    xdir = ax3.XDirection()
+    ydir = ax3.YDirection()
+    return gp_Pnt(
+        origin.X() + u * xdir.X() + v * ydir.X(),
+        origin.Y() + u * xdir.Y() + v * ydir.Y(),
+        origin.Z() + u * xdir.Z() + v * ydir.Z(),
+    )
+
+
+def _to_uv(ax3: "gp_Ax3", x: float, y: float, z: float) -> Tuple[float, float]:
+    """3D 点をスケッチ平面の (u, v) へ。"""
+    origin = ax3.Location()
+    xdir = ax3.XDirection()
+    ydir = ax3.YDirection()
+    dx = x - origin.X()
+    dy = y - origin.Y()
+    dz = z - origin.Z()
+    u = dx * xdir.X() + dy * xdir.Y() + dz * xdir.Z()
+    v = dx * ydir.X() + dy * ydir.Y() + dz * ydir.Z()
+    return u, v
+
+
+def _entity_edges(ax3: "gp_Ax3", entity: dict) -> List[Any]:
+    """1図形から 3D の辺リストを作る。"""
+    kind = entity["kind"]
+    params = entity["params"]
+    if kind == "line":
+        p0 = _to_pnt(ax3, float(params["x0"]), float(params["y0"]))
+        p1 = _to_pnt(ax3, float(params["x1"]), float(params["y1"]))
+        maker = BRepBuilderAPI_MakeEdge(p0, p1)
+        if not maker.IsDone():
+            raise ValueError("failed to build a line edge")
+        return [maker.Edge()]
+    if kind == "circle":
+        center = _to_pnt(ax3, float(params["cx"]), float(params["cy"]))
+        radius = float(params["radius"])
+        if radius <= 0:
+            raise ValueError(f"circle radius must be positive, got {radius}")
+        axis = gp_Ax2(center, ax3.Direction(), ax3.XDirection())
+        maker = BRepBuilderAPI_MakeEdge(gp_Circ(axis, radius))
+        if not maker.IsDone():
+            raise ValueError("failed to build a circle edge")
+        return [maker.Edge()]
+    if kind == "rectangle":
+        x = float(params["x"])
+        y = float(params["y"])
+        width = float(params["width"])
+        height = float(params["height"])
+        corners = [
+            _to_pnt(ax3, x, y),
+            _to_pnt(ax3, x + width, y),
+            _to_pnt(ax3, x + width, y + height),
+            _to_pnt(ax3, x, y + height),
+        ]
+        edges = []
+        for index in range(4):
+            maker = BRepBuilderAPI_MakeEdge(corners[index], corners[(index + 1) % 4])
+            if not maker.IsDone():
+                raise ValueError("failed to build a rectangle edge")
+            edges.append(maker.Edge())
+        return edges
+    raise ValueError(f"unknown entity kind: {kind!r}")
+
+
+def _entities_bbox_2d(entities: list) -> Tuple[float, float, float, float]:
+    """図形群の 2D バウンディングボックス (u_min, u_max, v_min, v_max)。"""
+    u_min = float("inf")
+    u_max = float("-inf")
+    v_min = float("inf")
+    v_max = float("-inf")
+
+    def include(u: float, v: float) -> None:
+        nonlocal u_min, u_max, v_min, v_max
+        u_min = min(u_min, u)
+        u_max = max(u_max, u)
+        v_min = min(v_min, v)
+        v_max = max(v_max, v)
+
+    for entity in entities:
+        kind = entity["kind"]
+        params = entity["params"]
+        if kind == "line":
+            include(float(params["x0"]), float(params["y0"]))
+            include(float(params["x1"]), float(params["y1"]))
+        elif kind == "circle":
+            cx = float(params["cx"])
+            cy = float(params["cy"])
+            radius = float(params["radius"])
+            include(cx - radius, cy - radius)
+            include(cx + radius, cy + radius)
+        elif kind == "rectangle":
+            x = float(params["x"])
+            y = float(params["y"])
+            include(x, y)
+            include(x + float(params["width"]), y + float(params["height"]))
+        else:
+            raise ValueError(f"unknown entity kind: {kind!r}")
+
+    if u_min == float("inf"):
+        return 0.0, 0.0, 0.0, 0.0
+    return u_min, u_max, v_min, v_max
+
+
+def _plane_face(
+    ax3: "gp_Ax3", u0: float, u1: float, v0: float, v1: float
+) -> Any:
+    """スケッチ平面上の軸平行矩形を TopoDS_Face にする(補助面用)。"""
+    corners = [
+        _to_pnt(ax3, u0, v0),
+        _to_pnt(ax3, u1, v0),
+        _to_pnt(ax3, u1, v1),
+        _to_pnt(ax3, u0, v1),
+    ]
+    wire_maker = BRepBuilderAPI_MakeWire()
+    for index in range(4):
+        edge_maker = BRepBuilderAPI_MakeEdge(corners[index], corners[(index + 1) % 4])
+        if not edge_maker.IsDone():
+            raise ValueError("failed to build an auxiliary edge")
+        wire_maker.Add(edge_maker.Edge())
+    if not wire_maker.IsDone():
+        raise ValueError("failed to build an auxiliary wire")
+    face_maker = BRepBuilderAPI_MakeFace(wire_maker.Wire(), True)
+    if not face_maker.IsDone():
+        raise ValueError("failed to build an auxiliary face")
+    face = face_maker.Face()
+    if face is None or face.IsNull():
+        raise ValueError("auxiliary face is empty")
+    return face
+
+
+def _face_vertices_inside_bbox_2d(
+    face: Any,
+    ax3: "gp_Ax3",
+    u_min: float,
+    u_max: float,
+    v_min: float,
+    v_max: float,
+    tol: float,
+) -> bool:
+    """面の頂点がすべて 2D bbox(+tol) の内側なら True(補助面の余りを落とす)。"""
+    shape_map = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(TopoDS.Face_s(face), TopAbs_ShapeEnum.TopAbs_VERTEX, shape_map)
+    if shape_map.Extent() < 1:
+        return False
+    for index in range(1, shape_map.Extent() + 1):
+        point = BRep_Tool.Pnt_s(TopoDS.Vertex_s(shape_map.FindKey(index)))
+        u, v = _to_uv(ax3, point.X(), point.Y(), point.Z())
+        if not (
+            u_min - tol <= u <= u_max + tol and v_min - tol <= v <= v_max + tol
+        ):
+            return False
+    return True
 
 
 # --------------------------------------------------------------------------------------

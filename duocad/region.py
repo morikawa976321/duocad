@@ -4,9 +4,6 @@
 幾何そのもの(`BRepAlgoAPI_Splitter`)は `duocad.kernel` が持つ(OCPを直接importできるのは
 kernel.py だけ。tests/test_boundaries.py が検査する)。
 
-**M2のスタブ段階(2026-08-11)**: `Region` / `RegionRef` のデータモデルは実装済み、
-`regions()` は `NotImplementedError`。
-
 契約:
     regions(doc, sketch_id) -> list[Region]
         スケッチの閉領域。`index` は**1始まり**で連番(面の添字と同じ流儀。kernel._face_map)。
@@ -23,8 +20,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
+from . import kernel
 from .document import Document
-from .sketch import SketchId
+from .sketch import SketchId, get_sketch
 
 
 @dataclass(frozen=True)
@@ -84,4 +82,32 @@ def regions(doc: Document, sketch_id: SketchId) -> List[Region]:
     図形が1つも無ければ空リスト。実装は `BRepAlgoAPI_Splitter` で平面状の面を
     スケッチの辺で分割する(実装計画書§3.3。実測で成立を確認済み)。
     """
-    raise NotImplementedError("M2で実装する: regions")
+    return [
+        Region(index=item["index"], area=item["area"])
+        for item in _regions_detailed(doc, sketch_id)
+    ]
+
+
+def _regions_detailed(doc: Document, sketch_id: SketchId) -> List[dict]:
+    """`kernel.sketch_regions` の結果をそのまま返す(面つき。`verbs/extrude.py` が使う)。
+
+    **verb層と共有する内部API**であり、`regions()`(公開API)は面を落として `Region` だけを
+    返す。押し出しには領域の `TopoDS_Face` そのものが要る一方、選択集合や操作ログへ
+    出てよいのは添字と面積だけ、という非対称をこの2段構えで表している。
+    """
+    sketch = get_sketch(doc, sketch_id)
+    if not sketch.entities:
+        return []
+    face = None
+    if sketch.plane.get("kind") == "face":
+        body_id = sketch.plane["body"]
+        body = next((candidate for candidate in doc.bodies if candidate.id == body_id), None)
+        if body is None:
+            raise KeyError(f"no such body: {body_id!r}")
+        if body.shape is None:
+            raise ValueError(f"body {body_id!r} has no shape")
+        face = kernel.face_of(body.shape, int(sketch.plane["index"]))
+    entities = [
+        {"kind": entity.kind, "params": dict(entity.params)} for entity in sketch.entities
+    ]
+    return kernel.sketch_regions(sketch.plane, entities, face=face)
