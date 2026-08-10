@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from minicad.document import Body, Document
+from duocad.document import Body, Document
 
 
 def test_document_units_is_mm():

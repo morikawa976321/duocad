@@ -11,10 +11,10 @@ import json
 
 import pytest
 
-from minicad.document import Document
-from minicad.io_step import import_step
-from minicad.oplog import Operation, OpLog
-from minicad.query import volume
+from duocad.document import Document
+from duocad.io_step import import_step
+from duocad.oplog import Operation, OpLog
+from duocad.query import volume
 
 STEP_PATH = r"C:\Users\tm976\mf\3d-models\shelf_attachment_GD.step"
 

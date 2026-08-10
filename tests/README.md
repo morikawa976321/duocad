@@ -1,4 +1,4 @@
-# minicad M0 — テストが定義するAPI契約
+# duocad M0 — テストが定義するAPI契約
 
 このディレクトリのテストが **M0(コアの骨格)のAPI契約そのもの**。次タスク（M0コア実装）は
 ここにあるテストを全部通すことだけを目標にする。仕様の正は
@@ -10,7 +10,7 @@
 M0の対象は「文書・ボディのリスト・操作ログ・undo・STEP読み書き・STL書き出し」で、**振る舞い
 (ロジック)は全部スタブ**（`raise NotImplementedError`）。ただし**day1の予防として最初から
 正しく書いておくべきデータモデルの定義そのもの**（`Document.units` の不変性、`Body.kind` の
-値検査、`Operation.provenance` フィールドの存在、`minicad/` のimport境界）は**実装済みで
+値検査、`Operation.provenance` フィールドの存在、`duocad/` のimport境界）は**実装済みで
 実際に通る**。これはテストを緩めているのではなく、実装計画書§6「day1に払う予防」を
 テストコードの側で先に払っているという位置づけ。
 
@@ -25,28 +25,28 @@ M0の対象は「文書・ボディのリスト・操作ログ・undo・STEP読�
 
 | モジュール | 役割 | OCP直接import | build123d直接import |
 |---|---|---|---|
-| `minicad/document.py` | `Document` / `Body` のデータモデル | 禁止 | 禁止 |
-| `minicad/oplog.py` | `Operation` / `OpLog`（操作ログ） | 禁止 | 禁止 |
-| `minicad/io_step.py` | STEP読み込み・STEP/STL書き出し | 禁止 | 禁止 |
-| `minicad/query.py` | 問い合わせ層のインタフェース（build123dラッパ） | 禁止 | **ここだけ許可** |
-| `minicad/kernel.py` | OCP(OCCT)を直接叩く層 | **ここだけ許可** | 禁止 |
+| `duocad/document.py` | `Document` / `Body` のデータモデル | 禁止 | 禁止 |
+| `duocad/oplog.py` | `Operation` / `OpLog`（操作ログ） | 禁止 | 禁止 |
+| `duocad/io_step.py` | STEP読み込み・STEP/STL書き出し | 禁止 | 禁止 |
+| `duocad/query.py` | 問い合わせ層のインタフェース（build123dラッパ） | 禁止 | **ここだけ許可** |
+| `duocad/kernel.py` | OCP(OCCT)を直接叩く層 | **ここだけ許可** | 禁止 |
 
 境界は `tests/test_boundaries.py` がソースを静的走査して機械的に検査する（実行環境が
 無くても走る）。**verbがOCP/build123dを直接叩き始めるのを防ぐ唯一の安全網であり、
 これが一番大事**（タスクファイルの記載どおり）。検査の効き方:
 
-- `minicad/` を **再帰的に**走査する（サブパッケージを作っても逃げられない）。
+- `duocad/` を **再帰的に**走査する（サブパッケージを作っても逃げられない）。
 - `import OCP` / `import OCP.X` / `from OCP import X` / `from OCP.X import Y` に加え、
   **動的import**（`importlib.import_module("OCP.X")` / `__import__("OCP")`）も検出する。
 - 免除は**パッケージ直下の `kernel.py` / `query.py` だけ**（相対パス一致で判定）。
-  ファイル名一致だと `minicad/verbs/kernel.py` を置くだけで境界を無効化できてしまう。
+  ファイル名一致だと `duocad/verbs/kernel.py` を置くだけで境界を無効化できてしまう。
 - 検査関数そのものを既知の違反ソースで検査するテスト
   （`test_boundary_scan_detects_every_import_form`）を持つ。これが無いと、境界テストは
   「緑だが何も見ていない」状態に静かに退化しうる。
 - 検出できない残りの穴: `exec()`/`eval()` 文字列、C拡張経由の間接呼び出し。
   ここまでやる相手は想定していない（規律の事故防止が目的で、悪意への防御ではない）。
 
-## `minicad/document.py`
+## `duocad/document.py`
 
 ### `BodyId = str`
 
@@ -79,7 +79,7 @@ Document.is_editable(body_id: BodyId) -> bool   # スタブ。kind=="solid"の�
 リストにする）。`add_body` は追加したボディを常にactiveにする（v1は単一フォーカスのUIなので、
 最新の操作対象を自動でactiveにする設計）。
 
-## `minicad/oplog.py`
+## `duocad/oplog.py`
 
 ### `Operation`（dataclass）
 
@@ -138,7 +138,7 @@ OpLog.replay(document: Document) -> None                    # スタブ
     M0では登録されるverbが `"import_step"` 1つなので、どちらで書いても通る — だからこそ
     ここで形を決めておく。
 
-## `minicad/io_step.py`
+## `duocad/io_step.py`
 
 ```python
 import_step(doc: Document, path: str | Path) -> BodyId
@@ -278,7 +278,7 @@ trial2: v1=91018.2223598035  v2=91018.22235980343  equal=False abs=7.276e-11 rel
 `test_export_stl_smaller_deviation_yields_larger_file` は
 **絶対サイズではなく単調性（0.2mm時 < 0.05mm時 < 0.01mm時）だけ**を契約として縛る。
 
-## `minicad/query.py`
+## `duocad/query.py`
 
 ```python
 describe_shape(shape: Any) -> dict
@@ -323,7 +323,7 @@ M0のテストは `edge_count` の値を縛っていないので、ここで数�
 実装は `BRepGProp.VolumeProperties_s(shape, props)`（`Eps` を渡さない既定の積分）を使うこと。
 `Eps` 付きの適応積分は精度が落ちる（上記「STEP往復」節の実測）。
 
-## `minicad/kernel.py`
+## `duocad/kernel.py`
 
 ```python
 read_step(path: str) -> TopoDS_Shape
@@ -340,7 +340,7 @@ write_stl(shape: TopoDS_Shape, path: str, deviation: float) -> None
 
 ## 実測環境（2026-08-10）
 
-- Python 3.11.15、`C:\Users\tm976\mf\minicad\.venv`（`uv venv --python 3.11`で作成）
+- Python 3.11.15、`C:\Users\tm976\mf\duocad\.venv`（`uv venv --python 3.11`で作成）
 - `build123d==0.11.1`
 - `cadquery-ocp-novtk==7.9.3.1.1`（importは `OCP`。`C:\Users\tm976\mf\cad-deixis-probe\.venv`
   で検証済みの環境と同一バージョン）
@@ -376,13 +376,13 @@ write_stl(shape: TopoDS_Shape, path: str, deviation: float) -> None
 ## 実行方法
 
 ```
-cd C:\Users\tm976\mf\minicad
+cd C:\Users\tm976\mf\duocad
 .venv\Scripts\python.exe -m pytest -v
 ```
 
-`minicad` は venv へインストールしていないので、`pyproject.toml` の
+`duocad` は venv へインストールしていないので、`pyproject.toml` の
 `[tool.pytest.ini_options] pythonpath = ["."]` で rootdir を `sys.path` に入れている。
 これが無いと `python -m pytest`（CWDが `sys.path` に入る）でしか走らず、素の
-`.venv\Scripts\pytest.exe` では `ModuleNotFoundError: No module named 'minicad'` で
+`.venv\Scripts\pytest.exe` では `ModuleNotFoundError: No module named 'duocad'` で
 **収集エラー3件**になる（2026-08-10監査で実測し、`pythonpath` を追加して修正した）。
 どちらの起動方法でも同じ結果になることを確認済み。

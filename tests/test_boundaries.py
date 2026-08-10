@@ -6,21 +6,21 @@ day1の予防として「問い合わせ層をインタフェースにする」�
 無くても走る。
 
 検査の実効性について(2026-08-10 監査で強化):
-- `minicad/` 配下を **再帰的に** 走査する(サブパッケージを作って逃げられない)。
+- `duocad/` 配下を **再帰的に** 走査する(サブパッケージを作って逃げられない)。
 - `import OCP` / `import OCP.X` / `from OCP import X` / `from OCP.X import Y` に加え、
   **動的import**(`importlib.import_module("OCP.X")` / `__import__("OCP")`)も検出する。
   静的importだけを見ていると、境界を破る最も安直な逃げ道(文字列でのimport)が素通りする。
 - 免除は **パッケージ直下の `kernel.py` / `query.py` だけ**(ファイル名一致ではない)。
-  ファイル名だけで免除すると `minicad/verbs/kernel.py` を作れば境界を無効化できてしまう。
+  ファイル名だけで免除すると `duocad/verbs/kernel.py` を作れば境界を無効化できてしまう。
 """
 from __future__ import annotations
 
 import ast
 from pathlib import Path
 
-MINICAD_DIR = Path(__file__).resolve().parent.parent / "minicad"
+DUOCAD_DIR = Path(__file__).resolve().parent.parent / "duocad"
 
-# 免除はパッケージ直下のこの2ファイルのみ(MINICAD_DIRからの相対パスで判定する)
+# 免除はパッケージ直下のこの2ファイルのみ(DUOCAD_DIRからの相対パスで判定する)
 OCP_ALLOWED = "kernel.py"
 BUILD123D_ALLOWED = "query.py"
 
@@ -61,27 +61,27 @@ def _imported_module_roots(py_file: Path) -> set[str]:
 
 
 def _source_files() -> list[tuple[str, Path]]:
-    """minicad配下の全.pyを(パッケージ相対パス, 実パス)で返す(サブパッケージ含む)。"""
+    """duocad配下の全.pyを(パッケージ相対パス, 実パス)で返す(サブパッケージ含む)。"""
     return [
-        (py.relative_to(MINICAD_DIR).as_posix(), py)
-        for py in sorted(MINICAD_DIR.rglob("*.py"))
+        (py.relative_to(DUOCAD_DIR).as_posix(), py)
+        for py in sorted(DUOCAD_DIR.rglob("*.py"))
     ]
 
 
 def test_only_kernel_module_imports_ocp():
-    """minicad配下(サブパッケージ含む)でOCP.*をimportしてよいのはパッケージ直下のkernel.pyだけ
+    """duocad配下(サブパッケージ含む)でOCP.*をimportしてよいのはパッケージ直下のkernel.pyだけ
     (verbが直接OCPを叩き始めるのを防ぐ。動的importでの迂回も検出する)。"""
     violations = [
         rel
         for rel, py_file in _source_files()
         if rel != OCP_ALLOWED and "OCP" in _imported_module_roots(py_file)
     ]
-    assert violations == [], f"OCPを直接importしているファイル(minicad/kernel.py以外は禁止): {violations}"
+    assert violations == [], f"OCPを直接importしているファイル(duocad/kernel.py以外は禁止): {violations}"
 
 
 def test_kernel_module_actually_imports_ocp():
     """kernel.pyは実際にOCPをimportしている(上の境界テストが機能するための前提)。"""
-    assert "OCP" in _imported_module_roots(MINICAD_DIR / OCP_ALLOWED)
+    assert "OCP" in _imported_module_roots(DUOCAD_DIR / OCP_ALLOWED)
 
 
 def test_only_query_module_imports_build123d():
@@ -92,7 +92,7 @@ def test_only_query_module_imports_build123d():
         for rel, py_file in _source_files()
         if rel != BUILD123D_ALLOWED and "build123d" in _imported_module_roots(py_file)
     ]
-    assert violations == [], f"build123dを直接importしているファイル(minicad/query.py以外は禁止): {violations}"
+    assert violations == [], f"build123dを直接importしているファイル(duocad/query.py以外は禁止): {violations}"
 
 
 def test_boundary_scan_detects_every_import_form(tmp_path):

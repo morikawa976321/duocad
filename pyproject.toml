@@ -1,7 +1,7 @@
 [project]
-name = "minicad"
+name = "duocad"
 version = "0.0.1"
-description = "自作3DCAD minicad — M0: コアの骨格（文書・操作ログ・STEP入出力）"
+description = "自作3DCAD duocad — M0: コアの骨格（文書・操作ログ・STEP入出力）"
 requires-python = ">=3.11,<3.12"
 dependencies = [
     "build123d==0.11.1",
@@ -11,9 +11,9 @@ dependencies = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# minicad は venv へインストールしていないので、rootdir を sys.path に入れる。
+# duocad は venv へインストールしていないので、rootdir を sys.path に入れる。
 # これが無いと `python -m pytest`（CWDがsys.pathに入る）でしか走らず、素の `pytest` では
-# `ModuleNotFoundError: No module named 'minicad'` で収集エラーになる（2026-08-10監査で実測）。
+# `ModuleNotFoundError: No module named 'duocad'` で収集エラーになる（2026-08-10監査で実測）。
 pythonpath = ["."]
 
 [build-system]
@@ -21,4 +21,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["minicad"]
+packages = ["duocad"]
