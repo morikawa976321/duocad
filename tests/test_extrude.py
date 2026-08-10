@@ -1,0 +1,378 @@
+"""M2契約: 領域の押し出し(`duocad.verbs.extrude`)。
+
+M1の `extrude_face`(既存ソリッドの面を押す)とは別のverbで、こちらは**スケッチの領域**を
+`join`(足す)/`cut`(引く)する。本人が日常的に使う「円を線で分けて片側だけ押し出す」と、
+受入対象である棚取付具の「板と穴」がこのverbで作れることを固定する(実装計画書§8のM2の検証)。
+
+検算はすべて**実測または算術で決まる値**:
+
+    片側だけの押し出し   : 体積 = その領域の面積 × 距離
+    40×30の板を10mm     : 体積 12000
+    半径3の穴を貫通      : 体積 12000 − π·3²·10 = 11717.2566611769…
+    そのときの面の構成    : 平面6 + 全周円筒1 = 7面(2026-08-11にOCPで直接実測)
+"""
+from __future__ import annotations
+
+import json
+import math
+
+import pytest
+
+# 参照ボディ(読み取り専用)を作るためだけにOCPを使う(境界検査は `duocad/` 配下だけが対象)
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+from duocad import query
+from duocad.document import Body, Document
+from duocad.oplog import OpLog
+from duocad.region import region_ref, regions
+from duocad.sketch import add_circle, add_line, add_rectangle, sketch_create
+from duocad.verbs import extrude
+
+#: 棚取付具の板を模した寸法(受入対象の部品と同じ「板＋穴」の構成を最小で作る)
+PLATE_WIDTH = 40.0
+PLATE_HEIGHT = 30.0
+PLATE_THICKNESS = 10.0
+PLATE_VOLUME = PLATE_WIDTH * PLATE_HEIGHT * PLATE_THICKNESS
+
+HOLE_RADIUS = 3.0
+HOLE_CENTER = (20.0, 15.0)
+#: 板(z=0..10)より深く取り、止まり穴にならないようにする。
+#: 貫通したことは体積では決まらない(止まり穴でも除去は板厚ぶん)ので、
+#: 面の構成(平面6 + 全周円筒1 = 7面)で確かめる —
+#: test_a_plate_with_a_hole_has_only_planes_and_a_full_cylinder
+HOLE_DEPTH = 20.0
+HOLE_VOLUME = math.pi * HOLE_RADIUS**2 * PLATE_THICKNESS
+
+#: 体積比較の相対許容差(M1の test_extrude_face.py と同じ理由・同じ桁)
+VOLUME_REL_TOL = 1.0e-9
+#: 実測値(小数3桁)と突き合わせる面積の許容差(tests/test_region.py と同じ)
+AREA_REL_TOL = 1.0e-6
+#: y=5 の線分で半径20の円を割ったときの大きい方の面積(実測)
+LARGER_HALF_AREA = 826.215
+
+
+def split_circle_sketch(document: Document) -> str:
+    """半径20の円を y=5 の線分で割ったスケッチ(領域2個)。"""
+    sketch_id = sketch_create(document, "XY")
+    add_circle(document, sketch_id, (0.0, 0.0), 20.0)
+    add_line(document, sketch_id, (-30.0, 5.0), (30.0, 5.0))
+    return sketch_id
+
+
+def plate_document() -> Document:
+    """40×30の長方形を10mm押し出した板を1つ持つ文書。"""
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    add_rectangle(document, sketch_id, (0.0, 0.0), PLATE_WIDTH, PLATE_HEIGHT)
+    plate = regions(document, sketch_id)
+    assert len(plate) == 1, "長方形1つのスケッチの領域は1個"
+    extrude(document, [region_ref(sketch_id, plate[0].index)], PLATE_THICKNESS, mode="join")
+    return document
+
+
+def drill(document: Document) -> None:
+    """板に半径3の穴を1つ開ける(XY平面のスケッチから貫通させる)。"""
+    sketch_id = sketch_create(document, "XY")
+    add_circle(document, sketch_id, HOLE_CENTER, HOLE_RADIUS)
+    hole = regions(document, sketch_id)
+    assert len(hole) == 1
+    extrude(document, [region_ref(sketch_id, hole[0].index)], HOLE_DEPTH, mode="cut")
+
+
+# --------------------------------------------------------------------------------------
+# 押し出し — 面積 × 距離で検算する
+# --------------------------------------------------------------------------------------
+def test_extruding_one_half_of_a_split_circle_gives_area_times_distance():
+    """**分割した領域の片方だけ**を10mm押し出すと、体積 = その領域の面積 × 10 になる。
+
+    これがM2の存在理由そのもの(実装計画書§3.3・§8のM2の検証)。領域の片方だけを対象に
+    できていなければ、体積は円全体の押し出し(=1256.637×10)になって落ちる。
+    """
+    document = Document()
+    sketch_id = split_circle_sketch(document)
+    target = max(regions(document, sketch_id), key=lambda region: region.area)
+    assert math.isclose(target.area, LARGER_HALF_AREA, rel_tol=AREA_REL_TOL)
+
+    extrude(document, [region_ref(sketch_id, target.index)], 10.0, mode="join")
+
+    body = document.active_body()
+    assert body is not None, "join は対象が無ければ新しいソリッドを作る"
+    assert document.is_editable(body.id) is True, "作ったボディは kind='solid'"
+    assert math.isclose(query.volume(body.shape), target.area * 10.0, rel_tol=AREA_REL_TOL)
+
+
+def test_join_fuses_into_the_existing_body():
+    """対象ボディがあるときの `join` は、そこへ肉を足す(2つ目のソリッドを作らない)。
+
+    板(z=0..10)の内側に10×10の長方形を置いて15mm押し出す。重なる10mmぶんは増えないので、
+    増分は 10×10×5 = 500 になる。
+    """
+    document = plate_document()
+    body = document.active_body()
+    sketch_id = sketch_create(document, "XY")
+    add_rectangle(document, sketch_id, (10.0, 10.0), 10.0, 10.0)
+    boss = regions(document, sketch_id)
+
+    extrude(document, [region_ref(sketch_id, boss[0].index)], 15.0, mode="join")
+
+    assert len(document.bodies) == 1, "join で2つ目のボディが増えている"
+    assert document.active_body().id == body.id
+    assert math.isclose(
+        query.volume(document.active_body().shape),
+        PLATE_VOLUME + 10.0 * 10.0 * 5.0,
+        rel_tol=VOLUME_REL_TOL,
+    )
+
+
+def test_cut_opens_a_hole_in_the_existing_body():
+    """`mode="cut"` で既存ボディから引ける。**切り取りが無いと穴が1つも開かない**。
+
+    体積が減っていることに加えて、**全周円筒の面が1つ増えている**ことまで見る
+    (体積だけだと、穴ではなく外形が削れていても通ってしまう)。
+    """
+    document = plate_document()
+    before = query.volume(document.active_body().shape)
+    assert query.describe_shape(document.active_body().shape)["faces_by_type"]["cylinder_full"] == 0
+
+    drill(document)
+
+    shape = document.active_body().shape
+    assert math.isclose(query.volume(shape), before - HOLE_VOLUME, rel_tol=VOLUME_REL_TOL)
+    assert query.describe_shape(shape)["faces_by_type"]["cylinder_full"] == 1
+
+
+def test_extrude_is_logged_and_undoable():
+    """押し出しが操作ログに1行で載り、undoで戻る(verbの粒度。§2)。
+
+    `selection` と `args["regions"]` は **JSON化できる素のdict**であること(§3.6。
+    `RegionRef` をそのまま入れると `to_json()` で落ちる)。作ったボディのIDを
+    `args["body_id"]` に記録することも固定する — 記録が無いと再生で別のIDになり、
+    保存した選択集合が指す先を失う。
+    """
+    document = Document()
+    sketch_id = split_circle_sketch(document)
+    target = max(regions(document, sketch_id), key=lambda region: region.area)
+    reference = region_ref(sketch_id, target.index)
+
+    operation = extrude(document, [reference], 10.0, mode="join")
+
+    body = document.active_body()
+    assert operation.verb == "extrude"
+    assert operation.args == {
+        "regions": [reference.to_dict()],
+        "distance": 10.0,
+        "mode": "join",
+        "body_id": body.id,
+    }
+    assert operation.selection == [reference.to_dict()]
+    json.loads(document.log.to_json())
+
+    undone = document.log.undo(document)
+
+    assert undone is not None and undone.verb == "extrude"
+    assert document.bodies == [], "join が作ったボディが undo で消えていない"
+
+    document.log.redo(document)
+    assert math.isclose(
+        query.volume(document.active_body().shape), target.area * 10.0, rel_tol=AREA_REL_TOL
+    )
+
+
+def test_undo_restores_the_shape_for_fuse_and_cut():
+    """既存ボディへの `join`(fuse)と `cut` も undo で元の形状に戻る。
+
+    undoの実体は2通りに分かれる — **新しく作ったボディなら取り除く**(上のテスト)、
+    **既存ボディを変えたなら形状を戻す**(こちら)。前者だけを見ていると後者の経路が
+    未検証のまま残る(2026-08-11のQA指摘)。`extrude_face` が形状の復帰を別に見ているのと同じ。
+    """
+    document = plate_document()
+    body_id = document.active_body().id
+
+    drill(document)
+    assert query.describe_shape(document.active_body().shape)["faces_by_type"]["cylinder_full"] == 1
+
+    document.log.undo(document)  # cut を取り消す
+
+    assert len(document.bodies) == 1 and document.active_body().id == body_id
+    assert math.isclose(
+        query.volume(document.active_body().shape), PLATE_VOLUME, rel_tol=VOLUME_REL_TOL
+    )
+    assert query.describe_shape(document.active_body().shape)["faces_by_type"]["cylinder_full"] == 0
+
+    sketch_id = sketch_create(document, "XY")
+    add_rectangle(document, sketch_id, (10.0, 10.0), 10.0, 10.0)
+    boss = regions(document, sketch_id)
+    extrude(document, [region_ref(sketch_id, boss[0].index)], 15.0, mode="join")
+
+    document.log.undo(document)  # fuse を取り消す
+
+    assert len(document.bodies) == 1
+    assert math.isclose(
+        query.volume(document.active_body().shape), PLATE_VOLUME, rel_tol=VOLUME_REL_TOL
+    )
+
+
+# --------------------------------------------------------------------------------------
+# 失敗を黙って通さない(§6予防6・§7)
+# --------------------------------------------------------------------------------------
+def test_extrude_without_an_existing_region_fails_and_changes_nothing():
+    """押し出し対象の領域が存在しない場合は失敗し、**文書が変更されない**。
+
+    領域は図形の配置から計算されるので、添字が指す先が消えていることが普通に起きる
+    (§7「領域はパラメータ編集で変わる」)。ここを黙って通すと空振りが静かに残る。
+    """
+    document = plate_document()
+    sketch_id = sketch_create(document, "XY")
+    add_circle(document, sketch_id, HOLE_CENTER, HOLE_RADIUS)
+    before_volume = query.volume(document.active_body().shape)
+    entries_before = len(document.log.entries)
+    bodies_before = len(document.bodies)
+
+    # 添字は1始まり(region.py の契約)なので、0 と負数も範囲外である
+    for target in ([], [region_ref(sketch_id, 99)], [region_ref(sketch_id, 0)],
+                   [region_ref(sketch_id, -1)]):
+        with pytest.raises(ValueError):
+            extrude(document, target, 5.0, mode="cut")
+
+    assert query.volume(document.active_body().shape) == before_volume
+    assert len(document.log.entries) == entries_before
+    assert len(document.bodies) == bodies_before
+
+
+@pytest.mark.parametrize(
+    ("distance", "mode"),
+    [(0.0, "join"), (5.0, "sculpt")],
+)
+def test_extrude_rejects_a_zero_distance_and_an_unknown_mode(distance, mode):
+    """距離0(形状が変わらない)と未知のmodeは ValueError。ログにも文書にも残さない。"""
+    document = Document()
+    sketch_id = split_circle_sketch(document)
+    target = max(regions(document, sketch_id), key=lambda region: region.area)
+    entries_before = len(document.log.entries)
+
+    with pytest.raises(ValueError):
+        extrude(document, [region_ref(sketch_id, target.index)], distance, mode=mode)
+
+    assert document.bodies == []
+    assert len(document.log.entries) == entries_before
+
+
+def test_cut_without_a_target_body_fails():
+    """引く相手が無い `cut` は ValueError(何も無いところから削れたことにしない)。"""
+    document = Document()
+    sketch_id = split_circle_sketch(document)
+    target = max(regions(document, sketch_id), key=lambda region: region.area)
+
+    with pytest.raises(ValueError):
+        extrude(document, [region_ref(sketch_id, target.index)], 10.0, mode="cut")
+
+    assert document.bodies == []
+
+
+@pytest.mark.parametrize("mode", ["join", "cut"])
+def test_extrude_rejects_a_reference_body(mode):
+    """読み込んだ参照ボディ(kind="reference")は押し出しの対象にならない(M0の読み取り専用契約)。
+
+    M1が `extrude_face` で同じ契約を固定している(`test_extrude_face_rejects_reference_body`)。
+    M2でも同じ穴を空けない。
+    """
+    document = Document()
+    document.add_body(
+        Body(
+            id="ref",
+            name="ref",
+            kind="reference",
+            shape=BRepPrimAPI_MakeBox(40.0, 30.0, 10.0).Shape(),
+        )
+    )
+    sketch_id = sketch_create(document, "XY")
+    add_circle(document, sketch_id, HOLE_CENTER, HOLE_RADIUS)
+    target = regions(document, sketch_id)[0]
+    entries_before = len(document.log.entries)
+
+    with pytest.raises(ValueError):
+        extrude(document, [region_ref(sketch_id, target.index)], 5.0, mode=mode, body_id="ref")
+
+    assert len(document.log.entries) == entries_before
+    assert len(document.bodies) == 1
+
+
+# --------------------------------------------------------------------------------------
+# 受入テストへの前進 — 棚取付具の「板と穴」(実装計画書§8のM2の検証)
+# --------------------------------------------------------------------------------------
+def test_a_plate_with_a_hole_has_only_planes_and_a_full_cylinder():
+    """長方形を押し出して板にし、円を `cut` で押し出して穴を開けられる。
+
+    受入対象の `shelf_attachment_GD.step` は **56面 = 平面34 + 全周円筒22(穴)** で、
+    トーラス0・円錐0・spline0(実装計画書§0)。つまりM2のverbだけで届く構成であり、
+    ここではその最小形(平面6 + 全周円筒1 = 7面)を作れることを確かめる。
+    **面の構成と体積は2026-08-11にOCPで直接実測した値**(box40×30×10からr=3の円柱を引き、
+    `query.describe_shape` で数えた)。
+    """
+    document = plate_document()
+    assert math.isclose(
+        query.volume(document.active_body().shape), PLATE_VOLUME, rel_tol=VOLUME_REL_TOL
+    )
+
+    drill(document)
+
+    shape = document.active_body().shape
+    info = query.describe_shape(shape)
+    assert info["faces_by_type"] == {
+        "plane": 6,
+        "cylinder_full": 1,
+        "cylinder_partial": 0,
+        "torus": 0,
+        "cone": 0,
+        "bspline": 0,
+        "other": 0,
+    }
+    assert info["face_count"] == 7
+    assert math.isclose(
+        query.volume(shape), PLATE_VOLUME - HOLE_VOLUME, rel_tol=VOLUME_REL_TOL
+    )
+
+
+def test_replay_reproduces_the_split_circle_extrusion():
+    """円＋**線分**のスケッチと片側だけの押し出しが、保存したログから再生できる。
+
+    M2の本筋の経路(円を線で割って片側を押す)を再生まで通す。下の板と穴の再生は
+    長方形と円しか通らないので、`add_line` の再生はこちらでしか検査されない
+    (2026-08-11のQA指摘)。
+    """
+    document = Document()
+    sketch_id = split_circle_sketch(document)
+    target = max(regions(document, sketch_id), key=lambda region: region.area)
+    extrude(document, [region_ref(sketch_id, target.index)], 10.0, mode="join")
+
+    replayed = Document()
+    replayed.log = OpLog.from_json(document.log.to_json())
+    replayed.log.replay(replayed)
+
+    body = replayed.active_body()
+    assert body is not None
+    assert math.isclose(query.volume(body.shape), target.area * 10.0, rel_tol=AREA_REL_TOL)
+    assert len(replayed.sketches) == 1
+    assert regions(replayed, sketch_id) == regions(document, sketch_id)
+
+
+def test_replay_reproduces_the_plate_with_the_hole():
+    """保存したログを再生すると同じ板と穴になる(形状はログからの導出物。§3.1)。
+
+    スケッチ・図形追加・押し出しの5操作が全部再生できることを一度に見る。
+    再生の経路が通らないと「開くと形が変わる」になるので、M2の締めはここ。
+    """
+    document = plate_document()
+    drill(document)
+    expected_volume = query.volume(document.active_body().shape)
+    expected_faces = query.describe_shape(document.active_body().shape)
+
+    replayed = Document()
+    replayed.log = OpLog.from_json(document.log.to_json())
+    replayed.log.replay(replayed)
+
+    body = replayed.active_body()
+    assert body is not None
+    assert math.isclose(query.volume(body.shape), expected_volume, rel_tol=VOLUME_REL_TOL)
+    assert query.describe_shape(body.shape) == expected_faces
+    assert len(replayed.sketches) == 2

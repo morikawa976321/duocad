@@ -5,6 +5,10 @@
 `C:\Users\tm976\mf\reports\cad_v1_implementation_plan_2026-08-10.md`（このREADMEと食い違ったら
 そちらを優先する）。
 
+**M2（スケッチ・領域検出・押し出し）の契約は本文書の末尾に追記してある（2026-08-11）。**
+M1（`extrude_face` / `make_editable_copy` / `tessellate`）の契約は
+`tests/test_extrude_face.py` のモジュールdocstringが持つ（ここには無い）。
+
 ## 読み方: 「実装済み(素で通る)」と「スタブ(NotImplementedErrorで赤)」の区別
 
 M0の対象は「文書・ボディのリスト・操作ログ・undo・STEP読み書き・STL書き出し」で、**振る舞い
@@ -386,3 +390,182 @@ cd C:\Users\tm976\mf\duocad
 `.venv\Scripts\pytest.exe` では `ModuleNotFoundError: No module named 'duocad'` で
 **収集エラー3件**になる（2026-08-10監査で実測し、`pythonpath` を追加して修正した）。
 どちらの起動方法でも同じ結果になることを確認済み。
+
+---
+
+# M2 — スケッチと領域検出のAPI契約（2026-08-11追記）
+
+ここから下がM2の契約。`tests/test_sketch.py` / `tests/test_region.py` / `tests/test_extrude.py`
+の3ファイルが実体で、次タスク（M2ロジックの実装）は**これを全部緑にすることだけ**を目標にする。
+上のM0の節は当時のまま残してある。
+
+## 現状（テスト先行の段階・2026-08-11）
+
+**97件収集・収集エラー0・29 failed / 68 passed。**
+
+- 29件の赤は**全件 `NotImplementedError` 由来**（`--tb=line` で例外種別を数えて確認済み。
+  `ImportError` や収集失敗による赤は0件）。
+- 68件の緑のうち **61件はM0・M1のテストで、1行も触っていない**。M2で新たに緑になったのは
+  7件だけで、いずれも**day1で実装済みのデータモデル/静的検査**（`Document.sketches` が
+  空リスト・`BASE_PLANES`・`face_plane()` の由来スロット・`Entity.kind` の検査・
+  `RegionRef` の由来スロット・`region_ref()`・M2ファイルへの import 境界）。
+  M0と同じ設計で、テストを緩めているのではない。
+
+## モジュール一覧（M2で増える分）
+
+| モジュール | 役割 | OCP直接import | build123d直接import |
+|---|---|---|---|
+| `duocad/sketch.py` | `Sketch` / `Entity` / PlaneRef とスケッチの4 verb | 禁止 | 禁止 |
+| `duocad/region.py` | `Region` / `RegionRef` と領域検出 | 禁止 | 禁止 |
+| `duocad/verbs/extrude.py` | verb `extrude`（領域の押し出し） | 禁止 | 禁止 |
+
+幾何（`BRepAlgoAPI_Splitter` による領域検出、プリズム生成、ブーリアン）は**すべて
+`kernel.py` に置く**。M0の境界がそのまま効く（`tests/test_sketch.py::
+test_m2_modules_are_covered_by_the_import_boundary_scan` が、この3ファイルが走査対象に
+入っていること自体を固定する。M0の `test_boundary_scan_covers_every_source_file` は
+M0の6ファイルしか見ないため、新規ファイルが走査から漏れても気づけない）。
+
+## `duocad/sketch.py`
+
+```python
+BASE_PLANES = ("XY", "XZ", "YZ")
+ENTITY_KINDS = ("line", "circle", "rectangle")
+
+base_plane(name) -> dict            # 実装済み {"kind":"base","name":..,"provenance":None}
+face_plane(body_id, face_index)     # 実装済み {"kind":"face","body":..,"index":..,"provenance":None}
+get_sketch(doc, sketch_id) -> Sketch                     # 実装済み。無ければKeyError
+
+sketch_create(doc, plane) -> SketchId                    # スタブ
+add_line(doc, sketch_id, p0, p1) -> EntityId             # スタブ
+add_circle(doc, sketch_id, center, radius) -> EntityId   # スタブ
+add_rectangle(doc, sketch_id, corner, width, height) -> EntityId   # スタブ
+entity_params(doc, sketch_id, entity_id) -> dict[str, float]       # スタブ
+```
+
+**契約**:
+
+- `plane` は `"XY"|"XZ"|"YZ"` か `face_plane(body_id, face_index)`。
+  **平面でない面（円筒面など）は `ValueError`**。黙って通すと、その上の領域検出と
+  押し出しが「意味を失ったまま成功する」。
+- **座標はスケッチ平面上の2D**。基準平面なら (x,y)/(x,z)/(y,z) に対応する。
+- `Entity.params` のキーは図形ごとに固定（スカラー1個＝将来のパラメータ1個になるよう平らに持つ）:
+  `line: x0,y0,x1,y1` / `circle: cx,cy,radius` / `rectangle: x,y,width,height`。
+- 操作ログの `args`:
+  `sketch_create` → `{"sketch_id":.., "plane": <PlaneRefのdict>}`、
+  図形追加 → `{"sketch_id":.., "entity_id":.., "kind":.., "params": {...}}`。
+  **作ったIDを記録する**（記録が無いと再生で別のIDになり、保存した選択集合が指す先を失う）。
+- verb名は `sketch_create` / `add_line` / `add_circle` / `add_rectangle` の4つで、
+  登録は `oplog.register_verb` へ **sketch.py 側から**行う（M0の契約どおり、`oplog.py` に
+  verb名の if 連鎖を書かない）。図形追加3つは do/undo の実体を共有してよい。
+- 存在しないスケッチIDへの操作は `KeyError`。
+
+## `duocad/region.py`
+
+```python
+Region(index: int, area: float)                 # frozen dataclass。実装済み
+RegionRef(sketch: SketchId, index: int, provenance=None)   # 実装済み。to_dict/from_dict付き
+region_ref(sketch_id, index) -> RegionRef       # 実装済み
+regions(doc, sketch_id) -> list[Region]         # スタブ
+```
+
+**契約**:
+
+- `index` は**1始まりの連番**（面の添字と同じ流儀）。`area` は mm²。
+- **列挙順は安定**であること（同じスケッチを2回評価して同じ順序・同じ面積）。選択集合は
+  領域を添字で指す（§3.5）ので、順序が揺れると保存した選択が別の領域を指す。
+- 図形が無いスケッチは**空リスト**（例外にしない）。存在しないスケッチIDは `KeyError`。
+- 実装は `BRepAlgoAPI_Splitter`（実装計画書§3.3。実測で成立を確認済み）。
+- `RegionRef` は**由来スロットを持つ**。実装計画書§6「由来スロットの適用先は3つ」の
+  3つ目（面/辺の添字・スケッチを貼った面・**領域の同一性**）がこれ。
+- 操作ログへ入れるのは `to_dict()` の素のdict（`OpLog.to_json()` がJSONにできること）。
+
+## `duocad/verbs/extrude.py`
+
+```python
+extrude(doc, regions, distance, mode="join", body_id=None) -> Operation   # スタブ
+MODES = ("join", "cut")
+```
+
+**契約**:
+
+- `regions` は `RegionRef` のリスト。**空リストは `ValueError`**、
+  **存在しない添字も `ValueError`**（領域は計算されるものなので、指した先が消えているのは
+  普通に起きる。§7「領域はパラメータ編集で変わる」）。
+- `distance` はスケッチ平面の法線方向への押し出し量。**0は `ValueError`**。
+  未知の `mode` も `ValueError`。
+- `mode="join"` … 対象ボディへ足す。**対象が無ければ新しいソリッド（`kind="solid"`）を
+  1つ作り、アクティブにする**（最初の板はこれで生まれる）。
+  `mode="cut"` … 対象から引く。**対象が無ければ `ValueError`**。
+- `body_id` の既定はアクティブボディ。`kind="reference"` は `ValueError`（M0の読み取り専用契約）。
+- ログの `args` は `{"regions": [<dict>...], "distance":.., "mode":.., "body_id":..}`、
+  `selection` は同じ `RegionRef` のdictの並び。**join が作ったボディのIDも `args["body_id"]`
+  に記録する**。
+- 失敗時は **document にもログにも変更を残さない**（幾何計算を `append` より先に済ませる。
+  `extrude_face` と同じ順序）。
+
+## M2の決定（仕様書から導かれないもの・M0の「export対象」と同じ位置づけ）
+
+実装計画書が規定していないため、**テストを書く側の決定として明示する**:
+
+1. **verbの戻り値の流儀** — 新しいものを作るverbは新しいID（`make_editable_copy` と同じ）、
+   既存の形状を変えるverbは `Operation`（`extrude_face` と同じ）。スケッチの4 verbは前者、
+   `extrude` は後者。
+2. **`Sketch` は `regions` フィールドを持たない**。実装計画書§3.3は `regions` を
+   「導出物」と明記しているので、**契約は `region.regions()` というアクセサに固定**し、
+   キャッシュを持つかどうかは実装の自由にした。導出物をデータモデルに置くと、
+   「更新されていないキャッシュ」が正のように見える瞬間が必ずできる。
+3. **`entity_params()` というアクセサを挟む**。M2では `Entity.params` の素通しだが、
+   **M3で「数値を図形に焼き込まず名前つきの値として持つ」へ移す**と `Entity.params` の
+   中身は参照に変わる。テストがこのアクセサ越しに数値を読んでいれば、M3の変更で
+   M2の契約は壊れない（M3のタスクファイル項番1がまさにこれを要求している）。
+   **M3の実装者へ**: `Entity.params` の形は変えてよいが、`entity_params()` は
+   解決済みの数値を返し続けること。
+4. **join の対象が無いときは新しいボディを作る**（1のverbが「作る」と「足す」を兼ねる）。
+   スケッチだけがある文書から最初の板を作る経路が他に無いため。cut は対象必須。
+5. **`Document.sketches` を追加した**（実装計画書§3.1の文書定義どおり）。型注釈は付けていない
+   —— `document.py` → `sketch.py` の依存を作らないため（依存は sketch.py → document.py の一方向）。
+
+## 実測値の出どころ
+
+| 値 | 出どころ |
+|---|---|
+| 円(r=20)の面積 **1256.637** | タスクファイル記載の実測値（真値 π·20²=1256.6370614…） |
+| y=5 の線分で割った **826.215 / 430.422** | 同上（真値 826.2152… / 430.4218…。合計が円の面積と一致する） |
+| 線2本で領域 **3個** | 同上 |
+| 板と穴の面構成 **平面6 + 全周円筒1 = 7面**、体積 **11717.2566611769…** | **2026-08-11にOCPで直接実測**（40×30×10 の box から r=3・高さ20 の円柱を `BRepAlgoAPI_Cut` で引き、`query.describe_shape` / `query.volume` で数えた） |
+
+面積の比較は `rel_tol=1e-6`。上の実測値は小数3桁なので真値との差は最大でも約 3e-7 で、
+この幅に確実に収まり、かつ**領域の取り違え（桁が変わる）は確実に落ちる**。
+体積の比較は M1 と同じ `rel_tol=1e-9`（ブーリアンの積分順序で1ULP級の差が出るため `==` は使わない）。
+
+## テスト一覧とタスクファイル項番の対応（M2）
+
+| タスクファイルの項番 | テスト |
+|---|---|
+| 1（基準平面） | `test_sketch.py::test_sketch_create_on_each_base_plane`（XY/XZ/YZ）, `::test_sketch_create_rejects_an_unknown_base_plane` |
+| 2（既存面・平面でない面の拒否） | `test_sketch.py::test_sketch_create_on_a_planar_face_of_an_existing_solid`, `::test_sketch_create_rejects_a_non_planar_face` |
+| 3（図形の保持） | `test_sketch.py::test_line_circle_and_rectangle_are_kept_in_the_sketch`, `::test_adding_an_entity_to_an_unknown_sketch_fails` |
+| 4（ログとundo） | `test_sketch.py::test_sketch_and_entities_are_logged_and_undoable` |
+| 5（円1個・1256.637） | `test_region.py::test_a_single_circle_yields_one_region` |
+| 6（2領域・合計一致） | `test_region.py::test_a_line_splits_the_circle_into_two_regions` |
+| 7（線2本で3領域） | `test_region.py::test_two_lines_split_the_circle_into_three_regions` |
+| 8（列挙順の安定） | `test_region.py::test_region_enumeration_order_is_stable`（＋`::test_regions_of_a_sketch_without_entities_is_empty`, `::test_regions_of_an_unknown_sketch_fails`） |
+| 9（片側だけ押し出し＝面積×距離） | `test_extrude.py::test_extruding_one_half_of_a_split_circle_gives_area_times_distance`（＋join の合成は `::test_join_fuses_into_the_existing_body`） |
+| 10（cutで穴） | `test_extrude.py::test_cut_opens_a_hole_in_the_existing_body` |
+| 11（ログとundo） | `test_extrude.py::test_extrude_is_logged_and_undoable`, `::test_undo_restores_the_shape_for_fuse_and_cut`（＋再生は `::test_replay_reproduces_the_split_circle_extrusion`, `::test_replay_reproduces_the_plate_with_the_hole`） |
+| 12（対象が無ければ失敗・文書不変） | `test_extrude.py::test_extrude_without_an_existing_region_fails_and_changes_nothing`, `::test_extrude_rejects_a_zero_distance_and_an_unknown_mode`, `::test_cut_without_a_target_body_fails`, `::test_extrude_rejects_a_reference_body` |
+| 13（板と穴・面の構成） | `test_extrude.py::test_a_plate_with_a_hole_has_only_planes_and_a_full_cylinder` |
+| 14（import境界） | `test_sketch.py::test_m2_modules_are_covered_by_the_import_boundary_scan` |
+| 15（RegionRefの由来スロット） | `test_region.py::test_region_ref_declares_a_provenance_slot`（＋貼った面の側は `test_sketch.py::test_face_plane_ref_declares_a_provenance_slot`） |
+
+## QAで足した契約（2026-08-11・cursor auto のレビュー指摘を反映）
+
+初版に対して cursor(auto) が major 1件・minor 6件を指摘し、全件を反映した。**契約が増えた分**:
+
+- `add_line` / `add_rectangle` のログ `args` の形と、**線を含む文書の再生**
+  （初版は円しか見ておらず「`Entity` は正しいがログだけ別形」が緑のまま残る穴があった）
+- **fuse-join と cut の undo**（undoの実体は「作ったボディを消す」と「形状を戻す」の2通りに
+  分かれるが、初版は前者しか見ていなかった）
+- 参照ボディ（`kind="reference"`）の拒否、領域添字 `0` / 負数の拒否
+- `Entity` / `Region` のフィールド検査を**完全一致から包含へ**（補助フィールドの追加まで
+  禁じるのは過剰拘束）

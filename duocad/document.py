@@ -53,6 +53,10 @@ class Document:
     def __init__(self) -> None:
         self._units = "mm"
         self.bodies: list[Body] = []
+        # M2追加。実装計画書§3.1の文書は bodies と並んで sketches を持つ。
+        # 型は duocad.sketch.Sketch だが、document.py -> sketch.py の依存を作らないため
+        # 注釈は付けない(sketch.py が document.py を import する一方向を保つ)。
+        self.sketches: list = []
         self._active_body_id: Optional[BodyId] = None
         # 遅延import: document.py -> oplog.py の一方向依存に留め、循環importを避ける。
         from .oplog import OpLog
