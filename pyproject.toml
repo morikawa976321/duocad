@@ -7,6 +7,8 @@ dependencies = [
     "build123d==0.11.1",
     "cadquery-ocp-novtk==7.9.3.1.1",
     "pytest>=8.0",
+    # M1: duocad/server.py の WebSocket。固定版で入れる(ローカル専用ツールなので上げなければ壊れない)
+    "websockets==17.0.1",
 ]
 
 [tool.pytest.ini_options]

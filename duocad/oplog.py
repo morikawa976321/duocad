@@ -110,6 +110,16 @@ class OpLog:
         """現在有効な(undoされていない)エントリの一覧。"""
         return list(self._entries[: self._cursor])
 
+    @property
+    def can_undo(self) -> bool:
+        """undoできる操作があるか(M1追加。アプリ層がボタンの有効・無効を出すため)。"""
+        return self._cursor > 0
+
+    @property
+    def can_redo(self) -> bool:
+        """redoできる操作があるか(M1追加。`_cursor` を外へ見せずに済ませるための読み取り専用)。"""
+        return self._cursor < len(self._entries)
+
     def append(self, verb: str, args: dict, selection: Optional[list] = None) -> Operation:
         """新しい操作を積む。redo可能だった末尾があれば新規操作で破棄される。
 

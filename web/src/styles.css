@@ -1,0 +1,118 @@
+/*
+ * バニラCSS＋CSS変数(実装計画書 §4)。Tailwindは使わない —
+ * 既定値に寄せると「よくあるWebアプリの見た目」になり、CADツールがWebアプリに見えてはいけない。
+ *
+ * M1では見た目に手をつけない(タスクの「やらないこと」)。ここにあるのは
+ * 「読める・押せる・canvasが全面に出る」ための最小限だけ。
+ */
+:root {
+  --bg: #101317;
+  --panel: #191d23;
+  --line: #2a3138;
+  --text: #d8dee6;
+  --dim: #7c8794;
+  --accent: #ffb454;
+  --font: "Consolas", "Cascadia Mono", "Meiryo", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.5 var(--font);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+header {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.tag {
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+}
+
+.tag.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+}
+
+.panel {
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  padding: 6px 12px 10px;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-height: 26px;
+}
+
+.label {
+  width: 5.5em;
+  color: var(--dim);
+  flex: 0 0 auto;
+}
+
+.value {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dim {
+  color: var(--dim);
+}
+
+input,
+button {
+  font: inherit;
+  color: var(--text);
+  background: #0d1014;
+  border: 1px solid var(--line);
+  padding: 3px 8px;
+}
+
+input {
+  width: 7em;
+  text-align: right;
+}
+
+input:focus,
+button:focus {
+  outline: 1px solid var(--accent);
+}
+
+button:disabled {
+  color: var(--dim);
+}
