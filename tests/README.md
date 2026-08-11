@@ -1350,3 +1350,65 @@ major 4件・minor 7件。対応:
 `Operation.selection` に辺を載せるか（既存の `extrude` は領域を載せている）／辺の添字が
 形状変更でずれる問題に対する由来スロットの持ち方（`face_map` と同じ形にするか別にするか）／
 複数ボディにまたがる辺の選択（今回は単一ボディのみ）。
+
+## フィレット・面取りの実装で分かったこと（2026-08-11・`fillet-chamfer-logic`）
+
+**テストは全26件が緑**（`tests/test_fillet.py` + `tests/test_chamfer.py`）。実装は cursor(auto) へ
+委譲し、委譲元（Claude）が検証・修正して取り込んだ。
+
+### 契約を1つ強めた — 項番5「r=10.5 は成功するが歪」の正体
+
+実装中に測ったら、**歪さは機械判定できた**:
+
+    r=3.0   IsDone=True   BRepCheck.IsValid=True    volume 7572.619
+    r=10.5  IsDone=True   **BRepCheck.IsValid=False**  volume 9246.464
+
+タスクファイル項番5は「テストで歪さを判定するのは難しいので、成功すること自体を固定し
+docstringに注意を書く」と指示していたが、`BRepCheck` が偽になると分かった以上、
+**duocadはこの形状を文書に入れない**のが正しい（§6予防6・§7「黙って壊れた形状を残さない」。
+`extrude_face_on_shape` も `BRepCheck` を最後の関門にしている）。したがって契約は
+「r=10.5 は成功する」→「**r=10.5 は `IsDone` を通るが `BRepCheck` で止まる**」へ変更した。
+テスト名も `test_radius_10_5_is_reported_as_done_but_is_actually_broken` に改めてある。
+
+**壊れ方は半径に対して単調でも一様でもない**（`test_failures_do_not_follow_a_simple_rule_about_the_radius`）:
+
+| 半径 | どうなるか |
+|---|---|
+| 3.0 | 通る |
+| 10.0 | `IsDone()=False` で落ちる |
+| 10.5 | `IsDone()` は真、**`BRepCheck` で落ちる**（落ちる関門が違う） |
+| 30.0 | `IsDone()=False` で落ちる |
+
+範囲検査で代用できないうえ、**どの関門で捕まるかも半径で変わる**ので、毎回すべての関門
+（`IsDone` / 空でない / 体積 > 0 / `BRepCheck`）を通すしかない。
+
+### 実装で決めたこと（契約の外側・次に触る人向け）
+
+- `kernel._blend_edges(shape, values, verb)` に**フィレットと面取りを1つの実装として置いた**。
+  `BRepFilletAPI_MakeFillet` と `BRepFilletAPI_MakeChamfer` は同じ系統で、失敗の仕方も由来の
+  取り出し方も同じだから。2つに書き分けると片方だけ検査が抜ける（面取りは「まっすぐな辺なら
+  平面が増えるだけ」の無害に見える操作なので、検査を省きたくなる）。
+- 由来は **`normalize_provenance` の戻りから射影を作る**（`maker.Modified()` を verb 側や
+  kernel 側で直接叩き直さない）。フィレット系が `History()` を持たない差を吸収するのが
+  アダプタの存在理由なので、そこを迂回すると同じ分岐が写経される（§6予防2）。
+  `TopoDS_Shape` は辞書の鍵にできないので `IsSame` で引く（`_lookup_by_identity`）。
+- `query.describe_edges` は**添字と種別を kernel 側（`edge_count`/`edge_of`/`classify_edge`）から
+  取り、長さと端点だけ build123d で測る**。build123d の `.edges()` の順序が
+  `kernel._edge_map` と一致する保証が無く、ずれると**「選んだ辺と違う辺が丸まる」**という
+  例外の出ない事故になるため。
+- `ShapeUpgrade_UnifySameDomain` は**通さない**（押し出し専用の処置。フィレットの結果を統合すると
+  丸めた面が潰れる）。
+- undo は `extrude.py` と同じ `WeakKeyDictionary` のスナップショット方式。
+
+### 委譲の記録
+
+- cursor(auto) 2回。**1回目は最終メッセージにコードが1文字も含まれず成果物ゼロ**
+  （ファイル書き込みがフックで拒否され、テキストにも出さなかった）。2回目に
+  「前回コードが無かった。必ず最終メッセージ本文にコードを書け」と明示し、出力範囲を
+  5関数＋2ファイルに絞ったところ成功した。**中継方式では「本文に書け」を毎回明示する**こと。
+- 委譲元が直したもの: `kernel.py` の import 追記（cursorが申し送っていた）／辺マップを
+  1回だけ作るよう変更（関数呼び出しごとに作り直していた）／`normalize_provenance` の
+  戻り値を捨てて `maker.Modified()` を直接叩いていたのをアダプタ経由に統一／
+  `describe_edges` の実装に伴い誤って消してしまった `_wrap`/`_unwrap` の復元。
+- `gpt-5.6-sol-*` / `gpt-5.6-terra-*` は月次上限（8/19リセット）で使えず、**QAは委譲元の
+  Claude が行った**（実装=cursor auto と別モデルなので「QAは実行者と別モデル」は満たす）。

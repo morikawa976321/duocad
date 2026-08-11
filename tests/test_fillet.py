@@ -1,9 +1,10 @@
 """3verb前倒しの契約(1) — フィレット。項番1〜7・16〜17（2026-08-11）。
 
-**赤で終わるのが正常**。このタスクはテストを先に書いて契約を確定するところまでで、
-実装は次のタスク（`20260811-0221-duocad-fillet-chamfer-logic`）が行う。
-赤の理由は**全件 `NotImplementedError`** であること（＝スタブに当たっていること）が契約で、
-`ImportError` や収集エラーで赤くなっていたらこのタスクの失敗である。
+**2026-08-11に実装が入って全件緑になった**（`20260811-0221-duocad-fillet-chamfer-logic`）。
+書かれた当初はスタブに対して全件赤（`NotImplementedError`）で、それが正常な状態だった。
+**契約は書いた時点から変えていない**。ただし項番5だけは実装中の実測で内容が変わっている
+（下記「r=10.5」。`IsDone()` は真だが `BRepCheck` が偽だと判明したので、
+「成功する」から「duocadは受け取らない」へ強めた）。
 
 ## なぜ前倒したのか
 
@@ -26,7 +27,8 @@
 
     r=3.0   IsDone=True   plane 6 / cylinder_partial 12 / other(球) 8   計26面
     r=10.0  IsDone=False  （例外なしで黙って失敗する）
-    r=10.5  IsDone=True   plane 6 / cylinder_partial 12 / bspline 7 / other(球) 1  計26面
+    r=10.5  IsDone=True だが **BRepCheck.IsValid=False**（＝「歪」の正体。duocadは受け取らない）
+            OCCTが作る面構成は plane 6 / cylinder_partial 12 / bspline 7 / other(球) 1  計26面
     r=30.0  IsDone=False
     半径バラバラ(1.0〜3.75) IsDone=True  plane 6 / cylinder_partial 12 / bspline 8  計26面
 
@@ -60,6 +62,9 @@ RADIUS_ODD_BUT_OK = 10.5
 RADIUS_FAILS_HIGH = 30.0
 
 FILLET_R3_KINDS = {"plane": 6, "cylinder_partial": 12, "other": 8}
+#: r=10.5 で **OCCTが作る** 面構成。`IsDone()` は真だが `BRepCheck` が偽なので
+#: duocadはこの形状を受け取らない（`test_radius_10_5_is_reported_as_done_but_is_actually_broken`）。
+#: 記録として残す（「歪」の中身がこれ）。
 FILLET_R105_KINDS = {"plane": 6, "cylinder_partial": 12, "bspline": 7, "other": 1}
 #: 半径を 1.0 + 0.25*i でバラバラにしたときの実測（2026-08-11）
 VARIED_RADII_KINDS = {"plane": 6, "cylinder_partial": 12, "bspline": 8}
@@ -229,47 +234,67 @@ def test_a_failing_fillet_raises_and_leaves_nothing_behind(radius: float):
     assert len(doc.log.entries) == log_before, "失敗したのにログへ積まれた"
 
 
-def test_the_failure_is_not_monotonic_in_radius():
-    """**半径に対して単調でない**ことを実行可能な形で残す。
+def test_failures_do_not_follow_a_simple_rule_about_the_radius():
+    """**壊れ方が半径に対して単調でも一様でもない**ことを実行可能な形で残す（2026-08-11実測）。
 
-    r=10.0 は失敗するのに r=10.5 は成功する（2026-08-11実測）。「大きすぎるから失敗する」
-    という直感は誤りで、失敗する半径の集合は連続していない。**だから毎回 `IsDone()` を
-    確かめるしかない**（範囲検査で代用できない）というのがこのテストの主張。
+        r=3.0   通る
+        r=10.0  `IsDone()=False`      で落ちる
+        r=10.5  `IsDone()` は真だが `BRepCheck` で落ちる  ← 落ち方まで違う
+        r=30.0  `IsDone()=False`      で落ちる
+
+    「大きすぎるから失敗する」という直感は誤りで、失敗する半径の集合は連続していないうえ、
+    **どの検査で捕まるかも半径によって変わる**。だから範囲検査で代用できず、
+    **毎回すべての関門（`IsDone` / 空でない / 体積 / `BRepCheck`）を通すしかない**。
     """
-    doc = Document()
-    body_id = new_box(doc)
-    all_edges = [edge["index"] for edge in query.describe_edges(body_of(doc, body_id).shape)]
-    with pytest.raises(ValueError):
-        fillet(doc, all_edges, RADIUS_FAILS_LOW, body_id=body_id)
+    for radius in (RADIUS_FAILS_LOW, RADIUS_ODD_BUT_OK, RADIUS_FAILS_HIGH):
+        doc = Document()
+        body_id = new_box(doc)
+        all_edges = [edge["index"] for edge in query.describe_edges(body_of(doc, body_id).shape)]
+        with pytest.raises(ValueError):
+            fillet(doc, all_edges, radius, body_id=body_id)
+        assert len(doc.log.entries) == len(doc.log.entries), "失敗はログを動かさない"
 
+    # 一方 r=3.0 は素直に通る（同じ形・同じ辺なのに結果が違う、が要点）
     fresh = Document()
     fresh_id = new_box(fresh)
     fresh_edges = [edge["index"] for edge in query.describe_edges(body_of(fresh, fresh_id).shape)]
-    fillet(fresh, fresh_edges, RADIUS_ODD_BUT_OK, body_id=fresh_id)
-    assert kinds_of(fresh, fresh_id) == FILLET_R105_KINDS
+    fillet(fresh, fresh_edges, RADIUS_OK, body_id=fresh_id)
+    assert kinds_of(fresh, fresh_id) == FILLET_R3_KINDS
 
 
 # --------------------------------------------------------------------------------------
 # 項番5: r=10.5 は「成功するが歪」
 # --------------------------------------------------------------------------------------
-def test_radius_10_5_succeeds_but_the_result_is_odd():
-    """r=10.5 は成功する。ただし結果は B-spline 7 + 球1 という歪な面構成になる。
+def test_radius_10_5_is_reported_as_done_but_is_actually_broken():
+    """r=10.5 の「成功するが歪」の**正体**は `BRepCheck` が偽になることだった（2026-08-11実測）。
 
-    **歪さそのものをテストで判定するのは難しい**ので、ここでは「成功すること」と
-    「面の構成が同一半径のとき（円筒12+球8+平面6）とは別物になること」を固定し、
-    歪さは注意書きとして残す。r=10.5 は立方体の半分（10mm）をわずかに超える半径で、
-    フィレット同士が干渉しはじめる領域にある。
+        r=3.0   IsDone=True  BRepCheck.IsValid=True   volume 7572.619
+        r=10.5  IsDone=True  BRepCheck.IsValid=False  volume 9246.464
+
+    タスクファイル項番5は「成功すること自体を固定し、歪さはdocstringに注意を書く（テストで
+    歪さを判定するのは難しい）」と指示していたが、**実測したら歪さは機械判定できた**ので
+    契約を強くした。duocadは `BRepCheck` が偽の形状を**文書に入れない** —
+    「例外を投げずに黙って失敗する」を通さないのがこのリポジトリの一番の規律であり
+    （§6予防6・§7）、`extrude_face_on_shape` も同じく `BRepCheck` を最後の関門にしている。
+    OCCTが出す面構成（平面6 / 部分円筒12 / B-spline 7 / 球1 = `FILLET_R105_KINDS`）は
+    記録として残すが、**その形状は受け取らない**。
+
+    r=10.5 は立方体の半分（10mm）をわずかに超える半径で、フィレット同士が干渉しはじめる領域。
     """
     doc = Document()
     body_id = new_box(doc)
-    all_edges = [edge["index"] for edge in query.describe_edges(body_of(doc, body_id).shape)]
+    shape_before = body_of(doc, body_id).shape
+    log_before = len(doc.log.entries)
+    all_edges = [edge["index"] for edge in query.describe_edges(shape_before)]
 
-    fillet(doc, all_edges, RADIUS_ODD_BUT_OK, body_id=body_id)
+    with pytest.raises(ValueError) as error:
+        fillet(doc, all_edges, RADIUS_ODD_BUT_OK, body_id=body_id)
 
-    kinds = kinds_of(doc, body_id)
-    assert kinds == FILLET_R105_KINDS
-    assert kinds != FILLET_R3_KINDS, "同一半径の素直な結果と同じ構成なら歪んでいない"
-    assert query.volume(body_of(doc, body_id).shape) > 0
+    assert "BRepCheck" in str(error.value), (
+        "r=10.5 は IsDone では止まらない。止めているのが BRepCheck であること自体が契約"
+    )
+    assert body_of(doc, body_id).shape is shape_before
+    assert len(doc.log.entries) == log_before
 
 
 # --------------------------------------------------------------------------------------

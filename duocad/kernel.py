@@ -48,7 +48,7 @@ from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
 from OCP.Bnd import Bnd_Box
 from OCP.BRep import BRep_Builder, BRep_Tool
-from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
 from OCP.BRepBuilderAPI import (
@@ -58,11 +58,12 @@ from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeWire,
 )
 from OCP.BRepCheck import BRepCheck_Analyzer
+from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
 from OCP.BRepGProp import BRepGProp, BRepGProp_Face
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
 from OCP.BRepTools import BRepTools
-from OCP.GeomAbs import GeomAbs_SurfaceType
+from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 from OCP.GProp import GProp_GProps
 from OCP.IFSelect import IFSelect_ReturnStatus
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
@@ -1053,45 +1054,174 @@ def edge_count(shape: "TopoDS_Shape") -> int:
 
 
 def classify_edge(edge: Any) -> str:
-    """1つの辺を EDGE_KINDS のいずれかへ分類する。**スタブ(実装は次のタスク)**。
+    """1つの辺を EDGE_KINDS のいずれかへ分類する。
 
     フィレット・面取りは「どの辺か」を選べないと使えず、辺の選択は
     「まっすぐな辺」「円い辺」の区別が要る(円い辺のフィレットはトーラスを、
     円い辺の面取りは円錐を作る。まっすぐな辺の面取りは平面になる。2026-08-11実測)。
     """
-    raise NotImplementedError("classify_edge は未実装(テスト先行)")
+    adaptor = BRepAdaptor_Curve(TopoDS.Edge_s(edge))
+    curve_type = adaptor.GetType()
+    if curve_type == GeomAbs_CurveType.GeomAbs_Line:
+        return "line"
+    if curve_type == GeomAbs_CurveType.GeomAbs_Circle:
+        return "circle"
+    return "other"
 
 
 def edge_of(shape: "TopoDS_Shape", edge_index: int) -> Any:
-    """形状の1始まり添字の辺を返す。範囲外は ValueError。**スタブ**。"""
-    raise NotImplementedError("edge_of は未実装(テスト先行)")
+    """形状の1始まり添字の辺を返す。範囲外は ValueError(面の `face_of` と同じ流儀)。"""
+    return _edge_at(_edge_map(shape), edge_index)
+
+
+def _edge_at(shape_map: "TopTools_IndexedMapOfShape", edge_index: int) -> Any:
+    """既に作った辺マップから引く(まとめて引くときにマップを作り直さないため)。"""
+    if not 1 <= int(edge_index) <= shape_map.Extent():
+        raise ValueError(
+            f"edge index out of range: {edge_index} (1..{shape_map.Extent()})"
+        )
+    return TopoDS.Edge_s(shape_map.FindKey(int(edge_index)))
 
 
 def fillet_edges(shape: "TopoDS_Shape", radii: dict) -> dict:
-    """辺(1始まりの添字)を丸めた**新しい形状**と由来の射影を返す。**スタブ**。
+    """辺(1始まりの添字)を丸めた**新しい形状**と由来の射影を返す。
 
     `radii` は `{辺の添字: 半径}`。入力の `shape` は変更しない。
 
-    **必ず `IsDone()` を確認すること**。OCCTのフィレットは例外を投げずに失敗し、しかも
+    **必ず `IsDone()` を確認する**。OCCTのフィレットは例外を投げずに失敗し、しかも
     半径に対して単調でない(2026-08-11に20mm立方体の全辺で実測: r=3.0 成功 / r=10.0
     `IsDone()=False` / r=10.5 成功 / r=30.0 `IsDone()=False`)。失敗は例外にして
     呼び出し側が操作ごと捨てられるようにする。
 
     戻り値(`"shape"` 以外はJSON化できる素の値):
-        {"shape": <TopoDS_Shape>, "provenance": {...},
-         "volume_before": float, "volume_after": float}
+        {"shape": <TopoDS_Shape>, "provenance": {...}, "volume_before": float,
+         "volume_after": float}
     """
-    raise NotImplementedError("fillet_edges は未実装(テスト先行)")
+    return _blend_edges(shape, radii, verb="fillet")
 
 
 def chamfer_edges(shape: "TopoDS_Shape", distances: dict) -> dict:
-    """辺(1始まりの添字)を面取りした新しい形状と由来の射影を返す。**スタブ**。
+    """辺(1始まりの添字)を面取りした新しい形状と由来の射影を返す。
 
     `distances` は `{辺の添字: 距離}`。`fillet_edges` と同じ契約(`IsDone()` の確認・
     入力を変更しない・戻り値の形)。`BRepFilletAPI_MakeChamfer` は同じ系統なので、
     **黙って失敗する性質も同じ**。
     """
-    raise NotImplementedError("chamfer_edges は未実装(テスト先行)")
+    return _blend_edges(shape, distances, verb="chamfer")
+
+
+def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
+    """フィレットと面取りの共通実装(違うのはビルダの型だけ)。
+
+    **同じ系統(`BRepFilletAPI_*`)なので失敗の仕方も由来の取り出し方も同じ**であり、
+    2つに書き分けると片方だけ検査が抜ける(実際、面取りは「まっすぐな辺なら平面が増えるだけ」
+    という無害に見える操作なので、検査を省きたくなる誘惑がある)。
+    """
+    if shape is None or shape.IsNull():
+        raise ValueError(f"cannot {verb} an empty shape")
+    if not values:
+        raise ValueError(f"{verb} requires at least one edge")
+
+    edge_map = _edge_map(shape)
+    volume_before = volume(shape)
+    maker = (
+        BRepFilletAPI_MakeFillet(shape)
+        if verb == "fillet"
+        else BRepFilletAPI_MakeChamfer(shape)
+    )
+    edge_indices: List[int] = []
+    for raw_index, raw_value in values.items():
+        index = int(raw_index)
+        maker.Add(float(raw_value), _edge_at(edge_map, index))
+        edge_indices.append(index)
+
+    try:
+        maker.Build()
+    except Exception as error:  # noqa: BLE001  OCCTは例外でも失敗しうる
+        raise ValueError(f"{verb} failed while building (edges {edge_indices}): {error}") from error
+    if not maker.IsDone():
+        # **ここが最重要**: OCCTは例外を投げずに失敗する。半径/距離の範囲検査では代用できない
+        raise ValueError(
+            f"{verb} failed (IsDone is false) for edges {edge_indices} with {values}"
+        )
+
+    final = maker.Shape()
+    if final is None or final.IsNull():
+        raise ValueError(f"{verb} produced an empty shape (edges {edge_indices})")
+    volume_after = volume(final)
+    if volume_after <= 0:
+        raise ValueError(f"{verb} left nothing solid (volume={volume_after})")
+    if not BRepCheck_Analyzer(final).IsValid():
+        raise ValueError(f"{verb} produced an invalid shape (BRepCheck, edges {edge_indices})")
+
+    return {
+        "shape": final,
+        "provenance": _blend_provenance(maker, shape, final, verb, edge_indices),
+        "volume_before": float(volume_before),
+        "volume_after": float(volume_after),
+    }
+
+
+def _blend_provenance(
+    maker: Any,
+    shape: "TopoDS_Shape",
+    final: "TopoDS_Shape",
+    verb: str,
+    edge_indices: List[int],
+) -> dict:
+    """由来を**正規化アダプタ経由で**回収し、JSON化できる射影へ落とす。
+
+    フィレット系は `History()` を持たず `Modified()` / `Generated()` / `IsDeleted()` だけを
+    持つ(2026-08-11に `BRepFilletAPI_MakeFillet` で実測)。ブーリアンは `History()` を持つので
+    取り出し方が違い、**その差を吸収するのが `normalize_provenance` の存在理由**である。
+    ここでアダプタを通さずに `maker.Modified()` を直接呼ぶと、verb ごとに同じ分岐を写経する
+    ことになる(§6予防2)。
+
+    アダプタの戻りは `TopoDS_Shape` を含む**メモリ上の形**なので、そのままでは
+    `OpLog.to_json()` で落ちる。ここで添字の射影に変換する(`extrude_face_on_shape` と同じ形)。
+    """
+    normalized = normalize_provenance(maker, [shape]) or {}
+    modified = {}
+    for entry in normalized.get("modified", []):
+        modified[entry["input"]] = entry["results"]
+    deleted_inputs = normalized.get("deleted", [])
+
+    shape_map = _face_map(shape)
+    final_map = _face_map(final)
+    successors: dict = {}
+    for index in range(1, shape_map.Extent() + 1):
+        old_face = shape_map.FindKey(index)
+        candidates = _lookup_by_identity(modified, old_face)
+        if candidates is None:
+            # アダプタが「触っていない」と言った面は、そのまま残っているはず
+            candidates = [] if _contains_identity(deleted_inputs, old_face) else [old_face]
+        resolved: List[int] = []
+        for candidate in candidates:
+            position = final_map.FindIndex(candidate)
+            if position > 0 and position not in resolved:
+                resolved.append(position)
+        successors[str(index)] = resolved
+
+    mapped = {position for positions in successors.values() for position in positions}
+    return {
+        "verb": verb,
+        "edges": list(edge_indices),
+        "face_map": successors,
+        "deleted": [int(key) for key, value in successors.items() if not value],
+        "new_faces": [i for i in range(1, final_map.Extent() + 1) if i not in mapped],
+    }
+
+
+def _lookup_by_identity(mapping: dict, key: Any) -> Optional[List[Any]]:
+    """`TopoDS_Shape` は辞書の鍵として同一性で引けないので `IsSame` で探す。"""
+    for candidate, results in mapping.items():
+        if candidate.IsSame(key):
+            return results
+    return None
+
+
+def _contains_identity(shapes: Sequence[Any], key: Any) -> bool:
+    return any(candidate.IsSame(key) for candidate in shapes)
 
 
 def _edge_map(shape: "TopoDS_Shape") -> "TopTools_IndexedMapOfShape":
