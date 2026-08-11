@@ -11,6 +11,8 @@ M3.5の契約:
     フォールバック)。複数ならcompoundへまとめる。詳細は `_shape_to_export` のdocstring。
 - export_stl(doc, path, deviation, body_ids=None) -> None
     body_ids省略時の対象は export_step と同じ。deviation(mm)は**絶対**の線形偏差。
+- export_body_ids(doc, body_ids=None) -> [BodyId, ...]
+    書き出し対象のID一覧。規則は `_bodies_to_export` に集約し、MCPの戻り値と共有する。
 
 失敗時の契約(黙って通さない。実装計画書 §6予防6):
 - パスが存在しない            -> FileNotFoundError
@@ -86,8 +88,13 @@ def export_stl(
     kernel.write_stl(shape, str(path), deviation)
 
 
-def _shape_to_export(doc: Document, body_ids):
-    """書き出し対象の形状(複数なら compound)。無ければ ValueError(ファイルは作らない)。
+def export_body_ids(doc: Document, body_ids: list[BodyId] | None = None) -> list[BodyId]:
+    """書き出し対象の body_id 一覧。規則は `_shape_to_export` と共有する。"""
+    return [body.id for body in _bodies_to_export(doc, body_ids)]
+
+
+def _bodies_to_export(doc: Document, body_ids: list[BodyId] | None):
+    """書き出し対象の Body 一覧。無ければ ValueError(ファイルは作らない)。
 
     `body_ids` 省略時は既定で **`kind="solid"` の全Body**(編集可能なもの)を対象にする。
     `kind="solid"` が1つも無ければ(=まだ編集用コピーを作っていない、参照だけの文書)、
@@ -112,6 +119,12 @@ def _shape_to_export(doc: Document, body_ids):
             bodies = [b for b in doc.bodies if b.shape is not None]
     if not bodies:
         raise ValueError("nothing to export: no body with a shape")
+    return bodies
+
+
+def _shape_to_export(doc: Document, body_ids):
+    """書き出し対象の形状(複数なら compound)。対象選びは `_bodies_to_export` に集約。"""
+    bodies = _bodies_to_export(doc, body_ids)
     shapes = [b.shape for b in bodies]
     if len(shapes) == 1:
         return shapes[0]

@@ -80,13 +80,21 @@ from datetime import datetime
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional  # Any: Session verb wrappers / listeners
 
 from websockets.asyncio.server import serve
 
-from . import io_step, kernel, query, selection
+from . import io_step, kernel, parameters, query, selection, sketch
 from .document import Document
-from .verbs import extrude_face, make_editable_copy
+from .verbs import (
+    chamfer as chamfer_verb,
+    extrude as extrude_regions_verb,
+    extrude_face,
+    fillet as fillet_verb,
+    make_editable_copy,
+    pattern_circular as pattern_circular_verb,
+    pattern_rectangular as pattern_rectangular_verb,
+)
 from .verbs import set_visible as set_visible_verb
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -451,7 +459,7 @@ class Session:
     def undo(self) -> dict:
         """直前の操作を取り消す。**文書の土台を作った操作は取り消させない**。
 
-        計測の手順は「10回押して10回戻す」なので、1回多く押すと編集用ボディを作った操作まで
+        計測の手順は「10回押して10回戻す」ので、1回多く押すと編集用ボディを作った操作まで
         取り消され、`active_body` が消えて以後の画面更新が全部落ちる(2026-08-10のQA指摘)。
         土台はundoの対象外にして、理由を画面へ返す。
         """
@@ -472,6 +480,142 @@ class Session:
         if operation is None:
             raise ValueError("やり直せる操作が無い")
         return self._emit({"verb": "redo", "redone": operation.verb, **_selection_hints(operation)})
+
+    # ---------------------------------------------------------------- F2: MCP / 全verbの口
+    #
+    # **新しいverbは作らない**。コアに既にあるものを `_emit` 経由で出すだけ。
+    # MCPもブラウザも同じ `Session` を叩くので、ここを通らないと開いている画面へ届かない。
+    def _after_logged_verb(self, extra: Optional[dict] = None) -> dict:
+        """直前にログへ積まれたverbについて変更イベントを発火する。"""
+        operation = self.document.log.entries[-1]
+        self._applied_count += 1
+        payload: dict[str, Any] = {"verb": operation.verb, "seq": operation.seq}
+        if extra:
+            payload.update(extra)
+        return self._emit(payload)
+
+    def sketch_create(self, plane: Any) -> dict:
+        sketch_id = sketch.sketch_create(self.document, plane)
+        return self._after_logged_verb({"sketch_id": sketch_id})
+
+    def add_line(self, sketch_id: str, p0: Any, p1: Any) -> dict:
+        entity_id = sketch.add_line(self.document, sketch_id, p0, p1)
+        return self._after_logged_verb({"entity_id": entity_id})
+
+    def add_circle(self, sketch_id: str, center: Any, radius: float) -> dict:
+        entity_id = sketch.add_circle(self.document, sketch_id, center, radius)
+        return self._after_logged_verb({"entity_id": entity_id})
+
+    def add_rectangle(self, sketch_id: str, corner: Any, width: float, height: float) -> dict:
+        entity_id = sketch.add_rectangle(self.document, sketch_id, corner, width, height)
+        return self._after_logged_verb({"entity_id": entity_id})
+
+    def add_arc(
+        self,
+        sketch_id: str,
+        center: Any,
+        radius: float,
+        start_deg: float,
+        end_deg: float,
+    ) -> dict:
+        entity_id = sketch.add_arc(
+            self.document, sketch_id, center, radius, start_deg, end_deg
+        )
+        return self._after_logged_verb({"entity_id": entity_id})
+
+    def extrude_regions(
+        self,
+        regions: Any,
+        distance: float,
+        mode: str = "join",
+        body_id: Optional[str] = None,
+    ) -> dict:
+        """スケッチ領域の押し出し(`verbs.extrude`)。既存の `extrude`(面)とは別。"""
+        operation = extrude_regions_verb(
+            self.document, regions, float(distance), mode=mode, body_id=body_id
+        )
+        changed_body_id = operation.args["body_id"]
+        return self._after_logged_verb({
+            "body_id": changed_body_id,
+            "distance": float(distance),
+            "mode": mode,
+            "changed_bodies": [changed_body_id],
+        })
+
+    def fillet(self, edges: Any, radius: Any, body_id: Optional[str] = None) -> dict:
+        operation = fillet_verb(self.document, edges, radius, body_id=body_id)
+        changed_body_id = operation.args["body_id"]
+        return self._after_logged_verb({
+            "body_id": changed_body_id,
+            "changed_bodies": [changed_body_id],
+        })
+
+    def chamfer(self, edges: Any, distance: Any, body_id: Optional[str] = None) -> dict:
+        operation = chamfer_verb(self.document, edges, distance, body_id=body_id)
+        changed_body_id = operation.args["body_id"]
+        return self._after_logged_verb({
+            "body_id": changed_body_id,
+            "changed_bodies": [changed_body_id],
+        })
+
+    def pattern_rectangular(
+        self,
+        sketch_id: str,
+        entities: Any,
+        dx: float,
+        dy: float,
+        nx: int,
+        ny: int,
+    ) -> dict:
+        pattern_id = pattern_rectangular_verb(
+            self.document, sketch_id, entities, dx, dy, nx, ny
+        )
+        return self._after_logged_verb({"pattern_id": pattern_id})
+
+    def pattern_circular(
+        self,
+        sketch_id: str,
+        entities: Any,
+        center: Any,
+        count: int,
+        total_angle: float = 360.0,
+        rotate_copies: bool = True,
+    ) -> dict:
+        pattern_id = pattern_circular_verb(
+            self.document,
+            sketch_id,
+            entities,
+            center,
+            count,
+            total_angle=total_angle,
+            rotate_copies=rotate_copies,
+        )
+        return self._after_logged_verb({"pattern_id": pattern_id})
+
+    def make_editable_copy_body(
+        self, source_body_id: Optional[str] = None, name: Optional[str] = None
+    ) -> dict:
+        body_id = make_editable_copy(self.document, source_body_id, name)
+        return self._after_logged_verb({"body_id": body_id})
+
+    def set_parameter(self, name: str, value: float) -> dict:
+        before_shapes = {body.id: id(body.shape) for body in self.document.bodies}
+        operation = parameters.set_parameter(self.document, name, float(value))
+        changed_bodies = [
+            body.id
+            for body in self.document.bodies
+            if before_shapes.get(body.id) != id(body.shape)
+        ]
+        return self._after_logged_verb({
+            "name": operation.args["name"],
+            "value": operation.args["value"],
+            "previous": operation.args["previous"],
+            "changed_bodies": changed_bodies,
+        })
+
+    def import_step(self, path: Any) -> dict:
+        body_ids = io_step.import_step(self.document, path)
+        return self._after_logged_verb({"body_ids": list(body_ids)})
 
     # ---------------------------------------------------------------- 計測
     def append_measure_record(self, record: dict) -> dict:

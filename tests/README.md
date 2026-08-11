@@ -1654,8 +1654,10 @@ AIから読み書きできず、交互操作が原理的に閉じない。`docum
 
 ### 4. `pending` のまま verb を適用してよいか → **黙って通さない（禁止ではない）**
 
-`confirmed_items(doc)` が `origin == "proposed"` のとき ValueError を送出する。
-これが提案と確定の区別を**実際に効かせている唯一の場所**である。
+`confirmed_items(doc)` が `origin == "proposed"` のとき `SelectionNotCommitted`
+（`ValueError` の派生）を送出する。これが提案と確定の区別を**実際に効かせている唯一の場所**である。
+MCPはメッセージ文言ではなく `isinstance(..., SelectionNotCommitted)` で
+`selection_not_committed` を付ける（コア側の文言に依存しない）。
 
 AIが自分の提案を実行したいときは `commit_selection()` を明示的に呼べばよい。
 **完全禁止にしなかった**のは、人が居ない場面（AI単独でモデルを作る）で提案→実行の経路が
@@ -2188,3 +2190,98 @@ F1で次のように直した。QAの1回目が指摘するまで見落として
   F2はここを触る必要が無い —— 触りたくなったら、それは28個の契約と食い違っている合図である。
 - **1つの図形を2つの反復で使い回せない**（コアが ValueError で拒む。F1で実測）。
   `pattern_rectangular` と `pattern_circular` のテストが別々の図形を使っているのはそのため。
+
+## Fの実装で分かったこと（2026-08-12・`duocad-mcp-full-logic`）
+
+**契約91件＋QAで足した2件の計93件が緑。全スイート 470件中469 passed**（赤1件は
+`test_extruding_one_part_of_the_pc_case_stays_under_1000ms` の壁時計フレークで、
+F1の着手前から赤い。この回に4回計測して 1421.8 / 1127.6 / 1056.5 / 1095.5 ms・閾値1000ms。
+claude 16 + Cursor 28 プロセスが同時稼働している負荷環境）。
+
+実装は cursor(auto) へ**4回に分けて**委譲した。1回で全部を頼んだ1回目は
+**descriptors 28個と `Session` 側のverbの口までで打ち切られ**、25個のツール本体がスタブのまま
+返ってきた（`_revision_snapshot` という書きかけの呼び出しが残り、M4から緑だった
+`tests/test_mcp.py` の3件が赤に落ちていた）。以降は
+**土台 → 選択7個 → 残り18個＋MCP.md → QA対応**の4回に割って、各回とも委譲元が `pytest` を
+回して確認した。**次に大きい委譲をするときも、最初から3〜4回に割る前提で計画すること。**
+
+### `fillet` / `chamfer` が選択のBodyを捨てていた（QAが見つけた・**この節で最も重要**）
+
+確定した辺の参照は `body` と `index` の両方を持つ。実装は `index` だけを取り出して
+`Session.fillet(edges, radius, body_id=None)` を呼んでおり、`body_id=None` はコア側で
+**アクティブなBody**になる。つまり**選択が指しているのと別の部品が丸まる** —— 27部品の
+PCケースなら「同じ添字の別部品の辺」を黙って変える。例外も出ない。
+
+**F1の契約が1Bodyの直方体でしか検査していなかったので素通しした。** 交互操作の一巡を通す
+`test_the_whole_interleaved_lap_runs_through_mcp_alone` は緑のままだった。`extrude_face` は
+面の参照から `body` を渡していて、**辺の側だけが抜けていた**（同じ形の穴が片方だけ空く典型）。
+
+QAの指摘を受けて `test_a_verb_targets_the_body_the_selection_names`（fillet / chamfer の2件）を
+足した。**アクティブでないBodyの辺を選んで丸め、無関係なBodyが変わらないことを見る** ——
+対応前は実測で `changed_bodies` が `['other']` になっていた。
+
+**教訓**: 「選択から形を取る」設計では、**参照が運んでいる情報を全部使っているか**を
+verbごとに確かめること。添字だけ使って `body` を落とすのは、型でも例外でも検出されない。
+
+### 拒否の判定は型付き例外にした（`SelectionNotCommitted`）
+
+最初の実装は「選択が proposed **かつ例外メッセージに `commit_selection` を含む**」で
+`selection_not_committed` を判定していた。理由は正当で、**origin を見るだけでは
+「提案中に起きた別の ValueError」（不正な参照など）まで畳んでしまう**（実際に
+`test_a_malformed_reference_is_refused_without_touching_the_selection` が落ちた）。
+
+しかしメッセージ文字列への依存は、コア側の文言を変えた瞬間に `invalid_argument` へ落ちる
+＝ **決定3が禁じた潰し方**をコードが自分で再現する。QAの結論に従い、
+`duocad/selection.py` に **`SelectionNotCommitted(ValueError)`** を足して
+`confirmed_items` が送出し、MCPは `isinstance` で名前を付けるだけにした。
+
+**`ValueError` の派生にしてある**ので、A1が書いた `pytest.raises(ValueError)` の契約は
+そのまま生きている。**門は依然として `confirmed_items` の1箇所だけ**で、MCPは先回りしない
+（`test_the_gate_lives_in_the_core_not_in_the_mcp_layer` がその向きを見張る）。
+
+### 「これで全部」型のアサーションは3箇所にあった
+
+F1のQAが `tests/test_mcp.py` の「ツールは3つだけ」を見つけたが、**同じ主張が
+`web/scripts/smoke-mcp.mjs` にもあった**（`if (tools.length !== 3) fail(...)`）。pytestを
+全部緑にした後で実機のsmokeを回して初めて発覚し、こちらもM4の3つの部分集合検査へ退役させた。
+
+**上限の契約は1箇所に置く**（今は `tests/test_mcp_verbs.py` の `EXPECTED_TOOLS`）。
+実機スクリプトは pytest とは別に走るので、**pytestが全部緑でも実機だけ赤い**という形で残る。
+
+### 別経路の確認（pytestとは別に、実プロセス・実ブラウザで通した）
+
+1. **実プロセスのMCPサーバへstdioで接続**（`python -m duocad.mcp_server` を起こし、
+   JSON-RPCを直接書く）。空の文書からMCPだけで箱を作り、`describe_document` →
+   述語で辺を4本提案 → **提案のままでは `selection_not_committed`** → `get_selection` →
+   `measure`（提案のままでも測れる） → `modify_selection` で1本足して1本引く（`[2,5,8,4]`・
+   **選択順のまま**） → `commit_selection` → `fillet(r=2.0)` で **面 6→10 / 体積
+   36000.000→35872.006**。**A2 が素のPythonで通した一巡と同じ数字**である。
+2. **本物のWebSocket接続**（ブラウザのふり）に、丸めた後の `face_count` と
+   **AIが書き換えた選択**の両方が届くことを確認。差分に新しい `geometry` が入っている。
+3. `export_step` で32KB書き出した**後も** JSON-RPCが続く（下記のstdout対策が効いている）。
+4. **本物のEdge**（`web/scripts/smoke-mcp.mjs`）でPCケース27部品を読み、MCPが26部品を隠すと
+   画面が変わり、奥の面が本物のクリックで選べるようになるところまでPASS。
+
+### 実測: OCCTのSTEP書き出しがstdoutを汚す件は本当に効いていた
+
+F1が予測して契約に入れた `os.dup2` によるfd振り替えが無ければ、`export_step` を公開した
+時点でMCP接続が壊れていた。**pytestの同一プロセス内テストでは検出できない**ので、
+実プロセスを起こす `test_exporting_does_not_corrupt_the_stdio_channel` が唯一の検査である。
+
+### 委譲の記録
+
+- cursor(auto): **6回**（実装4回・QA2回）
+- cursor(個別モデル指定): **1回**（`gpt-5.6-sol-high` / **月次上限で失敗**・リセット 2026-08-19）
+- QAは2ラウンド。1回目 **不合格**（major 1・minor 6）→ 全件対応 → 2回目 **合格**（指摘なし）
+- 実装は cursor、QAも cursor(auto) だが、**契約を書いたのは opus** なので
+  「実装者と別のモデルがレビューする」原則は保たれている
+
+### 完了後の状態
+
+**§0の到達表のAI列（19操作）が全部埋まった。** 残るのは人間側（B → C → D → E）と
+統合検証（G）である。推奨順序どおり**次は B（コマンド層の骨格：状態機械・複数選択・
+数値入力・プレビュー・Esc）**。
+
+**実装計画書 `reports/cad_v1_implementation_plan_2026-08-10.md` の §0 の到達表は
+まだ「AI 1/19」のままである**（`reports/` はこのタスクの target_dir 外なので触っていない）。
+次にあの文書を触る人が更新すること。

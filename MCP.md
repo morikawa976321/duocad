@@ -1,20 +1,31 @@
 # duocad の MCP サーバ — AIから文書を触る
 
-**AIが「前面パネルを隠して」と言えるようにするための口**（M4の最小の先取り・2026-08-11）。
-見えない面は選べない以上、**可視性は選択機構の一部**であり、大規模モデル（PCケース27部品・
-2835面）で交互操作を成立させる前提になる。
+**AIが文書を操作するための口**（F / 2026-08-11）。ブラウザとMCPは同じ `Session` を叩く対等な
+クライアントで、MCPが変えた内容は開いている画面へ即座に届く。
 
-公開しているツールは3つだけ。選択の提案・修正（`propose_selection` / `modify_selection` /
-`apply`）はM4の範囲で、**ここには無い**。
+公開ツールは**28個**。面・辺・領域などの**形は引数で受けず、確定した選択から取る**
+（数値・名前・パスだけが引数）。提案の選択はそのまま verb に渡せない — 先に
+`commit_selection` が要る。
 
-| ツール | 何をするか |
+## 公開ツール（28）
+
+| 群 | ツール |
 |---|---|
-| `describe_document` | ボディ一覧（`body_id`・名前・種別・可視性・面数・体積）とパラメータ一覧。**最初にこれを呼ぶ** |
-| `set_visible` | `set_visible(body_id, visible)`。コアの verb を叩くだけ（操作ログに載る・undoできる） |
-| `describe_shape` | 1ボディの面数・辺数・面の種別内訳・体積・境界箱（読み取りのみ） |
+| 問い合わせ(3) | `describe_document` / `describe_shape` / `measure` |
+| 述語の自己記述(1) | `describe_predicates` |
+| 選択(5) | `get_selection` / `propose_selection` / `modify_selection` / `commit_selection` / `clear_selection` |
+| スケッチ(5) | `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` |
+| フィーチャ(6) | `extrude` / `extrude_face` / `fillet` / `chamfer` / `pattern_rectangular` / `pattern_circular` |
+| ボディ・パラメータ(3) | `set_visible` / `make_editable_copy` / `set_parameter` |
+| 入出力(3) | `import_step` / `export_step` / `export_stl` |
+| 履歴(2) | `undo` / `redo` |
 
-`describe_document` を必ず一緒に出しているのは、**`set_visible` だけを公開してもAIは
-どのBodyが存在するか知らないので使えない**ため。
+**呼び方の型**（例）:
+
+1. `describe_document` で `body_id` / スケッチ / パラメータ名を知る
+2. `propose_selection`（`refs` か `predicate`）→ 必要なら `measure` で確認 → `commit_selection`
+3. `fillet(radius=…)` / `extrude(distance=…)` など — **辺や領域は引数に書かない**
+4. `import_step` のあとは戻り値の `hint` どおり `make_editable_copy` してから編集する
 
 ## 何が起きるか（このサーバの位置づけ）
 
@@ -29,15 +40,12 @@
 
 - MCPサーバは**アプリ層ではなく、コアのもう一人のクライアント**。ブラウザとMCPは同じ文書を
   叩く対等なクライアントで、MCPがブラウザを操作することはない。
-- したがって `set_visible` は**アプリ層を一切通らずに**文書を変える
+- したがって操作は**アプリ層を一切通らずに**文書を変える
   （実装計画書§2「コアはUIが無くても機能的に完全」の実証）。
-- **AIが可視性を変えると、開いているブラウザの表示が自分では何もしていないのに変わる**。
-  これが「コアが変更イベントを発火し、アプリ層が購読して描き直す」上り方向で、
-  実体は `Session.add_listener`（`duocad/server.py`）。これが無いと交互操作は原理的に
-  成立しない（§2「外してはいけない3つ」の2番目）。
+- **AIが文書を変えると、開いているブラウザの表示が自分では何もしていないのに変わる**。
+  実体は `Session.add_listener`（`duocad/server.py`）。
 - **1プロセスで両方を持つ**（stdioのMCPとWebSocket＋静的配信）。別プロセスにすると
-  MCP側が自分の `Document` を持ってしまい、「AIが変えた文書」と「人が見ている文書」が
-  別物になる。
+  「AIが変えた文書」と「人が見ている文書」が別物になる。
 
 ## 起動
 
@@ -110,28 +118,24 @@ claude mcp add duocad -- C:\Users\tm976\mf\duocad\.venv\Scripts\python.exe -m du
 
 ## 使い方（AIの側の手順）
 
-1. `describe_document` を呼ぶ → `body_id` の一覧を得る
-2. どの部品が手前かを知りたければ `describe_document(include_bbox=true)`、
-   1つの形を詳しく見たければ `describe_shape(body_id)`
-3. `set_visible(body_id, false)` で隠す → **人間の画面からも消える**
-4. 元に戻すのは `set_visible(body_id, true)`、またはブラウザ側の Ctrl+Z（undo）
+1. `describe_document` を呼ぶ → `body_id`・スケッチ・パラメータ名を得る
+2. 手前の部品を隠すなら `set_visible(body_id, false)`（**人間の画面からも消える**）
+3. 対象を `propose_selection` で選び、`commit_selection` してから fillet / extrude 等
+4. STEPを足したら `import_step` → `make_editable_copy`（戻り値の `hint` を見る）
+5. 取り消すのは `undo`（UIと同じ履歴）
 
 読み込んだSTEPはソリッドごとに「参照ボディ（読み取り専用・隠されている）」と
 「編集用コピー」の対になる。`describe_document` が既定で返すのは**編集用だけ**で、
 参照ボディの件数は `reference_count` で知らせる（`include_references=true` で出せる）。
-両方見せると同じ部品が2つ並び、隠しても画面が変わらない方をAIが掴むため。
 
 ## 実装のメモ
 
 - **依存を増やしていない**。公式SDK（`mcp` パッケージ）は入れず、JSON-RPC 2.0 over stdio を
   素で実装している（`duocad/mcp_server.py`）。使うのは `initialize` / `tools/list` /
-  `tools/call` の3メソッドだけで、SDKは pydantic・anyio・httpx・starlette・uvicorn を
-  連れてくる。pyproject が依存を4つに固定しているローカル専用ツールには重すぎる。
-  対応プロトコル版は `2025-06-18` / `2025-03-26` / `2024-11-05`。
-- **stdoutに出してよいのはJSON-RPCの行だけ**。起動メッセージ・警告はすべてstderrへ出す
-  （stdoutを1行汚すと接続に失敗する）。
-- ツールの実行時エラーは JSON-RPC エラーではなく `isError: true` の結果として返す
-  （AIが理由を読んでやり直せるようにするため）。引数の型・必須・未知キーは
-  実行前に弾く（`visible` に文字列 `"false"` が来ると Python では真になり、
-  **黙って逆の操作をする**ため）。
-- 契約は `tests/test_mcp.py`、実ブラウザでの確認は `web/scripts/smoke-mcp.mjs`。
+  `tools/call` の3メソッドだけ。対応プロトコル版は `2025-06-18` / `2025-03-26` / `2024-11-05`。
+- **stdoutに出してよいのはJSON-RPCの行だけ**。起動メッセージ・警告はすべてstderrへ出す。
+  OCCTのSTEP書き出しがC++からstdoutへ統計を吐くため、ツール実行中は fd 1 を stderr へ振る。
+- ツールの実行時エラーは JSON-RPC エラーではなく `isError: true` の構造化封筒
+  （`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
+  `invalid_predicate` / `internal`）。
+- 契約は `tests/test_mcp.py` / `tests/test_mcp_verbs.py` / `tests/test_mcp_selection.py`。

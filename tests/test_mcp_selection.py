@@ -509,6 +509,42 @@ def test_the_core_gate_is_the_only_one_for_regions_too(tmp_path: Path, monkeypat
     assert len(empty.document.bodies) == 1
 
 
+@pytest.mark.parametrize("tool,arguments", [("fillet", {"radius": 2.0}), ("chamfer", {"distance": 2.0})])
+def test_a_verb_targets_the_body_the_selection_names(tmp_path: Path, tool: str, arguments: dict):
+    """**選択が指しているBodyに当たること**(2026-08-12のF2のQAで見つかった穴)。
+
+    辺の参照は `body` と `index` の両方を持つ。MCPが `index` だけを取り出して
+    `body_id` を渡さないと、コアのverbは**アクティブなBody**を対象にする ——
+    27部品のPCケースでは「同じ添字の別部品の辺」を黙って丸める。例外も出ない。
+
+    F1の契約は1Bodyの直方体でしか検査しておらず、**この穴を素通しした**
+    (`test_the_whole_interleaved_lap_runs_through_mcp_alone` は緑のままだった)。
+    `extrude_face` は面の参照から `body` を渡していて、辺の側だけが抜けていた。
+    """
+    session = Session(None, 0.2, tmp_path / "m.jsonl")
+    # **選択する側を先に足す** —— `add_body` は足したBodyをアクティブにするので、
+    # 後から足した `other` がアクティブになる。アクティブでないほうを狙うのが試験の要点。
+    session.document.add_body(
+        Body(id="target", name="target", kind="solid", shape=BRepPrimAPI_MakeBox(BOX_X, BOX_Y, BOX_Z).Shape())
+    )
+    session.document.add_body(
+        Body(id="other", name="other", kind="solid", shape=BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape())
+    )
+    server = McpServer(DocumentTools(session))
+    target, other = session.document.bodies
+    assert session.document.active_body().id == "other", "前提: 狙う側はアクティブではない"
+    target_faces = kernel.face_count(target.shape)
+    other_faces = kernel.face_count(other.shape)
+
+    call(server, "propose_selection", {"predicate": {**VERTICAL_EDGES, "body": "target"}})
+    call(server, "commit_selection")
+    payload = call(server, tool, arguments)
+
+    assert payload["changed_bodies"] == ["target"], "選択と違うBodyに当たっている"
+    assert kernel.face_count(target.shape) > target_faces
+    assert kernel.face_count(other.shape) == other_faces, "無関係なBodyが変わった"
+
+
 def test_the_ai_can_execute_its_own_proposal_after_committing(server: McpServer, session: Session):
     """**禁止ではない** —— `commit_selection` を明示すれば自分の提案を実行できる。
 

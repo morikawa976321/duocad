@@ -9,7 +9,6 @@
 実装計画書§0の到達表のAI列(19操作)を埋めるため、公開ツールは**28個**になり、
 選択5つと述語の自己記述もここから出る。契約は
 `tests/test_mcp_verbs.py` / `tests/test_mcp_selection.py` と `tests/README.md` の「F」節。
-F1が置いたスタブは `DocumentTools` の末尾にある(実体は F2)。
 
 M4で公開した3つ(振る舞いの記述は現役):
 
@@ -73,14 +72,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import webbrowser
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterator, Optional
 
 from websockets.asyncio.server import serve
 
-from . import kernel, query
+from . import io_step, kernel, predicates, query, region, selection, sketch
 from .server import (
     DEFAULT_MEASURE_LOG,
     DEFAULT_STEP,
@@ -112,12 +113,21 @@ INTERNAL_ERROR = -32603
 # --------------------------------------------------------------------------------------
 # ツール(コアへの入口)
 # --------------------------------------------------------------------------------------
+class ToolError(Exception):
+    """ツール実行の構造化失敗(`isError` の封筒へ畳む)。プロトコル層の誤りには使わない。"""
+
+    def __init__(self, code: str, message: str, **extra: Any) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.extra = extra
+
+
 class DocumentTools:
     """`Session`(コア)を叩くツール群。**ここに新しい幾何ロジックを書かない**。
 
     M4では3つ(`describe_document` / `set_visible` / `describe_shape`)だった。
-    **F1(2026-08-11)で契約を28個へ広げた** —— 実装計画書§0の到達表のAI列を埋めるため。
-    増えるぶんは下の「F1で契約を確定した分」にスタブとして置いてあり、実体は F2 が入れる。
+    **F(F1+F2)で契約を28個へ広げ、実装済み** —— 実装計画書§0の到達表のAI列を埋めるため。
 
     どのツールも戻り値は**JSON化できる素の値だけ**(MCPのレスポンスに載るため)。
     失敗は例外のまま上げる — 呼び出し側(`McpServer`)が `isError` の結果へ変換して
@@ -139,8 +149,9 @@ class DocumentTools:
                 "name": "describe_document",
                 "description": (
                     "開いている文書のボディ一覧(body_id・名前・種別・可視性・面数・体積)と"
-                    "パラメータ一覧を返す。set_visible や describe_shape を呼ぶ前に、"
-                    "どのボディが存在するかを知るために最初に呼ぶ。"
+                    "スケッチ・パラメータ一覧を返す。set_visible や describe_shape、"
+                    "pattern_* や set_parameter を呼ぶ前に、どのボディ・図形・寸法名が"
+                    "存在するかを知るために最初に呼ぶ。"
                 ),
                 "inputSchema": {
                     "type": "object",
@@ -157,6 +168,14 @@ class DocumentTools:
                             "description": (
                                 "各ボディの境界箱(min/max/center/size)を含めるか。"
                                 "どの部品が手前・奥にあるかを知りたいときに true。既定 false"
+                            ),
+                        },
+                        "include_regions": {
+                            "type": "boolean",
+                            "description": (
+                                "各スケッチの領域数(region_count)を含めるか。"
+                                "押し出す前に閉領域がいくつあるか確かめたいときに true。"
+                                "数え上げは計算なので既定 false"
                             ),
                         },
                     },
@@ -204,6 +223,380 @@ class DocumentTools:
                     "additionalProperties": False,
                 },
             },
+        ] + self._f2_descriptors()
+
+    def _f2_descriptors(self) -> list[dict]:
+        """M4の3ツール以外(25個)の説明とスキーマ。"""
+        empty = {"type": "object", "properties": {}, "additionalProperties": False}
+        return [
+            {
+                "name": "describe_predicates",
+                "description": (
+                    "propose_selection の predicate= に書ける述語の語彙(op・引数・種別)を"
+                    "知るときに呼ぶ。使える op を推測せず、ここに出た一覧だけを使う。"
+                ),
+                "inputSchema": empty,
+            },
+            {
+                "name": "measure",
+                "description": (
+                    "いまの選択(提案のままでよい)の長さ・面積・法線などを測るときに呼ぶ。"
+                    "verb ではないので commit 前に提案を確かめる往復に使う。"
+                ),
+                "inputSchema": empty,
+            },
+            {
+                "name": "get_selection",
+                "description": (
+                    "いまの選択(項目・origin・件数)を読むときに呼ぶ。"
+                    "提案した直後や人が直したあとに、次の一手の対象を確認する。"
+                ),
+                "inputSchema": empty,
+            },
+            {
+                "name": "propose_selection",
+                "description": (
+                    "AIが選択を書き込むときに呼ぶ。refs(明示参照)か predicate(述語)の"
+                    "どちらか一方。結果は提案(origin=proposed)なので、verb の前に"
+                    "commit_selection が要る。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "refs": {
+                            "type": "array",
+                            "description": "面・辺・頂点・領域への明示参照の配列。predicate とは同時に渡せない",
+                        },
+                        "predicate": {
+                            "type": "object",
+                            "description": "述語(describe_predicates の語彙)。refs とは同時に渡せない",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "modify_selection",
+                "description": (
+                    "選択の過不足を差分で直すときに呼ぶ(人が直す経路)。"
+                    "触ると origin は user になり、そのままで verb に渡せる。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "add": {"type": "array", "description": "選択に足す参照の配列"},
+                        "remove": {"type": "array", "description": "選択から外す参照の配列"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "commit_selection",
+                "description": (
+                    "提案を確定するときに呼ぶ(中身は変えない)。"
+                    "AIが自分の提案を fillet 等へ渡す直前の明示の1手。"
+                ),
+                "inputSchema": empty,
+            },
+            {
+                "name": "clear_selection",
+                "description": "選択を空にしたいときに呼ぶ。",
+                "inputSchema": empty,
+            },
+            {
+                "name": "sketch_create",
+                "description": (
+                    "新しいスケッチを作るときに呼ぶ。"
+                    "base_plane(XY/XZ/YZ)を渡すか、確定選択の平面(ちょうど1枚)に貼る。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "base_plane": {
+                            "type": "string",
+                            "description": "基準平面名 XY / XZ / YZ。省略時は確定選択の面",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "add_line",
+                "description": "スケッチに線分を足すときに呼ぶ(平面上の2点)。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sketch_id": {"type": "string", "description": "対象スケッチのID"},
+                        "p0": {"type": "array", "description": "始点 [u, v]"},
+                        "p1": {"type": "array", "description": "終点 [u, v]"},
+                    },
+                    "required": ["sketch_id", "p0", "p1"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "add_circle",
+                "description": "スケッチに円を足すときに呼ぶ。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sketch_id": {"type": "string", "description": "対象スケッチのID"},
+                        "center": {"type": "array", "description": "中心 [u, v]"},
+                        "radius": {"type": "number", "description": "半径(mm)"},
+                    },
+                    "required": ["sketch_id", "center", "radius"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "add_rectangle",
+                "description": "スケッチに長方形を足すときに呼ぶ。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sketch_id": {"type": "string", "description": "対象スケッチのID"},
+                        "corner": {"type": "array", "description": "左下コーナー [u, v]"},
+                        "width": {"type": "number", "description": "幅(mm)"},
+                        "height": {"type": "number", "description": "高さ(mm)"},
+                    },
+                    "required": ["sketch_id", "corner", "width", "height"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "add_arc",
+                "description": "スケッチに円弧を足すときに呼ぶ(中心・半径・開始角・終了角)。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sketch_id": {"type": "string", "description": "対象スケッチのID"},
+                        "center": {"type": "array", "description": "中心 [u, v]"},
+                        "radius": {"type": "number", "description": "半径(mm)"},
+                        "start_deg": {"type": "number", "description": "開始角(度・反時計)"},
+                        "end_deg": {"type": "number", "description": "終了角(度・反時計)"},
+                    },
+                    "required": ["sketch_id", "center", "radius", "start_deg", "end_deg"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "extrude",
+                "description": (
+                    "確定選択の領域を押し出してソリッドを足す/切るときに呼ぶ。"
+                    "領域は選択から取る(引数では受けない)。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "distance": {"type": "number", "description": "押し出し量(mm・法線方向)"},
+                        "mode": {
+                            "type": "string",
+                            "description": "join(足す・既定) または cut(切る)",
+                        },
+                        "body_id": {
+                            "type": "string",
+                            "description": "対象ボディ。省略時はアクティブ(無ければ新規作成)",
+                        },
+                    },
+                    "required": ["distance"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "extrude_face",
+                "description": (
+                    "確定選択の面(ちょうど1枚)を押し出すときに呼ぶ。"
+                    "既存ソリッドの面を伸ばす経路。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "distance": {"type": "number", "description": "押し出し量(mm)"},
+                    },
+                    "required": ["distance"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "fillet",
+                "description": (
+                    "確定選択の辺を丸めるときに呼ぶ。"
+                    "半径は1つの数値か、選択順に対応する配列。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "radius": {
+                            "type": ["number", "array"],
+                            "description": "半径(mm)。辺ごとのリストも可(選択順)",
+                        },
+                    },
+                    "required": ["radius"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "chamfer",
+                "description": (
+                    "確定選択の辺を面取りするときに呼ぶ。"
+                    "距離は1つの数値か、選択順に対応する配列。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "distance": {
+                            "type": ["number", "array"],
+                            "description": "面取り距離(mm)。辺ごとのリストも可(選択順)",
+                        },
+                    },
+                    "required": ["distance"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "pattern_rectangular",
+                "description": "スケッチ上の図形を矩形に反復するときに呼ぶ。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sketch_id": {"type": "string", "description": "対象スケッチのID"},
+                        "entities": {"type": "array", "description": "反復する図形IDの配列"},
+                        "dx": {"type": "number", "description": "X方向の間隔(mm)"},
+                        "dy": {"type": "number", "description": "Y方向の間隔(mm)"},
+                        "nx": {"type": "integer", "description": "X方向の個数(元を含む)"},
+                        "ny": {"type": "integer", "description": "Y方向の個数(元を含む)"},
+                    },
+                    "required": ["sketch_id", "entities", "dx", "dy", "nx", "ny"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "pattern_circular",
+                "description": "スケッチ上の図形を円形に反復するときに呼ぶ。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sketch_id": {"type": "string", "description": "対象スケッチのID"},
+                        "entities": {"type": "array", "description": "反復する図形IDの配列"},
+                        "center": {"type": "array", "description": "回転中心 [u, v]"},
+                        "count": {"type": "integer", "description": "総数(元を含む)"},
+                        "total_angle": {
+                            "type": "number",
+                            "description": "全角度(度)。既定 360",
+                        },
+                        "rotate_copies": {
+                            "type": "boolean",
+                            "description": "複製自体を回転するか。既定 true",
+                        },
+                    },
+                    "required": ["sketch_id", "entities", "center", "count"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "make_editable_copy",
+                "description": (
+                    "参照ボディから編集用ソリッドを作るときに呼ぶ。"
+                    "import_step のあと、形を変えたい相手に対して使う。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "source_body_id": {
+                            "type": "string",
+                            "description": "複製元の body_id。省略時はアクティブ",
+                        },
+                        "name": {"type": "string", "description": "新しいボディの名前"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "set_parameter",
+                "description": (
+                    "名前つき寸法を書き換えて形を追随させるときに呼ぶ。"
+                    "名前は describe_document の sketches[].entities[].parameters から辿る。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "パラメータ名(d1 等)"},
+                        "value": {"type": "number", "description": "新しい値"},
+                    },
+                    "required": ["name", "value"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "import_step",
+                "description": (
+                    "STEPを参照ボディとして読み込むときに呼ぶ。"
+                    "編集するには続けて make_editable_copy が要る(戻り値の hint を見る)。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "読み込むSTEPファイルのパス"},
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "export_step",
+                "description": (
+                    "いまの文書をSTEPファイルへ書き出すときに呼ぶ。"
+                    "文書は変えないのでログには載らない。戻り値でパスとバイト数を確認する。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "書き出し先パス"},
+                        "body_ids": {
+                            "type": "array",
+                            "description": "書き出す body_id の配列。省略時は編集用ソリッド",
+                        },
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "export_stl",
+                "description": (
+                    "いまの文書をSTLへ書き出すときに呼ぶ。"
+                    "deviation でメッシュ粗さを指定する。文書は変えない。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "書き出し先パス"},
+                        "deviation": {
+                            "type": "number",
+                            "description": "線形偏差(mm・絶対)。省略時はセッション既定",
+                        },
+                        "body_ids": {
+                            "type": "array",
+                            "description": "書き出す body_id の配列。省略時は編集用ソリッド",
+                        },
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "undo",
+                "description": (
+                    "直前の操作を取り消すときに呼ぶ。"
+                    "UIと同じ履歴。土台(読み込み等)は取り消せない。"
+                ),
+                "inputSchema": empty,
+            },
+            {
+                "name": "redo",
+                "description": "undo した操作をやり直すときに呼ぶ。UIと同じ履歴。",
+                "inputSchema": empty,
+            },
         ]
 
     def call(self, name: str, arguments: dict) -> dict:
@@ -212,6 +605,31 @@ class DocumentTools:
             "describe_document": self.describe_document,
             "set_visible": self.set_visible,
             "describe_shape": self.describe_shape,
+            "describe_predicates": self.describe_predicates,
+            "measure": self.measure,
+            "get_selection": self.get_selection,
+            "propose_selection": self.propose_selection,
+            "modify_selection": self.modify_selection,
+            "commit_selection": self.commit_selection,
+            "clear_selection": self.clear_selection,
+            "sketch_create": self.sketch_create,
+            "add_line": self.add_line,
+            "add_circle": self.add_circle,
+            "add_rectangle": self.add_rectangle,
+            "add_arc": self.add_arc,
+            "extrude": self.extrude,
+            "extrude_face": self.extrude_face,
+            "fillet": self.fillet,
+            "chamfer": self.chamfer,
+            "pattern_rectangular": self.pattern_rectangular,
+            "pattern_circular": self.pattern_circular,
+            "make_editable_copy": self.make_editable_copy,
+            "set_parameter": self.set_parameter,
+            "import_step": self.import_step,
+            "export_step": self.export_step,
+            "export_stl": self.export_stl,
+            "undo": self.undo,
+            "redo": self.redo,
         }
         try:
             handler = handlers[name]
@@ -221,9 +639,12 @@ class DocumentTools:
 
     # ------------------------------------------------------------------ 実体
     def describe_document(
-        self, include_references: bool = False, include_bbox: bool = False
+        self,
+        include_references: bool = False,
+        include_bbox: bool = False,
+        include_regions: bool = False,
     ) -> dict:
-        """ボディ一覧とパラメータ一覧。
+        """ボディ一覧・スケッチ一覧とパラメータ一覧。
 
         **既定では参照ボディ(kind="reference")を出さない**。STEPを読むとソリッドごとに
         「参照(読み取り専用・隠されている)」と「編集用コピー」の2つができる
@@ -252,6 +673,26 @@ class DocumentTools:
                 entry["bbox"] = kernel.bounding_box(body.shape)
             bodies.append(entry)
 
+        sketches_out = []
+        for sk in document.sketches:
+            entities_out = [
+                {
+                    "entity_id": entity.id,
+                    "kind": entity.kind,
+                    "params": sketch.entity_params(document, sk.id, entity.id),
+                    "parameters": dict(entity.params),
+                }
+                for entity in sk.entities
+            ]
+            sketch_entry: dict[str, Any] = {
+                "sketch_id": sk.id,
+                "plane": dict(sk.plane),
+                "entities": entities_out,
+            }
+            if include_regions:
+                sketch_entry["region_count"] = len(region.regions(document, sk.id))
+            sketches_out.append(sketch_entry)
+
         active = document.active_body()
         return {
             "units": document.units,
@@ -261,6 +702,7 @@ class DocumentTools:
             "reference_count": reference_count,
             "reference_included": bool(include_references),
             "bodies": bodies,
+            "sketches": sketches_out,
             "parameters": dict(document.parameters),
             # **`Session.can_undo` を使う**(生の `log.can_undo` ではない)。文書の土台
             # (部品の読み込み・編集用ボディ)は取り消せないので、素のログを見ると
@@ -295,22 +737,24 @@ class DocumentTools:
                 "表示を切り替えられない(編集用コピーの body_id を使うこと)"
             )
         previous = before.visible
+        revisions = self._revision_snapshot()
         applied = self.session.set_visible(body_id, visible)
-        return {
-            "body_id": body_id,
-            "name": before.name,
-            "visible": before.visible,
-            "previous": previous,
-            "changed": previous != before.visible,
-            "verb": applied["verb"],
-            "seq": applied["seq"],
-            "can_undo": self.session.document.log.can_undo,
-            "visible_count": sum(
-                1
-                for body in self.session.document.bodies
-                if body.kind != "reference" and body.visible
-            ),
-        }
+        envelope = self._verb_envelope(applied["verb"], applied["seq"], revisions)
+        envelope.update(
+            {
+                "body_id": body_id,
+                "name": before.name,
+                "visible": before.visible,
+                "previous": previous,
+                "changed": previous != before.visible,
+                "visible_count": sum(
+                    1
+                    for body in self.session.document.bodies
+                    if body.kind != "reference" and body.visible
+                ),
+            }
+        )
+        return envelope
 
     def describe_shape(self, body_id: str) -> dict:
         """1ボディの形状(面・辺の数と種別内訳・体積・境界箱)。読み取りのみ。"""
@@ -335,11 +779,88 @@ class DocumentTools:
             raise KeyError(f"no such body: {body_id!r} (editable bodies: {known})")
         return body
 
+    # ------------------------------------------------------------------ 封筒(成功)
+    def _revision_snapshot(self) -> dict[str, int]:
+        """全Bodyの現在の版。呼び出し前後の差から `changed_bodies` を導くための材料。"""
+        return {
+            body.id: self.session.body_revision(body.id)
+            for body in self.session.document.bodies
+        }
+
+    def _body_summary(self, body) -> dict:
+        """封筒の `bodies[]` 1要素。キーは6つちょうど(`BODY_KEYS`)。"""
+        return {
+            "body_id": body.id,
+            "name": body.name,
+            "kind": body.kind,
+            "visible": body.visible,
+            "face_count": kernel.face_count(body.shape),
+            "volume": query.volume(body.shape),
+        }
+
+    def _verb_envelope(self, verb: str, seq: int, before: dict[str, int]) -> dict:
+        """ログに1行積むツールの成功封筒。
+
+        `changed_bodies` は verbごとの数え上げではなく、`Session.body_revision` の前後差。
+        消えたBodyは出さない(現存Bodyだけを見る)。
+        """
+        after = self._revision_snapshot()
+        changed_bodies: list[str] = []
+        for body in self.session.document.bodies:
+            if before.get(body.id) != after.get(body.id):
+                changed_bodies.append(body.id)
+        by_id = {body.id: body for body in self.session.document.bodies}
+        return {
+            "verb": verb,
+            "seq": seq,
+            "changed_bodies": changed_bodies,
+            "bodies": [self._body_summary(by_id[body_id]) for body_id in changed_bodies],
+            "can_undo": self.session.can_undo,
+            "can_redo": self.session.document.log.can_redo,
+        }
+
+    def _selection_summary(self) -> dict:
+        """エラー封筒へ載せる選択の要約(`count` / `origin` だけ)。"""
+        current = selection.get_selection(self.session.document)
+        return {"count": len(current.items), "origin": current.origin}
+
+    def _error_payload(self, tool: str, error: Exception) -> dict:
+        """例外を決定3の6語彙へ畳む。MCPは先に弾かず、落ちたあとに名前を付ける。"""
+        if isinstance(error, ToolError):
+            payload = {
+                "code": error.code,
+                "message": error.message,
+                "tool": tool,
+                "exception": type(error).__name__,
+            }
+            payload.update(error.extra)
+            return payload
+
+        message = _exception_message(error)
+        base = {
+            "message": message,
+            "tool": tool,
+            "exception": type(error).__name__,
+        }
+        if isinstance(error, (KeyError, FileNotFoundError)):
+            return {**base, "code": "not_found"}
+        # 提案のまま verb へ渡した拒否。文言ではなく型で判定する(決定3が禁じた潰し方を防ぐ)。
+        if isinstance(error, selection.SelectionNotCommitted):
+            return {
+                **base,
+                "code": "selection_not_committed",
+                "hint": "call commit_selection() before applying a verb that consumes the selection",
+                "selection": self._selection_summary(),
+            }
+        if isinstance(error, ValueError):
+            return {**base, "code": "invalid_argument"}
+        return {**base, "code": "internal"}
+
     # ==================================================================================
-    # F1(2026-08-11)で契約を確定した分 —— **すべてスタブ。実装は F2**
+    # F(F1+F2)で契約を確定し実装した分
     # ==================================================================================
     # 契約の正は `tests/test_mcp_verbs.py` / `tests/test_mcp_selection.py` と
-    # `tests/README.md` の「F」節。ここには**実装するときに読む順で要点だけ**書く。
+    # `tests/README.md` の「F」節。ここには**実装を読む順で要点だけ**書く。
     #
     # ## 貫いている3つの規則
     #
@@ -358,6 +879,7 @@ class DocumentTools:
     #    (`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
     #    `invalid_predicate` / `internal`)。**例外のテキストを素で返さない。**
     #    型→コードの対応は `KeyError`/`FileNotFoundError` → `not_found`、
+    #    `SelectionNotCommitted` → `selection_not_committed`、
     #    `ValueError` → `invalid_argument`、それ以外 → `internal`。**`FileNotFoundError` を
     #    忘れない** —— パスの間違いは AI が直せる誤りなので、`internal` に落とすと諦める。
     #
@@ -374,34 +896,14 @@ class DocumentTools:
     #
     # `selection_not_committed` を返すために `origin` を**先に見て弾いてはいけない**。
     # 拒否するのは `selection.confirmed_items`(A1が「区別を実際に効かせている唯一の場所」と
-    # 定めた場所)だけであり、MCPは**落ちたあとに** `get_selection()` を見てコードを選ぶ。
-    # 先に弾くと同じ規則が2箇所に生まれ、片方だけ緩んだときに誰も気づかない。
-    #
-    # ## `descriptors()` はまだ書かない(F1の意図)
-    #
-    # ツールの説明文と入力スキーマは**F2の成果物**である。F1は「何が公開されているべきか」を
-    # テストで固定するところまでを持つ。したがってF1完了時点では `tools/list` は3つのままで、
-    # 新しいツールの呼び出しは「未知のツール」として落ちる —— これが赤の主因である。
-
-    #: F2が `descriptors()` と `call()` へ**足す**ツール名(25個)。M4の既存3つと合わせて
-    #: **合計28個**になる。**実装の目印**であって契約ではない
-    #: (契約は `tests/test_mcp_verbs.py` の `EXPECTED_TOOLS`)。
-    F2_TOOLS = (
-        "describe_predicates", "measure",
-        "get_selection", "propose_selection", "modify_selection",
-        "commit_selection", "clear_selection",
-        "sketch_create", "add_line", "add_circle", "add_rectangle", "add_arc",
-        "extrude", "extrude_face", "fillet", "chamfer",
-        "pattern_rectangular", "pattern_circular",
-        "make_editable_copy", "set_parameter",
-        "import_step", "export_step", "export_stl",
-        "undo", "redo",
-    )
-
-    def _not_implemented(self, name: str) -> dict:
-        raise NotImplementedError(f"{name}: F2で実装する(スタブ)")
+    # 定めた場所)だけであり、MCPは**落ちたあとに** `isinstance(..., SelectionNotCommitted)`
+    # でコードを選ぶ。先に弾くと同じ規則が2箇所に生まれ、片方だけ緩んだときに誰も気づかない。
 
     # ------------------------------------------------------------------ 選択(5 + 自己記述)
+    def _as_selection_payload(self, selection: dict) -> dict:
+        """選択5ツールの戻り値を `{"selection": {...}}` に揃える。"""
+        return {"selection": selection}
+
     def get_selection(self) -> dict:
         """現在の選択を返す。**発火しない**(読むだけ)。
 
@@ -409,7 +911,7 @@ class DocumentTools:
         揃える —— `Session` 側は変更4メソッドがイベント、getが `to_dict()` と形が違うが、
         それはコアの都合(イベントの形を1箇所で作る)であってAIに見せる理由が無い。
         """
-        return self._not_implemented("get_selection")
+        return self._as_selection_payload(self.session.get_selection())
 
     def propose_selection(self, refs: Optional[list] = None, predicate: Optional[dict] = None) -> dict:
         """**AIが書き込む経路**。`refs`(明示的な参照)か `predicate`(述語)のどちらか一方。
@@ -420,19 +922,35 @@ class DocumentTools:
           `predicates.describe_ops()` をそのまま添える**(AIが自力で直せるように)
         - 不正な参照は `invalid_argument`(形)/ `not_found`(Body)。いずれも選択を変えない
         """
-        return self._not_implemented("propose_selection")
+        # 不正な述語はコアに渡す前に弾く —— 不可視Body等の ValueError を
+        # `invalid_predicate` に潰さないため(`validate` が通るものだけセッションへ)。
+        if predicate is not None and refs is None:
+            try:
+                predicates.validate(predicate)
+            except ValueError as error:
+                raise ToolError(
+                    "invalid_predicate",
+                    _exception_message(error),
+                    valid_ops=predicates.describe_ops(),
+                    valid_kinds=list(predicates.PREDICATE_KINDS),
+                ) from error
+        event = self.session.propose_selection(refs=refs, predicate=predicate)
+        return self._as_selection_payload(event["selection"])
 
     def modify_selection(self, add: Optional[list] = None, remove: Optional[list] = None) -> dict:
         """**人が直す経路**(差分編集)。`origin` は "user" になる —— 人が触ること自体が承認。"""
-        return self._not_implemented("modify_selection")
+        event = self.session.modify_selection(add=add, remove=remove)
+        return self._as_selection_payload(event["selection"])
 
     def commit_selection(self) -> dict:
         """提案を確定する(中身は変えない)。AIが自分の提案を実行する前に踏む明示の1手。"""
-        return self._not_implemented("commit_selection")
+        event = self.session.commit_selection()
+        return self._as_selection_payload(event["selection"])
 
     def clear_selection(self) -> dict:
         """選択を空にする。"""
-        return self._not_implemented("clear_selection")
+        event = self.session.clear_selection()
+        return self._as_selection_payload(event["selection"])
 
     def describe_predicates(self) -> dict:
         """述語の語彙をAIへ自己記述する。**`predicates.describe_ops()` をそのまま出す**。
@@ -444,7 +962,19 @@ class DocumentTools:
         防ぐため(ORが要るときは2回評価して `modify_selection(add=...)`)。
         `example` は `predicates.validate()` を通る本物であること(古くなって嘘にならない)。
         """
-        return self._not_implemented("describe_predicates")
+        example = {
+            "kind": "edge",
+            "where": [
+                {"op": "parallel_to", "axis": "Z"},
+                {"op": "length_gt", "value": 20},
+            ],
+        }
+        return {
+            "kinds": list(predicates.PREDICATE_KINDS),
+            "ops": predicates.describe_ops(),
+            "where_is": "and",
+            "example": example,
+        }
 
     def measure(self) -> dict:
         """選択を測る(§5 `measure(selection)`)。**verbではないので提案のままでも通る**。
@@ -457,7 +987,126 @@ class DocumentTools:
         頂点は位置を返す問い合わせが無いので `{"measured": False, "reason": ...}` で返す
         (黙って落とすとAIは自分の誤りと解釈する)。
         """
-        return self._not_implemented("measure")
+        current = selection.get_selection(self.session.document)
+        items: list[dict] = []
+        total_area = 0.0
+        total_length = 0.0
+        for ref in current.items:
+            kind = selection.ref_kind(ref)
+            if kind == "face":
+                body = self._find_body(ref["body"])
+                described = next(
+                    face for face in query.describe_faces(body.shape) if face["index"] == ref["index"]
+                )
+                items.append(
+                    {
+                        "kind": "face",
+                        "body": ref["body"],
+                        "index": ref["index"],
+                        "area": described["area"],
+                        "normal": described["normal"],
+                        "center": described["center"],
+                    }
+                )
+                total_area += described["area"]
+            elif kind == "edge":
+                body = self._find_body(ref["body"])
+                described = next(
+                    edge for edge in query.describe_edges(body.shape) if edge["index"] == ref["index"]
+                )
+                items.append(
+                    {
+                        "kind": "edge",
+                        "body": ref["body"],
+                        "index": ref["index"],
+                        "length": described["length"],
+                        "start": described["start"],
+                        "end": described["end"],
+                        "edge_kind": described["kind"],
+                    }
+                )
+                total_length += described["length"]
+            elif kind == "region":
+                sketch_id = ref["sketch"]
+                described = next(
+                    reg for reg in region.regions(self.session.document, sketch_id)
+                    if reg.index == ref["index"]
+                )
+                items.append(
+                    {
+                        "kind": "region",
+                        "sketch": sketch_id,
+                        "index": ref["index"],
+                        "area": described.area,
+                    }
+                )
+                total_area += described.area
+            elif kind == "vertex":
+                items.append(
+                    {
+                        "kind": "vertex",
+                        "body": ref["body"],
+                        "index": ref["index"],
+                        "measured": False,
+                        "reason": "頂点の位置を返す問い合わせがまだ無い",
+                    }
+                )
+            else:
+                raise ValueError(f"unmeasurable selection kind: {kind!r}")
+        return {
+            "count": len(items),
+            "origin": current.origin,
+            "items": items,
+            "total_area": total_area,
+            "total_length": total_length,
+        }
+
+    # ------------------------------------------------------------------ 選択→形(共通)
+    def _require_confirmed(self, kind: str, *, exactly_one: bool = False) -> list:
+        """確定選択から種別 `kind` の項目を取る。0件は `selection_empty`。
+
+        `exactly_one` のとき2件以上は黙って選ばず `invalid_argument`
+        (`required_kind` と `selection` を添える)。
+        **門は `selection.confirmed_items` だけ** — ここでは `origin` を先読みしない。
+        """
+        items = selection.confirmed_items(self.session.document, kind=kind)
+        if not items:
+            raise ToolError(
+                "selection_empty",
+                f"no {kind} in the confirmed selection",
+                required_kind=kind,
+                selection=self._selection_summary(),
+            )
+        if exactly_one and len(items) != 1:
+            raise ToolError(
+                "invalid_argument",
+                f"exactly one {kind} required, got {len(items)}",
+                required_kind=kind,
+                selection=self._selection_summary(),
+            )
+        return items
+
+    def _require_edge_indices(self) -> tuple[list, str]:
+        """確定選択の辺添字と対象 Body を**選択順のまま**返す(`fillet` / `chamfer` 用)。
+
+        複数Bodyにまたがる選択は `selection.edge_indices` が ValueError を出す。
+        """
+        edges = selection.edge_indices(self.session.document)
+        if not edges:
+            raise ToolError(
+                "selection_empty",
+                "no edge in the confirmed selection",
+                required_kind="edge",
+                selection=self._selection_summary(),
+            )
+        refs = selection.confirmed_items(self.session.document, kind="edge")
+        return edges, str(refs[0]["body"])
+
+    def _apply_logged(self, before: dict[str, int], applied: dict, **extra: Any) -> dict:
+        """`Session` が返した applied から封筒を作り、作ったもののID等を足す。"""
+        envelope = self._verb_envelope(applied["verb"], int(applied["seq"]), before)
+        envelope.update(extra)
+        return envelope
 
     # ------------------------------------------------------------------ スケッチ
     def sketch_create(self, base_plane: Optional[str] = None) -> dict:
@@ -465,26 +1114,51 @@ class DocumentTools:
 
         平面も選択も無ければエラー —— 既定でXYに貼ると、図形が静かに別の場所に出る。
         """
-        return self._not_implemented("sketch_create")
+        if base_plane is not None:
+            plane: Any = str(base_plane)
+        else:
+            face = self._require_confirmed("face", exactly_one=True)[0]
+            plane = sketch.face_plane(face["body"], face["index"])
+        before = self._revision_snapshot()
+        applied = self.session.sketch_create(plane)
+        return self._apply_logged(before, applied, sketch_id=applied["sketch_id"])
 
     def add_line(self, sketch_id: str, p0: list, p1: list) -> dict:
-        return self._not_implemented("add_line")
+        before = self._revision_snapshot()
+        applied = self.session.add_line(str(sketch_id), p0, p1)
+        return self._apply_logged(before, applied, entity_id=applied["entity_id"])
 
     def add_circle(self, sketch_id: str, center: list, radius: float) -> dict:
-        return self._not_implemented("add_circle")
+        before = self._revision_snapshot()
+        applied = self.session.add_circle(str(sketch_id), center, float(radius))
+        return self._apply_logged(before, applied, entity_id=applied["entity_id"])
 
     def add_rectangle(self, sketch_id: str, corner: list, width: float, height: float) -> dict:
-        return self._not_implemented("add_rectangle")
+        before = self._revision_snapshot()
+        applied = self.session.add_rectangle(
+            str(sketch_id), corner, float(width), float(height)
+        )
+        return self._apply_logged(before, applied, entity_id=applied["entity_id"])
 
     def add_arc(
         self, sketch_id: str, center: list, radius: float, start_deg: float, end_deg: float
     ) -> dict:
-        return self._not_implemented("add_arc")
+        before = self._revision_snapshot()
+        applied = self.session.add_arc(
+            str(sketch_id), center, float(radius), float(start_deg), float(end_deg)
+        )
+        return self._apply_logged(before, applied, entity_id=applied["entity_id"])
 
     # ------------------------------------------------------------------ フィーチャ
     def extrude(self, distance: float, mode: str = "join", body_id: Optional[str] = None) -> dict:
         """**確定選択の領域**を押し出す。領域は `RegionRef`(`{"sketch","index"}`)。"""
-        return self._not_implemented("extrude")
+        refs = self._require_confirmed("region")
+        regions = [region.RegionRef.from_dict(item) for item in refs]
+        before = self._revision_snapshot()
+        applied = self.session.extrude_regions(
+            regions, float(distance), mode=str(mode), body_id=body_id
+        )
+        return self._apply_logged(before, applied)
 
     def extrude_face(self, distance: float) -> dict:
         """**確定選択の面**(ちょうど1枚)を押し出す。対象Bodyは参照が持っている。
@@ -492,7 +1166,12 @@ class DocumentTools:
         2枚以上選ばれていたら黙ってどれかを選ばない —— AIから見て指示と結果がずれる
         唯一の経路になる。
         """
-        return self._not_implemented("extrude_face")
+        face = self._require_confirmed("face", exactly_one=True)[0]
+        before = self._revision_snapshot()
+        applied = self.session.extrude(
+            int(face["index"]), float(distance), body_id=face["body"]
+        )
+        return self._apply_logged(before, applied)
 
     def fillet(self, radius) -> dict:
         """**確定選択の辺**を丸める。`radius` は数値か辺ごとのリスト。
@@ -500,18 +1179,29 @@ class DocumentTools:
         辺の順序は `selection.edge_indices` が返す**選択順**であり、昇順ではない。
         `fillet` は `edges` と `radius` を位置で対応させるので、並べ替えると
         半径の割り当てが黙ってずれる(A1の実装で確認済み)。
+        対象 Body は辺の参照が持っている(`extrude_face` と同じ)。
         """
-        return self._not_implemented("fillet")
+        edges, body_id = self._require_edge_indices()
+        before = self._revision_snapshot()
+        applied = self.session.fillet(edges, radius, body_id=body_id)
+        return self._apply_logged(before, applied)
 
     def chamfer(self, distance) -> dict:
         """**確定選択の辺**を面取りする(`fillet` と同じ規律)。"""
-        return self._not_implemented("chamfer")
+        edges, body_id = self._require_edge_indices()
+        before = self._revision_snapshot()
+        applied = self.session.chamfer(edges, distance, body_id=body_id)
+        return self._apply_logged(before, applied)
 
     def pattern_rectangular(
         self, sketch_id: str, entities: list, dx: float, dy: float, nx: int, ny: int
     ) -> dict:
         """図形の矩形反復。**スケッチの図形は選択集合の項目ではない**ので引数で受ける。"""
-        return self._not_implemented("pattern_rectangular")
+        before = self._revision_snapshot()
+        applied = self.session.pattern_rectangular(
+            str(sketch_id), entities, float(dx), float(dy), int(nx), int(ny)
+        )
+        return self._apply_logged(before, applied, pattern_id=applied["pattern_id"])
 
     def pattern_circular(
         self,
@@ -522,13 +1212,24 @@ class DocumentTools:
         total_angle: float = 360.0,
         rotate_copies: bool = True,
     ) -> dict:
-        return self._not_implemented("pattern_circular")
+        before = self._revision_snapshot()
+        applied = self.session.pattern_circular(
+            str(sketch_id),
+            entities,
+            center,
+            int(count),
+            total_angle=float(total_angle),
+            rotate_copies=bool(rotate_copies),
+        )
+        return self._apply_logged(before, applied, pattern_id=applied["pattern_id"])
 
     # ------------------------------------------------------------------ ボディ・パラメータ
     def make_editable_copy(
         self, source_body_id: Optional[str] = None, name: Optional[str] = None
     ) -> dict:
-        return self._not_implemented("make_editable_copy")
+        before = self._revision_snapshot()
+        applied = self.session.make_editable_copy_body(source_body_id, name)
+        return self._apply_logged(before, applied, body_id=applied["body_id"])
 
     def set_parameter(self, name: str, value: float) -> dict:
         """名前つきの寸法を書き換える(形が追随する)。
@@ -537,7 +1238,15 @@ class DocumentTools:
         `sketches[].entities[].parameters` から辿れること —— 辿れないとAIは
         `d1` `d2` … を総当たりするしかない。
         """
-        return self._not_implemented("set_parameter")
+        before = self._revision_snapshot()
+        applied = self.session.set_parameter(str(name), float(value))
+        return self._apply_logged(
+            before,
+            applied,
+            name=applied["name"],
+            value=applied["value"],
+            previous=applied["previous"],
+        )
 
     # ------------------------------------------------------------------ 入出力
     def import_step(self, path: str) -> dict:
@@ -548,7 +1257,14 @@ class DocumentTools:
         足りない1手(`make_editable_copy`)を戻り値の `hint` で必ず知らせること ——
         黙って参照ボディだけ増やすと、AIは編集できない相手に verb を打ち続ける。
         """
-        return self._not_implemented("import_step")
+        before = self._revision_snapshot()
+        applied = self.session.import_step(path)
+        return self._apply_logged(
+            before,
+            applied,
+            body_ids=list(applied["body_ids"]),
+            hint="参照ボディは編集できない。続けるには make_editable_copy を呼ぶ",
+        )
 
     def export_step(self, path: str, body_ids: Optional[list] = None) -> dict:
         """STEPを書き出す。**ログに載らない**(文書を変えないので verb ではない)。
@@ -556,13 +1272,28 @@ class DocumentTools:
         そのぶん `{"path", "bytes", "body_ids"}` を返す —— AIは自分でファイルを
         確かめられないので、戻り値が唯一の確認手段である。
         """
-        return self._not_implemented("export_step")
+        target = Path(path)
+        resolved = io_step.export_body_ids(self.session.document, body_ids=body_ids)
+        io_step.export_step(self.session.document, target, body_ids=body_ids)
+        return {
+            "path": str(target),
+            "bytes": target.stat().st_size,
+            "body_ids": list(resolved),
+        }
 
     def export_stl(
         self, path: str, deviation: Optional[float] = None, body_ids: Optional[list] = None
     ) -> dict:
         """STLを書き出す(`deviation` 省略時は `Session.deviation`)。"""
-        return self._not_implemented("export_stl")
+        target = Path(path)
+        resolved = io_step.export_body_ids(self.session.document, body_ids=body_ids)
+        used = float(self.session.deviation if deviation is None else deviation)
+        io_step.export_stl(self.session.document, target, used, body_ids=body_ids)
+        return {
+            "path": str(target),
+            "bytes": target.stat().st_size,
+            "body_ids": list(resolved),
+        }
 
     # ------------------------------------------------------------------ 履歴
     def undo(self) -> dict:
@@ -571,10 +1302,19 @@ class DocumentTools:
         取り消せるかの判定は `Session.can_undo` が唯一の出どころ ——
         `describe_document` の答えと実際に通るかが一致する(M4のQAで塞いだ食い違い)。
         """
-        return self._not_implemented("undo")
+        before = self._revision_snapshot()
+        applied = self.session.undo()
+        # `Session.undo` が返す seq は取り消した操作の通し番号(`_selection_hints`経由)。
+        envelope = self._verb_envelope("undo", int(applied["seq"]), before)
+        envelope["undone"] = applied["undone"]
+        return envelope
 
     def redo(self) -> dict:
-        return self._not_implemented("redo")
+        before = self._revision_snapshot()
+        applied = self.session.redo()
+        envelope = self._verb_envelope("redo", int(applied["seq"]), before)
+        envelope["redone"] = applied["redone"]
+        return envelope
 
 
 # --------------------------------------------------------------------------------------
@@ -667,9 +1407,14 @@ class McpServer:
             "capabilities": {"tools": {}},
             "serverInfo": {"name": self.name, "version": self.version},
             "instructions": (
-                "duocad(自作3DCAD)の開いている文書を操作する。まず describe_document を呼んで "
-                "body_id を得てから set_visible / describe_shape を使う。"
-                "set_visible の結果は人間が開いているブラウザの画面にも即座に反映される。"
+                "duocad(自作3DCAD)の開いている文書を操作する。公開ツールは28個。"
+                "面・辺・領域などの形は引数で受けず、確定した選択から取る"
+                "（数値・名前・パスだけが引数）。"
+                "手順: describe_document で概要を知る → "
+                "propose_selection(predicate または refs) → commit_selection → "
+                "fillet / extrude などの verb。"
+                "提案のままでは verb に渡せない。set_visible の結果は人間が開いている"
+                "ブラウザの画面にも即座に反映される。"
             ),
         }
 
@@ -690,13 +1435,17 @@ class McpServer:
         _check_arguments(descriptor["inputSchema"], arguments)
 
         try:
-            payload = self.tools.call(name, arguments)
+            # OCCTのSTEP書き出しはC++が fd 1 へ直接書くので、実行中だけ stderr へ振る。
+            with _stdout_fd_to_stderr():
+                payload = self.tools.call(name, arguments)
         except Exception as error:
-            # **ツールの実行時エラーはプロトコルエラーにしない**(仕様)。isError の結果として
-            # 返すことで、AIが理由を読んでやり直せる。ここをJSON-RPCエラーにすると、
-            # クライアントによってはAIに理由が届かない。
+            # **ツールの実行時エラーはプロトコルエラーにしない**(仕様)。決定3の封筒へ畳む。
+            # 例外テキストを素で返すと `json.loads` できず、AIが機械可読に直せない。
+            envelope = {"error": self.tools._error_payload(name, error)}
             return {
-                "content": [{"type": "text", "text": f"{type(error).__name__}: {error}"}],
+                "content": [
+                    {"type": "text", "text": json.dumps(envelope, ensure_ascii=False)}
+                ],
                 "isError": True,
             }
         return {
@@ -723,10 +1472,11 @@ def _error(request_id: Any, code: int, message: str) -> dict:
 def _check_arguments(schema: dict, arguments: dict) -> None:
     """入力スキーマとの突き合わせ(必須・未知キー・型)。**黙って通さない**。
 
-    JSON Schemaの完全な検証はしない(依存を増やさないため)。ここで見るのは
-    「必須が欠けている」「知らないキーが来た」「boolean/string が違う」の3つだけで、
-    いずれも**間違ったまま実行すると静かに別のことをする**類の誤りである
-    (例: `visible` に文字列 "false" が来ると Python では真になる)。
+    JSON Schemaの完全な検証はしない(依存を増やさないため)。見るのは必須・未知キーと
+    `boolean` / `string` / `number` / `integer` / `array` / `object`、および型のリスト
+    (例: `fillet.radius` の `["number","array"]`)。いずれも**間違ったまま実行すると
+    静かに別のことをする**類の誤りである(例: `visible` に "false" → 真、`True` を
+    数値として通すと 1.0)。エラーメッセージには**引数名を必ず含める**。
     """
     properties = schema.get("properties") or {}
     required = schema.get("required") or []
@@ -742,10 +1492,62 @@ def _check_arguments(schema: dict, arguments: dict) -> None:
             )
     for key, value in arguments.items():
         expected = (properties.get(key) or {}).get("type")
-        if expected == "boolean" and not isinstance(value, bool):
-            raise _RpcError(INVALID_PARAMS, f"argument {key!r} must be a boolean, got {value!r}")
-        if expected == "string" and not isinstance(value, str):
-            raise _RpcError(INVALID_PARAMS, f"argument {key!r} must be a string, got {value!r}")
+        if expected is None:
+            continue
+        if isinstance(expected, list):
+            if not any(_value_matches_json_type(value, item) for item in expected):
+                raise _RpcError(
+                    INVALID_PARAMS,
+                    f"argument {key!r} must be one of {expected}, got {value!r}",
+                )
+            continue
+        if not _value_matches_json_type(value, expected):
+            raise _RpcError(
+                INVALID_PARAMS,
+                f"argument {key!r} must be a {expected}, got {value!r}",
+            )
+
+
+def _value_matches_json_type(value: Any, expected: str) -> bool:
+    """JSON Schemaの型名1つと Python 値の突き合わせ。**bool は number/integer にしない**。"""
+    if expected == "boolean":
+        return isinstance(value, bool)
+    if expected == "string":
+        return isinstance(value, str)
+    if expected == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "array":
+        return isinstance(value, list)
+    if expected == "object":
+        return isinstance(value, dict)
+    return True
+
+
+def _exception_message(error: Exception) -> str:
+    """例外の本文。`KeyError` の `str()` が付ける余分な引用符を避ける。"""
+    if isinstance(error, KeyError) and error.args:
+        return str(error.args[0])
+    return str(error)
+
+
+@contextmanager
+def _stdout_fd_to_stderr() -> Iterator[None]:
+    """ツール実行中だけ fd 1 を fd 2 へ振り替える。
+
+    OCCTのSTEP書き出しはC++が標準出力の実fdへ統計を吐く。`redirect_stdout` では
+    止まらないので、JSON-RPC専用の stdout を守るには `os.dup2` が要る。
+    """
+    sys.stdout.flush()
+    saved = os.dup(1)
+    try:
+        os.dup2(2, 1)
+        yield
+    finally:
+        sys.stdout.flush()
+        os.dup2(saved, 1)
+        os.close(saved)
 
 
 # --------------------------------------------------------------------------------------

@@ -190,8 +190,15 @@ async function main() {
     )
 
     const tools = (await mcp.send('tools/list')).result.tools.map((tool) => tool.name)
-    if (tools.length !== 3) fail(`公開ツールが3つでない: ${tools.join(', ')}`)
-    ok(`tools/list: ${tools.join(' / ')}`)
+    // **【2026-08-12 F2で退役】** ここは `tools.length !== 3` で「3つだけ」を固定していたが、
+    // F（F1+F2）が実装計画書§0の到達表のAI列を埋めてツールは28個になった。顔ぶれの上限を
+    // 決める契約は `tests/test_mcp_verbs.py` にひとつだけ置く（同じ上限を複数箇所に書くと、
+    // 片方の更新を忘れた瞬間に必ず食い違う——pytest側でも同じ穴を踏んでいる）。
+    // ここに残すのは **M4の3つが名前を変えずに生き残っていること** の回帰ガードである。
+    const m4Tools = ['describe_document', 'set_visible', 'describe_shape']
+    const missing = m4Tools.filter((name) => !tools.includes(name))
+    if (missing.length) fail(`M4のツールが消えている: ${missing.join(', ')}`)
+    ok(`tools/list: ${tools.length}個（M4の3つを含む）`)
 
     // ---------------------------------------------------------------- 検証1: 27件のBody
     const document = await mcp.callTool('describe_document')

@@ -38,10 +38,10 @@ UI側の要件も「AIの提案は見た目が違い、承認操作がある」�
     modify_selection(...)    -> origin="user"       人が差分編集する経路(触ること自体が承認)
     commit_selection()       -> origin="user"       中身を変えずに承認する経路
 
-**`origin="proposed"` のままでは verb に渡せない**(`confirmed_items` が ValueError)。
-これは「AIが自分の提案を人の確認なしに実行できるか」への答えで、**禁止ではなく
-「黙って通さない」**である(§6予防6) — AIは `commit_selection()` を明示的に呼べば
-自分の提案を実行できる。1手を明示的に踏ませることで、提案のまま実行された操作が
+**`origin="proposed"` のままでは verb に渡せない**(`confirmed_items` が
+`SelectionNotCommitted`)。これは「AIが自分の提案を人の確認なしに実行できるか」への答えで、
+**禁止ではなく「黙って通さない」**である(§6予防6) — AIは `commit_selection()` を明示的に
+呼べば自分の提案を実行できる。1手を明示的に踏ませることで、提案のまま実行された操作が
 操作ログの上で区別できなくなる事故を防ぐ。
 
 ## 可視性は選択機構の一部(M3.5からの継続)
@@ -68,6 +68,15 @@ from typing import Iterable, List, Optional, Sequence
 
 from . import kernel  # noqa: F401  face_count / count_subshapes を使う(OCPは kernel の中だけ)
 from .document import BodyId, Document
+
+
+class SelectionNotCommitted(ValueError):
+    """提案のまま verb へ渡そうとしたときに `confirmed_items` が送出する。
+
+    `ValueError` の派生なので既存の `pytest.raises(ValueError)` はそのまま通る。
+    MCPはメッセージ文字列ではなく `isinstance` で `selection_not_committed` を付ける。
+    """
+
 
 #: ShapeRef の kind(§3.5)。領域は RegionRef 側で表す。
 SHAPE_KINDS = ("face", "edge", "vertex")
@@ -223,15 +232,18 @@ def clear_selection(doc: Document) -> Selection:
 def confirmed_items(doc: Document, kind: Optional[str] = None) -> List[dict]:
     """**verbへ渡してよい**項目を返す。`kind` を指定するとその種別だけに絞る。
 
-    `origin == "proposed"` のときは ValueError(モジュールdocstringの「黙って通さない」)。
-    ここが、提案と確定の区別を**実際に効かせている唯一の場所**である。
+    `origin == "proposed"` のときは `SelectionNotCommitted`(ValueErrorの派生。
+    モジュールdocstringの「黙って通さない」)。ここが、提案と確定の区別を**実際に
+    効かせている唯一の場所**である。
 
     `kind` に渡せるのは `SELECTABLE_KINDS`(面・辺・頂点・領域)。未知の名前は ValueError
     (綴り間違いが「0件」として返ると、verbが黙って何もしない経路になる)。
     """
     selection = get_selection(doc)
     if selection.is_proposed():
-        raise ValueError("selection is still proposed: commit_selection() first")
+        raise SelectionNotCommitted(
+            "selection is still proposed: commit_selection() first"
+        )
     if kind is not None and kind not in SELECTABLE_KINDS:
         raise ValueError(f"unknown selectable kind: {kind!r}")
     items = list(selection.items)
