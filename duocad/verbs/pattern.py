@@ -29,6 +29,7 @@
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Sequence
 from uuid import uuid4
 
@@ -138,6 +139,55 @@ def pattern_rectangular(
 # --------------------------------------------------------------------------------------
 # 円形反復(v1最後のverb・2026-08-11) — **このタスクではスタブ**
 # --------------------------------------------------------------------------------------
+def _entity_center_2d(kind: str, params: dict) -> tuple[float, float]:
+    """図形の2D中心。回転中心との一致判定に使う。"""
+    if kind in ("circle", "arc"):
+        return (float(params["cx"]), float(params["cy"]))
+    if kind == "rectangle":
+        return (
+            float(params["x"]) + float(params["width"]) / 2.0,
+            float(params["y"]) + float(params["height"]) / 2.0,
+        )
+    if kind == "line":
+        return (
+            (float(params["x0"]) + float(params["x1"])) / 2.0,
+            (float(params["y0"]) + float(params["y1"])) / 2.0,
+        )
+    raise ValueError(f"unknown entity kind: {kind!r}")
+
+
+def _install_pattern_circular(
+    document: Document,
+    sketch_id: str,
+    pattern_id: str,
+    entities: Sequence[str],
+    cx: float,
+    cy: float,
+    count: int,
+    total_angle: float,
+    rotate_copies: bool,
+) -> None:
+    """Pattern をスケッチへ足し、寸法4つを名前つきの値として登録する。ログには触らない。"""
+    sketch = get_sketch(document, sketch_id)
+    if any(pattern.id == pattern_id for pattern in sketch.patterns):
+        raise ValueError(f"pattern id already exists: {pattern_id!r}")
+    refs = {
+        "cx": parameters.register_value(document, float(cx)),
+        "cy": parameters.register_value(document, float(cy)),
+        "count": parameters.register_value(document, float(count)),
+        "total_angle": parameters.register_value(document, float(total_angle)),
+    }
+    sketch.patterns.append(
+        Pattern(
+            id=pattern_id,
+            sources=list(entities),
+            params=refs,
+            kind="circular",
+            options={"rotate_copies": bool(rotate_copies)},
+        )
+    )
+
+
 def pattern_circular(
     doc: Document,
     sketch_id: str,
@@ -147,7 +197,7 @@ def pattern_circular(
     total_angle: float = 360.0,
     rotate_copies: bool = True,
 ) -> str:
-    """図形群をスケッチ平面の法線まわりに円形反復し、PatternId を返す。**スタブ**。
+    """図形群をスケッチ平面の法線まわりに円形反復し、PatternId を返す。
 
     契約は `tests/test_pattern_circular.py` が正。要点:
 
@@ -166,17 +216,109 @@ def pattern_circular(
 
     同じ `Pattern` を使い、`kind="circular"` で区別する。
     """
-    raise NotImplementedError("pattern_circular は未実装(テスト先行。次のタスクで実装する)")
+    if not _is_positive_int(count):
+        raise ValueError(f"count must be an integer >= 1, got {count!r}")
+    count_i = int(count)
+    angle = float(total_angle)
+    if not math.isfinite(angle) or not (0.0 < angle <= 360.0):
+        raise ValueError(
+            f"total_angle must satisfy 0 < angle <= 360, got {total_angle!r}"
+        )
+    cx = float(center[0])
+    cy = float(center[1])
+    entity_ids = list(entities)
+    if not entity_ids:
+        raise ValueError("pattern_circular requires at least one entity")
+
+    sketch = get_sketch(doc, sketch_id)
+    by_id = {entity.id: entity for entity in sketch.entities}
+    known = set(by_id)
+    for entity_id in entity_ids:
+        if entity_id not in known:
+            raise KeyError(
+                f"no such entity: {entity_id!r} in sketch {sketch_id!r}"
+            )
+
+    already_used = {
+        source
+        for pattern in sketch.patterns
+        for source in pattern.sources
+    }
+    for entity_id in entity_ids:
+        if entity_id in already_used:
+            raise ValueError(
+                f"entity {entity_id!r} is already used by another pattern"
+            )
+
+    for entity_id in entity_ids:
+        entity = by_id[entity_id]
+        resolved = {
+            key: parameters.resolve(doc, ref)
+            for key, ref in entity.params.items()
+        }
+        ecx, ecy = _entity_center_2d(entity.kind, resolved)
+        if abs(ecx - cx) <= 1e-9 and abs(ecy - cy) <= 1e-9:
+            raise ValueError(
+                f"entity {entity_id!r} is centred on the pattern pivot "
+                f"({cx}, {cy}); all copies would coincide with the original"
+            )
+
+    pattern_id = f"pattern-{uuid4().hex[:12]}"
+    _install_pattern_circular(
+        doc,
+        sketch_id,
+        pattern_id,
+        entity_ids,
+        cx,
+        cy,
+        count_i,
+        angle,
+        bool(rotate_copies),
+    )
+    doc.log.append(
+        VERB_PATTERN_CIRCULAR,
+        {
+            "sketch_id": sketch_id,
+            "pattern_id": pattern_id,
+            "entities": list(entity_ids),
+            "center": [cx, cy],
+            "count": count_i,
+            "total_angle": angle,
+            "rotate_copies": bool(rotate_copies),
+        },
+    )
+    return pattern_id
 
 
 def _do_pattern_circular(document: Document, operation: Operation) -> None:
     """redo / replay: 記録された PatternId と参照で反復を作り直す。ログには触らない。"""
-    raise NotImplementedError("pattern_circular の redo/replay は未実装")
+    args = operation.args
+    center = args["center"]
+    _install_pattern_circular(
+        document,
+        args["sketch_id"],
+        args["pattern_id"],
+        args["entities"],
+        float(center[0]),
+        float(center[1]),
+        int(args["count"]),
+        float(args["total_angle"]),
+        bool(args["rotate_copies"]),
+    )
 
 
 def _undo_pattern_circular(document: Document, operation: Operation) -> None:
     """undo: 反復を取り除く(元の図形は残る)。パラメータも文書から消す。"""
-    raise NotImplementedError("pattern_circular の undo は未実装")
+    args = operation.args
+    sketch = get_sketch(document, args["sketch_id"])
+    pattern_id = args["pattern_id"]
+    remaining = []
+    for pattern in sketch.patterns:
+        if pattern.id == pattern_id:
+            _release_param_refs(document, pattern.params)
+        else:
+            remaining.append(pattern)
+    sketch.patterns = remaining
 
 
 register_verb(

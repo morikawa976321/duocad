@@ -1,9 +1,9 @@
 """v1最後のverbの契約 — 円形反復 `pattern_circular`（2026-08-11）。
 
-**赤で終わるのが正常**。このタスクはテストを先に書いて契約を確定するところまでで、実装は
-次のタスク（`20260811-0231-duocad-circular-pattern-logic`）が行う。赤の理由は
-**全件 `NotImplementedError`** であること（＝スタブに当たっていること）が契約で、
-`ImportError` や収集エラーで赤くなっていたらこのタスクの失敗である。
+**2026-08-11に実装が入って全件緑になった**（`20260811-0231-duocad-circular-pattern-logic`）。
+書かれた当初はスタブに対して全件赤（`NotImplementedError`）で、それが正常な状態だった。
+**契約は書いた時点から変えていない**（実装中に `total_angle` の後追い検査が1件足りないと
+分かったので、テストを1件**足した** — 既存の契約を緩めてはいない）。
 
 `pattern_rectangular`（M3で実装済み）の**兄弟**なので、語彙も規律も揃える:
 
@@ -295,7 +295,8 @@ def test_changing_the_count_changes_the_number_of_holes():
     pattern = get_sketch(document, sketch_id).patterns[0]
     name = pattern.params["count"]
     assert isinstance(name, str), "素の数値を持っていたら後から変えられない"
-    assert parameter_of(document, name) == float(COUNT)
+    # `parameter_of` は (doc, sketch_id, owner_id, key) — 矩形反復のテストと同じ引き方
+    assert parameter_of(document, sketch_id, pattern_id, "count") == name
 
     set_parameter(document, name, 3.0)
 
@@ -459,4 +460,22 @@ def test_reducing_the_count_below_one_is_refused_afterwards_too():
 
     with pytest.raises(ValueError):
         set_parameter(document, name, 0.0)
+    assert len(regions(document, sketch_id)) == COUNT
+
+
+def test_changing_the_total_angle_to_an_unusable_value_is_refused():
+    """`total_angle` も `set_parameter` 経由で検査する（実装中に見つかった穴・2026-08-11）。
+
+    `count` だけを検査していると、**角度のほうから同じ壊れ方を作れる** —
+    0度にすれば全複製が重なり、360超なら1周を超えて重なるのに、例外は出ない。
+    「作成時だけ検査していると後から書き込む経路が素通りする」は `nx`/`ny` で既に
+    踏んだ穴で、角度も同じ扱いにする。
+    """
+    document = Document()
+    sketch_id, _, _ = hole_ring(document)
+    name = get_sketch(document, sketch_id).patterns[0].params["total_angle"]
+
+    for bad in (0.0, -90.0, 361.0):
+        with pytest.raises(ValueError):
+            set_parameter(document, name, bad)
     assert len(regions(document, sketch_id)) == COUNT

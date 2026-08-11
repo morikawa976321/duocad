@@ -126,9 +126,16 @@ def _require_usable_value(doc: Document, name: str, value: float) -> None:
                 require_valid_params(entity.kind, candidate)
         for pattern in sketch.patterns:
             for key, ref in pattern.params.items():
-                if ref == name and key in ("nx", "ny") and not is_positive_int(value):
+                if ref == name and key in ("nx", "ny", "count") and not is_positive_int(value):
                     raise ValueError(
                         f"pattern count {key} must be a positive integer, got {value!r}"
+                    )
+                # 円形反復の配置角も同じ理由で後からの書き込みを検査する(2026-08-11)。
+                # 0 や 360超を後から書けると、複製が全部重なる/1周を超えて重なるのに
+                # 例外が出ない ＝ 作成時の検査を素通りする穴が、個数だけでなく角度にも開く。
+                if ref == name and key == "total_angle" and not 0.0 < value <= 360.0:
+                    raise ValueError(
+                        f"pattern total_angle must be in (0, 360], got {value!r}"
                     )
 
 
