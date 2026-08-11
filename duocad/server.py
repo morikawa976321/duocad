@@ -84,7 +84,7 @@ from typing import Any, Optional
 
 from websockets.asyncio.server import serve
 
-from . import io_step, kernel, query
+from . import io_step, kernel, query, selection
 from .document import Document
 from .verbs import extrude_face, make_editable_copy
 from .verbs import set_visible as set_visible_verb
@@ -244,6 +244,7 @@ class Session:
             "can_redo": self.document.log.can_redo,
             "applied_count": self._applied_count,
             "measure_log": str(self.measure_log_path),
+            "selection": selection.get_selection(self.document).to_dict(),
         }
 
     # ---------------------------------------------------------------- M3.5: 差分送信
@@ -403,7 +404,7 @@ class Session:
     # 呼び出し側は `["selection"]` を挟むかどうかを取り違えないこと。
     def get_selection(self) -> dict:
         """現在の選択集合を素の値で返す(`Selection.to_dict()`)。発火はしない。"""
-        raise NotImplementedError("A2で実装する(スタブ)")
+        return selection.get_selection(self.document).to_dict()
 
     def propose_selection(
         self,
@@ -412,7 +413,8 @@ class Session:
         client_op: Optional[int] = None,
     ) -> dict:
         """AIの提案として選択を置き換え、変更イベントを発火して**そのイベント**を返す。"""
-        raise NotImplementedError("A2で実装する(スタブ)")
+        selection.propose_selection(self.document, refs=refs, predicate=predicate)
+        return self._emit(self._selection_event(client_op))
 
     def modify_selection(
         self,
@@ -421,15 +423,30 @@ class Session:
         client_op: Optional[int] = None,
     ) -> dict:
         """人の差分編集。足し引きして確定にし、変更イベントを発火して**そのイベント**を返す。"""
-        raise NotImplementedError("A2で実装する(スタブ)")
+        selection.modify_selection(
+            self.document,
+            add=() if add is None else add,
+            remove=() if remove is None else remove,
+        )
+        return self._emit(self._selection_event(client_op))
 
     def commit_selection(self, client_op: Optional[int] = None) -> dict:
         """提案を確定する(中身は変えない)。変更イベントを発火して**そのイベント**を返す。"""
-        raise NotImplementedError("A2で実装する(スタブ)")
+        selection.commit_selection(self.document)
+        return self._emit(self._selection_event(client_op))
 
     def clear_selection(self, client_op: Optional[int] = None) -> dict:
         """選択を空にする。変更イベントを発火して**そのイベント**を返す。"""
-        raise NotImplementedError("A2で実装する(スタブ)")
+        selection.clear_selection(self.document)
+        return self._emit(self._selection_event(client_op))
+
+    def _selection_event(self, client_op: Optional[int]) -> dict:
+        """選択変更イベントのペイロード(`set_visible` と同じく `_emit` へ渡す形)。"""
+        return {
+            "change": "selection",
+            "selection": selection.get_selection(self.document).to_dict(),
+            "client_op": client_op,
+        }
 
     def undo(self) -> dict:
         """直前の操作を取り消す。**文書の土台を作った操作は取り消させない**。

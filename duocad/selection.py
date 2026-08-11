@@ -105,16 +105,20 @@ class Selection:
         `count` を明示的に持たせるのは、**述語が0件だったことを呼び出し元が知れる**ように
         するため(項番19。AIが述語を外したことに気づけないと、交互操作は黙って止まる)。
         """
-        raise NotImplementedError("A2で実装する(スタブ)")
+        return {
+            "items": list(self.items),
+            "origin": self.origin,
+            "count": len(self.items),
+        }
 
     def is_proposed(self) -> bool:
         """AIの提案状態か(`origin == "proposed"`)。"""
-        raise NotImplementedError("A2で実装する(スタブ)")
+        return self.origin == ORIGIN_PROPOSED
 
 
 def get_selection(doc: Document) -> Selection:
     """現在の選択集合を返す(コピーではなく本体。読み手はAIでも人でもよい)。"""
-    raise NotImplementedError("A2で実装する(スタブ)")
+    return doc.selection
 
 
 def propose_selection(
@@ -135,7 +139,20 @@ def propose_selection(
     **一致0件はエラーではない** — 空の Selection を返す(項番19)。0件でも**置き換えは起きる**
     (外した述語の後に古い候補が残ると、人が承認したつもりで別の集合にverbがかかる)。
     """
-    raise NotImplementedError("A2で実装する(スタブ)")
+    if (refs is None) == (predicate is None):
+        raise ValueError("propose_selection needs exactly one of refs or predicate")
+
+    if refs is not None:
+        items = [_coerce_ref(doc, ref) for ref in refs]
+    else:
+        from . import predicates
+
+        items = predicates.evaluate(doc, predicate)
+
+    selection = get_selection(doc)
+    selection.items = list(items)
+    selection.origin = ORIGIN_PROPOSED
+    return selection
 
 
 def modify_selection(
@@ -161,7 +178,27 @@ def modify_selection(
     (形が不正なら ValueError、存在しないBodyは KeyError)。人が触る主経路なので、
     ここを素通りさせると壊れた参照が選択に紛れ込む。
     """
-    raise NotImplementedError("A2で実装する(スタブ)")
+    add_list = list(add)
+    remove_list = list(remove)
+    # 全参照を検査してから書き換える(途中で落ちると選択が壊れる)
+    coerced_add = [_coerce_ref(doc, ref) for ref in add_list]
+    coerced_remove = [_coerce_ref(doc, ref) for ref in remove_list]
+
+    selection = get_selection(doc)
+    items = list(selection.items)
+    for ref in coerced_add:
+        if not any(same_ref(existing, ref) for existing in items):
+            items.append(ref)
+    if coerced_remove:
+        items = [
+            existing
+            for existing in items
+            if not any(same_ref(existing, ref) for ref in coerced_remove)
+        ]
+
+    selection.items = items
+    selection.origin = ORIGIN_USER
+    return selection
 
 
 def commit_selection(doc: Document) -> Selection:
@@ -170,12 +207,17 @@ def commit_selection(doc: Document) -> Selection:
     人が「そのままでよい」と承認する経路であり、AIが自分の提案を実行する前に明示的に
     踏む1手でもある。既に "user" のときに呼んでも失敗しない(冪等)。
     """
-    raise NotImplementedError("A2で実装する(スタブ)")
+    selection = get_selection(doc)
+    selection.origin = ORIGIN_USER
+    return selection
 
 
 def clear_selection(doc: Document) -> Selection:
     """選択を空にする。空集合の `origin` は常に "user" に戻す。"""
-    raise NotImplementedError("A2で実装する(スタブ)")
+    selection = get_selection(doc)
+    selection.items = []
+    selection.origin = ORIGIN_USER
+    return selection
 
 
 def confirmed_items(doc: Document, kind: Optional[str] = None) -> List[dict]:
@@ -187,7 +229,15 @@ def confirmed_items(doc: Document, kind: Optional[str] = None) -> List[dict]:
     `kind` に渡せるのは `SELECTABLE_KINDS`(面・辺・頂点・領域)。未知の名前は ValueError
     (綴り間違いが「0件」として返ると、verbが黙って何もしない経路になる)。
     """
-    raise NotImplementedError("A2で実装する(スタブ)")
+    selection = get_selection(doc)
+    if selection.is_proposed():
+        raise ValueError("selection is still proposed: commit_selection() first")
+    if kind is not None and kind not in SELECTABLE_KINDS:
+        raise ValueError(f"unknown selectable kind: {kind!r}")
+    items = list(selection.items)
+    if kind is None:
+        return items
+    return [item for item in items if ref_kind(item) == kind]
 
 
 def ref_kind(ref: dict) -> str:
@@ -198,7 +248,16 @@ def ref_kind(ref: dict) -> str:
     `confirmed_items` の絞り込みと `same_ref` の等価判定が別々の規則を持ち始めるのを
     防ぐため。どちらでもない形の辞書は ValueError。
     """
-    raise NotImplementedError("A2で実装する(スタブ)")
+    if not isinstance(ref, dict):
+        raise ValueError(f"ref must be a dict, got {type(ref).__name__}")
+    if "sketch" in ref:
+        return REGION_KIND
+    if "kind" in ref:
+        kind = ref["kind"]
+        if kind not in SHAPE_KINDS:
+            raise ValueError(f"unknown shape kind: {kind!r}")
+        return kind
+    raise ValueError("ref is neither a ShapeRef nor a RegionRef")
 
 
 def edge_indices(doc: Document, body_id: Optional[BodyId] = None) -> List[int]:
@@ -207,7 +266,17 @@ def edge_indices(doc: Document, body_id: Optional[BodyId] = None) -> List[int]:
     `body_id` を省略した場合、選択に複数Bodyの辺が混ざっていれば ValueError
     (verbは1つのBodyしか丸められないので、どれのつもりかを黙って決めない)。
     """
-    raise NotImplementedError("A2で実装する(スタブ)")
+    edges = confirmed_items(doc, kind="edge")
+    if body_id is not None:
+        edges = [item for item in edges if item["body"] == body_id]
+    else:
+        bodies = {item["body"] for item in edges}
+        if len(bodies) > 1:
+            raise ValueError(
+                f"edge selection spans multiple bodies {sorted(bodies)!r}: "
+                "pass body_id explicitly"
+            )
+    return [int(item["index"]) for item in edges]
 
 
 # --------------------------------------------------------------------------------------
@@ -257,7 +326,15 @@ def select_region(doc: Document, sketch_id: str, region_index: int) -> dict:
     存在しない `sketch_id` は KeyError(`sketch.get_sketch` の契約に合わせる)、
     範囲外の添字は ValueError。
     """
-    raise NotImplementedError("A2で実装する(スタブ)")
+    from . import region as region_mod
+    from .sketch import get_sketch
+
+    get_sketch(doc, sketch_id)  # 存在しなければ KeyError
+    count = len(region_mod.regions(doc, sketch_id))
+    value = int(region_index)
+    if not 1 <= value <= count:
+        raise ValueError(f"region index out of range: {value} (1..{count})")
+    return region_mod.region_ref(sketch_id, value).to_dict()
 
 
 def same_ref(left: dict, right: dict) -> bool:
@@ -269,10 +346,49 @@ def same_ref(left: dict, right: dict) -> bool:
     種別が違えば別物(`ref_kind` で判定する)。ShapeRef は `body`+`kind`+`index`、
     RegionRef は `sketch`+`index` で比べる。
     """
-    raise NotImplementedError("A2で実装する(スタブ)")
+    left_kind = ref_kind(left)
+    right_kind = ref_kind(right)
+    if left_kind != right_kind:
+        return False
+    if left_kind == REGION_KIND:
+        return left["sketch"] == right["sketch"] and int(left["index"]) == int(right["index"])
+    return (
+        left["body"] == right["body"]
+        and left["kind"] == right["kind"]
+        and int(left["index"]) == int(right["index"])
+    )
 
 
 # --------------------------------------------------------------------------------------
+def _coerce_ref(doc: Document, ref: dict) -> dict:
+    """手書きの参照を検査し、`select_*` と同じ形へ正規化する。失敗時は選択を変えない前提。"""
+    if not isinstance(ref, dict):
+        raise ValueError(f"ref must be a dict, got {type(ref).__name__}")
+
+    if "sketch" in ref:
+        if "index" not in ref:
+            raise ValueError("RegionRef is missing 'index'")
+        return select_region(doc, ref["sketch"], ref["index"])
+
+    if "kind" not in ref:
+        raise ValueError("ShapeRef is missing 'kind'")
+    kind = ref["kind"]
+    if kind not in SHAPE_KINDS:
+        raise ValueError(f"unknown shape kind: {kind!r}")
+    if "body" not in ref:
+        raise ValueError("ShapeRef is missing 'body'")
+    if "index" not in ref:
+        raise ValueError("ShapeRef is missing 'index'")
+
+    body_id = ref["body"]
+    index = ref["index"]
+    if kind == "face":
+        return select_face(doc, body_id, index)
+    if kind == "edge":
+        return select_edge(doc, body_id, index)
+    return select_vertex(doc, body_id, index)
+
+
 def _visible_body(doc: Document, body_id: BodyId):
     """存在して可視なBodyを返す。無ければ KeyError、不可視なら ValueError。"""
     body = next((b for b in doc.bodies if b.id == body_id), None)

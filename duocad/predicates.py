@@ -44,9 +44,12 @@ M3.5で決めた「見えないものは選べない」の一貫性。`body` を
 """
 from __future__ import annotations
 
-from typing import List
+import math
+from typing import List, Sequence, Tuple
 
+from . import kernel, query
 from .document import Document
+from .selection import selectable_bodies
 
 #: 述語が対象にできる種別(領域の述語はスケッチ側の話なので持たない)
 PREDICATE_KINDS = ("face", "edge")
@@ -69,6 +72,8 @@ AXES = {"X": (1.0, 0.0, 0.0), "Y": (0.0, 1.0, 0.0), "Z": (0.0, 0.0, 1.0)}
 #: STEPから来た面・辺は厳密に軸平行ではないので、素の等値比較にはしない。
 PARALLEL_TOLERANCE = 1e-3
 
+_OPS_BY_KIND = {"face": FACE_OPS, "edge": EDGE_OPS}
+
 
 def validate(predicate: dict) -> dict:
     """述語を検査して正規化した写しを返す。不正なら ValueError(黙って通さない)。
@@ -79,7 +84,24 @@ def validate(predicate: dict) -> dict:
     **評価より前に全条件を検査する**。途中まで評価してから落ちると、
     「選択は変えない」(項番20)を守るのが実装依存になる。
     """
-    raise NotImplementedError("A2で実装する(スタブ)")
+    if not isinstance(predicate, dict):
+        raise ValueError(f"predicate must be a dict, got {type(predicate).__name__}")
+    if "kind" not in predicate:
+        raise ValueError("predicate is missing 'kind'")
+    kind = predicate["kind"]
+    if kind not in PREDICATE_KINDS:
+        raise ValueError(f"unknown predicate kind: {kind!r}")
+    if "where" not in predicate:
+        raise ValueError("predicate is missing 'where'")
+    where = predicate["where"]
+    if not isinstance(where, list):
+        raise ValueError(f"'where' must be a list, got {type(where).__name__}")
+
+    normalized_where = [_normalize_condition(kind, condition) for condition in where]
+    result = {"kind": kind, "where": normalized_where}
+    if "body" in predicate:
+        result["body"] = predicate["body"]
+    return result
 
 
 def evaluate(doc: Document, predicate: dict) -> List[dict]:
@@ -88,7 +110,16 @@ def evaluate(doc: Document, predicate: dict) -> List[dict]:
     順序は「`doc.bodies` の順 × 添字の昇順」で安定させる。UIの一覧と、テストの
     期待値の両方が順序に依存できるようにするため。
     """
-    raise NotImplementedError("A2で実装する(スタブ)")
+    normalized = validate(predicate)
+    bodies = _target_bodies(doc, normalized.get("body"), normalized["where"])
+    kind = normalized["kind"]
+    matched: List[dict] = []
+    for body in bodies:
+        if kind == "face":
+            matched.extend(_match_faces(body, normalized["where"]))
+        else:
+            matched.extend(_match_edges(body, normalized["where"]))
+    return matched
 
 
 def describe_ops() -> dict:
@@ -98,4 +129,241 @@ def describe_ops() -> dict:
     **F1で書き直さずに済むように、opの定義はここ1箇所を正にする**
     (スキーマとバリデータが二重管理になると、片方だけ増えたopが黙って通る)。
     """
-    raise NotImplementedError("A2で実装する(スタブ)")
+    return {
+        "face": [
+            {
+                "op": "normal_dot_gt",
+                "args": {"axis": "X|Y|Z|[x,y,z]", "value": "number"},
+                "doc": "面の外向き法線と軸の内積が value より大きい",
+            },
+            {
+                "op": "area_gt",
+                "args": {"value": "number"},
+                "doc": "面積が value より大きい(厳密な不等号)",
+            },
+            {
+                "op": "kind_is",
+                "args": {"value": "|".join(kernel.FACE_KINDS)},
+                "doc": "面の種別が value と一致する(kernel.classify_face)",
+            },
+        ],
+        "edge": [
+            {
+                "op": "parallel_to",
+                "args": {"axis": "X|Y|Z|[x,y,z]"},
+                "doc": "辺が軸に平行(単位方向の内積の絶対値が 1±PARALLEL_TOLERANCE)",
+            },
+            {
+                "op": "length_gt",
+                "args": {"value": "number"},
+                "doc": "長さが value より大きい(厳密な不等号。境界は含まない)",
+            },
+            {
+                "op": "length_lt",
+                "args": {"value": "number"},
+                "doc": "長さが value より小さい(厳密な不等号。境界は含まない)",
+            },
+            {
+                "op": "kind_is",
+                "args": {"value": "|".join(kernel.EDGE_KINDS)},
+                "doc": "辺の種別が value と一致する(kernel.classify_edge)",
+            },
+            {
+                "op": "on_boundary_of_face",
+                "args": {"face": "int (Body局所・1始まり)"},
+                "doc": "指定面の外周(outer wire)を成す辺。穴の縁は含まない",
+            },
+        ],
+    }
+
+
+# --------------------------------------------------------------------------------------
+def _normalize_condition(kind: str, condition: dict) -> dict:
+    if not isinstance(condition, dict):
+        raise ValueError(f"where condition must be a dict, got {type(condition).__name__}")
+    if "op" not in condition:
+        raise ValueError("where condition is missing 'op'")
+    op = condition["op"]
+    allowed = _OPS_BY_KIND[kind]
+    if op not in allowed:
+        raise ValueError(f"op {op!r} is not valid for kind {kind!r}")
+
+    if op == "normal_dot_gt":
+        if "axis" not in condition:
+            raise ValueError("condition is missing 'axis'")
+        axis = _normalize_axis(condition["axis"])
+        value = _require_number(condition, "value")
+        return {"op": op, "axis": list(axis), "value": value}
+    if op == "area_gt":
+        return {"op": op, "value": _require_number(condition, "value")}
+    if op == "kind_is":
+        if "value" not in condition:
+            raise ValueError("condition is missing 'value'")
+        value = condition["value"]
+        if not isinstance(value, str):
+            raise ValueError(f"'value' for kind_is must be a str, got {type(value).__name__}")
+        known = kernel.FACE_KINDS if kind == "face" else kernel.EDGE_KINDS
+        if value not in known:
+            raise ValueError(f"unknown kind value: {value!r}")
+        return {"op": op, "value": value}
+    if op == "parallel_to":
+        if "axis" not in condition:
+            raise ValueError("condition is missing 'axis'")
+        axis = _normalize_axis(condition["axis"])
+        return {"op": op, "axis": list(axis)}
+    if op in ("length_gt", "length_lt"):
+        return {"op": op, "value": _require_number(condition, "value")}
+    if op == "on_boundary_of_face":
+        if "face" not in condition:
+            raise ValueError("on_boundary_of_face is missing 'face'")
+        face = condition["face"]
+        if isinstance(face, bool) or not isinstance(face, int):
+            raise ValueError(f"'face' must be an int, got {type(face).__name__}")
+        return {"op": op, "face": int(face)}
+    raise ValueError(f"unhandled op: {op!r}")
+
+
+def _require_number(condition: dict, name: str) -> float:
+    if name not in condition:
+        raise ValueError(f"condition is missing '{name}'")
+    value = condition[name]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"'{name}' must be a number, got {type(value).__name__}")
+    return float(value)
+
+
+def _normalize_axis(axis) -> Tuple[float, float, float]:
+    if isinstance(axis, str):
+        if axis not in AXES:
+            raise ValueError(f"unknown axis: {axis!r}")
+        return AXES[axis]
+    if isinstance(axis, (list, tuple)) and len(axis) == 3:
+        try:
+            vector = (float(axis[0]), float(axis[1]), float(axis[2]))
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"axis vector must be 3 numbers, got {axis!r}") from error
+        magnitude = math.sqrt(vector[0] ** 2 + vector[1] ** 2 + vector[2] ** 2)
+        if magnitude <= 0:
+            raise ValueError("axis vector must be non-zero")
+        return (vector[0] / magnitude, vector[1] / magnitude, vector[2] / magnitude)
+    raise ValueError(f"axis must be X/Y/Z or a 3-vector, got {axis!r}")
+
+
+def _target_bodies(doc: Document, body_id, where: Sequence[dict]) -> list:
+    """走査対象のBody列。不可視は除外。明示指定の契約は `_visible_body` と同じ。"""
+    from .selection import _visible_body
+
+    if body_id is not None:
+        return [_visible_body(doc, body_id)]
+
+    visible_ids = selectable_bodies(doc)
+    if _needs_single_body(where) and len(visible_ids) != 1:
+        # **0件と複数件で言うことを変える**(2026-08-11のQA指摘)。0件は「複数ある」ではないし、
+        # `body` を明示しても解決しない —— AIが次に何を試せばよいかが逆になる。
+        raise ValueError(
+            "on_boundary_of_face needs a visible body to count faces on, "
+            "but no body is visible (set_visible で表示してから選ぶこと)"
+            if not visible_ids
+            else "on_boundary_of_face needs an explicit 'body' when multiple bodies are "
+            f"visible (visible: {visible_ids})"
+        )
+    id_set = set(visible_ids)
+    return [body for body in doc.bodies if body.id in id_set]
+
+
+def _needs_single_body(where: Sequence[dict]) -> bool:
+    return any(condition["op"] == "on_boundary_of_face" for condition in where)
+
+
+def _match_faces(body, where: Sequence[dict]) -> List[dict]:
+    faces = query.describe_faces(body.shape)
+    matched = []
+    for face in faces:
+        if all(_face_matches(face, condition) for condition in where):
+            matched.append(
+                {
+                    "body": body.id,
+                    "kind": "face",
+                    "index": face["index"],
+                    "provenance": None,
+                }
+            )
+    return matched
+
+
+def _match_edges(body, where: Sequence[dict]) -> List[dict]:
+    edges = query.describe_edges(body.shape)
+    boundary_sets = _boundary_sets(body, where)
+    matched = []
+    for edge in edges:
+        if all(_edge_matches(edge, condition, boundary_sets) for condition in where):
+            matched.append(
+                {
+                    "body": body.id,
+                    "kind": "edge",
+                    "index": edge["index"],
+                    "provenance": None,
+                }
+            )
+    return matched
+
+
+def _boundary_sets(body, where: Sequence[dict]) -> dict:
+    """関係述語の面添字 → 外周辺の集合。評価前に全件を解決して範囲外を落とす。"""
+    resolved = {}
+    for condition in where:
+        if condition["op"] != "on_boundary_of_face":
+            continue
+        face_index = condition["face"]
+        try:
+            resolved[face_index] = set(query.edges_of_face(body.shape, face_index))
+        except ValueError as error:
+            # **有効な範囲まで言う**(`select_*` と揃える。2026-08-11のQA指摘)。
+            # 添字だけ返しても、AIは次に何を試せばよいか分からない。
+            raise ValueError(
+                f"on_boundary_of_face face out of range: {face_index} "
+                f"(1..{kernel.face_count(body.shape)} on body {body.id!r})"
+            ) from error
+    return resolved
+
+
+def _face_matches(face: dict, condition: dict) -> bool:
+    op = condition["op"]
+    if op == "normal_dot_gt":
+        axis = condition["axis"]
+        normal = face["normal"]
+        return (
+            normal[0] * axis[0] + normal[1] * axis[1] + normal[2] * axis[2]
+            > condition["value"]
+        )
+    if op == "area_gt":
+        return face["area"] > condition["value"]
+    if op == "kind_is":
+        return face["kind"] == condition["value"]
+    raise ValueError(f"unhandled face op: {op!r}")
+
+
+def _edge_matches(edge: dict, condition: dict, boundary_sets: dict) -> bool:
+    op = condition["op"]
+    if op == "parallel_to":
+        return _is_parallel(edge, condition["axis"])
+    if op == "length_gt":
+        return edge["length"] > condition["value"]
+    if op == "length_lt":
+        return edge["length"] < condition["value"]
+    if op == "kind_is":
+        return edge["kind"] == condition["value"]
+    if op == "on_boundary_of_face":
+        return edge["index"] in boundary_sets[condition["face"]]
+    raise ValueError(f"unhandled edge op: {op!r}")
+
+
+def _is_parallel(edge: dict, axis: Sequence[float]) -> bool:
+    start, end = edge["start"], edge["end"]
+    direction = (end[0] - start[0], end[1] - start[1], end[2] - start[2])
+    magnitude = math.sqrt(direction[0] ** 2 + direction[1] ** 2 + direction[2] ** 2)
+    if magnitude <= 0:
+        return False
+    unit = (direction[0] / magnitude, direction[1] / magnitude, direction[2] / magnitude)
+    dot = abs(unit[0] * axis[0] + unit[1] * axis[1] + unit[2] * axis[2])
+    return abs(dot - 1.0) <= PARALLEL_TOLERANCE

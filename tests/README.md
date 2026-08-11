@@ -1830,3 +1830,64 @@ QAは `gpt-5.6-sol-high` を試したが**月次の使用量上限**（8/19リ�
 ```
 
 **素の `python` は使わない** — `OCP` を持たない別環境で、収集エラーになる（2026-08-11実測）。
+
+## Aの実装で分かったこと（2026-08-11・`selection-core-logic`）
+
+**契約77件＋QAで足した2件の計79件が緑。全スイート377 passed。** 実装は cursor(auto) へ
+委譲し**1巡で通った**（仕様をファイルで渡し、契約が既に `tests/README.md` と
+スタブのdocstringに全部書いてあったのが効いた）。
+
+- **面の法線は build123d の `Face.normal_at()` に任せてよい**（実測）。`describe_faces` の
+  docstringは当初「`TopAbs_REVERSED` なら反転する」と書いていたが、`normal_at()` は
+  **既に向きを織り込んだ外向き**を返し、`kernel.tessellate` の値と一致した。
+  自分でもう一度反転すると二重になる。ただし**tessellate 側とは別のコードパス**なので、
+  どちらかだけ壊れると述語だけが静かにずれる。`test_faces_can_be_selected_by_normal`
+  （`describe_faces` 由来）と `_top_face_index`（tessellate 由来）が同じ面を指すことで
+  両経路の一致が毎回検査される。**この対応関係を壊さないこと。**
+- **辺の添字を引き当てるのに `kernel.edge_index_of` を足した**（`IsSame` で照合）。
+  `edges_of_face` は build123d の `Face.outer_wire().edges()` から辺を得るが、
+  **その列挙順が `kernel._edge_map` と一致する保証は無い**ので、形状の同一性で
+  kernel側の添字へ引き当てる。`describe_edges` が「build123dの順序を信用しない」と
+  書いているのと同じ理由で、ここを横着すると「選んだ辺と違う辺が丸まる」。
+- **`edge_indices` の順序は選択順（追加順）であって昇順ではない。** `fillet` は
+  `edges` と `radius` のリストを**位置で対応**させるので、途中で並べ替えると
+  半径の割り当てが黙ってずれる。別経路の確認でもここを固定した。
+- **`evaluate` の実測コスト**: 合成した約27Body・約2900面で 0.3〜0.4秒（QAが計測）。
+  `describe_faces` / `describe_edges` はBodyあたり1回に抑えてある。
+  伸びしろとして、`kernel.edge_index_of` が呼ぶたびに辺マップを作り直す点と、
+  `on_boundary_of_face` だけの述語でも全辺を `describe_edges` する点が残っている
+  （**正しさの問題ではない**。実物のPCケースで遅ければここを見る）。
+
+### 別経路の確認（pytestとは別に素のPythonで1巡通した）
+
+30×30×40の直方体（スケッチ→押し出しで作成）に対して:
+
+1. AIが述語 `parallel_to Z and length_gt 20` で辺を提案 → **4本**（`[1, 2, 5, 8]`）
+2. **提案のままでは verb に渡せない**ことを確認（`commit_selection() first` で拒否）
+3. 人が `modify_selection` で1本足して1本引く → AIが `get_selection` で読み直す →
+   `[2, 5, 8, 4]`（**選択順のまま**）、`origin` は `"user"` に遷移
+4. **選択の操作で操作ログは1行も増えない**（素材の3行のまま）
+5. その選択をそのまま `fillet(r=3.0)` へ → **体積 36000.000 → 35712.876 / 面 6 → 10**
+6. AI起点の選択変更が**イベント（1回・`client_op` 込み）と `state_meta()["selection"]` の
+   両方**に載ることを確認（`applied` を落とすMCP起点でも画面へ届く経路）
+
+**これが§2.1の交互操作のPython側の一巡**である。UI側は B、MCP側は F でつながる。
+
+### QAで足したもの（2026-08-11・cursor auto のレビュー指摘）
+
+判定は**合格**（major 0・minor 7）。うち3件を実装・文書側で、2件をテストで対応した:
+
+- `on_boundary_of_face` で**可視Bodyが0件**のとき「複数あるので `body` を指定せよ」と
+  出していた（0件は複数ではないし、`body` を明示しても解決しない）→ 0件と複数で
+  言うことを分けた。
+- 範囲外の面添字のメッセージに**有効な範囲が無かった**（`select_*` は `1..count` を出す）
+  → 揃えた。
+- `describe_faces` の docstring が実装と食い違っていた（上記の法線の件）→ 実測に合わせた。
+- `kind_is` の**評価**にテストが無かった（`validate` と `describe_ops` しか見ていない）
+  → `test_kind_is_actually_filters_by_the_classified_kind` を追加。
+- 「不正な述語で選択を変えない」が **`validate` 段階で落ちる例しか無かった** →
+  `validate` を通ってから落ちる例（範囲外の面添字）を
+  `test_a_predicate_that_fails_at_evaluation_also_leaves_the_selection_untouched` で追加。
+  **「全条件を検査してから評価する」が効いているかは、こちらでしか確かめられない。**
+
+据え置いた minor は上記の性能2件（正しさの問題ではない）。

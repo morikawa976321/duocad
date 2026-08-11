@@ -101,6 +101,28 @@ def test_face_predicates_can_combine_conditions(doc: Document):
     assert predicates.evaluate(doc, {"kind": "face", "where": [upward, huge]}) == []
 
 
+def test_kind_is_actually_filters_by_the_classified_kind(doc: Document):
+    """`kind_is` が**分類ラベルで実際に絞れる**こと(A2のQAが指摘した穴)。
+
+    `validate` と `describe_ops` にopが載っていることだけを見ていると、
+    評価側が `kernel.classify_face` / `classify_edge` と違うラベルを見ていても気づけない。
+    直方体は6面とも平面・12辺とも直線なので、両方向を1本で固定できる。
+    """
+    shape = doc.bodies[0].shape
+    planes = predicates.evaluate(
+        doc, {"kind": "face", "where": [{"op": "kind_is", "value": "plane"}]}
+    )
+    assert len(planes) == kernel.face_count(shape) == 6
+
+    lines = predicates.evaluate(
+        doc, {"kind": "edge", "where": [{"op": "kind_is", "value": "line"}]}
+    )
+    assert len(lines) == kernel.edge_count(shape) == 12
+    assert predicates.evaluate(
+        doc, {"kind": "edge", "where": [{"op": "kind_is", "value": "circle"}]}
+    ) == []
+
+
 def test_an_empty_where_matches_everything_of_that_kind(doc: Document):
     """`where: []` はその種別の全部(「全面を選ぶ」を特別扱いしないで書けるように)。"""
     matched = predicates.evaluate(doc, {"kind": "face", "where": []})
@@ -431,6 +453,26 @@ def test_an_invalid_predicate_leaves_the_selection_untouched(doc: Document):
 
     with pytest.raises(ValueError):
         selection.propose_selection(doc, predicate={"kind": "edge", "where": [{"op": "nope"}]})
+
+    after = selection.get_selection(doc)
+    assert [dict(item) for item in after.items] == before
+    assert after.origin == selection.ORIGIN_USER
+
+
+def test_a_predicate_that_fails_at_evaluation_also_leaves_the_selection_untouched(doc: Document):
+    """**`validate` を通ってから落ちる述語**でも選択は変わらない(A2のQAが指摘した穴)。
+
+    上のテストは `validate` 段階で落ちる例しか見ていない。`on_boundary_of_face` の
+    範囲外は形式としては正しく、**実際に形状を見るまで分からない**ので、
+    「全条件を検査してから評価する」が効いているかはこちらでしか確かめられない。
+    """
+    selection.modify_selection(doc, add=[selection.select_edge(doc, "box", 1)])
+    before = [dict(item) for item in selection.get_selection(doc).items]
+
+    bad = {"kind": "edge", "where": [{"op": "on_boundary_of_face", "face": 99}]}
+    predicates.validate(bad)  # 形式としては正しい(ここでは落ちない)
+    with pytest.raises(ValueError):
+        selection.propose_selection(doc, predicate=bad)
 
     after = selection.get_selection(doc)
     assert [dict(item) for item in after.items] == before

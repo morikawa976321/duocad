@@ -1099,6 +1099,19 @@ def edge_of(shape: "TopoDS_Shape", edge_index: int) -> Any:
     return _edge_at(_edge_map(shape), edge_index)
 
 
+def edge_index_of(shape: "TopoDS_Shape", edge: Any) -> int:
+    """辺が形状の何番目か(1始まり)を `IsSame` で返す。無ければ ValueError。
+
+    build123d の列挙順が `_edge_map` と一致する保証は無いので、`query.edges_of_face` は
+    形状の同一性で引き当てる(既存の `edge_of` / `edge_count` のふるまいは変えない)。
+    """
+    shape_map = _edge_map(shape)
+    for index in range(1, shape_map.Extent() + 1):
+        if shape_map.FindKey(index).IsSame(edge):
+            return index
+    raise ValueError("edge is not part of the shape")
+
+
 def _edge_at(shape_map: "TopTools_IndexedMapOfShape", edge_index: int) -> Any:
     """既に作った辺マップから引く(まとめて引くときにマップを作り直さないため)。"""
     if not 1 <= int(edge_index) <= shape_map.Extent():

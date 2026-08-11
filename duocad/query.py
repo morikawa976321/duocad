@@ -44,7 +44,7 @@ from typing import Any
 # `Compound.cast` は TopoDS_Shape の実型を見て正しいラッパ型へ振り分ける classmethod で、
 # ソリッドを渡せば Solid、コンパウンドを渡せば Compound が返る(2026-08-10実測)。
 # 基底の `Shape.cast` は抽象メソッドで None を返すため使えない。
-from build123d import Compound, Edge
+from build123d import Compound, Edge, Face
 
 from . import kernel
 
@@ -123,15 +123,40 @@ def describe_faces(shape: Any) -> list:
 
     1. **添字は `kernel` の数え方に揃える**(`face_count` / `face_of`)。ここがずれると
        「選んだ面と違う面が押される」という、例外も出ない静かな事故になる。
-    2. **法線は外向きに揃える**(面の向きが `TopAbs_REVERSED` なら反転する)。
-       `kernel.tessellate` の `faces[].normal` と同じ約束であり、立方体なら
-       `normal·Z > 0.9` を満たす面は**上面のちょうど1枚**になる。向きを揃えないと
-       底面も +Z を向き、`faces where normal·Z > 0.9` が2枚返る(§5の例が壊れる)。
+    2. **法線は外向きである**。`kernel.tessellate` の `faces[].normal` と同じ約束で、
+       立方体なら `normal·Z > 0.9` を満たす面は**上面のちょうど1枚**になる。向きが
+       揃っていないと底面も +Z を向き、`faces where normal·Z > 0.9` が2枚返る
+       (§5の例が壊れる)。
+
+       **実装は build123d の `Face.normal_at()` に任せている**(2026-08-11実測: 面の向きを
+       自前で見て反転する処理は要らない —— `BRepPrimAPI_MakeBox` は底面を
+       `TopAbs_REVERSED` で持つが、`normal_at()` はその向きを織り込んだ外向きを返し、
+       `kernel.tessellate` の値と一致した)。**自分でもう一度反転すると二重になる。**
+       ただし tessellate 側とは別のコードパスなので、**どちらかだけ壊れると述語だけが
+       静かにずれる**(2026-08-11のQA指摘)。`test_faces_can_be_selected_by_normal` と
+       `test_predicates.py` の `_top_face_index`(tessellate 由来)が同じ面を指すことで、
+       両経路の一致が毎回検査される —— この対応関係を壊さないこと。
 
     曲面の `normal` / `center` は面の中央(UV範囲の中点)での値であり、平面以外では
     「その面を代表する1つの向き」でしかない。述語で曲面を厳密に選ぶ用途には使わない。
     """
-    raise NotImplementedError("A2で実装する(スタブ)")
+    raw = _unwrap(shape)
+    described = []
+    for index in range(1, kernel.face_count(raw) + 1):
+        face = kernel.face_of(raw, index)
+        wrapped = Face(face)
+        normal = wrapped.normal_at()
+        center = wrapped.center()
+        described.append(
+            {
+                "index": index,
+                "kind": kernel.classify_face(face),
+                "area": float(wrapped.area),
+                "normal": [float(normal.X), float(normal.Y), float(normal.Z)],
+                "center": [float(center.X), float(center.Y), float(center.Z)],
+            }
+        )
+    return described
 
 
 def edges_of_face(shape: Any, face_index: int) -> list:
@@ -147,7 +172,12 @@ def edges_of_face(shape: Any, face_index: int) -> list:
     添字は `kernel.edge_count` / `kernel.edge_of` と同じ1始まりで、
     `describe_edges` の `index` および `fillet(edges=[...])` の添字と一致する。
     """
-    raise NotImplementedError("A2で実装する(スタブ)")
+    raw = _unwrap(shape)
+    face = Face(kernel.face_of(raw, face_index))
+    indexes = {
+        kernel.edge_index_of(raw, edge.wrapped) for edge in face.outer_wire().edges()
+    }
+    return sorted(indexes)
 
 
 def _wrap(shape: Any):
