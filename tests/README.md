@@ -1530,3 +1530,303 @@ docstringに注意を書く」と指示していたが、`BRepCheck` が偽に�
 線分・円・**円弧**・長方形・**矩形反復**・**円形反復**・押し出し（結合/切取）・面押し出し・
 **フィレット**・**面取り** ＋ 寸法の数値入力・既存面へのスケッチ・領域検出。
 **残るのは受入テスト（M5）と M4本体（MCPによる交互操作＝選択の提案・修正）。**
+
+---
+
+# A — 選択集合をコアの第一級オブジェクトにする（2026-08-11追記・テスト先行の段階）
+
+`tests/test_selection.py`（項番1〜14）と `tests/test_predicates.py`（項番15〜20）が正。
+実装計画書 **§2.1（交互操作と選択の5条件）／§3.5（Selection のデータモデル）／§5（API）／§8b の A**。
+
+**このタスク（A1）は契約だけを書き、実装は A2 が入れる。** 契約タスク完了時点で
+新規77件のうち **71件が赤・6件が緑**（緑の6件は M3.5 で実装済みの `select_face` /
+`selectable_bodies` / `Document` の周辺を見るもの）。既存297件は1行も触っていない。
+**赤はすべて `NotImplementedError("A2で実装する(スタブ)")` である**（実測。他の理由で
+落ちているものは無い ＝ テストの書き間違いで赤くなっているものが混ざっていない）。
+
+## 何を成立させるためのものか
+
+**交互操作（AIが選択を提案 → 人が過不足を直す → AIが適用）の唯一の必要条件**が
+「選択集合が第一級の共有オブジェクトであること」である。M1の実装は**選択の正がブラウザ側**に
+あり、AIからは読むことも書くこともできなかった（M1のQAが2回とも指摘し、
+「M4の交互操作の前に払う債務」として持ち越されていた）。ここを払うのがAである。
+
+満たすべき5条件（§2.1）: **永続 ／ 双方向（AIが書ける）／ 種別を保持 ／ 差分編集可能 ／
+出所を区別（提案か確定か）**。
+
+## モジュール一覧（Aで増える分）
+
+| モジュール | 状態 | 役割 |
+|---|---|---|
+| `duocad/selection.py` | M3.5から拡張・**スタブ** | `Selection` と選択API。人のポインティング側の入口も持つ |
+| `duocad/predicates.py` | **新規・スタブ** | 述語による選択（AIが引数を作る側の入口） |
+| `duocad/query.py` | `describe_faces` / `edges_of_face` を**スタブ**追加 | 面の法線・面積、面と辺の関係 |
+| `duocad/document.py` | `self.selection` を追加（実装済み） | 選択の置き場所 |
+| `duocad/server.py` | `Session` の選択5メソッドを**スタブ**追加 | イベント発火の口 |
+
+## `duocad/selection.py` — 選択集合
+
+    Selection（dataclass）
+      items  : [ShapeRef | RegionRef]      追加順を保つ
+      origin : "user" | "proposed"         **集合単位**（項目ごとではない）
+      to_dict() -> {"items","origin","count"}
+      is_proposed() -> bool
+
+    get_selection(doc)                       -> Selection   読むだけ（発火しない）
+    propose_selection(doc, refs=|predicate=) -> Selection   置き換え・origin="proposed"
+    modify_selection(doc, add=(), remove=()) -> Selection   差分編集・origin="user"
+    commit_selection(doc)                    -> Selection   中身は変えず origin="user"
+    clear_selection(doc)                     -> Selection   空に（origin="user"）
+    confirmed_items(doc, kind=None)          -> [ref]       **proposed なら ValueError**
+    edge_indices(doc, body_id=None)          -> [int]       fillet/chamfer へそのまま渡せる形
+    select_face / select_edge / select_vertex / select_region -> ref
+    ref_kind(ref) -> "face"|"edge"|"vertex"|"region"        種別判定の唯一の場所
+    same_ref(a, b) -> bool                                  重複除去と remove が共有する判定
+
+`ShapeRef` は §3.5 のとおり `{"body","kind","index","provenance"}`、`RegionRef` は
+`{"sketch","index","provenance"}`。**添字は `kernel` の数え方（1始まり）に揃える** —
+ここがずれると「選んだ辺と違う辺が丸まる」という、例外も出ない静かな事故になる
+（`query.describe_edges` の警告と同じ）。
+
+**領域も選択集合の第一級の項目である**（参照を作れるだけでは足りない）。ただし
+`RegionRef` は §3.5 のデータモデルどおり **`kind` キーを持たない**ので、種別は
+`"sketch"` キーの有無から導く（`ref_kind`。定数は `REGION_KIND = "region"`、
+`kind=` に渡せる全体は `SELECTABLE_KINDS`）。判定を1箇所に集めるのは、
+`confirmed_items` の絞り込みと `same_ref` の等価判定が別々の規則を持ち始めるのを防ぐため。
+
+**`select_region` は M2 の `duocad.region` を使い回す** —— 参照そのものは
+`region.region_ref(sketch_id, index).to_dict()` が作り、範囲は
+`region.regions(doc, sketch_id)` を**その場で数え直して**検査する（領域は計算されるもので、
+図形を1本足しただけで個数が変わる）。ここで別形式のdictを組み立て直すと、
+操作ログの `selection` に2つの形が混ざる。存在しないスケッチは KeyError
+（`sketch.get_sketch` に合わせる）、範囲外の添字は ValueError。
+
+**参照が不正なときの例外は `select_*` と揃える** —— 形が不正（必須キーの欠落・未知の
+`kind`・範囲外の添字）なら ValueError、存在しないBodyなら KeyError。どこが悪いかで
+例外が変わらないと、呼び出し側（MCP）がAIへ返す説明を作れない。**`propose_selection` と
+`modify_selection` の両方に同じ契約がかかる**（`modify` は人が触る主経路なので、
+ここを素通りさせるとUIの実装ミスが壊れた参照として選択に紛れ込む）。
+
+**既に入っている参照を再度 add しても位置は動かさない**（末尾へ移し替えない）。
+人が同じものをもう一度クリックしただけで一覧の並びが変わると、`fillet` の辺リストと
+半径リストの対応も一緒にずれる。
+
+## 設計上の決定事項（タスクファイルの【要決定】への回答）
+
+### 1. 選択の置き場所は `Document.selection`（コアの状態）
+
+§2の図で、選択集合は文書・操作ログと**並んで**コアに置かれている。アプリ層に持たせると
+AIから読み書きできず、交互操作が原理的に閉じない。`document.py` → `selection.py` は
+`OpLog` と同じく**遅延import**で循環を避ける。
+
+### 2. `origin` は集合単位。`pending: bool` は採らない
+
+タスクファイルの案は「選択集合が `pending: bool` を持つ」だったが、**§3.5のデータモデルが
+`origin: "user" | "proposed"` と定めている**のでそちらに合わせた。UI側の要件も
+「AIの提案は見た目が違い、承認操作がある」＝集合まるごとの見た目であり、項目ごとに
+出所を持つ必要は現時点で無い（必要になったら `ShapeRef` 側に足せる。逆は難しい）。
+
+### 3. 遷移規則 — **人が触ること自体が承認**
+
+| API | 呼ぶ主体 | 遷移後の `origin` |
+|---|---|---|
+| `propose_selection` | AI | `"proposed"` |
+| `modify_selection` | 人（差分編集） | `"user"` |
+| `commit_selection` | 人（中身を変えずに承認）／AI（自分の提案を実行する前の1手） | `"user"` |
+| `clear_selection` | どちらでも | `"user"`（空集合の origin は常に user） |
+
+`modify_selection` を "proposed" のままにしない理由: 人が中身を見て直したのに、
+実行するのに**もう1回「承認」ボタンを押させる**ことになり、往復に無意味な1手が増える。
+§5のAPI一覧でも `propose_selection` が「**提案**状態で書き込む」経路として名指しされており、
+`modify_selection` は人の差分編集の側にある。
+
+### 4. `pending` のまま verb を適用してよいか → **黙って通さない（禁止ではない）**
+
+`confirmed_items(doc)` が `origin == "proposed"` のとき ValueError を送出する。
+これが提案と確定の区別を**実際に効かせている唯一の場所**である。
+
+AIが自分の提案を実行したいときは `commit_selection()` を明示的に呼べばよい。
+**完全禁止にしなかった**のは、人が居ない場面（AI単独でモデルを作る）で提案→実行の経路が
+塞がると、§0の到達表「19操作 × AI」が埋まらなくなるため。明示の1手を踏ませることで、
+「提案のまま適用された操作」が後から区別できなくなる事故だけを防ぐ（§6予防6の
+「黙って通さない」であって、機能の禁止ではない）。
+
+### 5. 述語は**構造化（JSON）**。DSL文字列は採らない
+
+    {"kind": "edge",
+     "body": "part-3",                       # 省略時は**可視Body全部**
+     "where": [{"op": "parallel_to", "axis": "Z"},
+               {"op": "length_gt", "value": 20}]}
+
+`where` は **AND**。空リストはその種別の全部。**ORは持たない** — 論理演算子を足した時点で
+述語言語のパーサを書き始めることになる。ORが要るときは2回評価して
+`modify_selection(add=...)` で足す（差分編集があるので表現力は落ちない）。
+
+DSL文字列を採らない理由は **MCPのツールがスキーマを持つ**こと。構造化引数ならスキーマ検証が
+効き、AIが書式を外した瞬間に落ちる。文字列DSLは「パースに成功して意味が違う」＝
+**黙って別の辺を丸める**という最悪の失敗を作りうる。
+
+使えるop（`predicates.describe_ops()` が唯一の正。F1のMCPスキーマはここから作る）:
+
+| kind | op | 引数 |
+|---|---|---|
+| face | `normal_dot_gt` | `axis`（"X"/"Y"/"Z" または3要素）, `value` |
+| face | `area_gt` | `value` |
+| face | `kind_is` | `value`（`kernel.classify_face` の種別） |
+| edge | `parallel_to` | `axis` |
+| edge | `length_gt` / `length_lt` | `value`（**厳密な不等号**。境界を含まない） |
+| edge | `kind_is` | `value` |
+| edge | `on_boundary_of_face` | `face`（面の1始まり添字）← **関係述語** |
+
+`on_boundary_of_face` は「上面の外周を丸める」に直結するので必須（項番17）。
+返すのは**外周（outer wire）だけで、面に空いた穴の縁は含めない** —
+外周を丸めたつもりの操作が黙って穴まで変えないため（穴の縁を丸めるとトーラスになる。
+`test_fillet.py` 項番3で実測済み）。**貫通穴を開けた箱で対照している** —
+穴の無い形だけで検査すると、面の全ワイヤを返す誤実装が緑のまま通る。
+
+`face` は **Body局所の1始まり添字**である。したがって可視Bodyが複数あるときは
+`body` の指定が要る（無ければ ValueError）。「全Bodyの3番目の面」という解釈は取らない —
+部品ごとに面の数え方は無関係で、その集合には意味が無いため。
+
+### 6. 0件一致と不正な述語は**別物**（項番19・20）
+
+- **0件はエラーではない**。空集合を返し、`Selection.to_dict()["count"]` で件数が分かる。
+  AIが述語を外したことに気づけないと、交互操作は人が画面を見るまで黙って止まる。
+- **不正な述語は ValueError で、選択を変更しない**。実装は
+  「**全条件を検査してから評価する**」順序でこれを守ること（途中まで評価して落ちる作りだと、
+  守れるかどうかが実装の偶然になる）。黙って空集合を返すと上の2つが区別できなくなる。
+- `body` を明示して**不可視Body**を指した場合も ValueError（「指定したのに0件」と
+  「見えないので対象外」はAIから区別が付かない）。
+
+### 7. 選択の変更は**操作ログに積まない**が、**イベントは発火する**（非対称）
+
+| | 文書を変えるか | ログに載るか | イベント |
+|---|---|---|---|
+| 選択の変更 | いいえ | **載らない** | **発火する** |
+| `set_visible` | はい（`Body.visible`） | **載る**（undoで戻る） | 発火する |
+
+選択をログに載せない理由は、undoの単位（§2「verbの粒度」＝undo1回で消える単位）を
+汚さないため。選択し直すたびにundo1手を消費する編集は使い物にならない。
+一方、ログに載らないことと「アプリ層に知らせない」ことは**別**である。
+
+### 8. イベントは**既存の上り方向にそのまま乗せる**（別系統を新設しない）
+
+`set_visible` で実証済みの経路は
+**`Session._emit` → `add_listener` の購読者（`Server._on_core_change`）→ 全接続へ配信**。
+選択も同じ購読者リストに乗せる（購読をやめれば両方止まる、で検査している）。
+
+イベントの形（verbの `applied` とは**キーで区別**する。選択はverbではない）:
+
+    {"change": "selection",
+     "selection": {"items": [...], "origin": "user"|"proposed", "count": int},
+     "client_op": int | None}
+
+`Session` の**戻り値**は `set_visible` と同じ流儀 —— 変更する4メソッドは `_emit(...)` の戻り
+＝**発火したイベントそのもの**を返し、`get_selection` だけは発火せず
+`Selection.to_dict()`（`{"items","origin","count"}`）を返す。**この2つは形が違う**ので、
+呼び出し側は `["selection"]` を挟むかどうかを取り違えないこと。
+`client_op` はそのまま載せて返す（出し手のいないMCP起点の変更では `None`）。
+
+**加えて `Session.state_meta()` に `"selection"` を載せること。** `Server._on_core_change` は
+MCP起点の変更から `applied` を落として配る（`applied` は操作を出したクライアントへの
+確認応答なので他人の操作に付けられない）ため、**状態に載っていないとAIが書き換えた選択は
+画面へ届かない**。`set_visible` の効果が `bodies[].visible` で届いているのと同じ場所である。
+イベントだけ実装して状態に載せないと、**AI→人の方向だけが黙って死ぬ**
+（人→AIは動くので、テストが無ければ気づけない）。
+
+## 期待値の出どころ
+
+30×30×40 の直方体（`BRepPrimAPI_MakeBox`）。面6・辺12・頂点8。
+上向きの面（法線·Z > 0.9）は**1枚**、その外周は長さ30の辺4本、Zに平行な辺は長さ40の4本。
+立方体にしなかったのは、3辺の長さが違えば「Zに平行な辺だけ」を選ぶ述語が長さでも
+区別でき、**添字の偶然の一致でテストが通る余地が減る**ため。
+
+**添字は決め打ちにせず毎回導く** — 上面は `kernel.tessellate` の外向き法線から、
+辺の長さは `query.describe_edges` から取る（決め打ちは、分解や数え方の細部が変わったときに
+テストが静かに別の実体を見に行く）。
+
+## A1で**契約にしなかった**こと（範囲の明示）
+
+- **形が変わったときの添字の付け替え**。選択は操作をまたいで保持されるが、押し出しの後に
+  同じ添字が別の面を指しうる（§3.5「indexは現時点の添字であって、再生時に信用してはならない」）。
+  これを解くのは `provenance` の空スロット（§6予防2）であり、Aの範囲外。
+  **A2も付け替えを実装しないこと**（中途半端な再解決は、壊れていることが分からなくなる分だけ悪い）。
+- **MCPツールとしての公開**は F1/F2。ここはコアのAPIまで。
+- **UI側（`web/`）** は B。確定選択と提案を見た目で区別して描くのも B。
+- **領域の述語**（スケッチの領域を条件で選ぶ）。`select_region` で参照は作れるが、
+  `predicates` の `kind` は face / edge だけ。
+
+## テスト一覧とタスクファイル項番の対応（A1）
+
+| 項番（タスクファイル） | テスト |
+|---|---|
+| 1（種別を保持） | `test_each_kind_of_reference_keeps_its_kind` / `test_shape_refs_have_the_shape_of_the_spec` / `test_regions_can_be_selected_with_a_region_ref` / `test_selecting_a_region_validates_the_sketch_and_the_index` / **`test_regions_go_into_the_selection_like_any_other_kind`** / `test_confirmed_items_rejects_an_unknown_kind` |
+| 2（差分編集） | `test_modify_selection_adds_and_removes_without_rebuilding` / `test_remove_wins_when_the_same_reference_is_added_and_removed` / `test_modify_selection_refuses_a_malformed_ref` |
+| 3（重複しない） | `test_adding_the_same_reference_twice_does_not_duplicate`（位置も動かないこと込み） / `test_the_same_index_on_two_bodies_is_not_a_duplicate` |
+| 4（空にできる） | `test_clear_selection_empties_it` |
+| 5（操作をまたいで残る） | `test_selection_survives_an_operation` |
+| 6（ログに載らない） | `test_changing_the_selection_does_not_touch_the_operation_log` ＋ 対照の `test_set_visible_still_lands_in_the_log` |
+| 7（保存されない） | `test_selection_is_not_saved` |
+| 8（提案として区別） | `test_proposed_items_are_distinguishable` |
+| 9（**交互操作そのもの**） | `test_the_ai_proposes_the_human_fixes_and_the_ai_reads_it_back` |
+| 10（commitで確定） | `test_commit_selection_confirms_without_changing_the_items` / `test_commit_selection_is_idempotent` |
+| 11（決めた遷移規則） | `test_human_editing_a_proposal_confirms_it` / `test_a_proposal_cannot_be_fed_to_a_verb` |
+| 12（発火する） | `test_changing_the_selection_fires_a_change_event` / `test_every_selection_api_fires_exactly_one_event` |
+| 13（描き直すのに足る） | `test_the_event_carries_enough_to_redraw` / `test_the_event_carries_the_client_op_back` |
+| 14（既存の上り方向） | `test_selection_events_ride_the_same_up_path_as_set_visible` / `test_selection_is_part_of_the_pushed_state` / `test_the_event_does_not_pretend_to_be_a_verb` |
+| 15（述語で面） | `test_faces_can_be_selected_by_normal` ほか |
+| 16（述語で辺） | `test_edges_can_be_selected_by_direction_and_length` / `test_length_conditions_are_strict_comparisons` / `test_results_group_by_body_in_document_order` |
+| 17（関係述語） | `test_edges_on_the_boundary_of_a_face_can_be_selected` / **`test_the_boundary_excludes_the_rim_of_a_hole`** / `test_the_boundary_of_the_bottom_face_is_a_different_set` / `test_the_relation_predicate_refuses_to_guess_which_body` / `test_the_boundary_of_a_face_is_ready_for_fillet` |
+| 18（不可視は対象外） | `test_hidden_bodies_are_not_scanned_by_predicates` / `test_naming_a_hidden_body_explicitly_is_an_error` |
+| 19（0件はエラーでない） | `test_zero_matches_is_not_an_error` / `test_the_caller_can_see_the_match_count` |
+| 20（不正な述語・不正な参照） | `test_invalid_predicates_are_rejected`（9通り） / `test_an_invalid_predicate_leaves_the_selection_untouched` / **`test_a_malformed_ref_is_refused_without_touching_the_selection`**（5通り） |
+
+## QAで足した契約（2026-08-11・cursor auto のレビュー指摘を反映）
+
+QAは `gpt-5.6-sol-high` を試したが**月次の使用量上限**（8/19リセット）で呼べず、
+**cursor の auto 枠**でレビューした。1ラウンド目の判定は**不合格**で、major 2件・minor 6件。
+**全件対応済み**（この節の内容がその結果）。
+
+- **major: `select_region` の契約とテストが両立していなかった** … docstringは
+  「存在しないスケッチは KeyError・範囲外は ValueError」と書いているのに、テストは
+  スケッチも領域も無い空の `Document` で成功することを要求していた。**契約側を正とし**、
+  テストを実際のスケッチ（半径20の円＝領域1個）で組み直した。あわせて、M2の
+  `region.region_ref` / `region.regions` を使い回す旨を明記した（別形式のdictを作ると
+  操作ログの `selection` に2つの形が混ざる）。
+- **major: 項番1の「領域」が実際には検証されていなかった** … 参照の形しか見ておらず、
+  領域を `modify_selection` へ入れる経路が1本も無かった。差分編集・重複除去・種別での
+  絞り込みまで通すテストを足し、`RegionRef` が `kind` キーを持たない問題を
+  `ref_kind` / `REGION_KIND` で解いた（**この穴はQAが見つけるまで気づいていない**）。
+- minor: 項番7のアサーションが弱い（新しい文書の選択が空、しか見ていなかった）→
+  **保存されたJSONが選択を運んでいないこと**を本体の検査にした。
+- minor: 述語の順序契約が1Bodyでしか検査されておらず「Body順」が壊れても落ちなかった →
+  2Bodyのテストを追加。
+- minor: 関係述語が「件数4・長さ30」しか見ておらず、**底面の外周でも緑になりえた**
+  （直方体は上下が合同）→ 端点のZまで固定し、底面との排他も対照実験にした。
+- minor: 不正な**参照**（不正な述語ではなく）の契約にテストが無かった → 5通り追加し、
+  例外の種類を `select_*` と揃えることを明文化。
+- minor: `Session` の選択メソッドの**戻り値**が書かれていなかった → イベントそのものを
+  返す（`get_selection` だけ `to_dict()`）と明記。
+- minor: `client_op` が契約に書いてあるのにテストが無かった → 追加。
+
+2ラウンド目は上の8件の解消を確認したうえで **major 1件・minor 4件**。**全件対応済み**:
+
+- **major: 「外周のみ」を契約に書きながら、穴の無い形でしか検査していなかった** …
+  面の**全ワイヤ**を返す誤実装でも「件数4・長さ30・Z=40」で緑になる。1ラウンド目の
+  「底面でも緑」と同型の穴を、指摘の側が自分で一般化して見つけている。
+  **貫通穴を開けた箱**（duocadのverbだけで作る）で対照を足した。
+- minor: 不正な参照の失敗契約が `propose_selection` にしか無かった（`modify_selection` は
+  人が触る主経路）→ 両方にかかる契約として明文化し、テストを追加。
+- minor: 重複 add したときの**位置**が未固定だった → 「動かさない」と決めて固定。
+- minor: 関係述語の `face` が Body局所の添字かどうか書かれておらず2通りに読めた →
+  Body局所と決め、可視Bodyが複数なら `body` 必須（無ければ ValueError）とした。
+- minor: `server.py` 冒頭の `state()` の形の記述に `selection` が無く、A節の決定と
+  食い違っていた → 追記（**A1時点ではまだ載っていない**ことも明記）。
+
+## 実行方法（A）
+
+```
+.venv\Scripts\python.exe -m pytest tests/test_selection.py tests/test_predicates.py -q
+```
+
+**素の `python` は使わない** — `OCP` を持たない別環境で、収集エラーになる（2026-08-11実測）。

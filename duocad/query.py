@@ -113,6 +113,43 @@ def describe_edges(shape: Any) -> list:
     return described
 
 
+def describe_faces(shape: Any) -> list:
+    """面を1始まりの添字つきで列挙する(A1で追加・**述語による面の選択が食う**)。
+
+    戻り値: `[{"index": int, "kind": str, "area": float, "normal": [x,y,z],
+              "center": [x,y,z]}, ...]`
+
+    `describe_edges` の面版であり、同じ2つの規律に従う:
+
+    1. **添字は `kernel` の数え方に揃える**(`face_count` / `face_of`)。ここがずれると
+       「選んだ面と違う面が押される」という、例外も出ない静かな事故になる。
+    2. **法線は外向きに揃える**(面の向きが `TopAbs_REVERSED` なら反転する)。
+       `kernel.tessellate` の `faces[].normal` と同じ約束であり、立方体なら
+       `normal·Z > 0.9` を満たす面は**上面のちょうど1枚**になる。向きを揃えないと
+       底面も +Z を向き、`faces where normal·Z > 0.9` が2枚返る(§5の例が壊れる)。
+
+    曲面の `normal` / `center` は面の中央(UV範囲の中点)での値であり、平面以外では
+    「その面を代表する1つの向き」でしかない。述語で曲面を厳密に選ぶ用途には使わない。
+    """
+    raise NotImplementedError("A2で実装する(スタブ)")
+
+
+def edges_of_face(shape: Any, face_index: int) -> list:
+    """その面の**外周**を成す辺の添字を昇順で返す(A1で追加・**関係述語**の実体)。
+
+    「上面の外周を丸める」——フィレットの最も実用的な使い方——が、これ無しでは
+    述語で表現できない(添字の決め打ちになり、形が変われば別の辺を指す)。
+
+    返すのは外周(outer wire)の辺だけで、**面に空いた穴の縁は含めない**。
+    穴の縁まで一緒に丸めると、外周を丸めたつもりの操作が黙って穴まで変える。
+    穴を対象にする述語が要るようになったら別の `op` として足すこと。
+
+    添字は `kernel.edge_count` / `kernel.edge_of` と同じ1始まりで、
+    `describe_edges` の `index` および `fillet(edges=[...])` の添字と一致する。
+    """
+    raise NotImplementedError("A2で実装する(スタブ)")
+
+
 def _wrap(shape: Any):
     """生の TopoDS_Shape を build123d のラッパへ(既にラッパならそのまま)。"""
     if shape is None:

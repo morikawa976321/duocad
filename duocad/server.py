@@ -47,9 +47,18 @@
       "bodies": [{"body_id","name","kind","visible","revision",
                   "face_count","volume","geometry": <tessellate結果|None>}, ...],
       "log", "can_undo", "can_redo", "applied_count", "measure_log",
+      "selection": {"items": [...], "origin": "user"|"proposed", "count": int},   # A(下記)
     }
     delta(known_revisions) -> {"bodies": [<上と同じ形・版が変わった分だけ>],
                                "unchanged": [BodyId, ...]}
+
+**A(2026-08-11)で `state` に `selection` が入る**(契約は `tests/test_selection.py` と
+tests/README.md の「A」節が正。**A1の時点ではまだ載っていない** —— A2が入れる)。
+`_on_core_change` はMCP起点の変更から `applied` を落として配るので、**選択が `state` に
+載っていないとAIが書き換えた選択はブラウザへ届かない**(`set_visible` の効果が
+`bodies[].visible` で届いているのと同じ場所)。選択の変更イベントは
+`{"change": "selection", "selection": {...}, "client_op": ...}` の形で、verbの `applied`
+とはキーで区別する(選択はverbではなく、操作ログにも載らない)。
 
 **計測ログ(measure_log.jsonl)はサーバが書く**。時刻はブラウザの単調時計
 (`performance.now()`)が正で、区間のms換算はここで一括して行う(クライアントとサーバで
@@ -368,6 +377,59 @@ class Session:
             "visible": bool(visible),
             "changed_bodies": [body_id],
         })
+
+    # ---------------------------------------------------------------- A1: 共有される選択集合
+    #
+    # **`set_visible` と同じ上り方向に乗せる**(別系統を新設しない)。
+    # 変更 → `Session._emit` → `add_listener` の購読者(`Server._on_core_change`) → 全接続へ配信。
+    #
+    # ただし `set_visible` の効果がブラウザへ届くのは `applied` ではなく
+    # **`state_meta()["bodies"][].visible`** 経由である(MCP起点の変更では `applied` を
+    # 落として配るため。`Server._on_core_change` のdocstring)。選択も同じで、
+    # **`state_meta()` に `"selection"` を載せない限りAIが書き換えた選択は画面へ届かない**。
+    # A2はイベントと状態の両方を通すこと(片方だけだと交互操作が片道になる)。
+    #
+    # 発火するイベントの形(verbの `applied` とはキーで区別する。選択はverbではない):
+    #     {"change": "selection",
+    #      "selection": {"items": [...], "origin": "user"|"proposed", "count": int},
+    #      "client_op": int | None}
+    # `selection` を丸ごと載せるのは、**UIが描き直すのに足る情報**(何が選択されたか・
+    # 提案か確定か)をイベント単体で持たせるため(項番13)。
+    #
+    # **戻り値**: 変更する4つは `set_visible` と同じく `self._emit(...)` の戻り —— つまり
+    # **発火したイベントそのもの**を返す(`{"change","selection","client_op"}`)。
+    # `get_selection` だけは発火しないので `Selection.to_dict()`
+    # (`{"items","origin","count"}`)を返す。**この2つは形が違う**ので、
+    # 呼び出し側は `["selection"]` を挟むかどうかを取り違えないこと。
+    def get_selection(self) -> dict:
+        """現在の選択集合を素の値で返す(`Selection.to_dict()`)。発火はしない。"""
+        raise NotImplementedError("A2で実装する(スタブ)")
+
+    def propose_selection(
+        self,
+        refs: Optional[list] = None,
+        predicate: Optional[dict] = None,
+        client_op: Optional[int] = None,
+    ) -> dict:
+        """AIの提案として選択を置き換え、変更イベントを発火して**そのイベント**を返す。"""
+        raise NotImplementedError("A2で実装する(スタブ)")
+
+    def modify_selection(
+        self,
+        add: Optional[list] = None,
+        remove: Optional[list] = None,
+        client_op: Optional[int] = None,
+    ) -> dict:
+        """人の差分編集。足し引きして確定にし、変更イベントを発火して**そのイベント**を返す。"""
+        raise NotImplementedError("A2で実装する(スタブ)")
+
+    def commit_selection(self, client_op: Optional[int] = None) -> dict:
+        """提案を確定する(中身は変えない)。変更イベントを発火して**そのイベント**を返す。"""
+        raise NotImplementedError("A2で実装する(スタブ)")
+
+    def clear_selection(self, client_op: Optional[int] = None) -> dict:
+        """選択を空にする。変更イベントを発火して**そのイベント**を返す。"""
+        raise NotImplementedError("A2で実装する(スタブ)")
 
     def undo(self) -> dict:
         """直前の操作を取り消す。**文書の土台を作った操作は取り消させない**。

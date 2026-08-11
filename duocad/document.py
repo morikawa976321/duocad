@@ -67,6 +67,14 @@ class Document:
         from .oplog import OpLog
 
         self.log = OpLog()
+        # A1追加。実装計画書§2の図で、文書・操作ログと**並んで**コアに置かれているもの。
+        # アプリ層に持たせると交互操作(AIが提案 → 人が直す → AIが適用)が原理的に閉じない。
+        # 遅延import の理由は OpLog と同じ(selection.py が document.py を import する一方向を保つ)。
+        # **保存されない** — 保存の経路は `self.log.to_json()` だけで、選択はログに載らない
+        # (選択の変更は文書を変更しないので操作ログに積まない。duocad/selection.py 参照)。
+        from .selection import Selection
+
+        self.selection = Selection()
 
     @property
     def units(self) -> str:
