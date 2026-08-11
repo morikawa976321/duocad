@@ -114,8 +114,54 @@ class Session:
         self._revision_counter: dict = {}  # body_id -> 現在の版(int)
         self._geometry_cache: dict = {}    # body_id -> (shape, tessellate結果)
         self._setup_floor_seq = 0  # load_step が積んだ最後のseq(これ以下はundoの対象外)
+        self._listeners: list = []  # 文書が変わったときに呼ぶ購読者(下記 add_listener)
         if step_path is not None:
             self.load_step(step_path)
+
+    # ---------------------------------------------------------------- 変更イベント(上り方向)
+    def add_listener(self, callback: Any) -> None:
+        """文書が変わったら `callback(applied: dict)` で知らせる(M4・2026-08-11)。
+
+        **コアが変更を発火し、アプリ層が購読して描き直す**(実装計画書§2「外しては
+        いけない3つ」の2番目)。これが無いと、**WebSocket経由以外の主体**——MCPサーバ
+        (`duocad/mcp_server.py`)からAIが文書を変えたとき——にブラウザが何も知らないまま
+        古い絵を出し続け、交互操作が原理的に成立しない。
+
+        購読者は `Server`(WebSocket)。1つの操作につき1回だけ呼ばれる。
+        """
+        self._listeners.append(callback)
+
+    def remove_listener(self, callback: Any) -> None:
+        """購読をやめる。登録されていなければ ValueError(黙って空振りさせない)。
+
+        文書は接続より長生きするので、`Server` を作り直す運用(テスト・再起動)で
+        古い購読者が残ると、既に閉じたループへ配信しようとして警告が溜まる。
+        """
+        self._listeners.remove(callback)
+
+    @property
+    def can_undo(self) -> bool:
+        """次のundoが通るか。**土台(部品の読み込み・編集用ボディ)は取り消せない**。
+
+        `state_meta()` と MCP の `describe_document` が同じ答えを返すための唯一の出どころ
+        (2026-08-11のQA指摘: MCP側が `document.log.can_undo` を素で見ていたため、
+        土台の直後に「undoできる」と答えてしまい、実際に呼ぶと拒否される食い違いがあった)。
+        """
+        return self.document.log.can_undo and not self._at_setup_floor()
+
+    def _emit(self, applied: dict) -> dict:
+        """購読者へ変更を知らせて `applied` をそのまま返す(呼び出し側は `return self._emit(...)`)。
+
+        **1人の購読者が落ちても他へ配り、操作自体は成功のままにする** — 通知の失敗で
+        既に確定した文書の変更を巻き戻すことはできないため。落ちたことは警告として残す
+        (黙って握りつぶさない。§6予防6)。
+        """
+        for callback in list(self._listeners):
+            try:
+                callback(applied)
+            except Exception as error:
+                self.warnings.append(f"変更イベントの配信に失敗: {type(error).__name__}: {error}")
+        return applied
 
     # ---------------------------------------------------------------- 文書の組み立て
     def load_step(self, path: Path) -> list:
@@ -185,7 +231,7 @@ class Session:
                 {"seq": operation.seq, "verb": operation.verb, "args": operation.args}
                 for operation in self.document.log.entries
             ],
-            "can_undo": self.document.log.can_undo and not self._at_setup_floor(),
+            "can_undo": self.can_undo,
             "can_redo": self.document.log.can_redo,
             "applied_count": self._applied_count,
             "measure_log": str(self.measure_log_path),
@@ -293,7 +339,7 @@ class Session:
             self._server_ms[int(client_op)] = round(elapsed_ms, 3)
         provenance = operation.provenance or {}
         changed_body_id = operation.args["body_id"]
-        return {
+        return self._emit({
             "verb": operation.verb,
             "seq": operation.seq,
             "client_op": client_op,
@@ -303,7 +349,7 @@ class Session:
             "after_face_index": provenance.get("after_face_index"),
             "server_ms": round(elapsed_ms, 3),
             "changed_bodies": [changed_body_id],
-        }
+        })
 
     def set_visible(self, body_id: str, visible: bool, client_op: Optional[int] = None) -> dict:
         """パーツ一覧からの表示・非表示切り替え。**コアの `set_visible` verbを呼ぶだけ**
@@ -314,14 +360,14 @@ class Session:
         """
         operation = set_visible_verb(self.document, body_id, bool(visible))
         self._applied_count += 1
-        return {
+        return self._emit({
             "verb": operation.verb,
             "seq": operation.seq,
             "client_op": client_op,
             "body_id": body_id,
             "visible": bool(visible),
             "changed_bodies": [body_id],
-        }
+        })
 
     def undo(self) -> dict:
         """直前の操作を取り消す。**文書の土台を作った操作は取り消させない**。
@@ -340,13 +386,13 @@ class Session:
         operation = self.document.log.undo(self.document)
         if operation is None:
             raise ValueError("取り消せる操作が無い")
-        return {"verb": "undo", "undone": operation.verb, **_selection_hints(operation)}
+        return self._emit({"verb": "undo", "undone": operation.verb, **_selection_hints(operation)})
 
     def redo(self) -> dict:
         operation = self.document.log.redo(self.document)
         if operation is None:
             raise ValueError("やり直せる操作が無い")
-        return {"verb": "redo", "redone": operation.verb, **_selection_hints(operation)}
+        return self._emit({"verb": "redo", "redone": operation.verb, **_selection_hints(operation)})
 
     # ---------------------------------------------------------------- 計測
     def append_measure_record(self, record: dict) -> dict:
@@ -486,6 +532,15 @@ class Server:
     def __init__(self, session: Session) -> None:
         self.session = session
         self.clients: set = set()
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # WebSocket経由の操作を処理している最中か(`_on_core_change` の二重配信よけ)。
+        # `Session` の操作メソッドは同期なので、この印は「その1回の呼び出しの間」だけ立つ。
+        self._dispatching = 0
+        # 進行中の配信タスク(捨てるとGCされうる。`_spawn_push` 参照)
+        self._pending_pushes: set = set()
+        # **コアの変更を購読する**(M4・2026-08-11)。WebSocket以外の主体(MCPサーバ)が
+        # 文書を変えたとき、ここが全接続へ配信する。これが上り方向の実体。
+        session.add_listener(self._on_core_change)
         self._known_revisions: dict = {}  # connection -> {body_id: revision}
         # 接続ごとの送信ロック。**2つの `_push` 呼び出し(例: 2クライアントがほぼ同時に
         # 操作したとき)が同じ接続への配信で競合するのを防ぐ**(2026-08-11のQA指摘: ロック無しだと
@@ -494,7 +549,68 @@ class Server:
         # されてしまい以後の差分が欠落する、の2通りの事故が起きうる)。
         self._send_locks: dict = {}  # connection -> asyncio.Lock
 
+    def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """配信に使うイベントループを覚える(`run()` と `mcp_server` が起動時に呼ぶ)。
+
+        コアの変更イベントは**同期の呼び出しの中**で飛んでくる(MCPのツールは
+        `Session.set_visible` を素で呼ぶ)ので、そこから非同期の配信を始めるために
+        ループの参照が要る。
+        """
+        self._loop = loop
+
+    def _on_core_change(self, applied: Optional[dict] = None) -> None:
+        """コアが変わった。**WebSocket以外の主体による変更だけ**を全接続へ配信する。
+
+        WebSocket経由の操作は `_dispatch` が自分で `_push` するので、ここで配ると
+        同じ状態を2回送ることになる(帯域だけでなく、`applied` の付いた配信と
+        付かない配信が交錯して画面側の相関が壊れる)。`_dispatching` の印で区別する。
+
+        `applied` を**載せずに**配るのは、MCPからの変更は「誰の操作でもない外からの
+        変化」であり、`applied` は操作を出したクライアントへの確認応答だからである
+        (ブラウザは `applied.client_op` で自分の計測と突き合わせる。他人の操作に
+        付けて送ると、知らない `client_op` を自分のものとして拾う経路ができる)。
+        """
+        if self._dispatching:
+            return
+        loop = self._loop
+        if loop is None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # 配信できないことを**黙って飲み込まない**(次の配信で画面へ出る)。
+                self.session.warnings.append(
+                    "文書が変わったがイベントループが無いため配信できなかった"
+                    "(Server.bind_loop を呼ぶこと)"
+                )
+                return
+        loop.call_soon_threadsafe(lambda: self._spawn_push())
+
+    def _spawn_push(self) -> None:
+        """配信タスクを起こし、**参照を持ち続ける**(2026-08-11のQA指摘)。
+
+        `create_task` の戻りを捨てるとタスクは弱参照でしか繋がらず、途中でGCされうる
+        (公式ドキュメントの警告)。加えて、配信中の例外を誰も回収しないと
+        「Task exception was never retrieved」が出るだけで**ブラウザは古いまま・
+        警告も出ない**という、完了条件3が静かに壊れる形になる。集合で保持し、
+        終わったら外し、落ちていたら警告として残す。
+        """
+        task = asyncio.get_running_loop().create_task(self._push(None, applied=None))
+        self._pending_pushes.add(task)
+
+        def finished(done: "asyncio.Task") -> None:
+            self._pending_pushes.discard(done)
+            if done.cancelled():
+                return
+            error = done.exception()
+            if error is not None:
+                self.session.warnings.append(
+                    f"コア変更の配信に失敗: {type(error).__name__}: {error}"
+                )
+
+        task.add_done_callback(finished)
+
     async def handle(self, connection: Any) -> None:
+        self._loop = self._loop or asyncio.get_running_loop()
         self.clients.add(connection)
         try:
             try:
@@ -528,7 +644,8 @@ class Server:
             if command == "get_state":
                 await self._push(connection, applied=None, only=connection)
             elif command == "extrude_face":
-                applied = self.session.extrude(
+                applied = self._apply(
+                    self.session.extrude,
                     message["face_index"],
                     message["distance"],
                     message.get("client_op"),
@@ -536,12 +653,17 @@ class Server:
                 )
                 await self._push(connection, applied=applied)
             elif command in ("undo", "redo"):
-                applied = self.session.undo() if command == "undo" else self.session.redo()
+                applied = self._apply(
+                    self.session.undo if command == "undo" else self.session.redo
+                )
                 applied["client_op"] = message.get("client_op")
                 await self._push(connection, applied=applied)
             elif command == "set_visible":
-                applied = self.session.set_visible(
-                    message["body_id"], bool(message["visible"]), message.get("client_op")
+                applied = self._apply(
+                    self.session.set_visible,
+                    message["body_id"],
+                    bool(message["visible"]),
+                    message.get("client_op"),
                 )
                 await self._push(connection, applied=applied)
             elif command == "measure_record":
@@ -559,6 +681,19 @@ class Server:
                 },
             )
 
+    def _apply(self, call: Any, *args: Any, **kwargs: Any) -> dict:
+        """WebSocket経由の変更を実行する。この間だけ `_dispatching` を立てる。
+
+        **同期の呼び出しだけを囲む**(`await` を挟まない)。印を配信(`_push`)の間まで
+        立てたままにすると、その待ち時間に届いたMCPからの変更まで
+        「WebSocket経由だから配信不要」と誤判定して黙って捨ててしまう。
+        """
+        self._dispatching += 1
+        try:
+            return call(*args, **kwargs)
+        finally:
+            self._dispatching -= 1
+
     async def _push(self, origin: Any, applied: Optional[dict], only: Any = None) -> None:
         """状態を配信する。`only` を指定するとその接続にだけ送る。
 
@@ -574,29 +709,25 @@ class Server:
         知っている扱いになる」の2通りの事故が起きる。ロックの範囲を1接続ぶんに絞って
         あるので、**別々の接続への配信は並行のまま**(1接続の遅延が他接続を止めない)。
 
-        **既知の残存課題(2026-08-11のQA2回目で指摘・未対応)**: `meta`(`state`)は
-        この関数の先頭で1回だけ作り、全ターゲットで使い回す。2クライアントが同時に操作した
-        とき、後発の `_push` の `deliver()` が先にロックを取って新しい `meta` を送った後、
-        先発の `_push` の `deliver()` が(ロック待ちしていたぶん)後から届いて**古い**
-        `meta` で上書きする経路が理論上ありうる(`_send_locks` は「同じ接続への配信」を
-        直列化するだけで、`_push` 呼び出しをまたいだ新旧の順序までは保証しない)。
-        `deliver()` の中で世代カウンタを比較して古い方を捨てる案も検討したが、
-        `applied`(呼び出し元への確認応答)を持つのは常にその接続**自身**の `_push` であり
-        (`target is origin` のときだけ載る)、1接続からのコマンドは
-        `async for raw in connection` が直列に処理するので自分自身の `_push` 同士は
-        競合しない。したがって影響するのは**他接続の操作による横取り**のみで、
-        M3.5は単一ユーザーを前提にしており(M4のMCP/交互操作で複数主体が同時に操作する
-        ようになって初めて顕在化する)、実害の検証手段(該当するテストも本手動確認の対象も
-        単一クライアント)が無いまま世代カウンタを足すと `applied` を誤って握りつぶす
-        新しい不具合を作りこむ危険の方が大きいと判断し、**このタスクでは対応を見送った**。
-        M4で複数主体が同時に操作するようになったら、この関数を再訪すること。
+        **`state` はロックの中で作る(M4・2026-08-11に修正)**。M3.5ではこの関数の先頭で
+        1回だけ作って全ターゲットへ使い回していた。そのため、後発の `_push` が先にロックを
+        取って新しい `state` を送った後、ロック待ちだった先発の `_push` が**古い** `state` で
+        上書きする経路があった(`_send_locks` は「同じ接続への配信」を直列化するだけで、
+        `_push` 呼び出しをまたいだ新旧の順序は保証しない)。M3.5では
+        「単一ユーザーなので顕在化しない・M4で再訪する」として見送っていたが、
+        **MCPが入って「人とAIが同時に操作する」が実在の経路になった**ので閉じた
+        (2026-08-11のM4のQA指摘)。送る直前に読み直せば、送る値は常にその瞬間の状態であり、
+        古い状態が後から上書きすることが原理的に起きない。`delta` と同じロックの中で作るので
+        `state` と `delta` の食い違いも同時に消える(以前は `state` の方が古くなりえた)。
+        代償は接続数ぶん `state_meta()` を計算すること(27部品で数KB・ローカル1ユーザー)。
         """
-        meta = self.session.state_meta()
         targets = [only] if only is not None else list(self.clients)
 
         async def deliver(target: Any) -> None:
             lock = self._send_locks.setdefault(target, asyncio.Lock())
             async with lock:
+                # **送る直前に**状態を作る(上記docstring: 古い状態が後から上書きするのを防ぐ)
+                meta = self.session.state_meta()
                 known = self._known_revisions.get(target, {})
                 delta = self.session.delta(known)
                 payload = {
@@ -622,12 +753,21 @@ class Server:
         # 全ターゲットぶんの配信(delta計算を含む)を終えてから取り出せば、
         # どのターゲットの分も取りこぼさない(1回のpushで複数回積まれても束ねて1回出す)。
         await asyncio.gather(*(deliver(target) for target in targets))
+        # 警告の宛先は操作を出したクライアント。**MCPからの変更には出し手がいない**
+        # (`origin is None`)ので、その場合は配信先全員へ出す — 出し手がいないことを理由に
+        # 警告を捨てると、AIが操作したときだけ「三角形分割が取れなかった」等が消える。
         for warning in self.session.take_warnings():
-            await _send(origin, {"type": "warning", "message": warning})
+            payload = {"type": "warning", "message": warning}
+            for target in [origin] if origin is not None else targets:
+                try:
+                    await _send(target, payload)
+                except Exception:
+                    self.clients.discard(target)
 
 
 async def run(session: Session, host: str, port: int) -> None:
     server = Server(session)
+    server.bind_loop(asyncio.get_running_loop())
     async with serve(server.handle, host, port, max_size=8 * 1024 * 1024):
         await asyncio.get_running_loop().create_future()  # Ctrl+C まで動かし続ける
 

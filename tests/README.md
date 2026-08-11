@@ -1059,3 +1059,127 @@ docstringに **版は経路ではなく状態（`(形状オブジェクトの同
 （cursorの個別モデル指定枠）は当日どちらも使用量制限に達していて呼べず、**cursor の
 auto 枠**でレビューした。auto は Composer/Grok 系へルーティングされるため「実行者
 （Claude）と別モデル」という条件は満たしている。
+
+---
+
+# M4（最小の先取り） — MCPと上り方向のAPI契約（2026-08-11追記）
+
+**AIが「前面パネルを隠して」と言えるようにする**ためだけの最小の先取り。M4本体（選択の
+提案・修正＝`propose_selection` / `modify_selection` / `apply`）は**範囲外**で、
+`tests/test_mcp.py::test_tools_list_is_exactly_the_minimal_set` がそれを機械的に固定する
+（ツールが3つより増えたら赤になる）。
+
+## モジュール一覧（M4で増える分）
+
+| モジュール | 役割 | OCP直接import | build123d直接import |
+|---|---|---|---|
+| `duocad/mcp_server.py` | MCPサーバ（stdio・JSON-RPC 2.0）とツール3つ | 禁止 | 禁止 |
+
+接続方法（Claude Code / Claude Desktop への登録）は `MCP.md` が正。
+
+## `duocad/mcp_server.py` — 公開するツールは3つだけ
+
+    describe_document(include_references=False, include_bbox=False)
+        ボディ一覧（body_id・名前・種別・可視性・面数・体積）とパラメータ一覧。
+        **既定では参照ボディ（kind="reference"）を出さない** — STEPを読むとソリッドごとに
+        「参照（隠されている）」と「編集用コピー」の対ができるので、そのまま見せると同じ部品が
+        2つ並び、隠しても画面が変わらない方をAIが掴む。隠した件数は `reference_count` で必ず返す。
+    set_visible(body_id, visible)
+        コアの verb `set_visible` を経由する（`Session.set_visible`）。操作ログに載り、undoで戻る。
+    describe_shape(body_id)
+        `query.describe_shape` の値 ＋ 体積 ＋ `kernel.bounding_box`。読み取りのみ。
+
+**層の位置づけ**: MCPサーバは**アプリ層ではなくコアのもう一人のクライアント**。ブラウザと
+MCPは同じ `Session` を叩く対等なクライアントで、MCPはブラウザを操作しない。
+
+**プロトコル**: 公式SDK（`mcp`）を入れず素で実装した（依存を4つに固定しているため。理由は
+`duocad/mcp_server.py` のdocstring）。したがって**プロトコルの正しさはテストでしか担保されない**
+——`initialize` の版交渉・通知に返事を書かない・バッチ拒否・`tools/call` の引数検査・
+実行時エラーを `isError` で返すこと、を `tests/test_mcp.py` が固定する。
+
+**stdoutに出してよいのはJSON-RPCの行だけ**（起動メッセージ・警告はstderr）。
+`test_the_process_starts_and_answers_over_real_stdio` が実プロセスを起動して、stdoutの全行が
+JSON-RPCとしてパースできることを見る。1行汚すだけでMCPクライアントは繋がらない。
+
+## `duocad/server.py` — 上り方向（コアが発火し、アプリ層が購読する）
+
+    Session.add_listener(callback)   文書が変わったら callback(applied) で知らせる
+    Server.bind_loop(loop)           配信に使うイベントループを覚える（起動時に呼ぶ）
+
+**これが無いと交互操作は原理的に成立しない**（実装計画書§2「外してはいけない3つ」の2番目）。
+MCPからAIが可視性を変えると、`Session` が発火 → `Server` が購読 → 接続している全ブラウザへ
+配信 → 画面が描き直る。契約は3つ:
+
+1. 1つの操作につき購読者へ**1回だけ**届く（`test_core_emits_one_event_per_mutation`）
+2. WebSocket経由の操作は `_dispatch` が自分で配信するので、購読者側は配らない
+   （`test_websocket_commands_are_not_broadcast_twice`。二重配信すると `applied` の付いた
+   配信と付かない配信が交錯して画面側の相関が壊れる）
+3. MCPからの変更に `applied`（操作元への確認応答）を**付けない**。ブラウザは
+   `applied.client_op` を自分の計測と突き合わせるので、他人の操作に付けると知らない
+   `client_op` を自分のものとして拾う経路ができる
+
+購読者が例外を投げても**操作は成功のまま**にする（確定した文書の変更を通知の失敗で
+巻き戻すことはできない）。落ちたことは警告として画面へ出す。
+
+## `duocad/kernel.py` — M4で増える分
+
+    bounding_box(shape) -> {"min","max","center","size","diagonal"}
+        **幾何から**求める（`useTriangulation=False`）。既定のTrueだと既存の三角形分割を使うため、
+        `tessellate` を呼んだ後だけ違う値が返るという再現性の無い挙動になる
+        （`test_bounding_box_does_not_depend_on_tessellation` が固定）。
+        `SetGap(0.0)` を入れてもOCCTは内部許容差ぶん（実測1e-7mm）膨らませるので、
+        厳密な寸法の根拠には使わない。
+
+## テスト一覧とタスクファイル項番の対応（M4）
+
+| 項番（タスクファイル） | テスト |
+|---|---|
+| 完了条件1（MCPクライアントから呼べる） | `test_the_process_starts_and_answers_over_real_stdio` ほかプロトコル群 |
+| 完了条件2（コアのverb経由・ログ・undo） | `test_set_visible_goes_through_the_core_verb` / `test_set_visible_is_undoable` |
+| 完了条件3（ブラウザに反映される） | `test_mcp_change_reaches_every_connected_websocket_client` ＋ `web/scripts/smoke-mcp.mjs` |
+| 完了条件4（接続方法の文書） | `MCP.md` |
+| 検証1〜4（実機・27部品） | `web/scripts/smoke-mcp.mjs`（実ブラウザ・実MCP） |
+
+## 実行方法（M4）
+
+```
+.venv\Scripts\python.exe -m pytest tests/test_mcp.py -q      # 契約（軽いSTEPだけ使う）
+cd web && node scripts/smoke-mcp.mjs                          # 実機（PCケース27部品・実ブラウザ）
+```
+
+`smoke-mcp.mjs` は自分で `python -m duocad.mcp_server` を起動する（**先に `duocad.server` を
+立てない**。ポートがぶつかる）。既定は8865/8866で、本人が実機で開いている8765/8766を避けてある。
+
+## M4のQAで足した契約（2026-08-11・cursor auto のレビュー指摘を反映）
+
+QAは `gpt-5.6-sol-high` → `gpt-5.6-terra-high` の順で試したが**どちらも月次の使用量上限**
+（8/19リセット）で呼べず、**cursor の auto 枠**でレビューした。auto は Composer/Grok 系へ
+ルーティングされるため「実行者（Claude）と別モデル」の条件は満たしている。major 3件・
+minor 7件のうち、対応したのは以下（残りは理由をつけて据え置き、`duocad/mcp_server.py` の
+docstringに明記した）。
+
+- **major: `_push` の `state` 使い回しによる新旧の逆転** … M3.5のQAが「単一ユーザーなので
+  顕在化しない・M4で再訪」として見送っていたレースが、**MCPで「人とAIが同時に操作する」が
+  実在の経路になった**ため本番化した。`state` を**ロックの中で送る直前に作る**ように変更
+  （送る値が常にその瞬間の状態になるので、古い状態が後から上書きすることが原理的に起きない）。
+  `state` と `delta` の食い違いも同時に消えた。
+- **major: 配信タスクの投げっぱなし** … `create_task` の戻りを捨てるとGCされうるうえ、
+  配信中の例外を誰も回収しないので「ブラウザは古いまま・警告も出ない」という**完了条件3が
+  静かに壊れる形**になる。`Server._spawn_push` で保持し、失敗を警告として残すようにした。
+- **major: 参照ボディの可視性をAIが触れた** … 表示に戻すと同じソリッドが二重に描かれ、
+  M3.5が塞いだ状態がAI経路だけで復活する。`set_visible` が `kind=="reference"` を拒否する
+  （`test_set_visible_refuses_reference_bodies`）。
+- **minor: `can_undo` の食い違い** … MCPが生の `log.can_undo` を返していたため、土台しか
+  ログが無い状態で「戻せる」と答え、実際に呼ぶと拒否される。`Session.can_undo` を新設して
+  `state_meta()` とMCPの答えを1つの出どころに揃えた（`test_can_undo_agrees_with_the_session`）。
+- **minor: テストが実装に追従して緑になる箇所** … プロトコル版を実装から import していたのを
+  テスト側のリテラルに変更（版を削っても緑、を防ぐ）。「全クライアントへ届く」テストが接続を
+  1本しか張っておらず**2本目に届かない実装でも緑**だったので2本に増やした。
+  可視性をフィクスチャが直接代入して文書とログをずらしていたのを、**テストごとに Session を
+  作り直す**方式に変更。`Session.remove_listener` を足して購読の後始末ができるようにした。
+
+**据え置いた指摘と理由**（`duocad/mcp_server.py` docstring「既知の割り切り」）:
+`notifications/initialized` を `tools/*` の前提条件にしない（厳格化しても弾けるのは行儀の
+悪いクライアントだけで、繋がらない失敗を新たに作る）／ツール実行がイベントループを塞ぐ
+（既存の `Session.extrude` と同じ性質。実行器スレッドへ逃がすと `Server` のスレッド前提を
+作り直すことになるので、M4本体で交互操作を作るときにまとめて再訪する）。

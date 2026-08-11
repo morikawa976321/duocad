@@ -46,8 +46,10 @@ import math
 import os
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
+from OCP.Bnd import Bnd_Box
 from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Copy,
@@ -227,6 +229,41 @@ def classify_face(face: Any) -> str:
     ):
         return "bspline"
     return "other"
+
+
+def bounding_box(shape: "TopoDS_Shape") -> dict:
+    """形状の境界箱(mm)。**幾何から求める**(三角形分割に依存しない)。
+
+    M4のMCPで足した(2026-08-11)。AIに「どの部品が手前か・どれが大きいか」を渡す最小の
+    空間情報で、これが無いと名前と面数だけで部品を選ぶことになる。
+
+    戻り値: {"min":[x,y,z], "max":[x,y,z], "center":[x,y,z], "size":[dx,dy,dz], "diagonal": float}
+
+    `BRepBndLib.Add_s(..., useTriangulation=False)` を使う。True(既定)だと**既存の
+    三角形分割があればそれを使う**ため、テセレーションの粗さで箱の値が変わる
+    (同じ形状でも `tessellate` を呼んだ後だけ違う値になる、という再現性の無い挙動になる)。
+    `SetGap(0.0)` を入れても OCCT は内部許容差ぶん(実測 1e-7mm)膨らませた値を返すので、
+    **厳密な寸法の根拠には使わない**(mm単位の部品では無視できる大きさ)。
+    `kernel.tessellate` の戻りにある `bbox` は三角形の節点から作った別物で、あちらは
+    アプリ層のカメラ合わせ用。
+    """
+    if shape is None or shape.IsNull():
+        raise ValueError("cannot compute the bounding box of an empty shape")
+    box = Bnd_Box()
+    box.SetGap(0.0)
+    BRepBndLib.Add_s(shape, box, False)
+    if box.IsVoid():
+        raise ValueError("bounding box is void (形状に頂点が無い)")
+    x_min, y_min, z_min, x_max, y_max, z_max = box.Get()
+    lows = [x_min, y_min, z_min]
+    highs = [x_max, y_max, z_max]
+    return {
+        "min": lows,
+        "max": highs,
+        "center": [(lows[i] + highs[i]) / 2.0 for i in range(3)],
+        "size": [highs[i] - lows[i] for i in range(3)],
+        "diagonal": math.dist(lows, highs),
+    }
 
 
 def count_subshapes(shape: "TopoDS_Shape", kind: str) -> int:
