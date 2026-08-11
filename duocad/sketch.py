@@ -45,8 +45,11 @@ PatternId = str
 #: 基準平面の名前(この3つだけ。実装計画書§1「平面(基準3面)」)
 BASE_PLANES = ("XY", "XZ", "YZ")
 
-#: 図形の種別(M2の3つ ＋ 2026-08-11に前倒しした円弧。円形反復はv1.1で範囲外のまま)
+#: 図形の種別(M2の3つ ＋ 2026-08-11に前倒しした円弧)
 ENTITY_KINDS = ("line", "circle", "rectangle", "arc")
+
+#: 反復の種別(M3の矩形 ＋ 2026-08-11に足した円形。これでv1のverbが揃う)
+PATTERN_KINDS = ("rectangular", "circular")
 
 VERB_SKETCH_CREATE = "sketch_create"
 VERB_ADD_LINE = "add_line"
@@ -130,6 +133,19 @@ class Pattern:
     id: PatternId
     sources: List[EntityId] = field(default_factory=list)
     params: Dict[str, Any] = field(default_factory=dict)
+    #: 反復の種類。2026-08-11に円形反復を足したときに導入した(`Body.kind` / `Entity.kind` と
+    #: 同じ語彙)。既定が "rectangular" なので、M3の矩形反復は何も変えずに動く。
+    kind: str = "rectangular"
+    #: 寸法ではない設定(例: 円形反復の `rotate_copies`)。**`params` に混ぜない** —
+    #: `params` は `set_parameter` で編集できる名前つきの数値の置き場であり、真偽の
+    #: 切り替えを入れると `0.5` を書き込める余地ができる。
+    options: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.kind not in PATTERN_KINDS:
+            raise ValueError(
+                f"kind must be one of {list(PATTERN_KINDS)!r}, got {self.kind!r}"
+            )
 
 
 @dataclass

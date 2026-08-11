@@ -38,6 +38,7 @@ from ..oplog import Operation, register_verb
 from ..sketch import Pattern, get_sketch
 
 VERB_PATTERN_RECTANGULAR = "pattern_rectangular"
+VERB_PATTERN_CIRCULAR = "pattern_circular"
 
 
 #: 個数の検査は `set_parameter` からも使うので parameters 側に置いてある
@@ -132,6 +133,57 @@ def pattern_rectangular(
         },
     )
     return pattern_id
+
+
+# --------------------------------------------------------------------------------------
+# 円形反復(v1最後のverb・2026-08-11) — **このタスクではスタブ**
+# --------------------------------------------------------------------------------------
+def pattern_circular(
+    doc: Document,
+    sketch_id: str,
+    entities: Sequence[str],
+    center: Any,
+    count: int,
+    total_angle: float = 360.0,
+    rotate_copies: bool = True,
+) -> str:
+    """図形群をスケッチ平面の法線まわりに円形反復し、PatternId を返す。**スタブ**。
+
+    契約は `tests/test_pattern_circular.py` が正。要点:
+
+    - `count` は**元を含めた総数**(矩形反復の `nx`/`ny` と同じ流儀)。
+    - **刻み角の場合分け**: 全周(`total_angle == 360`)は `360/count`、
+      全周未満は端点を含むので `total_angle/(count-1)`。
+      全周を `count-1` で割ると最後の複製が最初と重なる(実際に踏みやすい)。
+    - `cx` / `cy` / `count` / `total_angle` は名前つきの値にする(後から編集できる)。
+      **`rotate_copies` は `params` に入れない** — 寸法ではないので `Pattern.options` へ。
+      混ぜると `set_parameter` で `0.5` を書き込める余地ができる。
+    - `total_angle` は `0 < angle <= 360`。360超は複製が必ず重なるので受け取らない。
+    - **回転中心と図形の中心が一致する場合は ValueError**(全複製が元と重なり、
+      「反復したのに何も増えない」が成功として通ってしまう)。
+    - 回転した長方形は軸平行の `x,y,width,height` で表せないので、
+      **展開時に4本の線分へ落とす**(展開結果は導出物なので元と同じ種別でなくてよい)。
+
+    同じ `Pattern` を使い、`kind="circular"` で区別する。
+    """
+    raise NotImplementedError("pattern_circular は未実装(テスト先行。次のタスクで実装する)")
+
+
+def _do_pattern_circular(document: Document, operation: Operation) -> None:
+    """redo / replay: 記録された PatternId と参照で反復を作り直す。ログには触らない。"""
+    raise NotImplementedError("pattern_circular の redo/replay は未実装")
+
+
+def _undo_pattern_circular(document: Document, operation: Operation) -> None:
+    """undo: 反復を取り除く(元の図形は残る)。パラメータも文書から消す。"""
+    raise NotImplementedError("pattern_circular の undo は未実装")
+
+
+register_verb(
+    VERB_PATTERN_CIRCULAR,
+    do=_do_pattern_circular,
+    undo=_undo_pattern_circular,
+)
 
 
 # --------------------------------------------------------------------------------------
