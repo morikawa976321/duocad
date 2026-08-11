@@ -10,7 +10,9 @@
    正しく喋れること。**依存を増やさず素で実装した**(`duocad/mcp_server.py` のdocstring)
    ので、プロトコルの正しさはここでしか担保されない。
 2. **公開するツールは3つだけ** — `describe_document` / `set_visible` / `describe_shape`。
-   選択の提案・修正(`propose_selection` 等)はM4の範囲で、ここには**無い**ことも契約。
+   **【2026-08-11 F1で失効】** この上限は退役した。F が §0 の到達表のAI列を埋めるので
+   ツールは28個になる(顔ぶれの契約は `tests/test_mcp_verbs.py` にひとつだけ置く)。
+   ここに残るのは**M4の3つが名前も振る舞いも変わらず生き残っていること**の回帰ガードである。
 3. **`set_visible` はコアの verb を経由する** — 操作ログに載り、undoで戻る。
    アプリ層(ブラウザ)を一切通らない。
 4. **上り方向** — MCPが文書を変えると `Session` が変更イベントを発火し、購読している
@@ -41,8 +43,12 @@ SHELF = MODELS / "shelf_attachment_GD.step"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-#: 公開するツールの全部。**増えていないこと**も契約(スコープを広げない)。
-EXPECTED_TOOLS = {"describe_document", "set_visible", "describe_shape"}
+#: M4(最小の先取り)で公開した3つ。**2026-08-11のF1で「これで全部」は退役した** ——
+#: F が §0 の到達表のAI列を埋めるので、ツールは28個になる(正は
+#: `tests/test_mcp_verbs.py` の `EXPECTED_TOOLS`)。ここに残すのは
+#: **M4の3つが名前も振る舞いも変わらずに生き残っていること**の回帰ガードであり、
+#: 顔ぶれの上限ではない(上限の契約を2ファイルに置くと必ず食い違う)。
+M4_TOOLS = {"describe_document", "set_visible", "describe_shape"}
 
 #: 対応を約束するプロトコル版。**実装からimportしない**(2026-08-11のQA指摘) — importすると
 #: 実装側から版を削っても順序を壊してもテストが追従して緑になり、契約にならない。
@@ -182,10 +188,15 @@ def test_protocol_layer_never_raises(server: McpServer):
 # --------------------------------------------------------------------------------------
 # 2. ツールの顔ぶれ(最小構成であること)
 # --------------------------------------------------------------------------------------
-def test_tools_list_is_exactly_the_minimal_set(server: McpServer):
-    """**3つだけ**。`propose_selection` 等をここへ足したらM4の範囲が漏れている。"""
+def test_the_m4_tools_survive(server: McpServer):
+    """M4の3つが**名前を変えずに**公開され続けていること。
+
+    **2026-08-11のF1で「3つだけ」という上限は退役した**(F が到達表のAI列を埋めるため)。
+    顔ぶれの上限を決める契約は `tests/test_mcp_verbs.py` にひとつだけ置く ——
+    上限を2ファイルに書くと、片方を更新し忘れた瞬間に F2 が両方緑にできなくなる。
+    """
     tools = request(server, "tools/list")["result"]["tools"]
-    assert {tool["name"] for tool in tools} == EXPECTED_TOOLS
+    assert M4_TOOLS <= {tool["name"] for tool in tools}
 
 
 def test_every_tool_has_a_description_and_an_object_schema(server: McpServer):
@@ -203,7 +214,12 @@ def test_set_visible_schema_requires_both_arguments(server: McpServer):
 
 
 def test_unknown_tool_is_invalid_params(server: McpServer):
-    response = request(server, "tools/call", {"name": "propose_selection", "arguments": {}})
+    """**実在しえない名前**で見る(2026-08-11のF1で差し替え)。
+
+    元は `propose_selection` を例にしていたが、F がそれを本物のツールとして公開するので、
+    「未知のツール」の例としては使えなくなった(そのままだと F2 が緑にできない)。
+    """
+    response = request(server, "tools/call", {"name": "no_such_tool_ever", "arguments": {}})
     assert response["error"]["code"] == INVALID_PARAMS
 
 
@@ -515,7 +531,7 @@ def test_stdio_transport_speaks_line_delimited_json_rpc():
     assert [line.get("id") for line in lines] == [1, None, 2], "通知に返事を書いた/壊れた行を飛ばした"
     assert lines[0]["result"]["serverInfo"]["name"] == "duocad"
     assert lines[1]["error"]["code"] == -32700  # 壊れたJSONはパースエラー
-    assert {tool["name"] for tool in lines[2]["result"]["tools"]} == EXPECTED_TOOLS
+    assert M4_TOOLS <= {tool["name"] for tool in lines[2]["result"]["tools"]}
 
 
 def test_the_process_starts_and_answers_over_real_stdio():
@@ -568,7 +584,7 @@ def test_the_process_starts_and_answers_over_real_stdio():
             pytest.fail(f"stdoutにJSON-RPC以外の行が出ている(接続が壊れる): {line!r}")
     assert [response["id"] for response in responses] == [1, 2]
     assert responses[0]["result"]["protocolVersion"] == "2025-06-18"
-    assert {tool["name"] for tool in responses[1]["result"]["tools"]} == EXPECTED_TOOLS
+    assert M4_TOOLS <= {tool["name"] for tool in responses[1]["result"]["tools"]}
     # 静的配信が立てられなくてもMCPは動く(理由はstderrに残る)
     assert "warning" in completed.stderr
 

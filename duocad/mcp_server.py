@@ -2,9 +2,16 @@
 
 **目的**: AIが「前面パネルを隠して」と言えるようにする。見えない面は選べない以上、
 **可視性は選択機構の一部**であり(`duocad/selection.py`)、大規模モデルで交互操作を
-成立させる前提になる。選択の提案・修正(`propose_selection` 等)はM4の範囲で、ここには無い。
+成立させる前提になる。
 
-公開するツールは3つだけ:
+**【2026-08-11 F1で拡張】** M4は下記の3つだけを公開し、選択の提案・修正
+(`propose_selection` 等)を範囲外にしていた。**F(F1+F2)がその線を引き直す** ——
+実装計画書§0の到達表のAI列(19操作)を埋めるため、公開ツールは**28個**になり、
+選択5つと述語の自己記述もここから出る。契約は
+`tests/test_mcp_verbs.py` / `tests/test_mcp_selection.py` と `tests/README.md` の「F」節。
+F1が置いたスタブは `DocumentTools` の末尾にある(実体は F2)。
+
+M4で公開した3つ(振る舞いの記述は現役):
 
     describe_document(include_references=False, include_bbox=False)
         ボディの一覧(id・名前・種別・可視性・面数・体積)とパラメータの一覧を返す。
@@ -106,7 +113,11 @@ INTERNAL_ERROR = -32603
 # ツール(コアへの入口)
 # --------------------------------------------------------------------------------------
 class DocumentTools:
-    """`Session`(コア)を叩く3つのツール。**ここに新しい幾何ロジックを書かない**。
+    """`Session`(コア)を叩くツール群。**ここに新しい幾何ロジックを書かない**。
+
+    M4では3つ(`describe_document` / `set_visible` / `describe_shape`)だった。
+    **F1(2026-08-11)で契約を28個へ広げた** —— 実装計画書§0の到達表のAI列を埋めるため。
+    増えるぶんは下の「F1で契約を確定した分」にスタブとして置いてあり、実体は F2 が入れる。
 
     どのツールも戻り値は**JSON化できる素の値だけ**(MCPのレスポンスに載るため)。
     失敗は例外のまま上げる — 呼び出し側(`McpServer`)が `isError` の結果へ変換して
@@ -323,6 +334,247 @@ class DocumentTools:
             known = [b.id for b in self.session.document.bodies if b.kind != "reference"]
             raise KeyError(f"no such body: {body_id!r} (editable bodies: {known})")
         return body
+
+    # ==================================================================================
+    # F1(2026-08-11)で契約を確定した分 —— **すべてスタブ。実装は F2**
+    # ==================================================================================
+    # 契約の正は `tests/test_mcp_verbs.py` / `tests/test_mcp_selection.py` と
+    # `tests/README.md` の「F」節。ここには**実装するときに読む順で要点だけ**書く。
+    #
+    # ## 貫いている3つの規則
+    #
+    # 1. **形は選択から、数値は引数から。** 面・辺・領域を引数で受けるツールは1つも無い
+    #    (`fillet(radius)` であって `fillet(edges, radius)` ではない)。§5の
+    #    `apply(verb, selection, args)` をverbごとに分解した形で、これにより A1 の
+    #    「提案のままでは verb に渡せない」が**全verbへ自動的にかかる**。
+    #    Bodyだけは `body_id` 引数で受ける —— Bodyは選択集合の項目ではない。
+    # 2. **成功は封筒に入れて返す。** ログに1行積むツールは
+    #    `verb` / `seq` / `changed_bodies` / `bodies` / `can_undo` / `can_redo` を必ず持つ。
+    #    **`changed_bodies` は `Session.body_revision` の呼び出し前後の差**から導くこと。
+    #    verbごとに「これはbodyを変える」と数え上げると、verbが増えたときに静かに漏れる
+    #    (版が「経路ではなく状態」から導かれているのはこのためである。`Session.body_revision`)。
+    # 3. **失敗も封筒に入れて返す。** `{"error": {"code","message","tool","exception", ...}}`
+    #    を `json.dumps` した本文 + `isError: true`。コードは6語彙
+    #    (`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
+    #    `invalid_predicate` / `internal`)。**例外のテキストを素で返さない。**
+    #    型→コードの対応は `KeyError`/`FileNotFoundError` → `not_found`、
+    #    `ValueError` → `invalid_argument`、それ以外 → `internal`。**`FileNotFoundError` を
+    #    忘れない** —— パスの間違いは AI が直せる誤りなので、`internal` に落とすと諦める。
+    #
+    # ## stdout を汚さない(F1で実測した落とし穴)
+    #
+    # **OCCTのSTEP書き出しはC++側から標準出力へ統計を吐く**("Statistics on Transfer (Write)")。
+    # stdoutはJSON-RPC専用(モジュールdocstring)なので、これが混ざると接続が壊れる。
+    # Python層の `contextlib.redirect_stdout` では止まらない(C++が実fdへ直接書く)ため、
+    # **ツール実行の間だけ fd 1 を fd 2 へ振り替える**こと(`os.dup2`)。
+    # 検査は `tests/test_mcp_verbs.py::test_exporting_does_not_corrupt_the_stdio_channel`
+    # (**実プロセスを起こさないと原理的に検出できない**)。
+    #
+    # ## 拒否はコアがする。MCPは名前を付けるだけ
+    #
+    # `selection_not_committed` を返すために `origin` を**先に見て弾いてはいけない**。
+    # 拒否するのは `selection.confirmed_items`(A1が「区別を実際に効かせている唯一の場所」と
+    # 定めた場所)だけであり、MCPは**落ちたあとに** `get_selection()` を見てコードを選ぶ。
+    # 先に弾くと同じ規則が2箇所に生まれ、片方だけ緩んだときに誰も気づかない。
+    #
+    # ## `descriptors()` はまだ書かない(F1の意図)
+    #
+    # ツールの説明文と入力スキーマは**F2の成果物**である。F1は「何が公開されているべきか」を
+    # テストで固定するところまでを持つ。したがってF1完了時点では `tools/list` は3つのままで、
+    # 新しいツールの呼び出しは「未知のツール」として落ちる —— これが赤の主因である。
+
+    #: F2が `descriptors()` と `call()` へ**足す**ツール名(25個)。M4の既存3つと合わせて
+    #: **合計28個**になる。**実装の目印**であって契約ではない
+    #: (契約は `tests/test_mcp_verbs.py` の `EXPECTED_TOOLS`)。
+    F2_TOOLS = (
+        "describe_predicates", "measure",
+        "get_selection", "propose_selection", "modify_selection",
+        "commit_selection", "clear_selection",
+        "sketch_create", "add_line", "add_circle", "add_rectangle", "add_arc",
+        "extrude", "extrude_face", "fillet", "chamfer",
+        "pattern_rectangular", "pattern_circular",
+        "make_editable_copy", "set_parameter",
+        "import_step", "export_step", "export_stl",
+        "undo", "redo",
+    )
+
+    def _not_implemented(self, name: str) -> dict:
+        raise NotImplementedError(f"{name}: F2で実装する(スタブ)")
+
+    # ------------------------------------------------------------------ 選択(5 + 自己記述)
+    def get_selection(self) -> dict:
+        """現在の選択を返す。**発火しない**(読むだけ)。
+
+        戻り値は `{"selection": {"items", "origin", "count"}}`。**変更する4つと同じ形**に
+        揃える —— `Session` 側は変更4メソッドがイベント、getが `to_dict()` と形が違うが、
+        それはコアの都合(イベントの形を1箇所で作る)であってAIに見せる理由が無い。
+        """
+        return self._not_implemented("get_selection")
+
+    def propose_selection(self, refs: Optional[list] = None, predicate: Optional[dict] = None) -> dict:
+        """**AIが書き込む経路**。`refs`(明示的な参照)か `predicate`(述語)のどちらか一方。
+
+        §0のAI側の合格条件「引数を**述語**または明示的な参照で与えられ」がこの1つに載る。
+        - 一致0件は**成功**(`count: 0`)。エラーにするとAIが述語の書式を疑い始める
+        - 不正な述語は `invalid_predicate` で、**`valid_ops` に
+          `predicates.describe_ops()` をそのまま添える**(AIが自力で直せるように)
+        - 不正な参照は `invalid_argument`(形)/ `not_found`(Body)。いずれも選択を変えない
+        """
+        return self._not_implemented("propose_selection")
+
+    def modify_selection(self, add: Optional[list] = None, remove: Optional[list] = None) -> dict:
+        """**人が直す経路**(差分編集)。`origin` は "user" になる —— 人が触ること自体が承認。"""
+        return self._not_implemented("modify_selection")
+
+    def commit_selection(self) -> dict:
+        """提案を確定する(中身は変えない)。AIが自分の提案を実行する前に踏む明示の1手。"""
+        return self._not_implemented("commit_selection")
+
+    def clear_selection(self) -> dict:
+        """選択を空にする。"""
+        return self._not_implemented("clear_selection")
+
+    def describe_predicates(self) -> dict:
+        """述語の語彙をAIへ自己記述する。**`predicates.describe_ops()` をそのまま出す**。
+
+        戻り値: `{"kinds": [...], "ops": <describe_ops()>, "where_is": "and", "example": {...}}`。
+        opの定義を書き直すと、スキーマとバリデータが二重管理になり、**片方だけ増えたopが
+        黙って通る**(`predicates.describe_ops` の docstring がこれを禁じている)。
+        `where_is: "and"` と **ORが無いこと**まで出すのは、AIが無い機能を試して失敗するのを
+        防ぐため(ORが要るときは2回評価して `modify_selection(add=...)`)。
+        `example` は `predicates.validate()` を通る本物であること(古くなって嘘にならない)。
+        """
+        return self._not_implemented("describe_predicates")
+
+    def measure(self) -> dict:
+        """選択を測る(§5 `measure(selection)`)。**verbではないので提案のままでも通る**。
+
+        AIが自分の提案を確かめてから確定する往復がここで閉じる。`confirmed_items` 経由に
+        すると、AIは中身を見ずに commit する動機を持ってしまう。
+
+        値は**問い合わせ層のもの**をそのまま渡す(`query.describe_faces` /
+        `describe_edges` / `region.regions`)。測り直すと述語が使う値と食い違いうる。
+        頂点は位置を返す問い合わせが無いので `{"measured": False, "reason": ...}` で返す
+        (黙って落とすとAIは自分の誤りと解釈する)。
+        """
+        return self._not_implemented("measure")
+
+    # ------------------------------------------------------------------ スケッチ
+    def sketch_create(self, base_plane: Optional[str] = None) -> dict:
+        """スケッチを作る。`base_plane` 省略時は**確定選択の面**(ちょうど1枚)に貼る。
+
+        平面も選択も無ければエラー —— 既定でXYに貼ると、図形が静かに別の場所に出る。
+        """
+        return self._not_implemented("sketch_create")
+
+    def add_line(self, sketch_id: str, p0: list, p1: list) -> dict:
+        return self._not_implemented("add_line")
+
+    def add_circle(self, sketch_id: str, center: list, radius: float) -> dict:
+        return self._not_implemented("add_circle")
+
+    def add_rectangle(self, sketch_id: str, corner: list, width: float, height: float) -> dict:
+        return self._not_implemented("add_rectangle")
+
+    def add_arc(
+        self, sketch_id: str, center: list, radius: float, start_deg: float, end_deg: float
+    ) -> dict:
+        return self._not_implemented("add_arc")
+
+    # ------------------------------------------------------------------ フィーチャ
+    def extrude(self, distance: float, mode: str = "join", body_id: Optional[str] = None) -> dict:
+        """**確定選択の領域**を押し出す。領域は `RegionRef`(`{"sketch","index"}`)。"""
+        return self._not_implemented("extrude")
+
+    def extrude_face(self, distance: float) -> dict:
+        """**確定選択の面**(ちょうど1枚)を押し出す。対象Bodyは参照が持っている。
+
+        2枚以上選ばれていたら黙ってどれかを選ばない —— AIから見て指示と結果がずれる
+        唯一の経路になる。
+        """
+        return self._not_implemented("extrude_face")
+
+    def fillet(self, radius) -> dict:
+        """**確定選択の辺**を丸める。`radius` は数値か辺ごとのリスト。
+
+        辺の順序は `selection.edge_indices` が返す**選択順**であり、昇順ではない。
+        `fillet` は `edges` と `radius` を位置で対応させるので、並べ替えると
+        半径の割り当てが黙ってずれる(A1の実装で確認済み)。
+        """
+        return self._not_implemented("fillet")
+
+    def chamfer(self, distance) -> dict:
+        """**確定選択の辺**を面取りする(`fillet` と同じ規律)。"""
+        return self._not_implemented("chamfer")
+
+    def pattern_rectangular(
+        self, sketch_id: str, entities: list, dx: float, dy: float, nx: int, ny: int
+    ) -> dict:
+        """図形の矩形反復。**スケッチの図形は選択集合の項目ではない**ので引数で受ける。"""
+        return self._not_implemented("pattern_rectangular")
+
+    def pattern_circular(
+        self,
+        sketch_id: str,
+        entities: list,
+        center: list,
+        count: int,
+        total_angle: float = 360.0,
+        rotate_copies: bool = True,
+    ) -> dict:
+        return self._not_implemented("pattern_circular")
+
+    # ------------------------------------------------------------------ ボディ・パラメータ
+    def make_editable_copy(
+        self, source_body_id: Optional[str] = None, name: Optional[str] = None
+    ) -> dict:
+        return self._not_implemented("make_editable_copy")
+
+    def set_parameter(self, name: str, value: float) -> dict:
+        """名前つきの寸法を書き換える(形が追随する)。
+
+        **どの名前がどの寸法か**は `describe_document` の
+        `sketches[].entities[].parameters` から辿れること —— 辿れないとAIは
+        `d1` `d2` … を総当たりするしかない。
+        """
+        return self._not_implemented("set_parameter")
+
+    # ------------------------------------------------------------------ 入出力
+    def import_step(self, path: str) -> dict:
+        """STEPを**参照ボディとして**読む(コアの verb そのもの)。
+
+        起動時の `Session.load_step` は「参照 + 編集用コピー + 参照を隠す」までやるが、
+        それは利便のための組み合わせであって verb ではない。MCPが出すのは verb の側で、
+        足りない1手(`make_editable_copy`)を戻り値の `hint` で必ず知らせること ——
+        黙って参照ボディだけ増やすと、AIは編集できない相手に verb を打ち続ける。
+        """
+        return self._not_implemented("import_step")
+
+    def export_step(self, path: str, body_ids: Optional[list] = None) -> dict:
+        """STEPを書き出す。**ログに載らない**(文書を変えないので verb ではない)。
+
+        そのぶん `{"path", "bytes", "body_ids"}` を返す —— AIは自分でファイルを
+        確かめられないので、戻り値が唯一の確認手段である。
+        """
+        return self._not_implemented("export_step")
+
+    def export_stl(
+        self, path: str, deviation: Optional[float] = None, body_ids: Optional[list] = None
+    ) -> dict:
+        """STLを書き出す(`deviation` 省略時は `Session.deviation`)。"""
+        return self._not_implemented("export_stl")
+
+    # ------------------------------------------------------------------ 履歴
+    def undo(self) -> dict:
+        """**UIから見た履歴と同じもの**を戻す(AI用の別履歴を作らない)。
+
+        取り消せるかの判定は `Session.can_undo` が唯一の出どころ ——
+        `describe_document` の答えと実際に通るかが一致する(M4のQAで塞いだ食い違い)。
+        """
+        return self._not_implemented("undo")
+
+    def redo(self) -> dict:
+        return self._not_implemented("redo")
 
 
 # --------------------------------------------------------------------------------------

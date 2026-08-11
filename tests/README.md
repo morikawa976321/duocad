@@ -1065,9 +1065,15 @@ auto 枠**でレビューした。auto は Composer/Grok 系へルーティン�
 # M4（最小の先取り） — MCPと上り方向のAPI契約（2026-08-11追記）
 
 **AIが「前面パネルを隠して」と言えるようにする**ためだけの最小の先取り。M4本体（選択の
-提案・修正＝`propose_selection` / `modify_selection` / `apply`）は**範囲外**で、
-`tests/test_mcp.py::test_tools_list_is_exactly_the_minimal_set` がそれを機械的に固定する
-（ツールが3つより増えたら赤になる）。
+提案・修正＝`propose_selection` / `modify_selection` / `apply`）は**範囲外**とし、
+`test_tools_list_is_exactly_the_minimal_set` がツール3つを機械的に固定していた。
+
+> **【2026-08-11 F1で退役】その上限はもう無い。** F が §0 の到達表のAI列を埋めるので
+> ツールは28個になり、選択も述語もここから出る（顔ぶれの契約は
+> `tests/test_mcp_verbs.py` にひとつだけ置く。本文末尾の「F —」節が正）。
+> 当該テストは `test_the_m4_tools_survive`（M4の3つが名前も振る舞いも変わらず
+> 生き残っていることの回帰ガード）へ置き換えた。**以下のM4の記述は、
+> 「3つだけ」という範囲の主張を除いてすべて現役である。**
 
 ## モジュール一覧（M4で増える分）
 
@@ -1078,6 +1084,12 @@ auto 枠**でレビューした。auto は Composer/Grok 系へルーティン�
 接続方法（Claude Code / Claude Desktop への登録）は `MCP.md` が正。
 
 ## `duocad/mcp_server.py` — 公開するツールは3つだけ
+
+> **【2026-08-11 F1で失効】この「3つだけ」は退役した。** F が §0 の到達表のAI列を埋めるので
+> ツールは28個になる（顔ぶれの契約は `tests/test_mcp_verbs.py` にひとつだけ置く。本文末尾の
+> 「F —」節が正）。`test_tools_list_is_exactly_the_minimal_set` は
+> `test_the_m4_tools_survive`（M4の3つが名前も振る舞いも変わらず生き残っていることの回帰ガード）
+> へ置き換えた。以下の3つの**振る舞い**の記述は現役である。
 
     describe_document(include_references=False, include_bbox=False)
         ボディ一覧（body_id・名前・種別・可視性・面数・体積）とパラメータ一覧。
@@ -1891,3 +1903,288 @@ QAは `gpt-5.6-sol-high` を試したが**月次の使用量上限**（8/19リ�
   **「全条件を検査してから評価する」が効いているかは、こちらでしか確かめられない。**
 
 据え置いた minor は上記の性能2件（正しさの問題ではない）。
+
+---
+
+# F — MCPで全verbと述語選択を公開する（2026-08-11追記・テスト先行の段階）
+
+`tests/test_mcp_verbs.py`（操作と問い合わせ）と `tests/test_mcp_selection.py`（選択と述語）が正。
+実装計画書 **§0（到達表と「満足に使える」の操作的定義）／§5（API/MCP要件）／§8b の F**。
+
+**このタスク（F1）は契約だけを書き、実装は F2 が入れる。** 契約タスク完了時点で
+新規91件のうち **84件が赤・7件が緑**。緑7件は M4 で既に成立している規律の回帰ガード
+（境界・ツールの説明とスキーマの有無・実行時エラーをプロトコルエラーにしないこと・
+ログのverb名）で、**ツールが3つしか無い今は自動的に満たされるが、28個になっても守られる**
+ことを見張る。既存377件は1行も触っていない（実測 376 passed / 1 failed。赤は
+`test_extruding_one_part_of_the_pc_case_stays_under_1000ms` の既知のフレークのみで、
+着手前から赤い）。
+
+## 何を成立させるためのものか
+
+§0の到達表の **AI列が 1/19**（`set_visible` だけ）である。これは設計ミスの結果で、
+M2以降のタスクに毎回「GUI側は触らない」と書いた一方、**AI側へ出すタスクを一度も積まなかった**。
+F が埋めるのはその列であり、合格条件は §0 が定義している:
+
+> MCPツールとして呼べ／引数を**述語**または明示的な参照で与えられ／**結果と失敗が構造化して返る**
+
+## 公開するツールは28個
+
+| 群 | ツール |
+|---|---|
+| 問い合わせ(3) | `describe_document` / `describe_shape` / `measure` |
+| 述語の自己記述(1) | `describe_predicates` |
+| 選択(5) | `get_selection` / `propose_selection` / `modify_selection` / `commit_selection` / `clear_selection` |
+| スケッチ(5) | `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` |
+| フィーチャ(6) | `extrude` / `extrude_face` / `fillet` / `chamfer` / `pattern_rectangular` / `pattern_circular` |
+| ボディ・パラメータ(3) | `set_visible` / `make_editable_copy` / `set_parameter` |
+| 入出力(3) | `import_step` / `export_step` / `export_stl` |
+| 履歴(2) | `undo` / `redo` |
+
+操作は19個で、**§0の到達表のAI列19行とちょうど対応する**（表は
+`add_line / add_circle / add_rectangle / add_arc` のようにまとめて書かれているので、
+展開すると19になる）。`tools/list` の集合は**一致**で検査する（部分集合ではない）——
+「19のうち18ある」は §0 の観点では未達だが、部分集合の検査だと緑になる。
+
+**ツール名は操作ログのverb名と同じ綴りにする。** AIは `describe_document` が返すログを読んで
+次の一手を決めるので、ログのverb名と呼べるツール名が違うと対応表を推測させることになる。
+
+## 決定1（Fの背骨）— 形は選択から、数値は引数から
+
+**面・辺・領域を引数で受けるツールは1つも無い。** `fillet(radius)` であって
+`fillet(edges, radius)` ではない。形は**確定した選択**から取り、数値・名前・パスだけを引数で渡す。
+Bodyだけは `body_id` 引数で受ける —— Bodyは選択集合の項目ではないため。
+
+これは §5 の `apply(verb, selection, args)` を verb ごとのツールへ分解した形である。
+効き目は3つ:
+
+1. **A1の「提案のままでは verb に渡せない」が全verbへ自動的にかかる。** 形を引数で受ける裏口が
+   1つでもあると、その経路だけ提案と確定の区別が素通りになる。
+   `test_no_verb_tool_takes_a_shape_argument` がこれを名指しで固定している。
+2. **参照の検査をMCP層に書かなくて済む。** `selection._coerce_ref` が既に持っている
+   （形が不正なら ValueError・存在しないBodyなら KeyError）。二重に書けば必ず食い違う。
+3. **§0の「述語または明示的な参照で与えられ」が1箇所に集まる。** どちらも
+   `propose_selection`（`predicate=` / `refs=`）から入り、verbは選択を読むだけになる。
+
+代償は、フィレット1回が3呼び出し（提案→確定→適用）になること。**これは代償ではなく設計の主張**で、
+交互操作（AIが提案 → 人が直す → AIが適用）の一巡そのものである。人が居ない場面でも
+AIが `commit_selection()` を明示すれば通る（A1の決定4）。
+
+## 決定2 — 成功は封筒に入れて返す
+
+ログに1行積むツールは、次を必ず返す:
+
+    verb           ログに積んだverb名（undo/redo は "undo"/"redo"）
+    seq            そのOperationの通し番号
+    changed_bodies この操作で形状か可視性が変わったBodyId
+    bodies         その変更後の姿。キーは body_id / name / kind / visible /
+                   face_count / volume の6つちょうど（`BODY_KEYS`）
+    can_undo / can_redo
+
+加えて作ったものの**IDを返す**（`sketch_create`→`sketch_id` / `add_*`→`entity_id` /
+`pattern_*`→`pattern_id` / `make_editable_copy`→`body_id` / `import_step`→`body_ids`）。
+返さないとAIは次の呼び出しで指せない。
+
+**`changed_bodies` は `Session.body_revision` の呼び出し前後の差から導くこと。**
+verbごとに「これはbodyを変える」と数え上げる実装だと、verbが増えたときに静かに漏れる
+（漏れてもpytestは通り、**ブラウザだけが古いまま**になる）。版が「経路ではなく状態」から
+導かれているのは元々このためである（`Session.body_revision` のdocstring）。
+`test_changed_bodies_is_empty_when_only_a_sketch_changed` が、数え上げ実装なら落ちる側の対照。
+
+`export_step` / `export_stl` は**ログに載らない**（文書を変えないのでverbではない）。
+そのぶん `{"path", "bytes", "body_ids"}` を返す —— AIは自分でファイルを確かめられないので、
+戻り値が唯一の確認手段である。
+
+## 決定3 — 失敗も封筒に入れて返す（例外のテキストを素で投げない）
+
+    {"error": {"code": <6語彙>, "message": <原文>, "tool": <ツール名>, "exception": <型名>, ...}}
+
+を `json.dumps` した本文＋`isError: true`。M4は `f"{type(error).__name__}: {error}"` を
+そのまま返していたが、それは §0 の「失敗が構造化して返る」を満たしていない。
+
+| code | いつ | 添えるもの |
+|---|---|---|
+| `not_found` | `KeyError` / `FileNotFoundError` | — |
+| `invalid_argument` | `ValueError` | 選択由来なら `required_kind` / `selection` |
+| `selection_not_committed` | 提案のまま verb を呼んだ | `hint`（`commit_selection` を含む）/ `selection` |
+| `selection_empty` | 要求した種別の項目が確定選択に無い | `required_kind` / `selection` |
+| `invalid_predicate` | 述語が不正 | **`valid_ops` = `describe_ops()`** / `valid_kinds` |
+| `internal` | 上記以外 | — |
+
+**`FileNotFoundError` を忘れないこと。** パスの間違いはAIが直せる誤りなので、`internal` に
+落とすと直せるものを直さずに諦める（F1で実測: 無いSTEPは `FileNotFoundError` で来る）。
+
+コードを分けるかどうかの基準は**「AIが次に打つ手が変わるか」**である。`selection_empty` と
+「違う種別を選んだ」を分けていないのは、どちらも次の手が「辺を選び直す」で同じだから
+（区別の材料は `selection.count` で足りる）。逆に `selection_not_committed` を
+`invalid_argument` に潰してはいけない —— AIは半径を変えて再試行しはじめる。
+
+### 拒否はコアがする。MCPは名前を付けるだけ
+
+`selection_not_committed` を返すために **`origin` を先に見て弾いてはいけない**。拒否するのは
+`selection.confirmed_items`（A1が「区別を実際に効かせている唯一の場所」と定めた場所）だけで、
+MCPは**落ちたあとに** `get_selection()` を見てコードを選ぶ。先に弾くと同じ規則が2箇所に生まれ、
+片方だけ緩んだときに誰も気づかない。
+
+**この規則は対のテストでしか固定できない**（QA1回目の指摘）:
+
+- `test_no_selection_consuming_tool_accepts_a_proposal`（**形を選択から取る全ツール**を回す）
+  … 提案が通ってしまわないこと。ただし**MCPが先に弾いていても緑になる**ので、これだけでは
+  「門が1箇所」を主張できない。
+- `test_the_gate_lives_in_the_core_not_in_the_mcp_layer` … `selection.confirmed_items` を
+  `origin` を見ない版へ差し替えると、MCPは**そのまま通す**こと。通らなければMCP層にも門がある。
+
+前者だけを書いて「これで決定3が守られる」と読むのは誤りである（最初の版がそう書いていた）。
+
+## 決定4 — 選択5ツールは戻り値の形をMCP層で揃える
+
+`Session` 側は変更する4メソッドが**発火したイベントそのもの**
+（`{"change","selection","client_op"}`）を返し、`get_selection` だけが `Selection.to_dict()`
+（`{"items","origin","count"}`）を返す（A1の決定8）。この差はコアの都合（イベントの形を
+1箇所で作る）であって、**AIに見せる理由が無い**。MCPは5つとも `{"selection": {...}}` に揃える。
+
+## 決定5 — 述語の語彙は `describe_predicates` で自己記述する
+
+`predicates.describe_ops()` を**そのまま**返す。`describe_ops` の docstring が
+「F1で書き直さずに済むように、opの定義はここ1箇所を正にする」と既に宣言しており、MCP側で
+書き直すと**片方だけ増えたopが黙って通る**（スキーマにはあるがバリデータには無い、またはその逆）。
+
+opの一覧だけでは述語を組み立てられないので、`kinds` / `where_is: "and"` / `example` まで出す。
+**ORが無いことをAIが知らないと、無い機能を試して失敗する**（A1の決定5: ORが要るときは
+2回評価して `modify_selection(add=...)` で足す）。`example` は `predicates.validate()` を
+通る本物であることをテストが要求する —— 例が古くなって嘘になるのを防ぐため。
+
+## 決定6 — `measure` は verb ではないので提案のままでも通る
+
+§5 の `measure(selection)`。**`confirmed_items` を経由しない。** AIが自分の提案を測って
+確かめてから確定する、という往復がここで閉じる。確定を要求すると、AIは中身を見ずに commit する
+動機を持ってしまい、提案と確定の区別が実際に弱くなる。
+
+値は**問い合わせ層のものをそのまま渡す**（`query.describe_faces` / `describe_edges` /
+`region.regions`）。測り直すと述語が使う値と食い違いうる。**頂点は測れない**（位置を返す
+問い合わせ層の関数がまだ無い）ので `{"measured": false, "reason": ...}` で返す ——
+黙って落とすと、AIは「3つ選んだのに2つしか返らない」を自分の誤りと解釈する。
+
+## 決定7 — `describe_document` はスケッチとパラメータ名まで見せる
+
+§5 は「ボディ・**スケッチ**・パラメータの一覧」と定めているが、M4の実装はスケッチを出していない。
+スケッチが見えないと `pattern_rectangular(entities=[...])` の引数をAIが作れず、**自分が同じ
+会話の中で作った図形のIDしか知らない**（undo/redoや再接続で盲目になる）。
+
+各図形は `params`（解決済みの**数値**）と `parameters`（その数値を持つ**パラメータ名**）の
+両方を出す。数値だけだと `set_parameter` の引数が作れず、名前だけだと今の値が分からない。
+領域の数え上げ（splitter）は計算なので `include_regions` で任意にする。
+
+## 決定8 — `import_step` はコアのverbそのもの（`load_step` ではない）
+
+起動時の `Session.load_step` は「参照 + 編集用コピー + 参照を隠す」までやるが、それは利便のための
+組み合わせであって verb ではない。MCPが出すのは verb の側（参照ボディを足すだけ）で、
+足りない1手（`make_editable_copy`）を戻り値の `hint` で必ず知らせる —— 黙って参照ボディだけ
+増やすと、AIは編集できない相手に verb を打ち続ける。
+
+## F1で実測した落とし穴 — **OCCTのSTEP書き出しはstdoutを汚す**
+
+STEPを書き出すと、C++側から標準出力へ統計が出る:
+
+    ****        Statistics on Transfer (Write)                 ****
+    Step File Name : ...(662 ents)  Write  Done
+
+stdioトランスポートは**stdoutをJSON-RPC専用**にしている（`duocad/mcp_server.py` の
+モジュールdocstring:「stdoutを1文字でも汚すとMCPクライアントが接続に失敗する」）ので、
+`export_step` を公開した瞬間に接続が壊れる。**Python層の `contextlib.redirect_stdout` では
+止まらない**（C++が実fdへ直接書く）ため、ツール実行の間だけ **fd 1 を fd 2 へ振り替える**
+（`os.dup2`）必要がある。
+
+検査は `test_exporting_does_not_corrupt_the_stdio_channel` で、**実プロセスを起こす**。
+同一プロセス内で `DocumentTools` を叩くテストでは原理的に検出できない（汚れるのは
+テストランナーのstdoutであって、JSON-RPCの経路ではないため）。
+
+## 期待値の出どころ（すべて2026-08-11に実測）
+
+30×30×40 の直方体（A1と同じ。立方体にしないのも同じ理由）。
+
+- 述語 `parallel_to Z and length_gt 20` の一致は **4本**（`[1, 3, 5, 7]`）
+- 上面（法線·Z > 0.9）は **index 6**、その外周は `[2, 6, 10, 12]`
+- 交互操作の一巡（1本足して1本引いて `fillet(r=2.0)`）: 選択順は **`[3, 5, 7, 2]`**（昇順ではない）、
+  **面 6 → 10 / 体積 36000.000 → 35872.006**
+- スケッチ（30×30の長方形）→ 領域1個（面積900.0）→ `extrude(40)` で **面6・体積36000.0**
+- `extrude_face`（上面 +5mm）で 36000 → **40500**（= 30×30×5 の増分）
+- 円（半径10）→ `extrude(5)` の体積 **1570.796**、半径を20にすると **6283.185**
+- `shelf_attachment_GD.step` の `import_step` は **17個**の参照ボディを返す（単一ではない）
+
+**添字は決め打ちにせず毎回導く**（上面は法線から、辺は端点から）。決め打ちは、分解や
+数え方の細部が変わったときにテストが静かに別の実体を見に行く。
+
+## F1で**契約にしなかった**こと（範囲の明示）
+
+- **形が変わったときの添字の付け替え**。A1と同じくFの範囲外（`provenance` の空スロットの仕事）。
+  一巡のテストは fillet 後も選択が4件残ることだけを見ており、**同じ辺を指しているとは
+  主張していない**。
+- **`apply(verb, ...)` という総称ツール**。verbごとのツールにしたので持たない
+  （総称にするとスキーマが `args: object` に潰れ、AIから見た型検査が消える）。
+- **選択の項目ごとの `origin`**。A1の決定2のまま集合単位。
+- **UI側（`web/`）**。確定選択と提案を描き分けるのは B。
+- **MCPクライアントからの実接続と実ブラウザでの確認**。F2の検証項目
+  （`pytest` では「イベントが1回出て `state` に載る」までしか見られない）。
+- **領域の述語**（A1と同じ。`predicates` の `kind` は face / edge だけ）。
+- **書き出し先パスの制限**。ローカル専用ツールなので任意のパスへ書ける。
+
+## テスト一覧とタスクファイル項番の対応（F1）
+
+| 項番（タスクファイル） | テスト |
+|---|---|
+| 1（全操作が呼べる） | `test_every_v1_verb_is_reachable_as_an_mcp_tool` / `test_the_ai_column_of_the_reachability_table_is_complete` / `test_tool_names_match_the_verb_names_in_the_operation_log` |
+| 2（引数スキーマ） | `test_every_tool_has_a_description_and_an_object_schema` / `test_every_argument_is_typed_and_documented` / `test_the_argument_of_every_tool_is_fixed` / **`test_no_verb_tool_takes_a_shape_argument`** ＋ 型検査4件（`test_numbers_are_not_accepted_as_strings` ほか） |
+| 3（refs と predicate の両方） | `test_propose_selection_accepts_explicit_references` / `test_propose_selection_accepts_a_predicate` / `test_propose_selection_needs_exactly_one_of_them` |
+| 4（結果が構造化） | `test_a_verb_reports_what_changed_not_a_sentence` / `test_changed_bodies_is_empty_when_only_a_sketch_changed` / `test_set_visible_still_reports_the_same_shape` ＋ 各verbを1回ずつ成功させる `test_every_sketch_verb_is_reachable_and_returns_its_id` / `test_both_patterns_are_reachable_and_return_their_id` / `test_extrude_can_cut` |
+| 5（失敗が機械可読） | `test_a_missing_body_is_reported_as_not_found` / `test_a_bad_value_is_reported_as_invalid_argument` / `test_a_failed_verb_leaves_the_document_untouched` / `test_the_error_says_which_tool_failed` / `test_an_execution_error_is_not_a_protocol_error` / `test_import_step_reports_a_missing_file_as_not_found` |
+| 6（不正な述語＋有効なopの一覧） | `test_an_unknown_op_comes_back_with_the_valid_ones` / `test_a_type_error_in_a_predicate_is_also_self_repairable` / `test_an_unknown_predicate_kind_is_reported_the_same_way` / `test_an_invalid_predicate_leaves_the_selection_untouched` ＋ 対照の `test_a_malformed_reference_is_refused_without_touching_the_selection` |
+| 7（0件はエラーでない） | `test_zero_matches_is_a_success_that_says_zero` / `test_zero_matches_still_replaces_the_previous_selection` / `test_measure_of_an_empty_selection_is_not_an_error` |
+| 8（提案のままでは通さない） | **`test_no_selection_consuming_tool_accepts_a_proposal`（全ツール）** / `test_extrude_also_refuses_a_proposed_region` / **`test_the_gate_lives_in_the_core_not_in_the_mcp_layer`** / `test_a_proposal_cannot_be_fed_to_a_verb_through_mcp` / `test_the_ai_can_execute_its_own_proposal_after_committing` / `test_measure_works_on_a_proposal` / `test_applying_a_verb_with_nothing_selected_says_so` / `test_selecting_the_wrong_kind_is_also_reported_as_empty` |
+| 9（**MCP経由だけで一巡**） | **`test_the_whole_interleaved_lap_runs_through_mcp_alone`** |
+| 10（選択変更が配信される） | `test_a_selection_change_from_mcp_fires_exactly_one_event` / `test_a_selection_change_from_mcp_reaches_the_browser` / `test_a_verb_applied_through_mcp_reaches_the_browser` / `test_every_mutating_tool_fires_exactly_one_event` / `test_a_read_only_tool_fires_nothing` / `test_a_failed_tool_fires_nothing` |
+| 11（UIと同じ履歴） | `test_undo_through_mcp_undoes_the_ui_operation` / `test_redo_through_mcp_replays_it` / `test_undo_with_nothing_to_undo_is_a_structured_failure` / `test_undo_refuses_to_dismantle_the_document_floor` |
+| （§5の問い合わせ） | `test_measure_reports_lengths_for_edges` / `test_measure_reports_area_normal_and_center_for_faces` / `test_measure_reports_the_area_of_a_region` / `test_measure_admits_what_it_cannot_measure` / `test_describe_document_lists_sketches_and_their_entities` / `test_region_counts_are_opt_in` |
+| （項番外・範囲の維持） | `test_the_mcp_layer_holds_no_geometry_of_its_own` / `test_the_mcp_layer_does_not_reimplement_verbs` / `test_changing_the_selection_through_mcp_does_not_touch_the_log` / `test_the_selection_is_not_saved` / `test_exporting_does_not_corrupt_the_stdio_channel` |
+
+## M4の契約をひとつ退役させた（F1で必要になった変更）
+
+`tests/test_mcp.py` は「**公開するツールは3つだけ**」を集合の一致で固定しており、
+`test_unknown_tool_is_invalid_params` は「未知のツール」の例に `propose_selection` を
+使っていた。**このままでは F2 が両方を緑にできない**（28個にした瞬間にM4側が赤くなる）ため、
+F1で次のように直した。QAの1回目が指摘するまで見落としていた欠陥である:
+
+- `EXPECTED_TOOLS`（3つ・一致） → `M4_TOOLS`（3つ・**部分集合**）。
+  `test_tools_list_is_exactly_the_minimal_set` → `test_the_m4_tools_survive`。
+  **顔ぶれの上限を決める契約は `tests/test_mcp_verbs.py` にひとつだけ置く** ——
+  2ファイルに書くと、片方の更新を忘れた瞬間に実装側が詰む。
+- 「未知のツール」の例を `no_such_tool_ever` へ差し替え（実在しえない名前を使う）。
+- M4節の散文（本文 `duocad/mcp_server.py — 公開するツールは3つだけ`）に失効の断りを入れた。
+  3つの**振る舞い**の記述は現役である。
+
+## 実行方法（F）
+
+```
+.venv\Scripts\python.exe -m pytest tests/test_mcp_verbs.py tests/test_mcp_selection.py -q
+```
+
+**素の `python` は使わない** —— `OCP` を持たない別環境で収集エラーになる。
+`test_exporting_does_not_corrupt_the_stdio_channel` は実プロセスを起こし、既定と違うポート
+（18775/18776）を使う。`python -m duocad.server` を開いたままでも衝突しない。
+
+## F2への申し送り
+
+- **`descriptors()` はF1で書いていない。** ツールの説明文と引数スキーマはF2の成果物である
+  （説明文はAIがツールを選ぶ唯一の手がかりなので、「何ができるか」ではなく
+  「**いつ使うか**」を書く。既存3つの流儀に合わせること）。
+  したがってF1完了時点の赤の主因は「未知のツール」であって、スタブの `NotImplementedError`
+  ではない（A1のときと違う点）。
+- **`_check_arguments` を強くする必要がある。** 今は `boolean` / `string` しか見ておらず、
+  `number` / `integer` / `array` / `object` と**型のリスト**（`fillet.radius` は数値と配列の
+  両方を取る）に対応していない。**boolを数値として通さない**こと（Pythonでは `True` が
+  `int` の一種）。エラーメッセージに**引数名を含める**（テストが名指しを要求する）。
+- **`DocumentTools` にF1が入れたスタブがある**（`F2_TOOLS` とメソッド群）。docstringに
+  実装時の要点を書いてあるので、それを消さずに中身を埋めること。
+- **`tests/test_mcp.py` はF1で3箇所直してある**（上記「M4の契約をひとつ退役させた」）。
+  F2はここを触る必要が無い —— 触りたくなったら、それは28個の契約と食い違っている合図である。
+- **1つの図形を2つの反復で使い回せない**（コアが ValueError で拒む。F1で実測）。
+  `pattern_rectangular` と `pattern_circular` のテストが別々の図形を使っているのはそのため。
