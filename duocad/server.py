@@ -18,14 +18,22 @@
 
     下り(client -> server)
         {"cmd": "get_state"}
-        {"cmd": "extrude_face", "face_index": int, "distance": float, "client_op": int}
+        {"cmd": "extrude_face", "face_index": int, "distance": float, "client_op": int, "body_id": str}
+        {"cmd": "set_visible", "body_id": str, "visible": bool, "client_op": int}
         {"cmd": "undo"} / {"cmd": "redo"}
         {"cmd": "measure_record", "record": {...}}    計測1行の追記(下記)
 
     上り(server -> client)
-        {"type": "state", "state": {...}, "applied": {...}|None}
+        {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
         {"type": "error", "message": str, "where": str}
         {"type": "warning", "message": str}
+
+    **M3.5パーツ一覧UI(2026-08-11)で `state` は軽量化した** — `state.bodies` は
+    `geometry` を含まない(name/kind/visible/face_count/volume/revisionのみ、27部品でも数KB)。
+    形状は `delta.bodies`(接続ごとに版が変わったBodyだけ、`geometry` 付き)で届く。
+    毎回27部品ぶんのテセレーション結果(実測6MB超)を送り直すと、パーツ分解でサーバ側を
+    速くした意味がクライアント側の描画で消える(§2「外してはいけない3つ」)。
+    接続直後は「知っている版」が空なので `delta.bodies` に全Bodyが入り、初期描画が揃う。
 
 **状態変更は接続している全クライアントへ配信する**(上り方向。これが無いとM4の交互操作が
 成立しない。今は人間1人だが、経路は今作っておく)。操作を出したクライアントにだけ `applied`
@@ -69,7 +77,8 @@ from websockets.asyncio.server import serve
 
 from . import io_step, kernel, query
 from .document import Document
-from .verbs import extrude_face, make_editable_copy, set_visible
+from .verbs import extrude_face, make_editable_copy
+from .verbs import set_visible as set_visible_verb
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STEP = Path(r"C:\Users\tm976\mf\3d-models\mATX_PC_case_20251122\PC_case_20251122.step")
@@ -131,7 +140,7 @@ class Session:
         editable_ids = []
         for reference_id in reference_ids:
             editable_id = make_editable_copy(self.document, reference_id)
-            set_visible(self.document, reference_id, False)
+            set_visible_verb(self.document, reference_id, False)
             editable_ids.append(editable_id)
         entries = self.document.log.entries
         self._setup_floor_seq = entries[-1].seq if entries else 0
@@ -151,12 +160,27 @@ class Session:
 
     # ---------------------------------------------------------------- 状態
     def state(self) -> dict:
-        """アプリ層へ渡す全状態。bodiesは配列(部品ごと)。"""
+        """アプリ層へ渡す全状態。bodiesは配列(部品ごと)。**geometryを含む(重い)**。
+
+        WebSocket配信(`Server._push`)はこれを毎回は使わない — `state_meta()` + `delta()`
+        を組み合わせて、版が変わったBodyの `geometry` だけを送る(モジュールdocstring参照)。
+        `state()` はテストと `get_state` の全量確認用に残す。
+        """
+        meta = self.state_meta()
+        meta["bodies"] = [self._body_state(body) for body in self.document.bodies]
+        return meta
+
+    def state_meta(self) -> dict:
+        """`state()` の軽量版。**bodiesの各要素にgeometryを含まない**(テセレーションを呼ばない)。
+
+        パーツ一覧(名前・面数・可視性)のように形状そのものが要らない用途、および
+        WebSocket配信のたびに送る「土台」の情報に使う。27部品でも数KB(state()は6MB超)。
+        """
         active = self.document.active_body()
         return {
             "units": self.document.units,
             "active_body_id": active.id if active is not None else None,
-            "bodies": [self._body_state(body) for body in self.document.bodies],
+            "bodies": [self._body_meta(body) for body in self.document.bodies],
             "log": [
                 {"seq": operation.seq, "verb": operation.verb, "args": operation.args}
                 for operation in self.document.log.entries
@@ -229,8 +253,8 @@ class Session:
             raise KeyError(f"no such body: {body_id!r}")
         return body
 
-    def _body_state(self, body) -> dict:
-        """1Bodyぶんの状態(stateとdeltaが共有する)。"""
+    def _body_meta(self, body) -> dict:
+        """1Bodyぶんの軽量な状態(geometryを含まない。state_metaとの共有部分)。"""
         return {
             "body_id": body.id,
             "name": body.name,
@@ -239,8 +263,13 @@ class Session:
             "revision": self.body_revision(body.id),
             "face_count": kernel.face_count(body.shape),
             "volume": query.volume(body.shape),
-            "geometry": self.geometry(body.id) if body.visible else None,
         }
+
+    def _body_state(self, body) -> dict:
+        """1Bodyぶんの状態(stateとdeltaが共有する)。`_body_meta` にgeometryを足したもの。"""
+        meta = self._body_meta(body)
+        meta["geometry"] = self.geometry(body.id) if body.visible else None
+        return meta
 
     # ---------------------------------------------------------------- 操作
     def extrude(
@@ -268,11 +297,30 @@ class Session:
             "verb": operation.verb,
             "seq": operation.seq,
             "client_op": client_op,
+            "body_id": changed_body_id,
             "face_index": int(face_index),
             "distance": float(distance),
             "after_face_index": provenance.get("after_face_index"),
             "server_ms": round(elapsed_ms, 3),
             "changed_bodies": [changed_body_id],
+        }
+
+    def set_visible(self, body_id: str, visible: bool, client_op: Optional[int] = None) -> dict:
+        """パーツ一覧からの表示・非表示切り替え。**コアの `set_visible` verbを呼ぶだけ**
+        (アプリ層に可視性の状態を持たせない。実装計画書§2)。
+
+        呼ぶたびに操作ログへ1行積まれるので、undoで戻る。存在しない `body_id` は
+        `KeyError`(verb側の契約どおり。document・ログとも変更しない)。
+        """
+        operation = set_visible_verb(self.document, body_id, bool(visible))
+        self._applied_count += 1
+        return {
+            "verb": operation.verb,
+            "seq": operation.seq,
+            "client_op": client_op,
+            "body_id": body_id,
+            "visible": bool(visible),
+            "changed_bodies": [body_id],
         }
 
     def undo(self) -> dict:
@@ -348,6 +396,7 @@ def _selection_hints(operation: Any) -> dict:
     provenance = operation.provenance or {}
     return {
         "seq": operation.seq,
+        "body_id": operation.args.get("body_id"),
         "face_index": operation.args.get("face_index"),
         "after_face_index": provenance.get("after_face_index"),
     }
@@ -427,11 +476,23 @@ async def _send(connection: Any, payload: dict) -> None:
 
 
 class Server:
-    """WebSocketの接続集合とコマンドの実行。状態変更は全接続へ配信する。"""
+    """WebSocketの接続集合とコマンドの実行。状態変更は全接続へ配信する。
+
+    **接続ごとに「知っている版」を覚える**(`_known_revisions`)。M3.5で複数Bodyになった
+    ぶん、接続によって最後に送った版が違いうる(例: 遅れて `get_state` した接続は
+    まだ何も知らない)。差分(`Session.delta`)はこの接続ごとの版を基準に計算する。
+    """
 
     def __init__(self, session: Session) -> None:
         self.session = session
         self.clients: set = set()
+        self._known_revisions: dict = {}  # connection -> {body_id: revision}
+        # 接続ごとの送信ロック。**2つの `_push` 呼び出し(例: 2クライアントがほぼ同時に
+        # 操作したとき)が同じ接続への配信で競合するのを防ぐ**(2026-08-11のQA指摘: ロック無しだと
+        # 「known_revisionsの更新→await送信」の間に別の`_push`が割り込み、
+        # (a) 古い版のペイロードが後から届く、(b) 実際には送っていない版を「知っている」ことに
+        # されてしまい以後の差分が欠落する、の2通りの事故が起きうる)。
+        self._send_locks: dict = {}  # connection -> asyncio.Lock
 
     async def handle(self, connection: Any) -> None:
         self.clients.add(connection)
@@ -452,6 +513,8 @@ class Server:
                 await self._dispatch(connection, raw)
         finally:
             self.clients.discard(connection)
+            self._known_revisions.pop(connection, None)
+            self._send_locks.pop(connection, None)
 
     async def _dispatch(self, connection: Any, raw: Any) -> None:
         try:
@@ -466,12 +529,20 @@ class Server:
                 await self._push(connection, applied=None, only=connection)
             elif command == "extrude_face":
                 applied = self.session.extrude(
-                    message["face_index"], message["distance"], message.get("client_op")
+                    message["face_index"],
+                    message["distance"],
+                    message.get("client_op"),
+                    body_id=message.get("body_id"),
                 )
                 await self._push(connection, applied=applied)
             elif command in ("undo", "redo"):
                 applied = self.session.undo() if command == "undo" else self.session.redo()
                 applied["client_op"] = message.get("client_op")
+                await self._push(connection, applied=applied)
+            elif command == "set_visible":
+                applied = self.session.set_visible(
+                    message["body_id"], bool(message["visible"]), message.get("client_op")
+                )
                 await self._push(connection, applied=applied)
             elif command == "measure_record":
                 line = self.session.append_measure_record(message.get("record") or {})
@@ -489,19 +560,70 @@ class Server:
             )
 
     async def _push(self, origin: Any, applied: Optional[dict], only: Any = None) -> None:
-        """状態を配信する。`only` を指定するとその接続にだけ送る。"""
-        state = self.session.state()
+        """状態を配信する。`only` を指定するとその接続にだけ送る。
+
+        `state`(軽量・geometryなし)は全接続共通で1回だけ作る。`delta`(geometry付き、
+        版が変わったBodyだけ)は**接続ごとに知っている版が違いうる**ので、接続ごとに計算する
+        (モジュールdocstring参照。ここが差分送信の出口)。
+
+        **接続ごとの「delta計算 → 送信 → 版の記録」は `_send_locks` で直列化する**
+        (2026-08-11のQA指摘)。2つの操作(2クライアントがほぼ同時に操作した場合や、
+        1クライアントが応答を待たず連続でコマンドを送った場合)がそれぞれ別の `_push` を
+        起こすと、ロック無しでは「新しい版の送信が先に終わり、後から古い版が上書きで届く」
+        「送信前に版を記録してしまい、実際には届いていない版を`_known_revisions`が
+        知っている扱いになる」の2通りの事故が起きる。ロックの範囲を1接続ぶんに絞って
+        あるので、**別々の接続への配信は並行のまま**(1接続の遅延が他接続を止めない)。
+
+        **既知の残存課題(2026-08-11のQA2回目で指摘・未対応)**: `meta`(`state`)は
+        この関数の先頭で1回だけ作り、全ターゲットで使い回す。2クライアントが同時に操作した
+        とき、後発の `_push` の `deliver()` が先にロックを取って新しい `meta` を送った後、
+        先発の `_push` の `deliver()` が(ロック待ちしていたぶん)後から届いて**古い**
+        `meta` で上書きする経路が理論上ありうる(`_send_locks` は「同じ接続への配信」を
+        直列化するだけで、`_push` 呼び出しをまたいだ新旧の順序までは保証しない)。
+        `deliver()` の中で世代カウンタを比較して古い方を捨てる案も検討したが、
+        `applied`(呼び出し元への確認応答)を持つのは常にその接続**自身**の `_push` であり
+        (`target is origin` のときだけ載る)、1接続からのコマンドは
+        `async for raw in connection` が直列に処理するので自分自身の `_push` 同士は
+        競合しない。したがって影響するのは**他接続の操作による横取り**のみで、
+        M3.5は単一ユーザーを前提にしており(M4のMCP/交互操作で複数主体が同時に操作する
+        ようになって初めて顕在化する)、実害の検証手段(該当するテストも本手動確認の対象も
+        単一クライアント)が無いまま世代カウンタを足すと `applied` を誤って握りつぶす
+        新しい不具合を作りこむ危険の方が大きいと判断し、**このタスクでは対応を見送った**。
+        M4で複数主体が同時に操作するようになったら、この関数を再訪すること。
+        """
+        meta = self.session.state_meta()
+        targets = [only] if only is not None else list(self.clients)
+
+        async def deliver(target: Any) -> None:
+            lock = self._send_locks.setdefault(target, asyncio.Lock())
+            async with lock:
+                known = self._known_revisions.get(target, {})
+                delta = self.session.delta(known)
+                payload = {
+                    "type": "state",
+                    "state": meta,
+                    "delta": {"bodies": delta["bodies"]},
+                }
+                if applied is not None and target is origin:
+                    payload["applied"] = applied
+                try:
+                    await _send(target, payload)
+                    # **送信が成功してから**版を記録する(送信前に記録すると、失敗時や
+                    # 割り込み時に「送っていない版を知っている」ことになってしまう)。
+                    self._known_revisions[target] = {
+                        body["body_id"]: body["revision"] for body in meta["bodies"]
+                    }
+                except Exception:  # 落ちた接続のために他へ配れないことを避ける
+                    self.clients.discard(target)
+                    self._known_revisions.pop(target, None)
+                    self._send_locks.pop(target, None)
+
+        # 警告は delta() が呼ぶ geometry() の中で積まれる(deliver() の内側)。
+        # 全ターゲットぶんの配信(delta計算を含む)を終えてから取り出せば、
+        # どのターゲットの分も取りこぼさない(1回のpushで複数回積まれても束ねて1回出す)。
+        await asyncio.gather(*(deliver(target) for target in targets))
         for warning in self.session.take_warnings():
             await _send(origin, {"type": "warning", "message": warning})
-        targets = [only] if only is not None else list(self.clients)
-        for target in targets:
-            payload = {"type": "state", "state": state}
-            if applied is not None and target is origin:
-                payload["applied"] = applied
-            try:
-                await _send(target, payload)
-            except Exception:  # 落ちた接続のために他へ配れないことを避ける
-                self.clients.discard(target)
 
 
 async def run(session: Session, host: str, port: int) -> None:
