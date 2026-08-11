@@ -10,6 +10,7 @@ M2(2026-08-11)で実装済み。データモデル(`Sketch` / `Entity` / PlaneRe
     add_line(doc, sketch_id, p0, p1) -> EntityId
     add_circle(doc, sketch_id, center, radius) -> EntityId
     add_rectangle(doc, sketch_id, corner, width, height) -> EntityId
+    add_arc(doc, sketch_id, center, radius, start_deg, end_deg) -> EntityId   (2026-08-11追加)
     entity_params(doc, sketch_id, entity_id) -> dict[str, float]
 
 **座標はスケッチ平面上の2D**(u, v)。基準平面のときは (x, y) / (x, z) / (y, z) に対応する。
@@ -99,6 +100,7 @@ class Entity:
         line      : x0, y0, x1, y1
         circle    : cx, cy, radius
         rectangle : x, y, width, height
+        arc       : cx, cy, radius, start_deg, end_deg   (度・反時計回り・X軸から。0度をまたいでよい)
     """
 
     id: EntityId
@@ -226,7 +228,7 @@ def add_arc(
     start_deg: float,
     end_deg: float,
 ) -> EntityId:
-    """円弧を足して EntityId を返す。**スタブ(実装は次のタスク)**。
+    """円弧を足して EntityId を返す。
 
     **中心・半径・角度で持つ**(3点で受け取らない)。理由は実装計画書§3.4
     「パラメトリック・プリミティブ」と§6予防5で、**半径・角度を後から編集できる形**に
@@ -239,7 +241,14 @@ def add_arc(
     「円を線で分けて片側だけ押し出す」で多くは代用できるが、アロマ拡散器のように
     **部分円筒面(75〜97°の円弧を押し出したもの)**を持つ実物は代用では作れない。
     """
-    raise NotImplementedError("add_arc は未実装(テスト先行。次のタスクで実装する)")
+    params = {
+        "cx": float(center[0]),
+        "cy": float(center[1]),
+        "radius": float(radius),
+        "start_deg": float(start_deg),
+        "end_deg": float(end_deg),
+    }
+    return _add_entity(doc, sketch_id, "arc", params, VERB_ADD_ARC)
 
 
 def entity_params(
@@ -417,7 +426,7 @@ def _undo_add_entity(document: Document, operation: Operation) -> None:
 
 
 register_verb(VERB_SKETCH_CREATE, do=_do_sketch_create, undo=_undo_sketch_create)
-for _verb in (VERB_ADD_LINE, VERB_ADD_CIRCLE, VERB_ADD_RECTANGLE):
+for _verb in (VERB_ADD_LINE, VERB_ADD_CIRCLE, VERB_ADD_RECTANGLE, VERB_ADD_ARC):
     # 3つとも「スケッチへ図形を1つ足す」で、do/undo の実体は args["kind"] で分かれない
     # (追加する図形の種別は args が持つ)。verb名を分けているのは操作ログとMCPの粒度のため。
     register_verb(_verb, do=_do_add_entity, undo=_undo_add_entity)

@@ -1412,3 +1412,36 @@ docstringに注意を書く」と指示していたが、`BRepCheck` が偽に�
   `describe_edges` の実装に伴い誤って消してしまった `_wrap`/`_unwrap` の復元。
 - `gpt-5.6-sol-*` / `gpt-5.6-terra-*` は月次上限（8/19リセット）で使えず、**QAは委譲元の
   Claude が行った**（実装=cursor auto と別モデルなので「QAは実行者と別モデル」は満たす）。
+
+## 円弧の実装で分かったこと（2026-08-11・`arc-logic`）
+
+**テストは全16件が緑**（`tests/test_arc.py`）。cursor(auto) へ委譲し**1巡で通った**
+（フィレット・面取りと違い、スケッチ側だけで完結しOCCTの黙殺失敗が絡まないため）。
+変更は3ファイル・38行だけ。
+
+- `sketch.add_arc` は `_add_entity` を呼ぶだけ（`add_circle` と同じ形）。数値の検査・
+  名前つき値への登録・ログ・undo は既存の共通経路が面倒を見る。
+- **`VERB_ADD_ARC` を登録ループへ足すのを忘れない**。忘れると追加自体は動くのに
+  undo だけが `verb 'add_arc' has no registered handler` で落ちる（do/undo の実体は
+  `args["kind"]` を見る共通関数なので、足すのは1語だけ）。
+- `kernel._entity_edges` の `arc` 分岐は `BRepBuilderAPI_MakeEdge(gp_Circ(axis, r), u1, u2)`。
+  **0度またぎは `sweep = (end_deg - start_deg) % 360` で表現し、`u1 〜 u1+sweep` を渡す**
+  （`u2` に `end_deg` をそのまま渡すと 350→10 が20度ではなく340度の円弧になる）。
+  向きが反時計回りであることは `gp_Ax2(center, N, XDir)` の定義から導けるが、
+  **実測で確かめたのは `test_angles_run_counter_clockwise_and_may_cross_zero`**
+  （委譲先は「コード上の確認のみ・未実測」と正直に申告した）。
+- `kernel._entities_bbox_2d` の `arc` は**円と同じ外接箱**で安全側に囲む（補助面が少し
+  大きくなるだけで領域検出の結果は変わらない）。
+- `region._translate_params` の `arc` は `cx`/`cy` を動かすだけ（半径・角度は不変）。
+
+**v1のverbで残るのは `円形反復` の1つだけ**になった。そして**受入テストを実物に戻せる**
+状態に近づいた:
+
+| 段階 | 受入対象 | 構成（実測） |
+|---|---|---|
+| 最小の実物 | `PC_case_feet.step` | 5面 = 平面3 + 全周円筒1 + 円錐1 |
+| 本命 | `plate_1by1_24.step`（積層プレート） | 74面 = 平面18 + 部分円筒28 + 円錐8 + トーラス12 + bspline8 |
+
+**受入テストの再定義は本人の判断事項**なので行っていない（`受入テスト再定義待ち`）。
+なお最小の実物である脚も、**寸法まで同じ形は今のAPIでは作れない**（非対称な面取り＝
+角度指定が要る。上の「フィレット・面取りの実装で分かったこと」参照）。

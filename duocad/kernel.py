@@ -929,6 +929,24 @@ def _entity_edges(ax3: "gp_Ax3", entity: dict) -> List[Any]:
         if not maker.IsDone():
             raise ValueError("failed to build a circle edge")
         return [maker.Edge()]
+    if kind == "arc":
+        center = _to_pnt(ax3, float(params["cx"]), float(params["cy"]))
+        radius = float(params["radius"])
+        if radius <= 0:
+            raise ValueError(f"arc radius must be positive, got {radius}")
+        start_deg = float(params["start_deg"])
+        end_deg = float(params["end_deg"])
+        # 反時計回りに start→end。0度またぎは (end-start)%360 の掃引角で表現する。
+        sweep_deg = (end_deg - start_deg) % 360.0
+        start_rad = math.radians(start_deg)
+        end_rad = start_rad + math.radians(sweep_deg)
+        # gp_Ax2(center, N, X): P(U)=O+R*cos(U)*X+R*sin(U)*(N×X) なので
+        # U=0 がスケッチX、U増加が反時計回り（右手系）。
+        axis = gp_Ax2(center, ax3.Direction(), ax3.XDirection())
+        maker = BRepBuilderAPI_MakeEdge(gp_Circ(axis, radius), start_rad, end_rad)
+        if not maker.IsDone():
+            raise ValueError("failed to build an arc edge")
+        return [maker.Edge()]
     if kind == "rectangle":
         x = float(params["x"])
         y = float(params["y"])
@@ -971,6 +989,13 @@ def _entities_bbox_2d(entities: list) -> Tuple[float, float, float, float]:
             include(float(params["x0"]), float(params["y0"]))
             include(float(params["x1"]), float(params["y1"]))
         elif kind == "circle":
+            cx = float(params["cx"])
+            cy = float(params["cy"])
+            radius = float(params["radius"])
+            include(cx - radius, cy - radius)
+            include(cx + radius, cy + radius)
+        elif kind == "arc":
+            # 安全側: 円と同じ外接箱で囲む（補助面が少し大きくなるだけ）。
             cx = float(params["cx"])
             cy = float(params["cy"])
             radius = float(params["radius"])

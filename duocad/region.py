@@ -102,6 +102,9 @@ def _translate_params(
     elif kind == "circle":
         moved["cx"] = params["cx"] + dx
         moved["cy"] = params["cy"] + dy
+    elif kind == "arc":
+        moved["cx"] = params["cx"] + dx
+        moved["cy"] = params["cy"] + dy
     elif kind == "rectangle":
         moved["x"] = params["x"] + dx
         moved["y"] = params["y"] + dy
