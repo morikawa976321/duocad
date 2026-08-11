@@ -1183,3 +1183,170 @@ docstringに明記した）。
 悪いクライアントだけで、繋がらない失敗を新たに作る）／ツール実行がイベントループを塞ぐ
 （既存の `Session.extrude` と同じ性質。実行器スレッドへ逃がすと `Server` のスレッド前提を
 作り直すことになるので、M4本体で交互操作を作るときにまとめて再訪する）。
+
+---
+
+# 3verb前倒し（フィレット・面取り・円弧） — テストが定義する契約（2026-08-11追記）
+
+v1.1／v1.2に置いていた3verbを前倒しした（2026-08-11 本人決定）。**このタスクはテストだけ**で、
+実装は次の2タスク（`fillet-chamfer-logic` / `arc-logic`）が行う。**赤で終わるのが正常**。
+
+## 現状（2026-08-11・テスト先行の段階）
+
+- 新規3ファイル **32件が赤・4件が緑**、赤は**全件 `NotImplementedError`**（`--tb=line` で
+  例外種別を数えて確認済み。`ImportError`・収集エラーは0件）。
+- 緑の4件は**実装に依存しない実測の記録**: 円弧が `ENTITY_KINDS` に入っていること、
+  積層プレート74面の内訳、PCケースの脚5面の内訳、アロマ拡散器の部分円筒6面。
+  これらは「何が要るか」の到達点であり、実装が進んでも意味が変わらない。
+
+## なぜ前倒したのか（実測）
+
+| モデル | ソリッド | 面 | 足りないもの |
+|---|---|---|---|
+| PCケースの脚 `PC_case_feet.step` | 1 | 5（平面3 + 全周円筒1 + 円錐1） | 面取りだけ |
+| 積層プレート `plate_1by1_24.step` | 1 | 74（平面18 + 部分円筒28 + 円錐8 + トーラス12 + bspline8） | 面取り・フィレット |
+| アロマ拡散器 `aroma_oil_diffuser.step` | 4 | 352（平面338 + 全周円筒8 + 部分円筒6） | 円弧 |
+| PCケース `PC_case_20251122.step` | 27 | 2835 | フィレット |
+
+（2026-08-11に `query.describe_shape` で測り直した値。プレートの内訳はタスクファイル記載の
+「その他8」が `bspline` 8 であることまで確認した。）
+
+## モジュール一覧（この3verbで増える分・すべてスタブ）
+
+| モジュール | 役割 | OCP直接import | build123d直接import |
+|---|---|---|---|
+| `duocad/verbs/fillet.py` | verb `fillet` | 禁止 | 禁止 |
+| `duocad/verbs/chamfer.py` | verb `chamfer` | 禁止 | 禁止 |
+
+`duocad/sketch.py` に `arc`（`ENTITY_KINDS` と `add_arc`）、`duocad/kernel.py` に
+`edge_count` / `classify_edge` / `edge_of` / `fillet_edges` / `chamfer_edges`、
+`duocad/query.py` に `describe_edges` を足した（幾何とOCPの境界は従来どおり）。
+
+## API契約
+
+    fillet(doc, edges, radius, body_id=None) -> Operation
+    chamfer(doc, edges, distance, body_id=None) -> Operation
+        `edges` は**1始まりの辺の添字**のリスト（面の添字と同じ流儀）。
+        `radius`/`distance` は float（全辺同じ）か辺ごとのリスト（長さが合わなければ ValueError）。
+        ログに `args={"edges": [...], "radius"|"distance": ..., "body_id": ...}` を積む。
+
+    query.describe_edges(shape) -> [{"index","kind","length","start","end"}, ...]
+        `kind` は "line" | "circle" | "other"。**辺の選択は問い合わせ層越しに行う**
+        （verbが build123d を直接呼ばない。§6予防4）。**端点まで返す**のは
+        「縦の4辺だけ丸める」のような選び方が端点なしでは表現できず、添字の決め打ちに
+        退化するため（形が変われば別の辺を指す）。
+
+    sketch.add_arc(doc, sketch_id, center, radius, start_deg, end_deg) -> EntityId
+        **中心・半径・角度**で持つ（3点で受け取らない）。§3.4「パラメトリック・プリミティブ」と
+        §6予防5に従い、半径・角度を後から `set_parameter` で編集できる形にするため。
+        3点で持つと円弧だけが「数値を持たない図形」になる。
+        `params` は `cx` / `cy` / `radius` / `start_deg` / `end_deg`（度・反時計回り・X軸から）。
+
+## 実測値の出どころ（2026-08-11に測った。推測で書いていない）
+
+20mm立方体・全辺フィレット（duocadの語彙 = `faces_by_type`）:
+
+| 半径 | IsDone | 面の内訳 |
+|---|---|---|
+| 3.0 | True | 平面6 / 部分円筒12 / other(球)8 = 26面 |
+| 10.0 | **False** | （例外を投げずに黙って失敗） |
+| 10.5 | True | 平面6 / 部分円筒12 / bspline7 / other(球)1 = 26面 |
+| 30.0 | **False** | |
+| 1.0〜3.75をバラバラ | True | 平面6 / 部分円筒12 / bspline8 = 26面 |
+
+- **球は `other` に落ちる**（`FACE_KINDS` に球は無い）。タスクファイルの「円筒12+球8+平面6」を
+  duocadの語彙へ翻訳したのがこの表であり、**`FACE_KINDS` に球を足すのは範囲外**
+  （足すと既存の内訳の意味が変わる）。
+- 貫通穴（r=4）の円い辺2本に r=1.5 → 平面6 / 全周円筒1 / **トーラス2** = 9面。
+  **まっすぐな辺は円筒、円い辺はトーラス**になる。
+- 半円（r=5・180°）+ 弦を3mm押し出す → **部分円筒1**（U範囲180度）/ 平面3 = 4面。
+- 1辺だけフィレットしたときの面の添字の動き: 1→1 / 2→7 / 3→6 / 4→4 / 5→5 / 6→2
+  （2026-08-07には i=5→9 の観測）。**生の添字を保存してはいけない**（§7）の実行可能な根拠。
+- `BRepFilletAPI_MakeFillet` は `History()` を**持たない**（`Modified`/`Generated`/`IsDeleted`
+  は持つ）。`kernel.normalize_provenance` に通すと `modified`/`generated`/`deleted` が埋まる
+  ことを実測で確認した。ブーリアンは `History()` を持つので取り出し方が違う ＝ アダプタの存在理由。
+
+## タスクファイルの項番8を実測で訂正した
+
+タスクファイルは「**箱のエッジに面取りをかけると円錐面ができる**こと」と書いているが、実測は:
+
+    箱のまっすぐな辺を面取り（2mm） -> 平面7・面7   ← 平面が1枚増えるだけ。**円錐にならない**
+    円筒の円い縁を面取り（1mm）     -> 平面2 + 全周円筒1 + **円錐1**・面4
+
+円錐は**円い辺**から生まれる。タスクファイル自身の「推測で書かない・その場で測ってから書く」に
+従い実測どおりに書いた。項番8の意図（面取りが新しい面を作る）は
+`test_chamfering_a_straight_edge_makes_a_plane`、項番9の意図（実物の円錐が作れる）は
+`test_chamfering_a_circular_edge_makes_a_cone` が引き受ける。
+
+## 既存テストを1件だけ書き換えた（理由）
+
+`tests/test_sketch.py::test_entity_kind_is_validated` は「知らない種別」の例として `"arc"` を
+使っていた（M2時点では円弧はv1.2の範囲外だったため）。**前倒しで arc が有効になったので
+例を `"spline"` に差し替えた**。見ている契約（登録されていない種別を拒否する）は変えていない。
+
+## テスト一覧とタスクファイル項番の対応
+
+| 項番 | テスト |
+|---|---|
+| 1（円筒+球+平面） | `test_fillet.py::test_fillet_on_a_box_makes_cylinders_spheres_and_planes` / `..._vertical_edges_only` |
+| 2（半径バラバラでspline） | `test_varied_radii_produce_bspline_faces` |
+| 3（円い辺でトーラス） | `test_fillet_on_a_circular_edge_produces_torus` |
+| 4（失敗を黙って通さない） | `test_a_failing_fillet_raises_and_leaves_nothing_behind[10.0/30.0]` / `test_the_failure_is_not_monotonic_in_radius` |
+| 5（r=10.5は成功するが歪） | `test_radius_10_5_succeeds_but_the_result_is_odd` |
+| 6（ログ・undo） | `test_fillet_is_logged_and_undoable` |
+| 7（由来の回収） | `test_fillet_records_provenance_through_the_normalizing_adapter` |
+| 8（面取りで新しい面） | `test_chamfer.py::test_chamfering_a_straight_edge_makes_a_plane`（**実測で訂正**） |
+| 9（実物の脚の構成） | `test_chamfering_a_circular_edge_makes_a_cone` / `test_the_real_foot_needs_a_cone` / `test_chamfer_can_produce_every_face_kind_the_real_foot_needs` |
+| 10（面取りも黙って失敗しない） | `test_a_failing_chamfer_raises_and_leaves_nothing_behind` / `test_chamfer_rejects_an_unknown_edge_index` |
+| 11（ログ・undo） | `test_chamfer_is_logged_and_undoable` / `test_chamfer_records_provenance_...` |
+| 12（円弧を追加できる） | `test_arc.py::test_arc_is_a_sketch_entity_kind` / `test_add_arc_stores_named_numbers` / `test_add_arc_is_logged_and_undoable` / `test_arc_radius_can_be_edited_afterwards` / `test_broken_arcs_are_refused` |
+| 13（円弧を含む閉領域） | `test_a_region_closed_by_an_arc_and_a_line_is_detected` / `test_an_open_arc_alone_does_not_close_a_region` |
+| 14（部分円筒になる） | `test_extruding_an_arc_region_makes_a_partial_cylinder` / `test_the_partial_cylinder_spans_the_arc_angle` |
+| 15（ログ・undo） | `test_arc_survives_a_log_round_trip` |
+| 16（板→穴→フィレット） | `test_plate_then_hole_then_fillet` |
+| 17（添字がずれる） | `test_fillet_shifts_face_indices` |
+
+## この前倒しで**契約にしなかった**こと（範囲の明示）
+
+- **円形反復**（`pattern_circular`）は範囲外のまま（今回の前倒しに含まれていない）。
+- **可変半径フィレット・面取りの角度指定**などの拡張は入れない。
+- **受入テストの実物への差し替えは行わない** — 本人の判断事項。次々タスクの引継ぎに
+  「受入テスト再定義待ち」と書く。脚と寸法まで同じ形を組むテストを書かなかったのもこれが理由で、
+  ここで固定したのは「必要な面種がverbで作れること」までである。
+- `FACE_KINDS` に球（sphere）を足さない。
+
+## この前倒しのQAで足した契約（2026-08-11・cursor auto のレビュー指摘を反映）
+
+QAは `gpt-5.6-sol-high` → `gpt-5.6-terra-high` の順で試したが**どちらも月次の使用量上限**
+（8/19リセット）で呼べず、**cursor の auto 枠**でレビューした（実行者Claudeとは別モデル）。
+major 4件・minor 7件。対応:
+
+- **major: 項番9が集合の包含で通っていた** … `set(FEET_KINDS) <= produced` は4面でも5面でも
+  緑になり、**環状平面が無い実装でも「実物が作れる」と主張できた**。実測値そのもの
+  （平面2 + 全周円筒1 + 円錐1 = 4面）に落とし、実物との差が**平面1枚**であることと、
+  それが**非対称な面取り（角度指定＝今回の範囲外）**を要することを
+  `test_how_close_the_verbs_get_to_the_real_foot` に明記した。
+- **major: `pytest.raises(Exception)` が緩すぎた** … `IsDone()` を一度も見ない実装が
+  引数検査の TypeError で落ちても緑になる。失敗系はすべて **`ValueError`**（既存の
+  `extrude` 系と同じ）に絞った。**この型が実装の契約**である。
+- **major: 面取りとフィレットを同じボディへ順にかけるテストが無かった** …
+  積層プレートは円錐8とトーラス12を同時に持つので、片方だけ動く実装では実物に届かない。
+  `test_chamfer_and_fillet_compose_on_the_same_body` を足した（実測: 面取り後 平面6/全周円筒1/
+  円錐1 = 8面 → フィレット後 +トーラス1 = 9面）。**面取りで辺の添字が変わるので選び直す**
+  ことも同テストで示している。
+- **major: 円弧の角度を見ていると書いて長さしか見ていなかった** … docstringを実際に見ている値
+  （円弧の長さ = r·θ。角度と1対1）へ揃え、面側の内訳も同時に確認するようにした。
+- **minor 対応**: 半径バラバラの期待値を実測どおり厳密化（`bspline > 0` → 内訳の完全一致）／
+  面取りにしかなかった**範囲外の辺の添字**・**参照ボディの拒否**・**辺0本の拒否**を
+  フィレットにも追加／面取りの由来にも `face_map` を要求（片方だけ緩いと面取りだけ由来が
+  空でも緑になる）／**90度の扇形**のテストを追加（実物の部分円筒は75〜97°で、半円だけを
+  契約にすると「半円のときだけ通る」実装を止められない。実測: 平面4 + 部分円筒1 = 5面）／
+  **角度は反時計回り・0度をまたいでよい**（`start_deg=350, end_deg=10` は20度）を契約に明記。
+
+**項番8の訂正（円錐→平面）はQAも妥当と判定した**（直線辺の面取りは平面ベベル、円い縁の
+面取りが円錐、という切り分けは幾何的に自然）。
+
+**実装者への申し送り（QAが「未決」と指摘した点。実装時に決めてよいが、決めたらここへ書くこと）**:
+`Operation.selection` に辺を載せるか（既存の `extrude` は領域を載せている）／辺の添字が
+形状変更でずれる問題に対する由来スロットの持ち方（`face_map` と同じ形にするか別にするか）／
+複数ボディにまたがる辺の選択（今回は単一ボディのみ）。

@@ -75,6 +75,24 @@ def volume(shape: Any) -> float:
     return kernel.volume(_unwrap(shape))
 
 
+def describe_edges(shape: Any) -> list:
+    """辺を1始まりの添字つきで列挙する。**スタブ(実装は次のタスク)**。
+
+    戻り値: `[{"index": int, "kind": "line"|"circle"|"other", "length": float,
+              "start": [x,y,z], "end": [x,y,z]}, ...]`
+
+    `start` / `end` は辺の端点（閉じた辺＝円などでは同じ点になる）。**向きが分からないと
+    辺を選べない**ので端点まで返す — 「縦の4辺だけ丸める」のような、人間にもAIにも自然な
+    選び方が、端点なしでは表現できない（添字の決め打ちになり、形が変わると別の辺を指す）。
+
+    **フィレット・面取りの辺はここから選ぶ**(verbが build123d を直接呼ばないための境界。
+    実装計画書§6予防4)。「まっすぐな辺」と「円い辺」を区別できないと選べない —
+    円い辺のフィレットはトーラスを、円い辺の面取りは円錐を作り、まっすぐな辺の面取りは
+    平面になる(2026-08-11実測)ので、種別は選択の一部である。
+    """
+    raise NotImplementedError("describe_edges は未実装(テスト先行)")
+
+
 def _wrap(shape: Any):
     """生の TopoDS_Shape を build123d のラッパへ(既にラッパならそのまま)。"""
     if shape is None:

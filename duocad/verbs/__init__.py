@@ -9,15 +9,19 @@ if 連鎖を置かないための設計)。`duocad/__init__.py` がこのパッ�
 **OCP / build123d を直接importしない**(tests/test_boundaries.py が再帰的に検査する)。
 幾何は `duocad.kernel` 越しに呼ぶ。verbが増えたらここに1行足す。
 """
+from .chamfer import chamfer  # noqa: F401
 from .extrude import extrude  # noqa: F401
 from .extrude_face import extrude_face  # noqa: F401
+from .fillet import fillet  # noqa: F401
 from .make_editable_copy import make_editable_copy  # noqa: F401
 from .pattern import pattern_rectangular  # noqa: F401
 from .visibility import set_visible  # noqa: F401
 
 __all__ = [
+    "chamfer",
     "extrude",
     "extrude_face",
+    "fillet",
     "make_editable_copy",
     "pattern_rectangular",
     "set_visible",

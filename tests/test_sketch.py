@@ -112,15 +112,21 @@ def test_face_plane_ref_declares_a_provenance_slot():
 
 
 def test_entity_kind_is_validated():
-    """図形の種別は line / circle / rectangle だけ(M2の範囲。円弧はv1.2)。
+    """図形の種別は決められたものだけ。知らない種別を黙って受け取らない(§6予防6)。
 
-    `Body.kind` と同じく、知らない種別を黙って受け取らない(§6予防6)。
+    **2026-08-11に円弧(`arc`)を前倒しで足した**ため、このテストが「知らない種別」の例として
+    使っていた `"arc"` は有効になった(元の版は「図形の種別は line / circle / rectangle だけ。
+    円弧はv1.2」と書いていた)。例を差し替えただけで、**契約そのものは変えていない** —
+    見ているのは「登録されていない種別を拒否すること」であって、特定の綴りではない。
+    前倒しの理由は `tests/test_arc.py` のモジュールdocstring(実物のアロマ拡散器が
+    部分円筒6面を持ち、代用では作れない)。
     """
     assert Entity(id="e1", kind="circle").params == {}
+    assert Entity(id="e2", kind="arc").params == {}, "円弧は2026-08-11から有効な種別"
     # 必須フィールドの包含で見る(補助フィールドの追加まで禁じない)
     assert {"id", "kind", "params"} <= {f.name for f in dataclasses.fields(Entity)}
     with pytest.raises(ValueError):
-        Entity(id="e2", kind="arc")
+        Entity(id="e3", kind="spline")  # 円形反復・スプラインはv1.1以降で今も範囲外
 
 
 def test_m2_modules_are_covered_by_the_import_boundary_scan():

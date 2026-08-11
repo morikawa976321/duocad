@@ -1040,6 +1040,70 @@ def _face_vertices_inside_bbox_2d(
 
 
 # --------------------------------------------------------------------------------------
+# 3verb前倒し(フィレット・面取り・円弧)の幾何 — 2026-08-11。**このタスクではスタブ**
+# --------------------------------------------------------------------------------------
+#: 辺の種別(`classify_edge` が返す値。面の FACE_KINDS と同じ流儀で、判定はここに固定する)
+EDGE_KINDS = ("line", "circle", "other")
+
+
+def edge_count(shape: "TopoDS_Shape") -> int:
+    """重複を除いた辺の数。**この数え方の1始まりの添字が、辺の選択の識別子そのもの**
+    (面の `face_count` と同じ規律。`TopExp.MapShapes_s` を使う)。"""
+    return _edge_map(shape).Extent()
+
+
+def classify_edge(edge: Any) -> str:
+    """1つの辺を EDGE_KINDS のいずれかへ分類する。**スタブ(実装は次のタスク)**。
+
+    フィレット・面取りは「どの辺か」を選べないと使えず、辺の選択は
+    「まっすぐな辺」「円い辺」の区別が要る(円い辺のフィレットはトーラスを、
+    円い辺の面取りは円錐を作る。まっすぐな辺の面取りは平面になる。2026-08-11実測)。
+    """
+    raise NotImplementedError("classify_edge は未実装(テスト先行)")
+
+
+def edge_of(shape: "TopoDS_Shape", edge_index: int) -> Any:
+    """形状の1始まり添字の辺を返す。範囲外は ValueError。**スタブ**。"""
+    raise NotImplementedError("edge_of は未実装(テスト先行)")
+
+
+def fillet_edges(shape: "TopoDS_Shape", radii: dict) -> dict:
+    """辺(1始まりの添字)を丸めた**新しい形状**と由来の射影を返す。**スタブ**。
+
+    `radii` は `{辺の添字: 半径}`。入力の `shape` は変更しない。
+
+    **必ず `IsDone()` を確認すること**。OCCTのフィレットは例外を投げずに失敗し、しかも
+    半径に対して単調でない(2026-08-11に20mm立方体の全辺で実測: r=3.0 成功 / r=10.0
+    `IsDone()=False` / r=10.5 成功 / r=30.0 `IsDone()=False`)。失敗は例外にして
+    呼び出し側が操作ごと捨てられるようにする。
+
+    戻り値(`"shape"` 以外はJSON化できる素の値):
+        {"shape": <TopoDS_Shape>, "provenance": {...},
+         "volume_before": float, "volume_after": float}
+    """
+    raise NotImplementedError("fillet_edges は未実装(テスト先行)")
+
+
+def chamfer_edges(shape: "TopoDS_Shape", distances: dict) -> dict:
+    """辺(1始まりの添字)を面取りした新しい形状と由来の射影を返す。**スタブ**。
+
+    `distances` は `{辺の添字: 距離}`。`fillet_edges` と同じ契約(`IsDone()` の確認・
+    入力を変更しない・戻り値の形)。`BRepFilletAPI_MakeChamfer` は同じ系統なので、
+    **黙って失敗する性質も同じ**。
+    """
+    raise NotImplementedError("chamfer_edges は未実装(テスト先行)")
+
+
+def _edge_map(shape: "TopoDS_Shape") -> "TopTools_IndexedMapOfShape":
+    """辺の重複除去済みマップ(1始まり)。添字が選択の識別子になるので数え方はここに固定する。"""
+    if shape is None or shape.IsNull():
+        raise ValueError("cannot map the edges of an empty shape")
+    shape_map = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE, shape_map)
+    return shape_map
+
+
+# --------------------------------------------------------------------------------------
 # M3.5: ソリッド分解・複数形状の書き出し(2026-08-11)
 # --------------------------------------------------------------------------------------
 def split_solids(shape: "TopoDS_Shape") -> List["TopoDS_Shape"]:

@@ -44,13 +44,14 @@ PatternId = str
 #: 基準平面の名前(この3つだけ。実装計画書§1「平面(基準3面)」)
 BASE_PLANES = ("XY", "XZ", "YZ")
 
-#: 図形の種別(M2の3つ。円弧はv1.2、円形反復はv1.1で範囲外)
-ENTITY_KINDS = ("line", "circle", "rectangle")
+#: 図形の種別(M2の3つ ＋ 2026-08-11に前倒しした円弧。円形反復はv1.1で範囲外のまま)
+ENTITY_KINDS = ("line", "circle", "rectangle", "arc")
 
 VERB_SKETCH_CREATE = "sketch_create"
 VERB_ADD_LINE = "add_line"
 VERB_ADD_CIRCLE = "add_circle"
 VERB_ADD_RECTANGLE = "add_rectangle"
+VERB_ADD_ARC = "add_arc"
 
 
 # --------------------------------------------------------------------------------------
@@ -217,6 +218,30 @@ def add_rectangle(
     return _add_entity(doc, sketch_id, "rectangle", params, VERB_ADD_RECTANGLE)
 
 
+def add_arc(
+    doc: Document,
+    sketch_id: SketchId,
+    center: Any,
+    radius: float,
+    start_deg: float,
+    end_deg: float,
+) -> EntityId:
+    """円弧を足して EntityId を返す。**スタブ(実装は次のタスク)**。
+
+    **中心・半径・角度で持つ**(3点で受け取らない)。理由は実装計画書§3.4
+    「パラメトリック・プリミティブ」と§6予防5で、**半径・角度を後から編集できる形**に
+    しておかないと、円弧だけが「数値を持たない図形」になり `set_parameter` の外側に落ちる。
+    `params` のキーは `cx` / `cy` / `radius` / `start_deg` / `end_deg` の5つ(平らに持つ ＝
+    スカラー1個が将来のパラメータ1個になる)。角度は**度**・反時計回り・スケッチ平面の
+    X軸から測る。
+
+    **円弧を入れる理由**(優先度が低かったのに前倒した理由): 領域検出があれば
+    「円を線で分けて片側だけ押し出す」で多くは代用できるが、アロマ拡散器のように
+    **部分円筒面(75〜97°の円弧を押し出したもの)**を持つ実物は代用では作れない。
+    """
+    raise NotImplementedError("add_arc は未実装(テスト先行。次のタスクで実装する)")
+
+
 def entity_params(
     doc: Document, sketch_id: SketchId, entity_id: EntityId
 ) -> Dict[str, float]:
@@ -321,6 +346,11 @@ def require_valid_params(kind: str, params: Dict[str, float]) -> None:
             f"rectangle width/height must be positive, got "
             f"{params['width']!r} x {params['height']!r}"
         )
+    if kind == "arc":
+        if not params["radius"] > 0:
+            raise ValueError(f"arc radius must be positive, got {params['radius']!r}")
+        if params["start_deg"] == params["end_deg"]:
+            raise ValueError("arc start_deg and end_deg must differ (角度0の円弧は辺にならない)")
 
 
 # --------------------------------------------------------------------------------------
