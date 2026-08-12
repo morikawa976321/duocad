@@ -5,3 +5,6 @@ node_modules/
 dist/
 .pytest_cache/
 *.egg-info/
+
+# Windows PowerShell が LocalAppData を誤解決したときリポジトリ直下に落ちるキャッシュ
+/Microsoft/
