@@ -76,7 +76,7 @@ def session() -> Session:
     """
     if not SHELF.exists():
         pytest.skip(f"参照STEPが無い: {SHELF}")
-    return Session(SHELF, 0.2, REPO_ROOT / "measure_log.jsonl")
+    return Session(SHELF, 0.2)
 
 
 @pytest.fixture()

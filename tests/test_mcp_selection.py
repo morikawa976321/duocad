@@ -66,7 +66,7 @@ NO_MATCH = {"kind": "edge", "where": [{"op": "length_gt", "value": 1000.0}]}
 @pytest.fixture()
 def session(tmp_path: Path) -> Session:
     """30×30×40 の直方体を1つ持つセッション(面6・辺12・頂点8)。"""
-    made = Session(None, 0.2, tmp_path / "measure_log.jsonl")
+    made = Session(None, 0.2)
     made.document.add_body(
         Body(id="box", name="box", kind="solid", shape=BRepPrimAPI_MakeBox(BOX_X, BOX_Y, BOX_Z).Shape())
     )
@@ -429,7 +429,7 @@ def test_extrude_also_refuses_a_proposed_region(server: McpServer, tmp_path: Pat
     """領域を食う `extrude` にも同じ門がかかる(形が `ShapeRef` ではない側の対照)。"""
     from duocad.sketch import add_rectangle, sketch_create
 
-    empty = Session(None, 0.2, tmp_path / "m.jsonl")
+    empty = Session(None, 0.2)
     sketch_id = sketch_create(empty.document, "XY")
     add_rectangle(empty.document, sketch_id, (0.0, 0.0), 30.0, 30.0)
     mcp = McpServer(DocumentTools(empty))
@@ -497,7 +497,7 @@ def test_the_core_gate_is_the_only_one_for_regions_too(tmp_path: Path, monkeypat
 
     _open_the_core_gate(monkeypatch)
 
-    empty = Session(None, 0.2, tmp_path / "m.jsonl")
+    empty = Session(None, 0.2)
     sketch_id = sketch_create(empty.document, "XY")
     add_rectangle(empty.document, sketch_id, (0.0, 0.0), 30.0, 30.0)
     mcp = McpServer(DocumentTools(empty))
@@ -521,7 +521,7 @@ def test_a_verb_targets_the_body_the_selection_names(tmp_path: Path, tool: str, 
     (`test_the_whole_interleaved_lap_runs_through_mcp_alone` は緑のままだった)。
     `extrude_face` は面の参照から `body` を渡していて、辺の側だけが抜けていた。
     """
-    session = Session(None, 0.2, tmp_path / "m.jsonl")
+    session = Session(None, 0.2)
     # **選択する側を先に足す** —— `add_body` は足したBodyをアクティブにするので、
     # 後から足した `other` がアクティブになる。アクティブでないほうを狙うのが試験の要点。
     session.document.add_body(
@@ -626,7 +626,7 @@ def test_measure_reports_the_area_of_a_region(tmp_path: Path):
     """
     from duocad.sketch import add_circle, sketch_create
 
-    empty = Session(None, 0.2, tmp_path / "m.jsonl")
+    empty = Session(None, 0.2)
     sketch_id = sketch_create(empty.document, "XY")
     add_circle(empty.document, sketch_id, (0.0, 0.0), 10.0)
     mcp = McpServer(DocumentTools(empty))

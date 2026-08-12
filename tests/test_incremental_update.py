@@ -86,7 +86,7 @@ def _report(message: str) -> None:
 
 
 def _session(step_path: Path, tmp_path: Path) -> Session:
-    return Session(step_path, DEVIATION, tmp_path / "measure_log.jsonl")
+    return Session(step_path, DEVIATION)
 
 
 def _editable_bodies(session: Session) -> list:
@@ -488,14 +488,14 @@ def test_tessellation_is_not_recomputed_for_unchanged_bodies(tmp_path, monkeypat
 def test_extruding_one_part_of_the_pc_case_stays_under_1000ms():
     """PCケースの**1部品**(面数最大=233面)の押し出しが1000ms未満で終わる。
 
-    分解前は 4326–5101ms(2026-08-10・本人の実機計測。`measure_log.jsonl` の
-    `server_extrude_ms` ＝ `Session.extrude` 全体の時間)。分解後の実測は
+    分解前は 4326–5101ms(2026-08-10の実機計測（記録は削除済み）。
+    `Session.extrude` 全体の時間)。分解後の実測は
     面1 726.0ms / 面2 517.7ms / 面3 757.9ms(2026-08-11・このタスクで計測)。
 
     **計測の区間**: ここで測るのは verb `extrude_face` の呼び出し全体である。上の
     分解後の実測値は `kernel.extrude_face_on_shape` 単体のものだが、verbが足すのは
     ログ1行とスナップショットの記録だけで、差はOCCT演算に対して無視できる
-    (分解前の実機計測も verb 全体＝`server_extrude_ms` なので、比較の対象は揃っている)。
+    (分解前の実機計測も verb 全体なので、比較の対象は揃っている)。
 
     閾値1000msは分解前に対して4〜5倍の余裕を取った値だが、**実測726msに対しては
     1.4倍しかない**。落ちたときは「閾値が厳しすぎる」ではなく、この実測値と比べて

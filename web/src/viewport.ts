@@ -54,10 +54,6 @@ export interface BodyGeometryUpdate {
 export interface PickEvent {
   /** 当たった面(Body+添字)。外したら null。 */
   hit: FaceRef | null
-  /** ポインタを押した時刻(= 操作の始まり)。`performance.now()`。 */
-  tPointerDown: number
-  /** 当たり判定が終わった時刻。`performance.now()`。 */
-  tResolved: number
 }
 
 export interface Viewport {
@@ -347,7 +343,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const elapsed = performance.now() - downAt
     if (moved > CLICK_MOVE_LIMIT_PX || elapsed > CLICK_TIME_LIMIT_MS) return
     const hit = pickAt(event.offsetX, event.offsetY)
-    pickListener?.({ hit, tPointerDown: downAt, tResolved: performance.now() })
+    pickListener?.({ hit })
   }
 
   renderer.domElement.addEventListener('pointerdown', onPointerDown)

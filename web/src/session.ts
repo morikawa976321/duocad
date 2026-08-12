@@ -42,7 +42,6 @@ export interface ServerState {
   can_undo: boolean
   can_redo: boolean
   applied_count: number
-  measure_log: string
 }
 
 export interface Applied {
@@ -53,7 +52,6 @@ export interface Applied {
   face_index?: number
   distance?: number
   after_face_index?: number | null
-  server_ms?: number
   undone?: string
   redone?: string
   visible?: boolean
@@ -79,8 +77,6 @@ export interface Session {
   setVisible(bodyId: string, visible: boolean, clientOp: number): void
   undo(): void
   redo(): void
-  /** 計測1行を送る(追記するのはサーバ。区間のms換算もサーバが行う)。 */
-  record(record: Record<string, unknown>): void
   dispose(): void
 }
 
@@ -138,7 +134,6 @@ export function createSession(hooks: SessionHooks): Session {
     } else if (message.type === 'warning') {
       hooks.onWarning(message.message ?? '')
     }
-    // "recorded" は確認だけなので何もしない(計測の正はサーバのjsonl)
   }
 
   async function connect(): Promise<void> {
@@ -178,9 +173,6 @@ export function createSession(hooks: SessionHooks): Session {
     },
     redo() {
       send({ cmd: 'redo' })
-    },
-    record(record) {
-      send({ cmd: 'measure_record', record })
     },
     dispose() {
       disposed = true

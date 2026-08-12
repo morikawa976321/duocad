@@ -772,7 +772,7 @@ pattern_rectangular(doc, sketch_id, entities, dx, dy, nx, ny) -> PatternId
 
 ## 何を直しているのか（実機で測った問題・2026-08-10）
 
-本人がM1のビューアでPCケースを操作した実測（`measure_log.jsonl`）:
+本人がM1のビューアでPCケースを操作した実測（2026-08-10の実機計測。記録は削除済み）:
 
 | モデル | 面数 | kernel(OCCT) | 幾何更新 合計 |
 |---|---|---|---|
@@ -900,7 +900,7 @@ Session.state() -> {
     "units", "active_body_id",
     "bodies": [{"body_id","name","kind","visible","revision",
                 "face_count","volume","geometry": <tessellate結果 | None>}, ...],
-    "log", "can_undo", "can_redo", "applied_count", "measure_log",
+    "log", "can_undo", "can_redo", "applied_count",
 }
 Session.body_revision(body_id) -> int      # 形状の差し替え**と可視性の変更**で増える
 Session.geometry(body_id) -> dict          # キャッシュ付き。**同じオブジェクトを返す**

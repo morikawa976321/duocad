@@ -5,4 +5,3 @@ node_modules/
 dist/
 .pytest_cache/
 *.egg-info/
-# measure_log.jsonl は無視しない(M1の計測データは証跡として残す)

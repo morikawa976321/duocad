@@ -81,7 +81,7 @@ def sketch_doc():
 @pytest.fixture()
 def session(tmp_path: Path) -> Session:
     """STEPを読まないセッション(選択の契約は形状の中身に依存しない)。"""
-    made = Session(None, 0.2, tmp_path / "measure_log.jsonl")
+    made = Session(None, 0.2)
     made.document.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
     return made
 

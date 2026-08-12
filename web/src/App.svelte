@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * 「面を選ぶ → 距離を打つ → Enter」の状態機械と、その4段階の時刻の記録。
+   * 「面を選ぶ → 距離を打つ → Enter」の状態機械。
    *
    * 文書・操作ログ・undo履歴・**可視性**はコア側にある。**ただし面の選択(どの面を狙っているか)
    * だけがここにある** — 実装計画書§2/§3.5は選択集合もコア側(永続・双方向)と定めているが、
@@ -11,9 +11,6 @@
    * `PartsPanel.svelte` からここを経由してコアの `set_visible` verb を呼ぶ
    * (`session.setVisible`)。ここは可視性の値を覚えない — 毎回コアが返す `state.bodies`
    * を描き直すだけ(§2「コアはUIが無くても機能的に完全」)。
-   *
-   * 時刻の定義は MEASURE.md が正。ここで測るのは単調時計 `performance.now()` の値で、
-   * 区間のms換算はサーバ側で一括して行う(定義が2箇所に分かれないようにするため)。
    */
   import { onMount } from 'svelte'
   import PartsPanel from './PartsPanel.svelte'
@@ -33,11 +30,10 @@
   let model = $state<ServerState | null>(null)
   let selected = $state<FaceRef | null>(null)
   // 既定値を入れない。値が入ったままだと「打たずにEnter」ができてしまい、
-  // 打つ時間が0の行が「速い」として記録される(2026-08-10のQA指摘)。確定のたびに空へ戻す。
+  // 意図しない距離で確定してしまう。確定のたびに空へ戻す。
   let distanceText = $state('')
   let messages = $state<string[]>([])
-  let misses = $state(0)
-  let lastRecord = $state<Record<string, unknown> | null>(null)
+  let lastApplied = $state<Applied | null>(null)
   // 選択中の面の面積・法線などを出すための表示用キャッシュ(body_id -> 直近のgeometry)。
   // ドメインの状態ではない(可視性・選択の正はコア/上の `selected` のまま) — viewport が
   // three.jsの中に既に持っている形状を、UI表示(下のパネル)とテスト用フック向けに
@@ -50,26 +46,14 @@
     bodyId: string
     faceIndex: number
     distance: number
-    misses: number
-    reused: boolean
-    command: number
-    picked: number
-    value: number
-    committed: number
   } | null = null
 
   let opCounter = 0
-  let tCommandStart: number | null = null
-  let tFacePicked: number | null = null
-  let tValueEntered: number | null = null
-  let reusedSelection = false
 
   const session = createSession({
     onState: handleState,
     onError: (message, where) => {
       note(`エラー[${where}] ${message}`)
-      // 失敗した操作の計測は捨てる(壊れた行を貯めない)。**計測の状態は触らない** —
-      // 応答待ちの間に始めた次の操作の時刻を消してしまうため(2026-08-10の再QA指摘)。
       pending = null
     },
     onWarning: (message) => note(`警告 ${message}`),
@@ -80,13 +64,6 @@
 
   function note(message: string): void {
     messages = [message, ...messages].slice(0, 4)
-  }
-
-  function resetTimings(): void {
-    tCommandStart = null
-    tFacePicked = null
-    tValueEntered = null
-    reusedSelection = false
   }
 
   function handleState(next: ServerState, changed: BodyGeometry[], applied: Applied | null): void {
@@ -150,38 +127,8 @@
     viewport?.highlight(selected)
 
     if (pending && applied && applied.client_op === pending.op) {
-      const finished = pending
       pending = null
-      const record: Record<string, unknown> = {
-        kind: 'extrude',
-        op: finished.op,
-        body_id: finished.bodyId,
-        face_id: `${finished.bodyId}/faces_${finished.faceIndex}`,
-        face_index: finished.faceIndex,
-        distance: finished.distance,
-        pick_misses: finished.misses,
-        reused_selection: finished.reused,
-        seq: applied.seq,
-        after_face_index: applied.after_face_index ?? null,
-        clock: 'performance.now',
-        time_origin_epoch_ms: Math.round(performance.timeOrigin),
-        t_command_start: finished.command,
-        t_face_picked: finished.picked,
-        t_value_entered: finished.value,
-        t_committed: finished.committed,
-      }
-      // 「形が画面に出た時刻」は**描画された次のフレーム**で測る(2重のrAF)。
-      // rAF 1回だと描画前の時刻になるので、最大1フレーム(60Hzで約16.7ms)ぶん早く出る。
-      // ここでは時刻の代入と送信だけを行う — 計測の状態(時刻・外した回数)のリセットは
-      // commit() が同期でやる。ここでリセットすると、応答待ちの間に始めた次の操作の
-      // 時刻を消してしまう(2026-08-10のQA指摘)。
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
-          record.t_geometry_updated = performance.now()
-          session.record(record)
-          lastRecord = record
-        }),
-      )
+      lastApplied = applied
     }
   }
 
@@ -199,45 +146,15 @@
       note('直前の操作の応答待ち')
       return
     }
-    const committed = performance.now()
-    if (tCommandStart === null) {
-      tCommandStart = committed
-      reusedSelection = true
-    }
-    if (tFacePicked === null) tFacePicked = tCommandStart
-    if (tValueEntered === null) tValueEntered = committed
     opCounter += 1
     pending = {
       op: opCounter,
       bodyId: selected.bodyId,
       faceIndex: selected.faceIndex,
       distance,
-      misses,
-      reused: reusedSelection,
-      command: tCommandStart,
-      picked: tFacePicked,
-      value: tValueEntered,
-      committed,
     }
     session.extrude(selected.bodyId, selected.faceIndex, distance, opCounter)
-    // この操作ぶんの計測値は pending が持ったので、ここから先は次の操作の計測を始める。
-    // 応答待ちの間に打った時刻が消えないよう、リセットは**同期のここだけ**で行う
-    // (rAF側でリセットする実装に戻すと `scripts/smoke.mjs` の2回目の検査が落ちる。実測で確認済み)。
-    resetTimings()
-    misses = 0
     distanceText = ''
-  }
-
-  function onDistanceInput(): void {
-    const now = performance.now()
-    if (tCommandStart === null) {
-      // 選択を再利用して数値から始めた操作。この場合は「選ぶ」に時間0がかかったと記録し、
-      // 行に reused_selection=true を立てる(ms_to_pick=0 の理由が後から分かるように)。
-      tCommandStart = now
-      tFacePicked = now
-      reusedSelection = true
-    }
-    tValueEntered = now
   }
 
   function onDistanceKeydown(event: KeyboardEvent): void {
@@ -253,11 +170,9 @@
     if (key === 'z' && !event.shiftKey) {
       event.preventDefault()
       session.undo()
-      resetTimings()
     } else if (key === 'y' || (key === 'z' && event.shiftKey)) {
       event.preventDefault()
       session.redo()
-      resetTimings()
     }
   }
 
@@ -297,22 +212,9 @@
     viewport = createViewport(container)
     viewport.onPick((event) => {
       if (event.hit === null) {
-        misses += 1
-        session.record({
-          kind: 'pick_miss',
-          t_pointer_down: event.tPointerDown,
-          t_resolved: event.tResolved,
-          clock: 'performance.now',
-        })
-        note('面を外した(狙い外れとして記録)')
+        note('面を外した')
         return
       }
-      if (tCommandStart === null) {
-        tCommandStart = event.tPointerDown
-      }
-      // 実際にクリックで選んだのだから、数値から始めていても再利用ではない
-      reusedSelection = false
-      tFacePicked = event.tResolved
       selected = event.hit
       viewport?.highlight(event.hit)
     })
@@ -344,8 +246,7 @@
       parts: partBodies,
       bodyGeometry,
       selected,
-      misses,
-      lastRecord,
+      lastApplied,
       messages,
       projectFace: (bodyId: string, faceIndex: number) => viewport?.project(bodyId, faceIndex) ?? null,
     }
@@ -398,40 +299,28 @@
         autocomplete="off"
         placeholder="mm"
         bind:value={distanceText}
-        oninput={onDistanceInput}
         onkeydown={onDistanceKeydown}
       />
       <button id="extrude" onclick={commit} disabled={selected === null}>押し出す (Enter)</button>
-      <button id="undo" onclick={() => { session.undo(); resetTimings() }} disabled={!model?.can_undo}>
+      <button id="undo" onclick={() => session.undo()} disabled={!model?.can_undo}>
         undo
       </button>
-      <button id="redo" onclick={() => { session.redo(); resetTimings() }} disabled={!model?.can_redo}>
+      <button id="redo" onclick={() => session.redo()} disabled={!model?.can_redo}>
         redo
       </button>
-      <span class="value dim">正=足す / 負=削る ・ 外した回数 {misses}</span>
+      <span class="value dim">正=足す / 負=削る</span>
     </div>
 
     <div class="row">
       <span class="label">直前</span>
-      {#if lastRecord}
+      {#if lastApplied?.verb === 'extrude_face'}
         <span class="value">
-          op {lastRecord.op} ・ {lastRecord.body_id} ・ 面 {lastRecord.face_index} ・ {lastRecord.distance} mm
-          {#if typeof lastRecord.t_geometry_updated === 'number' && typeof lastRecord.t_command_start === 'number'}
-            ・ 総 {(
-              (lastRecord.t_geometry_updated as number) - (lastRecord.t_command_start as number)
-            ).toFixed(1)} ms
-          {/if}
+          seq {lastApplied.seq} ・ {lastApplied.body_id} ・ 面 {lastApplied.face_index} ・ {lastApplied.distance} mm
         </span>
       {:else}
-        <span class="value dim">まだ計測なし</span>
+        <span class="value dim">まだ操作なし</span>
       {/if}
     </div>
-
-    {#if model}
-      <div class="row">
-        <span class="label">計測ログ</span><span class="value dim">{model.measure_log}</span>
-      </div>
-    {/if}
 
     {#if messages.length}
       <div class="row">

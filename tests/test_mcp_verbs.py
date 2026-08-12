@@ -180,7 +180,7 @@ ERROR_CODES = {
 @pytest.fixture()
 def empty_session(tmp_path: Path) -> Session:
     """STEPを読まない空のセッション(スケッチから作る経路の出発点)。"""
-    return Session(None, 0.2, tmp_path / "measure_log.jsonl")
+    return Session(None, 0.2)
 
 
 @pytest.fixture()
@@ -190,7 +190,7 @@ def box_session(tmp_path: Path) -> Session:
     立方体にしないのは A1 と同じ理由 —— 3辺の長さが違えば、述語やフィレットの
     対象がたまたま一致して緑になる余地が減る。
     """
-    made = Session(None, 0.2, tmp_path / "measure_log.jsonl")
+    made = Session(None, 0.2)
     made.document.add_body(
         Body(id="box", name="box", kind="solid", shape=BRepPrimAPI_MakeBox(BOX_X, BOX_Y, BOX_Z).Shape())
     )
@@ -823,7 +823,7 @@ def test_make_editable_copy_turns_a_reference_into_a_solid(tmp_path: Path):
     """読み込んだ参照ボディを編集できるようにする経路がAIから届く。"""
     if not SHELF.exists():
         pytest.skip(f"参照STEPが無い: {SHELF}")
-    session = Session(None, 0.2, tmp_path / "measure_log.jsonl")
+    session = Session(None, 0.2)
     server = McpServer(DocumentTools(session))
 
     imported = call(server, "import_step", {"path": str(SHELF)})
@@ -846,7 +846,7 @@ def test_import_step_adds_reference_bodies_and_says_what_to_do_next(tmp_path: Pa
     """
     if not SHELF.exists():
         pytest.skip(f"参照STEPが無い: {SHELF}")
-    session = Session(None, 0.2, tmp_path / "measure_log.jsonl")
+    session = Session(None, 0.2)
     server = McpServer(DocumentTools(session))
 
     payload = call(server, "import_step", {"path": str(SHELF)})
@@ -1014,7 +1014,7 @@ def test_undo_refuses_to_dismantle_the_document_floor(tmp_path: Path):
     """
     if not SHELF.exists():
         pytest.skip(f"参照STEPが無い: {SHELF}")
-    session = Session(SHELF, 0.2, tmp_path / "measure_log.jsonl")
+    session = Session(SHELF, 0.2)
     server = McpServer(DocumentTools(session))
 
     assert call(server, "describe_document")["can_undo"] is False

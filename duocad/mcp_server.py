@@ -83,7 +83,6 @@ from websockets.asyncio.server import serve
 
 from . import io_step, kernel, predicates, query, region, selection, sketch
 from .server import (
-    DEFAULT_MEASURE_LOG,
     DEFAULT_STEP,
     DEFAULT_WEB_DIST,
     Server,
@@ -1625,7 +1624,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--http-port", type=int, default=8766)
     parser.add_argument("--deviation", type=float, default=kernel.DEFAULT_DEVIATION)
-    parser.add_argument("--measure-log", type=Path, default=DEFAULT_MEASURE_LOG)
     parser.add_argument("--web-dist", type=Path, default=DEFAULT_WEB_DIST)
     parser.add_argument("--no-step", action="store_true", help="STEPを読まずに空で起動する")
     parser.add_argument(
@@ -1640,7 +1638,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         _log(f"STEPが見つからない: {step_path}")
         return 2
 
-    session = Session(step_path, args.deviation, args.measure_log)
+    session = Session(step_path, args.deviation)
     try:
         asyncio.run(_run(session, args))
     except KeyboardInterrupt:

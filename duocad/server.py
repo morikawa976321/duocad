@@ -11,7 +11,6 @@
     --port 8765        WebSocketのポート
     --http-port 8766   静的配信のポート(ブラウザで開くのはこちら)
     --deviation 0.2    テセレーションの線形偏差(mm・絶対)
-    --measure-log PATH 計測ログの追記先(既定: <リポジトリ直下>/measure_log.jsonl)
     --no-open          既定ではブラウザを開く。開かせたくないとき(自動テスト)に付ける
 
 プロトコル(JSON文字列):
@@ -21,7 +20,6 @@
         {"cmd": "extrude_face", "face_index": int, "distance": float, "client_op": int, "body_id": str}
         {"cmd": "set_visible", "body_id": str, "visible": bool, "client_op": int}
         {"cmd": "undo"} / {"cmd": "redo"}
-        {"cmd": "measure_record", "record": {...}}    計測1行の追記(下記)
 
     上り(server -> client)
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
@@ -46,7 +44,7 @@
       "units", "active_body_id",
       "bodies": [{"body_id","name","kind","visible","revision",
                   "face_count","volume","geometry": <tessellate結果|None>}, ...],
-      "log", "can_undo", "can_redo", "applied_count", "measure_log",
+      "log", "can_undo", "can_redo", "applied_count",
       "selection": {"items": [...], "origin": "user"|"proposed", "count": int},   # A(下記)
     }
     delta(known_revisions) -> {"bodies": [<上と同じ形・版が変わった分だけ>],
@@ -60,11 +58,6 @@ tests/README.md の「A」節が正。**A1の時点ではまだ載っていな�
 `{"change": "selection", "selection": {...}, "client_op": ...}` の形で、verbの `applied`
 とはキーで区別する(選択はverbではなく、操作ログにも載らない)。
 
-**計測ログ(measure_log.jsonl)はサーバが書く**。時刻はブラウザの単調時計
-(`performance.now()`)が正で、区間のms換算はここで一括して行う(クライアントとサーバで
-区間の定義が食い違わないようにするため)。5つの時刻のどれかが欠けた行は**受け付けない**
-(黙って壊れた計測を貯めない。§6予防6)。時刻の定義は MEASURE.md が正。
-
 **OCPを直接importしない**(境界はkernel.pyだけ。tests/test_boundaries.py が検査する)。
 """
 from __future__ import annotations
@@ -74,9 +67,7 @@ import asyncio
 import json
 import sys
 import threading
-import time
 import webbrowser
-from datetime import datetime
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -100,16 +91,6 @@ from .verbs import set_visible as set_visible_verb
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STEP = Path(r"C:\Users\tm976\mf\3d-models\mATX_PC_case_20251122\PC_case_20251122.step")
 DEFAULT_WEB_DIST = REPO_ROOT / "web" / "dist"
-DEFAULT_MEASURE_LOG = REPO_ROOT / "measure_log.jsonl"
-
-#: 計測1行に必須の時刻(欠けたら受け付けない)。意味は MEASURE.md が正。
-MEASURE_TIMESTAMPS = (
-    "t_command_start",
-    "t_face_picked",
-    "t_value_entered",
-    "t_committed",
-    "t_geometry_updated",
-)
 
 
 class Session:
@@ -119,13 +100,10 @@ class Session:
         self,
         step_path: Optional[Path],
         deviation: float,
-        measure_log_path: Path,
     ) -> None:
         self.document = Document()
         self.deviation = float(deviation)
-        self.measure_log_path = Path(measure_log_path)
         self.warnings: list[str] = []
-        self._server_ms: dict[int, float] = {}
         self._applied_count = 0
         self._revision_state: dict = {}    # body_id -> (id(shape), visible) 直近の状態
         self._revision_counter: dict = {}  # body_id -> 現在の版(int)
@@ -251,7 +229,6 @@ class Session:
             "can_undo": self.can_undo,
             "can_redo": self.document.log.can_redo,
             "applied_count": self._applied_count,
-            "measure_log": str(self.measure_log_path),
             "selection": selection.get_selection(self.document).to_dict(),
         }
 
@@ -343,18 +320,14 @@ class Session:
         client_op: Optional[int] = None,
         body_id: Optional[str] = None,
     ) -> dict:
-        """面を押し出す。サーバ側の所要msを控えて `applied` を返す。
+        """面を押し出す。`applied` を返す。
 
         M3.5で `body_id` を足した(STEPが部品ごとに分解されるので、どのBodyの面かを
         指定できないと27部品のうち1つを選べない)。既定はアクティブボディ。
         `applied` は `"changed_bodies": [BodyId, ...]` を持つ(差分送信の対象)。
         """
-        started = time.perf_counter()
         operation = extrude_face(self.document, int(face_index), float(distance), body_id=body_id)
-        elapsed_ms = (time.perf_counter() - started) * 1000.0
         self._applied_count += 1
-        if client_op is not None:
-            self._server_ms[int(client_op)] = round(elapsed_ms, 3)
         provenance = operation.provenance or {}
         changed_body_id = operation.args["body_id"]
         return self._emit({
@@ -365,7 +338,6 @@ class Session:
             "face_index": int(face_index),
             "distance": float(distance),
             "after_face_index": provenance.get("after_face_index"),
-            "server_ms": round(elapsed_ms, 3),
             "changed_bodies": [changed_body_id],
         })
 
@@ -617,38 +589,6 @@ class Session:
         body_ids = io_step.import_step(self.document, path)
         return self._after_logged_verb({"body_ids": list(body_ids)})
 
-    # ---------------------------------------------------------------- 計測
-    def append_measure_record(self, record: dict) -> dict:
-        """計測1行を `measure_log.jsonl` へ追記する(区間のms換算はここで行う)。
-
-        `kind="extrude"` の行は5つの時刻が全部あることを要求する。欠けていれば例外にして
-        **書かない**(壊れた計測データは無いより悪い)。`kind="pick_miss"` は時刻1つでよい。
-        """
-        if not isinstance(record, dict):
-            raise ValueError("record must be a JSON object")
-        line: dict[str, Any] = dict(record)
-        line["ts"] = datetime.now().isoformat(timespec="milliseconds")
-        kind = line.get("kind", "extrude")
-        line["kind"] = kind
-
-        if kind == "extrude":
-            missing = [
-                name
-                for name in MEASURE_TIMESTAMPS
-                if not isinstance(record.get(name), (int, float))
-            ]
-            if missing:
-                raise ValueError(f"計測の時刻が欠けている: {missing}")
-            line.update(_intervals(record))
-            server_ms = self._server_ms.pop(int(record.get("op", -1)), None)
-            if server_ms is not None:
-                line["server_extrude_ms"] = server_ms
-
-        self.measure_log_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.measure_log_path.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(line, ensure_ascii=False) + "\n")
-        return line
-
     def take_warnings(self) -> list[str]:
         """溜まった警告を取り出して空にする(出したら消す)。"""
         warnings, self.warnings = self.warnings, []
@@ -668,22 +608,6 @@ def _selection_hints(operation: Any) -> dict:
         "body_id": operation.args.get("body_id"),
         "face_index": operation.args.get("face_index"),
         "after_face_index": provenance.get("after_face_index"),
-    }
-
-
-def _intervals(record: dict) -> dict:
-    """各区間の所要ms。**`ms_total` が Fusion360 との比較対象**(MEASURE.md 参照)。"""
-    command_start = float(record["t_command_start"])
-    face_picked = float(record["t_face_picked"])
-    value_entered = float(record["t_value_entered"])
-    committed = float(record["t_committed"])
-    geometry_updated = float(record["t_geometry_updated"])
-    return {
-        "ms_to_pick": round(face_picked - command_start, 3),
-        "ms_to_value": round(value_entered - face_picked, 3),
-        "ms_to_commit": round(committed - value_entered, 3),
-        "ms_to_geometry": round(geometry_updated - committed, 3),
-        "ms_total": round(geometry_updated - command_start, 3),
     }
 
 
@@ -790,7 +714,7 @@ class Server:
 
         `applied` を**載せずに**配るのは、MCPからの変更は「誰の操作でもない外からの
         変化」であり、`applied` は操作を出したクライアントへの確認応答だからである
-        (ブラウザは `applied.client_op` で自分の計測と突き合わせる。他人の操作に
+        (ブラウザは `applied.client_op` で自分の操作と突き合わせる。他人の操作に
         付けて送ると、知らない `client_op` を自分のものとして拾う経路ができる)。
         """
         if self._dispatching:
@@ -889,9 +813,6 @@ class Server:
                     message.get("client_op"),
                 )
                 await self._push(connection, applied=applied)
-            elif command == "measure_record":
-                line = self.session.append_measure_record(message.get("record") or {})
-                await _send(connection, {"type": "recorded", "record": line})
             else:
                 raise ValueError(f"unknown command: {command!r}")
         except Exception as error:  # 1つの失敗でサーバを落とさない。必ず画面へ返す
@@ -1001,7 +922,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--http-port", type=int, default=8766)
     parser.add_argument("--deviation", type=float, default=kernel.DEFAULT_DEVIATION)
-    parser.add_argument("--measure-log", type=Path, default=DEFAULT_MEASURE_LOG)
     parser.add_argument("--web-dist", type=Path, default=DEFAULT_WEB_DIST)
     parser.add_argument("--no-open", action="store_true", help="ブラウザを自動で開かない")
     parser.add_argument("--no-step", action="store_true", help="STEPを読まずに空で起動する")
@@ -1012,7 +932,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"STEPが見つからない: {step_path}", file=sys.stderr)
         return 2
 
-    session = Session(step_path, args.deviation, args.measure_log)
+    session = Session(step_path, args.deviation)
     ws_url = f"ws://127.0.0.1:{args.port}"
     try:
         start_http_server(args.web_dist, args.http_port, ws_url)
@@ -1028,7 +948,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"  body={body.name!r} faces={kernel.face_count(body.shape)} "
             f"volume={query.volume(body.shape):.4f} mm^3"
         )
-    print(f"  measure log: {session.measure_log_path}")
     print("  Ctrl+C で終了")
     if not args.no_open:
         webbrowser.open(page_url)
