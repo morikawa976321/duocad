@@ -2,7 +2,7 @@
 
 このディレクトリのテストが **M0(コアの骨格)のAPI契約そのもの**。次タスク（M0コア実装）は
 ここにあるテストを全部通すことだけを目標にする。仕様の正は
-`C:\Users\tm976\mf\reports\cad_v1_implementation_plan_2026-08-10.md`（このREADMEと食い違ったら
+`C:\Users\tm976\mf\duocad\docs\IMPLEMENTATION_PLAN.md`（このREADMEと食い違ったら
 そちらを優先する）。
 
 **M2（スケッチ・領域検出・押し出し）と M3（パラメータ・矩形反復）の契約は、
@@ -2282,6 +2282,6 @@ F1が予測して契約に入れた `os.dup2` によるfd振り替えが無け�
 統合検証（G）である。推奨順序どおり**次は B（コマンド層の骨格：状態機械・複数選択・
 数値入力・プレビュー・Esc）**。
 
-**実装計画書 `reports/cad_v1_implementation_plan_2026-08-10.md` の §0 の到達表は
+**実装計画書 `duocad/docs/IMPLEMENTATION_PLAN.md` の §0 の到達表は
 まだ「AI 1/19」のままである**（`reports/` はこのタスクの target_dir 外なので触っていない）。
 次にあの文書を触る人が更新すること。
