@@ -347,7 +347,7 @@ write_stl(shape: TopoDS_Shape, path: str, deviation: float) -> None
 
 - Python 3.11.15、`C:\Users\tm976\mf\duocad\.venv`（`uv venv --python 3.11`で作成）
 - `build123d==0.11.1`
-- `cadquery-ocp-novtk==7.9.3.1.1`（importは `OCP`。`C:\Users\tm976\mf\cad-deixis-probe\.venv`
+- `cadquery-ocp-novtk==7.9.3.1.1`（importは `OCP`。`C:\Users\tm976\mf\cad-deixis-probe\.venv`(2026-08-13に削除済み。当時の観測)
   で検証済みの環境と同一バージョン）
 - `pytest==9.1.1`
 - 受入対象STEP: `C:\Users\tm976\mf\3d-models\shelf_attachment_GD.step`

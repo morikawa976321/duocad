@@ -1,7 +1,7 @@
 # duocad — 要件定義（2026-08-07 第2稿）
 
 **なぜこう作るのかを記録した文書。** 2026-07-20の「コードCAD + deixisレイヤー」から要件を書き直したもの。
-実機検証の結果は `mf/cad-deixis-probe/FINDINGS.md`。
+実機検証の結果は `mf/duocad/docs/PROBE_FINDINGS.md`。
 
 > **2026-08-13に `mf/reports/` からこのリポジトリへ移した**（旧パス `mf/reports/cad_migration_spec_2026-08-07.md`）。
 

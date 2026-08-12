@@ -4,7 +4,7 @@
 
 - 前段の要件定義は [REQUIREMENTS.md](REQUIREMENTS.md)（**なぜこう作るか**。§2 分業の原則が企画の主張）
 - 本文書は **何を作るか／どこまで来たか**（§0 到達表・§8b 残タスク）
-- 実機検証の生データは `mf/cad-deixis-probe/FINDINGS.md`（ocp_vscode調査。役目は終えているが実測値の出典）
+- 実機検証の生データは `mf/duocad/docs/PROBE_FINDINGS.md`（ocp_vscode調査。役目は終えているが実測値の出典）
 
 > **2026-08-13に `mf/reports/` からこのリポジトリへ移した**（旧パス
 > `mf/reports/cad_v1_implementation_plan_2026-08-10.md`）。実装と同じ場所に置き、
