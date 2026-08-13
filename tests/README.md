@@ -10,6 +10,14 @@
 M1（`extrude_face` / `make_editable_copy` / `tessellate`）の契約は
 `tests/test_extrude_face.py` のモジュールdocstringが持つ（ここには無い）。
 
+## 【無人drainへの注意】負荷で赤になるテストが1本ある（2026-08-14）
+
+**`test_incremental_update.py::test_extruding_one_part_of_the_pc_case_stays_under_1000ms` は
+マシンが混むと閾値を超えて赤になる。** 単独5回で 942 / 961 / 973 / 1076 / 1164 ms（コードは無変更）。
+**この1本だけが赤いなら性能回帰ではなく負荷なので、コードを直さず・閾値も上げず、
+タスクを `failed/` へ送らないこと。** 報告に「この1本のみ負荷由来で赤」と書いて進める。
+扱いは本人判断で保留中。
+
 ## 読み方: 「実装済み(素で通る)」と「スタブ(NotImplementedErrorで赤)」の区別
 
 M0の対象は「文書・ボディのリスト・操作ログ・undo・STEP読み書き・STL書き出し」で、**振る舞い
