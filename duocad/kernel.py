@@ -672,6 +672,30 @@ def sketch_plane_normal(plane: dict, face: Any = None) -> Tuple[float, float, fl
     return (direction.X(), direction.Y(), direction.Z())
 
 
+def sketch_plane_frame(plane: dict, face: Any = None) -> dict:
+    """スケッチ平面の3Dの枠(原点と2軸と法線)を素の数値で返す(C・2026-08-13)。
+
+    戻り値: {"origin": [x,y,z], "u": [..], "v": [..], "normal": [..]}
+
+    **スケッチ平面上の (u, v) と3D座標を行き来する規則そのもの**である
+    (`p = origin + u*u_axis + v*v_axis`)。アプリ層はこれを受け取って、
+    画面のクリックを (u, v) へ落とし、図形を3Dへ描く。同じ計算を
+    アプリ層が独自に持つと、基準平面3面の軸の取り方と面に貼ったスケッチの
+    `ZReverse` の扱いが必ずずれるので、**枠はコアが配る**。
+    """
+    ax3 = _ax3_from_plane(plane, face=face)
+    origin = ax3.Location()
+    xdir = ax3.XDirection()
+    ydir = ax3.YDirection()
+    normal = ax3.Direction()
+    return {
+        "origin": [origin.X(), origin.Y(), origin.Z()],
+        "u": [xdir.X(), xdir.Y(), xdir.Z()],
+        "v": [ydir.X(), ydir.Y(), ydir.Z()],
+        "normal": [normal.X(), normal.Y(), normal.Z()],
+    }
+
+
 def sketch_regions(
     plane: dict, entities: list, face: Any = None
 ) -> List[dict]:

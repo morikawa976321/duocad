@@ -124,10 +124,26 @@ export interface NumberArgSpec {
   reject(value: number): string | null
 }
 
-export type ArgSpec = SelectionArgSpec | NumberArgSpec
+/**
+ * スケッチ平面をクリックして集める点(C・2026-08-13)。
+ *
+ * **選択引数と別物にしてある**。選択は「コアが持つ共有集合から取る」ものだが、点は
+ * その場の1クリックであり、集合に残らない(線を引くための始点が選択集合に溜まると、
+ * 次のコマンドが拾ってしまう)。
+ */
+export interface PointArgSpec {
+  kind: 'point'
+  name: string
+  label: string
+}
 
-/** 集まった引数の値。選択引数は参照の配列、数値引数は数。 */
-export type ArgValues = Record<string, SelectionRef[] | number>
+export type ArgSpec = SelectionArgSpec | NumberArgSpec | PointArgSpec
+
+/** スケッチ平面上の点 [u, v](mm)。 */
+export type Point2 = [number, number]
+
+/** 集まった引数の値。選択引数は参照の配列、数値引数は数、点引数は [u,v]。 */
+export type ArgValues = Record<string, SelectionRef[] | number | Point2>
 
 /** `build` の結果。作れないときは理由を返す(黙って何も送らない、をしない)。 */
 export type BuildResult =
@@ -141,8 +157,15 @@ export interface CommandDef {
   /** ツールバーのボタンの `id`(実機検査がここを叩く)。 */
   buttonId: string
   args: ArgSpec[]
-  /** サーバの `PREVIEWABLE_VERBS` に載っているか。載っていないverbは投機実行を求めない。 */
-  previewable: boolean
+  /**
+   * 確定前の姿の出し方(C・2026-08-13にbooleanから3値へ):
+   *
+   * - `server` … サーバの `PREVIEWABLE_VERBS` に載っている(投機実行して形を測らせる)
+   * - `local`  … ブラウザだけで描ける(スケッチの図形。**サーバへ投げない**ので
+   *   「Escで文書が変わらない」が構造的に成立する)
+   * - `none`   … 出さない
+   */
+  preview: 'server' | 'local' | 'none'
   /** 集まった引数から、サーバへ渡すverbの引数を作る。 */
   build(values: ArgValues): BuildResult
 }
@@ -160,7 +183,7 @@ export const EXTRUDE_FACE: CommandDef = {
   id: 'extrude_face',
   label: '押し出す',
   buttonId: 'extrude',
-  previewable: true,
+  preview: 'server',
   args: [
     { kind: 'selection', name: 'face', label: '押し出す面', shapeKind: 'face', min: 1, max: 1 },
     {
@@ -190,7 +213,11 @@ export const EXTRUDE_FACE: CommandDef = {
   },
 }
 
-/** 使えるコマンドの一覧(ツールバーの並び)。C・D・Eはここへ足す。 */
+/**
+ * 使えるコマンドの一覧(ツールバーの並び)。**ソリッドを触るモードのぶん**で、
+ * スケッチモードの一覧は `commands/sketch.ts` の `SKETCH_COMMANDS` にある
+ * (モードごとに一覧が違うだけで、状態機械は同じ1つ)。
+ */
 export const COMMANDS: CommandDef[] = [EXTRUDE_FACE]
 
 /**
@@ -202,8 +229,8 @@ export const COMMANDS: CommandDef[] = [EXTRUDE_FACE]
  */
 export const DEFAULT_COMMAND_ID = EXTRUDE_FACE.id
 
-export function findCommand(id: string): CommandDef {
-  const found = COMMANDS.find((command) => command.id === id)
+export function findCommand(id: string, list: CommandDef[] = COMMANDS): CommandDef {
+  const found = list.find((command) => command.id === id)
   if (!found) throw new Error(`unknown command: ${id}`)
   return found
 }
@@ -247,6 +274,10 @@ export function argSatisfied(spec: ArgSpec, values: ArgValues): boolean {
   if (spec.kind === 'selection') {
     return ((values[spec.name] ?? []) as SelectionRef[]).length >= spec.min
   }
+  if (spec.kind === 'point') {
+    const point = values[spec.name]
+    return Array.isArray(point) && point.length === 2 && point.every(Number.isFinite)
+  }
   const value = values[spec.name]
   return typeof value === 'number' && Number.isFinite(value) && spec.reject(value) === null
 }
@@ -266,6 +297,9 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
     const have = ((values[spec.name] ?? []) as SelectionRef[]).length
     const need = spec.min - have
     return `${spec.label}を${need}${KIND_COUNTERS[spec.shapeKind]}選ぶ(クリック / Shift+クリックで追加)`
+  }
+  if (spec.kind === 'point') {
+    return `${spec.label}をクリック(スケッチ平面の上)`
   }
   const value = values[spec.name]
   if (typeof value === 'number' && Number.isFinite(value)) {

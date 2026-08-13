@@ -23,6 +23,12 @@
         {"cmd": "modify_selection", "add": [ref, ...], "remove": [ref, ...], "client_op": int}
         {"cmd": "commit_selection", "client_op": int} / {"cmd": "clear_selection", "client_op": int}
         {"cmd": "preview", "verb": str, "args": {...}, "preview_id": int}
+        {"cmd": "sketch_create", "plane": <PlaneRef|"XY">, "client_op": int}          # C
+        {"cmd": "add_line", "sketch_id": str, "p0": [u,v], "p1": [u,v], ...}          # C
+        {"cmd": "add_circle", "sketch_id": str, "center": [u,v], "radius": float}     # C
+        {"cmd": "add_rectangle", "sketch_id": str, "corner": [u,v], "width", "height"}# C
+        {"cmd": "add_arc", "sketch_id": str, "center", "radius", "start_deg", "end_deg"} # C
+        {"cmd": "set_parameter", "name": str, "value": float, "client_op": int}       # C
 
     上り(server -> client)
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
@@ -89,7 +95,7 @@ from typing import Any, Optional  # Any: Session verb wrappers / listeners
 
 from websockets.asyncio.server import serve
 
-from . import io_step, kernel, parameters, query, selection, sketch
+from . import io_step, kernel, parameters, query, region, selection, sketch
 from .document import Document
 from .speculative import speculative
 from .verbs import (
@@ -120,6 +126,25 @@ PREVIEWABLE_VERBS: dict = {
     "extrude_face": ("extrude", ("body_id", "face_index", "distance")),
 }
 
+#: ブラウザから踏めるスケッチのコマンド -> (`Session` のメソッド名, 必須の引数名)。
+#:
+#: **C(2026-08-13)で「手動操作が一級の操作モード」がUIに現れる場所**。ここに無いverbは
+#: ソケットから呼べない(`PREVIEWABLE_VERBS` と同じ理由で、文字列で任意のメソッドを
+#: 呼べる作りにしない)。**引数が1つでも欠けたら KeyError にする** —— 既定値で補うと、
+#: 打ち忘れた寸法が黙って0で入る。
+#:
+#: `set_parameter` がここに居るのは、**クリックで置いた図形の値を後から打ち直す**のが
+#: パラメトリック・プリミティブ(§3.4)の効く場面そのものだから。図形の `params` は
+#: 名前つきの値への参照なので、名前さえ配れば打ち直しは既存のverbで足りる。
+SKETCH_COMMANDS: dict = {
+    "sketch_create": ("sketch_create", ("plane",)),
+    "add_line": ("add_line", ("sketch_id", "p0", "p1")),
+    "add_circle": ("add_circle", ("sketch_id", "center", "radius")),
+    "add_rectangle": ("add_rectangle", ("sketch_id", "corner", "width", "height")),
+    "add_arc": ("add_arc", ("sketch_id", "center", "radius", "start_deg", "end_deg")),
+    "set_parameter": ("set_parameter", ("name", "value")),
+}
+
 
 class Session:
     """1つの文書を持つサーバ側の状態。WebSocketの接続とは独立(接続が切れても文書は残る)。"""
@@ -135,6 +160,8 @@ class Session:
         self._applied_count = 0
         self._revision_state: dict = {}    # body_id -> (id(shape), visible) 直近の状態
         self._revision_counter: dict = {}  # body_id -> 現在の版(int)
+        # sketch_id -> (署名, 領域つきペイロード)。領域の計算が重いので内容で引く(C)
+        self._sketch_cache: dict = {}
         self._geometry_cache: dict = {}    # body_id -> (shape, tessellate結果)
         self._setup_floor_seq = 0  # load_step が積んだ最後のseq(これ以下はundoの対象外)
         self._listeners: list = []  # 文書が変わったときに呼ぶ購読者(下記 add_listener)
@@ -268,7 +295,98 @@ class Session:
             "can_redo": self.document.log.can_redo,
             "applied_count": self._applied_count,
             "selection": selection.get_selection(self.document).to_dict(),
+            # C(2026-08-13): スケッチは平面の枠・図形・領域まで含めて配る(下記)。
+            "sketches": self.sketches_state(),
         }
+
+    # ---------------------------------------------------------------- C: スケッチの配信
+    def sketches_state(self) -> list:
+        """全スケッチを**アプリ層が描ける形**で返す(C・2026-08-13)。
+
+        1件ぶん:
+            {"sketch_id", "plane": <PlaneRef>,
+             "frame": {"origin","u","v","normal"},          # (u,v) と3Dの往復の規則
+             "entities": [{"entity_id","kind","params","refs"}],   # 打ち直し用(名前つき)
+             "drawn":    [{"kind","params"}],                      # 反復を展開した描画用
+             "regions":  [{"index","area","centroid","positions","indices"}]}
+
+        **`entities` と `drawn` を分けている理由**: 前者は人が値を打ち直す対象
+        (`refs` にパラメータ名が入る。§3.4のパラメトリック・プリミティブ)で、後者は
+        反復を展開した「実際に見えるもの」。反復した図形が画面に出ないのに領域だけ
+        増える、を避けるため描画は必ず `drawn` を使う。
+
+        **領域の計算は重い**(`BRepAlgoAPI_Splitter`+テセレーション)。`state` は
+        変更のたびに全接続へ配るので、**スケッチの内容の署名でキャッシュする**
+        (`geometry()` が形状の同一性でキャッシュしているのと同じ判断)。署名には
+        解決済みの数値が入るので、`set_parameter` で値が変われば作り直される。
+        """
+        # undoで消えたスケッチのキャッシュを落とす(セッション寿命で溜め込まない)
+        alive = {item.id for item in self.document.sketches}
+        for sketch_id in [key for key in self._sketch_cache if key not in alive]:
+            self._sketch_cache.pop(sketch_id, None)
+        return [self._sketch_state(item) for item in self.document.sketches]
+
+    def _sketch_state(self, item) -> dict:
+        try:
+            drawn = region.expanded_entities(self.document, item.id)
+        except Exception as error:  # 壊れたスケッチで画面全体を落とさない
+            self.warnings.append(f"スケッチ {item.id} を描けない: {type(error).__name__}: {error}")
+            drawn = []
+        plane_shape = None
+        if item.plane.get("kind") == "face":
+            body = next(
+                (b for b in self.document.bodies if b.id == item.plane.get("body")), None
+            )
+            plane_shape = body.shape if body is not None else None
+        signature = json.dumps([item.plane, drawn, self.deviation], sort_keys=True, default=str)
+        cached = self._sketch_cache.get(item.id)
+        # 貼った面の形状は**参照そのもの**で比べる(`is`)。`id()` の整数だけを控えると、
+        # 旧形状が解放された後に同じアドレスが再利用されたときに偽ヒットする
+        # (`geometry()` のキャッシュが形状の同一性で引いているのと同じ判断。QA 2026-08-13)。
+        if cached is not None and cached[0] == signature and cached[1] is plane_shape:
+            payload = dict(cached[2])
+        else:
+            frame: Optional[dict] = None
+            regions: list = []
+            try:
+                frame = region.plane_frame(self.document, item.id)
+                if drawn:
+                    regions = region.regions_with_geometry(
+                        self.document, item.id, self.deviation
+                    )
+            except Exception as error:
+                self.warnings.append(
+                    f"スケッチ {item.id} の領域を計算できない: {type(error).__name__}: {error}"
+                )
+            payload = {"frame": frame, "drawn": drawn, "regions": regions}
+            self._sketch_cache[item.id] = (signature, plane_shape, payload)
+            payload = dict(payload)
+        payload["sketch_id"] = item.id
+        payload["plane"] = item.plane
+        # 図形そのものは軽いのでキャッシュしない(打ち直しの反映が1手遅れるのを避ける)。
+        # **ここも try で包む** —— 上の `drawn` だけを守っても、同じパラメータ解決を
+        # するこちらが素通りすると `state_meta()` ごと落ち、以後の配信が全部止まる。
+        try:
+            payload["entities"] = [
+                {
+                    "entity_id": entity.id,
+                    "kind": entity.kind,
+                    "params": sketch.entity_params(self.document, item.id, entity.id),
+                    # 値が名前つきパラメータなら**その名前**(`set_parameter` で打ち直せる)。
+                    # 素の数値のままなら None(M2以前に作られた図形)。
+                    "refs": {
+                        key: ref if isinstance(ref, str) else None
+                        for key, ref in entity.params.items()
+                    },
+                }
+                for entity in item.entities
+            ]
+        except Exception as error:
+            self.warnings.append(
+                f"スケッチ {item.id} の図形を読めない: {type(error).__name__}: {error}"
+            )
+            payload["entities"] = []
+        return payload
 
     # ---------------------------------------------------------------- M3.5: 差分送信
     def body_revision(self, body_id: str) -> int:
@@ -942,6 +1060,18 @@ class Server:
             # `_dispatching` まで立てると、**プレビューの計算中(押し出しなら約1秒)に
             # MCPから届いた本物の変更まで「WebSocket経由だから配信不要」と誤判定して
             # 黙って捨てる**(`_apply` のdocstringが警告しているのと同じ穴)。
+            # -------------------------------------------------- C: スケッチ(手で描く経路)
+            # **既にMCPが持っていたverbをブラウザにも開けただけ**(選択の3コマンドと同じ)。
+            # コアには何も足していない —— スケッチがAIからしか触れない状態は、この企画の
+            # 中心命題「手動操作が一級の操作モード」に真正面から反する(実装計画書§8b C)。
+            elif command in SKETCH_COMMANDS:
+                method, keys = SKETCH_COMMANDS[command]
+                applied = self._apply(
+                    getattr(self.session, method),
+                    **{key: message[key] for key in keys},
+                )
+                applied["client_op"] = message.get("client_op")
+                await self._push(connection, applied=applied)
             elif command == "preview":
                 result = self.session.preview(message["verb"], message.get("args") or {})
                 await _send(

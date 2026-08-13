@@ -291,6 +291,71 @@ def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
     return entities
 
 
+def plane_face(doc: Document, sketch_id: SketchId) -> Any:
+    """スケッチを貼った面(`TopoDS_Face`)。基準平面に貼ったスケッチなら None。
+
+    面に貼ったスケッチは**平面の枠を実際の面から取る**必要がある(基準3面と違って
+    位置も軸も文書の中身次第)。領域の計算とアプリ層への配信の両方が要るので、
+    `_regions_detailed` の中から切り出した。
+    """
+    sketch = get_sketch(doc, sketch_id)
+    if sketch.plane.get("kind") != "face":
+        return None
+    body_id = sketch.plane["body"]
+    body = next((candidate for candidate in doc.bodies if candidate.id == body_id), None)
+    if body is None:
+        raise KeyError(f"no such body: {body_id!r}")
+    if body.shape is None:
+        raise ValueError(f"body {body_id!r} has no shape")
+    return kernel.face_of(body.shape, int(sketch.plane["index"]))
+
+
+def plane_frame(doc: Document, sketch_id: SketchId) -> dict:
+    """スケッチ平面の3Dの枠(`kernel.sketch_plane_frame`)。C(2026-08-13)で追加。
+
+    アプリ層が「画面のクリック → 平面上の (u, v)」と「図形 → 3Dの線」を行き来するために
+    要る。**同じ計算をアプリ層に持たせない**(基準3面の軸の取り方と、面に貼ったときの
+    法線反転の扱いが必ずずれる)。
+    """
+    sketch = get_sketch(doc, sketch_id)
+    return kernel.sketch_plane_frame(sketch.plane, face=plane_face(doc, sketch_id))
+
+
+def expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
+    """反復を展開しパラメータを解決した、**画面に描くべき図形の全量**。
+
+    公開しているのは、アプリ層が描くものと領域の計算が食うものを同じにするため
+    (別々に組み立てると、反復した図形が画面に出ないのに領域だけ増える、が起きる)。
+    """
+    return _expanded_entities(doc, sketch_id)
+
+
+def regions_with_geometry(doc: Document, sketch_id: SketchId, deviation: float) -> List[dict]:
+    """領域を**画面へ描ける三角形つき**で返す(C・2026-08-13)。
+
+    戻り値: [{"index", "area", "centroid", "positions", "indices"}, ...]
+
+    領域はスケッチ平面上の面なので、実体(`TopoDS_Face`)を持っているのはコア側だけ。
+    アプリ層で図形から領域を組み直すと、コアが選択集合で指している添字と食い違う
+    (領域の順序は面積とu,vで決まる。`kernel.sketch_regions`)。**描くものも添字も
+    コアが配る**。
+    """
+    out: List[dict] = []
+    for item in _regions_detailed(doc, sketch_id):
+        mesh = kernel.tessellate(item["face"], deviation)
+        first = mesh["faces"][0] if mesh["faces"] else None
+        out.append(
+            {
+                "index": item["index"],
+                "area": item["area"],
+                "centroid": item["centroid"],
+                "positions": first["positions"] if first else [],
+                "indices": first["indices"] if first else [],
+            }
+        )
+    return out
+
+
 def _regions_detailed(doc: Document, sketch_id: SketchId) -> List[dict]:
     """`kernel.sketch_regions` の結果をそのまま返す(面つき。`verbs/extrude.py` が使う)。
 
@@ -301,15 +366,7 @@ def _regions_detailed(doc: Document, sketch_id: SketchId) -> List[dict]:
     sketch = get_sketch(doc, sketch_id)
     if not sketch.entities:
         return []
-    face = None
-    if sketch.plane.get("kind") == "face":
-        body_id = sketch.plane["body"]
-        body = next((candidate for candidate in doc.bodies if candidate.id == body_id), None)
-        if body is None:
-            raise KeyError(f"no such body: {body_id!r}")
-        if body.shape is None:
-            raise ValueError(f"body {body_id!r} has no shape")
-        face = kernel.face_of(body.shape, int(sketch.plane["index"]))
+    face = plane_face(doc, sketch_id)
     entities = _expanded_entities(doc, sketch_id)
     if not entities:
         return []

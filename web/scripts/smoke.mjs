@@ -512,6 +512,266 @@ async function main() {
     )
     ok(`undo 1回で押し出し前の体積へ戻った: ${volumeBefore}`)
 
+    // ================================================================ C: スケッチ
+    // **手動操作が一級の操作モードになる**ところ(実装計画書§8b C)。スケッチはM2から
+    // コアとMCPにあったが、人からは描けなかった。ここで見るのはタスクCの検証1〜5で、
+    // 検証6(MCPから同じ文書に見える)は smoke-mcp.mjs 側にある。
+    async function typeInto(selector, value) {
+      await page.click(selector)
+      await page.keyboard.down('Control')
+      await page.keyboard.press('KeyA')
+      await page.keyboard.up('Control')
+      await page.keyboard.press('Backspace')
+      await page.type(selector, String(value), { delay: 20 })
+    }
+
+    async function clickPlane(u, v) {
+      // **クリックの直前に射影し直す**(使い回さない。面のときと同じ理由)
+      const at = await page.evaluate(
+        (uu, vv) => {
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectSketchPoint(uu, vv)
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        },
+        u,
+        v,
+      )
+      if (!at) fail(`スケッチ平面の点 (${u}, ${v}) が画面の中に無い`)
+      await page.mouse.click(at.x, at.y)
+      return at
+    }
+
+    /** 待って落ちたら**画面の中身を添えて**失敗する(「120秒待った」だけでは切り分けられない)。 */
+    async function waitForSketch(predicate, what, ...args) {
+      try {
+        await page.waitForFunction(predicate, { timeout, polling: 50 }, ...args)
+      } catch (error) {
+        const dump = await page.evaluate(() =>
+          JSON.stringify({
+            activeSketch: window.__duocad.activeSketch,
+            sketches: window.__duocad.sketches.map((item) => ({
+              id: item.sketch_id,
+              plane: item.plane,
+              entities: item.entities.length,
+              kinds: item.entities.map((entity) => entity.kind),
+              regions: item.regions.length,
+            })),
+            selection: window.__duocad.selection,
+            messages: window.__duocad.messages,
+          }),
+        )
+        fail(`${what}: ${dump}`)
+      }
+    }
+
+    // **ページの中で JSON.stringify する**(Svelteの状態はプロキシで、そのまま返すと
+    // CDPのシリアライズで空オブジェクトになる。既存の `snapshot()` と同じ理由)。
+    const sketchState = async () =>
+      JSON.parse(
+        await page.evaluate(() => {
+          const hook = window.__duocad
+          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch) ?? null
+          return JSON.stringify({
+            activeSketch: hook.activeSketch,
+            plane: active?.plane ?? null,
+            entities: active?.entities?.length ?? 0,
+            kinds: (active?.entities ?? []).map((entity) => entity.kind),
+            regions: active?.regions?.length ?? 0,
+            log: hook.state.log.length,
+            appliedCount: hook.state.applied_count,
+          })
+        }),
+      )
+
+    // -------------------------------------------------------------- 検証1(その1): 面に貼る
+    // 直前のundoで押し出した面が選び直されている(M1からの挙動)ので、それに貼る。
+    //
+    // **選択が落ち着くまで待つ**。押し出し・undoの後継の選び直しは「サーバの状態が届く →
+    // アプリ層が `modify_selection` を送る → もう一度状態が届く」の**もう1往復**で決まるので、
+    // 体積が戻った瞬間の選択はまだ1つ前の面(押し出し後の後継)を指している。そこへ
+    // スケッチを貼ろうとすると、その添字が今の形状では曲面を指していて失敗する
+    // (2026-08-13に実際に踏んだ: face 34 is cylinder_partial)。**平面が選ばれるまで待つ**。
+    await waitForSketch(
+      (bodyId) => {
+        const hook = window.__duocad
+        const items = hook.selection?.items ?? []
+        if (items.length !== 1 || items[0].body !== bodyId) return false
+        const geometry = hook.bodyGeometry[bodyId]
+        const face = geometry?.faces.find((entry) => entry.index === items[0].index)
+        return Boolean(face && face.kind === 'plane')
+      },
+      '押し出しのundo後に平面が1つ選ばれた状態にならない',
+      extrudeTarget.body_id,
+    )
+    await page.click('#sketch-new-face')
+    await waitForSketch(() => window.__duocad.activeSketch !== null, '面に貼ったスケッチが作られない')
+    const onFace = await sketchState()
+    if (onFace.plane?.kind !== 'face') fail(`面に貼ったスケッチになっていない: ${JSON.stringify(onFace.plane)}`)
+    ok('既存ソリッドの面にスケッチを作れた(スケッチモードに入り、平面は face 参照)')
+    await page.click('#sketch-exit')
+    await page.waitForFunction(() => window.__duocad.activeSketch === null, { timeout, polling: 50 })
+
+    // -------------------------------------------------------------- 検証1(その2)・2: 基準平面に描く
+    await page.click('#sketch-new-XY')
+    await page.waitForFunction(
+      () => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return Boolean(active && active.plane.kind === 'base' && active.frame)
+      },
+      { timeout, polling: 50 },
+    )
+    ok('基準平面(XY)にもスケッチを作れた')
+
+    // 円: 中心をクリック → 半径を打つ → Enter(**Bの数値入力をそのまま使っている**)
+    await page.click('#sketch-circle')
+    await clickPlane(0, 0)
+    await typeInto('#sketch-radius', 20)
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(
+      () => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return Boolean(active && active.entities.length === 1 && active.regions.length === 1)
+      },
+      { timeout, polling: 50 },
+    )
+    ok('円を手で描けた(中心をクリック → 半径20を打つ → Enter。閉領域が1つできた)')
+
+    // 線分: 2点をクリックで置く。**円を横切る線**なので領域が2つに割れる(検証3)
+    await page.click('#sketch-line')
+    await clickPlane(-30, 5)
+    await clickPlane(30, 5)
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(
+      () => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return Boolean(active && active.entities.length === 2 && active.regions.length === 2)
+      },
+      { timeout, polling: 50 },
+    )
+    ok('線分を手で描けた(2点をクリック)。**円が線で2つの領域に割れた**')
+
+    // -------------------------------------------------------------- 検証4: Escで中断
+    // 長方形の引数を途中まで集めてEscを押す。文書が一切変わらないこと。
+    const beforeAbort = await sketchState()
+    await page.click('#sketch-rectangle')
+    await clickPlane(30, -30)
+    await typeInto('#sketch-width', 10)
+    await typeInto('#sketch-height', 6)
+    await page.keyboard.press('Escape')
+    const afterAbort = await sketchState()
+    if (afterAbort.entities !== beforeAbort.entities || afterAbort.log !== beforeAbort.log) {
+      fail(
+        `Escで中断したのに図形が残った: 図形 ${beforeAbort.entities}->${afterAbort.entities} / ` +
+          `log ${beforeAbort.log}->${afterAbort.log}`,
+      )
+    }
+    ok('Escで中断: 図形も操作ログも増えていない(スケッチの幽霊はサーバへ投げていない)')
+
+    // 長方形と円弧も描ける(4種そろっていること)
+    await page.click('#sketch-rectangle')
+    await clickPlane(30, -30)
+    await typeInto('#sketch-width', 10)
+    await typeInto('#sketch-height', 6)
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(
+      () => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return Boolean(active && active.entities.length === 3)
+      },
+      { timeout, polling: 50 },
+    )
+    await page.click('#sketch-arc')
+    await clickPlane(-40, -30)
+    await typeInto('#sketch-arc-radius', 8)
+    await typeInto('#sketch-arc-start', 0)
+    await typeInto('#sketch-arc-end', 120)
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(
+      () => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return Boolean(active && active.entities.length === 4)
+      },
+      { timeout, polling: 50 },
+    )
+    const kinds = (await sketchState()).kinds
+    if (kinds.join(',') !== 'circle,line,rectangle,arc') fail(`4種そろっていない: ${kinds.join(',')}`)
+    ok('長方形と円弧も描けた(線分・円・長方形・円弧の4種すべて)')
+
+    // -------------------------------------------------------------- 検証5: undoで1つずつ消える
+    const beforeUndo = await sketchState()
+    await page.click('#undo')
+    await page.waitForFunction(
+      (expected) => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return Boolean(active && active.entities.length === expected)
+      },
+      { timeout, polling: 50 },
+      beforeUndo.entities - 1,
+    )
+    ok(`undoで図形が1つずつ消えた(${beforeUndo.entities} -> ${beforeUndo.entities - 1}。円弧だけが消えた)`)
+
+    // -------------------------------------------------------------- 検証2(後半): 値の打ち直し
+    // **クリックだけで置いた後も寸法を打ち直せる**(§3.4 パラメトリック・プリミティブ)。
+    // 円の半径を20->12へ。領域の面積が変われば、コアが作り直したものが届いている。
+    const areaBefore = await page.evaluate(() => {
+      const hook = window.__duocad
+      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      return active.regions[0].area
+    })
+    // 属性セレクタで引く(図形IDは数字始まりもありうるので `#id` は使えない)
+    const radiusInput = await page.evaluate(() => {
+      const hook = window.__duocad
+      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      const circle = active.entities.find((entity) => entity.kind === 'circle')
+      return `[id="param-${circle.entity_id}-radius"]`
+    })
+    await typeInto(radiusInput, 12)
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(
+      () => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const circle = active.entities.find((entity) => entity.kind === 'circle')
+        return Math.abs(circle.params.radius - 12) < 1e-9
+      },
+      { timeout, polling: 50 },
+    )
+    const areaAfter = await page.evaluate(() => {
+      const hook = window.__duocad
+      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      return active.regions[0].area
+    })
+    if (!(areaAfter < areaBefore)) fail(`半径を小さくしたのに領域の面積が減らない: ${areaBefore} -> ${areaAfter}`)
+    ok(`置いた後に寸法を打ち直せた(半径 20 -> 12。領域の面積 ${areaBefore.toFixed(1)} -> ${areaAfter.toFixed(1)} mm²)`)
+
+    // -------------------------------------------------------------- 検証3(後半): 領域をクリックで選ぶ
+    // 描くコマンドはEscで抜けて「選ぶ」に戻っている。**3Dの領域を本物のクリックで選ぶ**。
+    await page.keyboard.press('Escape')
+    // 描いたもの全体を画面へ収める(領域を狙うクリックの精度のため)。
+    // **描き終わってから呼ぶ** —— 途中で呼ぶと、まだ描いていない位置が画面の外に出る。
+    await page.click('#sketch-look')
+    const regionAt = await page.evaluate(() => {
+      const rect = document.querySelector('.viewport').getBoundingClientRect()
+      const position = window.__duocad.projectRegion(1)
+      return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+    })
+    if (!regionAt) fail('領域1の画面上の位置が取れない')
+    await page.mouse.click(regionAt.x, regionAt.y)
+    await page.waitForFunction(
+      () => {
+        const items = window.__duocad.selection?.items ?? []
+        return items.length === 1 && 'sketch' in items[0] && items[0].index === 1
+      },
+      { timeout, polling: 50 },
+    )
+    ok('領域を本物のクリックで選べた(共有選択集合に領域が入った=Dの押し出しの引数になる)')
+
     if (consoleErrors.length > 0) {
       fail(`ブラウザのコンソールにエラー: ${consoleErrors.slice(0, 3).join(' | ')}`)
     }

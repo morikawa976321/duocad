@@ -45,12 +45,16 @@
     type ArgValues,
     type CommandDef,
     type NumberArgSpec,
+    type Point2,
   } from './command'
   import type { SelectionState } from '../session'
 
   let {
     selection,
     busy,
+    commands = COMMANDS,
+    defaultCommandId = DEFAULT_COMMAND_ID,
+    hover = null,
     onRun,
     onPreview,
     onCancelPreview,
@@ -60,8 +64,21 @@
     selection: SelectionState | null
     /** 直前の操作の応答待ち。待っている間は確定を受け付けない。 */
     busy: boolean
+    /**
+     * このモードで使えるコマンド(C・2026-08-13)。既定はソリッドを触るぶん。
+     * スケッチモードでは `commands/sketch.ts` の一覧が渡る —— **状態機械は同じ1つ**で、
+     * 変わるのは一覧と既定だけ(モードごとにUIを作り直さない)。
+     */
+    commands?: CommandDef[]
+    defaultCommandId?: string
+    /**
+     * スケッチ平面上でポインタが今指している点(C)。**幽霊にだけ使う**。
+     * これが無いと、線分は2点目を置くまで何も見えない。
+     */
+    hover?: Point2 | null
     onRun: (verb: string, args: Record<string, unknown>) => void
-    onPreview: (verb: string, args: Record<string, unknown>) => void
+    /** `mode` は `CommandDef.preview`。`local` はブラウザだけで描く(サーバへ投げない)。 */
+    onPreview: (verb: string, args: Record<string, unknown>, mode: 'server' | 'local') => void
     onCancelPreview: () => void
     onNote: (message: string) => void
   } = $props()
@@ -69,11 +86,20 @@
   /** 打ち終わってからプレビューを投げるまでの待ち[ms]。 */
   const PREVIEW_DEBOUNCE_MS = 250
 
-  let commandId = $state(DEFAULT_COMMAND_ID)
-  const command = $derived<CommandDef>(findCommand(commandId))
+  // 初期値を1回だけ捕まえるのが正しい —— モードが変わるときは呼び出し側(`App.svelte`)が
+  // `{#key}` でこのコンポーネントごと作り直す(集めかけの引数を持ち越さないため)。
+  // svelte-ignore state_referenced_locally
+  let commandId = $state(defaultCommandId)
+  const command = $derived<CommandDef>(findCommand(commandId, commands))
 
   /** 数値引数の生の入力(引数名 -> 打った文字列)。確定・中断のたびに空へ戻す。 */
   let numberText = $state<Record<string, string>>({})
+
+  /**
+   * クリックで集めた点(引数名 -> [u,v])。**選択集合には入れない** ——
+   * 線の始点が共有選択に溜まると、次のコマンドがそれを引数として拾ってしまう。
+   */
+  let points = $state<Record<string, Point2>>({})
 
   /**
    * 最後に見た**確定済み**の選択(`origin === "user"`)。AIが提案を書き込んでいる間、
@@ -89,12 +115,15 @@
     selection === null || selection.origin === 'user' ? selection : lastUserSelection,
   )
 
-  /** 集まった引数(選択は導出・数値は打った文字列から)。 */
+  /** 集まった引数(選択は導出・数値は打った文字列から・点はクリックから)。 */
   const values = $derived.by<ArgValues>(() => {
     const collected: ArgValues = {}
     for (const spec of command.args) {
       if (spec.kind === 'selection') {
         collected[spec.name] = itemsForArg(spec, argSelection)
+      } else if (spec.kind === 'point') {
+        const point = points[spec.name]
+        if (point) collected[spec.name] = point
       } else {
         const raw = (numberText[spec.name] ?? '').trim()
         const parsed = raw === '' ? Number.NaN : Number.parseFloat(raw)
@@ -107,6 +136,20 @@
   const missing = $derived(firstMissingArg(command, values))
   const ready = $derived(missing === null)
   const built = $derived(ready ? command.build(values) : null)
+
+  /**
+   * 幽霊に使う引数。**待っている点をポインタの位置で仮に埋める**ので、線分なら
+   * 2点目を置く前から線が見えている(ゴムひも)。確定に使うのは `built` のほうで、
+   * ここは表示専用。
+   */
+  const ghostBuilt = $derived.by(() => {
+    if (built?.ok) return built
+    if (missing?.kind !== 'point' || hover === null) return null
+    const provisional = { ...values, [missing.name]: hover }
+    if (firstMissingArg(command, provisional) !== null) return null
+    const result = command.build(provisional)
+    return result.ok ? result : null
+  })
 
   /** 画面に出す1行(何を待っているか)。 */
   const prompt = $derived.by(() => {
@@ -127,18 +170,26 @@
   let previewedKey: string | null = null
 
   $effect(() => {
-    const key = built && built.ok && command.previewable ? JSON.stringify([command.id, built.args]) : null
+    const source = command.preview === 'none' ? null : ghostBuilt
+    const key = source ? JSON.stringify([command.id, source.args]) : null
     if (key === previewedKey) return
     if (previewTimer) clearTimeout(previewTimer)
     previewedKey = key
-    if (key === null) {
+    if (key === null || source === null) {
       onCancelPreview()
       return
     }
-    const args = (built as { ok: true; args: Record<string, unknown> }).args
+    const mode = command.preview as 'server' | 'local'
+    const args = source.args
+    // **ブラウザだけで描ける幽霊は待たない**。デバウンスは「投機実行が重い」ことへの
+    // 対処(押し出しは実測で数百ms〜1秒)であって、線を1本引くのに待つ理由は無い。
+    if (mode === 'local') {
+      onPreview(command.id, args, mode)
+      return
+    }
     previewTimer = setTimeout(() => {
       previewTimer = null
-      onPreview(command.id, args)
+      onPreview(command.id, args, mode)
     }, PREVIEW_DEBOUNCE_MS)
   })
 
@@ -169,14 +220,18 @@
    * 選択パネルの「全解除」)。
    */
   function abort(): void {
-    const wasArmed = Object.values(numberText).some((text) => text !== '') || ready
+    const wasArmed =
+      Object.values(numberText).some((text) => text !== '') ||
+      Object.keys(points).length > 0 ||
+      ready
     reset()
-    if (commandId !== DEFAULT_COMMAND_ID) commandId = DEFAULT_COMMAND_ID
+    if (commandId !== defaultCommandId) commandId = defaultCommandId
     if (wasArmed) onNote('中断した(文書は変わっていない)')
   }
 
   function reset(): void {
     numberText = {}
+    points = {}
     if (previewTimer) clearTimeout(previewTimer)
     previewTimer = null
     previewedKey = null
@@ -189,6 +244,25 @@
     focusFirstNumber()
   }
 
+  /**
+   * スケッチ平面のクリックを、待っている点引数へ入れる(C)。
+   *
+   * 待っている点が無ければ**何もしない**(黙って最後の点を上書きすると、
+   * 引数が揃った後のクリックで図形が動いて見える)。
+   */
+  export function addPoint(u: number, v: number): boolean {
+    const spec = firstMissingArg(command, values)
+    if (spec === null || spec.kind !== 'point') return false
+    points = { ...points, [spec.name]: [u, v] }
+    focusFirstNumber()
+    return true
+  }
+
+  /** スケッチモードで待っている点があるか(App.svelte がクリックの行き先を決める)。 */
+  export function wantsPoint(): boolean {
+    return missing?.kind === 'point'
+  }
+
   function focusFirstNumber(): void {
     // 収集の先頭が数値引数なら、そこへ入れる(選択待ちのときは3Dを触るので奪わない)
     queueMicrotask(() => {
@@ -198,9 +272,21 @@
   }
 
   function onKeydown(event: KeyboardEvent): void {
-    if (event.key !== 'Escape') return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      abort()
+      return
+    }
+    // **点だけで引数が揃うコマンド(線分など)はEnterの受け皿が無い**(C)。数値欄に
+    // フォーカスが無いときのEnterをここで拾う —— 欄にフォーカスがあるときは
+    // `onNumberKeydown` が拾うので二重に確定しない。
+    if (event.key !== 'Enter' || !ready) return
+    const target = event.target as HTMLElement | null
+    // ボタンも除く —— フォーカスの残ったボタン(undo等)のEnterを奪うと、押したつもりの
+    // ボタンではなくコマンドが確定する(QA 2026-08-13)。
+    if (target && ['INPUT', 'TEXTAREA', 'BUTTON'].includes(target.tagName)) return
     event.preventDefault()
-    abort()
+    commit()
   }
 
   /** 数値欄でのEnter(確定)とTab(次の引数へ)。 */
@@ -225,7 +311,7 @@
 <section class="command-host" data-command={command.id} data-phase={ready ? 'ready' : 'collecting'}>
   <div class="row">
     <span class="label">コマンド</span>
-    {#each COMMANDS as candidate (candidate.id)}
+    {#each commands as candidate (candidate.id)}
       <button
         id={candidate.buttonId}
         class:on={candidate.id === command.id}

@@ -445,6 +445,55 @@ async function main() {
 
     await mcp.callTool('clear_selection')
 
+    // ---------------------------------------------------------------- C: 手で描いたものがAIにも見える
+    // タスクCの検証6。**片方にしか無い状態を作らない** —— 人がブラウザで描いた図形が
+    // AIの `describe_document` に出なければ、UIとコアが別の文書を見ていることになる。
+    await page.click('#sketch-new-XY')
+    await page.waitForFunction(() => window.__duocad.activeSketch !== null, {
+      timeout,
+      polling: 50,
+    })
+    await page.click('#sketch-circle')
+    const center = await page.evaluate(() => {
+      const rect = document.querySelector('.viewport').getBoundingClientRect()
+      const position = window.__duocad.projectSketchPoint(0, 0)
+      return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+    })
+    if (!center) fail('スケッチ平面の原点が画面の中に無い(手で描けない)')
+    await page.mouse.click(center.x, center.y)
+    await page.click('#sketch-radius')
+    await page.type('#sketch-radius', '15', { delay: 20 })
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(
+      () => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return Boolean(active && active.entities.length === 1)
+      },
+      { timeout, polling: 50 },
+    )
+    const drawnSketchId = await page.evaluate(() => window.__duocad.activeSketch)
+
+    // `include_regions` を明示する(既定では領域を数えない=重いため)
+    const afterDrawing = await mcp.callTool('describe_document', { include_regions: true })
+    const seenByAi = (afterDrawing.sketches ?? []).find((item) => item.sketch_id === drawnSketchId)
+    if (!seenByAi) {
+      fail(
+        `人が描いたスケッチ ${drawnSketchId} がAIから見えない: ` +
+          `${JSON.stringify((afterDrawing.sketches ?? []).map((item) => item.sketch_id))}`,
+      )
+    }
+    const drawnCircle = (seenByAi.entities ?? []).find((entity) => entity.kind === 'circle')
+    if (!drawnCircle) fail(`AI側に円が無い: ${JSON.stringify(seenByAi.entities)}`)
+    if (Math.abs(drawnCircle.params.radius - 15) > 1e-9) {
+      fail(`AIが読んだ半径が打った値と違う: ${drawnCircle.params.radius} != 15`)
+    }
+    if (seenByAi.region_count !== 1) fail(`AI側の領域数が1でない: ${seenByAi.region_count}`)
+    ok(
+      `**人がブラウザで描いた円が、AIの describe_document にそのまま見えている**` +
+        `(半径 ${drawnCircle.params.radius} / 領域 ${seenByAi.region_count} 個)`,
+    )
+
     if (consoleErrors.length > 0) {
       fail(`ブラウザのコンソールにエラー: ${consoleErrors.slice(0, 3).join(' | ')}`)
     }

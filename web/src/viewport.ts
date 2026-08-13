@@ -55,10 +55,29 @@ export interface BodyGeometryUpdate {
 export type PickMode = 'replace' | 'add' | 'remove'
 
 export interface PickEvent {
-  /** 当たった面(Body+添字)。外したら null。 */
+  /** 当たった面(Body+添字)。外したら null。**スケッチモード中は常に null**(下記)。 */
   hit: FaceRef | null
   /** Shift=追加 / Ctrl(Mac は Meta)=除去 / 修飾なし=置き換え。 */
   mode: PickMode
+  /**
+   * スケッチモード中の、クリックした点のスケッチ平面上の座標(C・2026-08-13)。
+   * 平面がカメラの裏なら null。**これが「手で描く」の入力そのもの**。
+   */
+  point: { sketchId: string; u: number; v: number } | null
+  /** スケッチモード中に領域へ当たったらその添字(領域は面より手前で拾う)。 */
+  region: { sketchId: string; index: number } | null
+}
+
+/** 1枚のスケッチの描画指示(three.js の型は出さない)。 */
+export interface SketchDraw {
+  sketchId: string
+  /** `p = origin + u*uAxis + v*vAxis`(コアが配る枠。session.ts の `SketchFrame`)。 */
+  frame: { origin: number[]; u: number[]; v: number[]; normal: number[] }
+  /** 反復を展開した描画対象。`params` はコアの `Entity.params` と同じキー。 */
+  entities: Array<{ kind: string; params: Record<string, number> }>
+  regions: Array<{ index: number; positions: number[]; indices: number[] }>
+  /** 選択中の領域の添字(強調して描く)。 */
+  selectedRegions: number[]
 }
 
 export interface Viewport {
@@ -82,6 +101,11 @@ export interface Viewport {
   prune(validBodyIds: string[]): void
   /** 面のクリック(当たり・外れとも)を受け取る。 */
   onPick(listener: (event: PickEvent) => void): void
+  /**
+   * スケッチモード中、ポインタがスケッチ平面のどこを指しているか(C)。
+   * モード外・平面の裏では null が来る。**確定前の線を見せるためだけ**に使う。
+   */
+  onPlaneMove(listener: (point: { u: number; v: number } | null) => void): void
   /**
    * 選択中の面を強調する(空配列で解除)。
    *
@@ -115,12 +139,48 @@ export interface Viewport {
    * 検査になる)。
    */
   project(bodyId: string, faceIndex: number): { x: number; y: number } | null
+  // ------------------------------------------------------------------ C: スケッチ
+  /**
+   * スケッチを描き直す(渡さなかったスケッチの描画は消える)。**図形は線、領域は面**で
+   * 描く。ソリッドの描画(`update`)とは別のグループに持つので、押し出しで形が変わっても
+   * スケッチは消えない。
+   */
+  showSketches(sketches: SketchDraw[]): void
+  /**
+   * 確定前の図形(スケッチの幽霊)を描く。`entity` が null で消える。
+   *
+   * **サーバへ投げない**。図形の形はブラウザ側で分かっており、コアで投機実行すると
+   * 文書に一度は入る(戻すとはいえ)。Escで中断しても文書が変わらないことを、
+   * 「そもそも送らない」で成立させる。
+   */
+  showSketchGhost(sketchId: string, entity: { kind: string; params: Record<string, number> } | null): void
+  /**
+   * スケッチモードの対象を決める。`null` でモードを抜ける。
+   *
+   * モード中のクリックは**面ではなく**「領域」または「平面上の点」になる
+   * (`PickEvent.point` / `PickEvent.region`)。描いている最中に奥のソリッドの面を
+   * 掴んでしまうと、線を引くつもりのクリックが選択の置き換えになる。
+   */
+  setActiveSketch(sketchId: string | null): void
+  /** スケッチ平面を正面から見る視点へ移す(無いと描きにくい)。 */
+  lookAtSketch(sketchId: string): void
+  /** スケッチ平面上の (u,v) の画面座標。実機検査が**本物のクリックで描く**ために要る。 */
+  projectSketchPoint(sketchId: string, u: number, v: number): { x: number; y: number } | null
+  /** 領域の画面座標(実機検査が領域を本物のクリックで選ぶために要る)。 */
+  projectRegion(sketchId: string, index: number): { x: number; y: number } | null
   resize(): void
   dispose(): void
 }
 
 const BASE_COLOR = 0x9aa6b2
 const HIGHLIGHT_COLOR = 0xffb454
+/** スケッチの線・確定前の線・領域(C・2026-08-13)。ソリッドの色と混ざらない色にする。 */
+const SKETCH_COLOR = 0xe8eef6
+const SKETCH_GHOST_COLOR = 0x7ee081
+const REGION_COLOR = 0x4d7ea8
+const REGION_SELECTED_COLOR = 0xffb454
+/** 円・円弧を折れ線で描くときの分割数(見た目の作り込みではなく、狙える程度の滑らかさ)。 */
+const ARC_SEGMENTS = 64
 /** AIの提案(`origin === "proposed"`)。確定(橙)と**色相で**離す。 */
 const PROPOSED_COLOR = 0x36d1ff
 /** 確定前の形。半透明で「まだ無いもの」に見せる。 */
@@ -201,6 +261,7 @@ export function createViewport(container: HTMLElement): Viewport {
   /** プレビュー(幽霊)のメッシュ。**ピックの対象にしない**ので `bodies` とは別に持つ。 */
   const previewMeshes = new Map<string, { objects: THREE.Object3D[]; disposables: Array<{ dispose(): void }> }>()
   let pickListener: ((event: PickEvent) => void) | null = null
+  let planeMoveListener: ((point: { u: number; v: number } | null) => void) | null = null
   let framed = false
   let alive = true
   let frameHandle = 0
@@ -415,6 +476,300 @@ export function createViewport(container: HTMLElement): Viewport {
     return null
   }
 
+  // ------------------------------------------------------------------ C: スケッチ
+  //
+  // **描くのは線と領域だけ**で、スケッチ平面そのもの(無限に広がる面)は描かない ——
+  // 面を描くと奥のソリッドが隠れ、「既存の部品の上に描く」が見えなくなる。
+  //
+  // ソリッドとは別のグループ(`sketchRoot`)に持つ。`update()`/`prune()` はソリッド側の
+  // `root` しか触らないので、押し出しでスケッチが消えることがない。
+  const sketchRoot = new THREE.Group()
+  scene.add(sketchRoot)
+
+  const sketchMaterial = new THREE.LineBasicMaterial({ color: SKETCH_COLOR })
+  const sketchGhostMaterial = new THREE.LineBasicMaterial({ color: SKETCH_GHOST_COLOR })
+  const regionMaterial = new THREE.MeshBasicMaterial({
+    color: REGION_COLOR,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.35,
+    depthWrite: false,
+  })
+  const regionSelectedMaterial = new THREE.MeshBasicMaterial({
+    color: REGION_SELECTED_COLOR,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+  })
+
+  interface SketchScene {
+    frame: SketchDraw['frame']
+    objects: THREE.Object3D[]
+    disposables: Array<{ dispose(): void }>
+    /** 領域のメッシュ(ピック対象)。 */
+    regionMeshes: THREE.Mesh[]
+    /** 図形の (u,v) の折れ線(視点合わせの中心を出すのに使う)。 */
+    points: Array<[number, number]>
+  }
+  const sketches = new Map<string, SketchScene>()
+  let ghost: { objects: THREE.Object3D[]; disposables: Array<{ dispose(): void }> } | null = null
+  let activeSketchId: string | null = null
+
+  /** スケッチ平面上の (u,v) を3Dの点へ(コアの `kernel._to_pnt` と同じ規則)。 */
+  function toWorld(frame: SketchDraw['frame'], u: number, v: number): THREE.Vector3 {
+    return new THREE.Vector3(
+      frame.origin[0] + u * frame.u[0] + v * frame.v[0],
+      frame.origin[1] + u * frame.u[1] + v * frame.v[1],
+      frame.origin[2] + u * frame.u[2] + v * frame.v[2],
+    )
+  }
+
+  /**
+   * 図形を (u,v) の折れ線にする。**コアの `Entity.params` のキーをそのまま読む**
+   * (`duocad/sketch.py` の `Entity` docstring)。円・円弧は折れ線で近似する。
+   */
+  function entityPoints(kind: string, params: Record<string, number>): Array<[number, number]> {
+    if (kind === 'line') {
+      return [
+        [params.x0, params.y0],
+        [params.x1, params.y1],
+      ]
+    }
+    if (kind === 'rectangle') {
+      const { x, y, width, height } = params
+      return [
+        [x, y],
+        [x + width, y],
+        [x + width, y + height],
+        [x, y + height],
+        [x, y],
+      ]
+    }
+    if (kind === 'circle' || kind === 'arc') {
+      const start = kind === 'circle' ? 0 : params.start_deg
+      // 反時計回り・0度をまたいでよい(`add_arc` の契約)。end<=start は一周分足す。
+      let end = kind === 'circle' ? 360 : params.end_deg
+      if (kind === 'arc' && end <= start) end += 360
+      const steps = Math.max(8, Math.round((ARC_SEGMENTS * Math.abs(end - start)) / 360))
+      const points: Array<[number, number]> = []
+      for (let step = 0; step <= steps; step += 1) {
+        const angle = ((start + ((end - start) * step) / steps) * Math.PI) / 180
+        points.push([
+          params.cx + params.radius * Math.cos(angle),
+          params.cy + params.radius * Math.sin(angle),
+        ])
+      }
+      return points
+    }
+    return []
+  }
+
+  function buildEntityLine(
+    frame: SketchDraw['frame'],
+    entity: { kind: string; params: Record<string, number> },
+    material: THREE.LineBasicMaterial,
+  ): { object: THREE.Object3D; geometry: THREE.BufferGeometry; points: Array<[number, number]> } | null {
+    const points = entityPoints(entity.kind, entity.params)
+    if (points.length < 2) return null
+    const geometry = new THREE.BufferGeometry().setFromPoints(
+      points.map(([u, v]) => toWorld(frame, u, v)),
+    )
+    return { object: new THREE.Line(geometry, material), geometry, points }
+  }
+
+  function clearSketch(sketchId: string): void {
+    const existing = sketches.get(sketchId)
+    if (!existing) return
+    for (const object of existing.objects) sketchRoot.remove(object)
+    for (const item of existing.disposables) item.dispose()
+    sketches.delete(sketchId)
+  }
+
+  function showSketches(entries: SketchDraw[]): void {
+    const keep = new Set(entries.map((entry) => entry.sketchId))
+    for (const sketchId of [...sketches.keys()]) if (!keep.has(sketchId)) clearSketch(sketchId)
+    for (const entry of entries) {
+      clearSketch(entry.sketchId)
+      const objects: THREE.Object3D[] = []
+      const disposables: Array<{ dispose(): void }> = []
+      const regionMeshes: THREE.Mesh[] = []
+      const points: Array<[number, number]> = []
+
+      // 領域を先に置く(線が領域の上に見えるように。奥行きは書かないので順序で決まる)
+      const selected = new Set(entry.selectedRegions)
+      for (const region of entry.regions) {
+        if (region.indices.length === 0) continue
+        const geometry = new THREE.BufferGeometry()
+        geometry.setAttribute(
+          'position',
+          new THREE.BufferAttribute(new Float32Array(region.positions), 3),
+        )
+        geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(region.indices), 1))
+        geometry.computeBoundingSphere()
+        const mesh = new THREE.Mesh(
+          geometry,
+          selected.has(region.index) ? regionSelectedMaterial : regionMaterial,
+        )
+        mesh.userData.sketchId = entry.sketchId
+        mesh.userData.regionIndex = region.index
+        sketchRoot.add(mesh)
+        objects.push(mesh)
+        regionMeshes.push(mesh)
+        disposables.push(geometry)
+      }
+
+      for (const entity of entry.entities) {
+        const built = buildEntityLine(entry.frame, entity, sketchMaterial)
+        if (!built) continue
+        sketchRoot.add(built.object)
+        objects.push(built.object)
+        disposables.push(built.geometry)
+        points.push(...built.points)
+      }
+      sketches.set(entry.sketchId, {
+        frame: entry.frame,
+        objects,
+        disposables,
+        regionMeshes,
+        points,
+      })
+    }
+  }
+
+  function clearGhost(): void {
+    if (!ghost) return
+    for (const object of ghost.objects) sketchRoot.remove(object)
+    for (const item of ghost.disposables) item.dispose()
+    ghost = null
+  }
+
+  function showSketchGhost(
+    sketchId: string,
+    entity: { kind: string; params: Record<string, number> } | null,
+  ): void {
+    clearGhost()
+    const target = sketches.get(sketchId)
+    if (!entity || !target) return
+    const built = buildEntityLine(target.frame, entity, sketchGhostMaterial)
+    if (!built) return
+    sketchRoot.add(built.object)
+    ghost = { objects: [built.object], disposables: [built.geometry] }
+  }
+
+  function setActiveSketch(sketchId: string | null): void {
+    activeSketchId = sketchId
+    if (sketchId !== null) return
+    clearGhost()
+    // 上方向を既定へ戻す。`lookAtSketch` が平面のv軸へ倒したままだと、モードを抜けた後の
+    // オービットが入る前と違う傾きになる(QA 2026-08-13)。
+    camera.up.set(0, 1, 0)
+    controls.update()
+  }
+
+  /** スケッチ平面と視線の交点を (u,v) で返す(平面がカメラの裏なら null)。 */
+  function planePointAt(offsetX: number, offsetY: number): { u: number; v: number } | null {
+    if (activeSketchId === null) return null
+    const target = sketches.get(activeSketchId)
+    if (!target) return null
+    const { width, height } = size()
+    const ndc = new THREE.Vector2((offsetX / width) * 2 - 1, -(offsetY / height) * 2 + 1)
+    raycaster.setFromCamera(ndc, camera)
+    const frame = target.frame
+    const origin = new THREE.Vector3(...(frame.origin as [number, number, number]))
+    const normal = new THREE.Vector3(...(frame.normal as [number, number, number])).normalize()
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin)
+    const hit = raycaster.ray.intersectPlane(plane, new THREE.Vector3())
+    if (hit === null) return null
+    const delta = hit.sub(origin)
+    return {
+      u: delta.dot(new THREE.Vector3(...(frame.u as [number, number, number]))),
+      v: delta.dot(new THREE.Vector3(...(frame.v as [number, number, number]))),
+    }
+  }
+
+  function regionAt(offsetX: number, offsetY: number): { sketchId: string; index: number } | null {
+    if (activeSketchId === null) return null
+    const target = sketches.get(activeSketchId)
+    if (!target || target.regionMeshes.length === 0) return null
+    const { width, height } = size()
+    const ndc = new THREE.Vector2((offsetX / width) * 2 - 1, -(offsetY / height) * 2 + 1)
+    raycaster.setFromCamera(ndc, camera)
+    const hits = raycaster.intersectObjects(target.regionMeshes, false)
+    if (hits.length === 0) return null
+    const index = hits[0].object.userData.regionIndex
+    if (typeof index !== 'number') return null
+    return { sketchId: activeSketchId, index }
+  }
+
+  function lookAtSketch(sketchId: string): void {
+    const target = sketches.get(sketchId)
+    if (!target) return
+    const frame = target.frame
+    const normal = new THREE.Vector3(...(frame.normal as [number, number, number])).normalize()
+    // 中心は描いてあるものの真ん中(何も無ければ平面の原点)
+    let center = toWorld(frame, 0, 0)
+    let radius = 0
+    if (target.points.length > 0) {
+      const us = target.points.map(([u]) => u)
+      const vs = target.points.map(([, v]) => v)
+      const midU = (Math.min(...us) + Math.max(...us)) / 2
+      const midV = (Math.min(...vs) + Math.max(...vs)) / 2
+      center = toWorld(frame, midU, midV)
+      radius = Math.max(Math.max(...us) - Math.min(...us), Math.max(...vs) - Math.min(...vs)) / 2
+    }
+    const previous = camera.position.distanceTo(controls.target)
+    const distance = radius > 0 ? Math.max(radius * 3, 1) : Math.max(previous, 1)
+    // 上方向を平面のv軸に合わせる(そうしないと真上から見たときに回転が不定になる)
+    camera.up.set(...(frame.v as [number, number, number]))
+    camera.position.copy(center).add(normal.multiplyScalar(distance))
+    camera.updateProjectionMatrix()
+    controls.target.copy(center)
+    controls.update()
+  }
+
+  function toScreen(point: THREE.Vector3): { x: number; y: number } | null {
+    const { width, height } = size()
+    const projected = point.clone().project(camera)
+    if (projected.z < -1 || projected.z > 1) return null
+    const x = ((projected.x + 1) / 2) * width
+    const y = ((1 - projected.y) / 2) * height
+    if (x < 0 || y < 0 || x > width || y > height) return null
+    return { x, y }
+  }
+
+  function projectSketchPoint(sketchId: string, u: number, v: number): { x: number; y: number } | null {
+    const target = sketches.get(sketchId)
+    if (!target) return null
+    return toScreen(toWorld(target.frame, u, v))
+  }
+
+  function projectRegion(sketchId: string, index: number): { x: number; y: number } | null {
+    const target = sketches.get(sketchId)
+    const mesh = target?.regionMeshes.find((candidate) => candidate.userData.regionIndex === index)
+    if (!target || !mesh) return null
+    const position = mesh.geometry.getAttribute('position')
+    const triangles = mesh.geometry.getIndex()
+    if (!position || !triangles) return null
+    // 面の `project` と同じ流儀: 三角形の重心を狙い、**実際にその領域へ当たる点**を返す
+    const point = new THREE.Vector3()
+    const corner = new THREE.Vector3()
+    for (let triangle = 0; triangle < triangles.count / 3; triangle += 1) {
+      point.set(0, 0, 0)
+      for (let vertex = 0; vertex < 3; vertex += 1) {
+        const at = triangles.getX(triangle * 3 + vertex)
+        corner.set(position.getX(at), position.getY(at), position.getZ(at))
+        point.add(corner)
+      }
+      point.multiplyScalar(1 / 3)
+      const screen = toScreen(point.clone())
+      if (screen === null) continue
+      const hit = regionAt(screen.x, screen.y)
+      if (hit && hit.index === index) return screen
+    }
+    return null
+  }
+
   // クリック(押した位置からほとんど動いていない)だけを選択として扱う。
   // 動いた場合は OrbitControls の視点回転であって選択ではない。
   let downAt = 0
@@ -436,17 +791,35 @@ export function createViewport(container: HTMLElement): Viewport {
     const moved = Math.hypot(event.offsetX - downX, event.offsetY - downY)
     const elapsed = performance.now() - downAt
     if (moved > CLICK_MOVE_LIMIT_PX || elapsed > CLICK_TIME_LIMIT_MS) return
-    const hit = pickAt(event.offsetX, event.offsetY)
     const mode: PickMode = event.shiftKey
       ? 'add'
       : event.ctrlKey || event.metaKey
         ? 'remove'
         : 'replace'
-    pickListener?.({ hit, mode })
+    // **スケッチモード中は面を拾わない**(C)。描いている最中に奥のソリッドの面を掴むと、
+    // 線を引くつもりのクリックが選択の置き換えになる。領域が手前・平面の点がその次。
+    if (activeSketchId !== null) {
+      const region = regionAt(event.offsetX, event.offsetY)
+      const plane = planePointAt(event.offsetX, event.offsetY)
+      pickListener?.({
+        hit: null,
+        mode,
+        region,
+        point: plane === null ? null : { sketchId: activeSketchId, ...plane },
+      })
+      return
+    }
+    pickListener?.({ hit: pickAt(event.offsetX, event.offsetY), mode, point: null, region: null })
+  }
+
+  function onPointerMove(event: PointerEvent): void {
+    if (planeMoveListener === null) return
+    planeMoveListener(activeSketchId === null ? null : planePointAt(event.offsetX, event.offsetY))
   }
 
   renderer.domElement.addEventListener('pointerdown', onPointerDown)
   renderer.domElement.addEventListener('pointerup', onPointerUp)
+  renderer.domElement.addEventListener('pointermove', onPointerMove)
 
   const observer = new ResizeObserver(() => applySize())
   observer.observe(container)
@@ -466,10 +839,19 @@ export function createViewport(container: HTMLElement): Viewport {
     onPick(listener) {
       pickListener = listener
     },
+    onPlaneMove(listener) {
+      planeMoveListener = listener
+    },
     highlight,
     showPreview,
     clearPreview,
     project,
+    showSketches,
+    showSketchGhost,
+    setActiveSketch,
+    lookAtSketch,
+    projectSketchPoint,
+    projectRegion,
     resize: applySize,
     dispose() {
       alive = false
@@ -477,7 +859,14 @@ export function createViewport(container: HTMLElement): Viewport {
       observer.disconnect()
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('pointerup', onPointerUp)
+      renderer.domElement.removeEventListener('pointermove', onPointerMove)
       clearPreview()
+      clearGhost()
+      for (const sketchId of [...sketches.keys()]) clearSketch(sketchId)
+      sketchMaterial.dispose()
+      sketchGhostMaterial.dispose()
+      regionMaterial.dispose()
+      regionSelectedMaterial.dispose()
       for (const bodyId of [...bodies.keys()]) clearBody(bodyId)
       controls.dispose()
       baseMaterial.dispose()

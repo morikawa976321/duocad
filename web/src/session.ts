@@ -72,6 +72,65 @@ export interface BodyGeometry extends BodyMeta {
   geometry: GeometryPayload | null
 }
 
+// --------------------------------------------------------------------------------------
+// C(2026-08-13): スケッチ — **手動操作が一級の操作モード**になる場所
+// --------------------------------------------------------------------------------------
+/** スケッチを貼る平面(コアの PlaneRef。基準3面か、既存ソリッドの平面状の面)。 */
+export type PlaneRef =
+  | { kind: 'base'; name: BasePlaneName; provenance?: unknown }
+  | { kind: 'face'; body: string; index: number; provenance?: unknown }
+
+export type BasePlaneName = 'XY' | 'XZ' | 'YZ'
+
+/**
+ * スケッチ平面の3Dの枠。`p = origin + u*uAxis + v*vAxis` が (u,v) と3Dの往復の規則で、
+ * **コアが配る**(`kernel.sketch_plane_frame`)。アプリ層で同じ計算を持たない —— 基準3面の
+ * 軸の取り方と、面に貼ったときの法線反転の扱いが必ずずれる。
+ */
+export interface SketchFrame {
+  origin: number[]
+  u: number[]
+  v: number[]
+  normal: number[]
+}
+
+export type EntityKind = 'line' | 'circle' | 'rectangle' | 'arc'
+
+/**
+ * スケッチ上の1図形。`params` は**解決済みの数値**、`refs` は同じキーの
+ * **パラメータ名**(`set_parameter` で打ち直せる。名前が無ければ null)。
+ *
+ * この2つが揃っているのが「クリックだけで置いた後も値を打ち直せる」の実体である
+ * (実装計画書§3.4 パラメトリック・プリミティブ)。
+ */
+export interface SketchEntity {
+  entity_id: string
+  kind: EntityKind
+  params: Record<string, number>
+  refs: Record<string, string | null>
+}
+
+/** 計算された閉領域。`positions`/`indices` は画面へ描くための三角形(コアが測る)。 */
+export interface SketchRegion {
+  index: number
+  area: number
+  centroid: number[]
+  positions: number[]
+  indices: number[]
+}
+
+export interface SketchState {
+  sketch_id: string
+  plane: PlaneRef
+  /** 平面が壊れている(貼った面が消えた等)ときだけ null。 */
+  frame: SketchFrame | null
+  /** 反復を展開した**実際に見えるもの**。描画は必ずこちらを使う。 */
+  drawn: Array<{ kind: EntityKind; params: Record<string, number> }>
+  /** 人が値を打ち直す対象(反復は展開しない)。 */
+  entities: SketchEntity[]
+  regions: SketchRegion[]
+}
+
 export interface ServerState {
   units: string
   active_body_id: string | null
@@ -83,6 +142,8 @@ export interface ServerState {
   applied_count: number
   /** 共有される選択集合。**ここが正**で、ブラウザは自前の選択を持たない(A2以降)。 */
   selection: SelectionState
+  /** 文書の全スケッチ(C以降)。図形も領域もここが正で、ブラウザは溜めない。 */
+  sketches: SketchState[]
 }
 
 /**
@@ -108,6 +169,13 @@ export interface Applied {
   /** 選択の変更イベントのときだけ `"selection"`。 */
   change?: string
   selection?: SelectionState
+  /** C: `sketch_create` が返す新しいスケッチのID。 */
+  sketch_id?: string
+  /** C: 図形追加verbが返す新しい図形のID。 */
+  entity_id?: string
+  /** C: `set_parameter` の名前と値。 */
+  name?: string
+  value?: number
 }
 
 /**
@@ -158,10 +226,36 @@ export interface Session {
    * 応答は `onPreview` へ。`previewId` は古い応答を捨てるための番号。
    */
   preview(verb: string, args: Record<string, unknown>, previewId: number): void
+  // ---------------------------------------------------------------- C: スケッチ
+  // **既にMCPが持っていたverbを送るだけ**(コアには何も足していない)。座標は
+  // スケッチ平面上の (u, v) で、3Dへの読み替えはコアが配る `frame` で行う。
+  createSketch(plane: PlaneRef, clientOp: number): void
+  addLine(sketchId: string, p0: Point2, p1: Point2, clientOp: number): void
+  addCircle(sketchId: string, center: Point2, radius: number, clientOp: number): void
+  addRectangle(
+    sketchId: string,
+    corner: Point2,
+    width: number,
+    height: number,
+    clientOp: number,
+  ): void
+  addArc(
+    sketchId: string,
+    center: Point2,
+    radius: number,
+    startDeg: number,
+    endDeg: number,
+    clientOp: number,
+  ): void
+  /** 名前つきの値を打ち直す(クリックで置いた図形の寸法を後から直す経路)。 */
+  setParameter(name: string, value: number, clientOp: number): void
   undo(): void
   redo(): void
   dispose(): void
 }
+
+/** スケッチ平面上の点 [u, v](mm)。 */
+export type Point2 = [number, number]
 
 const RECONNECT_DELAY_MS = 2000
 
@@ -271,6 +365,39 @@ export function createSession(hooks: SessionHooks): Session {
     },
     preview(verb, args, previewId) {
       send({ cmd: 'preview', verb, args, preview_id: previewId })
+    },
+    createSketch(plane, clientOp) {
+      send({ cmd: 'sketch_create', plane, client_op: clientOp })
+    },
+    addLine(sketchId, p0, p1, clientOp) {
+      send({ cmd: 'add_line', sketch_id: sketchId, p0, p1, client_op: clientOp })
+    },
+    addCircle(sketchId, center, radius, clientOp) {
+      send({ cmd: 'add_circle', sketch_id: sketchId, center, radius, client_op: clientOp })
+    },
+    addRectangle(sketchId, corner, width, height, clientOp) {
+      send({
+        cmd: 'add_rectangle',
+        sketch_id: sketchId,
+        corner,
+        width,
+        height,
+        client_op: clientOp,
+      })
+    },
+    addArc(sketchId, center, radius, startDeg, endDeg, clientOp) {
+      send({
+        cmd: 'add_arc',
+        sketch_id: sketchId,
+        center,
+        radius,
+        start_deg: startDeg,
+        end_deg: endDeg,
+        client_op: clientOp,
+      })
+    },
+    setParameter(name, value, clientOp) {
+      send({ cmd: 'set_parameter', name, value, client_op: clientOp })
     },
     undo() {
       send({ cmd: 'undo' })

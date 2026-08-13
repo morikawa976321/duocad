@@ -19,12 +19,20 @@
    */
   import { onMount } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
-  import { faceRef, sameRef } from './commands/command'
+  import { faceRef, sameRef, type Point2 } from './commands/command'
+  import {
+    DEFAULT_SKETCH_COMMAND_ID,
+    SKETCH_COMMANDS,
+    ghostEntity,
+    isSketchVerb,
+  } from './commands/sketch'
   import PartsPanel from './PartsPanel.svelte'
   import SelectionPanel from './SelectionPanel.svelte'
+  import SketchPanel from './SketchPanel.svelte'
   import {
     createSession,
     type Applied,
+    type BasePlaneName,
     type BodyGeometry,
     type ConnectionStatus,
     type PreviewPayload,
@@ -36,6 +44,7 @@
     createViewport,
     type GeometryPayload,
     type PickEvent,
+    type SketchDraw,
     type Viewport,
   } from './viewport'
 
@@ -59,6 +68,14 @@
   let previewId = 0
   /** 画面に幽霊が出ているか(テスト用フックが見る)。 */
   let previewing = $state(false)
+
+  // ---------------------------------------------------------------- C: スケッチモード
+  /** 今どのスケッチを編集しているか(null なら通常モード)。**図形も領域もコアが持つ**。 */
+  let sketchId = $state<string | null>(null)
+  /** ポインタが指しているスケッチ平面上の点(確定前の線を見せるためだけ)。 */
+  let hoverPoint = $state<Point2 | null>(null)
+  /** コマンド層への参照(クリックで集めた点を渡す)。 */
+  let host = $state<{ addPoint(u: number, v: number): boolean; wantsPoint(): boolean } | null>(null)
 
   const session = createSession({
     onState: handleState,
@@ -122,6 +139,13 @@
     }
 
     drawHighlight()
+    // スケッチも「コアが持ち、ここは描き直すだけ」(可視性・選択と同じ形)。
+    // **$effect ではなくここで同期に描く** —— 直後の `lookAtSketch` が平面の枠を要るので、
+    // 描画が1手遅れると「入った瞬間に正面を向く」が効かない。
+    drawSketches()
+    if (sketchId !== null && !sketches.some((item) => item.sketch_id === sketchId)) {
+      exitSketch() // undoでスケッチごと消えた
+    }
 
     // **選択の変更イベントはverbの適用ではない**(`change: "selection"` で見分ける。
     // session.ts の `Applied` 参照)。verbの応答としてだけ `lastApplied` を動かす。
@@ -130,6 +154,8 @@
       return
     }
     if (applied) {
+      // 作ったスケッチへはそのまま入る(作ってから改めて「入る」を押させない)
+      if (applied.verb === 'sketch_create' && applied.sketch_id) enterSketch(applied.sketch_id)
       reselectAfter(applied)
       if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
       lastApplied = applied
@@ -170,6 +196,10 @@
    * ここが作るのは「何を足して何を引くか」だけで、結果はコアから返ってくる。
    */
   function onPick(event: PickEvent): void {
+    if (sketchId !== null) {
+      onSketchPick(event)
+      return
+    }
     const current = selection?.items ?? []
     if (event.hit === null) {
       // 何もない所を素でクリック = 選択解除(修飾キー付きは空振りにする)
@@ -223,8 +253,127 @@
     modifySelection([target], current.filter((item) => !sameRef(item, target)))
   }
 
+  // ---------------------------------------------------------------- C: スケッチ
+  const sketches = $derived(model?.sketches ?? [])
+  const activeSketch = $derived(sketches.find((item) => item.sketch_id === sketchId) ?? null)
+
+  /** 描画指示を組み立てる(選択中の領域だけ強調色になる)。 */
+  function sketchDraws(): SketchDraw[] {
+    const selectedRegions = (selection?.items ?? [])
+      .filter((item): item is { sketch: string; index: number } => 'sketch' in item)
+    return sketches
+      .filter((item) => item.frame !== null)
+      .map((item) => ({
+        sketchId: item.sketch_id,
+        frame: item.frame as NonNullable<typeof item.frame>,
+        entities: item.drawn,
+        regions: item.regions,
+        selectedRegions: selectedRegions
+          .filter((ref) => ref.sketch === item.sketch_id)
+          .map((ref) => ref.index),
+      }))
+  }
+
+  function drawSketches(): void {
+    viewport?.showSketches(sketchDraws())
+  }
+
+  function enterSketch(id: string): void {
+    sketchId = id
+    hoverPoint = null
+    viewport?.setActiveSketch(id)
+    drawSketches()
+    viewport?.lookAtSketch(id)
+  }
+
+  function exitSketch(): void {
+    sketchId = null
+    hoverPoint = null
+    viewport?.setActiveSketch(null)
+  }
+
+  /**
+   * スケッチモードのクリック。**描いている最中は点、そうでなければ領域の選択**。
+   *
+   * 点を待っているコマンド(線分・円…)が起動している間は、領域の上を押しても点になる
+   * —— 既存の領域の内側に線を引けないと、分割そのものができない。既定のコマンドは
+   * 「選ぶ」(点を待たない)なので、描いていないときのクリックは領域へ行く。
+   */
+  function onSketchPick(event: PickEvent): void {
+    if (event.point && host?.wantsPoint()) {
+      if (host.addPoint(event.point.u, event.point.v)) return
+    }
+    if (event.region) {
+      const ref: SelectionRef = { sketch: event.region.sketchId, index: event.region.index }
+      const current = selection?.items ?? []
+      const already = current.some((item) => sameRef(item, ref))
+      if (event.mode === 'add') modifySelection([ref], [])
+      else if (event.mode === 'remove') modifySelection([], [ref])
+      else if (already && current.length === 1) modifySelection([], [ref])
+      else modifySelection([ref], current.filter((item) => !sameRef(item, ref)))
+      return
+    }
+    if (event.mode === 'replace' && (selection?.items.length ?? 0) > 0) {
+      session.clearSelection(nextOp())
+    }
+  }
+
+  function createSketchOnBase(name: BasePlaneName): void {
+    session.createSketch({ kind: 'base', name, provenance: null }, nextOp())
+  }
+
+  function createSketchOnFace(face: ShapeRef): void {
+    session.createSketch(
+      { kind: 'face', body: face.body, index: face.index, provenance: null },
+      nextOp(),
+    )
+  }
+
+  function setParameter(name: string, value: number): void {
+    session.setParameter(name, value, nextOp())
+  }
+
+  function selectRegion(sketch: string, index: number): void {
+    const ref: SelectionRef = { sketch, index }
+    const current = selection?.items ?? []
+    if (current.some((item) => sameRef(item, ref))) modifySelection([], [ref])
+    else modifySelection([ref], current.filter((item) => !sameRef(item, ref)))
+  }
+
   // ---------------------------------------------------------------- コマンド層との繋ぎ
   function runCommand(verb: string, args: Record<string, unknown>): void {
+    if (isSketchVerb(verb)) {
+      if (sketchId === null) {
+        note('スケッチモードに入っていない')
+        return
+      }
+      const op = nextOp()
+      pendingOp = op
+      viewport?.showSketchGhost(sketchId, null) // 本物を頼んだので幽霊は消す
+      if (verb === 'add_line') {
+        session.addLine(sketchId, args.p0 as Point2, args.p1 as Point2, op)
+      } else if (verb === 'add_circle') {
+        session.addCircle(sketchId, args.center as Point2, args.radius as number, op)
+      } else if (verb === 'add_rectangle') {
+        session.addRectangle(
+          sketchId,
+          args.corner as Point2,
+          args.width as number,
+          args.height as number,
+          op,
+        )
+      } else {
+        session.addArc(
+          sketchId,
+          args.center as Point2,
+          args.radius as number,
+          args.start_deg as number,
+          args.end_deg as number,
+          op,
+        )
+      }
+      return
+    }
     if (verb !== 'extrude_face') {
       note(`未知のコマンド: ${verb}`)
       return
@@ -234,7 +383,19 @@
     session.extrude(args.body_id as string, args.face_index as number, args.distance as number, op)
   }
 
-  function requestPreview(verb: string, args: Record<string, unknown>): void {
+  /**
+   * 確定前の姿。**スケッチの図形はサーバへ投げない**(`mode === 'local'`)——
+   * 形はブラウザ側で分かっており、投機実行にすると中断しても文書に一度は入る。
+   */
+  function requestPreview(
+    verb: string,
+    args: Record<string, unknown>,
+    mode: 'server' | 'local',
+  ): void {
+    if (mode === 'local') {
+      if (sketchId !== null) viewport?.showSketchGhost(sketchId, ghostEntity(verb, args))
+      return
+    }
     previewId += 1
     session.preview(verb, args, previewId)
   }
@@ -243,6 +404,7 @@
     previewId += 1 // 投げてある応答を無効にする(戻ってきても番号が合わない)
     previewing = false
     viewport?.clearPreview()
+    if (sketchId !== null) viewport?.showSketchGhost(sketchId, null)
   }
 
   function onWindowKeydown(event: KeyboardEvent): void {
@@ -289,6 +451,9 @@
   onMount(() => {
     viewport = createViewport(container)
     viewport.onPick(onPick)
+    viewport.onPlaneMove((point) => {
+      hoverPoint = point === null ? null : [point.u, point.v]
+    })
     session.start()
     return () => {
       session.dispose()
@@ -301,6 +466,9 @@
   $effect(() => {
     void selection
     drawHighlight()
+    // **スケッチはここで描き直さない**。選択もスケッチも `handleState` 経由でしか変わらず、
+    // そこで既に描き直している。ここにも置くと、1回の状態受信で全スケッチのジオメトリを
+    // 2回作り直すことになる(面のハイライトと違って作り直しが重い。QA 2026-08-13)。
   })
 
   const firstFace = $derived(selectedFaces[0] ?? null)
@@ -331,6 +499,14 @@
       lastApplied,
       messages,
       projectFace: (bodyId: string, faceIndex: number) => viewport?.project(bodyId, faceIndex) ?? null,
+      // C: スケッチ。**実機検査が本物のクリックで描く**ための穴
+      sketches,
+      activeSketch: sketchId,
+      hoverPoint,
+      projectSketchPoint: (u: number, v: number) =>
+        sketchId === null ? null : (viewport?.projectSketchPoint(sketchId, u, v) ?? null),
+      projectRegion: (index: number) =>
+        sketchId === null ? null : (viewport?.projectRegion(sketchId, index) ?? null),
     }
   })
 </script>
@@ -368,15 +544,36 @@
     onCommit={() => session.commitSelection(nextOp())}
   />
 
+  <SketchPanel
+    {sketches}
+    activeSketchId={sketchId}
+    selectedFace={firstFace}
+    selection={selection?.items ?? []}
+    onCreateOnBase={createSketchOnBase}
+    onCreateOnFace={createSketchOnFace}
+    onEnter={enterSketch}
+    onExit={exitSketch}
+    onLookAt={() => sketchId && viewport?.lookAtSketch(sketchId)}
+    onSetParameter={setParameter}
+    onSelectRegion={selectRegion}
+  />
+
   <section class="panel">
-    <CommandHost
-      {selection}
-      busy={pendingOp !== null}
-      onRun={runCommand}
-      onPreview={requestPreview}
-      onCancelPreview={clearPreview}
-      onNote={note}
-    />
+    <!-- モードが変わったらコマンド層を作り直す(集めかけの引数を持ち越さない) -->
+    {#key sketchId === null}
+      <CommandHost
+        bind:this={host}
+        {selection}
+        busy={pendingOp !== null}
+        commands={sketchId === null ? undefined : SKETCH_COMMANDS}
+        defaultCommandId={sketchId === null ? undefined : DEFAULT_SKETCH_COMMAND_ID}
+        hover={hoverPoint}
+        onRun={runCommand}
+        onPreview={requestPreview}
+        onCancelPreview={clearPreview}
+        onNote={note}
+      />
+    {/key}
 
     <div class="row">
       <span class="label">面</span>
