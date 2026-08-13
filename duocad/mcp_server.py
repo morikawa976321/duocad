@@ -1531,6 +1531,25 @@ def _exception_message(error: Exception) -> str:
     return str(error)
 
 
+def _claim_stdout() -> Any:
+    """JSON-RPC専用の書き口を確保し、**プロセスの fd 1 を fd 2 へ振り替える**(G・2026-08-14)。
+
+    ツール実行だけを `_stdout_fd_to_stderr` で囲むのでは足りない —— このプロセスは
+    **MCPとWebSocketの両方**を持っており(`_run`)、**人がブラウザからSTEPを書き出した
+    ときにも**OCCTのC++が実fdへ統計を吐く。その経路はツール実行ではないので囲みの外に
+    あり、JSON-RPCの行の途中に `****** Statistics on Transfer (Write) ******` が
+    割り込んで接続が壊れる(2026-08-14の受入検証で実際に踏んだ。交互操作は人とAIが
+    同じプロセスを同時に触る形なので、v1では普通に起きる)。
+
+    確保したdupを返し、fd 1 は stderr を指すようにする。これ以降、**誰がどの経路で
+    標準出力へ書いても**それはstderrへ流れ、JSON-RPCは返した書き口だけを通る。
+    """
+    sys.stdout.flush()
+    saved = os.dup(1)
+    os.dup2(2, 1)
+    return os.fdopen(saved, "wb", buffering=0)
+
+
 @contextmanager
 def _stdout_fd_to_stderr() -> Iterator[None]:
     """ツール実行中だけ fd 1 を fd 2 へ振り替える。
@@ -1561,7 +1580,7 @@ async def serve_stdio(server: McpServer, reader: Any = None, writer: Any = None)
     """
     loop = asyncio.get_running_loop()
     reader = reader if reader is not None else sys.stdin.buffer
-    writer = writer if writer is not None else sys.stdout.buffer
+    writer = writer if writer is not None else _claim_stdout()
 
     while True:
         line = await loop.run_in_executor(None, reader.readline)

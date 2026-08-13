@@ -343,10 +343,21 @@
    * 選択優先なら、面をクリックしてからフィレットを起動すれば必ずその部品の辺が出る。
    */
   const edgeTargetBody = $derived.by(() => {
-    const picked = (selection?.items ?? []).find(
-      (item): item is ShapeRef => !('sketch' in item),
+    // **見えているボディだけを対象にする**(G・2026-08-14の受入で踏んだ)。AIが述語で
+    // 提案した集合は参照ボディ(既定で隠れている)にまたがりうる。そこを対象にすると
+    // サーバが「隠れているものの辺は指せない」と断り、画面にはエラーだけが出て
+    // **見えている辺も出なくなる**。選択のうち見えているものを先に見る。
+    const visible = new Set(
+      (model?.bodies ?? []).filter((body) => body.visible).map((body) => body.body_id),
     )
-    return picked?.body ?? model?.active_body_id ?? null
+    const picked = (selection?.items ?? []).find(
+      (item): item is ShapeRef => !('sketch' in item) && visible.has((item as ShapeRef).body),
+    )
+    if (picked) return picked.body
+    // アクティブボディへ落ちるときも同じ判定をする —— 隠したまま辺を頼むと、
+    // 頼んでもいないエラーが画面に出るだけで何も得られない(自分で断るほうが正しい)。
+    const active = model?.active_body_id ?? null
+    return active !== null && visible.has(active) ? active : null
   })
 
   /** 今のコマンドが辺を要求しているか(スケッチモード中は辺を出さない)。 */

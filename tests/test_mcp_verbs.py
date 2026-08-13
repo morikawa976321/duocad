@@ -956,6 +956,113 @@ def test_exporting_does_not_corrupt_the_stdio_channel(tmp_path: Path):
     assert out_step.exists() and out_step.stat().st_size > 0
 
 
+def test_a_browser_export_does_not_corrupt_the_stdio_channel(tmp_path: Path):
+    """**人がブラウザから書き出しても** MCPのstdioが壊れない(G・2026-08-14に実機で踏んだ)。
+
+    上のテストは「MCPツールとしての書き出し」を守っているが、`duocad.mcp_server` の
+    プロセスは**MCPとWebSocketの両方**を持っている。人がブラウザで書き出すと、
+    同じプロセスのC++が同じ実fdへ統計を吐く —— その経路はツール実行の囲みの外にあり、
+    JSON-RPCの行に `****** Statistics on Transfer (Write) ******` が割り込んで接続が壊れた。
+
+    **交互操作は人とAIが同じプロセスを同時に触る形**なので、v1では普通に起きる。
+    ここはWebSocketクライアントとして繋ぎ、`export_step` を人の経路で踏んでから、
+    MCPの応答がまだJSONとして読めることを見る。
+    """
+    import os
+    import subprocess
+    import sys
+    import textwrap
+
+    out_step = tmp_path / "from-browser.step"
+    # ブラウザの代わりにWebSocketで `export_step` を送る子プロセス(サーバ起動後に走る)
+    poker = textwrap.dedent(
+        f"""
+        import asyncio, json, sys
+        from websockets.asyncio.client import connect
+
+        async def main():
+            for _ in range(60):
+                try:
+                    async with connect("ws://127.0.0.1:18785") as socket:
+                        await socket.recv()  # 初期状態
+                        await socket.send(json.dumps({{"cmd": "sketch_create",
+                            "plane": {{"kind": "base", "name": "XY", "provenance": None}}, "client_op": 1}}))
+                        state = json.loads(await socket.recv())
+                        sketch_id = state["applied"]["sketch_id"]
+                        await socket.send(json.dumps({{"cmd": "add_rectangle", "sketch_id": sketch_id,
+                            "corner": [0, 0], "width": 10, "height": 10, "client_op": 2}}))
+                        await socket.recv()
+                        await socket.send(json.dumps({{"cmd": "extrude",
+                            "regions": [{{"sketch": sketch_id, "index": 1}}],
+                            "distance": 10, "mode": "join", "client_op": 3}}))
+                        await socket.recv()
+                        await socket.send(json.dumps({{"cmd": "export_step", "path": r"{out_step}"}}))
+                        await socket.recv()
+                        return 0
+                except OSError:
+                    await asyncio.sleep(0.5)
+            return 1
+
+        sys.exit(asyncio.run(main()))
+        """
+    )
+    script = tmp_path / "poke.py"
+    script.write_text(poker, encoding="utf-8")
+
+    server_process = subprocess.Popen(
+        [
+            sys.executable, "-m", "duocad.mcp_server", "--no-step",
+            "--port", "18785", "--http-port", "18786",
+            "--web-dist", str(REPO_ROOT / "web" / "does-not-exist"),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        cwd=str(REPO_ROOT),
+    )
+    try:
+        assert server_process.stdin is not None
+        for message in (
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        ):
+            server_process.stdin.write(json.dumps(message) + "\n")
+        server_process.stdin.flush()
+
+        poked = subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=str(REPO_ROOT),
+        )
+        assert poked.returncode == 0, f"WebSocket経由の書き出しが通らない: {poked.stderr}"
+
+        # 書き出しの**後で**MCPが生きているか(ここが壊れると接続ごと死ぬ)
+        server_process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"}) + "\n")
+        server_process.stdin.flush()
+        server_process.stdin.close()
+        stdout, stderr = server_process.communicate(timeout=300)
+    finally:
+        if server_process.poll() is None:
+            server_process.kill()
+
+    assert out_step.exists() and out_step.stat().st_size > 0, stderr
+    ids = []
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        try:
+            ids.append(json.loads(line).get("id"))
+        except ValueError:
+            pytest.fail(f"stdoutにJSON-RPC以外の行が出ている(接続が壊れる): {line!r}")
+    assert ids == [1, 2], "人の書き出しの後もJSON-RPCが続いていない"
+
+
 def test_export_does_not_touch_the_operation_log(server: McpServer, box_session: Session, tmp_path: Path):
     before = len(box_session.document.log.entries)
     call(server, "export_stl", {"path": str(tmp_path / "x.stl")})
