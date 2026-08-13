@@ -167,12 +167,32 @@ export interface EntitiesArgSpec {
   min: number
 }
 
+/**
+ * 打ち込む文字列の引数(E・2026-08-14。今のところファイルのパスだけ)。
+ *
+ * **数値引数と分けてある**。数値は `Number.parseFloat` を通して弾く仕組みが要るが、
+ * パスは打った文字そのものが値であり、正しさの判定はサーバ(実在するか・書けるか)に
+ * しか無い —— ここで拡張子やドライブ文字を検査し始めると、**サーバと2箇所で
+ * 別々のパス解釈を持つ**ことになる(相対パスの基準はサーバの作業ディレクトリ)。
+ */
+export interface TextArgSpec {
+  kind: 'text'
+  name: string
+  label: string
+  /** 入力欄の `id`(実機検査がここを叩く)。 */
+  inputId: string
+  placeholder: string
+  /** 使えない値なら理由を返す(使えるなら null)。空文字の拒否くらいにとどめる。 */
+  reject(value: string): string | null
+}
+
 export type ArgSpec =
   | SelectionArgSpec
   | NumberArgSpec
   | PointArgSpec
   | ChoiceArgSpec
   | EntitiesArgSpec
+  | TextArgSpec
 
 /** スケッチ平面上の点 [u, v](mm)。 */
 export type Point2 = [number, number]
@@ -321,6 +341,10 @@ export function argSatisfied(spec: ArgSpec, values: ArgValues): boolean {
     const ids = values[spec.name]
     return Array.isArray(ids) && ids.length >= spec.min && ids.every((id) => typeof id === 'string')
   }
+  if (spec.kind === 'text') {
+    const text = values[spec.name]
+    return typeof text === 'string' && spec.reject(text) === null
+  }
   const value = values[spec.name]
   return typeof value === 'number' && Number.isFinite(value) && spec.reject(value) === null
 }
@@ -350,6 +374,11 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
   if (spec.kind === 'entities') {
     const have = ((values[spec.name] ?? []) as string[]).length
     return `${spec.label}を${spec.min - have}個選ぶ(スケッチパネルの図形一覧)`
+  }
+  if (spec.kind === 'text') {
+    const text = values[spec.name]
+    if (typeof text === 'string' && text !== '') return spec.reject(text) ?? ''
+    return `${spec.label}を打つ(${spec.placeholder})`
   }
   const value = values[spec.name]
   if (typeof value === 'number' && Number.isFinite(value)) {

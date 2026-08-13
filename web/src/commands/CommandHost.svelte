@@ -48,6 +48,7 @@
     type NumberArgSpec,
     type Point2,
     type SelectableKind,
+    type TextArgSpec,
   } from './command'
   import type { SelectionState } from '../session'
 
@@ -120,6 +121,14 @@
   let choices = $state<Record<string, string>>({})
 
   /**
+   * 打ち込んだ文字列(引数名 -> 値。E。今のところファイルのパスだけ)。
+   *
+   * **確定しても消さない**のがここだけ違う(下の `reset` 参照)。同じ場所へ保存し直す・
+   * 書き出し先を1文字だけ直す、が普通の使い方で、確定のたびにパスが消えると毎回打ち直しになる。
+   */
+  let textValues = $state<Record<string, string>>({})
+
+  /**
    * 最後に見た**確定済み**の選択(`origin === "user"`)。AIが提案を書き込んでいる間、
    * 引数はこちらを使う(上のdocstring「競合」)。
    */
@@ -148,6 +157,8 @@
       } else if (spec.kind === 'entities') {
         // 選択集合と同じく**導出する**(ここには持たない)。スケッチパネルで選び直せば追従する。
         collected[spec.name] = entities
+      } else if (spec.kind === 'text') {
+        collected[spec.name] = textValues[spec.name] ?? ''
       } else {
         const raw = (numberText[spec.name] ?? '').trim()
         const parsed = raw === '' ? Number.NaN : Number.parseFloat(raw)
@@ -188,6 +199,7 @@
 
   const numberArgs = $derived(command.args.filter((spec) => spec.kind === 'number') as NumberArgSpec[])
   const choiceArgs = $derived(command.args.filter((spec) => spec.kind === 'choice') as ChoiceArgSpec[])
+  const textArgs = $derived(command.args.filter((spec) => spec.kind === 'text') as TextArgSpec[])
 
   /** このコマンドが選択から取る種別をアプリ層へ知らせる(D。辺のときだけ辺を取りに行く)。 */
   $effect(() => {
@@ -323,9 +335,10 @@
   }
 
   function focusFirstNumber(): void {
-    // 収集の先頭が数値引数なら、そこへ入れる(選択待ちのときは3Dを触るので奪わない)
+    // 収集の先頭が打ち込む引数(数値・文字列)なら、そこへ入れる
+    // (選択待ち・点待ちのときは3Dを触るのでフォーカスを奪わない)
     queueMicrotask(() => {
-      if (missing?.kind !== 'number') return
+      if (missing?.kind !== 'number' && missing?.kind !== 'text') return
       document.getElementById(missing.inputId)?.focus()
     })
   }
@@ -348,8 +361,8 @@
     commit()
   }
 
-  /** 数値欄でのEnter(確定)とTab(次の引数へ)。 */
-  function onNumberKeydown(event: KeyboardEvent, spec: NumberArgSpec): void {
+  /** 打ち込む欄(数値・文字列)でのEnter(確定)とTab(次の引数へ)。 */
+  function onNumberKeydown(event: KeyboardEvent, spec: NumberArgSpec | TextArgSpec): void {
     if (event.key === 'Enter') {
       event.preventDefault()
       commit()
@@ -358,8 +371,12 @@
     if (event.key !== 'Tab' || event.shiftKey) return
     const remaining = command.args
       .slice(command.args.indexOf(spec) + 1)
-      .find((candidate) => candidate.kind === 'number' && !argSatisfied(candidate, values))
-    if (!remaining || remaining.kind !== 'number') return
+      .find(
+        (candidate) =>
+          (candidate.kind === 'number' || candidate.kind === 'text') &&
+          !argSatisfied(candidate, values),
+      )
+    if (!remaining || (remaining.kind !== 'number' && remaining.kind !== 'text')) return
     event.preventDefault()
     document.getElementById(remaining.inputId)?.focus()
   }
@@ -404,6 +421,28 @@
             {option.label}
           </button>
         {/each}
+      {/each}
+    </div>
+  {/if}
+
+  {#if textArgs.length}
+    <!-- 打ち込む文字列(E。今のところファイルのパスだけ)。**確定しても消さない** -->
+    <div class="row">
+      {#each textArgs as spec (spec.name)}
+        <label class="label" for={spec.inputId}>{spec.label}</label>
+        <input
+          id={spec.inputId}
+          class="path"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder={spec.placeholder}
+          value={textValues[spec.name] ?? ''}
+          oninput={(event) => {
+            textValues = { ...textValues, [spec.name]: (event.target as HTMLInputElement).value }
+          }}
+          onkeydown={(event) => onNumberKeydown(event, spec)}
+        />
       {/each}
     </div>
   {/if}
@@ -459,5 +498,11 @@
 
   button.on {
     border-color: var(--accent, #ffb454);
+  }
+
+  /* パスは数値より長い(見た目の作り込みではなく、打った先が読めないと確認できない) */
+  input.path {
+    flex: 1 1 320px;
+    min-width: 160px;
   }
 </style>

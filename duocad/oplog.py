@@ -120,6 +120,16 @@ class OpLog:
         """redoできる操作があるか(M1追加。`_cursor` を外へ見せずに済ませるための読み取り専用)。"""
         return self._cursor < len(self._entries)
 
+    @property
+    def redo_count(self) -> int:
+        """あと何回やり直せるか(E・2026-08-14。操作履歴パネルが**位置**を出すために要る)。
+
+        `can_redo` の真偽だけでは「どこまで戻れるか分かる」を満たせない —— 3回undoした
+        画面と1回undoした画面が同じに見える。`entries` が返すのはカーソルまでの写しなので、
+        外からは末尾に何本残っているかを知る手段が無い(だから `_cursor` を見せずにここで数える)。
+        """
+        return len(self._entries) - self._cursor
+
     def append(self, verb: str, args: dict, selection: Optional[list] = None) -> Operation:
         """新しい操作を積む。redo可能だった末尾があれば新規操作で破棄される。
 

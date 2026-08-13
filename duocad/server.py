@@ -35,11 +35,16 @@
         {"cmd": "pattern_rectangular", "sketch_id", "entities", "dx","dy","nx","ny"}  # D
         {"cmd": "pattern_circular", "sketch_id", "entities", "center","count","total_angle"} # D
         {"cmd": "get_edges", "body_id": str}                                          # D
+        {"cmd": "save_document", "path": str} / {"cmd": "open_document", "path": str} # E
+        {"cmd": "export_step", "path": str} / {"cmd": "export_stl", "path", "deviation"} # E
+        {"cmd": "import_step", "path": str}                                           # E
+        {"cmd": "make_editable_copy", "source_body_id": str|None}                     # E
 
     上り(server -> client)
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
         {"type": "preview", "preview_id": int|None, "verb": str, "bodies": [...]}
         {"type": "edges", "body_id": str, "revision": int, "edges": [...]}            # D
+        {"type": "file", "action": "save"|"export_step"|"export_stl", "path", "bytes"} # E
         {"type": "error", "message": str, "where": str}
         {"type": "warning", "message": str}
 
@@ -92,6 +97,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import threading
 import webbrowser
@@ -104,6 +110,7 @@ from websockets.asyncio.server import serve
 
 from . import io_step, kernel, parameters, query, region, selection, sketch
 from .document import Document
+from .oplog import OpLog
 from .speculative import speculative
 from .verbs import (
     chamfer as chamfer_verb,
@@ -184,6 +191,25 @@ FEATURE_COMMANDS: dict = {
         "pattern_circular",
         ("sketch_id", "entities", "center", "count", "total_angle"),
     ),
+}
+
+#: ブラウザから踏めるファイル操作 -> (`Session` のメソッド名, 必須の引数名, verbか)。
+#:
+#: **E(2026-08-14)で「開く/保存」が人の手に渡る場所**。`FEATURE_COMMANDS` と同じ登録制で、
+#: ここに無いものはソケットから呼べない。**verbかどうかで応答が違う**のがこの表だけの事情:
+#:
+#: - `import_step` / `make_editable_copy` … 文書を変える(ログに載る)。応答は状態配信
+#: - `save_document` / `export_step` / `export_stl` … 文書を変えない。応答は書いた先の
+#:   パスとバイト数だけ(要求した接続にだけ返る。`preview` と同じ扱い)
+#:
+#: `open_document` はどちらでもない —— 文書を**差し替える**ので全接続へ配る必要があり、
+#: 表からは外して `_dispatch` で個別に扱う(状態配信の形が他と違うため)。
+FILE_COMMANDS: dict = {
+    "save_document": ("save_document", ("path",), False),
+    "export_step": ("export_step_file", ("path",), False),
+    "export_stl": ("export_stl_file", ("path", "deviation"), False),
+    "import_step": ("import_step", ("path",), True),
+    "make_editable_copy": ("make_editable_copy_body", ("source_body_id",), True),
 }
 
 
@@ -335,7 +361,13 @@ class Session:
             ],
             "can_undo": self.can_undo,
             "can_redo": self.document.log.can_redo,
+            # E(2026-08-14): **どこまで戻れるか**を画面に出すために位置を配る。
+            # 真偽だけだと「3回undoした状態」と「1回undoした状態」が同じに見える。
+            "redo_count": self.document.log.redo_count,
             "applied_count": self._applied_count,
+            # E: 名前つきの寸法値(§3.4)。**打ち直しの対象そのもの**なので、どの名前が
+            # 今いくつかを配らないと、パラメータ編集パネルは何も出せない。
+            "parameters": dict(self.document.parameters),
             "selection": selection.get_selection(self.document).to_dict(),
             # C(2026-08-13): スケッチは平面の枠・図形・領域まで含めて配る(下記)。
             "sketches": self.sketches_state(),
@@ -887,8 +919,124 @@ class Session:
         })
 
     def import_step(self, path: Any) -> dict:
-        body_ids = io_step.import_step(self.document, path)
+        body_ids = io_step.import_step(self.document, self._resolve(path))
         return self._after_logged_verb({"body_ids": list(body_ids)})
+
+    # ---------------------------------------------------------------- E: ファイル操作
+    #
+    # **保存形式は操作ログのJSON**(実装計画書§3.1)。形状はそこから導出されるので、
+    # 開くたびに再生経路が検査されることになる —— 「保存したものが開けない」が
+    # 起きるとしたら、それは再生が壊れているということであり、隠さない方がよい。
+    def _resolve(self, path: Any) -> Path:
+        """受け取ったパスを絶対パスにする(相対はサーバの作業ディレクトリ基準)。
+
+        **どこへ書いたかを必ず応答へ返す**ため、ここで1度だけ解決する。ブラウザからは
+        `model.json` のような相対パスが普通に来るので、解決を各所でやると
+        「保存したと言われたファイルが見つからない」が起きる。
+        """
+        resolved = Path(str(path)).expanduser()
+        return resolved if resolved.is_absolute() else (Path.cwd() / resolved).resolve()
+
+    def save_document(self, path: Any) -> dict:
+        """操作ログをJSONで書き出す。**verbではない**(文書を変えないのでログに載らない)。
+
+        親ディレクトリが無ければ ValueError(黙って作らない —— 打ち間違えたパスの下に
+        深い木を作ると、次に開くときに見つけられない)。
+        """
+        target = self._resolve(path)
+        if not target.parent.exists():
+            raise ValueError(f"保存先のディレクトリが無い: {target.parent}")
+        payload = self.document.log.to_json()
+        # **一時ファイルへ書いてから差し替える**(QA指摘 2026-08-14)。素の上書きは既存の
+        # 中身を先に切り詰めるので、途中で落ちると**唯一の永続形式である前回の保存が
+        # 半端なJSONで潰れる**(形状は導出物なので、これを失うと復旧の手立てが無い)。
+        # `os.replace` は同じディレクトリ内なら不可分に差し替わる。
+        staging = target.with_name(target.name + ".writing")
+        staging.write_text(payload, encoding="utf-8")
+        os.replace(staging, target)
+        return {
+            "action": "save",
+            "path": str(target),
+            "bytes": target.stat().st_size,
+            "operations": len(self.document.log.entries),
+        }
+
+    def open_document(self, path: Any) -> dict:
+        """保存した操作ログを読み、**再生して**文書を差し替える(§3.1「これが正」)。
+
+        **失敗しても今の文書を壊さない**。新しい `Document` の上で再生し切ってから
+        差し替えるので、途中で落ちたら例外が上がるだけで画面はそのまま残る。
+
+        差し替えではキャッシュ(テセレーション・辺・スケッチ・版)を**全部捨てる** ——
+        Bodyのidは再生で作り直されるが、同じidが再び現れる可能性があり、古い形状を
+        指したキャッシュが残っていると別の文書の形を配ることになる。
+        """
+        source = self._resolve(path)
+        if not source.exists():
+            raise FileNotFoundError(f"開けるファイルが無い: {source}")
+        log = OpLog.from_json(source.read_text(encoding="utf-8"))
+        document = Document()
+        # **束ねてから再生する**(順序が逆だと `set_parameter` を含むログで落ちる)。
+        # パラメータの再生は「その操作までを作り直す」ために `document.log` を頭から
+        # 読むので、再生中の文書が自分のログを持っていないと成立しない
+        # (`parameters.rebuild` が理由つきで拒否する。実機で踏んだ 2026-08-14)。
+        document.log = log
+        log.replay(document)
+
+        self.document = document
+        self._geometry_cache.clear()
+        self._edge_cache.clear()
+        self._sketch_cache.clear()
+        # **版の数え上げ(`_revision_counter`)は消さない**。消すと版が1へ戻り、同じidの
+        # Bodyを知っているクライアントが「版が同じ=変わっていない」と判断して、
+        # **前の文書の形を描き続ける**(idはログに記録されるので再生で同じidが現れうる)。
+        # 状態のほう(`_revision_state`)だけ捨てれば、次の `body_revision` で必ず1つ上がる。
+        self._revision_state.clear()
+        # **土台の下限は引き継がない**。読み込んだログはすべてその文書の操作であり、
+        # 起動時の `load_step` が積んだ「取り消させない土台」とは別物である。
+        self._setup_floor_seq = 0
+        self._applied_count += 1
+        return self._emit({
+            "change": "document",
+            "action": "open",
+            "path": str(source),
+            "operations": len(log.entries),
+        })
+
+    def export_step_file(self, path: Any, body_ids: Optional[list] = None) -> dict:
+        """STEPを書き出す。**ログに載らない**(文書を変えないのでverbではない)。"""
+        target = self._resolve(path)
+        if not target.parent.exists():
+            raise ValueError(f"書き出し先のディレクトリが無い: {target.parent}")
+        resolved = io_step.export_body_ids(self.document, body_ids=body_ids)
+        io_step.export_step(self.document, target, body_ids=body_ids)
+        return {
+            "action": "export_step",
+            "path": str(target),
+            "bytes": target.stat().st_size,
+            "body_ids": list(resolved),
+        }
+
+    def export_stl_file(
+        self, path: Any, deviation: Optional[float] = None, body_ids: Optional[list] = None
+    ) -> dict:
+        """STLを書き出す。`deviation` は絶対の線形偏差[mm](省略時はセッションの値)。
+
+        **偏差を指定できることが要件**(§7: 0.2mm→30.7KB / 0.01mm→170.6KB)。
+        """
+        target = self._resolve(path)
+        if not target.parent.exists():
+            raise ValueError(f"書き出し先のディレクトリが無い: {target.parent}")
+        used = float(self.deviation if deviation is None else deviation)
+        resolved = io_step.export_body_ids(self.document, body_ids=body_ids)
+        io_step.export_stl(self.document, target, used, body_ids=body_ids)
+        return {
+            "action": "export_stl",
+            "path": str(target),
+            "bytes": target.stat().st_size,
+            "deviation": used,
+            "body_ids": list(resolved),
+        }
 
     def take_warnings(self) -> list[str]:
         """溜まった警告を取り出して空にする(出したら消す)。"""
@@ -1175,6 +1323,28 @@ class Server:
             elif command == "get_edges":
                 result = self.session.edges(message["body_id"])
                 await _send(connection, {"type": "edges", **result})
+            # -------------------------------------------------- E: ファイル操作
+            # **verbかどうかで応答が違う**(`FILE_COMMANDS` の3つ目の値)。文書を変えるものは
+            # 状態を全接続へ配り、書き出すだけのものは要求した接続へ結果だけ返す。
+            elif command in FILE_COMMANDS:
+                method, keys, is_verb = FILE_COMMANDS[command]
+                applied = self._apply(
+                    getattr(self.session, method),
+                    **{key: message[key] for key in keys},
+                )
+                if is_verb:
+                    applied["client_op"] = message.get("client_op")
+                    await self._push(connection, applied=applied)
+                else:
+                    await _send(connection, {"type": "file", **applied})
+            # **開くは文書ごと差し替える**ので全接続へ配る(自分だけ新しい文書を見ている、
+            # という状態を作らない)。`Session.open_document` が発火したイベントは
+            # `_on_core_change` 側でも拾われるが、`_apply` の間は `_dispatching` が
+            # 立っているので二重には配らない。
+            elif command == "open_document":
+                applied = self._apply(self.session.open_document, message["path"])
+                applied["client_op"] = message.get("client_op")
+                await self._push(connection, applied=applied)
             elif command == "preview":
                 result = self.session.preview(message["verb"], message.get("args") or {})
                 await _send(

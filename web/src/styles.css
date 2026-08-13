@@ -74,6 +74,10 @@ header {
   border-top: 1px solid var(--line);
   background: var(--panel);
   padding: 6px 12px 10px;
+  /* 縮ませない(E・2026-08-14)。縦に並んだパネルが増えると flex は全部を等しく
+     押し潰しにかかる —— 押し潰されてよいのはビューポート(.main)だけで、
+     コマンドの入力欄が枠の外へ出ると打てなくなる。 */
+  flex: 0 0 auto;
 }
 
 .row {

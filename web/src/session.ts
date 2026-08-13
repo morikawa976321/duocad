@@ -144,6 +144,26 @@ export interface ServerState {
   selection: SelectionState
   /** 文書の全スケッチ(C以降)。図形も領域もここが正で、ブラウザは溜めない。 */
   sketches: SketchState[]
+  /** あと何回やり直せるか(E)。**真偽だけだと履歴の位置が出せない**。 */
+  redo_count: number
+  /** 名前つきの寸法値(E・§3.4)。パラメータ編集パネルが出す対象そのもの。 */
+  parameters: Record<string, number>
+}
+
+/**
+ * ファイル操作の応答(E)。**状態の配信ではない** —— 保存・書き出しは文書を変えないので、
+ * 要求した接続にだけ「どこへ何バイト書いたか」が返る(`PreviewPayload` と同じ扱い)。
+ *
+ * `path` は**サーバが解決した絶対パス**。相対パスの基準はサーバの作業ディレクトリで、
+ * ブラウザ側では解決できない(2箇所で別々に解釈すると必ずずれる)。
+ */
+export interface FilePayload {
+  action: string
+  path: string
+  bytes: number
+  operations?: number
+  deviation?: number
+  body_ids?: string[]
 }
 
 /**
@@ -238,6 +258,8 @@ export interface SessionHooks {
   onPreview(payload: PreviewPayload): void
   /** 頼んだ辺が返ってきた(D。状態は変わっていない)。 */
   onEdges(payload: EdgesPayload): void
+  /** ファイルを書いた(E。状態は変わっていない)。 */
+  onFile(payload: FilePayload): void
 }
 
 export interface Session {
@@ -294,6 +316,15 @@ export interface Session {
    * (常時配ると27部品ぶんの辺が乗る。`Session.edges` のdocstring)。
    */
   getEdges(bodyId: string): void
+  // ---------------------------------------------------------------- E: ファイル操作
+  /**
+   * ファイル操作を送る(保存・開く・STEP読み込み・STEP/STL書き出し・編集可能なコピー)。
+   *
+   * `runFeature` と同じ理由で**verbごとのメソッドを作らない** —— 引数を作るのは
+   * `CommandDef.build` の仕事で、ここは `cmd` と `client_op` を足して流すだけ。
+   * 受け取れるverbの一覧はサーバの `FILE_COMMANDS` が正。
+   */
+  runFile(verb: string, args: Record<string, unknown>, clientOp: number): void
   undo(): void
   redo(): void
   dispose(): void
@@ -348,6 +379,12 @@ export function createSession(hooks: SessionHooks): Session {
       body_id?: string
       revision?: number
       edges?: EdgeGeometry[]
+      action?: string
+      path?: string
+      bytes?: number
+      operations?: number
+      deviation?: number
+      body_ids?: string[]
     }
     try {
       message = JSON.parse(raw)
@@ -368,6 +405,15 @@ export function createSession(hooks: SessionHooks): Session {
         body_id: message.body_id ?? '',
         revision: message.revision ?? 0,
         edges: message.edges ?? [],
+      })
+    } else if (message.type === 'file') {
+      hooks.onFile({
+        action: message.action ?? '',
+        path: message.path ?? '',
+        bytes: message.bytes ?? 0,
+        operations: message.operations,
+        deviation: message.deviation,
+        body_ids: message.body_ids,
       })
     } else if (message.type === 'error') {
       hooks.onError(message.message ?? '(理由なし)', message.where ?? '?')
@@ -458,6 +504,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     getEdges(bodyId) {
       send({ cmd: 'get_edges', body_id: bodyId })
+    },
+    runFile(verb, args, clientOp) {
+      send({ cmd: verb, ...args, client_op: clientOp })
     },
     undo() {
       send({ cmd: 'undo' })

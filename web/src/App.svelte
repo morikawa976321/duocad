@@ -32,6 +32,9 @@
     isFeatureVerb,
     needsSketchId,
   } from './commands/features'
+  import { FILE_COMMANDS, changesDocument, isFileVerb } from './commands/files'
+  import HistoryPanel from './HistoryPanel.svelte'
+  import ParametersPanel from './ParametersPanel.svelte'
   import {
     DEFAULT_SKETCH_COMMAND_ID,
     SKETCH_COMMANDS,
@@ -48,6 +51,7 @@
     type BodyGeometry,
     type ConnectionStatus,
     type EdgesPayload,
+    type FilePayload,
     type PreviewPayload,
     type SelectionRef,
     type ServerState,
@@ -67,7 +71,7 @@
    * 領域押し出しは**両方に居る**(描いた直後に押し出すのと、モードを抜けてから
    * 領域を選んで押し出すのは、どちらも実際に使う)。
    */
-  const SOLID_COMMANDS = [...COMMANDS, ...SOLID_FEATURE_COMMANDS]
+  const SOLID_COMMANDS = [...COMMANDS, ...SOLID_FEATURE_COMMANDS, ...FILE_COMMANDS]
   const SKETCH_MODE_COMMANDS = [...SKETCH_COMMANDS, ...SKETCH_FEATURE_COMMANDS]
 
   let container: HTMLDivElement
@@ -113,6 +117,29 @@
   /** スケッチパネルで選んだ図形(反復のverbの引数。共有選択集合には入らない)。 */
   let selectedEntities = $state<string[]>([])
 
+  // ---------------------------------------------------------------- E: ファイルと履歴
+  /** 直前に書いたファイル(画面の右上に出す。書き出しは他に痕跡が残らない)。 */
+  let lastFile = $state<FilePayload | null>(null)
+  /** 直前に出したファイル操作の `client_op`(応答が `file` で返ったときの待ちを解く)。 */
+  let lastFileOp: number | null = null
+  /**
+   * **この画面が出した操作の seq**(操作履歴パネルの「自分」の印)。
+   *
+   * 操作ログに主体は入っていない(§3.6)ので、区別できるのはここまで ——
+   * 再読込すると消えるし、AIが出した操作は「印が無い」だけで区別されたわけではない
+   * (`HistoryPanel.svelte` のdocstringに理由を書いてある)。
+   */
+  let myOperations = $state<number[]>([])
+  /**
+   * この画面が出した `client_op` の控え(QA指摘 2026-08-14)。
+   *
+   * **`pendingOp` では足りない** —— パラメータの打ち直しや可視性の切り替えは
+   * 「応答待ち」を立てない経路なので、`pendingOp` と突き合わせると
+   * **自分でやったのに印が付かない**(パラメータ編集はEの中心操作そのもの)。
+   * 出した番号を全部覚えておいて、返ってきた `applied.client_op` で照合する。
+   */
+  const myClientOps = new Set<number>()
+
   const session = createSession({
     onState: handleState,
     onError: (message, where) => {
@@ -145,15 +172,19 @@
     },
     onPreview: handlePreview,
     onEdges: handleEdges,
+    onFile: handleFile,
   })
 
   function note(message: string): void {
     if (!message) return
     messages = [message, ...messages].slice(0, 4)
   }
+  /** パネルへ渡す通知(プロパティ名と関数名を揃えるためだけの別名)。 */
+  const onNote = note
 
   function nextOp(): number {
     opCounter += 1
+    myClientOps.add(opCounter) // この番号で返ってきた操作は「自分」(上のdocstring)
     return opCounter
   }
 
@@ -215,9 +246,16 @@
     if (applied) {
       // 作ったスケッチへはそのまま入る(作ってから改めて「入る」を押させない)
       if (applied.verb === 'sketch_create' && applied.sketch_id) enterSketch(applied.sketch_id)
+      // **読み込んだだけでは編集できない**ことを必ず言う(E)。参照ボディへverbを打ち続ける
+      // 状態にしないための1手が `make_editable_copy` で、それはMCP側も戻り値の hint で
+      // 知らせている —— 人にだけ黙っているのは筋が通らない。
+      if (applied.verb === 'import_step') {
+        note('読み込んだのは参照ボディ(編集不可)。編集するには面を選んで「編集可能にする」')
+      }
       dropStaleEdges(applied)
       reselectAfter(applied)
       if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
+      markOwnership(applied)
       lastApplied = applied
     }
   }
@@ -230,8 +268,45 @@
     previewing = payload.bodies.length > 0
   }
 
+  /**
+   * 「自分が出した操作」の印を更新する(E。QA指摘 2026-08-14で作り直した)。
+   *
+   * **seqは使い回される**。undoで捨てた操作の番号は次に積まれた操作が再び使うので
+   * (`OpLog.append` はカーソル以降を捨ててから振る)、控えを消さずに溜めると
+   * **AIが積んだ操作に「自分」が付く**(取りこぼしより悪い)。新しい操作の seq を
+   * 受けたら、その番号以上の控えを先に落とす。文書ごと差し替わったら全部捨てる。
+   */
+  function markOwnership(applied: Applied): void {
+    if (applied.change === 'document') {
+      myOperations = []
+      return
+    }
+    if (typeof applied.seq !== 'number') return
+    if (applied.verb === 'undo' || applied.verb === 'redo') return // 積み直しではない
+    const seq = applied.seq
+    const kept = myOperations.filter((item) => item < seq)
+    const mine = applied.client_op !== null && myClientOps.has(applied.client_op as number)
+    myOperations = mine ? [...kept, seq] : kept
+  }
+
   function handleEdges(payload: EdgesPayload): void {
     edges = { ...edges, [payload.body_id]: payload }
+  }
+
+  /**
+   * ファイルを書いた(E)。**どこへ何バイト書いたかを必ず画面へ出す** ——
+   * 書き出しはブラウザの中に痕跡が残らない操作なので、通知が唯一の確認手段になる。
+   */
+  function handleFile(payload: FilePayload): void {
+    lastFile = payload
+    // **応答が `file` で返ったなら、その操作の待ちはここで解く**(QA指摘 2026-08-14)。
+    // 「文書を変えるか」の判定はブラウザとサーバで別々に持っているので、片方だけ
+    // 直したときに**状態配信を待ち続けて確定が永久に拒否される**経路ができる。
+    // 出した番号を控えてあるので、それと一致するときだけ解けばよい(取りすぎない)。
+    if (pendingOp !== null && pendingOp === lastFileOp) pendingOp = null
+    const size = `${payload.bytes.toLocaleString()} B`
+    const extra = payload.operations !== undefined ? ` / 操作 ${payload.operations}件` : ''
+    note(`${payload.action}: ${payload.path}(${size}${extra})`)
   }
 
   // ---------------------------------------------------------------- 選択(コアを叩くだけ)
@@ -547,6 +622,16 @@
       session.runFeature(verb, needsSketchId(verb) ? { ...args, sketch_id: sketchId } : args, op)
       return
     }
+    // ---------------------------------------------------------------- E: ファイル操作
+    if (isFileVerb(verb)) {
+      const op = nextOp()
+      lastFileOp = op
+      // **文書を変えないもの(保存・書き出し)は状態配信では返ってこない**ので、
+      // 「応答待ち」は立てない —— 立てると `handleFile` が来るまでEnterが拒否される。
+      if (changesDocument(verb)) pendingOp = op
+      session.runFile(verb, args, op)
+      return
+    }
     if (verb !== 'extrude_face') {
       note(`未知のコマンド: ${verb}`)
       return
@@ -743,6 +828,11 @@
       selectedEntities,
       projectEdge: (bodyId: string, edgeIndex: number) =>
         viewport?.projectEdge(bodyId, edgeIndex) ?? null,
+      // E: パラメータ・履歴・ファイル。実機検査が「打ち直したら形が追随する」を見る穴
+      parameters: model?.parameters ?? {},
+      redoCount: model?.redo_count ?? 0,
+      myOperations,
+      lastFile,
     }
   })
 </script>
@@ -779,6 +869,21 @@
     onClear={() => session.clearSelection(nextOp())}
     onCommit={() => session.commitSelection(nextOp())}
   />
+
+  <!-- E: 名前つきの値と操作履歴。**どちらもコアが持つものを描き直すだけ** -->
+  <div class="panels">
+    <ParametersPanel
+      parameters={model?.parameters ?? {}}
+      {sketches}
+      onSetParameter={setParameter}
+      {onNote}
+    />
+    <HistoryPanel
+      log={model?.log ?? []}
+      redoCount={model?.redo_count ?? 0}
+      mine={myOperations}
+    />
+  </div>
 
   <SketchPanel
     {sketches}
@@ -857,5 +962,19 @@
   .tag.preview {
     background: #7ee081;
     color: #0b1a0d;
+  }
+
+  /* パラメータと履歴は横に並べる(縦に積むとビューポートが潰れる)。
+     高さは各パネルが固定しているので、ここは幅を分けるだけ。 */
+  .panels {
+    display: flex;
+    gap: 0;
+    /* 縮ませない(SketchPanelと同じ理由。潰れると中の入力欄が枠の外へ出る) */
+    flex: 0 0 auto;
+  }
+
+  .panels > :global(section) {
+    flex: 1 1 0;
+    min-width: 0;
   }
 </style>

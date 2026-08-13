@@ -198,6 +198,11 @@
     flex-direction: column;
     gap: 4px;
     height: 96px;
+    /* **縮ませない**(E・2026-08-14)。`height` だけでは縦に並べたときに flex が
+       他のパネルと一緒に押し潰す —— 実際、Eでパネルを2枚足したらここが 96→55px になり、
+       図形の入力欄が枠の外へ出てクリックできなくなった(実機検査が落ちて気づいた)。
+       縮んでよいのはビューポート(`.main`)だけである。 */
+    flex: 0 0 auto;
     overflow: hidden;
     padding: 6px 8px;
     border-top: 1px solid #2a3038;
