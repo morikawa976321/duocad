@@ -255,7 +255,6 @@
 
   // ---------------------------------------------------------------- C: スケッチ
   const sketches = $derived(model?.sketches ?? [])
-  const activeSketch = $derived(sketches.find((item) => item.sketch_id === sketchId) ?? null)
 
   /** 描画指示を組み立てる(選択中の領域だけ強調色になる)。 */
   function sketchDraws(): SketchDraw[] {
