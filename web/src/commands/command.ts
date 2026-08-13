@@ -137,13 +137,48 @@ export interface PointArgSpec {
   label: string
 }
 
-export type ArgSpec = SelectionArgSpec | NumberArgSpec | PointArgSpec
+/**
+ * 2つ以上から1つ選ぶ引数(D・2026-08-14)。今のところ押し出しの**結合/切り取り**だけ。
+ *
+ * **既定値を持たない**。既定を `join` にすると「切り取るつもりで足した」が黙って通り、
+ * しかも形が増えるので失敗に見えない —— 数値引数に既定を入れないのと同じ理由(M1から)で、
+ * ここも人が1回選ぶまで引数が揃わない扱いにする(サーバ側も `mode` を必須にしてある)。
+ */
+export interface ChoiceArgSpec {
+  kind: 'choice'
+  name: string
+  label: string
+  options: Array<{ value: string; label: string; buttonId: string }>
+}
+
+/**
+ * スケッチの図形を選ぶ引数(D・2026-08-14。反復のverbが取る)。
+ *
+ * **選択引数と別物にしてある**。共有選択集合に入れられるのは面・辺・頂点・領域の4種で、
+ * **スケッチの図形はそこに入らない**(コアの `SELECTABLE_KINDS`)。MCP側も反復だけは
+ * 図形IDを引数で受けており(`mcp_server.pattern_rectangular` の
+ * 「スケッチの図形は選択集合の項目ではないので引数で受ける」)、ここはその人間側の対。
+ * 値はスケッチパネルで選んだ図形のIDで、`CommandHost` へは `entities` プロパティで渡る。
+ */
+export interface EntitiesArgSpec {
+  kind: 'entities'
+  name: string
+  label: string
+  min: number
+}
+
+export type ArgSpec =
+  | SelectionArgSpec
+  | NumberArgSpec
+  | PointArgSpec
+  | ChoiceArgSpec
+  | EntitiesArgSpec
 
 /** スケッチ平面上の点 [u, v](mm)。 */
 export type Point2 = [number, number]
 
-/** 集まった引数の値。選択引数は参照の配列、数値引数は数、点引数は [u,v]。 */
-export type ArgValues = Record<string, SelectionRef[] | number | Point2>
+/** 集まった引数の値。選択は参照の配列、数値は数、点は [u,v]、選択肢は文字列、図形はID列。 */
+export type ArgValues = Record<string, SelectionRef[] | number | Point2 | string | string[]>
 
 /** `build` の結果。作れないときは理由を返す(黙って何も送らない、をしない)。 */
 export type BuildResult =
@@ -278,6 +313,14 @@ export function argSatisfied(spec: ArgSpec, values: ArgValues): boolean {
     const point = values[spec.name]
     return Array.isArray(point) && point.length === 2 && point.every(Number.isFinite)
   }
+  if (spec.kind === 'choice') {
+    const value = values[spec.name]
+    return typeof value === 'string' && spec.options.some((option) => option.value === value)
+  }
+  if (spec.kind === 'entities') {
+    const ids = values[spec.name]
+    return Array.isArray(ids) && ids.length >= spec.min && ids.every((id) => typeof id === 'string')
+  }
   const value = values[spec.name]
   return typeof value === 'number' && Number.isFinite(value) && spec.reject(value) === null
 }
@@ -300,6 +343,13 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
   }
   if (spec.kind === 'point') {
     return `${spec.label}をクリック(スケッチ平面の上)`
+  }
+  if (spec.kind === 'choice') {
+    return `${spec.label}を選ぶ(${spec.options.map((option) => option.label).join(' / ')})`
+  }
+  if (spec.kind === 'entities') {
+    const have = ((values[spec.name] ?? []) as string[]).length
+    return `${spec.label}を${spec.min - have}個選ぶ(スケッチパネルの図形一覧)`
   }
   const value = values[spec.name]
   if (typeof value === 'number' && Number.isFinite(value)) {

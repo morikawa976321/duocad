@@ -19,7 +19,19 @@
    */
   import { onMount } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
-  import { faceRef, sameRef, type Point2 } from './commands/command'
+  import {
+    COMMANDS,
+    faceRef,
+    sameRef,
+    type Point2,
+    type SelectableKind,
+  } from './commands/command'
+  import {
+    SKETCH_FEATURE_COMMANDS,
+    SOLID_FEATURE_COMMANDS,
+    isFeatureVerb,
+    needsSketchId,
+  } from './commands/features'
   import {
     DEFAULT_SKETCH_COMMAND_ID,
     SKETCH_COMMANDS,
@@ -35,6 +47,7 @@
     type BasePlaneName,
     type BodyGeometry,
     type ConnectionStatus,
+    type EdgesPayload,
     type PreviewPayload,
     type SelectionRef,
     type ServerState,
@@ -47,6 +60,15 @@
     type SketchDraw,
     type Viewport,
   } from './viewport'
+
+  /**
+   * ツールバーの中身(モードごと)。**状態機械は1つのまま**で、変わるのは一覧と既定だけ
+   * (B・Cからの約束)。Dが足した3つはソリッド側、反復2つはスケッチ側に載る ——
+   * 領域押し出しは**両方に居る**(描いた直後に押し出すのと、モードを抜けてから
+   * 領域を選んで押し出すのは、どちらも実際に使う)。
+   */
+  const SOLID_COMMANDS = [...COMMANDS, ...SOLID_FEATURE_COMMANDS]
+  const SKETCH_MODE_COMMANDS = [...SKETCH_COMMANDS, ...SKETCH_FEATURE_COMMANDS]
 
   let container: HTMLDivElement
   let viewport: Viewport | null = null
@@ -74,8 +96,22 @@
   let sketchId = $state<string | null>(null)
   /** ポインタが指しているスケッチ平面上の点(確定前の線を見せるためだけ)。 */
   let hoverPoint = $state<Point2 | null>(null)
-  /** コマンド層への参照(クリックで集めた点を渡す)。 */
-  let host = $state<{ addPoint(u: number, v: number): boolean; wantsPoint(): boolean } | null>(null)
+  /** コマンド層への参照(クリックで集めた点を渡す・失敗したら打った値を戻す)。 */
+  let host = $state<{
+    addPoint(u: number, v: number): boolean
+    wantsPoint(): boolean
+    restoreLastInputs(): void
+  } | null>(null)
+
+  // ---------------------------------------------------------------- D: 辺とフィーチャ
+  /** 起動中のコマンドが選択から取る種別(`CommandHost` が知らせる)。 */
+  let wantedKinds = $state<SelectableKind[]>([])
+  /** 取り寄せた辺(body_id -> その版の折れ線)。**版が変われば捨てる**。 */
+  let edges = $state<Record<string, EdgesPayload>>({})
+  /** 取り寄せ中のもの(`${body_id}:${revision}`)。同じ要求を何度も投げないため。 */
+  let edgesAsked = new Set<string>()
+  /** スケッチパネルで選んだ図形(反復のverbの引数。共有選択集合には入らない)。 */
+  let selectedEntities = $state<string[]>([])
 
   const session = createSession({
     onState: handleState,
@@ -83,6 +119,13 @@
       note(`エラー[${where}] ${message}`)
       pendingOp = null
       if (where === 'preview') clearPreview()
+      // 辺の取り寄せが失敗したら「頼んだ」印も消す(次に起動したときに取り直せる)
+      if (where === 'get_edges' || where === 'send') edgesAsked.clear()
+      // **失敗しても、やり直せる状態にして返す**(D)。OCCTのフィレットは半径に対して
+      // 単調でなく(§7: r=10.0 失敗 / r=10.5 成功)、すぐ近くの値で打ち直すのが実際の
+      // 使い方になる。選択はコア側にあるので失敗では消えない —— ここで戻すのは
+      // 打った値だけでよく、24本選び直しにはならない。
+      if (isFeatureVerb(where)) host?.restoreLastInputs()
     },
     onWarning: (message) => note(`警告 ${message}`),
     onStatus: (next) => {
@@ -94,8 +137,14 @@
         pendingOp = null
         clearPreview()
       }
+      // **投げ損ねた辺の要求を覚えたままにしない**(D。QA指摘 2026-08-14)。接続が切れて
+      // いる間の要求は送られずに捨てられるが、`edgesAsked` には残る —— 再接続しても
+      // 版が同じなら「もう頼んだ」と判断して二度と取りに行かず、**そのBodyの辺が
+      // 出ないまま**フィレットが使えなくなる(`pendingOp` を捨てるのと同じ形の穴)。
+      if (next !== 'open') edgesAsked.clear()
     },
     onPreview: handlePreview,
+    onEdges: handleEdges,
   })
 
   function note(message: string): void {
@@ -146,6 +195,16 @@
     if (sketchId !== null && !sketches.some((item) => item.sketch_id === sketchId)) {
       exitSketch() // undoでスケッチごと消えた
     }
+    dropStaleRegions()
+    // 反復に使った図形は反復に吸収され、undoで戻ればまた現れる(D)。**消えたIDを
+    // 持ち続けない** —— 存在しない図形を引数にした反復は、押した瞬間にサーバで
+    // KeyError になるだけで、なぜ失敗したかが画面から分からない。
+    const known = new Set(
+      sketches.flatMap((item) => item.entities.map((entity) => entity.entity_id)),
+    )
+    if (selectedEntities.some((id) => !known.has(id))) {
+      selectedEntities = selectedEntities.filter((id) => known.has(id))
+    }
 
     // **選択の変更イベントはverbの適用ではない**(`change: "selection"` で見分ける。
     // session.ts の `Applied` 参照)。verbの応答としてだけ `lastApplied` を動かす。
@@ -156,6 +215,7 @@
     if (applied) {
       // 作ったスケッチへはそのまま入る(作ってから改めて「入る」を押させない)
       if (applied.verb === 'sketch_create' && applied.sketch_id) enterSketch(applied.sketch_id)
+      dropStaleEdges(applied)
       reselectAfter(applied)
       if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
       lastApplied = applied
@@ -170,25 +230,94 @@
     previewing = payload.bodies.length > 0
   }
 
+  function handleEdges(payload: EdgesPayload): void {
+    edges = { ...edges, [payload.body_id]: payload }
+  }
+
   // ---------------------------------------------------------------- 選択(コアを叩くだけ)
   const selection = $derived(model?.selection ?? null)
-  /** 3Dで強調できるのは面だけ(辺・頂点は選択パネルが見せる。viewport.ts 参照)。 */
   const selectedFaces = $derived(
     (selection?.items ?? []).filter(
       (item): item is ShapeRef => !('sketch' in item) && (item as ShapeRef).kind === 'face',
     ),
   )
+  /** 選択中の辺(D。**辺を出している間だけ**3Dで色が変わる)。 */
+  const selectedEdges = $derived(
+    (selection?.items ?? []).filter(
+      (item): item is ShapeRef => !('sketch' in item) && (item as ShapeRef).kind === 'edge',
+    ),
+  )
 
   function drawHighlight(): void {
+    const origin = selection?.origin === 'proposed' ? 'proposed' : 'user'
     viewport?.highlight(
       selectedFaces.map((item) => ({ bodyId: item.body, faceIndex: item.index })),
-      selection?.origin === 'proposed' ? 'proposed' : 'user',
+      origin,
+    )
+    viewport?.highlightEdges(
+      selectedEdges.map((item) => ({ bodyId: item.body, edgeIndex: item.index })),
+      origin,
     )
   }
+
+  // ---------------------------------------------------------------- D: 辺を取りに行く
+  /**
+   * 辺を出す対象のBody。**選んでいる形のBody**を優先し、無ければアクティブボディ。
+   *
+   * アクティブ固定にすると、27部品を読んだ文書で「見ている部品ではない方」の辺が出る。
+   * 選択優先なら、面をクリックしてからフィレットを起動すれば必ずその部品の辺が出る。
+   */
+  const edgeTargetBody = $derived.by(() => {
+    const picked = (selection?.items ?? []).find(
+      (item): item is ShapeRef => !('sketch' in item),
+    )
+    return picked?.body ?? model?.active_body_id ?? null
+  })
+
+  /** 今のコマンドが辺を要求しているか(スケッチモード中は辺を出さない)。 */
+  const wantsEdges = $derived(sketchId === null && wantedKinds.includes('edge'))
+
+  $effect(() => {
+    if (!wantsEdges || edgeTargetBody === null) {
+      viewport?.showEdges(null, [])
+      return
+    }
+    const body = model?.bodies.find((item) => item.body_id === edgeTargetBody)
+    const known = edges[edgeTargetBody]
+    // **版が違う辺は使わない**(形が変わった後の古い添字は別の辺を指す。§7)
+    if (body && known?.revision === body.revision) {
+      viewport?.showEdges(edgeTargetBody, known.edges)
+      drawHighlight()
+      return
+    }
+    viewport?.showEdges(null, [])
+    const key = `${edgeTargetBody}:${body?.revision ?? '?'}`
+    if (edgesAsked.has(key)) return
+    edgesAsked.add(key)
+    session.getEdges(edgeTargetBody)
+  })
 
   function modifySelection(add: SelectionRef[], remove: SelectionRef[]): void {
     if (add.length === 0 && remove.length === 0) return
     session.modifySelection(add, remove, nextOp())
+  }
+
+  /**
+   * 1つの参照に対するクリックを選択集合の編集へ翻訳する(面・辺・領域で同じ規則)。
+   *
+   * Shift=追加 / Ctrl=除去 / 修飾なし=置き換え。ただし**1つだけ選んでいるものを
+   * もう一度クリックしたら外す**(狙いを外したときに素で解除できる)。
+   *
+   * 置き換えのとき**自分自身は remove に入れない** —— コアは remove を後に適用するので、
+   * 入れると足したそばから外れる(`duocad/selection.py` の契約)。
+   */
+  function editSelection(ref: SelectionRef, mode: PickEvent['mode']): void {
+    const current = selection?.items ?? []
+    const already = current.some((item) => sameRef(item, ref))
+    if (mode === 'add') modifySelection([ref], [])
+    else if (mode === 'remove') modifySelection([], [ref])
+    else if (already && current.length === 1) modifySelection([], [ref])
+    else modifySelection([ref], current.filter((item) => !sameRef(item, ref)))
   }
 
   /**
@@ -201,25 +330,47 @@
       return
     }
     const current = selection?.items ?? []
+    // **辺が当たったら辺**(D)。フィレット・面取りを起動している間だけ来る。
+    if (event.edge !== null) {
+      editSelection(
+        { body: event.edge.bodyId, kind: 'edge', index: event.edge.edgeIndex },
+        event.mode,
+      )
+      return
+    }
     if (event.hit === null) {
       // 何もない所を素でクリック = 選択解除(修飾キー付きは空振りにする)
       if (event.mode === 'replace' && current.length > 0) session.clearSelection(nextOp())
       else if (event.mode === 'replace') note('面を外した')
       return
     }
-    const ref = faceRef(event.hit.bodyId, event.hit.faceIndex)
-    const already = current.some((item) => sameRef(item, ref))
-    if (event.mode === 'add') {
-      modifySelection([ref], [])
-    } else if (event.mode === 'remove') {
-      modifySelection([], [ref])
-    } else if (already && current.length === 1) {
-      modifySelection([], [ref]) // 再クリックで外す
-    } else {
-      // 置き換え。**自分自身は remove に入れない**(コアは remove を後に適用するので、
-      // 入れると足したそばから外れる。`duocad/selection.py` の契約)。
-      modifySelection([ref], current.filter((item) => !sameRef(item, ref)))
-    }
+    editSelection(faceRef(event.hit.bodyId, event.hit.faceIndex), event.mode)
+  }
+
+  /**
+   * 丸めた・面取りした辺の選択を外す(D・2026-08-14。**QA指摘 2026-08-14**)。
+   *
+   * **添字は形状変更で壊れる**(§7)。フィレットが成功すると辺の並びは作り直されるので、
+   * 選んだままの添字は**別の辺**を指す —— それを強調表示のまま残すと、続けて半径を打った
+   * ときに「選んだ覚えのない辺が丸まる」。このタスクが最も警戒している事故そのものである。
+   *
+   * **コア側では落とさない**。「選択は操作をまたいで残る」はA1で決めた契約
+   * (`tests/test_mcp_selection.py` の交互操作の一巡が、fillet の後も選択が残ることを
+   * 固定している)で、AIは次の一手をそのまま打てることを前提にしている。`extrude_face` は
+   * 後継の添字(`after_face_index`)をサーバが返すので選び直せるが、**フィレットには
+   * 辺の後継の対応が無い**ので、UIができる正直なことは「外して選び直させる」しかない。
+   */
+  function dropStaleEdges(applied: Applied): void {
+    if (applied.verb !== 'fillet' && applied.verb !== 'chamfer') return
+    const changed = applied.body_id
+    if (!changed) return
+    const stale = (selection?.items ?? []).filter(
+      (item): item is ShapeRef =>
+        !('sketch' in item) && (item as ShapeRef).kind === 'edge' && (item as ShapeRef).body === changed,
+    )
+    if (stale.length === 0) return
+    modifySelection([], stale)
+    note(`${applied.verb} した辺の選択を外した(形が変わって添字が別の辺を指すため)`)
   }
 
   /**
@@ -288,6 +439,7 @@
   function exitSketch(): void {
     sketchId = null
     hoverPoint = null
+    selectedEntities = [] // 反復の対象はモードを抜けたら持ち越さない(D)
     viewport?.setActiveSketch(null)
   }
 
@@ -303,13 +455,7 @@
       if (host.addPoint(event.point.u, event.point.v)) return
     }
     if (event.region) {
-      const ref: SelectionRef = { sketch: event.region.sketchId, index: event.region.index }
-      const current = selection?.items ?? []
-      const already = current.some((item) => sameRef(item, ref))
-      if (event.mode === 'add') modifySelection([ref], [])
-      else if (event.mode === 'remove') modifySelection([], [ref])
-      else if (already && current.length === 1) modifySelection([], [ref])
-      else modifySelection([ref], current.filter((item) => !sameRef(item, ref)))
+      editSelection({ sketch: event.region.sketchId, index: event.region.index }, event.mode)
       return
     }
     if (event.mode === 'replace' && (selection?.items.length ?? 0) > 0) {
@@ -330,6 +476,17 @@
 
   function setParameter(name: string, value: number): void {
     session.setParameter(name, value, nextOp())
+  }
+
+  /**
+   * 反復の対象にする図形を選ぶ/外す(D)。**共有選択集合には入れない** ——
+   * コアの選択集合が持てるのは面・辺・頂点・領域の4種で、図形はそこに入らない
+   * (MCP側も反復だけは図形IDを引数で受けている)。ここがその人間側の対。
+   */
+  function toggleEntity(entityId: string): void {
+    selectedEntities = selectedEntities.includes(entityId)
+      ? selectedEntities.filter((item) => item !== entityId)
+      : [...selectedEntities, entityId]
   }
 
   function selectRegion(sketch: string, index: number): void {
@@ -373,6 +530,23 @@
       }
       return
     }
+    // ---------------------------------------------------------------- D: フィーチャ
+    if (isFeatureVerb(verb)) {
+      if (needsSketchId(verb) && sketchId === null) {
+        note('スケッチモードに入っていない(反復はスケッチの図形が対象)')
+        return
+      }
+      if (verb === 'extrude' && !regionsStillExist(args.regions)) {
+        // **領域はパラメータ編集で分裂・消失しうる**(§7)。消えた領域を送ると
+        // サーバは添字が範囲外だと言うだけなので、ここで何が起きたかを画面へ出す。
+        note('選んだ領域が今のスケッチに無い(図形が変わって分裂・消失した可能性)。選び直す')
+        return
+      }
+      const op = nextOp()
+      pendingOp = op
+      session.runFeature(verb, needsSketchId(verb) ? { ...args, sketch_id: sketchId } : args, op)
+      return
+    }
     if (verb !== 'extrude_face') {
       note(`未知のコマンド: ${verb}`)
       return
@@ -380,6 +554,62 @@
     const op = nextOp()
     pendingOp = op
     session.extrude(args.body_id as string, args.face_index as number, args.distance as number, op)
+  }
+
+  /** 送ろうとしている領域が、今のスケッチに実在するか。 */
+  function regionsStillExist(value: unknown): boolean {
+    const refs = (value ?? []) as Array<{ sketch: string; index: number }>
+    return refs.every((ref) =>
+      sketches.some(
+        (item) =>
+          item.sketch_id === ref.sketch &&
+          item.regions.some((candidate) => candidate.index === ref.index),
+      ),
+    )
+  }
+
+  /**
+   * そのスケッチの領域の姿を1つの文字列にする(**中身が変わったかを見るための印**)。
+   *
+   * 添字だけでは足りない —— 領域の添字は計算結果の1始まりの連番なので、**分裂しても
+   * 古い添字は範囲内に残り、別の領域を指したまま生き続ける**(§7「領域はパラメータ編集で
+   * 変わる」)。面積と重心まで入れると、割れた・入れ替わった・数が変わったのどれでも印が変わる。
+   */
+  function regionPrint(sketch: (typeof sketches)[number]): string {
+    return sketch.regions
+      .map((item) => `${item.index}:${item.area.toFixed(6)}:${item.centroid.map((n) => n.toFixed(6)).join(',')}`)
+      .join('|')
+  }
+
+  /** スケッチID -> 直前に見た領域の印。 */
+  let regionPrints = new Map<string, string>()
+
+  /**
+   * 領域の姿が変わったスケッチの**領域の選択を外す**(D・2026-08-14。QA指摘)。
+   *
+   * 消えた領域は `regionsStillExist` が送信前に止められるが、**分裂**は止められない ——
+   * 添字が範囲内に残るので、黙って「別の領域」を押し出すことになる。姿が変わったら
+   * 選び直させるのが、この壊れ方に対して画面が取れる唯一の正直な手である。
+   */
+  function dropStaleRegions(): void {
+    const stale: SelectionRef[] = []
+    const next = new Map<string, string>()
+    for (const sketch of sketches) {
+      const print = regionPrint(sketch)
+      next.set(sketch.sketch_id, print)
+      const seen = regionPrints.get(sketch.sketch_id)
+      if (seen === undefined || seen === print) continue
+      stale.push(
+        ...(selection?.items ?? []).filter(
+          (item): item is { sketch: string; index: number } =>
+            'sketch' in item && item.sketch === sketch.sketch_id,
+        ),
+      )
+    }
+    regionPrints = next
+    if (stale.length === 0) return
+    modifySelection([], stale)
+    note('領域が作り直されたので選択を外した(分裂・消失しうる。選び直す)')
   }
 
   /**
@@ -506,6 +736,13 @@
         sketchId === null ? null : (viewport?.projectSketchPoint(sketchId, u, v) ?? null),
       projectRegion: (index: number) =>
         sketchId === null ? null : (viewport?.projectRegion(sketchId, index) ?? null),
+      // D: 辺とフィーチャ。**実機検査が本物のクリックで辺を選ぶ**ための穴
+      edges: edgeTargetBody === null ? null : (edges[edgeTargetBody] ?? null),
+      edgeTargetBody,
+      wantsEdges,
+      selectedEntities,
+      projectEdge: (bodyId: string, edgeIndex: number) =>
+        viewport?.projectEdge(bodyId, edgeIndex) ?? null,
     }
   })
 </script>
@@ -555,6 +792,8 @@
     onLookAt={() => sketchId && viewport?.lookAtSketch(sketchId)}
     onSetParameter={setParameter}
     onSelectRegion={selectRegion}
+    selectedEntities={selectedEntities}
+    onToggleEntity={toggleEntity}
   />
 
   <section class="panel">
@@ -564,13 +803,15 @@
         bind:this={host}
         {selection}
         busy={pendingOp !== null}
-        commands={sketchId === null ? undefined : SKETCH_COMMANDS}
+        commands={sketchId === null ? SOLID_COMMANDS : SKETCH_MODE_COMMANDS}
         defaultCommandId={sketchId === null ? undefined : DEFAULT_SKETCH_COMMAND_ID}
         hover={hoverPoint}
+        entities={selectedEntities}
         onRun={runCommand}
         onPreview={requestPreview}
         onCancelPreview={clearPreview}
         onNote={note}
+        onWants={(kinds) => (wantedKinds = kinds)}
       />
     {/key}
 
@@ -584,6 +825,9 @@
       {:else}
         <span class="value dim">面をクリックして選ぶ</span>
       {/if}
+      <!-- スケッチに寄った視点から戻る手(D)。これが無いと、小さい図形を描いた後に
+           モードを抜けると部品が画面の外にあるまま操作することになる -->
+      <button id="view-fit" onclick={() => viewport?.frameAll()}>全体</button>
       <button id="undo" onclick={() => session.undo()} disabled={!model?.can_undo}>undo</button>
       <button id="redo" onclick={() => session.redo()} disabled={!model?.can_redo}>redo</button>
       <span class="value dim">正=足す / 負=削る</span>

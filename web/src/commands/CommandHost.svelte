@@ -43,9 +43,11 @@
     overflowNote,
     promptFor,
     type ArgValues,
+    type ChoiceArgSpec,
     type CommandDef,
     type NumberArgSpec,
     type Point2,
+    type SelectableKind,
   } from './command'
   import type { SelectionState } from '../session'
 
@@ -55,10 +57,12 @@
     commands = COMMANDS,
     defaultCommandId = DEFAULT_COMMAND_ID,
     hover = null,
+    entities = [],
     onRun,
     onPreview,
     onCancelPreview,
     onNote,
+    onWants = () => {},
   }: {
     /** コアの選択集合(state.selection)。 */
     selection: SelectionState | null
@@ -76,11 +80,22 @@
      * これが無いと、線分は2点目を置くまで何も見えない。
      */
     hover?: Point2 | null
+    /**
+     * スケッチパネルで選ばれている図形のID(D)。**反復のverbだけが取る引数**で、
+     * 共有選択集合には入らない(`command.ts` の `EntitiesArgSpec` 参照)。
+     */
+    entities?: string[]
     onRun: (verb: string, args: Record<string, unknown>) => void
     /** `mode` は `CommandDef.preview`。`local` はブラウザだけで描く(サーバへ投げない)。 */
     onPreview: (verb: string, args: Record<string, unknown>, mode: 'server' | 'local') => void
     onCancelPreview: () => void
     onNote: (message: string) => void
+    /**
+     * 起動中のコマンドが選択から取る種別(D)。**辺を要求したときだけ**アプリ層が
+     * 辺の折れ線を取りに行き、ビューポートで指せるようにする —— 常時出すと
+     * 27部品ぶんの辺が要り、面のピックも辺に取られて押し出しが遅くなる。
+     */
+    onWants?: (kinds: SelectableKind[]) => void
   } = $props()
 
   /** 打ち終わってからプレビューを投げるまでの待ち[ms]。 */
@@ -100,6 +115,9 @@
    * 線の始点が共有選択に溜まると、次のコマンドがそれを引数として拾ってしまう。
    */
   let points = $state<Record<string, Point2>>({})
+
+  /** 選んだ選択肢(引数名 -> 値)。**既定は入れない**(`ChoiceArgSpec` のdocstring)。 */
+  let choices = $state<Record<string, string>>({})
 
   /**
    * 最後に見た**確定済み**の選択(`origin === "user"`)。AIが提案を書き込んでいる間、
@@ -124,6 +142,12 @@
       } else if (spec.kind === 'point') {
         const point = points[spec.name]
         if (point) collected[spec.name] = point
+      } else if (spec.kind === 'choice') {
+        const chosen = choices[spec.name]
+        if (chosen) collected[spec.name] = chosen
+      } else if (spec.kind === 'entities') {
+        // 選択集合と同じく**導出する**(ここには持たない)。スケッチパネルで選び直せば追従する。
+        collected[spec.name] = entities
       } else {
         const raw = (numberText[spec.name] ?? '').trim()
         const parsed = raw === '' ? Number.NaN : Number.parseFloat(raw)
@@ -163,6 +187,16 @@
   })
 
   const numberArgs = $derived(command.args.filter((spec) => spec.kind === 'number') as NumberArgSpec[])
+  const choiceArgs = $derived(command.args.filter((spec) => spec.kind === 'choice') as ChoiceArgSpec[])
+
+  /** このコマンドが選択から取る種別をアプリ層へ知らせる(D。辺のときだけ辺を取りに行く)。 */
+  $effect(() => {
+    onWants(
+      command.args
+        .filter((spec) => spec.kind === 'selection')
+        .map((spec) => (spec as { shapeKind: SelectableKind }).shapeKind),
+    )
+  })
 
   // ---------------------------------------------------------------- プレビュー
   let previewTimer: ReturnType<typeof setTimeout> | null = null
@@ -207,8 +241,31 @@
       onNote(built.reason)
       return
     }
+    lastInputs = { numbers: { ...numberText }, points: { ...points }, choices: { ...choices } }
     onRun(command.id, built.args)
     reset()
+  }
+
+  /**
+   * 直前に確定したときの入力(**失敗したときだけ**戻す。D・2026-08-14)。
+   *
+   * OCCTのフィレットは半径に対して単調でなく(§7: r=10.0 失敗 / r=10.5 成功)、
+   * **失敗したらすぐ近くの値で打ち直す**のが実際の使い方になる。確定のたびに欄を
+   * 空にする骨格のままだと、失敗のたびに全部打ち直しになる。選択はコア側にあって
+   * 消えないので、ここで戻すのは打った値だけでよい。
+   */
+  let lastInputs: {
+    numbers: Record<string, string>
+    points: Record<string, Point2>
+    choices: Record<string, string>
+  } | null = null
+
+  export function restoreLastInputs(): void {
+    if (lastInputs === null) return
+    numberText = { ...lastInputs.numbers }
+    points = { ...lastInputs.points }
+    choices = { ...lastInputs.choices }
+    focusFirstNumber()
   }
 
   /**
@@ -223,6 +280,7 @@
     const wasArmed =
       Object.values(numberText).some((text) => text !== '') ||
       Object.keys(points).length > 0 ||
+      Object.keys(choices).length > 0 ||
       ready
     reset()
     if (commandId !== defaultCommandId) commandId = defaultCommandId
@@ -232,6 +290,7 @@
   function reset(): void {
     numberText = {}
     points = {}
+    choices = {}
     if (previewTimer) clearTimeout(previewTimer)
     previewTimer = null
     previewedKey = null
@@ -323,6 +382,31 @@
     {/each}
     <span id="command-prompt" class="value" class:dim={!ready}>{prompt}</span>
   </div>
+
+  {#if choiceArgs.length}
+    <!-- 選択肢(D)。**既定を選んでおかない** — 押されるまで引数は揃わない -->
+    <div class="row">
+      {#each choiceArgs as spec (spec.name)}
+        <span class="label">{spec.label}</span>
+        {#each spec.options as option (option.value)}
+          <button
+            id={option.buttonId}
+            class:on={choices[spec.name] === option.value}
+            onclick={(event) => {
+              choices = { ...choices, [spec.name]: option.value }
+              // **押した直後にフォーカスを外す**。ボタンにフォーカスが残ったままだと、
+              // 続けて押すEnterを `onKeydown` が(ボタンの操作とみなして)無視するので、
+              // 「向きを選んで Enter」がどうやっても確定しない。
+              ;(event.currentTarget as HTMLElement).blur()
+              focusFirstNumber()
+            }}
+          >
+            {option.label}
+          </button>
+        {/each}
+      {/each}
+    </div>
+  {/if}
 
   <div class="row">
     {#each numberArgs as spec (spec.name)}

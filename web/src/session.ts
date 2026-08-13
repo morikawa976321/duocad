@@ -197,6 +197,32 @@ export interface PreviewPayload {
   }>
 }
 
+/**
+ * 1本の辺の折れ線(D・2026-08-14。`kernel.tessellate_edges` の1件そのまま)。
+ *
+ * `index` は**コアの数え方の1始まり**で、`fillet(edges=[...])` が食う添字と同じ。
+ * ここがずれると「指した辺と違う辺が丸まる」という、例外も出ない事故になる。
+ */
+export interface EdgeGeometry {
+  index: number
+  kind: string
+  length: number
+  closed: boolean
+  points: number[]
+}
+
+/**
+ * 辺の応答。**状態の配信ではない**(要求した接続にだけ届く。`PreviewPayload` と同じ扱い)。
+ *
+ * `revision` は要求した時点のBodyの版。**形が変われば版が上がる**ので、古い辺を
+ * 掴んだままフィレットをかける経路が閉じる(§7 添字は形状変更で壊れる、の辺版)。
+ */
+export interface EdgesPayload {
+  body_id: string
+  revision: number
+  edges: EdgeGeometry[]
+}
+
 export type ConnectionStatus = 'connecting' | 'open' | 'closed'
 
 export interface SessionHooks {
@@ -210,6 +236,8 @@ export interface SessionHooks {
   onStatus(status: ConnectionStatus): void
   /** プレビューが返ってきた(状態は変わっていない)。 */
   onPreview(payload: PreviewPayload): void
+  /** 頼んだ辺が返ってきた(D。状態は変わっていない)。 */
+  onEdges(payload: EdgesPayload): void
 }
 
 export interface Session {
@@ -249,6 +277,23 @@ export interface Session {
   ): void
   /** 名前つきの値を打ち直す(クリックで置いた図形の寸法を後から直す経路)。 */
   setParameter(name: string, value: number, clientOp: number): void
+  // ---------------------------------------------------------------- D: フィーチャ
+  /**
+   * フィーチャのverbを送る(領域押し出し・フィレット・面取り・矩形反復・円形反復)。
+   *
+   * **verbごとのメソッドを作らない**のは、引数を作るのが `CommandDef.build` の仕事で、
+   * ここがやることは「そのdictに `cmd` と `client_op` を足して流す」だけだから。
+   * verbごとに書き写すと、キー名を1文字打ち間違えた経路が**そのverbでだけ**静かに壊れる。
+   * **受け取れるverbの一覧はサーバの `FEATURE_COMMANDS` が正**で、そこに無い文字列は
+   * `unknown command` で返る(任意のメソッドを呼べる作りにしない、はサーバ側で担保する)。
+   */
+  runFeature(verb: string, args: Record<string, unknown>, clientOp: number): void
+  /**
+   * 1Bodyの辺を折れ線で取りに行く(応答は `onEdges`)。**状態配信ではない**ので
+   * 他のクライアントには何も起きない。フィレット・面取りを起動している間だけ呼ぶ
+   * (常時配ると27部品ぶんの辺が乗る。`Session.edges` のdocstring)。
+   */
+  getEdges(bodyId: string): void
   undo(): void
   redo(): void
   dispose(): void
@@ -300,6 +345,9 @@ export function createSession(hooks: SessionHooks): Session {
       preview_id?: number | null
       verb?: string
       bodies?: PreviewPayload['bodies']
+      body_id?: string
+      revision?: number
+      edges?: EdgeGeometry[]
     }
     try {
       message = JSON.parse(raw)
@@ -314,6 +362,12 @@ export function createSession(hooks: SessionHooks): Session {
         preview_id: message.preview_id ?? null,
         verb: message.verb ?? '',
         bodies: message.bodies ?? [],
+      })
+    } else if (message.type === 'edges') {
+      hooks.onEdges({
+        body_id: message.body_id ?? '',
+        revision: message.revision ?? 0,
+        edges: message.edges ?? [],
       })
     } else if (message.type === 'error') {
       hooks.onError(message.message ?? '(理由なし)', message.where ?? '?')
@@ -398,6 +452,12 @@ export function createSession(hooks: SessionHooks): Session {
     },
     setParameter(name, value, clientOp) {
       send({ cmd: 'set_parameter', name, value, client_op: clientOp })
+    },
+    runFeature(verb, args, clientOp) {
+      send({ cmd: verb, ...args, client_op: clientOp })
+    },
+    getEdges(bodyId) {
+      send({ cmd: 'get_edges', body_id: bodyId })
     },
     undo() {
       send({ cmd: 'undo' })

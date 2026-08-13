@@ -29,10 +29,17 @@
         {"cmd": "add_rectangle", "sketch_id": str, "corner": [u,v], "width", "height"}# C
         {"cmd": "add_arc", "sketch_id": str, "center", "radius", "start_deg", "end_deg"} # C
         {"cmd": "set_parameter", "name": str, "value": float, "client_op": int}       # C
+        {"cmd": "extrude", "regions": [{"sketch","index"}, ...], "distance", "mode"}  # D
+        {"cmd": "fillet", "edges": [int, ...], "radius": float, "body_id": str}       # D
+        {"cmd": "chamfer", "edges": [int, ...], "distance": float, "body_id": str}    # D
+        {"cmd": "pattern_rectangular", "sketch_id", "entities", "dx","dy","nx","ny"}  # D
+        {"cmd": "pattern_circular", "sketch_id", "entities", "center","count","total_angle"} # D
+        {"cmd": "get_edges", "body_id": str}                                          # D
 
     上り(server -> client)
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
         {"type": "preview", "preview_id": int|None, "verb": str, "bodies": [...]}
+        {"type": "edges", "body_id": str, "revision": int, "edges": [...]}            # D
         {"type": "error", "message": str, "where": str}
         {"type": "warning", "message": str}
 
@@ -124,6 +131,14 @@ DEFAULT_WEB_DIST = REPO_ROOT / "web" / "dist"
 #: (`speculative.py` の「戻さないもの」参照。QA 2026-08-13)。
 PREVIEWABLE_VERBS: dict = {
     "extrude_face": ("extrude", ("body_id", "face_index", "distance")),
+    # D(2026-08-14)。**この3つは `speculative` の「戻さないもの」の論法が成立する側**
+    # (同一seqの再適用しか起こさない = `speculative.py` が検算済みと書いている verb)。
+    # 反復(`pattern_*`)をここへ足していないのは安全のためではなく、**変わるのが
+    # スケッチの図形でソリッドではない**ため —— `preview` が返すのは形が変わったBodyだけで、
+    # 反復は1つもBodyを変えないので、載せても常に空の応答になる(幽霊はブラウザが描く)。
+    "extrude": ("extrude_regions", ("regions", "distance", "mode", "body_id")),
+    "fillet": ("fillet", ("edges", "radius", "body_id")),
+    "chamfer": ("chamfer", ("edges", "distance", "body_id")),
 }
 
 #: ブラウザから踏めるスケッチのコマンド -> (`Session` のメソッド名, 必須の引数名)。
@@ -145,6 +160,32 @@ SKETCH_COMMANDS: dict = {
     "set_parameter": ("set_parameter", ("name", "value")),
 }
 
+#: ブラウザから踏めるフィーチャのコマンド -> (`Session` のメソッド名, 必須の引数名)。
+#:
+#: **D(2026-08-14)で「AIからしか使えないverb」が無くなる場所**。ここに並ぶ5つは
+#: M2〜M3でコアに入り、F2でMCPに開いたが、**ブラウザからは1つも呼べなかった**
+#: (Cのスケッチと同じ片道)。`SKETCH_COMMANDS` と同じ流儀で、コアには何も足さず
+#: WebSocketに口を開けるだけ —— 開けた口が `PREVIEWABLE_VERBS` と同じ表に無いことに
+#: 意味があり、**ここに無いverbはソケットから呼べない**(文字列で任意のメソッドを
+#: 呼べる作りにしない)。**引数が1つでも欠けたら KeyError にする**(既定値で補うと、
+#: 打ち忘れた寸法や `mode` が黙って既定で入る)。
+#:
+#: `mode`(join/cut)を必須にしてあるのは、既定の `"join"` に落ちると
+#: **「切り取るつもりで足した」が黙って通る**ため。UIは人に選ばせてから送る。
+FEATURE_COMMANDS: dict = {
+    "extrude": ("extrude_regions", ("regions", "distance", "mode")),
+    "fillet": ("fillet", ("edges", "radius", "body_id")),
+    "chamfer": ("chamfer", ("edges", "distance", "body_id")),
+    "pattern_rectangular": (
+        "pattern_rectangular",
+        ("sketch_id", "entities", "dx", "dy", "nx", "ny"),
+    ),
+    "pattern_circular": (
+        "pattern_circular",
+        ("sketch_id", "entities", "center", "count", "total_angle"),
+    ),
+}
+
 
 class Session:
     """1つの文書を持つサーバ側の状態。WebSocketの接続とは独立(接続が切れても文書は残る)。"""
@@ -163,6 +204,7 @@ class Session:
         # sketch_id -> (署名, 領域つきペイロード)。領域の計算が重いので内容で引く(C)
         self._sketch_cache: dict = {}
         self._geometry_cache: dict = {}    # body_id -> (shape, tessellate結果)
+        self._edge_cache: dict = {}        # body_id -> (shape, tessellate_edges結果)(D)
         self._setup_floor_seq = 0  # load_step が積んだ最後のseq(これ以下はundoの対象外)
         self._listeners: list = []  # 文書が変わったときに呼ぶ購読者(下記 add_listener)
         self._suppress_events = 0  # >0 の間は `_emit` が配らない(プレビュー。`preview` 参照)
@@ -420,6 +462,38 @@ class Session:
             )
         self._geometry_cache[body_id] = (body.shape, result)
         return result
+
+    def edges(self, body_id: str) -> dict:
+        """1Bodyの辺を折れ線で返す(D・2026-08-14。キャッシュ付き)。
+
+        戻り値: `{"body_id", "revision", "edges": [kernel.tessellate_edges の1件, ...]}`
+
+        **`state` にも `delta` にも入れない**。辺が要るのはフィレット・面取りを起動して
+        いる間だけで、常時配ると27部品(2835面)の初回配信にその数倍の折れ線が乗る ——
+        M3.5で差分配信にして稼いだぶんを、使わない辺の転送で丸ごと使い切ることになる。
+        **要るときに要るBodyだけ**取りに来させる(`Server._dispatch` の `get_edges`)。
+
+        `revision` を一緒に返すのは、**クライアントが「今の形の辺か」を判定できるように**
+        するため。押し出しで形が変われば版が上がるので、古い辺を指したまま
+        フィレットをかける(＝別の辺が丸まる)経路が閉じる(§7「面の添字は形状変更で壊れる」の
+        辺版。添字の持ち越しはここでも許さない)。
+        """
+        body = self._find_body(body_id)
+        if body.shape is None:
+            raise ValueError(f"body {body_id!r} has no shape (辺を数えられない)")
+        # **不可視Bodyの辺は配らない**(`geometry()` と同じ規律。QA指摘 2026-08-14)。
+        # 配ると、隠したはずの部品の辺だけが宙に浮いて見え、しかも指せる ——
+        # 見えているものと指せるものを一致させる、という辺のピッキングの前提が崩れる。
+        if not body.visible:
+            raise ValueError(f"body {body_id!r} is not visible: 隠れているものの辺は指せない")
+        revision = self.body_revision(body_id)
+        cached = self._edge_cache.get(body_id)
+        if cached is not None and cached[0] is body.shape:
+            described = cached[1]
+        else:
+            described = kernel.tessellate_edges(body.shape, self.deviation)
+            self._edge_cache[body_id] = (body.shape, described)
+        return {"body_id": body_id, "revision": revision, "edges": described}
 
     def delta(self, known_revisions: dict) -> dict:
         """クライアントが持っている版との差分だけを返す(未知のIDは必ずbodiesへ)。
@@ -719,9 +793,19 @@ class Session:
         mode: str = "join",
         body_id: Optional[str] = None,
     ) -> dict:
-        """スケッチ領域の押し出し(`verbs.extrude`)。既存の `extrude`(面)とは別。"""
+        """スケッチ領域の押し出し(`verbs.extrude`)。既存の `extrude`(面)とは別。
+
+        **`regions` は `RegionRef` でも素のdictでもよい**(D・2026-08-14)。MCPは
+        `RegionRef` を作ってから渡すが、ブラウザからはJSONのdict(`{"sketch","index"}`)で
+        届く —— 変換をここに1つ置くことで、両方の口が同じメソッドを叩ける
+        (呼ぶ側ごとに verb の引数の形が違うと、片方だけ通る経路が生まれる)。
+        """
+        refs = [
+            item if isinstance(item, region.RegionRef) else region.RegionRef.from_dict(item)
+            for item in regions
+        ]
         operation = extrude_regions_verb(
-            self.document, regions, float(distance), mode=mode, body_id=body_id
+            self.document, refs, float(distance), mode=mode, body_id=body_id
         )
         changed_body_id = operation.args["body_id"]
         return self._after_logged_verb({
@@ -1072,6 +1156,25 @@ class Server:
                 )
                 applied["client_op"] = message.get("client_op")
                 await self._push(connection, applied=applied)
+            # -------------------------------------------------- D: フィーチャ(手でかける経路)
+            # スケッチの5コマンドと同じ形。**失敗は握りつぶさず必ず画面へ返す**(下の except)——
+            # とくにフィレットは例外を投げずに `IsDone()=False` で失敗する種類の失敗が
+            # あり、コア側が例外へ変換している(§7)。ここで握ると「押したのに何も
+            # 起きない」になり、原因が半径にあることが人に伝わらない。
+            elif command in FEATURE_COMMANDS:
+                method, keys = FEATURE_COMMANDS[command]
+                applied = self._apply(
+                    getattr(self.session, method),
+                    **{key: message[key] for key in keys},
+                )
+                applied["client_op"] = message.get("client_op")
+                await self._push(connection, applied=applied)
+            # -------------------------------------------------- D: 辺の折れ線(要るときだけ)
+            # **配信しない**(`preview` と同じ扱い)。文書は変わらないので状態を配る理由が無く、
+            # 要求した接続にだけ返す。`Session.edges` のdocstringが「常時配らない」理由を持つ。
+            elif command == "get_edges":
+                result = self.session.edges(message["body_id"])
+                await _send(connection, {"type": "edges", **result})
             elif command == "preview":
                 result = self.session.preview(message["verb"], message.get("args") or {})
                 await _send(

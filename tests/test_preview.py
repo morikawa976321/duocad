@@ -177,8 +177,11 @@ def test_preview_refuses_unknown_verbs_and_arguments(session: Session) -> None:
             {"body_id": body.id, "face_index": face_index, "distance": 1.0, "client_op": 7},
         )
 
-    # Bの範囲は extrude_face 1つ(C・Dが足すときはここも足す)
-    assert set(PREVIEWABLE_VERBS) == {"extrude_face"}
+    # **登録されているverbを1つずつ書き出す**(増えたことにここで気づけるようにする)。
+    # Bは `extrude_face` の1つ、Dが領域押し出し・フィレット・面取りを足した
+    # (反復は形を変えるのがスケッチでソリッドではないので載せていない。
+    # 契約は `tests/test_feature_ui.py` の「プレビュー」節が正)。
+    assert set(PREVIEWABLE_VERBS) == {"extrude_face", "extrude", "fillet", "chamfer"}
 
 
 def test_preview_does_not_poison_the_geometry_cache(session: Session) -> None:

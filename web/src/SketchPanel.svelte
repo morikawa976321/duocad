@@ -28,6 +28,8 @@
     onLookAt,
     onSetParameter,
     onSelectRegion,
+    selectedEntities = [],
+    onToggleEntity = () => {},
   }: {
     sketches: SketchState[]
     activeSketchId: string | null
@@ -41,6 +43,14 @@
     onLookAt: () => void
     onSetParameter: (name: string, value: number) => void
     onSelectRegion: (sketchId: string, index: number) => void
+    /**
+     * 反復の対象に選んである図形(D・2026-08-14)。**共有選択集合とは別物**で、
+     * コアの選択集合に図形は入らない(`commands/command.ts` の `EntitiesArgSpec`)。
+     * 3Dでクリックしても図形は選べない(平面のクリックは点か領域になる)ので、
+     * **図形を選べる場所はこの一覧だけ**である。
+     */
+    selectedEntities?: string[]
+    onToggleEntity?: (entityId: string) => void
   } = $props()
 
   const active = $derived(sketches.find((item) => item.sketch_id === activeSketchId) ?? null)
@@ -116,8 +126,22 @@
           <span class="value dim">まだ図形が無い(平面をクリックして描く)</span>
         {/if}
         {#each active.entities as entity (entity.entity_id)}
-          <div class="item" data-entity={entity.entity_id} data-kind={entity.kind}>
-            <span class="label">{entity.kind}</span>
+          <div
+            class="item"
+            class:picked={selectedEntities.includes(entity.entity_id)}
+            data-entity={entity.entity_id}
+            data-kind={entity.kind}
+            data-picked={selectedEntities.includes(entity.entity_id)}
+          >
+            <!-- 反復の対象に取る/外す(D)。種別のところがそのままボタン -->
+            <button
+              class="pick"
+              id={`entity-${entity.entity_id}`}
+              title="反復の対象にする"
+              onclick={() => onToggleEntity(entity.entity_id)}
+            >
+              {entity.kind}
+            </button>
             {#each shown(entity) as [key, value] (key)}
               <label class="param" for={`param-${entity.entity_id}-${key}`}>{key}</label>
               <input
@@ -240,6 +264,11 @@
   }
 
   button.region.on {
+    border-color: #ffb454;
+  }
+
+  /* 反復の対象(D)。選択中の領域と同じ橙で揃える(選ばれている、の意味を1色に保つ) */
+  .item.picked button.pick {
     border-color: #ffb454;
   }
 </style>

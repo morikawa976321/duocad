@@ -45,6 +45,19 @@ export interface FaceRef {
   faceIndex: number
 }
 
+/** 辺を一意に指す(D・2026-08-14。添字はコアの数え方の1始まり)。 */
+export interface EdgeRef {
+  bodyId: string
+  edgeIndex: number
+}
+
+/** サーバが配る1本の辺の折れ線(`kernel.tessellate_edges` の1件。session.ts と同じ形)。 */
+export interface EdgeLine {
+  index: number
+  kind: string
+  points: number[]
+}
+
 /** 1Bodyぶんの形状の差し替え。`geometry: null` は非表示・削除(メッシュを取り除く)。 */
 export interface BodyGeometryUpdate {
   bodyId: string
@@ -57,6 +70,12 @@ export type PickMode = 'replace' | 'add' | 'remove'
 export interface PickEvent {
   /** 当たった面(Body+添字)。外したら null。**スケッチモード中は常に null**(下記)。 */
   hit: FaceRef | null
+  /**
+   * 当たった辺(D・2026-08-14)。**辺を出しているときだけ** null 以外になる
+   * (`showEdges`)。辺が当たったときは `hit` を見ない —— 辺は面の上に重なっているので、
+   * 両方返すと呼び出し側が毎回優先順位を書くことになる。
+   */
+  edge: EdgeRef | null
   /** Shift=追加 / Ctrl(Mac は Meta)=除去 / 修飾なし=置き換え。 */
   mode: PickMode
   /**
@@ -113,12 +132,33 @@ export interface Viewport {
    * 確定した選択と**明確に違う色**で描く —— これが「交互操作が人間側から見える」唯一の
    * 場所である(実装計画書§8b B)。
    *
-   * **辺・頂点・領域は3Dでは描かない**。ここが持っているのは面ごとの三角形メッシュだけで、
-   * 個々の位相辺のジオメトリを持っていないため(面の境界線は `EdgesGeometry` による
-   * 見た目であって、コアの辺の添字とは対応しない)。辺の選択は `SelectionPanel` が
-   * 一覧と件数で見せる。3Dで辺を色分けするのは、面ごとに辺を送る作りが要るので D の債務。
+   * **頂点・領域は3Dでは色分けしない**(領域はスケッチ側で強調する)。**辺は D で
+   * できるようになった** —— `showEdges` でコアの添字つきの折れ線を渡してある間だけ、
+   * `highlightEdges` が同じ規律(user=橙 / proposed=水色)で色を変える。
    */
   highlight(refs: FaceRef[], origin: 'user' | 'proposed'): void
+  // ------------------------------------------------------------------ D: 辺
+  /**
+   * 辺の折れ線を出す(`bodyId` に null を渡すと消える)。**出している間だけ辺を指せる**。
+   *
+   * 常時出さないのは2つの理由による。(1)27部品ぶんの辺はサーバから取るだけでも重い
+   * (`Session.edges` のdocstring)。(2)辺は面の手前に重なるので、常時出すと
+   * 面を狙うクリックが辺に取られ、M1の「面を選んで押し出す」が遅くなる。
+   *
+   * **奥の辺も見え、奥の辺も指せる**(深度検査をしない)。three.js の線のレイキャストは
+   * 面による遮蔽を見ないので、**見えているものと指せるものを一致させる**にはこちらへ
+   * 揃えるしかない(見た目だけ隠すと「見えない辺が選ばれる」になる)。手前の辺のほうが
+   * レイに近いので、素直にクリックすれば手前が取れる。
+   */
+  showEdges(bodyId: string | null, edges: EdgeLine[]): void
+  /** 選択中の辺を強調する(面の `highlight` と同じ規律)。 */
+  highlightEdges(refs: EdgeRef[], origin: 'user' | 'proposed'): void
+  /**
+   * 辺の上の点の画面座標(無理なら null)。面の `project` の辺版で、
+   * **実機検査が本物のクリックで辺を選ぶ**ために要る穴。
+   * 返す前に**その画素からのレイが実際にこの辺へ当たること**を確かめる。
+   */
+  projectEdge(bodyId: string, edgeIndex: number): { x: number; y: number } | null
   /**
    * 確定前の形(プレビュー)を重ねる。**本物のBodyは隠し、幽霊を代わりに描く**。
    *
@@ -164,6 +204,15 @@ export interface Viewport {
   setActiveSketch(sketchId: string | null): void
   /** スケッチ平面を正面から見る視点へ移す(無いと描きにくい)。 */
   lookAtSketch(sketchId: string): void
+  /**
+   * 今あるもの全体が入る視点へ戻す(D・2026-08-14)。
+   *
+   * **`lookAtSketch` の戻り道**。スケッチに入ると図形の大きさに合わせて寄るので、
+   * 半径4mmの円を描いた後にモードを抜けると、40mmの板が画面から外れたままになる
+   * (M1は視点が動かなかったので要らなかった)。初回に1度だけ効いていた自動フレームを、
+   * 人からも押せるようにしただけで、新しい計算は増やしていない。
+   */
+  frameAll(): void
   /** スケッチ平面上の (u,v) の画面座標。実機検査が**本物のクリックで描く**ために要る。 */
   projectSketchPoint(sketchId: string, u: number, v: number): { x: number; y: number } | null
   /** 領域の画面座標(実機検査が領域を本物のクリックで選ぶために要る)。 */
@@ -186,6 +235,10 @@ const PROPOSED_COLOR = 0x36d1ff
 /** 確定前の形。半透明で「まだ無いもの」に見せる。 */
 const PREVIEW_COLOR = 0x7ee081
 const EDGE_COLOR = 0x20262d
+/** 選べる辺(D・2026-08-14)。面の境界線(`EDGE_COLOR`)と**見分けがつく明るさ**にする。 */
+const PICK_EDGE_COLOR = 0xbfd4ea
+/** 辺の当たり判定の太さ[画素]。細すぎると掴めず、太すぎると隣の辺が取れる。 */
+const EDGE_PICK_PIXELS = 6
 const BACKGROUND_COLOR = 0x161a1f
 
 /** クリックとドラッグ(視点回転)の境目。これ以上動いたら選択ではなく回転とみなす。 */
@@ -333,6 +386,10 @@ export function createViewport(container: HTMLElement): Viewport {
     for (const entry of entries) {
       clearBody(entry.bodyId)
       if (entry.geometry) buildBody(entry.bodyId, entry.geometry)
+      // 形が変わったBodyの辺は**その場で消す**(D)。古い添字の線を残すと、指した線と
+      // 違う辺が丸まる(§7の「添字は形状変更で壊れる」の辺版)。要るなら呼び出し側が
+      // 版の変化を見て取り直す(`App.svelte`)。
+      if (entry.bodyId === edgeBodyId) clearEdges()
     }
     rebuildPickIndex()
 
@@ -391,6 +448,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const stale = [...bodies.keys()].filter((bodyId) => !valid.has(bodyId))
     if (stale.length === 0) return
     clearPreview() // 消えるBodyの幽霊が取り残されないように(update と同じ理由)
+    if (edgeBodyId !== null && stale.includes(edgeBodyId)) clearEdges()
     for (const bodyId of stale) clearBody(bodyId)
     rebuildPickIndex()
   }
@@ -472,6 +530,147 @@ export function createViewport(container: HTMLElement): Viewport {
       if (x < 0 || y < 0 || x > width || y > height) continue
       const hit = pickAt(x, y)
       if (hit && hit.bodyId === bodyId && hit.faceIndex === faceIndex) return { x, y }
+    }
+    return null
+  }
+
+  // ------------------------------------------------------------------ D: 辺(選べる線)
+  //
+  // **フィレット・面取りが人間側から使えるようになる場所**。それまで画面に出ていた
+  // 輪郭線は `EdgesGeometry` による見た目で、コアの辺の添字とは対応していなかった
+  // (どの線を指してもフィレットの引数にならない)。ここで描くのはサーバが配る
+  // `kernel.tessellate_edges` の折れ線で、**1本1本がコアの添字を持っている**。
+  //
+  // ソリッドともスケッチとも別のグループに持つ(`update()`/`prune()` は `root` しか
+  // 触らないので、押し出しで辺のグループが巻き込まれない)。
+  const edgeRoot = new THREE.Group()
+  scene.add(edgeRoot)
+
+  const pickEdgeMaterial = new THREE.LineBasicMaterial({
+    color: PICK_EDGE_COLOR,
+    // **深度検査をしない**(奥の辺も見え、奥の辺も指せる)。three.js の線のレイキャストは
+    // 面による遮蔽を見ないので、見た目だけ隠すと「見えない辺が選ばれる」になる。
+    depthTest: false,
+  })
+  const pickEdgeSelectedMaterial = new THREE.LineBasicMaterial({
+    color: HIGHLIGHT_COLOR,
+    depthTest: false,
+  })
+  const pickEdgeProposedMaterial = new THREE.LineBasicMaterial({
+    color: PROPOSED_COLOR,
+    depthTest: false,
+  })
+
+  /** 今出している辺(**1つのBodyぶんだけ**)。空なら辺モードではない。 */
+  let edgeLines: THREE.Line[] = []
+  let edgeBodyId: string | null = null
+  /** 今出している辺の元になった配列(**同じものを渡されたら作り直さない**ための印)。 */
+  let edgeSource: EdgeLine[] | null = null
+  const edgeDisposables: Array<{ dispose(): void }> = []
+
+  function clearEdges(): void {
+    for (const line of edgeLines) edgeRoot.remove(line)
+    for (const item of edgeDisposables) item.dispose()
+    edgeDisposables.length = 0
+    edgeLines = []
+    edgeBodyId = null
+    edgeSource = null
+  }
+
+  function showEdges(bodyId: string | null, edges: EdgeLine[]): void {
+    // **同じものを渡されたら何もしない**。呼び出し側(`App.svelte`)は選択が変わるたびに
+    // 呼び直すので、毎回作り直すと**辺を1本クリックするたびに数百本ぶんの
+    // BufferGeometry を捨てて作り直す**ことになる(27部品では1Bodyで600本超)。
+    if (bodyId !== null && bodyId === edgeBodyId && edges === edgeSource) return
+    clearEdges()
+    if (bodyId === null || edges.length === 0) return
+    edgeBodyId = bodyId
+    edgeSource = edges
+    for (const edge of edges) {
+      // 2点(=6要素)未満は線にならない。`kernel.tessellate_edges` は失敗時も端点2点を
+      // 返す契約なので**ここへは届かないはず**だが、届いたときに黙って壊れた線を
+      // 作らないための番人として残す。
+      if (edge.points.length < 6) continue
+      const geometry = new THREE.BufferGeometry()
+      geometry.setAttribute(
+        'position',
+        new THREE.BufferAttribute(new Float32Array(edge.points), 3),
+      )
+      geometry.computeBoundingSphere()
+      const line = new THREE.Line(geometry, pickEdgeMaterial)
+      line.renderOrder = 10 // 深度を書かないぶん、描く順序で面より手前に出す
+      line.userData.bodyId = bodyId
+      line.userData.edgeIndex = edge.index
+      edgeRoot.add(line)
+      edgeLines.push(line)
+      edgeDisposables.push(geometry)
+    }
+  }
+
+  function highlightEdges(refs: EdgeRef[], origin: 'user' | 'proposed'): void {
+    const selected = origin === 'proposed' ? pickEdgeProposedMaterial : pickEdgeSelectedMaterial
+    const keys = new Set(
+      refs.filter((ref) => ref.bodyId === edgeBodyId).map((ref) => ref.edgeIndex),
+    )
+    for (const line of edgeLines) {
+      line.material = keys.has(line.userData.edgeIndex as number) ? selected : pickEdgeMaterial
+    }
+  }
+
+  /** 画面1画素ぶんの世界座標の長さ(当たり判定の太さを画素で決めるため)。 */
+  function worldPerPixel(): number {
+    const { height } = size()
+    const distance = Math.max(camera.position.distanceTo(controls.target), 1e-6)
+    return (2 * Math.tan((camera.fov * Math.PI) / 360) * distance) / height
+  }
+
+  function edgeAt(offsetX: number, offsetY: number): EdgeRef | null {
+    if (edgeLines.length === 0) return null
+    const { width, height } = size()
+    const ndc = new THREE.Vector2((offsetX / width) * 2 - 1, -(offsetY / height) * 2 + 1)
+    raycaster.setFromCamera(ndc, camera)
+    // 線の当たり判定の太さは**世界座標**で指定する。画素で決めないと、寄れば寄るほど
+    // 掴みにくくなる(20mmの立方体と2835面の筐体で同じ操作感にならない)。
+    const previous = raycaster.params.Line?.threshold
+    raycaster.params.Line = { threshold: worldPerPixel() * EDGE_PICK_PIXELS }
+    const hits = raycaster.intersectObjects(edgeLines, false)
+    if (previous !== undefined) raycaster.params.Line = { threshold: previous }
+    if (hits.length === 0) return null
+    const bodyId = hits[0].object.userData.bodyId
+    const edgeIndex = hits[0].object.userData.edgeIndex
+    if (typeof bodyId !== 'string' || typeof edgeIndex !== 'number') return null
+    return { bodyId, edgeIndex }
+  }
+
+  /** 折れ線の道のりの `fraction` の位置(0=始点 1=終点)。 */
+  function pointAlong(line: THREE.Line, fraction: number): THREE.Vector3 | null {
+    const position = line.geometry.getAttribute('position')
+    if (!position || position.count < 2) return null
+    const at = fraction * (position.count - 1)
+    const first = Math.min(Math.floor(at), position.count - 2)
+    const t = at - first
+    const a = new THREE.Vector3(position.getX(first), position.getY(first), position.getZ(first))
+    const b = new THREE.Vector3(
+      position.getX(first + 1),
+      position.getY(first + 1),
+      position.getZ(first + 1),
+    )
+    return a.lerp(b, t)
+  }
+
+  function projectEdge(bodyId: string, edgeIndex: number): { x: number; y: number } | null {
+    if (edgeBodyId !== bodyId) return null
+    const line = edgeLines.find((candidate) => candidate.userData.edgeIndex === edgeIndex)
+    if (!line) return null
+    // **端点は避ける**(隣の辺と共有しているので、そこを狙うと隣が取れることがある)。
+    // 中ほどから順に試し、**実際にその辺へ当たる画素**だけを返す(面の `project` と同じ規律)。
+    for (const fraction of [0.5, 0.35, 0.65, 0.2, 0.8, 0.1, 0.9]) {
+      const point = pointAlong(line, fraction)
+      if (point === null) continue
+      const screen = toScreen(point)
+      if (screen === null) continue
+      const hit = edgeAt(screen.x, screen.y)
+      if (hit && hit.bodyId === bodyId && hit.edgeIndex === edgeIndex) return screen
     }
     return null
   }
@@ -803,13 +1002,28 @@ export function createViewport(container: HTMLElement): Viewport {
       const plane = planePointAt(event.offsetX, event.offsetY)
       pickListener?.({
         hit: null,
+        edge: null,
         mode,
         region,
         point: plane === null ? null : { sketchId: activeSketchId, ...plane },
       })
       return
     }
-    pickListener?.({ hit: pickAt(event.offsetX, event.offsetY), mode, point: null, region: null })
+    // **辺を出しているときは辺が先**(D)。辺は面の上に重なっているので、面より後に見ると
+    // 必ず面が勝つ。出していないときは `edgeAt` が即 null を返すので、M1の面のピックは
+    // これまでと同じ経路を通る。
+    const edge = edgeAt(event.offsetX, event.offsetY)
+    if (edge !== null) {
+      pickListener?.({ hit: null, edge, mode, point: null, region: null })
+      return
+    }
+    pickListener?.({
+      hit: pickAt(event.offsetX, event.offsetY),
+      edge: null,
+      mode,
+      point: null,
+      region: null,
+    })
   }
 
   function onPointerMove(event: PointerEvent): void {
@@ -843,6 +1057,9 @@ export function createViewport(container: HTMLElement): Viewport {
       planeMoveListener = listener
     },
     highlight,
+    showEdges,
+    highlightEdges,
+    projectEdge,
     showPreview,
     clearPreview,
     project,
@@ -850,6 +1067,10 @@ export function createViewport(container: HTMLElement): Viewport {
     showSketchGhost,
     setActiveSketch,
     lookAtSketch,
+    frameAll() {
+      camera.up.set(0, 1, 0) // スケッチの v 軸へ倒したままだと、戻したのに傾いて見える
+      frameToContent()
+    },
     projectSketchPoint,
     projectRegion,
     resize: applySize,
@@ -862,6 +1083,10 @@ export function createViewport(container: HTMLElement): Viewport {
       renderer.domElement.removeEventListener('pointermove', onPointerMove)
       clearPreview()
       clearGhost()
+      clearEdges()
+      pickEdgeMaterial.dispose()
+      pickEdgeSelectedMaterial.dispose()
+      pickEdgeProposedMaterial.dispose()
       for (const sketchId of [...sketches.keys()]) clearSketch(sketchId)
       sketchMaterial.dispose()
       sketchGhostMaterial.dispose()

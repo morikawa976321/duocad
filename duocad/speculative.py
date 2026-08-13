@@ -46,7 +46,10 @@
   形状ではなく**巻き戻し後と同じ形状**なので、誤ったundoにはならない。
 
   **この論法が成立するのは「同一seqの再適用しか起こさないverb」に限る**
-  (`extrude_face` / `fillet` / `chamfer` — 検算済み。QA 2026-08-13)。
+  (`extrude_face` / `fillet` / `chamfer` — 検算済み。QA 2026-08-13。
+  **領域の `extrude` もこの側**である — `verbs/extrude.py` の `_do_extrude` は
+  記録された領域とmodeで**その操作だけ**を再適用し、操作ログを頭から再生しない。
+  D(2026-08-14)で `PREVIEWABLE_VERBS` へ載せる前に確認した。QA 2026-08-14)。
   `set_parameter` のように `parameters.rebuild` が**操作ログを頭から再生する**verbは、
   再生の途中で**過去のseqのスナップショットを別の値で作り直す**。文書は戻せても
   `_SNAPSHOTS` は戻らないので、中断したプレビューの形状が後の実undoで復元されうる。

@@ -25,6 +25,9 @@ M1で追加(2026-08-10。ビューポートと extrude_face のためにOCPが�
     tessellate(shape, deviation) -> dict    **面ごと**の三角形群(ピッキングに面単位のグループが要る)
     extrude_face_on_shape(shape, i, d) -> dict   面iを距離dだけ押し出した新形状＋由来の射影
 
+D(2026-08-14)で追加:
+    tessellate_edges(shape, deviation) -> list  **辺ごと**の折れ線(辺のピッキングに要る)
+
 M2で追加(2026-08-11。スケッチ平面・領域検出・領域押し出しの幾何):
     require_planar_face(shape, face_index) -> None
     face_of(shape, face_index) -> TopoDS_Face
@@ -63,6 +66,7 @@ from OCP.BRepGProp import BRepGProp, BRepGProp_Face
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
 from OCP.BRepTools import BRepTools
+from OCP.GCPnts import GCPnts_AbscissaPoint, GCPnts_QuasiUniformDeflection
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 from OCP.GProp import GProp_GProps
 from OCP.IFSelect import IFSelect_ReturnStatus
@@ -1134,6 +1138,64 @@ def edge_index_of(shape: "TopoDS_Shape", edge: Any) -> int:
         if shape_map.FindKey(index).IsSame(edge):
             return index
     raise ValueError("edge is not part of the shape")
+
+
+def tessellate_edges(
+    shape: "TopoDS_Shape",
+    deviation: float = DEFAULT_DEVIATION,
+) -> List[dict]:
+    """辺を1始まりの添字つきの**折れ線**にする(D・2026-08-14)。
+
+    `tessellate` の辺版。面がクリックで選べるのは面ごとの三角形を配っているからで、
+    **辺も同じように配らないと人は辺を指せない**(それまでの画面に出ていた輪郭線は
+    three.js の `EdgesGeometry` による見た目であって、コアの辺の添字とは対応しない)。
+    フィレット・面取りは「どの辺か」を選べないと使えないので、ここが無いと
+    **その2つのverbは人間側から永久に使えない**(実装計画書§8b D)。
+
+    戻り値(素の値だけ):
+        [{"index": int, "kind": "line"|"circle"|"other", "length": float,
+          "closed": bool, "points": [x,y,z, x,y,z, ...]}, ...]
+
+    `index` は `edge_count` / `edge_of` / `fillet(edges=[...])` と**同じ数え方**
+    (`_edge_map` の1始まり)。ここがずれると「指した辺と違う辺が丸まる」という、
+    例外も出ない静かな事故になる —— `query.describe_edges` が build123d の列挙順を
+    使わないのと同じ理由で、添字は必ず `_edge_map` から取る。
+
+    折れ線は `GCPnts_QuasiUniformDeflection` で `deviation`(mm)以内に収める
+    (面の三角形分割と同じ偏差を渡せば、線が面から浮かない)。直線は2点、円は
+    偏差ぶんの分割数になる。**分割に失敗した辺は端点だけの2点で返す**(黙って
+    落とすと、その辺だけ画面から消えて「指せない辺」になり原因が分からない)。
+    """
+    if shape is None or shape.IsNull():
+        raise ValueError("cannot tessellate the edges of an empty shape")
+    if not deviation > 0:
+        raise ValueError(f"deviation must be positive (mm), got {deviation!r}")
+
+    shape_map = _edge_map(shape)
+    described: List[dict] = []
+    for index in range(1, shape_map.Extent() + 1):
+        edge = TopoDS.Edge_s(shape_map.FindKey(index))
+        adaptor = BRepAdaptor_Curve(edge)
+        points: List[float] = []
+        sampler = GCPnts_QuasiUniformDeflection(adaptor, float(deviation))
+        if sampler.IsDone() and sampler.NbPoints() >= 2:
+            for number in range(1, sampler.NbPoints() + 1):
+                point = sampler.Value(number)
+                points.extend([float(point.X()), float(point.Y()), float(point.Z())])
+        else:
+            for parameter in (adaptor.FirstParameter(), adaptor.LastParameter()):
+                point = adaptor.Value(parameter)
+                points.extend([float(point.X()), float(point.Y()), float(point.Z())])
+        described.append(
+            {
+                "index": index,
+                "kind": classify_edge(edge),
+                "length": float(GCPnts_AbscissaPoint.Length_s(adaptor)),
+                "closed": bool(edge.Closed()),
+                "points": points,
+            }
+        )
+    return described
 
 
 def _edge_at(shape_map: "TopTools_IndexedMapOfShape", edge_index: int) -> Any:
