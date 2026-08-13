@@ -34,11 +34,13 @@ duocad> node web/scripts/acceptance.mjs
 | **AI** | MCPツールとして呼べ／**述語**または明示参照で引数を与えられ／**結果と失敗が構造化して返る** |
 
 **結果: 19/19（人間） / 19/19（AI）**。以下は受入スクリプトが実際に動かして記録したもの。
+ただし**表の全部が `acceptance.mjs` だけで閉じているわけではない** —— Esc・失敗の返り方・
+ゴムひもは別の場所が支えている。表の下の**「根拠の所在」を必ず併せて読むこと**。
 
 | # | 操作 | 人間 | AI | 実際にやったこと（人間側 / AI側） |
 |---|---|---|---|---|
 | 1 | `sketch_create` | ✅ | ✅ | `XY` ボタン → そのままモードへ入る / `base_plane: "XZ"` |
-| 2 | `add_line` | ✅ | ✅ | 2点をクリック（確定前はゴムひもで見える） / `p0`,`p1` |
+| 2 | `add_line` | ✅ | ✅ | 2点をクリックして線分が1本増える（**アサートしたのはここまで**。ゴムひも描画そのものは見ていない → 下の「根拠の所在」） / `p0`,`p1` |
 | 3 | `add_circle` | ✅ | ✅ | 中心をクリック → 半径10を打つ → Enter / `center`,`radius` |
 | 4 | `add_rectangle` | ✅ | ✅ | 左下をクリック → 幅60・高さ40 → Enter / `corner`,`width`,`height` |
 | 5 | `add_arc` | ✅ | ✅ | 中心をクリック → 半径・開始角・終了角 / 同じ4引数 |
@@ -57,10 +59,48 @@ duocad> node web/scripts/acceptance.mjs
 | 18 | `undo` | ✅ | ✅ | undoボタン（フィレットが戻る 面7→6） / `undo`（`undone` が返る） |
 | 19 | `redo` | ✅ | ✅ | redoボタン（面6→7） / `redo`（`redone` が返る） |
 
+### 根拠の所在 — 上の ✅ を、どのハーネスの何が支えているか
+
+**判定は据え置きだが、「どこで確かめたか」を取り違えないための節**（2026-08-14のQAの指摘で追記）。
+表の ✅ は `acceptance.mjs` だけで閉じておらず、**一部は別のハーネスと pytest が持っている**。
+
 **プレビュー・Esc・undo は骨格が1つ**（`web/src/commands/CommandHost.svelte`）なので、
-コマンドごとの再確認はしていない。代表確認は `extrude_face`（プレビュー）・`fillet`（Esc）・
-`fillet`/`pattern_rectangular`（undo）で、これは **verbごとに状態機械を作らない**という
-タスクBの決定に立った論法である（コマンド定義に依らない部分を代表1件で見ている）。
+コマンドごとの再確認はしていない。**verbごとに状態機械を作らない**というタスクBの決定に
+立った論法である（コマンド定義に依らない部分を代表1件で見る）。ただし代表1件の**置き場所は
+ハーネスによって違う**:
+
+| 見るもの | 実際にアサートしている場所 | 何を見ているか |
+|---|---|---|
+| **プレビュー** | `acceptance.mjs` の `extrude_face` | 距離を打つと `previewing === true` になり、確定前に形が出る |
+| **Escで中断** | **`smoke.mjs` の `extrude_face` 経路**（`acceptance.mjs` ではない） | Escで `previewing === false` に戻り、**操作ログ・`applied_count`・体積が1つも動かず**、距離の入力欄も空に戻る |
+| **undo** | `acceptance.mjs` の `fillet`（面 7→6）と `pattern_rectangular`（展開が戻る） | 形と件数が実際に戻る |
+
+**`acceptance.mjs` にはEsc中断のアサーションは無い。** このスクリプトにも `Escape` の打鍵は
+2箇所あるが、それは**スケッチの道具から抜けるため**の操作で、中断の検証ではない。
+§0の「Escで中断できる」を支えているのは `smoke.mjs` の側である。
+
+**AI側の「失敗が構造化して返る」は pytest が持っている。** `acceptance.mjs` は**成功経路が中心**で、
+わざと失敗させる経路を通していない（失敗したら ❌ を記録して次へ進む作りであって、
+失敗の**返り方**を検査する作りではない）。この条件を実際に守っているのは次の10件で、
+2026-08-14に名指しで走らせて**全て緑**であることを確認した:
+
+- `test_mcp_verbs.py`: `test_a_missing_body_is_reported_as_not_found`（`code: not_found` と
+  `exception: KeyError`。**例外のテキストをそのまま投げない**）/
+  `test_a_bad_value_is_reported_as_invalid_argument`（`code: invalid_argument`）/
+  `test_a_failed_verb_leaves_the_document_untouched` / `test_the_error_says_which_tool_failed`
+  （`tool` を必ず載せる —— AIが並行して呼ぶときどれの失敗か分かるように）/
+  `test_an_execution_error_is_not_a_protocol_error`（**実行時の失敗は `isError` で返す**。
+  JSON-RPCエラーにするとAIに理由が届かない）/ `test_undo_with_nothing_to_undo_is_a_structured_failure` /
+  `test_a_failed_tool_fires_nothing`
+- `test_mcp_selection.py`: `test_an_unknown_op_comes_back_with_the_valid_ones` /
+  `test_a_type_error_in_a_predicate_is_also_self_repairable` /
+  `test_an_unknown_predicate_kind_is_reported_the_same_way`（**AIが自分で直せる形で返る**）
+
+**同様に、表の `add_line` の「ゴムひも」も `acceptance.mjs` はアサートしていない** ——
+確かめたのは「2点クリックで `kind: "line"` の図形が1本増える」ところまでである。
+ゴムひも（確定前の追従描画）を実際に見ているのは人の目と `smoke` 系であって、この表ではない。
+なお `acceptance.mjs` が出す `add_line` の一行コメントは今も「ゴムひもで確定前の線が見える」と
+書いており、**スクリプト側の文言はアサーションより広い**。文言の直しは別途（§7）。
 
 ---
 
@@ -192,7 +232,7 @@ splineが出る形で、v1の受入に必要な差別化点はすでに2章で�
 
 ## 7. 起票候補（この受入では直していない）
 
-**1件だけ。製品ではなくテストの作りの問題である。**
+**2件。いずれも製品ではなくテスト・記録の作りの問題である。**
 
 **`test_extruding_one_part_of_the_pc_case_stays_under_1000ms` が閾値ぎりぎりで、マシンが混むと赤になる**（§4の注）。
 
@@ -207,3 +247,14 @@ splineが出る形で、v1の受入に必要な差別化点はすでに2章で�
   - 閾値を「絶対時間」から「分解前との比」に変える(4326-5101ms に対する比なら負荷に強い)
 - **本人が「感覚でわかるので定量的に測定する必要がない」と判断して2026-08-12に計測の器を撤去した**
   経緯があるので、この性能テスト自体を残すかどうかも含めて本人が決めるのが筋である
+
+**`acceptance.mjs` の成功メモが、アサーションより広いことを言っている箇所がある。**
+
+- 症状: `add_line` の戻り文字列が「2点をクリック(ゴムひもで確定前の線が見える)」だが、
+  実際にアサートしているのは `kind: "line"` の図形が1本増えたことだけ。**ゴムひも描画は見ていない**
+- 影響: この文字列が**そのまま受入記録の表になる**作りなので、**検証していないことが検証済みとして
+  記録に載る**。今回はACCEPTANCE.md側（§1の「根拠の所在」）で打ち消したが、根を断つならスクリプト側を直す
+- 直し方: 戻り文字列をアサートした内容に合わせる（「2点クリックで線分が1本増えた」）か、
+  ゴムひもを本当にアサートする（確定前に追従する図形がDOM/状態に出ていることを見る）
+- **この受入では文字列を触っていない** —— 触ると記録と実行結果が食い違うため、
+  直すなら `acceptance.mjs` を再実行して記録を取り直すのが筋である（数分で済む）
