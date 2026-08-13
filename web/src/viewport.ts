@@ -51,9 +51,14 @@ export interface BodyGeometryUpdate {
   geometry: GeometryPayload | null
 }
 
+/** クリックが選択集合に対して何をするか。修飾キーから決まる(B・2026-08-13)。 */
+export type PickMode = 'replace' | 'add' | 'remove'
+
 export interface PickEvent {
   /** 当たった面(Body+添字)。外したら null。 */
   hit: FaceRef | null
+  /** Shift=追加 / Ctrl(Mac は Meta)=除去 / 修飾なし=置き換え。 */
+  mode: PickMode
 }
 
 export interface Viewport {
@@ -77,8 +82,28 @@ export interface Viewport {
   prune(validBodyIds: string[]): void
   /** 面のクリック(当たり・外れとも)を受け取る。 */
   onPick(listener: (event: PickEvent) => void): void
-  /** 選択中の面を強調する(nullで解除)。 */
-  highlight(hit: FaceRef | null): void
+  /**
+   * 選択中の面を強調する(空配列で解除)。
+   *
+   * **B(2026-08-13)で複数選択と出所に対応した**。`origin` が `"proposed"`(AIの提案)なら
+   * 確定した選択と**明確に違う色**で描く —— これが「交互操作が人間側から見える」唯一の
+   * 場所である(実装計画書§8b B)。
+   *
+   * **辺・頂点・領域は3Dでは描かない**。ここが持っているのは面ごとの三角形メッシュだけで、
+   * 個々の位相辺のジオメトリを持っていないため(面の境界線は `EdgesGeometry` による
+   * 見た目であって、コアの辺の添字とは対応しない)。辺の選択は `SelectionPanel` が
+   * 一覧と件数で見せる。3Dで辺を色分けするのは、面ごとに辺を送る作りが要るので D の債務。
+   */
+  highlight(refs: FaceRef[], origin: 'user' | 'proposed'): void
+  /**
+   * 確定前の形(プレビュー)を重ねる。**本物のBodyは隠し、幽霊を代わりに描く**。
+   *
+   * 幽霊は**ピックの対象にしない**(まだ存在しない形は指せない)。本物の状態が
+   * 1つでも届いたら(`update`)プレビューは無効になるので、自動的に消える。
+   */
+  showPreview(bodies: BodyGeometryUpdate[]): void
+  /** プレビューを消して本物のBodyを出し直す。 */
+  clearPreview(): void
   /**
    * 面の表面上の点の画面座標(コンテナ内のCSSピクセル)。無理なら null。
    *
@@ -96,6 +121,10 @@ export interface Viewport {
 
 const BASE_COLOR = 0x9aa6b2
 const HIGHLIGHT_COLOR = 0xffb454
+/** AIの提案(`origin === "proposed"`)。確定(橙)と**色相で**離す。 */
+const PROPOSED_COLOR = 0x36d1ff
+/** 確定前の形。半透明で「まだ無いもの」に見せる。 */
+const PREVIEW_COLOR = 0x7ee081
 const EDGE_COLOR = 0x20262d
 const BACKGROUND_COLOR = 0x161a1f
 
@@ -150,6 +179,18 @@ export function createViewport(container: HTMLElement): Viewport {
     color: HIGHLIGHT_COLOR,
     side: THREE.DoubleSide,
   })
+  const proposedMaterial = new THREE.MeshLambertMaterial({
+    color: PROPOSED_COLOR,
+    side: THREE.DoubleSide,
+  })
+  const previewMaterial = new THREE.MeshLambertMaterial({
+    color: PREVIEW_COLOR,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.55,
+    // 半透明どうしが互いを隠して真っ黒な塊にならないようにする(奥行きは書かない)
+    depthWrite: false,
+  })
   const edgeMaterial = new THREE.LineBasicMaterial({ color: EDGE_COLOR })
 
   const raycaster = new THREE.Raycaster()
@@ -157,6 +198,8 @@ export function createViewport(container: HTMLElement): Viewport {
   const bodies = new Map<string, BodyMeshes>()
   /** 全Body分の面メッシュを1本にまとめたもの(ピック用)。update() のたびに作り直す。 */
   let allFaceMeshes: THREE.Mesh[] = []
+  /** プレビュー(幽霊)のメッシュ。**ピックの対象にしない**ので `bodies` とは別に持つ。 */
+  const previewMeshes = new Map<string, { objects: THREE.Object3D[]; disposables: Array<{ dispose(): void }> }>()
   let pickListener: ((event: PickEvent) => void) | null = null
   let framed = false
   let alive = true
@@ -224,6 +267,8 @@ export function createViewport(container: HTMLElement): Viewport {
 
   function update(entries: BodyGeometryUpdate[]): void {
     if (entries.length === 0) return
+    // 本物の形が届いた時点で、確定前の予想は用済み(古い幽霊を残さない)。
+    clearPreview()
     for (const entry of entries) {
       clearBody(entry.bodyId)
       if (entry.geometry) buildBody(entry.bodyId, entry.geometry)
@@ -236,10 +281,55 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
+  // ------------------------------------------------------------------ プレビュー(幽霊)
+  function setBodyVisible(bodyId: string, visible: boolean): void {
+    const entry = bodies.get(bodyId)
+    if (!entry) return
+    for (const object of entry.sceneObjects) object.visible = visible
+  }
+
+  function showPreview(entries: BodyGeometryUpdate[]): void {
+    clearPreview()
+    for (const entry of entries) {
+      if (!entry.geometry) continue
+      const objects: THREE.Object3D[] = []
+      const disposables: Array<{ dispose(): void }> = []
+      for (const face of entry.geometry.faces) {
+        if (face.indices.length === 0) continue
+        const geometry = new THREE.BufferGeometry()
+        geometry.setAttribute(
+          'position',
+          new THREE.BufferAttribute(new Float32Array(face.positions), 3),
+        )
+        geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(face.indices), 1))
+        geometry.computeVertexNormals()
+        geometry.computeBoundingSphere()
+        const mesh = new THREE.Mesh(geometry, previewMaterial)
+        root.add(mesh)
+        objects.push(mesh)
+        disposables.push(geometry)
+      }
+      // 本物を隠してから幽霊を出す(重ねると半透明の中に古い形が透けて読めない)
+      setBodyVisible(entry.bodyId, false)
+      previewMeshes.set(entry.bodyId, { objects, disposables })
+    }
+  }
+
+  function clearPreview(): void {
+    if (previewMeshes.size === 0) return
+    for (const [bodyId, entry] of previewMeshes) {
+      for (const object of entry.objects) root.remove(object)
+      for (const item of entry.disposables) item.dispose()
+      setBodyVisible(bodyId, true)
+    }
+    previewMeshes.clear()
+  }
+
   function prune(validBodyIds: string[]): void {
     const valid = new Set(validBodyIds)
     const stale = [...bodies.keys()].filter((bodyId) => !valid.has(bodyId))
     if (stale.length === 0) return
+    clearPreview() // 消えるBodyの幽霊が取り残されないように(update と同じ理由)
     for (const bodyId of stale) clearBody(bodyId)
     rebuildPickIndex()
   }
@@ -265,13 +355,12 @@ export function createViewport(container: HTMLElement): Viewport {
     controls.update()
   }
 
-  function highlight(hit: FaceRef | null): void {
+  function highlight(refs: FaceRef[], origin: 'user' | 'proposed'): void {
+    const selectedMaterial = origin === 'proposed' ? proposedMaterial : highlightMaterial
+    const keys = new Set(refs.map((ref) => `${ref.bodyId} ${ref.faceIndex}`))
     for (const mesh of allFaceMeshes) {
-      const isHit =
-        hit !== null &&
-        mesh.userData.bodyId === hit.bodyId &&
-        mesh.userData.faceIndex === hit.faceIndex
-      mesh.material = isHit ? highlightMaterial : baseMaterial
+      const isHit = keys.has(`${mesh.userData.bodyId} ${mesh.userData.faceIndex}`)
+      mesh.material = isHit ? selectedMaterial : baseMaterial
     }
   }
 
@@ -279,7 +368,12 @@ export function createViewport(container: HTMLElement): Viewport {
     const { width, height } = size()
     const ndc = new THREE.Vector2((offsetX / width) * 2 - 1, -(offsetY / height) * 2 + 1)
     raycaster.setFromCamera(ndc, camera)
-    const hits = raycaster.intersectObjects(allFaceMeshes, false)
+    // **隠しているメッシュは指せない**(プレビュー中の本物。three.js の Raycaster は
+    // `visible` を見ないので、ここで明示的に外す)。
+    const hits = raycaster.intersectObjects(
+      allFaceMeshes.filter((mesh) => mesh.visible),
+      false,
+    )
     if (hits.length === 0) return null
     const bodyId = hits[0].object.userData.bodyId
     const faceIndex = hits[0].object.userData.faceIndex
@@ -292,7 +386,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const mesh = entry?.faceMeshes.find(
       (candidate) => candidate.userData.faceIndex === faceIndex,
     )
-    if (!mesh) return null
+    if (!mesh || !mesh.visible) return null
     const position = mesh.geometry.getAttribute('position')
     const index = mesh.geometry.getIndex()
     if (!position || !index) return null
@@ -343,7 +437,12 @@ export function createViewport(container: HTMLElement): Viewport {
     const elapsed = performance.now() - downAt
     if (moved > CLICK_MOVE_LIMIT_PX || elapsed > CLICK_TIME_LIMIT_MS) return
     const hit = pickAt(event.offsetX, event.offsetY)
-    pickListener?.({ hit })
+    const mode: PickMode = event.shiftKey
+      ? 'add'
+      : event.ctrlKey || event.metaKey
+        ? 'remove'
+        : 'replace'
+    pickListener?.({ hit, mode })
   }
 
   renderer.domElement.addEventListener('pointerdown', onPointerDown)
@@ -368,6 +467,8 @@ export function createViewport(container: HTMLElement): Viewport {
       pickListener = listener
     },
     highlight,
+    showPreview,
+    clearPreview,
     project,
     resize: applySize,
     dispose() {
@@ -376,10 +477,13 @@ export function createViewport(container: HTMLElement): Viewport {
       observer.disconnect()
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('pointerup', onPointerUp)
+      clearPreview()
       for (const bodyId of [...bodies.keys()]) clearBody(bodyId)
       controls.dispose()
       baseMaterial.dispose()
       highlightMaterial.dispose()
+      proposedMaterial.dispose()
+      previewMaterial.dispose()
       edgeMaterial.dispose()
       renderer.dispose()
       renderer.domElement.remove()

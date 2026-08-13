@@ -14,8 +14,47 @@
  * **M3.5(2026-08-11)で `state` は部品ごとの配列になった**。`state.bodies` は軽量
  * (geometryを含まない)で、形状は `delta.bodies`(版が変わったBodyだけ)で届く
  * (`duocad/server.py` のモジュールdocstring参照)。
+ *
+ * **B(2026-08-13)で「M1由来の例外」が消えた** —— 選択はコア側(`state.selection`)が正に
+ * なり、ここは `modify_selection` / `commit_selection` / `clear_selection` を送るだけになった。
+ * 上の「例外はM1由来の面の選択」はもう無い(ブラウザは選択を1つも覚えない)。
+ * あわせて `preview`(投機的実行)を足した —— **これだけは状態を配信しない**ので、
+ * 応答は `onState` ではなく `onPreview` へ来る。
  */
 import type { GeometryPayload } from './viewport'
+
+/** 選べるものの種別。領域(region)は `RegionRef` 側で表す(`duocad/selection.py` §3.5)。 */
+export type ShapeKind = 'face' | 'edge' | 'vertex'
+
+/** 面・辺・頂点を指す参照。添字は**1始まり**(コアの `select_*` と同じ)。 */
+export interface ShapeRef {
+  body: string
+  kind: ShapeKind
+  index: number
+  provenance?: unknown
+}
+
+/** スケッチの領域を指す参照(`kind` キーを持たないのが `ShapeRef` との見分け方)。 */
+export interface RegionRef {
+  sketch: string
+  index: number
+  provenance?: unknown
+}
+
+export type SelectionRef = ShapeRef | RegionRef
+
+/**
+ * 共有される選択集合(`duocad/selection.py` の `Selection.to_dict()`)。
+ *
+ * **origin は集合単位**。`"proposed"` はAIが提案した状態で、そのままではverbに渡せない
+ * (コアが `SelectionNotCommitted` で止める)。人が `commit_selection` を踏むか、
+ * `modify_selection` で触ると `"user"` になる。
+ */
+export interface SelectionState {
+  items: SelectionRef[]
+  origin: 'user' | 'proposed'
+  count: number
+}
 
 /** 1Bodyぶんの軽量な状態(geometryを含まない)。パーツ一覧はこれだけで描ける。 */
 export interface BodyMeta {
@@ -42,11 +81,21 @@ export interface ServerState {
   can_undo: boolean
   can_redo: boolean
   applied_count: number
+  /** 共有される選択集合。**ここが正**で、ブラウザは自前の選択を持たない(A2以降)。 */
+  selection: SelectionState
 }
 
+/**
+ * 操作を出したクライアントへの確認応答。
+ *
+ * **2種類ある**。verbの適用は `verb` を持ち、選択の変更は `change: "selection"` を持つ
+ * (選択はverbではなく、操作ログにも載らない。`duocad/server.py` の `_selection_event`)。
+ * どちらか判らないまま `applied.verb` を見ると、選択変更のたびに `undefined` と
+ * 比較することになるので、**読む側は必ず先に見分ける**こと。
+ */
 export interface Applied {
-  verb: string
-  seq: number
+  verb?: string
+  seq?: number
   client_op: number | null
   body_id?: string
   face_index?: number
@@ -56,6 +105,28 @@ export interface Applied {
   redone?: string
   visible?: boolean
   changed_bodies?: string[]
+  /** 選択の変更イベントのときだけ `"selection"`。 */
+  change?: string
+  selection?: SelectionState
+}
+
+/**
+ * プレビュー(投機的実行)の応答。**状態の配信ではない** —— 要求した接続にだけ届き、
+ * サーバ側の文書は既に元へ戻っている(`Session.preview`)。
+ *
+ * `preview_id` は要求時に付けた番号。**古い応答を捨てるために要る** ——
+ * 数値を打ち替えると要求が追い越しうるし、Escで中断した後に届くこともある。
+ */
+export interface PreviewPayload {
+  preview_id: number | null
+  verb: string
+  bodies: Array<{
+    body_id: string
+    name: string
+    face_count: number
+    volume: number
+    geometry: GeometryPayload
+  }>
 }
 
 export type ConnectionStatus = 'connecting' | 'open' | 'closed'
@@ -69,12 +140,24 @@ export interface SessionHooks {
   onError(message: string, where: string): void
   onWarning(message: string): void
   onStatus(status: ConnectionStatus): void
+  /** プレビューが返ってきた(状態は変わっていない)。 */
+  onPreview(payload: PreviewPayload): void
 }
 
 export interface Session {
   start(): void
   extrude(bodyId: string, faceIndex: number, distance: number, clientOp: number): void
   setVisible(bodyId: string, visible: boolean, clientOp: number): void
+  /** 人が直す経路。差分編集で `origin` は `"user"` になる(触ること自体が承認)。 */
+  modifySelection(add: SelectionRef[], remove: SelectionRef[], clientOp: number): void
+  /** AIの提案を中身を変えずに承認する。 */
+  commitSelection(clientOp: number): void
+  clearSelection(clientOp: number): void
+  /**
+   * verbを投機的に実行して形だけ測らせる。**文書は変わらない**(サーバが元へ戻す)。
+   * 応答は `onPreview` へ。`previewId` は古い応答を捨てるための番号。
+   */
+  preview(verb: string, args: Record<string, unknown>, previewId: number): void
   undo(): void
   redo(): void
   dispose(): void
@@ -120,6 +203,9 @@ export function createSession(hooks: SessionHooks): Session {
       applied?: Applied
       message?: string
       where?: string
+      preview_id?: number | null
+      verb?: string
+      bodies?: PreviewPayload['bodies']
     }
     try {
       message = JSON.parse(raw)
@@ -129,6 +215,12 @@ export function createSession(hooks: SessionHooks): Session {
     }
     if (message.type === 'state' && message.state) {
       hooks.onState(message.state, message.delta?.bodies ?? [], message.applied ?? null)
+    } else if (message.type === 'preview') {
+      hooks.onPreview({
+        preview_id: message.preview_id ?? null,
+        verb: message.verb ?? '',
+        bodies: message.bodies ?? [],
+      })
     } else if (message.type === 'error') {
       hooks.onError(message.message ?? '(理由なし)', message.where ?? '?')
     } else if (message.type === 'warning') {
@@ -167,6 +259,18 @@ export function createSession(hooks: SessionHooks): Session {
     },
     setVisible(bodyId, visible, clientOp) {
       send({ cmd: 'set_visible', body_id: bodyId, visible, client_op: clientOp })
+    },
+    modifySelection(add, remove, clientOp) {
+      send({ cmd: 'modify_selection', add, remove, client_op: clientOp })
+    },
+    commitSelection(clientOp) {
+      send({ cmd: 'commit_selection', client_op: clientOp })
+    },
+    clearSelection(clientOp) {
+      send({ cmd: 'clear_selection', client_op: clientOp })
+    },
+    preview(verb, args, previewId) {
+      send({ cmd: 'preview', verb, args, preview_id: previewId })
     },
     undo() {
       send({ cmd: 'undo' })

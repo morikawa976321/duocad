@@ -362,6 +362,89 @@ async function main() {
     })
     ok('全表示へ戻した')
 
+    // ---------------------------------------------------------------- 検証5(B): 交互操作の一巡
+    // **AIが述語で辺を提案 → ブラウザに提案として出る → 人がクリックで1本外す →
+    //   AIが読むと外れている。** これが通れば、交互操作が人間側から見える形で成立している
+    //   (タスクBの検証項番5)。ここまでの4つと違い、**人とAIが同じ集合を順に触る**。
+    await mcp.callTool('clear_selection')
+    let proposed = await mcp.callTool('propose_selection', {
+      predicate: { kind: 'edge', body: target.body_id, where: [{ op: 'parallel_to', axis: 'Z' }] },
+    })
+    if (proposed.selection.count < 2) {
+      // Zに平行な辺が足りない部品なら、その部品の辺全部を提案に使う(件数だけが目的)
+      proposed = await mcp.callTool('propose_selection', {
+        predicate: { kind: 'edge', body: target.body_id, where: [] },
+      })
+    }
+    const proposedCount = proposed.selection.count
+    if (proposedCount < 2) fail(`提案に使える辺が足りない: ${proposedCount} 本`)
+    if (proposed.selection.origin !== 'proposed') {
+      fail(`propose_selection の origin が proposed でない: ${proposed.selection.origin}`)
+    }
+
+    await page.waitForFunction(
+      (count) => {
+        const selection = window.__duocad.selection
+        return selection?.count === count && selection.origin === 'proposed'
+      },
+      { timeout, polling: 50 },
+      proposedCount,
+    )
+    // **提案は確定選択と見た目が違う**(枠の色と「AIの提案」の札)。承認の操作もここにある。
+    const proposedLook = await page.evaluate(() => ({
+      marked: Boolean(document.querySelector('.selection-panel.proposed')),
+      badge: Boolean(document.querySelector('.selection-panel .badge')),
+      commit: Boolean(document.querySelector('#selection-commit')),
+      rows: document.querySelectorAll('.selection-row').length,
+      summary: document.querySelector('#selection-summary').textContent.trim(),
+    }))
+    if (!proposedLook.marked || !proposedLook.badge) {
+      fail('AIの提案が確定選択と同じ見た目で出ている(区別が付かない)')
+    }
+    if (!proposedLook.commit) fail('承認(commit_selection)の操作がUIに無い')
+    if (proposedLook.rows !== proposedCount) {
+      fail(`提案の件数が一覧に出ていない: ${proposedLook.rows} 行 / ${proposedCount} 本`)
+    }
+    ok(
+      `AIが述語で辺 ${proposedCount} 本を提案 → ブラウザに**提案として**出た` +
+        `(${proposedLook.summary} / 承認ボタンあり)`,
+    )
+
+    // ---------------------------------------------------------------- 人が1本外す
+    const droppedIndex = await page.evaluate(() => {
+      const ref = document.querySelector('.selection-row').dataset.ref // "edge:<body>:<index>"
+      return Number.parseInt(ref.slice(ref.lastIndexOf(':') + 1), 10)
+    })
+    await page.click('.selection-row .selection-remove')
+    await page.waitForFunction(
+      (count) => window.__duocad.selection?.count === count,
+      { timeout, polling: 50 },
+      proposedCount - 1,
+    )
+    ok(`人がブラウザで辺 ${droppedIndex} を1本外した(${proposedCount} -> ${proposedCount - 1} 本)`)
+
+    // ---------------------------------------------------------------- AIが読むと外れている
+    const afterHuman = await mcp.callTool('get_selection')
+    if (afterHuman.selection.count !== proposedCount - 1) {
+      fail(
+        `AIが読んだ選択の件数が合わない: ${afterHuman.selection.count} / ` +
+          `期待 ${proposedCount - 1}`,
+      )
+    }
+    if (afterHuman.selection.items.some((item) => item.index === droppedIndex)) {
+      fail(`人が外した辺 ${droppedIndex} がAI側にまだ残っている`)
+    }
+    if (afterHuman.selection.origin !== 'user') {
+      fail(`人が触ったのに origin が user でない: ${afterHuman.selection.origin}`)
+    }
+    ok(
+      `**AIが get_selection で読むと外れている**(${afterHuman.selection.count} 本 / ` +
+        `origin=user = 人が触ったことが承認になっている)`,
+    )
+    ok('→ 交互操作(AIが提案 → 人が過不足を直す → AIが読む)が一巡した')
+
+    await mcp.callTool('clear_selection')
+
     if (consoleErrors.length > 0) {
       fail(`ブラウザのコンソールにエラー: ${consoleErrors.slice(0, 3).join(' | ')}`)
     }

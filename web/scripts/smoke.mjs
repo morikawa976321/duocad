@@ -287,6 +287,101 @@ async function main() {
         `(${point.x.toFixed(0)}, ${point.y.toFixed(0)})`,
     )
 
+    // -------------------------------------------------------------- B: 複数選択(Shift / Ctrl)
+    // フィレット・面取りには必須で、M1のUIは単一選択しか持っていなかった。
+    // **選択の正はコア**なので、ここで見ているのは `state.selection`(コアが返した集合)である。
+    // **クリックの直前に射影し直す**(使い回さない)。画面のどこかが伸縮すると
+    // ビューポートのアスペクトが変わり、前に測った画素は別の面を指すようになる。
+    async function locateFace(bodyId, faceIndex) {
+      return page.evaluate(
+        (id, index) => {
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectFace(id, index)
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        },
+        bodyId,
+        faceIndex,
+      )
+    }
+
+    const secondIndex = await page.evaluate(
+      (bodyId, taken) => {
+        const part = window.__duocad.parts.find((entry) => entry.body_id === bodyId)
+        for (let index = 1; index <= part.face_count; index += 1) {
+          if (index === taken) continue
+          if (window.__duocad.projectFace(bodyId, index)) return index
+        }
+        return null
+      },
+      extrudeTarget.body_id,
+      target.index,
+    )
+    if (!secondIndex) fail(`パーツ「${extrudeTarget.name}」に2つ目の選べる面が無い(複数選択を検査できない)`)
+
+    let second = await locateFace(extrudeTarget.body_id, secondIndex)
+    if (!second) fail(`面 ${secondIndex} の位置が取れない`)
+    await page.keyboard.down('Shift')
+    await page.mouse.click(second.x, second.y)
+    await page.keyboard.up('Shift')
+    await page.waitForFunction(
+      (bodyId, first, added) => {
+        const items = window.__duocad.selection?.items ?? []
+        const has = (index) => items.some((item) => item.body === bodyId && item.index === index)
+        return items.length === 2 && has(first) && has(added)
+      },
+      { timeout, polling: 50 },
+      extrudeTarget.body_id,
+      target.index,
+      secondIndex,
+    )
+    const summaryText = await page.$eval('#selection-summary', (element) => element.textContent.trim())
+    if (!summaryText.includes('2')) fail(`選択パネルの件数表示が2件になっていない: "${summaryText}"`)
+    ok(`Shift+クリックで複数選択: ${summaryText}(面 ${target.index} と面 ${secondIndex})`)
+
+    second = await locateFace(extrudeTarget.body_id, secondIndex)
+    if (!second) fail(`面 ${secondIndex} の位置が取れない(2回目)`)
+    await page.keyboard.down('Control')
+    await page.mouse.click(second.x, second.y)
+    await page.keyboard.up('Control')
+    await page.waitForFunction(
+      (bodyId, index) => {
+        const selection = window.__duocad.selection
+        return (
+          selection?.count === 1 &&
+          selection.items[0].body === bodyId &&
+          selection.items[0].index === index
+        )
+      },
+      { timeout, polling: 50 },
+      extrudeTarget.body_id,
+      target.index,
+    )
+    ok(`Ctrl+クリックで1本外した(残ったのは最初に選んだ面 ${target.index})`)
+
+    // 選択パネルの「外す」ボタンでも1件ずつ落とせること。**3Dで指せない辺・頂点を
+    // 人が直せる唯一の場所**なので、面で経路が生きていることをここで確かめる。
+    await page.click('.selection-row .selection-remove')
+    await page.waitForFunction(() => window.__duocad.selection?.count === 0, {
+      timeout,
+      polling: 50,
+    })
+    ok('選択パネルの「外す」で1件落ちた(辺・頂点を人が直す経路と同じもの)')
+
+    // 押し出しのために選び直す(以後の検査は面1つが選ばれている前提)
+    const again = await locateFace(extrudeTarget.body_id, target.index)
+    if (!again) fail(`面 ${target.index} の位置が取れない(選び直し)`)
+    await page.mouse.click(again.x, again.y)
+    await page.waitForFunction(
+      (bodyId, index) => {
+        const selection = window.__duocad.selection
+        return selection?.count === 1 && selection.items[0].body === bodyId && selection.items[0].index === index
+      },
+      { timeout, polling: 50 },
+      extrudeTarget.body_id,
+      target.index,
+    )
+    ok(`押し出す面 ${target.index} を選び直した`)
+
     async function typeDistance(value) {
       await page.click('#distance')
       await page.keyboard.down('Control')
@@ -344,6 +439,48 @@ async function main() {
       )
     )
 
+    // -------------------------------------------------------------- B: プレビューとEsc
+    // **確定前に形が見える**こと。プレビューはサーバがverbを投機的に実行して形だけ返し、
+    // 文書は元へ戻す(`Session.preview`)ので、ここで操作ログが伸びてはいけない。
+    const logBefore = await page.evaluate(() => ({
+      applied: window.__duocad.state.applied_count,
+      log: window.__duocad.state.log.length,
+    }))
+    await typeDistance(distance)
+    await page.waitForFunction(() => window.__duocad.previewing === true, {
+      timeout,
+      polling: 50,
+    })
+    ok('距離を打つとプレビューが出た(確定前に形が見えている)')
+
+    // **Escで中断**。文書が一切変わっていないこと(操作ログの長さも増えない)。
+    await page.keyboard.press('Escape')
+    await page.waitForFunction(() => window.__duocad.previewing === false, {
+      timeout,
+      polling: 50,
+    })
+    const afterEscape = await page.evaluate(() => ({
+      applied: window.__duocad.state.applied_count,
+      log: window.__duocad.state.log.length,
+      distance: document.querySelector('#distance').value,
+    }))
+    if (afterEscape.applied !== logBefore.applied || afterEscape.log !== logBefore.log) {
+      fail(
+        `Escで中断したのに操作が残った: applied ${logBefore.applied}->${afterEscape.applied} / ` +
+          `log ${logBefore.log}->${afterEscape.log}`,
+      )
+    }
+    if (afterEscape.distance !== '') fail(`Escの後も距離が残っている: "${afterEscape.distance}"`)
+    const volumeAfterEscape = await page.evaluate(
+      (bodyId) => window.__duocad.parts.find((b) => b.body_id === bodyId).volume,
+      extrudeTarget.body_id,
+    )
+    if (Math.abs(volumeAfterEscape - volumeBefore) > 1e-9) {
+      fail(`Escで中断したのに体積が変わった: ${volumeBefore} -> ${volumeAfterEscape}`)
+    }
+    ok('Escで中断: 操作ログ・体積とも変化なし(プレビューは1行も残さない)')
+
+    // -------------------------------------------------------------- 確定(Enter)
     await typeDistance(distance)
     await page.keyboard.press('Enter')
     const after = await waitForExtrude(extrudeTarget.body_id, volumeBefore)

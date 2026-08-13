@@ -159,6 +159,23 @@ class OpLog:
         self._cursor += 1
         return operation
 
+    # ------------------------------------------------------------------ 投機的実行の巻き戻し
+    #
+    # `duocad.speculative` だけが使う(B・2026-08-13)。**公開の契約ではない**ので
+    # 名前を `_` で始める。それでもここに置くのは、`_entries` / `_cursor` を
+    # 別モジュールから直に触らせないため —— 外から触ると、ログの不変条件
+    # (「cursorは常に 0..len(entries)」「undo済みの末尾は次のappendで捨てる」)を
+    # 知らない場所が増える。
+    def _snapshot(self) -> tuple:
+        """エントリ列とカーソルを控える(プレビューの巻き戻し用)。"""
+        return (list(self._entries), self._cursor)
+
+    def _restore(self, snapshot: tuple) -> None:
+        """`_snapshot()` で控えた状態へ戻す。**リストは中身を入れ替える**。"""
+        entries, cursor = snapshot
+        self._entries[:] = entries
+        self._cursor = cursor
+
     def to_json(self) -> str:
         """現在有効なエントリ全部をJSON文字列へシリアライズする。
 

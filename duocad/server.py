@@ -20,11 +20,25 @@
         {"cmd": "extrude_face", "face_index": int, "distance": float, "client_op": int, "body_id": str}
         {"cmd": "set_visible", "body_id": str, "visible": bool, "client_op": int}
         {"cmd": "undo"} / {"cmd": "redo"}
+        {"cmd": "modify_selection", "add": [ref, ...], "remove": [ref, ...], "client_op": int}
+        {"cmd": "commit_selection", "client_op": int} / {"cmd": "clear_selection", "client_op": int}
+        {"cmd": "preview", "verb": str, "args": {...}, "preview_id": int}
 
     上り(server -> client)
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
+        {"type": "preview", "preview_id": int|None, "verb": str, "bodies": [...]}
         {"type": "error", "message": str, "where": str}
         {"type": "warning", "message": str}
+
+**B(2026-08-13)で選択とプレビューの口を足した**。選択の3つ(`modify_selection` /
+`commit_selection` / `clear_selection`)は既にMCPが持っていたものを**ブラウザ側にも**
+開けただけで、コアには何も足していない —— 人が過不足を直す経路(`modify_selection`)と
+AIの提案を承認する経路(`commit_selection`)がUIから踏めないと、交互操作は片道のままになる。
+`propose_selection` は開けていない(AIが書く経路であり、人はポインティングで直す)。
+
+`preview` だけは**状態を配信しない**。verbを投機的に実行して形だけ測り、文書は
+`duocad.speculative` が元へ戻す(確定した1回だけが操作ログに積まれる)。したがって
+応答は要求した接続にだけ返り、他のクライアントには何も起きない。
 
     **M3.5パーツ一覧UI(2026-08-11)で `state` は軽量化した** — `state.bodies` は
     `geometry` を含まない(name/kind/visible/face_count/volume/revisionのみ、27部品でも数KB)。
@@ -77,6 +91,7 @@ from websockets.asyncio.server import serve
 
 from . import io_step, kernel, parameters, query, selection, sketch
 from .document import Document
+from .speculative import speculative
 from .verbs import (
     chamfer as chamfer_verb,
     extrude as extrude_regions_verb,
@@ -91,6 +106,19 @@ from .verbs import set_visible as set_visible_verb
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STEP = Path(r"C:\Users\tm976\mf\3d-models\mATX_PC_case_20251122\PC_case_20251122.step")
 DEFAULT_WEB_DIST = REPO_ROOT / "web" / "dist"
+
+#: プレビューできるverb -> (`Session` のメソッド名, そのverbが受け取る引数名)。
+#:
+#: `Session.preview` の唯一の入口(docstring参照)。**ここに無いverbはプレビューできない** ——
+#: ソケットから届いた文字列で任意のメソッドを呼べる作りにしないためと、投機的実行が
+#: 正しく巻き戻せることを確認した verb だけを載せる場所を1つにするため。
+#: **B の範囲は `extrude_face` 1つ**(C・D がコマンドを足すときはここへ1行足す)。
+#: ただし `set_parameter` のような**操作ログを頭から再生するverbは1行足すだけでは壊れる**
+#: —— 再生が過去のseqのundoスナップショットを書き換え、`speculative` はそれを戻さない
+#: (`speculative.py` の「戻さないもの」参照。QA 2026-08-13)。
+PREVIEWABLE_VERBS: dict = {
+    "extrude_face": ("extrude", ("body_id", "face_index", "distance")),
+}
 
 
 class Session:
@@ -110,6 +138,7 @@ class Session:
         self._geometry_cache: dict = {}    # body_id -> (shape, tessellate結果)
         self._setup_floor_seq = 0  # load_step が積んだ最後のseq(これ以下はundoの対象外)
         self._listeners: list = []  # 文書が変わったときに呼ぶ購読者(下記 add_listener)
+        self._suppress_events = 0  # >0 の間は `_emit` が配らない(プレビュー。`preview` 参照)
         if step_path is not None:
             self.load_step(step_path)
 
@@ -150,7 +179,16 @@ class Session:
         **1人の購読者が落ちても他へ配り、操作自体は成功のままにする** — 通知の失敗で
         既に確定した文書の変更を巻き戻すことはできないため。落ちたことは警告として残す
         (黙って握りつぶさない。§6予防6)。
+
+        **プレビュー中(`_suppress_events`)は誰にも配らない**(B・2026-08-13)。投機的に
+        実行したverbも `_emit` を通るので、ここで止めないと「確定していない形」が
+        全クライアントへ配信され、直後の巻き戻しで元へ戻る —— 画面がちらつくだけでなく、
+        MCP側が読んだ状態が実在しない中間状態になる。**呼び出し経路(WebSocket / MCP /
+        直呼び)に関わらず止まる**ようにここへ置いてある(`Server._dispatching` の
+        二重配信よけはWebSocket経由にしか効かない)。
         """
+        if self._suppress_events:
+            return applied
         for callback in list(self._listeners):
             try:
                 callback(applied)
@@ -427,6 +465,67 @@ class Session:
             "selection": selection.get_selection(self.document).to_dict(),
             "client_op": client_op,
         }
+
+    # ---------------------------------------------------------------- B: プレビュー(投機的実行)
+    def preview(self, verb: str, args: Optional[dict] = None) -> dict:
+        """verbを**投機的に実行して形だけ測り、文書を元へ戻す**(B・2026-08-13)。
+
+        コマンド層の状態機械「起動 → 引数収集 → プレビュー → 確定(Enter) / 中断(Esc)」の
+        プレビューの実体。**操作ログには何も積まれず、イベントも発火しない** ——
+        確定した1回だけがログに積まれる(実装計画書§2)。巻き戻しは
+        `duocad.speculative.speculative` が行う。
+
+        戻り値:
+            {"verb": str,
+             "bodies": [{"body_id","name","face_count","volume","geometry"}, ...]}
+
+        `bodies` に入るのは**形が変わった可視のBodyだけ**(押し出しなら1個)。
+        `geometry` は `state`/`delta` の同名フィールドと同じ形なので、アプリ層は
+        本物の形状と同じ道具で描ける。
+
+        **プレビューできるverbは `PREVIEWABLE_VERBS` に登録したものだけ**。ソケットから
+        届いた文字列で `Session` の任意のメソッドを呼べる作りにしない、というのが1点。
+        もう1点は、投機的実行が正しく巻き戻せることを verb ごとに確認したうえで
+        載せる場所を1つにしておくため(C・D がコマンドを足すときはここへ1行足す)。
+
+        **キャッシュと `_applied_count` は自分で退避する** —— `speculative` が戻すのは
+        文書であって `Session` の持ち物ではない。テセレーションは `self.geometry()` を
+        使わず `kernel.tessellate` を直に呼ぶ(キャッシュを投機的な形で汚さないため)。
+        """
+        if verb not in PREVIEWABLE_VERBS:
+            raise ValueError(
+                f"verb {verb!r} はプレビューできない"
+                f"(登録済み: {sorted(PREVIEWABLE_VERBS)})"
+            )
+        method_name, allowed = PREVIEWABLE_VERBS[verb]
+        values = dict(args or {})
+        unknown = sorted(set(values) - set(allowed))
+        if unknown:
+            raise ValueError(f"verb {verb!r} が受け取らない引数: {unknown}(受け取るのは {list(allowed)})")
+
+        before = {id(body): body.shape for body in self.document.bodies}
+        applied_count = self._applied_count
+        bodies_out: list[dict] = []
+        self._suppress_events += 1
+        try:
+            with speculative(self.document):
+                getattr(self, method_name)(**values)
+                for body in self.document.bodies:
+                    if not body.visible or body.shape is None:
+                        continue
+                    if before.get(id(body)) is body.shape:
+                        continue  # 形が変わっていないBodyは送らない(差分送信と同じ判断)
+                    bodies_out.append({
+                        "body_id": body.id,
+                        "name": body.name,
+                        "face_count": kernel.face_count(body.shape),
+                        "volume": query.volume(body.shape),
+                        "geometry": kernel.tessellate(body.shape, self.deviation),
+                    })
+        finally:
+            self._suppress_events -= 1
+            self._applied_count = applied_count
+        return {"verb": verb, "bodies": bodies_out}
 
     def undo(self) -> dict:
         """直前の操作を取り消す。**文書の土台を作った操作は取り消させない**。
@@ -813,6 +912,46 @@ class Server:
                     message.get("client_op"),
                 )
                 await self._push(connection, applied=applied)
+            # -------------------------------------------------- B: 選択(人が直す経路)
+            # **コアの選択集合をそのまま叩く**(アプリ層に選択状態を持たせない)。
+            # 発火したイベント(`{"change":"selection", ...}`)を `applied` として返し、
+            # 状態は全接続へ配信する(`state.selection` に入っている)。
+            elif command == "modify_selection":
+                applied = self._apply(
+                    self.session.modify_selection,
+                    message.get("add") or [],
+                    message.get("remove") or [],
+                    message.get("client_op"),
+                )
+                await self._push(connection, applied=applied)
+            elif command in ("commit_selection", "clear_selection"):
+                applied = self._apply(
+                    self.session.commit_selection
+                    if command == "commit_selection"
+                    else self.session.clear_selection,
+                    message.get("client_op"),
+                )
+                await self._push(connection, applied=applied)
+            # -------------------------------------------------- B: プレビュー(投機的実行)
+            # **配信しない**。文書は変わらない(`Session.preview` が元へ戻す)ので、
+            # 状態を配る理由が無く、他のクライアントに見せる中間状態も存在しない。
+            # 要求した接続にだけ形を返す。
+            #
+            # **`_apply` で囲まない**(2つの止め方を重ねない)。プレビュー中の発火は
+            # `Session._suppress_events` が経路によらず止めており、ここで
+            # `_dispatching` まで立てると、**プレビューの計算中(押し出しなら約1秒)に
+            # MCPから届いた本物の変更まで「WebSocket経由だから配信不要」と誤判定して
+            # 黙って捨てる**(`_apply` のdocstringが警告しているのと同じ穴)。
+            elif command == "preview":
+                result = self.session.preview(message["verb"], message.get("args") or {})
+                await _send(
+                    connection,
+                    {
+                        "type": "preview",
+                        "preview_id": message.get("preview_id"),
+                        **result,
+                    },
+                )
             else:
                 raise ValueError(f"unknown command: {command!r}")
         except Exception as error:  # 1つの失敗でサーバを落とさない。必ず画面へ返す
