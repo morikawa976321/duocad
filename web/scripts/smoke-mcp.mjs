@@ -14,8 +14,10 @@
  *   3. その状態で **奥の面が本物のマウスクリックで選べる**
  *   4. **undo で可視性が戻る**(ブラウザのCtrl+Z。AIの操作と人間の操作が同じ操作ログに載る)
  *
- * サーバはこのスクリプトが `python -m duocad.mcp_server` として起動する(MCPクライアントが
- * やることと同じ)。**先に `duocad.server` を立てておく必要はない**(むしろポートがぶつかる)。
+ * サーバはこのスクリプトが `python -m duocad.mcp_server` として**空の文書で**起動する
+ * (`--step` 起動オプションは廃止済み)。STEPはMCPの `import_step` で読む。
+ * CLIの `--step <path>` は「MCPで読み込むファイル」であり、サーバへは渡さない。
+ * **先に `duocad.server` を立てておく必要はない**(むしろポートがぶつかる)。
  * ブラウザはインストール済みのEdge/Chromeを使う(`smoke.mjs` と同じ。`DUOCAD_BROWSER` で明示可)。
  */
 import { existsSync } from 'node:fs'
@@ -23,19 +25,19 @@ import { spawn } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { launch } from 'puppeteer-core'
+import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(HERE, '..', '..')
 const PYTHON = resolve(REPO_ROOT, '.venv', 'Scripts', 'python.exe')
 
 const options = parseArgs(process.argv.slice(2))
-const stepPath =
-  options.step ?? 'C:\\Users\\tm976\\mf\\3d-models\\mATX_PC_case_20251122\\PC_case_20251122.step'
+const stepPath = options.step ?? PC_CASE_STEP
 // 既定のポート(8765/8766)をわざと避ける: 本人が実機で開いているサーバを壊さないため。
 const wsPort = options.port ?? '8865'
 const httpPort = options['http-port'] ?? '8866'
 const timeout = Number.parseInt(options.timeout ?? '180000', 10)
-const expectedBodies = Number.parseInt(options['expect-bodies'] ?? '27', 10)
+const expectedBodies = Number.parseInt(options['expect-bodies'] ?? String(PC_CASE_SOLIDS), 10)
 
 function parseArgs(argv) {
   const parsed = {}
@@ -149,13 +151,12 @@ async function main() {
   console.log(`smoke-mcp: ${stepPath}`)
   console.log(`  browser: ${executablePath}`)
 
+  // `--step` 起動オプションは廃止済み。空で立ち上げ、あとで MCP の import_step で読む。
   const child = spawn(
     PYTHON,
     [
       '-m',
       'duocad.mcp_server',
-      '--step',
-      stepPath,
       '--port',
       String(wsPort),
       '--http-port',
@@ -199,6 +200,20 @@ async function main() {
     const missing = m4Tools.filter((name) => !tools.includes(name))
     if (missing.length) fail(`M4のツールが消えている: ${missing.join(', ')}`)
     ok(`tools/list: ${tools.length}個（M4の3つを含む）`)
+
+    const imported = await mcp.callTool('import_step', { path: stepPath })
+    if (imported.verb !== 'import_step_editable') {
+      fail(`import_step の verb が import_step_editable でない: ${imported.verb}`)
+    }
+    if (imported.body_ids.length !== expectedBodies) {
+      fail(`編集可能なボディが ${expectedBodies} 個でない: ${imported.body_ids.length}`)
+    }
+    if (imported.reference_ids.length !== expectedBodies) {
+      fail(`原本の参照ボディが ${expectedBodies} 個でない: ${imported.reference_ids.length}`)
+    }
+    ok(
+      `MCPの import_step: 編集可能なボディ ${imported.body_ids.length} 個(原本 ${imported.reference_ids.length} 個は隠したまま)`,
+    )
 
     // ---------------------------------------------------------------- 検証1: 27件のBody
     const document = await mcp.callTool('describe_document')

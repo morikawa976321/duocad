@@ -151,7 +151,9 @@ ARGUMENTS: dict = {
     "make_editable_copy": ({"source_body_id", "name"}, set()),
     "set_parameter": ({"name", "value"}, {"name", "value"}),
     # ---- 入出力
-    "import_step": ({"path"}, {"path"}),
+    # `editable` は2026-08-15追加。**既定 true**(読んだらそのまま編集できる)で、
+    # 参照ボディだけが欲しいときにだけ false を渡す。
+    "import_step": ({"path", "editable"}, {"path"}),
     "export_step": ({"path", "body_ids"}, {"path"}),
     "export_stl": ({"path", "deviation", "body_ids"}, {"path"}),
     # ---- 履歴
@@ -820,13 +822,17 @@ def test_set_parameter_reports_a_missing_name_as_not_found(empty_session: Sessio
 
 
 def test_make_editable_copy_turns_a_reference_into_a_solid(tmp_path: Path):
-    """読み込んだ参照ボディを編集できるようにする経路がAIから届く。"""
+    """読み込んだ参照ボディを編集できるようにする経路がAIから届く。
+
+    **`editable=false` で読んだときの続き**(2026-08-15)。既定の読み込みは編集用ボディまで
+    作るのでこの1手は要らないが、参照だけ読む経路を残した以上、その続きも届いていること。
+    """
     if not SHELF.exists():
         pytest.skip(f"参照STEPが無い: {SHELF}")
     session = Session(None, 0.2)
     server = McpServer(DocumentTools(session))
 
-    imported = call(server, "import_step", {"path": str(SHELF)})
+    imported = call(server, "import_step", {"path": str(SHELF), "editable": False})
     reference_id = imported["body_ids"][0]
     payload = call(server, "make_editable_copy", {"source_body_id": reference_id})
 
@@ -836,13 +842,13 @@ def test_make_editable_copy_turns_a_reference_into_a_solid(tmp_path: Path):
     assert payload["changed_bodies"] == [new_id]
 
 
-def test_import_step_adds_reference_bodies_and_says_what_to_do_next(tmp_path: Path):
-    """`import_step` は**コアのverbそのもの**(参照ボディを足すだけ)。
+def test_import_step_gives_editable_bodies_without_any_extra_call(tmp_path: Path):
+    """**AIも「読んだら使える」**(2026-08-15)。`import_step` の既定は編集可能なボディまで作る。
 
-    起動時の `Session.load_step` は「参照 + 編集用コピー + 参照を隠す」までやるが、
-    それは利便のための組み合わせであって verb ではない。MCPが出すのは verb の側で、
-    **足りない1手(`make_editable_copy`)を戻り値の `hint` で必ず知らせる** ——
-    黙って参照ボディだけ増やすと、AIは編集できない相手に verb を打ち続ける。
+    以前はこのツールが参照ボディだけを足し、AIは `make_editable_copy` をソリッドの数だけ
+    打つ必要があった(PCケースなら27回)。**MCP1呼び出し・ログ1行**で編集できる状態まで
+    行くのが今の契約で、ログに載るverbは `import_step_editable`(ツール名と綴りが違う
+    唯一のツールなので、ツールの説明文がその対応を明記している)。
     """
     if not SHELF.exists():
         pytest.skip(f"参照STEPが無い: {SHELF}")
@@ -850,6 +856,32 @@ def test_import_step_adds_reference_bodies_and_says_what_to_do_next(tmp_path: Pa
     server = McpServer(DocumentTools(session))
 
     payload = call(server, "import_step", {"path": str(SHELF)})
+
+    _assert_verb_envelope(payload, "import_step_editable")
+    assert len(payload["body_ids"]) == 17, "17ソリッドぶんの編集可能なボディを返していない"
+    assert all(
+        session.document.is_editable(body_id) is True for body_id in payload["body_ids"]
+    ), "読んだ直後に編集できないボディが混ざっている"
+    assert len(payload["reference_ids"]) == 17, "原本(参照ボディ)のIDも返すこと"
+    # hintは「そのまま編集できる」と言うこと。`make_editable_copy` に触れてよいのは
+    # **要らないと打ち消す**文脈だけ(古い手順を知っているAIを止めるため)で、
+    # 「続けるには make_editable_copy を呼ぶ」と促したら嘘になる。
+    assert "そのまま編集できる" in payload["hint"], payload["hint"]
+    assert "続けるには" not in payload["hint"], payload["hint"]
+    assert len(session.document.log.entries) == 1, "MCP1呼び出しは操作ログ1行"
+
+
+def test_import_step_can_still_add_reference_bodies_only(tmp_path: Path):
+    """`editable=false` なら従来どおり参照ボディだけを足し、続きの1手を `hint` で知らせる。
+
+    **既定は編集可能側**(本人の指示は「読んだら使える」)だが、参照だけ欲しい経路は残す。
+    """
+    if not SHELF.exists():
+        pytest.skip(f"参照STEPが無い: {SHELF}")
+    session = Session(None, 0.2)
+    server = McpServer(DocumentTools(session))
+
+    payload = call(server, "import_step", {"path": str(SHELF), "editable": False})
 
     _assert_verb_envelope(payload, "import_step")
     assert payload["body_ids"], "読み込んだBodyIdを返していない"
@@ -929,7 +961,7 @@ def test_exporting_does_not_corrupt_the_stdio_channel(tmp_path: Path):
     ]
     completed = subprocess.run(
         [
-            sys.executable, "-m", "duocad.mcp_server", "--no-step",
+            sys.executable, "-m", "duocad.mcp_server",
             "--port", "18775", "--http-port", "18776",
             "--web-dist", str(REPO_ROOT / "web" / "does-not-exist"),
         ],
@@ -1011,7 +1043,7 @@ def test_a_browser_export_does_not_corrupt_the_stdio_channel(tmp_path: Path):
 
     server_process = subprocess.Popen(
         [
-            sys.executable, "-m", "duocad.mcp_server", "--no-step",
+            sys.executable, "-m", "duocad.mcp_server",
             "--port", "18785", "--http-port", "18786",
             "--web-dist", str(REPO_ROOT / "web" / "does-not-exist"),
         ],

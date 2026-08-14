@@ -2091,6 +2091,12 @@ opの一覧だけでは述語を組み立てられないので、`kinds` / `wher
 足りない1手（`make_editable_copy`）を戻り値の `hint` で必ず知らせる —— 黙って参照ボディだけ
 増やすと、AIは編集できない相手に verb を打ち続ける。
 
+> **2026-08-15にMCPの既定を変えた**（この決定そのものは生きている）。`import_step` verbは今も
+> 「参照ボディを足すだけ」のコアのverbだが、**MCPツール `import_step` が既定で出すのは
+> 新しいverb `import_step_editable` の方**になった。「参照 + 編集用 + 参照を隠す」は
+> 利便の組み合わせではなく**1本のverb**になったので、MCPから1呼び出しで出せる。
+> 詳細は末尾の「起動オプション `--step` の廃止」節。
+
 ## F1で実測した落とし穴 — **OCCTのSTEP書き出しはstdoutを汚す**
 
 STEPを書き出すと、C++側から標準出力へ統計が出る:
@@ -2686,3 +2692,68 @@ Eでパネルを2枚足した時点で `SketchPanel` が 96→55px に潰れ、*
   サーバが解決した絶対パスを返すことで「どこへ書いたか」は必ず分かる
 - **操作ログの主体（誰が実行したか）の永続化**。上記のとおりコアの契約変更になる
 - **履歴の任意の位置へ飛ぶ**（クリックでその操作まで戻る）。undo/redoの回数で足りている
+
+---
+
+# 起動オプション `--step` の廃止と verb `import_step_editable`（2026-08-15）
+
+## 何が問題だったか（本人の指摘）
+
+**同じ「STEPを読む」が起動時とアプリ内で違う意味になっていた。**
+
+| | 何ができたか |
+|---|---|
+| 起動時 `--step`（`Session.load_step`） | ソリッドごとに 参照ボディ + 編集用コピー + 参照を隠す。読んだ直後から触れる |
+| アプリ内・MCP（`io_step.import_step`） | 参照ボディ（読み取り専用）だけ。編集するには `make_editable_copy` が1ボディずつ |
+
+PCケース（27ソリッド）をアプリ内から読むと、面をクリックして「編集可能にする」を**27回**やらないと
+触れる状態にならない。**この非対称のせいで起動オプションが消せなかった。**
+方向は「起動時にしかできないことを無くす」であって、CLI引数を削ることではない。
+
+## 足したverb（`duocad/verbs/import_editable.py`）
+
+```
+import_step_editable(doc, path) -> list[BodyId]        # 戻り値は**編集用ボディ**のID
+```
+
+- ソリッドごとに 参照ボディ（`kind="reference"`・**`visible=False`**）と
+  編集用ボディ（`kind="solid"`・可視）を作る。名前は `<stem>_N` と `<stem>_N-edit`
+  （起動時に `--step` が作っていた名前と同じ）。
+- **操作ログは1行**（`verb="import_step_editable"`,
+  `args={"path":.., "reference_ids":[..], "body_ids":[..]}`）。undo1回で34個（参照17+編集用17）が
+  まとめて消え、redo/replayは記録したIDをそのまま使う。
+- 参照を隠すのを `set_visible` の別行にしていない（`load_step` の旧実装との違い）。
+  1行の中で `visible=False` を作るので、再生で「隠した」操作が失われる余地がない。
+- 失敗（パス無し・壊れたSTEP）は `kernel.read_step` の中で止まり、documentにもログにも何も残らない。
+- 契約は `tests/test_import_split.py` の後半6件（`test_editable_import_*` / `test_undo_removes_every_body_of_the_editable_import_and_redo_restores_them` / `test_replay_of_the_editable_import_reproduces_the_same_document`）。
+
+## 既存の経路をどう寄せたか
+
+| 経路 | いま何を呼ぶか |
+|---|---|
+| `Session(step_path, deviation)` → `Session.load_step` | `import_step_editable` 1本。`_setup_floor_seq`（土台はundo不可）は従来どおり。**Python APIとして残す**（pytestがこの形で土台を作る） |
+| WebSocket `{"cmd":"import_step"}`（UIの「STEP読み込み」） | `Session.import_step(path, editable=True)` → 新verb。**通常のverbとしてundoできる** |
+| MCPツール `import_step` | 既定で新verb。`editable=false` のときだけコアの `import_step`（参照だけ） |
+| コアの verb `import_step` | **そのまま**。保存済みログの再生に要るので消せないし、参照だけ欲しい経路も残す |
+
+## ツール名とverb名が食い違う唯一の場所
+
+MCPツール `import_step` が積むログは `verb="import_step_editable"`。
+`test_mcp_verbs.py::test_tool_names_match_the_verb_names_in_the_operation_log` は
+「LOGGING_TOOLSの各名がverbとして登録されている」ことしか見ないので通るが、
+**ログを読んだAIが同じ綴りのツールを探すと見つからない**という穴は残る。
+ツールの説明文とMCP.mdに対応を明記して塞いである（消すには19操作の表とツール名を変える必要があり、
+それはこのタスクの範囲を超える）。
+
+## 廃止に伴って直したもの
+
+- `duocad/server.py` / `duocad/mcp_server.py` の `--step` / `--no-step` と `DEFAULT_STEP` 定数。
+  PCケースのパスの移し先は **`web/scripts/models.mjs`**（読む側が決める）。
+- `web/scripts/smoke.mjs` … 冒頭で自分で「STEP読み込み」を踏んで27部品を入れる。
+  **読み込みの後にEscで既定コマンドへ戻す**のを忘れると、以後の押し出しで `#distance` が出ない
+  （`CommandHost.commit` はコマンドを既定へ戻さない。2026-08-15に実際に踏んだ）。
+- `web/scripts/smoke-mcp.mjs` … 空で起動し、MCPの `import_step` を呼んでから27件を検査する。
+- `web/scripts/smoke-files.mjs` / `acceptance.mjs` … 「編集可能にする」の対象を参照ボディから
+  **読み込んでできた編集用ボディ**へ。参照は隠れていて `projectFace` が null を返すので指せない。
+- UIの `make_editable_copy` コマンドは**ボディの複製**として残っている（UIから参照ボディを指す経路は
+  もう存在しない）。

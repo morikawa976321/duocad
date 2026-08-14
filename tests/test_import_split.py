@@ -43,6 +43,7 @@ from duocad import kernel
 from duocad.document import Document
 from duocad.io_step import import_step
 from duocad.oplog import OpLog
+from duocad.verbs import import_step_editable
 
 MODELS = Path(r"C:\Users\tm976\mf\3d-models")
 PC_CASE = MODELS / "mATX_PC_case_20251122" / "PC_case_20251122.step"
@@ -286,3 +287,121 @@ def test_replay_reproduces_every_body_with_the_same_ids():
     assert [
         (body.id, body.name, body.kind) for body in restored.bodies
     ] == before
+
+
+# --------------------------------------------------------------------------------------
+# verb `import_step_editable`(2026-08-15)
+#
+# **読んだら使える**ことの契約。起動オプション `--step` が廃止できるかどうかは、
+# 起動時にしかできなかったこの手順(参照 + 編集用コピー + 参照を隠す)が
+# **1本のverb**としてアプリ内・MCPから踏めるかどうかにかかっている。
+# --------------------------------------------------------------------------------------
+def _imported_editable(path: Path):
+    """新verbでSTEPを読んだ文書と、返ってきた編集用BodyIdの並びを返す。"""
+    doc = Document()
+    body_ids = import_step_editable(doc, str(path))
+    return doc, body_ids
+
+
+def test_editable_import_makes_one_editable_body_per_solid():
+    """PCケースを読むと**編集可能なボディが27個**でき、参照ボディは隠れている。
+
+    追加操作なしに面をクリックして押し出せる状態(=起動時の `--step` と同じ状態)が
+    アプリ内の読み込みだけで揃うこと。ここが本タスクの目的そのもの。
+    """
+    doc, body_ids = _imported_editable(PC_CASE)
+
+    editable = [body for body in doc.bodies if body.kind == "solid"]
+    references = [body for body in doc.bodies if body.kind == "reference"]
+
+    assert len(editable) == 27, f"編集可能なボディが{len(editable)}個(期待27個)"
+    assert body_ids == [body.id for body in editable], "戻り値は編集可能なボディのIDの並び"
+    assert all(doc.is_editable(body_id) for body_id in body_ids)
+    assert len(references) == 27, "原本(参照ボディ)も1ソリッドにつき1つ残す"
+    assert all(body.visible is False for body in references), (
+        "参照ボディは隠すこと(可視のままだと同じ形が二重に描かれ、ピック失敗が再発する)"
+    )
+    assert all(body.visible is True for body in editable)
+
+
+def test_editable_import_is_a_single_operation_with_every_id_recorded():
+    """操作ログは**1行**。作った全ID(参照・編集用の両方)が `args` に載る。
+
+    N行積むと27部品を読んだ後の Ctrl+Z が最後の1個だけを戻す挙動になる
+    (実装計画書§2「undo1回で消える単位＝操作ログ1行＝MCP1呼び出し」)。
+    IDを記録しないと再生で別のIDになり、保存した選択集合が指す先を失う。
+    """
+    doc, body_ids = _imported_editable(SHELF)
+
+    assert len(doc.log.entries) == 1, (
+        f"操作ログが{len(doc.log.entries)}行(期待1行)。"
+        "コマンド層から import_step と make_editable_copy をN回発行していないか"
+    )
+    operation = doc.log.entries[0]
+    assert operation.verb == "import_step_editable"
+    assert operation.args["path"] == str(SHELF)
+    assert operation.args["body_ids"] == list(body_ids)
+    assert operation.args["reference_ids"] == [
+        body.id for body in doc.bodies if body.kind == "reference"
+    ]
+    assert len(operation.args["reference_ids"]) == 17
+
+
+def test_undo_removes_every_body_of_the_editable_import_and_redo_restores_them():
+    """undo 1回で34個(参照17 + 編集用17)がまとめて消え、redoで**同じIDで**戻る。"""
+    doc, _body_ids = _imported_editable(SHELF)
+    before = [(body.id, body.kind, body.visible) for body in doc.bodies]
+    assert len(before) == 34
+
+    doc.log.undo(doc)
+
+    assert doc.bodies == [], "undo1回で参照・編集用の両方が消えること"
+    assert doc.log.entries == []
+
+    doc.log.redo(doc)
+
+    assert [(body.id, body.kind, body.visible) for body in doc.bodies] == before
+    assert len(doc.log.entries) == 1, "redoは既存のエントリを有効化し直すだけ(積み直さない)"
+
+
+def test_replay_of_the_editable_import_reproduces_the_same_document():
+    """保存 → 再生(`open_document` が通る経路)で、IDも種別も可視性も同じ形に戻る。"""
+    doc, _body_ids = _imported_editable(SHELF)
+    before = [(body.id, body.name, body.kind, body.visible) for body in doc.bodies]
+
+    restored = Document()
+    restored.log = OpLog.from_json(doc.log.to_json())
+    restored.log.replay(restored)
+
+    assert [
+        (body.id, body.name, body.kind, body.visible) for body in restored.bodies
+    ] == before
+
+
+def test_editable_import_leaves_nothing_behind_when_the_path_is_missing(tmp_path):
+    """パスが無ければ FileNotFoundError。**document にもログにも何も残らない**。"""
+    doc = Document()
+    missing = tmp_path / "no-such-file.step"
+
+    with pytest.raises(FileNotFoundError):
+        import_step_editable(doc, str(missing))
+
+    assert doc.bodies == []
+    assert doc.log.entries == []
+
+
+def test_editable_import_leaves_nothing_behind_when_the_file_is_broken(tmp_path):
+    """STEPとして壊れていれば ValueError。documentにもログにも何も残らない。
+
+    `kernel.read_step` が `ReadFile()` の戻り値を検査してから例外にすること
+    (検査を飛ばすとPython例外ではなくプロセスごと落ちる。io_step.py の落とし穴)。
+    """
+    doc = Document()
+    broken = tmp_path / "broken.step"
+    broken.write_text("これはSTEPではない\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        import_step_editable(doc, str(broken))
+
+    assert doc.bodies == []
+    assert doc.log.entries == []

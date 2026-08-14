@@ -25,7 +25,7 @@
 1. `describe_document` で `body_id` / スケッチ / パラメータ名を知る
 2. `propose_selection`（`refs` か `predicate`）→ 必要なら `measure` で確認 → `commit_selection`
 3. `fillet(radius=…)` / `extrude(distance=…)` など — **辺や領域は引数に書かない**
-4. `import_step` のあとは戻り値の `hint` どおり `make_editable_copy` してから編集する
+4. `import_step` は**読んだ時点で編集できるボディ**を返す（`body_ids`。追加の1手は要らない）
 
 ## 何が起きるか（このサーバの位置づけ）
 
@@ -58,8 +58,6 @@ MCPクライアントが**このプロセスを起動する**（自分で先に�
 
 | オプション | 既定 | 意味 |
 |---|---|---|
-| `--step PATH` | `PC_case_20251122.step` | 起動時に読むSTEP |
-| `--no-step` | — | STEPを読まずに空で起動する |
 | `--port` | 8765 | WebSocket |
 | `--http-port` | 8766 | 静的配信（ブラウザで開くのはこちら） |
 | `--deviation` | 0.2 | テセレーションの線形偏差（mm・絶対） |
@@ -83,7 +81,8 @@ claude mcp add duocad -- C:\Users\tm976\mf\duocad\.venv\Scripts\python.exe -m du
 
 登録できたかは `claude mcp list`（接続まで見る）で確認する。セッション内では `/mcp` で
 ツール一覧が出る。**パスは絶対で書く** — `claude` を起動したディレクトリが
-`duocad` とは限らないため。STEPを変えたいときは末尾に `--step <path>` を足す。
+`duocad` とは限らないため。**起動時に読むSTEPを決める引数は無い**（2026-08-15に `--step` を廃止）——
+サーバは常に空の文書で立ち、STEPは `import_step` で読む。
 
 設定ファイルを直接書く場合（`.mcp.json` / `~/.claude.json` の `mcpServers`）：
 
@@ -121,12 +120,19 @@ claude mcp add duocad -- C:\Users\tm976\mf\duocad\.venv\Scripts\python.exe -m du
 1. `describe_document` を呼ぶ → `body_id`・スケッチ・パラメータ名を得る
 2. 手前の部品を隠すなら `set_visible(body_id, false)`（**人間の画面からも消える**）
 3. 対象を `propose_selection` で選び、`commit_selection` してから fillet / extrude 等
-4. STEPを足したら `import_step` → `make_editable_copy`（戻り値の `hint` を見る）
+4. STEPを足すなら `import_step(path)` —— **これ1回で編集できるボディが揃う**
+   （戻り値の `body_ids` がそれ。`reference_ids` は隠してある原本。`editable=false` を渡したときだけ
+   従来どおり参照ボディだけが増え、続きに `make_editable_copy` が要る）
 5. 取り消すのは `undo`（UIと同じ履歴）
 
 読み込んだSTEPはソリッドごとに「参照ボディ（読み取り専用・隠されている）」と
-「編集用コピー」の対になる。`describe_document` が既定で返すのは**編集用だけ**で、
+「編集用ボディ」の対になる。`describe_document` が既定で返すのは**編集用だけ**で、
 参照ボディの件数は `reference_count` で知らせる（`include_references=true` で出せる）。
+**参照ボディの可視性は切り替えられない**（原本なので。編集用の `body_id` を使う）。
+
+> **ツール名と操作ログのverb名が食い違う唯一の場所**: `import_step` は既定で
+> `verb="import_step_editable"` を1行積む（`editable=false` のときだけ `verb="import_step"`）。
+> ログを読んで次の一手を決めるときは、どちらも `import_step` ツールで呼び直せる。
 
 ## 実装のメモ
 

@@ -1,16 +1,16 @@
 /**
  * 実ブラウザでのパネルとファイル操作の検査(タスクE・2026-08-14)。
  *
- * `smoke-features.mjs` と同じく**空の文書**(`--no-step`)から始めて、人が手でやる順序を
+ * `smoke-features.mjs` と同じく**空の文書**から始めて、人が手でやる順序を
  * 本物のクリックとキー入力で通す。見るのはタスクEの検証1〜5:
  *
  *   1. **穴の径を1箇所編集して、反復で作った全部の穴が追随する**(M3の存在理由)
  *   2. **保存 → 再読込 → 開く → 同じ形**(操作ログから再生される)
- *   3. STEPを読み込み、`make_editable_copy` で編集可能にして押し出せる
+ *   3. STEPを読み込む(その時点で編集可能なボディができる)。面を選んで編集可能なコピーも作れる
  *   4. STEP/STL を書き出し、**STEPは読み戻して体積が一致**(読み戻しは pytest 側)
  *   5. 履歴パネルでundo/redoの位置が分かり、実際に戻せる
  *
- *   duocad> .venv\Scripts\python.exe -m duocad.server --no-step --port 8775 --http-port 8776 --no-open
+ *   duocad> .venv\Scripts\python.exe -m duocad.server --port 8775 --http-port 8776 --no-open
  *   web>    node scripts/smoke-files.mjs --url http://127.0.0.1:8776/ --workdir <書き込めるディレクトリ>
  *
  * **サーバは毎回起動し直す**(文書は接続より長生きするので、前回の形が残っていると
@@ -102,7 +102,7 @@ async function main() {
       polling: 100,
     })
     if ((await page.evaluate(() => window.__duocad.parts.length)) !== 0) {
-      fail('空の文書で起動していない(--no-step でサーバを起動し直す)')
+      fail('空の文書で起動していない(サーバを起動し直す)')
     }
     ok('空の文書で起動した')
 
@@ -449,60 +449,90 @@ async function main() {
     ok(`STLを書き出した(${statSync(stlPath).size} B / 偏差 ${stl.deviation}mm)`)
 
     // ================================================================ 検証3: 参照部品
+    // 読み込んだ時点で編集可能なボディができ、参照ボディは隠れて画面から指せない
+    // (隠したBodyは形状が配信されないので `projectFace` が null を返す)。
+    const originalVolume = (await look()).bodies[0].volume
+    const idsBefore = await page.evaluate(() =>
+      window.__duocad.parts.map((body) => body.body_id),
+    )
+    const partsBefore = idsBefore.length
     await page.click('#file-import-step')
     await typeInto('#file-path', stepPath)
     await page.keyboard.press('Enter')
-    await waitFor(() => window.__duocad.state.bodies.length >= 2, 'STEPを読み込めない')
-    const imported = await page.evaluate(
-      () => window.__duocad.state.bodies.filter((body) => body.kind === 'reference').length,
+    await waitFor(
+      (previous) => window.__duocad.parts.length === previous + 1,
+      'STEPを読み込めない',
+      partsBefore,
     )
-    if (imported === 0) fail('参照ボディが増えていない')
+    const importedId = await page.evaluate((before) => {
+      const added = window.__duocad.parts.filter((body) => !before.includes(body.body_id))
+      return added[0]?.body_id ?? null
+    }, idsBefore)
+    if (!importedId) fail('読み込んでできた編集用ボディが特定できない')
+
+    const references = await page.evaluate(() => {
+      const refs = window.__duocad.state.bodies.filter((body) => body.kind === 'reference')
+      return {
+        count: refs.length,
+        hidden: refs.filter((body) => body.visible === false).length,
+      }
+    })
+    if (references.count < 1) fail('参照ボディが増えていない')
+    if (references.hidden !== references.count) {
+      fail(`参照ボディが隠れていない: ${references.count} 個中 非表示 ${references.hidden}`)
+    }
     // **UIから出したSTEPを読み戻して体積が一致する**(タスクEの検証4の「UIから出しても同じ」)。
     // 許容差は相対 1e-6 —— §7の訂正どおり `==` では成立しない(再読込で数値積分の順序が変わる)。
-    const roundTrip = await page.evaluate(() => {
-      const reference = window.__duocad.state.bodies.find((body) => body.kind === 'reference')
-      const solid = window.__duocad.parts[0]
-      return { reference: reference.volume, solid: solid.volume }
-    })
-    if (Math.abs(roundTrip.reference - roundTrip.solid) > Math.abs(roundTrip.solid) * 1e-6) {
-      fail(`STEP往復で体積が変わった: ${roundTrip.solid} -> ${roundTrip.reference}`)
+    const importedVolume = await page.evaluate(
+      (id) => window.__duocad.parts.find((body) => body.body_id === id).volume,
+      importedId,
+    )
+    if (Math.abs(importedVolume - originalVolume) > Math.abs(originalVolume) * 1e-6) {
+      fail(`STEP往復で体積が変わった: ${originalVolume} -> ${importedVolume}`)
     }
     ok(
-      `STEPを読み込んだ(参照ボディ ${imported} 個)。**読み戻した体積が一致**` +
-        `(${roundTrip.solid.toFixed(6)} vs ${roundTrip.reference.toFixed(6)})`,
+      `STEPを読み込んだ(読み込んだボディはそのまま編集できる)。**読み戻した体積が一致**` +
+        `(${originalVolume.toFixed(6)} vs ${importedVolume.toFixed(6)})`,
     )
 
-    // 参照ボディの面を選んで「編集可能にする」。参照は `parts`(kind=solid)には出ないので、
-    // **パーツ一覧ではなく状態から** body_id を取り、その面を本物のクリックで指す。
-    //
-    // **先に編集用ソリッドを隠す**。読み込んだのは自分を書き出したSTEPなので、参照と
-    // ソリッドが同じ場所にぴったり重なっている —— 隠さないとクリックがどちらに当たるか
-    // 決まらない(「手前を隠すと奥が選べる」= M3.5の可視性の使いどころそのもの)。
+    // 「編集可能にする」は複製の経路。対象は参照ではなく、読み込んでできた編集用ボディ。
+    // **先に他を隠して対象だけ表示に戻す** —— 読み込んだのは自分を書き出したSTEPなので、
+    // 元のソリッドと同じ場所に重なっている(「手前を隠すと奥が選べる」= M3.5の可視性)。
     await page.click('#parts-hide-all')
     await waitFor(
       () => window.__duocad.parts.every((body) => !body.visible),
       '編集用ソリッドを隠せない',
     )
-    const referenceId = await page.evaluate(
-      () => window.__duocad.state.bodies.find((body) => body.kind === 'reference').body_id,
+    await page.click(`.parts-row[data-body-id="${importedId}"] input.visible-toggle`)
+    await waitFor(
+      (id) => {
+        const body = window.__duocad.parts.find((item) => item.body_id === id)
+        if (!body?.visible) return false
+        for (let index = 1; index <= 30; index += 1) {
+          if (window.__duocad.projectFace(id, index)) return true
+        }
+        return false
+      },
+      '読み込んだボディの面が画面から指せない',
+      importedId,
     )
     const facePoint = await page.evaluate((id) => {
       const rect = document.querySelector('.viewport').getBoundingClientRect()
-      for (let index = 1; index <= 12; index += 1) {
+      for (let index = 1; index <= 30; index += 1) {
         const position = window.__duocad.projectFace(id, index)
         if (position) return { x: position.x + rect.left, y: position.y + rect.top, index }
       }
       return null
-    }, referenceId)
-    if (!facePoint) fail('参照ボディの面が画面から指せない(隠れている可能性)')
+    }, importedId)
+    if (!facePoint) fail('読み込んだボディの面が画面から指せない')
     await page.mouse.click(facePoint.x, facePoint.y)
     await waitFor(
       (id) =>
         (window.__duocad.selection?.items ?? []).some(
           (item) => item.body === id && item.kind === 'face',
         ),
-      '参照ボディの面を選べない',
-      referenceId,
+      '読み込んだボディの面を選べない',
+      importedId,
     )
     const solidsBefore = (await look()).bodies.length
     await page.click('#file-make-editable')
@@ -512,7 +542,7 @@ async function main() {
       '編集可能なコピーができない',
       solidsBefore + 1,
     )
-    ok('参照ボディの面を選んで**編集可能なコピー**を作れた(そのまま押し出せる状態)')
+    ok('面を選んで**編集可能なコピー**を作れた(複製の経路)')
 
     // **画面に出たエラーを見落とさない**。サーバのエラーは通知欄へ出るだけで、
     // ブラウザのコンソールには出ない —— ここを見ないと「失敗しているのに緑」が起きる

@@ -551,7 +551,7 @@ def test_the_process_starts_and_answers_over_real_stdio():
             sys.executable,
             "-m",
             "duocad.mcp_server",
-            "--no-step",
+            # `--step` / `--no-step` は2026-08-15に廃止(常に空の文書で起動する)
             # 既定のポート(8765/8766)は実機のサーバが使っている可能性があるので避ける
             "--port",
             "18765",

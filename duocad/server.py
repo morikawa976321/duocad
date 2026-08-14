@@ -7,7 +7,6 @@
 起動(1コマンド):
     .venv\\Scripts\\python.exe -m duocad.server
 
-    --step PATH        起動時に読み込むSTEP(既定: 3d-models/shelf_attachment_GD.step)
     --port 8765        WebSocketのポート
     --http-port 8766   静的配信のポート(ブラウザで開くのはこちら)
     --deviation 0.2    テセレーションの線形偏差(mm・絶対)
@@ -117,6 +116,7 @@ from .verbs import (
     extrude as extrude_regions_verb,
     extrude_face,
     fillet as fillet_verb,
+    import_step_editable,
     make_editable_copy,
     pattern_circular as pattern_circular_verb,
     pattern_rectangular as pattern_rectangular_verb,
@@ -124,8 +124,14 @@ from .verbs import (
 from .verbs import set_visible as set_visible_verb
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_STEP = Path(r"C:\Users\tm976\mf\3d-models\mATX_PC_case_20251122\PC_case_20251122.step")
 DEFAULT_WEB_DIST = REPO_ROOT / "web" / "dist"
+
+# **起動オプション `--step` は廃止した(2026-08-15)**。サーバは常に空の文書で立ち上がり、
+# STEPはアプリ内の「STEP読み込み」かMCPの `import_step` から読む(どちらも編集可能な
+# ボディまで作る verb `import_step_editable` を通る)。起動時にしかできないことが無くなった
+# ので、起動前に「今日はどのSTEPを読むか」を決める必要が無くなった。
+# 読み込むSTEPのパスを既定として持つ場所も無くなる(旧 `DEFAULT_STEP`)ので、smokeスクリプトが
+# 使うPCケースのパスは `web/scripts/models.mjs` が持つ。
 
 #: プレビューできるverb -> (`Session` のメソッド名, そのverbが受け取る引数名)。
 #:
@@ -293,29 +299,25 @@ class Session:
 
     # ---------------------------------------------------------------- 文書の組み立て
     def load_step(self, path: Path) -> list:
-        """STEPを読み、ソリッドごとに参照ボディ+編集用コピーを作る。
+        """STEPを読み、ソリッドごとに参照ボディ+編集用コピーを作る(Python APIとして残す)。
 
-        参照ボディは編集用コピーを作った直後に `set_visible(..., False)` で隠す。
-        **verb経由にしている**(直接 `body.visible = False` を代入しない) — そうしないと、
-        保存したログ(`document.log.to_json()`)を再生したときに「参照を隠した」という
-        操作が失われ、参照・編集用の両方が可視のまま復元されてしまう(2026-08-11のQA指摘)。
-        同じ形が二重にテセレーション・二重に送信されるのを避けるため
-        (1ソリッドにつき同時に見えるのは1つ、が契約)。
+        **中身は verb `import_step_editable` そのもの**(2026-08-15)。以前はここで
+        `import_step` → `make_editable_copy` ×N → `set_visible` ×N を並べていたが、
+        同じ手順をアプリ内・MCPからも踏めるようにverbへ移した(起動時にしかできないこと
+        を無くす、が本タスクの主旨)。参照ボディを隠すのもverbの中で完結する ——
+        再生時は `_do_import_step_editable` が同じ状態を作り直すので、「参照を隠した」
+        という操作が失われて両方可視で復元される(2026-08-11のQA指摘)ことはない。
 
         **土台(undoの対象外にする範囲)はverb名ではなくseqの下限で区切る**
-        (`_setup_floor_seq`。`load_step` が積んだ最後のseq)。verb名で「末尾が
-        `import_step`/`make_editable_copy`/`set_visible` のどれか」と判定する実装だと、
-        `set_visible` はこの後(将来のMCP等から)ユーザー操作としても呼ばれうるため、
-        文書に対して1回でも呼ぶと末尾が `set_visible` になって以後の `undo` が誤って
-        拒否される(2026-08-11のQA指摘)。seqの下限なら、土台の後に積まれた操作だけが
-        正しくundoできる。
+        (`_setup_floor_seq`。ここが積んだ最後のseq)。verb名で判定する実装だと、
+        `set_visible` のように後からユーザー操作としても呼ばれうるverbが末尾に来た
+        瞬間に以後の `undo` が誤って拒否される(2026-08-11のQA指摘)。seqの下限なら、
+        土台の後に積まれた操作だけが正しくundoできる。
+
+        **`Session(step_path, deviation)` の起動経路は残す**(pytestが直に呼ぶ)。
+        CLIの `--step` は廃止したので、通常の起動でここを通ることはもう無い。
         """
-        reference_ids = io_step.import_step(self.document, str(path))
-        editable_ids = []
-        for reference_id in reference_ids:
-            editable_id = make_editable_copy(self.document, reference_id)
-            set_visible_verb(self.document, reference_id, False)
-            editable_ids.append(editable_id)
+        editable_ids = import_step_editable(self.document, str(path))
         entries = self.document.log.entries
         self._setup_floor_seq = entries[-1].seq if entries else 0
         return editable_ids
@@ -329,7 +331,7 @@ class Session:
         """編集対象のボディ(アクティブ)。無ければ RuntimeError。"""
         body = self.document.active_body()
         if body is None:
-            raise RuntimeError("文書にボディが無い(--step を指定して起動する)")
+            raise RuntimeError("文書にボディが無い(STEPを読み込むか、スケッチから作る)")
         return body
 
     # ---------------------------------------------------------------- 状態
@@ -918,9 +920,26 @@ class Session:
             "changed_bodies": changed_bodies,
         })
 
-    def import_step(self, path: Any) -> dict:
+    def import_step(self, path: Any, editable: Any = True) -> dict:
+        """STEPを読む。**既定は編集可能**(verb `import_step_editable`)。
+
+        「読んだら使える」が本人の指示なので、UI・MCPから来る通常の読み込みは
+        ソリッドごとに参照ボディ(隠す)と編集用ボディを作る1回のverbになる。
+
+        `editable=False` のときだけコアのverb `import_step`(参照ボディだけ)を通す ——
+        **参照だけ欲しい経路も残す**ための逃げ道で、既定にはしない。どちらも
+        ログ1行・undo1回に収まる。
+        """
+        if editable:
+            body_ids = import_step_editable(self.document, str(self._resolve(path)))
+            args = self.document.log.entries[-1].args
+            return self._after_logged_verb({
+                "body_ids": list(body_ids),
+                "reference_ids": list(args["reference_ids"]),
+                "editable": True,
+            })
         body_ids = io_step.import_step(self.document, self._resolve(path))
-        return self._after_logged_verb({"body_ids": list(body_ids)})
+        return self._after_logged_verb({"body_ids": list(body_ids), "editable": False})
 
     # ---------------------------------------------------------------- E: ファイル操作
     #
@@ -1212,7 +1231,7 @@ class Server:
             try:
                 await self._push(connection, applied=None, only=connection)
             except Exception as error:
-                # 文書が空(--no-step)等で状態が作れなくても、接続ごと落とさず理由を画面へ返す
+                # 文書が空(起動直後)等で状態が作れなくても、接続ごと落とさず理由を画面へ返す
                 await _send(
                     connection,
                     {
@@ -1460,21 +1479,15 @@ async def run(session: Session, host: str, port: int) -> None:
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="duocad M1 サーバ(WebSocket + 静的配信)")
-    parser.add_argument("--step", type=Path, default=DEFAULT_STEP)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--http-port", type=int, default=8766)
     parser.add_argument("--deviation", type=float, default=kernel.DEFAULT_DEVIATION)
     parser.add_argument("--web-dist", type=Path, default=DEFAULT_WEB_DIST)
     parser.add_argument("--no-open", action="store_true", help="ブラウザを自動で開かない")
-    parser.add_argument("--no-step", action="store_true", help="STEPを読まずに空で起動する")
     args = parser.parse_args(argv)
 
-    step_path: Optional[Path] = None if args.no_step else args.step
-    if step_path is not None and not step_path.exists():
-        print(f"STEPが見つからない: {step_path}", file=sys.stderr)
-        return 2
-
-    session = Session(step_path, args.deviation)
+    # **常に空の文書で起動する**(`--step` / `--no-step` は2026-08-15に廃止)。
+    session = Session(None, args.deviation)
     ws_url = f"ws://127.0.0.1:{args.port}"
     try:
         start_http_server(args.web_dist, args.http_port, ws_url)

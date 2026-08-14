@@ -141,6 +141,26 @@ def test_load_step_makes_one_editable_body_per_solid(tmp_path):
     assert len(_editable_bodies(session)) == 17
 
 
+def test_the_startup_load_is_one_operation_that_cannot_be_undone(tmp_path):
+    """`Session(step_path, DEVIATION)` の起動経路は**今までどおり**動く(2026-08-15)。
+
+    起動オプション `--step` は廃止したが、Python APIの `Session(step_path, ...)` は残す
+    (pytestがこの形で土台を作る)。中身は verb `import_step_editable` 1本になったので、
+    **操作ログは1行**で、`_setup_floor_seq`(土台はundoできない)も従来どおり効く ——
+    以前は `import_step` + `make_editable_copy`×N + `set_visible`×N で 1+2N 行だった。
+    """
+    session = _session(SHELF, tmp_path)
+
+    entries = session.document.log.entries
+    assert [entry.verb for entry in entries] == ["import_step_editable"], (
+        f"起動時の読み込みが{len(entries)}行(期待1行): {[entry.verb for entry in entries]}"
+    )
+    assert session.document.log.can_undo is True, "ログ自体は積まれている(前提)"
+    assert session.can_undo is False, "起動時に読んだ土台はundoの対象外"
+    with pytest.raises(ValueError):
+        session.undo()
+
+
 def test_load_step_does_not_show_the_same_solid_twice(tmp_path):
     """読み込み直後に**形状を送るBodyはソリッドの数と同じ**(17個)。
 

@@ -79,6 +79,8 @@
         return typeof args.plane === 'object' && args.plane !== null
           ? String((args.plane as { name?: string }).name ?? '面に貼る')
           : ''
+      case 'import_step_editable':
+        return `${String(args.path ?? '')} / ${count(args.body_ids)}部品`
       case 'import_step':
       case 'make_editable_copy':
         return String(args.path ?? args.source_body_id ?? '')

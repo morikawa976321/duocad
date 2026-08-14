@@ -83,7 +83,6 @@ from websockets.asyncio.server import serve
 
 from . import io_step, kernel, predicates, query, region, selection, sketch
 from .server import (
-    DEFAULT_STEP,
     DEFAULT_WEB_DIST,
     Server,
     Session,
@@ -496,7 +495,9 @@ class DocumentTools:
                 "name": "make_editable_copy",
                 "description": (
                     "参照ボディから編集用ソリッドを作るときに呼ぶ。"
-                    "import_step のあと、形を変えたい相手に対して使う。"
+                    "import_step は既定で編集可能なボディまで作るので通常は要らない —— "
+                    "editable=false で読んだ参照ボディを後から編集したいとき、"
+                    "または既存ボディの複製が欲しいときに使う。"
                 ),
                 "inputSchema": {
                     "type": "object",
@@ -529,13 +530,21 @@ class DocumentTools:
             {
                 "name": "import_step",
                 "description": (
-                    "STEPを参照ボディとして読み込むときに呼ぶ。"
-                    "編集するには続けて make_editable_copy が要る(戻り値の hint を見る)。"
+                    "STEPを読み込むときに呼ぶ。"
+                    "既定でソリッドごとに編集可能なボディができ、そのまま押し出し等の対象にできる"
+                    "(参照ボディは原本として隠したまま文書に残る)。"
+                    "読むだけで編集しないなら editable=false。"
+                    "操作ログには verb=import_step_editable(editable=false なら import_step)"
+                    "として1行載る —— どちらもこの import_step で呼ぶ。"
                 ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "読み込むSTEPファイルのパス"},
+                        "editable": {
+                            "type": "boolean",
+                            "description": "編集可能なボディまで作るか。既定 true",
+                        },
                     },
                     "required": ["path"],
                     "additionalProperties": False,
@@ -647,7 +656,7 @@ class DocumentTools:
 
         **既定では参照ボディ(kind="reference")を出さない**。STEPを読むとソリッドごとに
         「参照(読み取り専用・隠されている)」と「編集用コピー」の2つができる
-        (`Session.load_step`)ので、そのまま全部見せると同じ部品が2回並び、AIが
+        (verb `import_step_editable`)ので、そのまま全部見せると同じ部品が2回並び、AIが
         隠しても画面が変わらない方(参照)を掴む。**編集対象だけを既定にする**のが
         AIから見た文書の姿として正しい。件数は `reference_count` で必ず知らせるので、
         隠していることは分かる(黙って落とさない)。
@@ -727,7 +736,7 @@ class DocumentTools:
         before = self._find_body(body_id)
         if before.kind == "reference":
             # **参照ボディの可視性は触らせない**(2026-08-11のQAで指摘)。参照は読み込んだ
-            # STEPの原本で、編集用コピーを作った直後に隠してある(`Session.load_step`)。
+            # STEPの原本で、読み込み(`import_step_editable`)の時点で隠してある。
             # ここを表示に戻すと**同じソリッドが二重に描かれ**、M3.5が「1ソリッドにつき
             # 同時に見えるのは1つ」として塞いだ状態がAI経路だけで復活する。
             # `include_references=True` は**見せる**ためのもので、触ってよいという意味ではない。
@@ -1248,21 +1257,38 @@ class DocumentTools:
         )
 
     # ------------------------------------------------------------------ 入出力
-    def import_step(self, path: str) -> dict:
-        """STEPを**参照ボディとして**読む(コアの verb そのもの)。
+    def import_step(self, path: str, editable: bool = True) -> dict:
+        """STEPを読む。**既定で編集可能なボディまで作る**(verb `import_step_editable`)。
 
-        起動時の `Session.load_step` は「参照 + 編集用コピー + 参照を隠す」までやるが、
-        それは利便のための組み合わせであって verb ではない。MCPが出すのは verb の側で、
-        足りない1手(`make_editable_copy`)を戻り値の `hint` で必ず知らせること ——
-        黙って参照ボディだけ増やすと、AIは編集できない相手に verb を打ち続ける。
+        以前はコアの verb `import_step`(参照ボディだけ)を出しており、AIは読んだ後に
+        `make_editable_copy` をソリッドの数だけ打つ必要があった —— PCケースなら27回。
+        「読んだら使える」が本人の指示なので、既定を編集可能側にした(2026-08-15)。
+
+        `editable=false` のときだけ参照ボディだけを足す。その場合は足りない1手を
+        `hint` で知らせる —— 黙って参照ボディだけ増やすと、AIは編集できない相手に
+        verb を打ち続ける。
         """
         before = self._revision_snapshot()
-        applied = self.session.import_step(path)
+        want_editable = bool(editable)
+        applied = self.session.import_step(path, editable=want_editable)
+        if not want_editable:
+            return self._apply_logged(
+                before,
+                applied,
+                body_ids=list(applied["body_ids"]),
+                editable=False,
+                hint="参照ボディは編集できない。続けるには make_editable_copy を呼ぶ",
+            )
         return self._apply_logged(
             before,
             applied,
             body_ids=list(applied["body_ids"]),
-            hint="参照ボディは編集できない。続けるには make_editable_copy を呼ぶ",
+            reference_ids=list(applied["reference_ids"]),
+            editable=True,
+            hint=(
+                "body_ids はそのまま編集できる(make_editable_copy は要らない)。"
+                "reference_ids は隠してある読み込みの原本"
+            ),
         )
 
     def export_step(self, path: str, body_ids: Optional[list] = None) -> dict:
@@ -1639,12 +1665,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="duocad MCPサーバ(stdio) + WebSocket + web/dist の静的配信"
     )
-    parser.add_argument("--step", type=Path, default=DEFAULT_STEP)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--http-port", type=int, default=8766)
     parser.add_argument("--deviation", type=float, default=kernel.DEFAULT_DEVIATION)
     parser.add_argument("--web-dist", type=Path, default=DEFAULT_WEB_DIST)
-    parser.add_argument("--no-step", action="store_true", help="STEPを読まずに空で起動する")
     parser.add_argument(
         "--open",
         action="store_true",
@@ -1652,12 +1676,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    step_path: Optional[Path] = None if args.no_step else args.step
-    if step_path is not None and not step_path.exists():
-        _log(f"STEPが見つからない: {step_path}")
-        return 2
-
-    session = Session(step_path, args.deviation)
+    # **常に空の文書で起動する**(`--step` / `--no-step` は2026-08-15に廃止)。
+    # STEPはツール `import_step`(既定で編集可能なボディまで作る)から読む。
+    session = Session(None, args.deviation)
     try:
         asyncio.run(_run(session, args))
     except KeyboardInterrupt:

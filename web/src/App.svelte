@@ -246,9 +246,14 @@
     if (applied) {
       // 作ったスケッチへはそのまま入る(作ってから改めて「入る」を押させない)
       if (applied.verb === 'sketch_create' && applied.sketch_id) enterSketch(applied.sketch_id)
-      // **読み込んだだけでは編集できない**ことを必ず言う(E)。参照ボディへverbを打ち続ける
-      // 状態にしないための1手が `make_editable_copy` で、それはMCP側も戻り値の hint で
-      // 知らせている —— 人にだけ黙っているのは筋が通らない。
+      // **読み込んだら何ができる状態になったか**を言う(2026-08-15)。以前ここは
+      // 「読み込んだのは参照ボディ(編集不可)。編集するには…」と出していたが、
+      // 読み込みが編集可能なボディまで作るようになった今それは嘘になる。
+      // 参照だけを足す経路(`import_step`)はコアに残っているので、両方に文言を用意する。
+      if (applied.verb === 'import_step_editable') {
+        const count = applied.body_ids?.length ?? 0
+        note(`STEPを読み込んだ(${count}部品)。そのまま面をクリックして押し出せる`)
+      }
       if (applied.verb === 'import_step') {
         note('読み込んだのは参照ボディ(編集不可)。編集するには面を選んで「編集可能にする」')
       }

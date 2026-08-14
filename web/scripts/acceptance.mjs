@@ -10,8 +10,8 @@
  *
  *   duocad> node web/scripts/acceptance.mjs
  *
- * サーバは**このスクリプトが `python -m duocad.mcp_server --no-step` として起動する**
- * (`smoke-mcp.mjs` と同じ形)。**1つのプロセスがMCPとWebSocketの両方を持つ**ので、
+ * サーバは**このスクリプトが `python -m duocad.mcp_server` として空の文書で起動する**
+ * (`smoke-mcp.mjs` と同じ形。`--no-step` は廃止済み)。**1つのプロセスがMCPとWebSocketの両方を持つ**ので、
  * AIが叩いた結果が同じ文書としてブラウザに届く —— 交互操作の検証はこれが前提である。
  *
  * 見るのは3つ:
@@ -179,7 +179,7 @@ async function main() {
   console.log(`acceptance: ws=${wsPort} http=${httpPort} workdir=${workdir}`)
   const child = spawn(
     PYTHON,
-    ['-m', 'duocad.mcp_server', '--no-step', '--port', String(wsPort), '--http-port', String(httpPort)],
+    ['-m', 'duocad.mcp_server', '--port', String(wsPort), '--http-port', String(httpPort)],
     { cwd: REPO_ROOT, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
   )
   const serverLog = []
@@ -695,14 +695,28 @@ async function main() {
         'STEPを読み込めない',
         before,
       )
-      return '自分で書き出したSTEPを参照ボディとして読み込んだ(編集不可の注意が通知に出る)'
+      return '自分で書き出したSTEPを読み込んだ(そのまま編集できるボディができる)'
     })
 
     await attempt('human', 'make_editable_copy', async () => {
       await page.click('#parts-hide-all')
       await waitFor(() => window.__duocad.parts.every((body) => !body.visible), '編集用を隠せない')
-      const reference = await page.evaluate(
-        () => window.__duocad.state.bodies.find((body) => body.kind === 'reference').body_id,
+      // 参照は隠れていて指せない。直前の import で増えた編集用ボディ(parts の末尾)を表示して面を指す。
+      const importedId = await page.evaluate(
+        () => window.__duocad.parts[window.__duocad.parts.length - 1].body_id,
+      )
+      await page.click(`.parts-row[data-body-id="${importedId}"] input.visible-toggle`)
+      await waitFor(
+        (id) => {
+          const body = window.__duocad.parts.find((item) => item.body_id === id)
+          if (!body?.visible) return false
+          for (let index = 1; index <= 30; index += 1) {
+            if (window.__duocad.projectFace(id, index)) return true
+          }
+          return false
+        },
+        '読み込んだボディの面が画面から指せない',
+        importedId,
       )
       const point = await page.evaluate((id) => {
         const rect = document.querySelector('.viewport').getBoundingClientRect()
@@ -711,16 +725,16 @@ async function main() {
           if (position) return { x: position.x + rect.left, y: position.y + rect.top, index }
         }
         return null
-      }, reference)
-      if (!point) throw new Error('参照ボディの面が画面から指せない')
+      }, importedId)
+      if (!point) throw new Error('読み込んだボディの面が画面から指せない')
       await page.mouse.click(point.x, point.y)
       await waitFor(
         (id) =>
           (window.__duocad.selection?.items ?? []).some(
             (item) => item.body === id && item.kind === 'face',
           ),
-        '参照ボディの面を選べない',
-        reference,
+        '読み込んだボディの面を選べない',
+        importedId,
       )
       const before = (await look()).parts.length
       await page.click('#file-make-editable')
@@ -731,7 +745,7 @@ async function main() {
         before,
       )
       await page.click('#parts-show-all')
-      return '参照ボディの面をクリックして編集可能なコピーを作った'
+      return '面を選んで編集可能なコピーを作った(複製の経路)'
     })
 
     // ================================================================ AI側の19操作
@@ -904,7 +918,7 @@ async function main() {
     await attempt('ai', 'import_step', async () => {
       const result = await mcp.call('import_step', { path: aiStep })
       aiReference = result.body_ids[0]
-      return `参照ボディ ${result.body_ids.length} 個(hint: ${result.hint ? 'あり' : 'なし'})`
+      return `編集可能なボディ ${result.body_ids.length} 個`
     })
 
     await attempt('ai', 'make_editable_copy', async () => {
@@ -1025,7 +1039,7 @@ async function main() {
     console.log('\n--- 副次: 手だけで実物相当(全周円筒+円錐。空の文書で) ---')
     const solo = spawn(
       PYTHON,
-      ['-m', 'duocad.mcp_server', '--no-step', '--port', '8887', '--http-port', '8888'],
+      ['-m', 'duocad.mcp_server', '--port', '8887', '--http-port', '8888'],
       { cwd: REPO_ROOT, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
     )
     solo.stderr.resume()

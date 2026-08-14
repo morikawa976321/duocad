@@ -1,8 +1,9 @@
 /**
- * 実ブラウザでの起動確認(M3.5・2026-08-11改訂) — 「動くはず」で納品しないための機械検査。
+ * 実ブラウザでの起動確認(M3.5・2026-08-15改訂) — 「動くはず」で納品しないための機械検査。
  *
- * サーバが立っている状態で走らせると、**本物のマウスクリックで面を選び・数値を打ち・Enterで
- * 押し出し**、体積が変わったことを確かめる(M1由来)。
+ * サーバは空の文書で立つ(`--step` / `--no-step` は廃止済み)。このスクリプトがアプリ内の
+ * 「STEP読み込み」でPCケースを自分で読み、そのあと**本物のマウスクリックで面を選び・数値を打ち・
+ * Enterで押し出し**、体積が変わったことを確かめる(M1由来)。
  * これに加えてM3.5で: **パーツ一覧が27件出る**・**手前のパーツを隠すと奥の面が選べる**
  * (`viewport.project` は他Bodyに隠れている面に対して null を返す設計を利用して検査する)・
  * **可視性の切り替えがundoで戻る**、を検査する。
@@ -15,9 +16,12 @@
  */
 import { existsSync } from 'node:fs'
 import { launch } from 'puppeteer-core'
+import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
 
 const options = parseArgs(process.argv.slice(2))
 const url = options.url ?? 'http://127.0.0.1:8766/'
+const stepPath = options.step ?? PC_CASE_STEP
+const expectedParts = Number.parseInt(options['expect-parts'] ?? String(PC_CASE_SOLIDS), 10)
 const distance = Number.parseFloat(options.distance ?? '1')
 // 既定を長めにしてある: 一括の可視性切り替え(26部品ぶんのWebSocket往復)は、
 // 機械負荷が高いと数十秒かかることを実測した(2026-08-11・claude/cursorが60プロセス超
@@ -99,10 +103,64 @@ async function main() {
     await page.waitForFunction(
       () => {
         const hook = window.__duocad
-        return Boolean(hook && hook.ready && hook.parts && hook.parts.length > 0)
+        return Boolean(hook && hook.ready)
       },
       { timeout, polling: 100 },
     )
+
+    async function typeInto(selector, value) {
+      await page.click(selector)
+      await page.keyboard.down('Control')
+      await page.keyboard.press('KeyA')
+      await page.keyboard.up('Control')
+      await page.keyboard.press('Backspace')
+      await page.type(selector, String(value), { delay: 20 })
+    }
+
+    // サーバは空で立つ。前回の実行のサーバを使い回している場合は既に読まれている。
+    const partCount = await page.evaluate(() => window.__duocad.parts.length)
+    if (partCount === 0) {
+      await page.click('#file-import-step')
+      await typeInto('#file-path', stepPath)
+      await page.keyboard.press('Enter')
+      await page.waitForFunction(
+        (expected) => window.__duocad.parts.length === expected,
+        { timeout, polling: 100 },
+        expectedParts,
+      )
+      const references = await page.evaluate(() => {
+        const refs = window.__duocad.state.bodies.filter((body) => body.kind === 'reference')
+        return {
+          count: refs.length,
+          hidden: refs.filter((body) => body.visible === false).length,
+        }
+      })
+      if (references.count !== expectedParts || references.hidden !== expectedParts) {
+        fail(
+          `参照ボディが隠れていない: ${references.count} 個中 非表示 ${references.hidden} ` +
+            `(期待 ${expectedParts} 個すべて visible === false)`,
+        )
+      }
+      ok(
+        `STEP読み込みで${expectedParts}部品が編集可能な状態で入った` +
+          `(参照ボディ ${references.count} 個はすべて非表示)`,
+      )
+      // **Escで既定のコマンド(押し出す)へ戻す**。ツールバーからコマンドを起動すると
+      // 確定後もそのコマンドが構えたままで(`CommandHost.commit` は `commandId` を戻さない)、
+      // 面を選んでも距離の入力欄 `#distance` が出ない —— 以後の押し出しの段が
+      // 「セレクタが無い」で落ちる(2026-08-15に実際に踏んだ)。
+      await page.keyboard.press('Escape')
+      await page.waitForFunction(() => document.querySelector('#file-path') === null, {
+        timeout,
+        polling: 50,
+      })
+    } else if (partCount === expectedParts) {
+      ok('既に読み込み済み(前回の実行のサーバを使い回している)')
+    } else {
+      fail(
+        `部品数が ${partCount} 個(空でも ${expectedParts} でもない)。サーバを起動し直す`,
+      )
+    }
 
     // サーバは長寿命(このスクリプトを何度も同じプロセスへ再接続する運用がありうる)。
     // 前回の実行が可視性を変えたまま中断していた場合に備え、**必ず全表示から始める**。
@@ -516,15 +574,6 @@ async function main() {
     // **手動操作が一級の操作モードになる**ところ(実装計画書§8b C)。スケッチはM2から
     // コアとMCPにあったが、人からは描けなかった。ここで見るのはタスクCの検証1〜5で、
     // 検証6(MCPから同じ文書に見える)は smoke-mcp.mjs 側にある。
-    async function typeInto(selector, value) {
-      await page.click(selector)
-      await page.keyboard.down('Control')
-      await page.keyboard.press('KeyA')
-      await page.keyboard.up('Control')
-      await page.keyboard.press('Backspace')
-      await page.type(selector, String(value), { delay: 20 })
-    }
-
     async function clickPlane(u, v) {
       // **クリックの直前に射影し直す**(使い回さない。面のときと同じ理由)
       const at = await page.evaluate(

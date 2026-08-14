@@ -280,37 +280,68 @@ def test_export_without_a_deviation_is_refused(session: Session, tmp_path: Path)
 # --------------------------------------------------------------------------------------
 # 参照部品(STEP読み込み → 編集可能にする)
 # --------------------------------------------------------------------------------------
-def test_the_browser_can_import_a_step_and_make_it_editable(
+def test_the_browser_import_gives_editable_bodies_right_away(
     session: Session, tmp_path: Path
 ) -> None:
-    """STEPを読み込み、`make_editable_copy` で編集できるようにする(タスクEの検証3)。
+    """**画面から読み込んだSTEPは、追加操作なしに編集できる**(2026-08-15)。
 
-    読み込んだだけの参照ボディ(`kind="reference"`)は編集できない —— そこへ
-    verbを打ち続ける状態にしないための1手が `make_editable_copy` である。
+    タスクEの時点では読み込みは参照ボディ(`kind="reference"`)だけを足し、編集するには
+    `make_editable_copy` を1ボディずつ打つ必要があった —— PCケース27ソリッドなら27回。
+    起動オプション `--step` を廃止する前提として、その非対称を無くしたのがこの契約である。
+    **操作ログは1行**(undo1回でまるごと消える)。
+    """
+    body, _ = _box(session)
+    source = tmp_path / "part.step"
+    session.export_step_file(source)
+    log_before = len(session.document.log.entries)
+
+    async def script(send):
+        return await send({"cmd": "import_step", "path": str(source), "client_op": 1})
+
+    (imported, _clients) = _browser(session, script)
+
+    applied = imported["applied"]
+    assert applied["verb"] == "import_step_editable"
+    assert len(session.document.log.entries) == log_before + 1, "読み込みは操作ログ1行"
+    editable_ids = applied["body_ids"]
+    assert editable_ids, "編集可能なボディを返していない"
+    assert all(session.document.is_editable(body_id) for body_id in editable_ids)
+    # 原本(参照ボディ)は隠したまま文書に残る
+    references = [session._find_body(body_id) for body_id in applied["reference_ids"]]
+    assert references and all(not reference.visible for reference in references)
+    # **編集できる**ことを、実際にverbを通して確かめる(参照のままなら ValueError になる側)。
+    copy_id = editable_ids[0]
+    faces_before = kernel.face_count(session._find_body(copy_id).shape)
+    session.fillet([1], 1.0, body_id=copy_id)
+    assert kernel.face_count(session._find_body(copy_id).shape) > faces_before
+
+
+def test_the_browser_can_still_make_an_editable_copy_of_a_reference(
+    session: Session, tmp_path: Path
+) -> None:
+    """参照ボディだけを読む経路(`editable=False`)と、その続きの `make_editable_copy`。
+
+    既定は編集可能側だが、参照だけ欲しい経路は残してある(コアのverb `import_step`)。
+    UIの「編集可能にする」コマンドはこの続きに当たる。
     """
     body, _ = _box(session)
     source = tmp_path / "part.step"
     session.export_step_file(source)
 
+    imported = session.import_step(source, editable=False)
+    reference = imported["body_ids"][0]
+
     async def script(send):
-        imported = await send({"cmd": "import_step", "path": str(source), "client_op": 1})
-        reference = imported["applied"]["body_ids"][0]
-        editable = await send(
+        return await send(
             {"cmd": "make_editable_copy", "source_body_id": reference, "client_op": 2}
         )
-        return reference, editable
 
-    ((reference, editable), _clients) = _browser(session, script)
+    (editable, _clients) = _browser(session, script)
 
     assert editable["applied"]["verb"] == "make_editable_copy"
     copy_id = editable["applied"]["body_id"]
     assert session.document.is_editable(copy_id)
     assert not session.document.is_editable(reference)
-    # **編集できる**ことを、実際にverbを通して確かめる(参照のままなら ValueError になる側)。
-    copy_shape = session._find_body(copy_id).shape
-    faces_before = kernel.face_count(copy_shape)
-    session.fillet([1], 1.0, body_id=copy_id)
-    assert kernel.face_count(session._find_body(copy_id).shape) > faces_before
 
 
 def test_every_file_command_names_a_method_that_exists(session: Session) -> None:
