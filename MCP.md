@@ -68,9 +68,7 @@ MCPクライアントが**このプロセスを起動する**（自分で先に�
 `cd web && npm install && npm run build` しておくと画面も出る。
 
 **注意**: duocadのサーバを2つ同時に立てない（ポートがぶつかり、後から立った方がWebSocketの
-bindで落ちる）。**起動コマンドは `duocad.mcp_server` だけである** —— M1からあった
-`python -m duocad.server` は2026-08-15に廃止した（`duocad/server.py` のモジュールは
-`Session` / `Server` / 静的配信の実体として残っており、それを起動するのがこちら）。
+bindで落ちる）。
 
 ## Claude Code への登録
 

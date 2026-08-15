@@ -41,7 +41,6 @@ cd C:\Users\tm976\mf\duocad\web; npm install; npm run build
 
 **起動コマンドは `duocad.mcp_server` の1本しかない。** MCPとWebSocketと静的配信を1プロセスで
 兼ねるので、**手だけで触るときも同じもので立てて、AIに何も頼まなければよい**。
-（`python -m duocad.server` は2026-08-15に廃止。叩くと理由を出して終了コード2で止まる。下の補足）
 
 > **起動時に決めることは何も無い（2026-08-15）。** 起動オプション `--step` / `--no-step` は廃止し、
 > **サーバは常に空の文書で立つ**。読みたいSTEPは画面の「STEP読み込み」かMCPの `import_step_editable` で
@@ -85,18 +84,6 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 画面は既定の `ws://127.0.0.1:8765` へ落ちて繋がる（Pythonサーバは立てておくこと）。
 このときだけは `web/dist` の作り直しが要らない（Viteが `web/src` を直に配る）。
 型検査は `npm run check`（`tsc --noEmit`）。
-
-### 補足: 廃止した `duocad.server`（2026-08-15）
-
-`python -m duocad.server` という2つ目の起動コマンドがあった（WebSocketと静的配信だけで、
-stdioのMCPを持たない軽い方。smokeスクリプトが前提にしていた）。**廃止した** —— 起動経路が2つあると
-「AIが変えた文書」と「人が見ている文書」が別物になりうるうえ、`mcp_server` は機能的な上位互換で、
-AIに何も頼まなければ手だけの操作と同じだから。
-
-**`duocad/server.py` のモジュール自体は残っている**（`Session` / `Server` / 静的配信の実体で、
-`mcp_server` と543件のテストがこれを使う）。消えたのは `main()` と起動オプションだけ。
-`python -m duocad.server` を叩くと**黙って何もせずに終わらず**、`duocad.mcp_server` を指す
-1行を出して終了コード2で止まる。
 
 ### ポートまとめ
 

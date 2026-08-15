@@ -17,7 +17,7 @@
  * サーバはこのスクリプトが `python -m duocad.mcp_server` として**空の文書で**起動する
  * (`--step` 起動オプションは廃止済み)。STEPはMCPの `import_step_editable` で読む。
  * CLIの `--step <path>` は「MCPで読み込むファイル」であり、サーバへは渡さない。
- * **先に `duocad.server` を立てておく必要はない**(むしろポートがぶつかる)。
+ * **別のサーバを先に立てておく必要はない**(むしろポートがぶつかる)。
  * ブラウザはインストール済みのEdge/Chromeを使う(`smoke.mjs` と同じ。`DUOCAD_BROWSER` で明示可)。
  */
 import { existsSync } from 'node:fs'

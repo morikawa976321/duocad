@@ -26,8 +26,8 @@ verbが増えたらここに1行足す(oplogにverb名の分岐を書かない�
 
 `server` / `mcp_server` はここでimportしない(サーバを立てない用途でパッケージを読むほうが
 普通で、`python -m duocad.mcp_server` で起動すれば必要なものは自分でimportする)。
-**起動コマンドは `duocad.mcp_server` の1本だけ**(`python -m duocad.server` は
-2026-08-15に廃止。`server` モジュールは `Session` / `Server` / 静的配信の実体として残る)。
+**起動コマンドは `duocad.mcp_server` の1本だけ**で、`server` は `Session` / `Server` /
+静的配信を提供するモジュール(起動はしない)。
 """
 from . import io_step as _io_step  # noqa: F401  verb "import_step" をレジストリへ登録する
 from . import parameters as _parameters  # noqa: F401  verb "set_parameter" を登録する

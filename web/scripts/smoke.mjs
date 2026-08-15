@@ -10,7 +10,7 @@
  *
  *   web> node scripts/smoke.mjs
  *
- * **サーバはこのスクリプトが自分で立てる**(2026-08-15。`python -m duocad.server` の廃止に伴う)。
+ * **サーバはこのスクリプトが自分で立てる**(`web/scripts/server.mjs`)。
  * 既に立っているものへ繋ぐときだけ `--url http://127.0.0.1:8766/` を渡す。
  *
  * ブラウザは**インストール済みのEdge/Chromeを使う**(puppeteer-core なのでブラウザを
@@ -35,10 +35,10 @@ const distance = Number.parseFloat(options.distance ?? '1')
 // 並行していた環境。1回の往復自体は軽いが、混雑時はスケジューリング待ちが積み上がる)。
 const timeout = Number.parseInt(options.timeout ?? '120000', 10)
 
-// **Chromeを先に見る**(2026-08-15)。本人が使うブラウザがChromeになり、かつこの環境の
-// Edge 151 は headless で起動できない —— `Failed to launch the browser process: Code: 0` が
-// 出て即座に終了する(専用プロファイルを与えても同じで、duocad側の問題ではない)。
-// Edgeは候補として残す(Chromeが無い環境のため)。`DUOCAD_BROWSER` を置けばそれが最優先。
+// **Chromeを先に見る**(2026-08-15)。この環境の Edge 151 は headless で起動できない ——
+// `Failed to launch the browser process: Code: 0` が出て即座に終了する(専用プロファイルを
+// 与えても同じで、duocad側の問題ではない)。Edgeは候補として残す(Chromeが無い環境のため)。
+// `DUOCAD_BROWSER` を置けばそれが最優先。
 const CANDIDATE_BROWSERS = [
   process.env.DUOCAD_BROWSER,
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',

@@ -92,7 +92,6 @@ SELECTABLE_KINDS = SHAPE_KINDS + (REGION_KIND,)
 #: 出所(§3.5 `origin`)。"user"=人が確定した / "proposed"=AIの提案
 ORIGIN_USER = "user"
 ORIGIN_PROPOSED = "proposed"
-ORIGINS = (ORIGIN_USER, ORIGIN_PROPOSED)
 
 
 @dataclass

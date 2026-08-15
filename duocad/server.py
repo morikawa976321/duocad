@@ -4,15 +4,11 @@
 ここには「文書を持つ」以外の機能を置かない(アプリ層にしか無い機能を作った瞬間AIから使えなくなる。
 §2「外してはいけない3つ」の1)。
 
-**このモジュールは起動コマンドを持たない(2026-08-15に `python -m duocad.server` を廃止)。**
-提供するのは `Session` / `Server` / 静的配信で、**これを起動するのは `duocad.mcp_server` だけ**:
+**このモジュールは起動コマンドを持たない。** 提供するのは `Session` / `Server` / 静的配信で、
+**これを起動するのは `duocad.mcp_server` だけ**(起動経路が2つあると「AIが変えた文書」と
+「人が見ている文書」が別物になりうる):
 
     .venv\\Scripts\\python.exe -m duocad.mcp_server [--open] [--port 8765] [--http-port 8766]
-
-廃止した理由は、起動経路が2つあると**「AIが変えた文書」と「人が見ている文書」が別物になりうる**
-から(1プロセスで両方を持つ、というMCP側の前提が崩れる)。`mcp_server` はMCP(stdio)と
-WebSocketと静的配信を1プロセスで持つ**上位互換**であり、AIに何も頼まなければ手だけの操作と
-同じなので、下位の経路を残す理由が無い。ポートと偏差の引数は `mcp_server` 側に同じものがある。
 
 プロトコル(JSON文字列):
 
@@ -1469,13 +1465,11 @@ class Server:
 
 
 if __name__ == "__main__":
-    # **黙って何もしないで終わらない**(実装計画書§6予防6)。ここへ来たということは、
-    # 廃止した起動コマンドを叩いているか、それを書いた古い手順を読んでいるということ。
+    # **黙って何もしないで終わらない**(実装計画書§6予防6)。`main()` を持たないので、
+    # この番人が無いと `python -m duocad.server` が終了コード0で素通りする。
     print(
-        "duocad.server は起動コマンドではない(2026-08-15に廃止)。\n"
-        r"  .venv\Scripts\python.exe -m duocad.mcp_server --open" "\n"
-        "このモジュールは Session / Server / 静的配信を提供するライブラリで、"
-        "MCPとWebSocketを1プロセスで持つ duocad.mcp_server がこれを使う。",
+        "duocad.server は起動コマンドではない。サーバはこちら:\n"
+        r"  .venv\Scripts\python.exe -m duocad.mcp_server --open",
         file=sys.stderr,
     )
     raise SystemExit(2)

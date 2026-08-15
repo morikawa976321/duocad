@@ -1170,7 +1170,7 @@ cd web && node scripts/smoke-mcp.mjs                          # 実機（PCケ�
 `smoke-mcp.mjs` は自分で `python -m duocad.mcp_server` を起動する（**別のサーバを先に立てない**。
 ポートがぶつかる）。既定は8865/8866で、本人が実機で開いている8765/8766を避けてある。
 **2026-08-15から `smoke.mjs` / `smoke-features.mjs` / `smoke-files.mjs` も同じ形になった**
-（`web/scripts/server.mjs` が共通の起動・停止を持つ。`python -m duocad.server` の廃止に伴う）。
+（`web/scripts/server.mjs` が共通の起動・停止を持つ）。
 
 ## M4のQAで足した契約（2026-08-11・cursor auto のレビュー指摘を反映）
 
