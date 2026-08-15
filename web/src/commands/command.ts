@@ -269,8 +269,9 @@ export const EXTRUDE_FACE: CommandDef = {
 }
 
 /**
- * 使えるコマンドの一覧(ツールバーの並び)。**ソリッドを触るモードのぶん**で、
- * スケッチモードの一覧は `commands/sketch.ts` の `SKETCH_COMMANDS` にある
+ * ソリッドを触るモードの一覧のうち、**このファイルが定義するぶん**(押し出し1つ)。
+ * `App.svelte` が `SOLID_FEATURE_COMMANDS`(features.ts)と `FILE_COMMANDS`(files.ts)を
+ * 後ろに繋いで1つの並びにする。スケッチモードの一覧は `commands/sketch.ts`
  * (モードごとに一覧が違うだけで、状態機械は同じ1つ)。
  */
 export const COMMANDS: CommandDef[] = [EXTRUDE_FACE]

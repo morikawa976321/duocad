@@ -217,7 +217,6 @@ export interface Viewport {
   projectSketchPoint(sketchId: string, u: number, v: number): { x: number; y: number } | null
   /** 領域の画面座標(実機検査が領域を本物のクリックで選ぶために要る)。 */
   projectRegion(sketchId: string, index: number): { x: number; y: number } | null
-  resize(): void
   dispose(): void
 }
 
@@ -1073,7 +1072,6 @@ export function createViewport(container: HTMLElement): Viewport {
     },
     projectSketchPoint,
     projectRegion,
-    resize: applySize,
     dispose() {
       alive = false
       cancelAnimationFrame(frameHandle)

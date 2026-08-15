@@ -321,13 +321,6 @@ class Session:
         entries = self.document.log.entries
         return bool(entries) and entries[-1].seq <= self._setup_floor_seq
 
-    def body(self):
-        """編集対象のボディ(アクティブ)。無ければ RuntimeError。"""
-        body = self.document.active_body()
-        if body is None:
-            raise RuntimeError("文書にボディが無い(STEPを読み込むか、スケッチから作る)")
-        return body
-
     # ---------------------------------------------------------------- 状態
     def state(self) -> dict:
         """アプリ層へ渡す全状態。bodiesは配列(部品ごと)。**geometryを含む(重い)**。

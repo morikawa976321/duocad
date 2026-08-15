@@ -309,7 +309,8 @@
     onCancelPreview()
   }
 
-  export function start(nextId: string): void {
+  // 外から呼ばれない(ツールバーのボタンがこの中から呼ぶだけ)。
+  function start(nextId: string): void {
     reset()
     commandId = nextId
     focusFirstNumber()

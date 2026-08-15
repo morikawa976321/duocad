@@ -5,19 +5,14 @@
  * 文書・操作ログ・undo履歴・**可視性**はコア側にある
  * (§2「アプリ層が落ちて失われてよいのは、途中まで入力していたコマンドだけ」)。
  *
- * **例外はM1由来の「面の選択」**: 実装計画書§3.5は選択集合もコア側と定めているが、
- * 選択(どの面を狙っているか)はブラウザ側(`App.svelte` の `selected`)が正で、コアは
- * 選択そのものを知らない。移すのはM4の債務。**可視性は違う** — M3.5で
- * `duocad/verbs/visibility.py` の `set_visible` verbがコアに入ったので、表示・非表示の
- * 状態はここを経由してコアだけが持つ(このファイルはON/OFFを覚えず、コマンドを送るだけ)。
+ * **選択も可視性もコアが正**。このファイルは `modify_selection` / `commit_selection` /
+ * `clear_selection` / `set_visible` を送るだけで、どちらの状態も覚えない。
  *
  * **M3.5(2026-08-11)で `state` は部品ごとの配列になった**。`state.bodies` は軽量
  * (geometryを含まない)で、形状は `delta.bodies`(版が変わったBodyだけ)で届く
  * (`duocad/server.py` のモジュールdocstring参照)。
  *
- * **B(2026-08-13)で「M1由来の例外」が消えた** —— 選択はコア側(`state.selection`)が正に
- * なり、ここは `modify_selection` / `commit_selection` / `clear_selection` を送るだけになった。
- * 上の「例外はM1由来の面の選択」はもう無い(ブラウザは選択を1つも覚えない)。
+ * 選択の正は `state.selection`(コア側)。**ブラウザは選択を1つも覚えない。**
  * あわせて `preview`(投機的実行)を足した —— **これだけは状態を配信しない**ので、
  * 応答は `onState` ではなく `onPreview` へ来る。
  */
