@@ -81,9 +81,11 @@
   let model = $state<ServerState | null>(null)
   let messages = $state<string[]>([])
   let lastApplied = $state<Applied | null>(null)
-  // 選択中の面の面積・法線などを出すための表示用キャッシュ(body_id -> 直近のgeometry)。
+  // **テスト用フック `__duocad.bodyGeometry` のためだけの写し**(body_id -> 直近のgeometry)。
   // ドメインの状態ではない(可視性・選択の正はコア) — viewport が three.jsの中に既に
-  // 持っている形状を、UI表示とテスト用フック向けに読める形で複製しているだけ。
+  // 持っている形状を、実機検査から読める形で複製しているだけ。
+  // 2026-08-15まではM1の「面」の行(面積・法線の表示)も読んでいたが、その行は
+  // 選択パネルと重複していたので外した。**画面はもうこれを読まない。**
   let bodyGeometry = $state<Record<string, GeometryPayload>>({})
 
   /** 送信中のコマンドの `client_op`(応答が返るまでの間だけ生きる)。 */
@@ -394,22 +396,18 @@
   }
 
   /**
-   * 1つの参照に対するクリックを選択集合の編集へ翻訳する(面・辺・領域で同じ規則)。
+   * 1つの参照を選択集合の編集へ翻訳する(面・辺・領域で同じ規則)。
    *
-   * Shift=追加 / Ctrl=除去 / 修飾なし=置き換え。ただし**1つだけ選んでいるものを
-   * もう一度クリックしたら外す**(狙いを外したときに素で解除できる)。
+   * Shift=追加 / Ctrl=除去 / 修飾なし=置き換え。**解除の仕方だけ入口で違う**:
+   *
+   * - `'replace'`(3Dのクリック) … **1つだけ選んでいるものを再クリックしたら外す**
+   *   (狙いを外したときに素で解除できる)
+   * - `'toggle'`(一覧のクリック。スケッチパネルの領域) … **既に選ばれていたら常に外す**。
+   *   一覧はチェックボックスとして読まれるので、2つ選んだ状態で片方を押したときに
+   *   「置き換え」になると驚く
    *
    * 置き換えのとき**自分自身は remove に入れない** —— コアは remove を後に適用するので、
    * 入れると足したそばから外れる(`duocad/selection.py` の契約)。
-   */
-  /**
-   * 1つの参照を選択集合の編集へ翻訳する。
-   *
-   * `'toggle'` は**一覧のクリック用**(スケッチパネルの領域)。3Dのクリック(`'replace'`)と
-   * 違い、**既に選ばれているものを押したら常に外す** —— 一覧はチェックボックスとして
-   * 読まれるので、2つ選んだ状態で片方を押したときに「置き換え」になると驚く。
-   * 3D側は逆で、狙いを外したときに素で解除できる必要があるため
-   * **1つだけ選んでいるときに限って**外す。
    */
   function editSelection(ref: SelectionRef, mode: PickEvent['mode'] | 'toggle'): void {
     const current = selection?.items ?? []
@@ -789,15 +787,8 @@
     // 2回作り直すことになる(面のハイライトと違って作り直しが重い。QA 2026-08-13)。
   })
 
+  /** 選択の先頭の面。スケッチを貼る対象と、テスト用フックの `selected` が使う。 */
   const firstFace = $derived(selectedFaces[0] ?? null)
-  const selectedFace = $derived(
-    firstFace === null
-      ? null
-      : (bodyGeometry[firstFace.body]?.faces.find((face) => face.index === firstFace.index) ?? null),
-  )
-  const selectedBody = $derived(
-    firstFace === null ? null : (model?.bodies.find((body) => body.body_id === firstFace.body) ?? null),
-  )
 
   // 自動テスト(scripts/smoke.mjs)がブラウザの中を見るための穴。ローカル専用ツールなので
   // 常に生やしてある(「動くはず」で納品しないための道具であり、隠すと使えない)。

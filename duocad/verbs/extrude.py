@@ -128,7 +128,7 @@ def _resolve_target(
             f"body {body_id!r} is not editable (kind='reference'). "
             "make_editable_copy() で編集用のソリッドを作ってから押し出すこと"
         )
-    body = next(candidate for candidate in doc.bodies if candidate.id == body_id)
+    body = doc.get_body(body_id)
     if body.shape is None:
         raise ValueError(f"body {body_id!r} has no shape to extrude")
     return body, body_id
@@ -166,9 +166,8 @@ def _resolve_faces_and_normal(
     sketch = get_sketch(doc, sketch_id)
     support = None
     if sketch.plane.get("kind") == "face":
-        body = next(
-            candidate for candidate in doc.bodies if candidate.id == sketch.plane["body"]
-        )
+        # 貼った先のボディが消えていれば KeyError(以前は StopIteration で理由が読めなかった)
+        body = doc.get_body(sketch.plane["body"])
         support = kernel.face_of(body.shape, int(sketch.plane["index"]))
     normal = kernel.sketch_plane_normal(sketch.plane, face=support)
     return faces, normal
@@ -187,6 +186,8 @@ def _do_extrude(document: Document, operation: Operation) -> None:
     mode = args["mode"]
     distance = float(args["distance"])
 
+    # **ここは存在検査**(無いことが「新しく作る」への分岐条件で、失敗ではない)。
+    # `get_body` は無ければ KeyError なので使わない。
     existing = next(
         (candidate for candidate in document.bodies if candidate.id == body_id), None
     )
@@ -219,12 +220,7 @@ def _undo_extrude(document: Document, operation: Operation) -> None:
     if previous is None:
         document.remove_body(body_id)
         return
-    body = next(
-        (candidate for candidate in document.bodies if candidate.id == body_id), None
-    )
-    if body is None:
-        raise KeyError(f"no such body: {body_id!r}")
-    body.shape = previous
+    document.get_body(body_id).shape = previous
 
 
 register_verb(VERB_EXTRUDE, do=_do_extrude, undo=_undo_extrude)
