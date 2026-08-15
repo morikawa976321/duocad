@@ -259,7 +259,16 @@ export interface SessionHooks {
 
 export interface Session {
   start(): void
-  extrude(bodyId: string, faceIndex: number, distance: number, clientOp: number): void
+  /**
+   * verbを1つ送る。**引数のdictをそのまま流す**(`cmd` と `client_op` を足すだけ)。
+   *
+   * 引数を作るのは `CommandDef.build` の仕事で、ここは運ぶだけ —— verbごとにメソッドを
+   * 書き写すと、キー名を1文字打ち間違えた経路が**そのverbでだけ**静かに壊れる。
+   * **受け取れるverbの一覧はサーバの表(`SKETCH_COMMANDS` / `FEATURE_COMMANDS` /
+   * `FILE_COMMANDS`)が正**で、そこに無い文字列は `unknown command` で返る
+   * (任意のメソッドを呼べる作りにしない、はサーバ側で担保する)。
+   */
+  runVerb(verb: string, args: Record<string, unknown>, clientOp: number): void
   setVisible(bodyId: string, visible: boolean, clientOp: number): void
   /** 人が直す経路。差分編集で `origin` は `"user"` になる(触ること自体が承認)。 */
   modifySelection(add: SelectionRef[], remove: SelectionRef[], clientOp: number): void
@@ -271,55 +280,13 @@ export interface Session {
    * 応答は `onPreview` へ。`previewId` は古い応答を捨てるための番号。
    */
   preview(verb: string, args: Record<string, unknown>, previewId: number): void
-  // ---------------------------------------------------------------- C: スケッチ
-  // **既にMCPが持っていたverbを送るだけ**(コアには何も足していない)。座標は
-  // スケッチ平面上の (u, v) で、3Dへの読み替えはコアが配る `frame` で行う。
-  createSketch(plane: PlaneRef, clientOp: number): void
-  addLine(sketchId: string, p0: Point2, p1: Point2, clientOp: number): void
-  addCircle(sketchId: string, center: Point2, radius: number, clientOp: number): void
-  addRectangle(
-    sketchId: string,
-    corner: Point2,
-    width: number,
-    height: number,
-    clientOp: number,
-  ): void
-  addArc(
-    sketchId: string,
-    center: Point2,
-    radius: number,
-    startDeg: number,
-    endDeg: number,
-    clientOp: number,
-  ): void
-  /** 名前つきの値を打ち直す(クリックで置いた図形の寸法を後から直す経路)。 */
-  setParameter(name: string, value: number, clientOp: number): void
   // ---------------------------------------------------------------- D: フィーチャ
-  /**
-   * フィーチャのverbを送る(領域押し出し・フィレット・面取り・矩形反復・円形反復)。
-   *
-   * **verbごとのメソッドを作らない**のは、引数を作るのが `CommandDef.build` の仕事で、
-   * ここがやることは「そのdictに `cmd` と `client_op` を足して流す」だけだから。
-   * verbごとに書き写すと、キー名を1文字打ち間違えた経路が**そのverbでだけ**静かに壊れる。
-   * **受け取れるverbの一覧はサーバの `FEATURE_COMMANDS` が正**で、そこに無い文字列は
-   * `unknown command` で返る(任意のメソッドを呼べる作りにしない、はサーバ側で担保する)。
-   */
-  runFeature(verb: string, args: Record<string, unknown>, clientOp: number): void
   /**
    * 1Bodyの辺を折れ線で取りに行く(応答は `onEdges`)。**状態配信ではない**ので
    * 他のクライアントには何も起きない。フィレット・面取りを起動している間だけ呼ぶ
    * (常時配ると27部品ぶんの辺が乗る。`Session.edges` のdocstring)。
    */
   getEdges(bodyId: string): void
-  // ---------------------------------------------------------------- E: ファイル操作
-  /**
-   * ファイル操作を送る(保存・開く・STEP読み込み・STEP/STL書き出し・編集可能なコピー)。
-   *
-   * `runFeature` と同じ理由で**verbごとのメソッドを作らない** —— 引数を作るのは
-   * `CommandDef.build` の仕事で、ここは `cmd` と `client_op` を足して流すだけ。
-   * 受け取れるverbの一覧はサーバの `FILE_COMMANDS` が正。
-   */
-  runFile(verb: string, args: Record<string, unknown>, clientOp: number): void
   undo(): void
   redo(): void
   dispose(): void
@@ -437,14 +404,8 @@ export function createSession(hooks: SessionHooks): Session {
     start() {
       void connect()
     },
-    extrude(bodyId, faceIndex, distance, clientOp) {
-      send({
-        cmd: 'extrude_face',
-        body_id: bodyId,
-        face_index: faceIndex,
-        distance,
-        client_op: clientOp,
-      })
+    runVerb(verb, args, clientOp) {
+      send({ cmd: verb, ...args, client_op: clientOp })
     },
     setVisible(bodyId, visible, clientOp) {
       send({ cmd: 'set_visible', body_id: bodyId, visible, client_op: clientOp })
@@ -461,47 +422,8 @@ export function createSession(hooks: SessionHooks): Session {
     preview(verb, args, previewId) {
       send({ cmd: 'preview', verb, args, preview_id: previewId })
     },
-    createSketch(plane, clientOp) {
-      send({ cmd: 'sketch_create', plane, client_op: clientOp })
-    },
-    addLine(sketchId, p0, p1, clientOp) {
-      send({ cmd: 'add_line', sketch_id: sketchId, p0, p1, client_op: clientOp })
-    },
-    addCircle(sketchId, center, radius, clientOp) {
-      send({ cmd: 'add_circle', sketch_id: sketchId, center, radius, client_op: clientOp })
-    },
-    addRectangle(sketchId, corner, width, height, clientOp) {
-      send({
-        cmd: 'add_rectangle',
-        sketch_id: sketchId,
-        corner,
-        width,
-        height,
-        client_op: clientOp,
-      })
-    },
-    addArc(sketchId, center, radius, startDeg, endDeg, clientOp) {
-      send({
-        cmd: 'add_arc',
-        sketch_id: sketchId,
-        center,
-        radius,
-        start_deg: startDeg,
-        end_deg: endDeg,
-        client_op: clientOp,
-      })
-    },
-    setParameter(name, value, clientOp) {
-      send({ cmd: 'set_parameter', name, value, client_op: clientOp })
-    },
-    runFeature(verb, args, clientOp) {
-      send({ cmd: verb, ...args, client_op: clientOp })
-    },
     getEdges(bodyId) {
       send({ cmd: 'get_edges', body_id: bodyId })
-    },
-    runFile(verb, args, clientOp) {
-      send({ cmd: verb, ...args, client_op: clientOp })
     },
     undo() {
       send({ cmd: 'undo' })

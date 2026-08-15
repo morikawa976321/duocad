@@ -20,6 +20,9 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
+// 辺の折れ線の形は `session.ts` の `EdgeGeometry` が正(サーバが配る形そのもの)。
+import type { EdgeGeometry } from './session'
+
 /** kernel.tessellate() が返す1面ぶん(サーバのJSONそのまま)。 */
 export interface FaceGeometry {
   index: number
@@ -49,13 +52,6 @@ export interface FaceRef {
 export interface EdgeRef {
   bodyId: string
   edgeIndex: number
-}
-
-/** サーバが配る1本の辺の折れ線(`kernel.tessellate_edges` の1件。session.ts と同じ形)。 */
-export interface EdgeLine {
-  index: number
-  kind: string
-  points: number[]
 }
 
 /** 1Bodyぶんの形状の差し替え。`geometry: null` は非表示・削除(メッシュを取り除く)。 */
@@ -150,7 +146,7 @@ export interface Viewport {
    * 揃えるしかない(見た目だけ隠すと「見えない辺が選ばれる」になる)。手前の辺のほうが
    * レイに近いので、素直にクリックすれば手前が取れる。
    */
-  showEdges(bodyId: string | null, edges: EdgeLine[]): void
+  showEdges(bodyId: string | null, edges: EdgeGeometry[]): void
   /** 選択中の辺を強調する(面の `highlight` と同じ規律)。 */
   highlightEdges(refs: EdgeRef[], origin: 'user' | 'proposed'): void
   /**
@@ -564,7 +560,7 @@ export function createViewport(container: HTMLElement): Viewport {
   let edgeLines: THREE.Line[] = []
   let edgeBodyId: string | null = null
   /** 今出している辺の元になった配列(**同じものを渡されたら作り直さない**ための印)。 */
-  let edgeSource: EdgeLine[] | null = null
+  let edgeSource: EdgeGeometry[] | null = null
   const edgeDisposables: Array<{ dispose(): void }> = []
 
   function clearEdges(): void {
@@ -576,7 +572,7 @@ export function createViewport(container: HTMLElement): Viewport {
     edgeSource = null
   }
 
-  function showEdges(bodyId: string | null, edges: EdgeLine[]): void {
+  function showEdges(bodyId: string | null, edges: EdgeGeometry[]): void {
     // **同じものを渡されたら何もしない**。呼び出し側(`App.svelte`)は選択が変わるたびに
     // 呼び直すので、毎回作り直すと**辺を1本クリックするたびに数百本ぶんの
     // BufferGeometry を捨てて作り直す**ことになる(27部品では1Bodyで600本超)。

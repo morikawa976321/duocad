@@ -21,7 +21,7 @@
  * ここ(`command.ts`)は**Svelteに依存しない純粋な定義と道具**だけを持つ。
  * 状態機械・DOM・通信は `CommandHost.svelte` の側にある。
  */
-import type { SelectionRef, SelectionState, ShapeKind, ShapeRef } from '../session'
+import type { Point2, SelectionRef, SelectionState, ShapeKind, ShapeRef } from '../session'
 
 /** 選択の種別。コアの `SELECTABLE_KINDS` と同じ4つ。 */
 export type SelectableKind = ShapeKind | 'region'
@@ -194,8 +194,8 @@ export type ArgSpec =
   | EntitiesArgSpec
   | TextArgSpec
 
-/** スケッチ平面上の点 [u, v](mm)。 */
-export type Point2 = [number, number]
+/** スケッチ平面上の点 [u, v](mm)。**定義は `session.ts`**(コアと同じ形)。ここは通すだけ。 */
+export type { Point2 }
 
 /** 集まった引数の値。選択は参照の配列、数値は数、点は [u,v]、選択肢は文字列、図形はID列。 */
 export type ArgValues = Record<string, SelectionRef[] | number | Point2 | string | string[]>

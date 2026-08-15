@@ -402,12 +402,21 @@
    * 置き換えのとき**自分自身は remove に入れない** —— コアは remove を後に適用するので、
    * 入れると足したそばから外れる(`duocad/selection.py` の契約)。
    */
-  function editSelection(ref: SelectionRef, mode: PickEvent['mode']): void {
+  /**
+   * 1つの参照を選択集合の編集へ翻訳する。
+   *
+   * `'toggle'` は**一覧のクリック用**(スケッチパネルの領域)。3Dのクリック(`'replace'`)と
+   * 違い、**既に選ばれているものを押したら常に外す** —— 一覧はチェックボックスとして
+   * 読まれるので、2つ選んだ状態で片方を押したときに「置き換え」になると驚く。
+   * 3D側は逆で、狙いを外したときに素で解除できる必要があるため
+   * **1つだけ選んでいるときに限って**外す。
+   */
+  function editSelection(ref: SelectionRef, mode: PickEvent['mode'] | 'toggle'): void {
     const current = selection?.items ?? []
     const already = current.some((item) => sameRef(item, ref))
     if (mode === 'add') modifySelection([ref], [])
     else if (mode === 'remove') modifySelection([], [ref])
-    else if (already && current.length === 1) modifySelection([], [ref])
+    else if (already && (mode === 'toggle' || current.length === 1)) modifySelection([], [ref])
     else modifySelection([ref], current.filter((item) => !sameRef(item, ref)))
   }
 
@@ -555,18 +564,19 @@
   }
 
   function createSketchOnBase(name: BasePlaneName): void {
-    session.createSketch({ kind: 'base', name, provenance: null }, nextOp())
+    session.runVerb('sketch_create', { plane: { kind: 'base', name, provenance: null } }, nextOp())
   }
 
   function createSketchOnFace(face: ShapeRef): void {
-    session.createSketch(
-      { kind: 'face', body: face.body, index: face.index, provenance: null },
+    session.runVerb(
+      'sketch_create',
+      { plane: { kind: 'face', body: face.body, index: face.index, provenance: null } },
       nextOp(),
     )
   }
 
   function setParameter(name: string, value: number): void {
-    session.setParameter(name, value, nextOp())
+    session.runVerb('set_parameter', { name, value }, nextOp())
   }
 
   /**
@@ -581,10 +591,7 @@
   }
 
   function selectRegion(sketch: string, index: number): void {
-    const ref: SelectionRef = { sketch, index }
-    const current = selection?.items ?? []
-    if (current.some((item) => sameRef(item, ref))) modifySelection([], [ref])
-    else modifySelection([ref], current.filter((item) => !sameRef(item, ref)))
+    editSelection({ sketch, index }, 'toggle')
   }
 
   // ---------------------------------------------------------------- コマンド層との繋ぎ
@@ -597,28 +604,9 @@
       const op = nextOp()
       pendingOp = op
       viewport?.showSketchGhost(sketchId, null) // 本物を頼んだので幽霊は消す
-      if (verb === 'add_line') {
-        session.addLine(sketchId, args.p0 as Point2, args.p1 as Point2, op)
-      } else if (verb === 'add_circle') {
-        session.addCircle(sketchId, args.center as Point2, args.radius as number, op)
-      } else if (verb === 'add_rectangle') {
-        session.addRectangle(
-          sketchId,
-          args.corner as Point2,
-          args.width as number,
-          args.height as number,
-          op,
-        )
-      } else {
-        session.addArc(
-          sketchId,
-          args.center as Point2,
-          args.radius as number,
-          args.start_deg as number,
-          args.end_deg as number,
-          op,
-        )
-      }
+      // **引数名はコマンド定義とサーバの表で既に揃っている**(p0/p1・center/radius・
+      // corner/width/height・center/radius/start_deg/end_deg)。ここで詰め替えない。
+      session.runVerb(verb, { ...args, sketch_id: sketchId }, op)
       return
     }
     // ---------------------------------------------------------------- D: フィーチャ
@@ -635,7 +623,7 @@
       }
       const op = nextOp()
       pendingOp = op
-      session.runFeature(verb, needsSketchId(verb) ? { ...args, sketch_id: sketchId } : args, op)
+      session.runVerb(verb, needsSketchId(verb) ? { ...args, sketch_id: sketchId } : args, op)
       return
     }
     // ---------------------------------------------------------------- E: ファイル操作
@@ -645,7 +633,7 @@
       // **文書を変えないもの(保存・書き出し)は状態配信では返ってこない**ので、
       // 「応答待ち」は立てない —— 立てると `handleFile` が来るまでEnterが拒否される。
       if (changesDocument(verb)) pendingOp = op
-      session.runFile(verb, args, op)
+      session.runVerb(verb, args, op)
       return
     }
     if (verb !== 'extrude_face') {
@@ -654,7 +642,7 @@
     }
     const op = nextOp()
     pendingOp = op
-    session.extrude(args.body_id as string, args.face_index as number, args.distance as number, op)
+    session.runVerb(verb, args, op)
   }
 
   /** 送ろうとしている領域が、今のスケッチに実在するか。 */
@@ -936,33 +924,14 @@
       />
     {/key}
 
+    <!-- M1の「面」「直前」の行はここにあったが、選択パネルと履歴パネルが同じことを
+         見せるようになったので外した(2026-08-15)。残すのは、どのパネルにも属さない
+         **視点と履歴のボタン**だけ。「全体」はスケッチに寄った視点から戻る手で、
+         これが無いと小さい図形を描いた後に部品が画面の外にあるまま操作することになる。 -->
     <div class="row">
-      <span class="label">面</span>
-      {#if selectedFace && selectedBody}
-        <span class="value">
-          {selectedBody.name} / 面 {selectedFace.index} / {selectedFace.kind} / 面積 {selectedFace.area.toFixed(2)} mm²
-          / 法線 [{selectedFace.normal.map((n) => n.toFixed(2)).join(', ')}]
-        </span>
-      {:else}
-        <span class="value dim">面をクリックして選ぶ</span>
-      {/if}
-      <!-- スケッチに寄った視点から戻る手(D)。これが無いと、小さい図形を描いた後に
-           モードを抜けると部品が画面の外にあるまま操作することになる -->
       <button id="view-fit" onclick={() => viewport?.frameAll()}>全体</button>
       <button id="undo" onclick={() => session.undo()} disabled={!model?.can_undo}>undo</button>
       <button id="redo" onclick={() => session.redo()} disabled={!model?.can_redo}>redo</button>
-      <span class="value dim">正=足す / 負=削る</span>
-    </div>
-
-    <div class="row">
-      <span class="label">直前</span>
-      {#if lastApplied?.verb === 'extrude_face'}
-        <span class="value">
-          seq {lastApplied.seq} ・ {lastApplied.body_id} ・ 面 {lastApplied.face_index} ・ {lastApplied.distance} mm
-        </span>
-      {:else}
-        <span class="value dim">まだ操作なし</span>
-      {/if}
     </div>
 
     {#if messages.length}
