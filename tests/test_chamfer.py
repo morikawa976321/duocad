@@ -44,8 +44,8 @@ from duocad.region import region_ref
 from duocad.sketch import add_circle, add_rectangle, base_plane, sketch_create
 from duocad.verbs import chamfer, extrude
 
-MODELS = Path(r"C:\Users\tm976\mf\3d-models")
-FEET = MODELS / "mATX_PC_case_20251122" / "PC_case_feet.step"
+from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
+from models import PC_CASE_FEET as FEET
 
 #: PCケースの脚の実測（2026-08-11）
 FEET_KINDS = {"plane": 3, "cylinder_full": 1, "cone": 1}

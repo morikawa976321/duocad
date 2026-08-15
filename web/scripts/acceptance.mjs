@@ -24,15 +24,13 @@
  * 結果はJSONで stdout の末尾へ出す(`ACCEPTANCE.md` はそれを見て人が書く)。
  */
 import { existsSync, mkdtempSync } from 'node:fs'
-import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { launch } from 'puppeteer-core'
+import { findBrowser, launchBrowser } from './browser.mjs'
+import { fail, ok, parseArgs } from './args.mjs'
+import { McpClient } from './mcp-client.mjs'
+import { startServer } from './server.mjs'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-const REPO_ROOT = resolve(HERE, '..', '..')
-const PYTHON = resolve(REPO_ROOT, '.venv', 'Scripts', 'python.exe')
 
 const options = parseArgs(process.argv.slice(2))
 const wsPort = options.port ?? '8885'
@@ -40,31 +38,7 @@ const httpPort = options['http-port'] ?? '8886'
 const timeout = Number.parseInt(options.timeout ?? '120000', 10)
 const workdir = options.workdir ?? mkdtempSync(join(tmpdir(), 'duocad-g-'))
 
-function parseArgs(argv) {
-  const parsed = {}
-  for (let i = 0; i < argv.length; i += 1) {
-    const item = argv[i]
-    if (!item.startsWith('--')) continue
-    const key = item.slice(2)
-    const next = argv[i + 1]
-    if (next && !next.startsWith('--')) {
-      parsed[key] = next
-      i += 1
-    } else {
-      parsed[key] = 'true'
-    }
-  }
-  return parsed
-}
 
-// **Chromeを先に見る**(2026-08-15。理由は `smoke.mjs` の同じ箇所)。
-const CANDIDATE_BROWSERS = [
-  process.env.DUOCAD_BROWSER,
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-].filter(Boolean)
 
 /** 到達表の19操作(実装計画書§0)。**この並びのまま ACCEPTANCE.md の表になる**。 */
 const VERBS = [
@@ -106,88 +80,18 @@ async function attempt(side, verb, fn) {
   }
 }
 
-class McpClient {
-  constructor(child) {
-    this.child = child
-    this.nextId = 1
-    this.pending = new Map()
-    this.buffer = ''
-    child.stdout.setEncoding('utf8')
-    child.stdout.on('data', (chunk) => this.onData(chunk))
-  }
-
-  onData(chunk) {
-    this.buffer += chunk
-    let index = this.buffer.indexOf('\n')
-    while (index >= 0) {
-      const line = this.buffer.slice(0, index).trim()
-      this.buffer = this.buffer.slice(index + 1)
-      if (line) {
-        // **JSON以外の行は捨てずに控える**。stdoutはJSON-RPC専用なので、混ざったら
-        // それ自体が不具合(OCCTがC++から実fdへ吐く統計がこれ)。ここで例外にすると
-        // 受入検証そのものが止まってしまうので、記録して続ける。
-        let message
-        try {
-          message = JSON.parse(line)
-        } catch {
-          results.stdoutNoise = [...(results.stdoutNoise ?? []), line.slice(0, 120)]
-          continue
-        }
-        const resolver = this.pending.get(message.id)
-        if (resolver) {
-          this.pending.delete(message.id)
-          resolver(message)
-        }
-      }
-      index = this.buffer.indexOf('\n')
-    }
-  }
-
-  send(method, params) {
-    const id = this.nextId
-    this.nextId += 1
-    const promise = new Promise((resolvePending, rejectPending) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id)
-        rejectPending(new Error(`MCPの応答が来ない: ${method}`))
-      }, timeout)
-      this.pending.set(id, (message) => {
-        clearTimeout(timer)
-        resolvePending(message)
-      })
-    })
-    this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`)
-    return promise
-  }
-
-  notify(method, params) {
-    this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`)
-  }
-
-  async call(name, args) {
-    const response = await this.send('tools/call', { name, arguments: args ?? {} })
-    if (response.error) throw new Error(`${name}: ${JSON.stringify(response.error)}`)
-    if (response.result.isError) throw new Error(`${name}: ${response.result.content[0].text}`)
-    return JSON.parse(response.result.content[0].text)
-  }
-}
-
 async function main() {
-  const executablePath = CANDIDATE_BROWSERS.find((candidate) => existsSync(candidate))
-  if (!executablePath) throw new Error(`ブラウザが見つからない: ${CANDIDATE_BROWSERS.join(', ')}`)
-  if (!existsSync(PYTHON)) throw new Error(`venvのpythonが無い: ${PYTHON}`)
+  const executablePath = findBrowser()
 
   console.log(`acceptance: ws=${wsPort} http=${httpPort} workdir=${workdir}`)
-  const child = spawn(
-    PYTHON,
-    ['-m', 'duocad.mcp_server', '--port', String(wsPort), '--http-port', String(httpPort)],
-    { cwd: REPO_ROOT, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
-  )
-  const serverLog = []
-  child.stderr.setEncoding('utf8')
-  child.stderr.on('data', (chunk) => serverLog.push(chunk))
-
-  const mcp = new McpClient(child)
+  const server = await startServer({ wsPort, httpPort })
+  // 受入は落ちても最後まで走る作りなので、混入行は**記録して続ける**。
+  const mcp = new McpClient(server.child, {
+    timeout,
+    onNoise: (line) => {
+      results.stdoutNoise = [...(results.stdoutNoise ?? []), line.slice(0, 120)]
+    },
+  })
   let browser = null
 
   try {
@@ -201,18 +105,7 @@ async function main() {
     const tools = (await mcp.send('tools/list')).result.tools.map((tool) => tool.name)
     console.log(`  MCP: ${tools.length} tools`)
 
-    browser = await launch({
-      executablePath,
-      headless: true,
-      args: [
-        '--headless=new',
-        '--use-gl=angle',
-        '--use-angle=swiftshader',
-        '--enable-unsafe-swiftshader',
-        '--disable-gpu-sandbox',
-        '--window-size=1280,900',
-      ],
-    })
+    browser = await launchBrowser(executablePath)
     const page = await browser.newPage()
     await page.setViewport({ width: 1280, height: 900 })
     const consoleErrors = []
@@ -756,29 +649,29 @@ async function main() {
     let aiCircle = null
 
     await attempt('ai', 'sketch_create', async () => {
-      const result = await mcp.call('sketch_create', { base_plane: 'XZ' })
+      const result = await mcp.callTool('sketch_create', { base_plane: 'XZ' })
       aiSketch = result.sketch_id
       return `XZ平面に作った(${aiSketch})`
     })
 
     await attempt('ai', 'add_circle', async () => {
-      const result = await mcp.call('add_circle', { sketch_id: aiSketch, center: [0, 0], radius: 12 })
+      const result = await mcp.callTool('add_circle', { sketch_id: aiSketch, center: [0, 0], radius: 12 })
       aiCircle = result.entity_id
       return `半径12の円(${aiCircle})`
     })
 
     await attempt('ai', 'add_line', async () => {
-      await mcp.call('add_line', { sketch_id: aiSketch, p0: [40, 0], p1: [60, 0] })
+      await mcp.callTool('add_line', { sketch_id: aiSketch, p0: [40, 0], p1: [60, 0] })
       return '線分を1本'
     })
 
     await attempt('ai', 'add_rectangle', async () => {
-      await mcp.call('add_rectangle', { sketch_id: aiSketch, corner: [40, 20], width: 10, height: 6 })
+      await mcp.callTool('add_rectangle', { sketch_id: aiSketch, corner: [40, 20], width: 10, height: 6 })
       return '長方形を1つ'
     })
 
     await attempt('ai', 'add_arc', async () => {
-      await mcp.call('add_arc', {
+      await mcp.callTool('add_arc', {
         sketch_id: aiSketch,
         center: [-40, 0],
         radius: 6,
@@ -789,13 +682,13 @@ async function main() {
     })
 
     await attempt('ai', 'pattern_rectangular', async () => {
-      const rectangle = await mcp.call('add_rectangle', {
+      const rectangle = await mcp.callTool('add_rectangle', {
         sketch_id: aiSketch,
         corner: [60, 40],
         width: 4,
         height: 4,
       })
-      await mcp.call('pattern_rectangular', {
+      await mcp.callTool('pattern_rectangular', {
         sketch_id: aiSketch,
         entities: [rectangle.entity_id],
         dx: 6,
@@ -803,22 +696,22 @@ async function main() {
         nx: 3,
         ny: 1,
       })
-      await mcp.call('undo')
-      await mcp.call('undo')
+      await mcp.callTool('undo')
+      await mcp.callTool('undo')
       return '3×1に反復して確認し、undoで戻した(図形も消した)'
     })
 
     await attempt('ai', 'pattern_circular', async () => {
-      const dot = await mcp.call('add_circle', { sketch_id: aiSketch, center: [70, 0], radius: 2 })
-      await mcp.call('pattern_circular', {
+      const dot = await mcp.callTool('add_circle', { sketch_id: aiSketch, center: [70, 0], radius: 2 })
+      await mcp.callTool('pattern_circular', {
         sketch_id: aiSketch,
         entities: [dot.entity_id],
         center: [80, 0],
         count: 4,
         total_angle: 360,
       })
-      await mcp.call('undo')
-      await mcp.call('undo')
+      await mcp.callTool('undo')
+      await mcp.callTool('undo')
       return '全周4個に反復して確認し、undoで戻した'
     })
 
@@ -826,72 +719,72 @@ async function main() {
       // **AIから見える領域は「何個あるか」だけ**(`describe_document` は `region_count`)。
       // どれが目的の領域かは `propose_selection` → `measure` の往復で確かめる ——
       // これは提案を確定前に検算する経路そのもの(§0のAI側の条件)。
-      const document = await mcp.call('describe_document', { include_regions: true })
+      const document = await mcp.callTool('describe_document', { include_regions: true })
       const sketch = document.sketches.find((item) => item.sketch_id === aiSketch)
       let best = null
       for (let index = 1; index <= sketch.region_count; index += 1) {
-        await mcp.call('propose_selection', { refs: [{ sketch: aiSketch, index }] })
-        const measured = await mcp.call('measure', {})
+        await mcp.callTool('propose_selection', { refs: [{ sketch: aiSketch, index }] })
+        const measured = await mcp.callTool('measure', {})
         const area = measured.items[0]?.area ?? 0
         if (!best || area > best.area) best = { index, area }
       }
       if (!best) throw new Error(`領域が1つも無い(region_count=${sketch.region_count})`)
-      await mcp.call('propose_selection', { refs: [{ sketch: aiSketch, index: best.index }] })
-      await mcp.call('commit_selection')
-      const result = await mcp.call('extrude', { distance: 20, mode: 'join' })
+      await mcp.callTool('propose_selection', { refs: [{ sketch: aiSketch, index: best.index }] })
+      await mcp.callTool('commit_selection')
+      const result = await mcp.callTool('extrude', { distance: 20, mode: 'join' })
       return `${sketch.region_count}個の領域を measure で確かめて最大(面積 ${best.area.toFixed(1)})を選び、距離20で押し出した(seq ${result.seq})`
     })
 
     let aiBody = null
     await attempt('ai', 'extrude_face', async () => {
-      const document = await mcp.call('describe_document', {})
+      const document = await mcp.callTool('describe_document', {})
       aiBody = document.bodies.filter((body) => body.kind === 'solid').slice(-1)[0].body_id
-      const proposed = await mcp.call('propose_selection', {
+      const proposed = await mcp.callTool('propose_selection', {
         predicate: { kind: 'face', where: [{ op: 'kind_is', value: 'plane' }] },
       })
       const face = proposed.selection.items.find((item) => item.body === aiBody)
       if (!face) throw new Error(`このボディの平面が述語で1枚も選べない: ${JSON.stringify(proposed.selection.items.slice(0, 3))}`)
-      await mcp.call('propose_selection', { refs: [face] })
-      await mcp.call('commit_selection')
-      const result = await mcp.call('extrude_face', { distance: 3 })
+      await mcp.callTool('propose_selection', { refs: [face] })
+      await mcp.callTool('commit_selection')
+      const result = await mcp.callTool('extrude_face', { distance: 3 })
       return `述語で平面を選び直し、3mm押し出した(seq ${result.seq})`
     })
 
     await attempt('ai', 'fillet', async () => {
-      const proposed = await mcp.call('propose_selection', {
+      const proposed = await mcp.callTool('propose_selection', {
         predicate: { kind: 'edge', where: [{ op: 'kind_is', value: 'circle' }] },
       })
       const mine = proposed.selection.items.filter((item) => item.body === aiBody)
       if (mine.length === 0) throw new Error('円い辺が述語で選べない')
-      await mcp.call('propose_selection', { refs: [mine[0]] })
-      await mcp.call('commit_selection')
-      const result = await mcp.call('fillet', { radius: 1 })
+      await mcp.callTool('propose_selection', { refs: [mine[0]] })
+      await mcp.callTool('commit_selection')
+      const result = await mcp.callTool('fillet', { radius: 1 })
       return `述語で円い辺を選び、半径1で丸めた(面 ${result.face_count ?? '?'})`
     })
 
     await attempt('ai', 'chamfer', async () => {
-      const proposed = await mcp.call('propose_selection', {
+      const proposed = await mcp.callTool('propose_selection', {
         predicate: { kind: 'edge', where: [{ op: 'kind_is', value: 'circle' }] },
       })
       const mine = proposed.selection.items.filter((item) => item.body === aiBody)
       if (mine.length === 0) throw new Error('円い辺が述語で選べない')
-      await mcp.call('propose_selection', { refs: [mine[0]] })
-      await mcp.call('commit_selection')
-      await mcp.call('chamfer', { distance: 1 })
+      await mcp.callTool('propose_selection', { refs: [mine[0]] })
+      await mcp.callTool('commit_selection')
+      await mcp.callTool('chamfer', { distance: 1 })
       return '述語で円い辺を選び、長さ1で面取りした'
     })
 
     await attempt('ai', 'set_parameter', async () => {
-      const document = await mcp.call('describe_document', {})
+      const document = await mcp.callTool('describe_document', {})
       const sketch = document.sketches.find((item) => item.sketch_id === aiSketch)
       const circle = sketch.entities.find((item) => item.entity_id === aiCircle)
       const name = circle.parameters.radius
-      await mcp.call('set_parameter', { name, value: 14 })
+      await mcp.callTool('set_parameter', { name, value: 14 })
       return `${name} を 12 → 14 にした(describe_document の parameters から辿れる)`
     })
 
     await attempt('ai', 'set_visible', async () => {
-      await mcp.call('set_visible', { body_id: aiBody, visible: false })
+      await mcp.callTool('set_visible', { body_id: aiBody, visible: false })
       await page.waitForFunction(
         (id) => {
           const body = window.__duocad.state.bodies.find((item) => item.body_id === id)
@@ -900,18 +793,18 @@ async function main() {
         { timeout: 30000, polling: 50 },
         aiBody,
       )
-      await mcp.call('set_visible', { body_id: aiBody, visible: true })
+      await mcp.callTool('set_visible', { body_id: aiBody, visible: true })
       return 'AIが隠すとブラウザの表示も変わった(上り方向)'
     })
 
     const aiStep = join(workdir, 'ai.step')
     await attempt('ai', 'export_step', async () => {
-      const result = await mcp.call('export_step', { path: aiStep })
+      const result = await mcp.callTool('export_step', { path: aiStep })
       return `${result.bytes} B`
     })
 
     await attempt('ai', 'export_stl', async () => {
-      const result = await mcp.call('export_stl', { path: join(workdir, 'ai.stl'), deviation: 0.05 })
+      const result = await mcp.callTool('export_stl', { path: join(workdir, 'ai.stl'), deviation: 0.05 })
       return `${result.bytes} B(偏差0.05)`
     })
 
@@ -919,23 +812,23 @@ async function main() {
     await attempt('ai', 'import_step', async () => {
       // 通常の読み込みは `import_step_editable`(ツール名 == ログのverb名)。
       // 参照だけ足す `import_step` は別ツールとして残っている。
-      const result = await mcp.call('import_step_editable', { path: aiStep })
+      const result = await mcp.callTool('import_step_editable', { path: aiStep })
       aiReference = result.reference_ids[0]
       return `編集可能なボディ ${result.body_ids.length} 個`
     })
 
     await attempt('ai', 'make_editable_copy', async () => {
-      const result = await mcp.call('make_editable_copy', { source_body_id: aiReference })
+      const result = await mcp.callTool('make_editable_copy', { source_body_id: aiReference })
       return `編集用ボディ ${result.body_id} を作った`
     })
 
     await attempt('ai', 'undo', async () => {
-      const result = await mcp.call('undo')
+      const result = await mcp.callTool('undo')
       return `${result.undone} を取り消した`
     })
 
     await attempt('ai', 'redo', async () => {
-      const result = await mcp.call('redo')
+      const result = await mcp.callTool('redo')
       return `${result.redone} をやり直した`
     })
 
@@ -943,7 +836,7 @@ async function main() {
     console.log('\n--- 交互操作(AIが提案 → 画面に出る → 人が直す → AIが適用) ---')
     try {
       // 1. AIが述語で辺の集合を提案する
-      const proposed = await mcp.call('propose_selection', {
+      const proposed = await mcp.callTool('propose_selection', {
         predicate: { kind: 'edge', where: [{ op: 'parallel_to', axis: 'Y' }] },
       })
       const proposedItems = proposed.selection.items
@@ -997,11 +890,11 @@ async function main() {
       }))
 
       // 4. AIが読み直して適用する
-      const readBack = (await mcp.call('get_selection', {})).selection
+      const readBack = (await mcp.callTool('get_selection', {})).selection
       const targetBody = readBack.items[0].body
-      const facesBefore = (await mcp.call('describe_shape', { body_id: targetBody })).face_count
-      const applied = await mcp.call('fillet', { radius: 1.5 })
-      const facesAfter = (await mcp.call('describe_shape', { body_id: targetBody })).face_count
+      const facesBefore = (await mcp.callTool('describe_shape', { body_id: targetBody })).face_count
+      const applied = await mcp.callTool('fillet', { radius: 1.5 })
+      const facesAfter = (await mcp.callTool('describe_shape', { body_id: targetBody })).face_count
 
       // 5. 形が変わり、画面にも届く
       await page.waitForFunction(
@@ -1040,34 +933,24 @@ async function main() {
     // 作る」verbなので、既に何ボディも居るこの受入用の文書では既存へ融合してしまい、
     // 独立した円筒が作れない(1回目の実行で実際に踏んだ)。
     console.log('\n--- 副次: 手だけで実物相当(全周円筒+円錐。空の文書で) ---')
-    const solo = spawn(
-      PYTHON,
-      ['-m', 'duocad.mcp_server', '--port', '8887', '--http-port', '8888'],
-      { cwd: REPO_ROOT, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
-    )
-    solo.stderr.resume()
-    const soloMcp = new McpClient(solo)
+    const solo = await startServer({ wsPort: '8887', httpPort: '8888' })
+    const soloMcp = new McpClient(solo.child, { timeout })
     try {
-      await soloMcp.send('initialize', {
-        protocolVersion: '2025-06-18',
-        capabilities: {},
-        clientInfo: { name: 'duocad-acceptance-solo', version: '0.0.1' },
-      })
-      soloMcp.notify('notifications/initialized', {})
-      const sketch = await soloMcp.call('sketch_create', { base_plane: 'XY' })
-      await soloMcp.call('add_circle', { sketch_id: sketch.sketch_id, center: [0, 0], radius: 12.5 })
-      await soloMcp.call('propose_selection', { refs: [{ sketch: sketch.sketch_id, index: 1 }] })
-      await soloMcp.call('commit_selection')
-      await soloMcp.call('extrude', { distance: 22, mode: 'join' })
-      const body = (await soloMcp.call('describe_document', {})).bodies[0].body_id
-      const cylinder = await soloMcp.call('describe_shape', { body_id: body })
-      const proposed = await soloMcp.call('propose_selection', {
+      await soloMcp.handshake('duocad-acceptance-solo')
+      const sketch = await soloMcp.callTool('sketch_create', { base_plane: 'XY' })
+      await soloMcp.callTool('add_circle', { sketch_id: sketch.sketch_id, center: [0, 0], radius: 12.5 })
+      await soloMcp.callTool('propose_selection', { refs: [{ sketch: sketch.sketch_id, index: 1 }] })
+      await soloMcp.callTool('commit_selection')
+      await soloMcp.callTool('extrude', { distance: 22, mode: 'join' })
+      const body = (await soloMcp.callTool('describe_document', {})).bodies[0].body_id
+      const cylinder = await soloMcp.callTool('describe_shape', { body_id: body })
+      const proposed = await soloMcp.callTool('propose_selection', {
         predicate: { kind: 'edge', where: [{ op: 'kind_is', value: 'circle' }] },
       })
-      await soloMcp.call('propose_selection', { refs: [proposed.selection.items[0]] })
-      await soloMcp.call('commit_selection')
-      await soloMcp.call('chamfer', { distance: 2 })
-      const after = await soloMcp.call('describe_shape', { body_id: body })
+      await soloMcp.callTool('propose_selection', { refs: [proposed.selection.items[0]] })
+      await soloMcp.callTool('commit_selection')
+      await soloMcp.callTool('chamfer', { distance: 2 })
+      const after = await soloMcp.callTool('describe_shape', { body_id: body })
       results.physical = {
         ok: true,
         cylinder: { faces: cylinder.face_count, by_type: cylinder.faces_by_type },
@@ -1081,7 +964,7 @@ async function main() {
       results.physical = { ok: false, error: String(error.message ?? error) }
       console.log(`  NG   実物相当: ${results.physical.error}`)
     } finally {
-      solo.kill()
+      await solo.stop()
     }
 
     results.consoleErrors = consoleErrors.slice(0, 5)
@@ -1090,7 +973,7 @@ async function main() {
     console.log(JSON.stringify(results, null, 2))
   } finally {
     if (browser) await browser.close()
-    child.kill()
+    await server.stop()
   }
 }
 

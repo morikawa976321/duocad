@@ -15,7 +15,7 @@ from duocad.document import Document
 from duocad.io_step import export_step, export_stl, import_step
 from duocad.query import describe_shape, volume
 
-STEP_PATH = r"C:\Users\tm976\mf\3d-models\shelf_attachment_GD.step"
+from models import SHELF as STEP_PATH  # テスト共通のSTEPの置き場(tests/models.py)
 
 
 def test_import_step_face_breakdown_matches_measured_reference():

@@ -45,9 +45,9 @@ from duocad.io_step import import_step
 from duocad.oplog import OpLog
 from duocad.verbs import import_step_editable
 
-MODELS = Path(r"C:\Users\tm976\mf\3d-models")
-PC_CASE = MODELS / "mATX_PC_case_20251122" / "PC_case_20251122.step"
-SHELF = MODELS / "shelf_attachment_GD.step"
+from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
+from models import PC_CASE  # noqa: F401
+from models import SHELF  # noqa: F401
 MONITOR = MODELS / "monitor_attachment_for_24inch_GD.step"
 PLATE = MODELS / "stackable_plate" / "plate_1by1_24.step"
 

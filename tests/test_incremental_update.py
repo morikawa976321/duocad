@@ -44,9 +44,9 @@ from duocad.io_step import import_step
 from duocad.server import Session
 from duocad.verbs import extrude_face, make_editable_copy, set_visible
 
-MODELS = Path(r"C:\Users\tm976\mf\3d-models")
-PC_CASE = MODELS / "mATX_PC_case_20251122" / "PC_case_20251122.step"
-SHELF = MODELS / "shelf_attachment_GD.step"
+from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
+from models import PC_CASE  # noqa: F401
+from models import SHELF  # noqa: F401
 
 DEVIATION = 0.2
 

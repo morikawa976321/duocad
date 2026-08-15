@@ -40,8 +40,8 @@ from test_visibility import first_extrudable_face
 from duocad import query
 from duocad.server import SKETCH_COMMANDS, Server, Session
 
-MODELS = Path(r"C:\Users\tm976\mf\3d-models")
-SHELF = MODELS / "shelf_attachment_GD.step"
+from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
+from models import SHELF  # noqa: F401
 
 DEVIATION = 0.2
 RADIUS = 20.0

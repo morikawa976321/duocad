@@ -16,7 +16,7 @@ from duocad.io_step import import_step
 from duocad.oplog import Operation, OpLog
 from duocad.query import volume
 
-STEP_PATH = r"C:\Users\tm976\mf\3d-models\shelf_attachment_GD.step"
+from models import SHELF as STEP_PATH  # テスト共通のSTEPの置き場(tests/models.py)
 
 
 def test_operation_has_provenance_slot_defaulting_to_none():

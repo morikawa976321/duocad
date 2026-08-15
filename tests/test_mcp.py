@@ -38,8 +38,8 @@ from duocad import kernel, query
 from duocad.mcp_server import DocumentTools, McpServer, serve_stdio
 from duocad.server import Server, Session
 
-MODELS = Path(r"C:\Users\tm976\mf\3d-models")
-SHELF = MODELS / "shelf_attachment_GD.step"
+from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
+from models import SHELF  # noqa: F401
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

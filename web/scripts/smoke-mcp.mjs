@@ -21,15 +21,12 @@
  * ブラウザはインストール済みのEdge/Chromeを使う(`smoke.mjs` と同じ。`DUOCAD_BROWSER` で明示可)。
  */
 import { existsSync } from 'node:fs'
-import { spawn } from 'node:child_process'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { launch } from 'puppeteer-core'
+import { findBrowser, launchBrowser } from './browser.mjs'
+import { fail, ok, parseArgs } from './args.mjs'
+import { McpClient } from './mcp-client.mjs'
+import { startServer } from './server.mjs'
 import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-const REPO_ROOT = resolve(HERE, '..', '..')
-const PYTHON = resolve(REPO_ROOT, '.venv', 'Scripts', 'python.exe')
 
 const options = parseArgs(process.argv.slice(2))
 const stepPath = options.step ?? PC_CASE_STEP
@@ -39,157 +36,24 @@ const httpPort = options['http-port'] ?? '8866'
 const timeout = Number.parseInt(options.timeout ?? '180000', 10)
 const expectedBodies = Number.parseInt(options['expect-bodies'] ?? String(PC_CASE_SOLIDS), 10)
 
-function parseArgs(argv) {
-  const parsed = {}
-  for (let i = 0; i < argv.length; i += 1) {
-    const item = argv[i]
-    if (!item.startsWith('--')) continue
-    const key = item.slice(2)
-    const next = argv[i + 1]
-    if (next && !next.startsWith('--')) {
-      parsed[key] = next
-      i += 1
-    } else {
-      parsed[key] = 'true'
-    }
-  }
-  return parsed
-}
 
-// **Chromeを先に見る**(2026-08-15。理由は `smoke.mjs` の同じ箇所)。
-const CANDIDATE_BROWSERS = [
-  process.env.DUOCAD_BROWSER,
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-].filter(Boolean)
 
-function ok(message) {
-  console.log(`  ok   ${message}`)
-}
-
-function fail(message) {
-  throw new Error(message)
-}
-
-/**
- * MCPクライアント(stdio・JSON-RPC 2.0)。**Claude Code がやることと同じ**ことを最小限だけやる。
- * 行区切りのJSONで喋り、idでレスポンスを突き合わせる。
- */
-class McpClient {
-  constructor(child) {
-    this.child = child
-    this.nextId = 1
-    this.pending = new Map()
-    this.buffer = ''
-    child.stdout.setEncoding('utf8')
-    child.stdout.on('data', (chunk) => this.onData(chunk))
-  }
-
-  onData(chunk) {
-    this.buffer += chunk
-    let index = this.buffer.indexOf('\n')
-    while (index >= 0) {
-      const line = this.buffer.slice(0, index).trim()
-      this.buffer = this.buffer.slice(index + 1)
-      if (line) this.onLine(line)
-      index = this.buffer.indexOf('\n')
-    }
-  }
-
-  onLine(line) {
-    let message
-    try {
-      message = JSON.parse(line)
-    } catch (error) {
-      // stdoutにJSON-RPC以外が出ていたら接続は壊れている。**黙って読み飛ばさない**。
-      fail(`MCPサーバのstdoutにJSON-RPC以外の行が出た: ${line}`)
-      return
-    }
-    const resolver = this.pending.get(message.id)
-    if (!resolver) return
-    this.pending.delete(message.id)
-    resolver(message)
-  }
-
-  send(method, params) {
-    const id = this.nextId
-    this.nextId += 1
-    const promise = new Promise((resolvePending, rejectPending) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id)
-        rejectPending(new Error(`MCPの応答が来ない: ${method}`))
-      }, timeout)
-      this.pending.set(id, (message) => {
-        clearTimeout(timer)
-        resolvePending(message)
-      })
-    })
-    this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`)
-    return promise
-  }
-
-  notify(method, params) {
-    this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`)
-  }
-
-  /** ツールを呼んで、返ってきたJSONテキストを object で返す(isErrorなら失敗)。 */
-  async callTool(name, args) {
-    const response = await this.send('tools/call', { name, arguments: args ?? {} })
-    if (response.error) fail(`${name} がプロトコルエラー: ${JSON.stringify(response.error)}`)
-    if (response.result.isError) fail(`${name} が失敗: ${response.result.content[0].text}`)
-    return JSON.parse(response.result.content[0].text)
-  }
-}
 
 async function main() {
-  const executablePath = CANDIDATE_BROWSERS.find((candidate) => existsSync(candidate))
-  if (!executablePath) fail(`ブラウザが見つからない: ${CANDIDATE_BROWSERS.join(', ')}`)
-  if (!existsSync(PYTHON)) fail(`venvのpythonが無い: ${PYTHON}`)
+  const executablePath = findBrowser()
   if (!existsSync(stepPath)) fail(`STEPが無い: ${stepPath}`)
 
   console.log(`smoke-mcp: ${stepPath}`)
   console.log(`  browser: ${executablePath}`)
 
-  // `--step` 起動オプションは廃止済み。空で立ち上げ、あとで MCP の import_step_editable で読む。
-  const child = spawn(
-    PYTHON,
-    [
-      '-m',
-      'duocad.mcp_server',
-      '--port',
-      String(wsPort),
-      '--http-port',
-      String(httpPort),
-    ],
-    { cwd: REPO_ROOT, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
-  )
-  const serverLog = []
-  child.stderr.setEncoding('utf8')
-  child.stderr.on('data', (chunk) => serverLog.push(chunk))
-  child.on('exit', (code) => {
-    if (code !== 0 && code !== null) {
-      console.error(serverLog.join(''))
-    }
-  })
-
-  const mcp = new McpClient(child)
+  const server = await startServer({ wsPort, httpPort })
+  const mcp = new McpClient(server.child, { timeout })
   let browser = null
 
   try {
     // ---------------------------------------------------------------- MCPの握手
-    const initialized = await mcp.send('initialize', {
-      protocolVersion: '2025-06-18',
-      capabilities: {},
-      clientInfo: { name: 'duocad-smoke-mcp', version: '0.0.1' },
-    })
-    if (initialized.error) fail(`initialize が失敗: ${JSON.stringify(initialized.error)}`)
-    mcp.notify('notifications/initialized', {})
-    ok(
-      `MCP接続: protocol ${initialized.result.protocolVersion} / ` +
-        `${initialized.result.serverInfo.name} ${initialized.result.serverInfo.version}`,
-    )
+    const info = await mcp.handshake('duocad-smoke-mcp')
+    ok(`MCP接続: protocol ${info.protocolVersion} / ${info.serverInfo.name} ${info.serverInfo.version}`)
 
     const tools = (await mcp.send('tools/list')).result.tools.map((tool) => tool.name)
     // **【2026-08-12 F2で退役】** ここは `tools.length !== 3` で「3つだけ」を固定していたが、
@@ -228,18 +92,7 @@ async function main() {
     )
 
     // ---------------------------------------------------------------- ブラウザを開く
-    browser = await launch({
-      executablePath,
-      headless: true,
-      args: [
-        '--headless=new',
-        '--use-gl=angle',
-        '--use-angle=swiftshader',
-        '--enable-unsafe-swiftshader',
-        '--disable-gpu-sandbox',
-        '--window-size=1280,860',
-      ],
-    })
+    browser = await launchBrowser(executablePath)
     const page = await browser.newPage()
     await page.setViewport({ width: 1280, height: 860 })
     const consoleErrors = []
@@ -519,8 +372,7 @@ async function main() {
     console.log('smoke-mcp: PASS')
   } finally {
     if (browser) await browser.close()
-    child.stdin.end() // EOF = MCPクライアントが切断したときと同じ終わり方
-    await new Promise((done) => child.once('exit', done))
+    await server.stop() // stdinを閉じる = MCPクライアントが切断したときと同じ終わり方
   }
 }
 

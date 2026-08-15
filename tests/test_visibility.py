@@ -32,8 +32,8 @@ from duocad.io_step import import_step
 from duocad.oplog import OpLog
 from duocad.verbs import extrude_face, make_editable_copy, set_visible
 
-MODELS = Path(r"C:\Users\tm976\mf\3d-models")
-SHELF = MODELS / "shelf_attachment_GD.step"
+from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
+from models import SHELF  # noqa: F401
 
 #: M3.5で新設したモジュール(import境界の走査対象に入っていることを固定する)
 M35_MODULES = ("selection.py", "verbs/visibility.py")

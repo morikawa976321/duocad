@@ -41,7 +41,7 @@ from duocad.region import region_ref, regions
 from duocad.sketch import ENTITY_KINDS, add_arc, add_line, base_plane, entity_params, get_sketch, sketch_create
 from duocad.verbs import extrude
 
-MODELS = Path(r"C:\Users\tm976\mf\3d-models")
+from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
 
 #: 半円（r=5・180°）+ 弦を3mm押し出したときの実測（2026-08-11）
 HALF_DISC_PRISM_KINDS = {"cylinder_partial": 1, "plane": 3}

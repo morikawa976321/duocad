@@ -18,7 +18,8 @@
  * SwiftShader(ソフトウェアGL)を明示的に許可している。
  */
 import { existsSync } from 'node:fs'
-import { launch } from 'puppeteer-core'
+import { findBrowser, launchBrowser } from './browser.mjs'
+import { fail, ok, parseArgs } from './args.mjs'
 import { startServer } from './server.mjs'
 import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
 
@@ -35,67 +36,18 @@ const distance = Number.parseFloat(options.distance ?? '1')
 // 並行していた環境。1回の往復自体は軽いが、混雑時はスケジューリング待ちが積み上がる)。
 const timeout = Number.parseInt(options.timeout ?? '120000', 10)
 
-// **Chromeを先に見る**(2026-08-15)。この環境の Edge 151 は headless で起動できない ——
-// `Failed to launch the browser process: Code: 0` が出て即座に終了する(専用プロファイルを
-// 与えても同じで、duocad側の問題ではない)。Edgeは候補として残す(Chromeが無い環境のため)。
-// `DUOCAD_BROWSER` を置けばそれが最優先。
-const CANDIDATE_BROWSERS = [
-  process.env.DUOCAD_BROWSER,
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-].filter(Boolean)
 
-function parseArgs(argv) {
-  const parsed = {}
-  for (let i = 0; i < argv.length; i += 1) {
-    const item = argv[i]
-    if (item.startsWith('--')) {
-      const key = item.slice(2)
-      const next = argv[i + 1]
-      if (next && !next.startsWith('--')) {
-        parsed[key] = next
-        i += 1
-      } else {
-        parsed[key] = 'true'
-      }
-    }
-  }
-  return parsed
-}
 
-function ok(message) {
-  console.log(`  ok   ${message}`)
-}
-
-function fail(message) {
-  throw new Error(message)
-}
 
 async function main() {
-  const executablePath = CANDIDATE_BROWSERS.find((candidate) => existsSync(candidate))
-  if (!executablePath) {
-    fail(`ブラウザが見つからない(DUOCAD_BROWSER で指定する): ${CANDIDATE_BROWSERS.join(', ')}`)
-  }
+  const executablePath = findBrowser()
   console.log(`smoke: browser ${executablePath}`)
 
   const server = attachUrl === null ? await startServer({ wsPort, httpPort }) : null
   const url = server?.url ?? attachUrl
   console.log(`  server : ${url}${server === null ? ' (既に立っているサーバへ接続)' : ''}`)
 
-  const browser = await launch({
-    executablePath,
-    headless: true,
-    args: [
-      '--headless=new',
-      '--use-gl=angle',
-      '--use-angle=swiftshader',
-      '--enable-unsafe-swiftshader',
-      '--disable-gpu-sandbox',
-      '--window-size=1280,860',
-    ],
-  })
+  const browser = await launchBrowser(executablePath)
 
   try {
     const page = await browser.newPage()

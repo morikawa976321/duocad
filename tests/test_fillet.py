@@ -52,7 +52,7 @@ from duocad.sketch import add_circle, base_plane, sketch_create
 from duocad.verbs import extrude, fillet
 from duocad.region import region_ref
 
-MODELS = Path(r"C:\Users\tm976\mf\3d-models")
+from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
 
 #: 20mm立方体・全辺フィレットの実測（2026-08-11。上のdocstring参照）
 CUBE_MM = 20.0

@@ -24,7 +24,7 @@ from duocad.document import Body, Document
 from duocad.oplog import OpLog
 from duocad.verbs import extrude_face, make_editable_copy
 
-STEP_PATH = r"C:\Users\tm976\mf\3d-models\shelf_attachment_GD.step"
+from models import SHELF as STEP_PATH  # テスト共通のSTEPの置き場(tests/models.py)
 
 #: 体積比較の相対許容差。M0が実測した「STEP往復で1ULP級の丸めが出る」のと同じ理由で `==` は使わない
 #: (tests/README.md「STEP往復の体積は bit-exact ではない」)。ブーリアンの積分順序でも同程度の差が出る。

@@ -23,8 +23,12 @@ export const PYTHON = resolve(REPO_ROOT, '.venv', 'Scripts', 'python.exe')
 /**
  * サーバを立てて、HTTPが応答するまで待つ。
  *
+ * 戻り値の `child` は**MCPで叩く側のため**(`smoke-mcp` / `acceptance` が stdio に
+ * `McpClient` を繋ぐ)。ブラウザだけの検査は使わない。
+ *
  * @param {{wsPort: number|string, httpPort: number|string, timeout?: number}} options
- * @returns {Promise<{url: string, stop: () => Promise<void>, log: () => string}>}
+ * @returns {Promise<{url: string, child: import('node:child_process').ChildProcess,
+ *                    stop: () => Promise<void>, log: () => string}>}
  */
 export async function startServer({ wsPort, httpPort, timeout = 60000 }) {
   if (!existsSync(PYTHON)) throw new Error(`venvのpythonが無い: ${PYTHON}`)
@@ -76,5 +80,5 @@ export async function startServer({ wsPort, httpPort, timeout = 60000 }) {
     })
   }
 
-  return { url, stop, log }
+  return { url, child, stop, log }
 }

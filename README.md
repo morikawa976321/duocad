@@ -378,8 +378,9 @@ duocad/
   tests/                 543件。README.md がAPI契約そのもの
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
-    scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。
-                         server.mjs が検査用サーバの起動・停止、models.mjs がSTEPのパス
+    scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。共有部品は
+                         server.mjs（サーバの起動・停止）／browser.mjs（ブラウザ選択・起動）／
+                         mcp-client.mjs（MCPクライアント）／args.mjs／models.mjs（STEPのパス）
     dist/                ビルド成果物（**Pythonサーバが配信するのはこちら**・git管理外）
   .venv/                 Python 3.11（git管理外）
   pyproject.toml         依存はバージョン固定（ローカル専用なので上げなければ壊れない）

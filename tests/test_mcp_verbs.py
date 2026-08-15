@@ -47,8 +47,8 @@ INVALID_PARAMS = -32602
 BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MODELS = Path(r"C:\Users\tm976\mf\3d-models")
-SHELF = MODELS / "shelf_attachment_GD.step"
+from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
+from models import SHELF  # noqa: F401
 
 
 # --------------------------------------------------------------------------------------

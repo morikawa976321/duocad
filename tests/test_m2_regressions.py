@@ -31,7 +31,7 @@ from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, add_rectangle, face_plane, sketch_create
 from duocad.verbs import extrude
 
-STEP_PATH = r"C:\Users\tm976\mf\3d-models\shelf_attachment_GD.step"
+from models import SHELF as STEP_PATH  # テスト共通のSTEPの置き場(tests/models.py)
 
 BOX_EDGE = 20.0
 BOX_VOLUME = BOX_EDGE**3

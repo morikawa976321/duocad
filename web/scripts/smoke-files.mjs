@@ -21,7 +21,8 @@
 import { existsSync, mkdtempSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { launch } from 'puppeteer-core'
+import { findBrowser, launchBrowser } from './browser.mjs'
+import { fail, ok, parseArgs } from './args.mjs'
 import { startServer } from './server.mjs'
 
 const options = parseArgs(process.argv.slice(2))
@@ -32,49 +33,15 @@ const httpPort = options['http-port'] ?? '8796'
 const timeout = Number.parseInt(options.timeout ?? '120000', 10)
 const workdir = options.workdir ?? mkdtempSync(join(tmpdir(), 'duocad-e-'))
 
-// **Chromeを先に見る**(2026-08-15。理由は `smoke.mjs` の同じ箇所)。
-const CANDIDATE_BROWSERS = [
-  process.env.DUOCAD_BROWSER,
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-].filter(Boolean)
 
 /** 板と穴の寸法(mm)。体積の検算に使うので丸い数字。 */
 const PLATE = { width: 60, height: 20, thickness: 5 }
 const HOLE = { u: 10, v: 10, radius: 2, dx: 15, count: 3 }
 
-function parseArgs(argv) {
-  const parsed = {}
-  for (let i = 0; i < argv.length; i += 1) {
-    const item = argv[i]
-    if (!item.startsWith('--')) continue
-    const key = item.slice(2)
-    const next = argv[i + 1]
-    if (next && !next.startsWith('--')) {
-      parsed[key] = next
-      i += 1
-    } else {
-      parsed[key] = 'true'
-    }
-  }
-  return parsed
-}
 
-function ok(message) {
-  console.log(`  ok   ${message}`)
-}
-
-function fail(message) {
-  throw new Error(message)
-}
 
 async function main() {
-  const executablePath = CANDIDATE_BROWSERS.find((candidate) => existsSync(candidate))
-  if (!executablePath) {
-    fail(`ブラウザが見つからない(DUOCAD_BROWSER で指定する): ${CANDIDATE_BROWSERS.join(', ')}`)
-  }
+  const executablePath = findBrowser()
   console.log(`smoke-files: ${executablePath}`)
   console.log(`  workdir: ${workdir}`)
 
@@ -82,18 +49,7 @@ async function main() {
   const url = server?.url ?? attachUrl
   console.log(`  server : ${url}${server === null ? ' (既に立っているサーバへ接続)' : ''}`)
 
-  const browser = await launch({
-    executablePath,
-    headless: true,
-    args: [
-      '--headless=new',
-      '--use-gl=angle',
-      '--use-angle=swiftshader',
-      '--enable-unsafe-swiftshader',
-      '--disable-gpu-sandbox',
-      '--window-size=1280,900',
-    ],
-  })
+  const browser = await launchBrowser(executablePath)
 
   try {
     const page = await browser.newPage()

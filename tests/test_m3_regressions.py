@@ -33,7 +33,7 @@ from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, sketch_create
 from duocad.verbs import extrude, make_editable_copy, pattern_rectangular
 
-STEP_PATH = r"C:\Users\tm976\mf\3d-models\shelf_attachment_GD.step"
+from models import SHELF as STEP_PATH  # テスト共通のSTEPの置き場(tests/models.py)
 
 
 def test_set_parameter_keeps_the_active_body():
