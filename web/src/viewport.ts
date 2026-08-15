@@ -336,20 +336,36 @@ export function createViewport(container: HTMLElement): Viewport {
     bodies.delete(bodyId)
   }
 
+  /**
+   * 1面ぶんの `BufferGeometry` を作る(本物と幽霊で**同じ形の作り方**)。
+   *
+   * 本物(`buildBody`)と確定前の幽霊(`showPreview`)はどちらも同じ三角形群から作るので、
+   * **ここがずれると「プレビューと確定結果が違う形に見える」**という、いちばん困る形の
+   * 不具合になる(2026-08-15に同じ7行が2箇所にあったのを1つにした)。
+   *
+   * 一方で**メッシュの組み立てまでは共通化しない** —— 本物は `userData`(ピックのための
+   * body_id と面の添字)と面の境界線を持ち、幽霊はどちらも持たない(指せない・線を出さない)。
+   * 材質だけの違いに見えて、実際には「何のために置くか」が違う。
+   */
+  function faceGeometry(face: FaceGeometry): THREE.BufferGeometry {
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(new Float32Array(face.positions), 3),
+    )
+    geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(face.indices), 1))
+    geometry.computeVertexNormals()
+    geometry.computeBoundingSphere()
+    return geometry
+  }
+
   function buildBody(bodyId: string, payload: GeometryPayload): void {
     const faceMeshes: THREE.Mesh[] = []
     const sceneObjects: THREE.Object3D[] = []
     const disposables: Array<{ dispose(): void }> = []
     for (const face of payload.faces) {
       if (face.indices.length === 0) continue // 三角形が取れなかった面(サーバが警告を出す)
-      const geometry = new THREE.BufferGeometry()
-      geometry.setAttribute(
-        'position',
-        new THREE.BufferAttribute(new Float32Array(face.positions), 3),
-      )
-      geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(face.indices), 1))
-      geometry.computeVertexNormals()
-      geometry.computeBoundingSphere()
+      const geometry = faceGeometry(face)
       const mesh = new THREE.Mesh(geometry, baseMaterial)
       mesh.userData.bodyId = bodyId
       mesh.userData.faceIndex = face.index
@@ -409,14 +425,7 @@ export function createViewport(container: HTMLElement): Viewport {
       const disposables: Array<{ dispose(): void }> = []
       for (const face of entry.geometry.faces) {
         if (face.indices.length === 0) continue
-        const geometry = new THREE.BufferGeometry()
-        geometry.setAttribute(
-          'position',
-          new THREE.BufferAttribute(new Float32Array(face.positions), 3),
-        )
-        geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(face.indices), 1))
-        geometry.computeVertexNormals()
-        geometry.computeBoundingSphere()
+        const geometry = faceGeometry(face)
         const mesh = new THREE.Mesh(geometry, previewMaterial)
         root.add(mesh)
         objects.push(mesh)
