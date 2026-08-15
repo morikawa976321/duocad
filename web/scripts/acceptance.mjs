@@ -57,12 +57,13 @@ function parseArgs(argv) {
   return parsed
 }
 
+// **Chromeを先に見る**(2026-08-15。理由は `smoke.mjs` の同じ箇所)。
 const CANDIDATE_BROWSERS = [
   process.env.DUOCAD_BROWSER,
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
 ].filter(Boolean)
 
 /** 到達表の19操作(実装計画書§0)。**この並びのまま ACCEPTANCE.md の表になる**。 */

@@ -8,7 +8,10 @@
  * (`viewport.project` は他Bodyに隠れている面に対して null を返す設計を利用して検査する)・
  * **可視性の切り替えがundoで戻る**、を検査する。
  *
- *   node scripts/smoke.mjs --url http://127.0.0.1:8766/
+ *   web> node scripts/smoke.mjs
+ *
+ * **サーバはこのスクリプトが自分で立てる**(2026-08-15。`python -m duocad.server` の廃止に伴う)。
+ * 既に立っているものへ繋ぐときだけ `--url http://127.0.0.1:8766/` を渡す。
  *
  * ブラウザは**インストール済みのEdge/Chromeを使う**(puppeteer-core なのでブラウザを
  * ダウンロードしない)。`DUOCAD_BROWSER` で明示もできる。headless で WebGL を出すために
@@ -16,10 +19,14 @@
  */
 import { existsSync } from 'node:fs'
 import { launch } from 'puppeteer-core'
+import { startServer } from './server.mjs'
 import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
 
 const options = parseArgs(process.argv.slice(2))
-const url = options.url ?? 'http://127.0.0.1:8766/'
+// `--url` を渡したときだけ既に立っているサーバへ繋ぐ(既定は自分で立てる)。
+const attachUrl = options.url ?? null
+const wsPort = options.port ?? '8775'
+const httpPort = options['http-port'] ?? '8776'
 const stepPath = options.step ?? PC_CASE_STEP
 const expectedParts = Number.parseInt(options['expect-parts'] ?? String(PC_CASE_SOLIDS), 10)
 const distance = Number.parseFloat(options.distance ?? '1')
@@ -28,12 +35,16 @@ const distance = Number.parseFloat(options.distance ?? '1')
 // 並行していた環境。1回の往復自体は軽いが、混雑時はスケジューリング待ちが積み上がる)。
 const timeout = Number.parseInt(options.timeout ?? '120000', 10)
 
+// **Chromeを先に見る**(2026-08-15)。本人が使うブラウザがChromeになり、かつこの環境の
+// Edge 151 は headless で起動できない —— `Failed to launch the browser process: Code: 0` が
+// 出て即座に終了する(専用プロファイルを与えても同じで、duocad側の問題ではない)。
+// Edgeは候補として残す(Chromeが無い環境のため)。`DUOCAD_BROWSER` を置けばそれが最優先。
 const CANDIDATE_BROWSERS = [
   process.env.DUOCAD_BROWSER,
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
 ].filter(Boolean)
 
 function parseArgs(argv) {
@@ -67,8 +78,11 @@ async function main() {
   if (!executablePath) {
     fail(`ブラウザが見つからない(DUOCAD_BROWSER で指定する): ${CANDIDATE_BROWSERS.join(', ')}`)
   }
-  console.log(`smoke: ${url}`)
-  console.log(`  browser: ${executablePath}`)
+  console.log(`smoke: browser ${executablePath}`)
+
+  const server = attachUrl === null ? await startServer({ wsPort, httpPort }) : null
+  const url = server?.url ?? attachUrl
+  console.log(`  server : ${url}${server === null ? ' (既に立っているサーバへ接続)' : ''}`)
 
   const browser = await launch({
     executablePath,
@@ -830,6 +844,7 @@ async function main() {
     console.log('smoke: PASS')
   } finally {
     await browser.close()
+    if (server !== null) await server.stop()
   }
 }
 

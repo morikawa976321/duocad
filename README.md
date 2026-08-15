@@ -39,9 +39,9 @@ cd C:\Users\tm976\mf\duocad\web; npm install; npm run build
 > `web/src` ではなく `web/dist`（ビルド成果物）。`web/src` を触ったら `npm run build`。
 > 現在の `dist` は `src` より新しい（2026-08-15ビルド）ので、**そのまま起動してよい**。
 
-**起動は `duocad.mcp_server` の1本でよい。** MCPとWebSocketと静的配信を1プロセスで兼ねるので、
-**手だけで触るときも同じもので立てて、AIに何も頼まなければよい**（`duocad.server` は
-MCPを持たない軽い方で、smokeスクリプトが使う。下の補足）。
+**起動コマンドは `duocad.mcp_server` の1本しかない。** MCPとWebSocketと静的配信を1プロセスで
+兼ねるので、**手だけで触るときも同じもので立てて、AIに何も頼まなければよい**。
+（`python -m duocad.server` は2026-08-15に廃止。叩くと理由を出して終了コード2で止まる。下の補足）
 
 > **起動時に決めることは何も無い（2026-08-15）。** 起動オプション `--step` / `--no-step` は廃止し、
 > **サーバは常に空の文書で立つ**。読みたいSTEPは画面の「STEP読み込み」かMCPの `import_step_editable` で
@@ -86,26 +86,27 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 このときだけは `web/dist` の作り直しが要らない（Viteが `web/src` を直に配る）。
 型検査は `npm run check`（`tsc --noEmit`）。
 
-### 補足: `duocad.server`（MCPを持たない方）
+### 補足: 廃止した `duocad.server`（2026-08-15）
 
-```powershell
-cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m duocad.server   # ブラウザが自動で開く
-```
+`python -m duocad.server` という2つ目の起動コマンドがあった（WebSocketと静的配信だけで、
+stdioのMCPを持たない軽い方。smokeスクリプトが前提にしていた）。**廃止した** —— 起動経路が2つあると
+「AIが変えた文書」と「人が見ている文書」が別物になりうるうえ、`mcp_server` は機能的な上位互換で、
+AIに何も頼まなければ手だけの操作と同じだから。
 
-WebSocketと静的配信だけで、stdioのMCPを持たない。**§4のsmokeスクリプトが前提にしているのはこちら**
-（スクリプトがブラウザを駆動する側なので、MCPの口が要らない）。`mcp_server` との違いは3点だけ:
-**ブラウザを既定で開く**（止めるのは `--no-open`）／**`web/dist` が無いと起動を断る**（`mcp_server` は
-静的配信だけ諦めて続行）／stdoutを普通に使う。手で触るぶんには 1.1・1.2 と体験は同じ。
+**`duocad/server.py` のモジュール自体は残っている**（`Session` / `Server` / 静的配信の実体で、
+`mcp_server` と543件のテストがこれを使う）。消えたのは `main()` と起動オプションだけ。
+`python -m duocad.server` を叩くと**黙って何もせずに終わらず**、`duocad.mcp_server` を指す
+1行を出して終了コード2で止まる。
 
 ### ポートまとめ
 
 | ポート | 何 | 誰が使う |
 |---|---|---|
-| 8765 | WebSocket（コマンド下り／イベント上り） | `duocad.mcp_server`（smokeでは `duocad.server`） |
+| 8765 | WebSocket（コマンド下り／イベント上り） | `duocad.mcp_server` |
 | 8766 | 静的配信（**ブラウザで開くのはこちら**） | 同上 |
 | 5173 | Vite dev server | `npm run dev` |
-| 8775/8776 | `smoke-features` / `smoke-files` 用 | 手で立てる |
-| 8865/8866, 8885/8886 | `smoke-mcp` / `acceptance` が自分で立てる | スクリプト |
+| 8775/8776・8785/8786・8795/8796 | `smoke` / `smoke-features` / `smoke-files` | **各スクリプトが自分で立てる** |
+| 8865/8866・8885/8886 | `smoke-mcp` / `acceptance` | 同上 |
 
 ---
 
@@ -235,32 +236,30 @@ cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
 
 ### 実ブラウザのsmoke（本物のクリックとキー入力）
 
-インストール済みのEdge/Chromeを使う（`DUOCAD_BROWSER` で明示可）。**サーバは別窓で先に立てる**。
+**サーバを立てる手順は要らない**（2026-08-15）。**5本とも自分で `duocad.mcp_server` を立てて、
+終わったら止める**ので、コマンドは1本ずつ叩くだけでよい。**毎回まっさらな文書で始まる**（文書は
+接続より長生きするので、以前は「サーバを立て直す」のが手順の一部だった）。
 
-> **2026-08-15時点、このマシンのEdgeはheadlessで起動できない**（`Failed to launch the browser
-> process: Code: 0`。専用プロファイルを与えても同じで、**duocad側の問題ではない**）。
-> スクリプトはEdgeを先に試すので、**Chromeを明示して走らせること**:
->
-> ```powershell
-> $env:DUOCAD_BROWSER = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-> ```
+ブラウザは**Chromeを先に見る**（無ければEdge。`DUOCAD_BROWSER` で明示すればそれが最優先）。
 
 ```powershell
-# ① PCケースを読んだ状態（パーツ一覧・可視性・奥の面のピック）
-#    スクリプトが自分で「STEP読み込み」を踏むので、サーバは空のままでよい（読むパスは web/scripts/models.mjs）
-.\.venv\Scripts\python.exe -m duocad.server --no-open      # 別窓
-cd web; node scripts/smoke.mjs --url http://127.0.0.1:8766/
+cd C:\Users\tm976\mf\duocad\web
+
+# ① PCケース（パーツ一覧・可視性・奥の面のピック）※スクリプトが自分でSTEPを読み込む
+node scripts/smoke.mjs
 
 # ② 空から手だけで形を作る（スケッチ→押し出し→穴→フィレット→面取り→反復）
-.\.venv\Scripts\python.exe -m duocad.server --port 8775 --http-port 8776 --no-open   # 別窓
-cd web; node scripts/smoke-features.mjs --url http://127.0.0.1:8776/
+node scripts/smoke-features.mjs
 
-# ③ パネルとファイル操作（パラメータ追随・保存/開く・STEP/STL）※サーバは②を立て直す
-cd web; node scripts/smoke-files.mjs --url http://127.0.0.1:8776/
+# ③ パネルとファイル操作（パラメータ追随・保存/開く・STEP/STL）
+node scripts/smoke-files.mjs
 
-# ④ AIが操作すると人間の画面が変わる（サーバはスクリプトが自分で起動する）
-cd web; node scripts/smoke-mcp.mjs
+# ④ AIが操作すると人間の画面が変わる
+node scripts/smoke-mcp.mjs
 ```
+
+既に立てているサーバへ繋ぎたいときだけ `--url http://127.0.0.1:8766/` を渡す
+（その場合スクリプトはサーバを立てず、止めもしない）。
 
 ### v1の受入（19操作 × 人間/AI ＋ 交互操作）
 
@@ -392,7 +391,8 @@ duocad/
   tests/                 543件。README.md がAPI契約そのもの
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
-    scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）
+    scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。
+                         server.mjs が検査用サーバの起動・停止、models.mjs がSTEPのパス
     dist/                ビルド成果物（**Pythonサーバが配信するのはこちら**・git管理外）
   .venv/                 Python 3.11（git管理外）
   pyproject.toml         依存はバージョン固定（ローカル専用なので上げなければ壊れない）
@@ -414,7 +414,8 @@ duocad/
 - **duocadのサーバを2つ同時に立てない**（8765/8766がぶつかり、後から立った方がWebSocketのbindで落ちる）。
   自分で `mcp_server` を立てた状態でClaude Codeを起動すると**これが起きる**（§1.2）。
 - **`web/dist` を作り直さないとUIの変更が画面に出ない**（`npm run build`）。
-  `duocad.server` は `dist` が無いと起動を断る（`mcp_server` は静的配信だけ諦めて動く）。
+  `dist` が無くても `mcp_server` は**静的配信だけ諦めて起動する**ので、
+  「立ったのに画面が出ない」という形で出る（理由はstderrに1行出ている）。
 - **最初の板は空の文書でしか作れない**（起動直後の状態）。既存部品がいると `join` が融合してしまうので、
   手だけで一巡する日はSTEPを読み込む前にやる（サーバは常に空で立つ）。
 - **文書は接続より長生きする。** ブラウザを閉じても消えないので、まっさらから試すときはサーバを立て直す。

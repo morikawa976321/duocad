@@ -10,8 +10,10 @@
  *   4. STEP/STL を書き出し、**STEPは読み戻して体積が一致**(読み戻しは pytest 側)
  *   5. 履歴パネルでundo/redoの位置が分かり、実際に戻せる
  *
- *   duocad> .venv\Scripts\python.exe -m duocad.server --port 8775 --http-port 8776 --no-open
- *   web>    node scripts/smoke-files.mjs --url http://127.0.0.1:8776/ --workdir <書き込めるディレクトリ>
+ *   web> node scripts/smoke-files.mjs [--workdir <書き込めるディレクトリ>]
+ *
+ * **サーバはこのスクリプトが自分で立てる**(2026-08-15。`python -m duocad.server` の廃止に伴う)。
+ * 既に立っているものへ繋ぐときだけ `--url` を渡す。
  *
  * **サーバは毎回起動し直す**(文書は接続より長生きするので、前回の形が残っていると
  * 「最初のソリッドが生まれる」経路を通れない)。
@@ -20,18 +22,23 @@ import { existsSync, mkdtempSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { launch } from 'puppeteer-core'
+import { startServer } from './server.mjs'
 
 const options = parseArgs(process.argv.slice(2))
-const url = options.url ?? 'http://127.0.0.1:8776/'
+// `--url` を渡したときだけ既に立っているサーバへ繋ぐ(既定は自分で立てる)。
+const attachUrl = options.url ?? null
+const wsPort = options.port ?? '8795'
+const httpPort = options['http-port'] ?? '8796'
 const timeout = Number.parseInt(options.timeout ?? '120000', 10)
 const workdir = options.workdir ?? mkdtempSync(join(tmpdir(), 'duocad-e-'))
 
+// **Chromeを先に見る**(2026-08-15。理由は `smoke.mjs` の同じ箇所)。
 const CANDIDATE_BROWSERS = [
   process.env.DUOCAD_BROWSER,
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
 ].filter(Boolean)
 
 /** 板と穴の寸法(mm)。体積の検算に使うので丸い数字。 */
@@ -68,8 +75,12 @@ async function main() {
   if (!executablePath) {
     fail(`ブラウザが見つからない(DUOCAD_BROWSER で指定する): ${CANDIDATE_BROWSERS.join(', ')}`)
   }
-  console.log(`smoke-files: ${url}`)
+  console.log(`smoke-files: ${executablePath}`)
   console.log(`  workdir: ${workdir}`)
+
+  const server = attachUrl === null ? await startServer({ wsPort, httpPort }) : null
+  const url = server?.url ?? attachUrl
+  console.log(`  server : ${url}${server === null ? ' (既に立っているサーバへ接続)' : ''}`)
 
   const browser = await launch({
     executablePath,
@@ -560,6 +571,7 @@ async function main() {
     console.log('smoke-files: PASS')
   } finally {
     await browser.close()
+    if (server !== null) await server.stop()
   }
 }
 

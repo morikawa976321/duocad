@@ -10,8 +10,11 @@
  * 分けてあるのは、`join` の押し出しが「対象が無ければ新しいソリッドを作る」verbだから
  * (27部品が居る文書では既存の部品へ融合してしまい、**最初の板が生まれる**経路が通らない)。
  *
- *   duocad> .venv\Scripts\python.exe -m duocad.server --port 8775 --http-port 8776 --no-open
- *   web>    node scripts/smoke-features.mjs --url http://127.0.0.1:8776/
+ *   web> node scripts/smoke-features.mjs
+ *
+ * **サーバはこのスクリプトが自分で立てる**(2026-08-15。`python -m duocad.server` の廃止に伴う)。
+ * 毎回まっさらな文書で始まるので、下記の「最初の板が生まれる」経路がそのまま通る。
+ * 既に立っているものへ繋ぐときだけ `--url` を渡す。
  *
  * 見るのはタスクDの検証1〜5(検証6のMCP突合は `tests/test_feature_ui.py` 側にある):
  *
@@ -23,17 +26,22 @@
  */
 import { existsSync } from 'node:fs'
 import { launch } from 'puppeteer-core'
+import { startServer } from './server.mjs'
 
 const options = parseArgs(process.argv.slice(2))
-const url = options.url ?? 'http://127.0.0.1:8776/'
+// `--url` を渡したときだけ既に立っているサーバへ繋ぐ(既定は自分で立てる)。
+const attachUrl = options.url ?? null
+const wsPort = options.port ?? '8785'
+const httpPort = options['http-port'] ?? '8786'
 const timeout = Number.parseInt(options.timeout ?? '120000', 10)
 
+// **Chromeを先に見る**(2026-08-15。理由は `smoke.mjs` の同じ箇所)。
 const CANDIDATE_BROWSERS = [
   process.env.DUOCAD_BROWSER,
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
 ].filter(Boolean)
 
 /** 板の寸法(mm)。体積の検算に使うので、丸い数字にしてある。 */
@@ -70,7 +78,11 @@ async function main() {
   if (!executablePath) {
     fail(`ブラウザが見つからない(DUOCAD_BROWSER で指定する): ${CANDIDATE_BROWSERS.join(', ')}`)
   }
-  console.log(`smoke-features: ${url}`)
+  console.log(`smoke-features: ${executablePath}`)
+
+  const server = attachUrl === null ? await startServer({ wsPort, httpPort }) : null
+  const url = server?.url ?? attachUrl
+  console.log(`  server : ${url}${server === null ? ' (既に立っているサーバへ接続)' : ''}`)
 
   const browser = await launch({
     executablePath,
@@ -614,6 +626,7 @@ async function main() {
     console.log('smoke-features: PASS')
   } finally {
     await browser.close()
+    if (server !== null) await server.stop()
   }
 }
 

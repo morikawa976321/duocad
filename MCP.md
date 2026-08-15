@@ -67,9 +67,10 @@ MCPクライアントが**このプロセスを起動する**（自分で先に�
 `web/dist` が無い場合は**静的配信だけを諦めてMCPは動く**（理由はstderrに出る）。先に
 `cd web && npm install && npm run build` しておくと画面も出る。
 
-**注意**: `python -m duocad.server`（M1からのWebSocketサーバ）と同時に起動すると
-ポートがぶつかる。**MCP経由で使うときは `duocad.mcp_server` だけを起動する**
-（こちらがWebSocketと静的配信を兼ねる）。
+**注意**: duocadのサーバを2つ同時に立てない（ポートがぶつかり、後から立った方がWebSocketの
+bindで落ちる）。**起動コマンドは `duocad.mcp_server` だけである** —— M1からあった
+`python -m duocad.server` は2026-08-15に廃止した（`duocad/server.py` のモジュールは
+`Session` / `Server` / 静的配信の実体として残っており、それを起動するのがこちら）。
 
 ## Claude Code への登録
 

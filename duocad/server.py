@@ -4,13 +4,15 @@
 ここには「文書を持つ」以外の機能を置かない(アプリ層にしか無い機能を作った瞬間AIから使えなくなる。
 §2「外してはいけない3つ」の1)。
 
-起動(1コマンド):
-    .venv\\Scripts\\python.exe -m duocad.server
+**このモジュールは起動コマンドを持たない(2026-08-15に `python -m duocad.server` を廃止)。**
+提供するのは `Session` / `Server` / 静的配信で、**これを起動するのは `duocad.mcp_server` だけ**:
 
-    --port 8765        WebSocketのポート
-    --http-port 8766   静的配信のポート(ブラウザで開くのはこちら)
-    --deviation 0.2    テセレーションの線形偏差(mm・絶対)
-    --no-open          既定ではブラウザを開く。開かせたくないとき(自動テスト)に付ける
+    .venv\\Scripts\\python.exe -m duocad.mcp_server [--open] [--port 8765] [--http-port 8766]
+
+廃止した理由は、起動経路が2つあると**「AIが変えた文書」と「人が見ている文書」が別物になりうる**
+から(1プロセスで両方を持つ、というMCP側の前提が崩れる)。`mcp_server` はMCP(stdio)と
+WebSocketと静的配信を1プロセスで持つ**上位互換**であり、AIに何も頼まなければ手だけの操作と
+同じなので、下位の経路を残す理由が無い。ポートと偏差の引数は `mcp_server` 側に同じものがある。
 
 プロトコル(JSON文字列):
 
@@ -93,19 +95,15 @@ tests/README.md の「A」節が正。**A1の時点ではまだ載っていな�
 """
 from __future__ import annotations
 
-import argparse
 import asyncio
 import json
 import os
 import sys
 import threading
-import webbrowser
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional  # Any: Session verb wrappers / listeners
-
-from websockets.asyncio.server import serve
 
 from . import io_step, kernel, parameters, query, region, selection, sketch
 from .document import Document
@@ -1470,49 +1468,14 @@ class Server:
                     self.clients.discard(target)
 
 
-async def run(session: Session, host: str, port: int) -> None:
-    server = Server(session)
-    server.bind_loop(asyncio.get_running_loop())
-    async with serve(server.handle, host, port, max_size=8 * 1024 * 1024):
-        await asyncio.get_running_loop().create_future()  # Ctrl+C まで動かし続ける
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="duocad M1 サーバ(WebSocket + 静的配信)")
-    parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--http-port", type=int, default=8766)
-    parser.add_argument("--deviation", type=float, default=kernel.DEFAULT_DEVIATION)
-    parser.add_argument("--web-dist", type=Path, default=DEFAULT_WEB_DIST)
-    parser.add_argument("--no-open", action="store_true", help="ブラウザを自動で開かない")
-    args = parser.parse_args(argv)
-
-    # **常に空の文書で起動する**(`--step` / `--no-step` は2026-08-15に廃止)。
-    session = Session(None, args.deviation)
-    ws_url = f"ws://127.0.0.1:{args.port}"
-    try:
-        start_http_server(args.web_dist, args.http_port, ws_url)
-    except FileNotFoundError as error:
-        print(error, file=sys.stderr)
-        return 2
-
-    page_url = f"http://127.0.0.1:{args.http_port}/"
-    body = session.document.active_body()
-    print(f"duocad server: {page_url}  (WebSocket {ws_url})")
-    if body is not None:
-        print(
-            f"  body={body.name!r} faces={kernel.face_count(body.shape)} "
-            f"volume={query.volume(body.shape):.4f} mm^3"
-        )
-    print("  Ctrl+C で終了")
-    if not args.no_open:
-        webbrowser.open(page_url)
-
-    try:
-        asyncio.run(run(session, "127.0.0.1", args.port))
-    except KeyboardInterrupt:
-        print("\nbye")
-    return 0
-
-
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # **黙って何もしないで終わらない**(実装計画書§6予防6)。ここへ来たということは、
+    # 廃止した起動コマンドを叩いているか、それを書いた古い手順を読んでいるということ。
+    print(
+        "duocad.server は起動コマンドではない(2026-08-15に廃止)。\n"
+        r"  .venv\Scripts\python.exe -m duocad.mcp_server --open" "\n"
+        "このモジュールは Session / Server / 静的配信を提供するライブラリで、"
+        "MCPとWebSocketを1プロセスで持つ duocad.mcp_server がこれを使う。",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)

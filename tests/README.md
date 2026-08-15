@@ -1167,8 +1167,10 @@ MCPからAIが可視性を変えると、`Session` が発火 → `Server` が購
 cd web && node scripts/smoke-mcp.mjs                          # 実機（PCケース27部品・実ブラウザ）
 ```
 
-`smoke-mcp.mjs` は自分で `python -m duocad.mcp_server` を起動する（**先に `duocad.server` を
-立てない**。ポートがぶつかる）。既定は8865/8866で、本人が実機で開いている8765/8766を避けてある。
+`smoke-mcp.mjs` は自分で `python -m duocad.mcp_server` を起動する（**別のサーバを先に立てない**。
+ポートがぶつかる）。既定は8865/8866で、本人が実機で開いている8765/8766を避けてある。
+**2026-08-15から `smoke.mjs` / `smoke-features.mjs` / `smoke-files.mjs` も同じ形になった**
+（`web/scripts/server.mjs` が共通の起動・停止を持つ。`python -m duocad.server` の廃止に伴う）。
 
 ## M4のQAで足した契約（2026-08-11・cursor auto のレビュー指摘を反映）
 
@@ -2198,7 +2200,8 @@ F1で次のように直した。QAの1回目が指摘するまで見落として
 
 **素の `python` は使わない** —— `OCP` を持たない別環境で収集エラーになる。
 `test_exporting_does_not_corrupt_the_stdio_channel` は実プロセスを起こし、既定と違うポート
-（18775/18776）を使う。`python -m duocad.server` を開いたままでも衝突しない。
+（18775/18776）を使う。実機用のサーバ（`python -m duocad.mcp_server`。既定8765/8766）を
+開いたままでも衝突しない。
 
 ## F2への申し送り
 
