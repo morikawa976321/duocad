@@ -1941,16 +1941,9 @@ F が埋めるのはその列であり、合格条件は §0 が定義してい�
 
 ## 公開するツールは29個（2026-08-15。初版は28個）
 
-| 群 | ツール |
-|---|---|
-| 問い合わせ(3) | `describe_document` / `describe_shape` / `measure` |
-| 述語の自己記述(1) | `describe_predicates` |
-| 選択(5) | `get_selection` / `propose_selection` / `modify_selection` / `commit_selection` / `clear_selection` |
-| スケッチ(5) | `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` |
-| フィーチャ(6) | `extrude` / `extrude_face` / `fillet` / `chamfer` / `pattern_rectangular` / `pattern_circular` |
-| ボディ・パラメータ(3) | `set_visible` / `make_editable_copy` / `set_parameter` |
-| 入出力(4) | `import_step_editable` / `import_step` / `export_step` / `export_stl` |
-| 履歴(2) | `undo` / `redo` |
+**顔ぶれの一覧はここに写さない**（`MCP.md` が散文の正、`tests/test_mcp_verbs.py` の
+`EXPECTED_TOOLS` が機械の正）。同じ表を複数の文書に置くと、片方の更新を忘れた瞬間に
+必ず食い違う —— 2026-08-15の29ツール化では、4文書に散った同じ表のうち3つを手で直した。
 
 操作は19個で、**§0の到達表のAI列19行とちょうど対応する**（表は
 `add_line / add_circle / add_rectangle / add_arc` のようにまとめて書かれているので、

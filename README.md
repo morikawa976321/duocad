@@ -10,7 +10,7 @@
 | | |
 |---|---|
 | ブランチ / コミット | `master`（最新は `git log -1`。2026-08-15に `--step` 廃止のコミットを載せた） |
-| テスト | **543 passed / 45.0s**（2026-08-15の最終確認。負荷で振れる性能テスト1本も緑・§7の留保1） |
+| テスト | **549 passed**（2026-08-15。負荷で振れる性能テスト1本も緑・§7の留保1） |
 | 実行環境 | Python 3.11（`.venv`）／ Node（`web/node_modules` 導入済み）／ `web/dist` ビルド済み |
 | 単位 | mm 固定 |
 
@@ -21,7 +21,7 @@
 | [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | **設計の現行の正**。何を作るか・到達表・残タスク | 仕様を確かめるとき |
 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | **なぜこう作るか**（§2 分業の原則が企画の主張） | 判断の背景を辿るとき |
 | [ACCEPTANCE.md](ACCEPTANCE.md) | **v1受入の実測記録**（19操作の到達表・交互操作の観測値・留保2件） | 「何がどこで確かめられたか」を知るとき |
-| [MCP.md](MCP.md) | MCPサーバの29ツールと登録手順 | AI側から触るとき |
+| [MCP.md](MCP.md) | **MCPツール一覧の正**（29個）と登録手順 | AI側から触るとき |
 | [tests/README.md](tests/README.md) | テストが定義するAPI契約（M0〜M3の全契約と実測値） | コアの挙動を疑うとき |
 | docs/PROBE_FINDINGS.md | 実機検証の生データ（役目は終えているが実測値の出典） | 数値の出どころを辿るとき |
 
@@ -155,7 +155,7 @@ verbごとに別のダイアログを作っていないので、1つ覚えれば
 
 ### 3.1 あなたにしか判定できないもの（ここが本題）
 
-機械検査は543件＋実ブラウザのsmokeが既に通っている。**手で見る価値があるのは、機械が代われない2つ**:
+機械検査は549件＋実ブラウザのsmokeが既に通っている。**手で見る価値があるのは、機械が代われない2つ**:
 
 1. **速度の体感** — 「面を選ぶ → 距離を打つ → Enter」がFusion360と同等に速いか。
    これは企画の唯一の前提であり、2026-08-12に計測の器を撤去して**体感が正**と決めてある。
@@ -212,13 +212,13 @@ AIに「読み直してフィレット」と頼む → 形が変わる。
 
 ## 4. 自動検査の走らせ方
 
-### pytest（コア・MCPの契約 543件）
+### pytest（コア・MCPの契約 549件）
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-サーバもブラウザも要らない。2026-08-15にこのマシンで **543 passed / 45.0s**。
+サーバもブラウザも要らない。2026-08-15にこのマシンで **549 passed**。
 マシンが混んでいると性能テスト1本だけが赤に振れる（§7の留保1。**その1本だけなら負荷が原因**）。
 
 ### 実ブラウザのsmoke（本物のクリックとキー入力）
@@ -338,29 +338,23 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 
 ### AI側（MCP・29ツール）
 
-| 群 | ツール |
-|---|---|
-| 問い合わせ(3) | `describe_document` / `describe_shape` / `measure` |
-| 述語の自己記述(1) | `describe_predicates` |
-| 選択(5) | `get_selection` / `propose_selection` / `modify_selection` / `commit_selection` / `clear_selection` |
-| スケッチ(5) | `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` |
-| フィーチャ(6) | `extrude` / `extrude_face` / `fillet` / `chamfer` / `pattern_rectangular` / `pattern_circular` |
-| ボディ・パラメータ(3) | `set_visible` / `make_editable_copy` / `set_parameter` |
-| 入出力(4) | `import_step_editable` / `import_step` / `export_step` / `export_stl` |
-| 履歴(2) | `undo` / `redo` |
+**ツールの一覧は [MCP.md](MCP.md) が正**（ここに写すと、増減のたびに2箇所を直すことになる。
+実際 2026-08-15 の29ツール化では、同じ表が4文書にあって3つを手で直した）。
+機械の正は `tests/test_mcp_verbs.py` の `EXPECTED_TOOLS` で、**顔ぶれを一致で固定**している。
 
-**面・辺・領域は引数で受けない。確定した選択から取る**（数値・名前・パスだけが引数）。
-提案状態の選択はそのままverbに渡せず、先に `commit_selection` が要る。
-述語は構造化JSON: `{"kind":"edge","where":[{"op":"parallel_to","axis":"Z"},{"op":"length_gt","value":20}]}`
-（`where` はAND。面は `normal_dot_gt` / `area_gt` / `kind_is`、辺は `parallel_to` / `length_gt` /
-`length_lt` / `kind_is` / `on_boundary_of_face`）。
-**ツール名は操作ログのverb名と同じ綴り**である（2026-08-15に徹底した）。AIは
-`describe_document` のログを読んで次の一手を決めるので、綴りが違うと対応表を推測させることになる。
-STEP読み込みのツールが2つあるのはこのため —— `import_step_editable`（通常。ソリッドごとに
-編集可能なボディができる）と `import_step`（参照ボディだけ）は**別のverbなので別のツール**にした。
-1つのツールが引数で打ち分ける形だと、ログに出る verb 名で呼べるツールが存在しなくなる。
-この一致は `tests/test_mcp_verbs.py::test_tool_names_match_the_verb_names_in_the_operation_log`
-が**両方向で**固定する（片方向だった間に、まさにこのずれが緑のまま入り込んだ）。
+設計として押さえるのはこの4点:
+
+- **面・辺・領域は引数で受けない。確定した選択から取る**（数値・名前・パスだけが引数）。
+  提案状態の選択はそのままverbに渡せず、先に `commit_selection` が要る
+- **ツール名 == WebSocketのコマンド名 == UIのコマンドID == 操作ログのverb名**。
+  AIは `describe_document` のログを読んで次の一手を決めるので、綴りが違うと対応表を
+  推測させることになる。STEP読み込みのツールが2つあるのはこの規律の帰結
+  （`import_step_editable` と `import_step` は別のverbなので別のツール）
+- 述語は構造化JSON: `{"kind":"edge","where":[{"op":"parallel_to","axis":"Z"},{"op":"length_gt","value":20}]}`
+  （`where` はAND。**語彙は `describe_predicates` が自己記述する**ので、ここには写さない）
+- 名前の一致は両方向のテストが固定する
+  （`test_tool_names_match_the_verb_names_in_the_operation_log` と
+  `tests/test_ui_command_wiring.py`。片方向だった間に、まさにそのずれが緑のまま入り込んだ）
 
 公式SDKは入れず、JSON-RPC 2.0 over stdio を素で実装している（依存を増やしていない）。
 
