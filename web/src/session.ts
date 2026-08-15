@@ -191,6 +191,17 @@ export interface Applied {
   /** C: `set_parameter` の名前と値。 */
   name?: string
   value?: number
+  /**
+   * STEP読み込みが作ったボディ(2026-08-15)。`import_step_editable` は編集用と原本の両方、
+   * `import_step` は参照ボディだけを返す。
+   *
+   * **`svelte-check` を入れて初めて見つかった穴** —— サーバは前から返していたのに
+   * ここに宣言が無く、`.svelte` の中で `applied.body_ids` を読んでいた
+   * (`.svelte` は tsc の対象外だったので誰も気づかなかった)。実行時は動いていたが、
+   * サーバ側がキー名を変えても型では止まらない状態だった。
+   */
+  body_ids?: string[]
+  reference_ids?: string[]
 }
 
 /**

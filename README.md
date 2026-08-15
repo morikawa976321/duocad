@@ -83,7 +83,9 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 `http://127.0.0.1:5173/` を開く。devサーバは `/duocad-config.json` を返さないので、
 画面は既定の `ws://127.0.0.1:8765` へ落ちて繋がる（Pythonサーバは立てておくこと）。
 このときだけは `web/dist` の作り直しが要らない（Viteが `web/src` を直に配る）。
-型検査は `npm run check`（`tsc --noEmit`）。
+型検査は `npm run check`（`tsc --noEmit` ＋ `svelte-check`）。**`.svelte` の中も見る**
+（2026-08-15に `svelte-check` を追加するまでは `.ts` だけで、画面側の未使用変数や
+サーバ応答の型の食い違いが素通りしていた）。
 
 ### ポートまとめ
 
