@@ -96,7 +96,15 @@ SELECTION_TOOLS = {
     "clear_selection",
 }
 
-EXPECTED_TOOLS = VERB_TOOLS | QUERY_TOOLS | SELECTION_TOOLS
+#: 到達表の19操作には数えないが、**ログに載るverbと同じ綴りで呼べる**ために要るツール。
+#:
+#: 「STEPを読む」という1操作に verb が2つある(`import_step_editable` = 編集可能なボディまで
+#: 作る通常の経路 / `import_step` = 参照ボディだけ)。以前は1つの `import_step` ツールが
+#: `editable` 引数で打ち分けていたが、その形だと**ログに出る `import_step_editable` を
+#: 呼べるツールが存在しない**(2026-08-15のQA指摘)。ツールを2つに割り、名前をverbに揃えた。
+EXTRA_LOGGING_TOOLS = {"import_step_editable"}
+
+EXPECTED_TOOLS = VERB_TOOLS | QUERY_TOOLS | SELECTION_TOOLS | EXTRA_LOGGING_TOOLS
 
 #: 各ツールの引数(全体 / 必須)。**「増えていないこと」まで固定する** —— 引数がひとつ増えれば
 #: AIから見た呼び方が変わるので、契約の一部である。
@@ -151,9 +159,11 @@ ARGUMENTS: dict = {
     "make_editable_copy": ({"source_body_id", "name"}, set()),
     "set_parameter": ({"name", "value"}, {"name", "value"}),
     # ---- 入出力
-    # `editable` は2026-08-15追加。**既定 true**(読んだらそのまま編集できる)で、
-    # 参照ボディだけが欲しいときにだけ false を渡す。
-    "import_step": ({"path", "editable"}, {"path"}),
+    # STEP読み込みは**2ツール**(2026-08-15)。`import_step_editable` が通常の経路で、
+    # `import_step` は参照ボディだけ。**引数で打ち分けない** —— 引数で分けると、
+    # ログに載るverb名と呼べるツール名が食い違う(`EXTRA_LOGGING_TOOLS` の理由)。
+    "import_step_editable": ({"path"}, {"path"}),
+    "import_step": ({"path"}, {"path"}),
     "export_step": ({"path", "body_ids"}, {"path"}),
     "export_stl": ({"path", "deviation", "body_ids"}, {"path"}),
     # ---- 履歴
@@ -162,7 +172,7 @@ ARGUMENTS: dict = {
 }
 
 #: 操作ログに1行積むツール。**ツール名 == verb名**であること自体が契約(上記の理由)。
-LOGGING_TOOLS = VERB_TOOLS - {"export_step", "export_stl", "undo", "redo"}
+LOGGING_TOOLS = (VERB_TOOLS - {"export_step", "export_stl", "undo", "redo"}) | EXTRA_LOGGING_TOOLS
 
 #: 失敗コードの語彙。**増やすときはここを直す**(AI側は未知のコードを扱えないので、
 #: 実装が勝手に新しいコードを作れる状態にしない)。
@@ -310,15 +320,30 @@ def test_the_ai_column_of_the_reachability_table_is_complete(server: McpServer):
 
 
 def test_tool_names_match_the_verb_names_in_the_operation_log(server: McpServer):
-    """ログに載るverbは、**同じ綴りのツール名**で呼べる。
+    """ログに載るverbは、**同じ綴りのツール名**で呼べる。**両方向で見る。**
 
     AIは `describe_document` のログを読んで次の一手を決める。ログのverb名と呼べるツール名が
     違うと、対応表を推測させることになる(推測させた分だけ静かに間違う)。
+
+    **以前はこの検査が片方向(`LOGGING_TOOLS <= registered`)だった**ため、
+    2026-08-15に `import_step_editable` という**どのツール名でもないverb**が登録されても
+    緑のままだった(ツール `import_step` が `editable` 引数で2つのverbを打ち分けていた)。
+    集合の**一致**にすると、次の3つが全部この1行で落ちる:
+
+    1. ツール名と綴りの違うverbを新設した(このとき実際に起きた向き)
+    2. verbを登録せずにツールだけ足した
+    3. verbを消したのにツールが残った
+
+    `LOGGING_TOOLS` の側に「ログに載らないツール」(`export_*` / `undo` / `redo`)を
+    入れていないことも、この一致が成り立つ条件である。
     """
     from duocad.oplog import registered_verbs
 
     registered = set(registered_verbs())
-    assert LOGGING_TOOLS <= registered, sorted(LOGGING_TOOLS - registered)
+    assert registered == LOGGING_TOOLS, {
+        "ツールが無いverb": sorted(registered - LOGGING_TOOLS),
+        "verbが無いツール": sorted(LOGGING_TOOLS - registered),
+    }
 
 
 def test_every_tool_has_a_description_and_an_object_schema(server: McpServer):
@@ -824,15 +849,16 @@ def test_set_parameter_reports_a_missing_name_as_not_found(empty_session: Sessio
 def test_make_editable_copy_turns_a_reference_into_a_solid(tmp_path: Path):
     """読み込んだ参照ボディを編集できるようにする経路がAIから届く。
 
-    **`editable=false` で読んだときの続き**(2026-08-15)。既定の読み込みは編集用ボディまで
-    作るのでこの1手は要らないが、参照だけ読む経路を残した以上、その続きも届いていること。
+    **`import_step`(参照だけ)で読んだときの続き**(2026-08-15)。通常の読み込み
+    (`import_step_editable`)は編集用ボディまで作るのでこの1手は要らないが、参照だけ読む
+    経路を残した以上、その続きも届いていること。
     """
     if not SHELF.exists():
         pytest.skip(f"参照STEPが無い: {SHELF}")
     session = Session(None, 0.2)
     server = McpServer(DocumentTools(session))
 
-    imported = call(server, "import_step", {"path": str(SHELF), "editable": False})
+    imported = call(server, "import_step", {"path": str(SHELF)})
     reference_id = imported["body_ids"][0]
     payload = call(server, "make_editable_copy", {"source_body_id": reference_id})
 
@@ -843,19 +869,19 @@ def test_make_editable_copy_turns_a_reference_into_a_solid(tmp_path: Path):
 
 
 def test_import_step_gives_editable_bodies_without_any_extra_call(tmp_path: Path):
-    """**AIも「読んだら使える」**(2026-08-15)。`import_step` の既定は編集可能なボディまで作る。
+    """**AIも「読んだら使える」**(2026-08-15)。`import_step_editable` は編集可能なボディまで作る。
 
-    以前はこのツールが参照ボディだけを足し、AIは `make_editable_copy` をソリッドの数だけ
-    打つ必要があった(PCケースなら27回)。**MCP1呼び出し・ログ1行**で編集できる状態まで
-    行くのが今の契約で、ログに載るverbは `import_step_editable`(ツール名と綴りが違う
-    唯一のツールなので、ツールの説明文がその対応を明記している)。
+    以前は読み込みのツールが参照ボディだけを足し、AIは `make_editable_copy` をソリッドの
+    数だけ打つ必要があった(PCケースなら27回)。**MCP1呼び出し・ログ1行**で編集できる状態まで
+    行くのが今の契約。**ツール名はログに載るverb名と同じ綴り**であり、その一致は
+    `test_tool_names_match_the_verb_names_in_the_operation_log` が両方向で固定する。
     """
     if not SHELF.exists():
         pytest.skip(f"参照STEPが無い: {SHELF}")
     session = Session(None, 0.2)
     server = McpServer(DocumentTools(session))
 
-    payload = call(server, "import_step", {"path": str(SHELF)})
+    payload = call(server, "import_step_editable", {"path": str(SHELF)})
 
     _assert_verb_envelope(payload, "import_step_editable")
     assert len(payload["body_ids"]) == 17, "17ソリッドぶんの編集可能なボディを返していない"
@@ -872,16 +898,17 @@ def test_import_step_gives_editable_bodies_without_any_extra_call(tmp_path: Path
 
 
 def test_import_step_can_still_add_reference_bodies_only(tmp_path: Path):
-    """`editable=false` なら従来どおり参照ボディだけを足し、続きの1手を `hint` で知らせる。
+    """`import_step` は従来どおり参照ボディだけを足し、続きの1手を `hint` で知らせる。
 
-    **既定は編集可能側**(本人の指示は「読んだら使える」)だが、参照だけ欲しい経路は残す。
+    **通常の経路は `import_step_editable`**(本人の指示は「読んだら使える」)だが、
+    参照だけ欲しい経路は残す。
     """
     if not SHELF.exists():
         pytest.skip(f"参照STEPが無い: {SHELF}")
     session = Session(None, 0.2)
     server = McpServer(DocumentTools(session))
 
-    payload = call(server, "import_step", {"path": str(SHELF), "editable": False})
+    payload = call(server, "import_step", {"path": str(SHELF)})
 
     _assert_verb_envelope(payload, "import_step")
     assert payload["body_ids"], "読み込んだBodyIdを返していない"

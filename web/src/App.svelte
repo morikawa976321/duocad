@@ -255,7 +255,7 @@
         note(`STEPを読み込んだ(${count}部品)。そのまま面をクリックして押し出せる`)
       }
       if (applied.verb === 'import_step') {
-        note('読み込んだのは参照ボディ(編集不可)。編集するには面を選んで「編集可能にする」')
+        note('読み込んだのは参照ボディ(編集不可)。編集するには面を選んで「編集用に複製」')
       }
       dropStaleEdges(applied)
       reselectAfter(applied)

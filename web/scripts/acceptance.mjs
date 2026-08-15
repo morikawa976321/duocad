@@ -916,8 +916,10 @@ async function main() {
 
     let aiReference = null
     await attempt('ai', 'import_step', async () => {
-      const result = await mcp.call('import_step', { path: aiStep })
-      aiReference = result.body_ids[0]
+      // 通常の読み込みは `import_step_editable`(ツール名 == ログのverb名)。
+      // 参照だけ足す `import_step` は別ツールとして残っている。
+      const result = await mcp.call('import_step_editable', { path: aiStep })
+      aiReference = result.reference_ids[0]
       return `編集可能なボディ ${result.body_ids.length} 個`
     })
 

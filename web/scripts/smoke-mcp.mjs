@@ -15,7 +15,7 @@
  *   4. **undo で可視性が戻る**(ブラウザのCtrl+Z。AIの操作と人間の操作が同じ操作ログに載る)
  *
  * サーバはこのスクリプトが `python -m duocad.mcp_server` として**空の文書で**起動する
- * (`--step` 起動オプションは廃止済み)。STEPはMCPの `import_step` で読む。
+ * (`--step` 起動オプションは廃止済み)。STEPはMCPの `import_step_editable` で読む。
  * CLIの `--step <path>` は「MCPで読み込むファイル」であり、サーバへは渡さない。
  * **先に `duocad.server` を立てておく必要はない**(むしろポートがぶつかる)。
  * ブラウザはインストール済みのEdge/Chromeを使う(`smoke.mjs` と同じ。`DUOCAD_BROWSER` で明示可)。
@@ -151,7 +151,7 @@ async function main() {
   console.log(`smoke-mcp: ${stepPath}`)
   console.log(`  browser: ${executablePath}`)
 
-  // `--step` 起動オプションは廃止済み。空で立ち上げ、あとで MCP の import_step で読む。
+  // `--step` 起動オプションは廃止済み。空で立ち上げ、あとで MCP の import_step_editable で読む。
   const child = spawn(
     PYTHON,
     [
@@ -201,9 +201,10 @@ async function main() {
     if (missing.length) fail(`M4のツールが消えている: ${missing.join(', ')}`)
     ok(`tools/list: ${tools.length}個（M4の3つを含む）`)
 
-    const imported = await mcp.callTool('import_step', { path: stepPath })
+    // ツール名 == ログのverb名(2026-08-15にツールを2つへ割った)。
+    const imported = await mcp.callTool('import_step_editable', { path: stepPath })
     if (imported.verb !== 'import_step_editable') {
-      fail(`import_step の verb が import_step_editable でない: ${imported.verb}`)
+      fail(`import_step_editable の verb が一致しない: ${imported.verb}`)
     }
     if (imported.body_ids.length !== expectedBodies) {
       fail(`編集可能なボディが ${expectedBodies} 個でない: ${imported.body_ids.length}`)

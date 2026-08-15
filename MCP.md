@@ -3,11 +3,11 @@
 **AIが文書を操作するための口**（F / 2026-08-11）。ブラウザとMCPは同じ `Session` を叩く対等な
 クライアントで、MCPが変えた内容は開いている画面へ即座に届く。
 
-公開ツールは**28個**。面・辺・領域などの**形は引数で受けず、確定した選択から取る**
+公開ツールは**29個**。面・辺・領域などの**形は引数で受けず、確定した選択から取る**
 （数値・名前・パスだけが引数）。提案の選択はそのまま verb に渡せない — 先に
 `commit_selection` が要る。
 
-## 公開ツール（28）
+## 公開ツール（29）
 
 | 群 | ツール |
 |---|---|
@@ -17,7 +17,7 @@
 | スケッチ(5) | `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` |
 | フィーチャ(6) | `extrude` / `extrude_face` / `fillet` / `chamfer` / `pattern_rectangular` / `pattern_circular` |
 | ボディ・パラメータ(3) | `set_visible` / `make_editable_copy` / `set_parameter` |
-| 入出力(3) | `import_step` / `export_step` / `export_stl` |
+| 入出力(4) | `import_step_editable` / `import_step` / `export_step` / `export_stl` |
 | 履歴(2) | `undo` / `redo` |
 
 **呼び方の型**（例）:
@@ -25,7 +25,7 @@
 1. `describe_document` で `body_id` / スケッチ / パラメータ名を知る
 2. `propose_selection`（`refs` か `predicate`）→ 必要なら `measure` で確認 → `commit_selection`
 3. `fillet(radius=…)` / `extrude(distance=…)` など — **辺や領域は引数に書かない**
-4. `import_step` は**読んだ時点で編集できるボディ**を返す（`body_ids`。追加の1手は要らない）
+4. `import_step_editable` は**読んだ時点で編集できるボディ**を返す（`body_ids`。追加の1手は要らない）
 
 ## 何が起きるか（このサーバの位置づけ）
 
@@ -82,7 +82,7 @@ claude mcp add duocad -- C:\Users\tm976\mf\duocad\.venv\Scripts\python.exe -m du
 登録できたかは `claude mcp list`（接続まで見る）で確認する。セッション内では `/mcp` で
 ツール一覧が出る。**パスは絶対で書く** — `claude` を起動したディレクトリが
 `duocad` とは限らないため。**起動時に読むSTEPを決める引数は無い**（2026-08-15に `--step` を廃止）——
-サーバは常に空の文書で立ち、STEPは `import_step` で読む。
+サーバは常に空の文書で立ち、STEPは `import_step_editable` で読む。
 
 設定ファイルを直接書く場合（`.mcp.json` / `~/.claude.json` の `mcpServers`）：
 
@@ -120,9 +120,9 @@ claude mcp add duocad -- C:\Users\tm976\mf\duocad\.venv\Scripts\python.exe -m du
 1. `describe_document` を呼ぶ → `body_id`・スケッチ・パラメータ名を得る
 2. 手前の部品を隠すなら `set_visible(body_id, false)`（**人間の画面からも消える**）
 3. 対象を `propose_selection` で選び、`commit_selection` してから fillet / extrude 等
-4. STEPを足すなら `import_step(path)` —— **これ1回で編集できるボディが揃う**
-   （戻り値の `body_ids` がそれ。`reference_ids` は隠してある原本。`editable=false` を渡したときだけ
-   従来どおり参照ボディだけが増え、続きに `make_editable_copy` が要る）
+4. STEPを足すなら `import_step_editable(path)` —— **これ1回で編集できるボディが揃う**
+   （戻り値の `body_ids` がそれ。`reference_ids` は隠してある原本）。
+   参照ボディだけが欲しいときは `import_step(path)` を使う（続きに `make_editable_copy` が要る）
 5. 取り消すのは `undo`（UIと同じ履歴）
 
 読み込んだSTEPはソリッドごとに「参照ボディ（読み取り専用・隠されている）」と
@@ -130,9 +130,13 @@ claude mcp add duocad -- C:\Users\tm976\mf\duocad\.venv\Scripts\python.exe -m du
 参照ボディの件数は `reference_count` で知らせる（`include_references=true` で出せる）。
 **参照ボディの可視性は切り替えられない**（原本なので。編集用の `body_id` を使う）。
 
-> **ツール名と操作ログのverb名が食い違う唯一の場所**: `import_step` は既定で
-> `verb="import_step_editable"` を1行積む（`editable=false` のときだけ `verb="import_step"`）。
-> ログを読んで次の一手を決めるときは、どちらも `import_step` ツールで呼び直せる。
+> **ツール名は操作ログのverb名と同じ綴りである**（例外なし）。ログを読んで次の一手を決めるとき、
+> そこに出ている名前をそのまま呼べる。STEP読み込みのツールが2つあるのはこのためで、
+> `import_step_editable` と `import_step` は**別のverbなので別のツール**にしてある。
+> 2026-08-15までは1つの `import_step` ツールが `editable` 引数で打ち分けており、
+> **ログに出る `import_step_editable` を呼べるツールが存在しない**状態だった（QA指摘で解消）。
+> 一致は `tests/test_mcp_verbs.py::test_tool_names_match_the_verb_names_in_the_operation_log`
+> が**両方向で**固定する（片方向だった間にこのずれが緑のまま入り込んだので、集合の一致にした）。
 
 ## 実装のメモ
 

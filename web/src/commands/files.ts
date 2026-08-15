@@ -183,7 +183,10 @@ export const EXPORT_STL: CommandDef = {
  */
 export const MAKE_EDITABLE_COPY: CommandDef = {
   id: 'make_editable_copy',
-  label: '編集可能にする',
+  // ラベルは**両方の使われ方に対して正しい**必要がある(2026-08-15)。「編集可能にする」は
+  // 参照ボディを起点にしたときの言い方で、UIから普通に届くのは編集用ボディの複製なので
+  // 嘘になっていた。「編集用に複製」なら、参照からでも編集用からでも起きることを言えている。
+  label: '編集用に複製',
   buttonId: 'file-make-editable',
   preview: 'none',
   args: [

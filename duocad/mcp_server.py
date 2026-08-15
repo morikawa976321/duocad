@@ -6,8 +6,10 @@
 
 **【2026-08-11 F1で拡張】** M4は下記の3つだけを公開し、選択の提案・修正
 (`propose_selection` 等)を範囲外にしていた。**F(F1+F2)がその線を引き直す** ——
-実装計画書§0の到達表のAI列(19操作)を埋めるため、公開ツールは**28個**になり、
-選択5つと述語の自己記述もここから出る。契約は
+実装計画書§0の到達表のAI列(19操作)を埋めるため、公開ツールは**29個**になり、
+選択5つと述語の自己記述もここから出る（19操作に対して29ツールなのは、選択・問い合わせが
+操作の外にあるのと、STEP読み込みが `import_step_editable` / `import_step` の
+**2つのverbに1つずつ**対応するため。2026-08-15）。契約は
 `tests/test_mcp_verbs.py` / `tests/test_mcp_selection.py` と `tests/README.md` の「F」節。
 
 M4で公開した3つ(振る舞いの記述は現役):
@@ -126,6 +128,7 @@ class DocumentTools:
 
     M4では3つ(`describe_document` / `set_visible` / `describe_shape`)だった。
     **F(F1+F2)で契約を28個へ広げ、実装済み** —— 実装計画書§0の到達表のAI列を埋めるため。
+    2026-08-15に `import_step_editable` を足して**29個**(下記「ツール名 == verb名」)。
 
     どのツールも戻り値は**JSON化できる素の値だけ**(MCPのレスポンスに載るため)。
     失敗は例外のまま上げる — 呼び出し側(`McpServer`)が `isError` の結果へ変換して
@@ -495,8 +498,8 @@ class DocumentTools:
                 "name": "make_editable_copy",
                 "description": (
                     "参照ボディから編集用ソリッドを作るときに呼ぶ。"
-                    "import_step は既定で編集可能なボディまで作るので通常は要らない —— "
-                    "editable=false で読んだ参照ボディを後から編集したいとき、"
+                    "import_step_editable が編集可能なボディまで作るので通常は要らない —— "
+                    "import_step(参照だけ)で読んだボディを後から編集したいとき、"
                     "または既存ボディの複製が欲しいときに使う。"
                 ),
                 "inputSchema": {
@@ -528,23 +531,33 @@ class DocumentTools:
                 },
             },
             {
-                "name": "import_step",
+                "name": "import_step_editable",
                 "description": (
-                    "STEPを読み込むときに呼ぶ。"
-                    "既定でソリッドごとに編集可能なボディができ、そのまま押し出し等の対象にできる"
+                    "STEPを読み込むときに呼ぶ(通常はこちら)。"
+                    "ソリッドごとに編集可能なボディができ、そのまま押し出し等の対象にできる"
                     "(参照ボディは原本として隠したまま文書に残る)。"
-                    "読むだけで編集しないなら editable=false。"
-                    "操作ログには verb=import_step_editable(editable=false なら import_step)"
-                    "として1行載る —— どちらもこの import_step で呼ぶ。"
+                    "読んだ後の make_editable_copy は要らない。"
                 ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "読み込むSTEPファイルのパス"},
-                        "editable": {
-                            "type": "boolean",
-                            "description": "編集可能なボディまで作るか。既定 true",
-                        },
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "import_step",
+                "description": (
+                    "STEPを参照ボディ(読み取り専用)としてだけ足すときに呼ぶ。"
+                    "**編集するなら import_step_editable を使う** —— こちらで読むと、"
+                    "ソリッドの数だけ make_editable_copy を打つことになる。"
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "読み込むSTEPファイルのパス"},
                     },
                     "required": ["path"],
                     "additionalProperties": False,
@@ -633,6 +646,7 @@ class DocumentTools:
             "pattern_circular": self.pattern_circular,
             "make_editable_copy": self.make_editable_copy,
             "set_parameter": self.set_parameter,
+            "import_step_editable": self.import_step_editable,
             "import_step": self.import_step,
             "export_step": self.export_step,
             "export_stl": self.export_stl,
@@ -1257,37 +1271,47 @@ class DocumentTools:
         )
 
     # ------------------------------------------------------------------ 入出力
-    def import_step(self, path: str, editable: bool = True) -> dict:
-        """STEPを読む。**既定で編集可能なボディまで作る**(verb `import_step_editable`)。
+    def import_step_editable(self, path: str) -> dict:
+        """STEPを読み、**編集可能なボディまで作る**(verb `import_step_editable`)。
 
-        以前はコアの verb `import_step`(参照ボディだけ)を出しており、AIは読んだ後に
+        以前はコアの verb `import_step`(参照ボディだけ)しか出しておらず、AIは読んだ後に
         `make_editable_copy` をソリッドの数だけ打つ必要があった —— PCケースなら27回。
-        「読んだら使える」が本人の指示なので、既定を編集可能側にした(2026-08-15)。
+        「読んだら使える」が本人の指示なので、こちらを通常の経路にした(2026-08-15)。
 
-        `editable=false` のときだけ参照ボディだけを足す。その場合は足りない1手を
-        `hint` で知らせる —— 黙って参照ボディだけ増やすと、AIは編集できない相手に
-        verb を打ち続ける。
+        **ツール名は verb 名と同じ綴りにしてある。** 以前は1つの `import_step` ツールが
+        `editable` 引数で2つのverbを打ち分けていたが、そうすると `describe_document` の
+        ログに出る `import_step_editable` を呼べるツールが存在しないことになる
+        (AIに対応表を推測させる)。契約は `tests/test_mcp_verbs.py::
+        test_tool_names_match_the_verb_names_in_the_operation_log` が両方向で固定する。
         """
         before = self._revision_snapshot()
-        want_editable = bool(editable)
-        applied = self.session.import_step(path, editable=want_editable)
-        if not want_editable:
-            return self._apply_logged(
-                before,
-                applied,
-                body_ids=list(applied["body_ids"]),
-                editable=False,
-                hint="参照ボディは編集できない。続けるには make_editable_copy を呼ぶ",
-            )
+        applied = self.session.import_step(path, editable=True)
         return self._apply_logged(
             before,
             applied,
             body_ids=list(applied["body_ids"]),
             reference_ids=list(applied["reference_ids"]),
-            editable=True,
             hint=(
                 "body_ids はそのまま編集できる(make_editable_copy は要らない)。"
                 "reference_ids は隠してある読み込みの原本"
+            ),
+        )
+
+    def import_step(self, path: str) -> dict:
+        """STEPを**参照ボディ(読み取り専用)としてだけ**足す(verb `import_step`)。
+
+        足りない1手を `hint` で知らせる —— 黙って参照ボディだけ増やすと、AIは編集できない
+        相手に verb を打ち続ける。通常の読み込みは `import_step_editable` の側。
+        """
+        before = self._revision_snapshot()
+        applied = self.session.import_step(path, editable=False)
+        return self._apply_logged(
+            before,
+            applied,
+            body_ids=list(applied["body_ids"]),
+            hint=(
+                "参照ボディは編集できない。編集するなら import_step_editable で読み直すか、"
+                "make_editable_copy をソリッドごとに呼ぶ"
             ),
         )
 
@@ -1432,7 +1456,7 @@ class McpServer:
             "capabilities": {"tools": {}},
             "serverInfo": {"name": self.name, "version": self.version},
             "instructions": (
-                "duocad(自作3DCAD)の開いている文書を操作する。公開ツールは28個。"
+                "duocad(自作3DCAD)の開いている文書を操作する。公開ツールは29個。"
                 "面・辺・領域などの形は引数で受けず、確定した選択から取る"
                 "（数値・名前・パスだけが引数）。"
                 "手順: describe_document で概要を知る → "
@@ -1677,7 +1701,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     # **常に空の文書で起動する**(`--step` / `--no-step` は2026-08-15に廃止)。
-    # STEPはツール `import_step`(既定で編集可能なボディまで作る)から読む。
+    # STEPはツール `import_step_editable`(編集可能なボディまで作る)から読む。
     session = Session(None, args.deviation)
     try:
         asyncio.run(_run(session, args))

@@ -10,7 +10,7 @@
 | | |
 |---|---|
 | ブランチ / コミット | `master`（最新は `git log -1`。2026-08-15に `--step` 廃止のコミットを載せた） |
-| テスト | **542 passed / 1 failed / 65.6s**（2026-08-15に再実行。赤いのは負荷で振れる性能テスト1本だけ・§7の留保1） |
+| テスト | **543 passed / 45.0s**（2026-08-15の最終確認。負荷で振れる性能テスト1本も緑・§7の留保1） |
 | 実行環境 | Python 3.11（`.venv`）／ Node（`web/node_modules` 導入済み）／ `web/dist` ビルド済み |
 | 単位 | mm 固定 |
 
@@ -21,7 +21,7 @@
 | [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | **設計の現行の正**。何を作るか・到達表・残タスク | 仕様を確かめるとき |
 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | **なぜこう作るか**（§2 分業の原則が企画の主張） | 判断の背景を辿るとき |
 | [ACCEPTANCE.md](ACCEPTANCE.md) | **v1受入の実測記録**（19操作の到達表・交互操作の観測値・留保2件） | 「何がどこで確かめられたか」を知るとき |
-| [MCP.md](MCP.md) | MCPサーバの28ツールと登録手順 | AI側から触るとき |
+| [MCP.md](MCP.md) | MCPサーバの29ツールと登録手順 | AI側から触るとき |
 | [tests/README.md](tests/README.md) | テストが定義するAPI契約（M0〜M3の全契約と実測値） | コアの挙動を疑うとき |
 | docs/PROBE_FINDINGS.md | 実機検証の生データ（役目は終えているが実測値の出典） | 数値の出どころを辿るとき |
 
@@ -44,7 +44,7 @@ cd C:\Users\tm976\mf\duocad\web; npm install; npm run build
 MCPを持たない軽い方で、smokeスクリプトが使う。下の補足）。
 
 > **起動時に決めることは何も無い（2026-08-15）。** 起動オプション `--step` / `--no-step` は廃止し、
-> **サーバは常に空の文書で立つ**。読みたいSTEPは画面の「STEP読み込み」かMCPの `import_step` で
+> **サーバは常に空の文書で立つ**。読みたいSTEPは画面の「STEP読み込み」かMCPの `import_step_editable` で
 > あとから読む —— **読んだ時点でソリッドごとに編集可能なボディができる**ので、起動時に読んだのと
 > 同じ状態になる（以前は画面から読むと参照ボディだけが増え、編集するには `make_editable_copy` が
 > 1ボディずつ、27部品なら27回要った。この非対称のせいで起動オプションが消せなかった）。
@@ -142,7 +142,7 @@ verbごとに別のダイアログを作っていないので、1つ覚えれば
 
 | モード | ボタン |
 |---|---|
-| 通常 | 押し出す／領域を押し出す／丸める／面取り／矩形反復／円形反復／保存／開く／STEP読み込み／STEP書き出し／STL書き出し／編集可能にする |
+| 通常 | 押し出す／領域を押し出す／丸める／面取り／矩形反復／円形反復／保存／開く／STEP読み込み／STEP書き出し／STL書き出し／編集用に複製 |
 | スケッチ中 | 選ぶ／線分／円／長方形／円弧／（領域を押し出す・反復） |
 
 スケッチは **XY / XZ / YZ ボタン**か「**選択中の面に貼る**」で入り、「**抜ける**」で出る。
@@ -156,7 +156,8 @@ verbごとに別のダイアログを作っていないので、1つ覚えれば
   奥の面を触りたいときはパーツ一覧で手前を隠す。
 - **読み込んだSTEPはそのまま編集できる**（2026-08-15）。ソリッドごとに編集用ボディができ、
   面をクリックして押し出せる（原本の参照ボディは隠したまま文書に残り、パーツ一覧には出ない）。
-  「編集可能にする」（`make_editable_copy`）は、いまは**選んだ面のボディを複製する**コマンドである。
+  「編集用に複製」（`make_editable_copy`）は、選んだ面のボディをもう1つ作るコマンドである
+  （参照ボディを起点にすれば「編集可能にする」、編集用ボディを起点にすれば複製。**どちらも同じverb**）。
 - **数値は名前つきの値（`d1` `d2` …）として保持される。** パラメータ一覧で打ち直すと形が追随する。
 - **保存形式は操作ログのJSON**。したがって「開く」は再生であり、開くたびに再生経路が検査される。
 
@@ -229,12 +230,20 @@ AIに「読み直してフィレット」と頼む → 形が変わる。
 cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-サーバもブラウザも要らない。2026-08-15にこのマシンで **542 passed / 1 failed / 65.6s**
-（赤いのは負荷で振れる性能テスト1本だけ。§7の留保1）。
+サーバもブラウザも要らない。2026-08-15にこのマシンで **543 passed / 45.0s**。
+マシンが混んでいると性能テスト1本だけが赤に振れる（§7の留保1。**その1本だけなら負荷が原因**）。
 
 ### 実ブラウザのsmoke（本物のクリックとキー入力）
 
 インストール済みのEdge/Chromeを使う（`DUOCAD_BROWSER` で明示可）。**サーバは別窓で先に立てる**。
+
+> **2026-08-15時点、このマシンのEdgeはheadlessで起動できない**（`Failed to launch the browser
+> process: Code: 0`。専用プロファイルを与えても同じで、**duocad側の問題ではない**）。
+> スクリプトはEdgeを先に試すので、**Chromeを明示して走らせること**:
+>
+> ```powershell
+> $env:DUOCAD_BROWSER = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+> ```
 
 ```powershell
 # ① PCケースを読んだ状態（パーツ一覧・可視性・奥の面のピック）
@@ -341,7 +350,7 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 | `web/src/commands/{command,sketch,features,files}.ts` | 各コマンドの引数の集め方の定義だけ |
 | `web/src/{Parts,Selection,Sketch,Parameters,History}Panel.svelte` | 各パネル（コアが持つものを描き直すだけ） |
 
-### AI側（MCP・28ツール）
+### AI側（MCP・29ツール）
 
 | 群 | ツール |
 |---|---|
@@ -351,7 +360,7 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 | スケッチ(5) | `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` |
 | フィーチャ(6) | `extrude` / `extrude_face` / `fillet` / `chamfer` / `pattern_rectangular` / `pattern_circular` |
 | ボディ・パラメータ(3) | `set_visible` / `make_editable_copy` / `set_parameter` |
-| 入出力(3) | `import_step` / `export_step` / `export_stl` |
+| 入出力(4) | `import_step_editable` / `import_step` / `export_step` / `export_stl` |
 | 履歴(2) | `undo` / `redo` |
 
 **面・辺・領域は引数で受けない。確定した選択から取る**（数値・名前・パスだけが引数）。
@@ -359,6 +368,14 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 述語は構造化JSON: `{"kind":"edge","where":[{"op":"parallel_to","axis":"Z"},{"op":"length_gt","value":20}]}`
 （`where` はAND。面は `normal_dot_gt` / `area_gt` / `kind_is`、辺は `parallel_to` / `length_gt` /
 `length_lt` / `kind_is` / `on_boundary_of_face`）。
+**ツール名は操作ログのverb名と同じ綴り**である（2026-08-15に徹底した）。AIは
+`describe_document` のログを読んで次の一手を決めるので、綴りが違うと対応表を推測させることになる。
+STEP読み込みのツールが2つあるのはこのため —— `import_step_editable`（通常。ソリッドごとに
+編集可能なボディができる）と `import_step`（参照ボディだけ）は**別のverbなので別のツール**にした。
+1つのツールが引数で打ち分ける形だと、ログに出る verb 名で呼べるツールが存在しなくなる。
+この一致は `tests/test_mcp_verbs.py::test_tool_names_match_the_verb_names_in_the_operation_log`
+が**両方向で**固定する（片方向だった間に、まさにこのずれが緑のまま入り込んだ）。
+
 公式SDKは入れず、JSON-RPC 2.0 over stdio を素で実装している（依存を増やしていない）。
 
 ---

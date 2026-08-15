@@ -1077,7 +1077,7 @@ auto 枠**でレビューした。auto は Composer/Grok 系へルーティン�
 `test_tools_list_is_exactly_the_minimal_set` がツール3つを機械的に固定していた。
 
 > **【2026-08-11 F1で退役】その上限はもう無い。** F が §0 の到達表のAI列を埋めるので
-> ツールは28個になり、選択も述語もここから出る（顔ぶれの契約は
+> ツールは28個になり（**2026-08-15に29個**）、選択も述語もここから出る（顔ぶれの契約は
 > `tests/test_mcp_verbs.py` にひとつだけ置く。本文末尾の「F —」節が正）。
 > 当該テストは `test_the_m4_tools_survive`（M4の3つが名前も振る舞いも変わらず
 > 生き残っていることの回帰ガード）へ置き換えた。**以下のM4の記述は、
@@ -1094,7 +1094,7 @@ auto 枠**でレビューした。auto は Composer/Grok 系へルーティン�
 ## `duocad/mcp_server.py` — 公開するツールは3つだけ
 
 > **【2026-08-11 F1で失効】この「3つだけ」は退役した。** F が §0 の到達表のAI列を埋めるので
-> ツールは28個になる（顔ぶれの契約は `tests/test_mcp_verbs.py` にひとつだけ置く。本文末尾の
+> ツールは28個になる（**2026-08-15に29個**。顔ぶれの契約は `tests/test_mcp_verbs.py` にひとつだけ置く。本文末尾の
 > 「F —」節が正）。`test_tools_list_is_exactly_the_minimal_set` は
 > `test_the_m4_tools_survive`（M4の3つが名前も振る舞いも変わらず生き残っていることの回帰ガード）
 > へ置き換えた。以下の3つの**振る舞い**の記述は現役である。
@@ -1937,7 +1937,7 @@ F が埋めるのはその列であり、合格条件は §0 が定義してい�
 
 > MCPツールとして呼べ／引数を**述語**または明示的な参照で与えられ／**結果と失敗が構造化して返る**
 
-## 公開するツールは28個
+## 公開するツールは29個（2026-08-15。初版は28個）
 
 | 群 | ツール |
 |---|---|
@@ -1947,7 +1947,7 @@ F が埋めるのはその列であり、合格条件は §0 が定義してい�
 | スケッチ(5) | `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` |
 | フィーチャ(6) | `extrude` / `extrude_face` / `fillet` / `chamfer` / `pattern_rectangular` / `pattern_circular` |
 | ボディ・パラメータ(3) | `set_visible` / `make_editable_copy` / `set_parameter` |
-| 入出力(3) | `import_step` / `export_step` / `export_stl` |
+| 入出力(4) | `import_step_editable` / `import_step` / `export_step` / `export_stl` |
 | 履歴(2) | `undo` / `redo` |
 
 操作は19個で、**§0の到達表のAI列19行とちょうど対応する**（表は
@@ -1955,8 +1955,21 @@ F が埋めるのはその列であり、合格条件は §0 が定義してい�
 展開すると19になる）。`tools/list` の集合は**一致**で検査する（部分集合ではない）——
 「19のうち18ある」は §0 の観点では未達だが、部分集合の検査だと緑になる。
 
+**19操作に対してツールが29個ある**のは、選択・問い合わせが操作の外にあるのと、
+「STEPを読む」1操作に**verbが2つ**あるため（`import_step_editable` / `import_step`）。
+後者は `EXTRA_LOGGING_TOOLS` として到達表と別に持つ（2026-08-15）。
+
 **ツール名は操作ログのverb名と同じ綴りにする。** AIは `describe_document` が返すログを読んで
 次の一手を決めるので、ログのverb名と呼べるツール名が違うと対応表を推測させることになる。
+
+> **【2026-08-15・この規律が一度破れた】** `import_step` ツールが `editable` 引数で
+> 2つのverb（`import_step` / `import_step_editable`）を打ち分ける実装が入り、
+> **ログに出る `import_step_editable` を呼べるツールが存在しない**状態になった。
+> **検査が片方向（`LOGGING_TOOLS <= registered_verbs()`）だったので緑のまま通った** ——
+> ツール名の集合が登録verbに含まれることしか見ておらず、逆向き（登録verbにツールが有るか）を
+> 見ていなかった。QAの指摘を受けて、①ツールを2つに割って名前をverbへ揃え、
+> ②検査を**集合の一致**にした。引数で打ち分ける形は今後も採らない
+> （`test_tool_names_match_the_verb_names_in_the_operation_log` が両方向で落とす）。
 
 ## 決定1（Fの背骨）— 形は選択から、数値は引数から
 
