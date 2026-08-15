@@ -480,9 +480,9 @@ export function createViewport(container: HTMLElement): Viewport {
 
   function highlight(refs: FaceRef[], origin: 'user' | 'proposed'): void {
     const selectedMaterial = origin === 'proposed' ? proposedMaterial : highlightMaterial
-    const keys = new Set(refs.map((ref) => `${ref.bodyId} ${ref.faceIndex}`))
+    const keys = new Set(refs.map((ref) => `${ref.bodyId}\u0000${ref.faceIndex}`))
     for (const mesh of allFaceMeshes) {
-      const isHit = keys.has(`${mesh.userData.bodyId} ${mesh.userData.faceIndex}`)
+      const isHit = keys.has(`${mesh.userData.bodyId}\u0000${mesh.userData.faceIndex}`)
       mesh.material = isHit ? selectedMaterial : baseMaterial
     }
   }
