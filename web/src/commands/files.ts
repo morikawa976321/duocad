@@ -87,7 +87,8 @@ export const OPEN_DOCUMENT: CommandDef = {
  * 起動時の手順をそのままverb1本(`import_step_editable`)にしてここへ載せた。
  */
 export const IMPORT_STEP: CommandDef = {
-  id: 'import_step',
+  // **id == サーバの表のコマンド名 == ログのverb名**(2026-08-15)。
+  id: 'import_step_editable',
   label: 'STEP読み込み',
   buttonId: 'file-import-step',
   preview: 'none',
@@ -179,7 +180,7 @@ export const EXPORT_STL: CommandDef = {
  * まで作るようになり、参照ボディは隠されてパーツ一覧にも出ない(一覧は `kind === "solid"`
  * だけを並べる)ため、UIから参照を指す経路そのものが無い。**このコマンドはボディの複製**
  * として残っている(選んだ面を持つボディの形をもう1つ作る)——
- * 参照ボディを起点に使うのはMCP側(`import_step` を `editable=false` で呼んだ後)である。
+ * 参照ボディを起点に使うのはMCP側(参照だけ足す `import_step` を呼んだ後)である。
  */
 export const MAKE_EDITABLE_COPY: CommandDef = {
   id: 'make_editable_copy',

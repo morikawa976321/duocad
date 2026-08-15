@@ -1285,7 +1285,7 @@ class DocumentTools:
         test_tool_names_match_the_verb_names_in_the_operation_log` が両方向で固定する。
         """
         before = self._revision_snapshot()
-        applied = self.session.import_step(path, editable=True)
+        applied = self.session.import_step_editable(path)
         return self._apply_logged(
             before,
             applied,
@@ -1304,7 +1304,7 @@ class DocumentTools:
         相手に verb を打ち続ける。通常の読み込みは `import_step_editable` の側。
         """
         before = self._revision_snapshot()
-        applied = self.session.import_step(path, editable=False)
+        applied = self.session.import_step(path)
         return self._apply_logged(
             before,
             applied,

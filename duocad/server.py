@@ -34,7 +34,7 @@
         {"cmd": "get_edges", "body_id": str}                                          # D
         {"cmd": "save_document", "path": str} / {"cmd": "open_document", "path": str} # E
         {"cmd": "export_step", "path": str} / {"cmd": "export_stl", "path", "deviation"} # E
-        {"cmd": "import_step", "path": str}                                           # E
+        {"cmd": "import_step_editable", "path": str}  /  {"cmd": "import_step", ...}   # E
         {"cmd": "make_editable_copy", "source_body_id": str|None}                     # E
 
     上り(server -> client)
@@ -208,6 +208,9 @@ FILE_COMMANDS: dict = {
     "save_document": ("save_document", ("path",), False),
     "export_step": ("export_step_file", ("path",), False),
     "export_stl": ("export_stl_file", ("path", "deviation"), False),
+    # **コマンド名 == ログのverb名**(2026-08-15)。読み込みは2つのverbがあるので
+    # コマンドも2つに割る(引数で打ち分けると、名前が実際のverbと食い違う)。
+    "import_step_editable": ("import_step_editable", ("path",), True),
     "import_step": ("import_step", ("path",), True),
     "make_editable_copy": ("make_editable_copy_body", ("source_body_id",), True),
 }
@@ -901,26 +904,31 @@ class Session:
             "changed_bodies": changed_bodies,
         })
 
-    def import_step(self, path: Any, editable: Any = True) -> dict:
-        """STEPを読む。**既定は編集可能**(verb `import_step_editable`)。
+    def import_step_editable(self, path: Any) -> dict:
+        """STEPを読み、**編集可能なボディまで作る**(verb `import_step_editable`)。
 
-        「読んだら使える」が本人の指示なので、UI・MCPから来る通常の読み込みは
+        「読んだら使える」が本人の指示なので、UI・MCPから来る通常の読み込みはこちら ——
         ソリッドごとに参照ボディ(隠す)と編集用ボディを作る1回のverbになる。
 
-        `editable=False` のときだけコアのverb `import_step`(参照ボディだけ)を通す ——
-        **参照だけ欲しい経路も残す**ための逃げ道で、既定にはしない。どちらも
-        ログ1行・undo1回に収まる。
+        **メソッド名・WSのコマンド名・ログのverb名を同じ綴りにしてある**(2026-08-15)。
+        以前は1つの `import_step` が `editable` 引数で2つのverbを打ち分けており、
+        「コマンド名が実際に積まれるverbと違う」という食い違いがMCP側と同じ形で残っていた。
         """
-        if editable:
-            body_ids = import_step_editable(self.document, str(self._resolve(path)))
-            args = self.document.log.entries[-1].args
-            return self._after_logged_verb({
-                "body_ids": list(body_ids),
-                "reference_ids": list(args["reference_ids"]),
-                "editable": True,
-            })
+        body_ids = import_step_editable(self.document, str(self._resolve(path)))
+        args = self.document.log.entries[-1].args
+        return self._after_logged_verb({
+            "body_ids": list(body_ids),
+            "reference_ids": list(args["reference_ids"]),
+        })
+
+    def import_step(self, path: Any) -> dict:
+        """STEPを**参照ボディ(読み取り専用)としてだけ**足す(verb `import_step`)。
+
+        **参照だけ欲しい経路も残す**ための入口。通常の読み込みは上の
+        `import_step_editable` の側で、こちらを既定にはしない。
+        """
         body_ids = io_step.import_step(self.document, self._resolve(path))
-        return self._after_logged_verb({"body_ids": list(body_ids), "editable": False})
+        return self._after_logged_verb({"body_ids": list(body_ids)})
 
     # ---------------------------------------------------------------- E: ファイル操作
     #

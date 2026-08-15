@@ -296,7 +296,7 @@ def test_the_browser_import_gives_editable_bodies_right_away(
     log_before = len(session.document.log.entries)
 
     async def script(send):
-        return await send({"cmd": "import_step", "path": str(source), "client_op": 1})
+        return await send({"cmd": "import_step_editable", "path": str(source), "client_op": 1})
 
     (imported, _clients) = _browser(session, script)
 
@@ -322,13 +322,13 @@ def test_the_browser_can_still_make_an_editable_copy_of_a_reference(
     """参照ボディだけを読む経路(`editable=False`)と、その続きの `make_editable_copy`。
 
     既定は編集可能側だが、参照だけ欲しい経路は残してある(コアのverb `import_step`)。
-    UIの「編集可能にする」コマンドはこの続きに当たる。
+    UIの「編集用に複製」コマンドはこの続きに当たる。
     """
     body, _ = _box(session)
     source = tmp_path / "part.step"
     session.export_step_file(source)
 
-    imported = session.import_step(source, editable=False)
+    imported = session.import_step(source)  # 参照ボディだけを足す側
     reference = imported["body_ids"][0]
 
     async def script(send):

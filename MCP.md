@@ -129,7 +129,7 @@ claude mcp add duocad -- C:\Users\tm976\mf\duocad\.venv\Scripts\python.exe -m du
 参照ボディの件数は `reference_count` で知らせる（`include_references=true` で出せる）。
 **参照ボディの可視性は切り替えられない**（原本なので。編集用の `body_id` を使う）。
 
-> **ツール名は操作ログのverb名と同じ綴りである**（例外なし）。ログを読んで次の一手を決めるとき、
+> **ツール名は操作ログのverb名と同じ綴りである**（例外なし。**WebSocketのコマンド名とUIのコマンドIDも同じ**）。ログを読んで次の一手を決めるとき、
 > そこに出ている名前をそのまま呼べる。STEP読み込みのツールが2つあるのはこのためで、
 > `import_step_editable` と `import_step` は**別のverbなので別のツール**にしてある。
 > 2026-08-15までは1つの `import_step` ツールが `editable` 引数で打ち分けており、
