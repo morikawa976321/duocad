@@ -457,7 +457,7 @@ class Session:
         のタプルが前回の記録と違ったら+1する。押し出し・undo・redo・可視性変更のどれでも
         自動的に効く(verbごとに数え上げない)。
         """
-        body = self._find_body(body_id)
+        body = self.document.get_body(body_id)
         key = (id(body.shape), body.visible)
         if self._revision_state.get(body_id) != key:
             self._revision_state[body_id] = key
@@ -470,7 +470,7 @@ class Session:
         キャッシュは**形状の同一性**で判定する(版ではない)。可視性だけを変えたときに
         測り直すと、表示を切り替えるたびに高コストな再測定が走ってしまう。
         """
-        body = self._find_body(body_id)
+        body = self.document.get_body(body_id)
         if not body.visible:
             raise ValueError(f"body {body_id!r} is not visible: 不可視Bodyは測らない")
         cached = self._geometry_cache.get(body_id)
@@ -499,7 +499,7 @@ class Session:
         フィレットをかける(＝別の辺が丸まる)経路が閉じる(§7「面の添字は形状変更で壊れる」の
         辺版。添字の持ち越しはここでも許さない)。
         """
-        body = self._find_body(body_id)
+        body = self.document.get_body(body_id)
         if body.shape is None:
             raise ValueError(f"body {body_id!r} has no shape (辺を数えられない)")
         # **不可視Bodyの辺は配らない**(`geometry()` と同じ規律。QA指摘 2026-08-14)。
@@ -538,12 +538,6 @@ class Session:
             else:
                 bodies_out.append(self._body_state(body))
         return {"bodies": bodies_out, "unchanged": unchanged}
-
-    def _find_body(self, body_id: str):
-        body = next((b for b in self.document.bodies if b.id == body_id), None)
-        if body is None:
-            raise KeyError(f"no such body: {body_id!r}")
-        return body
 
     def _body_meta(self, body) -> dict:
         """1Bodyぶんの軽量な状態(geometryを含まない。state_metaとの共有部分)。"""

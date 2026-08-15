@@ -26,17 +26,14 @@ redo→undo も再生後のundoも効く。**保存したログを読み込ん�
 """
 from __future__ import annotations
 
-from typing import Any, Optional
-from weakref import WeakKeyDictionary
+from typing import Optional
 
 from .. import kernel
-from ..document import Body, BodyId, Document
+from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
+from ._common import editable_body, recall, remember
 
 VERB_EXTRUDE_FACE = "extrude_face"
-
-#: (document) -> {(body_id, seq): 押し出し前の形状}。documentが消えたら一緒に消える。
-_SNAPSHOTS: "WeakKeyDictionary[Document, dict]" = WeakKeyDictionary()
 
 
 def extrude_face(
@@ -51,7 +48,7 @@ def extrude_face(
     **document にもログにも変更を残さない** — 失敗しうる幾何計算を append より先に済ませる
     (io_step.import_step と同じ順序。§6予防6)。
     """
-    body = _editable_body(doc, body_id)
+    body = editable_body(doc, body_id, what="extrude", require_visible=True)
     result = kernel.extrude_face_on_shape(body.shape, face_index, distance)
 
     previous_shape = body.shape
@@ -62,50 +59,8 @@ def extrude_face(
         selection=[{"body": body.id, "kind": "face", "index": int(face_index)}],
     )
     operation.provenance = result["provenance"]
-    _remember(doc, body.id, operation.seq, previous_shape)
+    remember(doc, body.id, operation.seq, previous_shape)
     return operation
-
-
-def _editable_body(doc: Document, body_id: Optional[BodyId]) -> Body:
-    """押し出す対象のボディ。編集できないもの・形状の無いものは例外(黙って無視しない)。"""
-    if body_id is None:
-        body = doc.active_body()
-        if body is None:
-            raise ValueError("no active body to extrude (document is empty)")
-        body_id = body.id
-    if not doc.is_editable(body_id):  # 存在しないIDは KeyError(document側の契約)
-        raise ValueError(
-            f"body {body_id!r} is not editable (kind='reference'). "
-            "make_editable_copy() で編集用のソリッドを作ってから押し出すこと"
-        )
-    body = next(candidate for candidate in doc.bodies if candidate.id == body_id)
-    if not body.visible:
-        raise ValueError(
-            f"body {body_id!r} is hidden: 見えないものは指せない(set_visible で表示すること)"
-        )
-    if body.shape is None:
-        raise ValueError(f"body {body_id!r} has no shape to extrude")
-    return body
-
-
-# --------------------------------------------------------------------------------------
-# undo用のスナップショット
-# --------------------------------------------------------------------------------------
-def _remember(doc: Document, body_id: BodyId, seq: int, shape: Any) -> None:
-    """押し出し前の形状を覚える(同じseqで再適用されたら上書きする)。"""
-    _SNAPSHOTS.setdefault(doc, {})[(body_id, seq)] = shape
-
-
-def _recall(doc: Document, body_id: BodyId, seq: int) -> Any:
-    """覚えていた形状を取り出して忘れる。無ければ KeyError(黙ってundoを空振りさせない)。"""
-    snapshots = _SNAPSHOTS.get(doc)
-    if snapshots is None or (body_id, seq) not in snapshots:
-        raise KeyError(
-            f"no snapshot for undo of seq={seq} on body {body_id!r}: "
-            "保存したログを再生せずにundoしようとしている(M1の制限)。"
-            "OpLog.replay(document) してから undo すること"
-        )
-    return snapshots.pop((body_id, seq))
 
 
 # --------------------------------------------------------------------------------------
@@ -118,23 +73,19 @@ def _do_extrude_face(document: Document, operation: Operation) -> None:
     入っているのが正なので、空のときだけ埋める(再生が履歴を書き換えないようにする)。
     """
     args = operation.args
-    body = _editable_body(document, args["body_id"])
+    body = editable_body(document, args["body_id"], what="extrude", require_visible=True)
     result = kernel.extrude_face_on_shape(body.shape, args["face_index"], args["distance"])
     previous_shape = body.shape
     body.shape = result["shape"]
     if operation.provenance is None:
         operation.provenance = result["provenance"]
-    _remember(document, body.id, operation.seq, previous_shape)
+    remember(document, body.id, operation.seq, previous_shape)
 
 
 def _undo_extrude_face(document: Document, operation: Operation) -> None:
     """undo 時の取り消し: 押し出す前の形状に戻す。"""
-    args = operation.args
-    body_id = args["body_id"]
-    body = next((candidate for candidate in document.bodies if candidate.id == body_id), None)
-    if body is None:
-        raise KeyError(f"no such body: {body_id!r}")
-    body.shape = _recall(document, body_id, operation.seq)
+    body_id = operation.args["body_id"]
+    document.get_body(body_id).shape = recall(document, body_id, operation.seq)
 
 
 register_verb(VERB_EXTRUDE_FACE, do=_do_extrude_face, undo=_undo_extrude_face)

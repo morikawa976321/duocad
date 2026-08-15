@@ -257,3 +257,14 @@ def _undo_set_parameter(document: Document, operation: Operation) -> None:
 
 
 register_verb(VERB_SET_PARAMETER, do=_do_set_parameter, undo=_undo_set_parameter)
+
+
+def release_param_refs(document: Document, params: dict) -> None:
+    """図形/反復が持っていたパラメータ名を文書から消す(undo用)。
+
+    2026-08-15にここへ集めた(`sketch.py` と `verbs/pattern.py` に同じ関数が2つあった)。
+    **名前つきの値の持ち主はこのモジュール**なので、解放もここに置く。
+    """
+    for ref in params.values():
+        if isinstance(ref, str):
+            document.parameters.pop(ref, None)

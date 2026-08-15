@@ -28,12 +28,11 @@
 from __future__ import annotations
 
 from typing import Any, List, Optional, Sequence
-from uuid import uuid4
-from weakref import WeakKeyDictionary
 
 from .. import kernel
-from ..document import Body, BodyId, Document
+from ..document import Body, BodyId, Document, new_body_id
 from ..oplog import Operation, register_verb
+from ._common import recall, remember
 from ..region import RegionRef, _regions_detailed
 from ..sketch import get_sketch
 
@@ -43,7 +42,6 @@ VERB_EXTRUDE = "extrude"
 MODES = ("join", "cut")
 
 #: (document) -> {(body_id, seq): 押し出し前の形状 | None(新規作成)}。
-_SNAPSHOTS: "WeakKeyDictionary[Document, dict]" = WeakKeyDictionary()
 
 
 def extrude(
@@ -75,7 +73,7 @@ def extrude(
     created_new = False
     previous_shape: Any = None
     if target_body is None:
-        resolved_body_id = f"body-{uuid4().hex[:12]}"
+        resolved_body_id = new_body_id()
         doc.add_body(
             Body(
                 id=resolved_body_id,
@@ -100,7 +98,7 @@ def extrude(
         },
         selection=selection,
     )
-    _remember(doc, resolved_body_id, operation.seq, None if created_new else previous_shape)
+    remember(doc, resolved_body_id, operation.seq, None if created_new else previous_shape)
     return operation
 
 
@@ -176,22 +174,6 @@ def _resolve_faces_and_normal(
     return faces, normal
 
 
-def _remember(doc: Document, body_id: BodyId, seq: int, shape: Any) -> None:
-    """押し出し前の形状を覚える(新規作成なら None。同じseqで再適用されたら上書き)。"""
-    _SNAPSHOTS.setdefault(doc, {})[(body_id, seq)] = shape
-
-
-def _recall(doc: Document, body_id: BodyId, seq: int) -> Any:
-    """覚えていた形状を取り出して忘れる。無ければ KeyError。"""
-    snapshots = _SNAPSHOTS.get(doc)
-    if snapshots is None or (body_id, seq) not in snapshots:
-        raise KeyError(
-            f"no snapshot for undo of seq={seq} on body {body_id!r}: "
-            "保存したログを再生せずにundoしようとしている(M1と同じ制限)。"
-            "OpLog.replay(document) してから undo すること"
-        )
-    return snapshots.pop((body_id, seq))
-
 
 # --------------------------------------------------------------------------------------
 # verbの登録(oplog は verb名の分岐を持たない)
@@ -217,7 +199,7 @@ def _do_extrude(document: Document, operation: Operation) -> None:
         document.add_body(
             Body(id=body_id, name="solid", kind="solid", shape=result["shape"])
         )
-        _remember(document, body_id, operation.seq, None)
+        remember(document, body_id, operation.seq, None)
         return
 
     if not document.is_editable(body_id):
@@ -227,13 +209,13 @@ def _do_extrude(document: Document, operation: Operation) -> None:
         faces, distance, mode, normal, target_shape=existing.shape
     )
     existing.shape = result["shape"]
-    _remember(document, body_id, operation.seq, previous_shape)
+    remember(document, body_id, operation.seq, previous_shape)
 
 
 def _undo_extrude(document: Document, operation: Operation) -> None:
     """undo: 押し出す前の形状に戻す(新しく作ったボディなら取り除く)。"""
     body_id = operation.args["body_id"]
-    previous = _recall(document, body_id, operation.seq)
+    previous = recall(document, body_id, operation.seq)
     if previous is None:
         document.remove_body(body_id)
         return

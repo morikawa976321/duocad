@@ -31,7 +31,7 @@ VERB_SET_VISIBLE = "set_visible"
 
 def set_visible(doc: Document, body_id: BodyId, visible: bool) -> Operation:
     """Bodyの表示・非表示を切り替え、ログに積んで Operation を返す。"""
-    body = _find_body(doc, body_id)
+    body = doc.get_body(body_id)
     previous = body.visible
     body.visible = bool(visible)
     return doc.log.append(
@@ -40,21 +40,14 @@ def set_visible(doc: Document, body_id: BodyId, visible: bool) -> Operation:
     )
 
 
-def _find_body(doc: Document, body_id: BodyId):
-    body = next((b for b in doc.bodies if b.id == body_id), None)
-    if body is None:
-        raise KeyError(f"no such body: {body_id!r}")
-    return body
-
-
 def _do_set_visible(document: Document, operation: Operation) -> None:
     """redo / replay: 記録された `visible` を当て直す(ログには触らない)。"""
-    _find_body(document, operation.args["body_id"]).visible = operation.args["visible"]
+    document.get_body(operation.args["body_id"]).visible = operation.args["visible"]
 
 
 def _undo_set_visible(document: Document, operation: Operation) -> None:
     """undo: `args["previous"]` の値へ戻す。"""
-    _find_body(document, operation.args["body_id"]).visible = operation.args["previous"]
+    document.get_body(operation.args["body_id"]).visible = operation.args["previous"]
 
 
 register_verb(VERB_SET_VISIBLE, do=_do_set_visible, undo=_undo_set_visible)

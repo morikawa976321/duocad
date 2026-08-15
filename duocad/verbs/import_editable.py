@@ -45,10 +45,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Union
-from uuid import uuid4
 
 from .. import kernel
-from ..document import Body, BodyId, Document
+from ..document import Body, BodyId, Document, new_body_id
 from ..oplog import Operation, register_verb
 
 PathLike = Union[str, Path]
@@ -60,8 +59,8 @@ def import_step_editable(doc: Document, path: PathLike) -> list[BodyId]:
     """STEPを読み、ソリッドごとに参照ボディ(隠す)と編集用ボディを作って後者のIDを返す。"""
     shape = kernel.read_step(str(path))  # 失敗すればここで例外、doc/logは無傷
     solids = kernel.split_solids(shape)
-    reference_ids = [_new_body_id() for _ in solids]
-    body_ids = [_new_body_id() for _ in solids]
+    reference_ids = [new_body_id() for _ in solids]
+    body_ids = [new_body_id() for _ in solids]
     names = _reference_names(path, len(solids))
     _apply_to(doc, reference_ids, body_ids, solids, names)
     doc.log.append(
@@ -80,11 +79,6 @@ def _reference_names(path: PathLike, count: int) -> list[str]:
     """
     stem = Path(path).stem
     return [f"{stem}_{n}" for n in range(1, count + 1)]
-
-
-def _new_body_id() -> BodyId:
-    """新しいBodyId。再生時は記録済みのIDをそのまま使うのでここは通らない。"""
-    return f"body-{uuid4().hex[:12]}"
 
 
 def _apply_to(

@@ -47,12 +47,6 @@ VERB_PATTERN_CIRCULAR = "pattern_circular"
 _is_positive_int = parameters.is_positive_int
 
 
-def _release_param_refs(document: Document, params: dict) -> None:
-    for ref in params.values():
-        if isinstance(ref, str):
-            document.parameters.pop(ref, None)
-
-
 def _install_pattern(
     document: Document,
     sketch_id: str,
@@ -315,7 +309,7 @@ def _undo_pattern_circular(document: Document, operation: Operation) -> None:
     remaining = []
     for pattern in sketch.patterns:
         if pattern.id == pattern_id:
-            _release_param_refs(document, pattern.params)
+            parameters.release_param_refs(document, pattern.params)
         else:
             remaining.append(pattern)
     sketch.patterns = remaining
@@ -354,7 +348,7 @@ def _undo_pattern_rectangular(document: Document, operation: Operation) -> None:
     remaining = []
     for pattern in sketch.patterns:
         if pattern.id == pattern_id:
-            _release_param_refs(document, pattern.params)
+            parameters.release_param_refs(document, pattern.params)
         else:
             remaining.append(pattern)
     sketch.patterns = remaining

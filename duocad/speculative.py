@@ -38,10 +38,12 @@
 
 ## 戻さないもの(意図的)
 
-- `duocad.verbs.extrude_face._SNAPSHOTS` の undo用スナップショット(同型のテーブルが
-  `fillet.py` / `chamfer.py` / `extrude.py` にもある)。
+- `duocad.verbs._common.SNAPSHOTS` の undo用スナップショット。
+  **2026-08-15まで同型のテーブルが4つ**(`extrude_face` / `fillet` / `chamfer` / `extrude`)
+  あり、この節は4つ全部について同じ論法を主張していた。いまは**1つ**なので、
+  下の検算も1箇所で足りる。
   `(body_id, seq)` で引く弱参照テーブルで、**同じseqで再適用されたら上書きされる**
-  (`_remember` の契約)。巻き戻した seq はこの後の確定操作が使うので、確定すれば
+  (`remember` の契約)。巻き戻した seq はこの後の確定操作が使うので、確定すれば
   正しい値で上書きされる。中断した場合に1件残るが、参照しているのは巻き戻し前の
   形状ではなく**巻き戻し後と同じ形状**なので、誤ったundoにはならない。
 
@@ -52,7 +54,7 @@
   D(2026-08-14)で `PREVIEWABLE_VERBS` へ載せる前に確認した。QA 2026-08-14)。
   `set_parameter` のように `parameters.rebuild` が**操作ログを頭から再生する**verbは、
   再生の途中で**過去のseqのスナップショットを別の値で作り直す**。文書は戻せても
-  `_SNAPSHOTS` は戻らないので、中断したプレビューの形状が後の実undoで復元されうる。
+  `SNAPSHOTS` は戻らないので、中断したプレビューの形状が後の実undoで復元されうる。
   **`PREVIEWABLE_VERBS` に再生系のverbを足すときは、ここも一緒に戻すこと**
   (単に1行足すだけでは壊れる)。
 - `Session` 側のキャッシュ(版・テセレーション・`_applied_count`)。文書ではないので

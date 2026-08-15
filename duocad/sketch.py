@@ -173,13 +173,6 @@ def get_sketch(doc: Document, sketch_id: SketchId) -> Sketch:
     raise KeyError(f"no such sketch: {sketch_id!r}")
 
 
-def _release_param_refs(document: Document, params: Dict[str, Any]) -> None:
-    """図形/反復が持っていたパラメータ名を文書から消す(undo用)。"""
-    for ref in params.values():
-        if isinstance(ref, str):
-            document.parameters.pop(ref, None)
-
-
 # --------------------------------------------------------------------------------------
 # verb
 # --------------------------------------------------------------------------------------
@@ -402,9 +395,9 @@ def _undo_sketch_create(document: Document, operation: Operation) -> None:
     )
     if sketch is not None:
         for entity in sketch.entities:
-            _release_param_refs(document, entity.params)
+            parameters.release_param_refs(document, entity.params)
         for pattern in sketch.patterns:
-            _release_param_refs(document, pattern.params)
+            parameters.release_param_refs(document, pattern.params)
     document.sketches = [s for s in document.sketches if s.id != sketch_id]
 
 
@@ -435,7 +428,7 @@ def _undo_add_entity(document: Document, operation: Operation) -> None:
     remaining = []
     for entity in sketch.entities:
         if entity.id == entity_id:
-            _release_param_refs(document, entity.params)
+            parameters.release_param_refs(document, entity.params)
         else:
             remaining.append(entity)
     sketch.entities = remaining

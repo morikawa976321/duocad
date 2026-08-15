@@ -14,10 +14,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Optional
+from uuid import uuid4
 
 BodyId = str
 
 _VALID_KINDS = {"solid", "reference"}
+
+
+def new_body_id() -> BodyId:
+    """新しいBodyId。**再生時は記録済みのIDをそのまま使う**のでここは通らない。
+
+    2026-08-15にここへ集めた(それまで `io_step` / `verbs/import_editable` に同じ関数が2つ、
+    `verbs/extrude.py` にインラインの3つ目があった)。**BodyId の持ち主はこのモジュール**で、
+    verb側に置くと `io_step` が verbs/ を引くことになり層が逆になる。
+    """
+    return f"body-{uuid4().hex[:12]}"
 
 
 @dataclass
@@ -125,8 +136,22 @@ class Document:
             raise KeyError(f"no such body: {body_id!r}")
         return body.kind == "solid"
 
+    def get_body(self, body_id: BodyId) -> Body:
+        """IDでボディを引く。**無ければ KeyError**(黙ってNoneを返さない)。
+
+        2026-08-15に公開した。それまで `_find` が Optional を返す非公開メソッドだったため、
+        外側(`server.py` / `mcp_server.py` / `verbs/visibility.py` / 各verb)が
+        `next(candidate for ... if candidate.id == body_id)` を**4通りに再実装**していた。
+        「引けなかったときにどうなるか」が実装ごとに違うのが本当の害で、
+        `StopIteration` を投げるものと `KeyError` を投げるものが混ざっていた。
+        """
+        body = self._find(body_id)
+        if body is None:
+            raise KeyError(f"no such body: {body_id!r}")
+        return body
+
     def _find(self, body_id: BodyId) -> Optional[Body]:
-        """IDでボディを引く(無ければNone)。"""
+        """IDでボディを引く(無ければNone)。存在検査に使う内部用。"""
         for body in self.bodies:
             if body.id == body_id:
                 return body

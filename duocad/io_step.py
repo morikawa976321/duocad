@@ -38,10 +38,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Union
-from uuid import uuid4
 
 from . import kernel
-from .document import Body, BodyId, Document
+from .document import Body, BodyId, Document, new_body_id
 from .oplog import Operation, register_verb
 
 PathLike = Union[str, Path]
@@ -61,7 +60,7 @@ def import_step(doc: Document, path: PathLike) -> list[BodyId]:
     """
     shape = kernel.read_step(str(path))  # 失敗すればここで例外、doc/logは無傷
     solids = kernel.split_solids(shape)
-    body_ids = [_new_body_id() for _ in solids]
+    body_ids = [new_body_id() for _ in solids]
     stem = Path(path).stem
     names = [f"{stem}_{n}" for n in range(1, len(solids) + 1)]
     _apply_import_step_to(doc, body_ids, solids, names)
@@ -129,11 +128,6 @@ def _shape_to_export(doc: Document, body_ids):
     if len(shapes) == 1:
         return shapes[0]
     return kernel.make_compound(shapes)
-
-
-def _new_body_id() -> BodyId:
-    """新しいBodyIdを作る。再生時は記録済みのIDをそのまま使うのでここは通らない。"""
-    return f"body-{uuid4().hex[:12]}"
 
 
 def _apply_import_step_to(

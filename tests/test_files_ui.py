@@ -307,13 +307,13 @@ def test_the_browser_import_gives_editable_bodies_right_away(
     assert editable_ids, "編集可能なボディを返していない"
     assert all(session.document.is_editable(body_id) for body_id in editable_ids)
     # 原本(参照ボディ)は隠したまま文書に残る
-    references = [session._find_body(body_id) for body_id in applied["reference_ids"]]
+    references = [session.document.get_body(body_id) for body_id in applied["reference_ids"]]
     assert references and all(not reference.visible for reference in references)
     # **編集できる**ことを、実際にverbを通して確かめる(参照のままなら ValueError になる側)。
     copy_id = editable_ids[0]
-    faces_before = kernel.face_count(session._find_body(copy_id).shape)
+    faces_before = kernel.face_count(session.document.get_body(copy_id).shape)
     session.fillet([1], 1.0, body_id=copy_id)
-    assert kernel.face_count(session._find_body(copy_id).shape) > faces_before
+    assert kernel.face_count(session.document.get_body(copy_id).shape) > faces_before
 
 
 def test_the_browser_can_still_make_an_editable_copy_of_a_reference(
