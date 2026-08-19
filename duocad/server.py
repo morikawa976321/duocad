@@ -26,7 +26,7 @@
         {"cmd": "add_rectangle", "sketch_id": str, "corner": [u,v], "width", "height"}# C
         {"cmd": "add_arc", "sketch_id": str, "center", "radius", "start_deg", "end_deg"} # C
         {"cmd": "set_parameter", "name": str, "value": float, "client_op": int}       # C
-        {"cmd": "extrude", "distance": float, "mode": "join"|"cut", "body_id": str}   # D
+        {"cmd": "extrude", "distance": float, "mode": "join"|"cut"}                   # D
         {"cmd": "fillet", "radius": float | [float, ...]}                             # D
         {"cmd": "chamfer", "distance": float | [float, ...]}                          # D
         {"cmd": "pattern_rectangular", "sketch_id", "entities", "dx","dy","nx","ny"}  # D
@@ -189,7 +189,9 @@ SKETCH_COMMANDS: dict = {
 #: **並ぶのは数値・名前だけで、面・辺・領域は1つも無い**(2026-08-20)。対象集合は
 #: `Session` のverbラッパがコアの確定選択から取る(`selection.require_*`)ので、
 #: MCPの `fillet(radius)` とWSの `{"cmd":"fillet","radius":...}` が同じ形になった。
-#: `extrude` の `body_id` は対象集合ではなく「どのBodyへ足す/から引くか」なので残す。
+#: `body_id` は対象集合ではない(「どのBodyへ足す/から引くか」)ので消していないが、
+#: **この表には無い** —— WSの `extrude` は昔から行き先を受け取らず、アクティブなBodyへ
+#: 足す。行き先を指せるのは MCP の `extrude` と `preview`(`PREVIEWABLE_VERBS`)だけ。
 FEATURE_COMMANDS: dict = {
     "extrude": ("extrude_regions", ("distance", "mode")),
     "fillet": ("fillet", ("radius",)),
