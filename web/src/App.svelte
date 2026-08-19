@@ -609,7 +609,7 @@
         note('スケッチモードに入っていない(反復はスケッチの図形が対象)')
         return
       }
-      if (verb === 'extrude' && !regionsStillExist(args.regions)) {
+      if (verb === 'extrude' && !regionsStillExist()) {
         // **領域はパラメータ編集で分裂・消失しうる**(§7)。消えた領域を送ると
         // サーバは添字が範囲外だと言うだけなので、ここで何が起きたかを画面へ出す。
         note('選んだ領域が今のスケッチに無い(図形が変わって分裂・消失した可能性)。選び直す')
@@ -639,9 +639,17 @@
     session.runVerb(verb, args, op)
   }
 
-  /** 送ろうとしている領域が、今のスケッチに実在するか。 */
-  function regionsStillExist(value: unknown): boolean {
-    const refs = (value ?? []) as Array<{ sketch: string; index: number }>
+  /**
+   * これから押し出す領域(=コアの選択にある領域)が、今のスケッチに実在するか。
+   *
+   * **選択そのものを見る**。押し出す領域はサーバがコアの選択から取るので、
+   * 送る引数には入っていない —— 引数を見に行くと常に空になり、この検査が
+   * 黙って空振りする。
+   */
+  function regionsStillExist(): boolean {
+    const refs = (selection?.items ?? []).filter(
+      (item): item is { sketch: string; index: number } => 'sketch' in item,
+    )
     return refs.every((ref) =>
       sketches.some(
         (item) =>

@@ -14,7 +14,7 @@
 
     下り(client -> server)
         {"cmd": "get_state"}
-        {"cmd": "extrude_face", "face_index": int, "distance": float, "client_op": int, "body_id": str}
+        {"cmd": "extrude_face", "distance": float, "client_op": int}
         {"cmd": "set_visible", "body_id": str, "visible": bool, "client_op": int}
         {"cmd": "undo"} / {"cmd": "redo"}
         {"cmd": "modify_selection", "add": [ref, ...], "remove": [ref, ...], "client_op": int}
@@ -26,9 +26,9 @@
         {"cmd": "add_rectangle", "sketch_id": str, "corner": [u,v], "width", "height"}# C
         {"cmd": "add_arc", "sketch_id": str, "center", "radius", "start_deg", "end_deg"} # C
         {"cmd": "set_parameter", "name": str, "value": float, "client_op": int}       # C
-        {"cmd": "extrude", "regions": [{"sketch","index"}, ...], "distance", "mode"}  # D
-        {"cmd": "fillet", "edges": [int, ...], "radius": float, "body_id": str}       # D
-        {"cmd": "chamfer", "edges": [int, ...], "distance": float, "body_id": str}    # D
+        {"cmd": "extrude", "distance": float, "mode": "join"|"cut", "body_id": str}   # D
+        {"cmd": "fillet", "radius": float | [float, ...]}                             # D
+        {"cmd": "chamfer", "distance": float | [float, ...]}                          # D
         {"cmd": "pattern_rectangular", "sketch_id", "entities", "dx","dy","nx","ny"}  # D
         {"cmd": "pattern_circular", "sketch_id", "entities", "center","count","total_angle"} # D
         {"cmd": "get_edges", "body_id": str}                                          # D
@@ -44,6 +44,15 @@
         {"type": "file", "action": "save"|"export_step"|"export_stl", "path", "bytes"} # E
         {"type": "error", "message": str, "where": str}
         {"type": "warning", "message": str}
+
+**verbコマンドは対象集合(面・辺・領域)を引数で受けない**(2026-08-20)。数値・名前・パスだけを
+送り、押す面も丸める辺も押し出す領域も `Session` のverbラッパがコアの確定選択から取る
+(`selection.require_confirmed` / `require_edges`)。MCP側は以前からこの形で、
+`fillet(radius)` と `{"cmd": "fillet", "radius": ...}` が同じ引数になった ——
+それまではWebSocket側だけが「コアが持つ選択をブラウザで添字へ変換して送り返す」形で、
+同じ変換の実装が2言語に2つあった(`web/src/commands/features.ts` の `edgesOf`/`regionsOf`)。
+`body_id` が残っているのは対象集合ではないものだけ(`set_visible` / `get_edges` /
+`make_editable_copy` の対象、`extrude` の「どのBodyへ足すか」)。
 
 選択とプレビューの口がある。選択の3つ(`modify_selection` /
 `commit_selection` / `clear_selection`)は既にMCPが持っていたものを**ブラウザ側にも**
@@ -135,15 +144,15 @@ DEFAULT_WEB_DIST = REPO_ROOT / "web" / "dist"
 #: —— 再生が過去のseqのundoスナップショットを書き換え、`speculative` はそれを戻さない
 #: (`speculative.py` の「戻さないもの」参照)。
 PREVIEWABLE_VERBS: dict = {
-    "extrude_face": ("extrude", ("body_id", "face_index", "distance")),
+    "extrude_face": ("extrude", ("distance",)),
     # **この3つは `speculative` の「戻さないもの」の論法が成立する側**
     # (同一seqの再適用しか起こさない = `speculative.py` が検算済みと書いている verb)。
     # 反復(`pattern_*`)をここへ足していないのは安全のためではなく、**変わるのが
     # スケッチの図形でソリッドではない**ため —— `preview` が返すのは形が変わったBodyだけで、
     # 反復は1つもBodyを変えないので、載せても常に空の応答になる(幽霊はブラウザが描く)。
-    "extrude": ("extrude_regions", ("regions", "distance", "mode", "body_id")),
-    "fillet": ("fillet", ("edges", "radius", "body_id")),
-    "chamfer": ("chamfer", ("edges", "distance", "body_id")),
+    "extrude": ("extrude_regions", ("distance", "mode", "body_id")),
+    "fillet": ("fillet", ("radius",)),
+    "chamfer": ("chamfer", ("distance",)),
 }
 
 #: ブラウザから踏めるスケッチのコマンド -> (`Session` のメソッド名, 必須の引数名)。
@@ -176,10 +185,15 @@ SKETCH_COMMANDS: dict = {
 #:
 #: `mode`(join/cut)を必須にしてあるのは、既定の `"join"` に落ちると
 #: **「切り取るつもりで足した」が黙って通る**ため。UIは人に選ばせてから送る。
+#:
+#: **並ぶのは数値・名前だけで、面・辺・領域は1つも無い**(2026-08-20)。対象集合は
+#: `Session` のverbラッパがコアの確定選択から取る(`selection.require_*`)ので、
+#: MCPの `fillet(radius)` とWSの `{"cmd":"fillet","radius":...}` が同じ形になった。
+#: `extrude` の `body_id` は対象集合ではなく「どのBodyへ足す/から引くか」なので残す。
 FEATURE_COMMANDS: dict = {
-    "extrude": ("extrude_regions", ("regions", "distance", "mode")),
-    "fillet": ("fillet", ("edges", "radius", "body_id")),
-    "chamfer": ("chamfer", ("edges", "distance", "body_id")),
+    "extrude": ("extrude_regions", ("distance", "mode")),
+    "fillet": ("fillet", ("radius",)),
+    "chamfer": ("chamfer", ("distance",)),
     "pattern_rectangular": (
         "pattern_rectangular",
         ("sketch_id", "entities", "dx", "dy", "nx", "ny"),
@@ -557,20 +571,18 @@ class Session:
         return meta
 
     # ---------------------------------------------------------------- 操作
-    def extrude(
-        self,
-        face_index: int,
-        distance: float,
-        client_op: Optional[int] = None,
-        body_id: Optional[str] = None,
-    ) -> dict:
-        """面を押し出す。`applied` を返す。
+    def extrude(self, distance: float, client_op: Optional[int] = None) -> dict:
+        """**確定選択の面**(ちょうど1枚)を押し出す。`applied` を返す。
 
-        `body_id` を受け取る(STEPが部品ごとに分解されるので、どのBodyの面かを
-        指定できないと27部品のうち1つを選べない)。既定はアクティブボディ。
+        押す面とそのBodyは引数ではなく選択から取る(`selection.require_confirmed`)——
+        どのBodyの面かは参照が持っているので、27部品のうち1つを選ぶのに引数は要らない。
         `applied` は `"changed_bodies": [BodyId, ...]` を持つ(差分送信の対象)。
         """
-        operation = extrude_face(self.document, int(face_index), float(distance), body_id=body_id)
+        face = selection.require_confirmed(self.document, "face", exactly_one=True)[0]
+        face_index = int(face["index"])
+        operation = extrude_face(
+            self.document, face_index, float(distance), body_id=face["body"]
+        )
         self._applied_count += 1
         provenance = operation.provenance or {}
         changed_body_id = operation.args["body_id"]
@@ -802,21 +814,19 @@ class Session:
 
     def extrude_regions(
         self,
-        regions: Any,
         distance: float,
         mode: str = "join",
         body_id: Optional[str] = None,
     ) -> dict:
-        """スケッチ領域の押し出し(`verbs.extrude`)。既存の `extrude`(面)とは別。
+        """**確定選択の領域**を押し出す(`verbs.extrude`)。既存の `extrude`(面)とは別。
 
-        **`regions` は `RegionRef` でも素のdictでもよい**。MCPは
-        `RegionRef` を作ってから渡すが、ブラウザからはJSONのdict(`{"sketch","index"}`)で
-        届く —— 変換をここに1つ置くことで、両方の口が同じメソッドを叩ける
-        (呼ぶ側ごとに verb の引数の形が違うと、片方だけ通る経路が生まれる)。
+        押し出す領域は引数ではなく選択から取る。**`body_id` だけは引数のまま** ——
+        これは「どのBodyへ足す/から引くか」であって対象集合ではない(Bodyは選択集合の
+        項目ではない。MCPの `extrude` も同じ形)。
         """
         refs = [
-            item if isinstance(item, region.RegionRef) else region.RegionRef.from_dict(item)
-            for item in regions
+            region.RegionRef.from_dict(item)
+            for item in selection.require_confirmed(self.document, "region")
         ]
         operation = extrude_regions_verb(
             self.document, refs, float(distance), mode=mode, body_id=body_id
@@ -829,7 +839,13 @@ class Session:
             "changed_bodies": [changed_body_id],
         })
 
-    def fillet(self, edges: Any, radius: Any, body_id: Optional[str] = None) -> dict:
+    def fillet(self, radius: Any) -> dict:
+        """**確定選択の辺**を丸める。`radius` は数値か辺ごとのリスト。
+
+        辺と対象Bodyは `selection.require_edges` が選択順のまま返す。順序が効くのは
+        `edges` と `radius` を位置で対応させるため(並べ替えると半径の割り当てがずれる)。
+        """
+        edges, body_id = selection.require_edges(self.document)
         operation = fillet_verb(self.document, edges, radius, body_id=body_id)
         changed_body_id = operation.args["body_id"]
         return self._after_logged_verb({
@@ -837,7 +853,9 @@ class Session:
             "changed_bodies": [changed_body_id],
         })
 
-    def chamfer(self, edges: Any, distance: Any, body_id: Optional[str] = None) -> dict:
+    def chamfer(self, distance: Any) -> dict:
+        """**確定選択の辺**を面取りする(`fillet` と同じ規律)。"""
+        edges, body_id = selection.require_edges(self.document)
         operation = chamfer_verb(self.document, edges, distance, body_id=body_id)
         changed_body_id = operation.args["body_id"]
         return self._after_logged_verb({
@@ -1246,10 +1264,8 @@ class Server:
             elif command == "extrude_face":
                 applied = self._apply(
                     self.session.extrude,
-                    message["face_index"],
                     message["distance"],
                     message.get("client_op"),
-                    body_id=message.get("body_id"),
                 )
                 await self._push(connection, applied=applied)
             elif command in ("undo", "redo"):

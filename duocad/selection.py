@@ -37,6 +37,14 @@ UI側の要件も「AIの提案は見た目が違い、承認操作がある」�
     modify_selection(...)    -> origin="user"       人が差分編集する経路(触ること自体が承認)
     commit_selection()       -> origin="user"       中身を変えずに承認する経路
 
+## verbの対象集合はここからしか取れない(2026-08-20)
+
+`require_confirmed` / `require_edges` が「選択 → 面・辺・領域」の唯一の入口である。
+MCPもWebSocketも対象集合を引数で受ける口を持たず、`Session` のverbラッパがこの2つを呼ぶ
+——**AIの経路と人の経路が同じ規則を通る**のはここで担保されている。
+以前はWebSocket側だけが添字を引数で受けており、ブラウザがコアの選択を添字へ変換して
+送り返していた(同じ変換がTSとPythonに2つあり、片方だけ緩んでも誰も気づかない形だった)。
+
 **`origin="proposed"` のままでは verb に渡せない**(`confirmed_items` が
 `SelectionNotCommitted`)。これは「AIが自分の提案を人の確認なしに実行できるか」への答えで、
 **禁止ではなく「黙って通さない」**である(§6予防6) — AIは `commit_selection()` を明示的に
@@ -75,6 +83,31 @@ class SelectionNotCommitted(ValueError):
     `ValueError` の派生なので既存の `pytest.raises(ValueError)` はそのまま通る。
     MCPはメッセージ文字列ではなく `isinstance` で `selection_not_committed` を付ける。
     """
+
+
+class SelectionEmpty(ValueError):
+    """verbが食う種別の項目が確定選択に1つも無い(`require_*` が送出する)。
+
+    `kind` に「何が要るか」を持つ。MCPは `isinstance` でこの型を見て
+    `selection_empty` + `required_kind` を付ける(文言では判定しない)。
+    アプリ層(WebSocket)は文言をそのまま画面へ返す。
+    """
+
+    def __init__(self, message: str, kind: str) -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+class SelectionAmbiguous(ValueError):
+    """1つだけ食うverbに複数選ばれている(`require_confirmed(exactly_one=True)`)。
+
+    **黙って先頭を選ばない**ための型。`SelectionEmpty` と別にしてあるのは、
+    人・AIが次に打つ手が違う(選び直す vs 減らす)ため。
+    """
+
+    def __init__(self, message: str, kind: str) -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 #: ShapeRef の kind(§3.5)。領域は RegionRef 側で表す。
@@ -287,6 +320,50 @@ def edge_indices(doc: Document, body_id: Optional[BodyId] = None) -> List[int]:
                 "pass body_id explicitly"
             )
     return [int(item["index"]) for item in edges]
+
+
+# --------------------------------------------------------------------------------------
+# 選択 → verbの対象集合(**AIの経路も人の経路もここを通る**)
+# --------------------------------------------------------------------------------------
+# verbが食う面・辺・領域は、どちらの経路からも**引数では受けない**。MCPは
+# `fillet(radius)`、WebSocketは `{"cmd":"fillet","radius":...}` で、対象はここが
+# コアの確定選択から取る。2026-08-20まではWebSocket側だけが「コアの選択をブラウザで
+# 添字へ変換して送り返す」形で、同じ変換が2言語に2つあった。
+#
+# 例外はコアの語彙(`SelectionEmpty` / `SelectionAmbiguous` / `SelectionNotCommitted`)で
+# 投げる。MCPは型を見てエラーコードを付け、WebSocketは文言を画面へ返す ——
+# **拒否の規則はここ1箇所**で、呼び出し側は名前を付けるだけ。
+def require_confirmed(
+    doc: Document, kind: str, *, exactly_one: bool = False
+) -> List[dict]:
+    """確定選択から種別 `kind` の項目を取る。0件は `SelectionEmpty`。
+
+    `exactly_one` のとき2件以上は `SelectionAmbiguous`(黙って先頭を選ばない ——
+    指示と結果がずれる唯一の経路になる)。提案のままなら `confirmed_items` が
+    `SelectionNotCommitted` を投げる(門はそこ1箇所)。
+    """
+    items = confirmed_items(doc, kind=kind)
+    if not items:
+        raise SelectionEmpty(f"no {kind} in the confirmed selection", kind)
+    if exactly_one and len(items) != 1:
+        raise SelectionAmbiguous(
+            f"exactly one {kind} required, got {len(items)}", kind
+        )
+    return items
+
+
+def require_edges(doc: Document) -> tuple[List[int], BodyId]:
+    """確定選択の辺の添字と対象Bodyを**選択順のまま**返す(`fillet` / `chamfer` 用)。
+
+    順序が効く: verbは `edges` と半径(長さ)を位置で対応させるので、並べ替えると
+    割り当てが黙ってずれる。複数Bodyにまたがる選択は `edge_indices` が ValueError
+    (verbは1つのBodyしか丸められないので、どれのつもりかを黙って決めない)。
+    """
+    edges = edge_indices(doc)
+    if not edges:
+        raise SelectionEmpty("no edge in the confirmed selection", "edge")
+    refs = confirmed_items(doc, kind="edge")
+    return edges, refs[0]["body"]
 
 
 # --------------------------------------------------------------------------------------

@@ -1050,9 +1050,12 @@ def test_a_browser_export_does_not_corrupt_the_stdio_channel(tmp_path: Path):
                         await socket.send(json.dumps({{"cmd": "add_rectangle", "sketch_id": sketch_id,
                             "corner": [0, 0], "width": 10, "height": 10, "client_op": 2}}))
                         await socket.recv()
+                        # **押し出す領域は選択から取る**(コマンドの引数ではない)
+                        await socket.send(json.dumps({{"cmd": "modify_selection",
+                            "add": [{{"sketch": sketch_id, "index": 1}}], "client_op": 3}}))
+                        await socket.recv()
                         await socket.send(json.dumps({{"cmd": "extrude",
-                            "regions": [{{"sketch": sketch_id, "index": 1}}],
-                            "distance": 10, "mode": "join", "client_op": 3}}))
+                            "distance": 10, "mode": "join", "client_op": 4}}))
                         await socket.recv()
                         await socket.send(json.dumps({{"cmd": "export_step", "path": r"{out_step}"}}))
                         await socket.recv()

@@ -9,19 +9,21 @@
    * ## 引数収集は、まず共有選択集合を見る
    *
    * 選択引数の値は**コアの選択集合から導出する**(ここには持たない)。空のときだけ
-   * 「面を1つ選ぶ」と問う。AIが提案した集合を人が承認すれば、そのまま引数になる
+   * 「面を1つ選ぶ」と問う。AIが提案した集合を人が承認すれば、そのまま verb の対象になる
    * —— これがAI→人間の受け渡しの実体である(実装計画書§8b)。
    *
-   * ## AIが割り込んだときだけスナップショットを使う
+   * **選択の中身は送らない**(2026-08-20)。verbが食う面・辺・領域はサーバ側が
+   * コアの確定選択から取るので、`onRun` / `onPreview` へ渡るのは数値・選択肢・パスだけ。
+   * ここで選択を読むのは、何を待っているかを出すことと、確定を許すかを決めることに使う。
    *
-   * 実装計画書§5「競合」: **人がコマンドの引数収集中にAIが選択を書き換えた場合は、
-   * コマンド開始時の選択をスナップショットして使う**。
+   * ## AIが割り込んでいる間は確定させない
    *
-   * ここでの実装は「`origin === "user"` の選択だけを引数に採り、`"proposed"` が
-   * 届いている間は最後に見た確定選択を使い続ける」である。人が自分でクリックして
-   * 直す操作は `modify_selection` を通るので必ず `"user"` になり、**人の編集には
-   * 追従したまま、AIの割り込みからだけ守られる**。凍結してしまうと、面を選び直す
-   * 操作が効かなくなる。
+   * 実装計画書§5「競合」: 人が引数を集めている最中にAIが選択を書き換えることがある。
+   * 対象集合を送っていた頃は「最後に見た確定選択」を凍結して使っていたが、
+   * **対象を決めるのがサーバになった以上、ブラウザが凍結しても意味が無い**
+   * (送っても無視される)。代わりに `needsCommit` で確定を止め、承認するか
+   * クリックで直すことを促す —— 人がクリックすれば `modify_selection` を通って
+   * `origin` は `"user"` に戻るので、そのまま続けられる。
    *
    * ## プレビューは投機的実行
    *
@@ -42,6 +44,7 @@
     itemsForArg,
     overflowNote,
     promptFor,
+    refKey,
     type ArgValues,
     type ChoiceArgSpec,
     type CommandDef,
@@ -128,26 +131,12 @@
    */
   let textValues = $state<Record<string, string>>({})
 
-  /**
-   * 最後に見た**確定済み**の選択(`origin === "user"`)。AIが提案を書き込んでいる間、
-   * 引数はこちらを使う(上のdocstring「競合」)。
-   */
-  let lastUserSelection = $state<SelectionState | null>(null)
-  $effect(() => {
-    if (selection && selection.origin === 'user') lastUserSelection = selection
-  })
-
-  /** 引数に使う選択。提案が載っている間は最後の確定選択。 */
-  const argSelection = $derived(
-    selection === null || selection.origin === 'user' ? selection : lastUserSelection,
-  )
-
   /** 集まった引数(選択は導出・数値は打った文字列から・点はクリックから)。 */
   const values = $derived.by<ArgValues>(() => {
     const collected: ArgValues = {}
     for (const spec of command.args) {
       if (spec.kind === 'selection') {
-        collected[spec.name] = itemsForArg(spec, argSelection)
+        collected[spec.name] = itemsForArg(spec, selection)
       } else if (spec.kind === 'point') {
         const point = points[spec.name]
         if (point) collected[spec.name] = point
@@ -169,7 +158,21 @@
   })
 
   const missing = $derived(firstMissingArg(command, values))
-  const ready = $derived(missing === null)
+
+  /** 選ばれすぎ(`max` 超え)の理由。空でない間は確定させない。 */
+  const overflow = $derived(overflowNote(command, selection))
+
+  /**
+   * AIの提案が載っている間は確定できない。**verbが食うのはコアの確定選択**なので、
+   * 提案のまま送るとサーバが `SelectionNotCommitted` で断る —— 往復して同じことを
+   * 言われるより、承認が要ることをここで出す(選択パネルの「確定」か、クリックで直す)。
+   * 選択を使わないコマンド(ファイル・反復)は関係ないので、選択引数があるときだけ見る。
+   */
+  const needsCommit = $derived(
+    selection?.origin === 'proposed' && command.args.some((spec) => spec.kind === 'selection'),
+  )
+
+  const ready = $derived(missing === null && overflow === '' && !needsCommit)
   const built = $derived(ready ? command.build(values) : null)
 
   /**
@@ -192,9 +195,9 @@
       return 'AIの提案を承認するか、クリックして直してください(下の選択パネル)'
     }
     if (missing !== null) return promptFor(missing, values)
+    if (overflow !== '') return overflow
     if (built && !built.ok) return built.reason
-    const overflow = overflowNote(command, argSelection)
-    return overflow === '' ? 'Enterで確定 / Escで中断' : `${overflow} — Enterで確定 / Escで中断`
+    return 'Enterで確定 / Escで中断'
   })
 
   const numberArgs = $derived(command.args.filter((spec) => spec.kind === 'number') as NumberArgSpec[])
@@ -212,12 +215,23 @@
 
   // ---------------------------------------------------------------- プレビュー
   let previewTimer: ReturnType<typeof setTimeout> | null = null
-  /** 直前に投げたプレビューの引数(同じものを投げ直さないため)。 */
+  /** 直前に投げたプレビューの印(同じものを投げ直さないため)。 */
   let previewedKey: string | null = null
+
+  /**
+   * 選択の中身の印。**引数だけでは再送の判定にならない** —— 対象集合が引数から消えた
+   * (サーバがコアの選択から取る)ので、辺を1本足しても引数は同じままで、
+   * 印に入れないと「選び直したのに古い幽霊が残る」。
+   */
+  const selectionPrint = $derived(
+    command.args.some((spec) => spec.kind === 'selection')
+      ? (selection?.items ?? []).map(refKey).join('|')
+      : '',
+  )
 
   $effect(() => {
     const source = command.preview === 'none' ? null : ghostBuilt
-    const key = source ? JSON.stringify([command.id, source.args]) : null
+    const key = source ? JSON.stringify([command.id, source.args, selectionPrint]) : null
     if (key === previewedKey) return
     if (previewTimer) clearTimeout(previewTimer)
     previewedKey = key

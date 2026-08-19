@@ -55,6 +55,17 @@ def _editable(session: Session):
     return body, first_extrudable_face(body.shape)
 
 
+def _armed(session: Session):
+    """`_editable` に加えて**その面を選んでおく**(人がクリックした直後の状態)。
+
+    `extrude_face` は面を引数で受け取らず確定選択から取るので(2026-08-20)、
+    プレビューも確定も、まず選択が要る。
+    """
+    body, face_index = _editable(session)
+    session.modify_selection([{"body": body.id, "kind": "face", "index": face_index}], [])
+    return body, face_index
+
+
 def _fingerprint(session: Session) -> dict:
     """文書の「変わっていないこと」を1つの値にまとめる(比較を1箇所に集める)。"""
     return {
@@ -79,13 +90,10 @@ def _fingerprint(session: Session) -> dict:
 # --------------------------------------------------------------------------------------
 def test_preview_returns_the_shape_the_verb_would_produce(session: Session) -> None:
     """投機的に実行した結果の形が返る。**確定した本物と同じ体積**であること。"""
-    body, face_index = _editable(session)
+    body, face_index = _armed(session)
     volume_before = query.volume(body.shape)
 
-    result = session.preview(
-        "extrude_face",
-        {"body_id": body.id, "face_index": face_index, "distance": PREVIEW_MM},
-    )
+    result = session.preview("extrude_face", {"distance": PREVIEW_MM})
 
     assert result["verb"] == "extrude_face"
     assert len(result["bodies"]) == 1, "押し出しで形が変わるのは1つのBodyだけ"
@@ -97,33 +105,27 @@ def test_preview_returns_the_shape_the_verb_would_produce(session: Session) -> N
     assert previewed["geometry"]["faces"], "三角形が1つも無いプレビューは描けない"
 
     # 本物を実行すると、プレビューが言っていた体積になる
-    session.extrude(face_index, PREVIEW_MM, body_id=body.id)
+    session.extrude(PREVIEW_MM)
     assert query.volume(body.shape) == pytest.approx(previewed["volume"])
 
 
 def test_preview_leaves_nothing_behind(session: Session) -> None:
     """**中断しても文書が一切変わらない**の実体。プレビューは1行も残さない。"""
-    body, face_index = _editable(session)
+    body, face_index = _armed(session)
     before = _fingerprint(session)
 
-    session.preview(
-        "extrude_face",
-        {"body_id": body.id, "face_index": face_index, "distance": PREVIEW_MM},
-    )
+    session.preview("extrude_face", {"distance": PREVIEW_MM})
 
     assert _fingerprint(session) == before
 
 
 def test_repeated_previews_leave_nothing_behind(session: Session) -> None:
     """数値を打ちながら何度もプレビューしても積み上がらない(実際の使われ方)。"""
-    body, face_index = _editable(session)
+    body, face_index = _armed(session)
     before = _fingerprint(session)
 
     for distance in (1.0, 2.0, 3.0, -1.0, 10.0):
-        session.preview(
-            "extrude_face",
-            {"body_id": body.id, "face_index": face_index, "distance": distance},
-        )
+        session.preview("extrude_face", {"distance": distance})
 
     assert _fingerprint(session) == before
 
@@ -134,47 +136,43 @@ def test_preview_does_not_emit_events(session: Session) -> None:
     ここが漏れると、確定していない形が全接続へ配信され、直後の巻き戻しで消える
     (画面のちらつきだけでなく、MCPが読んだ状態が実在しない中間状態になる)。
     """
-    body, face_index = _editable(session)
+    body, face_index = _armed(session)
     seen: list = []
     session.add_listener(seen.append)
 
-    session.preview(
-        "extrude_face",
-        {"body_id": body.id, "face_index": face_index, "distance": PREVIEW_MM},
-    )
+    session.preview("extrude_face", {"distance": PREVIEW_MM})
     assert seen == [], "プレビューで変更イベントが発火した"
 
     # 購読そのものは生きている(黙って外れていないこと)
-    session.extrude(face_index, PREVIEW_MM, body_id=body.id)
+    session.extrude(PREVIEW_MM)
     assert len(seen) == 1
 
 
 def test_a_failed_preview_leaves_nothing_behind(session: Session) -> None:
     """失敗したプレビューも文書を変えない(半端な状態を残さない)。"""
-    body, face_index = _editable(session)
+    body, face_index = _armed(session)
     before = _fingerprint(session)
 
     with pytest.raises(Exception):
-        session.preview(
-            "extrude_face",
-            {"body_id": body.id, "face_index": face_index, "distance": 0.0},
-        )
+        session.preview("extrude_face", {"distance": 0.0})
 
     assert _fingerprint(session) == before
 
 
 def test_preview_refuses_unknown_verbs_and_arguments(session: Session) -> None:
     """プレビューできるverbは登録制。ソケットから任意のメソッドを呼べる作りにしない。"""
-    body, face_index = _editable(session)
+    body, face_index = _armed(session)
 
     with pytest.raises(ValueError):
         session.preview("set_visible", {"body_id": body.id, "visible": False})
     with pytest.raises(ValueError):
         session.preview("os.system", {})
     with pytest.raises(ValueError):
+        session.preview("extrude_face", {"distance": 1.0, "client_op": 7})
+    # **対象集合はもう引数ではない**(選択から取る)。古い形は黙って無視せず弾く
+    with pytest.raises(ValueError):
         session.preview(
-            "extrude_face",
-            {"body_id": body.id, "face_index": face_index, "distance": 1.0, "client_op": 7},
+            "extrude_face", {"body_id": body.id, "face_index": face_index, "distance": 1.0}
         )
 
     # **登録されているverbを1つずつ書き出す**(増えたことにここで気づけるようにする)。
@@ -185,13 +183,10 @@ def test_preview_refuses_unknown_verbs_and_arguments(session: Session) -> None:
 
 def test_preview_does_not_poison_the_geometry_cache(session: Session) -> None:
     """プレビューの形がキャッシュに残らない(次の `state` が投機的な形を出さない)。"""
-    body, face_index = _editable(session)
+    body, face_index = _armed(session)
     real = session.geometry(body.id)
 
-    session.preview(
-        "extrude_face",
-        {"body_id": body.id, "face_index": face_index, "distance": PREVIEW_MM},
-    )
+    session.preview("extrude_face", {"distance": PREVIEW_MM})
 
     assert session.geometry(body.id) is real, "プレビューがテセレーションのキャッシュを差し替えた"
 
@@ -281,14 +276,14 @@ def test_the_browser_can_approve_and_clear_the_selection(session: Session) -> No
 
 def test_preview_over_the_socket_answers_only_the_asking_client(session: Session) -> None:
     """`preview` は要求した接続にだけ返り、**状態を配信しない**。"""
-    body, face_index = _editable(session)
+    body, face_index = _armed(session)
 
     origin, other = _run(session, [
         {
             "cmd": "preview",
             "verb": "extrude_face",
             "preview_id": 42,
-            "args": {"body_id": body.id, "face_index": face_index, "distance": PREVIEW_MM},
+            "args": {"distance": PREVIEW_MM},
         },
     ])
 
@@ -299,14 +294,14 @@ def test_preview_over_the_socket_answers_only_the_asking_client(session: Session
     assert preview["bodies"][0]["geometry"]["faces"]
     # 他の接続には何も起きていない(接続直後の1枚だけ)
     assert [p.get("type") for p in other.payloads] == ["state"]
-    # 文書も動いていない
+    # 文書も動いていない(選択は押す前から載っている1面のまま)
     assert session._applied_count == 0
-    assert session.get_selection()["count"] == 0
+    assert session.get_selection()["count"] == 1
 
 
 def test_a_broken_preview_is_reported_and_does_not_kill_the_connection(session: Session) -> None:
     """プレビューが失敗したら理由を画面へ返す(サーバは落ちない・文書は変わらない)。"""
-    body, _ = _editable(session)
+    body, _ = _armed(session)
     before = _fingerprint(session)
 
     origin, _other = _run(session, [
@@ -314,7 +309,7 @@ def test_a_broken_preview_is_reported_and_does_not_kill_the_connection(session: 
             "cmd": "preview",
             "verb": "extrude_face",
             "preview_id": 7,
-            "args": {"body_id": body.id, "face_index": 10_000, "distance": PREVIEW_MM},
+            "args": {"distance": 0.0},  # 形が変わらない距離はコアが拒む
         },
     ])
 

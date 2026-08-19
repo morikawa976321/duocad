@@ -914,7 +914,8 @@ Session.body_revision(body_id) -> int      # 形状の差し替え**と可視性
 Session.geometry(body_id) -> dict          # キャッシュ付き。**同じオブジェクトを返す**
 Session.delta(known_revisions) -> {"bodies": [<上と同じ形・版が変わった分だけ>],
                                    "unchanged": [BodyId, ...]}
-Session.extrude(face_index, distance, client_op=None, body_id=None) -> applied
+Session.extrude(distance, client_op=None) -> applied
+                                           # 押す面は**確定選択**から（2026-08-20）
                                            # applied["changed_bodies"] = [BodyId, ...]
 ```
 
@@ -1601,6 +1602,8 @@ docstringに注意を書く」と指示していたが、`BRepCheck` が偽に�
     clear_selection(doc)                     -> Selection   空に（origin="user"）
     confirmed_items(doc, kind=None)          -> [ref]       **proposed なら ValueError**
     edge_indices(doc, body_id=None)          -> [int]       fillet/chamfer へそのまま渡せる形
+    require_confirmed(doc, kind, exactly_one=False) -> [ref]   0件は SelectionEmpty
+    require_edges(doc)                       -> ([int], BodyId) 選択順のまま（fillet/chamfer）
     select_face / select_edge / select_vertex / select_region -> ref
     ref_kind(ref) -> "face"|"edge"|"vertex"|"region"        種別判定の唯一の場所
     same_ref(a, b) -> bool                                  重複除去と remove が共有する判定
@@ -1632,6 +1635,16 @@ docstringに注意を書く」と指示していたが、`BRepCheck` が偽に�
 **既に入っている参照を再度 add しても位置は動かさない**（末尾へ移し替えない）。
 人が同じものをもう一度クリックしただけで一覧の並びが変わると、`fillet` の辺リストと
 半径リストの対応も一緒にずれる。
+
+**`require_confirmed` / `require_edges` が「選択 → verbの対象集合」の唯一の入口**
+（2026-08-20）。MCPもWebSocketも、面・辺・領域を引数で受ける口を持たない ——
+`Session` のverbラッパがこの2つを呼ぶので、AIの経路も人の経路も同じ規則を通る。
+拒否はコアの語彙で投げる: 0件は **`SelectionEmpty`**（`.kind` に要る種別）、
+1つだけ食うverbに複数なら **`SelectionAmbiguous`**、提案のままなら
+**`SelectionNotCommitted`**。3つとも `ValueError` の派生なので、既存の
+`pytest.raises(ValueError)` とWebSocketのエラー返却はそのまま通る。MCPは
+**型を見て**コードを付ける（`selection_empty` / `invalid_argument` /
+`selection_not_committed`。文言では判定しない）。
 
 ## 設計上の決定事項（タスクファイルの【要決定】への回答）
 
@@ -2243,6 +2256,10 @@ QAの指摘を受けて `test_a_verb_targets_the_body_the_selection_names`（fil
 足した。**アクティブでないBodyの辺を選んで丸め、無関係なBodyが変わらないことを見る** ——
 対応前は実測で `changed_bodies` が `['other']` になっていた。
 
+**2026-08-20に、この壊れ方は構造的に作れなくなった**。`Session.fillet(radius)` が
+`selection.require_edges` で添字とBodyを**まとめて**取るので、呼び出し側が片方だけ
+渡し忘れる形が存在しない。上のテストは契約として残す（規則が緩んだら落ちる側）。
+
 **教訓**: 「選択から形を取る」設計では、**参照が運んでいる情報を全部使っているか**を
 verbごとに確かめること。添字だけ使って `body` を落とすのは、型でも例外でも検出されない。
 
@@ -2506,6 +2523,11 @@ sketches[] = {
    **引数が1つでも欠けたら失敗させる**。とくに `mode`（join/cut）を必須にしてある ——
    既定の `"join"` に落ちると**「切り取るつもりで足した」が黙って通り**、しかも形が増えるので
    失敗に見えない。
+   **2026-08-20に対象集合（`edges` / `regions` / 対象の `body_id`）を引数から落とした。**
+   丸める辺も押し出す領域もコアの確定選択から取る（`selection.require_*`）ので、
+   WSへ送るのは数値と `mode` だけ。MCPの `fillet(radius)` と形が一致し、
+   「対象集合の指定方法」が2つから1つになった。
+   固定は `tests/test_ui_command_wiring.py::test_no_websocket_command_takes_a_target_set`。
 2. **`get_edges`** → `{"type":"edges", body_id, revision, edges:[...]}`。**`state` にも `delta` にも
    入れない**（要求した接続にだけ返る。`preview` と同じ扱い）。常時配ると27部品(2835面)の
    初回配信に折れ線が丸ごと乗り、M3.5の差分配信で稼いだぶんを使い切る。`revision` を返すのは

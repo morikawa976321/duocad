@@ -16,7 +16,11 @@
  *
  * **これがAI→人間の受け渡しが成立する仕組み**(実装計画書§8b)。AIが
  * `propose_selection` で辺の集合を提案 → 人が承認して verb を起動すると、
- * その選択がそのまま引数になる。空のときだけ人に問う。
+ * その選択がそのまま verb の対象になる。空のときだけ人に問う。
+ *
+ * **ただし選択の中身をサーバへ送ることはしない**(2026-08-20)。対象集合(面・辺・領域)は
+ * コアが自分の確定選択から取るので、`build` が作るのは数値・選択肢・パスだけである。
+ * ここで選択を読むのは「何を待っているか」を画面に出し、Enterを許すかを決めるためだけ。
  *
  * ここ(`command.ts`)は**Svelteに依存しない純粋な定義と道具**だけを持つ。
  * 状態機械・DOM・通信は `CommandHost.svelte` の側にある。
@@ -249,17 +253,16 @@ export const EXTRUDE_FACE: CommandDef = {
     },
   ],
   build(values) {
+    // **面そのものは送らない。** 押す面とそのBodyはサーバがコアの確定選択から取る
+    // (`duocad/selection.py` の `require_confirmed`)。ここで見るのは、人がまだ
+    // 選んでいないことを画面へ出すためだけ。
     const faces = (values.face ?? []) as SelectionRef[]
-    const face = faces[0] as ShapeRef | undefined
     const distance = values.distance
-    if (!face) return { ok: false, reason: '面が選ばれていない' }
+    if (faces.length === 0) return { ok: false, reason: '面が選ばれていない' }
     if (typeof distance !== 'number' || !Number.isFinite(distance)) {
       return { ok: false, reason: '距離が数値でない' }
     }
-    return {
-      ok: true,
-      args: { body_id: face.body, face_index: face.index, distance },
-    }
+    return { ok: true, args: { distance } }
   },
 }
 
@@ -302,11 +305,12 @@ export function itemsForArg(spec: SelectionArgSpec, selection: SelectionState | 
 }
 
 /**
- * `max` を超えて選ばれている引数があれば注意書きを返す(無ければ空文字)。
+ * `max` を超えて選ばれている引数があれば理由を返す(無ければ空文字)。
  *
- * **黙って先頭だけ使わない**。押し出しは面1つのverbなので、面を2つ選んだまま
- * Enterを押せば片方は無視される —— それを画面に出さないと「押したのに動かない面」が
- * 出て、原因が選択にあることが分からない。
+ * **黙って先頭だけ使わない**し、**送りもしない**。押し出しは面1つのverbで、
+ * コア側(`selection.require_confirmed(exactly_one=True)`)が2枚以上を拒否する ——
+ * ここで先頭を選んで送ると、UIだけが「どれを押すか」を勝手に決めることになる。
+ * `CommandHost` はこれが空でない間 Enter を受け付けない(減らしてから確定する)。
  */
 export function overflowNote(command: CommandDef, selection: SelectionState | null): string {
   for (const spec of command.args) {
@@ -314,7 +318,7 @@ export function overflowNote(command: CommandDef, selection: SelectionState | nu
     const total = (selection?.items ?? []).filter((item) => refKind(item) === spec.shapeKind).length
     if (total > spec.max) {
       const counter = KIND_COUNTERS[spec.shapeKind]
-      return `${spec.label}は${spec.max}${counter}まで(選択${total}${counter}のうち先頭を使う)`
+      return `${spec.label}は${spec.max}${counter}まで(いま${total}${counter}。Ctrl+クリックで減らす)`
     }
   }
   return ''

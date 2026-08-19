@@ -46,11 +46,19 @@ def session() -> Session:
     return Session(None, DEVIATION)
 
 
+def _select(session: Session, refs: list) -> None:
+    """選択を `refs` で置き換える。**verbの対象集合はここで決まる**(引数ではない)。"""
+    session.clear_selection()
+    session.modify_selection(refs, [])
+
+
 def _box(session: Session):
     """スケッチ→長方形→領域押し出しで 20mm の立方体を作る(D の `_box` と同じ手順)。"""
     sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
     session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
-    session.extrude_regions([{"sketch": sketch_id, "index": 1}], SIDE, mode="join")
+    _select(session, [{"sketch": sketch_id, "index": 1}])
+    session.extrude_regions(SIDE, mode="join")
+    session.clear_selection()
     return session.document.bodies[-1], sketch_id
 
 
@@ -123,7 +131,8 @@ def test_opening_replays_a_log_that_contains_set_parameter(
     """
     sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 5.0)
-    session.extrude_regions([{"sketch": sketch_id, "index": 1}], 10.0, mode="join")
+    _select(session, [{"sketch": sketch_id, "index": 1}])
+    session.extrude_regions(10.0, mode="join")
     radius = next(name for name, value in session.document.parameters.items() if value == 5.0)
     session.set_parameter(radius, 7.0)
     volume = query.volume(session.document.bodies[-1].shape)
@@ -252,7 +261,8 @@ def test_stl_export_honours_the_deviation(session: Session, tmp_path: Path) -> N
     """
     sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 10.0)
-    session.extrude_regions([{"sketch": sketch_id, "index": 1}], SIDE, mode="join")
+    _select(session, [{"sketch": sketch_id, "index": 1}])
+    session.extrude_regions(SIDE, mode="join")
     coarse = tmp_path / "coarse.stl"
     fine = tmp_path / "fine.stl"
 
@@ -312,7 +322,8 @@ def test_the_browser_import_gives_editable_bodies_right_away(
     # **編集できる**ことを、実際にverbを通して確かめる(参照のままなら ValueError になる側)。
     copy_id = editable_ids[0]
     faces_before = kernel.face_count(session.document.get_body(copy_id).shape)
-    session.fillet([1], 1.0, body_id=copy_id)
+    _select(session, [{"body": copy_id, "kind": "edge", "index": 1}])
+    session.fillet(1.0)
     assert kernel.face_count(session.document.get_body(copy_id).shape) > faces_before
 
 
@@ -359,7 +370,8 @@ def test_named_values_are_published_and_drive_the_shape(session: Session) -> Non
     """**名前つきの値が配られ、打ち直すと形が追随する**(タスクEの検証1の実体)。"""
     sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 5.0)
-    session.extrude_regions([{"sketch": sketch_id, "index": 1}], 10.0, mode="join")
+    _select(session, [{"sketch": sketch_id, "index": 1}])
+    session.extrude_regions(10.0, mode="join")
     body = session.document.bodies[-1]
     volume_before = query.volume(body.shape)
 
@@ -382,7 +394,8 @@ def test_a_pattern_of_holes_follows_one_named_value(session: Session) -> None:
     """**1箇所直すと反復で作った穴が全部追随する**(タスクEの検証1・M3の存在理由)。"""
     plate_sketch = session.sketch_create(XY_PLANE)["sketch_id"]
     session.add_rectangle(plate_sketch, [0.0, 0.0], 60.0, 20.0)
-    session.extrude_regions([{"sketch": plate_sketch, "index": 1}], 5.0, mode="join")
+    _select(session, [{"sketch": plate_sketch, "index": 1}])
+    session.extrude_regions(5.0, mode="join")
     body = session.document.bodies[-1]
 
     holes = session.sketch_create(XY_PLANE)["sketch_id"]
@@ -393,7 +406,8 @@ def test_a_pattern_of_holes_follows_one_named_value(session: Session) -> None:
         for item in session.state_meta()["sketches"][-1]["regions"]
     ]
     assert len(regions) == 3, "反復した3つの領域ができていない"
-    session.extrude_regions(regions, 5.0, mode="cut")
+    _select(session, regions)
+    session.extrude_regions(5.0, mode="cut")
     volume_small = query.volume(body.shape)
 
     published = session.state_meta()["parameters"]

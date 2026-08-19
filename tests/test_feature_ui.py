@@ -15,8 +15,10 @@ UI(領域押し出し・フィレット・面取り・反復のコマンド)そ�
 
 固定する契約:
 
-- 辺は**1始まりの添字つきの折れ線**で届き、その添字は `fillet(edges=[...])` が食う添字と
-  同じ(ずれると「指した辺と違う辺が丸まる」という、例外も出ない静かな事故になる)
+- 辺は**1始まりの添字つきの折れ線**で届き、その添字は選択の参照(`{"kind":"edge","index":n}`)が
+  持つ添字と同じ(ずれると「指した辺と違う辺が丸まる」という、例外も出ない静かな事故になる)
+- **フィーチャのコマンドは対象集合を引数で受け取らない**(2026-08-20)。丸める辺も押し出す
+  領域もコアの確定選択から取るので、WebSocketへ送るのは数値と `mode` だけである
 - 辺は**要求した接続にだけ**返る(状態配信に混ぜない)。形が変われば `revision` が上がる
 - 領域押し出し・フィレット・面取り・矩形反復・円形反復をWebSocketから踏める
 - **`mode`(join/cut)は必須**。既定値で補わない(切り取るつもりで足すのを黙って通さない)
@@ -51,14 +53,30 @@ def session() -> Session:
     return Session(None, DEVIATION)
 
 
+def _select(session: Session, refs: list) -> None:
+    """選択を `refs` で置き換える(人がクリックで選び直すのと同じ入口)。
+
+    **verbの対象集合はここで決まる** —— コマンドの引数には入らない(2026-08-20)。
+    """
+    session.clear_selection()
+    session.modify_selection(refs, [])
+
+
+def _edges(body, indices) -> list:
+    return [{"body": body.id, "kind": "edge", "index": index} for index in indices]
+
+
 def _box(session: Session):
     """スケッチ→長方形→領域押し出しで 20mm の立方体を1つ作り、そのBodyを返す。
 
     **人が手でやる順序そのもの**(タスクDの検証1「手だけで板を作る」の最小形)。
+    領域を選んでから押し出すのも人の順序どおり。
     """
     sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
     session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
-    session.extrude_regions([{"sketch": sketch_id, "index": 1}], SIDE, mode="join")
+    _select(session, [{"sketch": sketch_id, "index": 1}])
+    session.extrude_regions(SIDE, mode="join")
+    session.clear_selection()
     return session.document.bodies[-1], sketch_id
 
 
@@ -188,7 +206,8 @@ def test_a_round_edge_comes_back_curved_and_closed(session: Session) -> None:
     """
     sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 10.0)
-    session.extrude_regions([{"sketch": sketch_id, "index": 1}], SIDE, mode="join")
+    _select(session, [{"sketch": sketch_id, "index": 1}])
+    session.extrude_regions(SIDE, mode="join")
     cylinder = session.document.bodies[-1]
 
     described = kernel.tessellate_edges(cylinder.shape, DEVIATION)
@@ -231,7 +250,8 @@ def test_the_edge_revision_follows_the_shape(session: Session) -> None:
     """形が変われば `revision` が上がる。**古い辺の添字を持ち越させない**ための番号。"""
     body, _ = _box(session)
     before = session.edges(body.id)
-    session.fillet([1], RADIUS_THAT_WORKS, body_id=body.id)
+    _select(session, _edges(body, [1]))
+    session.fillet(RADIUS_THAT_WORKS)
     after = session.edges(body.id)
 
     assert after["revision"] > before["revision"]
@@ -272,12 +292,12 @@ def test_the_browser_can_extrude_a_region_and_cut_a_hole(session: Session) -> No
     volume_before = query.volume(body.shape)
     hole_sketch = session.sketch_create(XY_PLANE)["sketch_id"]
     session.add_circle(hole_sketch, [10.0, 10.0], 4.0)
+    _select(session, [{"sketch": hole_sketch, "index": 1}])
 
     async def script(send):
         return await send(
             {
                 "cmd": "extrude",
-                "regions": [{"sketch": hole_sketch, "index": 1}],
                 "distance": SIDE,
                 "mode": "cut",
                 "client_op": 7,
@@ -298,16 +318,11 @@ def test_extrude_without_a_mode_is_refused(session: Session) -> None:
     _box(session)
     sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
     session.add_circle(sketch_id, [10.0, 10.0], 4.0)
+    _select(session, [{"sketch": sketch_id, "index": 1}])
     before = _fingerprint(session)
 
     async def script(send):
-        return await send(
-            {
-                "cmd": "extrude",
-                "regions": [{"sketch": sketch_id, "index": 1}],
-                "distance": SIDE,
-            }
-        )
+        return await send({"cmd": "extrude", "distance": SIDE})
 
     (answer, _clients) = _browser(session, script)
 
@@ -316,19 +331,18 @@ def test_extrude_without_a_mode_is_refused(session: Session) -> None:
 
 
 def test_the_browser_can_fillet_the_edges_it_picked(session: Session) -> None:
-    """辺を複数選んでフィレットがかけられる(タスクDの検証2)。"""
+    """辺を複数選んでフィレットがかけられる(タスクDの検証2)。
+
+    **選んだ辺はコマンドに載らない** —— 画面のクリックが `modify_selection` で
+    コアの選択集合を編集し、`fillet` はそこから辺を取る(MCPと同じ入口)。
+    """
     body, _ = _box(session)
     faces_before = kernel.face_count(body.shape)
+    _select(session, _edges(body, [1, 2]))
 
     async def script(send):
         return await send(
-            {
-                "cmd": "fillet",
-                "edges": [1, 2],
-                "radius": RADIUS_THAT_WORKS,
-                "body_id": body.id,
-                "client_op": 3,
-            }
+            {"cmd": "fillet", "radius": RADIUS_THAT_WORKS, "client_op": 3}
         )
 
     (answer, _clients) = _browser(session, script)
@@ -348,20 +362,12 @@ def test_a_fillet_that_fails_leaves_the_document_and_the_selection_untouched(
     ここが消えると24本選び直しになる(タスクDの「失敗の扱い」)。
     """
     body, _ = _box(session)
-    session.modify_selection(
-        [{"body": body.id, "kind": "edge", "index": index} for index in range(1, 13)], []
-    )
+    _select(session, _edges(body, range(1, 13)))
     before = _fingerprint(session)
 
     async def script(send):
         return await send(
-            {
-                "cmd": "fillet",
-                "edges": list(range(1, 13)),
-                "radius": RADIUS_THAT_FAILS,
-                "body_id": body.id,
-                "client_op": 4,
-            }
+            {"cmd": "fillet", "radius": RADIUS_THAT_FAILS, "client_op": 4}
         )
 
     (answer, _clients) = _browser(session, script)
@@ -376,17 +382,10 @@ def test_a_fillet_that_fails_leaves_the_document_and_the_selection_untouched(
 def test_the_browser_can_chamfer(session: Session) -> None:
     body, _ = _box(session)
     faces_before = kernel.face_count(body.shape)
+    _select(session, _edges(body, [1]))
 
     async def script(send):
-        return await send(
-            {
-                "cmd": "chamfer",
-                "edges": [1],
-                "distance": 2.0,
-                "body_id": body.id,
-                "client_op": 5,
-            }
-        )
+        return await send({"cmd": "chamfer", "distance": 2.0, "client_op": 5})
 
     (answer, _clients) = _browser(session, script)
 
@@ -457,10 +456,11 @@ def test_a_full_circle_pattern_of_eight_steps_by_45_degrees(session: Session) ->
 def test_a_feature_command_missing_an_argument_is_refused(session: Session) -> None:
     """引数が欠けたコマンドは**黙って既定値で埋めない**(`SKETCH_COMMANDS` と同じ規律)。"""
     body, _ = _box(session)
+    _select(session, _edges(body, [1]))
     before = _fingerprint(session)
 
     async def script(send):
-        return await send({"cmd": "fillet", "edges": [1], "body_id": body.id})
+        return await send({"cmd": "fillet"})  # 半径が無い
 
     (answer, _clients) = _browser(session, script)
 
@@ -471,17 +471,10 @@ def test_a_feature_command_missing_an_argument_is_refused(session: Session) -> N
 def test_a_feature_verb_can_be_undone_from_the_browser(session: Session) -> None:
     body, _ = _box(session)
     faces_before = kernel.face_count(body.shape)
+    _select(session, _edges(body, [1]))
 
     async def script(send):
-        await send(
-            {
-                "cmd": "fillet",
-                "edges": [1],
-                "radius": RADIUS_THAT_WORKS,
-                "body_id": body.id,
-                "client_op": 1,
-            }
-        )
+        await send({"cmd": "fillet", "radius": RADIUS_THAT_WORKS, "client_op": 1})
         return await send({"cmd": "undo", "client_op": 2})
 
     (answer, _clients) = _browser(session, script)
@@ -498,31 +491,23 @@ def test_the_ui_and_the_ai_get_the_same_shape_from_the_same_verb() -> None:
     設計(§2「コアはUIが無くても完全」)であり、ここが分岐した瞬間に
     「画面では丸まったのにAIから見ると丸まっていない」が起きる。
 
-    AI側は**確定選択の辺**を引数に取る(明示的に添字を渡す口を持たない)ので、
-    選択集合に同じ辺を入れてから呼ぶ —— 人がクリックで選ぶ経路と同じ入口である。
+    **両側とも確定選択の辺を取る**(2026-08-20)。どちらも添字を引数で渡す口を持たず、
+    違いは選択の入れ方だけ —— 人はクリック(`modify_selection`)、AIは述語や参照である。
     """
     from_ui = Session(None, DEVIATION)
     from_ai = Session(None, DEVIATION)
     ui_body, _ = _box(from_ui)
     ai_body, _ = _box(from_ai)
 
+    _select(from_ui, _edges(ui_body, (1, 3)))
+
     async def script(send):
-        return await send(
-            {
-                "cmd": "fillet",
-                "edges": [1, 3],
-                "radius": RADIUS_THAT_WORKS,
-                "body_id": ui_body.id,
-                "client_op": 1,
-            }
-        )
+        return await send({"cmd": "fillet", "radius": RADIUS_THAT_WORKS, "client_op": 1})
 
     _browser(from_ui, script)
 
     tools = DocumentTools(from_ai)
-    from_ai.modify_selection(
-        [{"body": ai_body.id, "kind": "edge", "index": index} for index in (1, 3)], []
-    )
+    _select(from_ai, _edges(ai_body, (1, 3)))
     tools.fillet(RADIUS_THAT_WORKS)
 
     assert kernel.face_count(ui_body.shape) == kernel.face_count(ai_body.shape)
@@ -553,11 +538,10 @@ def test_previewing_a_fillet_shows_the_shape_and_leaves_nothing_behind(
 ) -> None:
     """プレビューは形を返し、**文書に何も残さない**(Escで文書が変わらないことの実体)。"""
     body, _ = _box(session)
+    _select(session, _edges(body, [1, 2]))
     before = _fingerprint(session)
 
-    result = session.preview(
-        "fillet", {"edges": [1, 2], "radius": RADIUS_THAT_WORKS, "body_id": body.id}
-    )
+    result = session.preview("fillet", {"radius": RADIUS_THAT_WORKS})
 
     assert result["verb"] == "fillet"
     assert [item["body_id"] for item in result["bodies"]] == [body.id]
@@ -568,12 +552,11 @@ def test_previewing_a_fillet_shows_the_shape_and_leaves_nothing_behind(
 def test_a_failing_preview_leaves_nothing_behind(session: Session) -> None:
     """**失敗したプレビューも何も残さない**(§7の非単調な失敗は打鍵中に普通に起きる)。"""
     body, _ = _box(session)
+    _select(session, _edges(body, range(1, 13)))
     before = _fingerprint(session)
 
     with pytest.raises(ValueError):
-        session.preview(
-            "fillet", {"edges": list(range(1, 13)), "radius": RADIUS_THAT_FAILS, "body_id": body.id}
-        )
+        session.preview("fillet", {"radius": RADIUS_THAT_FAILS})
 
     assert _fingerprint(session) == before
 
@@ -582,12 +565,10 @@ def test_previewing_a_region_extrude_does_not_add_a_body(session: Session) -> No
     """新しいソリッドを作る押し出し(join・対象なし)でも、プレビューは1つも残さない。"""
     sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
     session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
+    _select(session, [{"sketch": sketch_id, "index": 1}])
     before = _fingerprint(session)
 
-    result = session.preview(
-        "extrude",
-        {"regions": [{"sketch": sketch_id, "index": 1}], "distance": SIDE, "mode": "join"},
-    )
+    result = session.preview("extrude", {"distance": SIDE, "mode": "join"})
 
     assert len(result["bodies"]) == 1
     assert result["bodies"][0]["face_count"] == 6
@@ -597,7 +578,11 @@ def test_previewing_a_region_extrude_does_not_add_a_body(session: Session) -> No
 
 def test_preview_still_refuses_unknown_verbs_and_arguments(session: Session) -> None:
     body, _ = _box(session)
+    _select(session, _edges(body, [1]))
     with pytest.raises(ValueError):
         session.preview("pattern_circular", {})
     with pytest.raises(ValueError):
-        session.preview("fillet", {"edges": [1], "radius": 1.0, "sharpness": 2})
+        session.preview("fillet", {"radius": 1.0, "sharpness": 2})
+    # **対象集合はもう受け取らない** —— 古い形の引数はここで弾かれる(黙って無視しない)
+    with pytest.raises(ValueError):
+        session.preview("fillet", {"edges": [1], "radius": 1.0})

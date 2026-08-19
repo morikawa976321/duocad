@@ -14,11 +14,16 @@
  * 骨格には**選択肢(choice)引数**と**図形(entities)引数**の2種類があり、
  * どちらも `command.ts` に定義がある。
  *
- * ## 引数収集はまず共有選択集合を見る
+ * ## 対象集合はサーバへ送らない(2026-08-20)
  *
- * 領域・辺は共有選択集合から取る。**AIが `propose_selection` で辺の集合を
- * 提案し、人が承認すればそれがそのままフィレットの引数になる** —— これがこの企画の
- * 核心である**交互操作**の、人間側の受け口である。
+ * 領域・辺は**コアの確定選択そのもの**である。ここが送るのは数値と選択肢だけで、
+ * どの辺を丸めるかはサーバ側の `Session` が自分の選択集合から取る(`selection.require_*`)。
+ * 以前はコアが持つ選択をこのファイルで添字へ変換して送り返しており、同じ変換が
+ * TSとPythonに2つあった —— MCPは最初から「引数で受けない」側だったので、2つあった
+ * 「対象集合の指定方法」が1つに減った。
+ *
+ * 選択引数の定義(`kind: 'selection'`)は残る。**送るためではなく、人がまだ選んでいない
+ * ことを画面に出し、辺のピッキングを起動するため**である(`CommandHost` の `onWants`)。
  *
  * **図形(反復の対象)だけは選択集合から取れない**。コアの選択集合に入るのは
  * 面・辺・頂点・領域の4種で、スケッチの図形は入らないため(MCP側も反復だけは
@@ -35,7 +40,7 @@
  * 骨格が保証しており(送らなければ何も起きない)、確定後は undo で戻せる。
  */
 import type { ArgValues, CommandDef, Point2 } from './command'
-import type { SelectionRef, ShapeRef } from '../session'
+import type { SelectionRef } from '../session'
 
 /** 0以下を弾く(寸法として使えない)。**既定値を入れない**のがここの流儀。 */
 function positive(label: string): (value: number) => string | null {
@@ -51,29 +56,13 @@ function count(label: string, least: number): (value: number) => string | null {
 }
 
 /**
- * 選択集合の辺を、verbが食う形(`edges` の添字と1つの `body_id`)へ落とす。
+ * 選択引数が1つでも空なら理由を返す(埋まっていれば null)。
  *
- * **順序は選択の追加順のまま**(コアが順序を保つ契約)。`fillet` は `edges` と
- * `radius` を位置で対応させるので、並べ替えると半径の割り当てが黙ってずれる。
- *
- * **2つ以上のBodyにまたがっていたら断る**。verbは1つのBodyしか受け取らないので、
- * 黙って先頭のBodyだけを使うと「選んだのに丸まらない辺」が出る(overflowNote と同じ判断)。
+ * **値そのものは送らない。** 対象集合(面・辺・領域)はコアが自分の確定選択から取るので、
+ * ここで見るのは「人がまだ選んでいない」を画面へ出すためだけである。
  */
-function edgesOf(values: ArgValues, name: string): { edges: number[]; bodyId: string } | string {
-  const refs = ((values[name] ?? []) as SelectionRef[]).filter(
-    (ref): ref is ShapeRef => !('sketch' in ref),
-  )
-  if (refs.length === 0) return '辺が選ばれていない'
-  const bodies = [...new Set(refs.map((ref) => ref.body))]
-  if (bodies.length > 1) return `辺が2つのボディにまたがっている(${bodies.join(' / ')})`
-  return { edges: refs.map((ref) => ref.index), bodyId: bodies[0] }
-}
-
-/** 選択集合の領域を、verbが食う形(`{sketch, index}` の配列)へ落とす。 */
-function regionsOf(values: ArgValues, name: string): Array<{ sketch: string; index: number }> {
-  return ((values[name] ?? []) as SelectionRef[])
-    .filter((ref): ref is { sketch: string; index: number } => 'sketch' in ref)
-    .map((ref) => ({ sketch: ref.sketch, index: ref.index }))
+function missingSelection(values: ArgValues, name: string, label: string): string | null {
+  return ((values[name] ?? []) as SelectionRef[]).length === 0 ? `${label}が選ばれていない` : null
 }
 
 /**
@@ -117,13 +106,13 @@ export const EXTRUDE_REGIONS: CommandDef = {
     },
   ],
   build(values) {
-    const regions = regionsOf(values, 'regions')
+    const empty = missingSelection(values, 'regions', '領域')
     const distance = values.distance
     const mode = values.mode
-    if (regions.length === 0) return { ok: false, reason: '領域が選ばれていない' }
+    if (empty !== null) return { ok: false, reason: empty }
     if (typeof distance !== 'number') return { ok: false, reason: '距離が数値でない' }
     if (typeof mode !== 'string') return { ok: false, reason: '向きが選ばれていない' }
-    return { ok: true, args: { regions, distance, mode } }
+    return { ok: true, args: { distance, mode } }
   },
 }
 
@@ -155,11 +144,11 @@ export const FILLET: CommandDef = {
     },
   ],
   build(values) {
-    const picked = edgesOf(values, 'edges')
+    const empty = missingSelection(values, 'edges', '辺')
     const radius = values.radius
-    if (typeof picked === 'string') return { ok: false, reason: picked }
+    if (empty !== null) return { ok: false, reason: empty }
     if (typeof radius !== 'number') return { ok: false, reason: '半径が数値でない' }
-    return { ok: true, args: { edges: picked.edges, radius, body_id: picked.bodyId } }
+    return { ok: true, args: { radius } }
   },
 }
 
@@ -182,11 +171,11 @@ export const CHAMFER: CommandDef = {
     },
   ],
   build(values) {
-    const picked = edgesOf(values, 'edges')
+    const empty = missingSelection(values, 'edges', '辺')
     const distance = values.distance
-    if (typeof picked === 'string') return { ok: false, reason: picked }
+    if (empty !== null) return { ok: false, reason: empty }
     if (typeof distance !== 'number') return { ok: false, reason: '長さが数値でない' }
-    return { ok: true, args: { edges: picked.edges, distance, body_id: picked.bodyId } }
+    return { ok: true, args: { distance } }
   },
 }
 

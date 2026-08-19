@@ -886,6 +886,24 @@ class DocumentTools:
                 "hint": "call commit_selection() before applying a verb that consumes the selection",
                 "selection": self._selection_summary(),
             }
+        # 選択由来の拒否は**コアが型で言ってくる**(`duocad/selection.py` の `require_*`)。
+        # MCPは名前を付けて、次の一手を決める材料(`required_kind` / `selection`)を足すだけ。
+        # 「1つだけ要るのに複数」は `invalid_argument` のまま —— AIが打つ次の手は
+        # 「選び直す」ではなく「減らす」で、`selection_empty` とは違う(tests/README「F」節)。
+        if isinstance(error, selection.SelectionEmpty):
+            return {
+                **base,
+                "code": "selection_empty",
+                "required_kind": error.kind,
+                "selection": self._selection_summary(),
+            }
+        if isinstance(error, selection.SelectionAmbiguous):
+            return {
+                **base,
+                "code": "invalid_argument",
+                "required_kind": error.kind,
+                "selection": self._selection_summary(),
+            }
         if isinstance(error, ValueError):
             return {**base, "code": "invalid_argument"}
         return {**base, "code": "internal"}
@@ -903,6 +921,9 @@ class DocumentTools:
     #    `apply(verb, selection, args)` をverbごとに分解した形で、これにより A1 の
     #    「提案のままでは verb に渡せない」が**全verbへ自動的にかかる**。
     #    Bodyだけは `body_id` 引数で受ける —— Bodyは選択集合の項目ではない。
+    #    **2026-08-20からWebSocketのコマンドも同じ形**になり、選択から対象を取る実装は
+    #    `duocad/selection.py` の `require_confirmed` / `require_edges` の1組だけになった
+    #    (MCPが自前で持っていた `_require_*` は消え、`Session` のverbラッパが呼ぶ)。
     # 2. **成功は封筒に入れて返す。** ログに1行積むツールは
     #    `verb` / `seq` / `changed_bodies` / `bodies` / `can_undo` / `can_redo` を必ず持つ。
     #    **`changed_bodies` は `Session.body_revision` の呼び出し前後の差**から導くこと。
@@ -913,8 +934,10 @@ class DocumentTools:
     #    (`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
     #    `invalid_predicate` / `internal`)。**例外のテキストを素で返さない。**
     #    型→コードの対応は `KeyError`/`FileNotFoundError` → `not_found`、
-    #    `SelectionNotCommitted` → `selection_not_committed`、
-    #    `ValueError` → `invalid_argument`、それ以外 → `internal`。**`FileNotFoundError` を
+    #    `SelectionNotCommitted` → `selection_not_committed`、`SelectionEmpty` →
+    #    `selection_empty`、`SelectionAmbiguous` → `invalid_argument`(どちらも
+    #    `required_kind` / `selection` 付き)、その他の `ValueError` → `invalid_argument`、
+    #    それ以外 → `internal`。**`FileNotFoundError` を
     #    忘れない** —— パスの間違いは AI が直せる誤りなので、`internal` に落とすと諦める。
     #
     # ## stdout を汚さない
@@ -1096,47 +1119,6 @@ class DocumentTools:
             "total_length": total_length,
         }
 
-    # ------------------------------------------------------------------ 選択→形(共通)
-    def _require_confirmed(self, kind: str, *, exactly_one: bool = False) -> list:
-        """確定選択から種別 `kind` の項目を取る。0件は `selection_empty`。
-
-        `exactly_one` のとき2件以上は黙って選ばず `invalid_argument`
-        (`required_kind` と `selection` を添える)。
-        **門は `selection.confirmed_items` だけ** — ここでは `origin` を先読みしない。
-        """
-        items = selection.confirmed_items(self.session.document, kind=kind)
-        if not items:
-            raise ToolError(
-                "selection_empty",
-                f"no {kind} in the confirmed selection",
-                required_kind=kind,
-                selection=self._selection_summary(),
-            )
-        if exactly_one and len(items) != 1:
-            raise ToolError(
-                "invalid_argument",
-                f"exactly one {kind} required, got {len(items)}",
-                required_kind=kind,
-                selection=self._selection_summary(),
-            )
-        return items
-
-    def _require_edge_indices(self) -> tuple[list, str]:
-        """確定選択の辺添字と対象 Body を**選択順のまま**返す(`fillet` / `chamfer` 用)。
-
-        複数Bodyにまたがる選択は `selection.edge_indices` が ValueError を出す。
-        """
-        edges = selection.edge_indices(self.session.document)
-        if not edges:
-            raise ToolError(
-                "selection_empty",
-                "no edge in the confirmed selection",
-                required_kind="edge",
-                selection=self._selection_summary(),
-            )
-        refs = selection.confirmed_items(self.session.document, kind="edge")
-        return edges, str(refs[0]["body"])
-
     def _apply_logged(self, before: dict[str, int], applied: dict, **extra: Any) -> dict:
         """`Session` が返した applied から封筒を作り、作ったもののID等を足す。"""
         envelope = self._verb_envelope(applied["verb"], int(applied["seq"]), before)
@@ -1152,7 +1134,9 @@ class DocumentTools:
         if base_plane is not None:
             plane: Any = str(base_plane)
         else:
-            face = self._require_confirmed("face", exactly_one=True)[0]
+            face = selection.require_confirmed(
+                self.session.document, "face", exactly_one=True
+            )[0]
             plane = sketch.face_plane(face["body"], face["index"])
         before = self._revision_snapshot()
         applied = self.session.sketch_create(plane)
@@ -1186,12 +1170,13 @@ class DocumentTools:
 
     # ------------------------------------------------------------------ フィーチャ
     def extrude(self, distance: float, mode: str = "join", body_id: Optional[str] = None) -> dict:
-        """**確定選択の領域**を押し出す。領域は `RegionRef`(`{"sketch","index"}`)。"""
-        refs = self._require_confirmed("region")
-        regions = [region.RegionRef.from_dict(item) for item in refs]
+        """**確定選択の領域**を押し出す(選択から取るのは `Session.extrude_regions`)。
+
+        `body_id` だけは引数のまま —— 「どのBodyへ足す/から引くか」は対象集合ではない。
+        """
         before = self._revision_snapshot()
         applied = self.session.extrude_regions(
-            regions, float(distance), mode=str(mode), body_id=body_id
+            float(distance), mode=str(mode), body_id=body_id
         )
         return self._apply_logged(before, applied)
 
@@ -1199,33 +1184,26 @@ class DocumentTools:
         """**確定選択の面**(ちょうど1枚)を押し出す。対象Bodyは参照が持っている。
 
         2枚以上選ばれていたら黙ってどれかを選ばない —— AIから見て指示と結果がずれる
-        唯一の経路になる。
+        唯一の経路になる(拒否は `selection.require_confirmed` が行う)。
         """
-        face = self._require_confirmed("face", exactly_one=True)[0]
         before = self._revision_snapshot()
-        applied = self.session.extrude(
-            int(face["index"]), float(distance), body_id=face["body"]
-        )
+        applied = self.session.extrude(float(distance))
         return self._apply_logged(before, applied)
 
     def fillet(self, radius) -> dict:
         """**確定選択の辺**を丸める。`radius` は数値か辺ごとのリスト。
 
-        辺の順序は `selection.edge_indices` が返す**選択順**であり、昇順ではない。
-        `fillet` は `edges` と `radius` を位置で対応させるので、並べ替えると
-        半径の割り当てが黙ってずれる(A1の実装で確認済み)。
-        対象 Body は辺の参照が持っている(`extrude_face` と同じ)。
+        辺と対象Bodyの取り出しは `Session.fillet`(`selection.require_edges`)に任せる。
+        WebSocket側も同じラッパを通るので、選択→辺の変換はコアに1つしかない。
         """
-        edges, body_id = self._require_edge_indices()
         before = self._revision_snapshot()
-        applied = self.session.fillet(edges, radius, body_id=body_id)
+        applied = self.session.fillet(radius)
         return self._apply_logged(before, applied)
 
     def chamfer(self, distance) -> dict:
         """**確定選択の辺**を面取りする(`fillet` と同じ規律)。"""
-        edges, body_id = self._require_edge_indices()
         before = self._revision_snapshot()
-        applied = self.session.chamfer(edges, distance, body_id=body_id)
+        applied = self.session.chamfer(distance)
         return self._apply_logged(before, applied)
 
     def pattern_rectangular(

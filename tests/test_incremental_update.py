@@ -111,6 +111,19 @@ def _spy_on_tessellate(monkeypatch) -> list:
     return calls
 
 
+def _extrude_face(session, body, face_index=None, distance=None):
+    """`body` の面を1枚選んでから押し出す(人がクリックしてEnterを押す順序)。
+
+    `Session.extrude` は押す面を引数で受け取らず**確定選択から取る**(2026-08-20)ので、
+    差分送信の検査もまず選択を置く。選択は文書を変えないので、ここで測っている
+    「版が上がったか」「再送されたか」の対象には入らない。
+    """
+    index = first_extrudable_face(body.shape) if face_index is None else face_index
+    session.clear_selection()
+    session.modify_selection([{"body": body.id, "kind": "face", "index": index}], [])
+    return session.extrude(EXTRUDE_MM if distance is None else distance)
+
+
 def _shelf_parts(tmp_path: Path):
     """shelf を読んだSessionと、その17個の編集可能Bodyを返す。
 
@@ -264,9 +277,7 @@ def test_only_the_changed_body_is_resent_after_an_extrusion(tmp_path):
     }
     face_index = first_extrudable_face(target.shape)
 
-    applied = session.extrude(
-        face_index=face_index, distance=EXTRUDE_MM, body_id=target.id
-    )
+    applied = _extrude_face(session, target, face_index)
     delta = session.delta(known)
 
     assert applied["changed_bodies"] == [target.id]
@@ -303,11 +314,7 @@ def test_the_revision_of_an_untouched_body_does_not_move(tmp_path):
     target_before = session.body_revision(target.id)
     other_before = session.body_revision(other.id)
 
-    session.extrude(
-        face_index=first_extrudable_face(target.shape),
-        distance=EXTRUDE_MM,
-        body_id=target.id,
-    )
+    _extrude_face(session, target)
 
     assert session.body_revision(target.id) != target_before
     assert session.body_revision(other.id) == other_before
@@ -428,11 +435,7 @@ def test_undo_resends_the_restored_body(tmp_path):
     """
     session, bodies = _shelf_parts(tmp_path)
     target = bodies[0]
-    session.extrude(
-        face_index=first_extrudable_face(target.shape),
-        distance=EXTRUDE_MM,
-        body_id=target.id,
-    )
+    _extrude_face(session, target)
     after_extrude = {
         body.id: session.body_revision(body.id) for body in session.document.bodies
     }
@@ -463,11 +466,7 @@ def test_unchanged_bodies_reuse_their_tessellation(tmp_path):
     target_geometry_before = session.geometry(target.id)
     other_geometry_before = session.geometry(other.id)
 
-    session.extrude(
-        face_index=first_extrudable_face(target.shape),
-        distance=EXTRUDE_MM,
-        body_id=target.id,
-    )
+    _extrude_face(session, target)
 
     assert session.geometry(other.id) is other_geometry_before, (
         "変更していないBodyを測り直している"
@@ -493,7 +492,7 @@ def test_tessellation_is_not_recomputed_for_unchanged_bodies(tmp_path, monkeypat
 
     calls = _spy_on_tessellate(monkeypatch)
 
-    session.extrude(face_index=face_index, distance=EXTRUDE_MM, body_id=target.id)
+    _extrude_face(session, target, face_index)
     session.delta(known)
 
     assert len(calls) == 1, (
@@ -600,11 +599,7 @@ def test_the_delta_after_an_extrusion_is_much_smaller_than_the_full_state(tmp_pa
         body.id: session.body_revision(body.id) for body in session.document.bodies
     }
 
-    session.extrude(
-        face_index=first_extrudable_face(target.shape),
-        distance=EXTRUDE_MM,
-        body_id=target.id,
-    )
+    _extrude_face(session, target)
 
     full_bytes = len(json.dumps(session.state(), ensure_ascii=False))
     delta_bytes = len(json.dumps(session.delta(known), ensure_ascii=False))
