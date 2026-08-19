@@ -845,59 +845,10 @@
     {/if}
   </header>
 
-  <div class="main">
-    <PartsPanel
-      bodies={partBodies}
-      onToggle={setVisible}
-      onShowAll={showAllParts}
-      onHideAll={hideAllParts}
-      onShowOnly={showOnlyParts}
-    />
-    <!-- canvas はこの div の中で three.js が作る。Svelte はここの中身を触らない -->
-    <div class="viewport" bind:this={container}></div>
-  </div>
-
-  <SelectionPanel
-    {selection}
-    bodies={model?.bodies ?? []}
-    onRemove={(ref) => modifySelection([], [ref])}
-    onClear={() => session.clearSelection(nextOp())}
-    onCommit={() => session.commitSelection(nextOp())}
-  />
-
-  <!-- E: 名前つきの値と操作履歴。**どちらもコアが持つものを描き直すだけ** -->
-  <div class="panels">
-    <ParametersPanel
-      parameters={model?.parameters ?? {}}
-      {sketches}
-      onSetParameter={setParameter}
-      {onNote}
-    />
-    <HistoryPanel
-      log={model?.log ?? []}
-      redoCount={model?.redo_count ?? 0}
-      mine={myOperations}
-    />
-  </div>
-
-  <SketchPanel
-    {sketches}
-    activeSketchId={sketchId}
-    selectedFace={firstFace}
-    selection={selection?.items ?? []}
-    onCreateOnBase={createSketchOnBase}
-    onCreateOnFace={createSketchOnFace}
-    onEnter={enterSketch}
-    onExit={exitSketch}
-    onLookAt={() => sketchId && viewport?.lookAtSketch(sketchId)}
-    onSetParameter={setParameter}
-    onSelectRegion={selectRegion}
-    selectedEntities={selectedEntities}
-    onToggleEntity={toggleEntity}
-  />
-
-  <section class="panel">
-    <!-- モードが変わったらコマンド層を作り直す(集めかけの引数を持ち越さない) -->
+  <!-- コマンドのツールバー(2026-08-19: 下部から上部へ移した。中身・状態機械は
+       CommandHost.svelte 側で不変 —— ここは置き場所を変えただけ)。
+       モードが変わったらコマンド層を作り直す(集めかけの引数を持ち越さない) -->
+  <section class="toolbar">
     {#key sketchId === null}
       <CommandHost
         bind:this={host}
@@ -914,7 +865,64 @@
         onWants={(kinds) => (wantedKinds = kinds)}
       />
     {/key}
+  </section>
 
+  <div class="main">
+    <PartsPanel
+      bodies={partBodies}
+      onToggle={setVisible}
+      onShowAll={showAllParts}
+      onHideAll={hideAllParts}
+      onShowOnly={showOnlyParts}
+    />
+    <!-- canvas はこの div の中で three.js が作る。Svelte はここの中身を触らない -->
+    <div class="viewport" bind:this={container}></div>
+
+    <!-- 選択・パラメータ・スケッチをまとめた右サイドバー(2026-08-19)。
+         .sidebar は overflow-y:auto で自分の中だけスクロールするので、
+         中のパネルが増減しても .viewport のサイズは変わらない(射影が動かない)。 -->
+    <aside class="sidebar">
+      <SelectionPanel
+        {selection}
+        bodies={model?.bodies ?? []}
+        onRemove={(ref) => modifySelection([], [ref])}
+        onClear={() => session.clearSelection(nextOp())}
+        onCommit={() => session.commitSelection(nextOp())}
+      />
+
+      <ParametersPanel
+        parameters={model?.parameters ?? {}}
+        {sketches}
+        onSetParameter={setParameter}
+        {onNote}
+      />
+
+      <SketchPanel
+        {sketches}
+        activeSketchId={sketchId}
+        selectedFace={firstFace}
+        selection={selection?.items ?? []}
+        onCreateOnBase={createSketchOnBase}
+        onCreateOnFace={createSketchOnFace}
+        onEnter={enterSketch}
+        onExit={exitSketch}
+        onLookAt={() => sketchId && viewport?.lookAtSketch(sketchId)}
+        onSetParameter={setParameter}
+        onSelectRegion={selectRegion}
+        selectedEntities={selectedEntities}
+        onToggleEntity={toggleEntity}
+      />
+    </aside>
+  </div>
+
+  <!-- 操作履歴は下部の横長タイムラインとして表示(HistoryPanel.svelte側で横並びに restyle)。 -->
+  <HistoryPanel
+    log={model?.log ?? []}
+    redoCount={model?.redo_count ?? 0}
+    mine={myOperations}
+  />
+
+  <div class="statusbar">
     <!-- M1の「面」「直前」の行はここにあったが、選択パネルと履歴パネルが同じことを
          見せるようになったので外した(2026-08-15)。残すのは、どのパネルにも属さない
          **視点と履歴のボタン**だけ。「全体」はスケッチに寄った視点から戻る手で、
@@ -931,26 +939,12 @@
         <span class="value">{messages.join(' / ')}</span>
       </div>
     {/if}
-  </section>
+  </div>
 </div>
 
 <style>
   .tag.preview {
     background: #7ee081;
     color: #0b1a0d;
-  }
-
-  /* パラメータと履歴は横に並べる(縦に積むとビューポートが潰れる)。
-     高さは各パネルが固定しているので、ここは幅を分けるだけ。 */
-  .panels {
-    display: flex;
-    gap: 0;
-    /* 縮ませない(SketchPanelと同じ理由。潰れると中の入力欄が枠の外へ出る) */
-    flex: 0 0 auto;
-  }
-
-  .panels > :global(section) {
-    flex: 1 1 0;
-    min-width: 0;
   }
 </style>

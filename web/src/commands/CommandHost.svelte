@@ -479,6 +479,8 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
+    row-gap: 6px;
   }
 
   .label {
@@ -497,8 +499,12 @@
     color: var(--dim);
   }
 
+  /* ツールバーの「押しているコマンド」を1つだけ強調する(方向性Bのリボンで
+     アクティブなツールを塗り分けていたのに合わせた)。 */
   button.on {
     border-color: var(--accent, #ffb454);
+    color: var(--accent, #ffb454);
+    background: var(--accent-soft, rgba(255, 180, 84, 0.16));
   }
 
   /* パスは数値より長い(見た目の作り込みではなく、打った先が読めないと確認できない) */

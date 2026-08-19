@@ -115,15 +115,20 @@
 </section>
 
 <style>
-  /* 高さ固定(SketchPanel・ParametersPanelと同じ理由: ビューポートを伸縮させない) */
+  /* 2026-08-19: 縦積みの一覧から、下部の横長タイムラインへ restyle。
+     高さは固定のまま(SketchPanel・ParametersPanelと同じ理由: ビューポートを
+     伸縮させない) —— 伸びる方向を縦(overflow-y)から横(overflow-x)に変えただけで、
+     `flex: 0 0 auto` で自分の高さを保つ規律は変えていない。 */
   .history-panel {
     display: flex;
-    flex-direction: column;
-    gap: 4px;
-    height: 96px;
+    align-items: center;
+    gap: 10px;
+    height: 40px;
+    flex: 0 0 auto;
     overflow: hidden;
-    padding: 6px 8px;
-    border-top: 1px solid #2a3038;
+    padding: 0 14px;
+    background: var(--panel);
+    border-top: 1px solid var(--line);
   }
 
   .row {
@@ -131,21 +136,30 @@
     align-items: center;
     gap: 8px;
     flex: 0 0 auto;
+    white-space: nowrap;
   }
 
   .list {
     flex: 1 1 auto;
-    min-height: 0;
-    overflow: auto;
+    min-width: 0;
+    height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
     display: flex;
-    flex-direction: column; /* 並べ替えは配列側でやる(上の `newestFirst` のdocstring) */
-    gap: 2px;
+    flex-direction: row; /* 新しい順は配列側でやる(上の `newestFirst` のdocstring) */
+    align-items: center;
+    gap: 6px;
   }
 
   .item {
     display: flex;
     align-items: center;
     gap: 6px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 3px 9px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
   }
 
   .seq {
@@ -161,8 +175,8 @@
 
   .mine {
     font-size: 11px;
-    border: 1px solid #ffb454;
-    color: #ffb454;
+    border: 1px solid var(--accent);
+    color: var(--accent);
     border-radius: 3px;
     padding: 0 4px;
   }

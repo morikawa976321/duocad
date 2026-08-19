@@ -117,6 +117,11 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    /* 300px幅のサイドバーでは長い要約文+バッジ+ボタン2つが1行に収まらないことがある。
+       折り返す(SketchPanelで実機検査が踏んだのと同じ理由)。132pxの余裕があるので
+       高さは変えなくてよい。 */
+    flex-wrap: wrap;
+    row-gap: 4px;
   }
 
   .spacer {

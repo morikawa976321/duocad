@@ -108,15 +108,19 @@
 
 <style>
   /* 高さは固定する(内容で伸ばさない)。伸びるとビューポートがリサイズされ、
-     射影が変わって直前に測ったクリック位置が別の場所に当たる。SketchPanelと同じ理由。 */
+     射影が変わって直前に測ったクリック位置が別の場所に当たる。SketchPanelと同じ理由。
+     **`flex: 0 0 auto` を明示する**(2026-08-19)。右サイドバーの直接の子になった今、
+     これが無いと flex-shrink の既定値(1)でサイドバーの残り空間が足りないときに
+     縮められる —— SketchPanelが既に踏んだのと同じ壊れ方(このファイルのdocstring参照)。 */
   .parameters-panel {
     display: flex;
     flex-direction: column;
     gap: 4px;
     height: 96px;
+    flex: 0 0 auto;
     overflow: hidden;
     padding: 6px 8px;
-    border-top: 1px solid #2a3038;
+    border-top: 1px solid var(--line);
   }
 
   .row {
@@ -124,6 +128,8 @@
     align-items: center;
     gap: 8px;
     flex: 0 0 auto;
+    flex-wrap: wrap;
+    row-gap: 4px;
   }
 
   .list {

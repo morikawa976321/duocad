@@ -2,16 +2,24 @@
  * バニラCSS＋CSS変数(実装計画書 §4)。Tailwindは使わない —
  * 既定値に寄せると「よくあるWebアプリの見た目」になり、CADツールがWebアプリに見えてはいけない。
  *
- * M1では見た目に手をつけない(タスクの「やらないこと」)。ここにあるのは
- * 「読める・押せる・canvasが全面に出る」ための最小限だけ。
+ * 2026-08-19: 配色はM1のダーク×琥珀を踏襲しつつ、階層と余白だけ整理(方向性A)。
+ * 配置は常設パネルを右サイドバーへ、コマンドを上部ツールバーへ、履歴を下部の
+ * 横長タイムラインへ移した(方向性Bの構成)。**ビューポートのサイズを変えるのは
+ * .main の中の.viewportだけ**という不変条件は変えていない — 右サイドバーは内部で
+ * スクロールし、各パネルは flex: 0 0 auto で自分の高さを固定したまま。
  */
 :root {
-  --bg: #101317;
-  --panel: #191d23;
-  --line: #2a3138;
-  --text: #d8dee6;
-  --dim: #7c8794;
-  --accent: #ffb454;
+  --bg: oklch(17% 0.006 250);
+  --panel: oklch(20.5% 0.006 250);
+  --line: oklch(30% 0.008 250);
+  --line-soft: oklch(26% 0.007 250);
+  --text: oklch(89% 0.008 95);
+  --dim: oklch(62% 0.012 95);
+  --dim-2: oklch(46% 0.01 95);
+  --accent: oklch(76% 0.15 68);
+  --accent-soft: oklch(76% 0.15 68 / 0.16);
+  --accent-line: oklch(76% 0.15 68 / 0.4);
+  --input-bg: oklch(14% 0.006 250);
   --font: "Consolas", "Cascadia Mono", "Meiryo", monospace;
 }
 
@@ -40,11 +48,20 @@ body {
 
 header {
   display: flex;
-  gap: 16px;
+  gap: 18px;
   align-items: center;
-  padding: 6px 12px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
+  /* 縮ませない(.toolbar/.statusbarと同じ理由。下のコメント参照) */
+  flex: 0 0 auto;
+}
+
+.toolbar {
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  padding: 8px 16px;
+  flex: 0 0 auto;
 }
 
 .tag {
@@ -70,11 +87,31 @@ header {
   position: relative;
 }
 
-.panel {
+.sidebar {
+  /* 2026-08-19: 幅は300pxに戻した。220pxまで削っても実機検査 smoke-features.mjs の
+     「スケッチ平面の点 (80, 0) が画面の中に無い」は直らなかった(frameToContentは
+     アスペクト比を見ずモデルの対角線だけで距離を決めるので、ビューポートを削った分
+     だけ画面に収まる範囲が狭くなる—削り幅を変えても症状は残る)。削っても得が無い以上、
+     Parameters/Sketchの入力欄に無理をさせない300pxへ戻す。この既知の制約は
+     ハンドオーバー側で報告する。 */
+  width: 300px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+}
+
+.statusbar {
   border-top: 1px solid var(--line);
   background: var(--panel);
-  padding: 6px 12px 10px;
-  /* 縮ませない(E・2026-08-14)。縦に並んだパネルが増えると flex は全部を等しく
+  padding: 8px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* 縮ませない(E・2026-08-14の教訓)。縦に並んだ要素が増えると flex は全部を等しく
      押し潰しにかかる —— 押し潰されてよいのはビューポート(.main)だけで、
      コマンドの入力欄が枠の外へ出ると打てなくなる。 */
   flex: 0 0 auto;
@@ -108,14 +145,22 @@ input,
 button {
   font: inherit;
   color: var(--text);
-  background: #0d1014;
+  background: var(--input-bg);
   border: 1px solid var(--line);
-  padding: 3px 8px;
+  padding: 4px 10px;
 }
 
 input {
   width: 7em;
   text-align: right;
+}
+
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+button:not(:disabled):hover {
+  border-color: var(--accent);
 }
 
 input:focus,

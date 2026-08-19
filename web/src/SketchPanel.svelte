@@ -197,15 +197,20 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    height: 96px;
+    /* 2026-08-19: 96px→168pxへ。右サイドバー(幅300px)に入って横幅が減ったぶん、
+       ヘッダー行(編集中タグ+ボタン)が折り返す(下の`.row`参照)。折り返した分の
+       高さをここで確保しないと図形・領域の一覧欄が潰れる(実機検査 smoke.mjs が
+       半径の打ち直しで固まって落ちたのはこれが原因)。 */
+    height: 168px;
     /* **縮ませない**(E・2026-08-14)。`height` だけでは縦に並べたときに flex が
        他のパネルと一緒に押し潰す —— 実際、Eでパネルを2枚足したらここが 96→55px になり、
        図形の入力欄が枠の外へ出てクリックできなくなった(実機検査が落ちて気づいた)。
-       縮んでよいのはビューポート(`.main`)だけである。 */
+       縮んでよいのはビューポート(`.main`)だけである。右サイドバーの直接の子になった今も
+       同じ理由で明示する(サイドバーは overflow-y:auto で自分の中だけスクロールする)。 */
     flex: 0 0 auto;
     overflow: hidden;
     padding: 6px 8px;
-    border-top: 1px solid #2a3038;
+    border-top: 1px solid var(--line);
   }
 
   .row {
@@ -213,11 +218,21 @@
     align-items: center;
     gap: 8px;
     flex: 0 0 auto;
+    /* 2026-08-19: 300px幅だとタグ+ボタン2つが1行に収まらない。折り返さないと
+       タグの文字自体が箱の中で折り返して縦に伸び、高さの見積もりが立たなくなる
+       (実際に踏んだ壊れ方。上の`.sketch-panel`のコメント参照)。単位を1行ずつの
+       折り返しにしておけば、増える高さは行数×行高で読める。 */
+    flex-wrap: wrap;
+    row-gap: 4px;
   }
 
+  /* 2026-08-19: 右サイドバー(幅300px)に入った今、図形の一覧と領域の一覧を
+     横に2列並べると1列が140px弱まで潰れて読めない。縦に積んで、それぞれの列に
+     残り高さを均等に配る(`.list` の `flex:1 1 0` はそのまま)。 */
   .lists {
     display: flex;
-    gap: 12px;
+    flex-direction: column;
+    gap: 6px;
     flex: 1 1 auto;
     min-height: 0;
   }
@@ -262,18 +277,18 @@
   }
 
   .tag.on {
-    background: #ffb454;
-    color: #1a1206;
+    background: var(--accent);
+    color: var(--bg);
     padding: 1px 6px;
     border-radius: 3px;
   }
 
   button.region.on {
-    border-color: #ffb454;
+    border-color: var(--accent);
   }
 
   /* 反復の対象(D)。選択中の領域と同じ橙で揃える(選ばれている、の意味を1色に保つ) */
   .item.picked button.pick {
-    border-color: #ffb454;
+    border-color: var(--accent);
   }
 </style>
