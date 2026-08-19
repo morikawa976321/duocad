@@ -235,6 +235,18 @@ const PICK_EDGE_COLOR = 0xbfd4ea
 /** 辺の当たり判定の太さ[画素]。細すぎると掴めず、太すぎると隣の辺が取れる。 */
 const EDGE_PICK_PIXELS = 6
 const BACKGROUND_COLOR = 0x161a1f
+/**
+ * 基準3平面(XY/XZ/YZ)のグリッド。単位は mm。スケッチの最初の長方形(60×40)が
+ * 収まり、空の文書でも原点の位置が読める大きさ。`root` には入れない
+ * (初回フレーミングがグリッドの箱に引っ張られるのを避ける)。
+ */
+const GRID_EXTENT = 100
+const GRID_STEP = 10
+const GRID_COLOR = 0x3a4450
+/** 軸は色で見分ける(X赤 / Y緑 / Z青)。グリッド本体より少し明るく、選択色とは被らない。 */
+const AXIS_X_COLOR = 0xc45c5c
+const AXIS_Y_COLOR = 0x5cad6e
+const AXIS_Z_COLOR = 0x5a8ec4
 
 /** クリックとドラッグ(視点回転)の境目。これ以上動いたら選択ではなく回転とみなす。 */
 const CLICK_MOVE_LIMIT_PX = 6
@@ -251,6 +263,57 @@ interface BodyMeshes {
   disposables: Array<{ dispose(): void }>
 }
 
+/** 1本の軸に沿った線分を `positions` へ足す(LineSegments の2頂点)。 */
+function pushSegment(
+  positions: number[],
+  a: readonly [number, number, number],
+  b: readonly [number, number, number],
+): void {
+  positions.push(a[0], a[1], a[2], b[0], b[1], b[2])
+}
+
+/**
+ * 基準平面1枚ぶんの格子。軸そのもの(t=0)は RGB の軸線で別描きするのでここでは足さない
+ * (同じ線を重ねると深度でちらつく)。
+ */
+function pushPlaneGrid(
+  positions: number[],
+  uAxis: readonly [number, number, number],
+  vAxis: readonly [number, number, number],
+): void {
+  const steps = Math.round((GRID_EXTENT * 2) / GRID_STEP)
+  for (let i = 0; i <= steps; i += 1) {
+    const t = -GRID_EXTENT + i * GRID_STEP
+    if (t === 0) continue
+    pushSegment(
+      positions,
+      [
+        t * uAxis[0] + -GRID_EXTENT * vAxis[0],
+        t * uAxis[1] + -GRID_EXTENT * vAxis[1],
+        t * uAxis[2] + -GRID_EXTENT * vAxis[2],
+      ],
+      [
+        t * uAxis[0] + GRID_EXTENT * vAxis[0],
+        t * uAxis[1] + GRID_EXTENT * vAxis[1],
+        t * uAxis[2] + GRID_EXTENT * vAxis[2],
+      ],
+    )
+    pushSegment(
+      positions,
+      [
+        -GRID_EXTENT * uAxis[0] + t * vAxis[0],
+        -GRID_EXTENT * uAxis[1] + t * vAxis[1],
+        -GRID_EXTENT * uAxis[2] + t * vAxis[2],
+      ],
+      [
+        GRID_EXTENT * uAxis[0] + t * vAxis[0],
+        GRID_EXTENT * uAxis[1] + t * vAxis[1],
+        GRID_EXTENT * uAxis[2] + t * vAxis[2],
+      ],
+    )
+  }
+}
+
 export function createViewport(container: HTMLElement): Viewport {
   const renderer = new THREE.WebGLRenderer({ antialias: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
@@ -264,7 +327,12 @@ export function createViewport(container: HTMLElement): Viewport {
   scene.background = new THREE.Color(BACKGROUND_COLOR)
 
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000)
-  camera.position.set(1, 1, 1)
+  // 空の文書でもグリッド全体が見える位置。部品が届いたら `frameToContent` が上書きする。
+  {
+    const diagonal = Math.hypot(GRID_EXTENT * 2, GRID_EXTENT * 2, GRID_EXTENT * 2)
+    const distance = diagonal * 1.2
+    camera.position.set(distance, distance * 0.6, distance)
+  }
   scene.add(camera)
   // 光をカメラに付ける(視点を回しても面が真っ黒にならない。見た目の作り込みではなく可視性)
   const headlight = new THREE.DirectionalLight(0xffffff, 1.6)
@@ -278,6 +346,44 @@ export function createViewport(container: HTMLElement): Viewport {
 
   const root = new THREE.Group()
   scene.add(root)
+
+  // ------------------------------------------------------------------ 基準3平面のグリッド
+  //
+  // **常時出す**。スケッチ平面そのもの(無限に広がる面)は描かないが、原点の XY/XZ/YZ に
+  // 有限の格子を置くのは「今どこを見ているか」の基準になる。`root` には入れない ——
+  // 入れると初回の `frameToContent` がグリッドの箱に引っ張られ、小さな部品が画面の端に
+  // 寄る。ピック対象にもしない(線なので面のクリックを奪わない)。
+  const gridRoot = new THREE.Group()
+  gridRoot.renderOrder = -1
+  scene.add(gridRoot)
+  const gridDisposables: Array<{ dispose(): void }> = []
+  {
+    const gridPositions: number[] = []
+    pushPlaneGrid(gridPositions, [1, 0, 0], [0, 1, 0]) // XY (z=0)
+    pushPlaneGrid(gridPositions, [1, 0, 0], [0, 0, 1]) // XZ (y=0)
+    pushPlaneGrid(gridPositions, [0, 1, 0], [0, 0, 1]) // YZ (x=0)
+    const gridGeometry = new THREE.BufferGeometry()
+    gridGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(gridPositions), 3))
+    const gridMaterial = new THREE.LineBasicMaterial({ color: GRID_COLOR })
+    const gridLines = new THREE.LineSegments(gridGeometry, gridMaterial)
+    gridRoot.add(gridLines)
+    gridDisposables.push(gridGeometry, gridMaterial)
+
+    const axes: Array<{ color: number; a: [number, number, number]; b: [number, number, number] }> = [
+      { color: AXIS_X_COLOR, a: [-GRID_EXTENT, 0, 0], b: [GRID_EXTENT, 0, 0] },
+      { color: AXIS_Y_COLOR, a: [0, -GRID_EXTENT, 0], b: [0, GRID_EXTENT, 0] },
+      { color: AXIS_Z_COLOR, a: [0, 0, -GRID_EXTENT], b: [0, 0, GRID_EXTENT] },
+    ]
+    for (const axis of axes) {
+      const geometry = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(...axis.a),
+        new THREE.Vector3(...axis.b),
+      ])
+      const material = new THREE.LineBasicMaterial({ color: axis.color })
+      gridRoot.add(new THREE.Line(geometry, material))
+      gridDisposables.push(geometry, material)
+    }
+  }
 
   const baseMaterial = new THREE.MeshLambertMaterial({
     color: BASE_COLOR,
@@ -1096,6 +1202,8 @@ export function createViewport(container: HTMLElement): Viewport {
       regionMaterial.dispose()
       regionSelectedMaterial.dispose()
       for (const bodyId of [...bodies.keys()]) clearBody(bodyId)
+      for (const item of gridDisposables) item.dispose()
+      gridRoot.clear()
       controls.dispose()
       baseMaterial.dispose()
       highlightMaterial.dispose()
