@@ -77,9 +77,8 @@ import json
 import os
 import sys
 import webbrowser
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator, Optional
+from typing import Any, Callable, Optional
 
 from websockets.asyncio.server import serve
 
@@ -137,10 +136,27 @@ class DocumentTools:
 
     def __init__(self, session: Session) -> None:
         self.session = session
+        #: ツールの顔ぶれは起動中変わらない(`listChanged` を宣言していない)ので**1度だけ組む**。
+        #: `tools/call` は呼び出しのたびにこの表を引くため、都度組み直すと29個のdictを毎回作る。
+        self._descriptors = self._build_descriptors()
+        #: 名前 → 定義。`tools/call` の線形探索を避けるための索引。
+        self._descriptor_by_name = {d["name"]: d for d in self._descriptors}
 
     # ------------------------------------------------------------------ 記述
     def descriptors(self) -> list[dict]:
         """`tools/list` が返すツール定義(名前・説明・入力スキーマ)。
+
+        中身は `__init__` で1度だけ組み、以降は**同じリストを返す**。
+        返ったリスト・辞書を書き換えないこと(全呼び出しで共有している)。
+        """
+        return self._descriptors
+
+    def descriptor(self, name: str) -> Optional[dict]:
+        """名前でツール定義を1つ引く(未知なら None)。"""
+        return self._descriptor_by_name.get(name)
+
+    def _build_descriptors(self) -> list[dict]:
+        """ツール定義の実体(`__init__` から1度だけ呼ぶ)。
 
         説明文はAIがツールを選ぶ唯一の手がかりなので、**何ができるかではなく
         「いつ使うか」**を書く。
@@ -910,7 +926,8 @@ class DocumentTools:
     # **OCCTのSTEP書き出しはC++側から標準出力へ統計を吐く**("Statistics on Transfer (Write)")。
     # stdoutはJSON-RPC専用(モジュールdocstring)なので、これが混ざると接続が壊れる。
     # Python層の `contextlib.redirect_stdout` では止まらない(C++が実fdへ直接書く)ため、
-    # **ツール実行の間だけ fd 1 を fd 2 へ振り替える**こと(`os.dup2`)。
+    # **起動時に fd 1 を fd 2 へ振り替える**こと(`_claim_stdout`・`os.dup2`)。ツール実行の
+    # 間だけ囲む形はF1のもので、人がブラウザから書き出す経路を取り逃す(G・2026-08-14)。
     # 検査は `tests/test_mcp_verbs.py::test_exporting_does_not_corrupt_the_stdio_channel`
     # (**実プロセスを起こさないと原理的に検出できない**)。
     #
@@ -1477,16 +1494,16 @@ class McpServer:
         if not isinstance(arguments, dict):
             raise _RpcError(INVALID_PARAMS, "'arguments' must be a JSON object")
 
-        descriptor = next((d for d in self.tools.descriptors() if d["name"] == name), None)
+        descriptor = self.tools.descriptor(name)
         if descriptor is None:
             # 「そんなツールは無い」はプロトコル側の誤り(仕様の例も -32602)。
             raise _RpcError(INVALID_PARAMS, f"unknown tool: {name!r}")
         _check_arguments(descriptor["inputSchema"], arguments)
 
         try:
-            # OCCTのSTEP書き出しはC++が fd 1 へ直接書くので、実行中だけ stderr へ振る。
-            with _stdout_fd_to_stderr():
-                payload = self.tools.call(name, arguments)
+            # stdout は起動時に `_claim_stdout` が fd ごと stderr へ退避済みなので、
+            # ここで囲み直さない(囲んでも stderr を stderr に振り替えるだけになる)。
+            payload = self.tools.call(name, arguments)
         except Exception as error:
             # **ツールの実行時エラーはプロトコルエラーにしない**(仕様)。決定3の封筒へ畳む。
             # 例外テキストを素で返すと `json.loads` できず、AIが機械可読に直せない。
@@ -1584,7 +1601,7 @@ def _exception_message(error: Exception) -> str:
 def _claim_stdout() -> Any:
     """JSON-RPC専用の書き口を確保し、**プロセスの fd 1 を fd 2 へ振り替える**(G・2026-08-14)。
 
-    ツール実行だけを `_stdout_fd_to_stderr` で囲むのでは足りない —— このプロセスは
+    ツール実行の間だけ囲む形(F1)では足りない —— このプロセスは
     **MCPとWebSocketの両方**を持っており(`_run`)、**人がブラウザからSTEPを書き出した
     ときにも**OCCTのC++が実fdへ統計を吐く。その経路はツール実行ではないので囲みの外に
     あり、JSON-RPCの行の途中に `****** Statistics on Transfer (Write) ******` が
@@ -1598,24 +1615,6 @@ def _claim_stdout() -> Any:
     saved = os.dup(1)
     os.dup2(2, 1)
     return os.fdopen(saved, "wb", buffering=0)
-
-
-@contextmanager
-def _stdout_fd_to_stderr() -> Iterator[None]:
-    """ツール実行中だけ fd 1 を fd 2 へ振り替える。
-
-    OCCTのSTEP書き出しはC++が標準出力の実fdへ統計を吐く。`redirect_stdout` では
-    止まらないので、JSON-RPC専用の stdout を守るには `os.dup2` が要る。
-    """
-    sys.stdout.flush()
-    saved = os.dup(1)
-    try:
-        os.dup2(2, 1)
-        yield
-    finally:
-        sys.stdout.flush()
-        os.dup2(saved, 1)
-        os.close(saved)
 
 
 # --------------------------------------------------------------------------------------
