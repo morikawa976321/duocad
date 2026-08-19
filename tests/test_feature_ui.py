@@ -1,8 +1,8 @@
 """D契約(サーバ側): ブラウザから**手でフィーチャをかける**ための口と、辺の配信。
 
-タスクDの本体はUI(領域押し出し・フィレット・面取り・反復のコマンド)であり、**UIは
-`pytest` では完了判定できない**(実機確認は `web/scripts/smoke.mjs`)。しかしDがコアと
-サーバに足した2つ——
+UI(領域押し出し・フィレット・面取り・反復のコマンド)そのものは**`pytest` では
+完了判定できない**(実機確認は `web/scripts/smoke.mjs`)。このファイルが固定するのは
+コアとサーバ側の2つ——
 
 1. **辺を折れ線で配る**(`kernel.tessellate_edges` + `Session.edges` + `get_edges`)。
    面がクリックで選べるのは面ごとの三角形を配っているからで、**辺も配らないと人は
@@ -239,7 +239,7 @@ def test_the_edge_revision_follows_the_shape(session: Session) -> None:
 
 
 def test_the_edges_of_a_hidden_body_are_refused(session: Session) -> None:
-    """隠したBodyの辺は配らない(`geometry()` と同じ規律。QA指摘 2026-08-14)。
+    """隠したBodyの辺は配らない(`geometry()` と同じ規律)。
 
     配ると、隠したはずの部品の辺だけが宙に浮いて見え、しかも指せる —— 辺のピッキングは
     「見えているものと指せるものを一致させる」ことで成り立っているので、ここが破れると

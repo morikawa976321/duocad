@@ -1,6 +1,6 @@
 """操作ログ(実装計画書 §3.6、§6予防1・2)。
 
-M0の契約:
+契約:
 - 操作ログが唯一の正であり、文書の形状はここから導出される(§3.1)。
 - Operation は provenance フィールドを持つ(値はNoneでよい。スロットの存在自体が契約。§6予防2)。
 - 保存形式はJSON。SQLiteは使わない(理由: gitで差分が読める / AIが全履歴を読める / 1モデル=1ファイル)。
@@ -9,9 +9,9 @@ M0の契約:
 - undo()/redo()/replay() は verb ごとに document への反映方法を知っている必要がある。
 
 **verb名の if 連鎖をこのモジュールに書かないこと**(tests/README.md の明示的な契約)。
-M2で7 verbになった時点で「汎用のログ」が全verbの意味を知る層に化けるため、ここに置くのは
+verbの数が増えるほど「汎用のログ」が全verbの意味を知る層に化けてしまうため、ここに置くのは
 **レジストリ(verb名 -> (do, undo))だけ**にし、登録は **verbを定義した側**(io_step.py 等)が
-`register_verb()` で行う。M0で登録されるverbは `"import_step"` の1つだけ。
+`register_verb()` で行う。
 
 登録の実行タイミング: verbを定義したモジュールが import されたときに登録される。
 `duocad/__init__.py` が verbモジュールを import することで、`duocad` を使えば必ず
@@ -122,7 +122,7 @@ class OpLog:
 
     @property
     def redo_count(self) -> int:
-        """あと何回やり直せるか(E・2026-08-14。操作履歴パネルが**位置**を出すために要る)。
+        """あと何回やり直せるか(操作履歴パネルが**位置**を出すために要る)。
 
         `can_redo` の真偽だけでは「どこまで戻れるか分かる」を満たせない —— 3回undoした
         画面と1回undoした画面が同じに見える。`entries` が返すのはカーソルまでの写しなので、
@@ -171,7 +171,7 @@ class OpLog:
 
     # ------------------------------------------------------------------ 投機的実行の巻き戻し
     #
-    # `duocad.speculative` だけが使う(B・2026-08-13)。**公開の契約ではない**ので
+    # `duocad.speculative` だけが使う。**公開の契約ではない**ので
     # 名前を `_` で始める。それでもここに置くのは、`_entries` / `_cursor` を
     # 別モジュールから直に触らせないため —— 外から触ると、ログの不変条件
     # (「cursorは常に 0..len(entries)」「undo済みの末尾は次のappendで捨てる」)を
@@ -190,9 +190,9 @@ class OpLog:
         """現在有効なエントリ全部をJSON文字列へシリアライズする。
 
         **前提**: `args` / `selection` / `provenance` はJSON化できる値であること。
-        M0では `provenance` は常に None。M1で `kernel.normalize_provenance()` の戻り
-        (TopoDS_Shape を含むメモリ上の形)をそのまま入れるとここで TypeError になるので、
-        永続化用の射影を挟むこと(kernel.normalize_provenance のdocstring参照)。
+        `kernel.normalize_provenance()` の戻り(TopoDS_Shape を含むメモリ上の形)を
+        そのまま入れるとここで TypeError になるので、永続化用の射影を挟むこと
+        (kernel.normalize_provenance のdocstring参照)。
         黙って落とすと由来が静かに失われるため、変換の失敗は例外のまま上げる。
         """
         payload = {

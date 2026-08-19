@@ -9,10 +9,9 @@
 1. **プロトコル** — `initialize` / `tools/list` / `tools/call` が MCP(JSON-RPC 2.0)として
    正しく喋れること。**依存を増やさず素で実装した**(`duocad/mcp_server.py` のdocstring)
    ので、プロトコルの正しさはここでしか担保されない。
-2. **公開するツールは3つだけ** — `describe_document` / `set_visible` / `describe_shape`。
-   **【2026-08-11 F1で失効】** この上限は退役した。F が §0 の到達表のAI列を埋めるので
-   ツールは28個になる(顔ぶれの契約は `tests/test_mcp_verbs.py` にひとつだけ置く)。
-   ここに残るのは**M4の3つが名前も振る舞いも変わらず生き残っていること**の回帰ガードである。
+2. **M4の3つ(`describe_document` / `set_visible` / `describe_shape`)が名前も振る舞いも
+   変わらず生き残っていること** — ツール全体の顔ぶれの契約は
+   `tests/test_mcp_verbs.py` の `EXPECTED_TOOLS` にひとつだけ置く。
 3. **`set_visible` はコアの verb を経由する** — 操作ログに載り、undoで戻る。
    アプリ層(ブラウザ)を一切通らない。
 4. **上り方向** — MCPが文書を変えると `Session` が変更イベントを発火し、購読している
@@ -43,14 +42,13 @@ from models import SHELF  # noqa: F401
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-#: M4(最小の先取り)で公開した3つ。**2026-08-11のF1で「これで全部」は退役した** ——
-#: F が §0 の到達表のAI列を埋めるので、ツールは28個になる(正は
-#: `tests/test_mcp_verbs.py` の `EXPECTED_TOOLS`)。ここに残すのは
+#: M4の3つ。ツールはこの3つに限られない — 全体の顔ぶれの正は
+#: `tests/test_mcp_verbs.py` の `EXPECTED_TOOLS`。ここに残すのは
 #: **M4の3つが名前も振る舞いも変わらずに生き残っていること**の回帰ガードであり、
 #: 顔ぶれの上限ではない(上限の契約を2ファイルに置くと必ず食い違う)。
 M4_TOOLS = {"describe_document", "set_visible", "describe_shape"}
 
-#: 対応を約束するプロトコル版。**実装からimportしない**(2026-08-11のQA指摘) — importすると
+#: 対応を約束するプロトコル版。**実装からimportしない** — importすると
 #: 実装側から版を削っても順序を壊してもテストが追従して緑になり、契約にならない。
 #: 実クライアントが送ってくる版がここに無ければ、その版のクライアントは繋がらない。
 EXPECTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
@@ -70,7 +68,7 @@ INVALID_REQUEST = -32600
 def session() -> Session:
     """`shelf_attachment_GD.step` を1つ読み込んだセッション(参照1 + 編集用1)。
 
-    **テストごとに作り直す**(2026-08-11のQA指摘)。使い回して `body.visible` を直接
+    **テストごとに作り直す**。使い回して `body.visible` を直接
     書き戻す方式だと、文書の状態と操作ログがずれた土台の上でundo系のテストが走り、
     「偶然緑」になりうる。読み込みは軽いモデルなので作り直しのほうが安い。
     """
@@ -191,7 +189,6 @@ def test_protocol_layer_never_raises(server: McpServer):
 def test_the_m4_tools_survive(server: McpServer):
     """M4の3つが**名前を変えずに**公開され続けていること。
 
-    **2026-08-11のF1で「3つだけ」という上限は退役した**(F が到達表のAI列を埋めるため)。
     顔ぶれの上限を決める契約は `tests/test_mcp_verbs.py` にひとつだけ置く ——
     上限を2ファイルに書くと、片方を更新し忘れた瞬間に F2 が両方緑にできなくなる。
     """
@@ -214,10 +211,8 @@ def test_set_visible_schema_requires_both_arguments(server: McpServer):
 
 
 def test_unknown_tool_is_invalid_params(server: McpServer):
-    """**実在しえない名前**で見る(2026-08-11のF1で差し替え)。
-
-    元は `propose_selection` を例にしていたが、F がそれを本物のツールとして公開するので、
-    「未知のツール」の例としては使えなくなった(そのままだと F2 が緑にできない)。
+    """**実在しえない名前**で見る(いずれ本物のツールとして公開されうる名前を使うと、
+    その時点でこのテストの前提が崩れる)。
     """
     response = request(server, "tools/call", {"name": "no_such_tool_ever", "arguments": {}})
     assert response["error"]["code"] == INVALID_PARAMS
@@ -338,7 +333,7 @@ def test_set_visible_is_undoable(server: McpServer, session: Session):
 
 
 def test_set_visible_refuses_reference_bodies(server: McpServer, session: Session):
-    """参照ボディ(読み込んだSTEPの原本)の可視性は触らせない(2026-08-11のQA指摘)。
+    """参照ボディ(読み込んだSTEPの原本)の可視性は触らせない。
 
     表示に戻すと**同じソリッドが二重に描かれる** — M3.5が「1ソリッドにつき同時に見えるのは
     1つ」として塞いだ状態が、AI経路だけで復活してしまう。`include_references=True` は
@@ -441,7 +436,7 @@ def test_mcp_change_reaches_every_connected_websocket_client(session: Session):
     async def scenario() -> tuple:
         server = Server(session)
         server.bind_loop(asyncio.get_running_loop())
-        # **2本つなぐ**(2026-08-11のQA指摘: 1本だけだと「2本目に届かない」実装でも緑になる)
+        # **2本つなぐ**(1本だけだと「2本目に届かない」実装でも緑になる)
         browsers = [FakeConnection(), FakeConnection()]
         for browser in browsers:
             server.clients.add(browser)
@@ -551,7 +546,7 @@ def test_the_process_starts_and_answers_over_real_stdio():
             sys.executable,
             "-m",
             "duocad.mcp_server",
-            # `--step` / `--no-step` は2026-08-15に廃止(常に空の文書で起動する)
+            # `--step` / `--no-step` は廃止(常に空の文書で起動する)
             # 既定のポート(8765/8766)は実機のサーバが使っている可能性があるので避ける
             "--port",
             "18765",
@@ -564,9 +559,8 @@ def test_the_process_starts_and_answers_over_real_stdio():
         capture_output=True,
         text=True,
         # **両側でUTF-8に揃える**。既定だとWindowsのパイプはcp932で読み書きされ、
-        # 日本語のログを1行stderrへ出しただけで親側が UnicodeDecodeError で落ちる
-        # (実測: このテストを書いた2026-08-11に踏んだ)。MCPの中身がUTF-8なので、
-        # 子プロセスの側も PYTHONIOENCODING で明示する。
+        # 日本語のログを1行stderrへ出しただけで親側が UnicodeDecodeError で落ちる(実測)。
+        # MCPの中身がUTF-8なので、子プロセスの側も PYTHONIOENCODING で明示する。
         encoding="utf-8",
         errors="replace",
         env={**os.environ, "PYTHONIOENCODING": "utf-8"},

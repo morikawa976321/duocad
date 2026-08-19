@@ -1,6 +1,6 @@
 """STEP読み込み・STEP/STL書き出し(実装計画書 §5 入出力、§7 落とし穴、§8 M0検証)。
 
-M3.5の契約:
+契約:
 - import_step(doc, path) -> list[BodyId]
     STEPをソリッドごとに分解し、各ソリッドを kind="reference" のボディとして
     doc.bodies へ追加する。操作ログは1行
@@ -20,7 +20,7 @@ M3.5の契約:
 - 書き出す形状が無い(空の文書) -> ValueError。**ファイルを作らない**
 いずれも doc.bodies / doc.log に変更を残さないこと。
 
-**重要 — 実測済みの危険な落とし穴(2026-08-10・監査で再現確認)**:
+**重要 — 危険な落とし穴**:
 OCPの STEPControl_Reader は ReadFile() が IFSelect_RetDone 以外を返した状態のまま
 TransferRoots() を呼ぶと、Python例外にはならず **プロセスごと落ちる**
 (Windowsで終了コード 0xC0000005 = アクセス違反)。存在しないパス(IFSelect_RetError)でも
@@ -32,7 +32,7 @@ import_step の実装は **必ず ReadFile() の戻り値を先に検査し、�
 
 **deviation の意味**: BRepMesh_IncrementalMesh へ **isRelative=False**(絶対mm)で渡すこと。
 isRelative=True にすると 0.2 / 0.05 / 0.01 のどれでも同じサイズのSTLになり、
-「偏差を小さくすると細かくなる」という契約が成立しない(2026-08-10監査で実測)。
+「偏差を小さくすると細かくなる」という契約が成立しない。
 """
 from __future__ import annotations
 
@@ -99,7 +99,7 @@ def _bodies_to_export(doc: Document, body_ids: list[BodyId] | None):
     `kind="solid"` が1つも無ければ(=まだ編集用コピーを作っていない、参照だけの文書)、
     形状を持つ全Body(=参照)にフォールバックする。
 
-    **なぜ「形状を持つ全Body」を単純な既定にしなかったか(2026-08-11のQAで発見)**:
+    **なぜ「形状を持つ全Body」を単純な既定にしなかったか**:
     `Session.load_step` は各ソリッドについて参照ボディ(隠す)と編集用コピー(可視)の
     両方を文書に持つ。単純に「形状を持つ全Body」を書き出すと、同じソリッドが参照側と
     編集用コピー側の2回、二重に書き出されてしまう。`kind="solid"` を優先することで、

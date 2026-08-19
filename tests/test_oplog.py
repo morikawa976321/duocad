@@ -1,7 +1,7 @@
 """M0契約: Operation / OpLog(実装計画書 §3.6 操作ログ、§6予防1・2)。
 
 操作ログはM0の中核。ここが薄いとM1以降が全部揺れる、という前提で書く。
-provenanceスロットの存在確認はスキーマレベルの検証で日1実装済みなので素で通る。
+provenanceスロットの存在確認はスキーマレベルの検証で実装済みなので素で通る。
 append/undo/redo/to_json/from_json/replay はNotImplementedErrorスタブなので赤になる。
 """
 from __future__ import annotations

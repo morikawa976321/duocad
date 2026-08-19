@@ -1,4 +1,4 @@
-"""M3.5契約: 可視性のverbと、可視性が選択機構の一部であること(項番7〜10・2026-08-11)。
+"""M3.5契約: 可視性のverbと、可視性が選択機構の一部であること(項番7〜10)。
 
 **なぜコアのverbなのか**: 表示・非表示をアプリ層のチェックボックスとして作ると、可視性は
 文書の状態にならず、操作ログに載らず、undoできず、M4のMCPからも触れない。実装計画書§2
@@ -6,13 +6,12 @@
 タスクファイルにも「`set_visible` をコアのverbとして作れば、M4で自動的にMCPから使える
 ようになる」と明記されている。
 
-**なぜ選択機構の話が混ざるのか**: 2026-08-10に本人がPCケース(27部品・2835面)を実機で触った
-ときの所見が「パーツごとの表示・非表示が実装されればすべての面を選択できるようになるはず」
-であり、ピック失敗12回/押し出し7回(失敗率63%)の原因は**手前の部品が奥の面を隠していた**
-ことにあった。つまり可視性は見た目の設定ではなく**何を指せるかの定義**である。
+**なぜ選択機構の話が混ざるのか**: PCケース(27部品・2835面)の実機テストでは、ピック失敗12回/
+押し出し7回(失敗率63%)の原因が**手前の部品が奥の面を隠していた**ことだった。
+つまり可視性は見た目の設定ではなく**何を指せるかの定義**である。
 見えないものは指せない、をコアで保証する(項番10)。
 
-`duocad/selection.py` は M3.5 で新設した層で、`selectable_bodies` / `select_face` を持つ。
+`duocad/selection.py` が `selectable_bodies` / `select_face` を持つ層である。
 ShapeRef の形は実装計画書§3.5 のとおり
 `{"body": BodyId, "kind": "face", "index": int, "provenance": None}`。
 """
@@ -35,7 +34,7 @@ from duocad.verbs import extrude_face, make_editable_copy, set_visible
 from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
 from models import SHELF  # noqa: F401
 
-#: M3.5で新設したモジュール(import境界の走査対象に入っていることを固定する)
+#: M3.5のモジュール(import境界の走査対象に入っていることを固定する)
 M35_MODULES = ("selection.py", "verbs/visibility.py")
 
 #: 押し出し量(mm)。符号は正＝外向き法線方向へ足す。
@@ -296,7 +295,7 @@ def test_redo_of_an_extrusion_refuses_a_hidden_body():
     """redo(再適用)の経路でも不可視Bodyは押し出せない。
 
     可視性の判定を公開API(`extrude_face`)にだけ置くと、redo/replay が呼ぶ
-    `_do_extrude_face` から**不可視のBodyを黙って変形できる**(2026-08-11のQA指摘)。
+    `_do_extrude_face` から**不可視のBodyを黙って変形できる**。
     判定は両者が共有する入口(`_editable_body`)に置くこと。
 
     ここで `set_visible` verb ではなく `Body.visible` へ直接代入しているのは、

@@ -1,18 +1,16 @@
-"""MCPサーバ — AIがコアを直接叩くための口(M4の最小の先取り・2026-08-11)。
+"""MCPサーバ — AIがコアを直接叩くための口。
 
 **目的**: AIが「前面パネルを隠して」と言えるようにする。見えない面は選べない以上、
 **可視性は選択機構の一部**であり(`duocad/selection.py`)、大規模モデルで交互操作を
 成立させる前提になる。
 
-**【2026-08-11 F1で拡張】** M4は下記の3つだけを公開し、選択の提案・修正
-(`propose_selection` 等)を範囲外にしていた。**F(F1+F2)がその線を引き直す** ——
-実装計画書§0の到達表のAI列(19操作)を埋めるため、公開ツールは**29個**になり、
-選択5つと述語の自己記述もここから出る（19操作に対して29ツールなのは、選択・問い合わせが
+実装計画書§0の到達表のAI列(19操作)を埋めるため、公開ツールは**29個**あり、
+選択5つと述語の自己記述もここに含まれる（19操作に対して29ツールなのは、選択・問い合わせが
 操作の外にあるのと、STEP読み込みが `import_step_editable` / `import_step` の
-**2つのverbに1つずつ**対応するため。2026-08-15）。契約は
+**2つのverbに1つずつ**対応するため）。契約は
 `tests/test_mcp_verbs.py` / `tests/test_mcp_selection.py` と `tests/README.md` の「F」節。
 
-M4で公開した3つ(振る舞いの記述は現役):
+次の3つの挙動(振る舞いの記述は現役):
 
     describe_document(include_references=False, include_bbox=False)
         ボディの一覧(id・名前・種別・可視性・面数・体積)とパラメータの一覧を返す。
@@ -45,7 +43,7 @@ M4で公開した3つ(振る舞いの記述は現役):
 の全部を持つ。MCPクライアント(Claude Code 等)がこのプロセスを起動し、人間はそれが配信する
 `http://127.0.0.1:8766/` を開く。接続方法は `MCP.md` が正。
 
-**依存を増やさない(2026-08-11の判断)**: MCPの公式Python SDK(`mcp`)は入れず、
+**依存を増やさない**: MCPの公式Python SDK(`mcp`)は入れず、
 プロトコル(JSON-RPC 2.0 over stdio)を素で実装する。理由は3つ:
 (1) この venv には `pip` すら無く(uv管理)、`mcp` は pydantic/anyio/httpx/starlette/uvicorn を
     連れてくる。ローカル専用ツールの依存としては重すぎる(pyproject は依存を4つに固定している)。
@@ -57,7 +55,7 @@ M4で公開した3つ(振る舞いの記述は現役):
 **stdoutに出してよいのはJSON-RPCの行だけ**(1メッセージ1行・改行区切り)。起動メッセージや
 警告は必ず stderr へ出す — stdoutを1文字でも汚すとMCPクライアントが接続に失敗する。
 
-**既知の割り切り(2026-08-11のQAで指摘・意図的に据え置き)**:
+**既知の割り切り(意図的に据え置き)**:
 
 - `notifications/initialized` の受信を `tools/*` の前提条件に**しない**。仕様上クライアントは
   握手を済ませてから呼ぶが、そこを厳格に弾いても得るものが無く(拒否できるのは行儀の悪い
@@ -65,7 +63,7 @@ M4で公開した3つ(振る舞いの記述は現役):
 - ツールの実行はイベントループの中で同期に走る(重い `describe_*` の間はWebSocketの配信も
   止まる)。これは既存の `Session.extrude` が同じ性質を持つのと揃えたもので、
   実行器スレッドへ逃がすと `Server` 側のスレッド前提(`_dispatching` の印・ループの参照)を
-  作り直すことになる。**M4本体で交互操作を作るときに、両方まとめて再訪する**。
+  作り直すことになる。
 
 **OCPを直接importしない**(境界は kernel.py だけ。tests/test_boundaries.py が検査する)。
 """
@@ -125,9 +123,7 @@ class ToolError(Exception):
 class DocumentTools:
     """`Session`(コア)を叩くツール群。**ここに新しい幾何ロジックを書かない**。
 
-    M4では3つ(`describe_document` / `set_visible` / `describe_shape`)だった。
-    **F(F1+F2)で契約を28個へ広げ、実装済み** —— 実装計画書§0の到達表のAI列を埋めるため。
-    2026-08-15に `import_step_editable` を足して**29個**(下記「ツール名 == verb名」)。
+    ツールは**29個**ある —— 実装計画書§0の到達表のAI列を埋めるため(下記「ツール名 == verb名」)。
 
     どのツールも戻り値は**JSON化できる素の値だけ**(MCPのレスポンスに載るため)。
     失敗は例外のまま上げる — 呼び出し側(`McpServer`)が `isError` の結果へ変換して
@@ -243,7 +239,7 @@ class DocumentTools:
         ] + self._f2_descriptors()
 
     def _f2_descriptors(self) -> list[dict]:
-        """M4の3ツール以外(25個)の説明とスキーマ。"""
+        """describe_document・set_visible・describe_shape 以外(25個)の説明とスキーマ。"""
         empty = {"type": "object", "properties": {}, "additionalProperties": False}
         return [
             {
@@ -765,10 +761,10 @@ class DocumentTools:
             raise ValueError(f"visible must be a boolean, got {type(visible).__name__}")
         before = self._find_body(body_id)
         if before.kind == "reference":
-            # **参照ボディの可視性は触らせない**(2026-08-11のQAで指摘)。参照は読み込んだ
+            # **参照ボディの可視性は触らせない**。参照は読み込んだ
             # STEPの原本で、読み込み(`import_step_editable`)の時点で隠してある。
-            # ここを表示に戻すと**同じソリッドが二重に描かれ**、M3.5が「1ソリッドにつき
-            # 同時に見えるのは1つ」として塞いだ状態がAI経路だけで復活する。
+            # ここを表示に戻すと**同じソリッドが二重に描かれる**——1ソリッドにつき
+            # 同時に見えるのは1つという制約が、AI経路だけで破られてしまう。
             # `include_references=True` は**見せる**ためのもので、触ってよいという意味ではない。
             raise ValueError(
                 f"body {body_id!r} is a reference body: 参照ボディは読み取り専用の原本なので"
@@ -895,7 +891,7 @@ class DocumentTools:
         return {**base, "code": "internal"}
 
     # ==================================================================================
-    # F(F1+F2)で契約を確定し実装した分
+    # ツールの契約(選択・成功封筒・失敗封筒)
     # ==================================================================================
     # 契約の正は `tests/test_mcp_verbs.py` / `tests/test_mcp_selection.py` と
     # `tests/README.md` の「F」節。ここには**実装を読む順で要点だけ**書く。
@@ -921,13 +917,13 @@ class DocumentTools:
     #    `ValueError` → `invalid_argument`、それ以外 → `internal`。**`FileNotFoundError` を
     #    忘れない** —— パスの間違いは AI が直せる誤りなので、`internal` に落とすと諦める。
     #
-    # ## stdout を汚さない(F1で実測した落とし穴)
+    # ## stdout を汚さない
     #
     # **OCCTのSTEP書き出しはC++側から標準出力へ統計を吐く**("Statistics on Transfer (Write)")。
     # stdoutはJSON-RPC専用(モジュールdocstring)なので、これが混ざると接続が壊れる。
     # Python層の `contextlib.redirect_stdout` では止まらない(C++が実fdへ直接書く)ため、
     # **起動時に fd 1 を fd 2 へ振り替える**こと(`_claim_stdout`・`os.dup2`)。ツール実行の
-    # 間だけ囲む形はF1のもので、人がブラウザから書き出す経路を取り逃す(G・2026-08-14)。
+    # 間だけ囲む形では、人がブラウザから書き出す経路を取り逃す。
     # 検査は `tests/test_mcp_verbs.py::test_exporting_does_not_corrupt_the_stdio_channel`
     # (**実プロセスを起こさないと原理的に検出できない**)。
     #
@@ -1291,12 +1287,11 @@ class DocumentTools:
     def import_step_editable(self, path: str) -> dict:
         """STEPを読み、**編集可能なボディまで作る**(verb `import_step_editable`)。
 
-        以前はコアの verb `import_step`(参照ボディだけ)しか出しておらず、AIは読んだ後に
-        `make_editable_copy` をソリッドの数だけ打つ必要があった —— PCケースなら27回。
-        「読んだら使える」が本人の指示なので、こちらを通常の経路にした(2026-08-15)。
+        読み込んだらそのまま編集できることが**通常の経路**である —— そうでないと、AIは
+        読んだ後に `make_editable_copy` をソリッドの数だけ打つ必要が出る(PCケースなら27回)。
 
-        **ツール名は verb 名と同じ綴りにしてある。** 以前は1つの `import_step` ツールが
-        `editable` 引数で2つのverbを打ち分けていたが、そうすると `describe_document` の
+        **ツール名は verb 名と同じ綴りにしてある。** 1つの `import_step` ツールを
+        `editable` 引数で2つのverbに打ち分ける設計にすると、`describe_document` の
         ログに出る `import_step_editable` を呼べるツールが存在しないことになる
         (AIに対応表を推測させる)。契約は `tests/test_mcp_verbs.py::
         test_tool_names_match_the_verb_names_in_the_operation_log` が両方向で固定する。
@@ -1366,7 +1361,7 @@ class DocumentTools:
         """**UIから見た履歴と同じもの**を戻す(AI用の別履歴を作らない)。
 
         取り消せるかの判定は `Session.can_undo` が唯一の出どころ ——
-        `describe_document` の答えと実際に通るかが一致する(M4のQAで塞いだ食い違い)。
+        `describe_document` の答えと実際に通るかが一致する。
         """
         before = self._revision_snapshot()
         applied = self.session.undo()
@@ -1599,14 +1594,14 @@ def _exception_message(error: Exception) -> str:
 
 
 def _claim_stdout() -> Any:
-    """JSON-RPC専用の書き口を確保し、**プロセスの fd 1 を fd 2 へ振り替える**(G・2026-08-14)。
+    """JSON-RPC専用の書き口を確保し、**プロセスの fd 1 を fd 2 へ振り替える**。
 
-    ツール実行の間だけ囲む形(F1)では足りない —— このプロセスは
+    ツール実行の間だけ囲む形では足りない —— このプロセスは
     **MCPとWebSocketの両方**を持っており(`_run`)、**人がブラウザからSTEPを書き出した
     ときにも**OCCTのC++が実fdへ統計を吐く。その経路はツール実行ではないので囲みの外に
     あり、JSON-RPCの行の途中に `****** Statistics on Transfer (Write) ******` が
-    割り込んで接続が壊れる(2026-08-14の受入検証で実際に踏んだ。交互操作は人とAIが
-    同じプロセスを同時に触る形なので、v1では普通に起きる)。
+    割り込んで接続が壊れる(交互操作は人とAIが同じプロセスを同時に触る形なので、
+    v1では普通に起きる)。
 
     確保したdupを返し、fd 1 は stderr を指すようにする。これ以降、**誰がどの経路で
     標準出力へ書いても**それはstderrへ流れ、JSON-RPCは返した書き口だけを通る。
@@ -1699,7 +1694,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    # **常に空の文書で起動する**(`--step` / `--no-step` は2026-08-15に廃止)。
+    # **常に空の文書で起動する**。
     # STEPはツール `import_step_editable`(編集可能なボディまで作る)から読む。
     session = Session(None, args.deviation)
     try:

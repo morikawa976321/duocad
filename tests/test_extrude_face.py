@@ -1,7 +1,7 @@
 """M1契約: `extrude_face` / `make_editable_copy` / `kernel.tessellate`。
 
-このファイルは**M1のAPI契約**(M0の契約は tests/README.md と他のテストが持つ。ここは追加分で、
-既存のテストには一切触っていない)。実物の `shelf_attachment_GD.step`(読み取りのみ)を使い、
+このファイルは**M1のAPI契約**(M0の契約は tests/README.md と他のテストが持つ)。実物の
+`shelf_attachment_GD.step`(読み取りのみ)を使い、
 自己申告ではなく**体積の実測**で通す(実装計画書§8「各マイルストーンに検証手段を付ける。
 自己申告ではなく実測で通す」)。
 
@@ -34,7 +34,7 @@ VOLUME_REL_TOL = 1.0e-9
 def _reference_document() -> Document:
     """参照STEPを読み(分解せず単一形状のまま)、固定ID "reference" の参照Bodyを持つ文書を作る。
 
-    M3.5でimport_stepはソリッドごとに分解するが(shelf_attachment_GD.stepは17ソリッドに
+    import_stepはソリッドごとに分解するため(shelf_attachment_GD.stepは17ソリッドに
     分かれ、1ソリッドあたり最大4面)、このファイルはextrude_face verb自体の振る舞い
     (56面の複合形状に対する複数平面の連続押し出し・曲面の拒否・面の統合)を検証するもの
     なので、分解を経由せず kernel.read_step を直接使って56面のままの参照Bodyを1つ作る。
@@ -150,8 +150,8 @@ def test_extrude_face_does_not_touch_the_reference_body(session):
 def test_extrude_face_logs_args_and_json_serialisable_provenance(session):
     """ログに verb/args が載り、`provenance` が **JSONにできる**射影であること。
 
-    M0のQAが申し送った穴(`kernel.normalize_provenance` の戻りは TopoDS_Shape を含み
-    `to_json()` で落ちる)を、M1で実際に由来を積むこのverbが埋めているかを固定する。
+    `kernel.normalize_provenance` の戻り値が TopoDS_Shape を含み `to_json()` で落ちる
+    問題を、由来を積むこのverbが埋めているかを固定する。
     """
     document, _, solid_id = session
     body = document.active_body()
@@ -264,7 +264,7 @@ def test_after_face_index_allows_chained_extrusion(session):
 def test_extrude_face_result_is_a_valid_solid(session):
     """押し出した結果が `BRepCheck_Analyzer` で妥当であること。
 
-    実測(2026-08-10): この部品の面36・43を+2mmすると、ブーリアンの結果は妥当なのに
+    実測: この部品の面36・43を+2mmすると、ブーリアンの結果は妥当なのに
     `ShapeUpgrade_UnifySameDomain` を通した形状だけ `IsValid()` が偽になる
     (面数・体積は同じなので統合の利得も無い)。統合を無条件に採ると、正常な押し出しが
     **壊れた形状として文書に残る**。`kernel._unify_same_domain` の妥当性検査がその防波堤で、
@@ -314,7 +314,7 @@ def test_extrude_face_adopts_face_merging_when_it_helps():
 def test_extrude_face_rejects_curved_faces(session):
     """曲面(穴の円筒面)は押し出せない。通すと**成功したまま壊れた形状**が残る(実測)。
 
-    実測(2026-08-10): この部品の穴の円筒面(面1)を+1mmすると `IsDone()` は真・体積も変わるが
+    実測: この部品の穴の円筒面(面1)を+1mmすると `IsDone()` は真・体積も変わるが
     `BRepCheck_Analyzer.IsValid()` が偽になる。-1mmでは体積が 91018→38597 と激減する
     「有効だが無意味な」形状になる。曲面の押し出し(オフセット)はM1の範囲外。
     """
@@ -423,7 +423,7 @@ def test_tessellate_is_json_serialisable_and_bounded(session):
 def test_tessellate_finer_deviation_yields_more_triangles(session):
     """偏差を小さくすると三角形が増える(絶対偏差として効いていることの確認)。
 
-    M0で `isRelative=True` だと偏差を変えてもメッシュが変わらない落とし穴を実測しているので、
+    `isRelative=True` だと偏差を変えてもメッシュが変わらない落とし穴があるので、
     同じ間違いをテセレーション側でしていないことを固定する。
     """
     document, _, _ = session

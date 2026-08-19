@@ -1,8 +1,8 @@
 """E契約(サーバ側): ブラウザから**開く/保存/書き出し**を踏む口と、パネルが要る配信。
 
-タスクEの本体はUI(パラメータ編集パネル・操作履歴パネル・ファイル操作)であり、**UIは
-`pytest` では完了判定できない**(実機確認は `web/scripts/smoke-files.mjs`)。しかしEが
-サーバに足した3つ——
+UI(パラメータ編集パネル・操作履歴パネル・ファイル操作)そのものは**`pytest` では
+完了判定できない**(実機確認は `web/scripts/smoke-files.mjs`)。このファイルが固定するのは
+サーバ側の3つ——
 
 1. **ファイル操作の口**(`FILE_COMMANDS` + `open_document`)。保存形式は**操作ログのJSON**で、
    形状はそこから導出される(実装計画書§3.1「これが正」)
@@ -115,7 +115,7 @@ def test_saving_writes_the_operation_log_and_is_not_a_verb(session: Session, tmp
 def test_opening_replays_a_log_that_contains_set_parameter(
     session: Session, tmp_path: Path
 ) -> None:
-    """**打ち直した寸法を含むログが開ける**(2026-08-14に実機で踏んだ)。
+    """**打ち直した寸法を含むログが開ける**。
 
     パラメータの再生は「その操作までを作り直す」ために文書のログを頭から読むので、
     **再生前にログを文書へ束ねていない**と `parameters.rebuild` が拒否する。
@@ -247,8 +247,8 @@ def test_stl_export_honours_the_deviation(session: Session, tmp_path: Path) -> N
     """**偏差を指定できる**(細かくすればファイルは必ず大きくなる。§7の実測と同じ性質)。
 
     **曲面を持つ形で測る**。立方体は平面だけなので、偏差をいくら細かくしても三角形は
-    12枚のままでファイルサイズが1バイトも変わらない(最初この検査を立方体で書いて
-    684B == 684B で落ちた)。STLの近似が効くのは曲面である。
+    12枚のままでファイルサイズが1バイトも変わらない(立方体で書くと 684B == 684B のまま
+    検査にならない)。STLの近似が効くのは曲面である。
     """
     sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 10.0)
@@ -283,11 +283,11 @@ def test_export_without_a_deviation_is_refused(session: Session, tmp_path: Path)
 def test_the_browser_import_gives_editable_bodies_right_away(
     session: Session, tmp_path: Path
 ) -> None:
-    """**画面から読み込んだSTEPは、追加操作なしに編集できる**(2026-08-15)。
+    """**画面から読み込んだSTEPは、追加操作なしに編集できる**。
 
-    タスクEの時点では読み込みは参照ボディ(`kind="reference"`)だけを足し、編集するには
-    `make_editable_copy` を1ボディずつ打つ必要があった —— PCケース27ソリッドなら27回。
-    起動オプション `--step` を廃止する前提として、その非対称を無くしたのがこの契約である。
+    読み込みが参照ボディ(`kind="reference"`)だけを足す経路のままだと、編集するには
+    `make_editable_copy` を1ボディずつ打つ必要がある —— PCケース27ソリッドなら27回。
+    起動オプション `--step` を廃止する前提として、その非対称を無くすのがこの契約である。
     **操作ログは1行**(undo1回でまるごと消える)。
     """
     body, _ = _box(session)

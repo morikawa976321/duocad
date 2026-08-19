@@ -10,12 +10,12 @@
  * 受け取るのは空の `HTMLElement` 1つだけで、canvas の生成・破棄・再描画は全部この中で行う。
  * Svelte はこのコンテナの中身を二度と触らない。
  *
- * **M3.5(2026-08-11)でBodyごとの差分更新に対応した。** M1は「1個の形状を丸ごと差し替える」
- * `load()` だけを持っていたが、STEPがソリッドごとに分かれた(パーツ一覧UI)ことで、
- * 「変わったBodyだけ差し替える」`update()` が要る。**ここが27部品ぶんを毎回全部作り直すと、
- * サーバ側を速くした意味(差分送信)が描画で消える**(モジュールの利用側 `App.svelte` 参照)。
- * 面の当たり判定・強調表示・射影は body_id + face_index の組で指す(1個のBodyの中でしか
- * 一意でなかったM1の `faceIndex` 単独指定から変更)。
+ * **Bodyごとの差分更新に対応している。** 文書はSTEPの読み込みなどでソリッドごとに
+ * 分かれる(パーツ一覧UI)ので、「変わったBodyだけ差し替える」`update()` が要る。
+ * **ここが27部品ぶんを毎回全部作り直すと、サーバ側を速くした意味(差分送信)が描画で
+ * 消える**(モジュールの利用側 `App.svelte` 参照)。面の当たり判定・強調表示・射影は
+ * body_id + face_index の組で指す(1個のBodyの中でしか一意でない `faceIndex` 単独では
+ * 指さない)。
  */
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
@@ -48,7 +48,7 @@ export interface FaceRef {
   faceIndex: number
 }
 
-/** 辺を一意に指す(D・2026-08-14。添字はコアの数え方の1始まり)。 */
+/** 辺を一意に指す(添字はコアの数え方の1始まり)。 */
 export interface EdgeRef {
   bodyId: string
   edgeIndex: number
@@ -60,14 +60,14 @@ export interface BodyGeometryUpdate {
   geometry: GeometryPayload | null
 }
 
-/** クリックが選択集合に対して何をするか。修飾キーから決まる(B・2026-08-13)。 */
+/** クリックが選択集合に対して何をするか。修飾キーから決まる。 */
 export type PickMode = 'replace' | 'add' | 'remove'
 
 export interface PickEvent {
   /** 当たった面(Body+添字)。外したら null。**スケッチモード中は常に null**(下記)。 */
   hit: FaceRef | null
   /**
-   * 当たった辺(D・2026-08-14)。**辺を出しているときだけ** null 以外になる
+   * 当たった辺。**辺を出しているときだけ** null 以外になる
    * (`showEdges`)。辺が当たったときは `hit` を見ない —— 辺は面の上に重なっているので、
    * 両方返すと呼び出し側が毎回優先順位を書くことになる。
    */
@@ -75,7 +75,7 @@ export interface PickEvent {
   /** Shift=追加 / Ctrl(Mac は Meta)=除去 / 修飾なし=置き換え。 */
   mode: PickMode
   /**
-   * スケッチモード中の、クリックした点のスケッチ平面上の座標(C・2026-08-13)。
+   * スケッチモード中の、クリックした点のスケッチ平面上の座標。
    * 平面がカメラの裏なら null。**これが「手で描く」の入力そのもの**。
    */
   point: { sketchId: string; u: number; v: number } | null
@@ -98,8 +98,7 @@ export interface SketchDraw {
 export interface Viewport {
   /**
    * Bodyの形状をまとめて反映する。**初回(まだ何も描いていない状態)だけ、反映後の
-   * シーン全体にカメラを合わせる**。以後の呼び出しは視点を保ったまま差分だけ描き直す
-   * (M1の `load()` の「初回だけフレームする」を複数Body対応に一般化したもの)。
+   * シーン全体にカメラを合わせる**。以後の呼び出しは視点を保ったまま差分だけ描き直す。
    * 変更のないBodyには触れない — 27部品のうち1つだけ変わった押し出しでは、
    * 呼び出し側(App.svelte)はその1件だけを渡せばよい。
    */
@@ -107,29 +106,28 @@ export interface Viewport {
   /**
    * `validBodyIds` に無いBodyの描画を取り除く(文書から消えたBodyのメッシュを掃除する)。
    * `duocad/server.py` の `Session.delta` の契約(「知っているのに `bodies` にも
-   * `unchanged` にも現れないIDは消えた」)に対応する側。**M3.5で実際に呼べるverbからは
+   * `unchanged` にも現れないIDは消えた」)に対応する側。**実際に呼べるverbからは
    * 到達しない**(undoは文書の土台より前へ戻せない)が、呼び出し側(App.svelte)は
    * 契約どおりに毎回呼ぶ — 到達しない経路のためのコードを書かないと、次にBody削除が
-   * 起きるverbが増えたときに同じ「画面から消えない」不具合が再発する
-   * (2026-08-11のQA指摘)。
+   * 起きるverbが増えたときに同じ「画面から消えない」不具合が再発する。
    */
   prune(validBodyIds: string[]): void
   /** 面のクリック(当たり・外れとも)を受け取る。 */
   onPick(listener: (event: PickEvent) => void): void
   /**
-   * スケッチモード中、ポインタがスケッチ平面のどこを指しているか(C)。
+   * スケッチモード中、ポインタがスケッチ平面のどこを指しているか。
    * モード外・平面の裏では null が来る。**確定前の線を見せるためだけ**に使う。
    */
   onPlaneMove(listener: (point: { u: number; v: number } | null) => void): void
   /**
    * 選択中の面を強調する(空配列で解除)。
    *
-   * **B(2026-08-13)で複数選択と出所に対応した**。`origin` が `"proposed"`(AIの提案)なら
+   * **複数選択と出所(origin)に対応している**。`origin` が `"proposed"`(AIの提案)なら
    * 確定した選択と**明確に違う色**で描く —— これが「交互操作が人間側から見える」唯一の
-   * 場所である(実装計画書§8b B)。
+   * 場所である(実装計画書§8b)。
    *
-   * **頂点・領域は3Dでは色分けしない**(領域はスケッチ側で強調する)。**辺は D で
-   * できるようになった** —— `showEdges` でコアの添字つきの折れ線を渡してある間だけ、
+   * **頂点・領域は3Dでは色分けしない**(領域はスケッチ側で強調する)。**辺にも
+   * 対応している** —— `showEdges` でコアの添字つきの折れ線を渡してある間だけ、
    * `highlightEdges` が同じ規律(user=橙 / proposed=水色)で色を変える。
    */
   highlight(refs: FaceRef[], origin: 'user' | 'proposed'): void
@@ -139,7 +137,7 @@ export interface Viewport {
    *
    * 常時出さないのは2つの理由による。(1)27部品ぶんの辺はサーバから取るだけでも重い
    * (`Session.edges` のdocstring)。(2)辺は面の手前に重なるので、常時出すと
-   * 面を狙うクリックが辺に取られ、M1の「面を選んで押し出す」が遅くなる。
+   * 面を狙うクリックが辺に取られ、「面を選んで押し出す」が遅くなる。
    *
    * **奥の辺も見え、奥の辺も指せる**(深度検査をしない)。three.js の線のレイキャストは
    * 面による遮蔽を見ないので、**見えているものと指せるものを一致させる**にはこちらへ
@@ -201,12 +199,12 @@ export interface Viewport {
   /** スケッチ平面を正面から見る視点へ移す(無いと描きにくい)。 */
   lookAtSketch(sketchId: string): void
   /**
-   * 今あるもの全体が入る視点へ戻す(D・2026-08-14)。
+   * 今あるもの全体が入る視点へ戻す。
    *
    * **`lookAtSketch` の戻り道**。スケッチに入ると図形の大きさに合わせて寄るので、
-   * 半径4mmの円を描いた後にモードを抜けると、40mmの板が画面から外れたままになる
-   * (M1は視点が動かなかったので要らなかった)。初回に1度だけ効いていた自動フレームを、
-   * 人からも押せるようにしただけで、新しい計算は増やしていない。
+   * 半径4mmの円を描いた後にモードを抜けると、40mmの板が画面から外れたままになる。
+   * 初回に1度だけ効く自動フレームを、人からも押せるようにしただけで、新しい計算は
+   * 増やしていない。
    */
   frameAll(): void
   /** スケッチ平面上の (u,v) の画面座標。実機検査が**本物のクリックで描く**ために要る。 */
@@ -218,7 +216,7 @@ export interface Viewport {
 
 const BASE_COLOR = 0x9aa6b2
 const HIGHLIGHT_COLOR = 0xffb454
-/** スケッチの線・確定前の線・領域(C・2026-08-13)。ソリッドの色と混ざらない色にする。 */
+/** スケッチの線・確定前の線・領域。ソリッドの色と混ざらない色にする。 */
 const SKETCH_COLOR = 0xe8eef6
 const SKETCH_GHOST_COLOR = 0x7ee081
 const REGION_COLOR = 0x4d7ea8
@@ -230,7 +228,7 @@ const PROPOSED_COLOR = 0x36d1ff
 /** 確定前の形。半透明で「まだ無いもの」に見せる。 */
 const PREVIEW_COLOR = 0x7ee081
 const EDGE_COLOR = 0x20262d
-/** 選べる辺(D・2026-08-14)。面の境界線(`EDGE_COLOR`)と**見分けがつく明るさ**にする。 */
+/** 選べる辺。面の境界線(`EDGE_COLOR`)と**見分けがつく明るさ**にする。 */
 const PICK_EDGE_COLOR = 0xbfd4ea
 /** 辺の当たり判定の太さ[画素]。細すぎると掴めず、太すぎると隣の辺が取れる。 */
 const EDGE_PICK_PIXELS = 6
@@ -258,7 +256,7 @@ interface BodyMeshes {
   faceMeshes: THREE.Mesh[]
   /** `root` に足した全オブジェクト(面メッシュ+境界線)。clearBodyで**これを**取り除く
    * (面メッシュだけを外すと境界線(LineSegments)がシーンに残り続け、dispose済みの
-   * ジオメトリを参照するゴースト線としてメモリリークする。2026-08-11のQA指摘)。 */
+   * ジオメトリを参照するゴースト線としてメモリリークする)。 */
   sceneObjects: THREE.Object3D[]
   disposables: Array<{ dispose(): void }>
 }
@@ -447,7 +445,7 @@ export function createViewport(container: HTMLElement): Viewport {
    *
    * 本物(`buildBody`)と確定前の幽霊(`showPreview`)はどちらも同じ三角形群から作るので、
    * **ここがずれると「プレビューと確定結果が違う形に見える」**という、いちばん困る形の
-   * 不具合になる(2026-08-15に同じ7行が2箇所にあったのを1つにした)。
+   * 不具合になる。
    *
    * 一方で**メッシュの組み立てまでは共通化しない** —— 本物は `userData`(ピックのための
    * body_id と面の添字)と面の境界線を持ち、幽霊はどちらも持たない(指せない・線を出さない)。
@@ -503,7 +501,7 @@ export function createViewport(container: HTMLElement): Viewport {
     for (const entry of entries) {
       clearBody(entry.bodyId)
       if (entry.geometry) buildBody(entry.bodyId, entry.geometry)
-      // 形が変わったBodyの辺は**その場で消す**(D)。古い添字の線を残すと、指した線と
+      // 形が変わったBodyの辺は**その場で消す**。古い添字の線を残すと、指した線と
       // 違う辺が丸まる(§7の「添字は形状変更で壊れる」の辺版)。要るなら呼び出し側が
       // 版の変化を見て取り直す(`App.svelte`)。
       if (entry.bodyId === edgeBodyId) clearEdges()
@@ -565,8 +563,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /** シーンに今ある全メッシュの外接直方体にカメラを合わせる(初回だけ)。
    *
-   * M1はサーバが返す単一Bodyの `bbox` をそのまま使っていたが、複数Bodyでは
-   * 初回に届く順序や本数が変わりうるので、**実際に置いたメッシュから計算する**方が
+   * 複数Bodyでは初回に届く順序や本数が変わりうるので、**実際に置いたメッシュから計算する**方が
    * 頑丈(サーバのbbox形式に依存しない)。
    */
   function frameToContent(): void {
@@ -646,9 +643,9 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // ------------------------------------------------------------------ D: 辺(選べる線)
   //
-  // **フィレット・面取りが人間側から使えるようになる場所**。それまで画面に出ていた
-  // 輪郭線は `EdgesGeometry` による見た目で、コアの辺の添字とは対応していなかった
-  // (どの線を指してもフィレットの引数にならない)。ここで描くのはサーバが配る
+  // **フィレット・面取りが人間側から使えるようになる場所**。輪郭線として常時出ている
+  // `EdgesGeometry` の線(`buildBody` 参照)はコアの辺の添字と対応しておらず、どれを指しても
+  // フィレットの引数にならない。ここで描くのはサーバが配る
   // `kernel.tessellate_edges` の折れ線で、**1本1本がコアの添字を持っている**。
   //
   // ソリッドともスケッチとも別のグループに持つ(`update()`/`prune()` は `root` しか
@@ -971,7 +968,7 @@ export function createViewport(container: HTMLElement): Viewport {
     if (sketchId !== null) return
     clearGhost()
     // 上方向を既定へ戻す。`lookAtSketch` が平面のv軸へ倒したままだと、モードを抜けた後の
-    // オービットが入る前と違う傾きになる(QA 2026-08-13)。
+    // オービットが入る前と違う傾きになる。
     camera.up.set(0, 1, 0)
     controls.update()
   }
@@ -1105,7 +1102,7 @@ export function createViewport(container: HTMLElement): Viewport {
       : event.ctrlKey || event.metaKey
         ? 'remove'
         : 'replace'
-    // **スケッチモード中は面を拾わない**(C)。描いている最中に奥のソリッドの面を掴むと、
+    // **スケッチモード中は面を拾わない**。描いている最中に奥のソリッドの面を掴むと、
     // 線を引くつもりのクリックが選択の置き換えになる。領域が手前・平面の点がその次。
     if (activeSketchId !== null) {
       const region = regionAt(event.offsetX, event.offsetY)
@@ -1119,9 +1116,9 @@ export function createViewport(container: HTMLElement): Viewport {
       })
       return
     }
-    // **辺を出しているときは辺が先**(D)。辺は面の上に重なっているので、面より後に見ると
-    // 必ず面が勝つ。出していないときは `edgeAt` が即 null を返すので、M1の面のピックは
-    // これまでと同じ経路を通る。
+    // **辺を出しているときは辺が先**。辺は面の上に重なっているので、面より後に見ると
+    // 必ず面が勝つ。出していないときは `edgeAt` が即 null を返すので、面のピックは
+    // そのまま動く。
     const edge = edgeAt(event.offsetX, event.offsetY)
     if (edge !== null) {
       pickListener?.({ hit: null, edge, mode, point: null, region: null })

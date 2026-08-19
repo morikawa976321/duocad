@@ -1,14 +1,8 @@
-"""3verb前倒しの契約(1) — フィレット。項番1〜7・16〜17（2026-08-11）。
-
-**2026-08-11に実装が入って全件緑になった**（`20260811-0221-duocad-fillet-chamfer-logic`）。
-書かれた当初はスタブに対して全件赤（`NotImplementedError`）で、それが正常な状態だった。
-**契約は書いた時点から変えていない**。ただし項番5だけは実装中の実測で内容が変わっている
-（下記「r=10.5」。`IsDone()` は真だが `BRepCheck` が偽だと判明したので、
-「成功する」から「duocadは受け取らない」へ強めた）。
+"""3verb前倒しの契約(1) — フィレット。項番1〜7・16〜17。
 
 ## なぜ前倒したのか
 
-本人の実際の設計は、どれも現行の7verbでは作れない（2026-08-11の実測）:
+本人の実際の設計は、どれも現行の7verbでは作れない（実測）:
 
 | モデル | ソリッド | 面 | 足りないもの |
 |---|---|---|---|
@@ -21,7 +15,7 @@
 
 ## 期待値の出どころ（推測で書かない）
 
-タスクファイルが与える2026-08-07の実測値に加え、**duocadの語彙で書くために2026-08-11に
+タスクファイルが与える実測値に加え、**duocadの語彙で書くために
 測り直した**（`kernel.classify_face` は球を独立の種別に持たず `other` に落とすため、
 「円筒12 + 球8 + 平面6」はそのままでは書けない）。20mm立方体・全辺フィレットの実測:
 
@@ -54,7 +48,7 @@ from duocad.region import region_ref
 
 from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
 
-#: 20mm立方体・全辺フィレットの実測（2026-08-11。上のdocstring参照）
+#: 20mm立方体・全辺フィレットの実測（上のdocstring参照）
 CUBE_MM = 20.0
 RADIUS_OK = 3.0
 RADIUS_FAILS_LOW = 10.0
@@ -66,7 +60,7 @@ FILLET_R3_KINDS = {"plane": 6, "cylinder_partial": 12, "other": 8}
 #: duocadはこの形状を受け取らない（`test_radius_10_5_is_reported_as_done_but_is_actually_broken`）。
 #: 記録として残す（「歪」の中身がこれ）。
 FILLET_R105_KINDS = {"plane": 6, "cylinder_partial": 12, "bspline": 7, "other": 1}
-#: 半径を 1.0 + 0.25*i でバラバラにしたときの実測（2026-08-11）
+#: 半径を 1.0 + 0.25*i でバラバラにしたときの実測
 VARIED_RADII_KINDS = {"plane": 6, "cylinder_partial": 12, "bspline": 8}
 HOLE_FILLET_KINDS = {"plane": 6, "cylinder_full": 1, "torus": 2}
 
@@ -160,9 +154,9 @@ def test_fillet_on_the_vertical_edges_only():
 # 項番2: 半径をバラバラにすると B-spline が出る（副産物であることの固定）
 # --------------------------------------------------------------------------------------
 def test_varied_radii_produce_bspline_faces():
-    """**半径をバラバラにすると B-spline が出る**（2026-08-11実測: bspline 8）。
+    """**半径をバラバラにすると B-spline が出る**（実測: bspline 8）。
 
-    2026-08-07にはトーラスも同時に出る半径の組み合わせが観測されている。どちらにせよ
+    トーラスも同時に出る半径の組み合わせが観測されている。どちらにせよ
     要点は「splineはフィレットの副産物であり、B-splineが出たこと自体は異常ではない」。
     """
     doc = Document()
@@ -172,7 +166,7 @@ def test_varied_radii_produce_bspline_faces():
 
     fillet(doc, all_edges, radii, body_id=body_id)
 
-    # **実測どおり厳密に**（QA指摘: `bspline > 0` だけだと面構成を取り違えても緑になる）
+    # **実測どおり厳密に**（`bspline > 0` だけだと面構成を取り違えても緑になる）
     assert kinds_of(doc, body_id) == VARIED_RADII_KINDS
 
 
@@ -188,7 +182,7 @@ def test_radius_list_must_match_the_edges():
 # 項番3: 穴の円い辺へのフィレットで トーラスが出る
 # --------------------------------------------------------------------------------------
 def test_fillet_on_a_circular_edge_produces_torus():
-    """曲がった辺（穴の縁）を丸めると**トーラス**になる（2026-08-11実測: torus 2）。
+    """曲がった辺（穴の縁）を丸めると**トーラス**になる（実測: torus 2）。
 
     まっすぐな辺は円筒、円い辺はトーラス。**辺の種別が結果の面の種別を決める**ので、
     `query.describe_edges` の `kind` は選択の一部である。
@@ -214,7 +208,7 @@ def test_a_failing_fillet_raises_and_leaves_nothing_behind(radius: float):
 
     OCCTのフィレットは例外を投げずに失敗する。ここを素通しすると、
     **「操作したのに何も起きていない」がログ上は成功として残る**（再生すると別の形になる）。
-    r=10.0 と r=30.0 はどちらも20mm立方体の全辺で `IsDone()=False`（2026-08-11実測）。
+    r=10.0 と r=30.0 はどちらも20mm立方体の全辺で `IsDone()=False`（実測）。
     """
     doc = Document()
     body_id = new_box(doc)
@@ -223,7 +217,7 @@ def test_a_failing_fillet_raises_and_leaves_nothing_behind(radius: float):
     log_before = len(doc.log.entries)
     all_edges = [edge["index"] for edge in query.describe_edges(shape_before)]
 
-    # **例外の型まで縛る**（2026-08-11のQA指摘）。`Exception` で受けると、`IsDone()` を
+    # **例外の型まで縛る**。`Exception` で受けると、`IsDone()` を
     # 一度も見ない実装が引数検査の TypeError で落ちても緑になり、契約が空になる。
     # 既存の `extrude` 系と同じく ValueError に揃える。
     with pytest.raises(ValueError):
@@ -235,7 +229,7 @@ def test_a_failing_fillet_raises_and_leaves_nothing_behind(radius: float):
 
 
 def test_failures_do_not_follow_a_simple_rule_about_the_radius():
-    """**壊れ方が半径に対して単調でも一様でもない**ことを実行可能な形で残す（2026-08-11実測）。
+    """**壊れ方が半径に対して単調でも一様でもない**ことを実行可能な形で残す（実測）。
 
         r=3.0   通る
         r=10.0  `IsDone()=False`      で落ちる
@@ -266,14 +260,13 @@ def test_failures_do_not_follow_a_simple_rule_about_the_radius():
 # 項番5: r=10.5 は「成功するが歪」
 # --------------------------------------------------------------------------------------
 def test_radius_10_5_is_reported_as_done_but_is_actually_broken():
-    """r=10.5 の「成功するが歪」の**正体**は `BRepCheck` が偽になることだった（2026-08-11実測）。
+    """r=10.5 の「成功するが歪」の**正体**は `BRepCheck` が偽になることだった（実測）。
 
         r=3.0   IsDone=True  BRepCheck.IsValid=True   volume 7572.619
         r=10.5  IsDone=True  BRepCheck.IsValid=False  volume 9246.464
 
-    タスクファイル項番5は「成功すること自体を固定し、歪さはdocstringに注意を書く（テストで
-    歪さを判定するのは難しい）」と指示していたが、**実測したら歪さは機械判定できた**ので
-    契約を強くした。duocadは `BRepCheck` が偽の形状を**文書に入れない** —
+    **歪さは機械判定できる**(上の実測)ので、docstringの注意書きではなく契約として
+    固定する(項番5)。duocadは `BRepCheck` が偽の形状を**文書に入れない** —
     「例外を投げずに黙って失敗する」を通さないのがこのリポジトリの一番の規律であり
     （§6予防6・§7）、`extrude_face_on_shape` も同じく `BRepCheck` を最後の関門にしている。
     OCCTが出す面構成（平面6 / 部分円筒12 / B-spline 7 / 球1 = `FILLET_R105_KINDS`）は
@@ -330,12 +323,12 @@ def test_fillet_is_logged_and_undoable():
 def test_fillet_records_provenance_through_the_normalizing_adapter():
     """フィレットは `History()` を持たない。**正規化アダプタ経由**で由来が埋まること。
 
-    2026-08-11に `BRepFilletAPI_MakeFillet` で実測: `History` 無し / `Modified`・
+    `BRepFilletAPI_MakeFillet` で実測: `History` 無し / `Modified`・
     `Generated`・`IsDeleted` 有り。`kernel.normalize_provenance` はこの差を吸収するために
     存在するので（ブーリアンは `History()` を持つ）、verb側に分岐を書かないことも契約。
 
     `Operation.provenance` は**JSON化できる射影**であること（`OpLog.to_json()` が通る）。
-    生の `TopoDS_Shape` を入れると保存時に落ちる（M0のQAが申し送った穴）。
+    生の `TopoDS_Shape` を入れると保存時に落ちる。
     """
     doc = Document()
     body_id = new_box(doc)
@@ -372,8 +365,8 @@ def test_plate_then_hole_then_fillet():
 def test_fillet_shifts_face_indices():
     """**同じ面を追跡すると添字が変わりうる**ことを実行可能な形で残す。
 
-    2026-08-11の実測（20mm立方体の1辺に r=2 のフィレット）で、面の添字は
-    1→1 / 2→7 / 3→6 / 4→4 / 5→5 / 6→2 と入れ替わった（2026-08-07には i=5→9 の観測）。
+    実測(20mm立方体の1辺に r=2 のフィレット)で、面の添字は
+    1→1 / 2→7 / 3→6 / 4→4 / 5→5 / 6→2 と入れ替わった(別の観測では i=5→9 だったこともある)。
     穴の径変更・穴の追加・ポケット・面取りでは動かなかったので、**散発的に静かに間違う**。
 
     これは設計前提「**生の添字を保存してはいけない**」（実装計画書§7）の根拠であり、
@@ -417,7 +410,7 @@ def test_the_real_stacking_plate_needs_fillet_and_chamfer():
 
 
 # --------------------------------------------------------------------------------------
-# 選択と対象の拒否（2026-08-11のQA指摘で追加。面取り側にしかなかった）
+# 選択と対象の拒否
 # --------------------------------------------------------------------------------------
 def test_fillet_rejects_an_unknown_edge_index():
     """範囲外の辺の添字は ValueError（黙って無視して「成功」にしない）。"""
@@ -447,16 +440,16 @@ def test_fillet_needs_at_least_one_edge():
 
 
 # --------------------------------------------------------------------------------------
-# 面取りとフィレットの合成（2026-08-11のQA指摘で追加）
+# 面取りとフィレットの合成
 # --------------------------------------------------------------------------------------
 def test_chamfer_and_fillet_compose_on_the_same_body():
     """**同じボディに面取りとフィレットを順にかけられる**こと。
 
     本命の受入対象（積層プレート）は円錐8とトーラス12を**同時に**持つので、片方だけ動く
     実装では実物に届かない。32件を緑にしてもこの合成が壊れていれば意味がない、というのが
-    このテストの存在理由（2026-08-11のQA指摘）。
+    このテストの存在理由。
 
-    実測（2026-08-11・20mm立方体＋貫通穴r=4、穴の縁を面取り1mm → もう一方の縁をフィレット1mm）:
+    実測（20mm立方体＋貫通穴r=4、穴の縁を面取り1mm → もう一方の縁をフィレット1mm）:
 
         面取り後      平面6 / 全周円筒1 / 円錐1        = 8面
         フィレット後  平面6 / 全周円筒1 / 円錐1 / トーラス1 = 9面

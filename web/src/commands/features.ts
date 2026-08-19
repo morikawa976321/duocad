@@ -1,8 +1,8 @@
 /**
- * フィーチャのコマンド定義(タスクD・2026-08-14) — **AIからしか使えないverbが無くなる場所**。
+ * フィーチャのコマンド定義 — **AIからしか使えないverbが無くなる場所**。
  *
- * 領域押し出し・フィレット・面取り・矩形反復・円形反復の5つは、M2〜M3でコアに入り
- * F2でMCPに開いたが、**ブラウザからは1つも呼べなかった**(Cのスケッチと同じ片道)。
+ * 領域押し出し・フィレット・面取り・矩形反復・円形反復の5つはコアにあり、MCPからは
+ * 開かれているが、**ブラウザからは1つも呼べなかった**(スケッチと同じ片道)。
  * ここが埋めるのはその片道で、コアには何も足していない —— `duocad/server.py` の
  * `FEATURE_COMMANDS` に口を開け、`web/src/commands/features.ts`(このファイル)に
  * 引数の集め方を書くだけである。
@@ -11,14 +11,14 @@
  *
  * 状態機械・数値入力・プレビュー・中断は `CommandHost.svelte` の1つを使い回す
  * (実装計画書§8b D「Bの骨格に載せる。コマンドごとに状態機械を作り直さない」)。
- * Dが骨格へ足したのは**選択肢(choice)引数**と**図形(entities)引数**の2つで、
+ * 骨格には**選択肢(choice)引数**と**図形(entities)引数**の2種類があり、
  * どちらも `command.ts` に定義がある。
  *
  * ## 引数収集はまず共有選択集合を見る
  *
- * 領域・辺は共有選択集合から取る(Bの規律)。**AIが `propose_selection` で辺の集合を
+ * 領域・辺は共有選択集合から取る。**AIが `propose_selection` で辺の集合を
  * 提案し、人が承認すればそれがそのままフィレットの引数になる** —— これがこの企画の
- * 核心(G の交互操作)の、人間側の受け口である。
+ * 核心である**交互操作**の、人間側の受け口である。
  *
  * **図形(反復の対象)だけは選択集合から取れない**。コアの選択集合に入るのは
  * 面・辺・頂点・領域の4種で、スケッチの図形は入らないため(MCP側も反復だけは
@@ -37,7 +37,7 @@
 import type { ArgValues, CommandDef, Point2 } from './command'
 import type { SelectionRef, ShapeRef } from '../session'
 
-/** 0以下を弾く(寸法として使えない)。**既定値を入れない**のはM1からの流儀。 */
+/** 0以下を弾く(寸法として使えない)。**既定値を入れない**のがここの流儀。 */
 function positive(label: string): (value: number) => string | null {
   return (value) => (value > 0 ? null : `${label}は0より大きい値`)
 }
@@ -77,9 +77,9 @@ function regionsOf(values: ArgValues, name: string): Array<{ sketch: string; ind
 }
 
 /**
- * 領域の押し出し。**手だけで板に穴を開けられるようになる1本**(タスクDの検証1)。
+ * 領域の押し出し。**手だけで板に穴を開けられるようになる1本**。
  *
- * `extrude_face`(面を押す・M1から)とは別のverbである。こちらはスケッチの領域を取り、
+ * `extrude_face`(面を押す)とは別のverbである。こちらはスケッチの領域を取り、
  * `join` で足し `cut` で引く。**向きを人に選ばせる**のは、既定の `join` に落ちると
  * 「切り取るつもりで足した」が黙って通り、しかも形が増えるので失敗に見えないため。
  */
@@ -128,7 +128,7 @@ export const EXTRUDE_REGIONS: CommandDef = {
 }
 
 /**
- * フィレット。**辺を複数選べることが前提**(Bの複数選択 + Dで足した辺のピッキング)。
+ * フィレット。**辺を複数選べることが前提**(複数選択と辺のピッキングの両方が要る)。
  *
  * 半径は1つで全部の辺に効く(コアは辺ごとのリストも取るが、UIから辺ごとに違う半径を
  * 打たせる場面はまだ無い。要るようになったら選択パネル側に付ける)。
@@ -194,7 +194,7 @@ export const CHAMFER: CommandDef = {
  * 矩形反復。`nx`/`ny` は**元を含めた個数**(Fusion360と同じ流儀・コアの契約)。
  *
  * `sketch_id` はここでは付けない —— どのスケッチかは「今どのスケッチモードに居るか」で
- * あって、コマンドが集める引数ではない(`App.svelte` が送信時に足す。Cと同じ)。
+ * あって、コマンドが集める引数ではない(`App.svelte` が送信時に足す)。
  */
 export const PATTERN_RECTANGULAR: CommandDef = {
   id: 'pattern_rectangular',
@@ -268,8 +268,8 @@ export const PATTERN_RECTANGULAR: CommandDef = {
 /**
  * 円形反復。**全周(360度)は `360/count`、全周未満は `total_angle/(count-1)`** の
  * 場合分けをコアが持っている(全周を `count-1` で割ると最後の複製が最初と重なる)。
- * UIはここを再実装せず、角度と個数をそのまま渡す —— タスクDの検証4
- * 「全周8個で隣り合う角度が45度」は、その場合分けが効いていることの目視確認である。
+ * UIはここを再実装せず、角度と個数をそのまま渡す —— 「全周8個で隣り合う角度が45度」に
+ * なることが、その場合分けが効いていることの目視確認になる。
  *
  * 回転中心はスケッチ平面上のクリック(点引数)で取る。**中心と図形の中心が一致すると
  * コアが ValueError**(全複製が元と重なる)なので、その場合は理由が画面に出る。
@@ -319,7 +319,7 @@ export const PATTERN_CIRCULAR: CommandDef = {
 /**
  * ソリッドを触るモードで足すぶん(押し出し・丸める・面取り)。
  *
- * `App.svelte` が `COMMANDS`(Bの `extrude_face`)の後ろへ繋ぐ。**反復はスケッチの
+ * `App.svelte` が `COMMANDS`(`extrude_face`)の後ろへ繋ぐ。**反復はスケッチの
  * 図形を対象にするのでここには入らない**(下の `SKETCH_FEATURE_COMMANDS`)。
  */
 export const SOLID_FEATURE_COMMANDS: CommandDef[] = [EXTRUDE_REGIONS, FILLET, CHAMFER]
@@ -335,7 +335,7 @@ export const SKETCH_FEATURE_COMMANDS: CommandDef[] = [
   PATTERN_CIRCULAR,
 ]
 
-/** Dが足したverb(`App.svelte` が送信の分岐に使う)。 */
+/** フィーチャのverb(`App.svelte` が送信の分岐に使う)。 */
 export function isFeatureVerb(verb: string): boolean {
   return [...SOLID_FEATURE_COMMANDS, ...SKETCH_FEATURE_COMMANDS].some(
     (command) => command.id === verb,

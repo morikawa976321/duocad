@@ -1,7 +1,7 @@
 """M2契約: スケッチ(`sketch_create` / `add_line` / `add_circle` / `add_rectangle`)。
 
 このファイルは**M2のAPI契約の一部**(領域は tests/test_region.py、押し出しは
-tests/test_extrude.py が持つ)。M0・M1の既存テストには一切触っていない。
+tests/test_extrude.py が持つ)。M0・M1の既存テストとは独立している。
 
 M2の対象は「スケッチと領域検出」で、**振る舞い(verb)は全部スタブ**(`NotImplementedError`)。
 ただしM0と同じく、**後付けすると全部書き直しになるデータモデルだけは先に実装してある**
@@ -42,7 +42,7 @@ from duocad.sketch import (
     sketch_create,
 )
 
-#: M2で増えるソース(`duocad/` からの相対パス)。境界検査の対象に入っていることを固定する
+#: M2のソース(`duocad/` からの相対パス)。境界検査の対象に入っていることを固定する
 M2_MODULES = ("sketch.py", "region.py", "verbs/extrude.py")
 
 
@@ -114,12 +114,9 @@ def test_face_plane_ref_declares_a_provenance_slot():
 def test_entity_kind_is_validated():
     """図形の種別は決められたものだけ。知らない種別を黙って受け取らない(§6予防6)。
 
-    **2026-08-11に円弧(`arc`)を前倒しで足した**ため、このテストが「知らない種別」の例として
-    使っていた `"arc"` は有効になった(元の版は「図形の種別は line / circle / rectangle だけ。
-    円弧はv1.2」と書いていた)。例を差し替えただけで、**契約そのものは変えていない** —
-    見ているのは「登録されていない種別を拒否すること」であって、特定の綴りではない。
-    前倒しの理由は `tests/test_arc.py` のモジュールdocstring(実物のアロマ拡散器が
-    部分円筒6面を持ち、代用では作れない)。
+    円弧(`arc`)は有効な種別 — 理由は `tests/test_arc.py` のモジュールdocstring
+    (実物のアロマ拡散器が部分円筒6面を持ち、代用では作れない)。このテストが見ているのは
+    「登録されていない種別を拒否すること」であって、特定の綴りではない。
     """
     assert Entity(id="e1", kind="circle").params == {}
     assert Entity(id="e2", kind="arc").params == {}, "円弧は2026-08-11から有効な種別"
@@ -252,7 +249,7 @@ def test_sketch_and_entities_are_logged_and_undoable():
     ログが唯一の正(§3.1)なので、args だけで再生できる形になっていること
     (作られたIDを記録していないと、再生した文書の選択が別物を指す)まで見る。
     **3種類の図形すべての args の形を固定する** — 1種類だけ見ていると、
-    「`Entity` は正しいがログの形だけ別」という実装が緑のまま残る(2026-08-11のQA指摘)。
+    「`Entity` は正しいがログの形だけ別」という実装が緑のまま残る。
     """
     document = Document()
     sketch_id = sketch_create(document, "XY")

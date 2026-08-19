@@ -1,7 +1,7 @@
 """B契約(サーバ側): プレビュー(投機的実行)と、ブラウザから叩く選択の口。
 
-タスクBの本体はUI(コマンド層の骨格)であり、**UIは `pytest` では完了判定できない**
-(実機確認は `web/scripts/smoke.mjs`)。しかしBがコアとサーバに足した2つ——
+UI(コマンド層の骨格)そのものは**`pytest` では完了判定できない**
+(実機確認は `web/scripts/smoke.mjs`)。このファイルが固定するのはコアとサーバ側の2つ——
 
 1. **プレビュー** = verbを投機的に実行して形だけ測り、文書を元へ戻す
    (`duocad.speculative` + `Session.preview`)
@@ -178,9 +178,8 @@ def test_preview_refuses_unknown_verbs_and_arguments(session: Session) -> None:
         )
 
     # **登録されているverbを1つずつ書き出す**(増えたことにここで気づけるようにする)。
-    # Bは `extrude_face` の1つ、Dが領域押し出し・フィレット・面取りを足した
-    # (反復は形を変えるのがスケッチでソリッドではないので載せていない。
-    # 契約は `tests/test_feature_ui.py` の「プレビュー」節が正)。
+    # 反復は形を変えるのがスケッチでソリッドではないので載せていない
+    # (契約は `tests/test_feature_ui.py` の「プレビュー」節が正)。
     assert set(PREVIEWABLE_VERBS) == {"extrude_face", "extrude", "fillet", "chamfer"}
 
 

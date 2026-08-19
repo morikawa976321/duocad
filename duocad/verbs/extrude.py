@@ -1,6 +1,6 @@
-"""verb `extrude` — スケッチの**領域**を押し出す(実装計画書§1の3Dのverb)。M2で追加。
+"""verb `extrude` — スケッチの**領域**を押し出す(実装計画書§1の3Dのverb)。
 
-`extrude_face`(M1・既存ソリッドの面を押す)とは別のverbである。こちらは
+`extrude_face`(既存ソリッドの面を押す)とは別のverbである。こちらは
 **領域の集合**を対象に取り、`mode="join"` で足し、`mode="cut"` で引く。
 本人が日常的に使う「円を線で分けて片側だけ押し出す」がこのverbの存在理由。
 
@@ -108,10 +108,10 @@ def _resolve_target(
     """対象ボディを決める。cut で対象が無い・reference は ValueError。
 
     `body_id` を省略したときのアクティブボディが**編集できない**(読み込んだ参照STEP)なら、
-    「対象が無い」として扱う — `import_step` はボディを常にアクティブにする(M0の契約)ので、
-    参照部品を読んだ直後の文書では join が最初の板を作れなくなる。受入対象(棚取付具を
-    参照として読み、その隣に板を作る)がまさにこの経路である(2026-08-11のQAで発見)。
-    **明示的に参照ボディを指定された場合は今までどおり ValueError**(取り違えを黙認しない)。
+    「対象が無い」として扱う — `import_step` はボディを常にアクティブにするので、
+    参照部品を読んだ直後の文書では join が最初の板を作れなくなる。棚取付具を参照として読み、
+    その隣に板を作るのがまさにこの経路である。
+    一方、**明示的に参照ボディを指定された場合は ValueError**(取り違えを黙認しない)。
     """
     if body_id is None:
         active = doc.active_body()
@@ -142,8 +142,8 @@ def _resolve_faces_and_normal(
     **1回の押し出しが対象にできるのは1つのスケッチの領域だけ**。押し出しの向きは
     スケッチ平面の法線で決まるので、別平面の領域を混ぜると「最初のスケッチの法線」で
     全部押すことになり、方向がその面に寝た領域は**体積0の退化ソリッド**になる。
-    それは `IsDone()` も `BRepCheck_Analyzer` も通ってしまう(2026-08-11のQAが実測。
-    体積は期待の半分なのに例外は出なかった)ので、ここで弾くのが唯一の関門である。
+    それは `IsDone()` も `BRepCheck_Analyzer` も通ってしまう(体積が期待の半分でも
+    例外は出ない)ので、ここで弾くのが唯一の関門である。
     """
     sketch_ids = {ref.sketch for ref in refs}
     if len(sketch_ids) > 1:
@@ -166,7 +166,8 @@ def _resolve_faces_and_normal(
     sketch = get_sketch(doc, sketch_id)
     support = None
     if sketch.plane.get("kind") == "face":
-        # 貼った先のボディが消えていれば KeyError(以前は StopIteration で理由が読めなかった)
+        # 貼った先のボディが消えていれば KeyError(`next()` に任せると StopIteration になり、
+        # 原因が読めなくなる)
         body = doc.get_body(sketch.plane["body"])
         support = kernel.face_of(body.shape, int(sketch.plane["index"]))
     normal = kernel.sketch_plane_normal(sketch.plane, face=support)

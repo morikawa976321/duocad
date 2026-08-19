@@ -1,9 +1,9 @@
-"""M3.5契約: STEP読み込みのソリッド分解(タスクファイル項番1〜6・2026-08-11)。
+"""M3.5契約: STEP読み込みのソリッド分解(タスクファイル項番1〜6)。
 
-**なぜこれが要るのか(実機で測った問題)**: `import_step` は `OneShape()` が返す compound を
-そのまま1つの `Body` に入れていた。PCケース(27部品・2835面)を読むと2835面の塊が1ボディになり、
-`extrude_face` はその塊全体にOCCT演算をかけ、更新のたびに全面を測り直す。2026-08-10に本人が
-M1のビューアで実測した値:
+**なぜこれが要るのか(実機で測った問題)**: `OneShape()` が返す compound をそのまま
+1つの `Body` に入れると、PCケース(27部品・2835面)では2835面の塊が1ボディになり、
+`extrude_face` はその塊全体にOCCT演算をかけ、更新のたびに全面を測り直すことになる。
+分解しない実装での実測値:
 
 | モデル | 面数 | kernel(OCCT) | 幾何更新 合計 |
 |---|---|---|---|
@@ -13,15 +13,12 @@ M1のビューアで実測した値:
 さらにピック失敗12回/押し出し7回(失敗率63%)。**性能の問題ではなくデータモデルの問題**で、
 ソリッドごとにBodyへ分けるという1つの変更が、選択・更新速度・パーツ表示を同時に解く。
 
-## この契約が変えるもの(実装者への申し送り・重要)
+## この契約が定めるもの
 
-`import_step` の戻り値が `BodyId` から **`list[BodyId]`** に変わり、操作ログの `args` も
-`{"path":.., "body_id":..}` から `{"path":.., "body_ids": [..]}` に変わる。**M0のテストが
-これに依存しているので、実装時には下記を書き換える必要がある**(tests/README.md の
-「M3.5」節に一覧がある)。テストを先に書くこのタスクの時点では、M0〜M3の141件は
-1行も触っていない(＝全部緑のまま)。
+`import_step` の戻り値は **`list[BodyId]`** であり、操作ログの `args` は
+`{"path":.., "body_ids": [..]}` で持つ(単一ソリッドでも1要素のリスト)。
 
-## 実測値(2026-08-11・OCPで直接数えた。タスクファイル記載値と独立に一致)
+## 実測値(OCPで直接数えた)
 
 | ファイル | ソリッド | 全面数 | 1ソリッドあたり最大/中央/最小 |
 |---|---|---|---|
@@ -51,7 +48,7 @@ from models import SHELF  # noqa: F401
 MONITOR = MODELS / "monitor_attachment_for_24inch_GD.step"
 PLATE = MODELS / "stackable_plate" / "plate_1by1_24.step"
 
-#: (パス, ソリッド数, 全面数)。2026-08-11実測。
+#: (パス, ソリッド数, 全面数)。実測。
 MEASURED = [
     (PC_CASE, 27, 2835),
     (SHELF, 17, 56),
@@ -110,7 +107,7 @@ def test_a_single_solid_step_still_yields_exactly_one_body():
     ids=[path.stem for path, _solids, _faces in MEASURED],
 )
 def test_every_measured_model_is_split_into_its_solids(path, solids, faces):
-    """実測した4モデルすべてで、Bodyの数＝ソリッドの数になる(2026-08-11実測値)。"""
+    """実測した4モデルすべてで、Bodyの数＝ソリッドの数になる(実測値)。"""
     doc, _body_ids = _imported(path)
     assert len(doc.bodies) == solids
 
@@ -138,7 +135,7 @@ def test_split_preserves_the_total_face_count(path, solids, faces):
 
 
 def test_pc_case_face_counts_per_body_match_the_measured_spread():
-    """PCケースの1ソリッドあたりの面数は 最大233・中央94・最小6(2026-08-11実測)。
+    """PCケースの1ソリッドあたりの面数は 最大233・中央94・最小6(実測)。
 
     合計だけを見ていると「27個に分けたが中身が偏っている」を見逃す。
     最大233は**押し出しの最悪ケース**で、性能テスト(test_incremental_update.py 項番13)が
@@ -158,7 +155,7 @@ def test_pc_case_face_counts_per_body_match_the_measured_spread():
 def test_each_body_has_its_own_visible_flag():
     """分解した各Bodyは既定で可視で、1つを変えても他に波及しない。
 
-    `Body.visible` は M0 から `document.py` にあるが(既定 True)、compoundを1ボディで
+    `Body.visible` は `document.py` に既にあるが(既定 True)、compoundを1ボディで
     持っている間は「部品ごとに消す」という意味を持てなかった。分解して初めて機能する。
     """
     doc, _body_ids = _imported(SHELF)
@@ -290,7 +287,7 @@ def test_replay_reproduces_every_body_with_the_same_ids():
 
 
 # --------------------------------------------------------------------------------------
-# verb `import_step_editable`(2026-08-15)
+# verb `import_step_editable`
 #
 # **読んだら使える**ことの契約。起動オプション `--step` が廃止できるかどうかは、
 # 起動時にしかできなかったこの手順(参照 + 編集用コピー + 参照を隠す)が

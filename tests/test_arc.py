@@ -1,6 +1,6 @@
-"""3verb前倒しの契約(3) — 円弧。項番12〜15（2026-08-11）。
+"""3verb前倒しの契約(3) — 円弧。項番12〜15。
 
-**赤で終わるのが正常**（実装は次々タスク `20260811-0222-duocad-arc-logic`）。
+**未実装のうちは赤で終わるのが正常。**
 
 ## なぜ円弧を前倒すのか
 
@@ -8,7 +8,7 @@
 **アロマ拡散器**（実測: 352面 = 平面338 + 全周円筒8 + **部分円筒6**）のように
 **部分円筒面**を持つ実物があり、代用では作れない。
 
-## 期待値の出どころ（2026-08-11に測った）
+## 期待値の出どころ
 
 半円（半径5mm・180°）と弦の線分で閉じた領域を、法線方向へ3mm押し出したときの実測:
 
@@ -43,7 +43,7 @@ from duocad.verbs import extrude
 
 from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
 
-#: 半円（r=5・180°）+ 弦を3mm押し出したときの実測（2026-08-11）
+#: 半円（r=5・180°）+ 弦を3mm押し出したときの実測
 HALF_DISC_PRISM_KINDS = {"cylinder_partial": 1, "plane": 3}
 
 ARC_RADIUS = 5.0
@@ -80,7 +80,7 @@ def test_arc_is_a_sketch_entity_kind():
 def test_add_arc_stores_named_numbers():
     """円弧は**中心・半径・角度**を名前つきの数値として持つ（後から編集できる形）。
 
-    3点で持つと円弧だけが `set_parameter` の外側へ落ちる（M3の規律）。
+    3点で持つと円弧だけが `set_parameter` の外側へ落ちる。
     """
     doc = Document()
     sketch_id = sketch_create(doc, base_plane("XY"))
@@ -128,7 +128,7 @@ def test_broken_arcs_are_refused(radius: float, start_deg: float, end_deg: float
     """半径0・負・角度差0・NaNは拒否する（壊れた図形をスケッチへ入れない）。
 
     角度差0の円弧は辺にならず、NaNは**同じスケッチの正常な領域まで黙って消す**
-    （M2のQAで実測済みの挙動）。
+    （実測済みの挙動）。
     """
     doc = Document()
     sketch_id = sketch_create(doc, base_plane("XY"))
@@ -167,7 +167,7 @@ def test_an_open_arc_alone_does_not_close_a_region():
 # 項番14: 押し出すと部分円筒面ができる（全周円筒ではない）
 # --------------------------------------------------------------------------------------
 def test_extruding_an_arc_region_makes_a_partial_cylinder():
-    """円弧を含む領域を押し出すと**部分円筒**になる（2026-08-11実測: 部分円筒1 + 平面3）。
+    """円弧を含む領域を押し出すと**部分円筒**になる（実測: 部分円筒1 + 平面3）。
 
     全周円筒になったら円弧が効いていない（＝円を押し出しているのと同じ）。
     `cylinder_partial` と `cylinder_full` の区別は U範囲350度のしきい値（`kernel` の
@@ -189,8 +189,7 @@ def test_the_partial_cylinder_spans_the_arc_angle():
 
     面の種別だけを見ていると「たまたま部分円筒になった」を通してしまう。円弧の長さは
     r·θ で角度と1対1なので、長さを見れば角度を見たことになる（U範囲を直接読む問い合わせは
-    持っていないため、`describe_edges` の `length` で代用する。2026-08-11のQA指摘を受けて
-    docstringの主張を実際に見ている値へ揃えた）。
+    持っていないため、`describe_edges` の `length` で代用する）。
     """
     doc = Document()
     sketch_id = half_disc_sketch(doc)
@@ -248,12 +247,12 @@ def test_arc_survives_a_log_round_trip():
 
 
 # --------------------------------------------------------------------------------------
-# 実物に近い角度と、角度の決め方（2026-08-11のQA指摘で追加）
+# 実物に近い角度と、角度の決め方
 # --------------------------------------------------------------------------------------
 def test_a_ninety_degree_sector_also_makes_a_partial_cylinder():
     """**実物に近いのは半円ではなく扇形**（アロマ拡散器の部分円筒は75〜97°）。
 
-    90度の扇形（円弧 + 半径の線分2本）を押し出したときの実測（2026-08-11）:
+    90度の扇形（円弧 + 半径の線分2本）を押し出したときの実測:
     平面4 / 部分円筒1 = 5面。半円（180°）だけを契約にしていると、
     「半円のときだけ通る」実装を止められない。
     """

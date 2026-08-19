@@ -1,11 +1,6 @@
-"""v1最後のverbの契約 — 円形反復 `pattern_circular`（2026-08-11）。
+"""v1最後のverbの契約 — 円形反復 `pattern_circular`。
 
-**2026-08-11に実装が入って全件緑になった**（`20260811-0231-duocad-circular-pattern-logic`）。
-書かれた当初はスタブに対して全件赤（`NotImplementedError`）で、それが正常な状態だった。
-**契約は書いた時点から変えていない**（実装中に `total_angle` の後追い検査が1件足りないと
-分かったので、テストを1件**足した** — 既存の契約を緩めてはいない）。
-
-`pattern_rectangular`（M3で実装済み）の**兄弟**なので、語彙も規律も揃える:
+`pattern_rectangular`（実装済み）の**兄弟**なので、語彙も規律も揃える:
 
 - **反復は1つのverbとして持つ**（§2「verbの粒度」）。N個の独立した図形へ展開すると、
   個数や角度を後から変えられなくなり**反復の存在理由そのものが消える**。
@@ -464,7 +459,7 @@ def test_reducing_the_count_below_one_is_refused_afterwards_too():
 
 
 def test_changing_the_total_angle_to_an_unusable_value_is_refused():
-    """`total_angle` も `set_parameter` 経由で検査する（実装中に見つかった穴・2026-08-11）。
+    """`total_angle` も `set_parameter` 経由で検査する。
 
     `count` だけを検査していると、**角度のほうから同じ壊れ方を作れる** —
     0度にすれば全複製が重なり、360超なら1周を超えて重なるのに、例外は出ない。

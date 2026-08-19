@@ -1,4 +1,4 @@
-"""UIのコマンドIDが、サーバの表に**実在するか**を静的に検査する(2026-08-15)。
+"""UIのコマンドIDが、サーバの表に**実在するか**を静的に検査する。
 
 ## なぜ要るか
 
@@ -10,7 +10,7 @@
 
 このうち **1と3の食い違いだけが誰にも見られていなかった**。TS側のIDを1文字打ち間違えても
 `tsc` は通り(ただの文字列)、pytest も通り、**実ブラウザのsmokeを走らせて初めて**
-`unknown command` で出る。棚卸し(2026-08-15)で見つかった穴で、`test_boundaries.py` と
+`unknown command` で出る。この抜けを、`test_boundaries.py` と
 同じ「ソースを静的に読む」やり方で塞ぐ。
 
 ## 何を検査しないか
@@ -46,9 +46,8 @@ def _server_command_names() -> set[str]:
     1. 3つの表(`SKETCH_COMMANDS` / `FEATURE_COMMANDS` / `FILE_COMMANDS`)のキー
     2. `Server._dispatch` の中の `command == "..."` 比較
 
-    **2を落とすとこの検査は嘘になる** —— `extrude_face`(M1からの押し出し)と
+    **2を落とすとこの検査は嘘になる** —— `extrude_face`(押し出し)と
     `open_document`(応答が状態の差し替えで、他と形が違う)は表に載らず個別に捌かれている。
-    初版は1だけを見ており、その2つを「サーバに無い」と誤って報告した。
 
     `import duocad.server` すると OCP まで読み込むので ast で読む
     (この検査は幾何が無い環境でも走ってほしい。`test_boundaries.py` と同じ方針)。
@@ -126,8 +125,8 @@ def test_every_ui_command_id_exists_in_a_server_table():
 def test_the_names_that_bit_us_are_covered(command_id: str):
     """この検査が実際に効く名前を名指しで残す。
 
-    `import_step_editable` は2026-08-15にUIとWSの綴りを揃えた当のもので、
-    それまで**コマンド名(`import_step`)とログに載るverb名が違っていた**。
+    `import_step_editable` は、コマンド名とログに載るverb名が食い違うバグの
+    再発防止として効く。
     """
     assert command_id in _server_command_names()
     assert command_id in _ui_command_ids()

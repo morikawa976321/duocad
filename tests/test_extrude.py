@@ -9,7 +9,7 @@ M1の `extrude_face`(既存ソリッドの面を押す)とは別のverbで、こ
     片側だけの押し出し   : 体積 = その領域の面積 × 距離
     40×30の板を10mm     : 体積 12000
     半径3の穴を貫通      : 体積 12000 − π·3²·10 = 11717.2566611769…
-    そのときの面の構成    : 平面6 + 全周円筒1 = 7面(2026-08-11にOCPで直接実測)
+    そのときの面の構成    : 平面6 + 全周円筒1 = 7面(OCPで直接実測)
 """
 from __future__ import annotations
 
@@ -183,7 +183,7 @@ def test_undo_restores_the_shape_for_fuse_and_cut():
 
     undoの実体は2通りに分かれる — **新しく作ったボディなら取り除く**(上のテスト)、
     **既存ボディを変えたなら形状を戻す**(こちら)。前者だけを見ていると後者の経路が
-    未検証のまま残る(2026-08-11のQA指摘)。`extrude_face` が形状の復帰を別に見ているのと同じ。
+    未検証のまま残る。`extrude_face` が形状の復帰を別に見ているのと同じ。
     """
     document = plate_document()
     body_id = document.active_body().id
@@ -306,7 +306,7 @@ def test_a_plate_with_a_hole_has_only_planes_and_a_full_cylinder():
     受入対象の `shelf_attachment_GD.step` は **56面 = 平面34 + 全周円筒22(穴)** で、
     トーラス0・円錐0・spline0(実装計画書§0)。つまりM2のverbだけで届く構成であり、
     ここではその最小形(平面6 + 全周円筒1 = 7面)を作れることを確かめる。
-    **面の構成と体積は2026-08-11にOCPで直接実測した値**(box40×30×10からr=3の円柱を引き、
+    **面の構成と体積はOCPで直接実測した値**(box40×30×10からr=3の円柱を引き、
     `query.describe_shape` で数えた)。
     """
     document = plate_document()
@@ -337,8 +337,7 @@ def test_replay_reproduces_the_split_circle_extrusion():
     """円＋**線分**のスケッチと片側だけの押し出しが、保存したログから再生できる。
 
     M2の本筋の経路(円を線で割って片側を押す)を再生まで通す。下の板と穴の再生は
-    長方形と円しか通らないので、`add_line` の再生はこちらでしか検査されない
-    (2026-08-11のQA指摘)。
+    長方形と円しか通らないので、`add_line` の再生はこちらでしか検査されない。
     """
     document = Document()
     sketch_id = split_circle_sketch(document)

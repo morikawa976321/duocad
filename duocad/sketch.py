@@ -1,7 +1,4 @@
-"""スケッチ(実装計画書 §3.3「スケッチと領域」・§1のスケッチverb)。M2で追加。
-
-M2(2026-08-11)で実装済み。データモデル(`Sketch` / `Entity` / PlaneRef と、その day1 の
-由来スロット)はテスト先行の段階で先に置き、verbはこのタスクで埋めた(tests/README.md 参照)。
+"""スケッチ(実装計画書 §3.3「スケッチと領域」・§1のスケッチverb)。
 
 契約:
     sketch_create(doc, plane) -> SketchId
@@ -10,7 +7,7 @@ M2(2026-08-11)で実装済み。データモデル(`Sketch` / `Entity` / PlaneRe
     add_line(doc, sketch_id, p0, p1) -> EntityId
     add_circle(doc, sketch_id, center, radius) -> EntityId
     add_rectangle(doc, sketch_id, corner, width, height) -> EntityId
-    add_arc(doc, sketch_id, center, radius, start_deg, end_deg) -> EntityId   (2026-08-11追加)
+    add_arc(doc, sketch_id, center, radius, start_deg, end_deg) -> EntityId
     entity_params(doc, sketch_id, entity_id) -> dict[str, float]
 
 **座標はスケッチ平面上の2D**(u, v)。基準平面のときは (x, y) / (x, z) / (y, z) に対応する。
@@ -45,10 +42,10 @@ PatternId = str
 #: 基準平面の名前(この3つだけ。実装計画書§1「平面(基準3面)」)
 BASE_PLANES = ("XY", "XZ", "YZ")
 
-#: 図形の種別(M2の3つ ＋ 2026-08-11に前倒しした円弧)
+#: 図形の種別
 ENTITY_KINDS = ("line", "circle", "rectangle", "arc")
 
-#: 反復の種別(M3の矩形 ＋ 2026-08-11に足した円形。これでv1のverbが揃う)
+#: 反復の種別(矩形・円形。これでv1の反復verbが揃う)
 PATTERN_KINDS = ("rectangular", "circular")
 
 VERB_SKETCH_CREATE = "sketch_create"
@@ -94,9 +91,9 @@ class Entity:
     """スケッチ上の1図形。
 
     `params` は**その図形が自分で持つ名前つきの数値**(実装計画書§3.4
-    「パラメトリック・プリミティブ」)。M2では素の float が入る。M3で名前つきの値への
-    参照に変わるが、**解決済みの数値を返す `entity_params()` の戻り値は変わらない**
-    (だからM3はM2のテストを壊さない)。
+    「パラメトリック・プリミティブ」)。値は名前つきの値への参照(`parameters.register_value`
+    が返す名前)で持つ。**解決済みの数値を返すのは `entity_params()` の役目**であり、
+    内部表現が参照であることは呼び出し側から隠される。
 
     キーは図形ごとに固定する(スカラー1個 = 将来のパラメータ1個になるよう平らに持つ):
 
@@ -119,7 +116,7 @@ class Entity:
 
 @dataclass
 class Pattern:
-    """図形の矩形反復(M3で追加。実装計画書§1の `pattern_rectangular`)。
+    """図形の矩形反復(実装計画書§1の `pattern_rectangular`)。
 
     **1つの反復は1つのオブジェクト**であり、nx×ny 個の図形へ展開して持たない
     (展開すると個数や間隔を後から変えられなくなり、反復の存在理由が消える。§2「verbの粒度」)。
@@ -133,8 +130,7 @@ class Pattern:
     id: PatternId
     sources: List[EntityId] = field(default_factory=list)
     params: Dict[str, Any] = field(default_factory=dict)
-    #: 反復の種類。2026-08-11に円形反復を足したときに導入した(`Body.kind` / `Entity.kind` と
-    #: 同じ語彙)。既定が "rectangular" なので、M3の矩形反復は何も変えずに動く。
+    #: 反復の種類(`Body.kind` / `Entity.kind` と同じ語彙)。既定は "rectangular"。
     kind: str = "rectangular"
     #: 寸法ではない設定(例: 円形反復の `rotate_copies`)。**`params` に混ぜない** —
     #: `params` は `set_parameter` で編集できる名前つきの数値の置き場であり、真偽の
@@ -156,7 +152,7 @@ class Sketch:
     正は `duocad.region.regions(doc, sketch_id)` の戻り値であり、キャッシュを持つか
     どうかは実装の自由にしてある(tests/README.md「M2の決定」)。
 
-    `patterns` はM3で追加(反復は図形ではなく、図形を参照する別のもの)。
+    `patterns` は反復のリストを持つ(反復は図形ではなく、図形を参照する別のもの)。
     """
 
     id: SketchId
@@ -246,7 +242,7 @@ def add_arc(
     スカラー1個が将来のパラメータ1個になる)。角度は**度**・反時計回り・スケッチ平面の
     X軸から測る。
 
-    **円弧を入れる理由**(優先度が低かったのに前倒した理由): 領域検出があれば
+    **円弧を入れる理由**: 領域検出があれば
     「円を線で分けて片側だけ押し出す」で多くは代用できるが、アロマ拡散器のように
     **部分円筒面(75〜97°の円弧を押し出したもの)**を持つ実物は代用では作れない。
     """
@@ -265,10 +261,9 @@ def entity_params(
 ) -> Dict[str, float]:
     """図形の数値パラメータを**解決済みの素の数値**で返す。
 
-    M2では `Entity.params` の値がそのまま数値なので素通しでよい。**この関数を挟んである
-    理由はM3にある** — M3で数値を図形に焼き込まず名前つきの値として別に持つ形へ移すとき、
-    `Entity.params` の中身は参照に変わるが、ここの戻り値(数値)は変わらない。
-    テストがこの関数越しに読んでいれば、M3の変更でM2の契約は壊れない。
+    `Entity.params` の中身は名前つきの値への参照であり、そのままでは呼び出し側が使えない。
+    この関数を挟むことで、内部表現(参照)が変わっても呼び出し側(テスト含む)の戻り値の形は
+    変わらない。
     """
     sketch = get_sketch(doc, sketch_id)
     for entity in sketch.entities:
@@ -315,16 +310,16 @@ def _add_entity(
 
     **数値は先に検査する**(§6予防6)。非有限値・半径0以下・長さ0の線分・辺0の長方形は
     その場で `ValueError` にし、文書にもログにも残さない。黙って受け取ると、以後
-    `regions()` が毎回失敗する(M2に図形の削除verbは無いのでundo以外に復旧手段が無い)か、
+    `regions()` が毎回失敗する(図形の削除verbが無いのでundo以外に復旧手段が無い)か、
     NaN が混ざって**同じスケッチ上の正常な領域まで黙って消える**うえ、
-    `OpLog.to_json()` が裸の NaN を吐いてJSONとして壊れる(2026-08-11のQAで実測)。
+    `OpLog.to_json()` が裸の NaN を吐いてJSONとして壊れる。
 
     **モデルとログには別のdictを渡す**。同じ参照を共有すると、図形のパラメータを
-    書き換えた瞬間に**唯一の正であるログ**(§3.1)が黙って書き換わる。M3は
-    `Entity.params` の中身を変える予定なので、ここを共有したままにはできない。
+    書き換えた瞬間に**唯一の正であるログ**(§3.1)が黙って書き換わる。`Entity.params` の
+    中身は名前つきの値への参照であり、ログの `args["params"]` には打った数値をそのまま
+    入れるので、モデルとログでは持つ値の形自体が違う。
 
-    M3: 数値を検査したあと `register_value` で名前つきにし、`Entity.params` には名前を入れる。
-    操作ログの `args["params"]` には打った数値をそのまま入れる(M2の契約)。
+    数値を検査したあと `register_value` で名前つきにし、`Entity.params` には名前を入れる。
     """
     require_valid_params(kind, params)
     sketch = get_sketch(doc, sketch_id)
@@ -350,7 +345,7 @@ def require_valid_params(kind: str, params: Dict[str, float]) -> None:
 
     **作成時と `set_parameter` の両方から呼ぶ**。作成時だけ検査していると、同じ値を
     後から書き込む経路が素通りし、`add_circle` が拒否する半径0やNaNが文書に入る
-    (2026-08-11のQAで実測。NaNは同じスケッチの正常な領域まで黙って消す)。
+    (NaNは同じスケッチの正常な領域まで黙って消す)。
     """
     for name, value in params.items():
         if not math.isfinite(value):

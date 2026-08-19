@@ -1,4 +1,4 @@
-"""領域(実装計画書 §3.3「スケッチと領域」・§3.5 選択集合)。M2で追加。
+"""領域(実装計画書 §3.3「スケッチと領域」・§3.5 選択集合)。
 
 **領域は描くものではなく計算されるもの**。スケッチの図形群から閉領域を求めるのがこのモジュールで、
 幾何そのもの(`BRepAlgoAPI_Splitter`)は `duocad.kernel` が持つ(OCPを直接importできるのは
@@ -13,7 +13,8 @@ kernel.py だけ。tests/test_boundaries.py が検査する)。
         選択集合・操作ログへ入れる参照(§3.5)。
 
 **注意(実装計画書§7・§3.3)**: パラメータを編集すると領域は分裂・合体・消失しうる。
-押し出していた領域が消える壊れ方をするので、黙って通さないこと(M3の対象)。
+押し出していた領域が消える壊れ方をするので、黙って通さないこと(`parameters.set_parameter`
+が担う)。
 """
 from __future__ import annotations
 
@@ -311,7 +312,7 @@ def plane_face(doc: Document, sketch_id: SketchId) -> Any:
 
 
 def plane_frame(doc: Document, sketch_id: SketchId) -> dict:
-    """スケッチ平面の3Dの枠(`kernel.sketch_plane_frame`)。C(2026-08-13)で追加。
+    """スケッチ平面の3Dの枠(`kernel.sketch_plane_frame`)。
 
     アプリ層が「画面のクリック → 平面上の (u, v)」と「図形 → 3Dの線」を行き来するために
     要る。**同じ計算をアプリ層に持たせない**(基準3面の軸の取り方と、面に貼ったときの
@@ -331,7 +332,7 @@ def expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
 
 
 def regions_with_geometry(doc: Document, sketch_id: SketchId, deviation: float) -> List[dict]:
-    """領域を**画面へ描ける三角形つき**で返す(C・2026-08-13)。
+    """領域を**画面へ描ける三角形つき**で返す。
 
     戻り値: [{"index", "area", "centroid", "positions", "indices"}, ...]
 

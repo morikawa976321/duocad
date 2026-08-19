@@ -8,7 +8,7 @@
  * **選択も可視性もコアが正**。このファイルは `modify_selection` / `commit_selection` /
  * `clear_selection` / `set_visible` を送るだけで、どちらの状態も覚えない。
  *
- * **M3.5(2026-08-11)で `state` は部品ごとの配列になった**。`state.bodies` は軽量
+ * **`state` は部品ごとの配列である。** `state.bodies` は軽量
  * (geometryを含まない)で、形状は `delta.bodies`(版が変わったBodyだけ)で届く
  * (`duocad/server.py` のモジュールdocstring参照)。
  *
@@ -68,7 +68,7 @@ export interface BodyGeometry extends BodyMeta {
 }
 
 // --------------------------------------------------------------------------------------
-// C(2026-08-13): スケッチ — **手動操作が一級の操作モード**になる場所
+// C: スケッチ — **手動操作が一級の操作モード**になる場所
 // --------------------------------------------------------------------------------------
 /** スケッチを貼る平面(コアの PlaneRef。基準3面か、既存ソリッドの平面状の面)。 */
 export type PlaneRef =
@@ -135,18 +135,18 @@ export interface ServerState {
   can_undo: boolean
   can_redo: boolean
   applied_count: number
-  /** 共有される選択集合。**ここが正**で、ブラウザは自前の選択を持たない(A2以降)。 */
+  /** 共有される選択集合。**ここが正**で、ブラウザは自前の選択を持たない。 */
   selection: SelectionState
-  /** 文書の全スケッチ(C以降)。図形も領域もここが正で、ブラウザは溜めない。 */
+  /** 文書の全スケッチ。図形も領域もここが正で、ブラウザは溜めない。 */
   sketches: SketchState[]
-  /** あと何回やり直せるか(E)。**真偽だけだと履歴の位置が出せない**。 */
+  /** あと何回やり直せるか。**真偽だけだと履歴の位置が出せない**。 */
   redo_count: number
-  /** 名前つきの寸法値(E・§3.4)。パラメータ編集パネルが出す対象そのもの。 */
+  /** 名前つきの寸法値(§3.4)。パラメータ編集パネルが出す対象そのもの。 */
   parameters: Record<string, number>
 }
 
 /**
- * ファイル操作の応答(E)。**状態の配信ではない** —— 保存・書き出しは文書を変えないので、
+ * ファイル操作の応答。**状態の配信ではない** —— 保存・書き出しは文書を変えないので、
  * 要求した接続にだけ「どこへ何バイト書いたか」が返る(`PreviewPayload` と同じ扱い)。
  *
  * `path` は**サーバが解決した絶対パス**。相対パスの基準はサーバの作業ディレクトリで、
@@ -192,13 +192,12 @@ export interface Applied {
   name?: string
   value?: number
   /**
-   * STEP読み込みが作ったボディ(2026-08-15)。`import_step_editable` は編集用と原本の両方、
+   * STEP読み込みが作ったボディ。`import_step_editable` は編集用と原本の両方、
    * `import_step` は参照ボディだけを返す。
    *
-   * **`svelte-check` を入れて初めて見つかった穴** —— サーバは前から返していたのに
-   * ここに宣言が無く、`.svelte` の中で `applied.body_ids` を読んでいた
-   * (`.svelte` は tsc の対象外だったので誰も気づかなかった)。実行時は動いていたが、
-   * サーバ側がキー名を変えても型では止まらない状態だった。
+   * **ここに宣言が要る**: `.svelte` の中で `applied.body_ids` を読んでいるが、
+   * `.svelte` は tsc の対象外なので、ここに型が無いとサーバ側がキー名を変えても
+   * 型検査では止まらない(`svelte-check` でだけ検出できる)。
    */
   body_ids?: string[]
   reference_ids?: string[]
@@ -224,7 +223,7 @@ export interface PreviewPayload {
 }
 
 /**
- * 1本の辺の折れ線(D・2026-08-14。`kernel.tessellate_edges` の1件そのまま)。
+ * 1本の辺の折れ線(`kernel.tessellate_edges` の1件そのまま)。
  *
  * `index` は**コアの数え方の1始まり**で、`fillet(edges=[...])` が食う添字と同じ。
  * ここがずれると「指した辺と違う辺が丸まる」という、例外も出ない事故になる。
@@ -262,9 +261,9 @@ export interface SessionHooks {
   onStatus(status: ConnectionStatus): void
   /** プレビューが返ってきた(状態は変わっていない)。 */
   onPreview(payload: PreviewPayload): void
-  /** 頼んだ辺が返ってきた(D。状態は変わっていない)。 */
+  /** 頼んだ辺が返ってきた(状態は変わっていない)。 */
   onEdges(payload: EdgesPayload): void
-  /** ファイルを書いた(E。状態は変わっていない)。 */
+  /** ファイルを書いた(状態は変わっていない)。 */
   onFile(payload: FilePayload): void
 }
 

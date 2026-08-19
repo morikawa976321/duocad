@@ -1,12 +1,12 @@
-"""verb `import_step_editable` — STEPを読んで**そのまま編集できる状態**まで作る(2026-08-15)。
+"""verb `import_step_editable` — STEPを読んで**そのまま編集できる状態**まで作る。
 
-**なぜ `import_step` と別に要るのか(本人の指摘)**: 同じ「STEPを読む」が起動時とアプリ内で
-違う意味になっていた。起動時(`Session.load_step`)はソリッドごとに参照ボディ＋編集用コピーを
-作って参照を隠すので読んだ直後から触れるが、アプリ内(`import_step`)は参照ボディ
+**なぜ `import_step` と別に要るのか**: 同じ「STEPを読む」でも、起動時とアプリ内で必要な
+ものが違う。起動時(`Session.load_step`)はソリッドごとに参照ボディ＋編集用コピーを
+作って参照を隠すので読んだ直後から触れるが、アプリ内の `import_step` は参照ボディ
 (`kind="reference"`・読み取り専用)しか作らないので、PCケース27ソリッドを読むと
-`make_editable_copy` を**27回**打たないと触れる状態にならない。この非対称のせいで
-起動オプション `--step` が消せなかった。**起動時にしかできないことを無くす**のがこのverbで、
-これで `--step` は廃止できる(常に空で起動し、アプリ内・MCPから好きなSTEPを読む)。
+`make_editable_copy` を**27回**打たないと触れる状態にならない。**起動時にしかできない
+ことを無くす**のがこのverbであり、サーバは常に空の文書で起動し、STEPはアプリ内・MCPから
+読み込む。
 
 契約:
     import_step_editable(doc, path) -> list[BodyId]
@@ -27,7 +27,7 @@ Ctrl+Z が最後の1個だけを戻す挙動になる。
 
 **作った全IDを `args` に記録する**(`reference_ids` / `body_ids`)。記録が無いと再生
 (redo / `open_document`)で別のIDが振られ、保存した選択集合や押し出しの `body_id` が
-指す先を失う(M2の `sketch_create` と同じ理由)。
+指す先を失う(`sketch_create` と同じ理由)。
 
 失敗の契約(黙って通さない。§6予防6): パスが無い→FileNotFoundError / STEPとして壊れている→
 ValueError。いずれも **document にもログにも変更を残さない** —— `kernel.read_step` が
@@ -37,8 +37,8 @@ ValueError。いずれも **document にもログにも変更を残さない** �
 **参照ボディを残す理由**: 原本をログの上に持っておくと、編集用ボディを壊しても元の形が
 文書の中に残る(`make_editable_copy` の位置づけと同じ)。可視のまま持つと同じ形が二重に
 テセレーション・二重に送信され、手前を消しても参照側のメッシュが残ってピック失敗が再発する
-(2026-08-11のQA指摘)ので、**追加した時点で visible=False にする**。`Session.load_step` は
-これを `set_visible` verb で別行にしていたが、このverbでは1行の中で完結する ——
+ので、**追加した時点で visible=False にする**。`Session.load_step` はこれを `set_visible`
+verb で別行にしているが、このverbでは1行の中で完結する ——
 再生時も `_do_...` が同じ状態を作り直すので、「隠した」という操作が失われることはない。
 """
 from __future__ import annotations
@@ -73,8 +73,8 @@ def import_step_editable(doc: Document, path: PathLike) -> list[BodyId]:
 def _reference_names(path: PathLike, count: int) -> list[str]:
     """参照ボディの名前 `<ファイル名>_1` … `_N`(`io_step.import_step` と同じ付け方)。
 
-    編集用ボディはこれに `-edit` を足す(`make_editable_copy` の既定と同じ)。**起動時の
-    `--step` が作っていた名前とそろえてある** —— 名前はパーツ一覧にそのまま並ぶので、
+    編集用ボディはこれに `-edit` を足す(`make_editable_copy` の既定と同じ)。**どの経路で
+    読み込んでも同じ命名にそろえてある** —— 名前はパーツ一覧にそのまま並ぶので、
     読み込み経路によって見え方が変わらないようにする。
     """
     stem = Path(path).stem

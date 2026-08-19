@@ -1,12 +1,9 @@
-"""3verb前倒しの契約(2) — 面取り。項番8〜11（2026-08-11）。
+"""3verb前倒しの契約(2) — 面取り。項番8〜11。
 
-**2026-08-11に実装が入って全件緑になった**。書かれた当初はスタブに対して全件赤
-（`NotImplementedError`）で、それが正常な状態だった。契約は書いた時点から変えていない。
-
-## タスクファイルの項番8を実測で訂正した（重要）
+## タスクファイルの項番8は実測と異なる（重要）
 
 タスクファイルは項番8を「**箱のエッジに面取りをかけると円錐面ができる**こと」と書いているが、
-2026-08-11に測ったところ**そうならない**:
+実測では**そうならない**:
 
     箱のまっすぐな辺を面取り（距離2mm） -> IsDone=True / plane 7 / 面7   ← **平面が1枚増えるだけ**
     円筒の円い縁を面取り（距離1mm）     -> IsDone=True / plane 2 + cylinder_full 1 + **cone 1** / 面4
@@ -20,7 +17,7 @@
 
 ## 項番9 — 「実物が1つ作れるようになる」
 
-`PC_case_feet.step`（PCケースの脚）の実測（2026-08-11）:
+`PC_case_feet.step`（PCケースの脚）の実測:
 
     5面 = plane 3 + cylinder_full 1 + cone 1
     体積 11538.02 mm^3 / 境界箱 25.0 x 25.0 x 29.0 mm
@@ -28,7 +25,7 @@
 
 **面取りが入って初めて円錐が作れる**ようになる、というのがこのタスクの意義そのもの。
 ただし脚と**寸法まで同じ**形を組むことは受入テストの再定義にあたり、本人の判断事項なので
-ここでは行わない（次々タスクの引継ぎに「受入テスト再定義待ち」と書く）。ここで固定するのは
+ここでは行わない。ここで固定するのは
 **必要な面種（平面・全周円筒・円錐）がverbで作れるようになること**と、
 **脚が要求している構成が何か**の2つ。
 """
@@ -47,11 +44,11 @@ from duocad.verbs import chamfer, extrude
 from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
 from models import PC_CASE_FEET as FEET
 
-#: PCケースの脚の実測（2026-08-11）
+#: PCケースの脚の実測
 FEET_KINDS = {"plane": 3, "cylinder_full": 1, "cone": 1}
 FEET_FACE_COUNT = 5
 
-#: 円筒の円い縁を1つ面取りしたときの実測（2026-08-11）
+#: 円筒の円い縁を1つ面取りしたときの実測
 CYLINDER_CHAMFER_KINDS = {"plane": 2, "cylinder_full": 1, "cone": 1}
 
 
@@ -86,10 +83,10 @@ def edges_of_kind(doc: Document, body_id: str, kind: str) -> list:
 
 
 # --------------------------------------------------------------------------------------
-# 項番8（実測で訂正）: まっすぐな辺の面取りは平面／円い辺の面取りが円錐
+# 項番8（実測値を優先）: まっすぐな辺の面取りは平面／円い辺の面取りが円錐
 # --------------------------------------------------------------------------------------
 def test_chamfering_a_straight_edge_makes_a_plane():
-    """箱のまっすぐな辺を面取りすると**平面が1枚増える**（2026-08-11実測: 6面 -> 平面7）。
+    """箱のまっすぐな辺を面取りすると**平面が1枚増える**（実測: 6面 -> 平面7）。
 
     タスクファイルの項番8は「円錐面ができる」と書いているが、まっすぐな辺では円錐にならない。
     円錐は円い辺から生まれる（次のテスト）。
@@ -107,7 +104,7 @@ def test_chamfering_a_straight_edge_makes_a_plane():
 
 
 def test_chamfering_a_circular_edge_makes_a_cone():
-    """**円い辺**を面取りすると円錐ができる（2026-08-11実測: 円筒3面 -> 平面2+円筒1+円錐1）。
+    """**円い辺**を面取りすると円錐ができる（実測: 円筒3面 -> 平面2+円筒1+円錐1）。
 
     これが「面取りが入って初めて実物（PCケースの脚）が作れるようになる」の実体。
     """
@@ -126,7 +123,7 @@ def test_chamfering_a_circular_edge_makes_a_cone():
 # 項番9: 実物（PCケースの脚）が要求する構成
 # --------------------------------------------------------------------------------------
 def test_the_real_foot_needs_a_cone():
-    """`PC_case_feet.step` は 平面3 + 全周円筒1 + 円錐1 = 5面（2026-08-11実測）。
+    """`PC_case_feet.step` は 平面3 + 全周円筒1 + 円錐1 = 5面（実測）。
 
     **実装に依存しないので最初から緑**。この構成の円錐は現行の7verbでは作れず、
     面取りが入って初めて到達可能になる、という到達点の記録。
@@ -150,9 +147,9 @@ def test_how_close_the_verbs_get_to_the_real_foot():
     **面取りの角度指定はこの前倒しの範囲外**とタスクファイルが明記している。したがって
     「脚と寸法まで同じ形」は今回の到達点ではない。
 
-    面種の**集合の包含**で通す書き方（`set(FEET_KINDS) <= produced`）にしていた版は、
-    4面でも5面でも緑になり「実物が作れる」と誤って主張できたので、実測値そのものに落とした
-    （2026-08-11のQA指摘）。受入テストの再定義は本人の判断事項。
+    面種を**集合の包含**で通す書き方（`set(FEET_KINDS) <= produced`）だと、
+    4面でも5面でも緑になり「実物が作れる」と誤って主張できてしまう。そのため
+    実測値そのもの（厳密な等価）で検査する。受入テストの再定義は本人の判断事項。
     """
     doc = Document()
     body_id = new_cylinder(doc, radius=12.5, height=29.0)
@@ -184,7 +181,7 @@ def test_a_failing_chamfer_raises_and_leaves_nothing_behind():
     log_before = len(doc.log.entries)
     straight = edges_of_kind(doc, body_id, "line")
 
-    # 例外の型まで縛る（`Exception` だと `IsDone()` を見ない実装でも緑になる。QA指摘）
+    # 例外の型まで縛る（`Exception` だと `IsDone()` を見ない実装でも緑になる）
     with pytest.raises(ValueError):
         chamfer(doc, straight, 50.0, body_id=body_id)
 
@@ -238,6 +235,6 @@ def test_chamfer_records_provenance_through_the_normalizing_adapter():
 
     assert operation.provenance is not None
     assert operation.provenance["verb"] == "chamfer"
-    # フィレットと同じキーを要求する（片方だけ緩いと、面取りだけ由来が空でも緑になる。QA指摘）
+    # フィレットと同じキーを要求する（片方だけ緩いと、面取りだけ由来が空でも緑になる）
     assert "face_map" in operation.provenance
     doc.log.to_json()  # JSON化できない値が混ざっていればここで落ちる

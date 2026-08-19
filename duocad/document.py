@@ -1,12 +1,12 @@
 """文書とボディのデータモデル(実装計画書 §3.1 / §3.2)。
 
-M0の契約:
+契約:
 - Document.units は "mm" 固定で変更できない(セッターを持たないプロパティ)。
 - Document.bodies は常にリストで持つ(v1のUIは1ボディしか見せないが、データモデルは複数対応。
   参照STEPを読み込んだ時点で既に複数ボディになりうるため、day1でリストにしておく)。
 - Body.kind は "solid"(編集対象) か "reference"(読み込んだSTEP等・読み取り専用)のいずれか。
 
-M0で実装済み(2026-08-10)。存在しないBodyIdを渡された `remove_body` / `set_active_body` /
+存在しないBodyIdを渡された `remove_body` / `set_active_body` /
 `is_editable` は KeyError、ID重複の `add_body` は ValueError で落とす
 (黙って無視すると、取り消しや再生の空振りが静かに文書を壊すため。§6予防6)。
 """
@@ -24,9 +24,8 @@ _VALID_KINDS = {"solid", "reference"}
 def new_body_id() -> BodyId:
     """新しいBodyId。**再生時は記録済みのIDをそのまま使う**のでここは通らない。
 
-    2026-08-15にここへ集めた(それまで `io_step` / `verbs/import_editable` に同じ関数が2つ、
-    `verbs/extrude.py` にインラインの3つ目があった)。**BodyId の持ち主はこのモジュール**で、
-    verb側に置くと `io_step` が verbs/ を引くことになり層が逆になる。
+    **BodyId の持ち主はこのモジュール**であり、verb側に置くと `io_step` が verbs/ を引く
+    ことになり層が逆になる。
     """
     return f"body-{uuid4().hex[:12]}"
 
@@ -139,11 +138,10 @@ class Document:
     def get_body(self, body_id: BodyId) -> Body:
         """IDでボディを引く。**無ければ KeyError**(黙ってNoneを返さない)。
 
-        2026-08-15に公開した。それまで `_find` が Optional を返す非公開メソッドだったため、
-        外側(`server.py` / `mcp_server.py` / `verbs/visibility.py` / 各verb)が
-        `next(candidate for ... if candidate.id == body_id)` を**4通りに再実装**していた。
-        「引けなかったときにどうなるか」が実装ごとに違うのが本当の害で、
-        `StopIteration` を投げるものと `KeyError` を投げるものが混ざっていた。
+        呼び出し側(`server.py` / `mcp_server.py` / `verbs/visibility.py` / 各verb)がそれぞれ
+        `next(candidate for ... if candidate.id == body_id)` を実装し直すと、「引けなかった
+        ときにどうなるか」が呼び出し元ごとに違ってしまう —— `StopIteration` を投げるものと
+        `KeyError` を投げるものが混ざるのが本当の害なので、ここに一本化して揃える。
         """
         body = self._find(body_id)
         if body is None:

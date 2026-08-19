@@ -1,10 +1,10 @@
-"""F1契約: **選択と述語をMCPへ出す**(2026-08-11のタスク・実装は F2)。
+"""F1契約: **選択と述語をMCPへ出す**(実装は F2)。
 
 `tests/test_mcp_verbs.py` が操作(verb)の側を持ち、こちらが**交互操作の中心**——
 AIが選択を提案し、人が過不足を直し、AIが読み直して適用する——の側を持つ。
 契約の散文は `tests/README.md` の「F」節が正。
 
-A1/A2 で `duocad/selection.py` と `duocad/predicates.py` に入ったコアAPIを、そのまま
+`duocad/selection.py` と `duocad/predicates.py` にあるコアAPIを、そのまま
 MCPツールとして出す。**ここに新しい選択のロジックを書かない** —— MCPは
 コアのもう一人のクライアントであり、ブラウザと同じ `Document.selection` を触る。
 
@@ -472,7 +472,7 @@ def test_the_gate_lives_in_the_core_not_in_the_mcp_layer(
     (MCPが先に弾いても観察結果は同じ)ので、対で必要になる。**対の両方を同じ
     `SELECTION_CONSUMING_TOOLS` で回す** —— 片方だけ全ツール、片方は `fillet` だけ、という
     非対称にすると、残りのツールは「MCPが先読みして弾き、確定後は `get_selection()` を
-    素読み」でも全部緑になる(QA2回目の指摘)。
+    素読み」でも全部緑になる。
     """
     _open_the_core_gate(monkeypatch)
 
@@ -511,14 +511,11 @@ def test_the_core_gate_is_the_only_one_for_regions_too(tmp_path: Path, monkeypat
 
 @pytest.mark.parametrize("tool,arguments", [("fillet", {"radius": 2.0}), ("chamfer", {"distance": 2.0})])
 def test_a_verb_targets_the_body_the_selection_names(tmp_path: Path, tool: str, arguments: dict):
-    """**選択が指しているBodyに当たること**(2026-08-12のF2のQAで見つかった穴)。
+    """**選択が指しているBodyに当たること**(アクティブなBodyへ誤って当たる穴の再発防止)。
 
     辺の参照は `body` と `index` の両方を持つ。MCPが `index` だけを取り出して
     `body_id` を渡さないと、コアのverbは**アクティブなBody**を対象にする ——
     27部品のPCケースでは「同じ添字の別部品の辺」を黙って丸める。例外も出ない。
-
-    F1の契約は1Bodyの直方体でしか検査しておらず、**この穴を素通しした**
-    (`test_the_whole_interleaved_lap_runs_through_mcp_alone` は緑のままだった)。
     `extrude_face` は面の参照から `body` を渡していて、辺の側だけが抜けていた。
     """
     session = Session(None, 0.2)

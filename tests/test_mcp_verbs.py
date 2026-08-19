@@ -1,4 +1,4 @@
-"""F1契約: **v1の全verbをMCPツールとして公開する**(2026-08-11のタスク・実装は F2)。
+"""F1契約: **v1の全verbをMCPツールとして公開する**(実装は F2)。
 
 実装計画書§0の到達表は **AI列が 1/19** しか埋まっていない(`set_visible` だけ)。
 F(F1+F2)の仕事はそれを全部埋めることであり、**このファイルがその「埋まった」の定義**である。
@@ -99,9 +99,9 @@ SELECTION_TOOLS = {
 #: 到達表の19操作には数えないが、**ログに載るverbと同じ綴りで呼べる**ために要るツール。
 #:
 #: 「STEPを読む」という1操作に verb が2つある(`import_step_editable` = 編集可能なボディまで
-#: 作る通常の経路 / `import_step` = 参照ボディだけ)。以前は1つの `import_step` ツールが
-#: `editable` 引数で打ち分けていたが、その形だと**ログに出る `import_step_editable` を
-#: 呼べるツールが存在しない**(2026-08-15のQA指摘)。ツールを2つに割り、名前をverbに揃えた。
+#: 作る通常の経路 / `import_step` = 参照ボディだけ)。`editable` 引数で1つのツールが
+#: 打ち分ける形だと、**ログに出る `import_step_editable` を呼べるツールが存在しない**。
+#: ツールを2つに割り、名前をverbに揃えている。
 EXTRA_LOGGING_TOOLS = {"import_step_editable"}
 
 EXPECTED_TOOLS = VERB_TOOLS | QUERY_TOOLS | SELECTION_TOOLS | EXTRA_LOGGING_TOOLS
@@ -159,7 +159,7 @@ ARGUMENTS: dict = {
     "make_editable_copy": ({"source_body_id", "name"}, set()),
     "set_parameter": ({"name", "value"}, {"name", "value"}),
     # ---- 入出力
-    # STEP読み込みは**2ツール**(2026-08-15)。`import_step_editable` が通常の経路で、
+    # STEP読み込みは**2ツール**。`import_step_editable` が通常の経路で、
     # `import_step` は参照ボディだけ。**引数で打ち分けない** —— 引数で分けると、
     # ログに載るverb名と呼べるツール名が食い違う(`EXTRA_LOGGING_TOOLS` の理由)。
     "import_step_editable": ({"path"}, {"path"}),
@@ -325,12 +325,11 @@ def test_tool_names_match_the_verb_names_in_the_operation_log(server: McpServer)
     AIは `describe_document` のログを読んで次の一手を決める。ログのverb名と呼べるツール名が
     違うと、対応表を推測させることになる(推測させた分だけ静かに間違う)。
 
-    **以前はこの検査が片方向(`LOGGING_TOOLS <= registered`)だった**ため、
-    2026-08-15に `import_step_editable` という**どのツール名でもないverb**が登録されても
-    緑のままだった(ツール `import_step` が `editable` 引数で2つのverbを打ち分けていた)。
+    **片方向の検査(`LOGGING_TOOLS <= registered`)では、ツール名と綴りの違うverbが登録されても
+    検出できない**(`import_step` が `editable` 引数で2つのverbを打ち分ける設計だと起こりうる)。
     集合の**一致**にすると、次の3つが全部この1行で落ちる:
 
-    1. ツール名と綴りの違うverbを新設した(このとき実際に起きた向き)
+    1. ツール名と綴りの違うverbを新設した
     2. verbを登録せずにツールだけ足した
     3. verbを消したのにツールが残った
 
@@ -849,7 +848,7 @@ def test_set_parameter_reports_a_missing_name_as_not_found(empty_session: Sessio
 def test_make_editable_copy_turns_a_reference_into_a_solid(tmp_path: Path):
     """読み込んだ参照ボディを編集できるようにする経路がAIから届く。
 
-    **`import_step`(参照だけ)で読んだときの続き**(2026-08-15)。通常の読み込み
+    **`import_step`(参照だけ)で読んだときの続き**。通常の読み込み
     (`import_step_editable`)は編集用ボディまで作るのでこの1手は要らないが、参照だけ読む
     経路を残した以上、その続きも届いていること。
     """
@@ -869,10 +868,10 @@ def test_make_editable_copy_turns_a_reference_into_a_solid(tmp_path: Path):
 
 
 def test_import_step_gives_editable_bodies_without_any_extra_call(tmp_path: Path):
-    """**AIも「読んだら使える」**(2026-08-15)。`import_step_editable` は編集可能なボディまで作る。
+    """**AIも「読んだら使える」**。`import_step_editable` は編集可能なボディまで作る。
 
-    以前は読み込みのツールが参照ボディだけを足し、AIは `make_editable_copy` をソリッドの
-    数だけ打つ必要があった(PCケースなら27回)。**MCP1呼び出し・ログ1行**で編集できる状態まで
+    読み込みのツールが参照ボディだけを足す設計だと、AIは `make_editable_copy` をソリッドの
+    数だけ打つ必要がある(PCケースなら27回)。**MCP1呼び出し・ログ1行**で編集できる状態まで
     行くのが今の契約。**ツール名はログに載るverb名と同じ綴り**であり、その一致は
     `test_tool_names_match_the_verb_names_in_the_operation_log` が両方向で固定する。
     """
@@ -898,7 +897,7 @@ def test_import_step_gives_editable_bodies_without_any_extra_call(tmp_path: Path
 
 
 def test_import_step_can_still_add_reference_bodies_only(tmp_path: Path):
-    """`import_step` は従来どおり参照ボディだけを足し、続きの1手を `hint` で知らせる。
+    """`import_step` は参照ボディだけを足し、続きの1手を `hint` で知らせる。
 
     **通常の経路は `import_step_editable`**(本人の指示は「読んだら使える」)だが、
     参照だけ欲しい経路は残す。
@@ -948,7 +947,7 @@ def test_export_writes_a_file_and_reports_where(server: McpServer, tmp_path: Pat
 
 
 def test_exporting_does_not_corrupt_the_stdio_channel(tmp_path: Path):
-    """**OCCTのSTEP書き出しはC++側から標準出力へ統計を吐く**(2026-08-11のF1で実測)。
+    """**OCCTのSTEP書き出しはC++側から標準出力へ統計を吐く**(実測)。
 
         ****        Statistics on Transfer (Write)                 ****
         Step File Name : ...(662 ents)  Write  Done
@@ -1016,12 +1015,12 @@ def test_exporting_does_not_corrupt_the_stdio_channel(tmp_path: Path):
 
 
 def test_a_browser_export_does_not_corrupt_the_stdio_channel(tmp_path: Path):
-    """**人がブラウザから書き出しても** MCPのstdioが壊れない(G・2026-08-14に実機で踏んだ)。
+    """**人がブラウザから書き出しても** MCPのstdioが壊れない。
 
     上のテストは「MCPツールとしての書き出し」を守っているが、`duocad.mcp_server` の
     プロセスは**MCPとWebSocketの両方**を持っている。人がブラウザで書き出すと、
     同じプロセスのC++が同じ実fdへ統計を吐く —— その経路はツール実行の囲みの外にあり、
-    JSON-RPCの行に `****** Statistics on Transfer (Write) ******` が割り込んで接続が壊れた。
+    JSON-RPCの行に `****** Statistics on Transfer (Write) ******` が割り込んで接続が壊れる。
 
     **交互操作は人とAIが同じプロセスを同時に触る形**なので、v1では普通に起きる。
     ここはWebSocketクライアントとして繋ぎ、`export_step` を人の経路で踏んでから、
@@ -1176,7 +1175,7 @@ def test_undo_refuses_to_dismantle_the_document_floor(tmp_path: Path):
     """土台(STEPの読み込み・編集用ボディ)はMCP経由でも取り消せない。
 
     `Session.can_undo` が唯一の出どころであり、`describe_document` の答えと
-    実際に通るかが一致する(M4のQAで塞いだ食い違い)。
+    実際に通るかが一致する(食い違うと、AIは答えを信じて誤った判断をする)。
     """
     if not SHELF.exists():
         pytest.skip(f"参照STEPが無い: {SHELF}")

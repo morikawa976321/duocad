@@ -1,4 +1,4 @@
-"""A1契約: 述語による選択(項番15〜20・2026-08-11)。
+"""A1契約: 述語による選択(項番15〜20)。
 
 実装計画書§2のアーキテクチャは **「AIは述語で引数を作る / 人はポインティングで引数を作る」**
 で分かれている。人のクリックに当たるのが `selection.select_face` 等(test_selection.py)、
@@ -102,7 +102,7 @@ def test_face_predicates_can_combine_conditions(doc: Document):
 
 
 def test_kind_is_actually_filters_by_the_classified_kind(doc: Document):
-    """`kind_is` が**分類ラベルで実際に絞れる**こと(A2のQAが指摘した穴)。
+    """`kind_is` が**分類ラベルで実際に絞れる**こと。
 
     `validate` と `describe_ops` にopが載っていることだけを見ていると、
     評価側が `kernel.classify_face` / `classify_edge` と違うラベルを見ていても気づけない。
@@ -184,7 +184,7 @@ def test_results_are_ordered_by_body_then_index(doc: Document):
 def test_results_group_by_body_in_document_order():
     """複数Bodyでも「`doc.bodies` の順 → その中で添字昇順」になる。
 
-    1Bodyだけで見ていると**Body順の部分は壊れても落ちない**(QA指摘)。
+    1Bodyだけで見ていると**Body順の部分は壊れても落ちない**。
     Bodyをまたいで添字が交互に出ると、UIの一覧が部品ごとにまとまらない。
     """
     document = Document()
@@ -262,7 +262,7 @@ def test_the_boundary_of_a_face_is_ready_for_fillet(doc: Document):
 
 
 def test_the_boundary_excludes_the_rim_of_a_hole():
-    """**穴の縁は外周に含めない**(項番17の契約の本体。QAが指摘した穴)。
+    """**穴の縁は外周に含めない**(項番17の契約の本体)。
 
     穴無しの直方体だけで検査していると、面の**全ワイヤ**を返す誤実装でも
     「件数4・長さ30・Z=40」で緑になってしまう。貫通穴を1つ開けた箱の上面は
@@ -460,7 +460,7 @@ def test_an_invalid_predicate_leaves_the_selection_untouched(doc: Document):
 
 
 def test_a_predicate_that_fails_at_evaluation_also_leaves_the_selection_untouched(doc: Document):
-    """**`validate` を通ってから落ちる述語**でも選択は変わらない(A2のQAが指摘した穴)。
+    """**`validate` を通ってから落ちる述語**でも選択は変わらない。
 
     上のテストは `validate` 段階で落ちる例しか見ていない。`on_boundary_of_face` の
     範囲外は形式としては正しく、**実際に形状を見るまで分からない**ので、

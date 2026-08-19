@@ -1,4 +1,4 @@
-"""述語による選択 — **AIが引数を作る側の経路**(A1・2026-08-11)。
+"""述語による選択 — **AIが引数を作る側の経路**。
 
 実装計画書§2のアーキテクチャは「AIは述語で引数を作る / 人はポインティングで引数を作る」で
 分かれている。人のクリックに当たるのが `duocad.selection.select_face` 等であり、
@@ -31,7 +31,7 @@ ORが要るときは述語を2回評価して `modify_selection(add=...)` で足
 
 ## 不可視Bodyは走査しない(項番18)
 
-M3.5で決めた「見えないものは選べない」の一貫性。`body` を明示して不可視Bodyを指した
+「見えないものは選べない」への一貫性。`body` を明示して不可視Bodyを指した
 場合も ValueError(`selection._visible_body` と同じ契約)。
 
 ## 幾何は `query.py` 越しに取る
@@ -123,10 +123,10 @@ def evaluate(doc: Document, predicate: dict) -> List[dict]:
 
 
 def describe_ops() -> dict:
-    """MCPのツールスキーマ(F1)へそのまま出せる形の一覧を返す。
+    """MCPのツールスキーマへそのまま出せる形の一覧を返す。
 
     `{"face": [{"op":.., "args": {..}, "doc": ..}, ..], "edge": [...]}`。
-    **F1で書き直さずに済むように、opの定義はここ1箇所を正にする**
+    **MCPのツールスキーマを書き直さずに済むように、opの定義はここ1箇所を正にする**
     (スキーマとバリデータが二重管理になると、片方だけ増えたopが黙って通る)。
     """
     return {
@@ -258,7 +258,7 @@ def _target_bodies(doc: Document, body_id, where: Sequence[dict]) -> list:
 
     visible_ids = selectable_bodies(doc)
     if _needs_single_body(where) and len(visible_ids) != 1:
-        # **0件と複数件で言うことを変える**(2026-08-11のQA指摘)。0件は「複数ある」ではないし、
+        # **0件と複数件で言うことを変える**。0件は「複数ある」ではないし、
         # `body` を明示しても解決しない —— AIが次に何を試せばよいかが逆になる。
         raise ValueError(
             "on_boundary_of_face needs a visible body to count faces on, "
@@ -318,7 +318,7 @@ def _boundary_sets(body, where: Sequence[dict]) -> dict:
         try:
             resolved[face_index] = set(query.edges_of_face(body.shape, face_index))
         except ValueError as error:
-            # **有効な範囲まで言う**(`select_*` と揃える。2026-08-11のQA指摘)。
+            # **有効な範囲まで言う**(`select_*` と揃える)。
             # 添字だけ返しても、AIは次に何を試せばよいか分からない。
             raise ValueError(
                 f"on_boundary_of_face face out of range: {face_index} "

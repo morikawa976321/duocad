@@ -4,7 +4,7 @@ verbがbuild123dを直接呼ばないための境界。**build123dをimportし�
 (tests/test_boundaries.py が機械的に検査する)。差し替え可能に保つのが目的で、
 OCPを直接叩くのはkernel.pyの責務。
 
-M0の契約:
+契約:
     describe_shape(shape) -> dict
         {
             "face_count": int,
@@ -34,7 +34,7 @@ M0の契約:
 
 なお build123d の `.faces()` / `.edges()` は内部で `TopExp.MapShapes_s` を使うため
 **重複除去済み**である(shelf_attachment_GD.step 実測: 面56・辺66。kernelの
-`count_subshapes` と一致することを2026-08-10に確認した)。
+`count_subshapes` と一致する)。
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ from typing import Any
 
 # build123d の import はこのモジュールだけに許される(tests/test_boundaries.py)。
 # `Compound.cast` は TopoDS_Shape の実型を見て正しいラッパ型へ振り分ける classmethod で、
-# ソリッドを渡せば Solid、コンパウンドを渡せば Compound が返る(2026-08-10実測)。
+# ソリッドを渡せば Solid、コンパウンドを渡せば Compound が返る。
 # 基底の `Shape.cast` は抽象メソッドで None を返すため使えない。
 from build123d import Compound, Edge, Face
 
@@ -128,12 +128,12 @@ def describe_faces(shape: Any) -> list:
        揃っていないと底面も +Z を向き、`faces where normal·Z > 0.9` が2枚返る
        (§5の例が壊れる)。
 
-       **実装は build123d の `Face.normal_at()` に任せている**(2026-08-11実測: 面の向きを
-       自前で見て反転する処理は要らない —— `BRepPrimAPI_MakeBox` は底面を
-       `TopAbs_REVERSED` で持つが、`normal_at()` はその向きを織り込んだ外向きを返し、
-       `kernel.tessellate` の値と一致した)。**自分でもう一度反転すると二重になる。**
+       **実装は build123d の `Face.normal_at()` に任せている**(面の向きを自前で見て
+       反転する処理は要らない —— `BRepPrimAPI_MakeBox` は底面を `TopAbs_REVERSED` で
+       持つが、`normal_at()` はその向きを織り込んだ外向きを返し、`kernel.tessellate` の
+       値と一致する)。**自分でもう一度反転すると二重になる。**
        ただし tessellate 側とは別のコードパスなので、**どちらかだけ壊れると述語だけが
-       静かにずれる**(2026-08-11のQA指摘)。`test_faces_can_be_selected_by_normal` と
+       静かにずれる**。`test_faces_can_be_selected_by_normal` と
        `test_predicates.py` の `_top_face_index`(tessellate 由来)が同じ面を指すことで、
        両経路の一致が毎回検査される —— この対応関係を壊さないこと。
 

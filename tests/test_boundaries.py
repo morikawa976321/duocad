@@ -5,7 +5,7 @@ day1の予防として「問い合わせ層をインタフェースにする」�
 これが一番大事(タスクファイル記載)。ソースを静的に走査するのでOCP/build123dの実行環境が
 無くても走る。
 
-検査の実効性について(2026-08-10 監査で強化):
+検査の実効性について:
 - `duocad/` 配下を **再帰的に** 走査する(サブパッケージを作って逃げられない)。
 - `import OCP` / `import OCP.X` / `from OCP import X` / `from OCP.X import Y` に加え、
   **動的import**(`importlib.import_module("OCP.X")` / `__import__("OCP")`)も検出する。

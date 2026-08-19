@@ -1,16 +1,16 @@
-"""M3.5契約: 差分送信と性能の回帰(タスクファイル項番11〜14・2026-08-11)。
+"""M3.5契約: 差分送信と性能の回帰(タスクファイル項番11〜14)。
 
 サーバ層(`duocad/server.py` の `Session`)の契約。**アプリ層(web/)は次々タスクの範囲**で、
 ここで固定するのは「サーバが何を再計算し、何を送るか」だけ。
 
-## 何を直しているのか(2026-08-10の実測)
+## 何を直しているのか(実測)
 
 PCケース(2835面)を1ボディとして持っていたため、1部品を押し出すたびに全2835面を
 測り直していた: kernel(OCCT) 4326–5101ms / 幾何更新 合計 6602–7275ms。本人の所見は
 「押し出しをEnterしてから反映まで5秒くらいかかる」。ソリッドごとにBodyへ分ければ、
 変わるのは押した部品1つだけなので、**再テセレーションも再送も1部品分で済む**。
 
-## 実測(2026-08-11・このタスクで測った。閾値の根拠)
+## 実測(このタスクで測った。閾値の根拠)
 
 deviation=0.2 でPCケースを27ソリッドに分けたとき:
 
@@ -142,12 +142,12 @@ def test_load_step_makes_one_editable_body_per_solid(tmp_path):
 
 
 def test_the_startup_load_is_one_operation_that_cannot_be_undone(tmp_path):
-    """`Session(step_path, DEVIATION)` の起動経路は**今までどおり**動く(2026-08-15)。
+    """`Session(step_path, DEVIATION)` の起動経路が動くことを固定する。
 
-    起動オプション `--step` は廃止したが、Python APIの `Session(step_path, ...)` は残す
-    (pytestがこの形で土台を作る)。中身は verb `import_step_editable` 1本になったので、
-    **操作ログは1行**で、`_setup_floor_seq`(土台はundoできない)も従来どおり効く ——
-    以前は `import_step` + `make_editable_copy`×N + `set_visible`×N で 1+2N 行だった。
+    CLIに起動オプション `--step` は無いが、Python APIの `Session(step_path, ...)` はある
+    (pytestがこの形で土台を作る)。中身は verb `import_step_editable` 1本なので、
+    **操作ログは1行**で、`_setup_floor_seq`(土台はundoできない)も同じく効く ——
+    `import_step` + `make_editable_copy`×N + `set_visible`×N を個別に積むと 1+2N 行になる。
     """
     session = _session(SHELF, tmp_path)
 
@@ -166,7 +166,7 @@ def test_load_step_does_not_show_the_same_solid_twice(tmp_path):
 
     参照ボディ(`kind="reference"`)と編集用コピーの両方を可視のまま持つと、同じ形が
     二重にテセレーションされて二重に送られ、しかも手前の部品を消しても参照側のメッシュが
-    残ってピック失敗が再発する(2026-08-11のQA指摘)。参照を隠すか、出さないか、
+    残ってピック失敗が再発する。参照を隠すか、出さないか、
     そもそも作らないかは実装の自由 — **同時に見えるのは1ソリッドにつき1つ**が契約。
     """
     session = _session(SHELF, tmp_path)
@@ -188,8 +188,8 @@ def test_load_step_does_not_show_the_same_solid_twice(tmp_path):
 def test_state_lists_every_body_separately(tmp_path):
     """`state()` は `bodies` の配列を返し、各Bodyが自分の形状と可視性を持つ。
 
-    M1の `state()` は単一ボディ前提で `body_id` / `geometry` を平らに持っていた。
-    その形のままでは、パーツ一覧も差分送信も表現できない。
+    単一ボディ前提で `body_id` / `geometry` を平らに持つ形では、
+    パーツ一覧も差分送信も表現できない。
     """
     session = _session(SHELF, tmp_path)
 
@@ -237,7 +237,7 @@ def test_geometry_refuses_a_hidden_body(tmp_path):
     """`geometry()` は不可視Bodyに対して ValueError（隠したものは測らない）。
 
     「測らない」を `state()` の出力だけで縛ると、低い層の `geometry()` を直接呼ぶ実装が
-    隠したBodyを測り続ける穴が残る(2026-08-11のQA指摘)。入口の側で閉じる。
+    隠したBodyを測り続ける穴が残る。入口の側で閉じる。
     """
     session, bodies = _shelf_parts(tmp_path)
     target = bodies[0]
@@ -316,7 +316,7 @@ def test_the_revision_of_an_untouched_body_does_not_move(tmp_path):
 def test_hiding_a_body_is_delivered_as_a_delta(tmp_path):
     """`set_visible` の結果が `delta()` で届く(版が可視性でも上がる)。
 
-    **2026-08-11のQAが見つけた契約の穴**: 版を「形状の版」に限ると、非表示にしたBodyは
+    **版を「形状の版」に限ると起きる穴**: 非表示にしたBodyは
     `unchanged` に入り、クライアントは消したことを一度も知らされない。パーツを消して
     奥の面を選ぶという、このマイルストーンの目的そのものが差分の上で成立しなくなる。
     形状と可視性の**両方**で版が動くのが正しい。
@@ -342,7 +342,7 @@ def test_showing_a_body_again_is_delivered_as_a_delta(tmp_path):
     """再表示も `delta()` で届き、形状が戻ってくる。
 
     非表示だけを版に反映する実装（「隠したときだけ版を上げる」）でも他のテストは全部通る
-    ため、**戻す方向も別に縛る**（2026-08-11のQA 2回目の指摘）。これが無いと、消した
+    ため、**戻す方向も別に縛る**。これが無いと、消した
     パーツを画面へ戻せないまま緑になる。
     """
     session, bodies = _shelf_parts(tmp_path)
@@ -368,8 +368,8 @@ def test_undo_and_redo_of_set_visible_are_delivered_as_deltas(tmp_path):
 
     版を「verbを適用したとき」だけ上げる実装（`_undo_set_visible` が `previous` に戻すだけ）
     でも、他の可視性テストは全部緑になる。その場合クライアントは隠したままの版を持ち続け、
-    **undoしても画面から消えたまま**になる（2026-08-11のQA 3回目の指摘。2回目の
-    「再表示が届かない」と同型で、経路がundo/redoなだけ）。
+    **undoしても画面から消えたまま**になる（前述の
+    「再表示が届かない」問題と同型で、経路がundo/redoなだけ）。
 
     経路を1つずつ数え上げるのではなく、**版を状態から導く**実装にすること
     （`body_revision` のdocstring参照）。そうすれば新しい経路が増えても取りこぼさない。
@@ -424,7 +424,7 @@ def test_undo_resends_the_restored_body(tmp_path):
     """undoで形状が戻ったBodyも `delta()` で再送される。
 
     差分送信を押し出し方向にしか作っていないと、undoしても画面が押し出し後のまま残る
-    (M3で実際に起きた「全部緑のまま壊れていた経路」と同型。2026-08-11のQA指摘)。
+    (M3で実際に起きた「全部緑のまま壊れていた経路」と同型)。
     """
     session, bodies = _shelf_parts(tmp_path)
     target = bodies[0]
@@ -508,15 +508,15 @@ def test_tessellation_is_not_recomputed_for_unchanged_bodies(tmp_path, monkeypat
 def test_extruding_one_part_of_the_pc_case_stays_under_1000ms():
     """PCケースの**1部品**(面数最大=233面)の押し出しが1000ms未満で終わる。
 
-    **【無人drainへの注意・2026-08-14】このテストはマシンが混むと閾値を超えて赤になる。**
+    **【無人drainへの注意】このテストはマシンが混むと閾値を超えて赤になる。**
     単独5回で 942 / 961 / 973 / 1076 / 1164 ms と振れた実測がある(コードは無変更)。
     **この1本だけが赤いなら性能回帰ではなくマシンの負荷なので、コードを直そうとしないこと。**
     他のテストが緑ならタスクを failed/ へ送らず、報告に「この1本のみ負荷由来で赤」と書いて進める。
-    扱い(最小値採用 / -m perf で分離 / 比に変える / 廃止)は本人判断で保留中(2026-08-14)。
+    扱い(最小値採用 / -m perf で分離 / 比に変える / 廃止)は本人判断で保留中。
 
-    分解前は 4326–5101ms(2026-08-10の実機計測（記録は削除済み）。
+    分解前は 4326–5101ms(実機計測。
     `Session.extrude` 全体の時間)。分解後の実測は
-    面1 726.0ms / 面2 517.7ms / 面3 757.9ms(2026-08-11・このタスクで計測)。
+    面1 726.0ms / 面2 517.7ms / 面3 757.9ms(実測)。
 
     **計測の区間**: ここで測るのは verb `extrude_face` の呼び出し全体である。上の
     分解後の実測値は `kernel.extrude_face_on_shape` 単体のものだが、verbが足すのは
@@ -586,7 +586,7 @@ def test_pc_case_part_sizes_stay_within_the_measured_spread():
 def test_the_delta_after_an_extrusion_is_much_smaller_than_the_full_state(tmp_path):
     """押し出し後の差分のJSONが、全Body分の1/4未満になる。
 
-    2026-08-11実測: 全Body分 6,003,765バイト、1Bodyで最大のもの 600,764バイト(10.0%)。
+    実測: 全Body分 6,003,765バイト、1Bodyで最大のもの 600,764バイト(10.0%)。
     面数最大の233面Bodyでも 433,768バイト(7.2%)。閾値1/4は最悪値の2.5倍の余裕。
     **面数最大のBodyを押す**ことで、最悪ケースを測っている。
     """

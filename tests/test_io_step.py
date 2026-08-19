@@ -1,8 +1,8 @@
 """M0契約: STEP読み込み・STEP/STL書き出し(実装計画書 §7 落とし穴、§8 M0検証)。
 
-face構成(56/34/22/0/0/0)は shelf_attachment_GD.step を実際にOCPで走査して2026-08-10に実測済み
+face構成(56/34/22/0/0/0)は shelf_attachment_GD.step を実際にOCPで走査して実測済み
 (BRepAdaptor_Surfaceの面種別 + 円筒のUVBounds U範囲>350度で全周判定)。
-STEP往復の体積比較・STL偏差とファイルサイズの関係も同日に同じ環境(cadquery-ocp-novtk 7.9.3.1.1 /
+STEP往復の体積比較・STL偏差とファイルサイズの関係も同じ環境(cadquery-ocp-novtk 7.9.3.1.1 /
 build123d 0.11.1)で実測しており、下記の許容誤差・アサーションは推測ではなく実測に基づく。
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ from models import SHELF as STEP_PATH  # テスト共通のSTEPの置き場(test
 
 def test_import_step_face_breakdown_matches_measured_reference():
     """shelf_attachment_GD.step を読むと17個のBodyに分解される。各Bodyの内訳を合計すると
-    面56/平面34/全周円筒22/トーラス0/円錐0/spline0 になる(2026-08-10 OCPで直接実測した値)。"""
+    面56/平面34/全周円筒22/トーラス0/円錐0/spline0 になる(OCPで直接実測した値)。"""
     doc = Document()
     body_ids = import_step(doc, STEP_PATH)
     assert len(body_ids) == 17
@@ -81,7 +81,7 @@ def test_import_step_missing_file_raises_and_does_not_mutate_document(tmp_path):
     """存在しないSTEPパスはFileNotFoundErrorを送出し、documentにもログにも変更が残らない
     (失敗を黙って通さない。実装計画書§7・§6予防6)。
 
-    実装時の注意(2026-08-10実測・2026-08-10監査で再現確認): OCPのSTEPControl_Readerは、
+    実装時の注意: OCPのSTEPControl_Readerは、
     ReadFile()がIFSelect_RetDone以外を返した状態のまま TransferRoots()/OneShape() を呼ぶと、
     Python例外にならずプロセスごと落ちる(Windowsで終了コード0xC0000005 = アクセス違反)。
     import_stepの実装はReadFile()の戻り値を必ず先に検査し、失敗ならTransferRoots()を呼ぶ前に
@@ -104,7 +104,7 @@ def test_import_step_malformed_file_raises_value_error_and_does_not_mutate_docum
     このテストが上の「存在しないパス」のテストと別に要るのは、**存在チェックだけでは
     ReadFile()の戻り値検査を強制できない**ため。`Path.exists()` を見るだけの実装は上のテストを
     通してしまうが、中身が壊れたファイルではReadFile()がIFSelect_RetFailを返し、そのまま
-    TransferRoots()を呼ぶと**プロセスごと落ちる**(2026-08-10監査で実測。存在しないパスは
+    TransferRoots()を呼ぶと**プロセスごと落ちる**(存在しないパスは
     IFSelect_RetError、壊れた中身はIFSelect_RetFail、いずれもTransferRoots()で0xC0000005)。
     ReadFile()の戻り値を必ず検査させるのはこのテストの役目。
     """
@@ -141,9 +141,9 @@ def test_export_from_empty_document_raises_and_writes_no_file(tmp_path):
 def test_export_step_roundtrip_preserves_volume(tmp_path):
     """読んだ全ボディ(分解後)の体積の合計をexport_step→読み戻すと一致する。
 
-    M3.5でimport_stepがソリッドごとに分解するようになったため、doc.active_body()だけを
-    見ていた旧テストは1ソリッド(3〜4面)しか見なくなってしまう。export_step/export_stlは
-    body_ids省略時に「形状を持つ全Body」をcompoundにして書き出す設計にしたので(io_step.py)、
+    import_stepはソリッドごとに分解するため、doc.active_body()だけでは
+    1ソリッド(3〜4面)しか見えない。export_step/export_stlは
+    body_ids省略時に「形状を持つ全Body」をcompoundにして書き出す設計なので(io_step.py)、
     体積の合計は分解前と変わらず比較できる。
     """
     doc = Document()
@@ -179,13 +179,13 @@ def test_export_step_roundtrip_preserves_face_count(tmp_path):
 def test_export_stl_smaller_deviation_yields_larger_file(tmp_path):
     """deviationを指定でき、偏差を小さくするとファイルが大きくなる。
 
-    2026-08-10実測(監査で独立に再現。この環境・このファイルでの参考値。厳密一致は求めない):
+    実測(独立に再現。この環境・このファイルでの参考値。厳密一致は求めない):
     バイナリSTLで 0.2mm→112084B(109.5KB) / 0.05mm→143884B(140.5KB) / 0.01mm→302684B(295.6KB)。
     絶対値は環境・実装で変わりうるため、ここで縛るのは「偏差を下げるとファイルサイズが
     単調に増える」という関係だけ(実装計画書§7の 30.7/47.2/170.6KB は別形状での実測で、
     この形状ではバイナリ・ASCIIどちらとも一致しない。ASCIIだと569/730/1537KB)。
 
-    **実装上の落とし穴(2026-08-10監査で実測)**: deviationは**絶対**の線形偏差(mm)として
+    **実装上の落とし穴**: deviationは**絶対**の線形偏差(mm)として
     BRepMesh_IncrementalMeshに渡すこと(isRelative=False)。isRelative=Trueにすると
     0.2/0.05/0.01のいずれでも同じ112084Bになり、**このテストは必ず落ちる**。
     build123dの `export_stl` は内部で isRelative=True を使うので、そのまま流用してはいけない。

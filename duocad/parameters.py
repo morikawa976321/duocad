@@ -1,4 +1,4 @@
-"""名前つきの寸法値(実装計画書 §3.1 文書 / §3.4 パラメトリック・プリミティブ / §6予防5)。M3で追加。
+"""名前つきの寸法値(実装計画書 §3.1 文書 / §3.4 パラメトリック・プリミティブ / §6予防5)。
 
 **day1の予防5そのもの**: 打った数値を図形の座標に**焼き込まず**、名前つきの値として別に持つ。
 これが無いと「あとから値を編集して形が追随する」が成立せず、後から入れるには全操作の
@@ -19,7 +19,7 @@
     set_parameter(doc, name, value) -> Operation
         名前つきの値を書き換え、**形状を追随させる**。
 
-`set_parameter` の契約(ここがM3の本体):
+`set_parameter` の契約:
 
 - 存在しない名前は `KeyError`。文書にもログにも変更を残さない。
 - 成功したら `verb="set_parameter"`, `args={"name":.., "value":.., "previous":..}` を積む。
@@ -107,9 +107,9 @@ def _require_usable_value(doc: Document, name: str, value: float) -> None:
     `add_circle` 等が作成時に弾く値(NaN・inf・半径0以下・辺0・長さ0の線分)と、
     `pattern_rectangular` が弾く個数(1以上の整数)は、**後から書き込む経路でも同じように
     弾かなければならない**。作成時だけ検査していると、`set_parameter` から同じ壊れ方を
-    作れてしまう(2026-08-11のQAで実測: 半径0は以後 `regions()` が毎回失敗し、NaNは
-    例外も出さずに**同じスケッチの正常な領域まで消し**、`to_json()` が裸のNaNを吐いて
-    JSONとして壊れる。復旧手段はundoだけで、保存したら終わり)。
+    作れてしまう(半径0は以後 `regions()` が毎回失敗し、NaNは例外も出さずに**同じスケッチの
+    正常な領域まで消し**、`to_json()` が裸のNaNを吐いてJSONとして壊れる。復旧手段は
+    undoだけで、保存したら終わり)。
     """
     from .sketch import require_valid_params
 
@@ -130,7 +130,7 @@ def _require_usable_value(doc: Document, name: str, value: float) -> None:
                     raise ValueError(
                         f"pattern count {key} must be a positive integer, got {value!r}"
                     )
-                # 円形反復の配置角も同じ理由で後からの書き込みを検査する(2026-08-11)。
+                # 円形反復の配置角も同じ理由で後からの書き込みを検査する。
                 # 0 や 360超を後から書けると、複製が全部重なる/1周を超えて重なるのに
                 # 例外が出ない ＝ 作成時の検査を素通りする穴が、個数だけでなく角度にも開く。
                 if ref == name and key == "total_angle" and not 0.0 < value <= 360.0:
@@ -169,8 +169,8 @@ def rebuild(
 
     **値を「先に」確定させてから幾何を作り直す**のが要点。`set_parameter` はログの上では
     それが影響する図形や押し出しより**後ろ**に載るので、素直に順番どおり再生すると
-    「古い値で作った形状」ができ、最後に値だけ新しくなる(2026-08-11に実測: 半径を2.0から
-    2.5へ変えた文書を保存して再生すると、体積が2.0のときのまま戻った)。
+    「古い値で作った形状」ができ、最後に値だけ新しくなる(例: 半径を2.0から2.5へ変えた
+    文書を保存して再生すると、体積が2.0のときのまま戻ってしまう)。
     そこで、範囲内の `set_parameter` を**先に走査して最終値の表を作り**、各操作の直後に
     その表を当てながら再生する。パラメータ名は決定的に振り直されるので、
     表の名前は再生後の同じスカラーを指す。
@@ -190,7 +190,7 @@ def rebuild(
     # 失敗しても文書を壊さないための退避。再生は必ず**新しい** Body / Sketch を作るので、
     # ここで持つ参照は再生中に書き換わらない(だから元に戻せる)。退避が無いと、
     # 再生が途中で失敗したときに「ログは5行あるがボディもスケッチも0」という
-    # 不整合な文書が残る(2026-08-11のQAで実測: 参照STEPを移動しただけで起きる)。
+    # 不整合な文書が残る(参照STEPを移動しただけでも起きうる)。
     saved_bodies = list(doc.bodies)
     saved_sketches = list(doc.sketches)
     saved_parameters = dict(doc.parameters)
@@ -224,7 +224,7 @@ def rebuild(
 
     # **アクティブボディの選択はログに載らない**ので、再生では復元されない。
     # 放っておくと「最後に add_body されたボディ」に勝手に移り、以後の書き出し先
-    # (export_step は active を書く)と編集先が黙って変わる(2026-08-11のQAで実測)。
+    # (export_step は active を書く)と編集先が黙って変わる。
     if saved_active is not None and any(body.id == saved_active for body in doc.bodies):
         doc._active_body_id = saved_active
 
@@ -242,7 +242,7 @@ def _do_set_parameter(document: Document, operation: Operation) -> None:
     # **どのログを再生するか**が要る — `OpLog.replay(document)` は自分の entries を
     # document へ適用するだけで document.log を差し替えないので、外のログを渡された
     # 場合にここから document.log を見ると**中身の違うログを再生してしまう**
-    # (2026-08-11のQAで実測: 例外も出さずに空の文書ができた)。黙って壊すより止める。
+    # (例外も出さずに空の文書ができてしまう)。黙って壊すより止める。
     if not any(entry is operation for entry in document.log._entries):
         raise ValueError(
             "set_parameter を含むログを再生するときは、そのログを document.log へ"
@@ -262,7 +262,6 @@ register_verb(VERB_SET_PARAMETER, do=_do_set_parameter, undo=_undo_set_parameter
 def release_param_refs(document: Document, params: dict) -> None:
     """図形/反復が持っていたパラメータ名を文書から消す(undo用)。
 
-    2026-08-15にここへ集めた(`sketch.py` と `verbs/pattern.py` に同じ関数が2つあった)。
     **名前つきの値の持ち主はこのモジュール**なので、解放もここに置く。
     """
     for ref in params.values():
