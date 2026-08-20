@@ -1,4 +1,4 @@
-"""UIのコマンドIDが、サーバの表に**実在するか**を静的に検査する。
+"""UIのコマンドIDが、サーバが受け取れる名前に**実在するか**を静的に検査する。
 
 ## なぜ要るか
 
@@ -13,6 +13,14 @@
 `unknown command` で出る。この抜けを、`test_boundaries.py` と
 同じ「ソースを静的に読む」やり方で塞ぐ。
 
+## 1と2は宣言から導出になった(2026-08-20)
+
+**1と2はもう手で書かれていない** —— `duocad/catalog.py` の `COMMANDS` が唯一の宣言で、
+WSの表もMCPのスキーマもそこからの導出である。したがってこの検査が見るのは
+「**宣言と3層目(TS)の食い違い**」になった。3層目を宣言から生成しないのは、TS側が持つのが
+**引数の集め方**(どのクリックを待つか・入力欄のid・ボタンのid)であって宣言には無い
+情報だからで、名前の一致だけをここで機械的に固定する。
+
 ## 対象集合はどの層でも引数ではない(2026-08-20)
 
 かつてはWSだけが面・辺・領域を引数で受けており(`fillet(edges, radius, body_id)`)、
@@ -20,27 +28,48 @@ MCPの `fillet(radius)` と形が違った。**その差は無くなった** —
 どちらの層でもコアの確定選択から取る(`duocad/selection.py` の `require_confirmed` /
 `require_edges`)ので、WSのコマンドに残る引数は数値・名前・パスだけである。
 下の `test_no_websocket_command_takes_a_target_set` がそれを機械で固定する。
-
-## 何を検査しないか
-
-**3層を1つの表から生成することはしない。** 引数の形が揃ったので生成はできるように
-なったが、3つの表は目的が違う —— MCPはAIに見せるスキーマ(説明文が主役)、WSは
-「ソケットから呼べるものの許可リスト」、TSは引数の集め方(クリックの種別・入力欄のid)。
-1つの表から生成すると、この3つを1つのデータ構造に押し込むための分岐が生成器へ移り、
-読む側の負担は減らない。**名前の実在と、対象集合が引数に無いこと**を機械で見るのが
-ここの役割である(2026-08-19までは「引数の形が違うから」を統合しない理由にしていたが、
-その前提はこのタスクが消したので、理由を書き直した)。
 """
 from __future__ import annotations
 
 import ast
+import importlib.util
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 COMMANDS_DIR = REPO_ROOT / "web" / "src" / "commands"
+
+#: `web/src/commands/*.ts` の `CommandDef.category` に書ける値。
+#:
+#: **送信経路の分岐がこれ1つで決まる**(順序依存の暗黙のフォールバックを置かない)。
+#: `select_in_sketch` の `ui` はサーバへ何も送らない道具で、Python側の宣言には無い。
+UI_CATEGORIES = {"sketch", "feature", "file", "solid", "ui"}
+
+
+def _catalog():
+    """`duocad/catalog.py` を**パッケージを経由せずに**読み込む。
+
+    `import duocad.catalog` にすると `duocad/__init__.py` が verb を登録するために
+    `io_step` → `kernel` → OCP まで読み込む。この検査は幾何が無い環境でも走ってほしいので
+    (`test_boundaries.py` と同じ方針)、ファイル1つだけをその場で読む。
+    **宣言が純データであること**(相対importを持たないこと)がこの読み方の前提で、
+    ここが壊れたらそれ自体が設計の逸脱である。
+    """
+    name = "duocad_catalog_static"
+    if name in sys.modules:
+        return sys.modules[name]
+    path = REPO_ROOT / "duocad" / "catalog.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # **exec より先に登録する** —— `@dataclass` は `from __future__ import annotations` の
+    # 下で型注釈を解決するのに `sys.modules[cls.__module__]` を引く。
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 #: TS側のIDのうち、サーバの表に**無くてよい**もの。
 #:
@@ -74,36 +103,21 @@ BODY_ID_IS_A_NAME_HERE = {
 
 
 def _server_command_names() -> set[str]:
-    """サーバが受け取れるコマンド名を、**実行せずに**読む。
+    """サーバが受け取れるコマンド名を、**サーバを立てずに**集める。
 
     集めるのは2箇所:
 
-    1. 3つの表(`SKETCH_COMMANDS` / `FEATURE_COMMANDS` / `FILE_COMMANDS`)のキー
+    1. 宣言(`catalog.websocket_command_names()`)—— 表に載るものも、`_dispatch` が
+       個別に捌くもの(`ws="special"`)も含む
     2. `Server._dispatch` の中の `command == "..."` 比較
 
-    **2を落とすとこの検査は嘘になる** —— `extrude_face`(押し出し)と
-    `open_document`(応答が状態の差し替えで、他と形が違う)は表に載らず個別に捌かれている。
-
-    `import duocad.server` すると OCP まで読み込むので ast で読む
-    (この検査は幾何が無い環境でも走ってほしい。`test_boundaries.py` と同じ方針)。
+    **2を落とさない** —— 宣言に無いコマンドを `_dispatch` へ直接生やしたときも、
+    ここが拾えば「UIのIDがサーバに実在する」の判定は正しいままになる
+    (その逆、宣言にあるのに `_dispatch` に無い方は
+    `test_every_hand_dispatched_command_has_a_branch` が見る)。
     """
-    source = (REPO_ROOT / "duocad" / "server.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    names: set[str] = set()
-    wanted = {"SKETCH_COMMANDS", "FEATURE_COMMANDS", "FILE_COMMANDS"}
-    for node in tree.body:
-        if not isinstance(node, ast.AnnAssign) and not isinstance(node, ast.Assign):
-            continue
-        targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
-        label = next(
-            (t.id for t in targets if isinstance(t, ast.Name) and t.id in wanted), None
-        )
-        if label is None or not isinstance(node.value, ast.Dict):
-            continue
-        for key in node.value.keys:
-            if isinstance(key, ast.Constant) and isinstance(key.value, str):
-                names.add(key.value)
-    # `command == "..."` の右辺(個別に捌いているもの)
+    names = set(_catalog().websocket_command_names())
+    tree = ast.parse((REPO_ROOT / "duocad" / "server.py").read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if not isinstance(node, ast.Compare) or not isinstance(node.left, ast.Name):
             continue
@@ -116,37 +130,24 @@ def _server_command_names() -> set[str]:
 
 
 def _server_command_args() -> dict[str, tuple]:
-    """4つの表から「コマンド名 -> 受け取る引数名」を**実行せずに**読む。
+    """4つの表の「コマンド名 -> 受け取る引数名」を宣言から組み立てる。
 
-    値の形は `(メソッド名, (引数名, ...))` か `(メソッド名, (引数名, ...), verbか)`。
-    表の名前が違っても2番目が引数のタプルであることは共通なので、そこだけを取る。
+    表そのもの(`PREVIEWABLE_VERBS` / `SKETCH_COMMANDS` / `FEATURE_COMMANDS` /
+    `FILE_COMMANDS`)は `duocad/server.py` が宣言から導出しているので、ここでは
+    **同じ導出関数を呼ぶ**。同じコマンドが複数の表に出るときは引数を合併する
+    (`extrude` は `preview` だけが `body_id` を受け取る)。
     """
-    source = (REPO_ROOT / "duocad" / "server.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    wanted = {"PREVIEWABLE_VERBS", "SKETCH_COMMANDS", "FEATURE_COMMANDS", "FILE_COMMANDS"}
+    catalog = _catalog()
+    tables = [
+        catalog.previewable_verbs(),
+        catalog.ws_table("sketch"),
+        catalog.ws_table("feature"),
+        catalog.file_table(),
+    ]
     found: dict[str, tuple] = {}
-    for node in tree.body:
-        if not isinstance(node, (ast.AnnAssign, ast.Assign)):
-            continue
-        targets = [node.target] if isinstance(node, ast.AnnAssign) else node.targets
-        if not any(isinstance(t, ast.Name) and t.id in wanted for t in targets):
-            continue
-        if not isinstance(node.value, ast.Dict):
-            continue
-        for key, value in zip(node.value.keys, node.value.values):
-            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
-                continue
-            if not (isinstance(value, ast.Tuple) and len(value.elts) >= 2):
-                continue
-            args = value.elts[1]
-            if not isinstance(args, ast.Tuple):
-                continue
-            names = tuple(
-                item.value
-                for item in args.elts
-                if isinstance(item, ast.Constant) and isinstance(item.value, str)
-            )
-            found[key.value] = tuple(sorted(set(found.get(key.value, ()) + names)))
+    for table in tables:
+        for command, value in table.items():
+            found[command] = tuple(sorted(set(found.get(command, ()) + tuple(value[1]))))
     return found
 
 
@@ -184,11 +185,70 @@ def _ui_command_ids() -> dict[str, str]:
     return found
 
 
+def _ui_command_categories() -> dict[str, str]:
+    """`web/src/commands/*.ts` の `CommandDef` から「ID -> category」を読む。
+
+    `id` の次から**次の `id` の手前まで**を1つの定義とみなす(定義の途中に
+    コメントが挟まっても効く)。`category` を書き忘れた定義は値が空文字になり、
+    下の検査が名指しで落とす。
+    """
+    found: dict[str, str] = {}
+    for path in sorted(COMMANDS_DIR.glob("*.ts")):
+        text = path.read_text(encoding="utf-8")
+        marks = list(re.finditer(r"^\s*id:\s*'([^']+)'", text, re.M))
+        for index, match in enumerate(marks):
+            end = marks[index + 1].start() if index + 1 < len(marks) else len(text)
+            chunk = text[match.end():end]
+            category = re.search(r"^\s*category:\s*'([^']+)'", chunk, re.M)
+            found[match.group(1)] = category.group(1) if category else ""
+    return found
+
+
 def test_server_command_tables_are_readable():
     """先に**走査そのものが効いている**ことを見る(0件なら下の検査は常に緑になる)。"""
     names = _server_command_names()
     assert len(names) >= 10, f"サーバの表を読めていない: {sorted(names)}"
     assert {"sketch_create", "extrude", "save_document"} <= names
+
+
+def test_every_hand_dispatched_command_has_a_branch():
+    """宣言で「個別に捌く」と書いたコマンドは、**`_dispatch` に実際に分岐がある**。
+
+    導出にしたことで生まれた抜け —— 宣言に1行足せばUI側の検査は通るようになるが、
+    `ws="special"` は表に載らないので `_dispatch` に何も無くても誰も気づかない
+    (実行時に `unknown command` で返るだけ)。ここで名前の実在を見る。
+    """
+    catalog = _catalog()
+    source = (REPO_ROOT / "duocad" / "server.py").read_text(encoding="utf-8")
+    dispatch = source[source.index("async def _dispatch("):]
+    missing = [
+        command.name
+        for command in catalog.COMMANDS
+        if command.ws == "special" and f'"{command.name}"' not in dispatch
+    ]
+    assert not missing, f"`_dispatch` に分岐が無い(宣言だけある): {missing}"
+
+
+def test_every_ui_command_declares_the_same_category_as_the_declaration():
+    """**UIの `category` はコアの宣言と同じ値**(`ui` を除く)。
+
+    ここが落ちるのは「TS側でだけ分類を変えた/書き忘れた」とき。分類はUIの
+    送信経路そのもの(`App.svelte` の `runCommand`)なので、ずれると
+    **スケッチのverbがファイル操作として送られる**ような壊れ方をする。
+    以前は3つの判定関数を順に当てる形で、どれにも当たらないverbは黙って
+    `extrude_face` として送られていた。
+    """
+    declared = {command.name: command.category for command in _catalog().COMMANDS}
+    wrong: dict[str, str] = {}
+    for command_id, category in _ui_command_categories().items():
+        if category not in UI_CATEGORIES:
+            wrong[command_id] = f"未知の category: {category!r}"
+        elif category == "ui":
+            if command_id not in EXEMPT_IDS:
+                wrong[command_id] = "`ui` はサーバへ送らない道具だけ"
+        elif command_id in declared and declared[command_id] != category:
+            wrong[command_id] = f"宣言は {declared[command_id]!r} / UIは {category!r}"
+    assert not wrong, f"UIの category が宣言と合っていない: {wrong}"
 
 
 def test_ui_command_ids_are_readable():

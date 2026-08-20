@@ -13,29 +13,14 @@
 プロトコル(JSON文字列):
 
     下り(client -> server)
-        {"cmd": "get_state"}
-        {"cmd": "extrude_face", "distance": float, "client_op": int}
-        {"cmd": "set_visible", "body_id": str, "visible": bool, "client_op": int}
-        {"cmd": "undo"} / {"cmd": "redo"}
-        {"cmd": "modify_selection", "add": [ref, ...], "remove": [ref, ...], "client_op": int}
-        {"cmd": "commit_selection", "client_op": int} / {"cmd": "clear_selection", "client_op": int}
-        {"cmd": "preview", "verb": str, "args": {...}, "preview_id": int}
-        {"cmd": "sketch_create", "plane": <PlaneRef|"XY">, "client_op": int}          # C
-        {"cmd": "add_line", "sketch_id": str, "p0": [u,v], "p1": [u,v], ...}          # C
-        {"cmd": "add_circle", "sketch_id": str, "center": [u,v], "radius": float}     # C
-        {"cmd": "add_rectangle", "sketch_id": str, "corner": [u,v], "width", "height"}# C
-        {"cmd": "add_arc", "sketch_id": str, "center", "radius", "start_deg", "end_deg"} # C
-        {"cmd": "set_parameter", "name": str, "value": float, "client_op": int}       # C
-        {"cmd": "extrude", "distance": float, "mode": "join"|"cut"}                   # D
-        {"cmd": "fillet", "radius": float | [float, ...]}                             # D
-        {"cmd": "chamfer", "distance": float | [float, ...]}                          # D
-        {"cmd": "pattern_rectangular", "sketch_id", "entities", "dx","dy","nx","ny"}  # D
-        {"cmd": "pattern_circular", "sketch_id", "entities", "center","count","total_angle"} # D
-        {"cmd": "get_edges", "body_id": str}                                          # D
-        {"cmd": "save_document", "path": str} / {"cmd": "open_document", "path": str} # E
-        {"cmd": "export_step", "path": str} / {"cmd": "export_stl", "path", "deviation"} # E
-        {"cmd": "import_step_editable", "path": str}  /  {"cmd": "import_step", ...}   # E
-        {"cmd": "make_editable_copy", "source_body_id": str|None}                     # E
+        {"cmd": <コマンド名>, <引数>..., "client_op": int}
+
+**下りコマンドの一覧と引数は `duocad/catalog.py` の `COMMANDS` が正**(ここに写さない)。
+以前はこのdocstringに27行の手書きの一覧があり、下の4つの表と同じことを2箇所に書いていた。
+名前・引数・カテゴリを知りたいときは宣言を読むこと —— ソケットが受け取れる名前は
+そこから導出した表(`SKETCH_COMMANDS` / `FEATURE_COMMANDS` / `FILE_COMMANDS`)と、
+`_dispatch` が個別に捌く分(`catalog` の `ws="special"`)で全部である。
+`client_op` はどのクライアントの操作かを返すための添え物で、verbの引数ではない。
 
     上り(server -> client)
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
@@ -110,7 +95,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional  # Any: Session verb wrappers / listeners
 
-from . import io_step, kernel, parameters, query, region, selection, sketch
+from . import catalog, io_step, kernel, parameters, query, region, selection, sketch
 from .document import Document
 from .oplog import OpLog
 from .speculative import speculative
@@ -135,81 +120,41 @@ DEFAULT_WEB_DIST = REPO_ROOT / "web" / "dist"
 # 決める必要が無い。読み込むSTEPのパスを既定として持つ場所も無いので、smokeスクリプトが
 # 使うPCケースのパスは `web/scripts/models.mjs` が持つ。
 
-#: プレビューできるverb -> (`Session` のメソッド名, そのverbが受け取る引数名)。
+# --------------------------------------------------------------------------------------
+# ソケットから踏める口(**すべて `duocad/catalog.py` の宣言からの導出**)
+# --------------------------------------------------------------------------------------
+# **ここに手で表を書かない。** verbのメタ情報(名前・引数・カテゴリ・プレビュー可否・
+# MCPのスキーマ)は `catalog.COMMANDS` が唯一の宣言で、verbを1つ足すときに触るのは
+# verb本体と宣言1箇所だけである(以前はこの4つの表とMCPの2箇所を手で同期しており、
+# `fillet` は同一のタプルが2つの表に、`extrude` は `body_id` の有無が表ごとに
+# 食い違ったまま放置されていた)。
+#
+# 導出しても**登録制であることは変わらない**: ここに現れない名前はソケットから呼べない
+# (届いた文字列で `Session` の任意のメソッドを呼べる作りにしない)。表に載る引数は
+# **1つでも欠けたら KeyError にする** —— 既定値で補うと、打ち忘れた寸法や `mode` が
+# 黙って既定で入る。**並ぶのは数値・名前・パスだけで、面・辺・領域は1つも無い**
+# (2026-08-20。対象集合は `Session` のverbラッパが確定選択から取る)。
+
+#: プレビューできるverb -> (`Session` のメソッド名, 受け取ってよい引数名)。
 #:
-#: `Session.preview` の唯一の入口(docstring参照)。**ここに無いverbはプレビューできない** ——
-#: ソケットから届いた文字列で任意のメソッドを呼べる作りにしないためと、投機的実行が
-#: 正しく巻き戻せることを確認した verb だけを載せる場所を1つにするため。
-#: ただし `set_parameter` のような**操作ログを頭から再生するverbは1行足すだけでは壊れる**
-#: —— 再生が過去のseqのundoスナップショットを書き換え、`speculative` はそれを戻さない
-#: (`speculative.py` の「戻さないもの」参照)。
-PREVIEWABLE_VERBS: dict = {
-    "extrude_face": ("extrude", ("distance",)),
-    # **この3つは `speculative` の「戻さないもの」の論法が成立する側**
-    # (同一seqの再適用しか起こさない = `speculative.py` が検算済みと書いている verb)。
-    # 反復(`pattern_*`)をここへ足していないのは安全のためではなく、**変わるのが
-    # スケッチの図形でソリッドではない**ため —— `preview` が返すのは形が変わったBodyだけで、
-    # 反復は1つもBodyを変えないので、載せても常に空の応答になる(幽霊はブラウザが描く)。
-    "extrude": ("extrude_regions", ("distance", "mode", "body_id")),
-    "fillet": ("fillet", ("radius",)),
-    "chamfer": ("chamfer", ("distance",)),
-}
+#: `Session.preview` の唯一の入口(docstring参照)。**ここに無いverbはプレビューできない**。
+#: 載せてよいのは投機的実行が正しく巻き戻せることを確認したverbだけで、`set_parameter` の
+#: ような**操作ログを頭から再生するverbは宣言に1行足すだけでは壊れる**(再生が過去のseqの
+#: undoスナップショットを書き換え、`speculative` はそれを戻さない)。
+PREVIEWABLE_VERBS: dict = catalog.previewable_verbs()
 
 #: ブラウザから踏めるスケッチのコマンド -> (`Session` のメソッド名, 必須の引数名)。
-#:
-#: **「手動操作が一級の操作モード」がUIに現れる場所**。ここに無いverbは
-#: ソケットから呼べない(`PREVIEWABLE_VERBS` と同じ理由で、文字列で任意のメソッドを
-#: 呼べる作りにしない)。**引数が1つでも欠けたら KeyError にする** —— 既定値で補うと、
-#: 打ち忘れた寸法が黙って0で入る。
-#:
-#: `set_parameter` がここに居るのは、**クリックで置いた図形の値を後から打ち直す**のが
-#: パラメトリック・プリミティブ(§3.4)の効く場面そのものだから。図形の `params` は
-#: 名前つきの値への参照なので、名前さえ配れば打ち直しは既存のverbで足りる。
-SKETCH_COMMANDS: dict = {
-    "sketch_create": ("sketch_create", ("plane",)),
-    "add_line": ("add_line", ("sketch_id", "p0", "p1")),
-    "add_circle": ("add_circle", ("sketch_id", "center", "radius")),
-    "add_rectangle": ("add_rectangle", ("sketch_id", "corner", "width", "height")),
-    "add_arc": ("add_arc", ("sketch_id", "center", "radius", "start_deg", "end_deg")),
-    "set_parameter": ("set_parameter", ("name", "value")),
-}
+#: **「手動操作が一級の操作モード」がUIに現れる場所**。
+SKETCH_COMMANDS: dict = catalog.ws_table("sketch")
 
 #: ブラウザから踏めるフィーチャのコマンド -> (`Session` のメソッド名, 必須の引数名)。
-#:
-#: **「AIからしか使えないverb」が無くなる場所**。ここに並ぶ5つはコアにあり、MCPに開いている。
-#: ブラウザからはこの表を通じて呼べる(Cのスケッチと同じ経路)。`SKETCH_COMMANDS` と同じ流儀で、
-#: コアには何も足さずWebSocketに口を開けるだけ —— 開けた口が `PREVIEWABLE_VERBS` と同じ表に無いことに
-#: 意味があり、**ここに無いverbはソケットから呼べない**(文字列で任意のメソッドを
-#: 呼べる作りにしない)。**引数が1つでも欠けたら KeyError にする**(既定値で補うと、
-#: 打ち忘れた寸法や `mode` が黙って既定で入る)。
-#:
-#: `mode`(join/cut)を必須にしてあるのは、既定の `"join"` に落ちると
-#: **「切り取るつもりで足した」が黙って通る**ため。UIは人に選ばせてから送る。
-#:
-#: **並ぶのは数値・名前だけで、面・辺・領域は1つも無い**(2026-08-20)。対象集合は
-#: `Session` のverbラッパがコアの確定選択から取る(`selection.require_*`)ので、
-#: MCPの `fillet(radius)` とWSの `{"cmd":"fillet","radius":...}` が同じ形になった。
-#: `body_id` は対象集合ではない(「どのBodyへ足す/から引くか」)ので消していないが、
-#: **この表には無い** —— WSの `extrude` は昔から行き先を受け取らず、アクティブなBodyへ
-#: 足す。行き先を指せるのは MCP の `extrude` と `preview`(`PREVIEWABLE_VERBS`)だけ。
-FEATURE_COMMANDS: dict = {
-    "extrude": ("extrude_regions", ("distance", "mode")),
-    "fillet": ("fillet", ("radius",)),
-    "chamfer": ("chamfer", ("distance",)),
-    "pattern_rectangular": (
-        "pattern_rectangular",
-        ("sketch_id", "entities", "dx", "dy", "nx", "ny"),
-    ),
-    "pattern_circular": (
-        "pattern_circular",
-        ("sketch_id", "entities", "center", "count", "total_angle"),
-    ),
-}
+#: **「AIからしか使えないverb」が無くなる場所**(コアには何も足さず口を開けるだけ)。
+FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 
-#: ブラウザから踏めるファイル操作 -> (`Session` のメソッド名, 必須の引数名, verbか)。
+#: ブラウザから踏めるファイル操作 -> (`Session` のメソッド名, 必須の引数名, 文書を変えるか)。
 #:
-#: **「開く/保存」が人の手に渡る場所**。`FEATURE_COMMANDS` と同じ登録制で、
-#: ここに無いものはソケットから呼べない。**verbかどうかで応答が違う**のがこの表だけの事情:
+#: **「開く/保存」が人の手に渡る場所**。**文書を変えるかどうかで応答が違う**のが
+#: この表だけの事情:
 #:
 #: - `import_step` / `make_editable_copy` … 文書を変える(ログに載る)。応答は状態配信
 #: - `save_document` / `export_step` / `export_stl` … 文書を変えない。応答は書いた先の
@@ -217,16 +162,7 @@ FEATURE_COMMANDS: dict = {
 #:
 #: `open_document` はどちらでもない —— 文書を**差し替える**ので全接続へ配る必要があり、
 #: 表からは外して `_dispatch` で個別に扱う(状態配信の形が他と違うため)。
-FILE_COMMANDS: dict = {
-    "save_document": ("save_document", ("path",), False),
-    "export_step": ("export_step_file", ("path",), False),
-    "export_stl": ("export_stl_file", ("path", "deviation"), False),
-    # **コマンド名 == ログのverb名**。読み込みは2つのverbがあるので
-    # コマンドも2つに割る(引数で打ち分けると、名前が実際のverbと食い違う)。
-    "import_step_editable": ("import_step_editable", ("path",), True),
-    "import_step": ("import_step", ("path",), True),
-    "make_editable_copy": ("make_editable_copy_body", ("source_body_id",), True),
-}
+FILE_COMMANDS: dict = catalog.file_table()
 
 
 class Session:

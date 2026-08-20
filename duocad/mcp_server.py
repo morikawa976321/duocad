@@ -76,11 +76,11 @@ import os
 import sys
 import webbrowser
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from websockets.asyncio.server import serve
 
-from . import io_step, kernel, predicates, query, region, selection, sketch
+from . import catalog, io_step, kernel, predicates, query, region, selection, sketch
 from .server import (
     DEFAULT_WEB_DIST,
     Server,
@@ -137,6 +137,8 @@ class DocumentTools:
         self._descriptors = self._build_descriptors()
         #: 名前 → 定義。`tools/call` の線形探索を避けるための索引。
         self._descriptor_by_name = {d["name"]: d for d in self._descriptors}
+        #: 名前 → 実体のメソッド(`tools/call` が引く)。
+        self._handlers = self._build_handlers()
 
     # ------------------------------------------------------------------ 記述
     def descriptors(self) -> list[dict]:
@@ -154,521 +156,37 @@ class DocumentTools:
     def _build_descriptors(self) -> list[dict]:
         """ツール定義の実体(`__init__` から1度だけ呼ぶ)。
 
-        説明文はAIがツールを選ぶ唯一の手がかりなので、**何ができるかではなく
-        「いつ使うか」**を書く。
-        """
-        return [
-            {
-                "name": "describe_document",
-                "description": (
-                    "開いている文書のボディ一覧(body_id・名前・種別・可視性・面数・体積)と"
-                    "スケッチ・パラメータ一覧を返す。set_visible や describe_shape、"
-                    "pattern_* や set_parameter を呼ぶ前に、どのボディ・図形・寸法名が"
-                    "存在するかを知るために最初に呼ぶ。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "include_references": {
-                            "type": "boolean",
-                            "description": (
-                                "読み込んだSTEPの参照ボディ(kind='reference'・編集対象外で"
-                                "既定では隠されている)も含めるか。既定 false"
-                            ),
-                        },
-                        "include_bbox": {
-                            "type": "boolean",
-                            "description": (
-                                "各ボディの境界箱(min/max/center/size)を含めるか。"
-                                "どの部品が手前・奥にあるかを知りたいときに true。既定 false"
-                            ),
-                        },
-                        "include_regions": {
-                            "type": "boolean",
-                            "description": (
-                                "各スケッチの領域数(region_count)を含めるか。"
-                                "押し出す前に閉領域がいくつあるか確かめたいときに true。"
-                                "数え上げは計算なので既定 false"
-                            ),
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "set_visible",
-                "description": (
-                    "ボディの表示・非表示を切り替える。手前の部品を隠すと奥の面が選べるようになる"
-                    "(可視性は選択機構の一部)。操作ログに載るので undo で戻せる。"
-                    "開いているブラウザの表示も即座に変わる。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "body_id": {
-                            "type": "string",
-                            "description": "describe_document が返した body_id",
-                        },
-                        "visible": {
-                            "type": "boolean",
-                            "description": "true で表示、false で非表示",
-                        },
-                    },
-                    "required": ["body_id", "visible"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "describe_shape",
-                "description": (
-                    "1つのボディの形状を調べる(面数・辺数・面の種別内訳・体積・境界箱)。"
-                    "形は変えない読み取り専用。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "body_id": {
-                            "type": "string",
-                            "description": "describe_document が返した body_id",
-                        },
-                    },
-                    "required": ["body_id"],
-                    "additionalProperties": False,
-                },
-            },
-        ] + self._f2_descriptors()
+        **中身は `duocad/catalog.py` の宣言そのもの**(名前・説明・入力スキーマ)。
+        以前はここに29個ぶんのdictを手で書いており(`_f2_descriptors` だけで約394行)、
+        同じverbの引数がWebSocketの表とMCPのスキーマの2箇所にあった。ツールを1つ足す/
+        引数を1つ変えるときに触るのは宣言の1箇所だけである。
 
-    def _f2_descriptors(self) -> list[dict]:
-        """describe_document・set_visible・describe_shape 以外(25個)の説明とスキーマ。"""
-        empty = {"type": "object", "properties": {}, "additionalProperties": False}
-        return [
-            {
-                "name": "describe_predicates",
-                "description": (
-                    "propose_selection の predicate= に書ける述語の語彙(op・引数・種別)を"
-                    "知るときに呼ぶ。使える op を推測せず、ここに出た一覧だけを使う。"
-                ),
-                "inputSchema": empty,
-            },
-            {
-                "name": "measure",
-                "description": (
-                    "いまの選択(提案のままでよい)の長さ・面積・法線などを測るときに呼ぶ。"
-                    "verb ではないので commit 前に提案を確かめる往復に使う。"
-                ),
-                "inputSchema": empty,
-            },
-            {
-                "name": "get_selection",
-                "description": (
-                    "いまの選択(項目・origin・件数)を読むときに呼ぶ。"
-                    "提案した直後や人が直したあとに、次の一手の対象を確認する。"
-                ),
-                "inputSchema": empty,
-            },
-            {
-                "name": "propose_selection",
-                "description": (
-                    "AIが選択を書き込むときに呼ぶ。refs(明示参照)か predicate(述語)の"
-                    "どちらか一方。結果は提案(origin=proposed)なので、verb の前に"
-                    "commit_selection が要る。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "refs": {
-                            "type": "array",
-                            "description": "面・辺・頂点・領域への明示参照の配列。predicate とは同時に渡せない",
-                        },
-                        "predicate": {
-                            "type": "object",
-                            "description": "述語(describe_predicates の語彙)。refs とは同時に渡せない",
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "modify_selection",
-                "description": (
-                    "選択の過不足を差分で直すときに呼ぶ(人が直す経路)。"
-                    "触ると origin は user になり、そのままで verb に渡せる。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "add": {"type": "array", "description": "選択に足す参照の配列"},
-                        "remove": {"type": "array", "description": "選択から外す参照の配列"},
-                    },
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "commit_selection",
-                "description": (
-                    "提案を確定するときに呼ぶ(中身は変えない)。"
-                    "AIが自分の提案を fillet 等へ渡す直前の明示の1手。"
-                ),
-                "inputSchema": empty,
-            },
-            {
-                "name": "clear_selection",
-                "description": "選択を空にしたいときに呼ぶ。",
-                "inputSchema": empty,
-            },
-            {
-                "name": "sketch_create",
-                "description": (
-                    "新しいスケッチを作るときに呼ぶ。"
-                    "base_plane(XY/XZ/YZ)を渡すか、確定選択の平面(ちょうど1枚)に貼る。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "base_plane": {
-                            "type": "string",
-                            "description": "基準平面名 XY / XZ / YZ。省略時は確定選択の面",
-                        },
-                    },
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "add_line",
-                "description": "スケッチに線分を足すときに呼ぶ(平面上の2点)。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "sketch_id": {"type": "string", "description": "対象スケッチのID"},
-                        "p0": {"type": "array", "description": "始点 [u, v]"},
-                        "p1": {"type": "array", "description": "終点 [u, v]"},
-                    },
-                    "required": ["sketch_id", "p0", "p1"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "add_circle",
-                "description": "スケッチに円を足すときに呼ぶ。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "sketch_id": {"type": "string", "description": "対象スケッチのID"},
-                        "center": {"type": "array", "description": "中心 [u, v]"},
-                        "radius": {"type": "number", "description": "半径(mm)"},
-                    },
-                    "required": ["sketch_id", "center", "radius"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "add_rectangle",
-                "description": "スケッチに長方形を足すときに呼ぶ。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "sketch_id": {"type": "string", "description": "対象スケッチのID"},
-                        "corner": {"type": "array", "description": "左下コーナー [u, v]"},
-                        "width": {"type": "number", "description": "幅(mm)"},
-                        "height": {"type": "number", "description": "高さ(mm)"},
-                    },
-                    "required": ["sketch_id", "corner", "width", "height"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "add_arc",
-                "description": "スケッチに円弧を足すときに呼ぶ(中心・半径・開始角・終了角)。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "sketch_id": {"type": "string", "description": "対象スケッチのID"},
-                        "center": {"type": "array", "description": "中心 [u, v]"},
-                        "radius": {"type": "number", "description": "半径(mm)"},
-                        "start_deg": {"type": "number", "description": "開始角(度・反時計)"},
-                        "end_deg": {"type": "number", "description": "終了角(度・反時計)"},
-                    },
-                    "required": ["sketch_id", "center", "radius", "start_deg", "end_deg"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "extrude",
-                "description": (
-                    "確定選択の領域を押し出してソリッドを足す/切るときに呼ぶ。"
-                    "領域は選択から取る(引数では受けない)。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "distance": {"type": "number", "description": "押し出し量(mm・法線方向)"},
-                        "mode": {
-                            "type": "string",
-                            "description": "join(足す・既定) または cut(切る)",
-                        },
-                        "body_id": {
-                            "type": "string",
-                            "description": "対象ボディ。省略時はアクティブ(無ければ新規作成)",
-                        },
-                    },
-                    "required": ["distance"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "extrude_face",
-                "description": (
-                    "確定選択の面(ちょうど1枚)を押し出すときに呼ぶ。"
-                    "既存ソリッドの面を伸ばす経路。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "distance": {"type": "number", "description": "押し出し量(mm)"},
-                    },
-                    "required": ["distance"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "fillet",
-                "description": (
-                    "確定選択の辺を丸めるときに呼ぶ。"
-                    "半径は1つの数値か、選択順に対応する配列。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "radius": {
-                            "type": ["number", "array"],
-                            "description": "半径(mm)。辺ごとのリストも可(選択順)",
-                        },
-                    },
-                    "required": ["radius"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "chamfer",
-                "description": (
-                    "確定選択の辺を面取りするときに呼ぶ。"
-                    "距離は1つの数値か、選択順に対応する配列。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "distance": {
-                            "type": ["number", "array"],
-                            "description": "面取り距離(mm)。辺ごとのリストも可(選択順)",
-                        },
-                    },
-                    "required": ["distance"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "pattern_rectangular",
-                "description": "スケッチ上の図形を矩形に反復するときに呼ぶ。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "sketch_id": {"type": "string", "description": "対象スケッチのID"},
-                        "entities": {"type": "array", "description": "反復する図形IDの配列"},
-                        "dx": {"type": "number", "description": "X方向の間隔(mm)"},
-                        "dy": {"type": "number", "description": "Y方向の間隔(mm)"},
-                        "nx": {"type": "integer", "description": "X方向の個数(元を含む)"},
-                        "ny": {"type": "integer", "description": "Y方向の個数(元を含む)"},
-                    },
-                    "required": ["sketch_id", "entities", "dx", "dy", "nx", "ny"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "pattern_circular",
-                "description": "スケッチ上の図形を円形に反復するときに呼ぶ。",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "sketch_id": {"type": "string", "description": "対象スケッチのID"},
-                        "entities": {"type": "array", "description": "反復する図形IDの配列"},
-                        "center": {"type": "array", "description": "回転中心 [u, v]"},
-                        "count": {"type": "integer", "description": "総数(元を含む)"},
-                        "total_angle": {
-                            "type": "number",
-                            "description": "全角度(度)。既定 360",
-                        },
-                        "rotate_copies": {
-                            "type": "boolean",
-                            "description": "複製自体を回転するか。既定 true",
-                        },
-                    },
-                    "required": ["sketch_id", "entities", "center", "count"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "make_editable_copy",
-                "description": (
-                    "参照ボディから編集用ソリッドを作るときに呼ぶ。"
-                    "import_step_editable が編集可能なボディまで作るので通常は要らない —— "
-                    "import_step(参照だけ)で読んだボディを後から編集したいとき、"
-                    "または既存ボディの複製が欲しいときに使う。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "source_body_id": {
-                            "type": "string",
-                            "description": "複製元の body_id。省略時はアクティブ",
-                        },
-                        "name": {"type": "string", "description": "新しいボディの名前"},
-                    },
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "set_parameter",
-                "description": (
-                    "名前つき寸法を書き換えて形を追随させるときに呼ぶ。"
-                    "名前は describe_document の sketches[].entities[].parameters から辿る。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "パラメータ名(d1 等)"},
-                        "value": {"type": "number", "description": "新しい値"},
-                    },
-                    "required": ["name", "value"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "import_step_editable",
-                "description": (
-                    "STEPを読み込むときに呼ぶ(通常はこちら)。"
-                    "ソリッドごとに編集可能なボディができ、そのまま押し出し等の対象にできる"
-                    "(参照ボディは原本として隠したまま文書に残る)。"
-                    "読んだ後の make_editable_copy は要らない。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "読み込むSTEPファイルのパス"},
-                    },
-                    "required": ["path"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "import_step",
-                "description": (
-                    "STEPを参照ボディ(読み取り専用)としてだけ足すときに呼ぶ。"
-                    "**編集するなら import_step_editable を使う** —— こちらで読むと、"
-                    "ソリッドの数だけ make_editable_copy を打つことになる。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "読み込むSTEPファイルのパス"},
-                    },
-                    "required": ["path"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "export_step",
-                "description": (
-                    "いまの文書をSTEPファイルへ書き出すときに呼ぶ。"
-                    "文書は変えないのでログには載らない。戻り値でパスとバイト数を確認する。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "書き出し先パス"},
-                        "body_ids": {
-                            "type": "array",
-                            "description": "書き出す body_id の配列。省略時は編集用ソリッド",
-                        },
-                    },
-                    "required": ["path"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "export_stl",
-                "description": (
-                    "いまの文書をSTLへ書き出すときに呼ぶ。"
-                    "deviation でメッシュ粗さを指定する。文書は変えない。"
-                ),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "書き出し先パス"},
-                        "deviation": {
-                            "type": "number",
-                            "description": "線形偏差(mm・絶対)。省略時はセッション既定",
-                        },
-                        "body_ids": {
-                            "type": "array",
-                            "description": "書き出す body_id の配列。省略時は編集用ソリッド",
-                        },
-                    },
-                    "required": ["path"],
-                    "additionalProperties": False,
-                },
-            },
-            {
-                "name": "undo",
-                "description": (
-                    "直前の操作を取り消すときに呼ぶ。"
-                    "UIと同じ履歴。土台(読み込み等)は取り消せない。"
-                ),
-                "inputSchema": empty,
-            },
-            {
-                "name": "redo",
-                "description": "undo した操作をやり直すときに呼ぶ。UIと同じ履歴。",
-                "inputSchema": empty,
-            },
-        ]
+        説明文はAIがツールを選ぶ唯一の手がかりなので、**何ができるかではなく
+        「いつ使うか」**を書く(宣言側の `description`)。
+        """
+        return catalog.tool_descriptors()
+
+    def _build_handlers(self) -> dict:
+        """ツール名 -> 実体のメソッド(`__init__` から1度だけ組む)。
+
+        **宣言に載っている名前と同じ綴りのメソッドを引く**。以前はここに29行の辞書が
+        あり、ツールを足すたびに宣言・スキーマ・この表の3箇所を同期していた
+        (「ツール名 == verb名」の規律があるので、対応表は導出で足りる)。
+
+        **`__init__` の時点で組む**ので、宣言に足したのにメソッドを書き忘れると
+        `DocumentTools` を作った瞬間に AttributeError になる —— AIがそのツールを
+        呼ぶまで気づかない、という失敗の仕方をしない。
+        """
+        return {name: getattr(self, name) for name in catalog.tool_names()}
 
     def call(self, name: str, arguments: dict) -> dict:
         """ツールを実行して結果の辞書を返す。未知の名前は KeyError。"""
-        handlers: dict[str, Callable[..., dict]] = {
-            "describe_document": self.describe_document,
-            "set_visible": self.set_visible,
-            "describe_shape": self.describe_shape,
-            "describe_predicates": self.describe_predicates,
-            "measure": self.measure,
-            "get_selection": self.get_selection,
-            "propose_selection": self.propose_selection,
-            "modify_selection": self.modify_selection,
-            "commit_selection": self.commit_selection,
-            "clear_selection": self.clear_selection,
-            "sketch_create": self.sketch_create,
-            "add_line": self.add_line,
-            "add_circle": self.add_circle,
-            "add_rectangle": self.add_rectangle,
-            "add_arc": self.add_arc,
-            "extrude": self.extrude,
-            "extrude_face": self.extrude_face,
-            "fillet": self.fillet,
-            "chamfer": self.chamfer,
-            "pattern_rectangular": self.pattern_rectangular,
-            "pattern_circular": self.pattern_circular,
-            "make_editable_copy": self.make_editable_copy,
-            "set_parameter": self.set_parameter,
-            "import_step_editable": self.import_step_editable,
-            "import_step": self.import_step,
-            "export_step": self.export_step,
-            "export_stl": self.export_stl,
-            "undo": self.undo,
-            "redo": self.redo,
-        }
         try:
-            handler = handlers[name]
+            handler = self._handlers[name]
         except KeyError:
-            raise KeyError(f"unknown tool: {name!r} (available: {sorted(handlers)})") from None
+            raise KeyError(
+                f"unknown tool: {name!r} (available: {sorted(self._handlers)})"
+            ) from None
         return handler(**arguments)
 
     # ------------------------------------------------------------------ 実体

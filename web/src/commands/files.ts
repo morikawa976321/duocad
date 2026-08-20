@@ -34,6 +34,7 @@ function pathLike(label: string): (value: string) => string | null {
 
 export const SAVE_DOCUMENT: CommandDef = {
   id: 'save_document',
+  category: 'file',
   label: '保存',
   buttonId: 'file-save',
   preview: 'none',
@@ -56,6 +57,7 @@ export const SAVE_DOCUMENT: CommandDef = {
 
 export const OPEN_DOCUMENT: CommandDef = {
   id: 'open_document',
+  category: 'file',
   label: '開く',
   buttonId: 'file-open',
   preview: 'none',
@@ -88,6 +90,7 @@ export const OPEN_DOCUMENT: CommandDef = {
 export const IMPORT_STEP: CommandDef = {
   // **id == サーバの表のコマンド名 == ログのverb名**。
   id: 'import_step_editable',
+  category: 'file',
   label: 'STEP読み込み',
   buttonId: 'file-import-step',
   preview: 'none',
@@ -110,6 +113,7 @@ export const IMPORT_STEP: CommandDef = {
 
 export const EXPORT_STEP: CommandDef = {
   id: 'export_step',
+  category: 'file',
   label: 'STEP書き出し',
   buttonId: 'file-export-step',
   preview: 'none',
@@ -138,6 +142,7 @@ export const EXPORT_STEP: CommandDef = {
  */
 export const EXPORT_STL: CommandDef = {
   id: 'export_stl',
+  category: 'file',
   label: 'STL書き出し',
   buttonId: 'file-export-stl',
   preview: 'none',
@@ -183,6 +188,7 @@ export const EXPORT_STL: CommandDef = {
  */
 export const MAKE_EDITABLE_COPY: CommandDef = {
   id: 'make_editable_copy',
+  category: 'file',
   // ラベルは**両方の使われ方に対して正しい**必要がある。「編集可能にする」は
   // 参照ボディを起点にしたときの言い方で、UIから普通に届くのは編集用ボディの複製なので
   // 嘘になる。「編集用に複製」なら、参照からでも編集用からでも起きることを言えている。
@@ -216,11 +222,6 @@ export const FILE_COMMANDS: CommandDef[] = [
   EXPORT_STL,
   MAKE_EDITABLE_COPY,
 ]
-
-/** ファイル操作のverb(`App.svelte` が送信の分岐に使う)。 */
-export function isFileVerb(verb: string): boolean {
-  return FILE_COMMANDS.some((command) => command.id === verb)
-}
 
 /**
  * そのverbは**文書を変えるか**(＝応答が状態配信で返るか)。

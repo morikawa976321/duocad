@@ -33,6 +33,7 @@ function positive(label: string): (value: number) => string | null {
 
 export const ADD_LINE: CommandDef = {
   id: 'add_line',
+  category: 'sketch',
   label: '線分',
   buttonId: 'sketch-line',
   preview: 'local',
@@ -50,6 +51,7 @@ export const ADD_LINE: CommandDef = {
 
 export const ADD_CIRCLE: CommandDef = {
   id: 'add_circle',
+  category: 'sketch',
   label: '円',
   buttonId: 'sketch-circle',
   preview: 'local',
@@ -76,6 +78,7 @@ export const ADD_CIRCLE: CommandDef = {
 
 export const ADD_RECTANGLE: CommandDef = {
   id: 'add_rectangle',
+  category: 'sketch',
   label: '長方形',
   buttonId: 'sketch-rectangle',
   preview: 'local',
@@ -114,6 +117,7 @@ export const ADD_RECTANGLE: CommandDef = {
 
 export const ADD_ARC: CommandDef = {
   id: 'add_arc',
+  category: 'sketch',
   label: '円弧',
   buttonId: 'sketch-arc',
   preview: 'local',
@@ -173,6 +177,7 @@ export const ADD_ARC: CommandDef = {
  */
 export const SELECT_IN_SKETCH: CommandDef = {
   id: 'select_in_sketch',
+  category: 'ui',
   label: '選ぶ',
   buttonId: 'sketch-select',
   preview: 'none',
@@ -189,11 +194,6 @@ export const SKETCH_COMMANDS: CommandDef[] = [
   ADD_ARC,
 ]
 export const DEFAULT_SKETCH_COMMAND_ID = SELECT_IN_SKETCH.id
-
-/** 実際に図形を作る4つ(「選ぶ」を含まない = サーバが受け取るverbと同じ集合)。 */
-export function isSketchVerb(verb: string): boolean {
-  return [ADD_LINE, ADD_CIRCLE, ADD_RECTANGLE, ADD_ARC].some((command) => command.id === verb)
-}
 
 /**
  * 確定前の姿(幽霊)を、コアの `Entity` と同じ `{kind, params}` へ翻訳する。

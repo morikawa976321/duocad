@@ -274,8 +274,8 @@ export interface Session {
    *
    * 引数を作るのは `CommandDef.build` の仕事で、ここは運ぶだけ —— verbごとにメソッドを
    * 書き写すと、キー名を1文字打ち間違えた経路が**そのverbでだけ**静かに壊れる。
-   * **受け取れるverbの一覧はサーバの表(`SKETCH_COMMANDS` / `FEATURE_COMMANDS` /
-   * `FILE_COMMANDS`)が正**で、そこに無い文字列は `unknown command` で返る
+   * **受け取れるverbの一覧はコアの宣言(`duocad/catalog.py` の `COMMANDS`)が正**で、
+   * そこに無い文字列は `unknown command` で返る
    * (任意のメソッドを呼べる作りにしない、はサーバ側で担保する)。
    */
   runVerb(verb: string, args: Record<string, unknown>, clientOp: number): void

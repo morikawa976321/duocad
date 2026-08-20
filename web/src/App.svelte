@@ -22,23 +22,22 @@
     COMMANDS,
     faceRef,
     sameRef,
+    type CommandCategory,
     type Point2,
     type SelectableKind,
   } from './commands/command'
   import {
     SKETCH_FEATURE_COMMANDS,
     SOLID_FEATURE_COMMANDS,
-    isFeatureVerb,
     needsSketchId,
   } from './commands/features'
-  import { FILE_COMMANDS, changesDocument, isFileVerb } from './commands/files'
+  import { FILE_COMMANDS, changesDocument } from './commands/files'
   import HistoryPanel from './HistoryPanel.svelte'
   import ParametersPanel from './ParametersPanel.svelte'
   import {
     DEFAULT_SKETCH_COMMAND_ID,
     SKETCH_COMMANDS,
     ghostEntity,
-    isSketchVerb,
   } from './commands/sketch'
   import PartsPanel from './PartsPanel.svelte'
   import SelectionPanel from './SelectionPanel.svelte'
@@ -72,6 +71,17 @@
    */
   const SOLID_COMMANDS = [...COMMANDS, ...SOLID_FEATURE_COMMANDS, ...FILE_COMMANDS]
   const SKETCH_MODE_COMMANDS = [...SKETCH_COMMANDS, ...SKETCH_FEATURE_COMMANDS]
+
+  /**
+   * verb名 -> そのコマンドの分類。**送信経路の分岐はこれだけで決まる。**
+   *
+   * 知らない名前は `undefined` になり、`runCommand` がその場で断る ——
+   * 以前は3つの判定関数を順に当てて「どれにも当たらなければ `extrude_face`」だったので、
+   * 分類を書き忘れたverbが**黙って `extrude_face` として送られていた**。
+   */
+  const CATEGORY_OF: Map<string, CommandCategory> = new Map(
+    [...SOLID_COMMANDS, ...SKETCH_MODE_COMMANDS].map((command) => [command.id, command.category]),
+  )
 
   let container: HTMLDivElement
   let viewport: Viewport | null = null
@@ -151,7 +161,7 @@
       // 単調でなく(§7: r=10.0 失敗 / r=10.5 成功)、すぐ近くの値で打ち直すのが実際の
       // 使い方になる。選択はコア側にあるので失敗では消えない —— ここで戻すのは
       // 打った値だけでよく、24本選び直しにはならない。
-      if (isFeatureVerb(where)) host?.restoreLastInputs()
+      if (CATEGORY_OF.get(where) === 'feature') host?.restoreLastInputs()
     },
     onWarning: (message) => note(`警告 ${message}`),
     onStatus: (next) => {
@@ -589,54 +599,69 @@
   }
 
   // ---------------------------------------------------------------- コマンド層との繋ぎ
+  /**
+   * 揃った引数をサーバへ送る。**経路は `CommandDef.category` だけで決まる。**
+   *
+   * 以前は3つの判定関数を順に当て、どれにも当たらなければ `extrude_face` として
+   * 送っていた —— 分類を書き忘れたverbが黙って別のverbになる形の失敗だったので、
+   * **知らない名前はここで断る**。
+   */
   function runCommand(verb: string, args: Record<string, unknown>): void {
-    if (isSketchVerb(verb)) {
-      if (sketchId === null) {
-        note('スケッチモードに入っていない')
-        return
-      }
-      const op = nextOp()
-      pendingOp = op
-      viewport?.showSketchGhost(sketchId, null) // 本物を頼んだので幽霊は消す
-      // **引数名はコマンド定義とサーバの表で既に揃っている**(p0/p1・center/radius・
-      // corner/width/height・center/radius/start_deg/end_deg)。ここで詰め替えない。
-      session.runVerb(verb, { ...args, sketch_id: sketchId }, op)
-      return
-    }
-    // ---------------------------------------------------------------- D: フィーチャ
-    if (isFeatureVerb(verb)) {
-      if (needsSketchId(verb) && sketchId === null) {
-        note('スケッチモードに入っていない(反復はスケッチの図形が対象)')
-        return
-      }
-      if (verb === 'extrude' && !regionsStillExist()) {
-        // **領域はパラメータ編集で分裂・消失しうる**(§7)。消えた領域を送ると
-        // サーバは添字が範囲外だと言うだけなので、ここで何が起きたかを画面へ出す。
-        note('選んだ領域が今のスケッチに無い(図形が変わって分裂・消失した可能性)。選び直す')
-        return
-      }
-      const op = nextOp()
-      pendingOp = op
-      session.runVerb(verb, needsSketchId(verb) ? { ...args, sketch_id: sketchId } : args, op)
-      return
-    }
-    // ---------------------------------------------------------------- E: ファイル操作
-    if (isFileVerb(verb)) {
-      const op = nextOp()
-      lastFileOp = op
-      // **文書を変えないもの(保存・書き出し)は状態配信では返ってこない**ので、
-      // 「応答待ち」は立てない —— 立てると `handleFile` が来るまでEnterが拒否される。
-      if (changesDocument(verb)) pendingOp = op
-      session.runVerb(verb, args, op)
-      return
-    }
-    if (verb !== 'extrude_face') {
+    const category = CATEGORY_OF.get(verb)
+    if (category === undefined || category === 'ui') {
+      // `ui`(スケッチの「選ぶ」)は何も送らない道具なので、通常ここへは来ない。
       note(`未知のコマンド: ${verb}`)
       return
     }
-    const op = nextOp()
-    pendingOp = op
-    session.runVerb(verb, args, op)
+    switch (category) {
+      // -------------------------------------------------------------- C: スケッチ
+      case 'sketch': {
+        if (sketchId === null) {
+          note('スケッチモードに入っていない')
+          return
+        }
+        const op = nextOp()
+        pendingOp = op
+        viewport?.showSketchGhost(sketchId, null) // 本物を頼んだので幽霊は消す
+        // **引数名はコマンド定義とサーバの宣言で既に揃っている**(p0/p1・center/radius・
+        // corner/width/height・center/radius/start_deg/end_deg)。ここで詰め替えない。
+        session.runVerb(verb, { ...args, sketch_id: sketchId }, op)
+        return
+      }
+      // -------------------------------------------------------------- D: フィーチャ
+      case 'feature': {
+        if (needsSketchId(verb) && sketchId === null) {
+          note('スケッチモードに入っていない(反復はスケッチの図形が対象)')
+          return
+        }
+        if (verb === 'extrude' && !regionsStillExist()) {
+          // **領域はパラメータ編集で分裂・消失しうる**(§7)。消えた領域を送ると
+          // サーバは添字が範囲外だと言うだけなので、ここで何が起きたかを画面へ出す。
+          note('選んだ領域が今のスケッチに無い(図形が変わって分裂・消失した可能性)。選び直す')
+          return
+        }
+        const op = nextOp()
+        pendingOp = op
+        session.runVerb(verb, needsSketchId(verb) ? { ...args, sketch_id: sketchId } : args, op)
+        return
+      }
+      // -------------------------------------------------------------- E: ファイル操作
+      case 'file': {
+        const op = nextOp()
+        lastFileOp = op
+        // **文書を変えないもの(保存・書き出し)は状態配信では返ってこない**ので、
+        // 「応答待ち」は立てない —— 立てると `handleFile` が来るまでEnterが拒否される。
+        if (changesDocument(verb)) pendingOp = op
+        session.runVerb(verb, args, op)
+        return
+      }
+      default: {
+        // **分類を1つ足すとここで型が落ちる**(`never` に狭まらなくなる)。
+        // 送り方を書かずに分類だけ増やすことができない、というのがこの1行の役目。
+        const unhandled: never = category
+        note(`送り方が決まっていない分類: ${String(unhandled)}`)
+      }
+    }
   }
 
   /**

@@ -74,6 +74,7 @@ function missingSelection(values: ArgValues, name: string, label: string): strin
  */
 export const EXTRUDE_REGIONS: CommandDef = {
   id: 'extrude',
+  category: 'feature',
   label: '領域を押し出す',
   buttonId: 'extrude-regions',
   preview: 'server',
@@ -128,6 +129,7 @@ export const EXTRUDE_REGIONS: CommandDef = {
  */
 export const FILLET: CommandDef = {
   id: 'fillet',
+  category: 'feature',
   label: '丸める',
   buttonId: 'fillet',
   preview: 'server',
@@ -155,6 +157,7 @@ export const FILLET: CommandDef = {
 /** 面取り。フィレットと同じ集め方(まっすぐな辺は平面・円い辺は円錐になる)。 */
 export const CHAMFER: CommandDef = {
   id: 'chamfer',
+  category: 'feature',
   label: '面取り',
   buttonId: 'chamfer',
   preview: 'server',
@@ -187,6 +190,7 @@ export const CHAMFER: CommandDef = {
  */
 export const PATTERN_RECTANGULAR: CommandDef = {
   id: 'pattern_rectangular',
+  category: 'feature',
   label: '矩形反復',
   buttonId: 'pattern-rectangular',
   preview: 'none',
@@ -265,6 +269,7 @@ export const PATTERN_RECTANGULAR: CommandDef = {
  */
 export const PATTERN_CIRCULAR: CommandDef = {
   id: 'pattern_circular',
+  category: 'feature',
   label: '円形反復',
   buttonId: 'pattern-circular',
   preview: 'none',
@@ -324,14 +329,12 @@ export const SKETCH_FEATURE_COMMANDS: CommandDef[] = [
   PATTERN_CIRCULAR,
 ]
 
-/** フィーチャのverb(`App.svelte` が送信の分岐に使う)。 */
-export function isFeatureVerb(verb: string): boolean {
-  return [...SOLID_FEATURE_COMMANDS, ...SKETCH_FEATURE_COMMANDS].some(
-    (command) => command.id === verb,
-  )
-}
-
-/** そのverbがスケッチに属するか(`sketch_id` を足して送る必要があるか)。 */
+/**
+ * そのverbは**スケッチの図形を対象にするか**(`sketch_id` を足して送る必要があるか)。
+ *
+ * `category` では分けられない —— 反復は「フィーチャだが対象がスケッチの図形」という
+ * 位置にいる(コアでも `entities` を引数で受ける唯一のverbで、図形は選択集合に入らない)。
+ */
 export function needsSketchId(verb: string): boolean {
   return verb === PATTERN_RECTANGULAR.id || verb === PATTERN_CIRCULAR.id
 }

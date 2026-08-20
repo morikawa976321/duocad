@@ -14,6 +14,8 @@
     verbs    — verb層(1 verb 1モジュール)。extrude_face / make_editable_copy / extrude /
                pattern_rectangular / set_visible / fillet / chamfer(円弧はスケッチ側の
                図形なので sketch) / import_step_editable(読んだら編集できる状態まで作る1本)
+    catalog  — verbの単一宣言(名前・引数・カテゴリ・プレビュー可否・MCPスキーマ)。
+               server.py の4つの表も mcp_server.py のツール定義もここからの導出
     server   — WebSocketサーバ + web/dist の静的配信(アプリ層との唯一の接点)
     mcp_server — MCPサーバ。AIがコアを直接叩く口。
                  **アプリ層ではなくコアのもう一人のクライアント**で、ブラウザと同じ文書を叩く

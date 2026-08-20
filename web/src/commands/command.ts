@@ -209,9 +209,27 @@ export type BuildResult =
   | { ok: true; args: Record<string, unknown> }
   | { ok: false; reason: string }
 
+/**
+ * コマンドの分類。**送信経路の分岐はこれ1つで決まる。**
+ *
+ * - `sketch`  … スケッチのverb(`sketch_id` を足して送る。スケッチモードでなければ送らない)
+ * - `feature` … ソリッドのverb(失敗しても打った値を戻して打ち直せるようにする)
+ * - `file`    … ファイル操作(応答が状態配信で返るとは限らない。`changesDocument` 参照)
+ * - `ui`      … サーバへ何も送らない道具(スケッチモードの「選ぶ」だけ)
+ *
+ * **`ui` 以外はコアの宣言(`duocad/catalog.py`)の `category` と同じ値**であり、
+ * `tests/test_ui_command_wiring.py` が一致を機械で見る。以前はこの分岐が
+ * `isSketchVerb` / `isFeatureVerb` / `isFileVerb` の3つの判定関数と
+ * 「どれにも当たらなければ `extrude_face`」という順序依存の暗黙のフォールバックだった ——
+ * verbを足して登録を忘れると、**そのverbが黙って `extrude_face` として送られていた**。
+ */
+export type CommandCategory = 'sketch' | 'feature' | 'file' | 'ui'
+
 export interface CommandDef {
   /** verb名。**プレビューと確定で同じものをサーバへ送る**(食い違うと嘘のプレビューになる)。 */
   id: string
+  /** どの経路で送るか(`CommandCategory`)。**verbを足したら必ず書く。** */
+  category: CommandCategory
   label: string
   /** ツールバーのボタンの `id`(実機検査がここを叩く)。 */
   buttonId: string
@@ -235,6 +253,7 @@ export interface CommandDef {
 /** 面の押し出し。 */
 export const EXTRUDE_FACE: CommandDef = {
   id: 'extrude_face',
+  category: 'feature',
   label: '押し出す',
   buttonId: 'extrude',
   preview: 'server',
