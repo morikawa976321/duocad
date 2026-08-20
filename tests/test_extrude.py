@@ -164,7 +164,6 @@ def test_extrude_is_logged_and_undoable():
         "mode": "join",
         "body_id": body.id,
     }
-    assert operation.selection == [reference.to_dict()]
     json.loads(document.log.to_json())
 
     undone = document.log.undo(document)

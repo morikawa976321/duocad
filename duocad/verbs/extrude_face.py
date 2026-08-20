@@ -56,7 +56,6 @@ def extrude_face(
     operation = doc.log.append(
         VERB_EXTRUDE_FACE,
         {"body_id": body.id, "face_index": int(face_index), "distance": float(distance)},
-        selection=[{"body": body.id, "kind": "face", "index": int(face_index)}],
     )
     operation.provenance = result["provenance"]
     remember(doc, body.id, operation.seq, previous_shape)

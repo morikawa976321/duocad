@@ -35,7 +35,6 @@ class Operation:
     seq: int
     verb: str
     args: dict[str, Any] = field(default_factory=dict)
-    selection: list[Any] = field(default_factory=list)
     provenance: Optional[Any] = None
 
 
@@ -90,7 +89,7 @@ class OpLog:
     """操作ログ。append/undo/redo/to_json/from_json/replay を持つ。
 
     契約:
-        append(verb, args, selection=None) -> Operation   seqは1から単調増加
+        append(verb, args) -> Operation                    seqは1から単調増加
         undo(document) -> Operation | None                取り消した操作(無ければNone)
         redo(document) -> Operation | None                やり直した操作(無ければNone)
         to_json() -> str                                  有効なエントリ全部をJSON化
@@ -130,7 +129,7 @@ class OpLog:
         """
         return len(self._entries) - self._cursor
 
-    def append(self, verb: str, args: dict, selection: Optional[list] = None) -> Operation:
+    def append(self, verb: str, args: dict) -> Operation:
         """新しい操作を積む。redo可能だった末尾があれば新規操作で破棄される。
 
         **記録のみを行い、副作用は実行しない**(副作用は呼び出し側が先に済ませる)。
@@ -140,7 +139,6 @@ class OpLog:
             seq=len(self._entries) + 1,
             verb=verb,
             args=dict(args or {}),
-            selection=list(selection or []),
         )
         self._entries.append(operation)
         self._cursor = len(self._entries)
@@ -189,7 +187,7 @@ class OpLog:
     def to_json(self) -> str:
         """現在有効なエントリ全部をJSON文字列へシリアライズする。
 
-        **前提**: `args` / `selection` / `provenance` はJSON化できる値であること。
+        **前提**: `args` / `provenance` はJSON化できる値であること。
         `kernel.normalize_provenance()` の戻り(TopoDS_Shape を含むメモリ上の形)を
         そのまま入れるとここで TypeError になるので、永続化用の射影を挟むこと
         (kernel.normalize_provenance のdocstring参照)。
@@ -203,7 +201,12 @@ class OpLog:
 
     @classmethod
     def from_json(cls, data: str) -> "OpLog":
-        """to_json()の出力からOpLogを復元する。往復でエントリが完全一致すること。"""
+        """to_json()の出力からOpLogを復元する。往復でエントリが完全一致すること。
+
+        **後方互換**: 2026-08-20より前に保存されたファイルには `selection` キーが
+        入っている(当時の `Operation` が持っていたフィールド)。読めればよく、
+        値は使わない — 有れば無視し、無くてもエラーにしない。
+        """
         payload = json.loads(data)
         raw_operations = cls._extract_operations(payload)
 
@@ -216,7 +219,6 @@ class OpLog:
                     seq=item["seq"],
                     verb=item["verb"],
                     args=dict(item.get("args") or {}),
-                    selection=list(item.get("selection") or []),
                     provenance=item.get("provenance"),
                 )
             )

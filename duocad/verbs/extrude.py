@@ -16,8 +16,8 @@
                      (引く相手が無いのに成功したことにしない)。
         `body_id` の既定はアクティブボディ。編集できないボディ(kind="reference")は ValueError。
         ログに `verb="extrude"`,
-        `args={"regions": [<RegionRefのdict>, ...], "distance":.., "mode":.., "body_id":..}`,
-        `selection=[<RegionRefのdict>, ...]` を積んで `Operation` を返す。
+        `args={"regions": [<RegionRefのdict>, ...], "distance":.., "mode":.., "body_id":..}`
+        を積んで `Operation` を返す。
 
 **失敗を黙って通さない**(§6予防6・§7): 領域が空・添字が範囲外・`mode` が未知・距離0・
 ブーリアン失敗のいずれでも例外を送出し、**documentにもログにも変更を残さない**。
@@ -87,16 +87,14 @@ def extrude(
         previous_shape = target_body.shape
         target_body.shape = result["shape"]
 
-    selection = [ref.to_dict() for ref in refs]
     operation = doc.log.append(
         VERB_EXTRUDE,
         {
-            "regions": selection,
+            "regions": [ref.to_dict() for ref in refs],
             "distance": distance,
             "mode": mode,
             "body_id": resolved_body_id,
         },
-        selection=selection,
     )
     remember(doc, resolved_body_id, operation.seq, None if created_new else previous_shape)
     return operation

@@ -379,6 +379,9 @@ def test_selection_is_not_saved(doc: Document):
     保存の経路は `doc.log.to_json()` しか無いので、再生した文書の選択は空になる。
     **選択が空でないまま保存し、選択のある文書へ再生しても消える**ところまで見る
     (「新しい文書の選択が空」を見るだけでは、実装が間違っていても緑になる)。
+
+    `Operation.selection` フィールドは2026-08-20に廃止済み(値は常に運ばれない)なので、
+    ここで見るのは「保存されたJSONに選択の痕跡(選んだ面の参照)が一切現れないこと」。
     """
     set_visible(doc, "box", False)  # ログに1行積んでおく(空のログを再生しても何も検査できない)
     set_visible(doc, "box", True)
@@ -390,7 +393,7 @@ def test_selection_is_not_saved(doc: Document):
     # 「新しい文書の選択が空」だけを見ると、実装が間違っていても緑になる。
     operations = json.loads(saved)["operations"]
     assert operations, "検査の前提: ログに操作が入っていること"
-    assert all(not operation["selection"] for operation in operations)
+    assert all("selection" not in operation for operation in operations)
     assert json.dumps(selected, ensure_ascii=False) not in saved
 
     restored = Document()

@@ -97,18 +97,23 @@ Document.is_editable(body_id: BodyId) -> bool   # スタブ。kind=="solid"の�
 ### `Operation`（dataclass）
 
 ```python
-Operation(seq: int, verb: str, args: dict = {}, selection: list = [], provenance: Any | None = None)
+Operation(seq: int, verb: str, args: dict = {}, provenance: Any | None = None)
 ```
 
 `provenance` は**day1で用意する空スロット**（実装計画書§6予防2）。値は `None` でよく、
 **スロットの存在自体が契約**（フィールドが定義されていることをテストする）。
+
+**`selection` フィールドは2026-08-20に廃止**（9verb中書き込んでいたのは `extrude`/`extrude_face`
+の2つだけで、読むのはテストのみ・replay/undo/redo/state_metaのどこも読んでいなかった）。
+**後方互換**: 2026-08-20より前に保存されたファイルには `selection` キーが入っているが、
+`from_json` は有っても無くても受け付ける（値は無視する。既存の保存ファイルは引き続き開ける）。
 
 ### `OpLog`
 
 ```python
 OpLog()
 OpLog.entries -> list[Operation]                          # 実装済み。有効な(undoされていない)エントリ
-OpLog.append(verb: str, args: dict, selection: list | None = None) -> Operation   # スタブ
+OpLog.append(verb: str, args: dict) -> Operation           # スタブ
 OpLog.undo(document: Document) -> Operation | None         # スタブ
 OpLog.redo(document: Document) -> Operation | None         # スタブ
 OpLog.to_json() -> str                                      # スタブ
@@ -121,7 +126,7 @@ OpLog.replay(document: Document) -> None                    # スタブ
 - `seq` は `append` を呼ぶたびに1から単調増加する。
 - 保存形式は **JSON**。SQLiteは使わない（gitで差分が読める／AIが全履歴を読める／
   1モデル=1ファイルでコピー・共有できる、が理由。実装計画書§3.6）。
-- `to_json()` → `from_json()` の往復で、`entries`（`seq`/`verb`/`args`/`selection`/`provenance`
+- `to_json()` → `from_json()` の往復で、`entries`（`seq`/`verb`/`args`/`provenance`
   すべて）が完全一致すること。
 - `append()` は**ログへの記録のみ**を行う（副作用の実行はしない）。副作用（ボディの追加など）は
   呼び出し側（例: `io_step.import_step`）が `document` を直接操作した**あとで** `append()` を

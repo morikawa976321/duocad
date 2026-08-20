@@ -165,9 +165,6 @@ def test_extrude_face_logs_args_and_json_serialisable_provenance(session):
         "face_index": target["index"],
         "distance": 2.0,
     }
-    assert operation.selection == [
-        {"body": solid_id, "kind": "face", "index": target["index"]}
-    ]
     provenance = operation.provenance
     assert provenance["verb"] == "extrude_face"
     assert target["index"] in provenance["deleted"] or provenance["face_map"][str(target["index"])]
