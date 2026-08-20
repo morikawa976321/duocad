@@ -340,15 +340,14 @@ class DocumentTools:
         }
 
     def _body_summary(self, body) -> dict:
-        """封筒の `bodies[]` 1要素。キーは6つちょうど(`BODY_KEYS`)。"""
-        return {
-            "body_id": body.id,
-            "name": body.name,
-            "kind": body.kind,
-            "visible": body.visible,
-            "face_count": kernel.face_count(body.shape),
-            "volume": query.volume(body.shape),
-        }
+        """封筒の `bodies[]` 1要素。キーは6つちょうど(`BODY_KEYS`)。
+
+        `Session.body_meta` に集約(2026-08-20。revisionの有無以外同一のコピーが
+        server.pyとここの2箇所にあった)。MCP封筒は`revision`を持たない契約なので落とす。
+        """
+        meta = self.session.body_meta(body)
+        del meta["revision"]
+        return meta
 
     def _verb_envelope(self, verb: str, seq: int, before: dict[str, int]) -> dict:
         """ログに1行積むツールの成功封筒。

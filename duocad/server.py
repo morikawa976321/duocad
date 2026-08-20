@@ -281,7 +281,7 @@ class Session:
         `state()` はテストと `get_state` の全量確認用に残す。
         """
         meta = self.state_meta()
-        meta["bodies"] = [self._body_state(body) for body in self.document.bodies]
+        meta["bodies"] = [self.body_state(body) for body in self.document.bodies]
         return meta
 
     def state_meta(self) -> dict:
@@ -294,7 +294,7 @@ class Session:
         return {
             "units": self.document.units,
             "active_body_id": active.id if active is not None else None,
-            "bodies": [self._body_meta(body) for body in self.document.bodies],
+            "bodies": [self.body_meta(body) for body in self.document.bodies],
             "log": [
                 {"seq": operation.seq, "verb": operation.verb, "args": operation.args}
                 for operation in self.document.log.entries
@@ -487,11 +487,17 @@ class Session:
             if known_revisions.get(body.id) == current:
                 unchanged.append(body.id)
             else:
-                bodies_out.append(self._body_state(body))
+                bodies_out.append(self.body_state(body))
         return {"bodies": bodies_out, "unchanged": unchanged}
 
-    def _body_meta(self, body) -> dict:
-        """1Bodyぶんの軽量な状態(geometryを含まない。state_metaとの共有部分)。"""
+    def body_meta(self, body) -> dict:
+        """1Bodyぶんの軽量な状態(geometryを含まない。state_metaとの共有部分)。
+
+        **公開メソッド**(2026-08-20): `DocumentTools._body_summary`(mcp_server.py)が
+        MCP封筒の`bodies[]`要素を作るのにもこれを使う。以前はrevisionの有無以外同一の
+        コピーが2箇所にあった。MCP側は封筒の契約(`revision`を持たない)に合わせて
+        `revision`キーを落として使う。
+        """
         return {
             "body_id": body.id,
             "name": body.name,
@@ -502,9 +508,9 @@ class Session:
             "volume": query.volume(body.shape),
         }
 
-    def _body_state(self, body) -> dict:
-        """1Bodyぶんの状態(stateとdeltaが共有する)。`_body_meta` にgeometryを足したもの。"""
-        meta = self._body_meta(body)
+    def body_state(self, body) -> dict:
+        """1Bodyぶんの状態(stateとdeltaが共有する)。`body_meta` にgeometryを足したもの。"""
+        meta = self.body_meta(body)
         meta["geometry"] = self.geometry(body.id) if body.visible else None
         return meta
 
