@@ -801,3 +801,25 @@ def tool_descriptors() -> list:
 def tool_names() -> tuple:
     """MCPが公開するツール名(宣言の順)。"""
     return tuple(command.name for command in COMMANDS if command.mcp)
+
+
+def agent_instructions() -> str:
+    """**道具の使い方をAIへ渡す唯一の文**(MCPの `instructions` とアプリ内エージェントの
+    システムプロンプトは同じものを読む)。
+
+    AIから文書を触る道は2本ある —— Claude Codeなどが起動するMCPサーバ(`duocad/mcp_server.py`)と、
+    アプリ内から呼ぶエージェント(`duocad/agent/`)。**手順(propose→commit→verb)は同じ**なので、
+    2箇所に書くと片方だけ直った状態に気づけない。ツール数も宣言から数える —— 手で書いた「29」は
+    verbを足した日に古くなる。
+    """
+    return (
+        f"duocad(自作3DCAD)の開いている文書を操作する。公開ツールは{len(tool_names())}個。"
+        "面・辺・領域などの形は引数で受けず、確定した選択から取る"
+        "（数値・名前・パスだけが引数）。"
+        "手順: describe_document で概要を知る → "
+        "propose_selection(predicate または refs) → commit_selection → "
+        "fillet / extrude などの verb。"
+        "提案のままでは verb に渡せない。"
+        "形を変える verb が確定すると選択は空になるので、次の対象は選び直す。"
+        "set_visible の結果は人間が開いているブラウザの画面にも即座に反映される。"
+    )

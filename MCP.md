@@ -144,6 +144,9 @@ claude mcp add duocad -- C:\Users\tm976\mf\duocad\.venv\Scripts\python.exe -m du
   `tools/call` の3メソッドだけ。対応プロトコル版は `2025-06-18` / `2025-03-26` / `2024-11-05`。
 - **stdoutに出してよいのはJSON-RPCの行だけ**。起動メッセージ・警告はすべてstderrへ出す。
   OCCTのSTEP書き出しがC++からstdoutへ統計を吐くため、ツール実行中は fd 1 を stderr へ振る。
+- **AIへ渡す手順の文（`initialize` の `instructions`）は `catalog.agent_instructions()` の1本**で、
+  アプリ内AIエージェント（`duocad/agent/`・README §5）と共有する。手順を2箇所に書くと
+  片方だけ直った状態に気づけない。ツール数も宣言から数えるので、verbを足しても古くならない。
 - ツールの実行時エラーは JSON-RPC エラーではなく `isError: true` の構造化封筒
   （`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
   `invalid_predicate` / `internal`）。

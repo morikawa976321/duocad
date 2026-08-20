@@ -375,8 +375,13 @@ class DocumentTools:
         current = selection.get_selection(self.session.document)
         return {"count": len(current.items), "origin": current.origin}
 
-    def _error_payload(self, tool: str, error: Exception) -> dict:
-        """例外を決定3の6語彙へ畳む。MCPは先に弾かず、落ちたあとに名前を付ける。"""
+    def error_envelope(self, tool: str, error: Exception) -> dict:
+        """例外を決定3の6語彙へ畳む。MCPは先に弾かず、落ちたあとに名前を付ける。
+
+        **公開API**(`descriptors()` / `call()` と同じ面)。MCPとアプリ内エージェント
+        (`duocad/agent/loop.py`)がどちらもこれを通るので、AIが見る失敗の形は経路によらず同じ。
+        エージェント側で6語彙を書き写すと、片方だけ増えたときに気づけない。
+        """
         if isinstance(error, ToolError):
             payload = {
                 "code": error.code,
@@ -962,16 +967,9 @@ class McpServer:
             # listChanged は宣言しない。
             "capabilities": {"tools": {}},
             "serverInfo": {"name": self.name, "version": self.version},
-            "instructions": (
-                "duocad(自作3DCAD)の開いている文書を操作する。公開ツールは29個。"
-                "面・辺・領域などの形は引数で受けず、確定した選択から取る"
-                "（数値・名前・パスだけが引数）。"
-                "手順: describe_document で概要を知る → "
-                "propose_selection(predicate または refs) → commit_selection → "
-                "fillet / extrude などの verb。"
-                "提案のままでは verb に渡せない。set_visible の結果は人間が開いている"
-                "ブラウザの画面にも即座に反映される。"
-            ),
+            # **アプリ内エージェント(`duocad/agent/`)と同じ文**。手順を2箇所に書くと
+            # 片方だけ直った状態に気づけないので、宣言側(catalog.py)の1本から読む。
+            "instructions": catalog.agent_instructions(),
         }
 
     def _call_tool(self, params: dict) -> dict:
@@ -997,7 +995,7 @@ class McpServer:
         except Exception as error:
             # **ツールの実行時エラーはプロトコルエラーにしない**(仕様)。決定3の封筒へ畳む。
             # 例外テキストを素で返すと `json.loads` できず、AIが機械可読に直せない。
-            envelope = {"error": self.tools._error_payload(name, error)}
+            envelope = {"error": self.tools.error_envelope(name, error)}
             return {
                 "content": [
                     {"type": "text", "text": json.dumps(envelope, ensure_ascii=False)}

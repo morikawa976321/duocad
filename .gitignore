@@ -8,3 +8,7 @@ dist/
 
 # Windows PowerShell が LocalAppData を誤解決したときリポジトリ直下に落ちるキャッシュ
 /Microsoft/
+
+# アプリ内AIエージェントのAPIキー置き場(duocad/agent/providers.py)。
+# **中身は絶対にコミットしない**。環境変数で渡すなら要らないファイル。
+/duocad_secrets.json

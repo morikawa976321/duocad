@@ -10,7 +10,7 @@
 | | |
 |---|---|
 | ブランチ / コミット | `main`（最新は `git log -1`。2026-08-15に `--step` 廃止のコミットを載せた） |
-| テスト | **573 passed**（2026-08-20。負荷で振れる性能テスト1本も緑・§7の留保1） |
+| テスト | **599件**（2026-08-20。うち1本はllama-serverが立っているときだけ走る＝居なければskip。負荷で振れる性能テスト1本は§7の留保1） |
 | 実行環境 | Python 3.11（`.venv`）／ Node（`web/node_modules` 導入済み）／ `web/dist` ビルド済み |
 | 単位 | mm 固定 |
 
@@ -160,7 +160,7 @@ verbごとに別のダイアログを作っていないので、1つ覚えれば
 
 ### 3.1 あなたにしか判定できないもの（ここが本題）
 
-機械検査は573件が通っている（実ブラウザは5本中3本。§7の留保3）。**手で見る価値があるのは、機械が代われない2つ**:
+機械検査は599件が通っている（実ブラウザは5本中3本。§7の留保3）。**手で見る価値があるのは、機械が代われない2つ**:
 
 1. **速度の体感** — 「面を選ぶ → 距離を打つ → Enter」がFusion360と同等に速いか。
    これは企画の唯一の前提であり、2026-08-12に計測の器を撤去して**体感が正**と決めてある。
@@ -217,13 +217,13 @@ AIに「読み直してフィレット」と頼む → 形が変わる。
 
 ## 4. 自動検査の走らせ方
 
-### pytest（コア・MCPの契約 573件）
+### pytest（コア・MCPの契約 599件）
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-サーバもブラウザも要らない。2026-08-20にこのマシンで **573 passed**。
+サーバもブラウザも要らない。2026-08-20にこのマシンで **599件**（llama-serverを止めていれば 598 passed, 1 skipped）。
 マシンが混んでいると性能テスト1本だけが赤に振れる（§7の留保1。**その1本だけなら負荷が原因**）。
 
 ### 実ブラウザのsmoke（本物のクリックとキー入力）
@@ -334,6 +334,7 @@ AI側は本物のJSON-RPC**で19操作を叩く。結果はJSONでstdout末尾�
 | `duocad/kernel.py` | OCCTを直接叩く層（1566行。テセレーションもここ） | **○ここだけ** | ✗ |
 | `duocad/server.py` | WebSocket + `web/dist` の静的配信（アプリ層との唯一の接点） | ✗ | ✗ |
 | `duocad/mcp_server.py` | MCPサーバ。**アプリ層ではなくコアのもう一人のクライアント** | ✗ | ✗ |
+| `duocad/agent/` | **アプリ内AIエージェント**（プロバイダのアダプタ＋tool-useループ。UIは持たない） | ✗ | ✗ |
 
 ### frontend（`web/`）
 
@@ -377,6 +378,27 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 
 公式SDKは入れず、JSON-RPC 2.0 over stdio を素で実装している（依存を増やしていない）。
 
+### AI側（アプリ内エージェント・`duocad/agent/`）
+
+**AIから文書を触る道は2本ある**。MCPサーバは「MCPクライアントがduocadのプロセスを所有する」形なので、
+起動のトリガーも人間用UI（8766）の寿命もクライアントのセッションに縛られる。`duocad/agent/` は逆向きで、
+**先にアプリが立っていて、アプリの中からAIを選んで繋ぐ**（当面の対象はClaudeとllama-serverの2つ）。
+**MCP経路は残す** —— Claude Codeから触る道とアプリ内の道は共存する。
+
+- **道具の定義を第二の場所に書かない** —— `DocumentTools.descriptors()` を渡し、`.call()` で実行し、
+  失敗は `.error_envelope()` の6語彙。MCP経路と顔ぶれ・挙動・失敗の形が同一である
+- **システムプロンプトも二重に持たない** —— `catalog.agent_instructions()` の1本をMCPの
+  `instructions` とエージェントの両方が読む（ツール数も宣言から数える）
+- **暴走は必ず打ち切る** —— `max_turns` / `max_tokens` / 1リクエストのタイムアウト / 外から立てる中断フラグ。
+  打ち切った理由は構造化して返す（矛盾した指示を渡すと**思考**が膨らみ、1リクエストが600秒返らなかった実測がある）
+- **APIキーはブラウザへ送らない・から受け取らない**。読む順は環境変数 `ANTHROPIC_API_KEY` →
+  gitignore済みの `duocad_secrets.json`。画面に出してよいのは「設定済み / 未設定」の2値だけ
+- 依存は増やしていない（公式SDKを入れず `urllib` で素のHTTP・v1は非streaming）
+
+契約は `tests/test_agent_loop.py`（偽プロバイダで決定的に検査）。実機は
+`tests/test_agent_llama_server.py` の1本だけで、**8080にllama-serverが居なければskipする**
+（Claude APIを叩く実テストは課金が走るので書かない）。
+
 ---
 
 ## 6. リポジトリの地図
@@ -388,7 +410,8 @@ duocad/
   MCP.md                 MCPサーバの仕様と登録手順
   docs/                  IMPLEMENTATION_PLAN(現行の正) / REQUIREMENTS / PROBE_FINDINGS
   duocad/                コア（Python）。verbs/ に1 verb 1モジュール
-  tests/                 573件。README.md がAPI契約そのもの
+                         agent/ はアプリ内AIエージェント（プロバイダ＋ループ・UIなし）
+  tests/                 599件。README.md がAPI契約そのもの
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
     scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。共有部品は
