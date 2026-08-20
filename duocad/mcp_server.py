@@ -193,6 +193,25 @@ class DocumentTools:
             ) from None
         return handler(**arguments)
 
+    def current_seq(self) -> int:
+        """文書の版(H・2026-08-20)。**モデルには見せない** —— `descriptors()` には出てこず、
+        `AgentLoop` だけが読む `ToolSurface` の4つ目のメンバー。
+
+        `AgentLoop.run()` はモデルへ1往復投げるたびにこれを控え、応答が返ってから
+        (=モデルが考えている数十秒〜数分の間)値が変わっていたら、返ってきたツール呼び出しを
+        実行せずに「文書が変わったので選び直してほしい」という構造化エラーへ差し替える
+        (楽観ロック。`AgentLoop.run()` 内のコメント参照)。**面・辺・領域を消費するverb
+        は形状変更後に選択が全リセットされる**(`Session._reset_selection_if_needed`)ので
+        `selection_empty` で既に守られているが、`set_visible` / `set_parameter` のように
+        選択を経由しないverbはその門を通らない —— この版番号がその穴を埋める。
+
+        値は `len(document.log.entries)`(=undoされていない操作の本数)。undo後に**別の**
+        操作を同じ本数だけ行うと数値が偶然元へ戻りうるが、そのときは形状が変わっている
+        (=選択を消費するverbは上記の全リセットで別途守られる)ので実害はない
+        (`duocad/verbs/_common.py` の `editable_body` docstringと同じ非過剰設計)。
+        """
+        return len(self.session.document.log.entries)
+
     # ------------------------------------------------------------------ 実体
     def describe_document(
         self,

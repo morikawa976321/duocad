@@ -37,7 +37,7 @@ def chamfer(
     if not edge_list:
         raise ValueError("chamfer requires at least one edge")
 
-    body = editable_body(doc, body_id, what="chamfer")
+    body = editable_body(doc, body_id, what="chamfer", require_visible=True)
     values, stored_distance = normalize_values(edge_list, distance, label="distance")
     result = kernel.chamfer_edges(body.shape, dict(zip(edge_list, values)))
 
@@ -57,7 +57,7 @@ def _do_chamfer(document: Document, operation: Operation) -> None:
     args = operation.args
     edge_list = [int(index) for index in args["edges"]]
     values, _ = normalize_values(edge_list, args["distance"], label="distance")
-    body = editable_body(document, args["body_id"], what="chamfer")
+    body = editable_body(document, args["body_id"], what="chamfer", require_visible=True)
     result = kernel.chamfer_edges(body.shape, dict(zip(edge_list, values)))
     previous_shape = body.shape
     body.shape = result["shape"]

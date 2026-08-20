@@ -344,7 +344,7 @@ def require_confirmed(
     """
     items = confirmed_items(doc, kind=kind)
     if not items:
-        raise SelectionEmpty(f"no {kind} in the confirmed selection", kind)
+        raise SelectionEmpty(_empty_message(doc, kind), kind)
     if exactly_one and len(items) != 1:
         raise SelectionAmbiguous(
             f"exactly one {kind} required, got {len(items)}", kind
@@ -361,9 +361,37 @@ def require_edges(doc: Document) -> tuple[List[int], BodyId]:
     """
     edges = edge_indices(doc)
     if not edges:
-        raise SelectionEmpty("no edge in the confirmed selection", "edge")
+        raise SelectionEmpty(_empty_message(doc, "edge"), "edge")
     refs = confirmed_items(doc, kind="edge")
     return edges, refs[0]["body"]
+
+
+def _empty_message(doc: Document, kind: str) -> str:
+    """`SelectionEmpty` の文面(H・2026-08-20)。
+
+    **コードは分けない**(tests/README.md 決定3 —— 「何も選んでいない」と「違う種別を
+    選んだ」はどちらも次の一手が「{kind}を選び直す」で同じなので、`selection_empty` の
+    ままでよい)。ただし**文面**は分ける: 確定選択が空でなく、単に種別が違うだけなら、
+    実際に確定しているものを名指しする。矛盾した指示(例: 面が確定しているのに
+    「その選択の辺に」)を渡された結果、モデルが `get_selection` 等を何度も呼んで
+    様子見する暴走(2026-08-20実測・600秒応答なし)を防ぐのが狙いで、**1回目の
+    verb呼び出しの返り値だけで自己修復できる**ようにする(モデルに考えさせる前に
+    機械的に判定できる情報を渡す)。
+    """
+    others = confirmed_items(doc)
+    if not others:
+        return f"no {kind} in the confirmed selection"
+    counts: dict[str, int] = {}
+    for item in others:
+        item_kind = ref_kind(item)
+        counts[item_kind] = counts.get(item_kind, 0) + 1
+    described = ", ".join(
+        f"{count} {item_kind}" for item_kind, count in sorted(counts.items())
+    )
+    return (
+        f"{kind} required but the confirmed selection has {described} instead "
+        f"(no {kind}): select {kind}(s) again before calling this verb"
+    )
 
 
 # --------------------------------------------------------------------------------------

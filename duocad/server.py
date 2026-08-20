@@ -181,8 +181,8 @@ FILE_COMMANDS: dict = catalog.file_table()
 
 
 class _AiToolsOnLoop:
-    """`ToolSurface`(`descriptors`/`call`/`error_envelope`)を**イベントループのスレッドへ
-    限定する**覆い(G・2026-08-20)。
+    """`ToolSurface`(`descriptors`/`call`/`error_envelope`/`current_seq`)を**イベントループの
+    スレッドへ限定する**覆い(G・2026-08-20。`current_seq` はH・2026-08-20で追加)。
 
     `AgentLoop.run()` はモデルへのHTTPリクエストを含み数十秒かかりうるので、
     `Server._ai_start` が `run_in_executor` で実行器スレッドへ逃がす。だが `Session` は
@@ -216,7 +216,30 @@ class _AiToolsOnLoop:
     def error_envelope(self, tool: str, error: Exception) -> dict:
         return self._run_on_loop(self._tools.error_envelope, tool, error)
 
+    def current_seq(self) -> int:
+        # 読み取りだけでも `self.session.document` を触るので、`call`/`error_envelope` と
+        # 同じくイベントループのスレッドへ投げ返す(このクラスの不変条件)。
+        return self._run_on_loop(self._tools.current_seq)
+
     def _run_on_loop(self, fn: Any, *args: Any) -> Any:
+        # **既にイベントループのスレッド上にいるなら、直接呼ぶ**(H・2026-08-20)。
+        # 本番経路(`Server._ai_start`)は `AgentLoop.run()` を必ず実行器スレッドへ
+        # 逃がすので、そこからの呼び出しはここに来ない。だが `run()` が直接(実行器を
+        # 挟まずに)呼ばれる経路 —— たとえば `tests/test_agent_ws.py` が
+        # `asyncio.run(scenario())` の中でイベントループのスレッドから直に `run()` を
+        # 呼ぶ検査 —— では、`run_coroutine_threadsafe(...).result()` は**自分自身が
+        # 塞いでいるループの完了を自分自身で待つ**ことになり、必ず固まる
+        # (2026-08-20実測: `current_seq()` を毎ターン呼ぶようになって初めて顕在化した。
+        # 呼び出し前後を跨いだfixな待ち)。同じスレッドなら投げ返す意味が無いので、
+        # そのまま呼んで済ませる —— この不変条件(文書に触るのはイベントループの
+        # スレッドだけ)を破らない。
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is self._loop:
+            return fn(*args)
+
         async def _once() -> Any:
             return fn(*args)
 

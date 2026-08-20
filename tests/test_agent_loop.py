@@ -102,6 +102,9 @@ class SpyTools:
     def error_envelope(self, tool, error):
         return self.inner.error_envelope(tool, error)
 
+    def current_seq(self):
+        return self.inner.current_seq()
+
 
 def tools() -> DocumentTools:
     return DocumentTools(Session(None, 0.2))

@@ -129,6 +129,15 @@ def _resolve_target(
     body = doc.get_body(body_id)
     if body.shape is None:
         raise ValueError(f"body {body_id!r} has no shape to extrude")
+    if not body.visible:
+        # H・2026-08-20: 領域は選択から取るが、足す/引く**対象ボディ**(既定はアクティブ)は
+        # 選択の外から来る。人がこのボディを隠した後にAIが押し出すと、見えなくなった
+        # ボディが黙って変わる(`fillet`/`chamfer` と同じ穴。`_common.editable_body` の
+        # docstring参照)。ここは `editable_body()` を経由しない専用の解決関数なので、
+        # 同じ検査をここにも書く。
+        raise ValueError(
+            f"body {body_id!r} is hidden: 見えないものは指せない(set_visible で表示すること)"
+        )
     return body, body_id
 
 
@@ -204,6 +213,10 @@ def _do_extrude(document: Document, operation: Operation) -> None:
 
     if not document.is_editable(body_id):
         raise ValueError(f"body {body_id!r} is not editable")
+    if not existing.visible:
+        raise ValueError(
+            f"body {body_id!r} is hidden: 見えないものは指せない(set_visible で表示すること)"
+        )
     previous_shape = existing.shape
     result = kernel.extrude_regions(
         faces, distance, mode, normal, target_shape=existing.shape

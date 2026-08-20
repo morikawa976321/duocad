@@ -1664,6 +1664,13 @@ docstringに注意を書く」と指示していたが、`BRepCheck` が偽に�
 **型を見て**コードを付ける（`selection_empty` / `invalid_argument` /
 `selection_not_committed`。文言では判定しない）。
 
+**`SelectionEmpty` の文面は「種別の食い違い」を名指しする(H・2026-08-20)。**
+確定選択が空でなく、単に要求する種別と違うだけなら、実際に確定しているものを
+(例:「edge required but the confirmed selection has 3 face instead」)文面に入れる
+——コードは分けない(決定3の「区別の材料は `selection.count` で足りる」をそのまま守る)。
+狙いはモデルが**1回の呼び出しの返り値だけで**自己修復できるようにすること
+(`selection.py::_empty_message` / `tests/test_agent_concurrency.py`)。
+
 ## 設計上の決定事項（タスクファイルの【要決定】への回答）
 
 ### 1. 選択の置き場所は `Document.selection`（コアの状態）
@@ -2077,6 +2084,14 @@ verbごとに「これはbodyを変える」と数え上げる実装だと、ver
 「違う種別を選んだ」を分けていないのは、どちらも次の手が「辺を選び直す」で同じだから
 （区別の材料は `selection.count` で足りる）。逆に `selection_not_committed` を
 `invalid_argument` に潰してはいけない —— AIは半径を変えて再試行しはじめる。
+
+**文面(`message`)はH(2026-08-20)で「種別の食い違い」を名指しするよう変えた**
+（コードは上と同じく変えていない）。矛盾した指示("確定は面なのに辺にフィレット")を
+渡された実測で、モデルが `get_selection` 等の確認ツールを5回繰り返し1リクエストが
+600秒応答しなかった（engine `01_inbox/2026-08-20-llm-agent-thinking-runaway-on-contradictory-task.md`）
+—— `selection.count` だけでは、モデルが自分で「じゃあ何が選ばれているのか」を
+追加の呼び出しで確かめにいく。文面に確定済みの種別と件数を最初から入れておけば、
+1回のverb呼び出しの返り値だけで自己修復できる。
 
 ### 拒否はコアがする。MCPは名前を付けるだけ
 

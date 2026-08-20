@@ -60,9 +60,17 @@ def editable_body(
     """操作対象のボディ。**編集できないもの・形状の無いものは例外**(黙って無視しない)。
 
     `what` は失敗のメッセージに入る動詞(`"fillet"` / `"extrude"` 等)。
-    `require_visible` は「見えないものは指せない」を課すかどうかで、**面の添字を引数に取る
-    verb だけ True**(`extrude_face`)。辺の集合を取るverbは、隠れたボディの辺がそもそも
-    選択に入らないので、ここでは課さない(選択側 `selection._visible_body` が門番)。
+    `require_visible` は「見えないものは指せない」を課すかどうか。
+
+    **選ぶ時点の門番(`selection._visible_body`)だけでは足りない**(H・2026-08-20)。
+    以前は「辺の集合を取るverbは、隠れたボディの辺がそもそも選択に入らないので課さない」
+    としていたが、これは選択とverb呼び出しが同時に起きる(=実質シリアル)ことが前提の
+    推論だった。アプリ内AIが人と本当に並行して動くと、**確定選択した後・verbを呼ぶ前に
+    人がそのボディを隠す**という順序が起きうる —— 選択に入った時点では可視だったが、
+    使う時点では不可視というずれが生じ、選択側の門番はもう働かない。
+    実測(`tests/test_agent_concurrency.py`)で `fillet`/`chamfer` がこの順序で
+    隠したボディを黙って丸めることを確認したため、**面・辺どちらを取るverbも
+    True にする**(`fillet` / `chamfer` / `extrude_face`)。
     """
     if body_id is None:
         active = doc.active_body()

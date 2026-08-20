@@ -64,7 +64,8 @@ ProgressCallback = Callable[[str, dict, Any, bool], None]
 class ToolSurface(Protocol):
     """ループが道具に要求する面(`DocumentTools` がこれを満たす)。
 
-    **公開APIの3つだけ**に依存する —— 内部(`_build_descriptors` 等)には触らない。
+    **公開APIの4つだけ**に依存する —— 内部(`_build_descriptors` 等)には触らない。
+    `current_seq` はH・2026-08-20追加(「同時編集の安全性」楽観ロック。`run()` の docstring)。
     """
 
     def descriptors(self) -> list: ...
@@ -72,6 +73,8 @@ class ToolSurface(Protocol):
     def call(self, name: str, arguments: dict) -> dict: ...
 
     def error_envelope(self, tool: str, error: Exception) -> dict: ...
+
+    def current_seq(self) -> int: ...
 
 
 class Cancellation:
@@ -206,6 +209,13 @@ class AgentLoop:
                 )
 
             turn += 1
+            # **楽観ロック(H・2026-08-20)の版はここで控える** —— これから始まる
+            # `provider.complete()` はモデルへのHTTPリクエストで数十秒〜数分かかりうる。
+            # その間に人(またはMCP経由の別クライアント)が文書を変えていたら、モデルが
+            # いま組み立てているツール呼び出しは、自分が読んだ状態を前提にした古い決定に
+            # なる。応答が返った直後(実行する直前)にもう一度読み、ずれていたら実行しない
+            # (下記「文書が変わっていたら実行しない」)。
+            seq_before_request = self.tools.current_seq()
             try:
                 reply = self.provider.complete(
                     system=self.system,
@@ -255,6 +265,31 @@ class AgentLoop:
                 }.get(reply.stop, "stopped")
                 detail = "" if status == "completed" else f"stop_reason={reply.stop_reason!r}"
                 return self._result(status, detail, turn, outcomes, usage, text=reply.text)
+
+            # **文書が変わっていたら実行しない(楽観ロック本体)。** モデルが考えていた間に
+            # 版が動いていれば、いま届いたツール呼び出しはこのターンの前提が古い。
+            # `_reset_selection_if_needed`(コア側)は形状を変えるverbの後で確定選択を
+            # 全リセットするので、面・辺・領域を消費するverbは `selection_empty` で
+            # 既に守られている —— ここは**それを経由しないverb**(`set_visible` /
+            # `set_parameter` / body_id で直接効くもの等)を含めて一律に守る網であり、
+            # 「先回りして大きな仕組みを作らない」の要請どおり道具ごとの特別扱いはしない。
+            # **run() を終了させない** —— 打ち切り(cancelled/max_turns/max_tokens)とは違い、
+            # モデルは自己修復できる(2026-08-20実測)ので、次のターンで最新の状態を
+            # 読み直させて続ける。
+            seq_after_reply = self.tools.current_seq()
+            if seq_after_reply != seq_before_request:
+                self.turns.append(
+                    ToolResultTurn(
+                        self._unrun_results(
+                            reply.tool_calls,
+                            "文書が変わったため実行しなかった"
+                            f"(seq {seq_before_request} -> {seq_after_reply})。"
+                            "describe_document / get_selection で最新の状態を確認し、"
+                            "選択をやり直してから再試行すること。",
+                        )
+                    )
+                )
+                continue
 
             results: list[ToolResult] = []
             cancelled_at: Optional[int] = None

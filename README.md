@@ -10,7 +10,7 @@
 | | |
 |---|---|
 | ブランチ / コミット | `main`（最新は `git log -1`。2026-08-15に `--step` 廃止のコミットを載せた） |
-| テスト | **620件**（2026-08-20。うち1本はllama-serverが立っているときだけ走る＝居なければskip。負荷で振れる性能テスト1本は§7の留保1） |
+| テスト | **630件**（2026-08-20。うち1本はllama-serverが立っているときだけ走る＝居なければskip。負荷で振れる性能テスト1本は§7の留保1） |
 | 実行環境 | Python 3.11（`.venv`）／ Node（`web/node_modules` 導入済み）／ `web/dist` ビルド済み |
 | 単位 | mm 固定 |
 
@@ -182,7 +182,7 @@ verbごとに別のダイアログを作っていないので、1つ覚えれば
 
 ### 3.1 あなたにしか判定できないもの（ここが本題）
 
-機械検査は620件が通っている（実ブラウザは5本中3本。§7の留保3）。**手で見る価値があるのは、機械が代われない2つ**:
+機械検査は630件が通っている（実ブラウザは5本中3本。§7の留保3）。**手で見る価値があるのは、機械が代われない2つ**:
 
 1. **速度の体感** — 「面を選ぶ → 距離を打つ → Enter」がFusion360と同等に速いか。
    これは企画の唯一の前提であり、2026-08-12に計測の器を撤去して**体感が正**と決めてある。
@@ -244,13 +244,13 @@ AIに「読み直してフィレット」と頼む → 形が変わる。
 
 ## 4. 自動検査の走らせ方
 
-### pytest（コア・MCPの契約 620件）
+### pytest（コア・MCPの契約 630件）
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-サーバもブラウザも要らない。2026-08-20にこのマシンで **620件**（llama-serverを止めていれば 613 passed, 1 skipped）。
+サーバもブラウザも要らない。2026-08-20にこのマシンで **630件**（llama-serverを止めていれば 623 passed, 1 skipped）。
 マシンが混んでいると性能テスト1本だけが赤に振れる（§7の留保1。**その1本だけなら負荷が原因**）。
 
 ### 実ブラウザのsmoke（本物のクリックとキー入力）
@@ -419,6 +419,12 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
   `instructions` とエージェントの両方が読む（ツール数も宣言から数える）
 - **暴走は必ず打ち切る** —— `max_turns` / `max_tokens` / 1リクエストのタイムアウト / 外から立てる中断フラグ。
   打ち切った理由は構造化して返す（矛盾した指示を渡すと**思考**が膨らみ、1リクエストが600秒返らなかった実測がある）
+- **同時編集は楽観ロックで守る（H・2026-08-20）** —— モデルへの1往復を送る前に文書の版
+  （`DocumentTools.current_seq()`）を控え、応答が返ったとき版がずれていたら、そのツール呼び出しは
+  実行せず「文書が変わったので選び直せ」と返す。形状を変えるverbの確定後は確定選択が全リセットされる
+  （`Session._reset_selection_if_needed`）ので大半は元から `selection_empty` で止まっていたが、
+  `set_visible` のように選択を経由しないverbはこの網に掛からず、楽観ロックがその穴を埋める
+  （`fillet`/`chamfer`/`extrude` は対象ボディの可視性も実行時に見直すよう別途直した）
 - **APIキーはブラウザへ送らない・から受け取らない**。読む順は環境変数 `ANTHROPIC_API_KEY` →
   gitignore済みの `duocad_secrets.json`。画面に出してよいのは「設定済み / 未設定」の2値だけ
 - 依存は増やしていない（公式SDKを入れず `urllib` で素のHTTP・v1は非streaming）
@@ -441,7 +447,7 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
   (`Server._ai_start` のdocstring)
 - **`Session` に触るのは依然イベントループのスレッドだけ** —— 実行器スレッドから
   `DocumentTools` を直接叩くと、WebSocket/MCPと同時に2スレッドが文書を書き換えうる。
-  `Server._AiToolsOnLoop` が `.call()` / `.error_envelope()` を1回ずつ
+  `Server._AiToolsOnLoop` が `.call()` / `.error_envelope()` / `.current_seq()` を1回ずつ
   `asyncio.run_coroutine_threadsafe` でイベントループへ投げ返し、この不変条件を保つ
   (`mcp_server.py` 冒頭の「既知の割り切り」を作り直さずに済む形)
 - **AIがツールを呼んで文書を変えると、通常のverb配信に乗って開いている画面が変わる**
@@ -465,7 +471,7 @@ duocad/
   docs/                  IMPLEMENTATION_PLAN(現行の正) / REQUIREMENTS / PROBE_FINDINGS
   duocad/                コア（Python）。verbs/ に1 verb 1モジュール
                          agent/ はアプリ内AIエージェント（プロバイダ＋ループ・UIなし）
-  tests/                 620件。README.md がAPI契約そのもの
+  tests/                 630件。README.md がAPI契約そのもの
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
     scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。共有部品は
