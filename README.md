@@ -10,7 +10,7 @@
 | | |
 |---|---|
 | ブランチ / コミット | `main`（最新は `git log -1`。2026-08-15に `--step` 廃止のコミットを載せた） |
-| テスト | **602件**（2026-08-20。うち1本はllama-serverが立っているときだけ走る＝居なければskip。負荷で振れる性能テスト1本は§7の留保1） |
+| テスト | **614件**（2026-08-20。うち1本はllama-serverが立っているときだけ走る＝居なければskip。負荷で振れる性能テスト1本は§7の留保1） |
 | 実行環境 | Python 3.11（`.venv`）／ Node（`web/node_modules` 導入済み）／ `web/dist` ビルド済み |
 | 単位 | mm 固定 |
 
@@ -42,6 +42,17 @@ cd C:\Users\tm976\mf\duocad\web; npm install; npm run build
 **起動コマンドは `duocad.mcp_server` の1本しかない。** MCPとWebSocketと静的配信を1プロセスで
 兼ねるので、**手だけで触るときも同じもので立てて、AIに何も頼まなければよい**。
 
+**AIから文書を触る道は2本ある**(G・2026-08-20)。**どちらも起動コマンドは同じ1本**で、
+違うのはAIをどこから呼ぶかだけである:
+
+- **1.1 MCPクライアントに起動させる** —— Claude Code / Claude Desktop がこのプロセスを
+  所有する。AIはMCPのツール(29個)を通して触る
+- **1.2 自分で立ててアプリ内AIパネルを使う** —— 画面右サイドバーの「AI」パネルから
+  Claude(要APIキー)かローカルのllama-serverを選んで対話する。**MCPクライアントの
+  セッションに縛られない**(以前はこの立て方だとAIが繋がらなかった。下記1.2参照)
+
+**同時に2つ立てない**(§7)—— 1.1と1.2は同じ8765/8766を取り合うので、どちらか一方で立てる。
+
 > **起動時に決めることは何も無い（2026-08-15）。** 起動オプション `--step` / `--no-step` は廃止し、
 > **サーバは常に空の文書で立つ**。読みたいSTEPは画面の「STEP読み込み」かMCPの `import_step_editable` で
 > あとから読む —— **読んだ時点でソリッドごとに編集可能なボディができる**ので、起動時に読んだのと
@@ -60,7 +71,7 @@ claude mcp add duocad -- C:\Users\tm976\mf\duocad\.venv\Scripts\python.exe -m du
 人は `http://127.0.0.1:8766/` をブラウザで開いて手で触り、**AIに頼んだときだけAIが同じ文書を触る**。
 終了はセッションを閉じるだけ。
 
-### 1.2 Claude Codeを使わないとき — 自分で立てる
+### 1.2 Claude Codeを使わないとき — 自分で立ててアプリ内AIを使う
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m duocad.mcp_server --open
@@ -68,10 +79,20 @@ cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m duocad.mcp_server --o
 
 `--open` でブラウザが開く（省略時は開かない）。**ターミナルのstdinが開いている限り生きる**（`Ctrl+C` で終了）。
 
-> **この立て方だと、あとからAIは繋がらない。** MCPのstdioは**クライアントがプロセスを所有する**
-> 仕組みなので、Claude Codeは繋ぎに行かず**別プロセスを立てる** → WebSocket(8765)の bind に失敗して
-> **そちらが落ちる**（静的配信の方は「MCPだけで続行」の警告を出して続く）。
-> AIも使う日は 1.1 で立て、この立て方は使わない。
+**本タスク(G・2026-08-20)後は、この立て方が通常の使い方になる。** 以前はこの立て方だと
+「あとからAIは繋がらない」制約があった —— MCPのstdioは**クライアントがプロセスを所有する**
+仕組みなので、Claude Codeを後から起動しても繋ぎに行かず**別プロセスを立てる** →
+WebSocket(8765)の bind に失敗して**そちらが落ちる**（静的配信の方は「MCPだけで続行」の警告を
+出して続く）。この排他そのものは解消していない（MCPクライアントの仕様なので直せない）が、
+**AIを使うのにMCPクライアントを起動する必要が無くなった** —— 画面右サイドバーの「AI」パネルから
+Claude(`ANTHROPIC_API_KEY` 環境変数か `duocad_secrets.json` にキーが要る)か
+ローカルのllama-server(`llama-server -c 16384 --port 8080` を想定・キー不要)を選んで
+直接対話できる。人間用UIの寿命がMCPクライアントのセッション寿命に縛られる、という
+排他はここでは起きない。
+
+> **Claude Codeも同時に使いたい日は 1.1 で立てること。** この立て方(1.2)のままClaude Codeを
+> 起動すると、上記の理由でWebSocketが落ちる。1.1で立てればアプリ内AIパネルも一緒に使える
+> （MCPとアプリ内AIは同じ `Session` を叩く対等なクライアントなので、共存に問題は無い）。
 
 ### 1.3 frontendを直しながら見る（Vite dev server）
 
@@ -106,6 +127,7 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 ```
 ┌ ヘッダ: 接続状態 / 部品数 / 操作数 / プレビュー中の表示 ──────────┐
 ├ パーツ一覧 │ ビューポート(three.js。Svelteは中身を触らない)     ─┤
+├ AIパネル: プロバイダ選択・対話・ツール呼び出しの進捗・中断(G)    ─┤
 ├ 選択パネル: いま選んでいるもの・提案/確定の別・除去/クリア/確定  ─┤
 ├ パラメータ一覧 │ 操作履歴(undo/redoの位置)                      ─┤
 ├ スケッチ: XY/XZ/YZ・選択中の面に貼る・再開・図形と領域の一覧    ─┤
@@ -160,7 +182,7 @@ verbごとに別のダイアログを作っていないので、1つ覚えれば
 
 ### 3.1 あなたにしか判定できないもの（ここが本題）
 
-機械検査は602件が通っている（実ブラウザは5本中3本。§7の留保3）。**手で見る価値があるのは、機械が代われない2つ**:
+機械検査は614件が通っている（実ブラウザは5本中3本。§7の留保3）。**手で見る価値があるのは、機械が代われない2つ**:
 
 1. **速度の体感** — 「面を選ぶ → 距離を打つ → Enter」がFusion360と同等に速いか。
    これは企画の唯一の前提であり、2026-08-12に計測の器を撤去して**体感が正**と決めてある。
@@ -193,12 +215,17 @@ ACCEPTANCE.md §1 の19操作を、人間側だけでなぞる順序:
 全部見えている状態では狙った面の **0/94** しか指せず、他26部品を隠すと **35/94** になる
 （＝隠す操作が実用上必要）。
 
-### 3.4 交互操作（**この企画の核心**・§1.1で立てる）
+### 3.4 交互操作（**この企画の核心**・§1.1でもG・§1.2のAIパネルでも同じ形になる）
 
 AI側に「`parallel_to Y` の辺を提案して」と頼む → **選択パネルに提案として出る（3Dの色も確定の橙と別の水色）** →
 **画面をクリックして過不足を直す**（触った瞬間 `origin` が `proposed` → `user` に変わる＝承認）→
 AIに「読み直してフィレット」と頼む → 形が変わる。
 受入時の観測は 提案34本 → 人が1本 → `fillet(1.5)` で面 10→13。
+
+**AI側の道具は §1.1(Claude CodeのMCP)でも §1.2(画面右のAIパネル)でも同じ29ツール**
+（`duocad/agent/` が `DocumentTools` を共有する。G・2026-08-20）。§1.2のAIパネルでは
+プロバイダ(Claude / llama-server)を切り替えられ、ツール呼び出しが逐次画面に出て、
+実行中は中断できる —— MCPクライアントを開かずに交互操作の全体を1つの画面で試せる。
 
 ### 3.5 機械が既に見ているもの（手で重複して見なくてよい）
 
@@ -217,13 +244,13 @@ AIに「読み直してフィレット」と頼む → 形が変わる。
 
 ## 4. 自動検査の走らせ方
 
-### pytest（コア・MCPの契約 602件）
+### pytest（コア・MCPの契約 614件）
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-サーバもブラウザも要らない。2026-08-20にこのマシンで **602件**（llama-serverを止めていれば 601 passed, 1 skipped）。
+サーバもブラウザも要らない。2026-08-20にこのマシンで **614件**（llama-serverを止めていれば 613 passed, 1 skipped）。
 マシンが混んでいると性能テスト1本だけが赤に振れる（§7の留保1。**その1本だけなら負荷が原因**）。
 
 ### 実ブラウザのsmoke（本物のクリックとキー入力）
@@ -347,12 +374,13 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 
 | ファイル | 役割 |
 |---|---|
-| `web/src/App.svelte` | 画面全体の組み立て・選択の規則・キー処理（991行） |
+| `web/src/App.svelte` | 画面全体の組み立て・選択の規則・キー処理（897行） |
 | `web/src/viewport.ts` | three.js の囲い（load / onPick / highlight / project …） |
 | `web/src/session.ts` | WebSocketクライアント。**WSのURLはサーバが `/duocad-config.json` で教える**（ポートを推測しない） |
 | `web/src/commands/CommandHost.svelte` | **コマンド層の骨格**（起動→引数収集→プレビュー→Enter/Esc）。verbごとに作り直さない |
 | `web/src/commands/{command,sketch,features,files}.ts` | 各コマンドの引数の集め方の定義だけ |
 | `web/src/{Parts,Selection,Sketch,Parameters,History}Panel.svelte` | 各パネル（コアが持つものを描き直すだけ） |
+| `web/src/AiPanel.svelte` | **AIパネル**（G）。プロバイダ選択・対話・ツール呼び出しの進捗・中断。文書は描かない |
 
 ### AI側（MCP・29ツール）
 
@@ -378,7 +406,7 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 
 公式SDKは入れず、JSON-RPC 2.0 over stdio を素で実装している（依存を増やしていない）。
 
-### AI側（アプリ内エージェント・`duocad/agent/`）
+### AI側（アプリ内エージェント・`duocad/agent/` + G・WS配線）
 
 **AIから文書を触る道は2本ある**。MCPサーバは「MCPクライアントがduocadのプロセスを所有する」形なので、
 起動のトリガーも人間用UI（8766）の寿命もクライアントのセッションに縛られる。`duocad/agent/` は逆向きで、
@@ -399,6 +427,32 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 `tests/test_agent_llama_server.py` の1本だけで、**8080にllama-serverが居なければskipする**
 （Claude APIを叩く実テストは課金が走るので書かない）。
 
+**WebSocketへの配線(G・2026-08-20)。** `duocad/server.py` が `ai_get_status` / `ai_configure` /
+`ai_send` / `ai_cancel` の4つを持ち、画面右サイドバーの `web/src/AiPanel.svelte` から叩く。
+
+- **`ai_*` はverbではない**。文書を直接は変えない(操作ログに載らずundoの単位でもない)ので
+  `duocad/catalog.py` の `COMMANDS`(「MCPツール名==WSコマンド名==UIコマンドID==verb名」の
+  一致規律)には入れない。対応するMCPツールも作らない(AIがAIを起動する口は要らない)。
+  除外は `tests/test_ui_command_wiring.py::test_ai_commands_are_not_verbs` と
+  `tests/test_mcp_verbs.py::test_ai_commands_have_no_mcp_tool` が固定する
+- **`ai_send` はモデルへのHTTPリクエスト(数十秒かかりうる)を待たずに返る** ——
+  `AgentLoop.run()` を `run_in_executor` で実行器スレッドへ逃がし、進捗
+  (`ai_tool_call`)と最終応答(`ai_result`)は別イベントとして後から届く
+  (`Server._ai_start` のdocstring)
+- **`Session` に触るのは依然イベントループのスレッドだけ** —— 実行器スレッドから
+  `DocumentTools` を直接叩くと、WebSocket/MCPと同時に2スレッドが文書を書き換えうる。
+  `Server._AiToolsOnLoop` が `.call()` / `.error_envelope()` を1回ずつ
+  `asyncio.run_coroutine_threadsafe` でイベントループへ投げ返し、この不変条件を保つ
+  (`mcp_server.py` 冒頭の「既知の割り切り」を作り直さずに済む形)
+- **AIがツールを呼んで文書を変えると、通常のverb配信に乗って開いている画面が変わる**
+  (`applied` は付かない。MCPが変えたときと同じ扱い)
+- 中断は `ai_cancel`。走っているHTTPリクエスト自体は切れないので、反映は次の
+  チェックポイント(モデルへ投げる前・ツール1件ごと)まで遅れうる —— 「どこまでやったか」は
+  `ai_result.tool_calls` に残る
+
+契約は `tests/test_agent_ws.py`(偽プロバイダで `duocad.server.build_provider` を差し替え、
+実キー・実HTTPなしで決定的に検査)。
+
 ---
 
 ## 6. リポジトリの地図
@@ -411,7 +465,7 @@ duocad/
   docs/                  IMPLEMENTATION_PLAN(現行の正) / REQUIREMENTS / PROBE_FINDINGS
   duocad/                コア（Python）。verbs/ に1 verb 1モジュール
                          agent/ はアプリ内AIエージェント（プロバイダ＋ループ・UIなし）
-  tests/                 602件。README.md がAPI契約そのもの
+  tests/                 614件。README.md がAPI契約そのもの
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
     scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。共有部品は

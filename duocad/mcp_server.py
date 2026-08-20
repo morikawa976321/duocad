@@ -63,7 +63,11 @@
 - ツールの実行はイベントループの中で同期に走る(重い `describe_*` の間はWebSocketの配信も
   止まる)。これは既存の `Session.extrude` が同じ性質を持つのと揃えたもので、
   実行器スレッドへ逃がすと `Server` 側のスレッド前提(`_dispatching` の印・ループの参照)を
-  作り直すことになる。
+  作り直すことになる。**この割り切りはMCP経路には残したまま**(このプロセスの中で
+  `duocad/server.py` の `_AiToolsOnLoop` が同じ問題を別の形で解いた —— アプリ内AI
+  (G・`duocad/agent/`)は「LLMへのHTTPリクエスト(数十秒)」だけを実行器スレッドへ逃がし、
+  `Session` に触る瞬間は `run_coroutine_threadsafe` でイベントループへ1回ずつ投げ返す。
+  MCPのツール呼び出し自体はHTTPを持たず短いので、同じ手当ては要らないと判断した)。
 
 **OCPを直接importしない**(境界は kernel.py だけ。tests/test_boundaries.py が検査する)。
 """
@@ -1149,6 +1153,11 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
     """WebSocket・静的配信・MCPを1つのイベントループで動かす。"""
     server = Server(session)
     server.bind_loop(asyncio.get_running_loop())
+    # **同じ `DocumentTools`(= 同じ `Session`)をMCPとアプリ内AIの両方へ渡す**(G)。
+    # 別々に作ると道具の顔ぶれは同じでも別インスタンスになり、`_handlers` の索引を
+    # 2つ持つ理由が無い(状態は持たない薄いラッパなので共有して問題ない)。
+    tools = DocumentTools(session)
+    server.bind_agent_tools(tools)
 
     ws_url = f"ws://127.0.0.1:{args.port}"
     page_url = f"http://127.0.0.1:{args.http_port}/"
@@ -1168,7 +1177,7 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
                 webbrowser.open(page_url)
         body_count = len([b for b in session.document.bodies if b.kind != "reference"])
         _log(f"  bodies={body_count} (参照ボディを除く)")
-        await serve_stdio(McpServer(DocumentTools(session)))
+        await serve_stdio(McpServer(tools))
     _log("duocad MCP server: stdin closed, bye")
 
 

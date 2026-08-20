@@ -299,6 +299,79 @@ export interface EdgesPayload {
   edges: EdgeGeometry[]
 }
 
+// --------------------------------------------------------------------------------------
+// G: アプリ内AIエージェント — **verbではない**
+// --------------------------------------------------------------------------------------
+/**
+ * `ai_*` は文書を直接は変えない(操作ログに載らずundoの単位でもない)。AIがツールを呼んで
+ * 文書を変えたときは、その変更は**通常の `state` 配信**として別途届く(`onState` の
+ * `applied` は `null` —— MCP起点の変更と同じ扱い。`duocad/server.py` のモジュールdocstring)。
+ * ここにある4つはその会話そのものの配線でしかない。
+ */
+export type AiProviderKind = 'anthropic' | 'openai_compat'
+
+/** 画面に出してよい設定の全部。**APIキーの値は無い** —— `apiKeyConfigured` の真偽だけ。 */
+export interface AiStatus {
+  provider: AiProviderKind
+  model: string | null
+  baseUrl: string | null
+  apiKeyConfigured: boolean
+  running: boolean
+  providers: AiProviderKind[]
+  /** `ai_configure` を拒否したときだけ入る(例: 実行中/未知のプロバイダ)。 */
+  error?: string
+}
+
+/** ツール呼び出し1件の進捗(`AgentLoop` の `progress` コールバックそのもの)。
+ * **`name` は操作ログ・MCPツール名と同じ綴り** —— 履歴パネルと突き合わせられる。 */
+export interface AiToolCall {
+  name: string
+  arguments: Record<string, unknown>
+  result: unknown
+  ok: boolean
+}
+
+/**
+ * `run()` が止まった理由(`duocad/agent/loop.py` の `AgentRun.status` そのまま)。
+ *
+ * - `completed`  … ツールを呼ばずに答えた(正常終了)
+ * - `max_turns`  … 往復の上限で打ち切った
+ * - `cancelled`  … 中断ボタンで止めた。`tool_calls` にどこまでやったかが残る
+ * - `max_tokens` … 出力が上限で切れた。**そのターンのツールは実行していない**
+ *                  (切れた引数のままでは危険なので、実行せず止める設計)
+ * - `refusal`    … プロバイダが安全上の理由で断った
+ * - `provider_error` … HTTP・接続の失敗(`detail` に理由。APIキーは含まれない)
+ * - `stopped`    … 上のどれでもない停止理由(`detail` に生値)
+ */
+export type AiRunStatus =
+  | 'completed'
+  | 'max_turns'
+  | 'cancelled'
+  | 'max_tokens'
+  | 'refusal'
+  | 'provider_error'
+  | 'stopped'
+
+export interface AiRunResult {
+  status: AiRunStatus
+  text: string
+  detail: string
+  turns: number
+  tool_calls: Array<{ name: string; arguments: Record<string, unknown>; ok: boolean }>
+  usage: Record<string, number>
+}
+
+/**
+ * `AiPanel.svelte` が描く1本の時系列。**コアには無い**(会話の再構成はここが唯一の場所。
+ * `duocad/agent/loop.py` の `turns` はサーバ側に留まり、WSへは出さない)——再読込で消えるのは
+ * 「途中まで入力していたコマンド」と同じ扱いで許容している(実装計画書§2予防3)。
+ */
+export type AiTranscriptEntry =
+  | { kind: 'user'; text: string }
+  | { kind: 'tool'; call: AiToolCall }
+  | { kind: 'result'; result: AiRunResult }
+  | { kind: 'error'; message: string }
+
 export type ConnectionStatus = 'connecting' | 'open' | 'closed'
 
 export interface SessionHooks {
@@ -316,6 +389,15 @@ export interface SessionHooks {
   onEdges(payload: EdgesPayload): void
   /** ファイルを書いた(状態は変わっていない)。 */
   onFile(payload: FilePayload): void
+  // ---------------------------------------------------------------- G: アプリ内AIエージェント
+  /** 設定が変わった/`ai_get_status` の返事/実行の開始・終了で `running` が変わったとき。 */
+  onAiStatus(status: AiStatus): void
+  /** ツールを1つ呼んだ(進行中に逐次届く。**verb配信ではない**)。 */
+  onAiToolCall(call: AiToolCall): void
+  /** `run()` が止まった(理由は `status`)。 */
+  onAiResult(result: AiRunResult): void
+  /** 空メッセージ・実行中の2通目・プロバイダ未設定など、**繋がらない理由**。 */
+  onAiError(message: string): void
 }
 
 export interface Session {
@@ -350,6 +432,16 @@ export interface Session {
   getEdges(bodyId: string): void
   undo(): void
   redo(): void
+  // ---------------------------------------------------------------- G: アプリ内AIエージェント
+  /** 今の設定(応答は `onAiStatus`)。 */
+  aiGetStatus(): void
+  /** プロバイダ・モデル・エンドポイントを差し替える。**キーは渡さない**(渡す経路が無い)。 */
+  aiConfigure(provider: AiProviderKind, model?: string, baseUrl?: string): void
+  /** 1つの発話でエージェントを起こす。**待たずに返る** —— 進捗は `onAiToolCall`、
+   * 最終応答は `onAiResult` へ届く(`duocad/server.py` の `_ai_start` のdocstring)。 */
+  aiSend(message: string): void
+  /** 中断する。走っているツールの結果は `onAiResult` の `tool_calls` に残る。 */
+  aiCancel(): void
   dispose(): void
 }
 
@@ -408,6 +500,24 @@ export function createSession(hooks: SessionHooks): Session {
       operations?: number
       deviation?: number
       body_ids?: string[]
+      // ---------------------------------------------------------------- G
+      provider?: AiProviderKind
+      model?: string | null
+      base_url?: string | null
+      api_key_configured?: boolean
+      running?: boolean
+      providers?: AiProviderKind[]
+      error?: string
+      name?: string
+      arguments?: Record<string, unknown>
+      result?: unknown
+      ok?: boolean
+      status?: AiRunStatus
+      detail?: string
+      turns?: number
+      tool_calls?: Array<{ name: string; arguments: Record<string, unknown>; ok: boolean }>
+      usage?: Record<string, number>
+      text?: string
     }
     try {
       message = JSON.parse(raw)
@@ -442,6 +552,34 @@ export function createSession(hooks: SessionHooks): Session {
       hooks.onError(message.message ?? '(理由なし)', message.where ?? '?')
     } else if (message.type === 'warning') {
       hooks.onWarning(message.message ?? '')
+    } else if (message.type === 'ai_status') {
+      hooks.onAiStatus({
+        provider: message.provider ?? 'anthropic',
+        model: message.model ?? null,
+        baseUrl: message.base_url ?? null,
+        apiKeyConfigured: message.api_key_configured ?? false,
+        running: message.running ?? false,
+        providers: message.providers ?? ['anthropic', 'openai_compat'],
+        error: message.error,
+      })
+    } else if (message.type === 'ai_tool_call') {
+      hooks.onAiToolCall({
+        name: message.name ?? '',
+        arguments: message.arguments ?? {},
+        result: message.result,
+        ok: message.ok ?? false,
+      })
+    } else if (message.type === 'ai_result') {
+      hooks.onAiResult({
+        status: message.status ?? 'stopped',
+        text: message.text ?? '',
+        detail: message.detail ?? '',
+        turns: message.turns ?? 0,
+        tool_calls: message.tool_calls ?? [],
+        usage: message.usage ?? {},
+      })
+    } else if (message.type === 'ai_error') {
+      hooks.onAiError(message.message ?? '(理由なし)')
     }
   }
 
@@ -491,6 +629,18 @@ export function createSession(hooks: SessionHooks): Session {
     },
     redo() {
       send({ cmd: 'redo' })
+    },
+    aiGetStatus() {
+      send({ cmd: 'ai_get_status' })
+    },
+    aiConfigure(provider, model, baseUrl) {
+      send({ cmd: 'ai_configure', provider, model: model ?? null, base_url: baseUrl ?? null })
+    },
+    aiSend(message) {
+      send({ cmd: 'ai_send', message })
+    },
+    aiCancel() {
+      send({ cmd: 'ai_cancel' })
     },
     dispose() {
       disposed = true

@@ -308,6 +308,18 @@ def test_every_v1_verb_is_reachable_as_an_mcp_tool(server: McpServer):
     }
 
 
+def test_ai_commands_have_no_mcp_tool(server: McpServer):
+    """`ai_*`(G・タスクGがWebSocketに足したアプリ内AIの配線コマンド)はMCPツールにしない。
+
+    AIがAIを起動する口は要らない —— `duocad/agent/` はMCPの外(`duocad/server.py`)から
+    直接使う。上の厳密一致(`EXPECTED_TOOLS`)でも自動的に弾かれるが、**ここで名指しして
+    意図を固定する**(除外は事故で保たれているのではなく、書かないと決めたことである)。
+    """
+    names = {tool["name"] for tool in tool_list(server)}
+    leaked = {name for name in names if name.startswith("ai_")}
+    assert not leaked, f"ai_* がMCPツールとして公開されている: {sorted(leaked)}"
+
+
 def test_the_ai_column_of_the_reachability_table_is_complete(server: McpServer):
     """到達表の19操作を**名指しで**確認する(上の集合検査の意図を読める形で残す)。
 

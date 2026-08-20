@@ -48,6 +48,8 @@
   import SketchPanel from './SketchPanel.svelte'
   import {
     createSession,
+    type AiStatus,
+    type AiTranscriptEntry,
     type Applied,
     type BasePlaneName,
     type BodyGeometry,
@@ -59,6 +61,7 @@
     type ServerState,
     type ShapeRef,
   } from './session'
+  import AiPanel from './AiPanel.svelte'
   import {
     createViewport,
     type PickEvent,
@@ -148,6 +151,12 @@
    */
   const myClientOps = new Set<number>()
 
+  // ---------------------------------------------------------------- G: アプリ内AIエージェント
+  /** 今の設定(`session.aiGetStatus()` の返事・`ai_configure`/実行の開始終了で更新)。 */
+  let aiStatus = $state<AiStatus | null>(null)
+  /** 会話の時系列。**コアには無い**(`AiPanel.svelte` のdocstring参照)。 */
+  let aiTranscript = $state<AiTranscriptEntry[]>([])
+
   const session = createSession({
     onState: handleState,
     onError: (message, where) => {
@@ -165,6 +174,9 @@
     onWarning: (message) => note(`警告 ${message}`),
     onStatus: (next) => {
       status = next
+      // (再)接続したら今のAI設定を取り直す(サーバは再起動していなくても、
+      // 前回の接続が切れている間に別の画面が `ai_configure` した可能性がある)。
+      if (next === 'open') session.aiGetStatus()
       // 応答待ちの最中に接続が切れたら、その `client_op` はもう返ってこない。
       // 捨てないと再接続後も「直前の操作の応答待ち」が残り続け、Enterが永久に拒否される
       // (`onerror` を伴わない正常クローズで踏む)。
@@ -181,6 +193,10 @@
     onPreview: handlePreview,
     onEdges: handleEdges,
     onFile: handleFile,
+    onAiStatus: handleAiStatus,
+    onAiToolCall: (call) => (aiTranscript = [...aiTranscript, { kind: 'tool', call }]),
+    onAiResult: (result) => (aiTranscript = [...aiTranscript, { kind: 'result', result }]),
+    onAiError: handleAiError,
   })
 
   function note(message: string): void {
@@ -189,6 +205,23 @@
   }
   /** パネルへ渡す通知(プロパティ名と関数名を揃えるためだけの別名)。 */
   const onNote = note
+
+  // ---------------------------------------------------------------- G: アプリ内AIエージェント
+  function handleAiStatus(next: AiStatus): void {
+    aiStatus = next
+    // **繋がらない理由を黙って捨てない**(`ai_configure` の拒否。タスクファイルの要件)。
+    if (next.error) note(`AI設定: ${next.error}`)
+  }
+
+  function handleAiError(message: string): void {
+    aiTranscript = [...aiTranscript, { kind: 'error', message }]
+    note(`AI ${message}`)
+  }
+
+  function sendAiMessage(text: string): void {
+    aiTranscript = [...aiTranscript, { kind: 'user', text }]
+    session.aiSend(text)
+  }
 
   function nextOp(): number {
     opCounter += 1
@@ -788,6 +821,15 @@
          .sidebar は overflow-y:auto で自分の中だけスクロールするので、
          中のパネルが増減しても .viewport のサイズは変わらない(射影が動かない)。 -->
     <aside class="sidebar">
+      <AiPanel
+        status={aiStatus}
+        transcript={aiTranscript}
+        onSend={sendAiMessage}
+        onCancel={() => session.aiCancel()}
+        onConfigure={(providerKind, modelName, baseUrl) =>
+          session.aiConfigure(providerKind, modelName, baseUrl)}
+      />
+
       <SelectionPanel
         {selection}
         bodies={model?.bodies ?? []}

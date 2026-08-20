@@ -319,6 +319,31 @@ def test_body_id_survives_only_where_it_is_not_a_target_set():
     )
 
 
+def test_ai_commands_are_not_verbs():
+    """`ai_*`(G・アプリ内AIエージェントの配線)はWebSocketから踏めるが、
+    「MCPツール名==WSコマンド名==UIコマンドID==verb名」の一致規律の対象集合には入らない。
+
+    `ai_get_status` / `ai_configure` / `ai_send` / `ai_cancel` は文書を直接は変えない
+    (操作ログに載らずundoの単位でもない)。**この検査はその除外を明示的に固定する**
+    (`_server_command_names()` はソースを機械的に読むだけなので、宣言に無い名前が
+    無言で増減しても他の検査は気づかない)。
+    """
+    ai_names = {name for name in _server_command_names() if name.startswith("ai_")}
+    assert ai_names == {"ai_get_status", "ai_configure", "ai_send", "ai_cancel"}, (
+        f"ai_* の顔ぶれが変わった(このテストを更新すること): {sorted(ai_names)}"
+    )
+    declared = {command.name for command in _catalog().COMMANDS}
+    assert not ai_names & declared, (
+        f"ai_* は verb ではないので catalog.COMMANDS に入れない(混入: {sorted(ai_names & declared)})"
+    )
+    # UIのコマンドID(`web/src/commands/*.ts`)にも現れない —— AIパネルは
+    # `session.ts` の専用メソッドから直接送る(引数の集め方を持つ CommandDef の対象ではない)。
+    assert not ai_names & set(_ui_command_ids()), (
+        "ai_* が web/src/commands/*.ts の CommandDef として現れている"
+        "(AIパネルは session.ts から直接送ること)"
+    )
+
+
 @pytest.mark.parametrize("command_id", ["import_step_editable", "make_editable_copy", "fillet"])
 def test_the_names_that_bit_us_are_covered(command_id: str):
     """この検査が実際に効く名前を名指しで残す。

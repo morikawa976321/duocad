@@ -29,6 +29,19 @@
         {"type": "file", "action": "save"|"export_step"|"export_stl", "path", "bytes"} # E
         {"type": "error", "message": str, "where": str}
         {"type": "warning", "message": str}
+        {"type": "ai_status", "provider", "model", "base_url", "api_key_configured", "running", "providers"}  # G
+        {"type": "ai_tool_call", "name": str, "arguments": {...}, "result": {...}, "ok": bool}                 # G
+        {"type": "ai_result", "status", "text", "detail", "turns", "tool_calls": [...], "usage": {...}}        # G
+        {"type": "ai_error", "message": str}                                                                    # G
+
+**`ai_*` はverbではない**(G・2026-08-20)。`ai_get_status` / `ai_configure` / `ai_send` /
+`ai_cancel` はduocadの文書を直接は変えない(操作ログに載らず、undoの単位でもない) ——
+文書を変えるのはエージェントが呼ぶ既存29ツールの側で、それは通常のverb配信
+(`{"type":"state", "applied": None, ...}`)としてこの後に届く。したがって
+`duocad/catalog.py` の `COMMANDS`(「MCPツール名==WSコマンド名==UIコマンドID==verb名」の
+一致規律)には**入れない**——対応するMCPツールも作らない(AIがAIを起動する口は要らない)。
+除外は `tests/test_ui_command_wiring.py::test_ai_commands_are_not_verbs` と
+`tests/test_mcp_verbs.py::test_ai_commands_have_no_mcp_tool` が固定する。
 
 **verbコマンドは対象集合(面・辺・領域)を引数で受けない**(2026-08-20)。数値・名前・パスだけを
 送り、押す面も丸める辺も押し出す領域も `Session` のverbラッパがコアの確定選択から取る
@@ -96,6 +109,8 @@ from pathlib import Path
 from typing import Any, Optional  # Any: Session verb wrappers / listeners
 
 from . import catalog, io_step, kernel, parameters, query, region, selection, sketch
+from .agent import AgentLoop, Cancellation, ProviderError, api_key_configured, build_provider
+from .agent.providers import DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_COMPAT_BASE_URL
 from .document import Document
 from .oplog import OpLog
 from .speculative import speculative
@@ -163,6 +178,49 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 #: `open_document` はどちらでもない —— 文書を**差し替える**ので全接続へ配る必要があり、
 #: 表からは外して `_dispatch` で個別に扱う(状態配信の形が他と違うため)。
 FILE_COMMANDS: dict = catalog.file_table()
+
+
+class _AiToolsOnLoop:
+    """`ToolSurface`(`descriptors`/`call`/`error_envelope`)を**イベントループのスレッドへ
+    限定する**覆い(G・2026-08-20)。
+
+    `AgentLoop.run()` はモデルへのHTTPリクエストを含み数十秒かかりうるので、
+    `Server._ai_start` が `run_in_executor` で実行器スレッドへ逃がす。だが `Session` は
+    「イベントループのスレッドだけが触る」という既存の前提(`Server._dispatching` の印・
+    `bind_loop` で覚えるループ参照)の上に立っている —— WebSocketの `_dispatch` も
+    MCPのツール実行(`mcp_server.py` 冒頭docstring「既知の割り切り」)も、この前提を
+    崩さずに同じスレッドで直列に走ることで安全になっている。
+
+    実行器スレッドから直接 `DocumentTools` を叩くと、その前提が壊れて2スレッドが
+    同時に文書を書き換えうる。ここでは `.call()` / `.error_envelope()` を
+    `asyncio.run_coroutine_threadsafe` でイベントループへ1回ずつ投げ、その場で完了を
+    待つことで、**文書に触る処理は依然イベントループのスレッドだけ**という不変条件を保つ
+    (`Server` のスレッド前提を作り直さずに済む)。往復するのは `Session` のverb呼び出し
+    1回ぶん(数値・名前・パスだけの純Python、通常は数ms)で、動かないのはその短い間だけ
+    ——プロバイダへのHTTPリクエスト(本当に長くかかる方)はこの覆いを経由しない
+    (`AgentLoop.run()` が直接プロバイダを呼ぶ)。
+    """
+
+    def __init__(self, tools: Any, loop: asyncio.AbstractEventLoop) -> None:
+        self._tools = tools
+        self._loop = loop
+
+    def descriptors(self) -> list:
+        # 起動時に1度組んだ静的なリストを読むだけ(`DocumentTools._build_descriptors`)。
+        # 文書を触らないので、スレッドをまたいでも安全 —— 投げ返さない。
+        return self._tools.descriptors()
+
+    def call(self, name: str, arguments: dict) -> dict:
+        return self._run_on_loop(self._tools.call, name, arguments)
+
+    def error_envelope(self, tool: str, error: Exception) -> dict:
+        return self._run_on_loop(self._tools.error_envelope, tool, error)
+
+    def _run_on_loop(self, fn: Any, *args: Any) -> Any:
+        async def _once() -> Any:
+            return fn(*args)
+
+        return asyncio.run_coroutine_threadsafe(_once(), self._loop).result()
 
 
 class Session:
@@ -1114,6 +1172,20 @@ class Server:
         # (a) 古い版のペイロードが後から届く、(b) 実際には送っていない版を「知っている」ことに
         # されてしまい以後の差分が欠落する、の2通りの事故が起きうる)。
         self._send_locks: dict = {}  # connection -> asyncio.Lock
+        # -------------------------------------------------- G: アプリ内AIエージェント
+        # 道具は起動時に一度だけ注入される(`bind_agent_tools`。`bind_loop` と同じ形)。
+        # このモジュールは `mcp_server.DocumentTools` を作れない(`mcp_server` が
+        # `server` をimportしているので逆方向は循環になる)ので、実体は `mcp_server._run`
+        # が渡す。`ToolSurface`(`descriptors`/`call`/`error_envelope`)を満たせば何でもよい。
+        self._ai_tools: Optional[Any] = None
+        self._ai_provider_kind = "anthropic" if api_key_configured() else "openai_compat"
+        self._ai_model: Optional[str] = None
+        self._ai_base_url: Optional[str] = None
+        self._ai_loop: Optional[AgentLoop] = None
+        self._ai_cancellation = Cancellation()
+        self._ai_running = False
+        #: 実行中のバックグラウンド往復(GCされないよう保持。`_pending_pushes` と同じ理由)。
+        self._pending_ai_runs: set = set()
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """配信に使うイベントループを覚える(`run()` と `mcp_server` が起動時に呼ぶ)。
@@ -1123,6 +1195,14 @@ class Server:
         ループの参照が要る。
         """
         self._loop = loop
+
+    def bind_agent_tools(self, tools: Any) -> None:
+        """アプリ内AIが使う道具を注入する(`mcp_server._run` が起動時に1回呼ぶ)。
+
+        `duocad.mcp_server.DocumentTools` を受け取る想定だが、型では縛らない
+        (`ToolSurface` を満たす任意の値。テストは `SpyTools` のような薄い覆いを渡す)。
+        """
+        self._ai_tools = tools
 
     def _on_core_change(self, applied: Optional[dict] = None) -> None:
         """コアが変わった。**WebSocket以外の主体による変更だけ**を全接続へ配信する。
@@ -1323,6 +1403,27 @@ class Server:
                         **result,
                     },
                 )
+            # -------------------------------------------------- G: アプリ内AIエージェント
+            # **verbではない**(モジュールdocstring参照) —— 応答は状態配信(`type: state`)
+            # ではなく専用のイベント(`ai_status` / `ai_tool_call` / `ai_result` / `ai_error`)。
+            # AIがツールを呼んで文書を変えたときは、その変更が通常のverb配信として
+            # 別途(`applied=None`、`_on_core_change` 経由で)全接続へ届く。
+            elif command == "ai_get_status":
+                await _send(connection, {"type": "ai_status", **self._ai_status()})
+            elif command == "ai_configure":
+                status = self._ai_configure(
+                    message.get("provider"), message.get("model"), message.get("base_url")
+                )
+                # **ここは既にイベントループのスレッド**(`_dispatch` の中)なので、
+                # `_emit_ai_event` の `call_soon_threadsafe` を挟まず直接 `await` する
+                # (待たずに関数を抜けると、テストのようにここで `asyncio.run` が閉じる
+                # 呼び方では配信タスクが実行される前に握りつぶされる)。
+                await self._broadcast_ai({"type": "ai_status", **status})
+            elif command == "ai_send":
+                await self._ai_start(connection, str(message.get("message") or ""))
+            elif command == "ai_cancel":
+                self._ai_cancel()
+                await self._broadcast_ai({"type": "ai_status", **self._ai_status()})
             else:
                 raise ValueError(f"unknown command: {command!r}")
         except Exception as error:  # 1つの失敗でサーバを落とさない。必ず画面へ返す
@@ -1347,6 +1448,175 @@ class Server:
             return call(*args, **kwargs)
         finally:
             self._dispatching -= 1
+
+    # ------------------------------------------------------------------ G: アプリ内AIエージェント
+    def _ai_status(self) -> dict:
+        """画面に出してよい設定の全部。**APIキーの値は含まない** —— `api_key_configured` の
+        真偽だけを返す(`duocad/agent/providers.py` の要件)。
+
+        `model` / `base_url` は明示的に選んでいなければ**プロバイダの既定値**を返す
+        (`null` のままだと画面が「何と話しているか」を言えない)。
+        """
+        default_model = (
+            DEFAULT_ANTHROPIC_MODEL if self._ai_provider_kind == "anthropic" else "local"
+        )
+        default_base_url = (
+            None if self._ai_provider_kind == "anthropic" else DEFAULT_OPENAI_COMPAT_BASE_URL
+        )
+        return {
+            "provider": self._ai_provider_kind,
+            "model": self._ai_model or default_model,
+            "base_url": self._ai_base_url or default_base_url,
+            "api_key_configured": api_key_configured(),
+            "running": self._ai_running,
+            "providers": ["anthropic", "openai_compat"],
+        }
+
+    def _ai_configure(
+        self, provider: Optional[str], model: Optional[str], base_url: Optional[str]
+    ) -> dict:
+        """プロバイダ・モデル・エンドポイントを差し替える。**キーは扱わない**(値を受け取らない)。
+
+        実行中は変更を受け付けない —— `self._ai_cancellation` を作り直すと、既に走っている
+        `AgentLoop.run()` が古い `Cancellation` を見続けたままになり、中断ボタンが効かなくなる
+        (`loop_obj.run` は `run_in_executor` に渡した時点でその回のオブジェクトを掴んでいる)。
+        """
+        if self._ai_running:
+            return {**self._ai_status(), "error": "AI応答中は設定を変更できない(中断してから)"}
+        if provider is not None and provider not in ("anthropic", "openai_compat"):
+            return {**self._ai_status(), "error": f"未知のプロバイダ: {provider!r}"}
+        if provider is not None:
+            self._ai_provider_kind = provider
+        self._ai_model = model or None
+        self._ai_base_url = base_url or None
+        # 次に使うときに作り直す(古いプロバイダ・古い会話の履歴を持ち越さない)。
+        self._ai_loop = None
+        self._ai_cancellation = Cancellation()
+        return self._ai_status()
+
+    def _ensure_ai_loop(self) -> AgentLoop:
+        """今の設定で `AgentLoop` を作る(無ければ)。失敗理由は `ProviderError`(画面に出せる文)。"""
+        if self._ai_loop is not None:
+            return self._ai_loop
+        if self._ai_tools is None:
+            raise ProviderError(
+                "AIの道具が未初期化(サーバ起動側の問題: bind_agent_tools が呼ばれていない)"
+            )
+        if self._loop is None:
+            raise ProviderError("イベントループが未起動")
+        provider = build_provider(
+            self._ai_provider_kind, model=self._ai_model, base_url=self._ai_base_url
+        )
+        marshaled = _AiToolsOnLoop(self._ai_tools, self._loop)
+        self._ai_loop = AgentLoop(
+            marshaled, provider, cancellation=self._ai_cancellation, progress=self._ai_progress
+        )
+        return self._ai_loop
+
+    def _ai_progress(self, name: str, arguments: dict, result: Any, ok: bool) -> None:
+        """`AgentLoop` の進捗コールバック。**実行器スレッドから呼ばれる**
+        (`_ai_start` の `run_in_executor`)ので、`_emit_ai_event` 経由でイベントループへ戻す。
+        """
+        self._emit_ai_event(
+            {
+                "type": "ai_tool_call",
+                "name": name,
+                "arguments": arguments,
+                "result": result,
+                "ok": bool(ok),
+            }
+        )
+
+    async def _ai_start(self, connection: Any, prompt: str) -> None:
+        """1つの発話でエージェントを起こす。**`AgentLoop.run()` を待たずに返る** ——
+
+        モデルへのHTTPリクエストは数十秒かかりうる(モジュールdocstring・
+        `duocad/agent/loop.py` の設計docstring)。ここで `await` すると、その間
+        同じ接続からの次のメッセージ(`ai_cancel` を含む)が読めなくなる
+        (`handle()` は `async for raw in connection: await self._dispatch(...)` で
+        1接続を直列に処理するため)。したがって `run_in_executor` へ投げっぱなしにし、
+        進捗・結果は別のイベント(`ai_tool_call` / `ai_result`)として後から届ける。
+        """
+        prompt = prompt.strip()
+        if not prompt:
+            await _send(connection, {"type": "ai_error", "message": "空のメッセージは送れない"})
+            return
+        if self._ai_running:
+            await _send(
+                connection,
+                {"type": "ai_error", "message": "既にAIが応答中(中断してから送ること)"},
+            )
+            return
+        try:
+            loop_obj = self._ensure_ai_loop()
+        except ProviderError as error:
+            await _send(connection, {"type": "ai_error", "message": str(error)})
+            return
+
+        self._ai_running = True
+        self._ai_cancellation.clear()
+        await self._broadcast_ai({"type": "ai_status", **self._ai_status()})
+
+        running_loop = asyncio.get_running_loop()
+        future = running_loop.run_in_executor(None, loop_obj.run, prompt)
+        self._pending_ai_runs.add(future)
+
+        def finished(fut: "asyncio.Future") -> None:
+            self._pending_ai_runs.discard(fut)
+            self._ai_running = False
+            if not fut.cancelled():
+                error = fut.exception()
+                if error is not None:
+                    self._emit_ai_event(
+                        {"type": "ai_error", "message": f"{type(error).__name__}: {error}"}
+                    )
+                else:
+                    self._emit_ai_event({"type": "ai_result", **fut.result().to_dict()})
+            self._emit_ai_event({"type": "ai_status", **self._ai_status()})
+
+        future.add_done_callback(finished)
+
+    def _ai_cancel(self) -> None:
+        """中断フラグを立てる。**ループはモデルへ投げる前とツール1件ごとに見る**
+        (`duocad/agent/loop.py` の `Cancellation` docstring) —— 走っているHTTP
+        リクエスト自体は切れないので、反映は次のチェックポイントまで遅れうる。
+        """
+        self._ai_cancellation.cancel()
+
+    def _emit_ai_event(self, payload: dict) -> None:
+        """AI関連のイベントを全接続へ配る配信をイベントループへ確実に乗せる。
+        **どのスレッドからでも呼べる**(`_ai_progress` は実行器スレッドから来る。
+        `call_soon_threadsafe` は呼び出し元がイベントループのスレッドでも安全)。
+        """
+        loop = self._loop
+        if loop is None:
+            return
+        loop.call_soon_threadsafe(self._spawn_ai_broadcast, payload)
+
+    def _spawn_ai_broadcast(self, payload: dict) -> None:
+        """`_spawn_push` と同じ形(タスクの参照を保持し、失敗を警告として拾う)。"""
+        task = asyncio.get_running_loop().create_task(self._broadcast_ai(payload))
+        self._pending_pushes.add(task)
+
+        def finished(done: "asyncio.Task") -> None:
+            self._pending_pushes.discard(done)
+            if done.cancelled():
+                return
+            error = done.exception()
+            if error is not None:
+                self.session.warnings.append(
+                    f"AIイベントの配信に失敗: {type(error).__name__}: {error}"
+                )
+
+        task.add_done_callback(finished)
+
+    async def _broadcast_ai(self, payload: dict) -> None:
+        """AI関連のイベントを全接続へ配る(進捗・結果はどの画面から見ても同じ会話の続き)。"""
+        for target in list(self.clients):
+            try:
+                await _send(target, payload)
+            except Exception:
+                self.clients.discard(target)
 
     async def _push(self, origin: Any, applied: Optional[dict], only: Any = None) -> None:
         """状態を配信する。`only` を指定するとその接続にだけ送る。
