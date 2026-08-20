@@ -699,8 +699,10 @@ def test_the_whole_interleaved_lap_runs_through_mcp_alone(server: McpServer, ses
     assert query.volume(box.shape) < volume_before
     assert session.document.log.entries[-1].args["edges"] == vertical[1:] + [added]
 
-    # 6. **選択は操作をまたいで残る**(A1の項番5)。次の一手をAIがそのまま打てる
-    assert selection_of(server)["count"] == 4
+    # 6. **形を変えたので選択は全リセットされる**(2026-08-20の統一契約。
+    # `duocad/catalog.py` の `resets_selection`)。丸めた辺の添字は形状変更で別の辺を
+    # 指しうるので、後継を当てにいくのではなく空にする —— 次の一手はAIが選び直す。
+    assert selection_of(server) == {"items": [], "origin": "user", "count": 0}
 
 
 # --------------------------------------------------------------------------------------

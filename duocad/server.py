@@ -508,6 +508,24 @@ class Session:
         meta["geometry"] = self.geometry(body.id) if body.visible else None
         return meta
 
+    # ---------------------------------------------------------------- 選択の全リセット(2026-08-20)
+    def _reset_selection_if_needed(self, verb: str) -> None:
+        """形を変えるverbの確定後、選択を全リセットする(統一契約)。
+
+        **カタログの `resets_selection` が正**(`duocad/catalog.py`)。以前はここが
+        `web/src/App.svelte` に3つの対症療法(押し出した面の後継を選び直す・丸めた辺の
+        選択を外す・姿が変わった領域の選択を外す)として散らばっていて質もバラバラだった —
+        面・辺・領域の添字は形状変更で壊れるので、後継を当てにいくより**全部空にする**
+        ほうが単純で正しい(連続性が要るverbが現れたら、そのときに後継を返す契約を作る)。
+
+        呼び出し側は**成功した後にだけ**呼ぶこと — 失敗した verb は操作ログに積まれず
+        この関数にも到達しないので、「失敗しても選択は保持される」(README §3.2 手順5)は
+        自然に満たされる。
+        """
+        command = catalog.BY_NAME.get(verb)
+        if command is not None and command.resets_selection:
+            selection.clear_selection(self.document)
+
     # ---------------------------------------------------------------- 操作
     def extrude(self, distance: float, client_op: Optional[int] = None) -> dict:
         """**確定選択の面**(ちょうど1枚)を押し出す。`applied` を返す。
@@ -522,8 +540,8 @@ class Session:
             self.document, face_index, float(distance), body_id=face["body"]
         )
         self._applied_count += 1
-        provenance = operation.provenance or {}
         changed_body_id = operation.args["body_id"]
+        self._reset_selection_if_needed(operation.verb)
         return self._emit({
             "verb": operation.verb,
             "seq": operation.seq,
@@ -531,7 +549,6 @@ class Session:
             "body_id": changed_body_id,
             "face_index": int(face_index),
             "distance": float(distance),
-            "after_face_index": provenance.get("after_face_index"),
             "changed_bodies": [changed_body_id],
         })
 
@@ -700,13 +717,15 @@ class Session:
         operation = self.document.log.undo(self.document)
         if operation is None:
             raise ValueError("取り消せる操作が無い")
-        return self._emit({"verb": "undo", "undone": operation.verb, **_selection_hints(operation)})
+        self._reset_selection_if_needed("undo")
+        return self._emit({"verb": "undo", "seq": operation.seq, "undone": operation.verb})
 
     def redo(self) -> dict:
         operation = self.document.log.redo(self.document)
         if operation is None:
             raise ValueError("やり直せる操作が無い")
-        return self._emit({"verb": "redo", "redone": operation.verb, **_selection_hints(operation)})
+        self._reset_selection_if_needed("redo")
+        return self._emit({"verb": "redo", "seq": operation.seq, "redone": operation.verb})
 
     # ---------------------------------------------------------------- F2: MCP / 全verbの口
     #
@@ -716,6 +735,7 @@ class Session:
         """直前にログへ積まれたverbについて変更イベントを発火する。"""
         operation = self.document.log.entries[-1]
         self._applied_count += 1
+        self._reset_selection_if_needed(operation.verb)
         payload: dict[str, Any] = {"verb": operation.verb, "seq": operation.seq}
         if extra:
             payload.update(extra)
@@ -1002,22 +1022,6 @@ class Session:
         """溜まった警告を取り出して空にする(出したら消す)。"""
         warnings, self.warnings = self.warnings, []
         return warnings
-
-
-def _selection_hints(operation: Any) -> dict:
-    """undo/redo のあとにアプリ層がどの面を選び直せばよいかを返す。
-
-    面の添字は形状が変わると壊れる(実装計画書§7)ので、**取り消したら押し出す前の添字へ、
-    やり直したら後継の添字へ**戻す。これを渡さないと、undo後も後継の添字を選んだままになり、
-    次の押し出しが別の面に当たる。
-    """
-    provenance = operation.provenance or {}
-    return {
-        "seq": operation.seq,
-        "body_id": operation.args.get("body_id"),
-        "face_index": operation.args.get("face_index"),
-        "after_face_index": provenance.get("after_face_index"),
-    }
 
 
 # --------------------------------------------------------------------------------------

@@ -176,7 +176,6 @@ export interface Applied {
   body_id?: string
   face_index?: number
   distance?: number
-  after_face_index?: number | null
   undone?: string
   redone?: string
   visible?: boolean

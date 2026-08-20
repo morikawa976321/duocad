@@ -125,6 +125,13 @@ class Command:
     #: 使う —— 保存・書き出しは文書を変えないので、応答は書いた先のパスとバイト数だけを
     #: 要求した接続へ返す(`preview` と同じ扱い)。
     changes_document: bool = True
+    #: 確定後に選択集合を全リセットするか(2026-08-20)。**面・辺・領域の添字は形状変更で
+    #: 壊れる**(kernel.pyの既知の地雷)ので、形を変えるverbの確定後は選択を空にする ——
+    #: 「失効/後継を返す契約」ではなく「全リセット」を選んだ(後継を返す契約は、連続性が
+    #: 本当に必要なverbが現れてから)。`Session._reset_selection_if_needed` がここを見て
+    #: 確定後に1箇所で発火するので、UI経由・MCP経由のどちらでも同じに効く。
+    #: **失敗したverb(ログに積まれない)には効かない** —— 呼び出すのは成功パスだけ。
+    resets_selection: bool = False
     #: 設計上の注記(なぜこの形か)。コードの読み手向けで、AIには渡さない。
     note: str = ""
 
@@ -373,6 +380,7 @@ COMMANDS: tuple[Command, ...] = (
             Param("p1", "array", "終点 [u, v]"),
         ),
         session="add_line",
+        resets_selection=True,
     ),
     Command(
         name="add_circle",
@@ -384,6 +392,7 @@ COMMANDS: tuple[Command, ...] = (
             Param("radius", "number", "半径(mm)"),
         ),
         session="add_circle",
+        resets_selection=True,
     ),
     Command(
         name="add_rectangle",
@@ -396,6 +405,7 @@ COMMANDS: tuple[Command, ...] = (
             Param("height", "number", "高さ(mm)"),
         ),
         session="add_rectangle",
+        resets_selection=True,
     ),
     Command(
         name="add_arc",
@@ -409,6 +419,7 @@ COMMANDS: tuple[Command, ...] = (
             Param("end_deg", "number", "終了角(度・反時計)"),
         ),
         session="add_arc",
+        resets_selection=True,
     ),
     # ---------------------------------------------------------------- フィーチャ
     Command(
@@ -436,6 +447,7 @@ COMMANDS: tuple[Command, ...] = (
         ),
         session="extrude_regions",
         previewable=True,
+        resets_selection=True,
         note=(
             "**`mode` はWSでだけ必須**(既定の join に落ちると「切るつもりで足した」が"
             "黙って通る。UIは人に選ばせてから送る)。**`body_id` はWSのコマンドには無い** —— "
@@ -453,6 +465,7 @@ COMMANDS: tuple[Command, ...] = (
         session="extrude",
         ws="special",
         previewable=True,
+        resets_selection=True,
         note="`Session` 側の名前だけ `extrude`(面の押し出しが先にあった)",
     ),
     Command(
@@ -471,6 +484,7 @@ COMMANDS: tuple[Command, ...] = (
         ),
         session="fillet",
         previewable=True,
+        resets_selection=True,
     ),
     Command(
         name="chamfer",
@@ -488,6 +502,7 @@ COMMANDS: tuple[Command, ...] = (
         ),
         session="chamfer",
         previewable=True,
+        resets_selection=True,
     ),
     Command(
         name="pattern_rectangular",
@@ -502,6 +517,7 @@ COMMANDS: tuple[Command, ...] = (
             Param("ny", "integer", "Y方向の個数(元を含む)"),
         ),
         session="pattern_rectangular",
+        resets_selection=True,
         note=(
             "**スケッチの図形は選択集合の項目ではない**(選べるのは面・辺・頂点・領域)ので、"
             "`entities` は対象集合ではなく引数で受ける。**プレビューに載せていない**のは"
@@ -533,6 +549,7 @@ COMMANDS: tuple[Command, ...] = (
             ),
         ),
         session="pattern_circular",
+        resets_selection=True,
     ),
     # ---------------------------------------------------------------- ファイル操作
     Command(
@@ -567,6 +584,7 @@ COMMANDS: tuple[Command, ...] = (
             Param("value", "number", "新しい値"),
         ),
         session="set_parameter",
+        resets_selection=True,
         note=(
             "**クリックで置いた図形の値を後から打ち直す**のがパラメトリック・プリミティブの"
             "効く場面そのものなので、スケッチのコマンドとして開けている。"
@@ -680,6 +698,7 @@ COMMANDS: tuple[Command, ...] = (
         ),
         session="undo",
         ws="special",
+        resets_selection=True,
     ),
     Command(
         name="redo",
@@ -687,6 +706,7 @@ COMMANDS: tuple[Command, ...] = (
         description="undo した操作をやり直すときに呼ぶ。UIと同じ履歴。",
         session="redo",
         ws="special",
+        resets_selection=True,
     ),
     # ---------------------------------------------------------------- WebSocketだけの口
     # **verbではない**(文書を変えない)。ここに置いてあるのは、下りコマンドの一覧を

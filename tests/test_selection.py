@@ -321,15 +321,22 @@ def test_hidden_bodies_cannot_be_selected(two_bodies: Document):
 # --------------------------------------------------------------------------------------
 # 項番5〜7: 永続する / ログに載らない / 保存されない
 # --------------------------------------------------------------------------------------
-def test_selection_survives_an_operation(doc: Document):
-    """**操作をまたいで選択が保持される**(条件1「永続」)。押し出しの後も残る。
+def test_operating_the_raw_verb_function_does_not_touch_selection(doc: Document):
+    """**選択集合そのものは永続する**(条件1「永続」)。verb関数(このモジュールの
+    `extrude_face` のような、`duocad/verbs/*.py` の生の関数)は形しか触らない。
 
-    ここで消す設計にすると、「AIが提案 → 人が直す → AIが適用 → 続けてもう1手」の
-    2手目で毎回選び直しになり、交互操作の往復が成立しない。
+    **2026-08-20以前はこのテスト名が `test_selection_survives_an_operation` で、
+    「押し出しの後も選択は残る」という製品レベルの契約を表していた。** 本人が
+    「失効/後継を返す契約」を退けて「形を変えたら全リセット」へ確定したので、
+    製品として見える経路(WS・MCP)は `duocad/server.py` の `Session` を必ず通り、
+    `Session._reset_selection_if_needed`(`duocad/catalog.py` の `resets_selection` が正)
+    が確定後に選択を空にする。**そのリセットは Session 層の関心事であって、verb関数
+    自身の責務ではない** —— verb関数(`extrude_face` 等)は形状だけを差し替え、
+    選択集合(コアの別のオブジェクト)には触らない、という分離をこのテストは固定する。
 
-    **添字の付け替えはしない**(形が変われば同じ添字が別の実体を指す。§3.5・§7)。
-    それを解くのが `provenance` の空スロットで、A1の契約には含めない
-    (tests/README.md の「A1で契約にしなかったこと」)。
+    製品レベルの「形を変えたら選択は空になる」契約は
+    `tests/test_mcp_selection.py::test_the_whole_interleaved_lap_runs_through_mcp_alone`
+    (fillet確定後に `count == 0`)と `tests/test_server_selection_reset.py` が固定する。
     """
     face_index = _first_extrudable_face(doc.bodies[0].shape)
     before = selection.modify_selection(doc, add=[selection.select_face(doc, "box", face_index)])

@@ -518,10 +518,13 @@ async function main() {
       `押し出し: パーツ「${extrudeTarget.name}」体積 ${volumeBefore} -> ${volumeAfter} ` +
         `(増分 ${delta.toFixed(4)} = 面積×${distance})`,
     )
-    if (!after.selected || typeof after.selected.faceIndex !== 'number') {
-      fail('押し出した面の後継が選択に残っていない')
+    // **2026-08-20の統一契約**: 形を変えるverbが確定すると選択は全リセットされる
+    // (`duocad/catalog.py` の `resets_selection`)。押し出した面の後継を選び直す旧挙動
+    // (`reselectAfter`)は廃止したので、ここでは「選択が空になっていること」を見る。
+    if (after.selected !== null) {
+      fail(`押し出し成功後も選択が残っている(全リセット契約に反する): ${JSON.stringify(after.selected)}`)
     }
-    ok(`押し出した面の後継が選択に残った: 面 ${after.selected.faceIndex}`)
+    ok('押し出し成功後、選択は全リセットされた(2026-08-20の統一契約)')
 
     // -------------------------------------------------------------- undo(押し出し)
     await page.click('#undo')
@@ -599,25 +602,22 @@ async function main() {
       )
 
     // -------------------------------------------------------------- 検証1(その1): 面に貼る
-    // 直前のundoで押し出した面が選び直されている(M1からの挙動)ので、それに貼る。
-    //
-    // **選択が落ち着くまで待つ**。押し出し・undoの後継の選び直しは「サーバの状態が届く →
-    // アプリ層が `modify_selection` を送る → もう一度状態が届く」の**もう1往復**で決まるので、
-    // 体積が戻った瞬間の選択はまだ1つ前の面(押し出し後の後継)を指している。そこへ
-    // スケッチを貼ろうとすると、その添字が今の形状では曲面を指していて失敗する
-    // (2026-08-13に実際に踏んだ: face 34 is cylinder_partial)。**平面が選ばれるまで待つ**。
+    // **2026-08-20の統一契約で undo も選択を全リセットする**ので(旧: 押し出した面の後継を
+    // 選び直す `reselectAfter`)、面に貼るスケッチを作る前に押し出しに使った平面を
+    // もう一度クリックで選び直す(すぐ上の「押し出しのために選び直す」と同じ手)。
+    const backOnFace = await locateFace(extrudeTarget.body_id, target.index)
+    if (!backOnFace) fail(`押し出しのundo後、面 ${target.index} の位置が取れない(選び直し)`)
+    await page.mouse.click(backOnFace.x, backOnFace.y)
     await waitForSketch(
-      (bodyId) => {
-        const hook = window.__duocad
-        const items = hook.selection?.items ?? []
-        if (items.length !== 1 || items[0].body !== bodyId) return false
-        const geometry = hook.bodyGeometry[bodyId]
-        const face = geometry?.faces.find((entry) => entry.index === items[0].index)
-        return Boolean(face && face.kind === 'plane')
+      (bodyId, index) => {
+        const items = window.__duocad.selection?.items ?? []
+        return items.length === 1 && items[0].body === bodyId && items[0].index === index
       },
-      '押し出しのundo後に平面が1つ選ばれた状態にならない',
+      '押し出しのundo後に面を選び直せない',
       extrudeTarget.body_id,
+      target.index,
     )
+    ok(`押し出しのundo後、選択がリセットされていたので面 ${target.index} を選び直した`)
     await page.click('#sketch-new-face')
     await waitForSketch(() => window.__duocad.activeSketch !== null, '面に貼ったスケッチが作られない')
     const onFace = await sketchState()

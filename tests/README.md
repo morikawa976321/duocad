@@ -1784,10 +1784,21 @@ MCP起点の変更から `applied` を落として配る（`applied` は操作�
 
 ## A1で**契約にしなかった**こと（範囲の明示）
 
-- **形が変わったときの添字の付け替え**。選択は操作をまたいで保持されるが、押し出しの後に
-  同じ添字が別の面を指しうる（§3.5「indexは現時点の添字であって、再生時に信用してはならない」）。
-  これを解くのは `provenance` の空スロット（§6予防2）であり、Aの範囲外。
+- **形が変わったときの添字の付け替え**。A1の時点では「選択は操作をまたいで保持されるが、
+  押し出しの後に同じ添字が別の面を指しうる」だった（§3.5「indexは現時点の添字であって、
+  再生時に信用してはならない」）。これを解くのは `provenance` の空スロット（§6予防2）で、
+  Aの範囲外という判断は変わっていない。
   **A2も付け替えを実装しないこと**（中途半端な再解決は、壊れていることが分からなくなる分だけ悪い）。
+  **2026-08-20に契約そのものが変わった**: 付け替えではなく「形を変えるverbの確定後は
+  選択を全リセットする」で決着した（`duocad/catalog.py` の `resets_selection`、
+  `duocad/server.py` の `Session._reset_selection_if_needed`）。したがって
+  「選択は操作をまたいで保持される」はもう成り立たない —— 保持されるのは形を変えない
+  操作（可視性・選択操作そのもの）の間だけである。下の対応表の項番5と
+  `test_selection_survives_an_operation` は当時の名前のまま残しているが、
+  現在のテスト名・契約は `tests/test_selection.py::
+  test_operating_the_raw_verb_function_does_not_touch_selection`
+  （verb関数そのものは選択に触れないという、より狭い契約）と
+  `tests/test_server_selection_reset.py`（製品レベルの全リセット契約)が持つ。
 - **MCPツールとしての公開**は F1/F2。ここはコアのAPIまで。
 - **UI側（`web/`）** は B。確定選択と提案を見た目で区別して描くのも B。
 - **領域の述語**（スケッチの領域を条件で選ぶ）。`select_region` で参照は作れるが、
@@ -1801,7 +1812,7 @@ MCP起点の変更から `applied` を落として配る（`applied` は操作�
 | 2（差分編集） | `test_modify_selection_adds_and_removes_without_rebuilding` / `test_remove_wins_when_the_same_reference_is_added_and_removed` / `test_modify_selection_refuses_a_malformed_ref` |
 | 3（重複しない） | `test_adding_the_same_reference_twice_does_not_duplicate`（位置も動かないこと込み） / `test_the_same_index_on_two_bodies_is_not_a_duplicate` |
 | 4（空にできる） | `test_clear_selection_empties_it` |
-| 5（操作をまたいで残る） | `test_selection_survives_an_operation` |
+| 5（操作をまたいで残る。**2026-08-20に契約変更、上の注記参照**） | `test_operating_the_raw_verb_function_does_not_touch_selection`（旧名 `test_selection_survives_an_operation`） |
 | 6（ログに載らない） | `test_changing_the_selection_does_not_touch_the_operation_log` ＋ 対照の `test_set_visible_still_lands_in_the_log` |
 | 7（保存されない） | `test_selection_is_not_saved` |
 | 8（提案として区別） | `test_proposed_items_are_distinguishable` |
@@ -2154,8 +2165,10 @@ stdioトランスポートは**stdoutをJSON-RPC専用**にしている（`duoca
 ## F1で**契約にしなかった**こと（範囲の明示）
 
 - **形が変わったときの添字の付け替え**。A1と同じくFの範囲外（`provenance` の空スロットの仕事）。
-  一巡のテストは fillet 後も選択が4件残ることだけを見ており、**同じ辺を指しているとは
-  主張していない**。
+  一巡のテストは当時、fillet 後も選択が4件残ることだけを見ており、**同じ辺を指しているとは
+  主張していない**、という書き方だった。**2026-08-20の全リセット契約以降、この一巡は
+  fillet確定後に選択が0件になることを見る**（`test_the_whole_interleaved_lap_runs_through_mcp_alone`
+  の末尾）。付け替えを持たない、というF1の範囲判断そのものは変わっていない。
 - **`apply(verb, ...)` という総称ツール**。verbごとのツールにしたので持たない
   （総称にするとスキーマが `args: object` に潰れ、AIから見た型検査が消える）。
 - **選択の項目ごとの `origin`**。A1の決定2のまま集合単位。
@@ -2484,6 +2497,11 @@ sketches[] = {
 
 もう1つ: 画面の伸縮がピックをずらす件（B節）と同じ理由で、**`SketchPanel` の高さも固定**した。
 
+**この「後継の選び直し」機構（App.svelte の `reselectAfter`）は2026-08-20に廃止した。**
+形を変えるverbの確定後は選択を全リセットする統一契約(コア側 `Session._reset_selection_if_needed`)
+に置き換わり、「1往復あとに面が決まる」という前提そのものが無くなった(押し出し・undo後は
+常に選択0件になる)。詳細は本ファイル末尾の「選択の全リセット契約」節。
+
 ## Cで**契約にしなかった**こと（範囲の明示）
 
 - **押し出し・フィレット・反復のコマンド**（Dの範囲）。領域の選択までがCで、それを引数に
@@ -2563,9 +2581,20 @@ sketches[] = {
   UIができる正直なことは「外して選び直させる」だけである。
   → **AI側には同じ持ち越しが残っている**（MCPで fillet した後の選択は古い添字のまま）。
   A1の契約と§7が真正面からぶつかる箇所なので、**辺の後継を返すのはコア側の宿題**。
+
+  **この「宿題」は2026-08-20に別の答えで決着した。** 本人が「後継を返す契約」を退け、
+  「形を変えたら選択は全リセット」を選んだ —— A1の「選択は操作をまたいで残る」という
+  前提そのものが変わったので、上のパラグラフはもうAI側の持ち越しではなく、**UI側の
+  この `dropStaleEdges`（辺だけを外す対症療法）自体が丸ごと不要になった**。コア側
+  (`duocad/catalog.py` の `resets_selection`、`Session._reset_selection_if_needed`)が
+  fillet・chamfer を含む形を変えるverb全部について、確定後に選択を空にする。
+  UI・MCPのどちらの経路でも同じ `Session` を通るので均等に効く。
 - **領域は姿が変わったら選択を外す**。消えた領域は送信前に止められるが、**分裂は止まらない**
   （添字は1始まりの連番なので、割れても古い添字は範囲内に残り、黙って別の領域を押し出す）。
   面積と重心の印を毎回突き合わせ、変わったら選び直させる。
+  **この `dropStaleRegions`(面積・重心ハッシュでの変化検知)も2026-08-20に上と同じ理由で
+  廃止した** —— スケッチ図形の追加(`add_line`/`add_circle`/`add_rectangle`/`add_arc`)は
+  `resets_selection=True` なので、領域を作り直すverbの確定後は選択がまるごと空になる。
 - **反復にプレビューを出さない**。展開の規則（全周は `360/count`、回転した長方形は4本の線分へ
   落とす）はコアが持っており、幽霊のためにブラウザへ二重実装すると「画面の予想と実際が違う」を
   自作することになる（§2 形の定義は1箇所）。
@@ -2795,3 +2824,82 @@ MCPツール `import_step` が積むログは `verb="import_step_editable"`。
   **読み込んでできた編集用ボディ**へ。参照は隠れていて `projectFace` が null を返すので指せない。
 - UIの `make_editable_copy` コマンドは**ボディの複製**として残っている（UIから参照ボディを指す経路は
   もう存在しない）。
+
+---
+
+# 選択の全リセット契約 — 2026-08-20
+
+**「面・辺・領域の添字は形状変更で壊れる」(§7)問題への対症療法が3つ、`web/src/App.svelte` に
+質もバラバラなまま併存していた**: 押し出した面の後継を選び直す(`reselectAfter`。verb名の
+分岐と `after_face_index` 応答フィールドに依存)/ 丸めた辺の選択を外す(`dropStaleEdges`。
+fillet/chamferの2verbだけをハードコード)/ 姿が変わった領域の選択を外す(`dropStaleRegions`。
+面積・重心のハッシュで変化を検知)。本人が「失効/後継を返す契約」案(添字ではなく安定した参照を
+返す)を退け、**より単純な「全リセット」で方針確定した** —— 連続性が本当に必要なverbが
+現れたら、そのときに後継を返す契約を作る(先取りで作らない)。
+
+## 契約
+
+**形を変えるverbが確定すると、選択は空になる**(`items=[]` / `origin="user"`)。対象:
+
+- `extrude` / `extrude_face` / `fillet` / `chamfer` / `pattern_rectangular` / `pattern_circular`
+- `add_line` / `add_circle` / `add_rectangle` / `add_arc`(スケッチ図形の追加。領域の姿が
+  変わりうるので)
+- `set_parameter`(rebuildで形が変わりうる)
+- `undo` / `redo`(**「何を戻したか」に関わらず常に**。verbごとの分岐を持たない単純な規則)
+
+**リセットしない**: 形を変えない操作(`set_visible` / 選択操作そのもの / `commit_selection` /
+保存・書き出し / `describe_*`)。**失敗したverb**(形が変わっていない)。「失敗する半径では
+理由が画面に出て、選択が保持されたまま戻る」(README §3.2 手順5)は変わらない。
+
+## 実装の置き場
+
+選択集合はコアにあるので、リセットもコア側で行う。`duocad/catalog.py` の
+`Command.resets_selection` が**単一の宣言**(13verb)で、`duocad/server.py` の
+`Session._reset_selection_if_needed(verb)` がそれを見て確定後に1箇所で発火する。
+
+`Session` は WebSocket(`Server`)と MCP(`DocumentTools`)の**どちらも同じインスタンスを叩く
+唯一の適用パイプライン**なので、ここに置けばUI経由・MCP経由のどちらでも均等に効く
+(README §5「中核の4つの決めごと」)。
+
+- `_after_logged_verb`(sketch_create以外の大半のverbが通る共通の後始末)と、
+  `Session.extrude`(面の押し出し)・`Session.undo`・`Session.redo` の4箇所で呼ぶ。
+- **失敗した呼び出しには効かない** —— OCCTの操作が失敗すると例外が上がってログに積まれず、
+  この関数にも到達しない。
+- **プレビュー(`Session.preview` → `speculative()`)の中では見かけ上効かない**。
+  `duocad/speculative.py` の `_snapshot`/`_restore` が `doc.selection` の `items`/`origin` を
+  巻き戻し対象に含めている(2026-08-14の`dropStaleEdges`対応時から)ので、プレビュー中に一時的に
+  空になっても `with` を抜けると選択は元へ戻り、`_suppress_events` でイベントも配らないので
+  クライアントには一切見えない。**確定(Enter)した本物の呼び出しだけが実際にリセットする。**
+
+## 後始末
+
+- `extrude_face` の応答フィールド `after_face_index` は**削除した**(`Session.extrude` の
+  `applied` から)。`Operation.provenance["after_face_index"]`(kernelが計算する内部の由来情報。
+  `tests/test_extrude_face.py`)とは別物で、そちらは触っていない。
+- `undo`/`redo` の応答から `body_id` / `face_index` / `after_face_index` ヒント
+  (旧 `_selection_hints`)を削除。`seq` / `undone` / `redone` は他の消費者(`DocumentTools.undo`/
+  `redo` が `applied["seq"]` を読む、`HistoryPanel.svelte` が別経路の `args.face_index` を読む)
+  がいるので残した。
+- `web/src/App.svelte` から `reselectAfter` / `dropStaleEdges` / `regionPrint` /
+  `dropStaleRegions` / `regionPrints` を削除(約90行)。トップの responsibilities も3つ→2つに。
+
+## 破った既存契約と直したテスト
+
+- `tests/test_mcp_selection.py::test_the_whole_interleaved_lap_runs_through_mcp_alone` の
+  最終段(旧: 「fillet後も選択は4件残る」)を「fillet確定後は0件」へ変更。
+- `tests/test_selection.py::test_selection_survives_an_operation` を
+  `test_operating_the_raw_verb_function_does_not_touch_selection` へ改名・再定義。
+  **この核心テストが呼んでいる `extrude_face(doc, ...)` は `duocad/verbs/` の生の関数で、
+  `Session` を経由しない** —— リセットは `Session` 層(=verb適用パイプライン)の関心事で
+  verb関数自体の責務ではないので、この核心レベルのテストの主張(「verb関数は選択に触れない」)
+  自体は今も真である。製品レベルの全リセット契約は新設の `tests/test_server_selection_reset.py`
+  と上記MCPテストが持つ。
+- `tests/test_feature_ui.py::test_a_fillet_that_fails_leaves_the_document_and_the_selection_untouched`
+  は無変更(失敗パスなので、成功後だけ発火するこの契約と衝突しない)。
+
+## 新設: `tests/test_server_selection_reset.py`
+
+`Session` を直に叩いて、(1) `resets_selection=True` の13verbがカタログの宣言と一致すること、
+(2) 各verbが成功後に選択を空にすること、(3) `set_visible`/選択操作自体は選択に触らないこと、
+(4) undo/redoが「何を戻したか」に関わらず常にリセットすること、(5)「手前を隠して奥の面を選ぶ」
+(可視性の切替)で選択が飛ばないこと、を固定する。

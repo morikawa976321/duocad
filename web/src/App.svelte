@@ -10,11 +10,15 @@
    * 「選択集合もコア側(永続・双方向)」を満たせない —— ここは `state.selection` を
    * 描き直すだけで、**選択の値を1つも覚えていない**。可視性と同じ形である。
    *
-   * ここに残っている責務は3つだけ:
+   * ここに残っている責務は2つだけ:
    *
    * 1. **ピック → コアの選択への翻訳**(修飾キーで追加・除去・置き換えを決める)
    * 2. **プレビューの往復**(コマンド層が「何を試すか」を決め、ここが投げて幽霊を描く)
-   * 3. **押し出した面の後継を選び直す**(「同じ面を10回押す」を再ピックなしで回す)
+   *
+   * (以前はここに3つ目として「形が変わった後の選択を選び直す」対症療法が3つ
+   * 個別にあった — 押し出した面の後継選び・丸めた辺の解除・姿が変わった領域の解除。
+   * 2026-08-20にコア側の統一契約(形を変えるverbの確定後は選択を全リセット)へ
+   * 置き換え、ここからは消した。`duocad/catalog.py` の `resets_selection` が正)
    */
   import { onMount } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
@@ -235,7 +239,6 @@
     if (sketchId !== null && !sketches.some((item) => item.sketch_id === sketchId)) {
       exitSketch() // undoでスケッチごと消えた
     }
-    dropStaleRegions()
     // 反復に使った図形は反復に吸収され、undoで戻ればまた現れる。**消えたIDを
     // 持ち続けない** —— 存在しない図形を引数にした反復は、押した瞬間にサーバで
     // KeyError になるだけで、なぜ失敗したかが画面から分からない。
@@ -265,8 +268,6 @@
       if (applied.verb === 'import_step') {
         note('読み込んだのは参照ボディ(編集不可)。編集するには面を選んで「編集用に複製」')
       }
-      dropStaleEdges(applied)
-      reselectAfter(applied)
       if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
       markOwnership(applied)
       lastApplied = applied
@@ -451,63 +452,6 @@
     editSelection(faceRef(event.hit.bodyId, event.hit.faceIndex), event.mode)
   }
 
-  /**
-   * 丸めた・面取りした辺の選択を外す。
-   *
-   * **添字は形状変更で壊れる**(§7)。フィレットが成功すると辺の並びは作り直されるので、
-   * 選んだままの添字は**別の辺**を指す —— それを強調表示のまま残すと、続けて半径を打った
-   * ときに「選んだ覚えのない辺が丸まる」。このタスクが最も警戒している事故そのものである。
-   *
-   * **コア側では落とさない**。「選択は操作をまたいで残る」という契約
-   * (`tests/test_mcp_selection.py` の交互操作の一巡が、fillet の後も選択が残ることを
-   * 固定している)で、AIは次の一手をそのまま打てることを前提にしている。`extrude_face` は
-   * 後継の添字(`after_face_index`)をサーバが返すので選び直せるが、**フィレットには
-   * 辺の後継の対応が無い**ので、UIができる正直なことは「外して選び直させる」しかない。
-   */
-  function dropStaleEdges(applied: Applied): void {
-    if (applied.verb !== 'fillet' && applied.verb !== 'chamfer') return
-    const changed = applied.body_id
-    if (!changed) return
-    const stale = (selection?.items ?? []).filter(
-      (item): item is ShapeRef =>
-        !('sketch' in item) && (item as ShapeRef).kind === 'edge' && (item as ShapeRef).body === changed,
-    )
-    if (stale.length === 0) return
-    modifySelection([], stale)
-    note(`${applied.verb} した辺の選択を外した(形が変わって添字が別の辺を指すため)`)
-  }
-
-  /**
-   * 押し出し・undo・redo の後で、次に押す面を選び直す。
-   *
-   * **添字は形状変更で壊れる**ので持ち越さず、サーバが返した後継の添字を使う。
-   */
-  function reselectAfter(applied: Applied): void {
-    let next: ShapeRef | null = null
-    if (applied.verb === 'extrude_face' && typeof applied.after_face_index === 'number' && applied.body_id) {
-      next = faceRef(applied.body_id, applied.after_face_index)
-    } else if (
-      applied.verb === 'undo' &&
-      applied.undone === 'extrude_face' &&
-      typeof applied.face_index === 'number' &&
-      applied.body_id
-    ) {
-      next = faceRef(applied.body_id, applied.face_index)
-    } else if (
-      applied.verb === 'redo' &&
-      applied.redone === 'extrude_face' &&
-      typeof applied.after_face_index === 'number' &&
-      applied.body_id
-    ) {
-      next = faceRef(applied.body_id, applied.after_face_index)
-    }
-    if (next === null) return
-    const target = next
-    const current = selection?.items ?? []
-    if (current.length === 1 && sameRef(current[0], target)) return
-    modifySelection([target], current.filter((item) => !sameRef(item, target)))
-  }
-
   // ---------------------------------------------------------------- C: スケッチ
   const sketches = $derived(model?.sketches ?? [])
 
@@ -682,50 +626,6 @@
           item.regions.some((candidate) => candidate.index === ref.index),
       ),
     )
-  }
-
-  /**
-   * そのスケッチの領域の姿を1つの文字列にする(**中身が変わったかを見るための印**)。
-   *
-   * 添字だけでは足りない —— 領域の添字は計算結果の1始まりの連番なので、**分裂しても
-   * 古い添字は範囲内に残り、別の領域を指したまま生き続ける**(§7「領域はパラメータ編集で
-   * 変わる」)。面積と重心まで入れると、割れた・入れ替わった・数が変わったのどれでも印が変わる。
-   */
-  function regionPrint(sketch: (typeof sketches)[number]): string {
-    return sketch.regions
-      .map((item) => `${item.index}:${item.area.toFixed(6)}:${item.centroid.map((n) => n.toFixed(6)).join(',')}`)
-      .join('|')
-  }
-
-  /** スケッチID -> 直前に見た領域の印。 */
-  let regionPrints = new Map<string, string>()
-
-  /**
-   * 領域の姿が変わったスケッチの**領域の選択を外す**。
-   *
-   * 消えた領域は `regionsStillExist` が送信前に止められるが、**分裂**は止められない ——
-   * 添字が範囲内に残るので、黙って「別の領域」を押し出すことになる。姿が変わったら
-   * 選び直させるのが、この壊れ方に対して画面が取れる唯一の正直な手である。
-   */
-  function dropStaleRegions(): void {
-    const stale: SelectionRef[] = []
-    const next = new Map<string, string>()
-    for (const sketch of sketches) {
-      const print = regionPrint(sketch)
-      next.set(sketch.sketch_id, print)
-      const seen = regionPrints.get(sketch.sketch_id)
-      if (seen === undefined || seen === print) continue
-      stale.push(
-        ...(selection?.items ?? []).filter(
-          (item): item is { sketch: string; index: number } =>
-            'sketch' in item && item.sketch === sketch.sketch_id,
-        ),
-      )
-    }
-    regionPrints = next
-    if (stale.length === 0) return
-    modifySelection([], stale)
-    note('領域が作り直されたので選択を外した(分裂・消失しうる。選び直す)')
   }
 
   /**

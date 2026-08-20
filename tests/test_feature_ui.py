@@ -360,6 +360,10 @@ def test_a_fillet_that_fails_leaves_the_document_and_the_selection_untouched(
     OCCTのフィレットは例外を投げずに `IsDone()=False` で失敗し、しかも半径に対して
     単調でない(r=10.0 失敗 / r=10.5 成功)。**選択が残ることがUI側の要件の前提**で、
     ここが消えると24本選び直しになる(タスクDの「失敗の扱い」)。
+
+    **成功時は2026-08-20から選択を全リセットする**(`Session._reset_selection_if_needed`)
+    が、それは「操作ログに積まれた後」にしか発火しない ——
+    失敗した verb はログに積まれずここへ到達しないので、この契約とは独立に成立する。
     """
     body, _ = _box(session)
     _select(session, _edges(body, range(1, 13)))
