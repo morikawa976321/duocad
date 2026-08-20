@@ -605,6 +605,14 @@ async function main() {
     // **2026-08-20の統一契約で undo も選択を全リセットする**ので(旧: 押し出した面の後継を
     // 選び直す `reselectAfter`)、面に貼るスケッチを作る前に押し出しに使った平面を
     // もう一度クリックで選び直す(すぐ上の「押し出しのために選び直す」と同じ手)。
+    // **先に空であることを確かめる**。クリックは選択を置き換えるので、これを省くと
+    // 「undoでリセットされなかった」退行でもこの先が素通りしてしまう。
+    const selectionAfterUndo = await page.evaluate(
+      () => (window.__duocad.selection?.items ?? []).length,
+    )
+    if (selectionAfterUndo !== 0) {
+      fail(`押し出しのundo後、選択が空でない(${selectionAfterUndo}件。全リセット契約に反する)`)
+    }
     const backOnFace = await locateFace(extrudeTarget.body_id, target.index)
     if (!backOnFace) fail(`押し出しのundo後、面 ${target.index} の位置が取れない(選び直し)`)
     await page.mouse.click(backOnFace.x, backOnFace.y)
