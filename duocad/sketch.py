@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Tuple
 from uuid import uuid4
 
 from . import kernel
@@ -42,11 +42,214 @@ PatternId = str
 #: 基準平面の名前(この3つだけ。実装計画書§1「平面(基準3面)」)
 BASE_PLANES = ("XY", "XZ", "YZ")
 
-#: 図形の種別
-ENTITY_KINDS = ("line", "circle", "rectangle", "arc")
-
 #: 反復の種別(矩形・円形。これでv1の反復verbが揃う)
 PATTERN_KINDS = ("rectangular", "circular")
+
+
+# --------------------------------------------------------------------------------------
+# 図形種別ごとの純幾何演算(表) — kind分岐のテーブル化(2026-08-20)
+# --------------------------------------------------------------------------------------
+#
+# 以前は「検査(sketch.py)・平行移動(region.py)・回転(region.py)・中心(verbs/pattern.py)」の
+# 4つの処理がそれぞれ独自に kind で分岐しており、新しい図形種別を1つ足すには
+# 4ファイルにまたがる switch を1本ずつ増やす必要があった(§タスクファイル「現状実測」)。
+# ここでは向きを反転し、**図形種別ごとに1行**(`EntityKindOps`)へ全処理をまとめる。
+#
+# OCPに依存する処理(辺の生成・2D bbox)はここに置けない(import境界。`kernel.py` だけが
+# OCPをimportしてよい。tests/test_boundaries.py)。そちらは `kernel.py` 内に姉妹の表を持つ
+# (`_KERNEL_ENTITY_KIND_TABLE`)。**表は2つに分かれるが、新しい種別を足すときに触るのは
+# 「ここへ1行」と「kernel.pyへ1行」の2箇所だけ**(+TS側1箇所)になる。
+#
+# **表に無い種別は即時 ValueError**(`entity_kind_ops` が投げる)。silent defaultは無い。
+def _validate_line(params: Dict[str, float]) -> None:
+    if (params["x0"], params["y0"]) == (params["x1"], params["y1"]):
+        raise ValueError("line endpoints must differ (長さ0の線分は領域を割らない)")
+
+
+def _validate_circle(params: Dict[str, float]) -> None:
+    if not params["radius"] > 0:
+        raise ValueError(f"circle radius must be positive, got {params['radius']!r}")
+
+
+def _validate_rectangle(params: Dict[str, float]) -> None:
+    if not (params["width"] > 0 and params["height"] > 0):
+        raise ValueError(
+            f"rectangle width/height must be positive, got "
+            f"{params['width']!r} x {params['height']!r}"
+        )
+
+
+def _validate_arc(params: Dict[str, float]) -> None:
+    if not params["radius"] > 0:
+        raise ValueError(f"arc radius must be positive, got {params['radius']!r}")
+    if params["start_deg"] == params["end_deg"]:
+        raise ValueError("arc start_deg and end_deg must differ (角度0の円弧は辺にならない)")
+
+
+def _translate_line(params: Dict[str, float], dx: float, dy: float) -> Dict[str, float]:
+    return {
+        "x0": params["x0"] + dx,
+        "y0": params["y0"] + dy,
+        "x1": params["x1"] + dx,
+        "y1": params["y1"] + dy,
+    }
+
+
+def _translate_circle(params: Dict[str, float], dx: float, dy: float) -> Dict[str, float]:
+    moved = dict(params)
+    moved["cx"] = params["cx"] + dx
+    moved["cy"] = params["cy"] + dy
+    return moved
+
+
+def _translate_arc(params: Dict[str, float], dx: float, dy: float) -> Dict[str, float]:
+    moved = dict(params)
+    moved["cx"] = params["cx"] + dx
+    moved["cy"] = params["cy"] + dy
+    return moved
+
+
+def _translate_rectangle(params: Dict[str, float], dx: float, dy: float) -> Dict[str, float]:
+    moved = dict(params)
+    moved["x"] = params["x"] + dx
+    moved["y"] = params["y"] + dy
+    return moved
+
+
+def _rotate_point(x: float, y: float, cx: float, cy: float, angle_deg: float) -> Tuple[float, float]:
+    """点 (x, y) を中心 (cx, cy) まわりに angle_deg 度だけ反時計回りに回す。"""
+    rad = math.radians(angle_deg)
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
+    dx = x - cx
+    dy = y - cy
+    return (cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
+
+
+def _rectangle_as_rotated_lines(params: Dict[str, float], cx: float, cy: float, angle_deg: float) -> List[dict]:
+    """軸平行の長方形を、4隅を回した4本の線分へ落とす(長方形の語彙は回転を表せないため)。"""
+    x = params["x"]
+    y = params["y"]
+    width = params["width"]
+    height = params["height"]
+    corners = [
+        (x, y),
+        (x + width, y),
+        (x + width, y + height),
+        (x, y + height),
+    ]
+    rotated = [_rotate_point(px, py, cx, cy, angle_deg) for px, py in corners]
+    lines: List[dict] = []
+    for index in range(4):
+        x0, y0 = rotated[index]
+        x1, y1 = rotated[(index + 1) % 4]
+        lines.append({"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}})
+    return lines
+
+
+def _rotate_line(
+    params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
+) -> List[dict]:
+    if rotate_copies:
+        x0, y0 = _rotate_point(params["x0"], params["y0"], cx, cy, angle_deg)
+        x1, y1 = _rotate_point(params["x1"], params["y1"], cx, cy, angle_deg)
+        return [{"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}}]
+    mx = (params["x0"] + params["x1"]) / 2.0
+    my = (params["y0"] + params["y1"]) / 2.0
+    nmx, nmy = _rotate_point(mx, my, cx, cy, angle_deg)
+    return [{"kind": "line", "params": _translate_line(params, nmx - mx, nmy - my)}]
+
+
+def _rotate_circle(
+    params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
+) -> List[dict]:
+    nx, ny = _rotate_point(params["cx"], params["cy"], cx, cy, angle_deg)
+    return [{"kind": "circle", "params": {"cx": nx, "cy": ny, "radius": params["radius"]}}]
+
+
+def _rotate_arc(
+    params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
+) -> List[dict]:
+    nx, ny = _rotate_point(params["cx"], params["cy"], cx, cy, angle_deg)
+    start_deg = params["start_deg"]
+    end_deg = params["end_deg"]
+    if rotate_copies:
+        start_deg = start_deg + angle_deg
+        end_deg = end_deg + angle_deg
+    return [
+        {
+            "kind": "arc",
+            "params": {"cx": nx, "cy": ny, "radius": params["radius"], "start_deg": start_deg, "end_deg": end_deg},
+        }
+    ]
+
+
+def _rotate_rectangle(
+    params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
+) -> List[dict]:
+    if rotate_copies:
+        # 長方形の `x, y, width, height` は軸平行しか表せないので、回転した複製は
+        # 種別が変わる(4本の線分になる) — `rotate` の戻り値を種別横断の
+        # `[{"kind":.., "params":..}, ...]` にしてあるのはこの1ケースのため。
+        return _rectangle_as_rotated_lines(params, cx, cy, angle_deg)
+    ecx = params["x"] + params["width"] / 2.0
+    ecy = params["y"] + params["height"] / 2.0
+    ncx, ncy = _rotate_point(ecx, ecy, cx, cy, angle_deg)
+    return [{"kind": "rectangle", "params": _translate_rectangle(params, ncx - ecx, ncy - ecy)}]
+
+
+def _center_line(params: Dict[str, float]) -> Tuple[float, float]:
+    return ((params["x0"] + params["x1"]) / 2.0, (params["y0"] + params["y1"]) / 2.0)
+
+
+def _center_circle(params: Dict[str, float]) -> Tuple[float, float]:
+    return (float(params["cx"]), float(params["cy"]))
+
+
+def _center_arc(params: Dict[str, float]) -> Tuple[float, float]:
+    return (float(params["cx"]), float(params["cy"]))
+
+
+def _center_rectangle(params: Dict[str, float]) -> Tuple[float, float]:
+    return (params["x"] + params["width"] / 2.0, params["y"] + params["height"] / 2.0)
+
+
+@dataclass(frozen=True)
+class EntityKindOps:
+    """図形1種別ぶんの純幾何演算(OCPなし)。**表の1行 = その種別の全処理**。
+
+    `rotate` は同じ種別に閉じない(長方形の `rotate_copies=True` は4本の線分になる)ので、
+    戻り値は常に `[{"kind":.., "params":..}, ...]` の**リスト**にしてある(他の種別は1要素)。
+    """
+
+    validate: Callable[[Dict[str, float]], None]
+    translate: Callable[[Dict[str, float], float, float], Dict[str, float]]
+    rotate: Callable[[Dict[str, float], float, float, float, bool], List[dict]]
+    center_2d: Callable[[Dict[str, float]], Tuple[float, float]]
+
+
+_ENTITY_KIND_TABLE: Dict[str, EntityKindOps] = {
+    "line": EntityKindOps(_validate_line, _translate_line, _rotate_line, _center_line),
+    "circle": EntityKindOps(_validate_circle, _translate_circle, _rotate_circle, _center_circle),
+    "rectangle": EntityKindOps(_validate_rectangle, _translate_rectangle, _rotate_rectangle, _center_rectangle),
+    "arc": EntityKindOps(_validate_arc, _translate_arc, _rotate_arc, _center_arc),
+}
+
+#: 図形の種別。**`_ENTITY_KIND_TABLE` のキーが唯一の正**(新種別は表に1行足すだけでよい)。
+ENTITY_KINDS = tuple(_ENTITY_KIND_TABLE.keys())
+
+
+def entity_kind_ops(kind: str) -> EntityKindOps:
+    """種別ごとの純幾何演算(検査・平行移動・回転・中心)を引く。
+
+    表に無い種別は**その場で ValueError**(黙ってdefaultへ落とさない — 「反復だけ位置が
+    ずれる」型の静かなバグを塞ぐのがテーブル化の目的の一部)。
+    """
+    try:
+        return _ENTITY_KIND_TABLE[kind]
+    except KeyError:
+        raise ValueError(f"unknown entity kind: {kind!r} (one of {list(ENTITY_KINDS)})") from None
+
 
 VERB_SKETCH_CREATE = "sketch_create"
 VERB_ADD_LINE = "add_line"
@@ -350,20 +553,7 @@ def require_valid_params(kind: str, params: Dict[str, float]) -> None:
     for name, value in params.items():
         if not math.isfinite(value):
             raise ValueError(f"{kind}.{name} must be a finite number, got {value!r}")
-    if kind == "circle" and not params["radius"] > 0:
-        raise ValueError(f"circle radius must be positive, got {params['radius']!r}")
-    if kind == "line" and (params["x0"], params["y0"]) == (params["x1"], params["y1"]):
-        raise ValueError("line endpoints must differ (長さ0の線分は領域を割らない)")
-    if kind == "rectangle" and not (params["width"] > 0 and params["height"] > 0):
-        raise ValueError(
-            f"rectangle width/height must be positive, got "
-            f"{params['width']!r} x {params['height']!r}"
-        )
-    if kind == "arc":
-        if not params["radius"] > 0:
-            raise ValueError(f"arc radius must be positive, got {params['radius']!r}")
-        if params["start_deg"] == params["end_deg"]:
-            raise ValueError("arc start_deg and end_deg must differ (角度0の円弧は辺にならない)")
+    entity_kind_ops(kind).validate(params)
 
 
 # --------------------------------------------------------------------------------------

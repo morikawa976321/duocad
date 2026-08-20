@@ -16,7 +16,11 @@
  * あわせて `preview`(投機的実行)を足した —— **これだけは状態を配信しない**ので、
  * 応答は `onState` ではなく `onPreview` へ来る。
  */
+/** 図形の種別。**唯一の正は `entityKinds.ts` の表**(ここは型を通すだけ)。 */
+import type { EntityKind } from './entityKinds'
 import type { GeometryPayload } from './viewport'
+
+export type { EntityKind }
 
 /** 選べるものの種別。領域(region)は `RegionRef` 側で表す(`duocad/selection.py` §3.5)。 */
 export type ShapeKind = 'face' | 'edge' | 'vertex'
@@ -88,8 +92,6 @@ export interface SketchFrame {
   v: number[]
   normal: number[]
 }
-
-export type EntityKind = 'line' | 'circle' | 'rectangle' | 'arc'
 
 /**
  * スケッチ上の1図形。`params` は**解決済みの数値**、`refs` は同じキーの

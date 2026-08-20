@@ -19,13 +19,12 @@ kernel.py だけ。tests/test_boundaries.py が検査する)。
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from . import kernel
 from . import parameters
 from .document import Document
-from .sketch import SketchId, get_sketch
+from .sketch import SketchId, entity_kind_ops, get_sketch
 
 
 @dataclass(frozen=True)
@@ -91,119 +90,6 @@ def regions(doc: Document, sketch_id: SketchId) -> List[Region]:
     ]
 
 
-def _translate_params(
-    kind: str, params: Dict[str, float], dx: float, dy: float
-) -> Dict[str, float]:
-    """図形の2D params を (dx, dy) だけ平行移動したコピーを返す。"""
-    moved = dict(params)
-    if kind == "line":
-        moved["x0"] = params["x0"] + dx
-        moved["x1"] = params["x1"] + dx
-        moved["y0"] = params["y0"] + dy
-        moved["y1"] = params["y1"] + dy
-    elif kind == "circle":
-        moved["cx"] = params["cx"] + dx
-        moved["cy"] = params["cy"] + dy
-    elif kind == "arc":
-        moved["cx"] = params["cx"] + dx
-        moved["cy"] = params["cy"] + dy
-    elif kind == "rectangle":
-        moved["x"] = params["x"] + dx
-        moved["y"] = params["y"] + dy
-    else:
-        raise ValueError(f"unknown entity kind: {kind!r}")
-    return moved
-
-
-def _rotate_point(
-    x: float, y: float, cx: float, cy: float, angle_deg: float
-) -> tuple[float, float]:
-    """点 (x, y) を中心 (cx, cy) まわりに angle_deg 度だけ反時計回りに回す。"""
-    rad = math.radians(angle_deg)
-    cos_a = math.cos(rad)
-    sin_a = math.sin(rad)
-    dx = x - cx
-    dy = y - cy
-    return (cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
-
-
-def _rotate_params(
-    kind: str,
-    params: Dict[str, float],
-    cx: float,
-    cy: float,
-    angle_deg: float,
-    rotate_copies: bool,
-) -> Dict[str, float]:
-    """図形の2D params を中心まわりに回したコピーを返す(種別は変えない)。
-
-    `rotate_copies=False` のときは位置だけ回し、向きは元のまま
-    (図形の中心を回して、その差分だけ平行移動する)。
-    長方形の `rotate_copies=True` は軸平行で表せないので、呼び出し側で
-    `_rectangle_as_rotated_lines` へ落とすこと。
-    """
-    if kind == "circle":
-        nx, ny = _rotate_point(params["cx"], params["cy"], cx, cy, angle_deg)
-        return {"cx": nx, "cy": ny, "radius": params["radius"]}
-    if kind == "arc":
-        nx, ny = _rotate_point(params["cx"], params["cy"], cx, cy, angle_deg)
-        start_deg = params["start_deg"]
-        end_deg = params["end_deg"]
-        if rotate_copies:
-            start_deg = start_deg + angle_deg
-            end_deg = end_deg + angle_deg
-        return {
-            "cx": nx,
-            "cy": ny,
-            "radius": params["radius"],
-            "start_deg": start_deg,
-            "end_deg": end_deg,
-        }
-    if kind == "line":
-        if rotate_copies:
-            x0, y0 = _rotate_point(params["x0"], params["y0"], cx, cy, angle_deg)
-            x1, y1 = _rotate_point(params["x1"], params["y1"], cx, cy, angle_deg)
-            return {"x0": x0, "y0": y0, "x1": x1, "y1": y1}
-        mx = (params["x0"] + params["x1"]) / 2.0
-        my = (params["y0"] + params["y1"]) / 2.0
-        nmx, nmy = _rotate_point(mx, my, cx, cy, angle_deg)
-        return _translate_params(kind, params, nmx - mx, nmy - my)
-    if kind == "rectangle":
-        ecx = params["x"] + params["width"] / 2.0
-        ecy = params["y"] + params["height"] / 2.0
-        ncx, ncy = _rotate_point(ecx, ecy, cx, cy, angle_deg)
-        return _translate_params(kind, params, ncx - ecx, ncy - ecy)
-    raise ValueError(f"unknown entity kind: {kind!r}")
-
-
-def _rectangle_as_rotated_lines(
-    params: Dict[str, float], cx: float, cy: float, angle_deg: float
-) -> List[dict]:
-    """軸平行の長方形を、4隅を回した4本の線分へ落とす。"""
-    x = params["x"]
-    y = params["y"]
-    width = params["width"]
-    height = params["height"]
-    corners = [
-        (x, y),
-        (x + width, y),
-        (x + width, y + height),
-        (x, y + height),
-    ]
-    rotated = [_rotate_point(px, py, cx, cy, angle_deg) for px, py in corners]
-    lines: List[dict] = []
-    for index in range(4):
-        x0, y0 = rotated[index]
-        x1, y1 = rotated[(index + 1) % 4]
-        lines.append(
-            {
-                "kind": "line",
-                "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1},
-            }
-        )
-    return lines
-
-
 def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
     """パラメータを解決し、反復を展開した素の図形リストを返す。
 
@@ -249,24 +135,12 @@ def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
                 }
                 for i in range(count):
                     angle = i * step
-                    if entity.kind == "rectangle" and rotate_copies:
-                        entities.extend(
-                            _rectangle_as_rotated_lines(base, cx, cy, angle)
-                        )
-                    else:
-                        entities.append(
-                            {
-                                "kind": entity.kind,
-                                "params": _rotate_params(
-                                    entity.kind,
-                                    base,
-                                    cx,
-                                    cy,
-                                    angle,
-                                    rotate_copies,
-                                ),
-                            }
-                        )
+                    # `rotate` は種別横断で `[{"kind":.., "params":..}, ...]` を返す
+                    # (長方形の rotate_copies=True は4本の線分になり種別が変わるため。
+                    # `duocad.sketch.EntityKindOps.rotate` のdocstring)。
+                    entities.extend(
+                        entity_kind_ops(entity.kind).rotate(base, cx, cy, angle, rotate_copies)
+                    )
             continue
 
         dx = parameters.resolve(doc, pattern.params["dx"])
@@ -284,9 +158,7 @@ def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
                     entities.append(
                         {
                             "kind": entity.kind,
-                            "params": _translate_params(
-                                entity.kind, base, i * dx, j * dy
-                            ),
+                            "params": entity_kind_ops(entity.kind).translate(base, i * dx, j * dy),
                         }
                     )
     return entities

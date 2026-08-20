@@ -26,6 +26,13 @@
  */
 import type { CommandDef, Point2 } from './command'
 
+/**
+ * 確定前の姿(幽霊)の組み立ては `../entityKinds` の唯一の表へ寄せてある
+ * (図形種別ごとの処理を1箇所にまとめる。README.md「モジュールとimport境界」)。
+ * ここは元の呼び出し口を保つための再エクスポートだけ。
+ */
+export { ghostEntity } from '../entityKinds'
+
 /** 寸法として使えない値(0以下)を弾く。**既定値を入れない**のがここの流儀。 */
 function positive(label: string): (value: number) => string | null {
   return (value) => (value > 0 ? null : `${label}は0より大きい値`)
@@ -194,51 +201,3 @@ export const SKETCH_COMMANDS: CommandDef[] = [
   ADD_ARC,
 ]
 export const DEFAULT_SKETCH_COMMAND_ID = SELECT_IN_SKETCH.id
-
-/**
- * 確定前の姿(幽霊)を、コアの `Entity` と同じ `{kind, params}` へ翻訳する。
- *
- * **形の定義を1箇所に保つ**ため、描くのは `viewport.ts` の `entityPoints`(コアの
- * `Entity.params` のキーをそのまま読む実装)で、ここは verb の引数からそのキーへ
- * 移し替えるだけにしてある。
- */
-export function ghostEntity(
-  verb: string,
-  args: Record<string, unknown>,
-): { kind: string; params: Record<string, number> } | null {
-  if (verb === 'add_line') {
-    const p0 = args.p0 as Point2
-    const p1 = args.p1 as Point2
-    return { kind: 'line', params: { x0: p0[0], y0: p0[1], x1: p1[0], y1: p1[1] } }
-  }
-  if (verb === 'add_circle') {
-    const center = args.center as Point2
-    return { kind: 'circle', params: { cx: center[0], cy: center[1], radius: args.radius as number } }
-  }
-  if (verb === 'add_rectangle') {
-    const corner = args.corner as Point2
-    return {
-      kind: 'rectangle',
-      params: {
-        x: corner[0],
-        y: corner[1],
-        width: args.width as number,
-        height: args.height as number,
-      },
-    }
-  }
-  if (verb === 'add_arc') {
-    const center = args.center as Point2
-    return {
-      kind: 'arc',
-      params: {
-        cx: center[0],
-        cy: center[1],
-        radius: args.radius as number,
-        start_deg: args.start_deg as number,
-        end_deg: args.end_deg as number,
-      },
-    }
-  }
-  return null
-}

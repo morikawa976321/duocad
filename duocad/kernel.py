@@ -47,7 +47,8 @@ from __future__ import annotations
 
 import math
 import os
-from typing import Any, Iterable, List, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from OCP.Bnd import Bnd_Box
 from OCP.BRep import BRep_Builder, BRep_Tool
@@ -928,64 +929,119 @@ def _to_uv(ax3: "gp_Ax3", x: float, y: float, z: float) -> Tuple[float, float]:
     return u, v
 
 
+def _edges_line(ax3: "gp_Ax3", params: dict) -> List[Any]:
+    p0 = _to_pnt(ax3, float(params["x0"]), float(params["y0"]))
+    p1 = _to_pnt(ax3, float(params["x1"]), float(params["y1"]))
+    maker = BRepBuilderAPI_MakeEdge(p0, p1)
+    if not maker.IsDone():
+        raise ValueError("failed to build a line edge")
+    return [maker.Edge()]
+
+
+def _edges_circle(ax3: "gp_Ax3", params: dict) -> List[Any]:
+    center = _to_pnt(ax3, float(params["cx"]), float(params["cy"]))
+    radius = float(params["radius"])
+    if radius <= 0:
+        raise ValueError(f"circle radius must be positive, got {radius}")
+    axis = gp_Ax2(center, ax3.Direction(), ax3.XDirection())
+    maker = BRepBuilderAPI_MakeEdge(gp_Circ(axis, radius))
+    if not maker.IsDone():
+        raise ValueError("failed to build a circle edge")
+    return [maker.Edge()]
+
+
+def _edges_arc(ax3: "gp_Ax3", params: dict) -> List[Any]:
+    center = _to_pnt(ax3, float(params["cx"]), float(params["cy"]))
+    radius = float(params["radius"])
+    if radius <= 0:
+        raise ValueError(f"arc radius must be positive, got {radius}")
+    start_deg = float(params["start_deg"])
+    end_deg = float(params["end_deg"])
+    # 反時計回りに start→end。0度またぎは (end-start)%360 の掃引角で表現する。
+    sweep_deg = (end_deg - start_deg) % 360.0
+    start_rad = math.radians(start_deg)
+    end_rad = start_rad + math.radians(sweep_deg)
+    # gp_Ax2(center, N, X): P(U)=O+R*cos(U)*X+R*sin(U)*(N×X) なので
+    # U=0 がスケッチX、U増加が反時計回り（右手系）。
+    axis = gp_Ax2(center, ax3.Direction(), ax3.XDirection())
+    maker = BRepBuilderAPI_MakeEdge(gp_Circ(axis, radius), start_rad, end_rad)
+    if not maker.IsDone():
+        raise ValueError("failed to build an arc edge")
+    return [maker.Edge()]
+
+
+def _edges_rectangle(ax3: "gp_Ax3", params: dict) -> List[Any]:
+    x = float(params["x"])
+    y = float(params["y"])
+    width = float(params["width"])
+    height = float(params["height"])
+    corners = [
+        _to_pnt(ax3, x, y),
+        _to_pnt(ax3, x + width, y),
+        _to_pnt(ax3, x + width, y + height),
+        _to_pnt(ax3, x, y + height),
+    ]
+    edges = []
+    for index in range(4):
+        maker = BRepBuilderAPI_MakeEdge(corners[index], corners[(index + 1) % 4])
+        if not maker.IsDone():
+            raise ValueError("failed to build a rectangle edge")
+        edges.append(maker.Edge())
+    return edges
+
+
+def _bbox_line(params: dict) -> Tuple[float, float, float, float]:
+    x0, y0, x1, y1 = float(params["x0"]), float(params["y0"]), float(params["x1"]), float(params["y1"])
+    return (min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1))
+
+
+def _bbox_circle(params: dict) -> Tuple[float, float, float, float]:
+    cx, cy, radius = float(params["cx"]), float(params["cy"]), float(params["radius"])
+    return (cx - radius, cx + radius, cy - radius, cy + radius)
+
+
+def _bbox_arc(params: dict) -> Tuple[float, float, float, float]:
+    # 安全側: 円と同じ外接箱で囲む（補助面が少し大きくなるだけ）。
+    return _bbox_circle(params)
+
+
+def _bbox_rectangle(params: dict) -> Tuple[float, float, float, float]:
+    x, y = float(params["x"]), float(params["y"])
+    return (x, x + float(params["width"]), y, y + float(params["height"]))
+
+
+@dataclass(frozen=True)
+class _KernelEntityKindOps:
+    """図形1種別ぶんのOCP依存演算(辺生成・2D bbox)。表の1行 = その種別の全処理。
+
+    `duocad/sketch.py` の `EntityKindOps`(純幾何・OCP不要)の姉妹表 —— import境界
+    (OCPは kernel.py だけ)のため1本化できず、種別ごとの処理は2つの表に分かれている
+    (README.md「モジュールとimport境界」)。
+    """
+
+    edges: Callable[["gp_Ax3", dict], List[Any]]
+    bbox: Callable[[dict], Tuple[float, float, float, float]]
+
+
+_KERNEL_ENTITY_KIND_TABLE: Dict[str, _KernelEntityKindOps] = {
+    "line": _KernelEntityKindOps(_edges_line, _bbox_line),
+    "circle": _KernelEntityKindOps(_edges_circle, _bbox_circle),
+    "arc": _KernelEntityKindOps(_edges_arc, _bbox_arc),
+    "rectangle": _KernelEntityKindOps(_edges_rectangle, _bbox_rectangle),
+}
+
+
+def _kernel_entity_kind_ops(kind: str) -> _KernelEntityKindOps:
+    """種別ごとのOCP依存演算を引く。表に無い種別は即時 ValueError(silent defaultなし)。"""
+    try:
+        return _KERNEL_ENTITY_KIND_TABLE[kind]
+    except KeyError:
+        raise ValueError(f"unknown entity kind: {kind!r}") from None
+
+
 def _entity_edges(ax3: "gp_Ax3", entity: dict) -> List[Any]:
     """1図形から 3D の辺リストを作る。"""
-    kind = entity["kind"]
-    params = entity["params"]
-    if kind == "line":
-        p0 = _to_pnt(ax3, float(params["x0"]), float(params["y0"]))
-        p1 = _to_pnt(ax3, float(params["x1"]), float(params["y1"]))
-        maker = BRepBuilderAPI_MakeEdge(p0, p1)
-        if not maker.IsDone():
-            raise ValueError("failed to build a line edge")
-        return [maker.Edge()]
-    if kind == "circle":
-        center = _to_pnt(ax3, float(params["cx"]), float(params["cy"]))
-        radius = float(params["radius"])
-        if radius <= 0:
-            raise ValueError(f"circle radius must be positive, got {radius}")
-        axis = gp_Ax2(center, ax3.Direction(), ax3.XDirection())
-        maker = BRepBuilderAPI_MakeEdge(gp_Circ(axis, radius))
-        if not maker.IsDone():
-            raise ValueError("failed to build a circle edge")
-        return [maker.Edge()]
-    if kind == "arc":
-        center = _to_pnt(ax3, float(params["cx"]), float(params["cy"]))
-        radius = float(params["radius"])
-        if radius <= 0:
-            raise ValueError(f"arc radius must be positive, got {radius}")
-        start_deg = float(params["start_deg"])
-        end_deg = float(params["end_deg"])
-        # 反時計回りに start→end。0度またぎは (end-start)%360 の掃引角で表現する。
-        sweep_deg = (end_deg - start_deg) % 360.0
-        start_rad = math.radians(start_deg)
-        end_rad = start_rad + math.radians(sweep_deg)
-        # gp_Ax2(center, N, X): P(U)=O+R*cos(U)*X+R*sin(U)*(N×X) なので
-        # U=0 がスケッチX、U増加が反時計回り（右手系）。
-        axis = gp_Ax2(center, ax3.Direction(), ax3.XDirection())
-        maker = BRepBuilderAPI_MakeEdge(gp_Circ(axis, radius), start_rad, end_rad)
-        if not maker.IsDone():
-            raise ValueError("failed to build an arc edge")
-        return [maker.Edge()]
-    if kind == "rectangle":
-        x = float(params["x"])
-        y = float(params["y"])
-        width = float(params["width"])
-        height = float(params["height"])
-        corners = [
-            _to_pnt(ax3, x, y),
-            _to_pnt(ax3, x + width, y),
-            _to_pnt(ax3, x + width, y + height),
-            _to_pnt(ax3, x, y + height),
-        ]
-        edges = []
-        for index in range(4):
-            maker = BRepBuilderAPI_MakeEdge(corners[index], corners[(index + 1) % 4])
-            if not maker.IsDone():
-                raise ValueError("failed to build a rectangle edge")
-            edges.append(maker.Edge())
-        return edges
-    raise ValueError(f"unknown entity kind: {kind!r}")
+    return _kernel_entity_kind_ops(entity["kind"]).edges(ax3, entity["params"])
 
 
 def _entities_bbox_2d(entities: list) -> Tuple[float, float, float, float]:
@@ -995,39 +1051,13 @@ def _entities_bbox_2d(entities: list) -> Tuple[float, float, float, float]:
     v_min = float("inf")
     v_max = float("-inf")
 
-    def include(u: float, v: float) -> None:
-        nonlocal u_min, u_max, v_min, v_max
-        u_min = min(u_min, u)
-        u_max = max(u_max, u)
-        v_min = min(v_min, v)
-        v_max = max(v_max, v)
-
     for entity in entities:
-        kind = entity["kind"]
-        params = entity["params"]
-        if kind == "line":
-            include(float(params["x0"]), float(params["y0"]))
-            include(float(params["x1"]), float(params["y1"]))
-        elif kind == "circle":
-            cx = float(params["cx"])
-            cy = float(params["cy"])
-            radius = float(params["radius"])
-            include(cx - radius, cy - radius)
-            include(cx + radius, cy + radius)
-        elif kind == "arc":
-            # 安全側: 円と同じ外接箱で囲む（補助面が少し大きくなるだけ）。
-            cx = float(params["cx"])
-            cy = float(params["cy"])
-            radius = float(params["radius"])
-            include(cx - radius, cy - radius)
-            include(cx + radius, cy + radius)
-        elif kind == "rectangle":
-            x = float(params["x"])
-            y = float(params["y"])
-            include(x, y)
-            include(x + float(params["width"]), y + float(params["height"]))
-        else:
-            raise ValueError(f"unknown entity kind: {kind!r}")
+        ops = _kernel_entity_kind_ops(entity["kind"])
+        eu_min, eu_max, ev_min, ev_max = ops.bbox(entity["params"])
+        u_min = min(u_min, eu_min)
+        u_max = max(u_max, eu_max)
+        v_min = min(v_min, ev_min)
+        v_max = max(v_max, ev_max)
 
     if u_min == float("inf"):
         return 0.0, 0.0, 0.0, 0.0

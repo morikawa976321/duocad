@@ -36,7 +36,7 @@ from uuid import uuid4
 from .. import parameters
 from ..document import Document
 from ..oplog import Operation, register_verb
-from ..sketch import Pattern, get_sketch
+from ..sketch import Pattern, entity_kind_ops, get_sketch
 
 VERB_PATTERN_RECTANGULAR = "pattern_rectangular"
 VERB_PATTERN_CIRCULAR = "pattern_circular"
@@ -133,23 +133,6 @@ def pattern_rectangular(
 # --------------------------------------------------------------------------------------
 # 円形反復
 # --------------------------------------------------------------------------------------
-def _entity_center_2d(kind: str, params: dict) -> tuple[float, float]:
-    """図形の2D中心。回転中心との一致判定に使う。"""
-    if kind in ("circle", "arc"):
-        return (float(params["cx"]), float(params["cy"]))
-    if kind == "rectangle":
-        return (
-            float(params["x"]) + float(params["width"]) / 2.0,
-            float(params["y"]) + float(params["height"]) / 2.0,
-        )
-    if kind == "line":
-        return (
-            (float(params["x0"]) + float(params["x1"])) / 2.0,
-            (float(params["y0"]) + float(params["y1"])) / 2.0,
-        )
-    raise ValueError(f"unknown entity kind: {kind!r}")
-
-
 def _install_pattern_circular(
     document: Document,
     sketch_id: str,
@@ -250,7 +233,7 @@ def pattern_circular(
             key: parameters.resolve(doc, ref)
             for key, ref in entity.params.items()
         }
-        ecx, ecy = _entity_center_2d(entity.kind, resolved)
+        ecx, ecy = entity_kind_ops(entity.kind).center_2d(resolved)
         if abs(ecx - cx) <= 1e-9 and abs(ecy - cy) <= 1e-9:
             raise ValueError(
                 f"entity {entity_id!r} is centred on the pattern pivot "

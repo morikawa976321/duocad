@@ -21,6 +21,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 // 辺の折れ線の形は `session.ts` の `EdgeGeometry` が正(サーバが配る形そのもの)。
+import { entityPoints } from './entityKinds'
 import type { EdgeGeometry } from './session'
 
 /** kernel.tessellate() が返す1面ぶん(サーバのJSONそのまま)。 */
@@ -230,8 +231,6 @@ const SKETCH_COLOR = 0xe8eef6
 const SKETCH_GHOST_COLOR = 0x7ee081
 const REGION_COLOR = 0x4d7ea8
 const REGION_SELECTED_COLOR = 0xffb454
-/** 円・円弧を折れ線で描くときの分割数(見た目の作り込みではなく、狙える程度の滑らかさ)。 */
-const ARC_SEGMENTS = 64
 /** AIの提案(`origin === "proposed"`)。確定(橙)と**色相で**離す。 */
 const PROPOSED_COLOR = 0x36d1ff
 /** 確定前の形。半透明で「まだ無いもの」に見せる。 */
@@ -849,46 +848,6 @@ export function createViewport(container: HTMLElement): Viewport {
       frame.origin[1] + u * frame.u[1] + v * frame.v[1],
       frame.origin[2] + u * frame.u[2] + v * frame.v[2],
     )
-  }
-
-  /**
-   * 図形を (u,v) の折れ線にする。**コアの `Entity.params` のキーをそのまま読む**
-   * (`duocad/sketch.py` の `Entity` docstring)。円・円弧は折れ線で近似する。
-   */
-  function entityPoints(kind: string, params: Record<string, number>): Array<[number, number]> {
-    if (kind === 'line') {
-      return [
-        [params.x0, params.y0],
-        [params.x1, params.y1],
-      ]
-    }
-    if (kind === 'rectangle') {
-      const { x, y, width, height } = params
-      return [
-        [x, y],
-        [x + width, y],
-        [x + width, y + height],
-        [x, y + height],
-        [x, y],
-      ]
-    }
-    if (kind === 'circle' || kind === 'arc') {
-      const start = kind === 'circle' ? 0 : params.start_deg
-      // 反時計回り・0度をまたいでよい(`add_arc` の契約)。end<=start は一周分足す。
-      let end = kind === 'circle' ? 360 : params.end_deg
-      if (kind === 'arc' && end <= start) end += 360
-      const steps = Math.max(8, Math.round((ARC_SEGMENTS * Math.abs(end - start)) / 360))
-      const points: Array<[number, number]> = []
-      for (let step = 0; step <= steps; step += 1) {
-        const angle = ((start + ((end - start) * step) / steps) * Math.PI) / 180
-        points.push([
-          params.cx + params.radius * Math.cos(angle),
-          params.cy + params.radius * Math.sin(angle),
-        ])
-      }
-      return points
-    }
-    return []
   }
 
   function buildEntityLine(
