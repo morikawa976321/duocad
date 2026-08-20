@@ -196,20 +196,6 @@ def test_a_full_circle_divides_360_by_count():
         assert math.isclose(angle, index * step, abs_tol=1e-4), f"{angles}"
 
 
-def test_the_last_copy_of_a_full_circle_does_not_land_on_the_first():
-    """全周の最後の複製が最初と重ならない（項番9の本体）。
-
-    重なると穴の数が `count` より少なくなる。**穴の数を数えるだけで検出できる**ので、
-    幾何の一致まで見なくてよい。
-    """
-    document = Document()
-    plate(document)
-    sketch_id, _, _ = hole_ring(document)
-    drill_all(document, sketch_id)
-
-    assert len(hole_axes(document.active_body().shape)) == COUNT
-
-
 def test_a_partial_angle_includes_both_ends():
     """全周未満のときは**端点を含む**ので刻みは `total_angle/(count-1)`。
 

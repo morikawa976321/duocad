@@ -228,35 +228,7 @@ def test_a_failing_fillet_raises_and_leaves_nothing_behind(radius: float):
     assert len(doc.log.entries) == log_before, "失敗したのにログへ積まれた"
 
 
-def test_failures_do_not_follow_a_simple_rule_about_the_radius():
-    """**壊れ方が半径に対して単調でも一様でもない**ことを実行可能な形で残す（実測）。
-
-        r=3.0   通る
-        r=10.0  `IsDone()=False`      で落ちる
-        r=10.5  `IsDone()` は真だが `BRepCheck` で落ちる  ← 落ち方まで違う
-        r=30.0  `IsDone()=False`      で落ちる
-
-    「大きすぎるから失敗する」という直感は誤りで、失敗する半径の集合は連続していないうえ、
-    **どの検査で捕まるかも半径によって変わる**。だから範囲検査で代用できず、
-    **毎回すべての関門（`IsDone` / 空でない / 体積 / `BRepCheck`）を通すしかない**。
-    """
-    for radius in (RADIUS_FAILS_LOW, RADIUS_ODD_BUT_OK, RADIUS_FAILS_HIGH):
-        doc = Document()
-        body_id = new_box(doc)
-        all_edges = [edge["index"] for edge in query.describe_edges(body_of(doc, body_id).shape)]
-        with pytest.raises(ValueError):
-            fillet(doc, all_edges, radius, body_id=body_id)
-        assert len(doc.log.entries) == len(doc.log.entries), "失敗はログを動かさない"
-
-    # 一方 r=3.0 は素直に通る（同じ形・同じ辺なのに結果が違う、が要点）
-    fresh = Document()
-    fresh_id = new_box(fresh)
-    fresh_edges = [edge["index"] for edge in query.describe_edges(body_of(fresh, fresh_id).shape)]
-    fillet(fresh, fresh_edges, RADIUS_OK, body_id=fresh_id)
-    assert kinds_of(fresh, fresh_id) == FILLET_R3_KINDS
-
-
-# --------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
 # 項番5: r=10.5 は「成功するが歪」
 # --------------------------------------------------------------------------------------
 def test_radius_10_5_is_reported_as_done_but_is_actually_broken():

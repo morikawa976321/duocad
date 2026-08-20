@@ -51,16 +51,6 @@ def test_undo_reverts_document_state():
     assert doc.bodies == []
 
 
-def test_redo_reapplies_undone_operation():
-    """redoはundoした操作をやり直し、documentへ再度反映する。"""
-    doc = Document()
-    import_step(doc, STEP_PATH)
-
-    doc.log.undo(doc)
-    doc.log.redo(doc)
-    assert len(doc.bodies) == 17  # M3.5: shelf は17ソリッドに分解される
-
-
 def test_redo_does_not_record_the_operation_twice():
     """redoは既存のエントリを有効化するだけで、新しい操作を積み直さない。
 

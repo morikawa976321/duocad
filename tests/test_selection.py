@@ -577,31 +577,23 @@ def test_propose_selection_needs_exactly_one_source(doc: Document):
 # --------------------------------------------------------------------------------------
 # 項番12〜14: イベント(コア→アプリ層の上り方向)
 # --------------------------------------------------------------------------------------
-def test_changing_the_selection_fires_a_change_event(session: Session):
-    """選択が変わると**変更イベントが発火する**(項番12)。
-
-    ログに載らないこととイベントを出さないことは別である。AIが選択を書き換えたら
-    画面のハイライトは描き直されなければならない(§2「コマンドは下り、イベントは上り」)。
-    """
-    events = []
-    session.add_listener(events.append)
-    session.propose_selection(refs=[selection.select_edge(session.document, "box", 1)])
-    assert len(events) == 1
-
-
 def test_every_selection_api_fires_exactly_one_event(session: Session):
-    """変更する4つのAPIがそれぞれ1回だけ発火し、読み取りは発火しない。
+    """変更する4つのAPIがそれぞれ1回だけ発火し、読み取りは発火しない(項番12)。
 
     2回発火すると、購読側(`Server._on_core_change`)が同じ状態を2回配ることになる
-    (M4で「1つの操作につき1回だけ」を契約にしたのと同じ理由)。
+    (M4で「1つの操作につき1回だけ」を契約にしたのと同じ理由)。合計だけ見ると
+    「0回と2回」が打ち消し合って緑になるので、各APIの直後に件数を見る。
     """
     events = []
     session.add_listener(events.append)
     ref = selection.select_edge(session.document, "box", 1)
 
     session.propose_selection(refs=[ref])
+    assert len(events) == 1
     session.modify_selection(add=[selection.select_edge(session.document, "box", 2)])
+    assert len(events) == 2
     session.commit_selection()
+    assert len(events) == 3
     session.clear_selection()
     assert len(events) == 4
 

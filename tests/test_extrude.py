@@ -124,23 +124,6 @@ def test_join_fuses_into_the_existing_body():
     )
 
 
-def test_cut_opens_a_hole_in_the_existing_body():
-    """`mode="cut"` で既存ボディから引ける。**切り取りが無いと穴が1つも開かない**。
-
-    体積が減っていることに加えて、**全周円筒の面が1つ増えている**ことまで見る
-    (体積だけだと、穴ではなく外形が削れていても通ってしまう)。
-    """
-    document = plate_document()
-    before = query.volume(document.active_body().shape)
-    assert query.describe_shape(document.active_body().shape)["faces_by_type"]["cylinder_full"] == 0
-
-    drill(document)
-
-    shape = document.active_body().shape
-    assert math.isclose(query.volume(shape), before - HOLE_VOLUME, rel_tol=VOLUME_REL_TOL)
-    assert query.describe_shape(shape)["faces_by_type"]["cylinder_full"] == 1
-
-
 def test_extrude_is_logged_and_undoable():
     """押し出しが操作ログに1行で載り、undoで戻る(verbの粒度。§2)。
 
@@ -306,7 +289,8 @@ def test_a_plate_with_a_hole_has_only_planes_and_a_full_cylinder():
     トーラス0・円錐0・spline0(実装計画書§0)。つまりM2のverbだけで届く構成であり、
     ここではその最小形(平面6 + 全周円筒1 = 7面)を作れることを確かめる。
     **面の構成と体積はOCPで直接実測した値**(box40×30×10からr=3の円柱を引き、
-    `query.describe_shape` で数えた)。
+    `query.describe_shape` で数えた)。体積が穴の分だけ減ることもここで見る
+    (面の構成だけだと、半径違いの穴でも7面のまま通ってしまう)。
     """
     document = plate_document()
     assert math.isclose(
@@ -316,6 +300,9 @@ def test_a_plate_with_a_hole_has_only_planes_and_a_full_cylinder():
     drill(document)
 
     shape = document.active_body().shape
+    assert math.isclose(
+        query.volume(shape), PLATE_VOLUME - HOLE_VOLUME, rel_tol=VOLUME_REL_TOL
+    )
     info = query.describe_shape(shape)
     assert info["faces_by_type"] == {
         "plane": 6,

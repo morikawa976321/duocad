@@ -196,15 +196,6 @@ def test_the_m4_tools_survive(server: McpServer):
     assert M4_TOOLS <= {tool["name"] for tool in tools}
 
 
-def test_every_tool_has_a_description_and_an_object_schema(server: McpServer):
-    """説明文と入力スキーマはAIがツールを選ぶ唯一の手がかり。欠けたら使えない。"""
-    for tool in request(server, "tools/list")["result"]["tools"]:
-        assert tool["description"].strip()
-        schema = tool["inputSchema"]
-        assert schema["type"] == "object"
-        assert schema["additionalProperties"] is False
-
-
 def test_set_visible_schema_requires_both_arguments(server: McpServer):
     tool = next(t for t in request(server, "tools/list")["result"]["tools"] if t["name"] == "set_visible")
     assert set(tool["inputSchema"]["required"]) == {"body_id", "visible"}
@@ -298,13 +289,7 @@ def test_describe_shape_agrees_with_the_query_layer(server: McpServer, session: 
     assert payload["bbox"]["diagonal"] > 0
 
 
-def test_unknown_body_is_an_execution_error_not_a_protocol_error(server: McpServer):
-    """ツールの実行時エラーは `isError` で返す — JSON-RPCエラーにするとAIに理由が届かない。"""
-    text = call_tool_expecting_error(server, "describe_shape", {"body_id": "no-such-body"})
-    assert "no such body" in text
-
-
-# --------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
 # 4. set_visible — コアの verb を経由し、ログに載り、undoで戻る
 # --------------------------------------------------------------------------------------
 def test_set_visible_goes_through_the_core_verb(server: McpServer, session: Session):
@@ -365,14 +350,7 @@ def test_can_undo_agrees_with_the_session(server: McpServer, session: Session):
     session.undo()  # 今度は通る
 
 
-def test_set_visible_on_a_missing_body_changes_nothing(server: McpServer, session: Session):
-    before = len(session.document.log.entries)
-    text = call_tool_expecting_error(server, "set_visible", {"body_id": "ghost", "visible": False})
-    assert "no such body" in text
-    assert len(session.document.log.entries) == before, "失敗したのにログが動いた"
-
-
-# --------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
 # 5. 上り方向 — コアが発火し、アプリ層が購読して描き直す
 # --------------------------------------------------------------------------------------
 def test_core_emits_one_event_per_mutation(session: Session):

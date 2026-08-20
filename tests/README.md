@@ -376,7 +376,7 @@ write_stl(shape: TopoDS_Shape, path: str, deviation: float) -> None
 | 1 | `test_document.py::test_document_units_is_mm`, `::test_document_units_cannot_be_reassigned` |
 | 2 | `test_document.py::test_new_document_has_no_bodies`, `::test_new_document_active_body_is_none`, `::test_add_body_*`, `::test_remove_body_*`, `::test_set_active_body_*`, `::test_reference_body_is_not_editable`, `::test_solid_body_is_editable` |
 | 3 | `test_oplog.py::test_append_seq_is_monotonically_increasing` |
-| 4 | `test_oplog.py::test_undo_reverts_document_state`, `::test_redo_reapplies_undone_operation`, `::test_redo_does_not_record_the_operation_twice` |
+| 4 | `test_oplog.py::test_undo_reverts_document_state`, `::test_redo_does_not_record_the_operation_twice`（後者がredoの反映まで含めて見る。真部分集合だった `::test_redo_reapplies_undone_operation` は2026-08-20に削除） |
 | 5 | `test_oplog.py::test_to_json_from_json_roundtrip_matches_exactly`, `::test_to_json_emits_actual_json_with_the_logged_fields`（往復の自己整合だけでは「JSONであること」を縛れないため） |
 | 6 | `test_oplog.py::test_replay_reproduces_same_document_state`, `::test_replay_does_not_append_to_the_log_it_replays` |
 | 7 | `test_oplog.py::test_operation_has_provenance_slot_defaulting_to_none`, `::test_operation_dataclass_declares_provenance_field` |
@@ -576,7 +576,7 @@ MODES = ("join", "cut")
 | 7（線2本で3領域） | `test_region.py::test_two_lines_split_the_circle_into_three_regions` |
 | 8（列挙順の安定） | `test_region.py::test_region_enumeration_order_is_stable`（＋`::test_regions_of_a_sketch_without_entities_is_empty`, `::test_regions_of_an_unknown_sketch_fails`） |
 | 9（片側だけ押し出し＝面積×距離） | `test_extrude.py::test_extruding_one_half_of_a_split_circle_gives_area_times_distance`（＋join の合成は `::test_join_fuses_into_the_existing_body`） |
-| 10（cutで穴） | `test_extrude.py::test_cut_opens_a_hole_in_the_existing_body` |
+| 10（cutで穴） | `test_extrude.py::test_a_plate_with_a_hole_has_only_planes_and_a_full_cylinder`（項番13と同じテスト。体積減少と全周円筒1面を固定する。同じ形を作り直していた `::test_cut_opens_a_hole_in_the_existing_body` は2026-08-20にこちらへ統合） |
 | 11（ログとundo） | `test_extrude.py::test_extrude_is_logged_and_undoable`, `::test_undo_restores_the_shape_for_fuse_and_cut`（＋再生は `::test_replay_reproduces_the_split_circle_extrusion`, `::test_replay_reproduces_the_plate_with_the_hole`） |
 | 12（対象が無ければ失敗・文書不変） | `test_extrude.py::test_extrude_without_an_existing_region_fails_and_changes_nothing`, `::test_extrude_rejects_a_zero_distance_and_an_unknown_mode`, `::test_cut_without_a_target_body_fails`, `::test_extrude_rejects_a_reference_body` |
 | 13（板と穴・面の構成） | `test_extrude.py::test_a_plate_with_a_hole_has_only_planes_and_a_full_cylinder` |
@@ -1398,7 +1398,7 @@ docstringに注意を書く」と指示していたが、`BRepCheck` が偽に�
 「r=10.5 は成功する」→「**r=10.5 は `IsDone` を通るが `BRepCheck` で止まる**」へ変更した。
 テスト名も `test_radius_10_5_is_reported_as_done_but_is_actually_broken` に改めてある。
 
-**壊れ方は半径に対して単調でも一様でもない**（`test_failures_do_not_follow_a_simple_rule_about_the_radius`）:
+**壊れ方は半径に対して単調でも一様でもない**（個別事実は `test_a_failing_fillet_raises_and_leaves_nothing_behind`（r=10.0/30.0）と `test_radius_10_5_is_reported_as_done_but_is_actually_broken` が固定。これらを一括再実行するだけだった `test_failures_do_not_follow_a_simple_rule_about_the_radius` は重複として2026-08-20に削除）:
 
 | 半径 | どうなるか |
 |---|---|
@@ -1844,7 +1844,7 @@ MCP起点の変更から `applied` を落として配る（`applied` は操作�
 | 9（**交互操作そのもの**） | `test_the_ai_proposes_the_human_fixes_and_the_ai_reads_it_back` |
 | 10（commitで確定） | `test_commit_selection_confirms_without_changing_the_items` / `test_commit_selection_is_idempotent` |
 | 11（決めた遷移規則） | `test_human_editing_a_proposal_confirms_it` / `test_a_proposal_cannot_be_fed_to_a_verb` |
-| 12（発火する） | `test_changing_the_selection_fires_a_change_event` / `test_every_selection_api_fires_exactly_one_event` |
+| 12（発火する） | `test_every_selection_api_fires_exactly_one_event`（各APIの直後に件数を段階検査する形へ2026-08-20に強化。propose単体を見ていた `test_changing_the_selection_fires_a_change_event` は包含されるため削除） |
 | 13（描き直すのに足る） | `test_the_event_carries_enough_to_redraw` / `test_the_event_carries_the_client_op_back` |
 | 14（既存の上り方向） | `test_selection_events_ride_the_same_up_path_as_set_visible` / `test_selection_is_part_of_the_pushed_state` / `test_the_event_does_not_pretend_to_be_a_verb` |
 | 15（述語で面） | `test_faces_can_be_selected_by_normal` ほか |
@@ -2215,7 +2215,7 @@ stdioトランスポートは**stdoutをJSON-RPC専用**にしている（`duoca
 
 | 項番（タスクファイル） | テスト |
 |---|---|
-| 1（全操作が呼べる） | `test_every_v1_verb_is_reachable_as_an_mcp_tool` / `test_the_ai_column_of_the_reachability_table_is_complete` / `test_tool_names_match_the_verb_names_in_the_operation_log` |
+| 1（全操作が呼べる） | `test_every_v1_verb_is_reachable_as_an_mcp_tool` / `test_tool_names_match_the_verb_names_in_the_operation_log`（`test_the_ai_column_of_the_reachability_table_is_complete` は集合完全一致の帰結の同語反復だったため2026-08-20に削除） |
 | 2（引数スキーマ） | `test_every_tool_has_a_description_and_an_object_schema` / `test_every_argument_is_typed_and_documented` / `test_the_argument_of_every_tool_is_fixed` / **`test_no_verb_tool_takes_a_shape_argument`** ＋ 型検査4件（`test_numbers_are_not_accepted_as_strings` ほか） |
 | 3（refs と predicate の両方） | `test_propose_selection_accepts_explicit_references` / `test_propose_selection_accepts_a_predicate` / `test_propose_selection_needs_exactly_one_of_them` |
 | 4（結果が構造化） | `test_a_verb_reports_what_changed_not_a_sentence` / `test_changed_bodies_is_empty_when_only_a_sketch_changed` / `test_set_visible_still_reports_the_same_shape` ＋ 各verbを1回ずつ成功させる `test_every_sketch_verb_is_reachable_and_returns_its_id` / `test_both_patterns_are_reachable_and_return_their_id` / `test_extrude_can_cut` |

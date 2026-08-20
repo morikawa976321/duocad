@@ -320,17 +320,6 @@ def test_ai_commands_have_no_mcp_tool(server: McpServer):
     assert not leaked, f"ai_* がMCPツールとして公開されている: {sorted(leaked)}"
 
 
-def test_the_ai_column_of_the_reachability_table_is_complete(server: McpServer):
-    """到達表の19操作を**名指しで**確認する(上の集合検査の意図を読める形で残す)。
-
-    §0の表は行がまとめて書かれている(`add_line / add_circle / add_rectangle / add_arc` 等)ので、
-    ここで19操作へ展開したものが `VERB_TOOLS` である。
-    """
-    assert len(VERB_TOOLS) == 19, "到達表のAI列は19操作(§0)"
-    names = {tool["name"] for tool in tool_list(server)}
-    assert VERB_TOOLS <= names
-
-
 def test_tool_names_match_the_verb_names_in_the_operation_log(server: McpServer):
     """ログに載るverbは、**同じ綴りのツール名**で呼べる。**両方向で見る。**
 
