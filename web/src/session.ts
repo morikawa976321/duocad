@@ -164,43 +164,93 @@ export interface FilePayload {
 /**
  * 操作を出したクライアントへの確認応答。
  *
- * **2種類ある**。verbの適用は `verb` を持ち、選択の変更は `change: "selection"` を持つ
- * (選択はverbではなく、操作ログにも載らない。`duocad/server.py` の `_selection_event`)。
- * どちらか判らないまま `applied.verb` を見ると、選択変更のたびに `undefined` と
- * 比較することになるので、**読む側は必ず先に見分ける**こと。
+ * **discriminated union**(2026-08-20)。以前は全verbの応答フィールドを1つのinterfaceに
+ * optionalで積んだフラット構造だった —— **全フィールドがoptionalなので、`verb` ごとに
+ * 本来必須のキー(例: `import_step_editable` の `body_ids`)を宣言し忘れても型検査が
+ * 止まらなかった**(実績: 一度 `.svelte` 側だけが `body_ids` を読んでおり、宣言の無いまま
+ * 素通りしていた。`svelte-check` を入れて初めて発覚した)。`verb`(verbの適用)と
+ * `change`(`"selection"` = 選択の変更、`"document"` = ファイルを開いて文書ごと差し替わった。
+ * どちらも操作ログには載らない。`duocad/server.py` の `_selection_event` / `open_document`)を
+ * discriminantにしたので、`applied.verb === "extrude_face"` で絞り込めば `body_id` /
+ * `face_index` / `distance` が**必須**として見える(他のverbのキーは見えない)。
+ *
+ * `duocad/server.py` が実際に組み立てている形と1:1(`_after_logged_verb` / `_emit` の
+ * 各呼び出し)。**新しいverbを足すときはここにも1メンバー足す**
+ * (`duocad/catalog.py` がPython側のverb宣言の単一の正である一方、応答の「形」までは
+ * catalogが持たないので、この対応は手で保つしかない)。
  */
-export interface Applied {
-  verb?: string
-  seq?: number
+
+/**
+ * verb適用に共通するフィールド。
+ *
+ * `change?: undefined` は**実行時には存在しないプレースホルダ**。discriminantが
+ * `verb` と `change` の2つに分かれているので、`applied.change === "selection"` のように
+ * どちらの分岐からも先に触ってよいようにするには、触る側のキーが**全メンバーに
+ * (値が無くても)存在する**必要がある(無いメンバーが1つでもあると `Property 'change'
+ * does not exist` でコンパイルが止まる)。値としては来ない。
+ */
+interface AppliedVerbBase {
+  seq: number
   client_op: number | null
-  body_id?: string
-  face_index?: number
-  distance?: number
-  undone?: string
-  redone?: string
-  visible?: boolean
-  changed_bodies?: string[]
-  /** 選択の変更イベントのときだけ `"selection"`。 */
-  change?: string
-  selection?: SelectionState
-  /** C: `sketch_create` が返す新しいスケッチのID。 */
-  sketch_id?: string
-  /** C: 図形追加verbが返す新しい図形のID。 */
-  entity_id?: string
-  /** C: `set_parameter` の名前と値。 */
-  name?: string
-  value?: number
-  /**
-   * STEP読み込みが作ったボディ。`import_step_editable` は編集用と原本の両方、
-   * `import_step` は参照ボディだけを返す。
-   *
-   * **ここに宣言が要る**: `.svelte` の中で `applied.body_ids` を読んでいるが、
-   * `.svelte` は tsc の対象外なので、ここに型が無いとサーバ側がキー名を変えても
-   * 型検査では止まらない(`svelte-check` でだけ検出できる)。
-   */
-  body_ids?: string[]
-  reference_ids?: string[]
+  change?: undefined
 }
+
+/** change系イベント(verbではない)に共通するフィールド。`verb`/`seq` 側の同じ理由。 */
+interface AppliedChangeBase {
+  client_op: number | null
+  verb?: undefined
+  seq?: undefined
+}
+
+export type Applied =
+  | (AppliedVerbBase & {
+      verb: 'extrude_face'
+      body_id: string
+      face_index: number
+      distance: number
+      changed_bodies: string[]
+    })
+  | (AppliedVerbBase & {
+      verb: 'set_visible'
+      body_id: string
+      visible: boolean
+      changed_bodies: string[]
+    })
+  | (AppliedVerbBase & {
+      verb: 'extrude'
+      body_id: string
+      distance: number
+      mode: string
+      changed_bodies: string[]
+    })
+  | (AppliedVerbBase & { verb: 'fillet'; body_id: string; changed_bodies: string[] })
+  | (AppliedVerbBase & { verb: 'chamfer'; body_id: string; changed_bodies: string[] })
+  | (AppliedVerbBase & { verb: 'pattern_rectangular'; pattern_id: string })
+  | (AppliedVerbBase & { verb: 'pattern_circular'; pattern_id: string })
+  | (AppliedVerbBase & { verb: 'make_editable_copy'; body_id: string })
+  | (AppliedVerbBase & {
+      verb: 'set_parameter'
+      name: string
+      value: number
+      previous: number
+      changed_bodies: string[]
+    })
+  /** C: `sketch_create` が返す新しいスケッチのID。 */
+  | (AppliedVerbBase & { verb: 'sketch_create'; sketch_id: string })
+  /** C: 図形追加verbが返す新しい図形のID(4つとも同じ形)。 */
+  | (AppliedVerbBase & { verb: 'add_line' | 'add_circle' | 'add_rectangle' | 'add_arc'; entity_id: string })
+  /**
+   * STEP読み込みが作ったボディ。`import_step_editable` は編集用と原本の両方
+   * (`body_ids` + `reference_ids`)、`import_step` は参照ボディだけ(`body_ids` のみ)。
+   */
+  | (AppliedVerbBase & { verb: 'import_step_editable'; body_ids: string[]; reference_ids: string[] })
+  | (AppliedVerbBase & { verb: 'import_step'; body_ids: string[] })
+  | (AppliedVerbBase & { verb: 'undo'; undone: string })
+  | (AppliedVerbBase & { verb: 'redo'; redone: string })
+  /** 選択の変更イベント。verbではない(操作ログに載らない)。 */
+  | (AppliedChangeBase & { change: 'selection'; selection: SelectionState })
+  /** ファイルを開いて文書ごと差し替わった。verbではない(`Session.open_document`)。 */
+  | (AppliedChangeBase & { change: 'document'; action: string; path: string; operations: number })
 
 /**
  * プレビュー(投機的実行)の応答。**状態の配信ではない** —— 要求した接続にだけ届き、
