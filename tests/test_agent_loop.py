@@ -522,6 +522,64 @@ def test_stop_reasons_that_are_not_end_turn_are_reported_as_such():
     assert AgentLoop(surface, RecordedProvider([refused])).run("だめな話").status == "refusal"
 
 
+def test_an_unknown_stop_reason_falls_through_to_stopped_with_the_raw_value():
+    """知らない停止理由を `completed` に化けさせない(生値を `detail` に残す)。"""
+    unknown = ProviderReply(text="…", stop_reason="content_filter", stop="other")
+    run = AgentLoop(tools(), RecordedProvider([unknown])).run("なにか")
+
+    assert run.status == "stopped"
+    assert "content_filter" in run.detail
+    assert run.ok is False
+
+
+# --------------------------------------------------------------------------------------
+# 3b. 出力上限で切れたターンのツールは走らせない
+# --------------------------------------------------------------------------------------
+def test_truncated_replies_are_not_mistaken_for_tool_use_by_either_provider():
+    """**打ち切りの判定がツール呼び出しより先** —— 切れた引数を実行しないための前提。"""
+    anthropic = AnthropicProvider(FAKE_KEY, transport=FakeTransport([]))
+    reply = anthropic.parse_reply({**ANTHROPIC_TOOL_USE, "stop_reason": "max_tokens"})
+    assert reply.tool_calls  # ブロック自体は載っている
+    assert reply.stop == "max_tokens"
+
+    compat = OpenAICompatProvider(transport=FakeTransport([]))
+    truncated = {
+        "choices": [
+            {**OPENAI_TOOL_CALL["choices"][0], "finish_reason": "length"},
+        ]
+    }
+    reply = compat.parse_reply(truncated)
+    assert reply.tool_calls
+    assert reply.stop == "max_tokens"
+
+
+def test_a_truncated_turn_stops_before_running_its_tool_calls():
+    """引数のJSONが途中で切れている可能性があるので、**文書を変えるツールを走らせない**。"""
+    surface = SpyTools(tools())
+    truncated = ProviderReply(
+        text="半径は",
+        tool_calls=(
+            ToolCall(id="c1", name="fillet", arguments={"radius": 1}),
+            ToolCall(id="c2", name="describe_document", arguments={}),
+        ),
+        stop_reason="max_tokens",
+        stop="max_tokens",
+    )
+    provider = RecordedProvider([truncated, spoke("ここへは来ない")])
+    loop = AgentLoop(surface, provider)
+    run = loop.run("フィレットして")
+
+    assert surface.calls == []  # 1つも実行しない
+    assert run.status == "max_tokens"
+    assert run.tool_calls == ()
+    assert len(provider.requests) == 1
+    # 履歴は再送できる形に保つ(tool_use と tool_result が1対1)
+    results = loop.turns[-1].results
+    assert [r.call_id for r in results] == ["c1", "c2"]
+    assert all(r.ok is False for r in results)
+    assert "上限" in json.loads(results[0].content)["error"]["message"]
+
+
 def test_the_conversation_continues_across_runs_until_reset():
     surface = tools()
     provider = RecordedProvider([spoke("1回目"), spoke("2回目")])

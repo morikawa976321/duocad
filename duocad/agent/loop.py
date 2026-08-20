@@ -124,7 +124,9 @@ class AgentRun:
     - `completed`      … モデルがツールを呼ばずに答えた(正常終了)
     - `max_turns`      … 往復の上限で打ち切った
     - `cancelled`      … 中断フラグが立った
-    - `max_tokens`     … 出力上限で切れた(答えが途中)
+    - `max_tokens`     … 出力上限で切れた(答えが途中)。**そのターンのツールは実行していない**
+                         —— 切れた応答のツール呼び出しは引数のJSONが途中で切れている
+                         可能性があるため(`run()` の該当箇所に理由)
     - `refusal`        … プロバイダが安全上の理由で断った
     - `provider_error` … HTTP・接続・応答の形(`detail` に理由。**APIキーは含まれない**)
     - `stopped`        … 上のどれでもない停止理由(`detail` に生値)
@@ -222,6 +224,29 @@ class AgentLoop:
                 )
             )
 
+            if reply.stop == "max_tokens" and reply.tool_calls:
+                # **上限で切られたターンのツールは走らせない。**
+                # 打ち切られた応答のツール呼び出しは引数のJSONが途中で切れている
+                # 可能性があり(半径が "12" のはずが "1" で届く類)、duocadのツールは
+                # 文書を変える —— 「たぶん合っている引数」で形を変えるより、止めて
+                # 上限に当たったことを返すほうが安い。呼ばれたぶんには実行しなかった旨の
+                # 結果を積んでおく(履歴を再送できる形に保つ。中断と同じ扱い)。
+                self.turns.append(
+                    ToolResultTurn(
+                        self._unrun_results(
+                            reply.tool_calls, "出力上限で応答が切れたため実行しなかった"
+                        )
+                    )
+                )
+                return self._result(
+                    "max_tokens",
+                    f"stop_reason={reply.stop_reason!r}(切れた引数のままツールを実行しない)",
+                    turn,
+                    outcomes,
+                    usage,
+                    text=reply.text,
+                )
+
             if not reply.tool_calls:
                 status = {
                     "end_turn": "completed",
@@ -252,34 +277,45 @@ class AgentLoop:
                 )
 
             if cancelled_at is not None:
-                # **呼ばれたツールには必ず結果を積む** —— 「呼んだのに結果が無い」履歴は
-                # 次の `run()` でプロバイダに弾かれる(Claudeは tool_use と tool_result の
-                # 対応を要求する)。走らせなかったぶんは中断した旨の封筒で埋める。
-                for call in reply.tool_calls[cancelled_at:]:
-                    results.append(
-                        ToolResult(
-                            call_id=call.id,
-                            name=call.name,
-                            content=json.dumps(
-                                {
-                                    "error": {
-                                        "code": "internal",
-                                        "message": "中断された(利用者が停止した)",
-                                        "tool": call.name,
-                                        "exception": "Cancelled",
-                                    }
-                                },
-                                ensure_ascii=False,
-                            ),
-                            ok=False,
-                        )
+                # 走らせなかったぶんは中断した旨で埋める(下の `_unrun_results` 参照)。
+                results.extend(
+                    self._unrun_results(
+                        reply.tool_calls[cancelled_at:], "中断された(利用者が停止した)"
                     )
+                )
                 self.turns.append(ToolResultTurn(tuple(results)))
                 return self._result("cancelled", "中断フラグが立った", turn, outcomes, usage)
 
             self.turns.append(ToolResultTurn(tuple(results)))
 
     # ------------------------------------------------------------------ ツール
+    def _unrun_results(self, calls: Sequence[ToolCall], why: str) -> tuple[ToolResult, ...]:
+        """**走らせなかったツール呼び出しにも結果を積む**(中断・出力上限で打ち切ったとき)。
+
+        「呼んだのに結果が無い」履歴は次の `run()` でプロバイダに弾かれる
+        (Claudeは `tool_use` と `tool_result` の1対1の対応を要求する)。理由も
+        モデルへ伝わるので、次のターンで同じ手を打ち直せる。
+        """
+        return tuple(
+            ToolResult(
+                call_id=call.id,
+                name=call.name,
+                content=json.dumps(
+                    {
+                        "error": {
+                            "code": "internal",
+                            "message": why,
+                            "tool": call.name,
+                            "exception": "NotExecuted",
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                ok=False,
+            )
+            for call in calls
+        )
+
     def _execute(self, call: ToolCall) -> tuple[Any, bool]:
         """ツールを1つ実行する。**失敗しても例外を上げない**(封筒にして返す)。"""
         if call.parse_error:

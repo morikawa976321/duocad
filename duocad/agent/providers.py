@@ -645,13 +645,19 @@ class OpenAICompatProvider(Provider):
 
 
 def _neutral_stop(raw: str, has_tool_calls: bool, truncated: set) -> str:
-    """プロバイダの停止理由 → ループが分岐する4語彙 + `other`。"""
-    if has_tool_calls:
-        return "tool_use"
+    """プロバイダの停止理由 → ループが分岐する4語彙 + `other`。
+
+    **打ち切りの判定がツール呼び出しより先**である。上限で切られた応答にも
+    `tool_use` ブロック / `tool_calls` は載りうるが、その引数のJSONは**途中で
+    切れている可能性がある** —— `tool_use` に丸めると、ループは切れた引数のまま
+    ツールを実行してしまう(`loop.py` がここで止める理由)。
+    """
     if raw in truncated:
         return "max_tokens"
     if raw == "refusal":
         return "refusal"
+    if has_tool_calls:
+        return "tool_use"
     if raw in ("end_turn", "stop", "stop_sequence", ""):
         return "end_turn"
     return "other"
