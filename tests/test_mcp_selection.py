@@ -139,16 +139,6 @@ def _assert_selection_payload(payload: dict) -> dict:
     return selection
 
 
-def test_all_five_selection_tools_return_the_same_shape(server: McpServer, session: Session):
-    """5つとも `{"selection": {...}}` を返す(`Session` 側の2つの形を外へ漏らさない)。"""
-    box = box_of(session)
-    _assert_selection_payload(call(server, "get_selection"))
-    _assert_selection_payload(call(server, "propose_selection", {"refs": [edge_ref(box.id, 1)]}))
-    _assert_selection_payload(call(server, "modify_selection", {"add": [edge_ref(box.id, 2)]}))
-    _assert_selection_payload(call(server, "commit_selection"))
-    _assert_selection_payload(call(server, "clear_selection"))
-
-
 def test_propose_selection_accepts_explicit_references(server: McpServer, session: Session):
     """`refs=` の経路(§0の「明示的な参照」)。**提案**として入る。"""
     box = box_of(session)

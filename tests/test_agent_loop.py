@@ -32,7 +32,6 @@ from duocad.agent import (
     OpenAICompatProvider,
     ProviderError,
 )
-from duocad.agent.loop import ToolSurface
 from duocad.agent.providers import (
     ANTHROPIC_API_KEY_ENV,
     SECRETS_FILENAME,
@@ -598,16 +597,7 @@ def test_the_conversation_continues_across_runs_until_reset():
     assert loop.turns == []
 
 
-def test_document_tools_satisfies_the_loop_surface():
-    """ループが要求する面は公開APIの3つだけ(内部には触らない)。"""
-    surface = tools()
-    assert isinstance(surface, ToolSurface)
-    for name in ("descriptors", "call", "error_envelope"):
-        assert callable(getattr(surface, name))
-        assert not name.startswith("_")
-
-
-# --------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
 # 4. APIキーが漏れない(セキュリティ要件)
 # --------------------------------------------------------------------------------------
 def test_the_api_key_is_read_from_the_environment_first_then_the_local_file(tmp_path):

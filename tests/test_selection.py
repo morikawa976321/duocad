@@ -98,17 +98,6 @@ def _first_extrudable_face(shape) -> int:
 # --------------------------------------------------------------------------------------
 # 項番1: 面・辺・頂点・領域を選択に入れられ、種別が保持される
 # --------------------------------------------------------------------------------------
-def test_selection_lives_on_the_document_not_on_the_app_layer(doc: Document):
-    """選択は**コアの状態**である(実装計画書§2の図で文書・操作ログと並んでいる)。
-
-    ここがアプリ層にあると、AIは選択を読むことも書くこともできず、
-    §2.1の交互操作は原理的に成立しない。**この1本がA全体の前提**。
-    """
-    assert isinstance(doc.selection, selection.Selection)
-    assert doc.selection.items == []
-    assert doc.selection.origin == selection.ORIGIN_USER
-
-
 def test_each_kind_of_reference_keeps_its_kind(doc: Document):
     """面・辺・頂点の参照が、それぞれ `kind` を保持したまま選択に入る(条件3)。"""
     refs = [

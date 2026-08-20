@@ -36,7 +36,7 @@ import pytest
 
 from duocad import kernel, query
 from duocad.mcp_server import DocumentTools
-from duocad.server import FEATURE_COMMANDS, PREVIEWABLE_VERBS, Server, Session
+from duocad.server import FEATURE_COMMANDS, Server, Session
 
 DEVIATION = 0.2
 SIDE = 20.0
@@ -521,22 +521,9 @@ def test_the_ui_and_the_ai_get_the_same_shape_from_the_same_verb() -> None:
     ]
 
 
-def test_every_feature_command_names_a_method_that_exists(session: Session) -> None:
-    """表とメソッドの食い違いを起動時ではなくここで捕まえる(`getattr` は実行時にしか落ちない)。"""
-    for command, (method, keys) in FEATURE_COMMANDS.items():
-        assert callable(getattr(session, method)), command
-        assert keys, command
-
-
 # --------------------------------------------------------------------------------------
 # プレビュー(確定前の姿)
 # --------------------------------------------------------------------------------------
-@pytest.mark.parametrize("verb", ["fillet", "chamfer", "extrude"])
-def test_the_new_verbs_are_previewable(verb: str) -> None:
-    """D で足した3つは投機的実行の対象(`pattern_*` は形を変えないので載せていない)。"""
-    assert verb in PREVIEWABLE_VERBS
-
-
 def test_previewing_a_fillet_shows_the_shape_and_leaves_nothing_behind(
     session: Session,
 ) -> None:

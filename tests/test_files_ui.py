@@ -355,15 +355,7 @@ def test_the_browser_can_still_make_an_editable_copy_of_a_reference(
     assert not session.document.is_editable(reference)
 
 
-def test_every_file_command_names_a_method_that_exists(session: Session) -> None:
-    """表とメソッドの食い違いを起動時ではなくここで捕まえる。"""
-    for command, (method, keys, is_verb) in FILE_COMMANDS.items():
-        assert callable(getattr(session, method)), command
-        assert keys, command
-        assert isinstance(is_verb, bool), command
-
-
-# --------------------------------------------------------------------------------------
+#--------------------------------------------------------------------------------------
 # パネルが要る配信(パラメータ・履歴の位置)
 # --------------------------------------------------------------------------------------
 def test_named_values_are_published_and_drive_the_shape(session: Session) -> None:

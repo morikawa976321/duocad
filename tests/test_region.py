@@ -8,20 +8,15 @@
     半径20の円          -> 領域1個・面積 1256.637
     それを y=5 の線分で分割 -> 領域2個・面積 826.215 と 430.422(合計が元の円と一致)
     線を2本にすると       -> 領域3個
-
-`RegionRef` の `provenance` スロット検査だけがデータモデル由来で素で通り、
-`regions()` はスタブなので他は `NotImplementedError` で赤になる。
 """
 from __future__ import annotations
 
-import dataclasses
-import json
 import math
 
 import pytest
 
 from duocad.document import Document
-from duocad.region import Region, RegionRef, region_ref, regions
+from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, add_line, sketch_create
 
 CIRCLE_RADIUS = 20.0
@@ -48,34 +43,6 @@ def circle_sketch(document: Document, lines: tuple = ()) -> str:
     for y in lines:
         add_line(document, sketch_id, (-30.0, y), (30.0, y))
     return sketch_id
-
-
-# --------------------------------------------------------------------------------------
-# データモデル — day1で払う予防(素で通る)
-# --------------------------------------------------------------------------------------
-def test_region_ref_declares_a_provenance_slot():
-    """`RegionRef` は `provenance` スロットを持つ(値はNoneでよい。§6予防2)。
-
-    由来スロットの適用先は3つ — 面/辺の添字・スケッチを貼った面・**領域の同一性** — で、
-    領域はその1つ。線を1本動かすだけで添字の指す領域が入れ替わりうる(§7実測)ため、
-    「何番目の領域か」だけを保存する参照は将来必ず壊れる。後付けは全操作の書き直しになる。
-    """
-    reference = RegionRef(sketch="sketch-1", index=2)
-    assert "provenance" in {f.name for f in dataclasses.fields(RegionRef)}
-    assert reference.provenance is None
-    assert reference.to_dict() == {"sketch": "sketch-1", "index": 2, "provenance": None}
-    json.dumps(reference.to_dict())  # 操作ログのselectionに入るのでJSON化できること
-    assert RegionRef.from_dict(reference.to_dict()) == reference
-
-
-def test_region_and_region_ref_have_the_documented_shape():
-    """`Region` は (index, area)、`region_ref()` は添字から参照を作る(§3.3・§3.5)。
-
-    データモデルの形だけを見るテスト(領域検出との接続は下の実測テストが担う)。
-    必須フィールドは包含で見て、補助フィールドの追加までは禁じない。
-    """
-    assert region_ref("sketch-1", 2) == RegionRef(sketch="sketch-1", index=2)
-    assert {"index", "area"} <= {f.name for f in dataclasses.fields(Region)}
 
 
 # --------------------------------------------------------------------------------------

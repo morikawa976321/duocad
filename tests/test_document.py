@@ -10,11 +10,6 @@ import pytest
 from duocad.document import Body, Document
 
 
-def test_document_units_is_mm():
-    """新規Documentのunitsは"mm"である。"""
-    assert Document().units == "mm"
-
-
 def test_document_units_cannot_be_reassigned():
     """unitsへの代入はAttributeErrorになる(セッターを持たないため固定である)。"""
     doc = Document()
@@ -34,11 +29,6 @@ def test_body_accepts_solid_and_reference_kinds():
     reference = Body(id="b2", name="ref-body", kind="reference")
     assert solid.kind == "solid"
     assert reference.kind == "reference"
-
-
-def test_new_document_has_no_bodies():
-    """新規Documentのbodiesは空リストである(ボディはリストで持つ、というデータモデルの土台)。"""
-    assert Document().bodies == []
 
 
 def test_new_document_active_body_is_none():

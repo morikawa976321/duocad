@@ -124,11 +124,6 @@ def _curved_face(session: Session):
 # --------------------------------------------------------------------------------------
 # スケッチを作る
 # --------------------------------------------------------------------------------------
-def test_a_document_without_sketches_reports_an_empty_list(session: Session) -> None:
-    """スケッチが無い文書でも `state.sketches` は必ず在る(キーの有無で分岐させない)。"""
-    assert session.state_meta()["sketches"] == []
-
-
 def test_the_browser_can_create_a_sketch_on_a_base_plane(session: Session) -> None:
     """基準平面にスケッチを作れ、**全接続へ**届く。平面の枠(u,v の軸)も一緒に来る。
 

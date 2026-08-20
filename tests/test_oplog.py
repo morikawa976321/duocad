@@ -19,19 +19,6 @@ from duocad.query import volume
 from models import SHELF as STEP_PATH  # テスト共通のSTEPの置き場(tests/models.py)
 
 
-def test_operation_has_provenance_slot_defaulting_to_none():
-    """Operationはprovenanceフィールドを持ち、値はNoneでよい(スロットの存在自体が契約。§6予防2)。"""
-    op = Operation(seq=1, verb="noop", args={})
-    assert hasattr(op, "provenance")
-    assert op.provenance is None
-
-
-def test_operation_dataclass_declares_provenance_field():
-    """Operationのフィールド定義自体にprovenanceが含まれる(dataclasses.fields によるスキーマ検査)。"""
-    field_names = {f.name for f in dataclasses.fields(Operation)}
-    assert "provenance" in field_names
-
-
 def test_append_seq_is_monotonically_increasing():
     """append()を複数回呼ぶとseqが1から単調増加する。"""
     log = OpLog()

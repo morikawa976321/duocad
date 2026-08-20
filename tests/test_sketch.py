@@ -87,28 +87,12 @@ def first_face_index(shape, kind: str) -> int:
 # --------------------------------------------------------------------------------------
 # データモデル — day1で払う予防(素で通る)
 # --------------------------------------------------------------------------------------
-def test_new_document_has_no_sketches():
-    """文書は bodies と並んで sketches を持つ(実装計画書§3.1)。初期状態は空リスト。"""
-    assert Document().sketches == []
-
-
 def test_base_planes_are_the_three_reference_planes():
     """基準平面は3つだけ(実装計画書§1)。未知の名前は ValueError で弾く。"""
     assert BASE_PLANES == ("XY", "XZ", "YZ")
     assert base_plane("XY") == {"kind": "base", "name": "XY", "provenance": None}
     with pytest.raises(ValueError):
         base_plane("ZZ")
-
-
-def test_face_plane_ref_declares_a_provenance_slot():
-    """面へのスケッチ参照は `provenance` スロットを持つ(§6「由来スロットの適用先」の2つ目)。
-
-    面の添字は形状変更で静かにずれる(§7実測: 同じ面がi=5→9)。後から由来を足すのは
-    全操作の書き直しになるので、day1で空スロットだけ用意しておく。
-    """
-    plane = face_plane("body-1", 7)
-    assert plane == {"kind": "face", "body": "body-1", "index": 7, "provenance": None}
-    json.dumps(plane)  # 操作ログの args に入るのでJSON化できること
 
 
 def test_entity_kind_is_validated():

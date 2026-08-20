@@ -373,13 +373,13 @@ write_stl(shape: TopoDS_Shape, path: str, deviation: float) -> None
 
 | タスクファイルの項番 | テスト |
 |---|---|
-| 1 | `test_document.py::test_document_units_is_mm`, `::test_document_units_cannot_be_reassigned` |
-| 2 | `test_document.py::test_new_document_has_no_bodies`, `::test_new_document_active_body_is_none`, `::test_add_body_*`, `::test_remove_body_*`, `::test_set_active_body_*`, `::test_reference_body_is_not_editable`, `::test_solid_body_is_editable` |
+| 1 | `test_document.py::test_document_units_cannot_be_reassigned`（既定値"mm"を写すだけだった `::test_document_units_is_mm` は自明ロジック検査として2026-08-20に削除） |
+| 2 | `test_document.py::test_new_document_active_body_is_none`, `::test_add_body_*`, `::test_remove_body_*`, `::test_set_active_body_*`, `::test_reference_body_is_not_editable`, `::test_solid_body_is_editable`（`::test_new_document_has_no_bodies` は自明ロジック検査として2026-08-20に削除） |
 | 3 | `test_oplog.py::test_append_seq_is_monotonically_increasing` |
 | 4 | `test_oplog.py::test_undo_reverts_document_state`, `::test_redo_does_not_record_the_operation_twice`（後者がredoの反映まで含めて見る。真部分集合だった `::test_redo_reapplies_undone_operation` は2026-08-20に削除） |
 | 5 | `test_oplog.py::test_to_json_from_json_roundtrip_matches_exactly`, `::test_to_json_emits_actual_json_with_the_logged_fields`（往復の自己整合だけでは「JSONであること」を縛れないため） |
 | 6 | `test_oplog.py::test_replay_reproduces_same_document_state`, `::test_replay_does_not_append_to_the_log_it_replays` |
-| 7 | `test_oplog.py::test_operation_has_provenance_slot_defaulting_to_none`, `::test_operation_dataclass_declares_provenance_field` |
+| 7 | （素dataclassのフィールド存在確認2本は2026-08-20に削除。provenanceスロットの実挙動は `test_fillet.py` 等の由来記録テストが守る） |
 | 8 | `test_io_step.py::test_import_step_face_breakdown_matches_measured_reference` |
 | 9 | `test_io_step.py::test_import_step_creates_reference_body` |
 | 10 | `test_io_step.py::test_import_step_is_logged_and_undoable`, `::test_import_step_logs_path_and_body_id_in_args` |
@@ -581,7 +581,7 @@ MODES = ("join", "cut")
 | 12（対象が無ければ失敗・文書不変） | `test_extrude.py::test_extrude_without_an_existing_region_fails_and_changes_nothing`, `::test_extrude_rejects_a_zero_distance_and_an_unknown_mode`, `::test_cut_without_a_target_body_fails`, `::test_extrude_rejects_a_reference_body` |
 | 13（板と穴・面の構成） | `test_extrude.py::test_a_plate_with_a_hole_has_only_planes_and_a_full_cylinder` |
 | 14（import境界） | `test_sketch.py::test_m2_modules_are_covered_by_the_import_boundary_scan` |
-| 15（RegionRefの由来スロット） | `test_region.py::test_region_ref_declares_a_provenance_slot`（＋貼った面の側は `test_sketch.py::test_face_plane_ref_declares_a_provenance_slot`） |
+| 15（RegionRefの由来スロット） | （素dataclass/素dictの形の存在確認2本は2026-08-20に削除。由来の実挙動は各verbの provenance テストが守る） |
 
 ## M2のQAで足した契約（2026-08-11・cursor auto のレビュー指摘を反映）
 
@@ -1327,7 +1327,7 @@ v1.1／v1.2に置いていた3verbを前倒しした（2026-08-11 本人決定�
 | 9（実物の脚の構成） | `test_chamfering_a_circular_edge_makes_a_cone` / `test_the_real_foot_needs_a_cone` / `test_chamfer_can_produce_every_face_kind_the_real_foot_needs` |
 | 10（面取りも黙って失敗しない） | `test_a_failing_chamfer_raises_and_leaves_nothing_behind` / `test_chamfer_rejects_an_unknown_edge_index` |
 | 11（ログ・undo） | `test_chamfer_is_logged_and_undoable` / `test_chamfer_records_provenance_...` |
-| 12（円弧を追加できる） | `test_arc.py::test_arc_is_a_sketch_entity_kind` / `test_add_arc_stores_named_numbers` / `test_add_arc_is_logged_and_undoable` / `test_arc_radius_can_be_edited_afterwards` / `test_broken_arcs_are_refused` |
+| 12（円弧を追加できる） | `test_arc.py::test_add_arc_stores_named_numbers` / `test_add_arc_is_logged_and_undoable` / `test_arc_radius_can_be_edited_afterwards` / `test_broken_arcs_are_refused`（定数集合の存在確認 `test_arc_is_a_sketch_entity_kind` は2026-08-20に削除） |
 | 13（円弧を含む閉領域） | `test_a_region_closed_by_an_arc_and_a_line_is_detected` / `test_an_open_arc_alone_does_not_close_a_region` |
 | 14（部分円筒になる） | `test_extruding_an_arc_region_makes_a_partial_cylinder` / `test_the_partial_cylinder_spans_the_arc_angle` |
 | 15（ログ・undo） | `test_arc_survives_a_log_round_trip` |

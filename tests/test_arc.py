@@ -38,7 +38,7 @@ from duocad import kernel, query
 from duocad.document import Body, Document
 from duocad.parameters import set_parameter
 from duocad.region import region_ref, regions
-from duocad.sketch import ENTITY_KINDS, add_arc, add_line, base_plane, entity_params, get_sketch, sketch_create
+from duocad.sketch import add_arc, add_line, base_plane, entity_params, get_sketch, sketch_create
 from duocad.verbs import extrude
 
 from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
@@ -72,11 +72,6 @@ def half_disc_sketch(doc: Document) -> str:
 # --------------------------------------------------------------------------------------
 # 項番12: スケッチに円弧を追加できる
 # --------------------------------------------------------------------------------------
-def test_arc_is_a_sketch_entity_kind():
-    """円弧が図形の種別に入っていること（データモデル側なので**最初から緑**）。"""
-    assert "arc" in ENTITY_KINDS
-
-
 def test_add_arc_stores_named_numbers():
     """円弧は**中心・半径・角度**を名前つきの数値として持つ（後から編集できる形）。
 

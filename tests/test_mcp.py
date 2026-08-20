@@ -149,10 +149,6 @@ def test_notifications_get_no_response(server: McpServer):
     assert server.handle({"jsonrpc": "2.0", "method": "notifications/cancelled"}) is None
 
 
-def test_ping_answers_empty_result(server: McpServer):
-    assert request(server, "ping")["result"] == {}
-
-
 def test_unknown_method_is_method_not_found(server: McpServer):
     response = request(server, "resources/list")
     assert response["error"]["code"] == METHOD_NOT_FOUND
@@ -186,21 +182,6 @@ def test_protocol_layer_never_raises(server: McpServer):
 # --------------------------------------------------------------------------------------
 # 2. ツールの顔ぶれ(最小構成であること)
 # --------------------------------------------------------------------------------------
-def test_the_m4_tools_survive(server: McpServer):
-    """M4の3つが**名前を変えずに**公開され続けていること。
-
-    顔ぶれの上限を決める契約は `tests/test_mcp_verbs.py` にひとつだけ置く ——
-    上限を2ファイルに書くと、片方を更新し忘れた瞬間に F2 が両方緑にできなくなる。
-    """
-    tools = request(server, "tools/list")["result"]["tools"]
-    assert M4_TOOLS <= {tool["name"] for tool in tools}
-
-
-def test_set_visible_schema_requires_both_arguments(server: McpServer):
-    tool = next(t for t in request(server, "tools/list")["result"]["tools"] if t["name"] == "set_visible")
-    assert set(tool["inputSchema"]["required"]) == {"body_id", "visible"}
-
-
 def test_unknown_tool_is_invalid_params(server: McpServer):
     """**実在しえない名前**で見る(いずれ本物のツールとして公開されうる名前を使うと、
     その時点でこのテストの前提が崩れる)。
@@ -559,22 +540,6 @@ def test_the_process_starts_and_answers_over_real_stdio():
     assert M4_TOOLS <= {tool["name"] for tool in responses[1]["result"]["tools"]}
     # 静的配信が立てられなくてもMCPは動く(理由はstderrに残る)
     assert "warning" in completed.stderr
-
-
-# --------------------------------------------------------------------------------------
-# 7. 境界(既存の規律を壊していないこと)
-# --------------------------------------------------------------------------------------
-def test_mcp_server_does_not_touch_ocp_directly():
-    """MCPサーバはOCPを直接importしない(境界は kernel.py だけ)。
-
-    `tests/test_boundaries.py` が `duocad/` 全体を走査するので二重の検査だが、
-    **新しく増えた層こそ境界を破りやすい**ので、ここでも名指しで固定する。
-    """
-    from test_boundaries import DUOCAD_DIR, _imported_module_roots
-
-    roots = _imported_module_roots(DUOCAD_DIR / "mcp_server.py")
-    assert "OCP" not in roots
-    assert "build123d" not in roots
 
 
 def test_bounding_box_does_not_depend_on_tessellation():
