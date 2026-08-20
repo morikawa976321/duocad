@@ -193,24 +193,42 @@ class DocumentTools:
             ) from None
         return handler(**arguments)
 
-    def current_seq(self) -> int:
-        """文書の版(H・2026-08-20)。**モデルには見せない** —— `descriptors()` には出てこず、
-        `AgentLoop` だけが読む `ToolSurface` の4つ目のメンバー。
+    def current_seq(self) -> tuple[int, str]:
+        """文書+選択の版(H・2026-08-20。QA critical指摘2件を受けて改版)。**モデルには
+        見せない** —— `descriptors()` には出てこず、`AgentLoop` だけが読む `ToolSurface`
+        の4つ目のメンバー。
 
-        `AgentLoop.run()` はモデルへ1往復投げるたびにこれを控え、応答が返ってから
-        (=モデルが考えている数十秒〜数分の間)値が変わっていたら、返ってきたツール呼び出しを
-        実行せずに「文書が変わったので選び直してほしい」という構造化エラーへ差し替える
-        (楽観ロック。`AgentLoop.run()` 内のコメント参照)。**面・辺・領域を消費するverb
-        は形状変更後に選択が全リセットされる**(`Session._reset_selection_if_needed`)ので
-        `selection_empty` で既に守られているが、`set_visible` / `set_parameter` のように
-        選択を経由しないverbはその門を通らない —— この版番号がその穴を埋める。
+        `AgentLoop.run()` はモデルへの1往復のたび・ツールを1つ実行するたびにこれを控え、
+        値が変わっていたら残りのツール呼び出しを実行せずに「文書が変わったので選び直して
+        ほしい」という構造化エラーへ差し替える(楽観ロック。`AgentLoop.run()` 内のコメント
+        参照)。
 
-        値は `len(document.log.entries)`(=undoされていない操作の本数)。undo後に**別の**
-        操作を同じ本数だけ行うと数値が偶然元へ戻りうるが、そのときは形状が変わっている
-        (=選択を消費するverbは上記の全リセットで別途守られる)ので実害はない
-        (`duocad/verbs/_common.py` の `editable_body` docstringと同じ非過剰設計)。
+        戻り値は `(len(document.log.entries), selection.fingerprint(document))` のタプル
+        (`!=` で比較するだけなので順序は要らない)。**2つとも要る**:
+
+        - **ログの本数だけでは足りない**(QA 2026-08-20実測の指摘)。選択の変更(`propose_
+          selection`/`commit_selection`/`modify_selection`)は操作ログに一切乗らない
+          (`selection.py`モジュールdocstring)ので、「人が辺Aの選択を外して辺Bを選び直し
+          て確定する」という**入れ替え**(件数も種別も変わらない)はログの本数だけでは
+          検出できない —— `fillet(radius)` は確定選択から対象を取る(`require_edges`)ので、
+          見逃すとAIは辺Aのつもりで辺Bを黙って丸める。`selection.fingerprint()` を混ぜる
+          ことでこれも検出する。
+        - **選択の指紋だけでも足りない**(形状が変わっても選択の中身が同じままのことが
+          ある。例: 何もせず `describe_document` だけ呼ぶ人が居る場合や、選択を経由しない
+          verb自身の実行)。ログの本数と併せて持つ。
+
+        **それでも塞ぎきれない範囲が残る**(嘘の安心を書かない): `set_visible` /
+        `set_parameter` のように選択を経由しない・かつ選択も変えないverbが対象にする
+        `body_id`/パラメータ名は、v1のverb集合では削除も改名もされない(bodyもパラメータ名も
+        安定)ので、たとえ版がABA(undo後に別の同数の操作を積んで元の数値へ戻る)で偶然
+        一致しても、**verbが「別の対象」へ効くことはない**(対象の指定自体が version に
+        依存しない)。残るのは「人が既に同じ変更をしていたら上書きが起こりうる」程度の
+        意図の陳腐化であり、本タスクが塞ぐ対象(静かに別の対象へ効く)ではない。
         """
-        return len(self.session.document.log.entries)
+        return (
+            len(self.session.document.log.entries),
+            selection.fingerprint(self.session.document),
+        )
 
     # ------------------------------------------------------------------ 実体
     def describe_document(

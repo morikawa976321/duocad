@@ -216,7 +216,7 @@ class _AiToolsOnLoop:
     def error_envelope(self, tool: str, error: Exception) -> dict:
         return self._run_on_loop(self._tools.error_envelope, tool, error)
 
-    def current_seq(self) -> int:
+    def current_seq(self) -> Any:
         # 読み取りだけでも `self.session.document` を触るので、`call`/`error_envelope` と
         # 同じくイベントループのスレッドへ投げ返す(このクラスの不変条件)。
         return self._run_on_loop(self._tools.current_seq)

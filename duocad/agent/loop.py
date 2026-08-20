@@ -66,6 +66,8 @@ class ToolSurface(Protocol):
 
     **公開APIの4つだけ**に依存する —— 内部(`_build_descriptors` 等)には触らない。
     `current_seq` はH・2026-08-20追加(「同時編集の安全性」楽観ロック。`run()` の docstring)。
+    `!=` で比較するだけの不透明な値(`DocumentTools.current_seq()` は
+    `(ログの本数, 選択の指紋)` のタプルを返す)。
     """
 
     def descriptors(self) -> list: ...
@@ -74,7 +76,7 @@ class ToolSurface(Protocol):
 
     def error_envelope(self, tool: str, error: Exception) -> dict: ...
 
-    def current_seq(self) -> int: ...
+    def current_seq(self) -> Any: ...
 
 
 class Cancellation:
@@ -211,10 +213,10 @@ class AgentLoop:
             turn += 1
             # **楽観ロック(H・2026-08-20)の版はここで控える** —— これから始まる
             # `provider.complete()` はモデルへのHTTPリクエストで数十秒〜数分かかりうる。
-            # その間に人(またはMCP経由の別クライアント)が文書を変えていたら、モデルが
-            # いま組み立てているツール呼び出しは、自分が読んだ状態を前提にした古い決定に
-            # なる。応答が返った直後(実行する直前)にもう一度読み、ずれていたら実行しない
-            # (下記「文書が変わっていたら実行しない」)。
+            # その間に人(またはMCP経由の別クライアント)が文書や選択を変えていたら、
+            # モデルがいま組み立てているツール呼び出しは、自分が読んだ状態を前提にした
+            # 古い決定になる。ツールを実行する**直前ごとに**(1件目だけでなく)これと
+            # 比べる(下記「文書(または選択)が変わっていたら実行しない」)。
             seq_before_request = self.tools.current_seq()
             try:
                 reply = self.provider.complete(
@@ -266,36 +268,38 @@ class AgentLoop:
                 detail = "" if status == "completed" else f"stop_reason={reply.stop_reason!r}"
                 return self._result(status, detail, turn, outcomes, usage, text=reply.text)
 
-            # **文書が変わっていたら実行しない(楽観ロック本体)。** モデルが考えていた間に
-            # 版が動いていれば、いま届いたツール呼び出しはこのターンの前提が古い。
+            # **文書(または選択)が変わっていたら実行しない(楽観ロック本体)。**
             # `_reset_selection_if_needed`(コア側)は形状を変えるverbの後で確定選択を
             # 全リセットするので、面・辺・領域を消費するverbは `selection_empty` で
             # 既に守られている —— ここは**それを経由しないverb**(`set_visible` /
-            # `set_parameter` / body_id で直接効くもの等)を含めて一律に守る網であり、
+            # `set_parameter` / body_id で直接効くもの等)や、**選択が空にならない
+            # 入れ替え**(辺Aを外して辺Bを選び直して確定する。件数も種別も変わらない
+            # ので `selection_empty` は発火しない)を含めて一律に守る網であり、
             # 「先回りして大きな仕組みを作らない」の要請どおり道具ごとの特別扱いはしない。
+            #
+            # **チェックは呼び出し1件ごと**(QA critical指摘・2026-08-20)。1つの応答に
+            # 複数のツール呼び出しが束ねて届くことがあり、1件目の実行そのものが版を
+            # 動かす(=自分自身の行動)うえ、1件目を実行した後・2件目を実行する前にも
+            # イベントループが人の操作を処理できる隙間がある(`_AiToolsOnLoop._run_on_loop`
+            # は呼び出しのたびにイベントループへ制御を返す)。応答が届いた直後の1回だけ
+            # 見て残り全部を実行してしまうと、この隙間を見逃す。
+            #
             # **run() を終了させない** —— 打ち切り(cancelled/max_turns/max_tokens)とは違い、
             # モデルは自己修復できる(2026-08-20実測)ので、次のターンで最新の状態を
             # 読み直させて続ける。
-            seq_after_reply = self.tools.current_seq()
-            if seq_after_reply != seq_before_request:
-                self.turns.append(
-                    ToolResultTurn(
-                        self._unrun_results(
-                            reply.tool_calls,
-                            "文書が変わったため実行しなかった"
-                            f"(seq {seq_before_request} -> {seq_after_reply})。"
-                            "describe_document / get_selection で最新の状態を確認し、"
-                            "選択をやり直してから再試行すること。",
-                        )
-                    )
-                )
-                continue
-
+            expected_seq = seq_before_request
             results: list[ToolResult] = []
             cancelled_at: Optional[int] = None
+            stale_at: Optional[int] = None
+            stale_seq: Optional[Any] = None
             for index, call in enumerate(reply.tool_calls):
                 if self.cancellation.cancelled:
                     cancelled_at = index
+                    break
+                observed_seq = self.tools.current_seq()
+                if observed_seq != expected_seq:
+                    stale_at = index
+                    stale_seq = observed_seq
                     break
                 payload, ok = self._execute(call)
                 outcomes.append(
@@ -310,6 +314,9 @@ class AgentLoop:
                         ok=ok,
                     )
                 )
+                # 自分がいま実行した呼び出しの結果を、次の呼び出し前チェックの基準にする
+                # (=「自分の行動で版が動いた」ことを「よそからの変更」と誤検出しない)。
+                expected_seq = self.tools.current_seq()
 
             if cancelled_at is not None:
                 # 走らせなかったぶんは中断した旨で埋める(下の `_unrun_results` 参照)。
@@ -320,6 +327,19 @@ class AgentLoop:
                 )
                 self.turns.append(ToolResultTurn(tuple(results)))
                 return self._result("cancelled", "中断フラグが立った", turn, outcomes, usage)
+
+            if stale_at is not None:
+                results.extend(
+                    self._unrun_results(
+                        reply.tool_calls[stale_at:],
+                        "文書または選択が変わったため実行しなかった"
+                        f"(seq {expected_seq!r} -> {stale_seq!r})。"
+                        "describe_document / get_selection で最新の状態を確認し、"
+                        "選択をやり直してから再試行すること。",
+                    )
+                )
+                self.turns.append(ToolResultTurn(tuple(results)))
+                continue
 
             self.turns.append(ToolResultTurn(tuple(results)))
 

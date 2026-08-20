@@ -20,8 +20,15 @@
      `_do_extrude` にも同じ検査を足した。
    - 選択をまったく経由しない verb(`set_visible` 等)は、そもそも `resets_selection` の
      対象外である。`AgentLoop.run()` に**楽観ロック**を足した(「D」節) ——
-     モデルへの1往復を送る直前に文書の版(`current_seq()`)を控え、応答が返ったときに
-     ずれていたら、そのターンのツール呼び出しを一切実行せずモデルへ選び直させる。
+     モデルへの1往復を送る直前に文書の版(`current_seq()`)を控え、ツールを**1件実行する
+     直前ごとに**比べ、ずれていればそのツール呼び出し以降を実行せずモデルへ選び直させる。
+   - **QA(2026-08-20)で2件のcriticalが見つかり、同日中に直した**: (a) 版に選択の
+     「指紋」(`selection.fingerprint`)を混ぜていなかったので、人が**辺Aを外して同じ種別の
+     辺Bへ選び直して確定する**(件数も種別も変わらない=`resets_selection`も
+     `selection_empty`も発火しない)入れ替えを見逃していた(`current_seq()` は
+     `(ログの本数, 選択の指紋)` のタプルへ改版)。(b) チェックが応答到着直後の1回だけで、
+     1つの応答に束ねられた複数ツール呼び出しの**間**(1件目の実行後〜2件目の実行前)は
+     見ていなかった(1件ごとのチェックへ変更)。
 2. **確定済み選択の種別とverbが要求する種別の食い違いが、モデルに考えさせる前に
    機械的に検出されて理由が返る。** engine
    `01_inbox/2026-08-20-llm-agent-thinking-runaway-on-contradictory-task.md` の実測
@@ -294,15 +301,16 @@ def test_the_loop_refuses_a_tool_call_decided_before_a_concurrent_edit_and_the_m
     assert stale_result.ok is False
     stale_payload = json.loads(stale_result.content)
     assert stale_payload["error"]["exception"] == "NotExecuted"
-    assert "文書が変わった" in stale_payload["error"]["message"]
+    assert "文書または選択が変わった" in stale_payload["error"]["message"]
 
 
 def test_the_optimistic_lock_does_not_trip_on_the_loops_own_actions(box_session: Session):
-    """自分自身が同じ往復・同じターンで積んだ変更を「よそからの変更」と誤認しない。
+    """自分自身が同じ往復で積んだ変更を「よそからの変更」と誤認しない。
 
-    1つの応答に2つのツール呼び出し(`extrude_face` → `fillet`)が入っていても、版比較は
-    **往復の前後**でしか行わない(往復の中で自分が動かした分はチェック対象外)ので、
-    どちらも実行される —— 誤検出しないことを確かめる回帰。
+    1つの応答に2つのツール呼び出し(`extrude_face` → `describe_document`)が入っている。
+    チェックは**呼び出しごと**(1件実行するたびに次の基準値を取り直す)なので、
+    1件目が版を動かしても2件目の直前チェックはその動いた後の値を基準にする ——
+    どちらも実行される。誤検出しないことを確かめる回帰。
     """
     tools = DocumentTools(box_session)
     commit_face(box_session, index=1)
@@ -322,3 +330,125 @@ def test_the_optimistic_lock_does_not_trip_on_the_loops_own_actions(box_session:
     assert run.status == "completed"
     assert [outcome.name for outcome in run.tool_calls] == ["extrude_face", "describe_document"]
     assert all(outcome.ok for outcome in run.tool_calls)
+
+
+# ========================================================================================
+# E. QA(2026-08-20)で見つかったcritical2件への回帰
+# ========================================================================================
+def test_reselecting_the_same_kind_between_commit_and_the_verb_call_is_detected(
+    box_session: Session,
+):
+    """QA critical指摘1: ログの本数だけでは「選択の入れ替え」を見逃す。
+
+    `propose_selection` / `commit_selection` は操作ログに一切乗らない
+    (`duocad/selection.py` モジュールdocstring「操作ログとの関係」)ので、`current_seq()`
+    が `len(log.entries)` だけを見ていた旧実装は、人が**辺1の選択を外して同じ種別
+    (辺)の辺5へ選び直して確定する**手順を検出できなかった —— 件数も種別も変わらないので
+    `resets_selection` の全リセットも `selection_empty` も発火しない。
+    `current_seq()` に選択の指紋(`selection.fingerprint`)を混ぜたことで、この入れ替えも
+    「版が動いた」として検出されることを固定する。
+    """
+    tools = DocumentTools(box_session)
+    commit_edge(box_session, index=1)  # AIはこの時点の「辺1」を見て計画したはず
+
+    def swap_the_confirmed_edge() -> None:
+        # 人が辺1の確定を外し、同じ種別(辺)の辺5へ選び直して確定する。
+        # ログの本数はこの手順の前後で変わらない。
+        selection.propose_selection(
+            box_session.document, refs=[{"body": "box", "kind": "edge", "index": 5}]
+        )
+        selection.commit_selection(box_session.document)
+
+    provider = ConcurrentEditProvider(
+        [
+            (tool_use("fillet", {"radius": 2.0}), swap_the_confirmed_edge),
+            (tool_use("fillet", {"radius": 2.0}), None),
+            (spoke("丸めました"), None),
+        ]
+    )
+
+    run = AgentLoop(tools, provider).run("さっき選んだ辺をフィレットして")
+
+    assert run.status == "completed"
+    assert len(provider.requests) == 3, "1回止めて選び直させ、2回目で成功して完了するはず"
+    # 実行されたのは2回目だけ(1回目は「辺1のつもりで辺5」を黙って丸めることを防いだ)
+    assert [outcome.name for outcome in run.tool_calls] == ["fillet"]
+    assert run.tool_calls[0].ok is True
+
+
+class InterferingTools:
+    """`DocumentTools` を薄く覆い、**N回目の `current_seq()` 呼び出し**の直前に
+    副作用を挟める(QA critical指摘2の再現専用)。
+
+    `ConcurrentEditProvider` は往復(`provider.complete()`)単位でしか副作用を挟めないので、
+    「1つの応答に束ねられた2件のツール呼び出しの間」という**呼び出し単位**の隙間は
+    こちらでなければ作れない。副作用を `current_seq()` の呼び出し自体の直前で起こすのは、
+    `AgentLoop.run()` が呼び出し直前にそれを読む構造そのものを利用して、
+    「直前チェックの次の読み取りで初めて変化が見える」ことを保証するため。
+    """
+
+    def __init__(self, inner: DocumentTools, trigger_at_call: int, side_effect) -> None:
+        self.inner = inner
+        self._trigger_at_call = trigger_at_call
+        self._side_effect = side_effect
+        self._current_seq_calls = 0
+
+    def descriptors(self):
+        return self.inner.descriptors()
+
+    def call(self, name, arguments):
+        return self.inner.call(name, arguments)
+
+    def error_envelope(self, tool, error):
+        return self.inner.error_envelope(tool, error)
+
+    def current_seq(self):
+        self._current_seq_calls += 1
+        if self._current_seq_calls == self._trigger_at_call:
+            self._side_effect()
+        return self.inner.current_seq()
+
+
+def test_a_concurrent_edit_between_two_tool_calls_in_the_same_reply_is_detected(
+    box_session: Session,
+):
+    """QA critical指摘2: 1つの応答に束ねられた複数のツール呼び出しの**間**も見る。
+
+    以前は応答が届いた直後の1回だけ版を確かめ、残り全部を素通しで実行していた。
+    本番経路(`_AiToolsOnLoop._run_on_loop`)は呼び出しのたびにイベントループへ制御を
+    返すので、1件目の実行後・2件目の実行前にも人の操作が挟まりうる。ここでは
+    `current_seq()` の4回目の呼び出し(=1件目の実行後の基準値取得のさらに次、
+    つまり2件目の直前チェック)の直前に人の操作を割り込ませ、2件目が実行されない
+    ことを固定する。
+    """
+    inner = DocumentTools(box_session)
+    commit_face(box_session, index=1)
+
+    def hide_the_box() -> None:
+        box_session.set_visible("box", False)
+
+    # current_seq() の呼び出し順: ①往復前の基準値 → ②1件目の直前チェック →
+    # ③1件目実行後の基準値更新 → ④2件目の直前チェック。④の直前で割り込む。
+    tools = InterferingTools(inner, trigger_at_call=4, side_effect=hide_the_box)
+
+    reply = ProviderReply(
+        text="",
+        tool_calls=(
+            ToolCall(id="c1", name="extrude_face", arguments={"distance": 2.0}),
+            ToolCall(id="c2", name="set_visible", arguments={"body_id": "box", "visible": True}),
+        ),
+        stop_reason="tool_use",
+        stop="tool_use",
+    )
+    provider = ConcurrentEditProvider([(reply, None), (spoke("できました"), None)])
+
+    run = AgentLoop(tools, provider).run("面を押し出してからboxを表示して")
+
+    assert run.status == "completed"
+    # 1件目(extrude_face)は実行される。2件目(set_visible)は、その直前に人がboxを
+    # 隠したこと(=版が動いたこと)を検出して実行されない。
+    assert [outcome.name for outcome in run.tool_calls] == ["extrude_face"]
+    assert run.tool_calls[0].ok is True
+    assert box_session.document.bodies[0].visible is False, (
+        "2件目は実行されていない(人が隠したままのはず。実行されていたら再びTrueになる)"
+    )

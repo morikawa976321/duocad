@@ -70,6 +70,7 @@ MCPもWebSocketも対象集合を引数で受ける口を持たず、`Session` �
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Iterable, List, Optional, Sequence
 
@@ -159,6 +160,30 @@ class Selection:
 def get_selection(doc: Document) -> Selection:
     """現在の選択集合を返す(コピーではなく本体。読み手はAIでも人でもよい)。"""
     return doc.selection
+
+
+def fingerprint(doc: Document) -> str:
+    """選択の「指紋」(H・2026-08-20、QA critical指摘への対応)。
+
+    **選択の変更は操作ログに乗らない**(モジュールdocstring「操作ログとの関係」)。
+    したがって `len(doc.log.entries)` だけを版番号にすると、AIが考えている間に人が
+    「辺Aを外して辺Bを選び直して確定する」ような**入れ替え**(件数も種別も変わらない)を
+    見逃す —— `fillet(radius)` は確定選択から対象を取る(`require_edges`)ので、
+    版が動いたと誤認しなければAIは辺Aのつもりで辺Bを黙って丸める。
+
+    `origin` と `items` を**順序を保ったまま**JSON化して比較材料にする。順序を保つのは
+    `fillet`/`chamfer` が選択順と半径・距離のリストを対応させるため(並べ替えも
+    実質的な変更として検出したい)。ハッシュ化はしない —— 衝突を心配するより、
+    短い文字列をそのまま比較できる方が単純で正しい(「先回りして大きな仕組みを
+    作らない」)。呼び出し側(`DocumentTools.current_seq`)がこれを操作ログの版と
+    組み合わせて、文書か選択のどちらかが変わったことを検出する。
+    """
+    selection = get_selection(doc)
+    return json.dumps(
+        {"origin": selection.origin, "items": selection.items},
+        sort_keys=True,
+        default=str,
+    )
 
 
 def propose_selection(
