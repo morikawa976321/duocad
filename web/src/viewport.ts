@@ -104,6 +104,15 @@ export interface Viewport {
    */
   update(bodies: BodyGeometryUpdate[]): void
   /**
+   * 直近に `update()` で渡した生の `GeometryPayload` を読む(無ければ null)。
+   *
+   * **実機検査フック専用**(2026-08-20)。以前は `App.svelte` がこの写しを
+   * `bodyGeometry`(state変数)として二重に持っていた —— コアの状態の第3のコピー
+   * (コア本体・three.jsの描画・この写し)で、`update()`/`prune()` と別々に掃除する
+   * 手間があった。ここに寄せることで、正は「three.jsが今描いている形」の1箇所になる。
+   */
+  getGeometry(bodyId: string): GeometryPayload | null
+  /**
    * `validBodyIds` に無いBodyの描画を取り除く(文書から消えたBodyのメッシュを掃除する)。
    * `duocad/server.py` の `Session.delta` の契約(「知っているのに `bodies` にも
    * `unchanged` にも現れないIDは消えた」)に対応する側。**実際に呼べるverbからは
@@ -408,6 +417,15 @@ export function createViewport(container: HTMLElement): Viewport {
   const raycaster = new THREE.Raycaster()
   /** body_id -> そのBodyが画面に持つメッシュ。非表示・未読込のBodyはキーごと無い。 */
   const bodies = new Map<string, BodyMeshes>()
+  /**
+   * body_id -> サーバから届いた生の `GeometryPayload`(2026-08-20)。
+   *
+   * three.jsのメッシュ(`bodies`)とは別に持つ — `getGeometry()` は実機検査フックが
+   * 「今どんな形が届いているか」をJSONで読むためのものであり、three.jsのバッファは
+   * 読めない(型も漏らさない設計)。`bodies` と寿命を揃える(build/clear/pruneの
+   * タイミングで同時に出し入れする)ので、two-copyではなく「同じ更新の副産物」。
+   */
+  const rawGeometry = new Map<string, GeometryPayload>()
   /** 全Body分の面メッシュを1本にまとめたもの(ピック用)。update() のたびに作り直す。 */
   let allFaceMeshes: THREE.Mesh[] = []
   /** プレビュー(幽霊)のメッシュ。**ピックの対象にしない**ので `bodies` とは別に持つ。 */
@@ -438,6 +456,7 @@ export function createViewport(container: HTMLElement): Viewport {
     for (const object of existing.sceneObjects) root.remove(object)
     for (const item of existing.disposables) item.dispose()
     bodies.delete(bodyId)
+    rawGeometry.delete(bodyId)
   }
 
   /**
@@ -487,6 +506,7 @@ export function createViewport(container: HTMLElement): Viewport {
       disposables.push(edges)
     }
     bodies.set(bodyId, { faceMeshes, sceneObjects, disposables })
+    rawGeometry.set(bodyId, payload)
   }
 
   function rebuildPickIndex(): void {
@@ -1156,6 +1176,9 @@ export function createViewport(container: HTMLElement): Viewport {
 
   return {
     update,
+    getGeometry(bodyId) {
+      return rawGeometry.get(bodyId) ?? null
+    },
     prune,
     onPick(listener) {
       pickListener = listener

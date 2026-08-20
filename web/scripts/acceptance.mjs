@@ -423,7 +423,7 @@ async function main() {
       const before = (await look()).parts[0].volume
       const face = await page.evaluate((id) => {
         const rect = document.querySelector('.viewport').getBoundingClientRect()
-        const geometry = window.__duocad.bodyGeometry[id]
+        const geometry = window.__duocad.getGeometry(id)
         const planes = [...geometry.faces].filter((item) => item.kind === 'plane')
         for (const item of planes) {
           const position = window.__duocad.projectFace(id, item.index)

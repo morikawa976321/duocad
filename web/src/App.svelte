@@ -61,7 +61,6 @@
   } from './session'
   import {
     createViewport,
-    type GeometryPayload,
     type PickEvent,
     type SketchDraw,
     type Viewport,
@@ -94,10 +93,6 @@
   let model = $state<ServerState | null>(null)
   let messages = $state<string[]>([])
   let lastApplied = $state<Applied | null>(null)
-  // **テスト用フック `__duocad.bodyGeometry` のためだけの写し**(body_id -> 直近のgeometry)。
-  // ドメインの状態ではない(可視性・選択の正はコア) — viewport が three.jsの中に既に
-  // 持っている形状を、実機検査から読める形で複製しているだけ。
-  let bodyGeometry = $state<Record<string, GeometryPayload>>({})
 
   /** 送信中のコマンドの `client_op`(応答が返るまでの間だけ生きる)。 */
   let pendingOp = $state<number | null>(null)
@@ -212,24 +207,6 @@
     // ビューポートからも取り除く。
     viewport?.prune(next.bodies.map((body) => body.body_id))
     if (changed.length > 0) previewing = false // 本物が届いたら幽霊は消えている(viewport.update)
-
-    if (changed.length > 0) {
-      const nextGeometry = { ...bodyGeometry }
-      for (const body of changed) {
-        if (body.geometry) nextGeometry[body.body_id] = body.geometry
-        else delete nextGeometry[body.body_id]
-      }
-      bodyGeometry = nextGeometry
-    }
-    // このキャッシュも、消えたBodyのぶんは掃除しておく(viewport.prune と同じ理由)。
-    const validIds = new Set(next.bodies.map((body) => body.body_id))
-    for (const bodyId of Object.keys(bodyGeometry)) {
-      if (!validIds.has(bodyId)) {
-        const pruned = { ...bodyGeometry }
-        delete pruned[bodyId]
-        bodyGeometry = pruned
-      }
-    }
 
     drawHighlight()
     // スケッチも「コアが持ち、ここは描き直すだけ」(可視性・選択と同じ形)。
@@ -728,7 +705,9 @@
       state: model,
       // ユーザーに見せる27部品(参照ボディを除いた kind==="solid" だけ)
       parts: partBodies,
-      bodyGeometry,
+      // 直近にviewportへ渡した生geometryを問い合わせる(2026-08-20。以前は`bodyGeometry`と
+      // いうコア状態の第3のコピーをApp.svelteが持っていたが、正はviewportの描画に一本化した)。
+      getGeometry: (bodyId: string) => viewport?.getGeometry(bodyId) ?? null,
       // **選択の正はコア**。ここは共有集合の写しであって、ブラウザ側の状態ではない。
       selection: model?.selection ?? null,
       // 互換のための穴: 選択のうち最初の面を `{bodyId, faceIndex}` で出す

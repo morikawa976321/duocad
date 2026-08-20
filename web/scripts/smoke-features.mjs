@@ -456,14 +456,18 @@ async function main() {
     await page.keyboard.press('Enter')
     await waitFor(
       () =>
-        Object.values(window.__duocad.bodyGeometry)
+        window.__duocad.parts
+          .map((part) => window.__duocad.getGeometry(part.body_id))
+          .filter(Boolean)
           .flatMap((geometry) => geometry.faces)
           .some((face) => face.kind === 'cone'),
       '面取りしても円錐面ができない',
     )
     const kinds = await page.evaluate(() => {
       const counts = {}
-      for (const geometry of Object.values(window.__duocad.bodyGeometry)) {
+      for (const part of window.__duocad.parts) {
+        const geometry = window.__duocad.getGeometry(part.body_id)
+        if (!geometry) continue
         for (const face of geometry.faces) counts[face.kind] = (counts[face.kind] ?? 0) + 1
       }
       return counts

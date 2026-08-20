@@ -271,7 +271,7 @@ async function main() {
       const parts = [...window.__duocad.parts].sort((a, b) => a.face_count - b.face_count)
       const rect = document.querySelector('.viewport').getBoundingClientRect()
       for (const part of parts) {
-        const geometry = window.__duocad.bodyGeometry[part.body_id]
+        const geometry = window.__duocad.getGeometry(part.body_id)
         if (!geometry) continue
         const planes = [...geometry.faces]
           .filter((face) => face.kind === 'plane')
