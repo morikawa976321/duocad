@@ -691,6 +691,10 @@ def build_provider(
             transport=transport,
         )
     if kind == "openai_compat":
+        # **ここでは `ANTHROPIC_API_KEY` を一切読まない**(QA指摘・2026-08-20で確認)。
+        # `api_key` を渡していないので `OpenAICompatProvider._api_key` は常に `None` ——
+        # ローカルのllama-serverへ本物のキーを送る経路はそもそも存在しない
+        # (`base_url` を任意の外部ホストへ向けても、飛ぶのはキーの無いリクエストだけ)。
         return OpenAICompatProvider(
             model=model or "local",
             base_url=base_url or DEFAULT_OPENAI_COMPAT_BASE_URL,

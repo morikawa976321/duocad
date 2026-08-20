@@ -1277,6 +1277,21 @@ class Server:
             self.clients.discard(connection)
             self._known_revisions.pop(connection, None)
             self._send_locks.pop(connection, None)
+            self._on_disconnect(connection)
+
+    def _on_disconnect(self, connection: Any) -> None:
+        """1接続が切れた後の後始末(`handle()` の `finally` から呼ぶ)。
+
+        **誰も見ていない状態でAIの実行(=文書の変更)を放置しない**(QA指摘・major、
+        2026-08-20)。以前はここが接続の登録解除しかしておらず、ブラウザを閉じた後も
+        `AgentLoop.run()` が走り続け、誰も見ていないまま文書を変え続けられた。
+
+        **最後の1接続が切れたときだけ中断する** —— 他の画面がまだ見ている間に片方が
+        閉じても実行は続ける(`ai_*` は接続ごとではなく共有の1会話という設計と揃える。
+        `Server._ai_status()` の `providers`/`running` を全接続へ配る扱いと同じ)。
+        """
+        if not self.clients and self._ai_running:
+            self._ai_cancel()
 
     async def _dispatch(self, connection: Any, raw: Any) -> None:
         try:
@@ -1480,11 +1495,32 @@ class Server:
         実行中は変更を受け付けない —— `self._ai_cancellation` を作り直すと、既に走っている
         `AgentLoop.run()` が古い `Cancellation` を見続けたままになり、中断ボタンが効かなくなる
         (`loop_obj.run` は `run_in_executor` に渡した時点でその回のオブジェクトを掴んでいる)。
+
+        **`anthropic` は `base_url` を受け付けない**(QA指摘・critical、2026-08-20)。
+        `base_url` は「値は渡さないが送り先は画面から選べる」という設計だったが、
+        送り先を選べる時点でキーの値を渡しているのと同じ結果になる ——
+        `AnthropicProvider.complete()` は実キーを `x-api-key` ヘッダに載せて
+        `{base_url}/v1/messages` へPOSTするので、`ai_configure` で `base_url` を
+        任意のホストへ差し替えて `ai_send` するだけで**サーバの実キーが外部へ流出する**
+        (WebSocketは同一オリジンポリシーで止まらないので、127.0.0.1 bindは防御にならない)。
+        **採った設計**: `anthropic` を選んでいる(またはこの呼び出しで選ぶ)間は
+        `base_url` の指定を明示的なエラーとして拒否する(黙って無視すると、指定したのに
+        効かない理由が画面から分からない)。エンドポイントを差し替えられる必要があるのは
+        ローカルの `openai_compat`(キーを持たない)だけで足りる。
         """
         if self._ai_running:
             return {**self._ai_status(), "error": "AI応答中は設定を変更できない(中断してから)"}
         if provider is not None and provider not in ("anthropic", "openai_compat"):
             return {**self._ai_status(), "error": f"未知のプロバイダ: {provider!r}"}
+        effective_provider = provider if provider is not None else self._ai_provider_kind
+        if effective_provider == "anthropic" and base_url:
+            return {
+                **self._ai_status(),
+                "error": (
+                    "Claude(anthropic)はエンドポイントを固定している"
+                    "(公式APIのみ・base_urlは指定できない。実キーを外部ホストへ送らないため)"
+                ),
+            }
         if provider is not None:
             self._ai_provider_kind = provider
         self._ai_model = model or None
@@ -1504,9 +1540,13 @@ class Server:
             )
         if self._loop is None:
             raise ProviderError("イベントループが未起動")
-        provider = build_provider(
-            self._ai_provider_kind, model=self._ai_model, base_url=self._ai_base_url
-        )
+        # **`anthropic` には `base_url` を絶対に渡さない**(QA指摘・critical。
+        # `_ai_configure` が既に拒否しているが、ここでも二重に保証する —— 検証を
+        # 素通りする経路がどこかに生まれても、実キーが外部ホストへ渡る手前で止まる形にする)。
+        provider_kwargs: dict = {"model": self._ai_model}
+        if self._ai_provider_kind != "anthropic":
+            provider_kwargs["base_url"] = self._ai_base_url
+        provider = build_provider(self._ai_provider_kind, **provider_kwargs)
         marshaled = _AiToolsOnLoop(self._ai_tools, self._loop)
         self._ai_loop = AgentLoop(
             marshaled, provider, cancellation=self._ai_cancellation, progress=self._ai_progress

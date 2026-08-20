@@ -6,7 +6,7 @@
 `test_ui_command_wiring.py::test_ai_commands_are_not_verbs` と
 `test_mcp_verbs.py::test_ai_commands_have_no_mcp_tool` が固定する。
 
-固定する4つ:
+固定する6つ:
 
 1. **APIキーは画面へ出ない** —— `ai_status` に載るのは `api_key_configured` の真偽だけ。
 2. **`ai_send` はモデルへのHTTPリクエストを待たずに返る** —— 実行は `run_in_executor`
@@ -14,8 +14,17 @@
 3. **AIがツールを呼んで文書を変えると、開いているブラウザの絵が変わる**(通常のverb配信に乗る。
    `test_a_verb_applied_through_mcp_reaches_the_browser` のAI版)。
 4. **中断できる**(`ai_cancel`)。どこまでやったかは `ai_result.tool_calls` に残る。
+5. **`anthropic` の実キーは公式ホストにしか届かない**(2026-08-20・QA指摘critical)。
+   `ai_configure` で `base_url` を任意のホストへ差し替えて実キーを外部へ送れてしまう
+   経路が実在した——値をブラウザへ出していなくても、送り先を画面から選べれば結果は同じ。
+   `_ai_configure` が拒否し、`_ensure_ai_loop` も二重に(`anthropic` には `base_url` を
+   絶対に渡さない形で)保証する。
+6. **最後の1接続が切れたらAIの実行を中断する**(2026-08-20・QA指摘major)。誰も見ていない
+   まま文書が変わり続けるのを防ぐ。他の接続が残っていれば続ける(`Server._on_disconnect`)。
 
-実キーは使わない(`RecordedProvider` で `duocad.server.build_provider` を差し替える)。
+実キーは使わない(`RecordedProvider` で `duocad.server.build_provider` を差し替える。
+5だけは「差し替えを素通りしても実キーが漏れないこと」自体を検査したいので、
+`FakeTransport` で `duocad.server.build_provider` は本物のまま実行する)。
 """
 from __future__ import annotations
 
@@ -26,10 +35,18 @@ import time
 import pytest
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
-from duocad.agent.providers import Provider, ProviderReply, ToolCall
+from duocad.agent.providers import (
+    DEFAULT_ANTHROPIC_BASE_URL,
+    Provider,
+    ProviderReply,
+    ToolCall,
+)
 from duocad.document import Body
 from duocad.mcp_server import DocumentTools
 from duocad.server import Server, Session
+
+#: 本物ではない(`tests/test_agent_loop.py` と同じ形。このリポジトリに実キーは置かない)。
+FAKE_KEY = "sk-ant-test-DO-NOT-USE-0123456789"
 
 BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
 
@@ -387,3 +404,172 @@ def test_ai_cancel_stops_the_run_and_keeps_what_happened_so_far(monkeypatch, box
     # **どこまでやったかは残る**(タスクファイル完了条件2)。
     assert len(result["tool_calls"]) >= 1
     assert len(result["tool_calls"]) < 2, "中断が効かず最後まで回ってしまった"
+
+
+# --------------------------------------------------------------------------------------
+# 5. anthropicの実キーは公式ホストにしか届かない(QA指摘・critical)
+# --------------------------------------------------------------------------------------
+def test_ai_configure_rejects_a_base_url_for_anthropic(monkeypatch, box_session: Session):
+    """`base_url` を指定しても**保存されない**(黙って無視ではなく、理由が画面に出る)。"""
+    monkeypatch.setattr("duocad.server.api_key_configured", lambda: True)
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        connection = FakeConnection()
+        server.clients.add(connection)
+        await server._dispatch(
+            connection,
+            json.dumps(
+                {
+                    "cmd": "ai_configure",
+                    "provider": "anthropic",
+                    "base_url": "http://attacker.example/v1",
+                }
+            ),
+        )
+        return connection, server
+
+    connection, server = asyncio.run(scenario())
+    status = connection.of_type("ai_status")[-1]
+    assert "error" in status
+    assert "attacker.example" not in json.dumps(status)
+    assert server._ai_base_url is None, "拒否したのに base_url が保存されている"
+    # 既定値(公式ホスト)のまま。
+    assert status["base_url"] is None or status["base_url"] == DEFAULT_ANTHROPIC_BASE_URL
+
+
+def test_ai_configure_rejects_a_base_url_when_already_on_anthropic(monkeypatch, box_session: Session):
+    """`provider` を省略しても(=今のプロバイダが `anthropic` のまま)同じく拒否する。"""
+    monkeypatch.setattr("duocad.server.api_key_configured", lambda: True)
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        server._ai_provider_kind = "anthropic"  # 既定でも大抵こうだが、明示しておく
+        connection = FakeConnection()
+        server.clients.add(connection)
+        await server._dispatch(
+            connection,
+            json.dumps({"cmd": "ai_configure", "base_url": "http://attacker.example/v1"}),
+        )
+        return connection, server
+
+    connection, server = asyncio.run(scenario())
+    status = connection.of_type("ai_status")[-1]
+    assert "error" in status
+    assert server._ai_base_url is None
+
+
+def test_ai_configure_allows_a_base_url_for_openai_compat(box_session: Session):
+    """`openai_compat`(キーを持たない)は今までどおりエンドポイントを差し替えられる。"""
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        connection = FakeConnection()
+        server.clients.add(connection)
+        await server._dispatch(
+            connection,
+            json.dumps(
+                {
+                    "cmd": "ai_configure",
+                    "provider": "openai_compat",
+                    "base_url": "http://127.0.0.1:8080/v1",
+                }
+            ),
+        )
+        return connection
+
+    connection = asyncio.run(scenario())
+    status = connection.of_type("ai_status")[-1]
+    assert "error" not in status
+    assert status["base_url"] == "http://127.0.0.1:8080/v1"
+
+
+def test_anthropic_provider_never_receives_an_attacker_base_url(monkeypatch, box_session: Session):
+    """**深層防御**: `_ai_configure` の検証を素通りしたと仮定しても
+    (内部状態を直接壊す)、`_ensure_ai_loop` は `anthropic` に `base_url` を渡さない。
+
+    実際に1回HTTPを打たせ(`FakeTransport`。実ネットワークは叩かない)、送信先URLと
+    `x-api-key` ヘッダを検査する。**`duocad.server.build_provider` は差し替えない** ——
+    ここで見たいのは本物の `build_provider`/`AnthropicProvider` が正しく振る舞うことそのもの。
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_KEY)
+    calls: list[dict] = []
+
+    def fake_transport(url, payload, headers, timeout):
+        calls.append({"url": url, "headers": dict(headers)})
+        return {"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        # **検証をバイパスしたと仮定**(実装のガードが将来壊れた場合の保険を確かめるため、
+        # 内部状態を直接触る。`ai_configure` 経由ではこの状態には到達できない
+        # ——上の2本がそれを固定している)。
+        server._ai_provider_kind = "anthropic"
+        server._ai_base_url = "http://attacker.example/v1"
+        loop_obj = server._ensure_ai_loop()
+        loop_obj.provider._transport = fake_transport  # HTTPだけ差し替える
+        return loop_obj.run("ping")
+
+    run = asyncio.run(scenario())
+    assert run.status == "completed"
+    assert len(calls) == 1, "HTTPが1回も(または複数回)呼ばれた"
+    assert calls[0]["url"] == f"{DEFAULT_ANTHROPIC_BASE_URL}/v1/messages"
+    assert "attacker.example" not in calls[0]["url"]
+    assert calls[0]["headers"]["x-api-key"] == FAKE_KEY
+
+
+# --------------------------------------------------------------------------------------
+# 6. 最後の1接続が切れたらAIの実行を中断する(QA指摘・major)
+# --------------------------------------------------------------------------------------
+def test_last_client_disconnecting_cancels_a_running_ai_run(monkeypatch, box_session: Session):
+    monkeypatch.setattr(
+        "duocad.server.build_provider",
+        lambda *a, **k: RecordedProvider([spoke("done")], delay=0.2),
+    )
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        first, second = FakeConnection(), FakeConnection()
+        server.clients.add(first)
+        server.clients.add(second)
+        await server._dispatch(first, json.dumps({"cmd": "ai_send", "message": "hi"}))
+        assert server._ai_running is True
+
+        # 1つ目が切れても、もう1つ見ているので中断しない。
+        server.clients.discard(first)
+        server._on_disconnect(first)
+        assert server._ai_cancellation.cancelled is False
+
+        # 最後の1つも切れたら中断する。
+        server.clients.discard(second)
+        server._on_disconnect(second)
+        assert server._ai_cancellation.cancelled is True
+
+        await _wait_until(lambda: not server._ai_running)
+        return server
+
+    server = asyncio.run(scenario())
+    assert server._ai_running is False
+
+
+def test_disconnecting_while_another_client_is_still_watching_does_not_cancel(
+    monkeypatch, box_session: Session
+):
+    """**過剰に中断しない**——他の画面がまだ見ている間は、片方が閉じても実行を続ける。"""
+    monkeypatch.setattr(
+        "duocad.server.build_provider",
+        lambda *a, **k: RecordedProvider([spoke("done")]),
+    )
+
+    async def scenario():
+        server = build_server(box_session, asyncio.get_running_loop())
+        first, second = FakeConnection(), FakeConnection()
+        server.clients.add(first)
+        server.clients.add(second)
+        await server._dispatch(first, json.dumps({"cmd": "ai_send", "message": "hi"}))
+        server.clients.discard(first)
+        server._on_disconnect(first)
+        return server
+
+    server = asyncio.run(scenario())
+    assert server._ai_cancellation.cancelled is False
