@@ -1458,9 +1458,17 @@ docstringに注意を書く」と指示していたが、`BRepCheck` が偽に�
   向きが反時計回りであることは `gp_Ax2(center, N, XDir)` の定義から導けるが、
   **実測で確かめたのは `test_angles_run_counter_clockwise_and_may_cross_zero`**
   （委譲先は「コード上の確認のみ・未実測」と正直に申告した）。
+  当時は `_entity_edges` 本体に `if kind == "arc":` の分岐として書かれていたが、
+  **2026-08-20に `kernel._edges_arc`(`_KERNEL_ENTITY_KIND_TABLE` の1行)へ移した**
+  （`Entity.kind分岐のテーブル化`）。このコード自体は移動しただけで変わっていない。
 - `kernel._entities_bbox_2d` の `arc` は**円と同じ外接箱**で安全側に囲む（補助面が少し
-  大きくなるだけで領域検出の結果は変わらない）。
+  大きくなるだけで領域検出の結果は変わらない）。**2026-08-20に `kernel._bbox_arc` へ移した**
+  （`_entities_bbox_2d` 自体は残るが、中身は `_KERNEL_ENTITY_KIND_TABLE` 経由の呼び出しになった）。
 - `region._translate_params` の `arc` は `cx`/`cy` を動かすだけ（半径・角度は不変）。
+  **2026-08-20に `region._translate_params` は廃止し、`sketch._translate_arc`
+  (`sketch.entity_kind_ops("arc").translate`)へ移した** — 図形の純幾何演算(検査・
+  平行移動・回転・中心)は `region.py` ではなく `sketch.py` の表 `_ENTITY_KIND_TABLE`
+  が唯一の正になっている。
 
 **v1のverbで残るのは `円形反復` の1つだけ**になった。そして**受入テストを実物に戻せる**
 状態に近づいた:
@@ -1544,6 +1552,11 @@ docstringに注意を書く」と指示していたが、`BRepCheck` が偽に�
   **図形の中心だけを回して、その差分を平行移動**する（向きは元のまま）。
   `arc` は `rotate_copies=True` のとき `start_deg`/`end_deg` にも角度を足す
   （位置だけ回すと円弧の向きが揃ってしまう）。
+  **2026-08-20に両方とも `region.py` から `sketch.py` へ移した** — `_rotate_point` は
+  そのまま `sketch._rotate_point` に、種別ごとの分岐だった `_rotate_params` は
+  `sketch._rotate_line`/`_rotate_circle`/`_rotate_arc`/`_rotate_rectangle`
+  （`sketch.entity_kind_ops(kind).rotate`)に分かれた。挙動(このdocが書いている内容)は
+  変わっていない。
 - **`set_parameter` の後追い検査に `total_angle` も足した**（実装中に見つけた穴）。
   `count` だけ検査していると**角度の側から同じ壊れ方を作れる** — 0度にすれば全複製が重なり、
   360超なら1周を超えて重なるのに例外が出ない。「作成時だけ検査していると後から書き込む経路が
