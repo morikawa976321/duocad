@@ -180,7 +180,8 @@ ERROR_CODES = {
     "not_found",            # 存在しないBody / sketch / parameter(KeyError)
     "invalid_argument",     # 形・型・範囲が不正(ValueError)
     "selection_not_committed",  # 提案のまま verb を呼んだ(A1の門)
-    "selection_empty",      # 要求した種別の項目が確定選択に1つも無い
+    "selection_empty",      # 確定選択が**丸ごと空**(要求した種別以前の問題)
+    "selection_kind_mismatch",  # 空ではないが要求した種別が無い(2026-08-20に分離)
     "invalid_predicate",    # 述語が不正(有効なopの一覧を必ず添える)
     "internal",             # 上記以外(黙って握りつぶさないための受け皿)
 }
@@ -640,20 +641,43 @@ def test_applying_a_verb_with_nothing_selected_says_so(server: McpServer):
     assert error["selection"] == {"count": 0, "origin": "user"}
 
 
-def test_selecting_the_wrong_kind_is_also_reported_as_empty(server: McpServer, box_session: Session):
-    """面を選んで `fillet` を呼んでも「辺が無い」である(**種別の取り違え**)。
+def test_selecting_the_wrong_kind_has_its_own_code(server: McpServer, box_session: Session):
+    """面を選んで `fillet` を呼ぶと `selection_kind_mismatch`(**種別の取り違え**)。
 
-    `selection_empty` を「要求した種別の項目が1つも無い」と定義しているので、
-    「何も選んでいない」と「違うものを選んだ」が同じコードになる。
-    区別の材料は `selection.count`(0か否か)で足りる —— AIが打つ次の手はどちらも
-    「辺を選び直す」で同じである。
+    **2026-08-20に本人が決定3の「コードは分けない」を覆した。** 2026-08-20の実装時点では
+    「どちらも次の一手が『辺を選び直す』で同じだから `selection_empty` でよい。区別の材料は
+    `selection.count` で足りる」としていたが、覆した理由は語彙の数ではなく**名前が嘘をつく**
+    こと —— 面が1枚入っている選択に対して `selection_empty`(選択が空)と名乗ると、後で読む人を
+    必ず一度混乱させる。加えてアプリ層が種別違いにだけ反応する余地(「この面の辺を選ぶ」等)を
+    コードで分岐できる。
+
+    `present_kinds` に**実際に確定している種別と件数**が入るので、AIは `get_selection` を
+    呼び直さずに次の一手を決められる(矛盾指示でモデルが様子見を繰り返す暴走の予防。
+    engine `2026-08-20-llm-agent-thinking-runaway-on-contradictory-task`)。
     """
     box = box_session.document.bodies[0]
     select_refs(server, [face_ref(box.id, 1)])
     error = call_error(server, "fillet", {"radius": 2.0})
+    assert error["code"] == "selection_kind_mismatch"
+    assert error["required_kind"] == "edge"
+    assert error["present_kinds"] == {"face": 1}
+    assert error["selection"]["count"] == 1
+    assert "edge" in error["hint"]
+
+
+def test_an_empty_selection_still_says_empty(server: McpServer, box_session: Session):
+    """**対照**: 何も選んでいないときは今までどおり `selection_empty`。
+
+    上のテストと対にしてある —— 2つを1つのコードへ潰す実装(あるいは逆に、空のときまで
+    `selection_kind_mismatch` を返す実装)が入ったら、どちらかが必ず落ちる。
+    `SelectionKindMismatch` は `SelectionEmpty` の**派生**なので、`_error_payload` の
+    判定順を入れ替えるだけで種別違いが `selection_empty` に吸われる。そこを固定する。
+    """
+    error = call_error(server, "fillet", {"radius": 2.0})
     assert error["code"] == "selection_empty"
     assert error["required_kind"] == "edge"
-    assert error["selection"]["count"] == 1
+    assert error["selection"]["count"] == 0
+    assert "present_kinds" not in error
 
 
 def test_the_error_says_which_tool_failed(server: McpServer):

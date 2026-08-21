@@ -453,6 +453,23 @@ class DocumentTools:
         # MCPは名前を付けて、次の一手を決める材料(`required_kind` / `selection`)を足すだけ。
         # 「1つだけ要るのに複数」は `invalid_argument` のまま —— AIが打つ次の手は
         # 「選び直す」ではなく「減らす」で、`selection_empty` とは違う(tests/README「F」節)。
+        #
+        # **`SelectionKindMismatch` を先に見る**(2026-08-20・本人決定)。`SelectionEmpty` の
+        # 派生なので、順序を入れ替えると種別違いが `selection_empty` に吸われて7語彙目が
+        # 死ぬ。「空でないのに empty と名乗らない」ためにコードを分けたので、ここが要。
+        if isinstance(error, selection.SelectionKindMismatch):
+            return {
+                **base,
+                "code": "selection_kind_mismatch",
+                "required_kind": error.kind,
+                # 実際に確定している種別と件数(`{"face": 3}`)。画面もモデルも数え直さない。
+                "present_kinds": error.present,
+                "hint": (
+                    f"the confirmed selection is not empty but has no {error.kind}: "
+                    f"select {error.kind}(s) and commit before calling this verb"
+                ),
+                "selection": self._selection_summary(),
+            }
         if isinstance(error, selection.SelectionEmpty):
             return {
                 **base,
@@ -495,7 +512,7 @@ class DocumentTools:
     # 3. **失敗も封筒に入れて返す。** `{"error": {"code","message","tool","exception", ...}}`
     #    を `json.dumps` した本文 + `isError: true`。コードは6語彙
     #    (`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
-    #    `invalid_predicate` / `internal`)。**例外のテキストを素で返さない。**
+    #    `selection_kind_mismatch` / `invalid_predicate` / `internal`)。**例外のテキストを素で返さない。**
     #    型→コードの対応は `KeyError`/`FileNotFoundError` → `not_found`、
     #    `SelectionNotCommitted` → `selection_not_committed`、`SelectionEmpty` →
     #    `selection_empty`、`SelectionAmbiguous` → `invalid_argument`(どちらも
@@ -1186,6 +1203,38 @@ def _log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
+#: `npm run dev` が使うポート(README §1.3)。dev serverは `web/src` を直に配るので
+#: 静的配信(`--http-port`)とは別オリジンになる。
+VITE_DEV_PORT = 5173
+
+
+def allowed_origins(http_port: int) -> list:
+    """WebSocketを開いてよい `Origin` の許可リスト(2026-08-20・本人決定)。
+
+    **なぜ要るか**: WebSocketは**同一オリジンポリシーの対象外**で、任意のWebページが
+    `ws://127.0.0.1:<port>` へ繋いで読み書きできる。`127.0.0.1` へのbindは防御にならない
+    —— 攻撃側のコードは利用者のブラウザの中で動くため。検査が無い間は、duocadを立てたまま
+    別のサイトを開いているだけで、そのページが文書を読み・壊し・`export_step` で任意のパスへ
+    書き・`ai_chat` で課金を消費できた。
+
+    **`None`(Originヘッダ無し)を許可する**のは意図的である。ブラウザは必ず `Origin` を送り、
+    JavaScriptから偽装できないので、**ブラウザ経由の攻撃はこれで塞がる**。一方 `smoke*.mjs` や
+    素のWSクライアントはヘッダを送らないので、拒否すると自分の検査だけが壊れる。素のWSを
+    立てられる相手は既にこのPCでコードを実行できており、この防御線の外側にいる。
+
+    許可するのは「duocad自身が配るページ」だけ: 静的配信(`--http-port`)と Vite dev server。
+    `localhost` と `127.0.0.1` は**別オリジン**なので両方を挙げる(どちらで開くかは人による)。
+    """
+    return [
+        None,  # Originヘッダ無し(非ブラウザのクライアント)。上記の理由で許可する
+        *(
+            f"http://{host}:{port}"
+            for port in (http_port, VITE_DEV_PORT)
+            for host in ("127.0.0.1", "localhost")
+        ),
+    ]
+
+
 async def _run(session: Session, args: argparse.Namespace) -> None:
     """WebSocket・静的配信・MCPを1つのイベントループで動かす。"""
     server = Server(session)
@@ -1206,7 +1255,14 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
         _log(f"warning: 静的配信を立てられなかった(MCPだけで続行): {error}")
         served = False
 
-    async with serve(server.handle, "127.0.0.1", args.port, max_size=8 * 1024 * 1024):
+    origins = allowed_origins(args.http_port)
+    async with serve(
+        server.handle,
+        "127.0.0.1",
+        args.port,
+        max_size=8 * 1024 * 1024,
+        origins=origins,
+    ):
         _log(f"duocad MCP server: stdio / WebSocket {ws_url}")
         if served:
             _log(f"  ブラウザで開く: {page_url}")

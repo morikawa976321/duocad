@@ -72,7 +72,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Iterable, List, Optional, Sequence
+from typing import Iterable, List, NoReturn, Optional, Sequence
 
 from . import kernel  # noqa: F401  face_count / count_subshapes を使う(OCPは kernel の中だけ)
 from .document import BodyId, Document
@@ -97,6 +97,30 @@ class SelectionEmpty(ValueError):
     def __init__(self, message: str, kind: str) -> None:
         super().__init__(message)
         self.kind = kind
+
+
+class SelectionKindMismatch(SelectionEmpty):
+    """確定選択は**空ではない**が、verbが食う種別が1つも入っていない(2026-08-20・本人決定)。
+
+    例: フィレット(辺を食う)を呼んだのに、確定しているのは面3枚。
+
+    **`SelectionEmpty` の派生にしてある**ので、既存の `pytest.raises(SelectionEmpty)` や
+    `require_*` を型で捕まえている経路はそのまま通る。分けたのはMCPのエラーコードのためで、
+    `_error_payload` は**この型を先に**見て `selection_kind_mismatch` を返す。
+
+    **なぜ分けたか(2026-08-20に決定3を覆した)**: 2026-08-20の実装時点では「どちらも次の一手が
+    『{kind}を選び直す』で同じ」という理由でコードを分けず、文面だけ分けていた。本人がこれを
+    覆した理由は語彙の数ではなく**名前が嘘をつく**こと —— 面3枚が入っている選択に対して
+    `selection_empty`(選択が空)と名乗ると、後で読む人を必ず一度混乱させる。加えて
+    アプリ層が種別違いにだけ反応する余地(「この面の辺を選ぶ」等)がコードで分岐できる。
+
+    `present` に**実際に確定している種別と件数**を持つ(`{"face": 3}`)。文面の生成元と
+    同じ値なので、画面もモデルも数え直さなくてよい。
+    """
+
+    def __init__(self, message: str, kind: str, present: dict) -> None:
+        super().__init__(message, kind)
+        self.present = dict(present)
 
 
 class SelectionAmbiguous(ValueError):
@@ -369,7 +393,7 @@ def require_confirmed(
     """
     items = confirmed_items(doc, kind=kind)
     if not items:
-        raise SelectionEmpty(_empty_message(doc, kind), kind)
+        _raise_missing(doc, kind)
     if exactly_one and len(items) != 1:
         raise SelectionAmbiguous(
             f"exactly one {kind} required, got {len(items)}", kind
@@ -386,26 +410,29 @@ def require_edges(doc: Document) -> tuple[List[int], BodyId]:
     """
     edges = edge_indices(doc)
     if not edges:
-        raise SelectionEmpty(_empty_message(doc, "edge"), "edge")
+        _raise_missing(doc, "edge")
     refs = confirmed_items(doc, kind="edge")
     return edges, refs[0]["body"]
 
 
-def _empty_message(doc: Document, kind: str) -> str:
-    """`SelectionEmpty` の文面(H・2026-08-20)。
+def _raise_missing(doc: Document, kind: str) -> NoReturn:
+    """種別 `kind` が確定選択に無いときの拒否を**1箇所で**組み立てる(H・2026-08-20)。
 
-    **コードは分けない**(tests/README.md 決定3 —— 「何も選んでいない」と「違う種別を
-    選んだ」はどちらも次の一手が「{kind}を選び直す」で同じなので、`selection_empty` の
-    ままでよい)。ただし**文面**は分ける: 確定選択が空でなく、単に種別が違うだけなら、
-    実際に確定しているものを名指しする。矛盾した指示(例: 面が確定しているのに
-    「その選択の辺に」)を渡された結果、モデルが `get_selection` 等を何度も呼んで
+    **2つを型で分ける**(2026-08-20・本人決定。それまでは文面だけ分けて `SelectionEmpty`
+    に寄せていた。経緯は `SelectionKindMismatch` のdocstring):
+
+    - 確定選択が**丸ごと空** → `SelectionEmpty` → MCPは `selection_empty`
+    - 空ではないが `kind` が**1つも無い** → `SelectionKindMismatch` → `selection_kind_mismatch`
+
+    後者の文面は**実際に確定しているものを名指しする**。矛盾した指示(例: 面が確定して
+    いるのに「その選択の辺に」)を渡された結果、モデルが `get_selection` 等を何度も呼んで
     様子見する暴走(2026-08-20実測・600秒応答なし)を防ぐのが狙いで、**1回目の
     verb呼び出しの返り値だけで自己修復できる**ようにする(モデルに考えさせる前に
     機械的に判定できる情報を渡す)。
     """
     others = confirmed_items(doc)
     if not others:
-        return f"no {kind} in the confirmed selection"
+        raise SelectionEmpty(f"no {kind} in the confirmed selection", kind)
     counts: dict[str, int] = {}
     for item in others:
         item_kind = ref_kind(item)
@@ -413,9 +440,11 @@ def _empty_message(doc: Document, kind: str) -> str:
     described = ", ".join(
         f"{count} {item_kind}" for item_kind, count in sorted(counts.items())
     )
-    return (
+    raise SelectionKindMismatch(
         f"{kind} required but the confirmed selection has {described} instead "
-        f"(no {kind}): select {kind}(s) again before calling this verb"
+        f"(no {kind}): select {kind}(s) again before calling this verb",
+        kind,
+        counts,
     )
 
 

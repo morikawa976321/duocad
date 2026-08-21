@@ -14,7 +14,7 @@ UIは持たない(画面はタスクGが上に載せる)。
    伸びるのは文脈長ではなく思考の側なので、**上限と短いタイムアウトが要る**)。
 3. **ツールの実行時エラーでループを落とさない。** 構造化封筒
    (`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
-   `invalid_predicate` / `internal`)をそのままモデルへ返して自己修復させる
+   `selection_kind_mismatch` / `invalid_predicate` / `internal`)をそのままモデルへ返して自己修復させる
    (2026-08-20の実測でこれは機能した)。
 4. **UIの知識を持たない。** 進捗は `progress(name, arguments, result, ok)` のコールバックへ
    流すだけ(購読側=Gが画面に出す)。

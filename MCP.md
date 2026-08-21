@@ -149,5 +149,8 @@ claude mcp add duocad -- C:\Users\tm976\mf\duocad\.venv\Scripts\python.exe -m du
   片方だけ直った状態に気づけない。ツール数も宣言から数えるので、verbを足しても古くならない。
 - ツールの実行時エラーは JSON-RPC エラーではなく `isError: true` の構造化封筒
   （`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
-  `invalid_predicate` / `internal`）。
+  `selection_kind_mismatch` / `invalid_predicate` / `internal`）。
+  `selection_empty` は確定選択が**丸ごと空**のとき、`selection_kind_mismatch` は
+  **空ではないが要求した種別が無い**とき（例: フィレットを呼んだが面3枚が確定している）。
+  後者は実際に確定している種別と件数を `present_kinds` で返すので、選び直す先が引数なしで分かる。
 - 契約は `tests/test_mcp.py` / `tests/test_mcp_verbs.py` / `tests/test_mcp_selection.py`。

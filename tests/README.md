@@ -1657,19 +1657,31 @@ docstringに注意を書く」と指示していたが、`BRepCheck` が偽に�
 **`require_confirmed` / `require_edges` が「選択 → verbの対象集合」の唯一の入口**
 （2026-08-20）。MCPもWebSocketも、面・辺・領域を引数で受ける口を持たない ——
 `Session` のverbラッパがこの2つを呼ぶので、AIの経路も人の経路も同じ規則を通る。
-拒否はコアの語彙で投げる: 0件は **`SelectionEmpty`**（`.kind` に要る種別）、
+拒否はコアの語彙で投げる: 確定選択が**丸ごと空**なら **`SelectionEmpty`**（`.kind` に要る種別）、
+**空ではないが要求した種別が無い**なら **`SelectionKindMismatch`**、
 1つだけ食うverbに複数なら **`SelectionAmbiguous`**、提案のままなら
-**`SelectionNotCommitted`**。3つとも `ValueError` の派生なので、既存の
+**`SelectionNotCommitted`**。4つとも `ValueError` の派生なので、既存の
 `pytest.raises(ValueError)` とWebSocketのエラー返却はそのまま通る。MCPは
-**型を見て**コードを付ける（`selection_empty` / `invalid_argument` /
-`selection_not_committed`。文言では判定しない）。
+**型を見て**コードを付ける（`selection_empty` / `selection_kind_mismatch` /
+`invalid_argument` / `selection_not_committed`。文言では判定しない）。
 
-**`SelectionEmpty` の文面は「種別の食い違い」を名指しする(H・2026-08-20)。**
-確定選択が空でなく、単に要求する種別と違うだけなら、実際に確定しているものを
-(例:「edge required but the confirmed selection has 3 face instead」)文面に入れる
-——コードは分けない(決定3の「区別の材料は `selection.count` で足りる」をそのまま守る)。
-狙いはモデルが**1回の呼び出しの返り値だけで**自己修復できるようにすること
-(`selection.py::_empty_message` / `tests/test_agent_concurrency.py`)。
+**種別の食い違いは専用のコードで返す（`selection_kind_mismatch`。2026-08-20・本人決定）。**
+確定選択が空でなく、単に要求する種別と違うだけなら、実際に確定しているものを文面
+（例:「edge required but the confirmed selection has 3 face instead」）と `present_kinds`
+（例: `{"face": 3}`）の両方で返す。狙いはモデルが**1回の呼び出しの返り値だけで**
+自己修復できるようにすること（`selection.py::_raise_missing` /
+`tests/test_agent_concurrency.py` / `tests/test_mcp_verbs.py` の対の2本）。
+
+> **これは決定3の「コードは分けない」を覆したものである（2026-08-20）。**
+> 2026-08-20の実装時点では「どちらも次の一手が『{kind}を選び直す』で同じ。区別の材料は
+> `selection.count` で足りる」としてコードを分けず、文面だけ分けていた。本人が覆した理由は
+> 語彙の数ではなく**名前が嘘をつく**こと —— 面3枚が入っている選択に対して
+> `selection_empty`（選択が空）と名乗ると、後で読む人を必ず一度混乱させる。加えて
+> アプリ層が種別違いにだけ反応する余地（「この面の辺を選ぶ」等）をコードで分岐できる。
+> **善意で元に戻さないこと。** `SelectionKindMismatch` は `SelectionEmpty` の派生なので、
+> `_error_payload` の判定順を入れ替えるだけで種別違いが `selection_empty` に吸われて
+> 7語彙目が死ぬ。`test_an_empty_selection_still_says_empty` と
+> `test_selecting_the_wrong_kind_has_its_own_code` が対でそこを固定している。
 
 ## 設計上の決定事項（タスクファイルの【要決定】への回答）
 
@@ -2073,7 +2085,8 @@ verbごとに「これはbodyを変える」と数え上げる実装だと、ver
 | `not_found` | `KeyError` / `FileNotFoundError` | — |
 | `invalid_argument` | `ValueError` | 選択由来なら `required_kind` / `selection` |
 | `selection_not_committed` | 提案のまま verb を呼んだ | `hint`（`commit_selection` を含む）/ `selection` |
-| `selection_empty` | 要求した種別の項目が確定選択に無い | `required_kind` / `selection` |
+| `selection_empty` | 確定選択が**丸ごと空** | `required_kind` / `selection` |
+| `selection_kind_mismatch` | 空ではないが要求した種別が無い（例: フィレットに面3枚） | `required_kind` / `present_kinds` / `hint` / `selection` |
 | `invalid_predicate` | 述語が不正 | **`valid_ops` = `describe_ops()`** / `valid_kinds` |
 | `internal` | 上記以外 | — |
 
