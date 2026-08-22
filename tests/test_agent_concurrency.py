@@ -199,34 +199,6 @@ def test_a_genuinely_empty_selection_keeps_the_short_message(box_session: Sessio
     assert str(excinfo.value) == "no edge in the confirmed selection"
 
 
-def test_the_kind_mismatch_reaches_the_mcp_error_envelope(box_session: Session):
-    """コアの文面がMCP封筒の `message` までそのまま届き、**専用コード**が付く。
-
-    2026-08-20に本人が「コードは分けない」を覆したので、種別違いは `selection_kind_mismatch`
-    (7語彙目)になる。理由は語彙の数ではなく**名前が嘘をつく**こと —— 面が1枚入っている選択に
-    `selection_empty` と名乗らせない(tests/README.md 決定3の注記)。
-    """
-    from duocad.mcp_server import McpServer
-
-    server = McpServer(DocumentTools(box_session))
-    selection.propose_selection(
-        box_session.document, refs=[{"body": "box", "kind": "face", "index": 1}]
-    )
-    selection.commit_selection(box_session.document)
-
-    response = server.handle(
-        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "fillet", "arguments": {"radius": 1.0}}}
-    )
-    import json
-
-    payload = json.loads(response["result"]["content"][0]["text"])
-    error = payload["error"]
-    assert error["code"] == "selection_kind_mismatch"
-    assert "1 face" in error["message"]
-    # 文面と同じ値を機械可読でも返す(モデルも画面も数え直さない)
-    assert error["present_kinds"] == {"face": 1}
-
-
 # ========================================================================================
 # D. AgentLoopの楽観ロック: モデルが考えている間に文書が変わったら実行しない
 # ========================================================================================

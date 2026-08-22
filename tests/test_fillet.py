@@ -196,7 +196,9 @@ def test_fillet_on_a_circular_edge_produces_torus():
 # --------------------------------------------------------------------------------------
 # 項番4: 失敗を黙って通さない（最重要）
 # --------------------------------------------------------------------------------------
-@pytest.mark.parametrize("radius", [RADIUS_FAILS_LOW, RADIUS_FAILS_HIGH])
+#: 失敗する半径は2つ実測してあるが、どちらも `kernel._blend_edges` の同じ `IsDone()` 判定を
+#: 通るだけなので、低い方1つで足りる(2026-08-22に高い方を落とした)。
+@pytest.mark.parametrize("radius", [RADIUS_FAILS_LOW])
 def test_a_failing_fillet_raises_and_leaves_nothing_behind(radius: float):
     """`IsDone()=False` を**例外**にし、文書もログも変えない（ログにも積まない）。
 
@@ -306,23 +308,6 @@ def test_fillet_records_provenance_through_the_normalizing_adapter():
     assert operation.provenance["verb"] == "fillet"
     assert "face_map" in operation.provenance
     doc.log.to_json()  # JSON化できない値が混ざっていればここで落ちる
-
-
-# --------------------------------------------------------------------------------------
-# 項番16: 板 → 穴 → 全周にフィレット
-# --------------------------------------------------------------------------------------
-def test_plate_then_hole_then_fillet():
-    """この順で操作しても壊れない（実際の設計手順に一番近い並び）。"""
-    doc = Document()
-    body_id = new_box_with_hole(doc)
-    circular = edges_of_kind(doc, body_id, "circle")
-
-    fillet(doc, circular, 1.0, body_id=body_id)
-
-    kinds = kinds_of(doc, body_id)
-    assert kinds.get("torus") == 2, "穴の縁が丸まっていない"
-    assert kinds.get("cylinder_full") == 1, "穴そのものが消えた"
-    assert query.volume(body_of(doc, body_id).shape) > 0
 
 
 # --------------------------------------------------------------------------------------

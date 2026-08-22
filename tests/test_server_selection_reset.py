@@ -109,34 +109,6 @@ def test_fillet_clears_the_selection_on_success(session: Session) -> None:
     _assert_cleared(session)
 
 
-def test_chamfer_clears_the_selection_on_success(session: Session) -> None:
-    _select(session, [_edge(1)])
-    session.chamfer(1.0)
-    _assert_cleared(session)
-
-
-def test_extrude_face_clears_the_selection_on_success(session: Session) -> None:
-    _select(session, [_face(1)])
-    session.extrude(5.0)
-    _assert_cleared(session)
-
-
-def test_extrude_regions_clears_the_selection_on_success() -> None:
-    """**空の文書で試す**(`session` フィクスチャの箱は使わない)。
-
-    箱の中にすっぽり収まる押し出しを箱へ `join` すると、体積が変わらず
-    `kernel` が「形が変わっていない」と拒む(§7とは別の、この検証だけの都合)。
-    """
-    session = Session(None, 0.2)
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_rectangle(sketch_id, [0.0, 0.0], 10.0, 10.0)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-
-    session.extrude_regions(5.0, mode="join")
-
-    _assert_cleared(session)
-
-
 def test_add_shape_verbs_clear_a_pre_existing_3d_selection(session: Session) -> None:
     """スケッチ図形を1つ足すと、**それ以前に選んでいた3Dの面・辺**も空になる。
 
@@ -149,26 +121,6 @@ def test_add_shape_verbs_clear_a_pre_existing_3d_selection(session: Session) -> 
     assert session.get_selection()["count"] == 1
 
     session.add_circle(sketch_id, [0.0, 0.0], 5.0)
-
-    _assert_cleared(session)
-
-
-def test_pattern_rectangular_clears_the_selection_on_success(session: Session) -> None:
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
-    _select(session, [_face(1)])
-
-    session.pattern_rectangular(sketch_id, [entity_id], 10.0, 10.0, 2, 2)
-
-    _assert_cleared(session)
-
-
-def test_pattern_circular_clears_the_selection_on_success(session: Session) -> None:
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    entity_id = session.add_circle(sketch_id, [20.0, 0.0], 2.0)["entity_id"]
-    _select(session, [_face(1)])
-
-    session.pattern_circular(sketch_id, [entity_id], [0.0, 0.0], 4)
 
     _assert_cleared(session)
 

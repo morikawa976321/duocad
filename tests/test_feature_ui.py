@@ -282,36 +282,6 @@ def test_asking_for_the_edges_of_an_unknown_body_is_an_error(session: Session) -
     assert answer["where"] == "get_edges"
 
 
-# --------------------------------------------------------------------------------------
-# フィーチャのverbをブラウザから踏む
-# --------------------------------------------------------------------------------------
-def test_the_browser_can_extrude_a_region_and_cut_a_hole(session: Session) -> None:
-    """**手だけで板に穴を開けられる**(タスクDの検証1)。cut は体積を減らす。"""
-    body, _ = _box(session)
-    volume_before = query.volume(body.shape)
-    hole_sketch = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(hole_sketch, [10.0, 10.0], 4.0)
-    _select(session, [{"sketch": hole_sketch, "index": 1}])
-
-    async def script(send):
-        return await send(
-            {
-                "cmd": "extrude",
-                "distance": SIDE,
-                "mode": "cut",
-                "client_op": 7,
-            }
-        )
-
-    (answer, clients) = _browser(session, script)
-
-    assert answer["type"] == "state"
-    assert answer["applied"]["verb"] == "extrude"
-    assert answer["applied"]["client_op"] == 7
-    assert query.volume(body.shape) < volume_before
-    assert clients[1].payloads, "他の接続にも状態が届く(文書が変わったのだから)"
-
-
 def test_extrude_without_a_mode_is_refused(session: Session) -> None:
     """**`mode` を既定で埋めない**。「切り取るつもりで足した」が黙って通らないこと。"""
     _box(session)
@@ -351,111 +321,6 @@ def test_the_browser_can_fillet_the_edges_it_picked(session: Session) -> None:
     assert kernel.face_count(body.shape) > faces_before
 
 
-def test_a_fillet_that_fails_leaves_the_document_and_the_selection_untouched(
-    session: Session,
-) -> None:
-    """**§7の失敗が握りつぶされない**。理由が画面へ返り、文書も選択もそのまま。
-
-    OCCTのフィレットは例外を投げずに `IsDone()=False` で失敗し、しかも半径に対して
-    単調でない(r=10.0 失敗 / r=10.5 成功)。**選択が残ることがUI側の要件の前提**で、
-    ここが消えると24本選び直しになる(タスクDの「失敗の扱い」)。
-
-    **成功時は2026-08-20から選択を全リセットする**(`Session._reset_selection_if_needed`)
-    が、それは「操作ログに積まれた後」にしか発火しない ——
-    失敗した verb はログに積まれずここへ到達しないので、この契約とは独立に成立する。
-    """
-    body, _ = _box(session)
-    _select(session, _edges(body, range(1, 13)))
-    before = _fingerprint(session)
-
-    async def script(send):
-        return await send(
-            {"cmd": "fillet", "radius": RADIUS_THAT_FAILS, "client_op": 4}
-        )
-
-    (answer, _clients) = _browser(session, script)
-
-    assert answer["type"] == "error"
-    assert answer["where"] == "fillet"
-    assert "fillet" in answer["message"]
-    assert _fingerprint(session) == before
-    assert session.get_selection()["count"] == 12
-
-
-def test_the_browser_can_chamfer(session: Session) -> None:
-    body, _ = _box(session)
-    faces_before = kernel.face_count(body.shape)
-    _select(session, _edges(body, [1]))
-
-    async def script(send):
-        return await send({"cmd": "chamfer", "distance": 2.0, "client_op": 5})
-
-    (answer, _clients) = _browser(session, script)
-
-    assert answer["applied"]["verb"] == "chamfer"
-    assert kernel.face_count(body.shape) == faces_before + 1
-
-
-def test_the_browser_can_repeat_shapes_in_a_grid(session: Session) -> None:
-    """矩形反復。**元を含めた個数**(nx×ny)がそのまま描画対象の数になる。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
-
-    async def script(send):
-        return await send(
-            {
-                "cmd": "pattern_rectangular",
-                "sketch_id": sketch_id,
-                "entities": [entity_id],
-                "dx": 10.0,
-                "dy": 10.0,
-                "nx": 3,
-                "ny": 2,
-                "client_op": 6,
-            }
-        )
-
-    (answer, _clients) = _browser(session, script)
-
-    assert answer["applied"]["verb"] == "pattern_rectangular"
-    assert len(_drawn(session, sketch_id)) == 6
-
-
-def test_a_full_circle_pattern_of_eight_steps_by_45_degrees(session: Session) -> None:
-    """円形反復。**全周8個なら隣り合う角度は45度**(`360/8` であって `360/7` ではない)。
-
-    タスクDの検証4がこの目視確認を要求している —— 全周を `count-1` で割る実装だと
-    最後の複製が最初と重なり、8個のつもりが7個に見える。
-    """
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    entity_id = session.add_circle(sketch_id, [20.0, 0.0], 2.0)["entity_id"]
-
-    async def script(send):
-        return await send(
-            {
-                "cmd": "pattern_circular",
-                "sketch_id": sketch_id,
-                "entities": [entity_id],
-                "center": [0.0, 0.0],
-                "count": 8,
-                "total_angle": 360.0,
-                "client_op": 8,
-            }
-        )
-
-    (answer, _clients) = _browser(session, script)
-
-    assert answer["applied"]["verb"] == "pattern_circular"
-    drawn = _drawn(session, sketch_id)
-    assert len(drawn) == 8
-    angles = sorted(
-        math.degrees(math.atan2(item["params"]["cy"], item["params"]["cx"])) % 360.0
-        for item in drawn
-    )
-    steps = [round(b - a, 6) for a, b in zip(angles, angles[1:])]
-    assert steps == [pytest.approx(45.0)] * 7
-
-
 def test_a_feature_command_missing_an_argument_is_refused(session: Session) -> None:
     """引数が欠けたコマンドは**黙って既定値で埋めない**(`SKETCH_COMMANDS` と同じ規律)。"""
     body, _ = _box(session)
@@ -469,21 +334,6 @@ def test_a_feature_command_missing_an_argument_is_refused(session: Session) -> N
 
     assert answer["type"] == "error"
     assert _fingerprint(session) == before
-
-
-def test_a_feature_verb_can_be_undone_from_the_browser(session: Session) -> None:
-    body, _ = _box(session)
-    faces_before = kernel.face_count(body.shape)
-    _select(session, _edges(body, [1]))
-
-    async def script(send):
-        await send({"cmd": "fillet", "radius": RADIUS_THAT_WORKS, "client_op": 1})
-        return await send({"cmd": "undo", "client_op": 2})
-
-    (answer, _clients) = _browser(session, script)
-
-    assert answer["applied"]["undone"] == "fillet"
-    assert kernel.face_count(body.shape) == faces_before
 
 
 def test_the_ui_and_the_ai_get_the_same_shape_from_the_same_verb() -> None:

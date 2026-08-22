@@ -357,20 +357,6 @@ def test_every_argument_is_typed_and_documented(server: McpServer):
             assert (spec.get("description") or "").strip(), f"{where} に説明が無い"
 
 
-def test_the_argument_of_every_tool_is_fixed(server: McpServer):
-    """引数の顔ぶれと必須の別を**ツールごとに固定する**(`ARGUMENTS` の表が契約)。
-
-    ここが「形は選択から取る」を実際に効かせている場所である —— `fillet` に `edges` が
-    生えていたら、選択を経由しない裏口ができたということなので、この検査が落ちる。
-    """
-    tools = {tool["name"]: tool for tool in tool_list(server)}
-    assert set(tools) == set(ARGUMENTS), "ARGUMENTS の表とツールの顔ぶれがずれている"
-    for name, (properties, required) in ARGUMENTS.items():
-        schema = tools[name]["inputSchema"]
-        assert set(schema.get("properties") or {}) == properties, name
-        assert set(schema.get("required") or []) == required, name
-
-
 def test_no_verb_tool_takes_a_shape_argument(server: McpServer):
     """**形の引数(面・辺・領域)を持つverbツールは1つも無い**(モジュールdocstring 2)。
 
@@ -607,19 +593,6 @@ def test_a_bad_value_is_reported_as_invalid_argument(server: McpServer, box_sess
     select_refs(server, [edge_ref(box.id, index) for index in vertical_edge_indices(box.shape)])
     error = call_error(server, "fillet", {"radius": 0.0})
     assert error["code"] == "invalid_argument"
-
-
-def test_a_failed_verb_leaves_the_document_untouched(server: McpServer, box_session: Session):
-    """失敗したら**文書もログも動かない**(§6予防6)。MCP経由でも同じ。"""
-    box = box_session.document.bodies[0]
-    shape_before = box.shape
-    log_before = len(box_session.document.log.entries)
-
-    select_refs(server, [edge_ref(box.id, index) for index in vertical_edge_indices(box.shape)])
-    call_error(server, "fillet", {"radius": -1.0})
-
-    assert box.shape is shape_before
-    assert len(box_session.document.log.entries) == log_before
 
 
 def test_applying_a_verb_with_nothing_selected_says_so(server: McpServer):

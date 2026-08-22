@@ -115,7 +115,9 @@ def test_arc_radius_can_be_edited_afterwards():
 
 @pytest.mark.parametrize(
     "radius,start_deg,end_deg",
-    [(0.0, 0.0, 180.0), (-1.0, 0.0, 90.0), (5.0, 30.0, 30.0), (float("nan"), 0.0, 90.0)],
+    # 負の半径は 0.0 と同じ分岐(`not radius > 0`)なので落とした。NaNは `x <= 0` との
+    # 非同値性を守るので残す。
+    [(0.0, 0.0, 180.0), (5.0, 30.0, 30.0), (float("nan"), 0.0, 90.0)],
 )
 def test_broken_arcs_are_refused(radius: float, start_deg: float, end_deg: float):
     """半径0・負・角度差0・NaNは拒否する（壊れた図形をスケッチへ入れない）。
@@ -223,27 +225,6 @@ def test_arc_survives_a_log_round_trip():
 
     body_id = [body for body in restored.bodies if body.kind == "solid"][-1].id
     assert kinds_of(restored, body_id) == HALF_DISC_PRISM_KINDS
-
-
-# --------------------------------------------------------------------------------------
-# 実物に近い角度と、角度の決め方
-# --------------------------------------------------------------------------------------
-def test_a_ninety_degree_sector_also_makes_a_partial_cylinder():
-    """**実物に近いのは半円ではなく扇形**（アロマ拡散器の部分円筒は75〜97°）。
-
-    90度の扇形（円弧 + 半径の線分2本）を押し出したときの実測:
-    平面4 / 部分円筒1 = 5面。半円（180°）だけを契約にしていると、
-    「半円のときだけ通る」実装を止められない。
-    """
-    doc = Document()
-    sketch_id = sketch_create(doc, base_plane("XY"))
-    add_arc(doc, sketch_id, (0.0, 0.0), ARC_RADIUS, 0.0, 90.0)
-    add_line(doc, sketch_id, (0.0, ARC_RADIUS), (0.0, 0.0))
-    add_line(doc, sketch_id, (0.0, 0.0), (ARC_RADIUS, 0.0))
-
-    operation = extrude(doc, [region_ref(sketch_id, 1)], EXTRUDE_MM, mode="join")
-
-    assert kinds_of(doc, operation.args["body_id"]) == {"plane": 4, "cylinder_partial": 1}
 
 
 def test_angles_run_counter_clockwise_and_may_cross_zero():

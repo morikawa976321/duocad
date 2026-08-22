@@ -342,7 +342,9 @@ def test_pattern_survives_save_load_and_replay():
 # --------------------------------------------------------------------------------------
 # 項番11〜14: 失敗を黙って通さない
 # --------------------------------------------------------------------------------------
-@pytest.mark.parametrize("count", [0, -1, 2.5])
+#: 0 / 負 / 非整数の3分岐は `test_pattern.py` が網羅済み(`_is_positive_int` は共有)。
+#: ここは呼び出し口の配線確認なので境界の 0 だけ通す。
+@pytest.mark.parametrize("count", [0])
 def test_count_must_be_a_positive_integer(count):
     """`count < 1` や非整数は ValueError。**文書にもログにも残さない**。"""
     document = Document()
@@ -357,7 +359,8 @@ def test_count_must_be_a_positive_integer(count):
     assert len(document.log.entries) == log_before
 
 
-@pytest.mark.parametrize("total_angle", [0.0, -90.0, 361.0, float("nan")])
+#: -90.0 は 0.0 と同じ分岐(`not 0 < angle <= 360`)なので落とした。
+@pytest.mark.parametrize("total_angle", [0.0, 361.0, float("nan")])
 def test_total_angle_must_be_usable(total_angle):
     """`total_angle` は 0 < angle <= 360。0・負・360超・NaNは ValueError。
 

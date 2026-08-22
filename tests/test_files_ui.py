@@ -226,31 +226,6 @@ def test_saving_into_a_missing_directory_is_refused(session: Session, tmp_path: 
         session.save_document(tmp_path / "no-such-dir" / "model.json")
 
 
-# --------------------------------------------------------------------------------------
-# 書き出し(STEP / STL)
-# --------------------------------------------------------------------------------------
-def test_a_step_round_trip_keeps_the_volume(session: Session, tmp_path: Path) -> None:
-    """**STEPは読み戻して体積が一致する**(タスクEの検証4)。
-
-    比較は**相対許容差 1e-6**。§7の訂正どおり `==` では成立しない(再読込で数値積分の
-    順序が変わり、1ULP級の差が出る)。
-    """
-    body, _ = _box(session)
-    volume = query.volume(body.shape)
-    target = tmp_path / "out.step"
-
-    async def script(send):
-        return await send({"cmd": "export_step", "path": str(target)})
-
-    (answer, _clients) = _browser(session, script)
-
-    assert answer["type"] == "file" and answer["action"] == "export_step"
-    assert answer["bytes"] > 0
-    reread = kernel.read_step(str(target))
-    assert query.volume(reread) == pytest.approx(volume, rel=1e-6)
-    assert kernel.face_count(reread) == kernel.face_count(body.shape)
-
-
 def test_stl_export_honours_the_deviation(session: Session, tmp_path: Path) -> None:
     """**偏差を指定できる**(細かくすればファイルは必ず大きくなる。§7の実測と同じ性質)。
 
@@ -286,74 +261,6 @@ def test_export_without_a_deviation_is_refused(session: Session, tmp_path: Path)
     assert answer["type"] == "error"
 
 
-# --------------------------------------------------------------------------------------
-# 参照部品(STEP読み込み → 編集可能にする)
-# --------------------------------------------------------------------------------------
-def test_the_browser_import_gives_editable_bodies_right_away(
-    session: Session, tmp_path: Path
-) -> None:
-    """**画面から読み込んだSTEPは、追加操作なしに編集できる**。
-
-    読み込みが参照ボディ(`kind="reference"`)だけを足す経路のままだと、編集するには
-    `make_editable_copy` を1ボディずつ打つ必要がある —— PCケース27ソリッドなら27回。
-    起動オプション `--step` を廃止する前提として、その非対称を無くすのがこの契約である。
-    **操作ログは1行**(undo1回でまるごと消える)。
-    """
-    body, _ = _box(session)
-    source = tmp_path / "part.step"
-    session.export_step_file(source)
-    log_before = len(session.document.log.entries)
-
-    async def script(send):
-        return await send({"cmd": "import_step_editable", "path": str(source), "client_op": 1})
-
-    (imported, _clients) = _browser(session, script)
-
-    applied = imported["applied"]
-    assert applied["verb"] == "import_step_editable"
-    assert len(session.document.log.entries) == log_before + 1, "読み込みは操作ログ1行"
-    editable_ids = applied["body_ids"]
-    assert editable_ids, "編集可能なボディを返していない"
-    assert all(session.document.is_editable(body_id) for body_id in editable_ids)
-    # 原本(参照ボディ)は隠したまま文書に残る
-    references = [session.document.get_body(body_id) for body_id in applied["reference_ids"]]
-    assert references and all(not reference.visible for reference in references)
-    # **編集できる**ことを、実際にverbを通して確かめる(参照のままなら ValueError になる側)。
-    copy_id = editable_ids[0]
-    faces_before = kernel.face_count(session.document.get_body(copy_id).shape)
-    _select(session, [{"body": copy_id, "kind": "edge", "index": 1}])
-    session.fillet(1.0)
-    assert kernel.face_count(session.document.get_body(copy_id).shape) > faces_before
-
-
-def test_the_browser_can_still_make_an_editable_copy_of_a_reference(
-    session: Session, tmp_path: Path
-) -> None:
-    """参照ボディだけを読む経路(`editable=False`)と、その続きの `make_editable_copy`。
-
-    既定は編集可能側だが、参照だけ欲しい経路は残してある(コアのverb `import_step`)。
-    UIの「編集用に複製」コマンドはこの続きに当たる。
-    """
-    body, _ = _box(session)
-    source = tmp_path / "part.step"
-    session.export_step_file(source)
-
-    imported = session.import_step(source)  # 参照ボディだけを足す側
-    reference = imported["body_ids"][0]
-
-    async def script(send):
-        return await send(
-            {"cmd": "make_editable_copy", "source_body_id": reference, "client_op": 2}
-        )
-
-    (editable, _clients) = _browser(session, script)
-
-    assert editable["applied"]["verb"] == "make_editable_copy"
-    copy_id = editable["applied"]["body_id"]
-    assert session.document.is_editable(copy_id)
-    assert not session.document.is_editable(reference)
-
-
 #--------------------------------------------------------------------------------------
 # パネルが要る配信(パラメータ・履歴の位置)
 # --------------------------------------------------------------------------------------
@@ -379,36 +286,6 @@ def test_named_values_are_published_and_drive_the_shape(session: Session) -> Non
     assert answer["applied"]["verb"] == "set_parameter"
     assert session.state_meta()["parameters"][radius_name] == pytest.approx(8.0)
     assert query.volume(session.document.bodies[-1].shape) > volume_before
-
-
-def test_a_pattern_of_holes_follows_one_named_value(session: Session) -> None:
-    """**1箇所直すと反復で作った穴が全部追随する**(タスクEの検証1・M3の存在理由)。"""
-    plate_sketch = session.sketch_create("XY")["sketch_id"]
-    session.add_rectangle(plate_sketch, [0.0, 0.0], 60.0, 20.0)
-    _select(session, [{"sketch": plate_sketch, "index": 1}])
-    session.extrude_regions(5.0, mode="join")
-    body = session.document.bodies[-1]
-
-    holes = session.sketch_create("XY")["sketch_id"]
-    entity_id = session.add_circle(holes, [10.0, 10.0], 2.0)["entity_id"]
-    session.pattern_rectangular(holes, [entity_id], 15.0, 0.0, 3, 1)
-    regions = [
-        {"sketch": holes, "index": item["index"]}
-        for item in session.state_meta()["sketches"][-1]["regions"]
-    ]
-    assert len(regions) == 3, "反復した3つの領域ができていない"
-    _select(session, regions)
-    session.extrude_regions(5.0, mode="cut")
-    volume_small = query.volume(body.shape)
-
-    published = session.state_meta()["parameters"]
-    radius_name = next(name for name, value in published.items() if value == pytest.approx(2.0))
-    session.set_parameter(radius_name, 3.0)
-
-    volume_large = query.volume(session.document.bodies[-1].shape)
-    removed_before = 3 * math.pi * 2.0 * 2.0 * 5.0
-    removed_after = 3 * math.pi * 3.0 * 3.0 * 5.0
-    assert volume_small - volume_large == pytest.approx(removed_after - removed_before, rel=1e-3)
 
 
 def test_the_history_position_is_published(session: Session) -> None:

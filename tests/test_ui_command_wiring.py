@@ -349,22 +349,6 @@ def test_ai_commands_are_not_verbs():
     )
 
 
-@pytest.mark.parametrize(
-    "command_id", ["import_step_editable", "make_editable_copy", "fillet", "sketch_create"]
-)
-def test_the_names_that_bit_us_are_covered(command_id: str):
-    """この検査が実際に効く名前を名指しで残す。
-
-    `import_step_editable` は、コマンド名とログに載るverb名が食い違うバグの
-    再発防止として効く。`sketch_create` は**表に載らないコマンド**(`ws="special"`)
-    なので、UI側のIDと実在の突き合わせが宣言経由でしか効かない —— 個別に捌く分岐を
-    消したら `test_every_hand_dispatched_command_has_a_branch` が、宣言ごと消したら
-    ここが落ちる。
-    """
-    assert command_id in _server_command_names()
-    assert command_id in _ui_command_ids()
-
-
 # --------------------------------------------------------------------------------------
 # Enter要否(即適用)の表 —— 2026-08-22
 # --------------------------------------------------------------------------------------

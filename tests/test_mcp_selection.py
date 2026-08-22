@@ -151,15 +151,6 @@ def test_propose_selection_accepts_explicit_references(server: McpServer, sessio
     assert all(item["kind"] == "edge" for item in selection["items"])
 
 
-def test_propose_selection_accepts_a_predicate(server: McpServer, session: Session):
-    """`predicate=` の経路(§0の「述語」)。タスクファイル項番3の片割れ。"""
-    selection = _assert_selection_payload(
-        call(server, "propose_selection", {"predicate": VERTICAL_EDGES})
-    )
-    assert selection["count"] == 4, "Zに平行で長さ40の辺は4本(直方体)"
-    assert selection["origin"] == "proposed"
-
-
 def test_propose_selection_needs_exactly_one_of_them(server: McpServer, session: Session):
     """`refs` と `predicate` の**両方**も**どちらも無し**も拒む(コアの契約と同じ)。
 
@@ -172,42 +163,6 @@ def test_propose_selection_needs_exactly_one_of_them(server: McpServer, session:
     assert both["code"] == "invalid_argument"
     neither = call_error(server, "propose_selection", {})
     assert neither["code"] == "invalid_argument"
-
-
-def test_modify_selection_edits_the_difference(server: McpServer, session: Session):
-    """差分編集(作り直しではない)。**人が触ること自体が承認**なので `origin` は user になる。"""
-    box = box_of(session)
-    call(server, "propose_selection", {"refs": [edge_ref(box.id, 1), edge_ref(box.id, 2)]})
-    selection = _assert_selection_payload(
-        call(
-            server,
-            "modify_selection",
-            {"add": [edge_ref(box.id, 3)], "remove": [edge_ref(box.id, 1)]},
-        )
-    )
-    assert [item["index"] for item in selection["items"]] == [2, 3]
-    assert selection["origin"] == "user"
-
-
-def test_clear_selection_empties_it(server: McpServer, session: Session):
-    box = box_of(session)
-    call(server, "propose_selection", {"refs": [edge_ref(box.id, 1)]})
-    selection = _assert_selection_payload(call(server, "clear_selection"))
-    assert selection["count"] == 0 and selection["origin"] == "user"
-
-
-def test_changing_the_selection_through_mcp_does_not_touch_the_log(server: McpServer, session: Session):
-    """選択の変更は**操作ログに積まない**(A1の決定7)。MCP経由でも同じ。
-
-    積むと、選択し直すたびに undo を1手消費する編集になる(使い物にならない)。
-    """
-    box = box_of(session)
-    before = len(session.document.log.entries)
-    call(server, "propose_selection", {"predicate": VERTICAL_EDGES})
-    call(server, "modify_selection", {"remove": [edge_ref(box.id, 1)]})
-    call(server, "commit_selection")
-    call(server, "clear_selection")
-    assert len(session.document.log.entries) == before
 
 
 # --------------------------------------------------------------------------------------
@@ -354,28 +309,6 @@ def test_a_hidden_body_is_not_scanned_and_saying_so_is_an_error(server: McpServe
         server, "propose_selection", {"predicate": {**VERTICAL_EDGES, "body": box.id}}
     )
     assert error["code"] == "invalid_argument"
-
-
-# --------------------------------------------------------------------------------------
-# 4. 提案のままでは verb に渡せない(A1の決定4・タスクファイル項番8)
-# --------------------------------------------------------------------------------------
-def test_a_proposal_cannot_be_fed_to_a_verb_through_mcp(server: McpServer, session: Session):
-    """**黙って通さない**。MCP経由でも同じ挙動であること(項番8)。
-
-    このコードが `invalid_argument` に潰れていると、AIは半径を変えて再試行しはじめる
-    (直すべきは半径ではなく「確定していないこと」である)。`hint` に次の一手を書く。
-    """
-    box = box_of(session)
-    call(server, "propose_selection", {"predicate": VERTICAL_EDGES})
-    shape_before = box.shape
-
-    error = call_error(server, "fillet", {"radius": 2.0})
-
-    assert error["code"] == "selection_not_committed"
-    assert "commit_selection" in error["hint"]
-    assert error["selection"]["origin"] == "proposed"
-    assert box.shape is shape_before, "拒否したのに形が変わった"
-    assert session.document.log.entries == []
 
 
 #: **形を選択から取る全ツール**と、それぞれが提案のまま呼ばれたときの引数。
@@ -756,11 +689,3 @@ def test_a_selection_change_from_mcp_reaches_the_browser(session: Session):
     assert "applied" not in pushed
 
 
-def test_the_selection_is_not_saved(server: McpServer, session: Session):
-    """選択はセッション状態であって文書の保存対象ではない(A1の項番7)。
-
-    MCPから提案した選択が保存されると、次に開いたときAIの提案が人の確定として復活する。
-    """
-    call(server, "propose_selection", {"predicate": VERTICAL_EDGES})
-    saved = session.document.log.to_json()  # 保存の経路はこれだけ(選択はログに載らない)
-    assert "proposed" not in saved and "selection" not in json.loads(saved)

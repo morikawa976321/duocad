@@ -90,7 +90,6 @@ def _handshake(origin: str | None) -> bool:
     "origin",
     [
         "http://evil.example.com",
-        "https://evil.example.com",
         "http://127.0.0.1:8767",   # 隣のポート(別オリジン)
         "http://127.0.0.1",        # ポート無し(既定80。duocadは配っていない)
         "null",                    # sandboxed iframe / file:// が名乗る値

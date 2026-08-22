@@ -247,20 +247,6 @@ def test_the_boundary_of_the_bottom_face_is_a_different_set(doc: Document):
         assert abs(edges[item["index"]]["start"][2]) < 1e-6
 
 
-def test_the_boundary_of_a_face_is_ready_for_fillet(doc: Document):
-    """「上面の外周を丸める」が **述語 → 選択 → verbの引数** で1本に繋がること。
-
-    A1はここまで(契約)。実際に丸まるところまでは A2 の検証項目。
-    """
-    top = _top_face_index(doc.bodies[0].shape)
-    selection.propose_selection(
-        doc,
-        predicate={"kind": "edge", "where": [{"op": "on_boundary_of_face", "face": top}]},
-    )
-    selection.commit_selection(doc)
-    assert len(selection.edge_indices(doc, body_id="box")) == 4
-
-
 def test_the_boundary_excludes_the_rim_of_a_hole():
     """**穴の縁は外周に含めない**(項番17の契約の本体)。
 

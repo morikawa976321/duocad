@@ -253,7 +253,8 @@ def test_cut_without_a_target_body_fails():
     assert document.bodies == []
 
 
-@pytest.mark.parametrize("mode", ["join", "cut"])
+#: reference判定は `_resolve_target` でmode分岐より前に効くので、joinだけで足りる。
+@pytest.mark.parametrize("mode", ["join"])
 def test_extrude_rejects_a_reference_body(mode):
     """読み込んだ参照ボディ(kind="reference")は押し出しの対象にならない(M0の読み取り専用契約)。
 
