@@ -52,7 +52,7 @@ from .providers import (
 #: 1回の `run()` で許すモデルとの往復の上限。
 DEFAULT_MAX_TURNS = 12
 #: 1リクエストの出力上限(思考+本文)。思考は既定で有効なので小さすぎると本文が切れる。
-DEFAULT_MAX_TOKENS = 8192
+DEFAULT_MAX_TOKENS = 16384
 #: 1リクエストの待ち上限(秒)。**短く保つ**(上記「暴走の打ち切り」)。
 DEFAULT_REQUEST_TIMEOUT = 120.0
 
