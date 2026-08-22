@@ -153,6 +153,24 @@ def test_models_dir_is_created_if_missing(session: Session) -> None:
         "..",
         "../model.json",
         "C:\\model.json",
+        # 2026-08-23 QA指摘(第1段 gpt-5.6-terra-high fail)で実測した脱出経路。
+        # Path.is_absolute()がFalseを返す「ドライブ相対パス」で、素の絶対パス
+        # 判定をすり抜けたうえ、pathlibの`/`が右辺のドライブ付きセグメントを
+        # 新しいアンカーとして扱うため`models_dir`側が捨てられる。
+        "D:outside.json",
+        # NTFS代替データストリーム。同じ"コロン"の入口を通る。
+        "a.json:x",
+        # Windowsの予約デバイス名(拡張子を付けても特別扱いされる)。
+        "CON",
+        "CON.json",
+        "com1.json",
+        # 末尾のドット/空白はWindowsが黙って落とすため、別名のつもりが同じ実体になる。
+        "model.json.",
+        "model.json ",
+        " model.json",
+        # 拡張子違いは一覧(*.jsonだけを見る)から二度と開けなくなる(QAのMINOR)。
+        "model",
+        "model.txt",
     ],
 )
 def test_save_and_open_reject_anything_but_a_bare_filename(session: Session, bad_name: str) -> None:
@@ -160,6 +178,8 @@ def test_save_and_open_reject_anything_but_a_bare_filename(session: Session, bad
 
     以前の `Session._resolve` はCWD基準で任意の絶対パスを受けていた —— 保存先が
     「その日サーバをどこで起動したか」で変わる問題そのものだったので、ここを締める。
+    **ドライブ相対パス・代替データストリーム・予約デバイス名・末尾のドット/空白・
+    拡張子違いも同じ理由で拒否する**(2026-08-23 QA指摘)。
     """
     _box(session)
     with pytest.raises(ValueError):
@@ -167,6 +187,53 @@ def test_save_and_open_reject_anything_but_a_bare_filename(session: Session, bad
     with pytest.raises(ValueError):
         session.open_document(bad_name)
 
+
+def test_a_drive_relative_escape_never_touches_the_drive(session: Session) -> None:
+    """**QA実測の再現+否定**: ドライブ相対パスは拒否され、実際に何も書かれない。
+
+    修正前は `Path("D:outside.json").is_absolute()` が `False` を返すため絶対パス判定を
+    すり抜け、`models_dir / "D:outside.json"` が pathlib の仕様で `models_dir` を
+    捨てて `D:\\outside.json` に解決されていた(実測)。ここでは**models_dirと
+    同じドライブ**にすり替えて、拒否されたことと同時にファイルが実際には
+    どこにも作られていないことを確かめる(拒否理由の文言だけを見て安心しない)。
+    """
+    _box(session)
+    drive = session.models_dir.drive or "C:"
+    escape_name = f"{drive}outside-escape-test.json"
+
+    with pytest.raises(ValueError):
+        session.save_document(escape_name)
+
+    assert not (session.models_dir / "outside-escape-test.json").exists()
+
+
+def test_resolved_path_must_stay_inside_models_dir_even_past_a_symlink(
+    session: Session, tmp_path: Path
+) -> None:
+    """**正の判定は解決後のパスで行う**(2026-08-23 QA指摘のMAJOR)。
+
+    文字列だけの拒否では、`models_dir` 内の**既存のシンボリックリンク**が外を
+    指していた場合を塞げない。`_resolve_document_name` の最終判定
+    (`resolved.is_relative_to(root)`)がここを見る唯一の場所であることを固定する。
+
+    Windowsでシンボリックリンクを作るには開発者モードか管理者権限が要る ——
+    権限が無い環境では意味のある検査ができないので、その場合は明示的にskipする
+    (「検査していないのに緑」を避けるため、失敗を握りつぶさずskip理由に出す)。
+    """
+    _box(session)
+    session.models_dir.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = session.models_dir / "escape.json"
+    try:
+        link.symlink_to(outside / "target.json")
+    except OSError as error:
+        pytest.skip(f"このマシンではシンボリックリンクを作れない: {error}")
+
+    with pytest.raises(ValueError):
+        session.save_document("escape.json")
+
+    assert not (outside / "target.json").exists(), "リンクの先(models_dirの外)に書けてしまった"
 
 def test_opening_replays_a_log_that_contains_set_parameter(session: Session) -> None:
     """**打ち直した寸法を含むログが開ける**。

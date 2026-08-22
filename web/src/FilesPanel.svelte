@@ -49,15 +49,22 @@
    * 打った名前が使える形か(空・区切り文字・`.`/`..`)。
    *
    * **最終判定はサーバ**(`Session._resolve_document_name`)。ここでの検査は
-   * 明らかに拒まれる形を早く言うためだけで、拡張子や実在チェックはしない
+   * 明らかに拒まれる形を早く言うためだけの入力補助で、実在チェックはしない
    * (`command.ts` の `TextArgSpec` のdocstringと同じ理由: サーバと2箇所で
-   * 別々のパス解釈を持たない)。
+   * 別々のパス解釈を持たない)。2026-08-23のQA指摘(`D:outside.json` が
+   * `models_dir` の外へ解決される・拡張子違いは一覧から開けない)を受けて、
+   * サーバ側の拒否条件(コロン・前後の空白・`.json`必須)をここにも写した ——
+   * ただしここが穴を塞いでいるわけではなく、**正の判定は常にサーバ側の
+   * `is_relative_to` 検査**であることは変わらない。
    */
   function nameProblem(text: string): string | null {
     const trimmed = text.trim()
     if (trimmed === '') return 'ファイル名を打つ(例: model.json)'
+    if (trimmed !== text) return '前後の空白は使えない'
     if (trimmed.includes('/') || trimmed.includes('\\')) return '区切り文字は使えない(ファイル名だけ)'
+    if (trimmed.includes(':')) return "':' は使えない(ドライブ指定・代替ストリームの入口になる)"
     if (trimmed === '.' || trimmed === '..') return '使えないファイル名'
+    if (!trimmed.toLowerCase().endsWith('.json')) return '拡張子は.json(一覧はmodels/の*.jsonだけを見る)'
     return null
   }
 

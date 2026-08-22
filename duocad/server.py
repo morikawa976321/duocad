@@ -135,6 +135,14 @@ DEFAULT_WEB_DIST = REPO_ROOT / "web" / "dist"
 #: ここを差し替えて実フォルダを触らない。
 DEFAULT_MODELS_DIR = REPO_ROOT / "models"
 
+#: Windowsの予約デバイス名(拡張子の有無に関わらず特別扱いされる)。
+#: 大文字小文字を区別しない。`_resolve_document_name` が拒否理由をまとめて言う。
+_RESERVED_WINDOWS_NAMES = frozenset({
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+})
+
 # サーバは常に空の文書で立ち上がり、STEPはアプリ内の「STEP読み込み」かMCPの
 # `import_step` から読む(どちらも編集可能なボディまで作る verb `import_step_editable` を
 # 通る)。起動時にしかできないことが無いので、起動前に「今日はどのSTEPを読むか」を
@@ -1045,21 +1053,66 @@ class Session:
         「その日サーバをどこで起動したか」で変わるのがそもそもの問題だったので、
         起点をサーバのCWDから `models_dir` へ固定して塞ぐ。
 
-        **区切り文字・絶対パス・`..` は拒否する**(黙って`models_dir`の外を書く/読むことを
-        許さない)。`models_dir` が無ければここで作る(要件1「無ければアプリが作る」)。
+        **2026-08-23 QA指摘で締め直した**(第1段 `gpt-5.6-terra-high` fail)。
+        文字列だけの拒否では脱出経路が残っていた:
+
+        - `Path("D:outside.json").is_absolute()` は **False**(Windowsのドライブ相対
+          パス)。素の絶対パス判定をすり抜け、しかも `models_dir / "D:outside.json"`
+          は pathlib が右辺の「ドライブ付きセグメント」を**新しいアンカー**として扱う
+          ため、`models_dir` 側が黙って捨てられて `D:\\outside.json` に解決される
+          (実測)。**コロン1文字**が入口で、NTFSの代替データストリーム
+          (`a.json:x` → `models\a.json:x` へ書ける)も同じ入口を通る。
+        - 予約デバイス名(`CON`/`COM1`等、拡張子を付けても特別扱い)・末尾のドット/
+          空白(Windowsが黙って落とすため`foo.json.`と`foo.json`が同じ実体になりうる)。
+        - **文字列の拒否だけでは、既存のシンボリックリンク/ジャンクションを指す
+          ファイル名が`models_dir`の外へ実際に解決されるケースを塞げない** ——
+          最終判定は必ず**解決後のパスが`models_dir`配下か**で行う
+          (`resolve()`はリンクを辿るので、ここが唯一の正しい検査になる)。
+
+        したがって判定は2段: ①明らかに拒まれる形を早く言う文字列検査
+        (区切り文字・コロン・`.`/`..`・予約名・前後の空白・末尾のドット/空白・拡張子)、
+        ②**解決後のパスが`models_dir`配下であることの検査**(`is_relative_to`。
+        ①をすり抜けるものが万一あっても、ここで必ず止まる)。①だけに頼らない。
+
+        `models_dir` が無ければここで作る(要件1「無ければアプリが作る」)。
         """
         text = str(name)
-        if text.strip() == "":
+        stripped = text.strip()
+        if stripped == "":
             raise ValueError("ファイル名が空")
+        if text != stripped:
+            raise ValueError(f"前後の空白は不可: {text!r}")
         if "/" in text or "\\" in text:
             raise ValueError(f"ファイル名だけを受け取る(区切り文字は不可): {text!r}")
+        if ":" in text:
+            # ドライブ指定("D:outside.json")もNTFS代替データストリーム("a.json:x")も
+            # コロン1文字が入口(上のdocstring参照)。
+            raise ValueError(f"ファイル名だけを受け取る(':'は不可): {text!r}")
         if text in (".", ".."):
             raise ValueError(f"ファイル名として使えない: {text!r}")
+        if text.endswith(".") or text.endswith(" "):
+            raise ValueError(f"末尾のドット/空白は不可(Windowsが黙って落とすため): {text!r}")
+        base_name = text.split(".", 1)[0].upper()
+        if base_name in _RESERVED_WINDOWS_NAMES:
+            raise ValueError(f"予約されたデバイス名は使えない: {text!r}")
+        if not text.lower().endswith(".json"):
+            # **一覧(`list_documents`)は `*.json` しか見ない**(要件3)。拡張子違いを
+            # 受理すると、保存はできるのに一覧から二度と開けないファイルができる
+            # (2026-08-23 QA指摘のMINOR)。黙って `.json` を補うより、打ち間違いを
+            # その場で本人に返す方を選んだ(既存の「打ち間違いを許さない」流儀
+            # ―― 親ディレクトリを黙って作らない、既定値を黙って埋めない ―― と揃える)。
+            raise ValueError(f"拡張子は.json(一覧はモデルの*.jsonだけを見る): {text!r}")
         candidate = Path(text)
         if candidate.is_absolute():
             raise ValueError(f"ファイル名だけを受け取る(絶対パスは不可): {text!r}")
         self.models_dir.mkdir(parents=True, exist_ok=True)
-        return (self.models_dir / text).resolve()
+        root = self.models_dir.resolve()
+        resolved = (root / text).resolve()
+        # **正の判定はここ**(2026-08-23 QA指摘)。文字列検査をすり抜けるものが
+        # あっても、シンボリックリンク越しの脱出も含めて最終的にここで止まる。
+        if not resolved.is_relative_to(root):
+            raise ValueError(f"models/の外を指している: {text!r} -> {resolved}")
+        return resolved
 
     def save_document(self, name: Any) -> dict:
         """操作ログをJSONで書き出す。**verbではない**(文書を変えないのでログに載らない)。
