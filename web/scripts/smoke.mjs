@@ -664,10 +664,14 @@ async function main() {
     ok('円を手で描けた(中心をクリック → 半径20を打つ → Enter。閉領域が1つできた)')
 
     // 線分: 2点をクリックで置く。**円を横切る線**なので領域が2つに割れる(検証3)
+    //
+    // **Enterは押さない**(2026-08-22)。線分は対象が点2つだけでhowの入力が無いので、
+    // `needsEnter` が false になり **2点目のクリックで即適用**される。ここでEnterを
+    // 押さないままこの下の検査が通ることが、実機でのその証拠になる
+    // (点で揃うコマンドの側。選択で揃う側は `smoke-files.mjs` の(a)(b)(c))。
     await page.click('#sketch-line')
     await clickPlane(-30, 5)
     await clickPlane(30, 5)
-    await page.keyboard.press('Enter')
     await page.waitForFunction(
       () => {
         const hook = window.__duocad
@@ -676,7 +680,7 @@ async function main() {
       },
       { timeout, polling: 50 },
     )
-    ok('線分を手で描けた(2点をクリック)。**円が線で2つの領域に割れた**')
+    ok('線分を手で描けた(**2点目のクリックで即適用**。Enterを押していない)。**円が線で2つの領域に割れた**')
 
     // -------------------------------------------------------------- 検証4: Escで中断
     // 長方形の引数を途中まで集めてEscを押す。文書が一切変わらないこと。

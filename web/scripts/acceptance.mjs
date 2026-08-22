@@ -272,7 +272,8 @@ async function main() {
       await page.click('#sketch-line')
       await clickPlane(70, 0)
       await clickPlane(70, 30)
-      await page.keyboard.press('Enter')
+      // **Enterは押さない**(2026-08-22)。線分は対象が点2つ・howの入力が無いので
+      // 2点目のクリックで即適用される(`command.ts` の `needsEnter`)。
       await waitFor(
         () => {
           const hook = window.__duocad
@@ -281,7 +282,7 @@ async function main() {
         },
         '線分が置けない',
       )
-      return '2点をクリック(ゴムひもで確定前の線が見える)'
+      return '2点をクリック(**2点目で即適用**。ゴムひもで確定前の線が見える)'
     })
 
     await attempt('human', 'add_circle', async () => {

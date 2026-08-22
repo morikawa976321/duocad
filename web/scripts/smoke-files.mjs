@@ -115,6 +115,13 @@ async function main() {
       }
     }
 
+    /**
+     * **起きないことを見る前の猶予**。適用が走るなら「クリック → WS往復 → 状態配信」で
+     * 済む時間(実測で数十〜数百ms)を過ぎてから数える —— 待たずに数えると、
+     * 走っていても「まだ返ってきていないだけ」を緑と読んでしまう。
+     */
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 1000))
+
     async function typeInto(selector, value) {
       await page.click(selector)
       await page.keyboard.down('Control')
@@ -507,15 +514,55 @@ async function main() {
       '読み込んだボディの面を選べない',
       importedId,
     )
+    // ---------------------------------------------------------- 即適用(2026-08-22)
+    // `make_editable_copy` は**対象が面1つ・howが無い**ので、Enterの要らないコマンドに
+    // なった(`command.ts` の `needsEnter`)。ここで固定するのは骨格の3点:
+    //   (a) 選択が揃った状態で**起動しても発火しない**
+    //   (b) **起動した後の面クリック**で発火する(Enterを押さない)
+    //   (c) 起動 → Esc のあとは発火しない
+    // (a)(c) は「起きないこと」の検査なので、往復ぶんの猶予を与えてから見る。
     const solidsBefore = (await look()).bodies.length
     await page.click('#file-make-editable')
+    await settle()
+    if ((await look()).bodies.length !== solidsBefore) {
+      fail('(a) 起動しただけで複製が走った(即適用が起動時に発火している)')
+    }
+    ok('(a) 面が選ばれた状態で起動しても発火しない(起動即適用の事故が構造的に無い)')
+
+    // 起動前から揃っていた場合の適用手段は Enter(またはボタンの押し直し)である
     await page.keyboard.press('Enter')
     await waitFor(
       (expected) => window.__duocad.parts.length === expected,
       '編集可能なコピーができない',
       solidsBefore + 1,
     )
-    ok('面を選んで**編集可能なコピー**を作れた(複製の経路)')
+    ok('面を選んで**編集可能なコピー**を作れた(複製の経路。起動前から選んでいたのでEnter)')
+
+    // (c) 起動してすぐEscで降りたら、その後の面クリックでは発火しない
+    await page.click('#selection-clear')
+    await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, '選択を全解除できない')
+    await page.click('#file-make-editable')
+    await page.keyboard.press('Escape')
+    const solidsAfterEscape = (await look()).bodies.length
+    await page.mouse.click(facePoint.x, facePoint.y)
+    await settle()
+    if ((await look()).bodies.length !== solidsAfterEscape) {
+      fail('(c) Escで降りた後の面クリックで複製が走った')
+    }
+    ok('(c) 起動 → Esc のあとの面クリックでは発火しない')
+
+    // (b) 起動した後に面をクリックすると、Enterを押さずに適用される
+    await page.click('#selection-clear')
+    await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, '選択を全解除できない')
+    const solidsBeforeImmediate = (await look()).bodies.length
+    await page.click('#file-make-editable')
+    await page.mouse.click(facePoint.x, facePoint.y)
+    await waitFor(
+      (expected) => window.__duocad.parts.length === expected,
+      '(b) 起動後の面クリックで即適用されない',
+      solidsBeforeImmediate + 1,
+    )
+    ok('(b) **起動 → 面をクリック**だけで複製できた(Enterを押していない)')
 
     // **画面に出たエラーを見落とさない**。サーバのエラーはトーストへ出るだけで、
     // ブラウザのコンソールには出ない —— ここを見ないと「失敗しているのに緑」が起きる

@@ -6,6 +6,21 @@
    * 起動 → 引数収集 → プレビュー → 確定(Enter) / 中断(Esc)
    * ```
    *
+   * ## Enterが要らないコマンドがある(2026-08-22)
+   *
+   * 要否は `needsEnter(command)` が `args` から導出する(規則は `command.ts` 側)。
+   * ここが持つのは**発火の条件**だけで、それは1つ ——
+   * **「起動した後の1手で引数が揃ったとき」にだけ `commit()` する**。
+   *
+   * - **点で揃うもの**(線分)… `addPoint` の中で同期に判定する。
+   * - **選択で揃うもの**(編集用に複製)… 面のクリックはWS往復の後に届くので、
+   *   **起動した時点の選択を控えておき、それと違う選択が届いたときだけ**発火させる
+   *   (`armedPrint`)。起動前から面が選ばれていても発火しない。
+   *
+   * この形にすると「**起動しただけで文書が変わる**」が構造的に起きない ——
+   * verb→target→how の順序原則(engine `2026-08-22-duocad-ui-interaction-principles`)を
+   * 状態機械の側で担保している。**verbごとの分岐は1つも増えていない。**
+   *
    * ## 引数収集は、まず共有選択集合を見る
    *
    * 選択引数の値は**コアの選択集合から導出する**(ここには持たない)。空のときだけ
@@ -42,6 +57,7 @@
     findCommand,
     firstMissingArg,
     itemsForArg,
+    needsEnter,
     overflowNote,
     promptFor,
     refKey,
@@ -223,11 +239,20 @@
    * (サーバがコアの選択から取る)ので、辺を1本足しても引数は同じままで、
    * 印に入れないと「選び直したのに古い幽霊が残る」。
    */
-  const selectionPrint = $derived(
-    command.args.some((spec) => spec.kind === 'selection')
+  const selectionPrint = $derived(printSelectionFor(command))
+
+  /**
+   * そのコマンドから見た選択の印。**即適用の待ち受け(`armedPrint`)とプレビューの再送判定が
+   * 同じ印を使う** —— 別々に作ると、片方だけが「選び直し」に気づく状態が生まれる。
+   *
+   * **外(コア)から非同期に届く引数を足すときは、その値もこの印に混ぜること。**
+   * 混ぜないと、その引数で揃うコマンドの即適用が発火しない(選択と同じ経路に乗る)。
+   */
+  function printSelectionFor(target: CommandDef): string {
+    return target.args.some((spec) => spec.kind === 'selection')
       ? (selection?.items ?? []).map(refKey).join('|')
-      : '',
-  )
+      : ''
+  }
 
   $effect(() => {
     const source = command.preview === 'none' ? null : ghostBuilt
@@ -251,6 +276,47 @@
       previewTimer = null
       onPreview(command.id, args, mode)
     }, PREVIEW_DEBOUNCE_MS)
+  })
+
+  // ---------------------------------------------------------------- 即適用(Enterが要らないもの)
+  /**
+   * 即適用のうち、**選択が揃うのを待つ**もの(いまは `make_editable_copy` だけ)。
+   * 点で揃うもの(線分)は `addPoint` の中で同期に判定するので、ここには来ない。
+   */
+  const appliesOnSelection = $derived(
+    !needsEnter(command) && command.args.some((spec) => spec.kind === 'selection'),
+  )
+
+  /**
+   * 即適用の待ち受け —— **起動してから最後に見た選択の印**。`null` は待っていないこと。
+   *
+   * `null` になるのは3つ: **起動していない**(既定で構えているだけ)/ **Escで降りた** /
+   * **一度発火した**(1起動につき1回だけ)。1回だけにしてあるのは、確定の後もずっと
+   * 構えていると、**この画面が触っていない選択の変化**(AIの `modify_selection`)で
+   * 文書が変わりうるからである —— もう一度やるならボタンを押し直す(1手)。
+   *
+   * `$state` にしない: この値を読む `$effect` が自分で書き戻すので、依存に入れると
+   * 発火のたびに余分な再実行が走る(挙動は同じだが、読む人が無限ループを疑うことになる)。
+   */
+  let armedPrint: string | null = null
+
+  /**
+   * **起動した後に届いた選択の変化**でだけ適用する。
+   *
+   * 面のクリックは「クリック → WS往復 → 選択の配信」の後に引数が揃うので、点のように
+   * その場で判定できない。起動時の印と違う印が届いたことを「人が起動後に指した」と読む。
+   * `busy` / `ready` / `built.ok` の判定は `commit()` が持っているので、ここでは見ない。
+   */
+  $effect(() => {
+    const print = selectionPrint
+    if (!appliesOnSelection || armedPrint === null) return
+    if (print === armedPrint) return // 起動時から動いていない = 起動前からあった選択
+    armedPrint = print // 揃わない変化(空振り・選び直し)も「見た」ことにする
+    if (missing !== null) return
+    // 適用できたときは `reset()` が待ち受けを降ろす(1起動につき1回)。**降ろさずに
+    // 戻ってきたとき**(応答待ち・提案が載っている等)は印を進めただけなので、
+    // 次に選び直せばもう一度試せる。
+    commit()
   })
 
   // ---------------------------------------------------------------- 確定 / 中断
@@ -317,16 +383,38 @@
     numberText = {}
     points = {}
     choices = {}
+    // **即適用の待ち受けも降ろす**。確定・中断のどちらでも「起動している間」は終わりで、
+    // 構え直すのは `start()`(ボタンを押す1手)だけにする。
+    armedPrint = null
     if (previewTimer) clearTimeout(previewTimer)
     previewTimer = null
     previewedKey = null
     onCancelPreview()
   }
 
+  /**
+   * **起動中のコマンドのボタンをもう一度押した**とき。
+   *
+   * 揃っていれば確定(Enterと同じ)。揃っていなければ**構え直す** —— 即適用は1起動に
+   * つき1回なので、続けてもう一度やるための1手がここに要る(Escで既定へ降りてから
+   * 押し直す2手にしない)。Enterが要るコマンドではボタン自体が無効なので通らない。
+   */
+  function pressActive(): void {
+    if (ready) {
+      commit()
+      return
+    }
+    start(command.id)
+  }
+
   // 外から呼ばれない(ツールバーのボタンがこの中から呼ぶだけ)。
   function start(nextId: string): void {
     reset()
     commandId = nextId
+    // **ここで控えた選択より後に届いた変化だけ**が即適用の引き金になる。
+    // 起動より前から揃っていた選択(AIが選んだ面のまま起動した等)では発火せず、
+    // Enter か、ボタンをもう一度押すことが適用の1手として残る。
+    armedPrint = printSelectionFor(findCommand(nextId, commands))
     focusFirstNumber()
   }
 
@@ -340,6 +428,14 @@
     const spec = firstMissingArg(command, values)
     if (spec === null || spec.kind !== 'point') return false
     points = { ...points, [spec.name]: [u, v] }
+    // **この1クリックで引数が揃い、Enterが要らないなら、そのまま適用する**(線分の2点目)。
+    // `values` は `$derived` なので、上の代入の直後に読めば新しい点が入っている。
+    // 確定してもコマンドは構えたまま(`reset()` が消すのは集めた点だけ)なので、
+    // 続けて次の線を引ける —— これは `commands/sketch.ts` の設計で、崩さない。
+    if (!needsEnter(command) && firstMissingArg(command, values) === null) {
+      commit()
+      return true
+    }
     focusFirstNumber()
     return true
   }
@@ -406,10 +502,10 @@
       <button
         id={candidate.buttonId}
         class:on={candidate.id === command.id}
-        onclick={() => (candidate.id === command.id ? commit() : start(candidate.id))}
-        disabled={candidate.id === command.id && (!ready || busy)}
+        onclick={() => (candidate.id === command.id ? pressActive() : start(candidate.id))}
+        disabled={candidate.id === command.id && (busy || (!ready && needsEnter(command)))}
       >
-        {candidate.label}{candidate.id === command.id ? ' (Enter)' : ''}
+        {candidate.label}{candidate.id === command.id && needsEnter(candidate) ? ' (Enter)' : ''}
       </button>
     {/each}
     <span id="command-prompt" class="value" class:dim={!ready}>{prompt}</span>

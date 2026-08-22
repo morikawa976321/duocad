@@ -353,3 +353,134 @@ def test_the_names_that_bit_us_are_covered(command_id: str):
     """
     assert command_id in _server_command_names()
     assert command_id in _ui_command_ids()
+
+
+# --------------------------------------------------------------------------------------
+# Enter要否(即適用)の表 —— 2026-08-22
+# --------------------------------------------------------------------------------------
+#: `web/src/commands/command.ts` の `isHowInput` と同じ顔ぶれ(howの入力)。
+#: **TS側へ種別を足したらここへも足す**(下の `_needs_enter` のdocstring)。
+HOW_ARG_KINDS = {"number", "choice", "text"}
+
+
+def _args_of(chunk: str) -> list[tuple[str, str]]:
+    """1つの `CommandDef` の本文から `args: [...]` を読み、`(kind, max)` の並びを返す。
+
+    `max` は選択引数のときだけ意味があり(`'1'` / `'null'` / 数字)、他は空文字。
+    `build(...)` の本体を巻き込まないように**角括弧の対応で args だけを切り出す**
+    (本体には `values.face` 等が並ぶだけだが、将来の書き足しで `kind:` が現れうる)。
+    """
+    head = chunk.find("args: [")
+    if head < 0:
+        return []
+    start = chunk.index("[", head)
+    depth = 0
+    end = -1
+    for index in range(start, len(chunk)):
+        if chunk[index] == "[":
+            depth += 1
+        elif chunk[index] == "]":
+            depth -= 1
+            if depth == 0:
+                end = index
+                break
+    if end < 0:
+        return []
+    region = chunk[start + 1:end]
+    marks = list(re.finditer(r"kind:\s*'([a-z]+)'", region))
+    args: list[tuple[str, str]] = []
+    for index, match in enumerate(marks):
+        tail = region[match.end():marks[index + 1].start() if index + 1 < len(marks) else len(region)]
+        maximum = re.search(r"\bmax:\s*(null|\d+)", tail)
+        args.append((match.group(1), maximum.group(1) if maximum else ""))
+    return args
+
+
+def _ui_command_args() -> dict[str, list[tuple[str, str]]]:
+    """`web/src/commands/*.ts` から「ID -> 引数の並び」を読む(`_ui_command_categories` と同じ切り方)。"""
+    found: dict[str, list[tuple[str, str]]] = {}
+    for path in sorted(COMMANDS_DIR.glob("*.ts")):
+        text = path.read_text(encoding="utf-8")
+        marks = list(re.finditer(r"^\s*id:\s*'([^']+)'", text, re.M))
+        for index, match in enumerate(marks):
+            end = marks[index + 1].start() if index + 1 < len(marks) else len(text)
+            found[match.group(1)] = _args_of(text[match.end():end])
+    return found
+
+
+def _needs_enter(args: list[tuple[str, str]]) -> bool:
+    """TS側の `needsEnter`(`web/src/commands/command.ts`)と同じ判定を、宣言から作り直す。
+
+    **写しであることに意味がある** —— 判定はTSの1関数にしか無く、そこを書き換えれば
+    UIの挙動は静かに変わる。ここが同じ規則を独立に持っていると、下の表との突き合わせで
+    「どのverbのEnter要否が変わったか」が名指しで出る。
+
+    規則は2つ: **対象を複数取りうる**(選択の `max !== 1` / `entities`)か、
+    **howの入力がある**(数値・選択肢・文字列)なら Enter が要る。どちらでもなければ即適用。
+    **列挙していない種別は即適用の側**(TS側の既定と同じ。点がそれ)。
+    """
+    for kind, maximum in args:
+        if kind == "selection" and maximum != "1":
+            return True
+        if kind == "entities" or kind in HOW_ARG_KINDS:
+            return True
+    return False
+
+
+#: **Enterが要るか**の表(True = Enterで確定 / False = 引数が揃ったクリックで即適用)。
+#:
+#: 2026-08-22の本人決定(engine `2026-08-22-duocad-ui-interaction-principles`)で、
+#: 「省けるクリックは徹底的に省く」の実装として入った。**即適用は2つだけ**である:
+#: `add_line`(点2つで揃う)と `make_editable_copy`(面1つで揃う)。
+#: verbを足したらここへ1行足すことになる —— そのとき**Enterが要るかを1回考える**のが狙いで、
+#: 表そのものが実装の入力になっているわけではない(判定は `args` からの導出が正)。
+ENTER_REQUIRED = {
+    "extrude_face": True,          # 面1つ + 距離(how)
+    "extrude": True,               # 領域は何個でも + 距離 + 結合/切り取り
+    "fillet": True,                # 辺は何本でも + 半径
+    "chamfer": True,               # 辺は何本でも + 距離
+    "pattern_rectangular": True,   # 図形は何個でも + 個数と間隔
+    "pattern_circular": True,      # 図形は何個でも + 中心 + 個数と角度
+    "save_document": True,         # パス(how)
+    "open_document": True,         # パス
+    "import_step_editable": True,  # パス
+    "export_step": True,           # パス
+    "export_stl": True,            # パス + 偏差
+    "make_editable_copy": False,   # **面1つだけ。howが無い → 即適用**
+    "add_line": False,             # **点2つだけ。howが無い → 即適用**
+    "add_circle": True,            # 中心 + 半径
+    "add_rectangle": True,         # 左下 + 幅 + 高さ
+    "add_arc": True,               # 中心 + 半径 + 角度2つ
+    "select_in_sketch": False,     # 引数が無い(完成させるクリックが無いので発火もしない)
+}
+
+
+def test_the_command_arguments_are_readable():
+    """先に**走査そのものが効いている**ことを見る(0件なら下の検査は常に緑になる)。"""
+    args = _ui_command_args()
+    assert len(args) == len(ENTER_REQUIRED), (
+        f"UIのコマンドの数が変わった(Enter要否の表を更新すること): {sorted(args)}"
+    )
+    assert args["extrude_face"] == [("selection", "1"), ("number", "")], (
+        f"引数の読み取りが壊れている: {args['extrude_face']}"
+    )
+    assert args["select_in_sketch"] == [], f"引数の読み取りが壊れている: {args['select_in_sketch']}"
+
+
+def test_only_two_commands_apply_without_enter():
+    """**Enter要否は `args` からの導出**であり、いま即適用になるのは2つだけである。
+
+    per-commandのフラグを置かない設計(`command.ts` の `needsEnter`)なので、引数の書き方を
+    変えると**別のverbのEnter要否が黙って変わる** —— 例えば `make_editable_copy` の
+    `max` を `null` にすると「面を選び終わったと言う手」が復活し、`add_circle` から
+    半径を外すと**中心をクリックした瞬間に円ができる**。ここはその変化を名指しで落とす。
+    """
+    derived = {name: _needs_enter(args) for name, args in _ui_command_args().items()}
+    assert derived == ENTER_REQUIRED, (
+        "Enter要否が表と食い違う(意図した変更なら表と README「操作の型」を更新すること): "
+        f"{ {name: value for name, value in derived.items() if ENTER_REQUIRED.get(name) != value} }"
+    )
+    immediate = sorted(name for name, value in derived.items() if not value)
+    assert immediate == ["add_line", "make_editable_copy", "select_in_sketch"], (
+        f"即適用になるコマンドの顔ぶれが変わった: {immediate}"
+    )

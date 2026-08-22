@@ -12,6 +12,10 @@
  * 起動 → 引数収集 → プレビュー → 確定(Enter) / 中断(Esc)
  * ```
  *
+ * **Enterが要るかどうかも `args` から導出する**(2026-08-22)。対象が1つに定まり、
+ * 数値も選択肢も無いコマンド(線分・編集用に複製)は、引数を完成させるクリックで
+ * そのまま適用される —— 規則は下の `needsEnter` に1つだけ置いてある。
+ *
  * ## 引数収集は、まず共有選択集合を見る
  *
  * **これがAI→人間の受け渡しが成立する仕組み**(実装計画書§8b)。AIが
@@ -371,6 +375,66 @@ export function argSatisfied(spec: ArgSpec, values: ArgValues): boolean {
 /** まだ揃っていない最初の引数(全部揃っていれば null)。 */
 export function firstMissingArg(command: CommandDef, values: ArgValues): ArgSpec | null {
   return command.args.find((spec) => !argSatisfied(spec, values)) ?? null
+}
+
+/**
+ * その引数は**対象(target)を複数取りうる**か —— `needsEnter` の条件(1)。
+ *
+ * 選択引数は上限が1でなければ複数取りうる(`max === null` は何本でも)。図形引数
+ * (`entities`)は上限そのものが無い。**いつ選び終わったかは機械には分からない**ので、
+ * 終わりを人が言う必要がある。
+ */
+function takesManyTargets(spec: ArgSpec): boolean {
+  if (spec.kind === 'selection') return spec.max !== 1
+  return spec.kind === 'entities'
+}
+
+/**
+ * その引数は**how(どうするか)の入力**か —— `needsEnter` の条件(2)。
+ *
+ * 数値・選択肢・文字列。打ち終わり / 選び終わりは、対象と同じく機械には分からない。
+ * **新しい入力の種別を足すときは、必ずここへ足すこと**(下の既定の説明を読むこと)。
+ */
+function isHowInput(spec: ArgSpec): boolean {
+  return spec.kind === 'number' || spec.kind === 'choice' || spec.kind === 'text'
+}
+
+/**
+ * **Enterを押して確定する必要があるコマンドか**(要らないものは「即適用」になる)。
+ *
+ * per-commandのフラグを置かず `args` から**導出する**。狙いは、後から足すverbが
+ * 何も書かなくても同じ規則に従うことで、規則の在り処を1箇所に保つことである
+ * (フラグにすると、書き忘れたverbだけが黙って別の挙動になる)。
+ *
+ * ## 判定基準(2026-08-22本人決定。engine `2026-08-22-duocad-ui-interaction-principles`)
+ *
+ * 次の**どちらかに当たれば Enter が要る**:
+ *
+ * 1. **対象を複数取りうる**(`takesManyTargets`) …「まだ足すのか、これで終わりか」を
+ *    機械が決められない。
+ * 2. **howの入力がある**(`isHowInput`) … 打ち終わり・選び終わりを機械が決められない。
+ *
+ * **どちらでもない = 対象が1つに定まり、howが無い**ものだけが即適用になる。最後の1手
+ * (点を置く / 1つ選ぶ)で引数が揃った時点で、それ以上人に聞くことが残っていないからである。
+ * 現行の17個のうちここへ落ちるのは **`add_line`(点2つ)と `make_editable_copy`(面1つ)**
+ * だけで、その表は `tests/test_ui_command_wiring.py` が機械で固定している。
+ *
+ * ## 列挙していない種別は「即適用の側」に落ちる(意図した既定)
+ *
+ * 点(`point`)がそうであるように、**対象を1つだけ指す新しい種別**(例: 平面を1つ選ぶ)を
+ * 足したときは、ここを直さなくても即適用になる。逆に、**新しい how を足すときは
+ * `isHowInput` へ足すこと** —— 忘れると、打っている途中の値で適用される。
+ *
+ * 引数が1つも無いコマンド(`select_in_sketch`)もここでは `false` になるが、即適用は
+ * **引数を完成させるクリックでしか発火しない**(`CommandHost.svelte`)ので、完成させる
+ * 引数が無いコマンドは何をしても発火しない。
+ *
+ * **Enterが要らない = Enterが効かない、ではない。** 起動より前から対象が揃っていた場合
+ * (AIが選んだ面のまま起動した等)は即適用の発火条件を満たさないので、Enter(または
+ * ボタンの押し直し)が唯一の適用手段として残る。
+ */
+export function needsEnter(command: CommandDef): boolean {
+  return command.args.some((spec) => takesManyTargets(spec) || isHowInput(spec))
 }
 
 /**
