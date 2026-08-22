@@ -20,7 +20,7 @@ import pytest
 
 # 立体の面にスケッチを貼るテストのために、テスト側から直接ソリッドを作る
 # (境界検査は `duocad/` 配下だけを対象にしており、テストは対象外。M1の
-# test_extrude_face.py が BRepPrimAPI_MakeBox を使うのと同じ)。
+# かつて test_extrude_face.py が BRepPrimAPI_MakeBox を使っていたのと同じ)。
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
 
 # 境界検査の実体はM0のテストが持つ。M2の新規ファイルにも同じ検査が効いていることを

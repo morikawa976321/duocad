@@ -80,7 +80,7 @@ def _box(session: Session):
 
 
 class FakeConnection:
-    """`Server` が使うのは `send` だけ(配信の出口)。test_preview.py と同じ形。"""
+    """`Server` が使うのは `send` だけ(配信の出口)。かつて test_preview.py が使っていたのと同じ形。"""
 
     def __init__(self) -> None:
         self.payloads: list = []

@@ -1,5 +1,14 @@
 # duocad M0 — テストが定義するAPI契約
 
+> **【2026-08-22】この文書には、もう存在しないテストへの参照がある。**
+> 同日、私物STEP（`mfd-models`、リポジトリ外）に依存する153件を削除した。
+> 消えたファイルは `test_import_split.py` / `test_extrude_face.py` /
+> `test_incremental_update.py` / `test_preview.py` / `models.py` の5つと、
+> `test_mcp.py`・`test_sketch_ui.py`・`test_visibility.py` の大半。
+> **本文の契約の記述は当時の設計意図の記録として残すが、「このテストが守っている」と
+> 書いてある箇所は、まず現物を `grep` で確かめること。** 現在の全体像は
+> `.\.venv\Scripts\python.exe -m pytest -q --collect-only` が正。
+
 このディレクトリのテストが **M0(コアの骨格)のAPI契約そのもの**。次タスク（M0コア実装）は
 ここにあるテストを全部通すことだけを目標にする。仕様の正は
 `C:\Users\tm976\mf\duocad\docs\IMPLEMENTATION_PLAN.md`（このREADMEと食い違ったら
@@ -7,16 +16,17 @@
 
 **M2（スケッチ・領域検出・押し出し）と M3（パラメータ・矩形反復）の契約は、
 この順で本文書の末尾に追記してある（2026-08-11）。**
-M1（`extrude_face` / `make_editable_copy` / `tessellate`）の契約は
-`tests/test_extrude_face.py` のモジュールdocstringが持つ（ここには無い）。
+~~M1（`extrude_face` / `make_editable_copy` / `tessellate`）の契約は
+`tests/test_extrude_face.py` のモジュールdocstringが持つ（ここには無い）。~~
+**2026-08-22に `test_extrude_face.py` を削除したので、M1の契約はどこにも書かれていない。**
 
-## 【無人drainへの注意】負荷で赤になるテストが1本ある（2026-08-14）
+## 【無人drainへの注意】負荷で赤になるテストは無くなった（2026-08-22）
 
-**`test_incremental_update.py::test_extruding_one_part_of_the_pc_case_stays_under_1000ms` は
-マシンが混むと閾値を超えて赤になる。** 単独5回で 942 / 961 / 973 / 1076 / 1164 ms（コードは無変更）。
-**この1本だけが赤いなら性能回帰ではなく負荷なので、コードを直さず・閾値も上げず、
-タスクを `failed/` へ送らないこと。** 報告に「この1本のみ負荷由来で赤」と書いて進める。
-扱いは本人判断で保留中。
+以前ここに「`test_extruding_one_part_of_the_pc_case_stays_under_1000ms` はマシンが混むと
+赤に振れるので `failed/` へ送るな」と書いてあった。**2026-08-22にこのテストを
+`test_incremental_update.py` ごと削除した**（私物STEP依存）。
+いま **赤は1本も無い**（`469 passed, 1 skipped`）。**赤を見たらまず環境（`.venv` を使っているか）を
+疑い、それでも赤なら本物の回帰として扱ってよい。**
 
 ## 読み方: 「実装済み(素で通る)」と「スタブ(NotImplementedErrorで赤)」の区別
 

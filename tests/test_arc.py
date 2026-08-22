@@ -41,8 +41,6 @@ from duocad.region import region_ref, regions
 from duocad.sketch import add_arc, add_line, base_plane, entity_params, get_sketch, sketch_create
 from duocad.verbs import extrude
 
-from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
-
 #: 半円（r=5・180°）+ 弦を3mm押し出したときの実測
 HALF_DISC_PRISM_KINDS = {"cylinder_partial": 1, "plane": 3}
 
@@ -201,20 +199,6 @@ def test_the_partial_cylinder_spans_the_arc_angle():
     assert spans[0]["length"] == pytest.approx(3.141592653589793 * ARC_RADIUS, rel=1e-6)
     # 面の側も部分円筒が1枚だけ（全周円筒に化けていない）
     assert kinds_of(doc, operation.args["body_id"]) == HALF_DISC_PRISM_KINDS
-
-
-def test_the_aroma_diffuser_needs_partial_cylinders():
-    """代用が効かない実物の記録（**実装に依存しないので最初から緑**）。
-
-    アロマ拡散器は部分円筒6面を持つ。「円を線で分けて片側だけ押し出す」では
-    この面は作れない — これが円弧を前倒した理由そのもの。
-    """
-    diffuser = MODELS / "aroma_oil_diffuser.step"
-    if not diffuser.exists():
-        pytest.skip(f"参照STEPが無い: {diffuser}")
-    described = query.describe_shape(kernel.read_step(str(diffuser)))
-    assert described["face_count"] == 352
-    assert described["faces_by_type"]["cylinder_partial"] == 6
 
 
 # --------------------------------------------------------------------------------------

@@ -31,8 +31,6 @@ from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, add_rectangle, face_plane, sketch_create
 from duocad.verbs import extrude
 
-from models import SHELF as STEP_PATH  # テスト共通のSTEPの置き場(tests/models.py)
-
 BOX_EDGE = 20.0
 BOX_VOLUME = BOX_EDGE**3
 
@@ -148,27 +146,3 @@ def test_broken_numbers_never_enter_the_sketch(add):
     json.loads(document.log.to_json())  # 裸のNaNが混ざっていたらここで落ちる
 
 
-def test_join_makes_the_first_solid_next_to_a_reference_body():
-    """参照STEPを読んだ直後(アクティブが read-only)でも、`join` が最初の板を作れる。
-
-    `import_step` が作るボディは `kind="reference"` で、`add_body` の契約により
-    **常にアクティブになる**。ここで「アクティブが編集不可だから ValueError」にすると、
-    受入対象の経路(棚取付具を参照として読み、その隣に板を作る)が塞がる。
-    明示的に参照ボディを `body_id` で指定した場合は今までどおり ValueError
-    (`test_extrude.py::test_extrude_rejects_a_reference_body`)。
-    """
-    document = Document()
-    reference_ids = io_step.import_step(document, STEP_PATH)
-    reference_id = reference_ids[0]
-    sketch_id = sketch_create(document, "XY")
-    add_rectangle(document, sketch_id, (0.0, 0.0), 40.0, 30.0)
-
-    operation = extrude(
-        document, [region_ref(sketch_id, regions(document, sketch_id)[0].index)], 10.0
-    )
-
-    created = next(body for body in document.bodies if body.id == operation.args["body_id"])
-    assert created.kind == "solid"
-    assert created.id != reference_id
-    assert len(document.bodies) == 18  # 17個の参照ボディ + 新しく作った板1個
-    assert math.isclose(query.volume(created.shape), 12000.0, rel_tol=1e-9)

@@ -46,8 +46,6 @@ from duocad.sketch import add_circle, base_plane, sketch_create
 from duocad.verbs import extrude, fillet
 from duocad.region import region_ref
 
-from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
-
 #: 20mm立方体・全辺フィレットの実測（上のdocstring参照）
 CUBE_MM = 20.0
 RADIUS_OK = 3.0
@@ -56,10 +54,6 @@ RADIUS_ODD_BUT_OK = 10.5
 RADIUS_FAILS_HIGH = 30.0
 
 FILLET_R3_KINDS = {"plane": 6, "cylinder_partial": 12, "other": 8}
-#: r=10.5 で **OCCTが作る** 面構成。`IsDone()` は真だが `BRepCheck` が偽なので
-#: duocadはこの形状を受け取らない（`test_radius_10_5_is_reported_as_done_but_is_actually_broken`）。
-#: 記録として残す（「歪」の中身がこれ）。
-FILLET_R105_KINDS = {"plane": 6, "cylinder_partial": 12, "bspline": 7, "other": 1}
 #: 半径を 1.0 + 0.25*i でバラバラにしたときの実測
 VARIED_RADII_KINDS = {"plane": 6, "cylinder_partial": 12, "bspline": 8}
 HOLE_FILLET_KINDS = {"plane": 6, "cylinder_full": 1, "torus": 2}
@@ -359,26 +353,6 @@ def test_fillet_shifts_face_indices():
         if new and int(old) != new[0]
     ]
     assert moved, "1面も添字が動かないなら、この実測（および§7の前提）と食い違う"
-
-
-# --------------------------------------------------------------------------------------
-# 実物の目標（このタスクでは形状を作らない。到達点の記録）
-# --------------------------------------------------------------------------------------
-def test_the_real_stacking_plate_needs_fillet_and_chamfer():
-    """本命の受入対象**積層プレート**が何を要求しているかを実測で固定する。
-
-    ここは実装に依存しないので**最初から緑**。受入テストの再定義は本人の判断事項なので
-    行わず、「何が要るか」だけを実行可能な形で残す（splineはフィレットの副産物）。
-    """
-    plate = MODELS / "stackable_plate" / "plate_1by1_24.step"
-    if not plate.exists():
-        pytest.skip(f"参照STEPが無い: {plate}")
-    described = query.describe_shape(kernel.read_step(str(plate)))
-    kinds = described["faces_by_type"]
-    assert described["face_count"] == 74
-    assert kinds["cone"] > 0, "面取り無しでは作れない（円錐がある）"
-    assert kinds["torus"] > 0, "フィレット無しでは作れない（トーラスがある）"
-    assert kinds["cylinder_partial"] > 0, "円弧の押し出し無しでは作れない（部分円筒がある）"
 
 
 # --------------------------------------------------------------------------------------

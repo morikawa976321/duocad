@@ -17,12 +17,17 @@ from __future__ import annotations
 
 import socket
 
+from pathlib import Path
+
 import pytest
 
 from duocad.agent import AgentLoop, Limits, OpenAICompatProvider
 from duocad.mcp_server import DocumentTools
 from duocad.server import Session
-from models import PC_CASE_FEET
+#: 実物のSTEP(リポジトリ外)。**このcanaryだけが私物モデルに触れる** —— 他のテストは
+#: 2026-08-22に私物STEP依存を全て切ったので、ここがリポジトリ外への唯一の参照。
+#: llama-serverが立っていて、かつこのファイルがあるときだけ走る(既定は二重skip)。
+PC_CASE_FEET = Path(r"C:\Users\tm976\mf\3d-models\mATX_PC_case_20251122\PC_case_feet.step")
 
 HOST = "127.0.0.1"
 PORT = 8080

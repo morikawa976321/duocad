@@ -41,13 +41,8 @@ from duocad.region import region_ref
 from duocad.sketch import add_circle, add_rectangle, base_plane, sketch_create
 from duocad.verbs import chamfer, extrude
 
-from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
-from models import PC_CASE_FEET as FEET
-
 #: PCケースの脚の実測
 FEET_KINDS = {"plane": 3, "cylinder_full": 1, "cone": 1}
-FEET_FACE_COUNT = 5
-
 #: 円筒の円い縁を1つ面取りしたときの実測
 CYLINDER_CHAMFER_KINDS = {"plane": 2, "cylinder_full": 1, "cone": 1}
 
@@ -117,22 +112,6 @@ def test_chamfering_a_circular_edge_makes_a_cone():
     chamfer(doc, circular[:1], 1.0, body_id=body_id)
 
     assert kinds_of(doc, body_id) == CYLINDER_CHAMFER_KINDS
-
-
-# --------------------------------------------------------------------------------------
-# 項番9: 実物（PCケースの脚）が要求する構成
-# --------------------------------------------------------------------------------------
-def test_the_real_foot_needs_a_cone():
-    """`PC_case_feet.step` は 平面3 + 全周円筒1 + 円錐1 = 5面（実測）。
-
-    **実装に依存しないので最初から緑**。この構成の円錐は現行の7verbでは作れず、
-    面取りが入って初めて到達可能になる、という到達点の記録。
-    """
-    if not FEET.exists():
-        pytest.skip(f"参照STEPが無い: {FEET}")
-    described = query.describe_shape(kernel.read_step(str(FEET)))
-    assert described["face_count"] == FEET_FACE_COUNT
-    assert {k: v for k, v in described["faces_by_type"].items() if v} == FEET_KINDS
 
 
 def test_how_close_the_verbs_get_to_the_real_foot():

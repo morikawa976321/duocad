@@ -74,7 +74,7 @@ AIの提案を承認する経路(`commit_selection`)がUIから踏めないと�
 を付け、それ以外には同じ `state` だけを送る。
 
 `state` は部品ごとの配列になっている。契約は
-`tests/test_incremental_update.py` と tests/README.md の「M3.5」節が正:
+tests/README.md の「M3.5」節が正（`tests/test_incremental_update.py` は2026-08-22に削除）:
 
     state() -> {
       "units", "active_body_id",

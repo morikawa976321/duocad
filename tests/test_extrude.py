@@ -19,14 +19,16 @@ import math
 import pytest
 
 # 参照ボディ(読み取り専用)を作るためだけにOCPを使う(境界検査は `duocad/` 配下だけが対象)
+from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
-from duocad import query
+from duocad import kernel, query
 from duocad.document import Body, Document
 from duocad.oplog import OpLog
 from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, add_line, add_rectangle, sketch_create
 from duocad.verbs import extrude
+from duocad.verbs.extrude_face import extrude_face
 
 #: 棚取付具の板を模した寸法(受入対象の部品と同じ「板＋穴」の構成を最小で作る)
 PLATE_WIDTH = 40.0
@@ -43,7 +45,7 @@ HOLE_CENTER = (20.0, 15.0)
 HOLE_DEPTH = 20.0
 HOLE_VOLUME = math.pi * HOLE_RADIUS**2 * PLATE_THICKNESS
 
-#: 体積比較の相対許容差(M1の test_extrude_face.py と同じ理由・同じ桁)
+#: 体積比較の相対許容差(M1の面押し出しテストと同じ理由・同じ桁)
 VOLUME_REL_TOL = 1.0e-9
 #: 実測値(小数3桁)と突き合わせる面積の許容差(tests/test_region.py と同じ)
 AREA_REL_TOL = 1.0e-6
@@ -255,7 +257,7 @@ def test_cut_without_a_target_body_fails():
 def test_extrude_rejects_a_reference_body(mode):
     """読み込んだ参照ボディ(kind="reference")は押し出しの対象にならない(M0の読み取り専用契約)。
 
-    M1が `extrude_face` で同じ契約を固定している(`test_extrude_face_rejects_reference_body`)。
+    M1も `extrude_face` で同じ契約を固定していた(2026-08-22に該当テストは削除)。
     M2でも同じ穴を空けない。
     """
     document = Document()
@@ -361,3 +363,39 @@ def test_replay_reproduces_the_plate_with_the_hole():
     assert math.isclose(query.volume(body.shape), expected_volume, rel_tol=VOLUME_REL_TOL)
     assert query.describe_shape(body.shape) == expected_faces
     assert len(replayed.sketches) == 2
+
+
+# ---------------------------------------------------------------------------------
+# 面の統合(`extrude_face`)。2026-08-22に test_extrude_face.py を私物STEP依存として
+# 削除したとき、**実STEPを使わない唯一のテスト**だったこの1本だけをここへ移した。
+# ---------------------------------------------------------------------------------
+
+def test_extrude_face_adopts_face_merging_when_it_helps():
+    """統合が効く場合は採用され、面が増えっぱなしにならない(20mm立方体の上面を+10)。
+
+    実測: 統合なし10面 / 統合後6面。**統合を採用する経路**(`BRepTools_History` を通した
+    由来の射影)はこの形でしか通らない — 受入対象の部品では統合の利得が無く採用されないため、
+    そちらのテストだけでは履歴経由の射影が一度も実行されない。
+    """
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+    document = Document()
+    document.add_body(
+        Body(id="box", name="box", kind="solid", shape=BRepPrimAPI_MakeBox(20.0, 20.0, 20.0).Shape())
+    )
+    body = document.active_body()
+    assert body is not None
+    top = next(
+        face
+        for face in kernel.tessellate(body.shape)["faces"]
+        if face["normal"][2] > 0.999 and face["centroid"][2] > 19.9
+    )
+
+    operation = extrude_face(document, top["index"], 10.0)
+
+    assert math.isclose(query.volume(body.shape), 12000.0, rel_tol=1e-9)
+    assert kernel.face_count(body.shape) == 6, "同一平面の面が統合されていない"
+    assert operation.provenance["unified"] is True
+    assert isinstance(operation.provenance["after_face_index"], int)
+    assert BRepCheck_Analyzer(body.shape).IsValid()
+    # 履歴経由でも旧添字が新添字へ張れている(全部が「消えた」になっていない)

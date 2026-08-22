@@ -521,7 +521,8 @@ three.jsのビューポート、面のピッキング、数値入力、`extrude_
 > **【2026-08-12 撤去】計測の器（`measure_log.jsonl` / `MEASURE.md`・ブラウザ側の時刻収集・
 > `measure_record` コマンド・`server_extrude_ms`）は、本人の指示で完全に削除した**（duocad `dc7d813`）。
 > 「計測はすでに無意味」。**以後、速度・ピック失敗率の判定はすべて体感で行う。**
-> kernel時間の回帰だけは `tests/test_incremental_update.py` の性能テストが機械で守っている。
+> ~~kernel時間の回帰だけは `tests/test_incremental_update.py` の性能テストが機械で守っている。~~
+> **2026-08-22に当該テストを削除した（私物STEP依存）。kernel時間の回帰は今どこも見ていない。**
 > なお `client_op`（選択イベントの相関ID）と MCP の `measure(selection)`（面積・長さを測る問い合わせ）は
 > **名前が似ているだけの別物なので残してある**。
 >

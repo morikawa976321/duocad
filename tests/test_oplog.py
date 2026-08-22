@@ -12,12 +12,8 @@ import json
 import pytest
 
 from duocad.document import Document
-from duocad.io_step import import_step
 from duocad.oplog import Operation, OpLog
 from duocad.query import volume
-
-from models import SHELF as STEP_PATH  # テスト共通のSTEPの置き場(tests/models.py)
-
 
 def test_append_seq_is_monotonically_increasing():
     """append()を複数回呼ぶとseqが1から単調増加する。"""
@@ -26,36 +22,6 @@ def test_append_seq_is_monotonically_increasing():
     op2 = log.append("noop", {})
     op3 = log.append("noop", {})
     assert [op1.seq, op2.seq, op3.seq] == [1, 2, 3]
-
-
-def test_undo_reverts_document_state():
-    """undoは直前の操作をdocumentから取り消す(importしたボディが消える)。"""
-    doc = Document()
-    import_step(doc, STEP_PATH)
-    assert len(doc.bodies) == 17  # M3.5: shelf は17ソリッドに分解される
-
-    doc.log.undo(doc)
-    assert doc.bodies == []
-
-
-def test_redo_does_not_record_the_operation_twice():
-    """redoは既存のエントリを有効化するだけで、新しい操作を積み直さない。
-
-    redo/replayの実装が公開API(io_step.import_step)を呼び直すと、その中でappend()が走り
-    同じ操作が二重にログへ乗る。ログは唯一の正(実装計画書§3.1)なので、二重記録は
-    そのまま保存・再生の破綻になる。seqが振り直されていないことまで見る。
-    """
-    doc = Document()
-    import_step(doc, STEP_PATH)
-    seqs_before = [op.seq for op in doc.log.entries]
-
-    doc.log.undo(doc)
-    assert doc.log.entries == []
-
-    doc.log.redo(doc)
-    assert len(doc.log.entries) == 1
-    assert [op.seq for op in doc.log.entries] == seqs_before
-    assert len(doc.bodies) == 17  # M3.5: shelf は17ソリッドに分解される
 
 
 def test_to_json_emits_actual_json_with_the_logged_fields():
@@ -128,35 +94,3 @@ def test_from_json_accepts_legacy_selection_key_and_ignores_it():
     assert not hasattr(operation, "selection")
 
 
-def test_replay_reproduces_same_document_state():
-    """from_jsonしたログをreplayすると、元と同じ文書状態になる(ボディ数と各ボディの体積で比較)。"""
-    original = Document()
-    import_step(original, STEP_PATH)
-
-    dumped = original.log.to_json()
-    restored_log = OpLog.from_json(dumped)
-
-    replayed = Document()
-    restored_log.replay(replayed)
-
-    assert len(replayed.bodies) == len(original.bodies)
-    original_volumes = sorted(volume(b.shape) for b in original.bodies)
-    replayed_volumes = sorted(volume(b.shape) for b in replayed.bodies)
-    assert original_volumes == replayed_volumes
-
-
-def test_replay_does_not_append_to_the_log_it_replays():
-    """replayは自分のエントリを読んで文書を再構築するだけで、ログ自身を書き換えない。
-
-    「開くときはログから再生する」(実装計画書§3.1)運用では、再生したログがそのまま
-    その文書のログになる。再生のたびにエントリが増えるなら、開くたびに履歴が倍になる。
-    """
-    original = Document()
-    import_step(original, STEP_PATH)
-
-    restored_log = OpLog.from_json(original.log.to_json())
-    entries_before = [dataclasses.asdict(e) for e in restored_log.entries]
-
-    restored_log.replay(Document())
-
-    assert [dataclasses.asdict(e) for e in restored_log.entries] == entries_before

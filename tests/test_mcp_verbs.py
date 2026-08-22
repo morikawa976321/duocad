@@ -47,10 +47,6 @@ INVALID_PARAMS = -32602
 BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-from models import MODELS  # テスト共通のSTEPの置き場(tests/models.py)
-from models import SHELF  # noqa: F401
-
-
 # --------------------------------------------------------------------------------------
 # 公開する道具の全体像(**この表が到達表のAI列そのもの**)
 # --------------------------------------------------------------------------------------
@@ -858,78 +854,6 @@ def test_set_parameter_reports_a_missing_name_as_not_found(empty_session: Sessio
     assert error["code"] == "not_found"
 
 
-def test_make_editable_copy_turns_a_reference_into_a_solid(tmp_path: Path):
-    """読み込んだ参照ボディを編集できるようにする経路がAIから届く。
-
-    **`import_step`(参照だけ)で読んだときの続き**。通常の読み込み
-    (`import_step_editable`)は編集用ボディまで作るのでこの1手は要らないが、参照だけ読む
-    経路を残した以上、その続きも届いていること。
-    """
-    if not SHELF.exists():
-        pytest.skip(f"参照STEPが無い: {SHELF}")
-    session = Session(None, 0.2)
-    server = McpServer(DocumentTools(session))
-
-    imported = call(server, "import_step", {"path": str(SHELF)})
-    reference_id = imported["body_ids"][0]
-    payload = call(server, "make_editable_copy", {"source_body_id": reference_id})
-
-    _assert_verb_envelope(payload, "make_editable_copy")
-    new_id = payload["body_id"]
-    assert session.document.is_editable(new_id) is True
-    assert payload["changed_bodies"] == [new_id]
-
-
-def test_import_step_gives_editable_bodies_without_any_extra_call(tmp_path: Path):
-    """**AIも「読んだら使える」**。`import_step_editable` は編集可能なボディまで作る。
-
-    読み込みのツールが参照ボディだけを足す設計だと、AIは `make_editable_copy` をソリッドの
-    数だけ打つ必要がある(PCケースなら27回)。**MCP1呼び出し・ログ1行**で編集できる状態まで
-    行くのが今の契約。**ツール名はログに載るverb名と同じ綴り**であり、その一致は
-    `test_tool_names_match_the_verb_names_in_the_operation_log` が両方向で固定する。
-    """
-    if not SHELF.exists():
-        pytest.skip(f"参照STEPが無い: {SHELF}")
-    session = Session(None, 0.2)
-    server = McpServer(DocumentTools(session))
-
-    payload = call(server, "import_step_editable", {"path": str(SHELF)})
-
-    _assert_verb_envelope(payload, "import_step_editable")
-    assert len(payload["body_ids"]) == 17, "17ソリッドぶんの編集可能なボディを返していない"
-    assert all(
-        session.document.is_editable(body_id) is True for body_id in payload["body_ids"]
-    ), "読んだ直後に編集できないボディが混ざっている"
-    assert len(payload["reference_ids"]) == 17, "原本(参照ボディ)のIDも返すこと"
-    # hintは「そのまま編集できる」と言うこと。`make_editable_copy` に触れてよいのは
-    # **要らないと打ち消す**文脈だけ(古い手順を知っているAIを止めるため)で、
-    # 「続けるには make_editable_copy を呼ぶ」と促したら嘘になる。
-    assert "そのまま編集できる" in payload["hint"], payload["hint"]
-    assert "続けるには" not in payload["hint"], payload["hint"]
-    assert len(session.document.log.entries) == 1, "MCP1呼び出しは操作ログ1行"
-
-
-def test_import_step_can_still_add_reference_bodies_only(tmp_path: Path):
-    """`import_step` は参照ボディだけを足し、続きの1手を `hint` で知らせる。
-
-    **通常の経路は `import_step_editable`**(本人の指示は「読んだら使える」)だが、
-    参照だけ欲しい経路は残す。
-    """
-    if not SHELF.exists():
-        pytest.skip(f"参照STEPが無い: {SHELF}")
-    session = Session(None, 0.2)
-    server = McpServer(DocumentTools(session))
-
-    payload = call(server, "import_step", {"path": str(SHELF)})
-
-    _assert_verb_envelope(payload, "import_step")
-    assert payload["body_ids"], "読み込んだBodyIdを返していない"
-    assert all(
-        session.document.is_editable(body_id) is False for body_id in payload["body_ids"]
-    )
-    assert "make_editable_copy" in payload["hint"]
-
-
 def test_import_step_reports_a_missing_file_as_not_found(empty_session: Session):
     """無いファイルは `FileNotFoundError` で来る。**`internal` に落とさない**。
 
@@ -957,74 +881,6 @@ def test_export_writes_a_file_and_reports_where(server: McpServer, tmp_path: Pat
     payload = call(server, "export_stl", {"path": str(stl_path), "deviation": 0.1})
     assert Path(payload["path"]) == stl_path
     assert payload["bytes"] == stl_path.stat().st_size > 0
-
-
-def test_exporting_does_not_corrupt_the_stdio_channel(tmp_path: Path):
-    """**OCCTのSTEP書き出しはC++側から標準出力へ統計を吐く**(実測)。
-
-        ****        Statistics on Transfer (Write)                 ****
-        Step File Name : ...(662 ents)  Write  Done
-
-    stdioトランスポートは**stdoutをJSON-RPC専用**にしているので、これが1行でも混ざると
-    MCPクライアントとの接続が壊れる(`duocad/mcp_server.py` のモジュールdocstring)。
-    しかも**Python層の `redirect_stdout` では止まらない**(C++が実fdへ直接書く)ので、
-    ツール実行の間だけ**fdごと** stderr へ振り替える必要がある。
-
-    このテストは**実プロセスを起こして**確かめる —— 同一プロセス内で `DocumentTools` を
-    叩くテストでは、この事故は原理的に検出できない(汚れるのは親のstdoutであって
-    JSON-RPCの経路ではないため)。
-    """
-    import os
-    import subprocess
-    import sys
-
-    if not SHELF.exists():
-        pytest.skip(f"参照STEPが無い: {SHELF}")
-    out_step = tmp_path / "roundtrip.step"
-    messages = [
-        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
-        {"jsonrpc": "2.0", "method": "notifications/initialized"},
-        {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {"name": "import_step", "arguments": {"path": str(SHELF)}},
-        },
-        {
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {"name": "export_step", "arguments": {"path": str(out_step)}},
-        },
-        {"jsonrpc": "2.0", "id": 4, "method": "ping"},
-    ]
-    completed = subprocess.run(
-        [
-            sys.executable, "-m", "duocad.mcp_server",
-            "--port", "18775", "--http-port", "18776",
-            "--web-dist", str(REPO_ROOT / "web" / "does-not-exist"),
-        ],
-        input="\n".join(json.dumps(message) for message in messages) + "\n",
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-        cwd=str(REPO_ROOT),
-        timeout=300,
-    )
-    assert completed.returncode == 0, completed.stderr
-
-    ids = []
-    for line in completed.stdout.splitlines():
-        if not line.strip():
-            continue
-        try:
-            ids.append(json.loads(line).get("id"))
-        except ValueError:
-            pytest.fail(f"stdoutにJSON-RPC以外の行が出ている(接続が壊れる): {line!r}")
-    assert ids == [1, 2, 3, 4], "書き出しの後もJSON-RPCが続いていない"
-    assert out_step.exists() and out_step.stat().st_size > 0
 
 
 def test_a_browser_export_does_not_corrupt_the_stdio_channel(tmp_path: Path):
@@ -1183,22 +1039,6 @@ def test_redo_through_mcp_replays_it(box_session: Session):
 
 def test_undo_with_nothing_to_undo_is_a_structured_failure(server: McpServer):
     """取り消せるものが無いことは**失敗として構造で返る**(黙って成功にしない)。"""
-    error = call_error(server, "undo")
-    assert error["code"] == "invalid_argument"
-
-
-def test_undo_refuses_to_dismantle_the_document_floor(tmp_path: Path):
-    """土台(STEPの読み込み・編集用ボディ)はMCP経由でも取り消せない。
-
-    `Session.can_undo` が唯一の出どころであり、`describe_document` の答えと
-    実際に通るかが一致する(食い違うと、AIは答えを信じて誤った判断をする)。
-    """
-    if not SHELF.exists():
-        pytest.skip(f"参照STEPが無い: {SHELF}")
-    session = Session(SHELF, 0.2)
-    server = McpServer(DocumentTools(session))
-
-    assert call(server, "describe_document")["can_undo"] is False
     error = call_error(server, "undo")
     assert error["code"] == "invalid_argument"
 

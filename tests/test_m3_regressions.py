@@ -33,64 +33,6 @@ from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, sketch_create
 from duocad.verbs import extrude, make_editable_copy, pattern_rectangular
 
-from models import SHELF as STEP_PATH  # テスト共通のSTEPの置き場(tests/models.py)
-
-
-def test_set_parameter_keeps_the_active_body():
-    """`set_parameter` の作り直しで**アクティブボディの選択が移らない**。
-
-    アクティブの選択はログに載らないので、素直に作り直すと「最後に `add_body` された
-    ボディ」に勝手に決まる。`export_step` / `export_stl` は active を書き出し、
-    `extrude` / `extrude_face` は `body_id` 省略時に active を対象にするので、
-    ここが移ると**書き出し先と編集先が黙って変わる**。
-    """
-    document = Document()
-    reference_ids = io_step.import_step(document, STEP_PATH)
-    reference = reference_ids[0]
-    first = make_editable_copy(document, reference, name="A")
-    make_editable_copy(document, reference, name="B")
-    document.set_active_body(first)
-    sketch_id = sketch_create(document, "XY")
-    circle = add_circle(document, sketch_id, (200.0, 200.0), 5.0)
-
-    set_parameter(document, parameter_of(document, sketch_id, circle, "radius"), 7.0)
-
-    assert document.active_body().id == first
-
-
-def test_a_failed_rebuild_leaves_the_document_untouched(tmp_path):
-    """作り直しが**値と無関係な理由**で失敗しても、文書が空にならない。
-
-    再生はログ全部をやり直す＝`import_step` をディスクから読み直すので、参照STEPを
-    移動・削除しただけで失敗しうる。ここで文書を空のまま残すと、履歴だけが残った
-    不整合な状態になる（`set_parameter` の契約は「失敗したら変更前のまま」）。
-    """
-    step_copy = tmp_path / "reference.step"
-    shutil.copyfile(STEP_PATH, step_copy)
-    document = Document()
-    io_step.import_step(document, str(step_copy))
-    sketch_id = sketch_create(document, "XY")
-    circle = add_circle(document, sketch_id, (0.0, 0.0), 20.0)
-    extrude(document, [region_ref(sketch_id, regions(document, sketch_id)[0].index)], 10.0)
-    before = (
-        len(document.bodies),
-        len(document.sketches),
-        dict(document.parameters),
-        query.volume(document.active_body().shape),
-    )
-    os.remove(step_copy)
-
-    with pytest.raises(FileNotFoundError):
-        set_parameter(document, parameter_of(document, sketch_id, circle, "radius"), 10.0)
-
-    assert (
-        len(document.bodies),
-        len(document.sketches),
-        dict(document.parameters),
-        query.volume(document.active_body().shape),
-    ) == before
-
-
 @pytest.mark.parametrize(
     ("key", "value"),
     [
