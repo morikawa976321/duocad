@@ -484,3 +484,50 @@ def test_only_two_commands_apply_without_enter():
     assert immediate == ["add_line", "make_editable_copy", "select_in_sketch"], (
         f"即適用になるコマンドの顔ぶれが変わった: {immediate}"
     )
+
+
+def test_the_immediate_apply_fires_only_on_the_users_own_click():
+    """即適用の引き金は**この画面のクリック**であって、選択集合の中身ではない。
+
+    2026-08-22のQA指摘。選択集合は**AIも `modify_selection` で書き換えられる**ので、
+    「対象が1つ揃った」だけで発火させると、**人が何も指していないのに文書が変わる**
+    (実測: 直す前のビルドで `smoke-mcp.mjs` が部品 27 -> 28 を踏んだ)。配線は3段あり、
+    1つでも外れると穴が開くので、ブラウザを立てなくても気づけるようにここで固定する:
+
+    1. `App.svelte` が**自分が出した**選択変更だけを数える(`myClientOps` で照合)
+    2. その数を `CommandHost` へ渡している
+    3. `CommandHost` の即適用は**その数**を見ている(選択の印 `selectionPrint` ではない)
+
+    実挙動は `smoke-mcp.mjs`(AIが選択を書き換えても発火しない/人のクリックでは発火する)。
+    """
+    app = (COMMANDS_DIR.parent / "App.svelte").read_text(encoding="utf-8")
+    host = (COMMANDS_DIR / "CommandHost.svelte").read_text(encoding="utf-8")
+
+    # 1. 数える場所が「自分が出した操作か」の判定の中にある
+    increment = re.search(r"^\s*selfSelections \+= 1", app, re.M)
+    assert increment is not None, "App.svelte が選択変更を数えていない(即適用の引き金が無い)"
+    guard = app[:increment.start()].splitlines()[-3:]
+    assert any("myClientOps" in line for line in guard), (
+        "選択変更の数え上げが `myClientOps` の照合の中にない —— "
+        f"AIが出した選択変更まで数えると即適用が誤発火する: {guard}"
+    )
+
+    # 2. コマンド層へ渡している
+    assert re.search(r"^\s*\{selfSelections\}\s*$", app, re.M), (
+        "App.svelte が CommandHost へ selfSelections を渡していない"
+    )
+
+    # 3. 即適用の $effect が見ているのはその数である
+    anchor = host.find("armedSelections === null")
+    assert anchor > 0, "CommandHost に即適用の待ち受け(armedSelections)が無い"
+    start = host.rfind("$effect(() => {", 0, anchor)
+    end = host.find("\n  })", anchor)
+    assert start > 0 and end > start, "即適用の $effect を切り出せない(検査の側が古い)"
+    effect = host[start:end]
+    assert "selfSelections" in effect, (
+        "即適用の $effect が selfSelections を見ていない(何を引き金にしているか要確認)"
+    )
+    assert "selectionPrint" not in effect, (
+        "即適用の $effect が選択の印を引き金にしている —— "
+        "AIの modify_selection でも走るので、人のクリックの数で判定すること"
+    )

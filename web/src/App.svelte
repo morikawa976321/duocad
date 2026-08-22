@@ -161,6 +161,20 @@
    * 出した番号を全部覚えておいて、返ってきた `applied.client_op` で照合する。
    */
   const myClientOps = new Set<number>()
+  /**
+   * **この画面のクリックで選択が変わった回数**(コマンド層の「即適用」の引き金)。
+   *
+   * Enterの要らないコマンド(`command.ts` の `needsEnter`)は、引数が揃った瞬間に適用する。
+   * その引き金は**人がこの画面で指したこと**でなければならない —— 選択集合はAIも
+   * `modify_selection` で書き換えられるので、「選択が1つになった」だけを見て発火させると、
+   * **人が何も触っていないのに文書が変わる**(2026-08-22のQA指摘)。
+   *
+   * 見分けは `myOperations` と同じ材料でできる: 返ってきた `client_op` が
+   * `myClientOps` にあれば、それはこの画面が出した選択変更である。**数を渡すだけ**にして
+   * あるのは、コマンド層に「誰が変えたか」の判断を持ち込まないため(向こうは
+   * 「起動してから増えたか」しか見ない)。
+   */
+  let selfSelections = $state(0)
 
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
   /** 今の設定(`session.aiGetStatus()` の返事・`ai_configure`/実行の開始終了で更新)。 */
@@ -296,6 +310,11 @@
     // **選択の変更イベントはverbの適用ではない**(`change: "selection"` で見分ける。
     // session.ts の `Applied` 参照)。verbの応答としてだけ `lastApplied` を動かす。
     if (applied && applied.change === 'selection') {
+      // **この画面が出した選択変更だけ**を数える(上の `selfSelections` のdocstring)。
+      // AIが書き換えた選択はここを素通りするので、即適用の引き金にならない。
+      if (applied.client_op !== null && myClientOps.has(applied.client_op)) {
+        selfSelections += 1
+      }
       if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
       return
     }
@@ -831,6 +850,7 @@
         bind:this={host}
         {selection}
         busy={pendingOp !== null}
+        {selfSelections}
         commands={sketchId === null ? SOLID_COMMANDS : SKETCH_MODE_COMMANDS}
         defaultCommandId={sketchId === null ? undefined : DEFAULT_SKETCH_COMMAND_ID}
         hover={hoverPoint}

@@ -14,8 +14,9 @@
    *
    * - **点で揃うもの**(線分)… `addPoint` の中で同期に判定する。
    * - **選択で揃うもの**(編集用に複製)… 面のクリックはWS往復の後に届くので、
-   *   **起動した時点の選択を控えておき、それと違う選択が届いたときだけ**発火させる
-   *   (`armedPrint`)。起動前から面が選ばれていても発火しない。
+   *   **この画面が出した選択変更が起動後に届いた回数**(`selfSelections`)を見る。
+   *   起動時の値を控え、増えたときだけ発火させる(`armedSelections`)。
+   *   **起動前から面が選ばれていても、AIが選択を書き換えても発火しない。**
    *
    * この形にすると「**起動しただけで文書が変わる**」が構造的に起きない ——
    * verb→target→how の順序原則(engine `2026-08-22-duocad-ui-interaction-principles`)を
@@ -74,6 +75,7 @@
   let {
     selection,
     busy,
+    selfSelections = 0,
     commands = COMMANDS,
     defaultCommandId = DEFAULT_COMMAND_ID,
     hover = null,
@@ -88,6 +90,19 @@
     selection: SelectionState | null
     /** 直前の操作の応答待ち。待っている間は確定を受け付けない。 */
     busy: boolean
+    /**
+     * **この画面のクリックで選択が変わった回数**(`App.svelte` が数える)。
+     *
+     * Enterの要らないコマンドの即適用は、**これが起動後に増えたとき**にだけ発火する。
+     * 選択の中身を見て発火させると、AIの `modify_selection` でも走ってしまう ——
+     * 「引数を完成させる**クリック**でのみ発火」を成立させているのがこの1つの数である。
+     * **数以外の意味を持たせないこと**(誰が変えたかの判断は `App.svelte` の側にある)。
+     *
+     * **数えているのは共有選択集合の変更だけ**である。外から非同期に届く別の引数で揃う
+     * コマンドを後から足すときは、その引数にも同じ形の数を用意すること ——
+     * **中身が変わったこと**を引き金にすると、AIが書き換えたときにも発火する。
+     */
+    selfSelections?: number
     /**
      * このモードで使えるコマンド。既定はソリッドを触るぶん。
      * スケッチモードでは `commands/sketch.ts` の一覧が渡る —— **状態機械は同じ1つ**で、
@@ -239,20 +254,11 @@
    * (サーバがコアの選択から取る)ので、辺を1本足しても引数は同じままで、
    * 印に入れないと「選び直したのに古い幽霊が残る」。
    */
-  const selectionPrint = $derived(printSelectionFor(command))
-
-  /**
-   * そのコマンドから見た選択の印。**即適用の待ち受け(`armedPrint`)とプレビューの再送判定が
-   * 同じ印を使う** —— 別々に作ると、片方だけが「選び直し」に気づく状態が生まれる。
-   *
-   * **外(コア)から非同期に届く引数を足すときは、その値もこの印に混ぜること。**
-   * 混ぜないと、その引数で揃うコマンドの即適用が発火しない(選択と同じ経路に乗る)。
-   */
-  function printSelectionFor(target: CommandDef): string {
-    return target.args.some((spec) => spec.kind === 'selection')
+  const selectionPrint = $derived(
+    command.args.some((spec) => spec.kind === 'selection')
       ? (selection?.items ?? []).map(refKey).join('|')
-      : ''
-  }
+      : '',
+  )
 
   $effect(() => {
     const source = command.preview === 'none' ? null : ghostBuilt
@@ -288,33 +294,37 @@
   )
 
   /**
-   * 即適用の待ち受け —— **起動してから最後に見た選択の印**。`null` は待っていないこと。
+   * 即適用の待ち受け —— **起動した時点の `selfSelections`**。`null` は待っていないこと。
    *
    * `null` になるのは3つ: **起動していない**(既定で構えているだけ)/ **Escで降りた** /
-   * **一度発火した**(1起動につき1回だけ)。1回だけにしてあるのは、確定の後もずっと
-   * 構えていると、**この画面が触っていない選択の変化**(AIの `modify_selection`)で
-   * 文書が変わりうるからである —— もう一度やるならボタンを押し直す(1手)。
+   * **一度発火した**(1起動につき1回だけ)。1回だけにしてあるのは、確定した後もずっと
+   * 構えていると、**次の1クリックが意図せず2つ目の複製になる**からである ——
+   * もう一度やるならボタンを押し直す(1手)。
    *
    * `$state` にしない: この値を読む `$effect` が自分で書き戻すので、依存に入れると
    * 発火のたびに余分な再実行が走る(挙動は同じだが、読む人が無限ループを疑うことになる)。
    */
-  let armedPrint: string | null = null
+  let armedSelections: number | null = null
 
   /**
-   * **起動した後に届いた選択の変化**でだけ適用する。
+   * **起動した後に、この画面のクリックで選択が変わった**ときだけ適用する。
    *
    * 面のクリックは「クリック → WS往復 → 選択の配信」の後に引数が揃うので、点のように
-   * その場で判定できない。起動時の印と違う印が届いたことを「人が起動後に指した」と読む。
+   * その場で判定できない。**選択の中身が変わったこと**では引き金にならない ——
+   * それだとAIの `modify_selection` でも走り、人が何も指していないのに文書が変わる
+   * (2026-08-22のQA指摘)。数えているのは `App.svelte` が「自分が出した」と確かめた
+   * 選択変更だけである。
+   *
    * `busy` / `ready` / `built.ok` の判定は `commit()` が持っているので、ここでは見ない。
    */
   $effect(() => {
-    const print = selectionPrint
-    if (!appliesOnSelection || armedPrint === null) return
-    if (print === armedPrint) return // 起動時から動いていない = 起動前からあった選択
-    armedPrint = print // 揃わない変化(空振り・選び直し)も「見た」ことにする
+    const clicks = selfSelections
+    if (!appliesOnSelection || armedSelections === null) return
+    if (clicks === armedSelections) return // 起動してから、この画面では選び直していない
+    armedSelections = clicks // 揃わないクリック(空振り・選び直し)も「見た」ことにする
     if (missing !== null) return
     // 適用できたときは `reset()` が待ち受けを降ろす(1起動につき1回)。**降ろさずに
-    // 戻ってきたとき**(応答待ち・提案が載っている等)は印を進めただけなので、
+    // 戻ってきたとき**(応答待ち・提案が載っている等)は数を進めただけなので、
     // 次に選び直せばもう一度試せる。
     commit()
   })
@@ -385,7 +395,7 @@
     choices = {}
     // **即適用の待ち受けも降ろす**。確定・中断のどちらでも「起動している間」は終わりで、
     // 構え直すのは `start()`(ボタンを押す1手)だけにする。
-    armedPrint = null
+    armedSelections = null
     if (previewTimer) clearTimeout(previewTimer)
     previewTimer = null
     previewedKey = null
@@ -411,10 +421,10 @@
   function start(nextId: string): void {
     reset()
     commandId = nextId
-    // **ここで控えた選択より後に届いた変化だけ**が即適用の引き金になる。
+    // **ここで控えた数より後のクリックだけ**が即適用の引き金になる。
     // 起動より前から揃っていた選択(AIが選んだ面のまま起動した等)では発火せず、
     // Enter か、ボタンをもう一度押すことが適用の1手として残る。
-    armedPrint = printSelectionFor(findCommand(nextId, commands))
+    armedSelections = selfSelections
     focusFirstNumber()
   }
 

@@ -112,6 +112,13 @@ async function main() {
       },
       { timeout, polling: 100 },
     )
+    /**
+     * **起きないことを見る前の猶予**。適用が走るなら「選択の配信 → 適用 → 状態配信」で
+     * 済む時間を過ぎてから数える —— 待たずに数えると、走っていても
+     * 「まだ返ってきていないだけ」を緑と読んでしまう。
+     */
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 1500))
+
     const partCount = await page.evaluate(() => window.__duocad.parts.length)
     if (partCount !== expectedBodies) fail(`画面のパーツ数が合わない: ${partCount}`)
     ok(`ブラウザ接続: パーツ一覧 ${partCount} 件(MCPが見ている文書と同じ)`)
@@ -207,6 +214,91 @@ async function main() {
       `**さっきまで隠れて選べなかった面 ${newlyPickable.index} を本物のクリックで選べた** ` +
         `@ (${newlyPickable.x.toFixed(0)}, ${newlyPickable.y.toFixed(0)})`,
     )
+
+    // ------------------------------------------ 検証3b: AIが選択を変えても即適用は走らない
+    // 「編集用に複製」はEnterの要らないコマンド(`command.ts` の `needsEnter`)で、
+    // **起動した後に引数が揃うと即座に適用される**。その引き金は**人がこの画面で
+    // 指したこと**でなければならない —— 選択集合はAIも `modify_selection` で書き換えられる
+    // ので、「面が1つ選ばれた」だけで発火させると、**人が何も触っていないのに部品が増える**。
+    // ここはその境目を実機で固定する(2026-08-22のQA指摘)。
+    await mcp.callTool('clear_selection')
+    await page.waitForFunction(() => (window.__duocad.selection?.items ?? []).length === 0, {
+      timeout,
+      polling: 50,
+    })
+    const partsBeforeAi = await page.evaluate(() => window.__duocad.parts.length)
+    await page.click('#file-make-editable') // 人が起動する(ここまでは人の1手)
+    await mcp.callTool('modify_selection', {
+      // **AIが面を1つ選ぶ**。`origin` は "user" になる(MCPの `modify_selection` は
+      // 提案ではなく確定選択を直す経路)ので、選択の中身だけを見ていると人のクリックと区別が付かない。
+      add: [{ body: target.body_id, kind: 'face', index: newlyPickable.index }],
+    })
+    await page.waitForFunction(
+      () => {
+        const selection = window.__duocad.selection
+        return Boolean(selection && selection.count === 1 && selection.origin === 'user')
+      },
+      { timeout, polling: 50 },
+    )
+    await settle()
+    const afterAiSelection = await page.evaluate(() => {
+      const host = document.querySelector('.command-host')
+      return {
+        parts: window.__duocad.parts.length,
+        command: host.dataset.command,
+        phase: host.dataset.phase,
+      }
+    })
+    if (afterAiSelection.parts !== partsBeforeAi) {
+      fail(
+        `AIが選択を書き換えただけで「編集用に複製」が走った` +
+          `(部品 ${partsBeforeAi} -> ${afterAiSelection.parts})`,
+      )
+    }
+    // **空振りで緑になっていないこと**を同時に見る: コマンドは起動したままで、
+    // 引数も揃っている(=Enterを押せば適用される状態)。それでも走っていない。
+    if (afterAiSelection.command !== 'make_editable_copy' || afterAiSelection.phase !== 'ready') {
+      fail(
+        `この検査が空振りしている(command=${afterAiSelection.command} / ` +
+          `phase=${afterAiSelection.phase})`,
+      )
+    }
+    ok('**AIが選択を書き換えても即適用は発火しない**(引数は揃っていて、Enterなら適用できる状態のまま)')
+
+    // 同じ起動のまま**人が別の面をクリックすると発火する** ——
+    // 上の検査が「そもそも発火しない実装」で緑になっていないことの裏取り。
+    const otherFace = await page.evaluate(
+      (bodyId, total, skip) => {
+        const rect = document.querySelector('.viewport').getBoundingClientRect()
+        for (let index = 1; index <= total; index += 1) {
+          if (index === skip) continue
+          const position = window.__duocad.projectFace(bodyId, index)
+          if (position) return { index, x: position.x + rect.left, y: position.y + rect.top }
+        }
+        return null
+      },
+      target.body_id,
+      target.total,
+      newlyPickable.index,
+    )
+    if (!otherFace) fail('2つ目の面が画面から指せない(この裏取りが成立しない)')
+    await page.mouse.click(otherFace.x, otherFace.y)
+    await page.waitForFunction(
+      (expected) => window.__duocad.parts.length === expected,
+      { timeout, polling: 50 },
+      partsBeforeAi + 1,
+    )
+    ok(`**人が面 ${otherFace.index} をクリックしたときだけ**複製が走った(Enterは押していない)`)
+
+    // 後始末: いま作った複製を戻し、既定のコマンドへ降りる
+    // (この後の検証4はundoの位置に依存している)
+    await mcp.callTool('undo')
+    await page.waitForFunction(
+      (expected) => window.__duocad.parts.length === expected,
+      { timeout, polling: 50 },
+      partsBeforeAi,
+    )
+    await page.keyboard.press('Escape')
 
     // ---------------------------------------------------------------- 検証4: undoで戻る
     // AIの `set_visible` は人間の操作と同じ操作ログに載る。**ブラウザのCtrl+Z**で戻る。
