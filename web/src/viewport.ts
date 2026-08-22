@@ -80,7 +80,14 @@ export interface PickEvent {
    * 平面がカメラの裏なら null。**これが「手で描く」の入力そのもの**。
    */
   point: { sketchId: string; u: number; v: number } | null
-  /** スケッチモード中に領域へ当たったらその添字(領域は面より手前で拾う)。 */
+  /**
+   * 当たった領域(スケッチ+添字)。
+   *
+   * **スケッチモード中は常に**(そのスケッチの領域だけ。領域は面より手前で拾う)、
+   * **通常モードでは `pickRegions(true)` の間だけ**(全スケッチの領域)非nullになる。
+   * 通常モードの領域は辺と同じ「要求しているコマンドを起動している間だけ指せる」規律で、
+   * 常時指せるとスケッチ平面と重なる面のクリックが領域に取られる。
+   */
   region: { sketchId: string; index: number } | null
   /**
    * 当たった基準平面(XY/XZ/YZ)。**`showBasePlanes(true)` の間だけ** null 以外になる
@@ -177,6 +184,21 @@ export interface Viewport {
    * 当たった線から復元できない)。出している間はグリッドの色を変えて「今これが指せる」を出す。
    */
   showBasePlanes(on: boolean): void
+  // ------------------------------------------------------------------ 通常モードの領域
+  /**
+   * **通常モードで**スケッチの領域を指せるようにする(`false` で指せなくなる)。
+   *
+   * 辺・基準平面と同じ規律 —— **その対象を要求しているコマンド(「領域を押し出す」)を
+   * 起動している間だけ指せる**。常時指せると、スケッチ平面と重なる面(押し出した板の
+   * 底面など)を狙うクリックが、手前に浮いている領域に取られる。
+   *
+   * **新しいジオメトリは足していない** —— 領域のメッシュは既に全スケッチぶんが
+   * `showSketches` で置かれており(`userData.sketchId` を持つ)、ここが変えるのは
+   * `regionAt` が見る対象の範囲だけである。スケッチモード中(`setActiveSketch`)は
+   * このゲートに関係なく、**そのスケッチの領域だけ**が対象になる(描いている最中に
+   * 別のスケッチの領域を掴まない)。
+   */
+  pickRegions(on: boolean): void
   /** 選択中の辺を強調する(面の `highlight` と同じ規律)。 */
   highlightEdges(refs: EdgeRef[], origin: 'user' | 'proposed'): void
   /**
@@ -251,7 +273,14 @@ export interface Viewport {
    * そこをクリックした結果は平面のピックにならないため。
    */
   projectBasePlane(name: BasePlaneName): { x: number; y: number } | null
-  /** 領域の画面座標(実機検査が領域を本物のクリックで選ぶために要る)。 */
+  /**
+   * 領域の画面座標(実機検査が領域を本物のクリックで選ぶために要る)。
+   *
+   * **今その領域が指せる状態でなければ null** —— 返す前に `regionAt` で当たることを
+   * 確かめるので、通常モードでは `pickRegions(true)` の間しか返らない
+   * (`projectBasePlane` と同じ流儀。指せない状態の座標を返しても、そこをクリックした
+   * 結果は領域のピックにならない)。
+   */
   projectRegion(sketchId: string, index: number): { x: number; y: number } | null
   dispose(): void
 }
@@ -981,6 +1010,11 @@ export function createViewport(container: HTMLElement): Viewport {
   const sketches = new Map<string, SketchScene>()
   let ghost: { objects: THREE.Object3D[]; disposables: Array<{ dispose(): void }> } | null = null
   let activeSketchId: string | null = null
+  /**
+   * 通常モードで領域を指せるか(`pickRegions`)。**スケッチモード中は関係ない** ——
+   * モード中は常に「そのスケッチの領域」が対象で、このゲートは見ない。
+   */
+  let regionPickWanted = false
 
   /** スケッチ平面上の (u,v) を3Dの点へ(コアの `kernel._to_pnt` と同じ規則)。 */
   function toWorld(frame: SketchDraw['frame'], u: number, v: number): THREE.Vector3 {
@@ -1114,18 +1148,39 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
+  function pickRegions(on: boolean): void {
+    regionPickWanted = on
+  }
+
+  /**
+   * 今クリックで当たってよい領域メッシュ。
+   *
+   * - **スケッチモード中**: そのスケッチの領域だけ(描いている最中に別のスケッチの
+   *   領域を掴まない)。ゲートは見ない —— モードに入っている時点で領域が対象である。
+   * - **通常モード**: `pickRegions(true)` の間だけ、**全スケッチの領域**。
+   *   出していない間は空配列なので、面のピックはそのまま動く(辺の `edgeAt` と同じ形)。
+   */
+  function regionPickTargets(): THREE.Mesh[] {
+    if (activeSketchId !== null) return sketches.get(activeSketchId)?.regionMeshes ?? []
+    if (!regionPickWanted) return []
+    const meshes: THREE.Mesh[] = []
+    for (const target of sketches.values()) meshes.push(...target.regionMeshes)
+    return meshes
+  }
+
   function regionAt(offsetX: number, offsetY: number): { sketchId: string; index: number } | null {
-    if (activeSketchId === null) return null
-    const target = sketches.get(activeSketchId)
-    if (!target || target.regionMeshes.length === 0) return null
+    const targets = regionPickTargets()
+    if (targets.length === 0) return null
     const { width, height } = size()
     const ndc = new THREE.Vector2((offsetX / width) * 2 - 1, -(offsetY / height) * 2 + 1)
     raycaster.setFromCamera(ndc, camera)
-    const hits = raycaster.intersectObjects(target.regionMeshes, false)
+    // **近い方が勝つ**(`intersectObjects` は距離順)。複数スケッチの領域が重なっても
+    // 手前のものが取れる。
+    const hits = raycaster.intersectObjects(targets, false)
     if (hits.length === 0) return null
-    const index = hits[0].object.userData.regionIndex
-    if (typeof index !== 'number') return null
-    return { sketchId: activeSketchId, index }
+    const { sketchId, regionIndex } = hits[0].object.userData
+    if (typeof sketchId !== 'string' || typeof regionIndex !== 'number') return null
+    return { sketchId, index: regionIndex }
   }
 
   function lookAtSketch(sketchId: string): void {
@@ -1190,8 +1245,10 @@ export function createViewport(container: HTMLElement): Viewport {
       point.multiplyScalar(1 / 3)
       const screen = toScreen(point.clone())
       if (screen === null) continue
+      // **スケッチも一致していること**を見る —— 通常モードでは全スケッチの領域が対象に
+      // なるので、添字だけ見ると別のスケッチの同じ添字を「当たった」と読む。
       const hit = regionAt(screen.x, screen.y)
-      if (hit && hit.index === index) return screen
+      if (hit && hit.sketchId === sketchId && hit.index === index) return screen
     }
     return null
   }
@@ -1243,6 +1300,15 @@ export function createViewport(container: HTMLElement): Viewport {
     const edge = edgeAt(event.offsetX, event.offsetY)
     if (edge !== null) {
       pickListener?.({ hit: null, edge, mode, point: null, region: null, plane: null })
+      return
+    }
+    // **領域を要求しているときは領域が先**(辺と同じ「要求中のものが勝つ」)。領域は
+    // スケッチ平面の上に浮いており、押し出した板の底面と重なるので、面より後に見ると
+    // 視点によって面が勝ってしまう。`pickRegions(false)` の間は `regionAt` が即 null を
+    // 返すので、面のピックはそのまま動く。
+    const region = regionAt(event.offsetX, event.offsetY)
+    if (region !== null) {
+      pickListener?.({ hit: null, edge: null, mode, point: null, region, plane: null })
       return
     }
     // **面と基準平面は、レイ距離が近い方**(通常のオクルージョン。辺のような優先順位は
@@ -1307,6 +1373,7 @@ export function createViewport(container: HTMLElement): Viewport {
     highlight,
     showEdges,
     showBasePlanes,
+    pickRegions,
     highlightEdges,
     projectEdge,
     showPreview,

@@ -559,6 +559,23 @@
     viewport?.showBasePlanes(on)
   })
 
+  /**
+   * 通常モードで領域を指せるのは、**領域を要求しているコマンド(「領域を押し出す」)を
+   * 起動している間だけ**(辺・基準平面と同じ規律。2026-08-23の本人裁定5)。
+   *
+   * 常時指せると、スケッチ平面と重なる面(領域から押し出した板の底面など)を狙う
+   * クリックが、手前に浮いている領域に取られる。**スケッチモード中はゲートを立てない**
+   * —— モード中の領域ピックは `setActiveSketch` 側の規律(そのスケッチの領域だけ)で
+   * 動いており、ここから触ると別のスケッチの領域まで拾えるようになってしまう。
+   */
+  const wantsRegions = $derived(sketchId === null && wantedKinds.includes('region'))
+
+  $effect(() => {
+    // 先に読んでから渡す(上の基準平面と同じ理由。`?.` の短絡で依存を失わない)。
+    const on = wantsRegions
+    viewport?.pickRegions(on)
+  })
+
   function modifySelection(add: SelectionRef[], remove: SelectionRef[]): void {
     if (add.length === 0 && remove.length === 0) return
     session.modifySelection(add, remove, nextOp())
@@ -630,6 +647,13 @@
         { body: event.edge.bodyId, kind: 'edge', index: event.edge.edgeIndex },
         event.mode,
       )
+      return
+    }
+    // **領域が当たったら領域**。「領域を押し出す」を起動している間だけ来る
+    // (`wantsRegions` → `viewport.pickRegions`)。参照の形も修飾キーの規則も
+    // スケッチモードの `onSketchPick` と同じ —— 同じものを同じように選ぶ。
+    if (event.region !== null) {
+      editSelection({ sketch: event.region.sketchId, index: event.region.index }, event.mode)
       return
     }
     if (event.hit === null) {
@@ -933,14 +957,27 @@
       sketches,
       activeSketch: sketchId,
       hoverPoint,
-      projectSketchPoint: (u: number, v: number) =>
-        sketchId === null ? null : (viewport?.projectSketchPoint(sketchId, u, v) ?? null),
+      // **第2の呼び方**: スケッチを指定すると通常モードでも射影できる(領域の
+      // `projectRegion` と同じ形)。**同じ世界座標の点を、画面の寸法が変わった後でも
+      // もう一度指せる**ようにするための穴で、`smoke-regions` の「同じ場所が、要求中は
+      // 領域・外すと面になる」がこれを使う(コマンドを移るとツールバーの高さが変わり、
+      // 画素そのものは持ち越せない)。
+      projectSketchPoint: (u: number, v: number, targetSketchId?: string) => {
+        const target = targetSketchId ?? sketchId
+        return target === null ? null : (viewport?.projectSketchPoint(target, u, v) ?? null)
+      },
       // C: 基準平面。**実機検査が本物のクリックで貼る先を指す**ための穴
       // (指せる状態=スケッチのコマンドを起動している間しか座標を返さない)。
       wantsBasePlanes,
       projectBasePlane: (name: BasePlaneName) => viewport?.projectBasePlane(name) ?? null,
-      projectRegion: (index: number) =>
-        sketchId === null ? null : (viewport?.projectRegion(sketchId, index) ?? null),
+      // 領域。**第2引数を渡せば通常モードでも射影できる**(スケッチモードの外では
+      // 「今のスケッチ」が無いので、どのスケッチの領域かを検査側が言う必要がある)。
+      // 指せる状態でなければ null が返る(`viewport.projectRegion` が実際に当てて確かめる)。
+      wantsRegions,
+      projectRegion: (index: number, targetSketchId?: string) => {
+        const target = targetSketchId ?? sketchId
+        return target === null ? null : (viewport?.projectRegion(target, index) ?? null)
+      },
       // D: 辺とフィーチャ。**実機検査が本物のクリックで辺を選ぶ**ための穴
       edges: edgeTargetBody === null ? null : (edges[edgeTargetBody] ?? null),
       edgeTargetBody,

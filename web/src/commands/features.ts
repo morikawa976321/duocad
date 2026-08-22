@@ -320,8 +320,12 @@ export const SOLID_FEATURE_COMMANDS: CommandDef[] = [EXTRUDE_REGIONS, FILLET, CH
 
 /**
  * スケッチモードで足すぶん。**領域押し出しは両方に居る** —— 描いた直後にそのまま
- * 押し出せることと、モードを抜けてから領域を選んで押し出せることの両方が要る
- * (領域はスケッチパネルからも選べるので、どちらの居場所も実際に使う)。
+ * 押し出せることと、モードを抜けてから領域を選んで押し出せることの両方が要る。
+ *
+ * **通常モードの側で領域を指す道は3Dクリックだけである**(2026-08-23)。以前は
+ * スケッチパネルの領域一覧からも選べたが、一覧は冗長として削除した(本人裁定1)。
+ * 代わりに、このコマンドを起動している間だけ全スケッチの領域が3Dで指せる
+ * (`App.svelte` の `wantsRegions` → `viewport.pickRegions`。辺と同じ規律)。
  */
 export const SKETCH_FEATURE_COMMANDS: CommandDef[] = [
   EXTRUDE_REGIONS,
