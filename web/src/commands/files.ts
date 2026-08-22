@@ -6,23 +6,32 @@
  * コアには何も足していない —— `duocad/server.py` の `FILE_COMMANDS` に口を開け、
  * ここに引数の集め方を書くだけである(スケッチ・フィーチャと同じ形)。
  *
- * ## ファイル操作も「コマンド」として載せる
+ * ## ファイル操作も「コマンド」として載せる ―― ただし保存/開くは例外(2026-08-22)
  *
- * ボタンとダイアログを別に作らず、既存の骨格(`CommandHost.svelte`)にそのまま載せる。
- * そのため**Escで中断できる・引数が揃うまで確定しない・何を待っているか1行で出る**が、
- * 押し出しやフィレットと同じ仕組みでそのまま効く。骨格へ足したのは**文字列(text)引数**
- * だけで、これは「パスを打つ」ための3種類目の打ち込み(数値でも選択肢でもない)である。
+ * ボタンとダイアログを別に作らず、既存の骨格(`CommandHost.svelte`)にそのまま載せる
+ * のが基本形で、**書き出し・読み込みはそのまま**(下の `EXPORT_STEP` 等)。
+ *
+ * **保存/開くだけは `CommandHost` から外した**(engine
+ * `duocad-save-location-fixed-folder`)。以前はここも「パス」を打たせる文字列(text)
+ * 引数だったが、パスはサーバのCWD基準で解決されるため保存先が「その日サーバをどこで
+ * 起動したか」で変わり、実際に保存されたファイルは1つも存在しなかった。今は
+ * `duocad/models/` 配下の**ファイル名の一覧から選ぶ**形にしたので、`CommandHost` の
+ * 「1行のパスを打つ」引数収集ではなく `FilesPanel.svelte`(一覧・クリックで開く・
+ * 上書き・新規保存)が担当する。両方とも `session.runVerb(...)` を直接呼ぶ
+ * (`ParametersPanel.svelte` の `onSetParameter` と同じ形)。
  *
  * ## 保存形式は操作ログのJSON(§3.1)
  *
  * **これが正**で、形状は導出物である。したがって「開く」は再生であり、
  * **開くたびに再生経路が検査される**ことになる。gitに載り、AIが読め、1モデル1ファイル。
  *
- * ## パスの解釈はサーバに任せる
+ * ## パスの解釈はサーバに任せる(書き出し・読み込みの経路)
  *
  * 相対パスはサーバの作業ディレクトリ基準で解決され、**実際に書いた絶対パスが応答で返る**。
  * ブラウザ側で正規化すると、解釈が2箇所に分かれて「保存したと言われたファイルが
- * 見つからない」が起きる。
+ * 見つからない」が起きる。**保存/開く(`FilesPanel.svelte`)はこの経路を使わない** ——
+ * 受け取るのはファイル名だけで、`models_dir` 配下に閉じる解決はサーバ側の
+ * `Session._resolve_document_name` が行う。
  */
 import type { CommandDef } from './command'
 import type { SelectionRef, ShapeRef } from '../session'
@@ -30,52 +39,6 @@ import type { SelectionRef, ShapeRef } from '../session'
 /** 空のパスだけ弾く。**それ以上の判定はサーバに任せる**(上のdocstring)。 */
 function pathLike(label: string): (value: string) => string | null {
   return (value) => (value.trim() === '' ? `${label}を打つ` : null)
-}
-
-export const SAVE_DOCUMENT: CommandDef = {
-  id: 'save_document',
-  category: 'file',
-  label: '保存',
-  buttonId: 'file-save',
-  preview: 'none',
-  args: [
-    {
-      kind: 'text',
-      name: 'path',
-      label: '保存先',
-      inputId: 'file-path',
-      placeholder: 'model.json',
-      reject: pathLike('保存先'),
-    },
-  ],
-  build(values) {
-    const path = values.path
-    if (typeof path !== 'string' || path.trim() === '') return { ok: false, reason: '保存先が空' }
-    return { ok: true, args: { path: path.trim() } }
-  },
-}
-
-export const OPEN_DOCUMENT: CommandDef = {
-  id: 'open_document',
-  category: 'file',
-  label: '開く',
-  buttonId: 'file-open',
-  preview: 'none',
-  args: [
-    {
-      kind: 'text',
-      name: 'path',
-      label: '開く',
-      inputId: 'file-path',
-      placeholder: 'model.json',
-      reject: pathLike('開くファイル'),
-    },
-  ],
-  build(values) {
-    const path = values.path
-    if (typeof path !== 'string' || path.trim() === '') return { ok: false, reason: '開く先が空' }
-    return { ok: true, args: { path: path.trim() } }
-  },
 }
 
 /**
@@ -213,22 +176,24 @@ export const MAKE_EDITABLE_COPY: CommandDef = {
   },
 }
 
-/** ファイル操作のツールバー(ソリッドを触るモードに並ぶ)。 */
-export const FILE_COMMANDS: CommandDef[] = [
-  SAVE_DOCUMENT,
-  OPEN_DOCUMENT,
-  IMPORT_STEP,
-  EXPORT_STEP,
-  EXPORT_STL,
-  MAKE_EDITABLE_COPY,
-]
+/**
+ * ファイル操作のツールバー(ソリッドを触るモードに並ぶ)。
+ *
+ * **保存/開くはここに無い**(上のモジュールdocstring参照)。`FilesPanel.svelte` が
+ * `session.runVerb('save_document' | 'open_document' | 'list_documents', ...)` を
+ * 直接呼ぶので、`CommandHost` の引数収集(ここでの `CommandDef` 宣言)を経由しない。
+ */
+export const FILE_COMMANDS: CommandDef[] = [IMPORT_STEP, EXPORT_STEP, EXPORT_STL, MAKE_EDITABLE_COPY]
 
 /**
  * そのverbは**文書を変えるか**(＝応答が状態配信で返るか)。
  *
  * 保存と書き出しは文書を変えないので、応答は `{"type":"file"}` で要求した接続にだけ返る。
  * 送った側が「応答待ち」を解く条件が違うので、ここで見分けられるようにしてある。
+ * `open_document` はこの一覧を経由しなくなったが、**verb名としては変わっていない**
+ * ので判定はそのまま残す(`App.svelte` が `FilesPanel.svelte` から直接呼ぶ側でも
+ * 同じ名前の verb を送る)。
  */
 export function changesDocument(verb: string): boolean {
-  return verb === OPEN_DOCUMENT.id || verb === IMPORT_STEP.id || verb === MAKE_EDITABLE_COPY.id
+  return verb === 'open_document' || verb === IMPORT_STEP.id || verb === MAKE_EDITABLE_COPY.id
 }

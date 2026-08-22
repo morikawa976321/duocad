@@ -12,3 +12,8 @@ dist/
 # アプリ内AIエージェントのAPIキー置き場(duocad/agent/providers.py)。
 # **中身は絶対にコミットしない**。環境変数で渡すなら要らないファイル。
 /duocad_secrets.json
+
+# 保存/開くの既定の置き場(2026-08-22本人決定。engine `duocad-save-location-fixed-folder`)。
+# リポジトリ直下・gitignore対象 —— 個人のモデルファイルはgitに載せない。
+# 無ければ `duocad/server.py` の `Session._resolve_document_name` が作る。
+/models/

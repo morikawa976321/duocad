@@ -26,18 +26,24 @@ export const PYTHON = resolve(REPO_ROOT, '.venv', 'Scripts', 'python.exe')
  * 戻り値の `child` は**MCPで叩く側のため**(`smoke-mcp` / `acceptance` が stdio に
  * `McpClient` を繋ぐ)。ブラウザだけの検査は使わない。
  *
- * @param {{wsPort: number|string, httpPort: number|string, timeout?: number}} options
+ * `modelsDir` を渡すと保存/開く/一覧の置き場をそこへ差し替える(`--models-dir`)。
+ * **実ブラウザ検査は必ず渡すこと** —— 渡さないとリポジトリ直下の実 `models/` を
+ * 検査が書き換えてしまう(既定は `duocad/server.py` の `DEFAULT_MODELS_DIR`)。
+ *
+ * @param {{wsPort: number|string, httpPort: number|string, timeout?: number,
+ *          modelsDir?: string}} options
  * @returns {Promise<{url: string, child: import('node:child_process').ChildProcess,
  *                    stop: () => Promise<void>, log: () => string}>}
  */
-export async function startServer({ wsPort, httpPort, timeout = 60000 }) {
+export async function startServer({ wsPort, httpPort, timeout = 60000, modelsDir }) {
   if (!existsSync(PYTHON)) throw new Error(`venvのpythonが無い: ${PYTHON}`)
 
-  const child = spawn(
-    PYTHON,
-    ['-m', 'duocad.mcp_server', '--port', String(wsPort), '--http-port', String(httpPort)],
-    { cwd: REPO_ROOT, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } },
-  )
+  const args = ['-m', 'duocad.mcp_server', '--port', String(wsPort), '--http-port', String(httpPort)]
+  if (modelsDir) args.push('--models-dir', modelsDir)
+  const child = spawn(PYTHON, args, {
+    cwd: REPO_ROOT,
+    env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+  })
   const chunks = []
   child.stderr.setEncoding('utf8')
   child.stderr.on('data', (chunk) => chunks.push(chunk))

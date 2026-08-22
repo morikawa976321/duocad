@@ -519,8 +519,18 @@ COMMANDS: tuple[Command, ...] = (
         category="feature",
         description="スケッチ上の図形を矩形に反復するときに呼ぶ。",
         params=(
-            Param("sketch_id", "string", "対象スケッチのID"),
-            Param("entities", "array", "反復する図形IDの配列"),
+            Param(
+                "sketch_id",
+                "string",
+                "対象スケッチのID。describe_document の sketches[].sketch_id",
+            ),
+            Param(
+                "entities",
+                "array",
+                "反復する図形IDの配列。describe_document の"
+                " sketches[].entities[].entity_id をそのまま渡す。"
+                "**IDを推測して組み立てない**(存在しないIDはエラーになる)",
+            ),
             Param("dx", "number", "X方向の間隔(mm)"),
             Param("dy", "number", "Y方向の間隔(mm)"),
             Param("nx", "integer", "X方向の個数(元を含む)"),
@@ -540,8 +550,18 @@ COMMANDS: tuple[Command, ...] = (
         category="feature",
         description="スケッチ上の図形を円形に反復するときに呼ぶ。",
         params=(
-            Param("sketch_id", "string", "対象スケッチのID"),
-            Param("entities", "array", "反復する図形IDの配列"),
+            Param(
+                "sketch_id",
+                "string",
+                "対象スケッチのID。describe_document の sketches[].sketch_id",
+            ),
+            Param(
+                "entities",
+                "array",
+                "反復する図形IDの配列。describe_document の"
+                " sketches[].entities[].entity_id をそのまま渡す。"
+                "**IDを推測して組み立てない**(存在しないIDはエラーになる)",
+            ),
             Param("center", "array", "回転中心 [u, v]"),
             Param("count", "integer", "総数(元を含む)"),
             Param(
@@ -676,26 +696,57 @@ COMMANDS: tuple[Command, ...] = (
         name="save_document",
         category="file",
         description="",
-        params=(Param("path", "string", "保存先パス"),),
+        params=(
+            Param(
+                "name",
+                "string",
+                "保存先の**ファイル名だけ**(models/ 配下に固定。区切り文字・絶対パス・"
+                "..は不可)",
+            ),
+        ),
         session="save_document",
         mcp=False,
         changes_document=False,
         note=(
             "**AIには開けていない**。保存形式は操作ログのJSONで、AIは describe_document で"
-            "同じ内容を読めるので、ファイルとして書き出す必要があるのは人の側だけである"
+            "同じ内容を読めるので、ファイルとして書き出す必要があるのは人の側だけである。"
+            "2026-08-22に引数を `path`(サーバのCWD基準の任意パス)から `name`"
+            "(`models_dir` 配下のファイル名だけ)へ締めた"
+            "(engine `duocad-save-location-fixed-folder`)"
         ),
     ),
     Command(
         name="open_document",
         category="file",
         description="",
-        params=(Param("path", "string", "開くファイルのパス"),),
+        params=(
+            Param(
+                "name",
+                "string",
+                "開くファイルの**ファイル名だけ**(models/ 配下に固定。save_document と同じ)",
+            ),
+        ),
         session="open_document",
         ws="special",
         mcp=False,
         note=(
             "**文書ごと差し替える**ので応答の形が他と違う(全接続へ配る)。"
             "表からは外して `_dispatch` で個別に扱う"
+        ),
+    ),
+    Command(
+        name="list_documents",
+        category="file",
+        description="",
+        session="list_documents",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**`models_dir` の中身を一覧にする**(名前/更新日時/サイズ/操作数)。"
+            "保存/開くをファイル名の一覧から選べるようにするための穴で、"
+            "2026-08-22まではディレクトリ列挙のコードがリポジトリに1つも無かった。"
+            "`save_document`/`open_document` と同じく人だけの操作(`mcp=False`)。"
+            "文書は変えない(`changes_document=False`)"
         ),
     ),
     # ---------------------------------------------------------------- 履歴

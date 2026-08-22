@@ -85,6 +85,7 @@ from typing import Any, Optional
 from websockets.asyncio.server import serve
 
 from . import catalog, io_step, kernel, predicates, query, region, selection, sketch
+from .document import unknown_id_message
 from .server import (
     DEFAULT_WEB_DIST,
     Server,
@@ -368,8 +369,12 @@ class DocumentTools:
     def _find_body(self, body_id: str):
         body = next((b for b in self.session.document.bodies if b.id == body_id), None)
         if body is None:
+            # **文面は `document.unknown_id_message` に一本化してある**(2026-08-22)。
+            # 以前はここだけが有効IDを添える形を持っており、スケッチ・図形・パラメータの
+            # エラーは「違う」としか言わなかった —— AIから見て回復できるかどうかが
+            # 引いたIDの種類で変わるのは、こちら側の都合でしかない。
             known = [b.id for b in self.session.document.bodies if b.kind != "reference"]
-            raise KeyError(f"no such body: {body_id!r} (editable bodies: {known})")
+            raise KeyError(unknown_id_message("body", body_id, known))
         return body
 
     # ------------------------------------------------------------------ 封筒(成功)
@@ -1284,11 +1289,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="起動時にブラウザを開く(既定は開かない。MCPクライアントが起動する経路では邪魔になるため)",
     )
+    parser.add_argument(
+        "--models-dir",
+        type=Path,
+        default=None,
+        help=(
+            "保存/開く/一覧の置き場(既定は Session.DEFAULT_MODELS_DIR = リポジトリ直下の "
+            "models/)。実ブラウザ検査が使い捨てのworkdirへ差し替えるための穴で、"
+            "通常の起動では指定しない"
+        ),
+    )
     args = parser.parse_args(argv)
 
     # **常に空の文書で起動する**。
     # STEPはツール `import_step_editable`(編集可能なボディまで作る)から読む。
-    session = Session(None, args.deviation)
+    session = Session(None, args.deviation, models_dir=args.models_dir)
     try:
         asyncio.run(_run(session, args))
     except KeyboardInterrupt:

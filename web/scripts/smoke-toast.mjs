@@ -15,9 +15,14 @@
  *
  *   web> node scripts/smoke-toast.mjs
  *
- * エラーは**存在しないパスを「開く」「STEP読み込み」へ渡して**作る。サーバが別々の理由で
- * 断るので**文言の違うエラーが2件**手に入り、しかもどちらも1回きりで再送されない
+ * エラーは**存在しない書き出し先を「STEP書き出し」「STEP読み込み」へ渡して**作る。サーバが
+ * 別々の理由で断るので**文言の違うエラーが2件**手に入り、しかもどちらも1回きりで再送されない
  * （WSを切って作ると再接続の試行が延々と札を作り直すので、自動消滅を見られない）。
+ * **「開く」は使わない**（2026-08-22。engine `duocad-save-location-fixed-folder`）——
+ * 保存/開くはUIから任意パスを受け付けなくなり、`duocad/models/` の一覧をクリックする
+ * だけになった（`FilesPanel.svelte`）ので、「開く」に**存在しないパスを打つ**手段自体が
+ * 無くなっている。積層の検査に要るのは「文言の違うエラー2件」だけなので、
+ * 引き続きパスを打てる書き出し系(STEP書き出し・STEP読み込み)で作る。
  *
  * **サーバはこのスクリプトが自分で立てる**（`web/scripts/server.mjs`）。
  * 既に立っているものへ繋ぐときだけ `--url` を渡す。
@@ -33,8 +38,8 @@ const httpPort = options['http-port'] ?? '8806'
 const timeout = Number.parseInt(options.timeout ?? '120000', 10)
 
 /** 出しても消えても構わない、存在しないパス（サーバが断ることだけが要る）。 */
-const MISSING_DOCUMENT = 'C:/nowhere/duocad-smoke-toast-does-not-exist.json'
-const MISSING_STEP = 'C:/nowhere/duocad-smoke-toast-does-not-exist.step'
+const MISSING_EXPORT_DIR = 'C:/nowhere/duocad-smoke-toast-does-not-exist.step'
+const MISSING_STEP = 'C:/nowhere/duocad-smoke-toast-does-not-exist-2.step'
 
 async function main() {
   const executablePath = findBrowser()
@@ -104,8 +109,8 @@ async function main() {
     ok('起動直後: `#toasts` はあるが札は0枚(「今は0件」を素直に書ける)')
 
     // -------------------------------------------------------------- 検証1: 積層
-    await run('file-open', MISSING_DOCUMENT)
-    await waitToasts(1, '「開く」の失敗が札にならない')
+    await run('file-export-step', MISSING_EXPORT_DIR)
+    await waitToasts(1, '「STEP書き出し」の失敗が札にならない')
     await run('file-import-step', MISSING_STEP)
     await waitToasts(2, '2件目が積まれない')
     const stacked = await toasts()
@@ -115,7 +120,7 @@ async function main() {
     ok(`**積層**: 文言の違うエラー2件が同時に見えている(新しい方が上: ${stacked[0].text.slice(0, 40)}…)`)
 
     // -------------------------------------------------------------- 検証2: 同じ文言は数える
-    await run('file-open', MISSING_DOCUMENT)
+    await run('file-export-step', MISSING_EXPORT_DIR)
     try {
       await page.waitForFunction(
         () =>

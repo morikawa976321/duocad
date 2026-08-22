@@ -429,6 +429,13 @@ def _needs_enter(args: list[tuple[str, str]]) -> bool:
 #: `sketch_create`(貼る先の平面1つで揃う。2026-08-22に足した)。
 #: verbを足したらここへ1行足すことになる —— そのとき**Enterが要るかを1回考える**のが狙いで、
 #: 表そのものが実装の入力になっているわけではない(判定は `args` からの導出が正)。
+#:
+#: **`save_document`/`open_document` はこの表に無い**(2026-08-22。engine
+#: `duocad-save-location-fixed-folder`)。以前は「パス」を打たせる `text` 引数で
+#: Enterが要る側だったが、`CommandHost` から外れて `FilesPanel.svelte`
+#: (`duocad/models/` の一覧をクリック / 名前を打って新規保存)へ移ったため、
+#: この表(`web/src/commands/*.ts` の `CommandDef` から読む)には現れなくなった。
+#: サーバ側のverbとしては変わらず存在する(`tests/test_files_ui.py` が固定)。
 ENTER_REQUIRED = {
     "extrude_face": True,          # 面1つ + 距離(how)
     "extrude": True,               # 領域は何個でも + 距離 + 結合/切り取り
@@ -436,8 +443,6 @@ ENTER_REQUIRED = {
     "chamfer": True,               # 辺は何本でも + 距離
     "pattern_rectangular": True,   # 図形は何個でも + 個数と間隔
     "pattern_circular": True,      # 図形は何個でも + 中心 + 個数と角度
-    "save_document": True,         # パス(how)
-    "open_document": True,         # パス
     "import_step_editable": True,  # パス
     "export_step": True,           # パス
     "export_stl": True,            # パス + 偏差

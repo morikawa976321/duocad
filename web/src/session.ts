@@ -153,14 +153,36 @@ export interface ServerState {
  *
  * `path` は**サーバが解決した絶対パス**。相対パスの基準はサーバの作業ディレクトリで、
  * ブラウザ側では解決できない(2箇所で別々に解釈すると必ずずれる)。
+ *
+ * `name` は `save_document` の応答にだけ乗る**ファイル名だけ**(2026-08-22)。
+ * `open_document` は文書を差し替える側なので `Applied`(`change: "document"`)の
+ * `name` を見ること —— こちらは応答チャンネルが違う(`FilesPanel.svelte` 参照)。
+ *
+ * `files` は `list_documents` の応答にだけ乗る(`FilesPanel.svelte` が描く一覧)。
  */
 export interface FilePayload {
   action: string
   path: string
   bytes: number
+  name?: string
   operations?: number
   deviation?: number
   body_ids?: string[]
+  files?: DocumentInfo[]
+}
+
+/**
+ * `models_dir` に置かれた1ファイルの一覧情報(`list_documents` の1件)。
+ *
+ * **壊れて操作数が数えられないファイルはサーバの一覧に出てこない**
+ * (`Session.list_documents` が読めるものだけを返す)ので、ここに現れる時点で
+ * `operations` は必ず読めている。
+ */
+export interface DocumentInfo {
+  name: string
+  mtime: number
+  size: number
+  operations: number
 }
 
 /**
@@ -252,7 +274,13 @@ export type Applied =
   /** 選択の変更イベント。verbではない(操作ログに載らない)。 */
   | (AppliedChangeBase & { change: 'selection'; selection: SelectionState })
   /** ファイルを開いて文書ごと差し替わった。verbではない(`Session.open_document`)。 */
-  | (AppliedChangeBase & { change: 'document'; action: string; path: string; operations: number })
+  | (AppliedChangeBase & {
+      change: 'document'
+      action: string
+      path: string
+      name: string
+      operations: number
+    })
 
 /**
  * プレビュー(投機的実行)の応答。**状態の配信ではない** —— 要求した接続にだけ届き、
@@ -500,6 +528,7 @@ export function createSession(hooks: SessionHooks): Session {
       operations?: number
       deviation?: number
       body_ids?: string[]
+      files?: DocumentInfo[]
       // ---------------------------------------------------------------- G
       provider?: AiProviderKind
       model?: string | null
@@ -544,9 +573,11 @@ export function createSession(hooks: SessionHooks): Session {
         action: message.action ?? '',
         path: message.path ?? '',
         bytes: message.bytes ?? 0,
+        name: message.name,
         operations: message.operations,
         deviation: message.deviation,
         body_ids: message.body_ids,
+        files: message.files,
       })
     } else if (message.type === 'error') {
       hooks.onError(message.message ?? '(理由なし)', message.where ?? '?')

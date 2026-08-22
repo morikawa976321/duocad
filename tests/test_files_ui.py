@@ -4,8 +4,8 @@ UI(パラメータ編集パネル・操作履歴パネル・ファイル操作)�
 完了判定できない**(実機確認は `web/scripts/smoke-files.mjs`)。このファイルが固定するのは
 サーバ側の3つ——
 
-1. **ファイル操作の口**(`FILE_COMMANDS` + `open_document`)。保存形式は**操作ログのJSON**で、
-   形状はそこから導出される(実装計画書§3.1「これが正」)
+1. **ファイル操作の口**(`FILE_COMMANDS` + `open_document` + `list_documents`)。
+   保存形式は**操作ログのJSON**で、形状はそこから導出される(実装計画書§3.1「これが正」)
 2. **`state.parameters`** — 名前つきの寸法値。打ち直しの対象そのもの
 3. **`state.redo_count`** — 操作履歴パネルが「どこまで戻れるか」を出すための位置
 
@@ -14,15 +14,21 @@ UI(パラメータ編集パネル・操作履歴パネル・ファイル操作)�
 
 固定する契約:
 
+- **保存/開くは受け取るのがファイル名だけになった**(2026-08-22。engine
+  `duocad-save-location-fixed-folder`)。`models_dir` 配下に閉じ、区切り文字・絶対パス・
+  `..` は拒否する。以前の「サーバのCWD基準の任意パス」は、保存先がサーバの起動場所で
+  変わり実際には1つも使われていなかった問題そのものだった —— **旧パス形式との
+  後方互換は要らない**(保存済みファイルが1つも存在しなかったため)。
 - 保存は操作ログのJSONを書き、**verbではない**(操作ログが伸びない)
 - **開くと形が完全に戻る**(体積・面数・操作ログ・パラメータ)。開いた文書は**全接続へ**配る
 - **開くのに失敗しても今の文書を壊さない**
 - 版(revision)は開いた後に必ず上がる —— 同じidのBodyを知っているクライアントに
   古い形を描き続けさせない
 - STEP/STL を書き出せ、**STEPは読み戻して体積が一致する**(相対許容差 1e-6。§7の訂正)
+  (書き出し/読み込みは `path` のまま。ファイル名だけの制約は保存/開くだけの契約)
 - STLは**偏差を指定できる**(細かくすると必ずファイルが大きくなる)
 - `state.parameters` に名前つきの値が出て、`set_parameter` で形が追随する
-- 親ディレクトリが無い保存先は**黙って作らない**
+- **`list_documents` が `models_dir` の中身(名前/更新日時/サイズ/操作数)を返す**
 """
 from __future__ import annotations
 
@@ -41,8 +47,11 @@ SIDE = 20.0
 
 
 @pytest.fixture()
-def session() -> Session:
-    return Session(None, DEVIATION)
+def session(tmp_path: Path) -> Session:
+    # **`models_dir` はテストごとの使い捨てディレクトリ**(2026-08-22)。指定しないと
+    # 既定(リポジトリ直下の `duocad/models/`)を触ってしまう —— pytestが実フォルダを
+    # 汚さないための唯一の理由で、テストの意図とは無関係(`Session.__init__` 参照)。
+    return Session(None, DEVIATION, models_dir=tmp_path / "models")
 
 
 def _select(session: Session, refs: list) -> None:
@@ -101,27 +110,65 @@ def _browser(session: Session, script):
 # 保存と再現(§3.1: 操作ログが正・形状は導出物)
 # --------------------------------------------------------------------------------------
 def test_saving_writes_the_operation_log_and_is_not_a_verb(session: Session, tmp_path: Path) -> None:
-    """保存は操作ログのJSONを書くだけ。**操作ログは伸びない**(文書を変えていないので)。"""
+    """保存は操作ログのJSONを書くだけ。**操作ログは伸びない**(文書を変えていないので)。
+
+    **受け取るのはファイル名だけ**(`models_dir` 配下に固定。要件2)。
+    """
     _box(session)
-    target = tmp_path / "model.json"
     log_before = len(session.document.log.entries)
 
     async def script(send):
-        return await send({"cmd": "save_document", "path": str(target)})
+        return await send({"cmd": "save_document", "name": "model.json"})
 
     (answer, clients) = _browser(session, script)
 
+    target = session.models_dir / "model.json"
     assert answer["type"] == "file" and answer["action"] == "save"
     assert Path(answer["path"]) == target
+    assert answer["name"] == "model.json"
     assert answer["operations"] == log_before
     assert len(session.document.log.entries) == log_before
     assert json.loads(target.read_text(encoding="utf-8"))["operations"], "空のログを書いた"
     assert clients[1].payloads == [], "保存は状態配信ではない(要求した接続にだけ返る)"
 
 
-def test_opening_replays_a_log_that_contains_set_parameter(
-    session: Session, tmp_path: Path
-) -> None:
+def test_models_dir_is_created_if_missing(session: Session) -> None:
+    """**無ければアプリが作る**(要件1)。事前に存在しなくても保存できる。"""
+    assert not session.models_dir.exists()
+    _box(session)
+
+    session.save_document("model.json")
+
+    assert session.models_dir.is_dir()
+    assert (session.models_dir / "model.json").exists()
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "",
+        "   ",
+        "sub/model.json",
+        "sub\\model.json",
+        "..",
+        "../model.json",
+        "C:\\model.json",
+    ],
+)
+def test_save_and_open_reject_anything_but_a_bare_filename(session: Session, bad_name: str) -> None:
+    """**ファイル名だけを受け取る**(要件2)。区切り文字・絶対パス・`..` は拒否する。
+
+    以前の `Session._resolve` はCWD基準で任意の絶対パスを受けていた —— 保存先が
+    「その日サーバをどこで起動したか」で変わる問題そのものだったので、ここを締める。
+    """
+    _box(session)
+    with pytest.raises(ValueError):
+        session.save_document(bad_name)
+    with pytest.raises(ValueError):
+        session.open_document(bad_name)
+
+
+def test_opening_replays_a_log_that_contains_set_parameter(session: Session) -> None:
     """**打ち直した寸法を含むログが開ける**。
 
     パラメータの再生は「その操作までを作り直す」ために文書のログを頭から読むので、
@@ -135,19 +182,16 @@ def test_opening_replays_a_log_that_contains_set_parameter(
     radius = next(name for name, value in session.document.parameters.items() if value == 5.0)
     session.set_parameter(radius, 7.0)
     volume = query.volume(session.document.bodies[-1].shape)
-    target = tmp_path / "with-parameters.json"
-    session.save_document(target)
+    session.save_document("with-parameters.json")
 
-    fresh = Session(None, DEVIATION)
-    fresh.open_document(target)
+    fresh = Session(None, DEVIATION, models_dir=session.models_dir)
+    fresh.open_document("with-parameters.json")
 
     assert query.volume(fresh.document.bodies[-1].shape) == pytest.approx(volume, rel=1e-9)
     assert fresh.document.parameters[radius] == pytest.approx(7.0)
 
 
-def test_opening_rebuilds_the_same_shape_and_reaches_every_connection(
-    session: Session, tmp_path: Path
-) -> None:
+def test_opening_rebuilds_the_same_shape_and_reaches_every_connection(session: Session) -> None:
     """**保存 → 開く → 同じ形**(タスクEの検証2)。開いた文書は全接続へ届く。
 
     形は操作ログから**再生される**ので、この検査は同時に「再生経路が壊れていないこと」の
@@ -156,18 +200,18 @@ def test_opening_rebuilds_the_same_shape_and_reaches_every_connection(
     body, _ = _box(session)
     volume = query.volume(body.shape)
     faces = kernel.face_count(body.shape)
-    target = tmp_path / "model.json"
-    session.save_document(target)
+    session.save_document("model.json")
 
-    fresh = Session(None, DEVIATION)
+    fresh = Session(None, DEVIATION, models_dir=session.models_dir)
 
     async def script(send):
-        return await send({"cmd": "open_document", "path": str(target), "client_op": 3})
+        return await send({"cmd": "open_document", "name": "model.json", "client_op": 3})
 
     (answer, clients) = _browser(fresh, script)
 
     assert answer["type"] == "state"
     assert answer["applied"]["change"] == "document"
+    assert answer["applied"]["name"] == "model.json"
     assert answer["applied"]["client_op"] == 3
     reopened = fresh.document.bodies[-1]
     assert kernel.face_count(reopened.shape) == faces
@@ -178,9 +222,7 @@ def test_opening_rebuilds_the_same_shape_and_reaches_every_connection(
     assert clients[1].payloads, "開いた文書が他の接続へ届いていない"
 
 
-def test_opening_bumps_the_revision_even_when_the_body_id_repeats(
-    session: Session, tmp_path: Path
-) -> None:
+def test_opening_bumps_the_revision_even_when_the_body_id_repeats(session: Session) -> None:
     """開いた後の版は必ず上がる。
 
     Bodyのidは操作ログに記録され**再生で同じidが再現しうる**ので、版まで元へ戻すと、
@@ -189,41 +231,79 @@ def test_opening_bumps_the_revision_even_when_the_body_id_repeats(
     """
     body, _ = _box(session)
     before = session.body_revision(body.id)
-    target = tmp_path / "model.json"
-    session.save_document(target)
+    session.save_document("model.json")
 
-    session.open_document(target)
+    session.open_document("model.json")
 
     reopened = session.document.bodies[-1]
     assert session.body_revision(reopened.id) > before
 
 
-def test_a_failed_open_leaves_the_current_document_alone(session: Session, tmp_path: Path) -> None:
+def test_a_failed_open_leaves_the_current_document_alone(session: Session) -> None:
     """**開くのに失敗しても今の文書を壊さない**(新しい文書の上で再生し切ってから差し替える)。"""
     body, _ = _box(session)
     volume = query.volume(body.shape)
-    broken = tmp_path / "broken.json"
+    session.models_dir.mkdir(parents=True, exist_ok=True)
+    broken = session.models_dir / "broken.json"
     broken.write_text('{"version": 1, "operations": [{"seq": 1, "verb": "no_such_verb"}]}', encoding="utf-8")
 
     with pytest.raises(Exception):
-        session.open_document(broken)
+        session.open_document("broken.json")
 
     assert session.document.bodies[-1] is body
     assert query.volume(body.shape) == pytest.approx(volume)
 
     async def script(send):
-        return await send({"cmd": "open_document", "path": str(tmp_path / "missing.json")})
+        return await send({"cmd": "open_document", "name": "missing.json"})
 
     (answer, _clients) = _browser(session, script)
     assert answer["type"] == "error"
     assert query.volume(session.document.bodies[-1].shape) == pytest.approx(volume)
 
 
-def test_saving_into_a_missing_directory_is_refused(session: Session, tmp_path: Path) -> None:
-    """親ディレクトリを黙って作らない(打ち間違えたパスの下に木を作らない)。"""
+# --------------------------------------------------------------------------------------
+# 一覧(要件3: 名前/更新日時/サイズ/操作数)
+# --------------------------------------------------------------------------------------
+def test_list_documents_reports_name_mtime_size_and_operation_count(session: Session) -> None:
+    """`list_documents` が `models_dir` の中身を返す(名前/更新日時/サイズ/操作数)。"""
     _box(session)
-    with pytest.raises(ValueError):
-        session.save_document(tmp_path / "no-such-dir" / "model.json")
+    log_before = len(session.document.log.entries)
+    session.save_document("a.json")
+    session.set_parameter(next(iter(session.document.parameters)), 30.0)
+    session.save_document("b.json")
+
+    async def script(send):
+        return await send({"cmd": "list_documents"})
+
+    (answer, clients) = _browser(session, script)
+
+    assert answer["type"] == "file" and answer["action"] == "list"
+    by_name = {item["name"]: item for item in answer["files"]}
+    assert set(by_name) == {"a.json", "b.json"}
+    assert by_name["a.json"]["operations"] == log_before
+    assert by_name["b.json"]["operations"] == log_before + 1
+    assert by_name["a.json"]["size"] == (session.models_dir / "a.json").stat().st_size
+    assert by_name["a.json"]["mtime"] > 0
+    assert clients[1].payloads == [], "一覧も状態配信ではない(要求した接続にだけ返る)"
+
+
+def test_list_documents_creates_the_folder_and_skips_unreadable_files(session: Session) -> None:
+    """一覧も**無ければ作る**(要件1)。壊れたファイルは例外で丸ごと落ちず、読める分だけ返す。"""
+    assert not session.models_dir.exists()
+
+    async def script(send):
+        return await send({"cmd": "list_documents"})
+
+    (answer, _clients) = _browser(session, script)
+    assert answer["files"] == []
+    assert session.models_dir.is_dir()
+
+    (session.models_dir / "broken.json").write_text("not json at all", encoding="utf-8")
+    _box(session)
+    session.save_document("good.json")
+
+    (answer, _clients) = _browser(session, script)
+    assert [item["name"] for item in answer["files"]] == ["good.json"]
 
 
 def test_stl_export_honours_the_deviation(session: Session, tmp_path: Path) -> None:

@@ -45,6 +45,7 @@
     ghostEntity,
     runsOutsideSketch,
   } from './commands/sketch'
+  import FilesPanel from './FilesPanel.svelte'
   import PartsPanel from './PartsPanel.svelte'
   import SelectionPanel from './SelectionPanel.svelte'
   import SketchPanel from './SketchPanel.svelte'
@@ -57,6 +58,7 @@
     type BasePlaneName,
     type BodyGeometry,
     type ConnectionStatus,
+    type DocumentInfo,
     type EdgesPayload,
     type FilePayload,
     type PreviewPayload,
@@ -162,6 +164,21 @@
   /** 直前に出したファイル操作の `client_op`(応答が `file` で返ったときの待ちを解く)。 */
   let lastFileOp: number | null = null
   /**
+   * `duocad/models/` の中身(`list_documents` の写し。`FilesPanel.svelte` が描く)。
+   *
+   * **状態はコアが持つ**(2026-08-22)。ここはサーバの応答をそのまま置くだけで、
+   * 保存/開くのたびに `refreshDocuments()` を呼んで最新化する(サーバ側でファイルが
+   * 増減してもここが古いままにならないよう、開いたとき・保存/開くの直後に取り直す)。
+   */
+  let documentList = $state<DocumentInfo[]>([])
+  /**
+   * 直近に保存/開いたファイル名(画面に「今どれを触っているか」を出す)。
+   *
+   * **未保存マーク・自動保存はスコープ外**(2026-08-22決定)—— この名前は「最後に
+   * 保存/開いた対象」を指すだけで、その後の編集で古くなっても追わない。
+   */
+  let currentDocumentName = $state<string | null>(null)
+  /**
    * **この画面が出した操作の seq**(操作履歴パネルの「自分」の印)。
    *
    * 操作ログに主体は入っていない(§3.6)ので、区別できるのはここまで ——
@@ -223,6 +240,9 @@
       // (再)接続したら今のAI設定を取り直す(サーバは再起動していなくても、
       // 前回の接続が切れている間に別の画面が `ai_configure` した可能性がある)。
       if (next === 'open') session.aiGetStatus()
+      // (再)接続したら `models/` の一覧も取り直す(サーバの再起動・別セッションの
+      // 保存で増減しうる。`FilesPanel.svelte` が空のまま固まらないようにする)。
+      if (next === 'open') refreshDocuments()
       // 応答待ちの最中に接続が切れたら、その `client_op` はもう返ってこない。
       // 捨てないと再接続後も「直前の操作の応答待ち」が残り続け、Enterが永久に拒否される
       // (`onerror` を伴わない正常クローズで踏む)。
@@ -335,6 +355,18 @@
       if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
       return
     }
+    if (applied && applied.change === 'document') {
+      // **開いた**(`open_document`)。保存と同じく、ここでファイル名を追い、
+      // 一覧も取り直す(開いた版が一覧の「操作数」に含まれるのはこのファイル自身なので
+      // 変わらないが、他の操作で増減している可能性は保存と同じく否定できない)。
+      currentDocumentName = applied.name
+      note(`開いた: ${applied.name}`)
+      if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
+      markOwnership(applied)
+      lastApplied = applied
+      refreshDocuments()
+      return
+    }
     if (applied) {
       // 作ったスケッチへはそのまま入る(作ってから改めて「入る」を押させない)
       if (applied.verb === 'sketch_create' && applied.sketch_id) enterSketch(applied.sketch_id)
@@ -388,11 +420,19 @@
   }
 
   /**
-   * ファイルを書いた。**どこへ何バイト書いたかを必ず画面へ出す** ——
+   * ファイルを書いた/一覧が届いた。**どこへ何バイト書いたかを必ず画面へ出す** ——
    * 書き出しはブラウザの中に痕跡が残らない操作なので、通知が唯一の確認手段になる。
    */
   function handleFile(payload: FilePayload): void {
+    // **`list_documents` の応答はここで分岐して抜ける**。一覧の取得は保存/開くの
+    // たびに黙って裏で走る(`refreshDocuments` 参照)ので、他のファイル操作と同じ
+    // 「保存した/開いた」通知を出すと、一覧を取り直すたびに無意味な行が積まれる。
+    if (payload.action === 'list') {
+      documentList = payload.files ?? []
+      return
+    }
     lastFile = payload
+    if (payload.name) currentDocumentName = payload.name
     // **応答が `file` で返ったなら、その操作の待ちはここで解く**。
     // 「文書を変えるか」の判定はブラウザとサーバで別々に持っているので、片方だけ
     // 直したときに**状態配信を待ち続けて確定が永久に拒否される**経路ができる。
@@ -401,6 +441,31 @@
     const size = `${payload.bytes.toLocaleString()} B`
     const extra = payload.operations !== undefined ? ` / 操作 ${payload.operations}件` : ''
     note(`${payload.action}: ${payload.path}(${size}${extra})`)
+    // **保存/開いた直後に一覧を取り直す**。上書きで更新日時・サイズ・操作数が変わり、
+    // 新規保存では一覧に新しい行が要る —— 応答をここで待たず、次のWS往復に任せる。
+    if (payload.action === 'save') refreshDocuments()
+  }
+
+  /** `duocad/models/` の一覧をサーバへ取り直しに行く(`FilesPanel.svelte` が描く)。 */
+  function refreshDocuments(): void {
+    session.runVerb('list_documents', {}, nextOp())
+  }
+
+  /**
+   * ファイル名を渡して保存する(新規保存も一覧からの上書きも同じverb)。
+   *
+   * **`pendingOp` は立てない** —— `ParametersPanel.svelte` の `onSetParameter` と同じ
+   * 理由で、`FilesPanel.svelte` は `CommandHost` の応答待ちの外にいる。
+   */
+  function saveDocumentAs(name: string): void {
+    const op = nextOp()
+    lastFileOp = op
+    session.runVerb('save_document', { name }, op)
+  }
+
+  /** ファイル名を渡して開く。応答は `state`(`applied.change === 'document'`)で来る。 */
+  function openDocumentByName(name: string): void {
+    session.runVerb('open_document', { name }, nextOp())
   }
 
   // ---------------------------------------------------------------- 選択(コアを叩くだけ)
@@ -890,6 +955,8 @@
       redoCount: model?.redo_count ?? 0,
       myOperations,
       lastFile,
+      documentList,
+      currentDocumentName,
     }
   })
 </script>
@@ -900,6 +967,10 @@
   <header>
     <strong>duocad</strong>
     <span class="tag" class:on={status === 'open'}>{status}</span>
+    <!-- **現在開いているファイル名**(完了条件4)。未保存(この画面でまだ
+         保存/開いていない)は「(未保存)」と出す —— 自動保存・未保存マークは
+         スコープ外だが、「今どれを触っているか」は保存/開いた直後から出る。 -->
+    <span id="current-file" class="dim">{currentDocumentName ?? '(未保存)'}</span>
     {#if model}
       <span>部品 {partBodies.length}</span>
       <span>操作 {model.applied_count}</span>
@@ -979,6 +1050,13 @@
         onSelectRegion={selectRegion}
         selectedEntities={selectedEntities}
         onToggleEntity={toggleEntity}
+      />
+
+      <FilesPanel
+        documents={documentList}
+        currentName={currentDocumentName}
+        onSave={saveDocumentAs}
+        onOpen={openDocumentByName}
       />
     </aside>
 

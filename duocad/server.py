@@ -26,7 +26,7 @@
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
         {"type": "preview", "preview_id": int|None, "verb": str, "bodies": [...]}
         {"type": "edges", "body_id": str, "revision": int, "edges": [...]}            # D
-        {"type": "file", "action": "save"|"export_step"|"export_stl", "path", "bytes"} # E
+        {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path", "bytes"} # E
         {"type": "error", "message": str, "where": str}
         {"type": "warning", "message": str}
         {"type": "ai_status", "provider", "model", "base_url", "api_key_configured", "running", "providers"}  # G
@@ -128,6 +128,12 @@ from .verbs import set_visible as set_visible_verb
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_WEB_DIST = REPO_ROOT / "web" / "dist"
+#: 保存/開くの既定の置き場(2026-08-22本人決定。engine
+#: `duocad-save-location-fixed-folder`)。**リポジトリ直下・gitignore対象** —— 毎回パスを
+#: 手打ちする代わりに、決まったフォルダの中身を一覧から選ぶ形にする。無ければ
+#: `Session._resolve_document_name` が作る。テストは `Session(models_dir=tmp_path)` で
+#: ここを差し替えて実フォルダを触らない。
+DEFAULT_MODELS_DIR = REPO_ROOT / "models"
 
 # サーバは常に空の文書で立ち上がり、STEPはアプリ内の「STEP読み込み」かMCPの
 # `import_step` から読む(どちらも編集可能なボディまで作る verb `import_step_editable` を
@@ -253,9 +259,15 @@ class Session:
         self,
         step_path: Optional[Path],
         deviation: float,
+        models_dir: Optional[Path] = None,
     ) -> None:
         self.document = Document()
         self.deviation = float(deviation)
+        #: 保存/開く/一覧の唯一の置き場(2026-08-22)。既定は `DEFAULT_MODELS_DIR`
+        #: (リポジトリ直下の `models/`)。テストが実フォルダを汚さないよう差し替えられる。
+        self.models_dir: Path = (
+            DEFAULT_MODELS_DIR if models_dir is None else Path(models_dir)
+        ).resolve()
         self.warnings: list[str] = []
         self._applied_count = 0
         self._revision_state: dict = {}    # body_id -> (id(shape), visible) 直近の状態
@@ -1023,15 +1035,39 @@ class Session:
         resolved = Path(str(path)).expanduser()
         return resolved if resolved.is_absolute() else (Path.cwd() / resolved).resolve()
 
-    def save_document(self, path: Any) -> dict:
+    def _resolve_document_name(self, name: Any) -> Path:
+        """**ファイル名だけ**を受け取り、`models_dir` 配下に閉じたパスへ解決する。
+
+        2026-08-22本人決定(engine `duocad-save-location-fixed-folder`)——
+        保存/開くのたびにパスを手打ちする代わりに、決まったフォルダの中身を一覧から
+        選ぶ形にした。以前の `_resolve`(CWD基準の任意の絶対パスを許す)は
+        `save_document`/`open_document` からは呼ばれなくなった —— 保存先が
+        「その日サーバをどこで起動したか」で変わるのがそもそもの問題だったので、
+        起点をサーバのCWDから `models_dir` へ固定して塞ぐ。
+
+        **区切り文字・絶対パス・`..` は拒否する**(黙って`models_dir`の外を書く/読むことを
+        許さない)。`models_dir` が無ければここで作る(要件1「無ければアプリが作る」)。
+        """
+        text = str(name)
+        if text.strip() == "":
+            raise ValueError("ファイル名が空")
+        if "/" in text or "\\" in text:
+            raise ValueError(f"ファイル名だけを受け取る(区切り文字は不可): {text!r}")
+        if text in (".", ".."):
+            raise ValueError(f"ファイル名として使えない: {text!r}")
+        candidate = Path(text)
+        if candidate.is_absolute():
+            raise ValueError(f"ファイル名だけを受け取る(絶対パスは不可): {text!r}")
+        self.models_dir.mkdir(parents=True, exist_ok=True)
+        return (self.models_dir / text).resolve()
+
+    def save_document(self, name: Any) -> dict:
         """操作ログをJSONで書き出す。**verbではない**(文書を変えないのでログに載らない)。
 
-        親ディレクトリが無ければ ValueError(黙って作らない —— 打ち間違えたパスの下に
-        深い木を作ると、次に開くときに見つけられない)。
+        `name` は**ファイル名だけ**(`models_dir` 配下に固定)。区切り文字・絶対パス・
+        `..` は `_resolve_document_name` が拒否する。
         """
-        target = self._resolve(path)
-        if not target.parent.exists():
-            raise ValueError(f"保存先のディレクトリが無い: {target.parent}")
+        target = self._resolve_document_name(name)
         payload = self.document.log.to_json()
         # **一時ファイルへ書いてから差し替える**。素の上書きは既存の
         # 中身を先に切り詰めるので、途中で落ちると**唯一の永続形式である前回の保存が
@@ -1043,12 +1079,15 @@ class Session:
         return {
             "action": "save",
             "path": str(target),
+            "name": target.name,
             "bytes": target.stat().st_size,
             "operations": len(self.document.log.entries),
         }
 
-    def open_document(self, path: Any) -> dict:
+    def open_document(self, name: Any) -> dict:
         """保存した操作ログを読み、**再生して**文書を差し替える(§3.1「これが正」)。
+
+        `name` は**ファイル名だけ**(`models_dir` 配下に固定。`save_document` と同じ)。
 
         **失敗しても今の文書を壊さない**。新しい `Document` の上で再生し切ってから
         差し替えるので、途中で落ちたら例外が上がるだけで画面はそのまま残る。
@@ -1057,7 +1096,7 @@ class Session:
         Bodyのidは再生で作り直されるが、同じidが再び現れる可能性があり、古い形状を
         指したキャッシュが残っていると別の文書の形を配ることになる。
         """
-        source = self._resolve(path)
+        source = self._resolve_document_name(name)
         if not source.exists():
             raise FileNotFoundError(f"開けるファイルが無い: {source}")
         log = OpLog.from_json(source.read_text(encoding="utf-8"))
@@ -1086,8 +1125,37 @@ class Session:
             "change": "document",
             "action": "open",
             "path": str(source),
+            "name": source.name,
             "operations": len(log.entries),
         })
+
+    def list_documents(self) -> dict:
+        """`models_dir` の中身を一覧にする(名前/更新日時/サイズ/操作数)。
+
+        **verbではない**(`changes_document=False`)。ここが導入前は
+        「ディレクトリ列挙のコードがリポジトリに1つも無い」状態で、開く/保存を
+        アプリ内から一覧で選ぶには必須の穴だった。
+
+        操作数は `OpLog.from_json` で数える(§3.1「保存形式は操作ログのJSON」)—— 形状の
+        再生(`log.replay`)まではせず、パースだけなので軽い。壊れたファイル(手で
+        触られた・書き込み途中の `.writing` 等)は一覧からは省く(一覧が原因不明の
+        例外で丸ごと落ちるより、読める分だけ見せる方が実用に沿う)。
+        """
+        self.models_dir.mkdir(parents=True, exist_ok=True)
+        files = []
+        for path in sorted(self.models_dir.glob("*.json")):
+            try:
+                stat = path.stat()
+                operations = len(OpLog.from_json(path.read_text(encoding="utf-8")).entries)
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            files.append({
+                "name": path.name,
+                "mtime": stat.st_mtime,
+                "size": stat.st_size,
+                "operations": operations,
+            })
+        return {"action": "list", "path": str(self.models_dir), "bytes": 0, "files": files}
 
     def export_step_file(self, path: Any, body_ids: Optional[list] = None) -> dict:
         """STEPを書き出す。**ログに載らない**(文書を変えないのでverbではない)。"""
@@ -1457,7 +1525,7 @@ class Server:
             # `_on_core_change` 側でも拾われるが、`_apply` の間は `_dispatching` が
             # 立っているので二重には配らない。
             elif command == "open_document":
-                applied = self._apply(self.session.open_document, message["path"])
+                applied = self._apply(self.session.open_document, message["name"])
                 applied["client_op"] = message.get("client_op")
                 await self._push(connection, applied=applied)
             elif command == "preview":

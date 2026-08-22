@@ -45,7 +45,11 @@ async function main() {
   console.log(`smoke-files: ${executablePath}`)
   console.log(`  workdir: ${workdir}`)
 
-  const server = attachUrl === null ? await startServer({ wsPort, httpPort }) : null
+  // **`modelsDir: workdir`** —— 保存/開くは `duocad/models/` 配下のファイル名だけを
+  // 受け取るようになった(2026-08-22)。渡さないとリポジトリ直下の実 `models/` を
+  // 検査が書き換えてしまうので、既存の使い捨てworkdirをそのまま流用する
+  // (STEP/STL書き出しの `join(workdir, ...)` と同じディレクトリで、実在確認が楽になる)。
+  const server = attachUrl === null ? await startServer({ wsPort, httpPort, modelsDir: workdir }) : null
   const url = server?.url ?? attachUrl
   console.log(`  server : ${url}${server === null ? ' (既に立っているサーバへ接続)' : ''}`)
 
@@ -95,6 +99,8 @@ async function main() {
             redoCount: hook.redoCount,
             myOperations: hook.myOperations,
             lastFile: hook.lastFile,
+            documentList: hook.documentList,
+            currentDocumentName: hook.currentDocumentName,
             log: hook.state.log.length,
             messages: hook.messages,
             // 走行中に出たエラーの控え(`App.svelte` の `errorLog`)。**トーストは8秒で消える**ので、
@@ -377,10 +383,15 @@ async function main() {
     ok(`redoで戻った。この画面が出した操作 ${mine} 件に「自分」の印が付いている`)
 
     // ================================================================ 検証2: 保存と再現
-    const documentPath = join(workdir, 'model.json')
-    await page.click('#file-save')
-    await typeInto('#file-path', documentPath)
-    await page.keyboard.press('Enter')
+    // 2026-08-22: 保存/開くは `duocad/models/` 配下の**ファイル名の一覧**へ変わった
+    // (engine `duocad-save-location-fixed-folder`)。パスを打つ `#file-path` は
+    // もう save/open には無い —— `FilesPanel.svelte` の新規保存欄(`#file-name-input`
+    // + `#file-save-new`)と、一覧の行(`.files-row[data-name] .files-open` /
+    // `.files-overwrite`)を使う。
+    const documentName = 'model.json'
+    const documentPath = join(workdir, documentName) // startServer に modelsDir=workdir を渡してある
+    await typeInto('#file-name-input', documentName)
+    await page.click('#file-save-new')
     await waitFor(
       () => window.__duocad.lastFile?.action === 'save',
       '保存の応答が返らない',
@@ -388,6 +399,16 @@ async function main() {
     const saved = (await look()).lastFile
     if (!existsSync(documentPath)) fail(`保存したはずのファイルが無い: ${documentPath}`)
     ok(`保存した(${saved.path} / ${saved.bytes} B / 操作 ${saved.operations} 件)`)
+
+    // **現在のファイル名が画面に出る**(完了条件4)。ヘッダとパネルの両方が同じ名前を映す。
+    await waitFor(
+      (expected) => window.__duocad.currentDocumentName === expected,
+      '保存後に現在のファイル名が更新されない',
+      documentName,
+    )
+    const headerName = await page.$eval('#current-file', (el) => el.textContent.trim())
+    if (headerName !== documentName) fail(`ヘッダのファイル名が違う: "${headerName}"`)
+    ok(`現在のファイル名が画面に出た("${headerName}")`)
 
     const shapeBefore = (await look()).bodies[0]
 
@@ -411,9 +432,17 @@ async function main() {
     )
     ok('開く前に undo で形を変えた(開いて戻ることを見るため)')
 
-    await page.click('#file-open')
-    await typeInto('#file-path', documentPath)
-    await page.keyboard.press('Enter')
+    // **再接続で一覧が届く**(`App.svelte` が `onStatus('open')` で `refreshDocuments()` を
+    // 呼ぶ)。一覧に出ていることを先に見てから、クリックで開く —— **確認ダイアログは無い**
+    // (README「省けるクリックは徹底的に省く」)。
+    await waitFor(
+      (expected) => (window.__duocad.documentList ?? []).some((file) => file.name === expected),
+      '再接続後にファイル一覧が届かない',
+      documentName,
+    )
+    ok('再接続後、一覧に保存したファイルが出ている')
+
+    await page.click(`.files-row[data-name="${documentName}"] .files-open`)
     await waitFor(
       (expectedVolume) => {
         const body = window.__duocad.parts[0]
@@ -427,8 +456,41 @@ async function main() {
       fail(`開いた形の面数が違う: ${shapeBefore.faces} -> ${reopened.faces}`)
     }
     ok(
-      `**保存 → 再読込 → 開く で同じ形が戻った**(体積 ${reopened.volume.toFixed(4)} / 面 ${reopened.faces}` +
-        ' — 操作ログから再生された)',
+      `**保存 → 再読込 → 一覧から開く で同じ形が戻った**(体積 ${reopened.volume.toFixed(4)} / 面 ${reopened.faces}` +
+        ' — 操作ログから再生された。確認ダイアログは挟んでいない)',
+    )
+    await waitFor(
+      (expected) => window.__duocad.currentDocumentName === expected,
+      '開いた後に現在のファイル名が更新されない',
+      documentName,
+    )
+    ok('開いた後も現在のファイル名が画面に出ている')
+
+    // ================================================================ 検証2b: 上書き保存
+    // 「一覧から選んで上書き」(完了条件4の後半)。形を変えてから上書きし、
+    // 一覧の操作数・サイズが増えていることを見る(=本当に書き直った)。
+    const beforeOverwrite = (await look()).documentList.find((file) => file.name === documentName)
+    if (!beforeOverwrite) fail('上書き前の一覧に対象ファイルが無い')
+    await page.click('#undo') // 形を変える(上書きが実際に効いたかを見分けるため)
+    await waitFor(
+      (before) => Math.abs((window.__duocad.parts[0]?.volume ?? 0) - before) > 1e-6,
+      'undoしても形が変わらない(上書き検査の前提が作れない)',
+      reopened.volume,
+    )
+    await page.click(`.files-row[data-name="${documentName}"] .files-overwrite`)
+    // **`lastFile.action === 'save'` では待てない** —— 直前の新規保存で既に真になっている。
+    // 上書きが本当に効いたことは、undoで1件減らした後の操作数が一覧へ反映されることで見る。
+    await waitFor(
+      (expected) => {
+        const file = (window.__duocad.documentList ?? []).find((item) => item.name === expected)
+        return Boolean(file && file.operations === window.__duocad.state.log.length)
+      },
+      '上書き後の一覧の操作数が更新されない',
+      documentName,
+    )
+    ok(
+      `**一覧から選んで上書き**できた(操作 ${beforeOverwrite.operations} -> ` +
+        `${(await look()).documentList.find((file) => file.name === documentName).operations} 件)`,
     )
 
     // ================================================================ 検証4: 書き出し
