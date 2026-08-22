@@ -1,26 +1,16 @@
-"""M4(最小の先取り)契約: MCPサーバと「コアが発火し、アプリ層が購読する」上り方向。
-
-**このタスクの意義**: AIが「前面パネルを隠して」と言えるようにする。見えない面は選べない
-以上、可視性は選択機構の一部であり(`tests/test_visibility.py`)、それをAIが触れて初めて
-大規模モデルでの交互操作が成立する。
-
-ここで固定する契約は4つ:
+"""MCPサーバと「コアが発火し、アプリ層が購読する」上り方向の契約。
 
 1. **プロトコル** — `initialize` / `tools/list` / `tools/call` が MCP(JSON-RPC 2.0)として
-   正しく喋れること。**依存を増やさず素で実装した**(`duocad/mcp_server.py` のdocstring)
-   ので、プロトコルの正しさはここでしか担保されない。
-2. **M4の3つ(`describe_document` / `set_visible` / `describe_shape`)が名前も振る舞いも
-   変わらず生き残っていること** — ツール全体の顔ぶれの契約は
-   `tests/test_mcp_verbs.py` の `EXPECTED_TOOLS` にひとつだけ置く。
+   正しく喋れること。**依存を増やさず素で実装した**ので、プロトコルの正しさはここでしか
+   担保されない。
+2. **`describe_document` / `set_visible` / `describe_shape` が名前も振る舞いも変わらず
+   生き残っていること** — ツール全体の顔ぶれの契約は `tests/test_mcp_verbs.py` の
+   `EXPECTED_TOOLS` にひとつだけ置く。
 3. **`set_visible` はコアの verb を経由する** — 操作ログに載り、undoで戻る。
-   アプリ層(ブラウザ)を一切通らない。
 4. **上り方向** — MCPが文書を変えると `Session` が変更イベントを発火し、購読している
-   WebSocketサーバが**接続している全クライアントへ配信する**。これが動かないと交互操作は
-   原理的に成立しない(実装計画書§2「外してはいけない3つ」の2番目)。
+   WebSocketサーバが**接続している全クライアントへ配信する**。
 
-**実ブラウザでの確認は `web/scripts/smoke-mcp.mjs`** が行う(27部品のPCケースを読み、
-MCP経由で手前の部品を隠し、画面から消えて奥の面が選べるようになることを本物のEdgeで見る)。
-pytest側は軽いモデル(`shelf_attachment_GD.step`)だけを使う。
+**実ブラウザでの確認は `web/scripts/smoke-mcp.mjs`** が行う。
 """
 from __future__ import annotations
 

@@ -1,42 +1,21 @@
-"""H(同時編集の安全性)契約: 人とAIが**本当に並行して**同じ文書を触るときの2つの穴を塞ぐ。
+"""同時編集の安全性 —— 人とAIが**本当に並行して**同じ文書を触るときの2つの穴を塞ぐ。
 
-## 背景
+「添字は現時点のものであって、形が変われば別の実体を指す」ので、MCP経路(人が頼んで待つ=
+実質シリアル)では問題にならなかったことが、アプリ内AIでは本当に並行になる。
 
-`duocad/selection.py` が明記するとおり「添字は現時点のものであって、形が変われば別の
-実体を指す」(§3.5・§7)。MCP経路では「人が頼んで待つ」ので実質シリアルだったが、
-アプリ内AI(タスクF・G)では本当に並行になる —— AIが数十秒〜数分考えている間に、
-人が形を変えたり選択を作り直したりできる。
-
-## このファイルが固定する2つ
+固定するのは2つ:
 
 1. **AIのターンをまたいで文書が変わったとき、AIのverb呼び出しが静かに別の対象へ効かない。**
-   タスクC(`Session._reset_selection_if_needed`)が形を変えるverbの確定後に確定選択を
-   全リセットする契約は**既に成り立っていた**(実機で確認・下の「A」節が固定する)。
-   ここで新しく埋めたのは、その契約が届かない2つの経路:
-   - `fillet` / `chamfer` / `extrude`(領域)は**選択を経由しない対象ボディ解決**(`body_id`
-     の既定=アクティブ)を持ち、確定選択が生きていても対象ボディが隠されていれば
-     従来は素通りしていた(「B」節)。`duocad/verbs/_common.py::editable_body` の
-     `require_visible` を `fillet`/`chamfer` にも課し、`extrude` の `_resolve_target` /
-     `_do_extrude` にも同じ検査を足した。
-   - 選択をまったく経由しない verb(`set_visible` 等)は、そもそも `resets_selection` の
-     対象外である。`AgentLoop.run()` に**楽観ロック**を足した(「D」節) ——
-     モデルへの1往復を送る直前に文書の版(`current_seq()`)を控え、ツールを**1件実行する
-     直前ごとに**比べ、ずれていればそのツール呼び出し以降を実行せずモデルへ選び直させる。
-   - **QA(2026-08-20)で2件のcriticalが見つかり、同日中に直した**: (a) 版に選択の
-     「指紋」(`selection.fingerprint`)を混ぜていなかったので、人が**辺Aを外して同じ種別の
-     辺Bへ選び直して確定する**(件数も種別も変わらない=`resets_selection`も
-     `selection_empty`も発火しない)入れ替えを見逃していた(`current_seq()` は
-     `(ログの本数, 選択の指紋)` のタプルへ改版)。(b) チェックが応答到着直後の1回だけで、
-     1つの応答に束ねられた複数ツール呼び出しの**間**(1件目の実行後〜2件目の実行前)は
-     見ていなかった(1件ごとのチェックへ変更)。
-2. **確定済み選択の種別とverbが要求する種別の食い違いが、モデルに考えさせる前に
-   機械的に検出されて理由が返る。** engine
-   `01_inbox/2026-08-20-llm-agent-thinking-runaway-on-contradictory-task.md` の実測
-   (矛盾した指示でモデルが確認ツールを5回繰り返し600秒応答が無かった)への予防。
-   `SelectionEmpty` の**コードは変えない**(tests/README.md 決定3 —— 「何も選んでいない」
-   と「違う種別を選んだ」は次の一手がどちらも「選び直す」で同じ、という既存の意図的な
-   設計を尊重する)。変えたのは**文面**だけ —— 確定選択が空でないのに種別が違うだけなら、
-   実際に確定しているものを名指しする(「C」節)。
+   `Session._reset_selection_if_needed` の全リセットが届かない2つの経路を埋めてある ——
+   (a) `fillet` / `chamfer` / `extrude` は**選択を経由しない対象ボディ解決**(`body_id` の
+   既定=アクティブ)を持つので `editable_body(require_visible=True)` を課す(「B」節)、
+   (b) 選択をまったく経由しないverb(`set_visible` 等)には `AgentLoop.run()` の**楽観ロック**
+   (「D」節)。版は `(ログの本数, 選択の指紋)` で、チェックは**ツール1件を実行する直前ごと**
+   —— 件数も種別も変わらない「選択の入れ替え」も、1つの応答に束ねられた呼び出しの**間**も
+   これで見る(「E」節)。
+2. **確定済み選択の種別とverbが要求する種別の食い違いが、モデルに考えさせる前に機械的に
+   検出されて理由が返る。** 矛盾した指示でモデルが確認ツールを5回繰り返し600秒応答が
+   無かった実測への予防(「C」節)。
 """
 from __future__ import annotations
 
@@ -124,8 +103,7 @@ def test_undo_between_commit_and_the_verb_call_also_empties_the_selection(box_se
 def test_fillet_refuses_a_body_hidden_after_the_selection_was_confirmed(box_session: Session):
     """人が確定選択を消費させる**前に**そのボディを隠すと、`fillet` は静かに丸めない。
 
-    2026-08-20実測: 修正前はこの手順で `fillet` が成功していた
-    (`duocad/verbs/_common.py::editable_body` の `require_visible` を参照)。
+    実測: `require_visible` を課す前はこの手順で `fillet` が成功していた。
     """
     commit_edge(box_session)
     box_session.set_visible("box", False)  # 人が隠す(選択は消えない = 選択の外の経路)
@@ -160,10 +138,8 @@ def test_extrude_regions_refuses_the_active_body_when_it_was_hidden_meanwhile(
 def test_a_kind_mismatch_names_what_is_actually_confirmed(box_session: Session):
     """面が3枚確定しているのに `fillet`(辺が要る)を呼ぶと、理由に**両方**が入る。
 
-    2026-08-20の実測(engine `01_inbox/...-thinking-runaway-...md`)は、この情報が
-    無かったためにモデルが確認ツールを5回繰り返して止まったことへの予防 ——
     1回の呼び出しの返り値だけで「フィレットは辺を要求するが、確定しているのは面」と
-    分かるようにする。コードは変えない(`selection_empty` のまま)。
+    分かるようにする(モデルが確認ツールを繰り返して止まるのを防ぐ)。
     """
     selection.propose_selection(
         box_session.document,
@@ -304,20 +280,17 @@ def test_the_optimistic_lock_does_not_trip_on_the_loops_own_actions(box_session:
 
 
 # ========================================================================================
-# E. QA(2026-08-20)で見つかったcritical2件への回帰
+# E. 版の比較が見逃しうる2つの経路への回帰
 # ========================================================================================
 def test_reselecting_the_same_kind_between_commit_and_the_verb_call_is_detected(
     box_session: Session,
 ):
-    """QA critical指摘1: ログの本数だけでは「選択の入れ替え」を見逃す。
+    """ログの本数だけでは「選択の入れ替え」を見逃す。
 
-    `propose_selection` / `commit_selection` は操作ログに一切乗らない
-    (`duocad/selection.py` モジュールdocstring「操作ログとの関係」)ので、`current_seq()`
-    が `len(log.entries)` だけを見ていた旧実装は、人が**辺1の選択を外して同じ種別
-    (辺)の辺5へ選び直して確定する**手順を検出できなかった —— 件数も種別も変わらないので
-    `resets_selection` の全リセットも `selection_empty` も発火しない。
-    `current_seq()` に選択の指紋(`selection.fingerprint`)を混ぜたことで、この入れ替えも
-    「版が動いた」として検出されることを固定する。
+    `propose_selection` / `commit_selection` は操作ログに一切乗らないので、人が**辺1の選択を
+    外して同じ種別(辺)の辺5へ選び直して確定する**手順は件数も種別も変わらず、
+    `resets_selection` も `selection_empty` も発火しない。`current_seq()` に選択の指紋を
+    混ぜたことでこの入れ替えも「版が動いた」として検出されることを固定する。
     """
     tools = DocumentTools(box_session)
     commit_edge(box_session, index=1)  # AIはこの時点の「辺1」を見て計画したはず
@@ -348,14 +321,13 @@ def test_reselecting_the_same_kind_between_commit_and_the_verb_call_is_detected(
 
 
 class InterferingTools:
-    """`DocumentTools` を薄く覆い、**N回目の `current_seq()` 呼び出し**の直前に
-    副作用を挟める(QA critical指摘2の再現専用)。
+    """`DocumentTools` を薄く覆い、**N回目の `current_seq()` 呼び出し**の直前に副作用を挟める。
 
     `ConcurrentEditProvider` は往復(`provider.complete()`)単位でしか副作用を挟めないので、
-    「1つの応答に束ねられた2件のツール呼び出しの間」という**呼び出し単位**の隙間は
-    こちらでなければ作れない。副作用を `current_seq()` の呼び出し自体の直前で起こすのは、
-    `AgentLoop.run()` が呼び出し直前にそれを読む構造そのものを利用して、
-    「直前チェックの次の読み取りで初めて変化が見える」ことを保証するため。
+    「1つの応答に束ねられた2件のツール呼び出しの間」という**呼び出し単位**の隙間はこちらで
+    なければ作れない。副作用を `current_seq()` の呼び出し自体の直前で起こすのは、
+    `AgentLoop.run()` が呼び出し直前にそれを読む構造そのものを利用して、「直前チェックの次の
+    読み取りで初めて変化が見える」ことを保証するため。
     """
 
     def __init__(self, inner: DocumentTools, trigger_at_call: int, side_effect) -> None:
@@ -383,14 +355,11 @@ class InterferingTools:
 def test_a_concurrent_edit_between_two_tool_calls_in_the_same_reply_is_detected(
     box_session: Session,
 ):
-    """QA critical指摘2: 1つの応答に束ねられた複数のツール呼び出しの**間**も見る。
+    """1つの応答に束ねられた複数のツール呼び出しの**間**も見る。
 
-    以前は応答が届いた直後の1回だけ版を確かめ、残り全部を素通しで実行していた。
-    本番経路(`_AiToolsOnLoop._run_on_loop`)は呼び出しのたびにイベントループへ制御を
-    返すので、1件目の実行後・2件目の実行前にも人の操作が挟まりうる。ここでは
-    `current_seq()` の4回目の呼び出し(=1件目の実行後の基準値取得のさらに次、
-    つまり2件目の直前チェック)の直前に人の操作を割り込ませ、2件目が実行されない
-    ことを固定する。
+    本番経路(`_AiToolsOnLoop._run_on_loop`)は呼び出しのたびにイベントループへ制御を返すので、
+    1件目の実行後・2件目の実行前にも人の操作が挟まりうる。`current_seq()` の4回目の呼び出し
+    (=2件目の直前チェック)の直前に人の操作を割り込ませ、2件目が実行されないことを固定する。
     """
     inner = DocumentTools(box_session)
     commit_face(box_session, index=1)

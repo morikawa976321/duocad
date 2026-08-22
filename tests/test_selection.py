@@ -1,22 +1,17 @@
-"""A1契約: 選択集合をコアの第一級オブジェクトにする(項番1〜14)。
+"""選択集合をコアの第一級オブジェクトにする契約。
 
-**このファイルが定義するのは「交互操作が成立するための唯一の必要条件」である**
-(実装計画書§2.1)。AIが選択を提案し、人が過不足を直し、AIがそれに verb を適用する——
-この一巡は、選択集合が**コアにある共有オブジェクト**でなければ原理的に閉じない
-(選択の正がブラウザ側にあると、AIから読めも書けもしない)。
+AIが選択を提案し、人が過不足を直し、AIがそれに verb を適用する —— この一巡は、選択集合が
+**コアにある共有オブジェクト**でなければ原理的に閉じない(選択の正がブラウザ側にあると、
+AIから読めも書けもしない)。満たすべきは **永続 / 双方向(AIが書ける) / 種別を保持 /
+差分編集可能 / 出所を区別(提案か確定か)** の5つ。
 
-満たすべき5条件(§2.1): **永続 / 双方向(AIが書ける) / 種別を保持 / 差分編集可能 /
-出所を区別(提案か確定か)**。
-
-## 設計(理由は tests/README.md の A 節が正)
-
-- **`origin` は集合単位**(§3.5のデータモデルどおり)。要素単位の `pending: bool` は採らない
+- **`origin` は集合単位**。要素単位の `pending: bool` は採らない
 - **遷移**: `propose_selection`→"proposed" / `modify_selection`(人が触る)→"user" /
   `commit_selection`→"user"。**人が触ること自体が承認**である
 - **`origin="proposed"` のまま verb には渡せない**(`confirmed_items` が ValueError)。
   AIは `commit_selection()` を明示的に呼べば自分の提案を実行できる —— 禁止ではなく
-  「黙って通さない」(§6予防6)
-- **選択の変更は操作ログに積まない**が、**イベントは発火する**(下の項番12〜14)
+  「黙って通さない」
+- **選択の変更は操作ログに積まない**が、**イベントは発火する**
 """
 from __future__ import annotations
 
@@ -38,7 +33,7 @@ from duocad.verbs import extrude_face, set_visible
 #: 長さでも区別でき、添字の偶然の一致でテストが通ってしまう余地が減る。
 BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
 
-#: 押し出し量(mm)。項番5(操作をまたいで選択が残る)で文書を実際に変えるために使う。
+#: 押し出し量(mm)。文書を実際に変えるために使う。
 EXTRUDE_MM = 5.0
 
 
@@ -96,7 +91,7 @@ def _first_extrudable_face(shape) -> int:
 
 
 # --------------------------------------------------------------------------------------
-# 項番1: 面・辺・頂点・領域を選択に入れられ、種別が保持される
+# 面・辺・頂点・領域を選択に入れられ、種別が保持される
 # --------------------------------------------------------------------------------------
 def test_each_kind_of_reference_keeps_its_kind(doc: Document):
     """面・辺・頂点の参照が、それぞれ `kind` を保持したまま選択に入る(条件3)。"""
@@ -197,7 +192,7 @@ def test_selecting_from_a_missing_body_raises(doc: Document):
 
 
 # --------------------------------------------------------------------------------------
-# 項番2〜4: 差分編集・重複しない・空にできる
+# 差分編集・重複しない・空にできる
 # --------------------------------------------------------------------------------------
 def test_modify_selection_adds_and_removes_without_rebuilding(doc: Document):
     """`modify_selection(add=, remove=)` は**差分編集**である(条件4)。
@@ -308,24 +303,18 @@ def test_hidden_bodies_cannot_be_selected(two_bodies: Document):
 
 
 # --------------------------------------------------------------------------------------
-# 項番5〜7: 永続する / ログに載らない / 保存されない
+# 永続する / ログに載らない / 保存されない
 # --------------------------------------------------------------------------------------
 def test_operating_the_raw_verb_function_does_not_touch_selection(doc: Document):
-    """**選択集合そのものは永続する**(条件1「永続」)。verb関数(このモジュールの
-    `extrude_face` のような、`duocad/verbs/*.py` の生の関数)は形しか触らない。
+    """**選択集合そのものは永続する**。verb関数(`duocad/verbs/*.py` の生の関数)は形しか触らない。
 
-    **2026-08-20以前はこのテスト名が `test_selection_survives_an_operation` で、
-    「押し出しの後も選択は残る」という製品レベルの契約を表していた。** 本人が
-    「失効/後継を返す契約」を退けて「形を変えたら全リセット」へ確定したので、
-    製品として見える経路(WS・MCP)は `duocad/server.py` の `Session` を必ず通り、
-    `Session._reset_selection_if_needed`(`duocad/catalog.py` の `resets_selection` が正)
-    が確定後に選択を空にする。**そのリセットは Session 層の関心事であって、verb関数
-    自身の責務ではない** —— verb関数(`extrude_face` 等)は形状だけを差し替え、
-    選択集合(コアの別のオブジェクト)には触らない、という分離をこのテストは固定する。
+    製品として見える経路(WS・MCP)は `Session` を必ず通り、`_reset_selection_if_needed` が
+    確定後に選択を空にする。**そのリセットは Session 層の関心事であって、verb関数自身の
+    責務ではない** —— verb関数は形状だけを差し替え、選択集合には触らない、という分離を
+    このテストは固定する。
 
-    製品レベルの「形を変えたら選択は空になる」契約は
-    `tests/test_mcp_selection.py::test_the_whole_interleaved_lap_runs_through_mcp_alone`
-    (fillet確定後に `count == 0`)と `tests/test_server_selection_reset.py` が固定する。
+    製品レベルの「形を変えたら選択は空になる」契約は `tests/test_mcp_selection.py` と
+    `tests/test_server_selection_reset.py` が固定する。
     """
     face_index = _first_extrudable_face(doc.bodies[0].shape)
     before = selection.modify_selection(doc, add=[selection.select_face(doc, "box", face_index)])
@@ -363,14 +352,11 @@ def test_set_visible_still_lands_in_the_log(doc: Document):
 
 
 def test_selection_is_not_saved(doc: Document):
-    """**選択は保存されない**(セッション状態。項番7)。保存・再生の対象は操作ログだけ。
+    """**選択は保存されない**(セッション状態)。保存・再生の対象は操作ログだけ。
 
     保存の経路は `doc.log.to_json()` しか無いので、再生した文書の選択は空になる。
     **選択が空でないまま保存し、選択のある文書へ再生しても消える**ところまで見る
     (「新しい文書の選択が空」を見るだけでは、実装が間違っていても緑になる)。
-
-    `Operation.selection` フィールドは2026-08-20に廃止済み(値は常に運ばれない)なので、
-    ここで見るのは「保存されたJSONに選択の痕跡(選んだ面の参照)が一切現れないこと」。
     """
     set_visible(doc, "box", False)  # ログに1行積んでおく(空のログを再生しても何も検査できない)
     set_visible(doc, "box", True)
@@ -392,7 +378,7 @@ def test_selection_is_not_saved(doc: Document):
 
 
 # --------------------------------------------------------------------------------------
-# 項番8〜11: 出所(提案と確定)
+# 出所(提案と確定)
 # --------------------------------------------------------------------------------------
 def test_proposed_items_are_distinguishable(doc: Document):
     """`propose_selection` で入れた項目は**提案として区別できる**(項番8・条件5)。"""
@@ -564,7 +550,7 @@ def test_propose_selection_needs_exactly_one_source(doc: Document):
 
 
 # --------------------------------------------------------------------------------------
-# 項番12〜14: イベント(コア→アプリ層の上り方向)
+# イベント(コア→アプリ層の上り方向)
 # --------------------------------------------------------------------------------------
 def test_every_selection_api_fires_exactly_one_event(session: Session):
     """変更する4つのAPIがそれぞれ1回だけ発火し、読み取りは発火しない(項番12)。

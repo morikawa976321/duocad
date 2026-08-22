@@ -1,32 +1,20 @@
-"""形を変えるverbの確定後に選択を全リセットする統一契約(2026-08-20)。
+"""形を変えるverbの確定後に選択を全リセットする統一契約。
 
-**背景**: 「面・辺・領域の添字は形状変更で壊れる」(README §7)問題への対症療法が
-`web/src/App.svelte` に3つ(押し出した面の後継を選び直す・丸めた辺の選択を外す・
-姿が変わった領域の選択を外す)個別に併存していた。本人が「失効/後継を返す契約」を
-退け、より単純な「全リセット」で方針確定した(連続性が本当に必要なverbが現れたら、
-そのときに後継を返す契約を作る)。
-
-**実装の置き場**: 選択集合はコアにあるので、リセットもコア側で行う。
-`duocad/catalog.py` の `Command.resets_selection` が**単一の宣言**で、
-`duocad/server.py` の `Session._reset_selection_if_needed` がそれを見て確定後に
-1箇所で発火する。`Session` はWebSocket(`Server`)とMCP(`DocumentTools`)の**どちらも
-同じインスタンスを叩く**唯一の適用パイプラインなので、ここで検証すれば両方をカバーする
-(WebSocket/MCPそれぞれの配線自体は `tests/test_feature_ui.py` / `tests/test_mcp_verbs.py`
-/ `tests/test_mcp_selection.py` が別に固定している)。
+**実装の置き場**: 選択集合はコアにあるので、リセットもコア側で行う。`duocad/catalog.py` の
+`Command.resets_selection` が**単一の宣言**で、`Session._reset_selection_if_needed` がそれを
+見て確定後に1箇所で発火する。`Session` はWebSocketとMCPの**どちらも同じインスタンスを叩く**
+唯一の適用パイプラインなので、ここで検証すれば両方をカバーする。
 
 固定する契約:
 
 1. `resets_selection=True` はカタログの中で正確にこの13verbだけである
 2. 形を変えるverbが成功で確定すると、選択は空になる(`items=[]` / `origin="user"`)
 3. 形を変えない操作(可視性・選択操作そのもの)は選択に触らない
-4. undo/redo は「何を戻したか」に関わらず常にリセットする
-   (`set_visible` のような形を変えない操作のundoでも空にする —— 「undo/redoは常にリセット」
-   という単純な規則を保つため。README §2)
+4. undo/redo は「何を戻したか」に関わらず常にリセットする(単純な規則を保つため)
 5. 「手前を隠して奥の面を選ぶ」ワークフロー(可視性切替)で選択は飛ばない
 
-**失敗したverbが選択を保持すること**は `tests/test_feature_ui.py::
-test_a_fillet_that_fails_leaves_the_document_and_the_selection_untouched` が固定して
-いるので、ここでは重複して確かめない。
+**失敗したverbが選択を保持すること**は `tests/test_feature_ui.py` が固定しているので、
+ここでは重複して確かめない。
 """
 from __future__ import annotations
 
@@ -39,9 +27,9 @@ from duocad.server import Session
 
 BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
 
-#: 2026-08-20時点で「形を変える」と宣言されている verb 名(タスクファイルの列挙と対応)。
-#: **この集合が変わったら、`duocad/catalog.py` の宣言を見てここも一緒に見直すこと**
-#: (このテストは宣言そのものではなく「この集合で合っているか」を固定する)。
+#: 「形を変える」と宣言されている verb 名。**この集合が変わったら `duocad/catalog.py` の
+#: 宣言を見てここも一緒に見直すこと**(このテストは宣言そのものではなく「この集合で合って
+#: いるか」を固定する)。
 RESETTING_VERBS = frozenset(
     {
         "extrude",
@@ -62,11 +50,7 @@ RESETTING_VERBS = frozenset(
 
 
 def test_resets_selection_is_declared_on_exactly_these_verbs() -> None:
-    """カタログの `resets_selection=True` が RESETTING_VERBS と過不足なく一致する。
-
-    増減があれば、それは「形を変えるverbの定義」自体が変わったということなので、
-    このテストを直すときは README §2 の1行も一緒に見直すこと。
-    """
+    """カタログの `resets_selection=True` が RESETTING_VERBS と過不足なく一致する。"""
     flagged = {command.name for command in catalog.COMMANDS if command.resets_selection}
     assert flagged == RESETTING_VERBS
 
@@ -112,8 +96,7 @@ def test_fillet_clears_the_selection_on_success(session: Session) -> None:
 def test_add_shape_verbs_clear_a_pre_existing_3d_selection(session: Session) -> None:
     """スケッチ図形を1つ足すと、**それ以前に選んでいた3Dの面・辺**も空になる。
 
-    「全リセット」は文字どおり全部で、追加した図形の種別に関係なく効くことを確かめる
-    (「押し出した面と関係あるものだけ外す」のような部分的な賢さは持たせない)。
+    「全リセット」は文字どおり全部で、追加した図形の種別に関係なく効く。
     """
     _select(session, [_face(1)])
     sketch_id = session.sketch_create("XY")["sketch_id"]
@@ -173,12 +156,9 @@ def test_undo_of_a_shape_changing_verb_clears_the_selection(session: Session) ->
 
 
 def test_undo_of_a_non_shape_verb_still_clears_the_selection(session: Session) -> None:
-    """**undo/redoはunconditional**(タスクファイル: 「後継を返す契約」ではなく単純な規則)。
+    """**undo/redoはunconditional**(verbごとの分岐を持たない単純な規則)。
 
-    `set_visible` は自分自身では選択を変えないが、それをundoしたときも
-    「undo/redoは常にリセット」という単純な規則を優先する(verbごとの分岐を持たない)。
-
-    **選択は先に置く** —— 見えないBodyは選べない(README §2)ので、隠す前に選ぶ。
+    **選択は先に置く** —— 見えないBodyは選べないので、隠す前に選ぶ。
     """
     _select(session, [_face(1)])
     session.set_visible("box", False)
@@ -208,8 +188,7 @@ def test_hiding_a_body_to_reach_a_hidden_face_does_not_drop_the_selection(
 ) -> None:
     """奥の面を選ぶために手前を隠しても、**その前に選んでいたもの**は消えない。
 
-    `set_visible` はログに積まれるが `resets_selection=False`(可視性は形を変えない)
-    なので、この一連の操作の途中で選択が飛ぶと「隠す→選ぶ→もう一度選ぶ」を強いることになる。
+    ここが落ちると「隠す→選ぶ→もう一度選ぶ」を強いることになる。
     """
     other = Body(
         id="other", name="other", kind="solid", shape=BRepPrimAPI_MakeBox(5.0, 5.0, 5.0).Shape()

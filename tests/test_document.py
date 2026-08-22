@@ -1,8 +1,4 @@
-"""M0契約: Document / Body のデータモデル(実装計画書 §3.1 / §3.2)。
-
-Document.units と Body.kind の検証は日1(day1)予防としてスタブ段階で既に実装されており、
-ここでは実装済みの契約として素で通る。add_body等の振る舞いはNotImplementedErrorスタブなので赤になる。
-"""
+"""Document / Body のデータモデルの契約。"""
 from __future__ import annotations
 
 import pytest

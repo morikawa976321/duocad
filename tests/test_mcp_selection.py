@@ -1,37 +1,27 @@
-"""F1契約: **選択と述語をMCPへ出す**(実装は F2)。
+"""**選択と述語をMCPへ出す**契約。
 
-`tests/test_mcp_verbs.py` が操作(verb)の側を持ち、こちらが**交互操作の中心**——
-AIが選択を提案し、人が過不足を直し、AIが読み直して適用する——の側を持つ。
-契約の散文は `tests/README.md` の「F」節が正。
-
-`duocad/selection.py` と `duocad/predicates.py` にあるコアAPIを、そのまま
-MCPツールとして出す。**ここに新しい選択のロジックを書かない** —— MCPは
-コアのもう一人のクライアントであり、ブラウザと同じ `Document.selection` を触る。
+`tests/test_mcp_verbs.py` が操作(verb)の側を持ち、こちらが**交互操作の中心**——AIが選択を
+提案し、人が過不足を直し、AIが読み直して適用する——の側を持つ。`duocad/selection.py` と
+`duocad/predicates.py` にあるコアAPIをそのままMCPツールとして出す。**ここに新しい選択の
+ロジックを書かない** —— MCPはコアのもう一人のクライアントである。
 
 ## このファイルが固定する5つ
 
 1. **選択5ツールが届く** — `get_selection` / `propose_selection`(`refs=` と `predicate=` の
    両方)/ `modify_selection` / `commit_selection` / `clear_selection`。
-   **戻り値の形はMCP層で `{"selection": {...}}` に統一する**(下記)。
 2. **述語の語彙をAIが自己記述で知れる** — `describe_predicates` が
-   `predicates.describe_ops()` を**そのまま**返す。AIが使える `op` を推測しなくてよい状態にする。
-3. **0件と不正は別物**(A1の決定6) — 0件は成功して `count: 0`、不正な述語は
-   `invalid_predicate` で**有効なopの一覧つき**。AIが自力で直せることが条件。
-4. **提案のままでは verb に渡せない**(A1の決定4) — MCP経由でも同じ。
-   ただし `commit_selection` を明示すれば通る(禁止ではなく「黙って通さない」)。
+   `predicates.describe_ops()` を**そのまま**返す。
+3. **0件と不正は別物** — 0件は成功して `count: 0`、不正な述語は `invalid_predicate` で
+   **有効なopの一覧つき**。AIが自力で直せることが条件。
+4. **提案のままでは verb に渡せない** — MCP経由でも同じ。ただし `commit_selection` を
+   明示すれば通る(禁止ではなく「黙って通さない」)。
 5. **AI起点の選択変更が画面へ届く** — イベントとして発火し、かつ `state_meta()["selection"]`
-   に載る(A2で確認済みの経路にMCPも乗ること)。
+   に載る。
 
-## なぜMCP層で戻り値の形を統一するのか
-
-`Session` 側は**変更する4メソッドが発火したイベントそのもの**
-(`{"change","selection","client_op"}`)を返し、`get_selection` だけが
-`Selection.to_dict()`(`{"items","origin","count"}`)を返す(A1の決定8)。
-この差はコアの都合(イベントの形を1箇所で作る)であって、**AIに見せる理由が無い**。
-MCPは5つとも `{"selection": {"items","origin","count"}, ...}` に揃える ——
+**MCP層は5つとも `{"selection": {"items","origin","count"}, ...}` に揃える**。`Session` 側は
+変更する4メソッドが発火したイベントそのものを返し、`get_selection` だけが
+`Selection.to_dict()` を返すが、その差はコアの都合であってAIに見せる理由が無い ——
 揃えないと、AIは `["selection"]` を挟むかどうかをツールごとに覚えることになる。
-
-**このタスク(F1)は契約だけを書き、実装は F2 が入れる。赤で終わるのが正常。**
 """
 from __future__ import annotations
 
@@ -166,7 +156,7 @@ def test_propose_selection_needs_exactly_one_of_them(server: McpServer, session:
 
 
 # --------------------------------------------------------------------------------------
-# 2. 述語の語彙をAIが自己記述で知れる(タスクファイルの「述語の語彙を〜推測しなくてよい状態に」)
+# 2. 述語の語彙をAIが自己記述で知れる
 # --------------------------------------------------------------------------------------
 def test_describe_predicates_is_the_core_vocabulary_itself(server: McpServer):
     """`predicates.describe_ops()` を**そのまま**出す(二重管理にしない)。
@@ -202,7 +192,7 @@ def test_describe_predicates_changes_nothing(server: McpServer, session: Session
 
 
 # --------------------------------------------------------------------------------------
-# 3. 0件と不正は別物(A1の決定6・タスクファイル項番6/7)
+# 3. 0件と不正は別物
 # --------------------------------------------------------------------------------------
 def test_zero_matches_is_a_success_that_says_zero(server: McpServer):
     """**一致0件はエラーではない**。0件だと分かる形で返る(項番7)。
@@ -574,7 +564,7 @@ def test_measure_admits_what_it_cannot_measure(server: McpServer, session: Sessi
 
 
 # --------------------------------------------------------------------------------------
-# 6. 交互操作の一巡 — **MCP経由だけで**(タスクファイル項番9・F の核心)
+# 6. 交互操作の一巡 — **MCP経由だけで**
 # --------------------------------------------------------------------------------------
 def test_the_whole_interleaved_lap_runs_through_mcp_alone(server: McpServer, session: Session):
     """**このファイルで最も重要な1本**。
@@ -622,14 +612,14 @@ def test_the_whole_interleaved_lap_runs_through_mcp_alone(server: McpServer, ses
     assert query.volume(box.shape) < volume_before
     assert session.document.log.entries[-1].args["edges"] == vertical[1:] + [added]
 
-    # 6. **形を変えたので選択は全リセットされる**(2026-08-20の統一契約。
+    # 6. **形を変えたので選択は全リセットされる**(統一契約。
     # `duocad/catalog.py` の `resets_selection`)。丸めた辺の添字は形状変更で別の辺を
     # 指しうるので、後継を当てにいくのではなく空にする —— 次の一手はAIが選び直す。
     assert selection_of(server) == {"items": [], "origin": "user", "count": 0}
 
 
 # --------------------------------------------------------------------------------------
-# 7. AI起点の選択変更が画面へ届く(タスクファイル項番10)
+# 7. AI起点の選択変更が画面へ届く
 # --------------------------------------------------------------------------------------
 def test_a_selection_change_from_mcp_fires_exactly_one_event(server: McpServer, session: Session):
     """1ツール1イベント。イベントは**選択を丸ごと**運ぶ(UIが描き直すのに足る・項番13)。"""

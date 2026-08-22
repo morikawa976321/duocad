@@ -1,30 +1,22 @@
-"""E契約(サーバ側): ブラウザから**開く/保存/書き出し**を踏む口と、パネルが要る配信。
+"""サーバ側の契約: ブラウザから**開く/保存/書き出し**を踏む口と、パネルが要る配信。
 
-UI(パラメータ編集パネル・操作履歴パネル・ファイル操作)そのものは**`pytest` では
-完了判定できない**(実機確認は `web/scripts/smoke-files.mjs`)。このファイルが固定するのは
-サーバ側の3つ——
-
-1. **ファイル操作の口**(`FILE_COMMANDS` + `open_document` + `list_documents`)。
-   保存形式は**操作ログのJSON**で、形状はそこから導出される(実装計画書§3.1「これが正」)
-2. **`state.parameters`** — 名前つきの寸法値。打ち直しの対象そのもの
-3. **`state.redo_count`** — 操作履歴パネルが「どこまで戻れるか」を出すための位置
-
-——は機械で判定できる。とくに**保存→開く→同じ形**は、UIを介さなくても検査できるうえに
-**再生経路が壊れていないことの検査そのもの**なので、ここが正になる。
+UI(パラメータ編集パネル・操作履歴パネル・ファイル操作)そのものは**`pytest` では完了判定
+できない**(実機確認は `web/scripts/smoke-files.mjs`)。ここが固定するのはサーバ側の3つ ——
+ファイル操作の口(`FILE_COMMANDS` + `open_document` + `list_documents`)、`state.parameters`
+(名前つきの寸法値=打ち直しの対象)、`state.redo_count`(操作履歴パネルの位置)。とくに
+**保存→開く→同じ形**は、UIを介さなくても検査できるうえに**再生経路が壊れていないことの
+検査そのもの**なので、ここが正になる。
 
 固定する契約:
 
-- **保存/開くは受け取るのがファイル名だけになった**(2026-08-22。engine
-  `duocad-save-location-fixed-folder`)。`models_dir` 配下に閉じ、区切り文字・絶対パス・
-  `..` は拒否する。以前の「サーバのCWD基準の任意パス」は、保存先がサーバの起動場所で
-  変わり実際には1つも使われていなかった問題そのものだった —— **旧パス形式との
-  後方互換は要らない**(保存済みファイルが1つも存在しなかったため)。
+- **保存/開くが受け取るのはファイル名だけ**。`models_dir` 配下に閉じ、区切り文字・絶対パス・
+  `..` は拒否する
 - 保存は操作ログのJSONを書き、**verbではない**(操作ログが伸びない)
 - **開くと形が完全に戻る**(体積・面数・操作ログ・パラメータ)。開いた文書は**全接続へ**配る
 - **開くのに失敗しても今の文書を壊さない**
 - 版(revision)は開いた後に必ず上がる —— 同じidのBodyを知っているクライアントに
   古い形を描き続けさせない
-- STEP/STL を書き出せ、**STEPは読み戻して体積が一致する**(相対許容差 1e-6。§7の訂正)
+- STEP/STL を書き出せ、**STEPは読み戻して体積が一致する**(相対許容差 1e-6)
   (書き出し/読み込みは `path` のまま。ファイル名だけの制約は保存/開くだけの契約)
 - STLは**偏差を指定できる**(細かくすると必ずファイルが大きくなる)
 - `state.parameters` に名前つきの値が出て、`set_parameter` で形が追随する
@@ -48,7 +40,7 @@ SIDE = 20.0
 
 @pytest.fixture()
 def session(tmp_path: Path) -> Session:
-    # **`models_dir` はテストごとの使い捨てディレクトリ**(2026-08-22)。指定しないと
+    # **`models_dir` はテストごとの使い捨てディレクトリ**。指定しないと
     # 既定(リポジトリ直下の `duocad/models/`)を触ってしまう —— pytestが実フォルダを
     # 汚さないための唯一の理由で、テストの意図とは無関係(`Session.__init__` 参照)。
     return Session(None, DEVIATION, models_dir=tmp_path / "models")
@@ -153,7 +145,7 @@ def test_models_dir_is_created_if_missing(session: Session) -> None:
         "..",
         "../model.json",
         "C:\\model.json",
-        # 2026-08-23 QA指摘(第1段 gpt-5.6-terra-high fail)で実測した脱出経路。
+        # 実測した脱出経路。
         # Path.is_absolute()がFalseを返す「ドライブ相対パス」で、素の絶対パス
         # 判定をすり抜けたうえ、pathlibの`/`が右辺のドライブ付きセグメントを
         # 新しいアンカーとして扱うため`models_dir`側が捨てられる。
@@ -189,13 +181,13 @@ def test_save_and_open_reject_anything_but_a_bare_filename(session: Session, bad
 
 
 def test_a_drive_relative_escape_never_touches_the_drive(session: Session) -> None:
-    """**QA実測の再現+否定**: ドライブ相対パスは拒否され、実際に何も書かれない。
+    """ドライブ相対パスは拒否され、実際に何も書かれない。
 
-    修正前は `Path("D:outside.json").is_absolute()` が `False` を返すため絶対パス判定を
-    すり抜け、`models_dir / "D:outside.json"` が pathlib の仕様で `models_dir` を
-    捨てて `D:\\outside.json` に解決されていた(実測)。ここでは**models_dirと
-    同じドライブ**にすり替えて、拒否されたことと同時にファイルが実際には
-    どこにも作られていないことを確かめる(拒否理由の文言だけを見て安心しない)。
+    `Path("D:outside.json").is_absolute()` は `False` を返すため絶対パス判定をすり抜け、
+    `models_dir / "D:outside.json"` は pathlib の仕様で `models_dir` を捨てて
+    `D:\\outside.json` に解決される(実測)。ここでは**models_dirと同じドライブ**にすり替えて、
+    拒否されたことと同時にファイルが実際にはどこにも作られていないことを確かめる
+    (拒否理由の文言だけを見て安心しない)。
     """
     _box(session)
     drive = session.models_dir.drive or "C:"
@@ -210,15 +202,14 @@ def test_a_drive_relative_escape_never_touches_the_drive(session: Session) -> No
 def test_resolved_path_must_stay_inside_models_dir_even_past_a_symlink(
     session: Session, tmp_path: Path
 ) -> None:
-    """**正の判定は解決後のパスで行う**(2026-08-23 QA指摘のMAJOR)。
+    """**正の判定は解決後のパスで行う**。
 
-    文字列だけの拒否では、`models_dir` 内の**既存のシンボリックリンク**が外を
-    指していた場合を塞げない。`_resolve_document_name` の最終判定
-    (`resolved.is_relative_to(root)`)がここを見る唯一の場所であることを固定する。
+    文字列だけの拒否では、`models_dir` 内の**既存のシンボリックリンク**が外を指していた場合を
+    塞げない。`_resolve_document_name` の最終判定(`resolved.is_relative_to(root)`)がここを
+    見る唯一の場所であることを固定する。
 
-    Windowsでシンボリックリンクを作るには開発者モードか管理者権限が要る ——
-    権限が無い環境では意味のある検査ができないので、その場合は明示的にskipする
-    (「検査していないのに緑」を避けるため、失敗を握りつぶさずskip理由に出す)。
+    Windowsでシンボリックリンクを作るには開発者モードか管理者権限が要る —— 権限が無い環境では
+    意味のある検査ができないので、その場合は明示的にskipする(「検査していないのに緑」を避ける)。
     """
     _box(session)
     session.models_dir.mkdir(parents=True, exist_ok=True)
@@ -454,8 +445,7 @@ def test_the_history_position_is_published(session: Session) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 自己完結: 保存ファイルは外部STEPに依存しない(2026-08-23。
-# engine `duocad-oplog-embeds-imported-step`)
+# 自己完結: 保存ファイルは外部STEPに依存しない
 # --------------------------------------------------------------------------------------
 def _two_solid_step(tmp_path: Path) -> Path:
     """2ソリッド(体積1000と216)のSTEPを作って返す(`tests/test_io_step.py` と同じ作り)。"""
@@ -472,14 +462,11 @@ def _two_solid_step(tmp_path: Path) -> Path:
 def test_a_saved_document_opens_after_the_imported_step_is_renamed(
     session: Session, tmp_path: Path
 ) -> None:
-    """**読み込んだSTEPを改名しても、保存した文書は開ける**(本タスクの本体)。
+    """**読み込んだSTEPを改名しても、保存した文書は開ける**。
 
-    以前は操作ログに「このパスのSTEPを読んだ」しか無く、形はログのどこにも無かったので、
-    参照STEPを移動・改名・削除するか別PCへ持っていくと開けなかった。いまは
-    STEP本文がログの中にあるので、開く側は外部ファイルを一切読まない。
-
-    改名(=元の場所からファイルが消える)を挟むのが要点 —— 挟まないと、パス依存が
-    残っていても緑になってしまい、この検査は何も守らない。
+    STEP本文がログの中にあるので、開く側は外部ファイルを一切読まない。改名(=元の場所から
+    ファイルが消える)を挟むのが要点 —— 挟まないと、パス依存が残っていても緑になってしまい、
+    この検査は何も守らない。
     """
     step_path = _two_solid_step(tmp_path)
     session.import_step_editable(str(step_path))

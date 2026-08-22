@@ -1,9 +1,7 @@
-"""M0契約: STEP読み込み・STEP/STL書き出し(実装計画書 §7 落とし穴、§8 M0検証)。
+"""STEP読み込み・STEP/STL書き出しの契約。
 
-face構成(56/34/22/0/0/0)は shelf_attachment_GD.step を実際にOCPで走査して実測済み
-(BRepAdaptor_Surfaceの面種別 + 円筒のUVBounds U範囲>350度で全周判定)。
-STEP往復の体積比較・STL偏差とファイルサイズの関係も同じ環境(cadquery-ocp-novtk 7.9.3.1.1 /
-build123d 0.11.1)で実測しており、下記の許容誤差・アサーションは推測ではなく実測に基づく。
+下記の許容誤差・アサーションは推測ではなく実測(cadquery-ocp-novtk 7.9.3.1.1 /
+build123d 0.11.1)に基づく。
 """
 from __future__ import annotations
 
@@ -25,14 +23,10 @@ from duocad.query import describe_shape, volume
 from duocad.verbs.import_editable import import_step_editable
 
 def test_import_step_missing_file_raises_and_does_not_mutate_document(tmp_path):
-    """存在しないSTEPパスはFileNotFoundErrorを送出し、documentにもログにも変更が残らない
-    (失敗を黙って通さない。実装計画書§7・§6予防6)。
+    """存在しないSTEPパスは FileNotFoundError で、documentにもログにも変更が残らない。
 
-    実装時の注意: OCPのSTEPControl_Readerは、
-    ReadFile()がIFSelect_RetDone以外を返した状態のまま TransferRoots()/OneShape() を呼ぶと、
-    Python例外にならずプロセスごと落ちる(Windowsで終了コード0xC0000005 = アクセス違反)。
-    import_stepの実装はReadFile()の戻り値を必ず先に検査し、失敗ならTransferRoots()を呼ぶ前に
-    raiseすること(詳細はtests/README.md)。
+    実装は `ReadFile()` の戻り値を必ず先に検査すること(失敗した状態で `TransferRoots()` を
+    呼ぶと Python例外にならず**プロセスごと落ちる**)。
     """
     doc = Document()
     bad_path = tmp_path / "does_not_exist.step"
@@ -45,15 +39,12 @@ def test_import_step_missing_file_raises_and_does_not_mutate_document(tmp_path):
 
 
 def test_import_step_malformed_file_raises_value_error_and_does_not_mutate_document(tmp_path):
-    """STEPとして壊れているファイル(存在はする)はValueErrorを送出し、documentにもログにも
-    変更が残らない(失敗を黙って通さない。実装計画書§6予防6・§7)。
+    """STEPとして壊れているファイル(存在はする)は ValueError で、変更が残らない。
 
-    このテストが上の「存在しないパス」のテストと別に要るのは、**存在チェックだけでは
-    ReadFile()の戻り値検査を強制できない**ため。`Path.exists()` を見るだけの実装は上のテストを
-    通してしまうが、中身が壊れたファイルではReadFile()がIFSelect_RetFailを返し、そのまま
-    TransferRoots()を呼ぶと**プロセスごと落ちる**(存在しないパスは
-    IFSelect_RetError、壊れた中身はIFSelect_RetFail、いずれもTransferRoots()で0xC0000005)。
-    ReadFile()の戻り値を必ず検査させるのはこのテストの役目。
+    上の「存在しないパス」と別に要るのは、**存在チェックだけでは `ReadFile()` の戻り値検査を
+    強制できない**ため。`Path.exists()` を見るだけの実装は上のテストを通してしまうが、中身が
+    壊れたファイルでは `ReadFile()` が IFSelect_RetFail を返し、そのまま `TransferRoots()` を
+    呼ぶと**プロセスごと落ちる**。
     """
     doc = Document()
     broken = tmp_path / "broken.step"
@@ -67,8 +58,7 @@ def test_import_step_malformed_file_raises_value_error_and_does_not_mutate_docum
 
 
 def test_export_from_empty_document_raises_and_writes_no_file(tmp_path):
-    """書き出す形状が無い文書からのexportは例外になり、半端なファイルを残さない
-    (失敗を黙って通さない。実装計画書§6予防6)。
+    """書き出す形状が無い文書からのexportは例外になり、半端なファイルを残さない。
 
     黙って0バイトのSTEP/STLを吐くと、壊れた成果物が「成功」として残る。
     """
@@ -88,8 +78,7 @@ def test_export_from_empty_document_raises_and_writes_no_file(tmp_path):
 
 
 # --------------------------------------------------------------------------------------
-# 埋め込み: 読み込んだSTEPの形はログの中にある(2026-08-23。
-# engine `duocad-oplog-embeds-imported-step`)
+# 埋め込み: 読み込んだSTEPの形はログの中にある
 #
 # **ここが本命の契約** —— 再生が外部ファイルを読まない、を検査する。読まないことは
 # 「元のSTEPを消してから開く」でしか確かめられない(パスを引数に残したままでも、
@@ -98,9 +87,8 @@ def test_export_from_empty_document_raises_and_writes_no_file(tmp_path):
 def _two_solid_step(tmp_path) -> Path:
     """2ソリッド(体積1000と216)のSTEPを作って返す。
 
-    **`3d-models/` の私物STEPは使わない**(読み取り専用・リポジトリ外への依存を作らない。
-    engine `duocad-drops-private-step-test-dependency`)。テスト側は境界検査の対象外なので
-    OCPで直接作ってよい(`tests/test_extrude.py` と同じ流儀)。
+    **`3d-models/` の私物STEPは使わない**(読み取り専用・リポジトリ外への依存を作らない)。
+    テスト側は境界検査の対象外なのでOCPで直接作ってよい。
     """
     box_a = BRepPrimAPI_MakeBox(20.0, 10.0, 5.0).Shape()
     box_b = BRepPrimAPI_MakeBox(gp_Pnt(50.0, 0.0, 0.0), 6.0, 6.0, 6.0).Shape()
@@ -140,12 +128,10 @@ def test_import_step_logs_the_step_text_and_no_path(tmp_path):
 
 
 def test_replay_rebuilds_the_shape_after_the_original_step_is_gone(tmp_path):
-    """**元のSTEPを消してから再生しても同じ形が出る**(本タスクの本体)。
+    """**元のSTEPを消してから再生しても同じ形が出る**。
 
     保存形式(JSON)を往復させたうえで、参照していたSTEPをリネーム(=移動・改名・削除・
-    別PCへの持ち出しと同じ状況)してから `replay` する。ここが緑なら、
-    「操作ログが唯一の正であり、文書の形状はここから導出される」(`duocad/oplog.py`)が
-    実装として成立している。
+    別PCへの持ち出しと同じ状況)してから `replay` する。
     """
     doc = Document()
     step_path = _two_solid_step(tmp_path)
@@ -197,10 +183,8 @@ def test_import_step_editable_replays_without_the_original_step(tmp_path):
 def test_replaying_a_broken_embedded_step_raises_instead_of_crashing(tmp_path):
     """埋め込みが壊れていたら ValueError(**プロセスごと落ちない**)。
 
-    埋め込み経路も `kernel.read_step` の `ReadFile()` 戻り値検査を通ること —— 通らないと、
-    失敗した状態で `TransferRoots()` を呼んで 0xC0000005 でプロセスごと死ぬ
-    (engine `ocp-stepcontrol-reader-segfault-on-failed-readfile`)。**テストランナーごと
-    落ちるので、失敗の記録すら残らない**種類の事故であり、ここで止めるしかない。
+    埋め込み経路も `kernel.read_step` の `ReadFile()` 戻り値検査を通ること —— 通らないと
+    0xC0000005 で**テストランナーごと落ちる**(失敗の記録すら残らない)。
     """
     doc = Document()
     import_step(doc, _two_solid_step(tmp_path))

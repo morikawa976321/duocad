@@ -1,13 +1,6 @@
-"""M2契約: スケッチ(`sketch_create` / `add_line` / `add_circle` / `add_rectangle`)。
+"""スケッチの契約(`sketch_create` / `add_line` / `add_circle` / `add_rectangle`)。
 
-このファイルは**M2のAPI契約の一部**(領域は tests/test_region.py、押し出しは
-tests/test_extrude.py が持つ)。M0・M1の既存テストとは独立している。
-
-M2の対象は「スケッチと領域検出」で、**振る舞い(verb)は全部スタブ**(`NotImplementedError`)。
-ただしM0と同じく、**後付けすると全部書き直しになるデータモデルだけは先に実装してある**
-(`Document.sketches` / `Entity.kind` の検査 / PlaneRefの `provenance` スロット)。
-それを検査するテストだけが素で緑になる — これはテストを緩めているのではなく、
-実装計画書§6「day1に払う予防」をテスト側で先に払っているという位置づけ(M0のREADMEと同じ)。
+領域は `tests/test_region.py`、押し出しは `tests/test_extrude.py` が持つ。
 
 **座標はスケッチ平面上の2D**。基準平面 "XY" なら (x, y) がそのまま使える。
 """

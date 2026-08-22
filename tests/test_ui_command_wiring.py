@@ -1,33 +1,22 @@
 """UIのコマンドIDが、サーバが受け取れる名前に**実在するか**を静的に検査する。
 
-## なぜ要るか
-
 同じverbの表面が3層にある:
 
 1. `duocad/server.py` の `SKETCH_COMMANDS` / `FEATURE_COMMANDS` / `FILE_COMMANDS`(WebSocket)
 2. `duocad/mcp_server.py` のツール(MCP。**`tests/test_mcp_verbs.py` が一致で固定済み**)
 3. `web/src/commands/*.ts` の `CommandDef.id`(UIが引数を集めて送る先)
 
-このうち **1と3の食い違いだけが誰にも見られていなかった**。TS側のIDを1文字打ち間違えても
-`tsc` は通り(ただの文字列)、pytest も通り、**実ブラウザのsmokeを走らせて初めて**
-`unknown command` で出る。この抜けを、`test_boundaries.py` と
-同じ「ソースを静的に読む」やり方で塞ぐ。
+**1と3の食い違いだけが誰にも見られていない**。TS側のIDを1文字打ち間違えても `tsc` は通り
+(ただの文字列)、pytest も通り、**実ブラウザのsmokeを走らせて初めて** `unknown command` で
+出る。この抜けを `test_boundaries.py` と同じ「ソースを静的に読む」やり方で塞ぐ。
 
-## 1と2は宣言から導出になった(2026-08-20)
+**1と2は `duocad/catalog.py` の `COMMANDS` からの導出**なので、この検査が見るのは「宣言と
+3層目(TS)の食い違い」である。3層目を宣言から生成しないのは、TS側が持つのが**引数の集め方**
+(どのクリックを待つか・入力欄のid・ボタンのid)であって宣言には無い情報だからで、名前の
+一致だけをここで機械的に固定する。
 
-**1と2はもう手で書かれていない** —— `duocad/catalog.py` の `COMMANDS` が唯一の宣言で、
-WSの表もMCPのスキーマもそこからの導出である。したがってこの検査が見るのは
-「**宣言と3層目(TS)の食い違い**」になった。3層目を宣言から生成しないのは、TS側が持つのが
-**引数の集め方**(どのクリックを待つか・入力欄のid・ボタンのid)であって宣言には無い
-情報だからで、名前の一致だけをここで機械的に固定する。
-
-## 対象集合はどの層でも引数ではない(2026-08-20)
-
-かつてはWSだけが面・辺・領域を引数で受けており(`fillet(edges, radius, body_id)`)、
-MCPの `fillet(radius)` と形が違った。**その差は無くなった** —— 対象集合は
-どちらの層でもコアの確定選択から取る(`duocad/selection.py` の `require_confirmed` /
-`require_edges`)ので、WSのコマンドに残る引数は数値・名前・パスだけである。
-下の `test_no_websocket_command_takes_a_target_set` がそれを機械で固定する。
+**対象集合はどの層でも引数ではない** —— 面・辺・領域はコアの確定選択から取るので、WSの
+コマンドに残る引数は数値・名前・パスだけである(`test_no_websocket_command_takes_a_target_set`)。
 """
 from __future__ import annotations
 
@@ -91,7 +80,7 @@ TARGET_SET_ARGS = {
     "face_indices",
     "vertices",
     "vertex_index",
-    # `plane` は2026-08-22に足した。**面参照がこの名前で検査を素通りしていた** ——
+    # `plane` は**面参照がこの名前で検査を素通りしていた**ため足してある ——
     # WSの `sketch_create` だけが `plane={"kind":"face","body":...,"index":...}` を受けており、
     # 「対象集合を引数で渡さない」の唯一の例外がここに残っていたのに、上の名前の
     # どれにも当たらないので誰も落とさなかった(名前で見る検査の弱点そのもの)。
@@ -240,8 +229,6 @@ def test_every_ui_command_declares_the_same_category_as_the_declaration():
     ここが落ちるのは「TS側でだけ分類を変えた/書き忘れた」とき。分類はUIの
     送信経路そのもの(`App.svelte` の `runCommand`)なので、ずれると
     **スケッチのverbがファイル操作として送られる**ような壊れ方をする。
-    以前は3つの判定関数を順に当てる形で、どれにも当たらないverbは黙って
-    `extrude_face` として送られていた。
     """
     declared = {command.name: command.category for command in _catalog().COMMANDS}
     wrong: dict[str, str] = {}
@@ -289,7 +276,7 @@ def test_the_argument_tables_are_readable():
 
 
 def test_no_websocket_command_takes_a_target_set():
-    """**面・辺・領域を引数で受け取るWSコマンドは1つも無い**(2026-08-20)。
+    """**面・辺・領域を引数で受け取るWSコマンドは1つも無い**。
 
     ここが落ちるのは「対象集合をまた引数で渡し始めた」とき。同じ変換が
     ブラウザとコアの2箇所に生まれ、片方だけ直したときに**指した辺と違う辺が丸まる**
@@ -350,7 +337,7 @@ def test_ai_commands_are_not_verbs():
 
 
 # --------------------------------------------------------------------------------------
-# Enter要否(即適用)の表 —— 2026-08-22
+# Enter要否(即適用)の表
 # --------------------------------------------------------------------------------------
 #: `web/src/commands/command.ts` の `isHowInput` と同じ顔ぶれ(howの入力)。
 #: **TS側へ種別を足したらここへも足す**(下の `_needs_enter` のdocstring)。
@@ -423,19 +410,14 @@ def _needs_enter(args: list[tuple[str, str]]) -> bool:
 
 #: **Enterが要るか**の表(True = Enterで確定 / False = 引数が揃ったクリックで即適用)。
 #:
-#: 2026-08-22の本人決定(engine `2026-08-22-duocad-ui-interaction-principles`)で、
-#: 「省けるクリックは徹底的に省く」の実装として入った。**即適用は3つ**である:
-#: `add_line`(点2つで揃う)・`make_editable_copy`(面1つで揃う)・
-#: `sketch_create`(貼る先の平面1つで揃う。2026-08-22に足した)。
-#: verbを足したらここへ1行足すことになる —— そのとき**Enterが要るかを1回考える**のが狙いで、
-#: 表そのものが実装の入力になっているわけではない(判定は `args` からの導出が正)。
+#: **即適用は3つ**である: `add_line`(点2つで揃う)・`make_editable_copy`(面1つで揃う)・
+#: `sketch_create`(貼る先の平面1つで揃う)。verbを足したらここへ1行足すことになる ——
+#: そのとき**Enterが要るかを1回考える**のが狙いで、表そのものが実装の入力になっている
+#: わけではない(判定は `args` からの導出が正)。
 #:
-#: **`save_document`/`open_document` はこの表に無い**(2026-08-22。engine
-#: `duocad-save-location-fixed-folder`)。以前は「パス」を打たせる `text` 引数で
-#: Enterが要る側だったが、`CommandHost` から外れて `FilesPanel.svelte`
-#: (`duocad/models/` の一覧をクリック / 名前を打って新規保存)へ移ったため、
-#: この表(`web/src/commands/*.ts` の `CommandDef` から読む)には現れなくなった。
-#: サーバ側のverbとしては変わらず存在する(`tests/test_files_ui.py` が固定)。
+#: **`save_document`/`open_document` はこの表に無い** —— `CommandHost` から外れて
+#: `FilesPanel.svelte` へ移ったため、この表(`web/src/commands/*.ts` の `CommandDef` から
+#: 読む)には現れない。サーバ側のverbとしては変わらず存在する(`tests/test_files_ui.py`)。
 ENTER_REQUIRED = {
     "extrude_face": True,          # 面1つ + 距離(how)
     "extrude": True,               # 領域は何個でも + 距離 + 結合/切り取り
@@ -493,10 +475,10 @@ def test_only_three_commands_apply_without_enter():
 def test_the_immediate_apply_fires_only_on_the_users_own_click():
     """即適用の引き金は**この画面のクリック**であって、選択集合の中身ではない。
 
-    2026-08-22のQA指摘。選択集合は**AIも `modify_selection` で書き換えられる**ので、
-    「対象が1つ揃った」だけで発火させると、**人が何も指していないのに文書が変わる**
-    (実測: 直す前のビルドで `smoke-mcp.mjs` が部品 27 -> 28 を踏んだ)。配線は3段あり、
-    1つでも外れると穴が開くので、ブラウザを立てなくても気づけるようにここで固定する:
+    選択集合は**AIも `modify_selection` で書き換えられる**ので、「対象が1つ揃った」だけで
+    発火させると、**人が何も指していないのに文書が変わる**(実測: 直す前のビルドで
+    `smoke-mcp.mjs` が部品 27 -> 28 を踏んだ)。配線は3段あり、1つでも外れると穴が開くので、
+    ブラウザを立てなくても気づけるようにここで固定する:
 
     1. `App.svelte` が**自分が出した**選択変更だけを数える(`myClientOps` で照合)
     2. その数を `CommandHost` へ渡している

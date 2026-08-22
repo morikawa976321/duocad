@@ -1,19 +1,10 @@
-"""WebSocketのOrigin検査(2026-08-20・本人決定)。
+"""WebSocketのOrigin検査。理由は `duocad/mcp_server.py` の `allowed_origins` が持つ。
 
-**なぜ要るか**: WebSocketは**同一オリジンポリシーの対象外**で、任意のWebページが
-`ws://127.0.0.1:<port>` へ繋いで読み書きできる。`127.0.0.1` へのbindは防御にならない ——
-攻撃側のコードは利用者のブラウザの中で動くため。検査が無い間は、duocadを立てたまま別の
-サイトを開いているだけで、そのページが文書を読み・壊し・`export_step` で任意のパスへ書き・
-`ai_chat` で課金を消費できた。
+**Originヘッダ無しは許可する**(本人決定)。**「無しを許可」を緩みと読み替えて塞がないこと**
+—— 塞ぐと `tests/test_mcp_verbs.py` の実サーバ検査と `web/scripts/*.mjs` が全部落ちる。
 
-**Originヘッダ無しは許可する**(本人決定)。ブラウザは必ず `Origin` を送りJSから偽装できないので
-ブラウザ経由の攻撃はこれで塞がる。一方 `smoke*.mjs` や素のWSクライアントはヘッダを送らないので、
-拒否すると自分の検査だけが壊れる。素のWSを立てられる相手は既にこのPCでコードを実行できており、
-この防御線の外側にいる。**「無しを許可」を緩みと読み替えて塞がないこと** —— 塞ぐと
-`tests/test_mcp_verbs.py` の実サーバ検査と `web/scripts/*.mjs` が全部落ちる。
-
-ここは**握手だけ**を検査する(duocadのプロトコルは他のテストが見る)ので、ハンドラは
-接続を受けるだけの空実装でよい。
+ここは**握手だけ**を検査する(duocadのプロトコルは他のテストが見る)ので、ハンドラは接続を
+受けるだけの空実装でよい。
 """
 from __future__ import annotations
 
@@ -33,8 +24,7 @@ from duocad.mcp_server import VITE_DEV_PORT, allowed_origins
 def test_the_allowlist_covers_both_host_spellings_and_the_dev_server():
     """`localhost` と `127.0.0.1` は**別オリジン**なので両方要る。
 
-    どちらで開くかは人による(README §1 はどちらも書いていない)。片方だけにすると
-    「なぜか繋がらない日がある」という最悪の壊れ方をする。
+    片方だけにすると「なぜか繋がらない日がある」という最悪の壊れ方をする。
     """
     origins = allowed_origins(8766)
     for host in ("127.0.0.1", "localhost"):
@@ -99,8 +89,8 @@ def test_a_page_from_somewhere_else_cannot_open_the_websocket(origin: str):
     """**これが塞ぎたかった穴**。duocadが配っていないページからは繋がらない。
 
     `"null"` を含めているのは、sandboxed iframe や `file://` のページが `Origin: null` を
-    送るため —— 「知らないオリジンは弾く」を素直に書けば通るが、`None`(ヘッダ無し)の許可を
-    文字列 `"null"` の許可と取り違えると**穴が空いたまま緑になる**。
+    送るため —— `None`(ヘッダ無し)の許可と文字列 `"null"` の許可を取り違えると**穴が空いた
+    まま緑になる**。
     """
     assert _handshake(origin) is False
 

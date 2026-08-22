@@ -1,6 +1,5 @@
-"""G契約: アプリ内AIエージェントをWebSocketへ配線する(`duocad/server.py` の `ai_*`)。
+"""アプリ内AIエージェントをWebSocketへ配線する契約(`duocad/server.py` の `ai_*`)。
 
-タスクF(`duocad/agent/`)は「UIを持たないtool-useループ」を作った。ここは画面側の入口 ——
 **`ai_*` はverbではない**(文書を直接は変えない・操作ログに載らない・undoの単位でもない)ので、
 `duocad/catalog.py` の `COMMANDS` には入れない。除外そのものは
 `test_ui_command_wiring.py::test_ai_commands_are_not_verbs` と
@@ -9,18 +8,15 @@
 固定する6つ:
 
 1. **APIキーは画面へ出ない** —— `ai_status` に載るのは `api_key_configured` の真偽だけ。
-2. **`ai_send` はモデルへのHTTPリクエストを待たずに返る** —— 実行は `run_in_executor`
-   (`_ai_start` のdocstring)。進捗・結果は別イベント(`ai_tool_call` / `ai_result`)で届く。
-3. **AIがツールを呼んで文書を変えると、開いているブラウザの絵が変わる**(通常のverb配信に乗る。
-   `test_a_verb_applied_through_mcp_reaches_the_browser` のAI版)。
+2. **`ai_send` はモデルへのHTTPリクエストを待たずに返る**(実行は `run_in_executor`)。
+   進捗・結果は別イベント(`ai_tool_call` / `ai_result`)で届く。
+3. **AIがツールを呼んで文書を変えると、開いているブラウザの絵が変わる**(通常のverb配信に乗る)。
 4. **中断できる**(`ai_cancel`)。どこまでやったかは `ai_result.tool_calls` に残る。
-5. **`anthropic` の実キーは公式ホストにしか届かない**(2026-08-20・QA指摘critical)。
-   `ai_configure` で `base_url` を任意のホストへ差し替えて実キーを外部へ送れてしまう
-   経路が実在した——値をブラウザへ出していなくても、送り先を画面から選べれば結果は同じ。
-   `_ai_configure` が拒否し、`_ensure_ai_loop` も二重に(`anthropic` には `base_url` を
-   絶対に渡さない形で)保証する。
-6. **最後の1接続が切れたらAIの実行を中断する**(2026-08-20・QA指摘major)。誰も見ていない
-   まま文書が変わり続けるのを防ぐ。他の接続が残っていれば続ける(`Server._on_disconnect`)。
+5. **`anthropic` の実キーは公式ホストにしか届かない**。`ai_configure` で `base_url` を任意の
+   ホストへ差し替えると実キーが外部へ送られる —— 値をブラウザへ出していなくても、送り先を
+   画面から選べれば結果は同じ。`_ai_configure` が拒否し、`_ensure_ai_loop` も二重に保証する。
+6. **最後の1接続が切れたらAIの実行を中断する**。誰も見ていないまま文書が変わり続けるのを防ぐ
+   (他の接続が残っていれば続ける)。
 
 実キーは使わない(`RecordedProvider` で `duocad.server.build_provider` を差し替える。
 5だけは「差し替えを素通りしても実キーが漏れないこと」自体を検査したいので、
@@ -401,13 +397,13 @@ def test_ai_cancel_stops_the_run_and_keeps_what_happened_so_far(monkeypatch, box
     watcher = asyncio.run(scenario())
     result = watcher.of_type("ai_result")[-1]
     assert result["status"] == "cancelled"
-    # **どこまでやったかは残る**(タスクファイル完了条件2)。
+    # **どこまでやったかは残る**。
     assert len(result["tool_calls"]) >= 1
     assert len(result["tool_calls"]) < 2, "中断が効かず最後まで回ってしまった"
 
 
 # --------------------------------------------------------------------------------------
-# 5. anthropicの実キーは公式ホストにしか届かない(QA指摘・critical)
+# 5. anthropicの実キーは公式ホストにしか届かない
 # --------------------------------------------------------------------------------------
 def test_ai_configure_rejects_a_base_url_for_anthropic(monkeypatch, box_session: Session):
     """`base_url` を指定しても**保存されない**(黙って無視ではなく、理由が画面に出る)。"""
@@ -519,7 +515,7 @@ def test_anthropic_provider_never_receives_an_attacker_base_url(monkeypatch, box
 
 
 # --------------------------------------------------------------------------------------
-# 6. 最後の1接続が切れたらAIの実行を中断する(QA指摘・major)
+# 6. 最後の1接続が切れたらAIの実行を中断する
 # --------------------------------------------------------------------------------------
 def test_last_client_disconnecting_cancels_a_running_ai_run(monkeypatch, box_session: Session):
     monkeypatch.setattr(
