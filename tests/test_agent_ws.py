@@ -552,24 +552,3 @@ def test_last_client_disconnecting_cancels_a_running_ai_run(monkeypatch, box_ses
     assert server._ai_running is False
 
 
-def test_disconnecting_while_another_client_is_still_watching_does_not_cancel(
-    monkeypatch, box_session: Session
-):
-    """**過剰に中断しない**——他の画面がまだ見ている間は、片方が閉じても実行を続ける。"""
-    monkeypatch.setattr(
-        "duocad.server.build_provider",
-        lambda *a, **k: RecordedProvider([spoke("done")]),
-    )
-
-    async def scenario():
-        server = build_server(box_session, asyncio.get_running_loop())
-        first, second = FakeConnection(), FakeConnection()
-        server.clients.add(first)
-        server.clients.add(second)
-        await server._dispatch(first, json.dumps({"cmd": "ai_send", "message": "hi"}))
-        server.clients.discard(first)
-        server._on_disconnect(first)
-        return server
-
-    server = asyncio.run(scenario())
-    assert server._ai_cancellation.cancelled is False

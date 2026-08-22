@@ -402,7 +402,9 @@ def test_a_zero_match_proposal_still_replaces_the_previous_selection(doc: Docume
 @pytest.mark.parametrize(
     "bad, why",
     [
-        ({"kind": "edge", "where": [{"op": "no_such_op"}]}, "未知のop"),
+        # 「存在しないop」は「面のopを辺に使っている」(下)と同じ `op not in allowed` に
+        # 落ちるだけなので2026-08-22に落とした。判別力は下の方が広い(kindスコープを
+        # 外す退行を、実在するopの方だけが検出できる)。
         ({"kind": "edge", "where": [{"op": "length_gt", "value": "20"}]}, "型違い(文字列)"),
         ({"kind": "edge", "where": [{"op": "length_gt"}]}, "必須の引数が無い"),
         ({"kind": "edge", "where": [{"op": "normal_dot_gt", "axis": "Z", "value": 0.9}]},

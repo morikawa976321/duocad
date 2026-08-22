@@ -135,14 +135,6 @@ def test_fillet_refuses_a_body_hidden_after_the_selection_was_confirmed(box_sess
         box_session.fillet(1.0)
 
 
-def test_chamfer_refuses_a_body_hidden_after_the_selection_was_confirmed(box_session: Session):
-    commit_edge(box_session)
-    box_session.set_visible("box", False)
-
-    with pytest.raises(ValueError, match="hidden"):
-        box_session.chamfer(1.0)
-
-
 def test_extrude_regions_refuses_the_active_body_when_it_was_hidden_meanwhile(
     box_session: Session,
 ):

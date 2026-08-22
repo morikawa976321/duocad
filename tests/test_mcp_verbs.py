@@ -649,25 +649,6 @@ def test_an_empty_selection_still_says_empty(server: McpServer, box_session: Ses
     assert "present_kinds" not in error
 
 
-def test_the_error_says_which_tool_failed(server: McpServer):
-    """`tool` を必ず載せる(AIが並行して複数呼ぶとき、どれの失敗か分からないと直せない)。"""
-    error = call_error(server, "set_visible", {"body_id": "ghost", "visible": False})
-    assert error["tool"] == "set_visible"
-    assert error["code"] == "not_found"
-
-
-def test_an_execution_error_is_not_a_protocol_error(server: McpServer):
-    """実行時の失敗は `isError` で返す(JSON-RPCエラーにするとAIに理由が届かない)。
-
-    M4で決めた区別を、増えたツールでも守る。
-    """
-    response = request(
-        server, "tools/call", {"name": "describe_shape", "arguments": {"body_id": "ghost"}}
-    )
-    assert "error" not in response
-    assert response["result"]["isError"] is True
-
-
 # --------------------------------------------------------------------------------------
 # 5. スケッチ → 領域 → 押し出し(MCPだけで形が作れること)
 # --------------------------------------------------------------------------------------

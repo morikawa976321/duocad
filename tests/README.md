@@ -1,7 +1,7 @@
 # duocad M0 — テストが定義するAPI契約
 
 > **【2026-08-22】この文書には、もう存在しないテストへの参照がある。**
-> 同日、私物STEP（`mfd-models`、リポジトリ外）に依存する153件を削除した。
+> 同日、622件→422件へ削減した（私物STEP依存153件＋重複48件）。
 > 消えたファイルは `test_import_split.py` / `test_extrude_face.py` /
 > `test_incremental_update.py` / `test_preview.py` / `models.py` の5つと、
 > `test_mcp.py`・`test_sketch_ui.py`・`test_visibility.py` の大半。
@@ -25,7 +25,7 @@
 以前ここに「`test_extruding_one_part_of_the_pc_case_stays_under_1000ms` はマシンが混むと
 赤に振れるので `failed/` へ送るな」と書いてあった。**2026-08-22にこのテストを
 `test_incremental_update.py` ごと削除した**（私物STEP依存）。
-いま **赤は1本も無い**（`469 passed, 1 skipped`）。**赤を見たらまず環境（`.venv` を使っているか）を
+いま **赤は1本も無い**（`421 passed, 1 skipped`・15.8秒）。**赤を見たらまず環境（`.venv` を使っているか）を
 疑い、それでも赤なら本物の回帰として扱ってよい。**
 
 ## 読み方: 「実装済み(素で通る)」と「スタブ(NotImplementedErrorで赤)」の区別

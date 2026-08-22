@@ -129,7 +129,9 @@ def test_m2_modules_are_covered_by_the_import_boundary_scan():
 # --------------------------------------------------------------------------------------
 # sketch_create — 基準平面と既存ソリッドの面
 # --------------------------------------------------------------------------------------
-@pytest.mark.parametrize("name", BASE_PLANES)
+#: 3平面は `base_plane()` の同じ return を通るだけで分岐が無い(`sketch.py`)。
+#: 3値の網羅は `test_base_planes_are_the_three_reference_planes` が別に固定している。
+@pytest.mark.parametrize("name", BASE_PLANES[:1])
 def test_sketch_create_on_each_base_plane(name):
     """基準3面のどれにもスケッチを作れる。作ったスケッチは文書が持つ。"""
     document = Document()
