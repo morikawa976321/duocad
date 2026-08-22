@@ -148,6 +148,21 @@ def test_the_system_prompt_is_the_same_text_the_mcp_server_hands_out():
     assert str(len(catalog.tool_names())) in shared
 
 
+def _autonomy_rule_segments(text: str) -> tuple[str, str]:
+    """`agent_instructions()` の「(1) …」と「(2) …」を切り出す(下の検査の道具)。
+
+    **重要句が在るかを1つずつ見るだけでは足りない**(2026-08-22のQA指摘)。句を全部
+    残したまま「ただし直接適用してはならない」と1文足せば通ってしまい、**規則の反転**
+    (第1段に止まれと書く / 第2段の分岐を入れ替える)が素通りする。段ごとに切ってから
+    **条件と行動の対応**を見るために分ける。
+    """
+    first = text.index("(1) ")
+    second = text.index("(2) ")
+    tail = text.index("形を変える verb が確定すると")
+    assert first < second < tail, f"2段の規則が見つからない: {text}"
+    return text[first:second], text[second:tail]
+
+
 def test_the_system_prompt_carries_the_two_step_autonomy_rule():
     """**AIが止まるか進むかの規則は、この文にしか無い**(2026-08-22本人決定)。
 
@@ -159,17 +174,43 @@ def test_the_system_prompt_carries_the_two_step_autonomy_rule():
     (`web/src/commands/command.ts` の `needsEnter`)と**同じ2条件**である
     (対象を何個でも取る / how の入力がある)。表は `tests/test_ui_command_wiring.py`。
     **個々のverb名はこの文に書かない**(verbを足した日に古くなる)ので、ここでも見ない。
+
+    自然言語の規則を検査で完全に検証することはできない。ここが落とすのは
+    **句の削除・条件の否定/肯定の取り違え・分岐の入れ替え・承認必須の再導入**の4つで、
+    「規則が反転したら落ちる」ことを要件にしてある。
     """
     shared = catalog.agent_instructions()
 
-    # (1) 即実行してよい側 —— needsEnter と同じ2条件で書かれている
-    assert "対象を何個でも取る" in shared, "条件(1)『対象が複数か』が落ちている"
-    assert "how(寸法・選択肢・パス)" in shared, "条件(2)『howの入力があるか』が落ちている"
-    # (2) 残りは「AIが依頼から判断する」であって「人の承認を待つ」ではない
-    assert "自分で判断する" in shared, "自律判断の規則が落ちている"
-    assert "人の承認は要らない" in shared, "旧規則(承認必須)へ戻っている疑い"
+    # 前提: 確定はAI自身が踏む(旧規則ならここが「人の承認を待つ」に戻る)
+    assert "人の承認は要らない" in shared, "旧規則(承認必須)へ戻っている"
+
+    first, second = _autonomy_rule_segments(shared)
+
+    # --- 第1段: 2条件が**どちらも無い**とき、確認を待たず適用してよい ---
+    assert "対象を何個でも取る引数が無く" in first, "条件(1)が否定形で書かれていない"
+    assert "how(寸法・選択肢・パス)の入力も無い" in first, "条件(2)が否定形で書かれていない"
+    assert "確認を待たず" in first, "第1段の行動が『確認を待たない』でない"
+    assert "実行してよい" in first, "第1段が実行の許可になっていない"
+    # 第1段に「止まれ」が紛れ込むと、第1段を設けた意味がそのまま消える
+    for forbidden in ("止め", "尋ね", "確認を待つ", "承認"):
+        assert forbidden not in first, f"第1段に『{forbidden}』が入り、即実行の許可が濁っている"
+
+    # --- 第2段: 2条件の**いずれかがある**とき、AIが依頼から判断する ---
+    assert "対象を何個でも取る、または how の入力がある" in second, "条件が肯定形で書かれていない"
+    assert "自分で判断する" in second, "自律判断の規則が第2段に無い"
+    # 分岐の向き —— 具体的なら適用、曖昧なら停止。入れ替わったら順序が壊れて落ちる
+    concrete, applies = second.index("具体的な指示"), second.index("適用まで行き")
+    vague, stops = second.index("曖昧"), second.index("止めて")
+    assert concrete < applies < vague < stops, (
+        f"具体/曖昧と適用/停止の対応が入れ替わっている: {second}"
+    )
     # 止めると決めたら verb を呼ばない(呼べばコアが SelectionNotCommitted で断る)
-    assert "verb は呼ばない" in shared, "『止める』の中身が書かれていない"
+    assert "止めたら verb は呼ばない" in second, "『止める』の中身が書かれていない"
+    assert "止める側に倒す" in second, "迷ったときに倒す向きが書かれていない"
+
+    # 句を消さずに規則だけ旧に戻す手(1文の追記)を塞ぐ
+    for forbidden in ("してはならない", "許可を得て", "承認を得て", "必ず人に確認"):
+        assert forbidden not in shared, f"承認必須が『{forbidden}』の形で戻っている"
 
 
 # --------------------------------------------------------------------------------------
