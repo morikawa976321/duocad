@@ -97,6 +97,12 @@ async function main() {
             lastFile: hook.lastFile,
             log: hook.state.log.length,
             messages: hook.messages,
+            // 走行中に出たエラーの控え(`App.svelte` の `errorLog`)。**トーストは8秒で消える**ので、
+            // 最後に一度だけ見る下の検査は、画面のDOMではなくこちらを見る必要がある。
+            errors: hook.errors,
+            toasts: Array.from(document.querySelectorAll('#toasts .toast-text')).map((node) =>
+              node.textContent.trim(),
+            ),
           })
         }),
       )
@@ -511,12 +517,22 @@ async function main() {
     )
     ok('面を選んで**編集可能なコピー**を作れた(複製の経路)')
 
-    // **画面に出たエラーを見落とさない**。サーバのエラーは通知欄へ出るだけで、
+    // **画面に出たエラーを見落とさない**。サーバのエラーはトーストへ出るだけで、
     // ブラウザのコンソールには出ない —— ここを見ないと「失敗しているのに緑」が起きる
     // (2026-08-14に open_document で実際に起きた)。
-    const errors = (await look()).messages.filter((message) => message.startsWith('エラー['))
-    if (errors.length > 0) fail(`画面にエラーが出ている: ${errors.join(' | ')}`)
-    ok('画面の通知にエラーなし')
+    // 2026-08-22にエラーの表示先がステータスバーからトーストへ移った。**札は8秒で消える**ので
+    // 最後に一度だけ見るこの検査は控え(`errors`)を見る —— 画面のDOMを見ると、
+    // 途中で出て消えたエラーを取りこぼして緑になる(通知欄より弱くなる)。
+    const screen = await look()
+    // **控えが配列で来ることを先に確かめる。** ここが `undefined` や object に化けると
+    // 下の `length > 0` が永久に偽になり、**この検査が赤くならないまま死ぬ**
+    // (穴を1つ足すたびに起きうる形なので、握らずに落とす)。
+    if (!Array.isArray(screen.errors)) {
+      fail(`__duocad.errors が配列で来ない(検査が黙って死ぬ): ${JSON.stringify(screen.errors)}`)
+    }
+    const errors = screen.errors
+    if (errors.length > 0) fail(`画面にエラーが出た: ${errors.join(' | ')}`)
+    ok('走行中にエラーのトーストは1枚も出ていない')
 
     if (consoleErrors.length > 0) {
       fail(`ブラウザのコンソールにエラー: ${consoleErrors.slice(0, 3).join(' | ')}`)

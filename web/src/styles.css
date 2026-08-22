@@ -19,6 +19,9 @@
   --accent-soft: oklch(76% 0.15 68 / 0.16);
   --accent-line: oklch(76% 0.15 68 / 0.4);
   --input-bg: oklch(14% 0.006 250);
+  /* 右サイドバーの幅。トースト(Toast.svelte)がビューポートの右上へ寄るのに要る —
+     2箇所に 300px を書き写すと、幅を変えた日に片方だけ置き去りになる。 */
+  --sidebar-w: 300px;
   --font: "Consolas", "Cascadia Mono", "Meiryo", monospace;
 }
 
@@ -78,6 +81,9 @@ header {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
+  /* トーストの位置の基準。**大きさは変わらない**(浮かせる側が position:absolute なので
+     フローから外れており、.viewport の寸法＝カメラのアスペクトに触らない)。 */
+  position: relative;
 }
 
 .viewport {
@@ -92,7 +98,7 @@ header {
      frameToContent がアスペクト比を見ずモデルの対角線だけで距離を決めるため、
      サイドバーの削り幅によらず残る。300pxなら Parameters/Sketch の入力欄に
      無理をさせない。 */
-  width: 300px;
+  width: var(--sidebar-w);
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;

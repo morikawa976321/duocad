@@ -143,6 +143,9 @@ async function main() {
             log: hook.state.log.length,
             redoCount: hook.redoCount,
             messages: hook.messages,
+            // 走行中に出たエラーの控え(`App.svelte` の `errorLog`)。**トーストは8秒で消える**ので、
+            // 記録に残すのは画面のDOMではなくこちら(2026-08-22にエラーの表示先が移った)。
+            errors: hook.errors,
             lastFile: hook.lastFile,
           })
         }),
@@ -968,7 +971,11 @@ async function main() {
     }
 
     results.consoleErrors = consoleErrors.slice(0, 5)
-    results.screenMessages = (await look()).messages
+    const screen = await look()
+    results.screenMessages = screen.messages
+    // **エラーは別に記録する。** ステータスバーに残るのは情報だけになったので、
+    // `screenMessages` だけを受入記録に載せると「エラーは1件も出ていない」ように読める。
+    results.screenErrors = screen.errors ?? []
     console.log('\n=== RESULT_JSON ===')
     console.log(JSON.stringify(results, null, 2))
   } finally {

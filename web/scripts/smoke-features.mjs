@@ -104,6 +104,13 @@ async function main() {
             log: hook.state.log.length,
             appliedCount: hook.state.applied_count,
             messages: hook.messages,
+            // **今まさに画面に出ているエラーの札**(`Toast.svelte`。8秒で消える)。
+            // 文言の正はこのDOMであって、控えの `errors` ではない。
+            toasts: Array.from(document.querySelectorAll('#toasts .toast-text')).map((node) =>
+              node.textContent.trim(),
+            ),
+            // 消えた後も残る控え(`App.svelte` の `errorLog`)。走行中に出たエラーの履歴。
+            errors: hook.errors,
           })
         }),
       )
@@ -349,11 +356,21 @@ async function main() {
     await page.click('#fillet')
     await typeInto('#fillet-radius', 1000)
     await page.keyboard.press('Enter')
+    // **理由はトーストで出る**(2026-08-22。ステータスバーの1行では拒否に気づけない)。
+    // ここは控えの `errors` ではなく**実際に描かれた札**を見る —— 人間が見るのはDOMの方で、
+    // 控えだけ見ていると「記録はされたが画面には出ていない」を緑にしてしまう。
     await waitFor(
-      () => (window.__duocad.messages ?? []).some((message) => message.includes('fillet')),
-      '失敗する半径なのに理由が画面に出ない',
+      () =>
+        Array.from(document.querySelectorAll('#toasts .toast-text')).some((node) =>
+          node.textContent.includes('fillet'),
+        ),
+      '失敗する半径なのに理由がトーストに出ない',
     )
     const afterFailure = await look()
+    // **エラーがステータスバーへ二重に出ていない**(トースト一本化の実体。2026-08-22)。
+    // 両方に出すと「気づける場所」がまた2つになり、片方を直し忘れる形へ戻る。
+    const strayed = (afterFailure.messages ?? []).filter((message) => message.startsWith('エラー['))
+    if (strayed.length > 0) fail(`エラーがステータスバーにも出ている: ${strayed.join(' | ')}`)
     if (afterFailure.selection.count !== 2) {
       fail(`失敗で選択が消えた: ${afterFailure.selection.count}(24本選び直しになる)`)
     }
@@ -361,7 +378,7 @@ async function main() {
     const keptRadius = await page.$eval('#fillet-radius', (element) => element.value)
     if (keptRadius !== '1000') fail(`失敗後に打った値が戻っていない: "${keptRadius}"`)
     ok(
-      `**失敗を握りつぶさない**: 理由が画面に出て(${afterFailure.messages[0].slice(0, 48)}…)、` +
+      `**失敗を握りつぶさない**: 理由がトーストに出て(${(afterFailure.toasts[0] ?? '').slice(0, 48)}…)、` +
         '選択2件と打った値がそのまま残った(すぐ打ち直せる)',
     )
 

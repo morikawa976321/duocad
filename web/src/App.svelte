@@ -46,6 +46,7 @@
   import PartsPanel from './PartsPanel.svelte'
   import SelectionPanel from './SelectionPanel.svelte'
   import SketchPanel from './SketchPanel.svelte'
+  import Toast, { showToast } from './Toast.svelte'
   import {
     createSession,
     type AiStatus,
@@ -95,6 +96,16 @@
   let status = $state<ConnectionStatus>('connecting')
   let model = $state<ServerState | null>(null)
   let messages = $state<string[]>([])
+  /**
+   * 画面へ出したエラーの控え。**表示には使わない** —— 出すのはトースト(消える)で、
+   * ここは「消えた後も見られる場所」である。
+   *
+   * トーストにしたことで実機検査から検出力が落ちる経路が1つある: `smoke-files.mjs` は
+   * 最後に一度だけ「画面にエラーが出ていないか」を見ており、**通知欄は消えないから**
+   * その1回で走行全体を覆えていた。8秒で消える札を最後に見ても、途中で出て消えたエラーは
+   * 拾えない。控えを残して `__duocad.errors` から読ませることで、その検査を弱めずに済む。
+   */
+  let errorLog = $state<string[]>([])
   let lastApplied = $state<Applied | null>(null)
 
   /** 送信中のコマンドの `client_op`(応答が返るまでの間だけ生きる)。 */
@@ -160,7 +171,7 @@
   const session = createSession({
     onState: handleState,
     onError: (message, where) => {
-      note(`エラー[${where}] ${message}`)
+      fail(`エラー[${where}] ${message}`)
       pendingOp = null
       if (where === 'preview') clearPreview()
       // 辺の取り寄せが失敗したら「頼んだ」印も消す(次に起動したときに取り直せる)
@@ -171,9 +182,13 @@
       // 打った値だけでよく、24本選び直しにはならない。
       if (CATEGORY_OF.get(where) === 'feature') host?.restoreLastInputs()
     },
-    onWarning: (message) => note(`警告 ${message}`),
+    onWarning: (message) => fail(`警告 ${message}`),
     onStatus: (next) => {
+      // **繋がっていたのに切れた**のはエラー(操作が届かなくなる)。最初の接続待ちや
+      // 再接続の試行を毎回トーストにしても人間にできることは無いので、落差だけを見る。
+      const wasOpen = status === 'open'
       status = next
+      if (wasOpen && next !== 'open') fail('サーバとの接続が切れた(自動で繋ぎ直しを試みる)')
       // (再)接続したら今のAI設定を取り直す(サーバは再起動していなくても、
       // 前回の接続が切れている間に別の画面が `ai_configure` した可能性がある)。
       if (next === 'open') session.aiGetStatus()
@@ -199,6 +214,12 @@
     onAiError: handleAiError,
   })
 
+  /**
+   * **情報**を1行、ステータスバーへ出す(状態の説明・成功の報告)。
+   *
+   * エラーはここへ来ない —— `fail()` を使うこと。分けているのは表示先が違うからではなく、
+   * **「操作が拒まれた」に人間が気づけるかどうかが違う**からである(Toast.svelte のdocstring)。
+   */
   function note(message: string): void {
     if (!message) return
     messages = [message, ...messages].slice(0, 4)
@@ -206,16 +227,29 @@
   /** パネルへ渡す通知(プロパティ名と関数名を揃えるためだけの別名)。 */
   const onNote = note
 
+  /**
+   * **エラー**を1件、トーストで出す(拒まれた・失敗した・繋がらない)。
+   *
+   * **エラーが画面に出る経路はこの関数1本だけ**にしてある。各パネルが個別に
+   * `showToast` を叩き始めると、同じ失敗が2枚出たり、パネルを畳むとエラーが消えたりする
+   * (WSの応答を受けるのはこの層だけ、という形をそのまま使う)。
+   */
+  function fail(message: string): void {
+    if (!message) return
+    errorLog = [message, ...errorLog].slice(0, 20)
+    showToast(message)
+  }
+
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
   function handleAiStatus(next: AiStatus): void {
     aiStatus = next
     // **繋がらない理由を黙って捨てない**(`ai_configure` の拒否。タスクファイルの要件)。
-    if (next.error) note(`AI設定: ${next.error}`)
+    if (next.error) fail(`AI設定: ${next.error}`)
   }
 
   function handleAiError(message: string): void {
     aiTranscript = [...aiTranscript, { kind: 'error', message }]
-    note(`AI ${message}`)
+    fail(`AI ${message}`)
   }
 
   function sendAiMessage(text: string): void {
@@ -564,14 +598,14 @@
     const category = CATEGORY_OF.get(verb)
     if (category === undefined || category === 'ui') {
       // `ui`(スケッチの「選ぶ」)は何も送らない道具なので、通常ここへは来ない。
-      note(`未知のコマンド: ${verb}`)
+      fail(`未知のコマンド: ${verb}`)
       return
     }
     switch (category) {
       // -------------------------------------------------------------- C: スケッチ
       case 'sketch': {
         if (sketchId === null) {
-          note('スケッチモードに入っていない')
+          fail('スケッチモードに入っていない')
           return
         }
         const op = nextOp()
@@ -585,13 +619,13 @@
       // -------------------------------------------------------------- D: フィーチャ
       case 'feature': {
         if (needsSketchId(verb) && sketchId === null) {
-          note('スケッチモードに入っていない(反復はスケッチの図形が対象)')
+          fail('スケッチモードに入っていない(反復はスケッチの図形が対象)')
           return
         }
         if (verb === 'extrude' && !regionsStillExist()) {
           // **領域はパラメータ編集で分裂・消失しうる**(§7)。消えた領域を送ると
           // サーバは添字が範囲外だと言うだけなので、ここで何が起きたかを画面へ出す。
-          note('選んだ領域が今のスケッチに無い(図形が変わって分裂・消失した可能性)。選び直す')
+          fail('選んだ領域が今のスケッチに無い(図形が変わって分裂・消失した可能性)。選び直す')
           return
         }
         const op = nextOp()
@@ -613,7 +647,7 @@
         // **分類を1つ足すとここで型が落ちる**(`never` に狭まらなくなる)。
         // 送り方を書かずに分類だけ増やすことができない、というのがこの1行の役目。
         const unhandled: never = category
-        note(`送り方が決まっていない分類: ${String(unhandled)}`)
+        fail(`送り方が決まっていない分類: ${String(unhandled)}`)
       }
     }
   }
@@ -748,6 +782,10 @@
       previewing,
       lastApplied,
       messages,
+      // **エラーはステータスバーではなくトーストへ出る**(消える)ので、実機検査が
+      // 「走行中にエラーが出ていないか」を最後に一度で見られるよう控えを渡す。
+      // 今まさに画面に出ている札は `#toasts` のDOMが正 —— 文言の検証はそちらを見ること。
+      errors: errorLog,
       projectFace: (bodyId: string, faceIndex: number) => viewport?.project(bodyId, faceIndex) ?? null,
       // C: スケッチ。**実機検査が本物のクリックで描く**ための穴
       sketches,
@@ -861,6 +899,10 @@
         onToggleEntity={toggleEntity}
       />
     </aside>
+
+    <!-- エラーの札。**`.main` の中に置くが大きさは持たない**(position:absolute で浮く)ので、
+         ビューポートの寸法＝カメラのアスペクトには触らない。出す側は `fail()` の1本だけ。 -->
+    <Toast />
   </div>
 
   <!-- 操作履歴は下部の横長タイムラインとして表示(HistoryPanel.svelte側で横並びに restyle)。 -->

@@ -426,6 +426,7 @@ async function main() {
             applied: window.__duocad.lastApplied,
             appliedCount: window.__duocad.state?.applied_count ?? 0,
             messages: window.__duocad.messages,
+            errors: window.__duocad.errors,
           }),
         ),
       )
@@ -576,6 +577,7 @@ async function main() {
             })),
             selection: window.__duocad.selection,
             messages: window.__duocad.messages,
+            errors: window.__duocad.errors,
           }),
         )
         fail(`${what}: ${dump}`)
