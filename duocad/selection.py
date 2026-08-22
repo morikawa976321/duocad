@@ -1,70 +1,35 @@
 """選択機構 — **交互操作の中核**。
 
-## なぜコアに置くのか
+選択は `Document.selection` が持つ(コアの状態)。**保存はしない** —— 保存・再生の対象は
+操作ログだけであり、選択はセッション状態である。
 
-実装計画書§2.1の「交互操作」(AIが選択を提案 → 人が過不足を直す → AIが適用)が成立する
-**唯一の必要条件**が「選択集合が第一級の共有オブジェクトであること」である。選択をアプリ層
-(ブラウザ)に持たせると、AIから読めず・書けず、上の一巡が原理的に閉じない。
+**選択の変更は操作ログに積まない**(文書を変更せず、undoの単位でもない)。一方 `set_visible` は
+`Body.visible` という**文書の状態**を変えるのでログに載る。この非対称は意図的。ただし
+**イベントは発火する** —— AIが選択を書き換えたら画面のハイライトは描き直される。
 
-満たすべき5条件(§2.1):
-
-1. **永続** — 操作の合間に消えない。UIの一時状態ではない
-2. **双方向** — AIが読める / **AIが書ける** / 人が読める / 人が書ける
-3. **種別を保持** — 面 / 辺 / 頂点 / 領域を区別する
-4. **差分編集可能** — 追加・除去(作り直しではない)
-5. **出所を区別** — AIの**提案**か、人が**確定**したものか
-
-## 置き場所と保存
-
-選択は `Document.selection` が持つ(コアの状態)。**保存はしない** — 保存・再生の対象は
-操作ログだけであり、選択はセッション状態である。`Document` を保存する経路は
-`doc.log.to_json()` しか無いので、`Selection` をログに載せない限り自動的に保存されない。
-
-## 操作ログとの関係(非対称)
-
-**選択の変更は操作ログに積まない**(選択は文書を変更しないため。undoの単位でもない)。
-一方 `set_visible` は `Body.visible` という**文書の状態**を変えるのでログに載る。
-この非対称は意図的である。ただし**イベントは発火する** — ログに載らないことと
-「アプリ層へ知らせない」ことは別で、AIが選択を書き換えたら画面のハイライトは
-描き直されなければならない(§2「コマンドは下り、イベントは上り」)。
-
-## 提案と確定(§3.5 の `origin`)
-
-`origin` は**集合単位**で持つ(項目ごとではない)。§3.5のデータモデルがそう定めており、
-UI側の要件も「AIの提案は見た目が違い、承認操作がある」＝集合まるごとの見た目である。
+`origin` は**集合単位**で持つ(項目ごとではない):
 
     propose_selection(...)   -> origin="proposed"   AIが書き込む経路
     modify_selection(...)    -> origin="user"       人が差分編集する経路(触ること自体が承認)
     commit_selection()       -> origin="user"       中身を変えずに承認する経路
 
-## verbの対象集合はここからしか取れない(2026-08-20)
+**verbの対象集合は `require_confirmed` / `require_edges` からしか取れない**。MCPもWebSocketも
+対象集合を引数で受ける口を持たず、`Session` のverbラッパがこの2つを呼ぶ ——**AIの経路と人の
+経路が同じ規則を通る**のはここで担保されている。**`origin="proposed"` のままでは verb に
+渡せない**(`confirmed_items` が `SelectionNotCommitted`)。禁止ではなく**黙って通さない**で、
+AIは `commit_selection()` を明示的に呼べば自分の提案を実行できる。
 
-`require_confirmed` / `require_edges` が「選択 → 面・辺・領域」の唯一の入口である。
-MCPもWebSocketも対象集合を引数で受ける口を持たず、`Session` のverbラッパがこの2つを呼ぶ
-——**AIの経路と人の経路が同じ規則を通る**のはここで担保されている。
-以前はWebSocket側だけが添字を引数で受けており、ブラウザがコアの選択を添字へ変換して
-送り返していた(同じ変換がTSとPythonに2つあり、片方だけ緩んでも誰も気づかない形だった)。
-
-**`origin="proposed"` のままでは verb に渡せない**(`confirmed_items` が
-`SelectionNotCommitted`)。これは「AIが自分の提案を人の確認なしに実行できるか」への答えで、
-**禁止ではなく「黙って通さない」**である(§6予防6) — AIは `commit_selection()` を明示的に
-呼べば自分の提案を実行できる。1手を明示的に踏ませることで、提案のまま実行された操作が
-操作ログの上で区別できなくなる事故を防ぐ。
-
-## 可視性は選択機構の一部
-
-`visible=False` のBodyは選択の対象にならない(`selectable_bodies`)。実機でPCケース
+**可視性は選択機構の一部**で、`visible=False` のBodyは選択の対象にならない
+(`selectable_bodies`。`duocad.predicates` も不可視Bodyを走査しない)。実機でPCケース
 (27部品・2835面)を触ったときのピック失敗率63%の原因が「手前の部品が奥の面を隠していた」
-ことにあり、可視性は見た目の設定ではなく**何を指せるかの定義**である。述語による選択でも
-同じ(`duocad.predicates` は不可視Bodyを走査しない)。
+ことにある。
 
-## 参照の形(§3.5)
+参照の形:
 
     ShapeRef  : {"body": BodyId, "kind": "face"|"edge"|"vertex", "index": int, "provenance": None}
     RegionRef : {"sketch": SketchId, "index": int, "provenance": None}
 
-`provenance` は day1 の空スロット(§6予防2)。**添字は現時点のものであって、形が変われば
-別の実体を指す**(§3.5・§7)。A1では添字の付け替えを契約にしていない(下記「範囲外」)。
+**添字は現時点のものであって、形が変われば別の実体を指す**(添字の付け替えは契約にしていない)。
 
 **OCP / build123d を直接importしない**(数え上げは `kernel` 越し、幾何は `query` 越し)。
 """
@@ -81,17 +46,15 @@ from .document import BodyId, Document
 class SelectionNotCommitted(ValueError):
     """提案のまま verb へ渡そうとしたときに `confirmed_items` が送出する。
 
-    `ValueError` の派生なので既存の `pytest.raises(ValueError)` はそのまま通る。
-    MCPはメッセージ文字列ではなく `isinstance` で `selection_not_committed` を付ける。
+    `ValueError` の派生。MCPはメッセージ文字列ではなく `isinstance` で判定する。
     """
 
 
 class SelectionEmpty(ValueError):
     """verbが食う種別の項目が確定選択に1つも無い(`require_*` が送出する)。
 
-    `kind` に「何が要るか」を持つ。MCPは `isinstance` でこの型を見て
-    `selection_empty` + `required_kind` を付ける(文言では判定しない)。
-    アプリ層(WebSocket)は文言をそのまま画面へ返す。
+    `kind` に「何が要るか」を持つ。MCPは `isinstance` でこの型を見て `selection_empty` +
+    `required_kind` を付ける(文言では判定しない)。アプリ層は文言をそのまま画面へ返す。
     """
 
     def __init__(self, message: str, kind: str) -> None:
@@ -100,22 +63,14 @@ class SelectionEmpty(ValueError):
 
 
 class SelectionKindMismatch(SelectionEmpty):
-    """確定選択は**空ではない**が、verbが食う種別が1つも入っていない(2026-08-20・本人決定)。
+    """確定選択は**空ではない**が、verbが食う種別が1つも入っていない。
 
     例: フィレット(辺を食う)を呼んだのに、確定しているのは面3枚。
 
-    **`SelectionEmpty` の派生にしてある**ので、既存の `pytest.raises(SelectionEmpty)` や
-    `require_*` を型で捕まえている経路はそのまま通る。分けたのはMCPのエラーコードのためで、
-    `_error_payload` は**この型を先に**見て `selection_kind_mismatch` を返す。
-
-    **なぜ分けたか(2026-08-20に決定3を覆した)**: 2026-08-20の実装時点では「どちらも次の一手が
-    『{kind}を選び直す』で同じ」という理由でコードを分けず、文面だけ分けていた。本人がこれを
-    覆した理由は語彙の数ではなく**名前が嘘をつく**こと —— 面3枚が入っている選択に対して
-    `selection_empty`(選択が空)と名乗ると、後で読む人を必ず一度混乱させる。加えて
-    アプリ層が種別違いにだけ反応する余地(「この面の辺を選ぶ」等)がコードで分岐できる。
-
-    `present` に**実際に確定している種別と件数**を持つ(`{"face": 3}`)。文面の生成元と
-    同じ値なので、画面もモデルも数え直さなくてよい。
+    **`SelectionEmpty` の派生にしてある**ので、`require_*` を型で捕まえている経路はそのまま
+    通る。分けてあるのはMCPのエラーコードのためで、`_error_payload` は**この型を先に**見て
+    `selection_kind_mismatch` を返す。`present` に**実際に確定している種別と件数**を持つ
+    (`{"face": 3}`)。文面の生成元と同じ値なので、画面もモデルも数え直さなくてよい。
     """
 
     def __init__(self, message: str, kind: str, present: dict) -> None:
@@ -126,8 +81,8 @@ class SelectionKindMismatch(SelectionEmpty):
 class SelectionAmbiguous(ValueError):
     """1つだけ食うverbに複数選ばれている(`require_confirmed(exactly_one=True)`)。
 
-    **黙って先頭を選ばない**ための型。`SelectionEmpty` と別にしてあるのは、
-    人・AIが次に打つ手が違う(選び直す vs 減らす)ため。
+    **黙って先頭を選ばない**ための型。`SelectionEmpty` と別なのは、次に打つ手が違うため
+    (選び直す vs 減らす)。
     """
 
     def __init__(self, message: str, kind: str) -> None:
@@ -138,9 +93,8 @@ class SelectionAmbiguous(ValueError):
 #: ShapeRef の kind(§3.5)。領域は RegionRef 側で表す。
 SHAPE_KINDS = ("face", "edge", "vertex")
 
-#: 領域を種別で絞るときの名前。**RegionRef は `kind` キーを持たない**(§3.5のデータモデルが
-#: `{sketch, index, provenance}` と定めているため)ので、`"sketch"` キーの有無から導く。
-#: `confirmed_items(doc, kind="region")` はこの名前で絞る。
+#: 領域を種別で絞るときの名前。**RegionRef は `kind` キーを持たない**(データモデルが
+#: `{sketch, index, provenance}` と定めている)ので、`"sketch"` キーの有無から導く。
 REGION_KIND = "region"
 
 #: `confirmed_items(kind=...)` に渡せる名前の全体
@@ -163,12 +117,10 @@ class Selection:
     origin: str = ORIGIN_USER
 
     def to_dict(self) -> dict:
-        """アプリ層・MCPへ渡す素の値。
-
-        戻り値: `{"items": [...], "origin": str, "count": int}`
+        """アプリ層・MCPへ渡す素の値 `{"items": [...], "origin": str, "count": int}`。
 
         `count` を明示的に持たせるのは、**述語が0件だったことを呼び出し元が知れる**ように
-        するため(項番19。AIが述語を外したことに気づけないと、交互操作は黙って止まる)。
+        するため(AIが述語を外したことに気づけないと、交互操作は黙って止まる)。
         """
         return {
             "items": list(self.items),
@@ -177,7 +129,6 @@ class Selection:
         }
 
     def is_proposed(self) -> bool:
-        """AIの提案状態か(`origin == "proposed"`)。"""
         return self.origin == ORIGIN_PROPOSED
 
 
@@ -187,20 +138,15 @@ def get_selection(doc: Document) -> Selection:
 
 
 def fingerprint(doc: Document) -> str:
-    """選択の「指紋」(H・2026-08-20、QA critical指摘への対応)。
+    """選択の「指紋」。
 
-    **選択の変更は操作ログに乗らない**(モジュールdocstring「操作ログとの関係」)。
-    したがって `len(doc.log.entries)` だけを版番号にすると、AIが考えている間に人が
-    「辺Aを外して辺Bを選び直して確定する」ような**入れ替え**(件数も種別も変わらない)を
-    見逃す —— `fillet(radius)` は確定選択から対象を取る(`require_edges`)ので、
+    **選択の変更は操作ログに乗らない**ので、`len(doc.log.entries)` だけを版番号にすると、
+    AIが考えている間に人が「辺Aを外して辺Bを選び直して確定する」ような**入れ替え**
+    (件数も種別も変わらない)を見逃す —— `fillet(radius)` は確定選択から対象を取るので、
     版が動いたと誤認しなければAIは辺Aのつもりで辺Bを黙って丸める。
 
-    `origin` と `items` を**順序を保ったまま**JSON化して比較材料にする。順序を保つのは
-    `fillet`/`chamfer` が選択順と半径・距離のリストを対応させるため(並べ替えも
-    実質的な変更として検出したい)。ハッシュ化はしない —— 衝突を心配するより、
-    短い文字列をそのまま比較できる方が単純で正しい(「先回りして大きな仕組みを
-    作らない」)。呼び出し側(`DocumentTools.current_seq`)がこれを操作ログの版と
-    組み合わせて、文書か選択のどちらかが変わったことを検出する。
+    `origin` と `items` を**順序を保ったまま**JSON化する。順序を保つのは `fillet`/`chamfer` が
+    選択順と半径・距離のリストを対応させるため(並べ替えも実質的な変更として検出したい)。
     """
     selection = get_selection(doc)
     return json.dumps(
@@ -217,16 +163,15 @@ def propose_selection(
 ) -> Selection:
     """**AIが書き込む経路**。選択を丸ごと置き換え、`origin="proposed"` にする。
 
-    `refs`(参照の明示)か `predicate`(述語・`duocad.predicates` の形式)のどちらか一方を渡す。
-    両方 / どちらも無しは ValueError。
+    `refs`(参照の明示)か `predicate`(述語)のどちらか一方を渡す。両方 / どちらも無しは ValueError。
 
-    失敗の契約(§6予防6): **落ちたときは選択を変更しない**(項番20)。例外の種類は
-    `select_*` と揃える —— **参照の形が不正(必須キーの欠落・未知の `kind`)なら ValueError、
-    存在しないBodyを指していれば KeyError**、不正な述語は ValueError。
-    「どこが悪いか」で例外が変わらないと、呼び出し側(MCP)がAIへ返す説明を作れない。
+    失敗の契約: **落ちたときは選択を変更しない**。例外の種類は `select_*` と揃える ——
+    **参照の形が不正(必須キーの欠落・未知の `kind`)なら ValueError、存在しないBodyを指して
+    いれば KeyError**、不正な述語は ValueError。「どこが悪いか」で例外が変わらないと、
+    呼び出し側(MCP)がAIへ返す説明を作れない。
 
-    **一致0件はエラーではない** — 空の Selection を返す(項番19)。0件でも**置き換えは起きる**
-    (外した述語の後に古い候補が残ると、人が承認したつもりで別の集合にverbがかかる)。
+    **一致0件はエラーではない**(空の Selection を返す)。0件でも**置き換えは起きる** ——
+    外した述語の後に古い候補が残ると、人が承認したつもりで別の集合にverbがかかる。
     """
     if (refs is None) == (predicate is None):
         raise ValueError("propose_selection needs exactly one of refs or predicate")
@@ -251,21 +196,14 @@ def modify_selection(
 ) -> Selection:
     """**人が直す経路**。差分編集(作り直しではない)を行い、`origin="user"` にする。
 
-    - 同じ参照を2回 `add` しても重複しない(項番3)。等価判定は参照の中身
-      (`body`/`kind`/`index`、領域は `sketch`/`index`)で行う。`provenance` は見ない。
-    - 選択に無い参照の `remove` は**空振りでよい**(人が既に消したものをもう一度消す操作は
-      エラーにしない。UIのトグルがそのまま乗る)。
-    - **人が触ること自体が承認**なので `origin` は "user" になる(モジュールdocstring)。
+    - 同じ参照を2回 `add` しても重複しない。等価判定は参照の中身(`body`/`kind`/`index`、
+      領域は `sketch`/`index`)で行い、`provenance` は見ない。
+    - 選択に無い参照の `remove` は**空振りでよい**(UIのトグルがそのまま乗る)。
+    - `add` と `remove` に同じ参照があれば **remove が勝つ**。
+    - **既に入っている参照を再度 add しても、位置は動かさない**。同じものをもう一度
+      クリックしただけで並びが変わると、`fillet` の辺リストと半径リストの対応もずれる。
 
-    `add` と `remove` に同じ参照があれば **remove が勝つ**(引き算を後に適用する)。
-
-    **既に入っている参照を再度 add しても、位置は動かさない**(末尾へ移し替えない)。
-    人が同じものをもう一度クリックしただけで一覧の並びが変わると、
-    `fillet` の辺リストと半径リストの対応も一緒にずれる。
-
-    失敗の契約は `propose_selection` と同じ —— **不正な参照は落ちて、選択を変更しない**
-    (形が不正なら ValueError、存在しないBodyは KeyError)。人が触る主経路なので、
-    ここを素通りさせると壊れた参照が選択に紛れ込む。
+    失敗の契約は `propose_selection` と同じ —— **不正な参照は落ちて、選択を変更しない**。
     """
     add_list = list(add)
     remove_list = list(remove)
@@ -291,11 +229,7 @@ def modify_selection(
 
 
 def commit_selection(doc: Document) -> Selection:
-    """提案を確定する(`origin="user"`)。**中身は変えない**。
-
-    人が「そのままでよい」と承認する経路であり、AIが自分の提案を実行する前に明示的に
-    踏む1手でもある。既に "user" のときに呼んでも失敗しない(冪等)。
-    """
+    """提案を確定する(`origin="user"`)。**中身は変えない**。既に "user" でも失敗しない(冪等)。"""
     selection = get_selection(doc)
     selection.origin = ORIGIN_USER
     return selection
@@ -312,12 +246,11 @@ def clear_selection(doc: Document) -> Selection:
 def confirmed_items(doc: Document, kind: Optional[str] = None) -> List[dict]:
     """**verbへ渡してよい**項目を返す。`kind` を指定するとその種別だけに絞る。
 
-    `origin == "proposed"` のときは `SelectionNotCommitted`(ValueErrorの派生。
-    モジュールdocstringの「黙って通さない」)。ここが、提案と確定の区別を**実際に
-    効かせている唯一の場所**である。
+    `origin == "proposed"` のときは `SelectionNotCommitted`。ここが、提案と確定の区別を
+    **実際に効かせている唯一の場所**である。
 
-    `kind` に渡せるのは `SELECTABLE_KINDS`(面・辺・頂点・領域)。未知の名前は ValueError
-    (綴り間違いが「0件」として返ると、verbが黙って何もしない経路になる)。
+    `kind` に渡せるのは `SELECTABLE_KINDS`。未知の名前は ValueError(綴り間違いが「0件」として
+    返ると、verbが黙って何もしない経路になる)。
     """
     selection = get_selection(doc)
     if selection.is_proposed():
@@ -335,10 +268,9 @@ def confirmed_items(doc: Document, kind: Optional[str] = None) -> List[dict]:
 def ref_kind(ref: dict) -> str:
     """参照の種別を返す(`"face"|"edge"|"vertex"|"region"`)。
 
-    **RegionRef は `kind` キーを持たない**(§3.5)ので、`"sketch"` キーがあれば
-    `REGION_KIND`、無ければ `ref["kind"]` を返す。種別の判定をこの1箇所に集めるのは、
-    `confirmed_items` の絞り込みと `same_ref` の等価判定が別々の規則を持ち始めるのを
-    防ぐため。どちらでもない形の辞書は ValueError。
+    **RegionRef は `kind` キーを持たない**ので、`"sketch"` キーがあれば `REGION_KIND`。
+    種別の判定をこの1箇所に集めるのは、`confirmed_items` の絞り込みと `same_ref` の等価判定が
+    別々の規則を持ち始めるのを防ぐため。どちらでもない形の辞書は ValueError。
     """
     if not isinstance(ref, dict):
         raise ValueError(f"ref must be a dict, got {type(ref).__name__}")
@@ -374,11 +306,6 @@ def edge_indices(doc: Document, body_id: Optional[BodyId] = None) -> List[int]:
 # --------------------------------------------------------------------------------------
 # 選択 → verbの対象集合(**AIの経路も人の経路もここを通る**)
 # --------------------------------------------------------------------------------------
-# verbが食う面・辺・領域は、どちらの経路からも**引数では受けない**。MCPは
-# `fillet(radius)`、WebSocketは `{"cmd":"fillet","radius":...}` で、対象はここが
-# コアの確定選択から取る。2026-08-20まではWebSocket側だけが「コアの選択をブラウザで
-# 添字へ変換して送り返す」形で、同じ変換が2言語に2つあった。
-#
 # 例外はコアの語彙(`SelectionEmpty` / `SelectionAmbiguous` / `SelectionNotCommitted`)で
 # 投げる。MCPは型を見てエラーコードを付け、WebSocketは文言を画面へ返す ——
 # **拒否の規則はここ1箇所**で、呼び出し側は名前を付けるだけ。
@@ -388,8 +315,7 @@ def require_confirmed(
     """確定選択から種別 `kind` の項目を取る。0件は `SelectionEmpty`。
 
     `exactly_one` のとき2件以上は `SelectionAmbiguous`(黙って先頭を選ばない ——
-    指示と結果がずれる唯一の経路になる)。提案のままなら `confirmed_items` が
-    `SelectionNotCommitted` を投げる(門はそこ1箇所)。
+    指示と結果がずれる唯一の経路になる)。
     """
     items = confirmed_items(doc, kind=kind)
     if not items:
@@ -404,9 +330,8 @@ def require_confirmed(
 def require_edges(doc: Document) -> tuple[List[int], BodyId]:
     """確定選択の辺の添字と対象Bodyを**選択順のまま**返す(`fillet` / `chamfer` 用)。
 
-    順序が効く: verbは `edges` と半径(長さ)を位置で対応させるので、並べ替えると
-    割り当てが黙ってずれる。複数Bodyにまたがる選択は `edge_indices` が ValueError
-    (verbは1つのBodyしか丸められないので、どれのつもりかを黙って決めない)。
+    順序が効く: verbは `edges` と半径(長さ)を位置で対応させるので、並べ替えると割り当てが
+    黙ってずれる。複数Bodyにまたがる選択は `edge_indices` が ValueError。
     """
     edges = edge_indices(doc)
     if not edges:
@@ -416,19 +341,15 @@ def require_edges(doc: Document) -> tuple[List[int], BodyId]:
 
 
 def _raise_missing(doc: Document, kind: str) -> NoReturn:
-    """種別 `kind` が確定選択に無いときの拒否を**1箇所で**組み立てる(H・2026-08-20)。
-
-    **2つを型で分ける**(2026-08-20・本人決定。それまでは文面だけ分けて `SelectionEmpty`
-    に寄せていた。経緯は `SelectionKindMismatch` のdocstring):
+    """種別 `kind` が確定選択に無いときの拒否を**1箇所で**組み立てる。
 
     - 確定選択が**丸ごと空** → `SelectionEmpty` → MCPは `selection_empty`
     - 空ではないが `kind` が**1つも無い** → `SelectionKindMismatch` → `selection_kind_mismatch`
 
     後者の文面は**実際に確定しているものを名指しする**。矛盾した指示(例: 面が確定して
-    いるのに「その選択の辺に」)を渡された結果、モデルが `get_selection` 等を何度も呼んで
-    様子見する暴走(2026-08-20実測・600秒応答なし)を防ぐのが狙いで、**1回目の
-    verb呼び出しの返り値だけで自己修復できる**ようにする(モデルに考えさせる前に
-    機械的に判定できる情報を渡す)。
+    いるのに「その選択の辺に」)を渡されると、モデルが `get_selection` 等を何度も呼んで
+    様子見する暴走が起きる(2026-08-20実測・600秒応答なし)。**1回目のverb呼び出しの
+    返り値だけで自己修復できる**ようにするのが狙い。
     """
     others = confirmed_items(doc)
     if not others:
@@ -464,10 +385,7 @@ def select_face(doc: Document, body_id: BodyId, face_index: int) -> dict:
 
 
 def select_edge(doc: Document, body_id: BodyId, edge_index: int) -> dict:
-    """辺を指す ShapeRef を作る(添字は `kernel.edge_count` と同じ1始まり)。
-
-    **フィレット・面取りが食う参照**であり、`query.describe_edges` の添字と一致する。
-    """
+    """辺を指す ShapeRef を作る(添字は `query.describe_edges` / `fillet` と同じ1始まり)。"""
     body = _visible_body(doc, body_id)
     count = kernel.edge_count(body.shape)
     return _shape_ref(body_id, "edge", edge_index, count)
@@ -481,19 +399,17 @@ def select_vertex(doc: Document, body_id: BodyId, vertex_index: int) -> dict:
 
 
 def select_region(doc: Document, sketch_id: str, region_index: int) -> dict:
-    """スケッチの領域を指す RegionRef を作る(§3.5)。
+    """スケッチの領域を指す RegionRef を作る。
 
     **`duocad.region` に既にある契約を使い回すこと** —— 参照そのものは
-    `region.region_ref(sketch_id, index).to_dict()` が作る(`RegionRef` は dataclass で、
-    `to_dict()` / `from_dict()` と `provenance` スロットが既に契約になっている)。
-    ここで別形式のdictを組み立て直すと、操作ログの `selection` に2つの形が混ざる。
+    `region.region_ref(sketch_id, index).to_dict()` が作る。ここで別形式のdictを組み立て直すと、
+    操作ログの `selection` に2つの形が混ざる。
 
-    領域は**描くものではなく計算されるもの**(§3.3)なので、添字は
-    `region.regions(doc, sketch_id)` が返した領域列の1始まりの位置であり、
-    **その場で数え直して範囲を検査する**(図形を1本足しただけで領域数が変わるため)。
+    領域は**描くものではなく計算されるもの**なので、添字は `region.regions(doc, sketch_id)` が
+    返した領域列の1始まりの位置であり、**その場で数え直して範囲を検査する**(図形を1本
+    足しただけで領域数が変わるため)。
 
-    存在しない `sketch_id` は KeyError(`sketch.get_sketch` の契約に合わせる)、
-    範囲外の添字は ValueError。
+    存在しない `sketch_id` は KeyError、範囲外の添字は ValueError。
     """
     from . import region as region_mod
     from .sketch import get_sketch
@@ -509,11 +425,8 @@ def select_region(doc: Document, sketch_id: str, region_index: int) -> dict:
 def same_ref(left: dict, right: dict) -> bool:
     """2つの参照が同じ実体を指すか(`provenance` は見ない)。
 
-    重複除去(項番3)と `remove`(項番2)の両方がこの1つの判定を使う。
-    別々に書くと「addでは重複扱いなのにremoveでは別物」という非対称が静かに入る。
-
-    種別が違えば別物(`ref_kind` で判定する)。ShapeRef は `body`+`kind`+`index`、
-    RegionRef は `sketch`+`index` で比べる。
+    重複除去と `remove` の両方がこの1つの判定を使う。別々に書くと「addでは重複扱いなのに
+    removeでは別物」という非対称が静かに入る。種別が違えば別物。
     """
     left_kind = ref_kind(left)
     right_kind = ref_kind(right)

@@ -1,51 +1,15 @@
-"""OCP(OCCT)を直接叩く層(実装計画書 §2 アーキテクチャ、§6予防4)。
+"""OCP(OCCT)を直接叩く層。
 
-**duocad配下でOCP.*をimportしてよいのはこのモジュールだけ**
-(tests/test_boundaries.py が機械的に検査する。verbが直接OCPを叩き始めるのを防ぐための境界)。
-
-契約:
-    read_step(path) -> TopoDS_Shape
-        STEPファイルを読み、形状を返す。**ReadFile()の戻り値を必ず先に検査し**、
-        失敗(IFSelect_RetDone以外)なら TransferRoots()/OneShape() を呼ぶ前に例外を送出すること。
-        理由: 失敗した状態のままこれらを呼ぶと、Python例外ではなく**プロセスごと落ちる**
-        (Windowsで 0xC0000005。パス無し=IFSelect_RetError / 中身が壊れている=IFSelect_RetFail の
-        どちらでも同じ。io_step.py のモジュールdocstring参照)。
-    read_step_text(text) -> TopoDS_Shape
-        **STEP本文の文字列**から形状を返す(操作ログに埋め込んだ本文の復元用。2026-08-23)。
-        OCCTのリーダはパスしか受け取らないので一時ファイルへ書いてから `read_step` を通す。
-        **安全弁を二重に持たない**ため、ReadFile()の戻り値検査は `read_step` のものを流用する。
-    write_step(shape, path) -> None
-    write_stl(shape, path, deviation) -> None
-        deviation は**絶対**の線形偏差(mm)。BRepMesh_IncrementalMesh に isRelative=False で渡す
-        (isRelative=Trueだと偏差を変えてもメッシュが変わらない)。
-
-query.py が問い合わせを組み立てるために使う補助(OCPを触るのでここに置く):
-    volume(shape) -> float          BRepGProp.VolumeProperties_s(Eps無し)
-    classify_face(face) -> str      面の種別(平面/全周円筒/…)を FACE_KINDS のどれかへ分類
-    normalize_provenance(...)       由来マップ(Modified/Generated/History)の正規化アダプタ
-
-ビューポートと extrude_face のためにOCPが要る処理:
-    face_count(shape) -> int
-    tessellate(shape, deviation) -> dict    **面ごと**の三角形群(ピッキングに面単位のグループが要る)
-    extrude_face_on_shape(shape, i, d) -> dict   面iを距離dだけ押し出した新形状＋由来の射影
-
-辺のピッキングに要る折れ線:
-    tessellate_edges(shape, deviation) -> list  **辺ごと**の折れ線(辺のピッキングに要る)
-
-スケッチ平面・領域検出・領域押し出しの幾何:
-    require_planar_face(shape, face_index) -> None
-    face_of(shape, face_index) -> TopoDS_Face
-    sketch_plane_normal(plane, face=None) -> (nx, ny, nz)
-    sketch_regions(plane, entities, face=None) -> list[dict]
-    extrude_regions(faces, distance, mode, normal, target_shape=None) -> dict
-
-**ocp_tessellate は使わない**(実装計画書§4は使うと書いているが、この venv に入っておらず、
-かつ面ピッキングには面ごとの三角形グループが要るので自前実装の方が制御できる)。
+**duocad配下でOCP.*をimportしてよいのはこのモジュールだけ**(verbが直接OCPを叩き始めるのを
+防ぐための境界)。
 
 戻り値はいずれも **JSON化できる素の値(float/int/str/list/dict)だけ**にする。OCPのオブジェクトを
 kernel の外へ出さないための規律で、境界テスト(importの静的検査)では捕まえられない側の約束。
 唯一の例外は `extrude_face_on_shape` / `sketch_regions` / `extrude_regions` /
 `face_of` の戻りに含まれる TopoDS_*(document.Body.shape や領域押し出しの入力になる値)。
+
+**ocp_tessellate は使わない**(この venv に入っておらず、かつ面ピッキングには面ごとの
+三角形グループが要るので自前実装の方が制御できる)。
 """
 from __future__ import annotations
 
@@ -281,18 +245,14 @@ def classify_face(face: Any) -> str:
 def bounding_box(shape: "TopoDS_Shape") -> dict:
     """形状の境界箱(mm)。**幾何から求める**(三角形分割に依存しない)。
 
-    AIに「どの部品が手前か・どれが大きいか」を渡す最小の
-    空間情報で、これが無いと名前と面数だけで部品を選ぶことになる。
-
     戻り値: {"min":[x,y,z], "max":[x,y,z], "center":[x,y,z], "size":[dx,dy,dz], "diagonal": float}
 
     `BRepBndLib.Add_s(..., useTriangulation=False)` を使う。True(既定)だと**既存の
     三角形分割があればそれを使う**ため、テセレーションの粗さで箱の値が変わる
-    (同じ形状でも `tessellate` を呼んだ後だけ違う値になる、という再現性の無い挙動になる)。
-    `SetGap(0.0)` を入れても OCCT は内部許容差ぶん(実測 1e-7mm)膨らませた値を返すので、
-    **厳密な寸法の根拠には使わない**(mm単位の部品では無視できる大きさ)。
-    `kernel.tessellate` の戻りにある `bbox` は三角形の節点から作った別物で、あちらは
-    アプリ層のカメラ合わせ用。
+    (同じ形状でも `tessellate` を呼んだ後だけ違う値になる)。`SetGap(0.0)` を入れても
+    OCCT は内部許容差ぶん(実測 1e-7mm)膨らませた値を返すので、**厳密な寸法の根拠には
+    使わない**。`kernel.tessellate` の戻りにある `bbox` は三角形の節点から作った別物で、
+    あちらはアプリ層のカメラ合わせ用。
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot compute the bounding box of an empty shape")
@@ -340,11 +300,9 @@ def normalize_provenance(
 ) -> Optional[dict]:
     """OCCTの由来マップを1つの形へ正規化して返す(`Operation.provenance` に入れる値)。
 
-    **なぜここに置くのか(実装計画書§6予防2)**: 由来の取り出し方は操作ごとに違う。
-    ブーリアン(`BRepAlgoAPI_*`)は `History()` -> `BRepTools_History` を持ち、
-    フィレット等の `BRepBuilderAPI_MakeShape` 系は自分自身が `Modified()`/`Generated()`/
-    `IsDeleted()` を持つ。verb側にこの分岐を書くと、
-    verbが増えるたびに同じ分岐が写経される。**正規化はこの1関数に閉じる**。
+    **取り出し方が操作ごとに違う**のを吸収する —— ブーリアン(`BRepAlgoAPI_*`)は `History()`
+    -> `BRepTools_History` を持ち、フィレット等の `BRepBuilderAPI_MakeShape` 系は自分自身が
+    `Modified()` / `Generated()` / `IsDeleted()` を持つ。**正規化はこの1関数に閉じる**。
 
     戻り値の形(由来が1件も取れなければ None):
 
@@ -355,8 +313,8 @@ def normalize_provenance(
         }
 
     戻り値は `TopoDS_Shape` を直接含む**メモリ上の形**であり、そのままでは
-    `OpLog.to_json()` でJSON化できない。呼び出し側で永続化用の射影
-    (添字や安定名などのJSON化できる表現)に変換すること(`_blend_provenance` 参照)。
+    `OpLog.to_json()` でJSON化できない。呼び出し側で永続化用の射影に変換すること
+    (`_blend_provenance` 参照)。
     """
     source = builder.History() if hasattr(builder, "History") else builder
 
@@ -440,10 +398,9 @@ def tessellate(
 ) -> dict:
     """形状を三角形分割し、**面ごとに分けた**三角形群を素の値だけで返す。
 
-    面ごとに分けるのは、アプリ層が面をクリックで選ぶために「どの三角形がどの面か」を
-    必要とするため(1つの塊にまとめると当たった三角形から面へ戻れない)。添字は
-    `face_count` と同じ `TopExp.MapShapes_s` の1始まりで、`extrude_face_on_shape` の
-    `face_index` とも一致する。
+    面ごとに分けるのは、当たった三角形から面へ戻れるようにするため(1つの塊にまとめると
+    戻れない)。添字は `face_count` と同じ `TopExp.MapShapes_s` の1始まりで、
+    `extrude_face_on_shape` の `face_index` とも一致する。
 
     三角形の巻き方向は、面の向きが `TopAbs_REVERSED` のとき入れ替える(外向きに揃える)。
     これをやらないと、アプリ側で法線が内側を向いた面が黒く落ちる。
@@ -457,8 +414,8 @@ def tessellate(
           "untriangulated": [int, ...],   # 三角形が取れなかった面の添字(通常は空)
         }
 
-    `untriangulated` を戻り値に持たせているのは、**分割に失敗した面を黙って落とさない**ため
-    (§6予防6)。1面でも欠けると画面上はただ穴が空いて見え、原因の分からない不具合になる。
+    `untriangulated` を戻り値に持たせているのは、**分割に失敗した面を黙って落とさない**ため。
+    1面でも欠けると画面上はただ穴が空いて見え、原因の分からない不具合になる。
     全面が失敗した場合だけは形状として成立しないので例外にする。
     """
     if shape is None or shape.IsNull():
@@ -521,17 +478,16 @@ def extrude_face_on_shape(
     """面 `face_index` を `distance` だけ押し出した**新しい形状**と、由来の射影を返す。
 
     符号の意味: `distance > 0` は面の**外向き法線方向へ肉を足す**(Fuse)、`distance < 0` は
-    同じ向きへ**削る**(Cut)。どちらも面から直接プリズムを作ってブーリアンする(実装計画書§1.1
-    「実装は安い(面から直接プリズムを作る)」)。入力の `shape` は変更しない。
+    同じ向きへ**削る**(Cut)。どちらも面から直接プリズムを作ってブーリアンする。入力の
+    `shape` は変更しない。
 
     **平面の面だけ押し出せる**(それ以外は ValueError)。曲面は「面の中央の法線」方向へ
     掃引しても意味のある操作にならず、**成功したまま壊れた形状を返す**
-    (`shelf_attachment_GD.step` の穴の円筒面を+1mm押し出すと `IsDone()` は真・
-    体積も変わるが `BRepCheck_Analyzer.IsValid()` が偽になる。-1mmでは体積が
-    91018→38597 と激減する「有効だが無意味な」形状になる)。曲面の押し出し(オフセット)には
-    対応しない。
+    (穴の円筒面を+1mm押し出すと `IsDone()` は真・体積も変わるが
+    `BRepCheck_Analyzer.IsValid()` が偽になる。-1mmでは体積が 91018→38597 と激減する
+    「有効だが無意味な」形状になる)。曲面の押し出し(オフセット)には対応しない。
 
-    **黙って失敗させない**(§6予防6・§7。OCCTのブーリアンは例外を投げずに失敗する):
+    **黙って失敗させない**(OCCTのブーリアンは例外を投げずに失敗する):
     プリズム生成とブーリアンの `IsDone()`、結果が空でないこと、**体積が実際に変わったこと**、
     **最後に `BRepCheck_Analyzer` で形状が妥当であること**を毎回検査し、
     どれか1つでも欠ければ例外にして操作ごと捨てる。
@@ -540,8 +496,7 @@ def extrude_face_on_shape(
     面が分裂して増え(実測: 20mm立方体の上面を+10 → 統合なし10面 / 統合後6面)、
     **同じ面を続けて押し出す**という計測の手続き自体が成立しなくなる。ただし統合は
     **入力の形状を壊す**うえ利得が無い場合があるので、コピーで試してから採否を決める
-    (機序と実測値は `_unify_same_domain` のdocstring。ここを素直に書くと正常な押し出しが
-    壊れた形状として残る)。
+    (機序と実測値は `_unify_same_domain` のdocstring)。
 
     戻り値(`"shape"` 以外はすべてJSON化できる素の値):
         {
@@ -718,10 +673,8 @@ def sketch_plane_frame(plane: dict, face: Any = None) -> dict:
     戻り値: {"origin": [x,y,z], "u": [..], "v": [..], "normal": [..]}
 
     **スケッチ平面上の (u, v) と3D座標を行き来する規則そのもの**である
-    (`p = origin + u*u_axis + v*v_axis`)。アプリ層はこれを受け取って、
-    画面のクリックを (u, v) へ落とし、図形を3Dへ描く。同じ計算を
-    アプリ層が独自に持つと、基準平面3面の軸の取り方と面に貼ったスケッチの
-    `ZReverse` の扱いが必ずずれるので、**枠はコアが配る**。
+    (`p = origin + u*u_axis + v*v_axis`)。同じ計算をアプリ層が独自に持つと、基準平面3面の
+    軸の取り方と面に貼ったスケッチの `ZReverse` の扱いが必ずずれるので、**枠はコアが配る**。
     """
     ax3 = _ax3_from_plane(plane, face=face)
     origin = ax3.Location()
@@ -1172,9 +1125,7 @@ def edge_count(shape: "TopoDS_Shape") -> int:
 def classify_edge(edge: Any) -> str:
     """1つの辺を EDGE_KINDS のいずれかへ分類する。
 
-    フィレット・面取りは「どの辺か」を選べないと使えず、辺の選択は
-    「まっすぐな辺」「円い辺」の区別が要る(円い辺のフィレットはトーラスを、
-    円い辺の面取りは円錐を作る。まっすぐな辺の面取りは平面になる)。
+    円い辺のフィレットはトーラスを、円い辺の面取りは円錐を、まっすぐな辺の面取りは平面を作る。
     """
     adaptor = BRepAdaptor_Curve(TopoDS.Edge_s(edge))
     curve_type = adaptor.GetType()
@@ -1209,24 +1160,19 @@ def tessellate_edges(
 ) -> List[dict]:
     """辺を1始まりの添字つきの**折れ線**にする。
 
-    `tessellate` の辺版。面がクリックで選べるのは面ごとの三角形を配っているからで、
-    **辺も同じように配らないと人は辺を指せない**(それまでの画面に出ていた輪郭線は
-    three.js の `EdgesGeometry` による見た目であって、コアの辺の添字とは対応しない)。
-    フィレット・面取りは「どの辺か」を選べないと使えないので、ここが無いと
-    **その2つのverbは人間側から永久に使えない**(実装計画書§8b)。
+    `tessellate` の辺版。**辺も面と同じように配らないと人は辺を指せない**(画面に出ている
+    輪郭線は three.js の `EdgesGeometry` による見た目であって、コアの辺の添字とは対応しない)。
 
     戻り値(素の値だけ):
         [{"index": int, "kind": "line"|"circle"|"other", "length": float,
           "closed": bool, "points": [x,y,z, x,y,z, ...]}, ...]
 
     `index` は `edge_count` / `edge_of` / `fillet(edges=[...])` と**同じ数え方**
-    (`_edge_map` の1始まり)。ここがずれると「指した辺と違う辺が丸まる」という、
-    例外も出ない静かな事故になる —— `query.describe_edges` が build123d の列挙順を
-    使わないのと同じ理由で、添字は必ず `_edge_map` から取る。
+    (`_edge_map` の1始まり)。ここがずれると「指した辺と違う辺が丸まる」という、例外も出ない
+    静かな事故になるので、添字は必ず `_edge_map` から取る。
 
-    折れ線は `GCPnts_QuasiUniformDeflection` で `deviation`(mm)以内に収める
-    (面の三角形分割と同じ偏差を渡せば、線が面から浮かない)。直線は2点、円は
-    偏差ぶんの分割数になる。**分割に失敗した辺は端点だけの2点で返す**(黙って
+    折れ線は `GCPnts_QuasiUniformDeflection` で `deviation`(mm)以内に収める(面の三角形分割と
+    同じ偏差を渡せば、線が面から浮かない)。**分割に失敗した辺は端点だけの2点で返す**(黙って
     落とすと、その辺だけ画面から消えて「指せない辺」になり原因が分からない)。
     """
     if shape is None or shape.IsNull():
@@ -1301,8 +1247,7 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
     """フィレットと面取りの共通実装(違うのはビルダの型だけ)。
 
     **同じ系統(`BRepFilletAPI_*`)なので失敗の仕方も由来の取り出し方も同じ**であり、
-    2つに書き分けると片方だけ検査が抜ける(実際、面取りは「まっすぐな辺なら平面が増えるだけ」
-    という無害に見える操作なので、検査を省きたくなる誘惑がある)。
+    2つに書き分けると片方だけ検査が抜ける。
     """
     if shape is None or shape.IsNull():
         raise ValueError(f"cannot {verb} an empty shape")
@@ -1359,12 +1304,8 @@ def _blend_provenance(
     """由来を**正規化アダプタ経由で**回収し、JSON化できる射影へ落とす。
 
     フィレット系は `History()` を持たず `Modified()` / `Generated()` / `IsDeleted()` だけを
-    持つ。ブーリアンは `History()` を持つので
-    取り出し方が違い、**その差を吸収するのが `normalize_provenance` の存在理由**である。
-    ここでアダプタを通さずに `maker.Modified()` を直接呼ぶと、verb ごとに同じ分岐を写経する
-    ことになる(§6予防2)。
-
-    アダプタの戻りは `TopoDS_Shape` を含む**メモリ上の形**なので、そのままでは
+    持ち、ブーリアンは `History()` を持つ ——**その差を吸収するのが `normalize_provenance` の
+    存在理由**である。アダプタの戻りは `TopoDS_Shape` を含む**メモリ上の形**なので、そのままでは
     `OpLog.to_json()` で落ちる。ここで添字の射影に変換する(`extrude_face_on_shape` と同じ形)。
     """
     normalized = normalize_provenance(maker, [shape]) or {}

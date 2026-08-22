@@ -1,28 +1,15 @@
 """verbの単一宣言 —— **1 verbの追加 = ここに1エントリ**。
 
-## なぜこれがあるか
-
-同じverbのメタ情報(名前・引数・カテゴリ・プレビュー可否・AIへの説明)は、以前は
-4ファイル9箇所に手で書かれていた —— `server.py` の4つの表、`mcp_server.py` の
-ツール定義と `call()` のハンドラ表、frontendの3つの判定関数。**verbを1つ足すたびに
-その全部を同期する作業が発生し、片方だけ直したときは誰も気づかなかった**
-(実測: `fillet` は完全同一のタプルが2つの表に、`extrude` は `body_id` の有無が
-表ごとに食い違った状態で放置されていた)。v1.1以降は move_face / revolve / shell /
-primitive / boolean / hole とverbを足し続ける予定なので、同期作業と食い違いバグが
-verb数だけ増える。
-
 **このファイルが正**で、以下はすべてここからの導出である:
 
 - `duocad/server.py` … `PREVIEWABLE_VERBS` / `SKETCH_COMMANDS` / `FEATURE_COMMANDS` /
   `FILE_COMMANDS`(WebSocketの許可リスト)
 - `duocad/mcp_server.py` … `tools/list` が返すツール定義と `tools/call` のハンドラ表
 
-frontend(`web/src/commands/*.ts`)だけは別に持つ —— TS側が持つのは
-**引数の集め方**(どのクリックを待つか・入力欄のid・ボタンのid)であって、ここには
-無い情報だからである。名前が食い違わないことは `tests/test_ui_command_wiring.py` が
-機械で見る(TSのコマンドIDは全部ここに実在する)。
+frontend(`web/src/commands/*.ts`)だけは別に持つ —— TS側が持つのは**引数の集め方**
+(どのクリックを待つか・入力欄のid・ボタンのid)であって、ここには無い情報だからである。
 
-## 書き方(verbを1つ足すとき)
+verbを1つ足すとき:
 
 1. `duocad/verbs/` にverb本体を書き、`duocad/__init__.py` に登録の1行を足す
 2. `Session` にラッパを書く(対象集合は `selection.require_*` から取る。引数は数値・名前・パスだけ)
@@ -30,16 +17,12 @@ frontend(`web/src/commands/*.ts`)だけは別に持つ —— TS側が持つの�
 4. **このファイルの `COMMANDS` に1エントリ足す**
 5. UIから踏むなら `web/src/commands/*.ts` に引数の集め方を書く(`category` を忘れない)
 
-## 対象集合は引数ではない(2026-08-20)
+**対象集合は引数ではない** —— 面・辺・領域はどの層でも引数で受けず、コアの確定選択から取る
+(`selection.require_confirmed` / `require_edges`)。したがってここに並ぶ引数は**数値・名前・
+パスだけ**である。`body_id` が残っているのは「どのBodyへ足す/から引くか」のような**名前**で
+あって対象集合ではないため(Bodyは選択集合の項目ではない)。
 
-面・辺・領域はどの層でも引数で受けない —— コアの確定選択から取る
-(`duocad/selection.py` の `require_confirmed` / `require_edges`)。したがって
-ここに並ぶ引数は**数値・名前・パスだけ**である。`body_id` が残っているのは
-「どのBodyへ足す/から引くか」のような**名前**であって対象集合ではないもの
-(Bodyは選択集合の項目ではない)。`tests/test_ui_command_wiring.py` の
-`test_no_websocket_command_takes_a_target_set` がこれを機械で固定する。
-
-**OCP / build123d をimportしない**(純データ。`tests/test_boundaries.py` が検査する)。
+**OCP / build123d をimportしない**(純データ)。
 """
 from __future__ import annotations
 
@@ -49,8 +32,7 @@ from typing import Any, Optional
 #: `Command.category` に書ける値。
 #:
 #: - `query`     … 読み取り専用(文書を変えない・ログに載らない)
-#: - `selection` … 選択集合と可視性(「何が選べるか」。`set_visible` はログに載るverbだが、
-#:                 見えない面は選べない以上、可視性は選択機構の一部である)
+#: - `selection` … 選択集合と可視性(見えない面は選べない以上、可視性は選択機構の一部)
 #: - `sketch`    … スケッチのverb(スケッチモードで踏む)
 #: - `feature`   … ソリッドのverb
 #: - `file`      … ファイル操作(開く・保存・読み込み・書き出し)
@@ -71,15 +53,11 @@ WS_SURFACES = ("table", "special", "none")
 
 @dataclass(frozen=True)
 class Param:
-    """verbが受け取る引数1つ。
-
-    **1つの引数を2度書かない**ための持ち物である。`type` と `description` はMCPの
-    入力スキーマになり、`ws` はWebSocketの表に載るかどうかを決める。
+    """verbが受け取る引数1つ。`type` / `description` はMCPの入力スキーマになり、
+    `ws` はWebSocketの表に載るかどうかを決める。
     """
 
-    #: 引数名。**MCP・WS・`Session` のメソッドで同じ綴り**である
-    #: (2026-08-22まで `sketch_create` だけWSの綴りを変える仕掛けがあったが、
-    #: 綴りが違うのは引数の中身が違っていたからで、契約を揃えたら要らなくなった)。
+    #: 引数名。**MCP・WS・`Session` のメソッドで同じ綴り**である。
     name: str
     #: JSON Schema の `type`(`"number"` / `["number", "array"]` のような値)。
     type: Any
@@ -97,9 +75,8 @@ class Param:
 class Command:
     """verb(またはコアへの口)1つの宣言。**追加はここ1箇所で済ませる。**"""
 
-    #: **MCPツール名 == WSコマンド名 == UIコマンドID == 操作ログのverb名**。
-    #: AIは `describe_document` のログを読んで次の一手を決めるので、綴りが違うと
-    #: 対応表を推測させることになる(両方向のテストが固定している)。
+    #: **MCPツール名 == WSコマンド名 == UIコマンドID == 操作ログのverb名**。AIは
+    #: `describe_document` のログを読んで次の一手を決めるので、綴りが違うと対応表を推測させる。
     name: str
     #: `CATEGORIES` のどれか。WSの表の割り振りと、UI側の送信経路の分岐に対応する。
     category: str
@@ -115,21 +92,17 @@ class Command:
     ws: str = "table"
     #: MCPのツールとして公開するか(`save_document` / `open_document` は人だけの操作)。
     mcp: bool = True
-    #: `Session.preview` が投機実行してよいか。**巻き戻せることを確認したverbだけ**を
-    #: true にする —— `set_parameter` のような操作ログを頭から再生するverbは、再生が
-    #: 過去のseqのundoスナップショットを書き換えるので `speculative` では戻らない
+    #: `Session.preview` が投機実行してよいか。**巻き戻せることを確認したverbだけ**を true に
+    #: する —— `set_parameter` のような操作ログを頭から再生するverbは `speculative` では戻らない
     #: (`speculative.py` の「戻さないもの」)。
     previewable: bool = False
-    #: 文書を変えるか(= 操作ログに載り、応答が状態配信になるか)。`file` カテゴリだけが
-    #: 使う —— 保存・書き出しは文書を変えないので、応答は書いた先のパスとバイト数だけを
-    #: 要求した接続へ返す(`preview` と同じ扱い)。
+    #: 文書を変えるか(= 操作ログに載り、応答が状態配信になるか)。保存・書き出しは文書を
+    #: 変えないので、応答は書いた先のパスとバイト数だけを要求した接続へ返す。
     changes_document: bool = True
-    #: 確定後に選択集合を全リセットするか(2026-08-20)。**面・辺・領域の添字は形状変更で
-    #: 壊れる**(kernel.pyの既知の地雷)ので、形を変えるverbの確定後は選択を空にする ——
-    #: 「失効/後継を返す契約」ではなく「全リセット」を選んだ(後継を返す契約は、連続性が
-    #: 本当に必要なverbが現れてから)。`Session._reset_selection_if_needed` がここを見て
-    #: 確定後に1箇所で発火するので、UI経由・MCP経由のどちらでも同じに効く。
-    #: **失敗したverb(ログに積まれない)には効かない** —— 呼び出すのは成功パスだけ。
+    #: 確定後に選択集合を全リセットするか。**面・辺・領域の添字は形状変更で壊れる**
+    #: (kernel.pyの既知の地雷)ので、形を変えるverbの確定後は選択を空にする。
+    #: `Session._reset_selection_if_needed` がここを見て1箇所で発火するので、UI経由・MCP経由の
+    #: どちらでも同じに効く。**失敗したverb(ログに積まれない)には効かない**。
     resets_selection: bool = False
     #: 設計上の注記(なぜこの形か)。コードの読み手向けで、AIには渡さない。
     note: str = ""
@@ -153,9 +126,8 @@ class Command:
     def preview_params(self) -> tuple[str, ...]:
         """`preview` が受け取ってよい引数名。
 
-        **WSの表より広いことがある** —— `extrude` の `body_id`(どのBodyへ足すか)は
-        WSのコマンドでは受けない(アクティブなBodyへ足す)が、プレビューは
-        行き先を指定した結果を見せられる。
+        **WSの表より広いことがある** —— `extrude` の `body_id` はWSのコマンドでは受けない
+        (アクティブなBodyへ足す)が、プレビューは行き先を指定した結果を見せられる。
         """
         return tuple(p.name for p in self.params)
 
@@ -272,12 +244,6 @@ COMMANDS: tuple[Command, ...] = (
         ws="none",
     ),
     # ---------------------------------------------------------------- 選択
-    # **コアの選択集合をそのまま叩く**(アプリ層に選択状態を持たせない)。人が直す経路
-    # (`modify_selection`)と提案を確定する経路(`commit_selection`)がUIから
-    # 踏めないと、交互操作は片道のままになる。
-    # **`commit_selection` は「人の承認」専用ではない**(2026-08-22) —— AIが自分の提案を
-    # 確定して verb まで進む手でもある。どちらの意味で踏まれたかはコアには関係がなく、
-    # AIが止まるか進むかの規則は `agent_instructions()` の1本に書いてある。
     Command(
         name="get_selection",
         category="selection",
@@ -351,9 +317,6 @@ COMMANDS: tuple[Command, ...] = (
         ws="special",
     ),
     # ---------------------------------------------------------------- スケッチ
-    # **既にMCPが持っていたverbをブラウザにも開けただけ**(選択の3コマンドと同じ)。
-    # コアには何も足していない —— スケッチがAIからしか触れない状態は、この企画の
-    # 中心命題「手動操作が一級の操作モード」に真正面から反する(実装計画書§8b C)。
     Command(
         name="sketch_create",
         category="sketch",
@@ -770,8 +733,8 @@ COMMANDS: tuple[Command, ...] = (
         resets_selection=True,
     ),
     # ---------------------------------------------------------------- WebSocketだけの口
-    # **verbではない**(文書を変えない)。ここに置いてあるのは、下りコマンドの一覧を
-    # 1箇所で読めるようにするためで、4つの表のどれにも載らない。
+    # **verbではない**(文書を変えない)。下りコマンドの一覧を1箇所で読めるように
+    # ここへ置いてあるだけで、4つの表のどれにも載らない。
     Command(
         name="get_state",
         category="protocol",

@@ -1,8 +1,7 @@
-"""WebSocketサーバ + `web/dist` の静的配信(実装計画書§2「コマンドは下り、イベントは上り」)。
+"""WebSocketサーバ + `web/dist` の静的配信(「コマンドは下り、イベントは上り」)。
 
 アプリ層(ブラウザ)とコアの唯一の接点。**コアはこのサーバが無くても機能的に完全**であり、
-ここには「文書を持つ」以外の機能を置かない(アプリ層にしか無い機能を作った瞬間AIから使えなくなる。
-§2「外してはいけない3つ」の1)。
+ここには「文書を持つ」以外の機能を置かない。
 
 **このモジュールは起動コマンドを持たない。** 提供するのは `Session` / `Server` / 静的配信で、
 **これを起動するのは `duocad.mcp_server` だけ**(起動経路が2つあると「AIが変えた文書」と
@@ -16,85 +15,65 @@
         {"cmd": <コマンド名>, <引数>..., "client_op": int}
 
 **下りコマンドの一覧と引数は `duocad/catalog.py` の `COMMANDS` が正**(ここに写さない)。
-以前はこのdocstringに27行の手書きの一覧があり、下の4つの表と同じことを2箇所に書いていた。
-名前・引数・カテゴリを知りたいときは宣言を読むこと —— ソケットが受け取れる名前は
-そこから導出した表(`SKETCH_COMMANDS` / `FEATURE_COMMANDS` / `FILE_COMMANDS`)と、
-`_dispatch` が個別に捌く分(`catalog` の `ws="special"`)で全部である。
+ソケットが受け取れる名前は、そこから導出した表(`SKETCH_COMMANDS` / `FEATURE_COMMANDS` /
+`FILE_COMMANDS`)と `_dispatch` が個別に捌く分(`catalog` の `ws="special"`)で全部である。
 `client_op` はどのクライアントの操作かを返すための添え物で、verbの引数ではない。
 
     上り(server -> client)
         {"type": "state", "state": {...}, "delta": {"bodies": [...]}, "applied": {...}|None}
         {"type": "preview", "preview_id": int|None, "verb": str, "bodies": [...]}
-        {"type": "edges", "body_id": str, "revision": int, "edges": [...]}            # D
-        {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path", "bytes"} # E
+        {"type": "edges", "body_id": str, "revision": int, "edges": [...]}
+        {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path", "bytes"}
         {"type": "error", "message": str, "where": str}
         {"type": "warning", "message": str}
-        {"type": "ai_status", "provider", "model", "base_url", "api_key_configured", "running", "providers"}  # G
-        {"type": "ai_tool_call", "name": str, "arguments": {...}, "result": {...}, "ok": bool}                 # G
-        {"type": "ai_result", "status", "text", "detail", "turns", "tool_calls": [...], "usage": {...}}        # G
-        {"type": "ai_error", "message": str}                                                                    # G
+        {"type": "ai_status", "provider", "model", "base_url", "api_key_configured", "running", "providers"}
+        {"type": "ai_tool_call", "name": str, "arguments": {...}, "result": {...}, "ok": bool}
+        {"type": "ai_result", "status", "text", "detail", "turns", "tool_calls": [...], "usage": {...}}
+        {"type": "ai_error", "message": str}
 
-**`ai_*` はverbではない**(G・2026-08-20)。`ai_get_status` / `ai_configure` / `ai_send` /
-`ai_cancel` はduocadの文書を直接は変えない(操作ログに載らず、undoの単位でもない) ——
-文書を変えるのはエージェントが呼ぶ既存29ツールの側で、それは通常のverb配信
-(`{"type":"state", "applied": None, ...}`)としてこの後に届く。したがって
-`duocad/catalog.py` の `COMMANDS`(「MCPツール名==WSコマンド名==UIコマンドID==verb名」の
-一致規律)には**入れない**——対応するMCPツールも作らない(AIがAIを起動する口は要らない)。
-除外は `tests/test_ui_command_wiring.py::test_ai_commands_are_not_verbs` と
-`tests/test_mcp_verbs.py::test_ai_commands_have_no_mcp_tool` が固定する。
+**`ai_*` はverbではない**。`ai_get_status` / `ai_configure` / `ai_send` / `ai_cancel` は文書を
+直接は変えない(操作ログに載らず、undoの単位でもない) —— 文書を変えるのはエージェントが呼ぶ
+既存ツールの側で、それは通常のverb配信としてこの後に届く。したがって `catalog.COMMANDS` には
+**入れない**し、対応するMCPツールも作らない(AIがAIを起動する口は要らない)。
 
-**verbコマンドは対象集合(面・辺・領域)を引数で受けない**(2026-08-20)。数値・名前・パスだけを
-送り、押す面も丸める辺も押し出す領域も `Session` のverbラッパがコアの確定選択から取る
-(`selection.require_confirmed` / `require_edges`)。MCP側は以前からこの形で、
-`fillet(radius)` と `{"cmd": "fillet", "radius": ...}` が同じ引数になった ——
-それまではWebSocket側だけが「コアが持つ選択をブラウザで添字へ変換して送り返す」形で、
-同じ変換の実装が2言語に2つあった(`web/src/commands/features.ts` の `edgesOf`/`regionsOf`)。
-`body_id` が残っているのは対象集合ではないものだけ(`set_visible` / `get_edges` /
-`make_editable_copy` の対象、`extrude` の「どのBodyへ足すか」)。
+**verbコマンドは対象集合(面・辺・領域)を引数で受けない**。数値・名前・パスだけを送り、押す面も
+丸める辺も押し出す領域も `Session` のverbラッパがコアの確定選択から取る
+(`selection.require_confirmed` / `require_edges`)。`body_id` が残っているのは対象集合ではない
+ものだけ(`set_visible` / `get_edges` / `make_editable_copy` の対象、`extrude` の行き先)。
 
-選択とプレビューの口がある。選択の3つ(`modify_selection` /
-`commit_selection` / `clear_selection`)は既にMCPが持っていたものを**ブラウザ側にも**
-開けただけで、コアには何も足していない —— 人が過不足を直す経路(`modify_selection`)と
-AIの提案を承認する経路(`commit_selection`)がUIから踏めないと、交互操作は片道のままになる。
-`propose_selection` は開けていない(AIが書く経路であり、人はポインティングで直す)。
+選択の口は3つ(`modify_selection` / `commit_selection` / `clear_selection`)。`propose_selection`
+は開けていない(AIが書く経路であり、人はポインティングで直す)。
 
 `preview` だけは**状態を配信しない**。verbを投機的に実行して形だけ測り、文書は
 `duocad.speculative` が元へ戻す(確定した1回だけが操作ログに積まれる)。したがって
 応答は要求した接続にだけ返り、他のクライアントには何も起きない。
 
-    `state.bodies` は
-    `geometry` を含まない(name/kind/visible/face_count/volume/revisionのみ、27部品でも数KB)。
-    形状は `delta.bodies`(接続ごとに版が変わったBodyだけ、`geometry` 付き)で届く。
-    毎回27部品ぶんのテセレーション結果(実測6MB超)を送り直すと、パーツ分解でサーバ側を
-    速くした意味がクライアント側の描画で消える(§2「外してはいけない3つ」)。
-    接続直後は「知っている版」が空なので `delta.bodies` に全Bodyが入り、初期描画が揃う。
+    `state.bodies` は `geometry` を含まない(name/kind/visible/face_count/volume/revisionのみ、
+    27部品でも数KB)。形状は `delta.bodies`(接続ごとに版が変わったBodyだけ、`geometry` 付き)で
+    届く。毎回27部品ぶんのテセレーション結果(実測6MB超)を送り直すと、パーツ分解でサーバ側を
+    速くした意味がクライアント側の描画で消える。接続直後は「知っている版」が空なので
+    `delta.bodies` に全Bodyが入り、初期描画が揃う。
 
-**状態変更は接続している全クライアントへ配信する**(上り方向。これが無いと交互操作が
-成立しない。今は人間1人だが、経路は今作っておく)。操作を出したクライアントにだけ `applied`
-を付け、それ以外には同じ `state` だけを送る。
-
-`state` は部品ごとの配列になっている。契約は
-tests/README.md の「M3.5」節が正（`tests/test_incremental_update.py` は2026-08-22に削除）:
+**状態変更は接続している全クライアントへ配信する**(これが無いと交互操作が成立しない)。
+操作を出したクライアントにだけ `applied` を付け、それ以外には同じ `state` だけを送る。
 
     state() -> {
       "units", "active_body_id",
       "bodies": [{"body_id","name","kind","visible","revision",
                   "face_count","volume","geometry": <tessellate結果|None>}, ...],
       "log", "can_undo", "can_redo", "applied_count",
-      "selection": {"items": [...], "origin": "user"|"proposed", "count": int},   # A(下記)
+      "selection": {"items": [...], "origin": "user"|"proposed", "count": int},
     }
     delta(known_revisions) -> {"bodies": [<上と同じ形・版が変わった分だけ>],
                                "unchanged": [BodyId, ...]}
 
-`state` に `selection` が入っている(契約は `tests/test_selection.py` と
-tests/README.md の「A」節が正)。
-`_on_core_change` はMCP起点の変更から `applied` を落として配るので、**選択が `state` に
-載っていないとAIが書き換えた選択はブラウザへ届かない**(`set_visible` の効果が
-`bodies[].visible` で届いているのと同じ場所)。選択の変更イベントは
-`{"change": "selection", "selection": {...}, "client_op": ...}` の形で、verbの `applied`
-とはキーで区別する(選択はverbではなく、操作ログにも載らない)。
+**選択が `state` に載っていないとAIが書き換えた選択はブラウザへ届かない**(`_on_core_change` は
+MCP起点の変更から `applied` を落として配るため。`set_visible` の効果が `bodies[].visible` で
+届いているのと同じ場所)。選択の変更イベントは
+`{"change": "selection", "selection": {...}, "client_op": ...}` の形で、verbの `applied` とは
+キーで区別する(選択はverbではなく、操作ログにも載らない)。
 
-**OCPを直接importしない**(境界はkernel.pyだけ。tests/test_boundaries.py が検査する)。
+**OCPを直接importしない**(境界はkernel.pyだけ)。
 """
 from __future__ import annotations
 
@@ -128,19 +107,17 @@ from .verbs import set_visible as set_visible_verb
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_WEB_DIST = REPO_ROOT / "web" / "dist"
-#: 保存/開くの既定の置き場(2026-08-22本人決定。engine
-#: `duocad-save-location-fixed-folder`)。**リポジトリ直下・gitignore対象** —— 毎回パスを
-#: 手打ちする代わりに、決まったフォルダの中身を一覧から選ぶ形にする。無ければ
+#: 保存/開くの既定の置き場。**リポジトリ直下・gitignore対象** —— 毎回パスを手打ちする
+#: 代わりに、決まったフォルダの中身を一覧から選ぶ形にする。無ければ
 #: `Session._resolve_document_name` が作る。テストは `Session(models_dir=tmp_path)` で
 #: ここを差し替えて実フォルダを触らない。
 DEFAULT_MODELS_DIR = REPO_ROOT / "models"
 
-#: 状態配信で本文を伏せるログ引数(2026-08-23)。値の代わりに文字数だけを配る。
+#: 状態配信で本文を伏せるログ引数。値の代わりに文字数だけを配る。
 #:
-#: `import_step` / `import_step_editable` は読み込んだSTEPの**本文**を `args["step"]` に
-#: 持つ(engine `duocad-oplog-embeds-imported-step`)。PCケースのSTEPは4.6MBあり、
-#: `state_meta()` はWebSocketで**操作のたびに全部配られる**ので、素通しにすると
-#: 1操作ごとに数MBが流れる(このメソッドの「27部品でも数KB」という前提が壊れる)。
+#: `import_step` / `import_step_editable` は読み込んだSTEPの**本文**を `args["step"]` に持つ。
+#: PCケースのSTEPは4.6MBあり、`state_meta()` はWebSocketで**操作のたびに全部配られる**ので、
+#: 素通しにすると1操作ごとに数MBが流れる(「27部品でも数KB」という前提が壊れる)。
 #: 履歴パネルが使うのは `source_name` と件数だけなので、本文は配らない。
 #: **ログそのもの(`document.log`)は無傷** —— 伏せるのは配信用の射影だけで、
 #: 保存(`to_json`)は本文を書く。
@@ -167,76 +144,55 @@ _RESERVED_WINDOWS_NAMES = frozenset({
     "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 })
 
-# サーバは常に空の文書で立ち上がり、STEPはアプリ内の「STEP読み込み」かMCPの
-# `import_step` から読む(どちらも編集可能なボディまで作る verb `import_step_editable` を
-# 通る)。起動時にしかできないことが無いので、起動前に「今日はどのSTEPを読むか」を
-# 決める必要が無い。読み込むSTEPのパスを既定として持つ場所も無いので、smokeスクリプトが
-# 使うPCケースのパスは `web/scripts/models.mjs` が持つ。
+# サーバは常に空の文書で立ち上がり、STEPはアプリ内の「STEP読み込み」かMCPの `import_step`
+# から読む。読み込むSTEPのパスを既定として持つ場所は無いので、smokeスクリプトが使う
+# PCケースのパスは `web/scripts/models.mjs` が持つ。
 
 # --------------------------------------------------------------------------------------
 # ソケットから踏める口(**すべて `duocad/catalog.py` の宣言からの導出**)
 # --------------------------------------------------------------------------------------
 # **ここに手で表を書かない。** verbのメタ情報(名前・引数・カテゴリ・プレビュー可否・
 # MCPのスキーマ)は `catalog.COMMANDS` が唯一の宣言で、verbを1つ足すときに触るのは
-# verb本体と宣言1箇所だけである(以前はこの4つの表とMCPの2箇所を手で同期しており、
-# `fillet` は同一のタプルが2つの表に、`extrude` は `body_id` の有無が表ごとに
-# 食い違ったまま放置されていた)。
+# verb本体と宣言1箇所だけである。
 #
 # 導出しても**登録制であることは変わらない**: ここに現れない名前はソケットから呼べない
 # (届いた文字列で `Session` の任意のメソッドを呼べる作りにしない)。表に載る引数は
 # **1つでも欠けたら KeyError にする** —— 既定値で補うと、打ち忘れた寸法や `mode` が
-# 黙って既定で入る。**並ぶのは数値・名前・パスだけで、面・辺・領域は1つも無い**
-# (2026-08-20。対象集合は `Session` のverbラッパが確定選択から取る)。
+# 黙って既定で入る。**並ぶのは数値・名前・パスだけで、面・辺・領域は1つも無い**。
 
 #: プレビューできるverb -> (`Session` のメソッド名, 受け取ってよい引数名)。
-#:
-#: `Session.preview` の唯一の入口(docstring参照)。**ここに無いverbはプレビューできない**。
-#: 載せてよいのは投機的実行が正しく巻き戻せることを確認したverbだけで、`set_parameter` の
-#: ような**操作ログを頭から再生するverbは宣言に1行足すだけでは壊れる**(再生が過去のseqの
-#: undoスナップショットを書き換え、`speculative` はそれを戻さない)。
+#: `Session.preview` の唯一の入口で、**ここに無いverbはプレビューできない**
+#: (載せてよいverbの条件は `catalog.Command.previewable`)。
 PREVIEWABLE_VERBS: dict = catalog.previewable_verbs()
 
 #: ブラウザから踏めるスケッチのコマンド -> (`Session` のメソッド名, 必須の引数名)。
-#: **「手動操作が一級の操作モード」がUIに現れる場所**。
 SKETCH_COMMANDS: dict = catalog.ws_table("sketch")
 
 #: ブラウザから踏めるフィーチャのコマンド -> (`Session` のメソッド名, 必須の引数名)。
-#: **「AIからしか使えないverb」が無くなる場所**(コアには何も足さず口を開けるだけ)。
 FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 
 #: ブラウザから踏めるファイル操作 -> (`Session` のメソッド名, 必須の引数名, 文書を変えるか)。
-#:
-#: **「開く/保存」が人の手に渡る場所**。**文書を変えるかどうかで応答が違う**のが
-#: この表だけの事情:
+#: **文書を変えるかどうかで応答が違う**のがこの表だけの事情:
 #:
 #: - `import_step` / `make_editable_copy` … 文書を変える(ログに載る)。応答は状態配信
 #: - `save_document` / `export_step` / `export_stl` … 文書を変えない。応答は書いた先の
 #:   パスとバイト数だけ(要求した接続にだけ返る。`preview` と同じ扱い)
-#:
-#: `open_document` はどちらでもない —— 文書を**差し替える**ので全接続へ配る必要があり、
-#: 表からは外して `_dispatch` で個別に扱う(状態配信の形が他と違うため)。
+#: - `open_document` はどちらでもない —— 文書を**差し替える**ので全接続へ配る必要があり、
+#:   表からは外して `_dispatch` で個別に扱う。
 FILE_COMMANDS: dict = catalog.file_table()
 
 
 class _AiToolsOnLoop:
     """`ToolSurface`(`descriptors`/`call`/`error_envelope`/`current_seq`)を**イベントループの
-    スレッドへ限定する**覆い(G・2026-08-20。`current_seq` はH・2026-08-20で追加)。
+    スレッドへ限定する**覆い。
 
-    `AgentLoop.run()` はモデルへのHTTPリクエストを含み数十秒かかりうるので、
-    `Server._ai_start` が `run_in_executor` で実行器スレッドへ逃がす。だが `Session` は
-    「イベントループのスレッドだけが触る」という既存の前提(`Server._dispatching` の印・
-    `bind_loop` で覚えるループ参照)の上に立っている —— WebSocketの `_dispatch` も
-    MCPのツール実行(`mcp_server.py` 冒頭docstring「既知の割り切り」)も、この前提を
-    崩さずに同じスレッドで直列に走ることで安全になっている。
-
-    実行器スレッドから直接 `DocumentTools` を叩くと、その前提が壊れて2スレッドが
-    同時に文書を書き換えうる。ここでは `.call()` / `.error_envelope()` を
-    `asyncio.run_coroutine_threadsafe` でイベントループへ1回ずつ投げ、その場で完了を
-    待つことで、**文書に触る処理は依然イベントループのスレッドだけ**という不変条件を保つ
-    (`Server` のスレッド前提を作り直さずに済む)。往復するのは `Session` のverb呼び出し
-    1回ぶん(数値・名前・パスだけの純Python、通常は数ms)で、動かないのはその短い間だけ
-    ——プロバイダへのHTTPリクエスト(本当に長くかかる方)はこの覆いを経由しない
-    (`AgentLoop.run()` が直接プロバイダを呼ぶ)。
+    `AgentLoop.run()` はモデルへのHTTPリクエストを含み数十秒かかりうるので、`Server._ai_start`
+    が `run_in_executor` で実行器スレッドへ逃がす。だが `Session` は「イベントループの
+    スレッドだけが触る」という前提の上に立っている —— 実行器スレッドから直接 `DocumentTools`
+    を叩くと2スレッドが同時に文書を書き換えうる。ここでは `.call()` / `.error_envelope()` を
+    `asyncio.run_coroutine_threadsafe` でイベントループへ1回ずつ投げ、その場で完了を待つ。
+    往復するのは `Session` のverb呼び出し1回ぶん(通常は数ms)で、**プロバイダへのHTTP
+    リクエスト(本当に長くかかる方)はこの覆いを経由しない**。
     """
 
     def __init__(self, tools: Any, loop: asyncio.AbstractEventLoop) -> None:
@@ -260,17 +216,11 @@ class _AiToolsOnLoop:
         return self._run_on_loop(self._tools.current_seq)
 
     def _run_on_loop(self, fn: Any, *args: Any) -> Any:
-        # **既にイベントループのスレッド上にいるなら、直接呼ぶ**(H・2026-08-20)。
-        # 本番経路(`Server._ai_start`)は `AgentLoop.run()` を必ず実行器スレッドへ
-        # 逃がすので、そこからの呼び出しはここに来ない。だが `run()` が直接(実行器を
-        # 挟まずに)呼ばれる経路 —— たとえば `tests/test_agent_ws.py` が
-        # `asyncio.run(scenario())` の中でイベントループのスレッドから直に `run()` を
-        # 呼ぶ検査 —— では、`run_coroutine_threadsafe(...).result()` は**自分自身が
-        # 塞いでいるループの完了を自分自身で待つ**ことになり、必ず固まる
-        # (2026-08-20実測: `current_seq()` を毎ターン呼ぶようになって初めて顕在化した。
-        # 呼び出し前後を跨いだfixな待ち)。同じスレッドなら投げ返す意味が無いので、
-        # そのまま呼んで済ませる —— この不変条件(文書に触るのはイベントループの
-        # スレッドだけ)を破らない。
+        # **既にイベントループのスレッド上にいるなら、直接呼ぶ**。`run()` が実行器を挟まずに
+        # 呼ばれる経路(`tests/test_agent_ws.py` が `asyncio.run(scenario())` の中から直に
+        # 呼ぶ検査)では、`run_coroutine_threadsafe(...).result()` は**自分自身が塞いでいる
+        # ループの完了を自分自身で待つ**ことになり、必ず固まる(2026-08-20実測)。
+        # 同じスレッドなら投げ返す意味が無いので、そのまま呼んで済ませる。
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:
@@ -318,12 +268,10 @@ class Session:
     def add_listener(self, callback: Any) -> None:
         """文書が変わったら `callback(applied: dict)` で知らせる。
 
-        **コアが変更を発火し、アプリ層が購読して描き直す**(実装計画書§2「外しては
-        いけない3つ」の2番目)。これが無いと、**WebSocket経由以外の主体**——MCPサーバ
-        (`duocad/mcp_server.py`)からAIが文書を変えたとき——にブラウザが何も知らないまま
-        古い絵を出し続け、交互操作が原理的に成立しない。
-
-        購読者は `Server`(WebSocket)。1つの操作につき1回だけ呼ばれる。
+        **コアが変更を発火し、アプリ層が購読して描き直す**。これが無いと、**WebSocket経由
+        以外の主体**——MCPサーバからAIが文書を変えたとき——にブラウザが何も知らないまま
+        古い絵を出し続け、交互操作が原理的に成立しない。購読者は `Server`(WebSocket)で、
+        1つの操作につき1回だけ呼ばれる。
         """
         self._listeners.append(callback)
 
@@ -349,15 +297,13 @@ class Session:
         """購読者へ変更を知らせて `applied` をそのまま返す(呼び出し側は `return self._emit(...)`)。
 
         **1人の購読者が落ちても他へ配り、操作自体は成功のままにする** — 通知の失敗で
-        既に確定した文書の変更を巻き戻すことはできないため。落ちたことは警告として残す
-        (黙って握りつぶさない。§6予防6)。
+        既に確定した文書の変更を巻き戻すことはできないため。落ちたことは警告として残す。
 
-        **プレビュー中(`_suppress_events`)は誰にも配らない**。投機的に
-        実行したverbも `_emit` を通るので、ここで止めないと「確定していない形」が
-        全クライアントへ配信され、直後の巻き戻しで元へ戻る —— 画面がちらつくだけでなく、
-        MCP側が読んだ状態が実在しない中間状態になる。**呼び出し経路(WebSocket / MCP /
-        直呼び)に関わらず止まる**ようにここへ置いてある(`Server._dispatching` の
-        二重配信よけはWebSocket経由にしか効かない)。
+        **プレビュー中(`_suppress_events`)は誰にも配らない**。投機的に実行したverbも `_emit` を
+        通るので、ここで止めないと「確定していない形」が全クライアントへ配信され、直後の
+        巻き戻しで元へ戻る —— 画面がちらつくだけでなく、MCP側が読んだ状態が実在しない中間状態に
+        なる。**呼び出し経路(WebSocket / MCP / 直呼び)に関わらず止まる**ようにここへ置いてある
+        (`Server._dispatching` の二重配信よけはWebSocket経由にしか効かない)。
         """
         if self._suppress_events:
             return applied
@@ -372,19 +318,12 @@ class Session:
     def load_step(self, path: Path) -> list:
         """STEPを読み、ソリッドごとに参照ボディ+編集用コピーを作る(Python APIとして残す)。
 
-        **中身は verb `import_step_editable` そのもの**。同じ手順をアプリ内・MCPからも
-        踏めるようにverbへ移してある(起動時にしかできないことを無くす、が本タスクの主旨)。
-        参照ボディを隠すのもverbの中で完結する ——
-        再生時は `_do_import_step_editable` が同じ状態を作り直すので、「参照を隠した」
-        という操作が失われて両方可視で復元されることはない。
+        中身は verb `import_step_editable` そのもの。
 
-        **土台(undoの対象外にする範囲)はverb名ではなくseqの下限で区切る**
-        (`_setup_floor_seq`。ここが積んだ最後のseq)。verb名で判定する実装だと、
-        `set_visible` のように後からユーザー操作としても呼ばれうるverbが末尾に来た
-        瞬間に以後の `undo` が誤って拒否される。seqの下限なら、
-        土台の後に積まれた操作だけが正しくundoできる。
+        **土台(undoの対象外にする範囲)はverb名ではなくseqの下限で区切る**(`_setup_floor_seq`)。
+        verb名で判定すると、`set_visible` のように後からユーザー操作としても呼ばれうるverbが
+        末尾に来た瞬間に以後の `undo` が誤って拒否される。
 
-        **`Session(step_path, deviation)` の起動経路は残す**(pytestが直に呼ぶ)。
         通常の起動でここは通らない(pytestが直に呼ぶときだけ通る)。
         """
         editable_ids = import_step_editable(self.document, str(path))
@@ -453,15 +392,13 @@ class Session:
              "drawn":    [{"kind","params"}],                      # 反復を展開した描画用
              "regions":  [{"index","area","centroid","positions","indices"}]}
 
-        **`entities` と `drawn` を分けている理由**: 前者は人が値を打ち直す対象
-        (`refs` にパラメータ名が入る。§3.4のパラメトリック・プリミティブ)で、後者は
-        反復を展開した「実際に見えるもの」。反復した図形が画面に出ないのに領域だけ
-        増える、を避けるため描画は必ず `drawn` を使う。
+        **`entities` と `drawn` を分けている理由**: 前者は人が値を打ち直す対象(`refs` に
+        パラメータ名が入る)で、後者は反復を展開した「実際に見えるもの」。反復した図形が
+        画面に出ないのに領域だけ増える、を避けるため描画は必ず `drawn` を使う。
 
-        **領域の計算は重い**(`BRepAlgoAPI_Splitter`+テセレーション)。`state` は
-        変更のたびに全接続へ配るので、**スケッチの内容の署名でキャッシュする**
-        (`geometry()` が形状の同一性でキャッシュしているのと同じ判断)。署名には
-        解決済みの数値が入るので、`set_parameter` で値が変われば作り直される。
+        **領域の計算は重い**(`BRepAlgoAPI_Splitter`+テセレーション)。`state` は変更のたびに
+        全接続へ配るので、**スケッチの内容の署名でキャッシュする**。署名には解決済みの数値が
+        入るので、`set_parameter` で値が変われば作り直される。
         """
         # undoで消えたスケッチのキャッシュを落とす(セッション寿命で溜め込まない)
         alive = {item.id for item in self.document.sketches}
@@ -569,15 +506,13 @@ class Session:
 
         戻り値: `{"body_id", "revision", "edges": [kernel.tessellate_edges の1件, ...]}`
 
-        **`state` にも `delta` にも入れない**。辺が要るのはフィレット・面取りを起動して
-        いる間だけで、常時配ると27部品(2835面)の初回配信にその数倍の折れ線が乗る ——
+        **`state` にも `delta` にも入れない**。辺が要るのはフィレット・面取りを起動している
+        間だけで、常時配ると27部品(2835面)の初回配信にその数倍の折れ線が乗る ——
         差分配信にして稼いだぶんを、使わない辺の転送で丸ごと使い切ることになる。
-        **要るときに要るBodyだけ**取りに来させる(`Server._dispatch` の `get_edges`)。
 
         `revision` を一緒に返すのは、**クライアントが「今の形の辺か」を判定できるように**
-        するため。押し出しで形が変われば版が上がるので、古い辺を指したまま
-        フィレットをかける(＝別の辺が丸まる)経路が閉じる(§7「面の添字は形状変更で壊れる」の
-        辺版。添字の持ち越しはここでも許さない)。
+        するため。押し出しで形が変われば版が上がるので、古い辺を指したままフィレットをかける
+        (＝別の辺が丸まる)経路が閉じる。
         """
         body = self.document.get_body(body_id)
         if body.shape is None:
@@ -622,10 +557,8 @@ class Session:
     def body_meta(self, body) -> dict:
         """1Bodyぶんの軽量な状態(geometryを含まない。state_metaとの共有部分)。
 
-        **公開メソッド**(2026-08-20): `DocumentTools._body_summary`(mcp_server.py)が
-        MCP封筒の`bodies[]`要素を作るのにもこれを使う。以前はrevisionの有無以外同一の
-        コピーが2箇所にあった。MCP側は封筒の契約(`revision`を持たない)に合わせて
-        `revision`キーを落として使う。
+        **公開メソッド**: `DocumentTools._body_summary`(mcp_server.py)がMCP封筒の `bodies[]`
+        要素を作るのにもこれを使う。MCP側は封筒の契約に合わせて `revision` キーを落とす。
         """
         return {
             "body_id": body.id,
@@ -647,15 +580,11 @@ class Session:
     def _reset_selection_if_needed(self, verb: str) -> None:
         """形を変えるverbの確定後、選択を全リセットする(統一契約)。
 
-        **カタログの `resets_selection` が正**(`duocad/catalog.py`)。以前はここが
-        `web/src/App.svelte` に3つの対症療法(押し出した面の後継を選び直す・丸めた辺の
-        選択を外す・姿が変わった領域の選択を外す)として散らばっていて質もバラバラだった —
-        面・辺・領域の添字は形状変更で壊れるので、後継を当てにいくより**全部空にする**
-        ほうが単純で正しい(連続性が要るverbが現れたら、そのときに後継を返す契約を作る)。
+        **カタログの `resets_selection` が正**(`duocad/catalog.py`)。面・辺・領域の添字は
+        形状変更で壊れるので、後継を当てにいくより**全部空にする**ほうが単純で正しい。
 
         呼び出し側は**成功した後にだけ**呼ぶこと — 失敗した verb は操作ログに積まれず
-        この関数にも到達しないので、「失敗しても選択は保持される」(README §3.2 手順5)は
-        自然に満たされる。
+        この関数にも到達しないので、「失敗しても選択は保持される」は自然に満たされる。
         """
         command = catalog.BY_NAME.get(verb)
         if command is not None and command.resets_selection:
@@ -709,24 +638,17 @@ class Session:
     #
     # **`set_visible` と同じ上り方向に乗せる**(別系統を新設しない)。
     # 変更 → `Session._emit` → `add_listener` の購読者(`Server._on_core_change`) → 全接続へ配信。
-    #
-    # ただし `set_visible` の効果がブラウザへ届くのは `applied` ではなく
-    # **`state_meta()["bodies"][].visible`** 経由である(MCP起点の変更では `applied` を
-    # 落として配るため。`Server._on_core_change` のdocstring)。選択も同じで、
-    # **`state_meta()` に `"selection"` を載せない限りAIが書き換えた選択は画面へ届かない**。
-    # イベントと状態の両方を通す(片方だけだと交互操作が片道になる)。
+    # **`state_meta()` に `"selection"` を載せない限りAIが書き換えた選択は画面へ届かない**
+    # (MCP起点の変更では `applied` を落として配るため)。イベントと状態の両方を通す。
     #
     # 発火するイベントの形(verbの `applied` とはキーで区別する。選択はverbではない):
     #     {"change": "selection",
     #      "selection": {"items": [...], "origin": "user"|"proposed", "count": int},
     #      "client_op": int | None}
-    # `selection` を丸ごと載せるのは、**UIが描き直すのに足る情報**(何が選択されたか・
-    # 提案か確定か)をイベント単体で持たせるため(項番13)。
     #
-    # **戻り値**: 変更する4つは `set_visible` と同じく `self._emit(...)` の戻り —— つまり
-    # **発火したイベントそのもの**を返す(`{"change","selection","client_op"}`)。
-    # `get_selection` だけは発火しないので `Selection.to_dict()`
-    # (`{"items","origin","count"}`)を返す。**この2つは形が違う**ので、
+    # **戻り値**: 変更する4つは `self._emit(...)` の戻り —— つまり**発火したイベントそのもの**
+    # (`{"change","selection","client_op"}`)。`get_selection` だけは発火しないので
+    # `Selection.to_dict()`(`{"items","origin","count"}`)を返す。**この2つは形が違う**ので、
     # 呼び出し側は `["selection"]` を挟むかどうかを取り違えないこと。
     def get_selection(self) -> dict:
         """現在の選択集合を素の値で返す(`Selection.to_dict()`)。発火はしない。"""
@@ -779,26 +701,22 @@ class Session:
         """verbを**投機的に実行して形だけ測り、文書を元へ戻す**。
 
         コマンド層の状態機械「起動 → 引数収集 → プレビュー → 確定(Enter) / 中断(Esc)」の
-        プレビューの実体。**操作ログには何も積まれず、イベントも発火しない** ——
-        確定した1回だけがログに積まれる(実装計画書§2)。巻き戻しは
+        プレビューの実体。**操作ログには何も積まれず、イベントも発火しない**。巻き戻しは
         `duocad.speculative.speculative` が行う。
 
         戻り値:
             {"verb": str,
              "bodies": [{"body_id","name","face_count","volume","geometry"}, ...]}
 
-        `bodies` に入るのは**形が変わった可視のBodyだけ**(押し出しなら1個)。
-        `geometry` は `state`/`delta` の同名フィールドと同じ形なので、アプリ層は
-        本物の形状と同じ道具で描ける。
+        `bodies` に入るのは**形が変わった可視のBodyだけ**。`geometry` は `state`/`delta` の
+        同名フィールドと同じ形なので、アプリ層は本物の形状と同じ道具で描ける。
 
-        **プレビューできるverbは `PREVIEWABLE_VERBS` に登録したものだけ**。ソケットから
-        届いた文字列で `Session` の任意のメソッドを呼べる作りにしない、というのが1点。
-        もう1点は、投機的実行が正しく巻き戻せることを verb ごとに確認したうえで
-        載せる場所を1つにしておくため。
+        **プレビューできるverbは `PREVIEWABLE_VERBS` に登録したものだけ**(ソケットから届いた
+        文字列で `Session` の任意のメソッドを呼べる作りにしない)。
 
-        **キャッシュと `_applied_count` は自分で退避する** —— `speculative` が戻すのは
-        文書であって `Session` の持ち物ではない。テセレーションは `self.geometry()` を
-        使わず `kernel.tessellate` を直に呼ぶ(キャッシュを投機的な形で汚さないため)。
+        **キャッシュと `_applied_count` は自分で退避する** —— `speculative` が戻すのは文書で
+        あって `Session` の持ち物ではない。テセレーションは `self.geometry()` を使わず
+        `kernel.tessellate` を直に呼ぶ(キャッシュを投機的な形で汚さないため)。
         """
         if verb not in PREVIEWABLE_VERBS:
             raise ValueError(
@@ -879,15 +797,12 @@ class Session:
     def sketch_create(self, base_plane: Optional[str] = None) -> dict:
         """スケッチを作る。`base_plane`(XY/XZ/YZ)省略時は**確定選択の面**(ちょうど1枚)に貼る。
 
-        **面は引数で受けない**(2026-08-22)。以前はここが `plane` として
-        `{"kind":"face", "body":..., "index":...}` をそのまま受けており、
-        **対象集合を引数で渡す最後の経路**になっていた —— MCPは同じ操作を確定選択から
-        取っており(そちらの4行がここへ上がってきた実体)、2箇所に同じ解決を持つと
-        片方だけ直したときに「AIと人で貼る先が違う」形で食い違う。
+        **面は引数で受けない**。2箇所に同じ解決を持つと、片方だけ直したときに「AIと人で
+        貼る先が違う」形で食い違う。
 
         平面も選択も無ければエラーにする —— 既定でXYに貼ると、図形が静かに別の場所に出る。
-        2枚選んでいれば `SelectionAmbiguous`、AIの提案のままなら `SelectionNotCommitted`
-        が `require_confirmed` から上がり、そのままWS/MCPのエラーになる。
+        2枚選んでいれば `SelectionAmbiguous`、AIの提案のままなら `SelectionNotCommitted` が
+        `require_confirmed` から上がり、そのままWS/MCPのエラーになる。
         """
         if base_plane is not None:
             plane: Any = str(base_plane)
@@ -1033,12 +948,10 @@ class Session:
     def import_step_editable(self, path: Any) -> dict:
         """STEPを読み、**編集可能なボディまで作る**(verb `import_step_editable`)。
 
-        「読んだら使える」が本人の指示なので、UI・MCPから来る通常の読み込みはこちら ——
-        ソリッドごとに参照ボディ(隠す)と編集用ボディを作る1回のverbになる。
-
-        **メソッド名・WSのコマンド名・ログのverb名を同じ綴りにしてある**。1つのコマンドを
-        引数で2つのverbに打ち分ける作りだと、「コマンド名が実際に積まれるverbと違う」という
-        食い違いが起きる。
+        UI・MCPから来る通常の読み込みはこちら —— ソリッドごとに参照ボディ(隠す)と編集用
+        ボディを作る1回のverbになる。**メソッド名・WSのコマンド名・ログのverb名を同じ綴りに
+        してある**(1コマンドを引数で2つのverbに打ち分けると、コマンド名と積まれるverbが
+        食い違う)。
         """
         body_ids = import_step_editable(self.document, str(self._resolve(path)))
         args = self.document.log.entries[-1].args
@@ -1074,35 +987,25 @@ class Session:
     def _resolve_document_name(self, name: Any) -> Path:
         """**ファイル名だけ**を受け取り、`models_dir` 配下に閉じたパスへ解決する。
 
-        2026-08-22本人決定(engine `duocad-save-location-fixed-folder`)——
-        保存/開くのたびにパスを手打ちする代わりに、決まったフォルダの中身を一覧から
-        選ぶ形にした。以前の `_resolve`(CWD基準の任意の絶対パスを許す)は
-        `save_document`/`open_document` からは呼ばれなくなった —— 保存先が
-        「その日サーバをどこで起動したか」で変わるのがそもそもの問題だったので、
-        起点をサーバのCWDから `models_dir` へ固定して塞ぐ。
+        保存先が「その日サーバをどこで起動したか」で変わらないよう、起点を `models_dir` に
+        固定してある。**文字列だけの拒否では脱出経路が残る**(いずれも実測):
 
-        **2026-08-23 QA指摘で締め直した**(第1段 `gpt-5.6-terra-high` fail)。
-        文字列だけの拒否では脱出経路が残っていた:
+        - `Path("D:outside.json").is_absolute()` は **False**(Windowsのドライブ相対パス)。
+          素の絶対パス判定をすり抜け、しかも `models_dir / "D:outside.json"` は pathlib が
+          右辺の「ドライブ付きセグメント」を**新しいアンカー**として扱うため、`models_dir` 側が
+          黙って捨てられて `D:\\outside.json` に解決される。**コロン1文字**が入口で、NTFSの
+          代替データストリーム(`a.json:x` → `models\\a.json:x` へ書ける)も同じ入口を通る。
+        - 予約デバイス名(`CON`/`COM1`等、拡張子を付けても特別扱い)・末尾のドット/空白
+          (Windowsが黙って落とすため `foo.json.` と `foo.json` が同じ実体になりうる)。
+        - **文字列の拒否だけでは、既存のシンボリックリンク/ジャンクションを指すファイル名が
+          `models_dir` の外へ実際に解決されるケースを塞げない** —— 最終判定は必ず
+          **解決後のパスが `models_dir` 配下か**で行う(`resolve()` はリンクを辿る)。
 
-        - `Path("D:outside.json").is_absolute()` は **False**(Windowsのドライブ相対
-          パス)。素の絶対パス判定をすり抜け、しかも `models_dir / "D:outside.json"`
-          は pathlib が右辺の「ドライブ付きセグメント」を**新しいアンカー**として扱う
-          ため、`models_dir` 側が黙って捨てられて `D:\\outside.json` に解決される
-          (実測)。**コロン1文字**が入口で、NTFSの代替データストリーム
-          (`a.json:x` → `models\a.json:x` へ書ける)も同じ入口を通る。
-        - 予約デバイス名(`CON`/`COM1`等、拡張子を付けても特別扱い)・末尾のドット/
-          空白(Windowsが黙って落とすため`foo.json.`と`foo.json`が同じ実体になりうる)。
-        - **文字列の拒否だけでは、既存のシンボリックリンク/ジャンクションを指す
-          ファイル名が`models_dir`の外へ実際に解決されるケースを塞げない** ——
-          最終判定は必ず**解決後のパスが`models_dir`配下か**で行う
-          (`resolve()`はリンクを辿るので、ここが唯一の正しい検査になる)。
+        したがって判定は2段: ①明らかに拒まれる形を早く言う文字列検査(区切り文字・コロン・
+        `.`/`..`・予約名・前後の空白・末尾のドット/空白・拡張子)、②**解決後のパスが
+        `models_dir` 配下であることの検査**(`is_relative_to`)。①だけに頼らない。
 
-        したがって判定は2段: ①明らかに拒まれる形を早く言う文字列検査
-        (区切り文字・コロン・`.`/`..`・予約名・前後の空白・末尾のドット/空白・拡張子)、
-        ②**解決後のパスが`models_dir`配下であることの検査**(`is_relative_to`。
-        ①をすり抜けるものが万一あっても、ここで必ず止まる)。①だけに頼らない。
-
-        `models_dir` が無ければここで作る(要件1「無ければアプリが作る」)。
+        `models_dir` が無ければここで作る。
         """
         text = str(name)
         stripped = text.strip()
@@ -1124,11 +1027,9 @@ class Session:
         if base_name in _RESERVED_WINDOWS_NAMES:
             raise ValueError(f"予約されたデバイス名は使えない: {text!r}")
         if not text.lower().endswith(".json"):
-            # **一覧(`list_documents`)は `*.json` しか見ない**(要件3)。拡張子違いを
-            # 受理すると、保存はできるのに一覧から二度と開けないファイルができる
-            # (2026-08-23 QA指摘のMINOR)。黙って `.json` を補うより、打ち間違いを
-            # その場で本人に返す方を選んだ(既存の「打ち間違いを許さない」流儀
-            # ―― 親ディレクトリを黙って作らない、既定値を黙って埋めない ―― と揃える)。
+            # **一覧(`list_documents`)は `*.json` しか見ない**。拡張子違いを受理すると、
+            # 保存はできるのに一覧から二度と開けないファイルができる。黙って `.json` を
+            # 補うより、打ち間違いをその場で本人に返す。
             raise ValueError(f"拡張子は.json(一覧はモデルの*.jsonだけを見る): {text!r}")
         candidate = Path(text)
         if candidate.is_absolute():
@@ -1211,22 +1112,16 @@ class Session:
         })
 
     def list_documents(self) -> dict:
-        """`models_dir` の中身を一覧にする(名前/更新日時/サイズ/操作数)。
+        """`models_dir` の中身を一覧にする(名前/更新日時/サイズ/操作数)。**verbではない**。
 
-        **verbではない**(`changes_document=False`)。ここが導入前は
-        「ディレクトリ列挙のコードがリポジトリに1つも無い」状態で、開く/保存を
-        アプリ内から一覧で選ぶには必須の穴だった。
-
-        操作数は `OpLog.from_json` で数える(§3.1「保存形式は操作ログのJSON」)—— 形状の
-        再生(`log.replay`)まではせず、パースだけ。**2026-08-23にSTEP本文がログへ入って
-        1ファイルが4.8MB級になった**が、実測でファイルあたり約30ms(PCケースの
-        4.8MBを3件で0.09s)なので、この作りのままにしてある。
+        操作数は `OpLog.from_json` で数える —— 形状の再生(`log.replay`)まではせず、パースだけ。
+        STEP本文がログに入って1ファイルが4.8MB級になったが、実測でファイルあたり約30ms
+        (PCケースの4.8MBを3件で0.09s)なので、この作りのままにしてある。
 
         壊れたファイル(手で触られた・書き込み途中の `.writing` 等)は一覧からは省く
         (一覧が原因不明の例外で丸ごと落ちるより、読める分だけ見せる方が実用に沿う)。
-        **旧形式(version 1)のファイルもここでは黙って省かれる** —— `from_json` が
-        ValueError にするため。版1で保存されたファイルは実在しないので今は問題にならないが、
-        次に版を上げるときは「一覧に出ないだけで理由が分からない」になることに注意。
+        **旧形式(version 1)のファイルもここでは黙って省かれる** —— `from_json` が ValueError
+        にするため。次に版を上げるときは「一覧に出ないだけで理由が分からない」になることに注意。
         """
         self.models_dir.mkdir(parents=True, exist_ok=True)
         files = []
@@ -1479,13 +1374,9 @@ class Server:
     def _on_disconnect(self, connection: Any) -> None:
         """1接続が切れた後の後始末(`handle()` の `finally` から呼ぶ)。
 
-        **誰も見ていない状態でAIの実行(=文書の変更)を放置しない**(QA指摘・major、
-        2026-08-20)。以前はここが接続の登録解除しかしておらず、ブラウザを閉じた後も
-        `AgentLoop.run()` が走り続け、誰も見ていないまま文書を変え続けられた。
-
-        **最後の1接続が切れたときだけ中断する** —— 他の画面がまだ見ている間に片方が
-        閉じても実行は続ける(`ai_*` は接続ごとではなく共有の1会話という設計と揃える。
-        `Server._ai_status()` の `providers`/`running` を全接続へ配る扱いと同じ)。
+        **誰も見ていない状態でAIの実行(=文書の変更)を放置しない**。**最後の1接続が切れた
+        ときだけ中断する** —— 他の画面がまだ見ている間に片方が閉じても実行は続ける
+        (`ai_*` は接続ごとではなく共有の1会話という設計と揃える)。
         """
         if not self.clients and self._ai_running:
             self._ai_cancel()
@@ -1543,19 +1434,14 @@ class Server:
                 )
                 await self._push(connection, applied=applied)
             # -------------------------------------------------- B: プレビュー(投機的実行)
-            # **配信しない**。文書は変わらない(`Session.preview` が元へ戻す)ので、
-            # 状態を配る理由が無く、他のクライアントに見せる中間状態も存在しない。
-            # 要求した接続にだけ形を返す。
+            # **配信しない**。文書は変わらない(`Session.preview` が元へ戻す)ので、状態を配る
+            # 理由が無く、他のクライアントに見せる中間状態も存在しない。要求した接続にだけ返す。
             #
             # **`_apply` で囲まない**(2つの止め方を重ねない)。プレビュー中の発火は
-            # `Session._suppress_events` が経路によらず止めており、ここで
-            # `_dispatching` まで立てると、**プレビューの計算中(押し出しなら約1秒)に
-            # MCPから届いた本物の変更まで「WebSocket経由だから配信不要」と誤判定して
-            # 黙って捨てる**(`_apply` のdocstringが警告しているのと同じ穴)。
+            # `Session._suppress_events` が経路によらず止めており、ここで `_dispatching` まで
+            # 立てると、**プレビューの計算中(押し出しなら約1秒)にMCPから届いた本物の変更まで
+            # 「WebSocket経由だから配信不要」と誤判定して黙って捨てる**。
             # -------------------------------------------------- C: スケッチ(手で描く経路)
-            # **既にMCPが持っていたverbをブラウザにも開けただけ**(選択の3コマンドと同じ)。
-            # コアには何も足していない —— スケッチがAIからしか触れない状態は、この企画の
-            # 中心命題「手動操作が一級の操作モード」に真正面から反する(実装計画書§8b C)。
             # **スケッチを作るのは表に載らない** —— `base_plane` が省略できる引数だからで
             # (表は載せた引数を全部必須にする)、省略は「コアの確定選択の面に貼る」を意味する。
             # `catalog` の `ws="special"` がその宣言で、ここがその実体である。
@@ -1703,17 +1589,13 @@ class Server:
         `AgentLoop.run()` が古い `Cancellation` を見続けたままになり、中断ボタンが効かなくなる
         (`loop_obj.run` は `run_in_executor` に渡した時点でその回のオブジェクトを掴んでいる)。
 
-        **`anthropic` は `base_url` を受け付けない**(QA指摘・critical、2026-08-20)。
-        `base_url` は「値は渡さないが送り先は画面から選べる」という設計だったが、
-        送り先を選べる時点でキーの値を渡しているのと同じ結果になる ——
-        `AnthropicProvider.complete()` は実キーを `x-api-key` ヘッダに載せて
-        `{base_url}/v1/messages` へPOSTするので、`ai_configure` で `base_url` を
-        任意のホストへ差し替えて `ai_send` するだけで**サーバの実キーが外部へ流出する**
-        (WebSocketは同一オリジンポリシーで止まらないので、127.0.0.1 bindは防御にならない)。
-        **採った設計**: `anthropic` を選んでいる(またはこの呼び出しで選ぶ)間は
-        `base_url` の指定を明示的なエラーとして拒否する(黙って無視すると、指定したのに
-        効かない理由が画面から分からない)。エンドポイントを差し替えられる必要があるのは
-        ローカルの `openai_compat`(キーを持たない)だけで足りる。
+        **`anthropic` は `base_url` を受け付けない**。`AnthropicProvider.complete()` は実キーを
+        `x-api-key` ヘッダに載せて `{base_url}/v1/messages` へPOSTするので、`ai_configure` で
+        `base_url` を任意のホストへ差し替えて `ai_send` するだけで**サーバの実キーが外部へ
+        流出する**(WebSocketは同一オリジンポリシーで止まらないので、127.0.0.1 bindは防御に
+        ならない)。`anthropic` を選んでいる間は `base_url` の指定を明示的なエラーとして拒否する
+        (黙って無視すると、指定したのに効かない理由が画面から分からない)。エンドポイントを
+        差し替えられる必要があるのはローカルの `openai_compat`(キーを持たない)だけで足りる。
         """
         if self._ai_running:
             return {**self._ai_status(), "error": "AI応答中は設定を変更できない(中断してから)"}
