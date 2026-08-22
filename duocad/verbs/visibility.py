@@ -1,25 +1,7 @@
 """verb `set_visible` — Bodyの表示・非表示を切り替える。
 
-**なぜコアのverbなのか**: アプリ層のチェックボックスとして実装すると、可視性は文書の状態に
-ならず、操作ログにも載らず、undoできず、MCPからも触れない。実装計画書§2「コアはUIが
-無くても機能的に完全」の帰結として、**表示・非表示もverbである**。ここに置くことで
-MCPからもそのまま使える。
-
-契約:
-    set_visible(doc, body_id, visible) -> Operation
-        `body_id` のBodyの `visible` を `visible` にし、ログに
-        `verb="set_visible"`, `args={"body_id":.., "visible": bool, "previous": bool}`
-        を積んで Operation を返す。
-        `previous` は undo が元の値へ戻すために要る(`set_parameter` と同じ流儀)。
-
-失敗の契約(黙って通さない。§6予防6):
-    存在しない body_id -> KeyError。**documentにもログにも変更を残さない**
-    (`Document` の他のAPIと揃える。`is_editable` / `set_active_body` / `remove_body` は
-     いずれも存在しないIDで KeyError を送出する)。
-
-**可視性は選択機構の一部**であり、`visible=False` のBodyは選択の対象にならない
-(`duocad.selection` を参照)。表示を消しただけのつもりで押し出しが通ってしまうと、
-画面に出ていない部品が黙って変形する。
+**可視性は選択機構の一部**で、`visible=False` のBodyは選択の対象にならない
+(`duocad.selection`)。存在しない body_id は KeyError で、文書にもログにも何も残さない。
 """
 from __future__ import annotations
 
@@ -30,7 +12,6 @@ VERB_SET_VISIBLE = "set_visible"
 
 
 def set_visible(doc: Document, body_id: BodyId, visible: bool) -> Operation:
-    """Bodyの表示・非表示を切り替え、ログに積んで Operation を返す。"""
     body = doc.get_body(body_id)
     previous = body.visible
     body.visible = bool(visible)
@@ -41,12 +22,10 @@ def set_visible(doc: Document, body_id: BodyId, visible: bool) -> Operation:
 
 
 def _do_set_visible(document: Document, operation: Operation) -> None:
-    """redo / replay: 記録された `visible` を当て直す(ログには触らない)。"""
     document.get_body(operation.args["body_id"]).visible = operation.args["visible"]
 
 
 def _undo_set_visible(document: Document, operation: Operation) -> None:
-    """undo: `args["previous"]` の値へ戻す。"""
     document.get_body(operation.args["body_id"]).visible = operation.args["previous"]
 
 

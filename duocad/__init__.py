@@ -1,34 +1,14 @@
 """duocad — 自作3DCADのコア。GUI無しの骨格(文書・操作ログ・STEP入出力)に加えて、
 ビューポート(WebSocketサーバ + web/)と面の押し出しを持つ。
 
-サブモジュール:
-    document — Document / Body のデータモデル
-    oplog    — Operation / OpLog(操作ログ。undo/redo/永続化/再生)
-    io_step  — STEP読み込み・STEP/STL書き出し
-    query    — 問い合わせ層のインタフェース(build123dをラップする境界)
-    kernel   — OCP(OCCT)を直接叩く層。duocad配下でOCP.*をimportしてよいのはここだけ
-    sketch   — スケッチ。Sketch/Entity/Patternのデータモデルとスケッチの4 verb
-    parameters — 名前つきの寸法値。set_parameter と値の登録・解決
-    region   — 領域。Region/RegionRefと領域検出
-    selection — 選択機構。可視性を含む「何が選べるか」の判定
-    verbs    — verb層(1 verb 1モジュール)。extrude_face / make_editable_copy / extrude /
-               pattern_rectangular / set_visible / fillet / chamfer(円弧はスケッチ側の
-               図形なので sketch) / import_step_editable(読んだら編集できる状態まで作る1本)
-    catalog  — verbの単一宣言(名前・引数・カテゴリ・プレビュー可否・MCPスキーマ)。
-               server.py の4つの表も mcp_server.py のツール定義もここからの導出
-    server   — WebSocketサーバ + web/dist の静的配信(アプリ層との唯一の接点)
-    mcp_server — MCPサーバ。AIがコアを直接叩く口。
-                 **アプリ層ではなくコアのもう一人のクライアント**で、ブラウザと同じ文書を叩く
+層をまたぐ契約:
+    kernel — duocad配下で OCP.* を import してよいのはここだけ
+    catalog — verbの単一宣言。server.py の4つの表も mcp_server.py のツール定義もここから導出
+    mcp_server — アプリ層ではなく**コアのもう一人のクライアント**(ブラウザと同じ文書を叩く)
 
-パッケージのimport時に**verbを定義したモジュールを読み込む**。oplogのレジストリ
-(verb名 -> (do, undo))はverb側が `register_verb()` で埋める設計なので、これが無いと
-`OpLog.from_json(...).replay(doc)` だけを使う経路でverbが未登録になりうる。
-verbが増えたらここに1行足す(oplogにverb名の分岐を書かないための対価)。
-
-`server` / `mcp_server` はここでimportしない(サーバを立てない用途でパッケージを読むほうが
-普通で、`python -m duocad.mcp_server` で起動すれば必要なものは自分でimportする)。
-**起動コマンドは `duocad.mcp_server` の1本だけ**で、`server` は `Session` / `Server` /
-静的配信を提供するモジュール(起動はしない)。
+下のimportは未使用に見えるが必須。oplogのレジストリ(verb名 -> (do, undo))はverb側が
+`register_verb()` で埋めるので、これが無いと `OpLog.from_json(...).replay(doc)` だけを使う
+経路でverbが未登録になる。verbが増えたらここに1行足す。
 """
 from . import io_step as _io_step  # noqa: F401  verb "import_step" をレジストリへ登録する
 from . import parameters as _parameters  # noqa: F401  verb "set_parameter" を登録する

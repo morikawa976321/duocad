@@ -1,13 +1,9 @@
-"""verb層 — 1 verb 1モジュール(実装計画書§2「verbの粒度」)。
+"""verb層 — 1 verb 1モジュール。
 
 このパッケージを import すると、含まれる全verbが `oplog` のレジストリへ登録される
-(登録はverbを定義したモジュール側が `register_verb()` で行う。`oplog.py` に verb名の
-if 連鎖を置かないための設計)。`duocad/__init__.py` がこのパッケージを import するので、
-`duocad` を使えば必ずレジストリが埋まっている — 保存したログを `from_json` して
-`replay` するだけの経路でverbが未登録にならないようにするため。
+(登録はverb側の `register_verb()`)。verbが増えたらここに1行足す。
 
-**OCP / build123d を直接importしない**(tests/test_boundaries.py が再帰的に検査する)。
-幾何は `duocad.kernel` 越しに呼ぶ。verbが増えたらここに1行足す。
+幾何は `duocad.kernel` 越しに呼ぶ — **OCP / build123d を直接importしない**。
 """
 from .chamfer import chamfer  # noqa: F401
 from .extrude import extrude  # noqa: F401
