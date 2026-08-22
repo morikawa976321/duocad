@@ -5,12 +5,12 @@
    * **状態はコアが持つ**。ここは `bodies`(コアの `state.bodies`)を描くだけで、
    * 可視性そのものはローカルに持たない。チェックボックスを操作したら
    * `onToggle` 経由でコアの `set_visible` verb を呼びに行く(呼び出し元の `App.svelte` が
-   * WebSocket越しに送る)。ここが持つローカル状態は**「選択したものだけ表示」ボタンのための
-   * 一時的な下書き**(`picked`)だけで、これはドメインの状態ではない
-   * (undo/永続化の対象ではない、ページを閉じれば消えてよい選び途中の下書き)。
+   * WebSocket越しに送る)。**ローカル状態は無い**(完全にステートレス)。
    *
-   * 27部品を1つずつ押すのは実用にならないため、一括操作を3つ持つ:
-   * 全表示・全非表示・「選択したものだけ表示」(chosenで選んだ行だけ残して他を隠す)。
+   * 各行が持つのは表示/非表示のチェック1つだけ(2026-08-23本人裁定でpick列・
+   * 「選択したものだけ表示」を削除 —— duocadは10や20の複数パーツを扱えるほどリッチな
+   * 状態ではなく、現段階で考える必要のない懸念)。27部品を1つずつ押すのは実用にならない
+   * ため、一括操作は全表示・全非表示の2つを持つ(指示の範囲外なので残す)。
    */
   import type { BodyMeta } from './session'
 
@@ -19,28 +19,12 @@
     onToggle,
     onShowAll,
     onHideAll,
-    onShowOnly,
   }: {
     bodies: BodyMeta[]
     onToggle: (bodyId: string, visible: boolean) => void
     onShowAll: () => void
     onHideAll: () => void
-    onShowOnly: (bodyIds: string[]) => void
   } = $props()
-
-  // 「選択したものだけ表示」の下書き(ドメイン状態ではない。上のdocstring参照)。
-  let picked = $state<Set<string>>(new Set())
-
-  function togglePicked(bodyId: string): void {
-    const next = new Set(picked)
-    if (next.has(bodyId)) next.delete(bodyId)
-    else next.add(bodyId)
-    picked = next
-  }
-
-  function showOnlyPicked(): void {
-    onShowOnly([...picked])
-  }
 
   const visibleCount = $derived(bodies.filter((body) => body.visible).length)
 </script>
@@ -53,20 +37,10 @@
   <div class="parts-bulk">
     <button id="parts-show-all" onclick={onShowAll}>全表示</button>
     <button id="parts-hide-all" onclick={onHideAll}>全非表示</button>
-    <button id="parts-show-only-picked" onclick={showOnlyPicked} disabled={picked.size === 0}>
-      選択したものだけ表示
-    </button>
   </div>
   <ul class="parts-list">
     {#each bodies as body (body.body_id)}
       <li class="parts-row" class:hidden-row={!body.visible} data-body-id={body.body_id}>
-        <input
-          type="checkbox"
-          class="pick"
-          checked={picked.has(body.body_id)}
-          onchange={() => togglePicked(body.body_id)}
-          aria-label={`${body.name} を一括表示の対象にする`}
-        />
         <label class="parts-name">
           <input
             type="checkbox"

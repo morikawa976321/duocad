@@ -178,12 +178,14 @@ async function main() {
       return { pickable, total: body.face_count }
     }, occlusionTarget.bodyId)
 
-    // 対象パーツだけ残して他を全部隠す(パーツ一覧の一括操作「選択したものだけ表示」)。
-    await page.evaluate((bodyId) => {
-      const row = document.querySelector(`.parts-row[data-body-id="${bodyId}"] input.pick`)
-      row.click()
-    }, occlusionTarget.bodyId)
-    await page.click('#parts-show-only-picked')
+    // 対象パーツだけ残して他を全部隠す(全非表示 → 対象だけチェックボックスで表示オン。
+    // 「選択したものだけ表示」ボタンとpick列は削除済み — 2026-08-23本人裁定)。
+    await page.click('#parts-hide-all')
+    await page.waitForFunction(
+      () => window.__duocad.parts.every((b) => !b.visible),
+      { timeout, polling: 50 },
+    )
+    await page.click(`.parts-row[data-body-id="${occlusionTarget.bodyId}"] input.visible-toggle`)
     await page.waitForFunction(
       (bodyId) => {
         const bodies = window.__duocad.parts

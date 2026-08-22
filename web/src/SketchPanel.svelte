@@ -8,7 +8,10 @@
    * 1. 既にあるスケッチに入る(再開)/抜ける/正面から見る —— **モードの操作だけ**
    * 2. 図形の一覧と**値の打ち直し**(`set_parameter`)——
    *    クリックだけで置いた後に寸法を直せるのが§3.4のパラメトリック・プリミティブ
-   * 3. 領域の一覧と選択(押し出しがこの選択を引数に取る)
+   *
+   * **領域の一覧は無い**(2026-08-23本人裁定。冗長と判断)。領域の選択は3Dクリックのみ
+   * (`__duocad.projectRegion` / viewport)——描画コマンド起動中はクリックが点に取られるため、
+   * 描画中に領域を選ぶにはEscで「選ぶ」へ戻る1手が増えるが、それは受け入れた帰結。
    *
    * **スケッチを作るボタンはここに無い**(2026-08-22本人決定。engine
    * `2026-08-22-duocad-sketch-start-is-two-steps-by-pointing`)。作成はツールバーの
@@ -19,28 +22,24 @@
    * 図形が増えるたびにビューポートがリサイズされ、射影が変わって次のクリックが
    * 別の場所に当たる。
    */
-  import type { SelectionRef, SketchState } from './session'
+  import type { SketchState } from './session'
 
   let {
     sketches,
     activeSketchId,
-    selection,
     onEnter,
     onExit,
     onLookAt,
     onSetParameter,
-    onSelectRegion,
     selectedEntities = [],
     onToggleEntity = () => {},
   }: {
     sketches: SketchState[]
     activeSketchId: string | null
-    selection: SelectionRef[]
     onEnter: (sketchId: string) => void
     onExit: () => void
     onLookAt: () => void
     onSetParameter: (name: string, value: number) => void
-    onSelectRegion: (sketchId: string, index: number) => void
     /**
      * 反復の対象に選んである図形。**共有選択集合とは別物**で、
      * コアの選択集合に図形は入らない(`commands/command.ts` の `EntitiesArgSpec`)。
@@ -52,16 +51,6 @@
   } = $props()
 
   const active = $derived(sketches.find((item) => item.sketch_id === activeSketchId) ?? null)
-
-  /** 選択中の領域の添字(このスケッチのぶんだけ)。 */
-  const selectedRegions = $derived(
-    new Set(
-      selection
-        .filter((item): item is { sketch: string; index: number } => 'sketch' in item)
-        .filter((item) => item.sketch === activeSketchId)
-        .map((item) => item.index),
-    ),
-  )
 
   /** 打ちかけの値(図形ID+キー -> 文字列)。Enterまでコアへ送らない。 */
   let editing = $state<Record<string, string>>({})
@@ -114,72 +103,53 @@
   </div>
 
   {#if active}
-    <div class="lists">
-      <div class="list" id="sketch-entities">
-        {#if active.entities.length === 0}
-          <span class="value dim">まだ図形が無い(平面をクリックして描く)</span>
-        {/if}
-        {#each active.entities as entity (entity.entity_id)}
-          <div
-            class="item"
-            class:picked={selectedEntities.includes(entity.entity_id)}
-            data-entity={entity.entity_id}
-            data-kind={entity.kind}
-            data-picked={selectedEntities.includes(entity.entity_id)}
-          >
-            <!-- 反復の対象に取る/外す。種別のところがそのままボタン -->
-            <button
-              class="pick"
-              id={`entity-${entity.entity_id}`}
-              title="反復の対象にする"
-              onclick={() => onToggleEntity(entity.entity_id)}
-            >
-              {entity.kind}
-            </button>
-            {#each shown(entity) as [key, value] (key)}
-              <label class="param" for={`param-${entity.entity_id}-${key}`}>{key}</label>
-              <input
-                id={`param-${entity.entity_id}-${key}`}
-                data-param={key}
-                type="text"
-                inputmode="decimal"
-                autocomplete="off"
-                disabled={entity.refs[key] === null}
-                title={entity.refs[key] ?? '素の数値(打ち直せない)'}
-                value={editing[editKey(entity.entity_id, key)] ?? String(value)}
-                oninput={(event) => {
-                  editing = {
-                    ...editing,
-                    [editKey(entity.entity_id, key)]: (event.target as HTMLInputElement).value,
-                  }
-                }}
-                onkeydown={(event) => {
-                  if (event.key !== 'Enter') return
-                  event.preventDefault()
-                  commitParam(entity.entity_id, key, entity.refs[key])
-                }}
-              />
-            {/each}
-          </div>
-        {/each}
-      </div>
-
-      <div class="list" id="sketch-regions">
-        {#if active.regions.length === 0}
-          <span class="value dim">閉領域なし</span>
-        {/if}
-        {#each active.regions as region (region.index)}
+    <div class="list" id="sketch-entities">
+      {#if active.entities.length === 0}
+        <span class="value dim">まだ図形が無い(平面をクリックして描く)</span>
+      {/if}
+      {#each active.entities as entity (entity.entity_id)}
+        <div
+          class="item"
+          class:picked={selectedEntities.includes(entity.entity_id)}
+          data-entity={entity.entity_id}
+          data-kind={entity.kind}
+          data-picked={selectedEntities.includes(entity.entity_id)}
+        >
+          <!-- 反復の対象に取る/外す。種別のところがそのままボタン -->
           <button
-            class="region"
-            class:on={selectedRegions.has(region.index)}
-            id={`region-${region.index}`}
-            data-region={region.index}
-            onclick={() => onSelectRegion(active.sketch_id, region.index)}
+            class="pick"
+            id={`entity-${entity.entity_id}`}
+            title="反復の対象にする"
+            onclick={() => onToggleEntity(entity.entity_id)}
           >
-            領域 {region.index} ・ {region.area.toFixed(1)} mm²
+            {entity.kind}
           </button>
-        {/each}
-      </div>
+          {#each shown(entity) as [key, value] (key)}
+            <label class="param" for={`param-${entity.entity_id}-${key}`}>{key}</label>
+            <input
+              id={`param-${entity.entity_id}-${key}`}
+              data-param={key}
+              type="text"
+              inputmode="decimal"
+              autocomplete="off"
+              disabled={entity.refs[key] === null}
+              title={entity.refs[key] ?? '素の数値(打ち直せない)'}
+              value={editing[editKey(entity.entity_id, key)] ?? String(value)}
+              oninput={(event) => {
+                editing = {
+                  ...editing,
+                  [editKey(entity.entity_id, key)]: (event.target as HTMLInputElement).value,
+                }
+              }}
+              onkeydown={(event) => {
+                if (event.key !== 'Enter') return
+                event.preventDefault()
+                commitParam(entity.entity_id, key, entity.refs[key])
+              }}
+            />
+          {/each}
+        </div>
+      {/each}
     </div>
   {/if}
 </section>
@@ -192,7 +162,7 @@
     flex-direction: column;
     gap: 4px;
     /* 右サイドバー(幅300px)に入って横幅が減ったぶん、ヘッダー行(編集中タグ+ボタン)が
-       折り返す(下の`.row`参照)。折り返した分の高さをここで確保しないと図形・領域の
+       折り返す(下の`.row`参照)。折り返した分の高さをここで確保しないと図形の
        一覧欄が潰れ、入力欄が枠の外に出て操作できなくなる(smoke.mjs の半径打ち直しが
        ここで失敗する)。 */
     height: 168px;
@@ -220,19 +190,9 @@
     row-gap: 4px;
   }
 
-  /* 右サイドバー(幅300px)では図形の一覧と領域の一覧を
-     横に2列並べると1列が140px弱まで潰れて読めない。縦に積んで、それぞれの列に
-     残り高さを均等に配る(`.list` の `flex:1 1 0` はそのまま)。 */
-  .lists {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+  .list {
     flex: 1 1 auto;
     min-height: 0;
-  }
-
-  .list {
-    flex: 1 1 0;
     overflow: auto;
     display: flex;
     flex-direction: column;
@@ -277,11 +237,7 @@
     border-radius: 3px;
   }
 
-  button.region.on {
-    border-color: var(--accent);
-  }
-
-  /* 反復の対象。選択中の領域と同じ橙で揃える(選ばれている、の意味を1色に保つ) */
+  /* 反復の対象に取ったことを示す(選ばれている、の意味を1色に保つ) */
   .item.picked button.pick {
     border-color: var(--accent);
   }

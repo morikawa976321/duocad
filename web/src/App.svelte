@@ -565,25 +565,24 @@
   }
 
   /**
-   * 1つの参照を選択集合の編集へ翻訳する(面・辺・領域で同じ規則)。
+   * 1つの参照を選択集合の編集へ翻訳する(面・辺・領域で同じ規則。すべて3Dのクリック経由)。
    *
-   * Shift=追加 / Ctrl=除去 / 修飾なし=置き換え。**解除の仕方だけ入口で違う**:
-   *
-   * - `'replace'`(3Dのクリック) … **1つだけ選んでいるものを再クリックしたら外す**
-   *   (狙いを外したときに素で解除できる)
-   * - `'toggle'`(一覧のクリック。スケッチパネルの領域) … **既に選ばれていたら常に外す**。
-   *   一覧はチェックボックスとして読まれるので、2つ選んだ状態で片方を押したときに
-   *   「置き換え」になると驚く
+   * Shift=追加 / Ctrl=除去 / 修飾なし=置き換え(`'replace'`)。置き換えは
+   * **1つだけ選んでいるものを再クリックしたら外す**(狙いを外したときに素で解除できる)。
    *
    * 置き換えのとき**自分自身は remove に入れない** —— コアは remove を後に適用するので、
    * 入れると足したそばから外れる(`duocad/selection.py` の契約)。
+   *
+   * **`'toggle'`(一覧クリックの解除規則。スケッチパネルの領域一覧が使っていた)は
+   * 2026-08-23に領域一覧を削除して以来、渡す経路が無い**(呼び出し元は3Dクリックの
+   * `PickEvent['mode']` だけ)。
    */
-  function editSelection(ref: SelectionRef, mode: PickEvent['mode'] | 'toggle'): void {
+  function editSelection(ref: SelectionRef, mode: PickEvent['mode']): void {
     const current = selection?.items ?? []
     const already = current.some((item) => sameRef(item, ref))
     if (mode === 'add') modifySelection([ref], [])
     else if (mode === 'remove') modifySelection([], [ref])
-    else if (already && (mode === 'toggle' || current.length === 1)) modifySelection([], [ref])
+    else if (already && current.length === 1) modifySelection([], [ref])
     else selectOnly(ref)
   }
 
@@ -714,10 +713,6 @@
     selectedEntities = selectedEntities.includes(entityId)
       ? selectedEntities.filter((item) => item !== entityId)
       : [...selectedEntities, entityId]
-  }
-
-  function selectRegion(sketch: string, index: number): void {
-    editSelection({ sketch, index }, 'toggle')
   }
 
   // ---------------------------------------------------------------- コマンド層との繋ぎ
@@ -873,14 +868,6 @@
     for (const body of partBodies) if (body.visible) setVisible(body.body_id, false)
   }
 
-  function showOnlyParts(bodyIds: string[]): void {
-    const keep = new Set(bodyIds)
-    for (const body of partBodies) {
-      const desired = keep.has(body.body_id)
-      if (body.visible !== desired) setVisible(body.body_id, desired)
-    }
-  }
-
   onMount(() => {
     viewport = createViewport(container)
     viewport.onPick(onPick)
@@ -1006,7 +993,6 @@
       onToggle={setVisible}
       onShowAll={showAllParts}
       onHideAll={hideAllParts}
-      onShowOnly={showOnlyParts}
     />
     <!-- canvas はこの div の中で three.js が作る。Svelte はここの中身を触らない -->
     <div class="viewport" bind:this={container}></div>
@@ -1042,12 +1028,10 @@
       <SketchPanel
         {sketches}
         activeSketchId={sketchId}
-        selection={selection?.items ?? []}
         onEnter={enterSketch}
         onExit={exitSketch}
         onLookAt={() => sketchId && viewport?.lookAtSketch(sketchId)}
         onSetParameter={setParameter}
-        onSelectRegion={selectRegion}
         selectedEntities={selectedEntities}
         onToggleEntity={toggleEntity}
       />
