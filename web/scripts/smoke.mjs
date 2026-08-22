@@ -407,6 +407,97 @@ async function main() {
     )
     ok(`押し出す面 ${target.index} を選び直した`)
 
+    // -------------------------------------------------------------- 入力欄のCtrl+Z
+    // タスク20260823-0048の実機検査: フォーカスが入力欄(INPUT/TEXTAREA)にあるとき、
+    // Ctrl+Zはブラウザ標準のテキスト取り消しに任せ、文書のundoを発火しない。
+    // 入力欄の外では従来どおり文書がundoされる(App.svelte `onWindowKeydown`)。
+    async function opSnapshot() {
+      return page.evaluate(() => ({
+        log: window.__duocad.state.log.length,
+        redo: window.__duocad.state.redo_count,
+      }))
+    }
+
+    await page.click('#distance')
+    await page.type('#distance', '9', { delay: 20 })
+    const beforeFieldCtrlZ = await opSnapshot()
+    if (beforeFieldCtrlZ.log === 0) {
+      fail('入力欄Ctrl+Zの検査が意味を持たない(この時点で文書の操作履歴が0件)')
+    }
+    await page.keyboard.down('Control')
+    await page.keyboard.press('KeyZ')
+    await page.keyboard.up('Control')
+    // 発火していれば非同期(WS往復)で反映されるので、待たずに比べると「まだ届いていない
+    // だけ」を「発火していない」と誤判定しかねない。3秒は伊達ではない —— 実測で
+    // undo一往復に2秒近くかかることがあった(この節を書いた最初のバグ入り版で
+    // 400ms待ちにしたところ「変わっていない」と誤判定し、退行検知に失敗した)。
+    await new Promise((resolve) => setTimeout(resolve, 3000))
+    const afterFieldCtrlZ = await opSnapshot()
+    if (afterFieldCtrlZ.log !== beforeFieldCtrlZ.log || afterFieldCtrlZ.redo !== beforeFieldCtrlZ.redo) {
+      fail(
+        `入力欄にフォーカスがあるのにCtrl+Zで文書のundoが発火した: ` +
+          `log ${beforeFieldCtrlZ.log}->${afterFieldCtrlZ.log} / redo ${beforeFieldCtrlZ.redo}->${afterFieldCtrlZ.redo}`,
+      )
+    }
+    ok('入力欄(#distance)にフォーカスがある状態のCtrl+Zは文書の操作数を変えない')
+
+    // 入力欄の外でCtrl+Z: 従来どおり文書がundoされることを固定する(退行検知)。
+    await page.evaluate(() => document.activeElement && document.activeElement.blur())
+    const blurredTag = await page.evaluate(() => document.activeElement?.tagName ?? null)
+    if (blurredTag === 'INPUT' || blurredTag === 'TEXTAREA') {
+      fail(`blur()してもまだ入力欄にフォーカスが残っている: ${blurredTag}`)
+    }
+    await page.keyboard.down('Control')
+    await page.keyboard.press('KeyZ')
+    await page.keyboard.up('Control')
+    await page.waitForFunction(
+      (beforeLog) => window.__duocad.state.log.length === beforeLog - 1,
+      { timeout, polling: 50 },
+      beforeFieldCtrlZ.log,
+    )
+    ok('入力欄の外でのCtrl+Zは従来どおり文書をundoした')
+
+    // 元の状態へ戻す(以後の押し出し検査へ影響を残さない)。
+    await page.keyboard.down('Control')
+    await page.keyboard.press('KeyY')
+    await page.keyboard.up('Control')
+    await page.waitForFunction(
+      (beforeLog) => window.__duocad.state.log.length === beforeLog,
+      { timeout, polling: 50 },
+      beforeFieldCtrlZ.log,
+    )
+
+    // #distanceへ残った打ち間違いの文字を消す(以後のtypeDistanceが上書きするので実害は
+    // 無いが、念のため空へ戻す)。undo/redoで選択が外れていた場合は選び直す
+    // (`set_visible` は `resets_selection` を持たないので通常は外れないが、念のため)。
+    await page.click('#distance')
+    await page.keyboard.down('Control')
+    await page.keyboard.press('KeyA')
+    await page.keyboard.up('Control')
+    await page.keyboard.press('Backspace')
+    const stillSelected = await page.evaluate(
+      (bodyId, index) => {
+        const selection = window.__duocad.selection
+        return selection?.count === 1 && selection.items[0].body === bodyId && selection.items[0].index === index
+      },
+      extrudeTarget.body_id,
+      target.index,
+    )
+    if (!stillSelected) {
+      const reselect = await locateFace(extrudeTarget.body_id, target.index)
+      if (!reselect) fail(`面 ${target.index} の位置が取れない(Ctrl+Z検査後の選び直し)`)
+      await page.mouse.click(reselect.x, reselect.y)
+      await page.waitForFunction(
+        (bodyId, index) => {
+          const selection = window.__duocad.selection
+          return selection?.count === 1 && selection.items[0].body === bodyId && selection.items[0].index === index
+        },
+        { timeout, polling: 50 },
+        extrudeTarget.body_id,
+        target.index,
+      )
+    }
+
     async function typeDistance(value) {
       await page.click('#distance')
       await page.keyboard.down('Control')

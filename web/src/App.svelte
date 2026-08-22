@@ -838,6 +838,17 @@
   function onWindowKeydown(event: KeyboardEvent): void {
     if (!(event.ctrlKey || event.metaKey)) return
     const key = event.key.toLowerCase()
+    if (key !== 'z' && key !== 'y') return
+    // 編集中のフィールドではブラウザ標準のテキスト取り消しに任せ、文書のundo/redoは
+    // 発火しない(`CommandHost.onKeydown` と同じ書き方の判定)。**BUTTONとチェックボックスは
+    // 除外しない** —— どちらも「編集中のテキスト」を持たない操作対象で、フォーカスが
+    // 乗っているだけならCtrl+Zは文書のundoでよい(パーツ一覧の可視性チェックボックスに
+    // フォーカスが残った状態のCtrl+Zがundoを起こすのは既存の実機検査が固定している)。
+    const target = event.target as HTMLElement | null
+    const isTextEditingField =
+      target?.tagName === 'TEXTAREA' ||
+      (target?.tagName === 'INPUT' && !['checkbox', 'radio'].includes((target as HTMLInputElement).type))
+    if (isTextEditingField) return
     if (key === 'z' && !event.shiftKey) {
       event.preventDefault()
       session.undo()
