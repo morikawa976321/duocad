@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from duocad.document import Body, Document
+from duocad.document import Body, Document, unknown_id_message
 
 
 def test_document_units_cannot_be_reassigned():
@@ -106,3 +106,35 @@ def test_solid_body_is_editable():
     solid_body = Body(id="b1", name="sketch-result", kind="solid")
     doc.add_body(solid_body)
     assert doc.is_editable("b1") is True
+
+
+def test_unknown_id_message_lists_the_valid_ids():
+    """存在しないIDのエラー文は、**有効なIDをその場に並べる**(2026-08-22)。
+
+    行き止まりのエラー(「そのIDは違う」だけ)はAIを推測へ倒す。実測でローカルLLMが
+    存在しない図形IDを捏造したのを受けて、ID系のエラー文をここへ一本化した。
+    """
+    message = unknown_id_message("entity", "c1", ["entity-aaa", "entity-bbb"])
+    assert "'c1'" in message
+    assert "entity-aaa" in message and "entity-bbb" in message
+
+
+def test_unknown_id_message_names_the_scope_it_searched():
+    """どこを探して無かったのかを言う(スケッチ違いは図形IDが合わない普通の原因)。"""
+    message = unknown_id_message("entity", "c1", [], where="sketch 'sk_2'")
+    assert "sketch 'sk_2'" in message
+    assert "none exist yet" in message
+
+
+def test_unknown_id_message_sends_you_to_the_listing_tool_when_too_many():
+    """有効IDが多すぎるときは全部並べず件数だけ言い、列挙ツールへ送る。
+
+    エラー文がスケッチ1枚ぶんの図形IDで埋まると、それだけでAIの文脈を食う。
+    並べきれないなら、次の一手は「一覧を取り直す」である。
+    """
+    ids = [f"entity-{index:04d}" for index in range(40)]
+    message = unknown_id_message("entity", "c1", ids)
+    assert "entity-0000" in message
+    assert "entity-0039" not in message
+    assert "20 more" in message
+    assert "describe_document" in message

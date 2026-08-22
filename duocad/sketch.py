@@ -32,7 +32,7 @@ from uuid import uuid4
 
 from . import kernel
 from . import parameters
-from .document import BodyId, Document
+from .document import BodyId, Document, unknown_id_message
 from .oplog import Operation, register_verb
 
 SketchId = str
@@ -369,7 +369,9 @@ def get_sketch(doc: Document, sketch_id: SketchId) -> Sketch:
     for sketch in doc.sketches:
         if sketch.id == sketch_id:
             return sketch
-    raise KeyError(f"no such sketch: {sketch_id!r}")
+    raise KeyError(
+        unknown_id_message("sketch", sketch_id, [s.id for s in doc.sketches])
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -475,7 +477,14 @@ def entity_params(
                 key: parameters.resolve(doc, ref)
                 for key, ref in entity.params.items()
             }
-    raise KeyError(f"no such entity: {entity_id!r}")
+    raise KeyError(
+        unknown_id_message(
+            "entity",
+            entity_id,
+            [e.id for e in sketch.entities],
+            where=f"sketch {sketch_id!r}",
+        )
+    )
 
 
 def _resolve_plane(doc: Document, plane: Any) -> dict:

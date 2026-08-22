@@ -34,7 +34,7 @@ from typing import Any, Sequence
 from uuid import uuid4
 
 from .. import parameters
-from ..document import Document
+from ..document import Document, unknown_id_message
 from ..oplog import Operation, register_verb
 from ..sketch import Pattern, entity_kind_ops, get_sketch
 
@@ -97,7 +97,12 @@ def pattern_rectangular(
     for entity_id in entity_ids:
         if entity_id not in known:
             raise KeyError(
-                f"no such entity: {entity_id!r} in sketch {sketch_id!r}"
+                unknown_id_message(
+                    "entity",
+                    entity_id,
+                    [entity.id for entity in sketch.entities],
+                    where=f"sketch {sketch_id!r}",
+                )
             )
 
     already_used = {
@@ -213,7 +218,12 @@ def pattern_circular(
     for entity_id in entity_ids:
         if entity_id not in known:
             raise KeyError(
-                f"no such entity: {entity_id!r} in sketch {sketch_id!r}"
+                unknown_id_message(
+                    "entity",
+                    entity_id,
+                    [entity.id for entity in sketch.entities],
+                    where=f"sketch {sketch_id!r}",
+                )
             )
 
     already_used = {

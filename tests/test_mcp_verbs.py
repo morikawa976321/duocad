@@ -587,6 +587,55 @@ def test_a_missing_body_is_reported_as_not_found(server: McpServer):
     assert error["exception"] == "KeyError"
 
 
+def test_an_unknown_entity_id_shows_the_real_ones(empty_session: Session):
+    """存在しない図形IDは、弾くだけでなく**その場で有効なIDを見せる**(2026-08-22)。
+
+    「そのIDは違う」としか言わないエラーは行き止まりで、次の一手が書いていない。AIは
+    IDが分からないとき「尋ねる」ではなく**「推測する」に倒れる**(実測: ローカルLLMが
+    「ID形式を推測して試します」と述べて存在しない `c1` を渡した)ので、弾くだけでは
+    同じ推測を繰り返される。弾いた瞬間に正解の集合が見えていれば次の一手で復帰できる。
+    """
+    server = McpServer(DocumentTools(empty_session))
+    sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
+    real = call(
+        server, "add_circle", {"sketch_id": sketch_id, "center": [0, 0], "radius": 2}
+    )["entity_id"]
+
+    error = call_error(
+        server,
+        "pattern_rectangular",
+        {"sketch_id": sketch_id, "entities": ["c1"], "dx": 20, "dy": 0, "nx": 2, "ny": 1},
+    )
+
+    assert error["code"] == "not_found"
+    assert "c1" in error["message"]
+    assert real in error["message"], "有効な図形IDが添えられていない(行き止まりのエラー)"
+
+
+def test_an_unknown_sketch_id_shows_the_real_ones(empty_session: Session):
+    """スケッチIDでも同じ —— 有効IDを添える作法は引くIDの種類で変わらない。"""
+    server = McpServer(DocumentTools(empty_session))
+    real = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
+
+    error = call_error(
+        server, "add_circle", {"sketch_id": "sk_ghost", "center": [0, 0], "radius": 2}
+    )
+
+    assert error["code"] == "not_found"
+    assert real in error["message"], "有効なスケッチIDが添えられていない"
+
+
+def test_an_unknown_body_id_shows_the_real_ones(box_session: Session):
+    """ボディIDは以前からこの形だった —— 一本化しても崩れていないことを固定する。"""
+    server = McpServer(DocumentTools(box_session))
+    real = box_session.document.bodies[0].id
+
+    error = call_error(server, "describe_shape", {"body_id": "ghost"})
+
+    assert error["code"] == "not_found"
+    assert real in error["message"], "有効なボディIDが添えられていない"
+
+
 def test_a_bad_value_is_reported_as_invalid_argument(server: McpServer, box_session: Session):
     """`ValueError` は `invalid_argument`(半径0は形を変えないので verb が拒む)。"""
     box = box_session.document.bodies[0]

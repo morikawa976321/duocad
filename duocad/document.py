@@ -20,6 +20,39 @@ BodyId = str
 
 _VALID_KINDS = {"solid", "reference"}
 
+#: 存在しないIDのエラーに並べる有効IDの上限。超えたぶんは件数だけ言って列挙ツールへ送る
+#: (エラー文がスケッチ1枚ぶんの図形IDで埋まると、AIの文脈をそれだけで食う)。
+_MAX_LISTED_IDS = 20
+
+
+def unknown_id_message(
+    kind: str, missing: Any, known: Any, *, where: str = ""
+) -> str:
+    """存在しないIDのエラー文。**有効なIDか、その出し方を必ず添える**(2026-08-22)。
+
+    `no such entity: 'c1'` のように「違う」とだけ言うエラーは行き止まりで、次の一手が
+    書いていない。AIはIDが分からないとき「尋ねる」ではなく**「推測する」に倒れる**ので
+    (実測: ローカルLLMが「ID形式を推測して試します」と述べて存在しない図形IDを捏造した)、
+    弾くだけでは同じ推測を繰り返される。**弾いたら、その場で正解の集合を見せる。**
+
+    形は `mcp_server._find_body` が以前から使っていた `(editable bodies: [...])` に合わせて
+    あり、ここはそれを他のID系エラー(スケッチ・図形・パラメータ・ボディ)へ広げたもの。
+    並び順は与えられた順のままにする —— 図形IDは作った順に並んでおり、
+    ソートするとその手がかりが消える(IDの文字列自体には意味が無い)。
+    """
+    ids = list(known)
+    scope = f" in {where}" if where else ""
+    if not ids:
+        listed = "none exist yet"
+    elif len(ids) <= _MAX_LISTED_IDS:
+        listed = repr(ids)
+    else:
+        listed = (
+            f"{ids[:_MAX_LISTED_IDS]!r} and {len(ids) - _MAX_LISTED_IDS} more"
+            " (describe_document lists them all)"
+        )
+    return f"no such {kind}: {missing!r}{scope} (existing: {listed})"
+
 
 def new_body_id() -> BodyId:
     """新しいBodyId。**再生時は記録済みのIDをそのまま使う**のでここは通らない。
@@ -145,7 +178,13 @@ class Document:
         """
         body = self._find(body_id)
         if body is None:
-            raise KeyError(f"no such body: {body_id!r}")
+            raise KeyError(
+                unknown_id_message(
+                    "body",
+                    body_id,
+                    [b.id for b in self.bodies if b.kind != "reference"],
+                )
+            )
         return body
 
     def _find(self, body_id: BodyId) -> Optional[Body]:

@@ -39,7 +39,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, Optional
 
-from .document import Document
+from .document import Document, unknown_id_message
 from .oplog import Operation, register_verb, verb_handler
 
 #: パラメータ名の接頭辞(Fusion360の d1/d2 と同じ流儀。将来の改名機能はv1の範囲外)
@@ -142,7 +142,9 @@ def _require_usable_value(doc: Document, name: str, value: float) -> None:
 def set_parameter(doc: Document, name: str, value: float) -> Operation:
     """名前つきの値を書き換え、ログを再生して形状を追随させる。"""
     if name not in doc.parameters:
-        raise KeyError(f"no such parameter: {name!r}")
+        raise KeyError(
+            unknown_id_message("parameter", name, list(doc.parameters))
+        )
     previous = doc.parameters[name]
     value = float(value)
     _require_usable_value(doc, name, value)
