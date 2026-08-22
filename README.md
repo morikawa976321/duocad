@@ -346,7 +346,7 @@ AIに「読み直してフィレット」と頼む → 形が変わる。
 | **Enterが要るverbと要らないverbの表** | `tests/test_ui_command_wiring.py::test_only_three_commands_apply_without_enter`（宣言から導出） |
 | **スケッチを貼る先が「ちょうど1枚の確定選択の面」であること**（2枚は `SelectionAmbiguous`・提案のままは `SelectionNotCommitted`・平面でない面は拒否） | `tests/test_sketch_ui.py` の `sketch_create` 4本（WSの受け口）＋ `test_mcp_selection.py`（MCP側） |
 | **基準平面のグリッドを本物のクリックで指せる**（起動中だけ・部品に隠れている所は取れない） | `smoke.mjs` / `smoke-features.mjs` / `smoke-files.mjs` / `smoke-mcp.mjs` / `acceptance.mjs`（`projectBasePlane` で射影してから押す） |
-| **通常モードで領域を指せる**（要求中だけ・全スケッチ・面より優先・修飾キーは面と同じ・一巡して形が変わる） | `smoke-regions.mjs`（検証1〜5） |
+| **通常モードで領域を指せる**（要求中だけ・全スケッチ・面より優先・修飾キーは面と同じ・一巡して形が変わる・**消えた領域は押し出せない**） | `smoke-regions.mjs`（検証1〜6） |
 | **即適用が起動時に発火しない / 起動後のクリックで発火する / Escの後は発火しない** | `smoke-files.mjs`（`make_editable_copy` の(a)(b)(c)）・`smoke.mjs`（`add_line` はEnterを押さない） |
 | **AIが選択を書き換えても即適用が発火しない**（人のクリックだけが引き金） | `smoke-mcp.mjs`（検証3b）＋ `tests/test_ui_command_wiring.py::test_the_immediate_apply_fires_only_on_the_users_own_click`（配線の静的検査） |
 
@@ -393,7 +393,7 @@ node scripts/smoke-mcp.mjs
 # ⑤ エラーの見せ方(トーストの積層・数え上げ・クリック素通し・close・自動消滅)
 node scripts/smoke-toast.mjs
 
-# ⑥ 通常モードで領域を指せる(要求中だけ・全スケッチ・面より優先・修飾キー・一巡して形が変わる)
+# ⑥ 通常モードで領域を指せる(要求中だけ・全スケッチ・面より優先・修飾キー・一巡して形が変わる・消えた領域は押し出せない)
 node scripts/smoke-regions.mjs
 ```
 

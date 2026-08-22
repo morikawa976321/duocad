@@ -7,7 +7,7 @@
  *
  *   web> node scripts/smoke-regions.mjs
  *
- * 見るのは5つで、どれも「辺は要求しているコマンドを起動している間だけ指せる」と同型:
+ * 見るのは6つで、5つめまではどれも「辺は要求しているコマンドを起動している間だけ指せる」と同型:
  *
  *   1. **要求していない間は指せない** — 領域に当たる画素が1つも無い
  *   2. **要求している間は指せる** — 「領域を押し出す」を起動すると、**全スケッチ**の領域に
@@ -16,6 +16,24 @@
  *   4. **一巡して形が変わる** — 領域クリック → 距離 → 結合 → Enter で板が生まれる(完了条件2)
  *   5. **領域が面より先に取られる / 外すと面に戻る** — 板に隠れた領域の画素が、
  *      起動中は領域になり、別のコマンドへ移ると同じ視界のクリックが面になる
+ *   6. **消えた領域は押し出せない** — 通常モードで領域を選び引数を揃えた後、パラメータ編集で
+ *      その領域を消すと、Enterを押しても文書が変わらない(`runCommand` の `regionsStillExist`
+ *      と、コアの `resets_selection` の二枚重ね。下記「防具の重なり」)
+ *
+ * **防具の重なり(2026-08-23に変異検査で実測)**: 消えた領域を押し出させない防具は3枚ある。
+ *
+ *   (a) コアの `resets_selection`(`duocad/catalog.py`。`set_parameter` は `True`)——
+ *       パラメータを変えた時点で**選択が空になる**ので、確定の引数がそもそも揃わない
+ *   (b) `App.svelte` の `regionsStillExist` —— 選んだ領域が今のスケッチに無ければ送らず、
+ *       **何が起きたかを画面に出す**
+ *   (c) サーバ —— 消えた添字を送れば拒否する(文書は変わらないが、理由は素の添字エラー)
+ *
+ * **今のUIで効いているのは (a) であり、(b) の枝には到達しない**。(a) を外すと (b) が働き、
+ * 検証6の判定は緑のまま「選択が残り regionsStillExist が止めた」に変わる(そのぶん札が
+ * 1枚出るので、走行全体は最後のエラー検査で赤になる)。(a)(b) の両方を外すと (c) だけが残り、
+ * **文書は依然変わらない** —— つまり `regionsStillExist` が守っているのは文書ではなく
+ * **理由の見え方**である。検証6が固定するのは「どれが効いても押し出されない」という
+ * 外から見える性質のほうで、(b) 単独に歯を立てられる緑の検査は今の骨格では書けない。
  *
  * **順序に意味がある**: スケッチ2枚を**ソリッドが1つも無いうちに**作る。基準平面の画素は
  * 「部品に隠れていない所」を探して返すが、**部品の輪郭のすぐ外側**が返ることがあり、
@@ -49,6 +67,12 @@ const PLATE = { width: 40, height: 30, thickness: 10 }
  * (検査を不安定にするだけで、見たい性質はそこではない)。
  */
 const DISC = { u: -15, v: 15, radius: 5 }
+/**
+ * 同じスケッチに置く2つめの円。**1つめと重ねる**(中心の距離7 < 5+6)ので領域は3つに割れ、
+ * 半径を1.5へ縮めると重なりが解けて2つに戻る ——「選んでいた領域(添字3)が消える」を
+ * パラメータ編集だけで作れる最小の形。検証6が使う。
+ */
+const DISC_B = { u: -8, v: 15, radius: 6, shrunk: 1.5 }
 
 async function main() {
   const executablePath = findBrowser()
@@ -119,6 +143,13 @@ async function main() {
       page.evaluate(
         () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
       )
+
+    /**
+     * **起きないことを見る前の猶予**。適用が走るなら「キー入力 → WS往復 → 状態配信」で
+     * 済む時間を過ぎてから数える —— 待たずに数えると、走っていても
+     * 「まだ返ってきていないだけ」を緑と読んでしまう(`smoke-files` と同じ道具)。
+     */
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 1000))
 
     async function typeInto(selector, value) {
       await page.click(selector)
@@ -286,10 +317,38 @@ async function main() {
       '円の領域ができない',
     )
     await page.keyboard.press('Escape')
+
+    // 2つめの円(1つめと重ねる)。**パラメータの名前は打った値から引く** ——
+    // `d?` の採番はそれまでの図形の数で決まるので、決め打ちにすると図形を1つ足すたびに壊れる。
+    const beforeParams = await page.evaluate(() => Object.keys(window.__duocad.parameters))
+    await page.click('#sketch-circle')
+    await clickPlane(DISC_B.u, DISC_B.v)
+    await typeInto('#sketch-radius', DISC_B.radius)
+    await page.keyboard.press('Enter')
+    await waitFor(
+      () => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return Boolean(active && active.regions.length === 3)
+      },
+      '2つの円が重なって領域が3つにならない',
+    )
+    const radiusParam = await page.evaluate(
+      (known, radius) => {
+        const parameters = window.__duocad.parameters
+        const added = Object.keys(parameters).filter((name) => !known.includes(name))
+        const found = added.filter((name) => Math.abs(parameters[name] - radius) < 1e-9)
+        return found.length === 1 ? found[0] : null
+      },
+      beforeParams,
+      DISC_B.radius,
+    )
+    if (!radiusParam) fail('2つめの円の半径のパラメータ名を一意に引けない')
+    await page.keyboard.press('Escape')
     await page.click('#sketch-exit')
     await waitFor(() => window.__duocad.activeSketch === null, 'スケッチモードを抜けられない')
     if (plateSketch === discSketch) fail('スケッチが2枚に分かれていない')
-    ok('XY平面にスケッチを2枚(長方形・円)置き、通常モードへ戻った')
+    ok(`XY平面にスケッチを2枚(長方形・重なる円2つ=領域3つ)置き、通常モードへ戻った(半径は ${radiusParam})`)
 
     // ============================================== 検証1: 要求していない間は領域を指せない
     if ((await look()).wantsRegions !== false) {
@@ -420,6 +479,84 @@ async function main() {
       'ゲートを閉じた後、同じ場所のクリックで面が取れない',
     )
     ok('**外すと面に戻る**: 同じ場所が、要求中は領域・外すと面になった(=そこで競合していた)')
+
+    // ============================================== 検証6: 消えた領域は押し出せない
+    // タスク文の「既存の防具(`regionsStillExist`)が通常モードでも効くこと」の対。
+    // **添字3の領域を選んで引数まで揃え**、そのうえで2つめの円を縮めて重なりを解く
+    // (領域は3つ -> 2つになり、選んでいた添字3が消える)。ここでEnterを押しても
+    // 文書が1つも変わらないことを見る。
+    await page.click('#extrude-regions')
+    await waitFor(() => window.__duocad.wantsRegions === true, '「領域を押し出す」で領域を要求しない')
+    await clickRegion(discSketch, 3)
+    await waitFor(
+      (sketch) => {
+        const items = window.__duocad.selection?.items ?? []
+        return items.length === 1 && items[0].sketch === sketch && items[0].index === 3
+      },
+      'これから消える領域(添字3)を選べない',
+      discSketch,
+    )
+    await typeInto('#regions-distance', PLATE.thickness)
+    await page.click('#extrude-mode-join')
+    // **押せば通る状態だったこと**を先に固定する。これが無いと、この後の
+    // 「押しても通らない」は最初から引数が足りなかっただけかもしれない。
+    await waitFor(
+      () => (document.querySelector('#command-prompt')?.textContent ?? '').includes('Enterで確定'),
+      '引数が揃わない(この後の「押しても通らない」が意味を持たない)',
+    )
+
+    await typeInto(`#parameter-${radiusParam}`, DISC_B.shrunk)
+    await page.keyboard.press('Enter')
+    await waitFor(
+      (sketch) => {
+        const target = window.__duocad.sketches.find((item) => item.sketch_id === sketch)
+        return Boolean(
+          target &&
+            target.regions.length === 2 &&
+            !target.regions.some((region) => region.index === 3),
+        )
+      },
+      '2つめの円を縮めても領域が2つに戻らない(添字3が消えない)',
+      discSketch,
+    )
+    // **どちらの防具が効いたか**も見える形で残す。今のコアは `set_parameter` が
+    // `resets_selection=True` なので選択が空になり、`regionsStillExist` の枝までは行かない。
+    const guard = await page.evaluate(
+      () => (window.__duocad.selection?.items ?? []).length === 0,
+    )
+
+    const before = await look()
+    const beforeVolume = before.bodies.reduce((sum, body) => sum + body.volume, 0)
+    const beforeOps = await page.evaluate(() => window.__duocad.state.log.length)
+    // **入力欄からフォーカスを外してから押す** —— 欄の中のEnterはコマンドではなく
+    // その欄が受ける(`CommandHost.onKeydown` は INPUT を除く)ので、外さないと
+    // 「押したのに何も起きなかった」を検査したことにならない。
+    await page.click('header strong')
+    await page.keyboard.press('Enter')
+    await settle()
+
+    const after = await look()
+    const afterVolume = after.bodies.reduce((sum, body) => sum + body.volume, 0)
+    const afterOps = await page.evaluate(() => window.__duocad.state.log.length)
+    if (afterOps !== beforeOps || Math.abs(afterVolume - beforeVolume) > 1e-6) {
+      fail(
+        `消えた領域なのに押し出しが通った: 操作 ${beforeOps} -> ${afterOps} / ` +
+          `体積 ${beforeVolume} -> ${afterVolume}`,
+      )
+    }
+    const prompt = await page.evaluate(
+      () => document.querySelector('#command-prompt')?.textContent ?? '',
+    )
+    // **確定できる状態には戻っていないこと**だけを見る(文言そのものは見ない) ——
+    // どちらの防具が止めたかで残る文言が変わる(選択が空なら「押し出す領域を1つ選ぶ」、
+    // 選択が残って `regionsStillExist` が止めたなら確定の途中まで進んだ跡が残る)。
+    if (prompt.includes('Enterで確定')) {
+      fail(`消えた領域なのに「Enterで確定」のままになっている: ${JSON.stringify(prompt)}`)
+    }
+    ok(
+      `**消えた領域は押し出せない**: 引数が揃った状態から領域を消してEnterしても文書は不変` +
+        `(${guard ? 'コアが選択を空にした' : '選択が残り regionsStillExist が止めた'})`,
+    )
 
     // ============================================== 走行中にエラーが出ていないこと
     // **札(DOM)ではなく控えを見る** —— トーストは8秒で消えるので、最後に画面を見ると
