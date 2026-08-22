@@ -148,19 +148,45 @@ def test_the_system_prompt_is_the_same_text_the_mcp_server_hands_out():
     assert str(len(catalog.tool_names())) in shared
 
 
-def _autonomy_rule_segments(text: str) -> tuple[str, str]:
-    """`agent_instructions()` の「(1) …」と「(2) …」を切り出す(下の検査の道具)。
+def _autonomy_rule_zones(text: str) -> tuple[str, str, str, str]:
+    """プロンプトを「前置き / 第1段 / 第2段 / 後書き」の4区画に**漏れなく**割る。
 
-    **重要句が在るかを1つずつ見るだけでは足りない**(2026-08-22のQA指摘)。句を全部
-    残したまま「ただし直接適用してはならない」と1文足せば通ってしまい、**規則の反転**
-    (第1段に止まれと書く / 第2段の分岐を入れ替える)が素通りする。段ごとに切ってから
-    **条件と行動の対応**を見るために分ける。
+    前の版は第1段と第2段だけを切り出しており、**終端句より後ろを検査対象にしていなかった**。
+    そのため末尾に「ただし、第1段の操作も必ず提案で止める。」と1文足しても緑のままだった
+    (2026-08-22のQAが実測。前々版の「句が在るかだけ見る」と**同じ欠陥クラス**である)。
+    連結が元の文に戻ることを確かめて、**検査から外れる区画が残らない**ようにする。
+
+    切り出せないときは**緑にせず落とす**(空振り緑は、検査が効いていないことを
+    「異常なし」と報告するので、穴が開いていることに気づけない)。
     """
-    first = text.index("(1) ")
-    second = text.index("(2) ")
-    tail = text.index("形を変える verb が確定すると")
-    assert first < second < tail, f"2段の規則が見つからない: {text}"
-    return text[first:second], text[second:tail]
+    marks = ("(1) ", "(2) ", "形を変える verb が確定すると")
+    for mark in marks:
+        assert mark in text, (
+            f"段の目印『{mark}』がプロンプトに無い。"
+            "切り出せないなら検査は成立しないので、緑にせずここで落とす"
+        )
+    first, second, tail = (text.index(mark) for mark in marks)
+    assert 0 < first < second < tail, f"2段の規則の並びが崩れている: {text}"
+    zones = (text[:first], text[first:second], text[second:tail], text[tail:])
+    assert "".join(zones) == text, "区画の割り方が壊れている(全文を覆えていない)"
+    return zones
+
+
+#: **止まれ**と読める指示。第2段の中にしか置いてはならない(下の検査の要)。
+STOP_DIRECTIVES = (
+    "止め",
+    "止ま",
+    "尋ね",
+    "承認を待",
+    "確認を待つ",
+    "人に確認",
+    "人へ確認",
+    "許可を得",
+    "指示を仰",
+)
+
+#: 言い回しを問わず**第1段の許可を全称で打ち消す**語。プロンプト全体で禁じる。
+BLANKET_OVERRIDES = ("必ず", "第1段", "してはならない", "承認を得て", "許可を得")
 
 
 def test_the_system_prompt_carries_the_two_step_autonomy_rule():
@@ -175,25 +201,30 @@ def test_the_system_prompt_carries_the_two_step_autonomy_rule():
     (対象を何個でも取る / how の入力がある)。表は `tests/test_ui_command_wiring.py`。
     **個々のverb名はこの文に書かない**(verbを足した日に古くなる)ので、ここでも見ない。
 
-    自然言語の規則を検査で完全に検証することはできない。ここが落とすのは
-    **句の削除・条件の否定/肯定の取り違え・分岐の入れ替え・承認必須の再導入**の4つで、
-    「規則が反転したら落ちる」ことを要件にしてある。
+    ## 何を落とし、何を落とせないか
+
+    落とすのは4つ: **句の削除 / 条件の否定・肯定の取り違え / 分岐の入れ替え /
+    第1段の許可を打ち消す停止指示の追記**。最後の1つが要点で、
+    **矛盾の検出は区間の中ではなくプロンプト全文に対して行う**
+    (止まれと読める語は第2段の中にしか置けない、という不変条件にしてある)。
+
+    **落とせないもの**: 散文の意味は文字列検査では固定できないので、
+    ここに挙げていない言い回しでの矛盾は常に書き足せる
+    (例:「ユーザーへ問い合わせてから進むこと」)。そこは検査の領域ではなく、
+    **この文を書き換える人が `agent_instructions()` のdocstringを読むことで守る**。
     """
     shared = catalog.agent_instructions()
 
     # 前提: 確定はAI自身が踏む(旧規則ならここが「人の承認を待つ」に戻る)
     assert "人の承認は要らない" in shared, "旧規則(承認必須)へ戻っている"
 
-    first, second = _autonomy_rule_segments(shared)
+    head, first, second, tail = _autonomy_rule_zones(shared)
 
     # --- 第1段: 2条件が**どちらも無い**とき、確認を待たず適用してよい ---
     assert "対象を何個でも取る引数が無く" in first, "条件(1)が否定形で書かれていない"
     assert "how(寸法・選択肢・パス)の入力も無い" in first, "条件(2)が否定形で書かれていない"
     assert "確認を待たず" in first, "第1段の行動が『確認を待たない』でない"
     assert "実行してよい" in first, "第1段が実行の許可になっていない"
-    # 第1段に「止まれ」が紛れ込むと、第1段を設けた意味がそのまま消える
-    for forbidden in ("止め", "尋ね", "確認を待つ", "承認"):
-        assert forbidden not in first, f"第1段に『{forbidden}』が入り、即実行の許可が濁っている"
 
     # --- 第2段: 2条件の**いずれかがある**とき、AIが依頼から判断する ---
     assert "対象を何個でも取る、または how の入力がある" in second, "条件が肯定形で書かれていない"
@@ -208,9 +239,21 @@ def test_the_system_prompt_carries_the_two_step_autonomy_rule():
     assert "止めたら verb は呼ばない" in second, "『止める』の中身が書かれていない"
     assert "止める側に倒す" in second, "迷ったときに倒す向きが書かれていない"
 
-    # 句を消さずに規則だけ旧に戻す手(1文の追記)を塞ぐ
-    for forbidden in ("してはならない", "許可を得て", "承認を得て", "必ず人に確認"):
-        assert forbidden not in shared, f"承認必須が『{forbidden}』の形で戻っている"
+    # --- 全文: 第1段の許可を後段で打ち消していないこと ---
+    # **区間の外を見ていなかったのが前の版の穴**(末尾への1文追記が素通りした)。
+    # 止まれと読める語は第2段の中にしか置けない、という形にして全文を覆う。
+    for label, zone in (("前置き", head), ("第1段", first), ("後書き", tail)):
+        for word in STOP_DIRECTIVES:
+            assert word not in zone, (
+                f"{label}に停止指示『{word}』がある —— "
+                "止まれと読める語を置いてよいのは第2段の中だけである"
+                "(第1段の『確認を待たず適用してよい』を後段で打ち消す変更を落とすため)"
+            )
+    for word in BLANKET_OVERRIDES:
+        assert word not in shared, (
+            f"第1段の許可を全称で打ち消す言い回し『{word}』がプロンプトにある"
+        )
+    assert shared.count("(1) ") == 1, "段の見出し『(1) 』が増えている(後段で規則を上書きした疑い)"
 
 
 # --------------------------------------------------------------------------------------
