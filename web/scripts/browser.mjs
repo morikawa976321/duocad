@@ -2,7 +2,12 @@
  * 検査に使うブラウザの選択と起動 — 5本が同じ候補リストと同じ起動引数を持っていた(2026-08-15)。
  *
  * **インストール済みのブラウザを使う**(puppeteer-core なのでダウンロードしない)。
- * headless で WebGL を出すために SwiftShader(ソフトウェアGL)を明示的に許可している。
+ * **WebGLは実GPU(ANGLE/D3D11)で描く。** `--enable-unsafe-swiftshader` は「掴めなかったときに
+ * ソフトGLへ落ちてよい」という許可であって強制ではない —— 強制していた `--use-angle=swiftshader` は
+ * 2026-08-22に外した(Edge headless時代の名残)。**直るのはCPU消費であって検査の速さではない** ——
+ * `smoke.mjs` 1本の実測で、chromeのCPUは 1550秒(平均9.5コア) -> 215秒(1.4コア)、
+ * 所要時間は 163秒 -> 150秒でほぼ変わらない(検査の律速はOCCT側とWS往復で、描画のfpsではない)。
+ * どちらで描いたかは起動時の `GL :` 行に出る。
  */
 import { existsSync } from 'node:fs'
 import { launch } from 'puppeteer-core'
@@ -34,16 +39,39 @@ export function findBrowser() {
 
 /** headless で起動する。戻り値は puppeteer の Browser。 */
 export async function launchBrowser(executablePath = findBrowser()) {
-  return launch({
+  const browser = await launch({
     executablePath,
     headless: true,
     args: [
       '--headless=new',
       '--use-gl=angle',
-      '--use-angle=swiftshader',
       '--enable-unsafe-swiftshader',
       '--disable-gpu-sandbox',
       '--window-size=1280,860',
     ],
   })
+  console.log(`  GL     : ${await glRenderer(browser)}`)
+  return browser
+}
+
+/**
+ * 実際に描いたGLの実装名。**黙ってソフトGLへ落ちたことに気づくため**に毎回出す
+ * (落ちても検査は通ってしまい、遅いだけの状態が見えないため)。取得に失敗しても検査は続ける。
+ */
+async function glRenderer(browser) {
+  const page = await browser.newPage()
+  try {
+    return await page.evaluate(() => {
+      const gl = document.createElement('canvas').getContext('webgl2')
+      if (gl === null) return 'WebGLコンテキストを作れない'
+      const info = gl.getExtension('WEBGL_debug_renderer_info')
+      return info === null
+        ? gl.getParameter(gl.RENDERER)
+        : gl.getParameter(info.UNMASKED_RENDERER_WEBGL)
+    })
+  } catch (error) {
+    return `取得できない(${String(error)})`
+  } finally {
+    await page.close()
+  }
 }

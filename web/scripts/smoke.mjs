@@ -14,8 +14,7 @@
  * 既に立っているものへ繋ぐときだけ `--url http://127.0.0.1:8766/` を渡す。
  *
  * ブラウザは**インストール済みのEdge/Chromeを使う**(puppeteer-core なのでブラウザを
- * ダウンロードしない)。`DUOCAD_BROWSER` で明示もできる。headless で WebGL を出すために
- * SwiftShader(ソフトウェアGL)を明示的に許可している。
+ * ダウンロードしない)。`DUOCAD_BROWSER` で明示もできる。WebGLは実GPUで描く(詳細は browser.mjs)。
  */
 import { existsSync } from 'node:fs'
 import { findBrowser, launchBrowser } from './browser.mjs'
