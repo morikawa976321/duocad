@@ -1,6 +1,5 @@
 /**
- * MCP(stdio・JSON-RPC 2.0)のクライアント — `smoke-mcp.mjs` と `acceptance.mjs` が
- * 同じものを1つずつ持っていたので統合した(2026-08-15)。
+ * MCP(stdio・JSON-RPC 2.0)のクライアント(`smoke-mcp.mjs` / `acceptance.mjs` が共有する)。
  *
  * **stdoutに出てよいのはJSON-RPCの行だけ**という契約の検査点でもある。OCCTがC++から
  * 実fdへ吐く統計が混ざると接続が壊れるので、**JSONにならない行は捨てない**。

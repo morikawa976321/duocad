@@ -1,10 +1,10 @@
 /**
- * 実ブラウザでの起動確認(M3.5・2026-08-15改訂) — 「動くはず」で納品しないための機械検査。
+ * 実ブラウザでの起動確認 — 「動くはず」で納品しないための機械検査。
  *
- * サーバは空の文書で立つ(`--step` / `--no-step` は廃止済み)。このスクリプトがアプリ内の
+ * サーバは空の文書で立つ。このスクリプトがアプリ内の
  * 「STEP読み込み」でPCケースを自分で読み、そのあと**本物のマウスクリックで面を選び・数値を打ち・
  * Enterで押し出し**、体積が変わったことを確かめる(M1由来)。
- * これに加えてM3.5で: **パーツ一覧が27件出る**・**手前のパーツを隠すと奥の面が選べる**
+ * あわせて **パーツ一覧が27件出る**・**手前のパーツを隠すと奥の面が選べる**
  * (`viewport.project` は他Bodyに隠れている面に対して null を返す設計を利用して検査する)・
  * **可視性の切り替えがundoで戻る**、を検査する。
  *
@@ -31,7 +31,7 @@ const stepPath = options.step ?? PC_CASE_STEP
 const expectedParts = Number.parseInt(options['expect-parts'] ?? String(PC_CASE_SOLIDS), 10)
 const distance = Number.parseFloat(options.distance ?? '1')
 // 既定を長めにしてある: 一括の可視性切り替え(26部品ぶんのWebSocket往復)は、
-// 機械負荷が高いと数十秒かかることを実測した(2026-08-11・claude/cursorが60プロセス超
+// 機械負荷が高いと数十秒かかることを実測した(claude/cursorが60プロセス超
 // 並行していた環境。1回の往復自体は軽いが、混雑時はスケジューリング待ちが積み上がる)。
 const timeout = Number.parseInt(options.timeout ?? '120000', 10)
 
@@ -113,7 +113,7 @@ async function main() {
       // **Escで既定のコマンド(押し出す)へ戻す**。ツールバーからコマンドを起動すると
       // 確定後もそのコマンドが構えたままで(`CommandHost.commit` は `commandId` を戻さない)、
       // 面を選んでも距離の入力欄 `#distance` が出ない —— 以後の押し出しの段が
-      // 「セレクタが無い」で落ちる(2026-08-15に実際に踏んだ)。
+      // 「セレクタが無い」で落ちる(実際に踏んだ)。
       await page.keyboard.press('Escape')
       await page.waitForFunction(() => document.querySelector('#file-path') === null, {
         timeout,
@@ -179,7 +179,7 @@ async function main() {
     }, occlusionTarget.bodyId)
 
     // 対象パーツだけ残して他を全部隠す(全非表示 → 対象だけチェックボックスで表示オン。
-    // 「選択したものだけ表示」ボタンとpick列は削除済み — 2026-08-23本人裁定)。
+    // パーツ一覧が持つのは表示/非表示のチェックだけ)。
     await page.click('#parts-hide-all')
     await page.waitForFunction(
       () => window.__duocad.parts.every((b) => !b.visible),
@@ -408,7 +408,7 @@ async function main() {
     ok(`押し出す面 ${target.index} を選び直した`)
 
     // -------------------------------------------------------------- 入力欄のCtrl+Z
-    // タスク20260823-0048の実機検査: フォーカスが入力欄(INPUT/TEXTAREA)にあるとき、
+    // フォーカスが入力欄(INPUT/TEXTAREA)にあるとき、
     // Ctrl+Zはブラウザ標準のテキスト取り消しに任せ、文書のundoを発火しない。
     // 入力欄の外では従来どおり文書がundoされる(App.svelte `onWindowKeydown`)。
     async function opSnapshot() {

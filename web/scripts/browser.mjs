@@ -1,22 +1,20 @@
 /**
- * 検査に使うブラウザの選択と起動 — 5本が同じ候補リストと同じ起動引数を持っていた(2026-08-15)。
+ * 検査に使うブラウザの選択と起動。
  *
  * **インストール済みのブラウザを使う**(puppeteer-core なのでダウンロードしない)。
  * **WebGLは実GPU(ANGLE/D3D11)で描く。** `--enable-unsafe-swiftshader` は「掴めなかったときに
- * ソフトGLへ落ちてよい」という許可であって強制ではない —— 強制していた `--use-angle=swiftshader` は
- * 2026-08-22に外した(Edge headless時代の名残)。**直るのはCPU消費であって検査の速さではない** ——
- * `smoke.mjs` 1本の実測で、chromeのCPUは 1550秒(平均9.5コア) -> 215秒(1.4コア)、
- * 所要時間は 163秒 -> 150秒でほぼ変わらない(検査の律速はOCCT側とWS往復で、描画のfpsではない)。
- * どちらで描いたかは起動時の `GL :` 行に出る。
+ * ソフトGLへ落ちてよい」という許可であって強制ではない。**強制すると直るのはCPU消費であって
+ * 検査の速さではない** —— `smoke.mjs` 1本の実測で、chromeのCPUは 1550秒(平均9.5コア) ->
+ * 215秒(1.4コア)、所要時間は 163秒 -> 150秒でほぼ変わらない(検査の律速はOCCT側とWS往復で、
+ * 描画のfpsではない)。どちらで描いたかは起動時の `GL :` 行に出る。
  */
 import { existsSync } from 'node:fs'
 import { launch } from 'puppeteer-core'
 
 /**
- * 探す順。**Chromeが先**(2026-08-15) —— この環境の Edge 151 は headless で起動できず、
+ * 探す順。**Chromeが先** —— この環境の Edge 151 は headless で起動できず、
  * `Failed to launch the browser process: Code: 0` を出して即座に終了する(専用プロファイルを
  * 与えても同じで、duocad側の問題ではない)。Edgeは候補として残す(Chromeが無い環境のため)。
- * `DUOCAD_BROWSER` を置けばそれが最優先。
  */
 export const CANDIDATE_BROWSERS = [
   process.env.DUOCAD_BROWSER,
