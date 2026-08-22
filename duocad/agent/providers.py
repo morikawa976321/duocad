@@ -1,33 +1,23 @@
 """LLMプロバイダのアダプタ —— **キーの詰め替えだけを担当する層**。
 
-アプリ内エージェント(`duocad/agent/loop.py`)は「モデルへ道具の一覧と会話を渡し、
-呼びたいツールの一覧を受け取る」ことしかしない。その1往復をプロバイダごとの
-リクエスト/レスポンスの形へ翻訳するのがこのファイルである。当面の対象は2つ:
-
 - `anthropic`      … Claude API(`POST /v1/messages`)
 - `openai_compat`  … llama-server などのOpenAI互換(`POST /v1/chat/completions`)
 
-## 中立の往復型(ここが層の境目)
+**中立の往復型がここが層の境目**: ループは `UserTurn` / `AssistantTurn` / `ToolResultTurn` の
+3つだけを積み、**`tool_use` ブロックか `tool_calls` かはアダプタの中の話**である。逆にアダプタは
+`DocumentTools` も `Session` も知らない —— 受け取るのは `descriptors()` が返したツール定義
+そのままである(定義を書き写す場所を作らない)。
 
-ループは `UserTurn` / `AssistantTurn` / `ToolResultTurn` の3つだけを積む。
-**`tool_use` ブロックか `tool_calls` かはアダプタの中の話**であり、ループは知らない。
-逆にアダプタは `DocumentTools` も `Session` も知らない —— 受け取るのは
-`descriptors()` が返したツール定義そのままである(定義を書き写す場所を作らない)。
+公式SDK(`anthropic` / `openai`)は入れず、`urllib.request` で素のHTTPを書く。v1は**非streaming**。
 
-## 依存を増やさない
-
-公式SDK(`anthropic` / `openai`)は入れず、`urllib.request` で素のHTTPを書く
-(pyproject は依存を4つに固定している。MCPの公式SDKを蹴ったのと同じ理由)。
-v1は**非streaming** —— streamingを入れる段でだけ依存追加を検討する。
-
-## APIキーの取り回し(セキュリティ要件)
+**APIキーの取り回し(セキュリティ要件)**:
 
 - 読む順は 環境変数 → gitignore済みのローカル設定ファイル(`SECRETS_FILENAME`)。
-- **値はどこにも出さない** —— `repr()` にも例外メッセージにもログにも。
-  外へ出す前に必ず `_redact()` を通す(HTTPライブラリはヘッダ値を例外文へ載せることがある)。
+- **値はどこにも出さない** —— `repr()` にも例外メッセージにもログにも。外へ出す前に必ず
+  `_redact()` を通す(HTTPライブラリはヘッダ値を例外文へ載せることがある)。
 - 画面に出してよいのは `api_key_configured()` の2値だけ(ブラウザへ値を送らない)。
 
-**OCP / build123d をimportしない**(`tests/test_boundaries.py` が検査する)。
+**OCP / build123d をimportしない**。
 """
 from __future__ import annotations
 
@@ -691,7 +681,7 @@ def build_provider(
             transport=transport,
         )
     if kind == "openai_compat":
-        # **ここでは `ANTHROPIC_API_KEY` を一切読まない**(QA指摘・2026-08-20で確認)。
+        # **ここでは `ANTHROPIC_API_KEY` を一切読まない**。
         # `api_key` を渡していないので `OpenAICompatProvider._api_key` は常に `None` ——
         # ローカルのllama-serverへ本物のキーを送る経路はそもそも存在しない
         # (`base_url` を任意の外部ホストへ向けても、飛ぶのはキーの無いリクエストだけ)。

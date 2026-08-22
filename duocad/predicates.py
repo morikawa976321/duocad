@@ -1,46 +1,32 @@
-"""述語による選択 — **AIが引数を作る側の経路**。
+"""述語による選択 — **AIが引数を作る側の経路**(人のクリックに当たるのは `selection.select_face` 等)。
 
-実装計画書§2のアーキテクチャは「AIは述語で引数を作る / 人はポインティングで引数を作る」で
-分かれている。人のクリックに当たるのが `duocad.selection.select_face` 等であり、
-AIの述語に当たるのがこのモジュールである。§5の例は
-`faces where normal·Z > 0.9` / `edges where parallel_to Z and length > 20`。
-
-## 表現形式は**構造化(JSON)**。DSL文字列ではない
+表現形式は**構造化(JSON)**。DSL文字列ではない:
 
     {"kind": "edge",
      "body": "part-3",                       # 省略可。省略時は**可視Body全部**
      "where": [{"op": "parallel_to", "axis": "Z"},
                {"op": "length_gt", "value": 20}]}
 
-DSL文字列(`"edges where parallel_to Z and length > 20"`)を採らないのは、**MCPのツールが
-スキーマを持つ**ためである。構造化引数ならスキーマ検証が効き、AIが書式を外したときに
-パーサの気分ではなく**その場で明確に落ちる**。文字列DSLは、パースに成功して意味が違う
-という最悪の失敗(黙って別の辺を丸める)を作りうる。
+構造化引数なら**MCPのスキーマ検証が効き**、AIが書式を外したときにその場で明確に落ちる。
+文字列DSLは、パースに成功して意味が違うという最悪の失敗(黙って別の辺を丸める)を作りうる。
 
-`where` は**AND**(全条件を満たすものだけ)。空リストはその種別の全部を意味する。
-ORが要るときは述語を2回評価して `modify_selection(add=...)` で足す — 述語言語に
-論理演算子を持ち込まない(パーサを作り始めた時点で上の利点が消える)。
+`where` は**AND**(全条件を満たすものだけ)。空リストはその種別の全部を意味する。ORが要るときは
+述語を2回評価して `modify_selection(add=...)` で足す —— 述語言語に論理演算子を持ち込まない。
 
-## 失敗と0件は別物(項番19・20)
+**失敗と0件は別物**:
 
-- **一致0件はエラーではない**。空のリストを返し、件数は呼び出し元が数えられる。
-  AIが述語を外したことに気づけるように、`Selection.to_dict()` は `count` を返す。
-- **不正な述語は ValueError**(未知の `op`・型違い・`kind` に無い `op`)。
-  `propose_selection` はこれを捕まえず、**選択を変更しないまま**落とす。
-  黙って空集合にすると、上の2つが区別できなくなる。
+- **一致0件はエラーではない**。空のリストを返し、件数は呼び出し元が数えられる
+  (`Selection.to_dict()` の `count`)。
+- **不正な述語は ValueError**(未知の `op`・型違い・`kind` に無い `op`)。`propose_selection` は
+  これを捕まえず、**選択を変更しないまま**落とす。黙って空集合にすると2つが区別できなくなる。
 
-## 不可視Bodyは走査しない(項番18)
+**不可視Bodyは走査しない**。`body` を明示して不可視Bodyを指した場合も ValueError
+(`selection._visible_body` と同じ契約)。
 
-「見えないものは選べない」への一貫性。`body` を明示して不可視Bodyを指した
-場合も ValueError(`selection._visible_body` と同じ契約)。
-
-## 幾何は `query.py` 越しに取る
-
-このモジュールは **build123d も OCP も import しない**(`tests/test_boundaries.py` が機械検査)。
-面の法線・面積は `query.describe_faces`、辺の長さ・向きは `query.describe_edges`、
-面と辺の関係は `query.edges_of_face` から取る。**添字は kernel の数え方に揃っている**
-(ここがずれると「選んだ辺と違う辺が丸まる」という例外も出ない事故になる。query.py の
-`describe_edges` の警告を参照)。
+幾何は `query.py` 越しに取る(**build123d も OCP も import しない**)。面の法線・面積は
+`query.describe_faces`、辺の長さ・向きは `query.describe_edges`、面と辺の関係は
+`query.edges_of_face`。**添字は kernel の数え方に揃っている** —— ここがずれると「選んだ辺と
+違う辺が丸まる」という例外も出ない事故になる。
 """
 from __future__ import annotations
 

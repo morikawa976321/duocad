@@ -1,20 +1,14 @@
-"""領域(実装計画書 §3.3「スケッチと領域」・§3.5 選択集合)。
+"""領域 —— **描くものではなく計算されるもの**。
 
-**領域は描くものではなく計算されるもの**。スケッチの図形群から閉領域を求めるのがこのモジュールで、
-幾何そのもの(`BRepAlgoAPI_Splitter`)は `duocad.kernel` が持つ(OCPを直接importできるのは
-kernel.py だけ。tests/test_boundaries.py が検査する)。
+スケッチの図形群から閉領域を求めるのがこのモジュールで、幾何そのもの
+(`BRepAlgoAPI_Splitter`)は `duocad.kernel` が持つ(OCPを直接importできるのは kernel.py だけ)。
 
-契約:
-    regions(doc, sketch_id) -> list[Region]
-        スケッチの閉領域。`index` は**1始まり**で連番(面の添字と同じ流儀。kernel._face_map)。
-        **列挙順は同じスケッチに対して安定**であること(2回評価して同じ順序。
-        選択集合が添字で領域を指す以上、順序が揺れると選択が別物を指す)。
-    region_ref(sketch_id, index) -> RegionRef
-        選択集合・操作ログへ入れる参照(§3.5)。
+`regions(doc, sketch_id)` の `index` は**1始まり**の連番で、**列挙順は同じスケッチに対して
+安定**であること(2回評価して同じ順序。選択集合が添字で領域を指す以上、順序が揺れると選択が
+別物を指す)。
 
-**注意(実装計画書§7・§3.3)**: パラメータを編集すると領域は分裂・合体・消失しうる。
-押し出していた領域が消える壊れ方をするので、黙って通さないこと(`parameters.set_parameter`
-が担う)。
+**注意**: パラメータを編集すると領域は分裂・合体・消失しうる。押し出していた領域が消える
+壊れ方をするので、黙って通さないこと(`parameters.set_parameter` が担う)。
 """
 from __future__ import annotations
 
@@ -29,10 +23,7 @@ from .sketch import SketchId, entity_kind_ops, get_sketch
 
 @dataclass(frozen=True)
 class Region:
-    """計算された閉領域。実装計画書§3.3の `Region : { index, area }` そのもの。
-
-    `area` は mm^2(Document.units が常に "mm" であることに対応)。
-    """
+    """計算された閉領域。`area` は mm^2。"""
 
     index: int
     area: float
@@ -40,15 +31,13 @@ class Region:
 
 @dataclass
 class RegionRef:
-    """領域への参照(実装計画書§3.5 `RegionRef : { sketch, index, provenance: null }`)。
+    """領域への参照(`{ sketch, index, provenance }`)。
 
-    `provenance` は **day1で用意する空スロット**(§6予防2)。値は None でよく、
-    **スロットの存在自体が契約**。由来スロットの適用先は3つ — 面/辺の添字・スケッチを
-    貼った面・**領域の同一性** — で、これがその3つ目。領域は図形の配置から計算されるので、
-    線を1本動かしただけで添字の指す領域が入れ替わりうる(§7「領域はパラメータ編集で変わる」)。
+    `provenance` は**空スロット**(値は None でよく、スロットの存在自体が契約)。領域は図形の
+    配置から計算されるので、線を1本動かしただけで添字の指す領域が入れ替わりうる。
 
-    操作ログの `args` には `to_dict()` の形(素のdict)で入れる — `Operation` は
-    `OpLog.to_json()` でJSONにできなければならない(§3.6)。
+    操作ログの `args` には `to_dict()` の形(素のdict)で入れる —— `Operation` は
+    `OpLog.to_json()` でJSONにできなければならない。
     """
 
     sketch: SketchId
@@ -167,9 +156,8 @@ def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
 def plane_face(doc: Document, sketch_id: SketchId) -> Any:
     """スケッチを貼った面(`TopoDS_Face`)。基準平面に貼ったスケッチなら None。
 
-    面に貼ったスケッチは**平面の枠を実際の面から取る**必要がある(基準3面と違って
-    位置も軸も文書の中身次第)。領域の計算とアプリ層への配信の両方が要るので、
-    `_regions_detailed` の中から切り出した。
+    面に貼ったスケッチは**平面の枠を実際の面から取る**必要がある(基準3面と違って位置も軸も
+    文書の中身次第)。
     """
     sketch = get_sketch(doc, sketch_id)
     if sketch.plane.get("kind") != "face":

@@ -1,27 +1,17 @@
-"""verb `extrude` — スケッチの**領域**を押し出す(実装計画書§1の3Dのverb)。
+"""verb `extrude` — スケッチの**領域**を押し出す。
 
-`extrude_face`(既存ソリッドの面を押す)とは別のverbである。こちらは
-**領域の集合**を対象に取り、`mode="join"` で足し、`mode="cut"` で引く。
-本人が日常的に使う「円を線で分けて片側だけ押し出す」がこのverbの存在理由。
+`extrude_face`(既存ソリッドの面を押す)とは別のverbである。こちらは**領域の集合**を対象に
+取り、`mode="join"` で足し、`mode="cut"` で引く。
 
-契約:
-    extrude(doc, regions, distance, mode="join", body_id=None) -> Operation
-        `regions` は `duocad.region.region_ref()` が返す `RegionRef` のリスト。
-        `distance` はスケッチ平面の法線方向(正の向き)への押し出し量。0 は ValueError。
-        `mode`:
-            "join" — 対象ボディへ足す。**対象が無ければ新しいソリッドを1つ作る**
-                     (最初の板はこれで生まれる)。作った場合も `args["body_id"]` に
-                     そのIDを記録する(再生で同じIDが再現できないと選択が壊れるため)。
-            "cut"  — 対象ボディから引く。**対象が無ければ ValueError**
-                     (引く相手が無いのに成功したことにしない)。
-        `body_id` の既定はアクティブボディ。編集できないボディ(kind="reference")は ValueError。
-        ログに `verb="extrude"`,
-        `args={"regions": [<RegionRefのdict>, ...], "distance":.., "mode":.., "body_id":..}`
-        を積んで `Operation` を返す。
+- `"join"` … 対象ボディへ足す。**対象が無ければ新しいソリッドを1つ作る**(最初の板はこれで
+  生まれる)。作った場合も `args["body_id"]` にそのIDを記録する(再生で同じIDが再現できないと
+  選択が壊れるため)。
+- `"cut"` … 対象ボディから引く。**対象が無ければ ValueError**(引く相手が無いのに成功した
+  ことにしない)。
 
-**失敗を黙って通さない**(§6予防6・§7): 領域が空・添字が範囲外・`mode` が未知・距離0・
-ブーリアン失敗のいずれでも例外を送出し、**documentにもログにも変更を残さない**。
-とくに「切り取ったのに穴が1つも開いていない」を成功として通さないこと。
+**失敗を黙って通さない**: 領域が空・添字が範囲外・`mode` が未知・距離0・ブーリアン失敗の
+いずれでも例外を送出し、**documentにもログにも変更を残さない**。とくに「切り取ったのに穴が
+1つも開いていない」を成功として通さないこと。
 
 **OCP を直接importしない**。幾何は `duocad.kernel` 越しに呼ぶ。
 """
@@ -51,7 +41,6 @@ def extrude(
     mode: str = "join",
     body_id: Optional[BodyId] = None,
 ) -> Operation:
-    """領域の集合を押し出し、ログに積んで Operation を返す。"""
     distance = float(distance)
     if distance == 0.0:
         raise ValueError("distance must not be 0 (押し出し量0は形状を変えない)")
@@ -183,7 +172,7 @@ def _resolve_faces_and_normal(
 
 
 # --------------------------------------------------------------------------------------
-# verbの登録(oplog は verb名の分岐を持たない)
+# verbの登録
 # --------------------------------------------------------------------------------------
 def _do_extrude(document: Document, operation: Operation) -> None:
     """redo / replay 時の再適用。**ログには触らない**(触ると二重記録になる)。"""

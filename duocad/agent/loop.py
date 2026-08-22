@@ -1,25 +1,20 @@
 """エージェントループ —— **プロバイダ非依存**の tool-use 往復。
 
-`Session` の文書に対して、モデルに道具(`DocumentTools`)を渡して往復させる。
-UIは持たない(画面はタスクGが上に載せる)。
+`Session` の文書に対して、モデルに道具(`DocumentTools`)を渡して往復させる。UIは持たない。
 
-## 何を守っているか
-
-1. **道具の定義を第二の場所に書かない。** ツール一覧は `DocumentTools.descriptors()`、
-   実行は `.call()`、失敗の封筒は `.error_envelope()`。MCP経路(`duocad/mcp_server.py`)と
-   顔ぶれ・挙動・失敗の形が同一になる。
+1. **道具の定義を第二の場所に書かない。** ツール一覧は `DocumentTools.descriptors()`、実行は
+   `.call()`、失敗の封筒は `.error_envelope()`。MCP経路(`duocad/mcp_server.py`)と顔ぶれ・
+   挙動・失敗の形が同一になる。
 2. **暴走を必ず打ち切る。** `max_turns` / `max_tokens` / 1リクエストのタイムアウト /
-   外から立てる中断フラグの4つ。打ち切ったときは理由を構造化して返す
-   (実測: 矛盾した指示を渡すと思考が膨らみ、1リクエストが600秒返らなかった。
-   伸びるのは文脈長ではなく思考の側なので、**上限と短いタイムアウトが要る**)。
-3. **ツールの実行時エラーでループを落とさない。** 構造化封筒
-   (`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
-   `selection_kind_mismatch` / `invalid_predicate` / `internal`)をそのままモデルへ返して自己修復させる
-   (2026-08-20の実測でこれは機能した)。
+   外から立てる中断フラグの4つ。打ち切ったときは理由を構造化して返す(実測: 矛盾した指示を
+   渡すと思考が膨らみ、1リクエストが600秒返らなかった。伸びるのは文脈長ではなく思考の側
+   なので、**上限と短いタイムアウトが要る**)。
+3. **ツールの実行時エラーでループを落とさない。** 構造化封筒(`not_found` /
+   `invalid_argument` / `selection_not_committed` / `selection_empty` /
+   `selection_kind_mismatch` / `invalid_predicate` / `internal`)をそのままモデルへ返して
+   自己修復させる(実測でこれは機能した)。
 4. **UIの知識を持たない。** 進捗は `progress(name, arguments, result, ok)` のコールバックへ
-   流すだけ(購読側=Gが画面に出す)。
-
-## 使い方
+   流すだけ。
 
     tools = DocumentTools(session)
     loop = AgentLoop(tools, build_provider("openai_compat"))
@@ -28,7 +23,7 @@ UIは持たない(画面はタスクGが上に載せる)。
 
 会話は `AgentLoop` に積み上がる(`run()` を続けて呼べば続きになる)。`reset()` で捨てる。
 
-**OCP / build123d をimportしない**(`tests/test_boundaries.py` が検査する)。
+**OCP / build123d をimportしない**。
 """
 from __future__ import annotations
 
@@ -65,8 +60,7 @@ class ToolSurface(Protocol):
     """ループが道具に要求する面(`DocumentTools` がこれを満たす)。
 
     **公開APIの4つだけ**に依存する —— 内部(`_build_descriptors` 等)には触らない。
-    `current_seq` はH・2026-08-20追加(「同時編集の安全性」楽観ロック。`run()` の docstring)。
-    `!=` で比較するだけの不透明な値(`DocumentTools.current_seq()` は
+    `current_seq` は `!=` で比較するだけの不透明な値(`DocumentTools.current_seq()` は
     `(ログの本数, 選択の指紋)` のタプルを返す)。
     """
 
@@ -274,19 +268,16 @@ class AgentLoop:
             # 既に守られている —— ここは**それを経由しないverb**(`set_visible` /
             # `set_parameter` / body_id で直接効くもの等)や、**選択が空にならない
             # 入れ替え**(辺Aを外して辺Bを選び直して確定する。件数も種別も変わらない
-            # ので `selection_empty` は発火しない)を含めて一律に守る網であり、
-            # 「先回りして大きな仕組みを作らない」の要請どおり道具ごとの特別扱いはしない。
+            # ので `selection_empty` は発火しない)を含めて一律に守る網である。
             #
-            # **チェックは呼び出し1件ごと**(QA critical指摘・2026-08-20)。1つの応答に
-            # 複数のツール呼び出しが束ねて届くことがあり、1件目の実行そのものが版を
-            # 動かす(=自分自身の行動)うえ、1件目を実行した後・2件目を実行する前にも
-            # イベントループが人の操作を処理できる隙間がある(`_AiToolsOnLoop._run_on_loop`
-            # は呼び出しのたびにイベントループへ制御を返す)。応答が届いた直後の1回だけ
-            # 見て残り全部を実行してしまうと、この隙間を見逃す。
+            # **チェックは呼び出し1件ごと**。1つの応答に複数のツール呼び出しが束ねて
+            # 届くことがあり、1件目の実行そのものが版を動かす(=自分自身の行動)うえ、
+            # 1件目を実行した後・2件目を実行する前にもイベントループが人の操作を処理
+            # できる隙間がある(`_AiToolsOnLoop._run_on_loop` は呼び出しのたびに
+            # イベントループへ制御を返す)。
             #
             # **run() を終了させない** —— 打ち切り(cancelled/max_turns/max_tokens)とは違い、
-            # モデルは自己修復できる(2026-08-20実測)ので、次のターンで最新の状態を
-            # 読み直させて続ける。
+            # モデルは自己修復できる(実測)ので、次のターンで最新の状態を読み直させて続ける。
             expected_seq = seq_before_request
             results: list[ToolResult] = []
             cancelled_at: Optional[int] = None

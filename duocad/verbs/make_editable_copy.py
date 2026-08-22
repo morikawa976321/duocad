@@ -1,25 +1,11 @@
 """verb `make_editable_copy` — 読み込んだ参照ボディから編集用のソリッドを作る。
 
-**なぜ実装計画書の7 verbに無いものが要るのか**:
-
-`import_step` が作るボディは `kind="reference"`(読み取り専用)で、`Document.is_editable` は
-これを False にする。参照ボディを直接押し出すと「reference は編集操作の対象にならない」
-契約を破ることになり、かといって読み込んだものを編集できないままにもできない。そこで
-**編集用のソリッドを1つ作る操作**をここに足す。
-
-Fusion360で参照部品を挿入してから編集するのと同じ形であり、スケッチも押し出しも
-`kind="solid"` のボディを対象にするので必ず要る。**モデリングのverbではなく文書を
-組み立てるための操作**なので、実装計画書§1のverb表(スケッチ5＋3D2)の数には数えない。
-
-契約:
-    make_editable_copy(doc, source_body_id=None, name=None) -> BodyId
-        `source_body_id`(既定はアクティブボディ)の形状を持つ `kind="solid"` のボディを追加し、
-        `verb="make_editable_copy"`,
-        `args={"source_body_id":.., "body_id":.., "name":..}` をログに積んでBodyIdを返す。
-        追加したボディは `Document.add_body` の契約によりアクティブになる。
+`import_step` が作るボディは `kind="reference"`(読み取り専用)で `Document.is_editable` が
+False を返す。スケッチも押し出しも `kind="solid"` のボディを対象にするので、編集用のソリッドを
+1つ作る操作が要る。追加したボディは `Document.add_body` の契約によりアクティブになる。
 
 形状は**共有する(深いコピーをしない)**。verbは常に新しい形状を作って `body.shape` を差し替える
-実装(`extrude_face` を参照)なので、編集しても参照ボディ側は変わらない。
+ので、編集しても参照ボディ側は変わらない。
 """
 from __future__ import annotations
 
@@ -85,13 +71,11 @@ def _apply_to(doc: Document, source_body_id: BodyId, body_id: BodyId, name: str)
 # verbの登録
 # --------------------------------------------------------------------------------------
 def _do_make_editable_copy(document: Document, operation: Operation) -> None:
-    """redo / replay: 記録された複製元・BodyId・名前でソリッドを作り直す。"""
     args = operation.args
     _apply_to(document, args["source_body_id"], args["body_id"], args["name"])
 
 
 def _undo_make_editable_copy(document: Document, operation: Operation) -> None:
-    """undo: 追加したソリッドを取り除く。"""
     document.remove_body(operation.args["body_id"])
 
 

@@ -1,27 +1,15 @@
-"""スケッチ(実装計画書 §3.3「スケッチと領域」・§1のスケッチverb)。
-
-契約:
-    sketch_create(doc, plane) -> SketchId
-        `plane` は基準平面の名前("XY"/"XZ"/"YZ")か、`face_plane(body_id, face_index)` が返す
-        既存ソリッドの**平面状の**面への参照。平面でない面(円筒面など)は ValueError。
-    add_line(doc, sketch_id, p0, p1) -> EntityId
-    add_circle(doc, sketch_id, center, radius) -> EntityId
-    add_rectangle(doc, sketch_id, corner, width, height) -> EntityId
-    add_arc(doc, sketch_id, center, radius, start_deg, end_deg) -> EntityId
-    entity_params(doc, sketch_id, entity_id) -> dict[str, float]
+"""スケッチ。
 
 **座標はスケッチ平面上の2D**(u, v)。基準平面のときは (x, y) / (x, z) / (y, z) に対応する。
+`sketch_create` の `plane` は基準平面の名前("XY"/"XZ"/"YZ")か、`face_plane(body_id,
+face_index)` が返す既存ソリッドの**平面状の**面への参照(平面でない面は ValueError)。
 
-**verbの戻り値の流儀**(既存に合わせる): 新しいものを作るverbは新しいIDを返し
-(`make_editable_copy` と同じ)、既存の形状を変えるverbは `Operation` を返す
-(`extrude_face` と同じ)。スケッチのverbは前者、`extrude` は後者。
+**verbの戻り値の流儀**: 新しいものを作るverbは新しいIDを返し(`make_editable_copy` と同じ)、
+既存の形状を変えるverbは `Operation` を返す(`extrude_face` と同じ)。スケッチのverbは前者、
+`extrude` は後者。
 
-**なぜ verbs/ ではなくここに置くか**: スケッチの4 verbは `Sketch`/`Entity` のデータモデルと
-不可分で、別モジュールへ切り出すと相互参照になる。`verbs/` に置くのは3Dのverb
-(`extrude_face` / `extrude`)。タスクファイルが指定する成果物のパスもこの分け方である。
-
-**OCP / build123d を直接importしない**(tests/test_boundaries.py が再帰的に検査する)。
-領域検出の幾何は `duocad.region` 経由で `duocad.kernel` が持つ。
+**OCP / build123d を直接importしない**。領域検出の幾何は `duocad.region` 経由で
+`duocad.kernel` が持つ。
 """
 from __future__ import annotations
 
@@ -47,18 +35,14 @@ PATTERN_KINDS = ("rectangular", "circular")
 
 
 # --------------------------------------------------------------------------------------
-# 図形種別ごとの純幾何演算(表) — kind分岐のテーブル化(2026-08-20)
+# 図形種別ごとの純幾何演算(表) — kind分岐のテーブル化
 # --------------------------------------------------------------------------------------
 #
-# 以前は「検査(sketch.py)・平行移動(region.py)・回転(region.py)・中心(verbs/pattern.py)」の
-# 4つの処理がそれぞれ独自に kind で分岐しており、新しい図形種別を1つ足すには
-# 4ファイルにまたがる switch を1本ずつ増やす必要があった(§タスクファイル「現状実測」)。
-# ここでは向きを反転し、**図形種別ごとに1行**(`EntityKindOps`)へ全処理をまとめる。
+# **図形種別ごとに1行**(`EntityKindOps`)へ検査・平行移動・回転・中心をまとめる。
 #
 # OCPに依存する処理(辺の生成・2D bbox)はここに置けない(import境界。`kernel.py` だけが
-# OCPをimportしてよい。tests/test_boundaries.py)。そちらは `kernel.py` 内に姉妹の表を持つ
-# (`_KERNEL_ENTITY_KIND_TABLE`)。**表は2つに分かれるが、新しい種別を足すときに触るのは
-# 「ここへ1行」と「kernel.pyへ1行」の2箇所だけ**(+TS側1箇所)になる。
+# OCPをimportしてよい)。そちらは `kernel.py` 内に姉妹の表を持つ。**表は2つに分かれるが、
+# 新しい種別を足すときに触るのは「ここへ1行」と「kernel.pyへ1行」の2箇所だけ**(+TS側1箇所)。
 #
 # **表に無い種別は即時 ValueError**(`entity_kind_ops` が投げる)。silent defaultは無い。
 def _validate_line(params: Dict[str, float]) -> None:
@@ -242,8 +226,8 @@ ENTITY_KINDS = tuple(_ENTITY_KIND_TABLE.keys())
 def entity_kind_ops(kind: str) -> EntityKindOps:
     """種別ごとの純幾何演算(検査・平行移動・回転・中心)を引く。
 
-    表に無い種別は**その場で ValueError**(黙ってdefaultへ落とさない — 「反復だけ位置が
-    ずれる」型の静かなバグを塞ぐのがテーブル化の目的の一部)。
+    表に無い種別は**その場で ValueError**(黙ってdefaultへ落とすと「反復だけ位置がずれる」型の
+    静かなバグになる)。
     """
     try:
         return _ENTITY_KIND_TABLE[kind]
@@ -274,9 +258,8 @@ def base_plane(name: str) -> dict:
 def face_plane(body_id: BodyId, face_index: int) -> dict:
     """既存ソリッドの面への参照。`{"kind": "face", "body":.., "index":.., "provenance": None}`。
 
-    **これが「壊れやすい参照」の2つ目**(実装計画書§6「由来スロットの適用先は3つ」の
-    「スケッチを貼った面」)。面の添字は形状変更で静かにずれるので、
-    `provenance` を day1 で空けておく — 後から足すと全操作の書き直しになる。
+    面の添字は形状変更で静かにずれるので、`provenance` を day1 で空けておく
+    (後から足すと全操作の書き直しになる)。
     """
     return {
         "kind": "face",
@@ -293,10 +276,9 @@ def face_plane(body_id: BodyId, face_index: int) -> dict:
 class Entity:
     """スケッチ上の1図形。
 
-    `params` は**その図形が自分で持つ名前つきの数値**(実装計画書§3.4
-    「パラメトリック・プリミティブ」)。値は名前つきの値への参照(`parameters.register_value`
-    が返す名前)で持つ。**解決済みの数値を返すのは `entity_params()` の役目**であり、
-    内部表現が参照であることは呼び出し側から隠される。
+    `params` は**その図形が自分で持つ名前つきの数値**で、値は名前つきの値への参照
+    (`parameters.register_value` が返す名前)。**解決済みの数値を返すのは `entity_params()` の
+    役目**であり、内部表現が参照であることは呼び出し側から隠される。
 
     キーは図形ごとに固定する(スカラー1個 = 将来のパラメータ1個になるよう平らに持つ):
 
@@ -319,15 +301,13 @@ class Entity:
 
 @dataclass
 class Pattern:
-    """図形の矩形反復(実装計画書§1の `pattern_rectangular`)。
+    """図形の反復。
 
-    **1つの反復は1つのオブジェクト**であり、nx×ny 個の図形へ展開して持たない
-    (展開すると個数や間隔を後から変えられなくなり、反復の存在理由が消える。§2「verbの粒度」)。
-    展開は幾何を作るときだけ行う導出物。
+    **1つの反復は1つのオブジェクト**であり、nx×ny 個の図形へ展開して持たない(展開すると
+    個数や間隔を後から変えられなくなり、反復の存在理由が消える)。展開は幾何を作るときだけ。
 
-    `params` のキーは `dx` / `dy` / `nx` / `ny` で、値は `Entity.params` と同じく
-    **名前つきの値への参照**(§6予防5)。格子は (0,0) を含み、そこが `sources` の
-    元の位置になる。
+    `params` のキーは `dx` / `dy` / `nx` / `ny` で、値は `Entity.params` と同じく**名前つきの
+    値への参照**。格子は (0,0) を含み、そこが `sources` の元の位置になる。
     """
 
     id: PatternId
@@ -351,9 +331,8 @@ class Pattern:
 class Sketch:
     """1つのスケッチ。`plane` は PlaneRef、`entities` は追加順の図形。
 
-    **領域(`Region`)は持たない** — 領域は描くものではなく計算されるもの(§3.3)なので、
-    正は `duocad.region.regions(doc, sketch_id)` の戻り値であり、キャッシュを持つか
-    どうかは実装の自由にしてある(tests/README.md「M2の決定」)。
+    **領域(`Region`)は持たない** —— 領域は描くものではなく計算されるものなので、正は
+    `duocad.region.regions(doc, sketch_id)` の戻り値である。
 
     `patterns` は反復のリストを持つ(反復は図形ではなく、図形を参照する別のもの)。
     """
@@ -380,10 +359,8 @@ def get_sketch(doc: Document, sketch_id: SketchId) -> Sketch:
 def sketch_create(doc: Document, plane: Any) -> SketchId:
     """スケッチを作って SketchId を返す。
 
-    `plane` は "XY"/"XZ"/"YZ" か `face_plane(body_id, face_index)`。
-    面を指定する場合、その面が**平面でなければ ValueError**(円筒面などに貼らせない。
-    黙って通すと以後の領域検出が意味を失う。§6予防6)。失敗時は `doc.sketches` にも
-    ログにも変更を残さないこと。
+    面を指定する場合、その面が**平面でなければ ValueError**(円筒面などに貼らせない ——
+    黙って通すと以後の領域検出が意味を失う)。失敗時は `doc.sketches` にもログにも残さない。
     """
     plane_ref = _resolve_plane(doc, plane)
     sketch_id = f"sketch-{uuid4().hex[:12]}"
@@ -440,16 +417,10 @@ def add_arc(
 ) -> EntityId:
     """円弧を足して EntityId を返す。
 
-    **中心・半径・角度で持つ**(3点で受け取らない)。理由は実装計画書§3.4
-    「パラメトリック・プリミティブ」と§6予防5で、**半径・角度を後から編集できる形**に
+    **中心・半径・角度で持つ**(3点で受け取らない) —— 半径・角度を後から編集できる形に
     しておかないと、円弧だけが「数値を持たない図形」になり `set_parameter` の外側に落ちる。
-    `params` のキーは `cx` / `cy` / `radius` / `start_deg` / `end_deg` の5つ(平らに持つ ＝
-    スカラー1個が将来のパラメータ1個になる)。角度は**度**・反時計回り・スケッチ平面の
-    X軸から測る。
-
-    **円弧を入れる理由**: 領域検出があれば
-    「円を線で分けて片側だけ押し出す」で多くは代用できるが、アロマ拡散器のように
-    **部分円筒面(75〜97°の円弧を押し出したもの)**を持つ実物は代用では作れない。
+    `params` のキーは `cx` / `cy` / `radius` / `start_deg` / `end_deg` の5つ。角度は**度**・
+    反時計回り・スケッチ平面のX軸から測る。
     """
     params = {
         "cx": float(center[0]),
@@ -466,9 +437,7 @@ def entity_params(
 ) -> Dict[str, float]:
     """図形の数値パラメータを**解決済みの素の数値**で返す。
 
-    `Entity.params` の中身は名前つきの値への参照であり、そのままでは呼び出し側が使えない。
-    この関数を挟むことで、内部表現(参照)が変わっても呼び出し側(テスト含む)の戻り値の形は
-    変わらない。
+    `Entity.params` の中身は名前つきの値への参照なので、この関数を挟んで内部表現を隠す。
     """
     sketch = get_sketch(doc, sketch_id)
     for entity in sketch.entities:
@@ -520,18 +489,16 @@ def _add_entity(
 ) -> EntityId:
     """図形を1つ足してログに積む(3つの add_* で共有)。
 
-    **数値は先に検査する**(§6予防6)。非有限値・半径0以下・長さ0の線分・辺0の長方形は
-    その場で `ValueError` にし、文書にもログにも残さない。黙って受け取ると、以後
-    `regions()` が毎回失敗する(図形の削除verbが無いのでundo以外に復旧手段が無い)か、
-    NaN が混ざって**同じスケッチ上の正常な領域まで黙って消える**うえ、
-    `OpLog.to_json()` が裸の NaN を吐いてJSONとして壊れる。
+    **数値は先に検査する**。非有限値・半径0以下・長さ0の線分・辺0の長方形はその場で
+    `ValueError` にし、文書にもログにも残さない。黙って受け取ると、以後 `regions()` が毎回
+    失敗する(図形の削除verbが無いのでundo以外に復旧手段が無い)か、NaN が混ざって**同じ
+    スケッチ上の正常な領域まで黙って消える**うえ、`OpLog.to_json()` が裸の NaN を吐いて
+    JSONとして壊れる。
 
-    **モデルとログには別のdictを渡す**。同じ参照を共有すると、図形のパラメータを
-    書き換えた瞬間に**唯一の正であるログ**(§3.1)が黙って書き換わる。`Entity.params` の
-    中身は名前つきの値への参照であり、ログの `args["params"]` には打った数値をそのまま
-    入れるので、モデルとログでは持つ値の形自体が違う。
-
-    数値を検査したあと `register_value` で名前つきにし、`Entity.params` には名前を入れる。
+    **モデルとログには別のdictを渡す**。同じ参照を共有すると、図形のパラメータを書き換えた
+    瞬間に**唯一の正であるログ**が黙って書き換わる。`Entity.params` の中身は名前つきの値への
+    参照であり、ログの `args["params"]` には打った数値をそのまま入れるので、モデルとログでは
+    持つ値の形自体が違う。
     """
     require_valid_params(kind, params)
     sketch = get_sketch(doc, sketch_id)
@@ -566,7 +533,7 @@ def require_valid_params(kind: str, params: Dict[str, float]) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# verbの登録(oplog は verb名の分岐を持たない。登録は verb を定義したこちら側)
+# verbの登録
 # --------------------------------------------------------------------------------------
 def _do_sketch_create(document: Document, operation: Operation) -> None:
     """redo / replay: 記録された SketchId と平面でスケッチを作り直す。
