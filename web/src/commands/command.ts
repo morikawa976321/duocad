@@ -1,30 +1,19 @@
 /**
  * コマンド層 — **引数を集める共通の仕組み**。
  *
- * ## なぜ1つにまとめるのか
- *
- * v1のverbは19個ある。verbごとにUIを作り込むと、19回「選択を読む・数値を打たせる・
- * プレビューする・Escで中断する」を書き直すことになり、そのうち何本かは必ず
- * 「選択を先に見ない」「Escで文書が変わる」のどちらかを取りこぼす。
- * **verbはここに載せるだけ**にして、状態機械は `CommandHost.svelte` の1つだけにする。
- *
  * ```
  * 起動 → 引数収集 → プレビュー → 確定(Enter) / 中断(Esc)
  * ```
  *
- * **Enterが要るかどうかも `args` から導出する**(2026-08-22)。対象が1つに定まり、
- * 数値も選択肢も無いコマンド(線分・編集用に複製)は、引数を完成させるクリックで
- * そのまま適用される —— 規則は下の `needsEnter` に1つだけ置いてある。
+ * **verbはここに載せるだけ**にして、状態機械は `CommandHost.svelte` の1つだけにする。
+ * **Enterが要るかどうかも `args` から導出する** —— 規則は下の `needsEnter` に1つだけ置いてある。
  *
- * ## 引数収集は、まず共有選択集合を見る
+ * 引数収集は**まず共有選択集合を見る**。AIが `propose_selection` で辺の集合を提案 → 人が
+ * 承認して verb を起動すると、その選択がそのまま verb の対象になる。空のときだけ人に問う。
  *
- * **これがAI→人間の受け渡しが成立する仕組み**(実装計画書§8b)。AIが
- * `propose_selection` で辺の集合を提案 → 人が承認して verb を起動すると、
- * その選択がそのまま verb の対象になる。空のときだけ人に問う。
- *
- * **ただし選択の中身をサーバへ送ることはしない**(2026-08-20)。対象集合(面・辺・領域)は
- * コアが自分の確定選択から取るので、`build` が作るのは数値・選択肢・パスだけである。
- * ここで選択を読むのは「何を待っているか」を画面に出し、Enterを許すかを決めるためだけ。
+ * **ただし選択の中身をサーバへ送ることはしない**。対象集合(面・辺・領域)はコアが自分の確定
+ * 選択から取るので、`build` が作るのは数値・選択肢・パスだけである。ここで選択を読むのは
+ * 「何を待っているか」を画面に出し、Enterを許すかを決めるためだけ。
  *
  * ここ(`command.ts`)は**Svelteに依存しない純粋な定義と道具**だけを持つ。
  * 状態機械・DOM・通信は `CommandHost.svelte` の側にある。
@@ -163,10 +152,8 @@ export interface ChoiceArgSpec {
  * スケッチの図形を選ぶ引数(反復のverbが取る)。
  *
  * **選択引数と別物にしてある**。共有選択集合に入れられるのは面・辺・頂点・領域の4種で、
- * **スケッチの図形はそこに入らない**(コアの `SELECTABLE_KINDS`)。MCP側も反復だけは
- * 図形IDを引数で受けており(`mcp_server.pattern_rectangular` の
- * 「スケッチの図形は選択集合の項目ではないので引数で受ける」)、ここはその人間側の対。
- * 値はスケッチパネルで選んだ図形のIDで、`CommandHost` へは `entities` プロパティで渡る。
+ * **スケッチの図形はそこに入らない**(コアの `SELECTABLE_KINDS`)。値はスケッチパネルで
+ * 選んだ図形のIDで、`CommandHost` へは `entities` プロパティで渡る。
  */
 export interface EntitiesArgSpec {
   kind: 'entities'
@@ -178,10 +165,9 @@ export interface EntitiesArgSpec {
 /**
  * 打ち込む文字列の引数(今のところファイルのパスだけ)。
  *
- * **数値引数と分けてある**。数値は `Number.parseFloat` を通して弾く仕組みが要るが、
- * パスは打った文字そのものが値であり、正しさの判定はサーバ(実在するか・書けるか)に
- * しか無い —— ここで拡張子やドライブ文字を検査し始めると、**サーバと2箇所で
- * 別々のパス解釈を持つ**ことになる(相対パスの基準はサーバの作業ディレクトリ)。
+ * **数値引数と分けてある**。パスは打った文字そのものが値であり、正しさの判定はサーバ
+ * (実在するか・書けるか)にしか無い —— ここで拡張子やドライブ文字を検査し始めると、
+ * **サーバと2箇所で別々のパス解釈を持つ**ことになる。
  */
 export interface TextArgSpec {
   kind: 'text'
@@ -203,9 +189,6 @@ export interface TextArgSpec {
  *
  * `build` が送るのは基準平面のときの `{base_plane}` だけで、**面は送らない**
  * (`extrude_face` と同じ流儀。面はサーバがコアの確定選択から取る)。
- *
- * **`needsEnter` には現れない** —— 対象を1つだけ指す種別なので、`command.ts` の既定
- * (列挙していない種別は即適用の側)がそのまま正しい。
  */
 export interface PlaneArgSpec {
   kind: 'plane'
@@ -255,11 +238,7 @@ export type BuildResult =
  * - `file`    … ファイル操作(応答が状態配信で返るとは限らない。`changesDocument` 参照)
  * - `ui`      … サーバへ何も送らない道具(スケッチモードの「選ぶ」だけ)
  *
- * **`ui` 以外はコアの宣言(`duocad/catalog.py`)の `category` と同じ値**であり、
- * `tests/test_ui_command_wiring.py` が一致を機械で見る。以前はこの分岐が
- * `isSketchVerb` / `isFeatureVerb` / `isFileVerb` の3つの判定関数と
- * 「どれにも当たらなければ `extrude_face`」という順序依存の暗黙のフォールバックだった ——
- * verbを足して登録を忘れると、**そのverbが黙って `extrude_face` として送られていた**。
+ * **`ui` 以外はコアの宣言(`duocad/catalog.py`)の `category` と同じ値**である。
  */
 export type CommandCategory = 'sketch' | 'feature' | 'file' | 'ui'
 
@@ -326,16 +305,13 @@ export const EXTRUDE_FACE: CommandDef = {
 /**
  * ソリッドを触るモードの一覧のうち、**このファイルが定義するぶん**(押し出し1つ)。
  * `App.svelte` が `SOLID_FEATURE_COMMANDS`(features.ts)と `FILE_COMMANDS`(files.ts)を
- * 後ろに繋いで1つの並びにする。スケッチモードの一覧は `commands/sketch.ts`
- * (モードごとに一覧が違うだけで、状態機械は同じ1つ)。
+ * 後ろに繋いで1つの並びにする。スケッチモードの一覧は `commands/sketch.ts`。
  */
 export const COMMANDS: CommandDef[] = [EXTRUDE_FACE]
 
 /**
- * 起動していないときに構えているコマンド。
- *
- * **明示的な「起動」の1手を挟まない**のは、4手(面を選ぶ→数値を打つ→Enter)が
- * 本人の速度ベンチマークそのものであり、ここに1手足すと退行になるため。
+ * 起動していないときに構えているコマンド。**明示的な「起動」の1手を挟まない**
+ * (面を選ぶ→数値を打つ→Enter の4手に1手足すと退行になる)。
  * 別のコマンドを起動すると入れ替わり、Escでここへ戻る。
  */
 export const DEFAULT_COMMAND_ID = EXTRUDE_FACE.id
@@ -364,10 +340,9 @@ export function itemsForArg(spec: SelectionArgSpec, selection: SelectionState | 
 /**
  * `max` を超えて選ばれている引数があれば理由を返す(無ければ空文字)。
  *
- * **黙って先頭だけ使わない**し、**送りもしない**。押し出しは面1つのverbで、
- * コア側(`selection.require_confirmed(exactly_one=True)`)が2枚以上を拒否する ——
- * ここで先頭を選んで送ると、UIだけが「どれを押すか」を勝手に決めることになる。
- * `CommandHost` はこれが空でない間 Enter を受け付けない(減らしてから確定する)。
+ * **黙って先頭だけ使わない**し、**送りもしない**。ここで先頭を選んで送ると、UIだけが
+ * 「どれを押すか」を勝手に決めることになる(コア側の `require_confirmed(exactly_one=True)` は
+ * 2枚以上を拒否する)。`CommandHost` はこれが空でない間 Enter を受け付けない。
  */
 export function overflowNote(command: CommandDef, selection: SelectionState | null): string {
   for (const spec of command.args) {
@@ -439,11 +414,8 @@ function isHowInput(spec: ArgSpec): boolean {
 /**
  * **Enterを押して確定する必要があるコマンドか**(要らないものは「即適用」になる)。
  *
- * per-commandのフラグを置かず `args` から**導出する**。狙いは、後から足すverbが
- * 何も書かなくても同じ規則に従うことで、規則の在り処を1箇所に保つことである
- * (フラグにすると、書き忘れたverbだけが黙って別の挙動になる)。
- *
- * ## 判定基準(2026-08-22本人決定。engine `2026-08-22-duocad-ui-interaction-principles`)
+ * per-commandのフラグを置かず `args` から**導出する**。狙いは、後から足すverbが何も書かなくても
+ * 同じ規則に従うことである(フラグにすると、書き忘れたverbだけが黙って別の挙動になる)。
  *
  * 次の**どちらかに当たれば Enter が要る**:
  *
@@ -451,27 +423,21 @@ function isHowInput(spec: ArgSpec): boolean {
  *    機械が決められない。
  * 2. **howの入力がある**(`isHowInput`) … 打ち終わり・選び終わりを機械が決められない。
  *
- * **どちらでもない = 対象が1つに定まり、howが無い**ものだけが即適用になる。最後の1手
- * (点を置く / 1つ選ぶ)で引数が揃った時点で、それ以上人に聞くことが残っていないからである。
- * 現行の18個のうちここへ落ちるのは **`add_line`(点2つ)・`make_editable_copy`(面1つ)・
- * `sketch_create`(平面1つ)** で、その表は `tests/test_ui_command_wiring.py` が機械で
- * 固定している。
+ * **どちらでもない = 対象が1つに定まり、howが無い**ものだけが即適用になる。現行で
+ * ここへ落ちるのは **`add_line`(点2つ)・`make_editable_copy`(面1つ)・`sketch_create`
+ * (平面1つ)**。
  *
- * ## 列挙していない種別は「即適用の側」に落ちる(意図した既定)
- *
- * 点(`point`)がそうであるように、**対象を1つだけ指す新しい種別**は、ここを直さなくても
- * 即適用になる。2026-08-22に足した平面(`PlaneArgSpec`)がその実例で、この関数は
- * 1文字も変えずに `sketch_create` が「起動 → クリックで適用」になった。逆に、
- * **新しい how を足すときは `isHowInput` へ足すこと** —— 忘れると、打っている途中の値で
- * 適用される。
+ * **列挙していない種別は「即適用の側」に落ちる(意図した既定)。** 対象を1つだけ指す新しい
+ * 種別はここを直さなくても即適用になる。逆に、**新しい how を足すときは `isHowInput` へ
+ * 足すこと** —— 忘れると、打っている途中の値で適用される。
  *
  * 引数が1つも無いコマンド(`select_in_sketch`)もここでは `false` になるが、即適用は
- * **引数を完成させるクリックでしか発火しない**(`CommandHost.svelte`)ので、完成させる
- * 引数が無いコマンドは何をしても発火しない。
+ * **引数を完成させるクリックでしか発火しない**(`CommandHost.svelte`)ので、完成させる引数が
+ * 無いコマンドは何をしても発火しない。
  *
  * **Enterが要らない = Enterが効かない、ではない。** 起動より前から対象が揃っていた場合
- * (AIが選んだ面のまま起動した等)は即適用の発火条件を満たさないので、Enter(または
- * ボタンの押し直し)が唯一の適用手段として残る。
+ * (AIが選んだ面のまま起動した等)は即適用の発火条件を満たさないので、Enter(またはボタンの
+ * 押し直し)が唯一の適用手段として残る。
  */
 export function needsEnter(command: CommandDef): boolean {
   return command.args.some((spec) => takesManyTargets(spec) || isHowInput(spec))

@@ -14,11 +14,6 @@
    *
    * 1. **ピック → コアの選択への翻訳**(修飾キーで追加・除去・置き換えを決める)
    * 2. **プレビューの往復**(コマンド層が「何を試すか」を決め、ここが投げて幽霊を描く)
-   *
-   * (以前はここに3つ目として「形が変わった後の選択を選び直す」対症療法が3つ
-   * 個別にあった — 押し出した面の後継選び・丸めた辺の解除・姿が変わった領域の解除。
-   * 2026-08-20にコア側の統一契約(形を変えるverbの確定後は選択を全リセット)へ
-   * 置き換え、ここからは消した。`duocad/catalog.py` の `resets_selection` が正)
    */
   import { onMount } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
@@ -93,9 +88,7 @@
   /**
    * verb名 -> そのコマンドの分類。**送信経路の分岐はこれだけで決まる。**
    *
-   * 知らない名前は `undefined` になり、`runCommand` がその場で断る ——
-   * 以前は3つの判定関数を順に当てて「どれにも当たらなければ `extrude_face`」だったので、
-   * 分類を書き忘れたverbが**黙って `extrude_face` として送られていた**。
+   * 知らない名前は `undefined` になり、`runCommand` がその場で断る。
    */
   const CATEGORY_OF: Map<string, CommandCategory> = new Map(
     [...SOLID_COMMANDS, ...SKETCH_MODE_COMMANDS].map((command) => [command.id, command.category]),
@@ -166,7 +159,7 @@
   /**
    * `duocad/models/` の中身(`list_documents` の写し。`FilesPanel.svelte` が描く)。
    *
-   * **状態はコアが持つ**(2026-08-22)。ここはサーバの応答をそのまま置くだけで、
+   * **状態はコアが持つ**。ここはサーバの応答をそのまま置くだけで、
    * 保存/開くのたびに `refreshDocuments()` を呼んで最新化する(サーバ側でファイルが
    * 増減してもここが古いままにならないよう、開いたとき・保存/開くの直後に取り直す)。
    */
@@ -201,7 +194,7 @@
    * Enterの要らないコマンド(`command.ts` の `needsEnter`)は、引数が揃った瞬間に適用する。
    * その引き金は**人がこの画面で指したこと**でなければならない —— 選択集合はAIも
    * `modify_selection` で書き換えられるので、「選択が1つになった」だけを見て発火させると、
-   * **人が何も触っていないのに文書が変わる**(2026-08-22のQA指摘)。
+   * **人が何も触っていないのに文書が変わる**。
    *
    * 見分けは `myOperations` と同じ材料でできる: 返ってきた `client_op` が
    * `myClientOps` にあれば、それはこの画面が出した選択変更である。**数を渡すだけ**にして
@@ -589,10 +582,6 @@
    *
    * 置き換えのとき**自分自身は remove に入れない** —— コアは remove を後に適用するので、
    * 入れると足したそばから外れる(`duocad/selection.py` の契約)。
-   *
-   * **`'toggle'`(一覧クリックの解除規則。スケッチパネルの領域一覧が使っていた)は
-   * 2026-08-23に領域一覧を削除して以来、渡す経路が無い**(呼び出し元は3Dクリックの
-   * `PickEvent['mode']` だけ)。
    */
   function editSelection(ref: SelectionRef, mode: PickEvent['mode']): void {
     const current = selection?.items ?? []
@@ -743,9 +732,7 @@
   /**
    * 揃った引数をサーバへ送る。**経路は `CommandDef.category` だけで決まる。**
    *
-   * 以前は3つの判定関数を順に当て、どれにも当たらなければ `extrude_face` として
-   * 送っていた —— 分類を書き忘れたverbが黙って別のverbになる形の失敗だったので、
-   * **知らない名前はここで断る**。
+   * **知らない名前はここで断る**(分類を書き忘れたverbが黙って別のverbになるのを防ぐ)。
    */
   function runCommand(verb: string, args: Record<string, unknown>): void {
     const category = CATEGORY_OF.get(verb)
@@ -938,8 +925,7 @@
       state: model,
       // ユーザーに見せる27部品(参照ボディを除いた kind==="solid" だけ)
       parts: partBodies,
-      // 直近にviewportへ渡した生geometryを問い合わせる(2026-08-20。以前は`bodyGeometry`と
-      // いうコア状態の第3のコピーをApp.svelteが持っていたが、正はviewportの描画に一本化した)。
+      // 直近にviewportへ渡した生geometryを問い合わせる(正はviewportの描画に一本化してある)。
       getGeometry: (bodyId: string) => viewport?.getGeometry(bodyId) ?? null,
       // **選択の正はコア**。ここは共有集合の写しであって、ブラウザ側の状態ではない。
       selection: model?.selection ?? null,

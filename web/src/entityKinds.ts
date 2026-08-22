@@ -1,13 +1,12 @@
 /**
- * スケッチ図形の種別ごとの純フロントエンド処理(表) — kind分岐のテーブル化(2026-08-20)。
+ * スケッチ図形の種別ごとの純フロントエンド処理(表) — kind分岐のテーブル化。
  *
- * 以前は「描画用の折れ線化」(`viewport.ts` の `entityPoints`)と「幽霊(確定前の姿)の組み立て」
- * (`commands/sketch.ts` の `ghostEntity`)がそれぞれ独自に kind/verb で分岐しており、`EntityKind`
- * の宣言も `session.ts` の3箇所目だった。ここへ**図形種別ごとに1行**へ集約する
+ * 「描画用の折れ線化」(`viewport.ts` の `entityPoints`)と「幽霊(確定前の姿)の組み立て」
+ * (`commands/sketch.ts` の `ghostEntity`)を**図形種別ごとに1行**へ集約してある
  * (コアの `duocad/sketch.py` の `_ENTITY_KIND_TABLE` と対になる、TS側の唯一の宣言)。
  *
- * **表に無い種別は即時エラー**(`entityPoints` は throw。`ghostEntity` は元々「知らない
- * verbなら描かない」契約なので null のまま — 幽霊はスケッチのverb以外にも呼ばれるため)。
+ * **表に無い種別は即時エラー**(`entityPoints` は throw。`ghostEntity` は「知らないverbなら
+ * 描かない」契約なので null のまま —— 幽霊はスケッチのverb以外にも呼ばれるため)。
  */
 
 /** 図形の種別。**この表のキーが唯一の正**(新種別は表に1行足すだけでよい)。 */

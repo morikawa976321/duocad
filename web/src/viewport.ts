@@ -122,10 +122,8 @@ export interface Viewport {
   /**
    * 直近に `update()` で渡した生の `GeometryPayload` を読む(無ければ null)。
    *
-   * **実機検査フック専用**(2026-08-20)。以前は `App.svelte` がこの写しを
-   * `bodyGeometry`(state変数)として二重に持っていた —— コアの状態の第3のコピー
-   * (コア本体・three.jsの描画・この写し)で、`update()`/`prune()` と別々に掃除する
-   * 手間があった。ここに寄せることで、正は「three.jsが今描いている形」の1箇所になる。
+   * **実機検査フック専用**。ここに寄せてあるので、形の正は「three.jsが今描いている形」の
+   * 1箇所になる(App.svelte が写しを持つと、コアの状態の第3のコピーになる)。
    */
   getGeometry(bodyId: string): GeometryPayload | null
   /**
@@ -257,8 +255,6 @@ export interface Viewport {
    *
    * **`lookAtSketch` の戻り道**。スケッチに入ると図形の大きさに合わせて寄るので、
    * 半径4mmの円を描いた後にモードを抜けると、40mmの板が画面から外れたままになる。
-   * 初回に1度だけ効く自動フレームを、人からも押せるようにしただけで、新しい計算は
-   * 増やしていない。
    */
   frameAll(): void
   /** スケッチ平面上の (u,v) の画面座標。実機検査が**本物のクリックで描く**ために要る。 */
@@ -515,12 +511,11 @@ export function createViewport(container: HTMLElement): Viewport {
   /** body_id -> そのBodyが画面に持つメッシュ。非表示・未読込のBodyはキーごと無い。 */
   const bodies = new Map<string, BodyMeshes>()
   /**
-   * body_id -> サーバから届いた生の `GeometryPayload`(2026-08-20)。
+   * body_id -> サーバから届いた生の `GeometryPayload`。
    *
    * three.jsのメッシュ(`bodies`)とは別に持つ — `getGeometry()` は実機検査フックが
-   * 「今どんな形が届いているか」をJSONで読むためのものであり、three.jsのバッファは
-   * 読めない(型も漏らさない設計)。`bodies` と寿命を揃える(build/clear/pruneの
-   * タイミングで同時に出し入れする)ので、two-copyではなく「同じ更新の副産物」。
+   * 「今どんな形が届いているか」をJSONで読むためのもので、three.jsのバッファは読めない
+   * (型も漏らさない設計)。`bodies` と寿命を揃える(build/clear/pruneで同時に出し入れする)。
    */
   const rawGeometry = new Map<string, GeometryPayload>()
   /** 全Body分の面メッシュを1本にまとめたもの(ピック用)。update() のたびに作り直す。 */

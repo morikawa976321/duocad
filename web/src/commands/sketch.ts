@@ -1,28 +1,16 @@
 /**
  * スケッチのコマンド定義 — **手動操作が一級の操作モードになる場所**。
  *
- * スケッチはコアとMCPにあり、AIからは描けるが**人からは描けなかった**。
- * ここが埋めるのはその片道で、コアには何も足していない(WebSocketに口を開けただけ。
- * `duocad/server.py` の `SKETCH_COMMANDS`)。
+ * 状態機械・数値入力・中断は `CommandHost.svelte` の1つを使い回す(verbごとに独自のUIを
+ * 作らない)。骨格には**点(point)引数**があり、これは「スケッチ平面をクリックして (u,v) を
+ * 集める」という、選択でも数値でもない3つ目の集め方である。
  *
- * ## Bの骨格に載せるだけ
+ * **幽霊はブラウザで描く**(`preview: 'local'`)。押し出しのプレビューはコアに投機実行させる
+ * (形がコアにしか分からない)が、スケッチの図形は**形がブラウザ側で分かっている**。
+ * **そもそも送らない**ことで「Escで中断しても文書が一切変わらない」が構造的に成立する。
  *
- * 状態機械・数値入力・中断は `CommandHost.svelte` の1つを使い回す(実装計画書§8b C
- * 「Bで作ったコマンド層の骨格に載せる。verbごとに独自のUIを作らない」)。骨格には
- * **点(point)引数**があり、これは「スケッチ平面をクリックして (u,v) を集める」
- * という、選択でも数値でもない3つ目の集め方である。
- *
- * ## 幽霊はブラウザで描く(`preview: 'local'`)
- *
- * 押し出しのプレビューはコアに投機実行させる(形がコアにしか分からないため)が、
- * スケッチの図形は**形がブラウザ側で分かっている**。投機実行にすると、中断しても
- * 文書に一度は入って戻ることになる。ここでは**そもそも送らない**ことで
- * 「Escで中断しても文書が一切変わらない」を構造的に成立させる。
- *
- * ## `sketch_id` はここでは付けない
- *
- * どのスケッチに描くかは「今どのスケッチモードに居るか」であって、コマンドが集める
- * 引数ではない。`App.svelte` が送信時に足す(コマンド定義がセッションの状態を知らない)。
+ * **`sketch_id` はここでは付けない**。どのスケッチに描くかは「今どのスケッチモードに居るか」
+ * であって、コマンドが集める引数ではない —— `App.svelte` が送信時に足す。
  */
 import { isPlaneArgValue, type CommandDef, type Point2 } from './command'
 
@@ -174,30 +162,20 @@ export const ADD_ARC: CommandDef = {
 }
 
 /**
- * スケッチを作る —— **「スケッチ」を押して、貼る先をクリックする2手**(2026-08-22本人決定。
- * engine `2026-08-22-duocad-sketch-start-is-two-steps-by-pointing`)。
- *
- * ## ここだけ居場所が違う
+ * スケッチを作る —— **「スケッチ」を押して、貼る先をクリックする2手**。
  *
  * 分類は `sketch` だが `sketch_id` を取らず、**スケッチモードの外で走る唯一のverb**である
  * (だから一覧も `SKETCH_COMMANDS` ではなく `App.svelte` のソリッド側に載る)。反復
- * (`pattern_*`)が「分類は feature だが `sketch_id` が要る」のちょうど裏返しで、
- * `App.svelte` の送信経路はその2箇所を `needsSketchId`(features.ts)と
- * 下の `runsOutsideSketch` の2つの述語で捌く。
+ * (`pattern_*`)が「分類は feature だが `sketch_id` が要る」のちょうど裏返しで、`App.svelte` の
+ * 送信経路はその2箇所を `needsSketchId`(features.ts)と下の `runsOutsideSketch` で捌く。
  *
- * ## 貼る先の指し方は1つ(ポインティング)
+ * 基準平面のボタンは置かない —— 置くと「ボタンで指す」と「クリックで指す」の2つが並び、面に
+ * 貼る経路だけがクリックになる(UI指針1「実物をクリックできるものにボタンを作らない」)。
  *
- * 基準平面のボタンは置かない —— 置くと「ボタンで指す」と「クリックで指す」の2つが
- * 並び、面に貼る経路だけがクリックになる(UI指針1「実物をクリックできるものにボタンを
- * 作らない」)。基準平面はビューポートのグリッドを、面はソリッドの面を、同じ1クリックで指す。
- *
- * ## 面は送らない
- *
- * 面に貼るときの `build` は **`{}`** を返す。面の参照を引数に入れると「対象集合の
- * 指定方法」が再び2つになる(`extrude_face` と同じ流儀。サーバは
- * `selection.require_confirmed(doc, "face", exactly_one=True)` で確定選択から取る)。
- * 2枚選んでいれば `SelectionAmbiguous`、AIの提案のままなら `SelectionNotCommitted` が
- * 返り、トーストで人に見える。
+ * **面は送らない**: 面に貼るときの `build` は **`{}`** を返す。面の参照を引数に入れると
+ * 「対象集合の指定方法」が再び2つになる(サーバは `require_confirmed(doc, "face",
+ * exactly_one=True)` で確定選択から取る)。2枚選んでいれば `SelectionAmbiguous`、AIの提案の
+ * ままなら `SelectionNotCommitted` が返り、トーストで人に見える。
  */
 export const SKETCH_CREATE: CommandDef = {
   id: 'sketch_create',
@@ -206,8 +184,7 @@ export const SKETCH_CREATE: CommandDef = {
   buttonId: 'sketch-create',
   preview: 'none',
   // **引数名は `target`** —— WSに載る名前(`base_plane`)とわざと変えてある。値は
-  // 「基準平面名」か「面は選択にある」の2状態で、`base_plane` だと後者が嘘になる
-  // (かつては逆に、WSだけが `plane` という名前で面参照そのものを受けていた)。
+  // 「基準平面名」か「面は選択にある」の2状態で、`base_plane` だと後者が嘘になる。
   args: [{ kind: 'plane', name: 'target', label: 'スケッチを貼る先' }],
   build(values) {
     const plane = values.target
@@ -220,13 +197,12 @@ export const SKETCH_CREATE: CommandDef = {
 /**
  * そのverbは**スケッチモードの外で走る**か(= `sketch_id` を足さずに送るか)。
  *
- * 該当するのは `sketch_create` だけである —— スケッチを作るverbなので、モードに
- * 入っていることを要求すると永久に起動できない。`features.ts` の `needsSketchId`
- * (分類は feature だが `sketch_id` が要る反復)のちょうど裏返しで、**分類だけでは
- * 送り方が決まらない2箇所**をこの2つの述語で名指ししている。
+ * 該当するのは `sketch_create` だけである —— スケッチを作るverbなので、モードに入っている
+ * ことを要求すると永久に起動できない。`features.ts` の `needsSketchId` のちょうど裏返しで、
+ * **分類だけでは送り方が決まらない2箇所**をこの2つの述語で名指ししている。
  *
- * **列挙にしてある**(「引数に `plane` があるか」等で導出しない)ので、スケッチモードの
- * verbを新しく足しても既定は変わらない —— 足したverbは今までどおり `sketch_id` が付く。
+ * **列挙にしてある**(「引数に `plane` があるか」等で導出しない)ので、スケッチモードのverbを
+ * 新しく足しても既定は変わらない —— 足したverbは今までどおり `sketch_id` が付く。
  */
 export function runsOutsideSketch(verb: string): boolean {
   return verb === SKETCH_CREATE.id

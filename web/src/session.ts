@@ -154,7 +154,7 @@ export interface ServerState {
  * `path` は**サーバが解決した絶対パス**。相対パスの基準はサーバの作業ディレクトリで、
  * ブラウザ側では解決できない(2箇所で別々に解釈すると必ずずれる)。
  *
- * `name` は `save_document` の応答にだけ乗る**ファイル名だけ**(2026-08-22)。
+ * `name` は `save_document` の応答にだけ乗る**ファイル名だけ**。
  * `open_document` は文書を差し替える側なので `Applied`(`change: "document"`)の
  * `name` を見ること —— こちらは応答チャンネルが違う(`FilesPanel.svelte` 参照)。
  *
@@ -188,20 +188,16 @@ export interface DocumentInfo {
 /**
  * 操作を出したクライアントへの確認応答。
  *
- * **discriminated union**(2026-08-20)。以前は全verbの応答フィールドを1つのinterfaceに
- * optionalで積んだフラット構造だった —— **全フィールドがoptionalなので、`verb` ごとに
- * 本来必須のキー(例: `import_step_editable` の `body_ids`)を宣言し忘れても型検査が
- * 止まらなかった**(実績: 一度 `.svelte` 側だけが `body_ids` を読んでおり、宣言の無いまま
- * 素通りしていた。`svelte-check` を入れて初めて発覚した)。`verb`(verbの適用)と
- * `change`(`"selection"` = 選択の変更、`"document"` = ファイルを開いて文書ごと差し替わった。
- * どちらも操作ログには載らない。`duocad/server.py` の `_selection_event` / `open_document`)を
- * discriminantにしたので、`applied.verb === "extrude_face"` で絞り込めば `body_id` /
- * `face_index` / `distance` が**必須**として見える(他のverbのキーは見えない)。
+ * **discriminated union**。全フィールドがoptionalなフラット構造だと、`verb` ごとに本来必須の
+ * キー(例: `import_step_editable` の `body_ids`)を宣言し忘れても型検査が止まらない
+ * (実際、`.svelte` 側だけが `body_ids` を読んでいて宣言が無いまま素通りしていたことがある)。
+ * `verb`(verbの適用)と `change`(`"selection"` = 選択の変更、`"document"` = ファイルを開いて
+ * 文書ごと差し替わった。どちらも操作ログには載らない)をdiscriminantにしてあるので、
+ * `applied.verb === "extrude_face"` で絞り込めば `body_id` / `face_index` / `distance` が
+ * **必須**として見える(他のverbのキーは見えない)。
  *
- * `duocad/server.py` が実際に組み立てている形と1:1(`_after_logged_verb` / `_emit` の
- * 各呼び出し)。**新しいverbを足すときはここにも1メンバー足す**
- * (`duocad/catalog.py` がPython側のverb宣言の単一の正である一方、応答の「形」までは
- * catalogが持たないので、この対応は手で保つしかない)。
+ * `duocad/server.py` が実際に組み立てている形と1:1。**新しいverbを足すときはここにも1メンバー
+ * 足す**(`duocad/catalog.py` は応答の「形」までは持たないので、この対応は手で保つしかない)。
  */
 
 /**
