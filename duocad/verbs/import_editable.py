@@ -17,9 +17,14 @@
 
         操作ログは**1行**:
           verb="import_step_editable",
-          args={"path": str, "reference_ids": [BodyId, ...], "body_ids": [BodyId, ...]}
+          args={"source_name": str, "step": <STEP本文>,
+                "reference_ids": [BodyId, ...], "body_ids": [BodyId, ...]}
         `reference_ids[i]` と `body_ids[i]` は同じソリッドの参照・編集用で、並びは
         `doc.bodies` へ追加した順に対応する。
+
+**形はログの中にある**(2026-08-23): `args["step"]` にSTEP本文を生テキストで取り込むので、
+**再生は外部ファイルを一切読まない**。`args["source_name"]` は元のファイル名(パスではない)で、
+ボディの命名にしか使わない。理由と代償は `io_step.py` のモジュールdocstringに書いてある。
 
 **ログ1行・undo1回・MCP1呼び出しに収める**(実装計画書§2「verbの粒度」)。コマンド層から
 `import_step` と `make_editable_copy` をN回発行する形にしてはならない —— 27部品を読んだ後の
@@ -30,9 +35,10 @@ Ctrl+Z が最後の1個だけを戻す挙動になる。
 指す先を失う(`sketch_create` と同じ理由)。
 
 失敗の契約(黙って通さない。§6予防6): パスが無い→FileNotFoundError / STEPとして壊れている→
-ValueError。いずれも **document にもログにも変更を残さない** —— `kernel.read_step` が
-`ReadFile()` の戻り値を先に検査してから例外にするので、`doc` を触る前にここで止まる
-(この検査を飛ばすとPython例外ではなくプロセスごと落ちる。io_step.py の落とし穴の節を参照)。
+ValueError。いずれも **document にもログにも変更を残さない** —— `kernel.read_step_text` が
+`kernel.read_step` 経由で `ReadFile()` の戻り値を先に検査してから例外にするので、
+`doc` を触る前にここで止まる(この検査を飛ばすとPython例外ではなくプロセスごと落ちる。
+io_step.py の落とし穴の節を参照。**埋め込み経路も同じ1本の安全弁を通る**)。
 
 **参照ボディを残す理由**: 原本をログの上に持っておくと、編集用ボディを壊しても元の形が
 文書の中に残る(`make_editable_copy` の位置づけと同じ)。可視のまま持つと同じ形が二重に
@@ -48,6 +54,7 @@ from typing import Union
 
 from .. import kernel
 from ..document import Body, BodyId, Document, new_body_id
+from ..io_step import read_step_source, solid_names
 from ..oplog import Operation, register_verb
 
 PathLike = Union[str, Path]
@@ -57,28 +64,34 @@ VERB_IMPORT_STEP_EDITABLE = "import_step_editable"
 
 def import_step_editable(doc: Document, path: PathLike) -> list[BodyId]:
     """STEPを読み、ソリッドごとに参照ボディ(隠す)と編集用ボディを作って後者のIDを返す。"""
-    shape = kernel.read_step(str(path))  # 失敗すればここで例外、doc/logは無傷
+    source_name, text = read_step_source(path)  # 無ければ FileNotFoundError
+    shape = kernel.read_step_text(text)  # 壊れていればここで例外、doc/logは無傷
     solids = kernel.split_solids(shape)
     reference_ids = [new_body_id() for _ in solids]
     body_ids = [new_body_id() for _ in solids]
-    names = _reference_names(path, len(solids))
+    names = _reference_names(source_name, len(solids))
     _apply_to(doc, reference_ids, body_ids, solids, names)
     doc.log.append(
         VERB_IMPORT_STEP_EDITABLE,
-        {"path": str(path), "reference_ids": reference_ids, "body_ids": body_ids},
+        {
+            "source_name": source_name,
+            "step": text,
+            "reference_ids": reference_ids,
+            "body_ids": body_ids,
+        },
     )
     return body_ids
 
 
-def _reference_names(path: PathLike, count: int) -> list[str]:
+def _reference_names(source_name: str, count: int) -> list[str]:
     """参照ボディの名前 `<ファイル名>_1` … `_N`(`io_step.import_step` と同じ付け方)。
 
     編集用ボディはこれに `-edit` を足す(`make_editable_copy` の既定と同じ)。**どの経路で
     読み込んでも同じ命名にそろえてある** —— 名前はパーツ一覧にそのまま並ぶので、
-    読み込み経路によって見え方が変わらないようにする。
+    読み込み経路によって見え方が変わらないようにする。**実体は `io_step.solid_names`**
+    (2つの読み込みverbで命名が分岐しないよう、1か所にまとめてある)。
     """
-    stem = Path(path).stem
-    return [f"{stem}_{n}" for n in range(1, count + 1)]
+    return solid_names(source_name, count)
 
 
 def _apply_to(
@@ -106,14 +119,15 @@ def _apply_to(
 # verbの登録
 # --------------------------------------------------------------------------------------
 def _do_import_step_editable(document: Document, operation: Operation) -> None:
-    """redo / replay: パスを読み直し、**記録されたIDをそのまま使って**復元する。
+    """redo / replay: **ログに埋め込まれたSTEP本文**から、記録されたIDをそのまま使って復元する。
 
-    公開APIの `import_step_editable` を呼び直してはいけない(ログに二重記録される)。
+    **外部ファイルを読まない**(2026-08-23)。公開APIの `import_step_editable` を
+    呼び直してはいけない(ログに二重記録される)。
     """
     args = operation.args
-    shape = kernel.read_step(args["path"])
+    shape = kernel.read_step_text(args["step"])
     solids = kernel.split_solids(shape)
-    names = _reference_names(args["path"], len(solids))
+    names = _reference_names(args["source_name"], len(solids))
     _apply_to(document, args["reference_ids"], args["body_ids"], solids, names)
 
 

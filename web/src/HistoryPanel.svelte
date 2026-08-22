@@ -78,11 +78,15 @@
         return typeof args.plane === 'object' && args.plane !== null
           ? String((args.plane as { name?: string }).name ?? '面に貼る')
           : ''
+      // 読み込みの引数は `source_name`(元のファイル名)。**パスではない** ——
+      // 2026-08-23にSTEP本文をログへ取り込み、`path` を捨てた(本文 `args.step` は
+      // サーバが配信で伏せるので、ここには来ない)。
       case 'import_step_editable':
-        return `${String(args.path ?? '')} / ${count(args.body_ids)}部品`
+        return `${String(args.source_name ?? '')} / ${count(args.body_ids)}部品`
       case 'import_step':
+        return String(args.source_name ?? '')
       case 'make_editable_copy':
-        return String(args.path ?? args.source_body_id ?? '')
+        return String(args.source_body_id ?? '')
       default:
         // 未知のverbでも黙って空にしない(足したverbが履歴で無名になるのを防ぐ)
         return Object.keys(args).slice(0, 2).join(', ')

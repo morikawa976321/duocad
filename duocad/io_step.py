@@ -4,8 +4,20 @@
 - import_step(doc, path) -> list[BodyId]
     STEPをソリッドごとに分解し、各ソリッドを kind="reference" のボディとして
     doc.bodies へ追加する。操作ログは1行
-    (verb="import_step", args={"path": str(path), "body_ids": [BodyId, ...]})。
+    (verb="import_step",
+     args={"source_name": str, "step": <STEP本文>, "body_ids": [BodyId, ...]})。
     undo1回で追加した全Bodyがまとめて消える。単一ソリッドでも1要素のリストを返す。
+
+**形はログの中にある**(2026-08-23。engine `duocad-oplog-embeds-imported-step`):
+    以前は `args={"path": ...}` だけを積み、再生のたびに**同じ絶対パスを読み直して**いた。
+    これは「操作ログが唯一の正であり、文書の形状はここから導出される」(oplog.py)という
+    明文の契約を破っていた —— 外部STEPという**第二の正**があり、参照先を移動・改名・削除
+    するか別PCへ持って行くと文書が開けなくなる。いまは**読み込んだ時点でSTEP本文を
+    `args["step"]` へ生テキストで取り込む**(base64にしない —— 保存形式をJSONにしたのは
+    gitで差分が読める・AIが履歴を全部読めるからで、base64はその両方を潰す)。
+    元のファイル名は `args["source_name"]` に残る(ボディの命名に使う。**パスではない**)。
+    したがって**再生は外部ファイルを一切読まない**。取り込みなので、
+    元のSTEPを後から更新しても文書は追随しない(Fusionの「挿入」と同じ。これは意図)。
 - export_step(doc, path, body_ids=None) -> None
     body_ids省略時は既定で kind="solid" の全Bodyを書き出す(1つも無ければ形状を持つ全Bodyに
     フォールバック)。複数ならcompoundへまとめる。詳細は `_shape_to_export` のdocstring。
@@ -13,6 +25,9 @@
     body_ids省略時の対象は export_step と同じ。deviation(mm)は**絶対**の線形偏差。
 - export_body_ids(doc, body_ids=None) -> [BodyId, ...]
     書き出し対象のID一覧。規則は `_bodies_to_export` に集約し、MCPの戻り値と共有する。
+- read_step_source(path) -> (source_name, text) / solid_names(source_name, count) -> [str, ...]
+    **2つの読み込みverbが共有する**(verb `import_step_editable` も同じ取り込み・同じ命名に
+    なるように、ここが唯一の出どころ。分けると読み込み経路で名前や取り込み方が食い違う)。
 
 失敗時の契約(黙って通さない。実装計画書 §6予防6):
 - パスが存在しない            -> FileNotFoundError
@@ -29,6 +44,10 @@ TransferRoots() を呼ぶと、Python例外にはならず **プロセスごと�
 import_step の実装は **必ず ReadFile() の戻り値を先に検査し、失敗なら TransferRoots()/OneShape()
 を呼ぶ前に例外を送出すること**。`Path.exists()` のチェックだけでは壊れたファイルを防げない。
 実体は kernel.read_step にあり、この安全弁もそこに実装されている。詳細は tests/README.md 参照。
+**ログに埋め込んだ本文からの復元(kernel.read_step_text)も、一時ファイルへ書いてから
+同じ kernel.read_step を通す** —— リーダを立てる場所を2つに増やすと、安全弁の無い経路が
+1本できてしまうため(埋め込みが壊れていれば ValueError で止まる。
+tests/test_io_step.py::test_replaying_a_broken_embedded_step_raises_instead_of_crashing)。
 
 **deviation の意味**: BRepMesh_IncrementalMesh へ **isRelative=False**(絶対mm)で渡すこと。
 isRelative=True にすると 0.2 / 0.05 / 0.01 のどれでも同じサイズのSTLになり、
@@ -48,23 +67,62 @@ PathLike = Union[str, Path]
 VERB_IMPORT_STEP = "import_step"
 
 
+def read_step_source(path: PathLike) -> tuple[str, str]:
+    """STEPファイルを読み、`(source_name, text)` を返す(ログへ埋め込むための取り込み)。
+
+    - `source_name` … **ファイル名だけ**(拡張子を含む)。ボディの命名に使う。パスは残さない
+      —— 残すと「開ける文書」の判定に他人のディレクトリ構成が混ざる。
+    - `text` … STEP本文。
+
+    **バイト列で読んでから復号する**。STEPはASCIIが原則だが、ヘッダのコメントや
+    説明文字列にASCII外のバイトが入っている実ファイルがあるため、UTF-8で読めなければ
+    latin-1へ落とす(latin-1はどのバイト列でも失敗しない)。ここで例外にすると、
+    「読めるはずのSTEPが読めない」が復号の都合で起きる。
+
+    パスが無ければ FileNotFoundError(`kernel.read_step` と同じ契約。中身がSTEPとして
+    壊れている場合は、後段の `kernel.read_step_text` が ValueError にする)。
+    """
+    data = Path(path).read_bytes()  # 無ければ FileNotFoundError
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = data.decode("latin-1")
+    return Path(path).name, text
+
+
+def solid_names(source_name: str, count: int) -> list[str]:
+    """参照ボディの名前 `<元ファイル名の拡張子抜き>_1` … `_N`。
+
+    **`source_name` はファイル名**(`read_step_source` が入れる)なので、ここでの
+    `Path(...).stem` はパスの分解ではなく拡張子落としである。verb `import_step_editable`
+    の `_reference_names` と同じ付け方にそろえてある(読み込み経路で名前が変わらないこと)。
+    """
+    stem = Path(source_name).stem
+    return [f"{stem}_{n}" for n in range(1, count + 1)]
+
+
 def import_step(doc: Document, path: PathLike) -> list[BodyId]:
     """STEPをソリッドごとに分解して参照ボディとして読み込み、doc.bodiesへ追加してdoc.logに記録し、
     追加した全BodyIdをリストで返す(単一ソリッドでも1要素のリスト)。
 
-    操作ログは1行(verb="import_step", args={"path": str(path), "body_ids": [BodyId, ...]})。
+    操作ログは1行(verb="import_step",
+    args={"source_name": str, "step": <STEP本文>, "body_ids": [BodyId, ...]})。
+    **形はここに入る**ので、再生は元のパスを読み直さない(モジュールdocstring参照)。
     undo1回で全Bodyがまとめて消える。
 
     失敗時は例外を送出し、documentにもログにも変更を残さない
     (パス無し=FileNotFoundError / 中身が壊れている=ValueError)。
     """
-    shape = kernel.read_step(str(path))  # 失敗すればここで例外、doc/logは無傷
+    source_name, text = read_step_source(path)  # 無ければ FileNotFoundError
+    shape = kernel.read_step_text(text)  # 壊れていればここで例外、doc/logは無傷
     solids = kernel.split_solids(shape)
     body_ids = [new_body_id() for _ in solids]
-    stem = Path(path).stem
-    names = [f"{stem}_{n}" for n in range(1, len(solids) + 1)]
+    names = solid_names(source_name, len(solids))
     _apply_import_step_to(doc, body_ids, solids, names)
-    doc.log.append(VERB_IMPORT_STEP, {"path": str(path), "body_ids": body_ids})
+    doc.log.append(
+        VERB_IMPORT_STEP,
+        {"source_name": source_name, "step": text, "body_ids": body_ids},
+    )
     return body_ids
 
 
@@ -146,15 +204,17 @@ def _apply_import_step_to(
 
 
 def _do_import_step(document: Document, operation: Operation) -> None:
-    """redo / replay 時の再適用: パスを読み直して分解し、記録されたbody_idsをそのまま使って復元する。
+    """redo / replay 時の再適用: **ログに埋め込まれたSTEP本文**から復元する。
+
+    **外部ファイルを読まない**(2026-08-23)。`args["step"]` が形の出どころで、
+    `args["source_name"]` は名前にしか使わない。記録された body_ids をそのまま使う。
 
     **`io_step.import_step`(公開API)を呼び直してはいけない**(呼ぶとログに二重記録される)。
     """
     args = operation.args
-    shape = kernel.read_step(args["path"])
+    shape = kernel.read_step_text(args["step"])
     solids = kernel.split_solids(shape)
-    stem = Path(args["path"]).stem
-    names = [f"{stem}_{n}" for n in range(1, len(solids) + 1)]
+    names = solid_names(args["source_name"], len(solids))
     _apply_import_step_to(document, args["body_ids"], solids, names)
 
 

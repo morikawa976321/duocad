@@ -135,6 +135,30 @@ DEFAULT_WEB_DIST = REPO_ROOT / "web" / "dist"
 #: ここを差し替えて実フォルダを触らない。
 DEFAULT_MODELS_DIR = REPO_ROOT / "models"
 
+#: 状態配信で本文を伏せるログ引数(2026-08-23)。値の代わりに文字数だけを配る。
+#:
+#: `import_step` / `import_step_editable` は読み込んだSTEPの**本文**を `args["step"]` に
+#: 持つ(engine `duocad-oplog-embeds-imported-step`)。PCケースのSTEPは4.6MBあり、
+#: `state_meta()` はWebSocketで**操作のたびに全部配られる**ので、素通しにすると
+#: 1操作ごとに数MBが流れる(このメソッドの「27部品でも数KB」という前提が壊れる)。
+#: 履歴パネルが使うのは `source_name` と件数だけなので、本文は配らない。
+#: **ログそのもの(`document.log`)は無傷** —— 伏せるのは配信用の射影だけで、
+#: 保存(`to_json`)は本文を書く。
+_REDACTED_LOG_ARGS = ("step",)
+
+
+def _log_args_for_state(args: dict) -> dict:
+    """状態配信用のargs。埋め込んだSTEP本文を「文字数」に置き換える(上記 `_REDACTED_LOG_ARGS`)。"""
+    if not any(key in args for key in _REDACTED_LOG_ARGS):
+        return args  # 大半の操作はここ。写しを作らない
+    projected = dict(args)
+    for key in _REDACTED_LOG_ARGS:
+        value = projected.get(key)
+        if isinstance(value, str):
+            projected[key] = f"<{len(value)}文字は配信しない>"
+    return projected
+
+
 #: Windowsの予約デバイス名(拡張子の有無に関わらず特別扱いされる)。
 #: 大文字小文字を区別しない。`_resolve_document_name` が拒否理由をまとめて言う。
 _RESERVED_WINDOWS_NAMES = frozenset({
@@ -397,7 +421,11 @@ class Session:
             "active_body_id": active.id if active is not None else None,
             "bodies": [self.body_meta(body) for body in self.document.bodies],
             "log": [
-                {"seq": operation.seq, "verb": operation.verb, "args": operation.args}
+                {
+                    "seq": operation.seq,
+                    "verb": operation.verb,
+                    "args": _log_args_for_state(operation.args),
+                }
                 for operation in self.document.log.entries
             ],
             "can_undo": self.can_undo,
@@ -1190,9 +1218,15 @@ class Session:
         アプリ内から一覧で選ぶには必須の穴だった。
 
         操作数は `OpLog.from_json` で数える(§3.1「保存形式は操作ログのJSON」)—— 形状の
-        再生(`log.replay`)まではせず、パースだけなので軽い。壊れたファイル(手で
-        触られた・書き込み途中の `.writing` 等)は一覧からは省く(一覧が原因不明の
-        例外で丸ごと落ちるより、読める分だけ見せる方が実用に沿う)。
+        再生(`log.replay`)まではせず、パースだけ。**2026-08-23にSTEP本文がログへ入って
+        1ファイルが4.8MB級になった**が、実測でファイルあたり約30ms(PCケースの
+        4.8MBを3件で0.09s)なので、この作りのままにしてある。
+
+        壊れたファイル(手で触られた・書き込み途中の `.writing` 等)は一覧からは省く
+        (一覧が原因不明の例外で丸ごと落ちるより、読める分だけ見せる方が実用に沿う)。
+        **旧形式(version 1)のファイルもここでは黙って省かれる** —— `from_json` が
+        ValueError にするため。版1で保存されたファイルは実在しないので今は問題にならないが、
+        次に版を上げるときは「一覧に出ないだけで理由が分からない」になることに注意。
         """
         self.models_dir.mkdir(parents=True, exist_ok=True)
         files = []

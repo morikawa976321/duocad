@@ -143,8 +143,15 @@ OpLog.replay(document: Document) -> None                    # スタブ
   呼ぶ。
 - `undo`/`redo`/`replay` は verb ごとに `document` への反映方法を知っている必要がある。
   **M0で実在するverbは `"import_step"` のみ**で、その `args` は
-  `{"path": str, "body_id": BodyId}` を持つ（`io_step.import_step` が積む。この形は
-  `tests/test_io_step.py::test_import_step_logs_path_and_body_id_in_args` が固定する）。
+  `{"path": str, "body_id": BodyId}` を持つ（`io_step.import_step` が積む）。
+
+  > **2026-08-23 に `args` の形が変わった**（この節はM0当時の記述として残す）。いまは
+  > `{"source_name": str, "step": <STEP本文>, "body_ids": [BodyId, ...]}` で、
+  > **形そのものがログの中にある**。再生は外部ファイルを読まない（下の「実装イメージ」の
+  > `kernel.read_step(args["path"])` は `kernel.read_step_text(args["step"])` に変わっている）。
+  > 保存形式の版は `OpLog.FORMAT_VERSION = 2` で、版1のファイルは明示的に断る。
+  > 契約は `tests/test_io_step.py::test_replay_rebuilds_the_shape_after_the_original_step_is_gone`
+  > が固定する（engine `duocad-oplog-embeds-imported-step`）。
   - `replay(document)` は**自分の `entries` を書き換えない**（再生のたびに履歴が増えないこと。
     `test_replay_does_not_append_to_the_log_it_replays` が固定する）。
     「開くときはログから再生する」（実装計画書§3.1）運用では
@@ -177,8 +184,9 @@ export_stl(doc: Document, path: str | Path, deviation: float) -> None
 **契約**:
 
 - `import_step` はSTEPを **`kind="reference"`** のボディとして `doc.bodies` に追加し、
-  `doc.log` に `verb="import_step"`, `args={"path": str(path), "body_id": <新BodyId>}` を
-  積んで、そのBodyIdを返す。
+  `doc.log` に `verb="import_step"` を積む。**`args` は2026-08-23に
+  `{"source_name": str, "step": <STEP本文>, "body_ids": [BodyId, ...]}` へ変わった**
+  （M0当時は `{"path", "body_id"}`）。戻り値はソリッドごとのBodyIdのリスト。
 - `export_stl` の `deviation` は**絶対の線形偏差(mm)**。`BRepMesh_IncrementalMesh` へ
   **`isRelative=False`** で渡すこと（後述の実測。相対にすると偏差を変えてもメッシュが変わらない）。
 - **失敗を黙って通さない**（実装計画書§6予防6・§7）。3つとも `doc.bodies` / `doc.log.entries` に

@@ -97,8 +97,16 @@ class OpLog:
         replay(document) -> None                           先頭から実行し直し文書を再構築する
     """
 
-    #: to_json が出す入れ物のバージョン(将来フォーマットを変えたときの識別子)
-    FORMAT_VERSION = 1
+    #: to_json が出す入れ物のバージョン(将来フォーマットを変えたときの識別子)。
+    #:
+    #: **2 = 読み込んだSTEPの本文がログに入っている**(2026-08-23)。1は
+    #: `import_step` / `import_step_editable` が `args={"path": ...}` だけを持ち、
+    #: 再生が外部ファイルを読み直す形だった —— 形の出どころが違うので、
+    #: **1は読まずに明示的なエラーにする**(`from_json`)。黙って再生すると
+    #: `args["step"]` が無いところで KeyError になり、原因が版の違いだと分からない。
+    #: 版1で保存されたファイルは実在しない(この形式で保存を始める前の版)ため、
+    #: 移行の実装は置かない。
+    FORMAT_VERSION = 2
 
     def __init__(self) -> None:
         self._entries: list[Operation] = []
@@ -203,9 +211,12 @@ class OpLog:
     def from_json(cls, data: str) -> "OpLog":
         """to_json()の出力からOpLogを復元する。往復でエントリが完全一致すること。
 
-        **後方互換**: 2026-08-20より前に保存されたファイルには `selection` キーが
-        入っている(当時の `Operation` が持っていたフィールド)。読めればよく、
-        値は使わない — 有れば無視し、無くてもエラーにしない。
+        **版の検査が先**(2026-08-23): 入れ物に `version` があって現在の
+        `FORMAT_VERSION` と違えば、操作を1件も読まずに ValueError にする
+        (`_check_version`)。
+
+        **未知のキーは無視する**: 過去の `Operation` が持っていた `selection` のような
+        余分なキーが入っていても読み込みは壊れない(値は使わない)。
         """
         payload = json.loads(data)
         raw_operations = cls._extract_operations(payload)
@@ -225,17 +236,50 @@ class OpLog:
         log._cursor = len(log._entries)
         return log
 
-    @staticmethod
-    def _extract_operations(payload: Any) -> list:
-        """to_json の入れ物から操作の配列を取り出す(素のリスト形式も受け付ける)。"""
+    @classmethod
+    def _extract_operations(cls, payload: Any) -> list:
+        """to_json の入れ物から操作の配列を取り出す(素のリスト形式も受け付ける)。
+
+        **版が今の形式と違えば、読む前に断る**(2026-08-23)。version 1 は
+        `import_step` の形がログに入っていない(外部STEPのパスを読み直す)形式で、
+        今の再生経路では復元できない —— 黙って進めると `args["step"]` の KeyError に
+        なり、「保存形式の版が古い」という本当の理由が見えなくなる。
+        """
         if isinstance(payload, list):
+            # 版の無い素のリスト(テスト・手書き)。版の判定はできないので通す。
             return payload
         if isinstance(payload, dict):
+            cls._check_version(payload)
             operations = payload.get("operations")
             if isinstance(operations, list):
                 return operations
             raise ValueError("JSON object must contain an 'operations' array")
         raise ValueError(f"unsupported oplog JSON payload: {type(payload).__name__}")
+
+    @classmethod
+    def _check_version(cls, payload: dict) -> None:
+        """入れ物の `version` を検査する。今の版でなければ ValueError(黙って読まない)。
+
+        `version` が無い入れ物は版1相当ではなく「版を書かない手書き」として通す
+        (テストが `{"operations": [...]}` だけを渡す経路がある)。**版を書いたのに
+        違う値**であることだけを、はっきりした失敗として扱う。
+        """
+        if "version" not in payload:
+            return
+        version = payload["version"]
+        if version == cls.FORMAT_VERSION:
+            return
+        if version == 1:
+            raise ValueError(
+                "この保存ファイルは旧形式(version 1)で、読み込んだSTEPの形が入っていない"
+                "(外部ファイルへのパスだけを持つ形式)。現在の形式は "
+                f"version {cls.FORMAT_VERSION} で、変換の手立ては用意していない —— "
+                "元のSTEPを読み込み直して保存し直すこと。"
+            )
+        raise ValueError(
+            f"未知の保存形式 version {version!r}(このduocadが読めるのは "
+            f"version {cls.FORMAT_VERSION})"
+        )
 
     def replay(self, document: "Document") -> None:
         """ログを先頭から実行し直し、documentの状態(bodies等)を再構築する。

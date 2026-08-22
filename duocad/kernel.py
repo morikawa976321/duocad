@@ -10,6 +10,10 @@
         理由: 失敗した状態のままこれらを呼ぶと、Python例外ではなく**プロセスごと落ちる**
         (Windowsで 0xC0000005。パス無し=IFSelect_RetError / 中身が壊れている=IFSelect_RetFail の
         どちらでも同じ。io_step.py のモジュールdocstring参照)。
+    read_step_text(text) -> TopoDS_Shape
+        **STEP本文の文字列**から形状を返す(操作ログに埋め込んだ本文の復元用。2026-08-23)。
+        OCCTのリーダはパスしか受け取らないので一時ファイルへ書いてから `read_step` を通す。
+        **安全弁を二重に持たない**ため、ReadFile()の戻り値検査は `read_step` のものを流用する。
     write_step(shape, path) -> None
     write_stl(shape, path, deviation) -> None
         deviation は**絶対**の線形偏差(mm)。BRepMesh_IncrementalMesh に isRelative=False で渡す
@@ -47,6 +51,7 @@ from __future__ import annotations
 
 import math
 import os
+import tempfile
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -139,6 +144,42 @@ def read_step(path: str) -> "TopoDS_Shape":
     if shape is None or shape.IsNull():
         raise ValueError(f"STEP file produced an empty shape: {filename}")
     return shape
+
+
+def read_step_text(text: str) -> "TopoDS_Shape":
+    """**STEP本文の文字列**を読み、TopoDS_Shapeを返す。壊れていれば ValueError。
+
+    操作ログに埋め込んだSTEP本文(`io_step.import_step` / verb `import_step_editable`)を
+    再生するための入口。**OCCTのSTEPリーダはファイルパスしか受け取らない**ので、
+    一時ファイルへ書き出してから `read_step` を通す。
+
+    **ReadFile()の戻り値検査は `read_step` のものをそのまま通る**(安全弁を二重に持たない)。
+    ここで別経路のリーダを立てると、失敗した状態で TransferRoots() を呼んで
+    **プロセスごと落ちる**(0xC0000005)経路が新しく1本できてしまう。
+
+    一時ディレクトリは読み終えた時点で消す。**形状はOCCTのメモリ上に構築済み**で
+    ファイルを参照し続けないので、戻り値は消した後も有効。
+
+    書き出しは**バイト列で行う**(`write_text` は Windows で `\\n` を `\\r\\n` へ
+    書き換えるため、`\\r\\n` を含む元のSTEPが `\\r\\r\\n` に化ける)。
+    """
+    if not isinstance(text, str):
+        raise TypeError(f"STEP本文は文字列で渡すこと: {type(text).__name__}")
+    if text.strip() == "":
+        # OCCTへ渡す前に止める(空ファイルは ReadFile が失敗し、その先は read_step が
+        # 止めるが、埋め込みが空だった、という原因のほうを言いたい)。
+        raise ValueError("埋め込まれたSTEP本文が空")
+    with tempfile.TemporaryDirectory(prefix="duocad-step-") as tmpdir:
+        staging = os.path.join(tmpdir, "embedded.step")
+        with open(staging, "wb") as handle:
+            handle.write(text.encode("utf-8"))
+        try:
+            return read_step(staging)
+        except (FileNotFoundError, ValueError) as error:
+            # 一時パスをそのまま見せない(利用者にとって意味の無い場所を指すため)。
+            raise ValueError(
+                f"埋め込まれたSTEP本文をSTEPとして読めない({len(text)}文字): {error}"
+            ) from error
 
 
 def write_step(shape: "TopoDS_Shape", path: str) -> None:

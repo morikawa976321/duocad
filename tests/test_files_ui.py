@@ -312,7 +312,11 @@ def test_a_failed_open_leaves_the_current_document_alone(session: Session) -> No
     volume = query.volume(body.shape)
     session.models_dir.mkdir(parents=True, exist_ok=True)
     broken = session.models_dir / "broken.json"
-    broken.write_text('{"version": 1, "operations": [{"seq": 1, "verb": "no_such_verb"}]}', encoding="utf-8")
+    # **版は現行(2)にしておく** —— 1にすると「旧形式」で先に断られ、
+    # このテストが見たい「未知のverbで再生が落ちる」経路まで届かない。
+    broken.write_text(
+        '{"version": 2, "operations": [{"seq": 1, "verb": "no_such_verb"}]}', encoding="utf-8"
+    )
 
     with pytest.raises(Exception):
         session.open_document("broken.json")
@@ -447,3 +451,79 @@ def test_the_history_position_is_published(session: Session) -> None:
 
     session.redo()
     assert session.state_meta()["redo_count"] == 1
+
+
+# --------------------------------------------------------------------------------------
+# 自己完結: 保存ファイルは外部STEPに依存しない(2026-08-23。
+# engine `duocad-oplog-embeds-imported-step`)
+# --------------------------------------------------------------------------------------
+def _two_solid_step(tmp_path: Path) -> Path:
+    """2ソリッド(体積1000と216)のSTEPを作って返す(`tests/test_io_step.py` と同じ作り)。"""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.gp import gp_Pnt
+
+    box_a = BRepPrimAPI_MakeBox(20.0, 10.0, 5.0).Shape()
+    box_b = BRepPrimAPI_MakeBox(gp_Pnt(50.0, 0.0, 0.0), 6.0, 6.0, 6.0).Shape()
+    step_path = tmp_path / "parts.step"
+    kernel.write_step(kernel.make_compound([box_a, box_b]), str(step_path))
+    return step_path
+
+
+def test_a_saved_document_opens_after_the_imported_step_is_renamed(
+    session: Session, tmp_path: Path
+) -> None:
+    """**読み込んだSTEPを改名しても、保存した文書は開ける**(本タスクの本体)。
+
+    以前は操作ログに「このパスのSTEPを読んだ」しか無く、形はログのどこにも無かったので、
+    参照STEPを移動・改名・削除するか別PCへ持っていくと開けなかった。いまは
+    STEP本文がログの中にあるので、開く側は外部ファイルを一切読まない。
+
+    改名(=元の場所からファイルが消える)を挟むのが要点 —— 挟まないと、パス依存が
+    残っていても緑になってしまい、この検査は何も守らない。
+    """
+    step_path = _two_solid_step(tmp_path)
+    session.import_step_editable(str(step_path))
+    before = [
+        (body.name, body.kind, body.visible, kernel.face_count(body.shape),
+         round(query.volume(body.shape), 9))
+        for body in session.document.bodies
+    ]
+    assert len(before) == 4, "ソリッド2つ × (参照 + 編集用)"
+    session.save_document("imported.json")
+
+    step_path.rename(tmp_path / "somewhere_else.step")
+    assert not step_path.exists()
+
+    fresh = Session(None, DEVIATION, models_dir=session.models_dir)
+    fresh.open_document("imported.json")
+
+    assert [
+        (body.name, body.kind, body.visible, kernel.face_count(body.shape),
+         round(query.volume(body.shape), 9))
+        for body in fresh.document.bodies
+    ] == before
+
+
+def test_the_state_does_not_ship_the_embedded_step_text(session: Session, tmp_path: Path) -> None:
+    """状態配信のログは**STEP本文を運ばない**(文字数だけを出す)。
+
+    `state_meta()` は操作のたびにWebSocketで全部配られる。PCケースのSTEPは4.6MBあるので、
+    素通しにすると1操作ごとに数MBが流れ、「27部品でも数KB」という前提が壊れる。
+    履歴パネルが使うのは `source_name` と件数だけ。**保存(`to_json`)は本文を書く**ので、
+    ここで伏せても自己完結性は変わらない。
+    """
+    step_path = _two_solid_step(tmp_path)
+    session.import_step_editable(str(step_path))
+    step_text = session.document.log.entries[-1].args["step"]
+
+    entry = session.state_meta()["log"][-1]
+
+    assert entry["verb"] == "import_step_editable"
+    assert entry["args"]["source_name"] == "parts.step"
+    assert entry["args"]["step"] != step_text
+    assert str(len(step_text)) in entry["args"]["step"], "何文字あるかは出す"
+    assert session.document.log.entries[-1].args["step"] == step_text, "ログ本体を壊さない"
+
+    session.save_document("with-step.json")
+    saved = json.loads((session.models_dir / "with-step.json").read_text(encoding="utf-8"))
+    assert saved["operations"][-1]["args"]["step"] == step_text, "保存側は本文を書くこと"
