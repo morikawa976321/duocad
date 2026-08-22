@@ -410,7 +410,31 @@ async function main() {
     // ---------------------------------------------------------------- C: 手で描いたものがAIにも見える
     // タスクCの検証6。**片方にしか無い状態を作らない** —— 人がブラウザで描いた図形が
     // AIの `describe_document` に出なければ、UIとコアが別の文書を見ていることになる。
-    await page.click('#sketch-new-XY')
+    // **先に部品を全部隠す。** 基準平面のグリッドは原点の周り±100mmで、PCケースは
+    // その中を丸ごと覆っている —— 面と平面はレイ距離で競う(通常のオクルージョン)ので、
+    // 部品が見えている限りグリッドは1画素も指せない。人がやることも同じ(隠してから指す)。
+    await page.click('#parts-hide-all')
+    await page.waitForFunction(() => window.__duocad.parts.every((item) => !item.visible), {
+      timeout,
+      polling: 50,
+    })
+
+    // **スケッチを作るのは2手**(「スケッチ」を起動 → 貼る先のグリッドをクリック)。
+    // Enterは無い —— 対象が1つに定まり how の入力が無いコマンドは即適用になる。
+    await page.click('#sketch-create')
+    const basePlane = await page
+      .waitForFunction(
+        () => {
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectBasePlane('XY')
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        },
+        { timeout, polling: 50 },
+      )
+      .then((handle) => handle.jsonValue())
+      .catch(() => null)
+    if (!basePlane) fail('基準平面XYを指せる画素が無い(「スケッチ」が起動しているか)')
+    await page.mouse.click(basePlane.x, basePlane.y)
     await page.waitForFunction(() => window.__duocad.activeSketch !== null, {
       timeout,
       polling: 50,

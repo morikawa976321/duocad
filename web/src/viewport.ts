@@ -22,7 +22,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 // 辺の折れ線の形は `session.ts` の `EdgeGeometry` が正(サーバが配る形そのもの)。
 import { entityPoints } from './entityKinds'
-import type { EdgeGeometry } from './session'
+import type { BasePlaneName, EdgeGeometry } from './session'
 
 /** kernel.tessellate() が返す1面ぶん(サーバのJSONそのまま)。 */
 export interface FaceGeometry {
@@ -82,6 +82,14 @@ export interface PickEvent {
   point: { sketchId: string; u: number; v: number } | null
   /** スケッチモード中に領域へ当たったらその添字(領域は面より手前で拾う)。 */
   region: { sketchId: string; index: number } | null
+  /**
+   * 当たった基準平面(XY/XZ/YZ)。**`showBasePlanes(true)` の間だけ** null 以外になる
+   * (辺と同じ「要求しているコマンドを起動している間だけ指せる」規律)。
+   *
+   * 面と平面の両方に当たったときは**レイ距離が近い方**だけが返る(通常のオクルージョン)
+   * ので、`plane` が非nullなら `hit` は null である。
+   */
+  plane: BasePlaneName | null
 }
 
 /** 1枚のスケッチの描画指示(three.js の型は出さない)。 */
@@ -155,6 +163,20 @@ export interface Viewport {
    * レイに近いので、素直にクリックすれば手前が取れる。
    */
   showEdges(bodyId: string | null, edges: EdgeGeometry[]): void
+  // ------------------------------------------------------------------ 基準3平面(スケッチを貼る先)
+  /**
+   * 基準3平面(XY/XZ/YZ)を**指せるようにする**(`false` で指せなくなる)。
+   *
+   * 辺と同じ規律 —— **その対象を要求しているコマンドを起動している間だけ指せる**。
+   * 常時指せると、面を狙うクリックが手前のグリッドに取られる(グリッドは原点を跨いで
+   * ±100mmに広がっているので、ほとんどの視点で部品の手前に1枚は居る)。
+   *
+   * **当たり判定に新しいメッシュは足していない** —— `raycaster.ray.intersectPlane()` を
+   * 3枚ぶん回すだけの解析交差で、描画中のグリッド(`gridRoot`)は判定に一切使わない
+   * (グリッドは3平面の線が1つの `BufferGeometry` に混在しており、どの平面の線かを
+   * 当たった線から復元できない)。出している間はグリッドの色を変えて「今これが指せる」を出す。
+   */
+  showBasePlanes(on: boolean): void
   /** 選択中の辺を強調する(面の `highlight` と同じ規律)。 */
   highlightEdges(refs: EdgeRef[], origin: 'user' | 'proposed'): void
   /**
@@ -219,6 +241,16 @@ export interface Viewport {
   frameAll(): void
   /** スケッチ平面上の (u,v) の画面座標。実機検査が**本物のクリックで描く**ために要る。 */
   projectSketchPoint(sketchId: string, u: number, v: number): { x: number; y: number } | null
+  /**
+   * 基準平面の上の点の画面座標(無理なら null)。**実機検査が本物のクリックで
+   * 基準平面を指す**ために要る穴で、面の `project` と同じ流儀:
+   * 返す前に**その画素からのレイが実際にその平面へ当たり、かつ手前に面が無いこと**を
+   * 確かめる(部品に隠れている所を返すと、クリックが面に取られる)。
+   *
+   * **`showBasePlanes(true)` の間しか返らない** —— 指せない状態の座標を返しても、
+   * そこをクリックした結果は平面のピックにならないため。
+   */
+  projectBasePlane(name: BasePlaneName): { x: number; y: number } | null
   /** 領域の画面座標(実機検査が領域を本物のクリックで選ぶために要る)。 */
   projectRegion(sketchId: string, index: number): { x: number; y: number } | null
   dispose(): void
@@ -249,6 +281,41 @@ const BACKGROUND_COLOR = 0x161a1f
 const GRID_EXTENT = 100
 const GRID_STEP = 10
 const GRID_COLOR = 0x3a4450
+/**
+ * スケッチのコマンドを起動している間のグリッド。**「今これが指せる」が分かればよく、
+ * 見た目は作り込まない**(当たり判定の感触と見た目は後日ユーザーが対話で詰める)。
+ */
+const GRID_ARMED_COLOR = 0x7a90ab
+
+/**
+ * 基準3平面の解析的な定義(**描いているグリッドとは別物**)。並びと軸は
+ * `pushPlaneGrid` の3回の呼び出しと同じで、範囲もグリッドと同じ ±`GRID_EXTENT`。
+ * 3枚とも原点を通るので three.js の `Plane` の `constant` は 0 でよい。
+ */
+const BASE_PLANES: ReadonlyArray<{
+  name: BasePlaneName
+  normal: readonly [number, number, number]
+  u: readonly [number, number, number]
+  v: readonly [number, number, number]
+}> = [
+  { name: 'XY', normal: [0, 0, 1], u: [1, 0, 0], v: [0, 1, 0] },
+  { name: 'XZ', normal: [0, 1, 0], u: [1, 0, 0], v: [0, 0, 1] },
+  { name: 'YZ', normal: [1, 0, 0], u: [0, 1, 0], v: [0, 0, 1] },
+]
+
+/**
+ * `projectBasePlane` が順に試す平面上の点[mm]。
+ *
+ * **u も v も 0 にしない** —— 3平面は原点と3本の軸で交わっており、どちらかが0の点は
+ * 2枚に同時に乗る(例: XY平面上の (60, 0) は世界座標で y=0 なので XZ 平面の上でもある)。
+ * そこを返すと、レイ距離が同じ2枚のどちらが取れるかが並び順で決まってしまう。
+ */
+const BASE_PLANE_PROBES: ReadonlyArray<readonly [number, number]> = [
+  [30, 30], [-30, 30], [30, -30], [-30, -30],
+  [60, 60], [-60, 60], [60, -60], [-60, -60],
+  [15, 45], [-45, 15], [45, -15], [-15, -45],
+  [85, 85], [-85, -85], [10, 10], [-10, -10],
+]
 /** 軸は色で見分ける(X赤 / Y緑 / Z青)。グリッド本体より少し明るく、選択色とは被らない。 */
 const AXIS_X_COLOR = 0xc45c5c
 const AXIS_Y_COLOR = 0x5cad6e
@@ -363,6 +430,9 @@ export function createViewport(container: HTMLElement): Viewport {
   gridRoot.renderOrder = -1
   scene.add(gridRoot)
   const gridDisposables: Array<{ dispose(): void }> = []
+  // **材質だけブロックの外に出してある** —— `showBasePlanes` が色を差し替えるため
+  // (グリッドは3平面ぶんが1つのジオメトリに混ざっているので、平面ごとの色分けはしない)。
+  const gridMaterial = new THREE.LineBasicMaterial({ color: GRID_COLOR })
   {
     const gridPositions: number[] = []
     pushPlaneGrid(gridPositions, [1, 0, 0], [0, 1, 0]) // XY (z=0)
@@ -370,7 +440,6 @@ export function createViewport(container: HTMLElement): Viewport {
     pushPlaneGrid(gridPositions, [0, 1, 0], [0, 0, 1]) // YZ (x=0)
     const gridGeometry = new THREE.BufferGeometry()
     gridGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(gridPositions), 3))
-    const gridMaterial = new THREE.LineBasicMaterial({ color: GRID_COLOR })
     const gridLines = new THREE.LineSegments(gridGeometry, gridMaterial)
     gridRoot.add(gridLines)
     gridDisposables.push(gridGeometry, gridMaterial)
@@ -609,7 +678,14 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
-  function pickAt(offsetX: number, offsetY: number): FaceRef | null {
+  /**
+   * 面のピック。**レイ距離も返す** —— 基準平面と面のどちらが手前かを比べるのに要る
+   * (`onPointerUp`)。`pickAt` はこれの薄い覆いで、距離を要らない呼び出し側のためにある。
+   */
+  function faceHitAt(
+    offsetX: number,
+    offsetY: number,
+  ): { ref: FaceRef; distance: number } | null {
     const { width, height } = size()
     const ndc = new THREE.Vector2((offsetX / width) * 2 - 1, -(offsetY / height) * 2 + 1)
     raycaster.setFromCamera(ndc, camera)
@@ -623,7 +699,72 @@ export function createViewport(container: HTMLElement): Viewport {
     const bodyId = hits[0].object.userData.bodyId
     const faceIndex = hits[0].object.userData.faceIndex
     if (typeof bodyId !== 'string' || typeof faceIndex !== 'number') return null
-    return { bodyId, faceIndex }
+    return { ref: { bodyId, faceIndex }, distance: hits[0].distance }
+  }
+
+  function pickAt(offsetX: number, offsetY: number): FaceRef | null {
+    return faceHitAt(offsetX, offsetY)?.ref ?? null
+  }
+
+  // ------------------------------------------------------------------ 基準3平面(スケッチを貼る先)
+  /** 基準3平面を指せるか(`showBasePlanes`)。**出していない間は当たり判定を回さない**。 */
+  let basePlanesOn = false
+
+  function showBasePlanes(on: boolean): void {
+    if (basePlanesOn === on) return
+    basePlanesOn = on
+    gridMaterial.color.setHex(on ? GRID_ARMED_COLOR : GRID_COLOR)
+  }
+
+  /**
+   * 基準3平面のうち当たった1枚と、そのレイ距離(当たらなければ null)。
+   *
+   * **描いているグリッドは判定に使わない**(3平面の線が1つのジオメトリに混ざっており、
+   * 当たった線からどの平面かを復元できない)。`planePointAt` と同じ解析交差を3枚ぶん回し、
+   * グリッドの描画範囲の外(|u| か |v| が `GRID_EXTENT` 超)は捨て、**レイ距離が最小の
+   * 1枚**を採る。
+   */
+  function basePlaneAt(
+    offsetX: number,
+    offsetY: number,
+  ): { name: BasePlaneName; distance: number } | null {
+    if (!basePlanesOn) return null
+    const { width, height } = size()
+    const ndc = new THREE.Vector2((offsetX / width) * 2 - 1, -(offsetY / height) * 2 + 1)
+    raycaster.setFromCamera(ndc, camera)
+    let best: { name: BasePlaneName; distance: number } | null = null
+    const hit = new THREE.Vector3()
+    for (const spec of BASE_PLANES) {
+      const plane = new THREE.Plane(new THREE.Vector3(...spec.normal), 0)
+      if (raycaster.ray.intersectPlane(plane, hit) === null) continue // 平行 / カメラの裏
+      const u = hit.dot(new THREE.Vector3(...spec.u))
+      const v = hit.dot(new THREE.Vector3(...spec.v))
+      if (Math.abs(u) > GRID_EXTENT || Math.abs(v) > GRID_EXTENT) continue
+      const distance = raycaster.ray.origin.distanceTo(hit)
+      if (best === null || distance < best.distance) best = { name: spec.name, distance }
+    }
+    return best
+  }
+
+  function projectBasePlane(name: BasePlaneName): { x: number; y: number } | null {
+    const spec = BASE_PLANES.find((candidate) => candidate.name === name)
+    if (!spec || !basePlanesOn) return null
+    for (const [u, v] of BASE_PLANE_PROBES) {
+      const world = new THREE.Vector3(
+        u * spec.u[0] + v * spec.v[0],
+        u * spec.u[1] + v * spec.v[1],
+        u * spec.u[2] + v * spec.v[2],
+      )
+      const screen = toScreen(world)
+      if (screen === null) continue
+      // **本当にその平面が取れる画素か**を確かめてから返す(面の `project` と同じ流儀)。
+      const plane = basePlaneAt(screen.x, screen.y)
+      if (plane === null || plane.name !== name) continue
+      const face = faceHitAt(screen.x, screen.y)
+      if (face !== null && face.distance < plane.distance) continue // 部品に隠れている
+      return screen
+    }
+    return null
   }
 
   function project(bodyId: string, faceIndex: number): { x: number; y: number } | null {
@@ -1091,24 +1232,42 @@ export function createViewport(container: HTMLElement): Viewport {
         edge: null,
         mode,
         region,
+        plane: null,
         point: plane === null ? null : { sketchId: activeSketchId, ...plane },
       })
       return
     }
     // **辺を出しているときは辺が先**。辺は面の上に重なっているので、面より後に見ると
     // 必ず面が勝つ。出していないときは `edgeAt` が即 null を返すので、面のピックは
-    // そのまま動く。
+    // そのまま動く。**この順序は変えない**(基準平面を足しても辺→面の優先順位は同じ)。
     const edge = edgeAt(event.offsetX, event.offsetY)
     if (edge !== null) {
-      pickListener?.({ hit: null, edge, mode, point: null, region: null })
+      pickListener?.({ hit: null, edge, mode, point: null, region: null, plane: null })
+      return
+    }
+    // **面と基準平面は、レイ距離が近い方**(通常のオクルージョン。辺のような優先順位は
+    // 付けない —— 平面は部品と同じ空間に居るので、手前に見えているものが取れるのが自然)。
+    // 基準平面は `showBasePlanes(true)` の間しか当たらない。
+    const face = faceHitAt(event.offsetX, event.offsetY)
+    const basePlane = basePlaneAt(event.offsetX, event.offsetY)
+    if (basePlane !== null && (face === null || basePlane.distance < face.distance)) {
+      pickListener?.({
+        hit: null,
+        edge: null,
+        mode,
+        point: null,
+        region: null,
+        plane: basePlane.name,
+      })
       return
     }
     pickListener?.({
-      hit: pickAt(event.offsetX, event.offsetY),
+      hit: face?.ref ?? null,
       edge: null,
       mode,
       point: null,
       region: null,
+      plane: null,
     })
   }
 
@@ -1147,6 +1306,7 @@ export function createViewport(container: HTMLElement): Viewport {
     },
     highlight,
     showEdges,
+    showBasePlanes,
     highlightEdges,
     projectEdge,
     showPreview,
@@ -1161,6 +1321,7 @@ export function createViewport(container: HTMLElement): Viewport {
       frameToContent()
     },
     projectSketchPoint,
+    projectBasePlane,
     projectRegion,
     dispose() {
       alive = false

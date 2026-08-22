@@ -1057,7 +1057,7 @@ def test_a_browser_export_does_not_corrupt_the_stdio_channel(tmp_path: Path):
                     async with connect("ws://127.0.0.1:18785") as socket:
                         await socket.recv()  # 初期状態
                         await socket.send(json.dumps({{"cmd": "sketch_create",
-                            "plane": {{"kind": "base", "name": "XY", "provenance": None}}, "client_op": 1}}))
+                            "base_plane": "XY", "client_op": 1}}))
                         state = json.loads(await socket.recv())
                         sketch_id = state["applied"]["sketch_id"]
                         await socket.send(json.dumps({{"cmd": "add_rectangle", "sketch_id": sketch_id,

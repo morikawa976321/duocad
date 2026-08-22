@@ -194,6 +194,36 @@ export interface TextArgSpec {
   reject(value: string): string | null
 }
 
+/**
+ * **スケッチを貼る先**を1つ指す引数(`sketch_create` だけが取る)。
+ *
+ * 値は2状態しかない: 基準平面の名前(`'XY' | 'XZ' | 'YZ'`)か、**面は選択にある**を表す
+ * `'face'` である。面の側を選択引数にしないのは、この引数が「基準平面か面か」という
+ * *どちらか*であって、選択集合から導出できないため —— 選択が空でも基準平面なら揃う。
+ *
+ * `build` が送るのは基準平面のときの `{base_plane}` だけで、**面は送らない**
+ * (`extrude_face` と同じ流儀。面はサーバがコアの確定選択から取る)。
+ *
+ * **`needsEnter` には現れない** —— 対象を1つだけ指す種別なので、`command.ts` の既定
+ * (列挙していない種別は即適用の側)がそのまま正しい。
+ */
+export interface PlaneArgSpec {
+  kind: 'plane'
+  name: string
+  label: string
+}
+
+/**
+ * `PlaneArgSpec` が取りうる値。基準平面3つ(`session.ts` の `BasePlaneName` と同じ綴り)と、
+ * 「貼る先の面はコアの確定選択にある」を表す `'face'`。
+ */
+export type PlaneArgValue = 'XY' | 'XZ' | 'YZ' | 'face'
+
+/** `PlaneArgSpec` に入れてよい値か。 */
+export function isPlaneArgValue(value: unknown): value is PlaneArgValue {
+  return value === 'XY' || value === 'XZ' || value === 'YZ' || value === 'face'
+}
+
 export type ArgSpec =
   | SelectionArgSpec
   | NumberArgSpec
@@ -201,11 +231,15 @@ export type ArgSpec =
   | ChoiceArgSpec
   | EntitiesArgSpec
   | TextArgSpec
+  | PlaneArgSpec
 
 /** スケッチ平面上の点 [u, v](mm)。**定義は `session.ts`**(コアと同じ形)。ここは通すだけ。 */
 export type { Point2 }
 
-/** 集まった引数の値。選択は参照の配列、数値は数、点は [u,v]、選択肢は文字列、図形はID列。 */
+/**
+ * 集まった引数の値。選択は参照の配列、数値は数、点は [u,v]、選択肢は文字列、図形はID列、
+ * スケッチを貼る先は文字列(`PlaneArgValue`)。
+ */
 export type ArgValues = Record<string, SelectionRef[] | number | Point2 | string | string[]>
 
 /** `build` の結果。作れないときは理由を返す(黙って何も送らない、をしない)。 */
@@ -368,6 +402,9 @@ export function argSatisfied(spec: ArgSpec, values: ArgValues): boolean {
     const text = values[spec.name]
     return typeof text === 'string' && spec.reject(text) === null
   }
+  if (spec.kind === 'plane') {
+    return isPlaneArgValue(values[spec.name])
+  }
   const value = values[spec.name]
   return typeof value === 'number' && Number.isFinite(value) && spec.reject(value) === null
 }
@@ -416,14 +453,17 @@ function isHowInput(spec: ArgSpec): boolean {
  *
  * **どちらでもない = 対象が1つに定まり、howが無い**ものだけが即適用になる。最後の1手
  * (点を置く / 1つ選ぶ)で引数が揃った時点で、それ以上人に聞くことが残っていないからである。
- * 現行の17個のうちここへ落ちるのは **`add_line`(点2つ)と `make_editable_copy`(面1つ)**
- * だけで、その表は `tests/test_ui_command_wiring.py` が機械で固定している。
+ * 現行の18個のうちここへ落ちるのは **`add_line`(点2つ)・`make_editable_copy`(面1つ)・
+ * `sketch_create`(平面1つ)** で、その表は `tests/test_ui_command_wiring.py` が機械で
+ * 固定している。
  *
  * ## 列挙していない種別は「即適用の側」に落ちる(意図した既定)
  *
- * 点(`point`)がそうであるように、**対象を1つだけ指す新しい種別**(例: 平面を1つ選ぶ)を
- * 足したときは、ここを直さなくても即適用になる。逆に、**新しい how を足すときは
- * `isHowInput` へ足すこと** —— 忘れると、打っている途中の値で適用される。
+ * 点(`point`)がそうであるように、**対象を1つだけ指す新しい種別**は、ここを直さなくても
+ * 即適用になる。2026-08-22に足した平面(`PlaneArgSpec`)がその実例で、この関数は
+ * 1文字も変えずに `sketch_create` が「起動 → クリックで適用」になった。逆に、
+ * **新しい how を足すときは `isHowInput` へ足すこと** —— 忘れると、打っている途中の値で
+ * 適用される。
  *
  * 引数が1つも無いコマンド(`select_in_sketch`)もここでは `false` になるが、即適用は
  * **引数を完成させるクリックでしか発火しない**(`CommandHost.svelte`)ので、完成させる
@@ -462,6 +502,9 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
     const text = values[spec.name]
     if (typeof text === 'string' && text !== '') return spec.reject(text) ?? ''
     return `${spec.label}を打つ(${spec.placeholder})`
+  }
+  if (spec.kind === 'plane') {
+    return `${spec.label}をクリック(基準平面のグリッド XY/XZ/YZ か、ソリッドの面)`
   }
   const value = values[spec.name]
   if (typeof value === 'number' && Number.isFinite(value)) {

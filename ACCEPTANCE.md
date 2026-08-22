@@ -52,7 +52,7 @@ duocad> node web/scripts/acceptance.mjs
 
 | # | 操作 | 人間 | AI | 実際にやったこと（人間側 / AI側） |
 |---|---|---|---|---|
-| 1 | `sketch_create` | ✅ | ✅ | `XY` ボタン → そのままモードへ入る / `base_plane: "XZ"` |
+| 1 | `sketch_create` | ✅ | ✅ | 「スケッチ」→ **XYのグリッドをクリック**（2手・Enterなし）→ そのままモードへ入る / `base_plane: "XZ"` |
 | 2 | `add_line` | ✅ | ✅ | 2点をクリックして線分が1本増える（**アサートしたのはここまで**。ゴムひも描画そのものは見ていない → 下の「根拠の所在」） / `p0`,`p1` |
 | 3 | `add_circle` | ✅ | ✅ | 中心をクリック → 半径10を打つ → Enter / `center`,`radius` |
 | 4 | `add_rectangle` | ✅ | ✅ | 左下をクリック → 幅60・高さ40 → Enter / `corner`,`width`,`height` |

@@ -5,24 +5,26 @@
    * この企画の中心命題「手動操作が一級の操作モード」がUIに現れる場所。ここが持つのは
    * 3つだけで、どれも**コアを叩くだけ**(パネルは何も覚えない):
    *
-   * 1. スケッチに入る/抜ける(基準平面3面 or 選択中の面に貼る)
+   * 1. 既にあるスケッチに入る(再開)/抜ける/正面から見る —— **モードの操作だけ**
    * 2. 図形の一覧と**値の打ち直し**(`set_parameter`)——
    *    クリックだけで置いた後に寸法を直せるのが§3.4のパラメトリック・プリミティブ
    * 3. 領域の一覧と選択(押し出しがこの選択を引数に取る)
+   *
+   * **スケッチを作るボタンはここに無い**(2026-08-22本人決定。engine
+   * `2026-08-22-duocad-sketch-start-is-two-steps-by-pointing`)。作成はツールバーの
+   * 「スケッチ」コマンド → 貼る先をクリック、の2手に一本化した —— 平面ボタンを残すと
+   * 「ボタンで指す」と「クリックで指す」の2つの指し方が並ぶ(UI指針1)。
    *
    * **見た目は作り込まない**(タスクの制約)。高さは固定してある —— 内容任せにすると
    * 図形が増えるたびにビューポートがリサイズされ、射影が変わって次のクリックが
    * 別の場所に当たる。
    */
-  import type { SelectionRef, ShapeRef, SketchState } from './session'
+  import type { SelectionRef, SketchState } from './session'
 
   let {
     sketches,
     activeSketchId,
-    selectedFace,
     selection,
-    onCreateOnBase,
-    onCreateOnFace,
     onEnter,
     onExit,
     onLookAt,
@@ -33,11 +35,7 @@
   }: {
     sketches: SketchState[]
     activeSketchId: string | null
-    /** 選択中の最初の面(あれば「この面に貼る」が押せる)。 */
-    selectedFace: ShapeRef | null
     selection: SelectionRef[]
-    onCreateOnBase: (name: 'XY' | 'XZ' | 'YZ') => void
-    onCreateOnFace: (face: ShapeRef) => void
     onEnter: (sketchId: string) => void
     onExit: () => void
     onLookAt: () => void
@@ -100,17 +98,13 @@
       <button id="sketch-look" onclick={onLookAt}>正面から見る</button>
       <button id="sketch-exit" onclick={onExit}>抜ける</button>
     {:else}
-      <span class="value dim">平面を選んで入る</span>
-      {#each ['XY', 'XZ', 'YZ'] as const as name}
-        <button id={`sketch-new-${name}`} onclick={() => onCreateOnBase(name)}>{name}</button>
-      {/each}
-      <button
-        id="sketch-new-face"
-        disabled={selectedFace === null}
-        onclick={() => selectedFace && onCreateOnFace(selectedFace)}
-      >
-        選択中の面に貼る
-      </button>
+      <!-- 作るのはツールバーの「スケッチ」から(ここに平面ボタンは置かない)。
+           残すのは既にあるスケッチを再開する手だけ。 -->
+      <span class="value dim">
+        {sketches.length === 0
+          ? 'まだスケッチが無い(ツールバーの「スケッチ」→ 貼る先をクリック)'
+          : '再開するスケッチを選ぶ'}
+      </span>
       {#each sketches as item (item.sketch_id)}
         <button class="reopen" onclick={() => onEnter(item.sketch_id)}>
           再開 {item.plane.kind === 'base' ? item.plane.name : '面'}({item.entities.length})

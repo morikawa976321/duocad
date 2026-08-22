@@ -242,9 +242,21 @@ async function main() {
     console.log('\n--- 人間側(ブラウザを本物のクリックとキーで操作) ---')
 
     await attempt('human', 'sketch_create', async () => {
-      await page.click('#sketch-new-XY')
+      // **2手**(「スケッチ」を起動 → 貼る先の基準平面グリッドをクリック)。Enterは無い。
+      await page.click('#sketch-create')
+      const at = await page
+        .waitForFunction(
+          () => {
+            const rect = document.querySelector('.viewport').getBoundingClientRect()
+            const position = window.__duocad.projectBasePlane('XY')
+            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+          },
+          { timeout, polling: 50 },
+        )
+        .then((handle) => handle.jsonValue())
+      await page.mouse.click(at.x, at.y)
       await waitFor(() => window.__duocad.activeSketch !== null, 'スケッチに入れない')
-      return 'XY平面にスケッチを作り、そのままモードへ入った'
+      return 'XY平面のグリッドをクリックしてスケッチを作り、そのままモードへ入った'
     })
 
     await attempt('human', 'add_rectangle', async () => {

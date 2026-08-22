@@ -38,7 +38,6 @@ from duocad.document import Body
 from duocad.server import Session
 
 BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
-XY_PLANE = {"kind": "base", "name": "XY", "provenance": None}
 
 #: 2026-08-20時点で「形を変える」と宣言されている verb 名(タスクファイルの列挙と対応)。
 #: **この集合が変わったら、`duocad/catalog.py` の宣言を見てここも一緒に見直すこと**
@@ -129,7 +128,7 @@ def test_extrude_regions_clears_the_selection_on_success() -> None:
     `kernel` が「形が変わっていない」と拒む(§7とは別の、この検証だけの都合)。
     """
     session = Session(None, 0.2)
-    sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_rectangle(sketch_id, [0.0, 0.0], 10.0, 10.0)
     _select(session, [{"sketch": sketch_id, "index": 1}])
 
@@ -145,7 +144,7 @@ def test_add_shape_verbs_clear_a_pre_existing_3d_selection(session: Session) -> 
     (「押し出した面と関係あるものだけ外す」のような部分的な賢さは持たせない)。
     """
     _select(session, [_face(1)])
-    sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     # sketch_create 自体は形を変えないので、まだ何も起きていないはず。
     assert session.get_selection()["count"] == 1
 
@@ -155,7 +154,7 @@ def test_add_shape_verbs_clear_a_pre_existing_3d_selection(session: Session) -> 
 
 
 def test_pattern_rectangular_clears_the_selection_on_success(session: Session) -> None:
-    sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     entity_id = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
     _select(session, [_face(1)])
 
@@ -165,7 +164,7 @@ def test_pattern_rectangular_clears_the_selection_on_success(session: Session) -
 
 
 def test_pattern_circular_clears_the_selection_on_success(session: Session) -> None:
-    sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     entity_id = session.add_circle(sketch_id, [20.0, 0.0], 2.0)["entity_id"]
     _select(session, [_face(1)])
 
@@ -176,7 +175,7 @@ def test_pattern_circular_clears_the_selection_on_success(session: Session) -> N
 
 def test_set_parameter_clears_the_selection_on_success(session: Session) -> None:
     """`set_parameter` はrebuildで形が変わりうるので全リセットの対象(タスクファイルの明示)。"""
-    sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 5.0)
     # add_circle は cx/cy/radius の3つを名前つき(d1..d3)にする(tests/test_parameters.py)。
     # どれを打ち直しても rebuild が走るので、ここではどれか1つで足りる。

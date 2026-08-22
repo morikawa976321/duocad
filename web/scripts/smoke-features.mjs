@@ -148,6 +148,34 @@ async function main() {
       await page.type(selector, String(value), { delay: 15 })
     }
 
+    /**
+     * **スケッチを作る2手**: ツールバーの「スケッチ」を起動 → 貼る先をクリック。
+     *
+     * Enterは無い(`command.ts` の `needsEnter`: 対象1つ・howの入力なし → 即適用)。
+     * 座標は**クリックの直前に射影し直す**(スケッチ平面の点と同じ流儀)。
+     * `projectBasePlane` は「その画素からのレイが本当にその平面に当たり、手前に面が
+     * 無い」ことを確かめてから返すので、部品に隠れている所を押すことはない。
+     */
+    async function createSketchOnBase(name = 'XY') {
+      await page.click('#sketch-create')
+      let at = null
+      try {
+        const handle = await page.waitForFunction(
+          (plane) => {
+            const rect = document.querySelector('.viewport').getBoundingClientRect()
+            const position = window.__duocad.projectBasePlane(plane)
+            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+          },
+          { timeout, polling: 50 },
+          name,
+        )
+        at = await handle.jsonValue()
+      } catch {
+        fail(`基準平面 ${name} を指せる画素が無い(「スケッチ」が起動しているか)`)
+      }
+      await page.mouse.click(at.x, at.y)
+    }
+
     /** スケッチ平面の (u,v) を**クリックの直前に射影して**押す(画面が動いても狂わない)。 */
     async function clickPlane(u, v) {
       const at = await page.evaluate(
@@ -211,7 +239,7 @@ async function main() {
     }
 
     // ================================================================ 検証1: 板と穴
-    await page.click('#sketch-new-XY')
+    await createSketchOnBase('XY')
     await waitFor(() => window.__duocad.activeSketch !== null, 'XY平面のスケッチに入れない')
 
     await page.click('#sketch-rectangle')
@@ -257,7 +285,7 @@ async function main() {
     // (編集中は「抜ける」「正面から見る」に入れ替わる)。
     await page.click('#sketch-exit')
     await waitFor(() => window.__duocad.activeSketch === null, '1枚目のスケッチを抜けられない')
-    await page.click('#sketch-new-XY')
+    await createSketchOnBase('XY')
     await waitFor(
       () => window.__duocad.activeSketch !== null && window.__duocad.sketches.length === 2,
       '2枚目のスケッチに入れない',
@@ -422,7 +450,7 @@ async function main() {
     // ================================================================ 検証3: 面取りで円錐
     // 円筒を1本立てて、その円い辺を面取りする。**`PC_case_feet` と同じ種別の面**
     // (全周円筒・円錐・平面)が手だけで作れることの確認。
-    await page.click('#sketch-new-XY')
+    await createSketchOnBase('XY')
     await waitFor(() => window.__duocad.activeSketch !== null, '3枚目のスケッチに入れない')
     await page.click('#sketch-circle')
     await clickPlane(80, 0)
@@ -495,7 +523,7 @@ async function main() {
     )
 
     // ================================================================ 検証4: 反復
-    await page.click('#sketch-new-XY')
+    await createSketchOnBase('XY')
     await waitFor(() => window.__duocad.activeSketch !== null, '反復用のスケッチに入れない')
     await page.click('#sketch-circle')
     await clickPlane(0, 0)

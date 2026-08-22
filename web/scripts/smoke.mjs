@@ -560,6 +560,34 @@ async function main() {
       return at
     }
 
+    /**
+     * **スケッチを作る2手**: ツールバーの「スケッチ」を起動 → 貼る先をクリック。
+     *
+     * Enterは無い(`command.ts` の `needsEnter`: 対象1つ・howの入力なし → 即適用)。
+     * 座標は**クリックの直前に射影し直す**(スケッチ平面の点と同じ流儀)。
+     * `projectBasePlane` は「その画素からのレイが本当にその平面に当たり、手前に面が
+     * 無い」ことを確かめてから返すので、部品に隠れている所を押すことはない。
+     */
+    async function createSketchOnBase(name = 'XY') {
+      await page.click('#sketch-create')
+      let at = null
+      try {
+        const handle = await page.waitForFunction(
+          (plane) => {
+            const rect = document.querySelector('.viewport').getBoundingClientRect()
+            const position = window.__duocad.projectBasePlane(plane)
+            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+          },
+          { timeout, polling: 50 },
+          name,
+        )
+        at = await handle.jsonValue()
+      } catch {
+        fail(`基準平面 ${name} を指せる画素が無い(「スケッチ」が起動しているか)`)
+      }
+      await page.mouse.click(at.x, at.y)
+    }
+
     /** 待って落ちたら**画面の中身を添えて**失敗する(「120秒待った」だけでは切り分けられない)。 */
     async function waitForSketch(predicate, what, ...args) {
       try {
@@ -628,7 +656,14 @@ async function main() {
       target.index,
     )
     ok(`押し出しのundo後、選択がリセットされていたので面 ${target.index} を選び直した`)
-    await page.click('#sketch-new-face')
+
+    // **面に貼るのも同じ2手**(「スケッチ」を起動 → 面をクリック)。基準平面のグリッドと
+    // 面はどちらも1クリックで指せる同じ「貼る先」で、ボタンでの指し方は無くなった
+    // (2026-08-22。engine `duocad-sketch-start-is-two-steps-by-pointing`)。
+    // **起動より前から選ばれていた面では発火しない**(即適用の不変条件)ので、
+    // 起動してから同じ面をもう一度クリックする —— これが本来の1手である。
+    await page.click('#sketch-create')
+    await page.mouse.click(backOnFace.x, backOnFace.y)
     await waitForSketch(() => window.__duocad.activeSketch !== null, '面に貼ったスケッチが作られない')
     const onFace = await sketchState()
     if (onFace.plane?.kind !== 'face') fail(`面に貼ったスケッチになっていない: ${JSON.stringify(onFace.plane)}`)
@@ -636,8 +671,109 @@ async function main() {
     await page.click('#sketch-exit')
     await page.waitForFunction(() => window.__duocad.activeSketch === null, { timeout, polling: 50 })
 
+    // -------------------------------------------------------------- 平面でない面は「札」で断られる
+    //
+    // **クライアントは先回りしない**(判定はコアの `kernel.require_planar_face` 1箇所)。
+    // 見るのは**人が理由に気づけるか**で、そこは札の文言でしか確かめられない ——
+    // `#toasts .toast-text` を読むのは T1(Toast.svelte)が決めた検査の穴である。
+    const curved = await page.evaluate((bodyId) => {
+      const geometry = window.__duocad.getGeometry(bodyId)
+      return geometry
+        ? geometry.faces.filter((face) => face.kind !== 'plane').map((face) => face.index)
+        : []
+    }, extrudeTarget.body_id)
+
+    /**
+     * **視点が落ち着いてから**面の画面座標を返す。
+     *
+     * `lookAtSketch` / `sketch-exit` の直後はOrbitControlsのダンピングが効いていて、
+     * カメラが数十msかけて動き続ける —— 射影した座標をそのまま押すと**別の部品の面**に
+     * 当たる(実測で踏んだ)。2回続けて同じ画素に射影できたら止まったとみなす。
+     */
+    async function locateFaceWhenStill(bodyId, faceIndex) {
+      let previous = null
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const at = await locateFace(bodyId, faceIndex)
+        if (at && previous && Math.hypot(at.x - previous.x, at.y - previous.y) < 1) return at
+        previous = at
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      return null
+    }
+
+    let refused = null
+    let tried = 0
+    const attempted = []
+    for (const index of curved) {
+      if (tried >= 4) break // 画面から指せない面は数える前に飛ばす(奥は他の26部品に隠れている)
+      // **起動してから射影する**(順序が逆だと当たらない)。コマンドを起動すると
+      // コマンド行の文言が変わって行が伸び縮みし、`.viewport` の高さ=射影が動く
+      // (スケッチパネルの高さを固定してあるのと同じ事情。実測で別の部品の面を押した)。
+      await page.click('#sketch-create') // 1起動につき1回なので、試すたびに構え直す
+      const at = await locateFaceWhenStill(extrudeTarget.body_id, index)
+      if (!at) {
+        await page.keyboard.press('Escape')
+        continue
+      }
+      tried += 1
+      attempted.push(index)
+      await page.mouse.click(at.x, at.y)
+      const toast = await page
+        .waitForFunction(
+          () => {
+            const node = document.querySelector('#toasts .toast-text')
+            return node && node.textContent.includes('平面') ? node.textContent.trim() : null
+          },
+          { timeout: 5000, polling: 50 },
+        )
+        .then((handle) => handle.jsonValue())
+        .catch(() => null)
+      if (toast) {
+        refused = { index, toast }
+        break
+      }
+      // 手前の別の面(または基準平面)に取られた。作られてしまったスケッチから出て次を試す。
+      if (await page.evaluate(() => window.__duocad.activeSketch !== null)) {
+        await page.click('#sketch-exit')
+        await page.waitForFunction(() => window.__duocad.activeSketch === null, {
+          timeout,
+          polling: 50,
+        })
+      }
+    }
+    if (refused === null && tried === 0) {
+      console.log('  --   平面でない面がこの視点からは1枚も指せない(検査を飛ばす)')
+    } else if (refused === null) {
+      const dump = await page.evaluate(() =>
+        JSON.stringify({
+          errors: window.__duocad.errors,
+          selection: window.__duocad.selection,
+          activeSketch: window.__duocad.activeSketch,
+          sketches: window.__duocad.sketches.map((item) => item.plane),
+        }),
+      )
+      fail(`平面でない面を指しても「平面でない」と言う札が出ない(試した面 ${attempted}): ${dump}`)
+    }
+    if (refused !== null) {
+      if (await page.evaluate(() => window.__duocad.activeSketch !== null)) {
+        fail('平面でない面なのにスケッチモードへ入っている(黙って通った)')
+      }
+      ok(`平面でない面 ${refused.index} は札で断られた: ${refused.toast.slice(0, 56)}…`)
+    }
+    await page.keyboard.press('Escape')
+
     // -------------------------------------------------------------- 検証1(その2)・2: 基準平面に描く
-    await page.click('#sketch-new-XY')
+    //
+    // **先に部品を全部隠す。** 基準平面のグリッドは原点の周り±100mmで、この文書の
+    // PCケースはその中を丸ごと覆っている —— 面と平面はレイ距離で競うので(通常の
+    // オクルージョン)、部品が見えている限りグリッドは1画素も指せない。`projectBasePlane`
+    // が null を返すのはその正しい振る舞いであり、人がやることも同じ(隠してから指す)。
+    await page.click('#parts-hide-all')
+    await page.waitForFunction(() => window.__duocad.parts.every((item) => !item.visible), {
+      timeout,
+      polling: 50,
+    })
+    await createSketchOnBase('XY')
     await page.waitForFunction(
       () => {
         const hook = window.__duocad
@@ -646,7 +782,7 @@ async function main() {
       },
       { timeout, polling: 50 },
     )
-    ok('基準平面(XY)にもスケッチを作れた')
+    ok('基準平面(XY)にもスケッチを作れた(部品を全非表示にしてグリッドを指した)')
 
     // 円: 中心をクリック → 半径を打つ → Enter(**Bの数値入力をそのまま使っている**)
     await page.click('#sketch-circle')

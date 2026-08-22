@@ -4,7 +4,8 @@ UI(スケッチモード・図形・領域の表示)そのものは**`pytest` �
 (実機確認は `web/scripts/smoke.mjs`)。このファイルが固定するのはサーバ側の2つ——
 
 1. **スケッチのverbをWebSocketにも開ける**(`sketch_create` / `add_line` / `add_circle` /
-   `add_rectangle` / `add_arc` ＋ 値の打ち直しの `set_parameter`)
+   `add_rectangle` / `add_arc` ＋ 値の打ち直しの `set_parameter`)。**`sketch_create` だけ
+   表に載らず個別に捌かれる** —— `base_plane` が省略できる引数だからである
 2. **スケッチを描ける形で配信する**(`state.sketches`: 平面の3D枠・図形・領域の三角形)
 
 ——は機械で判定できる。ここが緑でないとUIの検証は意味を持たない(画面に線が出ることの
@@ -17,8 +18,8 @@ UI(スケッチモード・図形・領域の表示)そのものは**`pytest` �
 
 固定する契約:
 
-- 基準平面3面と**既存ソリッドの平面状の面**の両方にスケッチを作れる。平面でない面は
-  黙って通さない
+- 基準平面3面(`base_plane`)と**確定選択の面**(引数を省いたとき)の両方にスケッチを
+  作れる。平面でない面・2枚選択・提案のままは黙って通さない
 - 4種の図形(線分・円・長方形・円弧)をWebSocketから足せ、`state.sketches` に出る
 - 図形は**パラメータ名を持って届く**(クリックで置いた後に値を打ち直せる=§3.4)
 - 円を線分で分けると**領域が2つ**になり、各領域は**画面に描ける三角形**を持つ
@@ -47,7 +48,6 @@ DEVIATION = 0.2
 RADIUS = 20.0
 CIRCLE_AREA = math.pi * RADIUS * RADIUS
 AREA_REL_TOL = 1.0e-3
-XY_PLANE = {"kind": "base", "name": "XY", "provenance": None}
 
 
 @pytest.fixture()
@@ -131,7 +131,7 @@ def test_the_browser_can_create_a_sketch_on_a_base_plane(session: Session) -> No
     """
 
     async def script(send):
-        return await send({"cmd": "sketch_create", "plane": XY_PLANE, "client_op": 1})
+        return await send({"cmd": "sketch_create", "base_plane": "XY", "client_op": 1})
 
     applied, clients = _browser(session, script)
 
@@ -148,18 +148,32 @@ def test_the_browser_can_create_a_sketch_on_a_base_plane(session: Session) -> No
         assert frame["normal"] == [0.0, 0.0, 1.0]
 
 
-def test_a_sketch_can_be_glued_to_a_planar_face_of_a_solid(session: Session) -> None:
-    """既存ソリッドの平面状の面にも貼れる。枠は**その面**のもの(基準平面ではない)。"""
+def _select_face(body_id: str, face_index: int, client_op: int = 1) -> dict:
+    """面を1枚だけ確定選択にするWSコマンド(**ブラウザの1クリックと同じ経路**)。
+
+    `modify_selection` は `origin="user"` にするので、これだけで確定選択になる。
+    """
+    return {
+        "cmd": "modify_selection",
+        "add": [{"body": body_id, "kind": "face", "index": face_index}],
+        "remove": [],
+        "client_op": client_op,
+    }
+
+
+def test_a_sketch_can_be_glued_to_the_confirmed_face(session: Session) -> None:
+    """**面は引数で渡さない**(2026-08-22)。`base_plane` を省くと確定選択の面に貼る。
+
+    ブラウザは「スケッチを起動 → 面をクリック」の2手で、クリックが選択を置き換え、
+    verbは引数なしで飛ぶ。ここが固定するのはその**サーバ側の受け口**である ——
+    以前はWSだけが `plane={"kind":"face",...}` を受けており、対象集合を引数で渡す経路が
+    ここにだけ残っていた(MCPは最初から確定選択から取っていた)。
+    """
     body, face_index = _planar_face(session)
 
     async def script(send):
-        return await send(
-            {
-                "cmd": "sketch_create",
-                "plane": {"kind": "face", "body": body.id, "index": face_index, "provenance": None},
-                "client_op": 1,
-            }
-        )
+        await send(_select_face(body.id, face_index))
+        return await send({"cmd": "sketch_create", "client_op": 2})
 
     _applied, clients = _browser(session, script)
 
@@ -167,26 +181,87 @@ def test_a_sketch_can_be_glued_to_a_planar_face_of_a_solid(session: Session) -> 
     assert len(frame["origin"]) == 3
     # 法線は単位ベクトル(面から取れている証拠。基準平面の決め打ちではない)
     assert math.isclose(math.hypot(*frame["normal"]), 1.0, rel_tol=1e-9)
-    assert _sketches(clients[0])[0]["plane"]["kind"] == "face"
+    plane = _sketches(clients[0])[0]["plane"]
+    assert plane["kind"] == "face"
+    assert plane["body"] == body.id and plane["index"] == face_index
 
 
 def test_a_curved_face_is_refused_loudly(session: Session) -> None:
-    """平面でない面にスケッチを貼ろうとしたら**失敗を明示**する(黙って入らない)。"""
+    """平面でない面にスケッチを貼ろうとしたら**失敗を明示**する(黙って入らない)。
+
+    判定はコアの `kernel.require_planar_face` 1箇所だけで、ブラウザは先回りしない ——
+    **人が見るのはこの応答から作られるトースト**なので、文言から「平面でない」と
+    分かることまでがこの契約である。
+    """
     body, face_index = _curved_face(session)
 
     async def script(send):
-        return await send(
-            {
-                "cmd": "sketch_create",
-                "plane": {"kind": "face", "body": body.id, "index": face_index, "provenance": None},
-                "client_op": 1,
-            }
-        )
+        await send(_select_face(body.id, face_index))
+        return await send({"cmd": "sketch_create", "client_op": 2})
 
     response, _clients = _browser(session, script)
 
     assert response["type"] == "error"
     assert "平面" in response["message"] and "ValueError" in response["message"]
+    assert session.document.sketches == []
+
+
+def test_two_selected_faces_are_refused_instead_of_picking_one(session: Session) -> None:
+    """2枚選んでいたら `SelectionAmbiguous`。**黙って先頭に貼らない。**
+
+    「貼る先はちょうど1枚」はコアの規律(`require_confirmed(exactly_one=True)`)で、
+    ブラウザ側の1クリックは1枚しか選ばないが、**AIが2枚提案して人が承認した状態**は
+    実際に起こる。そこで先頭を選ぶと、指した覚えのない面にスケッチが乗る。
+    """
+    body, first = _planar_face(session)
+    second = next(
+        face["index"]
+        for face in query.describe_faces(body.shape)
+        if face["kind"] == "plane" and face["index"] != first
+    )
+
+    async def script(send):
+        await send(_select_face(body.id, first))
+        await send(_select_face(body.id, second, client_op=2))
+        return await send({"cmd": "sketch_create", "client_op": 3})
+
+    response, _clients = _browser(session, script)
+
+    assert response["type"] == "error"
+    assert "SelectionAmbiguous" in response["message"]
+    assert session.document.sketches == []
+
+
+def test_a_proposed_face_is_refused_until_it_is_committed(session: Session) -> None:
+    """AIの提案(`origin="proposed"`)のままでは貼れない —— `SelectionNotCommitted`。
+
+    A1の決定4がWSのこの経路にも効いていることを固定する(MCP側は
+    `tests/test_mcp_selection.py` が全ツールぶんを見ている)。**引数から面が消えた以上、
+    提案と確定の区別が効く唯一の場所は確定選択の読み出しである。**
+    """
+    body, face_index = _planar_face(session)
+
+    async def script(send):
+        # AIの経路(`propose_selection`)は `Session` を直に叩く。WSには開いていない。
+        session.propose_selection(refs=[{"body": body.id, "kind": "face", "index": face_index}])
+        return await send({"cmd": "sketch_create", "client_op": 1})
+
+    response, _clients = _browser(session, script)
+
+    assert response["type"] == "error"
+    assert "SelectionNotCommitted" in response["message"]
+    assert session.document.sketches == []
+
+
+def test_creating_a_sketch_with_nothing_selected_is_refused(session: Session) -> None:
+    """平面も選択も無ければエラー。**既定でXYに貼らない**(図形が静かに別の場所に出る)。"""
+
+    async def script(send):
+        return await send({"cmd": "sketch_create", "client_op": 1})
+
+    response, _clients = _browser(session, script)
+
+    assert response["type"] == "error"
     assert session.document.sketches == []
 
 
@@ -222,7 +297,7 @@ def test_the_browser_can_draw_all_four_kinds(session: Session) -> None:
     """線分・円・長方形・円弧の4つがWebSocketから足せ、`state.sketches` に出る。"""
 
     async def script(send):
-        created = await send({"cmd": "sketch_create", "plane": XY_PLANE, "client_op": 1})
+        created = await send({"cmd": "sketch_create", "base_plane": "XY", "client_op": 1})
         sketch_id = created["applied"]["sketch_id"]
         for command in _draw_four_kinds(send, sketch_id):
             await send(command)
@@ -248,7 +323,7 @@ def test_entities_carry_parameter_names_so_the_values_can_be_retyped(session: Se
     """
 
     async def script(send):
-        created = await send({"cmd": "sketch_create", "plane": XY_PLANE, "client_op": 1})
+        created = await send({"cmd": "sketch_create", "base_plane": "XY", "client_op": 1})
         sketch_id = created["applied"]["sketch_id"]
         added = await send(
             {"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "radius": RADIUS, "client_op": 2}
@@ -270,7 +345,7 @@ def test_undo_removes_one_entity_at_a_time(session: Session) -> None:
     """undoで図形が1つずつ消える(まとめて消えない・スケッチごと飛ばない)。"""
 
     async def script(send):
-        created = await send({"cmd": "sketch_create", "plane": XY_PLANE, "client_op": 1})
+        created = await send({"cmd": "sketch_create", "base_plane": "XY", "client_op": 1})
         sketch_id = created["applied"]["sketch_id"]
         await send(
             {"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "radius": RADIUS, "client_op": 2}
@@ -293,7 +368,7 @@ def test_missing_arguments_are_refused(session: Session) -> None:
     """引数が欠けたコマンドは失敗させる。**既定値で埋めない**(0の半径が黙って入る)。"""
 
     async def script(send):
-        created = await send({"cmd": "sketch_create", "plane": XY_PLANE, "client_op": 1})
+        created = await send({"cmd": "sketch_create", "base_plane": "XY", "client_op": 1})
         sketch_id = created["applied"]["sketch_id"]
         return await send({"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0]})
 
@@ -303,9 +378,13 @@ def test_missing_arguments_are_refused(session: Session) -> None:
 
 
 def test_only_the_registered_commands_are_reachable() -> None:
-    """ソケットから呼べるのは登録した6つだけ(文字列で任意のメソッドを呼ばせない)。"""
+    """表から呼べるのは登録した5つだけ(文字列で任意のメソッドを呼ばせない)。
+
+    **`sketch_create` はこの表に居ない**(2026-08-22)—— `base_plane` が省略できる引数で、
+    表は「載せた引数は全部必須」だからである。宣言側は `ws="special"` で、実体は
+    `Server._dispatch` の個別の分岐(`tests/test_ui_command_wiring.py` が対応を見る)。
+    """
     assert set(SKETCH_COMMANDS) == {
-        "sketch_create",
         "add_line",
         "add_circle",
         "add_rectangle",
@@ -325,7 +404,7 @@ def test_a_line_splits_the_circle_into_two_drawable_regions(session: Session) ->
     """
 
     async def script(send):
-        created = await send({"cmd": "sketch_create", "plane": XY_PLANE, "client_op": 1})
+        created = await send({"cmd": "sketch_create", "base_plane": "XY", "client_op": 1})
         sketch_id = created["applied"]["sketch_id"]
         await send(
             {"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "radius": RADIUS, "client_op": 2}
@@ -350,7 +429,7 @@ def test_a_region_can_be_selected_through_the_shared_selection(session: Session)
     """領域は共有選択集合に入れられる(Dの押し出しがこの選択を引数に取る)。"""
 
     async def script(send):
-        created = await send({"cmd": "sketch_create", "plane": XY_PLANE, "client_op": 1})
+        created = await send({"cmd": "sketch_create", "base_plane": "XY", "client_op": 1})
         sketch_id = created["applied"]["sketch_id"]
         await send(
             {"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "radius": RADIUS, "client_op": 2}
@@ -383,7 +462,7 @@ def test_the_region_payload_is_cached_until_the_sketch_changes(session: Session)
     """
 
     async def script(send):
-        created = await send({"cmd": "sketch_create", "plane": XY_PLANE, "client_op": 1})
+        created = await send({"cmd": "sketch_create", "base_plane": "XY", "client_op": 1})
         sketch_id = created["applied"]["sketch_id"]
         await send(
             {"cmd": "add_circle", "sketch_id": sketch_id, "center": [0.0, 0.0], "radius": RADIUS, "client_op": 2}

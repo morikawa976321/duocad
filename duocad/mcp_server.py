@@ -709,17 +709,14 @@ class DocumentTools:
     def sketch_create(self, base_plane: Optional[str] = None) -> dict:
         """スケッチを作る。`base_plane` 省略時は**確定選択の面**(ちょうど1枚)に貼る。
 
-        平面も選択も無ければエラー —— 既定でXYに貼ると、図形が静かに別の場所に出る。
+        **解決は `Session.sketch_create` が持つ**(2026-08-22にここから引き上げた)——
+        ブラウザ側も同じ契約になったので、2箇所に同じ「省略時は確定選択の面」を
+        持たない(片方だけ直すと、AIと人で貼る先が食い違う)。
         """
-        if base_plane is not None:
-            plane: Any = str(base_plane)
-        else:
-            face = selection.require_confirmed(
-                self.session.document, "face", exactly_one=True
-            )[0]
-            plane = sketch.face_plane(face["body"], face["index"])
         before = self._revision_snapshot()
-        applied = self.session.sketch_create(plane)
+        applied = self.session.sketch_create(
+            None if base_plane is None else str(base_plane)
+        )
         return self._apply_logged(before, applied, sketch_id=applied["sketch_id"])
 
     def add_line(self, sketch_id: str, p0: list, p1: list) -> dict:

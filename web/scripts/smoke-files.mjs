@@ -131,6 +131,34 @@ async function main() {
       await page.type(selector, String(value), { delay: 15 })
     }
 
+    /**
+     * **スケッチを作る2手**: ツールバーの「スケッチ」を起動 → 貼る先をクリック。
+     *
+     * Enterは無い(`command.ts` の `needsEnter`: 対象1つ・howの入力なし → 即適用)。
+     * 座標は**クリックの直前に射影し直す**(スケッチ平面の点と同じ流儀)。
+     * `projectBasePlane` は「その画素からのレイが本当にその平面に当たり、手前に面が
+     * 無い」ことを確かめてから返すので、部品に隠れている所を押すことはない。
+     */
+    async function createSketchOnBase(name = 'XY') {
+      await page.click('#sketch-create')
+      let at = null
+      try {
+        const handle = await page.waitForFunction(
+          (plane) => {
+            const rect = document.querySelector('.viewport').getBoundingClientRect()
+            const position = window.__duocad.projectBasePlane(plane)
+            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+          },
+          { timeout, polling: 50 },
+          name,
+        )
+        at = await handle.jsonValue()
+      } catch {
+        fail(`基準平面 ${name} を指せる画素が無い(「スケッチ」が起動しているか)`)
+      }
+      await page.mouse.click(at.x, at.y)
+    }
+
     async function clickPlane(u, v) {
       const at = await page.evaluate(
         (uu, vv) => {
@@ -179,7 +207,7 @@ async function main() {
     }
 
     // ================================================================ 板を作る
-    await page.click('#sketch-new-XY')
+    await createSketchOnBase('XY')
     await waitFor(() => window.__duocad.activeSketch !== null, 'XY平面のスケッチに入れない')
     await page.click('#sketch-rectangle')
     await clickPlane(0, 0)
@@ -209,7 +237,7 @@ async function main() {
 
     // ================================================================ 検証1: 追随
     // 穴を1つ描いて矩形反復で3つにし、まとめて切り取ってから**径を1箇所だけ**打ち直す。
-    await page.click('#sketch-new-XY')
+    await createSketchOnBase('XY')
     await waitFor(() => window.__duocad.sketches.length === 2, '穴のスケッチに入れない')
     await page.click('#sketch-circle')
     await clickPlane(HOLE.u, HOLE.v)

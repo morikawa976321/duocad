@@ -41,7 +41,9 @@
   import {
     DEFAULT_SKETCH_COMMAND_ID,
     SKETCH_COMMANDS,
+    SKETCH_CREATE,
     ghostEntity,
+    runsOutsideSketch,
   } from './commands/sketch'
   import PartsPanel from './PartsPanel.svelte'
   import SelectionPanel from './SelectionPanel.svelte'
@@ -76,7 +78,14 @@
    * 領域押し出しは**両方に居る**(描いた直後に押し出すのと、モードを抜けてから
    * 領域を選んで押し出すのは、どちらも実際に使う)。
    */
-  const SOLID_COMMANDS = [...COMMANDS, ...SOLID_FEATURE_COMMANDS, ...FILE_COMMANDS]
+  const SOLID_COMMANDS = [
+    ...COMMANDS,
+    ...SOLID_FEATURE_COMMANDS,
+    // **`sketch_create` はスケッチ分類だがここに載る** —— `sketch_id` を取らず、
+    // スケッチモードの外で走る唯一のverbだからである(`commands/sketch.ts` のdocstring)。
+    SKETCH_CREATE,
+    ...FILE_COMMANDS,
+  ]
   const SKETCH_MODE_COMMANDS = [...SKETCH_COMMANDS, ...SKETCH_FEATURE_COMMANDS]
 
   /**
@@ -126,12 +135,20 @@
   let host = $state<{
     addPoint(u: number, v: number): boolean
     wantsPoint(): boolean
+    wantsPlane(): boolean
+    setBasePlane(name: BasePlaneName): boolean
+    useSelectedFaceAsPlane(): boolean
     restoreLastInputs(): void
   } | null>(null)
 
   // ---------------------------------------------------------------- D: 辺とフィーチャ
   /** 起動中のコマンドが選択から取る種別(`CommandHost` が知らせる)。 */
   let wantedKinds = $state<SelectableKind[]>([])
+  /**
+   * 起動中のコマンドが**基準平面を要求している**か(`CommandHost` が知らせる)。
+   * 辺と同じ規律で、要求している間だけビューポートで指せるようにする。
+   */
+  let wantedPlane = $state(false)
   /** 取り寄せた辺(body_id -> その版の折れ線)。**版が変われば捨てる**。 */
   let edges = $state<Record<string, EdgesPayload>>({})
   /** 取り寄せ中のもの(`${body_id}:${revision}`)。同じ要求を何度も投げないため。 */
@@ -460,6 +477,23 @@
     session.getEdges(edgeTargetBody)
   })
 
+  /**
+   * 基準3平面を指せるのは**スケッチのコマンドを起動している間だけ**(辺と同じ規律)。
+   * スケッチモード中は出さない —— 描いている最中のクリックは点か領域であり、
+   * 奥の基準平面を掴むと線が引けなくなる。
+   */
+  const wantsBasePlanes = $derived(sketchId === null && wantedPlane)
+
+  $effect(() => {
+    // **先に読んでから渡す。** `viewport?.showBasePlanes(wantsBasePlanes)` と書くと、
+    // 初回(まだ `onMount` 前で `viewport` が null)に `?.` が短絡して
+    // `wantsBasePlanes` を一度も読まず、この $effect が依存を1つも持たないまま二度と
+    // 再実行されない —— 起動しても平面が指せない、という形で出る(実測で踏んだ)。
+    // 上の辺の $effect が同じ穴に落ちていないのは、`wantsEdges` を先に読んでいるから。
+    const on = wantsBasePlanes
+    viewport?.showBasePlanes(on)
+  })
+
   function modifySelection(add: SelectionRef[], remove: SelectionRef[]): void {
     if (add.length === 0 && remove.length === 0) return
     session.modifySelection(add, remove, nextOp())
@@ -485,7 +519,20 @@
     if (mode === 'add') modifySelection([ref], [])
     else if (mode === 'remove') modifySelection([], [ref])
     else if (already && (mode === 'toggle' || current.length === 1)) modifySelection([], [ref])
-    else modifySelection([ref], current.filter((item) => !sameRef(item, ref)))
+    else selectOnly(ref)
+  }
+
+  /**
+   * その参照**だけ**が選ばれている状態にする(常に置き換え。再クリックで外さない)。
+   *
+   * `editSelection` の置き換えの実体でもあるが、**トグルの判定を通らない**のが違い ——
+   * スケッチを貼る先として面を指す経路がこれを直接呼ぶ。既に選ばれている面をもう一度
+   * クリックしたときに `editSelection` の解除に落ちると選択が空になり、直後に走る
+   * `sketch_create` が「面が選ばれていない」で失敗する。ここでは「指した面に貼る」が常に成立する。
+   */
+  function selectOnly(ref: SelectionRef): void {
+    const current = selection?.items ?? []
+    modifySelection([ref], current.filter((item) => !sameRef(item, ref)))
   }
 
   /**
@@ -498,6 +545,21 @@
       return
     }
     const current = selection?.items ?? []
+    // **スケッチを貼る先を待っているとき**。基準平面はその場で決まり(即適用が同期に走る)、
+    // 面は「選択を置き換えたうえで `'face'` を入れる」——
+    // 送るのは選択が確定して配信されてからで、その待ち受けは `CommandHost` が持つ。
+    if (host?.wantsPlane()) {
+      if (event.plane !== null) {
+        host.setBasePlane(event.plane)
+        return
+      }
+      if (event.hit !== null) {
+        host.useSelectedFaceAsPlane()
+        selectOnly(faceRef(event.hit.bodyId, event.hit.faceIndex))
+        return
+      }
+      // 何も無い所をクリックしたら、通常どおり選択解除だけして待ち続ける(下へ落とす)
+    }
     // **辺が当たったら辺**。フィレット・面取りを起動している間だけ来る。
     if (event.edge !== null) {
       editSelection(
@@ -574,18 +636,6 @@
     }
   }
 
-  function createSketchOnBase(name: BasePlaneName): void {
-    session.runVerb('sketch_create', { plane: { kind: 'base', name, provenance: null } }, nextOp())
-  }
-
-  function createSketchOnFace(face: ShapeRef): void {
-    session.runVerb(
-      'sketch_create',
-      { plane: { kind: 'face', body: face.body, index: face.index, provenance: null } },
-      nextOp(),
-    )
-  }
-
   function setParameter(name: string, value: number): void {
     session.runVerb('set_parameter', { name, value }, nextOp())
   }
@@ -623,6 +673,16 @@
     switch (category) {
       // -------------------------------------------------------------- C: スケッチ
       case 'sketch': {
+        // **`sketch_create` だけはスケッチモードの外で走る** —— スケッチを作るverbなので、
+        // 入っていることを要求すると永久に起動できない。反復の `needsSketchId` と同じ形の
+        // 判定を1つ置いて迂回させる: 反復が「分類は feature だが `sketch_id` が要る」で、
+        // こちらは「分類は sketch だが `sketch_id` が要らない」という裏返しの位置にいる。
+        if (runsOutsideSketch(verb)) {
+          const op = nextOp()
+          pendingOp = op
+          session.runVerb(verb, args, op)
+          return
+        }
         if (sketchId === null) {
           fail('スケッチモードに入っていない')
           return
@@ -779,7 +839,7 @@
     // 2回作り直すことになる(面のハイライトと違って作り直しが重い)。
   })
 
-  /** 選択の先頭の面。スケッチを貼る対象と、テスト用フックの `selected` が使う。 */
+  /** 選択の先頭の面。**テスト用フックの `selected` だけが使う**(互換のための穴)。 */
   const firstFace = $derived(selectedFaces[0] ?? null)
 
   // 自動テスト(scripts/smoke.mjs)がブラウザの中を見るための穴。ローカル専用ツールなので
@@ -812,6 +872,10 @@
       hoverPoint,
       projectSketchPoint: (u: number, v: number) =>
         sketchId === null ? null : (viewport?.projectSketchPoint(sketchId, u, v) ?? null),
+      // C: 基準平面。**実機検査が本物のクリックで貼る先を指す**ための穴
+      // (指せる状態=スケッチのコマンドを起動している間しか座標を返さない)。
+      wantsBasePlanes,
+      projectBasePlane: (name: BasePlaneName) => viewport?.projectBasePlane(name) ?? null,
       projectRegion: (index: number) =>
         sketchId === null ? null : (viewport?.projectRegion(sketchId, index) ?? null),
       // D: 辺とフィーチャ。**実機検査が本物のクリックで辺を選ぶ**ための穴
@@ -860,6 +924,7 @@
         onCancelPreview={clearPreview}
         onNote={note}
         onWants={(kinds) => (wantedKinds = kinds)}
+        onWantsPlane={(wants) => (wantedPlane = wants)}
       />
     {/key}
   </section>
@@ -906,10 +971,7 @@
       <SketchPanel
         {sketches}
         activeSketchId={sketchId}
-        selectedFace={firstFace}
         selection={selection?.items ?? []}
-        onCreateOnBase={createSketchOnBase}
-        onCreateOnFace={createSketchOnFace}
         onEnter={enterSketch}
         onExit={exitSketch}
         onLookAt={() => sketchId && viewport?.lookAtSketch(sketchId)}

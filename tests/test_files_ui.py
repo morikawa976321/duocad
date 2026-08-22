@@ -38,7 +38,6 @@ from duocad.server import FILE_COMMANDS, Server, Session
 
 DEVIATION = 0.2
 SIDE = 20.0
-XY_PLANE = {"kind": "base", "name": "XY", "provenance": None}
 
 
 @pytest.fixture()
@@ -54,7 +53,7 @@ def _select(session: Session, refs: list) -> None:
 
 def _box(session: Session):
     """スケッチ→長方形→領域押し出しで 20mm の立方体を作る(D の `_box` と同じ手順)。"""
-    sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
     _select(session, [{"sketch": sketch_id, "index": 1}])
     session.extrude_regions(SIDE, mode="join")
@@ -129,7 +128,7 @@ def test_opening_replays_a_log_that_contains_set_parameter(
     **再生前にログを文書へ束ねていない**と `parameters.rebuild` が拒否する。
     順序を間違えても他のverbだけのログは開けてしまうため、ここで固定する。
     """
-    sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 5.0)
     _select(session, [{"sketch": sketch_id, "index": 1}])
     session.extrude_regions(10.0, mode="join")
@@ -259,7 +258,7 @@ def test_stl_export_honours_the_deviation(session: Session, tmp_path: Path) -> N
     12枚のままでファイルサイズが1バイトも変わらない(立方体で書くと 684B == 684B のまま
     検査にならない)。STLの近似が効くのは曲面である。
     """
-    sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     _select(session, [{"sketch": sketch_id, "index": 1}])
     session.extrude_regions(SIDE, mode="join")
@@ -360,7 +359,7 @@ def test_the_browser_can_still_make_an_editable_copy_of_a_reference(
 # --------------------------------------------------------------------------------------
 def test_named_values_are_published_and_drive_the_shape(session: Session) -> None:
     """**名前つきの値が配られ、打ち直すと形が追随する**(タスクEの検証1の実体)。"""
-    sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 5.0)
     _select(session, [{"sketch": sketch_id, "index": 1}])
     session.extrude_regions(10.0, mode="join")
@@ -384,13 +383,13 @@ def test_named_values_are_published_and_drive_the_shape(session: Session) -> Non
 
 def test_a_pattern_of_holes_follows_one_named_value(session: Session) -> None:
     """**1箇所直すと反復で作った穴が全部追随する**(タスクEの検証1・M3の存在理由)。"""
-    plate_sketch = session.sketch_create(XY_PLANE)["sketch_id"]
+    plate_sketch = session.sketch_create("XY")["sketch_id"]
     session.add_rectangle(plate_sketch, [0.0, 0.0], 60.0, 20.0)
     _select(session, [{"sketch": plate_sketch, "index": 1}])
     session.extrude_regions(5.0, mode="join")
     body = session.document.bodies[-1]
 
-    holes = session.sketch_create(XY_PLANE)["sketch_id"]
+    holes = session.sketch_create("XY")["sketch_id"]
     entity_id = session.add_circle(holes, [10.0, 10.0], 2.0)["entity_id"]
     session.pattern_rectangular(holes, [entity_id], 15.0, 0.0, 3, 1)
     regions = [

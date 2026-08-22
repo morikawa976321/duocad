@@ -61,7 +61,10 @@ CATEGORIES = ("query", "selection", "sketch", "feature", "file", "history", "pro
 #: `Command.ws` に書ける値。
 #:
 #: - `table`   … `server.py` の表(`SKETCH_COMMANDS` 等)に載り、`_dispatch` が機械的に捌く
-#: - `special` … WebSocketから踏めるが `_dispatch` が個別に捌く(応答の形が他と違うもの)
+#: - `special` … WebSocketから踏めるが `_dispatch` が個別に捌く。**表の規約に合わない
+#:               もの**がここへ来る —— 応答の形が他と違う(`open_document`)か、
+#:               **省略できる引数がある**(`sketch_create` の `base_plane`)かのどちらか。
+#:               表の「載せた引数は全部必須」はそのまま保つ(`Param.ws` 参照)
 #: - `none`    … WebSocketには開けていない(`propose_selection` はAIが書く経路)
 WS_SURFACES = ("table", "special", "none")
 
@@ -74,7 +77,9 @@ class Param:
     入力スキーマになり、`ws` はWebSocketの表に載るかどうかを決める。
     """
 
-    #: 引数名。**MCP側の綴りが正**(WSだけ違う場合は `ws_name` を書く)。
+    #: 引数名。**MCP・WS・`Session` のメソッドで同じ綴り**である
+    #: (2026-08-22まで `sketch_create` だけWSの綴りを変える仕掛けがあったが、
+    #: 綴りが違うのは引数の中身が違っていたからで、契約を揃えたら要らなくなった)。
     name: str
     #: JSON Schema の `type`(`"number"` / `["number", "array"]` のような値)。
     type: Any
@@ -82,16 +87,10 @@ class Param:
     description: str
     #: MCPで必須か。省略できる引数は実体側にも既定値があること。
     required: bool = True
-    #: WebSocketのコマンドが受け取るか。**WSは載せたものを全部必須にする**
-    #: (既定値で補うと、打ち忘れた寸法や `mode` が黙って既定で入る)。
+    #: WebSocketのコマンドが受け取るか。**表(`Command.ws == "table"`)は載せたものを
+    #: 全部必須にする**(既定値で補うと、打ち忘れた寸法や `mode` が黙って既定で入る)。
+    #: 省略を許したい引数があるコマンドは表に載せず `ws="special"` にすること。
     ws: bool = True
-    #: WS側だけ名前が違うときの綴り(`sketch_create` の `base_plane` / `plane` だけ)。
-    ws_name: Optional[str] = None
-
-    @property
-    def wire_name(self) -> str:
-        """WebSocketのメッセージに載る名前(= `Session` のメソッドの引数名)。"""
-        return self.ws_name or self.name
 
 
 @dataclass(frozen=True)
@@ -148,7 +147,7 @@ class Command:
     @property
     def ws_params(self) -> tuple[str, ...]:
         """WebSocketのコマンドが受け取る引数名(**すべて必須**)。"""
-        return tuple(p.wire_name for p in self.params if p.ws)
+        return tuple(p.name for p in self.params if p.ws)
 
     @property
     def preview_params(self) -> tuple[str, ...]:
@@ -158,7 +157,7 @@ class Command:
         WSのコマンドでは受けない(アクティブなBodyへ足す)が、プレビューは
         行き先を指定した結果を見せられる。
         """
-        return tuple(p.wire_name for p in self.params)
+        return tuple(p.name for p in self.params)
 
     def input_schema(self) -> dict:
         """MCPの `inputSchema`(JSON Schema)。"""
@@ -361,13 +360,17 @@ COMMANDS: tuple[Command, ...] = (
                 "string",
                 "基準平面名 XY / XZ / YZ。省略時は確定選択の面",
                 required=False,
-                ws_name="plane",
             ),
         ),
         session="sketch_create",
+        ws="special",
         note=(
-            "**WSだけ引数名が `plane`** —— ブラウザは基準平面(`{kind:'base'}`)と"
-            "面に貼る(`{kind:'face'}`)を同じ引数で送り分けるので、名前が `base_plane` だと嘘になる"
+            "**MCPとWSで引数が同じ**(2026-08-22)。以前はWSだけ `plane` という名前で"
+            "面参照(`{kind:'face'}`)そのものを受けており、**対象集合を引数で渡す経路が"
+            "ここだけ残っていた**。今はどちらも `base_plane` だけを取り、省略時は"
+            "コアの確定選択の面(ちょうど1枚)に貼る。"
+            "省略できる引数があるので表には載せられず(表は全引数必須)、"
+            '`ws="special"` で `_dispatch` が個別に捌く'
         ),
     ),
     Command(

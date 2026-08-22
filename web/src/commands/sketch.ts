@@ -24,7 +24,7 @@
  * どのスケッチに描くかは「今どのスケッチモードに居るか」であって、コマンドが集める
  * 引数ではない。`App.svelte` が送信時に足す(コマンド定義がセッションの状態を知らない)。
  */
-import type { CommandDef, Point2 } from './command'
+import { isPlaneArgValue, type CommandDef, type Point2 } from './command'
 
 /**
  * 確定前の姿(幽霊)の組み立ては `../entityKinds` の唯一の表へ寄せてある
@@ -171,6 +171,65 @@ export const ADD_ARC: CommandDef = {
     if (start === end) return { ok: false, reason: '開始角と終了角が同じ' }
     return { ok: true, args: { center, radius, start_deg: start, end_deg: end } }
   },
+}
+
+/**
+ * スケッチを作る —— **「スケッチ」を押して、貼る先をクリックする2手**(2026-08-22本人決定。
+ * engine `2026-08-22-duocad-sketch-start-is-two-steps-by-pointing`)。
+ *
+ * ## ここだけ居場所が違う
+ *
+ * 分類は `sketch` だが `sketch_id` を取らず、**スケッチモードの外で走る唯一のverb**である
+ * (だから一覧も `SKETCH_COMMANDS` ではなく `App.svelte` のソリッド側に載る)。反復
+ * (`pattern_*`)が「分類は feature だが `sketch_id` が要る」のちょうど裏返しで、
+ * `App.svelte` の送信経路はその2箇所を `needsSketchId`(features.ts)と
+ * 下の `runsOutsideSketch` の2つの述語で捌く。
+ *
+ * ## 貼る先の指し方は1つ(ポインティング)
+ *
+ * 基準平面のボタンは置かない —— 置くと「ボタンで指す」と「クリックで指す」の2つが
+ * 並び、面に貼る経路だけがクリックになる(UI指針1「実物をクリックできるものにボタンを
+ * 作らない」)。基準平面はビューポートのグリッドを、面はソリッドの面を、同じ1クリックで指す。
+ *
+ * ## 面は送らない
+ *
+ * 面に貼るときの `build` は **`{}`** を返す。面の参照を引数に入れると「対象集合の
+ * 指定方法」が再び2つになる(`extrude_face` と同じ流儀。サーバは
+ * `selection.require_confirmed(doc, "face", exactly_one=True)` で確定選択から取る)。
+ * 2枚選んでいれば `SelectionAmbiguous`、AIの提案のままなら `SelectionNotCommitted` が
+ * 返り、トーストで人に見える。
+ */
+export const SKETCH_CREATE: CommandDef = {
+  id: 'sketch_create',
+  category: 'sketch',
+  label: 'スケッチ',
+  buttonId: 'sketch-create',
+  preview: 'none',
+  // **引数名は `target`** —— WSに載る名前(`base_plane`)とわざと変えてある。値は
+  // 「基準平面名」か「面は選択にある」の2状態で、`base_plane` だと後者が嘘になる
+  // (かつては逆に、WSだけが `plane` という名前で面参照そのものを受けていた)。
+  args: [{ kind: 'plane', name: 'target', label: 'スケッチを貼る先' }],
+  build(values) {
+    const plane = values.target
+    if (!isPlaneArgValue(plane)) return { ok: false, reason: '貼る先が決まっていない' }
+    // **面は送らない**(サーバがコアの確定選択から取る)。基準平面だけが引数になる。
+    return { ok: true, args: plane === 'face' ? {} : { base_plane: plane } }
+  },
+}
+
+/**
+ * そのverbは**スケッチモードの外で走る**か(= `sketch_id` を足さずに送るか)。
+ *
+ * 該当するのは `sketch_create` だけである —— スケッチを作るverbなので、モードに
+ * 入っていることを要求すると永久に起動できない。`features.ts` の `needsSketchId`
+ * (分類は feature だが `sketch_id` が要る反復)のちょうど裏返しで、**分類だけでは
+ * 送り方が決まらない2箇所**をこの2つの述語で名指ししている。
+ *
+ * **列挙にしてある**(「引数に `plane` があるか」等で導出しない)ので、スケッチモードの
+ * verbを新しく足しても既定は変わらない —— 足したverbは今までどおり `sketch_id` が付く。
+ */
+export function runsOutsideSketch(verb: string): boolean {
+  return verb === SKETCH_CREATE.id
 }
 
 /**

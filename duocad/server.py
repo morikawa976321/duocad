@@ -828,7 +828,26 @@ class Session:
             payload.update(extra)
         return self._emit(payload)
 
-    def sketch_create(self, plane: Any) -> dict:
+    def sketch_create(self, base_plane: Optional[str] = None) -> dict:
+        """スケッチを作る。`base_plane`(XY/XZ/YZ)省略時は**確定選択の面**(ちょうど1枚)に貼る。
+
+        **面は引数で受けない**(2026-08-22)。以前はここが `plane` として
+        `{"kind":"face", "body":..., "index":...}` をそのまま受けており、
+        **対象集合を引数で渡す最後の経路**になっていた —— MCPは同じ操作を確定選択から
+        取っており(そちらの4行がここへ上がってきた実体)、2箇所に同じ解決を持つと
+        片方だけ直したときに「AIと人で貼る先が違う」形で食い違う。
+
+        平面も選択も無ければエラーにする —— 既定でXYに貼ると、図形が静かに別の場所に出る。
+        2枚選んでいれば `SelectionAmbiguous`、AIの提案のままなら `SelectionNotCommitted`
+        が `require_confirmed` から上がり、そのままWS/MCPのエラーになる。
+        """
+        if base_plane is not None:
+            plane: Any = str(base_plane)
+        else:
+            face = selection.require_confirmed(
+                self.document, "face", exactly_one=True
+            )[0]
+            plane = sketch.face_plane(face["body"], face["index"])
         sketch_id = sketch.sketch_create(self.document, plane)
         return self._after_logged_verb({"sketch_id": sketch_id})
 
@@ -1382,6 +1401,16 @@ class Server:
             # **既にMCPが持っていたverbをブラウザにも開けただけ**(選択の3コマンドと同じ)。
             # コアには何も足していない —— スケッチがAIからしか触れない状態は、この企画の
             # 中心命題「手動操作が一級の操作モード」に真正面から反する(実装計画書§8b C)。
+            # **スケッチを作るのは表に載らない** —— `base_plane` が省略できる引数だからで
+            # (表は載せた引数を全部必須にする)、省略は「コアの確定選択の面に貼る」を意味する。
+            # `catalog` の `ws="special"` がその宣言で、ここがその実体である。
+            elif command == "sketch_create":
+                applied = self._apply(
+                    self.session.sketch_create,
+                    message.get("base_plane"),
+                )
+                applied["client_op"] = message.get("client_op")
+                await self._push(connection, applied=applied)
             elif command in SKETCH_COMMANDS:
                 method, keys = SKETCH_COMMANDS[command]
                 applied = self._apply(

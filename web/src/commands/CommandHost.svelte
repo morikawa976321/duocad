@@ -13,7 +13,9 @@
    * **「起動した後の1手で引数が揃ったとき」にだけ `commit()` する**。
    *
    * - **点で揃うもの**(線分)… `addPoint` の中で同期に判定する。
-   * - **選択で揃うもの**(編集用に複製)… 面のクリックはWS往復の後に届くので、
+   * - **基準平面で揃うもの**(スケッチ作成)… `setBasePlane` の中で同期に判定する
+   *   (グリッドのピックはブラウザだけで決まる)。
+   * - **選択で揃うもの**(編集用に複製 / 面に貼るスケッチ)… 面のクリックはWS往復の後に届くので、
    *   **この画面が出した選択変更が起動後に届いた回数**(`selfSelections`)を見る。
    *   起動時の値を控え、増えたときだけ発火させる(`armedSelections`)。
    *   **起動前から面が選ばれていても、AIが選択を書き換えても発火しない。**
@@ -85,6 +87,7 @@
     onCancelPreview,
     onNote,
     onWants = () => {},
+    onWantsPlane = () => {},
   }: {
     /** コアの選択集合(state.selection)。 */
     selection: SelectionState | null
@@ -131,6 +134,12 @@
      * 27部品ぶんの辺が要り、面のピックも辺に取られて押し出しが遅くなる。
      */
     onWants?: (kinds: SelectableKind[]) => void
+    /**
+     * 起動中のコマンドが**基準平面を要求している**か。`onWants`(辺)と同じ形の受動的な
+     * 知らせで、アプリ層はこれを見て `viewport.showBasePlanes()` を切り替える ——
+     * 常時指せると、面を狙うクリックが手前のグリッドに取られる。
+     */
+    onWantsPlane?: (wants: boolean) => void
   } = $props()
 
   /** 打ち終わってからプレビューを投げるまでの待ち[ms]。 */
@@ -153,6 +162,14 @@
 
   /** 選んだ選択肢(引数名 -> 値)。**既定は入れない**(`ChoiceArgSpec` のdocstring)。 */
   let choices = $state<Record<string, string>>({})
+
+  /**
+   * 指したスケッチ平面(引数名 -> `'XY' | 'XZ' | 'YZ' | 'face'`)。
+   *
+   * **点と同じくここに持つ**(選択集合には入れない)。基準平面は選択集合に入れられる
+   * 種別ではないし、面の側も**入るのは面の参照であって「面に貼る」という意思ではない**。
+   */
+  let planes = $state<Record<string, string>>({})
 
   /**
    * 打ち込んだ文字列(引数名 -> 値。今のところファイルのパスだけ)。
@@ -179,6 +196,9 @@
         collected[spec.name] = entities
       } else if (spec.kind === 'text') {
         collected[spec.name] = textValues[spec.name] ?? ''
+      } else if (spec.kind === 'plane') {
+        const chosen = planes[spec.name]
+        if (chosen) collected[spec.name] = chosen
       } else {
         const raw = (numberText[spec.name] ?? '').trim()
         const parsed = raw === '' ? Number.NaN : Number.parseFloat(raw)
@@ -244,6 +264,11 @@
     )
   })
 
+  /** 基準平面を要求しているか(辺と同じ規律で、起動している間だけ指せるようにする)。 */
+  $effect(() => {
+    onWantsPlane(command.args.some((spec) => spec.kind === 'plane'))
+  })
+
   // ---------------------------------------------------------------- プレビュー
   let previewTimer: ReturnType<typeof setTimeout> | null = null
   /** 直前に投げたプレビューの印(同じものを投げ直さないため)。 */
@@ -286,11 +311,17 @@
 
   // ---------------------------------------------------------------- 即適用(Enterが要らないもの)
   /**
-   * 即適用のうち、**選択が揃うのを待つ**もの(いまは `make_editable_copy` だけ)。
-   * 点で揃うもの(線分)は `addPoint` の中で同期に判定するので、ここには来ない。
+   * 即適用のうち、**選択が揃うのを待つ**もの(`make_editable_copy` と、
+   * 面に貼るときの `sketch_create`)。点・基準平面のように**その場で決まる**ものは
+   * `addPoint` / `setBasePlane` の中で同期に判定するので、ここには来ない。
+   *
+   * 平面引数を含める理由: 面をクリックしてスケッチを貼る経路は、`plane` の値こそ
+   * その場で `'face'` に決まるが、**サーバが読むのはコアの確定選択**なので、
+   * 選択がサーバに届いて配信されるまで送ってはならない。待ち方は面の複製と同じでよい。
    */
   const appliesOnSelection = $derived(
-    !needsEnter(command) && command.args.some((spec) => spec.kind === 'selection'),
+    !needsEnter(command) &&
+      command.args.some((spec) => spec.kind === 'selection' || spec.kind === 'plane'),
   )
 
   /**
@@ -383,6 +414,7 @@
       Object.values(numberText).some((text) => text !== '') ||
       Object.keys(points).length > 0 ||
       Object.keys(choices).length > 0 ||
+      Object.keys(planes).length > 0 ||
       ready
     reset()
     if (commandId !== defaultCommandId) commandId = defaultCommandId
@@ -393,6 +425,7 @@
     numberText = {}
     points = {}
     choices = {}
+    planes = {}
     // **即適用の待ち受けも降ろす**。確定・中断のどちらでも「起動している間」は終わりで、
     // 構え直すのは `start()`(ボタンを押す1手)だけにする。
     armedSelections = null
@@ -453,6 +486,43 @@
   /** スケッチモードで待っている点があるか(App.svelte がクリックの行き先を決める)。 */
   export function wantsPoint(): boolean {
     return missing?.kind === 'point'
+  }
+
+  /**
+   * スケッチを貼る先(基準平面 or 面)を待っているか。
+   * `wantsPoint` と同じで、`App.svelte` がクリックの行き先を決めるために見る。
+   */
+  export function wantsPlane(): boolean {
+    return missing?.kind === 'plane'
+  }
+
+  /**
+   * **基準平面のグリッドをクリックした**。点(`addPoint`)と同じく**その場で決まる**ので、
+   * これで引数が揃い Enter が要らないなら、そのまま適用する(2手目のクリックが確定を兼ねる)。
+   *
+   * 待っている平面引数が無ければ何もしない(`false` を返す)。
+   */
+  export function setBasePlane(name: string): boolean {
+    const spec = firstMissingArg(command, values)
+    if (spec === null || spec.kind !== 'plane') return false
+    planes = { ...planes, [spec.name]: name }
+    if (!needsEnter(command) && firstMissingArg(command, values) === null) commit()
+    return true
+  }
+
+  /**
+   * **ソリッドの面をクリックした** —— 貼る先を「選択にある面」にする。
+   *
+   * `setBasePlane` と違い**ここでは適用しない**。面はサーバがコアの確定選択から取るので、
+   * 呼び出し側が同時に出した選択の変更がサーバへ届いて配信されるまで送れない。
+   * 適用は上の `$effect`(`selfSelections` が増えたとき)が行う ——
+   * **引き金は「人がこの画面で指した回数」のままで、選択の中身ではない**。
+   */
+  export function useSelectedFaceAsPlane(): boolean {
+    const spec = firstMissingArg(command, values)
+    if (spec === null || spec.kind !== 'plane') return false
+    planes = { ...planes, [spec.name]: 'face' }
+    return true
   }
 
   function focusFirstNumber(): void {

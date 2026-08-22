@@ -91,6 +91,11 @@ TARGET_SET_ARGS = {
     "face_indices",
     "vertices",
     "vertex_index",
+    # `plane` は2026-08-22に足した。**面参照がこの名前で検査を素通りしていた** ——
+    # WSの `sketch_create` だけが `plane={"kind":"face","body":...,"index":...}` を受けており、
+    # 「対象集合を引数で渡さない」の唯一の例外がここに残っていたのに、上の名前の
+    # どれにも当たらないので誰も落とさなかった(名前で見る検査の弱点そのもの)。
+    "plane",
 }
 
 #: `body_id` を引数に持ってよいコマンド -> なぜそれが対象集合ではないか。
@@ -344,12 +349,17 @@ def test_ai_commands_are_not_verbs():
     )
 
 
-@pytest.mark.parametrize("command_id", ["import_step_editable", "make_editable_copy", "fillet"])
+@pytest.mark.parametrize(
+    "command_id", ["import_step_editable", "make_editable_copy", "fillet", "sketch_create"]
+)
 def test_the_names_that_bit_us_are_covered(command_id: str):
     """この検査が実際に効く名前を名指しで残す。
 
     `import_step_editable` は、コマンド名とログに載るverb名が食い違うバグの
-    再発防止として効く。
+    再発防止として効く。`sketch_create` は**表に載らないコマンド**(`ws="special"`)
+    なので、UI側のIDと実在の突き合わせが宣言経由でしか効かない —— 個別に捌く分岐を
+    消したら `test_every_hand_dispatched_command_has_a_branch` が、宣言ごと消したら
+    ここが落ちる。
     """
     assert command_id in _server_command_names()
     assert command_id in _ui_command_ids()
@@ -430,8 +440,9 @@ def _needs_enter(args: list[tuple[str, str]]) -> bool:
 #: **Enterが要るか**の表(True = Enterで確定 / False = 引数が揃ったクリックで即適用)。
 #:
 #: 2026-08-22の本人決定(engine `2026-08-22-duocad-ui-interaction-principles`)で、
-#: 「省けるクリックは徹底的に省く」の実装として入った。**即適用は2つだけ**である:
-#: `add_line`(点2つで揃う)と `make_editable_copy`(面1つで揃う)。
+#: 「省けるクリックは徹底的に省く」の実装として入った。**即適用は3つ**である:
+#: `add_line`(点2つで揃う)・`make_editable_copy`(面1つで揃う)・
+#: `sketch_create`(貼る先の平面1つで揃う。2026-08-22に足した)。
 #: verbを足したらここへ1行足すことになる —— そのとき**Enterが要るかを1回考える**のが狙いで、
 #: 表そのものが実装の入力になっているわけではない(判定は `args` からの導出が正)。
 ENTER_REQUIRED = {
@@ -448,6 +459,7 @@ ENTER_REQUIRED = {
     "export_stl": True,            # パス + 偏差
     "make_editable_copy": False,   # **面1つだけ。howが無い → 即適用**
     "add_line": False,             # **点2つだけ。howが無い → 即適用**
+    "sketch_create": False,        # **貼る先を1つ指すだけ。howが無い → 即適用**
     "add_circle": True,            # 中心 + 半径
     "add_rectangle": True,         # 左下 + 幅 + 高さ
     "add_arc": True,               # 中心 + 半径 + 角度2つ
@@ -467,8 +479,8 @@ def test_the_command_arguments_are_readable():
     assert args["select_in_sketch"] == [], f"引数の読み取りが壊れている: {args['select_in_sketch']}"
 
 
-def test_only_two_commands_apply_without_enter():
-    """**Enter要否は `args` からの導出**であり、いま即適用になるのは2つだけである。
+def test_only_three_commands_apply_without_enter():
+    """**Enter要否は `args` からの導出**であり、いま即適用になるのは3つだけである。
 
     per-commandのフラグを置かない設計(`command.ts` の `needsEnter`)なので、引数の書き方を
     変えると**別のverbのEnter要否が黙って変わる** —— 例えば `make_editable_copy` の
@@ -481,9 +493,12 @@ def test_only_two_commands_apply_without_enter():
         f"{ {name: value for name, value in derived.items() if ENTER_REQUIRED.get(name) != value} }"
     )
     immediate = sorted(name for name, value in derived.items() if not value)
-    assert immediate == ["add_line", "make_editable_copy", "select_in_sketch"], (
-        f"即適用になるコマンドの顔ぶれが変わった: {immediate}"
-    )
+    assert immediate == [
+        "add_line",
+        "make_editable_copy",
+        "select_in_sketch",
+        "sketch_create",
+    ], f"即適用になるコマンドの顔ぶれが変わった: {immediate}"
 
 
 def test_the_immediate_apply_fires_only_on_the_users_own_click():

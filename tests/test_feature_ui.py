@@ -40,7 +40,6 @@ from duocad.server import FEATURE_COMMANDS, Server, Session
 
 DEVIATION = 0.2
 SIDE = 20.0
-XY_PLANE = {"kind": "base", "name": "XY", "provenance": None}
 
 #: §7の実測値(20mm立方体の全辺)。**この2つが逆転したら §7 の記述が古い**。
 RADIUS_THAT_FAILS = 10.0
@@ -72,7 +71,7 @@ def _box(session: Session):
     **人が手でやる順序そのもの**(タスクDの検証1「手だけで板を作る」の最小形)。
     領域を選んでから押し出すのも人の順序どおり。
     """
-    sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
     _select(session, [{"sketch": sketch_id, "index": 1}])
     session.extrude_regions(SIDE, mode="join")
@@ -204,7 +203,7 @@ def test_a_round_edge_comes_back_curved_and_closed(session: Session) -> None:
     直線と同じ2点で返すと、画面上は円筒の丸い稜線が弦1本になり、**狙ってクリックできない**
     (面取りで円錐を作るには円い辺を指す必要がある。タスクDの検証3 = `PC_case_feet` の構成)。
     """
-    sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     _select(session, [{"sketch": sketch_id, "index": 1}])
     session.extrude_regions(SIDE, mode="join")
@@ -290,7 +289,7 @@ def test_the_browser_can_extrude_a_region_and_cut_a_hole(session: Session) -> No
     """**手だけで板に穴を開けられる**(タスクDの検証1)。cut は体積を減らす。"""
     body, _ = _box(session)
     volume_before = query.volume(body.shape)
-    hole_sketch = session.sketch_create(XY_PLANE)["sketch_id"]
+    hole_sketch = session.sketch_create("XY")["sketch_id"]
     session.add_circle(hole_sketch, [10.0, 10.0], 4.0)
     _select(session, [{"sketch": hole_sketch, "index": 1}])
 
@@ -316,7 +315,7 @@ def test_the_browser_can_extrude_a_region_and_cut_a_hole(session: Session) -> No
 def test_extrude_without_a_mode_is_refused(session: Session) -> None:
     """**`mode` を既定で埋めない**。「切り取るつもりで足した」が黙って通らないこと。"""
     _box(session)
-    sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [10.0, 10.0], 4.0)
     _select(session, [{"sketch": sketch_id, "index": 1}])
     before = _fingerprint(session)
@@ -399,7 +398,7 @@ def test_the_browser_can_chamfer(session: Session) -> None:
 
 def test_the_browser_can_repeat_shapes_in_a_grid(session: Session) -> None:
     """矩形反復。**元を含めた個数**(nx×ny)がそのまま描画対象の数になる。"""
-    sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     entity_id = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
 
     async def script(send):
@@ -428,7 +427,7 @@ def test_a_full_circle_pattern_of_eight_steps_by_45_degrees(session: Session) ->
     タスクDの検証4がこの目視確認を要求している —— 全周を `count-1` で割る実装だと
     最後の複製が最初と重なり、8個のつもりが7個に見える。
     """
-    sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     entity_id = session.add_circle(sketch_id, [20.0, 0.0], 2.0)["entity_id"]
 
     async def script(send):
@@ -554,7 +553,7 @@ def test_a_failing_preview_leaves_nothing_behind(session: Session) -> None:
 
 def test_previewing_a_region_extrude_does_not_add_a_body(session: Session) -> None:
     """新しいソリッドを作る押し出し(join・対象なし)でも、プレビューは1つも残さない。"""
-    sketch_id = session.sketch_create(XY_PLANE)["sketch_id"]
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
     _select(session, [{"sketch": sketch_id, "index": 1}])
     before = _fingerprint(session)
