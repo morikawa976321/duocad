@@ -273,8 +273,11 @@ COMMANDS: tuple[Command, ...] = (
     ),
     # ---------------------------------------------------------------- 選択
     # **コアの選択集合をそのまま叩く**(アプリ層に選択状態を持たせない)。人が直す経路
-    # (`modify_selection`)とAIの提案を承認する経路(`commit_selection`)がUIから
+    # (`modify_selection`)と提案を確定する経路(`commit_selection`)がUIから
     # 踏めないと、交互操作は片道のままになる。
+    # **`commit_selection` は「人の承認」専用ではない**(2026-08-22) —— AIが自分の提案を
+    # 確定して verb まで進む手でもある。どちらの意味で踏まれたかはコアには関係がなく、
+    # AIが止まるか進むかの規則は `agent_instructions()` の1本に書いてある。
     Command(
         name="get_selection",
         category="selection",
@@ -291,6 +294,8 @@ COMMANDS: tuple[Command, ...] = (
             "AIが選択を書き込むときに呼ぶ。refs(明示参照)か predicate(述語)の"
             "どちらか一方。結果は提案(origin=proposed)なので、verb の前に"
             "commit_selection が要る。"
+            "ここで止めて人に見せるか、自分で commit して verb まで行くかは"
+            "依頼の具体性で決める(人の承認を待つ義務は無い)。"
         ),
         params=(
             Param(
@@ -331,7 +336,8 @@ COMMANDS: tuple[Command, ...] = (
         category="selection",
         description=(
             "提案を確定するときに呼ぶ(中身は変えない)。"
-            "AIが自分の提案を fillet 等へ渡す直前の明示の1手。"
+            "AIが自分の提案を fillet 等へ渡す直前の明示の1手で、"
+            "AIが自分で呼んでよい(人が画面で承認するのと同じ手)。"
         ),
         session="commit_selection",
         ws="special",
@@ -814,6 +820,21 @@ def agent_instructions() -> str:
     アプリ内から呼ぶエージェント(`duocad/agent/`)。**手順(propose→commit→verb)は同じ**なので、
     2箇所に書くと片方だけ直った状態に気づけない。ツール数も宣言から数える —— 手で書いた「29」は
     verbを足した日に古くなる。
+
+    **どこまで自分でやるかもここに書く**(2026-08-22本人決定。engine
+    `2026-08-22-duocad-ui-interaction-principles`)。以前は「提案して人の承認を待つ」を
+    無条件の規則にしていたが、`commit_selection` は最初からAIにも公開されていたので、
+    人の承認を強制していたのは**この文だけ**だった。新しい規則は2段:
+
+    - **確認を待たず適用してよい操作** … 対象を何個でも取る引数が無く、how(寸法・選択肢・
+      パス)の入力も無いもの。人に聞くことが残っていないので、提案で止める意味が無い。
+      **判定基準は手動UIのEnter要否と同一**(`web/src/commands/command.ts` の `needsEnter`。
+      表は `tests/test_ui_command_wiring.py`)。個々のverb名をこの文に書かない —— verbを
+      足した日に古くなるうえ、基準さえ書けばツール定義の引数から導ける。
+    - **止まるか進むかをAIが決める操作** … 上以外。依頼の具体性から判断する。
+
+    `SelectionNotCommitted` の門(`duocad/selection.py`)は**残してある** —— これが無いと
+    「提案で止める」が単なる無操作になり、選択肢として成立しない。
     """
     return (
         f"duocad(自作3DCAD)の開いている文書を操作する。公開ツールは{len(tool_names())}個。"
@@ -823,6 +844,19 @@ def agent_instructions() -> str:
         "propose_selection(predicate または refs) → commit_selection → "
         "fillet / extrude などの verb。"
         "提案のままでは verb に渡せない。"
+        "ただし commit_selection はAI自身が呼んでよい —— 人の承認は要らない。"
+        "どこまで自分で進めるかは次の2段で決める。"
+        "(1) 対象を何個でも取る引数が無く、how(寸法・選択肢・パス)の入力も無い操作は、"
+        "確認を待たず propose_selection → commit_selection → verb を一息に実行してよい"
+        "（人に聞くことが残っていない。手動UIでEnterが要らない操作と同じ基準。"
+        "名前・ID・座標・貼る先の平面名は how ではなく対象として数える）。"
+        "(2) それ以外(対象を何個でも取る、または how の入力がある操作)は、"
+        "提案で止めるか適用まで行くかを依頼の文面から自分で判断する: "
+        "対象も数値も定まる具体的な指示なら適用まで行き、"
+        "曖昧・探索的な依頼なら propose_selection で止めて何を選んだかを述べ、"
+        "確定してよいかを尋ねる（止めたら verb は呼ばない）。"
+        "迷ったら (2) では止める側に倒す —— 提案は人が直せるが、"
+        "適用してしまった形は undo で戻すしかない。"
         "形を変える verb が確定すると選択は空になるので、次の対象は選び直す。"
         "set_visible の結果は人間が開いているブラウザの画面にも即座に反映される。"
     )

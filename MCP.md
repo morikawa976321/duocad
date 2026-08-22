@@ -5,7 +5,8 @@
 
 公開ツールは**29個**。面・辺・領域などの**形は引数で受けず、確定した選択から取る**
 （数値・名前・パスだけが引数）。提案の選択はそのまま verb に渡せない — 先に
-`commit_selection` が要る。
+`commit_selection` が要る。**この1手はAI自身が踏んでよい**（人の承認を待つ規則は
+2026-08-22に外した。どこまで自分でやるかは下記「AIはどこまで自分でやるか」）。
 
 ## 公開ツール（29）
 
@@ -24,8 +25,57 @@
 
 1. `describe_document` で `body_id` / スケッチ / パラメータ名を知る
 2. `propose_selection`（`refs` か `predicate`）→ 必要なら `measure` で確認 → `commit_selection`
+   （**AIが自分で踏む**。人に見せて止めるときだけ踏まない）
 3. `fillet(radius=…)` / `extrude(distance=…)` など — **辺や領域は引数に書かない**
 4. `import_step_editable` は**読んだ時点で編集できるボディ**を返す（`body_ids`。追加の1手は要らない）
+
+## AIはどこまで自分でやるか（2026-08-22改訂）
+
+**「提案して人の承認を待つ」を無条件の規則にするのはやめた。** `commit_selection` は
+最初から上の一覧（選択5個）に載っており、AIが自分で確定して適用することは機構的に
+ずっと可能だった —— 承認を強制していたのは文書とプロンプトだけである。規則は2段になった。
+
+### (1) 確認を待たず適用してよい操作
+
+次の**どちらにも当たらない**操作:
+
+- 対象を**何個でも取る**引数がある（何本の辺で終わりなのかは機械には決められない）
+- **how**（寸法・選択肢・パス）の入力がある（打ち終わり・選び終わりも機械には決められない）
+
+**how は「何をどうするか」の値だけ**である。ボディ名・`sketch_id` のようなID・点の座標・
+スケッチを貼る先の平面名（`base_plane` の `XY`/`XZ`/`YZ`）は、文字列や列挙に見えても
+**対象（target）の側**であり how には数えない（手動UIでも `PlaneArgSpec` / `point` は
+how ではない）。
+
+どちらにも当たらなければ対象は1つに定まり、人に聞くことが残っていない。AIは
+`propose_selection` → `commit_selection` → verb を**一息に実行してよい**。
+
+**この基準は手動UIのEnter要否と同一のもの**である（人が押すEnterは「まだ足すのか・
+打ち終わったか」を人が言う手であり、AIが確認を待つ理由と同じ）。判定の実物は
+`web/src/commands/command.ts` の `needsEnter`、どのverbがどちらかの表は
+`tests/test_ui_command_wiring.py`（`ENTER_REQUIRED`）が機械で固定している。
+**顔ぶれをここに写さない** —— verbを足した日に古くなるうえ、基準さえ書けばツールの
+引数から導ける。
+
+### (2) それ以外の操作 — 止まるか進むかをAIが判断する
+
+提案で止めるか適用まで行くかを、**AIがユーザーのプロンプトから自律的に判断する**。目安:
+
+| 依頼 | AIの動き |
+|---|---|
+| 対象も数値も定まる具体的な指示（「上面の穴4つを半径2でフィレット」） | `commit_selection` して適用まで行く |
+| 曖昧・探索的（「角を丸めたい」「どこを削ればいい?」） | `propose_selection` で止め、何を選んだかを述べて確定してよいか尋ねる |
+
+**迷ったら止める側に倒す** —— 提案は人がクリックで直せるが、適用してしまった形は
+`undo` で戻すしかない。
+
+### 止める選択肢を成立させているもの
+
+提案のまま verb を呼ぶとコアが `selection_not_committed` で断る（`duocad/selection.py` の
+`confirmed_items`）。**この門があるから「止めた」が本当に止まる**ので、撤去していない。
+
+> AIへ渡す文（MCPの `instructions` とアプリ内AIパネルのシステムプロンプト）は
+> `catalog.agent_instructions()` の1本で、この規則もそこに入っている（下記「実装のメモ」）。
 
 ## 何が起きるか（このサーバの位置づけ）
 
@@ -119,6 +169,7 @@ claude mcp add duocad -- C:\Users\tm976\mf\duocad\.venv\Scripts\python.exe -m du
 1. `describe_document` を呼ぶ → `body_id`・スケッチ・パラメータ名を得る
 2. 手前の部品を隠すなら `set_visible(body_id, false)`（**人間の画面からも消える**）
 3. 対象を `propose_selection` で選び、`commit_selection` してから fillet / extrude 等
+   —— **確定を人に頼まない**。提案で止めるかどうかの判断は上記「AIはどこまで自分でやるか」
 4. STEPを足すなら `import_step_editable(path)` —— **これ1回で編集できるボディが揃う**
    （戻り値の `body_ids` がそれ。`reference_ids` は隠してある原本）。
    参照ボディだけが欲しいときは `import_step(path)` を使う（続きに `make_editable_copy` が要る）

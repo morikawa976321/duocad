@@ -148,6 +148,30 @@ def test_the_system_prompt_is_the_same_text_the_mcp_server_hands_out():
     assert str(len(catalog.tool_names())) in shared
 
 
+def test_the_system_prompt_carries_the_two_step_autonomy_rule():
+    """**AIが止まるか進むかの規則は、この文にしか無い**(2026-08-22本人決定)。
+
+    `commit_selection` は最初からMCPに公開されているので、人の承認を強制していたのは
+    プロンプトと文書だけだった。裏を返すと、**ここを旧規則(承認必須)へ戻しても
+    コアは何も止めない** —— 赤にならずに振る舞いだけが変わる。だから文で固定する。
+
+    即実行してよい側の条件は、手動UIのEnter要否
+    (`web/src/commands/command.ts` の `needsEnter`)と**同じ2条件**である
+    (対象を何個でも取る / how の入力がある)。表は `tests/test_ui_command_wiring.py`。
+    **個々のverb名はこの文に書かない**(verbを足した日に古くなる)ので、ここでも見ない。
+    """
+    shared = catalog.agent_instructions()
+
+    # (1) 即実行してよい側 —— needsEnter と同じ2条件で書かれている
+    assert "対象を何個でも取る" in shared, "条件(1)『対象が複数か』が落ちている"
+    assert "how(寸法・選択肢・パス)" in shared, "条件(2)『howの入力があるか』が落ちている"
+    # (2) 残りは「AIが依頼から判断する」であって「人の承認を待つ」ではない
+    assert "自分で判断する" in shared, "自律判断の規則が落ちている"
+    assert "人の承認は要らない" in shared, "旧規則(承認必須)へ戻っている疑い"
+    # 止めると決めたら verb を呼ばない(呼べばコアが SelectionNotCommitted で断る)
+    assert "verb は呼ばない" in shared, "『止める』の中身が書かれていない"
+
+
 # --------------------------------------------------------------------------------------
 # 2. アダプタの整形(HTTPを差し替えた単体検査。実キーで外部を叩かない)
 # --------------------------------------------------------------------------------------
