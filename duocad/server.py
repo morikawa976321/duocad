@@ -1426,7 +1426,7 @@ class Server:
             return
 
         try:
-            self._commit_before_verb(command, message)
+            await self._commit_before_verb(connection, command, message)
             if command == "get_state":
                 await self._push(connection, applied=None, only=connection)
             elif command == "extrude_face":
@@ -1586,7 +1586,7 @@ class Server:
                 },
             )
 
-    def _commit_before_verb(self, command: Any, message: dict) -> None:
+    async def _commit_before_verb(self, connection: Any, command: Any, message: dict) -> None:
         """**人がツールバーからコマンドを実行する行為そのものを承認とみなす**(2026-08-23本人裁定)。
 
         対象集合を確定選択から取るverb(`SELECTION_CONSUMING_COMMANDS`)がこのソケットへ
@@ -1602,9 +1602,17 @@ class Server:
         「提案のまま押し出そうとした瞬間に `SelectionNotCommitted` の札だけが出る」が残る。
         投機実行するverbは `message["verb"]` にある。
 
-        `_apply` で囲むのは、この commit の発火を**WebSocket経由の変更として印す**ため
-        (囲まないと `_on_core_change` が余分な状態配信を1回増やす。直後のverbの `_push` が
-        新しい origin ごと配るので、それで足りる)。
+        **確定したら必ずここで配信する**(`_push`)。後続のverbの配信に相乗りさせてはいけない
+        —— `preview` は「状態を配らない」コマンドなので、相乗りにすると
+        **サーバの origin だけが `user` になり、画面は `proposed` のまま残る**。
+        `SelectionPanel` を廃した今、origin を人へ伝えるのは3Dの色だけであり、
+        AI側が `get_selection` で読む値でもあるので、この食い違いは
+        「人が承認していないのに承認済みに見える」状態そのものになる(2026-08-23 QA指摘・実測で再現)。
+
+        **`client_op` は載せない(`None`)**。これは人が出した選択編集ではなく、サーバが
+        自動で行う確定である。verbの `client_op` を載せると、アプリ層がこれを
+        「この画面が出した選択変更」と数え(`selfSelections` = 即適用の引き金)、
+        さらに `pendingOp` を verb の完了前に解いてしまう。
         """
         name = message.get("verb") if command == "preview" else command
         if name not in SELECTION_CONSUMING_COMMANDS:
@@ -1616,7 +1624,8 @@ class Server:
             return
         if not selection.get_selection(self.session.document).is_proposed():
             return
-        self._apply(self.session.commit_selection, message.get("client_op"))
+        applied = self._apply(self.session.commit_selection, None)
+        await self._push(connection, applied=applied)
 
     def _apply(self, call: Any, *args: Any, **kwargs: Any) -> dict:
         """WebSocket経由の変更を実行する。この間だけ `_dispatching` を立てる。

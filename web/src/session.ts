@@ -46,8 +46,12 @@ export type SelectionRef = ShapeRef | RegionRef
  * 共有される選択集合(`duocad/selection.py` の `Selection.to_dict()`)。
  *
  * **origin は集合単位**。`"proposed"` はAIが提案した状態で、そのままではverbに渡せない
- * (コアが `SelectionNotCommitted` で止める)。人が `commit_selection` を踏むか、
- * `modify_selection` で触ると `"user"` になる。
+ * (コアが `SelectionNotCommitted` で止める)。`"user"` になる道は2つ ——
+ * 人がクリックで触る(`modify_selection`)か、**人が対象集合を食うコマンドを実行する**
+ * (2026-08-23。サーバが走らせる直前に確定する。`duocad/server.py` の `_commit_before_verb`)。
+ *
+ * **画面から `commitSelection` を呼ぶ道は無い**(同日「承認する」ボタンごと廃止した)。
+ * 提案と確定を人へ伝えるのは**3Dのハイライト色だけ**なので、この値は必ず配信で追随する。
  */
 export interface SelectionState {
   items: SelectionRef[]

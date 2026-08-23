@@ -217,6 +217,75 @@ def test_a_preview_also_commits_a_proposed_selection(session: Session) -> None:
     assert session.get_selection()["origin"] == "user"
 
 
+def _state_origins(client) -> list:
+    """その接続が受け取った状態配信の origin を届いた順に返す。"""
+    return [
+        payload["state"]["selection"]["origin"]
+        for payload in client.payloads
+        if payload.get("type") == "state"
+    ]
+
+
+def test_the_automatic_commit_reaches_every_client(session: Session) -> None:
+    """**自動確定は必ず配信する** —— サーバとブラウザで origin が食い違わないこと。
+
+    落ちると、サーバの選択は `user` なのに画面は `proposed` のまま残る。
+    `SelectionPanel` を廃した今、origin を人へ伝えるのは3Dの色だけであり、AI側が
+    `get_selection` で読む値でもあるので、**人が承認していないのに承認済みに見える**
+    状態そのものになる。
+
+    とくに `preview` で落ちやすい —— あれは「状態を配らない」コマンドなので、確定の配信を
+    後続のverbの `_push` に相乗りさせると preview だけが漏れる(2026-08-23 QA指摘)。
+    プレビューして Esc で降りると、その食い違いが**そのまま残る**。
+    """
+    body, _ = _box(session)
+    _propose_face(session, body)
+
+    async def script(send):
+        return await send(
+            {"cmd": "preview", "verb": "extrude_face", "args": {"distance": 5.0}}
+        )
+
+    (answer, clients) = _browser(session, script)
+
+    assert answer["type"] == "preview", answer
+    assert session.get_selection()["origin"] == "user"
+    # **要求した接続にも、見ているだけの接続にも届く**(2本つないでいる理由)
+    for number, client in enumerate(clients):
+        assert _state_origins(client) == ["user"], (
+            f"client{number} に確定が届いていない: "
+            f"{[payload.get('type') for payload in client.payloads]}"
+        )
+
+
+def test_the_automatic_commit_is_not_counted_as_a_human_selection(session: Session) -> None:
+    """自動確定の配信に **`client_op` を載せない**。
+
+    載せるとアプリ層がこれを「この画面が出した選択変更」と数え(`selfSelections` ——
+    即適用の引き金)、さらに `pendingOp` をverbの完了前に解く。どちらも
+    **人が指していないのに文書が変わる**方向の事故なので、載せないことを固定する。
+    """
+    body, _ = _box(session)
+    _propose_face(session, body)
+
+    async def script(send):
+        return await send({"cmd": "extrude_face", "distance": 5.0, "client_op": 7})
+
+    (answer, clients) = _browser(session, script)
+
+    selections = [
+        payload["applied"]
+        for payload in clients[0].payloads
+        if payload.get("type") == "state"
+        and (payload.get("applied") or {}).get("change") == "selection"
+    ]
+    assert len(selections) == 1, selections
+    assert selections[0]["client_op"] is None
+    # verbのほうは今までどおり自分の `client_op` を持って返る
+    assert answer["applied"]["verb"] == "extrude_face"
+    assert answer["applied"]["client_op"] == 7
+
+
 def test_selection_editing_and_visibility_do_not_commit(session: Session) -> None:
     """**可視性の切替・問い合わせでは確定しない**(コマンド行を通るverbだけが承認になる)。
 

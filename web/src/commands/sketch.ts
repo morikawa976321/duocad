@@ -174,8 +174,10 @@ export const ADD_ARC: CommandDef = {
  *
  * **面は送らない**: 面に貼るときの `build` は **`{}`** を返す。面の参照を引数に入れると
  * 「対象集合の指定方法」が再び2つになる(サーバは `require_confirmed(doc, "face",
- * exactly_one=True)` で確定選択から取る)。2枚選んでいれば `SelectionAmbiguous`、AIの提案の
- * ままなら `SelectionNotCommitted` が返り、トーストで人に見える。
+ * exactly_one=True)` で確定選択から取る)。2枚選んでいれば `SelectionAmbiguous` が返り、
+ * トーストで人に見える。**AIの提案のままでも止まらない**(2026-08-23) —— 面に貼る
+ * (`base_plane` を送らない)経路は対象集合を確定選択から取るので、サーバが走らせる直前に
+ * 自動で確定する(`duocad/server.py` の `_commit_before_verb`)。
  */
 export const SKETCH_CREATE: CommandDef = {
   id: 'sketch_create',
