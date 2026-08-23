@@ -652,6 +652,22 @@
     gap: 8px;
     flex-wrap: wrap;
     row-gap: 6px;
+    position: relative;
+  }
+
+  /* コマンド行と、その後に続く引数行(選択肢/パス/数値)との区切り。`:first-child`だけ
+     外すのは、選択肢/パス行が`{#if}`で出たり消えたりしても先頭行は常にコマンド行だから。
+     position:absoluteの疑似要素は通常フローの高さに数えられないので、`.command-host`の
+     gap(4px)の中に線を描いても`.toolbar`ひいてはビューポートの実寸(styles.css冒頭の
+     不変条件)は動かない。border/paddingだと各行の高さがそのままビューポートを押し縮める。 */
+  .row:not(:first-child)::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -2px;
+    height: 1px;
+    background: var(--line);
   }
 
   .label {

@@ -142,6 +142,21 @@
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+    /* .list(ファイル一覧)との区切り線を`.row::after`で描く土台。position:absoluteの
+       疑似要素は通常フローの高さに数えられないので、`.files-panel`のgap(6px)の中に線を
+       描いても`.toolbar`ひいてはビューポートの実寸(styles.css冒頭の不変条件)は動かない。
+       border/paddingで区切ると、この行の高さが直接ビューポートを押し縮める。 */
+    position: relative;
+  }
+
+  .row::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -3px;
+    height: 1px;
+    background: var(--line);
   }
 
   .label {
