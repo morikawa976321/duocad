@@ -10,6 +10,21 @@
  * スクロールし、各パネルは flex: 0 0 auto で自分の高さを固定する。ビューポートに
  * 浮かせるもの(ブラウザ・トースト)は position:absolute でフローの外に出す。
  */
+/* 同梱フォント(2026-08-23決定。PlemolJP Console v3.1.0、SIL OFL 1.1 — public/fonts/plemoljp/LICENSE.txt)。
+   Consolas/Meiryoなどのシステムフォント任せをやめ、OSによらず同じ見た目に固定するために同梱した
+   (4候補を実機で比較した上での選定。他候補はCica/HackGen/UDEVGothic — 経緯はengineのメモを参照)。
+   本体はwoff2化・サブセット無しの全グリフ版。半角:全角=1:2のConsole版なのでラベルと数値の桁が揃う。 */
+@font-face {
+  font-family: 'PlemolJP Console';
+  src: url('/fonts/plemoljp/PlemolJPConsole-Regular.woff2') format('woff2');
+  font-weight: 400;
+}
+@font-face {
+  font-family: 'PlemolJP Console';
+  src: url('/fonts/plemoljp/PlemolJPConsole-Bold.woff2') format('woff2');
+  font-weight: 700;
+}
+
 :root {
   --bg: oklch(17% 0.006 250);
   --panel: oklch(20.5% 0.006 250);
@@ -28,7 +43,7 @@
   /* 右サイドバーの幅。トースト(Toast.svelte)がビューポートの右上へ寄るのに要る —
      2箇所に 300px を書き写すと、幅を変えた日に片方だけ置き去りになる。 */
   --sidebar-w: 300px;
-  --font: "Consolas", "Cascadia Mono", "Meiryo", monospace;
+  --font: "PlemolJP Console", "Consolas", "Cascadia Mono", "Meiryo", monospace;
 }
 
 * {
