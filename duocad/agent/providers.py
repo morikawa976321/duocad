@@ -61,6 +61,16 @@ class ProviderError(RuntimeError):
         self.status = status
 
 
+class ProviderTimeout(ProviderError):
+    """**待ち時間切れ**だけを表す(2026-08-23)。
+
+    接続拒否やHTTP 5xxと**同じ型にしない** —— 呼び出し側(`AgentLoop`)は、自分が
+    合計時間の予算で待ちを縮めたときだけ、これを「こちらの都合による打ち切り」と
+    読み替える。型が同じだと、本物の障害まで `timeout` と名乗ることになり、
+    直す場所を見誤らせる。`ProviderError` を捕まえている既存の経路はそのまま効く。
+    """
+
+
 # --------------------------------------------------------------------------------------
 # 中立の往復型(ループとアダプタの間の言葉)
 # --------------------------------------------------------------------------------------
@@ -218,9 +228,17 @@ def post_json(url: str, payload: dict, headers: dict, timeout: float) -> dict:
             f"HTTP {error.code} from {_origin(url)}: {detail}", status=error.code
         ) from None
     except urllib.error.URLError as error:
+        # **待ち時間切れが `URLError` に包まれて来る経路がある**(2026-08-23)。
+        # 接続の段階で切れると urllib は `URLError(reason=TimeoutError(...))` を投げ、
+        # この節が下の `except TimeoutError` より先に捕まえてしまう。包みの中を見て
+        # 名前を付け直さないと、こちらの予算による打ち切りが「接続できない」になる。
+        if isinstance(error.reason, TimeoutError):
+            raise ProviderTimeout(
+                f"{_origin(url)} が {timeout:g}s で返らなかった"
+            ) from None
         raise ProviderError(f"{_origin(url)} へ接続できない: {error.reason}") from None
     except TimeoutError:
-        raise ProviderError(f"{_origin(url)} が {timeout:g}s で返らなかった") from None
+        raise ProviderTimeout(f"{_origin(url)} が {timeout:g}s で返らなかった") from None
 
     try:
         parsed = json.loads(body)
@@ -438,7 +456,11 @@ class AnthropicProvider(Provider):
         try:
             return self._transport(url, payload, headers, timeout)
         except ProviderError as error:
-            raise ProviderError(
+            # **型をそのまま保って作り直す**(2026-08-23)。秘匿のために新しい例外へ
+            # 詰め替えるので、`ProviderError(...)` と書くと `ProviderTimeout` が
+            # ただの `ProviderError` へ潰れる —— 呼び出し側は待ち時間切れだけを
+            # 別扱いするので、ここで型が消えると本物の障害と区別できなくなる。
+            raise type(error)(
                 _redact(str(error), self._api_key), status=error.status
             ) from None
         except Exception as error:  # HTTPライブラリがヘッダ値を例外文へ載せる場合がある
@@ -625,7 +647,11 @@ class OpenAICompatProvider(Provider):
         try:
             return self._transport(url, payload, headers, timeout)
         except ProviderError as error:
-            raise ProviderError(
+            # **型をそのまま保って作り直す**(2026-08-23)。秘匿のために新しい例外へ
+            # 詰め替えるので、`ProviderError(...)` と書くと `ProviderTimeout` が
+            # ただの `ProviderError` へ潰れる —— 呼び出し側は待ち時間切れだけを
+            # 別扱いするので、ここで型が消えると本物の障害と区別できなくなる。
+            raise type(error)(
                 _redact(str(error), self._api_key), status=error.status
             ) from None
         except Exception as error:

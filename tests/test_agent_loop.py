@@ -31,6 +31,7 @@ from duocad.agent import (
     Limits,
     OpenAICompatProvider,
     ProviderError,
+    ProviderTimeout,
 )
 from duocad.agent.providers import (
     ANTHROPIC_API_KEY_ENV,
@@ -490,12 +491,17 @@ def test_multiple_tool_calls_in_one_reply_all_run_and_report_progress():
 
 
 def test_a_failing_tool_returns_the_structured_envelope_and_the_loop_keeps_going():
-    """**構造化封筒をそのままモデルへ返して自己修復させる**(MCP経路と同じ語彙)。"""
+    """**構造化封筒をそのままモデルへ返して自己修復させる**(MCP経路と同じ語彙)。
+
+    依頼に半径を書いてあるのは、**このテストが見たいのが選択の空**だからである
+    (2026-08-23)。書かないと寸法のガードが先に立って `dimension_not_given` で
+    止まり、`selection_empty` まで届かない —— ガード自体は下の専用テストが見る。
+    """
     surface = tools()
     provider = RecordedProvider(
         [tool_use("fillet", {"radius": 2.0}), tool_use("describe_document", {}), spoke("直しました")]
     )
-    run = AgentLoop(surface, provider).run("フィレットして")
+    run = AgentLoop(surface, provider).run("R2でフィレットして")
 
     first = run.tool_calls[0]
     assert first.ok is False
@@ -584,6 +590,74 @@ def test_the_total_time_budget_does_not_fire_on_a_normal_run():
     assert run.status == "completed"
 
 
+# --------------------------------------------------------------------------------------
+# 人が言っていない寸法で形を変えないこと(2026-08-23)
+# --------------------------------------------------------------------------------------
+def test_a_dimension_nobody_asked_for_is_refused_before_the_verb_runs():
+    """**規律を文章で頼まず、ここで機械的に止める**。
+
+    `agent_instructions()` は「曖昧な依頼なら propose_selection で止めて尋ねる」
+    「迷ったら止める側に倒す」と書いてあるが、モデルはこれを守れなかった —— 実測で
+    「角が尖ってて危ないから、いい感じに処理しといて」に対し、止まらず R1.5mm を
+    自分で決めて fillet まで適用した。適用してしまった形はundoでしか戻せない。
+    """
+    surface = tools()
+    provider = RecordedProvider([tool_use("fillet", {"radius": 1.5}, "c0"), spoke("やめた")])
+
+    run = AgentLoop(surface, provider).run("角が尖ってて危ないから、いい感じに処理しといて")
+
+    assert envelope_code(run.tool_calls[0].result) == "dimension_not_given"
+    assert run.tool_calls[0].ok is False
+    assert "radius" in run.tool_calls[0].result["error"]["message"]
+
+
+def test_a_dimension_the_person_gave_passes_through():
+    """人が量を言っていれば止めない(止めるのは捏造だけ)。"""
+    surface = tools()
+    provider = RecordedProvider([tool_use("fillet", {"radius": 3}, "c0"), spoke("done")])
+
+    run = AgentLoop(surface, provider).run("上面の辺をR3で丸めて")
+
+    assert envelope_code(run.tool_calls[0].result) != "dimension_not_given"
+
+
+def test_a_dimension_derived_from_what_the_person_said_passes_through():
+    """**厳密な照合にしない** —— 「直径8mm」から `radius: 4` を導くのは正しい。
+
+    値がそのまま本文にあることを求めると、この普通の依頼が通らなくなる。
+    見るのは「人が量を与えたか」だけでよい。
+    """
+    surface = tools()
+    provider = RecordedProvider(
+        [tool_use("add_circle", {"sketch_id": "s", "center": [0, 0], "radius": 4}, "c0"),
+         spoke("done")]
+    )
+
+    run = AgentLoop(surface, provider).run("原点に直径8mmの円を描いて")
+
+    assert envelope_code(run.tool_calls[0].result) != "dimension_not_given"
+
+
+def test_an_id_in_the_prompt_is_not_mistaken_for_a_dimension():
+    """`body_1` の 1 を「寸法を言った」と読むとガードが素通りする。"""
+    surface = tools()
+    provider = RecordedProvider([tool_use("fillet", {"radius": 2}, "c0"), spoke("やめた")])
+
+    run = AgentLoop(surface, provider).run("body_1の角を丸めておいて")
+
+    assert envelope_code(run.tool_calls[0].result) == "dimension_not_given"
+
+
+def test_a_verb_without_a_dimension_is_never_guarded():
+    """印の無いverbは素通し(`describe_document` は寸法を取らない)。"""
+    surface = tools()
+    provider = RecordedProvider([tool_use("describe_document", {}, "c0"), spoke("done")])
+
+    run = AgentLoop(surface, provider).run("いい感じに教えて")
+
+    assert run.tool_calls[0].ok is True
+
+
 def test_the_cancel_flag_stops_the_loop_between_tool_calls():
     surface = tools()
     cancellation = Cancellation()
@@ -646,6 +720,33 @@ def test_a_provider_failure_is_reported_not_raised():
     assert run.status == "provider_error"
     assert "529" in run.detail
     assert run.tool_calls == ()
+
+
+def test_a_real_provider_failure_is_not_renamed_to_timeout():
+    """**本物の障害を `timeout` と名乗らせない**(2026-08-23)。
+
+    合計時間の予算は1リクエストの待ちより常に短いので、「予算が縮めたか」だけで
+    判定すると接続拒否やHTTP 5xxまで `timeout` になる。読み替えてよいのは
+    `ProviderTimeout`(待ち時間切れ)のときだけである —— 原因がこちらの予算なのか
+    相手の障害なのかで、直す場所が違う。
+    """
+    surface = tools()
+    provider = RecordedProvider([ProviderError("https://api.example へ接続できない: refused")])
+
+    run = AgentLoop(surface, provider).run("やって")
+
+    assert run.status == "provider_error"
+
+
+def test_a_timeout_under_the_total_budget_is_reported_as_timeout():
+    """予算が待ちを縮めた結果の待ち時間切れは `timeout`(相手のせいではない)。"""
+    surface = tools()
+    provider = RecordedProvider([ProviderTimeout("127.0.0.1:8080 が 5s で返らなかった")])
+
+    run = AgentLoop(surface, provider, limits=Limits(max_total_seconds=5.0)).run("やって")
+
+    assert run.status == "timeout"
+    assert "5" in run.detail
 
 
 def test_stop_reasons_that_are_not_end_turn_are_reported_as_such():

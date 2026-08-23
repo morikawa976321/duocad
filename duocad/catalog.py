@@ -69,6 +69,20 @@ class Param:
     #: 全部必須にする**(既定値で補うと、打ち忘れた寸法や `mode` が黙って既定で入る)。
     #: 省略を許したい引数があるコマンドは表に載せず `ws="special"` にすること。
     ws: bool = True
+    #: **形の寸法を決める値か**(2026-08-23)。`agent_instructions()` の言う how のうち、
+    #: **数値の分だけ**をここで印す —— 半径・距離・間隔・個数・角度。
+    #:
+    #: 選択肢(`mode` / `visible`)とパス(`path`)は how だが印さない。あれらは言葉で
+    #: 指定されるものなので、「人が数量を言ったか」では測れず、印すと誤って止まる
+    #: (「カバーを隠して」に数字は無い)。**AIが勝手に決めてしまうのは寸法**であり、
+    #: undoでしか戻せない形を左右するのも寸法である。
+    #:
+    #: 対象を指すもの(`body_id` / `sketch_id` / `entities`)、点の座標
+    #: (`center` / `corner` / `p0`)、貼る先の平面名(`base_plane`)、命名(`name`)は
+    #: how ではないので印さない(`agent_instructions()` の但し書きと同じ線)。
+    #:
+    #: 使い道は `duocad/agent/loop.py` のガード1つだけ。
+    dimension: bool = False
 
 
 @dataclass(frozen=True)
@@ -362,7 +376,7 @@ COMMANDS: tuple[Command, ...] = (
         params=(
             Param("sketch_id", "string", "対象スケッチのID"),
             Param("center", "array", "中心 [u, v]"),
-            Param("radius", "number", "半径(mm)"),
+            Param("radius", "number", "半径(mm)", dimension=True),
         ),
         session="add_circle",
         resets_selection=True,
@@ -374,8 +388,8 @@ COMMANDS: tuple[Command, ...] = (
         params=(
             Param("sketch_id", "string", "対象スケッチのID"),
             Param("corner", "array", "左下コーナー [u, v]"),
-            Param("width", "number", "幅(mm)"),
-            Param("height", "number", "高さ(mm)"),
+            Param("width", "number", "幅(mm)", dimension=True),
+            Param("height", "number", "高さ(mm)", dimension=True),
         ),
         session="add_rectangle",
         resets_selection=True,
@@ -387,9 +401,9 @@ COMMANDS: tuple[Command, ...] = (
         params=(
             Param("sketch_id", "string", "対象スケッチのID"),
             Param("center", "array", "中心 [u, v]"),
-            Param("radius", "number", "半径(mm)"),
-            Param("start_deg", "number", "開始角(度・反時計)"),
-            Param("end_deg", "number", "終了角(度・反時計)"),
+            Param("radius", "number", "半径(mm)", dimension=True),
+            Param("start_deg", "number", "開始角(度・反時計)", dimension=True),
+            Param("end_deg", "number", "終了角(度・反時計)", dimension=True),
         ),
         session="add_arc",
         resets_selection=True,
@@ -403,7 +417,7 @@ COMMANDS: tuple[Command, ...] = (
             "領域は選択から取る(引数では受けない)。"
         ),
         params=(
-            Param("distance", "number", "押し出し量(mm・法線方向)"),
+            Param("distance", "number", "押し出し量(mm・法線方向)", dimension=True),
             Param(
                 "mode",
                 "string",
@@ -434,7 +448,7 @@ COMMANDS: tuple[Command, ...] = (
             "確定選択の面(ちょうど1枚)を押し出すときに呼ぶ。"
             "既存ソリッドの面を伸ばす経路。"
         ),
-        params=(Param("distance", "number", "押し出し量(mm)"),),
+        params=(Param("distance", "number", "押し出し量(mm)", dimension=True),),
         session="extrude",
         ws="special",
         previewable=True,
@@ -453,6 +467,7 @@ COMMANDS: tuple[Command, ...] = (
                 "radius",
                 ["number", "array"],
                 "半径(mm)。辺ごとのリストも可(選択順)",
+                dimension=True,
             ),
         ),
         session="fillet",
@@ -471,6 +486,7 @@ COMMANDS: tuple[Command, ...] = (
                 "distance",
                 ["number", "array"],
                 "面取り距離(mm)。辺ごとのリストも可(選択順)",
+                dimension=True,
             ),
         ),
         session="chamfer",
@@ -494,10 +510,10 @@ COMMANDS: tuple[Command, ...] = (
                 " sketches[].entities[].entity_id をそのまま渡す。"
                 "**IDを推測して組み立てない**(存在しないIDはエラーになる)",
             ),
-            Param("dx", "number", "X方向の間隔(mm)"),
-            Param("dy", "number", "Y方向の間隔(mm)"),
-            Param("nx", "integer", "X方向の個数(元を含む)"),
-            Param("ny", "integer", "Y方向の個数(元を含む)"),
+            Param("dx", "number", "X方向の間隔(mm)", dimension=True),
+            Param("dy", "number", "Y方向の間隔(mm)", dimension=True),
+            Param("nx", "integer", "X方向の個数(元を含む)", dimension=True),
+            Param("ny", "integer", "Y方向の個数(元を含む)", dimension=True),
         ),
         session="pattern_rectangular",
         resets_selection=True,
@@ -526,12 +542,13 @@ COMMANDS: tuple[Command, ...] = (
                 "**IDを推測して組み立てない**(存在しないIDはエラーになる)",
             ),
             Param("center", "array", "回転中心 [u, v]"),
-            Param("count", "integer", "総数(元を含む)"),
+            Param("count", "integer", "総数(元を含む)", dimension=True),
             Param(
                 "total_angle",
                 "number",
                 "全角度(度)。既定 360",
                 required=False,
+                dimension=True,
             ),
             Param(
                 "rotate_copies",
@@ -574,7 +591,7 @@ COMMANDS: tuple[Command, ...] = (
         ),
         params=(
             Param("name", "string", "パラメータ名(d1 等)"),
-            Param("value", "number", "新しい値"),
+            Param("value", "number", "新しい値", dimension=True),
         ),
         session="set_parameter",
         resets_selection=True,
@@ -643,6 +660,7 @@ COMMANDS: tuple[Command, ...] = (
                 "number",
                 "線形偏差(mm・絶対)。省略時はセッション既定",
                 required=False,
+                dimension=True,
             ),
             Param(
                 "body_ids",
@@ -825,6 +843,19 @@ def tool_descriptors() -> list:
 def tool_names() -> tuple:
     """MCPが公開するツール名(宣言の順)。"""
     return tuple(command.name for command in COMMANDS if command.mcp)
+
+
+def dimension_params(name: str) -> tuple[str, ...]:
+    """そのverbが取る**形の寸法を決める引数**の名前(`Param.dimension`)。
+
+    未知の名前は空を返す —— 知らないverbを「寸法を取らない」扱いにするのは、
+    ガード側(`agent/loop.py`)が**印のあるものだけを止める**設計だからである
+    (知らないものを止めると、verbを足した日に別の理由で止まる)。
+    """
+    for command in COMMANDS:
+        if command.name == name:
+            return tuple(p.name for p in command.params if p.dimension)
+    return ()
 
 
 def agent_instructions() -> str:

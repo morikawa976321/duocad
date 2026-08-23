@@ -9,6 +9,10 @@
    `Session._reset_selection_if_needed` の全リセットが届かない2つの経路を埋めてある ——
    (a) `fillet` / `chamfer` / `extrude` は**選択を経由しない対象ボディ解決**(`body_id` の
    既定=アクティブ)を持つので `editable_body(require_visible=True)` を課す(「B」節)、
+   なお各テストの依頼文に寸法(10mm・R2)を書いてあるのは、**このファイルが見たいのが
+   楽観ロックだから**である(2026-08-23)。書かないと寸法のガード
+   (`AgentLoop._dimensions_nobody_asked_for`)が先に立ち、verbまで届かない。
+
    (b) 選択をまったく経由しないverb(`set_visible` 等)には `AgentLoop.run()` の**楽観ロック**
    (「D」節)。版は `(ログの本数, 選択の指紋)` で、チェックは**ツール1件を実行する直前ごと**
    —— 件数も種別も変わらない「選択の入れ替え」も、1つの応答に束ねられた呼び出しの**間**も
@@ -272,7 +276,7 @@ def test_the_optimistic_lock_does_not_trip_on_the_loops_own_actions(box_session:
     )
     provider = ConcurrentEditProvider([(reply, None), (spoke("できました"), None)])
 
-    run = AgentLoop(tools, provider).run("面を押し出して教えて")
+    run = AgentLoop(tools, provider).run("面を10mm押し出して教えて")
 
     assert run.status == "completed"
     assert [outcome.name for outcome in run.tool_calls] == ["extrude_face", "describe_document"]
@@ -311,7 +315,7 @@ def test_reselecting_the_same_kind_between_commit_and_the_verb_call_is_detected(
         ]
     )
 
-    run = AgentLoop(tools, provider).run("さっき選んだ辺をフィレットして")
+    run = AgentLoop(tools, provider).run("さっき選んだ辺をR2でフィレットして")
 
     assert run.status == "completed"
     assert len(provider.requests) == 3, "1回止めて選び直させ、2回目で成功して完了するはず"
@@ -382,7 +386,7 @@ def test_a_concurrent_edit_between_two_tool_calls_in_the_same_reply_is_detected(
     )
     provider = ConcurrentEditProvider([(reply, None), (spoke("できました"), None)])
 
-    run = AgentLoop(tools, provider).run("面を押し出してからboxを表示して")
+    run = AgentLoop(tools, provider).run("面を10mm押し出してからboxを表示して")
 
     assert run.status == "completed"
     # 1件目(extrude_face)は実行される。2件目(set_visible)は、その直前に人がboxを

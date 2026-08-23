@@ -28,7 +28,9 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
+import unicodedata
 from time import monotonic
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Protocol, Sequence, runtime_checkable
@@ -38,6 +40,7 @@ from .providers import (
     AssistantTurn,
     Provider,
     ProviderError,
+    ProviderTimeout,
     ToolCall,
     ToolResult,
     ToolResultTurn,
@@ -284,6 +287,12 @@ class AgentLoop:
             # 古い決定になる。ツールを実行する**直前ごとに**(1件目だけでなく)これと
             # 比べる(下記「文書(または選択)が変わっていたら実行しない」)。
             seq_before_request = self.tools.current_seq()
+            # **予算が縮めたのか、元から短かったのか**を覚えておく(2026-08-23)。
+            # 「失敗した時刻が締切を過ぎているか」で判定すると取りこぼす —— 実測で、
+            # 締切のわずか手前(29.2秒/上限30秒)で発火した回が `provider_error` を名乗った。
+            # 縮めたのがこちらの予算なら、その事実がそのまま答えである。
+            budget_left = deadline - monotonic()
+            capped_by_budget = budget_left < self.limits.request_timeout
             try:
                 reply = self.provider.complete(
                     system=self.system,
@@ -294,7 +303,7 @@ class AgentLoop:
                     # 境目でしか見ないので、これが無いと実効上限は「合計時間 + 1リクエスト」に
                     # なる(実測: 上限30秒に対して35.2秒)。ここで頭を押さえると、
                     # はみ出しは接続を畳む分だけになる。
-                    timeout=min(self.limits.request_timeout, deadline - monotonic()),
+                    timeout=min(self.limits.request_timeout, budget_left),
                 )
             except ProviderError as error:
                 # **合計時間で頭を押さえた結果の失敗は `timeout` と名乗る**(2026-08-23)。
@@ -302,7 +311,7 @@ class AgentLoop:
                 # タイムアウト = `ProviderError` として現れる。ここを分けないと、
                 # 画面には「プロバイダの障害」と出る —— 原因はこちらの予算であって
                 # 相手側ではないので、直す場所を見誤らせる。
-                if monotonic() >= deadline:
+                if capped_by_budget and isinstance(error, ProviderTimeout):
                     return self._result(
                         "timeout",
                         f"合計時間が上限({self.limits.max_total_seconds:g}秒)に達した",
@@ -424,6 +433,28 @@ class AgentLoop:
             self.turns.append(ToolResultTurn(tuple(results)))
 
     # ------------------------------------------------------------------ ツール
+    def _dimensions_nobody_asked_for(self, call: ToolCall) -> tuple[str, ...]:
+        """人が量を言っていないのにモデルが埋めた寸法引数の名前(空なら問題なし)。
+
+        **会話に出た全てのユーザー発話**を見る —— 「上面をR3で丸めて」のあとに
+        「反対側も同じように」と続ける言い方があるので、直近の1発話に絞ると
+        正しい依頼を止めてしまう。
+
+        印が無いverb(`catalog.dimension_params` が空)は素通しする。
+        `set_visible` の `visible` や `extrude` の `mode` のような**言葉で指定される
+        how** はここでは見ない(印していない理由は `Param.dimension` に書いた)。
+        """
+        names = catalog.dimension_params(call.name)
+        if not names:
+            return ()
+        filled = tuple(name for name in names if call.arguments.get(name) is not None)
+        if not filled:
+            return ()
+        said = " ".join(
+            turn.text for turn in self.turns if isinstance(turn, UserTurn)
+        )
+        return () if _mentions_a_quantity(said) else filled
+
     def _unrun_results(self, calls: Sequence[ToolCall], why: str) -> tuple[ToolResult, ...]:
         """**走らせなかったツール呼び出しにも結果を積む**(中断・出力上限で打ち切ったとき)。
 
@@ -461,6 +492,34 @@ class AgentLoop:
                         "message": call.parse_error,
                         "tool": call.name,
                         "exception": "ValueError",
+                    }
+                },
+                False,
+            )
+        invented = self._dimensions_nobody_asked_for(call)
+        if invented:
+            # **人が言っていない寸法で形を変えない**(2026-08-23)。
+            # `agent_instructions()` は「曖昧・探索的な依頼なら propose_selection で止めて
+            # 尋ねる」「迷ったら止める側に倒す」と書いてあるが、**モデルはこれを守れない**
+            # (実測: 「角が尖ってて危ないから、いい感じに処理しといて」に対して、
+            # 止まらず R1.5mm を自分で決めて fillet まで適用した)。
+            # 規律を文章で頼むのをやめて、ここで機械的に止める。
+            #
+            # **失敗として返す**(例外にしない) —— モデルはこの封筒を読んで、
+            # 提案を出して人に尋ねる側へ回れる。往復が1つ増えるだけで、
+            # 適用してしまった形をundoで戻すより安い。
+            return (
+                {
+                    "error": {
+                        "code": "dimension_not_given",
+                        "message": (
+                            f"{', '.join(invented)} の値を人が指示していない。"
+                            "寸法を自分で決めて形を変えてはいけない。"
+                            "propose_selection で対象だけ提案し、"
+                            "何を選んだかと、どの寸法が要るかを述べて尋ねること。"
+                        ),
+                        "tool": call.name,
+                        "exception": "DimensionNotGiven",
                     }
                 },
                 False,
@@ -511,6 +570,31 @@ class AgentLoop:
             tool_calls=tuple(outcomes),
             usage=usage,
         )
+
+
+#: 識別子らしいかたまり(`body_1` / `sketch-1c72a3c7` / `entity-75aa`)。
+#: **区切り(`-` か `_`)を含むものだけ**を識別子とみなす —— `[A-Za-z]\w*` で広く取ると
+#: `R3` や `M8` まで消えてしまい、日本語CADでいちばん普通の寸法の言い方
+#: (「上面をR3で丸めて」)が「数量を言っていない」と読まれる。
+#: duocadのIDは `body-` / `sketch-` / `entity-` / `pattern-` の接頭辞を持つので、
+#: 区切りの有無で足りる。
+_IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9]*[-_][A-Za-z0-9_.-]*")
+_DIGIT = re.compile(r"\d")
+
+
+def _mentions_a_quantity(text: str) -> bool:
+    """人が数量を口にしたか(2026-08-23)。
+
+    **識別子の中の数字は数えない** —— `body_1` を「寸法を言った」と読むとガードが
+    素通りする。全角は NFKC で寄せてから見る(日本語入力で「Ｒ３」と打たれうる)。
+
+    **厳密な照合(モデルが渡した値がそのまま本文にあるか)にはしていない。**
+    「直径8mmの円」と言われて `radius: 4` を渡すのは正しい導出であり、そこを弾くと
+    普通の依頼が通らない。見るのは**人が量を与えたかどうか**だけでよい ——
+    量を与えていないなら、モデルが埋めた寸法は必ず捏造である。
+    """
+    plain = _IDENTIFIER.sub(" ", unicodedata.normalize("NFKC", text))
+    return bool(_DIGIT.search(plain))
 
 
 def _merge_usage(total: dict, latest: dict) -> dict:
