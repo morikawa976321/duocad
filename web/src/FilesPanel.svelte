@@ -1,8 +1,9 @@
 <script lang="ts">
   /**
    * ファイルパネル — **保存先が固定フォルダになったことをUIに落とす場所**。
-   * `App.svelte` の**左サイドバー(`.data-panel`)の中身はこれ1枚だけ**である
-   * (Fusion 360のデータパネルに対応する位置)。
+   * `App.svelte` の**`.toolbar`(コマンドのツールバー)に `CommandHost` と並んで載る**
+   * (2026-08-23。保存機能だけをサイドバーで特別扱いする必然性が無いという本人裁定で、
+   * 右サイドバー→左サイドバー(データパネル)を経て、ここへ丸ごと統合した)。
    *
    * **`duocad/models/` の中身を一覧で見せて、クリック1つで開く**。`BrowserPanel.svelte`
    * と同じ作りで、**状態はコアが持つ**(`documents` はサーバの
@@ -78,11 +79,8 @@
 
 <section class="files-panel">
   <div class="row">
-    <strong>ファイル</strong>
+    <span class="label">ファイル</span>
     <span id="current-document" class="value dim">{currentName ?? '(未保存)'}</span>
-  </div>
-
-  <div class="new-row">
     <input
       id="file-name-input"
       type="text"
@@ -99,11 +97,13 @@
     <button id="file-save-new" onclick={submitDraft} disabled={draftProblem !== null}>
       新規保存
     </button>
+    {#if draftName !== '' && draftProblem !== null}
+      <span class="hint">{draftProblem}</span>
+    {/if}
   </div>
-  {#if draftName !== '' && draftProblem !== null}
-    <span class="hint">{draftProblem}</span>
-  {/if}
 
+  <!-- **一覧は横スクロールの帯**(旧・縦list)。ツールバーの帯に収める都合で、
+       右サイドバーにあった頃の縦長レイアウトから変えた(挙動は同じ)。 -->
   <div class="list" id="files-list">
     {#if sorted.length === 0}
       <span class="value dim">models/ にファイルが無い</span>
@@ -125,45 +125,46 @@
 </section>
 
 <style>
-  /* 左サイドバーの高さを丸ごと受け取り、余った分は `.list` が持つ
-     (自分の高さを固定していた頃の 140px は、右サイドバーで他のパネルと
-     縦に並んでいたときの都合であって、専用の枠に移った今は要らない)。
-     溢れるのは `.list` の中だけなので、ファイルが増えても `.viewport` の寸法には触らない。 */
+  /* ツールバーの帯に収める横並びレイアウト(旧・右/左サイドバーの縦積みから変更)。
+     `.list` だけ横スクロールにして、ファイルが増えても `.toolbar` の高さ(ひいては
+     `.viewport` の寸法)には触らない。 */
   .files-panel {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow: hidden;
-    padding: 6px 8px;
+    gap: 6px;
+    padding-bottom: 8px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--line);
   }
 
   .row {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .label {
     flex: 0 0 auto;
+    color: var(--dim);
+    font-size: 12px;
   }
 
   .row .value {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 220px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .new-row {
-    display: flex;
-    gap: 4px;
-    flex: 0 0 auto;
-  }
-
-  .new-row input {
-    flex: 1 1 auto;
+  #file-name-input {
+    flex: 0 0 180px;
     min-width: 0;
   }
 
-  .new-row button {
+  .row button {
     flex: 0 0 auto;
     font-size: 11px;
   }
@@ -173,24 +174,29 @@
     color: var(--accent);
   }
 
+  /* 一覧はチップの横列。増えたらこの帯の中だけで横スクロールする。 */
   .list {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
   }
 
   .files-row {
     display: flex;
     align-items: center;
     gap: 6px;
+    flex: 0 0 auto;
+    border: 1px solid var(--line);
+    padding: 2px 6px;
+    white-space: nowrap;
   }
 
   .files-open {
-    flex: 1 1 auto;
-    min-width: 0;
+    flex: 0 0 auto;
+    max-width: 160px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -202,6 +208,7 @@
   .meta {
     flex: 0 0 auto;
     font-size: 11px;
+    white-space: nowrap;
   }
 
   .files-overwrite {

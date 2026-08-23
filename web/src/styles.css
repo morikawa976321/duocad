@@ -2,17 +2,13 @@
  * バニラCSS＋CSS変数(実装計画書 §4)。Tailwindは使わない —
  * 既定値に寄せると「よくあるWebアプリの見た目」になり、CADツールがWebアプリに見えてはいけない。
  *
- * 配色はダーク×琥珀。配置はFusion 360に寄せてあり、左サイドバー(.data-panel)が
- * 保存済みファイルの一覧、右サイドバー(.sidebar)が常設パネル、上部がコマンドの
- * ツールバー、ビューポートの左上に浮かぶのがブラウザ(BrowserPanel.svelte)。
- * **ビューポートのサイズを変えるのは
- * .main > .stage の中の.viewportだけ**が不変条件 — 両サイドバーは内部で
+ * 配色はダーク×琥珀。配置はFusion 360に寄せてあり、右サイドバー(.sidebar)が常設パネル、
+ * 上部がコマンドのツールバー(FilesPanel.svelteとCommandHostが並ぶ。2026-08-23に
+ * FilesPanelを左サイドバーからここへ統合した)、ビューポートの左上に浮かぶのが
+ * ブラウザ(BrowserPanel.svelte)。**ビューポートのサイズを変えるのは
+ * .main > .stage の中の.viewportだけ**が不変条件 — サイドバーは内部で
  * スクロールし、各パネルは flex: 0 0 auto で自分の高さを固定する。ビューポートに
  * 浮かせるもの(ブラウザ・トースト)は position:absolute でフローの外に出す。
- *
- * 例外は左サイドバーの開閉だけで、これは意図してビューポートを広げる操作である
- * (flex の配分が変わるだけで .viewport 自身のサイズ指定は動かない。
- * カメラのアスペクトは viewport.ts の ResizeObserver が追う)。
  */
 :root {
   --bg: oklch(17% 0.006 250);
@@ -29,10 +25,6 @@
   /* 右サイドバーの幅。トースト(Toast.svelte)がビューポートの右上へ寄るのに要る —
      2箇所に 300px を書き写すと、幅を変えた日に片方だけ置き去りになる。 */
   --sidebar-w: 300px;
-  /* 左サイドバー(ファイル一覧)の幅。旧パーツ一覧の220pxと近い値にしてある ——
-     ここを大きく広げると .viewport が痩せ、frameToContent がアスペクト比を見ない分だけ
-     「画面の中に無い」判定が出やすくなる(下の .sidebar のコメント参照)。 */
-  --data-panel-w: 240px;
   --font: "Consolas", "Cascadia Mono", "Meiryo", monospace;
 }
 
@@ -114,18 +106,6 @@ header {
   min-width: 0;
   min-height: 0;
   position: relative;
-}
-
-/* 左サイドバー(ファイル一覧)。中身は FilesPanel 1枚だけなので、
-   高さは丸ごと渡して一覧側にスクロールさせる。 */
-.data-panel {
-  width: var(--data-panel-w);
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: var(--panel);
-  border-right: 1px solid var(--line);
 }
 
 .sidebar {
