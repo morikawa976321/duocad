@@ -473,6 +473,20 @@ export interface Session {
 export type Point2 = [number, number]
 
 const RECONNECT_DELAY_MS = 2000
+/**
+ * 繋がらないことをトーストで言うまでの連続失敗回数。
+ *
+ * **試行のたびには出さない**(`App.svelte` の `onStatus` が「繋がっていたのに切れた」落差
+ * だけを見るのと同じ規律)。ただし**一度も繋がっていない間は落差が生まれない**ので、
+ * それだけをここが1回言う —— サーバより先にタブを開いたとき、黙ったままでは
+ * 繋がらない理由が画面のどこにも出ない。
+ *
+ * **数えるのは回数であって時間ではない。** 試行の間隔は `RECONNECT_DELAY_MS` では
+ * 決まらない —— 繋がらないソケットが閉じるまでに実測2秒かかり、さらにChromeが同じ
+ * ホストへの失敗を重ねると自前で遅らせる(実測: 開いたばかりの画面で5秒周期、
+ * 失敗を積んだ画面では26秒周期)。時間で切ると、この幅がそのまま無音の幅になる。
+ */
+const CONNECT_FAILURE_NOTICE_AT = 3
 
 async function resolveWebSocketUrl(): Promise<string> {
   // サーバが `/duocad-config.json` で自分のWebSocketのURLを教える。
@@ -495,6 +509,8 @@ export function createSession(hooks: SessionHooks): Session {
   let socket: WebSocket | null = null
   let disposed = false
   let retry: ReturnType<typeof setTimeout> | null = null
+  /** 開く前に閉じた回数。開いたら0へ戻す(`CONNECT_FAILURE_NOTICE_AT`)。 */
+  let failures = 0
 
   function send(payload: Record<string, unknown>): void {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -616,12 +632,28 @@ export function createSession(hooks: SessionHooks): Session {
     const url = await resolveWebSocketUrl()
     const next = new WebSocket(url)
     socket = next
-    next.onopen = () => hooks.onStatus('open')
+    // この接続が一度でも開いたか。**開いてから切れた**のは `App.svelte` の `onStatus` が
+    // 落差として拾うので、ここで数えるのは開く前に閉じたぶんだけでよい。
+    let opened = false
+    next.onopen = () => {
+      opened = true
+      failures = 0
+      hooks.onStatus('open')
+    }
     next.onmessage = (event) => handle(String(event.data))
-    next.onerror = () => hooks.onError(`WebSocketのエラー (${url})`, 'socket')
+    // **`onerror` にトーストを繋がない。** 繋ぐと再接続の試行1回につき1枚出ることになり、
+    // 「試行は毎回トーストにしない」という規律が、その規律が対象にしていた経路そのものに
+    // 破られる(サーバより先にタブを開いていて15回ぶん数え上がった)。繋がらないことは
+    // 下の `onclose` が1回だけ言う。
     next.onclose = () => {
       hooks.onStatus('closed')
       if (disposed) return
+      if (!opened) {
+        failures += 1
+        if (failures === CONNECT_FAILURE_NOTICE_AT) {
+          hooks.onError(`サーバへ繋がらない (${url})。自動で繋ぎ直しを続ける`, 'socket')
+        }
+      }
       retry = setTimeout(() => void connect(), RECONNECT_DELAY_MS)
     }
   }
