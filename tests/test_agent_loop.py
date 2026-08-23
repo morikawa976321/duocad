@@ -553,6 +553,37 @@ def test_max_turns_cuts_the_loop_off_with_a_structured_reason():
     assert run.to_dict()["status"] == "max_turns"
 
 
+def test_the_total_time_budget_cuts_the_loop_off_before_max_turns():
+    """**総時間の上限は往復数と別に要る**(2026-08-23)。
+
+    `max_tokens` は1リクエスト、`request_timeout` は1リクエストの待ち、`max_turns` は
+    回数しか縛らない。人が待つのはその掛け算なので、部分の上限をいくら締めても決まらない
+    —— 実測で、1リクエストが上限内のまま12往復を空回りして合計88秒かかった。
+    """
+    surface = tools()
+    provider = RecordedProvider([tool_use("describe_document", {}, f"c{i}") for i in range(5)])
+
+    run = AgentLoop(
+        surface, provider, limits=Limits(max_turns=99, max_total_seconds=0.0)
+    ).run("ずっと調べて")
+
+    assert run.status == "timeout"
+    assert run.turns == 0, "予算が尽きていれば1往復も始めない"
+    assert run.tool_calls == (), "ツールを1つも実行しない"
+    assert "30" not in run.detail and "0" in run.detail
+    assert run.to_dict()["status"] == "timeout"
+
+
+def test_the_total_time_budget_does_not_fire_on_a_normal_run():
+    """正常系が上限に当たらないこと(既定30秒で普通の往復が切られては困る)。"""
+    surface = tools()
+    provider = RecordedProvider([tool_use("describe_document", {}, "c0"), spoke("できた")])
+
+    run = AgentLoop(surface, provider).run("ボディを教えて")
+
+    assert run.status == "completed"
+
+
 def test_the_cancel_flag_stops_the_loop_between_tool_calls():
     surface = tools()
     cancellation = Cancellation()

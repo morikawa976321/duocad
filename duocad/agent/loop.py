@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import threading
+from time import monotonic
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Protocol, Sequence, runtime_checkable
 
@@ -46,10 +47,57 @@ from .providers import (
 
 #: 1回の `run()` で許すモデルとの往復の上限。
 DEFAULT_MAX_TURNS = 12
-#: 1リクエストの出力上限(思考+本文)。思考は既定で有効なので小さすぎると本文が切れる。
-DEFAULT_MAX_TOKENS = 16384
-#: 1リクエストの待ち上限(秒)。**短く保つ**(上記「暴走の打ち切り」)。
-DEFAULT_REQUEST_TIMEOUT = 120.0
+
+#: 1リクエストの出力上限(思考+本文)。**待ち時間の上限はここだけが決める**(2026-08-23)。
+#:
+#: 以前は16384だった。思考付きモデルは上限が小さいと思考の途中で切れて本文が空で返るため、
+#: 空返しを避けるべく大きく取っていた。しかしそれは**最悪値を捨てる**ことでもあり、実際に
+#: 1リクエストで7,468トークン(120秒)生成して下の待ち上限に当たった。
+#:
+#: いま小さくできるのは、**思考の打ち切りをサーバ側が担うようになった**からである ——
+#: llama-server の `--reasoning-budget N` は思考をNトークンで切り、
+#: `--reasoning-budget-message` が思考終了タグの直前へ文を注入するので、
+#: 思考が尽きても本文は返る(空返しの原因が消えた)。
+#:
+#: **サーバ側の `--n-predict` は上限ではなく既定値**であり、ここで `max_tokens` を明示すると
+#: そちらが勝つ(実測: `--n-predict 1024` のサーバへ16384を送ると3,520トークン返った)。
+#: したがって**保証はクライアント側のこの定数にしか置けない**。
+#:
+#: 1024の根拠: `--reasoning-budget 512` のサーバで実タスクを20試行し、
+#: 打ち切り0/20・誤り0/20・最悪4.7秒だった。上限に当たっても
+#: `run()` は切れた引数のツールを実行せず `max_tokens` を構造化して返す(下記)ので、
+#: 小さすぎたときの害は「止まる」だけで、壊れた形が残ることはない。
+DEFAULT_MAX_TOKENS = 1024
+
+#: 待ち上限の算定に使う、**いちばん遅い実行環境**のスループット(tok/s)。
+#: dGPU無しのラップトップ(Core Ultra 255H・DDR5-5600)を想定した値。
+MIN_TOKENS_PER_SEC = 10.0
+#: 接続とプリフィルに見込む固定分(秒)。
+REQUEST_OVERHEAD_SEC = 15.0
+
+#: 1リクエストの待ち上限(秒)。**`DEFAULT_MAX_TOKENS` から導出する**(2026-08-23)。
+#:
+#: 以前は120.0の直値で、出力上限とは独立していた。**上限が2つ独立していると片方だけ
+#: 動かして事故る** —— 実際に出力上限を16384へ上げたとき、この値が据え置かれたため
+#: 名目16384に対して実効は約7,450トークンで頭打ちになり、そこに当たって切断された。
+#:
+#: 役割も変えてある。待ち時間を決めるのは `DEFAULT_MAX_TOKENS` であり、ここは
+#: **ネットワークやプロセスのハングを検知するための保険**でしかない。だから
+#: いちばん遅い環境でも誤発火しない長さを取る(速い環境では到達しない)。
+DEFAULT_REQUEST_TIMEOUT = DEFAULT_MAX_TOKENS / MIN_TOKENS_PER_SEC + REQUEST_OVERHEAD_SEC
+
+#: 1回の `run()` 全体の待ち上限(秒)。**人が待てる時間はここだけが決める**(2026-08-23)。
+#:
+#: `max_tokens` と `request_timeout` は1リクエストしか縛らず、`max_turns` は回数しか
+#: 縛らない。**総時間は往復数との掛け算**なので、部分の上限をいくら締めても決まらない ——
+#: 実測で、1リクエストが上限内(最悪16.5秒)のまま12往復を空回りして合計88秒かかった。
+#: 待っている人には、1回の暴走か12回の空回りかは区別がつかない。
+#:
+#: 30の根拠: 正常な複合多段が12.5〜16.1秒、単純な依頼が7.2〜7.4秒だったので、
+#: 正常系には当たらず、堂々巡り(88秒)は確実に切れる位置。**足りなければ延ばすのではなく、
+#: 何に時間を使ったかを見ること** —— 正常系が30秒に当たるなら、それは上限ではなく
+#: 往復数の問題である(`describe_document` のようにアプリが既に知っている情報の往復を消す)。
+DEFAULT_MAX_TOTAL_SECONDS = 30.0
 
 #: 進捗の口。`(ツール名, 引数, 結果, 成否)`。Gがこれを購読して画面に出す。
 ProgressCallback = Callable[[str, dict, Any, bool], None]
@@ -96,11 +144,17 @@ class Cancellation:
 
 @dataclass(frozen=True)
 class Limits:
-    """打ち切りの3つ(4つ目の中断フラグは `Cancellation`)。"""
+    """打ち切りの4つ(5つ目の中断フラグは `Cancellation`)。
+
+    **総時間を決めるのは `max_total_seconds` だけ**である。他の3つは部分しか縛らない ——
+    `max_tokens` は1リクエスト、`request_timeout` は1リクエストの待ち、`max_turns` は回数。
+    掛け算(往復数 × 1往復)が人の待ち時間になるので、そこに直接の上限を置く。
+    """
 
     max_turns: int = DEFAULT_MAX_TURNS
     max_tokens: int = DEFAULT_MAX_TOKENS
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT
+    max_total_seconds: float = DEFAULT_MAX_TOTAL_SECONDS
 
 
 @dataclass(frozen=True)
@@ -122,6 +176,8 @@ class AgentRun:
 
     - `completed`      … モデルがツールを呼ばずに答えた(正常終了)
     - `max_turns`      … 往復の上限で打ち切った
+    - `timeout`        … **合計時間**の上限で打ち切った(`max_turns` に届く前に時間が尽きた)。
+                         往復の境目で切るので、実行済みのツールの結果は `tool_calls` に入る
     - `cancelled`      … 中断フラグが立った
     - `max_tokens`     … 出力上限で切れた(答えが途中)。**そのターンのツールは実行していない**
                          —— 切れた応答のツール呼び出しは引数のJSONが途中で切れている
@@ -191,6 +247,7 @@ class AgentLoop:
         outcomes: list[ToolOutcome] = []
         usage: dict = {}
         turn = 0
+        deadline = monotonic() + self.limits.max_total_seconds
 
         while True:
             if self.cancellation.cancelled:
@@ -199,6 +256,21 @@ class AgentLoop:
                 return self._result(
                     "max_turns",
                     f"往復が上限({self.limits.max_turns})に達した",
+                    turn,
+                    outcomes,
+                    usage,
+                )
+            # **人が待てる時間の上限**(2026-08-23)。`max_tokens` は1リクエストしか縛らず、
+            # `max_turns` は回数しか縛らないので、**どちらも総時間を決めない** ——
+            # 実測で、曖昧な依頼のとき query ツールを堂々巡りして12往復を使い切り、
+            # 1リクエストが上限内(最悪16.5秒)のまま**合計88秒**かかった。
+            # 待っている人から見れば、それが1回の暴走か12回の空回りかは区別がつかない。
+            # **次の往復を始める前**に見る(往復の途中で切ると、実行済みのツールの
+            # 結果を積まないまま抜けることになる。中断と同じ扱いで境界を揃える)。
+            if monotonic() >= deadline:
+                return self._result(
+                    "timeout",
+                    f"合計時間が上限({self.limits.max_total_seconds:g}秒)に達した",
                     turn,
                     outcomes,
                     usage,
@@ -218,9 +290,26 @@ class AgentLoop:
                     turns=self.turns,
                     tools=descriptors,
                     max_tokens=self.limits.max_tokens,
-                    timeout=self.limits.request_timeout,
+                    # **残り時間を超えて待たない**(2026-08-23)。上のdeadline判定は往復の
+                    # 境目でしか見ないので、これが無いと実効上限は「合計時間 + 1リクエスト」に
+                    # なる(実測: 上限30秒に対して35.2秒)。ここで頭を押さえると、
+                    # はみ出しは接続を畳む分だけになる。
+                    timeout=min(self.limits.request_timeout, deadline - monotonic()),
                 )
             except ProviderError as error:
+                # **合計時間で頭を押さえた結果の失敗は `timeout` と名乗る**(2026-08-23)。
+                # 上で `timeout=` を残り時間まで縮めているので、予算切れは接続の
+                # タイムアウト = `ProviderError` として現れる。ここを分けないと、
+                # 画面には「プロバイダの障害」と出る —— 原因はこちらの予算であって
+                # 相手側ではないので、直す場所を見誤らせる。
+                if monotonic() >= deadline:
+                    return self._result(
+                        "timeout",
+                        f"合計時間が上限({self.limits.max_total_seconds:g}秒)に達した",
+                        turn,
+                        outcomes,
+                        usage,
+                    )
                 return self._result("provider_error", str(error), turn, outcomes, usage)
 
             usage = _merge_usage(usage, reply.usage)
