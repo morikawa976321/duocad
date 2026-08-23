@@ -343,7 +343,9 @@ const REGION_SELECTED_COLOR = 0xffb454
 const PROPOSED_COLOR = 0x36d1ff
 /** 確定前の形。半透明で「まだ無いもの」に見せる。 */
 const PREVIEW_COLOR = 0x7ee081
-const EDGE_COLOR = 0x20262d
+/** 面の境界線。背景(`BACKGROUND_COLOR`)に埋もれないよう、2026-08-23に`GRID_COLOR`と
+    同程度の明るさへ上げた。`PICK_EDGE_COLOR`とは見分けがつく明るさを保つ(下記コメント)。 */
+const EDGE_COLOR = 0x3f4a56
 /** 選べる辺。面の境界線(`EDGE_COLOR`)と**見分けがつく明るさ**にする。 */
 const PICK_EDGE_COLOR = 0xbfd4ea
 /** 辺の当たり判定の太さ[画素]。細すぎると掴めず、太すぎると隣の辺が取れる。 */

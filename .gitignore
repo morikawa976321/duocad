@@ -17,3 +17,6 @@ dist/
 # リポジトリ直下・gitignore対象 —— 個人のモデルファイルはgitに載せない。
 # 無ければ `duocad/server.py` の `Session._resolve_document_name` が作る。
 /models/
+
+# 実機検査のスクリーンショット(個人の画面のスクショなのでgitに載せない)。
+/screenshots/

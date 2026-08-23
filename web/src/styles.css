@@ -13,7 +13,10 @@
 :root {
   --bg: oklch(17% 0.006 250);
   --panel: oklch(20.5% 0.006 250);
-  --line: oklch(30% 0.008 250);
+  /* 区画境界(header/.toolbar/.sidebar/.statusbarのborder)と、input/button/.tagの枠を兼ねる。
+     2026-08-23に30%→40%へ上げたのは区画境界のためで、枠が一緒に強くなるのは意図どおり
+     (枠だけ弱くしたい理由が無い限りトークンを分けない)。 */
+  --line: oklch(40% 0.008 250);
   --line-soft: oklch(26% 0.007 250);
   --text: oklch(89% 0.008 95);
   --dim: oklch(62% 0.012 95);
