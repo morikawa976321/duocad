@@ -98,6 +98,44 @@ export async function withoutBrowserPanel(page, run) {
   }
 }
 
+/**
+ * undo / redo。**2026-08-23に画面のボタン(`#undo`/`#redo`)を削除した**ので、
+ * `App.svelte` の `onWindowKeydown` が拾うのと同じキー(Ctrl+Z / Ctrl+Y)を送る。
+ *
+ * **先にフォーカスを外す**。数値入力(INPUT/TEXTAREA)にフォーカスが残っていると、
+ * `onWindowKeydown` はブラウザ標準のテキスト取り消しに譲って文書のundo/redoを
+ * 発火しない(意図どおりの挙動。`smoke.mjs`「入力欄にフォーカスがある状態のCtrl+Z」参照)。
+ * コマンドは確定後も構えたままなので、Enterで確定した直後は入力欄にフォーカスが残っている。
+ */
+async function blurTextField(page) {
+  await page.evaluate(() => {
+    const el = document.activeElement
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) el.blur()
+  })
+}
+
+export async function pressUndo(page) {
+  await blurTextField(page)
+  await page.keyboard.down('Control')
+  await page.keyboard.press('KeyZ')
+  await page.keyboard.up('Control')
+}
+
+export async function pressRedo(page) {
+  await blurTextField(page)
+  await page.keyboard.down('Control')
+  await page.keyboard.press('KeyY')
+  await page.keyboard.up('Control')
+}
+
+/**
+ * 視点をシーン全体へ戻す。**2026-08-23に画面のボタン(`#view-fit`)を削除した**ので、
+ * 実機検査だけが使う穴(`window.__duocad.frameAll`)を直接呼ぶ。
+ */
+export async function frameAll(page) {
+  await page.evaluate(() => window.__duocad.frameAll())
+}
+
 /** ブラウザの開閉を `open` に合わせる。**動かしたときだけ true**(戻す要否の判定に使う)。 */
 async function setBrowserPanel(page, open) {
   const changed = await page.evaluate((want) => {

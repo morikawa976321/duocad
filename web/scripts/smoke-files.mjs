@@ -21,7 +21,7 @@
 import { existsSync, mkdtempSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { findBrowser, launchBrowser, withoutBrowserPanel } from './browser.mjs'
+import { findBrowser, launchBrowser, withoutBrowserPanel, pressUndo, pressRedo, frameAll } from './browser.mjs'
 import { fail, ok, parseArgs } from './args.mjs'
 import { startServer } from './server.mjs'
 
@@ -267,7 +267,7 @@ async function main() {
     await page.keyboard.press('Enter')
     await waitFor(() => window.__duocad.parts.length === 1, '板ができない')
     await page.click('#sketch-exit')
-    await page.click('#view-fit')
+    await frameAll(page)
     const plateVolume = (await look()).bodies[0].volume
     ok(`板を作った(体積 ${plateVolume})`)
 
@@ -332,7 +332,7 @@ async function main() {
       holesVolume,
     )
     await page.click('#sketch-exit')
-    await page.click('#view-fit')
+    await frameAll(page)
     const withHoles = (await look()).bodies[0]
     ok(`反復した穴を3つまとめて開けた(体積 ${plateVolume} -> ${withHoles.volume.toFixed(2)})`)
 
@@ -363,7 +363,7 @@ async function main() {
 
     // ================================================================ 検証5: undo/redoで位置が動く
     const beforeUndo = await look()
-    await page.click('#undo')
+    await pressUndo(page)
     await waitFor(
       (expected) => window.__duocad.redoCount === expected,
       'undoしてもやり直せる件数が増えない',
@@ -375,7 +375,7 @@ async function main() {
     }
     ok(`undoでやり直せる件数が増えた(${beforeUndo.redoCount} -> ${undone.redoCount})`)
 
-    await page.click('#redo')
+    await pressRedo(page)
     await waitFor(
       (expected) => window.__duocad.redoCount === expected,
       'redoで位置が戻らない',
@@ -429,7 +429,7 @@ async function main() {
     // 保存した形と同じままで「開く」を押すと、**開くのが失敗しても体積が一致してしまい
     // 検査が素通りする**(2026-08-14に実際に踏んだ: open_document が例外で落ちていたのに
     // このチェックが緑だった)。undoで形を変えてから開き、戻ることを見る。
-    await page.click('#undo')
+    await pressUndo(page)
     await waitFor(
       (before) => Math.abs((window.__duocad.parts[0]?.volume ?? 0) - before) > 1e-6,
       'undoしても形が変わらない(開く検査の前提が作れない)',
@@ -476,7 +476,7 @@ async function main() {
     // 一覧の操作数・サイズが増えていることを見る(=本当に書き直った)。
     const beforeOverwrite = (await look()).documentList.find((file) => file.name === documentName)
     if (!beforeOverwrite) fail('上書き前の一覧に対象ファイルが無い')
-    await page.click('#undo') // 形を変える(上書きが実際に効いたかを見分けるため)
+    await pressUndo(page) // 形を変える(上書きが実際に効いたかを見分けるため)
     await waitFor(
       (before) => Math.abs((window.__duocad.parts[0]?.volume ?? 0) - before) > 1e-6,
       'undoしても形が変わらない(上書き検査の前提が作れない)',

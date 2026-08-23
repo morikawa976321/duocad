@@ -12,7 +12,7 @@
 import { mkdtempSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { findBrowser, launchBrowser } from './browser.mjs'
+import { findBrowser, launchBrowser, frameAll } from './browser.mjs'
 import { parseArgs } from './args.mjs'
 import { startServer } from './server.mjs'
 import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
@@ -61,7 +61,7 @@ async function main() {
       { timeout: 60000, polling: 100 },
       PC_CASE_SOLIDS,
     )
-    await page.click('#view-fit')
+    await frameAll(page)
     await new Promise((resolve) => setTimeout(resolve, 500))
 
     const modelPath = path.join(outDir, `${tag}-model.png`)

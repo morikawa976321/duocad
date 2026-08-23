@@ -974,11 +974,14 @@
       previewing,
       lastApplied,
       messages,
-      // **エラーはステータスバーではなくトーストへ出る**(消える)ので、実機検査が
+      // **エラーはトーストへ出る**(消える)ので、実機検査が
       // 「走行中にエラーが出ていないか」を最後に一度で見られるよう控えを渡す。
       // 今まさに画面に出ている札は `#toasts` のDOMが正 —— 文言の検証はそちらを見ること。
       errors: errorLog,
       projectFace: (bodyId: string, faceIndex: number) => viewport?.project(bodyId, faceIndex) ?? null,
+      // 視点をシーン全体へ戻す。**2026-08-23に画面のボタンを削除**した後も、実機検査が
+      // 図形を画面内へ収めるために呼ぶ手だけはここに残す。
+      frameAll: () => viewport?.frameAll(),
       // C: スケッチ。**実機検査が本物のクリックで描く**ための穴
       sketches,
       activeSketch: sketchId,
@@ -1129,24 +1132,6 @@
     <!-- エラーの札。**`.main` の中に置くが大きさは持たない**(position:absolute で浮く)ので、
          ビューポートの寸法＝カメラのアスペクトには触らない。出す側は `fail()` の1本だけ。 -->
     <Toast />
-  </div>
-
-  <div class="statusbar">
-    <!-- 残すのは、どのパネルにも属さない**視点とundo/redoのボタン**だけ
-         (面・直前の情報は選択パネルに出ている)。「全体」はスケッチに寄った視点から戻る手で、
-         これが無いと小さい図形を描いた後に部品が画面の外にあるまま操作することになる。 -->
-    <div class="row">
-      <button id="view-fit" onclick={() => viewport?.frameAll()}>全体</button>
-      <button id="undo" onclick={() => session.undo()} disabled={!model?.can_undo}>undo</button>
-      <button id="redo" onclick={() => session.redo()} disabled={!model?.can_redo}>redo</button>
-    </div>
-
-    {#if messages.length}
-      <div class="row">
-        <span class="label">通知</span>
-        <span class="value">{messages.join(' / ')}</span>
-      </div>
-    {/if}
   </div>
 </div>
 

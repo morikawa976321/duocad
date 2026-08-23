@@ -25,7 +25,7 @@
  *   5. すべてのコマンドで Esc中断 と undo が効く
  */
 import { existsSync } from 'node:fs'
-import { findBrowser, launchBrowser, withoutBrowserPanel } from './browser.mjs'
+import { findBrowser, launchBrowser, withoutBrowserPanel, pressUndo, frameAll } from './browser.mjs'
 import { fail, ok, parseArgs } from './args.mjs'
 import { startServer } from './server.mjs'
 
@@ -337,7 +337,7 @@ async function main() {
     await waitFor(() => window.__duocad.activeSketch === null, 'スケッチモードを抜けられない')
     // **視点を全体へ戻す**。直前の `#sketch-look` は描いていた図形(半径4mm)に寄っているので、
     // そのままでは40mmの板が画面の外にあり、辺をクリックで指せない。
-    await page.click('#view-fit')
+    await frameAll(page)
 
     // ================================================================ 検証2: フィレット
     // 面を1つ選んでおく(辺を取りに行く対象のBodyが決まる)。
@@ -443,7 +443,7 @@ async function main() {
     ok('フィレット成功後、選択は全リセットされた(古い添字を次の操作へ持ち越さない)')
 
     // -------------------------------------------------------------- 検証5: undo
-    await page.click('#undo')
+    await pressUndo(page)
     await waitFor(
       (expected) => window.__duocad.parts[0]?.face_count === expected,
       'undoでフィレットが戻らない',
@@ -457,7 +457,9 @@ async function main() {
     await createSketchOnBase('XY')
     await waitFor(() => window.__duocad.activeSketch !== null, '3枚目のスケッチに入れない')
     await page.click('#sketch-circle')
-    await clickPlane(80, 0)
+    // **55**(board幅40 + clearance)。2026-08-23の下段バー削除でビューポートが縦に伸び、
+    // 新規スケッチの既定ズームで見えるuの上限が下がった(実測: u<=56で可視)ので80から詰めた。
+    await clickPlane(55, 0)
     await typeInto('#sketch-radius', 12)
     await page.keyboard.press('Enter')
     await waitFor(
@@ -527,6 +529,9 @@ async function main() {
     )
 
     // ================================================================ 検証4: 反復
+    // 直前の円柱スケッチが `sketch-look` で寄った視点のまま(exitはカメラを戻さない)なので、
+    // 2026-08-23の下段バー削除でアスペクト比が変わった今、基準平面グリッドが画面の外にある。
+    await frameAll(page)
     await createSketchOnBase('XY')
     await waitFor(() => window.__duocad.activeSketch !== null, '反復用のスケッチに入れない')
     await page.click('#sketch-circle')
@@ -581,7 +586,7 @@ async function main() {
     )
     ok('矩形反復: 3×2 で図形が6個になった(元を含めた個数)')
 
-    await page.click('#undo')
+    await pressUndo(page)
     await waitFor(
       () => {
         const hook = window.__duocad

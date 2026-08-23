@@ -26,7 +26,7 @@
 import { existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { findBrowser, launchBrowser, withoutBrowserPanel } from './browser.mjs'
+import { findBrowser, launchBrowser, withoutBrowserPanel, pressUndo, pressRedo, frameAll } from './browser.mjs'
 import { fail, ok, parseArgs } from './args.mjs'
 import { McpClient } from './mcp-client.mjs'
 import { startServer } from './server.mjs'
@@ -363,7 +363,7 @@ async function main() {
         },
         '矩形反復が展開されない',
       )
-      await page.click('#undo') // この後の受入で邪魔になるので戻す
+      await pressUndo(page) // この後の受入で邪魔になるので戻す
       await waitFor(
         () => {
           const hook = window.__duocad
@@ -399,7 +399,7 @@ async function main() {
         },
         '円形反復が展開されない',
       )
-      await page.click('#undo')
+      await pressUndo(page)
       await waitFor(
         () => {
           const hook = window.__duocad
@@ -436,7 +436,7 @@ async function main() {
     })
 
     await page.click('#sketch-exit')
-    await page.click('#view-fit')
+    await frameAll(page)
     const bodyId = (await look()).parts[0].id
 
     await attempt('human', 'extrude_face', async () => {
@@ -499,7 +499,7 @@ async function main() {
 
     await attempt('human', 'undo', async () => {
       const before = (await look()).parts[0].faces
-      await page.click('#undo')
+      await pressUndo(page)
       await waitFor(
         (previous) => window.__duocad.parts[0].face_count < previous,
         'undoで戻らない',
@@ -510,7 +510,7 @@ async function main() {
 
     await attempt('human', 'redo', async () => {
       const before = (await look()).parts[0].faces
-      await page.click('#redo')
+      await pressRedo(page)
       await waitFor(
         (previous) => window.__duocad.parts[0].face_count > previous,
         'redoで戻らない',
@@ -886,7 +886,7 @@ async function main() {
       //    提案は複数のボディにまたがりうるので、**人が1本に絞る**(素のクリック=置き換え)。
       const target = proposedItems[0]
       await page.click('#fillet')
-      await page.click('#view-fit') // 提案されたボディが画面の外にあることがある
+      await frameAll(page) // 提案されたボディが画面の外にあることがある
       await waitForEdges(target.body)
       // **提案のうち、実際に指せる1本を人が選ぶ**。裏に回っている辺は指せないので、
       // 同じボディの候補を順に試す(人がやることと同じ —— 見えている辺をクリックする)。

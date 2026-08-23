@@ -18,7 +18,7 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { findBrowser, launchBrowser } from './browser.mjs'
+import { findBrowser, launchBrowser, frameAll } from './browser.mjs'
 import { fail, ok, parseArgs } from './args.mjs'
 import { McpClient } from './mcp-client.mjs'
 import { startServer } from './server.mjs'
@@ -61,7 +61,7 @@ async function main() {
     })
     await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
     await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
-    await page.click('#view-fit').catch(() => {})
+    await frameAll(page).catch(() => {})
 
     // ---------------------------------------------------------------- 1. 頂点マーカー
     const proposed = await mcp.callTool('propose_selection', {

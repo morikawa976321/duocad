@@ -17,7 +17,7 @@
  * ダウンロードしない)。`DUOCAD_BROWSER` で明示もできる。WebGLは実GPUで描く(詳細は browser.mjs)。
  */
 import { existsSync } from 'node:fs'
-import { findBrowser, launchBrowser, withoutBrowserPanel } from './browser.mjs'
+import { findBrowser, launchBrowser, withoutBrowserPanel, pressUndo } from './browser.mjs'
 import { fail, ok, parseArgs } from './args.mjs'
 import { startServer } from './server.mjs'
 import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
@@ -623,7 +623,7 @@ async function main() {
     ok('押し出し成功後、選択は全リセットされた(2026-08-20の統一契約)')
 
     // -------------------------------------------------------------- undo(押し出し)
-    await page.click('#undo')
+    await pressUndo(page)
     await page.waitForFunction(
       (bodyId, expectedVolume) =>
         Math.abs(
@@ -968,7 +968,7 @@ async function main() {
 
     // -------------------------------------------------------------- 検証5: undoで1つずつ消える
     const beforeUndo = await sketchState()
-    await page.click('#undo')
+    await pressUndo(page)
     await page.waitForFunction(
       (expected) => {
         const hook = window.__duocad

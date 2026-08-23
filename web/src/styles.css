@@ -13,7 +13,7 @@
 :root {
   --bg: oklch(17% 0.006 250);
   --panel: oklch(20.5% 0.006 250);
-  /* 区画境界(header/.toolbar/.sidebar/.statusbarのborder)と、input/button/.tagの枠を兼ねる。
+  /* 区画境界(header/.toolbar/.sidebarのborder)と、input/button/.tagの枠を兼ねる。
      2026-08-23に30%→40%へ上げたのは区画境界のためで、枠が一緒に強くなるのは意図どおり
      (枠だけ弱くしたい理由が無い限りトークンを分けない)。 */
   --line: oklch(40% 0.008 250);
@@ -61,7 +61,7 @@ header {
   padding: 8px 16px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
-  /* 縮ませない(.toolbar/.statusbarと同じ理由。下のコメント参照) */
+  /* 縮ませない(.toolbarと同じ理由。下のコメント参照) */
   flex: 0 0 auto;
 }
 
@@ -125,19 +125,6 @@ header {
   overflow-y: auto;
   background: var(--panel);
   border-left: 1px solid var(--line);
-}
-
-.statusbar {
-  border-top: 1px solid var(--line);
-  background: var(--panel);
-  padding: 8px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  /* 縮ませない。縦に並んだ要素が増えると flex は全部を等しく
-     押し潰しにかかる —— 押し潰されてよいのはビューポート(.main)だけで、
-     コマンドの入力欄が枠の外へ出ると打てなくなる。 */
-  flex: 0 0 auto;
 }
 
 .row {

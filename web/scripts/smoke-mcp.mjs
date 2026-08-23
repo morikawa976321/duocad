@@ -21,7 +21,7 @@
  * ブラウザはインストール済みのEdge/Chromeを使う(`smoke.mjs` と同じ。`DUOCAD_BROWSER` で明示可)。
  */
 import { existsSync } from 'node:fs'
-import { findBrowser, launchBrowser } from './browser.mjs'
+import { findBrowser, launchBrowser, frameAll } from './browser.mjs'
 import { fail, ok, parseArgs } from './args.mjs'
 import { McpClient } from './mcp-client.mjs'
 import { startServer } from './server.mjs'
@@ -362,7 +362,7 @@ async function main() {
     // 読んで確かめる(`viewport.highlightColors`)。辺が3Dに出るのは辺を要求している
     // コマンドを起動している間だけなので、人がやるとおり先にフィレットを起動する。
     await page.click('#fillet')
-    await page.click('#view-fit')
+    await frameAll(page)
     await page.waitForFunction(
       (bodyId) => window.__duocad.edges?.body_id === bodyId,
       { timeout, polling: 50 },
