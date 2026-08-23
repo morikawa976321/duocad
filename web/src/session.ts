@@ -347,7 +347,7 @@ export interface AiStatus {
 }
 
 /** ツール呼び出し1件の進捗(`AgentLoop` の `progress` コールバックそのもの)。
- * **`name` は操作ログ・MCPツール名と同じ綴り** —— 履歴パネルと突き合わせられる。 */
+ * **`name` は操作ログ・MCPツール名と同じ綴り** —— 操作ログと突き合わせられる。 */
 export interface AiToolCall {
   name: string
   arguments: Record<string, unknown>

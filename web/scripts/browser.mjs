@@ -73,3 +73,50 @@ async function glRenderer(browser) {
     await page.close()
   }
 }
+
+/**
+ * ビューポートに浮かぶ**ブラウザ(`BrowserPanel.svelte`)を畳んだ状態で `run` を走らせ、
+ * 終わったら元に戻す。
+ *
+ * このパネルは `.viewport` の左上に重なっており、**その下の画素は押せない**(押すと
+ * クリックがパネルに吸われる)。`viewport.ts` の `clickable` が覆われた画素を候補から
+ * 落とすので、`project*` のうち**候補を複数持つもの**(面・辺・領域・基準平面)は勝手に
+ * 別の画素へ逃げる。逃げ場が無いのは `projectSketchPoint` だけ —— **スケッチ平面の
+ * 特定の (u,v) は1画素しかない**ので、そこがパネルの下に来ると押せない。
+ *
+ * だから畳むのは**その1点を押す間だけ**にする。パネルを開けたままにしておくのは、
+ * 一覧(モデル・スケッチ)そのものを触る検査が同じ画面を使うからである。
+ *
+ * パネルが無い画面でも落ちない(何もせず `run` を走らせる)。
+ */
+export async function withoutBrowserPanel(page, run) {
+  const changed = await setBrowserPanel(page, false)
+  try {
+    return await run()
+  } finally {
+    if (changed) await setBrowserPanel(page, true)
+  }
+}
+
+/** ブラウザの開閉を `open` に合わせる。**動かしたときだけ true**(戻す要否の判定に使う)。 */
+async function setBrowserPanel(page, open) {
+  const changed = await page.evaluate((want) => {
+    const panel = document.querySelector('.browser-panel')
+    if (panel === null) return false
+    if (!panel.classList.contains('collapsed') === want) return false
+    document.querySelector('#browser-collapse')?.click()
+    return true
+  }, open)
+  // **DOMに反映されるまで待つ**(Svelteの更新は次のタスクなので、押した直後は古い)
+  if (changed) {
+    await page.waitForFunction(
+      (want) => {
+        const panel = document.querySelector('.browser-panel')
+        return panel !== null && !panel.classList.contains('collapsed') === want
+      },
+      { polling: 20, timeout: 5000 },
+      open,
+    )
+  }
+  return changed
+}

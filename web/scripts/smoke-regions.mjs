@@ -49,7 +49,7 @@
  * **サーバはこのスクリプトが自分で立てる**(`web/scripts/server.mjs`)。
  * 既に立っているものへ繋ぐときだけ `--url` を渡す。
  */
-import { findBrowser, launchBrowser } from './browser.mjs'
+import { findBrowser, launchBrowser, withoutBrowserPanel } from './browser.mjs'
 import { fail, ok, parseArgs } from './args.mjs'
 import { startServer } from './server.mjs'
 
@@ -215,18 +215,22 @@ async function main() {
     }
 
     async function clickPlane(u, v) {
-      await settleLayout()
-      const at = await page.evaluate(
-        (uu, vv) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectSketchPoint(uu, vv)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        u,
-        v,
-      )
-      if (!at) fail(`スケッチ平面の点 (${u}, ${v}) が画面の中に無い`)
-      await clickAt(at)
+      // **浮いているブラウザを畳んでから**押す —— スケッチ平面の (u,v) は画面の1画素しかなく、
+      // そこがパネルの下に来ると逃げ場が無い(理由は `browser.mjs` の `withoutBrowserPanel`)。
+      return withoutBrowserPanel(page, async () => {
+        await settleLayout()
+        const at = await page.evaluate(
+          (uu, vv) => {
+            const rect = document.querySelector('.viewport').getBoundingClientRect()
+            const position = window.__duocad.projectSketchPoint(uu, vv)
+            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+          },
+          u,
+          v,
+        )
+        if (!at) fail(`スケッチ平面の点 (${u}, ${v}) が画面の中に無い`)
+        await clickAt(at)
+      })
     }
 
     /**

@@ -819,6 +819,7 @@ export function createViewport(container: HTMLElement): Viewport {
       const x = ((projected.x + 1) / 2) * width
       const y = ((1 - projected.y) / 2) * height
       if (x < 0 || y < 0 || x > width || y > height) continue
+      if (!clickable(x, y)) continue // 浮いているパネルに覆われている(次の三角形を試す)
       const hit = pickAt(x, y)
       if (hit && hit.bodyId === bodyId && hit.faceIndex === faceIndex) return { x, y }
     }
@@ -1204,6 +1205,24 @@ export function createViewport(container: HTMLElement): Viewport {
     controls.update()
   }
 
+  /**
+   * その画素が**本当に押せるか**(canvasの上に浮いているDOMに覆われていないか)。
+   *
+   * 3Dのレイ検査(`pickAt` / `faceHitAt` / `basePlaneAt`)は**canvasの中しか見ない**ので、
+   * ビューポートに浮かせたパネル —— `BrowserPanel.svelte` のブラウザ —— に覆われた画素も
+   * 「取れる」と答えてしまう。実際にそこを押すとクリックはパネルに吸われ、**指したはずの
+   * ものが指されない**。`project*` は「その画素が本当にそれを取れる」ことを確かめてから
+   * 返す約束なので、覆われた画素は候補から落とす(呼び出し側の探索が次の候補へ進む)。
+   *
+   * `Toast.svelte` の札が引っかからないのは、あちらが `pointer-events: none` で
+   * クリックを吸わないから —— 覆っているかどうかではなく、**吸うかどうか**が判定基準であり、
+   * それを直接答えるのが `elementFromPoint` である。
+   */
+  function clickable(x: number, y: number): boolean {
+    const rect = container.getBoundingClientRect()
+    return document.elementFromPoint(rect.left + x, rect.top + y) === renderer.domElement
+  }
+
   function toScreen(point: THREE.Vector3): { x: number; y: number } | null {
     const { width, height } = size()
     const projected = point.clone().project(camera)
@@ -1211,6 +1230,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const x = ((projected.x + 1) / 2) * width
     const y = ((1 - projected.y) / 2) * height
     if (x < 0 || y < 0 || x > width || y > height) return null
+    if (!clickable(x, y)) return null
     return { x, y }
   }
 

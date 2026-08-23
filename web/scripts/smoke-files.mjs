@@ -8,7 +8,7 @@
  *   2. **保存 → 再読込 → 開く → 同じ形**(操作ログから再生される)
  *   3. STEPを読み込む(その時点で編集可能なボディができる)。面を選んで編集可能なコピーも作れる
  *   4. STEP/STL を書き出し、**STEPは読み戻して体積が一致**(読み戻しは pytest 側)
- *   5. 履歴パネルでundo/redoの位置が分かり、実際に戻せる
+ *   5. undo/redoでやり直せる件数と有効な操作数が実際に動く
  *
  *   web> node scripts/smoke-files.mjs [--workdir <書き込めるディレクトリ>]
  *
@@ -21,7 +21,7 @@
 import { existsSync, mkdtempSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { findBrowser, launchBrowser } from './browser.mjs'
+import { findBrowser, launchBrowser, withoutBrowserPanel } from './browser.mjs'
 import { fail, ok, parseArgs } from './args.mjs'
 import { startServer } from './server.mjs'
 
@@ -97,7 +97,6 @@ async function main() {
             regions: active?.regions?.length ?? 0,
             parameters: hook.parameters,
             redoCount: hook.redoCount,
-            myOperations: hook.myOperations,
             lastFile: hook.lastFile,
             documentList: hook.documentList,
             currentDocumentName: hook.currentDocumentName,
@@ -166,17 +165,21 @@ async function main() {
     }
 
     async function clickPlane(u, v) {
-      const at = await page.evaluate(
-        (uu, vv) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectSketchPoint(uu, vv)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        u,
-        v,
-      )
-      if (!at) fail(`スケッチ平面の点 (${u}, ${v}) が画面の中に無い`)
-      await page.mouse.click(at.x, at.y)
+      // **浮いているブラウザを畳んでから**押す —— スケッチ平面の (u,v) は画面の1画素しかなく、
+      // そこがパネルの下に来ると逃げ場が無い(理由は `browser.mjs` の `withoutBrowserPanel`)。
+      return withoutBrowserPanel(page, async () => {
+        const at = await page.evaluate(
+          (uu, vv) => {
+            const rect = document.querySelector('.viewport').getBoundingClientRect()
+            const position = window.__duocad.projectSketchPoint(uu, vv)
+            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+          },
+          u,
+          v,
+        )
+        if (!at) fail(`スケッチ平面の点 (${u}, ${v}) が画面の中に無い`)
+        await page.mouse.click(at.x, at.y)
+      })
     }
 
     async function clickRegion(index) {
@@ -331,7 +334,7 @@ async function main() {
         ` 体積 ${withHoles.volume.toFixed(2)} -> ${afterResize.volume.toFixed(2)})`,
     )
 
-    // ================================================================ 検証5: 履歴の位置
+    // ================================================================ 検証5: undo/redoで位置が動く
     const beforeUndo = await look()
     await page.click('#undo')
     await waitFor(
@@ -343,34 +346,7 @@ async function main() {
     if (undone.log !== beforeUndo.log - 1) {
       fail(`undoで履歴の有効件数が減っていない: ${beforeUndo.log} -> ${undone.log}`)
     }
-    const position = await page.$eval('#history-position', (element) => element.textContent.trim())
-    if (!position.includes('やり直せる')) fail(`履歴パネルに位置が出ていない: "${position}"`)
-    ok(`履歴パネルに位置が出た("${position}")`)
-
-    // **溢れた行までスクロールで到達できる**(QA指摘 2026-08-14)。`flex-direction: column-reverse`
-    // で新しい順に並べると、溢れた分は `scrollHeight === clientHeight` のままスクロールできず、
-    // 「一覧で見せる」が最新数行のリストに縮退する(実測で踏んだ)。**最古の行が読めること**を見る。
-    const history = await page.evaluate(() => {
-      const list = document.querySelector('#history-list')
-      const rows = [...list.querySelectorAll('.item')]
-      const oldest = rows[rows.length - 1]
-      list.scrollTop = list.scrollHeight
-      const listBox = list.getBoundingClientRect()
-      const rowBox = oldest.getBoundingClientRect()
-      return {
-        rows: rows.length,
-        scrollable: list.scrollHeight > list.clientHeight,
-        oldestSeq: oldest.dataset.seq,
-        oldestVisible: rowBox.top >= listBox.top - 1 && rowBox.bottom <= listBox.bottom + 1,
-      }
-    })
-    if (!history.oldestVisible) {
-      fail(`履歴の最古の行(${history.oldestSeq})までスクロールで到達できない: ${JSON.stringify(history)}`)
-    }
-    ok(
-      `履歴 ${history.rows} 行のうち最古(seq ${history.oldestSeq})までスクロールで到達できた` +
-        `(溢れている: ${history.scrollable})`,
-    )
+    ok(`undoでやり直せる件数が増えた(${beforeUndo.redoCount} -> ${undone.redoCount})`)
 
     await page.click('#redo')
     await waitFor(
@@ -378,9 +354,11 @@ async function main() {
       'redoで位置が戻らない',
       beforeUndo.redoCount,
     )
-    const mine = (await look()).myOperations.length
-    if (mine === 0) fail('この画面が出した操作が1つも印されていない')
-    ok(`redoで戻った。この画面が出した操作 ${mine} 件に「自分」の印が付いている`)
+    const redone = await look()
+    if (redone.log !== beforeUndo.log) {
+      fail(`redoで履歴の有効件数が戻っていない: ${beforeUndo.log} -> ${redone.log}`)
+    }
+    ok(`redoで戻った(有効件数 ${redone.log})`)
 
     // ================================================================ 検証2: 保存と再現
     // 2026-08-22: 保存/開くは `duocad/models/` 配下の**ファイル名の一覧**へ変わった

@@ -17,7 +17,7 @@
  * ダウンロードしない)。`DUOCAD_BROWSER` で明示もできる。WebGLは実GPUで描く(詳細は browser.mjs)。
  */
 import { existsSync } from 'node:fs'
-import { findBrowser, launchBrowser } from './browser.mjs'
+import { findBrowser, launchBrowser, withoutBrowserPanel } from './browser.mjs'
 import { fail, ok, parseArgs } from './args.mjs'
 import { startServer } from './server.mjs'
 import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
@@ -637,19 +637,23 @@ async function main() {
     // コアとMCPにあったが、人からは描けなかった。ここで見るのはタスクCの検証1〜5で、
     // 検証6(MCPから同じ文書に見える)は smoke-mcp.mjs 側にある。
     async function clickPlane(u, v) {
-      // **クリックの直前に射影し直す**(使い回さない。面のときと同じ理由)
-      const at = await page.evaluate(
-        (uu, vv) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectSketchPoint(uu, vv)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        u,
-        v,
-      )
-      if (!at) fail(`スケッチ平面の点 (${u}, ${v}) が画面の中に無い`)
-      await page.mouse.click(at.x, at.y)
-      return at
+      // **浮いているブラウザを畳んでから**押す —— スケッチ平面の (u,v) は画面の1画素しかなく、
+      // そこがパネルの下に来ると逃げ場が無い(理由は `browser.mjs` の `withoutBrowserPanel`)。
+      return withoutBrowserPanel(page, async () => {
+        // **クリックの直前に射影し直す**(使い回さない。面のときと同じ理由)
+        const at = await page.evaluate(
+          (uu, vv) => {
+            const rect = document.querySelector('.viewport').getBoundingClientRect()
+            const position = window.__duocad.projectSketchPoint(uu, vv)
+            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+          },
+          u,
+          v,
+        )
+        if (!at) fail(`スケッチ平面の点 (${u}, ${v}) が画面の中に無い`)
+        await page.mouse.click(at.x, at.y)
+        return at
+      })
     }
 
     /**

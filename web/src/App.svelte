@@ -31,7 +31,6 @@
     needsSketchId,
   } from './commands/features'
   import { FILE_COMMANDS, changesDocument } from './commands/files'
-  import HistoryPanel from './HistoryPanel.svelte'
   import ParametersPanel from './ParametersPanel.svelte'
   import {
     DEFAULT_SKETCH_COMMAND_ID,
@@ -41,7 +40,7 @@
     runsOutsideSketch,
   } from './commands/sketch'
   import FilesPanel from './FilesPanel.svelte'
-  import PartsPanel from './PartsPanel.svelte'
+  import BrowserPanel from './BrowserPanel.svelte'
   import SelectionPanel from './SelectionPanel.svelte'
   import SketchPanel from './SketchPanel.svelte'
   import Toast, { showToast } from './Toast.svelte'
@@ -172,13 +171,15 @@
    */
   let currentDocumentName = $state<string | null>(null)
   /**
-   * **この画面が出した操作の seq**(操作履歴パネルの「自分」の印)。
+   * 左サイドバー(ファイル一覧)を出しているか。**見た目だけの状態**で、コアには送らない
+   * (モデルの状態ではないので操作ログにも残さない)。
    *
-   * 操作ログに主体は入っていない(§3.6)ので、区別できるのはここまで ——
-   * 再読込すると消えるし、AIが出した操作は「印が無い」だけで区別されたわけではない
-   * (`HistoryPanel.svelte` のdocstringに理由を書いてある)。
+   * 畳むとビューポートが横に広がる —— `.viewport` は ResizeObserver で自分の寸法を
+   * 見張っており(`viewport.ts` の `applySize`)、カメラのアスペクトも追随する。
+   * **開閉のたびに射影が変わる**ので、画面の座標を覚えて使い回す側(実機検査)は
+   * 開閉を挟んだら取り直すこと。
    */
-  let myOperations = $state<number[]>([])
+  let dataPanelOpen = $state(true)
   /**
    * この画面が出した `client_op` の控え。
    *
@@ -196,8 +197,9 @@
    * `modify_selection` で書き換えられるので、「選択が1つになった」だけを見て発火させると、
    * **人が何も触っていないのに文書が変わる**。
    *
-   * 見分けは `myOperations` と同じ材料でできる: 返ってきた `client_op` が
-   * `myClientOps` にあれば、それはこの画面が出した選択変更である。**数を渡すだけ**にして
+   * 見分けは、返ってきた `client_op` が
+   * `myClientOps` にあるかどうかでできる: あれば、それはこの画面が出した選択変更である。
+   * **数を渡すだけ**にして
    * あるのは、コマンド層に「誰が変えたか」の判断を持ち込まないため(向こうは
    * 「起動してから増えたか」しか見ない)。
    */
@@ -355,7 +357,6 @@
       currentDocumentName = applied.name
       note(`開いた: ${applied.name}`)
       if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
-      markOwnership(applied)
       lastApplied = applied
       refreshDocuments()
       return
@@ -374,7 +375,6 @@
         note('読み込んだのは参照ボディ(編集不可)。編集するには面を選んで「編集用に複製」')
       }
       if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
-      markOwnership(applied)
       lastApplied = applied
     }
   }
@@ -385,27 +385,6 @@
       payload.bodies.map((body) => ({ bodyId: body.body_id, geometry: body.geometry })),
     )
     previewing = payload.bodies.length > 0
-  }
-
-  /**
-   * 「自分が出した操作」の印を更新する。
-   *
-   * **seqは使い回される**。undoで捨てた操作の番号は次に積まれた操作が再び使うので
-   * (`OpLog.append` はカーソル以降を捨ててから振る)、控えを消さずに溜めると
-   * **AIが積んだ操作に「自分」が付く**(取りこぼしより悪い)。新しい操作の seq を
-   * 受けたら、その番号以上の控えを先に落とす。文書ごと差し替わったら全部捨てる。
-   */
-  function markOwnership(applied: Applied): void {
-    if (applied.change === 'document') {
-      myOperations = []
-      return
-    }
-    if (typeof applied.seq !== 'number') return
-    if (applied.verb === 'undo' || applied.verb === 'redo') return // 積み直しではない
-    const seq = applied.seq
-    const kept = myOperations.filter((item) => item < seq)
-    const mine = applied.client_op !== null && myClientOps.has(applied.client_op as number)
-    myOperations = mine ? [...kept, seq] : kept
   }
 
   function handleEdges(payload: EdgesPayload): void {
@@ -974,7 +953,6 @@
       // E: パラメータ・履歴・ファイル。実機検査が「打ち直したら形が追随する」を見る穴
       parameters: model?.parameters ?? {},
       redoCount: model?.redo_count ?? 0,
-      myOperations,
       lastFile,
       documentList,
       currentDocumentName,
@@ -986,6 +964,19 @@
 
 <div class="app">
   <header>
+    <!-- 左サイドバー(ファイル一覧)の開閉。**実物をクリックできない対象なのでボタンを置く**
+         (UI指針1「実物クリックできるものにボタンを作らない」の裏返し —— パネルそのものは
+         畳むと画面から消えるので、外に手を出す場所が要る)。 -->
+    <button
+      id="data-panel-toggle"
+      class="tag"
+      class:on={dataPanelOpen}
+      onclick={() => (dataPanelOpen = !dataPanelOpen)}
+      title="ファイル一覧の表示/非表示"
+      aria-pressed={dataPanelOpen}
+    >
+      ファイル
+    </button>
     <strong>duocad</strong>
     <span class="tag" class:on={status === 'open'}>{status}</span>
     <!-- **現在開いているファイル名**(完了条件4)。未保存(この画面でまだ
@@ -1022,14 +1013,37 @@
   </section>
 
   <div class="main">
-    <PartsPanel
-      bodies={partBodies}
-      onToggle={setVisible}
-      onShowAll={showAllParts}
-      onHideAll={hideAllParts}
-    />
-    <!-- canvas はこの div の中で three.js が作る。Svelte はここの中身を触らない -->
-    <div class="viewport" bind:this={container}></div>
+    <!-- 左サイドバー: 保存済みファイルの一覧(Fusion 360のデータパネルに対応)。
+         **開閉で `.viewport` の幅が変わる**が、変えているのは相変わらず flex の配分だけで、
+         `.viewport` 自身のサイズ指定は動かない(styles.css の不変条件)。 -->
+    {#if dataPanelOpen}
+      <aside class="data-panel">
+        <FilesPanel
+          documents={documentList}
+          currentName={currentDocumentName}
+          onSave={saveDocumentAs}
+          onOpen={openDocumentByName}
+        />
+      </aside>
+    {/if}
+
+    <!-- ビューポートと、その上に浮かぶブラウザの入れ物。**`.stage` が浮かせる側の位置の基準**で、
+         大きさを決めているのは `.stage` の中の `.viewport` 1つだけ(ブラウザは position:absolute で
+         フローの外にいるので、開閉してもカメラのアスペクトに触らない)。 -->
+    <div class="stage">
+      <!-- canvas はこの div の中で three.js が作る。Svelte はここの中身を触らない -->
+      <div class="viewport" bind:this={container}></div>
+
+      <BrowserPanel
+        bodies={partBodies}
+        {sketches}
+        activeSketchId={sketchId}
+        onToggle={setVisible}
+        onShowAll={showAllParts}
+        onHideAll={hideAllParts}
+        onEnterSketch={enterSketch}
+      />
+    </div>
 
     <!-- 選択・パラメータ・スケッチをまとめた右サイドバー。
          .sidebar は overflow-y:auto で自分の中だけスクロールするので、
@@ -1069,13 +1083,6 @@
         selectedEntities={selectedEntities}
         onToggleEntity={toggleEntity}
       />
-
-      <FilesPanel
-        documents={documentList}
-        currentName={currentDocumentName}
-        onSave={saveDocumentAs}
-        onOpen={openDocumentByName}
-      />
     </aside>
 
     <!-- エラーの札。**`.main` の中に置くが大きさは持たない**(position:absolute で浮く)ので、
@@ -1083,16 +1090,9 @@
     <Toast />
   </div>
 
-  <!-- 操作履歴は下部の横長タイムラインとして表示(HistoryPanel.svelte側で横並びに restyle)。 -->
-  <HistoryPanel
-    log={model?.log ?? []}
-    redoCount={model?.redo_count ?? 0}
-    mine={myOperations}
-  />
-
   <div class="statusbar">
-    <!-- 残すのは、どのパネルにも属さない**視点と履歴のボタン**だけ
-         (面・直前の情報は選択パネルと履歴パネルに出ている)。「全体」はスケッチに寄った視点から戻る手で、
+    <!-- 残すのは、どのパネルにも属さない**視点とundo/redoのボタン**だけ
+         (面・直前の情報は選択パネルに出ている)。「全体」はスケッチに寄った視点から戻る手で、
          これが無いと小さい図形を描いた後に部品が画面の外にあるまま操作することになる。 -->
     <div class="row">
       <button id="view-fit" onclick={() => viewport?.frameAll()}>全体</button>

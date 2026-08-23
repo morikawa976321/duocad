@@ -1,9 +1,11 @@
 <script lang="ts">
   /**
    * ファイルパネル — **保存先が固定フォルダになったことをUIに落とす場所**。
+   * `App.svelte` の**左サイドバー(`.data-panel`)の中身はこれ1枚だけ**である
+   * (Fusion 360のデータパネルに対応する位置)。
    *
-   * **`duocad/models/` の中身を一覧で見せて、クリック1つで開く**。`PartsPanel.svelte` /
-   * `HistoryPanel.svelte` と同じ作りで、**状態はコアが持つ**(`documents` はサーバの
+   * **`duocad/models/` の中身を一覧で見せて、クリック1つで開く**。`BrowserPanel.svelte`
+   * と同じ作りで、**状態はコアが持つ**(`documents` はサーバの
    * `list_documents` が返した一覧の写しで、ここでは何も覚えない)。保存・開く・一覧はどれも
    * `App.svelte` が `session.runVerb(...)` で直接送る(`ParametersPanel.svelte` の
    * `onSetParameter` と同じ形。`CommandHost` は経由しない —— 一覧からのクリックは「対象を
@@ -123,18 +125,18 @@
 </section>
 
 <style>
-  /* 高さは固定する(PartsPanel/ParametersPanelと同じ理由)。一覧は自分の中だけ
-     overflow するので、増減しても `.sidebar` 全体の overflow-y:auto に吸収される
-     (`.viewport` の寸法には触らない。App.svelteの`.sidebar`のdocstring参照)。 */
+  /* 左サイドバーの高さを丸ごと受け取り、余った分は `.list` が持つ
+     (自分の高さを固定していた頃の 140px は、右サイドバーで他のパネルと
+     縦に並んでいたときの都合であって、専用の枠に移った今は要らない)。
+     溢れるのは `.list` の中だけなので、ファイルが増えても `.viewport` の寸法には触らない。 */
   .files-panel {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    height: 140px;
-    flex: 0 0 auto;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow: hidden;
     padding: 6px 8px;
-    border-top: 1px solid var(--line);
   }
 
   .row {
