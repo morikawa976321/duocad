@@ -121,6 +121,33 @@ async function main() {
     }
 
     /**
+     * **何も無い所を素でクリックして全部外す**(`App.svelte` の `onPick`)。
+     *
+     * 2026-08-23に選択パネルを廃したので、人が「全解除」する手段はこれ1つになった。
+     * どの画素が空いているかは視点と部品の形で変わるので、四隅を順に試して
+     * **実際に0件になった時点で成功**とする(取れた画素を決め打ちしない)。
+     */
+    async function clearSelectionByClickingNothing() {
+      const rect = await page.evaluate(() => {
+        const box = document.querySelector('.viewport').getBoundingClientRect()
+        return { left: box.left, top: box.top, width: box.width, height: box.height }
+      })
+      for (const [fx, fy] of [[0.97, 0.97], [0.03, 0.97], [0.97, 0.03], [0.5, 0.97]]) {
+        await page.mouse.click(rect.left + rect.width * fx, rect.top + rect.height * fy)
+        try {
+          await page.waitForFunction(
+            () => (window.__duocad.selection?.items ?? []).length === 0,
+            { timeout: 2000, polling: 50 },
+          )
+          return
+        } catch {
+          // そこには部品が居た。次の隅を試す
+        }
+      }
+      fail(`何も無い所のクリックで全解除できない: ${JSON.stringify(await look())}`)
+    }
+
+    /**
      * **起きないことを見る前の猶予**。適用が走るなら「クリック → WS往復 → 状態配信」で
      * 済む時間(実測で数十〜数百ms)を過ぎてから数える —— 待たずに数えると、
      * 走っていても「まだ返ってきていないだけ」を緑と読んでしまう。
@@ -607,8 +634,7 @@ async function main() {
     ok('面を選んで**編集可能なコピー**を作れた(複製の経路。起動前から選んでいたのでEnter)')
 
     // (c) 起動してすぐEscで降りたら、その後の面クリックでは発火しない
-    await page.click('#selection-clear')
-    await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, '選択を全解除できない')
+    await clearSelectionByClickingNothing()
     await page.click('#file-make-editable')
     await page.keyboard.press('Escape')
     const solidsAfterEscape = (await look()).bodies.length
@@ -620,8 +646,7 @@ async function main() {
     ok('(c) 起動 → Esc のあとの面クリックでは発火しない')
 
     // (b) 起動した後に面をクリックすると、Enterを押さずに適用される
-    await page.click('#selection-clear')
-    await waitFor(() => (window.__duocad.selection?.items ?? []).length === 0, '選択を全解除できない')
+    await clearSelectionByClickingNothing()
     const solidsBeforeImmediate = (await look()).bodies.length
     await page.click('#file-make-editable')
     await page.mouse.click(facePoint.x, facePoint.y)

@@ -36,6 +36,11 @@ const httpPort = options['http-port'] ?? '8866'
 const timeout = Number.parseInt(options.timeout ?? '180000', 10)
 const expectedBodies = Number.parseInt(options['expect-bodies'] ?? String(PC_CASE_SOLIDS), 10)
 
+/** 3Dハイライトの色(`viewport.ts` の `HIGHLIGHT_COLOR` / `PROPOSED_COLOR`)。
+    **選択パネルを廃した後、提案と確定を区別する唯一の手段**なので、値で検査する。 */
+const USER_HIGHLIGHT = 0xffb454
+const PROPOSED_HIGHLIGHT = 0x36d1ff
+
 
 
 
@@ -352,38 +357,67 @@ async function main() {
       { timeout, polling: 50 },
       proposedCount,
     )
-    // **提案は確定選択と見た目が違う**(枠の色と「AIの提案」の札)。承認の操作もここにある。
-    const proposedLook = await page.evaluate(() => ({
-      marked: Boolean(document.querySelector('.selection-panel.proposed')),
-      badge: Boolean(document.querySelector('.selection-panel .badge')),
-      commit: Boolean(document.querySelector('#selection-commit')),
-      rows: document.querySelectorAll('.selection-row').length,
-      summary: document.querySelector('#selection-summary').textContent.trim(),
-    }))
-    if (!proposedLook.marked || !proposedLook.badge) {
-      fail('AIの提案が確定選択と同じ見た目で出ている(区別が付かない)')
-    }
-    if (!proposedLook.commit) fail('承認(commit_selection)の操作がUIに無い')
-    if (proposedLook.rows !== proposedCount) {
-      fail(`提案の件数が一覧に出ていない: ${proposedLook.rows} 行 / ${proposedCount} 本`)
-    }
-    ok(
-      `AIが述語で辺 ${proposedCount} 本を提案 → ブラウザに**提案として**出た` +
-        `(${proposedLook.summary} / 承認ボタンあり)`,
+    // **提案は確定選択と違う色で出る。** 2026-08-23に選択パネルを廃したので、提案(水色)と
+    // 確定(橙)の区別を人へ伝えるのは**3Dのハイライト色だけ**になった —— その色そのものを
+    // 読んで確かめる(`viewport.highlightColors`)。辺が3Dに出るのは辺を要求している
+    // コマンドを起動している間だけなので、人がやるとおり先にフィレットを起動する。
+    await page.click('#fillet')
+    await page.click('#view-fit')
+    await page.waitForFunction(
+      (bodyId) => window.__duocad.edges?.body_id === bodyId,
+      { timeout, polling: 50 },
+      target.body_id,
     )
+    const proposedColor = await page.evaluate(() => window.__duocad.highlightColors().edge)
+    if (proposedColor !== PROPOSED_HIGHLIGHT) {
+      fail(
+        `AIの提案が提案の色で出ていない: ${proposedColor?.toString(16)} ` +
+          `(期待 ${PROPOSED_HIGHLIGHT.toString(16)})`,
+      )
+    }
+    ok(`AIが述語で辺 ${proposedCount} 本を提案 → ブラウザに**提案の色(水色)で**出た`)
 
     // ---------------------------------------------------------------- 人が1本外す
-    const droppedIndex = await page.evaluate(() => {
-      const ref = document.querySelector('.selection-row').dataset.ref // "edge:<body>:<index>"
-      return Number.parseInt(ref.slice(ref.lastIndexOf(':') + 1), 10)
-    })
-    await page.click('.selection-row .selection-remove')
-    await page.waitForFunction(
-      (count) => window.__duocad.selection?.count === count,
-      { timeout, polling: 50 },
-      proposedCount - 1,
-    )
-    ok(`人がブラウザで辺 ${droppedIndex} を1本外した(${proposedCount} -> ${proposedCount - 1} 本)`)
+    // **Ctrl+クリックで外す**(選択パネルの「外す」ボタンの代わり。2026-08-23)。
+    // 裏に回っている辺は指せないので、提案のうち実際に指せる1本を順に試す。
+    const proposedIndices = proposed.selection.items
+      .filter((item) => item.body === target.body_id)
+      .map((item) => item.index)
+    let droppedIndex = null
+    for (const index of proposedIndices) {
+      const at = await page.evaluate(
+        (id, edgeIndex) => {
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectEdge(id, edgeIndex)
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        },
+        target.body_id,
+        index,
+      )
+      if (!at) continue
+      await page.keyboard.down('Control')
+      await page.mouse.click(at.x, at.y)
+      await page.keyboard.up('Control')
+      try {
+        await page.waitForFunction(
+          (count) => window.__duocad.selection?.count === count,
+          { timeout: 5000, polling: 50 },
+          proposedCount - 1,
+        )
+        droppedIndex = index
+        break
+      } catch {
+        // その辺は画面から指せなかった(裏に回っている)。次を試す
+      }
+    }
+    if (droppedIndex === null) fail('提案された辺を本物のクリックで1本も外せない')
+    // **触った瞬間に色が確定側(橙)へ変わる** —— 承認されたことが色で人に伝わる。
+    const userColor = await page.evaluate(() => window.__duocad.highlightColors().edge)
+    if (userColor !== USER_HIGHLIGHT) {
+      fail(`人が触ったのに確定の色へ変わらない: ${userColor?.toString(16)}`)
+    }
+    await page.keyboard.press('Escape') // フィレットは起動しただけ(形は変えない)
+    ok(`人がブラウザで辺 ${droppedIndex} をCtrl+クリックで外した(${proposedCount} -> ${proposedCount - 1} 本・色は橙へ)`)
 
     // ---------------------------------------------------------------- AIが読むと外れている
     const afterHuman = await mcp.callTool('get_selection')

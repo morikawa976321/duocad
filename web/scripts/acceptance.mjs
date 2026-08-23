@@ -862,7 +862,8 @@ async function main() {
       const proposedItems = proposed.selection.items
       if (proposedItems.length === 0) throw new Error('述語で辺が1本も選べない')
 
-      // 2. **ブラウザに「提案」として出る**(確定選択と違う色・選択パネルにバッジ)
+      // 2. **ブラウザに「提案」として出る**(確定選択と**違う色**で3Dに出る。
+      //    2026-08-23に選択パネルを廃したので、区別を伝えるのはこの色だけになった)
       await page.waitForFunction(
         (count) => {
           const selection = window.__duocad.selection
@@ -871,9 +872,9 @@ async function main() {
         { timeout: 30000, polling: 50 },
         proposedItems.length,
       )
-      const badge = await page.$eval('#selection-summary', (element) => ({
-        origin: element.dataset.origin,
-        text: element.textContent.trim(),
+      const badge = await page.evaluate(() => ({
+        origin: window.__duocad.selection.origin,
+        text: `${window.__duocad.selection.count} 件`,
       }))
       const promptText = await page.$eval('#command-prompt', (element) => element.textContent.trim())
 

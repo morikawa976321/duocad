@@ -31,12 +31,13 @@
    * `onRun` / `onPreview` へ渡るのは数値・選択肢・パスだけ。ここで選択を読むのは、何を待って
    * いるかを出すことと、確定を許すかを決めることに使う。
    *
-   * ## AIが割り込んでいる間は確定させない
+   * ## AIの提案のままでも確定できる
    *
-   * 人が引数を集めている最中にAIが選択を書き換えることがある。**対象を決めるのはサーバ**
-   * なのでブラウザが凍結しても意味が無く、代わりに `needsCommit` で確定を止め、承認するか
-   * クリックで直すことを促す —— 人がクリックすれば `modify_selection` を通って `origin` は
-   * `"user"` に戻るので、そのまま続けられる。
+   * 人が引数を集めている最中にAIが選択を書き換えることがある。**ここでは止めない**
+   * (2026-08-23本人裁定) —— コマンドを実行する行為そのものを承認とみなし、サーバが
+   * verbを走らせる直前に `commit_selection` する(`duocad/server.py` の
+   * `_commit_before_verb`)。人がクリックで直せば `modify_selection` を通って `origin` は
+   * その場で `"user"` に戻るので、どちらの順でも同じ結果になる。
    *
    * ## プレビューは投機的実行
    *
@@ -207,17 +208,7 @@
   /** 選ばれすぎ(`max` 超え)の理由。空でない間は確定させない。 */
   const overflow = $derived(overflowNote(command, selection))
 
-  /**
-   * AIの提案が載っている間は確定できない。**verbが食うのはコアの確定選択**なので、
-   * 提案のまま送るとサーバが `SelectionNotCommitted` で断る —— 往復して同じことを
-   * 言われるより、承認が要ることをここで出す(選択パネルの「確定」か、クリックで直す)。
-   * 選択を使わないコマンド(ファイル・反復)は関係ないので、選択引数があるときだけ見る。
-   */
-  const needsCommit = $derived(
-    selection?.origin === 'proposed' && command.args.some((spec) => spec.kind === 'selection'),
-  )
-
-  const ready = $derived(missing === null && overflow === '' && !needsCommit)
+  const ready = $derived(missing === null && overflow === '')
   const built = $derived(ready ? command.build(values) : null)
 
   /**
@@ -236,9 +227,6 @@
 
   /** 画面に出す1行(何を待っているか)。 */
   const prompt = $derived.by(() => {
-    if (selection?.origin === 'proposed') {
-      return 'AIの提案を承認するか、クリックして直してください(下の選択パネル)'
-    }
     if (missing !== null) return promptFor(missing, values)
     if (overflow !== '') return overflow
     if (built && !built.ok) return built.reason

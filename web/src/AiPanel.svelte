@@ -185,8 +185,9 @@
     border-top: 1px solid var(--line);
     background: var(--panel);
     padding: 6px 10px;
-    /* SelectionPanelと同じ理由(コメント参照)で高さを固定する ——
-       会話が伸びてもビューポートのアスペクトを動かさない。 */
+    /* **高さを固定する。** 内容任せにすると、会話が伸びるたびにビューポートが
+       リサイズされてカメラのアスペクトと射影が動く —— 直前に射影した画素を
+       押すと別のものが取れる(実機検査が本物のクリックで指す前提が崩れる)。 */
     height: 220px;
     flex: 0 0 auto;
     display: flex;

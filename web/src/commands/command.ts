@@ -23,14 +23,6 @@ import type { Point2, SelectionRef, SelectionState, ShapeKind, ShapeRef } from '
 /** 選択の種別。コアの `SELECTABLE_KINDS` と同じ4つ。 */
 export type SelectableKind = ShapeKind | 'region'
 
-/** 画面に出す種別の名前(件数表示・引数の問いかけに使う)。 */
-export const KIND_LABELS: Record<SelectableKind, string> = {
-  face: '面',
-  edge: '辺',
-  vertex: '頂点',
-  region: '領域',
-}
-
 /** 種別ごとの数え方(「辺 4本」「面 2面」)。件数表示を1箇所に集める。 */
 const KIND_COUNTERS: Record<SelectableKind, string> = {
   face: '面',
@@ -74,19 +66,6 @@ export function refKey(ref: SelectionRef): string {
 /** 面の参照を作る(ビューポートのピック結果から)。添字は1始まり。 */
 export function faceRef(bodyId: string, faceIndex: number): ShapeRef {
   return { body: bodyId, kind: 'face', index: faceIndex }
-}
-
-/** 種別ごとの件数を「辺 4本 / 面 1面」の形にまとめる(選択パネルの要約)。 */
-export function describeSelection(items: SelectionRef[]): string {
-  const counts = new Map<SelectableKind, number>()
-  for (const item of items) {
-    const kind = refKind(item)
-    counts.set(kind, (counts.get(kind) ?? 0) + 1)
-  }
-  if (counts.size === 0) return 'なし'
-  return [...counts]
-    .map(([kind, count]) => `${KIND_LABELS[kind]} ${count}${KIND_COUNTERS[kind]}`)
-    .join(' / ')
 }
 
 // --------------------------------------------------------------------------------------

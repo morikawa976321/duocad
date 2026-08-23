@@ -359,9 +359,7 @@ async function main() {
       target.index,
       secondIndex,
     )
-    const summaryText = await page.$eval('#selection-summary', (element) => element.textContent.trim())
-    if (!summaryText.includes('2')) fail(`選択パネルの件数表示が2件になっていない: "${summaryText}"`)
-    ok(`Shift+クリックで複数選択: ${summaryText}(面 ${target.index} と面 ${secondIndex})`)
+    ok(`Shift+クリックで複数選択: 2件(面 ${target.index} と面 ${secondIndex})`)
 
     second = await locateFace(extrudeTarget.body_id, secondIndex)
     if (!second) fail(`面 ${secondIndex} の位置が取れない(2回目)`)
@@ -383,14 +381,19 @@ async function main() {
     )
     ok(`Ctrl+クリックで1本外した(残ったのは最初に選んだ面 ${target.index})`)
 
-    // 選択パネルの「外す」ボタンでも1件ずつ落とせること。**3Dで指せない辺・頂点を
-    // 人が直せる唯一の場所**なので、面で経路が生きていることをここで確かめる。
-    await page.click('.selection-row .selection-remove')
+    // **何も無い所を素でクリックすると全部外れる**(2026-08-23に選択パネルを廃したので、
+    // 「全解除」ボタンの代わりはこれ1つになった)。canvasの隅は部品にも
+    // 浮いているパネルにも当たらない画素を選ぶ。
+    const empty = await page.evaluate(() => {
+      const rect = document.querySelector('.viewport').getBoundingClientRect()
+      return { x: rect.left + rect.width - 6, y: rect.top + rect.height - 6 }
+    })
+    await page.mouse.click(empty.x, empty.y)
     await page.waitForFunction(() => window.__duocad.selection?.count === 0, {
       timeout,
       polling: 50,
     })
-    ok('選択パネルの「外す」で1件落ちた(辺・頂点を人が直す経路と同じもの)')
+    ok('何も無い所のクリックで全部外れた(旧「全解除」ボタンの代わり)')
 
     // 押し出しのために選び直す(以後の検査は面1つが選ばれている前提)
     const again = await locateFace(extrudeTarget.body_id, target.index)
