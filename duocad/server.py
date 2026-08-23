@@ -181,6 +181,11 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 #:   表からは外して `_dispatch` で個別に扱う。
 FILE_COMMANDS: dict = catalog.file_table()
 
+#: **対象集合をコアの確定選択から取るコマンド**(`catalog.Command.uses_selection`)。
+#: `_dispatch` はこれを受け取ったとき、選択が `origin="proposed"` のままなら
+#: **自動で `commit_selection` してから**verbを走らせる(下記 `_commit_before_verb`)。
+SELECTION_CONSUMING_COMMANDS: set = catalog.selection_consuming_commands()
+
 
 class _AiToolsOnLoop:
     """`ToolSurface`(`descriptors`/`call`/`error_envelope`/`current_seq`)を**イベントループの
@@ -258,6 +263,7 @@ class Session:
         self._sketch_cache: dict = {}
         self._geometry_cache: dict = {}    # body_id -> (shape, tessellate結果)
         self._edge_cache: dict = {}        # body_id -> (shape, tessellate_edges結果)(D)
+        self._vertex_cache: dict = {}      # body_id -> (shape, vertex_positions結果)
         self._setup_floor_seq = 0  # load_step が積んだ最後のseq(これ以下はundoの対象外)
         self._listeners: list = []  # 文書が変わったときに呼ぶ購読者(下記 add_listener)
         self._suppress_events = 0  # >0 の間は `_emit` が配らない(プレビュー。`preview` 参照)
@@ -530,6 +536,35 @@ class Session:
             described = kernel.tessellate_edges(body.shape, self.deviation)
             self._edge_cache[body_id] = (body.shape, described)
         return {"body_id": body_id, "revision": revision, "edges": described}
+
+    def vertices(self, body_id: str) -> dict:
+        """1Bodyの頂点を1始まりの添字つきの3D座標で返す(キャッシュ付き)。
+
+        戻り値: `{"body_id", "revision", "vertices": [{"index", "point": [x,y,z]}, ...]}`
+
+        **`edges()` と同じく配信しない**(`state` にも `delta` にも入れない)。違うのは
+        画面側の使い方で、辺は「要求しているコマンドを起動している間だけ全部出す」のに対し、
+        頂点は**選択に入っているものだけ**を出す —— 頂点を引数に取るverbが無いので候補を
+        全部見せる意味が無い。ここが全頂点を返すのは、どれが選ばれるかを事前に知らない
+        からで、画面に出るのは選択に入った添字だけである。
+
+        `revision` を返す理由も辺と同じ —— 形が変われば版が上がるので、古い座標を
+        描き続ける経路が閉じる。
+        """
+        body = self.document.get_body(body_id)
+        if body.shape is None:
+            raise ValueError(f"body {body_id!r} has no shape (頂点を数えられない)")
+        # **不可視Bodyの頂点は配らない**(`geometry()` / `edges()` と同じ規律)。
+        if not body.visible:
+            raise ValueError(f"body {body_id!r} is not visible: 隠れているものの頂点は指せない")
+        revision = self.body_revision(body_id)
+        cached = self._vertex_cache.get(body_id)
+        if cached is not None and cached[0] is body.shape:
+            described = cached[1]
+        else:
+            described = query.describe_vertices(body.shape)
+            self._vertex_cache[body_id] = (body.shape, described)
+        return {"body_id": body_id, "revision": revision, "vertices": described}
 
     def delta(self, known_revisions: dict) -> dict:
         """クライアントが持っている版との差分だけを返す(未知のIDは必ずbodiesへ)。
@@ -1093,6 +1128,7 @@ class Session:
         self.document = document
         self._geometry_cache.clear()
         self._edge_cache.clear()
+        self._vertex_cache.clear()
         self._sketch_cache.clear()
         # **版の数え上げ(`_revision_counter`)は消さない**。消すと版が1へ戻り、同じidの
         # Bodyを知っているクライアントが「版が同じ=変わっていない」と判断して、
@@ -1390,6 +1426,7 @@ class Server:
             return
 
         try:
+            self._commit_before_verb(command, message)
             if command == "get_state":
                 await self._push(connection, applied=None, only=connection)
             elif command == "extrude_face":
@@ -1479,6 +1516,11 @@ class Server:
             elif command == "get_edges":
                 result = self.session.edges(message["body_id"])
                 await _send(connection, {"type": "edges", **result})
+            # -------------------------------------------------- D: 頂点の座標(選択に入った分だけ画面に出る)
+            # **配信しない**(`get_edges` と同じ)。要求した接続にだけ返す。
+            elif command == "get_vertices":
+                result = self.session.vertices(message["body_id"])
+                await _send(connection, {"type": "vertices", **result})
             # -------------------------------------------------- E: ファイル操作
             # **verbかどうかで応答が違う**(`FILE_COMMANDS` の3つ目の値)。文書を変えるものは
             # 状態を全接続へ配り、書き出すだけのものは要求した接続へ結果だけ返す。
@@ -1543,6 +1585,38 @@ class Server:
                     "message": f"{type(error).__name__}: {error}",
                 },
             )
+
+    def _commit_before_verb(self, command: Any, message: dict) -> None:
+        """**人がツールバーからコマンドを実行する行為そのものを承認とみなす**(2026-08-23本人裁定)。
+
+        対象集合を確定選択から取るverb(`SELECTION_CONSUMING_COMMANDS`)がこのソケットへ
+        届いたとき、選択が `origin="proposed"`(AIの提案)のままなら、先に
+        `commit_selection` してから走らせる。**中身は変えない** —— 変わるのは origin だけで、
+        提案と確定の区別そのもの(`confirmed_items` の門)は残る。
+
+        **ここはブラウザ側の経路だけ**である。MCPは `mcp_server.py` を通るのでこの覆いを
+        受けず、AIは今までどおり自分の提案を `commit_selection` で明示的に確定する
+        (`duocad/selection.py` のモジュールdocstring)。
+
+        `preview` も対象にする —— 数値を打つと投機実行が飛ぶので、ここを外すと
+        「提案のまま押し出そうとした瞬間に `SelectionNotCommitted` の札だけが出る」が残る。
+        投機実行するverbは `message["verb"]` にある。
+
+        `_apply` で囲むのは、この commit の発火を**WebSocket経由の変更として印す**ため
+        (囲まないと `_on_core_change` が余分な状態配信を1回増やす。直後のverbの `_push` が
+        新しい origin ごと配るので、それで足りる)。
+        """
+        name = message.get("verb") if command == "preview" else command
+        if name not in SELECTION_CONSUMING_COMMANDS:
+            return
+        # **`sketch_create` に `base_plane` が付いていたら読まない** —— そのときは貼る先が
+        # 引数で来ており、選択は使われない。使われない集合を承認扱いにすると、
+        # 「基準平面を指しただけなのにAIの提案が確定していた」という静かな変化になる。
+        if name == "sketch_create" and message.get("base_plane") is not None:
+            return
+        if not selection.get_selection(self.session.document).is_proposed():
+            return
+        self._apply(self.session.commit_selection, message.get("client_op"))
 
     def _apply(self, call: Any, *args: Any, **kwargs: Any) -> dict:
         """WebSocket経由の変更を実行する。この間だけ `_dispatching` を立てる。

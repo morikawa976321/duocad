@@ -41,7 +41,6 @@
   } from './commands/sketch'
   import FilesPanel from './FilesPanel.svelte'
   import BrowserPanel from './BrowserPanel.svelte'
-  import SelectionPanel from './SelectionPanel.svelte'
   import SketchPanel from './SketchPanel.svelte'
   import Toast, { showToast } from './Toast.svelte'
   import {
@@ -59,12 +58,14 @@
     type SelectionRef,
     type ServerState,
     type ShapeRef,
+    type VerticesPayload,
   } from './session'
   import AiPanel from './AiPanel.svelte'
   import {
     createViewport,
     type PickEvent,
     type SketchDraw,
+    type VertexMarker,
     type Viewport,
   } from './viewport'
 
@@ -147,6 +148,10 @@
   let edges = $state<Record<string, EdgesPayload>>({})
   /** 取り寄せ中のもの(`${body_id}:${revision}`)。同じ要求を何度も投げないため。 */
   let edgesAsked = new Set<string>()
+  /** 頂点の座標(**選択に頂点が入っているBodyの分だけ**取り寄せる)。 */
+  let vertices = $state<Record<string, VerticesPayload>>({})
+  /** 取り寄せ中のもの(辺と同じ形の印)。 */
+  let verticesAsked = new Set<string>()
   /** スケッチパネルで選んだ図形(反復のverbの引数。共有選択集合には入らない)。 */
   let selectedEntities = $state<string[]>([])
 
@@ -209,6 +214,7 @@
       if (where === 'preview') clearPreview()
       // 辺の取り寄せが失敗したら「頼んだ」印も消す(次に起動したときに取り直せる)
       if (where === 'get_edges' || where === 'send') edgesAsked.clear()
+      if (where === 'get_vertices' || where === 'send') verticesAsked.clear()
       // **失敗しても、やり直せる状態にして返す**。OCCTのフィレットは半径に対して
       // 単調でなく(§7: r=10.0 失敗 / r=10.5 成功)、すぐ近くの値で打ち直すのが実際の
       // 使い方になる。選択はコア側にあるので失敗では消えない —— ここで戻すのは
@@ -239,10 +245,14 @@
       // いる間の要求は送られずに捨てられるが、`edgesAsked` には残る —— 再接続しても
       // 版が同じなら「もう頼んだ」と判断して二度と取りに行かず、**そのBodyの辺が
       // 出ないまま**フィレットが使えなくなる(`pendingOp` を捨てるのと同じ形の穴)。
-      if (next !== 'open') edgesAsked.clear()
+      if (next !== 'open') {
+        edgesAsked.clear()
+        verticesAsked.clear()
+      }
     },
     onPreview: handlePreview,
     onEdges: handleEdges,
+    onVertices: handleVertices,
     onFile: handleFile,
     onAiStatus: handleAiStatus,
     onAiToolCall: (call) => (aiTranscript = [...aiTranscript, { kind: 'tool', call }]),
@@ -381,6 +391,10 @@
     edges = { ...edges, [payload.body_id]: payload }
   }
 
+  function handleVertices(payload: VerticesPayload): void {
+    vertices = { ...vertices, [payload.body_id]: payload }
+  }
+
   /**
    * ファイルを書いた/一覧が届いた。**どこへ何バイト書いたかを必ず画面へ出す** ——
    * 書き出しはブラウザの中に痕跡が残らない操作なので、通知が唯一の確認手段になる。
@@ -444,6 +458,32 @@
     ),
   )
 
+  /** 選択中の頂点(**選ばれているものだけ**が3Dにマーカーで出る)。 */
+  const selectedVertices = $derived(
+    (selection?.items ?? []).filter(
+      (item): item is ShapeRef => !('sketch' in item) && (item as ShapeRef).kind === 'vertex',
+    ),
+  )
+
+  /**
+   * 画面に出す頂点マーカー(参照 + 座標)。
+   *
+   * **版が合っている座標しか使わない**(辺と同じ規律 §7)—— 形が変わった後の古い座標を
+   * 描くと、実物のどこにも無い所にマーカーが浮く。座標がまだ届いていないBodyは黙って
+   * 落ちるが、下の `$effect` が取りに行くので次の配信で出る。
+   */
+  const vertexMarkers = $derived.by(() => {
+    const markers: VertexMarker[] = []
+    for (const item of selectedVertices) {
+      const body = model?.bodies.find((candidate) => candidate.body_id === item.body)
+      const known = vertices[item.body]
+      if (!body || !body.visible || known?.revision !== body.revision) continue
+      const point = known.vertices.find((candidate) => candidate.index === item.index)?.point
+      if (point) markers.push({ bodyId: item.body, vertexIndex: item.index, point })
+    }
+    return markers
+  })
+
   function drawHighlight(): void {
     const origin = selection?.origin === 'proposed' ? 'proposed' : 'user'
     viewport?.highlight(
@@ -454,7 +494,28 @@
       selectedEdges.map((item) => ({ bodyId: item.body, edgeIndex: item.index })),
       origin,
     )
+    viewport?.showVertices(vertexMarkers, origin)
   }
+
+  /**
+   * 選択に入った頂点の座標を取りに行く。
+   *
+   * **辺と違って「コマンドが要求している間」ではない** —— 頂点を引数に取るコマンドが
+   * 無いので、要求の有無ではなく**選択に入っているかどうか**が出す条件になる
+   * (`viewport.showVertices` のdocstring)。
+   */
+  $effect(() => {
+    for (const item of selectedVertices) {
+      const body = model?.bodies.find((candidate) => candidate.body_id === item.body)
+      // **見えているBodyだけ**に頼む(隠れているものの頂点はサーバが断る。辺と同じ規律)。
+      if (!body || !body.visible) continue
+      if (vertices[item.body]?.revision === body.revision) continue
+      const key = `${item.body}:${body.revision}`
+      if (verticesAsked.has(key)) continue
+      verticesAsked.add(key)
+      session.getVertices(item.body)
+    }
+  })
 
   // ---------------------------------------------------------------- D: 辺を取りに行く
   /**
@@ -603,6 +664,16 @@
     if (event.edge !== null) {
       editSelection(
         { body: event.edge.bodyId, kind: 'edge', index: event.edge.edgeIndex },
+        event.mode,
+      )
+      return
+    }
+    // **頂点が当たったら頂点**。選択に入っている頂点だけがマーカーとして出ているので、
+    // ここへ来るのは実質「AIが選んだ頂点を人がCtrl+クリックで外す」経路である
+    // (頂点を選択へ新規追加するコマンドは無い)。参照の形も修飾キーの規則も面・辺と同じ。
+    if (event.vertex !== null) {
+      editSelection(
+        { body: event.vertex.bodyId, kind: 'vertex', index: event.vertex.vertexIndex },
         event.mode,
       )
       return
@@ -940,6 +1011,12 @@
       selectedEntities,
       projectEdge: (bodyId: string, edgeIndex: number) =>
         viewport?.projectEdge(bodyId, edgeIndex) ?? null,
+      // 頂点。**実機検査が本物のクリックで頂点を外す**ための穴(出ていなければ null)。
+      vertexMarkers,
+      // **提案(水色)と確定(橙)の区別は3Dの色だけ**になったので、色そのものを読める穴を出す。
+      highlightColors: () => viewport?.highlightColors() ?? null,
+      projectVertex: (bodyId: string, vertexIndex: number) =>
+        viewport?.projectVertex(bodyId, vertexIndex) ?? null,
       // E: パラメータ・履歴・ファイル。実機検査が「打ち直したら形が追随する」を見る穴
       parameters: model?.parameters ?? {},
       redoCount: model?.redo_count ?? 0,
@@ -1017,7 +1094,7 @@
       />
     </div>
 
-    <!-- 選択・パラメータ・スケッチをまとめた右サイドバー。
+    <!-- AI・パラメータ・スケッチをまとめた右サイドバー。
          .sidebar は overflow-y:auto で自分の中だけスクロールするので、
          中のパネルが増減しても .viewport のサイズは変わらない(射影が動かない)。 -->
     <aside class="sidebar">
@@ -1028,14 +1105,6 @@
         onCancel={() => session.aiCancel()}
         onConfigure={(providerKind, modelName, baseUrl) =>
           session.aiConfigure(providerKind, modelName, baseUrl)}
-      />
-
-      <SelectionPanel
-        {selection}
-        bodies={model?.bodies ?? []}
-        onRemove={(ref) => modifySelection([], [ref])}
-        onClear={() => session.clearSelection(nextOp())}
-        onCommit={() => session.commitSelection(nextOp())}
       />
 
       <ParametersPanel

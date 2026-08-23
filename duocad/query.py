@@ -110,6 +110,17 @@ def describe_faces(shape: Any) -> list:
     return described
 
 
+def describe_vertices(shape: Any) -> list:
+    """頂点を1始まりの添字つきで列挙する(`[{"index": int, "point": [x,y,z]}, ...]`)。
+
+    **添字は `kernel.count_subshapes(shape, "vertex")` の体系**で、`selection.select_vertex`
+    が範囲を検査する数え方と同じ。build123d の `.vertices()` の順序がこれと一致する保証は
+    無いので、座標も順序も `kernel.vertex_positions` から取る(`describe_edges` が
+    `.edges()` を使わないのと同じ理由)。
+    """
+    return kernel.vertex_positions(_unwrap(shape))
+
+
 def edges_of_face(shape: Any, face_index: int) -> list:
     """その面の**外周**を成す辺の添字を昇順で返す。
 

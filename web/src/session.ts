@@ -323,6 +323,30 @@ export interface EdgesPayload {
   edges: EdgeGeometry[]
 }
 
+/**
+ * 1つの頂点の3D座標(`kernel.vertex_positions` の1件そのまま)。
+ *
+ * `index` は**コアの数え方の1始まり**(`count_subshapes(shape, "vertex")`)で、
+ * 選択の `ShapeRef`(`kind: "vertex"`)が持つ添字と同じ。
+ */
+export interface VertexGeometry {
+  index: number
+  point: number[]
+}
+
+/**
+ * 頂点の応答。**状態の配信ではない**(要求した接続にだけ届く。`EdgesPayload` と同じ扱い)。
+ *
+ * 全頂点が入っているが、**画面に出るのは選択に入った添字だけ**である(辺と違い、
+ * 頂点を要求するコマンドが無いので候補を見せる意味が無い)。`revision` は要求した
+ * 時点のBodyの版で、形が変わった後の古い座標を描き続ける経路を閉じる。
+ */
+export interface VerticesPayload {
+  body_id: string
+  revision: number
+  vertices: VertexGeometry[]
+}
+
 // --------------------------------------------------------------------------------------
 // G: アプリ内AIエージェント — **verbではない**
 // --------------------------------------------------------------------------------------
@@ -411,6 +435,8 @@ export interface SessionHooks {
   onPreview(payload: PreviewPayload): void
   /** 頼んだ辺が返ってきた(状態は変わっていない)。 */
   onEdges(payload: EdgesPayload): void
+  /** 頼んだ頂点が返ってきた(状態は変わっていない)。 */
+  onVertices(payload: VerticesPayload): void
   /** ファイルを書いた(状態は変わっていない)。 */
   onFile(payload: FilePayload): void
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
@@ -439,7 +465,13 @@ export interface Session {
   setVisible(bodyId: string, visible: boolean, clientOp: number): void
   /** 人が直す経路。差分編集で `origin` は `"user"` になる(触ること自体が承認)。 */
   modifySelection(add: SelectionRef[], remove: SelectionRef[], clientOp: number): void
-  /** AIの提案を中身を変えずに承認する。 */
+  /**
+   * AIの提案を中身を変えずに承認する。
+   *
+   * **今は画面から呼んでいない**(2026-08-23に「承認する」ボタンを廃止し、verbの実行を
+   * 承認とみなすようサーバ側で自動化した)。口はコアの3つの選択操作の1つとして残る
+   * (`duocad/selection.py` のモジュールdocstring)。
+   */
   commitSelection(clientOp: number): void
   clearSelection(clientOp: number): void
   /**
@@ -454,6 +486,14 @@ export interface Session {
    * (常時配ると27部品ぶんの辺が乗る。`Session.edges` のdocstring)。
    */
   getEdges(bodyId: string): void
+  /**
+   * 1Bodyの頂点の座標を取りに行く(応答は `onVertices`)。**状態配信ではない**。
+   *
+   * 呼ぶのは**選択に頂点が入っているとき**だけ。辺のように「コマンドを起動している間」
+   * ではない —— 頂点を引数に取るコマンドが無く、要るのは「AIが選んだ頂点が今どれか」を
+   * 人が見て外せることだけである(`duocad/server.py` の `Session.vertices`)。
+   */
+  getVertices(bodyId: string): void
   undo(): void
   redo(): void
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
@@ -534,6 +574,7 @@ export function createSession(hooks: SessionHooks): Session {
       body_id?: string
       revision?: number
       edges?: EdgeGeometry[]
+      vertices?: VertexGeometry[]
       action?: string
       path?: string
       bytes?: number
@@ -579,6 +620,12 @@ export function createSession(hooks: SessionHooks): Session {
         body_id: message.body_id ?? '',
         revision: message.revision ?? 0,
         edges: message.edges ?? [],
+      })
+    } else if (message.type === 'vertices') {
+      hooks.onVertices({
+        body_id: message.body_id ?? '',
+        revision: message.revision ?? 0,
+        vertices: message.vertices ?? [],
       })
     } else if (message.type === 'file') {
       hooks.onFile({
@@ -682,6 +729,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     getEdges(bodyId) {
       send({ cmd: 'get_edges', body_id: bodyId })
+    },
+    getVertices(bodyId) {
+      send({ cmd: 'get_vertices', body_id: bodyId })
     },
     undo() {
       send({ cmd: 'undo' })

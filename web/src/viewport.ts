@@ -55,6 +55,21 @@ export interface EdgeRef {
   edgeIndex: number
 }
 
+/** 頂点を一意に指す(添字はコアの数え方の1始まり)。 */
+export interface VertexRef {
+  bodyId: string
+  vertexIndex: number
+}
+
+/**
+ * 画面に出す頂点1個。**参照と座標を一緒に渡す** —— 頂点は選択に入っているものしか
+ * 描かないので、「どれを描くか」と「どこに描くか」を別の呼び出しに分ける意味が無い。
+ */
+export interface VertexMarker extends VertexRef {
+  /** 世界座標 [x, y, z](`kernel.vertex_positions` の `point`)。 */
+  point: number[]
+}
+
 /** 1Bodyぶんの形状の差し替え。`geometry: null` は非表示・削除(メッシュを取り除く)。 */
 export interface BodyGeometryUpdate {
   bodyId: string
@@ -73,6 +88,13 @@ export interface PickEvent {
    * 両方返すと呼び出し側が毎回優先順位を書くことになる。
    */
   edge: EdgeRef | null
+  /**
+   * 当たった頂点。**選択に入っている頂点を出しているときだけ** null 以外になる
+   * (`showVertices`)。辺より後・面より先に見る —— 頂点は必ず辺の端点に乗っているので
+   * 辺より先に見ると、フィレットを起動している間に辺の端が掴めなくなる。逆に面より
+   * 後だと、最小の的である頂点マーカーがその下の面に取られて二度と外せない。
+   */
+  vertex: VertexRef | null
   /** Shift=追加 / Ctrl(Mac は Meta)=除去 / 修飾なし=置き換え。 */
   mode: PickMode
   /**
@@ -149,9 +171,9 @@ export interface Viewport {
    * 確定した選択と**明確に違う色**で描く —— これが「交互操作が人間側から見える」唯一の
    * 場所である(実装計画書§8b)。
    *
-   * **頂点・領域は3Dでは色分けしない**(領域はスケッチ側で強調する)。**辺にも
-   * 対応している** —— `showEdges` でコアの添字つきの折れ線を渡してある間だけ、
-   * `highlightEdges` が同じ規律(user=橙 / proposed=水色)で色を変える。
+   * **領域は3Dでは色分けしない**(スケッチ側で強調する)。**辺と頂点は同じ規律に
+   * 揃えてある** —— 辺は `showEdges` で折れ線を渡してある間だけ `highlightEdges` が、
+   * 頂点は `showVertices` が、どちらも user=橙 / proposed=水色で色を変える。
    */
   highlight(refs: FaceRef[], origin: 'user' | 'proposed'): void
   // ------------------------------------------------------------------ D: 辺
@@ -199,6 +221,35 @@ export interface Viewport {
   pickRegions(on: boolean): void
   /** 選択中の辺を強調する(面の `highlight` と同じ規律)。 */
   highlightEdges(refs: EdgeRef[], origin: 'user' | 'proposed'): void
+  // ------------------------------------------------------------------ 頂点(選択中のものだけ)
+  /**
+   * **選択に入っている頂点だけ**を点(画面上で一定の大きさ)で出す(空配列で消える)。
+   *
+   * 辺の `showEdges` + `highlightEdges` と違って**1つの呼び出し**なのは、頂点では
+   * 「出す」と「選ばれている」が同じことだからである —— 頂点を引数に取るコマンドが無く、
+   * 候補を全部見せて選ばせる場面が存在しない。目的は「AIが選んだ頂点が今どれかを人が見て、
+   * クリックで外せる」ことだけ。
+   *
+   * 色は面・辺と同じ規律(user=橙 / proposed=水色)。**領域の単色方式は採らない** ——
+   * `SelectionPanel` を廃した後、提案と確定の区別を人へ伝える手段は3Dの色だけになる。
+   *
+   * **奥のマーカーも見え、奥のマーカーも指せる**(辺と同じく深度検査をしない)。
+   */
+  showVertices(markers: VertexMarker[], origin: 'user' | 'proposed'): void
+  /**
+   * 今そのハイライトに使っている色(16進)。出していない種別は null。
+   *
+   * **実機検査フック専用**。`SelectionPanel` を廃した後、AIの提案(水色)と確定(橙)の
+   * 区別を人へ伝えるのは**3Dの色だけ**になったので、その色が実際に変わっていることを
+   * 機械で見られるようにする(`getGeometry` と同じ species の穴)。
+   */
+  highlightColors(): { face: number | null; edge: number | null; vertex: number | null }
+  /**
+   * 頂点マーカーの画面座標(無理なら null)。**実機検査が本物のクリックで頂点を外す**
+   * ために要る穴で、面の `project` / 辺の `projectEdge` と同じ流儀 ——
+   * 返す前にその画素からのレイが実際にその頂点へ当たることを確かめる。
+   */
+  projectVertex(bodyId: string, vertexIndex: number): { x: number; y: number } | null
   /**
    * 辺の上の点の画面座標(無理なら null)。面の `project` の辺版で、
    * **実機検査が本物のクリックで辺を選ぶ**ために要る穴。
@@ -297,6 +348,9 @@ const EDGE_COLOR = 0x20262d
 const PICK_EDGE_COLOR = 0xbfd4ea
 /** 辺の当たり判定の太さ[画素]。細すぎると掴めず、太すぎると隣の辺が取れる。 */
 const EDGE_PICK_PIXELS = 6
+/** 頂点マーカーの半径[画素]。辺の当たり判定(`EDGE_PICK_PIXELS`)より細くする ——
+    太いと、辺を狙うクリックが端点のマーカーに吸われる(頂点は必ず辺の端に乗っている)。 */
+const VERTEX_PIXELS = 4
 const BACKGROUND_COLOR = 0x161a1f
 /**
  * 基準3平面(XY/XZ/YZ)のグリッド。単位は mm。スケッチの最初の長方形(60×40)が
@@ -693,8 +747,16 @@ export function createViewport(container: HTMLElement): Viewport {
     controls.update()
   }
 
+  /** 直近に使ったハイライト色(`highlightColors`)。出していない種別は null。 */
+  const highlightColor: { face: number | null; edge: number | null; vertex: number | null } = {
+    face: null,
+    edge: null,
+    vertex: null,
+  }
+
   function highlight(refs: FaceRef[], origin: 'user' | 'proposed'): void {
     const selectedMaterial = origin === 'proposed' ? proposedMaterial : highlightMaterial
+    highlightColor.face = refs.length === 0 ? null : selectedMaterial.color.getHex()
     const keys = new Set(refs.map((ref) => `${ref.bodyId}\u0000${ref.faceIndex}`))
     for (const mesh of allFaceMeshes) {
       const isHit = keys.has(`${mesh.userData.bodyId}\u0000${mesh.userData.faceIndex}`)
@@ -901,6 +963,8 @@ export function createViewport(container: HTMLElement): Viewport {
 
   function highlightEdges(refs: EdgeRef[], origin: 'user' | 'proposed'): void {
     const selected = origin === 'proposed' ? pickEdgeProposedMaterial : pickEdgeSelectedMaterial
+    highlightColor.edge =
+      refs.filter((ref) => ref.bodyId === edgeBodyId).length === 0 ? null : selected.color.getHex()
     const keys = new Set(
       refs.filter((ref) => ref.bodyId === edgeBodyId).map((ref) => ref.edgeIndex),
     )
@@ -965,6 +1029,114 @@ export function createViewport(container: HTMLElement): Viewport {
       if (hit && hit.bodyId === bodyId && hit.edgeIndex === edgeIndex) return screen
     }
     return null
+  }
+
+  // ------------------------------------------------------------------ 頂点(選択中のものだけ)
+  //
+  // **辺と違い、候補を全部出すことはしない。** 頂点を引数に取るverbが無いので
+  // 「候補を見せて選ばせる」場面が無く、要るのは「AIが選んだ頂点が今どれか」を人が見て
+  // 外せることだけである(`duocad/server.py` の `Session.vertices` と同じ理由)。
+  //
+  // **点(`THREE.Points`)で描き、大きさは画素で固定する**(`sizeAttenuation: false`)。
+  // 世界座標の球にすると、描いた時のカメラ距離で大きさが決まってしまい、**寄れば巨大な玉、
+  // 引けば1画素未満**になる —— 頂点マーカーは選択中の頂点を見る唯一の手段なので、
+  // 27部品を引きで見ているときに消えるのは機能が無いのと同じである。
+  const vertexRoot = new THREE.Group()
+  scene.add(vertexRoot)
+
+  const vertexMaterial = new THREE.PointsMaterial({
+    color: HIGHLIGHT_COLOR,
+    size: VERTEX_PIXELS * 2,
+    sizeAttenuation: false,
+    // 辺と同じく**深度検査をしない**(奥のマーカーも見え、奥のマーカーも指せる)。
+    // 見た目だけ隠すと「見えない頂点が外れる」になる。
+    depthTest: false,
+  })
+  const vertexProposedMaterial = new THREE.PointsMaterial({
+    color: PROPOSED_COLOR,
+    size: VERTEX_PIXELS * 2,
+    sizeAttenuation: false,
+    depthTest: false,
+  })
+
+  /** 今出している頂点マーカー。空なら選択に頂点が入っていない。 */
+  let vertexMeshes: THREE.Points[] = []
+  const vertexDisposables: Array<{ dispose(): void }> = []
+  /** 直前に描いた印(**同じものを渡されたら作り直さない**ため)。 */
+  let vertexKey = ''
+
+  function clearVertices(): void {
+    for (const mesh of vertexMeshes) vertexRoot.remove(mesh)
+    for (const item of vertexDisposables) item.dispose()
+    vertexDisposables.length = 0
+    vertexMeshes = []
+    vertexKey = ''
+  }
+
+  function showVertices(markers: VertexMarker[], origin: 'user' | 'proposed'): void {
+    const key = `${origin}|${markers
+      .map((marker) => `${marker.bodyId}|${marker.vertexIndex}|${marker.point.join(',')}`)
+      .join(';')}`
+    // 呼び出し側(App.svelte)は選択が変わるたびに呼び直すので、毎回作り直すと
+    // ジオメトリを捨てて作り直し続けることになる(`showEdges` と同じ番人)。
+    if (key === vertexKey) return
+    clearVertices()
+    vertexKey = key
+    const material = origin === 'proposed' ? vertexProposedMaterial : vertexMaterial
+    highlightColor.vertex = markers.length === 0 ? null : material.color.getHex()
+    if (markers.length === 0) return
+    for (const marker of markers) {
+      if (marker.point.length < 3) continue
+      // **1マーカー1オブジェクト**(辺が1本1 `THREE.Line` なのと同じ) —— まとめると
+      // 当たった点からコアの添字へ戻れない。数は選択中のものだけなので費用は無視できる。
+      const geometry = new THREE.BufferGeometry()
+      geometry.setAttribute(
+        'position',
+        new THREE.BufferAttribute(new Float32Array(marker.point.slice(0, 3)), 3),
+      )
+      geometry.computeBoundingSphere()
+      const mesh = new THREE.Points(geometry, material)
+      mesh.renderOrder = 11 // 深度を書かないぶん、描く順序で辺(10)より手前に出す
+      mesh.userData.bodyId = marker.bodyId
+      mesh.userData.vertexIndex = marker.vertexIndex
+      mesh.userData.point = marker.point
+      vertexRoot.add(mesh)
+      vertexMeshes.push(mesh)
+      vertexDisposables.push(geometry)
+    }
+  }
+
+  function vertexAt(offsetX: number, offsetY: number): VertexRef | null {
+    if (vertexMeshes.length === 0) return null
+    const { width, height } = size()
+    const ndc = new THREE.Vector2((offsetX / width) * 2 - 1, -(offsetY / height) * 2 + 1)
+    raycaster.setFromCamera(ndc, camera)
+    // 点の当たり判定も**画素で決める**(辺の `edgeAt` と同じ理由 —— 寄るほど掴みにくく
+    // なるのを避ける)。描いている大きさと揃えておく。
+    const previous = raycaster.params.Points?.threshold
+    raycaster.params.Points = { threshold: worldPerPixel() * VERTEX_PIXELS }
+    const hits = raycaster.intersectObjects(vertexMeshes, false)
+    if (previous !== undefined) raycaster.params.Points = { threshold: previous }
+    if (hits.length === 0) return null
+    const bodyId = hits[0].object.userData.bodyId
+    const vertexIndex = hits[0].object.userData.vertexIndex
+    if (typeof bodyId !== 'string' || typeof vertexIndex !== 'number') return null
+    return { bodyId, vertexIndex }
+  }
+
+  function projectVertex(bodyId: string, vertexIndex: number): { x: number; y: number } | null {
+    const mesh = vertexMeshes.find(
+      (candidate) =>
+        candidate.userData.bodyId === bodyId && candidate.userData.vertexIndex === vertexIndex,
+    )
+    if (!mesh) return null
+    const point = mesh.userData.point as number[]
+    const screen = toScreen(new THREE.Vector3(point[0], point[1], point[2]))
+    if (screen === null) return null
+    // **本当にその頂点が取れる画素か**を確かめてから返す(面の `project` と同じ流儀)。
+    const hit = vertexAt(screen.x, screen.y)
+    if (hit === null || hit.bodyId !== bodyId || hit.vertexIndex !== vertexIndex) return null
+    return screen
   }
 
   // ------------------------------------------------------------------ C: スケッチ
@@ -1302,6 +1474,7 @@ export function createViewport(container: HTMLElement): Viewport {
       pickListener?.({
         hit: null,
         edge: null,
+        vertex: null,
         mode,
         region,
         plane: null,
@@ -1314,7 +1487,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // そのまま動く。**この順序は変えない**(基準平面を足しても辺→面の優先順位は同じ)。
     const edge = edgeAt(event.offsetX, event.offsetY)
     if (edge !== null) {
-      pickListener?.({ hit: null, edge, mode, point: null, region: null, plane: null })
+      pickListener?.({ hit: null, edge, vertex: null, mode, point: null, region: null, plane: null })
       return
     }
     // **領域を要求しているときは領域が先**(辺と同じ「要求中のものが勝つ」)。領域は
@@ -1323,7 +1496,16 @@ export function createViewport(container: HTMLElement): Viewport {
     // 返すので、面のピックはそのまま動く。
     const region = regionAt(event.offsetX, event.offsetY)
     if (region !== null) {
-      pickListener?.({ hit: null, edge: null, mode, point: null, region, plane: null })
+      pickListener?.({ hit: null, edge: null, vertex: null, mode, point: null, region, plane: null })
+      return
+    }
+    // **頂点マーカーは面より先**(最小の的なので、当たったならそれが狙いである)。
+    // 辺・領域より後なのは、頂点が必ず辺の端点に乗っているから —— 先に見ると
+    // フィレットを起動している間に辺の端が掴めなくなる。出していない間は
+    // `vertexAt` が即 null を返すので、面のピックはそのまま動く。
+    const vertex = vertexAt(event.offsetX, event.offsetY)
+    if (vertex !== null) {
+      pickListener?.({ hit: null, edge: null, vertex, mode, point: null, region: null, plane: null })
       return
     }
     // **面と基準平面は、レイ距離が近い方**(通常のオクルージョン。辺のような優先順位は
@@ -1335,6 +1517,7 @@ export function createViewport(container: HTMLElement): Viewport {
       pickListener?.({
         hit: null,
         edge: null,
+        vertex: null,
         mode,
         point: null,
         region: null,
@@ -1345,6 +1528,7 @@ export function createViewport(container: HTMLElement): Viewport {
     pickListener?.({
       hit: face?.ref ?? null,
       edge: null,
+      vertex: null,
       mode,
       point: null,
       region: null,
@@ -1391,6 +1575,11 @@ export function createViewport(container: HTMLElement): Viewport {
     pickRegions,
     highlightEdges,
     projectEdge,
+    showVertices,
+    highlightColors() {
+      return { ...highlightColor }
+    },
+    projectVertex,
     showPreview,
     clearPreview,
     project,
@@ -1415,6 +1604,9 @@ export function createViewport(container: HTMLElement): Viewport {
       clearPreview()
       clearGhost()
       clearEdges()
+      clearVertices()
+      vertexMaterial.dispose()
+      vertexProposedMaterial.dispose()
       pickEdgeMaterial.dispose()
       pickEdgeSelectedMaterial.dispose()
       pickEdgeProposedMaterial.dispose()

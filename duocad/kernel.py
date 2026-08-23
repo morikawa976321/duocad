@@ -1216,6 +1216,38 @@ def _edge_at(shape_map: "TopTools_IndexedMapOfShape", edge_index: int) -> Any:
     return TopoDS.Edge_s(shape_map.FindKey(int(edge_index)))
 
 
+# --------------------------------------------------------------------------------------
+# 頂点(選択集合に入った頂点を画面に出すための座標)
+# --------------------------------------------------------------------------------------
+def _vertex_map(shape: "TopoDS_Shape") -> "TopTools_IndexedMapOfShape":
+    """頂点の重複除去済みマップ(1始まり)。**`count_subshapes(shape, "vertex")` と同じ
+    数え方**であり、その添字が `selection.select_vertex` の識別子そのものになる。"""
+    if shape is None or shape.IsNull():
+        raise ValueError("cannot map the vertices of an empty shape")
+    shape_map = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_VERTEX, shape_map)
+    return shape_map
+
+
+def vertex_positions(shape: "TopoDS_Shape") -> List[dict]:
+    """頂点を1始まりの添字つきの3D座標で返す。
+
+    戻り値(素の値だけ): `[{"index": int, "point": [x, y, z]}, ...]`
+
+    添字がずれると**AIが指した頂点と違う点が画面に出る**(例外は出ない)ので、
+    数え方は `_vertex_map` 1箇所に固定する。`tests/test_vertex_pick.py` が
+    `count_subshapes(shape, "vertex")` との一致を機械で見ている。
+    """
+    shape_map = _vertex_map(shape)
+    described: List[dict] = []
+    for index in range(1, shape_map.Extent() + 1):
+        point = BRep_Tool.Pnt_s(TopoDS.Vertex_s(shape_map.FindKey(index)))
+        described.append(
+            {"index": index, "point": [float(point.X()), float(point.Y()), float(point.Z())]}
+        )
+    return described
+
+
 def fillet_edges(shape: "TopoDS_Shape", radii: dict) -> dict:
     """辺(1始まりの添字)を丸めた**新しい形状**と由来の射影を返す。
 

@@ -118,6 +118,15 @@ class Command:
     #: `Session._reset_selection_if_needed` がここを見て1箇所で発火するので、UI経由・MCP経由の
     #: どちらでも同じに効く。**失敗したverb(ログに積まれない)には効かない**。
     resets_selection: bool = False
+    #: **対象集合をコアの確定選択から取るか**(2026-08-23)。`Session` の実体が
+    #: `selection.require_confirmed` / `require_edges` を呼ぶverbだけが true。
+    #:
+    #: WebSocketの `_dispatch` は、ここが true のコマンドを受け取ったとき、選択が
+    #: `origin="proposed"` のままなら**自動で `commit_selection` してから**verbを走らせる
+    #: (**人がツールバーからコマンドを実行する行為そのものを承認とみなす**。2026-08-23本人裁定。
+    #: MCP側は素通しで、AIは今までどおり `commit_selection` を明示的に呼ぶ)。宣言と実体の
+    #: 一致は `tests/test_vertex_pick.py` が構文木で照合する。
+    uses_selection: bool = False
     #: 設計上の注記(なぜこの形か)。コードの読み手向けで、AIには渡さない。
     note: str = ""
 
@@ -346,6 +355,7 @@ COMMANDS: tuple[Command, ...] = (
                 required=False,
             ),
         ),
+        uses_selection=True,
         session="sketch_create",
         ws="special",
         note=(
@@ -432,6 +442,7 @@ COMMANDS: tuple[Command, ...] = (
                 ws=False,
             ),
         ),
+        uses_selection=True,
         session="extrude_regions",
         previewable=True,
         resets_selection=True,
@@ -449,6 +460,7 @@ COMMANDS: tuple[Command, ...] = (
             "既存ソリッドの面を伸ばす経路。"
         ),
         params=(Param("distance", "number", "押し出し量(mm)", dimension=True),),
+        uses_selection=True,
         session="extrude",
         ws="special",
         previewable=True,
@@ -470,6 +482,7 @@ COMMANDS: tuple[Command, ...] = (
                 dimension=True,
             ),
         ),
+        uses_selection=True,
         session="fillet",
         previewable=True,
         resets_selection=True,
@@ -489,6 +502,7 @@ COMMANDS: tuple[Command, ...] = (
                 dimension=True,
             ),
         ),
+        uses_selection=True,
         session="chamfer",
         previewable=True,
         resets_selection=True,
@@ -778,6 +792,21 @@ COMMANDS: tuple[Command, ...] = (
         note="**配信しない**。投機実行して形だけ測り、文書は `speculative` が元へ戻す",
     ),
     Command(
+        name="get_vertices",
+        category="protocol",
+        description="",
+        params=(Param("body_id", "string", "頂点の座標が要るボディ"),),
+        session="vertices",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**配信しない**(`get_edges` と同じ)。頂点は辺と違い、**選択に入っているものだけ**"
+            "が画面に出る —— 頂点を引数に取るverbが無いので候補を全部見せる意味が無く、"
+            "要るのは「AIが選んだ頂点が今どれか」を人が見て外せることだけである"
+        ),
+    ),
+    Command(
         name="get_edges",
         category="protocol",
         description="",
@@ -828,6 +857,14 @@ def file_table() -> dict:
         for command in COMMANDS
         if command.category == "file" and command.ws == "table"
     }
+
+
+def selection_consuming_commands() -> set:
+    """**対象集合をコアの確定選択から取る**コマンド名(`Command.uses_selection`)。
+
+    `server._dispatch` の自動 `commit_selection` がこれを見る。
+    """
+    return {command.name for command in COMMANDS if command.uses_selection}
 
 
 def websocket_command_names() -> set:

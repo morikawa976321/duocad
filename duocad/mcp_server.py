@@ -550,8 +550,7 @@ class DocumentTools:
 
         値は**問い合わせ層のもの**をそのまま渡す(`query.describe_faces` /
         `describe_edges` / `region.regions`)。測り直すと述語が使う値と食い違いうる。
-        頂点は位置を返す問い合わせが無いので `{"measured": False, "reason": ...}` で返す
-        (黙って落とすとAIは自分の誤りと解釈する)。
+        頂点は `describe_vertices` の3D座標(`point`)を返す。
         """
         current = selection.get_selection(self.session.document)
         items: list[dict] = []
@@ -608,13 +607,18 @@ class DocumentTools:
                 )
                 total_area += described.area
             elif kind == "vertex":
+                body = self._find_body(ref["body"])
+                described = next(
+                    vertex
+                    for vertex in query.describe_vertices(body.shape)
+                    if vertex["index"] == ref["index"]
+                )
                 items.append(
                     {
                         "kind": "vertex",
                         "body": ref["body"],
                         "index": ref["index"],
-                        "measured": False,
-                        "reason": "頂点の位置を返す問い合わせがまだ無い",
+                        "point": described["point"],
                     }
                 )
             else:

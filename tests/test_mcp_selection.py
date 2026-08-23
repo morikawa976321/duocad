@@ -549,18 +549,19 @@ def test_measure_reports_the_area_of_a_region(tmp_path: Path):
     assert item["area"] == pytest.approx(math.pi * 100.0, rel=1e-3)
 
 
-def test_measure_admits_what_it_cannot_measure(server: McpServer, session: Session):
-    """頂点は**位置を返す問い合わせ層の関数がまだ無い**ので、測れないと明示して返す。
+def test_measure_returns_the_position_of_a_vertex(server: McpServer, session: Session):
+    """頂点は3D座標(`point`)で返る。落ちたら、AIが選んだ頂点の位置を誰も言えない。
 
-    黙って落とすと、AIは「3つ選んだのに2つしか返らない」を自分の誤りと解釈する。
-    測れないことを言うのが正しい(§6予防6の「黙って通さない」の読み取り側)。
+    座標は `kernel.vertex_positions` の添字体系そのもの —— ずれると、AIが指した頂点と
+    違う点が画面のマーカーに出る(例外は出ない)。
     """
+    from duocad import kernel
+
     box = box_of(session)
     call(server, "propose_selection", {"refs": [{"body": box.id, "kind": "vertex", "index": 1}]})
     item = call(server, "measure")["items"][0]
     assert item["kind"] == "vertex"
-    assert item["measured"] is False
-    assert item["reason"].strip()
+    assert item["point"] == kernel.vertex_positions(box.shape)[0]["point"]
 
 
 # --------------------------------------------------------------------------------------

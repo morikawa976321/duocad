@@ -1,0 +1,284 @@
+"""頂点のピック/ハイライトの土台と、**人がverbを実行したら提案が確定する**規則。
+
+ここが固定する契約は2つ:
+
+1. **頂点の3D座標を引ける**(`kernel.vertex_positions` / `query.describe_vertices` /
+   `Session.vertices` / WSの `get_vertices`)。添字は
+   `kernel.count_subshapes(shape, "vertex")` の1始まりで、`selection.select_vertex` が
+   範囲を検査する体系と同じ。**ずれると、AIが指した頂点と違う点が画面のマーカーに出る**
+   (例外は出ない静かな事故)。
+2. **対象集合を確定選択から取るverbがWebSocketへ届いたら、提案(`origin="proposed"`)は
+   自動で確定する**(2026-08-23本人裁定「明示的な承認は不要」)。
+   `SelectionPanel` の「承認する」ボタンを消した代わりであり、これが無いと
+   **AIの提案に対して人が直接コマンドを実行した瞬間に `SelectionNotCommitted` で詰む**。
+   宣言(`catalog.Command.uses_selection`)と実体(`Session` が `require_*` を呼ぶか)の
+   一致も、ここが構文木で見る —— verbを足した日に片方だけ直っても気づけるように。
+"""
+from __future__ import annotations
+
+import ast
+import asyncio
+import json
+from pathlib import Path
+
+import pytest
+
+from duocad import catalog, kernel, query, selection
+from duocad.server import SELECTION_CONSUMING_COMMANDS, Server, Session
+
+DEVIATION = 0.2
+SIDE = 20.0
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture()
+def session() -> Session:
+    return Session(None, DEVIATION)
+
+
+class FakeConnection:
+    """`Server` が使うのは `send` だけ(`test_feature_ui.py` と同じ形)。"""
+
+    def __init__(self) -> None:
+        self.payloads: list = []
+
+    async def send(self, raw: str) -> None:
+        self.payloads.append(json.loads(raw))
+
+
+def _browser(session: Session, script):
+    """`script(send)` を1つのイベントループで走らせる。**2本つなぐ**(配信先の検証のため)。"""
+
+    async def scenario():
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        clients = [FakeConnection(), FakeConnection()]
+        for client in clients:
+            server.clients.add(client)
+            await server._push(client, applied=None, only=client)
+        for client in clients:
+            client.payloads.clear()
+
+        async def send(command: dict) -> dict:
+            await server._dispatch(clients[0], json.dumps(command))
+            return clients[0].payloads[-1]
+
+        return await script(send), clients
+
+    return asyncio.run(scenario())
+
+
+def _box(session: Session):
+    """スケッチ→長方形→領域押し出しで 20mm の立方体を1つ作る(人の順序そのもの)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
+    session.clear_selection()
+    session.modify_selection([{"sketch": sketch_id, "index": 1}], [])
+    session.extrude_regions(SIDE, mode="join")
+    session.clear_selection()
+    return session.document.bodies[-1], sketch_id
+
+
+# --------------------------------------------------------------------------------------
+# 1. 頂点の座標(添字の体系)
+# --------------------------------------------------------------------------------------
+def test_vertex_positions_use_the_same_index_as_the_selection(session: Session) -> None:
+    """`vertex_positions` の添字は `count_subshapes(shape, "vertex")` の体系と同じ。
+
+    落ちたら、`selection.select_vertex` が通した添字で座標が引けない
+    (= 選択に入った頂点を画面に出せない)。
+    """
+    body, _ = _box(session)
+    described = kernel.vertex_positions(body.shape)
+
+    assert len(described) == kernel.count_subshapes(body.shape, "vertex") == 8
+    assert [item["index"] for item in described] == list(range(1, 9))
+    for item in described:
+        assert len(item["point"]) == 3
+        # 20mm立方体なので、全頂点が 0 か 20(の丸め誤差内)に居る
+        assert all(min(abs(value), abs(value - SIDE)) < 1e-6 for value in item["point"])
+
+
+def test_the_query_layer_passes_the_kernel_positions_through(session: Session) -> None:
+    """`query.describe_vertices` は kernel の座標をそのまま渡す(測り直さない)。
+
+    落ちたら、AIが `measure` で見る座標と画面のマーカーが別の計算で出ることになる。
+    """
+    body, _ = _box(session)
+    assert query.describe_vertices(body.shape) == kernel.vertex_positions(body.shape)
+
+
+def test_an_empty_shape_has_no_vertex_map() -> None:
+    """空の形状は ValueError(黙って0件を返すと「頂点が無いボディ」に見える)。"""
+    with pytest.raises(ValueError):
+        kernel.vertex_positions(None)
+
+
+# --------------------------------------------------------------------------------------
+# 2. 頂点を配る口(Session.vertices / get_vertices)
+# --------------------------------------------------------------------------------------
+def test_vertices_are_sent_only_to_the_connection_that_asked(session: Session) -> None:
+    """`get_vertices` は要求した接続にだけ返る(`get_edges` と同じ扱い)。"""
+    body, _ = _box(session)
+
+    async def script(send):
+        return await send({"cmd": "get_vertices", "body_id": body.id})
+
+    (answer, clients) = _browser(session, script)
+
+    assert answer["type"] == "vertices"
+    assert answer["body_id"] == body.id
+    assert len(answer["vertices"]) == 8
+    assert clients[1].payloads == [], "頂点は全接続へ配らない(要求した接続だけ)"
+
+
+def test_the_vertex_revision_follows_the_shape(session: Session) -> None:
+    """形が変われば `revision` が上がる。**古い添字の座標を描き続けさせない**ための番号。"""
+    body, _ = _box(session)
+    before = session.vertices(body.id)
+    session.clear_selection()
+    session.modify_selection([{"body": body.id, "kind": "edge", "index": 1}], [])
+    session.fillet(3.0)
+    after = session.vertices(body.id)
+
+    assert after["revision"] > before["revision"]
+    assert len(after["vertices"]) != len(before["vertices"])
+
+
+def test_the_vertices_of_a_hidden_body_are_refused(session: Session) -> None:
+    """隠したBodyの頂点は配らない(`edges()` / `geometry()` と同じ規律)。
+
+    配ると、隠したはずの部品の頂点マーカーだけが宙に浮いて見え、しかも指せる。
+    """
+    body, _ = _box(session)
+    session.set_visible(body.id, False)
+
+    with pytest.raises(ValueError):
+        session.vertices(body.id)
+
+
+def test_asking_for_the_vertices_of_an_unknown_body_is_an_error(session: Session) -> None:
+    _box(session)
+
+    async def script(send):
+        return await send({"cmd": "get_vertices", "body_id": "body-does-not-exist"})
+
+    (answer, _clients) = _browser(session, script)
+    assert answer["type"] == "error"
+    assert answer["where"] == "get_vertices"
+
+
+# --------------------------------------------------------------------------------------
+# 3. 人がverbを実行したら提案は確定する(「承認する」ボタンの代替)
+# --------------------------------------------------------------------------------------
+def _propose_face(session: Session, body) -> None:
+    selection.propose_selection(
+        session.document, refs=[{"body": body.id, "kind": "face", "index": 1}]
+    )
+
+
+def test_running_a_verb_from_the_browser_commits_a_proposed_selection(
+    session: Session,
+) -> None:
+    """**AIの提案のままでも、人がコマンドを実行したら通る**(実行そのものが承認)。
+
+    落ちたら、AIが選択を提案した直後に人がツールバーを押すと
+    `SelectionNotCommitted` で止まる —— 「承認する」ボタンを消した後は解消手段が無い。
+    """
+    body, _ = _box(session)
+    _propose_face(session, body)
+    assert session.get_selection()["origin"] == "proposed"
+
+    async def script(send):
+        return await send({"cmd": "extrude_face", "distance": 5.0, "client_op": 7})
+
+    (answer, _clients) = _browser(session, script)
+
+    assert answer["type"] == "state", answer
+    assert answer["applied"]["verb"] == "extrude_face"
+
+
+def test_a_preview_also_commits_a_proposed_selection(session: Session) -> None:
+    """プレビュー(数値を打つと飛ぶ投機実行)も同じ扱い。
+
+    ここを外すと、提案のまま押し出そうとした人の画面に、**理由の分からない札だけ**が出る。
+    """
+    body, _ = _box(session)
+    _propose_face(session, body)
+
+    async def script(send):
+        return await send(
+            {"cmd": "preview", "verb": "extrude_face", "args": {"distance": 5.0}}
+        )
+
+    (answer, _clients) = _browser(session, script)
+
+    assert answer["type"] == "preview", answer
+    assert session.get_selection()["origin"] == "user"
+
+
+def test_selection_editing_and_visibility_do_not_commit(session: Session) -> None:
+    """**可視性の切替・問い合わせでは確定しない**(コマンド行を通るverbだけが承認になる)。
+
+    ここが緩むと、AIの提案が人の意図と無関係な操作で黙って確定へ変わる。
+    undoをここで見ないのは、undoが `resets_selection` で選択そのものを空にするから
+    (空集合の origin は常に "user" —— 確定したのではなく消えている)。
+    """
+    body, _ = _box(session)
+
+    for command in (
+        {"cmd": "set_visible", "body_id": body.id, "visible": True},
+        {"cmd": "get_state"},
+        {"cmd": "get_edges", "body_id": body.id},
+        {"cmd": "get_vertices", "body_id": body.id},
+    ):
+        _propose_face(session, body)
+
+        async def script(send, command=command):
+            return await send(command)
+
+        _browser(session, script)
+        assert session.get_selection()["origin"] == "proposed", command
+
+
+def test_a_sketch_on_a_named_plane_does_not_commit(session: Session) -> None:
+    """`sketch_create` に `base_plane` が付いていたら確定しない。
+
+    そのときは貼る先が引数で来ており、選択は使われない —— 使われない集合を承認扱いに
+    すると、「基準平面を指しただけなのにAIの提案が確定していた」という静かな変化になる。
+    """
+    body, _ = _box(session)
+    _propose_face(session, body)
+
+    async def script(send):
+        return await send({"cmd": "sketch_create", "base_plane": "XZ"})
+
+    (answer, _clients) = _browser(session, script)
+
+    assert answer["type"] == "state", answer
+    assert session.get_selection()["origin"] == "proposed"
+
+
+def test_the_declaration_matches_which_verbs_read_the_selection() -> None:
+    """`catalog.Command.uses_selection` と、`Session` が実際に確定選択を読むverbが一致する。
+
+    落ちたら、**新しく足したverbが自動確定の対象から漏れている**(AIの提案に対して
+    人がそのverbを実行すると詰む)か、逆に選択を読まないverbが余計に確定させている。
+    """
+    tree = ast.parse((REPO_ROOT / "duocad" / "server.py").read_text(encoding="utf-8"))
+    reads_selection: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Attribute):
+                continue
+            if inner.func.attr in ("require_confirmed", "require_edges"):
+                reads_selection.add(node.name)
+
+    declared = {
+        catalog.BY_NAME[name].session for name in SELECTION_CONSUMING_COMMANDS
+    }
+    assert declared == reads_selection, (
+        f"宣言 {sorted(declared)} と実体 {sorted(reads_selection)} がずれている"
+    )
