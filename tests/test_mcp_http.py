@@ -1,0 +1,211 @@
+"""MCPのHTTPトランスポート(`/mcp`)の契約。
+
+**なぜこの口があるか**(2026-08-26): stdioは「MCPクライアントがduocadのプロセスを所有する」
+形なので、起動のトリガーも人間用UI(8766)の寿命もクライアントのセッションに縛られていた。
+HTTPの口は逆向きで、**先にアプリが立っていて、Claude Codeが後から繋ぎに来る**。
+
+固定するのは4つ:
+
+1. **トランスポートで中身が変わらない** —— 握手もツールの顔ぶれも stdio と同じ。
+   `handle()` がトランスポートを知らないという設計(`mcp_server.py` のdocstring)の帰結であり、
+   ここが崩れたら「口を増やしただけ」ではなくなっている。
+2. **ワーカースレッドから文書を書き換えても `Session` の前提を壊さない** —— `/mcp` は
+   `ThreadingHTTPServer` のスレッドで走るので、道具は `ToolsOnLoop` でイベントループへ
+   投げ返される。**この検査だけが本番と同じスレッド構成を通る**(他のMCP検査は `handle()` を
+   直に呼ぶので、包みが外れていても緑のままになる)。
+3. **ブラウザからは叩けない** —— `127.0.0.1` へのbindは防御にならない(`allowed_origins` と
+   同じ理屈)。JSON-RPCの本文は `text/plain` にすればプリフライト無しで送れるので、
+   `Origin` を持つリクエストと知らない `Host` を落とすことが防御線そのものである。
+4. **静的配信を壊していない** —— 同じポートに口を生やしたので、ページが配れなくなる形の
+   事故がありうる。
+"""
+from __future__ import annotations
+
+import asyncio
+import http.client
+import json
+import socket
+import threading
+
+import pytest
+
+from duocad import kernel
+from duocad.mcp_server import DocumentTools, McpServer
+from duocad.server import Session, ToolsOnLoop, WebHandler, start_http_server
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+class _Http:
+    """`/mcp` を素のHTTPで叩く(`http.client` は `Host` の差し替えまでさせてくれる)。"""
+
+    def __init__(self, port: int) -> None:
+        self.port = port
+
+    def request(self, method: str, path: str, body: bytes = None, headers: dict = None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=15)
+        try:
+            conn.request(method, path, body=body, headers=headers or {})
+            response = conn.getresponse()
+            return response.status, response.read()
+        finally:
+            conn.close()
+
+    def rpc(self, payload: dict, headers: dict = None):
+        body = json.dumps(payload).encode("utf-8")
+        sent = {"Content-Type": "application/json", **(headers or {})}
+        status, raw = self.request("POST", "/mcp", body=body, headers=sent)
+        return status, (json.loads(raw) if raw and status < 300 else None)
+
+
+@pytest.fixture
+def http_mcp(tmp_path):
+    """本番と同じ組み方で立てる —— イベントループは別スレッド、HTTPはさらに別スレッド。"""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<!doctype html><title>duocad</title>", encoding="utf-8")
+
+    loop = asyncio.new_event_loop()
+    running = threading.Event()
+
+    def _spin() -> None:
+        asyncio.set_event_loop(loop)
+        loop.call_soon(running.set)
+        loop.run_forever()
+
+    thread = threading.Thread(target=_spin, name="duocad-test-loop", daemon=True)
+    thread.start()
+    assert running.wait(10), "イベントループが立たなかった"
+
+    session = Session(None, kernel.DEFAULT_DEVIATION, models_dir=tmp_path / "models")
+    tools = DocumentTools(session)
+    port = _free_port()
+    httpd = start_http_server(
+        dist, port, f"ws://127.0.0.1:{port}", mcp=McpServer(ToolsOnLoop(tools, loop))
+    )
+    try:
+        yield _Http(port), session, tools
+    finally:
+        httpd.shutdown()
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=10)
+        WebHandler.mcp_server = None
+
+
+def _ok(response: dict) -> dict:
+    assert "error" not in response, response
+    return response["result"]
+
+
+def test_handshake_and_tool_lineup_do_not_depend_on_the_transport(http_mcp):
+    """1. HTTPで握手し、**stdioと同じ顔ぶれ**のツールが出る。"""
+    http, _session, tools = http_mcp
+
+    status, response = http.rpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "clientInfo": {"name": "t"}},
+        }
+    )
+    assert status == 200
+    result = _ok(response)
+    assert result["protocolVersion"] == "2025-06-18"
+    assert result["serverInfo"]["name"] == "duocad"
+    assert result["instructions"]
+
+    status, response = http.rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    assert status == 200
+    over_http = {tool["name"] for tool in _ok(response)["tools"]}
+
+    # 同じ `DocumentTools` を直に持たせた `McpServer`(= stdioが使うのと同じ組み方)と比べる。
+    direct = McpServer(tools).handle({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
+    assert over_http == {tool["name"] for tool in direct["result"]["tools"]}
+    assert len(over_http) >= 29
+
+
+def test_tool_call_from_a_worker_thread_changes_the_same_document(http_mcp):
+    """2. ワーカースレッドからの `tools/call` が、**イベントループ側の文書**を変える。
+
+    `ToolsOnLoop` の包みを外すとここが競合する(検査としては緑のまま通ることもあるが、
+    その場合でも「同じ `Session` を触っている」ことは下の assert が押さえる)。
+    """
+    http, session, _tools = http_mcp
+    assert session.document.sketches == []
+
+    status, response = http.rpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "sketch_create", "arguments": {"base_plane": "XY"}},
+        }
+    )
+    assert status == 200
+    result = _ok(response)
+    assert result["isError"] is False
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["verb"] == "sketch_create"
+
+    # **HTTPのスレッドで呼んだのに、文書はこのプロセスの `Session` のもの**。
+    assert len(session.document.sketches) == 1
+
+
+@pytest.mark.parametrize(
+    "headers, why",
+    [
+        ({"Origin": "https://evil.example"}, "他オリジンのページからのPOST"),
+        ({"Origin": "http://127.0.0.1:8766"}, "duocad自身のページを騙っても通さない"),
+        ({"Host": "evil.example"}, "DNSリバインディング"),
+    ],
+)
+def test_browser_reachable_requests_are_refused(http_mcp, headers, why):
+    """3. ブラウザから届きうる形のリクエストは403(`WebHandler._mcp_forbidden`)。"""
+    http, session, _tools = http_mcp
+    status, _ = http.rpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "sketch_create", "arguments": {"base_plane": "XY"}},
+        },
+        headers=headers,
+    )
+    assert status == 403, why
+    # 副作用が起きていないことまで見る(応答を読めなくても書けてしまうのが怖い形なので)。
+    assert session.document.sketches == []
+
+
+def test_transport_shape(http_mcp):
+    """4-a. 通知は202(本文なし)、`/mcp` のGETは405、他のパスへのPOSTは404。"""
+    http, _session, _tools = http_mcp
+
+    status, raw = http.request(
+        "POST",
+        "/mcp",
+        body=json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    assert (status, raw) == (202, b"")
+
+    # サーバ→クライアントのSSEは提供しない(pushするものが無い)。仕様どおり405。
+    assert http.request("GET", "/mcp")[0] == 405
+    assert http.request("POST", "/duocad-config.json", body=b"{}")[0] == 404
+
+
+def test_static_serving_still_works(http_mcp):
+    """4-b. 同じポートに口を生やしても、ページとconfigは今までどおり配れる。"""
+    http, _session, _tools = http_mcp
+
+    status, raw = http.request("GET", "/")
+    assert status == 200
+    assert b"duocad" in raw
+
+    status, raw = http.request("GET", "/duocad-config.json")
+    assert status == 200
+    assert json.loads(raw)["ws_url"].startswith("ws://127.0.0.1:")

@@ -12,15 +12,24 @@
 **MCPとWebSocketを同じプロセスで動かす**。別プロセスにするとMCP側が自分の `Document` を
 持ってしまい「AIが変えた文書」と「人が見ている文書」が別物になる:
 
-    stdio(MCP) ─┐
-                ├→ Session(文書・操作ログ) → WebSocket → ブラウザ
-    ブラウザ ───┘
+    HTTP /mcp ─┐
+    stdio(MCP) ┼→ Session(文書・操作ログ) → WebSocket → ブラウザ
+    ブラウザ ──┘
 
-MCPクライアント(Claude Code 等)がこのプロセスを起動し、人間はそれが配信する
-`http://127.0.0.1:8766/` を開く。接続方法は `MCP.md` が正。
+**トランスポートは2本ある**(2026-08-26)。`handle()` はどちらも知らない(1メッセージの辞書を
+受け取って返すだけ)ので、増えたのは口だけである:
+
+- **HTTP** —— 静的配信と同じ8766の `/mcp`。**アプリを先に立てて、MCPクライアントが後から
+  繋ぎに来る**。これが通常の道で、`claude mcp add --transport http duocad
+  http://127.0.0.1:8766/mcp` の一度きりの登録で繋がる。**アプリの寿命がクライアントの
+  セッションに縛られない**
+- **stdio** —— クライアントがこのプロセスを所有する古典的な形。Claude Desktopのように
+  stdioしか話せないクライアントのために残してある
+
+接続方法は `MCP.md` が正。
 
 **依存を増やさない**: MCPの公式Python SDK(`mcp`)は入れず、プロトコル(JSON-RPC 2.0 over
-stdio)を素で実装する。この venv には `pip` すら無く(uv管理)、`mcp` は
+stdio / HTTP)を素で実装する。この venv には `pip` すら無く(uv管理)、`mcp` は
 pydantic/anyio/httpx/starlette/uvicorn を連れてくる。使うのは `initialize` / `tools/list` /
 `tools/call` の3メソッドだけ。
 
@@ -34,8 +43,11 @@ pydantic/anyio/httpx/starlette/uvicorn を連れてくる。使うのは `initia
   という失敗を作る。
 - ツールの実行はイベントループの中で同期に走る(重い `describe_*` の間はWebSocketの配信も
   止まる)。実行器スレッドへ逃がすと `Server` 側のスレッド前提を作り直すことになる。
-  MCPのツール呼び出し自体はHTTPを持たず短いので、`_AiToolsOnLoop`(`duocad/server.py`)の
-  ような手当ては要らないと判断した。
+  **stdioの経路は `serve_stdio` 自体がイベントループの上にいるので、これで済む**。
+  HTTPの経路だけは `ThreadingHTTPServer` のワーカースレッドから入ってくるので、
+  `ToolsOnLoop`(`duocad/server.py`)で包んでイベントループへ投げ返している。
+- `/mcp` は**リクエストを直列化する**(`WebHandler.mcp_lock`)。MCPクライアントは1つしか
+  想定していないので、並行で捌く価値より握手の状態が混ざらないことを取った。
 
 **OCPを直接importしない**(境界は kernel.py だけ)。
 """
@@ -56,8 +68,10 @@ from . import catalog, io_step, kernel, predicates, query, region, selection, sk
 from .document import unknown_id_message
 from .server import (
     DEFAULT_WEB_DIST,
+    MCP_HTTP_PATH,
     Server,
     Session,
+    ToolsOnLoop,
     start_http_server,
 )
 
@@ -1173,12 +1187,19 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
 
     ws_url = f"ws://127.0.0.1:{args.port}"
     page_url = f"http://127.0.0.1:{args.http_port}/"
+    mcp_url = f"http://127.0.0.1:{args.http_port}{MCP_HTTP_PATH}"
+    # **HTTPトランスポート用のMCPは別インスタンスにする**(2026-08-26)。stdioと同じ
+    # `McpServer` を共有すると `initialized` や `protocol_version` が混ざる —— 別の
+    # トランスポートに繋いだ相手は別のクライアントなので、握手も別に持つのが正しい。
+    # 道具は `ToolsOnLoop` で包む(HTTPはワーカースレッドで走るため。下記 `start_http_server`)。
+    http_mcp = McpServer(ToolsOnLoop(tools, asyncio.get_running_loop()))
     try:
-        start_http_server(args.web_dist, args.http_port, ws_url)
+        start_http_server(args.web_dist, args.http_port, ws_url, mcp=http_mcp)
         served = True
     except (FileNotFoundError, OSError) as error:
-        # ブラウザへ配れなくてもMCPのツールは動く。**黙って落とさず**理由を残して続ける。
-        _log(f"warning: 静的配信を立てられなかった(MCPだけで続行): {error}")
+        # ブラウザへ配れなくてもstdioのMCPは動く。**黙って落とさず**理由を残して続ける。
+        # ただし `/mcp` も同じサーバに載っているので、**この経路ではHTTPのMCPも立たない**。
+        _log(f"warning: 静的配信を立てられなかった(stdioのMCPだけで続行): {error}")
         served = False
 
     origins = allowed_origins(args.http_port)
@@ -1192,6 +1213,7 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
         _log(f"duocad MCP server: stdio / WebSocket {ws_url}")
         if served:
             _log(f"  ブラウザで開く: {page_url}")
+            _log(f"  MCP(HTTP): {mcp_url}")
             if args.open:
                 webbrowser.open(page_url)
         body_count = len([b for b in session.document.bodies if b.kind != "reference"])

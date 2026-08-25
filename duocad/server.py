@@ -187,17 +187,23 @@ FILE_COMMANDS: dict = catalog.file_table()
 SELECTION_CONSUMING_COMMANDS: set = catalog.selection_consuming_commands()
 
 
-class _AiToolsOnLoop:
-    """`ToolSurface`(`descriptors`/`call`/`error_envelope`/`current_seq`)を**イベントループの
-    スレッドへ限定する**覆い。
+class ToolsOnLoop:
+    """`ToolSurface`(`descriptors`/`descriptor`/`call`/`error_envelope`/`current_seq`)を
+    **イベントループのスレッドへ限定する**覆い。
 
-    `AgentLoop.run()` はモデルへのHTTPリクエストを含み数十秒かかりうるので、`Server._ai_start`
-    が `run_in_executor` で実行器スレッドへ逃がす。だが `Session` は「イベントループの
-    スレッドだけが触る」という前提の上に立っている —— 実行器スレッドから直接 `DocumentTools`
-    を叩くと2スレッドが同時に文書を書き換えうる。ここでは `.call()` / `.error_envelope()` を
-    `asyncio.run_coroutine_threadsafe` でイベントループへ1回ずつ投げ、その場で完了を待つ。
-    往復するのは `Session` のverb呼び出し1回ぶん(通常は数ms)で、**プロバイダへのHTTP
-    リクエスト(本当に長くかかる方)はこの覆いを経由しない**。
+    `Session` は「イベントループのスレッドだけが触る」という前提の上に立っているが、
+    そこへ**別のスレッドから入ってくる経路が2本ある**:
+
+    - **アプリ内AI** —— `AgentLoop.run()` はモデルへのHTTPリクエストを含み数十秒かかりうるので、
+      `Server._ai_start` が `run_in_executor` で実行器スレッドへ逃がす
+    - **HTTPトランスポートのMCP** —— `/mcp` は `ThreadingHTTPServer` のワーカースレッドで
+      走る(`WebHandler.do_POST`)
+
+    どちらも直接 `DocumentTools` を叩くと2スレッドが同時に文書を書き換えうる。ここでは
+    `.call()` / `.error_envelope()` / `.current_seq()` を `asyncio.run_coroutine_threadsafe`
+    でイベントループへ1回ずつ投げ、その場で完了を待つ。往復するのは `Session` のverb呼び出し
+    1回ぶん(通常は数ms)で、**プロバイダへのHTTPリクエスト(本当に長くかかる方)はこの覆いを
+    経由しない**。
     """
 
     def __init__(self, tools: Any, loop: asyncio.AbstractEventLoop) -> None:
@@ -208,6 +214,11 @@ class _AiToolsOnLoop:
         # 起動時に1度組んだ静的なリストを読むだけ(`DocumentTools._build_descriptors`)。
         # 文書を触らないので、スレッドをまたいでも安全 —— 投げ返さない。
         return self._tools.descriptors()
+
+    def descriptor(self, name: str) -> Any:
+        # `descriptors()` と同じ静的な索引の引き当て(MCPの `tools/call` が引数検査に使う)。
+        # 文書を触らないので投げ返さない。
+        return self._tools.descriptor(name)
 
     def call(self, name: str, arguments: dict) -> dict:
         return self._run_on_loop(self._tools.call, name, arguments)
@@ -1219,17 +1230,126 @@ class Session:
 # --------------------------------------------------------------------------------------
 # 静的配信(web/dist)
 # --------------------------------------------------------------------------------------
+#: MCPのHTTPトランスポートの口(2026-08-26)。ブラウザが開くページと同じ8766に生やす
+#: —— 人もClaude Codeも覚えるURLが1つで済む。
+MCP_HTTP_PATH = "/mcp"
+
+#: `/mcp` が受け取るリクエストボディの上限。WebSocketの `max_size` と揃える。
+MCP_HTTP_MAX_BODY = 8 * 1024 * 1024
+
+
 class WebHandler(SimpleHTTPRequestHandler):
-    """`web/dist` を配る。加えて `/duocad-config.json` でWebSocketのURLを教える。
+    """`web/dist` を配る。加えて `/duocad-config.json` でWebSocketのURLを教え、
+    `/mcp` でMCP(JSON-RPC 2.0 over HTTP)を喋る。
 
     ポートを別にしているのは、1つのポートでHTTPとWebSocketを同時に喋る実装が
     websocketsのバージョンに依存するため(壊れやすい側を避けた)。
     """
 
     config_payload: bytes = b"{}"
+    #: `/mcp` を処理する `McpServer`(`duocad/mcp_server.py`)。`start_http_server` が挿す。
+    #: None のままなら `/mcp` は 404 —— 静的配信だけ立てる検査のため。
+    mcp_server: Any = None
+    #: `Host` ヘッダとして許す綴り(DNSリバインディング対策。下記 `_mcp_forbidden`)。
+    mcp_hosts: frozenset = frozenset()
+    #: `McpServer` の状態(`initialized` 等)を2スレッドで同時に触らせない。
+    #: `ThreadingHTTPServer` は接続ごとにスレッドを立てるので、直列化はここで作る。
+    mcp_lock = threading.Lock()
+
+    def do_POST(self) -> None:  # noqa: N802  (BaseHTTPRequestHandlerの命名に従う)
+        """MCPのHTTPトランスポート。**`/mcp` 以外にPOSTの口は無い**。"""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self.send_error(400)
+            return
+        if length > MCP_HTTP_MAX_BODY:
+            # 大きすぎる本文は読み捨てない(読み捨てること自体が的になる)。接続ごと閉じる。
+            self.send_error(413)
+            return
+
+        # **検査より先に本文を読み切る。** 読まずに 4xx を返して接続を閉じると、まだ書いている
+        # クライアントの側で接続が中断される(Windowsでは `ConnectionAbortedError`)——
+        # 拒否は届いているのにクライアントからは通信エラーに見える、という紛らわしい形になる。
+        # 2026-08-26、`tests/test_mcp_http.py` の403の検査が**この競合で散発的に赤くなって**
+        # 見つかった(1回目は緑・2回目で赤)。上限で頭打ちにしてあるので読み切って安全である。
+        raw = self.rfile.read(length) if length > 0 else b""
+
+        if self.path.split("?")[0] != MCP_HTTP_PATH or self.mcp_server is None:
+            self.send_error(404)
+            return
+        if self._mcp_forbidden():
+            return
+        if not raw:
+            self.send_error(400)
+            return
+
+        try:
+            message = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            # JSON-RPCのパースエラー封筒(-32700)を返すのが仕様上は丁寧だが、そのために
+            # `mcp_server.py` の定数をここへ写すと**同じ番号が2箇所**になる(server.py を
+            # importしているのは mcp_server.py の側なので、逆向きのimportは循環する)。
+            # 行儀のよいクライアントはここへ来ないので、素の400で足りると判断した。
+            self.send_error(400)
+            return
+
+        with self.mcp_lock:
+            response = self.mcp_server.handle(message)
+        # `handle` の None は「返事を書いてはいけない」(通知)。HTTPでは202が対応する。
+        self._send_json(202 if response is None else 200, response)
+
+    def _mcp_forbidden(self) -> bool:
+        """`/mcp` を**ブラウザから叩かれない**ようにする検査(通ったら False)。
+
+        **なぜ要るか**: `127.0.0.1` へのbindは防御にならない —— 攻撃側のコードは利用者の
+        ブラウザの中で動くからである(`allowed_origins` と同じ理屈)。しかもJSON-RPCの本文は
+        `Content-Type: text/plain` にすれば**プリフライトの要らない「単純リクエスト」**として
+        送れるので、悪意のあるページは応答を読めないまま `/mcp` に副作用だけ起こせる。
+
+        防ぐのはこの2点で足りる:
+
+        - **`Origin` があれば拒否する**。ブラウザは他オリジンへのPOSTに必ず `Origin` を付け、
+          JavaScriptから偽装できない。duocad自身のページは `/mcp` を叩かないので、
+          「`Origin` 付きのリクエストは全部よそ者」と言い切れる。
+        - **`Host` を許可リストで見る**。`127.0.0.1:<port>` 以外の名前で解決して来たものを
+          落とす(DNSリバインディング)。
+
+        **CORSのヘッダは一切返さない**(だからプリフライトも通らない)。
+
+        **トークンは置かない。** 守れる相手が増えないためである —— このPCでコードを実行できる
+        相手は、トークンを書いたファイルも読める。`allowed_origins` が「`Origin` ヘッダ無しを
+        意図的に許可する」と決めたのと同じ線引きで、その外側は防御対象にしない。おかげで
+        `claude mcp add` はURL1つで済む(2026-08-26判断)。
+        """
+        if self.headers.get("Origin") is not None:
+            self.send_error(403)
+            return True
+        host = (self.headers.get("Host") or "").strip().lower()
+        if host not in self.mcp_hosts:
+            self.send_error(403)
+            return True
+        return False
+
+    def _send_json(self, status: int, payload: Any) -> None:
+        body = b"" if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        if body:
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
 
     def do_GET(self) -> None:  # noqa: N802  (BaseHTTPRequestHandlerの命名に従う)
         path = self.path.split("?")[0]
+        if path == MCP_HTTP_PATH:
+            # **サーバ→クライアントのSSEストリームは提供しない**(duocadからMCPクライアントへ
+            # pushするものが無い。ツールの顔ぶれは起動中変わらないので `listChanged` も出さない)。
+            # 仕様はその場合405を返せと言っている。
+            self.send_error(405)
+            return
         if path == "/favicon.ico":
             # ブラウザが必ず取りに来る。404を返すとコンソールがエラーで汚れ、
             # 計測中に本物のエラーを見落とす(自動検査もこれで落ちた)。中身は要らない。
@@ -1251,14 +1371,33 @@ class WebHandler(SimpleHTTPRequestHandler):
         """アクセスログを出さない(計測中のコンソールを静かに保つ)。"""
 
 
-def start_http_server(dist_dir: Path, port: int, ws_url: str) -> ThreadingHTTPServer:
-    """静的配信をデーモンスレッドで立てる。`web/dist` が無ければ何も立てずに例外。"""
+def mcp_http_hosts(port: int) -> frozenset:
+    """`/mcp` の `Host` ヘッダとして許す綴り(`WebHandler._mcp_forbidden`)。
+
+    `localhost` と `127.0.0.1` は別の綴りなので両方を挙げる(WebSocketの `allowed_origins`
+    が両方を挙げるのと同じ理由)。
+    """
+    return frozenset(f"{host}:{port}" for host in ("127.0.0.1", "localhost"))
+
+
+def start_http_server(
+    dist_dir: Path, port: int, ws_url: str, mcp: Any = None
+) -> ThreadingHTTPServer:
+    """静的配信をデーモンスレッドで立てる。`web/dist` が無ければ何も立てずに例外。
+
+    `mcp` を渡すと同じポートで `/mcp`(MCPのHTTPトランスポート)も喋る。**`Session` を触るのは
+    イベントループのスレッドだけ**という不変条件があるので、渡す `McpServer` の道具は
+    `ToolsOnLoop` で包んであること —— 包まないと `ThreadingHTTPServer` のワーカースレッドが
+    直に文書を書き換える。
+    """
     if not (dist_dir / "index.html").exists():
         raise FileNotFoundError(
             f"{dist_dir} に index.html が無い。先に web をビルドすること:\n"
             f"    cd {dist_dir.parent}\n    npm install\n    npm run build"
         )
     WebHandler.config_payload = json.dumps({"ws_url": ws_url}).encode("utf-8")
+    WebHandler.mcp_server = mcp
+    WebHandler.mcp_hosts = mcp_http_hosts(port)
     handler = partial(WebHandler, directory=str(dist_dir))
     httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
     thread = threading.Thread(target=httpd.serve_forever, name="duocad-http", daemon=True)
@@ -1719,7 +1858,7 @@ class Server:
         if self._ai_provider_kind != "anthropic":
             provider_kwargs["base_url"] = self._ai_base_url
         provider = build_provider(self._ai_provider_kind, **provider_kwargs)
-        marshaled = _AiToolsOnLoop(self._ai_tools, self._loop)
+        marshaled = ToolsOnLoop(self._ai_tools, self._loop)
         self._ai_loop = AgentLoop(
             marshaled, provider, cancellation=self._ai_cancellation, progress=self._ai_progress
         )

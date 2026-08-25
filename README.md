@@ -10,7 +10,7 @@
 | | |
 |---|---|
 | ブランチ / コミット | `main`（最新は `git log -1`。2026-08-15に `--step` 廃止のコミットを載せた） |
-| テスト | **480件**（2026-08-22に622件から422件へ削減し、以後の追加分。うち1本はllama-serverと実STEPが揃うときだけ走る＝ふだんはskip。**赤は1本も無い**・通し21秒。2026-08-23実測 `479 passed, 1 skipped`） |
+| テスト | **489件**（2026-08-22に622件から422件へ削減し、以後の追加分。うち2本は実機が揃うときだけ走る＝ふだんはskip。**赤は1本も無い**・通し19秒。2026-08-26実測 `487 passed, 2 skipped`） |
 | 実行環境 | Python 3.11（`.venv`）／ Node（`web/node_modules` 導入済み）／ `web/dist` ビルド済み |
 | 単位 | mm 固定 |
 
@@ -83,19 +83,19 @@ cd C:\Users\tm976\mf\duocad\web; npm install; npm run build
 > `web/src` ではなく `web/dist`（ビルド成果物）。`web/src` を触ったら `npm run build`。
 > 現在の `dist` は `src` より新しい（2026-08-20ビルド。Gのコミットで作り直した）ので、**そのまま起動してよい**。
 
-**起動コマンドは `duocad.mcp_server` の1本しかない。** MCPとWebSocketと静的配信を1プロセスで
-兼ねるので、**手だけで触るときも同じもので立てて、AIに何も頼まなければよい**。
+**立て方は1つしかない（2026-08-26）。** MCPとWebSocketと静的配信を1プロセスで兼ねるので、
+手で触るだけの日もAIに頼む日も同じもので立てる。**MCPクライアントにduocadを起動させる形は廃止した**
+——「起動のトリガーも人間用UI（8766）の寿命もMCPクライアントのセッションに縛られる」という形
+そのものが疣だったので、**先にアプリを立てて、Claude Codeが後から繋ぎに来る**向きへ反転した（1.2）。
+おかげで**同じ8765/8766を2つのduocadが取り合う事故も消えた**（以前はこれが起動順の制約の正体だった）。
 
-**AIから文書を触る道は2本ある**(G・2026-08-20)。**どちらも起動コマンドは同じ1本**で、
-違うのはAIをどこから呼ぶかだけである:
+**AIから文書を触る道は2本ある**。どちらもこの1つの立て方の上に乗り、同じ `Session` を叩く
+対等なクライアントなので**同時に使ってよい**:
 
-- **1.1 MCPクライアントに起動させる** —— Claude Code / Claude Desktop がこのプロセスを
-  所有する。AIはMCPのツール(29個)を通して触る
-- **1.2 自分で立ててアプリ内AIパネルを使う** —— 画面右サイドバーの「AI」パネルから
-  Claude(要APIキー)かローカルのllama-serverを選んで対話する。**MCPクライアントの
-  セッションに縛られない**(以前はこの立て方だとAIが繋がらなかった。下記1.2参照)
-
-**同時に2つ立てない**(§7)—— 1.1と1.2は同じ8765/8766を取り合うので、どちらか一方で立てる。
+- **アプリ内AIパネル**（画面右サイドバー）—— ローカルの llama-server（キー不要）か
+  Claude（`ANTHROPIC_API_KEY` が要る）を選ぶ。**キーを持っていない＝サブスク契約だけの今は、
+  実質llama-server専用**である
+- **Claude Code**（MCPの29ツール）—— **サブスク認証のまま使えるのはこちらだけ**。繋ぎ方は1.2
 
 > **起動時に決めることは何も無い（2026-08-15）。** 起動オプション `--step` / `--no-step` は廃止し、
 > **サーバは常に空の文書で立つ**。読みたいSTEPは画面の「STEP読み込み」かMCPの `import_step_editable` で
@@ -103,40 +103,54 @@ cd C:\Users\tm976\mf\duocad\web; npm install; npm run build
 > 同じ状態になる（以前は画面から読むと参照ボディだけが増え、編集するには `make_editable_copy` が
 > 1ボディずつ、27部品なら27回要った。この非対称のせいで起動オプションが消せなかった）。
 
-### 1.1 通常 — MCPクライアントに起動させる
-
-一度だけ登録する（Claude Desktop への登録・`.mcp.json` の書式は [MCP.md](MCP.md)）:
-
-```powershell
-claude mcp add duocad -- C:\Users\tm976\mf\duocad\.venv\Scripts\python.exe -m duocad.mcp_server
-```
-
-以後は**Claude Codeを起動するとプロセスが立つ**ので、自分でサーバのコマンドを打つ必要はない。
-人は `http://127.0.0.1:8766/` をブラウザで開いて手で触り、**AIに頼んだときだけAIが同じ文書を触る**。
-終了はセッションを閉じるだけ。
-
-### 1.2 Claude Codeを使わないとき — 自分で立ててアプリ内AIを使う
+### 1.1 立てる
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m duocad.mcp_server --open
 ```
 
 `--open` でブラウザが開く（省略時は開かない）。**ターミナルのstdinが開いている限り生きる**（`Ctrl+C` で終了）。
+立つと stderr にこう出る:
 
-**本タスク(G・2026-08-20)後は、この立て方が通常の使い方になる。** 以前はこの立て方だと
-「あとからAIは繋がらない」制約があった —— MCPのstdioは**クライアントがプロセスを所有する**
-仕組みなので、Claude Codeを後から起動しても繋ぎに行かず**別プロセスを立てる** →
-WebSocket(8765)の bind に失敗して**そちらが落ちる**（静的配信の方は「MCPだけで続行」の警告を
-出して続く）。この排他そのものは解消していない（MCPクライアントの仕様なので直せない）が、
-**AIを使うのにMCPクライアントを起動する必要が無くなった** —— 画面右サイドバーの「AI」パネルから
-Claude(`ANTHROPIC_API_KEY` 環境変数か `duocad_secrets.json` にキーが要る)か
-ローカルのllama-server(`llama-server -c 16384 --port 8080` を想定・キー不要)を選んで
-直接対話できる。人間用UIの寿命がMCPクライアントのセッション寿命に縛られる、という
-排他はここでは起きない。
+```
+duocad MCP server: stdio / WebSocket ws://127.0.0.1:8765
+  ブラウザで開く: http://127.0.0.1:8766/
+  MCP(HTTP): http://127.0.0.1:8766/mcp
+  bodies=0 (参照ボディを除く)
+```
 
-> **Claude Codeも同時に使いたい日は 1.1 で立てること。** この立て方(1.2)のままClaude Codeを
-> 起動すると、上記の理由でWebSocketが落ちる。1.1で立てればアプリ内AIパネルも一緒に使える
-> （MCPとアプリ内AIは同じ `Session` を叩く対等なクライアントなので、共存に問題は無い）。
+### 1.2 Claude Codeを繋ぐ（登録は要らない）
+
+**`.mcp.json` がリポジトリ直下にあるので、このディレクトリでClaude Codeを起動すれば繋がる**
+（起動時に**cwdの `.mcp.json` だけ**を読む。親ディレクトリは遡らない）。初回だけ「このプロジェクトの
+MCPサーバを承認するか」と訊かれ、承認は `~/.claude.json` の `enabledMcpjsonServers` に残る
+（やり直すなら `claude mcp reset-project-choices`）。
+
+**一度だけ必要なのは、古いstdio登録を消すことだけ**:
+
+```powershell
+claude mcp remove duocad -s local
+```
+
+スコープの優先順位は **local > project > user** で、**エントリ全体が入れ替わる**（フィールドは
+マージされない）。古い登録はlocalスコープなので、消すまで `.mcp.json` を**黙って覆い隠す**。
+
+- **duocadが立っていなくてもClaude Codeは起動する**（そのサーバが `✘ Failed to connect` になるだけ）。
+  繋がったかは `claude mcp list`（接続まで見る）、セッション内なら `/mcp`
+- **HTTPのサーバはClaude Codeが自動で繋ぎ直す**（初回失敗で最大3回、セッション中の切断で最大5回・
+  指数バックオフ）。**duocadを立て直してもClaude Code側は放っておいてよい** —— stdioには無かった性質
+- 起動時の待ちは既定30秒（`MCP_TIMEOUT` にミリ秒を入れて変更する）
+- **トークンもヘッダも要らない。** `/mcp` は `Origin` を持つリクエスト（＝ブラウザから来たもの）と
+  知らない `Host` を落とすので、URLだけで足りる。理由は `WebHandler._mcp_forbidden` のdocstring
+- **stdioの口も残してある** —— Claude Desktopのようにstdioしか話せないクライアント用（[MCP.md](MCP.md)）
+
+duocad以外のディレクトリからも使いたい日だけ、手でuserスコープへ登録する:
+
+```powershell
+claude mcp add --scope user --transport http duocad http://127.0.0.1:8766/mcp
+```
+
+**既定にはしない** —— 29ツールが無関係なプロジェクトにも出てくるため。
 
 ### 1.3 frontendを直しながら見る（Vite dev server）
 
@@ -157,7 +171,7 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 | ポート | 何 | 誰が使う |
 |---|---|---|
 | 8765 | WebSocket（コマンド下り／イベント上り） | `duocad.mcp_server` |
-| 8766 | 静的配信（**ブラウザで開くのはこちら**） | 同上 |
+| 8766 | 静的配信（**ブラウザで開くのはこちら**）＋ `/mcp`（**Claude Codeが繋ぐのはこちら**） | 同上 |
 | 5173 | Vite dev server | `npm run dev` |
 | 8775/8776・8785/8786・8795/8796 | `smoke` / `smoke-features` / `smoke-files` | **各スクリプトが自分で立てる** |
 | 8805/8806・8815/8816 | `smoke-toast` / `smoke-regions` | 同上 |
@@ -360,15 +374,15 @@ ACCEPTANCE.md §1 の19操作を、人間側だけでなぞる順序:
 全部見えている状態では狙った面の **0/94** しか指せず、他26部品を隠すと **35/94** になる
 （＝隠す操作が実用上必要）。
 
-### 3.4 交互操作（**この企画の核心**・§1.1でもG・§1.2のAIパネルでも同じ形になる）
+### 3.4 交互操作（**この企画の核心**・Claude CodeでもアプリのAIパネルでも同じ形になる）
 
 AI側に「`parallel_to Y` の辺を提案して」と頼む → **3Dに提案の色（水色。確定は橙）で出る** →
 **画面をクリックして過不足を直す**（触った瞬間 `origin` が `proposed` → `user` に変わる＝承認）→
 AIに「読み直してフィレット」と頼む → 形が変わる。
 受入時の観測は 提案34本 → 人が1本 → `fillet(1.5)` で面 10→13。
 
-**AI側の道具は §1.1(Claude CodeのMCP)でも §1.2(画面右のAIパネル)でも同じ29ツール**
-（`duocad/agent/` が `DocumentTools` を共有する。G・2026-08-20）。§1.2のAIパネルでは
+**AI側の道具は Claude Code(MCP)でも 画面右のAIパネルでも同じ29ツール**
+（`duocad/agent/` が `DocumentTools` を共有する。G・2026-08-20）。AIパネルでは
 プロバイダ(Claude / llama-server)を切り替えられ、ツール呼び出しが逐次画面に出て、
 実行中は中断できる —— MCPクライアントを開かずに交互操作の全体を1つの画面で試せる。
 
@@ -400,7 +414,7 @@ AIに「読み直してフィレット」と頼む → 形が変わる。
 
 ## 4. 自動検査の走らせ方
 
-### pytest（コア・MCPの契約 422件）
+### pytest（コア・MCPの契約 489件）
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
@@ -575,14 +589,20 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
   （`test_tool_names_match_the_verb_names_in_the_operation_log` と
   `tests/test_ui_command_wiring.py`。片方向だった間に、まさにそのずれが緑のまま入り込んだ）
 
-公式SDKは入れず、JSON-RPC 2.0 over stdio を素で実装している（依存を増やしていない）。
+公式SDKは入れず、JSON-RPC 2.0 を素で実装している（依存を増やしていない）。**トランスポートは
+stdioとHTTP（`/mcp`）の2本**で、`McpServer.handle()` はどちらも知らない —— 1メッセージの辞書を
+受け取って返すだけなので、口が増えても中身は増えない（契約は `tests/test_mcp_http.py`）。
 
 ### AI側（アプリ内エージェント・`duocad/agent/` + G・WS配線）
 
-**AIから文書を触る道は2本ある**。MCPサーバは「MCPクライアントがduocadのプロセスを所有する」形なので、
-起動のトリガーも人間用UI（8766）の寿命もクライアントのセッションに縛られる。`duocad/agent/` は逆向きで、
-**先にアプリが立っていて、アプリの中からAIを選んで繋ぐ**（当面の対象はClaudeとllama-serverの2つ）。
-**MCP経路は残す** —— Claude Codeから触る道とアプリ内の道は共存する。
+**AIから文書を触る道は2本ある**。`duocad/agent/` は**先にアプリが立っていて、アプリの中から
+AIを選んで繋ぐ**（当面の対象はClaudeとllama-serverの2つ）。**MCP経路は残す** —— Claude Codeから
+触る道とアプリ内の道は共存する。
+
+> **かつてここに書いてあった非対称は解消した**（2026-08-26）。MCPがstdioしか持たなかった間は
+> 「MCPクライアントがduocadのプロセスを所有する」形だったので、起動のトリガーも人間用UI（8766）の
+> 寿命もクライアントのセッションに縛られていた。`/mcp`（HTTP）を足したことで**MCP経路も
+> 「先にアプリが立っている」向きになり**、2本の道の向きが揃った。
 
 - **道具の定義を第二の場所に書かない** —— `DocumentTools.descriptors()` を渡し、`.call()` で実行し、
   失敗は `.error_envelope()` の6語彙。MCP経路と顔ぶれ・挙動・失敗の形が同一である
@@ -636,13 +656,14 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 
 ```
 duocad/
+  .mcp.json              Claude Code向けのMCP登録（projectスコープ。これがあるので登録作業が要らない）
   README.md              ← このファイル（入口）
   ACCEPTANCE.md          v1受入の実測記録
   MCP.md                 MCPサーバの仕様と登録手順
   docs/                  IMPLEMENTATION_PLAN(現行の正) / REQUIREMENTS / PROBE_FINDINGS
   duocad/                コア（Python）。verbs/ に1 verb 1モジュール
                          agent/ はアプリ内AIエージェント（プロバイダ＋ループ・UIなし）
-  tests/                 422件。README.md は2026-08-22以前の契約の記録（削除済みテストを指す箇所あり）
+  tests/                 489件。README.md は2026-08-22以前の契約の記録（削除済みテストを指す箇所あり）
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
     scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。共有部品は
@@ -668,7 +689,12 @@ duocad/
 ### 運用の注意
 
 - **duocadのサーバを2つ同時に立てない**（8765/8766がぶつかり、後から立った方がWebSocketのbindで落ちる）。
-  自分で `mcp_server` を立てた状態でClaude Codeを起動すると**これが起きる**（§1.2）。
+  **Claude Codeがこれを起こすことは無くなった**（2026-08-26。MCPをHTTPで繋ぐようになり、
+  クライアントはduocadを起動しない）—— ただし**stdioの登録が残っているとまだ起きる**（§1.2）。
+- **`/mcp`（8766）はブラウザから叩けない**（2026-08-26）。`Origin` を持つリクエストと、
+  `127.0.0.1:<port>` / `localhost:<port>` 以外の `Host` を403で落とす。**認証トークンは無い** ——
+  このPCでコードを実行できる相手はトークンを書いたファイルも読めるので、守れる相手が増えない
+  （下のWebSocketのOrigin検査と同じ線引き）。契約は `tests/test_mcp_http.py`。
 - **WebSocket(8765)はOriginを検査する**（2026-08-20）。繋げるのはduocad自身が配るページだけ
   ——静的配信（`--http-port`、既定8766）と Vite dev server（5173）を、`127.0.0.1` / `localhost`
   の両方の綴りで許可する。**`Origin` ヘッダを送らないクライアント（`smoke*.mjs` などの素のWS）は

@@ -361,7 +361,7 @@ def test_a_concurrent_edit_between_two_tool_calls_in_the_same_reply_is_detected(
 ):
     """1つの応答に束ねられた複数のツール呼び出しの**間**も見る。
 
-    本番経路(`_AiToolsOnLoop._run_on_loop`)は呼び出しのたびにイベントループへ制御を返すので、
+    本番経路(`ToolsOnLoop._run_on_loop`)は呼び出しのたびにイベントループへ制御を返すので、
     1件目の実行後・2件目の実行前にも人の操作が挟まりうる。`current_seq()` の4回目の呼び出し
     (=2件目の直前チェック)の直前に人の操作を割り込ませ、2件目が実行されないことを固定する。
     """

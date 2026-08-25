@@ -326,7 +326,7 @@ def test_a_tool_call_that_mutates_the_document_reaches_the_browser(
 ):
     """`set_visible` をAI経由で呼ぶと、**通常のverb配信**(`type: state`)が別接続へ届く。
 
-    `_AiToolsOnLoop` が実行器スレッドからイベントループへ投げ返していること
+    `ToolsOnLoop` が実行器スレッドからイベントループへ投げ返していること
     (=`Session` への書き込みが実際に起きていること)の実測でもある。
     """
     box = box_session.document.bodies[0]

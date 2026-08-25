@@ -101,13 +101,13 @@ how には数えない（手動UIでも `PlaneArgSpec` / `point` は how では�
   （実装計画書§2「コアはUIが無くても機能的に完全」の実証）。
 - **AIが文書を変えると、開いているブラウザの表示が自分では何もしていないのに変わる**。
   実体は `Session.add_listener`（`duocad/server.py`）。
-- **1プロセスで両方を持つ**（stdioのMCPとWebSocket＋静的配信）。別プロセスにすると
+- **1プロセスで全部を持つ**（MCP＝stdioと `/mcp`、WebSocket、静的配信）。別プロセスにすると
   「AIが変えた文書」と「人が見ている文書」が別物になる。
 
 ## 起動
 
-MCPクライアントが**このプロセスを起動する**（自分で先に立てておく必要はない）。人間は
-プロセスが配信する `http://127.0.0.1:8766/` をブラウザで開く。
+**先に自分でduocadを立て、MCPクライアントは後から繋ぐ**（2026-08-26）。人間は同じプロセスが
+配信する `http://127.0.0.1:8766/` をブラウザで開く。
 
 ```
 .venv\Scripts\python.exe -m duocad.mcp_server [オプション]
@@ -116,48 +116,73 @@ MCPクライアントが**このプロセスを起動する**（自分で先に�
 | オプション | 既定 | 意味 |
 |---|---|---|
 | `--port` | 8765 | WebSocket |
-| `--http-port` | 8766 | 静的配信（ブラウザで開くのはこちら） |
+| `--http-port` | 8766 | 静的配信（ブラウザで開く）＋ `/mcp`（MCPのHTTPトランスポート） |
 | `--deviation` | 0.2 | テセレーションの線形偏差（mm・絶対） |
 | `--web-dist PATH` | `web/dist` | 静的配信するディレクトリ |
 | `--open` | — | 起動時にブラウザを開く（既定は開かない） |
 
-`web/dist` が無い場合は**静的配信だけを諦めてMCPは動く**（理由はstderrに出る）。先に
-`cd web && npm install && npm run build` しておくと画面も出る。
+`web/dist` が無い場合は**静的配信を諦めてstdioのMCPだけで動く**（理由はstderrに出る）。
+このとき `/mcp` も同じHTTPサーバに載っているので**一緒に立たない**。先に
+`cd web && npm install && npm run build` しておくこと。
 
 **注意**: duocadのサーバを2つ同時に立てない（ポートがぶつかり、後から立った方がWebSocketの
 bindで落ちる）。
 
-## Claude Code への登録
+## トランスポートは2本
 
-プロジェクト直下（`C:\Users\tm976\mf\duocad`）で：
+`handle()` はトランスポートを知らない（1メッセージの辞書を受け取って返すだけ）ので、
+**同じ29ツールがどちらの口からも同じ顔で出る**。契約は `tests/test_mcp_http.py` が固定する。
 
-```
-claude mcp add duocad -- C:\Users\tm976\mf\duocad\.venv\Scripts\python.exe -m duocad.mcp_server
-```
+| | 誰が使う | プロセスの所有者 |
+|---|---|---|
+| **HTTP** `http://127.0.0.1:8766/mcp` | Claude Code | **duocad自身**（クライアントは後から繋ぐ） |
+| **stdio** | Claude Desktop など、stdioしか話せないクライアント | MCPクライアント |
 
-登録できたかは `claude mcp list`（接続まで見る）で確認する。セッション内では `/mcp` で
-ツール一覧が出る。**パスは絶対で書く** — `claude` を起動したディレクトリが
-`duocad` とは限らないため。**起動時に読むSTEPを決める引数は無い**（2026-08-15に `--step` を廃止）——
-サーバは常に空の文書で立ち、STEPは `import_step_editable` で読む。
+`/mcp` は `Origin` を持つリクエスト（＝ブラウザから来たもの）と、知らない `Host` を403で落とす。
+**認証トークンは置いていない** —— このPCでコードを実行できる相手はトークンを書いたファイルも
+読めるので、守れる相手が増えないためである（`WebHandler._mcp_forbidden` のdocstringが正）。
+サーバ→クライアントのSSEストリームは提供しない（pushするものが無い）ので `GET /mcp` は405。
 
-設定ファイルを直接書く場合（`.mcp.json` / `~/.claude.json` の `mcpServers`）：
+## Claude Code への登録（要らない）
+
+**リポジトリ直下の `.mcp.json` が登録そのもの**（projectスコープ）。duocadのディレクトリで
+Claude Codeを起動すれば繋がる —— 起動時に**cwdの `.mcp.json` だけ**を読む（親は遡らない）。
+初回だけ承認を訊かれ、結果は `~/.claude.json` の `enabledMcpjsonServers` に残る
+（`claude mcp reset-project-choices` でやり直せる）。
 
 ```json
 {
   "mcpServers": {
     "duocad": {
-      "command": "C:\\Users\\tm976\\mf\\duocad\\.venv\\Scripts\\python.exe",
-      "args": ["-m", "duocad.mcp_server"],
-      "cwd": "C:\\Users\\tm976\\mf\\duocad"
+      "type": "http",
+      "url": "http://127.0.0.1:8766/mcp"
     }
   }
 }
 ```
 
+**一度だけやること**: 古いstdio登録を消す（`claude mcp remove duocad -s local`）。スコープの優先順位は
+**local > project > user** で**エントリ全体が入れ替わる**ため、localに残っている限り
+`.mcp.json` は黙って覆い隠される。
+
+繋がったかは `claude mcp list`（接続まで見る）。セッション内では `/mcp` でツール一覧が出る。
+**duocadが立っていなければ繋がらないだけ**で、Claude Code自体は起動する。HTTPのサーバは
+**自動で繋ぎ直す**（初回失敗で最大3回、セッション中の切断で最大5回・指数バックオフ）ので、
+duocadを立て直してもClaude Code側の操作は要らない。起動時の待ちは既定30秒（`MCP_TIMEOUT`）。
+
+**起動時に読むSTEPを決める引数は無い**（2026-08-15に `--step` を廃止）—— サーバは常に空の
+文書で立ち、STEPは `import_step_editable` で読む。
+
+duocad以外のディレクトリからも使う日だけ、userスコープへ手で登録する
+（`claude mcp add --scope user --transport http duocad http://127.0.0.1:8766/mcp`）。
+29ツールが無関係なプロジェクトにも出るので既定にはしない。
+
 ## Claude Desktop への登録
 
-`%APPDATA%\Claude\claude_desktop_config.json` に上と同じ `mcpServers` の項目を書き、
-**Claude Desktop を再起動する**（設定は起動時にしか読まれない）。
+Claude Desktopはstdioで繋ぐので、**あちらがduocadのプロセスを所有する**（人間用UIの寿命も
+Claude Desktopのセッションに縛られる。1.2のHTTPのような後付けの接続はできない）。
+`%APPDATA%\Claude\claude_desktop_config.json` に書き、**Claude Desktop を再起動する**
+（設定は起動時にしか読まれない）。
 
 ```json
 {
@@ -197,8 +222,9 @@ claude mcp add duocad -- C:\Users\tm976\mf\duocad\.venv\Scripts\python.exe -m du
 
 ## 実装のメモ
 
-- **依存を増やしていない**。公式SDK（`mcp` パッケージ）は入れず、JSON-RPC 2.0 over stdio を
-  素で実装している（`duocad/mcp_server.py`）。使うのは `initialize` / `tools/list` /
+- **依存を増やしていない**。公式SDK（`mcp` パッケージ）は入れず、JSON-RPC 2.0 を
+  素で実装している（`duocad/mcp_server.py`）。トランスポートはstdioとHTTPの2本だが、
+  `handle()` はどちらも知らないので**プロトコルの実装は1つ**である。使うのは `initialize` / `tools/list` /
   `tools/call` の3メソッドだけ。対応プロトコル版は `2025-06-18` / `2025-03-26` / `2024-11-05`。
 - **stdoutに出してよいのはJSON-RPCの行だけ**。起動メッセージ・警告はすべてstderrへ出す。
   OCCTのSTEP書き出しがC++からstdoutへ統計を吐くため、ツール実行中は fd 1 を stderr へ振る。
