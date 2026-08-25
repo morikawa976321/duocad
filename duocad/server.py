@@ -275,6 +275,7 @@ class Session:
         self._geometry_cache: dict = {}    # body_id -> (shape, tessellate結果)
         self._edge_cache: dict = {}        # body_id -> (shape, tessellate_edges結果)(D)
         self._vertex_cache: dict = {}      # body_id -> (shape, vertex_positions結果)
+        self._volume_cache: dict = {}      # body_id -> (shape, query.volume結果)
         self._setup_floor_seq = 0  # load_step が積んだ最後のseq(これ以下はundoの対象外)
         self._listeners: list = []  # 文書が変わったときに呼ぶ購読者(下記 add_listener)
         self._suppress_events = 0  # >0 の間は `_emit` が配らない(プレビュー。`preview` 参照)
@@ -605,6 +606,9 @@ class Session:
 
         **公開メソッド**: `DocumentTools._body_summary`(mcp_server.py)がMCP封筒の `bodies[]`
         要素を作るのにもこれを使う。MCP側は封筒の契約に合わせて `revision` キーを落とす。
+
+        `state_meta()` を通じて**接続のたびに全Bodyぶん**呼ばれる(`_push`)。`volume` は
+        キャッシュ付き(下記 `_body_volume`)——`face_count` は合計2msと軽いので毎回測る。
         """
         return {
             "body_id": body.id,
@@ -613,8 +617,24 @@ class Session:
             "visible": body.visible,
             "revision": self.body_revision(body.id),
             "face_count": kernel.face_count(body.shape),
-            "volume": query.volume(body.shape),
+            "volume": self._body_volume(body),
         }
+
+    def _body_volume(self, body) -> float:
+        """bodyの体積(キャッシュ付き)。
+
+        `geometry()` と同じ規律 —— キャッシュは**形状の同一性**(`is`)で判定する(版ではない)。
+        `id()` の整数だけを控えると、旧shapeが解放された後に同じアドレスが再利用されて
+        偽ヒットしうるので、shapeそのものを保持して比べる(`geometry()` のキャッシュと同じ代償)。
+        `query.volume` は面ごとの数値積分でここにだけキャッシュが無く、可視性を切り替えた
+        だけでも全ボディぶん測り直していた(PCケースで693ms/回)。
+        """
+        cached = self._volume_cache.get(body.id)
+        if cached is not None and cached[0] is body.shape:
+            return cached[1]
+        result = query.volume(body.shape)
+        self._volume_cache[body.id] = (body.shape, result)
+        return result
 
     def body_state(self, body) -> dict:
         """1Bodyぶんの状態(stateとdeltaが共有する)。`body_meta` にgeometryを足したもの。"""
@@ -1140,6 +1160,7 @@ class Session:
         self._geometry_cache.clear()
         self._edge_cache.clear()
         self._vertex_cache.clear()
+        self._volume_cache.clear()
         self._sketch_cache.clear()
         # **版の数え上げ(`_revision_counter`)は消さない**。消すと版が1へ戻り、同じidの
         # Bodyを知っているクライアントが「版が同じ=変わっていない」と判断して、
