@@ -193,7 +193,10 @@
   .group {
     display: flex;
     flex-direction: column;
-    min-height: 0;
+    /* **縮ませない**。縦のflexである `.browser-body` の中では既定の `flex-shrink: 1` が効き、
+       区分が中身より低く潰れる。潰れてもリストは隠れず枠の外へ溢れるので、下の区分の
+       見出し(「スケッチ」)と行が重なって見える。スクロールは `.browser-body` が1つ持つ。 */
+    flex: 0 0 auto;
   }
 
   .group + .group {
