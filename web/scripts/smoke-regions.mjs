@@ -16,21 +16,28 @@
  *   4. **一巡して形が変わる** — 領域クリック → 距離 → 結合 → Enter で板が生まれる(完了条件2)
  *   5. **領域が面より先に取られる / 外すと面に戻る** — 板に隠れた領域の画素が、
  *      起動中は領域になり、別のコマンドへ移ると同じ視界のクリックが面になる
- *   6. **消えた領域は押し出せない** — SketchPanelで2つめの円の径を縮めて領域を1つ消すと、
+ *   6. **消えた領域は押し出せない** — 添字3の領域を選んだ状態でSketchPanelから
+ *      2つめの円の径を縮めると、コアが選択を空にし(a)、領域も3→2に減る。
  *      通常モードで「領域を押し出す」を起動してもその添字にはもう画素が当たらず、
- *      押し出しても文書が変わらない
+ *      押し出しても文書が変わらない。あわせて `regionsStillExist`(b)のロジックも
+ *      合成データで直接検算する
  *
- * **2026-08-27: 検証6の形を変えた**(ParametersPanel廃止 → SketchPanel統合)。元は
- * 「領域を選んで引数まで揃えた直後に、そのまま(モードを動かさず)パラメータを打ち直して
- * 領域を消す」という順序で、`runCommand` の `regionsStillExist` とコアの `resets_selection`
- * の二枚重ねを見ていた(変異検査で(a)`resets_selection`だけが実効的だったと実測済み)。
- * 今は非アクティブな `discSketch` の図形を打ち直すのに「再開」でそのスケッチへ再入場する
- * 必要があり、再入場は `{#key sketchId === null}` で `CommandHost` を作り直す
- * (`App.svelte`)ので、**引数を揃えた状態のままパラメータだけ差し替える**という前提が
- * 成立しなくなった(本人が受け入れた損失)。そこで**先に値を打ち直して領域を消し、
- * 消えた添字がそもそも選べないこと**を見る形に変えてある —— 「消えた領域は押し出せない」
- * という外から見える性質そのものは変わらないが、`regionsStillExist` 単体の分岐を
- * 踏む検査ではなくなった(実測はコード中のコメント参照)。
+ * **2026-08-27: 検証6をQA差し戻しで再構成した**(ParametersPanel廃止 → SketchPanel
+ * 統合)。一度は「先に値を打ち直して領域を消し、消えた添字がそもそも選べないこと」だけを
+ * 見る形に簡略化したが、それだと選ぶものが最初から無いため `resets_selection` も
+ * `regionsStillExist` もどちらも実行されない「骨抜き」の検査になっていた(QA指摘)。
+ * 今の形は**添字3を先に選んでから**縮める順序に戻し、選択が1件→0件になる瞬間を
+ * 直接観測する((a)。`tests/test_server_selection_reset.py` に同じ筋のpytestを追加した)。
+ * ただし「引数(距離・種別)まで揃えた状態のままその場でパラメータを差し替える」という
+ * 元の順序は、非アクティブな `discSketch` への再入場が `{#key sketchId === null}` で
+ * `CommandHost` を作り直す(`App.svelte`)ため再現できない(受け入れた損失) ——
+ * 選択(コア側の共有状態)は再入場をまたいで生き残るが、距離・種別の入力(CommandHost
+ * ローカルの状態)は失われる。そのため`regionsStillExist`(b)の分岐は**通常のUI操作では
+ * 到達できない**ことが構造的に確定しており(領域を変えうる全13verbが例外なく
+ * `resets_selection=True` を持つため。過不足の固定は
+ * `tests/test_server_selection_reset.py::test_resets_selection_is_declared_on_exactly_these_verbs`)、
+ * ロジック自体の正しさは `window.__duocad.regionsStillExist` を直接呼んで検算する
+ * (詳細はApp.svelteの同名関数のdocstringとコード中のコメント)。
  *
  * **順序に意味がある**: スケッチ2枚を**ソリッドが1つも無いうちに**作る。基準平面の画素は
  * 「部品に隠れていない所」を探して返すが、**部品の輪郭のすぐ外側**が返ることがあり、
@@ -484,14 +491,19 @@ async function main() {
     // ============================================== 検証6: 消えた領域は押し出せない
     // タスク文の「既存の防具(`regionsStillExist`)が通常モードでも効くこと」の対。
     //
-    // **2026-08-27: ParametersPanel廃止に伴い変えた形**(本人が受け入れた損失)。
-    // 元の検査は「添字3の領域を選んで引数まで揃え、そのうえで2つめの円を縮めて
-    // 消す」という順序だった(ParametersPanelは文書全体のパラメータをどのモードからでも
-    // 打てたため)。今は非アクティブな `discSketch` の図形を打ち直すのに再入場が要り、
-    // 再入場は `{#key sketchId === null}` で `CommandHost` を作り直す
-    // (`App.svelte`)ので、「選んで引数を揃えた直後に」その場で消す形はもう検査できない。
-    // **先に値を打ち直して領域を消し、消えた添字がそもそも選べないこと**を見る形に変える
-    // ——「消えた領域は押し出せない」という外から見える性質そのものは変わらない。
+    // **2026-08-27: QA差し戻しを受けて再構成。** 一度は「先に消してから選べないことを
+    // 見る」形に単純化したが、それだと `resets_selection`(コア)も `regionsStillExist`
+    // (`App.svelte`)もどちらも実行されない(選ぶものが最初から無いので防具の出番が無い、
+    // という「骨抜き」の指摘)。ここでは両方を実地で踏む形に戻す:
+    //
+    //   (a) `resets_selection` —— **先に添字3を選んでから**縮める。選択が
+    //       1件→0件になることを直接確認し、コアが実際に選択を空にしたことを見る
+    //       (`tests/test_server_selection_reset.py::test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish`
+    //       がpytest側でも同じ筋を固定している)。
+    //   (b) `regionsStillExist` —— **通常のUI操作では構造的に到達できない**(理由は
+    //       下記コメントと `App.svelte` の同名関数のdocstring)。ロジックそのものの
+    //       正しさは `window.__duocad.regionsStillExist(selection, sketches)` を
+    //       合成データで直接呼んで検算する。
 
     // 2つめの円のentity_idを引く(`refs.radius` が `radiusParam` と一致するもの)。
     const circleBEntityId = await page.evaluate(
@@ -505,7 +517,36 @@ async function main() {
     )
     if (!circleBEntityId) fail('2つめの円のentity_idを引けない')
 
-    // **再入場してSketchPanelから縮める**(人間の実際の手順=「再開」。BrowserPanelの名前クリック)。
+    // **(a-1) 先に添字3を選ぶ**(まだ実在する領域を、通常モードで本物のクリックで選ぶ)。
+    // **距離・種別はあえて打たない** —— `EXTRUDE_REGIONS` は `preview: 'server'` で、
+    // 引数が揃うとデバウンス後にプレビュー要求を自動で投げる。直後にSketchPanelへ
+    // 再入場して選択を空にすると、飛んでいる途中のプレビュー要求が空の選択で
+    // サーバに届いて `SelectionEmpty` の警告トーストを出す(実測)。ここで見たいのは
+    // 「選択が1件→0件になること」だけなので、プレビューを誘発する残り2つの引数は
+    // 埋めずに済ませる。
+    await page.click('#extrude-regions')
+    await waitFor(() => window.__duocad.wantsRegions === true, '「領域を押し出す」で領域を要求しない')
+    await clickRegion(discSketch, 3)
+    await waitFor(
+      (sketch) => {
+        const items = window.__duocad.selection?.items ?? []
+        return items.length === 1 && items[0].sketch === sketch && items[0].index === 3
+      },
+      'これから消える領域(添字3)を選べない',
+      discSketch,
+    )
+    const selectedBeforeShrink = await page.evaluate(
+      () => (window.__duocad.selection?.items ?? []).length,
+    )
+    if (selectedBeforeShrink !== 1) fail(`縮める前の選択が1件でない: ${selectedBeforeShrink}`)
+
+    // **(a-2) 再入場してSketchPanelから縮める**(人間の実際の手順=「再開」。
+    // BrowserPanelの名前クリック)。再入場は `{#key sketchId === null}` で
+    // `CommandHost` を作り直すので、起動していた `extrude-regions` コマンド自体は
+    // ここで失われる(受け入れた損失。SketchPanelへの統合タスクの帰結)。
+    // **失われないのはコアが持つ共有選択集合**(`selection`)であり、添字3への参照は
+    // ここでもまだ生きている ——だからこそ直後の `set_parameter` がそれを空にする
+    // 瞬間を観測できる。
     await page.click(`[data-sketch-id="${discSketch}"] .sketch-name`)
     await waitFor(
       (id) => window.__duocad.activeSketch === id,
@@ -526,14 +567,75 @@ async function main() {
       '2つめの円を縮めても領域が2つに戻らない(添字3が消えない)',
       discSketch,
     )
+    // **(a-3) resets_selection が実際に選択を空にしたことを見る**(1件→0件)。
+    const selectedAfterShrink = await page.evaluate(
+      () => (window.__duocad.selection?.items ?? []).length,
+    )
+    if (selectedAfterShrink !== 0) {
+      fail(
+        `set_parameterの後も選択が残っている(resets_selectionが効いていない): ` +
+          `${selectedAfterShrink}件`,
+      )
+    }
+    ok(
+      '**(a) resets_selection**: 添字3を選んだ状態でSketchPanelから径を縮めたら、' +
+        'コアが選択を1件→0件に空にした(領域は3→2、添字3は実在しなくなった)',
+    )
+
     await page.click('#sketch-exit')
     await waitFor(() => window.__duocad.activeSketch === null, 'discSketchを抜けられない')
 
+    // **(b) regionsStillExist のロジックを合成データで直接検査する。**
+    //
+    // なぜ通常のUI操作では到達できないか: 領域を変えうる全13verb(`add_line` 等の作図・
+    // `set_parameter`・`pattern_rectangular`/`pattern_circular`・`undo`/`redo`)は
+    // `duocad/catalog.py` で例外なく `resets_selection=True` を持つ
+    // (`tests/test_server_selection_reset.py::test_resets_selection_is_declared_on_exactly_these_verbs`
+    // が過不足なく固定)。したがって「選んだ領域が消える」操作が起きた瞬間、コアの選択は
+    // 必ず同時に空になる。`CommandHost` は生きた `selection` を見て確定を許すかどうかを
+    // 決めるので、選択が空になった時点で `runCommand` 自体が呼ばれなくなり、
+    // その内側にある `regionsStillExist` のfalse分岐へ**構造的に到達できない**
+    // (直上の(a)がまさにこれを実証している)。これは今回の統合で新たに生まれた制約では
+    // なく、統合前から成立していた事実(このファイルの旧版docstringが変異検査で
+    // 既に指摘していた「(b)の枝には到達しない」)。
+    //
+    // そこでロジック自体の正しさ(実在しない添字はfalse・実在する添字はtrueと判定するか)
+    // を、本物の関数 `App.svelte` の `regionsStillExist` を直接呼んで検算する
+    // (`window.__duocad.regionsStillExist`。再実装ではなく本体そのもの)。
+    const regionCheck = await page.evaluate((sketchId) => {
+      const sketches = window.__duocad.sketches
+      const target = sketches.find((item) => item.sketch_id === sketchId)
+      const liveIndex = target.regions[0]?.index ?? null
+      const missingIndex = Math.max(0, ...target.regions.map((r) => r.index)) + 100
+      const stale = { items: [{ sketch: sketchId, index: missingIndex }], origin: 'user', count: 1 }
+      const live = { items: [{ sketch: sketchId, index: liveIndex }], origin: 'user', count: 1 }
+      return {
+        liveIndex,
+        missingIndex,
+        staleResult: window.__duocad.regionsStillExist(stale, sketches),
+        liveResult: window.__duocad.regionsStillExist(live, sketches),
+      }
+    }, discSketch)
+    if (regionCheck.liveIndex === null) fail('discSketchに領域が1つも無い(検査の前提が崩れている)')
+    if (regionCheck.staleResult !== false) {
+      fail(
+        `regionsStillExist: 実在しない添字${regionCheck.missingIndex}をfalseと判定しない` +
+          '(ガードの実装そのものが壊れている)',
+      )
+    }
+    if (regionCheck.liveResult !== true) {
+      fail(`regionsStillExist: 実在する添字${regionCheck.liveIndex}をtrueと判定しない`)
+    }
+    ok(
+      '**(b) regionsStillExist**: 実在しない添字はfalse・実在する添字はtrueと、' +
+        '本体のロジックを直接呼んで確認した(通常操作では(a)が先回りするため到達しない分岐)',
+    )
+
+    // ============================================== 仕上げ: 通常モードでも消えた領域は押し出せない
     const before = await look()
     const beforeVolume = before.bodies.reduce((sum, body) => sum + body.volume, 0)
     const beforeOps = await page.evaluate(() => window.__duocad.state.log.length)
 
-    // 通常モードで「領域を押し出す」を起動しても、消えた添字3にはもう画素が当たらない。
     await page.click('#extrude-regions')
     await waitFor(() => window.__duocad.wantsRegions === true, '「領域を押し出す」で領域を要求しない')
     if ((await regionPixel(3, discSketch)) !== null) {
@@ -557,8 +659,8 @@ async function main() {
       )
     }
     ok(
-      '**消えた領域は押し出せない**: SketchPanelで径を縮めて添字3を消したら、通常モードで' +
-        'その領域へ当たる画素が無くなり、押し出しを起動しても文書は不変だった',
+      '**消えた領域は押し出せない**: 添字3が消えた後は通常モードでもその領域へ当たる画素が無く、' +
+        '押し出しを起動しても文書は不変だった',
     )
 
     // ============================================== 走行中にエラーが出ていないこと

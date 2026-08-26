@@ -21,7 +21,7 @@ from __future__ import annotations
 import pytest
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
-from duocad import catalog
+from duocad import catalog, selection
 from duocad.document import Body
 from duocad.server import Session
 
@@ -124,6 +124,45 @@ def test_set_parameter_clears_the_selection_on_success(session: Session) -> None
     session.set_parameter(name, 8.0)
 
     _assert_cleared(session)
+
+
+def test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish(
+    session: Session,
+) -> None:
+    """`web/scripts/smoke-regions.mjs` 検証6が実機で見ているシナリオの直接固定。
+
+    **`regionsStillExist`(`App.svelte`)がUI操作で到達できない理由をここで実証する**:
+    重なる円2つで領域を3つ作り、うち1つ(添字3。重なりが解けると消える方)を選んだ
+    状態で、片方の円の半径を打ち直して重なりを解く。領域は3→2に減り、添字3は
+    実在しなくなるが、**その前に `set_parameter` の `resets_selection=True` が
+    選択そのものを空にする**ので、`App.svelte` 側が「選んだ領域がまだ実在するか」を
+    確かめる分岐(`regionsStillExist`)へたどり着く前に選択が失われる。
+    `RESETTING_VERBS` の全13verbがこの性質を持つため(直上のテストが過不足なく固定)、
+    現行のverbカタログでは `regionsStillExist` のfalse分岐は構造的に到達不能であり、
+    その分岐自体の正しさは `window.__duocad.regionsStillExist` 経由の直接呼び出しで
+    検査する(smoke-regions.mjs参照。ここはコア側の契約=(a)の実証に専念する)。
+    """
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_circle(sketch_id, [0.0, 0.0], 15.0)
+    session.add_circle(sketch_id, [20.0, 0.0], 15.0)
+    sketch_obj = session.document.sketches[-1]
+    assert sketch_obj.id == sketch_id
+    radius_name = sketch_obj.entities[1].params["radius"]
+
+    from duocad.region import regions as list_regions
+
+    before = {item.index for item in list_regions(session.document, sketch_id)}
+    assert before == {1, 2, 3}, f"想定した3領域(1,2,3)にならない: {before}"
+
+    region_ref = selection.select_region(session.document, sketch_id, 3)
+    _select(session, [region_ref])
+    assert session.get_selection()["count"] == 1
+
+    session.set_parameter(radius_name, 3.0)  # 重なりが解け、添字3が消える
+
+    after = {item.index for item in list_regions(session.document, sketch_id)}
+    assert 3 not in after, "半径を縮めても添字3の領域が消えない(検査の前提が崩れている)"
+    _assert_cleared(session)  # (a) resets_selection が選択を空にした
 
 
 # --------------------------------------------------------------------------------------

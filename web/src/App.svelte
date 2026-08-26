@@ -55,8 +55,10 @@
     type FilePayload,
     type PreviewPayload,
     type SelectionRef,
+    type SelectionState,
     type ServerState,
     type ShapeRef,
+    type SketchState,
     type VerticesPayload,
   } from './session'
   import AiPanel from './AiPanel.svelte'
@@ -859,18 +861,30 @@
   }
 
   /**
-   * これから押し出す領域(=コアの選択にある領域)が、今のスケッチに実在するか。
+   * これから押し出す領域(=コアの選択にある領域)が、指定したスケッチ一覧に実在するか。
    *
    * **選択そのものを見る**。押し出す領域はサーバがコアの選択から取るので、
    * 送る引数には入っていない —— 引数を見に行くと常に空になり、この検査が
    * 黙って空振りする。
+   *
+   * **引数を取る形にしてある**(2026-08-27)。呼び出し側(`runCommand`)は既定値の
+   * 現在の `selection`/`sketches` で呼ぶが、テスト(`window.__duocad.regionsStillExist`)は
+   * 合成データを渡して分岐を直接検査できる —— この関数がfalseを返す状況(選んだ領域が
+   * 実際に消えている)は、`duocad/catalog.py` の `resets_selection=True`(13verb全て。
+   * `tests/test_server_selection_reset.py` が過不足なく固定)が領域を変えうるverbの
+   * すべてに掛かっているため、**通常のUI操作では選択が先に空になり到達できない**
+   * (`tests/test_server_selection_reset.py::test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish`
+   * が実測)。ロジック自体の正しさをpuppeteerから検算するための穴が要る理由はこれ。
    */
-  function regionsStillExist(): boolean {
-    const refs = (selection?.items ?? []).filter(
+  function regionsStillExist(
+    sel: SelectionState | null = selection,
+    sks: SketchState[] = sketches,
+  ): boolean {
+    const refs = (sel?.items ?? []).filter(
       (item): item is { sketch: string; index: number } => 'sketch' in item,
     )
     return refs.every((ref) =>
-      sketches.some(
+      sks.some(
         (item) =>
           item.sketch_id === ref.sketch &&
           item.regions.some((candidate) => candidate.index === ref.index),
@@ -1044,6 +1058,12 @@
       lastFile,
       documentList,
       currentDocumentName,
+      // **`regionsStillExist` を合成データで直接叩く穴**(2026-08-27)。通常のUI操作では
+      // `resets_selection` が先に選択を空にするため、この関数がfalseを返す分岐へ
+      // クリックの積み重ねでは到達できない(理由は関数自身のdocstring参照)。
+      // ロジックそのものの正しさは実機検査(`smoke-regions.mjs`)がここ経由で検算する。
+      regionsStillExist: (sel: SelectionState | null, sks: SketchState[]) =>
+        regionsStillExist(sel, sks),
     }
   })
 </script>
