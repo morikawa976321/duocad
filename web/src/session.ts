@@ -120,6 +120,23 @@ export interface SketchRegion {
   indices: number[]
 }
 
+/** 反復の種別。`Pattern.kind`(コア)と同じ語彙。 */
+export type PatternKind = 'rectangular' | 'circular'
+
+/**
+ * スケッチ上の1反復。`params`/`refs` は `SketchEntity` と同じ形(打ち直しの対象)。
+ * `sources` は元にした図形のID(反復そのものは反復の対象に取れない)。
+ * `options` は寸法ではない設定(円形反復の `rotate_copies` 等。打ち直せない)。
+ */
+export interface SketchPattern {
+  pattern_id: string
+  kind: PatternKind
+  sources: string[]
+  params: Record<string, number>
+  refs: Record<string, string | null>
+  options: Record<string, unknown>
+}
+
 export interface SketchState {
   sketch_id: string
   plane: PlaneRef
@@ -129,6 +146,8 @@ export interface SketchState {
   drawn: Array<{ kind: EntityKind; params: Record<string, number> }>
   /** 人が値を打ち直す対象(反復は展開しない)。 */
   entities: SketchEntity[]
+  /** 反復の打ち直し対象(間隔・個数)。`SketchPanel.svelte` が図形の一覧に続けて出す。 */
+  patterns: SketchPattern[]
   regions: SketchRegion[]
 }
 

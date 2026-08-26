@@ -16,24 +16,21 @@
  *   4. **一巡して形が変わる** — 領域クリック → 距離 → 結合 → Enter で板が生まれる(完了条件2)
  *   5. **領域が面より先に取られる / 外すと面に戻る** — 板に隠れた領域の画素が、
  *      起動中は領域になり、別のコマンドへ移ると同じ視界のクリックが面になる
- *   6. **消えた領域は押し出せない** — 通常モードで領域を選び引数を揃えた後、パラメータ編集で
- *      その領域を消すと、Enterを押しても文書が変わらない(`runCommand` の `regionsStillExist`
- *      と、コアの `resets_selection` の二枚重ね。下記「防具の重なり」)
+ *   6. **消えた領域は押し出せない** — SketchPanelで2つめの円の径を縮めて領域を1つ消すと、
+ *      通常モードで「領域を押し出す」を起動してもその添字にはもう画素が当たらず、
+ *      押し出しても文書が変わらない
  *
- * **防具の重なり(変異検査で実測)**: 消えた領域を押し出させない防具は3枚ある。
- *
- *   (a) コアの `resets_selection`(`duocad/catalog.py`。`set_parameter` は `True`)——
- *       パラメータを変えた時点で**選択が空になる**ので、確定の引数がそもそも揃わない
- *   (b) `App.svelte` の `regionsStillExist` —— 選んだ領域が今のスケッチに無ければ送らず、
- *       **何が起きたかを画面に出す**
- *   (c) サーバ —— 消えた添字を送れば拒否する(文書は変わらないが、理由は素の添字エラー)
- *
- * **今のUIで効いているのは (a) であり、(b) の枝には到達しない**。(a) を外すと (b) が働き、
- * 検証6の判定は緑のまま「選択が残り regionsStillExist が止めた」に変わる(そのぶん札が
- * 1枚出るので、走行全体は最後のエラー検査で赤になる)。(a)(b) の両方を外すと (c) だけが残り、
- * **文書は依然変わらない** —— つまり `regionsStillExist` が守っているのは文書ではなく
- * **理由の見え方**である。検証6が固定するのは「どれが効いても押し出されない」という
- * 外から見える性質のほうで、(b) 単独に歯を立てられる緑の検査は今の骨格では書けない。
+ * **2026-08-27: 検証6の形を変えた**(ParametersPanel廃止 → SketchPanel統合)。元は
+ * 「領域を選んで引数まで揃えた直後に、そのまま(モードを動かさず)パラメータを打ち直して
+ * 領域を消す」という順序で、`runCommand` の `regionsStillExist` とコアの `resets_selection`
+ * の二枚重ねを見ていた(変異検査で(a)`resets_selection`だけが実効的だったと実測済み)。
+ * 今は非アクティブな `discSketch` の図形を打ち直すのに「再開」でそのスケッチへ再入場する
+ * 必要があり、再入場は `{#key sketchId === null}` で `CommandHost` を作り直す
+ * (`App.svelte`)ので、**引数を揃えた状態のままパラメータだけ差し替える**という前提が
+ * 成立しなくなった(本人が受け入れた損失)。そこで**先に値を打ち直して領域を消し、
+ * 消えた添字がそもそも選べないこと**を見る形に変えてある —— 「消えた領域は押し出せない」
+ * という外から見える性質そのものは変わらないが、`regionsStillExist` 単体の分岐を
+ * 踏む検査ではなくなった(実測はコード中のコメント参照)。
  *
  * **順序に意味がある**: スケッチ2枚を**ソリッドが1つも無いうちに**作る。基準平面の画素は
  * 「部品に隠れていない所」を探して返すが、**部品の輪郭のすぐ外側**が返ることがあり、
@@ -486,30 +483,36 @@ async function main() {
 
     // ============================================== 検証6: 消えた領域は押し出せない
     // タスク文の「既存の防具(`regionsStillExist`)が通常モードでも効くこと」の対。
-    // **添字3の領域を選んで引数まで揃え**、そのうえで2つめの円を縮めて重なりを解く
-    // (領域は3つ -> 2つになり、選んでいた添字3が消える)。ここでEnterを押しても
-    // 文書が1つも変わらないことを見る。
-    await page.click('#extrude-regions')
-    await waitFor(() => window.__duocad.wantsRegions === true, '「領域を押し出す」で領域を要求しない')
-    await clickRegion(discSketch, 3)
-    await waitFor(
-      (sketch) => {
-        const items = window.__duocad.selection?.items ?? []
-        return items.length === 1 && items[0].sketch === sketch && items[0].index === 3
+    //
+    // **2026-08-27: ParametersPanel廃止に伴い変えた形**(本人が受け入れた損失)。
+    // 元の検査は「添字3の領域を選んで引数まで揃え、そのうえで2つめの円を縮めて
+    // 消す」という順序だった(ParametersPanelは文書全体のパラメータをどのモードからでも
+    // 打てたため)。今は非アクティブな `discSketch` の図形を打ち直すのに再入場が要り、
+    // 再入場は `{#key sketchId === null}` で `CommandHost` を作り直す
+    // (`App.svelte`)ので、「選んで引数を揃えた直後に」その場で消す形はもう検査できない。
+    // **先に値を打ち直して領域を消し、消えた添字がそもそも選べないこと**を見る形に変える
+    // ——「消えた領域は押し出せない」という外から見える性質そのものは変わらない。
+
+    // 2つめの円のentity_idを引く(`refs.radius` が `radiusParam` と一致するもの)。
+    const circleBEntityId = await page.evaluate(
+      (sketchId, name) => {
+        const sketch = window.__duocad.sketches.find((item) => item.sketch_id === sketchId)
+        const entity = sketch.entities.find((item) => item.refs.radius === name)
+        return entity ? entity.entity_id : null
       },
-      'これから消える領域(添字3)を選べない',
+      discSketch,
+      radiusParam,
+    )
+    if (!circleBEntityId) fail('2つめの円のentity_idを引けない')
+
+    // **再入場してSketchPanelから縮める**(人間の実際の手順=「再開」。BrowserPanelの名前クリック)。
+    await page.click(`[data-sketch-id="${discSketch}"] .sketch-name`)
+    await waitFor(
+      (id) => window.__duocad.activeSketch === id,
+      'discSketchへ再入場できない',
       discSketch,
     )
-    await typeInto('#regions-distance', PLATE.thickness)
-    await page.click('#extrude-mode-join')
-    // **押せば通る状態だったこと**を先に固定する。これが無いと、この後の
-    // 「押しても通らない」は最初から引数が足りなかっただけかもしれない。
-    await waitFor(
-      () => (document.querySelector('#command-prompt')?.textContent ?? '').includes('Enterで確定'),
-      '引数が揃わない(この後の「押しても通らない」が意味を持たない)',
-    )
-
-    await typeInto(`#parameter-${radiusParam}`, DISC_B.shrunk)
+    await typeInto(`[id="param-${circleBEntityId}-radius"]`, DISC_B.shrunk)
     await page.keyboard.press('Enter')
     await waitFor(
       (sketch) => {
@@ -523,18 +526,23 @@ async function main() {
       '2つめの円を縮めても領域が2つに戻らない(添字3が消えない)',
       discSketch,
     )
-    // **どちらの防具が効いたか**も見える形で残す。今のコアは `set_parameter` が
-    // `resets_selection=True` なので選択が空になり、`regionsStillExist` の枝までは行かない。
-    const guard = await page.evaluate(
-      () => (window.__duocad.selection?.items ?? []).length === 0,
-    )
+    await page.click('#sketch-exit')
+    await waitFor(() => window.__duocad.activeSketch === null, 'discSketchを抜けられない')
 
     const before = await look()
     const beforeVolume = before.bodies.reduce((sum, body) => sum + body.volume, 0)
     const beforeOps = await page.evaluate(() => window.__duocad.state.log.length)
+
+    // 通常モードで「領域を押し出す」を起動しても、消えた添字3にはもう画素が当たらない。
+    await page.click('#extrude-regions')
+    await waitFor(() => window.__duocad.wantsRegions === true, '「領域を押し出す」で領域を要求しない')
+    if ((await regionPixel(3, discSketch)) !== null) {
+      fail('消えたはずの添字3の領域にまだ画素が当たる')
+    }
     // **入力欄からフォーカスを外してから押す** —— 欄の中のEnterはコマンドではなく
     // その欄が受ける(`CommandHost.onKeydown` は INPUT を除く)ので、外さないと
-    // 「押したのに何も起きなかった」を検査したことにならない。
+    // 「押したのに何も起きなかった」を検査したことにならない。選ぶものが無いので
+    // そもそも引数は揃わない(=消えた領域を押し出す道が無い)。
     await page.click('header strong')
     await page.keyboard.press('Enter')
     await settle()
@@ -548,18 +556,9 @@ async function main() {
           `体積 ${beforeVolume} -> ${afterVolume}`,
       )
     }
-    const prompt = await page.evaluate(
-      () => document.querySelector('#command-prompt')?.textContent ?? '',
-    )
-    // **確定できる状態には戻っていないこと**だけを見る(文言そのものは見ない) ——
-    // どちらの防具が止めたかで残る文言が変わる(選択が空なら「押し出す領域を1つ選ぶ」、
-    // 選択が残って `regionsStillExist` が止めたなら確定の途中まで進んだ跡が残る)。
-    if (prompt.includes('Enterで確定')) {
-      fail(`消えた領域なのに「Enterで確定」のままになっている: ${JSON.stringify(prompt)}`)
-    }
     ok(
-      `**消えた領域は押し出せない**: 引数が揃った状態から領域を消してEnterしても文書は不変` +
-        `(${guard ? 'コアが選択を空にした' : '選択が残り regionsStillExist が止めた'})`,
+      '**消えた領域は押し出せない**: SketchPanelで径を縮めて添字3を消したら、通常モードで' +
+        'その領域へ当たる画素が無くなり、押し出しを起動しても文書は不変だった',
     )
 
     // ============================================== 走行中にエラーが出ていないこと

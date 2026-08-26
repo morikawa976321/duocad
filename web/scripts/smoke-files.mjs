@@ -275,6 +275,10 @@ async function main() {
     // 穴を1つ描いて矩形反復で3つにし、まとめて切り取ってから**径を1箇所だけ**打ち直す。
     await createSketchOnBase('XY')
     await waitFor(() => window.__duocad.sketches.length === 2, '穴のスケッチに入れない')
+    // **後段の径打ち直しが使う**: このスケッチは押し出し後に一度抜けるので、SketchPanelで
+    // 打ち直すには「再開」(BrowserPanelの名前クリック)で戻る必要がある
+    // (ParametersPanel廃止に伴う受け入れた損失)。
+    const holeSketchId = await page.evaluate(() => window.__duocad.activeSketch)
     await page.click('#sketch-circle')
     await clickPlane(HOLE.u, HOLE.v)
     await typeInto('#sketch-radius', HOLE.radius)
@@ -336,14 +340,15 @@ async function main() {
     const withHoles = (await look()).bodies[0]
     ok(`反復した穴を3つまとめて開けた(体積 ${plateVolume} -> ${withHoles.volume.toFixed(2)})`)
 
-    // **パラメータパネルで径を1箇所だけ打ち直す**
-    const radiusName = await page.evaluate((radius) => {
-      const entries = Object.entries(window.__duocad.parameters)
-      const hit = entries.find(([, value]) => Math.abs(value - radius) < 1e-9)
-      return hit ? hit[0] : null
-    }, HOLE.radius)
-    if (!radiusName) fail(`半径 ${HOLE.radius} の名前つきの値がパネルに出ていない`)
-    await typeInto(`[id="parameter-${radiusName}"]`, 3)
+    // **SketchPanelで径を1箇所だけ打ち直す**(ParametersPanel廃止。図形は押し出しの後で
+    // スケッチの外に出ているので、「再開」でそのスケッチへ戻ってから図形の一覧を打つ)。
+    await page.click(`[data-sketch-id="${holeSketchId}"] .sketch-name`)
+    await waitFor(
+      (id) => window.__duocad.activeSketch === id,
+      '穴のスケッチへ再入場できない',
+      holeSketchId,
+    )
+    await typeInto(`[id="param-${entityId}-radius"]`, 3)
     await page.keyboard.press('Enter')
     const biggerHoles = Math.PI * 3 ** 2 * PLATE.thickness * HOLE.count
     await waitFor(
@@ -356,9 +361,11 @@ async function main() {
       biggerHoles,
     )
     const afterResize = (await look()).bodies[0]
+    await page.click('#sketch-exit')
+    await waitFor(() => window.__duocad.activeSketch === null, '穴のスケッチを抜けられない')
     ok(
-      `**径を1箇所だけ打ち直したら、反復した穴が全部追随した**(半径 ${HOLE.radius}→3 で` +
-        ` 体積 ${withHoles.volume.toFixed(2)} -> ${afterResize.volume.toFixed(2)})`,
+      `**SketchPanelで再開して径を1箇所だけ打ち直したら、反復した穴が全部追随した**` +
+        `(半径 ${HOLE.radius}→3 で体積 ${withHoles.volume.toFixed(2)} -> ${afterResize.volume.toFixed(2)})`,
     )
 
     // ================================================================ 検証5: undo/redoで位置が動く

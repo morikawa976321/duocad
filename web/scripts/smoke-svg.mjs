@@ -235,7 +235,7 @@ async function main() {
     // ============================================================ 5: パラメータを増やさない
     //
     // 取り込んだ図形の座標は「人が打ち直す寸法」ではないので名前つきの値を作らない。
-    // ここが増えると ParametersPanel がロゴ1枚で埋まる(`verbs/import_svg.py`)。
+    // ここが増えるとSketchPanelの図形一覧がロゴ1枚で埋まる(`verbs/import_svg.py`)。
     const withSolid = await look()
     if (withSolid.parameters !== 0) {
       fail(`取り込みが名前つきの値を作っている(${withSolid.parameters}個)`)

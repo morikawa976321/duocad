@@ -93,6 +93,8 @@ async function main() {
     },
   })
   let browser = null
+  /** 人間側が最初に作ったスケッチのID(`set_parameter` が再開に使う)。 */
+  let humanSketchId = null
 
   try {
     const initialized = await mcp.send('initialize', {
@@ -260,6 +262,10 @@ async function main() {
         .then((handle) => handle.jsonValue())
       await page.mouse.click(at.x, at.y)
       await waitFor(() => window.__duocad.activeSketch !== null, 'スケッチに入れない')
+      // **後段の `set_parameter` が使う**: このスケッチは `#sketch-exit` の後に一度
+      // 抜けるので、SketchPanelで図形を打ち直すには「再開」(=BrowserPanelの名前クリック)で
+      // 戻る必要がある(ParametersPanel廃止に伴う受け入れた損失)。
+      humanSketchId = await page.evaluate(() => window.__duocad.activeSketch)
       return 'XY平面のグリッドをクリックしてスケッチを作り、そのままモードへ入った'
     })
 
@@ -544,13 +550,27 @@ async function main() {
 
     await attempt('human', 'set_parameter', async () => {
       const before = (await look()).parts[0].volume
-      const entry = await page.evaluate(() => {
-        const entries = Object.entries(window.__duocad.parameters)
-        const hit = entries.find(([, value]) => Math.abs(value - 60) < 1e-9) // 長方形の幅
-        return hit ? { name: hit[0], value: hit[1] } : null
+      // **打ち直すのはSketchPanel**(ParametersPanel廃止)。長方形はもうスケッチモードの
+      // 外にいる図形なので、「再開」(BrowserPanelの名前クリック)でそのスケッチへ戻ってから
+      // 図形の一覧の入力欄を打つ —— 人間が実際にやる手順そのもの。
+      await page.click(`[data-sketch-id="${humanSketchId}"] .sketch-name`)
+      await waitFor(
+        (id) => window.__duocad.activeSketch === id,
+        '長方形のスケッチへ再入場できない',
+        humanSketchId,
+      )
+      const target = await page.evaluate(() => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        for (const entity of active.entities) {
+          for (const [key, value] of Object.entries(entity.params)) {
+            if (Math.abs(value - 60) < 1e-9) return { entityId: entity.entity_id, key } // 長方形の幅
+          }
+        }
+        return null
       })
-      if (!entry) throw new Error('長方形の幅がパラメータ一覧に出ていない')
-      await typeInto(`[id="parameter-${entry.name}"]`, 50)
+      if (!target) throw new Error('長方形の幅がSketchPanelの図形一覧に出ていない')
+      await typeInto(`[id="param-${target.entityId}-${target.key}"]`, 50)
       await page.keyboard.press('Enter')
       await waitFor(
         (previous) => Math.abs(window.__duocad.parts[0].volume - previous) > 1e-6,
@@ -558,7 +578,9 @@ async function main() {
         before,
       )
       const after = (await look()).parts[0].volume
-      return `パラメータ一覧で ${entry.name} を 60 → 50 に打ち直した(体積 ${before.toFixed(2)} → ${after.toFixed(2)})`
+      await page.click('#sketch-exit')
+      await waitFor(() => window.__duocad.activeSketch === null, '長方形のスケッチを抜けられない')
+      return `SketchPanelで再開して ${target.key} を 60 → 50 に打ち直した(体積 ${before.toFixed(2)} → ${after.toFixed(2)})`
     })
 
     await attempt('human', 'set_visible', async () => {

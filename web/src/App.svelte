@@ -31,7 +31,6 @@
     needsSketchId,
   } from './commands/features'
   import { FILE_COMMANDS, changesDocument } from './commands/files'
-  import ParametersPanel from './ParametersPanel.svelte'
   import {
     DEFAULT_SKETCH_COMMAND_ID,
     SKETCH_COMMANDS,
@@ -270,9 +269,6 @@
     if (!message) return
     messages = [message, ...messages].slice(0, 4)
   }
-  /** パネルへ渡す通知(プロパティ名と関数名を揃えるためだけの別名)。 */
-  const onNote = note
-
   /**
    * **エラー**を1件、トーストで出す(拒まれた・失敗した・繋がらない)。
    *
@@ -440,7 +436,7 @@
   /**
    * ファイル名を渡して保存する(新規保存も一覧からの上書きも同じverb)。
    *
-   * **`pendingOp` は立てない** —— `ParametersPanel.svelte` の `onSetParameter` と同じ
+   * **`pendingOp` は立てない** —— `SketchPanel.svelte` の `onSetParameter`(打ち直し)と同じ
    * 理由で、`FilesPanel.svelte` は `CommandHost` の応答待ちの外にいる。
    */
   function saveDocumentAs(name: string): void {
@@ -1131,13 +1127,6 @@
         onCancel={() => session.aiCancel()}
         onConfigure={(providerKind, modelName, baseUrl) =>
           session.aiConfigure(providerKind, modelName, baseUrl)}
-      />
-
-      <ParametersPanel
-        parameters={model?.parameters ?? {}}
-        {sketches}
-        onSetParameter={setParameter}
-        {onNote}
       />
 
       <SketchPanel

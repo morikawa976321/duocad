@@ -4,7 +4,7 @@
  *
  * **保存/開くだけは `CommandHost` に無い**。`duocad/models/` 配下の**ファイル名の一覧から
  * 選ぶ**形なので、`FilesPanel.svelte`(一覧・クリックで開く・上書き・新規保存)が担当し、
- * `session.runVerb(...)` を直接呼ぶ(`ParametersPanel.svelte` の `onSetParameter` と同じ形)。
+ * `session.runVerb(...)` を直接呼ぶ(`SketchPanel.svelte` の `onSetParameter` と同じ形)。
  *
  * **保存形式は操作ログのJSON**で、形状は導出物である。したがって「開く」は再生であり、
  * **開くたびに再生経路が検査される**ことになる。

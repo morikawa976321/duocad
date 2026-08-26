@@ -8,7 +8,7 @@
    割れないことを面数で見る。
 3. **ログ1行・undo1回** — ロゴ1枚が数百行にならない。`add_bezier` というverbは**無い**。
 4. **再生は外部ファイルを読まない** — SVGを消してもログから同じ形が戻る。
-5. **取り込んだ図形は名前つきの値を持たない** — ParametersPanel がロゴ1枚で埋まらない。
+5. **取り込んだ図形は名前つきの値を持たない** — SketchPanelの図形一覧がロゴ1枚で埋まらない。
 """
 from __future__ import annotations
 
@@ -286,7 +286,7 @@ def test_imported_entities_do_not_create_named_parameters(tmp_path: Path) -> Non
     """取り込んだ図形は `d1` `d2` … を作らない。
 
     制御点の座標は人が打ち直す寸法ではない。名前つきの値に登録すると、ロゴ1枚で
-    数千個が ParametersPanel に並び、しかも `register_value` は1から線形に採番するので
+    数千個がSketchPanelの図形一覧に並び、しかも `register_value` は1から線形に採番するので
     O(n^2)になる(小さなSVGで既に309個という実測がある)。
     """
     document = Document()

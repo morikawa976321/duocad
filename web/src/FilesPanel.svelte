@@ -8,7 +8,7 @@
    * **`duocad/models/` の中身を一覧で見せて、クリック1つで開く**。`BrowserPanel.svelte`
    * と同じ作りで、**状態はコアが持つ**(`documents` はサーバの
    * `list_documents` が返した一覧の写しで、ここでは何も覚えない)。保存・開く・一覧はどれも
-   * `App.svelte` が `session.runVerb(...)` で直接送る(`ParametersPanel.svelte` の
+   * `App.svelte` が `session.runVerb(...)` で直接送る(`SketchPanel.svelte` の
    * `onSetParameter` と同じ形。`CommandHost` は経由しない —— 一覧からのクリックは「対象を
    * 選ぶ」そのものであって、引数収集の状態機械を通す理由が無い)。
    *
@@ -42,7 +42,7 @@
     onNew: () => void
   } = $props()
 
-  /** 打ちかけの新規保存名。送ったら空に戻す(ParametersPanelの`editing`と同じ規律)。 */
+  /** 打ちかけの新規保存名。送ったら空に戻す(SketchPanelの`editing`と同じ規律)。 */
   let draftName = $state('')
 
   /**

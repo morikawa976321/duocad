@@ -73,6 +73,10 @@
   function shown(entity: SketchState['entities'][number]): Array<[string, number]> {
     return Object.entries(entity.params)
   }
+
+  function shownPattern(pattern: SketchState['patterns'][number]): Array<[string, number]> {
+    return Object.entries(pattern.params)
+  }
 </script>
 
 <section class="sketch-panel" data-active={activeSketchId ?? ''}>
@@ -144,6 +148,40 @@
                 if (event.key !== 'Enter') return
                 event.preventDefault()
                 commitParam(entity.entity_id, key, entity.refs[key])
+              }}
+            />
+          {/each}
+        </div>
+      {/each}
+      {#each active.patterns as pattern (pattern.pattern_id)}
+        <div class="item" data-pattern={pattern.pattern_id} data-kind={pattern.kind}>
+          <!-- 反復はラベルのみ(ボタンにしない) —— 図形の `kind` ボタンは
+               「反復の対象に取る/外す」の意味だが、反復を反復の対象には取れない。 -->
+          <span class="label" title={pattern.kind}>
+            {pattern.kind === 'circular' ? '円形反復' : '矩形反復'}
+          </span>
+          <span class="param">元 {pattern.sources.length}個</span>
+          {#each shownPattern(pattern) as [key, value] (key)}
+            <label class="param" for={`param-${pattern.pattern_id}-${key}`}>{key}</label>
+            <input
+              id={`param-${pattern.pattern_id}-${key}`}
+              data-param={key}
+              type="text"
+              inputmode="decimal"
+              autocomplete="off"
+              disabled={pattern.refs[key] === null}
+              title={pattern.refs[key] ?? '素の数値(打ち直せない)'}
+              value={editing[editKey(pattern.pattern_id, key)] ?? String(value)}
+              oninput={(event) => {
+                editing = {
+                  ...editing,
+                  [editKey(pattern.pattern_id, key)]: (event.target as HTMLInputElement).value,
+                }
+              }}
+              onkeydown={(event) => {
+                if (event.key !== 'Enter') return
+                event.preventDefault()
+                commitParam(pattern.pattern_id, key, pattern.refs[key])
               }}
             />
           {/each}

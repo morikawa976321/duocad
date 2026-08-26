@@ -16,8 +16,8 @@ svgelementsの版が変われば同じログから別の形が出てくること
 同じ形になる」が黙って壊れる。`args["source_name"]` は元のファイル名でパスではない。
 
 **取り込んだ図形の数値は名前つきの値に登録しない**(素の数値のまま持つ)。制御点の座標は
-人が打ち直す寸法ではなく、`register_value` に通すとロゴ1枚で数千個の `d1` が
-ParametersPanel に並ぶ。`parameters.resolve` は素の数値をそのまま返すので、この形は
+人が打ち直す寸法ではなく、`register_value` に通すとロゴ1枚で数千個の `d1` が生まれ、
+SketchPanelの図形一覧が埋まる。`parameters.resolve` は素の数値をそのまま返すので、この形は
 元から通る(`sketch.Entity` のdocstring)。
 
 失敗は黙って通さない: パス無し=FileNotFoundError / 壊れている・図形が無い・多すぎる=ValueError

@@ -411,12 +411,15 @@ class Session:
             {"sketch_id", "plane": <PlaneRef>,
              "frame": {"origin","u","v","normal"},          # (u,v) と3Dの往復の規則
              "entities": [{"entity_id","kind","params","refs"}],   # 打ち直し用(名前つき)
+             "patterns": [{"pattern_id","kind","sources","params","refs","options"}],  # 反復の打ち直し用
              "drawn":    [{"kind","params"}],                      # 反復を展開した描画用
              "regions":  [{"index","area","centroid","positions","indices"}]}
 
         **`entities` と `drawn` を分けている理由**: 前者は人が値を打ち直す対象(`refs` に
         パラメータ名が入る)で、後者は反復を展開した「実際に見えるもの」。反復した図形が
-        画面に出ないのに領域だけ増える、を避けるため描画は必ず `drawn` を使う。
+        画面に出ないのに領域だけ増える、を避けるため描画は必ず `drawn` を使う。**`patterns`**は
+        `entities` と対になる打ち直し用の口(反復の間隔・個数)で、`SketchPanel.svelte` が図形の
+        行に続けて出す(2026-08-27、`ParametersPanel.svelte` 廃止に伴い統合)。
 
         **領域の計算は重い**(`BRepAlgoAPI_Splitter`+テセレーション)。`state` は変更のたびに
         全接続へ配るので、**スケッチの内容の署名でキャッシュする**。署名には解決済みの数値が
@@ -488,6 +491,33 @@ class Session:
                 f"スケッチ {item.id} の図形を読めない: {type(error).__name__}: {error}"
             )
             payload["entities"] = []
+        # 反復も同じ理由でキャッシュしない・try で包む(上の `entities` と同じ規律)。
+        # SketchPanelが反復の行を出すために要る(`pattern_id`/`kind`/`sources`/`params`/
+        # `refs`/`options`。`entities` と同じ形にしておくと、フロント側の打ち直しの
+        # コンポーネント(`commitParam`)をそのまま使い回せる)。
+        try:
+            payload["patterns"] = [
+                {
+                    "pattern_id": pattern.id,
+                    "kind": pattern.kind,
+                    "sources": list(pattern.sources),
+                    "params": {
+                        key: parameters.resolve(self.document, ref)
+                        for key, ref in pattern.params.items()
+                    },
+                    "refs": {
+                        key: ref if isinstance(ref, str) else None
+                        for key, ref in pattern.params.items()
+                    },
+                    "options": dict(pattern.options),
+                }
+                for pattern in item.patterns
+            ]
+        except Exception as error:
+            self.warnings.append(
+                f"スケッチ {item.id} の反復を読めない: {type(error).__name__}: {error}"
+            )
+            payload["patterns"] = []
         return payload
 
     # ---------------------------------------------------------------- M3.5: 差分送信
