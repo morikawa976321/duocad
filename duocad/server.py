@@ -919,7 +919,8 @@ class Session:
 
         押し出す領域は引数ではなく選択から取る。**`body_id` だけは引数のまま** ——
         これは「どのBodyへ足す/から引くか」であって対象集合ではない(Bodyは選択集合の
-        項目ではない。MCPの `extrude` も同じ形)。
+        項目ではない。MCPの `extrude` も同じ形)。`mode="new"` は行き先を持たないので
+        `body_id` を渡すと ValueError(ブラウザからは元々送れない)。
         """
         refs = [
             region.RegionRef.from_dict(item)

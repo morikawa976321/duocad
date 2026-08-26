@@ -749,6 +749,35 @@ def test_extrude_can_cut(empty_session: Session):
     assert payload["changed_bodies"] == [body.id]
 
 
+def test_extrude_can_make_a_new_body(empty_session: Session):
+    """`mode="new"` が実際にコアへ届く(既存ボディがあっても融合しない)。
+
+    `join` との差はボディの本数にしか出ない —— `new` を読み飛ばして `join` に落ちる実装は、
+    形が増えるので**体積だけ見ていると緑になる**。AIが「別のボディとして作って」と言われた
+    ときに黙って融合させないための一点。
+    """
+    server = McpServer(DocumentTools(empty_session))
+    plate = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
+    call(server, "add_rectangle", {"sketch_id": plate, "corner": [0, 0], "width": BOX_X, "height": BOX_Y})
+    select_refs(server, [{"sketch": plate, "index": 1}])
+    call(server, "extrude", {"distance": BOX_Z, "mode": "join"})
+    first = empty_session.document.bodies[0]
+
+    second = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
+    call(server, "add_rectangle", {"sketch_id": second, "corner": [5, 5], "width": 10, "height": 10})
+    select_refs(server, [{"sketch": second, "index": 1}])
+    payload = call(server, "extrude", {"distance": BOX_Z, "mode": "new"})
+
+    _assert_verb_envelope(payload, "extrude")
+    assert len(empty_session.document.bodies) == 2, "new が既存ボディへ融合している"
+    created = empty_session.document.bodies[1]
+    assert payload["changed_bodies"] == [created.id]
+    assert query.volume(first.shape) == pytest.approx(BOX_X * BOX_Y * BOX_Z, rel=1e-9), (
+        "new が元のボディの形を変えている"
+    )
+    assert query.volume(created.shape) == pytest.approx(10.0 * 10.0 * BOX_Z, rel=1e-9)
+
+
 def test_extrude_face_takes_its_face_from_the_selection(server: McpServer, box_session: Session):
     """`extrude_face` は**選択された面**を押す(添字を引数で受けない)。"""
     box = box_session.document.bodies[0]

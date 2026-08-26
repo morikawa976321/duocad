@@ -126,6 +126,99 @@ def test_join_fuses_into_the_existing_body():
     )
 
 
+# --------------------------------------------------------------------------------------
+# `new` — 「対象があっても融合しない」種別(2026-08-26)
+# --------------------------------------------------------------------------------------
+def test_new_makes_a_second_body_instead_of_fusing():
+    """`mode="new"` は対象ボディがあっても融合せず、**独立したソリッドを1つ足す**。
+
+    `test_join_fuses_into_the_existing_body` と**同じ入力**を種別だけ変えて打つ。
+    `join` は 1ボディ・+500(重なる10mmは増えない)、`new` は 2ボディ・板はそのままで
+    10×10×15 = 1500 の別ソリッドになる。**この差が出なければ `new` が `join` に
+    落ちている**(既存ボディがいると2つ目の板が作れない元の状態に戻る)。
+    """
+    document = plate_document()
+    plate = document.active_body()
+    sketch_id = sketch_create(document, "XY")
+    add_rectangle(document, sketch_id, (10.0, 10.0), 10.0, 10.0)
+    boss = regions(document, sketch_id)
+
+    extrude(document, [region_ref(sketch_id, boss[0].index)], 15.0, mode="new")
+
+    assert len(document.bodies) == 2, "new が既存ボディへ融合している"
+    assert math.isclose(query.volume(plate.shape), PLATE_VOLUME, rel_tol=VOLUME_REL_TOL), (
+        "new が元の板の形を変えている"
+    )
+    created = document.active_body()
+    assert created is not None and created.id != plate.id, "作ったボディがactiveになっていない"
+    assert document.is_editable(created.id) is True, "作ったボディは kind='solid'"
+    assert math.isclose(
+        query.volume(created.shape), 10.0 * 10.0 * 15.0, rel_tol=VOLUME_REL_TOL
+    )
+
+
+def test_new_refuses_a_body_id():
+    """`new` に行き先を渡したら ValueError。文書にもログにも何も残さない。
+
+    黙って無視すると「そのボディへ足したつもりが別ボディになっていた」が成功として通る
+    —— しかも形は増えるので、画面上は失敗に見えない(`mode` を既定で埋めない理由と同じ)。
+    """
+    document = plate_document()
+    plate = document.active_body()
+    sketch_id = sketch_create(document, "XY")
+    add_rectangle(document, sketch_id, (10.0, 10.0), 10.0, 10.0)
+    boss = regions(document, sketch_id)
+    entries_before = len(document.log.entries)
+
+    with pytest.raises(ValueError):
+        extrude(
+            document,
+            [region_ref(sketch_id, boss[0].index)],
+            15.0,
+            mode="new",
+            body_id=plate.id,
+        )
+
+    assert len(document.bodies) == 1
+    assert len(document.log.entries) == entries_before
+    assert math.isclose(query.volume(plate.shape), PLATE_VOLUME, rel_tol=VOLUME_REL_TOL)
+
+
+def test_new_is_undoable_and_replays():
+    """`new` で作ったボディは undo で消え、保存したログの再生でも同じ2ボディに戻る。
+
+    再生の分岐が `join`(「無ければ作る」)と別なので、ここを通さないと**開くと
+    ボディが1つに融合している**という形で表面化する。
+    """
+    document = plate_document()
+    plate_id = document.active_body().id
+    sketch_id = sketch_create(document, "XY")
+    add_rectangle(document, sketch_id, (10.0, 10.0), 10.0, 10.0)
+    boss = regions(document, sketch_id)
+    operation = extrude(
+        document, [region_ref(sketch_id, boss[0].index)], 15.0, mode="new"
+    )
+    created_id = operation.args["body_id"]
+    assert created_id != plate_id
+
+    document.log.undo(document)
+    assert [body.id for body in document.bodies] == [plate_id], "undoで新規ボディが残っている"
+
+    document.log.redo(document)
+    assert [body.id for body in document.bodies] == [plate_id, created_id]
+
+    replayed = Document()
+    replayed.log = OpLog.from_json(document.log.to_json())
+    replayed.log.replay(replayed)
+
+    assert [body.id for body in replayed.bodies] == [plate_id, created_id]
+    assert math.isclose(
+        query.volume(replayed.get_body(created_id).shape),
+        10.0 * 10.0 * 15.0,
+        rel_tol=VOLUME_REL_TOL,
+    )
+
+
 def test_extrude_is_logged_and_undoable():
     """押し出しが操作ログに1行で載り、undoで戻る(verbの粒度。§2)。
 

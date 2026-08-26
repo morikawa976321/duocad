@@ -50,8 +50,13 @@ function missingSelection(values: ArgValues, name: string, label: string): strin
  * 領域の押し出し。**手だけで板に穴を開けられるようになる1本**。
  *
  * `extrude_face`(面を押す)とは別のverbである。こちらはスケッチの領域を取り、
- * `join` で足し `cut` で引く。**向きを人に選ばせる**のは、既定の `join` に落ちると
- * 「切り取るつもりで足した」が黙って通り、しかも形が増えるので失敗に見えないため。
+ * `join` で足し `cut` で引き、`new` で独立したボディにする。**種別を人に選ばせる**のは、
+ * 既定の `join` に落ちると「切り取るつもりで足した」が黙って通り、しかも形が増えるので
+ * 失敗に見えないため。
+ *
+ * **`new`(新規ボディ)を明示的に選べることが要る**のは、`join` が「行き先が無ければ作る」
+ * という**落ち方**でしか新しいボディを作れなかったから —— 既存のボディがいる文書では
+ * 2つ目の板が作れず、黙って融合していた。
  */
 export const EXTRUDE_REGIONS: CommandDef = {
   id: 'extrude',
@@ -80,10 +85,11 @@ export const EXTRUDE_REGIONS: CommandDef = {
     {
       kind: 'choice',
       name: 'mode',
-      label: '向き',
+      label: '種別',
       options: [
         { value: 'join', label: '結合', buttonId: 'extrude-mode-join' },
         { value: 'cut', label: '切り取り', buttonId: 'extrude-mode-cut' },
+        { value: 'new', label: '新規ボディ', buttonId: 'extrude-mode-new' },
       ],
     },
   ],
@@ -93,7 +99,7 @@ export const EXTRUDE_REGIONS: CommandDef = {
     const mode = values.mode
     if (empty !== null) return { ok: false, reason: empty }
     if (typeof distance !== 'number') return { ok: false, reason: '距離が数値でない' }
-    if (typeof mode !== 'string') return { ok: false, reason: '向きが選ばれていない' }
+    if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
     return { ok: true, args: { distance, mode } }
   },
 }

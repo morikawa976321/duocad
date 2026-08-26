@@ -14,7 +14,7 @@ UI(領域押し出し・フィレット・面取り・反復のコマンド)そ�
   確定選択から取るので、WebSocketへ送るのは数値と `mode` だけである
 - 辺は**要求した接続にだけ**返る(状態配信に混ぜない)。形が変われば `revision` が上がる
 - 領域押し出し・フィレット・面取り・矩形反復・円形反復をWebSocketから踏める
-- **`mode`(join/cut)は必須**。既定値で補わない(切り取るつもりで足すのを黙って通さない)
+- **`mode`(join/cut/new)は必須**。既定値で補わない(切り取るつもりで足すのを黙って通さない)
 - **フィレットの失敗は文書に何も残さない**(OCCTは例外を投げずに失敗し、半径に対して単調でも
   ない)。**選択も保持される** —— 24本選び直しにならないことがUI側の要件の前提
 - プレビューはフィレット・面取り・領域押し出しでも**何も残さない**
@@ -290,6 +290,31 @@ def test_extrude_without_a_mode_is_refused(session: Session) -> None:
 
     assert answer["type"] == "error"
     assert _fingerprint(session) == before
+
+
+def test_the_browser_can_make_a_new_body(session: Session) -> None:
+    """`mode="new"` をブラウザから打つと、**既存の立方体に融合せず**2つ目のボディが増える。
+
+    ブラウザは `body_id` を送れない(`catalog` の `ws=False`)ので、`join` のときの行き先は
+    常にアクティブなボディである —— つまり**画面からは既存ボディがある限り2つ目の板が
+    作れなかった**。`new` はその一点を開ける口なので、WSの経路でも通しておく。
+    """
+    box, _ = _box(session)
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_rectangle(sketch_id, [5.0, 5.0], 10.0, 10.0)
+    _select(session, [{"sketch": sketch_id, "index": 1}])
+
+    async def script(send):
+        return await send({"cmd": "extrude", "distance": SIDE, "mode": "new", "client_op": 3})
+
+    (answer, _clients) = _browser(session, script)
+
+    assert answer["type"] == "state"
+    assert len(session.document.bodies) == 2, "new が既存ボディへ融合している"
+    assert math.isclose(query.volume(box.shape), SIDE**3, rel_tol=1e-9), "元の立方体が変わっている"
+    created = session.document.bodies[-1]
+    assert created.id != box.id
+    assert math.isclose(query.volume(created.shape), 10.0 * 10.0 * SIDE, rel_tol=1e-9)
 
 
 def test_the_browser_can_fillet_the_edges_it_picked(session: Session) -> None:

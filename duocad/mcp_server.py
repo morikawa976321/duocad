@@ -715,6 +715,7 @@ class DocumentTools:
         """**確定選択の領域**を押し出す(選択から取るのは `Session.extrude_regions`)。
 
         `body_id` だけは引数のまま —— 「どのBodyへ足す/から引くか」は対象集合ではない。
+        `mode="new"` は行き先を持たないので `body_id` を受け付けない。
         """
         before = self._revision_snapshot()
         applied = self.session.extrude_regions(

@@ -1,13 +1,17 @@
 """verb `extrude` — スケッチの**領域**を押し出す。
 
 `extrude_face`(既存ソリッドの面を押す)とは別のverbである。こちらは**領域の集合**を対象に
-取り、`mode="join"` で足し、`mode="cut"` で引く。
+取り、`mode="join"` で足し、`mode="cut"` で引き、`mode="new"` で独立したボディにする。
 
 - `"join"` … 対象ボディへ足す。**対象が無ければ新しいソリッドを1つ作る**(最初の板はこれで
   生まれる)。作った場合も `args["body_id"]` にそのIDを記録する(再生で同じIDが再現できないと
   選択が壊れるため)。
 - `"cut"` … 対象ボディから引く。**対象が無ければ ValueError**(引く相手が無いのに成功した
   ことにしない)。
+- `"new"` … **対象が何であっても、常に新しいソリッドを1つ作る**。`join` の「対象が無ければ
+  作る」という**落ち方**を、種別として言えるようにしたもの —— これが無いと、既存部品がいる
+  文書では2つ目の板が作れず(`join` が黙って融合する)、最初の板は空の文書でしか生まれない。
+  **`body_id` は受け付けない**(行き先の無い操作に行き先を渡されたら取り違えである)。
 
 **失敗を黙って通さない**: 領域が空・添字が範囲外・`mode` が未知・距離0・ブーリアン失敗の
 いずれでも例外を送出し、**documentにもログにも変更を残さない**。とくに「切り取ったのに穴が
@@ -28,8 +32,8 @@ from ..sketch import get_sketch
 
 VERB_EXTRUDE = "extrude"
 
-#: 押し出しの向き(実装計画書§1「mode(join | cut)」)
-MODES = ("join", "cut")
+#: 押し出しの種別(実装計画書§1「mode(join | cut)」＋ new)
+MODES = ("join", "cut", "new")
 
 #: (document) -> {(body_id, seq): 押し出し前の形状 | None(新規作成)}。
 
@@ -94,12 +98,22 @@ def _resolve_target(
 ) -> tuple[Optional[Body], Optional[BodyId]]:
     """対象ボディを決める。cut で対象が無い・reference は ValueError。
 
+    **`new` は対象を決めない**(常に新規作成)。`body_id` を渡されたら ValueError。
+
     `body_id` を省略したときのアクティブボディが**編集できない**(読み込んだ参照STEP)なら、
     「対象が無い」として扱う — `import_step` はボディを常にアクティブにするので、
     参照部品を読んだ直後の文書では join が最初の板を作れなくなる。棚取付具を参照として読み、
     その隣に板を作るのがまさにこの経路である。
     一方、**明示的に参照ボディを指定された場合は ValueError**(取り違えを黙認しない)。
     """
+    if mode == "new":
+        if body_id is not None:
+            raise ValueError(
+                f"new does not take a body_id (got {body_id!r}): "
+                "新規ボディに行き先は無い。足すなら mode='join' を使うこと"
+            )
+        return None, None
+
     if body_id is None:
         active = doc.active_body()
         if active is not None and doc.is_editable(active.id):
@@ -188,6 +202,21 @@ def _do_extrude(document: Document, operation: Operation) -> None:
     existing = next(
         (candidate for candidate in document.bodies if candidate.id == body_id), None
     )
+
+    if mode == "new":
+        # **常に作る**(`join` のように既存へ合流しない)。同じIDが既にいるなら再生の
+        # 前提が壊れているので、黙って上書き・融合させずに落とす。
+        if existing is not None:
+            raise ValueError(
+                f"cannot replay new: body {body_id!r} already exists"
+            )
+        result = kernel.extrude_regions(faces, distance, mode, normal, target_shape=None)
+        document.add_body(
+            Body(id=body_id, name="solid", kind="solid", shape=result["shape"])
+        )
+        remember(document, body_id, operation.seq, None)
+        return
+
     if existing is None:
         if mode != "join":
             raise ValueError(f"cannot replay {mode} without target body {body_id!r}")

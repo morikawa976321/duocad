@@ -526,7 +526,7 @@ regions(doc, sketch_id) -> list[Region]         # スタブ
 
 ```python
 extrude(doc, regions, distance, mode="join", body_id=None) -> Operation   # スタブ
-MODES = ("join", "cut")
+MODES = ("join", "cut", "new")          # new は2026-08-26追加
 ```
 
 **契約**:
@@ -539,6 +539,17 @@ MODES = ("join", "cut")
 - `mode="join"` … 対象ボディへ足す。**対象が無ければ新しいソリッド（`kind="solid"`）を
   1つ作り、アクティブにする**（最初の板はこれで生まれる）。
   `mode="cut"` … 対象から引く。**対象が無ければ `ValueError`**。
+  `mode="new"`（2026-08-26追加）… **対象があっても融合せず、常に新しいソリッドを1つ作る**。
+  `join` の「行き先が無ければ作る」という**落ち方**を種別として言えるようにしたもので、
+  これが無いと既存のボディがいる文書では2つ目の板が作れなかった（ブラウザは `body_id` を
+  送れないので逃げ道も無い）。**`body_id` を渡すと `ValueError`** —— 黙って無視すると
+  「そのボディへ足したつもりが別ボディになっていた」が、形が増えるぶん失敗に見えないまま
+  通る（`mode` を既定で埋めない理由と同じ）。再生の分岐も `join` とは別で、
+  **既に同じIDのボディがいたら `ValueError`**（黙って融合・上書きさせない）。
+  固定は `test_extrude.py::test_new_makes_a_second_body_instead_of_fusing` /
+  `::test_new_refuses_a_body_id` / `::test_new_is_undoable_and_replays`、
+  WSは `test_feature_ui.py::test_the_browser_can_make_a_new_body`、
+  MCPは `test_mcp_verbs.py::test_extrude_can_make_a_new_body`。
 - `body_id` の既定はアクティブボディ。`kind="reference"` は `ValueError`（M0の読み取り専用契約）。
 - ログの `args` は `{"regions": [<dict>...], "distance":.., "mode":.., "body_id":..}`、
   `selection` は同じ `RegionRef` のdictの並び。**join が作ったボディのIDも `args["body_id"]`
@@ -2615,7 +2626,7 @@ sketches[] = {
 
 1. **`FEATURE_COMMANDS`** — ブラウザから踏めるフィーチャのverb（`extrude` / `fillet` /
    `chamfer` / `pattern_rectangular` / `pattern_circular`）。`SKETCH_COMMANDS` と同じ登録制で、
-   **引数が1つでも欠けたら失敗させる**。とくに `mode`（join/cut）を必須にしてある ——
+   **引数が1つでも欠けたら失敗させる**。とくに `mode`（join/cut/new）を必須にしてある ——
    既定の `"join"` に落ちると**「切り取るつもりで足した」が黙って通り**、しかも形が増えるので
    失敗に見えない。
    **2026-08-20に対象集合（`edges` / `regions` / 対象の `body_id`）を引数から落とした。**

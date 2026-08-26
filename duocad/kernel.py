@@ -778,7 +778,7 @@ def extrude_regions(
     normal: Sequence[float],
     target_shape: Any = None,
 ) -> dict:
-    """領域の面群を法線方向へ押し出し、join/cut した形状を返す。
+    """領域の面群を法線方向へ押し出し、join/cut/new した形状を返す。
 
     戻り値: {"shape": TopoDS_Shape, "volume_before": float | None, "volume_after": float}
     """
@@ -787,10 +787,14 @@ def extrude_regions(
     distance = float(distance)
     if distance == 0.0:
         raise ValueError("distance must not be 0 (押し出し量0は形状を変えない)")
-    if mode not in ("join", "cut"):
+    if mode not in ("join", "cut", "new"):
         raise ValueError(f"unknown extrude mode: {mode!r}")
     if mode == "cut" and (target_shape is None or target_shape.IsNull()):
         raise ValueError("cut requires a target shape")
+    if mode == "new" and target_shape is not None and not target_shape.IsNull():
+        # `new` は**必ず独立したソリッドになる**。相手を渡されたのに黙って無視すると
+        # 「足したつもりが別ボディになっていた」が成功として通る。
+        raise ValueError("new must not take a target shape (新規ボディに行き先は無い)")
 
     nx, ny, nz = float(normal[0]), float(normal[1]), float(normal[2])
     offset = gp_Vec(nx * distance, ny * distance, nz * distance)
@@ -824,7 +828,8 @@ def extrude_regions(
             raise ValueError("fusing region prisms produced an empty shape")
 
     volume_before: Optional[float] = None
-    if mode == "join":
+    if mode in ("join", "new"):
+        # `new` はここへ来る時点で `target_shape is None` が保証されている(上の検査)。
         if target_shape is None or target_shape.IsNull():
             result = combined
         else:

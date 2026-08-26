@@ -424,7 +424,7 @@ COMMANDS: tuple[Command, ...] = (
         name="extrude",
         category="feature",
         description=(
-            "確定選択の領域を押し出してソリッドを足す/切るときに呼ぶ。"
+            "確定選択の領域を押し出して、ソリッドを足す/切る/新しいボディにするときに呼ぶ。"
             "領域は選択から取る(引数では受けない)。"
         ),
         params=(
@@ -432,13 +432,14 @@ COMMANDS: tuple[Command, ...] = (
             Param(
                 "mode",
                 "string",
-                "join(足す・既定) または cut(切る)",
+                "join(足す・既定) / cut(切る) / new(独立した新しいボディを作る)",
                 required=False,
             ),
             Param(
                 "body_id",
                 "string",
-                "対象ボディ。省略時はアクティブ(無ければ新規作成)",
+                "対象ボディ。省略時はアクティブ(無ければ新規作成)。"
+                "mode='new' では指定できない(行き先を持たない)",
                 required=False,
                 ws=False,
             ),

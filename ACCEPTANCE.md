@@ -57,7 +57,7 @@ duocad> node web/scripts/acceptance.mjs
 | 3 | `add_circle` | ✅ | ✅ | 中心をクリック → 半径10を打つ → Enter / `center`,`radius` |
 | 4 | `add_rectangle` | ✅ | ✅ | 左下をクリック → 幅60・高さ40 → Enter / `corner`,`width`,`height` |
 | 5 | `add_arc` | ✅ | ✅ | 中心をクリック → 半径・開始角・終了角 / 同じ4引数 |
-| 6 | `extrude`（領域） | ✅ | ✅ | 領域をクリック → 距離10 → **結合/切り取りを選ぶ** → Enter / 領域を `measure` で確かめてから `commit` → `distance`,`mode` |
+| 6 | `extrude`（領域） | ✅ | ✅ | 領域をクリック → 距離10 → **結合/切り取り/新規ボディを選ぶ** → Enter / 領域を `measure` で確かめてから `commit` → `distance`,`mode` |
 | 7 | `extrude_face` | ✅ | ✅ | 面をクリック → 距離2 → **プレビューが出てから** Enter（体積 24000→25200） / 述語 `kind_is plane` で選び直して3mm |
 | 8 | `fillet` | ✅ | ✅ | **辺を本物のクリックで選び**半径2（面 6→7） / 述語 `kind_is circle` で選び半径1 |
 | 9 | `chamfer` | ✅ | ✅ | 辺を選び長さ1（面 7→10） / 述語で円い辺を選び長さ1 |
