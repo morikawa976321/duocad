@@ -177,6 +177,16 @@
    */
   let currentDocumentName = $state<string | null>(null)
   /**
+   * 左サイドバー(ファイル一覧)を出しているか。**見た目だけの状態**で、コアには送らない
+   * (モデルの状態ではないので操作ログにも残さない)。
+   *
+   * 畳むとビューポートが横に広がる —— `.viewport` は ResizeObserver で自分の寸法を
+   * 見張っており(`viewport.ts` の `applySize`)、カメラのアスペクトも追随する。
+   * **開閉のたびに射影が変わる**ので、画面の座標を覚えて使い回す側(実機検査)は
+   * 開閉を挟んだら取り直すこと。
+   */
+  let dataPanelOpen = $state(true)
+  /**
    * この画面が出した `client_op` の控え。
    *
    * **`pendingOp` では足りない** —— パラメータの打ち直しや可視性の切り替えは
@@ -1074,6 +1084,19 @@
 
 <div class="app">
   <header>
+    <!-- 左サイドバー(ファイル一覧)の開閉。**実物をクリックできない対象なのでボタンを置く**
+         (UI指針1「実物クリックできるものにボタンを作らない」の裏返し —— パネルそのものは
+         畳むと画面から消えるので、外に手を出す場所が要る)。 -->
+    <button
+      id="data-panel-toggle"
+      class="tag"
+      class:on={dataPanelOpen}
+      onclick={() => (dataPanelOpen = !dataPanelOpen)}
+      title="ファイル一覧の表示/非表示"
+      aria-pressed={dataPanelOpen}
+    >
+      ファイル
+    </button>
     <strong>duocad</strong>
     <span class="tag" class:on={status === 'open'}>{status}</span>
     <!-- **現在開いているファイル名**(完了条件4)。未保存(この画面でまだ
@@ -1087,18 +1110,10 @@
     {/if}
   </header>
 
-  <!-- コマンドのツールバー。`FilesPanel` はコマンド引数収集(CommandHostの状態機械)と
-       無関係なので、`{#key}` の外に置いて作り直しの対象から外す(2026-08-23、本人裁定
-       `duocad-files-panel-selection-panel-verdict`: 保存機能だけをサイドバーで
-       特別扱いする必然性が無いため、丸ごとここへ統合した)。 -->
+  <!-- コマンドのツールバー。モードが変わったらコマンド層を作り直す(集めかけの引数を持ち越さない)。
+       `FilesPanel` はここには載らない —— 2026-08-23にいったんここへ統合したが、
+       2026-08-26に本人が左サイドバーへの復元を決定した(下の `.main` 直下の `.data-panel` 参照)。 -->
   <section class="toolbar">
-    <FilesPanel
-      documents={documentList}
-      currentName={currentDocumentName}
-      onSave={saveDocumentAs}
-      onOpen={openDocumentByName}
-      onNew={newDocument}
-    />
     {#key sketchId === null}
       <CommandHost
         bind:this={host}
@@ -1120,6 +1135,21 @@
   </section>
 
   <div class="main">
+    <!-- 左サイドバー: 保存済みファイルの一覧(Fusion 360のデータパネルに対応)。
+         **開閉で `.viewport` の幅が変わる**が、変えているのは相変わらず flex の配分だけで、
+         `.viewport` 自身のサイズ指定は動かない(styles.css の不変条件)。 -->
+    {#if dataPanelOpen}
+      <aside class="data-panel">
+        <FilesPanel
+          documents={documentList}
+          currentName={currentDocumentName}
+          onSave={saveDocumentAs}
+          onOpen={openDocumentByName}
+          onNew={newDocument}
+        />
+      </aside>
+    {/if}
+
     <!-- ビューポートと、その上に浮かぶブラウザの入れ物。**`.stage` が浮かせる側の位置の基準**で、
          大きさを決めているのは `.stage` の中の `.viewport` 1つだけ(ブラウザは position:absolute で
          フローの外にいるので、開閉してもカメラのアスペクトに触らない)。 -->

@@ -294,12 +294,23 @@ async function main() {
 
     // **描いたものに視点を合わせてから続ける**。空のスケッチに入った直後のカメラは
     // 何も無い場面に合わせてあるので、原点から離れた点は画面の外になる(実測で踏んだ)。
+    //
+    // **矩形(u[0,60]・v[0,40])の外へ逃がす場所を、横(u<0/u>60)から下(v<0)へ変えた**
+    // (2026-08-26、ファイル一覧が左サイドバーへ戻ってビューポートが240px狭まったため)。
+    // 横方向は実測でu=70やu=-20が軒並み画面の外になった一方、縦方向(v)は
+    // ウィンドウの幅を削っても変わらないFOVで決まるので、矩形の下端(v=0)からv=-10までの
+    // 帯は今も見える(実測)。**この帯の中に置くのは、矩形と交差させないため** ——
+    // `duocad/region.py` の領域計算は `BRepAlgoAPI_Splitter` で面をスケッチの辺すべてで
+    // 割るので、閉じていない線分・円弧でも矩形の内側を横切らせると分割線になり、
+    // 実際に「join produced an invalid shape」で押し出しが壊れることを実測で確認した。
+    // 矩形の外に完全に離してあれば、線分・円弧は閉じていないので新しい領域を作らず、
+    // 円だけが独立した小さな領域になる(以前の u=70/-20 配置と同じ理屈)。
     await page.click('#sketch-look')
 
     await attempt('human', 'add_line', async () => {
       await page.click('#sketch-line')
-      await clickPlane(70, 0)
-      await clickPlane(70, 30)
+      await clickPlane(5, -8)
+      await clickPlane(25, -8)
       // **Enterは押さない**(2026-08-22)。線分は対象が点2つ・howの入力が無いので
       // 2点目のクリックで即適用される(`command.ts` の `needsEnter`)。
       await waitFor(
@@ -315,8 +326,8 @@ async function main() {
 
     await attempt('human', 'add_circle', async () => {
       await page.click('#sketch-circle')
-      await clickPlane(-20, 20)
-      await typeInto('#sketch-radius', 10)
+      await clickPlane(35, -5)
+      await typeInto('#sketch-radius', 4)
       await page.keyboard.press('Enter')
       await waitFor(
         () => {
@@ -326,13 +337,13 @@ async function main() {
         },
         '円が置けない',
       )
-      return '中心をクリック → 半径10を打つ → Enter'
+      return '中心をクリック → 半径4を打つ → Enter'
     })
 
     await attempt('human', 'add_arc', async () => {
       await page.click('#sketch-arc')
-      await clickPlane(-20, -10)
-      await typeInto('#sketch-arc-radius', 8)
+      await clickPlane(50, -5)
+      await typeInto('#sketch-arc-radius', 3)
       await typeInto('#sketch-arc-start', 0)
       await typeInto('#sketch-arc-end', 120)
       await page.keyboard.press('Enter')
@@ -399,7 +410,7 @@ async function main() {
       )
       if (!picked) await page.click(`[id="entity-${circleId}"]`)
       await page.click('#pattern-circular')
-      await clickPlane(-20, 45)
+      await clickPlane(20, 45)
       await typeInto('#pattern-count', 4)
       await typeInto('#pattern-angle', 360)
       await page.keyboard.press('Enter')

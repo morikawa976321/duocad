@@ -458,9 +458,15 @@ async function main() {
     await createSketchOnBase('XY')
     await waitFor(() => window.__duocad.activeSketch !== null, '3枚目のスケッチに入れない')
     await page.click('#sketch-circle')
-    // **55**(board幅40 + clearance)。2026-08-23の下段バー削除でビューポートが縦に伸び、
-    // 新規スケッチの既定ズームで見えるuの上限が下がった(実測: u<=56で可視)ので80から詰めた。
-    await clickPlane(55, 0)
+    // **u軸ではなくv軸でboardの外へ出す**(2026-08-26、ファイル一覧が左サイドバーへ
+    // 戻ってビューポートが240px狭まり、u方向(横)の可視範囲がv方向(縦)より先に詰まった
+    // ——実測でu=40(boardの右端そのもの)すら画面の外になる。vはウィンドウの幅を
+    // 削っても変わらない縦のFOVで決まるので、boardの下(v<0)へ逃がせば同じ倍率のまま
+    // 見える。u=20はboard幅40の中で常に見えている位置、v=-25は「boardのv範囲[0,30]の
+    // 外」かつ実測で可視な範囲(実測: v>=-35で可視)。半径12の円はv∈[-37,-13]に収まり、
+    // boardの下端(v=0)との間に13の余白が残る(footprintがv方向で分離するので、
+    // u方向はboardと重なっていても円柱はboardと別の面として立つ)。
+    await clickPlane(20, -25)
     await typeInto('#sketch-radius', 12)
     await page.keyboard.press('Enter')
     await waitFor(
