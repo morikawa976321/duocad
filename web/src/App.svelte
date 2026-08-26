@@ -351,11 +351,13 @@
       return
     }
     if (applied && applied.change === 'document') {
-      // **開いた**(`open_document`)。保存と同じく、ここでファイル名を追い、
-      // 一覧も取り直す(開いた版が一覧の「操作数」に含まれるのはこのファイル自身なので
-      // 変わらないが、他の操作で増減している可能性は保存と同じく否定できない)。
+      // **開いた**(`open_document`)か**新規にした**(`new_document`)。保存と同じく、ここで
+      // ファイル名を追い、一覧も取り直す(開いた版が一覧の「操作数」に含まれるのはこの
+      // ファイル自身なので変わらないが、他の操作で増減している可能性は保存と同じく
+      // 否定できない)。**新規は `name` が `null`** で来るので、触っているファイルの表示は
+      // 「(未保存)」へ戻る。
       currentDocumentName = applied.name
-      note(`開いた: ${applied.name}`)
+      note(applied.name === null ? '新規の文書にした' : `開いた: ${applied.name}`)
       if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
       lastApplied = applied
       refreshDocuments()
@@ -442,6 +444,16 @@
   /** ファイル名を渡して開く。応答は `state`(`applied.change === 'document'`)で来る。 */
   function openDocumentByName(name: string): void {
     session.runVerb('open_document', { name }, nextOp())
+  }
+
+  /**
+   * 空の文書にする(「新規」)。応答は開くのと同じ `state`
+   * (`applied.change === 'document'` / `action: "new"`)で来る。
+   *
+   * **確認を挟まない**(`FilesPanel.svelte` の「開くのに確認ダイアログを挟まない」と同じ線)。
+   */
+  function newDocument(): void {
+    session.runVerb('new_document', {}, nextOp())
   }
 
   // ---------------------------------------------------------------- 選択(コアを叩くだけ)
@@ -1057,6 +1069,7 @@
       currentName={currentDocumentName}
       onSave={saveDocumentAs}
       onOpen={openDocumentByName}
+      onNew={newDocument}
     />
     {#key sketchId === null}
       <CommandHost

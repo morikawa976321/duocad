@@ -1179,9 +1179,8 @@ class Session:
         **失敗しても今の文書を壊さない**。新しい `Document` の上で再生し切ってから
         差し替えるので、途中で落ちたら例外が上がるだけで画面はそのまま残る。
 
-        差し替えではキャッシュ(テセレーション・辺・スケッチ・版)を**全部捨てる** ——
-        Bodyのidは再生で作り直されるが、同じidが再び現れる可能性があり、古い形状を
-        指したキャッシュが残っていると別の文書の形を配ることになる。
+        差し替えの後始末(キャッシュ・版・土台の下限)は `_replace_document` が持つ
+        (`new_document` と共通)。
         """
         source = self._resolve_document_name(name)
         if not source.exists():
@@ -1195,6 +1194,45 @@ class Session:
         document.log = log
         log.replay(document)
 
+        self._replace_document(document)
+        return self._emit({
+            "change": "document",
+            "action": "open",
+            "path": str(source),
+            "name": source.name,
+            "operations": len(log.entries),
+        })
+
+    def new_document(self) -> dict:
+        """空の文書へ差し替える(「新規」)。**verbではない**(ログに載らない)。
+
+        **今の文書は捨てられ、undoでは戻らない**(`open_document` と同じ)。確認は挟まない ——
+        一覧からのクリック1つで別の文書へ移れるのに、空の文書へ移るときだけ確認を挟むと
+        挙動が割れる(`web/src/FilesPanel.svelte` の「開くのに確認ダイアログを挟まない」)。
+
+        **`save_document` は呼ばない**(自動保存はスコープ外)。保存していない編集は消える。
+        """
+        self._replace_document(Document())
+        return self._emit({
+            "change": "document",
+            "action": "new",
+            # **開いたファイルが無いので `path` / `name` は `None`**。受け取る側
+            # (`web/src/App.svelte`)はこれで「今どれを触っているか」の表示を(未保存)へ戻す。
+            "path": None,
+            "name": None,
+            "operations": 0,
+        })
+
+    def _replace_document(self, document: Document) -> None:
+        """今の文書を `document` へ差し替える(`open_document` / `new_document` の共通部分)。
+
+        差し替えではキャッシュ(テセレーション・辺・頂点・体積・スケッチ・版)を**全部捨てる**
+        —— Bodyのidは再生で作り直されるが、同じidが再び現れる可能性があり、古い形状を
+        指したキャッシュが残っていると別の文書の形を配ることになる。
+
+        **選択集合はここで触らない** —— 選択は `Document` が持つので、差し替えた時点で
+        新しい文書の空の選択になっている。
+        """
         self.document = document
         self._geometry_cache.clear()
         self._edge_cache.clear()
@@ -1210,13 +1248,6 @@ class Session:
         # 起動時の `load_step` が積んだ「取り消させない土台」とは別物である。
         self._setup_floor_seq = 0
         self._applied_count += 1
-        return self._emit({
-            "change": "document",
-            "action": "open",
-            "path": str(source),
-            "name": source.name,
-            "operations": len(log.entries),
-        })
 
     def list_documents(self) -> dict:
         """`models_dir` の中身を一覧にする(名前/更新日時/サイズ/操作数)。**verbではない**。
@@ -1752,6 +1783,11 @@ class Server:
             # 立っているので二重には配らない。
             elif command == "open_document":
                 applied = self._apply(self.session.open_document, message["name"])
+                applied["client_op"] = message.get("client_op")
+                await self._push(connection, applied=applied)
+            # **新規も文書ごと差し替える**ので開くと同じ扱い(全接続へ配る)。引数は無い。
+            elif command == "new_document":
+                applied = self._apply(self.session.new_document)
                 applied["client_op"] = message.get("client_op")
                 await self._push(connection, applied=applied)
             elif command == "preview":

@@ -273,12 +273,17 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'redo'; redone: string })
   /** 選択の変更イベント。verbではない(操作ログに載らない)。 */
   | (AppliedChangeBase & { change: 'selection'; selection: SelectionState })
-  /** ファイルを開いて文書ごと差し替わった。verbではない(`Session.open_document`)。 */
+  /**
+   * 文書ごと差し替わった。verbではない(`Session.open_document` / `Session.new_document`)。
+   *
+   * **`path` / `name` は `null` になりうる** —— 新規(`action: "new"`)は開いたファイルが
+   * 無いので、どちらも `null` で来る(触っているファイルの表示は「(未保存)」へ戻る)。
+   */
   | (AppliedChangeBase & {
       change: 'document'
       action: string
-      path: string
-      name: string
+      path: string | null
+      name: string | null
       operations: number
     })
 

@@ -18,6 +18,8 @@
    *
    * **開くのに確認ダイアログを挟まない**。上書きも同様 —— 保存はそもそも「今の文書をそこへ
    * 書く」操作であり、一覧からの上書きだけ確認を挟むと**新規保存と挙動が割れる**。
+   * **「新規」も同じ**(`onNew`) —— 一覧のクリック1つで別の文書へ移れるのに、空の文書へ
+   * 移るときだけ確認を挟むと挙動が割れる。どちらも保存していない編集を捨てる点は同じである。
    */
   import type { DocumentInfo } from './session'
 
@@ -26,6 +28,7 @@
     currentName,
     onSave,
     onOpen,
+    onNew,
   }: {
     /** `duocad/models/` の中身(サーバの `list_documents` の写し)。 */
     documents: DocumentInfo[]
@@ -35,6 +38,8 @@
     onSave: (name: string) => void
     /** ファイル名を渡して開く。 */
     onOpen: (name: string) => void
+    /** 空の文書にする(引数なし。ファイルはまだ1つも決まっていない)。 */
+    onNew: () => void
   } = $props()
 
   /** 打ちかけの新規保存名。送ったら空に戻す(ParametersPanelの`editing`と同じ規律)。 */
@@ -80,6 +85,12 @@
 <section class="files-panel">
   <div class="row">
     <span class="label">ファイル</span>
+    <!-- **新規は一覧の外にある** —— 開くのが「一覧のどれかを指す」操作なのに対し、こちらは
+         指す先が無い(空の文書にする)。名前を打つ欄より前に置いて、ファイル名の入力と
+         「新規保存」の組から離してある。 -->
+    <button id="file-new" onclick={onNew} title="今の文書を捨てて空から始める(保存していない編集は消える)">
+      新規
+    </button>
     <span id="current-document" class="value dim">{currentName ?? '(未保存)'}</span>
     <input
       id="file-name-input"

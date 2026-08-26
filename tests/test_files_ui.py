@@ -324,6 +324,76 @@ def test_a_failed_open_leaves_the_current_document_alone(session: Session) -> No
 
 
 # --------------------------------------------------------------------------------------
+# 新規(空の文書へ差し替える。`open_document` と同じ差し替えの経路)
+# --------------------------------------------------------------------------------------
+def test_new_document_empties_the_document_and_reaches_every_connection(session: Session) -> None:
+    """**新規は空の文書へ差し替える**。開くのと同じく全接続へ届く。
+
+    `name` / `path` は `None`(開いたファイルが無い)。画面はこれを見て「今どれを触って
+    いるか」の表示を(未保存)へ戻す。
+    """
+    _box(session)
+    assert session.document.bodies and session.document.log.entries
+
+    async def script(send):
+        return await send({"cmd": "new_document", "client_op": 7})
+
+    (answer, clients) = _browser(session, script)
+
+    assert answer["type"] == "state"
+    assert answer["applied"]["change"] == "document"
+    assert answer["applied"]["action"] == "new"
+    assert answer["applied"]["name"] is None
+    assert answer["applied"]["path"] is None
+    assert answer["applied"]["client_op"] == 7
+    assert session.document.bodies == []
+    assert session.document.sketches == []
+    assert answer["state"]["bodies"] == []
+    assert clients[1].payloads, "新規にした文書が他の接続へ届いていない"
+
+
+def test_new_document_is_not_a_verb_and_leaves_nothing_to_undo(session: Session) -> None:
+    """新規は**操作ログに載らない**(差し替えであって操作ではない)。
+
+    したがって**undoでは戻らない** —— 新しい文書のログは空で、取り消せる操作が1つも無い。
+    捨てた文書を取り戻す手段は「保存してあれば開き直す」だけである。
+    """
+    _box(session)
+
+    session.new_document()
+
+    assert session.document.log.entries == []
+    with pytest.raises(ValueError):
+        session.undo()
+
+
+def test_new_document_clears_the_selection(session: Session) -> None:
+    """選択は `Document` が持つので、差し替えた時点で空になる。
+
+    **面・辺・領域の添字は文書が変われば意味を失う**(形を変えるverbの後にリセットするのと
+    同じ理由)。空にせず持ち越すと、次のverbが存在しないBodyを指す。
+    """
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    assert session.document.selection.items
+
+    session.new_document()
+
+    assert session.document.selection.items == []
+
+
+def test_new_document_is_not_exposed_to_ai(session: Session) -> None:
+    """**AIには開けていない**(`save_document` / `open_document` / `list_documents` と同じ)。
+
+    今の文書を丸ごと捨ててundoでも戻せない操作なので、捨てる判断は人がする。
+    """
+    from duocad import catalog
+
+    assert "new_document" not in catalog.tool_names()
+    assert "new_document" in catalog.websocket_command_names()
+
+
+# --------------------------------------------------------------------------------------
 # 一覧(要件3: 名前/更新日時/サイズ/操作数)
 # --------------------------------------------------------------------------------------
 def test_list_documents_reports_name_mtime_size_and_operation_count(session: Session) -> None:

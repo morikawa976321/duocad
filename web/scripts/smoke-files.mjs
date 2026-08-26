@@ -498,6 +498,31 @@ async function main() {
         `${(await look()).documentList.find((file) => file.name === documentName).operations} 件)`,
     )
 
+    // ================================================================ 検証2c: 新規
+    // 「新規」(`#file-new`)で**空の文書へ戻る**。確認ダイアログは無い(開くと同じ扱い)。
+    // **元の形は一覧から開き直して取り戻す** —— この後の書き出しの検査が今の形を使うので、
+    // ここで空のままにできない。捨てた文書がundoでは戻らないことは pytest 側が固定する。
+    const beforeNew = (await look()).bodies[0]
+    await page.click('#file-new')
+    await waitFor(
+      () => window.__duocad.parts.length === 0 && window.__duocad.currentDocumentName === null,
+      '「新規」で空の文書にならない',
+    )
+    const headerAfterNew = await page.$eval('#current-file', (el) => el.textContent.trim())
+    if (headerAfterNew === documentName) fail(`新規にしてもヘッダに前のファイル名が残る: "${headerAfterNew}"`)
+    ok(`**「新規」で空の文書に戻った**(部品0 / ヘッダ "${headerAfterNew}"。確認ダイアログは挟んでいない)`)
+
+    await page.click(`.files-row[data-name="${documentName}"] .files-open`)
+    await waitFor(
+      (expectedVolume) => {
+        const body = window.__duocad.parts[0]
+        return Boolean(body && Math.abs(body.volume - expectedVolume) < 1e-6)
+      },
+      '新規にした後、一覧から開き直しても同じ形にならない',
+      beforeNew.volume,
+    )
+    ok('新規にした後も一覧から開き直せた(以降の書き出しの検査は元の形で続く)')
+
     // ================================================================ 検証4: 書き出し
     const stepPath = join(workdir, 'out.step')
     await page.click('#file-export-step')

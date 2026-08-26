@@ -735,6 +735,20 @@ COMMANDS: tuple[Command, ...] = (
         changes_document=False,
     ),
     Command(
+        name="new_document",
+        category="file",
+        description="",
+        session="new_document",
+        ws="special",
+        mcp=False,
+        note=(
+            "**空の文書へ差し替える**(画面の「新規」)。`open_document` と同じく文書ごと"
+            "差し替えるので応答の形が他と違い(全接続へ配る)、表からは外して `_dispatch` で"
+            "個別に扱う。**AIには開けていない**(`mcp=False`) —— 今の文書を丸ごと捨てる操作で、"
+            "undoでは戻らない。捨てる判断は人がする"
+        ),
+    ),
+    Command(
         name="save_document",
         category="file",
         description="",
