@@ -16,16 +16,17 @@
  * 毎回まっさらな文書で始まるので、下記の「最初の板が生まれる」経路がそのまま通る。
  * 既に立っているものへ繋ぐときだけ `--url` を渡す。
  *
- * 見るのは5つ(MCPとの突合は `tests/test_feature_ui.py` 側にある):
+ * 見るのは6つ(MCPとの突合は `tests/test_feature_ui.py` 側にある):
  *
  *   1. 手だけで板に穴を開けられる(スケッチ → 領域選択 → cut で押し出し)
  *   2. 辺を複数選んでフィレット。**失敗する半径では理由が画面に出て、選択が保持されたまま戻る**
  *   3. 面取りで円錐ができる(`PC_case_feet` と同じ種別の面が手だけで作れる)
  *   4. 矩形反復・円形反復(**全周8個で隣り合う角度が45度**)
- *   5. すべてのコマンドで Esc中断 と undo が効く
+ *   5. **新規ボディ**で押し出すと、板がいる文書でも2つ目のボディが生まれる(2026-08-26)
+ *   6. すべてのコマンドで Esc中断 と undo が効く
  */
 import { existsSync } from 'node:fs'
-import { findBrowser, launchBrowser, withoutBrowserPanel, pressUndo, frameAll } from './browser.mjs'
+import { findBrowser, launchBrowser, withoutBrowserPanel, pressUndo } from './browser.mjs'
 import { fail, ok, parseArgs } from './args.mjs'
 import { startServer } from './server.mjs'
 
@@ -335,9 +336,9 @@ async function main() {
 
     await page.click('#sketch-exit')
     await waitFor(() => window.__duocad.activeSketch === null, 'スケッチモードを抜けられない')
-    // **視点を全体へ戻す**。直前の `#sketch-look` は描いていた図形(半径4mm)に寄っているので、
-    // そのままでは40mmの板が画面の外にあり、辺をクリックで指せない。
-    await frameAll(page)
+    // **視点は `sketch-exit` が入る前へ戻す**(2026-08-26に製品側で直した)。直前の
+    // `#sketch-look` は半径4mmの円に寄っているので、戻らないと40mmの板が画面の外にあり、
+    // 辺をクリックで指せない —— それをここで `frameAll` で補っていたのが2026-08-25まで。
 
     // ================================================================ 検証2: フィレット
     // 面を1つ選んでおく(辺を取りに行く対象のBodyが決まる)。
@@ -529,9 +530,8 @@ async function main() {
     )
 
     // ================================================================ 検証4: 反復
-    // 直前の円柱スケッチが `sketch-look` で寄った視点のまま(exitはカメラを戻さない)なので、
-    // 2026-08-23の下段バー削除でアスペクト比が変わった今、基準平面グリッドが画面の外にある。
-    await frameAll(page)
+    // 直前の円柱スケッチは `sketch-look` で寄っているが、**`sketch-exit` が入る前の視点へ
+    // 戻す**(2026-08-26)ので、基準平面グリッドは画面の中にある。
     await createSketchOnBase('XY')
     await waitFor(() => window.__duocad.activeSketch !== null, '反復用のスケッチに入れない')
     await page.click('#sketch-circle')
@@ -631,6 +631,66 @@ async function main() {
       fail(`全周8個の刻みが45度でない: ${steps.map((step) => step.toFixed(4)).join(', ')}`)
     }
     ok(`円形反復: 全周8個で隣り合う角度が45度(360/8。誤差 ${worst.toExponential(1)})`)
+
+    // ================================================================ 検証5: 新規ボディ
+    // **`new` は既存ボディへ融合しない**(2026-08-26追加の3つ目の種別)。それまで新しい
+    // ボディが生まれる道は `join` の「行き先が無ければ作る」という**落ち方**だけで、
+    // 板が既にいるこの文書では**手だけでは2つ目のボディが作れなかった**
+    // (ブラウザは `body_id` を送れないので、行き先を指して逃げることもできない)。
+    //
+    // **見るのはボディの本数**。板から離れた位置に置くので、`join` に落ちてもブーリアンは
+    // 成功し、体積も同じだけ増える —— **本数だけが2つの種別を分ける**。
+    await page.click('#sketch-exit')
+    await waitFor(() => window.__duocad.activeSketch === null, '反復用のスケッチを抜けられない')
+    const beforeNew = await look()
+    if (beforeNew.bodies.length !== 1) {
+      fail(`新規ボディの検査に入る前のボディが1個でない(${beforeNew.bodies.length}個)`)
+    }
+
+    await createSketchOnBase('XY')
+    await waitFor(() => window.__duocad.activeSketch !== null, '新規ボディ用のスケッチに入れない')
+    await page.click('#sketch-rectangle')
+    await clickPlane(0, -25) // 板(v: 0..30)から離した位置。重なっていると本数で見分けられない
+    await typeInto('#sketch-width', 15)
+    await typeInto('#sketch-height', 15)
+    await page.keyboard.press('Enter')
+    await waitFor(
+      () => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return Boolean(active && active.regions.length === 1)
+      },
+      '新規ボディ用の領域ができない',
+    )
+    await page.keyboard.press('Escape')
+    await page.click('#sketch-look')
+    await clickRegion(1)
+    await page.click('#extrude-regions')
+    await typeInto('#regions-distance', 8)
+    await page.click('#extrude-mode-new')
+    await page.keyboard.press('Enter')
+    await waitFor(
+      () => window.__duocad.parts.length === 2,
+      '「新規ボディ」で押し出してもボディが増えない(joinに落ちている)',
+    )
+    await page.click('#sketch-exit')
+
+    const afterNew = await look()
+    const plateAfter = afterNew.bodies.find((body) => body.id === beforeNew.bodies[0].id)
+    if (!plateAfter) fail('新規ボディを作ったら元の板が消えた')
+    if (plateAfter.volume !== beforeNew.bodies[0].volume) {
+      fail(
+        `新規ボディなのに元の板の体積が変わった(${beforeNew.bodies[0].volume} -> ${plateAfter.volume})`,
+      )
+    }
+    const created = afterNew.bodies.find((body) => body.id !== beforeNew.bodies[0].id)
+    if (Math.abs(created.volume - 15 * 15 * 8) > 1e-6) {
+      fail(`新しいボディの体積が 15×15×8 でない: ${created.volume}`)
+    }
+    ok(
+      `**新規ボディで押し出した**(ボディ 1 -> 2。新しい方の体積 ${created.volume.toFixed(2)}` +
+        ` = 15×15×8、元の板は ${plateAfter.volume} のまま融合していない)`,
+    )
 
     if (consoleErrors.length > 0) {
       fail(`ブラウザのコンソールにエラー: ${consoleErrors.slice(0, 3).join(' | ')}`)

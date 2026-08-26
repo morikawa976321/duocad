@@ -304,8 +304,9 @@ export interface Viewport {
   /**
    * 今あるもの全体が入る視点へ戻す。
    *
-   * **`lookAtSketch` の戻り道**。スケッチに入ると図形の大きさに合わせて寄るので、
-   * 半径4mmの円を描いた後にモードを抜けると、40mmの板が画面から外れたままになる。
+   * **`lookAtSketch` の戻り道ではない**(2026-08-26)。抜けたときの復帰は
+   * `setActiveSketch(null)` が「入る前の視点」へ戻す形で担う。こちらは
+   * 「今あるもの全体」という別の視点で、実機検査が図形を画面内へ収めるために呼ぶ。
    */
   frameAll(): void
   /** スケッチ平面上の (u,v) の画面座標。実機検査が**本物のクリックで描く**ために要る。 */
@@ -1287,13 +1288,57 @@ export function createViewport(container: HTMLElement): Viewport {
     ghost = { objects: [built.object], disposables: [built.geometry] }
   }
 
+  /**
+   * スケッチに入る直前の視点(抜けるときに戻す)。**モード外では null**。
+   *
+   * `lookAtSketch` は描いている図形の大きさに寄るので、半径4mmの円を描いて抜けると
+   * **40mmの板が画面の外に残る**。視点を全体へ戻すボタンは `7363c76`(下段バーの削除)で
+   * 落としてあり、人に残る手は手動のオービット/ズームしかない —— **抜けたら入る前へ戻す**。
+   * 「全体が入る視点」ではなく「入る前の視点」なのは、スケッチに入る前に自分で寄せていた
+   * 視点まで毎回捨てないため(本人裁定・2026-08-26)。
+   *
+   * `framedAtEntry` は入った時点で**もう何か描かれていたか**を覚える。**最初の板は
+   * スケッチの中で生まれる**ので(`update` の初回 `frameToContent`)、そのときの「入る前」は
+   * 何も無い文書の視点であり、戻すと生まれたばかりの形から離れる。その1回だけは戻さない。
+   */
+  let cameraBeforeSketch:
+    | {
+        position: THREE.Vector3
+        target: THREE.Vector3
+        up: THREE.Vector3
+        framedAtEntry: boolean
+      }
+    | null = null
+
   function setActiveSketch(sketchId: string | null): void {
+    const wasActive = activeSketchId !== null
     activeSketchId = sketchId
-    if (sketchId !== null) return
+    if (sketchId !== null) {
+      // **入る「とき」だけ控える**。`lookAtSketch` の側で控えないのは、あれが
+      // 「正面から見る」でも呼ばれるから —— そこで控えると戻り先が寄った視点に化ける。
+      // モード中に別のスケッチへ移ったときも、戻り先は最初に入る前のままにする。
+      if (!wasActive) {
+        cameraBeforeSketch = {
+          position: camera.position.clone(),
+          target: controls.target.clone(),
+          up: camera.up.clone(),
+          framedAtEntry: framed,
+        }
+      }
+      return
+    }
     clearGhost()
     // 上方向を既定へ戻す。`lookAtSketch` が平面のv軸へ倒したままだと、モードを抜けた後の
     // オービットが入る前と違う傾きになる。
     camera.up.set(0, 1, 0)
+    const previous = cameraBeforeSketch
+    cameraBeforeSketch = null
+    if (previous !== null && previous.framedAtEntry) {
+      camera.position.copy(previous.position)
+      camera.up.copy(previous.up)
+      controls.target.copy(previous.target)
+      camera.updateProjectionMatrix()
+    }
     controls.update()
   }
 
