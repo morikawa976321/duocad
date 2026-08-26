@@ -807,6 +807,45 @@ class DocumentTools:
             ),
         )
 
+    def import_svg(
+        self,
+        path: str,
+        base_plane: Optional[str] = None,
+        scale: Optional[float] = None,
+    ) -> dict:
+        """SVGを**1枚のスケッチ**として読み込む(verb `import_svg`)。
+
+        取り込んだ図形はその時点で領域として使えるので、続けて `propose_selection` →
+        `commit_selection` → `extrude` を打てる。**`hint` で領域の数を知らせる** ——
+        SVGは1枚で複数の輪郭を持つのが普通で(文字の内側の穴、離れた図形)、
+        黙って `sketch_id` だけ返すと、AIは領域が1つだけのつもりで押し出しに進む。
+
+        **貼る先の解決は `Session.import_svg` が持つ**(`sketch_create` と同じ) ——
+        2箇所に同じ「省略時は確定選択の面」を持つと、片方だけ直したときにAIと人で
+        貼る先が食い違う。
+        """
+        before = self._revision_snapshot()
+        applied = self.session.import_svg(
+            path,
+            None if base_plane is None else str(base_plane),
+            None if scale is None else float(scale),
+        )
+        sketch_id = applied["sketch_id"]
+        region_count = len(region.regions(self.session.document, sketch_id))
+        return self._apply_logged(
+            before,
+            applied,
+            sketch_id=sketch_id,
+            source_name=applied["source_name"],
+            entity_count=applied["entity_count"],
+            region_count=region_count,
+            hint=(
+                f"領域が {region_count} 個ある。押し出す前に describe_document の "
+                "include_regions で面積を見て、対象を propose_selection で選ぶこと"
+                "(文字の内側の穴も1つの領域として数える)"
+            ),
+        )
+
     def import_step(self, path: str) -> dict:
         """STEPを**参照ボディ(読み取り専用)としてだけ**足す(verb `import_step`)。
 

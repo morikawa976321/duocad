@@ -18,7 +18,7 @@
 | スケッチ(5) | `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` |
 | フィーチャ(6) | `extrude` / `extrude_face` / `fillet` / `chamfer` / `pattern_rectangular` / `pattern_circular` |
 | ボディ・パラメータ(3) | `set_visible` / `make_editable_copy` / `set_parameter` |
-| 入出力(4) | `import_step_editable` / `import_step` / `export_step` / `export_stl` |
+| 入出力(5) | `import_step_editable` / `import_step` / `import_svg` / `export_step` / `export_stl` |
 | 履歴(2) | `undo` / `redo` |
 
 **呼び方の型**（例）:
@@ -28,6 +28,10 @@
    （**AIが自分で踏む**。人に見せて止めるときだけ踏まない）
 3. `fillet(radius=…)` / `extrude(distance=…)` など — **辺や領域は引数に書かない**
 4. `import_step_editable` は**読んだ時点で編集できるボディ**を返す（`body_ids`。追加の1手は要らない）
+5. `import_svg(path)` はSVGを**1枚のスケッチ**にして返す（`sketch_id` と `region_count`）。
+   そのまま `propose_selection` → `commit_selection` → `extrude` へ進める。
+   **領域は1枚のSVGに複数あるのが普通**（文字の内側の穴・離れた図形）なので、
+   押し出す前に `describe_document(include_regions=True)` で面積を見て選ぶこと
 
 ## AIはどこまで自分でやるか（2026-08-22改訂）
 

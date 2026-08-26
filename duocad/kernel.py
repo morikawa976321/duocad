@@ -37,6 +37,7 @@ from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
 from OCP.BRepTools import BRepTools
 from OCP.GCPnts import GCPnts_AbscissaPoint, GCPnts_QuasiUniformDeflection
+from OCP.Geom import Geom_BezierCurve
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 from OCP.GProp import GProp_GProps
 from OCP.IFSelect import IFSelect_ReturnStatus
@@ -52,6 +53,7 @@ from OCP.TopExp import TopExp
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
 from OCP.TopTools import TopTools_IndexedMapOfShape, TopTools_ListOfShape
+from OCP.TColgp import TColgp_Array1OfPnt
 from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pnt, gp_Vec
 
 #: describe_shape の faces_by_type が持つキー(この順序が正。query.py が初期化に使う)
@@ -964,6 +966,26 @@ def _edges_arc(ax3: "gp_Ax3", params: dict) -> List[Any]:
     return [maker.Edge()]
 
 
+def _edges_bezier(ax3: "gp_Ax3", params: dict) -> List[Any]:
+    """3次ベジエを**厳密に**1本の辺にする(折れ線へ落とさない)。
+
+    折れ線化した輪郭を押し出すと側面が線分の数だけ平面に割れる(実測: 制御点2本ぶんの形で
+    面数4に対し130)。fillet/chamferの対象指定も面の一覧も実用にならなくなるので、
+    曲線は曲線のまま `Geom_BezierCurve` へ渡す。
+    """
+    points = TColgp_Array1OfPnt(1, 4)
+    for index, (key_x, key_y) in enumerate(
+        (("x0", "y0"), ("cx1", "cy1"), ("cx2", "cy2"), ("x1", "y1")), start=1
+    ):
+        points.SetValue(
+            index, _to_pnt(ax3, float(params[key_x]), float(params[key_y]))
+        )
+    maker = BRepBuilderAPI_MakeEdge(Geom_BezierCurve(points))
+    if not maker.IsDone():
+        raise ValueError("failed to build a bezier edge")
+    return [maker.Edge()]
+
+
 def _edges_rectangle(ax3: "gp_Ax3", params: dict) -> List[Any]:
     x = float(params["x"])
     y = float(params["y"])
@@ -999,6 +1021,18 @@ def _bbox_arc(params: dict) -> Tuple[float, float, float, float]:
     return _bbox_circle(params)
 
 
+def _bbox_bezier(params: dict) -> Tuple[float, float, float, float]:
+    """**制御点の凸包**で押さえる。3次ベジエは必ず制御点の凸包の内側に入るので、
+    曲線の真のbboxより広いことはあっても狭いことはない(安全側)。
+
+    ここのbboxが使われるのは `sketch_regions` が分割用の補助面をどれだけ大きく作るかの
+    決定だけなので、広い側に外れても結果は変わらない。
+    """
+    xs = [float(params[key]) for key in ("x0", "cx1", "cx2", "x1")]
+    ys = [float(params[key]) for key in ("y0", "cy1", "cy2", "y1")]
+    return (min(xs), max(xs), min(ys), max(ys))
+
+
 def _bbox_rectangle(params: dict) -> Tuple[float, float, float, float]:
     x, y = float(params["x"]), float(params["y"])
     return (x, x + float(params["width"]), y, y + float(params["height"]))
@@ -1022,6 +1056,7 @@ _KERNEL_ENTITY_KIND_TABLE: Dict[str, _KernelEntityKindOps] = {
     "circle": _KernelEntityKindOps(_edges_circle, _bbox_circle),
     "arc": _KernelEntityKindOps(_edges_arc, _bbox_arc),
     "rectangle": _KernelEntityKindOps(_edges_rectangle, _bbox_rectangle),
+    "bezier": _KernelEntityKindOps(_edges_bezier, _bbox_bezier),
 }
 
 

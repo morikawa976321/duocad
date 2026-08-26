@@ -99,6 +99,7 @@ from .verbs import (
     extrude_face,
     fillet as fillet_verb,
     import_step_editable,
+    import_svg as import_svg_verb,
     make_editable_copy,
     pattern_circular as pattern_circular_verb,
     pattern_rectangular as pattern_rectangular_verb,
@@ -115,17 +116,18 @@ DEFAULT_MODELS_DIR = REPO_ROOT / "models"
 
 #: 状態配信で本文を伏せるログ引数。値の代わりに文字数だけを配る。
 #:
-#: `import_step` / `import_step_editable` は読み込んだSTEPの**本文**を `args["step"]` に持つ。
+#: `import_step` / `import_step_editable` は読み込んだSTEPの**本文**を `args["step"]` に持ち、
+#: `import_svg` は翻訳した**図形の全部**を `args["entities"]` に持つ(ロゴ1枚で数百件)。
 #: PCケースのSTEPは4.6MBあり、`state_meta()` はWebSocketで**操作のたびに全部配られる**ので、
 #: 素通しにすると1操作ごとに数MBが流れる(「27部品でも数KB」という前提が壊れる)。
 #: 履歴パネルが使うのは `source_name` と件数だけなので、本文は配らない。
 #: **ログそのもの(`document.log`)は無傷** —— 伏せるのは配信用の射影だけで、
 #: 保存(`to_json`)は本文を書く。
-_REDACTED_LOG_ARGS = ("step",)
+_REDACTED_LOG_ARGS = ("step", "entities")
 
 
 def _log_args_for_state(args: dict) -> dict:
-    """状態配信用のargs。埋め込んだSTEP本文を「文字数」に置き換える(上記 `_REDACTED_LOG_ARGS`)。"""
+    """状態配信用のargs。埋め込んだ本文・図形を「量」に置き換える(上記 `_REDACTED_LOG_ARGS`)。"""
     if not any(key in args for key in _REDACTED_LOG_ARGS):
         return args  # 大半の操作はここ。写しを作らない
     projected = dict(args)
@@ -133,6 +135,8 @@ def _log_args_for_state(args: dict) -> dict:
         value = projected.get(key)
         if isinstance(value, str):
             projected[key] = f"<{len(value)}文字は配信しない>"
+        elif isinstance(value, list):
+            projected[key] = f"<{len(value)}件は配信しない>"
     return projected
 
 
@@ -1026,6 +1030,41 @@ class Session:
             "reference_ids": list(args["reference_ids"]),
         })
 
+    def import_svg(
+        self, path: Any, base_plane: Optional[str] = None, scale: Any = None
+    ) -> dict:
+        """SVGを**1枚のスケッチ**として読み込む(verb `import_svg`)。
+
+        `base_plane`(XY/XZ/YZ)は `sketch_create` と同じ綴り。**省略時は確定選択の面**
+        (ちょうど1枚)に貼る ——
+        `sketch_create` と同じ解決にしてある。取り込む先の決め方を2通り持つと、
+        「人とAIで貼る先が違う」形で食い違う。
+
+        `scale` は解決後のmmへさらに掛ける倍率(省略時1.0)。UIには出しておらず
+        (`catalog` の `ws=False`)、単位を持たないSVGの寸法が合わないときだけAIが使う。
+        """
+        if base_plane is not None:
+            target: Any = str(base_plane)
+        else:
+            face = selection.require_confirmed(
+                self.document, "face", exactly_one=True
+            )[0]
+            target = sketch.face_plane(face["body"], face["index"])
+        sketch_id = import_svg_verb(
+            self.document,
+            str(self._resolve(path)),
+            plane=target,
+            scale=1.0 if scale is None else float(scale),
+        )
+        args = self.document.log.entries[-1].args
+        return self._after_logged_verb(
+            {
+                "sketch_id": sketch_id,
+                "source_name": args["source_name"],
+                "entity_count": len(args["entities"]),
+            }
+        )
+
     def import_step(self, path: Any) -> dict:
         """STEPを**参照ボディ(読み取り専用)としてだけ**足す(verb `import_step`)。
 
@@ -1682,6 +1721,18 @@ class Server:
                 result = self.session.vertices(message["body_id"])
                 await _send(connection, {"type": "vertices", **result})
             # -------------------------------------------------- E: ファイル操作
+            # **SVG読み込みは表に載らない** —— `base_plane` が省略できる引数だからで
+            # (表は載せた引数を全部必須にする)、省略は「コアの確定選択の面に貼る」を意味する。
+            # `sketch_create` と同じ形で、`catalog` の `ws="special"` がその宣言である。
+            elif command == "import_svg":
+                applied = self._apply(
+                    self.session.import_svg,
+                    message["path"],
+                    message.get("base_plane"),
+                    message.get("scale"),
+                )
+                applied["client_op"] = message.get("client_op")
+                await self._push(connection, applied=applied)
             # **verbかどうかで応答が違う**(`FILE_COMMANDS` の3つ目の値)。文書を変えるものは
             # 状態を全接続へ配り、書き出すだけのものは要求した接続へ結果だけ返す。
             elif command in FILE_COMMANDS:
@@ -1777,10 +1828,11 @@ class Server:
         name = message.get("verb") if command == "preview" else command
         if name not in SELECTION_CONSUMING_COMMANDS:
             return
-        # **`sketch_create` に `base_plane` が付いていたら読まない** —— そのときは貼る先が
-        # 引数で来ており、選択は使われない。使われない集合を承認扱いにすると、
-        # 「基準平面を指しただけなのにAIの提案が確定していた」という静かな変化になる。
-        if name == "sketch_create" and message.get("base_plane") is not None:
+        # **貼る先が引数で来ていたら選択は読まない** —— そのときは選択が使われない。
+        # 使われない集合を承認扱いにすると、「基準平面を指しただけなのにAIの提案が
+        # 確定していた」という静かな変化になる。**スケッチを作るverbが2つある**
+        # (`sketch_create` / `import_svg`)ので、引数名を `base_plane` に揃えてある。
+        if name in ("sketch_create", "import_svg") and message.get("base_plane") is not None:
             return
         if not selection.get_selection(self.session.document).is_proposed():
             return

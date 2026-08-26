@@ -64,6 +64,7 @@ VERB_TOOLS = {
     "set_parameter",
     # 入出力
     "import_step",
+    "import_svg",
     "export_step",
     "export_stl",
     # 履歴
@@ -151,6 +152,9 @@ ARGUMENTS: dict = {
     # ログに載るverb名と呼べるツール名が食い違う(`EXTRA_LOGGING_TOOLS` の理由)。
     "import_step_editable": ({"path"}, {"path"}),
     "import_step": ({"path"}, {"path"}),
+    # SVG読み込みは**貼る先(`base_plane`)と倍率(`scale`)が省略できる**。省略時は
+    # 確定選択の面に貼る(`sketch_create` と同じ解決・同じ綴り)。
+    "import_svg": ({"path", "base_plane", "scale"}, {"path"}),
     "export_step": ({"path", "body_ids"}, {"path"}),
     "export_stl": ({"path", "deviation", "body_ids"}, {"path"}),
     # ---- 履歴

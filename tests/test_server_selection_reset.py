@@ -42,6 +42,10 @@ RESETTING_VERBS = frozenset(
         "add_circle",
         "add_rectangle",
         "add_arc",
+        # SVG読み込みは**図形を足すverbの仲間**なので `add_*` と同じく選択を空にする。
+        # 貼る先に使った面が選ばれたまま残ると、次に打つ `extrude` が領域ではなく面を
+        # 掴んだ状態で走り、`selection_kind_mismatch` で止まる。
+        "import_svg",
         "set_parameter",
         "undo",
         "redo",

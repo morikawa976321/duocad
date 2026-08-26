@@ -10,13 +10,20 @@
  */
 
 /** 図形の種別。**この表のキーが唯一の正**(新種別は表に1行足すだけでよい)。 */
-export type EntityKind = 'line' | 'circle' | 'rectangle' | 'arc'
+export type EntityKind = 'line' | 'circle' | 'rectangle' | 'arc' | 'bezier'
 
 interface EntityKindSpec {
-  /** この種別を作るverb名(`add_*`)。`ghostEntity` の逆引きに使う。 */
-  verb: string
-  /** verbの `build()` が作った引数から、コアの `Entity.params` と同じキーへ移し替える。 */
-  fromArgs(args: Record<string, unknown>): Record<string, number>
+  /**
+   * この種別を作るverb名(`add_*`)。`ghostEntity` の逆引きに使う。
+   *
+   * **省略できる** —— `bezier` はこれを作るverbが無い(取り込み `import_svg` だけが作り、
+   * 人もAIもベジエを1本ずつは足せない。2026-08-26本人裁定)。verbが無い種別は
+   * 幽霊(確定前の姿)も持たないので、`fromArgs` ではなく表ごと持たない形にしてある。
+   */
+  verb?: string
+  /** verbの `build()` が作った引数から、コアの `Entity.params` と同じキーへ移し替える。
+   *  **`verb` があるときだけ要る**(幽霊を描くのはverbで起動したコマンドだけ)。 */
+  fromArgs?(args: Record<string, unknown>): Record<string, number>
   /** `params` を (u,v) の折れ線へ(円・円弧は分割線で近似)。コアの `Entity.params` のキーを
    *  そのまま読む(`duocad/sketch.py` の `Entity` docstring)。 */
   toPoints(params: Record<string, number>): Array<[number, number]>
@@ -25,12 +32,34 @@ interface EntityKindSpec {
 /** 円・円弧を折れ線へ近似するときの分割数。 */
 const ARC_SEGMENTS = 64
 
+/** 3次ベジエを折れ線へ近似するときの分割数。**描画と当たり判定だけの話**で、
+ *  コア側(`kernel._edges_bezier`)は曲線のままOCCTへ渡すので形は近似されない。 */
+const BEZIER_SEGMENTS = 32
+
 function arcPoints(cx: number, cy: number, radius: number, start: number, end: number): Array<[number, number]> {
   const steps = Math.max(8, Math.round((ARC_SEGMENTS * Math.abs(end - start)) / 360))
   const points: Array<[number, number]> = []
   for (let step = 0; step <= steps; step += 1) {
     const angle = ((start + ((end - start) * step) / steps) * Math.PI) / 180
     points.push([cx + radius * Math.cos(angle), cy + radius * Math.sin(angle)])
+  }
+  return points
+}
+
+function bezierPoints(
+  x0: number, y0: number,
+  cx1: number, cy1: number,
+  cx2: number, cy2: number,
+  x1: number, y1: number,
+): Array<[number, number]> {
+  const points: Array<[number, number]> = []
+  for (let step = 0; step <= BEZIER_SEGMENTS; step += 1) {
+    const t = step / BEZIER_SEGMENTS
+    const u = 1 - t
+    points.push([
+      u * u * u * x0 + 3 * u * u * t * cx1 + 3 * u * t * t * cx2 + t * t * t * x1,
+      u * u * u * y0 + 3 * u * u * t * cy1 + 3 * u * t * t * cy2 + t * t * t * y1,
+    ])
   }
   return points
 }
@@ -97,13 +126,28 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
       return arcPoints(params.cx, params.cy, params.radius, params.start_deg, end)
     },
   },
+  bezier: {
+    // **`verb` を持たない唯一の種別**(上の `EntityKindSpec.verb` のコメント)。
+    toPoints(params) {
+      return bezierPoints(
+        params.x0, params.y0,
+        params.cx1, params.cy1,
+        params.cx2, params.cy2,
+        params.x1, params.y1,
+      )
+    },
+  },
 }
 
 /** 図形の種別の一覧(唯一の正は上の表)。 */
 export const ENTITY_KINDS: readonly EntityKind[] = Object.keys(ENTITY_KIND_TABLE) as EntityKind[]
 
+// **`verb` を持つ種別だけ**を入れる。持たない種別(`bezier`)を `undefined` キーで
+// 入れると、verbの綴りを間違えた呼び出しがそこへ落ちて幽霊が別の図形として描かれる。
 const VERB_TO_KIND: Record<string, EntityKind> = Object.fromEntries(
-  (Object.entries(ENTITY_KIND_TABLE) as Array<[EntityKind, EntityKindSpec]>).map(([kind, spec]) => [spec.verb, kind]),
+  (Object.entries(ENTITY_KIND_TABLE) as Array<[EntityKind, EntityKindSpec]>)
+    .filter(([, spec]) => spec.verb !== undefined)
+    .map(([kind, spec]) => [spec.verb as string, kind]),
 )
 
 function entityKindSpec(kind: string): EntityKindSpec {
@@ -129,5 +173,8 @@ export function ghostEntity(
 ): { kind: EntityKind; params: Record<string, number> } | null {
   const kind = VERB_TO_KIND[verb]
   if (!kind) return null
-  return { kind, params: entityKindSpec(kind).fromArgs(args) }
+  const spec = entityKindSpec(kind)
+  // `VERB_TO_KIND` は verb を持つ種別だけなので、ここへ来る種別は必ず `fromArgs` を持つ。
+  if (!spec.fromArgs) return null
+  return { kind, params: spec.fromArgs(args) }
 }

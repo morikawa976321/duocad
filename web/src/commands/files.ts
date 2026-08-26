@@ -15,6 +15,7 @@
  * (`FilesPanel.svelte`)はこの経路を使わない** —— 受け取るのはファイル名だけで、`models_dir`
  * 配下に閉じる解決はサーバ側の `Session._resolve_document_name` が行う。
  */
+import { isPlaneArgValue } from './command'
 import type { CommandDef } from './command'
 import type { SelectionRef, ShapeRef } from '../session'
 
@@ -49,6 +50,51 @@ export const IMPORT_STEP: CommandDef = {
     const path = values.path
     if (typeof path !== 'string' || path.trim() === '') return { ok: false, reason: 'パスが空' }
     return { ok: true, args: { path: path.trim() } }
+  },
+}
+
+/**
+ * SVGを**1枚のスケッチ**として読み込む。外で描いた輪郭(ロゴ・図面・アウトライン化した文字)を
+ * 持ち込んで押し出すための入口で、読んだ時点で領域として使える。
+ *
+ * **引数の順は verb → target → how**(UI設計指針)。先に貼る先をクリックで指し、次にパスを打つ。
+ * 貼る先は `sketch_create` と同じ `base_plane` 引数で、基準平面ならその名前を送り、**面なら
+ * 何も送らない**(サーバがコアの確定選択から取る)。
+ *
+ * **倍率(`scale`)はここに出していない** —— 単位の合わないSVGを直すための逃げ道であって、
+ * 普段は要らない。常に出すと「毎回1.0と打つ欄」が1つ増える(`catalog` の `ws=false`)。
+ */
+export const IMPORT_SVG: CommandDef = {
+  // **id == サーバのコマンド名 == ログのverb名**。
+  id: 'import_svg',
+  category: 'file',
+  label: 'SVG読み込み',
+  buttonId: 'file-import-svg',
+  preview: 'none',
+  args: [
+    { kind: 'plane', name: 'target', label: 'スケッチを貼る先' },
+    {
+      kind: 'text',
+      name: 'path',
+      label: 'SVG',
+      inputId: 'file-svg-path',
+      placeholder: 'logo.svg',
+      reject: pathLike('SVGのパス'),
+    },
+  ],
+  build(values) {
+    const plane = values.target
+    if (!isPlaneArgValue(plane)) return { ok: false, reason: '貼る先が決まっていない' }
+    const path = values.path
+    if (typeof path !== 'string' || path.trim() === '') return { ok: false, reason: 'パスが空' }
+    // **面は送らない**(サーバがコアの確定選択から取る)。基準平面だけが引数になる。
+    return {
+      ok: true,
+      args:
+        plane === 'face'
+          ? { path: path.trim() }
+          : { path: path.trim(), base_plane: plane },
+    }
   },
 }
 
@@ -158,7 +204,13 @@ export const MAKE_EDITABLE_COPY: CommandDef = {
  * `session.runVerb('save_document' | 'open_document' | 'list_documents', ...)` を
  * 直接呼ぶので、`CommandHost` の引数収集(ここでの `CommandDef` 宣言)を経由しない。
  */
-export const FILE_COMMANDS: CommandDef[] = [IMPORT_STEP, EXPORT_STEP, EXPORT_STL, MAKE_EDITABLE_COPY]
+export const FILE_COMMANDS: CommandDef[] = [
+  IMPORT_STEP,
+  IMPORT_SVG,
+  EXPORT_STEP,
+  EXPORT_STL,
+  MAKE_EDITABLE_COPY,
+]
 
 /**
  * そのverbは**文書を変えるか**(＝応答が状態配信で返るか)。
@@ -169,5 +221,10 @@ export const FILE_COMMANDS: CommandDef[] = [IMPORT_STEP, EXPORT_STEP, EXPORT_STL
  * そのまま残す。
  */
 export function changesDocument(verb: string): boolean {
-  return verb === 'open_document' || verb === IMPORT_STEP.id || verb === MAKE_EDITABLE_COPY.id
+  return (
+    verb === 'open_document' ||
+    verb === IMPORT_STEP.id ||
+    verb === IMPORT_SVG.id ||
+    verb === MAKE_EDITABLE_COPY.id
+  )
 }

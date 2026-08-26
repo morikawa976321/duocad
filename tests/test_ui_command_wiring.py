@@ -426,6 +426,7 @@ ENTER_REQUIRED = {
     "pattern_rectangular": True,   # 図形は何個でも + 個数と間隔
     "pattern_circular": True,      # 図形は何個でも + 中心 + 個数と角度
     "import_step_editable": True,  # パス
+    "import_svg": True,            # 貼る先 + パス(howがある → Enterが要る)
     "export_step": True,           # パス
     "export_stl": True,            # パス + 偏差
     "make_editable_copy": False,   # **面1つだけ。howが無い → 即適用**

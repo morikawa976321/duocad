@@ -70,6 +70,17 @@ def _validate_arc(params: Dict[str, float]) -> None:
         raise ValueError("arc start_deg and end_deg must differ (角度0の円弧は辺にならない)")
 
 
+def _validate_bezier(params: Dict[str, float]) -> None:
+    """3次ベジエ。**始点と終点が一致していてよい**(閉じた1本の曲線はSVGに普通にある)。
+
+    弾くのは制御点4つが1点に潰れた場合だけ —— そのときだけ長さ0の辺になり、以後
+    `regions()` が毎回失敗する。
+    """
+    points = _bezier_points(params)
+    if all(point == points[0] for point in points[1:]):
+        raise ValueError("bezier control points must not all coincide (長さ0の曲線は辺にならない)")
+
+
 def _translate_line(params: Dict[str, float], dx: float, dy: float) -> Dict[str, float]:
     return {
         "x0": params["x0"] + dx,
@@ -98,6 +109,12 @@ def _translate_rectangle(params: Dict[str, float], dx: float, dy: float) -> Dict
     moved["x"] = params["x"] + dx
     moved["y"] = params["y"] + dy
     return moved
+
+
+def _translate_bezier(params: Dict[str, float], dx: float, dy: float) -> Dict[str, float]:
+    return _bezier_params(
+        [(px + dx, py + dy) for px, py in _bezier_points(params)]
+    )
 
 
 def _rotate_point(x: float, y: float, cx: float, cy: float, angle_deg: float) -> Tuple[float, float]:
@@ -182,6 +199,22 @@ def _rotate_rectangle(
     return [{"kind": "rectangle", "params": _translate_rectangle(params, ncx - ecx, ncy - ecy)}]
 
 
+def _rotate_bezier(
+    params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
+) -> List[dict]:
+    """**ベジエはアフィン不変**なので、制御点を回すだけで曲線が厳密に回る。
+
+    長方形(`_rotate_rectangle`)のように種別が崩れて線分4本に化けることが無い唯一の曲線で、
+    戻り値は常に1要素のまま。
+    """
+    if rotate_copies:
+        rotated = [_rotate_point(px, py, cx, cy, angle_deg) for px, py in _bezier_points(params)]
+        return [{"kind": "bezier", "params": _bezier_params(rotated)}]
+    mx, my = _center_bezier(params)
+    nmx, nmy = _rotate_point(mx, my, cx, cy, angle_deg)
+    return [{"kind": "bezier", "params": _translate_bezier(params, nmx - mx, nmy - my)}]
+
+
 def _center_line(params: Dict[str, float]) -> Tuple[float, float]:
     return ((params["x0"] + params["x1"]) / 2.0, (params["y0"] + params["y1"]) / 2.0)
 
@@ -196,6 +229,37 @@ def _center_arc(params: Dict[str, float]) -> Tuple[float, float]:
 
 def _center_rectangle(params: Dict[str, float]) -> Tuple[float, float]:
     return (params["x"] + params["width"] / 2.0, params["y"] + params["height"] / 2.0)
+
+
+def _center_bezier(params: Dict[str, float]) -> Tuple[float, float]:
+    """**制御点4つの重心**。曲線上の点ではないが、平行移動・回転の基準として一貫していれば
+    足りる(`_center_line` が線分の中点を返すのと同じ役割)。"""
+    points = _bezier_points(params)
+    return (
+        sum(point[0] for point in points) / 4.0,
+        sum(point[1] for point in points) / 4.0,
+    )
+
+
+#: 3次ベジエの `params` のキー(**始点・制御点1・制御点2・終点の順**)。
+#: `_bezier_points` / `_bezier_params` の往復がこの順序を唯一の正とする。
+BEZIER_KEYS = ("x0", "y0", "cx1", "cy1", "cx2", "cy2", "x1", "y1")
+
+
+def _bezier_points(params: Dict[str, float]) -> List[Tuple[float, float]]:
+    """`params` を制御点4つの (x, y) へ。"""
+    return [
+        (float(params["x0"]), float(params["y0"])),
+        (float(params["cx1"]), float(params["cy1"])),
+        (float(params["cx2"]), float(params["cy2"])),
+        (float(params["x1"]), float(params["y1"])),
+    ]
+
+
+def _bezier_params(points: List[Tuple[float, float]]) -> Dict[str, float]:
+    """制御点4つの (x, y) を `params` へ(`_bezier_points` の逆)。"""
+    flat = [value for point in points for value in point]
+    return {key: float(value) for key, value in zip(BEZIER_KEYS, flat)}
 
 
 @dataclass(frozen=True)
@@ -217,6 +281,7 @@ _ENTITY_KIND_TABLE: Dict[str, EntityKindOps] = {
     "circle": EntityKindOps(_validate_circle, _translate_circle, _rotate_circle, _center_circle),
     "rectangle": EntityKindOps(_validate_rectangle, _translate_rectangle, _rotate_rectangle, _center_rectangle),
     "arc": EntityKindOps(_validate_arc, _translate_arc, _rotate_arc, _center_arc),
+    "bezier": EntityKindOps(_validate_bezier, _translate_bezier, _rotate_bezier, _center_bezier),
 }
 
 #: 図形の種別。**`_ENTITY_KIND_TABLE` のキーが唯一の正**(新種別は表に1行足すだけでよい)。
@@ -286,6 +351,12 @@ class Entity:
         circle    : cx, cy, radius
         rectangle : x, y, width, height
         arc       : cx, cy, radius, start_deg, end_deg   (度・反時計回り・X軸から。0度をまたいでよい)
+        bezier    : x0, y0, cx1, cy1, cx2, cy2, x1, y1   (始点・制御点1・制御点2・終点)
+
+    **bezier だけは値が素の数値のまま**でありうる。これを作るのは `import_svg` だけで、
+    取り込んだ曲線の制御点座標は「人が打ち直す寸法」ではないため名前つきの値に登録しない
+    (ロゴ1枚で数千個の `d1` が並び、ParametersPanel が使い物にならなくなる)。
+    `parameters.resolve` は素の数値をそのまま返すので、この形は元から通る。
     """
 
     id: EntityId
@@ -362,7 +433,7 @@ def sketch_create(doc: Document, plane: Any) -> SketchId:
     面を指定する場合、その面が**平面でなければ ValueError**(円筒面などに貼らせない ——
     黙って通すと以後の領域検出が意味を失う)。失敗時は `doc.sketches` にもログにも残さない。
     """
-    plane_ref = _resolve_plane(doc, plane)
+    plane_ref = resolve_plane(doc, plane)
     sketch_id = f"sketch-{uuid4().hex[:12]}"
     # モデルとログには別のdictを渡す(共有すると、貼った面の由来スロットを後から埋めた
     # 瞬間に、唯一の正であるログが黙って書き換わる)。
@@ -456,8 +527,12 @@ def entity_params(
     )
 
 
-def _resolve_plane(doc: Document, plane: Any) -> dict:
-    """引数の平面指定を PlaneRef のdictへ正規化する。失敗時は文書を触らない。"""
+def resolve_plane(doc: Document, plane: Any) -> dict:
+    """引数の平面指定を PlaneRef のdictへ正規化する。失敗時は文書を触らない。
+
+    **verb層からも呼ぶ**(`verbs/import_svg.py`)ので公開している —— 平面の解決を2箇所に
+    持つと、面が平面かどうかの検査が片方だけ抜ける。
+    """
     if isinstance(plane, str):
         return base_plane(plane)
     if isinstance(plane, dict) and plane.get("kind") == "base":

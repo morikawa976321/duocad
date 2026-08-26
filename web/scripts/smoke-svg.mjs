@@ -1,0 +1,274 @@
+/**
+ * 実ブラウザでのSVG読み込みの検査。
+ *
+ * pytestが見られないのは「**画面から本当に通せるか**」だけである。verbの中身・単位・
+ * 再生は `tests/test_svg_import.py` が持つので、ここは人の手順をそのまま通す:
+ *
+ *   1. ツールバーの「SVG読み込み」を押すと**貼る先を待つ**(基準平面が指せるようになる)
+ *   2. 基準平面をクリック → パスを打つ → Enter で**スケッチが1枚できて画面に描かれる**
+ *   3. **スケッチモードに入らない**まま、通常モードで領域を指して**そのまま押し出せる**
+ *   4. ベジエの輪郭を押し出しても**側面が割れない**(面数で見る)
+ *   5. **パラメータが増えない**(`d1` が並ばない ＝ 取り込みは名前つきの値を作らない)
+ *   6. **Ctrl+Z 1回で取り込みごと消える**(ログ1行に収まっている)
+ *
+ *   web> node scripts/smoke-svg.mjs [--workdir <書き込めるディレクトリ>]
+ *
+ * **サーバはこのスクリプトが自分で立てる**(`web/scripts/server.mjs`)。既に立っている
+ * ものへ繋ぐときだけ `--url` を渡す。
+ */
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { findBrowser, launchBrowser, withoutBrowserPanel, pressUndo } from './browser.mjs'
+import { fail, ok, parseArgs } from './args.mjs'
+import { startServer } from './server.mjs'
+
+const options = parseArgs(process.argv.slice(2))
+const attachUrl = options.url ?? null
+const wsPort = options.port ?? '8797'
+const httpPort = options['http-port'] ?? '8798'
+const timeout = Number.parseInt(options.timeout ?? '120000', 10)
+const workdir = options.workdir ?? mkdtempSync(join(tmpdir(), 'duocad-svg-'))
+
+/**
+ * 検査に使うSVG。**物理単位を持たせない**(viewBoxだけ)ので 1ユーザー単位 = 1mm になる。
+ *
+ * 曲線を混ぜてあるのは `bezier` 種別が画面と押し出しまで通ることを見るため。丘の形
+ * (3次ベジエ1本 + 閉じる直線1本)は**辺が2本しかない**ので、押し出した立体は
+ * 上下2枚 + 側面2枚 = **4面**になる。折れ線化していればここが数十面に増える。
+ */
+const SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 40">
+  <rect x="4" y="4" width="24" height="16"/>
+  <circle cx="44" cy="12" r="7"/>
+  <path d="M 8 34 C 20 22, 40 22, 52 34 Z"/>
+</svg>
+`
+
+/** 取り込んだ図形の内訳。SVGを変えたらここも変える(数が合わないと下の検査が意味を失う)。 */
+const EXPECTED = {
+  entities: 4 + 4 + 2, // 矩形=線4 / 円=弧4 / 丘=ベジエ1+線1
+  regions: 3,
+  hillFaces: 4, // 丘を押し出した立体の面数(**曲線が曲線のままなら4**)
+}
+const THICKNESS = 5
+
+async function main() {
+  const executablePath = findBrowser()
+  console.log(`smoke-svg: ${executablePath}`)
+  console.log(`  workdir: ${workdir}`)
+
+  const svgPath = join(workdir, 'shapes.svg')
+  writeFileSync(svgPath, SVG, 'utf8')
+
+  const server =
+    attachUrl === null ? await startServer({ wsPort, httpPort, modelsDir: workdir }) : null
+  const url = server?.url ?? attachUrl
+  console.log(`  server : ${url}${server === null ? ' (既に立っているサーバへ接続)' : ''}`)
+
+  const browser = await launchBrowser(executablePath)
+  try {
+    const page = await browser.newPage()
+    await page.setViewport({ width: 1280, height: 900 })
+    const consoleErrors = []
+    page.on('pageerror', (error) => consoleErrors.push(String(error)))
+    page.on('console', (message) => {
+      if (message.type() === 'error') consoleErrors.push(message.text())
+    })
+
+    await page.goto(url, { waitUntil: 'load', timeout })
+    await page.waitForFunction(() => Boolean(window.__duocad && window.__duocad.ready), {
+      timeout,
+      polling: 100,
+    })
+    if ((await page.evaluate(() => window.__duocad.parts.length)) !== 0) {
+      fail('空の文書で起動していない(サーバを起動し直す)')
+    }
+    ok('空の文書で起動した')
+
+    /**
+     * 画面の状態。**アクティブなスケッチを見ない** —— `import_svg` はスケッチモードへ
+     * 入らないので(`sketch_create` だけが入る)、取り込んだスケッチは常に非アクティブである。
+     */
+    const look = async () =>
+      JSON.parse(
+        await page.evaluate(() => {
+          const hook = window.__duocad
+          const sketch = hook.sketches[hook.sketches.length - 1] ?? null
+          return JSON.stringify({
+            sketches: hook.sketches.length,
+            activeSketch: hook.activeSketch,
+            sketchId: sketch?.sketch_id ?? null,
+            entities: sketch?.entities?.length ?? 0,
+            kinds: [...new Set((sketch?.entities ?? []).map((entity) => entity.kind))].sort(),
+            drawn: sketch?.drawn?.length ?? 0,
+            regions: (sketch?.regions ?? []).map((item) => ({
+              index: item.index,
+              area: item.area,
+            })),
+            parts: hook.parts.map((body) => ({ volume: body.volume, faces: body.face_count })),
+            parameters: Object.keys(hook.parameters ?? {}).length,
+            log: hook.state.log.length,
+            errors: hook.errors,
+          })
+        }),
+      )
+
+    async function waitFor(predicate, what, ...args) {
+      try {
+        await page.waitForFunction(predicate, { timeout, polling: 50 }, ...args)
+      } catch {
+        fail(`${what}: ${JSON.stringify(await look())}`)
+      }
+    }
+
+    // ============================================================ 1: 貼る先を待つ
+    await page.click('#file-import-svg')
+    await waitFor(
+      // **プロパティであって関数ではない**(`smoke-regions.mjs` と同じ読み方)。
+      () => window.__duocad.wantsBasePlanes === true,
+      'SVG読み込みを起動しても基準平面が指せるようにならない',
+    )
+    ok('「SVG読み込み」が貼る先を待っている(基準平面が指せる)')
+
+    // ============================================================ 2: 平面 → パス → Enter
+    //
+    // **座標はクリックの直前に射影し直す**(`projectBasePlane` はその画素から本当にその
+    // 平面が取れることを確かめてから返す)。浮いているパネルはレイ検査に見えないので、
+    // 指す間だけ畳む(`withoutBrowserPanel`)。
+    await withoutBrowserPanel(page, async () => {
+      const handle = await page.waitForFunction(
+        () => {
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const at = window.__duocad.projectBasePlane('XY')
+          return at ? { x: at.x + rect.left, y: at.y + rect.top } : null
+        },
+        { timeout, polling: 50 },
+      )
+      const at = await handle.jsonValue()
+      await page.mouse.click(at.x, at.y)
+    })
+
+    await page.click('#file-svg-path')
+    await page.type('#file-svg-path', svgPath)
+    await page.keyboard.press('Enter')
+
+    await waitFor(
+      (expected) => {
+        const sketch = window.__duocad.sketches[window.__duocad.sketches.length - 1]
+        return Boolean(sketch) && sketch.entities.length === expected
+      },
+      `取り込んだ図形が ${EXPECTED.entities} 個にならない`,
+      EXPECTED.entities,
+    )
+    const after = await look()
+    ok(`SVGを取り込んでスケッチが1枚できた(図形 ${after.entities} 個 / ${after.kinds.join(', ')})`)
+
+    if (!after.kinds.includes('bezier')) {
+      fail(`ベジエが図形として入っていない: ${JSON.stringify(after.kinds)}`)
+    }
+    if (after.drawn !== after.entities) {
+      fail(`描画用の図形が足りない: drawn=${after.drawn} entities=${after.entities}`)
+    }
+    if (after.regions.length !== EXPECTED.regions) {
+      fail(`領域が ${EXPECTED.regions} 個にならない: ${JSON.stringify(after.regions)}`)
+    }
+    ok(`ベジエを含む ${after.entities} 図形が描かれ、領域が ${after.regions.length} 個できた`)
+
+    // ============================================================ 3-4: そのまま押し出せる
+    //
+    // **スケッチモードへ入らないまま**通常モードで領域を指す(2026-08-23に領域ピックは
+    // 通常モードへ移っている)。取り込み → 押し出しの間にEscが要らないことがここの主張。
+    if (after.activeSketch !== null) {
+      fail(`取り込みでスケッチモードに入っている: ${after.activeSketch}`)
+    }
+
+    // 丘の領域 = 矩形(24×16)でも円(半径7)でもない残りの1つ。
+    const areaOf = (region) => region.area
+    const hill = after.regions.find(
+      (region) =>
+        Math.abs(areaOf(region) - 24 * 16) > 1 && Math.abs(areaOf(region) - Math.PI * 49) > 1,
+    )
+    if (!hill) fail(`丘の領域が見つからない: ${JSON.stringify(after.regions)}`)
+
+    await page.click('#extrude-regions')
+    await waitFor(() => window.__duocad.wantsRegions === true, '「領域を押し出す」で領域を要求しない')
+
+    await withoutBrowserPanel(page, async () => {
+      const handle = await page.waitForFunction(
+        (sketchId, index) => {
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const at = window.__duocad.projectRegion(index, sketchId)
+          return at ? { x: at.x + rect.left, y: at.y + rect.top } : null
+        },
+        { timeout, polling: 50 },
+        after.sketchId,
+        hill.index,
+      )
+      const at = await handle.jsonValue()
+      await page.mouse.click(at.x, at.y)
+    })
+
+    await page.click('#regions-distance')
+    await page.type('#regions-distance', String(THICKNESS))
+    await page.click('#extrude-mode-join')
+    await page.keyboard.press('Enter')
+
+    await waitFor(
+      (expected) => {
+        const parts = window.__duocad.parts
+        return parts.length === 1 && Math.abs(parts[0].volume - expected) < expected * 0.02
+      },
+      '取り込んだ領域を押し出せない',
+      hill.area * THICKNESS,
+    )
+    const built = (await look()).parts[0]
+    ok(`取り込んだ領域をそのまま押し出せた(体積 ${built.volume.toFixed(1)} mm^3)`)
+
+    if (built.faces !== EXPECTED.hillFaces) {
+      fail(
+        `曲線の側面が割れている(面数 ${built.faces}、期待 ${EXPECTED.hillFaces})` +
+          ' —— ベジエが折れ線に落ちている',
+      )
+    }
+    ok(`曲線の側面は1枚のまま(面数 ${built.faces})`)
+
+    // ============================================================ 5: パラメータを増やさない
+    //
+    // 取り込んだ図形の座標は「人が打ち直す寸法」ではないので名前つきの値を作らない。
+    // ここが増えると ParametersPanel がロゴ1枚で埋まる(`verbs/import_svg.py`)。
+    const withSolid = await look()
+    if (withSolid.parameters !== 0) {
+      fail(`取り込みが名前つきの値を作っている(${withSolid.parameters}個)`)
+    }
+    ok('パラメータは1つも増えていない')
+
+    // ============================================================ 6: Ctrl+Z で戻る
+    //
+    // 押し出しで1回、取り込みで1回。**取り込みは何個図形があっても1回**。
+    if (withSolid.log !== 2) {
+      fail(`ログが2行(取り込み+押し出し)になっていない: ${withSolid.log}行`)
+    }
+    await pressUndo(page)
+    await waitFor(() => window.__duocad.parts.length === 0, 'Ctrl+Zで押し出しが戻らない')
+    await pressUndo(page)
+    await waitFor(
+      () => window.__duocad.sketches.length === 0,
+      'Ctrl+Z 1回で取り込みが消えない(ログがverbごとに分かれている)',
+    )
+    ok('Ctrl+Z 2回で押し出しと取り込みが戻った(取り込みはログ1行)')
+
+    const errors = (await look()).errors
+    if (errors.length > 0) fail(`画面にエラーが出ている: ${JSON.stringify(errors)}`)
+    if (consoleErrors.length > 0) fail(`コンソールにエラー: ${JSON.stringify(consoleErrors)}`)
+    ok('エラーは出ていない')
+    console.log('smoke-svg: OK')
+  } finally {
+    await browser.close()
+    server?.stop()
+  }
+}
+
+main().catch((error) => {
+  console.error(error)
+  process.exit(1)
+})
