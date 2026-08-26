@@ -847,7 +847,10 @@ pattern_rectangular(doc, sketch_id, entities, dx, dy, nx, ny) -> PatternId
 | モジュール | 役割 | OCP直接import | build123d直接import |
 |---|---|---|---|
 | `duocad/selection.py` | 選択機構（何が選べるか。可視性を含む） | 禁止 | 禁止 |
-| `duocad/verbs/visibility.py` | verb `set_visible` | 禁止 | 禁止 |
+| ~~`duocad/verbs/visibility.py`~~ | verb `set_visible` | 禁止 | 禁止 |
+（**2026-08-26**: `set_visible` はverbをやめ、実体は `duocad/selection.py` へ移した。
+操作ログに載らず undo / redo でも戻らない。以下この文書で「ログに載る・undoで戻る」と
+書いてある可視性の記述はすべて当時の設計であり、現在の契約ではない。）
 
 変更するモジュール: `duocad/io_step.py`（分解）、`duocad/server.py`（差分送信）、
 `duocad/verbs/extrude_face.py`（不可視Bodyの拒否）。
@@ -896,7 +899,10 @@ import_step(doc: Document, path: str | Path) -> list[BodyId]      # 戻り値が
 `web/`（アプリ層）も `state` の形が変わるので追随が要る。**パーツ一覧パネルは次々タスクの
 範囲**だが、既存のビューアが動かなくなる点は認識しておくこと。
 
-## `duocad/verbs/visibility.py` — 可視性のverb
+## `duocad/verbs/visibility.py` — 可視性のverb（**2026-08-26に廃止**）
+
+現在は `duocad/selection.py` の `set_visible(doc, body_id, visible) -> dict`。以下はverbだった
+当時の記述で、`previous` を `args` に持つ理由（undoが元の値へ戻すため）ごと失効している。
 
 ```python
 set_visible(doc: Document, body_id: BodyId, visible: bool) -> Operation
@@ -1129,7 +1135,7 @@ auto 枠**でレビューした。auto は Composer/Grok 系へルーティン�
         「参照（隠されている）」と「編集用コピー」の対ができるので、そのまま見せると同じ部品が
         2つ並び、隠しても画面が変わらない方をAIが掴む。隠した件数は `reference_count` で必ず返す。
     set_visible(body_id, visible)
-        コアの verb `set_visible` を経由する（`Session.set_visible`）。操作ログに載り、undoで戻る。
+        コアを経由する（`Session.set_visible`）。**2026-08-26以降は操作ログに載らず、undoで戻らない。**
     describe_shape(body_id)
         `query.describe_shape` の値 ＋ 体積 ＋ `kernel.bounding_box`。読み取りのみ。
 
@@ -1795,7 +1801,7 @@ DSL文字列を採らない理由は **MCPのツールがスキーマを持つ**
 | | 文書を変えるか | ログに載るか | イベント |
 |---|---|---|---|
 | 選択の変更 | いいえ | **載らない** | **発火する** |
-| `set_visible` | はい（`Body.visible`） | **載る**（undoで戻る） | 発火する |
+| `set_visible` | はい（`Body.visible`） | **載らない**（2026-08-26。undoで戻らない） | 発火する |
 
 選択をログに載せない理由は、undoの単位（§2「verbの粒度」＝undo1回で消える単位）を
 汚さないため。選択し直すたびにundo1手を消費する編集は使い物にならない。
@@ -1868,7 +1874,7 @@ MCP起点の変更から `applied` を落として配る（`applied` は操作�
 | 3（重複しない） | `test_adding_the_same_reference_twice_does_not_duplicate`（位置も動かないこと込み） / `test_the_same_index_on_two_bodies_is_not_a_duplicate` |
 | 4（空にできる） | `test_clear_selection_empties_it` |
 | 5（操作をまたいで残る。**2026-08-20に契約変更、上の注記参照**） | `test_operating_the_raw_verb_function_does_not_touch_selection`（旧名 `test_selection_survives_an_operation`） |
-| 6（ログに載らない） | `test_changing_the_selection_does_not_touch_the_operation_log` ＋ 対照の `test_set_visible_still_lands_in_the_log` |
+| 6（ログに載らない） | `test_changing_the_selection_does_not_touch_the_operation_log` ＋ `test_set_visible_does_not_land_in_the_log_either`（対照は同テスト内の `sketch_create`） |
 | 7（保存されない） | `test_selection_is_not_saved` |
 | 8（提案として区別） | `test_proposed_items_are_distinguishable` |
 | 9（**交互操作そのもの**） | `test_the_ai_proposes_the_human_fixes_and_the_ai_reads_it_back` |

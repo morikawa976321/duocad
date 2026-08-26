@@ -3,9 +3,11 @@
 選択は `Document.selection` が持つ(コアの状態)。**保存はしない** —— 保存・再生の対象は
 操作ログだけであり、選択はセッション状態である。
 
-**選択の変更は操作ログに積まない**(文書を変更せず、undoの単位でもない)。一方 `set_visible` は
-`Body.visible` という**文書の状態**を変えるのでログに載る。この非対称は意図的。ただし
-**イベントは発火する** —— AIが選択を書き換えたら画面のハイライトは描き直される。
+**選択の変更も可視性の変更も操作ログに積まない**(どちらもundoの単位ではない。2026-08-26)。
+可視性は `Body.visible` という**文書の状態**を変えるが、それでもログには載せない —— 理由は
+`set_visible` の docstring。したがって Ctrl+Z / Ctrl+Y では戻らず、**保存もされない**
+(保存の実体は操作ログのJSONなので、開き直した文書は全ボディが可視で始まる)。ただし
+**イベントは発火する** —— AIが選択や可視性を書き換えたら画面は描き直される。
 
 `origin` は**集合単位**で持つ(項目ごとではない):
 
@@ -367,6 +369,43 @@ def _raise_missing(doc: Document, kind: str) -> NoReturn:
         kind,
         counts,
     )
+
+
+# --------------------------------------------------------------------------------------
+# 可視性 — 選択機構の一部。**verbではない**(操作ログに積まない)
+# --------------------------------------------------------------------------------------
+def set_visible(doc: Document, body_id: BodyId, visible: bool) -> dict:
+    """Bodyの表示・非表示を切り替える。**undo / redo の対象外**(2026-08-26本人決定)。
+
+    可視性は形ではなく「何を指せるか」の定義である。形を1つも変えないものがundoの1手を
+    消費すると、**奥の面を見るために手前を隠して戻すという「見るための操作」が編集の履歴を
+    埋め**、直前の押し出しへ戻るのにCtrl+Zを何度も叩くことになる。しかも `OpLog.append` は
+    redo可能な末尾を捨てるので、undo直後に何かを隠すとredoが黙って消えていた。
+
+    ログに載せない結果として**保存もされない**(保存の実体は `OpLog.to_json`)。開き直した
+    文書は全ボディが可視で始まる —— 選択と同じ「セッション状態」の扱いにする。
+
+    存在しない body_id は KeyError(文書は何も変わらない)。
+    """
+    body = doc.get_body(body_id)
+    previous = body.visible
+    body.visible = bool(visible)
+    return {
+        "body_id": body_id,
+        "visible": body.visible,
+        "previous": previous,
+        "changed": previous != body.visible,
+    }
+
+
+def visibility_fingerprint(doc: Document) -> str:
+    """可視性の「指紋」。**楽観ロック(`DocumentTools.current_seq`)のために要る。**
+
+    可視性がログに載らなくなった以上、`len(doc.log.entries)` では「AIが考えている間に人が
+    ボディを隠した」を検出できない。見逃すと、AIが**人が隠したものを黙って表示に戻す**
+    (逆も同じ)。`fingerprint`(選択)と同じ役目を可視性について果たす。
+    """
+    return json.dumps(sorted(body.id for body in doc.bodies if not body.visible))
 
 
 # --------------------------------------------------------------------------------------

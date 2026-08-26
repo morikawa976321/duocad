@@ -25,9 +25,10 @@ from duocad import kernel, selection
 from duocad.document import Body, Document
 from duocad.oplog import OpLog
 from duocad.region import region_ref, regions
+from duocad.selection import set_visible
 from duocad.server import Session
 from duocad.sketch import add_circle, sketch_create
-from duocad.verbs import extrude_face, set_visible
+from duocad.verbs import extrude_face
 
 #: 立方体ではなく直方体にする。3辺の長さが違えば「Zに平行な辺だけ」を選ぶ述語(test_predicates)が
 #: 長さでも区別でき、添字の偶然の一致でテストが通ってしまう余地が減る。
@@ -328,9 +329,9 @@ def test_operating_the_raw_verb_function_does_not_touch_selection(doc: Document)
 def test_changing_the_selection_does_not_touch_the_operation_log(doc: Document):
     """**選択の変更は操作ログに載らない**(選択は文書を変更しないため。項番6)。
 
-    `set_visible` が `Body.visible` という**文書の状態**を変えるのでログに載るのとは
-    対照的である。この非対称は意図的で、undoの単位(§2「verbの粒度」)を選択が汚さない
-    ようにするためでもある —— 選択し直すたびにundo1手を消費する編集は使い物にならない。
+    undoの単位(§2「verbの粒度」)を選択が汚さないようにするためでもある —— 選択し直す
+    たびにundo1手を消費する編集は使い物にならない。同じ理由で `set_visible` も載せない
+    (下のテスト)。
     """
     before = len(doc.log.entries)
     selection.propose_selection(doc, refs=[selection.select_face(doc, "box", 1)])
@@ -340,14 +341,20 @@ def test_changing_the_selection_does_not_touch_the_operation_log(doc: Document):
     assert len(doc.log.entries) == before
 
 
-def test_set_visible_still_lands_in_the_log(doc: Document):
-    """対照実験: 文書の状態を変える `set_visible` は**ログに載る**。
+def test_set_visible_does_not_land_in_the_log_either(doc: Document):
+    """**可視性もログに載らない**(2026-08-26)。`Body.visible` という文書の状態を変えるが、
+    形は1つも変えないので undo の1手を使わせない —— 奥を覗くために手前を隠して戻す
+    「見るための操作」が編集の履歴を埋めると、直前の押し出しへ戻れなくなる。
 
-    上のテストが「ログが増えないこと」を見ているので、そもそもこの文書でログが増える
-    経路が生きていることを確かめておかないと、両方緑のまま何も検査していない状態になる。
+    **対照実験を同じテストに入れる**。上のテストと合わせて「ログが増えない」しか見ていないと、
+    そもそもこの文書でログが増える経路が死んでいても両方緑になる。
     """
     before = len(doc.log.entries)
     set_visible(doc, "box", False)
+    set_visible(doc, "box", True)
+    assert len(doc.log.entries) == before, "可視性が操作ログに積まれている"
+
+    sketch_create(doc, "XY")  # 対照: 本物のverbは載る
     assert len(doc.log.entries) == before + 1
 
 
@@ -358,8 +365,7 @@ def test_selection_is_not_saved(doc: Document):
     **選択が空でないまま保存し、選択のある文書へ再生しても消える**ところまで見る
     (「新しい文書の選択が空」を見るだけでは、実装が間違っていても緑になる)。
     """
-    set_visible(doc, "box", False)  # ログに1行積んでおく(空のログを再生しても何も検査できない)
-    set_visible(doc, "box", True)
+    sketch_create(doc, "XY")  # ログに1行積んでおく(空のログを再生しても何も検査できない)
     selected = selection.select_face(doc, "box", 1)
     selection.propose_selection(doc, refs=[selected])
     saved = doc.log.to_json()

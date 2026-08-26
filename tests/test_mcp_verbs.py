@@ -59,7 +59,6 @@ VERB_TOOLS = {
     "pattern_rectangular",
     "pattern_circular",
     # ボディ・パラメータ
-    "set_visible",
     "make_editable_copy",
     "set_parameter",
     # 入出力
@@ -76,12 +75,17 @@ VERB_TOOLS = {
 QUERY_TOOLS = {"describe_document", "describe_shape", "measure", "describe_predicates"}
 
 #: 選択(§5「選択(中心)」)。契約の本体は `tests/test_mcp_selection.py`。
+#:
+#: **`set_visible` はここ**(2026-08-26)。可視性は選択機構の一部であり、選択と同じく
+#: 操作ログに載らない —— したがって `VERB_TOOLS`(=ログのverb名と綴りが一致する集合)に
+#: 置くと、下の `LOGGING_TOOLS` の一致検査が「ツールがあるのにverbが無い」で落ちる。
 SELECTION_TOOLS = {
     "get_selection",
     "propose_selection",
     "modify_selection",
     "commit_selection",
     "clear_selection",
+    "set_visible",
 }
 
 #: 到達表の19操作には数えないが、**ログに載るverbと同じ綴りで呼べる**ために要るツール。
@@ -476,17 +480,22 @@ def test_changed_bodies_is_empty_when_only_a_sketch_changed(
     assert payload["sketch_id"]
 
 
-def test_set_visible_still_reports_the_same_shape(server: McpServer, box_session: Session):
-    """M4で決めた `set_visible` の戻り値(`previous` / `changed`)を壊さない。
+def test_set_visible_reports_the_change_but_not_a_verb_envelope(
+    server: McpServer, box_session: Session
+):
+    """M4で決めた `set_visible` の戻り値(`previous` / `changed`)は壊さない。ただし
+    **`verb` / `seq` は載せない**(2026-08-26)。
 
-    既存の `tests/test_mcp.py` が見ている契約であり、封筒を足すのは**追加**であって
-    置き換えではない。
+    可視性は操作ログに載らなくなったので、verbの封筒を配ると「undoで戻る」と読める嘘を
+    AIへ渡すことになる。見分けは選択と同じ `change` キー(契約2)。
     """
     box = box_session.document.bodies[0]
     payload = call(server, "set_visible", {"body_id": box.id, "visible": False})
-    _assert_verb_envelope(payload, "set_visible")
+    assert payload["change"] == "visibility"
+    assert "verb" not in payload and "seq" not in payload
     assert payload["previous"] is True and payload["visible"] is False and payload["changed"] is True
-    assert payload["changed_bodies"] == [box.id]
+    assert payload["changed_bodies"] == [box.id], "版の前後差では拾えている(可視性は版に入る)"
+    assert box_session.document.log.entries == [], "可視性が操作ログに積まれている"
 
 
 def test_every_sketch_verb_is_reachable_and_returns_its_id(empty_session: Session):
@@ -1005,16 +1014,18 @@ def test_undo_through_mcp_undoes_the_ui_operation(box_session: Session):
     box = box_session.document.bodies[0]
     server = McpServer(DocumentTools(box_session))
 
-    # 人の操作(アプリ層の経路)
-    box_session.set_visible(box.id, False)
-    assert box.visible is False
+    # 人の操作(アプリ層の経路)。**材料に可視性は使えない** —— `set_visible` は2026-08-26に
+    # 操作ログから外れ、undoの対象ではなくなった(`duocad.selection.set_visible`)。
+    select_refs(server, [face_ref(box.id, 1)])
+    box_session.extrude(5.0)
+    extruded = call(server, "describe_shape", {"body_id": box.id})["volume"]
     log_length = len(box_session.document.log.entries)
 
     payload = call(server, "undo")
 
     assert payload["verb"] == "undo"
-    assert payload["undone"] == "set_visible"
-    assert box.visible is True
+    assert payload["undone"] == "extrude_face"
+    assert call(server, "describe_shape", {"body_id": box.id})["volume"] != pytest.approx(extruded)
     assert len(box_session.document.log.entries) == log_length - 1
     assert payload["changed_bodies"] == [box.id]
 
@@ -1022,13 +1033,15 @@ def test_undo_through_mcp_undoes_the_ui_operation(box_session: Session):
 def test_redo_through_mcp_replays_it(box_session: Session):
     box = box_session.document.bodies[0]
     server = McpServer(DocumentTools(box_session))
-    box_session.set_visible(box.id, False)
+    select_refs(server, [face_ref(box.id, 1)])
+    box_session.extrude(5.0)
+    extruded = call(server, "describe_shape", {"body_id": box.id})["volume"]
     call(server, "undo")
 
     payload = call(server, "redo")
 
-    assert payload["verb"] == "redo" and payload["redone"] == "set_visible"
-    assert box.visible is False
+    assert payload["verb"] == "redo" and payload["redone"] == "extrude_face"
+    assert call(server, "describe_shape", {"body_id": box.id})["volume"] == pytest.approx(extruded)
 
 
 def test_undo_with_nothing_to_undo_is_a_structured_failure(server: McpServer):

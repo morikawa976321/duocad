@@ -71,7 +71,8 @@
 MCP起点の変更から `applied` を落として配るため。`set_visible` の効果が `bodies[].visible` で
 届いているのと同じ場所)。選択の変更イベントは
 `{"change": "selection", "selection": {...}, "client_op": ...}` の形で、verbの `applied` とは
-キーで区別する(選択はverbではなく、操作ログにも載らない)。
+キーで区別する(選択はverbではなく、操作ログにも載らない)。**可視性も同じ `change` 系**
+(`{"change": "visibility", ...}`)—— こちらもverbではない(2026-08-26)。
 
 **OCPを直接importしない**(境界はkernel.pyだけ)。
 """
@@ -104,7 +105,6 @@ from .verbs import (
     pattern_circular as pattern_circular_verb,
     pattern_rectangular as pattern_rectangular_verb,
 )
-from .verbs import set_visible as set_visible_verb
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_WEB_DIST = REPO_ROOT / "web" / "dist"
@@ -343,8 +343,8 @@ class Session:
         中身は verb `import_step_editable` そのもの。
 
         **土台(undoの対象外にする範囲)はverb名ではなくseqの下限で区切る**(`_setup_floor_seq`)。
-        verb名で判定すると、`set_visible` のように後からユーザー操作としても呼ばれうるverbが
-        末尾に来た瞬間に以後の `undo` が誤って拒否される。
+        verb名で判定すると、後からユーザー操作としても呼ばれうるverbが末尾に来た瞬間に
+        以後の `undo` が誤って拒否される。
 
         通常の起動でここは通らない(pytestが直に呼ぶときだけ通る)。
         """
@@ -687,22 +687,22 @@ class Session:
         })
 
     def set_visible(self, body_id: str, visible: bool, client_op: Optional[int] = None) -> dict:
-        """パーツ一覧からの表示・非表示切り替え。**コアの `set_visible` verbを呼ぶだけ**
+        """パーツ一覧からの表示・非表示切り替え。**コアの `selection.set_visible` を呼ぶだけ**
         (アプリ層に可視性の状態を持たせない。実装計画書§2)。
 
-        呼ぶたびに操作ログへ1行積まれるので、undoで戻る。存在しない `body_id` は
-        `KeyError`(verb側の契約どおり。document・ログとも変更しない)。
+        **verbではない**ので操作ログには積まれず、undo / redo では戻らない
+        (理由は `selection.set_visible`)。発火するのは選択と同じ `change` 系のイベントで、
+        verbの `applied` とはキーで区別する:
+
+            {"change": "visibility", "body_id": .., "visible": .., "previous": .., "changed": ..,
+             "client_op": int | None}
+
+        効果そのものは配信される状態の `bodies[].visible` に載る(`body_revision` が
+        可視性を版に含めているので、`delta` でも必ず1つ上がる)。存在しない `body_id` は
+        `KeyError`(コア側の契約どおり。documentは変更しない)。
         """
-        operation = set_visible_verb(self.document, body_id, bool(visible))
-        self._applied_count += 1
-        return self._emit({
-            "verb": operation.verb,
-            "seq": operation.seq,
-            "client_op": client_op,
-            "body_id": body_id,
-            "visible": bool(visible),
-            "changed_bodies": [body_id],
-        })
+        changed = selection.set_visible(self.document, body_id, bool(visible))
+        return self._emit({"change": "visibility", "client_op": client_op, **changed})
 
     # ---------------------------------------------------------------- A1: 共有される選択集合
     #

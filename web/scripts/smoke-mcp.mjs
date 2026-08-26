@@ -12,7 +12,8 @@
  *   2. MCP経由で `set_visible(false)` にすると **ブラウザの表示が実際に変わる**
  *      (= コアが変更イベントを発火し、アプリ層が購読して描き直す上り方向が動いている)
  *   3. その状態で **奥の面が本物のマウスクリックで選べる**
- *   4. **undo で可視性が戻る**(ブラウザのCtrl+Z。AIの操作と人間の操作が同じ操作ログに載る)
+ *   4. **AIが積んだ操作をブラウザのCtrl+Zで取り消せる**(同じ操作ログを共有している)。
+ *      あわせて、**その同じCtrl+Zで可視性は戻らない**(`set_visible` は操作ログに載らない)
  *
  * サーバはこのスクリプトが `python -m duocad.mcp_server` として**空の文書で**起動する。
  * STEPはMCPの `import_step_editable` で読む。
@@ -305,21 +306,36 @@ async function main() {
     )
     await page.keyboard.press('Escape')
 
-    // ---------------------------------------------------------------- 検証4: undoで戻る
-    // AIの `set_visible` は人間の操作と同じ操作ログに載る。**ブラウザのCtrl+Z**で戻る。
+    // ------------------------------------------------- 検証4: 同じ操作ログ / 可視性は履歴の外
+    // **AIが積んだ操作を、人間がブラウザのCtrl+Zで取り消せる**(同じ操作ログを共有している)。
+    // 材料に可視性を使わない —— `set_visible` は操作ログに載らないので(2026-08-26)、
+    // **同じCtrl+Zを押しても隠れたまま**である。戻ってしまうと、奥を覗くために手前を隠した
+    // だけで直前の編集へ戻れなくなる。1回のCtrl+Zで両方を見る。
     const lastHidden = others[others.length - 1]
+    await mcp.callTool('make_editable_copy', { source_body_id: target.body_id })
+    await page.waitForFunction(
+      (expected) => window.__duocad.parts.length === expected,
+      { timeout, polling: 50 },
+      partsBeforeAi + 1,
+    )
     await page.keyboard.down('Control')
     await page.keyboard.press('KeyZ')
     await page.keyboard.up('Control')
     await page.waitForFunction(
-      (bodyId) => window.__duocad.parts.find((part) => part.body_id === bodyId).visible === true,
+      (expected) => window.__duocad.parts.length === expected,
       { timeout, polling: 50 },
+      partsBeforeAi,
+    )
+    ok('ブラウザのCtrl+Zで、AIが積んだ複製が取り消せた(AIと人間が同じ操作ログを共有している)')
+
+    const stillHidden = await page.evaluate(
+      (bodyId) => window.__duocad.parts.find((part) => part.body_id === bodyId).visible,
       lastHidden.body_id,
     )
-    ok(
-      `ブラウザのCtrl+Zで、AIが最後に隠した「${lastHidden.name}」が戻った` +
-        `(AIの操作と人間の操作が同じ操作ログに載っている)`,
-    )
+    if (stillHidden !== false) {
+      fail(`Ctrl+Zで「${lastHidden.name}」の非表示まで戻った(可視性は undo/redo の対象外のはず)`)
+    }
+    ok(`同じCtrl+Zでも「${lastHidden.name}」は隠れたまま(可視性は undo/redo の対象外)`)
 
     // 後始末: 全部表示へ戻す(次の実行のため)
     await setAllVisible(mcp, document.bodies, true)

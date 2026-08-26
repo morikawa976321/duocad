@@ -12,13 +12,14 @@ from __future__ import annotations
 # test_parameters.py と同じ流儀で借りる。tests/ は sys.path に入っている)。
 from test_boundaries import DUOCAD_DIR, _imported_module_roots, _source_files
 
-from duocad import kernel, selection
-from duocad.document import Document
-from duocad.io_step import import_step
-from duocad.verbs import extrude_face, make_editable_copy, set_visible
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
-#: M3.5のモジュール(import境界の走査対象に入っていることを固定する)
-M35_MODULES = ("selection.py", "verbs/visibility.py")
+from duocad.document import Body
+from duocad.server import Session
+
+#: M3.5のモジュール(import境界の走査対象に入っていることを固定する)。
+#: 可視性は2026-08-26に `verbs/visibility.py` から `selection.py` へ移った(verbではなくなった)。
+M35_MODULES = ("selection.py",)
 
 #: 押し出し量(mm)。符号は正＝外向き法線方向へ足す。
 EXTRUDE_MM = 1.0
@@ -37,3 +38,51 @@ def test_m35_modules_are_covered_by_the_import_boundary_scan():
         roots = _imported_module_roots(DUOCAD_DIR / rel)
         assert "OCP" not in roots, f"{rel} がOCPを直接importしている(kernel.py越しに呼ぶこと)"
         assert "build123d" not in roots, f"{rel} がbuild123dを直接importしている(query.py越し)"
+
+
+# --------------------------------------------------------------------------------------
+# 可視性は undo / redo の対象外(2026-08-26本人決定)
+# --------------------------------------------------------------------------------------
+def _box_session() -> Session:
+    """30×30×40 の直方体を1つ持つセッション(操作ログは空の状態から始まる)。"""
+    session = Session(None, 0.2)
+    session.document.add_body(
+        Body(id="box", name="box", kind="solid", shape=BRepPrimAPI_MakeBox(30.0, 30.0, 40.0).Shape())
+    )
+    return session
+
+
+def test_hiding_a_body_is_not_undoable():
+    """**Ctrl+Z で表示は戻らない**。undoが戻すのは直前の「形を変えた操作」である。
+
+    形を1つも変えない「見るための操作」がundoの1手を消費すると、奥の面を見るために手前を
+    隠して戻すだけで履歴が埋まり、直前の押し出しへ戻るのに何度もCtrl+Zを叩くことになる。
+    """
+    session = _box_session()
+    session.sketch_create("XY")  # 戻る先の本物のverbを1つ積んでおく
+
+    session.set_visible("box", False)
+    assert session.document.get_body("box").visible is False
+
+    session.undo()
+
+    assert session.document.get_body("box").visible is False, "undoが可視性まで戻している"
+    assert session.document.log.entries == [], "undoが戻したのは直前のverbのはず"
+
+
+def test_hiding_a_body_does_not_discard_the_redo_stack():
+    """隠しただけでredoが消えない。
+
+    `OpLog.append` は**redo可能だった末尾を新しい操作で捨てる**。可視性がverbだった頃は、
+    undoした直後に何かを隠すと「やり直せるはずのもの」が黙って消えていた。
+    """
+    session = _box_session()
+    session.sketch_create("XY")
+    session.undo()
+    assert session.document.log.can_redo, "検査の前提: やり直せる末尾があること"
+
+    session.set_visible("box", False)
+
+    assert session.document.log.can_redo, "隠しただけでredoが消えた"
+    session.redo()
+    assert len(session.document.log.entries) == 1

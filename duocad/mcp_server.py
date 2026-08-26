@@ -3,7 +3,8 @@
 **層の位置づけ(ここを誤ると設計が崩れる)**: MCPサーバは**アプリ層ではなく、コアのもう一人の
 クライアント**である。ブラウザ(web/)とMCPは同じ `Session`(=コア側の文書)を叩く対等な
 クライアントで、MCPからブラウザを操作したりブラウザの状態を読んだりしない。したがって
-`set_visible` はアプリ層を一切通らずに文書を変え、操作ログに載り、undoできる。
+`set_visible` はアプリ層を一切通らずに文書を変える(ただし**操作ログには載らず、undoで戻らない**
+—— 理由は `duocad.selection.set_visible`)。
 
 **上り方向(コアが変更を発火し、アプリ層が購読して描き直す)**: 実体は `Session.add_listener`
 で、`Server`(WebSocket)が購読して全接続へ配信する。MCPが可視性を変えると、**開いている
@@ -182,14 +183,19 @@ class DocumentTools:
           つもりで辺Bを黙って丸める。
         - **選択の指紋だけでも足りない**(形状が変わっても選択の中身が同じままのことがある)。
 
-        **それでも塞ぎきれない範囲が残る**: `set_visible` / `set_parameter` のように選択を
-        経由しないverbが対象にする `body_id`/パラメータ名は削除も改名もされないので、版が
-        ABAで偶然一致しても**verbが「別の対象」へ効くことはない**。残るのは「人が既に同じ
-        変更をしていたら上書きが起こりうる」程度の意図の陳腐化である。
+        - **可視性の指紋も要る**(2026-08-26)。`set_visible` は操作ログに載らなくなったので、
+          ログの本数でも選択の指紋でも「AIが考えている間に人がボディを隠した」が動かない。
+          抜けると、AIが**人が隠したものを黙って表示に戻す**(逆も同じ)。
+
+        **それでも塞ぎきれない範囲が残る**: `set_parameter` のように選択を経由しないverbが
+        対象にするパラメータ名は削除も改名もされないので、版がABAで偶然一致しても
+        **verbが「別の対象」へ効くことはない**。残るのは「人が既に同じ変更をしていたら
+        上書きが起こりうる」程度の意図の陳腐化である。
         """
         return (
             len(self.session.document.log.entries),
             selection.fingerprint(self.session.document),
+            selection.visibility_fingerprint(self.session.document),
         )
 
     # ------------------------------------------------------------------ 実体
@@ -268,12 +274,16 @@ class DocumentTools:
         }
 
     def set_visible(self, body_id: str, visible: bool) -> dict:
-        """可視性を切り替える。**コアの verb を経由する**(`Session.set_visible`)。
+        """可視性を切り替える。**コアを経由する**(`Session.set_visible`)。
 
-        ここを通ることで (a) 操作ログに1行積まれ (b) undoで戻り (c) 変更イベントが発火して
-        開いているブラウザが描き直す、の3つが同時に成立する。
+        ここを通ることで (a) 文書の `Body.visible` が変わり (b) 変更イベントが発火して
+        開いているブラウザが描き直す、の2つが同時に成立する。
 
-        存在しない `body_id` は KeyError(verbの契約。文書もログも変更しない)。
+        **verbではないので封筒に `verb` / `seq` を載せない**(契約2)。可視性は操作ログに
+        積まれず、undo / redo でも戻らない —— 理由は `duocad.selection.set_visible`。
+        AIが「隠したのを元に戻す」には `set_visible(visible=True)` を呼ぶ。
+
+        存在しない `body_id` は KeyError(コアの契約。文書は変更しない)。
         """
         body_id = str(body_id)
         if not isinstance(visible, bool):
@@ -289,25 +299,22 @@ class DocumentTools:
                 f"body {body_id!r} is a reference body: 参照ボディは読み取り専用の原本なので"
                 "表示を切り替えられない(編集用コピーの body_id を使うこと)"
             )
-        previous = before.visible
         revisions = self._revision_snapshot()
         applied = self.session.set_visible(body_id, visible)
-        envelope = self._verb_envelope(applied["verb"], applied["seq"], revisions)
-        envelope.update(
-            {
-                "body_id": body_id,
-                "name": before.name,
-                "visible": before.visible,
-                "previous": previous,
-                "changed": previous != before.visible,
-                "visible_count": sum(
-                    1
-                    for body in self.session.document.bodies
-                    if body.kind != "reference" and body.visible
-                ),
-            }
-        )
-        return envelope
+        return {
+            "change": "visibility",
+            "body_id": body_id,
+            "name": before.name,
+            "visible": applied["visible"],
+            "previous": applied["previous"],
+            "changed": applied["changed"],
+            "changed_bodies": self._changed_bodies(revisions),
+            "visible_count": sum(
+                1
+                for body in self.session.document.bodies
+                if body.kind != "reference" and body.visible
+            ),
+        }
 
     def describe_shape(self, body_id: str) -> dict:
         """1ボディの形状(面・辺の数と種別内訳・体積・境界箱)。読み取りのみ。"""
@@ -357,11 +364,7 @@ class DocumentTools:
         `changed_bodies` は verbごとの数え上げではなく、`Session.body_revision` の前後差。
         消えたBodyは出さない(現存Bodyだけを見る)。
         """
-        after = self._revision_snapshot()
-        changed_bodies: list[str] = []
-        for body in self.session.document.bodies:
-            if before.get(body.id) != after.get(body.id):
-                changed_bodies.append(body.id)
+        changed_bodies = self._changed_bodies(before)
         by_id = {body.id: body for body in self.session.document.bodies}
         return {
             "verb": verb,
@@ -371,6 +374,20 @@ class DocumentTools:
             "can_undo": self.session.can_undo,
             "can_redo": self.session.document.log.can_redo,
         }
+
+    def _changed_bodies(self, before: dict) -> list[str]:
+        """`Session.body_revision` の**前後差**で「変わったBody」を出す(消えたBodyは出さない)。
+
+        verbごとに「これはbodyを変える」と数え上げると、verbが増えたときに静かに漏れる
+        (契約2)。`body_revision` は形状の同一性と可視性のタプルから版を導くので、
+        押し出しでも `set_visible` でも同じこの1本で拾える。
+        """
+        after = self._revision_snapshot()
+        return [
+            body.id
+            for body in self.session.document.bodies
+            if before.get(body.id) != after.get(body.id)
+        ]
 
     def _selection_summary(self) -> dict:
         """エラー封筒へ載せる選択の要約(`count` / `origin` だけ)。"""
@@ -458,6 +475,9 @@ class DocumentTools:
     #    `duocad/selection.py` の `require_confirmed` / `require_edges` の1組だけ。
     # 2. **成功は封筒に入れて返す。** ログに1行積むツールは
     #    `verb` / `seq` / `changed_bodies` / `bodies` / `can_undo` / `can_redo` を必ず持つ。
+    #    **ログに載らない変更**(選択・`set_visible`)は `verb` / `seq` を持たず、代わりに
+    #    `change`("selection" / "visibility")で見分ける —— 持たせると、undoで戻ると読める
+    #    封筒をAIに配ることになる。
     #    **`changed_bodies` は `Session.body_revision` の呼び出し前後の差**から導くこと。
     #    verbごとに「これはbodyを変える」と数え上げると、verbが増えたときに静かに漏れる。
     # 3. **失敗も封筒に入れて返す。** `{"error": {"code","message","tool","exception", ...}}`

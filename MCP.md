@@ -203,13 +203,15 @@ Claude Desktopのセッションに縛られる。1.2のHTTPのような後付�
 ## 使い方（AIの側の手順）
 
 1. `describe_document` を呼ぶ → `body_id`・スケッチ・パラメータ名を得る
-2. 手前の部品を隠すなら `set_visible(body_id, false)`（**人間の画面からも消える**）
+2. 手前の部品を隠すなら `set_visible(body_id, false)`（**人間の画面からも消える**）。
+   **可視性は操作ログに載らないので `undo` では戻らない** —— 戻すのは `set_visible(body_id, true)`
 3. 対象を `propose_selection` で選び、`commit_selection` してから fillet / extrude 等
    —— **確定を人に頼まない**。提案で止めるかどうかの判断は上記「AIはどこまで自分でやるか」
 4. STEPを足すなら `import_step_editable(path)` —— **これ1回で編集できるボディが揃う**
    （戻り値の `body_ids` がそれ。`reference_ids` は隠してある原本）。
    参照ボディだけが欲しいときは `import_step(path)` を使う（続きに `make_editable_copy` が要る）
-5. 取り消すのは `undo`（UIと同じ履歴）
+5. 取り消すのは `undo`（UIと同じ履歴）。**戻せるのは形を変えた操作だけ**で、
+   可視性の切り替えと選択の変更は履歴に載っていない
 
 読み込んだSTEPはソリッドごとに「参照ボディ（読み取り専用・隠されている）」と
 「編集用ボディ」の対になる。`describe_document` が既定で返すのは**編集用だけ**で、

@@ -235,12 +235,6 @@ export type Applied =
       changed_bodies: string[]
     })
   | (AppliedVerbBase & {
-      verb: 'set_visible'
-      body_id: string
-      visible: boolean
-      changed_bodies: string[]
-    })
-  | (AppliedVerbBase & {
       verb: 'extrude'
       body_id: string
       distance: number
@@ -273,6 +267,17 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'redo'; redone: string })
   /** 選択の変更イベント。verbではない(操作ログに載らない)。 */
   | (AppliedChangeBase & { change: 'selection'; selection: SelectionState })
+  /**
+   * 可視性の変更イベント。**verbではない**(操作ログに載らず、Ctrl+Z / Ctrl+Y で戻らない。
+   * 2026-08-26)。効果そのものは配信される `state.bodies[].visible` に載る。
+   */
+  | (AppliedChangeBase & {
+      change: 'visibility'
+      body_id: string
+      visible: boolean
+      previous: boolean
+      changed: boolean
+    })
   /**
    * 文書ごと差し替わった。verbではない(`Session.open_document` / `Session.new_document`)。
    *

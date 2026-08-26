@@ -350,6 +350,14 @@
       if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
       return
     }
+    if (applied && applied.change === 'visibility') {
+      // **可視性もverbではない**(操作ログに載らない)ので `lastApplied` を動かさない。
+      // 効果は同じ配信の `state.bodies[].visible` に載っており、ここで見るのは
+      // 「自分が出した操作か」の突き合わせだけ(表示切り替えは `pendingOp` を立てない
+      // 経路なので、印は `myClientOps` の側が持っている)。
+      if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
+      return
+    }
     if (applied && applied.change === 'document') {
       // **開いた**(`open_document`)か**新規にした**(`new_document`)。保存と同じく、ここで
       // ファイル名を追い、一覧も取り直す(開いた版が一覧の「操作数」に含まれるのはこの
@@ -907,6 +915,8 @@
     // 除外しない** —— どちらも「編集中のテキスト」を持たない操作対象で、フォーカスが
     // 乗っているだけならCtrl+Zは文書のundoでよい(パーツ一覧の可視性チェックボックスに
     // フォーカスが残った状態のCtrl+Zがundoを起こすのは既存の実機検査が固定している)。
+    // **戻るのは直前のverbであって、そのチェックボックスの表示切り替えではない** ——
+    // 可視性は操作ログに載らない(2026-08-26。`duocad/selection.py` の `set_visible`)。
     const target = event.target as HTMLElement | null
     const isTextEditingField =
       target?.tagName === 'TEXTAREA' ||

@@ -59,7 +59,11 @@ def new_body_id() -> BodyId:
 
 @dataclass
 class Body:
-    """1つのボディ。`kind="reference"`(読み込んだSTEP等)は編集操作の対象にならない。"""
+    """1つのボディ。`kind="reference"`(読み込んだSTEP等)は編集操作の対象にならない。
+
+    `visible` は**選択機構の一部**(見えないものは指せない)で、選択と同じく
+    **操作ログに載らず保存もされない** —— 切り替えは `duocad.selection.set_visible`。
+    """
 
     id: BodyId
     name: str

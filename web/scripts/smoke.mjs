@@ -6,7 +6,7 @@
  * Enterで押し出し**、体積が変わったことを確かめる(M1由来)。
  * あわせて **パーツ一覧が27件出る**・**手前のパーツを隠すと奥の面が選べる**
  * (`viewport.project` は他Bodyに隠れている面に対して null を返す設計を利用して検査する)・
- * **可視性の切り替えがundoで戻る**、を検査する。
+ * **可視性の切り替えが操作ログに載らない**(2026-08-26。undo/redoの対象外)、を検査する。
  *
  *   web> node scripts/smoke.mjs
  *
@@ -226,12 +226,18 @@ async function main() {
     )
     ok('全表示に戻した')
 
-    // -------------------------------------------------------------- 項番5: undoで戻る(可視性)
+    // ----------------------------------------------- 項番5: 可視性は履歴に載らない(2026-08-26)
+    // チェックボックスの切り替えは**操作ログに1行も積まない**ので、Ctrl+Z / Ctrl+Y では戻らない。
+    // **ここで実際にCtrl+Zを押さない**のは、この時点の履歴の末尾がSTEP読み込みそのもので、
+    // 押すと27部品ごと消えるから —— それ自体が「可視性が履歴に載っていない」ことの現れである。
+    // 実際にCtrl+Zを押して隠れたままであることは `smoke-mcp.mjs` の検証4が実機で見ている。
     const undoTarget = occlusionTarget.bodyId
-    const beforeHideRevision = await page.evaluate(
-      (bodyId) => window.__duocad.parts.find((b) => b.body_id === bodyId).revision,
-      undoTarget,
-    )
+    const readState = (bodyId) => ({
+      revision: window.__duocad.parts.find((b) => b.body_id === bodyId).revision,
+      operations: window.__duocad.state.log.length,
+      applied: window.__duocad.state.applied_count,
+    })
+    const beforeHide = await page.evaluate(readState, undoTarget)
     await page.click(`.parts-row[data-body-id="${undoTarget}"] input.visible-toggle`)
     await page.waitForFunction(
       (bodyId) => window.__duocad.parts.find((b) => b.body_id === bodyId).visible === false,
@@ -239,27 +245,35 @@ async function main() {
       undoTarget,
     )
     ok(`パーツ「${occlusionTarget.name}」を個別チェックボックスで非表示にした`)
-    await page.keyboard.down('Control')
-    await page.keyboard.press('KeyZ')
-    await page.keyboard.up('Control')
+
+    const afterHide = await page.evaluate(readState, undoTarget)
+    if (afterHide.operations !== beforeHide.operations || afterHide.applied !== beforeHide.applied) {
+      fail(
+        `可視性の切り替えが操作ログに積まれた: ` +
+          `${beforeHide.operations}行/${beforeHide.applied}操作 -> ` +
+          `${afterHide.operations}行/${afterHide.applied}操作`,
+      )
+    }
+    // **版は動く**。ログに載らないことと「差分が届かない」ことは別で、ここを混同すると
+    // 隠したのに画面から消えない(`body_revision` が可視性を版に含めている理由)。
+    if (afterHide.revision === beforeHide.revision) {
+      fail('非表示にしたのに版が動いていない(差分が届いていない疑い)')
+    }
+    ok('可視性の切り替えは操作ログに載らない(undo/redoの対象外)が、版は動いて画面へ差分が届いた')
+
+    // **戻す手も同じ操作**(履歴の外なので、戻すのはundoではなくもう一度クリック)
+    await page.click(`.parts-row[data-body-id="${undoTarget}"] input.visible-toggle`)
     await page.waitForFunction(
       (bodyId) => window.__duocad.parts.find((b) => b.body_id === bodyId).visible === true,
       { timeout, polling: 50 },
       undoTarget,
     )
-    const afterUndoRevision = await page.evaluate(
-      (bodyId) => window.__duocad.parts.find((b) => b.body_id === bodyId).revision,
-      undoTarget,
-    )
-    if (afterUndoRevision === beforeHideRevision) {
-      fail('undo後の版が非表示にする前と同じ(版が動いていない=差分が届いていない疑い)')
-    }
     const checkboxRestored = await page.$eval(
       `.parts-row[data-body-id="${undoTarget}"] input.visible-toggle`,
       (element) => element.checked,
     )
-    if (!checkboxRestored) fail('undo後もチェックボックスが非表示のまま(画面に反映されていない)')
-    ok('Ctrl+Z(undo)で可視性が元に戻り、パネルのチェックボックスにも反映された')
+    if (!checkboxRestored) fail('もう一度押しても表示に戻らない(画面に反映されていない)')
+    ok('もう一度チェックボックスを押して表示に戻した(戻す手も同じ操作)')
 
     // -------------------------------------------------------------- 押し出し(体積検算)
     // 面積が大きい平面を狙う(平らな面の押し出しは体積 = 面積 × 距離 で検算できる)。

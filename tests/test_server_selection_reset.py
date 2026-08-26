@@ -162,11 +162,12 @@ def test_undo_of_a_shape_changing_verb_clears_the_selection(session: Session) ->
 def test_undo_of_a_non_shape_verb_still_clears_the_selection(session: Session) -> None:
     """**undo/redoはunconditional**(verbごとの分岐を持たない単純な規則)。
 
-    **選択は先に置く** —— 見えないBodyは選べないので、隠す前に選ぶ。
+    材料は `sketch_create` —— 形を1つも変えないが操作ログには載るverbである
+    (`set_visible` は2026-08-26に操作ログから外れたので、ここの材料にはならない)。
     """
     _select(session, [_face(1)])
-    session.set_visible("box", False)
-    assert session.get_selection()["count"] == 1  # set_visible自体は触らない(契約3)
+    session.sketch_create("XY")
+    assert session.get_selection()["count"] == 1  # 形を変えないverbは触らない(契約3)
 
     session.undo()
 

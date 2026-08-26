@@ -13,7 +13,6 @@ from .import_editable import import_step_editable  # noqa: F401
 from .import_svg import import_svg  # noqa: F401
 from .make_editable_copy import make_editable_copy  # noqa: F401
 from .pattern import pattern_circular, pattern_rectangular  # noqa: F401
-from .visibility import set_visible  # noqa: F401
 
 __all__ = [
     "chamfer",
@@ -25,5 +24,4 @@ __all__ = [
     "make_editable_copy",
     "pattern_circular",
     "pattern_rectangular",
-    "set_visible",
 ]

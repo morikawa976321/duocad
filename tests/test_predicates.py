@@ -18,7 +18,8 @@ from duocad import kernel, predicates, query, selection
 from duocad.document import Body, Document
 from duocad.region import region_ref
 from duocad.sketch import add_circle, add_rectangle, base_plane, sketch_create
-from duocad.verbs import extrude, set_visible
+from duocad.selection import set_visible
+from duocad.verbs import extrude
 
 BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
 

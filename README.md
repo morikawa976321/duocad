@@ -634,8 +634,10 @@ AIを選んで繋ぐ**（当面の対象はClaudeとllama-serverの2つ）。**M
   （`DocumentTools.current_seq()`）を控え、応答が返ったとき版がずれていたら、そのツール呼び出しは
   実行せず「文書が変わったので選び直せ」と返す。形状を変えるverbの確定後は確定選択が全リセットされる
   （`Session._reset_selection_if_needed`）ので大半は元から `selection_empty` で止まっていたが、
-  `set_visible` のように選択を経由しないverbはこの網に掛からず、楽観ロックがその穴を埋める
-  （`fillet`/`chamfer`/`extrude` は対象ボディの可視性も実行時に見直すよう別途直した）
+  `set_parameter` のように選択を経由しないverbはこの網に掛からず、楽観ロックがその穴を埋める
+  （`fillet`/`chamfer`/`extrude` は対象ボディの可視性も実行時に見直すよう別途直した）。
+  **版は「ログの本数・選択の指紋・可視性の指紋」の3つ組**（2026-08-26）—— 可視性は操作ログに
+  載らないので、指紋を持たないと「AIが考えている間に人がボディを隠した」が版に出ない
 - **APIキーはブラウザへ送らない・から受け取らない**。読む順は環境変数 `ANTHROPIC_API_KEY` →
   gitignore済みの `duocad_secrets.json`。画面に出してよいのは「設定済み / 未設定」の2値だけ
 - 依存は増やしていない（公式SDKを入れず `urllib` で素のHTTP・v1は非streaming）
