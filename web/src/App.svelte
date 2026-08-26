@@ -424,7 +424,13 @@
     if (pendingOp !== null && pendingOp === lastFileOp) pendingOp = null
     const size = `${payload.bytes.toLocaleString()} B`
     const extra = payload.operations !== undefined ? ` / 操作 ${payload.operations}件` : ''
-    note(`${payload.action}: ${payload.path}(${size}${extra})`)
+    // **export_step/export_stlのみ**body_idsが載る。書き出した個数と、非表示で除外した
+    // 個数(0件なら文言を出さない)を並べる —— 「隠したつもりが無いのに減っている」を
+    // 見えない驚きにしないため。
+    const exported = payload.body_ids !== undefined ? ` / ${payload.body_ids.length}個` : ''
+    const skippedCount = payload.skipped_hidden?.length ?? 0
+    const skipped = skippedCount > 0 ? ` ※非表示の${skippedCount}個は除外` : ''
+    note(`${payload.action}: ${payload.path}(${size}${extra}${exported}${skipped})`)
     // **保存/開いた直後に一覧を取り直す**。上書きで更新日時・サイズ・操作数が変わり、
     // 新規保存では一覧に新しい行が要る —— 応答をここで待たず、次のWS往復に任せる。
     if (payload.action === 'save') refreshDocuments()

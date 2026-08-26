@@ -641,6 +641,67 @@ async function main() {
       '読み込んだボディの面を選べない',
       importedId,
     )
+
+    // ================================================================ 検証5: 表示中のみ書き出し
+    // **いまの状態を使い回す**(元の板 = 非表示、読み込んだボディ = 可視の1個だけ)。
+    // 「表示中(visible)のBodyだけを書き出し、対象を選ぶ引数は無い」契約を実地で踏む
+    // (2026-08-27 export-visible-only)。参照ボディはそもそも候補にならない
+    // (kind==="solid"の候補があるので参照へのフォールバックは起きない)ので、
+    // 除外1件は「元の板」だけになるはず。
+    const hiddenPlateId = idsBefore[0]
+    const visibleOnlyStepPath = join(workdir, 'visible-only.step')
+    await page.click('#file-export-step')
+    await typeInto('#file-path', visibleOnlyStepPath)
+    await page.keyboard.press('Enter')
+    await waitFor(
+      (expected) => window.__duocad.lastFile?.path === expected,
+      '表示中のみのSTEP書き出しの応答が返らない',
+      visibleOnlyStepPath,
+    )
+    const visibleOnlyStep = (await look()).lastFile
+    if (JSON.stringify(visibleOnlyStep.body_ids) !== JSON.stringify([importedId])) {
+      fail(`表示中のBodyだけが書き出されていない: body_ids=${JSON.stringify(visibleOnlyStep.body_ids)}`)
+    }
+    if (JSON.stringify(visibleOnlyStep.skipped_hidden) !== JSON.stringify([hiddenPlateId])) {
+      fail(
+        `非表示で除外したBodyが応答と一致しない: skipped_hidden=` +
+          `${JSON.stringify(visibleOnlyStep.skipped_hidden)}(期待 [${hiddenPlateId}])`,
+      )
+    }
+    if (!existsSync(visibleOnlyStepPath) || statSync(visibleOnlyStepPath).size === 0) {
+      fail('表示中のみのSTEPが書けていない')
+    }
+
+    const visibleOnlyStlPath = join(workdir, 'visible-only.stl')
+    await page.click('#file-export-stl')
+    await typeInto('#file-path', visibleOnlyStlPath)
+    await typeInto('#file-deviation', 0.1)
+    await page.keyboard.press('Enter')
+    await waitFor(
+      (expected) => window.__duocad.lastFile?.path === expected,
+      '表示中のみのSTL書き出しの応答が返らない',
+      visibleOnlyStlPath,
+    )
+    const visibleOnlyStl = (await look()).lastFile
+    if (JSON.stringify(visibleOnlyStl.body_ids) !== JSON.stringify([importedId])) {
+      fail(`STLも表示中のBodyだけになっていない: body_ids=${JSON.stringify(visibleOnlyStl.body_ids)}`)
+    }
+    if (JSON.stringify(visibleOnlyStl.skipped_hidden) !== JSON.stringify([hiddenPlateId])) {
+      fail(`STLの除外Bodyが応答と一致しない: skipped_hidden=${JSON.stringify(visibleOnlyStl.skipped_hidden)}`)
+    }
+
+    // トーストに「書き出した個数」と「非表示で除外した個数」が出ることを実地で見る
+    // (`App.svelte` の `handleFile`。除外0件のときは文言そのものを出さないので、
+    // ここでは除外がある場合の文言を固定する)。
+    const visibleOnlyMessage = (await look()).messages[0] ?? ''
+    if (!visibleOnlyMessage.includes('1個') || !visibleOnlyMessage.includes('除外')) {
+      fail(`トーストに除外件数が出ていない: ${JSON.stringify((await look()).messages)}`)
+    }
+    ok(
+      `**表示中のBodyだけ**がSTEP/STLへ書き出された(非表示の1個は除外)。` +
+        `トースト: "${visibleOnlyMessage}"`,
+    )
+
     // ---------------------------------------------------------- 即適用(2026-08-22)
     // `make_editable_copy` は**対象が面1つ・howが無い**ので、Enterの要らないコマンドに
     // なった(`command.ts` の `needsEnter`)。ここで固定するのは骨格の3点:

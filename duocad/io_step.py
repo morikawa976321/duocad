@@ -18,6 +18,14 @@ TransferRoots() を呼ぶと、Python例外にはならず**プロセスごと�
 
 失敗は黙って通さない: パス無し=FileNotFoundError / 壊れている=ValueError / 書き出す形状が
 無い=ValueError(**ファイルを作らない**)。いずれも doc.bodies / doc.log に変更を残さない。
+
+**書き出し対象は「いま表示中(`visible=True`)のBody」に固定してある**（対象を選ぶ引数は無い）。
+候補は `kind == "solid"` の全Body、1つも無ければ形状を持つ全Body(参照だけの文書の救済)。
+**この2段のどちらで候補を決めるかを先に済ませ、その結果に可視フィルタを乗せる順序を守ること**
+——逆にする(可視の中からkindで絞る)と、編集用ソリッドを全部隠したときに参照ボディが代わりに
+書き出されてしまう。可視性とkindは別の軸であり、混ぜてはいけない。候補はあるのに全部非表示なら
+専用の ValueError(`set_visible(visible=True)` で戻す手順つき)を出し、候補が最初から無い場合の
+文言とは分ける。含めたくないBodyは呼び出し側が `set_visible` で隠してから書き出すのが唯一の経路。
 """
 from __future__ import annotations
 
@@ -75,49 +83,65 @@ def import_step(doc: Document, path: PathLike) -> list[BodyId]:
     return body_ids
 
 
-def export_step(doc: Document, path: PathLike, body_ids: list[BodyId] | None = None) -> None:
-    """対象の既定は `_bodies_to_export` 参照。複数Bodyならcompoundへまとめる。"""
-    shape = _shape_to_export(doc, body_ids)
+def export_step(doc: Document, path: PathLike) -> None:
+    """対象は `_bodies_to_export` 参照(いま表示中のBodyのみ)。複数Bodyならcompoundへまとめる。"""
+    shape = _shape_to_export(doc)
     kernel.write_step(shape, str(path))
 
 
-def export_stl(
-    doc: Document, path: PathLike, deviation: float, body_ids: list[BodyId] | None = None
-) -> None:
-    """deviation(mm)は**絶対**の線形偏差。対象の既定は export_step と同じ。"""
-    shape = _shape_to_export(doc, body_ids)
+def export_stl(doc: Document, path: PathLike, deviation: float) -> None:
+    """deviation(mm)は**絶対**の線形偏差。対象は export_step と同じ。"""
+    shape = _shape_to_export(doc)
     kernel.write_stl(shape, str(path), deviation)
 
 
-def export_body_ids(doc: Document, body_ids: list[BodyId] | None = None) -> list[BodyId]:
-    return [body.id for body in _bodies_to_export(doc, body_ids)]
+def export_body_ids(doc: Document) -> list[BodyId]:
+    return [body.id for body in _bodies_to_export(doc)]
 
 
-def _bodies_to_export(doc: Document, body_ids: list[BodyId] | None):
-    """書き出し対象の Body 一覧。無ければ ValueError(ファイルは作らない)。
+def export_skipped_hidden(doc: Document) -> list[BodyId]:
+    """書き出し候補のうち非表示(`visible=False`)で除外されたBodyのID一覧(除外0件なら空リスト)。
+
+    `export_body_ids` と対で使う想定 —— 呼び出し側(server.py / mcp_server.py)が
+    応答へ両方載せて「何を書き出し、何を除外したか」を必ず見えるようにする。
+    """
+    return [b.id for b in _export_candidates(doc) if not b.visible]
+
+
+def _export_candidates(doc: Document) -> list[Body]:
+    """kindだけで決まる書き出し候補(可視性はまだ見ない)。
 
     既定は `kind="solid"` の全Body、1つも無ければ形状を持つ全Bodyへフォールバックする。
     `Session.load_step` は各ソリッドを参照ボディと編集用コピーの両方で持つので、
     「形状を持つ全Body」を素の既定にすると同じソリッドが二重に書き出される。
     """
-    if body_ids is not None:
-        bodies = []
-        for body_id in body_ids:
-            body = next((b for b in doc.bodies if b.id == body_id), None)
-            if body is None:
-                raise KeyError(f"no such body: {body_id!r}")
-            bodies.append(body)
-    else:
-        bodies = [b for b in doc.bodies if b.kind == "solid" and b.shape is not None]
-        if not bodies:
-            bodies = [b for b in doc.bodies if b.shape is not None]
-    if not bodies:
+    candidates = [b for b in doc.bodies if b.kind == "solid" and b.shape is not None]
+    if not candidates:
+        candidates = [b for b in doc.bodies if b.shape is not None]
+    return candidates
+
+
+def _bodies_to_export(doc: Document) -> list[Body]:
+    """書き出し対象の Body 一覧(表示中のものだけ)。無ければ ValueError(ファイルは作らない)。
+
+    **kindで候補を決めてから可視フィルタを乗せる順序を守ること**(逆にすると、編集用ソリッドを
+    全部隠したときに参照ボディが代わりに書き出される)。候補が最初から無い場合と、候補はあるが
+    全部非表示の場合とで文言を分ける(前者は形が無い、後者は隠されているだけで復旧できる)。
+    """
+    candidates = _export_candidates(doc)
+    if not candidates:
         raise ValueError("nothing to export: no body with a shape")
+    bodies = [b for b in candidates if b.visible]
+    if not bodies:
+        raise ValueError(
+            "nothing to export: all candidate bodies are hidden: "
+            "見えないものは書き出せない。set_visible(visible=true) で戻してから呼ぶこと"
+        )
     return bodies
 
 
-def _shape_to_export(doc: Document, body_ids):
-    bodies = _bodies_to_export(doc, body_ids)
+def _shape_to_export(doc: Document):
+    bodies = _bodies_to_export(doc)
     shapes = [b.shape for b in bodies]
     if len(shapes) == 1:
         return shapes[0]

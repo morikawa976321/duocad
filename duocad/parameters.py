@@ -208,8 +208,7 @@ def rebuild(
         _REBUILDING = False
 
     # **アクティブボディの選択はログに載らない**ので、再生では復元されない。
-    # 放っておくと「最後に add_body されたボディ」に勝手に移り、以後の書き出し先
-    # (export_step は active を書く)と編集先が黙って変わる。
+    # 放っておくと「最後に add_body されたボディ」に勝手に移り、以後の編集先が黙って変わる。
     if saved_active is not None and any(body.id == saved_active for body in doc.bodies):
         doc._active_body_id = saved_active
 

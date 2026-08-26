@@ -16,10 +16,17 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.gp import gp_Pnt
 
 from duocad import kernel, query
-from duocad.document import Document
-from duocad.io_step import export_step, export_stl, import_step
+from duocad.document import Body, Document, new_body_id
+from duocad.io_step import (
+    export_body_ids,
+    export_skipped_hidden,
+    export_step,
+    export_stl,
+    import_step,
+)
 from duocad.oplog import OpLog
 from duocad.query import describe_shape, volume
+from duocad.selection import set_visible
 from duocad.verbs.import_editable import import_step_editable
 
 def test_import_step_missing_file_raises_and_does_not_mutate_document(tmp_path):
@@ -75,6 +82,110 @@ def test_export_from_empty_document_raises_and_writes_no_file(tmp_path):
     assert not stl_path.exists()
 
 
+def _add_solid_body(doc: Document, name: str, box) -> str:
+    """テスト用に `kind="solid"` のBodyを直接足す(既定 `visible=True`)。"""
+    body_id = new_body_id()
+    doc.add_body(Body(id=body_id, name=name, kind="solid", shape=box))
+    return body_id
+
+
+def test_export_excludes_a_hidden_solid_from_step_and_stl(tmp_path):
+    """`visible=False` のソリッドはSTEP/STLのどちらからも除外される。
+
+    非表示のものが混じっていると書き出しの面数・体積で気づけるが、それを機械で
+    固定するのがこのテスト —— `_bodies_to_export` が可視性を見ていない実装への回帰検査。
+    """
+    doc = Document()
+    shown = BRepPrimAPI_MakeBox(20.0, 10.0, 5.0).Shape()
+    hidden = BRepPrimAPI_MakeBox(gp_Pnt(50.0, 0.0, 0.0), 6.0, 6.0, 6.0).Shape()
+    shown_id = _add_solid_body(doc, "shown", shown)
+    hidden_id = _add_solid_body(doc, "hidden", hidden)
+    set_visible(doc, hidden_id, False)
+
+    step_path = tmp_path / "visible_only.step"
+    export_step(doc, step_path)
+    reimported = Document()
+    import_step(reimported, step_path)
+    assert len(reimported.bodies) == 1, "非表示のボディがSTEPに混入している"
+    assert math.isclose(query.volume(reimported.bodies[0].shape), 20.0 * 10.0 * 5.0, rel_tol=1e-6)
+
+    stl_path = tmp_path / "visible_only.stl"
+    export_stl(doc, stl_path, 0.1)
+    assert stl_path.exists() and stl_path.stat().st_size > 0
+    # STEP/STLは同じ `_bodies_to_export` を通るので、STEP側の面数(6=単一ボックス)が
+    # 非表示除外の効果を代表する。STLはファイルが実際に書けたことだけを確認する。
+    assert kernel.face_count(reimported.bodies[0].shape) == 6
+
+    assert export_body_ids(doc) == [shown_id]
+    assert export_skipped_hidden(doc) == [hidden_id]
+
+
+def test_export_raises_a_dedicated_error_when_all_candidates_are_hidden(tmp_path):
+    """候補はあるが全部非表示 → `ValueError` かつファイルを作らない。
+
+    「形が無い」場合の文言(`nothing to export: no body with a shape`)とは分ける
+    ——こちらは `set_visible(visible=True)` で戻せば直る、という別種の状態だから。
+    """
+    doc = Document()
+    box = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
+    body_id = _add_solid_body(doc, "box", box)
+    set_visible(doc, body_id, False)
+
+    step_path = tmp_path / "none.step"
+    stl_path = tmp_path / "none.stl"
+
+    with pytest.raises(ValueError, match="all candidate bodies are hidden"):
+        export_step(doc, step_path)
+    assert not step_path.exists()
+
+    with pytest.raises(ValueError, match="all candidate bodies are hidden"):
+        export_stl(doc, stl_path, 0.1)
+    assert not stl_path.exists()
+
+    # 「形が無い」既存の文言とは異なるエラーであることも確認する
+    with pytest.raises(ValueError, match="no body with a shape"):
+        export_step(Document(), step_path)
+
+
+def test_export_from_a_reference_only_document_still_works(tmp_path):
+    """参照ボディだけの文書(`import_step` で読んだもの・既定で `visible=True`)は
+    現状どおり書き出される —— フォールバックの順序(kindで候補→可視でフィルタ)を
+    守れているかの検査。ここを落とすと「可視→kind」の逆順に戻った事故に気づけない。
+    """
+    doc = Document()
+    source = _two_solid_step(tmp_path)
+    body_ids = import_step(doc, source)
+    assert all(body.visible for body in doc.bodies), "import_step直後は全部可視のはず"
+
+    out_path = tmp_path / "from_reference.step"
+    export_step(doc, out_path)
+    assert out_path.exists()
+    assert export_body_ids(doc) == body_ids
+    assert export_skipped_hidden(doc) == []
+
+
+def test_export_after_import_step_editable_exports_only_the_editable_copy(tmp_path):
+    """`import_step_editable` 直後は編集用コピーだけが書き出される(現状維持の回帰)。
+
+    参照ボディは `visible=False` で追加されるので、変更後の可視フィルタでも
+    二重には数えず、結果は変更前と変わらないはず。
+    """
+    doc = Document()
+    source = _two_solid_step(tmp_path)
+    body_ids = import_step_editable(doc, source)
+    reference_ids = [b.id for b in doc.bodies if b.kind == "reference"]
+    assert len(reference_ids) == 2 and all(
+        not b.visible for b in doc.bodies if b.kind == "reference"
+    )
+
+    out_path = tmp_path / "editable_only.step"
+    export_step(doc, out_path)
+    assert export_body_ids(doc) == body_ids
+    assert export_skipped_hidden(doc) == []
+
+    reimported = Document()
+    import_step(reimported, out_path)
+    assert len(reimported.bodies) == 2, "参照ボディが紛れ込んでいる"
 
 
 # --------------------------------------------------------------------------------------

@@ -230,6 +230,7 @@ COMMANDS: tuple[Command, ...] = (
             "(可視性は選択機構の一部)。操作ログには載らず undo では戻らないので、"
             "隠したものを戻すには visible=true でもう一度呼ぶこと。"
             "開いているブラウザの表示も即座に変わる。"
+            "**export_step / export_stl の書き出し対象も変わる**(非表示のボディは書き出されない)。"
         ),
         params=(
             Param("body_id", "string", "describe_document が返した body_id"),
@@ -693,19 +694,12 @@ COMMANDS: tuple[Command, ...] = (
         name="export_step",
         category="file",
         description=(
-            "いまの文書をSTEPファイルへ書き出すときに呼ぶ。"
-            "文書は変えないのでログには載らない。戻り値でパスとバイト数を確認する。"
+            "いま表示中(visible)のボディをSTEPファイルへ書き出す。対象を選ぶ引数は無い —— "
+            "含めたくないものがあれば、先に set_visible(visible=false) で隠してから呼ぶこと。"
+            "文書は変えないのでログには載らない。戻り値でパス・バイト数・"
+            "非表示で除外した件数(skipped_hidden)を確認する。"
         ),
-        params=(
-            Param("path", "string", "書き出し先パス"),
-            Param(
-                "body_ids",
-                "array",
-                "書き出す body_id の配列。省略時は編集用ソリッド",
-                required=False,
-                ws=False,
-            ),
-        ),
+        params=(Param("path", "string", "書き出し先パス"),),
         session="export_step_file",
         changes_document=False,
     ),
@@ -713,8 +707,10 @@ COMMANDS: tuple[Command, ...] = (
         name="export_stl",
         category="file",
         description=(
-            "いまの文書をSTLへ書き出すときに呼ぶ。"
-            "deviation でメッシュ粗さを指定する。文書は変えない。"
+            "いま表示中(visible)のボディをSTLへ書き出す。対象を選ぶ引数は無い —— "
+            "含めたくないものがあれば、先に set_visible(visible=false) で隠してから呼ぶこと。"
+            "deviation でメッシュ粗さを指定する。文書は変えない。戻り値の "
+            "skipped_hidden で非表示で除外した件数を確認できる。"
         ),
         params=(
             Param("path", "string", "書き出し先パス"),
@@ -724,13 +720,6 @@ COMMANDS: tuple[Command, ...] = (
                 "線形偏差(mm・絶対)。省略時はセッション既定",
                 required=False,
                 dimension=True,
-            ),
-            Param(
-                "body_ids",
-                "array",
-                "書き出す body_id の配列。省略時は編集用ソリッド",
-                required=False,
-                ws=False,
             ),
         ),
         session="export_stl_file",

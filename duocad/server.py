@@ -1308,39 +1308,47 @@ class Session:
             })
         return {"action": "list", "path": str(self.models_dir), "bytes": 0, "files": files}
 
-    def export_step_file(self, path: Any, body_ids: Optional[list] = None) -> dict:
-        """STEPを書き出す。**ログに載らない**(文書を変えないのでverbではない)。"""
+    def export_step_file(self, path: Any) -> dict:
+        """STEPを書き出す。**ログに載らない**(文書を変えないのでverbではない)。
+
+        対象は**いま表示中のBodyだけ**(引数で選べない)。非表示で除外した件数は
+        `skipped_hidden` として必ず応答に載る(0件でも載る)。
+        """
         target = self._resolve(path)
         if not target.parent.exists():
             raise ValueError(f"書き出し先のディレクトリが無い: {target.parent}")
-        resolved = io_step.export_body_ids(self.document, body_ids=body_ids)
-        io_step.export_step(self.document, target, body_ids=body_ids)
+        resolved = io_step.export_body_ids(self.document)
+        skipped = io_step.export_skipped_hidden(self.document)
+        io_step.export_step(self.document, target)
         return {
             "action": "export_step",
             "path": str(target),
             "bytes": target.stat().st_size,
             "body_ids": list(resolved),
+            "skipped_hidden": list(skipped),
         }
 
-    def export_stl_file(
-        self, path: Any, deviation: Optional[float] = None, body_ids: Optional[list] = None
-    ) -> dict:
+    def export_stl_file(self, path: Any, deviation: Optional[float] = None) -> dict:
         """STLを書き出す。`deviation` は絶対の線形偏差[mm](省略時はセッションの値)。
 
         **偏差を指定できることが要件**(§7: 0.2mm→30.7KB / 0.01mm→170.6KB)。
+        対象は**いま表示中のBodyだけ**(引数で選べない)。非表示で除外した件数は
+        `skipped_hidden` として必ず応答に載る(0件でも載る)。
         """
         target = self._resolve(path)
         if not target.parent.exists():
             raise ValueError(f"書き出し先のディレクトリが無い: {target.parent}")
         used = float(self.deviation if deviation is None else deviation)
-        resolved = io_step.export_body_ids(self.document, body_ids=body_ids)
-        io_step.export_stl(self.document, target, used, body_ids=body_ids)
+        resolved = io_step.export_body_ids(self.document)
+        skipped = io_step.export_skipped_hidden(self.document)
+        io_step.export_stl(self.document, target, used)
         return {
             "action": "export_stl",
             "path": str(target),
             "bytes": target.stat().st_size,
             "deviation": used,
             "body_ids": list(resolved),
+            "skipped_hidden": list(skipped),
         }
 
     def take_warnings(self) -> list[str]:

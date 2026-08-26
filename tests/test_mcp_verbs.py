@@ -29,6 +29,7 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from duocad import kernel, query
 from duocad.document import Body
 from duocad.mcp_server import DocumentTools, McpServer
+from duocad.selection import set_visible
 from duocad.server import Server, Session
 
 # JSON-RPC 2.0 の標準エラーコード。**実装から import しない**(test_mcp.py と同じ理由:
@@ -159,8 +160,8 @@ ARGUMENTS: dict = {
     # SVG読み込みは**貼る先(`base_plane`)と倍率(`scale`)が省略できる**。省略時は
     # 確定選択の面に貼る(`sketch_create` と同じ解決・同じ綴り)。
     "import_svg": ({"path", "base_plane", "scale"}, {"path"}),
-    "export_step": ({"path", "body_ids"}, {"path"}),
-    "export_stl": ({"path", "deviation", "body_ids"}, {"path"}),
+    "export_step": ({"path"}, {"path"}),
+    "export_stl": ({"path", "deviation"}, {"path"}),
     # ---- 履歴
     "undo": (set(), set()),
     "redo": (set(), set()),
@@ -913,6 +914,38 @@ def test_export_writes_a_file_and_reports_where(server: McpServer, tmp_path: Pat
     payload = call(server, "export_stl", {"path": str(stl_path), "deviation": 0.1})
     assert Path(payload["path"]) == stl_path
     assert payload["bytes"] == stl_path.stat().st_size > 0
+
+
+def test_export_reports_skipped_hidden_bodies_and_no_body_ids_argument(
+    server: McpServer, box_session: Session, tmp_path: Path
+):
+    """`body_ids` 引数は存在せず(渡しても未知の引数エラーになる)、応答の `body_ids` /
+    `skipped_hidden` は実際に書き出した/除外したBodyと一致する。
+    """
+    hidden = Body(
+        id="hidden-box",
+        name="hidden-box",
+        kind="solid",
+        shape=BRepPrimAPI_MakeBox(5.0, 5.0, 5.0).Shape(),
+    )
+    box_session.document.add_body(hidden)
+    set_visible(box_session.document, "hidden-box", False)
+
+    step_path = tmp_path / "visible_only.step"
+    payload = call(server, "export_step", {"path": str(step_path)})
+    assert payload["body_ids"] == ["box"]
+    assert payload["skipped_hidden"] == ["hidden-box"]
+
+    stl_path = tmp_path / "visible_only.stl"
+    payload = call(server, "export_stl", {"path": str(stl_path), "deviation": 0.1})
+    assert payload["body_ids"] == ["box"]
+    assert payload["skipped_hidden"] == ["hidden-box"]
+
+    # `body_ids` はスキーマから消えている(未知の引数として弾かれる=プロトコルエラー)。
+    response = request(
+        server, "tools/call", {"name": "export_step", "arguments": {"path": str(step_path), "body_ids": ["box"]}}
+    )
+    assert response["error"]["code"] == INVALID_PARAMS
 
 
 def test_a_browser_export_does_not_corrupt_the_stdio_channel(tmp_path: Path):

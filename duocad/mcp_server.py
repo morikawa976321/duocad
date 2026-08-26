@@ -885,33 +885,37 @@ class DocumentTools:
             ),
         )
 
-    def export_step(self, path: str, body_ids: Optional[list] = None) -> dict:
+    def export_step(self, path: str) -> dict:
         """STEPを書き出す。**ログに載らない**(文書を変えないので verb ではない)。
 
-        そのぶん `{"path", "bytes", "body_ids"}` を返す —— AIは自分でファイルを
+        対象は**いま表示中のBodyだけ**(引数で選べない)。そのぶん
+        `{"path", "bytes", "body_ids", "skipped_hidden"}` を返す —— AIは自分でファイルを
         確かめられないので、戻り値が唯一の確認手段である。
         """
         target = Path(path)
-        resolved = io_step.export_body_ids(self.session.document, body_ids=body_ids)
-        io_step.export_step(self.session.document, target, body_ids=body_ids)
+        resolved = io_step.export_body_ids(self.session.document)
+        skipped = io_step.export_skipped_hidden(self.session.document)
+        io_step.export_step(self.session.document, target)
         return {
             "path": str(target),
             "bytes": target.stat().st_size,
             "body_ids": list(resolved),
+            "skipped_hidden": list(skipped),
         }
 
-    def export_stl(
-        self, path: str, deviation: Optional[float] = None, body_ids: Optional[list] = None
-    ) -> dict:
-        """STLを書き出す(`deviation` 省略時は `Session.deviation`)。"""
+    def export_stl(self, path: str, deviation: Optional[float] = None) -> dict:
+        """STLを書き出す(`deviation` 省略時は `Session.deviation`)。対象は export_step と同じ
+        (いま表示中のBodyだけ・引数で選べない)。"""
         target = Path(path)
-        resolved = io_step.export_body_ids(self.session.document, body_ids=body_ids)
+        resolved = io_step.export_body_ids(self.session.document)
+        skipped = io_step.export_skipped_hidden(self.session.document)
         used = float(self.session.deviation if deviation is None else deviation)
-        io_step.export_stl(self.session.document, target, used, body_ids=body_ids)
+        io_step.export_stl(self.session.document, target, used)
         return {
             "path": str(target),
             "bytes": target.stat().st_size,
             "body_ids": list(resolved),
+            "skipped_hidden": list(skipped),
         }
 
     # ------------------------------------------------------------------ 履歴

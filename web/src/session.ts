@@ -191,6 +191,8 @@ export interface FilePayload {
   operations?: number
   deviation?: number
   body_ids?: string[]
+  /** 書き出し候補のうち非表示(visible=false)で除外されたBodyのID(export_step/export_stlのみ)。 */
+  skipped_hidden?: string[]
   files?: DocumentInfo[]
 }
 
@@ -614,6 +616,7 @@ export function createSession(hooks: SessionHooks): Session {
       operations?: number
       deviation?: number
       body_ids?: string[]
+      skipped_hidden?: string[]
       files?: DocumentInfo[]
       // ---------------------------------------------------------------- G
       provider?: AiProviderKind
@@ -669,6 +672,7 @@ export function createSession(hooks: SessionHooks): Session {
         operations: message.operations,
         deviation: message.deviation,
         body_ids: message.body_ids,
+        skipped_hidden: message.skipped_hidden,
         files: message.files,
       })
     } else if (message.type === 'error') {
