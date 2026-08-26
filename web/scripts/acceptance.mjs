@@ -1,5 +1,5 @@
 /**
- * v1の受入 — **19操作を人間側とAI側の両方で実際に動かす**。
+ * v1の受入 — **18操作を人間側とAI側の両方で実際に動かす**。
  *
  * v1の定義:
  *
@@ -16,7 +16,7 @@
  *
  * 見るのは3つ:
  *
- * 1. **到達表**: 19操作 × 人間/AI を実際に動かして ✅ / ❌
+ * 1. **到達表**: 18操作 × 人間/AI を実際に動かして ✅ / ❌
  * 2. **交互操作**: AIが述語で辺を提案 → ブラウザに提案として出る → 人がクリックで直す →
  *    AIが読み直して fillet → 形が変わる(**この企画の核心**)
  * 3. **副次**: 手だけで実物相当(全周円筒+円錐)を作る
@@ -40,7 +40,14 @@ const workdir = options.workdir ?? mkdtempSync(join(tmpdir(), 'duocad-g-'))
 
 
 
-/** 到達表の19操作(実装計画書§0)。**この並びのまま ACCEPTANCE.md の表になる**。 */
+/**
+ * 到達表の18操作(実装計画書§0)。**この並びのまま ACCEPTANCE.md の表になる**。
+ *
+ * 2026-08-27に19から18へ減った —— 参照ボディから編集用ソリッドを作る複製の操作を
+ * 削除し、STEP読み込み(`import_step`)が読んだ時点で編集可能なボディまで作るように
+ * 統合したため。**減ったのはこの1つだけ**であること(他を削って通していないこと)が
+ * v1到達の根拠を保つ条件である。
+ */
 const VERBS = [
   'sketch_create',
   'add_line',
@@ -55,7 +62,6 @@ const VERBS = [
   'pattern_circular',
   'set_parameter',
   'set_visible',
-  'make_editable_copy',
   'import_step',
   'export_step',
   'export_stl',
@@ -244,7 +250,7 @@ async function main() {
       )
     }
 
-    // ================================================================ 人間側の19操作
+    // ================================================================ 人間側の18操作
     console.log('\n--- 人間側(ブラウザを本物のクリックとキーで操作) ---')
 
     await attempt('human', 'sketch_create', async () => {
@@ -622,69 +628,23 @@ async function main() {
     })
 
     await attempt('human', 'import_step', async () => {
-      const before = (await look()).bodies.length
+      // **読んだ時点で編集できることまで見る。** `parts` は `kind === "solid"` だけを
+      // 並べるので(参照ボディは隠されて出ない)、ここが増えていれば編集用ボディができている。
+      // `bodies` の側で数えると、参照ボディだけが増えた実装でも緑になってしまう。
+      const before = (await look()).parts.length
       await page.click('#file-import-step')
       await typeInto('#file-path', humanStep)
       await page.keyboard.press('Enter')
       await waitFor(
-        (previous) => window.__duocad.state.bodies.length > previous,
-        'STEPを読み込めない',
-        before,
-      )
-      return '自分で書き出したSTEPを読み込んだ(そのまま編集できるボディができる)'
-    })
-
-    await attempt('human', 'make_editable_copy', async () => {
-      await page.click('#parts-hide-all')
-      await waitFor(() => window.__duocad.parts.every((body) => !body.visible), '編集用を隠せない')
-      // 参照は隠れていて指せない。直前の import で増えた編集用ボディ(parts の末尾)を表示して面を指す。
-      const importedId = await page.evaluate(
-        () => window.__duocad.parts[window.__duocad.parts.length - 1].body_id,
-      )
-      await page.click(`.parts-row[data-body-id="${importedId}"] input.visible-toggle`)
-      await waitFor(
-        (id) => {
-          const body = window.__duocad.parts.find((item) => item.body_id === id)
-          if (!body?.visible) return false
-          for (let index = 1; index <= 30; index += 1) {
-            if (window.__duocad.projectFace(id, index)) return true
-          }
-          return false
-        },
-        '読み込んだボディの面が画面から指せない',
-        importedId,
-      )
-      const point = await page.evaluate((id) => {
-        const rect = document.querySelector('.viewport').getBoundingClientRect()
-        for (let index = 1; index <= 30; index += 1) {
-          const position = window.__duocad.projectFace(id, index)
-          if (position) return { x: position.x + rect.left, y: position.y + rect.top, index }
-        }
-        return null
-      }, importedId)
-      if (!point) throw new Error('読み込んだボディの面が画面から指せない')
-      await page.mouse.click(point.x, point.y)
-      await waitFor(
-        (id) =>
-          (window.__duocad.selection?.items ?? []).some(
-            (item) => item.body === id && item.kind === 'face',
-          ),
-        '読み込んだボディの面を選べない',
-        importedId,
-      )
-      const before = (await look()).parts.length
-      await page.click('#file-make-editable')
-      await page.keyboard.press('Enter')
-      await waitFor(
         (previous) => window.__duocad.parts.length > previous,
-        '編集可能なコピーができない',
+        'STEPを読み込んでも編集用ボディが増えない',
         before,
       )
-      await page.click('#parts-show-all')
-      return '面を選んで編集可能なコピーを作った(複製の経路)'
+      const added = (await look()).parts.length - before
+      return `自分で書き出したSTEPを読み込んだ(そのまま編集できるボディが ${added} 個できる)`
     })
 
-    // ================================================================ AI側の19操作
+    // ================================================================ AI側の18操作
     console.log('\n--- AI側(MCPツールを本物のJSON-RPCで呼ぶ) ---')
     // **同じサーバ・同じ文書**を触る(このスクリプトが起動したのは mcp_server 1つだけ)。
     let aiSketch = null
@@ -850,18 +810,19 @@ async function main() {
       return `${result.bytes} B(偏差0.05)`
     })
 
-    let aiReference = null
     await attempt('ai', 'import_step', async () => {
-      // 通常の読み込みは `import_step_editable`(ツール名 == ログのverb名)。
-      // 参照だけ足す `import_step` は別ツールとして残っている。
-      const result = await mcp.callTool('import_step_editable', { path: aiStep })
-      aiReference = result.reference_ids[0]
-      return `編集可能なボディ ${result.body_ids.length} 個`
-    })
-
-    await attempt('ai', 'make_editable_copy', async () => {
-      const result = await mcp.callTool('make_editable_copy', { source_body_id: aiReference })
-      return `編集用ボディ ${result.body_id} を作った`
+      // **STEP読み込みのツールは1つだけ**(ツール名 == ログのverb名)。読んだ時点で
+      // 編集可能なボディができ、原本の参照ボディは隠したまま同じ1操作で入る。
+      const result = await mcp.callTool('import_step', { path: aiStep })
+      if (!Array.isArray(result.body_ids) || result.body_ids.length === 0) {
+        throw new Error(`編集可能なボディが返らない: ${JSON.stringify(result.body_ids)}`)
+      }
+      if (result.reference_ids.length !== result.body_ids.length) {
+        throw new Error(
+          `参照と編集用が対になっていない: ${result.reference_ids.length} / ${result.body_ids.length}`,
+        )
+      }
+      return `編集可能なボディ ${result.body_ids.length} 個(原本 ${result.reference_ids.length} 個は隠したまま)`
     })
 
     await attempt('ai', 'undo', async () => {

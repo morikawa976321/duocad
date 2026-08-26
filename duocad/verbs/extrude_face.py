@@ -3,7 +3,8 @@
 `distance > 0` は面の外向き法線方向へ足し、`distance < 0` は削る。
 
 **編集できるのは `kind="solid"` のボディだけ**(`Document.is_editable`)。読み込んだSTEPは
-`kind="reference"`(読み取り専用)なので、先に `make_editable_copy` で編集用のソリッドを作る。
+`kind="reference"`(読み取り専用)だが、`import_step` は同じソリッドの編集用ボディ
+(`kind="solid"`)も同時に作るので、押し出しの対象はそちらである。
 
 **undoは押し出し前の形状のスナップショット**で戻す(操作ログを逆算しない)。スナップショットは
 プロセス内の弱参照テーブルに `(body_id, seq)` で持ち、`do` のたびに取り直すので redo→undo も

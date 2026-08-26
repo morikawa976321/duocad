@@ -100,10 +100,13 @@ def _resolve_target(
 
     **`new` は対象を決めない**(常に新規作成)。`body_id` を渡されたら ValueError。
 
-    `body_id` を省略したときのアクティブボディが**編集できない**(読み込んだ参照STEP)なら、
-    「対象が無い」として扱う — `import_step` はボディを常にアクティブにするので、
-    参照部品を読んだ直後の文書では join が最初の板を作れなくなる。棚取付具を参照として読み、
-    その隣に板を作るのがまさにこの経路である。
+    `body_id` を省略したときのアクティブボディが**編集できない**(参照ボディ)なら、
+    「対象が無い」として扱い、join でも最初の板を作れるようにする。
+    **2026-08-27の統合以降、この分岐へ落ちる経路は残っていない** —— `import_step` は
+    参照ボディの**後に**編集用ボディを足すので、読み込み直後のアクティブは常に編集可能で、
+    参照ボディを作る verb は他に無い。それでも握り潰さずに残してあるのは、アクティブが
+    参照ボディである状態を作る verb が将来増えたときに、ここが黙って ValueError を投げる
+    (= join が最初の板を作れない)側へ倒れないようにするためである。
     一方、**明示的に参照ボディを指定された場合は ValueError**(取り違えを黙認しない)。
     """
     if mode == "new":
@@ -127,7 +130,8 @@ def _resolve_target(
     if not doc.is_editable(body_id):
         raise ValueError(
             f"body {body_id!r} is not editable (kind='reference'). "
-            "make_editable_copy() で編集用のソリッドを作ってから押し出すこと"
+            "参照ボディは読み込みの原本なので触れない —— import_step が同じソリッドに"
+            "作る編集用ボディ(kind='solid')の body_id を使うこと"
         )
     body = doc.get_body(body_id)
     if body.shape is None:

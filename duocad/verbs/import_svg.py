@@ -5,7 +5,7 @@
 
 **ログ1行・undo1回・MCP1呼び出しに収める**。`add_line` / `add_bezier` をN回発行する形に
 してはならない —— ロゴ1枚が数百行のログになり、取り込みを取り消すのに Ctrl+Z を数百回
-押すことになる(`import_step_editable` と同じ理由)。
+押すことになる(`import_step` と同じ理由)。
 
 **作った全IDを `args` に記録する**(`sketch_id` / 各 `entity_id`)。記録が無いと再生
 (redo / `open_document`)で別のIDが振られ、保存した選択集合や押し出しの参照先を失う。

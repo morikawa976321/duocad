@@ -403,8 +403,7 @@ function isHowInput(spec: ArgSpec): boolean {
  * 2. **howの入力がある**(`isHowInput`) … 打ち終わり・選び終わりを機械が決められない。
  *
  * **どちらでもない = 対象が1つに定まり、howが無い**ものだけが即適用になる。現行で
- * ここへ落ちるのは **`add_line`(点2つ)・`make_editable_copy`(面1つ)・`sketch_create`
- * (平面1つ)**。
+ * ここへ落ちるのは **`add_line`(点2つ)・`sketch_create`(貼る先の平面1つ)**。
  *
  * **列挙していない種別は「即適用の側」に落ちる(意図した既定)。** 対象を1つだけ指す新しい
  * 種別はここを直さなくても即適用になる。逆に、**新しい how を足すときは `isHowInput` へ

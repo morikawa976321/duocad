@@ -42,7 +42,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # --------------------------------------------------------------------------------------
 # 公開する道具の全体像(**この表が到達表のAI列そのもの**)
 # --------------------------------------------------------------------------------------
-#: §0の到達表の19操作。ツール名は**操作ログのverb名と同じ綴り**にする —— AIが
+#: §0の到達表の18操作(2026-08-27に複製の操作を1つ削除して19から減った)。
+#: ツール名は**操作ログのverb名と同じ綴り**にする —— AIが
 #: `describe_document` のログを読んで次の操作を決めるとき、ログのverb名と呼べるツール名が
 #: 違うと対応表を推測させることになる。
 VERB_TOOLS = {
@@ -60,7 +61,6 @@ VERB_TOOLS = {
     "pattern_rectangular",
     "pattern_circular",
     # ボディ・パラメータ
-    "make_editable_copy",
     "set_parameter",
     # 入出力
     "import_step",
@@ -89,13 +89,16 @@ SELECTION_TOOLS = {
     "set_visible",
 }
 
-#: 到達表の19操作には数えないが、**ログに載るverbと同じ綴りで呼べる**ために要るツール。
+#: 到達表の操作には数えないが、**ログに載るverbと同じ綴りで呼べる**ために要るツール。
 #:
-#: 「STEPを読む」という1操作に verb が2つある(`import_step_editable` = 編集可能なボディまで
-#: 作る通常の経路 / `import_step` = 参照ボディだけ)。`editable` 引数で1つのツールが
-#: 打ち分ける形だと、**ログに出る `import_step_editable` を呼べるツールが存在しない**。
-#: ツールを2つに割り、名前をverbに揃えている。
-EXTRA_LOGGING_TOOLS = {"import_step_editable"}
+#: **いまは空である**(2026-08-27)。「STEPを読む」に verb が2つあった間だけ中身があった ——
+#: 編集可能なボディまで作る経路と参照ボディだけの経路で、1つのツールが引数で打ち分ける形に
+#: すると**ログに出るverb名を呼べるツールが存在しない**ことになるため、ツールを2つに割って
+#: いた。verbが `import_step` 1本に統合されて対応が1:1へ戻ったので、ここは空になる。
+#:
+#: **空でも残す。** 下の `LOGGING_TOOLS` の一致検査が「ツール名 == verb名」を両方向で見る
+#: 仕組みそのもので、到達表に無いverbを足したときはここへ書く場所が要る。
+EXTRA_LOGGING_TOOLS: set = set()
 
 EXPECTED_TOOLS = VERB_TOOLS | QUERY_TOOLS | SELECTION_TOOLS | EXTRA_LOGGING_TOOLS
 
@@ -149,13 +152,11 @@ ARGUMENTS: dict = {
     ),
     # ---- ボディ・パラメータ
     "set_visible": ({"body_id", "visible"}, {"body_id", "visible"}),
-    "make_editable_copy": ({"source_body_id", "name"}, set()),
     "set_parameter": ({"name", "value"}, {"name", "value"}),
     # ---- 入出力
-    # STEP読み込みは**2ツール**。`import_step_editable` が通常の経路で、
-    # `import_step` は参照ボディだけ。**引数で打ち分けない** —— 引数で分けると、
-    # ログに載るverb名と呼べるツール名が食い違う(`EXTRA_LOGGING_TOOLS` の理由)。
-    "import_step_editable": ({"path"}, {"path"}),
+    # STEP読み込みは**1ツール**(2026-08-27に統合)。読んだ時点で編集可能なボディまでできる。
+    # **`editable` のような引数で経路を打ち分けない** —— 引数で分けると、ログに載るverb名と
+    # 呼べるツール名が食い違う(`EXTRA_LOGGING_TOOLS` の理由)。
     "import_step": ({"path"}, {"path"}),
     # SVG読み込みは**貼る先(`base_plane`)と倍率(`scale`)が省略できる**。省略時は
     # 確定選択の面に貼る(`sketch_create` と同じ解決・同じ綴り)。
@@ -296,7 +297,7 @@ def test_every_v1_verb_is_reachable_as_an_mcp_tool(server: McpServer):
 
     §0の到達表のAI列にある全操作がMCPツールとして存在し、かつ**余計なものが無い**。
     集合の一致で見るのは、新しいverbを足したときにMCPへ出し忘れるのを防ぐため
-    ——「19操作のうち18個ある」は実装計画書の観点では未達だが、部分集合の検査では緑になる。
+    ——「18操作のうち17個ある」は実装計画書の観点では未達だが、部分集合の検査では緑になる。
     """
     names = {tool["name"] for tool in tool_list(server)}
     assert names == EXPECTED_TOOLS, {
@@ -312,7 +313,7 @@ def test_tool_names_match_the_verb_names_in_the_operation_log(server: McpServer)
     違うと、対応表を推測させることになる(推測させた分だけ静かに間違う)。
 
     **片方向の検査(`LOGGING_TOOLS <= registered`)では、ツール名と綴りの違うverbが登録されても
-    検出できない**(`import_step` が `editable` 引数で2つのverbを打ち分ける設計だと起こりうる)。
+    検出できない**(1つのツールが引数で2つのverbを打ち分ける設計だと起こりうる)。
     集合の**一致**にすると、次の3つが全部この1行で落ちる:
 
     1. ツール名と綴りの違うverbを新設した

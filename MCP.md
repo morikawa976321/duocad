@@ -3,12 +3,12 @@
 **AIが文書を操作するための口**（F / 2026-08-11）。ブラウザとMCPは同じ `Session` を叩く対等な
 クライアントで、MCPが変えた内容は開いている画面へ即座に届く。
 
-公開ツールは**29個**。面・辺・領域などの**形は引数で受けず、確定した選択から取る**
+公開ツールは**28個**。面・辺・領域などの**形は引数で受けず、確定した選択から取る**
 （数値・名前・パスだけが引数）。提案の選択はそのまま verb に渡せない — 先に
 `commit_selection` が要る。**この1手はAI自身が踏んでよい**（人の承認を待つ規則は
 2026-08-22に外した。どこまで自分でやるかは下記「AIはどこまで自分でやるか」）。
 
-## 公開ツール（29）
+## 公開ツール（28）
 
 | 群 | ツール |
 |---|---|
@@ -17,8 +17,8 @@
 | 選択(5) | `get_selection` / `propose_selection` / `modify_selection` / `commit_selection` / `clear_selection` |
 | スケッチ(5) | `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` |
 | フィーチャ(6) | `extrude` / `extrude_face` / `fillet` / `chamfer` / `pattern_rectangular` / `pattern_circular` |
-| ボディ・パラメータ(3) | `set_visible` / `make_editable_copy` / `set_parameter` |
-| 入出力(5) | `import_step_editable` / `import_step` / `import_svg` / `export_step` / `export_stl` |
+| ボディ・パラメータ(2) | `set_visible` / `set_parameter` |
+| 入出力(4) | `import_step` / `import_svg` / `export_step` / `export_stl` |
 | 履歴(2) | `undo` / `redo` |
 
 **呼び方の型**（例）:
@@ -27,7 +27,7 @@
 2. `propose_selection`（`refs` か `predicate`）→ 必要なら `measure` で確認 → `commit_selection`
    （**AIが自分で踏む**。人に見せて止めるときだけ踏まない）
 3. `fillet(radius=…)` / `extrude(distance=…)` など — **辺や領域は引数に書かない**
-4. `import_step_editable` は**読んだ時点で編集できるボディ**を返す（`body_ids`。追加の1手は要らない）
+4. `import_step` は**読んだ時点で編集できるボディ**を返す（`body_ids`。追加の1手は要らない）
 5. `import_svg(path)` はSVGを**1枚のスケッチ**にして返す（`sketch_id` と `region_count`）。
    そのまま `propose_selection` → `commit_selection` → `extrude` へ進める。
    **領域は1枚のSVGに複数あるのが普通**（文字の内側の穴・離れた図形）なので、
@@ -51,12 +51,12 @@
 （`base_plane` の `XY`/`XZ`/`YZ`）は、文字列や列挙に見えても**対象（target）の側**であり
 how には数えない（手動UIでも `PlaneArgSpec` / `point` は how ではない）。
 
-**どちらでもない付帯入力もある。** `make_editable_copy` の `name`（新しいボディへの命名）は
-既存の対象を指してもいなければ結果を決めてもいない。**省略でき、既定がある**
-（`duocad/verbs/make_editable_copy.py` の `"<複製元>-edit"`）ので打ち終わりを
-人に聞く必要がそもそも無く、how には数えない（手動UIはこの引数を持たない —— `ws=False`。
-だから `ENTER_REQUIRED` でも `make_editable_copy` は第1段のままである）。この種の
-「省略可の付帯入力」は第1段の判定を変えない。
+**どちらでもない付帯入力もある。** 既存の対象を指してもいなければ結果も決めない引数
+（新しく作るものへの命名など）で、**省略でき、既定がある**ものである。打ち終わりを
+人に聞く必要がそもそも無いので how には数えず、手動UIにも出さない（`ws=False`）——
+この種の「省略可の付帯入力」は第1段の判定を変えない。
+**いま該当する引数は1つも無い**（唯一の実例だった複製の `name` が2026-08-27に消えた）ので、
+ここに書けるのは規則だけである。無い例を作文しないこと。
 
 どちらにも当たらなければ対象は1つに定まり、人に聞くことが残っていない。AIは
 `propose_selection` → `commit_selection` → verb を**一息に実行してよい**。
@@ -135,7 +135,7 @@ bindで落ちる）。
 ## トランスポートは2本
 
 `handle()` はトランスポートを知らない（1メッセージの辞書を受け取って返すだけ）ので、
-**同じ29ツールがどちらの口からも同じ顔で出る**。契約は `tests/test_mcp_http.py` が固定する。
+**同じ28ツールがどちらの口からも同じ顔で出る**。契約は `tests/test_mcp_http.py` が固定する。
 
 | | 誰が使う | プロセスの所有者 |
 |---|---|---|
@@ -175,11 +175,11 @@ Claude Codeを起動すれば繋がる —— 起動時に**cwdの `.mcp.json` �
 duocadを立て直してもClaude Code側の操作は要らない。起動時の待ちは既定30秒（`MCP_TIMEOUT`）。
 
 **起動時に読むSTEPを決める引数は無い**（2026-08-15に `--step` を廃止）—— サーバは常に空の
-文書で立ち、STEPは `import_step_editable` で読む。
+文書で立ち、STEPは `import_step` で読む。
 
 duocad以外のディレクトリからも使う日だけ、userスコープへ手で登録する
 （`claude mcp add --scope user --transport http duocad http://127.0.0.1:8766/mcp`）。
-29ツールが無関係なプロジェクトにも出るので既定にはしない。
+28ツールが無関係なプロジェクトにも出るので既定にはしない。
 
 ## Claude Desktop への登録
 
@@ -207,9 +207,9 @@ Claude Desktopのセッションに縛られる。1.2のHTTPのような後付�
    **可視性は操作ログに載らないので `undo` では戻らない** —— 戻すのは `set_visible(body_id, true)`
 3. 対象を `propose_selection` で選び、`commit_selection` してから fillet / extrude 等
    —— **確定を人に頼まない**。提案で止めるかどうかの判断は上記「AIはどこまで自分でやるか」
-4. STEPを足すなら `import_step_editable(path)` —— **これ1回で編集できるボディが揃う**
+4. STEPを足すなら `import_step(path)` —— **これ1回で編集できるボディが揃う**
    （戻り値の `body_ids` がそれ。`reference_ids` は隠してある原本）。
-   参照ボディだけが欲しいときは `import_step(path)` を使う（続きに `make_editable_copy` が要る）
+   **読み込みのツールはこれ1つだけ**で、参照ボディだけを足す口は無い（2026-08-27）
 5. 取り消すのは `undo`（UIと同じ履歴）。**戻せるのは形を変えた操作だけ**で、
    可視性の切り替えと選択の変更は履歴に載っていない
 
@@ -219,10 +219,11 @@ Claude Desktopのセッションに縛られる。1.2のHTTPのような後付�
 **参照ボディの可視性は切り替えられない**（原本なので。編集用の `body_id` を使う）。
 
 > **ツール名は操作ログのverb名と同じ綴りである**（例外なし。**WebSocketのコマンド名とUIのコマンドIDも同じ**）。ログを読んで次の一手を決めるとき、
-> そこに出ている名前をそのまま呼べる。STEP読み込みのツールが2つあるのはこのためで、
-> `import_step_editable` と `import_step` は**別のverbなので別のツール**にしてある。
-> 2026-08-15までは1つの `import_step` ツールが `editable` 引数で打ち分けており、
-> **ログに出る `import_step_editable` を呼べるツールが存在しない**状態だった（QA指摘で解消）。
+> そこに出ている名前をそのまま呼べる。**1つのツールを引数で複数のverbに打ち分けない** ——
+> 2026-08-15までは1つの `import_step` ツールが `editable` 引数で2つのverbを打ち分けており、
+> **ログに出る方のverbを呼べるツールが存在しない**状態だった（QA指摘で解消）。
+> 2026-08-27にSTEP読み込みのverb自体が `import_step` 1本へ統合され対応は1:1へ戻ったが、
+> 規律は変わらない（読み込みのverbを増やすなら、同じ綴りのツールも増やす）。
 > 一致は `tests/test_mcp_verbs.py::test_tool_names_match_the_verb_names_in_the_operation_log`
 > が**両方向で**固定する（片方向だった間にこのずれが緑のまま入り込んだので、集合の一致にした）。
 

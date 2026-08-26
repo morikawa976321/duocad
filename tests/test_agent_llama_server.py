@@ -52,7 +52,7 @@ pytestmark = [
 def test_a_local_model_can_actually_call_the_document_tools():
     """5面6辺の実物を読み込んだ文書について、モデルが**ツールを呼んで**答えること。"""
     tools = DocumentTools(Session(None, 0.2))
-    imported = tools.call("import_step_editable", {"path": str(PC_CASE_FEET)})
+    imported = tools.call("import_step", {"path": str(PC_CASE_FEET)})
     assert imported["body_ids"], "STEPの読み込みに失敗している(検査の前提)"
 
     calls: list[tuple[str, bool]] = []

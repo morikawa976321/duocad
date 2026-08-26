@@ -561,7 +561,7 @@ MODES = ("join", "cut", "new")          # new は2026-08-26追加
 
 実装計画書が規定していないため、**テストを書く側の決定として明示する**:
 
-1. **verbの戻り値の流儀** — 新しいものを作るverbは新しいID（`make_editable_copy` と同じ）、
+1. **verbの戻り値の流儀** — 新しいものを作るverbは新しいID（`import_svg` と同じ）、
    既存の形状を変えるverbは `Operation`（`extrude_face` と同じ）。スケッチの4 verbは前者、
    `extrude` は後者。
 2. **`Sketch` は `regions` フィールドを持たない**。実装計画書§3.3は `regions` を
@@ -902,13 +902,14 @@ import_step(doc: Document, path: str | Path) -> list[BodyId]      # 戻り値が
 | `test_io_step.py` | `test_export_step_roundtrip_preserves_face_count` | `== 56` は成立しない（activeは最後の1ソリッド＝3〜4面） |
 | `test_io_step.py` | `test_export_step_roundtrip_preserves_volume` / `test_export_stl_smaller_deviation_yields_larger_file` / `test_export_stl_works_from_reference_body` | 書き出し対象が「最後のソリッド」に静かに変わる。M0の節が申し送っていた `export_step(doc, path, body_ids=None)` を入れるのが自然なタイミング |
 | `test_oplog.py` | `test_undo_reverts_document_state`(48行) / `test_redo_reapplies_undone_operation`(61行) / `test_redo_does_not_record_the_operation_twice`(81行) | `len(doc.bodies) == 1` → 17（3件とも） |
-| `test_extrude_face.py` | `session` フィクスチャ（38–40行）、`len(document.bodies) == 2`（57行）、`reference_id`（58/71/114/352行）、**`face_count == 56`（62/121/367行）** | `make_editable_copy(document, reference_id)` にリストが渡る。`len == 2` → 18。分解後は1ソリッド3〜4面なので56面の前提が全部崩れる |
 | `test_m2_regressions.py` | 161–172行 | `created.id != reference_id`（リスト比較）、`len(document.bodies) == 2` → 18 |
-| `test_m3_regressions.py` | 48–50行 | `make_editable_copy(document, reference, ...)` にリストが渡る |
-| `duocad/server.py` | `Session.load_step`（122–123行） | テストではないが同じ理由で壊れる。`make_editable_copy(self.document, reference_id)` にリストが渡る |
 
 `web/`（アプリ層）も `state` の形が変わるので追随が要る。**パーツ一覧パネルは次々タスクの
 範囲**だが、既存のビューアが動かなくなる点は認識しておくこと。
+
+> **【2026-08-27】この予測表から3行落とした** —— 参照ボディを編集可能にする verb と、
+> それを使っていた `test_extrude_face.py`（2026-08-22に削除済み）・`test_m3_regressions.py` の
+> 該当箇所・`Session.load_step` の呼び出しが全部無くなり、予測の対象が存在しなくなったため。
 
 ## `duocad/verbs/visibility.py` — 可視性のverb（**2026-08-26に廃止**）
 
@@ -2046,9 +2047,12 @@ F が埋めるのはその列であり、合格条件は §0 が定義してい�
 展開すると19になる）。`tools/list` の集合は**一致**で検査する（部分集合ではない）——
 「19のうち18ある」は §0 の観点では未達だが、部分集合の検査だと緑になる。
 
-**19操作に対してツールが29個ある**のは、選択・問い合わせが操作の外にあるのと、
-「STEPを読む」1操作に**verbが2つ**あるため（`import_step_editable` / `import_step`）。
-後者は `EXTRA_LOGGING_TOOLS` として到達表と別に持つ（2026-08-15）。
+**18操作に対してツールが28個ある**のは、選択・問い合わせが操作の外にあるためである
+（2026-08-27時点。`EXTRA_LOGGING_TOOLS` は**空**）。
+2026-08-15〜08-27の間は「STEPを読む」1操作に**verbが2つ**あり、到達表に数えない側を
+`EXTRA_LOGGING_TOOLS` に持っていた。verbが `import_step` 1本へ統合されて対応が1:1に戻り、
+同時に複製の1操作が消えたので、19操作/29ツール → 18操作/28ツールになった。
+**空の `EXTRA_LOGGING_TOOLS` は残してある** —— 到達表に無いverbを足したときに書く場所が要る。
 
 **ツール名は操作ログのverb名と同じ綴りにする。** AIは `describe_document` が返すログを読んで
 次の一手を決めるので、ログのverb名と呼べるツール名が違うと対応表を推測させることになる。
@@ -2095,7 +2099,7 @@ AIが `commit_selection()` を明示すれば通る（A1の決定4）。
     can_undo / can_redo
 
 加えて作ったものの**IDを返す**（`sketch_create`→`sketch_id` / `add_*`→`entity_id` /
-`pattern_*`→`pattern_id` / `make_editable_copy`→`body_id` / `import_step`→`body_ids`）。
+`pattern_*`→`pattern_id` / `import_step`→`body_ids` と `reference_ids`）。
 返さないとAIは次の呼び出しで指せない。
 
 **`changed_bodies` は `Session.body_revision` の呼び出し前後の差から導くこと。**
@@ -2209,6 +2213,11 @@ opの一覧だけでは述語を組み立てられないので、`kinds` / `wher
 > 新しいverb `import_step_editable` の方**になった。「参照 + 編集用 + 参照を隠す」は
 > 利便の組み合わせではなく**1本のverb**になったので、MCPから1呼び出しで出せる。
 > 詳細は末尾の「起動オプション `--step` の廃止」節。
+>
+> **【2026-08-27】この決定は役目を終えた。** 参照ボディだけを足す verb も、
+> 足りない1手を補う複製の verb も削除し、STEP読み込みは `import_step` 1本になった
+> （読んだ時点で編集用ボディまで作る）。**`hint` で足りない1手を知らせる必要はもう無い**
+> —— 足りない1手が存在しないからである。
 
 ## F1で実測した落とし穴 — **OCCTのSTEP書き出しはstdoutを汚す**
 
@@ -2754,7 +2763,7 @@ PASS**。**空の文書から始める**のがこのスクリプトの要点で�
 ## サーバに足した3つ
 
 1. **ファイル操作の口**（`FILE_COMMANDS` ＋ `open_document`）。**verbかどうかで応答が違う**:
-   `import_step` / `make_editable_copy` は文書を変えるので状態配信、`save_document` /
+   `import_step` / `import_svg` は文書を変えるので状態配信、`save_document` /
    `export_step` / `export_stl` は変えないので**要求した接続にだけ**結果（書いた先の絶対パスと
    バイト数）を返す。`open_document` は文書を**差し替える**ので全接続へ配る（表からは外して
    個別に扱う）。
@@ -2829,8 +2838,9 @@ Eでパネルを2枚足した時点で `SketchPanel` が 96→55px に潰れ、*
 
 - **穴の径を1箇所打ち直したら、反復で作った3つの穴が全部追随した**（半径2→3で体積 5811.50→5575.88）
 - **保存 → 画面を再読込 → 開く で同じ形が戻った**（体積・面数とも一致。操作ログから再生）
-- STEP/STL を書き出し（偏差を指定できることを応答で確認）、**STEPを読み込んで
-  `make_editable_copy` で編集可能にできた**
+- STEP/STL を書き出し（偏差を指定できることを応答で確認）、**STEPを読み込むとその時点で
+  編集用ボディができ、面をクリックして指せる**（2026-08-27に更新。それまでは読み込んだ後に
+  複製のコマンドで編集可能にする経路を見ていたが、そのコマンドは削除した）
 - 履歴パネルに位置が出る（「7 件が有効 ・ あと 1 件やり直せる」）。undo/redoで動く
 
 **検査そのものの落とし穴**: 「保存 → 開く → 同じ形」は、**サーバが長寿命**なので開くのが
@@ -2851,6 +2861,13 @@ Eでパネルを2枚足した時点で `SketchPanel` が 96→55px に潰れ、*
 ---
 
 # 起動オプション `--step` の廃止と verb `import_step_editable`（2026-08-15）
+
+> **【2026-08-27・この節は経緯の記録である】** ここに出てくる verb `import_step_editable` は
+> **もう存在しない** —— 2026-08-27にSTEP読み込みを1本へ統合し、この verb の実装が
+> `import_step` という名前になった。同時に、参照ボディだけを足す読み込みと、参照ボディを
+> 編集可能にする複製の verb（`make_editable_copy`）を削除した。
+> したがって以下の表・箇条書きの現在形は 2026-08-15 時点のものとして読むこと。
+> **ツール名とverb名の食い違い（下の節）は、この統合で構造ごと消えた。**
 
 ## 何が問題だったか（本人の指摘）
 
@@ -2910,8 +2927,12 @@ MCPツール `import_step` が積むログは `verb="import_step_editable"`。
 - `web/scripts/smoke-mcp.mjs` … 空で起動し、MCPの `import_step` を呼んでから27件を検査する。
 - `web/scripts/smoke-files.mjs` / `acceptance.mjs` … 「編集可能にする」の対象を参照ボディから
   **読み込んでできた編集用ボディ**へ。参照は隠れていて `projectFace` が null を返すので指せない。
-- UIの `make_editable_copy` コマンドは**ボディの複製**として残っている（UIから参照ボディを指す経路は
-  もう存在しない）。
+- UIの `make_editable_copy` コマンドは**ボディの複製**として残った（UIから参照ボディを指す経路は
+  もう存在しなかった）。
+
+> **【2026-08-27】上の最後の2項目はもう成り立たない。** 複製のコマンドはUIからもコアからも
+> 削除され、`smoke-files.mjs` / `acceptance.mjs` の該当ブロックは無くなった
+> （即適用の(a)(b)(c)は、面に貼る `sketch_create` で同じ配線を踏む形へ移した）。
 
 ---
 

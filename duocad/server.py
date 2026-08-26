@@ -39,7 +39,7 @@
 **verbコマンドは対象集合(面・辺・領域)を引数で受けない**。数値・名前・パスだけを送り、押す面も
 丸める辺も押し出す領域も `Session` のverbラッパがコアの確定選択から取る
 (`selection.require_confirmed` / `require_edges`)。`body_id` が残っているのは対象集合ではない
-ものだけ(`set_visible` / `get_edges` / `make_editable_copy` の対象、`extrude` の行き先)。
+ものだけ(`set_visible` / `get_edges` の対象、`extrude` の行き先)。
 
 選択の口は3つ(`modify_selection` / `commit_selection` / `clear_selection`)。`propose_selection`
 は開けていない(AIが書く経路であり、人はポインティングで直す)。
@@ -99,9 +99,8 @@ from .verbs import (
     extrude as extrude_regions_verb,
     extrude_face,
     fillet as fillet_verb,
-    import_step_editable,
+    import_step as import_step_verb,
     import_svg as import_svg_verb,
-    make_editable_copy,
     pattern_circular as pattern_circular_verb,
     pattern_rectangular as pattern_rectangular_verb,
 )
@@ -116,7 +115,7 @@ DEFAULT_MODELS_DIR = REPO_ROOT / "models"
 
 #: 状態配信で本文を伏せるログ引数。値の代わりに文字数だけを配る。
 #:
-#: `import_step` / `import_step_editable` は読み込んだSTEPの**本文**を `args["step"]` に持ち、
+#: `import_step` は読み込んだSTEPの**本文**を `args["step"]` に持ち、
 #: `import_svg` は翻訳した**図形の全部**を `args["entities"]` に持つ(ロゴ1枚で数百件)。
 #: PCケースのSTEPは4.6MBあり、`state_meta()` はWebSocketで**操作のたびに全部配られる**ので、
 #: 素通しにすると1操作ごとに数MBが流れる(「27部品でも数KB」という前提が壊れる)。
@@ -149,7 +148,7 @@ _RESERVED_WINDOWS_NAMES = frozenset({
 })
 
 # サーバは常に空の文書で立ち上がり、STEPはアプリ内の「STEP読み込み」かMCPの `import_step`
-# から読む。読み込むSTEPのパスを既定として持つ場所は無いので、smokeスクリプトが使う
+# から読む(読み込みのverbは1本だけ)。読み込むSTEPのパスを既定として持つ場所は無いので、smokeスクリプトが使う
 # PCケースのパスは `web/scripts/models.mjs` が持つ。
 
 # --------------------------------------------------------------------------------------
@@ -178,7 +177,7 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 #: ブラウザから踏めるファイル操作 -> (`Session` のメソッド名, 必須の引数名, 文書を変えるか)。
 #: **文書を変えるかどうかで応答が違う**のがこの表だけの事情:
 #:
-#: - `import_step` / `make_editable_copy` … 文書を変える(ログに載る)。応答は状態配信
+#: - `import_step` / `import_svg` … 文書を変える(ログに載る)。応答は状態配信
 #: - `save_document` / `export_step` / `export_stl` … 文書を変えない。応答は書いた先の
 #:   パスとバイト数だけ(要求した接続にだけ返る。`preview` と同じ扱い)
 #: - `open_document` はどちらでもない —— 文書を**差し替える**ので全接続へ配る必要があり、
@@ -340,7 +339,7 @@ class Session:
     def load_step(self, path: Path) -> list:
         """STEPを読み、ソリッドごとに参照ボディ+編集用コピーを作る(Python APIとして残す)。
 
-        中身は verb `import_step_editable` そのもの。
+        中身は verb `import_step` そのもの。
 
         **土台(undoの対象外にする範囲)はverb名ではなくseqの下限で区切る**(`_setup_floor_seq`)。
         verb名で判定すると、後からユーザー操作としても呼ばれうるverbが末尾に来た瞬間に
@@ -348,7 +347,7 @@ class Session:
 
         通常の起動でここは通らない(pytestが直に呼ぶときだけ通る)。
         """
-        editable_ids = import_step_editable(self.document, str(path))
+        editable_ids = import_step_verb(self.document, str(path))
         entries = self.document.log.entries
         self._setup_floor_seq = entries[-1].seq if entries else 0
         return editable_ids
@@ -1025,12 +1024,6 @@ class Session:
         )
         return self._after_logged_verb({"pattern_id": pattern_id})
 
-    def make_editable_copy_body(
-        self, source_body_id: Optional[str] = None, name: Optional[str] = None
-    ) -> dict:
-        body_id = make_editable_copy(self.document, source_body_id, name)
-        return self._after_logged_verb({"body_id": body_id})
-
     def set_parameter(self, name: str, value: float) -> dict:
         before_shapes = {body.id: id(body.shape) for body in self.document.bodies}
         operation = parameters.set_parameter(self.document, name, float(value))
@@ -1046,15 +1039,15 @@ class Session:
             "changed_bodies": changed_bodies,
         })
 
-    def import_step_editable(self, path: Any) -> dict:
-        """STEPを読み、**編集可能なボディまで作る**(verb `import_step_editable`)。
+    def import_step(self, path: Any) -> dict:
+        """STEPを読み、**編集可能なボディまで作る**(verb `import_step`)。
 
-        UI・MCPから来る通常の読み込みはこちら —— ソリッドごとに参照ボディ(隠す)と編集用
-        ボディを作る1回のverbになる。**メソッド名・WSのコマンド名・ログのverb名を同じ綴りに
-        してある**(1コマンドを引数で2つのverbに打ち分けると、コマンド名と積まれるverbが
-        食い違う)。
+        **STEPの読み込みはこれ1本**(2026-08-27に統合) —— ソリッドごとに参照ボディ(隠す)と
+        編集用ボディを作る1回のverbで、何部品あってもログ1行・undo1回である。
+        **メソッド名・WSのコマンド名・ログのverb名を同じ綴りにしてある**(1コマンドを引数で
+        2つのverbに打ち分けると、コマンド名と積まれるverbが食い違う)。
         """
-        body_ids = import_step_editable(self.document, str(self._resolve(path)))
+        body_ids = import_step_verb(self.document, str(self._resolve(path)))
         args = self.document.log.entries[-1].args
         return self._after_logged_verb({
             "body_ids": list(body_ids),
@@ -1095,15 +1088,6 @@ class Session:
                 "entity_count": len(args["entities"]),
             }
         )
-
-    def import_step(self, path: Any) -> dict:
-        """STEPを**参照ボディ(読み取り専用)としてだけ**足す(verb `import_step`)。
-
-        **参照だけ欲しい経路も残す**ための入口。通常の読み込みは上の
-        `import_step_editable` の側で、こちらを既定にはしない。
-        """
-        body_ids = io_step.import_step(self.document, self._resolve(path))
-        return self._after_logged_verb({"body_ids": list(body_ids)})
 
     # ---------------------------------------------------------------- E: ファイル操作
     #

@@ -580,26 +580,6 @@ COMMANDS: tuple[Command, ...] = (
     ),
     # ---------------------------------------------------------------- ファイル操作
     Command(
-        name="make_editable_copy",
-        category="file",
-        description=(
-            "参照ボディから編集用ソリッドを作るときに呼ぶ。"
-            "import_step_editable が編集可能なボディまで作るので通常は要らない —— "
-            "import_step(参照だけ)で読んだボディを後から編集したいとき、"
-            "または既存ボディの複製が欲しいときに使う。"
-        ),
-        params=(
-            Param(
-                "source_body_id",
-                "string",
-                "複製元の body_id。省略時はアクティブ",
-                required=False,
-            ),
-            Param("name", "string", "新しいボディの名前", required=False, ws=False),
-        ),
-        session="make_editable_copy_body",
-    ),
-    Command(
         name="set_parameter",
         category="sketch",
         description=(
@@ -618,19 +598,6 @@ COMMANDS: tuple[Command, ...] = (
             "**プレビューには載せられない** —— 操作ログを頭から再生するverbで、"
             "再生が過去のseqのundoスナップショットを書き換える(`speculative.py`)"
         ),
-    ),
-    Command(
-        name="import_step_editable",
-        category="file",
-        description=(
-            "STEPを読み込むときに呼ぶ(通常はこちら)。"
-            "ソリッドごとに編集可能なボディができ、そのまま押し出し等の対象にできる"
-            "(参照ボディは原本として隠したまま文書に残る)。"
-            "読んだ後の make_editable_copy は要らない。"
-        ),
-        params=(Param("path", "string", "読み込むSTEPファイルのパス"),),
-        session="import_step_editable",
-        note="**コマンド名 == ログのverb名**。読み込みは2つのverbがあるのでコマンドも2つに割る",
     ),
     Command(
         name="import_svg",
@@ -683,12 +650,17 @@ COMMANDS: tuple[Command, ...] = (
         name="import_step",
         category="file",
         description=(
-            "STEPを参照ボディ(読み取り専用)としてだけ足すときに呼ぶ。"
-            "**編集するなら import_step_editable を使う** —— こちらで読むと、"
-            "ソリッドの数だけ make_editable_copy を打つことになる。"
+            "STEPを読み込むときに呼ぶ。**読んだ時点で編集できる** —— "
+            "ソリッドごとに編集可能なボディができ、そのまま押し出し等の対象にできる"
+            "(原本の参照ボディは隠したまま文書に残る)。"
+            "何部品あっても1操作(ログ1行・undo1回)。"
         ),
         params=(Param("path", "string", "読み込むSTEPファイルのパス"),),
         session="import_step",
+        note=(
+            "**STEPの読み込みはこの1 verbだけ**(2026-08-27に統合)。"
+            "参照ボディだけを足す経路と、それを後から編集可能にする複製の経路は消えた"
+        ),
     ),
     Command(
         name="export_step",

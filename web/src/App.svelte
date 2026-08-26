@@ -372,15 +372,11 @@
     if (applied) {
       // 作ったスケッチへはそのまま入る(作ってから改めて「入る」を押させない)
       if (applied.verb === 'sketch_create' && applied.sketch_id) enterSketch(applied.sketch_id)
-      // **読み込んだら何ができる状態になったか**を言う。読み込みには編集可能なボディを
-      // 作る経路と、参照だけを足す経路(`import_step`)があり両方がコアに残っているので、
-      // 経路ごとに文言を用意する(「編集不可」と言い切ると編集可能な読み込みでは誤りになる)。
-      if (applied.verb === 'import_step_editable') {
+      // **読み込んだら何ができる状態になったか**を言う。読み込みの経路は1本だけ
+      // (`import_step`)で、必ず編集可能なボディまでできる。
+      if (applied.verb === 'import_step') {
         const count = applied.body_ids?.length ?? 0
         note(`STEPを読み込んだ(${count}部品)。そのまま面をクリックして押し出せる`)
-      }
-      if (applied.verb === 'import_step') {
-        note('読み込んだのは参照ボディ(編集不可)。編集するには面を選んで「編集用に複製」')
       }
       if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
       lastApplied = applied

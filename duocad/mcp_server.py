@@ -209,7 +209,7 @@ class DocumentTools:
 
         **既定では参照ボディ(kind="reference")を出さない**。STEPを読むとソリッドごとに
         「参照(読み取り専用・隠されている)」と「編集用コピー」の2つができる
-        (verb `import_step_editable`)ので、そのまま全部見せると同じ部品が2回並び、AIが
+        (verb `import_step`)ので、そのまま全部見せると同じ部品が2回並び、AIが
         隠しても画面が変わらない方(参照)を掴む。**編集対象だけを既定にする**のが
         AIから見た文書の姿として正しい。件数は `reference_count` で必ず知らせるので、
         隠していることは分かる(黙って落とさない)。
@@ -291,7 +291,7 @@ class DocumentTools:
         before = self._find_body(body_id)
         if before.kind == "reference":
             # **参照ボディの可視性は触らせない**。参照は読み込んだ
-            # STEPの原本で、読み込み(`import_step_editable`)の時点で隠してある。
+            # STEPの原本で、読み込み(`import_step`)の時点で隠してある。
             # ここを表示に戻すと**同じソリッドが二重に描かれる**——1ソリッドにつき
             # 同時に見えるのは1つという制約が、AI経路だけで破られてしまう。
             # `include_references=True` は**見せる**ためのもので、触ってよいという意味ではない。
@@ -780,13 +780,6 @@ class DocumentTools:
         return self._apply_logged(before, applied, pattern_id=applied["pattern_id"])
 
     # ------------------------------------------------------------------ ボディ・パラメータ
-    def make_editable_copy(
-        self, source_body_id: Optional[str] = None, name: Optional[str] = None
-    ) -> dict:
-        before = self._revision_snapshot()
-        applied = self.session.make_editable_copy_body(source_body_id, name)
-        return self._apply_logged(before, applied, body_id=applied["body_id"])
-
     def set_parameter(self, name: str, value: float) -> dict:
         """名前つきの寸法を書き換える(形が追随する)。
 
@@ -805,25 +798,27 @@ class DocumentTools:
         )
 
     # ------------------------------------------------------------------ 入出力
-    def import_step_editable(self, path: str) -> dict:
-        """STEPを読み、**編集可能なボディまで作る**(verb `import_step_editable`)。
+    def import_step(self, path: str) -> dict:
+        """STEPを読み、**編集可能なボディまで作る**(verb `import_step`)。
 
-        読み込んだらそのまま編集できることが**通常の経路**である —— そうでないと、AIは読んだ
-        後に `make_editable_copy` をソリッドの数だけ打つ必要が出る(PCケースなら27回)。
+        読み込んだらそのまま編集できる —— **STEPの読み込みはこの1本だけ**で、読んだ後に
+        編集可能化を部品ごとに打つ手は無い(PCケースなら27回になっていた)。何部品あっても
+        ログ1行・undo1回・MCP1呼び出しである。
 
-        **ツール名は verb 名と同じ綴りにしてある。** 1つの `import_step` ツールを `editable`
-        引数で2つのverbに打ち分ける設計にすると、`describe_document` のログに出る
-        `import_step_editable` を呼べるツールが存在しないことになる(AIに対応表を推測させる)。
+        **ツール名は verb 名と同じ綴りにしてある。** `describe_document` のログに出る
+        verb 名と呼べるツール名が違うと、AIに対応表を推測させることになる ——
+        したがって**1つのツールを引数で複数のverbに打ち分けてはならない**。verbが1本に
+        なった今もこの規律は同じで、読み込みのverbを増やすならツールも同じ綴りで増やす。
         """
         before = self._revision_snapshot()
-        applied = self.session.import_step_editable(path)
+        applied = self.session.import_step(path)
         return self._apply_logged(
             before,
             applied,
             body_ids=list(applied["body_ids"]),
             reference_ids=list(applied["reference_ids"]),
             hint=(
-                "body_ids はそのまま編集できる(make_editable_copy は要らない)。"
+                "body_ids はそのまま編集できる。"
                 "reference_ids は隠してある読み込みの原本"
             ),
         )
@@ -864,24 +859,6 @@ class DocumentTools:
                 f"領域が {region_count} 個ある。押し出す前に describe_document の "
                 "include_regions で面積を見て、対象を propose_selection で選ぶこと"
                 "(文字の内側の穴も1つの領域として数える)"
-            ),
-        )
-
-    def import_step(self, path: str) -> dict:
-        """STEPを**参照ボディ(読み取り専用)としてだけ**足す(verb `import_step`)。
-
-        足りない1手を `hint` で知らせる —— 黙って参照ボディだけ増やすと、AIは編集できない
-        相手に verb を打ち続ける。通常の読み込みは `import_step_editable` の側。
-        """
-        before = self._revision_snapshot()
-        applied = self.session.import_step(path)
-        return self._apply_logged(
-            before,
-            applied,
-            body_ids=list(applied["body_ids"]),
-            hint=(
-                "参照ボディは編集できない。編集するなら import_step_editable で読み直すか、"
-                "make_editable_copy をソリッドごとに呼ぶ"
             ),
         )
 
@@ -1312,7 +1289,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     # **常に空の文書で起動する**。
-    # STEPはツール `import_step_editable`(編集可能なボディまで作る)から読む。
+    # STEPはツール `import_step`(編集可能なボディまで作る)から読む。
     session = Session(None, args.deviation, models_dir=args.models_dir)
     try:
         asyncio.run(_run(session, args))

@@ -13,15 +13,18 @@
  *      (= コアが変更イベントを発火し、アプリ層が購読して描き直す上り方向が動いている)
  *   3. その状態で **奥の面が本物のマウスクリックで選べる**
  *   4. **AIが積んだ操作をブラウザのCtrl+Zで取り消せる**(同じ操作ログを共有している)。
+ *      読み込みは何部品でも**undo1回**であることも、ここで同時に見る
  *      あわせて、**その同じCtrl+Zで可視性は戻らない**(`set_visible` は操作ログに載らない)
  *
  * サーバはこのスクリプトが `python -m duocad.mcp_server` として**空の文書で**起動する。
- * STEPはMCPの `import_step_editable` で読む。
+ * STEPはMCPの `import_step` で読む(読み込みのツールは1つだけ)。
  * CLIの `--step <path>` は「MCPで読み込むファイル」であり、サーバへは渡さない。
  * **別のサーバを先に立てておく必要はない**(むしろポートがぶつかる)。
  * ブラウザはインストール済みのEdge/Chromeを使う(`smoke.mjs` と同じ。`DUOCAD_BROWSER` で明示可)。
  */
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { findBrowser, launchBrowser, frameAll } from './browser.mjs'
 import { fail, ok, parseArgs } from './args.mjs'
 import { McpClient } from './mcp-client.mjs'
@@ -72,10 +75,10 @@ async function main() {
     if (missing.length) fail(`M4のツールが消えている: ${missing.join(', ')}`)
     ok(`tools/list: ${tools.length}個（M4の3つを含む）`)
 
-    // ツール名 == ログのverb名(2026-08-15にツールを2つへ割った)。
-    const imported = await mcp.callTool('import_step_editable', { path: stepPath })
-    if (imported.verb !== 'import_step_editable') {
-      fail(`import_step_editable の verb が一致しない: ${imported.verb}`)
+    // ツール名 == ログのverb名。**STEP読み込みのツールは1つだけ**(2026-08-27に統合)。
+    const imported = await mcp.callTool('import_step', { path: stepPath })
+    if (imported.verb !== 'import_step') {
+      fail(`import_step の verb が一致しない: ${imported.verb}`)
     }
     if (imported.body_ids.length !== expectedBodies) {
       fail(`編集可能なボディが ${expectedBodies} 個でない: ${imported.body_ids.length}`)
@@ -222,18 +225,30 @@ async function main() {
     )
 
     // ------------------------------------------ 検証3b: AIが選択を変えても即適用は走らない
-    // 「編集用に複製」はEnterの要らないコマンド(`command.ts` の `needsEnter`)で、
-    // **起動した後に引数が揃うと即座に適用される**。その引き金は**人がこの画面で
-    // 指したこと**でなければならない —— 選択集合はAIも `modify_selection` で書き換えられる
-    // ので、「面が1つ選ばれた」だけで発火させると、**人が何も触っていないのに部品が増える**。
-    // ここはその境目を実機で固定する(2026-08-22のQA指摘)。
+    // **即適用**(`command.ts` の `needsEnter` が false になるコマンド)は、起動した後に
+    // 引数が揃うと即座に適用される。その引き金は**人がこの画面で指したこと**でなければ
+    // ならない —— 選択集合はAIも `modify_selection` で書き換えられるので、「面が1つ選ばれた」
+    // だけで発火させると、**人が何も触っていないのに文書が変わる**。ここはその境目を実機で
+    // 固定する(2026-08-22のQA指摘)。
+    //
+    // 材料は**面に貼る `sketch_create`**である(2026-08-27に「編集用に複製」が消えたため
+    // 差し替えた)。踏む配線は同じ1本 —— `CommandHost` の `appliesOnSelection` が構え、
+    // `App.svelte` が「自分が出した」と確かめた選択変更の数(`selfSelections`)が増えたときだけ
+    // `commit()` する `$effect` である。
+    //
+    // **旧コマンドより1段弱いことを明記しておく**: 面1つで揃う旧コマンドは、AIが選択を
+    // 書き換えた時点で `phase="ready"`(引数が揃った状態)に到達できたので、「揃っているのに
+    // 発火しない」まで示せた。`sketch_create` の貼る先は `App.svelte` の `onPick` からしか
+    // 埋まらない(`useSelectedFaceAsPlane`)ため、AIの選択だけでは `ready` にならない。
+    // いま固定できるのは「**コアの確定選択が人のクリック後と同じ状態でも**、AI由来なら
+    // 貼る先は埋まらず、コマンドは構えたまま何も起きない」までである。
     await mcp.callTool('clear_selection')
     await page.waitForFunction(() => (window.__duocad.selection?.items ?? []).length === 0, {
       timeout,
       polling: 50,
     })
-    const partsBeforeAi = await page.evaluate(() => window.__duocad.parts.length)
-    await page.click('#file-make-editable') // 人が起動する(ここまでは人の1手)
+    const sketchesBeforeAi = await page.evaluate(() => window.__duocad.sketches.length)
+    await page.click('#sketch-create') // 人が起動する(ここまでは人の1手)
     await mcp.callTool('modify_selection', {
       // **AIが面を1つ選ぶ**。`origin` は "user" になる(MCPの `modify_selection` は
       // 提案ではなく確定選択を直す経路)ので、選択の中身だけを見ていると人のクリックと区別が付かない。
@@ -250,59 +265,129 @@ async function main() {
     const afterAiSelection = await page.evaluate(() => {
       const host = document.querySelector('.command-host')
       return {
-        parts: window.__duocad.parts.length,
+        sketches: window.__duocad.sketches.length,
+        activeSketch: window.__duocad.activeSketch,
         command: host.dataset.command,
         phase: host.dataset.phase,
       }
     })
-    if (afterAiSelection.parts !== partsBeforeAi) {
+    if (afterAiSelection.sketches !== sketchesBeforeAi || afterAiSelection.activeSketch !== null) {
       fail(
-        `AIが選択を書き換えただけで「編集用に複製」が走った` +
-          `(部品 ${partsBeforeAi} -> ${afterAiSelection.parts})`,
+        `AIが選択を書き換えただけで「スケッチ」が走った` +
+          `(スケッチ ${sketchesBeforeAi} -> ${afterAiSelection.sketches})`,
       )
     }
-    // **空振りで緑になっていないこと**を同時に見る: コマンドは起動したままで、
-    // 引数も揃っている(=Enterを押せば適用される状態)。それでも走っていない。
-    if (afterAiSelection.command !== 'make_editable_copy' || afterAiSelection.phase !== 'ready') {
+    // **空振りで緑になっていないこと**を同時に見る: コマンドは起動したまま構えている。
+    // (`phase` は `collecting` のまま —— 上のコメントのとおり、貼る先は人のクリックでしか埋まらない)
+    if (afterAiSelection.command !== 'sketch_create' || afterAiSelection.phase !== 'collecting') {
       fail(
         `この検査が空振りしている(command=${afterAiSelection.command} / ` +
           `phase=${afterAiSelection.phase})`,
       )
     }
-    ok('**AIが選択を書き換えても即適用は発火しない**(引数は揃っていて、Enterなら適用できる状態のまま)')
+    ok('**AIが選択を書き換えても即適用は発火しない**(コマンドは構えたまま、貼る先は埋まらない)')
 
-    // 同じ起動のまま**人が別の面をクリックすると発火する** ——
-    // 上の検査が「そもそも発火しない実装」で緑になっていないことの裏取り。
-    const otherFace = await page.evaluate(
+    // 同じ画面で**人が面をクリックすると発火する** ——
+    // 上の検査が「そもそも発火しない実装」で緑になっていないことの裏取り。**Enterは押さない**。
+    //
+    // 貼れるのは**平面状の面**だけなので候補を絞り、さらに「押した画素が基準平面のグリッドに
+    // 取られた」場合(面より手前にグリッドが来ることがある)はその試行を捨てて次の面を試す。
+    // **面を起点に貼れたことまで確かめる**(グリッドで貼ると `setBasePlane` の同期経路になり、
+    // ここで見たい `selfSelections` の待ち受けを踏まない)。
+    const planarCandidates = await page.evaluate(
       (bodyId, total, skip) => {
-        const rect = document.querySelector('.viewport').getBoundingClientRect()
+        const geometry = window.__duocad.getGeometry(bodyId)
+        const planar = new Set(
+          (geometry?.faces ?? []).filter((face) => face.kind === 'plane').map((face) => face.index),
+        )
+        const found = []
         for (let index = 1; index <= total; index += 1) {
-          if (index === skip) continue
-          const position = window.__duocad.projectFace(bodyId, index)
-          if (position) return { index, x: position.x + rect.left, y: position.y + rect.top }
+          if (index === skip || !planar.has(index)) continue
+          if (window.__duocad.projectFace(bodyId, index)) found.push(index)
+          if (found.length >= 6) break
         }
-        return null
+        return found
       },
       target.body_id,
       target.total,
       newlyPickable.index,
     )
-    if (!otherFace) fail('2つ目の面が画面から指せない(この裏取りが成立しない)')
-    await page.mouse.click(otherFace.x, otherFace.y)
-    await page.waitForFunction(
-      (expected) => window.__duocad.parts.length === expected,
-      { timeout, polling: 50 },
-      partsBeforeAi + 1,
-    )
-    ok(`**人が面 ${otherFace.index} をクリックしたときだけ**複製が走った(Enterは押していない)`)
+    if (planarCandidates.length === 0) fail('平面状の面が画面から1枚も指せない(この裏取りが成立しない)')
 
-    // 後始末: いま作った複製を戻し、既定のコマンドへ降りる
+    let sketchedOnFace = null
+    const attemptLog = []
+    for (const index of planarCandidates) {
+      // **起動してから射影する**(順序が逆だと当たらない): コマンドを起動するとコマンド行の
+      // 文言が変わって行が伸び縮みし、`.viewport` の高さ=射影が動く(smoke.mjs で実測)。
+      if (await page.evaluate(() => document.querySelector('.command-host').dataset.command !== 'sketch_create')) {
+        await page.click('#sketch-create')
+      }
+      const at = await page.evaluate(
+        (bodyId, faceIndex) => {
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectFace(bodyId, faceIndex)
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        },
+        target.body_id,
+        index,
+      )
+      if (!at) {
+        attemptLog.push(`${index}: 射影できない`)
+        continue
+      }
+      await page.mouse.click(at.x, at.y)
+      const created = await page
+        .waitForFunction(() => window.__duocad.activeSketch !== null, { timeout: 15000, polling: 50 })
+        .then(() => true)
+        .catch(() => false)
+      if (!created) {
+        const toast = await page.evaluate(
+          () => document.querySelector('#toasts .toast-text')?.textContent?.trim() ?? null,
+        )
+        attemptLog.push(`${index}: スケッチができない(${toast ?? 'トーストなし'})`)
+        await page.keyboard.press('Escape')
+        continue
+      }
+      // **`JSON.stringify` はブラウザの中でやる** —— スケッチの `plane` はSvelteの
+      // リアクティブなプロキシで、そのまま返すとCDPの直列化が空オブジェクトに潰す(実測)。
+      const plane = JSON.parse(
+        await page.evaluate(() => {
+          const hook = window.__duocad
+          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          return JSON.stringify(active?.plane ?? null)
+        }),
+      )
+      // 抜けてから判定する(この後の検証4はスケッチモードの外を前提にしている)
+      await page.click('#sketch-exit')
+      await page.waitForFunction(() => window.__duocad.activeSketch === null, { timeout, polling: 50 })
+      attemptLog.push(`${index}: plane=${JSON.stringify(plane)}`)
+      if (plane?.kind === 'face') {
+        sketchedOnFace = index
+        break
+      }
+      // 手前の基準平面グリッドに取られた。作られてしまったスケッチを戻して次の面を試す。
+      await mcp.callTool('undo')
+      await page.waitForFunction(
+        (expected) => window.__duocad.sketches.length === expected,
+        { timeout, polling: 50 },
+        sketchesBeforeAi,
+      )
+    }
+    if (sketchedOnFace === null) {
+      fail(
+        `人が面をクリックしても面に貼れなかった(即適用の裏取りが成立していない): ` +
+          `候補=${JSON.stringify(planarCandidates)} / ${attemptLog.join(' | ')}`,
+      )
+    }
+    ok(`**人が面 ${sketchedOnFace} をクリックしたときだけ**スケッチが貼られた(Enterは押していない)`)
+
+    // 後始末: いま作ったスケッチを戻し、既定のコマンドへ降りる
     // (この後の検証4はundoの位置に依存している)
     await mcp.callTool('undo')
     await page.waitForFunction(
-      (expected) => window.__duocad.parts.length === expected,
+      (expected) => window.__duocad.sketches.length === expected,
       { timeout, polling: 50 },
-      partsBeforeAi,
+      sketchesBeforeAi,
     )
     await page.keyboard.press('Escape')
 
@@ -311,12 +396,28 @@ async function main() {
     // 材料に可視性を使わない —— `set_visible` は操作ログに載らないので(2026-08-26)、
     // **同じCtrl+Zを押しても隠れたまま**である。戻ってしまうと、奥を覗くために手前を隠した
     // だけで直前の編集へ戻れなくなる。1回のCtrl+Zで両方を見る。
+    //
+    // 積む操作は **`import_step`**。いま表示中は対象の1部品だけなので、AIに書き出させた
+    // STEPをそのまま読み直せば軽い1操作になる。**読み込みは何部品でもログ1行・undo1回**
+    // という粒度(2026-08-27の統合の中核)を、実機のCtrl+Z 1回で裏取りする形でもある。
     const lastHidden = others[others.length - 1]
-    await mcp.callTool('make_editable_copy', { source_body_id: target.body_id })
+    const roundTripStep = join(tmpdir(), `duocad-smoke-mcp-${process.pid}.step`)
+    await mcp.callTool('export_step', { path: roundTripStep })
+    const partsBeforeImport = await page.evaluate(() => window.__duocad.parts.length)
+    const reimported = await mcp.callTool('import_step', { path: roundTripStep })
+    if (reimported.verb !== 'import_step') {
+      fail(`import_step の verb が一致しない: ${reimported.verb}`)
+    }
+    if (reimported.body_ids.length < 1 || reimported.reference_ids.length !== reimported.body_ids.length) {
+      fail(
+        `読み込みが参照と編集用の対になっていない: ` +
+          `${reimported.reference_ids.length} / ${reimported.body_ids.length}`,
+      )
+    }
     await page.waitForFunction(
       (expected) => window.__duocad.parts.length === expected,
       { timeout, polling: 50 },
-      partsBeforeAi + 1,
+      partsBeforeImport + reimported.body_ids.length,
     )
     await page.keyboard.down('Control')
     await page.keyboard.press('KeyZ')
@@ -324,9 +425,14 @@ async function main() {
     await page.waitForFunction(
       (expected) => window.__duocad.parts.length === expected,
       { timeout, polling: 50 },
-      partsBeforeAi,
+      partsBeforeImport,
     )
-    ok('ブラウザのCtrl+Zで、AIが積んだ複製が取り消せた(AIと人間が同じ操作ログを共有している)')
+    rmSync(roundTripStep, { force: true })
+    ok(
+      `ブラウザのCtrl+Z **1回**で、AIが読み込んだ ${reimported.body_ids.length} 部品` +
+        `(原本 ${reimported.reference_ids.length} 個ごと)がまとめて消えた` +
+        `(AIと人間が同じ操作ログを共有していて、読み込みはundo1回)`,
+    )
 
     const stillHidden = await page.evaluate(
       (bodyId) => window.__duocad.parts.find((part) => part.body_id === bodyId).visible,

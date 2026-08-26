@@ -10,7 +10,6 @@
 `register_verb()` で埋めるので、これが無いと `OpLog.from_json(...).replay(doc)` だけを使う
 経路でverbが未登録になる。verbが増えたらここに1行足す。
 """
-from . import io_step as _io_step  # noqa: F401  verb "import_step" をレジストリへ登録する
 from . import parameters as _parameters  # noqa: F401  verb "set_parameter" を登録する
 from . import sketch as _sketch  # noqa: F401  スケッチの4 verb を登録する
-from . import verbs as _verbs  # noqa: F401  extrude_face / make_editable_copy / extrude / pattern_rectangular を登録する
+from . import verbs as _verbs  # noqa: F401  extrude_face / import_step / extrude / pattern_rectangular を登録する

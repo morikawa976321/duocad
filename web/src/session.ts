@@ -214,7 +214,7 @@ export interface DocumentInfo {
  * 操作を出したクライアントへの確認応答。
  *
  * **discriminated union**。全フィールドがoptionalなフラット構造だと、`verb` ごとに本来必須の
- * キー(例: `import_step_editable` の `body_ids`)を宣言し忘れても型検査が止まらない
+ * キー(例: `import_step` の `body_ids`)を宣言し忘れても型検査が止まらない
  * (実際、`.svelte` 側だけが `body_ids` を読んでいて宣言が無いまま素通りしていたことがある)。
  * `verb`(verbの適用)と `change`(`"selection"` = 選択の変更、`"document"` = ファイルを開いて
  * 文書ごと差し替わった。どちらも操作ログには載らない)をdiscriminantにしてあるので、
@@ -266,7 +266,6 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'chamfer'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'pattern_rectangular'; pattern_id: string })
   | (AppliedVerbBase & { verb: 'pattern_circular'; pattern_id: string })
-  | (AppliedVerbBase & { verb: 'make_editable_copy'; body_id: string })
   | (AppliedVerbBase & {
       verb: 'set_parameter'
       name: string
@@ -279,11 +278,10 @@ export type Applied =
   /** C: 図形追加verbが返す新しい図形のID(4つとも同じ形)。 */
   | (AppliedVerbBase & { verb: 'add_line' | 'add_circle' | 'add_rectangle' | 'add_arc'; entity_id: string })
   /**
-   * STEP読み込みが作ったボディ。`import_step_editable` は編集用と原本の両方
-   * (`body_ids` + `reference_ids`)、`import_step` は参照ボディだけ(`body_ids` のみ)。
+   * STEP読み込みが作ったボディ。**読み込みは1 verbだけ**で、編集用(`body_ids`)と
+   * 原本の参照(`reference_ids`)の両方が1回の応答で返る。
    */
-  | (AppliedVerbBase & { verb: 'import_step_editable'; body_ids: string[]; reference_ids: string[] })
-  | (AppliedVerbBase & { verb: 'import_step'; body_ids: string[] })
+  | (AppliedVerbBase & { verb: 'import_step'; body_ids: string[]; reference_ids: string[] })
   | (AppliedVerbBase & { verb: 'undo'; undone: string })
   | (AppliedVerbBase & { verb: 'redo'; redone: string })
   /** 選択の変更イベント。verbではない(操作ログに載らない)。 */

@@ -11,10 +11,11 @@ TransferRoots() を呼ぶと、Python例外にはならず**プロセスごと�
 **deviation は BRepMesh_IncrementalMesh へ isRelative=False(絶対mm)で渡す**。True にすると
 0.2 / 0.05 / 0.01 のどれでも同じサイズのSTLになり、「偏差を小さくすると細かくなる」が成立しない。
 
-**形はログの中にある**: `import_step` は読んだ時点でSTEP本文を `args["step"]` へ生テキストで
-取り込む(base64にしない —— JSON保存はgitで差分が読めることが目的で、base64がそれを潰す)。
-`args["source_name"]` はファイル名だけで**パスではない**。したがって**再生は外部ファイルを
-一切読まない**。取り込みなので、元のSTEPを後から更新しても文書は追随しない(意図)。
+**読み込みのverb本体はここに無い** —— `import_step` は `duocad/verbs/import_editable.py` に
+1本だけある(2026-08-27に統合。参照ボディだけを足す経路は消えた)。ここに残すのは
+**読み込み経路が共有する部品**(`read_step_source` / `solid_names`)と書き出しである。
+形の取り込み方(STEP本文を `args["step"]` へ生テキストで持ち、再生が外部ファイルを
+一切読まないこと)の契約は、そのverbのモジュールdocstringが正。
 
 失敗は黙って通さない: パス無し=FileNotFoundError / 壊れている=ValueError / 書き出す形状が
 無い=ValueError(**ファイルを作らない**)。いずれも doc.bodies / doc.log に変更を残さない。
@@ -33,12 +34,9 @@ from pathlib import Path
 from typing import Union
 
 from . import kernel
-from .document import Body, BodyId, Document, new_body_id
-from .oplog import Operation, register_verb
+from .document import Body, BodyId, Document
 
 PathLike = Union[str, Path]
-
-VERB_IMPORT_STEP = "import_step"
 
 
 def read_step_source(path: PathLike) -> tuple[str, str]:
@@ -59,28 +57,10 @@ def read_step_source(path: PathLike) -> tuple[str, str]:
 def solid_names(source_name: str, count: int) -> list[str]:
     """参照ボディの名前 `<元ファイル名の拡張子抜き>_1` … `_N`。
 
-    verb `import_step_editable` の `_reference_names` と同じ付け方にそろえてある。
+    verb `import_step` の `_reference_names` の実体がこれである(命名を1箇所に持つ)。
     """
     stem = Path(source_name).stem
     return [f"{stem}_{n}" for n in range(1, count + 1)]
-
-
-def import_step(doc: Document, path: PathLike) -> list[BodyId]:
-    """STEPをソリッドごとに分解して参照ボディとして読み込み、追加した全BodyIdを返す。
-
-    undo1回で全Bodyがまとめて消える。失敗時は例外を送出し、documentにもログにも何も残さない。
-    """
-    source_name, text = read_step_source(path)
-    shape = kernel.read_step_text(text)  # 壊れていればここで例外、doc/logは無傷
-    solids = kernel.split_solids(shape)
-    body_ids = [new_body_id() for _ in solids]
-    names = solid_names(source_name, len(solids))
-    _apply_import_step_to(doc, body_ids, solids, names)
-    doc.log.append(
-        VERB_IMPORT_STEP,
-        {"source_name": source_name, "step": text, "body_ids": body_ids},
-    )
-    return body_ids
 
 
 def export_step(doc: Document, path: PathLike) -> None:
@@ -146,35 +126,3 @@ def _shape_to_export(doc: Document):
     if len(shapes) == 1:
         return shapes[0]
     return kernel.make_compound(shapes)
-
-
-def _apply_import_step_to(
-    doc: Document, body_ids: list[BodyId], solids: list, names: list[str]
-) -> list[Body]:
-    """ソリッド群を指定IDのボディとしてdocへ追加する(ログには触らない)。"""
-    bodies = []
-    for body_id, solid, name in zip(body_ids, solids, names):
-        body = Body(id=body_id, name=name, kind="reference", shape=solid)
-        doc.add_body(body)
-        bodies.append(body)
-    return bodies
-
-
-def _do_import_step(document: Document, operation: Operation) -> None:
-    """redo / replay: **ログに埋め込まれたSTEP本文**から復元する(外部ファイルを読まない)。
-
-    **公開APIの `io_step.import_step` を呼び直してはいけない**(ログに二重記録される)。
-    """
-    args = operation.args
-    shape = kernel.read_step_text(args["step"])
-    solids = kernel.split_solids(shape)
-    names = solid_names(args["source_name"], len(solids))
-    _apply_import_step_to(document, args["body_ids"], solids, names)
-
-
-def _undo_import_step(document: Document, operation: Operation) -> None:
-    for body_id in operation.args["body_ids"]:
-        document.remove_body(body_id)
-
-
-register_verb(VERB_IMPORT_STEP, do=_do_import_step, undo=_undo_import_step)

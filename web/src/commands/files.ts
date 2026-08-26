@@ -17,7 +17,6 @@
  */
 import { isPlaneArgValue } from './command'
 import type { CommandDef } from './command'
-import type { SelectionRef, ShapeRef } from '../session'
 
 /** 空のパスだけ弾く。**それ以上の判定はサーバに任せる**(上のdocstring)。 */
 function pathLike(label: string): (value: string) => string | null {
@@ -26,12 +25,15 @@ function pathLike(label: string): (value: string) => string | null {
 
 /**
  * STEPの読み込み。**読んだ時点で編集できる**。ソリッドごとに編集用ボディができ、そのまま面を
- * クリックして押し出せる(原本の参照ボディは隠したまま文書に残る)。参照ボディだけが増える
- * 経路だと、編集するには `make_editable_copy` を1ボディずつ打つ必要がある(PCケースなら27回)。
+ * クリックして押し出せる(原本の参照ボディは隠したまま文書に残る)。
+ *
+ * **STEP読み込みのコマンドはこれ1つだけ**(2026-08-27)。参照ボディだけを足す読み込みと、
+ * それを1ボディずつ編集可能にする複製のコマンドは消えた —— 27部品なら27手かかる形であり、
+ * 読み込みが1操作(ログ1行・undo1回)であるという規律とも噛み合わなかった。
  */
 export const IMPORT_STEP: CommandDef = {
   // **id == サーバの表のコマンド名 == ログのverb名**。
-  id: 'import_step_editable',
+  id: 'import_step',
   category: 'file',
   label: 'STEP読み込み',
   buttonId: 'file-import-step',
@@ -162,42 +164,6 @@ export const EXPORT_STL: CommandDef = {
 }
 
 /**
- * 参照ボディを編集できるようにする。**面をクリックして選ぶ**のが引数の集め方
- * (引数収集はまず共有選択集合を見る、という規律)。
- *
- * **UIから指せるのは編集用ボディだけである** —— STEP読み込みが編集用ボディまで作り、参照
- * ボディは隠されてパーツ一覧にも出ない(一覧は `kind === "solid"` だけを並べる)。したがって
- * **このコマンドはボディの複製**として残っている(選んだ面を持つボディの形をもう1つ作る)。
- * 参照ボディを起点に使うのはMCP側である。
- */
-export const MAKE_EDITABLE_COPY: CommandDef = {
-  id: 'make_editable_copy',
-  category: 'file',
-  // ラベルは**両方の使われ方に対して正しい**必要がある。「編集可能にする」は
-  // 参照ボディを起点にしたときの言い方で、UIから普通に届くのは編集用ボディの複製なので
-  // 嘘になる。「編集用に複製」なら、参照からでも編集用からでも起きることを言えている。
-  label: '編集用に複製',
-  buttonId: 'file-make-editable',
-  preview: 'none',
-  args: [
-    {
-      kind: 'selection',
-      name: 'source',
-      label: '元にする面',
-      shapeKind: 'face',
-      min: 1,
-      max: 1,
-    },
-  ],
-  build(values) {
-    const faces = (values.source ?? []) as SelectionRef[]
-    const face = faces[0] as ShapeRef | undefined
-    if (!face) return { ok: false, reason: '面が選ばれていない' }
-    return { ok: true, args: { source_body_id: face.body } }
-  },
-}
-
-/**
  * ファイル操作のツールバー(ソリッドを触るモードに並ぶ)。
  *
  * **保存/開くはここに無い**(上のモジュールdocstring参照)。`FilesPanel.svelte` が
@@ -209,7 +175,6 @@ export const FILE_COMMANDS: CommandDef[] = [
   IMPORT_SVG,
   EXPORT_STEP,
   EXPORT_STL,
-  MAKE_EDITABLE_COPY,
 ]
 
 /**
@@ -221,10 +186,5 @@ export const FILE_COMMANDS: CommandDef[] = [
  * そのまま残す。
  */
 export function changesDocument(verb: string): boolean {
-  return (
-    verb === 'open_document' ||
-    verb === IMPORT_STEP.id ||
-    verb === IMPORT_SVG.id ||
-    verb === MAKE_EDITABLE_COPY.id
-  )
+  return verb === 'open_document' || verb === IMPORT_STEP.id || verb === IMPORT_SVG.id
 }

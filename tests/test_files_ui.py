@@ -539,7 +539,7 @@ def test_a_saved_document_opens_after_the_imported_step_is_renamed(
     この検査は何も守らない。
     """
     step_path = _two_solid_step(tmp_path)
-    session.import_step_editable(str(step_path))
+    session.import_step(str(step_path))
     before = [
         (body.name, body.kind, body.visible, kernel.face_count(body.shape),
          round(query.volume(body.shape), 9))
@@ -570,12 +570,12 @@ def test_the_state_does_not_ship_the_embedded_step_text(session: Session, tmp_pa
     ここで伏せても自己完結性は変わらない。
     """
     step_path = _two_solid_step(tmp_path)
-    session.import_step_editable(str(step_path))
+    session.import_step(str(step_path))
     step_text = session.document.log.entries[-1].args["step"]
 
     entry = session.state_meta()["log"][-1]
 
-    assert entry["verb"] == "import_step_editable"
+    assert entry["verb"] == "import_step"
     assert entry["args"]["source_name"] == "parts.step"
     assert entry["args"]["step"] != step_text
     assert str(len(step_text)) in entry["args"]["step"], "何文字あるかは出す"

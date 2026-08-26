@@ -6,7 +6,7 @@
  *
  *   1. **穴の径を1箇所編集して、反復で作った全部の穴が追随する**(M3の存在理由)
  *   2. **保存 → 再読込 → 開く → 同じ形**(操作ログから再生される)
- *   3. STEPを読み込む(その時点で編集可能なボディができる)。面を選んで編集可能なコピーも作れる
+ *   3. STEPを読み込む(その時点で編集可能なボディができる)
  *   4. STEP/STL を書き出し、**STEPは読み戻して体積が一致**(読み戻しは pytest 側)
  *   5. undo/redoでやり直せる件数と有効な操作数が実際に動く
  *
@@ -92,6 +92,8 @@ async function main() {
               visible: body.visible,
             })),
             activeSketch: hook.activeSketch,
+            // 文書にあるスケッチの件数(即適用の検査が「増えていないこと」を数える)
+            sketches: hook.sketches.length,
             entities: active?.entities?.length ?? 0,
             drawn: active?.drawn?.length ?? 0,
             regions: active?.regions?.length ?? 0,
@@ -602,9 +604,11 @@ async function main() {
         `(${originalVolume.toFixed(6)} vs ${importedVolume.toFixed(6)})`,
     )
 
-    // 「編集可能にする」は複製の経路。対象は参照ではなく、読み込んでできた編集用ボディ。
+    // **この後の検証5(表示中のみ書き出し)と即適用の検査が使う下ごしらえ。**
     // **先に他を隠して対象だけ表示に戻す** —— 読み込んだのは自分を書き出したSTEPなので、
     // 元のソリッドと同じ場所に重なっている(「手前を隠すと奥が選べる」= M3.5の可視性)。
+    // そのうえで**読み込んだボディの面を1枚選ぶ**(読んだ時点で編集できることの実地確認でもある
+    // —— 参照ボディはパーツ一覧に出ず、面も指せない)。
     await page.click('#parts-hide-all')
     await waitFor(
       () => window.__duocad.parts.every((body) => !body.visible),
@@ -703,52 +707,72 @@ async function main() {
     )
 
     // ---------------------------------------------------------- 即適用(2026-08-22)
-    // `make_editable_copy` は**対象が面1つ・howが無い**ので、Enterの要らないコマンドに
-    // なった(`command.ts` の `needsEnter`)。ここで固定するのは骨格の3点:
-    //   (a) 選択が揃った状態で**起動しても発火しない**
+    // Enterの要らないコマンド(`command.ts` の `needsEnter` が false)の骨格を固定する。
+    // 材料は**面に貼る `sketch_create`**(対象は貼る先1つ・howの入力なし)。2026-08-27まで
+    // ここは「編集用に複製」で見ていたが、そのコマンドが消えたので同じ配線を踏む方へ移した。
+    //   (a) 面が選ばれた状態で**起動しても発火しない**
     //   (b) **起動した後の面クリック**で発火する(Enterを押さない)
     //   (c) 起動 → Esc のあとは発火しない
     // (a)(c) は「起きないこと」の検査なので、往復ぶんの猶予を与えてから見る。
-    const solidsBefore = (await look()).bodies.length
-    await page.click('#file-make-editable')
+    //
+    // **1点だけ弱くなったことを書いておく**: 旧コマンドは対象(面)が起動より前から揃って
+    // いられたので、「揃っていても即適用は発火せず、Enterが唯一の適用手段として残る」まで
+    // 見られた。`sketch_create` の貼る先は `App.svelte` の `onPick` からしか埋まらない
+    // (`useSelectedFaceAsPlane`)ので、起動前から揃っている状態を作れる即適用コマンドは
+    // いま1つも無い。(a) は「起動しただけで走らない」に絞られる。
+    const sketchesBefore = (await look()).sketches
+    // **数えるものが数値で来ることを先に確かめる。** ここが `undefined` に化けると
+    // 下の3つの比較が `undefined !== undefined` で全部素通りし、**検査が黙って死ぬ**
+    // (2026-08-27に実際に踏んだ: `look()` が返すのは件数であって配列ではない)。
+    if (typeof sketchesBefore !== 'number') {
+      fail(`スケッチの件数が数値で来ない(検査が黙って死ぬ): ${JSON.stringify(sketchesBefore)}`)
+    }
+    await page.click('#sketch-create')
     await settle()
-    if ((await look()).bodies.length !== solidsBefore) {
-      fail('(a) 起動しただけで複製が走った(即適用が起動時に発火している)')
+    if ((await look()).sketches !== sketchesBefore) {
+      fail('(a) 起動しただけでスケッチが走った(即適用が起動時に発火している)')
     }
     ok('(a) 面が選ばれた状態で起動しても発火しない(起動即適用の事故が構造的に無い)')
 
-    // 起動前から揃っていた場合の適用手段は Enter(またはボタンの押し直し)である
-    await page.keyboard.press('Enter')
-    await waitFor(
-      (expected) => window.__duocad.parts.length === expected,
-      '編集可能なコピーができない',
-      solidsBefore + 1,
-    )
-    ok('面を選んで**編集可能なコピー**を作れた(複製の経路。起動前から選んでいたのでEnter)')
-
     // (c) 起動してすぐEscで降りたら、その後の面クリックでは発火しない
-    await clearSelectionByClickingNothing()
-    await page.click('#file-make-editable')
     await page.keyboard.press('Escape')
-    const solidsAfterEscape = (await look()).bodies.length
+    await clearSelectionByClickingNothing()
+    await page.click('#sketch-create')
+    await page.keyboard.press('Escape')
     await page.mouse.click(facePoint.x, facePoint.y)
     await settle()
-    if ((await look()).bodies.length !== solidsAfterEscape) {
-      fail('(c) Escで降りた後の面クリックで複製が走った')
+    if ((await look()).sketches !== sketchesBefore) {
+      fail('(c) Escで降りた後の面クリックでスケッチが走った')
     }
     ok('(c) 起動 → Esc のあとの面クリックでは発火しない')
 
     // (b) 起動した後に面をクリックすると、Enterを押さずに適用される
     await clearSelectionByClickingNothing()
-    const solidsBeforeImmediate = (await look()).bodies.length
-    await page.click('#file-make-editable')
+    await page.click('#sketch-create')
     await page.mouse.click(facePoint.x, facePoint.y)
     await waitFor(
-      (expected) => window.__duocad.parts.length === expected,
+      (expected) => window.__duocad.sketches.length === expected,
       '(b) 起動後の面クリックで即適用されない',
-      solidsBeforeImmediate + 1,
+      sketchesBefore + 1,
     )
-    ok('(b) **起動 → 面をクリック**だけで複製できた(Enterを押していない)')
+    // **面を起点に貼れたことまで見る** —— 基準平面のグリッドに取られていると
+    // `setBasePlane` の同期経路になり、ここで見たい「選択が届いてから送る」待ち受け
+    // (`CommandHost` の `selfSelections` を数える `$effect`)を踏んでいない。
+    // **`JSON.stringify` はブラウザの中でやる** —— スケッチの `plane` はSvelteの
+    // リアクティブなプロキシで、そのまま返すとCDPの直列化が空オブジェクトに潰す(実測)。
+    const immediatePlane = JSON.parse(
+      await page.evaluate(() => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return JSON.stringify(active?.plane ?? null)
+      }),
+    )
+    if (immediatePlane?.kind !== 'face') {
+      fail(`(b) 面ではなく ${JSON.stringify(immediatePlane)} に貼られた(即適用の経路が違う)`)
+    }
+    ok('(b) **起動 → 面をクリック**だけで面にスケッチを貼れた(Enterを押していない)')
+    await page.click('#sketch-exit')
+    await waitFor(() => window.__duocad.activeSketch === null, 'スケッチから抜けられない')
 
     // **画面に出たエラーを見落とさない**。サーバのエラーはトーストへ出るだけで、
     // ブラウザのコンソールには出ない —— ここを見ないと「失敗しているのに緑」が起きる

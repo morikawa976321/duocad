@@ -115,7 +115,7 @@ def read_step(path: str) -> "TopoDS_Shape":
 def read_step_text(text: str) -> "TopoDS_Shape":
     """**STEP本文の文字列**を読み、TopoDS_Shapeを返す。壊れていれば ValueError。
 
-    操作ログに埋め込んだSTEP本文(`io_step.import_step` / verb `import_step_editable`)を
+    操作ログに埋め込んだSTEP本文(verb `import_step`)を
     再生するための入口。**OCCTのSTEPリーダはファイルパスしか受け取らない**ので、
     一時ファイルへ書き出してから `read_step` を通す。
 

@@ -410,8 +410,9 @@ def _needs_enter(args: list[tuple[str, str]]) -> bool:
 
 #: **Enterが要るか**の表(True = Enterで確定 / False = 引数が揃ったクリックで即適用)。
 #:
-#: **即適用は3つ**である: `add_line`(点2つで揃う)・`make_editable_copy`(面1つで揃う)・
-#: `sketch_create`(貼る先の平面1つで揃う)。verbを足したらここへ1行足すことになる ——
+#: **即適用は2つ**である: `add_line`(点2つで揃う)・`sketch_create`(貼る先の平面1つで揃う)。
+#: 2026-08-27まで3つだった —— 面1つで揃う複製のコマンドが消えて減った。
+#: verbを足したらここへ1行足すことになる ——
 #: そのとき**Enterが要るかを1回考える**のが狙いで、表そのものが実装の入力になっている
 #: わけではない(判定は `args` からの導出が正)。
 #:
@@ -425,11 +426,10 @@ ENTER_REQUIRED = {
     "chamfer": True,               # 辺は何本でも + 距離
     "pattern_rectangular": True,   # 図形は何個でも + 個数と間隔
     "pattern_circular": True,      # 図形は何個でも + 中心 + 個数と角度
-    "import_step_editable": True,  # パス
+    "import_step": True,           # パス
     "import_svg": True,            # 貼る先 + パス(howがある → Enterが要る)
     "export_step": True,           # パス
     "export_stl": True,            # パス + 偏差
-    "make_editable_copy": False,   # **面1つだけ。howが無い → 即適用**
     "add_line": False,             # **点2つだけ。howが無い → 即適用**
     "sketch_create": False,        # **貼る先を1つ指すだけ。howが無い → 即適用**
     "add_circle": True,            # 中心 + 半径
@@ -451,12 +451,14 @@ def test_the_command_arguments_are_readable():
     assert args["select_in_sketch"] == [], f"引数の読み取りが壊れている: {args['select_in_sketch']}"
 
 
-def test_only_three_commands_apply_without_enter():
-    """**Enter要否は `args` からの導出**であり、いま即適用になるのは3つだけである。
+def test_only_two_commands_apply_without_enter():
+    """**Enter要否は `args` からの導出**であり、いま即適用になるのは2つだけである
+    (`add_line` / `sketch_create`。`select_in_sketch` は引数が無く、完成させるクリックが
+    無いので発火しない側で数に入らない)。
 
     per-commandのフラグを置かない設計(`command.ts` の `needsEnter`)なので、引数の書き方を
-    変えると**別のverbのEnter要否が黙って変わる** —— 例えば `make_editable_copy` の
-    `max` を `null` にすると「面を選び終わったと言う手」が復活し、`add_circle` から
+    変えると**別のverbのEnter要否が黙って変わる** —— 例えば `extrude_face` の選択引数から
+    `max: 1` を外すと「面を選び終わったと言う手」が要るかどうかが裏返り、`add_circle` から
     半径を外すと**中心をクリックした瞬間に円ができる**。ここはその変化を名指しで落とす。
     """
     derived = {name: _needs_enter(args) for name, args in _ui_command_args().items()}
@@ -467,7 +469,6 @@ def test_only_three_commands_apply_without_enter():
     immediate = sorted(name for name, value in derived.items() if not value)
     assert immediate == [
         "add_line",
-        "make_editable_copy",
         "select_in_sketch",
         "sketch_create",
     ], f"即適用になるコマンドの顔ぶれが変わった: {immediate}"

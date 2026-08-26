@@ -71,7 +71,8 @@ def editable_body(
     if not doc.is_editable(body_id):  # 存在しないIDは KeyError(document側の契約)
         raise ValueError(
             f"body {body_id!r} is not editable (kind='reference'). "
-            "make_editable_copy() で編集用のソリッドを作ってから操作すること"
+            "参照ボディは読み込みの原本なので触れない —— import_step が同じソリッドに"
+            "作る編集用ボディ(kind='solid')の body_id を使うこと"
         )
     body = doc.get_body(body_id)
     if require_visible and not body.visible:

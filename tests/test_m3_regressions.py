@@ -31,7 +31,7 @@ from duocad.oplog import OpLog
 from duocad.parameters import parameter_of, set_parameter
 from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, sketch_create
-from duocad.verbs import extrude, make_editable_copy, pattern_rectangular
+from duocad.verbs import extrude, pattern_rectangular
 
 @pytest.mark.parametrize(
     ("key", "value"),

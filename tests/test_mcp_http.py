@@ -126,7 +126,7 @@ def test_handshake_and_tool_lineup_do_not_depend_on_the_transport(http_mcp):
     # 同じ `DocumentTools` を直に持たせた `McpServer`(= stdioが使うのと同じ組み方)と比べる。
     direct = McpServer(tools).handle({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
     assert over_http == {tool["name"] for tool in direct["result"]["tools"]}
-    assert len(over_http) >= 29
+    assert len(over_http) >= 28  # 顔ぶれの正は tests/test_mcp_verbs.py の EXPECTED_TOOLS
 
 
 def test_tool_call_from_a_worker_thread_changes_the_same_document(http_mcp):
