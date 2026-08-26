@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <title>duocad</title>
+  <!-- 確定した形(手前・styles.css の accent = viewport.ts の HIGHLIGHT_COLOR)に、
+       AI提案のゴースト(奥・viewport.ts の PROPOSED_COLOR)が重なっている。
+       propose→commit の1枚絵。16pxで潰れないよう形は角丸矩形2つだけに絞り、
+       線は塗りより細く保つこと。コメントに2連ハイフンを書かないこと(XMLが落ちる)。 -->
+  <rect x="13.9" y="3.4" width="14.7" height="14.7" rx="1.8" fill="none" stroke="#36d1ff" stroke-width="2.8"/>
+  <rect x="2" y="12.5" width="17.5" height="17.5" rx="2.6" fill="#ffb454"/>
+</svg>
