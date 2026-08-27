@@ -93,9 +93,9 @@ cd C:\Users\tm976\mf\duocad\web; npm install; npm run build
 **AIから文書を触る道は2本ある**。どちらもこの1つの立て方の上に乗り、同じ `Session` を叩く
 対等なクライアントなので**同時に使ってよい**:
 
-- **アプリ内AIパネル**（画面右サイドバー）—— ローカルの llama-server（キー不要）か
-  Claude（`ANTHROPIC_API_KEY` が要る）を選ぶ。**キーを持っていない＝サブスク契約だけの今は、
-  実質llama-server専用**である
+- **アプリ内AIパネル**（画面右サイドバー）—— ローカルの llama-server（キー不要）。
+  **ClaudeをAPIキーで使う経路は2026-08-27に廃止した** —— サブスク契約しか持っておらず
+  一度も使わなかったので、鍵という概念ごとアプリから消した（Claudeを使う道は下のMCP経路）
 - **Claude Code**（MCPの28ツール）—— **サブスク認証のまま使えるのはこちらだけ**。繋ぎ方は1.2
 
 > **起動時に決めることは何も無い（2026-08-15）。** 起動オプション `--step` / `--no-step` は廃止し、
@@ -417,8 +417,8 @@ AIに「読み直してフィレット」と頼む → 形が変わる。
 
 **AI側の道具は Claude Code(MCP)でも 画面右のAIパネルでも同じ30ツール**
 （`duocad/agent/` が `DocumentTools` を共有する。G・2026-08-20）。AIパネルでは
-プロバイダ(Claude / llama-server)を切り替えられ、ツール呼び出しが逐次画面に出て、
-実行中は中断できる —— MCPクライアントを開かずに交互操作の全体を1つの画面で試せる。
+ツール呼び出しが逐次画面に出て、実行中は中断できる —— MCPクライアントを開かずに
+交互操作の全体を1つの画面で試せる。
 
 ### 3.5 機械が既に見ているもの（手で重複して見なくてよい）
 
@@ -638,7 +638,7 @@ stdioとHTTP（`/mcp`）の2本**で、`McpServer.handle()` はどちらも知�
 ### AI側（アプリ内エージェント・`duocad/agent/` + G・WS配線）
 
 **AIから文書を触る道は2本ある**。`duocad/agent/` は**先にアプリが立っていて、アプリの中から
-AIを選んで繋ぐ**（当面の対象はClaudeとllama-serverの2つ）。**MCP経路は残す** —— Claude Codeから
+AIを選んで繋ぐ**（今あるのは llama-server の1つ）。**MCP経路は残す** —— Claude Codeから
 触る道とアプリ内の道は共存する。
 
 > **かつてここに書いてあった非対称は解消した**（2026-08-26）。MCPがstdioしか持たなかった間は
@@ -660,13 +660,14 @@ AIを選んで繋ぐ**（当面の対象はClaudeとllama-serverの2つ）。**M
   （`fillet`/`chamfer`/`extrude` は対象ボディの可視性も実行時に見直すよう別途直した）。
   **版は「ログの本数・選択の指紋・可視性の指紋」の3つ組**（2026-08-26）—— 可視性は操作ログに
   載らないので、指紋を持たないと「AIが考えている間に人がボディを隠した」が版に出ない
-- **APIキーはブラウザへ送らない・から受け取らない**。読む順は環境変数 `ANTHROPIC_API_KEY` →
-  gitignore済みの `duocad_secrets.json`。画面に出してよいのは「設定済み / 未設定」の2値だけ
+- **鍵を持つ層ではない（2026-08-27）**。ClaudeをAPIキーで叩く `anthropic` アダプタと、
+  その読み口（環境変数 / `duocad_secrets.json`）を廃止した。`build_provider` はプロバイダへ
+  鍵を渡さないので、`base_url` をどこへ向けても飛ぶのはキーの無いリクエストだけになる。
+  **鍵を要るプロバイダを足すなら、`Server._ai_configure` に `base_url` の拒否を書き戻すこと**
 - 依存は増やしていない（公式SDKを入れず `urllib` で素のHTTP・v1は非streaming）
 
 契約は `tests/test_agent_loop.py`（偽プロバイダで決定的に検査）。実機は
-`tests/test_agent_llama_server.py` の1本だけで、**8080にllama-serverが居なければskipする**
-（Claude APIを叩く実テストは課金が走るので書かない）。
+`tests/test_agent_llama_server.py` の1本だけで、**8080にllama-serverが居なければskipする**。
 
 **WebSocketへの配線(G・2026-08-20)。** `duocad/server.py` が `ai_get_status` / `ai_configure` /
 `ai_send` / `ai_cancel` の4つを持ち、画面右サイドバーの `web/src/AiPanel.svelte` から叩く。

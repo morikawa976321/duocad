@@ -389,14 +389,19 @@ export interface VerticesPayload {
  * `applied` は `null` —— MCP起点の変更と同じ扱い。`duocad/server.py` のモジュールdocstring)。
  * ここにある4つはその会話そのものの配線でしかない。
  */
-export type AiProviderKind = 'anthropic' | 'openai_compat'
+/**
+ * 繋げるプロバイダの綴り(`duocad/server.py` の `AI_PROVIDERS` が正)。
+ *
+ * **2026-08-27に `'anthropic'` が消えて1つになった** —— ClaudeをAPIキーで叩く経路の廃止。
+ * 型を潰さず union のまま残してあるのは、次のプロバイダの差込口だからである。
+ */
+export type AiProviderKind = 'openai_compat'
 
-/** 画面に出してよい設定の全部。**APIキーの値は無い** —— `apiKeyConfigured` の真偽だけ。 */
+/** 画面に出してよい設定の全部。**鍵の類は載らない**(2026-08-27にAPIキー経路ごと廃止)。 */
 export interface AiStatus {
   provider: AiProviderKind
   model: string | null
   baseUrl: string | null
-  apiKeyConfigured: boolean
   running: boolean
   providers: AiProviderKind[]
   /** `ai_configure` を拒否したときだけ入る(例: 実行中/未知のプロバイダ)。 */
@@ -631,7 +636,6 @@ export function createSession(hooks: SessionHooks): Session {
       provider?: AiProviderKind
       model?: string | null
       base_url?: string | null
-      api_key_configured?: boolean
       running?: boolean
       providers?: AiProviderKind[]
       error?: string
@@ -690,12 +694,11 @@ export function createSession(hooks: SessionHooks): Session {
       hooks.onWarning(message.message ?? '')
     } else if (message.type === 'ai_status') {
       hooks.onAiStatus({
-        provider: message.provider ?? 'anthropic',
+        provider: message.provider ?? 'openai_compat',
         model: message.model ?? null,
         baseUrl: message.base_url ?? null,
-        apiKeyConfigured: message.api_key_configured ?? false,
         running: message.running ?? false,
-        providers: message.providers ?? ['anthropic', 'openai_compat'],
+        providers: message.providers ?? ['openai_compat'],
         error: message.error,
       })
     } else if (message.type === 'ai_tool_call') {

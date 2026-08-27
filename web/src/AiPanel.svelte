@@ -8,9 +8,10 @@
    * - **`ai_*` はverbではない**。ここから送るのは対話であって、文書の変更は
    *   AIが呼ぶ既存29ツールの側から**通常のverb配信**として届く(`App.svelte` の
    *   `handleState` がいつもどおり描き直す。このパネルは何も描かない)。
-   * - **APIキーはここに無い**。`status.apiKeyConfigured` の真偽だけを見て、
-   *   入力欄・設定フォームのどちらにもキーを打つ場所を作らない
-   *   (`duocad/agent/providers.py` の要件そのもの)。
+   * - **鍵を打つ場所がどこにも無い**。ClaudeをAPIキーで使う経路は2026-08-27に廃止したので、
+   *   キーという概念自体がこの画面にもサーバにも無い(Claudeへ繋ぐ道はMCP経路だけ)。
+   * - **プロバイダの選択は `status.providers` で駆動する**。今は1つ(llama-server)しか
+   *   無いので選択UIは出ないが、サーバの `AI_PROVIDERS` が増えれば自動で出る。
    * - **状態はほぼ持たない** —— 唯一ここだけが持つのは打ちかけの発話と会話の時系列
    *   (`transcript`)で、これは `duocad/agent/loop.py` の会話がサーバ側にしか
    *   残らないための代わり(再読込で消えるのは「途中まで入力していたコマンド」と同じ扱い。
@@ -37,22 +38,22 @@
   let draft = $state('')
   let settingsOpen = $state(false)
   /** 設定フォームの打ちかけ(開いた時点の `status` で初期化する)。 */
-  let providerDraft = $state<AiProviderKind>('anthropic')
+  let providerDraft = $state<AiProviderKind>('openai_compat')
   let modelDraft = $state('')
   let baseUrlDraft = $state('')
 
   const running = $derived(status?.running ?? false)
-  /** `anthropic` はキーが要る。`openai_compat`(llama-server)は既定でキー不要。 */
-  const blockedReason = $derived.by(() => {
-    if (!status) return '接続を待っている'
-    if (status.provider === 'anthropic' && !status.apiKeyConfigured) {
-      return 'APIキー未設定(環境変数 ANTHROPIC_API_KEY か duocad_secrets.json に置く。画面からは入力できない)'
-    }
-    return null
-  })
+  const blockedReason = $derived(status ? null : '接続を待っている')
+  /** 選択UIは**2つ以上あるときだけ**出す(1つしか無い今は出さない)。 */
+  const canPickProvider = $derived((status?.providers?.length ?? 0) > 1)
+
+  /** 画面に出す名前(綴りそのままだと何と話しているか分からない)。 */
+  const PROVIDER_LABEL: Record<string, string> = {
+    openai_compat: 'llama-server',
+  }
 
   function openSettings(): void {
-    providerDraft = status?.provider ?? 'anthropic'
+    providerDraft = status?.provider ?? 'openai_compat'
     modelDraft = status?.model ?? ''
     baseUrlDraft = status?.baseUrl ?? ''
     settingsOpen = true
@@ -61,13 +62,14 @@
   /**
    * プロバイダを切り替えたら **モデルとエンドポイントの打ちかけを捨てる**。
    *
-   * 持ち越すと `openai_compat` → `anthropic` で必ず詰まる —— エンドポイント欄は
-   * 隠れるだけで `baseUrlDraft` は生きているので、`ai_configure` に llama-server の
-   * URLが一緒に乗り、`Server._ai_configure` の「anthropicに `base_url` は渡せない」
-   * 拒否に当たる。しかも `_ai_status()` は `openai_compat` のとき既定URLを必ず返すから、
-   * 設定を開き直しても同じ値が入り直す(＝画面操作でClaudeへ戻れない)。モデル名も同じで、
-   * 他プロバイダのもの(`local` 等)が残ると設定は通ったうえで送信時に落ちる。
-   * 空にすればどちらも `undefined` になり、サーバ側の既定値が使われる。
+   * **打ちかけはプロバイダに属する** —— モデル名は綴りが各プロバイダ固有なので、他所のもの
+   * (`local` 等)が残ると設定は通ったうえで送信時に落ちる。エンドポイントはもっと悪く、
+   * 欄が隠れても `baseUrlDraft` は生きているので、隠れたまま `ai_configure` に乗って
+   * 「指定した覚えのないURL」で繋ぎに行く。空にすればどちらも `undefined` になり、
+   * サーバ側の既定値が使われる。
+   *
+   * 今はプロバイダが1つなのでこの関数は動かない(選択UI自体が出ない)。**2つ目を足したら
+   * ここが効き始める** —— `duocad/server.py` の `AI_PROVIDERS` に足すだけで選択UIが出る。
    */
   function selectProvider(next: AiProviderKind): void {
     if (next === providerDraft) return
@@ -110,7 +112,7 @@
     <strong>AI</strong>
     {#if status}
       <span class="value" data-provider={status.provider}>
-        {status.provider === 'anthropic' ? 'Claude' : 'llama-server'}
+        {PROVIDER_LABEL[status.provider] ?? status.provider}
         {status.model ? `(${status.model})` : ''}
       </span>
       {#if running}
@@ -128,34 +130,39 @@
 
   {#if settingsOpen}
     <div class="ai-settings">
-      <label>
-        プロバイダ
-        <!-- `bind:value` にしない —— 束縛の更新と `onchange` の順序に依存せず、
-             切り替えを1か所(`selectProvider`)で扱うため。 -->
-        <select
-          id="ai-provider"
-          value={providerDraft}
-          onchange={(event) => selectProvider(event.currentTarget.value as AiProviderKind)}
-        >
-          <option value="anthropic">Claude(anthropic)</option>
-          <option value="openai_compat">llama-server(openai_compat)</option>
-        </select>
-      </label>
+      {#if canPickProvider}
+        <label>
+          プロバイダ
+          <!-- `bind:value` にしない —— 束縛の更新と `onchange` の順序に依存せず、
+               切り替えを1か所(`selectProvider`)で扱うため。
+               **選択肢はサーバの `ai_status.providers` が正**(ここに書き写さない)。 -->
+          <select
+            id="ai-provider"
+            value={providerDraft}
+            onchange={(event) => selectProvider(event.currentTarget.value as AiProviderKind)}
+          >
+            {#each status?.providers ?? [] as kind (kind)}
+              <option value={kind}>{PROVIDER_LABEL[kind] ?? kind}({kind})</option>
+            {/each}
+          </select>
+        </label>
+      {/if}
       <label>
         モデル
         <input id="ai-model" type="text" placeholder="既定値" bind:value={modelDraft} />
       </label>
-      {#if providerDraft === 'openai_compat'}
-        <label>
-          エンドポイント
-          <input
-            id="ai-base-url"
-            type="text"
-            placeholder="http://127.0.0.1:8080/v1"
-            bind:value={baseUrlDraft}
-          />
-        </label>
-      {/if}
+      <!-- **エンドポイントは常に出す** —— 今あるプロバイダは鍵を持たないので、
+           どこを指しても飛ぶのはキーの無いリクエストだけである。鍵を持つプロバイダを
+           足すときは、ここと `Server._ai_configure` の両方に制限を書き戻すこと。 -->
+      <label>
+        エンドポイント
+        <input
+          id="ai-base-url"
+          type="text"
+          placeholder="http://127.0.0.1:8080/v1"
+          bind:value={baseUrlDraft}
+        />
+      </label>
       <button id="ai-settings-apply" onclick={applySettings} disabled={running}>適用</button>
     </div>
   {/if}
