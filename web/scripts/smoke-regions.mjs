@@ -645,7 +645,9 @@ async function main() {
     // その欄が受ける(`CommandHost.onKeydown` は INPUT を除く)ので、外さないと
     // 「押したのに何も起きなかった」を検査したことにならない。選ぶものが無いので
     // そもそも引数は揃わない(=消えた領域を押し出す道が無い)。
-    await page.click('header strong')
+    // **押す先はヘッダの中の押しても何も起きない字**(2026-08-27にアプリ名 `header strong` を
+    // 消したので、常にあるファイル名の札へ移した)。ボタンを押すとその操作が始まってしまう。
+    await page.click('#current-file')
     await page.keyboard.press('Enter')
     await settle()
 

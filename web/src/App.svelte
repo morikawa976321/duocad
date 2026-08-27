@@ -172,10 +172,40 @@
   /**
    * 直近に保存/開いたファイル名(画面に「今どれを触っているか」を出す)。
    *
-   * **未保存マーク・自動保存はスコープ外**(2026-08-22決定)—— この名前は「最後に
-   * 保存/開いた対象」を指すだけで、その後の編集で古くなっても追わない。
+   * **持つのは名前だけ**(2026-08-27に分離)。それまではこの値が `null` であること
+   * 自体を「(未保存)」として出していたが、名前と保存状態は別の問い(どれを触っているか /
+   * それが書けているか)なので、後者は `savedAt` が持つ。**自動保存は引き続きスコープ外**
+   * (2026-08-22決定)。
    */
   let currentDocumentName = $state<string | null>(null)
+  /**
+   * **最後に書けた/読み込んだ時点の文書の位置** `[applied_count, 操作数]`。
+   * `null` は「この画面ではまだ一度もファイルにしていない」(＝常に未保存)。
+   *
+   * **内容は比べない**。比べるのは「あれから文書が動いたか」だけで、それには
+   * `applied_count`(verbを適用した回数。**undo/redoでは動かない**)と操作数
+   * (`log.length`。undoで減りredoで戻る)の2つが要る —— 片方だけでは
+   * 「undoで保存時点へ戻した文書」(操作数は一致・applied_countも不変)と
+   * 「undoしてから別のverbを打った文書」(操作数は一致・applied_countが増える)が
+   * 見分けられず、後者を保存済みと言ってしまう。
+   *
+   * **偽るとしたら「未保存」の側だけ**、という非対称になっている。保存後にverbを打って
+   * からundoで同じ形へ戻した文書は、中身は保存済みと同じでも `applied_count` が増えた
+   * ままなので「未保存」と出る。逆(書けていないのに保存済みと出る)は起こらない ——
+   * `applied_count` が動いていないなら新しいverbは1つも適用されておらず、そのうえで
+   * 操作数まで一致するなら履歴の位置も同じだからである。
+   *
+   * 可視性の切り替えはverbではなくファイルにも載らないので、どちらも動かない
+   * (＝保存済みのまま。これは正しい)。
+   */
+  let savedAt = $state<[number, number] | null>(null)
+  /** 今の文書がそのままファイルに載っているか(ヘッダの `#save-state`)。 */
+  const saved = $derived(
+    savedAt !== null &&
+      model !== null &&
+      model.applied_count === savedAt[0] &&
+      model.log.length === savedAt[1],
+  )
   /**
    * 左サイドバー(ファイル一覧)を出しているか。**見た目だけの状態**で、コアには送らない
    * (モデルの状態ではないので操作ログにも残さない)。
@@ -220,7 +250,11 @@
   const session = createSession({
     onState: handleState,
     onError: (message, where) => {
-      fail(`エラー[${where}] ${message}`)
+      // `where` はどのverbで失敗したかを言う印だが、**`send` はverbではない**
+      // (「繋がっていないので送れなかった」。2026-08-27にヘッダの常設ステータスを外して以来、
+      // 繋がっていないことに気づく唯一の札になった)。内部の語を頭に付けると、
+      // その1枚だけが人間の言葉でなくなるので付けない。
+      fail(where === 'send' ? message : `エラー[${where}] ${message}`)
       pendingOp = null
       if (where === 'preview') clearPreview()
       // 辺の取り寄せが失敗したら「頼んだ」印も消す(次に起動したときに取り直せる)
@@ -371,8 +405,12 @@
       // ファイル名を追い、一覧も取り直す(開いた版が一覧の「操作数」に含まれるのはこの
       // ファイル自身なので変わらないが、他の操作で増減している可能性は保存と同じく
       // 否定できない)。**新規は `name` が `null`** で来るので、触っているファイルの表示は
-      // 「(未保存)」へ戻る。
+      // 「(無題)」へ戻る。
       currentDocumentName = applied.name
+      // **開いた直後の文書はファイルの中身そのもの**なので保存済みから始める。新規は
+      // どこにも書かれていないので `null`(＝常に未保存)へ戻す。`next` は上で `model` に
+      // 入れた今回の状態で、開いた版の `applied_count` / 操作数がもう入っている。
+      savedAt = applied.name === null ? null : [next.applied_count, next.log.length]
       note(applied.name === null ? '新規の文書にした' : `開いた: ${applied.name}`)
       if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
       lastApplied = applied
@@ -423,6 +461,13 @@
     }
     lastFile = payload
     if (payload.name) currentDocumentName = payload.name
+    // **書けた時点の位置を控える**(ヘッダの `#save-state` が「保存済み」を言う根拠)。
+    // 数えるのは `save` だけ —— `export_step`/`export_stl` は形を別形式で吐くだけで、
+    // 文書(操作ログ)を書いてはいない。操作数はサーバが実際に書いた件数を返してくるので
+    // それを使う(こちらで数え直さない)。
+    if (payload.action === 'save' && model !== null) {
+      savedAt = [model.applied_count, payload.operations ?? model.log.length]
+    }
     // **応答が `file` で返ったなら、その操作の待ちはここで解く**。
     // 「文書を変えるか」の判定はブラウザとサーバで別々に持っているので、片方だけ
     // 直したときに**状態配信を待ち続けて確定が永久に拒否される**経路ができる。
@@ -1101,17 +1146,22 @@
     >
       ファイル
     </button>
-    <strong>duocad</strong>
-    <span class="tag" class:on={status === 'open'}>{status}</span>
-    <!-- **現在開いているファイル名**(完了条件4)。未保存(この画面でまだ
-         保存/開いていない)は「(未保存)」と出す —— 自動保存・未保存マークは
-         スコープ外だが、「今どれを触っているか」は保存/開いた直後から出る。 -->
-    <span id="current-file" class="dim">{currentDocumentName ?? '(未保存)'}</span>
-    {#if model}
-      <span>部品 {partBodies.length}</span>
-      <span>操作 {model.applied_count}</span>
-      {#if previewing}<span class="tag preview">プレビュー</span>{/if}
-    {/if}
+    <!-- **現在開いているファイル名**(完了条件4)。**常に名前だけを出す**(2026-08-27) ——
+         まだ保存も読み込みもしていない文書には名前が無いので「(無題)」と置く。
+         書けているかどうかは隣の `#save-state` が言う。 -->
+    <span id="current-file" class="dim">{currentDocumentName ?? '(無題)'}</span>
+    <!-- **今の文書がファイルに載っているか**(`savedAt` 参照)。**目立たせるのは
+         「未保存」の側** —— 人の手が要るのはこちらだけで、保存済みは黙っていてよい。 -->
+    <span id="save-state" class="tag" class:on={!saved}>{saved ? '保存済み' : '未保存'}</span>
+    <!-- **常設の指標はこれで全部**(2026-08-27に本人裁定で4つ外した)。外したものと行き先:
+         - **接続状態** → 常時光らせず、**操作したのに送れなかった瞬間**にトーストで言う
+           (`session.ts` の `send`)。見ても何もしなくてよい間ずっと視線を取るのをやめた。
+           繋がっていたのが切れたときの通知(`onStatus`)と、再接続の連続失敗の通知は残る。
+         - **部品数 / 操作数** → 数そのものは人の判断に使わない。何があるかはブラウザ
+           (`BrowserPanel.svelte`)を見れば分かり、操作数は保存したファイルの一覧に出る。
+         - **プレビュー中の印** → **印が要らない見え方を目指す**方針(本人)。幽霊が
+           出ていることは幽霊自身が示すべきで、札で補うのは見え方が弱い証拠になる。
+           状態(`previewing`)は実機検査が見るので残してある。 -->
   </header>
 
   <!-- コマンドのツールバー。モードが変わったらコマンド層を作り直す(集めかけの引数を持ち越さない)。
@@ -1202,10 +1252,3 @@
     <Toast />
   </div>
 </div>
-
-<style>
-  .tag.preview {
-    background: #7ee081;
-    color: #0b1a0d;
-  }
-</style>

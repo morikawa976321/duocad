@@ -424,6 +424,17 @@ async function main() {
     if (headerName !== documentName) fail(`ヘッダのファイル名が違う: "${headerName}"`)
     ok(`現在のファイル名が画面に出た("${headerName}")`)
 
+    // **保存状態はファイル名とは別の札**(`#save-state`)。名前が「どれを触っているか」で、
+    // こちらは「それがファイルに載っているか」——書けた直後は「保存済み」でなければならない。
+    const expectSaveState = (expected, where) =>
+      waitFor(
+        (want) => document.querySelector('#save-state')?.textContent.trim() === want,
+        `${where}: ヘッダの保存状態が "${expected}" にならない`,
+        expected,
+      )
+    await expectSaveState('保存済み', '新規保存の直後')
+    ok('保存した直後のヘッダが「保存済み」になった')
+
     const shapeBefore = (await look()).bodies[0]
 
     // **アプリを再読込してから開く**(タスクEの検証2「再起動 → 開く → 同じ形状」)。
@@ -479,6 +490,10 @@ async function main() {
       documentName,
     )
     ok('開いた後も現在のファイル名が画面に出ている')
+    // 開いた直後の文書は**ファイルの中身そのもの**なので「保存済み」から始まる
+    // (再読込で `savedAt` は捨てられているから、これは開いたことで入り直した値である)。
+    await expectSaveState('保存済み', '開いた直後')
+    ok('開いた直後のヘッダが「保存済み」になった')
 
     // ================================================================ 検証2b: 上書き保存
     // 「一覧から選んで上書き」(完了条件4の後半)。形を変えてから上書きし、
@@ -491,6 +506,10 @@ async function main() {
       'undoしても形が変わらない(上書き検査の前提が作れない)',
       reopened.volume,
     )
+    // **開いた後に文書を動かしたので「未保存」へ落ちる**。ここは書き出しではなく編集なので、
+    // ファイルの中身と今の文書が食い違った状態そのものである。
+    await expectSaveState('未保存', '開いた後にundoした直後')
+    ok('開いた文書を編集したらヘッダが「未保存」へ落ちた')
     await page.click(`.files-row[data-name="${documentName}"] .files-overwrite`)
     // **`lastFile.action === 'save'` では待てない** —— 直前の新規保存で既に真になっている。
     // 上書きが本当に効いたことは、undoで1件減らした後の操作数が一覧へ反映されることで見る。
@@ -506,6 +525,8 @@ async function main() {
       `**一覧から選んで上書き**できた(操作 ${beforeOverwrite.operations} -> ` +
         `${(await look()).documentList.find((file) => file.name === documentName).operations} 件)`,
     )
+    await expectSaveState('保存済み', '上書きの直後')
+    ok('上書きの直後のヘッダが「保存済み」へ戻った')
 
     // ================================================================ 検証2c: 新規
     // 「新規」(`#file-new`)で**空の文書へ戻る**。確認ダイアログは無い(開くと同じ扱い)。
@@ -520,6 +541,9 @@ async function main() {
     const headerAfterNew = await page.$eval('#current-file', (el) => el.textContent.trim())
     if (headerAfterNew === documentName) fail(`新規にしてもヘッダに前のファイル名が残る: "${headerAfterNew}"`)
     ok(`**「新規」で空の文書に戻った**(部品0 / ヘッダ "${headerAfterNew}"。確認ダイアログは挟んでいない)`)
+    // 新規の文書は**どこにも書かれていない**ので、名前が無いのと同じ理由で「未保存」。
+    await expectSaveState('未保存', '「新規」の直後')
+    ok('「新規」の直後のヘッダが「未保存」へ戻った')
 
     await page.click(`.files-row[data-name="${documentName}"] .files-open`)
     await waitFor(

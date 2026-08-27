@@ -1232,7 +1232,8 @@ class Session:
             "change": "document",
             "action": "new",
             # **開いたファイルが無いので `path` / `name` は `None`**。受け取る側
-            # (`web/src/App.svelte`)はこれで「今どれを触っているか」の表示を(未保存)へ戻す。
+            # (`web/src/App.svelte`)はこれで「今どれを触っているか」の表示を(無題)へ戻し、
+            # 保存状態も「未保存」へ戻す(どこにも書かれていない文書になるため)。
             "path": None,
             "name": None,
             "operations": 0,

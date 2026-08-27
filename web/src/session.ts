@@ -585,9 +585,20 @@ export function createSession(hooks: SessionHooks): Session {
   /** 開く前に閉じた回数。開いたら0へ戻す(`CONNECT_FAILURE_NOTICE_AT`)。 */
   let failures = 0
 
+  /**
+   * 1本送る。**繋がっていなければ送らずに、その場でトーストへ回す**。
+   *
+   * 2026-08-27にヘッダの常設ステータスを外したので、**繋がっていないことに人間が
+   * 気づく機会は「操作したのに送れなかった」この瞬間**になった。ここは画面からの操作が
+   * 必ず通る1本道なので、各パネルに同じ判定を書き写さずに済む。
+   *
+   * **間引かない。** 同じ文言が続けて来ても、まとめるのはトースト側(`Toast.svelte` の
+   * 「同じ文言は積まずに数える」)であって、送る側が黙る話ではない —— ここで最初の1回だけ
+   * にすると、**2回目の操作が黙って消える**(押した本人には成功と区別がつかない)。
+   */
   function send(payload: Record<string, unknown>): void {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      hooks.onError('サーバに接続していない', 'send')
+      hooks.onError('サーバに繋がっていないので操作を送れなかった(自動で繋ぎ直しを試みている)', 'send')
       return
     }
     socket.send(JSON.stringify(payload))
