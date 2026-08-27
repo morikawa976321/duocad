@@ -1,9 +1,12 @@
-"""F(アプリ内エージェント)契約: **UIなしで回るtool-useループ**と2つのプロバイダアダプタ。
+"""F(アプリ内エージェント)契約: **UIなしで回るtool-useループ**とプロバイダアダプタ。
 
 ここが本体の検査である —— 実機のLLMには依存させない。**偽プロバイダ(記録済みの応答列を
 返すスタブ)**でループの分岐を決定的に固定し、アダプタの整形はHTTPを差し替えた単体検査で見る
-(llama-serverの実機は `tests/test_agent_llama_server.py` の1本だけ。Claude APIを叩く実テストは
-課金が走るので**書かない**)。
+(llama-serverの実機は `tests/test_agent_llama_server.py` の1本だけ)。
+
+**プロバイダは `openai_compat` の1つだけになった**(2026-08-27) —— ClaudeをAPIキーで叩く
+`anthropic` アダプタとその鍵の読み口を廃止したため。Claudeへ繋ぐ道はMCP経路に残っている
+(`tests/test_mcp.py` / `tests/test_mcp_http.py`)。
 
 ## このファイルが固定する5つ
 
@@ -14,19 +17,18 @@
 3. **打ち切りが効く** —— `max_turns` / 中断フラグ / プロバイダの失敗。理由は構造化して返す。
 4. **ツールの失敗でループが落ちない** —— 封筒をそのままモデルへ返して自己修復させる
    (未知のツール名・引数の食い違い・壊れたJSONも含む)。
-5. **APIキーがどこにも出ない** —— `repr`・例外メッセージ・進捗・結果のどれにも。
+5. **鍵がどこにも出ない** —— `repr`・例外メッセージ・進捗・結果のどれにも。
+   併せて **`build_provider` が鍵を渡さない**(画面から鍵を受け取る経路を作らない)。
 """
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
 from duocad import catalog
 from duocad.agent import (
     AgentLoop,
-    AnthropicProvider,
     Cancellation,
     Limits,
     OpenAICompatProvider,
@@ -34,8 +36,6 @@ from duocad.agent import (
     ProviderTimeout,
 )
 from duocad.agent.providers import (
-    ANTHROPIC_API_KEY_ENV,
-    SECRETS_FILENAME,
     AssistantTurn,
     Provider,
     ProviderReply,
@@ -43,16 +43,12 @@ from duocad.agent.providers import (
     ToolResult,
     ToolResultTurn,
     UserTurn,
-    api_key_configured,
-    load_api_key,
 )
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.server import Session
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
 #: 本物ではない。**形だけ本物に似せた文字列**(このリポジトリのどこにも実キーは置かない)。
-FAKE_KEY = "sk-ant-test-DO-NOT-USE-0123456789"
+FAKE_KEY = "sk-test-DO-NOT-USE-0123456789"
 
 
 # --------------------------------------------------------------------------------------
@@ -252,7 +248,7 @@ def test_the_system_prompt_carries_the_two_step_autonomy_rule():
 
 
 # --------------------------------------------------------------------------------------
-# 2. アダプタの整形(HTTPを差し替えた単体検査。実キーで外部を叩かない)
+# 2. アダプタの整形(HTTPを差し替えた単体検査。外部を叩かない)
 # --------------------------------------------------------------------------------------
 class FakeTransport:
     """`post_json` と同じ形をした差し替え。送った内容を全部覚える。"""
@@ -269,90 +265,6 @@ class FakeTransport:
         if isinstance(response, Exception):
             raise response
         return response
-
-
-ANTHROPIC_TOOL_USE = {
-    "content": [
-        {"type": "thinking", "thinking": "考えている", "signature": "sig"},
-        {"type": "text", "text": "調べる"},
-        {"type": "tool_use", "id": "toolu_1", "name": "describe_document", "input": {}},
-    ],
-    "stop_reason": "tool_use",
-    "usage": {"input_tokens": 10, "output_tokens": 3},
-}
-ANTHROPIC_DONE = {
-    "content": [{"type": "text", "text": "ボディはありません"}],
-    "stop_reason": "end_turn",
-    "usage": {"input_tokens": 20, "output_tokens": 5},
-}
-
-
-def test_anthropic_request_shape_and_forbidden_parameters():
-    """`inputSchema` → `input_schema` のキー1つ違い。**現行モデルが400を返す欄は送らない**。"""
-    transport = FakeTransport([ANTHROPIC_DONE])
-    provider = AnthropicProvider(FAKE_KEY, transport=transport)
-    surface = tools()
-
-    provider.complete(
-        system="つかいかた",
-        turns=[UserTurn("やって")],
-        tools=surface.descriptors(),
-        max_tokens=1234,
-        timeout=30.0,
-    )
-
-    sent = transport.sent[0]
-    assert sent["url"].endswith("/v1/messages")
-    assert sent["headers"]["anthropic-version"] == "2023-06-01"
-    assert sent["headers"]["x-api-key"] == FAKE_KEY
-    payload = sent["payload"]
-    assert payload["model"] == "claude-opus-5"
-    assert payload["max_tokens"] == 1234
-    assert payload["system"] == "つかいかた"
-    assert payload["messages"] == [{"role": "user", "content": "やって"}]
-    assert payload["tools"][0]["input_schema"] == surface.descriptors()[0]["inputSchema"]
-    assert [t["name"] for t in payload["tools"]] == list(catalog.tool_names())
-    for forbidden in ("temperature", "top_p", "top_k", "thinking"):
-        assert forbidden not in payload, f"{forbidden} は現行モデルが400を返す"
-
-
-def test_anthropic_echoes_the_assistant_content_back_unchanged():
-    """assistantの本文は**そのまま**返す(thinkingブロックを落とすと次のターンが壊れる)。"""
-    provider = AnthropicProvider(FAKE_KEY, transport=FakeTransport([]))
-    reply = provider.parse_reply(ANTHROPIC_TOOL_USE)
-    turns = [
-        UserTurn("やって"),
-        AssistantTurn(text=reply.text, tool_calls=reply.tool_calls, raw=reply.raw_message),
-        ToolResultTurn(
-            (
-                ToolResult(call_id="toolu_1", name="describe_document", content="{}", ok=True),
-                ToolResult(call_id="toolu_2", name="measure", content="boom", ok=False),
-            )
-        ),
-    ]
-
-    messages = provider.render_messages(turns)
-    assert messages[1] == {"role": "assistant", "content": ANTHROPIC_TOOL_USE["content"]}
-    # 複数のツール結果は1つのuserメッセージにまとめる(分けると並列呼びが止む)
-    assert messages[2]["role"] == "user"
-    assert messages[2]["content"] == [
-        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "{}", "is_error": False},
-        {"type": "tool_result", "tool_use_id": "toolu_2", "content": "boom", "is_error": True},
-    ]
-
-
-def test_anthropic_reply_parsing():
-    provider = AnthropicProvider(FAKE_KEY, transport=FakeTransport([]))
-    reply = provider.parse_reply(ANTHROPIC_TOOL_USE)
-    assert reply.text == "調べる"
-    assert reply.stop == "tool_use"
-    assert [(c.id, c.name, c.arguments) for c in reply.tool_calls] == [
-        ("toolu_1", "describe_document", {})
-    ]
-
-    assert provider.parse_reply(ANTHROPIC_DONE).stop == "end_turn"
-    assert provider.parse_reply({"content": [], "stop_reason": "max_tokens"}).stop == "max_tokens"
-    assert provider.parse_reply({"content": [], "stop_reason": "refusal"}).stop == "refusal"
 
 
 OPENAI_TOOL_CALL = {
@@ -705,16 +617,16 @@ def test_a_cancelled_turn_still_leaves_a_replayable_history():
     results = loop.turns[-1].results
     assert [r.call_id for r in results] == ["c1", "c2"]
     assert [r.ok for r in results] == [True, False]
-    # Claudeへ送り直せる形になっている(tool_use と tool_result が1対1)
-    messages = AnthropicProvider(FAKE_KEY, transport=FakeTransport([])).render_messages(loop.turns)
-    used = [b["id"] for b in messages[1]["content"] if b["type"] == "tool_use"]
-    returned = [b["tool_use_id"] for b in messages[2]["content"]]
+    # 送り直せる形になっている(呼び出しと結果が1対1で対応している)
+    messages = OpenAICompatProvider(transport=FakeTransport([])).render_messages("", loop.turns)
+    used = [c["id"] for c in messages[1]["tool_calls"]]
+    returned = [m["tool_call_id"] for m in messages[2:]]
     assert used == returned == ["c1", "c2"]
 
 
 def test_a_provider_failure_is_reported_not_raised():
     surface = tools()
-    provider = RecordedProvider([ProviderError("HTTP 529 from https://api.anthropic.com: overloaded")])
+    provider = RecordedProvider([ProviderError("HTTP 529 from http://127.0.0.1:8080/v1: overloaded")])
     run = AgentLoop(surface, provider).run("やって")
 
     assert run.status == "provider_error"
@@ -771,13 +683,12 @@ def test_an_unknown_stop_reason_falls_through_to_stopped_with_the_raw_value():
 # --------------------------------------------------------------------------------------
 # 3b. 出力上限で切れたターンのツールは走らせない
 # --------------------------------------------------------------------------------------
-def test_truncated_replies_are_not_mistaken_for_tool_use_by_either_provider():
-    """**打ち切りの判定がツール呼び出しより先** —— 切れた引数を実行しないための前提。"""
-    anthropic = AnthropicProvider(FAKE_KEY, transport=FakeTransport([]))
-    reply = anthropic.parse_reply({**ANTHROPIC_TOOL_USE, "stop_reason": "max_tokens"})
-    assert reply.tool_calls  # ブロック自体は載っている
-    assert reply.stop == "max_tokens"
+def test_a_truncated_reply_is_not_mistaken_for_tool_use():
+    """**打ち切りの判定がツール呼び出しより先** —— 切れた引数を実行しないための前提。
 
+    上限で切られた応答にも `tool_calls` は載る(**ブロック自体はある**)。それを
+    `tool_use` に丸めると、切れた引数のままツールが走る。
+    """
     compat = OpenAICompatProvider(transport=FakeTransport([]))
     truncated = {
         "choices": [
@@ -831,35 +742,18 @@ def test_the_conversation_continues_across_runs_until_reset():
     assert loop.turns == []
 
 
-#--------------------------------------------------------------------------------------
-# 4. APIキーが漏れない(セキュリティ要件)
 # --------------------------------------------------------------------------------------
-def test_the_api_key_is_read_from_the_environment_first_then_the_local_file(tmp_path):
-    secrets = tmp_path / SECRETS_FILENAME
-    secrets.write_text(json.dumps({ANTHROPIC_API_KEY_ENV: "from-file"}), encoding="utf-8")
-
-    assert load_api_key(environ={ANTHROPIC_API_KEY_ENV: "from-env"}, path=secrets) == "from-env"
-    assert load_api_key(environ={}, path=secrets) == "from-file"
-    assert load_api_key(environ={ANTHROPIC_API_KEY_ENV: "   "}, path=secrets) == "from-file"
-    assert load_api_key(environ={}, path=tmp_path / "missing.json") is None
-
-    secrets.write_text("{壊れている", encoding="utf-8")
-    assert load_api_key(environ={}, path=secrets) is None
-
-    # 画面へ出してよいのは2値だけ(値は返さない)
-    assert api_key_configured(environ={ANTHROPIC_API_KEY_ENV: "x"}, path=tmp_path / "none") is True
-    assert api_key_configured(environ={}, path=tmp_path / "none") is False
-
-
-def test_the_local_secrets_file_is_gitignored():
-    ignored = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
-    assert SECRETS_FILENAME in ignored
-
-
-def test_the_api_key_never_shows_up_in_repr_or_error_messages():
+# 4. 鍵が漏れない(セキュリティ要件)
+#
+# **ClaudeをAPIキーで叩く経路は2026-08-27に廃止した** —— 環境変数も `duocad_secrets.json` も
+# 読まなくなり、`load_api_key` / `api_key_configured` ごと消えている。残っているのは
+# `openai_compat` が鍵を要求するサーバのために受け取れる `api_key` だけで、**`build_provider`
+# はそれを渡さない**。ここで固定するのはその2点である。
+# --------------------------------------------------------------------------------------
+def test_a_provider_key_never_shows_up_in_repr_or_error_messages():
     """HTTPライブラリはヘッダ値を例外文へ載せることがある。**外へ出る前に消す**。"""
     leaking = FakeTransport([ValueError(f"Invalid header value {FAKE_KEY!r}")])
-    provider = AnthropicProvider(FAKE_KEY, transport=leaking)
+    provider = OpenAICompatProvider(api_key=FAKE_KEY, transport=leaking)
 
     assert FAKE_KEY not in repr(provider)
     with pytest.raises(ProviderError) as caught:
@@ -872,28 +766,26 @@ def test_the_api_key_never_shows_up_in_repr_or_error_messages():
     assert FAKE_KEY not in json.dumps(run.to_dict(), ensure_ascii=False)
 
 
-def test_the_api_key_travels_only_in_the_header_not_in_the_body():
-    transport = FakeTransport([ANTHROPIC_DONE])
-    provider = AnthropicProvider(FAKE_KEY, transport=transport)
-    provider.complete(
-        system=catalog.agent_instructions(),
-        turns=[UserTurn("やって")],
-        tools=tools().descriptors(),
-        max_tokens=64,
-        timeout=1.0,
-    )
-    sent = transport.sent[0]
-    assert FAKE_KEY not in json.dumps(sent["payload"], ensure_ascii=False)
-    assert sent["headers"]["x-api-key"] == FAKE_KEY
+def test_the_provider_the_app_builds_carries_no_key_at_all(monkeypatch):
+    """**アプリが作るプロバイダには鍵が乗らない**。
 
-
-def test_building_the_anthropic_provider_without_a_key_fails_with_a_useful_message(tmp_path):
+    廃止した経路が生き残っていないことも同時に見る —— 環境に `ANTHROPIC_API_KEY` が
+    居ても拾わないし、`anthropic` という綴りはもう作れない。
+    """
     from duocad.agent.providers import build_provider
 
-    with pytest.raises(ProviderError) as caught:
-        build_provider("anthropic", environ={}, secrets=tmp_path / "none.json")
-    message = str(caught.value)
-    assert ANTHROPIC_API_KEY_ENV in message and SECRETS_FILENAME in message
+    monkeypatch.setenv("ANTHROPIC_API_KEY", FAKE_KEY)
+    transport = FakeTransport(
+        [{"choices": [{"message": {"content": "はい"}, "finish_reason": "stop"}]}]
+    )
+    provider = build_provider("openai_compat", transport=transport)
+    provider.complete(system="s", turns=[UserTurn("x")], tools=[], max_tokens=16, timeout=1.0)
 
+    sent = transport.sent[0]
+    assert "authorization" not in {key.lower() for key in sent["headers"]}
+    assert FAKE_KEY not in json.dumps(sent, ensure_ascii=False)
+
+    with pytest.raises(ValueError):
+        build_provider("anthropic")
     with pytest.raises(ValueError):
         build_provider("gemini")
