@@ -245,6 +245,21 @@ export interface Viewport {
    */
   highlightColors(): { face: number | null; edge: number | null; vertex: number | null }
   /**
+   * 今ホバーで明るくしているもの(**実機検査フック専用**)。
+   *
+   * ホバーは色を足さず明度だけを上げるので、`highlightColors` では変化を読めない
+   * (橙のままである)。**「クリックすれば取れるもの」と実際にクリックした結果が
+   * 一致していること**を機械で確かめるための穴で、頂点は対象外なので返さない。
+   */
+  hoveredRef(): {
+    face: FaceRef | null
+    edge: EdgeRef | null
+    region: { sketchId: string; index: number } | null
+    plane: BasePlaneName | null
+    /** そのものに**今実際に当たっている**色(16進)。何も指していなければ null。 */
+    color: number | null
+  }
+  /**
    * 頂点マーカーの画面座標(無理なら null)。**実機検査が本物のクリックで頂点を外す**
    * ために要る穴で、面の `project` / 辺の `projectEdge` と同じ流儀 ——
    * 返す前にその画素からのレイが実際にその頂点へ当たることを確かめる。
@@ -407,6 +422,25 @@ const AXIS_Z_COLOR = 0x5a8ec4
 const CLICK_MOVE_LIMIT_PX = 6
 const CLICK_TIME_LIMIT_MS = 500
 
+/**
+ * ホバー強調で上げる明度(HSLのL)。**3色目は足さない**(2026-08-27本人決定) ——
+ * 色相が「誰の選択か」(user=橙 / proposed=水色)、明度が「今カーソルの下にあるか」を
+ * 表す2軸にする。未選択にも選択済みにも同じ幅で掛けるので、規則は
+ * 「カーソルの下にあるものは明るい」の1行で済む。
+ */
+const HOVER_LIGHTEN = 0.16
+/** ホバー中の基準平面に重ねる板の濃さ。グリッドの線が透けて見える程度に留める。 */
+const BASE_PLANE_HOVER_OPACITY = 0.14
+
+/** 色相・彩度はそのままに明度だけ上げる(`HOVER_LIGHTEN` の実体)。 */
+function lighten(hex: number, amount: number): number {
+  const color = new THREE.Color(hex)
+  const hsl = { h: 0, s: 0, l: 0 }
+  color.getHSL(hsl)
+  color.setHSL(hsl.h, hsl.s, Math.min(1, hsl.l + amount))
+  return color.getHex()
+}
+
 /** 1個のBodyが画面に持つメッシュ(面ごとの三角形メッシュ+境界線)。 */
 interface BodyMeshes {
   /** ピック判定の対象(面の三角形メッシュだけ)。 */
@@ -542,6 +576,87 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
+  /**
+   * ホバー中の基準平面に重ねる板(**同時に見えるのは多くても1枚**)。
+   *
+   * グリッドの線は3平面ぶんが1つのジオメトリに混ざっていて平面ごとに色を変えられない
+   * (`showBasePlanes` のコメント)。線を3本に割る代わりに半透明の板を重ねて
+   * 「今カーソルが指しているのはこの平面」を出す(2026-08-27本人決定)。
+   * **当たり判定には使わない** —— 判定は今までどおり `basePlaneAt` の解析交差である。
+   */
+  const basePlaneHoverMeshes = new Map<BasePlaneName, THREE.Mesh>()
+  {
+    const material = new THREE.MeshBasicMaterial({
+      color: GRID_ARMED_COLOR,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: BASE_PLANE_HOVER_OPACITY,
+      // 半透明どうしで真っ黒にならないように奥行きは書かない(`previewMaterial` と同じ)。
+      depthWrite: false,
+    })
+    gridDisposables.push(material)
+    for (const spec of BASE_PLANES) {
+      const corners = ([[-1, -1], [1, -1], [1, 1], [-1, 1]] as const).map(
+        ([su, sv]) =>
+          new THREE.Vector3(
+            (su * spec.u[0] + sv * spec.v[0]) * GRID_EXTENT,
+            (su * spec.u[1] + sv * spec.v[1]) * GRID_EXTENT,
+            (su * spec.u[2] + sv * spec.v[2]) * GRID_EXTENT,
+          ),
+      )
+      const geometry = new THREE.BufferGeometry().setFromPoints([
+        corners[0], corners[1], corners[2],
+        corners[0], corners[2], corners[3],
+      ])
+      const mesh = new THREE.Mesh(geometry, material)
+      mesh.visible = false
+      gridRoot.add(mesh)
+      gridDisposables.push(geometry)
+      basePlaneHoverMeshes.set(spec.name, mesh)
+    }
+  }
+
+  function applyBasePlaneHover(): void {
+    for (const [name, mesh] of basePlaneHoverMeshes) mesh.visible = hoverPlane === name
+  }
+
+  /**
+   * 今ホバーで当てている色(**実機検査フック専用**)。
+   *
+   * **材質から読み戻す** —— ホバーは色相を変えず明度だけを上げるので、`highlightColors`
+   * では変化が出ない(選択中の面は橙のままである)。「本当に明るくなったか」は実際に
+   * 当たっている材質を見るしかない。
+   */
+  function hoverColorNow(): number | null {
+    const pick = (object: THREE.Object3D | undefined): number | null => {
+      const material = (object as { material?: { color?: THREE.Color } } | undefined)?.material
+      return material?.color ? material.color.getHex() : null
+    }
+    const face = hoverFace
+    if (face !== null) {
+      return pick(
+        allFaceMeshes.find(
+          (mesh) =>
+            mesh.userData.bodyId === face.bodyId && mesh.userData.faceIndex === face.faceIndex,
+        ),
+      )
+    }
+    const edge = hoverEdge
+    if (edge !== null) {
+      return pick(edgeLines.find((line) => line.userData.edgeIndex === edge.edgeIndex))
+    }
+    const region = hoverRegion
+    if (region !== null) {
+      return pick(
+        sketches
+          .get(region.sketchId)
+          ?.regionMeshes.find((mesh) => mesh.userData.regionIndex === region.index),
+      )
+    }
+    if (hoverPlane !== null) return pick(basePlaneHoverMeshes.get(hoverPlane))
+    return null
+  }
+
   const baseMaterial = new THREE.MeshLambertMaterial({
     color: BASE_COLOR,
     side: THREE.DoubleSide,
@@ -552,6 +667,19 @@ export function createViewport(container: HTMLElement): Viewport {
   })
   const proposedMaterial = new THREE.MeshLambertMaterial({
     color: PROPOSED_COLOR,
+    side: THREE.DoubleSide,
+  })
+  // ホバー中の面。**選択の色に明度を足しただけ**で色相は変えない(`HOVER_LIGHTEN`)。
+  const baseHoverMaterial = new THREE.MeshLambertMaterial({
+    color: lighten(BASE_COLOR, HOVER_LIGHTEN),
+    side: THREE.DoubleSide,
+  })
+  const highlightHoverMaterial = new THREE.MeshLambertMaterial({
+    color: lighten(HIGHLIGHT_COLOR, HOVER_LIGHTEN),
+    side: THREE.DoubleSide,
+  })
+  const proposedHoverMaterial = new THREE.MeshLambertMaterial({
+    color: lighten(PROPOSED_COLOR, HOVER_LIGHTEN),
     side: THREE.DoubleSide,
   })
   const previewMaterial = new THREE.MeshLambertMaterial({
@@ -581,6 +709,70 @@ export function createViewport(container: HTMLElement): Viewport {
   const previewMeshes = new Map<string, { objects: THREE.Object3D[]; disposables: Array<{ dispose(): void }> }>()
   let pickListener: ((event: PickEvent) => void) | null = null
   let planeMoveListener: ((point: { u: number; v: number } | null) => void) | null = null
+
+  // ---------------------------------------------------------------- ホバー強調
+  //
+  // **「そのままクリックしたら取れるもの」を1つだけ明るくする**(2026-08-27本人決定)。
+  // 対象は面・辺・領域・基準平面で、**頂点は出さない** —— 選択に入っている頂点しか
+  // マーカーが無く、「クリックすれば選択されるもの」を出せる状態にない。
+  //
+  // 当たり判定は `resolveHit` **1つだけ**をクリックと共有する。優先順位を2箇所に
+  // 書くとプレビューが嘘をつき、この機能の存在意義が消える。
+  /** ポインタの現在位置(canvasの外なら null)。**解決はフレームに1回**(`tick`)。 */
+  let hoverAt: { x: number; y: number } | null = null
+  /** 視点回転中(=そのポインタの動きはクリックではない)。回している間は解決しない。 */
+  let orbiting = false
+  let hoverFace: FaceRef | null = null
+  let hoverEdge: EdgeRef | null = null
+  let hoverPlane: BasePlaneName | null = null
+  let hoverRegion: { sketchId: string; index: number } | null = null
+  // 「変わったときだけ材質を書き換える」ための印(毎フレーム全メッシュを走査しない)。
+  let hoverFaceKey = ''
+  let hoverEdgeKey = ''
+  let hoverRegionKey = ''
+  /**
+   * 直近にホバーを解決したときの「ポインタ位置+視点+`pickGeneration`」。**同じなら
+   * 当たるものも同じ**なので、レイキャストごと省く(止まって眺めている間は毎フレーム
+   * 2835面を撃たない)。
+   */
+  let hoverProbe = ''
+  /**
+   * **「何が指せるか」が変わるたびに増やす番号**。`hoverProbe` に混ぜてあるので、
+   * ポインタも視点も動いていなくても次のフレームで必ず解決し直す。
+   *
+   * これが無いと、**止まったまま予告だけが古くなる**。例: 領域をホバーしたまま Esc で
+   * コマンドを解除すると `pickRegions(false)` で領域は指せなくなるのに、ポインタも視点も
+   * 動いていないので解決が省かれ、明るいままの領域が「クリックすれば取れる」と嘘をつく。
+   * 頂点マーカーが増えたとき・プレビューで本物を隠したとき・ビューポートの寸法が
+   * 変わったときも同じ(いずれも当たるものが変わる)。
+   */
+  let pickGeneration = 0
+
+  /** 「何が指せるか」を変えた側が呼ぶ。 */
+  function pickChanged(): void {
+    pickGeneration += 1
+  }
+
+  /**
+   * ホバーの印を捨てる。**描画対象を作り直した側が呼ぶ** —— 作り直したメッシュは
+   * 素の材質で生まれるので、印を残すと「変わっていない」と判断して明るくし直さない。
+   */
+  function invalidateHover(): void {
+    hoverFace = null
+    hoverEdge = null
+    hoverRegion = null
+    hoverFaceKey = ''
+    hoverEdgeKey = ''
+    hoverRegionKey = ''
+    hoverPlane = null
+    pickChanged()
+    // **材質まで戻す**。参照と印を捨てるだけだと、作り直していない対象に付けた明るい材質が
+    // そのまま残る(次の解決が「なし」や別種別だと、誰も戻さないまま画面に居座る)。
+    applyFaceMaterials()
+    applyEdgeMaterials()
+    applyRegionMaterials()
+    applyBasePlaneHover()
+  }
   let framed = false
   let alive = true
   let frameHandle = 0
@@ -593,6 +785,7 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function applySize(): void {
+    pickChanged() // 寸法が変わると同じ画素が別のものを指す(engine `viewport-resize-silently-changes-what-a-click-grabs`)
     const { width, height } = size()
     renderer.setSize(width, height, false)
     camera.aspect = width / height
@@ -661,6 +854,7 @@ export function createViewport(container: HTMLElement): Viewport {
   function rebuildPickIndex(): void {
     allFaceMeshes = []
     for (const entry of bodies.values()) allFaceMeshes.push(...entry.faceMeshes)
+    invalidateHover() // 作り直した面は素の材質で生まれる(`invalidateHover` のコメント)
   }
 
   function update(entries: BodyGeometryUpdate[]): void {
@@ -691,6 +885,7 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function showPreview(entries: BodyGeometryUpdate[]): void {
+    pickChanged() // 本物のBodyを隠すので、同じ画素が別のもの(または何も)を指す
     clearPreview()
     for (const entry of entries) {
       if (!entry.geometry) continue
@@ -711,6 +906,7 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function clearPreview(): void {
+    pickChanged() // 隠していた本物が戻る(`showPreview` の対)
     if (previewMeshes.size === 0) return
     for (const [bodyId, entry] of previewMeshes) {
       for (const object of entry.objects) root.remove(object)
@@ -757,14 +953,45 @@ export function createViewport(container: HTMLElement): Viewport {
     vertex: null,
   }
 
-  function highlight(refs: FaceRef[], origin: 'user' | 'proposed'): void {
-    const selectedMaterial = origin === 'proposed' ? proposedMaterial : highlightMaterial
-    highlightColor.face = refs.length === 0 ? null : selectedMaterial.color.getHex()
-    const keys = new Set(refs.map((ref) => `${ref.bodyId}\u0000${ref.faceIndex}`))
+  /** 「持ち主+添字」の1本の鍵(面・辺・領域で共通)。 */
+  function refKey(owner: string, index: number): string {
+    return `${owner}\u0000${index}`
+  }
+
+  /** 今の選択(`highlight` が受け取ったもの)。**材質を決めるのは下の1箇所だけ**。 */
+  let selectedFaceKeys = new Set<string>()
+  let faceOrigin: 'user' | 'proposed' = 'user'
+
+  /**
+   * 面の材質を決める。**選択とホバーの両方を見る唯一の場所**。
+   *
+   * 分けてはいけない —— どちらも `mesh.material` を書くので、ホバーが後から上書きする
+   * 形にすると、次のstate配信で走る `highlight()` の全走査に黙って消される。
+   */
+  function applyFaceMaterials(): void {
+    const selectedMaterial = faceOrigin === 'proposed' ? proposedMaterial : highlightMaterial
+    const selectedHover = faceOrigin === 'proposed' ? proposedHoverMaterial : highlightHoverMaterial
+    highlightColor.face = selectedFaceKeys.size === 0 ? null : selectedMaterial.color.getHex()
     for (const mesh of allFaceMeshes) {
-      const isHit = keys.has(`${mesh.userData.bodyId}\u0000${mesh.userData.faceIndex}`)
-      mesh.material = isHit ? selectedMaterial : baseMaterial
+      const bodyId = mesh.userData.bodyId as string
+      const faceIndex = mesh.userData.faceIndex as number
+      const isHit = selectedFaceKeys.has(refKey(bodyId, faceIndex))
+      const isHovered =
+        hoverFace !== null && hoverFace.bodyId === bodyId && hoverFace.faceIndex === faceIndex
+      mesh.material = isHit
+        ? isHovered
+          ? selectedHover
+          : selectedMaterial
+        : isHovered
+          ? baseHoverMaterial
+          : baseMaterial
     }
+  }
+
+  function highlight(refs: FaceRef[], origin: 'user' | 'proposed'): void {
+    faceOrigin = origin
+    selectedFaceKeys = new Set(refs.map((ref) => refKey(ref.bodyId, ref.faceIndex)))
+    applyFaceMaterials()
   }
 
   /**
@@ -802,7 +1029,14 @@ export function createViewport(container: HTMLElement): Viewport {
   function showBasePlanes(on: boolean): void {
     if (basePlanesOn === on) return
     basePlanesOn = on
+    pickChanged()
     gridMaterial.color.setHex(on ? GRID_ARMED_COLOR : GRID_COLOR)
+    // 指せなくなった平面の板を残さない(`basePlaneAt` が null を返すので次のフレームでも
+    // 消えるが、ゲートを閉じた瞬間に消えるほうが「もう指せない」が伝わる)。
+    if (!on) {
+      hoverPlane = null
+      applyBasePlaneHover()
+    }
   }
 
   /**
@@ -917,6 +1151,19 @@ export function createViewport(container: HTMLElement): Viewport {
     color: PROPOSED_COLOR,
     depthTest: false,
   })
+  // ホバー中の辺(面と同じで明度を足すだけ)。
+  const pickEdgeHoverMaterial = new THREE.LineBasicMaterial({
+    color: lighten(PICK_EDGE_COLOR, HOVER_LIGHTEN),
+    depthTest: false,
+  })
+  const pickEdgeSelectedHoverMaterial = new THREE.LineBasicMaterial({
+    color: lighten(HIGHLIGHT_COLOR, HOVER_LIGHTEN),
+    depthTest: false,
+  })
+  const pickEdgeProposedHoverMaterial = new THREE.LineBasicMaterial({
+    color: lighten(PROPOSED_COLOR, HOVER_LIGHTEN),
+    depthTest: false,
+  })
 
   /** 今出している辺(**1つのBodyぶんだけ**)。空なら辺モードではない。 */
   let edgeLines: THREE.Line[] = []
@@ -932,6 +1179,7 @@ export function createViewport(container: HTMLElement): Viewport {
     edgeLines = []
     edgeBodyId = null
     edgeSource = null
+    invalidateHover()
   }
 
   function showEdges(bodyId: string | null, edges: EdgeGeometry[]): void {
@@ -964,16 +1212,39 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
+  /** 今出している辺のうち選択に入っているもの(面の `selectedFaceKeys` と同じ役目)。 */
+  let selectedEdgeIndices = new Set<number>()
+  let edgeOrigin: 'user' | 'proposed' = 'user'
+
+  /** 辺の材質を決める。**選択とホバーの両方を見る唯一の場所**(面と同じ規律)。 */
+  function applyEdgeMaterials(): void {
+    const selected = edgeOrigin === 'proposed' ? pickEdgeProposedMaterial : pickEdgeSelectedMaterial
+    const selectedHover =
+      edgeOrigin === 'proposed' ? pickEdgeProposedHoverMaterial : pickEdgeSelectedHoverMaterial
+    highlightColor.edge = selectedEdgeIndices.size === 0 ? null : selected.color.getHex()
+    for (const line of edgeLines) {
+      const edgeIndex = line.userData.edgeIndex as number
+      const isHit = selectedEdgeIndices.has(edgeIndex)
+      const isHovered =
+        hoverEdge !== null &&
+        hoverEdge.bodyId === (line.userData.bodyId as string) &&
+        hoverEdge.edgeIndex === edgeIndex
+      line.material = isHit
+        ? isHovered
+          ? selectedHover
+          : selected
+        : isHovered
+          ? pickEdgeHoverMaterial
+          : pickEdgeMaterial
+    }
+  }
+
   function highlightEdges(refs: EdgeRef[], origin: 'user' | 'proposed'): void {
-    const selected = origin === 'proposed' ? pickEdgeProposedMaterial : pickEdgeSelectedMaterial
-    highlightColor.edge =
-      refs.filter((ref) => ref.bodyId === edgeBodyId).length === 0 ? null : selected.color.getHex()
-    const keys = new Set(
+    edgeOrigin = origin
+    selectedEdgeIndices = new Set(
       refs.filter((ref) => ref.bodyId === edgeBodyId).map((ref) => ref.edgeIndex),
     )
-    for (const line of edgeLines) {
-      line.material = keys.has(line.userData.edgeIndex as number) ? selected : pickEdgeMaterial
-    }
+    applyEdgeMaterials()
   }
 
   /** 画面1画素ぶんの世界座標の長さ(当たり判定の太さを画素で決めるため)。 */
@@ -1085,6 +1356,7 @@ export function createViewport(container: HTMLElement): Viewport {
     if (key === vertexKey) return
     clearVertices()
     vertexKey = key
+    pickChanged() // 頂点マーカーは面より先に取られるので、増減で「指せるもの」が変わる
     const material = origin === 'proposed' ? vertexProposedMaterial : vertexMaterial
     highlightColor.vertex = markers.length === 0 ? null : material.color.getHex()
     if (markers.length === 0) return
@@ -1168,6 +1440,22 @@ export function createViewport(container: HTMLElement): Viewport {
     opacity: 0.55,
     depthWrite: false,
   })
+  // ホバー中の領域。**3Dに領域の色を新しく作らない**(2026-08-27本人決定) ——
+  // 面・辺と同じで、既にここにある色に明度を足すだけ。
+  const regionHoverMaterial = new THREE.MeshBasicMaterial({
+    color: lighten(REGION_COLOR, HOVER_LIGHTEN),
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.35,
+    depthWrite: false,
+  })
+  const regionSelectedHoverMaterial = new THREE.MeshBasicMaterial({
+    color: lighten(REGION_SELECTED_COLOR, HOVER_LIGHTEN),
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+  })
 
   interface SketchScene {
     frame: SketchDraw['frame']
@@ -1244,6 +1532,9 @@ export function createViewport(container: HTMLElement): Viewport {
         )
         mesh.userData.sketchId = entry.sketchId
         mesh.userData.regionIndex = region.index
+        // ホバーとの組み合わせを後から決められるように、選択かどうかを印として残す
+        // (材質から読み戻すと、ホバー色が付いた瞬間に選択が分からなくなる)。
+        mesh.userData.selected = selected.has(region.index)
         sketchRoot.add(mesh)
         objects.push(mesh)
         regionMeshes.push(mesh)
@@ -1265,6 +1556,28 @@ export function createViewport(container: HTMLElement): Viewport {
         regionMeshes,
         points,
       })
+    }
+    invalidateHover() // 領域のメッシュを作り直したので印を捨てる
+  }
+
+  /** 領域の材質を決める。**選択とホバーの両方を見る唯一の場所**(面・辺と同じ規律)。 */
+  function applyRegionMaterials(): void {
+    for (const [sketchId, entry] of sketches) {
+      for (const mesh of entry.regionMeshes) {
+        const regionIndex = mesh.userData.regionIndex as number
+        const isHit = mesh.userData.selected === true
+        const isHovered =
+          hoverRegion !== null &&
+          hoverRegion.sketchId === sketchId &&
+          hoverRegion.index === regionIndex
+        mesh.material = isHit
+          ? isHovered
+            ? regionSelectedHoverMaterial
+            : regionSelectedMaterial
+          : isHovered
+            ? regionHoverMaterial
+            : regionMaterial
+      }
     }
   }
 
@@ -1312,6 +1625,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
   function setActiveSketch(sketchId: string | null): void {
     const wasActive = activeSketchId !== null
+    if (activeSketchId !== sketchId) pickChanged() // モードの出入りで優先順位ごと変わる
     activeSketchId = sketchId
     if (sketchId !== null) {
       // **入る「とき」だけ控える**。`lookAtSketch` の側で控えないのは、あれが
@@ -1364,7 +1678,9 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function pickRegions(on: boolean): void {
+    if (regionPickWanted === on) return
     regionPickWanted = on
+    pickChanged() // ゲートの開閉で「指せるもの」が変わる(止まったままでも解決し直す)
   }
 
   /**
@@ -1503,6 +1819,9 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function onPointerUp(event: PointerEvent): void {
+    // **ボタンの種類より先に解除する**。右/中ボタンで視点を回して離した場合、ここで
+    // 解除しないと次の `pointermove` が来るまでホバーが止まったままになる。
+    orbiting = false
     if (event.button !== 0 || !downValid) return
     downValid = false
     const moved = Math.hypot(event.offsetX - downX, event.offsetY - downY)
@@ -1513,92 +1832,149 @@ export function createViewport(container: HTMLElement): Viewport {
       : event.ctrlKey || event.metaKey
         ? 'remove'
         : 'replace'
+    pickListener?.({ ...resolveHit(event.offsetX, event.offsetY), mode })
+  }
+
+  /**
+   * その画素をクリックしたら**何が取れるか**(修飾キー以外の `PickEvent` そのもの)。
+   *
+   * **クリックとホバー強調はこの1つの関数だけを見る**。優先順位をクリック側と
+   * ホバー側の2箇所に書くと、片方だけ直したときにプレビューが黙って嘘をつく ——
+   * それはこの機能の存在意義そのものを消す。**副作用はここに置かない**
+   * (`pickListener` を呼ぶのは `onPointerUp` だけ)。
+   */
+  function resolveHit(offsetX: number, offsetY: number): Omit<PickEvent, 'mode'> {
+    const nothing: Omit<PickEvent, 'mode'> = {
+      hit: null,
+      edge: null,
+      vertex: null,
+      point: null,
+      region: null,
+      plane: null,
+    }
     // **スケッチモード中は面を拾わない**。描いている最中に奥のソリッドの面を掴むと、
     // 線を引くつもりのクリックが選択の置き換えになる。領域が手前・平面の点がその次。
     if (activeSketchId !== null) {
-      const region = regionAt(event.offsetX, event.offsetY)
-      const plane = planePointAt(event.offsetX, event.offsetY)
-      pickListener?.({
-        hit: null,
-        edge: null,
-        vertex: null,
-        mode,
+      const region = regionAt(offsetX, offsetY)
+      const plane = planePointAt(offsetX, offsetY)
+      return {
+        ...nothing,
         region,
-        plane: null,
         point: plane === null ? null : { sketchId: activeSketchId, ...plane },
-      })
-      return
+      }
     }
     // **辺を出しているときは辺が先**。辺は面の上に重なっているので、面より後に見ると
     // 必ず面が勝つ。出していないときは `edgeAt` が即 null を返すので、面のピックは
     // そのまま動く。**この順序は変えない**(基準平面を足しても辺→面の優先順位は同じ)。
-    const edge = edgeAt(event.offsetX, event.offsetY)
-    if (edge !== null) {
-      pickListener?.({ hit: null, edge, vertex: null, mode, point: null, region: null, plane: null })
-      return
-    }
+    const edge = edgeAt(offsetX, offsetY)
+    if (edge !== null) return { ...nothing, edge }
     // **領域を要求しているときは領域が先**(辺と同じ「要求中のものが勝つ」)。領域は
     // スケッチ平面の上に浮いており、押し出した板の底面と重なるので、面より後に見ると
     // 視点によって面が勝ってしまう。`pickRegions(false)` の間は `regionAt` が即 null を
     // 返すので、面のピックはそのまま動く。
-    const region = regionAt(event.offsetX, event.offsetY)
-    if (region !== null) {
-      pickListener?.({ hit: null, edge: null, vertex: null, mode, point: null, region, plane: null })
-      return
-    }
+    const region = regionAt(offsetX, offsetY)
+    if (region !== null) return { ...nothing, region }
     // **頂点マーカーは面より先**(最小の的なので、当たったならそれが狙いである)。
     // 辺・領域より後なのは、頂点が必ず辺の端点に乗っているから —— 先に見ると
     // フィレットを起動している間に辺の端が掴めなくなる。出していない間は
     // `vertexAt` が即 null を返すので、面のピックはそのまま動く。
-    const vertex = vertexAt(event.offsetX, event.offsetY)
-    if (vertex !== null) {
-      pickListener?.({ hit: null, edge: null, vertex, mode, point: null, region: null, plane: null })
-      return
-    }
+    const vertex = vertexAt(offsetX, offsetY)
+    if (vertex !== null) return { ...nothing, vertex }
     // **面と基準平面は、レイ距離が近い方**(通常のオクルージョン。辺のような優先順位は
     // 付けない —— 平面は部品と同じ空間に居るので、手前に見えているものが取れるのが自然)。
     // 基準平面は `showBasePlanes(true)` の間しか当たらない。
-    const face = faceHitAt(event.offsetX, event.offsetY)
-    const basePlane = basePlaneAt(event.offsetX, event.offsetY)
+    const face = faceHitAt(offsetX, offsetY)
+    const basePlane = basePlaneAt(offsetX, offsetY)
     if (basePlane !== null && (face === null || basePlane.distance < face.distance)) {
-      pickListener?.({
-        hit: null,
-        edge: null,
-        vertex: null,
-        mode,
-        point: null,
-        region: null,
-        plane: basePlane.name,
-      })
-      return
+      return { ...nothing, plane: basePlane.name }
     }
-    pickListener?.({
-      hit: face?.ref ?? null,
-      edge: null,
-      vertex: null,
-      mode,
-      point: null,
-      region: null,
-      plane: null,
-    })
+    return { ...nothing, hit: face?.ref ?? null }
   }
 
   function onPointerMove(event: PointerEvent): void {
+    // **座標を控えるだけ**。当たり判定は `tick` が1フレームに1回だけ回す
+    // (pointermove は1フレームに何度も飛ぶので、ここで解決すると同じ絵のために
+    // 何度もレイキャストすることになる)。
+    hoverAt = { x: event.offsetX, y: event.offsetY }
+    // 視点回転中は取れるものの予告を出さない(**これはクリックにならない**)。境目は
+    // `onPointerUp` の moved 判定と揃える。**`downValid` ではなく `buttons` で見る** ——
+    // canvasの外でボタンを離されると `pointerup` が来ず、`downValid` は立ったままになる。
+    orbiting =
+      event.buttons !== 0 &&
+      Math.hypot(event.offsetX - downX, event.offsetY - downY) > CLICK_MOVE_LIMIT_PX
     if (planeMoveListener === null) return
     planeMoveListener(activeSketchId === null ? null : planePointAt(event.offsetX, event.offsetY))
+  }
+
+  /** ポインタがcanvasから出た。**強調を残さない**(戻ってくるまで指せるものは無い)。 */
+  function onPointerLeave(): void {
+    hoverAt = null
+    orbiting = false
   }
 
   renderer.domElement.addEventListener('pointerdown', onPointerDown)
   renderer.domElement.addEventListener('pointerup', onPointerUp)
   renderer.domElement.addEventListener('pointermove', onPointerMove)
+  renderer.domElement.addEventListener('pointerleave', onPointerLeave)
+  // ドラッグがOSに横取りされた場合(`pointerup` が来ない)。`pointerleave` と同じ後始末でよい。
+  renderer.domElement.addEventListener('pointercancel', onPointerLeave)
 
   const observer = new ResizeObserver(() => applySize())
   observer.observe(container)
   applySize()
 
+  /**
+   * ホバー強調を1フレームぶん更新する。
+   *
+   * **毎フレーム解決し直す** —— 視点を回すとポインタが動かなくても当たるものが変わるので、
+   * 「動いたときだけ」では足りない。材質の書き換えは**変わったときだけ**行う
+   * (全メッシュ走査を毎フレームやらない)。
+   */
+  function updateHover(): void {
+    const point = orbiting ? null : hoverAt
+    const probe =
+      point === null
+        ? ''
+        : `${pickGeneration},${point.x},${point.y},` +
+          `${camera.position.toArray().join(',')},${camera.quaternion.toArray().join(',')}`
+    if (probe === hoverProbe) return
+    hoverProbe = probe
+    const next = point === null ? null : resolveHit(point.x, point.y)
+    // **頂点は出さない**(2026-08-27本人決定)。頂点が取れる画素では面も辺も光らない ——
+    // そこをクリックしても面は選ばれないのだから、光らせないほうが正しい。
+    const face = next?.hit ?? null
+    const edge = next?.edge ?? null
+    const region = next?.region ?? null
+    const plane = next?.plane ?? null
+
+    const nextFaceKey = face === null ? '' : refKey(face.bodyId, face.faceIndex)
+    if (nextFaceKey !== hoverFaceKey) {
+      hoverFaceKey = nextFaceKey
+      hoverFace = face
+      applyFaceMaterials()
+    }
+    const nextEdgeKey = edge === null ? '' : refKey(edge.bodyId, edge.edgeIndex)
+    if (nextEdgeKey !== hoverEdgeKey) {
+      hoverEdgeKey = nextEdgeKey
+      hoverEdge = edge
+      applyEdgeMaterials()
+    }
+    const nextRegionKey = region === null ? '' : refKey(region.sketchId, region.index)
+    if (nextRegionKey !== hoverRegionKey) {
+      hoverRegionKey = nextRegionKey
+      hoverRegion = region
+      applyRegionMaterials()
+    }
+    if (plane !== hoverPlane) {
+      hoverPlane = plane
+      applyBasePlaneHover()
+    }
+  }
+
   function tick(): void {
     if (!alive) return
     controls.update()
+    updateHover()
     renderer.render(scene, camera)
     frameHandle = requestAnimationFrame(tick)
   }
@@ -1626,6 +2002,15 @@ export function createViewport(container: HTMLElement): Viewport {
     highlightColors() {
       return { ...highlightColor }
     },
+    hoveredRef() {
+      return {
+        face: hoverFace,
+        edge: hoverEdge,
+        region: hoverRegion,
+        plane: hoverPlane,
+        color: hoverColorNow(),
+      }
+    },
     projectVertex,
     showPreview,
     clearPreview,
@@ -1648,6 +2033,8 @@ export function createViewport(container: HTMLElement): Viewport {
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('pointerup', onPointerUp)
       renderer.domElement.removeEventListener('pointermove', onPointerMove)
+      renderer.domElement.removeEventListener('pointerleave', onPointerLeave)
+      renderer.domElement.removeEventListener('pointercancel', onPointerLeave)
       clearPreview()
       clearGhost()
       clearEdges()
@@ -1657,11 +2044,16 @@ export function createViewport(container: HTMLElement): Viewport {
       pickEdgeMaterial.dispose()
       pickEdgeSelectedMaterial.dispose()
       pickEdgeProposedMaterial.dispose()
+      pickEdgeHoverMaterial.dispose()
+      pickEdgeSelectedHoverMaterial.dispose()
+      pickEdgeProposedHoverMaterial.dispose()
       for (const sketchId of [...sketches.keys()]) clearSketch(sketchId)
       sketchMaterial.dispose()
       sketchGhostMaterial.dispose()
       regionMaterial.dispose()
       regionSelectedMaterial.dispose()
+      regionHoverMaterial.dispose()
+      regionSelectedHoverMaterial.dispose()
       for (const bodyId of [...bodies.keys()]) clearBody(bodyId)
       for (const item of gridDisposables) item.dispose()
       gridRoot.clear()
@@ -1669,6 +2061,9 @@ export function createViewport(container: HTMLElement): Viewport {
       baseMaterial.dispose()
       highlightMaterial.dispose()
       proposedMaterial.dispose()
+      baseHoverMaterial.dispose()
+      highlightHoverMaterial.dispose()
+      proposedHoverMaterial.dispose()
       previewMaterial.dispose()
       edgeMaterial.dispose()
       renderer.dispose()

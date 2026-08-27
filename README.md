@@ -426,6 +426,7 @@ AIに「読み直してフィレット」と頼む → 形が変わる。
 | **AIの提案のままでも人がコマンドを実行すれば通る**（承認ボタンの代替）／可視性・問い合わせでは確定しない／宣言と実体の一致 | `tests/test_vertex_pick.py` の3節（`_commit_before_verb`。構文木で `require_confirmed` / `require_edges` を照合） |
 | **提案と確定が3Dの色で区別される**（水色 / 橙）・**Ctrl+クリックで1本外せる** | `smoke-mcp.mjs`（`viewport.highlightColors()` の値で検査） |
 | **選択パネルを消した後の代替が実機で機能する**（頂点マーカーが出る・Ctrl+クリックで外せる・**提案のまま人がツールバーで押し出せる**） | `smoke-vertex.mjs`（本物のMCP＋本物のブラウザ） |
+| **ホバーの予告と、クリックの結果が一致する**（面／ビューポートを出たら消える／選択済みにも明度が乗る／辺が面より先という優先順位も共有） | `smoke-hover.mjs`（`viewport.hoveredRef()` の参照と色で検査） |
 | **何も無い所のクリックで全解除できる**（旧「全解除」ボタンの代替） | `smoke.mjs` / `smoke-files.mjs` |
 
 **逆に、機械が見ていないと明記されているもの**: `add_line` の**ゴムひも描画**（確定前に追従する線）。
@@ -479,6 +480,9 @@ node scripts/smoke-vertex.mjs
 
 # ⑧ SVG読み込み(貼る先→パス→Enter・そのまま押し出せる・曲線の側面が割れない・Ctrl+Z 1回)
 node scripts/smoke-svg.mjs
+
+# ⑨ ホバーの予告とクリックの結果が一致する(面・外へ出たら消える・選択済みにも明度・辺が先)
+node scripts/smoke-hover.mjs
 ```
 
 既に立てているサーバへ繋ぎたいときだけ `--url http://127.0.0.1:8766/` を渡す

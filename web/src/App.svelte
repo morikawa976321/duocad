@@ -1062,6 +1062,10 @@
       vertexMarkers,
       // **提案(水色)と確定(橙)の区別は3Dの色だけ**になったので、色そのものを読める穴を出す。
       highlightColors: () => viewport?.highlightColors() ?? null,
+      // ホバー強調で今明るくしているもの。**「クリックすれば取れるもの」と実際に
+      // クリックした結果が一致していること**を実機検査が確かめるための穴
+      // (明度しか変えないので highlightColors では読めない)。
+      hoveredRef: () => viewport?.hoveredRef() ?? null,
       projectVertex: (bodyId: string, vertexIndex: number) =>
         viewport?.projectVertex(bodyId, vertexIndex) ?? null,
       // E: パラメータ・履歴・ファイル。実機検査が「打ち直したら形が追随する」を見る穴
