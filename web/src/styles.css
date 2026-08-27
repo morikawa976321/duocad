@@ -10,6 +10,10 @@
  * スクロールし、各パネルは flex: 0 0 auto で自分の高さを固定する。ビューポートに
  * 浮かせるもの(ブラウザ・トースト)は position:absolute でフローの外に出す。
  *
+ * 設定ダイアログ(SettingsDialog.svelte)はこの不変条件の例外ではなく、
+ * **そもそも大きさを持たない側**である — native <dialog> の showModal() で
+ * top-layer に出るのでフローの外にいる(ビューポートを覆わず、::backdrop も透明)。
+ *
  * 例外は左サイドバーの開閉だけで、これは意図してビューポートを広げる操作である
  * (flex の配分が変わるだけで .viewport 自身のサイズ指定は動かない。
  * カメラのアスペクトは viewport.ts の ResizeObserver が追う)。

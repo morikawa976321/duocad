@@ -324,6 +324,17 @@ export interface Viewport {
    * 「今あるもの全体」という別の視点で、実機検査が図形を画面内へ収めるために呼ぶ。
    */
   frameAll(): void
+  /**
+   * カメラの画角[度]を変える(`FOV_MIN`〜`FOV_MAX` に丸める。範囲外・NaNは無視)。
+   *
+   * **画面の設定であって文書の状態ではない。** コアにも操作ログにも行かず、undoの
+   * 対象にもならない。値の持ち主はブラウザ側(`App.svelte` + `viewSettings.ts`)である。
+   *
+   * **距離補正が入る** —— `controls.target` からの距離を `tan(fov/2)` の比で押し引きし、
+   * 注視点付近にあるものの**画面上の大きさを保つ**。変わるのはパースの強さだけで、
+   * これをしないと画角の変更がただの「ズーム」になり、比べたいものが比べられない。
+   */
+  setFov(deg: number): void
   /** スケッチ平面上の (u,v) の画面座標。実機検査が**本物のクリックで描く**ために要る。 */
   projectSketchPoint(sketchId: string, u: number, v: number): { x: number; y: number } | null
   /**
@@ -417,6 +428,23 @@ const BASE_PLANE_PROBES: ReadonlyArray<readonly [number, number]> = [
 const AXIS_X_COLOR = 0xc45c5c
 const AXIS_Y_COLOR = 0x5cad6e
 const AXIS_Z_COLOR = 0x5a8ec4
+
+/**
+ * カメラの画角[度]の下限・上限・既定。**UIとlocalStorage(`viewSettings.ts`)も
+ * ここを import する** —— 範囲の正を2か所に書かない。
+ *
+ * 30まで絞れば体感は十分に正投影へ近いので `OrthographicCamera` は持たない。
+ * 90を超えると端の歪みが強すぎて形の判断に使えない。
+ */
+export const FOV_MIN = 30
+export const FOV_MAX = 90
+export const FOV_DEFAULT = 45
+
+/**
+ * `lookAtSketch` が図形の外接半径に掛ける余白。
+ * **45度で従来の `radius * 3` と一致させるための余白**(`1.243/tan(22.5°) ≈ 3.00`)。
+ */
+const SKETCH_FIT_MARGIN = 1.243
 
 /** クリックとドラッグ(視点回転)の境目。これ以上動いたら選択ではなく回転とみなす。 */
 const CLICK_MOVE_LIMIT_PX = 6
@@ -515,7 +543,7 @@ export function createViewport(container: HTMLElement): Viewport {
   const scene = new THREE.Scene()
   scene.background = new THREE.Color(BACKGROUND_COLOR)
 
-  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000)
+  const camera = new THREE.PerspectiveCamera(FOV_DEFAULT, 1, 0.1, 10000)
   // 空の文書でもグリッド全体が見える位置。部品が届いたら `frameToContent` が上書きする。
   {
     const diagonal = Math.hypot(GRID_EXTENT * 2, GRID_EXTENT * 2, GRID_EXTENT * 2)
@@ -926,6 +954,23 @@ export function createViewport(container: HTMLElement): Viewport {
     rebuildPickIndex()
   }
 
+  /**
+   * 半径 `radius` の球が画面に収まる、注視点からの距離。FOVとアスペクトの狭い方で決まる。
+   *
+   * **FOVを可変にした以上、収まる距離を定数で決め打ちできない**(2026-08-28)。
+   * 45度・アスペクト1以上では `radius / tan(22.5°) = radius * 2.4142` になる。
+   * `frameToContent` はこれを `radius = diagonal / 2` で呼ぶので `diagonal * 1.2071` となり、
+   * **以前の決め打ち定数 `diagonal * 1.2` はこの式を45度で評価して丸めた値そのもの**である
+   * (差は0.6%)。**したがって既定のFOVでの見え方は実質変わらない。**
+   * 縦長のビューポート(aspect<1)では距離が伸びるが、これは以前が横方向を見ていなかった
+   * 取りこぼしの修正にあたる(狭い方に合わせないと横がはみ出す)。
+   */
+  function fitDistance(radius: number): number {
+    const vHalf = THREE.MathUtils.degToRad(camera.fov) / 2
+    const hHalf = Math.atan(Math.tan(vHalf) * camera.aspect)
+    return radius / Math.tan(Math.min(vHalf, hHalf))
+  }
+
   /** シーンに今ある全メッシュの外接直方体にカメラを合わせる(初回だけ)。
    *
    * 複数Bodyでは初回に届く順序や本数が変わりうるので、**実際に置いたメッシュから計算する**方が
@@ -937,12 +982,31 @@ export function createViewport(container: HTMLElement): Viewport {
     const center = new THREE.Vector3()
     box.getCenter(center)
     const diagonal = Math.max(box.getSize(new THREE.Vector3()).length(), 1e-6)
-    const distance = diagonal * 1.2
+    const distance = fitDistance(diagonal / 2)
     camera.near = Math.max(diagonal / 1000, 0.01)
-    camera.far = diagonal * 20
+    // **距離側からも導く**。範囲を30〜90に絞った今は `diagonal * 20` が常に勝つので
+    // このガードは発火しないが、将来もし下限を下げたら距離が伸びてfarを追い越し、
+    // シーンが丸ごと消える —— そのときにここで気づけるようにしておく。
+    camera.far = Math.max(diagonal * 20, distance * 4)
     camera.position.copy(center).add(new THREE.Vector3(distance, distance * 0.6, distance))
     camera.updateProjectionMatrix()
     controls.target.copy(center)
+    controls.update()
+  }
+
+  function setFov(deg: number): void {
+    if (!Number.isFinite(deg)) return
+    const next = Math.min(FOV_MAX, Math.max(FOV_MIN, deg))
+    if (Math.abs(next - camera.fov) < 1e-6) return
+    // 注視点での見かけの大きさを保つ(tan(fov/2) × 距離 を一定にする)。
+    // これをしないとパースと一緒に拡大率まで変わり、「ズーム」になってしまう。
+    const before = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)
+    const after = Math.tan(THREE.MathUtils.degToRad(next) / 2)
+    const offset = camera.position.clone().sub(controls.target).multiplyScalar(before / after)
+    camera.position.copy(controls.target).add(offset)
+    camera.fov = next
+    camera.far = Math.max(camera.far, offset.length() * 4)
+    camera.updateProjectionMatrix()
     controls.update()
   }
 
@@ -1731,7 +1795,7 @@ export function createViewport(container: HTMLElement): Viewport {
       radius = Math.max(Math.max(...us) - Math.min(...us), Math.max(...vs) - Math.min(...vs)) / 2
     }
     const previous = camera.position.distanceTo(controls.target)
-    const distance = radius > 0 ? Math.max(radius * 3, 1) : Math.max(previous, 1)
+    const distance = radius > 0 ? Math.max(fitDistance(radius * SKETCH_FIT_MARGIN), 1) : Math.max(previous, 1)
     // 上方向を平面のv軸に合わせる(そうしないと真上から見たときに回転が不定になる)
     camera.up.set(...(frame.v as [number, number, number]))
     camera.position.copy(center).add(normal.multiplyScalar(distance))
@@ -2023,6 +2087,7 @@ export function createViewport(container: HTMLElement): Viewport {
       camera.up.set(0, 1, 0) // スケッチの v 軸へ倒したままだと、戻したのに傾いて見える
       frameToContent()
     },
+    setFov,
     projectSketchPoint,
     projectBasePlane,
     projectRegion,

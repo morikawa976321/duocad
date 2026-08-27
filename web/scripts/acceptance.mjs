@@ -942,6 +942,233 @@ async function main() {
       console.log(`  NG   交互操作: ${results.interleaved.error}`)
     }
 
+    // ================================================================ 設定: 画角(FOV)
+    //
+    // **2026-08-28にFOVをUIから可変にした**ので、受入に数手だけ足す(実機検査のファイルは
+    // 増やさない)。見るのは2点だけ:
+    //
+    //   1. **どの画角でも `frameAll` が図形を画面に収める**(30でも90でもシーンが消えない
+    //      —— near/far のクリップに当たらない)
+    //   2. **画角を変えても注視点付近の見かけの大きさが変わらない**(距離補正)。
+    //      端の点はパース差で動くのが正しい挙動なので、**動かないことを見るのは画面中心に
+    //      近い点**、**動くことを見るのは一番外の点**にする。両方見ないと検出力が無い ——
+    //      `setFov` が丸ごと効いていない実装でも「中心が動かない」だけなら緑になる。
+    //
+    // **ダイアログは各手の前に必ず閉じる。** `showModal()` は背後を inert にするので、
+    // 開いたままだとビューポートのクリックが全部死ぬ。
+    console.log('\n--- 設定: 画角(FOV。距離補正と frameAll) ---')
+
+    /** 設定ダイアログの開閉(DOMに反映されるまで待つ)。 */
+    async function setSettingsOpen(open) {
+      const now = await page.evaluate(() => document.querySelector('#settings-dialog')?.open === true)
+      if (now === open) return
+      await page.click(open ? '#settings-open' : '#settings-close')
+      await page.waitForFunction(
+        (want) => document.querySelector('#settings-dialog')?.open === want,
+        { timeout: 30000, polling: 20 },
+        open,
+      )
+    }
+
+    /**
+     * スライダーを**本物のキー操作で** `target` まで動かす(range の step は 1 なので
+     * 矢印キー1回が1度)。値を直接代入しないのは、`oninput` を経由しない代入では
+     * 「スライダーを動かすとその場で効く」が検証にならないため。
+     */
+    async function dragFovTo(target) {
+      await setSettingsOpen(true)
+      await page.focus('#settings-fov')
+      for (let guard = 0; guard < 100; guard += 1) {
+        const now = await page.$eval('#settings-fov', (element) => Number(element.value))
+        if (now === target) break
+        const step = now < target ? 'ArrowRight' : 'ArrowLeft'
+        for (let i = 0; i < Math.min(Math.abs(target - now), 10); i += 1) {
+          await page.keyboard.press(step)
+        }
+      }
+      await page.waitForFunction(
+        (want) => window.__duocad.fov === want,
+        { timeout: 30000, polling: 20 },
+        target,
+      )
+      const shown = await page.$eval('#settings-fov-value', (element) => element.textContent.trim())
+      await setSettingsOpen(false)
+      return shown
+    }
+
+    /**
+     * 今この瞬間に画面へ射影できる面を全部集める(ビューポート左上を原点とする画素)。
+     * `fromCenter` はビューポート中心からの距離 —— **中心付近か外周かで期待する挙動が
+     * 逆になる**ので、判定はこの値で振り分ける。
+     */
+    async function faceScreenPoints() {
+      return await page.evaluate(() => {
+        const hook = window.__duocad
+        const rect = document.querySelector('.viewport').getBoundingClientRect()
+        const center = { x: rect.width / 2, y: rect.height / 2 }
+        const points = []
+        for (const part of hook.parts) {
+          const geometry = hook.getGeometry(part.body_id)
+          if (geometry === null) continue
+          for (const face of geometry.faces) {
+            const at = hook.projectFace(part.body_id, face.index)
+            if (at === null) continue
+            points.push({
+              key: `${part.body_id}#${face.index}`,
+              x: at.x,
+              y: at.y,
+              fromCenter: Math.hypot(at.x - center.x, at.y - center.y),
+            })
+          }
+        }
+        return { points, width: rect.width, height: rect.height }
+      })
+    }
+
+    try {
+      await setSettingsOpen(false)
+      await dragFovTo(45)
+      await frameAll(page)
+
+      // (1) 30 と 90 のどちらでも、frameAll のあとに図形が画面の中にある(完了条件8・9)。
+      //
+      //     **「1面でも射影できた」では検出力が無い。** `frameToContent` が画角を見ずに
+      //     距離を決めていても、中央付近の面はどのみち画面に残るので緑になってしまう
+      //     (実際に距離式を `diagonal * 1.2` へ戻して確かめた)。そこで**画面に占める
+      //     大きさ**を見る —— `fitDistance` は画角によらず同じ外接球を画面いっぱいに
+      //     収めるので、射影された面の広がりは画角を変えてもほぼ変わらないはずである。
+      //     画角を見ない距離式なら、90度では 3.7 倍ほど小さく写る(=シーンが豆粒になる)。
+      const framed = {}
+      const captured = {}
+      for (const angle of [45, 30, 90]) {
+        const shown = await dragFovTo(angle)
+        await frameAll(page)
+        const { points } = await faceScreenPoints()
+        if (points.length === 0) {
+          throw new Error(`画角${angle}で frameAll しても面が1つも画面の中に無い`)
+        }
+        captured[angle] = new Map(points.map((point) => [point.key, point]))
+        framed[angle] = { shown, faces: points.length }
+      }
+      // **広がりは同じ面の集合で測る。** 射影できる面は画角によって増えたり減ったりするので、
+      // 拾えた面の顔ぶれの違いを広がりの差と取り違えない。
+      const commonKeys = [...captured[45].keys()].filter(
+        (key) => captured[30].has(key) && captured[90].has(key),
+      )
+      if (commonKeys.length < 3) {
+        throw new Error(`30/45/90 のどれでも射影できる面が ${commonKeys.length} 個しか無い(広がりを比べられない)`)
+      }
+      const spreadOf = (angle) => {
+        const xs = commonKeys.map((key) => captured[angle].get(key).x)
+        const ys = commonKeys.map((key) => captured[angle].get(key).y)
+        return Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys))
+      }
+      for (const angle of [45, 30, 90]) framed[angle].spread = Number(spreadOf(angle).toFixed(1))
+      for (const angle of [30, 90]) {
+        const ratio = framed[angle].spread / framed[45].spread
+        framed[angle].ratio = Number(ratio.toFixed(3))
+        if (ratio < 0.6 || ratio > 1.5) {
+          throw new Error(
+            `画角${angle}で frameAll した図形の広がりが45度の ${ratio.toFixed(2)} 倍` +
+              `(${framed[angle].spread} / ${framed[45].spread} 画素。収める距離が画角に追随していない)`,
+          )
+        }
+      }
+
+      // (2) 距離補正。**frameAll を挟まずに**画角だけを 45 → 60 へ変え、同じ面の画面座標を比べる。
+      const backTo45 = await dragFovTo(45)
+      await frameAll(page)
+      const before = await faceScreenPoints()
+      await dragFovTo(60)
+      const after = await faceScreenPoints()
+
+      const afterByKey = new Map(after.points.map((point) => [point.key, point]))
+      const moved = []
+      for (const point of before.points) {
+        const now = afterByKey.get(point.key)
+        // 画角を広げると外周のものは画面から出ていく(正しい挙動)。比べられる面だけ見る。
+        if (now === undefined) continue
+        moved.push({ ...point, shift: Math.hypot(now.x - point.x, now.y - point.y) })
+      }
+      if (moved.length === 0) throw new Error('画角45と60の両方で射影できる面が1つも無い')
+      moved.sort((a, b) => a.fromCenter - b.fromCenter)
+
+      // **中心にごく近い点だけを見ても検出力が足りない** —— 距離補正が丸ごと無い実装は
+      // 中心を不動点にした一様な拡大になるので、中心の点は補正の有無に関わらず動かない。
+      // だから「中心付近は数画素以内」に加えて、**外周寄りの点が拡大率どおりには動いて
+      // いないこと**を見る。45→60の拡大率は tan(30°)/tan(22.5°) ≒ 1.394 なので、
+      // 補正が無ければ中心から r の点は 0.394r 動く。補正があれば奥行き差ぶんのパースだけで、
+      // このシーンの取りうる最大でも 0.15r 程度に収まる。**0.25r を境にすれば両者を分けられる。**
+      const near = moved[0]
+      // 外周寄りの点。画面の端ぎりぎりだと射影が別の三角形へ移りうるので上限を掛ける。
+      const radiusCap = 0.35 * Math.min(before.width, before.height)
+      const outer = moved.filter((point) => point.fromCenter <= radiusCap).pop()
+      if (outer === undefined || outer.fromCenter < 40) {
+        throw new Error('外周寄りの比較点が取れない(中心から40画素以上離れた面が無い)')
+      }
+      const maxShift = Math.max(...moved.map((point) => point.shift))
+
+      if (near.shift > 6) {
+        throw new Error(`画角45→60で中心付近の面が ${near.shift.toFixed(1)} 画素動いた(距離補正が効いていない)`)
+      }
+      const allowed = 0.25 * outer.fromCenter
+      if (outer.shift > allowed) {
+        throw new Error(
+          `画角45→60で中心から ${outer.fromCenter.toFixed(0)} 画素の面が ${outer.shift.toFixed(1)} 画素動いた` +
+            `(距離補正が無いときの目安 ${(0.394 * outer.fromCenter).toFixed(1)} 画素に近い。許容 ${allowed.toFixed(1)})`,
+        )
+      }
+      // (3) 画角そのものが本当に変わっていること(`setFov` が丸ごと効いていない実装を落とす)。
+      //     **45→90で見る** —— 45→60のパース差はこのシーンの薄さでは10画素に届かず、
+      //     境目を引ける幅が無い。45→90なら拡大率が 2.414 倍になり、注視点から奥行きの
+      //     ずれた面は数十画素動く。
+      await dragFovTo(45)
+      await frameAll(page)
+      const wideBefore = await faceScreenPoints()
+      await dragFovTo(90)
+      const wideAfter = await faceScreenPoints()
+      const wideByKey = new Map(wideAfter.points.map((point) => [point.key, point]))
+      const wideShifts = wideBefore.points
+        .filter((point) => wideByKey.has(point.key))
+        .map((point) => {
+          const now = wideByKey.get(point.key)
+          return Math.hypot(now.x - point.x, now.y - point.y)
+        })
+      if (wideShifts.length === 0) throw new Error('画角45と90の両方で射影できる面が1つも無い')
+      const wideMaxShift = Math.max(...wideShifts)
+      if (wideMaxShift < 20) {
+        throw new Error(`画角45→90でどの面も ${wideMaxShift.toFixed(1)} 画素しか動かない(画角が実際には変わっていない)`)
+      }
+
+      await dragFovTo(45)
+      await frameAll(page)
+
+      results.fov = {
+        ok: true,
+        framed,
+        backTo45,
+        compared: moved.length,
+        nearShift: Number(near.shift.toFixed(2)),
+        nearFromCenter: Number(near.fromCenter.toFixed(1)),
+        outerShift: Number(outer.shift.toFixed(2)),
+        outerFromCenter: Number(outer.fromCenter.toFixed(1)),
+        outerAllowed: Number(allowed.toFixed(2)),
+        maxShift: Number(maxShift.toFixed(2)),
+        wideMaxShift: Number(wideMaxShift.toFixed(2)),
+      }
+      console.log(
+        `  OK   画角: frameAll の広がり(共通の${commonKeys.length}面) 45度=${framed[45].spread}px / 30度=${framed[30].spread}px(${framed[30].ratio}倍)` +
+          ` / 90度=${framed[90].spread}px(${framed[90].ratio}倍)。` +
+          ` 45→60: 中心付近(r=${near.fromCenter.toFixed(0)})は ${near.shift.toFixed(1)}px /` +
+          ` 外周(r=${outer.fromCenter.toFixed(0)})は ${outer.shift.toFixed(1)}px(補正無しなら ${(0.394 * outer.fromCenter).toFixed(0)}px) /` +
+          ` 最大 ${maxShift.toFixed(1)}px。45→90では最大 ${wideMaxShift.toFixed(1)}px 動く`,
+      )
+    } catch (error) {
+      results.fov = { ok: false, error: String(error.message ?? error) }
+      console.log(`  NG   画角: ${results.fov.error}`)
+      await setSettingsOpen(false).catch(() => {})
+    }
+
     // ================================================================ 副次: 実物相当
     //
     // **別プロセス(空の文書)で作る**。`join` の押し出しは「対象が無ければ新しいソリッドを

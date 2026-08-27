@@ -62,6 +62,8 @@
     type VerticesPayload,
   } from './session'
   import AiPanel from './AiPanel.svelte'
+  import SettingsDialog from './SettingsDialog.svelte'
+  import { loadFov, saveFov } from './viewSettings'
   import {
     createViewport,
     type PickEvent,
@@ -216,6 +218,24 @@
    * 開閉を挟んだら取り直すこと。
    */
   let dataPanelOpen = $state(true)
+  /**
+   * 設定ダイアログ(`SettingsDialog.svelte`)を出しているか。**既定は閉じている。**
+   * 見た目だけの状態で、コアにも操作ログにも行かない。
+   */
+  let settingsOpen = $state(false)
+  /**
+   * カメラの画角[度]。**画面の設定であって文書の状態ではない** ——
+   * コアに送らず(`session.*` を通らない)、操作ログにも残らず、undoの対象にもならない。
+   * 永続化はブラウザのlocalStorageだけ(`viewSettings.ts`)。
+   */
+  let fov = $state(loadFov())
+
+  /** スライダーからの変更。**その場で効かせて、そのまま覚える**(「適用」を挟まない)。 */
+  function applyFov(deg: number): void {
+    if (!Number.isFinite(deg)) return
+    fov = deg
+    saveFov(deg)
+  }
   /**
    * この画面が出した `client_op` の控え。
    *
@@ -1021,6 +1041,11 @@
 
   onMount(() => {
     viewport = createViewport(container)
+    // **ここで1回明示的に呼ぶ**。`viewport` は `$state` ではないただの `let` なので、
+    // 下の `$effect(() => viewport?.setFov(fov))` は**この代入では再走しない** ——
+    // 初回のエフェクトは `viewport === null` のまま走り終わっており、保存されたFOVが
+    // 画面に出ないままになる(Svelte 5 runesの罠)。
+    viewport.setFov(fov)
     viewport.onPick(onPick)
     viewport.onPlaneMove((point) => {
       hoverPoint = point === null ? null : [point.u, point.v]
@@ -1040,6 +1065,12 @@
     // **スケッチはここで描き直さない**。選択もスケッチも `handleState` 経由でしか変わらず、
     // そこで既に描き直している。ここにも置くと、1回の状態受信で全スケッチのジオメトリを
     // 2回作り直すことになる(面のハイライトと違って作り直しが重い)。
+  })
+
+  // 画角が変わったらビューポートへ流す。**初回の反映はここではなく `onMount` が行う**
+  // (`viewport` は `$state` ではないので、代入ではこのエフェクトが再走しない)。
+  $effect(() => {
+    viewport?.setFov(fov)
   })
 
   /** 選択の先頭の面。**テスト用フックの `selected` だけが使う**(互換のための穴)。 */
@@ -1071,6 +1102,11 @@
       // 視点をシーン全体へ戻す。**2026-08-23に画面のボタンを削除**した後も、実機検査が
       // 図形を画面内へ収めるために呼ぶ手だけはここに残す。
       frameAll: () => viewport?.frameAll(),
+      // 画角。**実機検査が「FOVを変えてから frameAll して収まるか」を見るための穴**
+      // (スライダーを本物で動かすのとは別に、値を直接置ける口が要る)。
+      // 文書の状態ではないので、ここを叩いてもコアへは何も飛ばない。
+      fov,
+      setFov: (deg: number) => applyFov(deg),
       // C: スケッチ。**実機検査が本物のクリックで描く**ための穴
       sketches,
       activeSketch: sketchId,
@@ -1162,6 +1198,14 @@
          - **プレビュー中の印** → **印が要らない見え方を目指す**方針(本人)。幽霊が
            出ていることは幽霊自身が示すべきで、札で補うのは見え方が弱い証拠になる。
            状態(`previewing`)は実機検査が見るので残してある。 -->
+    <!-- 設定ダイアログを開く口(2026-08-28)。**一度決めたらほとんど変更しない設定**は
+         常設パネルに置かずここへまとめる(本人決定。線引きは「作業中に切り替えるものは
+         その場のパネル、一度決めたら触らないものは設定モーダル」)。
+         **閉じるのはダイアログの中の `#settings-close`** —— `showModal()` は背後を
+         inert にするので、開いている間はこのボタンを押せない。 -->
+    <button id="settings-open" class="tag" onclick={() => (settingsOpen = true)} title="設定を開く">
+      設定
+    </button>
   </header>
 
   <!-- コマンドのツールバー。モードが変わったらコマンド層を作り直す(集めかけの引数を持ち越さない)。
@@ -1251,4 +1295,13 @@
          ビューポートの寸法＝カメラのアスペクトには触らない。出す側は `fail()` の1本だけ。 -->
     <Toast />
   </div>
+
+  <!-- 設定ダイアログ。**top-layer(`showModal()`)にいるのでレイアウトの大きさを持たない** ——
+       どこに書いても `.viewport` の寸法＝カメラのアスペクトには触らない。 -->
+  <SettingsDialog
+    open={settingsOpen}
+    {fov}
+    onFov={applyFov}
+    onClose={() => (settingsOpen = false)}
+  />
 </div>
