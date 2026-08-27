@@ -814,6 +814,30 @@ async function main() {
     )
     ok(`押し出しのundo後、選択がリセットされていたので面 ${target.index} を選び直した`)
 
+    // -------------------------------------------------------------- A1: SketchPanelはスケッチモード中だけ出る
+    // **2026-08-28、`App.svelte` が `{#if sketchId !== null}` でSketchPanelをDOMごと
+    // 出し分けるようにした回帰検査**(`20260827-2320-duocad-right-sidebar-panels` QA差し戻し1)。
+    // 通常モード → 入る → 抜ける、の往復で「消えている・出る・また消える」の3点を通しで見る。
+    // ここまでの検証区画は押し出し・undo・面の選び直しだけで、まだ一度もスケッチモードに
+    // 入っていない(=通常モード)ので、最初の非存在チェックの場所として素直。
+    // **`.sketch-panel`も入れる**(完了条件A1が明示する4個のidに加えて、コンポーネントの
+    // 外枠そのもの)。`SketchPanel.svelte`は`active`がnullでも外側の`<section class="sketch-panel">`
+    // 自体は空のまま描いてしまう作りなので、4個のidだけを見ていると`App.svelte`側の
+    // `{#if sketchId !== null}`を外す退行を拾えない(id群は内側の`{#if active}`にも守られて
+    // 二重に隠れるため、外側のゲートだけを外しても赤くならない。実測で確認済み)。
+    const sketchPanelIds = ['.sketch-panel', '#sketch-mode', '#sketch-exit', '#sketch-look', '#sketch-entities']
+    const sketchPanelPresence = async () =>
+      Object.fromEntries(
+        await Promise.all(
+          sketchPanelIds.map(async (id) => [id, (await page.$(id)) !== null]),
+        ),
+      )
+    const presentBefore = await sketchPanelPresence()
+    if (Object.values(presentBefore).some(Boolean)) {
+      fail(`通常モードなのにSketchPanelの要素がDOMに残っている: ${JSON.stringify(presentBefore)}`)
+    }
+    ok('通常モード: SketchPanelの要素(.sketch-panel本体含む)がDOMに無い')
+
     // **面に貼るのも同じ2手**(「スケッチ」を起動 → 面をクリック)。基準平面のグリッドと
     // 面はどちらも1クリックで指せる同じ「貼る先」で、ボタンでの指し方は無くなった
     // (2026-08-22。engine `duocad-sketch-start-is-two-steps-by-pointing`)。
@@ -825,8 +849,25 @@ async function main() {
     const onFace = await sketchState()
     if (onFace.plane?.kind !== 'face') fail(`面に貼ったスケッチになっていない: ${JSON.stringify(onFace.plane)}`)
     ok('既存ソリッドの面にスケッチを作れた(スケッチモードに入り、平面は face 参照)')
+
+    // 入った直後: SketchPanelの要素が全部出ていること(A1の往復・出現側)。
+    const presentInSketch = await sketchPanelPresence()
+    if (Object.values(presentInSketch).some((shown) => !shown)) {
+      fail(`スケッチモード中なのにSketchPanelの要素が欠けている: ${JSON.stringify(presentInSketch)}`)
+    }
+    ok('スケッチモード中: SketchPanelの要素が全部DOMに出た')
+
     await page.click('#sketch-exit')
     await page.waitForFunction(() => window.__duocad.activeSketch === null, { timeout, polling: 50 })
+
+    // 抜けた直後: また消えていること(A1の往復・消滅側)。
+    // **`{#if sketchId !== null}` を外して常時表示に戻すと、この検査だけが赤くなる**
+    // (2026-08-28実測。QA差し戻しで足した検査なので、一度わざと壊して赤を確認済み)。
+    const presentAfterExit = await sketchPanelPresence()
+    if (Object.values(presentAfterExit).some(Boolean)) {
+      fail(`「抜ける」を押した後もSketchPanelの要素がDOMに残っている: ${JSON.stringify(presentAfterExit)}`)
+    }
+    ok('通常モードへ戻った: SketchPanelの要素がまたDOMから消えた(A1の往復を固定)')
 
     // -------------------------------------------------------------- 平面でない面は「札」で断られる
     //

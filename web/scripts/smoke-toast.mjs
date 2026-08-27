@@ -124,12 +124,44 @@ async function main() {
     // うちAIだけが畳めなかったのを、BrowserPanel.svelteと同じ形のカレットで揃えた。
     // トーストの検査とは無関係だが、アプリを起動している実機検査1本で足りる要件なので
     // ここに同居させる。
+    //
+    // **2026-08-28 QA差し戻し2で範囲を広げた**: 当初は`#ai-transcript`と`aria-expanded`
+    // しか見ておらず、transcriptだけ消えて`.ai-input`/`.ai-settings`/`.hint`が残るような
+    // 部分的な壊れ方(B2)や、220px固定が解除されない壊れ方(B3)を検出できなかった。
+    // **`.hint`は`.ai-panel`の中に絞る**(実測で踏んだ穴): `SettingsDialog.svelte`の
+    // `<p class="hint dim">`が同名クラスを持ち、native `<dialog>`は非表示でも要素自体は
+    // DOMに残るため、絞らずに`page.$('.hint')`だけで見ると常にこちらへ先に当たって
+    // AIパネル側の状態を一度も見ないまま緑になっていた。`.ai-input`/`.ai-settings`も
+    // 念のため同じ流儀で絞る(今は他所に同名クラスは無いが、増えたときの事故を先回りする)。
+    const aiVisible = async () => ({
+      transcript: (await page.$('#ai-transcript')) !== null,
+      input: (await page.$('.ai-panel .ai-input')) !== null,
+      settings: (await page.$('.ai-panel .ai-settings')) !== null,
+      hint: (await page.$('.ai-panel .hint')) !== null,
+    })
+    const aiPanelHeight = async () =>
+      page.$eval('.ai-panel', (node) => node.getBoundingClientRect().height)
+
     if ((await page.$('#ai-collapse')) === null) fail('#ai-collapse が無い(AIパネルが畳めない)')
     const aiExpandedAtStart = await page.$eval('#ai-collapse', (node) => node.getAttribute('aria-expanded'))
     if (aiExpandedAtStart !== 'true') {
       fail(`AIパネルの既定は開いているはず: aria-expanded=${aiExpandedAtStart}`)
     }
-    if ((await page.$('#ai-transcript')) === null) fail('既定で開いているはずの#ai-transcriptが無い')
+    const shownAtStart = await aiVisible()
+    // **`.ai-settings`だけは既定で閉じている**(`settingsOpen`の既定はfalse)ので、
+    // ここでは対象にしない —— 開いていることを先に作ってから畳む検査は下で別途行う。
+    if (!shownAtStart.transcript || !shownAtStart.input || !shownAtStart.hint) {
+      fail(`既定で開いているはずのAI本体の要素が欠けている: ${JSON.stringify(shownAtStart)}`)
+    }
+    // **設定フォームも開いた状態を作ってから畳む** —— `.ai-settings`の非存在(B2)を
+    // 実際に踏むには、畳む前に一度出しておく必要がある。
+    await page.click('#ai-settings-toggle')
+    await page.waitForFunction(() => document.querySelector('.ai-settings') !== null, {
+      timeout,
+      polling: 50,
+    })
+    const heightOpen = await aiPanelHeight()
+
     await page.click('#ai-collapse')
     try {
       await page.waitForFunction(() => document.querySelector('#ai-transcript') === null, {
@@ -145,6 +177,21 @@ async function main() {
     if (aiExpandedAfterCollapse !== 'false') {
       fail(`畳んだ後のaria-expandedがfalseでない: ${aiExpandedAfterCollapse}`)
     }
+    // **B2**: 畳んだら会話欄だけでなく入力欄・設定フォーム・ヒントも全部DOMから消える。
+    const shownWhileCollapsed = await aiVisible()
+    if (Object.values(shownWhileCollapsed).some(Boolean)) {
+      fail(`畳んだのに残っている要素がある(部分的な壊れ方): ${JSON.stringify(shownWhileCollapsed)}`)
+    }
+    ok('**畳む(B2)**: `#ai-transcript`/`.ai-input`/`.ai-settings`/`.hint`が全部DOMから消えた')
+    // **B3**: 220px固定を効かせず、ヘッダ行だけの高さになる。
+    const heightCollapsed = await aiPanelHeight()
+    if (!(heightCollapsed < heightOpen * 0.5)) {
+      fail(
+        `畳んでも220px固定が解除されていない: 開いている時 ${heightOpen}px -> 畳んだ後 ${heightCollapsed}px`,
+      )
+    }
+    ok(`**畳む(B3)**: 220px固定が外れてヘッダ行だけの高さになった(${heightOpen.toFixed(0)}px -> ${heightCollapsed.toFixed(0)}px)`)
+
     await page.click('#ai-collapse')
     try {
       await page.waitForFunction(() => document.querySelector('#ai-transcript') !== null, {
@@ -154,7 +201,17 @@ async function main() {
     } catch {
       fail('もう一度#ai-collapseを押しても#ai-transcriptが戻らない')
     }
-    ok('**AIパネルの開閉**: `#ai-collapse`を押すと`#ai-transcript`がDOMから消え、もう一度押すと戻る')
+    const shownAfterReopen = await aiVisible()
+    if (!shownAfterReopen.transcript || !shownAfterReopen.input || !shownAfterReopen.settings || !shownAfterReopen.hint) {
+      fail(`開き直しても要素が戻らない: ${JSON.stringify(shownAfterReopen)}`)
+    }
+    ok('**AIパネルの開閉**: `#ai-collapse`を押すと本体一式がDOMから消え、もう一度押すと全部戻る')
+    // 後続のトースト検査に影響しないよう、設定フォームは閉じておく。
+    await page.click('#ai-settings-toggle')
+    await page.waitForFunction(() => document.querySelector('.ai-settings') === null, {
+      timeout,
+      polling: 50,
+    })
 
     // -------------------------------------------------------------- 検証1: 積層
     await run('file-export-step', MISSING_EXPORT_DIR)
