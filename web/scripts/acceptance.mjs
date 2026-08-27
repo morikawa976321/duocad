@@ -1169,8 +1169,28 @@ async function main() {
       // 中心を不動点にした一様な拡大になるので、中心の点は補正の有無に関わらず動かない。
       // だから「中心付近は数画素以内」に加えて、**外周寄りの点が拡大率どおりには動いて
       // いないこと**を見る。45→60の拡大率は tan(30°)/tan(22.5°) ≒ 1.394 なので、
-      // 補正が無ければ中心から r の点は 0.394r 動く。補正があれば奥行き差ぶんのパースだけで、
-      // このシーンの取りうる最大でも 0.15r 程度に収まる。**0.25r を境にすれば両者を分けられる。**
+      // 補正が無ければ中心から r の点は 0.394r 動く。
+      //
+      // **しきい値は実測から作った(2026-08-28再校正)。** 測定点を`projectFace`(最初に
+      // ピックできた三角形の重心。視点で数十px跳ぶ)から`projectPoint(face.centroid)`
+      // (固定した世界座標)へ差し替えた際、旧しきい値(6px / 0.25r)は跳びを吸収するための
+      // 値のまま残っていて、跳びの無い新しい測り方には桁で緩かった(実測0.68px/3.38pxに対し
+      // 6px/46.6pxは約9倍・14倍の余裕)。この文書と同じ場面(板1枚・穴3つのシーン)で
+      // 実測した値は次のとおり(45→60固定・5回連続で誤差なく再現。`projectPoint`は
+      // 三角形選択に依存しないため決定論的):
+      //   correct(このコード)          near 0.68px / outer 3.38px(r=186.5)
+      //   setFovの補正を半分の強さに   near 1.99px / outer 27.6px
+      //   setFovの補正を20%弱める      near 0.47px / outer  9.8px
+      //   setFovの補正を丸ごと外す     near 4.10px / outer 52.7px
+      // **near単独では「補正を弱める」系の劣化を確実には拾えない**(相対距離があまり
+      // 動かない点なので、半分の強さでも1.99pxとしきい値2pxの内側に収まりうる)。
+      // 検出の主力はouter(補正の量そのものが線形に出る)で、near は「補正が丸ごと無い」
+      // 極端な壊れ方を確実に落とす保険という位置づけ(元設計と同じ役割分担)。
+      // **near 2px(実測の約2.9倍)・outer 0.04r(実測比の約2.2倍。r=186.5なら7.46px)**
+      // に置いた —— 補正半分の劣化はouterが27.6px対7.46pxで明白に落とし、20%弱めた
+      // 劣化も9.8px対7.46pxで落とす。10%弱めた劣化(outer 3.35px)は正常値(3.38px)と
+      // 同オーダーで測定の分解能を超えており、この検査では区別できない
+      // (`projectPoint`を使ってもピクセル単位の測定には限界がある)。
       const near = moved[0]
       // 外周寄りの点。画面の端ぎりぎりだと射影が別の三角形へ移りうるので上限を掛ける。
       const radiusCap = 0.35 * Math.min(before.width, before.height)
@@ -1180,10 +1200,10 @@ async function main() {
       }
       const maxShift = Math.max(...moved.map((point) => point.shift))
 
-      if (near.shift > 6) {
+      if (near.shift > 2) {
         throw new Error(`画角45→60で中心付近の面が ${near.shift.toFixed(1)} 画素動いた(距離補正が効いていない)`)
       }
-      const allowed = 0.25 * outer.fromCenter
+      const allowed = 0.04 * outer.fromCenter
       if (outer.shift > allowed) {
         throw new Error(
           `画角45→60で中心から ${outer.fromCenter.toFixed(0)} 画素の面が ${outer.shift.toFixed(1)} 画素動いた` +
