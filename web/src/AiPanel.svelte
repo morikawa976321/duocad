@@ -58,6 +58,24 @@
     settingsOpen = true
   }
 
+  /**
+   * プロバイダを切り替えたら **モデルとエンドポイントの打ちかけを捨てる**。
+   *
+   * 持ち越すと `openai_compat` → `anthropic` で必ず詰まる —— エンドポイント欄は
+   * 隠れるだけで `baseUrlDraft` は生きているので、`ai_configure` に llama-server の
+   * URLが一緒に乗り、`Server._ai_configure` の「anthropicに `base_url` は渡せない」
+   * 拒否に当たる。しかも `_ai_status()` は `openai_compat` のとき既定URLを必ず返すから、
+   * 設定を開き直しても同じ値が入り直す(＝画面操作でClaudeへ戻れない)。モデル名も同じで、
+   * 他プロバイダのもの(`local` 等)が残ると設定は通ったうえで送信時に落ちる。
+   * 空にすればどちらも `undefined` になり、サーバ側の既定値が使われる。
+   */
+  function selectProvider(next: AiProviderKind): void {
+    if (next === providerDraft) return
+    providerDraft = next
+    modelDraft = ''
+    baseUrlDraft = ''
+  }
+
   function applySettings(): void {
     onConfigure(providerDraft, modelDraft.trim() || undefined, baseUrlDraft.trim() || undefined)
     settingsOpen = false
@@ -112,7 +130,13 @@
     <div class="ai-settings">
       <label>
         プロバイダ
-        <select id="ai-provider" bind:value={providerDraft}>
+        <!-- `bind:value` にしない —— 束縛の更新と `onchange` の順序に依存せず、
+             切り替えを1か所(`selectProvider`)で扱うため。 -->
+        <select
+          id="ai-provider"
+          value={providerDraft}
+          onchange={(event) => selectProvider(event.currentTarget.value as AiProviderKind)}
+        >
           <option value="anthropic">Claude(anthropic)</option>
           <option value="openai_compat">llama-server(openai_compat)</option>
         </select>
