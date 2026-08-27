@@ -1,0 +1,628 @@
+{
+  "version": 2,
+  "operations": [
+    {
+      "seq": 1,
+      "verb": "sketch_create",
+      "args": {
+        "sketch_id": "sketch-9bf2416fc765",
+        "plane": {
+          "kind": "base",
+          "name": "XY",
+          "provenance": null
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 2,
+      "verb": "add_rectangle",
+      "args": {
+        "sketch_id": "sketch-9bf2416fc765",
+        "entity_id": "entity-418413925b31",
+        "kind": "rectangle",
+        "params": {
+          "x": -40.0,
+          "y": -30.0,
+          "width": 80.0,
+          "height": 60.0
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 3,
+      "verb": "extrude",
+      "args": {
+        "regions": [
+          {
+            "sketch": "sketch-9bf2416fc765",
+            "index": 1,
+            "provenance": null
+          }
+        ],
+        "distance": 8.0,
+        "mode": "new",
+        "body_id": "body-70633ceb7b54"
+      },
+      "provenance": null
+    },
+    {
+      "seq": 4,
+      "verb": "fillet",
+      "args": {
+        "edges": [
+          1,
+          2,
+          5,
+          8
+        ],
+        "radius": 8.0,
+        "body_id": "body-70633ceb7b54"
+      },
+      "provenance": {
+        "verb": "fillet",
+        "edges": [
+          1,
+          2,
+          5,
+          8
+        ],
+        "face_map": {
+          "1": [
+            1
+          ],
+          "2": [
+            6
+          ],
+          "3": [
+            10
+          ],
+          "4": [
+            7
+          ],
+          "5": [
+            2
+          ],
+          "6": [
+            5
+          ]
+        },
+        "deleted": [],
+        "new_faces": [
+          3,
+          4,
+          8,
+          9
+        ]
+      }
+    },
+    {
+      "seq": 5,
+      "verb": "sketch_create",
+      "args": {
+        "sketch_id": "sketch-f0b275ebe577",
+        "plane": {
+          "kind": "base",
+          "name": "XY",
+          "provenance": null
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 6,
+      "verb": "add_arc",
+      "args": {
+        "sketch_id": "sketch-f0b275ebe577",
+        "entity_id": "entity-4ef418bc1d5f",
+        "kind": "arc",
+        "params": {
+          "cx": 0.0,
+          "cy": 30.0,
+          "radius": 12.0,
+          "start_deg": 0.0,
+          "end_deg": 180.0
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 7,
+      "verb": "add_line",
+      "args": {
+        "sketch_id": "sketch-f0b275ebe577",
+        "entity_id": "entity-b3e720beac2e",
+        "kind": "line",
+        "params": {
+          "x0": 12.0,
+          "y0": 30.0,
+          "x1": -12.0,
+          "y1": 30.0
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 8,
+      "verb": "extrude",
+      "args": {
+        "regions": [
+          {
+            "sketch": "sketch-f0b275ebe577",
+            "index": 1,
+            "provenance": null
+          }
+        ],
+        "distance": 8.0,
+        "mode": "join",
+        "body_id": "body-70633ceb7b54"
+      },
+      "provenance": null
+    },
+    {
+      "seq": 9,
+      "verb": "sketch_create",
+      "args": {
+        "sketch_id": "sketch-192850f8a57c",
+        "plane": {
+          "kind": "base",
+          "name": "XY",
+          "provenance": null
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 10,
+      "verb": "add_circle",
+      "args": {
+        "sketch_id": "sketch-192850f8a57c",
+        "entity_id": "entity-23650187d0df",
+        "kind": "circle",
+        "params": {
+          "cx": -28.0,
+          "cy": -18.0,
+          "radius": 3.5
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 11,
+      "verb": "pattern_rectangular",
+      "args": {
+        "sketch_id": "sketch-192850f8a57c",
+        "pattern_id": "pattern-29cb72b20f36",
+        "entities": [
+          "entity-23650187d0df"
+        ],
+        "dx": 56.0,
+        "dy": 36.0,
+        "nx": 2,
+        "ny": 2
+      },
+      "provenance": null
+    },
+    {
+      "seq": 12,
+      "verb": "extrude",
+      "args": {
+        "regions": [
+          {
+            "sketch": "sketch-192850f8a57c",
+            "index": 1,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-192850f8a57c",
+            "index": 2,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-192850f8a57c",
+            "index": 3,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-192850f8a57c",
+            "index": 4,
+            "provenance": null
+          }
+        ],
+        "distance": 10.0,
+        "mode": "cut",
+        "body_id": "body-70633ceb7b54"
+      },
+      "provenance": null
+    },
+    {
+      "seq": 13,
+      "verb": "sketch_create",
+      "args": {
+        "sketch_id": "sketch-b852a0decc16",
+        "plane": {
+          "kind": "base",
+          "name": "XY",
+          "provenance": null
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 14,
+      "verb": "add_circle",
+      "args": {
+        "sketch_id": "sketch-b852a0decc16",
+        "entity_id": "entity-8541bb32b4b2",
+        "kind": "circle",
+        "params": {
+          "cx": 24.0,
+          "cy": 0.0,
+          "radius": 3.0
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 15,
+      "verb": "pattern_circular",
+      "args": {
+        "sketch_id": "sketch-b852a0decc16",
+        "pattern_id": "pattern-189a0e720cf7",
+        "entities": [
+          "entity-8541bb32b4b2"
+        ],
+        "center": [
+          0.0,
+          0.0
+        ],
+        "count": 6,
+        "total_angle": 360.0,
+        "rotate_copies": true
+      },
+      "provenance": null
+    },
+    {
+      "seq": 16,
+      "verb": "extrude",
+      "args": {
+        "regions": [
+          {
+            "sketch": "sketch-b852a0decc16",
+            "index": 1,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-b852a0decc16",
+            "index": 2,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-b852a0decc16",
+            "index": 3,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-b852a0decc16",
+            "index": 4,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-b852a0decc16",
+            "index": 5,
+            "provenance": null
+          },
+          {
+            "sketch": "sketch-b852a0decc16",
+            "index": 6,
+            "provenance": null
+          }
+        ],
+        "distance": 10.0,
+        "mode": "cut",
+        "body_id": "body-70633ceb7b54"
+      },
+      "provenance": null
+    },
+    {
+      "seq": 17,
+      "verb": "sketch_create",
+      "args": {
+        "sketch_id": "sketch-0b5a85c4c995",
+        "plane": {
+          "kind": "face",
+          "body": "body-70633ceb7b54",
+          "index": 5,
+          "provenance": null
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 18,
+      "verb": "add_circle",
+      "args": {
+        "sketch_id": "sketch-0b5a85c4c995",
+        "entity_id": "entity-e61d3788f4cf",
+        "kind": "circle",
+        "params": {
+          "cx": 0.0,
+          "cy": 0.0,
+          "radius": 16.0
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 19,
+      "verb": "extrude",
+      "args": {
+        "regions": [
+          {
+            "sketch": "sketch-0b5a85c4c995",
+            "index": 1,
+            "provenance": null
+          }
+        ],
+        "distance": 10.0,
+        "mode": "join",
+        "body_id": "body-70633ceb7b54"
+      },
+      "provenance": null
+    },
+    {
+      "seq": 20,
+      "verb": "extrude_face",
+      "args": {
+        "body_id": "body-70633ceb7b54",
+        "face_index": 26,
+        "distance": 6.0
+      },
+      "provenance": {
+        "verb": "extrude_face",
+        "face_index": 26,
+        "distance": 6.0,
+        "unified": true,
+        "face_map": {
+          "1": [
+            23
+          ],
+          "2": [
+            4
+          ],
+          "3": [
+            14
+          ],
+          "4": [
+            22
+          ],
+          "5": [
+            2
+          ],
+          "6": [
+            15
+          ],
+          "7": [
+            21
+          ],
+          "8": [
+            4
+          ],
+          "9": [
+            20
+          ],
+          "10": [
+            17
+          ],
+          "11": [
+            19
+          ],
+          "12": [
+            18
+          ],
+          "13": [
+            13
+          ],
+          "14": [
+            12
+          ],
+          "15": [
+            11
+          ],
+          "16": [
+            10
+          ],
+          "17": [
+            9
+          ],
+          "18": [
+            8
+          ],
+          "19": [
+            7
+          ],
+          "20": [
+            6
+          ],
+          "21": [
+            5
+          ],
+          "22": [
+            3
+          ],
+          "23": [
+            2
+          ],
+          "24": [
+            1
+          ],
+          "25": [
+            16
+          ],
+          "26": []
+        },
+        "deleted": [
+          26
+        ],
+        "new_faces": [
+          24
+        ],
+        "after_face_index": 24
+      }
+    },
+    {
+      "seq": 21,
+      "verb": "sketch_create",
+      "args": {
+        "sketch_id": "sketch-2ea0aa94167f",
+        "plane": {
+          "kind": "base",
+          "name": "XY",
+          "provenance": null
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 22,
+      "verb": "add_circle",
+      "args": {
+        "sketch_id": "sketch-2ea0aa94167f",
+        "entity_id": "entity-de800a30bd48",
+        "kind": "circle",
+        "params": {
+          "cx": 0.0,
+          "cy": 0.0,
+          "radius": 8.0
+        }
+      },
+      "provenance": null
+    },
+    {
+      "seq": 23,
+      "verb": "extrude",
+      "args": {
+        "regions": [
+          {
+            "sketch": "sketch-2ea0aa94167f",
+            "index": 1,
+            "provenance": null
+          }
+        ],
+        "distance": 26.0,
+        "mode": "cut",
+        "body_id": "body-70633ceb7b54"
+      },
+      "provenance": null
+    },
+    {
+      "seq": 24,
+      "verb": "chamfer",
+      "args": {
+        "edges": [
+          1
+        ],
+        "distance": 1.5,
+        "body_id": "body-70633ceb7b54"
+      },
+      "provenance": {
+        "verb": "chamfer",
+        "edges": [
+          1
+        ],
+        "face_map": {
+          "1": [
+            1
+          ],
+          "2": [
+            4
+          ],
+          "3": [
+            3
+          ],
+          "4": [
+            25
+          ],
+          "5": [
+            5
+          ],
+          "6": [
+            6
+          ],
+          "7": [
+            7
+          ],
+          "8": [
+            8
+          ],
+          "9": [
+            9
+          ],
+          "10": [
+            10
+          ],
+          "11": [
+            11
+          ],
+          "12": [
+            12
+          ],
+          "13": [
+            13
+          ],
+          "14": [
+            14
+          ],
+          "15": [
+            15
+          ],
+          "16": [
+            16
+          ],
+          "17": [
+            17
+          ],
+          "18": [
+            18
+          ],
+          "19": [
+            19
+          ],
+          "20": [
+            20
+          ],
+          "21": [
+            21
+          ],
+          "22": [
+            22
+          ],
+          "23": [
+            23
+          ],
+          "24": [
+            24
+          ],
+          "25": [
+            26
+          ]
+        },
+        "deleted": [],
+        "new_faces": [
+          2
+        ]
+      }
+    },
+    {
+      "seq": 25,
+      "verb": "set_parameter",
+      "args": {
+        "name": "d16",
+        "value": 4.0,
+        "previous": 3.5
+      },
+      "provenance": null
+    }
+  ]
+}
