@@ -343,6 +343,32 @@ async function main() {
     // ================================================================ 検証2: フィレット
     // 面を1つ選んでおく(辺を取りに行く対象のBodyが決まる)。
     const bodyId = afterHole.id
+
+    // ---------------------------------------------------------- 無起動では辺が指せない
+    // **2026-08-28 QA差し戻し**: 通常モードの既定を無起動にした変更の検査が「起動中は指せる」
+    // 側(この下の「フィレットを起動」)しか持っていなかった。`onWants` が退行して常時辺を
+    // 要求するようになると、この時点で辺のジオメトリがサーバから届いてしまうので、
+    // ここでその手前を固定する。
+    const idleEdges = await look()
+    if (idleEdges.wantsEdges) {
+      fail('起動していないのに辺を要求している(既定のコマンドは「押し出す」=面)')
+    }
+    if (idleEdges.edges.length !== 0) {
+      fail(`要求していないのに辺のジオメトリが届いている: ${idleEdges.edges.length}本`)
+    }
+    // **実際にクリックでも選べない**ことも見る(旗だけでなく、本物のクリック経路を通す)。
+    // 添字は総当たりで構わない —— 揃っていなければ `projectEdge` がその場でnullを返すので
+    // `clickEdge` はクリックそのものを起こさない。
+    let idleEdgePicked = false
+    for (let index = 1; index <= 40; index += 1) {
+      if (await clickEdge(bodyId, index)) {
+        idleEdgePicked = true
+        break
+      }
+    }
+    if (idleEdgePicked) fail('起動していないのに辺が本物のクリックで選べてしまった')
+    ok('**要求していない間は指せない**: 通常モードで辺へ当たる画素が1つも無く、クリックでも選べない')
+
     await page.click('#fillet')
     await waitForEdges('フィレットを起動しても辺が届かない')
     const edgeState = await look()

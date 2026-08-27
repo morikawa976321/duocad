@@ -1012,6 +1012,27 @@ async function main() {
       timeout,
       polling: 50,
     })
+
+    // ---------------------------------------------------------- 無起動では基準平面が指せない
+    // **2026-08-28 QA差し戻し**: 「起動中は指せる」側(この下の `createSketchOnBase`)しか
+    // 検査が無かった。部品を全部隠した直後・まだ何も起動していない状態(ここまでの
+    // 「平面でない面」ループはEscapeで無起動へ戻っている)で確かめる —— 隠すのを先にした
+    // 状態で比べないと、「部品に隠れているから」なのか「要求していないから」なのか
+    // 区別が付かない。
+    const idlePlanes = await page.evaluate(() => ({
+      wants: window.__duocad.wantsBasePlanes,
+      XY: window.__duocad.projectBasePlane('XY'),
+      XZ: window.__duocad.projectBasePlane('XZ'),
+      YZ: window.__duocad.projectBasePlane('YZ'),
+    }))
+    if (idlePlanes.wants) {
+      fail('起動していないのに基準平面を要求している(既定のコマンドは「押し出す」=面)')
+    }
+    if (idlePlanes.XY !== null || idlePlanes.XZ !== null || idlePlanes.YZ !== null) {
+      fail(`要求していないのに基準平面へ当たる画素がある: ${JSON.stringify(idlePlanes)}`)
+    }
+    ok('**要求していない間は指せない**: 通常モードで基準平面へ当たる画素が1つも無い(XY/XZ/YZとも)')
+
     await createSketchOnBase('XY')
     await page.waitForFunction(
       () => {
