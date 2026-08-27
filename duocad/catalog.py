@@ -600,26 +600,17 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="import_svg",
-        category="file",
+        category="sketch",
         description=(
-            "SVGを1枚のスケッチとして読み込むときに呼ぶ。"
+            "いま開いているスケッチへSVGの図形を足すときに呼ぶ。"
             "外で描いた輪郭(ロゴ・図面・アウトライン化した文字)を持ち込んで押し出したいとき用。"
             "図形は取り込んだ時点で領域として使えるので、続けて extrude を打てる。"
             "曲線はベジエのまま入る(折れ線に落ちない)。単位はmm、"
             "SVGが物理単位を持たなければ1ユーザー単位=1mm。"
         ),
         params=(
+            Param("sketch_id", "string", "対象スケッチのID"),
             Param("path", "string", "読み込むSVGファイルのパス"),
-            # **引数名は `sketch_create` と同じ `base_plane`** —— 綴りを変えると、
-            # スケッチを作る2つのverbで同じ意味の引数が違う名前になる。`plane` という名前は
-            # かつて面参照そのものをWSで受けていた抜け道で、`tests/test_ui_command_wiring.py`
-            # の `TARGET_SET_ARGS` が名指しで禁じている。
-            Param(
-                "base_plane",
-                "string",
-                "基準平面名 XY / XZ / YZ。省略時は確定選択の面",
-                required=False,
-            ),
             # **UIには出さない**(`ws=False`)。倍率は単位の合わないSVGを直すための逃げ道で、
             # 普段は要らない —— 常に出すと「毎回1.0と打つ欄」が1つ増える。
             Param(
@@ -632,17 +623,16 @@ COMMANDS: tuple[Command, ...] = (
             ),
         ),
         session="import_svg",
-        uses_selection=True,
-        ws="special",
         resets_selection=True,
         note=(
-            "**図形を作るverbだが category は file** —— 入口はファイルを選ぶことで、"
-            "スケッチのコマンド群(点をクリックして描く)とは操作の形が違う。"
+            "**2026-08-28、『新しいスケッチを1枚作って図形を全部そこへ入れる』から"
+            "『開いているスケッチへ足す』へ変えた**(ユーザーが提示された3案から選択)。"
+            "貼る先を選ぶ引数(旧 `base_plane`)は消えた —— スケッチのコマンドなのに"
+            "別の平面へも貼れる、という二重の意味を避けるため。スケッチの外から使いたければ"
+            "先に `sketch_create` で作ってから呼ぶ。**対象集合はもう選択から取らない**"
+            "(`uses_selection` を外した) —— `sketch_id` を明示的に取る `add_line` と同じ形。"
             "取り込んだ曲線は `bezier` 種別で入るが、**`add_bezier` というverbは無い**"
             "(人もAIもベジエを1本ずつは足せない。2026-08-26本人裁定)。"
-            "省略できる引数があるので表には載せられず(表は全引数必須)、"
-            '`ws=\"special\"` で `_dispatch` が個別に捌く(`sketch_create` と同じ)'
-        
         ),
     ),
     Command(

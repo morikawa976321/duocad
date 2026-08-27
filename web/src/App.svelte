@@ -30,7 +30,7 @@
     SOLID_FEATURE_COMMANDS,
     needsSketchId,
   } from './commands/features'
-  import { FILE_COMMANDS, changesDocument } from './commands/files'
+  import { changesDocument } from './commands/files'
   import {
     DEFAULT_SKETCH_COMMAND_ID,
     SKETCH_COMMANDS,
@@ -84,7 +84,9 @@
     // **`sketch_create` はスケッチ分類だがここに載る** —— `sketch_id` を取らず、
     // スケッチモードの外で走る唯一のverbだからである(`commands/sketch.ts` のdocstring)。
     SKETCH_CREATE,
-    ...FILE_COMMANDS,
+    // **`file` 分類の `CommandDef` はもう1つも無い**(2026-08-28。`commands/files.ts` の
+    // モジュールdocstring)。`IMPORT_SVG` はスケッチモードのコマンドへ移り、`SKETCH_COMMANDS`
+    // (下)側に載っている。
   ]
   const SKETCH_MODE_COMMANDS = [...SKETCH_COMMANDS, ...SKETCH_FEATURE_COMMANDS]
 
@@ -973,7 +975,7 @@
    * **引数を取る形にしてある**(2026-08-27)。呼び出し側(`runCommand`)は既定値の
    * 現在の `selection`/`sketches` で呼ぶが、テスト(`window.__duocad.regionsStillExist`)は
    * 合成データを渡して分岐を直接検査できる —— この関数がfalseを返す状況(選んだ領域が
-   * 実際に消えている)は、`duocad/catalog.py` の `resets_selection=True`(13verb全て。
+   * 実際に消えている)は、`duocad/catalog.py` の `resets_selection=True`(14verb全て。
    * `tests/test_server_selection_reset.py` が過不足なく固定)が領域を変えうるverbの
    * すべてに掛かっているため、**通常のUI操作では選択が先に空になり到達できない**
    * (`tests/test_server_selection_reset.py::test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish`

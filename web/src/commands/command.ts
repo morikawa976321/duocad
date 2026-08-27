@@ -283,8 +283,9 @@ export const EXTRUDE_FACE: CommandDef = {
 
 /**
  * ソリッドを触るモードの一覧のうち、**このファイルが定義するぶん**(押し出し1つ)。
- * `App.svelte` が `SOLID_FEATURE_COMMANDS`(features.ts)と `FILE_COMMANDS`(files.ts)を
- * 後ろに繋いで1つの並びにする。スケッチモードの一覧は `commands/sketch.ts`。
+ * `App.svelte` が `SOLID_FEATURE_COMMANDS`(features.ts)と `SKETCH_CREATE`(sketch.ts)を
+ * 後ろに繋いで1つの並びにする(`file` 分類の `CommandDef` は2026-08-28からもう無い ——
+ * `commands/files.ts` のモジュールdocstring)。スケッチモードの一覧は `commands/sketch.ts`。
  */
 export const COMMANDS: CommandDef[] = [EXTRUDE_FACE]
 

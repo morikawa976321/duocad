@@ -4,9 +4,11 @@
 `sketch_create` の `plane` は基準平面の名前("XY"/"XZ"/"YZ")か、`face_plane(body_id,
 face_index)` が返す既存ソリッドの**平面状の**面への参照(平面でない面は ValueError)。
 
-**verbの戻り値の流儀**: 新しいものを作るverbは新しいIDを返し(`import_svg` と同じ)、
+**verbの戻り値の流儀**: 新しいものを作るverbは新しいIDを返し(`sketch_create` と同じ)、
 既存の形状を変えるverbは `Operation` を返す(`extrude_face` と同じ)。スケッチのverbは前者、
-`extrude` は後者。
+`extrude` は後者。**`import_svg`(2026-08-28〜)はどちらでもない** —— 新しいスケッチを作らず
+既存のスケッチへ図形を足すだけなので、戻り値は追加した entity_id のリストである
+(`duocad/verbs/import_svg.py` のdocstring)。
 
 **OCP / build123d を直接importしない**。領域検出の幾何は `duocad.region` 経由で
 `duocad.kernel` が持つ。

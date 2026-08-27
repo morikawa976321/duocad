@@ -26,6 +26,11 @@ function positive(label: string): (value: number) => string | null {
   return (value) => (value > 0 ? null : `${label}は0より大きい値`)
 }
 
+/** 空のパスだけ弾く。**それ以上の判定はサーバに任せる**(`import_svg` verbのdocstring)。 */
+function pathLike(label: string): (value: string) => string | null {
+  return (value) => (value.trim() === '' ? `${label}を打つ` : null)
+}
+
 export const ADD_LINE: CommandDef = {
   id: 'add_line',
   category: 'sketch',
@@ -162,6 +167,40 @@ export const ADD_ARC: CommandDef = {
 }
 
 /**
+ * SVGの図形を**いま開いているスケッチへ**足す(2026-08-28。「新しいスケッチを1枚作って
+ * 全部そこへ入れる」形から、CADの「アクティブなスケッチに挿入する」に相当する形へ変えた)。
+ *
+ * **引数はパスだけ**。`sketch_id` はここでは付けない(モジュールdocstringの規律どおり
+ * `App.svelte` が送信時に足す) —— 貼る先を選ぶ手順(旧「基準平面をクリック」)は消えた。
+ *
+ * **倍率(`scale`)はここに出していない** —— 単位の合わないSVGを直すための逃げ道であって、
+ * 普段は要らない。常に出すと「毎回1.0と打つ欄」が1つ増える(`catalog` の `ws=False`)。
+ */
+export const IMPORT_SVG: CommandDef = {
+  // **id == サーバのコマンド名 == ログのverb名**。
+  id: 'import_svg',
+  category: 'sketch',
+  label: 'SVG読み込み',
+  buttonId: 'sketch-import-svg',
+  preview: 'none',
+  args: [
+    {
+      kind: 'text',
+      name: 'path',
+      label: 'SVG',
+      inputId: 'sketch-svg-path',
+      placeholder: 'logo.svg',
+      reject: pathLike('SVGのパス'),
+    },
+  ],
+  build(values) {
+    const path = values.path
+    if (typeof path !== 'string' || path.trim() === '') return { ok: false, reason: 'パスが空' }
+    return { ok: true, args: { path: path.trim() } }
+  },
+}
+
+/**
  * スケッチを作る —— **「スケッチ」を押して、貼る先をクリックする2手**。
  *
  * 分類は `sketch` だが `sketch_id` を取らず、**スケッチモードの外で走る唯一のverb**である
@@ -236,5 +275,6 @@ export const SKETCH_COMMANDS: CommandDef[] = [
   ADD_CIRCLE,
   ADD_RECTANGLE,
   ADD_ARC,
+  IMPORT_SVG,
 ]
 export const DEFAULT_SKETCH_COMMAND_ID = SELECT_IN_SKETCH.id

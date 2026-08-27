@@ -825,33 +825,33 @@ class DocumentTools:
 
     def import_svg(
         self,
+        sketch_id: str,
         path: str,
-        base_plane: Optional[str] = None,
         scale: Optional[float] = None,
     ) -> dict:
-        """SVGを**1枚のスケッチ**として読み込む(verb `import_svg`)。
+        """SVGの図形を**`sketch_id` が指す既存のスケッチへ**取り込む(verb `import_svg`)。
+
+        **新しいスケッチは作らない**(2026-08-28) —— 貼る先は `sketch_id` が指すスケッチの
+        平面で決まる。スケッチが無ければ先に `sketch_create` で作ること。
 
         取り込んだ図形はその時点で領域として使えるので、続けて `propose_selection` →
         `commit_selection` → `extrude` を打てる。**`hint` で領域の数を知らせる** ——
         SVGは1枚で複数の輪郭を持つのが普通で(文字の内側の穴、離れた図形)、
-        黙って `sketch_id` だけ返すと、AIは領域が1つだけのつもりで押し出しに進む。
-
-        **貼る先の解決は `Session.import_svg` が持つ**(`sketch_create` と同じ) ——
-        2箇所に同じ「省略時は確定選択の面」を持つと、片方だけ直したときにAIと人で
-        貼る先が食い違う。
+        黙って結果だけ返すと、AIは領域が1つだけのつもりで押し出しに進む。
         """
         before = self._revision_snapshot()
         applied = self.session.import_svg(
+            str(sketch_id),
             path,
-            None if base_plane is None else str(base_plane),
             None if scale is None else float(scale),
         )
-        sketch_id = applied["sketch_id"]
-        region_count = len(region.regions(self.session.document, sketch_id))
+        entity_ids = applied["entity_ids"]
+        region_count = len(region.regions(self.session.document, str(sketch_id)))
         return self._apply_logged(
             before,
             applied,
-            sketch_id=sketch_id,
+            sketch_id=str(sketch_id),
+            entity_ids=list(entity_ids),
             source_name=applied["source_name"],
             entity_count=applied["entity_count"],
             region_count=region_count,

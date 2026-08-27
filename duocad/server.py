@@ -177,7 +177,8 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 #: ブラウザから踏めるファイル操作 -> (`Session` のメソッド名, 必須の引数名, 文書を変えるか)。
 #: **文書を変えるかどうかで応答が違う**のがこの表だけの事情:
 #:
-#: - `import_step` / `import_svg` … 文書を変える(ログに載る)。応答は状態配信
+#: - `import_step` … 文書を変える(ログに載る)。応答は状態配信(`import_svg` はスケッチの
+#:   コマンドへ移り、2026-08-28からこの表に無い —— `SKETCH_COMMANDS` 側にいる)
 #: - `save_document` / `export_step` / `export_stl` … 文書を変えない。応答は書いた先の
 #:   パスとバイト数だけ(要求した接続にだけ返る。`preview` と同じ扱い)
 #: - `open_document` はどちらでもない —— 文書を**差し替える**ので全接続へ配る必要があり、
@@ -1060,36 +1061,28 @@ class Session:
             "reference_ids": list(args["reference_ids"]),
         })
 
-    def import_svg(
-        self, path: Any, base_plane: Optional[str] = None, scale: Any = None
-    ) -> dict:
-        """SVGを**1枚のスケッチ**として読み込む(verb `import_svg`)。
+    def import_svg(self, sketch_id: str, path: Any, scale: Any = None) -> dict:
+        """SVGの図形を**いま開いているスケッチ(`sketch_id`)へ**取り込む(verb `import_svg`)。
 
-        `base_plane`(XY/XZ/YZ)は `sketch_create` と同じ綴り。**省略時は確定選択の面**
-        (ちょうど1枚)に貼る ——
-        `sketch_create` と同じ解決にしてある。取り込む先の決め方を2通り持つと、
-        「人とAIで貼る先が違う」形で食い違う。
+        **貼る先は引数で選ばない**(2026-08-28) —— スケッチのverbなので、貼る先は
+        `sketch_id` が指すスケッチの平面で決まる(`add_line` と同じ形)。基準平面や面を
+        指す経路は無い。スケッチの外から使いたければ、先に `sketch_create` で作ってから
+        このverbを呼ぶ。
 
         `scale` は解決後のmmへさらに掛ける倍率(省略時1.0)。UIには出しておらず
         (`catalog` の `ws=False`)、単位を持たないSVGの寸法が合わないときだけAIが使う。
         """
-        if base_plane is not None:
-            target: Any = str(base_plane)
-        else:
-            face = selection.require_confirmed(
-                self.document, "face", exactly_one=True
-            )[0]
-            target = sketch.face_plane(face["body"], face["index"])
-        sketch_id = import_svg_verb(
+        entity_ids = import_svg_verb(
             self.document,
+            str(sketch_id),
             str(self._resolve(path)),
-            plane=target,
             scale=1.0 if scale is None else float(scale),
         )
         args = self.document.log.entries[-1].args
         return self._after_logged_verb(
             {
-                "sketch_id": sketch_id,
+                "sketch_id": str(sketch_id),
+                "entity_ids": list(entity_ids),
                 "source_name": args["source_name"],
                 "entity_count": len(args["entities"]),
             }
@@ -1791,18 +1784,9 @@ class Server:
                 result = self.session.vertices(message["body_id"])
                 await _send(connection, {"type": "vertices", **result})
             # -------------------------------------------------- E: ファイル操作
-            # **SVG読み込みは表に載らない** —— `base_plane` が省略できる引数だからで
-            # (表は載せた引数を全部必須にする)、省略は「コアの確定選択の面に貼る」を意味する。
-            # `sketch_create` と同じ形で、`catalog` の `ws="special"` がその宣言である。
-            elif command == "import_svg":
-                applied = self._apply(
-                    self.session.import_svg,
-                    message["path"],
-                    message.get("base_plane"),
-                    message.get("scale"),
-                )
-                applied["client_op"] = message.get("client_op")
-                await self._push(connection, applied=applied)
+            # **SVG読み込みはもうここに無い**(2026-08-28) —— `import_svg` はスケッチのverbに
+            # なり、`sketch_id` が必須引数になったので表(`SKETCH_COMMANDS`)に載る側へ移った
+            # (上のC節で他のスケッチのverbと一緒に捌かれる)。
             # **verbかどうかで応答が違う**(`FILE_COMMANDS` の3つ目の値)。文書を変えるものは
             # 状態を全接続へ配り、書き出すだけのものは要求した接続へ結果だけ返す。
             elif command in FILE_COMMANDS:
@@ -1905,9 +1889,10 @@ class Server:
             return
         # **貼る先が引数で来ていたら選択は読まない** —— そのときは選択が使われない。
         # 使われない集合を承認扱いにすると、「基準平面を指しただけなのにAIの提案が
-        # 確定していた」という静かな変化になる。**スケッチを作るverbが2つある**
-        # (`sketch_create` / `import_svg`)ので、引数名を `base_plane` に揃えてある。
-        if name in ("sketch_create", "import_svg") and message.get("base_plane") is not None:
+        # 確定していた」という静かな変化になる。**スケッチを作るverbは `sketch_create` だけ**
+        # (2026-08-28: `import_svg` は `sketch_id` を取る側へ変わり、対象集合を確定選択から
+        # 取らなくなったので `SELECTION_CONSUMING_COMMANDS` に入らず、この関数の対象からも外れた)。
+        if name == "sketch_create" and message.get("base_plane") is not None:
             return
         if not selection.get_selection(self.session.document).is_proposed():
             return

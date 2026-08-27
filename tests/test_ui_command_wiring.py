@@ -431,7 +431,7 @@ ENTER_REQUIRED = {
     "chamfer": True,               # 辺は何本でも + 距離
     "pattern_rectangular": True,   # 図形は何個でも + 個数と間隔
     "pattern_circular": True,      # 図形は何個でも + 中心 + 個数と角度
-    "import_svg": True,            # 貼る先 + パス(howがある → Enterが要る)
+    "import_svg": True,            # パス(howがある → Enterが要る。sketch_idはApp.svelteが足す)
     "add_line": False,             # **点2つだけ。howが無い → 即適用**
     "sketch_create": False,        # **貼る先を1つ指すだけ。howが無い → 即適用**
     "add_circle": True,            # 中心 + 半径

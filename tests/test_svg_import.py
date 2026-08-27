@@ -1,6 +1,6 @@
 """verb `import_svg` と図形種別 `bezier` の契約。
 
-## このファイルが固定する5つ
+## このファイルが固定する6つ
 
 1. **単位はmm** — 物理単位を持つSVG(`width="100mm"`)はその寸法で、`viewBox` しか無いSVGは
    1ユーザー単位=1mmで入る。**Yは反転する**(SVGは下向き、スケッチのvは上向き)。
@@ -9,6 +9,9 @@
 3. **ログ1行・undo1回** — ロゴ1枚が数百行にならない。`add_bezier` というverbは**無い**。
 4. **再生は外部ファイルを読まない** — SVGを消してもログから同じ形が戻る。
 5. **取り込んだ図形は名前つきの値を持たない** — SketchPanelの図形一覧がロゴ1枚で埋まらない。
+6. **貼る先は「いま開いているスケッチ」(`sketch_id`)だけ** — 新しいスケッチは作らない
+   (2026-08-28。それまでは「新しいスケッチを1枚作って全部そこへ入れる」形だった)。
+   `sketch_id` が実在しなければ拒否し、既存の図形は消えず、新しく足した分だけが増える。
 """
 from __future__ import annotations
 
@@ -53,6 +56,11 @@ def write_svg(directory: Path, name: str, body: str) -> Path:
     path = directory / name
     path.write_text(body, encoding="utf-8")
     return path
+
+
+def new_sketch(document: Document, plane: str = "XY") -> str:
+    """検査の下ごしらえ: **先にスケッチを作る**(import_svgはもうこれを作らない)。"""
+    return sketch_module.sketch_create(document, plane)
 
 
 # --------------------------------------------------------------------------------------
@@ -170,9 +178,8 @@ def test_the_extruded_side_of_a_curve_stays_one_face(tmp_path: Path) -> None:
     折れ線化していると側面が分割数ぶんの平面に割れる。
     """
     document = Document()
-    sketch_id = import_svg(
-        document, write_svg(tmp_path, "curve.svg", SVG_WITH_UNITS), plane="XY"
-    )
+    sketch_id = new_sketch(document)
+    import_svg(document, sketch_id, write_svg(tmp_path, "curve.svg", SVG_WITH_UNITS))
     regions = region.regions(document, sketch_id)
     curved = min(regions, key=lambda item: item.area)  # 矩形(600mm^2)ではない方
     extrude(document, [RegionRef(sketch=sketch_id, index=curved.index)], 5.0, "join")
@@ -210,15 +217,33 @@ def test_the_whole_import_is_one_log_entry(tmp_path: Path) -> None:
     取り消すのに Ctrl+Z を数百回押すことになる。
     """
     document = Document()
-    sketch_id = import_svg(
-        document, write_svg(tmp_path, "log.svg", SVG_MIXED), plane="XY"
-    )
-    assert len(document.log.entries) == 1
-    assert document.log.entries[0].verb == "import_svg"
-    assert len(sketch_module.get_sketch(document, sketch_id).entities) > 1
+    sketch_id = new_sketch(document)
+    entity_ids = import_svg(document, sketch_id, write_svg(tmp_path, "log.svg", SVG_MIXED))
+    # ログは2行(sketch_create + import_svg)。import_svg自体は1回しか積まない。
+    assert len(document.log.entries) == 2
+    assert document.log.entries[-1].verb == "import_svg"
+    assert len(entity_ids) > 1
+    assert len(sketch_module.get_sketch(document, sketch_id).entities) == len(entity_ids)
 
-    document.log.undo(document)
-    assert document.sketches == []
+    document.log.undo(document)  # import_svgだけ戻る
+    assert sketch_module.get_sketch(document, sketch_id).entities == []
+    assert document.sketches != []  # スケッチ自体はimport_svgが作ったものではないので残る
+
+
+def test_import_svg_adds_to_an_existing_sketch_without_replacing_it(tmp_path: Path) -> None:
+    """**既にある図形を消さない**。取り込みは足すだけで、置き換えではない。"""
+    document = Document()
+    sketch_id = new_sketch(document)
+    sketch_module.add_circle(document, sketch_id, [0.0, 0.0], 5.0)
+    before = len(sketch_module.get_sketch(document, sketch_id).entities)
+
+    entity_ids = import_svg(
+        document, sketch_id, write_svg(tmp_path, "add.svg", SVG_MIXED)
+    )
+
+    after = sketch_module.get_sketch(document, sketch_id).entities
+    assert len(after) == before + len(entity_ids)
+    assert {e.id for e in after} >= set(entity_ids)
 
 
 def test_there_is_no_verb_that_adds_a_single_bezier() -> None:
@@ -248,7 +273,8 @@ def test_replay_does_not_read_the_svg_file(tmp_path: Path) -> None:
     """
     path = write_svg(tmp_path, "gone.svg", SVG_MIXED)
     document = Document()
-    sketch_id = import_svg(document, path, plane="XY")
+    sketch_id = new_sketch(document)
+    import_svg(document, sketch_id, path)
     before = [
         (entity.kind, dict(entity.params))
         for entity in sketch_module.get_sketch(document, sketch_id).entities
@@ -268,9 +294,8 @@ def test_replay_does_not_read_the_svg_file(tmp_path: Path) -> None:
 def test_undo_and_redo_round_trip(tmp_path: Path) -> None:
     """undo→redo で図形が同じ数・同じIDで戻る(IDをログに記録している理由)。"""
     document = Document()
-    sketch_id = import_svg(
-        document, write_svg(tmp_path, "roundtrip.svg", SVG_MIXED), plane="XY"
-    )
+    sketch_id = new_sketch(document)
+    import_svg(document, sketch_id, write_svg(tmp_path, "roundtrip.svg", SVG_MIXED))
     ids = [e.id for e in sketch_module.get_sketch(document, sketch_id).entities]
     document.log.undo(document)
     document.log.redo(document)
@@ -290,16 +315,16 @@ def test_imported_entities_do_not_create_named_parameters(tmp_path: Path) -> Non
     O(n^2)になる(小さなSVGで既に309個という実測がある)。
     """
     document = Document()
-    import_svg(document, write_svg(tmp_path, "params.svg", SVG_MIXED), plane="XY")
+    sketch_id = new_sketch(document)
+    import_svg(document, sketch_id, write_svg(tmp_path, "params.svg", SVG_MIXED))
     assert document.parameters == {}
 
 
 def test_imported_entities_still_resolve_and_draw(tmp_path: Path) -> None:
     """素の数値のままでも `entity_params` は解決でき、領域も出る(名前つきでなくても一人前)。"""
     document = Document()
-    sketch_id = import_svg(
-        document, write_svg(tmp_path, "draw.svg", SVG_MIXED), plane="XY"
-    )
+    sketch_id = new_sketch(document)
+    import_svg(document, sketch_id, write_svg(tmp_path, "draw.svg", SVG_MIXED))
     sketch = sketch_module.get_sketch(document, sketch_id)
     for entity in sketch.entities:
         values = sketch_module.entity_params(document, sketch_id, entity.id)
@@ -308,22 +333,40 @@ def test_imported_entities_still_resolve_and_draw(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------------------
+# 6: 貼る先は「開いているスケッチ」だけ
+# --------------------------------------------------------------------------------------
+def test_an_unknown_sketch_id_is_refused(tmp_path: Path) -> None:
+    """`sketch_id` が実在しなければ拒否する。**doc.sketches にもログにも何も残さない**。"""
+    document = Document()
+    path = write_svg(tmp_path, "orphan.svg", SVG_MIXED)
+    with pytest.raises(KeyError):
+        import_svg(document, "sketch-does-not-exist", path)
+    assert document.sketches == [] and document.log.entries == []
+
+
+# --------------------------------------------------------------------------------------
 # 失敗の契約
 # --------------------------------------------------------------------------------------
 def test_a_missing_file_raises_file_not_found(tmp_path: Path) -> None:
     document = Document()
+    sketch_id = new_sketch(document)
+    before = len(document.log.entries)
     with pytest.raises(FileNotFoundError):
-        import_svg(document, tmp_path / "no-such-file.svg", plane="XY")
-    assert document.sketches == [] and document.log.entries == []
+        import_svg(document, sketch_id, tmp_path / "no-such-file.svg")
+    assert sketch_module.get_sketch(document, sketch_id).entities == []
+    assert len(document.log.entries) == before
 
 
 def test_a_broken_file_raises_value_error(tmp_path: Path) -> None:
     path = tmp_path / "broken.svg"
     path.write_text("<svg><this is not xml", encoding="utf-8")
     document = Document()
+    sketch_id = new_sketch(document)
+    before = len(document.log.entries)
     with pytest.raises(ValueError):
-        import_svg(document, path, plane="XY")
-    assert document.sketches == [] and document.log.entries == []
+        import_svg(document, sketch_id, path)
+    assert sketch_module.get_sketch(document, sketch_id).entities == []
+    assert len(document.log.entries) == before
 
 
 def test_an_svg_without_geometry_is_refused(tmp_path: Path) -> None:
@@ -335,9 +378,10 @@ def test_an_svg_without_geometry_is_refused(tmp_path: Path) -> None:
         '<text x="1" y="5">hello</text></svg>',
     )
     document = Document()
+    sketch_id = new_sketch(document)
     with pytest.raises(ValueError, match="取り込める図形が無い"):
-        import_svg(document, path, plane="XY")
-    assert document.sketches == []
+        import_svg(document, sketch_id, path)
+    assert sketch_module.get_sketch(document, sketch_id).entities == []
 
 
 def test_too_many_entities_is_refused_not_truncated(tmp_path: Path) -> None:
@@ -352,9 +396,10 @@ def test_too_many_entities_is_refused_not_truncated(tmp_path: Path) -> None:
         f'<path d="{segments}"/></svg>',
     )
     document = Document()
+    sketch_id = new_sketch(document)
     with pytest.raises(ValueError, match="図形が多すぎる"):
-        import_svg(document, path, plane="XY")
-    assert document.sketches == []
+        import_svg(document, sketch_id, path)
+    assert sketch_module.get_sketch(document, sketch_id).entities == []
 
 
 # --------------------------------------------------------------------------------------
@@ -362,13 +407,26 @@ def test_too_many_entities_is_refused_not_truncated(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------------------
 def test_session_import_svg_reports_what_it_made(tmp_path: Path) -> None:
     session = Session(None, 0.2, models_dir=tmp_path)
+    sketch_id = session.sketch_create("XY")["sketch_id"]
     applied = session.import_svg(
-        str(write_svg(tmp_path, "session.svg", SVG_MIXED)), "XY"
+        sketch_id, str(write_svg(tmp_path, "session.svg", SVG_MIXED))
     )
     assert applied["verb"] == "import_svg"
     assert applied["source_name"] == "session.svg"
     assert applied["entity_count"] > 1
-    assert applied["sketch_id"] in {s.id for s in session.document.sketches}
+    assert applied["sketch_id"] == sketch_id
+    entity_ids = set(applied["entity_ids"])
+    assert entity_ids
+    assert entity_ids <= {e.id for e in session.document.sketches[-1].entities}
+
+
+def test_session_import_svg_rejects_an_unknown_sketch(tmp_path: Path) -> None:
+    """WS/MCPが通る経路でも、実在しない `sketch_id` は拒否する。"""
+    session = Session(None, 0.2, models_dir=tmp_path)
+    path = str(write_svg(tmp_path, "orphan.svg", SVG_MIXED))
+    with pytest.raises(KeyError):
+        session.import_svg("sketch-does-not-exist", path)
+    assert session.document.sketches == [] and session.document.log.entries == []
 
 
 def test_the_state_feed_does_not_carry_every_entity(tmp_path: Path) -> None:
@@ -379,7 +437,8 @@ def test_the_state_feed_does_not_carry_every_entity(tmp_path: Path) -> None:
     **ログそのものは無傷**であること(保存は図形を書く)も併せて見る。
     """
     session = Session(None, 0.2, models_dir=tmp_path)
-    session.import_svg(str(write_svg(tmp_path, "feed.svg", SVG_MIXED)), "XY")
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.import_svg(sketch_id, str(write_svg(tmp_path, "feed.svg", SVG_MIXED)))
 
     delivered = session.state_meta()["log"][-1]["args"]
     assert isinstance(delivered["entities"], str)

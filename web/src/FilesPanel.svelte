@@ -24,8 +24,9 @@
    * **STEP読み込み・STEP書き出し・STL書き出しも一覧の下に置く**(2026-08-27に本人が決定。
    * それまでツールバーの `CommandHost` に残っていた)。この3つも保存/開くと同じ形で
    * `App.svelte` が `session.runVerb(...)` を直接呼ぶ(`CommandHost` を経由しない)。
-   * `commands/files.ts` の `FILE_COMMANDS` には `IMPORT_SVG` だけが残る
-   * (`import_svg` はスケッチへ貼る先を選ぶ操作なので `CommandHost` に残る)。
+   * **SVG読み込み(`import_svg`)はここには無い**(2026-08-28) —— 「開いているスケッチへ
+   * 取り込む」形になり、スケッチモードのコマンド(`commands/sketch.ts` の `IMPORT_SVG`)へ
+   * 移った。`commands/files.ts` の `CommandDef` はもう1つも無い。
    *
    * **送信後もパス欄は消さない**(ファイル名欄=`draftName`とは逆の規律)。STEP/STLのパスは
    * 同じ値へ書き出し直す・同じファイルを読み直すことが多く、毎回打ち直させると手間になる

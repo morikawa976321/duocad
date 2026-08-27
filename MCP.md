@@ -28,10 +28,11 @@
    （**AIが自分で踏む**。人に見せて止めるときだけ踏まない）
 3. `fillet(radius=…)` / `extrude(distance=…)` など — **辺や領域は引数に書かない**
 4. `import_step` は**読んだ時点で編集できるボディ**を返す（`body_ids`。追加の1手は要らない）
-5. `import_svg(path)` はSVGを**1枚のスケッチ**にして返す（`sketch_id` と `region_count`）。
-   そのまま `propose_selection` → `commit_selection` → `extrude` へ進める。
-   **領域は1枚のSVGに複数あるのが普通**（文字の内側の穴・離れた図形）なので、
-   押し出す前に `describe_document(include_regions=True)` で面積を見て選ぶこと
+5. `import_svg(sketch_id, path)` はSVGの図形を**いま開いているスケッチへ**足す
+   （2026-08-28。新しいスケッチは作らない —— 無ければ先に `sketch_create`）。戻り値は
+   足した `entity_ids` と `region_count`。そのまま `propose_selection` → `commit_selection`
+   → `extrude` へ進める。**領域は1枚のSVGに複数あるのが普通**（文字の内側の穴・離れた図形）
+   なので、押し出す前に `describe_document(include_regions=True)` で面積を見て選ぶこと
 
 ## AIはどこまで自分でやるか（2026-08-22改訂）
 

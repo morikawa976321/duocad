@@ -7,7 +7,7 @@
 
 固定する契約:
 
-1. `resets_selection=True` はカタログの中で正確にこの13verbだけである
+1. `resets_selection=True` はカタログの中で正確にこの14verbだけである
 2. 形を変えるverbが成功で確定すると、選択は空になる(`items=[]` / `origin="user"`)
 3. 形を変えない操作(可視性・選択操作そのもの)は選択に触らない
 4. undo/redo は「何を戻したか」に関わらず常にリセットする(単純な規則を保つため)
@@ -137,7 +137,7 @@ def test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish(
     実在しなくなるが、**その前に `set_parameter` の `resets_selection=True` が
     選択そのものを空にする**ので、`App.svelte` 側が「選んだ領域がまだ実在するか」を
     確かめる分岐(`regionsStillExist`)へたどり着く前に選択が失われる。
-    `RESETTING_VERBS` の全13verbがこの性質を持つため(直上のテストが過不足なく固定)、
+    `RESETTING_VERBS` の全14verbがこの性質を持つため(直上のテストが過不足なく固定)、
     現行のverbカタログでは `regionsStillExist` のfalse分岐は構造的に到達不能であり、
     その分岐自体の正しさは `window.__duocad.regionsStillExist` 経由の直接呼び出しで
     検査する(smoke-regions.mjs参照。ここはコア側の契約=(a)の実証に専念する)。

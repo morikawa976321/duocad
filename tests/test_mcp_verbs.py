@@ -158,9 +158,10 @@ ARGUMENTS: dict = {
     # **`editable` のような引数で経路を打ち分けない** —— 引数で分けると、ログに載るverb名と
     # 呼べるツール名が食い違う(`EXTRA_LOGGING_TOOLS` の理由)。
     "import_step": ({"path"}, {"path"}),
-    # SVG読み込みは**貼る先(`base_plane`)と倍率(`scale`)が省略できる**。省略時は
-    # 確定選択の面に貼る(`sketch_create` と同じ解決・同じ綴り)。
-    "import_svg": ({"path", "base_plane", "scale"}, {"path"}),
+    # SVG読み込みは**いま開いているスケッチへ足す**(2026-08-28)。貼る先(旧 `base_plane`)は
+    # 引数から消え、代わりに対象スケッチを指す `sketch_id` が必須になった。倍率(`scale`)だけが
+    # 省略できる。
+    "import_svg": ({"path", "sketch_id", "scale"}, {"path", "sketch_id"}),
     "export_step": ({"path"}, {"path"}),
     "export_stl": ({"path", "deviation"}, {"path"}),
     # ---- 履歴
