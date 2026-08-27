@@ -289,13 +289,6 @@ export const EXTRUDE_FACE: CommandDef = {
  */
 export const COMMANDS: CommandDef[] = [EXTRUDE_FACE]
 
-/**
- * 起動していないときに構えているコマンド。**明示的な「起動」の1手を挟まない**
- * (面を選ぶ→数値を打つ→Enter の4手に1手足すと退行になる)。
- * 別のコマンドを起動すると入れ替わり、Escでここへ戻る。
- */
-export const DEFAULT_COMMAND_ID = EXTRUDE_FACE.id
-
 export function findCommand(id: string, list: CommandDef[] = COMMANDS): CommandDef {
   const found = list.find((command) => command.id === id)
   if (!found) throw new Error(`unknown command: ${id}`)

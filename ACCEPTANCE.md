@@ -80,7 +80,7 @@ duocad> node web/scripts/acceptance.mjs
 | 4 | `add_rectangle` | ✅ | ✅ | 左下をクリック → 幅60・高さ40 → Enter / `corner`,`width`,`height` |
 | 5 | `add_arc` | ✅ | ✅ | 中心をクリック → 半径・開始角・終了角 / 同じ4引数 |
 | 6 | `extrude`（領域） | ✅ | ✅ | 領域をクリック → 距離10 → **結合/切り取り/新規ボディを選ぶ** → Enter / 領域を `measure` で確かめてから `commit` → `distance`,`mode` |
-| 7 | `extrude_face` | ✅ | ✅ | 面をクリック → 距離2 → **プレビューが出てから** Enter（体積 24000→25200） / 述語 `kind_is plane` で選び直して3mm |
+| 7 | `extrude_face` | ✅ | ✅ | 面をクリック →「押し出す」を起動（2026-08-28。通常モードの既定が無起動になった） → 距離2 → **プレビューが出てから** Enter（体積 24000→25200） / 述語 `kind_is plane` で選び直して3mm |
 | 8 | `fillet` | ✅ | ✅ | **辺を本物のクリックで選び**半径2（面 6→7） / 述語 `kind_is circle` で選び半径1 |
 | 9 | `chamfer` | ✅ | ✅ | 辺を選び長さ1（面 7→10） / 述語で円い辺を選び長さ1 |
 | 10 | `pattern_rectangular` | ✅ | ✅ | 図形を一覧から選ぶ → 間隔と個数（1×2で展開を確認しundoで戻した） / `entities`,`dx`,`dy`,`nx`,`ny` |
@@ -107,7 +107,7 @@ duocad> node web/scripts/acceptance.mjs
 | 見るもの | 実際にアサートしている場所 | 何を見ているか |
 |---|---|---|
 | **プレビュー** | `acceptance.mjs` の `extrude_face` | 距離を打つと `previewing === true` になり、確定前に形が出る |
-| **Escで中断** | **`smoke.mjs` の `extrude_face` 経路**（`acceptance.mjs` ではない） | Escで `previewing === false` に戻り、**操作ログ・`applied_count`・体積が1つも動かず**、距離の入力欄も空に戻る |
+| **Escで中断** | **`smoke.mjs` の `extrude_face` 経路**（`acceptance.mjs` ではない） | Escで `previewing === false` に戻り、**操作ログ・`applied_count`・体積が1つも動かず**、無起動へ戻る（`#distance`・`#command-abort` ともDOMから消える。2026-08-28、通常モードの既定が無起動になったので「値が空に戻る」より強い固定になった） |
 | **undo** | `acceptance.mjs` の `fillet`（面 7→6）と `pattern_rectangular`（展開が戻る） | 形と件数が実際に戻る |
 
 **`acceptance.mjs` にはEsc中断のアサーションは無い。** このスクリプトにも `Escape` の打鍵は

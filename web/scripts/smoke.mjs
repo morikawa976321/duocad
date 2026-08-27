@@ -104,14 +104,52 @@ async function main() {
       await page.type(selector, String(value), { delay: 20 })
     }
 
+    // -------------------------------------------------------------- 項番0: 起動直後は無起動
+    // **2026-08-28、通常モードの既定を「どのコマンドも起動していない」へ変更**
+    // (本人裁定 [[duocad-show-only-what-is-needed]]。`CommandHost.svelte`のdocstring参照)。
+    // ページを開いた直後(サーバの使い回しに関わらず、CommandHostはブラウザ側のローカル状態
+    // なので毎回まっさらに始まる)、まだ何も操作していない時点でこれを確かめる。
+    const idleBefore = await page.evaluate(() => ({
+      abort: document.querySelector('#command-abort') !== null,
+      prompt: document.querySelector('#command-prompt')?.textContent ?? null,
+      onButtons: document.querySelectorAll('.command-host button.on').length,
+      inputs: document.querySelectorAll('.command-host input').length,
+    }))
+    if (idleBefore.abort) fail('起動直後なのに#command-abortがDOMにある(無起動のはず)')
+    if (idleBefore.prompt !== '') {
+      fail(`起動直後の#command-promptが空文字でない: "${idleBefore.prompt}"`)
+    }
+    if (idleBefore.onButtons !== 0) {
+      fail(`起動直後なのにコマンドボタンが押された状態: ${idleBefore.onButtons}個`)
+    }
+    if (idleBefore.inputs !== 0) fail(`起動直後なのに引数の入力欄が出ている: ${idleBefore.inputs}個`)
+    ok(
+      '起動直後: どのコマンドも起動していない' +
+        '(#command-abort無し・#command-prompt空・押されたボタン無し・入力欄無し)',
+    )
+
+    await page.click('#extrude')
+    await page.waitForFunction(
+      () => document.querySelector('#command-abort') !== null && document.querySelector('#distance') !== null,
+      { timeout, polling: 50 },
+    )
+    ok('#extrudeを押すと#command-abortと#distanceが両方出た')
+
+    await page.keyboard.press('Escape')
+    await page.waitForFunction(
+      () => document.querySelector('#command-abort') === null && document.querySelector('#distance') === null,
+      { timeout, polling: 50 },
+    )
+    ok('Escで無起動へ戻った(#command-abort・#distanceともDOMから消えた)')
+
     // サーバは空で立つ。前回の実行のサーバを使い回している場合は既に読まれている。
     const partCount = await page.evaluate(() => window.__duocad.parts.length)
     if (partCount === 0) {
       // **STEP読み込みは左サイドバーのファイルパネルへ移設**(2026-08-27。
       // `commands/files.ts`・`FilesPanel.svelte` docstring参照)。ツールバーの
-      // `CommandHost` を経由しないので、既定コマンド(`extrude_face`)は最初から構えたまま
-      // ——旧版にあった「Escで既定コマンドへ戻す」ワークアラウンドは、import_stepが
-      // `CommandHost`のcommandIdへ一切触らなくなったため構造的に不要になった。
+      // `CommandHost` を経由しないので、`CommandHost`のcommandIdへ一切触らない
+      // ——2026-08-28、通常モードの既定は無起動になったが、それはCommandHost自身の
+      // 初期状態の話であり、STEP読み込みの経路には関係が無い。
       await typeInto('#file-import-path', stepPath)
       await page.click('#file-import-step')
       await page.waitForFunction(
@@ -466,6 +504,13 @@ async function main() {
     )
     ok(`押し出す面 ${target.index} を選び直した`)
 
+    // **通常モードの既定は無起動なので、ここで明示的に「押し出し」を起動する**
+    // (2026-08-28。以前は`extrude_face`が最初から構えたままで、この1手が要らなかった)。
+    // 面は選択済みのまま(起動は選択を触らない)なので、#distanceだけがここで出る。
+    await page.click('#extrude')
+    await page.waitForSelector('#distance')
+    ok('「押し出す」を起動した(#extrudeを押す1手)')
+
     // -------------------------------------------------------------- 入力欄のCtrl+Z
     // フォーカスが入力欄(INPUT/TEXTAREA)にあるとき、
     // Ctrl+Zはブラウザ標準のテキスト取り消しに任せ、文書のundoを発火しない。
@@ -630,6 +675,9 @@ async function main() {
     ok('距離を打つとプレビューが出た(確定前に形が見えている)')
 
     // **Escで中断**。文書が一切変わっていないこと(操作ログの長さも増えない)。
+    // **2026-08-28: Escは既定コマンドへではなく無起動へ戻る**ので、以前は「#distanceの値が
+    // 空に戻る」ことを見ていたが、いまは**#distance自体がDOMから消える**(#command-abortも
+    // 同様)。「値が空」より強い固定になる。
     await page.keyboard.press('Escape')
     await page.waitForFunction(() => window.__duocad.previewing === false, {
       timeout,
@@ -638,7 +686,8 @@ async function main() {
     const afterEscape = await page.evaluate(() => ({
       applied: window.__duocad.state.applied_count,
       log: window.__duocad.state.log.length,
-      distance: document.querySelector('#distance').value,
+      distanceGone: document.querySelector('#distance') === null,
+      abortGone: document.querySelector('#command-abort') === null,
     }))
     if (afterEscape.applied !== logBefore.applied || afterEscape.log !== logBefore.log) {
       fail(
@@ -646,7 +695,12 @@ async function main() {
           `log ${logBefore.log}->${afterEscape.log}`,
       )
     }
-    if (afterEscape.distance !== '') fail(`Escの後も距離が残っている: "${afterEscape.distance}"`)
+    if (!afterEscape.distanceGone || !afterEscape.abortGone) {
+      fail(
+        `Escの後も押し出しが構えたまま(無起動に戻っていない): ` +
+          `#distance消えた=${afterEscape.distanceGone} / #command-abort消えた=${afterEscape.abortGone}`,
+      )
+    }
     const volumeAfterEscape = await page.evaluate(
       (bodyId) => window.__duocad.parts.find((b) => b.body_id === bodyId).volume,
       extrudeTarget.body_id,
@@ -655,9 +709,13 @@ async function main() {
     if (Math.abs(volumeAfterEscape - volumeBefore) > Math.abs(volumeBefore) * VOLUME_EPS) {
       fail(`Escで中断したのに体積が変わった: ${volumeBefore} -> ${volumeAfterEscape}`)
     }
-    ok('Escで中断: 操作ログ・体積とも変化なし(プレビューは1行も残さない)')
+    ok('Escで中断: 操作ログ・体積とも変化なし、無起動へ戻った(プレビューは1行も残さない)')
 
     // -------------------------------------------------------------- 確定(Enter)
+    // **Escで無起動へ戻ったので、もう一度「押し出し」を起動し直す**(2026-08-28)。
+    // 面は選択済みのまま(Escは選択を消さない)なので、起動するだけで#distanceが戻る。
+    await page.click('#extrude')
+    await page.waitForSelector('#distance')
     await typeDistance(distance)
     await page.keyboard.press('Enter')
     const after = await waitForExtrude(extrudeTarget.body_id, volumeBefore)

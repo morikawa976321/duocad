@@ -534,6 +534,11 @@ async function main() {
         bodyId,
         face.index,
       )
+      // **通常モードの既定は無起動なので、ここで明示的に「押し出す」を起動する**
+      // (2026-08-28。以前は`extrude_face`が最初から構えたままで、この1手が要らなかった)。
+      // 面は選択済みのまま(起動は選択を触らない)なので、#distanceだけがここで出る。
+      await page.click('#extrude')
+      await waitFor(() => document.querySelector('#distance') !== null, '#extrudeを押しても#distanceが出ない')
       await typeInto('#distance', 2)
       await waitFor(() => window.__duocad.previewing === true, 'プレビューが出ない')
       await page.keyboard.press('Enter')
@@ -543,7 +548,10 @@ async function main() {
         before,
       )
       const after = (await look()).parts[0].volume
-      return `面をクリック → 距離2 → プレビューが出てからEnter(体積 ${before.toFixed(2)} → ${after.toFixed(2)})`
+      return (
+        `面をクリック →「押し出す」を起動 → 距離2 → プレビューが出てからEnter` +
+        `(体積 ${before.toFixed(2)} → ${after.toFixed(2)})`
+      )
     })
 
     await attempt('human', 'fillet', async () => {

@@ -78,10 +78,17 @@ async function main() {
     await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
     await frameAll(page)
 
-    const box = await page.evaluate(() => {
-      const rect = document.querySelector('.viewport').getBoundingClientRect()
-      return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
-    })
+    // **使い回さず、使う直前に測り直す**(smoke.mjsの`locateFace`と同じ流儀)。
+    // 2026-08-28、通常モードの既定が無起動になったことでツールバーの行数(=高さ)が
+    // 状態によって変わるようになった —— コマンドを起動すると引数の行(数値・選択肢・
+    // 中断ボタン)が増える分だけ`.viewport`が下へ縮む。1回だけ測って使い回すと、
+    // 起動前後で`.viewport`の実際の位置とずれる(実測で、領域ホバーの検査がこれで外した)。
+    async function viewportBox() {
+      return page.evaluate(() => {
+        const rect = document.querySelector('.viewport').getBoundingClientRect()
+        return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+      })
+    }
 
     // ---------------------------------------------------------------- 1. 面: 予告と結果の一致
     const spot = await withoutBrowserPanel(page, async () => {
@@ -98,6 +105,7 @@ async function main() {
         bodyId,
       )
       if (!found) fail('画面上で指せる面が1つも無い')
+      const box = await viewportBox()
       await page.mouse.move(box.left + found.x, box.top + found.y)
       await settle(page)
       const hovered = await page.evaluate(() => window.__duocad.hoveredRef())
@@ -146,6 +154,7 @@ async function main() {
 
     // ---------------------------------------------------------------- 3. 選択済みにも明度が乗る
     await withoutBrowserPanel(page, async () => {
+      const box = await viewportBox()
       await page.mouse.move(box.left + spot.x, box.top + spot.y)
       await settle(page)
       const state = await page.evaluate(() => ({
@@ -184,6 +193,7 @@ async function main() {
         return null
       }, bodyId)
       if (!found) fail('丸めるを起動したのに、画面上で指せる辺が1本も無い')
+      const box = await viewportBox() // **#fillet起動後の高さで測る**(起動前の`box`は使い回さない)
       await page.mouse.move(box.left + found.x, box.top + found.y)
       await settle(page)
       const hovered = await page.evaluate(() => window.__duocad.hoveredRef())
@@ -231,6 +241,10 @@ async function main() {
         return null
       })
       if (!region) fail('「領域を押し出す」を起動したのに、画面上で指せる領域が無い')
+      // **#extrude-regions起動後の高さで測る**(2026-08-28実測: 起動前の`box`を使い回すと、
+      // 選択肢の行(結合/切り取り/新規)ぶんツールバーが伸びて`.viewport`が動き、
+      // 領域ではなく別の面を掴んだ)。
+      const box = await viewportBox()
       await page.mouse.move(box.left + region.x, box.top + region.y)
       await settle(page)
       const hovered = await page.evaluate(() => window.__duocad.hoveredRef())

@@ -22,6 +22,23 @@
    *
    * この形にすると「**起動しただけで文書が変わる**」が構造的に起きない。
    *
+   * ## 既定は「無起動」(2026-08-28)
+   *
+   * `commandId` は `string | null` で、**`null` が「どのコマンドも起動していない」を表す**。
+   * 見ているだけ・触っていない状態を画面に存在させるための表現で、以前の
+   * `DEFAULT_COMMAND_ID`(押し出しが最初から構えたまま)を覆した(本人裁定 2026-08-27
+   * [[duocad-show-only-what-is-needed]])。`null` の間は引数の収集・プレビュー・Enterの確定を
+   * すべて素通りさせ、`#command-abort` も描かない(見えないだけではなくDOMに無い)。
+   * `onWants([])` / `onWantsPlane(false)` を送るので、辺・領域・基準平面のピックも止まる —
+   * ただし**面・頂点は常に指せる**ので「見ているだけ、選べる」が既定状態になる。
+   *
+   * 初期値は `defaultCommandId ?? null`。`App.svelte` は通常モードで `undefined` を渡す
+   * (→ 無起動)。スケッチモードは `DEFAULT_SKETCH_COMMAND_ID`(= `select_in_sketch`)を渡すので
+   * 今までどおり「選ぶ」が既定のまま(描くコマンドが常に点を待つと領域をクリックで選べなくなる
+   * ため、こちらは無起動にしない)。**Escは常にこの初期値へ戻る**(`abort()`)——通常モードは
+   * 無起動、スケッチモードは「選ぶ」。確定後はコマンドが構えたままなので(下記「確定 / 中断」)、
+   * 無起動へ戻る手はEscだけである。
+   *
    * ## 引数収集は、まず共有選択集合を見る
    *
    * 選択引数の値は**コアの選択集合から導出する**(ここには持たない)。空のときだけ
@@ -49,7 +66,6 @@
    * ではない。
    */
   import {
-    DEFAULT_COMMAND_ID,
     COMMANDS,
     argSatisfied,
     findCommand,
@@ -74,7 +90,7 @@
     busy,
     selfSelections = 0,
     commands = COMMANDS,
-    defaultCommandId = DEFAULT_COMMAND_ID,
+    defaultCommandId,
     hover = null,
     entities = [],
     onRun,
@@ -107,6 +123,7 @@
      * 変わるのは一覧と既定だけ(モードごとにUIを作り直さない)。
      */
     commands?: CommandDef[]
+    /** 起動していない状態を表すには渡さない(`undefined`)。渡さなければ `null`(無起動)になる。 */
     defaultCommandId?: string
     /**
      * スケッチ平面上でポインタが今指している点。**幽霊にだけ使う**。
@@ -142,9 +159,10 @@
 
   // 初期値を1回だけ捕まえるのが正しい —— モードが変わるときは呼び出し側(`App.svelte`)が
   // `{#key}` でこのコンポーネントごと作り直す(集めかけの引数を持ち越さないため)。
+  // `defaultCommandId` が無ければ無起動(`null`)から始まる。
   // svelte-ignore state_referenced_locally
-  let commandId = $state(defaultCommandId)
-  const command = $derived<CommandDef>(findCommand(commandId, commands))
+  let commandId = $state<string | null>(defaultCommandId ?? null)
+  const command = $derived<CommandDef | null>(commandId === null ? null : findCommand(commandId, commands))
 
   /** 数値引数の生の入力(引数名 -> 打った文字列)。確定・中断のたびに空へ戻す。 */
   let numberText = $state<Record<string, string>>({})
@@ -177,7 +195,7 @@
   /** 集まった引数(選択は導出・数値は打った文字列から・点はクリックから)。 */
   const values = $derived.by<ArgValues>(() => {
     const collected: ArgValues = {}
-    for (const spec of command.args) {
+    for (const spec of command?.args ?? []) {
       if (spec.kind === 'selection') {
         collected[spec.name] = itemsForArg(spec, selection)
       } else if (spec.kind === 'point') {
@@ -203,13 +221,15 @@
     return collected
   })
 
-  const missing = $derived(firstMissingArg(command, values))
+  /** `command` が `null`(無起動)の間は待っている引数も無い。 */
+  const missing = $derived(command === null ? null : firstMissingArg(command, values))
 
   /** 選ばれすぎ(`max` 超え)の理由。空でない間は確定させない。 */
-  const overflow = $derived(overflowNote(command, selection))
+  const overflow = $derived(command === null ? '' : overflowNote(command, selection))
 
-  const ready = $derived(missing === null && overflow === '')
-  const built = $derived(ready ? command.build(values) : null)
+  /** **無起動では確定できない**(`command === null` を明示的に含める。Enterが素通りしないため)。 */
+  const ready = $derived(command !== null && missing === null && overflow === '')
+  const built = $derived(command !== null && ready ? command.build(values) : null)
 
   /**
    * 幽霊に使う引数。**待っている点をポインタの位置で仮に埋める**ので、線分なら
@@ -218,37 +238,39 @@
    */
   const ghostBuilt = $derived.by(() => {
     if (built?.ok) return built
-    if (missing?.kind !== 'point' || hover === null) return null
+    if (command === null || missing?.kind !== 'point' || hover === null) return null
     const provisional = { ...values, [missing.name]: hover }
     if (firstMissingArg(command, provisional) !== null) return null
     const result = command.build(provisional)
     return result.ok ? result : null
   })
 
-  /** 画面に出す1行(何を待っているか)。 */
+  /** 画面に出す1行(何を待っているか)。**無起動では空文字**(プレースホルダ文を新設しない)。 */
   const prompt = $derived.by(() => {
+    if (command === null) return ''
     if (missing !== null) return promptFor(missing, values)
     if (overflow !== '') return overflow
     if (built && !built.ok) return built.reason
     return 'Enterで確定 / Escで中断'
   })
 
-  const numberArgs = $derived(command.args.filter((spec) => spec.kind === 'number') as NumberArgSpec[])
-  const choiceArgs = $derived(command.args.filter((spec) => spec.kind === 'choice') as ChoiceArgSpec[])
-  const textArgs = $derived(command.args.filter((spec) => spec.kind === 'text') as TextArgSpec[])
+  const numberArgs = $derived((command?.args ?? []).filter((spec) => spec.kind === 'number') as NumberArgSpec[])
+  const choiceArgs = $derived((command?.args ?? []).filter((spec) => spec.kind === 'choice') as ChoiceArgSpec[])
+  const textArgs = $derived((command?.args ?? []).filter((spec) => spec.kind === 'text') as TextArgSpec[])
 
-  /** このコマンドが選択から取る種別をアプリ層へ知らせる(辺のときだけ辺を取りに行く)。 */
+  /** このコマンドが選択から取る種別をアプリ層へ知らせる(辺のときだけ辺を取りに行く)。
+   *  無起動では何も要求しない(`[]`)——面・頂点は常に指せるので、それだけが既定状態に残る。 */
   $effect(() => {
     onWants(
-      command.args
+      (command?.args ?? [])
         .filter((spec) => spec.kind === 'selection')
         .map((spec) => (spec as { shapeKind: SelectableKind }).shapeKind),
     )
   })
 
-  /** 基準平面を要求しているか(辺と同じ規律で、起動している間だけ指せるようにする)。 */
+  /** 基準平面を要求しているか(辺と同じ規律で、起動している間だけ指せるようにする)。無起動では常にfalse。 */
   $effect(() => {
-    onWantsPlane(command.args.some((spec) => spec.kind === 'plane'))
+    onWantsPlane((command?.args ?? []).some((spec) => spec.kind === 'plane'))
   })
 
   // ---------------------------------------------------------------- プレビュー
@@ -262,32 +284,35 @@
    * 印に入れないと「選び直したのに古い幽霊が残る」。
    */
   const selectionPrint = $derived(
-    command.args.some((spec) => spec.kind === 'selection')
+    (command?.args ?? []).some((spec) => spec.kind === 'selection')
       ? (selection?.items ?? []).map(refKey).join('|')
       : '',
   )
 
   $effect(() => {
-    const source = command.preview === 'none' ? null : ghostBuilt
-    const key = source ? JSON.stringify([command.id, source.args, selectionPrint]) : null
+    // `cmd` へ一度だけ束ねる —— 以後この関数内では `command` を読み直さない(TSの型narrowing
+    // を素直に効かせるため。`$derived` の読み直しは同じ値でも別の式として扱われる)。
+    const cmd = command
+    const source = cmd === null || cmd.preview === 'none' ? null : ghostBuilt
+    const key = source ? JSON.stringify([cmd!.id, source.args, selectionPrint]) : null
     if (key === previewedKey) return
     if (previewTimer) clearTimeout(previewTimer)
     previewedKey = key
-    if (key === null || source === null) {
+    if (key === null || source === null || cmd === null) {
       onCancelPreview()
       return
     }
-    const mode = command.preview as 'server' | 'local'
+    const mode = cmd.preview as 'server' | 'local'
     const args = source.args
     // **ブラウザだけで描ける幽霊は待たない**。デバウンスは「投機実行が重い」ことへの
     // 対処(押し出しは実測で数百ms〜1秒)であって、線を1本引くのに待つ理由は無い。
     if (mode === 'local') {
-      onPreview(command.id, args, mode)
+      onPreview(cmd.id, args, mode)
       return
     }
     previewTimer = setTimeout(() => {
       previewTimer = null
-      onPreview(command.id, args, mode)
+      onPreview(cmd.id, args, mode)
     }, PREVIEW_DEBOUNCE_MS)
   })
 
@@ -307,7 +332,8 @@
    * 「Enterが要る」側へ移る。
    */
   const appliesOnSelection = $derived(
-    !needsEnter(command) &&
+    command !== null &&
+      !needsEnter(command) &&
       command.args.some((spec) => spec.kind === 'selection' || spec.kind === 'plane'),
   )
 
@@ -352,7 +378,9 @@
       onNote('直前の操作の応答待ち')
       return
     }
-    if (!ready || built === null) {
+    // `ready` は `command !== null` を含むが、TSはそれを`command`の型へ持ち越さないので
+    // ここでも明示する(無起動でEnterやクリックがすり抜けて呼ばれた場合の防御でもある)。
+    if (command === null || !ready || built === null) {
       onNote(prompt)
       return
     }
@@ -394,8 +422,13 @@
    * **選択は消さない**。選ぶことは文書の変更ではなく、選び直しのたびに
    * 選択が飛ぶと「Escで打ち直す」ができなくなる(選択を空にしたいときは
    * 選択パネルの「全解除」)。
+   *
+   * **戻り先は`defaultCommandId ?? null`**(通常モードは無起動・スケッチモードは
+   * 「選ぶ」)。以前の「既定コマンドへ戻す」がそのまま「無起動へ戻す」になった
+   * ——2026-08-27本人裁定でこの構えが覆ったのはここだけで、他の挙動は変えていない。
    */
   function abort(): void {
+    const idleId = defaultCommandId ?? null
     const wasArmed =
       Object.values(numberText).some((text) => text !== '') ||
       Object.keys(points).length > 0 ||
@@ -403,7 +436,7 @@
       Object.keys(planes).length > 0 ||
       ready
     reset()
-    if (commandId !== defaultCommandId) commandId = defaultCommandId
+    if (commandId !== idleId) commandId = idleId
     if (wasArmed) onNote('中断した(文書は変わっていない)')
   }
 
@@ -429,6 +462,7 @@
    * 押し直す2手にしない)。Enterが要るコマンドではボタン自体が無効なので通らない。
    */
   function pressActive(): void {
+    if (command === null) return // 呼び出し元(テンプレート)は起動中のボタンからしか呼ばない
     if (ready) {
       commit()
       return
@@ -454,6 +488,7 @@
    * 引数が揃った後のクリックで図形が動いて見える)。
    */
   export function addPoint(u: number, v: number): boolean {
+    if (command === null) return false
     const spec = firstMissingArg(command, values)
     if (spec === null || spec.kind !== 'point') return false
     points = { ...points, [spec.name]: [u, v] }
@@ -489,6 +524,7 @@
    * 待っている平面引数が無ければ何もしない(`false` を返す)。
    */
   export function setBasePlane(name: string): boolean {
+    if (command === null) return false
     const spec = firstMissingArg(command, values)
     if (spec === null || spec.kind !== 'plane') return false
     planes = { ...planes, [spec.name]: name }
@@ -505,6 +541,7 @@
    * **引き金は「人がこの画面で指した回数」のままで、選択の中身ではない**。
    */
   export function useSelectedFaceAsPlane(): boolean {
+    if (command === null) return false
     const spec = firstMissingArg(command, values)
     if (spec === null || spec.kind !== 'plane') return false
     planes = { ...planes, [spec.name]: 'face' }
@@ -545,7 +582,7 @@
       commit()
       return
     }
-    if (event.key !== 'Tab' || event.shiftKey) return
+    if (event.key !== 'Tab' || event.shiftKey || command === null) return
     const remaining = command.args
       .slice(command.args.indexOf(spec) + 1)
       .find(
@@ -561,17 +598,21 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<section class="command-host" data-command={command.id} data-phase={ready ? 'ready' : 'collecting'}>
+<section
+  class="command-host"
+  data-command={command?.id}
+  data-phase={command === null ? 'idle' : ready ? 'ready' : 'collecting'}
+>
   <div class="row">
     <span class="label">コマンド</span>
     {#each commands as candidate (candidate.id)}
       <button
         id={candidate.buttonId}
-        class:on={candidate.id === command.id}
-        onclick={() => (candidate.id === command.id ? pressActive() : start(candidate.id))}
-        disabled={candidate.id === command.id && (busy || (!ready && needsEnter(command)))}
+        class:on={command !== null && candidate.id === command.id}
+        onclick={() => (command !== null && candidate.id === command.id ? pressActive() : start(candidate.id))}
+        disabled={command !== null && candidate.id === command.id && (busy || (!ready && needsEnter(command)))}
       >
-        {candidate.label}{candidate.id === command.id && needsEnter(candidate) ? ' (Enter)' : ''}
+        {candidate.label}{command !== null && candidate.id === command.id && needsEnter(candidate) ? ' (Enter)' : ''}
       </button>
     {/each}
     <span id="command-prompt" class="value" class:dim={!ready}>{prompt}</span>
@@ -624,24 +665,28 @@
     </div>
   {/if}
 
-  <div class="row">
-    {#each numberArgs as spec (spec.name)}
-      <label class="label" for={spec.inputId}>{spec.label} {spec.unit}</label>
-      <input
-        id={spec.inputId}
-        type="text"
-        inputmode="decimal"
-        autocomplete="off"
-        placeholder={spec.placeholder}
-        value={numberText[spec.name] ?? ''}
-        oninput={(event) => {
-          numberText = { ...numberText, [spec.name]: (event.target as HTMLInputElement).value }
-        }}
-        onkeydown={(event) => onNumberKeydown(event, spec)}
-      />
-    {/each}
-    <button id="command-abort" onclick={abort}>中断 (Esc)</button>
-  </div>
+  {#if command !== null}
+    <!-- **無起動ではこの行ごと出さない**(2026-08-28)。`#command-abort` はDOMに無いことが
+         完了条件そのものなので、`disabled`/非表示ではなく `{#if}` でDOMから外す。 -->
+    <div class="row">
+      {#each numberArgs as spec (spec.name)}
+        <label class="label" for={spec.inputId}>{spec.label} {spec.unit}</label>
+        <input
+          id={spec.inputId}
+          type="text"
+          inputmode="decimal"
+          autocomplete="off"
+          placeholder={spec.placeholder}
+          value={numberText[spec.name] ?? ''}
+          oninput={(event) => {
+            numberText = { ...numberText, [spec.name]: (event.target as HTMLInputElement).value }
+          }}
+          onkeydown={(event) => onNumberKeydown(event, spec)}
+        />
+      {/each}
+      <button id="command-abort" onclick={abort}>中断 (Esc)</button>
+    </div>
+  {/if}
 </section>
 
 <style>
