@@ -755,4 +755,3 @@ class Server:
                     await _send(target, payload)
                 except Exception:
                     self.clients.discard(target)
-

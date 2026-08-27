@@ -19,9 +19,29 @@ from __future__ import annotations
 
 import sys
 
+# --------------------------------------------------------------------------------------
+# 再輸出(入口の本体)
+# --------------------------------------------------------------------------------------
+# **入口は名前を減らさない。** 分割前の `duocad.server` はここに並ぶ名前をすべて
+# モジュールスコープに持っていて、`duocad.server.<名前>` で引けた。実体を別ファイルへ
+# 移したあとも同じ名前が同じように引けることが、この入口を残す理由そのものである
+# (`import` で引く側だけでなく、モジュール属性を差し替える検査もここを見る)。
+# 素通しのimport(下の `# noqa: F401`)は使われていないように見えるが**消さない**。
+import asyncio  # noqa: F401  分割前から `duocad.server.asyncio` で引けた
+import json  # noqa: F401
+import os  # noqa: F401
+import threading  # noqa: F401
+from functools import partial  # noqa: F401
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer  # noqa: F401
+from pathlib import Path  # noqa: F401
+from typing import Any, Optional  # noqa: F401
+
+from . import catalog, io_step, kernel, parameters, query, region, selection, sketch  # noqa: F401
 # `build_provider` の再輸出は**差し替え点**である。`Server._ensure_ai_loop` はこの入口越しに
 # 引く(`tests/test_agent_ws.py` が `duocad.server.build_provider` を monkeypatch する)。
-from .agent import build_provider
+from .agent import AgentLoop, Cancellation, ProviderError, build_provider  # noqa: F401
+from .agent.providers import DEFAULT_OPENAI_COMPAT_BASE_URL  # noqa: F401
+from .document import Document  # noqa: F401
 from .net.http import (
     MCP_HTTP_MAX_BODY,
     MCP_HTTP_PATH,
@@ -37,30 +57,32 @@ from .net.ws import (
     SELECTION_CONSUMING_COMMANDS,
     SKETCH_COMMANDS,
     Server,
+    _send,  # noqa: F401
 )
+from .oplog import OpLog  # noqa: F401
 from .paths import DEFAULT_MODELS_DIR, DEFAULT_WEB_DIST, REPO_ROOT
-from .session import PREVIEWABLE_VERBS, Session
+from .session import (
+    PREVIEWABLE_VERBS,
+    Session,
+    _log_args_for_state,  # noqa: F401
+    _REDACTED_LOG_ARGS,  # noqa: F401
+    _RESERVED_WINDOWS_NAMES,  # noqa: F401
+)
+from .speculative import speculative  # noqa: F401
+from .verbs import (  # noqa: F401
+    chamfer as chamfer_verb,
+    extrude as extrude_verb,
+    extrude_face as extrude_face_verb,
+    fillet as fillet_verb,
+    import_step as import_step_verb,
+    import_svg as import_svg_verb,
+    pattern_circular as pattern_circular_verb,
+    pattern_rectangular as pattern_rectangular_verb,
+)
 
-__all__ = [
-    "AI_PROVIDERS",
-    "DEFAULT_MODELS_DIR",
-    "DEFAULT_WEB_DIST",
-    "FEATURE_COMMANDS",
-    "FILE_COMMANDS",
-    "MCP_HTTP_MAX_BODY",
-    "MCP_HTTP_PATH",
-    "PREVIEWABLE_VERBS",
-    "REPO_ROOT",
-    "SELECTION_CONSUMING_COMMANDS",
-    "SKETCH_COMMANDS",
-    "Server",
-    "Session",
-    "ToolsOnLoop",
-    "WebHandler",
-    "build_provider",
-    "mcp_http_hosts",
-    "start_http_server",
-]
+# **`__all__` は置かない。** 置くと `from duocad.server import *` で出る名前が分割前より
+# 狭くなる(属性アクセスには効かないが、星importの意味は変わる)。入口が提供するものは
+# 上のdocstringの地図が示す。
 
 
 if __name__ == "__main__":
