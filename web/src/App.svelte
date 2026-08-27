@@ -1107,6 +1107,12 @@
       // 文書の状態ではないので、ここを叩いてもコアへは何も飛ばない。
       fov,
       setFov: (deg: number) => applyFov(deg),
+      // **視点の向きそのものを見るための穴**(2026-08-28のZ-up化で足した)。カメラの姿勢と
+      // 「この世界座標が画面のどこに写るか」を返す。`projectFace` では測れない ——
+      // あちらは遮蔽された面に null を返すので、**上面と下面のどちらが画面で上か**のように
+      // 見えていない側を含む比較ができない。どちらも読むだけで、コアへは何も飛ばない。
+      cameraPose: () => viewport?.cameraPose() ?? null,
+      projectPoint: (point: [number, number, number]) => viewport?.projectPoint(point) ?? null,
       // C: スケッチ。**実機検査が本物のクリックで描く**ための穴
       sketches,
       activeSketch: sketchId,

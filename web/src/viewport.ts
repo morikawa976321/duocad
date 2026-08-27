@@ -335,6 +335,30 @@ export interface Viewport {
    * これをしないと画角の変更がただの「ズーム」になり、比べたいものが比べられない。
    */
   setFov(deg: number): void
+  /**
+   * 今のカメラの姿勢(ワールド座標)。**実機検査が視点の向きそのものを見るための穴**で、
+   * 描画にも操作にも使わない。
+   *
+   * ここから確かめたいのは2点: `up` がワールド+Zであること、および**水平ドラッグで
+   * オービットさせても `position.z - target.z` が変わらない**こと(＝回転の極が+Zであること)。
+   * 後者は `OrbitControls` が生成時の up を `_quat` へ焼き込む仕様のせいで**静かに壊れる**
+   * 種類の不具合で、画面の見た目からは分からない。
+   */
+  cameraPose(): {
+    position: [number, number, number]
+    target: [number, number, number]
+    up: [number, number, number]
+  }
+  /**
+   * ワールド座標の点が画面のどこに写るか(ビューポート左上を原点とする画素)。
+   * カメラの前後のクリップ範囲の外なら null。
+   *
+   * **`project*` の仲間ではない** —— あちらは「その画素が本当にそれを取れる」ことまで
+   * 確かめて返すピック用の穴だが、こちらは投影そのものを問う。**「+Zが画面で上か」は
+   * 遮蔽と無関係に決まる**(真上から見れば下面は隠れて `project` が null を返すが、
+   * 上下関係は変わらない)ので、ピックできるかを条件にすると測りたいものが測れない。
+   */
+  projectPoint(point: readonly [number, number, number]): { x: number; y: number } | null
   /** スケッチ平面上の (u,v) の画面座標。実機検査が**本物のクリックで描く**ために要る。 */
   projectSketchPoint(sketchId: string, u: number, v: number): { x: number; y: number } | null
   /**
@@ -358,6 +382,32 @@ export interface Viewport {
   projectRegion(sketchId: string, index: number): { x: number; y: number } | null
   dispose(): void
 }
+
+/**
+ * ワールドの上方向 —— **X=右 / Y=奥 / Z=上の右手系**(Fusion 360・Blender・スライサと
+ * 同じ、CADの標準)。カーネル(OCCT/build123d)は元から Z-up で、`_BASE_PLANE_AXES` の
+ * "XY" の法線も `(0,0,1)` である。**ずれていたのはビューアだけだった**(2026-08-28に是正)。
+ *
+ * **`(0,0,1)` をこのファイルの他の場所へ直書きしないこと。** up軸の値が2か所以上に散ると
+ * 次の改修で必ず片方が取り残される —— 直前まで `camera.up.set(0, 1, 0)` の直書きが2か所
+ * あり、**スケッチに1回入って出るだけで Y-up へ戻っていた**。
+ */
+const WORLD_UP = new THREE.Vector3(0, 0, 1)
+
+/**
+ * **three.js の既定の上方向そのものを、モジュールの読み込み時に差し替える。**
+ *
+ * `camera.up` を後から書き換える形では効かない箇所が2つあるので、**カメラ・
+ * OrbitControls・ライトを1つも `new` する前に**ここで確定させる(いずれも three 0.185.1 の
+ * 実物で確認):
+ *
+ * - `OrbitControls` はコンストラクタで `_quat` に**生成時の `object.up`** を焼き込み、
+ *   `update()` で再計算しない。ここが Y のままだと、見た目の上方向は正しいのに
+ *   **水平ドラッグの回転軸だけが Y軸まわりのまま静かに残る**。
+ * - `HemisphereLight` はコンストラクタで `position` に `DEFAULT_UP` を複写し、
+ *   **その position が空(sky)の向きになる**。ここが Y のままだと天地が横倒しになる。
+ */
+THREE.Object3D.DEFAULT_UP.copy(WORLD_UP)
 
 const BASE_COLOR = 0x9aa6b2
 const HIGHLIGHT_COLOR = 0xffb454
@@ -445,6 +495,18 @@ export const FOV_DEFAULT = 45
  * **45度で従来の `radius * 3` と一致させるための余白**(`1.243/tan(22.5°) ≈ 3.00`)。
  */
 const SKETCH_FIT_MARGIN = 1.243
+
+/**
+ * 既定の視点の向き(front-top-right)。**距離に掛けて注視点へ足す**ためのベクトルで、
+ * 長さは 1.166(= `hypot(1, 1, 0.6)`)。初期視点と `frameToContent` の2か所が使う。
+ *
+ * **X と Y に等量、上方向(Z)は控えめ** —— Y-up 時代の `(d, 0.6d, d)` の構図をそのまま
+ * Z-up へ移したもので、注視点からの距離は以前と変わらない(距離を決めるのは `fitDistance`
+ * であり、こちらは向きだけを持つ)。**Y が負**なのは duocad では Y=奥 だからで、`+Y` から
+ * 見ると背面になる —— Fusion / SolidWorks の既定アイソメと同じ
+ * front(−Y) / top(+Z) / right(+X) の側から見る。
+ */
+const HOME_VIEW_OFFSET = new THREE.Vector3(1, -1, 0.6)
 
 /** クリックとドラッグ(視点回転)の境目。これ以上動いたら選択ではなく回転とみなす。 */
 const CLICK_MOVE_LIMIT_PX = 6
@@ -548,7 +610,7 @@ export function createViewport(container: HTMLElement): Viewport {
   {
     const diagonal = Math.hypot(GRID_EXTENT * 2, GRID_EXTENT * 2, GRID_EXTENT * 2)
     const distance = diagonal * 1.2
-    camera.position.set(distance, distance * 0.6, distance)
+    camera.position.copy(HOME_VIEW_OFFSET).multiplyScalar(distance)
   }
   scene.add(camera)
   // 光をカメラに付ける(視点を回しても面が真っ黒にならない。見た目の作り込みではなく可視性)
@@ -988,7 +1050,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // このガードは発火しないが、将来もし下限を下げたら距離が伸びてfarを追い越し、
     // シーンが丸ごと消える —— そのときにここで気づけるようにしておく。
     camera.far = Math.max(diagonal * 20, distance * 4)
-    camera.position.copy(center).add(new THREE.Vector3(distance, distance * 0.6, distance))
+    camera.position.copy(center).addScaledVector(HOME_VIEW_OFFSET, distance)
     camera.updateProjectionMatrix()
     controls.target.copy(center)
     controls.update()
@@ -1008,6 +1070,25 @@ export function createViewport(container: HTMLElement): Viewport {
     camera.far = Math.max(camera.far, offset.length() * 4)
     camera.updateProjectionMatrix()
     controls.update()
+  }
+
+  function cameraPose(): {
+    position: [number, number, number]
+    target: [number, number, number]
+    up: [number, number, number]
+  } {
+    return {
+      position: [camera.position.x, camera.position.y, camera.position.z],
+      target: [controls.target.x, controls.target.y, controls.target.z],
+      up: [camera.up.x, camera.up.y, camera.up.z],
+    }
+  }
+
+  function projectPoint(point: readonly [number, number, number]): { x: number; y: number } | null {
+    const { width, height } = size()
+    const projected = new THREE.Vector3(point[0], point[1], point[2]).project(camera)
+    if (projected.z < -1 || projected.z > 1) return null
+    return { x: ((projected.x + 1) / 2) * width, y: ((1 - projected.y) / 2) * height }
   }
 
   /** 直近に使ったハイライト色(`highlightColors`)。出していない種別は null。 */
@@ -1708,7 +1789,7 @@ export function createViewport(container: HTMLElement): Viewport {
     clearGhost()
     // 上方向を既定へ戻す。`lookAtSketch` が平面のv軸へ倒したままだと、モードを抜けた後の
     // オービットが入る前と違う傾きになる。
-    camera.up.set(0, 1, 0)
+    camera.up.copy(WORLD_UP)
     const previous = cameraBeforeSketch
     cameraBeforeSketch = null
     if (previous !== null && previous.framedAtEntry) {
@@ -2084,10 +2165,12 @@ export function createViewport(container: HTMLElement): Viewport {
     setActiveSketch,
     lookAtSketch,
     frameAll() {
-      camera.up.set(0, 1, 0) // スケッチの v 軸へ倒したままだと、戻したのに傾いて見える
+      camera.up.copy(WORLD_UP) // スケッチの v 軸へ倒したままだと、戻したのに傾いて見える
       frameToContent()
     },
     setFov,
+    cameraPose,
+    projectPoint,
     projectSketchPoint,
     projectBasePlane,
     projectRegion,

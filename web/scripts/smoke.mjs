@@ -22,6 +22,17 @@ import { fail, ok, parseArgs } from './args.mjs'
 import { startServer } from './server.mjs'
 import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
 
+/**
+ * 体積が「元と同じ」かを見るときの**相対**許容。**絶対値で 1e-9 と書かない** ——
+ * この検査の体積は 1.9e5 mm³ のオーダーで、undo は形を作り直すので OCCT の丸めが
+ * 最後の数ビットに残る(実測: 187548.90762404303 → undo後 187548.90762404166。
+ * 差 1.4e-9 = 相対 7e-15)。**どの面を押したかで再計算の経路が変わるので、この差が
+ * 出るかどうかは視点(=どの面が指せるか)にまで依存する** —— 2026-08-28にビューポートを
+ * Z-up へ変えて指せる面が変わった際、絶対値 1e-9 では実際に落ちた。区別したい変化は
+ * 押し出し1手ぶん(1920 mm³ 以上)なので、相対 1e-9(= 1.9e-4 mm³)でも桁違いに厳しい。
+ */
+const VOLUME_EPS = 1e-9
+
 const options = parseArgs(process.argv.slice(2))
 // `--url` を渡したときだけ既に立っているサーバへ繋ぐ(既定は自分で立てる)。
 const attachUrl = options.url ?? null
@@ -343,6 +354,24 @@ async function main() {
       )
     }
 
+    /**
+     * **視点が落ち着いてから**面の画面座標を返す。
+     *
+     * `lookAtSketch` / `sketch-exit` の直後はOrbitControlsのダンピングが効いていて、
+     * カメラが数十msかけて動き続ける —— 射影した座標をそのまま押すと**別の部品の面**に
+     * 当たる(実測で踏んだ)。2回続けて同じ画素に射影できたら止まったとみなす。
+     */
+    async function locateFaceWhenStill(bodyId, faceIndex) {
+      let previous = null
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const at = await locateFace(bodyId, faceIndex)
+        if (at && previous && Math.hypot(at.x - previous.x, at.y - previous.y) < 1) return at
+        previous = at
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      return null
+    }
+
     const secondIndex = await page.evaluate(
       (bodyId, taken) => {
         const part = window.__duocad.parts.find((entry) => entry.body_id === bodyId)
@@ -409,8 +438,15 @@ async function main() {
     })
     ok('何も無い所のクリックで全部外れた(旧「全解除」ボタンの代わり)')
 
-    // 押し出しのために選び直す(以後の検査は面1つが選ばれている前提)
-    const again = await locateFace(extrudeTarget.body_id, target.index)
+    // 押し出しのために選び直す(以後の検査は面1つが選ばれている前提)。
+    //
+    // **`locateFaceWhenStill` を使う** —— 直前の「全解除」の直後は画面がまだ落ち着いて
+    // おらず、素の `locateFace` だと**射影した瞬間と押した瞬間で画素の意味がずれ、
+    // 隣の面に当たる**。2026-08-28に視点を Z-up の front-top-right へ変えて指せる面が
+    // 別の面になったところ、**6回に2回ここで落ちた**(それまでの面はたまたま境界から
+    // 遠く、数画素ずれても同じ面だった)。射影の前に往復を1つ挟むだけで4回連続で通った
+    // ことから、原因は「面が取れない」ではなく**射影と実クリックの時間差**である。
+    const again = await locateFaceWhenStill(extrudeTarget.body_id, target.index)
     if (!again) fail(`面 ${target.index} の位置が取れない(選び直し)`)
     await page.mouse.click(again.x, again.y)
     await page.waitForFunction(
@@ -609,7 +645,8 @@ async function main() {
       (bodyId) => window.__duocad.parts.find((b) => b.body_id === bodyId).volume,
       extrudeTarget.body_id,
     )
-    if (Math.abs(volumeAfterEscape - volumeBefore) > 1e-9) {
+    // **体積が「変わっていない」かは相対で見る**(下の undo と同じ理由。VOLUME_EPS 参照)。
+    if (Math.abs(volumeAfterEscape - volumeBefore) > Math.abs(volumeBefore) * VOLUME_EPS) {
       fail(`Escで中断したのに体積が変わった: ${volumeBefore} -> ${volumeAfterEscape}`)
     }
     ok('Escで中断: 操作ログ・体積とも変化なし(プレビューは1行も残さない)')
@@ -639,13 +676,14 @@ async function main() {
     // -------------------------------------------------------------- undo(押し出し)
     await pressUndo(page)
     await page.waitForFunction(
-      (bodyId, expectedVolume) =>
+      (bodyId, expectedVolume, eps) =>
         Math.abs(
           window.__duocad.parts.find((b) => b.body_id === bodyId).volume - expectedVolume,
-        ) < 1e-9,
+        ) <= Math.abs(expectedVolume) * eps,
       { timeout, polling: 50 },
       extrudeTarget.body_id,
       volumeBefore,
+      VOLUME_EPS,
     )
     ok(`undo 1回で押し出し前の体積へ戻った: ${volumeBefore}`)
 
@@ -796,23 +834,6 @@ async function main() {
         : []
     }, extrudeTarget.body_id)
 
-    /**
-     * **視点が落ち着いてから**面の画面座標を返す。
-     *
-     * `lookAtSketch` / `sketch-exit` の直後はOrbitControlsのダンピングが効いていて、
-     * カメラが数十msかけて動き続ける —— 射影した座標をそのまま押すと**別の部品の面**に
-     * 当たる(実測で踏んだ)。2回続けて同じ画素に射影できたら止まったとみなす。
-     */
-    async function locateFaceWhenStill(bodyId, faceIndex) {
-      let previous = null
-      for (let attempt = 0; attempt < 40; attempt += 1) {
-        const at = await locateFace(bodyId, faceIndex)
-        if (at && previous && Math.hypot(at.x - previous.x, at.y - previous.y) < 1) return at
-        previous = at
-        await new Promise((resolve) => setTimeout(resolve, 50))
-      }
-      return null
-    }
 
     let refused = null
     let tried = 0

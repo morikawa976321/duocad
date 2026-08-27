@@ -69,7 +69,7 @@ const VERBS = [
   'redo',
 ]
 
-const results = { human: {}, ai: {}, interleaved: null, physical: null, fov: null }
+const results = { human: {}, ai: {}, interleaved: null, physical: null, fov: null, zup: null }
 
 function record(side, verb, ok, note) {
   results[side][verb] = { ok, note }
@@ -95,7 +95,7 @@ function failedLabels(collected) {
       else if (!entry.ok) failed.push(`${side}/${verb}`)
     }
   }
-  for (const name of ['interleaved', 'physical', 'fov']) {
+  for (const name of ['interleaved', 'physical', 'fov', 'zup']) {
     const entry = collected[name]
     if (entry === null || entry === undefined) failed.push(`${name}(未実行)`)
     else if (!entry.ok) failed.push(name)
@@ -131,6 +131,8 @@ async function main() {
   let browser = null
   /** 人間側が最初に作ったスケッチのID(`set_parameter` が再開に使う)。 */
   let humanSketchId = null
+  /** 最初にスケッチを抜けた直後の `camera.up`(下の「座標系」の節が判定する)。 */
+  let upAfterFirstExit = null
 
   try {
     const initialized = await mcp.send('initialize', {
@@ -489,22 +491,39 @@ async function main() {
     })
 
     await page.click('#sketch-exit')
+    await waitFor(() => window.__duocad.activeSketch === null, '最初のスケッチを抜けられない')
+    // **抜けた直後の上方向を控える**(判定は下の「座標系」の節。完了条件5)。
+    //
+    // **ここが `setActiveSketch(null)` の「既定へ戻す」書き込みが効く唯一の経路**である。
+    // 最初の板はこのスケッチの中で生まれた(=入った時点では何も無かった)ので、
+    // `cameraBeforeSketch.framedAtEntry` が false になり「入る前の視点」への復帰は
+    // 走らない —— 上方向を決めるのは既定へ戻す1行だけになる。2回目以降の出入りでは
+    // 控えた up が復元されるので、**そちらで見てもこの1行の不具合は隠れる**。
+    //
+    // **`frameAll` より前に読む。** `frameAll` も up を+Zへ直すので、後で読むと隠れる。
+    upAfterFirstExit = await page.evaluate(() => window.__duocad.cameraPose().up)
     await frameAll(page)
     const bodyId = (await look()).parts[0].id
 
     await attempt('human', 'extrude_face', async () => {
       const before = (await look()).parts[0].volume
+      // **押す面は法線で名指しする**(手前=−Y の壁)。以前は「平面のうち最初に射影できた
+      // もの」だったが、それだと**どの面を押したかが視点で変わる** —— 2026-08-28に視点を
+      // Z-up の front-top-right へ変えたとき、それまで当たっていた +Y の壁が裏向きになり、
+      // 別の壁(40×10)が選ばれて後続の形が丸ごと変わった(AI側の `fillet` が、できあがった
+      // 形の都合で OCCT に IsDone=false で断られるところまで波及した)。**受入の筋書きは
+      // カメラの向きに依存させない。**
       const face = await page.evaluate((id) => {
         const rect = document.querySelector('.viewport').getBoundingClientRect()
         const geometry = window.__duocad.getGeometry(id)
-        const planes = [...geometry.faces].filter((item) => item.kind === 'plane')
-        for (const item of planes) {
-          const position = window.__duocad.projectFace(id, item.index)
-          if (position) return { index: item.index, x: position.x + rect.left, y: position.y + rect.top }
-        }
-        return null
+        const wall = geometry.faces.find((item) => item.kind === 'plane' && item.normal[1] < -0.9)
+        if (wall === undefined) return null
+        const position = window.__duocad.projectFace(id, wall.index)
+        return position === null
+          ? null
+          : { index: wall.index, x: position.x + rect.left, y: position.y + rect.top }
       }, bodyId)
-      if (!face) throw new Error('押し出せる面が画面から指せない')
+      if (!face) throw new Error('手前(−Y)の壁が画面から指せない')
       await page.mouse.click(face.x, face.y)
       await waitFor(
         (id, index) =>
@@ -811,10 +830,24 @@ async function main() {
       })
       const mine = proposed.selection.items.filter((item) => item.body === aiBody)
       if (mine.length === 0) throw new Error('円い辺が述語で選べない')
-      await mcp.callTool('propose_selection', { refs: [mine[0]] })
+      // **`measure` で長さを確かめてから一番長い円い辺を選ぶ**(`ai/extrude` と同じ、
+      // 提案を確定前に検算する経路)。**先頭を黙って使わない** —— 直前の `fillet` が
+      // 作る角の小さな円弧(長さ1.57mm = 半径1の四半円)も述語では同じ「円い辺」なので、
+      // 添字の順で取ると**長さ1の面取りが入る余地のない辺**を掴む。2026-08-28に視点を
+      // Z-up へ変えて形が少し変わった際、実際にそこへ落ちて OCCT に
+      // 「no suitable edges」で断られた(それまでは偶然通っていた)。
+      const candidates = []
+      for (const ref of mine) {
+        await mcp.callTool('propose_selection', { refs: [ref] })
+        const measured = await mcp.callTool('measure', {})
+        candidates.push({ ref, length: measured.items[0]?.length ?? 0 })
+      }
+      candidates.sort((a, b) => b.length - a.length)
+      const target = candidates[0]
+      await mcp.callTool('propose_selection', { refs: [target.ref] })
       await mcp.callTool('commit_selection')
       await mcp.callTool('chamfer', { distance: 1 })
-      return '述語で円い辺を選び、長さ1で面取りした'
+      return `述語で円い辺を${candidates.length}本集め、measure で一番長いもの(辺${target.ref.index}・${target.length.toFixed(1)}mm)を長さ1で面取りした`
     })
 
     await attempt('ai', 'set_parameter', async () => {
@@ -1199,6 +1232,246 @@ async function main() {
       await setSettingsOpen(false).catch(() => {})
     }
 
+
+    // ================================================================ 座標系: Z-up 右手系
+    //
+    // **2026-08-28にビューポートを Z-up(X=右 / Y=奥 / Z=上)へ直した**ので、受入に数手
+    // 足す(実機検査のファイルは増やさない)。カーネルは元から Z-up で、**ずれていたのは
+    // ビューアだけ**だった。見るのは4点:
+    //
+    //   1. `camera.up` がワールド+Z、かつ初期視点が front-top-right
+    //   2. **+Z が画面で上** —— XY平面から +Z へ押し出した部品の上面が、下面より画面で上に写る
+    //   3. **オービットの極が +Z** —— 水平ドラッグでZ軸まわりに回る(Y軸まわりではない)
+    //   4. **スケッチに入って出ても Y-up へ戻らない**
+    //
+    // **上下面の比較に `projectFace` は使えない。** あれは「その画素が本当にその面を
+    // 取れる」ことまで確かめて返すので、**上から見えている限り下面は常に null** になり、
+    // 比べる相手が存在しない。遮蔽と無関係な投影そのものを問う `projectPoint` を使う。
+    //
+    // **3 は画面の見た目からは分からない。** `OrbitControls` はコンストラクタで生成時の
+    // `object.up` を `_quat` に焼き込み `update()` で再計算しないので、up を後から
+    // 書き換えた実装では**画面の上方向だけが正しく、回転の極は+Yのまま**になる。
+    // 判定は「水平ドラッグしても注視点からの高さ(`position.z - target.z`)が変わらない」
+    // ＋「回転軸上の点の画面位置が動かない」で見る —— 極が+Yなら高さが大きく振れる。
+    console.log('\n--- 座標系: Z-up 右手系(上方向・オービットの極・視点) ---')
+
+    /** 減衰(`enableDamping`)が効いているので、カメラが止まってから読む。 */
+    async function settledPose() {
+      let previous = null
+      for (let guard = 0; guard < 200; guard += 1) {
+        const pose = await page.evaluate(() => window.__duocad.cameraPose())
+        if (
+          previous !== null &&
+          previous.position.every((value, i) => Math.abs(value - pose.position[i]) < 1e-4)
+        ) {
+          return pose
+        }
+        previous = pose
+        await new Promise((resolve) => setTimeout(resolve, 30))
+      }
+      throw new Error('カメラが止まらない(減衰が終わらない)')
+    }
+
+    try {
+      await setSettingsOpen(false)
+      await frameAll(page)
+      const pose = await settledPose()
+
+      // (1) 上方向そのもの(完了条件1)。
+      const up = pose.up
+      if (Math.abs(up[0]) > 1e-6 || Math.abs(up[1]) > 1e-6 || Math.abs(up[2] - 1) > 1e-6) {
+        throw new Error(`camera.up が [${up.map((v) => v.toFixed(3)).join(', ')}](+Zでない)`)
+      }
+
+      // (2) 初期視点が front-top-right(完了条件4)。**X と Y に等量、Zは控えめ**の
+      //     (d, -d, 0.6d) —— `+Y` から見ると背面になるので Y は負である。
+      const offset = pose.position.map((value, i) => value - pose.target[i])
+      const home = { x: offset[0], y: offset[1], z: offset[2] }
+      if (!(home.x > 0 && home.y < 0 && home.z > 0)) {
+        throw new Error(
+          `初期視点が front-top-right でない(注視点からのオフセット ` +
+            `${offset.map((v) => v.toFixed(1)).join(', ')}。+X / −Y / +Z の側から見るはず)`,
+        )
+      }
+      const xyRatio = Math.abs(home.y) / home.x
+      const zRatio = home.z / home.x
+      if (Math.abs(xyRatio - 1) > 0.05 || Math.abs(zRatio - 0.6) > 0.05) {
+        throw new Error(
+          `初期視点の比が (1, -1, 0.6) でない(|y|/x=${xyRatio.toFixed(3)} z/x=${zRatio.toFixed(3)})`,
+        )
+      }
+
+      // (3) **+Z が画面で上**(完了条件2)。まず注視点とその真上40mmの点で見る。
+      const axisPoint = [pose.target[0], pose.target[1], pose.target[2] + 40]
+      const screen = await page.evaluate(
+        (below, above) => ({
+          below: window.__duocad.projectPoint(below),
+          above: window.__duocad.projectPoint(above),
+        }),
+        pose.target,
+        axisPoint,
+      )
+      if (screen.below === null || screen.above === null) {
+        throw new Error('注視点とその真上40mmの点が画面に射影できない')
+      }
+      const axisRise = screen.below.y - screen.above.y // 画面yは下向きなので、上なら正
+      if (axisRise < 10) {
+        throw new Error(
+          `+Zへ40mm動かしても画面で ${axisRise.toFixed(1)} 画素しか上がらない(画面の上方向が+Zでない)`,
+        )
+      }
+
+      // (4) **押し出した部品の上面と下面**(完了条件2の本番)。法線 +Z / −Z の面の重心を
+      //     射影して、上面のほうが画面で上(y が小さい)ことを見る。
+      const plate = await page.evaluate(() => {
+        const hook = window.__duocad
+        for (const part of hook.parts) {
+          const geometry = hook.getGeometry(part.body_id)
+          if (geometry === null) continue
+          const top = geometry.faces.find((face) => face.normal[2] > 0.9)
+          const bottom = geometry.faces.find((face) => face.normal[2] < -0.9)
+          if (top === undefined || bottom === undefined) continue
+          return {
+            bodyId: part.body_id,
+            top: { index: top.index, at: hook.projectPoint(top.centroid), z: top.centroid[2] },
+            bottom: {
+              index: bottom.index,
+              at: hook.projectPoint(bottom.centroid),
+              z: bottom.centroid[2],
+            },
+          }
+        }
+        return null
+      })
+      if (plate === null) throw new Error('法線が +Z と −Z の面を両方持つボディが1つも無い')
+      if (plate.top.at === null || plate.bottom.at === null) {
+        throw new Error('上面・下面の重心が画面に射影できない')
+      }
+      if (!(plate.top.z > plate.bottom.z)) {
+        throw new Error(
+          `上面の重心のZ(${plate.top.z})が下面(${plate.bottom.z})より上でない(前提が崩れている)`,
+        )
+      }
+      const faceRise = plate.bottom.at.y - plate.top.at.y
+      if (faceRise <= 0) {
+        throw new Error(
+          `上面(面${plate.top.index})が画面で下面(面${plate.bottom.index})より下にある` +
+            `(y ${plate.top.at.y.toFixed(1)} vs ${plate.bottom.at.y.toFixed(1)})`,
+        )
+      }
+
+      // (5) **オービットの極が +Z**(完了条件3)。ビューポートを水平にドラッグして、
+      //     注視点からの高さと、回転軸上の点の画面位置が動かないことを見る。
+      const rect = await page.evaluate(() => {
+        const box = document.querySelector('.viewport').getBoundingClientRect()
+        return { left: box.left, top: box.top, width: box.width, height: box.height }
+      })
+      const midY = rect.top + rect.height / 2
+      const centerX = rect.left + rect.width / 2
+      const swing = Math.min(220, rect.width / 3)
+      await page.mouse.move(centerX - swing, midY)
+      await page.mouse.down()
+      for (let i = 1; i <= 10; i += 1) {
+        await page.mouse.move(centerX - swing + (2 * swing * i) / 10, midY)
+      }
+      await page.mouse.up()
+      const turned = await settledPose()
+      const turnedOffset = turned.position.map((value, i) => value - turned.target[i])
+      const azimuthBefore = Math.atan2(offset[1], offset[0])
+      const azimuthAfter = Math.atan2(turnedOffset[1], turnedOffset[0])
+      let azimuthDelta = Math.abs(azimuthAfter - azimuthBefore)
+      if (azimuthDelta > Math.PI) azimuthDelta = 2 * Math.PI - azimuthDelta
+      const radius = Math.hypot(...offset)
+      if (azimuthDelta < 0.5) {
+        throw new Error(
+          `水平に${(2 * swing).toFixed(0)}画素ドラッグしても方位が ${azimuthDelta.toFixed(3)} rad しか回らない(オービットが効いていない)`,
+        )
+      }
+      const heightDrift = Math.abs(turnedOffset[2] - offset[2])
+      if (heightDrift > 0.01 * radius) {
+        throw new Error(
+          `水平ドラッグで注視点からの高さが ${offset[2].toFixed(1)} → ${turnedOffset[2].toFixed(1)} へ動いた` +
+            `(${heightDrift.toFixed(2)}mm。回転の極が+Zでない ——` +
+            ` OrbitControls が生成時の up を焼き込んでいる)`,
+        )
+      }
+      const axisAfter = await page.evaluate(
+        (point) => window.__duocad.projectPoint(point),
+        axisPoint,
+      )
+      if (axisAfter === null) throw new Error('回転軸上の点が回した後に射影できない')
+      const axisShift = Math.hypot(axisAfter.x - screen.above.x, axisAfter.y - screen.above.y)
+      if (axisShift > 3) {
+        throw new Error(
+          `水平ドラッグで回転軸(注視点の真上)の点が ${axisShift.toFixed(1)} 画素動いた(その軸で回っていない)`,
+        )
+      }
+
+      // (6) **スケッチに入って出ても Y-up へ戻らない**(完了条件5)。既定へ戻す処理が
+      //     `(0,1,0)` を直書きしていたので、1往復するだけで倒れていた。
+      //     まず**最初の退出**(復帰の走らない経路。上の `upAfterFirstExit` 参照)、
+      //     続いて2回目以降の出入り(控えた up の復元が走る経路)の両方を見る。
+      if (upAfterFirstExit === null) throw new Error('最初にスケッチを抜けたときの up を控えていない')
+      const firstUp = upAfterFirstExit
+      if (
+        Math.abs(firstUp[0]) > 1e-6 ||
+        Math.abs(firstUp[1]) > 1e-6 ||
+        Math.abs(firstUp[2] - 1) > 1e-6
+      ) {
+        throw new Error(
+          `最初にスケッチを抜けた直後の camera.up が [${firstUp.map((v) => v.toFixed(3)).join(', ')}]` +
+            `(既定へ戻す処理が Y-up を直書きしている)`,
+        )
+      }
+      await page.click(`[data-sketch-id="${humanSketchId}"] .sketch-name`)
+      await waitFor((id) => window.__duocad.activeSketch === id, 'スケッチへ再入場できない', humanSketchId)
+      await page.click('#sketch-exit')
+      await waitFor(() => window.__duocad.activeSketch === null, 'スケッチを抜けられない')
+      const afterSketch = await settledPose()
+      const backUp = afterSketch.up
+      if (Math.abs(backUp[0]) > 1e-6 || Math.abs(backUp[1]) > 1e-6 || Math.abs(backUp[2] - 1) > 1e-6) {
+        throw new Error(
+          `スケッチを1往復したら camera.up が [${backUp.map((v) => v.toFixed(3)).join(', ')}] になった(Y-upへ戻っている)`,
+        )
+      }
+
+      await frameAll(page)
+
+      results.zup = {
+        ok: true,
+        up,
+        home: offset.map((value) => Number(value.toFixed(2))),
+        homeRatio: { xy: Number(xyRatio.toFixed(3)), z: Number(zRatio.toFixed(3)) },
+        axisRise: Number(axisRise.toFixed(1)),
+        plate: {
+          bodyId: plate.bodyId,
+          topFace: plate.top.index,
+          bottomFace: plate.bottom.index,
+          rise: Number(faceRise.toFixed(1)),
+        },
+        orbit: {
+          azimuthDelta: Number(azimuthDelta.toFixed(3)),
+          heightDrift: Number(heightDrift.toFixed(4)),
+          axisShift: Number(axisShift.toFixed(2)),
+          radius: Number(radius.toFixed(1)),
+        },
+        upAfterFirstExit: firstUp,
+        upAfterSketchRoundTrip: backUp,
+      }
+      console.log(
+        `  OK   座標系: up=[${up.join(', ')}] / 視点は front-top-right` +
+          `(${offset.map((v) => v.toFixed(0)).join(', ')}。|y|/x=${xyRatio.toFixed(2)} z/x=${zRatio.toFixed(2)}) /` +
+          ` +Zへ40mmで画面 ${axisRise.toFixed(0)}px 上がる /` +
+          ` 上面(面${plate.top.index})は下面(面${plate.bottom.index})より ${faceRise.toFixed(0)}px 上 /` +
+          ` 水平ドラッグで方位 ${azimuthDelta.toFixed(2)}rad 回しても高さのずれ ${heightDrift.toFixed(3)}mm・` +
+          `軸上の点 ${axisShift.toFixed(1)}px / スケッチは最初の退出も1往復の後も up は +Z`,
+      )
+    } catch (error) {
+      results.zup = { ok: false, error: String(error.message ?? error) }
+      console.log(`  NG   座標系: ${results.zup.error}`)
+      await setSettingsOpen(false).catch(() => {})
+      await page.evaluate(() => window.__duocad.frameAll()).catch(() => {})
+    }
     // ================================================================ 副次: 実物相当
     //
     // **別プロセス(空の文書)で作る**。`join` の押し出しは「対象が無ければ新しいソリッドを
