@@ -91,16 +91,23 @@ async function main() {
       }
     }
 
-    /** コマンドを起動してパスを打ち、Enterで確定する（入力欄は毎回消してから打つ）。 */
+    // **入力欄idはボタンidで決まる**(2026-08-27にFilesPanelへ移設。`#file-path`の
+    // 時間貸しではなく、STEP読み込み/STEP書き出しがそれぞれ専用の欄を持つ)。
+    const INPUT_FOR_BUTTON = {
+      'file-export-step': 'file-export-step-path',
+      'file-import-step': 'file-import-path',
+    }
+
+    /** 対応する欄へパスを打ち、ボタンを押して確定する(入力欄は毎回消してから打つ)。 */
     const run = async (buttonId, path) => {
-      await page.click(`#${buttonId}`)
-      await page.click('#file-path')
+      const inputId = INPUT_FOR_BUTTON[buttonId]
+      await page.click(`#${inputId}`)
       await page.keyboard.down('Control')
       await page.keyboard.press('KeyA')
       await page.keyboard.up('Control')
       await page.keyboard.press('Backspace')
-      await page.type('#file-path', path, { delay: 10 })
-      await page.keyboard.press('Enter')
+      await page.type(`#${inputId}`, path, { delay: 10 })
+      await page.click(`#${buttonId}`)
     }
 
     // -------------------------------------------------------------- 器はいつでもある

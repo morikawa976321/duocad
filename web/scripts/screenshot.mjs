@@ -53,9 +53,8 @@ async function main() {
       await page.type(selector, String(value), { delay: 20 })
     }
 
+    await typeInto('#file-import-path', PC_CASE_STEP)
     await page.click('#file-import-step')
-    await typeInto('#file-path', PC_CASE_STEP)
-    await page.keyboard.press('Enter')
     await page.waitForFunction(
       (expected) => window.__duocad.parts.length === expected,
       { timeout: 60000, polling: 100 },

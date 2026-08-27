@@ -20,6 +20,16 @@
    * 書く」操作であり、一覧からの上書きだけ確認を挟むと**新規保存と挙動が割れる**。
    * **「新規」も同じ**(`onNew`) —— 一覧のクリック1つで別の文書へ移れるのに、空の文書へ
    * 移るときだけ確認を挟むと挙動が割れる。どちらも保存していない編集を捨てる点は同じである。
+   *
+   * **STEP読み込み・STEP書き出し・STL書き出しも一覧の下に置く**(2026-08-27に本人が決定。
+   * それまでツールバーの `CommandHost` に残っていた)。この3つも保存/開くと同じ形で
+   * `App.svelte` が `session.runVerb(...)` を直接呼ぶ(`CommandHost` を経由しない)。
+   * `commands/files.ts` の `FILE_COMMANDS` には `IMPORT_SVG` だけが残る
+   * (`import_svg` はスケッチへ貼る先を選ぶ操作なので `CommandHost` に残る)。
+   *
+   * **送信後もパス欄は消さない**(ファイル名欄=`draftName`とは逆の規律)。STEP/STLのパスは
+   * 同じ値へ書き出し直す・同じファイルを読み直すことが多く、毎回打ち直させると手間になる
+   * ——「新規保存」が消すのは1回きりの新しい名前だからで、性質が違う。
    */
   import type { DocumentInfo } from './session'
 
@@ -29,6 +39,9 @@
     onSave,
     onOpen,
     onNew,
+    onImportStep,
+    onExportStep,
+    onExportStl,
   }: {
     /** `duocad/models/` の中身(サーバの `list_documents` の写し)。 */
     documents: DocumentInfo[]
@@ -40,6 +53,12 @@
     onOpen: (name: string) => void
     /** 空の文書にする(引数なし。ファイルはまだ1つも決まっていない)。 */
     onNew: () => void
+    /** STEPのパスを渡して読み込む(文書を変える。編集可能なボディが増える)。 */
+    onImportStep: (path: string) => void
+    /** 書き出し先のパスを渡してSTEPへ書き出す(文書は変えない)。 */
+    onExportStep: (path: string) => void
+    /** 書き出し先のパスと偏差(mm)を渡してSTLへ書き出す(文書は変えない)。 */
+    onExportStl: (path: string, deviation: number) => void
   } = $props()
 
   /** 打ちかけの新規保存名。送ったら空に戻す(SketchPanelの`editing`と同じ規律)。 */
@@ -80,6 +99,57 @@
   }
 
   const sorted = $derived([...documents].sort((a, b) => b.mtime - a.mtime))
+
+  // ---------------------------------------------------------------- STEP/STL(入出力)
+  /**
+   * 空だけを弾く(**ファイル名の検査`nameProblem`は掛けない**)。STEP/STLは`models/`配下に
+   * 閉じない任意パスで、`commands/files.ts`のdocstringが定めたとおり解釈はサーバに任せる。
+   */
+  function pathProblem(text: string): string | null {
+    return text.trim() === '' ? 'パスを打つ' : null
+  }
+
+  let importPath = $state('')
+  const importProblem = $derived(pathProblem(importPath))
+
+  function submitImportStep(): void {
+    if (importProblem !== null) return
+    onImportStep(importPath.trim())
+  }
+
+  let exportStepPath = $state('')
+  const exportStepProblem = $derived(pathProblem(exportStepPath))
+
+  function submitExportStep(): void {
+    if (exportStepProblem !== null) return
+    onExportStep(exportStepPath.trim())
+  }
+
+  let exportStlPath = $state('')
+  let deviationText = $state('')
+  const exportStlPathProblem = $derived(pathProblem(exportStlPath))
+
+  /**
+   * 偏差(mm)。**既定値を埋めない**。0以下(空欄含む)は無効 —— 用途で桁が変わる値なので、
+   * 黙って既定値で出すと粗いままプリンタへ送られる(`commands/files.ts`の`EXPORT_STL`
+   * docstring参照)。
+   */
+  const deviationProblem = $derived(
+    Number.parseFloat(deviationText.trim()) > 0 ? null : '偏差は0より大きい値',
+  )
+  const exportStlProblem = $derived(exportStlPathProblem ?? deviationProblem)
+
+  function submitExportStl(): void {
+    if (exportStlProblem !== null) return
+    onExportStl(exportStlPath.trim(), Number.parseFloat(deviationText.trim()))
+  }
+
+  /** Enterで、その行のボタンと同じことをする(`#file-name-input`と同じ規律)。 */
+  function onRowEnter(event: KeyboardEvent, submit: () => void): void {
+    if (event.key !== 'Enter') return
+    event.preventDefault()
+    submit()
+  }
 </script>
 
 <section class="files-panel">
@@ -134,6 +204,81 @@
       </div>
     {/each}
   </div>
+
+  <!-- STEP/STLの入出力。一覧の下に区切りを置いて積む(2026-08-27に本人がツールバーから
+       ここへ寄せると決定)。「入力欄+ボタン」の見た目は上の新規保存の行と揃えてある。 -->
+  <div class="io-section">
+    <div class="new-row">
+      <input
+        id="file-import-path"
+        type="text"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="part.step"
+        value={importPath}
+        oninput={(event) => (importPath = (event.target as HTMLInputElement).value)}
+        onkeydown={(event) => onRowEnter(event, submitImportStep)}
+      />
+      <button id="file-import-step" onclick={submitImportStep} disabled={importProblem !== null}>
+        STEP読み込み
+      </button>
+    </div>
+    {#if importPath !== '' && importProblem !== null}
+      <span class="hint">{importProblem}</span>
+    {/if}
+
+    <div class="new-row">
+      <input
+        id="file-export-step-path"
+        type="text"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="out.step"
+        value={exportStepPath}
+        oninput={(event) => (exportStepPath = (event.target as HTMLInputElement).value)}
+        onkeydown={(event) => onRowEnter(event, submitExportStep)}
+      />
+      <button id="file-export-step" onclick={submitExportStep} disabled={exportStepProblem !== null}>
+        STEP書き出し
+      </button>
+    </div>
+    {#if exportStepPath !== '' && exportStepProblem !== null}
+      <span class="hint">{exportStepProblem}</span>
+    {/if}
+
+    <div class="new-row">
+      <input
+        id="file-export-stl-path"
+        type="text"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="out.stl"
+        value={exportStlPath}
+        oninput={(event) => (exportStlPath = (event.target as HTMLInputElement).value)}
+        onkeydown={(event) => onRowEnter(event, submitExportStl)}
+      />
+      <input
+        id="file-deviation"
+        class="deviation"
+        type="text"
+        inputmode="decimal"
+        autocomplete="off"
+        placeholder="mm"
+        value={deviationText}
+        oninput={(event) => (deviationText = (event.target as HTMLInputElement).value)}
+        onkeydown={(event) => onRowEnter(event, submitExportStl)}
+      />
+      <button id="file-export-stl" onclick={submitExportStl} disabled={exportStlProblem !== null}>
+        STL書き出し
+      </button>
+    </div>
+    {#if exportStlPath !== '' && exportStlPathProblem !== null}
+      <span class="hint">{exportStlPathProblem}</span>
+    {/if}
+    {#if deviationText !== '' && deviationProblem !== null}
+      <span class="hint">{deviationProblem}</span>
+    {/if}
+  </div>
 </section>
 
 <style>
@@ -186,6 +331,10 @@
     min-width: 0;
   }
 
+  .new-row input.deviation {
+    flex: 0 0 56px;
+  }
+
   .new-row button {
     flex: 0 0 auto;
     font-size: 11px;
@@ -235,5 +384,16 @@
 
   .dim {
     color: var(--dim);
+  }
+
+  /* `.list`は伸縮する(flex:1)のでスクロールを持つ。この区切りから下は
+     `.new-row`(ファイル名の行)と同じく縮まない(flex:0 0 auto)。 */
+  .io-section {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 0 0 auto;
+    border-top: 1px solid var(--line);
+    padding-top: 6px;
   }
 </style>

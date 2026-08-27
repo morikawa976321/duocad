@@ -107,9 +107,13 @@ async function main() {
     // サーバは空で立つ。前回の実行のサーバを使い回している場合は既に読まれている。
     const partCount = await page.evaluate(() => window.__duocad.parts.length)
     if (partCount === 0) {
+      // **STEP読み込みは左サイドバーのファイルパネルへ移設**(2026-08-27。
+      // `commands/files.ts`・`FilesPanel.svelte` docstring参照)。ツールバーの
+      // `CommandHost` を経由しないので、既定コマンド(`extrude_face`)は最初から構えたまま
+      // ——旧版にあった「Escで既定コマンドへ戻す」ワークアラウンドは、import_stepが
+      // `CommandHost`のcommandIdへ一切触らなくなったため構造的に不要になった。
+      await typeInto('#file-import-path', stepPath)
       await page.click('#file-import-step')
-      await typeInto('#file-path', stepPath)
-      await page.keyboard.press('Enter')
       await page.waitForFunction(
         (expected) => window.__duocad.parts.length === expected,
         { timeout, polling: 100 },
@@ -132,15 +136,6 @@ async function main() {
         `STEP読み込みで${expectedParts}部品が編集可能な状態で入った` +
           `(参照ボディ ${references.count} 個はすべて非表示)`,
       )
-      // **Escで既定のコマンド(押し出す)へ戻す**。ツールバーからコマンドを起動すると
-      // 確定後もそのコマンドが構えたままで(`CommandHost.commit` は `commandId` を戻さない)、
-      // 面を選んでも距離の入力欄 `#distance` が出ない —— 以後の押し出しの段が
-      // 「セレクタが無い」で落ちる(実際に踏んだ)。
-      await page.keyboard.press('Escape')
-      await page.waitForFunction(() => document.querySelector('#file-path') === null, {
-        timeout,
-        polling: 50,
-      })
     } else if (partCount === expectedParts) {
       ok('既に読み込み済み(前回の実行のサーバを使い回している)')
     } else {

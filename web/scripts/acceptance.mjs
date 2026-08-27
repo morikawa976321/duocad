@@ -669,8 +669,9 @@ async function main() {
     const humanStl = join(workdir, 'human.stl')
 
     await attempt('human', 'export_step', async () => {
-      await page.click('#file-export-step')
-      await typeInto('#file-path', humanStep)
+      // **左サイドバーのファイルパネル**(2026-08-27にツールバーから移設)。欄へ打って
+      // Enter(その行のボタンと同じ)。
+      await typeInto('#file-export-step-path', humanStep)
       await page.keyboard.press('Enter')
       await waitFor(() => window.__duocad.lastFile?.action === 'export_step', '応答が返らない')
       const file = (await look()).lastFile
@@ -678,8 +679,7 @@ async function main() {
     })
 
     await attempt('human', 'export_stl', async () => {
-      await page.click('#file-export-stl')
-      await typeInto('#file-path', humanStl)
+      await typeInto('#file-export-stl-path', humanStl)
       await typeInto('#file-deviation', 0.05)
       await page.keyboard.press('Enter')
       await waitFor(() => window.__duocad.lastFile?.action === 'export_stl', '応答が返らない')
@@ -692,8 +692,7 @@ async function main() {
       // 並べるので(参照ボディは隠されて出ない)、ここが増えていれば編集用ボディができている。
       // `bodies` の側で数えると、参照ボディだけが増えた実装でも緑になってしまう。
       const before = (await look()).parts.length
-      await page.click('#file-import-step')
-      await typeInto('#file-path', humanStep)
+      await typeInto('#file-import-path', humanStep)
       await page.keyboard.press('Enter')
       await waitFor(
         (previous) => window.__duocad.parts.length > previous,
@@ -1074,8 +1073,18 @@ async function main() {
           const geometry = hook.getGeometry(part.body_id)
           if (geometry === null) continue
           for (const face of geometry.faces) {
-            const at = hook.projectFace(part.body_id, face.index)
+            // **面の重心を、固定した世界座標として`projectPoint`で射影する**
+            // (`projectFace`は使わない)。`projectFace`は「面の三角形を順に走査して
+            // 最初にクリックが通る画素」を返す実装で、代表点ではなく**たまたま条件を
+            // 満たした三角形の重心**を返す。視点・画角を変えると勝ち残る三角形が入れ替わり、
+            // 同じ面でも画面座標が数十px跳ぶ(engine
+            // `projected-face-point-jumps-between-triangles`。2026-08-28実測: 中心から
+            // 211pxの面で27.3px対3.5pxの差)。ここは「視点・画角の違いを比べる」検査なので、
+            // 固定した世界座標(面の重心)をそのまま射影する`projectPoint`を使う
+            // (`projectFace`が要るのは「本当にそこを押せるか」を見る手だけ)。
+            const at = hook.projectPoint(face.centroid)
             if (at === null) continue
+            if (at.x < 0 || at.y < 0 || at.x > rect.width || at.y > rect.height) continue
             points.push({
               key: `${part.body_id}#${face.index}`,
               x: at.x,

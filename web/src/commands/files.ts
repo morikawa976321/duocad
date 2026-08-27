@@ -2,18 +2,22 @@
  * ファイル操作のコマンド。コアには何も足していない —— `duocad/server.py` の `FILE_COMMANDS`
  * に口を開け、ここに引数の集め方を書くだけである(スケッチ・フィーチャと同じ形)。
  *
- * **保存/開くだけは `CommandHost` に無い**。`duocad/models/` 配下の**ファイル名の一覧から
- * 選ぶ**形なので、`FilesPanel.svelte`(一覧・クリックで開く・上書き・新規保存)が担当し、
- * `session.runVerb(...)` を直接呼ぶ(`SketchPanel.svelte` の `onSetParameter` と同じ形)。
+ * **保存/開く/STEP読み込み/STEP書き出し/STL書き出しは `CommandHost` に無い**。
+ * `FilesPanel.svelte`(左サイドバー)が一覧・クリックで開く・上書き・新規保存に続けて
+ * この3つも担当し、`session.runVerb(...)` を直接呼ぶ(`SketchPanel.svelte` の
+ * `onSetParameter` と同じ形。2026-08-27にツールバーの`CommandHost`から移設した)。
+ * **`FILE_COMMANDS`(下)に残るのは `IMPORT_SVG` だけ** —— スケッチへ貼る先を選ぶ操作なので
+ * 引数収集の状態機械(`CommandHost`)を経由する理由がある。
  *
  * **保存形式は操作ログのJSON**で、形状は導出物である。したがって「開く」は再生であり、
  * **開くたびに再生経路が検査される**ことになる。
  *
  * **パスの解釈はサーバに任せる**(書き出し・読み込みの経路)。相対パスはサーバの作業
  * ディレクトリ基準で解決され、**実際に書いた絶対パスが応答で返る**。ブラウザ側で正規化すると、
- * 解釈が2箇所に分かれて「保存したと言われたファイルが見つからない」が起きる。**保存/開く
- * (`FilesPanel.svelte`)はこの経路を使わない** —— 受け取るのはファイル名だけで、`models_dir`
- * 配下に閉じる解決はサーバ側の `Session._resolve_document_name` が行う。
+ * 解釈が2箇所に分かれて「保存したと言われたファイルが見つからない」が起きる。**保存/開く/
+ * STEP・STLの入出力(`FilesPanel.svelte`)はこの経路を使わない** —— 受け取るのは
+ * ファイル名・パスの文字列だけで、解決はサーバ側(`Session._resolve_document_name` /
+ * 各verbの実装)が行う。
  */
 import { isPlaneArgValue } from './command'
 import type { CommandDef } from './command'
@@ -21,38 +25,6 @@ import type { CommandDef } from './command'
 /** 空のパスだけ弾く。**それ以上の判定はサーバに任せる**(上のdocstring)。 */
 function pathLike(label: string): (value: string) => string | null {
   return (value) => (value.trim() === '' ? `${label}を打つ` : null)
-}
-
-/**
- * STEPの読み込み。**読んだ時点で編集できる**。ソリッドごとに編集用ボディができ、そのまま面を
- * クリックして押し出せる(原本の参照ボディは隠したまま文書に残る)。
- *
- * **STEP読み込みのコマンドはこれ1つだけ**(2026-08-27)。参照ボディだけを足す読み込みと、
- * それを1ボディずつ編集可能にする複製のコマンドは消えた —— 27部品なら27手かかる形であり、
- * 読み込みが1操作(ログ1行・undo1回)であるという規律とも噛み合わなかった。
- */
-export const IMPORT_STEP: CommandDef = {
-  // **id == サーバの表のコマンド名 == ログのverb名**。
-  id: 'import_step',
-  category: 'file',
-  label: 'STEP読み込み',
-  buttonId: 'file-import-step',
-  preview: 'none',
-  args: [
-    {
-      kind: 'text',
-      name: 'path',
-      label: 'STEP',
-      inputId: 'file-path',
-      placeholder: 'part.step',
-      reject: pathLike('STEPのパス'),
-    },
-  ],
-  build(values) {
-    const path = values.path
-    if (typeof path !== 'string' || path.trim() === '') return { ok: false, reason: 'パスが空' }
-    return { ok: true, args: { path: path.trim() } }
-  },
 }
 
 /**
@@ -100,81 +72,17 @@ export const IMPORT_SVG: CommandDef = {
   },
 }
 
-export const EXPORT_STEP: CommandDef = {
-  id: 'export_step',
-  category: 'file',
-  label: 'STEP書き出し',
-  buttonId: 'file-export-step',
-  preview: 'none',
-  args: [
-    {
-      kind: 'text',
-      name: 'path',
-      label: '書き出し先',
-      inputId: 'file-path',
-      placeholder: 'out.step',
-      reject: pathLike('書き出し先'),
-    },
-  ],
-  build(values) {
-    const path = values.path
-    if (typeof path !== 'string' || path.trim() === '') return { ok: false, reason: '書き出し先が空' }
-    return { ok: true, args: { path: path.trim() } }
-  },
-}
-
-/**
- * STL書き出し。**偏差を必ず打たせる**(既定で埋めない)。
- *
- * 実測: 0.2mm→30.7KB / 0.05mm→47.2KB / 0.01mm→170.6KB(§7)。用途で桁が変わる値なので、
- * 黙って既定値で出すと「粗いまま3Dプリンタへ送った」が起きる。
- */
-export const EXPORT_STL: CommandDef = {
-  id: 'export_stl',
-  category: 'file',
-  label: 'STL書き出し',
-  buttonId: 'file-export-stl',
-  preview: 'none',
-  args: [
-    {
-      kind: 'text',
-      name: 'path',
-      label: '書き出し先',
-      inputId: 'file-path',
-      placeholder: 'out.stl',
-      reject: pathLike('書き出し先'),
-    },
-    {
-      kind: 'number',
-      name: 'deviation',
-      label: '偏差',
-      unit: 'mm',
-      inputId: 'file-deviation',
-      placeholder: 'mm',
-      reject: (value) => (value > 0 ? null : '偏差は0より大きい値'),
-    },
-  ],
-  build(values) {
-    const path = values.path
-    const deviation = values.deviation
-    if (typeof path !== 'string' || path.trim() === '') return { ok: false, reason: '書き出し先が空' }
-    if (typeof deviation !== 'number') return { ok: false, reason: '偏差が数値でない' }
-    return { ok: true, args: { path: path.trim(), deviation } }
-  },
-}
-
 /**
  * ファイル操作のツールバー(ソリッドを触るモードに並ぶ)。
  *
- * **保存/開くはここに無い**(上のモジュールdocstring参照)。`FilesPanel.svelte` が
- * `session.runVerb('save_document' | 'open_document' | 'list_documents', ...)` を
- * 直接呼ぶので、`CommandHost` の引数収集(ここでの `CommandDef` 宣言)を経由しない。
+ * **保存/開く/STEP読み込み/STEP書き出し/STL書き出しはここに無い**(上のモジュール
+ * docstring参照)。`FilesPanel.svelte` が
+ * `session.runVerb('save_document' | 'open_document' | 'new_document' | 'list_documents' |
+ * 'import_step' | 'export_step' | 'export_stl', ...)` を直接呼ぶので、`CommandHost` の
+ * 引数収集(ここでの `CommandDef` 宣言)を経由しない。
  */
 export const FILE_COMMANDS: CommandDef[] = [
-  IMPORT_STEP,
   IMPORT_SVG,
-  EXPORT_STEP,
-  EXPORT_STL,
 ]
 
 /**
@@ -182,9 +90,11 @@ export const FILE_COMMANDS: CommandDef[] = [
  *
  * 保存と書き出しは文書を変えないので、応答は `{"type":"file"}` で要求した接続にだけ返る。
  * 送った側が「応答待ち」を解く条件が違うので、ここで見分けられるようにしてある。
- * `open_document` はこの一覧を経由しなくなったが、**verb名としては変わっていない**ので判定は
- * そのまま残す。
+ * `open_document` / `import_step` はこの一覧(`FILE_COMMANDS`)を経由しなくなったが、
+ * **verb名としては変わっていない**ので判定はそのまま残す(`'import_step'` は文字どおりの
+ * verb名 —— かつては `IMPORT_STEP.id` を参照していたが、そのCommandDefは
+ * `FilesPanel.svelte` への移設で不要になり削除した)。
  */
 export function changesDocument(verb: string): boolean {
-  return verb === 'open_document' || verb === IMPORT_STEP.id || verb === IMPORT_SVG.id
+  return verb === 'open_document' || verb === 'import_step' || verb === IMPORT_SVG.id
 }

@@ -416,9 +416,14 @@ def _needs_enter(args: list[tuple[str, str]]) -> bool:
 #: そのとき**Enterが要るかを1回考える**のが狙いで、表そのものが実装の入力になっている
 #: わけではない(判定は `args` からの導出が正)。
 #:
-#: **`save_document`/`open_document` はこの表に無い** —— `CommandHost` から外れて
-#: `FilesPanel.svelte` へ移ったため、この表(`web/src/commands/*.ts` の `CommandDef` から
-#: 読む)には現れない。サーバ側のverbとしては変わらず存在する(`tests/test_files_ui.py`)。
+#: **`save_document`/`open_document`/`import_step`/`export_step`/`export_stl` はこの表に
+#: 無い** —— `CommandHost` から外れて `FilesPanel.svelte` へ移ったため、この表
+#: (`web/src/commands/*.ts` の `CommandDef` から読む)には現れない。サーバ側のverbとしては
+#: 変わらず存在する(`save_document`/`open_document`は`tests/test_files_ui.py`、
+#: `import_step`/`export_step`/`export_stl`は`tests/test_io_step.py`)。
+#: STEP/STLは2026-08-27にツールバーから左サイドバーへ移設した(`FilesPanel.svelte`の
+#: 入力欄はEnterでも行内のボタンと同じ送信をするが、判定対象は`CommandDef.args`からの
+#: 導出であり、`CommandDef`自体が無くなったのでこの表の対象にならない)。
 ENTER_REQUIRED = {
     "extrude_face": True,          # 面1つ + 距離(how)
     "extrude": True,               # 領域は何個でも + 距離 + 結合/切り取り
@@ -426,10 +431,7 @@ ENTER_REQUIRED = {
     "chamfer": True,               # 辺は何本でも + 距離
     "pattern_rectangular": True,   # 図形は何個でも + 個数と間隔
     "pattern_circular": True,      # 図形は何個でも + 中心 + 個数と角度
-    "import_step": True,           # パス
     "import_svg": True,            # 貼る先 + パス(howがある → Enterが要る)
-    "export_step": True,           # パス
-    "export_stl": True,            # パス + 偏差
     "add_line": False,             # **点2つだけ。howが無い → 即適用**
     "sketch_create": False,        # **貼る先を1つ指すだけ。howが無い → 即適用**
     "add_circle": True,            # 中心 + 半径

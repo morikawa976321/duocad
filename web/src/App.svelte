@@ -539,6 +539,32 @@
     session.runVerb('new_document', {}, nextOp())
   }
 
+  /**
+   * STEP/STL入出力(2026-08-27に`FilesPanel.svelte`へ移設。ツールバーの`CommandHost`を
+   * 経由していた頃の `runCommand` の `case 'file'` と**同じ挙動**にする —— 二重化しないよう
+   * `changesDocument` をそのまま呼ぶ(`import_step` だけが文書を変える)。
+   *
+   * **書き出しは`pendingOp`を立てない**(立てると`handleFile`が来るまでEnterが拒否される)。
+   */
+  function runFileOp(verb: string, args: Record<string, unknown>): void {
+    const op = nextOp()
+    lastFileOp = op
+    if (changesDocument(verb)) pendingOp = op
+    session.runVerb(verb, args, op)
+  }
+
+  function importStep(path: string): void {
+    runFileOp('import_step', { path })
+  }
+
+  function exportStep(path: string): void {
+    runFileOp('export_step', { path })
+  }
+
+  function exportStl(path: string, deviation: number): void {
+    runFileOp('export_stl', { path, deviation })
+  }
+
   // ---------------------------------------------------------------- 選択(コアを叩くだけ)
   const selection = $derived(model?.selection ?? null)
   const selectedFaces = $derived(
@@ -1250,6 +1276,9 @@
           onSave={saveDocumentAs}
           onOpen={openDocumentByName}
           onNew={newDocument}
+          onImportStep={importStep}
+          onExportStep={exportStep}
+          onExportStl={exportStl}
         />
       </aside>
     {/if}

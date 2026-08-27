@@ -401,7 +401,9 @@ async function main() {
     // (engine `duocad-save-location-fixed-folder`)。パスを打つ `#file-path` は
     // もう save/open には無い —— `FilesPanel.svelte` の新規保存欄(`#file-name-input`
     // + `#file-save-new`)と、一覧の行(`.files-row[data-name] .files-open` /
-    // `.files-overwrite`)を使う。
+    // `.files-overwrite`)を使う。**2026-08-27にSTEP/STLの入出力も同じパネルへ移設**
+    // され、共用だった `#file-path` は廃止(`#file-import-path` /
+    // `#file-export-step-path` / `#file-export-stl-path` の3つに分かれた)。
     const documentName = 'model.json'
     const documentPath = join(workdir, documentName) // startServer に modelsDir=workdir を渡してある
     await typeInto('#file-name-input', documentName)
@@ -558,9 +560,8 @@ async function main() {
 
     // ================================================================ 検証4: 書き出し
     const stepPath = join(workdir, 'out.step')
+    await typeInto('#file-export-step-path', stepPath)
     await page.click('#file-export-step')
-    await typeInto('#file-path', stepPath)
-    await page.keyboard.press('Enter')
     await waitFor(
       () => window.__duocad.lastFile?.action === 'export_step',
       'STEP書き出しの応答が返らない',
@@ -569,10 +570,9 @@ async function main() {
     ok(`STEPを書き出した(${statSync(stepPath).size} B)`)
 
     const stlPath = join(workdir, 'out.stl')
-    await page.click('#file-export-stl')
-    await typeInto('#file-path', stlPath)
+    await typeInto('#file-export-stl-path', stlPath)
     await typeInto('#file-deviation', 0.05)
-    await page.keyboard.press('Enter')
+    await page.click('#file-export-stl')
     await waitFor(
       () => window.__duocad.lastFile?.action === 'export_stl',
       'STL書き出しの応答が返らない',
@@ -589,9 +589,8 @@ async function main() {
       window.__duocad.parts.map((body) => body.body_id),
     )
     const partsBefore = idsBefore.length
+    await typeInto('#file-import-path', stepPath)
     await page.click('#file-import-step')
-    await typeInto('#file-path', stepPath)
-    await page.keyboard.press('Enter')
     await waitFor(
       (previous) => window.__duocad.parts.length === previous + 1,
       'STEPを読み込めない',
@@ -678,9 +677,8 @@ async function main() {
     // 除外1件は「元の板」だけになるはず。
     const hiddenPlateId = idsBefore[0]
     const visibleOnlyStepPath = join(workdir, 'visible-only.step')
+    await typeInto('#file-export-step-path', visibleOnlyStepPath)
     await page.click('#file-export-step')
-    await typeInto('#file-path', visibleOnlyStepPath)
-    await page.keyboard.press('Enter')
     await waitFor(
       (expected) => window.__duocad.lastFile?.path === expected,
       '表示中のみのSTEP書き出しの応答が返らない',
@@ -701,10 +699,9 @@ async function main() {
     }
 
     const visibleOnlyStlPath = join(workdir, 'visible-only.stl')
-    await page.click('#file-export-stl')
-    await typeInto('#file-path', visibleOnlyStlPath)
+    await typeInto('#file-export-stl-path', visibleOnlyStlPath)
     await typeInto('#file-deviation', 0.1)
-    await page.keyboard.press('Enter')
+    await page.click('#file-export-stl')
     await waitFor(
       (expected) => window.__duocad.lastFile?.path === expected,
       '表示中のみのSTL書き出しの応答が返らない',
