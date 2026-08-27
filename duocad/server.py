@@ -382,6 +382,7 @@ class Session:
         パーツ一覧(名前・面数・可視性)のように形状そのものが要らない用途、および
         WebSocket配信のたびに送る「土台」の情報に使う。27部品でも数KB(state()は6MB超)。
         """
+        self._prune_body_caches()
         active = self.document.active_body()
         return {
             "units": self.document.units,
@@ -617,6 +618,28 @@ class Session:
             described = query.describe_vertices(body.shape)
             self._vertex_cache[body_id] = (body.shape, described)
         return {"body_id": body_id, "revision": revision, "vertices": described}
+
+    def _prune_body_caches(self) -> None:
+        """undoで消えたBodyのキャッシュを4つのdictから落とす(セッション寿命で溜め込まない)。
+
+        `sketches_state()` の剪定(生存集合との差分をpop)と同じ形に揃えてある。**`_revision_counter`
+        は絶対に剪定しない** —— 版が1へ戻ると、同じ `body_id` を知っているクライアントが
+        「版が同じ=変わっていない」と判断して前の文書の形を描き続ける
+        (`_replace_document` のコメントと同じ理由)。`_revision_state` は次の `body_revision` が
+        必ず版を1つ上げるだけなので落としてよいが、ここでは触らない(必須ではないため)。
+
+        **プレビュー中(`_suppress_events` > 0)は呼ばない** —— `preview()` は
+        `duocad.speculative.speculative` で文書を投機的に書き換えて必ず元へ戻す。その最中の
+        生存集合で消すと、戻した後に `_volume_cache` 等の再測定が走ってしまう
+        (PCケース27部品で693ms/回の再測定を避けるために入れたキャッシュなので、
+        ここを無効化すると入れた目的が消える)。
+        """
+        if self._suppress_events:
+            return
+        alive = {body.id for body in self.document.bodies}
+        for cache in (self._geometry_cache, self._edge_cache, self._vertex_cache, self._volume_cache):
+            for body_id in [key for key in cache if key not in alive]:
+                cache.pop(body_id, None)
 
     def delta(self, known_revisions: dict) -> dict:
         """クライアントが持っている版との差分だけを返す(未知のIDは必ずbodiesへ)。

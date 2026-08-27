@@ -402,6 +402,39 @@ def test_multiple_tool_calls_in_one_reply_all_run_and_report_progress():
     assert len(last_turns[-1].results) == 2
 
 
+def test_a_raising_progress_callback_is_logged_with_a_warning_but_does_not_break_the_loop(caplog):
+    """B(1.2, CODE_SURVEY_ACTIONS): `_notify` は購読者の例外を握りつぶさず、痕跡を残す。
+
+    「購読者の事故でループを落とさない」設計は変えない(ループは最後まで走り、結果は正常)が、
+    例外はもう無音では消えない —— WARNINGが1件、型・トレースバックが分かる形で出る。
+    """
+    surface = SpyTools(tools())
+    reply = ProviderReply(
+        text="1つ調べる",
+        tool_calls=(ToolCall(id="c1", name="describe_document", arguments={}),),
+        stop_reason="tool_use",
+        stop="tool_use",
+    )
+    provider = RecordedProvider([reply, spoke("調べました")])
+
+    def broken_progress(*_args):
+        raise RuntimeError("購読者側の事故")
+
+    with caplog.at_level("WARNING", logger="duocad.agent.loop"):
+        run = AgentLoop(surface, provider, progress=broken_progress).run("調べて")
+
+    # 1: ループは最後まで走り、結果は正常に返る(例外は外へ伝播していない)。
+    assert run.status == "completed"
+    assert run.text == "調べました"
+
+    # 2: caplog にWARNINGが1件出ており、投げた例外の型が分かる(exc_info付き)。
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert warnings[0].exc_info is not None
+    assert warnings[0].exc_info[0] is RuntimeError
+    assert "RuntimeError" in caplog.text
+
+
 def test_a_failing_tool_returns_the_structured_envelope_and_the_loop_keeps_going():
     """**構造化封筒をそのままモデルへ返して自己修復させる**(MCP経路と同じ語彙)。
 

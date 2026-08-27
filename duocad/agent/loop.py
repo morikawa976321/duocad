@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 import unicodedata
@@ -47,6 +48,11 @@ from .providers import (
     Turn,
     UserTurn,
 )
+
+#: **`logging.basicConfig()` は呼ばない**(設定はアプリ側の責務。ライブラリ側のコードなので
+#: ハンドラを自分で足さない)。ハンドラ未設定時は `logging` の `lastResort` がstderrへ出す。
+#: **stdoutへは出さない** —— MCPサーバ(`duocad/mcp_server.py`)がstdoutをJSON-RPC専用にしている。
+_logger = logging.getLogger(__name__)
 
 #: 1回の `run()` で許すモデルとの往復の上限。
 DEFAULT_MAX_TURNS = 12
@@ -544,13 +550,18 @@ class AgentLoop:
             return {"error": self.tools.error_envelope(call.name, error)}, False
 
     def _notify(self, name: str, arguments: dict, result: Any, ok: bool) -> None:
-        """進捗を購読者へ渡す。**購読者の失敗でループを落とさない**。"""
+        """進捗を購読者へ渡す。**購読者の失敗でループを落とさない**(モジュールdocstring規律3)。
+
+        握りつぶしはしない —— 例外は外へ伝播させないが、型・メッセージ・トレースバックが
+        追える形で警告ログを1件残す(`exc_info=True`)。ここが唯一の出どころなので、
+        「進捗が更新されない」の原因追跡がこれで可能になる。
+        """
         if self.progress is None:
             return
         try:
             self.progress(name, arguments, result, ok)
-        except Exception:  # pragma: no cover - 購読者側の事故
-            pass
+        except Exception:
+            _logger.warning("progress callback failed for tool %r", name, exc_info=True)
 
     def _result(
         self,
