@@ -270,7 +270,9 @@ class DocumentTools:
             # 「undoできる」と答えたのに実際は拒否される、という食い違いが出る。
             "can_undo": self.session.can_undo,
             "can_redo": document.log.can_redo,
-            "applied_count": len(document.log.entries),
+            # **`Session.applied_count` を使う**(ログの長さ `len(log.entries)` ではない)。
+            # ログの長さはundoで減るので、AIが見る数とブラウザが見る数がundoの後でずれる。
+            "applied_count": self.session.applied_count,
         }
 
     def set_visible(self, body_id: str, visible: bool) -> dict:

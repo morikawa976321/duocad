@@ -321,6 +321,22 @@ class Session:
         """
         return self.document.log.can_undo and not self._at_setup_floor()
 
+    @property
+    def applied_count(self) -> int:
+        """**verbを適用した回数**(undo / redo では動かない・単調増加)。
+
+        `state_meta()` と MCP の `describe_document` が同じ答えを返すための唯一の出どころ。
+        **操作ログの長さ(`len(document.log.entries)`)ではない** —— ログの長さはundoで減るので、
+        「undoで保存時点へ戻した文書」と「undoしてから別のverbを打った文書」が同じ値になる。
+        `web/src/App.svelte` の保存済み判定は、この2つを見分けるために**動かないほう**の意味に
+        依存している(そちらへ揃える。逆向きに揃えない)。
+
+        書き換える側(`extrude_face` 等の各verb / `_after_logged_verb` / 文書を開く)は
+        従来どおり `_applied_count` を直に動かす。**`preview()` は投機実行のあいだ
+        `_applied_count` を退避して戻す**ので、プレビューでこの値は動かない。
+        """
+        return self._applied_count
+
     def _emit(self, applied: dict) -> dict:
         """購読者へ変更を知らせて `applied` をそのまま返す(呼び出し側は `return self._emit(...)`)。
 
@@ -401,7 +417,7 @@ class Session:
             # **どこまで戻れるか**を画面に出すために位置を配る。
             # 真偽だけだと「3回undoした状態」と「1回undoした状態」が同じに見える。
             "redo_count": self.document.log.redo_count,
-            "applied_count": self._applied_count,
+            "applied_count": self.applied_count,
             # 名前つきの寸法値(§3.4)。**打ち直しの対象そのもの**なので、どの名前が
             # 今いくつかを配らないと、パラメータ編集パネルは何も出せない。
             "parameters": dict(self.document.parameters),
