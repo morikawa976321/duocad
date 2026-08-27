@@ -69,11 +69,38 @@ const VERBS = [
   'redo',
 ]
 
-const results = { human: {}, ai: {}, interleaved: null, physical: null }
+const results = { human: {}, ai: {}, interleaved: null, physical: null, fov: null }
 
 function record(side, verb, ok, note) {
   results[side][verb] = { ok, note }
   console.log(`  ${ok ? 'OK  ' : 'NG  '} ${side.padEnd(5)} ${verb.padEnd(20)} ${note}`)
+}
+
+/**
+ * ❌ を1つでも残したまま終わったなら、その名前を全部並べる(空なら全部通っている)。
+ *
+ * **このスクリプトは落ちても止めない設計**(冒頭のdocstring「各操作は独立して試し、
+ * 落ちても止めずに ❌ と理由を残す」)なので、合否は走り終わってから1回だけ判定する。
+ * **判定をここに置かないと、❌ が並んでいても終了コードが0のまま**になり、
+ * 呼び出し側(人・cron・drain)からは全部通ったのと区別が付かない —— 2026-08-28まで
+ * 実際にそうなっていた。**出力は1行も減らさず、終了コードだけを変える。**
+ */
+function failedLabels(collected) {
+  const failed = []
+  for (const side of ['human', 'ai']) {
+    for (const verb of VERBS) {
+      const entry = collected[side][verb]
+      // **未実行も失敗として数える。** 黙って飛ばされた操作は ❌ より始末が悪い。
+      if (entry === undefined) failed.push(`${side}/${verb}(未実行)`)
+      else if (!entry.ok) failed.push(`${side}/${verb}`)
+    }
+  }
+  for (const name of ['interleaved', 'physical', 'fov']) {
+    const entry = collected[name]
+    if (entry === null || entry === undefined) failed.push(`${name}(未実行)`)
+    else if (!entry.ok) failed.push(name)
+  }
+  return failed
 }
 
 /** 1操作を試す。**落ちても止めない**(❌ と理由を残して次へ)。 */
@@ -90,7 +117,10 @@ async function main() {
   const executablePath = findBrowser()
 
   console.log(`acceptance: ws=${wsPort} http=${httpPort} workdir=${workdir}`)
-  const server = await startServer({ wsPort, httpPort })
+  // **`modelsDir: workdir`** —— 渡さないとリポジトリ直下の実 `models/` を受入が触る
+  // (`server.mjs` の `startServer` 参照)。使い捨てdirは既に作ってあるのに、
+  // ここだけ渡し忘れていた(2026-08-28に発見。他の実機検査5本は元から渡している)。
+  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
   // 受入は落ちても最後まで走る作りなので、混入行は**記録して続ける**。
   const mcp = new McpClient(server.child, {
     timeout,
@@ -1175,7 +1205,8 @@ async function main() {
     // 作る」verbなので、既に何ボディも居るこの受入用の文書では既存へ融合してしまい、
     // 独立した円筒が作れない(1回目の実行で実際に踏んだ)。
     console.log('\n--- 副次: 手だけで実物相当(全周円筒+円錐。空の文書で) ---')
-    const solo = await startServer({ wsPort: '8887', httpPort: '8888' })
+    // 副次の別プロセスも実 `models/` を向かせない(上の本体と同じ理由)。
+    const solo = await startServer({ wsPort: '8887', httpPort: '8888', modelsDir: workdir })
     const soloMcp = new McpClient(solo.child, { timeout })
     try {
       await soloMcp.handshake('duocad-acceptance-solo')
@@ -1215,6 +1246,8 @@ async function main() {
     // **エラーは別に記録する。** ステータスバーに残るのは情報だけになったので、
     // `screenMessages` だけを受入記録に載せると「エラーは1件も出ていない」ように読める。
     results.screenErrors = screen.errors ?? []
+    // **合否そのものも記録に残す**(終了コードだけだと、ログを後から読む人には見えない)。
+    results.failed = failedLabels(results)
     console.log('\n=== RESULT_JSON ===')
     console.log(JSON.stringify(results, null, 2))
   } finally {
@@ -1223,9 +1256,20 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`acceptance: FAIL ${error.message}`)
-  console.log('\n=== RESULT_JSON ===')
-  console.log(JSON.stringify(results, null, 2))
-  process.exit(1)
-})
+main()
+  .then(() => {
+    // **後始末(ブラウザとサーバの停止)が終わってから**落とす —— `main()` の中で
+    // `process.exit` すると `finally` を飛ばして子プロセスが残る。
+    const failed = failedLabels(results)
+    if (failed.length > 0) {
+      console.error(`\nacceptance: FAIL ${failed.length}件 — ${failed.join(' / ')}`)
+      process.exit(1)
+    }
+    console.log('\nacceptance: PASS')
+  })
+  .catch((error) => {
+    console.error(`acceptance: FAIL ${error.message}`)
+    console.log('\n=== RESULT_JSON ===')
+    console.log(JSON.stringify(results, null, 2))
+    process.exit(1)
+  })
