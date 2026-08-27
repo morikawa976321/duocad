@@ -955,7 +955,7 @@ Session.body_revision(body_id) -> int      # 形状の差し替え**と可視性
 Session.geometry(body_id) -> dict          # キャッシュ付き。**同じオブジェクトを返す**
 Session.delta(known_revisions) -> {"bodies": [<上と同じ形・版が変わった分だけ>],
                                    "unchanged": [BodyId, ...]}
-Session.extrude(distance, client_op=None) -> applied
+Session.extrude_face(distance, client_op=None) -> applied
                                            # 押す面は**確定選択**から（2026-08-20）
                                            # applied["changed_bodies"] = [BodyId, ...]
 ```
@@ -1245,7 +1245,7 @@ docstringに明記した）。
 **据え置いた指摘と理由**（`duocad/mcp_server.py` docstring「既知の割り切り」）:
 `notifications/initialized` を `tools/*` の前提条件にしない（厳格化しても弾けるのは行儀の
 悪いクライアントだけで、繋がらない失敗を新たに作る）／ツール実行がイベントループを塞ぐ
-（既存の `Session.extrude` と同じ性質。実行器スレッドへ逃がすと `Server` のスレッド前提を
+（既存の `Session.extrude_face` と同じ性質。実行器スレッドへ逃がすと `Server` のスレッド前提を
 作り直すことになるので、M4本体で交互操作を作るときにまとめて再訪する）。
 
 ---
@@ -2971,7 +2971,7 @@ fillet/chamferの2verbだけをハードコード)/ 姿が変わった領域の�
 (README §5「中核の4つの決めごと」)。
 
 - `_after_logged_verb`(sketch_create以外の大半のverbが通る共通の後始末)と、
-  `Session.extrude`(面の押し出し)・`Session.undo`・`Session.redo` の4箇所で呼ぶ。
+  `Session.extrude_face`(面の押し出し)・`Session.undo`・`Session.redo` の4箇所で呼ぶ。
 - **失敗した呼び出しには効かない** —— OCCTの操作が失敗すると例外が上がってログに積まれず、
   この関数にも到達しない。
 - **プレビュー(`Session.preview` → `speculative()`)の中では見かけ上効かない**。
@@ -2982,7 +2982,7 @@ fillet/chamferの2verbだけをハードコード)/ 姿が変わった領域の�
 
 ## 後始末
 
-- `extrude_face` の応答フィールド `after_face_index` は**削除した**(`Session.extrude` の
+- `extrude_face` の応答フィールド `after_face_index` は**削除した**(`Session.extrude_face` の
   `applied` から)。`Operation.provenance["after_face_index"]`(kernelが計算する内部の由来情報。
   `tests/test_extrude_face.py`)とは別物で、そちらは触っていない。
 - `undo`/`redo` の応答から `body_id` / `face_index` / `after_face_index` ヒント

@@ -74,7 +74,7 @@ def _box(session: Session):
     session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
     session.clear_selection()
     session.modify_selection([{"sketch": sketch_id, "index": 1}], [])
-    session.extrude_regions(SIDE, mode="join")
+    session.extrude(SIDE, mode="join")
     session.clear_selection()
     return session.document.bodies[-1], sketch_id
 

@@ -57,7 +57,7 @@ def _box(session: Session):
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
     _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude_regions(SIDE, mode="join")
+    session.extrude(SIDE, mode="join")
     session.clear_selection()
     return session.document.bodies[-1], sketch_id
 
@@ -236,7 +236,7 @@ def test_opening_replays_a_log_that_contains_set_parameter(session: Session) -> 
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 5.0)
     _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude_regions(10.0, mode="join")
+    session.extrude(10.0, mode="join")
     radius = next(name for name, value in session.document.parameters.items() if value == 5.0)
     session.set_parameter(radius, 7.0)
     volume = query.volume(session.document.bodies[-1].shape)
@@ -448,7 +448,7 @@ def test_stl_export_honours_the_deviation(session: Session, tmp_path: Path) -> N
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude_regions(SIDE, mode="join")
+    session.extrude(SIDE, mode="join")
     coarse = tmp_path / "coarse.stl"
     fine = tmp_path / "fine.stl"
 
@@ -481,7 +481,7 @@ def test_named_values_are_published_and_drive_the_shape(session: Session) -> Non
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 5.0)
     _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude_regions(10.0, mode="join")
+    session.extrude(10.0, mode="join")
     body = session.document.bodies[-1]
     volume_before = query.volume(body.shape)
 

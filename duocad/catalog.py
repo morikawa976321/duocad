@@ -99,8 +99,8 @@ class Command:
     description: str = ""
     params: tuple[Param, ...] = ()
     #: `Session` のメソッド名(WebSocket側の実体)。WSに開けていないものは None。
-    #: **verb名と違ってよい**(`extrude` -> `extrude_regions` のように、
-    #: コア側の歴史的な名前をverb名に合わせて改名しない)。
+    #: **verb名と違ってよい**(`export_step` -> `export_step_file` のように、
+    #: コア側の名前がverb名と一致しないことがある)。
     session: Optional[str] = None
     #: WebSocketでの露出のしかた(`WS_SURFACES`)。
     ws: str = "table"
@@ -446,7 +446,7 @@ COMMANDS: tuple[Command, ...] = (
             ),
         ),
         uses_selection=True,
-        session="extrude_regions",
+        session="extrude",
         previewable=True,
         resets_selection=True,
         note=(
@@ -464,11 +464,10 @@ COMMANDS: tuple[Command, ...] = (
         ),
         params=(Param("distance", "number", "押し出し量(mm)", dimension=True),),
         uses_selection=True,
-        session="extrude",
+        session="extrude_face",
         ws="special",
         previewable=True,
         resets_selection=True,
-        note="`Session` 側の名前だけ `extrude`(面の押し出しが先にあった)",
     ),
     Command(
         name="fillet",

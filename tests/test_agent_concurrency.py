@@ -76,7 +76,7 @@ def test_a_concurrent_shape_change_empties_the_confirmed_selection_and_the_next_
 
     # 「人」が割り込んで別の操作をする(AIのターンとは無関係)
     commit_face(box_session, index=2)
-    box_session.extrude(1.0)  # Session.extrude は catalog 上の `extrude_face`
+    box_session.extrude_face(1.0)
 
     assert len(selection.get_selection(box_session.document).items) == 0
     with pytest.raises(selection.SelectionEmpty):
@@ -90,7 +90,7 @@ def test_undo_between_commit_and_the_verb_call_also_empties_the_selection(box_se
     リセットされる —— `undo` は `resets_selection=True`。
     """
     commit_face(box_session, index=1)
-    box_session.extrude(2.0)  # 何か1つログに積む(取り消せる操作を作る)
+    box_session.extrude_face(2.0)  # 何か1つログに積む(取り消せる操作を作る)
     commit_edge(box_session)
     assert len(selection.get_selection(box_session.document).items) == 1
 
@@ -117,7 +117,7 @@ def test_fillet_refuses_a_body_hidden_after_the_selection_was_confirmed(box_sess
         box_session.fillet(1.0)
 
 
-def test_extrude_regions_refuses_the_active_body_when_it_was_hidden_meanwhile(
+def test_extrude_refuses_the_active_body_when_it_was_hidden_meanwhile(
     box_session: Session,
 ):
     """`extrude`(領域)は対象ボディを**選択ではなく**引数/アクティブから取る
@@ -133,7 +133,7 @@ def test_extrude_regions_refuses_the_active_body_when_it_was_hidden_meanwhile(
     box_session.set_visible("box", False)  # 人が対象ボディを隠す
 
     with pytest.raises(ValueError, match="hidden"):
-        box_session.extrude_regions(1.0, mode="join")
+        box_session.extrude(1.0, mode="join")
 
 
 # ========================================================================================

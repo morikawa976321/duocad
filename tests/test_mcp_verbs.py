@@ -1080,7 +1080,7 @@ def test_undo_through_mcp_undoes_the_ui_operation(box_session: Session):
     # 人の操作(アプリ層の経路)。**材料に可視性は使えない** —— `set_visible` は2026-08-26に
     # 操作ログから外れ、undoの対象ではなくなった(`duocad.selection.set_visible`)。
     select_refs(server, [face_ref(box.id, 1)])
-    box_session.extrude(5.0)
+    box_session.extrude_face(5.0)
     extruded = call(server, "describe_shape", {"body_id": box.id})["volume"]
     log_length = len(box_session.document.log.entries)
 
@@ -1097,7 +1097,7 @@ def test_redo_through_mcp_replays_it(box_session: Session):
     box = box_session.document.bodies[0]
     server = McpServer(DocumentTools(box_session))
     select_refs(server, [face_ref(box.id, 1)])
-    box_session.extrude(5.0)
+    box_session.extrude_face(5.0)
     extruded = call(server, "describe_shape", {"body_id": box.id})["volume"]
     call(server, "undo")
 

@@ -96,8 +96,8 @@ from .oplog import OpLog
 from .speculative import speculative
 from .verbs import (
     chamfer as chamfer_verb,
-    extrude as extrude_regions_verb,
-    extrude_face,
+    extrude as extrude_verb,
+    extrude_face as extrude_face_verb,
     fillet as fillet_verb,
     import_step as import_step_verb,
     import_svg as import_svg_verb,
@@ -696,7 +696,7 @@ class Session:
             selection.clear_selection(self.document)
 
     # ---------------------------------------------------------------- 操作
-    def extrude(self, distance: float, client_op: Optional[int] = None) -> dict:
+    def extrude_face(self, distance: float, client_op: Optional[int] = None) -> dict:
         """**確定選択の面**(ちょうど1枚)を押し出す。`applied` を返す。
 
         押す面とそのBodyは引数ではなく選択から取る(`selection.require_confirmed`)——
@@ -705,7 +705,7 @@ class Session:
         """
         face = selection.require_confirmed(self.document, "face", exactly_one=True)[0]
         face_index = int(face["index"])
-        operation = extrude_face(
+        operation = extrude_face_verb(
             self.document, face_index, float(distance), body_id=face["body"]
         )
         self._applied_count += 1
@@ -944,13 +944,13 @@ class Session:
         )
         return self._after_logged_verb({"entity_id": entity_id})
 
-    def extrude_regions(
+    def extrude(
         self,
         distance: float,
         mode: str = "join",
         body_id: Optional[str] = None,
     ) -> dict:
-        """**確定選択の領域**を押し出す(`verbs.extrude`)。既存の `extrude`(面)とは別。
+        """**確定選択の領域**を押し出す(`verbs.extrude`)。面を押す `extrude_face` とは別。
 
         押し出す領域は引数ではなく選択から取る。**`body_id` だけは引数のまま** ——
         これは「どのBodyへ足す/から引くか」であって対象集合ではない(Bodyは選択集合の
@@ -961,7 +961,7 @@ class Session:
             region.RegionRef.from_dict(item)
             for item in selection.require_confirmed(self.document, "region")
         ]
-        operation = extrude_regions_verb(
+        operation = extrude_verb(
             self.document, refs, float(distance), mode=mode, body_id=body_id
         )
         changed_body_id = operation.args["body_id"]
@@ -1700,7 +1700,7 @@ class Server:
                 await self._push(connection, applied=None, only=connection)
             elif command == "extrude_face":
                 applied = self._apply(
-                    self.session.extrude,
+                    self.session.extrude_face,
                     message["distance"],
                     message.get("client_op"),
                 )

@@ -67,7 +67,7 @@ def _box(session: Session):
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
     _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude_regions(SIDE, mode="join")
+    session.extrude(SIDE, mode="join")
     session.clear_selection()
     return session.document.bodies[-1], sketch_id
 
@@ -199,7 +199,7 @@ def test_a_round_edge_comes_back_curved_and_closed(session: Session) -> None:
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude_regions(SIDE, mode="join")
+    session.extrude(SIDE, mode="join")
     cylinder = session.document.bodies[-1]
 
     described = kernel.tessellate_edges(cylinder.shape, DEVIATION)

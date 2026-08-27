@@ -712,13 +712,13 @@ class DocumentTools:
 
     # ------------------------------------------------------------------ フィーチャ
     def extrude(self, distance: float, mode: str = "join", body_id: Optional[str] = None) -> dict:
-        """**確定選択の領域**を押し出す(選択から取るのは `Session.extrude_regions`)。
+        """**確定選択の領域**を押し出す(選択から取るのは `Session.extrude`)。
 
         `body_id` だけは引数のまま —— 「どのBodyへ足す/から引くか」は対象集合ではない。
         `mode="new"` は行き先を持たないので `body_id` を受け付けない。
         """
         before = self._revision_snapshot()
-        applied = self.session.extrude_regions(
+        applied = self.session.extrude(
             float(distance), mode=str(mode), body_id=body_id
         )
         return self._apply_logged(before, applied)
@@ -730,7 +730,7 @@ class DocumentTools:
         唯一の経路になる(拒否は `selection.require_confirmed` が行う)。
         """
         before = self._revision_snapshot()
-        applied = self.session.extrude(float(distance))
+        applied = self.session.extrude_face(float(distance))
         return self._apply_logged(before, applied)
 
     def fillet(self, radius) -> dict:

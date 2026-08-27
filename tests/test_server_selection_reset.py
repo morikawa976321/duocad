@@ -190,7 +190,7 @@ def test_selection_editing_itself_is_not_a_reset(session: Session) -> None:
 # --------------------------------------------------------------------------------------
 def test_undo_of_a_shape_changing_verb_clears_the_selection(session: Session) -> None:
     _select(session, [_face(1)])
-    session.extrude(5.0)  # ここで既に空になっている
+    session.extrude_face(5.0)  # ここで既に空になっている
     _select(session, [_edge(1)])  # 次の一手として選び直した状態を作る
 
     session.undo()
@@ -215,7 +215,7 @@ def test_undo_of_a_non_shape_verb_still_clears_the_selection(session: Session) -
 
 def test_redo_clears_the_selection(session: Session) -> None:
     _select(session, [_face(1)])
-    session.extrude(5.0)
+    session.extrude_face(5.0)
     session.undo()
     _select(session, [_edge(1)])
 
