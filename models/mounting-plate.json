@@ -623,6 +623,19 @@
         "previous": 3.5
       },
       "provenance": null
+    },
+    {
+      "seq": 26,
+      "verb": "sketch_create",
+      "args": {
+        "sketch_id": "sketch-3180055b9152",
+        "plane": {
+          "kind": "base",
+          "name": "XY",
+          "provenance": null
+        }
+      },
+      "provenance": null
     }
   ]
 }
