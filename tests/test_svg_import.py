@@ -246,6 +246,37 @@ def test_import_svg_adds_to_an_existing_sketch_without_replacing_it(tmp_path: Pa
     assert {e.id for e in after} >= set(entity_ids)
 
 
+def test_undo_after_two_imports_removes_only_the_most_recent_batch(tmp_path: Path) -> None:
+    """**このタスクが作った契約そのもの**: undoは「そのverb呼び出しが足した図形だけ」を消す。
+
+    同じスケッチへ2回取り込むと、1回目のログエントリと2回目のログエントリは別々に残る
+    (2回とも `import_svg`)。2回目の呼び出しのあとにundoすると、**2回目が足した図形だけ**が
+    消え、1回目の取り込み分と、取り込みより前から手で描いてあった図形は無傷で残る。
+
+    落ちたら `_undo_import_svg` がスケッチ全体を消す(古い設計)か、全図形を無差別に消す形へ
+    戻っている —— どちらも「開いているスケッチへ足す」という今回の意味と両立しない。
+    """
+    document = Document()
+    sketch_id = new_sketch(document)
+    hand_drawn = sketch_module.add_circle(document, sketch_id, [0.0, 0.0], 5.0)
+
+    first_ids = import_svg(
+        document, sketch_id, write_svg(tmp_path, "first.svg", SVG_MIXED)
+    )
+    second_ids = import_svg(
+        document, sketch_id, write_svg(tmp_path, "second.svg", SVG_VIEWBOX_ONLY)
+    )
+    assert set(first_ids).isdisjoint(second_ids), "1回目と2回目のIDが重なっている"
+
+    document.log.undo(document)  # 2回目のimport_svgだけを戻す
+
+    remaining = {e.id for e in sketch_module.get_sketch(document, sketch_id).entities}
+    assert remaining == {hand_drawn, *first_ids}, (
+        f"2回目の取り込み分だけが消えるはずが一致しない: {sorted(remaining)} != "
+        f"{sorted({hand_drawn, *first_ids})}"
+    )
+
+
 def test_there_is_no_verb_that_adds_a_single_bezier() -> None:
     """**`add_bezier` は存在しない**(人もAIもベジエを1本ずつは足せない。2026-08-26本人裁定)。
 
@@ -379,9 +410,11 @@ def test_an_svg_without_geometry_is_refused(tmp_path: Path) -> None:
     )
     document = Document()
     sketch_id = new_sketch(document)
+    before = len(document.log.entries)
     with pytest.raises(ValueError, match="取り込める図形が無い"):
         import_svg(document, sketch_id, path)
     assert sketch_module.get_sketch(document, sketch_id).entities == []
+    assert len(document.log.entries) == before
 
 
 def test_too_many_entities_is_refused_not_truncated(tmp_path: Path) -> None:
@@ -397,9 +430,11 @@ def test_too_many_entities_is_refused_not_truncated(tmp_path: Path) -> None:
     )
     document = Document()
     sketch_id = new_sketch(document)
+    before = len(document.log.entries)
     with pytest.raises(ValueError, match="図形が多すぎる"):
         import_svg(document, sketch_id, path)
     assert sketch_module.get_sketch(document, sketch_id).entities == []
+    assert len(document.log.entries) == before
 
 
 # --------------------------------------------------------------------------------------

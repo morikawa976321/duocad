@@ -15,10 +15,10 @@
 | 問い合わせ(3) | `describe_document` / `describe_shape` / `measure` |
 | 述語の自己記述(1) | `describe_predicates` |
 | 選択(5) | `get_selection` / `propose_selection` / `modify_selection` / `commit_selection` / `clear_selection` |
-| スケッチ(5) | `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` |
+| スケッチ(6) | `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` / `import_svg` |
 | フィーチャ(6) | `extrude` / `extrude_face` / `fillet` / `chamfer` / `pattern_rectangular` / `pattern_circular` |
 | ボディ・パラメータ(2) | `set_visible` / `set_parameter` |
-| 入出力(4) | `import_step` / `import_svg` / `export_step` / `export_stl` |
+| 入出力(3) | `import_step` / `export_step` / `export_stl` |
 | 履歴(2) | `undo` / `redo` |
 
 **呼び方の型**（例）:
