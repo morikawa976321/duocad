@@ -19,17 +19,19 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 
 import pytest
 
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
-from duocad import io_step, kernel, query
+from duocad import kernel, query
 from duocad.document import Body, Document
 from duocad.oplog import OpLog
 from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, add_rectangle, face_plane, sketch_create
 from duocad.verbs import extrude
+from duocad.verbs.import_editable import import_step
 
 BOX_EDGE = 20.0
 BOX_VOLUME = BOX_EDGE**3
@@ -146,3 +148,48 @@ def test_broken_numbers_never_enter_the_sketch(add):
     json.loads(document.log.to_json())  # 裸のNaNが混ざっていたらここで落ちる
 
 
+def _single_solid_step(tmp_path) -> Path:
+    """20×10×5(体積1000)のソリッド1個だけのSTEPを作って返す。
+
+    `test_io_step.py::_two_solid_step` と同じ理由でテスト側がOCPで作る
+    (`3d-models/` の私物STEPには依存しない)。ここで欲しいのは「読み込み直後の文書」
+    という**状態**だけなので、部品は1つで足りる。
+    """
+    step_path = tmp_path / "reference.step"
+    kernel.write_step(BRepPrimAPI_MakeBox(20.0, 10.0, 5.0).Shape(), str(step_path))
+    return step_path
+
+
+def test_join_right_after_importing_a_step_does_not_fail(tmp_path):
+    """参照STEPを読んだ直後でも `join` が通る(受入対象そのものの経路)。
+
+    かつては読み込みが `kind="reference"` のボディだけを足していたため、直後の
+    アクティブが参照ボディになり、`join` が「参照ボディは触れない」の ValueError で
+    落ちていた —— **最初の板が作れない**。`import_step` が参照ボディの**後に**編集用
+    ボディを足す(＝アクティブが常に編集可能になる)ことでの修正なので、ここでは
+    「読み込み直後のアクティブが編集可能か」と「その状態で join が通るか」の両方を見る。
+
+    体積: 20×10 の底面を10mm押し出した角柱(2000)が、その中に丸ごと入る箱(1000)を
+    飲み込むので、融合後は 2000 ちょうどになる。
+    """
+    document = Document()
+    body_ids = import_step(document, _single_solid_step(tmp_path))
+
+    active = document.active_body()
+    assert active is not None and active.id == body_ids[-1]
+    assert document.is_editable(active.id), "アクティブが参照ボディのままだと join が落ちる"
+
+    sketch_id = sketch_create(document, "XY")
+    add_rectangle(document, sketch_id, (0.0, 0.0), 20.0, 10.0)
+    found = regions(document, sketch_id)
+    assert len(found) == 1
+
+    extrude(document, [region_ref(sketch_id, found[0].index)], 10.0, mode="join")
+
+    assert math.isclose(
+        query.volume(document.get_body(body_ids[0]).shape), 2000.0, rel_tol=1e-9
+    )
+    reference = next(body for body in document.bodies if body.kind == "reference")
+    assert math.isclose(query.volume(reference.shape), 1000.0, rel_tol=1e-9), (
+        "読み込みの原本が押し出しに巻き込まれている"
+    )

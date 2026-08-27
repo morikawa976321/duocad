@@ -20,12 +20,10 @@ from __future__ import annotations
 
 import json
 import math
-import os
-import shutil
 
 import pytest
 
-from duocad import io_step, query
+from duocad import query
 from duocad.document import Document
 from duocad.oplog import OpLog
 from duocad.parameters import parameter_of, set_parameter
@@ -112,3 +110,86 @@ def test_replaying_a_foreign_log_fails_loudly_instead_of_emptying_the_document()
 
     assert math.isclose(query.volume(proper.active_body().shape), expected, rel_tol=1e-9)
     assert math.isclose(expected, math.pi * 10.0**2 * 10.0, rel_tol=1e-9)
+
+
+def test_set_parameter_keeps_the_active_body():
+    """`set_parameter` を1回打っても、作業対象(アクティブボディ)が移らない。
+
+    **アクティブの選択はログに載らない**ので、作り直し(全部消して再生)がそのまま
+    捨ててしまう。捨てると再生の最後に `add_body` されたボディへ勝手に移り、
+    **以後の書き出し先と編集先が黙って別のボディへ変わる**(値を1つ変えただけで
+    作業対象が変わる、という気づきようのない壊れ方)。
+
+    2つ目のボディを作った**あとで**1つ目へ戻すのが要点 —— 再生順の最後は常に
+    2つ目なので、復元していなければここで必ず2つ目に化ける。
+    """
+    document = Document()
+    first_sketch = sketch_create(document, "XY")
+    circle = add_circle(document, first_sketch, (0.0, 0.0), 5.0)
+    first = extrude(
+        document,
+        [region_ref(first_sketch, regions(document, first_sketch)[0].index)],
+        10.0,
+        mode="new",
+    ).args["body_id"]
+
+    second_sketch = sketch_create(document, "XY")
+    add_circle(document, second_sketch, (100.0, 0.0), 5.0)
+    second = extrude(
+        document,
+        [region_ref(second_sketch, regions(document, second_sketch)[0].index)],
+        10.0,
+        mode="new",
+    ).args["body_id"]
+    assert document.active_body().id == second
+
+    document.set_active_body(first)
+    set_parameter(document, parameter_of(document, first_sketch, circle, "radius"), 7.0)
+
+    assert document.active_body().id == first, "作り直しで作業対象が黙って移っている"
+    assert math.isclose(
+        query.volume(document.get_body(first).shape),
+        math.pi * 7.0**2 * 10.0,
+        rel_tol=1e-9,
+    ), "形が新しい値に追随していない"
+
+
+def test_a_rebuild_that_fails_leaves_the_document_as_it_was():
+    """作り直しが途中で失敗したら、bodies / sketches / parameters / アクティブを元へ戻す。
+
+    退避が無いと「ログは4行あるがボディもスケッチも0」という**不整合な文書**が残る
+    (ログとカーソルは無傷なので、壊れたことにすら気づけない)。
+
+    ここでは反復の個数を 3×2 から 1×2 へ減らして失敗させる —— 押し出しの対象にした
+    6番目の領域が消えるので、再生中の `extrude` が ValueError で落ちる。値の検査
+    (`_require_usable_value`)は通る値なので、**検査ではなく作り直しの途中**で落ちる
+    という、この後始末が要る唯一の状況を作れる。
+    """
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    circle = add_circle(document, sketch_id, (10.0, 10.0), 2.0)
+    pattern_id = pattern_rectangular(document, sketch_id, [circle], 10.0, 10.0, 3, 2)
+    found = regions(document, sketch_id)
+    assert len(found) == 6
+    extrude(document, [region_ref(sketch_id, found[-1].index)], 5.0, mode="new")
+
+    name = parameter_of(document, sketch_id, pattern_id, "nx")
+    bodies_before = list(document.bodies)
+    sketches_before = list(document.sketches)
+    parameters_before = dict(document.parameters)
+    active_before = document.active_body().id
+    volume_before = query.volume(document.get_body(active_before).shape)
+    entries_before = len(document.log.entries)
+
+    with pytest.raises(ValueError):
+        set_parameter(document, name, 1.0)
+
+    assert document.bodies == bodies_before, "作り直しの失敗でボディが消えている"
+    assert document.sketches == sketches_before, "作り直しの失敗でスケッチが消えている"
+    assert document.parameters == parameters_before
+    assert document.active_body().id == active_before
+    assert math.isclose(
+        query.volume(document.get_body(active_before).shape), volume_before, rel_tol=1e-9
+    )
+    assert len(document.log.entries) == entries_before
+    assert len(regions(document, sketch_id)) == 6, "反復が減ったまま残っている"
