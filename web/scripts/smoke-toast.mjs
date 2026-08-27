@@ -13,6 +13,10 @@
  *   4. **手動close** — ×で1枚だけ消える
  *   5. **自動消滅** — 放っておけば消える
  *
+ * ついでに、**AIパネルの開閉カレット**（`#ai-collapse`。2026-08-28新設）も1本だけここで見る
+ * ——トーストとは無関係だが、アプリを実際に起動している検査が既にあるのでそこへ同居させた
+ * （`20260827-2320-duocad-right-sidebar-panels` の完了条件C4）。
+ *
  *   web> node scripts/smoke-toast.mjs
  *
  * エラーは**存在しない書き出し先を「STEP書き出し」「STEP読み込み」へ渡して**作る。サーバが
@@ -114,6 +118,43 @@ async function main() {
     if ((await page.$('#toasts')) === null) fail('#toasts が無い(実機検査が文言を読めない)')
     if ((await toasts()).length !== 0) fail(`起動直後に札が出ている: ${JSON.stringify(await toasts())}`)
     ok('起動直後: `#toasts` はあるが札は0枚(「今は0件」を素直に書ける)')
+
+    // -------------------------------------------------------------- AIパネルの開閉カレット
+    // **2026-08-28新設**(`20260827-2320-duocad-right-sidebar-panels`)。tier3の常設パネルの
+    // うちAIだけが畳めなかったのを、BrowserPanel.svelteと同じ形のカレットで揃えた。
+    // トーストの検査とは無関係だが、アプリを起動している実機検査1本で足りる要件なので
+    // ここに同居させる。
+    if ((await page.$('#ai-collapse')) === null) fail('#ai-collapse が無い(AIパネルが畳めない)')
+    const aiExpandedAtStart = await page.$eval('#ai-collapse', (node) => node.getAttribute('aria-expanded'))
+    if (aiExpandedAtStart !== 'true') {
+      fail(`AIパネルの既定は開いているはず: aria-expanded=${aiExpandedAtStart}`)
+    }
+    if ((await page.$('#ai-transcript')) === null) fail('既定で開いているはずの#ai-transcriptが無い')
+    await page.click('#ai-collapse')
+    try {
+      await page.waitForFunction(() => document.querySelector('#ai-transcript') === null, {
+        timeout,
+        polling: 50,
+      })
+    } catch {
+      fail('#ai-collapseを押しても#ai-transcriptがDOMから消えない')
+    }
+    const aiExpandedAfterCollapse = await page.$eval('#ai-collapse', (node) =>
+      node.getAttribute('aria-expanded'),
+    )
+    if (aiExpandedAfterCollapse !== 'false') {
+      fail(`畳んだ後のaria-expandedがfalseでない: ${aiExpandedAfterCollapse}`)
+    }
+    await page.click('#ai-collapse')
+    try {
+      await page.waitForFunction(() => document.querySelector('#ai-transcript') !== null, {
+        timeout,
+        polling: 50,
+      })
+    } catch {
+      fail('もう一度#ai-collapseを押しても#ai-transcriptが戻らない')
+    }
+    ok('**AIパネルの開閉**: `#ai-collapse`を押すと`#ai-transcript`がDOMから消え、もう一度押すと戻る')
 
     // -------------------------------------------------------------- 検証1: 積層
     await run('file-export-step', MISSING_EXPORT_DIR)

@@ -18,6 +18,15 @@
    *   `session.ts` の `AiTranscriptEntry` docstring)。
    * - **ツール呼び出しの表示はverb名をそのまま出す**(操作ログ・MCPツール名と同じ綴り。
    *   タスクファイルの要件)。
+   *
+   * **2026-08-28、`BrowserPanel.svelte` と同じ形の開閉カレット(`#ai-collapse`)を付けた**
+   * (本人裁定 [[duocad-show-only-what-is-needed]] 3段目「使うかもしれないし使わないかも
+   * しれないものは…ユーザーが表示・非表示を切り替えられるようにする」)。これで
+   * tier3の常設パネルは全て畳めるようになった(ファイル一覧=ヘッダのトグル、
+   * ブラウザ=カレット、AI設定フォーム=設定ボタン、AI本体=このカレット)。
+   * 畳んでも会話(`transcript`)は親(`App.svelte`)が持ったまま消えないので、開き直せば続きが見える。
+   * **既定は開いている**(`BrowserPanel.svelte` と同じ形。再読込をまたいだ保持はしない)。
+   * 「設定」を押すと畳んだままでも設定フォームが見えるよう自動的に開く(`openSettings`)。
    */
   import type { AiProviderKind, AiStatus, AiTranscriptEntry } from './session'
 
@@ -37,6 +46,10 @@
 
   let draft = $state('')
   let settingsOpen = $state(false)
+  /** パネル本体(会話・入力・設定)を出しているか。**既定は開いている**(`BrowserPanel.svelte`
+   * の `open` と同じ形)。畳んでもヘッダ行(プロバイダ名・中断・設定)は見えたままにする ——
+   * それらは「何が繋がっているか」「応答中か」を一目で言う役目なので、畳んでも隠さない。 */
+  let open = $state(true)
   /** 設定フォームの打ちかけ(開いた時点の `status` で初期化する)。 */
   let providerDraft = $state<AiProviderKind>('openai_compat')
   let modelDraft = $state('')
@@ -57,6 +70,8 @@
     modelDraft = status?.model ?? ''
     baseUrlDraft = status?.baseUrl ?? ''
     settingsOpen = true
+    // **畳んだまま設定を開いても見えない**ので、設定を押したら本体ごと開く。
+    open = true
   }
 
   /**
@@ -107,8 +122,18 @@
   }
 </script>
 
-<section class="ai-panel">
+<section class="ai-panel" class:collapsed={!open}>
   <div class="ai-head">
+    <!-- **BrowserPanel.svelteと同じ形の開閉カレット**(2026-08-28。新しい畳み方を発明しない)。 -->
+    <button
+      id="ai-collapse"
+      class="caret"
+      onclick={() => (open = !open)}
+      title={open ? '畳む' : '開く'}
+      aria-expanded={open}
+    >
+      {open ? '▾' : '▸'}
+    </button>
     <strong>AI</strong>
     {#if status}
       <span class="value" data-provider={status.provider}>
@@ -128,87 +153,89 @@
     </button>
   </div>
 
-  {#if settingsOpen}
-    <div class="ai-settings">
-      {#if canPickProvider}
+  {#if open}
+    {#if settingsOpen}
+      <div class="ai-settings">
+        {#if canPickProvider}
+          <label>
+            プロバイダ
+            <!-- `bind:value` にしない —— 束縛の更新と `onchange` の順序に依存せず、
+                 切り替えを1か所(`selectProvider`)で扱うため。
+                 **選択肢はサーバの `ai_status.providers` が正**(ここに書き写さない)。 -->
+            <select
+              id="ai-provider"
+              value={providerDraft}
+              onchange={(event) => selectProvider(event.currentTarget.value as AiProviderKind)}
+            >
+              {#each status?.providers ?? [] as kind (kind)}
+                <option value={kind}>{PROVIDER_LABEL[kind] ?? kind}({kind})</option>
+              {/each}
+            </select>
+          </label>
+        {/if}
         <label>
-          プロバイダ
-          <!-- `bind:value` にしない —— 束縛の更新と `onchange` の順序に依存せず、
-               切り替えを1か所(`selectProvider`)で扱うため。
-               **選択肢はサーバの `ai_status.providers` が正**(ここに書き写さない)。 -->
-          <select
-            id="ai-provider"
-            value={providerDraft}
-            onchange={(event) => selectProvider(event.currentTarget.value as AiProviderKind)}
-          >
-            {#each status?.providers ?? [] as kind (kind)}
-              <option value={kind}>{PROVIDER_LABEL[kind] ?? kind}({kind})</option>
-            {/each}
-          </select>
+          モデル
+          <input id="ai-model" type="text" placeholder="既定値" bind:value={modelDraft} />
         </label>
+        <!-- **エンドポイントは常に出す** —— 今あるプロバイダは鍵を持たないので、
+             どこを指しても飛ぶのはキーの無いリクエストだけである。鍵を持つプロバイダを
+             足すときは、ここと `Server._ai_configure` の両方に制限を書き戻すこと。 -->
+        <label>
+          エンドポイント
+          <input
+            id="ai-base-url"
+            type="text"
+            placeholder="http://127.0.0.1:8080/v1"
+            bind:value={baseUrlDraft}
+          />
+        </label>
+        <button id="ai-settings-apply" onclick={applySettings} disabled={running}>適用</button>
+      </div>
+    {/if}
+
+    {#if blockedReason}
+      <p class="hint dim" data-ai-blocked>{blockedReason}</p>
+    {/if}
+
+    <div class="ai-transcript" id="ai-transcript">
+      {#each transcript as entry, index (index)}
+        {#if entry.kind === 'user'}
+          <p class="line user">{entry.text}</p>
+        {:else if entry.kind === 'tool'}
+          <p class="line tool" class:tool-fail={!entry.call.ok} data-tool={entry.call.name}>
+            {entry.call.ok ? '✓' : '✗'} {toolLine(entry)}
+          </p>
+        {:else if entry.kind === 'result'}
+          <p class="line result" data-status={entry.result.status}>
+            {entry.result.text || STATUS_LABEL[entry.result.status] || entry.result.status}
+          </p>
+        {:else}
+          <p class="line error">{entry.message}</p>
+        {/if}
+      {/each}
+      {#if transcript.length === 0}
+        <p class="hint dim">AIに話しかける(例: 「ボディの一覧を教えて」)</p>
       {/if}
-      <label>
-        モデル
-        <input id="ai-model" type="text" placeholder="既定値" bind:value={modelDraft} />
-      </label>
-      <!-- **エンドポイントは常に出す** —— 今あるプロバイダは鍵を持たないので、
-           どこを指しても飛ぶのはキーの無いリクエストだけである。鍵を持つプロバイダを
-           足すときは、ここと `Server._ai_configure` の両方に制限を書き戻すこと。 -->
-      <label>
-        エンドポイント
-        <input
-          id="ai-base-url"
-          type="text"
-          placeholder="http://127.0.0.1:8080/v1"
-          bind:value={baseUrlDraft}
-        />
-      </label>
-      <button id="ai-settings-apply" onclick={applySettings} disabled={running}>適用</button>
+    </div>
+
+    <div class="ai-input">
+      <input
+        id="ai-message"
+        type="text"
+        placeholder={blockedReason ?? '話しかける…'}
+        disabled={running || !!blockedReason}
+        bind:value={draft}
+        onkeydown={(event) => {
+          if (event.key !== 'Enter') return
+          event.preventDefault()
+          send()
+        }}
+      />
+      <button id="ai-send" onclick={send} disabled={running || !draft.trim() || !!blockedReason}>
+        送信
+      </button>
     </div>
   {/if}
-
-  {#if blockedReason}
-    <p class="hint dim" data-ai-blocked>{blockedReason}</p>
-  {/if}
-
-  <div class="ai-transcript" id="ai-transcript">
-    {#each transcript as entry, index (index)}
-      {#if entry.kind === 'user'}
-        <p class="line user">{entry.text}</p>
-      {:else if entry.kind === 'tool'}
-        <p class="line tool" class:tool-fail={!entry.call.ok} data-tool={entry.call.name}>
-          {entry.call.ok ? '✓' : '✗'} {toolLine(entry)}
-        </p>
-      {:else if entry.kind === 'result'}
-        <p class="line result" data-status={entry.result.status}>
-          {entry.result.text || STATUS_LABEL[entry.result.status] || entry.result.status}
-        </p>
-      {:else}
-        <p class="line error">{entry.message}</p>
-      {/if}
-    {/each}
-    {#if transcript.length === 0}
-      <p class="hint dim">AIに話しかける(例: 「ボディの一覧を教えて」)</p>
-    {/if}
-  </div>
-
-  <div class="ai-input">
-    <input
-      id="ai-message"
-      type="text"
-      placeholder={blockedReason ?? '話しかける…'}
-      disabled={running || !!blockedReason}
-      bind:value={draft}
-      onkeydown={(event) => {
-        if (event.key !== 'Enter') return
-        event.preventDefault()
-        send()
-      }}
-    />
-    <button id="ai-send" onclick={send} disabled={running || !draft.trim() || !!blockedReason}>
-      送信
-    </button>
-  </div>
 </section>
 
 <style>
@@ -226,6 +253,12 @@
     min-height: 0;
   }
 
+  /* **畳んだら220px固定を効かせず、ヘッダ行だけの高さにする**(`flex: 0 0 auto` は維持 ——
+     縮んでよいのはビューポートだけ、という不変条件は畳んでも変わらない)。 */
+  .ai-panel.collapsed {
+    height: auto;
+  }
+
   .ai-head {
     display: flex;
     align-items: center;
@@ -233,6 +266,20 @@
     flex-wrap: wrap;
     row-gap: 4px;
     flex: 0 0 auto;
+  }
+
+  /* BrowserPanel.svelteの `.caret` と同じ見た目(新しい畳み方を発明しない)。 */
+  .caret {
+    padding: 0 4px;
+    border: none;
+    background: none;
+    color: var(--dim);
+    line-height: 1;
+  }
+
+  .caret:not(:disabled):hover {
+    color: var(--accent);
+    border: none;
   }
 
   .spacer {

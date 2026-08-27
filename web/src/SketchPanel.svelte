@@ -1,11 +1,15 @@
 <script lang="ts">
   /**
-   * スケッチのパネル — **モードの出入りと、置いた図形の打ち直し**。
+   * スケッチのパネル — **スケッチモード中だけ出る**、図形の一覧と打ち直し。
    *
-   * この企画の中心命題「手動操作が一級の操作モード」がUIに現れる場所。ここが持つのは
-   * 3つだけで、どれも**コアを叩くだけ**(パネルは何も覚えない):
+   * **2026-08-28、常時表示をやめた**(本人裁定 [[duocad-show-only-what-is-needed]] 2段目
+   * 「明確に必要でないものは出さない」に、通常モード時のこのパネルが名指しで当たった)。
+   * `App.svelte` 側が `{#if sketchId !== null}` で括っており、通常モードでは
+   * **DOMごと存在しない**(見えないだけではない)。
    *
-   * 1. 既にあるスケッチに入る(再開)/抜ける/正面から見る —— **モードの操作だけ**
+   * ここが持つのは2つだけで、どちらも**コアを叩くだけ**(パネルは何も覚えない):
+   *
+   * 1. 抜ける/正面から見る —— **モードの操作だけ**(「抜ける」はスケッチモード中は常に出る)
    * 2. 図形の一覧と**値の打ち直し**(`set_parameter`)——
    *    クリックだけで置いた後に寸法を直せるのが§3.4のパラメトリック・プリミティブ
    *
@@ -17,6 +21,11 @@
    * クリック、の2手に一本化してある —— 平面ボタンを残すと「ボタンで指す」と「クリックで指す」
    * の2つの指し方が並ぶ(UI指針1)。
    *
+   * **既存スケッチへ再び入る口(再開)もここには無い**(2026-08-28に削除)。旧「再開」ボタンは
+   * `BrowserPanel.svelte` のスケッチ名クリック(`onEnterSketch`)と全く同じ操作の複製だった
+   * ——「実物クリックできるものにボタンを作らない」(UI指針1)にも同時に反していたので、
+   * 再開の口はブラウザ側の1本だけに一本化した。
+   *
    * **見た目は作り込まない**(タスクの制約)。高さは固定してある —— 内容任せにすると
    * 図形が増えるたびにビューポートがリサイズされ、射影が変わって次のクリックが
    * 別の場所に当たる。
@@ -26,7 +35,6 @@
   let {
     sketches,
     activeSketchId,
-    onEnter,
     onExit,
     onLookAt,
     onSetParameter,
@@ -35,7 +43,6 @@
   }: {
     sketches: SketchState[]
     activeSketchId: string | null
-    onEnter: (sketchId: string) => void
     onExit: () => void
     onLookAt: () => void
     onSetParameter: (name: string, value: number) => void
@@ -80,32 +87,22 @@
 </script>
 
 <section class="sketch-panel" data-active={activeSketchId ?? ''}>
-  <div class="row">
-    <span class="label">スケッチ</span>
-    {#if active}
+  <!-- **`active` が null の分岐は事故防止のガードとしてのみ残す**(2026-08-28)。
+       `App.svelte` は `sketchId !== null` の間だけこのコンポーネントを描くので、
+       通常は必ず見つかる —— undoでスケッチごと消えた直後の1フレームなど、
+       `sketches` にまだ無いIDが来てもここが落ちないための保険。
+       **再開の口(旧`.reopen`ボタン)は無い**(docstring参照)。 -->
+  {#if active}
+    <div class="row">
+      <span class="label">スケッチ</span>
       <span id="sketch-mode" class="tag on">
         編集中 {active.plane.kind === 'base' ? active.plane.name : '面に貼ったスケッチ'}
         ・図形 {active.entities.length} ・領域 {active.regions.length}
       </span>
       <button id="sketch-look" onclick={onLookAt}>正面から見る</button>
       <button id="sketch-exit" onclick={onExit}>抜ける</button>
-    {:else}
-      <!-- 作るのはツールバーの「スケッチ」から(ここに平面ボタンは置かない)。
-           残すのは既にあるスケッチを再開する手だけ。 -->
-      <span class="value dim">
-        {sketches.length === 0
-          ? 'まだスケッチが無い(ツールバーの「スケッチ」→ 貼る先をクリック)'
-          : '再開するスケッチを選ぶ'}
-      </span>
-      {#each sketches as item (item.sketch_id)}
-        <button class="reopen" onclick={() => onEnter(item.sketch_id)}>
-          再開 {item.plane.kind === 'base' ? item.plane.name : '面'}({item.entities.length})
-        </button>
-      {/each}
-    {/if}
-  </div>
+    </div>
 
-  {#if active}
     <div class="list" id="sketch-entities">
       {#if active.entities.length === 0}
         <span class="value dim">まだ図形が無い(平面をクリックして描く)</span>

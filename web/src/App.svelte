@@ -1316,16 +1316,21 @@
           session.aiConfigure(providerKind, modelName, baseUrl)}
       />
 
-      <SketchPanel
-        {sketches}
-        activeSketchId={sketchId}
-        onEnter={enterSketch}
-        onExit={exitSketch}
-        onLookAt={() => sketchId && viewport?.lookAtSketch(sketchId)}
-        onSetParameter={setParameter}
-        selectedEntities={selectedEntities}
-        onToggleEntity={toggleEntity}
-      />
+      <!-- **スケッチモード中だけ**出す(2026-08-27本人裁定 [[duocad-show-only-what-is-needed]]
+           2段目「明確に必要でないものは出さない」)。通常モードでの再開は
+           BrowserPanelのスケッチ名クリック(`onEnterSketch`)に一本化してあるので、
+           ここに戻る口は無い。 -->
+      {#if sketchId !== null}
+        <SketchPanel
+          {sketches}
+          activeSketchId={sketchId}
+          onExit={exitSketch}
+          onLookAt={() => sketchId && viewport?.lookAtSketch(sketchId)}
+          onSetParameter={setParameter}
+          selectedEntities={selectedEntities}
+          onToggleEntity={toggleEntity}
+        />
+      {/if}
     </aside>
 
     <!-- エラーの札。**`.main` の中に置くが大きさは持たない**(position:absolute で浮く)ので、
