@@ -26,7 +26,7 @@
         {"type": "file", "action": "save"|"export_step"|"export_stl"|"list", "path", "bytes"}
         {"type": "error", "message": str, "where": str}
         {"type": "warning", "message": str}
-        {"type": "ai_status", "provider", "model", "base_url", "api_key_configured", "running", "providers"}
+        {"type": "ai_status", "provider", "model", "base_url", "running", "providers"}
         {"type": "ai_tool_call", "name": str, "arguments": {...}, "result": {...}, "ok": bool}
         {"type": "ai_result", "status", "text", "detail", "turns", "tool_calls": [...], "usage": {...}}
         {"type": "ai_error", "message": str}
@@ -89,8 +89,8 @@ from pathlib import Path
 from typing import Any, Optional  # Any: Session verb wrappers / listeners
 
 from . import catalog, io_step, kernel, parameters, query, region, selection, sketch
-from .agent import AgentLoop, Cancellation, ProviderError, api_key_configured, build_provider
-from .agent.providers import DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_COMPAT_BASE_URL
+from .agent import AgentLoop, Cancellation, ProviderError, build_provider
+from .agent.providers import DEFAULT_OPENAI_COMPAT_BASE_URL
 from .document import Document
 from .oplog import OpLog
 from .speculative import speculative
@@ -188,6 +188,12 @@ FILE_COMMANDS: dict = catalog.file_table()
 #: `_dispatch` はこれを受け取ったとき、選択が `origin="proposed"` のままなら
 #: **自動で `commit_selection` してから**verbを走らせる(下記 `_commit_before_verb`)。
 SELECTION_CONSUMING_COMMANDS: set = catalog.selection_consuming_commands()
+
+#: アプリ内AIが繋げるプロバイダ(`ai_configure` が受け付ける綴り・`ai_status.providers`)。
+#: **2026-08-27に `anthropic` を落として1つになった** —— ClaudeをAPIキーで叩く経路の廃止。
+#: Claudeへ繋ぐ道はMCP(サブスク認証のClaude Codeが `/mcp` へ来る)側に残っている。
+#: **列のまま残すのは次のプロバイダの差込口だから**で、画面はこの長さで選択UIの要否を決める。
+AI_PROVIDERS: tuple = ("openai_compat",)
 
 
 class ToolsOnLoop:
@@ -1560,7 +1566,9 @@ class Server:
         # `server` をimportしているので逆方向は循環になる)ので、実体は `mcp_server._run`
         # が渡す。`ToolSurface`(`descriptors`/`call`/`error_envelope`)を満たせば何でもよい。
         self._ai_tools: Optional[Any] = None
-        self._ai_provider_kind = "anthropic" if api_key_configured() else "openai_compat"
+        # **プロバイダは1つしか無い**(2026-08-27。ClaudeをAPIキーで叩く経路を廃止した)。
+        # 選ぶ仕組み自体は残してある —— 次のプロバイダの差込口である。
+        self._ai_provider_kind = "openai_compat"
         self._ai_model: Optional[str] = None
         self._ai_base_url: Optional[str] = None
         self._ai_loop: Optional[AgentLoop] = None
@@ -1914,25 +1922,21 @@ class Server:
 
     # ------------------------------------------------------------------ G: アプリ内AIエージェント
     def _ai_status(self) -> dict:
-        """画面に出してよい設定の全部。**APIキーの値は含まない** —— `api_key_configured` の
-        真偽だけを返す(`duocad/agent/providers.py` の要件)。
+        """画面に出してよい設定の全部。**鍵の類は一切載せない**(2026-08-27) ——
+        `api_key_configured` も廃止した(APIキーで繋ぐプロバイダがもう無い)。
 
         `model` / `base_url` は明示的に選んでいなければ**プロバイダの既定値**を返す
         (`null` のままだと画面が「何と話しているか」を言えない)。
+
+        **`providers` は増減しうる列として返し続ける** —— 画面はこの長さを見て
+        選択UIを出すか決める(1つなら出さない)。
         """
-        default_model = (
-            DEFAULT_ANTHROPIC_MODEL if self._ai_provider_kind == "anthropic" else "local"
-        )
-        default_base_url = (
-            None if self._ai_provider_kind == "anthropic" else DEFAULT_OPENAI_COMPAT_BASE_URL
-        )
         return {
             "provider": self._ai_provider_kind,
-            "model": self._ai_model or default_model,
-            "base_url": self._ai_base_url or default_base_url,
-            "api_key_configured": api_key_configured(),
+            "model": self._ai_model or "local",
+            "base_url": self._ai_base_url or DEFAULT_OPENAI_COMPAT_BASE_URL,
             "running": self._ai_running,
-            "providers": ["anthropic", "openai_compat"],
+            "providers": list(AI_PROVIDERS),
         }
 
     def _ai_configure(
@@ -1944,27 +1948,16 @@ class Server:
         `AgentLoop.run()` が古い `Cancellation` を見続けたままになり、中断ボタンが効かなくなる
         (`loop_obj.run` は `run_in_executor` に渡した時点でその回のオブジェクトを掴んでいる)。
 
-        **`anthropic` は `base_url` を受け付けない**。`AnthropicProvider.complete()` は実キーを
-        `x-api-key` ヘッダに載せて `{base_url}/v1/messages` へPOSTするので、`ai_configure` で
-        `base_url` を任意のホストへ差し替えて `ai_send` するだけで**サーバの実キーが外部へ
-        流出する**(WebSocketは同一オリジンポリシーで止まらないので、127.0.0.1 bindは防御に
-        ならない)。`anthropic` を選んでいる間は `base_url` の指定を明示的なエラーとして拒否する
-        (黙って無視すると、指定したのに効かない理由が画面から分からない)。エンドポイントを
-        差し替えられる必要があるのはローカルの `openai_compat`(キーを持たない)だけで足りる。
+        **`base_url` を自由に差し替えてよいのは、鍵を持たないプロバイダだけ**である。
+        今ある `openai_compat` はローカルのllama-serverで鍵を持たないので、任意のホストを
+        指しても飛ぶのはキーの無いリクエストだけになる(WebSocketは同一オリジンポリシーで
+        止まらないので、127.0.0.1 bindは防御にならない —— 鍵を持つプロバイダを足すときは
+        この節に拒否を書き戻すこと。2026-08-27にClaudeのAPIキー経路ごと消した)。
         """
         if self._ai_running:
             return {**self._ai_status(), "error": "AI応答中は設定を変更できない(中断してから)"}
-        if provider is not None and provider not in ("anthropic", "openai_compat"):
+        if provider is not None and provider not in AI_PROVIDERS:
             return {**self._ai_status(), "error": f"未知のプロバイダ: {provider!r}"}
-        effective_provider = provider if provider is not None else self._ai_provider_kind
-        if effective_provider == "anthropic" and base_url:
-            return {
-                **self._ai_status(),
-                "error": (
-                    "Claude(anthropic)はエンドポイントを固定している"
-                    "(公式APIのみ・base_urlは指定できない。実キーを外部ホストへ送らないため)"
-                ),
-            }
         if provider is not None:
             self._ai_provider_kind = provider
         self._ai_model = model or None
@@ -1984,13 +1977,9 @@ class Server:
             )
         if self._loop is None:
             raise ProviderError("イベントループが未起動")
-        # **`anthropic` には `base_url` を絶対に渡さない**(QA指摘・critical。
-        # `_ai_configure` が既に拒否しているが、ここでも二重に保証する —— 検証を
-        # 素通りする経路がどこかに生まれても、実キーが外部ホストへ渡る手前で止まる形にする)。
-        provider_kwargs: dict = {"model": self._ai_model}
-        if self._ai_provider_kind != "anthropic":
-            provider_kwargs["base_url"] = self._ai_base_url
-        provider = build_provider(self._ai_provider_kind, **provider_kwargs)
+        provider = build_provider(
+            self._ai_provider_kind, model=self._ai_model, base_url=self._ai_base_url
+        )
         marshaled = ToolsOnLoop(self._ai_tools, self._loop)
         self._ai_loop = AgentLoop(
             marshaled, provider, cancellation=self._ai_cancellation, progress=self._ai_progress

@@ -1,59 +1,46 @@
 """LLMプロバイダのアダプタ —— **キーの詰め替えだけを担当する層**。
 
-- `anthropic`      … Claude API(`POST /v1/messages`)
 - `openai_compat`  … llama-server などのOpenAI互換(`POST /v1/chat/completions`)
 
 **中立の往復型がここが層の境目**: ループは `UserTurn` / `AssistantTurn` / `ToolResultTurn` の
-3つだけを積み、**`tool_use` ブロックか `tool_calls` かはアダプタの中の話**である。逆にアダプタは
+3つだけを積み、**プロバイダ固有の本文の形はアダプタの中の話**である。逆にアダプタは
 `DocumentTools` も `Session` も知らない —— 受け取るのは `descriptors()` が返したツール定義
 そのままである(定義を書き写す場所を作らない)。
 
-公式SDK(`anthropic` / `openai`)は入れず、`urllib.request` で素のHTTPを書く。v1は**非streaming**。
+**アダプタが1つでもこの層は畳まない**(2026-08-27) —— `Provider` / `build_provider` は
+次のプロバイダの差込口である。
 
-**APIキーの取り回し(セキュリティ要件)**:
+**この層はAPIキーを持たない**(2026-08-27)。ClaudeをAPIキーで叩く経路は廃止した ——
+Claudeを使う道はMCP(サブスク認証のClaude Codeが `/mcp` へ繋ぐ)だけである。
+`openai_compat` はキーを要求するサーバのために `api_key` を受けられるが、`build_provider`
+は渡さない(画面から鍵を受け取る経路を作らないため)。外へ出る文字列は `_redact()` を通す。
 
-- 読む順は 環境変数 → gitignore済みのローカル設定ファイル(`SECRETS_FILENAME`)。
-- **値はどこにも出さない** —— `repr()` にも例外メッセージにもログにも。外へ出す前に必ず
-  `_redact()` を通す(HTTPライブラリはヘッダ値を例外文へ載せることがある)。
-- 画面に出してよいのは `api_key_configured()` の2値だけ(ブラウザへ値を送らない)。
+公式SDK(`openai`)は入れず、`urllib.request` で素のHTTPを書く。v1は**非streaming**。
 
 **OCP / build123d をimportしない**。
 """
 from __future__ import annotations
 
 import json
-import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
-#: 既定のClaudeモデル。**日付サフィックスを付けない**(この綴りで完結している)。
-DEFAULT_ANTHROPIC_MODEL = "claude-opus-5"
-#: Claude APIの版ヘッダ(`anthropic-version`)。
-ANTHROPIC_API_VERSION = "2023-06-01"
-DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 #: llama-server の既定(`llama-server -c 16384 --port 8080` を想定)。
 DEFAULT_OPENAI_COMPAT_BASE_URL = "http://127.0.0.1:8080/v1"
-
-#: 環境変数名。
-ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
-#: リポジトリ直下のローカル設定ファイル(**gitignore済み**)。
-#: 形は `{"ANTHROPIC_API_KEY": "..."}` の素のJSON。
-SECRETS_FILENAME = "duocad_secrets.json"
 
 #: 失敗の本文をこの長さで切る(モデルへ返す文が無限に伸びないように)。
 MAX_ERROR_CHARS = 400
 
-#: HTTPの実体。テストは差し替える(実キーで外部を叩かないため)。
+#: HTTPの実体。テストは差し替える(外部を叩かないため)。
 Transport = Callable[[str, dict, dict, float], dict]
 
 
 class ProviderError(RuntimeError):
     """プロバイダとの1往復が成立しなかった(HTTP・接続・応答の形)。
 
-    **メッセージにAPIキーを含めない**。生成元は必ず `_redact()` を通す。
+    **メッセージに鍵を含めない**。生成元は必ず `_redact()` を通す。
     """
 
     def __init__(self, message: str, *, status: Optional[int] = None) -> None:
@@ -107,7 +94,8 @@ class UserTurn:
 class AssistantTurn:
     text: str
     tool_calls: tuple[ToolCall, ...] = ()
-    #: プロバイダが返した生の本文。**Claudeはこれをそのまま返す**(thinkingブロックを壊さない)。
+    #: プロバイダが返した生の本文(そのまま返す必要のあるアダプタのため。現行の
+    #: `openai_compat` は使わず組み直す)。
     raw: Any = None
 
 
@@ -135,61 +123,10 @@ class ProviderReply:
 
 
 # --------------------------------------------------------------------------------------
-# APIキー(値を持ち歩かない)
+# 外へ出る文字列(鍵を載せない)
 # --------------------------------------------------------------------------------------
-def repo_root() -> Path:
-    """リポジトリ直下(`duocad/agent/providers.py` から2つ上)。"""
-    return Path(__file__).resolve().parents[2]
-
-
-def secrets_path() -> Path:
-    """ローカル設定ファイルの場所(存在しなくてよい)。"""
-    return repo_root() / SECRETS_FILENAME
-
-
-def load_api_key(
-    env_name: str = ANTHROPIC_API_KEY_ENV,
-    *,
-    environ: Optional[dict] = None,
-    path: Optional[Path] = None,
-) -> Optional[str]:
-    """APIキーを読む。**環境変数が先、次にgitignore済みのローカル設定ファイル**。
-
-    見つからなければ None(例外にしない —— 未設定は「使えない」であって異常ではない)。
-    設定ファイルが壊れていても値の推測はせず None を返す。
-    """
-    env = os.environ if environ is None else environ
-    value = (env.get(env_name) or "").strip()
-    if value:
-        return value
-
-    secrets = secrets_path() if path is None else path
-    try:
-        raw = secrets.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    value = str(data.get(env_name) or "").strip()
-    return value or None
-
-
-def api_key_configured(
-    env_name: str = ANTHROPIC_API_KEY_ENV,
-    *,
-    environ: Optional[dict] = None,
-    path: Optional[Path] = None,
-) -> bool:
-    """**画面に出してよいのはこの2値だけ**(値は返さない)。"""
-    return load_api_key(env_name, environ=environ, path=path) is not None
-
-
 def _redact(text: str, secret: Optional[str]) -> str:
-    """例外メッセージからAPIキーを消す。
+    """例外メッセージから鍵を消す。
 
     HTTPライブラリは不正なヘッダ値を例外文へそのまま載せる(例: 改行入りのキー)。
     外へ出る文字列は**必ず**ここを通す。
@@ -257,7 +194,7 @@ def post_json(url: str, payload: dict, headers: dict, timeout: float) -> dict:
 class Provider:
     """プロバイダ1つ。**ループはこの3つしか使わない**(`name` / `model` / `complete`)。"""
 
-    #: `anthropic` / `openai_compat`
+    #: `openai_compat`(増えたらここに足す)
     name = "provider"
 
     def complete(
@@ -276,199 +213,6 @@ def _text_of(turn: AssistantTurn) -> str:
     return turn.text or ""
 
 
-class AnthropicProvider(Provider):
-    """Claude API(`POST /v1/messages`・非streaming)。
-
-    詰め替えは3つだけ:
-
-    - ツール定義 … `descriptors()` の `inputSchema` を `input_schema` へ(他はそのまま)
-    - ツール呼び出し … `content` の `tool_use` ブロック
-    - ツール結果 … `role:"user"` の `tool_result` ブロック(`tool_use_id` で対応づける)
-
-    **送らないもの**: `temperature` / `top_p` / `top_k` と `thinking.budget_tokens`
-    (現行モデルは400を返す)。`thinking` は既定(適応的)のまま触らない ——
-    明示的に切ると**ツール呼び出しが本文のテキストへ化ける**既知の失敗があり、
-    ツールを回すこのループでは黙って何も実行されない事故になる。
-    """
-
-    name = "anthropic"
-
-    def __init__(
-        self,
-        api_key: str,
-        *,
-        model: str = DEFAULT_ANTHROPIC_MODEL,
-        base_url: str = DEFAULT_ANTHROPIC_BASE_URL,
-        effort: Optional[str] = None,
-        transport: Transport = post_json,
-    ) -> None:
-        if not api_key:
-            raise ValueError("APIキーが未設定(環境変数かローカル設定ファイルに置く)")
-        # 値は属性に持つが、`repr` にも例外にも出さない(下の __repr__ と _redact)。
-        self._api_key = api_key
-        self.model = model
-        self.base_url = base_url.rstrip("/")
-        #: `output_config.effort`(`low`|`medium`|`high`|`xhigh`|`max`)。None なら送らない。
-        self.effort = effort
-        self._transport = transport
-
-    def __repr__(self) -> str:  # pragma: no cover - 表示だけ
-        return f"AnthropicProvider(model={self.model!r}, base_url={self.base_url!r})"
-
-    # ------------------------------------------------------------------ 整形
-    def render_tools(self, tools: Sequence[dict]) -> list[dict]:
-        """`descriptors()` → Claudeの `tools`(キー1つ違い)。"""
-        return [
-            {
-                "name": tool["name"],
-                "description": tool.get("description", ""),
-                "input_schema": tool["inputSchema"],
-            }
-            for tool in tools
-        ]
-
-    def render_messages(self, turns: Sequence[Turn]) -> list[dict]:
-        messages: list[dict] = []
-        for turn in turns:
-            if isinstance(turn, UserTurn):
-                messages.append({"role": "user", "content": turn.text})
-            elif isinstance(turn, AssistantTurn):
-                # **生の本文をそのまま返す** —— thinkingブロックを落とすと次のターンが壊れる。
-                content = turn.raw
-                if not isinstance(content, list) or not content:
-                    # 生の本文が無いとき(偽プロバイダ・別プロバイダの履歴)は組み直す。
-                    # **tool_useブロックを落とさない** —— 落とすと次のtool_resultが
-                    # 対応先を失って弾かれる。
-                    content = []
-                    text = _text_of(turn)
-                    if text:
-                        content.append({"type": "text", "text": text})
-                    content.extend(
-                        {
-                            "type": "tool_use",
-                            "id": call.id,
-                            "name": call.name,
-                            "input": call.arguments,
-                        }
-                        for call in turn.tool_calls
-                    )
-                    if not content:
-                        continue
-                messages.append({"role": "assistant", "content": content})
-            elif isinstance(turn, ToolResultTurn):
-                # 複数のツール結果は**1つのuserメッセージにまとめる**(分けると並列呼びが止む)。
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": result.call_id,
-                                "content": result.content,
-                                "is_error": not result.ok,
-                            }
-                            for result in turn.results
-                        ],
-                    }
-                )
-            else:  # pragma: no cover - 型を増やしたときに気づくため
-                raise TypeError(f"未知のターン: {turn!r}")
-        return messages
-
-    def build_payload(
-        self,
-        *,
-        system: str,
-        turns: Sequence[Turn],
-        tools: Sequence[dict],
-        max_tokens: int,
-    ) -> dict:
-        payload: dict = {
-            "model": self.model,
-            "max_tokens": int(max_tokens),
-            "messages": self.render_messages(turns),
-        }
-        if system:
-            payload["system"] = system
-        if tools:
-            payload["tools"] = self.render_tools(tools)
-        if self.effort:
-            payload["output_config"] = {"effort": self.effort}
-        return payload
-
-    def parse_reply(self, response: dict) -> ProviderReply:
-        content = response.get("content")
-        blocks = content if isinstance(content, list) else []
-        texts: list[str] = []
-        calls: list[ToolCall] = []
-        for block in blocks:
-            if not isinstance(block, dict):
-                continue
-            kind = block.get("type")
-            if kind == "text":
-                texts.append(str(block.get("text", "")))
-            elif kind == "tool_use":
-                arguments = block.get("input")
-                calls.append(
-                    ToolCall(
-                        id=str(block.get("id", "")),
-                        name=str(block.get("name", "")),
-                        arguments=arguments if isinstance(arguments, dict) else {},
-                        parse_error=(
-                            None
-                            if isinstance(arguments, dict)
-                            else "tool_use.input がJSONオブジェクトではない"
-                        ),
-                    )
-                )
-        stop_reason = str(response.get("stop_reason") or "")
-        return ProviderReply(
-            text="\n".join(t for t in texts if t).strip(),
-            tool_calls=tuple(calls),
-            stop_reason=stop_reason,
-            stop=_neutral_stop(stop_reason, bool(calls), {"max_tokens"}),
-            usage=response.get("usage") if isinstance(response.get("usage"), dict) else {},
-            raw_message=blocks,
-        )
-
-    # ------------------------------------------------------------------ 1往復
-    def complete(
-        self,
-        *,
-        system: str,
-        turns: Sequence[Turn],
-        tools: Sequence[dict],
-        max_tokens: int,
-        timeout: float,
-    ) -> ProviderReply:
-        payload = self.build_payload(
-            system=system, turns=turns, tools=tools, max_tokens=max_tokens
-        )
-        headers = {
-            "x-api-key": self._api_key,
-            "anthropic-version": ANTHROPIC_API_VERSION,
-        }
-        response = self._call(f"{self.base_url}/v1/messages", payload, headers, timeout)
-        return self.parse_reply(response)
-
-    def _call(self, url: str, payload: dict, headers: dict, timeout: float) -> dict:
-        """**外へ出る例外は必ずキーを消してから**投げ直す。"""
-        try:
-            return self._transport(url, payload, headers, timeout)
-        except ProviderError as error:
-            # **型をそのまま保って作り直す**(2026-08-23)。秘匿のために新しい例外へ
-            # 詰め替えるので、`ProviderError(...)` と書くと `ProviderTimeout` が
-            # ただの `ProviderError` へ潰れる —— 呼び出し側は待ち時間切れだけを
-            # 別扱いするので、ここで型が消えると本物の障害と区別できなくなる。
-            raise type(error)(
-                _redact(str(error), self._api_key), status=error.status
-            ) from None
-        except Exception as error:  # HTTPライブラリがヘッダ値を例外文へ載せる場合がある
-            raise ProviderError(
-                _redact(f"{type(error).__name__}: {error}", self._api_key)
-            ) from None
-
-
 class OpenAICompatProvider(Provider):
     """OpenAI互換(`POST /v1/chat/completions`・非streaming)。llama-server がこれ。
 
@@ -479,7 +223,8 @@ class OpenAICompatProvider(Provider):
     - ツール結果 … `role:"tool"` + `tool_call_id` を**1件ずつ**
 
     APIキーは既定で不要(ローカル)。要るサーバのために `api_key` を受けるが、
-    値の扱いはClaude側と同じ(出さない)。
+    **`build_provider` は渡さない** —— 画面から鍵を受け取る経路は作らない。値は
+    `repr()` にも例外にも出さない(`_redact()`)。
     """
 
     name = "openai_compat"
@@ -664,8 +409,8 @@ def _neutral_stop(raw: str, has_tool_calls: bool, truncated: set) -> str:
     """プロバイダの停止理由 → ループが分岐する4語彙 + `other`。
 
     **打ち切りの判定がツール呼び出しより先**である。上限で切られた応答にも
-    `tool_use` ブロック / `tool_calls` は載りうるが、その引数のJSONは**途中で
-    切れている可能性がある** —— `tool_use` に丸めると、ループは切れた引数のまま
+    `tool_calls` は載りうるが、その引数のJSONは**途中で切れている可能性がある**
+    —— `tool_use` に丸めると、ループは切れた引数のまま
     ツールを実行してしまう(`loop.py` がここで止める理由)。
     """
     if raw in truncated:
@@ -684,36 +429,18 @@ def build_provider(
     *,
     model: Optional[str] = None,
     base_url: Optional[str] = None,
-    environ: Optional[dict] = None,
-    secrets: Optional[Path] = None,
     transport: Transport = post_json,
 ) -> Provider:
-    """名前からプロバイダを1つ作る(アプリ内UI=タスクGが選ぶ入口)。
+    """名前からプロバイダを1つ作る(アプリ内UIが選ぶ入口)。
 
-    APIキーは**呼び出し側から渡さない** —— ここが唯一の読み口である
-    (画面から受け取る経路を作らないため)。
+    **ここでAPIキーを読まない**(2026-08-27) —— `api_key` を渡していないので
+    `OpenAICompatProvider._api_key` は常に `None` である。`base_url` を任意の外部ホストへ
+    向けても、飛ぶのはキーの無いリクエストだけになる。
     """
-    if kind == "anthropic":
-        api_key = load_api_key(environ=environ, path=secrets)
-        if not api_key:
-            raise ProviderError(
-                f"{ANTHROPIC_API_KEY_ENV} が未設定"
-                f"(環境変数か {SECRETS_FILENAME} に置く。値は画面へ出さない)"
-            )
-        return AnthropicProvider(
-            api_key,
-            model=model or DEFAULT_ANTHROPIC_MODEL,
-            base_url=base_url or DEFAULT_ANTHROPIC_BASE_URL,
-            transport=transport,
-        )
     if kind == "openai_compat":
-        # **ここでは `ANTHROPIC_API_KEY` を一切読まない**。
-        # `api_key` を渡していないので `OpenAICompatProvider._api_key` は常に `None` ——
-        # ローカルのllama-serverへ本物のキーを送る経路はそもそも存在しない
-        # (`base_url` を任意の外部ホストへ向けても、飛ぶのはキーの無いリクエストだけ)。
         return OpenAICompatProvider(
             model=model or "local",
             base_url=base_url or DEFAULT_OPENAI_COMPAT_BASE_URL,
             transport=transport,
         )
-    raise ValueError(f"未知のプロバイダ: {kind!r} (anthropic / openai_compat)")
+    raise ValueError(f"未知のプロバイダ: {kind!r} (openai_compat)")
