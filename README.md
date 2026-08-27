@@ -401,7 +401,7 @@ engine `duocad-save-location-fixed-folder`）。**ツールバー(`CommandHost`)
 - **AIの提案は、人がコマンドを実行した時点で自動的に確定する**（2026-08-23。「承認する」ボタンの代替）。
   対象集合を確定選択から取るverb（押し出す・領域を押し出す・丸める・面取り・スケッチ）が
   ブラウザから届くと、サーバが走らせる直前に `commit_selection` する
-  （`duocad/server.py` の `_commit_before_verb`。宣言は `catalog.Command.uses_selection`）。
+  （`duocad/net/ws.py` の `_commit_before_verb`。宣言は `catalog.Command.uses_selection`）。
   **人がツールバーからコマンドを実行する行為そのものが承認**である、というのが根拠。
   可視性の切替・undo・選択集合の編集では確定しない。**AI側（MCP）は素通し**で、
   AIは今までどおり自分の提案を `commit_selection` で明示的に確定する。
@@ -631,7 +631,7 @@ AI側は本物のJSON-RPC**で19操作を叩く。結果はJSONでstdout末尾�
   WebSocketは複数接続へ配信する作りだが、想定するのは「1人が1つのブラウザで開いている」
   ことだけで、同時編集の経路に `Session` 全体を守る排他は無い。形状が壊れることはない
   （verbの適用は同期でawaitを挟まない）が、操作ログや選択状態が意図と違う順序で反映され
-  うる。**この前提を変えるなら `duocad/server.py` の `Server` に排他を入れるのが先。**
+  うる。**この前提を変えるなら `duocad/net/ws.py` の `Server` に排他を入れるのが先。**
 
 ### モジュールとimport境界
 
@@ -654,9 +654,16 @@ AI側は本物のJSON-RPC**で19操作を叩く。結果はJSONでstdout末尾�
 | `duocad/svg_import.py` | SVG → スケッチの図形（**パーサはbuild123dの推移依存で既に入っている** svgelements） | ✗ | ✗ |
 | `duocad/query.py` | 問い合わせ層のインタフェース | ✗ | **○ここだけ** |
 | `duocad/kernel.py` | OCCTを直接叩く層（1637行。テセレーションもここ） | **○ここだけ** | ✗ |
-| `duocad/server.py` | WebSocket + `web/dist` の静的配信（アプリ層との唯一の接点） | ✗ | ✗ |
+| `duocad/session.py` | `Session`（1つの文書を持つサーバ側の状態。verbの呼び出し・選択・保存/開く） | ✗ | ✗ |
+| `duocad/paths.py` | `REPO_ROOT` と、そこから出る既定の置き場（`web/dist` / `models`） | ✗ | ✗ |
+| `duocad/net/ws.py` | `Server`（WebSocketの配信と `_dispatch`）＋ソケットから踏めるコマンドの表 | ✗ | ✗ |
+| `duocad/net/http.py` | `web/dist` の静的配信と `/mcp`（MCPのHTTPトランスポート） | ✗ | ✗ |
+| `duocad/net/tools_on_loop.py` | `ToolsOnLoop`（別スレッドからの道具呼び出しをイベントループへ限定する覆い） | ✗ | ✗ |
+| `duocad/server.py` | **入口**（上の5つの再輸出。`mcp_server.py` とテストはここから名前を取る） | ✗ | ✗ |
 | `duocad/mcp_server.py` | MCPサーバ。**アプリ層ではなくコアのもう一人のクライアント** | ✗ | ✗ |
 | `duocad/agent/` | **アプリ内AIエージェント**（プロバイダのアダプタ＋tool-useループ。UIは持たない） | ✗ | ✗ |
+
+**`duocad/net/` → `duocad/session.py` の一方向**（`session.py` から `net/` を参照しない）。唯一の逆向きは `Server._ensure_ai_loop` が `build_provider` を**入口（`duocad.server`）越しに引く**ところで、これはプロバイダの差し替え点を `duocad.server.build_provider` に固定するため（`tests/test_agent_ws.py` がそこを monkeypatch する。直接importすると差し替えが黙って効かなくなる）。呼び出し時まで遅らせてあるのでimport時の循環にはならない。
 
 ### frontend（`web/`）
 
@@ -744,7 +751,7 @@ AIを選んで繋ぐ**（今あるのは llama-server の1つ）。**MCP経路�
 契約は `tests/test_agent_loop.py`（偽プロバイダで決定的に検査）。実機は
 `tests/test_agent_llama_server.py` の1本だけで、**8080にllama-serverが居なければskipする**。
 
-**WebSocketへの配線(G・2026-08-20)。** `duocad/server.py` が `ai_get_status` / `ai_configure` /
+**WebSocketへの配線(G・2026-08-20)。** `duocad/net/ws.py` が `ai_get_status` / `ai_configure` /
 `ai_send` / `ai_cancel` の4つを持ち、画面右サイドバーの `web/src/AiPanel.svelte` から叩く。
 
 - **`ai_*` はverbではない**。文書を直接は変えない(操作ログに載らずundoの単位でもない)ので
@@ -782,6 +789,8 @@ duocad/
   MCP.md                 MCPサーバの仕様と登録手順
   docs/                  IMPLEMENTATION_PLAN(現行の正) / REQUIREMENTS / PROBE_FINDINGS
   duocad/                コア（Python）。verbs/ に1 verb 1モジュール
+                         net/ はアプリ層との接点（ws.py=WebSocket／http.py=静的配信と/mcp／
+                         tools_on_loop.py）。server.py はその入口で、再輸出と起動の番人だけ
                          agent/ はアプリ内AIエージェント（プロバイダ＋ループ・UIなし）
   tests/                 515件。README.md は2026-08-22以前の契約の記録（削除済みテストを指す箇所あり）
   web/                   frontend（Svelte 5 + Vite）

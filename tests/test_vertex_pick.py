@@ -334,7 +334,7 @@ def test_the_declaration_matches_which_verbs_read_the_selection() -> None:
     落ちたら、**新しく足したverbが自動確定の対象から漏れている**(AIの提案に対して
     人がそのverbを実行すると詰む)か、逆に選択を読まないverbが余計に確定させている。
     """
-    tree = ast.parse((REPO_ROOT / "duocad" / "server.py").read_text(encoding="utf-8"))
+    tree = ast.parse((REPO_ROOT / "duocad" / "session.py").read_text(encoding="utf-8"))
     reads_selection: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef):

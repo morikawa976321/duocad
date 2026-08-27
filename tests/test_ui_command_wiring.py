@@ -111,7 +111,7 @@ def _server_command_names() -> set[str]:
     `test_every_hand_dispatched_command_has_a_branch` が見る)。
     """
     names = set(_catalog().websocket_command_names())
-    tree = ast.parse((REPO_ROOT / "duocad" / "server.py").read_text(encoding="utf-8"))
+    tree = ast.parse((REPO_ROOT / "duocad" / "net" / "ws.py").read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if not isinstance(node, ast.Compare) or not isinstance(node.left, ast.Name):
             continue
@@ -152,7 +152,7 @@ def _dispatch_message_keys() -> set[str]:
     個別に捌かれている)。どのコマンドの引数かまでは分岐を追わないと分からないので、
     ここは「対象集合の名前が1つも出てこない」ことだけを見るのに使う。
     """
-    source = (REPO_ROOT / "duocad" / "server.py").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "duocad" / "net" / "ws.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     keys: set[str] = set()
     for node in ast.walk(tree):
@@ -213,7 +213,7 @@ def test_every_hand_dispatched_command_has_a_branch():
     (実行時に `unknown command` で返るだけ)。ここで名前の実在を見る。
     """
     catalog = _catalog()
-    source = (REPO_ROOT / "duocad" / "server.py").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "duocad" / "net" / "ws.py").read_text(encoding="utf-8")
     dispatch = source[source.index("async def _dispatch("):]
     missing = [
         command.name
