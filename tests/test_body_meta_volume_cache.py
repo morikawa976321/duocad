@@ -5,6 +5,10 @@
 形状が変わっていないBodyの体積を測り直さないことを固定する。
 
 キャッシュの規律は `geometry()` と同じ —— 形状の**同一性**(`is`)で判定する(版ではない)。
+
+**実体の持ち主は `session.view`(`duocad/view.py` の `DocumentView._body_volume` /
+`_volume_cache`)**。2026-08-28に `Session` から切り出したが、ここが叩く口
+(`session.state_meta()`)は委譲として残っているので、この検査は切り出す前と同じものを見ている。
 """
 from __future__ import annotations
 

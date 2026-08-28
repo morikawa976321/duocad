@@ -2,6 +2,7 @@
 
     `duocad/paths.py`               `REPO_ROOT` / `DEFAULT_WEB_DIST` / `DEFAULT_MODELS_DIR`
     `duocad/session.py`             `Session`(1つの文書を持つサーバ側の状態)＋ `PREVIEWABLE_VERBS`
+    `duocad/view.py`                `DocumentView`(状態配信・版・キャッシュ。`Session` が1つ持つ)
     `duocad/net/ws.py`              `Server`(WebSocketの配信と `_dispatch`)＋ソケットから踏める表
     `duocad/net/http.py`            `web/dist` の静的配信と `/mcp`
     `duocad/net/tools_on_loop.py`   `ToolsOnLoop`(別スレッドからの道具呼び出しの覆い)
@@ -64,8 +65,6 @@ from .paths import DEFAULT_MODELS_DIR, DEFAULT_WEB_DIST, REPO_ROOT
 from .session import (
     PREVIEWABLE_VERBS,
     Session,
-    _log_args_for_state,  # noqa: F401
-    _REDACTED_LOG_ARGS,  # noqa: F401
     _RESERVED_WINDOWS_NAMES,  # noqa: F401
 )
 from .speculative import speculative  # noqa: F401
@@ -78,6 +77,13 @@ from .verbs import (  # noqa: F401
     import_svg as import_svg_verb,
     pattern_circular as pattern_circular_verb,
     pattern_rectangular as pattern_rectangular_verb,
+)
+# `_log_args_for_state` / `_REDACTED_LOG_ARGS` は2026-08-28に `view.py` へ移った(第2段)。
+# **入口から引ける名前は減らさない**ので、出どころだけ変えてここへ再輸出し続ける。
+from .view import (
+    DocumentView,
+    _log_args_for_state,  # noqa: F401
+    _REDACTED_LOG_ARGS,  # noqa: F401
 )
 
 # **`__all__` は置かない。** 置くと `from duocad.server import *` で出る名前が分割前より

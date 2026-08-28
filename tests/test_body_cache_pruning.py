@@ -1,4 +1,4 @@
-"""`Session` のBody索引キャッシュの剪定(20260827、CODE_SURVEY_ACTIONS 1.1)。
+"""Body索引キャッシュの剪定(20260827、CODE_SURVEY_ACTIONS 1.1)。
 
 `_geometry_cache` / `_edge_cache` / `_vertex_cache` / `_volume_cache` は `body_id` 索きで、
 文書からBodyが消えても(undoで)エントリが自然には落ちない。同じ文書を開いたまま
@@ -6,9 +6,13 @@
 呼ばれる)が生存集合との差分で剪定することを固定する。`sketches_state()` の剪定(同じ形)と
 `tests/test_body_meta_volume_cache.py` の作り(`Session` を直に組んでキャッシュのdictを覗く)に揃える。
 
+**キャッシュの持ち主は `session.view`(`duocad/view.py` の `DocumentView`)**。2026-08-28に
+`Session` から切り出したので覗く先だけを移してある —— 呼ぶ口(`session.state_meta()` /
+`session.geometry()` …)も見る中身も、切り出す前と同じである。
+
 **`_revision_counter` は剪定しない**。剪定すると版が1へ戻り、同じ `body_id` を知っている
 クライアントが「版が同じ=変わっていない」と判断して前の文書の形を描き続ける
-(`Session._replace_document` のコメントと同じ理由)。
+(`DocumentView.reset` のコメントと同じ理由)。
 """
 from __future__ import annotations
 
@@ -59,11 +63,11 @@ def test_undo_prunes_the_gone_bodys_entry_from_all_four_caches_but_not_the_revis
     session.edges(created_id)
     session.vertices(created_id)
     session.body_meta(session.document.get_body(created_id))  # _volume_cache と _revision_counter を埋める
-    assert created_id in session._geometry_cache
-    assert created_id in session._edge_cache
-    assert created_id in session._vertex_cache
-    assert created_id in session._volume_cache
-    assert created_id in session._revision_counter
+    assert created_id in session.view._geometry_cache
+    assert created_id in session.view._edge_cache
+    assert created_id in session.view._vertex_cache
+    assert created_id in session.view._volume_cache
+    assert created_id in session.view._revision_counter
 
     session.undo()
     assert created_id not in [body.id for body in session.document.bodies], (
@@ -73,12 +77,12 @@ def test_undo_prunes_the_gone_bodys_entry_from_all_four_caches_but_not_the_revis
     # WebSocket配信のたびに呼ばれる state_meta() が剪定を走らせる。
     session.state_meta()
 
-    assert created_id not in session._geometry_cache
-    assert created_id not in session._edge_cache
-    assert created_id not in session._vertex_cache
-    assert created_id not in session._volume_cache
+    assert created_id not in session.view._geometry_cache
+    assert created_id not in session.view._edge_cache
+    assert created_id not in session.view._vertex_cache
+    assert created_id not in session.view._volume_cache
     # A2: _revision_counter は剪定しない(剪定しすぎの検知)。
-    assert created_id in session._revision_counter
+    assert created_id in session.view._revision_counter
 
 
 def test_pruning_does_not_touch_a_body_that_is_still_alive():
@@ -93,7 +97,7 @@ def test_pruning_does_not_touch_a_body_that_is_still_alive():
 
     session.state_meta()  # undoしていないので何も落ちないはず
 
-    assert created_id in session._geometry_cache
-    assert created_id in session._edge_cache
-    assert created_id in session._vertex_cache
-    assert created_id in session._volume_cache
+    assert created_id in session.view._geometry_cache
+    assert created_id in session.view._edge_cache
+    assert created_id in session.view._vertex_cache
+    assert created_id in session.view._volume_cache

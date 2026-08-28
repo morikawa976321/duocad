@@ -218,13 +218,23 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
   `web/src/SettingsDialog.svelte`）。**一度決めたらほとんど変更しない設定だけをここに置く**
   という線引きで、作業中に切り替えるもの（AIの接続先など）はその場のパネルに残す。
   中身は平らな並び1つだけで、スキーマ駆動・カテゴリ・タブは作らない — 項目が増えたら行を足す。
-  - いまある項目は**ビューポートの画角（FOV）だけ**（`#settings-fov`。30〜90度・既定45）。
-    **スライダーを動かすとその場で効き**、「適用」は無い。**距離補正が入る**ので、
-    画角を変えても `controls.target` 付近のものの画面上の大きさは変わらず、
-    パースの強さだけが変わる（`viewport.ts` の `setFov`）。
+  - いまある項目は**ビューポートの画角（FOV）だけ**。**選べるのは 0（完全正投影）と
+    30〜90度**で、あいだの1〜29は無い（既定45）。角度はスライダー（`#settings-fov`）、
+    正投影はチェックボックス（`#settings-ortho`）と**別の口**にしてある — 1本の目盛りに
+    両方を乗せると「押せるのに効かない帯」ができるため。正投影のあいだスライダーは
+    disabled になり、外すと**直前の角度へ戻る**（`App.svelte` の `fovAngle`）。
+    **動かすとその場で効き**、「適用」は無い。
+  - **0度は「とても小さい画角」ではなく `OrthographicCamera` そのもの**（2026-08-28追加）。
+    画角を絞って正投影を真似ることはできない — 手前と奥の見かけの比は**画角ではなく距離で
+    決まる**ので、いくら絞っても1にならないまま距離だけが伸びて深度の精度を失う。
+    `viewport.ts` は透視と正投影の2つのカメラを持ち、`setFov(0)` で丸ごと差し替える
+    （姿勢・クリップ範囲・ヘッドライト・`OrbitControls` の操作対象を移す）。
+  - **見かけの大きさの補正が入る**ので、画角を変えても——**正投影へ切り替えても**——
+    `controls.target` 付近のものの画面上の大きさは変わらず、パースの強さだけが変わる
+    （`viewport.ts` の `setFov`。透視は距離で、正投影は視錐台の大きさで揃える）。
   - **画角は文書の状態ではない**。コアへ送らず、操作ログにも残らず、undoの対象にもならない。
     保存先はブラウザのlocalStorage（`web/src/viewSettings.ts`。キー `duocad.view.fov`）で、
-    壊れた値・範囲外・localStorageが使えない環境では既定の45で起動する。
+    壊れた値・選べない値・localStorageが使えない環境では既定の45で起動する。
   - **ダイアログはビューポートを覆わず、暗くもしない**（native `<dialog>` + `showModal()`、
     `::backdrop` は透明、画面の右端に小さく出す）。FOVは見ながら決める設定なので、
     判断材料を隠すと選べない。**top-layerにいるので `.viewport` の寸法＝カメラのアスペクトには
@@ -654,16 +664,17 @@ AI側は本物のJSON-RPC**で19操作を叩く。結果はJSONでstdout末尾�
 | `duocad/svg_import.py` | SVG → スケッチの図形（**パーサはbuild123dの推移依存で既に入っている** svgelements） | ✗ | ✗ |
 | `duocad/query.py` | 問い合わせ層のインタフェース | ✗ | **○ここだけ** |
 | `duocad/kernel.py` | OCCTを直接叩く層（1637行。テセレーションもここ） | **○ここだけ** | ✗ |
-| `duocad/session.py` | `Session`（1つの文書を持つサーバ側の状態。verbの呼び出し・選択・保存/開く） | ✗ | ✗ |
+| `duocad/session.py` | `Session`（1つの文書を持つサーバ側の状態。verbの呼び出し・選択・保存/開く。**配りものは持たず `view` へ委譲**） | ✗ | ✗ |
+| `duocad/view.py` | `DocumentView`（**配りもの**＝状態配信・版・テセレーション/辺/頂点/体積/スケッチのキャッシュ。文書を変えない） | ✗ | ✗ |
 | `duocad/paths.py` | `REPO_ROOT` と、そこから出る既定の置き場（`web/dist` / `models`） | ✗ | ✗ |
 | `duocad/net/ws.py` | `Server`（WebSocketの配信と `_dispatch`）＋ソケットから踏めるコマンドの表 | ✗ | ✗ |
 | `duocad/net/http.py` | `web/dist` の静的配信と `/mcp`（MCPのHTTPトランスポート） | ✗ | ✗ |
 | `duocad/net/tools_on_loop.py` | `ToolsOnLoop`（別スレッドからの道具呼び出しをイベントループへ限定する覆い） | ✗ | ✗ |
-| `duocad/server.py` | **入口**（上の5つの再輸出。`mcp_server.py` とテストはここから名前を取る） | ✗ | ✗ |
+| `duocad/server.py` | **入口**（上の6つの再輸出。`mcp_server.py` とテストはここから名前を取る） | ✗ | ✗ |
 | `duocad/mcp_server.py` | MCPサーバ。**アプリ層ではなくコアのもう一人のクライアント** | ✗ | ✗ |
 | `duocad/agent/` | **アプリ内AIエージェント**（プロバイダのアダプタ＋tool-useループ。UIは持たない） | ✗ | ✗ |
 
-**`duocad/net/` → `duocad/session.py` の一方向**（`session.py` から `net/` を参照しない）。唯一の逆向きは `Server._ensure_ai_loop` が `build_provider` を**入口（`duocad.server`）越しに引く**ところで、これはプロバイダの差し替え点を `duocad.server.build_provider` に固定するため（`tests/test_agent_ws.py` がそこを monkeypatch する。直接importすると差し替えが黙って効かなくなる）。呼び出し時まで遅らせてあるのでimport時の循環にはならない。
+**`duocad/net/` → `duocad/session.py` → `duocad/view.py` の一方向**（`session.py` から `net/` を参照せず、`view.py` から `session.py` を参照しない）。`DocumentView` が配る封筒のうち**持ち主が `Session` の値**（`can_undo` / `applied_count` / 「いまプレビュー中か」）は、`Session._view_inputs()` が引数で渡す（`view` 側に旗を複製しない）。唯一の逆向きは `Server._ensure_ai_loop` が `build_provider` を**入口（`duocad.server`）越しに引く**ところで、これはプロバイダの差し替え点を `duocad.server.build_provider` に固定するため（`tests/test_agent_ws.py` がそこを monkeypatch する。直接importすると差し替えが黙って効かなくなる）。呼び出し時まで遅らせてあるのでimport時の循環にはならない。
 
 ### frontend（`web/`）
 
@@ -684,7 +695,7 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 | `web/src/{Browser,Files,Sketch,Parameters}Panel.svelte` | 各パネル（コアが持つものを描き直すだけ）。**選択パネルは2026-08-23に削除**（選択を直すのは3Dクリックだけ） |
 | `web/src/Toast.svelte` | **エラーの札**。`showToast(message)` の1本だけを公開し、出すのは `App.svelte` の `fail()` から |
 | `web/src/AiPanel.svelte` | **AIパネル**（G）。プロバイダ選択・対話・ツール呼び出しの進捗・中断。文書は描かない。**`#ai-collapse`(`BrowserPanel.svelte`と同じ形)で畳める**（2026-08-28） |
-| `web/src/SettingsDialog.svelte` | **設定ダイアログ**。native `<dialog>` + `showModal()`。**一度決めたら触らない設定だけ**（いまは画角）。ビューポートを覆わず暗くもしない |
+| `web/src/SettingsDialog.svelte` | **設定ダイアログ**。native `<dialog>` + `showModal()`。**一度決めたら触らない設定だけ**（いまは画角と正投影）。ビューポートを覆わず暗くもしない |
 | `web/src/viewSettings.ts` | **画面設定のlocalStorage**。入れてよいのはクライアント側だけの設定で、**文書の状態は入れない**。読み書きとも例外を投げない |
 
 ### AI側（MCP・30ツール）
@@ -789,6 +800,8 @@ duocad/
   MCP.md                 MCPサーバの仕様と登録手順
   docs/                  IMPLEMENTATION_PLAN(現行の正) / REQUIREMENTS / PROBE_FINDINGS
   duocad/                コア（Python）。verbs/ に1 verb 1モジュール
+                         session.py=1つの文書を持つサーバ側の状態／view.py=その配りもの
+                         （状態配信・版・キャッシュ。session.py が1つ持つ）
                          net/ はアプリ層との接点（ws.py=WebSocket／http.py=静的配信と/mcp／
                          tools_on_loop.py）。server.py はその入口で、再輸出と起動の番人だけ
                          agent/ はアプリ内AIエージェント（プロバイダ＋ループ・UIなし）
