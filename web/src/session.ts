@@ -221,8 +221,11 @@ export interface DocumentInfo {
  * `applied.verb === "extrude_face"` で絞り込めば `body_id` / `face_index` / `distance` が
  * **必須**として見える(他のverbのキーは見えない)。
  *
- * `duocad/server.py` が実際に組み立てている形と1:1。**新しいverbを足すときはここにも1メンバー
- * 足す**(`duocad/catalog.py` は応答の「形」までは持たないので、この対応は手で保つしかない)。
+ * `duocad/session.py` の `Session` が実際に組み立てている形と1:1。**新しいverbを足すときは
+ * ここにも1メンバー足す**(`duocad/catalog.py` は応答の「形」までは持たないので、この対応は
+ * 手で保つしかない)。**手で保つが、放置はされない** —— `tests/test_applied_type_sync.py` が
+ * このunionをソースとして読み、catalogのverb名と、実際にverbを走らせた戻り値のキーの
+ * 両方に突き合わせる(2026-08-28。それまでに `import_svg` が1つ欠けていた)。
  */
 
 /**
@@ -277,6 +280,21 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'sketch_create'; sketch_id: string })
   /** C: 図形追加verbが返す新しい図形のID(4つとも同じ形)。 */
   | (AppliedVerbBase & { verb: 'add_line' | 'add_circle' | 'add_rectangle' | 'add_arc'; entity_id: string })
+  /**
+   * SVGから取り込んだ図形。**スケッチのverb**(2026-08-28に `import_svg` はファイル操作から
+   * スケッチへ移り、貼る先の `sketch_id` を必須で取るようになった)。
+   *
+   * `entity_ids` は**この1回が足した分だけ**で、貼った先のスケッチに元からあった図形は
+   * 含まない(undoもこの分だけを戻す)。`source_name` は読んだファイル名、`entity_count` は
+   * `entity_ids.length` と同じ数を操作ログ側から数えたもの。
+   */
+  | (AppliedVerbBase & {
+      verb: 'import_svg'
+      sketch_id: string
+      entity_ids: string[]
+      source_name: string
+      entity_count: number
+    })
   /**
    * STEP読み込みが作ったボディ。**読み込みは1 verbだけ**で、編集用(`body_ids`)と
    * 原本の参照(`reference_ids`)の両方が1回の応答で返る。
