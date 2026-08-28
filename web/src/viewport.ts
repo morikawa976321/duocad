@@ -325,14 +325,17 @@ export interface Viewport {
    */
   frameAll(): void
   /**
-   * カメラの画角[度]を変える(`FOV_MIN`〜`FOV_MAX` に丸める。範囲外・NaNは無視)。
+   * カメラの画角[度]を変える。**`FOV_ORTHO`(0) は完全正投影**で、そのとき裏では
+   * `OrthographicCamera` へ丸ごと差し替わる(近似ではない)。0以外は
+   * `FOV_MIN`〜`FOV_MAX` に丸め、NaN・∞は無視する。
    *
    * **画面の設定であって文書の状態ではない。** コアにも操作ログにも行かず、undoの
    * 対象にもならない。値の持ち主はブラウザ側(`App.svelte` + `viewSettings.ts`)である。
    *
-   * **距離補正が入る** —— `controls.target` からの距離を `tan(fov/2)` の比で押し引きし、
-   * 注視点付近にあるものの**画面上の大きさを保つ**。変わるのはパースの強さだけで、
-   * これをしないと画角の変更がただの「ズーム」になり、比べたいものが比べられない。
+   * **見かけの大きさの補正が入る** —— 注視点の面で画面の縦に収まる世界長さを切り替えの
+   * 前後で保つ(透視なら距離、正投影なら視錐台の大きさで作る)。**正投影への切り替えでも
+   * 同じ**で、変わるのはパースの強さだけである。これをしないと画角の変更がただの
+   * 「ズーム」になり、比べたいものが比べられない。
    */
   setFov(deg: number): void
   /**
@@ -483,12 +486,32 @@ const AXIS_Z_COLOR = 0x5a8ec4
  * カメラの画角[度]の下限・上限・既定。**UIとlocalStorage(`viewSettings.ts`)も
  * ここを import する** —— 範囲の正を2か所に書かない。
  *
- * 30まで絞れば体感は十分に正投影へ近いので `OrthographicCamera` は持たない。
- * 90を超えると端の歪みが強すぎて形の判断に使えない。
+ * 90を超えると端の歪みが強すぎて形の判断に使えない。**下限が30なのは、そこから下に
+ * 欲しいのが「弱いパース」ではなく正投影そのものだから** —— 画角を絞って正投影を
+ * 真似ると距離補正でカメラが際限なく遠ざかり(30度で既に注視点距離が3.7倍)、深度の
+ * 精度を捨てるわりに平行投影にはならない(手前と奥の見かけの比は**画角ではなく距離で
+ * 決まる**ので、画角をいくら絞っても1にならない)。そこで**1〜29は選べる値に無く**、
+ * 0(`FOV_ORTHO`)は近似ではなく本物の `OrthographicCamera` へ切り替える。
  */
 export const FOV_MIN = 30
 export const FOV_MAX = 90
 export const FOV_DEFAULT = 45
+
+/**
+ * 完全正投影を表す画角(2026-08-28本人指示で追加)。**「とても小さい画角」ではない**
+ * —— これを渡すと `PerspectiveCamera` ではなく `OrthographicCamera` が使われ、
+ * パースが完全に消える(同じ長さの辺は奥行きが違っても同じ長さに写る)。
+ */
+export const FOV_ORTHO = 0
+
+/**
+ * 選べる画角か。**0ちょうど、または30〜90**の2択で、あいだの1〜29は無い。
+ * UI(`SettingsDialog.svelte`)とlocalStorage(`viewSettings.ts`)はこれを呼ぶ ——
+ * 「選べる値」の正をこの1か所に閉じるため。
+ */
+export function isSelectableFov(value: number): boolean {
+  return Number.isFinite(value) && (value === FOV_ORTHO || (value >= FOV_MIN && value <= FOV_MAX))
+}
 
 /**
  * `lookAtSketch` が図形の外接半径に掛ける余白。
@@ -498,7 +521,14 @@ const SKETCH_FIT_MARGIN = 1.243
 
 /**
  * 既定の視点の向き(front-top-right)。**距離に掛けて注視点へ足す**ためのベクトルで、
- * 長さは 1.166(= `hypot(1, 1, 0.6)`)。初期視点と `frameToContent` の2か所が使う。
+ * **長さは1ではなく 1.5362**(= `hypot(1, 1, 0.6)`)。初期視点と `frameToContent` の
+ * 2か所が使う。
+ *
+ * **掛けた値がそのまま注視点距離になるわけではない** —— `frameToContent` は
+ * `fitDistance` の 1.5362倍の位置にカメラを置くので、収まるぎりぎりより一回り引いた絵に
+ * なる。**この余白は既定の見え方そのもの**なので直さない(直すと全画角で見かけが1.54倍に
+ * なる)。ただし正投影は視錐台で大きさを作るため、この係数を掛けないと透視と揃わない
+ * (`frameToContent`)。
  *
  * **X と Y に等量、上方向(Z)は控えめ** —— Y-up 時代の `(d, 0.6d, d)` の構図をそのまま
  * Z-up へ移したもので、注視点からの距離は以前と変わらない(距離を決めるのは `fitDistance`
@@ -605,7 +635,21 @@ export function createViewport(container: HTMLElement): Viewport {
   const scene = new THREE.Scene()
   scene.background = new THREE.Color(BACKGROUND_COLOR)
 
-  const camera = new THREE.PerspectiveCamera(FOV_DEFAULT, 1, 0.1, 10000)
+  /**
+   * **カメラは2つあり、`camera` が今どちらを使っているかを指す。**
+   *
+   * 正投影は「画角0度の透視」ではなく別種の投影なので、1つのカメラでは表せない
+   * (`FOV_ORTHO` の説明を参照)。**姿勢(position / up / near / far)は切り替えのたびに
+   * 写す**ので、どちらを使っていても視点は同じ ——「どちらのカメラか」は投影の作り方
+   * だけの違いに閉じている。
+   *
+   * **`camera` を直接見てよいのは姿勢と投影の共通部分だけ**。`fov` / `aspect` は
+   * 透視にしか無く、`left`/`right`/`top`/`bottom`/`zoom` は正投影にしか意味が無いので、
+   * それらを触る処理は `perspective` / `orthographic` を名指しすること。
+   */
+  const perspective = new THREE.PerspectiveCamera(FOV_DEFAULT, 1, 0.1, 10000)
+  const orthographic = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10000)
+  let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = perspective
   // 空の文書でもグリッド全体が見える位置。部品が届いたら `frameToContent` が上書きする。
   {
     const diagonal = Math.hypot(GRID_EXTENT * 2, GRID_EXTENT * 2, GRID_EXTENT * 2)
@@ -619,7 +663,10 @@ export function createViewport(container: HTMLElement): Viewport {
   camera.add(headlight)
   scene.add(new THREE.HemisphereLight(0xdfe7f2, 0x191c21, 1.0))
 
-  const controls = new OrbitControls(camera, renderer.domElement)
+  // **型引数を明示する** —— 省くと生成に渡した `perspective` で固まり、正投影へ
+  // 差し替えるときに `controls.object` が受け取れない(`activateCamera`)。
+  const controls: OrbitControls<THREE.PerspectiveCamera | THREE.OrthographicCamera> =
+    new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.dampingFactor = 0.15
 
@@ -878,8 +925,16 @@ export function createViewport(container: HTMLElement): Viewport {
     pickChanged() // 寸法が変わると同じ画素が別のものを指す(engine `viewport-resize-silently-changes-what-a-click-grabs`)
     const { width, height } = size()
     renderer.setSize(width, height, false)
-    camera.aspect = width / height
-    camera.updateProjectionMatrix()
+    const aspect = width / height
+    perspective.aspect = aspect
+    perspective.updateProjectionMatrix()
+    // **正投影は縦(`top`/`bottom`)を正として横を作り直す。** 透視の `aspect` と同じで、
+    // 縦の見え方を寸法に依存させない(`smoke-features.mjs` がv方向を基準に置いている)。
+    // **`zoom` には触らない** —— あれは OrbitControls のドリーの持ち物である。
+    orthographic.right = orthographic.top * aspect
+    orthographic.left = -orthographic.top * aspect
+    orthographic.updateProjectionMatrix()
+    // 使っていない側も同時に整えてある(切り替えた瞬間に1フレーム歪むのを防ぐ)。
   }
 
   function clearBody(bodyId: string): void {
@@ -1026,11 +1081,104 @@ export function createViewport(container: HTMLElement): Viewport {
    * (差は0.6%)。**したがって既定のFOVでの見え方は実質変わらない。**
    * 縦長のビューポート(aspect<1)では距離が伸びるが、これは以前が横方向を見ていなかった
    * 取りこぼしの修正にあたる(狭い方に合わせないと横がはみ出す)。
+   *
+   * **正投影のときも透視の画角で評価する。** 正投影では距離が見え方に効かないので、
+   * ここが返すのは「透視と同じ場所にカメラを置くための距離」でしかない(収める仕事は
+   * `fitHalfHeight` + `setViewHalfHeight` がする)。
+   *
+   * **`fitHalfHeight(radius) / tan(vHalf)` へ書き換えない。** 数学的には同じだが最後の桁が
+   * 変わり、**基準平面と同一平面にある面のピックが反転する** —— 基準平面に描いて押し出すと
+   * その面は平面とぴったり重なるので、`resolveHit` の「レイ距離が近い方」が浮動小数の
+   * 最後の桁で決まる。2026-08-28、この書き換えだけで `smoke-files` の(b)が面ではなく
+   * XZ平面を取った(カメラ位置の差は 7e-14。**同着そのものは以前からある**)。
    */
   function fitDistance(radius: number): number {
-    const vHalf = THREE.MathUtils.degToRad(camera.fov) / 2
-    const hHalf = Math.atan(Math.tan(vHalf) * camera.aspect)
+    const vHalf = THREE.MathUtils.degToRad(perspective.fov) / 2
+    const hHalf = Math.atan(Math.tan(vHalf) * perspective.aspect)
     return radius / Math.tan(Math.min(vHalf, hHalf))
+  }
+
+  /**
+   * 半径 `radius` の球が画面に収まる「見かけの大きさ」の半分(＝注視点の面で画面の縦に
+   * 収まる世界長さの半分)。**縦横の狭い方に合わせる** —— 横長の画面では縦が、
+   * 縦長の画面では横が先に詰まる。
+   *
+   * **`fitDistance` と対で、同じ球を収める。** 透視は距離で、正投影は視錐台の大きさで
+   * 収めるので、収める量そのもの(この関数)と距離(`fitDistance`)を別々に持つ ——
+   * 分けないと正投影側が「収める距離」という意味の無い値を通ることになる。
+   *
+   * **式は独立だが答えは一致していなければならない**(`fitDistance(r) * tan(vHalf)` が
+   * この関数の値になる)。`fitDistance` 側を書き換えて揃えないのは、あちらが最後の桁まで
+   * 据え置きだから(`fitDistance` の説明)。片方だけ直すとこの一致が黙って崩れる。
+   */
+  function fitHalfHeight(radius: number): number {
+    return perspective.aspect >= 1 ? radius : radius / perspective.aspect
+  }
+
+  /**
+   * 注視点の面で画面の縦に収まる世界長さの半分。**2つのカメラを同じ物差しで測るための穴**
+   * で、「見かけの大きさを保つ」処理(`setFov` の切り替え)と当たり判定の太さ
+   * (`worldPerPixel`)がここを通る。
+   *
+   * 透視は距離×tan(画角/2)、正投影は視錐台の半分の高さ÷`zoom`(ドリーは `zoom` を動かす
+   * だけでカメラを動かさないので、`zoom` を割らないと見かけの大きさにならない)。
+   */
+  function viewHalfHeight(): number {
+    if (camera === orthographic) return orthographic.top / orthographic.zoom
+    const distance = camera.position.distanceTo(controls.target)
+    return distance * Math.tan(THREE.MathUtils.degToRad(perspective.fov) / 2)
+  }
+
+  /**
+   * 見かけの大きさ(`viewHalfHeight`)を `half` にする。**透視は注視点からの距離で、
+   * 正投影は視錐台の大きさで作る** —— 正投影ではカメラを前後させても大きさは1ミリも
+   * 変わらないので、距離で調節する道が無い。
+   *
+   * 正投影側は `zoom` を1へ戻して視錐台そのものへ焼き込む(`zoom` は OrbitControls の
+   * ドリーの持ち物なので、こちらが値を持ち続けると次のドリーで踏まれる)。
+   */
+  function setViewHalfHeight(half: number): void {
+    const safe = Math.max(half, 1e-6)
+    if (camera === orthographic) {
+      const { width, height } = size()
+      orthographic.top = safe
+      orthographic.bottom = -safe
+      orthographic.right = safe * (width / height)
+      orthographic.left = -safe * (width / height)
+      orthographic.zoom = 1
+      orthographic.updateProjectionMatrix()
+      return
+    }
+    const distance = safe / Math.tan(THREE.MathUtils.degToRad(perspective.fov) / 2)
+    const offset = camera.position.clone().sub(controls.target)
+    // 注視点にぴったり重なっていると向きが無い(長さ0のベクトルは伸ばせない)。既定の向きへ逃がす。
+    if (offset.lengthSq() < 1e-18) offset.copy(HOME_VIEW_OFFSET)
+    camera.position.copy(controls.target).add(offset.setLength(distance))
+  }
+
+  /**
+   * 使うカメラを差し替える(透視 ⇄ 正投影)。**視点は持ち越す** —— 姿勢・クリップ範囲を
+   * 写し、ヘッドライトとシーンへの所属、`OrbitControls` の操作対象を全部移す。
+   *
+   * **`OrbitControls` は `object` の差し替えを受け付ける**が、極(`_quat`)だけは生成時の
+   * `up` から焼かれたまま動かない —— これは**そのままでよい**。両方のカメラの上方向は
+   * ワールド+Zで同じなので、焼かれた極も同じである(`WORLD_UP` の説明を参照)。
+   */
+  function activateCamera(next: THREE.PerspectiveCamera | THREE.OrthographicCamera): void {
+    if (next === camera) return
+    next.position.copy(camera.position)
+    next.up.copy(camera.up)
+    next.quaternion.copy(camera.quaternion)
+    next.near = camera.near
+    next.far = camera.far
+    // ヘッドライトはカメラの子(視点を回しても面が真っ黒にならない)。置き去りにすると暗くなる。
+    camera.remove(headlight)
+    scene.remove(camera)
+    next.add(headlight)
+    scene.add(next)
+    camera = next
+    controls.object = next
+    next.updateProjectionMatrix()
   }
 
   /** シーンに今ある全メッシュの外接直方体にカメラを合わせる(初回だけ)。
@@ -1051,23 +1199,39 @@ export function createViewport(container: HTMLElement): Viewport {
     // シーンが丸ごと消える —— そのときにここで気づけるようにしておく。
     camera.far = Math.max(diagonal * 20, distance * 4)
     camera.position.copy(center).addScaledVector(HOME_VIEW_OFFSET, distance)
-    camera.updateProjectionMatrix()
     controls.target.copy(center)
+    // **正投影は距離では収まらない。** カメラは上で透視と同じ場所へ置いた(near/farと回転の
+    // 半径のため)が、収める仕事は視錐台がする。
+    //
+    // **`fitHalfHeight` をそのまま渡さない。** `HOME_VIEW_OFFSET` の長さが1ではないので、
+    // 透視が実際に出すのは `fitHalfHeight` の 1.5362倍ぶん引いた絵である —— 素の
+    // `fitHalfHeight` で視錐台を作ると、`frameAll` のたびに**正投影だけが1.54倍に寄る**
+    // (2026-08-28に受入で実測。93.6px → 143.7px)。同じ係数を掛けて、どちらの投影でも
+    // `frameAll` の見かけが揃うようにする。
+    if (camera === orthographic) {
+      setViewHalfHeight(fitHalfHeight(diagonal / 2) * HOME_VIEW_OFFSET.length())
+    }
+    camera.updateProjectionMatrix()
     controls.update()
   }
 
   function setFov(deg: number): void {
     if (!Number.isFinite(deg)) return
-    const next = Math.min(FOV_MAX, Math.max(FOV_MIN, deg))
-    if (Math.abs(next - camera.fov) < 1e-6) return
-    // 注視点での見かけの大きさを保つ(tan(fov/2) × 距離 を一定にする)。
-    // これをしないとパースと一緒に拡大率まで変わり、「ズーム」になってしまう。
-    const before = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)
-    const after = Math.tan(THREE.MathUtils.degToRad(next) / 2)
-    const offset = camera.position.clone().sub(controls.target).multiplyScalar(before / after)
-    camera.position.copy(controls.target).add(offset)
-    camera.fov = next
-    camera.far = Math.max(camera.far, offset.length() * 4)
+    // **0だけが正投影**で、それ以外は 30〜90 へ丸める(あいだの1〜29という値は無い)。
+    const next = deg === FOV_ORTHO ? FOV_ORTHO : Math.min(FOV_MAX, Math.max(FOV_MIN, deg))
+    const wantOrtho = next === FOV_ORTHO
+    const already = wantOrtho
+      ? camera === orthographic
+      : camera === perspective && Math.abs(next - perspective.fov) < 1e-6
+    if (already) return
+    // **切り替えの前に見かけの大きさを測り、切り替えた後に同じ値へ戻す。**
+    // これをしないとパースの強さと一緒に拡大率まで変わり、ただの「ズーム」になってしまう
+    // (正投影への切り替えでも同じ —— 視錐台の大きさを、測った値から作る)。
+    const half = viewHalfHeight()
+    activateCamera(wantOrtho ? orthographic : perspective)
+    if (!wantOrtho) perspective.fov = next
+    setViewHalfHeight(half)
+    camera.far = Math.max(camera.far, camera.position.distanceTo(controls.target) * 4)
     camera.updateProjectionMatrix()
     controls.update()
   }
@@ -1392,11 +1556,19 @@ export function createViewport(container: HTMLElement): Viewport {
     applyEdgeMaterials()
   }
 
-  /** 画面1画素ぶんの世界座標の長さ(当たり判定の太さを画素で決めるため)。 */
+  /**
+   * 画面1画素ぶんの世界座標の長さ(当たり判定の太さを画素で決めるため)。
+   *
+   * **同じ量を2つの式で書いてある。** 透視側は `2 * viewHalfHeight() / height` と同値だが、
+   * そちらへ寄せると最後の桁が変わり、基準平面と同一平面にある面のピックが反転する
+   * (`fitDistance` の説明と同じ同着)。**式を1つに寄せるのは、その同着を `resolveHit` 側で
+   * 先に決着させてから。**
+   */
   function worldPerPixel(): number {
     const { height } = size()
+    if (camera === orthographic) return (2 * Math.max(viewHalfHeight(), 1e-6)) / height
     const distance = Math.max(camera.position.distanceTo(controls.target), 1e-6)
-    return (2 * Math.tan((camera.fov * Math.PI) / 360) * distance) / height
+    return (2 * Math.tan((perspective.fov * Math.PI) / 360) * distance) / height
   }
 
   function edgeAt(offsetX: number, offsetY: number): EdgeRef | null {
@@ -1764,6 +1936,12 @@ export function createViewport(container: HTMLElement): Viewport {
         position: THREE.Vector3
         target: THREE.Vector3
         up: THREE.Vector3
+        /**
+         * 入る前の見かけの大きさ(`viewHalfHeight`)。**位置だけでは戻せない** ——
+         * 正投影では寄り引きが視錐台の大きさであってカメラの位置ではないので、
+         * 位置を戻しても `lookAtSketch` がスケッチに合わせた倍率のまま残る。
+         */
+        halfHeight: number
         framedAtEntry: boolean
       }
     | null = null
@@ -1781,6 +1959,7 @@ export function createViewport(container: HTMLElement): Viewport {
           position: camera.position.clone(),
           target: controls.target.clone(),
           up: camera.up.clone(),
+          halfHeight: viewHalfHeight(),
           framedAtEntry: framed,
         }
       }
@@ -1796,6 +1975,11 @@ export function createViewport(container: HTMLElement): Viewport {
       camera.position.copy(previous.position)
       camera.up.copy(previous.up)
       controls.target.copy(previous.target)
+      // **見かけの大きさを戻すのは正投影のときだけ。** 正投影では寄り引きがカメラの位置
+      // ではないので、位置を戻しても `lookAtSketch` が作った倍率が残る。透視は上で位置を
+      // 戻した時点で終わっており、ここを通すと**同じ値を計算し直して最後の桁だけ動かす**
+      // (`fitDistance` の説明と同じ同着を踏む)。
+      if (camera === orthographic) setViewHalfHeight(previous.halfHeight)
       camera.updateProjectionMatrix()
     }
     controls.update()
@@ -1880,8 +2064,11 @@ export function createViewport(container: HTMLElement): Viewport {
     // 上方向を平面のv軸に合わせる(そうしないと真上から見たときに回転が不定になる)
     camera.up.set(...(frame.v as [number, number, number]))
     camera.position.copy(center).add(normal.multiplyScalar(distance))
-    camera.updateProjectionMatrix()
     controls.target.copy(center)
+    // 正投影は距離では寄れない(`frameToContent` と同じ理由)。描いてあるものが無いときは
+    // 今の見かけの大きさのまま —— 透視側が `previous` の距離を保つのと同じ扱いにする。
+    if (camera === orthographic && radius > 0) setViewHalfHeight(fitHalfHeight(radius * SKETCH_FIT_MARGIN))
+    camera.updateProjectionMatrix()
     controls.update()
   }
 
@@ -2081,7 +2268,10 @@ export function createViewport(container: HTMLElement): Viewport {
       point === null
         ? ''
         : `${pickGeneration},${point.x},${point.y},` +
-          `${camera.position.toArray().join(',')},${camera.quaternion.toArray().join(',')}`
+          `${camera.position.toArray().join(',')},${camera.quaternion.toArray().join(',')},` +
+          // **`zoom` も入れる** —— 正投影のドリーは `zoom` だけを動かしてカメラを動かさない
+          // ので、位置と姿勢だけのキーでは「ホイールで寄ったのに当たるものが変わらない」になる。
+          `${camera.zoom}`
     if (probe === hoverProbe) return
     hoverProbe = probe
     const next = point === null ? null : resolveHit(point.x, point.y)

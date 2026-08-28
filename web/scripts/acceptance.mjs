@@ -1015,14 +1015,17 @@ async function main() {
     // ================================================================ 設定: 画角(FOV)
     //
     // **2026-08-28にFOVをUIから可変にした**ので、受入に数手だけ足す(実機検査のファイルは
-    // 増やさない)。見るのは2点だけ:
+    // 増やさない)。同日に**完全正投影(0度)**を足したので、見るのは3点:
     //
-    //   1. **どの画角でも `frameAll` が図形を画面に収める**(30でも90でもシーンが消えない
-    //      —— near/far のクリップに当たらない)
+    //   1. **どの画角でも `frameAll` が図形を画面に収める**(0でも30でも90でもシーンが
+    //      消えない —— near/far のクリップに当たらない)
     //   2. **画角を変えても注視点付近の見かけの大きさが変わらない**(距離補正)。
     //      端の点はパース差で動くのが正しい挙動なので、**動かないことを見るのは画面中心に
     //      近い点**、**動くことを見るのは一番外の点**にする。両方見ないと検出力が無い ——
     //      `setFov` が丸ごと効いていない実装でも「中心が動かない」だけなら緑になる。
+    //   3. **0度が本物の正投影であること**(下の(4)。「とても小さい画角の透視」では
+    //      通らない検査にしてある)と、**正投影でも寄り引きと `frameAll` が噛み合うこと**
+    //      (下の(5))
     //
     // **ダイアログは各手の前に必ず閉じる。** `showModal()` は背後を inert にするので、
     // 開いたままだとビューポートのクリックが全部死ぬ。
@@ -1066,6 +1069,90 @@ async function main() {
       return shown
     }
 
+    /** 完全正投影(0度)の入切。**スライダーとは別の口**(`#settings-ortho`)。 */
+    async function setOrtho(on) {
+      await setSettingsOpen(true)
+      const now = await page.$eval('#settings-ortho', (element) => element.checked)
+      if (now !== on) await page.click('#settings-ortho')
+      await page.waitForFunction(
+        (want) => (window.__duocad.fov === 0) === want,
+        { timeout: 30000, polling: 20 },
+        on,
+      )
+      const shown = await page.$eval('#settings-fov-value', (element) => element.textContent.trim())
+      await setSettingsOpen(false)
+      return shown
+    }
+
+    /**
+     * 画角を `value` にする。**0は正投影のチェックボックス、それ以外はスライダー**。
+     * 正投影のあいだスライダーは disabled なので、角度へ戻すときは先にチェックを外す。
+     */
+    async function setFovTo(value) {
+      if (value === 0) return await setOrtho(true)
+      await setOrtho(false)
+      return await dragFovTo(value)
+    }
+
+    /**
+     * 注視点の手前(-1)・注視点上(0)・奥(+1)に**同じ長さの世界の線分**を視線と直角に置き、
+     * それぞれ画面で何画素に写るかを測る(`ratio` は手前÷奥)。
+     *
+     * **これが正投影の検査の要**である。透視投影ではこの比は `(d+L)/(d-L)` ——
+     * **距離だけで決まり画角に依らない**ので、画角をいくら絞っても1にならない。
+     * つまり「比が1」は近似では作れず、本物の平行投影であることの証拠になる
+     * (面の重心のような図形依存の点ではなく、視点から作った世界座標を射影するので、
+     * どんなシーンでも同じように測れる)。
+     *
+     * **`scale` を渡すと線分の長さ(＝物差し)を世界座標で固定する。** 渡さないと注視点までの
+     * 距離から作るので、カメラが前後した瞬間に物差しごと変わり、別の時点の測定値と
+     * 比べられない(返り値の `scale` をそのまま次へ渡すこと)。
+     *
+     * **前後のずらしだけは固定しない。** こちらを世界座標で固定すると、カメラが遠ざかる
+     * 実装(画角を絞って正投影を真似る等)では前後の差が距離に対して相対的に消え、比が1へ
+     * 近づく —— 検査の検出力がカメラの遠さで薄まる。2026-08-28、画角1度の偽物で実測して
+     * 比 1.0127(しきい値1.01のすぐ外)しか出ず、もう一声絞られたら通ってしまうことが
+     * 分かったので、**常に今の距離から作る**(本物の透視なら距離によらず約1.86)。
+     */
+    async function depthProbe(scale = null) {
+      return await page.evaluate((given) => {
+        const hook = window.__duocad
+        const pose = hook.cameraPose()
+        if (pose === null) return null
+        const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+        const len = (v) => Math.hypot(v[0], v[1], v[2])
+        const unit = (v) => {
+          const l = len(v)
+          return [v[0] / l, v[1] / l, v[2] / l]
+        }
+        const cross = (a, b) => [
+          a[1] * b[2] - a[2] * b[1],
+          a[2] * b[0] - a[0] * b[2],
+          a[0] * b[1] - a[1] * b[0],
+        ]
+        const toTarget = sub(pose.target, pose.position)
+        const distance = len(toTarget)
+        if (!(distance > 0)) return null
+        const dir = unit(toTarget)
+        const right = unit(cross(dir, pose.up))
+        if (!right.every((value) => Number.isFinite(value))) return null
+        const half = given === null ? distance * 0.05 : given.half // 線分の半分の長さ(物差し)
+        const depth = distance * 0.3 // 注視点からの前後のずらし(常に今の距離から作る)
+        const widthAt = (k) => {
+          const center = [0, 1, 2].map((i) => pose.target[i] + dir[i] * depth * k)
+          const a = hook.projectPoint(center.map((value, i) => value + right[i] * half))
+          const b = hook.projectPoint(center.map((value, i) => value - right[i] * half))
+          if (a === null || b === null) return null
+          return Math.hypot(a.x - b.x, a.y - b.y)
+        }
+        const near = widthAt(-1)
+        const at = widthAt(0)
+        const far = widthAt(1)
+        if (near === null || at === null || far === null) return null
+        return { near, at, far, ratio: near / far, scale: { half } }
+      }, scale)
+    }
+
     /**
      * 今この瞬間に画面へ射影できる面を全部集める(ビューポート左上を原点とする画素)。
      * `fromCenter` はビューポート中心からの距離 —— **中心付近か外周かで期待する挙動が
@@ -1107,7 +1194,7 @@ async function main() {
 
     try {
       await setSettingsOpen(false)
-      await dragFovTo(45)
+      await setFovTo(45)
       await frameAll(page)
 
       // (1) 30 と 90 のどちらでも、frameAll のあとに図形が画面の中にある(完了条件8・9)。
@@ -1120,8 +1207,11 @@ async function main() {
       //     画角を見ない距離式なら、90度では 3.7 倍ほど小さく写る(=シーンが豆粒になる)。
       const framed = {}
       const captured = {}
-      for (const angle of [45, 30, 90]) {
-        const shown = await dragFovTo(angle)
+      // **0(正投影)も同じ枠で見る。** 正投影は距離では収まらず視錐台で収めるので、
+      // `frameToContent` が透視のときの距離式だけを直していると、ここで豆粒になるか
+      // 画面からはみ出す。
+      for (const angle of [45, 30, 90, 0]) {
+        const shown = await setFovTo(angle)
         await frameAll(page)
         const { points } = await faceScreenPoints()
         if (points.length === 0) {
@@ -1133,33 +1223,34 @@ async function main() {
       // **広がりは同じ面の集合で測る。** 射影できる面は画角によって増えたり減ったりするので、
       // 拾えた面の顔ぶれの違いを広がりの差と取り違えない。
       const commonKeys = [...captured[45].keys()].filter(
-        (key) => captured[30].has(key) && captured[90].has(key),
+        (key) => captured[30].has(key) && captured[90].has(key) && captured[0].has(key),
       )
       if (commonKeys.length < 3) {
-        throw new Error(`30/45/90 のどれでも射影できる面が ${commonKeys.length} 個しか無い(広がりを比べられない)`)
+        throw new Error(`0/30/45/90 のどれでも射影できる面が ${commonKeys.length} 個しか無い(広がりを比べられない)`)
       }
       const spreadOf = (angle) => {
         const xs = commonKeys.map((key) => captured[angle].get(key).x)
         const ys = commonKeys.map((key) => captured[angle].get(key).y)
         return Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys))
       }
-      for (const angle of [45, 30, 90]) framed[angle].spread = Number(spreadOf(angle).toFixed(1))
-      for (const angle of [30, 90]) {
+      for (const angle of [45, 30, 90, 0]) framed[angle].spread = Number(spreadOf(angle).toFixed(1))
+      for (const angle of [30, 90, 0]) {
         const ratio = framed[angle].spread / framed[45].spread
         framed[angle].ratio = Number(ratio.toFixed(3))
         if (ratio < 0.6 || ratio > 1.5) {
           throw new Error(
             `画角${angle}で frameAll した図形の広がりが45度の ${ratio.toFixed(2)} 倍` +
-              `(${framed[angle].spread} / ${framed[45].spread} 画素。収める距離が画角に追随していない)`,
+              `(${framed[angle].spread} / ${framed[45].spread} 画素。` +
+              '収める大きさが投影に追随していない)',
           )
         }
       }
 
       // (2) 距離補正。**frameAll を挟まずに**画角だけを 45 → 60 へ変え、同じ面の画面座標を比べる。
-      const backTo45 = await dragFovTo(45)
+      const backTo45 = await setFovTo(45)
       await frameAll(page)
       const before = await faceScreenPoints()
-      await dragFovTo(60)
+      await setFovTo(60)
       const after = await faceScreenPoints()
 
       const afterByKey = new Map(after.points.map((point) => [point.key, point]))
@@ -1222,10 +1313,10 @@ async function main() {
       //     **45→90で見る** —— 45→60のパース差はこのシーンの薄さでは10画素に届かず、
       //     境目を引ける幅が無い。45→90なら拡大率が 2.414 倍になり、注視点から奥行きの
       //     ずれた面は数十画素動く。
-      await dragFovTo(45)
+      await setFovTo(45)
       await frameAll(page)
       const wideBefore = await faceScreenPoints()
-      await dragFovTo(90)
+      await setFovTo(90)
       const wideAfter = await faceScreenPoints()
       const wideByKey = new Map(wideAfter.points.map((point) => [point.key, point]))
       const wideShifts = wideBefore.points
@@ -1240,13 +1331,114 @@ async function main() {
         throw new Error(`画角45→90でどの面も ${wideMaxShift.toFixed(1)} 画素しか動かない(画角が実際には変わっていない)`)
       }
 
-      await dragFovTo(45)
+      // (4) **完全正投影(0度)。** 見るのは2点 —— (a) 手前と奥で見かけの大きさが変わらない
+      //     こと(`depthProbe` の説明のとおり、これは「画角のとても小さい透視」では作れない)、
+      //     (b) 切り替えても注視点の見かけの大きさが変わらないこと(30〜90の距離補正と同じ
+      //     約束を、投影の切り替えでも守る)。
+      await setFovTo(45)
+      await frameAll(page)
+      const perspProbe = await depthProbe()
+      if (perspProbe === null) {
+        throw new Error('透視での前後の比が測れない(線分が画面の外か、視線が上方向と平行)')
+      }
+      if (perspProbe.ratio < 1.5) {
+        throw new Error(
+          `画角45なのに手前と奥の見かけが ${perspProbe.ratio.toFixed(3)} 倍しか違わない` +
+            '(この検査自体が効いていない。想定は約1.86倍)',
+        )
+      }
+      const scale = perspProbe.scale // 以降は同じ物差しで測る(カメラが前後しても比べられる)
+      /**
+       * **見かけの大きさが動かなくなるまで測り続ける。** ホイールの効きは次の rAF まで
+       * 出ないので、送った直後に1回測るだけでは寄る前の値を読む。「変わるまで待つ」では
+       * なく「動かなくなるまで待つ」にしてあるのは、1回の操作が複数のイベントに分かれて
+       * 届いたときに途中の値を掴まないため(**この分割が実際に起きるかは確かめていない**。
+       * 上限200回で、正常時は数回で抜ける)。
+       */
+      async function settledProbe() {
+        let previous = null
+        let stable = 0
+        for (let guard = 0; guard < 200 && stable < 3; guard += 1) {
+          const now = await depthProbe(scale)
+          if (now === null) return null
+          if (previous !== null && Math.abs(now.at - previous.at) < 0.01) stable += 1
+          else stable = 0
+          previous = now
+        }
+        return previous
+      }
+      const orthoShown = await setFovTo(0)
+      if (orthoShown !== '0°') throw new Error(`正投影の表示が「${orthoShown}」になっている`)
+      // スライダーは正投影のあいだ効かない(押せるのに効かない口を出さない)。
+      await setSettingsOpen(true)
+      const sliderDisabled = await page.$eval('#settings-fov', (element) => element.disabled)
+      await setSettingsOpen(false)
+      if (!sliderDisabled) throw new Error('正投影なのに画角のスライダーが効いたままになっている')
+      const orthoProbe = await depthProbe(scale)
+      if (orthoProbe === null) throw new Error('正投影での前後の比が測れない')
+      if (Math.abs(orthoProbe.ratio - 1) > 0.01) {
+        throw new Error(
+          `正投影なのに手前と奥の見かけが ${orthoProbe.ratio.toFixed(4)} 倍違う` +
+            `(手前 ${orthoProbe.near.toFixed(1)}px / 奥 ${orthoProbe.far.toFixed(1)}px。パースが残っている)`,
+        )
+      }
+      const orthoKeptSize = orthoProbe.at / perspProbe.at
+      if (Math.abs(orthoKeptSize - 1) > 0.02) {
+        throw new Error(
+          `正投影へ切り替えると注視点の見かけの大きさが ${orthoKeptSize.toFixed(3)} 倍になる` +
+            '(切り替えがズームになっている)',
+        )
+      }
+
+      // (5) **正投影の寄り引きと、そこからの `frameAll`。** 正投影のドリーは `zoom` を
+      //     動かすだけで**カメラを動かさない**ので、`frameAll` が位置しか直していないと
+      //     寄った倍率のまま居座る。上の(1)の枠ではこれを検出できない —— 画角を切り替えた
+      //     直後の見かけの大きさは `setFov` 側が保つので、`frameAll` が何もしなくても
+      //     たまたま正しい値になっているためである。ここは**先にホイールで倍率を崩してから**
+      //     `frameAll` を呼ぶので、視錐台を作り直していない実装は戻れない。
+      const zoomedIn = await withoutBrowserPanel(page, async () => {
+        const box = await page.evaluate(() => {
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+        })
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+        await page.mouse.wheel({ deltaY: -600 })
+        return await settledProbe()
+      })
+      if (zoomedIn === null || !(zoomedIn.at > orthoProbe.at * 1.2)) {
+        throw new Error(
+          `正投影でホイールが効かない(見かけ ${zoomedIn === null ? 'null' : zoomedIn.at.toFixed(1)}px /` +
+            ` 寄る前 ${orthoProbe.at.toFixed(1)}px)`,
+        )
+      }
+      // 寄っても平行投影のままであること(`zoom` の道でパースが混ざらない)。
+      if (Math.abs(zoomedIn.ratio - 1) > 0.01) {
+        throw new Error(`正投影で寄ったら手前と奥の見かけが ${zoomedIn.ratio.toFixed(4)} 倍違う`)
+      }
+      await frameAll(page)
+      const refit = await settledProbe()
+      if (refit === null) throw new Error('正投影の frameAll 後に前後の比が測れない')
+      const refitRatio = refit.at / orthoProbe.at
+      if (Math.abs(refitRatio - 1) > 0.05) {
+        throw new Error(
+          `正投影で寄ったあと frameAll しても倍率が戻らない(戻り ${refitRatio.toFixed(3)} 倍。` +
+            `${refit.at.toFixed(1)}px / ${orthoProbe.at.toFixed(1)}px)`,
+        )
+      }
+
+      await setFovTo(45)
       await frameAll(page)
 
       results.fov = {
         ok: true,
         framed,
         backTo45,
+        orthoShown,
+        orthoRatio: Number(orthoProbe.ratio.toFixed(4)),
+        perspRatio: Number(perspProbe.ratio.toFixed(4)),
+        orthoKeptSize: Number(orthoKeptSize.toFixed(4)),
+        orthoZoomedIn: Number((zoomedIn.at / orthoProbe.at).toFixed(3)),
+        orthoRefit: Number(refitRatio.toFixed(4)),
         compared: moved.length,
         nearShift: Number(near.shift.toFixed(2)),
         nearFromCenter: Number(near.fromCenter.toFixed(1)),
@@ -1258,7 +1450,10 @@ async function main() {
       }
       console.log(
         `  OK   画角: frameAll の広がり(共通の${commonKeys.length}面) 45度=${framed[45].spread}px / 30度=${framed[30].spread}px(${framed[30].ratio}倍)` +
-          ` / 90度=${framed[90].spread}px(${framed[90].ratio}倍)。` +
+          ` / 90度=${framed[90].spread}px(${framed[90].ratio}倍) / 正投影=${framed[0].spread}px(${framed[0].ratio}倍)。` +
+          ` 正投影の手前÷奥=${orthoProbe.ratio.toFixed(4)}(透視45度なら ${perspProbe.ratio.toFixed(2)})・` +
+          `切り替えでの見かけ ${orthoKeptSize.toFixed(3)}倍・` +
+          `ホイールで ${(zoomedIn.at / orthoProbe.at).toFixed(2)}倍に寄って frameAll で ${refitRatio.toFixed(3)}倍へ戻る。` +
           ` 45→60: 中心付近(r=${near.fromCenter.toFixed(0)})は ${near.shift.toFixed(1)}px /` +
           ` 外周(r=${outer.fromCenter.toFixed(0)})は ${outer.shift.toFixed(1)}px(補正無しなら ${(0.394 * outer.fromCenter).toFixed(0)}px) /` +
           ` 最大 ${maxShift.toFixed(1)}px。45→90では最大 ${wideMaxShift.toFixed(1)}px 動く`,

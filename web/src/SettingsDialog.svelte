@@ -16,15 +16,25 @@
    * **状態の正は `App.svelte`**。ここは値と口を受け取るだけの presentational な部品で、
    * 双方向束縛をコンポーネントの境界に持ち込まない。
    */
-  import { FOV_MAX, FOV_MIN } from './viewport'
+  import { FOV_MAX, FOV_MIN, FOV_ORTHO } from './viewport'
 
-  const { open, fov, onFov, onClose }: {
+  const { open, fov, angle, onFov, onClose }: {
     open: boolean
+    /** 今の画角[度]。`FOV_ORTHO`(0)なら完全正投影で、スライダーは効かない。 */
     fov: number
-    /** スライダーを動かした先の角度[度]。**その場で効く**(「適用」で確定させない)。 */
+    /**
+     * スライダーが指す角度(`FOV_MIN`〜`FOV_MAX`)。**正投影のあいだも「戻る先」を
+     * 指したまま止まる**ので、`fov` とは別に受け取る —— 0はスライダーの範囲外であり、
+     * `fov` をそのまま流すとブラウザが30へ丸めて戻る先が失われる。
+     */
+    angle: number
+    /** 選ばれた画角[度]。**その場で効く**(「適用」で確定させない)。 */
     onFov: (deg: number) => void
     onClose: () => void
   } = $props()
+
+  /** 完全正投影の状態か(チェックボックスとスライダーの生死はこの1つで決まる)。 */
+  const ortho = $derived(fov === FOV_ORTHO)
 
   let dialog: HTMLDialogElement
 
@@ -52,13 +62,27 @@
       min={FOV_MIN}
       max={FOV_MAX}
       step="1"
-      value={fov}
+      value={angle}
+      disabled={ortho}
       oninput={(event) => onFov(Number.parseFloat(event.currentTarget.value))}
     />
     <span id="settings-fov-value">{Math.round(fov)}°</span>
   </label>
+  <!-- **正投影はスライダーの続きに置かない**(2026-08-28本人指示)。0と30〜90のあいだに
+       選べる値は無いので、1本の目盛りに乗せると1〜29という「押せるのに効かない帯」が
+       できる。別の口(チェックボックス)にすれば、選べる値がそのまま操作の形になる。 -->
+  <label>
+    正投影(0°)
+    <input
+      id="settings-ortho"
+      type="checkbox"
+      checked={ortho}
+      onchange={(event) => onFov(event.currentTarget.checked ? FOV_ORTHO : angle)}
+    />
+  </label>
   <p class="hint dim">
-    小さいほどパースが弱く(正投影に近く)なる。見かけの大きさは変わらない。
+    小さいほどパースが弱くなる。見かけの大きさは変わらない。正投影ではパースが完全に消え、
+    同じ長さの辺は奥行きが違っても同じ長さに写る。
   </p>
 </dialog>
 
@@ -110,6 +134,21 @@
     width: auto;
     min-width: 0;
     padding: 0;
+    accent-color: var(--accent);
+  }
+
+  /* 正投影のあいだは角度が効かない。**薄くして触れないことを見せる**(隠すと行が消えて
+     ダイアログの高さが動き、戻る先の角度も読めなくなる)。 */
+  #settings-fov:disabled {
+    opacity: 0.4;
+  }
+
+  /* チェックボックスは幅を持たせない(素の `input` の width:7em を打ち消す)。 */
+  #settings-ortho {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 0;
+    margin: 0;
     accent-color: var(--accent);
   }
 

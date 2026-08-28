@@ -6,26 +6,26 @@
  * すべてPython側が正であり、ブラウザに写しを置いた時点で「どちらが本当か」が生まれる。
  * 判定は「これを失っても文書が1ミリも変わらないか」で、Yesのものだけがここに来る。
  *
- * **範囲の正は `viewport.ts`**(`FOV_MIN`/`FOV_MAX`/`FOV_DEFAULT`)。ここで再定義しない。
+ * **選べる値の正は `viewport.ts`**(`isSelectableFov`/`FOV_DEFAULT`)。ここで再定義しない ——
+ * 正投影(`FOV_ORTHO`=0)を足したときのように、判定が2か所にあると片方だけ古くなる。
  *
  * **どの関数も例外を投げない。** localStorage は「使えない」設定(サードパーティCookieの
  * 遮断・プライベートモード・容量超過)で**読み書きの両方が throw する**ので、失敗は
  * 既定値へ倒して黙って続ける。保存できないことはユーザーが対処できる問題ではないので
  * トーストも出さない。
  */
-import { FOV_DEFAULT, FOV_MAX, FOV_MIN } from './viewport'
+import { FOV_DEFAULT, isSelectableFov } from './viewport'
 
 /** localStorage の鍵。画面設定は `duocad.view.*` の下に置く。 */
 const FOV_KEY = 'duocad.view.fov'
 
-/** 保存されたFOV。無い・壊れている・範囲外・localStorageが使えない → `FOV_DEFAULT`。 */
+/** 保存されたFOV。無い・壊れている・選べない値・localStorageが使えない → `FOV_DEFAULT`。 */
 export function loadFov(): number {
   try {
     const raw = window.localStorage.getItem(FOV_KEY)
     if (raw === null) return FOV_DEFAULT
     const value = Number.parseFloat(raw)
-    if (!Number.isFinite(value)) return FOV_DEFAULT
-    if (value < FOV_MIN || value > FOV_MAX) return FOV_DEFAULT
+    if (!isSelectableFov(value)) return FOV_DEFAULT
     return value
   } catch {
     return FOV_DEFAULT

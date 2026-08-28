@@ -66,6 +66,8 @@
   import { loadFov, saveFov } from './viewSettings'
   import {
     createViewport,
+    FOV_DEFAULT,
+    FOV_ORTHO,
     type PickEvent,
     type SketchDraw,
     type VertexMarker,
@@ -226,16 +228,27 @@
    */
   let settingsOpen = $state(false)
   /**
+   * 起動時に読んだ画角。**下の2つの `$state` の初期値はここから作る** ——
+   * `$state` の初期化で別の `$state` を読むと「初期値しか見ていない」警告になる。
+   */
+  const savedFov = loadFov()
+  /**
    * カメラの画角[度]。**画面の設定であって文書の状態ではない** ——
    * コアに送らず(`session.*` を通らない)、操作ログにも残らず、undoの対象にもならない。
-   * 永続化はブラウザのlocalStorageだけ(`viewSettings.ts`)。
+   * 永続化はブラウザのlocalStorageだけ(`viewSettings.ts`)。`FOV_ORTHO`(0)は完全正投影。
    */
-  let fov = $state(loadFov())
+  let fov = $state(savedFov)
+  /**
+   * **正投影から戻る先の角度**(`FOV_MIN`〜`FOV_MAX`)。0は角度ではないので別に覚える ——
+   * これが無いと、正投影を外したときに戻る先が既定の45へ落ち、直前まで見ていた画角が失われる。
+   */
+  let fovAngle = $state(savedFov === FOV_ORTHO ? FOV_DEFAULT : savedFov)
 
-  /** スライダーからの変更。**その場で効かせて、そのまま覚える**(「適用」を挟まない)。 */
+  /** 設定からの変更。**その場で効かせて、そのまま覚える**(「適用」を挟まない)。 */
   function applyFov(deg: number): void {
     if (!Number.isFinite(deg)) return
     fov = deg
+    if (deg !== FOV_ORTHO) fovAngle = deg
     saveFov(deg)
   }
   /**
@@ -1343,6 +1356,7 @@
   <SettingsDialog
     open={settingsOpen}
     {fov}
+    angle={fovAngle}
     onFov={applyFov}
     onClose={() => (settingsOpen = false)}
   />
