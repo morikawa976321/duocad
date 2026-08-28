@@ -795,6 +795,74 @@ async function main() {
     await page.click('#sketch-exit')
     await waitFor(() => window.__duocad.activeSketch === null, 'スケッチから抜けられない')
 
+    // ---------------------------------------------------------- (d) 同一平面の同着(2026-08-28)
+    // **基準平面に描いて押し出した面は、その基準平面とぴったり重なる。** `resolveHit` は
+    // 面と基準平面を「レイ距離が近い方」で決めるので、この重なりでは2つの距離が同着になり、
+    // 素の `<` では**勝敗が浮動小数の最後の桁で決まる**。実際、`fitDistance` を数学的に
+    // 同値な式へ書き換えただけ(カメラ位置の差 7e-14)で、上の(b)が面ではなくXZ基準平面を
+    // 取って赤くなった —— 見た目も `projectFace` が返す画素も同じままで、である。
+    //
+    // **(b)を1回通すだけでは検出力が無い**(同着はどちらに転んでもおかしくないので、
+    // たまたま面が勝っていれば緑になる)。そこで**画角を振ってカメラを視線上で動かし**、
+    // 丸め方の違う位置を何通りも作って、そのすべてで面が勝つことを見る。画角を変えても
+    // 見かけの大きさは保たれる(`viewport.ts` の `setFov`)ので、同じ面を指し続けられる。
+    // **面の画素は毎回測り直す** —— カメラが動くと同じ面でも画素が変わる。
+    //
+    // **実測(2026-08-28)**: 同着に決着を付けない実装で、この6通りのうち**51度と55度**が
+    // XZ基準平面を取った(45/47/49/53度は面。同じ実装で上の(b)も平面を取っている ——
+    // (b)も画角45なのに(d)の45度は面で、**同じ画角でもクリックごとに転ぶ**)。決着を
+    // 付けた後は6通りとも面である。**ここは丸めの当たり外れなので、通ったからといって
+    // 角度の本数を減らさないこと。**
+    const tieAngles = [45, 47, 49, 51, 53, 55]
+    const tieResults = []
+    for (const angle of tieAngles) {
+      await page.evaluate((deg) => window.__duocad.setFov(deg), angle)
+      await waitFor((deg) => window.__duocad.fov === deg, '画角が変わらない', angle)
+      // **件数はこの回の開始時から数える。** (b)が貼ったスケッチが残っているので、
+      // `sketchesBefore + 1` を待つと**クリックの前に条件が満たされている**(実測で踏んだ)。
+      const before = await page.evaluate(() => window.__duocad.sketches.length)
+      await clearSelectionByClickingNothing()
+      await page.click('#sketch-create')
+      // **使う直前に測り直す**(カメラが動いているので、前の画角の画素は使えない)。
+      const at = await page.evaluate((id, index) => {
+        const rect = document.querySelector('.viewport').getBoundingClientRect()
+        const position = window.__duocad.projectFace(id, index)
+        return position === null ? null : { x: position.x + rect.left, y: position.y + rect.top }
+      }, importedId, facePoint.index)
+      if (at === null) fail(`(d) 画角${angle}で面${facePoint.index}が画面から指せない`)
+      await page.mouse.click(at.x, at.y)
+      // **「増えた」ではなく「入った」で待つ** —— 即適用は貼ると同時にそのスケッチへ入るので、
+      // `activeSketch` が立つことがこの手が届いた証拠になる。
+      await waitFor(() => window.__duocad.activeSketch !== null, `(d) 画角${angle}で面クリックが届かない`)
+      const kind = JSON.parse(
+        await page.evaluate(() => {
+          const hook = window.__duocad
+          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          return JSON.stringify(active?.plane ?? null)
+        }),
+      )?.kind
+      tieResults.push(`${angle}:${kind}`)
+      await page.click('#sketch-exit')
+      await waitFor(() => window.__duocad.activeSketch === null, `(d) 画角${angle}で抜けられない`)
+      // **1本ずつ戻す**。残すと以降の件数の比較が全部ずれる。
+      await pressUndo(page)
+      await waitFor(
+        (expected) => window.__duocad.sketches.length === expected,
+        `(d) 画角${angle}のスケッチをundoで戻せない`,
+        before,
+      )
+    }
+    await page.evaluate(() => window.__duocad.setFov(45))
+    await waitFor(() => window.__duocad.fov === 45, '画角を45へ戻せない')
+    const tieBad = tieResults.filter((entry) => !entry.endsWith(':face'))
+    if (tieBad.length > 0) {
+      fail(
+        `(d) 基準平面と同一平面の面が、画角によっては平面に取られる: ${tieBad.join(' / ')}` +
+          `(全結果 ${tieResults.join(' / ')})`,
+      )
+    }
+    ok(`(d) **基準平面と重なった面は、カメラを動かしても面が取れる**(画角 ${tieAngles.join('/')} の6通り)`)
+
     // **画面に出たエラーを見落とさない**。サーバのエラーはトーストへ出るだけで、
     // ブラウザのコンソールには出ない —— ここを見ないと「失敗しているのに緑」が起きる
     // (2026-08-14に open_document で実際に起きた)。

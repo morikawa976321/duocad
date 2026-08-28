@@ -1086,16 +1086,11 @@ export function createViewport(container: HTMLElement): Viewport {
    * ここが返すのは「透視と同じ場所にカメラを置くための距離」でしかない(収める仕事は
    * `fitHalfHeight` + `setViewHalfHeight` がする)。
    *
-   * **`fitHalfHeight(radius) / tan(vHalf)` へ書き換えない。** 数学的には同じだが最後の桁が
-   * 変わり、**基準平面と同一平面にある面のピックが反転する** —— 基準平面に描いて押し出すと
-   * その面は平面とぴったり重なるので、`resolveHit` の「レイ距離が近い方」が浮動小数の
-   * 最後の桁で決まる。2026-08-28、この書き換えだけで `smoke-files` の(b)が面ではなく
-   * XZ平面を取った(カメラ位置の差は 7e-14。**同着そのものは以前からある**)。
+   * **収める量は `fitHalfHeight` が持ち、ここはそれを距離へ直すだけ**(縦横の狭い方に
+   * 合わせる判断はあちらに1つだけ置く)。
    */
   function fitDistance(radius: number): number {
-    const vHalf = THREE.MathUtils.degToRad(perspective.fov) / 2
-    const hHalf = Math.atan(Math.tan(vHalf) * perspective.aspect)
-    return radius / Math.tan(Math.min(vHalf, hHalf))
+    return fitHalfHeight(radius) / Math.tan(THREE.MathUtils.degToRad(perspective.fov) / 2)
   }
 
   /**
@@ -1104,12 +1099,8 @@ export function createViewport(container: HTMLElement): Viewport {
    * 縦長の画面では横が先に詰まる。
    *
    * **`fitDistance` と対で、同じ球を収める。** 透視は距離で、正投影は視錐台の大きさで
-   * 収めるので、収める量そのもの(この関数)と距離(`fitDistance`)を別々に持つ ——
-   * 分けないと正投影側が「収める距離」という意味の無い値を通ることになる。
-   *
-   * **式は独立だが答えは一致していなければならない**(`fitDistance(r) * tan(vHalf)` が
-   * この関数の値になる)。`fitDistance` 側を書き換えて揃えないのは、あちらが最後の桁まで
-   * 据え置きだから(`fitDistance` の説明)。片方だけ直すとこの一致が黙って崩れる。
+   * 収めるので、収める量そのもの(この関数)と、それを距離へ直す換算(`fitDistance`)に
+   * 分けてある。分けないと正投影側が「収める距離」という意味の無い値を通ることになる。
    */
   function fitHalfHeight(radius: number): number {
     return perspective.aspect >= 1 ? radius : radius / perspective.aspect
@@ -1558,17 +1549,11 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /**
    * 画面1画素ぶんの世界座標の長さ(当たり判定の太さを画素で決めるため)。
-   *
-   * **同じ量を2つの式で書いてある。** 透視側は `2 * viewHalfHeight() / height` と同値だが、
-   * そちらへ寄せると最後の桁が変わり、基準平面と同一平面にある面のピックが反転する
-   * (`fitDistance` の説明と同じ同着)。**式を1つに寄せるのは、その同着を `resolveHit` 側で
-   * 先に決着させてから。**
+   * **正投影でも同じ式で出る** —— 縦の見え方の正は `viewHalfHeight` 1つに寄せてある。
    */
   function worldPerPixel(): number {
     const { height } = size()
-    if (camera === orthographic) return (2 * Math.max(viewHalfHeight(), 1e-6)) / height
-    const distance = Math.max(camera.position.distanceTo(controls.target), 1e-6)
-    return (2 * Math.tan((perspective.fov * Math.PI) / 360) * distance) / height
+    return (2 * Math.max(viewHalfHeight(), 1e-6)) / height
   }
 
   function edgeAt(offsetX: number, offsetY: number): EdgeRef | null {
@@ -1976,9 +1961,8 @@ export function createViewport(container: HTMLElement): Viewport {
       camera.up.copy(previous.up)
       controls.target.copy(previous.target)
       // **見かけの大きさを戻すのは正投影のときだけ。** 正投影では寄り引きがカメラの位置
-      // ではないので、位置を戻しても `lookAtSketch` が作った倍率が残る。透視は上で位置を
-      // 戻した時点で終わっており、ここを通すと**同じ値を計算し直して最後の桁だけ動かす**
-      // (`fitDistance` の説明と同じ同着を踏む)。
+      // ではないので、位置を戻しても `lookAtSketch` が作った倍率が残る。透視は上の位置の
+      // 復元で戻り終わっているので、ここを通しても同じ値を計算し直すだけである。
       if (camera === orthographic) setViewHalfHeight(previous.halfHeight)
       camera.updateProjectionMatrix()
     }
@@ -2215,9 +2199,20 @@ export function createViewport(container: HTMLElement): Viewport {
     // **面と基準平面は、レイ距離が近い方**(通常のオクルージョン。辺のような優先順位は
     // 付けない —— 平面は部品と同じ空間に居るので、手前に見えているものが取れるのが自然)。
     // 基準平面は `showBasePlanes(true)` の間しか当たらない。
+    //
+    // **ただし同着は面が勝つ。** 基準平面に描いて押し出すと、その面は平面とぴったり重なり、
+    // 2つのレイ距離が同着になる —— 素の `<` では**どちらが手前かが浮動小数の最後の桁で
+    // 決まり**、見た目が同じなのに指すたび結果が変わる(2026-08-28、無関係な式の書き換えで
+    // カメラが 7e-14 動いただけで面→XZ平面へ反転した)。そこで**画面で1画素にも満たない差を
+    // 「手前」と見なさない** —— 見分けが付かないなら、実体のある面のほうが狙いである。
+    // しきい値はシーンの寸法に依らないよう `worldPerPixel()`(注視点で1画素ぶんの世界長さ)
+    // から作る。この不変は `smoke-files.mjs` の(d)が画角を振って固定している。
     const face = faceHitAt(offsetX, offsetY)
     const basePlane = basePlaneAt(offsetX, offsetY)
-    if (basePlane !== null && (face === null || basePlane.distance < face.distance)) {
+    if (
+      basePlane !== null &&
+      (face === null || basePlane.distance < face.distance - worldPerPixel())
+    ) {
       return { ...nothing, plane: basePlane.name }
     }
     return { ...nothing, hit: face?.ref ?? null }
