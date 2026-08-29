@@ -636,6 +636,20 @@
         }
       },
       "provenance": null
+    },
+    {
+      "seq": 27,
+      "verb": "sketch_create",
+      "args": {
+        "sketch_id": "sketch-11ed7deae0e1",
+        "plane": {
+          "kind": "face",
+          "body": "body-70633ceb7b54",
+          "index": 3,
+          "provenance": null
+        }
+      },
+      "provenance": null
     }
   ]
 }
