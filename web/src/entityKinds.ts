@@ -9,6 +9,13 @@
  * 描かない」契約なので null のまま —— 幽霊はスケッチのverb以外にも呼ばれるため)。
  */
 
+import {
+  DEFAULT_RESOLUTION,
+  arcSegments,
+  bezierSegments,
+  type ViewResolution,
+} from './adaptiveResolution'
+
 /** 図形の種別。**この表のキーが唯一の正**(新種別は表に1行足すだけでよい)。 */
 export type EntityKind = 'line' | 'circle' | 'rectangle' | 'arc' | 'bezier'
 
@@ -25,19 +32,27 @@ interface EntityKindSpec {
    *  **`verb` があるときだけ要る**(幽霊を描くのはverbで起動したコマンドだけ)。 */
   fromArgs?(args: Record<string, unknown>): Record<string, number>
   /** `params` を (u,v) の折れ線へ(円・円弧は分割線で近似)。コアの `Entity.params` のキーを
-   *  そのまま読む(`duocad/sketch.py` の `Entity` docstring)。 */
-  toPoints(params: Record<string, number>): Array<[number, number]>
+   *  そのまま読む(`duocad/sketch.py` の `Entity` docstring)。
+   *
+   *  **`resolution` は「いまの画面でどれくらい細かく折るか」**(`adaptiveResolution.ts`)。
+   *  以前は分割数が固定(円1周64)で、寄ると多角形の角が見えていた。 */
+  toPoints(params: Record<string, number>, resolution: ViewResolution): Array<[number, number]>
 }
 
-/** 円・円弧を折れ線へ近似するときの分割数。 */
-const ARC_SEGMENTS = 64
-
-/** 3次ベジエを折れ線へ近似するときの分割数。**描画と当たり判定だけの話**で、
- *  コア側(`kernel._edges_bezier`)は曲線のままOCCTへ渡すので形は近似されない。 */
-const BEZIER_SEGMENTS = 32
-
-function arcPoints(cx: number, cy: number, radius: number, start: number, end: number): Array<[number, number]> {
-  const steps = Math.max(8, Math.round((ARC_SEGMENTS * Math.abs(end - start)) / 360))
+/**
+ * 円弧を折れ線へ。`start` / `end` は**度**(コアの `Entity.params` がそう持っている)、
+ * 分割数の計算は**ラジアン**で行う(`adaptiveResolution.ts` の単位に合わせる)。
+ */
+function arcPoints(
+  cx: number,
+  cy: number,
+  radius: number,
+  start: number,
+  end: number,
+  resolution: ViewResolution,
+): Array<[number, number]> {
+  const sweep = ((end - start) * Math.PI) / 180
+  const steps = arcSegments(radius, sweep, resolution)
   const points: Array<[number, number]> = []
   for (let step = 0; step <= steps; step += 1) {
     const angle = ((start + ((end - start) * step) / steps) * Math.PI) / 180
@@ -46,15 +61,19 @@ function arcPoints(cx: number, cy: number, radius: number, start: number, end: n
   return points
 }
 
+/** 3次ベジエを折れ線へ。**描画と当たり判定だけの話**で、
+ *  コア側(`kernel._edges_bezier`)は曲線のままOCCTへ渡すので形は近似されない。 */
 function bezierPoints(
   x0: number, y0: number,
   cx1: number, cy1: number,
   cx2: number, cy2: number,
   x1: number, y1: number,
+  resolution: ViewResolution,
 ): Array<[number, number]> {
+  const steps = bezierSegments([x0, y0], [cx1, cy1], [cx2, cy2], [x1, y1], resolution)
   const points: Array<[number, number]> = []
-  for (let step = 0; step <= BEZIER_SEGMENTS; step += 1) {
-    const t = step / BEZIER_SEGMENTS
+  for (let step = 0; step <= steps; step += 1) {
+    const t = step / steps
     const u = 1 - t
     points.push([
       u * u * u * x0 + 3 * u * u * t * cx1 + 3 * u * t * t * cx2 + t * t * t * x1,
@@ -85,9 +104,9 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
       const center = args.center as [number, number]
       return { cx: center[0], cy: center[1], radius: args.radius as number }
     },
-    toPoints(params) {
+    toPoints(params, resolution) {
       // 反時計回り・0度をまたいでよい(`add_arc` の契約と揃える。円は0〜360固定)。
-      return arcPoints(params.cx, params.cy, params.radius, 0, 360)
+      return arcPoints(params.cx, params.cy, params.radius, 0, 360, resolution)
     },
   },
   rectangle: {
@@ -119,21 +138,22 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
         end_deg: args.end_deg as number,
       }
     },
-    toPoints(params) {
+    toPoints(params, resolution) {
       // end<=start は一周分足す(0度またぎ。`add_arc` の契約)。
       let end = params.end_deg
       if (end <= params.start_deg) end += 360
-      return arcPoints(params.cx, params.cy, params.radius, params.start_deg, end)
+      return arcPoints(params.cx, params.cy, params.radius, params.start_deg, end, resolution)
     },
   },
   bezier: {
     // **`verb` を持たない唯一の種別**(上の `EntityKindSpec.verb` のコメント)。
-    toPoints(params) {
+    toPoints(params, resolution) {
       return bezierPoints(
         params.x0, params.y0,
         params.cx1, params.cy1,
         params.cx2, params.cy2,
         params.x1, params.y1,
+        resolution,
       )
     },
   },
@@ -156,9 +176,18 @@ function entityKindSpec(kind: string): EntityKindSpec {
   return spec
 }
 
-/** 図形を (u,v) の折れ線にする。表に無い種別は例外(黙って空の折れ線を返さない)。 */
-export function entityPoints(kind: string, params: Record<string, number>): Array<[number, number]> {
-  return entityKindSpec(kind).toPoints(params)
+/**
+ * 図形を (u,v) の折れ線にする。表に無い種別は例外(黙って空の折れ線を返さない)。
+ *
+ * `resolution` を省くと**ズーム連動を入れる前と同じ既定の粗さ**になる。呼ぶのは
+ * `viewport.ts` だけで、そちらは常に今のカメラから求めた値を渡す。
+ */
+export function entityPoints(
+  kind: string,
+  params: Record<string, number>,
+  resolution: ViewResolution = DEFAULT_RESOLUTION,
+): Array<[number, number]> {
+  return entityKindSpec(kind).toPoints(params, resolution)
 }
 
 /**

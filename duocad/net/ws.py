@@ -381,6 +381,18 @@ class Server:
             elif command == "get_vertices":
                 result = self.session.vertices(message["body_id"])
                 await _send(connection, {"type": "vertices", **result})
+            # -------------------------------------------------- 可変解像度(ズーム連動)
+            # **文書は変わらない**が、配る形の粗さが変わるので**全接続へ配り直す**
+            # (`get_edges` と違って要求元だけに返す話ではない —— 粗さは
+            # `DocumentView` が1つ持つ画面の設定で、複数の接続に別々の粗さは持てない)。
+            # 変わらなかったときは何も送らない —— ズーム操作は連続で飛んでくるので、
+            # 同じ値での再配信を許すと27部品ぶんのメッシュが無駄に流れる。
+            elif command == "set_view_resolution":
+                changed = self.session.set_view_resolution(
+                    message["world_per_pixel"], message.get("size_hint") or 0.0
+                )
+                if changed:
+                    await self._push(connection, applied=None)
             # -------------------------------------------------- E: ファイル操作
             # **SVG読み込みはもうここに無い**(2026-08-28) —— `import_svg` はスケッチのverbに
             # なり、`sketch_id` が必須引数になったので表(`SKETCH_COMMANDS`)に載る側へ移った

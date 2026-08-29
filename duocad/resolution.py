@@ -1,0 +1,116 @@
+"""カメラの見え方から目標のテセレーション精度を決める変換(可変解像度)。
+
+**ここには幾何が無い** —— 曲線を評価しないただの算術で、OCPを一切importしない
+(`kernel.py` から定数2つを読むだけ)。理由はこの関数が**2つの言語に同じ式で存在する**
+ことにある: スケッチの円・円弧はブラウザ側で折れ線になり(真実源が編集中のデータで
+フロントにあるため)、ソリッドと辺はOCCTを持つこちらでテセレーションされる。
+両方が同じ粗さで描かれるには、**曲線の評価ではなく「画面の許容誤差 → 目標偏差」の
+変換だけ**を揃えればよい。
+
+    Python: ここ(`duocad/resolution.py`)
+    TS:     `web/src/adaptiveResolution.ts`
+
+**2つの実装の定数が一致していることは `tests/test_adaptive_resolution.py` が機械で見る。**
+片方だけ変えると、同じ画面でスケッチの線とソリッドの辺の滑らかさが食い違う ——
+例外も赤も出ない種類の壊れ方なので、検査を外さないこと。
+
+考え方:
+
+1. 画面上で曲線が多角形に見えるのは、**弦と弧の乖離(sagitta)が数画素になったとき**である。
+   したがって許容誤差は「世界座標のmm」ではなく「画面の画素」で決めるのが正しく、
+   カメラが寄れば同じmmが大きな画素になるので目標偏差はズームに追随して小さくなる。
+2. 1画素あたりの世界長さ(`world_per_pixel`)はビューポート側が持っている
+   (`viewport.ts` の `worldPerPixel()`。透視でも正投影でも同じ意味の値になる)。
+   **プロトコルはこの生の値を運ぶ** —— 導出済みの偏差を運ぶと、クライアントが
+   古いままでも任意の偏差をサーバへ押し込めてしまい、変換式の持ち主が2つになる。
+3. 角度偏差(ラジアン)は線形偏差から導く。半径 r の円弧が線形偏差 e を満たす半角は
+   theta = sqrt(2e/r) なので、**角度偏差を sqrt(e) に比例させる**と「どの半径から
+   角度偏差が支配的になるか」がズームによらず一定に保たれる。
+   `deviation == kernel.DEFAULT_DEVIATION` のとき `kernel.DEFAULT_ANGULAR_DEFLECTION`
+   にちょうど戻るので、**既定値の意味は変えていない**(先行タスクが入れた
+   `tests/test_feature_ui.py` の小半径円弧の下限は、その定数から導かれている)。
+
+**角度はすべてラジアン**(度ではない)。OCCTの `BRepMesh_IncrementalMesh` /
+`GCPnts_TangentialDeflection` の角度偏差パラメータがラジアンだからで、
+ここで度へ直すと2つの単位が混ざる。
+
+**分かっている代償(2026-08-30 実測、PCケース27部品2835面)**: 目標精度は**文書全体で1つ**
+なので、大きな文書の一部へ深く寄ると**画面に出ていない部品まで同じ細かさで測り直す**。
+
+    視点              1画素    目標偏差   三角形     測り直しの往復
+    全体を収めた状態  1.11mm   0.390mm     65,707    2.8秒
+    20段ズームイン    0.095mm  0.033mm    394,975    5.6秒
+    30段ズームイン    0.028mm  0.010mm  1,180,763   14.5秒
+
+全体表示では**入れる前(固定0.2mm)より軽い**(粗くてよい所を粗くするため)が、深いズームでは
+上のとおり重い。**次の一手は「Bodyごとに画面占有率で精度を変える」**(視錐台の外・画面上
+数画素にしかならない部品を細かく測らない)で、そこはプロトコルの形が変わる
+(`set_view_resolution` が1組ではなくBodyごとの値を運ぶか、サーバが視錐台を知る)ため、
+本タスクでは入れていない。小さな文書(1部品)では往復1秒未満で問題にならない。
+"""
+from __future__ import annotations
+
+import math
+
+from .kernel import DEFAULT_ANGULAR_DEFLECTION, DEFAULT_DEVIATION
+
+#: 画面上で許す弦と弧の乖離[画素]。**この1つだけが「どれくらい滑らかか」を決める。**
+#: 1画素より小さくしてあるのは、アンチエイリアスが効くと1画素未満のずれも角として見えるため。
+TOLERANCE_PIXELS = 0.35
+
+#: 目標偏差[mm]の下限(絶対)。1ミクロン。これ以上細かくしてもディスプレイに出ない一方、
+#: `BRepMesh_IncrementalMesh` の三角形数だけが増える。
+DEVIATION_MIN_ABS = 1.0e-3
+#: 目標偏差[mm]の上限(絶対)。これ以上粗いと形が別物になる。
+DEVIATION_MAX_ABS = 5.0
+#: 目標偏差の下限(モデルの外接対角に対する比)。大きなモデルで下限が絶対値のままだと、
+#: 引いた状態から一気に寄ったときに全体を1ミクロンで測り直しかねない。
+DEVIATION_MIN_RELATIVE = 1.0e-5
+#: 目標偏差の上限(同・比)。小さなモデルで `DEVIATION_MAX_ABS` が効くと形が消える。
+DEVIATION_MAX_RELATIVE = 2.0e-2
+
+#: 角度偏差[ラジアン]の下限。円1周あたり約314分割。
+ANGULAR_MIN = 0.02
+#: 角度偏差[ラジアン]の上限。OCCT自身の既定値(`IMeshTools_Parameters().Angle`)と同じで、
+#: 円1周あたり約13分割。**引いたときにここまで粗くなれる**ことが「ズームアウトで分割数が
+#: 減る」の効き代になる。
+ANGULAR_MAX = 0.5
+
+
+def clamp_deviation(deviation: float, size_hint: float = 0.0) -> float:
+    """目標偏差[mm]を安全な範囲へ丸める(上下限は上記の定数)。
+
+    `size_hint` はモデルの外接対角[mm]。0以下・非有限なら比による上下限は使わない。
+    """
+    if not math.isfinite(deviation) or deviation <= 0.0:
+        return DEFAULT_DEVIATION
+    size = float(size_hint) if math.isfinite(size_hint) and size_hint > 0.0 else 0.0
+    low = max(DEVIATION_MIN_ABS, size * DEVIATION_MIN_RELATIVE)
+    # **上限は下限より小さくならない** —— 極端に小さなモデルでは比の上限が絶対の下限を
+    # 下回りうるので、そのときは下限を採る(範囲が反転すると clamp が意味を失う)。
+    high = max(low, min(DEVIATION_MAX_ABS, size * DEVIATION_MAX_RELATIVE) if size > 0.0 else DEVIATION_MAX_ABS)
+    return min(high, max(low, float(deviation)))
+
+
+def angular_for_deviation(deviation: float) -> float:
+    """線形偏差[mm]に見合う角度偏差[ラジアン]。
+
+    `theta = sqrt(2e/r)` から `sqrt(e)` に比例させる(モジュールdocstringの3)。
+    `deviation == kernel.DEFAULT_DEVIATION` で `kernel.DEFAULT_ANGULAR_DEFLECTION` に戻る。
+    """
+    if not math.isfinite(deviation) or deviation <= 0.0:
+        return DEFAULT_ANGULAR_DEFLECTION
+    scaled = DEFAULT_ANGULAR_DEFLECTION * math.sqrt(float(deviation) / DEFAULT_DEVIATION)
+    return min(ANGULAR_MAX, max(ANGULAR_MIN, scaled))
+
+
+def view_resolution(world_per_pixel: float, size_hint: float = 0.0) -> tuple:
+    """`(deviation[mm], angular_deflection[rad])` を返す。**変換式の唯一の入口**。
+
+    `world_per_pixel` は「画面1画素ぶんの世界長さ[mm]」(注視点の面で測る)。
+    非有限・0以下なら既定値の組を返す(ズーム連動を入れる前と同じ粗さ)。
+    """
+    if not math.isfinite(world_per_pixel) or world_per_pixel <= 0.0:
+        return (DEFAULT_DEVIATION, DEFAULT_ANGULAR_DEFLECTION)
+    deviation = clamp_deviation(TOLERANCE_PIXELS * float(world_per_pixel), size_hint)
+    return (deviation, angular_for_deviation(deviation))

@@ -22,6 +22,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 // 辺の折れ線の形は `session.ts` の `EdgeGeometry` が正(サーバが配る形そのもの)。
 import { entityPoints } from './entityKinds'
+import { DEFAULT_RESOLUTION, viewResolution, type ViewResolution } from './adaptiveResolution'
 import type { BasePlaneName, EdgeGeometry } from './session'
 
 /** kernel.tessellate() が返す1面ぶん(サーバのJSONそのまま)。 */
@@ -41,6 +42,21 @@ export interface GeometryPayload {
   bbox: { min: number[]; max: number[]; center: number[]; diagonal: number }
   faces: FaceGeometry[]
   untriangulated: number[]
+}
+
+/**
+ * 「いまの画面はどれくらい細かく描くべきか」。**カメラから導く値であって設定ではない。**
+ *
+ * `worldPerPixel` と `sizeHint` が**事実**(画面1画素ぶんの世界長さ[mm]と、いま見えている
+ * ものの外接対角[mm])で、`deviation` / `angularDeflection` はそこから
+ * `adaptiveResolution.ts` の式で導いた**目標精度**である。サーバへ送るのは事実の方だけで
+ * (`set_view_resolution`)、同じ式が `duocad/resolution.py` にもある。
+ */
+export interface ViewportResolution extends ViewResolution {
+  /** 画面1画素ぶんの世界長さ[mm](注視点の面で測る)。 */
+  worldPerPixel: number
+  /** いま見えているものの外接対角[mm](上下限の丸めにだけ使う)。 */
+  sizeHint: number
 }
 
 /** 面を一意に指す(1個のBodyの中でしか一意でない `faceIndex` 単独指定はしない)。 */
@@ -338,6 +354,31 @@ export interface Viewport {
    * 「ズーム」になり、比べたいものが比べられない。
    */
   setFov(deg: number): void
+  // ------------------------------------------------------------------ 可変解像度(ズーム連動)
+  /**
+   * 今の画面が要求している解像度。**実機検査と `App.svelte` の両方が読む**
+   * (前者は「寄ったら本当に細かくなったか」を数値で見るため、後者は送る値のため)。
+   */
+  viewResolution(): ViewportResolution
+  /**
+   * 解像度が**意味のある幅で**変わったときに呼ばれる(ズーム・画角変更・寸法変更)。
+   *
+   * **落ち着いてから1回だけ呼ぶ。** ホイールを回している間ずっと呼ぶと、27部品ぶんの
+   * 再テセレーションがサーバで連続して走る —— カメラが止まったことを確かめ(減衰が
+   * 収まるまで待つ)、かつ偏差が一定比以上動いたときだけ通す。
+   *
+   * スケッチの折れ線(ブラウザ内で完結する経路)は**この呼び出しと同じ瞬間に**
+   * ここが自分で描き直す。呼び出し側がやるのはサーバへ知らせることだけである。
+   */
+  onResolutionChange(listener: (resolution: ViewportResolution) => void): void
+  /**
+   * スケッチの図形1本ごとの折れ線の点数(`sketch_id` -> 図形順の点数)。
+   *
+   * **実機検査フック専用**。「寄ったら円が滑らかになった」は目でしか分からないので、
+   * 代わりに**分割数そのもの**を機械で見られるようにする(`getGeometry` と同じ species の穴。
+   * ソリッド側は `getGeometry().deviation` と三角形数がその役をする)。
+   */
+  sketchPolylineCounts(): Record<string, number[]>
   /**
    * 今のカメラの姿勢(ワールド座標)。**実機検査が視点の向きそのものを見るための穴**で、
    * 描画にも操作にも使わない。
@@ -1015,6 +1056,7 @@ export function createViewport(container: HTMLElement): Viewport {
       if (entry.bodyId === edgeBodyId) clearEdges()
     }
     rebuildPickIndex()
+    refreshContentDiagonal() // 見えているものの大きさが変わった(解像度の上下限に効く)
 
     if (!framed) {
       frameToContent()
@@ -1069,6 +1111,7 @@ export function createViewport(container: HTMLElement): Viewport {
     if (edgeBodyId !== null && stale.includes(edgeBodyId)) clearEdges()
     for (const bodyId of stale) clearBody(bodyId)
     rebuildPickIndex()
+    refreshContentDiagonal() // 見えているものの大きさが変わった(解像度の上下限に効く)
   }
 
   /**
@@ -1556,6 +1599,77 @@ export function createViewport(container: HTMLElement): Viewport {
     return (2 * Math.max(viewHalfHeight(), 1e-6)) / height
   }
 
+  // ------------------------------------------------------------------ 可変解像度(ズーム連動)
+  //
+  // **寄ったら細かく、引いたら粗く。** 曲線が多角形に見えるのは弦と弧の乖離が数画素に
+  // なったときなので、目標精度は世界座標のmmではなく**画面の画素**で決める
+  // (式と定数は `adaptiveResolution.ts`。同じものが `duocad/resolution.py` にもある)。
+
+  /** カメラが止まったと見なすまでの待ち[ms]。**減衰(`dampingFactor`)が収まる時間も含む。** */
+  const RESOLUTION_SETTLE_MS = 180
+  /** 目標偏差がこの比だけ動いて初めて作り直す(1割程度の揺れでは測り直さない)。 */
+  const RESOLUTION_CHANGE_RATIO = 1.25
+  /** `worldPerPixel` が「まだ動いている」と見なす相対差。減衰の収束判定。 */
+  const RESOLUTION_STILL_EPSILON = 1.0e-4
+
+  /** 直近に採用した解像度(スケッチの折れ線と `viewResolution()` が読む)。 */
+  let appliedResolution: ViewportResolution = {
+    ...DEFAULT_RESOLUTION,
+    worldPerPixel: 0,
+    sizeHint: 0,
+  }
+  let resolutionListener: ((resolution: ViewportResolution) => void) | null = null
+  let resolutionApplied = false
+  let lastWorldPerPixel = -1
+  let lastSizeHint = -1
+  let steadySince = 0
+  /**
+   * いま見えているものの外接対角[mm]。**毎フレーム測らない** —— `Box3.setFromObject` は
+   * 全メッシュを走査するので、中身が変わったとき(`update` / `prune` / `showSketches`)に
+   * だけ測り直す。上下限の丸めにしか使わないので、1フレーム古くても害が無い。
+   */
+  let contentDiagonal = 0
+
+  function refreshContentDiagonal(): void {
+    const box = new THREE.Box3().setFromObject(root)
+    box.union(new THREE.Box3().setFromObject(sketchRoot))
+    contentDiagonal = box.isEmpty() ? 0 : box.getSize(new THREE.Vector3()).length()
+  }
+
+  /**
+   * カメラが落ち着いていれば解像度を採り直す(毎フレーム `tick` から呼ばれる)。
+   *
+   * **3段の門**を通したものだけが通る: (1)`worldPerPixel` が動いていない
+   * (2)止まってから `RESOLUTION_SETTLE_MS` 経った (3)目標偏差が `RESOLUTION_CHANGE_RATIO`
+   * 以上動いた。1つでも欠くと、ホイールを回している間ずっとサーバへ再テセレーションを
+   * 頼むことになる(27部品なら操作が止まる)。**初回だけは(3)を問わず通す** ——
+   * 既定値のままの画面と、実際のカメラから導いた値を必ず1度は合わせる。
+   */
+  function updateResolution(now: number): void {
+    const perPixel = worldPerPixel()
+    const moved =
+      lastWorldPerPixel < 0 ||
+      Math.abs(perPixel - lastWorldPerPixel) > lastWorldPerPixel * RESOLUTION_STILL_EPSILON ||
+      contentDiagonal !== lastSizeHint
+    if (moved) {
+      lastWorldPerPixel = perPixel
+      lastSizeHint = contentDiagonal
+      steadySince = now
+      return
+    }
+    if (now - steadySince < RESOLUTION_SETTLE_MS) return
+    const target = viewResolution(perPixel, contentDiagonal)
+    const ratio = target.deviation / appliedResolution.deviation
+    if (resolutionApplied && ratio < RESOLUTION_CHANGE_RATIO && ratio > 1 / RESOLUTION_CHANGE_RATIO) {
+      return
+    }
+    resolutionApplied = true
+    appliedResolution = { ...target, worldPerPixel: perPixel, sizeHint: contentDiagonal }
+    // **スケッチはここで描き直す**(ブラウザ内で完結する経路。サーバ往復が要らない)。
+    redrawSketches()
+    resolutionListener?.(appliedResolution)
+  }
+
   function edgeAt(offsetX: number, offsetY: number): EdgeRef | null {
     if (edgeLines.length === 0) return null
     const { width, height } = size()
@@ -1767,6 +1881,8 @@ export function createViewport(container: HTMLElement): Viewport {
     regionMeshes: THREE.Mesh[]
     /** 図形の (u,v) の折れ線(視点合わせの中心を出すのに使う)。 */
     points: Array<[number, number]>
+    /** 図形1本ごとの折れ線の点数(実機検査の `sketchPolylineCounts` が読む)。 */
+    polylineCounts: number[]
   }
   const sketches = new Map<string, SketchScene>()
   let ghost: { objects: THREE.Object3D[]; disposables: Array<{ dispose(): void }> } | null = null
@@ -1791,7 +1907,9 @@ export function createViewport(container: HTMLElement): Viewport {
     entity: { kind: string; params: Record<string, number> },
     material: THREE.LineBasicMaterial,
   ): { object: THREE.Object3D; geometry: THREE.BufferGeometry; points: Array<[number, number]> } | null {
-    const points = entityPoints(entity.kind, entity.params)
+    // **今の画面の粗さで折る**(`appliedResolution`)。固定分割だった頃は、寄ると
+    // 円が多角形に見え、引くと使われない点をGPUへ送っていた。
+    const points = entityPoints(entity.kind, entity.params, appliedResolution)
     if (points.length < 2) return null
     const geometry = new THREE.BufferGeometry().setFromPoints(
       points.map(([u, v]) => toWorld(frame, u, v)),
@@ -1807,7 +1925,19 @@ export function createViewport(container: HTMLElement): Viewport {
     sketches.delete(sketchId)
   }
 
+  /**
+   * 直近に受け取った描画指示。**解像度が変わったときに折り直すために控える**
+   * (折れ線はここで作るので、指示そのものを持っていないと粗さだけを変えられない)。
+   */
+  let lastSketchDraws: SketchDraw[] = []
+
+  /** 控えた指示で描き直す(`updateResolution` が呼ぶ)。中身が無ければ何もしない。 */
+  function redrawSketches(): void {
+    if (lastSketchDraws.length > 0) showSketches(lastSketchDraws)
+  }
+
   function showSketches(entries: SketchDraw[]): void {
+    lastSketchDraws = entries
     const keep = new Set(entries.map((entry) => entry.sketchId))
     for (const sketchId of [...sketches.keys()]) if (!keep.has(sketchId)) clearSketch(sketchId)
     for (const entry of entries) {
@@ -1816,6 +1946,7 @@ export function createViewport(container: HTMLElement): Viewport {
       const disposables: Array<{ dispose(): void }> = []
       const regionMeshes: THREE.Mesh[] = []
       const points: Array<[number, number]> = []
+      const polylineCounts: number[] = []
 
       // 領域を先に置く(線が領域の上に見えるように。奥行きは書かないので順序で決まる)
       const selected = new Set(entry.selectedRegions)
@@ -1850,6 +1981,7 @@ export function createViewport(container: HTMLElement): Viewport {
         objects.push(built.object)
         disposables.push(built.geometry)
         points.push(...built.points)
+        polylineCounts.push(built.points.length)
       }
       sketches.set(entry.sketchId, {
         frame: entry.frame,
@@ -1857,9 +1989,11 @@ export function createViewport(container: HTMLElement): Viewport {
         disposables,
         regionMeshes,
         points,
+        polylineCounts,
       })
     }
     invalidateHover() // 領域のメッシュを作り直したので印を捨てる
+    refreshContentDiagonal() // 見えているものの大きさが変わった(解像度の上下限に効く)
   }
 
   /** 領域の材質を決める。**選択とホバーの両方を見る唯一の場所**(面・辺と同じ規律)。 */
@@ -2304,6 +2438,10 @@ export function createViewport(container: HTMLElement): Viewport {
   function tick(): void {
     if (!alive) return
     controls.update()
+    // **描画ループで見る**(`OrbitControls` の 'change' ではない) —— 減衰つきのドリーは
+    // イベントが止まった後も数十フレーム動き続けるので、「止まったか」はフレーム側でしか
+    // 分からない。中身は算術数本で、当たったときだけ作り直しが走る。
+    updateResolution(performance.now())
     updateHover()
     renderer.render(scene, camera)
     frameHandle = requestAnimationFrame(tick)
@@ -2321,6 +2459,17 @@ export function createViewport(container: HTMLElement): Viewport {
     },
     onPlaneMove(listener) {
       planeMoveListener = listener
+    },
+    viewResolution() {
+      return { ...appliedResolution }
+    },
+    sketchPolylineCounts() {
+      const counts: Record<string, number[]> = {}
+      for (const [sketchId, entry] of sketches) counts[sketchId] = [...entry.polylineCounts]
+      return counts
+    },
+    onResolutionChange(listener) {
+      resolutionListener = listener
     },
     highlight,
     showEdges,

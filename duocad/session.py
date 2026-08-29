@@ -207,6 +207,18 @@ class Session:
         """1Bodyの頂点の座標(`DocumentView.vertices`)。"""
         return self.view.vertices(body_id)
 
+    def set_view_resolution(self, world_per_pixel: float, size_hint: float = 0.0) -> bool:
+        """ビューポートのズームに合わせて目標のテセレーション精度を決め直す。
+
+        **文書は一切変わらない**(操作ログにもundoにも載らず、`applied` も出ない)。
+        変わるのは配りものの粗さだけなので、`DocumentView` へそのまま委譲する。
+        戻り値が True のときだけ配信し直せばよい(`duocad/net/ws.py`)。
+
+        `self.deviation`(セッションの土台。STL書き出しが使う)は**動かさない** ——
+        書き出す形の粗さが画面のズームで変わってはいけない。
+        """
+        return self.view.set_view_resolution(world_per_pixel, size_hint)
+
     def body_meta(self, body) -> dict:
         """1Bodyぶんの軽量な状態(`DocumentView.body_meta`)。MCPの `bodies[]` もここを通る。"""
         return self.view.body_meta(body)
@@ -386,7 +398,13 @@ class Session:
                         "name": body.name,
                         "face_count": kernel.face_count(body.shape),
                         "volume": query.volume(body.shape),
-                        "geometry": kernel.tessellate(body.shape, self.deviation),
+                        # **プレビューも画面の粗さで測る**(本物のBodyと並べて出るので、
+                        # ここだけ土台の粗さのままだと確定の前後で滑らかさが跳ねる)。
+                        "geometry": kernel.tessellate(
+                            body.shape,
+                            self.view.view_deviation,
+                            self.view.view_angular_deflection,
+                        ),
                     })
         finally:
             self._suppress_events -= 1

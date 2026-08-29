@@ -1091,12 +1091,37 @@
     viewport.onPlaneMove((point) => {
       hoverPoint = point === null ? null : [point.u, point.v]
     })
+    // 可変解像度 —— ズームで見え方が変わったらサーバへ知らせ、ソリッド・辺・領域を
+    // その粗さで測り直させる。**スケッチの折れ線はビューポート側が自分で折り直す**
+    // (ブラウザ内で完結するので往復が要らない)。連打の抑制も向こうが持っている。
+    viewport.onResolutionChange(sendViewResolution)
     session.start()
     return () => {
       session.dispose()
       viewport?.dispose()
       viewport = null
     }
+  })
+
+  /**
+   * 今の見え方をサーバへ知らせる(可変解像度)。**繋がっていないときは黙って捨てる。**
+   *
+   * `session.send` は送れなかった操作をトーストに出すが、これは人が起こした操作ではなく
+   * 画面の都合の連絡なので、切れている間にホイールを回しただけで「操作を送れなかった」の
+   * 札が出るのは誤報である。繋ぎ直したときは下の `$effect` が送り直す。
+   */
+  function sendViewResolution(resolution: { worldPerPixel: number; sizeHint: number }): void {
+    if (status !== 'open') return
+    session.setViewResolution(resolution.worldPerPixel, resolution.sizeHint)
+  }
+
+  // 繋がった(繋ぎ直した)ら、今の見え方をもう一度知らせる。**サーバ側の目標精度は
+  // セッションの持ち物**なので、サーバが立ち上がり直すと既定の粗さへ戻る —— 次に人が
+  // ズームするまで粗いままになるのを避ける。
+  $effect(() => {
+    if (status !== 'open') return
+    const resolution = viewport?.viewResolution()
+    if (resolution && resolution.worldPerPixel > 0) sendViewResolution(resolution)
   })
 
   // 選択が変わったら描き直す(コア発 → 購読 → 再描画。上り方向の出口)
@@ -1153,6 +1178,10 @@
       // あちらは遮蔽された面に null を返すので、**上面と下面のどちらが画面で上か**のように
       // 見えていない側を含む比較ができない。どちらも読むだけで、コアへは何も飛ばない。
       cameraPose: () => viewport?.cameraPose() ?? null,
+      // 可変解像度。**実機検査が「寄ったら本当に細かくなったか」を数値で見るための穴**
+      // (見た目の滑らかさは目でしか分からないので、代わりに目標偏差と分割数を出す)。
+      viewResolution: () => viewport?.viewResolution() ?? null,
+      sketchPolylineCounts: () => viewport?.sketchPolylineCounts() ?? null,
       projectPoint: (point: [number, number, number]) => viewport?.projectPoint(point) ?? null,
       // C: スケッチ。**実機検査が本物のクリックで描く**ための穴
       sketches,

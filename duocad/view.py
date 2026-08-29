@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-from . import kernel, parameters, query, region, selection, sketch
+from . import kernel, parameters, query, region, resolution, selection, sketch
 from .document import Document
 
 
@@ -65,12 +65,21 @@ class DocumentView:
     ) -> None:
         #: いま配っている文書。差し替えは `reset()` だけが行う。
         self.document = document
+        #: **文書の粗さの土台**(セッション起動時の `--deviation`)。ビューポートの
+        #: ズーム連動値(下記)が来ていない間だけ使われる。STL書き出しはこちらを見る
+        #: (`Session.export_stl_file`) —— 書き出す形の粗さがカメラで変わってはいけない。
         self.deviation = float(deviation)
+        #: **ズーム連動の目標精度**(`set_view_resolution`)。`(線形偏差[mm], 角度偏差[rad])`。
+        #: `None` は「まだ画面から届いていない」で、そのときは `self.deviation` +
+        #: `kernel.DEFAULT_ANGULAR_DEFLECTION` を使う(ズーム連動を入れる前と同じ)。
+        #: **画面の設定であって文書の状態ではない** —— 操作ログにもundoにも載らない。
+        self._view_resolution: Optional[tuple] = None
         #: **`Session.warnings` と同じリストオブジェクト**を共有する(2つの持ち主を作らない)。
         #: 吸い出す口は `Session.take_warnings()` にだけ置いてあり、そちらは**中身を空にする**
         #: (新しいリストへ束ね直さない —— 束ね直すと、ここが古いリストへ書き続ける)。
         self.warnings = warnings
-        self._revision_state: dict = {}    # body_id -> (id(shape), visible) 直近の状態
+        # body_id -> (id(shape), visible, 目標精度) 直近の状態(`body_revision`)
+        self._revision_state: dict = {}
         self._revision_counter: dict = {}  # body_id -> 現在の版(int)
         # sketch_id -> (署名, 領域つきペイロード)。領域の計算が重いので内容で引く(C)
         self._sketch_cache: dict = {}
@@ -78,6 +87,43 @@ class DocumentView:
         self._edge_cache: dict = {}        # body_id -> (shape, tessellate_edges結果)(D)
         self._vertex_cache: dict = {}      # body_id -> (shape, vertex_positions結果)
         self._volume_cache: dict = {}      # body_id -> (shape, query.volume結果)
+
+    # ---------------------------------------------------------------- 可変解像度(ズーム連動)
+    @property
+    def view_deviation(self) -> float:
+        """いま測るのに使う線形偏差[mm]。ズーム連動値が来ていればそちら、無ければ土台。"""
+        return self.deviation if self._view_resolution is None else self._view_resolution[0]
+
+    @property
+    def view_angular_deflection(self) -> float:
+        """いま測るのに使う角度偏差[**ラジアン**]。度ではない(`duocad/resolution.py`)。"""
+        if self._view_resolution is None:
+            return kernel.DEFAULT_ANGULAR_DEFLECTION
+        return self._view_resolution[1]
+
+    def set_view_resolution(self, world_per_pixel: float, size_hint: float = 0.0) -> bool:
+        """画面の見え方から目標精度を決め直す。**変わったら True**(呼び出し側の再配信の合図)。
+
+        受け取るのは**カメラの事実**(画面1画素ぶんの世界長さ[mm]と、モデルの外接対角[mm])
+        であって、導出済みの偏差ではない。変換式の持ち主を1つにするための線引きで、
+        式そのものは `duocad/resolution.py` にあり、ブラウザ側の
+        `web/src/adaptiveResolution.ts` と定数まで一致している(検査あり)。
+
+        **変わったときはキャッシュを捨てる**。`geometry()` / `edges()` / `_sketch_state` の
+        キャッシュはどれも「形状が同じなら測り直さない」で引いており、粗さは鍵に入って
+        いない —— 捨てないと、ズームしても前の粗さのメッシュを配り続ける。
+
+        版(`body_revision`)にも粗さが入る(下記)ので、差分配信は自動的に
+        「全Bodyのgeometryを送り直す」になる。
+        """
+        target = resolution.view_resolution(world_per_pixel, size_hint)
+        if self._view_resolution == target:
+            return False
+        self._view_resolution = target
+        self._geometry_cache.clear()
+        self._edge_cache.clear()
+        self._sketch_cache.clear()
+        return True
 
     # ---------------------------------------------------------------- 文書の差し替え
     def reset(self, document: Document) -> None:
@@ -188,7 +234,9 @@ class DocumentView:
                 (b for b in self.document.bodies if b.id == item.plane.get("body")), None
             )
             plane_shape = body.shape if body is not None else None
-        signature = json.dumps([item.plane, drawn, self.deviation], sort_keys=True, default=str)
+        signature = json.dumps(
+            [item.plane, drawn, self.view_deviation], sort_keys=True, default=str
+        )
         cached = self._sketch_cache.get(item.id)
         # 貼った面の形状は**参照そのもの**で比べる(`is`)。`id()` の整数だけを控えると、
         # 旧形状が解放された後に同じアドレスが再利用されたときに偽ヒットする
@@ -202,7 +250,7 @@ class DocumentView:
                 frame = region.plane_frame(self.document, item.id)
                 if drawn:
                     regions = region.regions_with_geometry(
-                        self.document, item.id, self.deviation
+                        self.document, item.id, self.view_deviation
                     )
             except Exception as error:
                 self.warnings.append(
@@ -272,7 +320,10 @@ class DocumentView:
         自動的に効く(verbごとに数え上げない)。
         """
         body = self.document.get_body(body_id)
-        key = (id(body.shape), body.visible)
+        # **粗さも「状態」のうち**(2026-08-30、可変解像度)。ズームで目標精度が変われば
+        # 配るべきgeometryも変わるので、ここに入れておかないと差分配信が
+        # 「版が同じ=変わっていない」と判断して**古い粗さのメッシュを画面に残す**。
+        key = (id(body.shape), body.visible, self._view_resolution)
         if self._revision_state.get(body_id) != key:
             self._revision_state[body_id] = key
             self._revision_counter[body_id] = self._revision_counter.get(body_id, 0) + 1
@@ -290,7 +341,9 @@ class DocumentView:
         cached = self._geometry_cache.get(body_id)
         if cached is not None and cached[0] is body.shape:
             return cached[1]
-        result = kernel.tessellate(body.shape, self.deviation)
+        result = kernel.tessellate(
+            body.shape, self.view_deviation, self.view_angular_deflection
+        )
         if result["untriangulated"]:
             self.warnings.append(
                 f"三角形分割が取れなかった面({body.name}): {result['untriangulated']}(画面に出ません)"
@@ -324,7 +377,9 @@ class DocumentView:
         if cached is not None and cached[0] is body.shape:
             described = cached[1]
         else:
-            described = kernel.tessellate_edges(body.shape, self.deviation)
+            described = kernel.tessellate_edges(
+                body.shape, self.view_deviation, self.view_angular_deflection
+            )
             self._edge_cache[body_id] = (body.shape, described)
         return {"body_id": body_id, "revision": revision, "edges": described}
 

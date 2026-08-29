@@ -550,6 +550,20 @@ export interface Session {
    * 人が見て外せることだけである(`duocad/server.py` の `Session.vertices`)。
    */
   getVertices(bodyId: string): void
+  /**
+   * 画面の見え方をサーバへ知らせ、**ズームに合わせた粗さでソリッド・辺・領域を
+   * 測り直させる**(可変解像度)。応答は通常の状態配信で、変わらなければ何も来ない。
+   *
+   * **導出済みの偏差ではなくカメラの事実を送る** —— 「画面の許容誤差 → 目標偏差」の
+   * 変換式は `web/src/adaptiveResolution.ts` と `duocad/resolution.py` の両方にあり
+   * (同じ定数・検査あり)、どちらが正かを決めずに済ませるとサーバが任意の粗さを
+   * クライアントから押し込まれる。呼ぶのは `viewport.onResolutionChange` の中だけで、
+   * そちらがズーム中の連打を止めてある。
+   *
+   * @param worldPerPixel 画面1画素ぶんの世界長さ[mm]
+   * @param sizeHint いま見えているものの外接対角[mm](上下限の丸めにだけ使う)
+   */
+  setViewResolution(worldPerPixel: number, sizeHint: number): void
   undo(): void
   redo(): void
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
@@ -799,6 +813,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     getVertices(bodyId) {
       send({ cmd: 'get_vertices', body_id: bodyId })
+    },
+    setViewResolution(worldPerPixel, sizeHint) {
+      send({ cmd: 'set_view_resolution', world_per_pixel: worldPerPixel, size_hint: sizeHint })
     },
     undo() {
       send({ cmd: 'undo' })

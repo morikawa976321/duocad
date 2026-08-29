@@ -820,6 +820,35 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="set_view_resolution",
+        category="protocol",
+        description="",
+        params=(
+            Param(
+                "world_per_pixel",
+                "number",
+                "画面1画素ぶんの世界長さ[mm](注視点の面で測る)",
+            ),
+            Param(
+                "size_hint",
+                "number",
+                "いま見えているものの外接対角[mm](上下限の丸めにだけ使う)",
+                required=False,
+            ),
+        ),
+        session="set_view_resolution",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**文書を変えない画面の設定**(可変解像度)。カメラのズームに応じた目標の"
+            "テセレーション精度を決め直し、変わったときだけ状態を配信し直す。"
+            "**導出済みの偏差ではなくカメラの事実を受け取る** —— 変換式の持ち主を"
+            "`duocad/resolution.py` 1つに保つため(`size_hint` を省略できるので "
+            "`ws=\"special\"`)"
+        ),
+    ),
+    Command(
         name="get_edges",
         category="protocol",
         description="",
