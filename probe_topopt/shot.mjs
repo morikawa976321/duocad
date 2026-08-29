@@ -105,14 +105,15 @@ try {
   })
   page.on('pageerror', (e) => console.log(`  [page] ${e.message}`))
 
-  console.log(
-    `  GL     : ${await page.evaluate(() => {
-      const gl = document.createElement('canvas').getContext('webgl2')
-      if (gl === null) return 'WebGLコンテキストを作れない'
-      const info = gl.getExtension('WEBGL_debug_renderer_info')
-      return info === null ? gl.getParameter(gl.RENDERER) : gl.getParameter(info.UNMASKED_RENDERER_WEBGL)
-    })}`,
-  )
+  // `--enable-unsafe-swiftshader` を付けてあるので、実GPUを掴めなかった場合は黙って
+  // ソフトウェアラスタライザへ落ちる。名前を出すだけだと落ちたことに気づけないので検査する。
+  const glRenderer = await page.evaluate(() => {
+    const gl = document.createElement('canvas').getContext('webgl2')
+    if (gl === null) return 'WebGLコンテキストを作れない'
+    const info = gl.getExtension('WEBGL_debug_renderer_info')
+    return info === null ? gl.getParameter(gl.RENDERER) : gl.getParameter(info.UNMASKED_RENDERER_WEBGL)
+  })
+  console.log(`  GL     : ${glRenderer}`)
 
   await page.goto(URL, { waitUntil: 'load' })
   // ESMの読み込みが終わって検査用の穴が生えるまで待つ
@@ -165,6 +166,8 @@ try {
   if (probe.iterations < 1) problems.push('反復メッセージが1件も届いていない')
   if (probe.occupied < 1) problems.push('占有要素が0(形が出ていない)')
   if (probe.triangles < 1) problems.push('三角形が1枚も描かれていない(画面が空)')
+  if (/swiftshader|software|llvmpipe/i.test(glRenderer))
+    problems.push(`実GPUではなくソフトウェアラスタライザで描画している: ${glRenderer}`)
   if (problems.length > 0) {
     failed = problems
   }

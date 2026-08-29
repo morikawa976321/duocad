@@ -43,6 +43,7 @@ E_REF, NU_REF = 1.0, 0.3
 _C1 = E_REF / ((1.0 + NU_REF) * (1.0 - 2.0 * NU_REF))
 D00_REF = _C1 * (1.0 - NU_REF)  # 一軸ひずみ eps_xx=1 のときの eps^T D eps
 G_REF = E_REF / (2.0 * (1.0 + NU_REF))  # せん断 gamma_xy=1 のときの eps^T D eps
+D01_REF = _C1 * NU_REF  # ポアソン結合項。二軸ひずみでしか姿を現さない
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
@@ -101,6 +102,17 @@ def check_element_stiffness() -> None:
         f"u^T Ke u={e_shear:.12f} (理論値 {G_REF:.12f})",
     )
 
+    # 二軸ひずみ eps_xx = eps_yy = 1 → eps^T D eps = 2*D[0,0] + 2*D[0,1]
+    # 一軸とせん断だけでは D[0,1](ポアソン結合項)が式に現れず、そこを壊した実装が
+    # 素通りする。結合項を単独で炙り出すためにこの1件を足してある。
+    e_biaxial = energy(lambda x, y, z: (x, y, 0.0))
+    biaxial_ref = 2.0 * (D00_REF + D01_REF)
+    check(
+        "パッチ試験(二軸ひずみ・ポアソン結合項)",
+        abs(e_biaxial - biaxial_ref) < 1e-10 * biaxial_ref,
+        f"u^T Ke u={e_biaxial:.12f} (理論値 {biaxial_ref:.12f}, D[0,1]={D01_REF:.12f})",
+    )
+
     # 剛体移動・剛体回転はエネルギーを持たない
     e_trans = energy(lambda x, y, z: (1.0, 2.0, -3.0))
     e_rot = energy(lambda x, y, z: (-y, x, 0.0))
@@ -109,6 +121,7 @@ def check_element_stiffness() -> None:
 
     RESULTS["ke_axial"] = e_axial
     RESULTS["ke_shear"] = e_shear
+    RESULTS["ke_biaxial"] = e_biaxial
 
 
 # ---------------------------------------------------------------------------
