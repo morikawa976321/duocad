@@ -211,6 +211,52 @@ def test_a_round_edge_comes_back_curved_and_closed(session: Session) -> None:
         assert item["length"] == pytest.approx(2.0 * math.pi * 10.0, rel=1e-3)
 
 
+def test_small_radius_circle_still_gets_enough_points_from_angular_deflection(
+    session: Session,
+) -> None:
+    """小半径の円弧は**線形偏差だけでは粗くなる**——角度偏差が効いて初めて滑らかになる。
+
+    小半径ではsagitta(弦と弧の最大乖離)がすぐ`deviation`(既定0.2mm)を下回るため、
+    `GCPnts_QuasiUniformDeflection`(線形偏差のみ、修正前の実装)だと分割点がどんどん
+    減っていく——半径1mmの円は実測6点(六角形)まで落ち込んでいた。この修正で
+    `GCPnts_TangentialDeflection`(線形+角度)に replace した後は、角度偏差
+    `kernel.DEFAULT_ANGULAR_DEFLECTION`(ラジアン)1本で必要点数の下限が決まり、
+    半径に依存しなくなる。
+
+    下限は**マジックナンバーを埋めない**——満周(2π rad)を角度偏差で割った分割数
+    (切り上げ)+ 閉曲線の始点=終点を含めた+1、から導く。この式のまま
+    `DEFAULT_ANGULAR_DEFLECTION` を変えても検査が追随する。
+    """
+    minimum_points = math.ceil(2.0 * math.pi / kernel.DEFAULT_ANGULAR_DEFLECTION) + 1
+
+    counts_by_radius: dict[float, int] = {}
+    for radius in (1.0, 10.0):
+        sketch_id = session.sketch_create("XY")["sketch_id"]
+        session.add_circle(sketch_id, [0.0, 0.0], radius)
+        _select(session, [{"sketch": sketch_id, "index": 1}])
+        session.extrude(SIDE, mode="new")
+        cylinder = session.document.bodies[-1]
+
+        described = kernel.tessellate_edges(cylinder.shape, DEVIATION)
+        curved = [item for item in described if item["kind"] == "circle"]
+        assert curved, "円筒に円い辺が1本も無いのはおかしい"
+        counts = {len(item["points"]) // 3 for item in curved}
+        assert len(counts) == 1, f"半径{radius}mmの上下2つの円の点数が揃わない: {counts}"
+        (count,) = counts
+        assert count >= minimum_points, (
+            f"半径{radius}mmの円が角度偏差の下限{minimum_points}点を下回った"
+            f"(実際{count}点)。線形偏差だけの分割に戻っていないか"
+        )
+        counts_by_radius[radius] = count
+
+    # 角度偏差が主導する分割数は**半径に依存しない**(線形偏差だけなら半径が小さいほど
+    # 点数が減っていた——修正前の実測は半径1mmで6点、10mmで17点)。
+    assert counts_by_radius[1.0] == counts_by_radius[10.0], (
+        "半径によって分割点数が変わっている: 角度偏差ではなく線形偏差が支配的になっている"
+        f"疑いがある({counts_by_radius})"
+    )
+
+
 def test_tessellate_edges_rejects_an_empty_shape_and_a_bad_deviation(session: Session) -> None:
     """黙って空を返さない(§6予防6)。"""
     body, _ = _box(session)
