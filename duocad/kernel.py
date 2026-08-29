@@ -36,7 +36,7 @@ from OCP.BRepGProp import BRepGProp, BRepGProp_Face
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
 from OCP.BRepTools import BRepTools
-from OCP.GCPnts import GCPnts_AbscissaPoint, GCPnts_QuasiUniformDeflection
+from OCP.GCPnts import GCPnts_AbscissaPoint, GCPnts_TangentialDeflection
 from OCP.Geom import Geom_BezierCurve
 from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 from OCP.GProp import GProp_GProps
@@ -381,7 +381,9 @@ def _is_removed(source: Any, sub: "TopoDS_Shape") -> bool:
 # --------------------------------------------------------------------------------------
 #: 既定の線形偏差(mm)。write_stl と同じ「絶対」の偏差。
 DEFAULT_DEVIATION = 0.2
-#: 既定の角度偏差。曲面(穴の円筒)が多角形に見えない程度に細かくする。
+#: 既定の角度偏差(**ラジアン**。度ではない — OCCTのBRepMesh_IncrementalMesh/GCPnts_TangentialDeflection
+#: の角度偏差パラメータはラジアンで、既定は0.5rad(`IMeshTools_Parameters().Angle`で確認済み)。
+#: 0.35radは約20度)。曲面(穴の円筒)が多角形に見えない程度に細かくする。
 DEFAULT_ANGULAR_DEFLECTION = 0.35
 
 #: 面の同一性を「重心の一致」で判定するときの相対許容差(after_face_index の探索)。
@@ -1197,6 +1199,7 @@ def edge_index_of(shape: "TopoDS_Shape", edge: Any) -> int:
 def tessellate_edges(
     shape: "TopoDS_Shape",
     deviation: float = DEFAULT_DEVIATION,
+    angular_deflection: float = DEFAULT_ANGULAR_DEFLECTION,
 ) -> List[dict]:
     """辺を1始まりの添字つきの**折れ線**にする。
 
@@ -1211,14 +1214,25 @@ def tessellate_edges(
     (`_edge_map` の1始まり)。ここがずれると「指した辺と違う辺が丸まる」という、例外も出ない
     静かな事故になるので、添字は必ず `_edge_map` から取る。
 
-    折れ線は `GCPnts_QuasiUniformDeflection` で `deviation`(mm)以内に収める(面の三角形分割と
-    同じ偏差を渡せば、線が面から浮かない)。**分割に失敗した辺は端点だけの2点で返す**(黙って
+    折れ線は `GCPnts_TangentialDeflection` で `deviation`(mm、線形)と `angular_deflection`
+    (ラジアン、角度)の**両方**を満たすまで分割する。以前は `GCPnts_QuasiUniformDeflection`
+    (線形偏差のみ)を使っており、小半径の円弧は角度の制約が無いぶん分割数が2〜4点まで
+    落ち込んで多角形に見えていた(実測: 20mm立方体の全辺フィレットでr=0.5mmの円弧が2点=弦1本)。
+    `angular_deflection` の既定値 `DEFAULT_ANGULAR_DEFLECTION` は `tessellate()` が
+    `BRepMesh_IncrementalMesh` に渡すのと同じ値(ラジアン。OCCTの角度偏差パラメータは
+    ラジアンで、既定0.5rad ≈ 28.6度。`IMeshTools_Parameters().Angle` の既定値で確認済み)
+    なので、通常のソリッド表示と辺オーバーレイの粗さが揃う。
+    `GCPnts_TangentialDeflection` のコンストラクタは `(adaptor, angular, linear,
+    minNbPoints=2, ...)` の順で、`IsDone()` を持たない(常に何かしらの点列を作るか、
+    退化した曲線では例外を投げる)。**分割に失敗した辺は端点だけの2点で返す**(黙って
     落とすと、その辺だけ画面から消えて「指せない辺」になり原因が分からない)。
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot tessellate the edges of an empty shape")
     if not deviation > 0:
         raise ValueError(f"deviation must be positive (mm), got {deviation!r}")
+    if not angular_deflection > 0:
+        raise ValueError(f"angular_deflection must be positive, got {angular_deflection!r}")
 
     shape_map = _edge_map(shape)
     described: List[dict] = []
@@ -1226,9 +1240,15 @@ def tessellate_edges(
         edge = TopoDS.Edge_s(shape_map.FindKey(index))
         adaptor = BRepAdaptor_Curve(edge)
         points: List[float] = []
-        sampler = GCPnts_QuasiUniformDeflection(adaptor, float(deviation))
-        if sampler.IsDone() and sampler.NbPoints() >= 2:
-            for number in range(1, sampler.NbPoints() + 1):
+        try:
+            sampler = GCPnts_TangentialDeflection(
+                adaptor, float(angular_deflection), float(deviation)
+            )
+            n_points = sampler.NbPoints()
+        except Exception:  # noqa: BLE001  OCCTは退化した曲線で例外を投げることがある
+            n_points = 0
+        if n_points >= 2:
+            for number in range(1, n_points + 1):
                 point = sampler.Value(number)
                 points.extend([float(point.X()), float(point.Y()), float(point.Z())])
         else:
