@@ -49,7 +49,7 @@ from OCP.STEPControl import (
 )
 from OCP.StlAPI import StlAPI_Writer
 from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
-from OCP.TopExp import TopExp
+from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
 from OCP.TopTools import TopTools_IndexedMapOfShape, TopTools_ListOfShape
@@ -441,21 +441,10 @@ def tessellate(
     untriangulated: List[int] = []
     for index in range(1, shape_map.Extent() + 1):
         face = TopoDS.Face_s(shape_map.FindKey(index))
-        positions, indices = _face_triangles(face)
-        if not indices:
+        payload = _describe_face(face, index)
+        if not payload["indices"]:
             untriangulated.append(index)
-        area, centroid = _face_props(face)
-        faces.append(
-            {
-                "index": index,
-                "kind": classify_face(face),
-                "area": area,
-                "centroid": list(centroid),
-                "normal": list(_face_normal(face)),
-                "positions": positions,
-                "indices": indices,
-            }
-        )
+        faces.append(payload)
 
     if faces and len(untriangulated) == len(faces):
         raise ValueError(
@@ -468,6 +457,183 @@ def tessellate(
         "bbox": _bounding_box(faces),
         "faces": faces,
         "untriangulated": untriangulated,
+    }
+
+
+def _is_closed_shell(shape: "TopoDS_Shape") -> bool:
+    """**閉じた立体か**(すべての辺が2面以上に共有されているか)。
+
+    バックフェイスカリングの安全弁である。開いたシェル(板金の面1枚、STEPから来た
+    面だけの部品)では**裏を向いた面が本当に見えている**ので、法線とカメラの内積だけで
+    「裏だから粗くてよい」と決めてはいけない。閉じた立体でだけその判定を許す。
+
+    数え方は**面ごとの出現回数**であって、辺の一意な隣接面の数ではない ——
+    円筒のシーム辺は同じ1面に2回現れるので、一意な面で数えると閉じた円柱が
+    「開いている」と判定される。退化辺(極)は数えない(面を持たない)。
+    """
+    if shape is None or shape.IsNull():
+        return False
+    edge_map = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE, edge_map)
+    total_edges = edge_map.Extent()
+    if total_edges == 0:
+        return False
+    face_map = _face_map(shape)
+    if face_map.Extent() == 0:
+        return False
+    counts = [0] * (total_edges + 1)
+    for index in range(1, face_map.Extent() + 1):
+        explorer = TopExp_Explorer(face_map.FindKey(index), TopAbs_ShapeEnum.TopAbs_EDGE)
+        while explorer.More():
+            edge = TopoDS.Edge_s(explorer.Current())
+            if not BRep_Tool.Degenerated_s(edge):
+                slot = edge_map.FindIndex(edge)
+                if slot > 0:
+                    counts[slot] += 1
+            explorer.Next()
+    return all(count == 0 or count >= 2 for count in counts[1:])
+
+
+def _describe_face(face: Any, index: int) -> dict:
+    """1面ぶんの配りもの(三角形・分類・面積・重心・法線)。`tessellate` と選択的版で共有する。"""
+    positions, indices = _face_triangles(face)
+    area, centroid = _face_props(face)
+    return {
+        "index": index,
+        "kind": classify_face(face),
+        "area": area,
+        "centroid": list(centroid),
+        "normal": list(_face_normal(face)),
+        "positions": positions,
+        "indices": indices,
+    }
+
+
+def tessellate_selective(
+    shape: "TopoDS_Shape",
+    fine_faces: Optional[Iterable[int]] = None,
+    deviation: float = DEFAULT_DEVIATION,
+    angular_deflection: float = DEFAULT_ANGULAR_DEFLECTION,
+    coarse_deviation: Optional[float] = None,
+    coarse_angular_deflection: Optional[float] = None,
+) -> dict:
+    """**面ごとに粗さを変えて**三角形分割する(視錐台/バックフェイスによる選択的高精度化)。
+
+    `fine_faces` に入っている1始まりの面添字だけを `deviation` / `angular_deflection` で、
+    それ以外を `coarse_deviation` / `coarse_angular_deflection` で測る。
+    `fine_faces=None` は「全面を細かく」で、`tessellate()` と同じ測り方になる。
+
+    戻り値は `tessellate()` と同じ形に次を足したもの:
+
+        "deviation":        この配りものの中で**いちばん細かい**偏差[mm]
+        "coarse_deviation": 粗い側の偏差[mm]
+        "fine_face_count":  細かく測った面の数
+        "closed":           閉じた立体か(`_is_closed_shell`。バックフェイス判定の可否)
+        faces[i]["detail"]: "fine" | "coarse"
+
+    **2パスで測る**。1回の `BRepMesh_IncrementalMesh` に面ごとの偏差を渡す口がOCCTに無いので、
+    粗い面だけを集めたcompound・細かい面だけを集めたcompoundをそれぞれ測り、パスの間で
+    三角形を抜き出す。`BRepTools.Clean_s` を**パスごとに**呼ぶのは、前のパスの三角形が
+    残っていると `BRepMesh_IncrementalMesh` が「もう十分細かい」と判断して測り直さないため。
+
+    **分かっている代償(隙間)**: 細かい面と粗い面が**曲線の辺**を共有していると、辺の折れ線が
+    パスごとに別々に作られるので、境目に粗い側の偏差ぶんの隙間が開きうる。境目は
+    「視錐台の縁」と「シルエット」で、平面どうしの共有辺(直線)では起きない。
+    塞ぐには境界の1リングを細かい側へ含めるなどが要るが、**画面の縁の話**なので入れていない。
+    """
+    if shape is None or shape.IsNull():
+        raise ValueError("cannot tessellate an empty shape")
+    if not deviation > 0:
+        raise ValueError(f"deviation must be positive (mm), got {deviation!r}")
+    if not angular_deflection > 0:
+        raise ValueError(f"angular_deflection must be positive, got {angular_deflection!r}")
+
+    shape_map = _face_map(shape)
+    total = shape_map.Extent()
+    coarse_dev = float(deviation if coarse_deviation is None else coarse_deviation)
+    coarse_ang = float(
+        angular_deflection if coarse_angular_deflection is None else coarse_angular_deflection
+    )
+    # **粗い側が細かい側を下回らない**。逆転すると「見えていない面の方が細かい」になる。
+    coarse_dev = max(coarse_dev, float(deviation))
+    coarse_ang = max(coarse_ang, float(angular_deflection))
+
+    if fine_faces is None:
+        fine = set(range(1, total + 1))
+    else:
+        fine = {int(index) for index in fine_faces if 1 <= int(index) <= total}
+
+    # 1パスで済む場合は既存の道をそのまま通す(2つ目の経路を増やさない)。
+    if not fine:
+        result = tessellate(shape, coarse_dev, coarse_ang)
+    elif len(fine) == total or (
+        coarse_dev == float(deviation) and coarse_ang == float(angular_deflection)
+    ):
+        result = tessellate(shape, deviation, angular_deflection)
+    else:
+        result = _tessellate_split(
+            shape, shape_map, fine, float(deviation), float(angular_deflection), coarse_dev, coarse_ang
+        )
+
+    for face in result["faces"]:
+        face["detail"] = "fine" if face["index"] in fine else "coarse"
+    result["deviation"] = float(deviation) if fine else coarse_dev
+    result["coarse_deviation"] = coarse_dev
+    result["fine_face_count"] = len(fine)
+    result["closed"] = _is_closed_shell(shape)
+    return result
+
+
+def _tessellate_split(
+    shape: "TopoDS_Shape",
+    shape_map: "TopTools_IndexedMapOfShape",
+    fine: set,
+    deviation: float,
+    angular_deflection: float,
+    coarse_deviation: float,
+    coarse_angular_deflection: float,
+) -> dict:
+    """`tessellate_selective` の2パス本体。**粗い側 → 細かい側**の順で測って抜き出す。"""
+    total = shape_map.Extent()
+    coarse = set(range(1, total + 1)) - fine
+    described: Dict[int, dict] = {}
+    untriangulated: List[int] = []
+
+    for group_indices, dev, angle in (
+        (coarse, coarse_deviation, coarse_angular_deflection),
+        (fine, deviation, angular_deflection),
+    ):
+        if not group_indices:
+            continue
+        builder = BRep_Builder()
+        compound = TopoDS_Compound()
+        builder.MakeCompound(compound)
+        for index in sorted(group_indices):
+            builder.Add(compound, shape_map.FindKey(index))
+        # **毎パスで捨ててから測る**(残っていると「十分細かい」と見なされて測り直さない)。
+        BRepTools.Clean_s(shape)
+        mesh = BRepMesh_IncrementalMesh(compound, float(dev), False, float(angle), True)
+        if not mesh.IsDone():
+            raise ValueError(f"meshing failed for deviation={dev} (BRepMesh_IncrementalMesh)")
+        # **次のパスで Clean_s する前に**抜き出す。
+        for index in sorted(group_indices):
+            face = TopoDS.Face_s(shape_map.FindKey(index))
+            payload = _describe_face(face, index)
+            if not payload["indices"]:
+                untriangulated.append(index)
+            described[index] = payload
+
+    faces = [described[index] for index in range(1, total + 1)]
+    if faces and len(untriangulated) == len(faces):
+        raise ValueError(
+            f"三角形分割が1面も取れなかった(deviation={deviation}, coarse={coarse_deviation})"
+        )
+    return {
+        "deviation": float(deviation),
+        "face_count": len(faces),
+        "bbox": _bounding_box(faces),
+        "faces": faces,
+        "untriangulated": sorted(untriangulated),
     }
 
 

@@ -207,7 +207,12 @@ class Session:
         """1Bodyの頂点の座標(`DocumentView.vertices`)。"""
         return self.view.vertices(body_id)
 
-    def set_view_resolution(self, world_per_pixel: float, size_hint: float = 0.0) -> bool:
+    def set_view_resolution(
+        self,
+        world_per_pixel: float,
+        size_hint: float = 0.0,
+        focus=None,
+    ) -> bool:
         """ビューポートのズームに合わせて目標のテセレーション精度を決め直す。
 
         **文書は一切変わらない**(操作ログにもundoにも載らず、`applied` も出ない)。
@@ -216,8 +221,11 @@ class Session:
 
         `self.deviation`(セッションの土台。STL書き出しが使う)は**動かさない** ——
         書き出す形の粗さが画面のズームで変わってはいけない。
+
+        `focus` は face単位の高精度化(`{body_id: [面添字]}`)。省略すれば全面が細かい側になる
+        (`DocumentView.set_view_resolution`)。
         """
-        return self.view.set_view_resolution(world_per_pixel, size_hint)
+        return self.view.set_view_resolution(world_per_pixel, size_hint, focus)
 
     def body_meta(self, body) -> dict:
         """1Bodyぶんの軽量な状態(`DocumentView.body_meta`)。MCPの `bodies[]` もここを通る。"""

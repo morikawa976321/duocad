@@ -389,6 +389,11 @@
   // ---------------------------------------------------------------- コアからの状態
   function handleState(next: ServerState, changed: BodyGeometry[], applied: Applied | null): void {
     model = next
+    // **状態が1通届くたびに1つ増える番号**(実機検査のための穴。`__duocad.stateEpoch`)。
+    // これが無いと「サーバの往復がまだ終わっていない」と「もう何も変わらない」を
+    // 外から区別できず、**要求が出ていく前の画面を『落ち着いた』と読む**検査になる
+    // (2026-08-30に実際にそう読んで、入りと切りが同じ値に見えた)。
+    stateEpoch += 1
 
     // 差分更新: 版が変わったBodyだけをビューポートへ渡す。27部品のうち1つを押し出しても
     // 描き直すのはその1つ(サーバ側の差分送信をここで無駄にしない。§2)。
@@ -1110,9 +1115,13 @@
    * 画面の都合の連絡なので、切れている間にホイールを回しただけで「操作を送れなかった」の
    * 札が出るのは誤報である。繋ぎ直したときは下の `$effect` が送り直す。
    */
-  function sendViewResolution(resolution: { worldPerPixel: number; sizeHint: number }): void {
+  function sendViewResolution(resolution: {
+    worldPerPixel: number
+    sizeHint: number
+    focus?: Record<string, number[] | null> | null
+  }): void {
     if (status !== 'open') return
-    session.setViewResolution(resolution.worldPerPixel, resolution.sizeHint)
+    session.setViewResolution(resolution.worldPerPixel, resolution.sizeHint, resolution.focus ?? null)
   }
 
   // 繋がった(繋ぎ直した)ら、今の見え方をもう一度知らせる。**サーバ側の目標精度は
@@ -1138,6 +1147,9 @@
   $effect(() => {
     viewport?.setFov(fov)
   })
+
+  /** 状態配信を受けた回数。**実機検査が往復の完了を知るための穴**(`handleState` が増やす)。 */
+  let stateEpoch = $state(0)
 
   /** 選択の先頭の面。**テスト用フックの `selected` だけが使う**(互換のための穴)。 */
   const firstFace = $derived(selectedFaces[0] ?? null)
@@ -1181,6 +1193,11 @@
       // 可変解像度。**実機検査が「寄ったら本当に細かくなったか」を数値で見るための穴**
       // (見た目の滑らかさは目でしか分からないので、代わりに目標偏差と分割数を出す)。
       viewResolution: () => viewport?.viewResolution() ?? null,
+      // 状態配信を受けた回数。**測り直しの往復が終わったかを外から見る唯一の手段**。
+      stateEpoch,
+      // face単位の高精度化(視錐台+バックフェイスカリング)を切る/入れる穴。
+      // **導入前後を同じ走行の中で比べる**ために要る(`smoke-face-culling.mjs`)。
+      setFaceCulling: (enabled: boolean) => viewport?.setFaceCulling(enabled),
       sketchPolylineCounts: () => viewport?.sketchPolylineCounts() ?? null,
       projectPoint: (point: [number, number, number]) => viewport?.projectPoint(point) ?? null,
       // C: スケッチ。**実機検査が本物のクリックで描く**ための穴

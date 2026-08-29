@@ -563,7 +563,7 @@ export interface Session {
    * @param worldPerPixel 画面1画素ぶんの世界長さ[mm]
    * @param sizeHint いま見えているものの外接対角[mm](上下限の丸めにだけ使う)
    */
-  setViewResolution(worldPerPixel: number, sizeHint: number): void
+  setViewResolution(worldPerPixel: number, sizeHint: number, focus?: Record<string, number[] | null> | null): void
   undo(): void
   redo(): void
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
@@ -814,8 +814,17 @@ export function createSession(hooks: SessionHooks): Session {
     getVertices(bodyId) {
       send({ cmd: 'get_vertices', body_id: bodyId })
     },
-    setViewResolution(worldPerPixel, sizeHint) {
-      send({ cmd: 'set_view_resolution', world_per_pixel: worldPerPixel, size_hint: sizeHint })
+    setViewResolution(worldPerPixel, sizeHint, focus) {
+      if (focus == null) {
+        send({ cmd: 'set_view_resolution', world_per_pixel: worldPerPixel, size_hint: sizeHint })
+      } else {
+        send({
+          cmd: 'set_view_resolution',
+          world_per_pixel: worldPerPixel,
+          size_hint: sizeHint,
+          focus,
+        })
+      }
     },
     undo() {
       send({ cmd: 'undo' })

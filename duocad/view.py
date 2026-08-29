@@ -74,6 +74,15 @@ class DocumentView:
         #: `kernel.DEFAULT_ANGULAR_DEFLECTION` を使う(ズーム連動を入れる前と同じ)。
         #: **画面の設定であって文書の状態ではない** —— 操作ログにもundoにも載らない。
         self._view_resolution: Optional[tuple] = None
+        #: **画面外・背を向けた面に使う粗さ**(`(線形偏差[mm], 角度偏差[rad])`)。
+        #: `duocad/resolution.py` の `coarse_view_resolution` が決める値で、
+        #: **ズームに依存しない**(モデルの大きさだけで決まる)。`None` は分けないという意味。
+        self._view_coarse_resolution: Optional[tuple] = None
+        #: **どの面を細かく測るか**(`{body_id: frozenset(1始まりの面添字)}`)。
+        #: `None` は「画面から指定が無い」= 全Body全面を細かく(ズーム連動を入れた直後と同じ)。
+        #: dictに**居ないBody**も全面を細かく扱う。空のfrozensetは「そのBodyは全面粗く」。
+        #: **画面の設定であって文書の状態ではない** —— 操作ログにもundoにも載らない。
+        self._view_focus: Optional[dict] = None
         #: **`Session.warnings` と同じリストオブジェクト**を共有する(2つの持ち主を作らない)。
         #: 吸い出す口は `Session.take_warnings()` にだけ置いてあり、そちらは**中身を空にする**
         #: (新しいリストへ束ね直さない —— 束ね直すと、ここが古いリストへ書き続ける)。
@@ -101,7 +110,94 @@ class DocumentView:
             return kernel.DEFAULT_ANGULAR_DEFLECTION
         return self._view_resolution[1]
 
-    def set_view_resolution(self, world_per_pixel: float, size_hint: float = 0.0) -> bool:
+    def _body_focus(self, body_id: str) -> Optional[frozenset]:
+        """そのBodyで**細かく測る面**の集合。`None` は全面(指定が無い/そのBodyの指定が無い)。"""
+        if self._view_focus is None:
+            return None
+        return self._view_focus.get(body_id, None)
+
+    def body_recipe(self, body_id: str) -> tuple:
+        """そのBodyを**どう測るか**の実効レシピ。キャッシュの鍵であり、版の鍵でもある。
+
+        **ここが「画面外のBodyを配り直さない」の要である。** 全面を粗く測るBodyのレシピには
+        細かい側の値が入らないので、寄っても引いてもレシピが変わらず、
+        `body_revision` が上がらず、`delta()` が「変わっていない」と判断して何も送らない。
+        逆に、細かい側の値をレシピへ無条件に入れると**画面に出ていないBodyまで
+        ズームのたびに配り直す**(それが2026-08-30に14.5秒かかっていた形である)。
+        """
+        fine = self._body_focus(body_id)
+        if fine is None:
+            return ("all", self._view_resolution)
+        if not fine:
+            return ("coarse", self._view_coarse_resolution or self._view_resolution)
+        return (
+            "mixed",
+            self._view_resolution,
+            self._view_coarse_resolution,
+            tuple(sorted(fine)),
+        )
+
+    def _tessellation_args(self, body_id: str) -> tuple:
+        """`kernel.tessellate_selective` に渡す `(fine_faces, dev, ang, coarse_dev, coarse_ang)`。"""
+        fine = self._body_focus(body_id)
+        coarse = self._view_coarse_resolution
+        if coarse is None:
+            # 分けない(`size_hint` が無い・まだ画面から届いていない)。
+            return (fine, self.view_deviation, self.view_angular_deflection, None, None)
+        return (
+            fine,
+            self.view_deviation,
+            self.view_angular_deflection,
+            coarse[0],
+            coarse[1],
+        )
+
+    def body_view_resolution(self, body_id: str) -> tuple:
+        """そのBody**全体**に使う `(偏差, 角度偏差)`。面ごとに分けられない配りもの(辺)が使う。
+
+        細かい面が1つでもあれば細かい側、1つも無ければ粗い側。**辺は面ごとに分けない** ——
+        辺が要るのはフィレット/面取りを起動している1Bodyだけで、そこは必ず画面の中にある。
+        """
+        fine = self._body_focus(body_id)
+        if fine is None or fine or self._view_coarse_resolution is None:
+            return (self.view_deviation, self.view_angular_deflection)
+        return self._view_coarse_resolution
+
+    @staticmethod
+    def _normalize_focus(focus) -> Optional[dict]:
+        """画面から届いた `focus` を `{body_id: frozenset(int)}` へ正規化する(不正は捨てる)。
+
+        **信じない**: 型が違う値・整数でない添字・負の添字は黙って落とす。落とした結果が
+        空集合になれば「そのBodyは全面粗く」になるだけで、形が壊れることはない
+        (粗く測るのは**測り方**であって、面が消えるわけではない)。
+        """
+        if focus is None:
+            return None
+        if not isinstance(focus, dict):
+            return None
+        normalized: dict = {}
+        for body_id, indices in focus.items():
+            if not isinstance(body_id, str):
+                continue
+            if indices is None:
+                continue  # **明示的な「全面細かく」**。キーごと置かない
+            if not isinstance(indices, (list, tuple, set, frozenset)):
+                continue
+            picked = set()
+            for value in indices:
+                if isinstance(value, bool) or not isinstance(value, int):
+                    continue
+                if value >= 1:
+                    picked.add(value)
+            normalized[body_id] = frozenset(picked)
+        return normalized
+
+    def set_view_resolution(
+        self,
+        world_per_pixel: float,
+        size_hint: float = 0.0,
+        focus=None,
+    ) -> bool:
         """画面の見え方から目標精度を決め直す。**変わったら True**(呼び出し側の再配信の合図)。
 
         受け取るのは**カメラの事実**(画面1画素ぶんの世界長さ[mm]と、モデルの外接対角[mm])
@@ -109,12 +205,22 @@ class DocumentView:
         式そのものは `duocad/resolution.py` にあり、ブラウザ側の
         `web/src/adaptiveResolution.ts` と定数まで一致している(検査あり)。
 
-        **変わったときはキャッシュを捨てる**。`geometry()` / `edges()` / `_sketch_state` の
-        キャッシュはどれも「形状が同じなら測り直さない」で引いており、粗さは鍵に入って
-        いない —— 捨てないと、ズームしても前の粗さのメッシュを配り続ける。
+        `focus` は **face単位の高精度化**(2026-08-30)。`{body_id: [1始まりの面添字]}` で、
+        **入っている面だけを細かく、残りを粗く**測る。キーの無いBody・`None` は「全面細かく」
+        (＝この引数を渡さない旧クライアントは今までどおり動く)。空リストは「全面粗く」。
+        判定するのは画面側である —— 視錐台に入っているか・カメラに背を向けているかは
+        **カメラを持っている側にしか分からない**ので、サーバは受け取った事実に従うだけにする
+        (`web/src/faceCulling.ts`)。粗い側の値は `resolution.coarse_view_resolution` が
+        決める **ズームに依存しない**粗さで、これが後述のキャッシュ据え置きを成立させている。
 
-        版(`body_revision`)にも粗さが入る(下記)ので、差分配信は自動的に
-        「全Bodyのgeometryを送り直す」になる。
+        **キャッシュは捨てない**(2026-08-30に改めた)。`geometry()` / `edges()` の鍵には
+        `body_recipe()`(実効レシピ)が入っているので、レシピの変わらないBody —— つまり
+        **画面外で粗いまま据え置かれるBody** —— は測ったものがそのまま生き、
+        版も上がらないので `delta()` が何も送らない。ここで一括で捨てると、
+        face単位に分けた意味が丸ごと消える。粗さだけを見て捨てていたのが、
+        27部品2835面で往復14.5秒かかっていた形である
+        (engine [[one-global-deviation-costs-on-large-assemblies]])。
+        スケッチはブラウザ側で折る経路で面を持たないので、細かい側が動いたときだけ捨てる。
 
         **目標精度は文書に1つ**(接続ごとには持たない)。これは**単一ブラウザ前提**
         (2026-08-27本人決定。engine [[duocad-assumes-a-single-browser]] / `Server` の
@@ -124,12 +230,27 @@ class DocumentView:
         (そのときは `DocumentView` のキャッシュも接続ごとになる)。
         """
         target = resolution.view_resolution(world_per_pixel, size_hint)
-        if self._view_resolution == target:
+        coarse = resolution.coarse_view_resolution(world_per_pixel, size_hint)
+        if coarse == target:
+            coarse = None  # 分ける意味が無い(`size_hint` が無い/引ききっている)
+        normalized = self._normalize_focus(focus)
+        if (
+            self._view_resolution == target
+            and self._view_coarse_resolution == coarse
+            and self._view_focus == normalized
+        ):
             return False
+        resolution_changed = self._view_resolution != target
         self._view_resolution = target
-        self._geometry_cache.clear()
-        self._edge_cache.clear()
-        self._sketch_cache.clear()
+        self._view_coarse_resolution = coarse
+        self._view_focus = normalized
+        # **geometry / edges のキャッシュはここでは捨てない。** 鍵に `body_recipe()` が
+        # 入っているので、レシピの変わっていないBody(=画面外で粗いままのBody)は
+        # 測ったものがそのまま生き、`delta()` も送らない。ここで一括で捨てると、
+        # face単位に分けた意味が丸ごと消える(全Bodyを毎回測り直すことになる)。
+        if resolution_changed:
+            # スケッチはブラウザ側で折るので面ごとの粗さを持たない(細かい側で1つ)。
+            self._sketch_cache.clear()
         return True
 
     # ---------------------------------------------------------------- 文書の差し替え
@@ -152,6 +273,8 @@ class DocumentView:
         self._volume_cache.clear()
         self._sketch_cache.clear()
         self._revision_state.clear()
+        # **どの面を細かく測るかも捨てる**。面の添字は文書が変われば別のものを指す。
+        self._view_focus = None
 
     # ---------------------------------------------------------------- 状態
     def state(self, *, can_undo: bool, applied_count: int, previewing: bool) -> dict:
@@ -330,7 +453,7 @@ class DocumentView:
         # **粗さも「状態」のうち**(2026-08-30、可変解像度)。ズームで目標精度が変われば
         # 配るべきgeometryも変わるので、ここに入れておかないと差分配信が
         # 「版が同じ=変わっていない」と判断して**古い粗さのメッシュを画面に残す**。
-        key = (id(body.shape), body.visible, self._view_resolution)
+        key = (id(body.shape), body.visible, self.body_recipe(body_id))
         if self._revision_state.get(body_id) != key:
             self._revision_state[body_id] = key
             self._revision_counter[body_id] = self._revision_counter.get(body_id, 0) + 1
@@ -345,17 +468,19 @@ class DocumentView:
         body = self.document.get_body(body_id)
         if not body.visible:
             raise ValueError(f"body {body_id!r} is not visible: 不可視Bodyは測らない")
+        recipe = self.body_recipe(body_id)
         cached = self._geometry_cache.get(body_id)
-        if cached is not None and cached[0] is body.shape:
-            return cached[1]
-        result = kernel.tessellate(
-            body.shape, self.view_deviation, self.view_angular_deflection
+        if cached is not None and cached[0] is body.shape and cached[1] == recipe:
+            return cached[2]
+        fine, deviation, angular, coarse_deviation, coarse_angular = self._tessellation_args(body_id)
+        result = kernel.tessellate_selective(
+            body.shape, fine, deviation, angular, coarse_deviation, coarse_angular
         )
         if result["untriangulated"]:
             self.warnings.append(
                 f"三角形分割が取れなかった面({body.name}): {result['untriangulated']}(画面に出ません)"
             )
-        self._geometry_cache[body_id] = (body.shape, result)
+        self._geometry_cache[body_id] = (body.shape, recipe, result)
         return result
 
     def edges(self, body_id: str) -> dict:
@@ -380,14 +505,13 @@ class DocumentView:
         if not body.visible:
             raise ValueError(f"body {body_id!r} is not visible: 隠れているものの辺は指せない")
         revision = self.body_revision(body_id)
+        edge_deviation, edge_angular = self.body_view_resolution(body_id)
         cached = self._edge_cache.get(body_id)
-        if cached is not None and cached[0] is body.shape:
-            described = cached[1]
+        if cached is not None and cached[0] is body.shape and cached[1] == (edge_deviation, edge_angular):
+            described = cached[2]
         else:
-            described = kernel.tessellate_edges(
-                body.shape, self.view_deviation, self.view_angular_deflection
-            )
-            self._edge_cache[body_id] = (body.shape, described)
+            described = kernel.tessellate_edges(body.shape, edge_deviation, edge_angular)
+            self._edge_cache[body_id] = (body.shape, (edge_deviation, edge_angular), described)
         return {"body_id": body_id, "revision": revision, "edges": described}
 
     def vertices(self, body_id: str) -> dict:

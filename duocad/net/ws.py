@@ -390,9 +390,16 @@ class Server:
             # するときに何を変えるかは `DocumentView.set_view_resolution` の docstring)。
             # 変わらなかったときは何も送らない —— ズーム操作は連続で飛んでくるので、
             # 同じ値での再配信を許すと27部品ぶんのメッシュが無駄に流れる。
+            # `focus` は **face単位**の高精度化(2026-08-30)。`{body_id: [1始まりの面添字]}` で
+            # 「視錐台に入っている/カメラに正面を向けている面」だけを細かく測らせる。
+            # **判定は画面側にしか作れない**(カメラを持っているのがそちらだから)ので、
+            # ここは受け取った事実を渡すだけにする。省略・不正な値なら全面が細かい側になり、
+            # 2026-08-29の可変解像度と同じ挙動に戻る(旧クライアント互換)。
             elif command == "set_view_resolution":
                 changed = self.session.set_view_resolution(
-                    message["world_per_pixel"], message.get("size_hint") or 0.0
+                    message["world_per_pixel"],
+                    message.get("size_hint") or 0.0,
+                    message.get("focus"),
                 )
                 if changed:
                     await self._push(connection, applied=None)

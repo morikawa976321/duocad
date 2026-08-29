@@ -114,3 +114,42 @@ def view_resolution(world_per_pixel: float, size_hint: float = 0.0) -> tuple:
         return (DEFAULT_DEVIATION, DEFAULT_ANGULAR_DEFLECTION)
     deviation = clamp_deviation(TOLERANCE_PIXELS * float(world_per_pixel), size_hint)
     return (deviation, angular_for_deviation(deviation))
+
+
+#: 「引いた視点」を代表させる画面の高さ[画素]。**画面外・背を向けた面に使う粗さ**
+#: (`coarse_view_resolution`)は、モデル全体がこの画素数に収まる程度に引いた視点の粗さと
+#: 定義する。**ズームに依存しない**のがこの定義の目的で、寄っても粗い側の値が動かないため
+#: `DocumentView` のキャッシュと版がそのまま生き、画面外のBodyは配り直しすら起きない。
+#:
+#: 512という値は「全体を収めた視点でこれまで配っていた粗さ」に合わせてある(PCケースの
+#: 外接対角 約600mm・1280x860 の実測で 1画素=1.11mm・目標偏差0.39mm。
+#: 600/512 = 1.17mm でほぼ一致する)。**細かくすると画面外の面まで測り直して重くなり、
+#: 粗くすると画面の縁で形が別物になる**ので、ここは実測に紐づく定数である。
+COARSE_REFERENCE_PIXELS = 512.0
+
+
+def coarse_view_resolution(world_per_pixel: float, size_hint: float = 0.0) -> tuple:
+    """**視錐台の外・カメラに背を向けた面**に使う `(deviation[mm], angular[rad])`。
+
+    `view_resolution` と同じ変換式を、**「モデル全体が `COARSE_REFERENCE_PIXELS` 画素に
+    収まる引き」の1画素**に対して適用する。ズームで動かないので、深く寄っても
+    「見えていない側」の粗さは変わらない = 測り直しも配り直しも起きない。
+
+    **細かい側より細かくはしない**(`max`)。引いた状態では `world_per_pixel` の方が
+    大きくなりうるので、そのときは細かい側の値をそのまま採る —— 逆転すると
+    「画面外の方が細かい」という無意味な状態になる。
+
+    `size_hint`(モデルの外接対角[mm])が無い/非正なら**分けられない**ので、
+    細かい側と同じ値を返す(＝実質的に従来どおり全面を同じ粗さで測る)。
+    """
+    fine = view_resolution(world_per_pixel, size_hint)
+    if not math.isfinite(size_hint) or size_hint <= 0.0:
+        return fine
+    if not math.isfinite(world_per_pixel) or world_per_pixel <= 0.0:
+        return fine
+    coarse_per_pixel = max(float(world_per_pixel), float(size_hint) / COARSE_REFERENCE_PIXELS)
+    coarse = view_resolution(coarse_per_pixel, size_hint)
+    # 丸めの上下限が絡むので、**値そのものでも**細かい側を下回らせない。
+    if coarse[0] < fine[0]:
+        return fine
+    return coarse
