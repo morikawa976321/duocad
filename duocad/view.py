@@ -115,6 +115,13 @@ class DocumentView:
 
         版(`body_revision`)にも粗さが入る(下記)ので、差分配信は自動的に
         「全Bodyのgeometryを送り直す」になる。
+
+        **目標精度は文書に1つ**(接続ごとには持たない)。これは**単一ブラウザ前提**
+        (2026-08-27本人決定。engine [[duocad-assumes-a-single-browser]] / `Server` の
+        docstring「同時編集は前提にしない」)に乗った選択である —— 2つのブラウザが別々の
+        ズームで開いていれば、後から来た方の粗さで両方が測り直され、先客は自分のカメラに
+        合わない粗さのまま残る。**同時編集を仕様にするなら、ここを接続ごとに分ける**
+        (そのときは `DocumentView` のキャッシュも接続ごとになる)。
         """
         target = resolution.view_resolution(world_per_pixel, size_hint)
         if self._view_resolution == target:

@@ -19,6 +19,7 @@ import asyncio
 import json
 import math
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -91,6 +92,117 @@ def test_the_conversion_constants_match_between_python_and_typescript() -> None:
     assert not mismatched, (
         "duocad/resolution.py と web/src/adaptiveResolution.ts の定数が食い違う"
         f"(名前 -> (Python, TS)): {mismatched}"
+    )
+
+
+# --------------------------------------------------------------------------------------
+# 1b. 定数だけでなく**式**が2つの言語で同じ
+# --------------------------------------------------------------------------------------
+#: TS側を実際に評価する口(`tests/eval_adaptive_resolution.mjs` のdocstring)。
+TS_EVALUATOR = Path(__file__).resolve().parent / "eval_adaptive_resolution.mjs"
+
+#: 非有限をJSONで運ぶときの綴り(JSONに非有限の数値リテラルが無いため)。
+_NON_FINITE = {"NaN": float("nan"), "Infinity": float("inf"), "-Infinity": float("-inf")}
+
+
+def _to_float(value) -> float:
+    return _NON_FINITE[value] if isinstance(value, str) else float(value)
+
+
+def _equivalence_cases() -> list:
+    """突き合わせる入力の組。**表を手で書かない** —— 上下限は定数から導く。
+
+    含めるのは(a)クランプの境界のすぐ内・ちょうど・すぐ外、(b)`DEFAULT_DEVIATION` に
+    ちょうど落ちる点(角度偏差が既定へ戻る折り返し)、(c)桁をまたぐ極端値、(d)0近傍と
+    非有限。**境界を跨がない値だけを並べると、クランプの向きを間違えても両方が同じに
+    間違えたときにしか落ちない**ので、必ず両側を踏む。
+    """
+    cases: list = []
+    for size in (0.0, 0.01, 1.0, 20.0, 620.0, 10_000.0):
+        low = max(resolution.DEVIATION_MIN_ABS, size * resolution.DEVIATION_MIN_RELATIVE)
+        high = max(
+            low,
+            min(resolution.DEVIATION_MAX_ABS, size * resolution.DEVIATION_MAX_RELATIVE)
+            if size > 0
+            else resolution.DEVIATION_MAX_ABS,
+        )
+        for edge in (low, high, kernel.DEFAULT_DEVIATION):
+            # この `world_per_pixel` でちょうど `edge` になる、を中心に前後へ振る。
+            base = edge / resolution.TOLERANCE_PIXELS
+            for factor in (0.5, 0.999999, 1.0, 1.000001, 2.0):
+                cases.append([base * factor, size])
+        for extreme in (1.0e-12, 1.0e-6, 1.0, 1.0e6, 1.0e12):
+            cases.append([extreme, size])
+        for bad in (0.0, -1.0, "NaN", "Infinity", "-Infinity"):
+            cases.append([bad, size])
+    # `size_hint` 側の異常値(こちらは比の上下限を使わない経路へ落ちる)。
+    for bad_size in (-1.0, "NaN", "Infinity"):
+        cases.append([0.05, bad_size])
+    return cases
+
+
+def _evaluate_in_typescript(cases: list) -> list:
+    """TS側の実装を **node で実際に走らせて** 評価する(ソースの文字列比較はしない)。
+
+    **skipしない** —— 足場が無いときのskipは無人実行では緑と区別が付かず、
+    「式の一致を誰も見ていない」状態をそのまま通してしまう。
+    """
+    assert TS_EVALUATOR.exists(), f"評価の口が無い: {TS_EVALUATOR}"
+    try:
+        completed = subprocess.run(
+            ["node", str(TS_EVALUATOR)],
+            input=json.dumps(cases).encode("utf-8"),
+            capture_output=True,
+            cwd=str(REPO_ROOT),
+            timeout=120,
+        )
+    except FileNotFoundError as error:  # noqa: PERF203
+        raise AssertionError(
+            "node が見つからない。TS側の式を評価できないので、両言語の一致を検査できない"
+        ) from error
+    if completed.returncode != 0:
+        raise AssertionError(
+            "TS側の評価に失敗した(Nodeが .ts を読めない可能性がある。23.6以降なら既定で読める):"
+            + completed.stderr.decode("utf-8", "replace")
+        )
+    return json.loads(completed.stdout.decode("utf-8"))
+
+
+def test_the_conversion_formula_matches_between_python_and_typescript() -> None:
+    """**定数ではなく式そのもの**が2つの言語で同じ値を出す。
+
+    定数の一致(上の検査)だけでは、`sqrt` を落とす・掛け算を足し算にする・クランプの
+    向きを入れ替える、といった**式の形の食い違い**が全部素通りする。素通りすると、
+    同じ画面でスケッチの円(ブラウザで折る)とソリッド・辺(サーバで折る)の粗さがずれる ——
+    このタスクが直した症状そのものが、定数が揃ったまま再発しうる。
+
+    比較は**厳密一致**。四則と `sqrt` はIEEE754で正しく丸められ、JSONの往復は倍精度を
+    そのまま運ぶので、桁が1つでも違えば式が違う。
+    """
+    cases = _equivalence_cases()
+    assert len(cases) >= 100, f"突き合わせる入力が少なすぎる: {len(cases)}件"
+
+    from_ts = _evaluate_in_typescript(cases)
+    assert len(from_ts) == len(cases), "TS側が返した件数が合わない"
+
+    mismatched = []
+    for (raw_per_pixel, raw_size), ts_values in zip(cases, from_ts):
+        per_pixel = _to_float(raw_per_pixel)
+        size = _to_float(raw_size)
+        deviation, angular = resolution.view_resolution(per_pixel, size)
+        python_values = [
+            deviation,
+            angular,
+            resolution.clamp_deviation(per_pixel, size),
+            resolution.angular_for_deviation(per_pixel),
+        ]
+        if python_values != ts_values:
+            mismatched.append((raw_per_pixel, raw_size, python_values, ts_values))
+
+    assert not mismatched, (
+        "duocad/resolution.py と web/src/adaptiveResolution.ts の**式**が食い違う"
+        f"({len(mismatched)}/{len(cases)}件。(world_per_pixel, size_hint, Python, TS)): "
+        f"{mismatched[:5]}"
     )
 
 
