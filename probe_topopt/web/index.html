@@ -35,9 +35,10 @@
   import * as THREE from 'three';
   import { OrbitControls } from './vendor/three/OrbitControls.js';
 
-  // WebSocketのポート。**server.py 側を PROBE_WS_PORT で動かしたとき、ここが8766に
+  // WebSocketのポート。**server.py 側を PROBE_WS_PORT で動かしたとき、ここが8776に
   // 固定だと画面だけ古いポートを叩いて黙って繋がらない**ので `?ws=<番号>` で上書きできる。
-  const WS_PORT = new URLSearchParams(location.search).get('ws') ?? '8766';
+  // 既定が8776なのは、8765/8766を duocad 本体が使っているため。
+  const WS_PORT = new URLSearchParams(location.search).get('ws') ?? '8776';
   const WS_URL = `ws://127.0.0.1:${WS_PORT}`;
   const runBtn = document.getElementById('run');
 

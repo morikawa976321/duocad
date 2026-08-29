@@ -29,9 +29,9 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const DUOCAD = dirname(HERE)
 const PYTHON = join(DUOCAD, '.venv', 'Scripts', 'python.exe')
 const OUT = join(HERE, 'screenshots', 'result.png')
-const HTTP_PORT = Number(process.env.PROBE_HTTP_PORT ?? 8765)
-const WS_PORT = Number(process.env.PROBE_WS_PORT ?? 8766)
-// `?ws=` を必ず付ける。**付けないと画面は既定の8766を叩き、ポートを変えたときだけ
+const HTTP_PORT = Number(process.env.PROBE_HTTP_PORT ?? 8775)
+const WS_PORT = Number(process.env.PROBE_WS_PORT ?? 8776)
+// `?ws=` を必ず付ける。**付けないと画面は既定の8776を叩き、ポートを変えたときだけ
 // 「接続が切断されました」で静かに落ちる。**
 const URL = `http://127.0.0.1:${HTTP_PORT}/?ws=${WS_PORT}`
 

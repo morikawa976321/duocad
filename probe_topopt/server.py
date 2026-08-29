@@ -18,8 +18,12 @@ import simp
 _ROOT = Path(__file__).resolve().parent
 _WEB_DIR = _ROOT / "web"
 _HOST = "127.0.0.1"
-_HTTP_PORT = int(os.environ.get("PROBE_HTTP_PORT", "8765"))
-_WS_PORT = int(os.environ.get("PROBE_WS_PORT", "8766"))
+# **8765/8766 を使わない。** そこは duocad 本体が使っている
+# (8765 = WebSocket、8766 = 静的配信 + /mcp。本体の README「ポート」節)。
+# 同じ番号にすると、本体が動いている間はこのプローブが起動せず、逆に
+# プローブを先に立てると**本体の起動が黙って失敗する**。
+_HTTP_PORT = int(os.environ.get("PROBE_HTTP_PORT", "8775"))
+_WS_PORT = int(os.environ.get("PROBE_WS_PORT", "8776"))
 
 
 class _StaticHandler(SimpleHTTPRequestHandler):
