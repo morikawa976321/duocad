@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>probe topopt</title>
+  <!-- ブラウザが勝手に取りに行く /favicon.ico の404をログに残さないための空アイコン -->
+  <link rel="icon" href="data:,">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a12; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #run {
+      position: fixed;
+      left: 12px;
+      top: 12px;
+      z-index: 10;
+      padding: 8px 16px;
+      font-size: 14px;
+      cursor: pointer;
+      border: 1px solid #556;
+      border-radius: 4px;
+      background: rgba(20, 24, 36, 0.9);
+      color: #eef;
+    }
+    #run:disabled { opacity: 0.55; cursor: default; }
+  </style>
+  <script type="importmap">
+  {"imports": {"three": "./vendor/three/three.module.js"}}
+  </script>
+</head>
+<body>
+  <button id="run" type="button">最適化を実行</button>
+  <script type="module">
+  import * as THREE from 'three';
+  import { OrbitControls } from './vendor/three/OrbitControls.js';
+
+  // WebSocketのポート。**server.py 側を PROBE_WS_PORT で動かしたとき、ここが8766に
+  // 固定だと画面だけ古いポートを叩いて黙って繋がらない**ので `?ws=<番号>` で上書きできる。
+  const WS_PORT = new URLSearchParams(location.search).get('ws') ?? '8766';
+  const WS_URL = `ws://127.0.0.1:${WS_PORT}`;
+  const runBtn = document.getElementById('run');
+
+  const probe = {
+    state: 'idle',
+    lastIter: null,
+    iterations: [],
+    error: null,
+  };
+  window.__probe = probe;
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  document.body.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a0a12);
+
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 5000);
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x333344, 0.65));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.85);
+  dirLight.position.set(2, 3, 1);
+  scene.add(dirLight);
+
+  const dummy = new THREE.Object3D();
+  let mesh = null;
+  let boundsHelper = null;
+  let nelx = 0;
+  let nely = 0;
+  let nelz = 0;
+  let maxIter = 0;
+  let socket = null;
+
+  function setProbeState(next) {
+    probe.state = next;
+  }
+
+  function resize() {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  /**
+   * 設計空間がちょうど画面に収まる位置へカメラを置く。
+   * **「格子の最大辺 × 係数」で決めない** —— 視野角と縦横比を無視した目分量になり、
+   * 40x16x16 だと画面の1/6ほどの大きさにしか映らなかった(2026-08-29に実測)。
+   * 外接球の半径から必要な距離を三角法で出す。
+   */
+  function fitCamera() {
+    const radius = 0.5 * Math.hypot(nelx || 1, nely || 1, nelz || 1);
+    const vFov = THREE.MathUtils.degToRad(camera.fov);
+    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+    const dist = Math.max(radius / Math.sin(vFov / 2), radius / Math.sin(hFov / 2)) * 1.08;
+    camera.position.copy(new THREE.Vector3(0.72, 0.45, 0.86).normalize().multiplyScalar(dist));
+    camera.near = dist / 100;
+    camera.far = dist * 20;
+    camera.updateProjectionMatrix();
+    controls.target.set(0, 0, 0);
+    controls.update();
+  }
+
+  function updateBounds() {
+    if (boundsHelper) {
+      scene.remove(boundsHelper);
+      boundsHelper.geometry.dispose();
+      boundsHelper.material.dispose();
+      boundsHelper = null;
+    }
+    const boxGeo = new THREE.BoxGeometry(nelx, nely, nelz);
+    const edges = new THREE.EdgesGeometry(boxGeo);
+    boxGeo.dispose();
+    boundsHelper = new THREE.LineSegments(
+      edges,
+      new THREE.LineBasicMaterial({ color: 0x5577aa, transparent: true, opacity: 0.45 }),
+    );
+    scene.add(boundsHelper);
+    fitCamera();
+  }
+
+  function initMesh(nx, ny, nz) {
+    nelx = nx;
+    nely = ny;
+    nelz = nz;
+    if (mesh) {
+      scene.remove(mesh);
+      mesh.geometry.dispose();
+      mesh.material.dispose();
+      mesh = null;
+    }
+    const maxCount = nelx * nely * nelz;
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    const material = new THREE.MeshLambertMaterial();
+    mesh = new THREE.InstancedMesh(geometry, material, maxCount);
+    mesh.count = 0;
+    scene.add(mesh);
+    updateBounds();
+  }
+
+  function flatToExyz(e) {
+    const ez = e % nelz;
+    const t = Math.floor(e / nelz);
+    const ey = t % nely;
+    const ex = Math.floor(t / nely);
+    return [ex, ey, ez];
+  }
+
+  function densityColor(t) {
+    const color = new THREE.Color();
+    color.setHSL(0.58 - t * 0.38, 0.75, 0.12 + t * 0.58);
+    return color;
+  }
+
+  function updateInstances(occupied, rhoVals) {
+    if (!mesh) return;
+    mesh.count = occupied.length;
+    for (let i = 0; i < occupied.length; i++) {
+      const [ex, ey, ez] = flatToExyz(occupied[i]);
+      dummy.position.set(
+        ex + 0.5 - nelx / 2,
+        ey + 0.5 - nely / 2,
+        ez + 0.5 - nelz / 2,
+      );
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+      mesh.setColorAt(i, densityColor(rhoVals[i] / 255));
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) {
+      mesh.instanceColor.needsUpdate = true;
+    }
+  }
+
+  function handleMessage(msg) {
+    if (msg.type === 'start') {
+      maxIter = msg.max_iter;
+      initMesh(msg.nelx, msg.nely, msg.nelz);
+      runBtn.textContent = `反復 0/${maxIter}`;
+      return;
+    }
+    if (msg.type === 'iter') {
+      probe.lastIter = msg;
+      probe.iterations.push(msg);
+      updateInstances(msg.occupied, msg.rho);
+      runBtn.textContent =
+        `反復 ${msg.it}/${maxIter} · C=${msg.compliance.toFixed(1)}`;
+      return;
+    }
+    if (msg.type === 'done') {
+      setProbeState('done');
+      runBtn.disabled = false;
+      runBtn.textContent =
+        `完了 ${msg.iterations}反復 · C=${msg.compliance.toFixed(2)} (もう一度)`;
+      if (socket) {
+        socket.close();
+        socket = null;
+      }
+      return;
+    }
+    if (msg.type === 'error') {
+      setProbeState('error');
+      probe.error = msg.message;
+      runBtn.disabled = false;
+      runBtn.textContent = `エラー: ${msg.message}`;
+      if (socket) {
+        socket.close();
+        socket = null;
+      }
+    }
+  }
+
+  runBtn.addEventListener('click', () => {
+    if (probe.state === 'running') return;
+    probe.error = null;
+    probe.lastIter = null;
+    probe.iterations = [];
+    setProbeState('running');
+    runBtn.disabled = true;
+    runBtn.textContent = '接続中…';
+    socket = new WebSocket(WS_URL);
+    socket.addEventListener('open', () => {
+      socket.send(JSON.stringify({ type: 'start' }));
+    });
+    socket.addEventListener('message', (ev) => {
+      handleMessage(JSON.parse(ev.data));
+    });
+    socket.addEventListener('error', () => {
+      if (probe.state !== 'running') return;
+      setProbeState('error');
+      probe.error = 'WebSocket 接続に失敗しました';
+      runBtn.disabled = false;
+      runBtn.textContent = probe.error;
+    });
+    socket.addEventListener('close', () => {
+      if (probe.state === 'running') {
+        setProbeState('error');
+        probe.error = '接続が切断されました';
+        runBtn.disabled = false;
+        runBtn.textContent = probe.error;
+      }
+      socket = null;
+    });
+  });
+
+  function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+    // **実機検査が「真っ黒でも合格」にならないようにする穴。** 直前のフレームで
+    // GPUへ投げた三角形の数を出しておくと、shot.mjs がこれを見て空の画面を弾ける。
+    probe.triangles = renderer.info.render.triangles;
+  }
+  animate();
+  </script>
+</body>
+</html>
