@@ -768,11 +768,13 @@ COMMANDS: tuple[Command, ...] = (
             Param(
                 "name",
                 "string",
-                "保存先の**ファイル名だけ**(models/ 配下に固定。区切り文字・絶対パス・"
-                "..は不可)",
+                "**新しい**保存先のファイル名だけ(models/ 配下に固定。区切り文字・絶対パス・"
+                "..は不可)。**省略すると編集中のファイルへ上書きする**",
+                required=False,
             ),
         ),
         session="save_document",
+        ws="special",
         mcp=False,
         changes_document=False,
         note=(
@@ -780,7 +782,12 @@ COMMANDS: tuple[Command, ...] = (
             "同じ内容を読めるので、ファイルとして書き出す必要があるのは人の側だけである。"
             "2026-08-22に引数を `path`(サーバのCWD基準の任意パス)から `name`"
             "(`models_dir` 配下のファイル名だけ)へ締めた"
-            "(engine `duocad-save-location-fixed-folder`)"
+            "(engine `duocad-save-location-fixed-folder`)。"
+            "**2026-08-30に `name` を任意引数にし、表(`ws=\"table\"`)から外して "
+            "`_dispatch` の個別分岐へ移した** —— 表は載せた引数を全部必須にする規律なので"
+            "(`Param.ws` のdocstring)、省略を許すコマンドは表に置けない。"
+            "契約は `Session.save_document`: 引数なし=編集中のファイルへ上書き / "
+            "`name` あり=**新しい名前でのみ**保存(既存名は拒否)"
         ),
     ),
     Command(

@@ -104,10 +104,13 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 #:
 #: - `import_step` … 文書を変える(ログに載る)。応答は状態配信(`import_svg` はスケッチの
 #:   コマンドへ移り、2026-08-28からこの表に無い —— `SKETCH_COMMANDS` 側にいる)
-#: - `save_document` / `export_step` / `export_stl` … 文書を変えない。応答は書いた先の
+#: - `export_step` / `export_stl` … 文書を変えない。応答は書いた先の
 #:   パスとバイト数だけ(要求した接続にだけ返る。`preview` と同じ扱い)
 #: - `open_document` はどちらでもない —— 文書を**差し替える**ので全接続へ配る必要があり、
 #:   表からは外して `_dispatch` で個別に扱う。
+#: - **`save_document` も2026-08-30に表から外れた** —— `name` が任意引数になり、
+#:   「表に載る引数は全部必須」の規律に合わなくなったため(`catalog.Param.ws` 参照)。
+#:   応答は `file` の封筒 + 状態の配り直し(現在ファイル名が変わるため)。
 FILE_COMMANDS: dict = catalog.file_table()
 
 #: **対象集合をコアの確定選択から取るコマンド**(`catalog.Command.uses_selection`)。
@@ -420,6 +423,25 @@ class Server:
                     await self._push(connection, applied=applied)
                 else:
                     await _send(connection, {"type": "file", **applied})
+            # **保存は表に載らない**(2026-08-30) —— `name` が任意引数になったため。
+            # 表(`FILE_COMMANDS`)は載せた引数を全部必須にする規律なので、省略を許す
+            # コマンドはここで個別に捌く(`catalog.Param.ws` のdocstring)。
+            #
+            # 契約は `Session.save_document`: **引数なし=編集中のファイルへ上書き** /
+            # **`name` あり=新しい名前でのみ保存**(既存名は拒否)。
+            #
+            # **書いた後に状態も配り直す**。「いま編集しているファイル」はサーバの状態で
+            # (`state.current_name`)、名前を付けて保存すればそれが変わる —— `file` の封筒
+            # だけを返すと、ヘッダが「(無題)」のままなのに保存ボタン(現在ファイルへの
+            # 上書き)は通る、という食い違いが画面に残る。文書そのものは変わらないので
+            # `applied` は付けない(操作ログに載らないのは従来どおり)。
+            elif command == "save_document":
+                name = message.get("name")
+                applied = self._apply(
+                    self.session.save_document, *(() if name is None else (name,))
+                )
+                await _send(connection, {"type": "file", **applied})
+                await self._push(connection, applied=None)
             # **開くは文書ごと差し替える**ので全接続へ配る(自分だけ新しい文書を見ている、
             # という状態を作らない)。`Session.open_document` が発火したイベントは
             # `_on_core_change` 側でも拾われるが、`_apply` の間は `_dispatching` が

@@ -9,7 +9,7 @@
 | | |
 |---|---|
 | ブランチ / コミット | `main`（最新は `git log -1`） |
-| テスト | **694件**（うち2本は実機が揃うときだけ走る＝ふだんはskip。**赤は1本も無い**） |
+| テスト | **701件**（うち2本は実機が揃うときだけ走る＝ふだんはskip。**赤は1本も無い**） |
 | 実行環境 | Python 3.11（`.venv`）／ Node（`web/node_modules` 導入済み）／ `web/dist` ビルド済み |
 | 単位 | mm 固定 |
 
@@ -173,6 +173,14 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
   クリックが効かない**。
 - **Enterが要らないコマンドは2つ（線分・スケッチ）**。
 - undo/redoは**キーボードのみ**（Ctrl+Z / Ctrl+Y）。
+- **保存できる先は「いま編集しているファイル」1つだけ**（2026-08-30）。上書きの口は
+  ヘッダの保存ボタン（`#file-save`）と **Ctrl+S** で、行き先を選ばせない。ファイルパネルの
+  名前欄は「**新しい名前**で保存」専用で、既存の名前を打つとサーバが拒否する
+  （`duocad/session.py` の `save_document`。**現在のファイルと同じ名前でも拒否する** ——
+  例外条項を残すと、後からUIを足したときに黙って穴が開く）。一覧の行にあった「上書き」
+  ボタンは撤去した：A を編集中に B の行を押せば B が今の文書で潰れ、操作ログが唯一の正で
+  ある以上それは復旧できなかった。**いま編集しているファイルはサーバが持ち**
+  （`state.current_name`）、画面はその写しを出す＝リロードしても名前が残る。
 - `#save-state`（保存済み/未保存）の判定は**内容の比較ではなく操作ログの履歴位置**による。
   undoで同じ形へ戻しても「未保存」のまま。可視性の切り替えはファイルに載らないので動かさない。
 - **選択パネルは無い**。選択を直す手段は3Dクリックに一本化してある。
@@ -188,7 +196,7 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 
 ## 3. 自動検査の走らせ方
 
-### pytest（コア・MCPの契約 694件）
+### pytest（コア・MCPの契約 701件）
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
@@ -460,7 +468,7 @@ duocad/
                          net/ はアプリ層との接点（ws.py=WebSocket／http.py=静的配信と/mcp／
                          tools_on_loop.py）。server.py はその入口で、再輸出と起動の番人だけ
                          agent/ はアプリ内AIエージェント（プロバイダ＋ループ・UIなし）
-  tests/                 694件。README.md はモジュール単位のAPI契約リファレンス
+  tests/                 701件。README.md はモジュール単位のAPI契約リファレンス
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
     scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。共有部品は

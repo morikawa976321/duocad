@@ -838,3 +838,63 @@ def test_optional_declarations_are_justified(
                 f"{kind}: '{literal}' の `{name}` は必須だが {absent_in} の実応答に無い。"
                 "`?` を付けるか、Python側を揃えること"
             )
+
+
+# --------------------------------------------------------------------------------------
+# 完了条件3: 状態配信(`ServerState`)のフィールド名も食い違わない
+# --------------------------------------------------------------------------------------
+# `Applied` と同じ穴が**状態配信の側**にもある。`Session.state_meta()` はWebSocketで
+# 操作のたびに丸ごと配られるが、キーを1つ足しても消しても `tsc` は何も言わない
+# (2026-08-30に `current_name` を足したときに、この検査が無いことに気づいた)。
+#
+# **ここで見るのはフィールド名の集合だけ**である。`Applied` 側のような型の突合まではしない
+# —— `ServerState` は `BodyMeta[]` / `SelectionState` / `SketchState[]` のような独自型が
+# 大半で、素の型として見られるものが少なく、名前の一致だけでも「足し忘れ・消し忘れ」という
+# 実際に起きるずれは全部捕まる。型まで見たくなったら `_compare` と同じ道具が使える。
+def _ts_interface_body(name: str) -> str:
+    """`export interface <name> { ... }` の中身を**波かっこを数えて**取り出す。
+
+    `_ts_base_fields` の「最初の `}` まで」では足りない —— `ServerState` の `log` は
+    `Array<{ ... }>` を1行で書いており、途中の `}` で切れてしまう。
+    """
+    text = SESSION_TS.read_text(encoding="utf-8")
+    start = text.index(f"interface {name} {{")
+    open_at = text.index("{", start)
+    depth = 0
+    for index in range(open_at, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_at + 1 : index]
+    raise AssertionError(f"interface {name} の `}}` が見つからない")
+
+
+def _ts_server_state_fields() -> set[str]:
+    """`ServerState` が宣言しているフィールド名(**入れ子の中は数えない**)。
+
+    行頭2スペースちょうどの `名前:` / `名前?:` だけを拾う。入れ子の型は同じ行の中か
+    より深い字下げにいるので、この形にアンカーすれば混ざらない。
+    """
+    body = _strip_comments(_ts_interface_body("ServerState"))
+    return set(re.findall(r"^  (\w+)\??:", body, flags=re.M))
+
+
+def test_server_state_fields_match_the_runtime_state(tmp_path) -> None:
+    """`Session.state_meta()` が実際に返すキーと `ServerState` の宣言が一致する。
+
+    落ちるのは「Python側にキーを足してTSに足し忘れた」「TSに宣言だけ残した」とき。
+    どちらも実機で `undefined` を読むまで誰も気づかない類のずれである。
+    """
+    declared = _ts_server_state_fields()
+    assert len(declared) >= 8, f"ServerState を読めていない: {sorted(declared)}"
+
+    session = Session(None, DEVIATION, models_dir=tmp_path / "models")
+    _box(session)  # 空の文書でも全キーは出るが、中身のある文書で見るほうが実態に近い
+    actual = set(session.state_meta())
+
+    assert actual == declared, (
+        "web/src/session.ts の ServerState が Session.state_meta() と食い違う"
+        f"(実応答のみ={sorted(actual - declared)} / TSのみ={sorted(declared - actual)})"
+    )

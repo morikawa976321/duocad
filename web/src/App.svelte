@@ -15,7 +15,7 @@
    * 1. **ピック → コアの選択への翻訳**(修飾キーで追加・除去・置き換えを決める)
    * 2. **プレビューの往復**(コマンド層が「何を試すか」を決め、ここが投げて幽霊を描く)
    */
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
   import {
     COMMANDS,
@@ -399,6 +399,10 @@
   // ---------------------------------------------------------------- コアからの状態
   function handleState(next: ServerState, changed: BodyGeometry[], applied: Applied | null): void {
     model = next
+    // **編集中のファイル名はサーバの写し**(2026-08-30)。`applied` や `file` の応答から
+    // 拾い直さない —— 正は `Session._current_name` 1つで、こちらは配信のたびに映すだけ。
+    // これでリロードしても名前が戻る(以前は文書だけサーバに残って名前が失われた)。
+    currentDocumentName = next.current_name
     // **状態が1通届くたびに1つ増える番号**(実機検査のための穴。`__duocad.stateEpoch`)。
     // これが無いと「サーバの往復がまだ終わっていない」と「もう何も変わらない」を
     // 外から区別できず、**要求が出ていく前の画面を『落ち着いた』と読む**検査になる
@@ -448,8 +452,8 @@
       // ファイル名を追い、一覧も取り直す(開いた版が一覧の「操作数」に含まれるのはこの
       // ファイル自身なので変わらないが、他の操作で増減している可能性は保存と同じく
       // 否定できない)。**新規は `name` が `null`** で来るので、触っているファイルの表示は
-      // 「(無題)」へ戻る。
-      currentDocumentName = applied.name
+      // 「(無題)」へ戻る —— ただし表示そのものを更新するのは上の `next.current_name` で、
+      // ここが見るのは「開いたのか新規にしたのか」の区別だけである。
       // **開いた直後の文書はファイルの中身そのもの**なので保存済みから始める。新規は
       // どこにも書かれていないので `null`(＝常に未保存)へ戻す。`next` は上で `model` に
       // 入れた今回の状態で、開いた版の `applied_count` / 操作数がもう入っている。
@@ -519,7 +523,9 @@
       return
     }
     lastFile = payload
-    if (payload.name) currentDocumentName = payload.name
+    // **ここでファイル名を控えない**(2026-08-30) —— 編集中のファイルはサーバが持ち
+    // (`state.current_name`)、保存の直後にはサーバが状態も配り直す(`net/ws.py` の
+    // `save_document` 分岐)。応答から拾い直すと真実源が2つになる。
     // **書けた時点の位置を控える**(ヘッダの `#save-state` が「保存済み」を言う根拠)。
     // 数えるのは `save` だけ —— `export_step`/`export_stl` は形を別形式で吐くだけで、
     // 文書(操作ログ)を書いてはいない。操作数はサーバが実際に書いた件数を返してくるので
@@ -552,7 +558,11 @@
   }
 
   /**
-   * ファイル名を渡して保存する(新規保存も一覧からの上書きも同じverb)。
+   * **新しい名前で**保存する(「名前を付けて保存」。`FilesPanel` の名前欄だけが呼ぶ)。
+   *
+   * **既存名は送っても通らない** —— サーバが拒否してトースト1枚になる
+   * (`Session.save_document`)。ここで `documentList` を見た実在チェックは**足さない**:
+   * パス解釈の正を2箇所に持たないという既存の規律(`FilesPanel.nameProblem` のdocstring)。
    *
    * **`pendingOp` は立てない** —— `FilesPanel.svelte` は `CommandHost` の応答待ちの外にいる
    * (一覧からのクリックは「対象を選ぶ」そのもので、引数収集の状態機械を通す理由が無い)。
@@ -561,6 +571,31 @@
     const op = nextOp()
     lastFileOp = op
     session.runVerb('save_document', { name }, op)
+  }
+
+  /**
+   * **編集中のファイルへ上書き保存する**(ヘッダの `#file-save` と Ctrl+S。2026-08-30)。
+   *
+   * 引数を送らない —— 書き込み先を決めるのはサーバ(`Session._current_name`)であって、
+   * 画面が名前を送り返す形だと「表示されている名前」と「実際に開いているファイル」が
+   * ずれた瞬間に別のファイルを潰す。
+   *
+   * **編集中のファイルが無いとき(起動直後・`new` の直後)は押せないボタンにしない。**
+   * 新規の文書では必ず通る道なので、`disabled` にすると**なぜ押せないかを言わないまま
+   * 死んでいる札**になる(本人決定)。代わりにファイルパネルを開いて名前欄へ入れる ——
+   * 「保存したい」に対する答えは「名前を付けろ」であり、その場所まで連れて行く。
+   */
+  function saveCurrentDocument(): void {
+    if (currentDocumentName === null) {
+      dataPanelOpen = true
+      note('まだファイル名が無い。名前を打って「新規保存」すると、以後はここへ上書きできる')
+      // パネルを開いた直後は入力欄がまだDOMに無い(Svelteの更新は非同期)。
+      void tick().then(() => document.querySelector<HTMLInputElement>('#file-name-input')?.focus())
+      return
+    }
+    const op = nextOp()
+    lastFileOp = op
+    session.runVerb('save_document', {}, op)
   }
 
   /** ファイル名を渡して開く。応答は `state`(`applied.change === 'document'`)で来る。 */
@@ -1165,7 +1200,7 @@
   function onWindowKeydown(event: KeyboardEvent): void {
     if (!(event.ctrlKey || event.metaKey)) return
     const key = event.key.toLowerCase()
-    if (key !== 'z' && key !== 'y') return
+    if (key !== 'z' && key !== 'y' && key !== 's') return
     // 編集中のフィールドではブラウザ標準のテキスト取り消しに任せ、文書のundo/redoは
     // 発火しない(`CommandHost.onKeydown` と同じ書き方の判定)。**BUTTONとチェックボックスは
     // 除外しない** —— どちらも「編集中のテキスト」を持たない操作対象で、フォーカスが
@@ -1177,6 +1212,24 @@
     const isTextEditingField =
       target?.tagName === 'TEXTAREA' ||
       (target?.tagName === 'INPUT' && !['checkbox', 'radio'].includes((target as HTMLInputElement).type))
+    // **Ctrl+S はヘッダの保存ボタン(`#file-save`)と同じ操作**(2026-08-30)。編集中の
+    // ファイルへ上書きし、まだ無ければファイルパネルの名前欄へ連れて行く
+    // (`saveCurrentDocument`)。
+    //
+    // **`preventDefault()` はフォーカスがどこにあっても必ず通す** —— 止めないと
+    // ブラウザの「ページを保存」ダイアログが開き、こちらの保存が起きたのかどうかが
+    // 人から見えなくなる(実機検査ではモーダルで止まる)。
+    //
+    // **ここだけ `isTextEditingField` で抜けない**のは、Ctrl+S にはテキスト編集としての
+    // 意味が無いからである。Ctrl+Z/Y を入力欄で見送るのは「ブラウザ標準のテキスト取り消しに
+    // 任せる」ためで、譲る相手がいる。Ctrl+S に譲る相手はページ保存ダイアログしかなく、
+    // それは止めると決めた側なので、見送ると**何も起きない死んだキー**になる
+    // (判定式そのものは undo/redo と同じものを使い、意味の違いだけをここに書く)。
+    if (key === 's') {
+      event.preventDefault()
+      saveCurrentDocument()
+      return
+    }
     if (isTextEditingField) return
     if (key === 'z' && !event.shiftKey) {
       event.preventDefault()
@@ -1406,6 +1459,17 @@
     <!-- **今の文書がファイルに載っているか**(`savedAt` 参照)。**目立たせるのは
          「未保存」の側** —— 人の手が要るのはこちらだけで、保存済みは黙っていてよい。 -->
     <span id="save-state" class="tag" class:on={!saved}>{saved ? '保存済み' : '未保存'}</span>
+    <!-- **保存は1箇所だけ**(2026-08-30本人決定)。押すと**編集中のファイルへ上書き**する。
+         一覧の行にあった「上書き」ボタンは撤去した —— A を編集中に B の行を押せば B が
+         今の文書で潰れ、操作ログが唯一の正である以上それは復旧できなかった。
+         **`.toolbar` には置かない** —— あちらはverbの行で、保存はverbではない
+         (操作ログに載らず、undoの対象でもない)。ここが `#current-file` /
+         `#save-state` と同じ行なのは、指しているのが同じもの(編集中のファイル)だから。
+         **編集中のファイルが無くても `disabled` にしない** —— 理由は
+         `saveCurrentDocument` のdocstring(押せない札より、名前欄へ連れて行く)。 -->
+    <button id="file-save" class="tag" onclick={saveCurrentDocument} title="編集中のファイルへ上書き保存(Ctrl+S)">
+      保存
+    </button>
     <!-- **常設の指標はこれで全部**(2026-08-27に本人裁定で4つ外した)。外したものと行き先:
          - **接続状態** → 常時光らせず、**操作したのに送れなかった瞬間**にトーストで言う
            (`session.ts` の `send`)。見ても何もしなくてよい間ずっと視線を取るのをやめた。

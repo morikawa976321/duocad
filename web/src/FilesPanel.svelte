@@ -15,10 +15,19 @@
    * ファイルを書いているのはサーバ側のPythonなので、ブラウザがファイルハンドルを持っても
    * 噛み合わない。
    *
-   * **開くのに確認ダイアログを挟まない**。上書きも同様 —— 保存はそもそも「今の文書をそこへ
-   * 書く」操作であり、一覧からの上書きだけ確認を挟むと**新規保存と挙動が割れる**。
-   * **「新規」も同じ**(`onNew`) —— 一覧のクリック1つで別の文書へ移れるのに、空の文書へ
-   * 移るときだけ確認を挟むと挙動が割れる。どちらも保存していない編集を捨てる点は同じである。
+   * **このパネルから上書きはできない**(2026-08-30に一覧の行から「上書き」を撤去した。
+   * engine `2026-08-30-duocad-save-becomes-a-header-button`)。A を編集中に B の行を
+   * 押せば、確認も無く B が今の文書で潰れた —— 操作ログが唯一の正である以上、
+   * 失ったものは復旧できない。**上書きの口はヘッダの保存ボタン(`#file-save`)と Ctrl+S
+   * だけ**で、行き先は常に「いま編集しているファイル」1つに固定されている
+   * (`duocad/session.py` の `save_document`)。
+   * したがって**このパネルの `onSave` は「新しい名前で保存」だけを意味する**。
+   *
+   * **開くのに確認ダイアログを挟まない**。**「新規」も同じ**(`onNew`) —— 一覧の
+   * クリック1つで別の文書へ移れるのに、空の文書へ移るときだけ確認を挟むと挙動が割れる。
+   * どちらも保存していない編集を捨てる点は同じである。**捨てる側に確認を挟まないのは、
+   * 消えるのが「まだどこにも書いていない編集」だからで、書いてあるファイルを潰す操作
+   * (上の上書き)とは別の話である** —— 後者は確認ではなく**経路ごと**塞いだ。
    *
    * **STEP読み込み・STEP書き出し・STL書き出しも一覧の下に置く**(2026-08-27に本人が決定。
    * それまでツールバーの `CommandHost` に残っていた)。この3つも保存/開くと同じ形で
@@ -45,9 +54,18 @@
   }: {
     /** `duocad/models/` の中身(サーバの `list_documents` の写し)。 */
     documents: DocumentInfo[]
-    /** 直近に保存/開いたファイル名(`App.svelte` が save/open の応答から追う)。 */
+    /**
+     * **いま編集しているファイル名**(サーバの `state.current_name` の写し。無ければ `null`)。
+     *
+     * ヘッダの `#current-file` と同じ値で、ヘッダの保存ボタンが書く先そのものである。
+     */
     currentName: string | null
-    /** ファイル名を渡して保存する(新規保存も上書きも同じ verb)。 */
+    /**
+     * **新しい名前で**保存する(「名前を付けて保存」)。
+     *
+     * **既存のファイル名を渡してもサーバが拒否する** —— 上書きの口はこのパネルには無い
+     * (ヘッダの `#file-save` と Ctrl+S だけ。冒頭のdocstring参照)。
+     */
     onSave: (name: string) => void
     /** ファイル名を渡して開く。 */
     onOpen: (name: string) => void
@@ -70,6 +88,11 @@
    * **最終判定はサーバ**(`Session._resolve_document_name` の `is_relative_to` 検査)。
    * ここでの検査は明らかに拒まれる形を早く言うための入力補助でしかなく、実在チェックはしない
    * (サーバと2箇所で別々のパス解釈を持たない)。
+   *
+   * **既存名かどうかもここでは見ない**(2026-08-30)。`documents` は手元にあるが、
+   * それは `list_documents` を最後に呼んだ時点の写しでしかなく、「保存できるか」の正は
+   * サーバ側の `save_document` にある。打った名前が既にあればサーバが拒否し、
+   * `onError` -> `fail()` でトースト1枚になる —— **新しい通知経路を作らない**。
    */
   function nameProblem(text: string): string | null {
     const trimmed = text.trim()
@@ -161,7 +184,10 @@
     <button id="file-new" onclick={onNew} title="今の文書を捨てて空から始める(保存していない編集は消える)">
       新規
     </button>
-    <span id="current-document" class="value dim">{currentName ?? '(未保存)'}</span>
+    <!-- **編集中のファイル名**。ヘッダの `#current-file` と同じ値・同じ言葉にしてある
+         (2026-08-30に「(未保存)」から「(無題)」へ揃えた) —— 名前が無いことと
+         保存できていないことは別の問いで、後者を言うのは `#save-state` の役目である。 -->
+    <span id="current-document" class="value dim">{currentName ?? '(無題)'}</span>
   </div>
 
   <div class="new-row">
@@ -198,9 +224,9 @@
         <span class="meta dim" title={formatTime(file.mtime)}>
           {file.operations ?? '?'}件 / {formatSize(file.size)}
         </span>
-        <button class="files-overwrite" onclick={() => onSave(file.name)} title="今の文書で上書き">
-          上書き
-        </button>
+        <!-- **行に「上書き」ボタンは無い**(2026-08-30に撤去。冒頭のdocstring)。
+             上書きの口はヘッダの `#file-save` と Ctrl+S だけで、行き先は
+             「いま編集しているファイル」に固定されている。 -->
       </div>
     {/each}
   </div>
@@ -374,12 +400,6 @@
   .meta {
     flex: 0 0 auto;
     font-size: 11px;
-  }
-
-  .files-overwrite {
-    flex: 0 0 auto;
-    font-size: 11px;
-    padding: 2px 4px;
   }
 
   .dim {

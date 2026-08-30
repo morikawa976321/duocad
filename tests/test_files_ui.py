@@ -11,6 +11,9 @@ UI(パラメータ編集パネル・操作履歴パネル・ファイル操作)�
 
 - **保存/開くが受け取るのはファイル名だけ**。`models_dir` 配下に閉じ、区切り文字・絶対パス・
   `..` は拒否する
+- **保存は「編集中のファイル」1つに閉じている**(2026-08-30)。`save_document()`(引数なし)は
+  いま編集しているファイルへ上書きし、`save_document(name)` は**新しい名前でのみ**保存する
+  (既存名は拒否。`name == 現在名` でも拒否する)。編集中のファイルが無ければ引数なしの保存も拒否
 - 保存は操作ログのJSONを書き、**verbではない**(操作ログが伸びない)
 - **開くと形が完全に戻る**(体積・面数・操作ログ・パラメータ)。開いた文書は**全接続へ**配る
 - **開くのに失敗しても今の文書を壊さない**
@@ -105,6 +108,10 @@ def test_saving_writes_the_operation_log_and_is_not_a_verb(session: Session, tmp
     """保存は操作ログのJSONを書くだけ。**操作ログは伸びない**(文書を変えていないので)。
 
     **受け取るのはファイル名だけ**(`models_dir` 配下に固定。要件2)。
+
+    保存の応答は `{"type":"file"}` の封筒で、**`applied` は付かない**(verbではない)。
+    ただし2026-08-30以降は**その後に状態も配り直す** —— 「いま編集しているファイル」が
+    サーバの状態(`state.current_name`)になり、名前を付けて保存すればそれが変わるため。
     """
     _box(session)
     log_before = len(session.document.log.entries)
@@ -112,8 +119,9 @@ def test_saving_writes_the_operation_log_and_is_not_a_verb(session: Session, tmp
     async def script(send):
         return await send({"cmd": "save_document", "name": "model.json"})
 
-    (answer, clients) = _browser(session, script)
+    (_last, clients) = _browser(session, script)
 
+    answer = clients[0].last("file")
     target = session.models_dir / "model.json"
     assert answer["type"] == "file" and answer["action"] == "save"
     assert Path(answer["path"]) == target
@@ -121,7 +129,82 @@ def test_saving_writes_the_operation_log_and_is_not_a_verb(session: Session, tmp
     assert answer["operations"] == log_before
     assert len(session.document.log.entries) == log_before
     assert json.loads(target.read_text(encoding="utf-8"))["operations"], "空のログを書いた"
-    assert clients[1].payloads == [], "保存は状態配信ではない(要求した接続にだけ返る)"
+    # **状態の配り直しに `applied` は載らない**(保存はverbではないので、画面の
+    # `lastApplied` を動かしてはいけない)。載る値は現在ファイル名だけが変わる。
+    state = clients[0].last("state")
+    assert "applied" not in state, "保存がverbの確定として配信されている"
+    assert state["state"]["current_name"] == "model.json"
+    # **他の接続にも届く** —— 現在ファイルはサーバの状態なので、片方の画面だけが
+    # 「model.json を編集中」で他方が「(無題)」という食い違いを作らない
+    # (`open_document` と同じ線。`Server._dispatch` の save_document 分岐)。
+    assert clients[1].last("state")["state"]["current_name"] == "model.json"
+
+
+def test_saving_over_another_file_is_refused_and_leaves_it_untouched(session: Session) -> None:
+    """**編集中でないファイルは1バイトも書き換わらない**(このタスクの存在理由)。
+
+    `save_document(name)` は「**新しい名前でのみ保存**」を意味する。既存名を渡す道は
+    UIから消えたが(一覧の行の「上書き」を撤去した)、契約としてもここで塞ぐ ——
+    UIを後から足したときに黙って穴が開かないようにするためで、
+    「`name` が現在のファイルなら通す」という例外条項も置かない
+    (`Session.save_document` のdocstring)。
+    """
+    _box(session)
+    session.save_document("other.json")          # 触られては困る側
+    other = session.models_dir / "other.json"
+    untouched = other.read_bytes()
+    session.new_document()
+    _box(session)                                 # 中身の違う別の文書を作る
+    session.save_document("mine.json")            # ここからが「編集中」
+
+    with pytest.raises(ValueError) as refusal:
+        session.save_document("other.json")
+
+    assert other.read_bytes() == untouched, "編集中でないファイルが書き換わった"
+    # **どうすればできるかまで言う**(封筒が `{型名}: {文}` を前置するので、文だけで通じること)
+    assert "other.json" in str(refusal.value) and "開け" in str(refusal.value)
+    assert session.state_meta()["current_name"] == "mine.json", "現在ファイルが動いた"
+
+    # **現在のファイルの名前を渡す道も塞がっている**(例外条項を置かない)。
+    mine = session.models_dir / "mine.json"
+    before = mine.read_bytes()
+    with pytest.raises(ValueError) as same:
+        session.save_document("mine.json")
+    assert mine.read_bytes() == before
+    assert "Ctrl+S" in str(same.value), "上書きの正しい道を教えていない"
+
+
+def test_saving_without_a_name_writes_the_current_file_only(session: Session) -> None:
+    """引数なしの `save_document()` は**編集中のファイルへ上書き**する。
+
+    そして `new_document` の直後には編集中のファイルが無いので**拒否される** ——
+    空の文書はどこにも書かれておらず、上書き先が存在しないのがこの操作の意味である。
+    """
+    _box(session)
+    with pytest.raises(ValueError) as fresh_start:
+        session.save_document()
+    assert "編集中のファイルが無い" in str(fresh_start.value)
+
+    session.save_document("mine.json")            # 名前を付けて保存 = 以後の上書き先
+    target = session.models_dir / "mine.json"
+    operations_before = json.loads(target.read_text(encoding="utf-8"))["operations"]
+    session.undo()                                # 文書を動かす(上書きが効いたことを見るため)
+
+    answer = session.save_document()
+
+    assert Path(answer["path"]) == target and answer["name"] == "mine.json"
+    written = json.loads(target.read_text(encoding="utf-8"))["operations"]
+    assert len(written) == len(operations_before) - 1, "上書きが効いていない"
+    assert [item["name"] for item in session.list_documents()["files"]] == ["mine.json"], (
+        "引数なしの保存が別のファイルを作った"
+    )
+
+    session.new_document()
+    with pytest.raises(ValueError):
+        session.save_document()
+    assert json.loads(target.read_text(encoding="utf-8"))["operations"] == written, (
+        "新規の直後の保存が、直前まで編集していたファイルを空の文書で潰した"
+    )
 
 
 def test_models_dir_is_created_if_missing(session: Session) -> None:

@@ -71,6 +71,17 @@ class Session:
         #: `geometry()` や `_sketch_state` が積む警告。**`view` と同じリストオブジェクトを
         #: 共有する**(吸い出す口は `take_warnings()` だけ。2つの持ち主を作らない)。
         self.warnings: list[str] = []
+        #: **いま編集しているファイルの名前**(`models_dir` 配下のファイル名だけ。無ければ `None`)。
+        #: 2026-08-30に足した。それまで「どのファイルを触っているか」を知っているのは
+        #: ブラウザだけで、サーバは受け取った名前を解決して書くだけだったため、
+        #: **編集中でないファイルを上書きできる**穴が構造として残っていた
+        #: (誤クリック1回で無関係なモデルが今の文書に置き換わり、操作ログが唯一の正である
+        #: 以上、失ったものは復旧できない)。ここに現在名を持たせて `save_document` の契約を
+        #: 2つに割ることで、その穴を**どのUIからも**塞ぐ(下記 `save_document`)。
+        #:
+        #: **書き換えるのは3箇所だけ**: `save_document(name)` の成功・`open_document` の成功・
+        #: `_replace_document`(開く/新規の共通部分。引数で必ず決めさせる)。
+        self._current_name: Optional[str] = None
         self._applied_count = 0
         #: 配りもの(状態・版・キャッシュ)。**文書を差し替えたら `view.reset()` を呼ぶ**
         #: (`_replace_document`)——古い文書について測ったものを握ったままにしないため。
@@ -187,11 +198,26 @@ class Session:
 
     def state(self) -> dict:
         """アプリ層へ渡す全状態(`DocumentView.state`)。**geometryを含む(重い)**。"""
-        return self.view.state(**self._view_inputs())
+        return self._with_current_name(self.view.state(**self._view_inputs()))
 
     def state_meta(self) -> dict:
         """`state()` の軽量版(`DocumentView.state_meta`)。配信のたびに呼ばれる口。"""
-        return self.view.state_meta(**self._view_inputs())
+        return self._with_current_name(self.view.state_meta(**self._view_inputs()))
+
+    def _with_current_name(self, state: dict) -> dict:
+        """配りものに**いま編集しているファイル名**を1つ足す(`view` の持ち物ではない)。
+
+        **`view.state_meta()` へ足さない** —— `DocumentView` が持つのは文書から測れるもの
+        (形・版・スケッチ)だけで、どのファイルを開いているかは `Session` の持ち物である。
+        `state()` と `state_meta()` の両方をここへ通すのは、片方だけに載って
+        「`get_state` では見えるのに配信では見えない」が起きないようにするため。
+
+        **載せないと画面が説明のつかない状態になる**: リロードすると文書はサーバに残る
+        のにブラウザ側の名前だけ失われ、ヘッダが「(無題)」のままなのに保存ボタン
+        (現在ファイルへの上書き)だけは通る、という食い違いが出る。
+        """
+        state["current_name"] = self._current_name
+        return state
 
     def delta(self, known_revisions: dict) -> dict:
         """クライアントが持っている版との差分(`DocumentView.delta`)。"""
@@ -765,13 +791,50 @@ class Session:
             raise ValueError(f"models/の外を指している: {text!r} -> {resolved}")
         return resolved
 
-    def save_document(self, name: Any) -> dict:
+    def save_document(self, name: Any = None) -> dict:
         """操作ログをJSONで書き出す。**verbではない**(文書を変えないのでログに載らない)。
 
+        **契約は2つに割れている**(2026-08-30。engine
+        `2026-08-30-duocad-save-becomes-a-header-button`):
+
+        - `save_document()`(引数なし) … **いま編集しているファイルへ上書き**する。
+          編集中のファイルが無ければ拒否する
+        - `save_document(name)` … **新しい名前でのみ保存**する。**既に在る名前は拒否**する
+          (いま編集しているファイルの名前であっても拒否する)
+
+        **`name == self._current_name` なら通す、という例外条項を置かない**(本人決定)。
+        一覧の行から上書きを送るUIが無くなった今、`name` の意味は「新しい名前」1つに
+        固定できる。例外を残すと、後から別のUIを足したときに**そこだけ穴が開く**
+        (しかも、その穴が開いたことは誰にも見えない)。
+
+        塞いでいるのは「**編集中でないファイルを上書きできる**」穴である。誤クリック1回で
+        無関係なモデルが今の文書に置き換わり、操作ログが唯一の正である以上、失ったものは
+        復旧できない。**拒否の文はどうすればできるかまで言う** —— 呼び出し側の封筒
+        (`net/ws.py` の `{"type":"error"}`)が `{型名}: {文}` を前置するので、
+        文だけで人に通じる形で書くこと。
+
         `name` は**ファイル名だけ**(`models_dir` 配下に固定)。区切り文字・絶対パス・
-        `..` は `_resolve_document_name` が拒否する。
+        `..` は `_resolve_document_name` が拒否する。**その検査を先に通す** ——
+        「既に在るか」を見るより前にパスの安全性を決着させる(models/ の外を指す名前は、
+        存在の有無を問う前に断る)。
         """
-        target = self._resolve_document_name(name)
+        if name is None:
+            if self._current_name is None:
+                raise ValueError(
+                    "編集中のファイルが無い"
+                    "(ファイルパネルで名前を付けて保存すれば、以後はそこへ上書きできる)"
+                )
+            target = self._resolve_document_name(self._current_name)
+        else:
+            target = self._resolve_document_name(name)
+            if target.exists():
+                # **どちらの枝も拒否する**。分かれるのは「次に何をすればよいか」の文言だけで、
+                # 「現在のファイルなら通す」という抜け道はここに無い(上記docstring)。
+                raise ValueError(
+                    f"{target.name} は既にある(ヘッダの保存ボタンかCtrl+Sで上書きできる)"
+                    if target.name == self._current_name
+                    else f"{target.name} は編集中ではない(先に開けば上書きできる)"
+                )
         payload = self.document.log.to_json()
         # **一時ファイルへ書いてから差し替える**。素の上書きは既存の
         # 中身を先に切り詰めるので、途中で落ちると**唯一の永続形式である前回の保存が
@@ -780,6 +843,10 @@ class Session:
         staging = target.with_name(target.name + ".writing")
         staging.write_text(payload, encoding="utf-8")
         os.replace(staging, target)
+        # **書けてから現在ファイルにする**。先に控えると、書き込みが落ちたときに
+        # 「存在しないファイルを編集中」という状態が残り、次の引数なし保存が
+        # 黙って新しいファイルを作る(拒否されるべき経路が通ってしまう)。
+        self._current_name = target.name
         return {
             "action": "save",
             "path": str(target),
@@ -811,7 +878,9 @@ class Session:
         document.log = log
         log.replay(document)
 
-        self._replace_document(document)
+        # **開けたものが編集中のファイルになる**(以後、引数なしの `save_document()` は
+        # ここへ書く)。再生が落ちたときはこの行まで来ないので、現在名も差し替わらない。
+        self._replace_document(document, current_name=source.name)
         return self._emit({
             "change": "document",
             "action": "open",
@@ -828,8 +897,12 @@ class Session:
         挙動が割れる(`web/src/FilesPanel.svelte` の「開くのに確認ダイアログを挟まない」)。
 
         **`save_document` は呼ばない**(自動保存はスコープ外)。保存していない編集は消える。
+
+        **編集中のファイルも無くなる**(`current_name=None`)。空の文書はどこにも書かれて
+        いないので、この直後の引数なし `save_document()` は拒否される —— 名前を付けて
+        保存するまで書き込み先が存在しないのは、この操作の意味そのものである。
         """
-        self._replace_document(Document())
+        self._replace_document(Document(), current_name=None)
         return self._emit({
             "change": "document",
             "action": "new",
@@ -841,8 +914,13 @@ class Session:
             "operations": 0,
         })
 
-    def _replace_document(self, document: Document) -> None:
+    def _replace_document(self, document: Document, *, current_name: Optional[str]) -> None:
         """今の文書を `document` へ差し替える(`open_document` / `new_document` の共通部分)。
+
+        **`current_name` は既定値を持たない**(キーワード必須)。文書を差し替える経路は
+        必ず「この後どのファイルを編集していることになるか」を1つ決める —— 既定で
+        持ち越すと、`new_document` の後に前の文書のファイル名が残って、引数なしの
+        `save_document()` が**捨てたはずのファイルを空の文書で潰す**。
 
         差し替えでは配りものを `view.reset()` で作り直す —— Bodyのidは再生で作り直されるが、
         同じidが再び現れる可能性があり、古い形状を指したキャッシュが残っていると別の文書の
@@ -852,6 +930,7 @@ class Session:
         新しい文書の空の選択になっている。
         """
         self.document = document
+        self._current_name = current_name
         # キャッシュの破棄は**`view` の1呼び出し**(何を捨てて何を残すかは `DocumentView.reset`
         # が持つ。とくに版の数え上げを消さない理由はそちらのdocstring)。
         self.view.reset(document)
