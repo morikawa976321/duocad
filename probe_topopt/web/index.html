@@ -40,6 +40,9 @@
   // 既定が8776なのは、8765/8766を duocad 本体が使っているため。
   const WS_PORT = new URLSearchParams(location.search).get('ws') ?? '8776';
   const WS_URL = `ws://127.0.0.1:${WS_PORT}`;
+  // **`?voxel=1` を付けたときだけ、完了時も従来のボクセル表示のまま終わる**(デバッグ用)。
+  // 既定(付けない場合)は完了時に平滑化した面へ差し替わる。
+  const VOXEL_ONLY = new URLSearchParams(location.search).get('voxel') === '1';
   const runBtn = document.getElementById('run');
 
   const probe = {
@@ -47,6 +50,8 @@
     lastIter: null,
     iterations: [],
     error: null,
+    // 完了時にどちらの表示になったか。'voxel' | 'smooth' | null(未完了)。
+    surface: null,
   };
   window.__probe = probe;
 
@@ -68,6 +73,7 @@
 
   const dummy = new THREE.Object3D();
   let mesh = null;
+  let smoothMesh = null;
   let boundsHelper = null;
   let nelx = 0;
   let nely = 0;
@@ -136,13 +142,46 @@
       mesh.material.dispose();
       mesh = null;
     }
+    if (smoothMesh) {
+      scene.remove(smoothMesh);
+      smoothMesh.geometry.dispose();
+      smoothMesh.material.dispose();
+      smoothMesh = null;
+    }
     const maxCount = nelx * nely * nelz;
     const geometry = new THREE.BoxGeometry(1, 1, 1);
     const material = new THREE.MeshLambertMaterial();
     mesh = new THREE.InstancedMesh(geometry, material, maxCount);
     mesh.count = 0;
+    mesh.visible = true;
     scene.add(mesh);
     updateBounds();
+  }
+
+  /**
+   * 完了時、ボクセルの立方体描画を平滑化した三角形メッシュへ差し替える。
+   * ボクセル(`mesh`)は消さずに`visible=false`で隠すだけにする —— `?voxel=1`のときは
+   * この関数自体を呼ばないので、隠す/戻すの分岐が単純なままで済む。
+   */
+  function showSmoothMesh(payload) {
+    if (smoothMesh) {
+      scene.remove(smoothMesh);
+      smoothMesh.geometry.dispose();
+      smoothMesh.material.dispose();
+      smoothMesh = null;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(payload.vertices, 3),
+    );
+    // 頂点数は最大でも数万なので既定のUint16(65535上限)を超えうる —— 明示的にUint32にする。
+    geometry.setIndex(new THREE.Uint32BufferAttribute(payload.faces, 1));
+    geometry.computeVertexNormals();
+    const material = new THREE.MeshLambertMaterial({ color: 0x6fa8dc });
+    smoothMesh = new THREE.Mesh(geometry, material);
+    scene.add(smoothMesh);
+    if (mesh) mesh.visible = false;
   }
 
   function flatToExyz(e) {
@@ -199,6 +238,15 @@
       runBtn.disabled = false;
       runBtn.textContent =
         `完了 ${msg.iterations}反復 · C=${msg.compliance.toFixed(2)} (もう一度)`;
+      // **既定は完了時に平滑化した面へ差し替える。** `?voxel=1` のときだけ、デバッグ用に
+      // 従来のボクセル表示のまま終わる(サーバがmeshを送ってこなかった=生成失敗のときも
+      // 同じくボクセルのまま残す)。
+      if (!VOXEL_ONLY && msg.mesh) {
+        showSmoothMesh(msg.mesh);
+        probe.surface = 'smooth';
+      } else {
+        probe.surface = 'voxel';
+      }
       if (socket) {
         socket.close();
         socket = null;

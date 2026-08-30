@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 from websockets.asyncio.server import serve
 
+import mesh
 import simp
 
 _ROOT = Path(__file__).resolve().parent
@@ -73,6 +74,28 @@ def _iter_message(it: simp.Iteration, xphys: np.ndarray) -> dict[str, object]:
     }
 
 
+def _build_mesh_payload(rho: np.ndarray) -> dict[str, object]:
+    """完了時の密度場から、平滑化済みの面(頂点・三角形)をJSONで送れる形にする。
+
+    浮島除去→パディング→marching cubes→Taubin平滑化は `mesh.build_surface` が持つ
+    (詳細は `mesh.py`)。`mesh.py` が返す座標は角(0,0,0)基準(STL書き出しに素直な向き)
+    だが、**ボクセル描画(`web/index.html` の `dummy.position`)は原点を中心に置く規約**
+    (`ex+0.5-nelx/2` 等)なので、ここで同じだけ平行移動して座標系を合わせる
+    (合わせないと、置き換わった瞬間にカメラ・バウンディングボックスに対して形状が
+    半分ずれた位置に描かれる)。`nelx/nely/nelz` はどれも偶数なのでこの平行移動は
+    整数量になり、`edge_interpolation_ratios` が見る小数部には影響しない。
+    座標は小数4桁へ丸めてペイロードを縮める(表示品質には効かない)。
+    """
+    mr = mesh.build_surface(rho)
+    nelx, nely, nelz = rho.shape
+    center = np.asarray(mr.spacing, dtype=float) * (np.array([nelx, nely, nelz], dtype=float) / 2.0)
+    verts = np.round(mr.verts_smooth - center, 4)
+    return {
+        "vertices": verts.ravel().tolist(),
+        "faces": mr.faces.astype(np.int64).ravel().tolist(),
+    }
+
+
 async def _ws_handler(websocket, state: _AppState) -> None:
     try:
         async for raw in websocket:
@@ -130,6 +153,15 @@ async def _ws_handler(websocket, state: _AppState) -> None:
                 await queue.put(None)
                 await sender_task
                 last = result.history[-1] if result.history else None
+                # **完了時にだけ**平滑化した面を作って一緒に送る(反復中は間に合わないので
+                # やらない/やる必要が無い。ボクセルのままdoneを受け取った側=`?voxel=1`は
+                # このmeshフィールドを無視すればよい)。失敗しても`done`自体は必ず送る
+                # (画面が反復完了のまま固まらないようにする)。
+                mesh_payload: dict[str, object] | None = None
+                try:
+                    mesh_payload = await asyncio.to_thread(_build_mesh_payload, result.rho)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"平滑化メッシュの生成に失敗(ボクセル表示のまま終わる): {exc}")
                 done_msg = {
                     "type": "done",
                     "iterations": len(result.history),
@@ -137,6 +169,7 @@ async def _ws_handler(websocket, state: _AppState) -> None:
                     "compliance": last.compliance if last is not None else 0.0,
                     "volfrac": last.volfrac if last is not None else 0.0,
                     "stopped_by": result.stopped_by,
+                    "mesh": mesh_payload,
                 }
                 try:
                     await websocket.send(json.dumps(done_msg, ensure_ascii=False))

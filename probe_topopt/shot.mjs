@@ -1,18 +1,23 @@
 /**
- * 実機確認 — headless Chrome で実際にボタンを押し、形状が描かれた状態を
- * `screenshots/result.png` に撮る。
+ * 実機確認 — headless Chrome で実際にボタンを押し、平滑化した面が描かれた状態を
+ * `screenshots/result_smooth.png` に撮る。
  *
  *   node shot.mjs
  *
  * `server.py` を子プロセスで起動し、終わったら落とす(先に自分で起動しておく必要はない)。
- * **完了条件3はこのスクリプトの緑をもって満たしたとする**ので、
- * 「撮れた」だけでなく **画面に本当に形が出ているか**まで見る:
+ * **完了条件4(実機確認)はこのスクリプトの緑をもって満たしたとする**ので、
+ * 「撮れた」だけでなく **画面に本当に平滑化した面が出ているか**まで見る:
  *
  * - `window.__probe.state === 'done'`(最適化が最後まで走った)
  * - 反復メッセージが `max_iter` 回届いた
  * - 最終反復の占有要素数が 0 でない
+ * - **`window.__probe.surface === 'smooth'`**(完了時にボクセルではなく平滑化した面へ
+ *   差し替わったこと。`?voxel=1` を付けていなければサーバが送ってきたmeshが使われる)
  * - **`renderer.info.render.triangles > 0`**(GPUへ実際に三角形が投げられている。
  *   これが無いと「真っ黒でも成功」になる)
+ *
+ * 撮るのは `screenshots/result_smooth.png`。**既存の `screenshots/result.png`
+ * (旧ボクセル版の実機確認)には触らない**(消さず残す)。
  *
  * puppeteer-core は duocad 本体の `web/node_modules` から借りる(**新規インストールをしない**
  * ための措置。`createRequire` に `web/package.json` を渡して解決させている)。
@@ -28,7 +33,7 @@ import { fileURLToPath } from 'node:url'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DUOCAD = dirname(HERE)
 const PYTHON = join(DUOCAD, '.venv', 'Scripts', 'python.exe')
-const OUT = join(HERE, 'screenshots', 'result.png')
+const OUT = join(HERE, 'screenshots', 'result_smooth.png')
 const HTTP_PORT = Number(process.env.PROBE_HTTP_PORT ?? 8775)
 const WS_PORT = Number(process.env.PROBE_WS_PORT ?? 8776)
 // `?ws=` を必ず付ける。**付けないと画面は既定の8776を叩き、ポートを変えたときだけ
@@ -134,6 +139,7 @@ try {
   const probe = await page.evaluate(() => ({
     state: window.__probe.state,
     error: window.__probe.error,
+    surface: window.__probe.surface,
     iterations: window.__probe.iterations.length,
     lastIt: window.__probe.lastIter?.it ?? null,
     compliance: window.__probe.lastIter?.compliance ?? null,
@@ -151,6 +157,7 @@ try {
   await page.screenshot({ path: OUT })
 
   console.log(`  state  : ${probe.state}${probe.error ? ` (${probe.error})` : ''}`)
+  console.log(`  surface: ${probe.surface}`)
   console.log(`  反復   : ${probe.iterations} (最終 it=${probe.lastIt})`)
   console.log(`  C      : ${probe.compliance}`)
   console.log(`  体積率 : ${probe.volfrac}`)
@@ -165,6 +172,7 @@ try {
   if (probe.state !== 'done') problems.push(`state が done でない: ${probe.state} (${probe.error})`)
   if (probe.iterations < 1) problems.push('反復メッセージが1件も届いていない')
   if (probe.occupied < 1) problems.push('占有要素が0(形が出ていない)')
+  if (probe.surface !== 'smooth') problems.push(`完了時の表示がsmoothでない: ${probe.surface}(平滑化した面へ差し替わっていない)`)
   if (probe.triangles < 1) problems.push('三角形が1枚も描かれていない(画面が空)')
   if (/swiftshader|software|llvmpipe/i.test(glRenderer))
     problems.push(`実GPUではなくソフトウェアラスタライザで描画している: ${glRenderer}`)
