@@ -3,7 +3,7 @@
     ..\.venv\Scripts\python.exe check_mesh.py
 
 **このファイルが合否そのものである。** タスクの完了条件1「`check_mesh.py` が緑」を、
-下記7項目の assert で判定する。1つでも落ちればプロセスは非ゼロで終わる。
+下記8項目の assert で判定する。1つでも落ちればプロセスは非ゼロで終わる。
 
 検査の構成:
 
@@ -21,8 +21,14 @@
    (細い部材を食っていないこと)。
 7. **STLの往復** — 書き出したSTLを `build123d.Mesher().read()` で読み戻し、
    三角形数(=面数、facetedB-rep)と体積が一致する。
+8. **座標系の整合(セル中心規約)** — 既知の位置に置いた合成密度場で、面のバウンディング
+   ボックスが期待どおりの位置にあるかを見る。1〜7はどれも並進不変(体積・水密性・分布の
+   形は位置のズレでは変わらない)なので、**全軸を一律に半セルずらす**類のバグを検出できない
+   (2026-08-30にQAが発見: `rho[ex]`はセル`ex`の中心の値なのに、パディング除去のオフセット
+   計算がそれを踏まえておらず、marching cubesの面が設計空間に対して常に半要素ずれていた)。
 
-実行には`simp.py`のプリセット(40x16x16・60反復)を1回回す(約1.5〜2分)。
+実行には`simp.py`のプリセット(40x16x16・60反復)を1回回す(約1.5〜2分)。8番目の検査だけは
+高速な合成密度場で行うので、この所要時間には影響しない。
 """
 
 from __future__ import annotations
@@ -182,7 +188,12 @@ def check_taubin_vs_laplacian(mr: mesh.MeshResult) -> None:
 # ---------------------------------------------------------------------------
 def check_interpolation_not_binarized(mr: mesh.MeshResult) -> None:
     print("\n[5] 補間が効いている(内分比の分布)")
-    ratios = mesh.edge_interpolation_ratios(mr.verts_raw, spacing=mr.spacing)
+    # **`mr.verts_raw` から再計算しない。** `verts_raw` はセル中心規約へ半要素オフセット
+    # 済みで、整数格子点の前提(`edge_interpolation_ratios`が軸を判定する根拠)が崩れて
+    # 全頂点が「軸誤判定→常に0.5」になる(2026-08-30、オフセット修正と同時に実測して発見)。
+    # `mr.interpolation_ratios` は `mesh.run_marching_cubes` がオフセット適用前
+    # (marching_cubes直後の生座標、整数格子点のまま)に計算済みの値を使う。
+    ratios = mr.interpolation_ratios
     std = float(ratios.std())
     frac_exact_half = float(np.mean(np.abs(ratios - 0.5) < 1e-6))
     # 参考: 二値化した場(rho>0.5の0/1配列)を渡すと、辺の両端が必ず0/1になり
@@ -258,6 +269,50 @@ def check_stl_roundtrip(mr: mesh.MeshResult) -> None:
     RESULTS["stl_roundtrip_read_seconds"] = round(read_seconds, 1)
 
 
+# ---------------------------------------------------------------------------
+# 8. 座標系の整合(セル中心規約)
+# ---------------------------------------------------------------------------
+def check_bounding_box_alignment() -> None:
+    """既知の位置に置いた合成密度場で、marching cubesが返す面のバウンディングボックスが
+    「セル中心」規約(`rho[ex]` はセル `ex` の中心の値。`web/index.html` のボクセル描画も
+    `ex+0.5-nelx/2` でこの規約)どおりの位置にあるかを見る。
+
+    上の1〜7はどれも並進不変(体積・水密性・分布の形は位置のズレでは変わらない)なので、
+    **全軸を一律に半セルずらす**類のバグはこれが無いと素通りする(2026-08-30にQAが発見:
+    パディング除去のオフセット計算が `pad_width*spacing` になっており、正しくは
+    `(pad_width-0.5)*spacing`。差の0.5要素ぶん、面が常に設計空間に対してずれていた)。
+
+    このぶんだけは実データ(SIMP結果)を使わず、位置が最初から分かっている合成密度場
+    (直方体ブロック1つ、z軸方向は設計空間の端(0)に接するように置いてパディング境界の
+    処理も一緒に確認する)で見る — 高速かつ期待値が数式で厳密に出せるため。
+    """
+    print("\n[8] 座標系の整合(既知の位置に置いた合成密度場のバウンディングボックス)")
+    lo = (2, 1, 0)
+    hi = (4, 3, 2)
+    rho = np.zeros((6, 5, 4))
+    rho[lo[0] : hi[0], lo[1] : hi[1], lo[2] : hi[2]] = 1.0
+
+    mr_synth = mesh.build_surface(rho)
+    bbox_min = mr_synth.verts_raw.min(axis=0)
+    bbox_max = mr_synth.verts_raw.max(axis=0)
+    expected_min = np.array(lo, dtype=float)
+    expected_max = np.array(hi, dtype=float)
+
+    err_min = float(np.abs(bbox_min - expected_min).max())
+    err_max = float(np.abs(bbox_max - expected_max).max())
+    # 許容0.25要素: 正しい実装なら誤差はほぼ0(浮動小数点誤差のみ)、報告されたバグは
+    # 0.5要素ぶんずれるので、その中間に閾値を置けばどちらも明確に判定できる。
+    check(
+        "バウンディングボックスがセル中心規約の期待範囲と一致(半セルずれていない)",
+        err_min < 0.25 and err_max < 0.25,
+        f"min={bbox_min.tolist()}(期待{expected_min.tolist()}) "
+        f"max={bbox_max.tolist()}(期待{expected_max.tolist()}) "
+        f"誤差(min,max)=({err_min:.4f},{err_max:.4f})",
+    )
+    RESULTS["bbox_alignment_err_min"] = err_min
+    RESULTS["bbox_alignment_err_max"] = err_max
+
+
 def main() -> int:
     print("=" * 72)
     print("check_mesh.py : marching cubes + Taubin平滑化の受入検査")
@@ -270,6 +325,7 @@ def main() -> int:
     check_interpolation_not_binarized(mr)
     check_min_wall_thickness(mr)
     check_stl_roundtrip(mr)
+    check_bounding_box_alignment()
 
     print("\n" + "=" * 72)
     print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))

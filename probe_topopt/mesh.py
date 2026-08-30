@@ -84,16 +84,30 @@ def run_marching_cubes(
     level: float = DEFAULT_LEVEL,
     spacing: tuple[float, float, float] = DEFAULT_SPACING,
     pad_width: int = DEFAULT_PAD,
-) -> tuple[np.ndarray, np.ndarray]:
-    """`rho_padded`(連続値・パッド済み)から (verts, faces) を返す。
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """`rho_padded`(連続値・パッド済み)から (verts, faces, interpolation_ratios) を返す。
 
-    座標はパディング分だけ原点をずらして、パディングしていない元の格子の座標系に戻す。
+    座標は「パディングしていない元の格子」の**セル中心規約**に戻す。`rho[ex]` は要素 `ex` の
+    **中心**の値であり(`web/index.html` のボクセル描画も `ex+0.5-nelx/2` でこの規約に
+    合わせている)、パッド済み配列の添字 `i` は元の添字 `ex = i - pad_width` に対応する。
+    `marching_cubes` は添字 `i` をそのまま `i*spacing` の位置とみなして頂点を置くので、
+    それを中心規約の座標 `(ex+0.5)*spacing = (i-pad_width+0.5)*spacing` へ戻すには
+    `(pad_width-0.5)*spacing` を引けばよい。**`pad_width*spacing` を引くと0.5要素ぶん
+    ずれる**(2026-08-30 QAで発見・修正。engine `marching-cubes-cell-center-half-offset`)。
     `level` は引数(等値の太さを決める設計の摘み。定数で埋め込まない)。
+
+    **`interpolation_ratios` はオフセットを引く前(marching_cubes直後の生座標)で計算する。**
+    生座標は「2軸が整数格子点・1軸だけが端点間の線形補間値」という
+    `edge_interpolation_ratios` の前提どおりに整数*spacingへ乗っている。オフセット後の
+    座標は半要素ぶん(整数ではなく半整数)ずれるため、offset適用後に計算すると
+    軸判定が丸ごと反転し「常に0.5」という誤った結果になる
+    (2026-08-30、セル中心オフセットの修正と同時に実測して発見)。
     """
     verts, faces, _normals, _values = marching_cubes(rho_padded, level=level, spacing=spacing)
-    offset = np.asarray(spacing, dtype=float) * pad_width
+    interpolation_ratios = edge_interpolation_ratios(verts, spacing=spacing)
+    offset = np.asarray(spacing, dtype=float) * (pad_width - 0.5)
     verts = verts - offset
-    return verts, faces
+    return verts, faces, interpolation_ratios
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +312,7 @@ class MeshResult:
     lam: float
     mu: float
     n_iter: int
+    interpolation_ratios: np.ndarray
 
 
 def build_surface(
@@ -314,7 +329,9 @@ def build_surface(
     t0 = time.perf_counter()
     rho_clean = remove_islands(rho, threshold=level)
     padded = pad_field(rho_clean, width=pad_width)
-    verts_raw, faces = run_marching_cubes(padded, level=level, spacing=spacing, pad_width=pad_width)
+    verts_raw, faces, interpolation_ratios = run_marching_cubes(
+        padded, level=level, spacing=spacing, pad_width=pad_width
+    )
     verts_smooth = taubin_smooth(verts_raw, faces, lam=lam, mu=mu, n_iter=n_iter)
     seconds = time.perf_counter() - t0
     return MeshResult(
@@ -330,6 +347,7 @@ def build_surface(
         lam=lam,
         mu=mu,
         n_iter=n_iter,
+        interpolation_ratios=interpolation_ratios,
     )
 
 

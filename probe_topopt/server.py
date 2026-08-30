@@ -83,7 +83,8 @@ def _build_mesh_payload(rho: np.ndarray) -> dict[str, object]:
     (`ex+0.5-nelx/2` 等)なので、ここで同じだけ平行移動して座標系を合わせる
     (合わせないと、置き換わった瞬間にカメラ・バウンディングボックスに対して形状が
     半分ずれた位置に描かれる)。`nelx/nely/nelz` はどれも偶数なのでこの平行移動は
-    整数量になり、`edge_interpolation_ratios` が見る小数部には影響しない。
+    整数量になり、marching cubesの補間比を見る検査(`check_mesh.py`)には影響しない
+    (その検査は`mesh.build_surface`内部でオフセット適用前の生座標から計算済みの値を使う)。
     座標は小数4桁へ丸めてペイロードを縮める(表示品質には効かない)。
     """
     mr = mesh.build_surface(rho)
