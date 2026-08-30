@@ -358,21 +358,17 @@ class DocumentView:
         except Exception as error:  # 壊れたスケッチで画面全体を落とさない
             self.warnings.append(f"スケッチ {item.id} を描けない: {type(error).__name__}: {error}")
             drawn = []
-        plane_shape = None
-        if item.plane.get("kind") == "face":
-            body = next(
-                (b for b in self.document.bodies if b.id == item.plane.get("body")), None
-            )
-            plane_shape = body.shape if body is not None else None
+        # **貼った先のボディの形状は署名に入れない**。面に貼ったスケッチの姿勢は
+        # `item.plane["frame"]` が持っており(`duocad.region.plane_frame`)、ボディを後から
+        # 面取り・フィレットしてもスケッチの枠も領域も変わらない。逆に `set_parameter` の
+        # `rebuild()` で姿勢が解き直されたときは `plane` そのものが変わるので、この署名が
+        # 拾う。
         signature = json.dumps(
             [item.plane, drawn, self.view_deviation], sort_keys=True, default=str
         )
         cached = self._sketch_cache.get(item.id)
-        # 貼った面の形状は**参照そのもの**で比べる(`is`)。`id()` の整数だけを控えると、
-        # 旧形状が解放された後に同じアドレスが再利用されたときに偽ヒットする
-        # (`geometry()` のキャッシュが形状の同一性で引いているのと同じ判断)。
-        if cached is not None and cached[0] == signature and cached[1] is plane_shape:
-            payload = dict(cached[2])
+        if cached is not None and cached[0] == signature:
+            payload = dict(cached[1])
         else:
             frame: Optional[dict] = None
             regions: list = []
@@ -387,7 +383,7 @@ class DocumentView:
                     f"スケッチ {item.id} の領域を計算できない: {type(error).__name__}: {error}"
                 )
             payload = {"frame": frame, "drawn": drawn, "regions": regions}
-            self._sketch_cache[item.id] = (signature, plane_shape, payload)
+            self._sketch_cache[item.id] = (signature, payload)
             payload = dict(payload)
         payload["sketch_id"] = item.id
         payload["plane"] = item.plane

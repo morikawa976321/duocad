@@ -325,8 +325,10 @@ def base_plane(name: str) -> dict:
 def face_plane(body_id: BodyId, face_index: int) -> dict:
     """既存ソリッドの面への参照。`{"kind": "face", "body":.., "index":.., "provenance": None}`。
 
-    面の添字は形状変更で静かにずれるので、`provenance` を day1 で空けておく
-    (後から足すと全操作の書き直しになる)。
+    **これは `sketch_create` へ渡す引数の形**であって、スケッチが持つ形ではない。
+    `resolve_plane` を通すと解決済みの姿勢(`frame`)が足され、以後**幾何の正はその枠**になる
+    (`body`/`index` は「元はどのボディのどの面か」の由来表示に残るだけで、引き直しには
+    使わない)。面の添字は形状変更で静かにずれるため。
     """
     return {
         "kind": "face",
@@ -334,6 +336,17 @@ def face_plane(body_id: BodyId, face_index: int) -> dict:
         "index": int(face_index),
         "provenance": None,
     }
+
+
+def plane_log_args(plane_ref: dict) -> dict:
+    """PlaneRef から**操作ログへ載せる形**(解決済みの姿勢を落とした素の参照)を作る。
+
+    **`frame` はログへ入れない**。ログは唯一の正であり、そこへ解決結果を焼き込むと
+    `set_parameter` の `rebuild()`(履歴を最初から再生し直す)で古い姿勢が復活し、
+    「スケッチ作成**より前**のパラメータ編集には追随する」が壊れる。姿勢は再生のたびに
+    `_do_sketch_create` がその履歴時点の形状から解決し直す(`resolve_plane`)。
+    """
+    return {key: value for key, value in plane_ref.items() if key != "frame"}
 
 
 # --------------------------------------------------------------------------------------
@@ -438,9 +451,13 @@ def sketch_create(doc: Document, plane: Any) -> SketchId:
     plane_ref = resolve_plane(doc, plane)
     sketch_id = f"sketch-{uuid4().hex[:12]}"
     # モデルとログには別のdictを渡す(共有すると、貼った面の由来スロットを後から埋めた
-    # 瞬間に、唯一の正であるログが黙って書き換わる)。
+    # 瞬間に、唯一の正であるログが黙って書き換わる)。**モデルは解決済みの姿勢つき、
+    # ログは素の参照だけ**(`plane_log_args`)。
     doc.sketches.append(Sketch(id=sketch_id, plane=dict(plane_ref)))
-    doc.log.append(VERB_SKETCH_CREATE, {"sketch_id": sketch_id, "plane": dict(plane_ref)})
+    doc.log.append(
+        VERB_SKETCH_CREATE,
+        {"sketch_id": sketch_id, "plane": plane_log_args(plane_ref)},
+    )
     return sketch_id
 
 
@@ -532,8 +549,14 @@ def entity_params(
 def resolve_plane(doc: Document, plane: Any) -> dict:
     """引数の平面指定を PlaneRef のdictへ正規化する。失敗時は文書を触らない。
 
-    **verb層からも呼ぶ**(`verbs/import_svg.py`)ので公開している —— 平面の解決を2箇所に
-    持つと、面が平面かどうかの検査が片方だけ抜ける。
+    **面参照はここで姿勢まで解決して `frame` に焼き付ける**(`kernel.face_frame`)。
+    これが「面の姿勢をライブに引き直すのをやめる」の唯一の入口であり、解決を2箇所に持つと
+    平面かどうかの検査も焼き付けも片方だけ抜ける。
+
+    **`doc` を渡すのは「いまこの瞬間の形状」から解決するため**である。新規作成では
+    `sketch_create` が、再生では `_do_sketch_create` が呼ぶので、`rebuild()` はその履歴時点の
+    形状に対して姿勢を解き直す(＝スケッチ作成**より前**のパラメータ編集には追随し、
+    **より後**の面取り・フィレットには一切動かされない)。
     """
     if isinstance(plane, str):
         return base_plane(plane)
@@ -547,12 +570,12 @@ def resolve_plane(doc: Document, plane: Any) -> dict:
             raise KeyError(f"no such body: {body_id!r}")
         if body.shape is None:
             raise ValueError(f"body {body_id!r} has no shape")
-        kernel.require_planar_face(body.shape, face_index)
         return {
             "kind": "face",
             "body": body_id,
             "index": face_index,
             "provenance": plane.get("provenance"),
+            "frame": kernel.face_frame(body.shape, face_index),
         }
     raise ValueError(f"invalid sketch plane: {plane!r}")
 
@@ -617,12 +640,18 @@ def _do_sketch_create(document: Document, operation: Operation) -> None:
 
     同じIDが既にあるなら `ValueError`(`Document.add_body` と同じ理由 — 黙って重複させると
     `get_sketch` がどちらを返すかで以後の図形追加・領域参照の指す先が静かに決まる)。
+
+    **平面は `resolve_plane` で解き直す**。ログが持つのは素の参照(body/index)だけで、姿勢は
+    「この操作を適用するその瞬間の形状」から取る。`rebuild()` は履歴を頭から再生するので、
+    ここで解くと**スケッチより前**のパラメータ編集は反映され、**スケッチより後**の面取り・
+    フィレットはまだ適用されていない —— それが「作成時点で固定する」の実体である。
     """
     args = operation.args
     sketch_id = args["sketch_id"]
     if any(sketch.id == sketch_id for sketch in document.sketches):
         raise ValueError(f"sketch id already exists: {sketch_id!r}")
-    document.sketches.append(Sketch(id=sketch_id, plane=dict(args["plane"])))
+    plane_ref = resolve_plane(document, args["plane"])
+    document.sketches.append(Sketch(id=sketch_id, plane=dict(plane_ref)))
 
 
 def _undo_sketch_create(document: Document, operation: Operation) -> None:

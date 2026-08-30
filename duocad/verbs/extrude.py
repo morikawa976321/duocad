@@ -178,13 +178,11 @@ def _resolve_faces_and_normal(
         faces.append(match["face"])
 
     sketch = get_sketch(doc, sketch_id)
-    support = None
-    if sketch.plane.get("kind") == "face":
-        # 貼った先のボディが消えていれば KeyError(`next()` に任せると StopIteration になり、
-        # 原因が読めなくなる)
-        body = doc.get_body(sketch.plane["body"])
-        support = kernel.face_of(body.shape, int(sketch.plane["index"]))
-    normal = kernel.sketch_plane_normal(sketch.plane, face=support)
+    # 面に貼ったスケッチでも**ライブの面は引かない**。押し出しの向きはスケッチ平面の法線で
+    # 決まり、その法線は作成時に `plane["frame"]` へ焼き付けてある(`kernel.face_frame`)。
+    # 添字で引き直していた頃は、貼った先のボディを後から面取りしただけで押し出し方向が
+    # 別の面の法線へ静かに移りえた。
+    normal = kernel.sketch_plane_normal(sketch.plane)
     return faces, normal
 
 

@@ -153,33 +153,20 @@ def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
     return entities
 
 
-def plane_face(doc: Document, sketch_id: SketchId) -> Any:
-    """スケッチを貼った面(`TopoDS_Face`)。基準平面に貼ったスケッチなら None。
-
-    面に貼ったスケッチは**平面の枠を実際の面から取る**必要がある(基準3面と違って位置も軸も
-    文書の中身次第)。
-    """
-    sketch = get_sketch(doc, sketch_id)
-    if sketch.plane.get("kind") != "face":
-        return None
-    body_id = sketch.plane["body"]
-    body = next((candidate for candidate in doc.bodies if candidate.id == body_id), None)
-    if body is None:
-        raise KeyError(f"no such body: {body_id!r}")
-    if body.shape is None:
-        raise ValueError(f"body {body_id!r} has no shape")
-    return kernel.face_of(body.shape, int(sketch.plane["index"]))
-
-
 def plane_frame(doc: Document, sketch_id: SketchId) -> dict:
     """スケッチ平面の3Dの枠(`kernel.sketch_plane_frame`)。
 
     アプリ層が「画面のクリック → 平面上の (u, v)」と「図形 → 3Dの線」を行き来するために
     要る。**同じ計算をアプリ層に持たせない**(基準3面の軸の取り方と、面に貼ったときの
     法線反転の扱いが必ずずれる)。
+
+    **面に貼ったスケッチでも `body.shape` を見ない**。姿勢はスケッチ作成時に
+    `sketch.resolve_plane` が `plane["frame"]` へ焼き付けており、ここはそれを読むだけである
+    (`kernel.face_frame` のdocstring)。ライブの面から引き直していた頃は、スケッチと無関係な
+    フィレット1つで添字の指す先が円錐面へずれ、スケッチが丸ごと描けなくなっていた。
     """
     sketch = get_sketch(doc, sketch_id)
-    return kernel.sketch_plane_frame(sketch.plane, face=plane_face(doc, sketch_id))
+    return kernel.sketch_plane_frame(sketch.plane)
 
 
 def expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
@@ -227,8 +214,10 @@ def _regions_detailed(doc: Document, sketch_id: SketchId) -> List[dict]:
     sketch = get_sketch(doc, sketch_id)
     if not sketch.entities:
         return []
-    face = plane_face(doc, sketch_id)
     entities = _expanded_entities(doc, sketch_id)
     if not entities:
         return []
-    return kernel.sketch_regions(sketch.plane, entities, face=face)
+    # 面に貼ったスケッチでも実際の面(`TopoDS_Face`)は渡さない —— `sketch_regions` が面から
+    # 取っていたのは**無限平面としての姿勢だけ**で、トリムされた境界は使っていない。姿勢は
+    # `plane["frame"]` が持っている(`plane_frame` のdocstring)。
+    return kernel.sketch_regions(sketch.plane, entities)

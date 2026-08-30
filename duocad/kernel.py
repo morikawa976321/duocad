@@ -810,14 +810,19 @@ def extrude_face_on_shape(
 # --------------------------------------------------------------------------------------
 # スケッチ平面・領域検出・領域押し出し
 # --------------------------------------------------------------------------------------
-def require_planar_face(shape: "TopoDS_Shape", face_index: int) -> None:
-    """面 `face_index` が平面でなければ ValueError(スケッチを貼れない)。"""
+def require_planar_face(shape: "TopoDS_Shape", face_index: int) -> Any:
+    """面 `face_index` が平面でなければ ValueError(スケッチを貼れない)。平面ならその面を返す。
+
+    面を返すのは `face_frame` が同じ面をもう一度数え直さずに済ませるため
+    (`_face_map` は毎回 `MapShapes_s` を走らせるので、面の多い形状では数え直しが効く)。
+    """
     face = face_of(shape, face_index)
     kind = classify_face(face)
     if kind != "plane":
         raise ValueError(
             f"face {face_index} is {kind}: スケッチを貼れるのは平面の面だけ"
         )
+    return face
 
 
 def face_of(shape: "TopoDS_Shape", face_index: int) -> Any:
@@ -828,6 +833,23 @@ def face_of(shape: "TopoDS_Shape", face_index: int) -> Any:
             f"face index out of range: {face_index} (1..{shape_map.Extent()})"
         )
     return TopoDS.Face_s(shape_map.FindKey(int(face_index)))
+
+
+def face_frame(shape: "TopoDS_Shape", face_index: int) -> dict:
+    """面 `face_index` の**その時点の姿勢**を素の数値の枠として切り出す。
+
+    戻り値は `sketch_plane_frame` と同じ形 —— {"origin", "u", "v", "normal"}。
+
+    **これがスケッチの姿勢を「焼き付ける」入口である**。スケッチを貼った面の添字は、その後の
+    面取り・フィレットで(スケッチと無関係な場所の操作でも)静かに別の面へずれる。ずれた添字で
+    引き直すと、平面だったはずの参照が円錐面・円筒面になって領域計算ごと落ちる
+    (2026-08-30に実測。`face is cone: スケッチ平面にできるのは平面だけ`)。
+    面が完全に消えてもスケッチはその場に残る、というのが CAD の期待される挙動なので
+    (Fusion 360 実機で反証確認済み)、**姿勢は作成時に1回だけ解決して固定する**。
+
+    平面でなければ ValueError(スケッチを貼れない面)。
+    """
+    return _frame_from_ax3(_ax3_from_face(require_planar_face(shape, face_index)))
 
 
 def sketch_plane_normal(plane: dict, face: Any = None) -> Tuple[float, float, float]:
@@ -846,17 +868,7 @@ def sketch_plane_frame(plane: dict, face: Any = None) -> dict:
     (`p = origin + u*u_axis + v*v_axis`)。同じ計算をアプリ層が独自に持つと、基準平面3面の
     軸の取り方と面に貼ったスケッチの `ZReverse` の扱いが必ずずれるので、**枠はコアが配る**。
     """
-    ax3 = _ax3_from_plane(plane, face=face)
-    origin = ax3.Location()
-    xdir = ax3.XDirection()
-    ydir = ax3.YDirection()
-    normal = ax3.Direction()
-    return {
-        "origin": [origin.X(), origin.Y(), origin.Z()],
-        "u": [xdir.X(), xdir.Y(), xdir.Z()],
-        "v": [ydir.X(), ydir.Y(), ydir.Z()],
-        "normal": [normal.X(), normal.Y(), normal.Z()],
-    }
+    return _frame_from_ax3(_ax3_from_plane(plane, face=face))
 
 
 def sketch_regions(
@@ -1040,7 +1052,13 @@ def extrude_regions(
 
 
 def _ax3_from_plane(plane: dict, face: Any = None) -> "gp_Ax3":
-    """PlaneRef から gp_Ax3 を作る。面参照で平面でなければ ValueError。"""
+    """PlaneRef から gp_Ax3 を作る。面参照で平面でなければ ValueError。
+
+    **面参照は `plane["frame"]`(作成時に焼き付けた姿勢)が最優先**で、そこに枠がある限り
+    `face` は見ない —— これが「後続の面取り・フィレットがスケッチを動かさない」の実体である
+    (`face_frame` のdocstring)。枠を持たない面参照は `face` から解決する。古い操作ログを
+    再生した文書や、手で組んだ PlaneRef のための後方互換の経路。
+    """
     kind = plane.get("kind")
     if kind == "base":
         name = plane.get("name")
@@ -1049,10 +1067,83 @@ def _ax3_from_plane(plane: dict, face: Any = None) -> "gp_Ax3":
         origin, normal, xdir = _BASE_PLANE_AXES[name]
         return gp_Ax3(gp_Pnt(*origin), gp_Dir(*normal), gp_Dir(*xdir))
     if kind == "face":
+        frame = plane.get("frame")
+        if frame is not None:
+            return _ax3_from_frame(frame)
         if face is None:
             raise ValueError("face plane requires a TopoDS_Face")
         return _ax3_from_face(face)
     raise ValueError(f"invalid sketch plane: {plane!r}")
+
+
+def _frame_from_ax3(ax3: "gp_Ax3") -> dict:
+    """gp_Ax3 を素の数値の枠へ。`_ax3_from_frame` の逆で、往復して同じものに戻る。"""
+    origin = ax3.Location()
+    xdir = ax3.XDirection()
+    ydir = ax3.YDirection()
+    normal = ax3.Direction()
+    return {
+        "origin": [origin.X(), origin.Y(), origin.Z()],
+        "u": [xdir.X(), xdir.Y(), xdir.Z()],
+        "v": [ydir.X(), ydir.Y(), ydir.Z()],
+        "normal": [normal.X(), normal.Y(), normal.Z()],
+    }
+
+
+def _ax3_from_frame(frame: Any) -> "gp_Ax3":
+    """素の数値の枠から gp_Ax3 を復元する(`_frame_from_ax3` の逆)。
+
+    **`v` を捨ててはいけない**。`gp_Ax3(location, direction, xdirection)` は必ず右手系を作る
+    (`YDirection = Direction ^ XDirection`)のに対し、`_ax3_from_face` が反転面へ当てる
+    `ZReverse()` は Direction だけを裏返して X/Y を据え置く(＝左手系になる)。
+    origin/normal/u の3つだけを保存して組み直すと、**反転面に貼ったスケッチの v 軸だけが
+    符号反転し、図形が平面内で鏡像になる**。実測でOCCTのこの挙動を確認済み(2026-08-30)。
+    そこで `v` も保存し、必要なら `YReverse()`(Y だけを裏返す)で左手系へ戻す。
+
+    復元した3軸が保存値と一致しない場合は ValueError —— 黙って鏡像の平面を配ると、
+    領域の添字も押し出しの向きも意味を失ったまま成功してしまう。
+    """
+    if not isinstance(frame, dict):
+        raise ValueError(f"invalid sketch plane frame: {frame!r}")
+    try:
+        given = {
+            name: [float(value) for value in frame[name]]
+            for name in ("origin", "u", "v", "normal")
+        }
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"invalid sketch plane frame: {frame!r}") from error
+    for name, vector in given.items():
+        if len(vector) != 3 or not all(math.isfinite(value) for value in vector):
+            raise ValueError(f"invalid sketch plane frame ({name}): {frame!r}")
+    origin, u, v, normal = given["origin"], given["u"], given["v"], given["normal"]
+
+    try:
+        # 長さ0のベクトルや normal と u が平行な枠は OCCT が Standard_ConstructionError で
+        # 落とす。層の外(操作ログ・手書きのPlaneRef)から来た値の検査なので ValueError へ
+        # 揃える —— 呼び出し側は「平面が不正」を1種類の例外で捕まえられなければならない。
+        ax3 = gp_Ax3(gp_Pnt(*origin), gp_Dir(*normal), gp_Dir(*u))
+    except Exception as error:
+        raise ValueError(f"invalid sketch plane frame: {frame!r}") from error
+    if _dot3(ax3.YDirection(), v) < 0.0:
+        ax3.YReverse()
+
+    restored = _frame_from_ax3(ax3)
+    for name, vector in given.items():
+        for expected, actual in zip(vector, restored[name]):
+            if abs(expected - actual) > 1.0e-9 * max(1.0, abs(expected)):
+                raise ValueError(
+                    f"sketch plane frame is not orthonormal ({name}): {frame!r}"
+                )
+    return ax3
+
+
+def _dot3(direction: "gp_Dir", vector: Sequence[float]) -> float:
+    """gp_Dir と素の3成分の内積(枠の復元で向きの一致だけを見る)。"""
+    return (
+        direction.X() * float(vector[0])
+        + direction.Y() * float(vector[1])
+        + direction.Z() * float(vector[2])
+    )
 
 
 def _ax3_from_face(face: Any) -> "gp_Ax3":

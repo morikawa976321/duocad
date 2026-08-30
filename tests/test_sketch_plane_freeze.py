@@ -1,0 +1,365 @@
+"""面に貼ったスケッチの姿勢は**作成時に固定**され、その後の形状変更に動かされない。
+
+2026-08-30の事故: 直方体の上面にスケッチを貼った状態で辺をフィレットしたら、スケッチと
+無関係な場所の操作なのに面の列挙順が変わり、`plane["index"]` の指す先が球面・円筒面へずれて
+スケッチが丸ごと描けなくなった(`ValueError: face is cone: スケッチ平面にできるのは平面だけ` /
+`face is cylinder_full: ...`)。原因は**描画のたびにライブの `body.shape` から添字で面を引き
+直していた**こと。
+
+設計の正はFusion 360の実機挙動(2026-08-30に反証確認): 参照した面の面積が0になるまで丸めても
+スケッチは元の高さ・向きのまま残る。つまり**作成時点の姿勢をスケッチ自身へ焼き付け、以後その
+ボディに何が起きても引き直さない**。一方、スケッチ作成**より前**のパラメータ編集には従来どおり
+追随する —— `rebuild()` が履歴を頭から再生し、その時点の形状から解き直すため。
+
+面の**実体**(`TopoDS_Face`)が要るのは領域計算だと思われがちだが、実際に使われていたのは
+無限平面としての姿勢だけである(トリムされた境界は使っていない)。だからこの凍結で失うものは無い。
+"""
+from __future__ import annotations
+
+import math
+
+import pytest
+
+from duocad import kernel, parameters, query, region
+from duocad.document import Document
+from duocad.oplog import OpLog
+from duocad.region import region_ref
+from duocad.sketch import (
+    add_circle,
+    add_rectangle,
+    base_plane,
+    face_plane,
+    get_sketch,
+    sketch_create,
+)
+from duocad.verbs import extrude
+
+BOX = 20.0
+#: 直方体の上面(z=BOX・法線+Z)の面添字。`new_box` の直後は必ずこれになる(実測)。
+TOP_FACE_INDEX = 6
+#: +X側の側面の面添字(`new_box` の直後)。幅(`d3`)を変えると位置が動く面。
+PLUS_X_FACE_INDEX = 3
+
+
+# --------------------------------------------------------------------------------------
+# 道具（duocadのverbだけで素材を作る。生のOCPで組み立てない = tests/test_fillet.py と同じ）
+# --------------------------------------------------------------------------------------
+def new_box(doc: Document, width: float = BOX, depth: float = BOX, height: float = BOX) -> str:
+    """スケッチ(長方形)→押し出しで直方体を1つ作り body_id を返す。
+
+    長方形の名前つきの値は追加順に `d1`=x / `d2`=y / `d3`=width / `d4`=height。
+    """
+    sketch_id = sketch_create(doc, base_plane("XY"))
+    add_rectangle(doc, sketch_id, (0.0, 0.0), width, depth)
+    return extrude(doc, [region_ref(sketch_id, 1)], height, mode="join").args["body_id"]
+
+
+def all_edges(doc: Document, body_id: str) -> list:
+    return [edge["index"] for edge in query.describe_edges(doc.get_body(body_id).shape)]
+
+
+def live_frame(doc: Document, body_id: str, face_index: int) -> dict:
+    """**その瞬間の** `body.shape` の面から枠を取る(凍結前の古い解決の再現)。"""
+    return kernel.face_frame(doc.get_body(body_id).shape, face_index)
+
+
+def top_plane_indices(doc: Document, body_id: str, z: float) -> list:
+    """高さ `z` にある上向きの平面の面添字(消滅したかを実物で見るため)。"""
+    found = []
+    for face in query.describe_faces(doc.get_body(body_id).shape):
+        if face["kind"] != "plane" or face["normal"][2] < 0.99:
+            continue
+        if abs(face["center"][2] - z) < 1.0e-9:
+            found.append(face["index"])
+    return found
+
+
+def assert_same_frame(actual: dict, expected: dict) -> None:
+    for key in ("origin", "u", "v", "normal"):
+        assert len(actual[key]) == 3
+        for got, want in zip(actual[key], expected[key]):
+            assert math.isclose(got, want, rel_tol=0.0, abs_tol=1.0e-9), (
+                f"{key}: {actual[key]} != {expected[key]}"
+            )
+
+
+# --------------------------------------------------------------------------------------
+# 1. 作成後の形状変更は姿勢を動かさない
+# --------------------------------------------------------------------------------------
+def test_a_later_fillet_does_not_move_a_face_sketch_even_when_the_index_now_lands_on_a_sphere():
+    """2026-08-30の事故そのもの。**添字の指す先が球面へずれてもスケッチは動かない**。
+
+    立方体の全12辺を r=3 で丸めると面は26枚になり、上面だった添字6は角の球面
+    (`classify_face` は球を `other` に落とす)を指す。凍結前はここでスケッチの枠を
+    引き直していたため `ValueError: face is other: ...` で描画ごと落ちていた。
+    """
+    document = Document()
+    body_id = new_box(document)
+    sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
+    add_circle(document, sketch_id, (0.0, 0.0), 4.0)
+    frame_before = region.plane_frame(document, sketch_id)
+
+    from duocad.verbs import fillet
+
+    fillet(document, all_edges(document, body_id), 3.0, body_id=body_id)
+
+    # 前提の確認: 添字6はもう平面ではない(＝古い実装ならここで落ちていた)
+    shape = document.get_body(body_id).shape
+    assert kernel.classify_face(kernel.face_of(shape, TOP_FACE_INDEX)) != "plane"
+    with pytest.raises(ValueError):
+        kernel.face_frame(shape, TOP_FACE_INDEX)
+
+    assert_same_frame(region.plane_frame(document, sketch_id), frame_before)
+    assert [item.area for item in region.regions(document, sketch_id)] == pytest.approx(
+        [math.pi * 16.0]
+    )
+
+
+def test_a_face_sketch_survives_the_referenced_face_disappearing_completely():
+    """参照元の面が**完全に消滅**してもスケッチは元の高さ・向きで残る(Fusion実機の挙動)。
+
+    上面を丸ごと削り落とす(上面より大きい長方形で 5mm 切り下げる)。切削後、z=20 に上向きの
+    平面は**1枚も無い**。それでもスケッチの枠は z=20 のままで、領域も計算できる。
+
+    **フィレットで面積をちょうど0にする経路は使えない**: OCCTのフィレットは半径が限界値
+    (20mm立方体の上面4辺なら r=10)ちょうどだと `IsDone=False` で失敗する(実測。
+    `tests/test_fillet.py` のdocstringも同じ限界を記録している)。限界未満では常に微小な
+    平面が残るので、「面積が完全に0」を作れるのは切削の側である。
+    """
+    document = Document()
+    body_id = new_box(document)
+    kept = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
+    add_circle(document, kept, (0.0, 0.0), 4.0)
+    frame_before = region.plane_frame(document, kept)
+    assert top_plane_indices(document, body_id, BOX) == [TOP_FACE_INDEX]
+
+    cutter = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
+    # 上面より大きい長方形。スケッチ平面の原点は面の中央付近なので (u,v) を中心対称に取る。
+    add_rectangle(document, cutter, (-15.0, -15.0), 30.0, 30.0)
+    extrude(document, [region_ref(cutter, 1)], -5.0, mode="cut", body_id=body_id)
+
+    assert top_plane_indices(document, body_id, BOX) == [], "上面が残っている(前提が崩れた)"
+    assert kernel.volume(document.get_body(body_id).shape) == pytest.approx(
+        BOX * BOX * (BOX - 5.0)
+    )
+    # 添字6は今や+X側の側面。凍結前は**例外も出さずに**スケッチがそこへ移っていた。
+    assert live_frame(document, body_id, TOP_FACE_INDEX)["normal"] == pytest.approx(
+        [1.0, 0.0, 0.0]
+    )
+
+    assert_same_frame(region.plane_frame(document, kept), frame_before)
+    assert region.plane_frame(document, kept)["origin"][2] == pytest.approx(BOX)
+    assert [item.area for item in region.regions(document, kept)] == pytest.approx(
+        [math.pi * 16.0]
+    )
+
+
+def test_extrude_takes_its_direction_from_the_frozen_frame():
+    """押し出しの向きも凍結した枠から取る(ライブの面から引き直さない)。
+
+    向きだけ別経路で解いていると、面取り後に**押し出しだけが別の面の法線へ**静かに移る。
+    """
+    document = Document()
+    body_id = new_box(document)
+    sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
+    add_circle(document, sketch_id, (0.0, 0.0), 4.0)
+
+    from duocad.verbs import fillet
+
+    fillet(document, all_edges(document, body_id), 3.0, body_id=body_id)
+    volume_before = kernel.volume(document.get_body(body_id).shape)
+
+    extrude(document, [region_ref(sketch_id, 1)], 5.0, mode="join", body_id=body_id)
+
+    volume_after = kernel.volume(document.get_body(body_id).shape)
+    assert volume_after > volume_before, "上向きに積めていない(法線が別の面へ移った)"
+
+
+# --------------------------------------------------------------------------------------
+# 2. 作成より前のパラメータ編集には従来どおり追随する
+# --------------------------------------------------------------------------------------
+def test_a_face_sketch_follows_a_parameter_edit_that_precedes_it():
+    """`set_parameter` は履歴を頭から再生するので、スケッチはその時点の形状で解き直される。
+
+    直方体の幅(`d3`)を 20 → 30 にすると +X 側の側面が動く。そこに貼ったスケッチの原点も
+    x=20 から x=30 へ**ついていく**(向きは変わらない)。凍結によってここが止まってはいけない。
+    """
+    document = Document()
+    body_id = new_box(document)
+    sketch_id = sketch_create(document, face_plane(body_id, PLUS_X_FACE_INDEX))
+    add_circle(document, sketch_id, (0.0, 0.0), 3.0)
+    before = region.plane_frame(document, sketch_id)
+    assert before["origin"][0] == pytest.approx(BOX)
+
+    parameters.set_parameter(document, "d3", 30.0)
+
+    after = region.plane_frame(document, sketch_id)
+    assert after["origin"][0] == pytest.approx(30.0)
+    assert after["normal"] == pytest.approx([1.0, 0.0, 0.0])
+    assert after["u"] == pytest.approx(before["u"])
+    assert after["v"] == pytest.approx(before["v"])
+    assert [item.area for item in region.regions(document, sketch_id)] == pytest.approx(
+        [math.pi * 9.0]
+    )
+
+
+# --------------------------------------------------------------------------------------
+# 3. 焼き付けた枠そのものの契約
+# --------------------------------------------------------------------------------------
+def test_the_frozen_frame_equals_the_live_resolution_at_creation_time_for_every_face():
+    """凍結した枠は「作成時にライブで解いた枠」と**厳密に一致**する。
+
+    **反転面(`TopAbs_REVERSED`)が要点**。`_ax3_from_face` は反転面に `ZReverse()` を当てるが、
+    これは Direction だけを裏返して X/Y を据え置く(＝左手系になる)。一方
+    `gp_Ax3(location, direction, xdirection)` は必ず右手系を作る。origin/normal/u だけを
+    保存して組み直すと **v の符号だけが反転し、図形が平面内で鏡像になる**(OCCTのこの挙動は
+    2026-08-30に実測)。だから枠は v も保存し、必要なら `YReverse()` で戻す。
+    直方体の6面には反転面が3枚あるので、この検査で両方の系を通る。
+    """
+    document = Document()
+    body_id = new_box(document)
+    faces = query.describe_faces(document.get_body(body_id).shape)
+    assert len(faces) == 6
+
+    reversed_faces = 0
+    for face in faces:
+        expected = live_frame(document, body_id, face["index"])
+        sketch_id = sketch_create(document, face_plane(body_id, face["index"]))
+        assert_same_frame(region.plane_frame(document, sketch_id), expected)
+        # 右手系/左手系の両方を実際に通ったことを数える(u × v が normal と同じ向きか)
+        cross_z = (
+            expected["u"][1] * expected["v"][2] - expected["u"][2] * expected["v"][1],
+            expected["u"][2] * expected["v"][0] - expected["u"][0] * expected["v"][2],
+            expected["u"][0] * expected["v"][1] - expected["u"][1] * expected["v"][0],
+        )
+        if sum(a * b for a, b in zip(cross_z, expected["normal"])) < 0:
+            reversed_faces += 1
+    # 押し出しで作った直方体は6面中5面が反転面(実測)。**両方の系を実際に通ったこと**だけを
+    # 固定する —— 枚数そのものはOCCTのブーリアンの都合で変わりうる。
+    assert 0 < reversed_faces < 6, (
+        f"右手系と左手系の両方を通っていない(反転面 {reversed_faces}/6)"
+    )
+
+
+def test_the_frame_is_kept_out_of_the_oplog():
+    """ログには**素の参照だけ**を載せる。焼き付けた枠を入れると再生で古い姿勢が復活する。
+
+    ログが持つのは `kind`/`body`/`index`/`provenance`。姿勢は再生のたびに解き直す。
+    """
+    document = Document()
+    body_id = new_box(document)
+    sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
+
+    logged = [
+        entry for entry in document.log.entries if entry.verb == "sketch_create"
+    ][-1]
+    assert set(logged.args["plane"]) == {"kind", "body", "index", "provenance"}
+    assert "frame" in get_sketch(document, sketch_id).plane
+
+
+def test_a_log_round_trip_reproduces_the_same_frames():
+    """保存(JSON)→再生でスケッチの枠が同じに戻る(undo/redoと保存の互換)。
+
+    再生の途中では、面取り前のボディに対して姿勢が解かれる。**再生後の最終形状に対して
+    ではない** —— そこが「作成時点で固定する」の実体である。
+    """
+    document = Document()
+    body_id = new_box(document)
+    sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
+    add_circle(document, sketch_id, (0.0, 0.0), 4.0)
+
+    from duocad.verbs import fillet
+
+    fillet(document, all_edges(document, body_id), 3.0, body_id=body_id)
+    expected = region.plane_frame(document, sketch_id)
+
+    restored = Document()
+    restored.log = OpLog.from_json(document.log.to_json())
+    restored.log.replay(restored)
+
+    assert_same_frame(region.plane_frame(restored, sketch_id), expected)
+    assert [item.area for item in region.regions(restored, sketch_id)] == pytest.approx(
+        [math.pi * 16.0]
+    )
+
+
+def test_undo_and_redo_of_the_fillet_leave_the_sketch_pose_alone():
+    """フィレットの取り消し・やり直しでスケッチの姿勢が揺れない。"""
+    document = Document()
+    body_id = new_box(document)
+    sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
+    add_circle(document, sketch_id, (0.0, 0.0), 4.0)
+    expected = region.plane_frame(document, sketch_id)
+
+    from duocad.verbs import fillet
+
+    fillet(document, all_edges(document, body_id), 3.0, body_id=body_id)
+    assert_same_frame(region.plane_frame(document, sketch_id), expected)
+
+    document.log.undo(document)
+    assert_same_frame(region.plane_frame(document, sketch_id), expected)
+
+    document.log.redo(document)
+    assert_same_frame(region.plane_frame(document, sketch_id), expected)
+
+
+# --------------------------------------------------------------------------------------
+# 4. 壊れた枠を黙って通さない
+# --------------------------------------------------------------------------------------
+def test_a_face_plane_without_a_frame_still_resolves_from_the_given_face():
+    """枠を持たない面参照は、渡された面から解く(後方互換の経路)。
+
+    `sketch_create` を通った平面は必ず枠を持つので製品の経路では通らないが、**kernelは
+    OCPの境界**であり、手で組んだ PlaneRef が来る余地がある。枠が無いのに面も無ければ
+    ValueError —— 黙って基準平面へ落とさない。
+    """
+    document = Document()
+    body_id = new_box(document)
+    shape = document.get_body(body_id).shape
+    bare = {"kind": "face", "body": body_id, "index": TOP_FACE_INDEX, "provenance": None}
+
+    assert_same_frame(
+        kernel.sketch_plane_frame(bare, face=kernel.face_of(shape, TOP_FACE_INDEX)),
+        kernel.face_frame(shape, TOP_FACE_INDEX),
+    )
+    with pytest.raises(ValueError):
+        kernel.sketch_plane_frame(bare)
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pytest.param("not a dict", id="not-a-dict"),
+        pytest.param({"origin": [0, 0, 0], "u": [1, 0, 0], "v": [0, 1, 0]}, id="missing-normal"),
+        pytest.param(
+            {"origin": [0, 0, 0], "u": [1, 0, 0], "v": [0, 1, 0], "normal": [0, 0, 0]},
+            id="zero-normal",
+        ),
+        pytest.param(
+            {"origin": [0, 0, 0], "u": [0, 0, 1], "v": [0, 1, 0], "normal": [0, 0, 1]},
+            id="u-parallel-to-normal",
+        ),
+        pytest.param(
+            {"origin": [0, 0, 0], "u": [1, 1, 0], "v": [0, 1, 0], "normal": [0, 0, 1]},
+            id="u-not-perpendicular",
+        ),
+        pytest.param(
+            {
+                "origin": [0, 0, float("nan")],
+                "u": [1, 0, 0],
+                "v": [0, 1, 0],
+                "normal": [0, 0, 1],
+            },
+            id="nan-origin",
+        ),
+    ],
+)
+def test_a_broken_frame_is_rejected_instead_of_silently_mirroring_the_plane(frame):
+    """直交していない・非有限・欠けている枠は ValueError。
+
+    黙って通すと**領域の添字も押し出しの向きも意味を失ったまま成功する**(平面内で鏡像に
+    なった図形は、そのまま見ても間違いに見えない)。
+    """
+    plane = {"kind": "face", "body": "b", "index": 1, "provenance": None, "frame": frame}
+    with pytest.raises(ValueError):
+        kernel.sketch_plane_frame(plane)
