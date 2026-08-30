@@ -649,7 +649,12 @@ def check_cell_center_convention() -> None:
     builder.MakeCompound(far_compound)
     for sh in far_shells:
         builder.Add(far_compound, sh)
-    far_report = vx.inspect_soup(vx.triangles_from_shape(far_compound, deviation=0.5))
+    far_soup = vx.triangles_from_shape(far_compound, deviation=0.5)
+    assert far_soup.signed_volume(np.array([], dtype=int)) == 0.0, (
+        "三角形が1枚も無い部分集合の符号付き体積は0でなければならない"
+        "(stage2 が signed_volume を直に呼ぶ。基準点を空配列から取ると落ちる)"
+    )
+    far_report = vx.inspect_soup(far_soup)
     far_volumes = sorted(far_report["component_volumes"])
     check(
         "殻ごとの符号付き体積も、遠くに離れた小さな殻で桁落ちしない",

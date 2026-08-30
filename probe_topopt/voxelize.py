@@ -260,6 +260,10 @@ class TriangleSoup:
         """
         p = self.positions
         t = self.triangles if triangles is None else self.triangles[triangles]
+        if t.shape[0] == 0:
+            # 三角形が1枚も無い部分集合は体積ゼロ。基準点を空配列から取ろうとすると落ちるので
+            # 先に返す(いまの呼び出し元は必ず1枚以上あるが、stage2 はこの関数を直に呼ぶ)。
+            return 0.0
         a_raw = p[t[:, 0]]
         b_raw = p[t[:, 1]]
         c_raw = p[t[:, 2]]
