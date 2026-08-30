@@ -917,11 +917,79 @@ async function main() {
     // (2026-08-22。engine `duocad-sketch-start-is-two-steps-by-pointing`)。
     // **起動より前から選ばれていた面では発火しない**(即適用の不変条件)ので、
     // 起動してから同じ面をもう一度クリックする —— これが本来の1手である。
-    await page.click('#sketch-create')
-    await page.mouse.click(backOnFace.x, backOnFace.y)
-    await waitForSketch(() => window.__duocad.activeSketch !== null, '面に貼ったスケッチが作られない')
-    const onFace = await sketchState()
-    if (onFace.plane?.kind !== 'face') fail(`面に貼ったスケッチになっていない: ${JSON.stringify(onFace.plane)}`)
+    //
+    // **基準平面グリッドはいまモデル全体の大きさに追随して広い**(2026-08-30)。
+    // `resolveHit` の面/平面の優先順位は解析的なレイ距離(手前が勝つ)であって見た目の
+    // 透明な線とは無関係なので、狙った面より基準平面が手前に来る候補が実際にありうる ——
+    // `smoke-mcp.mjs`の「手前の基準平面グリッドに取られた」と同じ、既知の起こりうる形。
+    // **候補は複数の部品にまたがって探す**(同じ流儀)。1つの部品(例: 通気口だらけの
+    // メッシュパネル)は、外から見えている平面面の**大半**が実は自分自身の穴を透かして
+    // 見える内側の面で、その先で基準平面(z=0/y=0等)を必ずくぐる —— そういう部品では
+    // 同じ部品の中で何枚候補を替えても全滅しうるので、部品もまたいで探す。
+    const planarCandidates = await page.evaluate(() => {
+      const found = []
+      for (const part of window.__duocad.parts) {
+        const geometry = window.__duocad.getGeometry(part.body_id)
+        if (!geometry) continue
+        const planar = geometry.faces.filter((face) => face.kind === 'plane')
+        for (const face of planar) {
+          if (window.__duocad.projectFace(part.body_id, face.index)) {
+            found.push({ bodyId: part.body_id, index: face.index })
+          }
+          if (found.length >= 20) return found
+        }
+      }
+      return found
+    })
+    if (planarCandidates.length === 0) fail('平面状の面が画面から1枚も指せない(この裏取りが成立しない)')
+
+    const sketchCountBeforeFaceAttempts = await page.evaluate(() => window.__duocad.sketches.length)
+    let onFace = null
+    const faceAttemptLog = []
+    for (const candidate of planarCandidates) {
+      if (
+        await page.evaluate(
+          () => document.querySelector('.command-host')?.dataset.command !== 'sketch_create',
+        )
+      ) {
+        await page.click('#sketch-create')
+      }
+      const at = await locateFace(candidate.bodyId, candidate.index)
+      if (!at) {
+        faceAttemptLog.push(`${candidate.bodyId}/${candidate.index}: 射影できない`)
+        continue
+      }
+      await page.mouse.click(at.x, at.y)
+      const created = await page
+        .waitForFunction(() => window.__duocad.activeSketch !== null, { timeout: 15000, polling: 50 })
+        .then(() => true)
+        .catch(() => false)
+      if (!created) {
+        faceAttemptLog.push(`${candidate.bodyId}/${candidate.index}: スケッチができない`)
+        await page.keyboard.press('Escape')
+        continue
+      }
+      const attempt = await sketchState()
+      if (attempt.plane?.kind === 'face') {
+        onFace = attempt
+        break
+      }
+      faceAttemptLog.push(`${candidate.bodyId}/${candidate.index}: plane=${JSON.stringify(attempt.plane)}`)
+      // 手前の基準平面グリッドに取られた。**先に抜けてから**(`smoke-mcp.mjs`と同じ順序 ——
+      // スケッチモードの中でundoを叩く経路は検査していない)、作られてしまったスケッチを
+      // 戻して次の面を試す。
+      await page.click('#sketch-exit')
+      await waitForSketch(() => window.__duocad.activeSketch === null, '基準平面のスケッチから抜けられない')
+      await pressUndo(page)
+      await waitForSketch(
+        (expected) => window.__duocad.sketches.length === expected,
+        '基準平面のスケッチを戻せない',
+        sketchCountBeforeFaceAttempts,
+      )
+    }
+    if (onFace === null) {
+      fail(`面へのスケッチが1つも作れなかった(全候補が基準平面に取られた等): ${faceAttemptLog.join(' | ')}`)
+    }
     ok('既存ソリッドの面にスケッチを作れた(スケッチモードに入り、平面は face 参照)')
 
     // 入った直後: モード操作が**ツールバーに**出ていること(A1の往復・出現側)。
@@ -950,30 +1018,79 @@ async function main() {
     // **クライアントは先回りしない**(判定はコアの `kernel.require_planar_face` 1箇所)。
     // 見るのは**人が理由に気づけるか**で、そこは札の文言でしか確かめられない ——
     // `#toasts .toast-text` を読むのは T1(Toast.svelte)が決めた検査の穴である。
-    const curved = await page.evaluate((bodyId) => {
-      const geometry = window.__duocad.getGeometry(bodyId)
-      return geometry
-        ? geometry.faces.filter((face) => face.kind !== 'plane').map((face) => face.index)
-        : []
-    }, extrudeTarget.body_id)
+    // **カメラから見てY=0の向こう側にある部品を隠す**(2026-08-30。基準グリッドが
+    // 内容の大きさへ追随するようになった結果を実測: このホームビューはカメラが
+    // 深いマイナスY側にあり(`HOME_VIEW_OFFSET`)、この文書のモデルはY=-290.5〜+110.5に
+    // 広がっている——Y=0を越えた先(Y>0寄り)にある部品の非平面面は、カメラからの
+    // レイが先にXZ平面(Y=0。いまはモデル全体を覆うほど広い)をくぐるので、**解析的には
+    // 本当にグリッドの方が手前になる**(見た目の透明な線とは無関係な、正しい
+    // オクルージョン判定。手前の部品を隠して奥を出す「項番2」の検査と同じ理屈)。
+    // 27部品を総当たりして実測したところ、Y=0側の部品を除くだけで安定して非平面面が
+    // 指せた。**除くのは一時的**(この検査の後は基準平面の検査へ入り、どのみち全部隠す)。
+    const riskyBodyIds = await page.evaluate(() => {
+      const risky = []
+      for (const part of window.__duocad.parts) {
+        const geometry = window.__duocad.getGeometry(part.body_id)
+        if (geometry && geometry.bbox.max[1] > -5) risky.push(part.body_id)
+      }
+      return risky
+    })
+    for (const bodyId of riskyBodyIds) {
+      await page.click(`.parts-row[data-body-id="${bodyId}"] input.visible-toggle`)
+    }
+    await page.waitForFunction(
+      (ids) => {
+        const bodies = window.__duocad.parts
+        return ids.every((id) => !bodies.find((b) => b.body_id === id).visible)
+      },
+      { timeout, polling: 50 },
+      riskyBodyIds,
+    )
+    ok(`Y=0を越えた側の部品(${riskyBodyIds.length}/27)を隠した(基準平面に取られない非平面面を探すため)`)
 
+    // **ここで`projectFace`の安い判定(リトライ無し)に通してから件数を絞る** ——
+    // 候補を後段の`locateFaceWhenStill`(最大40回×50msの安定待ち)にそのまま渡すと、
+    // 映っていない面1枚ごとに最大2秒かかる(実測: 全2835面をこの絞り無しで回すと
+    // 10分を超えた)。
+    const curved = await page.evaluate(() => {
+      const found = []
+      for (const part of window.__duocad.parts) {
+        if (!part.visible) continue
+        const geometry = window.__duocad.getGeometry(part.body_id)
+        if (!geometry) continue
+        for (const face of geometry.faces) {
+          if (face.kind === 'plane') continue
+          if (!window.__duocad.projectFace(part.body_id, face.index)) continue
+          found.push({ bodyId: part.body_id, index: face.index })
+          if (found.length >= 8) return found
+        }
+      }
+      return found
+    })
 
     let refused = null
     let tried = 0
     const attempted = []
-    for (const index of curved) {
-      if (tried >= 4) break // 画面から指せない面は数える前に飛ばす(奥は他の26部品に隠れている)
+    for (const candidate of curved) {
       // **起動してから射影する**(順序が逆だと当たらない)。コマンドを起動すると
       // コマンド行の文言が変わって行が伸び縮みし、`.viewport` の高さ=射影が動く
       // (スケッチパネルの高さを固定してあるのと同じ事情。実測で別の部品の面を押した)。
-      await page.click('#sketch-create') // 1起動につき1回なので、試すたびに構え直す
-      const at = await locateFaceWhenStill(extrudeTarget.body_id, index)
+      // **すでに起動中ならもう一度押さない**(トグルで無起動へ戻ってしまう。
+      // `planarCandidates`のループと同じ流儀)。
+      if (
+        await page.evaluate(
+          () => document.querySelector('.command-host')?.dataset.command !== 'sketch_create',
+        )
+      ) {
+        await page.click('#sketch-create')
+      }
+      const at = await locateFaceWhenStill(candidate.bodyId, candidate.index)
       if (!at) {
         await page.keyboard.press('Escape')
         continue
       }
       tried += 1
-      attempted.push(index)
+      attempted.push(`${candidate.bodyId}/${candidate.index}`)
       await page.mouse.click(at.x, at.y)
       const toast = await page
         .waitForFunction(
@@ -986,7 +1103,7 @@ async function main() {
         .then((handle) => handle.jsonValue())
         .catch(() => null)
       if (toast) {
-        refused = { index, toast }
+        refused = { index: candidate.index, toast }
         break
       }
       // 手前の別の面(または基準平面)に取られた。作られてしまったスケッチから出て次を試す。
@@ -1021,10 +1138,11 @@ async function main() {
 
     // -------------------------------------------------------------- 検証1(その2)・2: 基準平面に描く
     //
-    // **先に部品を全部隠す。** 基準平面のグリッドは原点の周り±100mmで、この文書の
-    // PCケースはその中を丸ごと覆っている —— 面と平面はレイ距離で競うので(通常の
-    // オクルージョン)、部品が見えている限りグリッドは1画素も指せない。`projectBasePlane`
-    // が null を返すのはその正しい振る舞いであり、人がやることも同じ(隠してから指す)。
+    // **先に部品を全部隠す。** 基準平面のグリッドは原点の周りの正方形で、**内容の大きさに
+    // 追随して広がる**(2026-08-30)ので、この文書のPCケースは常にその中に丸ごと覆われる ——
+    // 面と平面はレイ距離で競うので(通常のオクルージョン)、部品が見えている限りグリッドは
+    // 1画素も指せない。`projectBasePlane` が null を返すのはその正しい振る舞いであり、
+    // 人がやることも同じ(隠してから指す)。
     await page.click('#parts-hide-all')
     await page.waitForFunction(() => window.__duocad.parts.every((item) => !item.visible), {
       timeout,

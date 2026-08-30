@@ -458,13 +458,20 @@
       // どこにも書かれていないので `null`(＝常に未保存)へ戻す。`next` は上で `model` に
       // 入れた今回の状態で、開いた版の `applied_count` / 操作数がもう入っている。
       savedAt = applied.name === null ? null : [next.applied_count, next.log.length]
-      // **開いた(`open_document`)ときだけ合わせ直す。** 文書のスケールが不連続に変わる
-      // のは import_step と同じくここだけ(実測: 小さな部品→大きな板を保存し、開き直すと
+      // **開いた(`open_document`)ときだけ視点を合わせ直す。** 文書のスケールが不連続に
+      // 変わるのは import_step と同じくここだけ(実測: 小さな部品→大きな板を保存し、開き直すと
       // 前の文書の視点のまま端が画面外に出た)。**新規(`new_document`)は空の文書**なので
       // 合わせる内容が無く、`frameToContent()` は箱が空のまま何もしない(呼んでも無害だが、
       // 完了条件が言う「文書のスケールが不連続に変わるのはインポートとopen_documentだけ」に
       // 忠実に、対象を開いた場合だけへ絞る)。
-      if (applied.name !== null) viewport?.frameAll()
+      // **新規のときは基準グリッドだけ縮める。** カメラは動かさないが、前の文書で広がった
+      // グリッド(基準平面グリッドはモデルの大きさに追随する)は空の文書に戻ったので
+      // `BASE_EXTENT` へ縮めてよい(`viewport.resetGrid` のヒステリシス許可。2026-08-30)。
+      if (applied.name !== null) {
+        viewport?.frameAll()
+      } else {
+        viewport?.resetGrid()
+      }
       note(applied.name === null ? '新規の文書にした' : `開いた: ${applied.name}`)
       if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
       lastApplied = applied
@@ -1367,6 +1374,9 @@
       // あちらは遮蔽された面に null を返すので、**上面と下面のどちらが画面で上か**のように
       // 見えていない側を含む比較ができない。どちらも読むだけで、コアへは何も飛ばない。
       cameraPose: () => viewport?.cameraPose() ?? null,
+      // 基準グリッドの今の半幅・刻み[mm]。**実機検査が「モデルの大きさへ広がった/縮んだ」を
+      // 数値で見るための穴**(2026-08-30。`viewport.gridScale` のdocstring)。
+      gridScale: () => viewport?.gridScale() ?? null,
       // 可変解像度。**実機検査が「寄ったら本当に細かくなったか」を数値で見るための穴**
       // (見た目の滑らかさは目でしか分からないので、代わりに目標偏差と分割数を出す)。
       viewResolution: () => viewport?.viewResolution() ?? null,
