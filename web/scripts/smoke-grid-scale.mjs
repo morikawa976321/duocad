@@ -20,6 +20,14 @@
  *      縮まない(ふつうの編集)。`frameAll` を呼んだときだけ実際に縮む。**新規文書**
  *      (`#file-new`)でも同じく縮む。
  *
+ *   D. **内容を全部消した後の`frameAll`でも縮む**(2026-08-31 QA指摘の回帰検査)。
+ *      `frameToContent()`は`root`が空なら姿勢を合わせずに`false`を返す早期returnを持つが、
+ *      グリッドの縮小許可はそれとは独立に必ず1回通る必要がある——通っていないと、
+ *      大きなモデルを読んで広がったグリッドが、モデルを全部消して`frameAll`しても
+ *      二度と縮まない(新規文書にするまで巨大なグリッドが残り続ける)。**姿勢(カメラ)は
+ *      合わせられない(=動かない)ままであることも一緒に見る**(この回帰の直し方によっては
+ *      姿勢の契約=戻り値の意味を壊しうるため)。
+ *
  * サーバはこのスクリプトが空の文書で起動し、形はMCP経由で作る。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
  */
@@ -266,6 +274,59 @@ async function main() {
       fail(`もう一度252mmの箱を作ってもextent=500/step=50に戻らない: ${JSON.stringify(grownAgain)}`)
     }
     ok('[C] もう一度大きな箱を作るとグリッドが即座に広がった(広げるのは常に即座)')
+
+    // ====================================================================== D. 全部消してframeAllで縮む
+    console.log('\n[D] 全部消した後のframeAll: 姿勢を合わせられなくてもグリッドは縮む')
+    // **root(ボディ)もsketchRoot(スケッチ)も両方空にする** —— QA指摘の再現条件そのもの:
+    // `frameToContent()`は`root`が空なら早期returnするが、`contentBoxForGrid()`は
+    // `sketchRoot`も見るので、ボディだけ消してスケッチが残っていても同じ早期returnを通る。
+    // 常駐させていた小さな立方体(sketch_create→add_rectangle→extrudeの3verb)と、直前で
+    // 作り直した大きな箱(同じく3verb)の両方をundoで消し、文書を完全に空にする。
+    for (let i = 0; i < 6; i += 1) await mcp.callTool('undo')
+    await page.waitForFunction(
+      () => window.__duocad.parts.length === 0 && window.__duocad.sketches.length === 0,
+      { timeout, polling: 100 },
+    )
+    await sleep(200)
+    ok('文書を完全に空にした(parts=0 / sketches=0)')
+
+    const emptyBeforeFrameAll = await page.evaluate(() => window.__duocad.gridScale())
+    if (emptyBeforeFrameAll.extent !== 500 || emptyBeforeFrameAll.step !== 50) {
+      fail(
+        `文書を空にした直後にグリッドが即座に縮んでしまった(ヒステリシス違反。空にする操作は` +
+          `frameAllでも新規文書でもない、ふつうの編集のはず): ${JSON.stringify(emptyBeforeFrameAll)}`,
+      )
+    }
+    ok(`[D] 空にした直後はまだ縮まない(点滅しない): ${JSON.stringify(emptyBeforeFrameAll)}`)
+
+    const poseBeforeEmptyFrameAll = await page.evaluate(() => window.__duocad.cameraPose())
+    await page.evaluate(() => window.__duocad.frameAll())
+    await sleep(200)
+    const afterEmptyFrameAll = await page.evaluate(() => window.__duocad.gridScale())
+    if (afterEmptyFrameAll.extent !== 100 || afterEmptyFrameAll.step !== 10) {
+      fail(
+        `文書が空の状態でframeAllを呼んでもグリッドが縮まない` +
+          `(frameToContentの早期returnがapplyGridScaleより前にあると起きる回帰): ` +
+          `${JSON.stringify(afterEmptyFrameAll)}`,
+      )
+    }
+    ok(`[D] 内容が空でもframeAllでグリッドは縮む(BASE_EXTENTへ戻った): ${JSON.stringify(afterEmptyFrameAll)}`)
+
+    // **姿勢(カメラ)は動かない契約のまま** —— 空の箱には合わせられないので、
+    // frameToContentは早期returnし続ける(戻り値=falseの意味を壊していないことの裏取り)。
+    const poseAfterEmptyFrameAll = await page.evaluate(() => window.__duocad.cameraPose())
+    const emptyFrameAllMoved = Math.hypot(
+      poseAfterEmptyFrameAll.position[0] - poseBeforeEmptyFrameAll.position[0],
+      poseAfterEmptyFrameAll.position[1] - poseBeforeEmptyFrameAll.position[1],
+      poseAfterEmptyFrameAll.position[2] - poseBeforeEmptyFrameAll.position[2],
+    )
+    if (emptyFrameAllMoved > 1e-6) {
+      fail(
+        `空の文書でframeAllを呼んだのにカメラが動いた(frameToContentの「実際に合わせたか」の` +
+          `契約が壊れている疑い): 移動量=${emptyFrameAllMoved.toFixed(3)}mm`,
+      )
+    }
+    ok('[D] 空の文書でframeAllを呼んでもカメラは動かない(姿勢の契約は変えていない)')
 
     const poseBeforeNew = await page.evaluate(() => window.__duocad.cameraPose())
     await page.click('#file-new')

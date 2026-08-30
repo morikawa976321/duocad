@@ -1462,6 +1462,15 @@ export function createViewport(container: HTMLElement): Viewport {
    */
   function frameToContent(): boolean {
     const box = new THREE.Box3().setFromObject(root)
+    // **姿勢を合わせられるか(box空)に関わらず、グリッドの縮小許可は必ず1回通す**
+    // (2026-08-31 QA指摘で修正)。`frameAll()`はここ(`frameToContent`)を呼ぶだけで、
+    // 縮小の許可はここにしか無い —— 下の `box.isEmpty()` の早期returnより前に置かないと、
+    // モデルを全部消してから`frameAll()`しても、広がったグリッドが二度と縮まなかった
+    // (`contentBoxForGrid()`は`sketchRoot`も見るので、ボディだけ消してスケッチが残る
+    // 場合も同じ早期returnを通る)。**姿勢(戻り値・カメラの位置/向き)の扱いは変えない**
+    // —— これは「実際に合わせたか」を表す契約のままで、グリッドの縮小はそれとは独立に
+    // 判定する(`applyGridScale`はその一手だけを担う)。
+    applyGridScale(contentBoxForGrid(), true)
     if (box.isEmpty()) return false
     const center = new THREE.Vector3()
     box.getCenter(center)
@@ -1480,11 +1489,6 @@ export function createViewport(container: HTMLElement): Viewport {
     if (camera === orthographic) {
       setViewHalfHeight(fitHalfHeight(diagonal / 2) * HOME_VIEW_OFFSET.length())
     }
-    // **ここは実際に合わせた=`frameAll` の実体**なので、グリッドの縮小を許可してよい
-    // (ヒステリシスの許可は `applyGridScale` のdocstring参照)。箱は `root` だけでなく
-    // `sketchRoot` も見た方(`contentBoxForGrid`)で測り直す —— この関数自身の `box` は
-    // カメラ姿勢のためのもので `root` 限定である。
-    applyGridScale(contentBoxForGrid(), true)
     updateClipPlanes()
     controls.update()
     return true
