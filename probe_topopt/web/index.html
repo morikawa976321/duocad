@@ -43,6 +43,12 @@
   // **`?voxel=1` を付けたときだけ、完了時も従来のボクセル表示のまま終わる**(デバッグ用)。
   // 既定(付けない場合)は完了時に平滑化した面へ差し替わる。
   const VOXEL_ONLY = new URLSearchParams(location.search).get('voxel') === '1';
+  // **`?debug=anchors` を付けたときは最適化を回さず、面アンカー(CADの面に割り当てた
+  // 格子節点)を描く**。固定に割り当てた節点と荷重に割り当てた節点を別々の色で出す。
+  const ANCHOR_DEBUG = new URLSearchParams(location.search).get('debug') === 'anchors';
+  // 実機検査(shot_anchors.mjs)が「2色が本当に画面に出ているか」を数えるための基準色。
+  const FIXED_COLOR = 0x2ee6a8;   // 固定 = 緑シアン
+  const LOAD_COLOR = 0xff5c2e;    // 荷重 = 橙赤
   const runBtn = document.getElementById('run');
 
   const probe = {
@@ -52,6 +58,8 @@
     error: null,
     // 完了時にどちらの表示になったか。'voxel' | 'smooth' | null(未完了)。
     surface: null,
+    // `?debug=anchors` のときだけ入る {fixed, load, design, fixedColor, loadColor}。
+    anchors: null,
   };
   window.__probe = probe;
 
@@ -74,6 +82,9 @@
   const dummy = new THREE.Object3D();
   let mesh = null;
   let smoothMesh = null;
+  let designMesh = null;
+  let fixedMesh = null;
+  let loadMesh = null;
   let boundsHelper = null;
   let nelx = 0;
   let nely = 0;
@@ -184,6 +195,114 @@
     if (mesh) mesh.visible = false;
   }
 
+  function disposeMesh(m) {
+    if (!m) return null;
+    scene.remove(m);
+    m.geometry.dispose();
+    m.material.dispose();
+    return null;
+  }
+
+  /**
+   * `?debug=anchors`: 設計空間のボクセルを半透明で、固定/荷重に割り当てた節点を
+   * **別々の色の球**で描く。
+   *
+   * 座標の規約: ボクセルは中心が `ex+0.5-nelx/2` に来るので(既存の updateInstances と
+   * 同じ)、その角にある**節点は `i-nelx/2`**。サーバ側(`_build_anchor_payload`)で
+   * 既にこの引き算を済ませて送ってくるので、ここでは足し引きしない ——
+   * **両側で引くと二重にずれる。**
+   */
+  function showAnchors(msg) {
+    nelx = msg.nelx;
+    nely = msg.nely;
+    nelz = msg.nelz;
+    mesh = disposeMesh(mesh);
+    smoothMesh = disposeMesh(smoothMesh);
+    designMesh = disposeMesh(designMesh);
+    fixedMesh = disposeMesh(fixedMesh);
+    loadMesh = disposeMesh(loadMesh);
+
+    // 設計空間は**不透明**に描く。半透明にすると重なりで silhouette が潰れ、
+    // 耳(lug)のような小さな出っ張りが画面から消える(2026-08-31に実測)。
+    designMesh = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshLambertMaterial({ color: 0x39445e }),
+      Math.max(msg.design.length, 1),
+    );
+    designMesh.count = msg.design.length;
+    for (let i = 0; i < msg.design.length; i++) {
+      const [ex, ey, ez] = flatToExyz(msg.design[i]);
+      dummy.position.set(ex + 0.5 - nelx / 2, ey + 0.5 - nely / 2, ez + 0.5 - nelz / 2);
+      dummy.updateMatrix();
+      designMesh.setMatrixAt(i, dummy.matrix);
+    }
+    designMesh.instanceMatrix.needsUpdate = true;
+    scene.add(designMesh);
+
+    const nodeGeo = new THREE.SphereGeometry(0.34, 12, 8);
+    const build = (flat, color) => {
+      const count = flat.length / 3;
+      // **節点は深度テストを切って最前面に描く。** どの節点が選ばれたかを見るための表示で、
+      // 形状の裏側にある節点(固定面はカメラの反対側にある)まで見えている必要がある。
+      const m = new THREE.InstancedMesh(
+        nodeGeo.clone(),
+        new THREE.MeshLambertMaterial({
+          color, emissive: color, emissiveIntensity: 0.6, depthTest: false,
+        }),
+        Math.max(count, 1),
+      );
+      m.renderOrder = 3;
+      m.count = count;
+      for (let i = 0; i < count; i++) {
+        dummy.position.set(flat[3 * i], flat[3 * i + 1], flat[3 * i + 2]);
+        dummy.updateMatrix();
+        m.setMatrixAt(i, dummy.matrix);
+      }
+      m.instanceMatrix.needsUpdate = true;
+      scene.add(m);
+      return m;
+    };
+    fixedMesh = build(msg.fixed, FIXED_COLOR);
+    loadMesh = build(msg.load, LOAD_COLOR);
+    nodeGeo.dispose();
+
+    updateBounds();
+    probe.anchors = {
+      fixed: msg.fixed.length / 3,
+      load: msg.load.length / 3,
+      design: msg.design.length,
+      fixedFace: msg.fixed_face,
+      loadFace: msg.load_face,
+      fixedArea: msg.fixed_area,
+      loadArea: msg.load_area,
+      seconds: msg.seconds,
+      fixedColor: FIXED_COLOR,
+      loadColor: LOAD_COLOR,
+    };
+  }
+
+  /**
+   * 画面に**2色が本当に出ているか**を数える(実機検査の穴)。
+   * 直前に自分で1フレーム描いてから読むので `preserveDrawingBuffer` は要らない。
+   * 「両方の節点集合を描いたつもりで、片方が形状の裏に隠れている/同じ色だった」を弾く。
+   */
+  probe.pixelCensus = () => {
+    renderer.render(scene, camera);
+    const gl = renderer.getContext();
+    const w = gl.drawingBufferWidth;
+    const h = gl.drawingBufferHeight;
+    const buf = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    let fixed = 0;
+    let load = 0;
+    for (let i = 0; i < buf.length; i += 4) {
+      const r = buf[i], g = buf[i + 1], b = buf[i + 2];
+      if (g > 110 && g > 1.6 * r && g > 1.15 * b) fixed++;
+      else if (r > 110 && r > 1.8 * g && r > 2.2 * b) load++;
+    }
+    return { width: w, height: h, fixed, load };
+  };
+
   function flatToExyz(e) {
     const ez = e % nelz;
     const t = Math.floor(e / nelz);
@@ -219,6 +338,19 @@
   }
 
   function handleMessage(msg) {
+    if (msg.type === 'anchors') {
+      showAnchors(msg);
+      setProbeState('anchors');
+      runBtn.disabled = false;
+      runBtn.textContent =
+        `面アンカー: 固定=面${msg.fixed_face} ${probe.anchors.fixed}節点 / ` +
+        `荷重=面${msg.load_face} ${probe.anchors.load}節点`;
+      if (socket) {
+        socket.close();
+        socket = null;
+      }
+      return;
+    }
     if (msg.type === 'start') {
       maxIter = msg.max_iter;
       initMesh(msg.nelx, msg.nely, msg.nelz);
@@ -265,6 +397,8 @@
     }
   }
 
+  if (ANCHOR_DEBUG) runBtn.textContent = '面アンカーを表示';
+
   runBtn.addEventListener('click', () => {
     if (probe.state === 'running') return;
     probe.error = null;
@@ -275,7 +409,9 @@
     runBtn.textContent = '接続中…';
     socket = new WebSocket(WS_URL);
     socket.addEventListener('open', () => {
-      socket.send(JSON.stringify({ type: 'start' }));
+      socket.send(JSON.stringify(
+        ANCHOR_DEBUG ? { type: 'start', mode: 'anchors' } : { type: 'start' },
+      ));
     });
     socket.addEventListener('message', (ev) => {
       handleMessage(JSON.parse(ev.data));

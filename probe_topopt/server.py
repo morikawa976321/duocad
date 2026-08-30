@@ -13,8 +13,10 @@ from pathlib import Path
 import numpy as np
 from websockets.asyncio.server import serve
 
+import anchor
 import mesh
 import simp
+import voxelize as vx
 
 _ROOT = Path(__file__).resolve().parent
 _WEB_DIR = _ROOT / "web"
@@ -97,6 +99,46 @@ def _build_mesh_payload(rho: np.ndarray) -> dict[str, object]:
     }
 
 
+# `?debug=anchors` のデモに使う解像度。**check_anchor.py の [7] と同じ 32** にしてあるので、
+# 画面に出ている節点集合は受入検査が通したものとそのまま同じ。
+ANCHOR_DEMO_ELEMENTS = 32
+
+
+def _build_anchor_payload(elements_long_axis: int = ANCHOR_DEMO_ELEMENTS) -> dict[str, object]:
+    """`?debug=anchors` 用: 設計空間のボクセルと、固定/荷重に割り当てた節点を送れる形にする。
+
+    座標はビューアの規約に合わせる —— 要素 (ex,ey,ez) の中心が
+    `(ex+0.5-nelx/2, ...)` なので、その角にある**節点 (i,j,k) は `(i-nelx/2, ...)`**。
+    ここで規約を取り違えると、節点が形状から半セルずれた位置に描かれて
+    「アンカーがずれている」ように見える(実際には合っているのに)。
+    """
+    model = vx.voxelize(anchor.demo_bracket(), elements_long_axis)
+    table = anchor.build_anchors(model.soup, model.grid)
+    fixed_face, load_face = anchor.demo_faces(model.soup)
+    nelx, nely, nelz = model.grid.shape
+    half = np.array([nelx, nely, nelz], dtype=float) / 2.0
+
+    def nodes_of(face: int) -> list[float]:
+        idx = table.nodes(face).astype(float)
+        return np.round(idx - half, 4).ravel().tolist()
+
+    return {
+        "type": "anchors",
+        "nelx": nelx,
+        "nely": nely,
+        "nelz": nelz,
+        "spacing": model.grid.spacing,
+        "design": np.flatnonzero(model.design.ravel()).tolist(),
+        "fixed": nodes_of(fixed_face),
+        "load": nodes_of(load_face),
+        "fixed_face": fixed_face,
+        "load_face": load_face,
+        "fixed_area": table[fixed_face].total_area,
+        "load_area": table[load_face].total_area,
+        "seconds": table.stats["seconds"],
+    }
+
+
 async def _ws_handler(websocket, state: _AppState) -> None:
     try:
         async for raw in websocket:
@@ -113,6 +155,26 @@ async def _ws_handler(websocket, state: _AppState) -> None:
                     )
                 except Exception:
                     pass
+                continue
+
+            if msg.get("mode") == "anchors":
+                # **面アンカーの表示だけ**(最適化は回さない)。完了条件4の実機確認はこの経路。
+                state.running = True
+                try:
+                    payload = await asyncio.to_thread(_build_anchor_payload)
+                    await websocket.send(json.dumps(payload, ensure_ascii=False))
+                except Exception as exc:  # noqa: BLE001
+                    try:
+                        await websocket.send(
+                            json.dumps(
+                                {"type": "error", "message": f"面アンカーの構築に失敗: {exc}"},
+                                ensure_ascii=False,
+                            )
+                        )
+                    except Exception:
+                        pass
+                finally:
+                    state.running = False
                 continue
 
             state.running = True

@@ -220,6 +220,12 @@ class TriangleSoup:
     `triangles`  : (T,3) 頂点添字
     `face_index` : (T,)  その三角形が属する OCCT の面添字(1始まり。`kernel.tessellate` と同じ)
     `face_kind`  : {面添字: "plane"/"cylinder"/...}
+    `face_props` : {面添字: {"area": float, "centroid": (3,), "normal": (3,), "kind": str}}
+                   **B-rep から直に取った真値**(三角形分割の近似ではない)。`kernel.tessellate`
+                   が面ごとに返すものをそのまま畳んである。stage2「面アンカー」の受入検査が
+                   「節点集合の重心・面積が解像度を上げると真の面へ近づく」を測る基準になる —
+                   三角形から作った値を基準にすると、近似を近似と比べることになって
+                   何も検査していないのと同じになる。
     """
 
     positions: np.ndarray
@@ -227,6 +233,7 @@ class TriangleSoup:
     face_index: np.ndarray
     face_kind: dict[int, str] = field(default_factory=dict)
     deviation: float = 0.0
+    face_props: dict[int, dict] = field(default_factory=dict)
 
     @property
     def triangle_count(self) -> int:
@@ -302,11 +309,18 @@ def triangles_from_shape(
     tri_chunks: list[np.ndarray] = []
     face_chunks: list[np.ndarray] = []
     face_kind: dict[int, str] = {}
+    face_props: dict[int, dict] = {}
     offset = 0
     for face in payload["faces"]:
         positions = np.asarray(face["positions"], dtype=float).reshape(-1, 3)
         indices = np.asarray(face["indices"], dtype=np.int64).reshape(-1, 3)
         face_kind[int(face["index"])] = str(face.get("kind", ""))
+        face_props[int(face["index"])] = {
+            "kind": str(face.get("kind", "")),
+            "area": float(face.get("area", 0.0)),
+            "centroid": np.asarray(face.get("centroid", (0.0, 0.0, 0.0)), dtype=float),
+            "normal": np.asarray(face.get("normal", (0.0, 0.0, 0.0)), dtype=float),
+        }
         if indices.size == 0:
             continue
         pos_chunks.append(positions)
@@ -323,6 +337,7 @@ def triangles_from_shape(
         face_index=np.concatenate(face_chunks, axis=0),
         face_kind=face_kind,
         deviation=float(deviation),
+        face_props=face_props,
     )
 
 
