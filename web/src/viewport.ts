@@ -465,11 +465,16 @@ export interface Viewport {
    * オービットさせても `position.z - target.z` が変わらない**こと(＝回転の極が+Zであること)。
    * 後者は `OrbitControls` が生成時の up を `_quat` へ焼き込む仕様のせいで**静かに壊れる**
    * 種類の不具合で、画面の見た目からは分からない。
+   *
+   * `near`/`far` も返す(2026-08-30)。こちらも実機検査の穴で、文書の状態ではないので
+   * コアへは何も飛ばさない(`App.svelte` の `window.__duocad` と同じ方針)。
    */
   cameraPose(): {
     position: [number, number, number]
     target: [number, number, number]
     up: [number, number, number]
+    near: number
+    far: number
   }
   /**
    * ワールド座標の点が画面のどこに写るか(ビューポート左上を原点とする画素)。
@@ -1165,6 +1170,7 @@ export function createViewport(container: HTMLElement): Viewport {
     }
     rebuildPickIndex()
     refreshContentDiagonal() // 見えているものの大きさが変わった(解像度の上下限に効く)
+    updateClipPlanes() // 内容が変わった → 視錐台を引き直す(姿勢は初回のみ下で決める)
 
     if (!framed) {
       frameToContent()
@@ -1220,6 +1226,7 @@ export function createViewport(container: HTMLElement): Viewport {
     for (const bodyId of stale) clearBody(bodyId)
     rebuildPickIndex()
     refreshContentDiagonal() // 見えているものの大きさが変わった(解像度の上下限に効く)
+    updateClipPlanes() // 内容が変わった → 視錐台を引き直す
   }
 
   /**
@@ -1323,10 +1330,38 @@ export function createViewport(container: HTMLElement): Viewport {
     next.updateProjectionMatrix()
   }
 
+  /**
+   * near/far(視錐台の前後端)を、いまの内容とカメラ距離から引き直す。
+   *
+   * **`frameToContent`(姿勢)から独立させてある**(2026-08-30)。姿勢はページ読み込みで
+   * 1回決めれば十分だが、near/farは「最初に届いた形の大きさ」で固定してよいものではない
+   * —— 後から大きなSTEPが届けばfarを追い越して手前が切り取られ(farはズーム・オービットでは
+   * 一切広がらない)、逆に小さな細部へ深く寄ればnearが大きいまま手前が切れる。**内容が変わる
+   * たび**(`refreshContentDiagonal` の呼び出し元)**とカメラが意味のある幅で動くたび**
+   * (`cameraMoved` 判定に相乗り)の両方で呼ぶことで、視錐台を常時追随させる。
+   *
+   * near は**距離側からも**導く —— コンテンツの大きさだけで決めると、大きなモデルの中の
+   * 小さな面へ深く寄ったときに手前が切れる(near は「いま見ている距離」に対しても十分
+   * 小さくなければならない)。far は既存の `対角 × 20` の保守性をそのまま保ちつつ、
+   * 距離が伸びた場合の下限も持つ(`frameToContent` の元のガードコメントの理由と同じ)。
+   *
+   * `span` の下限に `GRID_EXTENT * 2` を置くのは、空の文書やグリッドしか無い場面でも
+   * 視錐台がグリッド全体を収める大きさを保つため(`contentDiagonal` はボディが無いと0)。
+   */
+  function updateClipPlanes(): void {
+    const span = Math.max(contentDiagonal, GRID_EXTENT * 2)
+    const distance = camera.position.distanceTo(controls.target)
+    camera.near = Math.max(Math.min(span, distance) / 1000, 0.01)
+    camera.far = Math.max(span * 20, distance * 4)
+    camera.updateProjectionMatrix()
+  }
+
   /** シーンに今ある全メッシュの外接直方体にカメラを合わせる(初回だけ)。
    *
    * 複数Bodyでは初回に届く順序や本数が変わりうるので、**実際に置いたメッシュから計算する**方が
    * 頑丈(サーバのbbox形式に依存しない)。
+   *
+   * **姿勢(位置・向き)だけを決める。** near/farは `updateClipPlanes` の仕事(上記コメント)。
    */
   function frameToContent(): void {
     const box = new THREE.Box3().setFromObject(root)
@@ -1335,15 +1370,10 @@ export function createViewport(container: HTMLElement): Viewport {
     box.getCenter(center)
     const diagonal = Math.max(box.getSize(new THREE.Vector3()).length(), 1e-6)
     const distance = fitDistance(diagonal / 2)
-    camera.near = Math.max(diagonal / 1000, 0.01)
-    // **距離側からも導く**。範囲を30〜90に絞った今は `diagonal * 20` が常に勝つので
-    // このガードは発火しないが、将来もし下限を下げたら距離が伸びてfarを追い越し、
-    // シーンが丸ごと消える —— そのときにここで気づけるようにしておく。
-    camera.far = Math.max(diagonal * 20, distance * 4)
     camera.position.copy(center).addScaledVector(HOME_VIEW_OFFSET, distance)
     controls.target.copy(center)
-    // **正投影は距離では収まらない。** カメラは上で透視と同じ場所へ置いた(near/farと回転の
-    // 半径のため)が、収める仕事は視錐台がする。
+    // **正投影は距離では収まらない。** カメラは上で透視と同じ場所へ置いた(回転の半径のため)が、
+    // 収める仕事は視錐台がする。
     //
     // **`fitHalfHeight` をそのまま渡さない。** `HOME_VIEW_OFFSET` の長さが1ではないので、
     // 透視が実際に出すのは `fitHalfHeight` の 1.5362倍ぶん引いた絵である —— 素の
@@ -1353,7 +1383,7 @@ export function createViewport(container: HTMLElement): Viewport {
     if (camera === orthographic) {
       setViewHalfHeight(fitHalfHeight(diagonal / 2) * HOME_VIEW_OFFSET.length())
     }
-    camera.updateProjectionMatrix()
+    updateClipPlanes()
     controls.update()
   }
 
@@ -1382,11 +1412,15 @@ export function createViewport(container: HTMLElement): Viewport {
     position: [number, number, number]
     target: [number, number, number]
     up: [number, number, number]
+    near: number
+    far: number
   } {
     return {
       position: [camera.position.x, camera.position.y, camera.position.z],
       target: [controls.target.x, controls.target.y, controls.target.z],
       up: [camera.up.x, camera.up.y, camera.up.z],
+      near: camera.near,
+      far: camera.far,
     }
   }
 
@@ -1850,6 +1884,12 @@ export function createViewport(container: HTMLElement): Viewport {
    * **門**はズームに加え**姿勢**も見る —— 寄りだけでは `worldPerPixel` が動かず、
    * 視錐台が変わっても気づけない。落ち着いたあと `computeFocus` は2835面を走査するので、
    * 姿勢と `focusGeneration` が同じなら再走査しない。
+   *
+   * **`moved` の分岐に `updateClipPlanes()` を相乗りさせてある**(2026-08-30)。near/farは
+   * カメラ距離が変わるたびに引き直すべきだが、毎フレーム呼ぶ必要は無い —— この分岐は
+   * 既存の画素基準の閾値判定(`cameraMoved()`)で門が閉じているので、オービット/パン/ドリーの
+   * 減衰が画素以下に収まった時点で自然に呼ばれなくなる(動いている間は毎フレーム呼ばれるが、
+   * `updateProjectionMatrix()` は毎フレームでも安い)。
    */
   function updateResolution(now: number): void {
     const perPixel = worldPerPixel()
@@ -1864,6 +1904,7 @@ export function createViewport(container: HTMLElement): Viewport {
       rememberCamera()
       cameraEpoch += 1
       steadySince = now
+      updateClipPlanes()
       return
     }
     if (now - steadySince < RESOLUTION_SETTLE_MS) return
@@ -2298,6 +2339,7 @@ export function createViewport(container: HTMLElement): Viewport {
     }
     invalidateHover() // 領域のメッシュを作り直したので印を捨てる
     refreshContentDiagonal() // 見えているものの大きさが変わった(解像度の上下限に効く)
+    updateClipPlanes() // 内容が変わった → 視錐台を引き直す
   }
 
   /** 領域の材質を決める。**選択とホバーの両方を見る唯一の場所**(面・辺と同じ規律)。 */
