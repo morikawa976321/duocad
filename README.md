@@ -4,12 +4,12 @@
 両者が同じ選択集合を交互に触れるようにしたモデリングツール。**
 差別化はUIでも機能数でもなく **交互操作**（AIが集合を提案 → 人が過不足を直す → AIが操作を適用）にある。
 
-**状態:** 20操作。うち19操作が人間（UI）とAI（MCP）の両側から使える（`set_parameter` だけは2026-08-30に人間側の口を捨て、AI専用にした）。このREADMEは開発を再開するときの入口である。
+**状態:** 24操作。うち23操作が人間（UI）とAI（MCP）の両側から使える（`set_parameter` だけは2026-08-30に人間側の口を捨て、AI専用にした）。このREADMEは開発を再開するときの入口である。
 
 | | |
 |---|---|
 | ブランチ / コミット | `main`（最新は `git log -1`） |
-| テスト | **701件**（うち2本は実機が揃うときだけ走る＝ふだんはskip。**赤は1本も無い**） |
+| テスト | **755件**（うち2本は実機が揃うときだけ走る＝ふだんはskip。**赤は1本も無い**） |
 | 実行環境 | Python 3.11（`.venv`）／ Node（`web/node_modules` 導入済み）／ `web/dist` ビルド済み |
 | 単位 | mm 固定 |
 
@@ -19,7 +19,7 @@
 |---|---|---|
 | [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | **設計の現行の正**。何を作るか・到達表・残タスク | 仕様を確かめるとき |
 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | **なぜこう作るか**（§2 分業の原則が企画の主張） | 判断の背景を辿るとき |
-| [MCP.md](MCP.md) | **MCPツール一覧の正**（28個）と登録手順 | AI側から触るとき |
+| [MCP.md](MCP.md) | **MCPツール一覧の正**（32個）と登録手順 | AI側から触るとき |
 | [tests/README.md](tests/README.md) | テストが定義するAPI契約 | コアの挙動を疑うとき |
 
 ---
@@ -259,6 +259,7 @@ cd C:\Users\tm976\mf\duocad; node web\scripts\acceptance.mjs
 
 MCPとWebSocketを1プロセスで持つサーバを自分で起動し、**人間側はブラウザの本物のクリックとキー、
 AI側は本物のJSON-RPC**で20操作を叩く（`set_parameter` の人間側だけは口が無いので空欄）。結果はJSONでstdout末尾に出る。数分。
+**形状最適化の4操作(合計24)はまだ`acceptance.mjs`に無い**（`web/scripts/smoke-optimize-mode.mjs` が個別の実機smokeを持つ。到達表は §0 参照）。
 
 **❌ が1つでもあれば終了コード1で終わる。** ただし**途中では止めない** ——
 全セクションを最後まで走らせて RESULT_JSON を出し切ってから、`failed[]` を見て終了コードだけを決める。

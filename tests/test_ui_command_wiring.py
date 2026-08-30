@@ -440,6 +440,10 @@ ENTER_REQUIRED = {
     "select_in_sketch": False,     # 引数が無い(完成させるクリックが無いので発火もしない)
     "move_sketch_entities": True,  # 点・辺は何個でも + 移動量2つ + 複製の選択
     "move_body": True,             # 面/辺/頂点は何個でも + 移動量3つ + 複製の選択
+    "set_preserve_bodies": True,   # ボディは何個でも(0個もよい=解除)
+    "set_exclude_bodies": True,    # 同上
+    "set_fixtures": True,          # 面は何個でも(0個もよい=解除)
+    "set_loads": True,             # 面は何個でも + 向き(choice) + 大きさ(number)
 }
 
 

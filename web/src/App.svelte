@@ -33,6 +33,7 @@
     needsSketchId,
   } from './commands/features'
   import { changesDocument } from './commands/files'
+  import { OPTIMIZE_MODE_COMMANDS, OPTIMIZE_PRESET_ROLE } from './commands/optimize'
   import {
     DEFAULT_SKETCH_COMMAND_ID,
     SKETCH_COMMANDS,
@@ -51,6 +52,7 @@
     type Applied,
     type BasePlaneName,
     type BodyGeometry,
+    type BodyRef,
     type ConnectionStatus,
     type DocumentInfo,
     type EdgesPayload,
@@ -100,9 +102,14 @@
    * verb名 -> そのコマンドの分類。**送信経路の分岐はこれだけで決まる。**
    *
    * 知らない名前は `undefined` になり、`runCommand` がその場で断る。
+   * **`OPTIMIZE_MODE_COMMANDS` も含める** —— 忘れると `runCommand` が
+   * `set_preserve_bodies` 等を「未知のコマンド」で断ってしまう。
    */
   const CATEGORY_OF: Map<string, CommandCategory> = new Map(
-    [...SOLID_COMMANDS, ...SKETCH_MODE_COMMANDS].map((command) => [command.id, command.category]),
+    [...SOLID_COMMANDS, ...SKETCH_MODE_COMMANDS, ...OPTIMIZE_MODE_COMMANDS].map((command) => [
+      command.id,
+      command.category,
+    ]),
   )
 
   let container: HTMLDivElement
@@ -146,6 +153,20 @@
     useSelectedFaceAsPlane(): boolean
     restoreLastInputs(): void
   } | null>(null)
+
+  // ---------------------------------------------------------------- F: 形状最適化モード
+  /**
+   * 第3のモード(形状最適化)に入っているか。**対応する文書実体が無い**ので、スケッチと
+   * 違い画面側だけの状態でよい(バックエンドには一切知らせない)。**状態機械は増やさない**
+   * —— 冒頭のコメント「状態機械は1つのまま、変わるのは一覧と既定だけ」のとおり、
+   * 変わるのはツールバーの一覧(`OPTIMIZE_MODE_COMMANDS`)と、それに応じた描画だけ。
+   */
+  let optimizeMode = $state(false)
+  /**
+   * 直近にトーストへ出した `stale` の鍵(`role:body:index`)。**消えたら忘れる**
+   * (次に見た集合で作り直す)ので、直ってからまた壊れれば同じ組でも再度出す。
+   */
+  let seenStaleKeys = new Set<string>()
 
   // ---------------------------------------------------------------- D: 辺とフィーチャ
   /** 起動中のコマンドが選択から取る種別(`CommandHost` が知らせる)。 */
@@ -648,6 +669,8 @@
 
   // ---------------------------------------------------------------- 選択(コアを叩くだけ)
   const selection = $derived(model?.selection ?? null)
+  /** 形状最適化の条件(第3のモード)。**配りものの正はコア**(`duocad/optimize.py`)。 */
+  const optimize = $derived(model?.optimize ?? null)
   /**
    * 反復のverbが引数で取る図形のID。
    *
@@ -675,6 +698,13 @@
     (selection?.items ?? []).filter(
       (item): item is ShapeRef => !('sketch' in item) && (item as ShapeRef).kind === 'face',
     ),
+  )
+  /**
+   * 選択中のボディ(形状最適化の保持/除外を決めているあいだだけ現れる。
+   * `refKind` で見分ける —— `BodyRef` は `kind: 'body'` を持つ)。
+   */
+  const selectedBodies = $derived(
+    (selection?.items ?? []).filter((item): item is BodyRef => refKind(item) === 'body'),
   )
   /** 選択中の辺(**辺を出している間だけ**3Dで色が変わる)。 */
   const selectedEdges = $derived(
@@ -713,6 +743,12 @@
     const origin = selection?.origin === 'proposed' ? 'proposed' : 'user'
     viewport?.highlight(
       selectedFaces.map((item) => ({ bodyId: item.body, faceIndex: item.index })),
+      origin,
+    )
+    // **選択が勝つ**(タスク仕様の色の規則)。ボディが選ばれているあいだは保持/除外の
+    // 役割色より優先してハイライト色を出す(`viewport.applyFaceMaterials` が実体)。
+    viewport?.highlightBodies(
+      selectedBodies.map((item) => item.body),
       origin,
     )
     viewport?.highlightEdges(
@@ -898,6 +934,27 @@
     modifySelection([ref], current.filter((item) => !sameRef(item, ref)))
   }
 
+  /** `selectOnly` の複数版 —— 選択集合を `refs` そのものに置き換える。 */
+  function presetSelection(refs: SelectionRef[]): void {
+    const current = selection?.items ?? []
+    modifySelection(
+      refs,
+      current.filter((item) => !refs.some((ref) => sameRef(item, ref))),
+    )
+  }
+
+  /**
+   * コマンドが起動した(`CommandHost.start`)。**形状最適化の4つだけが意味を持つ** ——
+   * 起動した役割の**既存の割り当て**をそのまま選択状態にして見せる(タスク仕様
+   * 「verb起動 → 既存の割り当てが選択状態で現れる」)。`duocad/optimize.py` の契約どおり
+   * `state.optimize` の該当配列はそのまま `modifySelection` へ渡せる形をしている。
+   */
+  function onCommandStart(verb: string): void {
+    const role = OPTIMIZE_PRESET_ROLE[verb]
+    if (role === undefined || model === null) return
+    presetSelection(model.optimize[role])
+  }
+
   /**
    * ピックを選択集合の編集へ翻訳する。**UI側に選択状態を持たない**ので、
    * ここが作るのは「何を足して何を引くか」だけで、結果はコアから返ってくる。
@@ -952,6 +1009,14 @@
       // 何もない所を素でクリック = 選択解除(修飾キー付きは空振りにする)
       if (event.mode === 'replace' && current.length > 0) session.clearSelection(nextOp())
       else if (event.mode === 'replace') note('面を外した')
+      return
+    }
+    // **保持/除外ソリッドのverbが起動している間はボディ粒度**(タスク仕様)。
+    // `wantedKinds` に `'body'` が立つのは `commands/optimize.ts` の `SET_PRESERVE_BODIES` /
+    // `SET_EXCLUDE_BODIES` だけなので、面が当たってもクリックした面ではなくその
+    // ボディ全体を選択へ足す。
+    if (wantedKinds.includes('body')) {
+      editSelection({ body: event.hit.bodyId, kind: 'body', index: null }, event.mode)
       return
     }
     editSelection(faceRef(event.hit.bodyId, event.hit.faceIndex), event.mode)
@@ -1030,6 +1095,22 @@
     sketchId = null
     hoverPoint = null
     viewport?.setActiveSketch(null)
+  }
+
+  /** 第3のモード(形状最適化)へ入る。「形状最適化」ボタンから(スケッチと同じ作法)。 */
+  function enterOptimizeMode(): void {
+    optimizeMode = true
+  }
+
+  /**
+   * 第3のモードを抜けて通常モードへ戻る。**選択は持ち越さない** —— ボディ粒度で
+   * 選んでいた `BodyRef` は通常モードのverbには使えない種別なので、`exitSketch` と
+   * 同じ理由で外す(面の選択は残す。抜けてからそのまま押し出す経路がある)。
+   */
+  function exitOptimizeMode(): void {
+    const staying = (selection?.items ?? []).filter((item) => refKind(item) === 'body')
+    if (staying.length > 0) modifySelection([], staying)
+    optimizeMode = false
   }
 
   /**
@@ -1326,6 +1407,45 @@
     // 2回作り直すことになる(面のハイライトと違って作り直しが重い)。
   })
 
+  /**
+   * 形状最適化(第3のモード)の見た目を描き直す —— 保持/除外ソリッドの色、拘束面の
+   * 色分けと固定記号、荷重の矢印+ラベル。**モードを抜けているあいだは描かない**
+   * (タスク仕様)。`viewport.ts` の `FaceRef` はコアの `ShapeRef`(`{body, kind, index}`)
+   * とは形が違う(`{bodyId, faceIndex}`)ので、ここで詰め替える。
+   */
+  $effect(() => {
+    if (!optimizeMode || optimize === null) {
+      viewport?.setOptimizeState(null)
+      return
+    }
+    viewport?.setOptimizeState({
+      preserveBodies: optimize.preserve_bodies.map((item) => item.body),
+      excludeBodies: optimize.exclude_bodies.map((item) => item.body),
+      fixtures: optimize.fixtures.map((item) => ({ bodyId: item.body, faceIndex: item.index })),
+      loads: optimize.loads.map((item) => ({ bodyId: item.body, faceIndex: item.index })),
+      load: optimize.load,
+    })
+  })
+
+  /**
+   * `state.optimize.stale`(いま使えない割り当て)をトーストで知らせる。
+   *
+   * **`code` で分岐する**(`duocad/optimize.py` の契約) —— `"hidden"` は部品を隠す
+   * たびに出るので出さない側、`"fingerprint"`/`"missing"` は出す側。文言では分岐しない。
+   * **モードに関係なく見る** —— 割り当てが壊れるのは他のverb(undo・部品の削除)が
+   * 起こすので、最適化モードに入っていないときにも気づけて良い。
+   */
+  $effect(() => {
+    const stale = optimize?.stale ?? []
+    const next = new Set<string>()
+    for (const item of stale) {
+      const key = `${item.role}:${item.body}:${item.index ?? ''}`
+      next.add(key)
+      if (item.code !== 'hidden' && !seenStaleKeys.has(key)) fail(item.reason)
+    }
+    seenStaleKeys = next
+  })
+
   // 画角が変わったらビューポートへ流す。**初回の反映はここではなく `onMount` が行う**
   // (`viewport` は `$state` ではないので、代入ではこのエフェクトが再走しない)。
   $effect(() => {
@@ -1387,6 +1507,12 @@
       setFaceCulling: (enabled: boolean) => viewport?.setFaceCulling(enabled),
       sketchPolylineCounts: () => viewport?.sketchPolylineCounts() ?? null,
       projectPoint: (point: [number, number, number]) => viewport?.projectPoint(point) ?? null,
+      // F: 形状最適化(第3のモード)。**実機検査がモードの出入りと`wantedKinds`(ボディ粒度)
+      // を見るための穴** —— 配りものそのものは `state.optimize` にある。
+      optimizeMode,
+      wantedKinds,
+      faceColor: (bodyId: string, faceIndex: number) => viewport?.faceColor({ bodyId, faceIndex }) ?? null,
+      optimizeAnnotationCount: () => viewport?.optimizeAnnotationCount() ?? 0,
       // C: スケッチ。**実機検査が本物のクリックで描く**ための穴
       sketches,
       activeSketch: sketchId,
@@ -1532,13 +1658,36 @@
         <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
       </div>
     {/if}
-    {#key sketchId === null}
+    <!-- **形状最適化(第3のモード)への入口**(2026-08-31)。対応する文書実体が無く
+         viewport上に「これをクリックすれば入れる」実物が存在しないので、UI指針1の
+         裏返しとしてボタンを置く(スケッチと同じ「モードに入るボタン」の作法)。 -->
+    {#if sketchId === null && !optimizeMode}
+      <button
+        id="optimize-enter"
+        class="tag"
+        onclick={enterOptimizeMode}
+        title="形状最適化モードに入る(保持/除外ソリッド・拘束面・荷重面を決める)"
+      >
+        形状最適化
+      </button>
+    {/if}
+    {#if optimizeMode}
+      <div class="mode-row">
+        <span class="label">形状最適化</span>
+        <span id="optimize-mode" class="tag on">
+          保持 {optimize?.preserve_bodies.length ?? 0} ・除外 {optimize?.exclude_bodies.length ?? 0}
+          ・拘束 {optimize?.fixtures.length ?? 0} ・荷重 {optimize?.loads.length ?? 0}
+        </span>
+        <button id="optimize-exit" onclick={exitOptimizeMode}>抜ける</button>
+      </div>
+    {/if}
+    {#key sketchId === null ? (optimizeMode ? 'optimize' : 'solid') : 'sketch'}
       <CommandHost
         bind:this={host}
         {selection}
         busy={pendingOp !== null}
         {selfSelections}
-        commands={sketchId === null ? SOLID_COMMANDS : SKETCH_MODE_COMMANDS}
+        commands={sketchId !== null ? SKETCH_MODE_COMMANDS : optimizeMode ? OPTIMIZE_MODE_COMMANDS : SOLID_COMMANDS}
         defaultCommandId={sketchId === null ? undefined : DEFAULT_SKETCH_COMMAND_ID}
         hover={hoverPoint}
         entities={selectedEntities}
@@ -1546,6 +1695,7 @@
         onPreview={requestPreview}
         onCancelPreview={clearPreview}
         onNote={note}
+        onStart={onCommandStart}
         onWants={(kinds) => (wantedKinds = kinds)}
         onWantsPlane={(wants) => (wantedPlane = wants)}
       />

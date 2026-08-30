@@ -3,12 +3,12 @@
 **AIが文書を操作するための口。** ブラウザとMCPは同じ `Session` を叩く対等な
 クライアントで、MCPが変えた内容は開いている画面へ即座に届く。
 
-公開ツールは**28個**。面・辺・領域などの**形は引数で受けず、確定した選択から取る**
+公開ツールは**32個**。面・辺・領域などの**形は引数で受けず、確定した選択から取る**
 （数値・名前・パスだけが引数）。提案の選択はそのまま verb に渡せない — 先に
 `commit_selection` が要る。**この1手はAI自身が踏んでよい**（どこまで自分でやるかは
 下記「AIはどこまで自分でやるか」）。
 
-## 公開ツール（28）
+## 公開ツール（32）
 
 | 群 | ツール |
 |---|---|
@@ -18,6 +18,7 @@
 | スケッチ(6) | `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` / `import_svg` |
 | フィーチャ(6) | `extrude` / `extrude_face` / `fillet` / `chamfer` / `pattern_rectangular` / `pattern_circular` |
 | ボディ・パラメータ(2) | `set_visible` / `set_parameter` |
+| 形状最適化(4) | `set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` — 保持/除外ソリッド・拘束面・荷重面の条件を置く(集合代入。最適化の実行はまだ無い) |
 | 入出力(3) | `import_step` / `export_step` / `export_stl` |
 | 履歴(2) | `undo` / `redo` |
 

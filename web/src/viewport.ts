@@ -84,6 +84,23 @@ export interface EdgeRef {
   edgeIndex: number
 }
 
+/** 荷重の大きさ[N]と向き。契約は `duocad/optimize.py` の `state_payload`(`session.ts` の
+ *  `OptimizeLoad` と同じ形)。`setOptimizeState` はこれをそのまま受け取る。 */
+export interface OptimizeLoadVisual {
+  magnitude: number
+  direction: 'normal' | '-normal' | 'vector'
+  vector: [number, number, number] | null
+}
+
+/** `setOptimizeState` が受け取る、形状最適化(第3のモード)の見た目の元。 */
+export interface OptimizeVisualState {
+  preserveBodies: string[]
+  excludeBodies: string[]
+  fixtures: FaceRef[]
+  loads: FaceRef[]
+  load: OptimizeLoadVisual | null
+}
+
 /** 頂点を一意に指す(添字はコアの数え方の1始まり)。 */
 export interface VertexRef {
   bodyId: string
@@ -254,6 +271,23 @@ export interface Viewport {
    * 頂点は `showVertices` が、どちらも user=橙 / proposed=水色で色を変える。
    */
   highlight(refs: FaceRef[], origin: 'user' | 'proposed'): void
+  /**
+   * 選択中の**ボディ**を強調する(`highlight` のボディ版。空配列で解除)。
+   *
+   * 形状最適化(第3のモード)で保持/除外ソリッドを決めているあいだだけ非空になる ——
+   * その他のverbはボディを選択できない(`App.svelte` の `wantedKinds`)。**選択は役割色
+   * (`setOptimizeState` の緑/赤)に勝つ**——そのボディの全面がハイライト色になる。
+   */
+  highlightBodies(bodyIds: string[], origin: 'user' | 'proposed'): void
+  /**
+   * 形状最適化(第3のモード)の見た目 —— 保持/除外ソリッドの色、拘束面の色分けと
+   * 固定記号、荷重の矢印+ラベル。**`null` はモードを抜けたとき**(何も描かない・
+   * ソリッドの色も素へ戻す。タスク仕様「モードを抜けているあいだは描かない」)。
+   *
+   * 記号・矢印は**指せない**(装飾)——「見えて、指した先が分かればよい」で、
+   * ピックの対象は増やさない(`allFaceMeshes` は変わらない)。
+   */
+  setOptimizeState(state: OptimizeVisualState | null): void
   // ------------------------------------------------------------------ D: 辺
   /**
    * 辺の折れ線を出す(`bodyId` に null を渡すと消える)。**出している間だけ辺を指せる**。
@@ -322,6 +356,18 @@ export interface Viewport {
    * 機械で見られるようにする(`getGeometry` と同じ species の穴)。
    */
   highlightColors(): { face: number | null; edge: number | null; vertex: number | null }
+  /**
+   * 指した面が**いま実際に塗られている色**(16進。無ければ null)。**実機検査フック専用**
+   * —— 形状最適化(第3のモード)の役割色(緑/赤/青)が本当に切り替わっていることを、
+   * `highlightColors`(選択の色だけを見る)では確かめられないので別に置く。
+   */
+  faceColor(ref: FaceRef): number | null
+  /**
+   * 形状最適化(第3のモード)の装飾(拘束記号+荷重矢印・ラベル)の数。**実機検査フック専用**
+   * —— 「拘束と荷重が見える」を、個々のメッシュの形までは検証せず「何か描かれているか」の
+   * 数で機械的に確かめる(`setOptimizeState` が空にすると0に戻る)。
+   */
+  optimizeAnnotationCount(): number
   /**
    * 今ホバーで明るくしているもの(**実機検査フック専用**)。
    *
@@ -565,6 +611,18 @@ const REGION_SELECTED_COLOR = 0xffb454
 const PROPOSED_COLOR = 0x36d1ff
 /** 確定前の形。半透明で「まだ無いもの」に見せる。 */
 const PREVIEW_COLOR = 0x7ee081
+/**
+ * 形状最適化(第3のモード)の役割色。**選択が勝つ**(本人決定) —— 選ばれているあいだは
+ * `HIGHLIGHT_COLOR` / `PROPOSED_COLOR` になり、役割色は一時的に見えなくなる
+ * (`applyFaceMaterials` が実体。役割は `state !== 'plain'` のとき無視する)。
+ */
+const OPTIMIZE_PRESERVE_COLOR = 0x3f9b58
+const OPTIMIZE_EXCLUDE_COLOR = 0xc75448
+/** 拘束面(青系に塗る)。 */
+const OPTIMIZE_FIXTURE_COLOR = 0x3f7fc2
+/** 拘束の固定記号(四角錐)と、荷重の矢印・ラベルの色。面の塗りとは別に見分ける。 */
+const OPTIMIZE_FIXTURE_MARK_COLOR = 0x1c3550
+const OPTIMIZE_LOAD_COLOR = 0xffc857
 /** 面の境界線。背景(`BACKGROUND_COLOR`)に埋もれないよう、2026-08-23に`GRID_COLOR`と
     同程度の明るさへ上げた。`PICK_EDGE_COLOR`とは見分けがつく明るさを保つ(下記コメント)。 */
 const EDGE_COLOR = 0x3f4a56
@@ -842,6 +900,16 @@ export function createViewport(container: HTMLElement): Viewport {
   const root = new THREE.Group()
   scene.add(root)
 
+  // ------------------------------------------------------------------ 形状最適化(第3のモード)の注記
+  //
+  // 拘束の固定記号・荷重の矢印+ラベル。**`root` には入れない**(グリッドと同じ理由 ——
+  // 外接直方体に混ざると初回フレーミングやnear/far計算を歪める)。**指せない**(装飾)ので
+  // ピックの対象にも足さない。`setOptimizeState` が唯一の書き手。
+  const optimizeRoot = new THREE.Group()
+  optimizeRoot.renderOrder = 1
+  scene.add(optimizeRoot)
+  let optimizeDisposables: Array<{ dispose(): void }> = []
+
   // ------------------------------------------------------------------ 基準3平面のグリッド
   //
   // **常時出す**。スケッチ平面そのもの(無限に広がる面)は描かないが、原点の XY/XZ/YZ に
@@ -990,31 +1058,47 @@ export function createViewport(container: HTMLElement): Viewport {
     return null
   }
 
-  const baseMaterial = new THREE.MeshLambertMaterial({
-    color: BASE_COLOR,
-    side: THREE.DoubleSide,
-  })
-  const highlightMaterial = new THREE.MeshLambertMaterial({
-    color: HIGHLIGHT_COLOR,
-    side: THREE.DoubleSide,
-  })
-  const proposedMaterial = new THREE.MeshLambertMaterial({
-    color: PROPOSED_COLOR,
-    side: THREE.DoubleSide,
-  })
-  // ホバー中の面。**選択の色に明度を足しただけ**で色相は変えない(`HOVER_LIGHTEN`)。
-  const baseHoverMaterial = new THREE.MeshLambertMaterial({
-    color: lighten(BASE_COLOR, HOVER_LIGHTEN),
-    side: THREE.DoubleSide,
-  })
-  const highlightHoverMaterial = new THREE.MeshLambertMaterial({
-    color: lighten(HIGHLIGHT_COLOR, HOVER_LIGHTEN),
-    side: THREE.DoubleSide,
-  })
-  const proposedHoverMaterial = new THREE.MeshLambertMaterial({
-    color: lighten(PROPOSED_COLOR, HOVER_LIGHTEN),
-    side: THREE.DoubleSide,
-  })
+  /**
+   * 面の材質は **(役割 × 選択状態 × ホバー)** をキーにした遅延生成のキャッシュから取る。
+   *
+   * 役割は形状最適化(第3のモード)の保持/除外/拘束で、素の面(`'none'`)を含めて4種。
+   * 選択状態は3種(未選択 `'plain'` / 確定 `'user'` / AI提案 `'proposed'`)、ホバーは2種。
+   * 組み合わせは最大24だが、**使った組だけ**をこの中で作る(全部を手で書き下さない) ——
+   * 役割が無かった頃の6個(base/highlight/proposed × 通常/ホバー)から3倍に増える軸を、
+   * 静的な定数ではなく関数1つに閉じるための形。
+   *
+   * **選択は役割に勝つ**(本人決定)。`state !== 'plain'` のときは役割を見ない ——
+   * 保持ソリッド(緑)を選ぶとハイライト色になり、緑は一時的に見えなくなる。
+   */
+  type OptimizeFaceRole = 'none' | 'preserve' | 'exclude' | 'fixture'
+  type FaceMaterialState = 'plain' | 'user' | 'proposed'
+  const faceMaterialCache = new Map<string, THREE.MeshLambertMaterial>()
+
+  function roleBaseColor(role: OptimizeFaceRole): number {
+    if (role === 'preserve') return OPTIMIZE_PRESERVE_COLOR
+    if (role === 'exclude') return OPTIMIZE_EXCLUDE_COLOR
+    if (role === 'fixture') return OPTIMIZE_FIXTURE_COLOR
+    return BASE_COLOR
+  }
+
+  function faceMaterialFor(
+    role: OptimizeFaceRole,
+    state: FaceMaterialState,
+    hovered: boolean,
+  ): THREE.MeshLambertMaterial {
+    const effectiveRole: OptimizeFaceRole = state === 'plain' ? role : 'none'
+    const key = `${effectiveRole}:${state}:${hovered ? 1 : 0}`
+    const cached = faceMaterialCache.get(key)
+    if (cached) return cached
+    const base =
+      state === 'user' ? HIGHLIGHT_COLOR : state === 'proposed' ? PROPOSED_COLOR : roleBaseColor(effectiveRole)
+    const material = new THREE.MeshLambertMaterial({
+      color: hovered ? lighten(base, HOVER_LIGHTEN) : base,
+      side: THREE.DoubleSide,
+    })
+    faceMaterialCache.set(key, material)
+    return material
+  }
   const previewMaterial = new THREE.MeshLambertMaterial({
     color: PREVIEW_COLOR,
     side: THREE.DoubleSide,
@@ -1178,7 +1262,9 @@ export function createViewport(container: HTMLElement): Viewport {
     for (const face of payload.faces) {
       if (face.indices.length === 0) continue // 三角形が取れなかった面(サーバが警告を出す)
       const geometry = faceGeometry(face)
-      const mesh = new THREE.Mesh(geometry, baseMaterial)
+      // **素の材質**で生む(役割・選択・ホバーは `applyFaceMaterials()` が
+      // `rebuildPickIndex()`(→ `invalidateHover()`)経由ですぐに塗り直す)。
+      const mesh = new THREE.Mesh(geometry, faceMaterialFor('none', 'plain', false))
       mesh.userData.bodyId = bodyId
       mesh.userData.faceIndex = face.index
       root.add(mesh)
@@ -1553,30 +1639,41 @@ export function createViewport(container: HTMLElement): Viewport {
   /** 今の選択(`highlight` が受け取ったもの)。**材質を決めるのは下の1箇所だけ**。 */
   let selectedFaceKeys = new Set<string>()
   let faceOrigin: 'user' | 'proposed' = 'user'
+  /** ボディ単位の選択(`highlightBodies`。保持/除外を決めているあいだだけ埋まる)。 */
+  let selectedBodyIds = new Set<string>()
+  let bodyOrigin: 'user' | 'proposed' = 'user'
 
   /**
-   * 面の材質を決める。**選択とホバーの両方を見る唯一の場所**。
+   * 形状最適化(第3のモード)の役割。**モードを抜けたら空にする**(`setOptimizeState(null)`)
+   * ので、抜けているあいだは常に `'none'` になる(タスク仕様「モードを抜けているあいだは
+   * 描かない」)。
+   */
+  let bodyRoles = new Map<string, 'preserve' | 'exclude'>()
+  let fixtureFaceKeys = new Set<string>()
+
+  /**
+   * 面の材質を決める。**選択とホバーと役割の全部を見る唯一の場所**。
    *
-   * 分けてはいけない —— どちらも `mesh.material` を書くので、ホバーが後から上書きする
-   * 形にすると、次のstate配信で走る `highlight()` の全走査に黙って消される。
+   * 分けてはいけない —— どれも `mesh.material` を書くので、後から上書きする形にすると
+   * 次のstate配信で走る `highlight()` の全走査に黙って消される。
    */
   function applyFaceMaterials(): void {
-    const selectedMaterial = faceOrigin === 'proposed' ? proposedMaterial : highlightMaterial
-    const selectedHover = faceOrigin === 'proposed' ? proposedHoverMaterial : highlightHoverMaterial
-    highlightColor.face = selectedFaceKeys.size === 0 ? null : selectedMaterial.color.getHex()
+    highlightColor.face =
+      selectedFaceKeys.size === 0 && selectedBodyIds.size === 0
+        ? null
+        : faceMaterialFor('none', selectedFaceKeys.size > 0 ? faceOrigin : bodyOrigin, false).color.getHex()
     for (const mesh of allFaceMeshes) {
       const bodyId = mesh.userData.bodyId as string
       const faceIndex = mesh.userData.faceIndex as number
-      const isHit = selectedFaceKeys.has(refKey(bodyId, faceIndex))
+      const hitAsFace = selectedFaceKeys.has(refKey(bodyId, faceIndex))
+      const hitAsBody = selectedBodyIds.has(bodyId)
+      const state: FaceMaterialState = hitAsFace ? faceOrigin : hitAsBody ? bodyOrigin : 'plain'
+      const role: OptimizeFaceRole = fixtureFaceKeys.has(refKey(bodyId, faceIndex))
+        ? 'fixture'
+        : (bodyRoles.get(bodyId) ?? 'none')
       const isHovered =
         hoverFace !== null && hoverFace.bodyId === bodyId && hoverFace.faceIndex === faceIndex
-      mesh.material = isHit
-        ? isHovered
-          ? selectedHover
-          : selectedMaterial
-        : isHovered
-          ? baseHoverMaterial
-          : baseMaterial
+      mesh.material = faceMaterialFor(role, state, isHovered)
     }
   }
 
@@ -1584,6 +1681,159 @@ export function createViewport(container: HTMLElement): Viewport {
     faceOrigin = origin
     selectedFaceKeys = new Set(refs.map((ref) => refKey(ref.bodyId, ref.faceIndex)))
     applyFaceMaterials()
+  }
+
+  /**
+   * 選択中のボディを強調する(`highlight` のボディ版)。保持/除外ソリッドを決めている
+   * あいだだけ非空になる —— **選択が役割色に勝つ**ので、ここに載ったボディは
+   * `applyFaceMaterials()` が全面をハイライト色で塗る。
+   */
+  function highlightBodies(bodyIds: string[], origin: 'user' | 'proposed'): void {
+    bodyOrigin = origin
+    selectedBodyIds = new Set(bodyIds)
+    applyFaceMaterials()
+  }
+
+  // ------------------------------------------------------------------ 形状最適化(第3のモード)の装飾
+  /** 拘束記号・荷重矢印+ラベルを全部消す。`setOptimizeState` が最初に呼ぶ。 */
+  function clearOptimizeAnnotations(): void {
+    optimizeRoot.clear()
+    for (const item of optimizeDisposables) item.dispose()
+    optimizeDisposables = []
+  }
+
+  /**
+   * 面の重心と平均法線を、**いま実際に描かれているメッシュ**から測る。
+   *
+   * サーバの配りもの(`FaceRef`)は添字だけで重心・法線を持たない。ここは装飾専用の
+   * 簡易測定であって `duocad/optimize.py` の指紋(面積加重・照合用)とは別物 ——
+   * 頂点の単純平均でよい(タスク仕様「あとから直すのは安い。凝りすぎない」)。
+   */
+  function faceCentroidNormal(
+    bodyId: string,
+    faceIndex: number,
+  ): { center: THREE.Vector3; normal: THREE.Vector3 } | null {
+    const mesh = allFaceMeshes.find(
+      (candidate) => candidate.userData.bodyId === bodyId && candidate.userData.faceIndex === faceIndex,
+    )
+    if (!mesh) return null
+    const position = mesh.geometry.getAttribute('position') as THREE.BufferAttribute
+    const normalAttr = mesh.geometry.getAttribute('normal') as THREE.BufferAttribute
+    if (!position || position.count === 0) return null
+    const center = new THREE.Vector3()
+    const normal = new THREE.Vector3()
+    for (let i = 0; i < position.count; i++) {
+      center.x += position.getX(i)
+      center.y += position.getY(i)
+      center.z += position.getZ(i)
+      if (normalAttr) {
+        normal.x += normalAttr.getX(i)
+        normal.y += normalAttr.getY(i)
+        normal.z += normalAttr.getZ(i)
+      }
+    }
+    center.divideScalar(position.count)
+    if (normal.lengthSq() < 1e-12) normal.set(0, 0, 1)
+    else normal.normalize()
+    return { center, normal }
+  }
+
+  /** 荷重の大きさのラベル(canvasテクスチャの札)。**モデルの大きさへ追随**させる
+   *  (`height` は呼び出し側が `contentDiagonal` から決める)。 */
+  function makeMagnitudeLabel(
+    text: string,
+    height: number,
+  ): { sprite: THREE.Sprite; disposables: Array<{ dispose(): void }> } {
+    const canvas = document.createElement('canvas')
+    canvas.width = 256
+    canvas.height = 96
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctx.fillStyle = 'rgba(16, 22, 30, 0.85)'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = '#ffc857'
+      ctx.font = 'bold 48px sans-serif'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(text, 12, canvas.height / 2)
+    }
+    const texture = new THREE.CanvasTexture(canvas)
+    const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, depthWrite: false, transparent: true })
+    const sprite = new THREE.Sprite(material)
+    sprite.scale.set(height * (canvas.width / canvas.height), height, 1)
+    return { sprite, disposables: [texture, material] }
+  }
+
+  /**
+   * 形状最適化(第3のモード)の見た目を作り直す。**`null` は全部消すだけ**
+   * (モードを抜けた・そもそも入っていない)。
+   *
+   * `preserveBodies` / `excludeBodies` は `applyFaceMaterials()` が読む役割の表を差し替える
+   * だけ(ボディの色は選択と同じ経路)。拘束・荷重は**装飾**(`optimizeRoot`)を作り直す ——
+   * 拘束面は固定記号(四角錐)を法線の上に置き、荷重面は矢印(`THREE.ArrowHelper`。長さは
+   * 大きさの対数スケール)+ 大きさのラベルを描く。どちらも**モデルの大きさへ追随**させる
+   * (`contentDiagonal` が0なら文書が空なので何も描けない)。
+   */
+  function setOptimizeState(state: OptimizeVisualState | null): void {
+    clearOptimizeAnnotations()
+    bodyRoles = new Map()
+    fixtureFaceKeys = new Set()
+    if (state === null) {
+      applyFaceMaterials()
+      return
+    }
+    for (const bodyId of state.preserveBodies) bodyRoles.set(bodyId, 'preserve')
+    for (const bodyId of state.excludeBodies) bodyRoles.set(bodyId, 'exclude')
+    fixtureFaceKeys = new Set(state.fixtures.map((ref) => refKey(ref.bodyId, ref.faceIndex)))
+    applyFaceMaterials()
+
+    const scale = Math.max(contentDiagonal, 1e-6)
+    if (scale <= 1e-6) return // 空の文書(装飾できる面が無い)
+
+    // -------------------------------------------------- 拘束の固定記号(四角錐)
+    if (state.fixtures.length > 0) {
+      const markSize = scale * 0.03
+      const markMaterial = new THREE.MeshLambertMaterial({ color: OPTIMIZE_FIXTURE_MARK_COLOR })
+      optimizeDisposables.push(markMaterial)
+      for (const ref of state.fixtures) {
+        const measured = faceCentroidNormal(ref.bodyId, ref.faceIndex)
+        if (!measured) continue
+        // **4角錐**(`radialSegments=4`)。既定は+Y軸を高さの向きに持つので、面へ刺さる向き
+        // (法線の逆)へ回してから、根元が面の少し上に来るよう法線方向へ持ち上げる。
+        const geometry = new THREE.ConeGeometry(markSize * 0.6, markSize, 4)
+        optimizeDisposables.push(geometry)
+        const cone = new THREE.Mesh(geometry, markMaterial)
+        cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), measured.normal.clone().negate())
+        cone.position.copy(measured.center).addScaledVector(measured.normal, markSize * 0.6)
+        optimizeRoot.add(cone)
+      }
+    }
+
+    // -------------------------------------------------- 荷重の矢印+ラベル
+    if (state.load !== null && state.loads.length > 0) {
+      const { magnitude, direction, vector } = state.load
+      // **長さは大きさの対数スケール**(タスク仕様)。1N未満でも長さが0にならないよう
+      // `Math.max(magnitude, 1)` で下駄を履かせる(見た目専用の式で、正確な力学ではない)。
+      const length = scale * 0.12 * (1 + Math.log10(Math.max(magnitude, 1)) * 0.3)
+      const labelHeight = scale * 0.05
+      const labelText = `${Number(magnitude.toFixed(2))}N`
+      for (const ref of state.loads) {
+        const measured = faceCentroidNormal(ref.bodyId, ref.faceIndex)
+        if (!measured) continue
+        const dir =
+          direction === 'vector' && vector !== null
+            ? new THREE.Vector3(vector[0], vector[1], vector[2]).normalize()
+            : direction === '-normal'
+              ? measured.normal.clone().negate()
+              : measured.normal.clone()
+        const arrow = new THREE.ArrowHelper(dir, measured.center, length, OPTIMIZE_LOAD_COLOR, length * 0.3, length * 0.18)
+        optimizeRoot.add(arrow)
+        optimizeDisposables.push(arrow) // `ArrowHelper.dispose()` が線・矢頭の材質を片付ける
+        const { sprite, disposables } = makeMagnitudeLabel(labelText, labelHeight)
+        sprite.position.copy(measured.center).addScaledVector(dir, length * 1.15)
+        optimizeRoot.add(sprite)
+        optimizeDisposables.push(...disposables)
+      }
+    }
   }
 
   /**
@@ -3185,6 +3435,8 @@ export function createViewport(container: HTMLElement): Viewport {
       resolutionListener = listener
     },
     highlight,
+    highlightBodies,
+    setOptimizeState,
     showEdges,
     showBasePlanes,
     pickRegions,
@@ -3193,6 +3445,16 @@ export function createViewport(container: HTMLElement): Viewport {
     showVertices,
     highlightColors() {
       return { ...highlightColor }
+    },
+    faceColor(ref) {
+      const mesh = allFaceMeshes.find(
+        (candidate) => candidate.userData.bodyId === ref.bodyId && candidate.userData.faceIndex === ref.faceIndex,
+      )
+      const material = mesh?.material as THREE.MeshLambertMaterial | undefined
+      return material?.color ? material.color.getHex() : null
+    },
+    optimizeAnnotationCount() {
+      return optimizeRoot.children.length
     },
     hoveredRef() {
       return {
@@ -3264,14 +3526,11 @@ export function createViewport(container: HTMLElement): Viewport {
       gridMaterial.dispose() // `rebuildGrid`は使い回すので、消えるのは最終teardownのここだけ
       gridRoot.clear()
       controls.dispose()
-      baseMaterial.dispose()
-      highlightMaterial.dispose()
-      proposedMaterial.dispose()
-      baseHoverMaterial.dispose()
-      highlightHoverMaterial.dispose()
-      proposedHoverMaterial.dispose()
+      for (const material of faceMaterialCache.values()) material.dispose()
+      faceMaterialCache.clear()
       previewMaterial.dispose()
       edgeMaterial.dispose()
+      clearOptimizeAnnotations()
       renderer.dispose()
       renderer.domElement.remove()
     },

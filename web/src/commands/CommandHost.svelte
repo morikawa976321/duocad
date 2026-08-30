@@ -95,6 +95,7 @@
     defaultCommandId,
     hover = null,
     entities = [],
+    onStart = () => {},
     onRun,
     onPreview,
     onCancelPreview,
@@ -137,6 +138,14 @@
      * 共有選択集合には入らない(`command.ts` の `EntitiesArgSpec` 参照)。
      */
     entities?: string[]
+    /**
+     * **起動した**(`start()`)瞬間に呼ばれる。既定は何もしない。
+     *
+     * 形状最適化の4つのverb(`App.svelte`)だけが使う ——起動時に既存の割り当てを
+     * 選択状態にして見せるため、`App.svelte` 側でそのverbのプリセレクトを行う。
+     * ここでは何が起きるかを知らない(verb名を渡すだけ)。
+     */
+    onStart?: (verb: string) => void
     onRun: (verb: string, args: Record<string, unknown>) => void
     /** `mode` は `CommandDef.preview`。`local` はブラウザだけで描く(サーバへ投げない)。 */
     onPreview: (verb: string, args: Record<string, unknown>, mode: 'server' | 'local') => void
@@ -484,6 +493,7 @@
     // 起動より前から揃っていた選択(AIが選んだ面のまま起動した等)では発火せず、
     // Enter か、ボタンをもう一度押すことが適用の1手として残る。
     armedSelections = selfSelections
+    onStart(nextId)
     focusFirstNumber()
   }
 
