@@ -1172,8 +1172,10 @@ export function createViewport(container: HTMLElement): Viewport {
     refreshContentDiagonal() // 見えているものの大きさが変わった(解像度の上下限に効く)
     updateClipPlanes() // 内容が変わった → 視錐台を引き直す(姿勢は初回のみ下で決める)
 
-    if (!framed) {
-      frameToContent()
+    // **`frameToContent()` が実際に合わせたときだけ機会を消費する**(2026-08-30)。
+    // 空振り(箱が空)で `framed = true` にすると、以後どんなに大きな内容が届いても
+    // 初回フレーミングが二度と起きない(上の関数docstring参照)。
+    if (!framed && frameToContent()) {
       framed = true
     }
   }
@@ -1362,10 +1364,16 @@ export function createViewport(container: HTMLElement): Viewport {
    * 頑丈(サーバのbbox形式に依存しない)。
    *
    * **姿勢(位置・向き)だけを決める。** near/farは `updateClipPlanes` の仕事(上記コメント)。
+   *
+   * **実際に合わせたかを boolean で返す**(2026-08-30)。箱が空(=描くものがまだ無い)なら
+   * 何もせず `false` を返す —— 呼び出し側の `update()` はこれを見て初めて「一度きりの機会」
+   * (`framed` フラグ)を消費する。戻り値を見ずに常に `framed = true` にすると、
+   * `geometry: null` のBodyだけが届いた1通(参照ボディだけ・本体がまだ無い等)で
+   * 空振りのまま機会が焼き切れ、以後どれだけ内容が届いても初回フレーミングが起きなくなる。
    */
-  function frameToContent(): void {
+  function frameToContent(): boolean {
     const box = new THREE.Box3().setFromObject(root)
-    if (box.isEmpty()) return
+    if (box.isEmpty()) return false
     const center = new THREE.Vector3()
     box.getCenter(center)
     const diagonal = Math.max(box.getSize(new THREE.Vector3()).length(), 1e-6)
@@ -1385,6 +1393,7 @@ export function createViewport(container: HTMLElement): Viewport {
     }
     updateClipPlanes()
     controls.update()
+    return true
   }
 
   function setFov(deg: number): void {

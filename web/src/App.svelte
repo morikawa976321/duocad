@@ -454,6 +454,13 @@
       // どこにも書かれていないので `null`(＝常に未保存)へ戻す。`next` は上で `model` に
       // 入れた今回の状態で、開いた版の `applied_count` / 操作数がもう入っている。
       savedAt = applied.name === null ? null : [next.applied_count, next.log.length]
+      // **開いた(`open_document`)ときだけ合わせ直す。** 文書のスケールが不連続に変わる
+      // のは import_step と同じくここだけ(実測: 小さな部品→大きな板を保存し、開き直すと
+      // 前の文書の視点のまま端が画面外に出た)。**新規(`new_document`)は空の文書**なので
+      // 合わせる内容が無く、`frameToContent()` は箱が空のまま何もしない(呼んでも無害だが、
+      // 完了条件が言う「文書のスケールが不連続に変わるのはインポートとopen_documentだけ」に
+      // 忠実に、対象を開いた場合だけへ絞る)。
+      if (applied.name !== null) viewport?.frameAll()
       note(applied.name === null ? '新規の文書にした' : `開いた: ${applied.name}`)
       if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
       lastApplied = applied
@@ -466,6 +473,15 @@
       // **読み込んだら何ができる状態になったか**を言う。読み込みの経路は1本だけ
       // (`import_step`)で、必ず編集可能なボディまでできる。
       if (applied.verb === 'import_step') {
+        // **読み込んだモデル全体が入る視点へ合わせ直す**。文書のスケールが不連続に
+        // 変わるのはインポート(2026-08-30の本人実測: 対角約640mmのSTEPを読んで
+        // 端が画面外に出た)だけで、押し出し等ふつうの編集で視点が跳ぶと操作の妨害に
+        // なるので、この分岐以外へは広げない。**このジオメトリはもう届いている**——
+        // `handleState` は自身の先頭で `viewport?.update(changed...)` を呼んでおり
+        // (このifより上)、import_step の応答は state 配信1通の中に delta.bodies(実体)と
+        // applied(この分岐)が一緒に載って届く(`duocad/net/ws.py` の `_push`)ので、
+        // 順序を気にする必要が無い。
+        viewport?.frameAll()
         const count = applied.body_ids?.length ?? 0
         note(`STEPを読み込んだ(${count}部品)。そのまま面をクリックして押し出せる`)
       }
