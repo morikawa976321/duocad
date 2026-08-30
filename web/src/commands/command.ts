@@ -27,14 +27,18 @@ import type {
   SketchEntityRef,
 } from '../session'
 
-/** 選択の種別。コアの `SELECTABLE_KINDS` と同じ5つ。 */
-export type SelectableKind = ShapeKind | 'region' | 'sketch_entity'
+/** 選択の種別。コアの `SELECTABLE_KINDS` と同じ顔ぶれ(`tests/test_optimize_setup.py` が照合)。 */
+export type SelectableKind = ShapeKind | 'body' | 'region' | 'sketch_entity'
 
-/** 種別ごとの数え方(「辺 4本」「面 2面」)。件数表示を1箇所に集める。 */
+/** 種別ごとの数え方(「辺 4本」「面 2面」)。件数表示を1箇所に集める。
+ *
+ * **`Record<SelectableKind, string>` なので、種別を足したらここも埋まる** ——
+ * 埋め忘れると件数が `undefined` になり、型検査も実行時例外も出ないまま画面に出る。 */
 const KIND_COUNTERS: Record<SelectableKind, string> = {
   face: '面',
   edge: '本',
   vertex: '点',
+  body: '個',
   region: '個',
   sketch_entity: '個',
 }

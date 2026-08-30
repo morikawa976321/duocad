@@ -71,7 +71,14 @@ export interface SketchEntityRef {
   provenance?: unknown
 }
 
-export type SelectionRef = ShapeRef | RegionRef | SketchEntityRef
+/**
+ * 選択集合に入りうる参照の全部(コアの `duocad/selection.py` の `SELECTABLE_KINDS` と対)。
+ *
+ * **`BodyRef` を落とさないこと** —— `state.optimize` の4配列は「そのまま
+ * `modifySelection` へ渡せる」が契約なので、ここに入っていないと保持/除外ソリッドの
+ * プリセレクトが型の上で書けない(`tests/test_optimize_setup.py` が宣言を静的に見ている)。
+ */
+export type SelectionRef = ShapeRef | BodyRef | RegionRef | SketchEntityRef
 
 /**
  * 共有される選択集合(`duocad/selection.py` の `Selection.to_dict()`)。

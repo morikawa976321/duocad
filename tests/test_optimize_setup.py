@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+from pathlib import Path
 
 import pytest
 
@@ -31,6 +33,10 @@ from duocad.document import Document
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.oplog import OpLog
 from duocad.server import Server, Session
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SESSION_TS = REPO_ROOT / "web" / "src" / "session.ts"
+COMMAND_TS = REPO_ROOT / "web" / "src" / "commands" / "command.ts"
 
 DEVIATION = 0.2
 SIDE = 20.0
@@ -473,6 +479,75 @@ def test_the_setup_survives_a_save_and_reopen(session: Session) -> None:
     assert optimize.state_payload(reopened) == before
 
 
+def test_the_setup_survives_a_real_save_and_open(tmp_path) -> None:
+    """**実APIの往復**(`save_document` → 別の文書へ差し替え → `open_document`)で復元される。
+
+    上の `test_the_setup_survives_a_save_and_reopen` は `OpLog` を直に往復させるので、
+    **ファイルI/Oと文書の差し替えを通らない**。仕様の完了条件3(保存・再オープンで条件が
+    復元される)が名指ししているのはこちらの経路である。
+
+    落とせることを確認した壊れ方: **verbの再生が条件を戻さない**(`_do_*` を空にすると
+    ここが赤くなる)。途中の `new_document()` の検査は「差し替え後に前の文書の割り当てを
+    配っていない」を見る —— ただし `OptimizeSetup.revision` と形状の同一性が鍵に入って
+    いるおかげで、`DocumentView.reset()` の `_optimize_cache.clear()` を外しても
+    **これは赤くならない**(実測)。あの `clear()` は他のキャッシュと規律を揃えるための
+    もので、この検査が守っているものではない。
+    """
+    made = Session(None, DEVIATION, models_dir=tmp_path / "models")
+    body = _box(made)
+    _select(made, _body_refs(body))
+    made.set_preserve_bodies()
+    _select(made, _face_refs(body, [1, 2]))
+    made.set_fixtures()
+    _select(made, _face_refs(body, [3]))
+    made.set_loads(120.0, [1.0, 0.0, 0.0])
+    before = _optimize(made)
+    assert len(before["fixtures"]) == 2 and before["load"]["magnitude"] == 120.0
+
+    made.save_document("optimized.json")
+    made.new_document()
+    # **差し替えでキャッシュごと落ちていること**(ここが緑でないと、次の open が
+    # 前の文書の割り当てを配っていても気づけない)
+    empty = _optimize(made)
+    assert empty["preserve_bodies"] == [] and empty["fixtures"] == [] and empty["load"] is None
+
+    made.open_document("optimized.json")
+    after = _optimize(made)
+    assert after == before, {"開く前": before, "開いた後": after}
+
+
+def test_clearing_every_role_survives_a_real_save_and_open(tmp_path) -> None:
+    """**空の代入も操作ログの1手**なので、保存・再オープンで「空のまま」戻る。
+
+    ここが落ちるなら、外した役割が開き直すたびに復活していることになる
+    (解除専用のverbが無い以上、「空を代入した」がログに残らなければ外せない)。
+    """
+    made = Session(None, DEVIATION, models_dir=tmp_path / "models")
+    body = _box(made)
+    _select(made, _body_refs(body))
+    made.set_preserve_bodies()
+    _select(made, _face_refs(made.document.bodies[-1], [1]))
+    made.set_fixtures()
+    _select(made, _face_refs(body, [2]))
+    made.set_loads(30.0, "normal")
+
+    # 4つとも空にする(**解除専用のverbは無い** —— 空の選択で確定するのが外し方)
+    made.clear_selection()
+    made.set_preserve_bodies()
+    made.set_exclude_bodies()
+    made.set_fixtures()
+    made.set_loads(30.0, "normal")
+    assert _optimize(made)["fixtures"] == []
+
+    made.save_document("cleared.json")
+    made.new_document()
+    made.open_document("cleared.json")
+
+    after = _optimize(made)
+    assert after["preserve_bodies"] == [] and after["exclude_bodies"] == []
+    assert after["fixtures"] == [] and after["loads"] == [] and after["stale"] == []
+
+
 def test_undo_and_redo_walk_the_assignment_back(session: Session) -> None:
     """undoは**直前の集合**へ戻り、redoでやり直せる(集合代入なので差分ではない)。"""
     first = _box(session)
@@ -604,24 +679,80 @@ def test_every_verb_is_reachable_from_all_three_surfaces(verb: str) -> None:
     assert verb in catalog.tool_names(), "MCPのツールに無い"
 
 
-def test_the_websocket_and_mcp_paths_agree(session: Session) -> None:
-    """WS経由とMCP経由で同じ結果になる(引数の綴りも同じ)。"""
-    body = _box(session)
-    _select(session, _face_refs(body, [1]))
+#: verb名 -> (対象の選び方, WSへ送る引数, MCPラッパへ渡す引数, 結果を確かめる読み取り)。
+#:
+#: **4 verb 全部をWSとMCPの両方で実際に走らせる**ための表。宣言の照合(下の
+#: `test_every_verb_is_reachable_from_all_three_surfaces`)だけでは、
+#: **引数の受け渡しが繋がっているか**は分からない —— WSの表は
+#: `**{key: message[key] for key in keys}` で機械的に渡すので、宣言の引数名と
+#: `Session` のラッパの引数名が食い違えば `TypeError` になり、MCPのラッパは手書きなので
+#: 綴りを間違えれば同じく落ちる。どちらも**その経路を1回走らせるまで誰も気づかない**。
+#: 読み取りは**セッションに依らない値**へ均す(`body_id` は毎回振り直されるので、
+#: 「選んだボディか」に置き換えてから2経路を突き合わせる)。
+def _assigned_bodies(role):
+    return lambda state, body: [
+        "<選んだボディ>" if item == body.id else item for item in _ids(state[role])
+    ]
 
-    async def script(send):
-        return await send({"cmd": "set_loads", "magnitude": 50.0, "direction": [0.0, 1.0, 0.0]})
 
-    answer = _browser(session, script)
-    assert answer["type"] == "state", answer
-    assert _optimize(session)["load"]["magnitude"] == 50.0
+def _assigned_faces(role):
+    return lambda state, body: _indices(state[role])
 
-    tools = DocumentTools(session)
-    _select(session, _face_refs(body, [2]))
-    tools.set_loads(magnitude=75.0, direction=[0.0, 1.0, 0.0])
-    state = _optimize(session)
-    assert state["load"]["magnitude"] == 75.0
-    assert _indices(state["loads"]) == [2]
+
+_ROUTES = {
+    "set_preserve_bodies": ("body", {}, _assigned_bodies("preserve_bodies")),
+    "set_exclude_bodies": ("body", {}, _assigned_bodies("exclude_bodies")),
+    "set_fixtures": ("face", {}, _assigned_faces("fixtures")),
+    # 荷重だけは**howの値そのもの**も突き合わせる(面の集合だけ見ていると、
+    # 大きさ・向きが片方の経路で落ちていても緑になる)。
+    "set_loads": (
+        "face",
+        {"magnitude": 50.0, "direction": [0.0, 1.0, 0.0]},
+        lambda state, body: (
+            _indices(state["loads"]),
+            state["load"]["magnitude"],
+            state["load"]["direction"],
+            state["load"]["vector"],
+        ),
+    ),
+}
+
+
+@pytest.mark.parametrize("verb", sorted(_ROUTES))
+def test_the_websocket_and_mcp_paths_both_run_the_verb(verb: str) -> None:
+    """**4 verb とも、WS経由とMCP経由で実際に走って同じ結果になる。**
+
+    宣言の照合ではなく**実行**で見る(引数の受け渡しは走らせないと繋がりが分からない)。
+    同じ選択に対して2経路で走らせ、**どちらも同じものを割り当てる**ことまで確かめる ——
+    片方だけが対象を取り違えていると、AIと人で結果が食い違う形で出る。
+    """
+    picker, arguments, read = _ROUTES[verb]
+
+    def run(use_websocket: bool):
+        made = Session(None, DEVIATION)
+        body = _box(made)
+        _select(
+            made,
+            _body_refs(body) if picker == "body" else _face_refs(body, [1, 2]),
+        )
+        if use_websocket:
+
+            async def script(send):
+                return await send({"cmd": verb, **arguments})
+
+            answer = _browser(made, script)
+            assert answer["type"] == "state", answer
+        else:
+            getattr(DocumentTools(made), verb)(**arguments)
+        assert made.document.log.entries[-1].verb == verb, "操作ログに載っていない"
+        return read(_optimize(made), body)
+
+    over_ws = run(True)
+    over_mcp = run(False)
+    assert over_ws == over_mcp, {"WS": over_ws, "MCP": over_mcp}
+    assert over_ws, "対象を1つも割り当てていない(確定選択から取れていない)"
+    if verb == "set_loads":
+        assert over_ws == ([1, 2], 50.0, "vector", [0.0, 1.0, 0.0]), over_ws
 
 
 def test_the_mcp_schema_takes_only_the_how(session: Session) -> None:
@@ -713,3 +844,49 @@ def test_the_log_broadcast_does_not_carry_every_fingerprint(session: Session) ->
     delivered = session.state_meta()["log"][-1]["args"]
     assert "配信しない" in delivered["faces"], delivered
     assert len(session.document.log.entries[-1].args["faces"]) == 3
+
+
+# --------------------------------------------------------------------------------------
+# 8. 選択種別 `body` がTS側の型でも通ること(**静的に読む**)
+# --------------------------------------------------------------------------------------
+# `state.optimize` の4配列は「そのまま `modifySelection` へ渡せる」が契約である
+# (`duocad/optimize.py` の `state_payload`)。**その契約は型の上でも成り立っていなければ
+# ならない** —— TS側の `SelectionRef` にボディの参照が入っていなければ、画面側は
+# `preserve_bodies` を `modifySelection(add: SelectionRef[], ...)` へ渡せず、
+# 着手した瞬間にコンパイルが止まる。`tsc` は「渡さないコードが無い」うちは何も言わないので、
+# **宣言そのものをここで見る**(`tests/test_ui_command_wiring.py` と同じ、ソースを静的に
+# 読むやり方)。
+def _ts_union_arms(path: Path, name: str) -> set:
+    """`export type <name> = A | B | C` の右辺を集合で返す。"""
+    text = path.read_text(encoding="utf-8")
+    match = re.search(rf"^export type {name} = (.+)$", text, re.M)
+    assert match, f"{name} の宣言を {path.name} から読めていない"
+    return {arm.strip() for arm in match.group(1).split("|") if arm.strip()}
+
+
+def test_the_typescript_selection_ref_covers_the_body_kind() -> None:
+    """TSの `SelectionRef` に**ボディの参照が入っている**。
+
+    落ちるのは「コアに選択種別を足したのに、画面へ渡す型の口を開け忘れた」とき。
+    """
+    arms = _ts_union_arms(SESSION_TS, "SelectionRef")
+    assert "BodyRef" in arms, (
+        "`SelectionRef` にボディの参照が無い —— `state.optimize` の "
+        f"preserve_bodies / exclude_bodies を modifySelection へ渡せない: {sorted(arms)}"
+    )
+
+
+def test_the_typescript_selectable_kinds_match_the_core() -> None:
+    """TSの `SelectableKind` の顔ぶれが、コアの `SELECTABLE_KINDS` と一致する。
+
+    ここが古いままだと、`KIND_COUNTERS` のような**種別ごとの表に穴が開く**
+    (件数表示が `undefined` になる形で、型検査も実行時例外も出ないまま画面に出る)。
+    """
+    shape_kinds = {arm.strip("'") for arm in _ts_union_arms(SESSION_TS, "ShapeKind")}
+    declared = set()
+    for arm in _ts_union_arms(COMMAND_TS, "SelectableKind"):
+        declared |= shape_kinds if arm == "ShapeKind" else {arm.strip("'")}
+    assert declared == set(selection.SELECTABLE_KINDS), {
+        "TSのみ": sorted(declared - set(selection.SELECTABLE_KINDS)),
+        "コアのみ": sorted(set(selection.SELECTABLE_KINDS) - declared),
+    }
