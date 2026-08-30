@@ -15,7 +15,7 @@ Claudeを使う道はMCP(サブスク認証のClaude Codeが `/mcp` へ繋ぐ)�
 `openai_compat` はキーを要求するサーバのために `api_key` を受けられるが、`build_provider`
 は渡さない(画面から鍵を受け取る経路を作らないため)。外へ出る文字列は `_redact()` を通す。
 
-公式SDK(`openai`)は入れず、`urllib.request` で素のHTTPを書く。v1は**非streaming**。
+公式SDK(`openai`)は入れず、`urllib.request` で素のHTTPを書く。**非streaming**。
 
 **OCP / build123d をimportしない**。
 """
@@ -137,7 +137,7 @@ def _redact(text: str, secret: Optional[str]) -> str:
 
 
 # --------------------------------------------------------------------------------------
-# HTTP(素のurllib。streamingはv1の範囲外)
+# HTTP(素のurllib。streamingは非対応)
 # --------------------------------------------------------------------------------------
 def _origin(url: str) -> str:
     """エラーメッセージに載せてよい程度に短くしたURL(クエリを落とす)。"""

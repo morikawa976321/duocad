@@ -32,7 +32,7 @@ PatternId = str
 #: 基準平面の名前(この3つだけ。実装計画書§1「平面(基準3面)」)
 BASE_PLANES = ("XY", "XZ", "YZ")
 
-#: 反復の種別(矩形・円形。これでv1の反復verbが揃う)
+#: 反復の種別(矩形・円形)
 PATTERN_KINDS = ("rectangular", "circular")
 
 

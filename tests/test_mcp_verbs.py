@@ -1,4 +1,4 @@
-"""**v1の全verbをMCPツールとして公開する**契約。
+"""**全verbをMCPツールとして公開する**契約。
 
 `tests/test_mcp_selection.py` が選択・述語の側を持ち、こちらが**操作(verb)と問い合わせ**の
 側を持つ。AI側の合格条件は「MCPツールとして呼べ/引数を**述語**または明示的な参照で
@@ -293,7 +293,7 @@ def vertical_edge_indices(shape) -> list:
 # --------------------------------------------------------------------------------------
 # 1. 到達性 — 全verbがMCPツールとして呼べること
 # --------------------------------------------------------------------------------------
-def test_every_v1_verb_is_reachable_as_an_mcp_tool(server: McpServer):
+def test_every_verb_is_reachable_as_an_mcp_tool(server: McpServer):
     """**このファイルで最も重要な1本**(タスクファイル項番1)。
 
     §0の到達表のAI列にある全操作がMCPツールとして存在し、かつ**余計なものが無い**。
@@ -958,7 +958,7 @@ def test_a_browser_export_does_not_corrupt_the_stdio_channel(tmp_path: Path):
     同じプロセスのC++が同じ実fdへ統計を吐く —— その経路はツール実行の囲みの外にあり、
     JSON-RPCの行に `****** Statistics on Transfer (Write) ******` が割り込んで接続が壊れる。
 
-    **交互操作は人とAIが同じプロセスを同時に触る形**なので、v1では普通に起きる。
+    **交互操作は人とAIが同じプロセスを同時に触る形**なので、普通に起きる。
     ここはWebSocketクライアントとして繋ぎ、`export_step` を人の経路で踏んでから、
     MCPの応答がまだJSONとして読めることを見る。
     """

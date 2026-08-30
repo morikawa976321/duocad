@@ -25,7 +25,7 @@ from typing import Any, Dict, Optional
 from .document import Document, unknown_id_message
 from .oplog import Operation, register_verb, verb_handler
 
-#: パラメータ名の接頭辞(Fusion360の d1/d2 と同じ流儀。将来の改名機能はv1の範囲外)
+#: パラメータ名の接頭辞(Fusion360の d1/d2 と同じ流儀。改名機能は未実装)
 PARAMETER_PREFIX = "d"
 
 VERB_SET_PARAMETER = "set_parameter"

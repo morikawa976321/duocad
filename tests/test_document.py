@@ -33,7 +33,7 @@ def test_new_document_active_body_is_none():
 
 
 def test_add_body_appends_to_bodies_list_and_returns_its_id():
-    """add_bodyはbodiesへ追加し、追加したBodyのidを返す(v1でUIは1つしか見せないがデータは複数ボディ対応)。"""
+    """add_bodyはbodiesへ追加し、追加したBodyのidを返す(UIは1つしか見せないがデータは複数ボディ対応)。"""
     doc = Document()
     body = Body(id="b1", name="first", kind="solid")
     returned_id = doc.add_body(body)

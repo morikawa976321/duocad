@@ -100,7 +100,7 @@ def test_entity_kind_is_validated():
     # 必須フィールドの包含で見る(補助フィールドの追加まで禁じない)
     assert {"id", "kind", "params"} <= {f.name for f in dataclasses.fields(Entity)}
     with pytest.raises(ValueError):
-        Entity(id="e3", kind="spline")  # 円形反復・スプラインはv1.1以降で今も範囲外
+        Entity(id="e3", kind="spline")  # スプラインは今も範囲外
 
 
 def test_m2_modules_are_covered_by_the_import_boundary_scan():
