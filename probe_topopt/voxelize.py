@@ -69,6 +69,16 @@ from duocad import kernel  # noqa: E402  (sys.path を整えてから)
 RAY_JITTER_X = 1.0e-4
 RAY_JITTER_Y = 0.6180339887498949e-4
 
+# **1つの固定値では守れない。** ずらし幅を固定にすると、その値にちょうど合った位置に
+# 頂点が来る格子を渡されたときに縮退する(2026-08-31のQA指摘。円錐の頂点へ既定のずらしを
+# 合わせた格子を作れば再現する)。縮退(巻き数が0に戻らない列)を検知したら、**決定的な列**を
+# 順に試し直す。倍率を素数にしてあるのは、ある倍率で当たった位置が別の倍率で当たり直さない
+# ようにするため。乱数は使わない(決定性を保つ)。
+RAY_JITTER_SEQUENCE: tuple[tuple[float, float], ...] = tuple(
+    (RAY_JITTER_X * k, RAY_JITTER_Y * m)
+    for k, m in ((1, 1), (3, 5), (7, 11), (13, 17), (19, 23), (29, 31))
+)
+
 # 既定の三角形分割の細かさ。**要素サイズに比例させる**(格子を細かくすると三角形も
 # 細かくなる)。0.02 は「格子の誤差が支配的で、三角形分割の弦誤差はその20分の1」という
 # 配分。受入検査が曖昧として除外する帯(要素サイズの5%)より細かいことが要る。
@@ -235,9 +245,23 @@ class TriangleSoup:
         """面添字 → その面の三角形の添字。stage2 が面から要素を引くための口。"""
         return np.flatnonzero(self.face_index == int(face_index))
 
-    def signed_volume(self) -> float:
-        """発散定理による符号付き体積。外向きに揃っていれば正。"""
-        a, b, c = self.triangle_vertices()
+    def signed_volume(self, triangles: Optional[np.ndarray] = None) -> float:
+        """発散定理による符号付き体積。外向きに揃っていれば正。
+
+        **基準点(bboxの中心)を引いてから三重積を取る。** 絶対座標のまま足すと、原点から
+        遠いソリッドで桁落ちする(2026-08-31のQA指摘。原点から 1e8 mm の 40x20x10 の箱で
+        8000 が 7957.33 になり、薄い形なら符号が反転して「法線が内向き」と誤って拒否する)。
+        体積は平行移動に対して不変なので、基準点を引くのは数値の都合だけの操作。
+
+        `triangles` に三角形の添字を渡すと、その部分集合だけの符号付き体積を返す
+        (連結成分ごとに見るため)。
+        """
+        p = self.positions
+        t = self.triangles if triangles is None else self.triangles[triangles]
+        origin = 0.5 * (p.min(axis=0) + p.max(axis=0))
+        a = p[t[:, 0]] - origin
+        b = p[t[:, 1]] - origin
+        c = p[t[:, 2]] - origin
         return float(np.einsum("ij,ij->i", a, np.cross(b, c)).sum() / 6.0)
 
     def area(self) -> float:
@@ -351,6 +375,7 @@ def inspect_soup(soup: TriangleSoup, weld_tolerance: Optional[float] = None) -> 
     mismatched = int(np.count_nonzero(fwd_count != bwd_count))  # 対の数が合わない
 
     volume = soup.signed_volume()
+    components = _shell_orientation_report(soup, labels, ~degenerate)
     report = {
         "triangles": soup.triangle_count,
         "degenerate_triangles": int(np.count_nonzero(degenerate)),
@@ -361,6 +386,9 @@ def inspect_soup(soup: TriangleSoup, weld_tolerance: Optional[float] = None) -> 
         "mismatched_edges": mismatched,
         "signed_volume": volume,
         "area": soup.area(),
+        "components": len(components),
+        "component_volumes": [round(comp["volume"], 6) for comp in components],
+        "component_depths": [comp["depth"] for comp in components],
     }
 
     if boundary or duplicated or mismatched:
@@ -377,7 +405,108 @@ def inspect_soup(soup: TriangleSoup, weld_tolerance: Optional[float] = None) -> 
             f"符号付き体積が正でない({volume:.6g} mm^3)。法線が内向き = 裏返った形状。"
             f" 詳細: {report}"
         )
+    for comp in components:
+        expected = "正" if comp["depth"] % 2 == 0 else "負(空洞)"
+        actual_positive = comp["volume"] > 0
+        if actual_positive != (comp["depth"] % 2 == 0):
+            raise ValueError(
+                f"殻の向きが揃っていない: {len(components)}個ある連結成分のうち "
+                f"{comp['index']}番目(三角形{comp['triangles']}枚)は他の殻 {comp['depth']} 枚の"
+                f"内側にあるので符号付き体積は{expected}でなければならないが、"
+                f"{comp['volume']:.6g} mm^3 だった。"
+                "**総体積だけを見ると正のまま通ってしまう壊れ方**(内部空洞の殻だけを裏返すと"
+                "空洞が材料として埋まる)なので、殻ごとに見ている。"
+                f" 詳細: {report}"
+            )
     return report
+
+
+def _shell_orientation_report(
+    soup: TriangleSoup, labels: np.ndarray, live_mask: np.ndarray
+) -> list[dict]:
+    """連結成分(殻)ごとに、符号付き体積と「他の殻いくつの内側にあるか」を返す。
+
+    内部空洞の殻は外向き法線が**空洞のほうを向く**ので符号付き体積が負になる。
+    殻ごとに見ないと、**空洞の殻だけを裏返した入力**が総体積が正のまま通ってしまい、
+    空洞が材料として埋まる(2026-08-31のQA指摘。40³の箱に20³の空洞で実際に再現した)。
+    入れ子の深さが偶数の殻は正、奇数(=空洞)の殻は負でなければならない。
+    """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    tri = labels[soup.triangles]
+    live_idx = np.flatnonzero(live_mask)
+    live = tri[live_idx]
+    n_labels = int(labels.max()) + 1
+    rows = np.concatenate([live[:, 0], live[:, 1], live[:, 2]])
+    cols = np.concatenate([live[:, 1], live[:, 2], live[:, 0]])
+    graph = coo_matrix(
+        (np.ones(rows.size, dtype=np.int8), (rows, cols)), shape=(n_labels, n_labels)
+    ).tocsr()
+    n_comp, comp_of_label = connected_components(graph, directed=False)
+
+    comp_of_tri = comp_of_label[live[:, 0]]
+    lo, hi = soup.bbox
+    eps = float(np.linalg.norm(hi - lo)) * 1e-6
+
+    out: list[dict] = []
+    reps = []
+    tri_sets = []
+    for k in range(n_comp):
+        members = live_idx[comp_of_tri == k]
+        if members.size == 0:
+            continue  # 三角形を持たない孤立ラベル(退化三角形だけのラベル)
+        tri_sets.append(members)
+        reps.append(soup.positions[soup.triangles[members[0], 0]])
+        out.append(
+            {
+                "index": len(out),
+                "triangles": int(members.size),
+                "volume": soup.signed_volume(members),
+                "depth": 0,
+            }
+        )
+
+    for i, comp in enumerate(out):
+        depth = 0
+        for j, members in enumerate(tri_sets):
+            if i == j:
+                continue
+            if _point_is_inside(soup, members, reps[i], eps):
+                depth += 1
+        comp["depth"] = depth
+    return out
+
+
+def _point_is_inside(
+    soup: TriangleSoup, triangles: np.ndarray, point: np.ndarray, eps: float
+) -> bool:
+    """1点が三角形の部分集合が囲む領域の内側かを、+z のレイの巻き数で判定する。
+
+    `occupancy` と同じ考え方だが、格子ではなく1点だけを見る(殻の入れ子の深さを数えるため)。
+    レイの (x,y) は `eps` だけずらす(頂点や辺をちょうど貫く縮退を外す)。
+    """
+    idx = np.asarray(triangles)
+    a = soup.positions[soup.triangles[idx, 0]]
+    b = soup.positions[soup.triangles[idx, 1]]
+    c = soup.positions[soup.triangles[idx, 2]]
+    px = float(point[0]) + eps
+    py = float(point[1]) + eps * 0.6180339887498949
+    pz = float(point[2])
+    area2 = (b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (b[:, 1] - a[:, 1]) * (
+        c[:, 0] - a[:, 0]
+    )
+    usable = np.abs(area2) > 0.0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        inv = np.where(usable, 1.0 / np.where(usable, area2, 1.0), 0.0)
+        l0 = ((c[:, 0] - b[:, 0]) * (py - b[:, 1]) - (c[:, 1] - b[:, 1]) * (px - b[:, 0])) * inv
+        l1 = ((a[:, 0] - c[:, 0]) * (py - c[:, 1]) - (a[:, 1] - c[:, 1]) * (px - c[:, 0])) * inv
+        l2 = ((b[:, 0] - a[:, 0]) * (py - a[:, 1]) - (b[:, 1] - a[:, 1]) * (px - a[:, 0])) * inv
+    inside = usable & (l0 >= 0.0) & (l1 >= 0.0) & (l2 >= 0.0)
+    z = l0 * a[:, 2] + l1 * b[:, 2] + l2 * c[:, 2]
+    hit = inside & (z > pz)
+    winding = int(np.sign(area2[hit]).sum())
+    return winding != 0
 
 
 # ---------------------------------------------------------------------------
@@ -387,10 +516,16 @@ def occupancy(
     soup: TriangleSoup,
     grid: Grid,
     *,
-    jitter: tuple[float, float] = (RAY_JITTER_X, RAY_JITTER_Y),
+    jitter: Optional[tuple[float, float]] = None,
     strict: bool = True,
 ) -> tuple[np.ndarray, dict]:
     """三角形群と格子から占有マスク (nx,ny,nz) の bool 配列を返す。
+
+    `jitter=None`(既定)のときは `RAY_JITTER_SEQUENCE` を順に試し、縮退(巻き数が0に
+    戻らない列)が出たら**次のずらし幅でやり直す**。全部だめだったときだけ例外にする。
+    明示的にタプルを渡すとその1回だけを試す(受入検査がずらしの効きを見るための口)。
+    `stats["jitter"]` に実際に成功したずらし幅、`stats["jitter_attempts"]` に試した回数が入る。
+
 
     各列 (i,j) の**セル中心**を通る +z のレイを飛ばし、三角形との交点を集める。
     交点には「入る(+1)/出る(-1)」の符号を付け、z 順の累積(巻き数)が 0 でない区間に
@@ -400,6 +535,37 @@ def occupancy(
     戻り値の2つめは診断。`unbalanced_columns` は最後まで巻き数が 0 に戻らなかった列の数で、
     閉じた表面なら 0 でなければならない(`strict=True` なら 0 でないとき例外)。
     """
+    if jitter is not None:
+        return _occupancy_once(soup, grid, jitter, strict)
+
+    last_error: Optional[ValueError] = None
+    for attempt, candidate in enumerate(RAY_JITTER_SEQUENCE, start=1):
+        try:
+            mask, stats = _occupancy_once(soup, grid, candidate, strict=True)
+        except ValueError as exc:
+            last_error = exc
+            continue
+        stats["jitter"] = candidate
+        stats["jitter_attempts"] = attempt
+        return mask, stats
+    if not strict:
+        mask, stats = _occupancy_once(soup, grid, RAY_JITTER_SEQUENCE[0], strict=False)
+        stats["jitter"] = RAY_JITTER_SEQUENCE[0]
+        stats["jitter_attempts"] = len(RAY_JITTER_SEQUENCE)
+        return mask, stats
+    raise ValueError(
+        f"レイのずらしを {len(RAY_JITTER_SEQUENCE)} 通り試したがすべて縮退した。"
+        f"最後の理由: {last_error}"
+    )
+
+
+def _occupancy_once(
+    soup: TriangleSoup,
+    grid: Grid,
+    jitter: tuple[float, float],
+    strict: bool,
+) -> tuple[np.ndarray, dict]:
+    """`occupancy` の1回ぶん(ずらし幅を固定して1回だけ走査する)。"""
     nx, ny, nz = grid.shape
     h = float(grid.spacing)
 
@@ -462,6 +628,8 @@ def occupancy(
     mask = np.zeros((nx, ny, nz), dtype=bool)
     stats = {
         "triangles": soup.triangle_count,
+        "jitter": jitter,
+        "jitter_attempts": 1,
         "flat_projection": int(np.count_nonzero(flat)),
         "covers_no_column": int(np.count_nonzero(~covers)),
         "crossings": 0,
@@ -469,7 +637,13 @@ def occupancy(
     }
     if not col_chunks:
         if strict:
-            raise ValueError("三角形とレイの交点が1つも無い(格子が形状を覆っていない)")
+            raise ValueError(
+                "三角形とレイの交点が1つも無い。格子が形状をまったく覆っていない"
+                f"(格子の範囲 {np.round(grid.world_box()[0], 3).tolist()}"
+                f" .. {np.round(grid.world_box()[1], 3).tolist()} /"
+                f" 形状の範囲 {np.round(soup.bbox[0], 3).tolist()}"
+                f" .. {np.round(soup.bbox[1], 3).tolist()})"
+            )
         return mask, stats
 
     col = np.concatenate(col_chunks)
@@ -540,8 +714,18 @@ def closest_triangle(
     """各点について、三角形群までの**厳密な**最短距離とその三角形の添字を返す。
 
     面添字が要るときは `soup.face_index[tri]` で引ける(stage2「面アンカー」の素材)。
-    厳密な点-三角形距離(頂点・辺・内部の6分岐)を numpy でベクトル化し、点をチャンクに
-    切ってメモリを抑える。頂点だけの近似(KD木)は三角形1枚ぶん距離を過大評価しうるので使わない。
+
+    **候補点の最小値で求める(領域分けの優先順位では求めない)。** 三角形上の最近傍点は
+    「3頂点 / 3辺への射影(端で打ち切る) / 面への射影(重心座標が三角形の内側のときだけ)」の
+    どれかなので、7候補の距離を全部出して最小を取れば必ず正しい。教科書(Ericson)の
+    領域分けは分岐が排他であることを前提にしていて、**退化した三角形(2頂点が重なる等)では
+    複数の領域が同時に真になり、後から上書きしたほうが勝って誤った距離を返す**
+    (2026-08-31のQA指摘。`a=b=(0,0,0), c=(5,4,4), p=(10,4,-8)` で 13.416407865 を返したが、
+    線分への正解は 12.638010059)。**退化三角形はOCCTの三角形分割に実際に現れる**ので
+    (円錐の頂点まわりなど)、入力側で弾くのではなくここで正しく扱う。
+
+    点をチャンクに切ってメモリを抑える。頂点だけの近似(KD木)は三角形1枚ぶん距離を
+    過大評価しうるので使わない。
     """
     pts = np.asarray(points, dtype=float)
     if pts.ndim != 2 or pts.shape[1] != 3:
@@ -551,8 +735,24 @@ def closest_triangle(
     ac = c - a
     bc = c - b
     if chunk is None:
-        # (点数 x 三角形数 x 3) の中間配列を数MBに抑える。三角形が多いほど点を細かく切る。
+        # (点数 x 三角形数) の中間配列を数MBに抑える。三角形が多いほど点を細かく切る。
         chunk = int(max(1, 200_000 // max(a.shape[0], 1)))
+
+    # 辺の長さの2乗(0 なら退化した辺 = 端点そのものが最近傍)
+    len_ab = np.einsum("ij,ij->i", ab, ab)
+    len_ac = np.einsum("ij,ij->i", ac, ac)
+    len_bc = np.einsum("ij,ij->i", bc, bc)
+    normal = np.cross(ab, ac)
+    len_n = np.einsum("ij,ij->i", normal, normal)
+
+    def _seg_dist2(p_rel: np.ndarray, edge: np.ndarray, length2: np.ndarray) -> np.ndarray:
+        """線分(始点 → 始点+edge)への距離の2乗。`p_rel` は始点からの相対位置 (m,T,3)。"""
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t = np.einsum("ij,mij->mi", edge, p_rel) / np.where(length2 > 0, length2, 1.0)
+        t = np.where(length2 > 0, t, 0.0)
+        t = np.clip(t, 0.0, 1.0)
+        diff = p_rel - edge[None, :, :] * t[..., None]
+        return np.einsum("mij,mij->mi", diff, diff)
 
     dist = np.empty(pts.shape[0], dtype=float)
     which = np.empty(pts.shape[0], dtype=np.int64)
@@ -560,57 +760,27 @@ def closest_triangle(
         p = pts[s : s + chunk][:, None, :]  # (m,1,3)
         ap = p - a[None, :, :]
         bp = p - b[None, :, :]
-        cp = p - c[None, :, :]
 
-        d1 = np.einsum("tj,mtj->mt", ab, ap)
-        d2 = np.einsum("tj,mtj->mt", ac, ap)
-        d3 = np.einsum("tj,mtj->mt", ab, bp)
-        d4 = np.einsum("tj,mtj->mt", ac, bp)
-        d5 = np.einsum("tj,mtj->mt", ab, cp)
-        d6 = np.einsum("tj,mtj->mt", ac, cp)
-        va = d3 * d6 - d5 * d4
-        vb = d5 * d2 - d1 * d6
-        vc = d1 * d4 - d3 * d2
+        # 3辺への射影(端で打ち切る)。頂点はこの打ち切りに含まれる。
+        best = _seg_dist2(ap, ab, len_ab)
+        np.minimum(best, _seg_dist2(ap, ac, len_ac), out=best)
+        np.minimum(best, _seg_dist2(bp, bc, len_bc), out=best)
 
-        denom = va + vb + vc
+        # 面への射影。重心座標が三角形の内側にあるときだけ候補にする。
         with np.errstate(divide="ignore", invalid="ignore"):
-            inv = np.where(np.abs(denom) > 0, 1.0 / denom, 0.0)
-            v_face = vb * inv
-            w_face = vc * inv
-            t_ab = np.where((d1 - d3) != 0, d1 / np.where((d1 - d3) != 0, d1 - d3, 1.0), 0.0)
-            t_ac = np.where((d2 - d6) != 0, d2 / np.where((d2 - d6) != 0, d2 - d6, 1.0), 0.0)
-            den_bc = (d4 - d3) + (d5 - d6)
-            t_bc = np.where(den_bc != 0, (d4 - d3) / np.where(den_bc != 0, den_bc, 1.0), 0.0)
+            inv = np.where(len_n > 0, 1.0 / np.where(len_n > 0, len_n, 1.0), 0.0)
+            cross_ap_ac = np.cross(ap, ac[None, :, :])
+            cross_ab_ap = np.cross(ab[None, :, :], ap)
+            v = np.einsum("mij,ij->mi", cross_ap_ac, normal) * inv
+            w = np.einsum("mij,ij->mi", cross_ab_ap, normal) * inv
+        signed = np.einsum("mij,ij->mi", ap, normal) * np.sqrt(np.where(len_n > 0, inv, 0.0))
+        face_ok = (len_n > 0) & (v >= 0.0) & (w >= 0.0) & (v + w <= 1.0)
+        face_dist2 = np.where(face_ok, signed * signed, np.inf)
+        np.minimum(best, face_dist2, out=best)
 
-        closest = a[None, :, :] + ab[None, :, :] * v_face[..., None] + ac[
-            None, :, :
-        ] * w_face[..., None]
-
-        # 領域ごとの上書き(Ericson "Real-Time Collision Detection" の分岐をそのまま)
-        region_a = (d1 <= 0) & (d2 <= 0)
-        region_b = (d3 >= 0) & (d4 <= d3)
-        region_c = (d6 >= 0) & (d5 <= d6)
-        region_ab = (vc <= 0) & (d1 >= 0) & (d3 <= 0)
-        region_ac = (vb <= 0) & (d2 >= 0) & (d6 <= 0)
-        region_bc = (va <= 0) & ((d4 - d3) >= 0) & ((d5 - d6) >= 0)
-
-        closest = np.where(
-            region_bc[..., None], b[None, :, :] + bc[None, :, :] * t_bc[..., None], closest
-        )
-        closest = np.where(
-            region_ac[..., None], a[None, :, :] + ac[None, :, :] * t_ac[..., None], closest
-        )
-        closest = np.where(
-            region_ab[..., None], a[None, :, :] + ab[None, :, :] * t_ab[..., None], closest
-        )
-        closest = np.where(region_c[..., None], c[None, :, :], closest)
-        closest = np.where(region_b[..., None], b[None, :, :], closest)
-        closest = np.where(region_a[..., None], a[None, :, :], closest)
-
-        d2min = np.einsum("mtj,mtj->mt", p - closest, p - closest)
-        best = np.argmin(d2min, axis=1)
-        dist[s : s + chunk] = np.sqrt(d2min[np.arange(best.size), best])
-        which[s : s + chunk] = best
+        pick = np.argmin(best, axis=1)
+        dist[s : s + chunk] = np.sqrt(np.maximum(best[np.arange(pick.size), pick], 0.0))
+        which[s : s + chunk] = pick
     return dist, which
 
 
@@ -681,22 +851,16 @@ def voxelize(
     started = time.perf_counter()
     solid = _unwrap(shape)
 
-    # 格子を決めるための粗い bbox は、細かい三角形分割を待たずに OCCT から取る。
+    # 格子は **B-rep の bbox** から起こす。三角形分割の bbox から起こし直してはいけない ——
+    # 弦は真の面より内側に来るので、仕様の「B-repの周囲に1要素分の余白」が満たせなくなる
+    # (2026-08-31のQA指摘。要素サイズ 0.89738 に対し余白 0.89605 になっていた)。
     if grid is None:
         lo, hi = _shape_bbox(solid)
-        probe = grid_for_bbox(lo, hi, elements_long_axis, pad=pad)
-    else:
-        probe = grid
-    dev = float(deviation) if deviation else max(probe.spacing * deviation_ratio, 1e-6)
+        grid = grid_for_bbox(lo, hi, elements_long_axis, pad=pad)
+    dev = float(deviation) if deviation else max(grid.spacing * deviation_ratio, 1e-6)
 
     soup = triangles_from_shape(solid, deviation=dev, angular_deflection=angular_deflection)
     report = inspect_soup(soup)
-
-    if grid is None:
-        # 三角形の実際の bbox で格子を作り直す(弦は真の面より内側に来るので、粗い bbox の
-        # ままだと余白が 1 要素からわずかにずれる)。
-        lo, hi = soup.bbox
-        grid = grid_for_bbox(lo, hi, elements_long_axis, pad=pad)
 
     design, occ_stats = occupancy(soup, grid)
     stats = {
@@ -715,12 +879,16 @@ def voxelize(
     keep_mask = np.zeros_like(design)
     obstacle_mask = np.zeros_like(design)
     if keep is not None:
-        raw, sub = _voxelize_region(keep, grid, deviation=dev, angular=angular_deflection)
+        raw, sub = _voxelize_region(
+            keep, grid, deviation=dev, angular=angular_deflection, label="保持"
+        )
         keep_mask = raw & design
         stats["keep_dropped_outside"] = int(np.count_nonzero(raw & ~design))
         stats["keep_surface"] = sub
     if obstacle is not None:
-        raw, sub = _voxelize_region(obstacle, grid, deviation=dev, angular=angular_deflection)
+        raw, sub = _voxelize_region(
+            obstacle, grid, deviation=dev, angular=angular_deflection, label="障害物"
+        )
         obstacle_mask = raw & design
         stats["obstacle_dropped_outside"] = int(np.count_nonzero(raw & ~design))
         stats["obstacle_surface"] = sub
@@ -746,11 +914,34 @@ def voxelize(
     )
 
 
-def _voxelize_region(region: Any, grid: Grid, deviation: float, angular: float):
+def _voxelize_region(region: Any, grid: Grid, deviation: float, angular: float, label: str):
+    """保持/障害物の領域を設計空間と同じ格子に載せる。
+
+    **格子とまったく重ならない領域は黙って空にせず拒否する。** 「材料を必ず残せ」と
+    言われた領域が1要素も掴めないまま最適化が走ると、支えの無い構造がもっともらしく
+    出てくる。座標系や単位の取り違えがいちばんありそうな原因なので、範囲を出して落とす
+    (2026-08-31のQA指摘。それまでは占有判定の奥から「交点が1つも無い」という、
+    呼び出し側から見て何が悪いのか分からない例外が出ていた)。
+    """
     solid = _unwrap(region)
     soup = triangles_from_shape(solid, deviation=deviation, angular_deflection=angular)
     report = inspect_soup(soup)
+    grid_lo, grid_hi = grid.world_box()
+    region_lo, region_hi = soup.bbox
+    if np.any(region_hi < grid_lo) or np.any(region_lo > grid_hi):
+        raise ValueError(
+            f"{label}領域が設計空間の格子とまったく重なっていない。"
+            f"{label}の範囲 {np.round(region_lo, 3).tolist()} .. {np.round(region_hi, 3).tolist()} /"
+            f" 格子の範囲 {np.round(grid_lo, 3).tolist()} .. {np.round(grid_hi, 3).tolist()}。"
+            "座標系か単位の取り違えの可能性が高い。"
+        )
     mask, _stats = occupancy(soup, grid)
+    if not mask.any():
+        raise ValueError(
+            f"{label}領域が1要素も掴めなかった(重なってはいるが、この要素サイズ"
+            f" {grid.spacing:.6g} mm では領域の中心を1つも通らない)。"
+            "解像度を上げるか領域を広げること。"
+        )
     return mask, report
 
 
@@ -777,6 +968,9 @@ def _shape_bbox(shape: Any) -> tuple[np.ndarray, np.ndarray]:
 
     box = Bnd_Box()
     BRepBndLib.Add_s(shape, box, False)
+    # Bnd_Box は形状の公差ぶんの「隙間」を足して返す。その 1e-7 mm が要素サイズに乗ると、
+    # 辺長が要素サイズの整数倍の箱で体積が厳密一致しなくなるので隙間を落とす。
+    box.SetGap(0.0)
     if box.IsVoid():
         raise ValueError("bounding box is empty (null shape?)")
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()

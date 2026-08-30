@@ -60,12 +60,14 @@ for _stream in (sys.stdout, sys.stderr):
             pass
 
 from build123d import Box, Cone, Cylinder, Pos, Rotation  # noqa: E402
+from scipy.spatial import cKDTree  # noqa: E402
 from OCP.BRep import BRep_Builder  # noqa: E402
 from OCP.BRepClass3d import BRepClass3d_SolidClassifier  # noqa: E402
 from OCP.gp import gp_Pnt  # noqa: E402
 from OCP.TopAbs import TopAbs_FACE, TopAbs_IN, TopAbs_ON  # noqa: E402
 from OCP.TopExp import TopExp_Explorer  # noqa: E402
-from OCP.TopoDS import TopoDS, TopoDS_Shell  # noqa: E402
+from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shell  # noqa: E402
+from OCP.TopAbs import TopAbs_SHELL  # noqa: E402
 
 import voxelize as vx  # noqa: E402
 
@@ -340,6 +342,50 @@ def check_broken_input_raises() -> None:
             f"例外にならず格子を返した(占有{model.stats['design_elements']}要素) — "
             "もっともらしいゴミを返している",
         )
+    # **内部空洞の殻だけを裏返した入力**(2026-08-31のQA指摘)。総符号付き体積は正のまま
+    # なので、全体を1つの数で見る判定では見抜けず、空洞が材料として埋まる。
+    hollow = Box(40, 40, 40) - Box(20, 20, 20)
+    shells = []
+    explorer = TopExp_Explorer(vx._unwrap(hollow), TopAbs_SHELL)
+    while explorer.More():
+        shells.append(TopoDS.Shell_s(explorer.Current()))
+        explorer.Next()
+    inner = min(
+        shells, key=lambda sh: abs(vx.triangles_from_shape(sh, deviation=0.5).signed_volume())
+    )
+    builder = BRep_Builder()
+    compound = TopoDS_Compound()
+    builder.MakeCompound(compound)
+    for sh in shells:
+        builder.Add(compound, sh.Reversed() if sh.IsSame(inner) else sh)
+    try:
+        broken = vx.voxelize(compound, 20)
+        check(
+            "壊れた入力で例外: 内部空洞の殻だけを裏返した中空の箱",
+            False,
+            f"例外にならず占有{broken.stats['design_elements']}要素を返した"
+            f"(体積{broken.design_volume:.0f} mm^3 / 健全なら56000)。空洞が埋まっている",
+        )
+    except ValueError as exc:
+        check(
+            "壊れた入力で例外: 内部空洞の殻だけを裏返した中空の箱",
+            True,
+            f"ValueError: {str(exc).splitlines()[0][:90]}",
+        )
+    # 健全な中空の箱は通り、空洞が空のままであること(上の検査が「空洞のある形は全部落とす」
+    # 実装で緑にならないことの確認)
+    good_hollow = vx.voxelize(hollow, 20)
+    surface = good_hollow.stats["surface"]
+    check(
+        "健全な中空の箱は通り、空洞が空のまま(殻ごとの符号と入れ子の深さが取れている)",
+        good_hollow.design_volume == 56000.0
+        and surface["components"] == 2
+        and surface["component_depths"] == [0, 1]
+        and surface["component_volumes"][1] < 0,
+        f"体積{good_hollow.design_volume:.0f} mm^3(期待56000) / 殻{surface['components']}個 "
+        f"体積{surface['component_volumes']} 深さ{surface['component_depths']}",
+    )
+
     # `inspect_soup` を通さずに `occupancy` を直接呼んだ場合の守り。上の3件は
     # `inspect_soup` が先に落とすので、占有判定側の守り(巻き数が0に戻らない列を
     # 見つけたら落ちる)は素通りしている。stage2 が `occupancy` を直に呼ぶことは
@@ -424,6 +470,24 @@ def check_keep_and_obstacle() -> None:
         check("保持と障害物が重なったら落ちる", False, "例外にならなかった")
     except ValueError as exc:
         check("保持と障害物が重なったら落ちる", True, f"ValueError: {str(exc).splitlines()[0][:70]}")
+
+    # 設計空間とまったく重ならない領域(2026-08-31のQA指摘)。黙って空にすると、支えの無い
+    # 構造がもっともらしく出てくる。**どの領域が / どこにあって / 格子はどこか**が分かる
+    # 文言で落ちること(占有判定の奥から出る「交点が1つも無い」では呼び出し側に分からない)。
+    for label, kwargs in (
+        ("保持", {"keep": Pos(100, 0, 0) * Box(10, 10, 10)}),
+        ("障害物", {"obstacle": Pos(0, 0, 90) * Box(5, 5, 5)}),
+    ):
+        try:
+            vx.voxelize(design, 24, **kwargs)
+            check(f"設計空間の外にある{label}領域を拒否する", False, "例外にならなかった")
+        except ValueError as exc:
+            message = str(exc).splitlines()[0]
+            check(
+                f"設計空間の外にある{label}領域を、何が悪いか分かる文言で拒否する",
+                label in message and "格子の範囲" in message,
+                f"ValueError: {message[:110]}",
+            )
     RESULTS["keep_elements"] = model.stats["keep_elements"]
     RESULTS["keep_dropped_outside"] = model.stats["keep_dropped_outside"]
 
@@ -535,6 +599,41 @@ def check_cell_center_convention() -> None:
         f"500点中 不一致{int(np.count_nonzero(np.any(roundtrip != sample, axis=1)))}点",
     )
 
+    # (d2) **B-rep の bbox** に対して1要素以上の余白があること(2026-08-31のQA指摘)。
+    #      三角形分割の bbox から格子を作り直すと、弦が真の面より内側に来るぶんだけ
+    #      余白が1要素を割る。曲面のある形でしか露見しないので円筒と円錐で見る。
+    worst = None
+    for shape, name in ((Cylinder(10, 30), "円筒"), (Cone(10, 0, 20), "円錐"), (Box(40, 20, 10), "箱")):
+        for n in (17, 37, 64):
+            model_n = vx.voxelize(shape, n)
+            brep_lo, brep_hi = vx._shape_bbox(vx._unwrap(shape))
+            grid_lo, grid_hi = model_n.grid.world_box()
+            margin = float(
+                np.concatenate([brep_lo - grid_lo, grid_hi - brep_hi]).min()
+            ) / model_n.grid.spacing
+            if worst is None or margin < worst[0]:
+                worst = (margin, name, n)
+    check(
+        "B-repのバウンディングボックスに対して1要素以上の余白がある",
+        worst[0] >= 1.0 - 1e-9,
+        f"最小の余白 {worst[0]:.6f} 要素 ({worst[1]} n={worst[2]})",
+    )
+    RESULTS["min_margin_elements"] = round(worst[0], 6)
+
+    # (d3) 原点から遠いソリッドでも符号付き体積が桁落ちしない(2026-08-31のQA指摘)。
+    #      絶対座標のまま三重積を足すと、薄い形では符号が反転して健全な形状を拒否する。
+    volumes = []
+    for offset in (0.0, 1e4, 1e6, 1e8, 1e10):
+        far = vx.triangles_from_shape(
+            vx._unwrap(Pos(offset, offset, offset) * Box(40, 20, 10)), deviation=0.5
+        )
+        volumes.append(far.signed_volume())
+    check(
+        "原点から遠いソリッドでも符号付き体積が桁落ちしない",
+        all(abs(v - 8000.0) < 1e-6 for v in volumes),
+        f"原点/1e4/1e6/1e8/1e10 mm での符号付き体積 {[round(v, 6) for v in volumes]}(期待8000)",
+    )
+
     # (d) 余白がちょうど pad 要素ぶんある(格子が形状にぴったり張り付いていない)。
     lo, hi = model.grid.world_box()
     margin_lo = np.array([-20.0, -10.0, -5.0]) - lo
@@ -639,10 +738,117 @@ def check_degenerate_rays() -> None:
     # 体積を突き合わせないのは、厚さ4mmの板が要素サイズで割り切れず、n=96(要素0.31mm)
     # でも量子化誤差が±4%で振動するため — 閾値を置くと形の正しさではなく板の厚みと
     # 要素サイズの当たり外れを判定してしまう。
+    # **ずらし幅が1つの固定値では守れない**(2026-08-31のQA指摘)。既定のずらし量に
+    # ちょうど合わせた格子を作れば、その1回目は必ず縮退する。決定的な列で数回やり直す
+    # 経路が実際に効いていること(1回目で落ちる格子を渡して最終的に成功すること)を見る。
+    first = vx.RAY_JITTER_SEQUENCE[0]
+    base = vx.grid_for_bbox(*apex_soup.bbox, 20)
+    h = base.spacing
+    aligned = vx.Grid(
+        origin=(
+            0.0 - h * (10 + 0.5 + first[0]),   # 円錐の頂点 (x=0,y=0) を列の中心が厳密に貫く
+            0.0 - h * (10 + 0.5 + first[1]),
+            base.origin[2],
+        ),
+        spacing=h,
+        shape=base.shape,
+    )
+    single_failed = False
+    try:
+        vx.occupancy(apex_soup, aligned, jitter=first)
+    except ValueError:
+        single_failed = True
+    try:
+        retried, stats_r = vx.occupancy(apex_soup, aligned)
+        recovered = stats_r["unbalanced_columns"] == 0 and int(retried.sum()) > 0
+        attempts = stats_r["jitter_attempts"]
+        detail = f"やり直し{attempts}回目のずらし{stats_r['jitter']}で成功、占有{int(retried.sum())}要素"
+    except ValueError as exc:
+        recovered = False
+        attempts = len(vx.RAY_JITTER_SEQUENCE)
+        detail = f"やり直しても失敗: {str(exc)[:70]}"
+    check(
+        "既定のずらしに合わせた格子でも、やり直しで最終的に成功する",
+        single_failed and recovered and attempts >= 2,
+        f"1回目のずらし単体では{'落ちた' if single_failed else '落ちなかった'} / {detail}",
+    )
+    RESULTS["jitter_retry_attempts"] = attempts
+
     check(
         "ずらし有りの円錐+板が空でないマスクを返す",
         int(with_jitter.sum()) > 0,
         f"占有{int(with_jitter.sum())}要素 / 交点{stats_w['crossings']}個",
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. 表面までの最短距離(stage2 が面へ戻る経路)
+# ---------------------------------------------------------------------------
+def check_closest_triangle() -> None:
+    print("[9] 表面までの最短距離(closest_triangle)")
+    # (a) **退化した三角形**(2頂点が重なる)でも正しい。2026-08-31のQA指摘の反例そのもの。
+    #     教科書の領域分けは分岐が排他であることを前提にしていて、退化すると複数の領域が
+    #     同時に真になり、後から上書きしたほうが勝って誤った距離を返す。退化三角形は
+    #     OCCTの三角形分割に実際に現れる(円錐の頂点まわりなど)ので、入力で弾けない。
+    degenerate = vx.TriangleSoup(
+        positions=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [5.0, 4.0, 4.0]]),
+        triangles=np.array([[0, 1, 2]]),
+        face_index=np.array([1]),
+    )
+    point = np.array([[10.0, 4.0, -8.0]])
+    got = float(vx.closest_triangle(degenerate, point)[0][0])
+    expected = 12.638010058771675  # 線分 (0,0,0)-(5,4,4) への厳密な距離
+    check(
+        "退化した三角形(2頂点が重なる)でも最短距離が正しい",
+        abs(got - expected) < 1e-9,
+        f"{got:.9f}(期待 {expected:.9f}。領域分けの上書き順の誤りだと 13.416407865 が返る)",
+    )
+
+    # (b) 三角形の上を細かく標本化した距離と突き合わせる(実装とは独立な参照)。
+    #     自前の値は必ず標本の最小値以下(標本は必ず三角形上の点なので上界)で、
+    #     標本の刻みぶんの誤差より小さいところまで一致していること。
+    soup = vx.triangles_from_shape(vx._unwrap(Cylinder(10, 30) - Box(6, 40, 40)), deviation=0.4)
+    rng = np.random.default_rng(31)
+    probes = rng.uniform(-22.0, 22.0, (300, 3))
+    mine, tri = vx.closest_triangle(soup, probes)
+    a, b, c = soup.triangle_vertices()
+    steps = 12
+    grid_uv = [
+        (i / steps, j / steps) for i in range(steps + 1) for j in range(steps + 1 - i)
+    ]
+    samples = np.concatenate([a + u * (b - a) + v * (c - a) for u, v in grid_uv], axis=0)
+    reference = cKDTree(samples).query(probes)[0]
+    longest_edge = float(
+        np.max(
+            [
+                np.linalg.norm(b - a, axis=1),
+                np.linalg.norm(c - b, axis=1),
+                np.linalg.norm(a - c, axis=1),
+            ]
+        )
+    )
+    tolerance = longest_edge / steps
+    check(
+        "最短距離が標本化した参照値と一致する(自前 <= 参照、差は標本の刻み以内)",
+        bool(np.all(mine <= reference + 1e-9))
+        and float(np.max(reference - mine)) <= tolerance,
+        f"300点 / 最大の超過 {float(np.max(mine - reference)):.3g}mm / "
+        f"最大の不足 {float(np.max(reference - mine)):.4f}mm (刻みの上界 {tolerance:.4f}mm)",
+    )
+
+    # (c) 面へ戻れること(stage2 が使う経路)。表面上の点は必ずその面の三角形に当たる。
+    face_ids = np.unique(soup.face_index)
+    ok = 0
+    for face in face_ids:
+        members = soup.triangles_of_face(int(face))
+        centroid = soup.positions[soup.triangles[members[0]]].mean(axis=0)
+        _d, hit = vx.closest_triangle(soup, centroid[None, :])
+        if int(soup.face_index[hit[0]]) == int(face):
+            ok += 1
+    check(
+        "三角形の重心から face_index で元の面へ戻れる(stage2 の経路)",
+        ok == len(face_ids),
+        f"{ok}/{len(face_ids)} 面",
     )
 
 
@@ -659,6 +865,7 @@ def main() -> int:
     check_deterministic()
     check_cell_center_convention()
     check_degenerate_rays()
+    check_closest_triangle()
     RESULTS["total_seconds"] = round(time.perf_counter() - started, 1)
 
     print("\n" + "=" * 72)
