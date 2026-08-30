@@ -11,6 +11,11 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
+# 解いた後に残差で検算するときの上限(相対)。CG は `cg_rtol=1e-9` まで詰め、直接解法は
+# 1e-14 程度まで出るので、1e-6 は「収束した解」に対して6桁以上の余裕がある。
+# **拘束不足の系を黙って通さないための関門**であって、精度の要求ではない。
+SOLVE_RESIDUAL_TOL = 1e-6
+
 PRESET: dict = {
     "nelx": 40,
     "nely": 16,
@@ -250,7 +255,16 @@ class Model:
         cg_rtol: float = 1e-9,
         u0: np.ndarray | None = None,
     ) -> np.ndarray:
-        """K U = F を解いて U (ndof,) を返す。拘束DOFの成分はきっかり 0.0。"""
+        """K U = F を解いて U (ndof,) を返す。拘束DOFの成分はきっかり 0.0。
+
+        **解いた後に残差で検算し、通らなければ落とす。** 拘束が足りない系(剛体運動が
+        止まっていない)を渡されると K は特異になるが、`Model.__init__` の検査は
+        「拘束が非空で範囲内」しか見ないので通ってしまう。そのまま解くと CG は収束せず、
+        直接解法へ落ちた先で **有限だが桁違いの解**(実測 `fixed_dofs=[0]` で max|u| = 1.2e16)
+        が返り、最適化はその値を信じて進んだ末に別の場所で落ちる(実測 OC 更新で
+        `ZeroDivisionError`)。**原因から遠い場所で落ちるのが最悪**なので、ここで名指しする。
+        剛体運動の完全な検出はしない —— 残差が通らなければ落とす、それだけでよい。
+        """
         if solver not in ("cg", "direct"):
             raise ValueError(f"未知の解法: {solver!r}")
         kg = self.assemble(rho, penal)
@@ -269,10 +283,34 @@ class Model:
                     RuntimeWarning,
                     stacklevel=2,
                 )
-                u_free = spla.spsolve(kf, ff)
+                with warnings.catch_warnings():
+                    # 特異行列の警告はここでは要らない(下の残差検査が本番の判定)。
+                    warnings.simplefilter("ignore")
+                    u_free = spla.spsolve(kf, ff)
+        self._verify_solution(kf, ff, u_free)
         u = np.zeros(self.ndof)
         u[self.free] = u_free
         return u
+
+    def _verify_solution(self, kf, ff: np.ndarray, u_free: np.ndarray) -> None:
+        """`K_ff u = f_f` を残差で検算する。通らなければ拘束不足を名指しして落とす。"""
+        finite = bool(np.all(np.isfinite(u_free)))
+        rel = float("inf")
+        if finite:
+            denominator = float(np.linalg.norm(ff))
+            rel = float(np.linalg.norm(kf @ u_free - ff)) / denominator
+        if finite and rel <= SOLVE_RESIDUAL_TOL:
+            return
+        raise ValueError(
+            "K U = F が解けていない"
+            f"(残差 ||K u - f|| / ||f|| = {rel:.3e} > {SOLVE_RESIDUAL_TOL:.0e}"
+            f"{'' if finite else ' / 解に非有限値がある'}、"
+            f"max|u| = {np.max(np.abs(u_free)) if u_free.size else 0.0:.3e})。"
+            "**拘束不足(剛体運動が止まっていない)の可能性が高い。** "
+            f"いま拘束されているのは {self.fixed.size} / {self.ndof} 自由度。"
+            "面アンカーから作った拘束なら、その面の節点が少なすぎないか"
+            "(`AnchorTable.empty_faces()`)、1点だけを拘束していないかを確認すること"
+        )
 
     def compliance(
         self, rho: np.ndarray, penal: float, u: np.ndarray

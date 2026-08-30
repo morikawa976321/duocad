@@ -356,14 +356,42 @@ class AnchorTable:
     ) -> np.ndarray:
         """圧力 [N/mm^2] を面法線の**逆**向き(面を押す向き)に載せた荷重ベクトル。
 
-        節点力 = -pressure * 担当面積 * 節点法線。総荷重は面の向きの分布で決まるので、
-        `load_vector` と違い「指定した合力」にはならない(それが圧力の意味)。
+        節点力 = `-pressure * (cad_area/担当面積の合計) * 担当面積 * 節点法線`。
+        向きの分布は担当面積の重みのまま(=節点への配り方は変えない)で、
+        **総量だけを「面の真の面積」に合わせ直す**。
+
+        **なぜ担当面積をそのまま使わないか。** 稜線の規則で節点を隣の面に取られたぶん、
+        担当面積の合計は真の面積より数%小さい(実測: 24x24 の面で 10.7%、要素サイズ1.875mm)。
+        `load_vector` は「指定した合力」を担当面積の**比**で配るので、この差は正規化で
+        吸収されて消える。しかし圧力は `p x 面積` が合力そのものなので、**吸収されずに
+        そのまま合力の不足になる**(粗い格子ほど大きく、解像度を上げると黙って合力が増える)。
+        面の真の面積は B-rep から取れている(`FaceAnchor.cad_area`)ので、そこから出す。
+
+        担当面積の**値**も所有の規則も変えていない。変えるのはこの関数が作る合力だけ。
+        平面の面なら合力の大きさは厳密に `pressure * cad_area`(受入検査[1]が相対1e-12で見る)。
+        曲面では `p * ∫n dA` の離散近似になる(それが圧力の意味であって、
+        大きさが `p * cad_area` になるわけではない)。
         """
         picked = self._selected(faces)
         self._require_nodes(picked, sum(a.node_count for a in picked))
         f = np.zeros(self.node_grid.ndof) if out is None else out
         for anchor in picked:
-            vec = -float(pressure) * anchor.areas[:, None] * anchor.normals
+            assigned = float(anchor.areas.sum())
+            if not assigned > 0.0:
+                raise ValueError(
+                    f"面 {anchor.face_index}: 担当面積の合計が 0 で圧力を配れない"
+                )
+            true_area = float(anchor.cad_area)
+            if not true_area > 0.0:
+                # `face_props` を持たない TriangleSoup(検査が手で組んだもの等)への保険。
+                # 三角形の総面積も真の面積の近似なので、無いよりはよい。
+                true_area = float(anchor.triangle_area)
+            if not true_area > 0.0:
+                raise ValueError(
+                    f"面 {anchor.face_index}: 真の面積が取れないので圧力の合力を決められない"
+                )
+            scale = -float(pressure) * (true_area / assigned)
+            vec = scale * anchor.areas[:, None] * anchor.normals
             for axis in range(3):
                 np.add.at(f, 3 * anchor.node_ids + axis, vec[:, axis])
         return f

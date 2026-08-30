@@ -9,11 +9,15 @@
 検査の構成:
 
 0. **節点番号と境界条件の口の契約** — `NodeGrid` の通し番号・自由度番号が
-   `simp._build_edof` と一致し、`void_mask` を渡しても既定の拘束が消えない。
-   ここがずれると荷重は別の場所に入り、それでも最適化は「もっともらしく」収束するので、
-   下の1〜7が全部緑でも意味が無い。**最初に置くのはそのため。**
+   `simp._build_edof` と一致する。ここがずれると荷重は別の場所に入り、それでも最適化は
+   「もっともらしく」収束するので、下の1〜7が全部緑でも意味が無い。**最初に置くのはそのため。**
+   あわせて、**`void_mask` だけを渡した `optimize`** が既定の拘束を明示した場合と
+   `rho` ビット単位で一致すること(`Model` を直に組んで `fixed` の包含関係を見るだけでは、
+   置き換えの回帰が素通りする)と、**拘束不足が拘束不足と名指しして落ちる**ことを見る。
 1. **総荷重の保存** — 解像度を2倍にしても、節点荷重の合計が指定値と一致する(相対1e-12)。
-   面が複数のときも、荷重が斜めのときも見る。
+   面が複数のときも、荷重が斜めのときも見る。あわせて**圧力の合力が `p x cad_area` と
+   一致する**(稜線で捨てた面積に依らないこと。担当面積から出していた修正前のコードに
+   当てると 11.7% / 4.5% ずれて落ちる)。
 2. **解像度非依存** — 同じ面の節点集合の重心と合計担当面積が、解像度を4倍にすると
    真の面の重心・面積へ**半分以下の誤差**まで近づく(平面と曲面の両方)。
 3. **面の取り違えが無い** — 板の上面と側面で節点集合が排他になり、どの節点も自分の面から
@@ -160,18 +164,52 @@ def check_node_numbering() -> None:
         f"中心-節点={np.round(centre - pos[0], 6).tolist()}",
     )
 
-    # `void_mask` だけを渡したとき、**既定の片持ち梁の拘束が消えないこと**。
-    # 消えると系が拘束不足になり、それでも例外は出ない(浮いた節点の拘束が残るため)。
-    base = simp.Model(4, 3, 3).fixed
-    void = np.zeros((4, 3, 3), dtype=bool)
+    # `void_mask` だけを渡したとき、**既定の片持ち梁の拘束が消えないこと**を
+    # **`optimize` を実際に通して**見る。`Model` を直に組んで `fixed` の包含関係だけを
+    # 見ていると、「optimize が拘束を置き換えてしまう」種類の回帰は素通りする
+    # (`optimize` こそが置き換えていた場所なので、そこを通らない検査には意味が無い)。
+    void = np.zeros((6, 4, 4), dtype=bool)
     void[:, 0, :] = True                      # y の1層を空にして浮いた節点を作る
-    with_void = simp.Model(
-        4, 3, 3, extra_fixed_dofs=simp._floating_dofs(4, 3, 3, void)
-    ).fixed
+    default_fixed = simp.Model(6, 4, 4).fixed
+    opts = dict(max_iter=3, solver="direct", void_mask=void)
+    detail = ""
+    ok = False
+    try:
+        implicit = simp.optimize(6, 4, 4, **opts)
+        explicit = simp.optimize(6, 4, 4, fixed_dofs=default_fixed, **opts)
+        same = bool((implicit.rho == explicit.rho).all())
+        void_empty = float(implicit.rho[void].max()) == 0.0
+        finite = bool(np.isfinite(implicit.history[-1].compliance)) and (
+            implicit.history[-1].compliance > 0
+        )
+        ok = same and void_empty and finite
+        detail = (
+            f"暗黙 vs 既定を明示した場合の rho がビット一致={same} / "
+            f"空領域の最大密度={implicit.rho[void].max():.3e} / "
+            f"C={implicit.history[-1].compliance:.6f}"
+        )
+    except ValueError as exc:
+        # 既定の拘束が消えると拘束不足になり、残差の検算がここで落とす(それも不合格)。
+        detail = f"optimize が例外で落ちた(拘束が消えている疑い): {exc!s:.120}"
     check(
-        "void_mask を渡しても既定の拘束が残る(追加であって置き換えではない)",
-        np.setdiff1d(base, with_void).size == 0 and with_void.size > base.size,
-        f"既定 {base.size} DOF → 追加後 {with_void.size} DOF(既定が全部残っている)",
+        "void_mask だけを渡した optimize が、既定の拘束を明示した場合と厳密に一致する",
+        ok,
+        detail,
+    )
+
+    # 拘束不足の系を**黙って解かない**こと。1自由度だけ拘束すると K は特異になるが、
+    # 「非空で範囲内」の検査は通ってしまう。実測ではCGが収束しないまま
+    # max|u| = 1.2e16 の有限値が返り、最適化はその値を信じて進んだ末に
+    # OC 更新の ZeroDivisionError で落ちていた(原因から遠い場所で落ちるのが最悪)。
+    raised = ""
+    try:
+        simp.optimize(6, 4, 4, max_iter=3, fixed_dofs=np.array([0]))
+    except ValueError as exc:
+        raised = str(exc)
+    check(
+        "拘束不足(1自由度だけ拘束)を、拘束不足と名指しした例外で落とす",
+        "K U = F が解けていない" in raised and "拘束不足" in raised,
+        " ".join(raised.split())[:110] if raised else "例外が出なかった(黙って解いている)",
     )
 
 
@@ -219,6 +257,34 @@ def check_load_conservation() -> None:
         top = _face_of(model.soup, "plane", normal=(0, 0, 1))
         f = table.load_vector(top, (0.0, 0.0, -1000.0))
         totals.append(float(f[2::3].sum()))
+    # **圧力の合力は「真の面積」から出ていること。** 担当面積は稜線で隣の面に取られたぶん
+    # 数%小さい(実測 10.7%)。`load_vector` は指定した合力を担当面積の**比**で配るので
+    # その差は正規化で消えるが、圧力は `p x 面積` が合力そのものなので**そのまま不足**する
+    # (粗い格子ほど大きく、解像度を上げると黙って合力が増える)。
+    pressure_rows = []
+    for n in (16, 32):
+        model, table = _table(PLATE, n)
+        top = _face_of(model.soup, "plane", normal=(0, 0, 1))
+        a = table[top]
+        p_load = 0.25
+        f = table.pressure_vector(top, p_load)
+        got = np.array([f[0::3].sum(), f[1::3].sum(), f[2::3].sum()])
+        want = -p_load * a.cad_area * (a.cad_normal / np.linalg.norm(a.cad_normal))
+        rel = float(np.abs(got - want).max() / np.abs(want).max())
+        # 担当面積で出していたら何%ずれるか(=修正前の値)。検査が効く幅を示す。
+        gap = 1.0 - a.total_area / a.cad_area
+        pressure_rows.append((n, rel, gap, a.cad_area, a.total_area))
+    for n, rel, gap, cad, assigned in pressure_rows:
+        check(
+            f"n={n:3d} 圧力の合力が p x cad_area と一致(稜線で捨てた面積に依らない)",
+            rel < 1e-12,
+            f"相対誤差 {rel:.3e}(担当面積 {assigned:.3f} で出していたら {gap:.2%} 不足していた。"
+            f"CAD面積 {cad:.3f})",
+        )
+    RESULTS["pressure_resultant"] = [
+        {"n": n, "rel_err": rel, "assigned_area_shortfall": gap} for n, rel, gap, _c, _a in pressure_rows
+    ]
+
     drift = abs(totals[1] - totals[0]) / abs(totals[0])
     check(
         "解像度16と32で総荷重が同じ(相対1e-12以内)",
