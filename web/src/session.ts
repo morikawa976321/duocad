@@ -33,6 +33,20 @@ export interface ShapeRef {
   provenance?: unknown
 }
 
+/**
+ * ソリッドを丸ごと指す参照(2026-08-31。形状最適化の保持/除外ソリッド)。
+ *
+ * **添字を持たない** —— Bodyは他のBodyの部分形状ではないので数え上げる添字が無く、
+ * コアは `index: null` を明示的に載せてくる(キーごと落とすと「まだ埋めていない」と
+ * 「そもそも持たない」が見分けられない)。コア側の綴りは `duocad/selection.py` の `BODY_KIND`。
+ */
+export interface BodyRef {
+  body: string
+  kind: 'body'
+  index: null
+  provenance?: unknown
+}
+
 /** スケッチの領域を指す参照(`kind` キーを持たないのが `ShapeRef` との見分け方)。 */
 export interface RegionRef {
   sketch: string
@@ -168,6 +182,63 @@ export interface SketchState {
   regions: SketchRegion[]
 }
 
+/**
+ * 形状最適化(第3のモード)で**いまどの対象にどの役割が付いているか**。
+ *
+ * **参照はそのまま `modifySelection` へ渡せる形**である —— verbを起動したときに、既に
+ * その役割が付いている対象を選択状態にして見せる(集合代入なので、そこから付け外しして
+ * 決定すると、その集合がそのまま新しい割り当てになる)のがこの型の使い道である。
+ *
+ * 契約の正は `duocad/optimize.py` の `state_payload`。
+ */
+export interface OptimizeState {
+  preserve_bodies: BodyRef[]
+  exclude_bodies: BodyRef[]
+  /**
+   * **いま指せるものだけ**が載る(不可視・消えたボディの分は `stale` へ回る)——
+   * `modifySelection` へそのまま渡せることがこの配列の存在理由なので、渡すと例外になる
+   * 参照を混ぜない。
+   */
+  fixtures: ShapeRef[]
+  loads: ShapeRef[]
+  /** 荷重の大きさと向き。**1文書に1種類**(v1の制限)。荷重面が0枚なら `null`。 */
+  load: OptimizeLoad | null
+  /**
+   * **いま使えない割り当て**。上の4つの配列に載らなかったものが、全部理由つきでここに出る
+   * (指紋が合わなくなった面・消えたボディ・非表示のボディ)。
+   *
+   * **「割り当てが消えた」ではない** —— 文書からは何も消えていないので、形を戻せば・表示に
+   * 戻せば次の配信でまた載る。**トーストに出すかどうかは `code` で決める**こと
+   * (`'hidden'` は人が部品を隠すたびに出るので、出す側ではない)。
+   */
+  stale: OptimizeStaleItem[]
+  /** 条件の版(中身が変わると1つ上がる)。 */
+  revision: number
+}
+
+/** 荷重の大きさ[N]と向き。`direction === 'vector'` のときだけ `vector` が入る。 */
+export interface OptimizeLoad {
+  magnitude: number
+  direction: 'normal' | '-normal' | 'vector'
+  vector: [number, number, number] | null
+}
+
+/**
+ * いま使えない割り当て1件(`OptimizeState.stale`)。
+ *
+ * `index` はボディの役割(`preserve_bodies` / `exclude_bodies`)では `null`。
+ * `reason` はそのままトーストに出せる文だが、**出すかどうかの判定は `code` で行う**
+ * (文言で分岐すると、文を直した日に静かに壊れる)。
+ */
+export interface OptimizeStaleItem {
+  role: 'preserve_bodies' | 'exclude_bodies' | 'fixtures' | 'loads'
+  body: string
+  index: number | null
+  /** `'fingerprint'`=形が変わって別の面を指している / `'missing'`=ボディが無い / `'hidden'`=非表示 */
+  code: 'fingerprint' | 'missing' | 'hidden'
+  reason: string
+}
+
 export interface ServerState {
   units: string
   active_body_id: string | null
@@ -194,6 +265,11 @@ export interface ServerState {
    * サーバに残るのにブラウザの値だけ失われるので、これは実際に起きていた)。
    */
   current_name: string | null
+  /**
+   * 形状最適化の条件(第3のモード)。**verb起動時のプリセレクトと役割の色はここが正**で、
+   * ブラウザは自前に溜めない(選択集合と同じ扱い)。
+   */
+  optimize: OptimizeState
 }
 
 /**
@@ -318,6 +394,23 @@ export type Applied =
       copy: boolean
       created: string[]
       changed_bodies: string[]
+    })
+  /**
+   * 形状最適化の条件(集合代入)。**形は1つも変わらない**ので `changed_bodies` は無い ——
+   * 役割の色は配信される `state.optimize` から描く。
+   */
+  | (AppliedVerbBase & { verb: 'set_preserve_bodies' | 'set_exclude_bodies'; bodies: string[] })
+  | (AppliedVerbBase & { verb: 'set_fixtures'; face_count: number })
+  /**
+   * 荷重。`direction_vector` は**単位化済み**(打った値と長さが違うことがある)で、
+   * `direction` が `'normal'` / `'-normal'` のときは `null`。
+   */
+  | (AppliedVerbBase & {
+      verb: 'set_loads'
+      face_count: number
+      magnitude: number
+      direction: string
+      direction_vector: number[] | null
     })
   | (AppliedVerbBase & { verb: 'pattern_rectangular'; pattern_id: string })
   | (AppliedVerbBase & { verb: 'pattern_circular'; pattern_id: string })

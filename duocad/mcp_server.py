@@ -657,6 +657,21 @@ class DocumentTools:
                         "point": described["point"],
                     }
                 )
+            elif kind == selection.BODY_KIND:
+                # **ソリッドを丸ごと指す種別**(形状最適化の保持/除外)。面積にも長さにも
+                # 足さない —— ボディの「大きさ」は体積であって、面の面積の合計ではない。
+                # 値は `body_meta` から取る(体積はキャッシュ済み。測り直さない)。
+                body = self._find_body(ref["body"])
+                meta = self.session.body_meta(body)
+                items.append(
+                    {
+                        "kind": selection.BODY_KIND,
+                        "body": ref["body"],
+                        "name": meta["name"],
+                        "volume": meta["volume"],
+                        "face_count": meta["face_count"],
+                    }
+                )
             elif kind == selection.SKETCH_ENTITY_KIND:
                 # **スケッチの図形**。点なら (u, v) を、辺(図形全体)なら解決済みの
                 # `params` をそのまま返す —— `move_sketch_entities` の dx, dy を
@@ -826,6 +841,47 @@ class DocumentTools:
         )
         return self._apply_logged(
             before, applied, copy=applied["copy"], created=applied["created"]
+        )
+
+    # ------------------------------------------------------------------ 形状最適化の条件
+    #
+    # **4つとも集合代入**で、対象は確定選択から取る(引数はhowだけ)。**確定選択が空でも
+    # 通る** —— 空の代入が「その役割を全部外す」を意味するので、解除専用のツールが要らない。
+    # 排他は先勝ちで、衝突すると `invalid_argument`(`optimize.RoleConflict` は ValueError の
+    # 派生)。どのボディ・面が衝突したかは例外の文面が名指しする。
+    def set_preserve_bodies(self) -> dict:
+        """**確定選択のボディ**を保持ソリッドの集合にする(集合代入は `Session`)。"""
+        before = self._revision_snapshot()
+        applied = self.session.set_preserve_bodies()
+        return self._apply_logged(before, applied, bodies=applied["bodies"])
+
+    def set_exclude_bodies(self) -> dict:
+        """**確定選択のボディ**を除外ソリッドの集合にする(集合代入は `Session`)。"""
+        before = self._revision_snapshot()
+        applied = self.session.set_exclude_bodies()
+        return self._apply_logged(before, applied, bodies=applied["bodies"])
+
+    def set_fixtures(self) -> dict:
+        """**確定選択の面**を拘束面の集合にする(集合代入は `Session`)。"""
+        before = self._revision_snapshot()
+        applied = self.session.set_fixtures()
+        return self._apply_logged(before, applied, face_count=applied["face_count"])
+
+    def set_loads(self, magnitude: float, direction: Any) -> dict:
+        """**確定選択の面**を荷重面の集合にし、大きさ[N]と向きを持たせる。
+
+        向きは `"normal"` / `"-normal"` / `[x, y, z]`。**ベクトルは単位化して控える**ので、
+        返る `direction_vector` は打った値と長さが違うことがある(向きだけを使う)。
+        """
+        before = self._revision_snapshot()
+        applied = self.session.set_loads(magnitude, direction)
+        return self._apply_logged(
+            before,
+            applied,
+            face_count=applied["face_count"],
+            magnitude=applied["magnitude"],
+            direction=applied["direction"],
+            direction_vector=applied["direction_vector"],
         )
 
     # ------------------------------------------------------------------ ボディ・パラメータ

@@ -569,6 +569,93 @@ COMMANDS: tuple[Command, ...] = (
             "幽霊を出しても本体と重なって見分けが付かない"
         ),
     ),
+    # ---------------------------------------------------------------- 形状最適化の条件(第3のモード)
+    #
+    # **4つとも集合代入**である(「1つ足す」ではなく「この役割の集合を、いま確定している
+    # 選択集合そのものに置き換える」)。だから**解除専用のverbが無い** —— verbの中で
+    # 全部外して決定すれば、その役割は空になる。実体と契約は
+    # `duocad/verbs/optimize_setup.py`、配りものの形は `duocad/optimize.py`。
+    #
+    # `category="feature"` にしてあるのは、ソリッドに対する操作でWSの `FEATURE_COMMANDS`
+    # の捌き方(引数を表から読んで `Session` のメソッドを呼ぶ)がそのまま当たるからである。
+    # **モードの分け方は画面側の話**で、コアの分類ではない —— 分類を1つ増やすと、
+    # WSの表・`_dispatch` の分岐・UIの送信経路がverbの中身と関係なく増える。
+    Command(
+        name="set_preserve_bodies",
+        category="feature",
+        description=(
+            "形状最適化で**削ってはいけないソリッド**を決めるときに呼ぶ。"
+            "確定選択のボディ(kind='body' の参照)**そのもの**を保持ソリッドの集合にする"
+            "(足すのではなく置き換える。空の選択で確定すれば全部外れる)。"
+            "既に除外ソリッドに割り当てられているボディがあると失敗する(先勝ち)。"
+        ),
+        session="set_preserve_bodies",
+        uses_selection=True,
+        note=(
+            "対象は引数で受けない(engine `duocad-target-set-taken-only-from-selection`)。"
+            "**howも無い** —— 役割を付けるだけなので数値も選択肢も要らない"
+        ),
+    ),
+    Command(
+        name="set_exclude_bodies",
+        category="feature",
+        description=(
+            "形状最適化で**材料を置いてはいけないソリッド**(逃げ・干渉物)を決めるときに呼ぶ。"
+            "確定選択のボディ(kind='body' の参照)**そのもの**を除外ソリッドの集合にする"
+            "(足すのではなく置き換える。空の選択で確定すれば全部外れる)。"
+            "既に保持ソリッドに割り当てられているボディがあると失敗する(先勝ち)。"
+        ),
+        session="set_exclude_bodies",
+        uses_selection=True,
+        note="`set_preserve_bodies` と対。設計空間のverbは作らない(engine `topopt-needs-no-design-space-input`)",
+    ),
+    Command(
+        name="set_fixtures",
+        category="feature",
+        description=(
+            "形状最適化で**固定される面**(拘束)を決めるときに呼ぶ。確定選択の面**そのもの**を"
+            "拘束面の集合にする(足すのではなく置き換える。空の選択で確定すれば全部外れる)。"
+            "既に荷重面に割り当てられている面があると失敗する(先勝ち)。"
+        ),
+        session="set_fixtures",
+        uses_selection=True,
+        note=(
+            "面の参照は添字だけでなく重心・法線・面積の**指紋**も一緒に操作ログへ書く"
+            "(添字は形が変われば別の面を指すため。照合は `duocad/optimize.py`)"
+        ),
+    ),
+    Command(
+        name="set_loads",
+        category="feature",
+        description=(
+            "形状最適化で**力がかかる面**(荷重)を決めるときに呼ぶ。確定選択の面**そのもの**を"
+            "荷重面の集合にし、大きさと向きを持たせる(足すのではなく置き換える)。"
+            "既に拘束面に割り当てられている面があると失敗する(先勝ち)。"
+            "**1文書につき荷重は1種類**で、選ばれた面すべてが同じ大きさ・向きを共有する。"
+        ),
+        params=(
+            Param(
+                "magnitude",
+                "number",
+                "荷重の大きさ[N](0より大きい有限の数)。**選ばれた面すべてで共有する**",
+                dimension=True,
+            ),
+            Param(
+                "direction",
+                ["string", "array"],
+                "荷重の向き。'normal'=面の外向き法線 / '-normal'=面を押し込む向き / "
+                "[x, y, z]=世界座標のベクトル(長さは無視して向きだけ使う。"
+                "棚受けのように世界の -Z へ受ける荷重は [0, 0, -1])",
+            ),
+        ),
+        session="set_loads",
+        uses_selection=True,
+        note=(
+            "`magnitude` に `dimension` の印を付けてある —— **AIが勝手に決めてよい数ではない**。"
+            "向きに世界軸の名前(`-Z` 等)を足さないのは、同じ向きの綴りが2系統になるため"
+            "(ベクトルで表せる)"
+        ),
+    ),
     Command(
         name="pattern_rectangular",
         category="feature",

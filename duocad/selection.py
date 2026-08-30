@@ -29,6 +29,7 @@ AIは `commit_selection()` を明示的に呼べば自分の提案を実行で�
 参照の形:
 
     ShapeRef  : {"body": BodyId, "kind": "face"|"edge"|"vertex", "index": int, "provenance": None}
+    BodyRef   : {"body": BodyId, "kind": "body", "index": None, "provenance": None}
     RegionRef : {"sketch": SketchId, "index": int, "provenance": None}
 
 **添字は現時点のものであって、形が変われば別の実体を指す**(添字の付け替えは契約にしていない)。
@@ -95,6 +96,22 @@ class SelectionAmbiguous(ValueError):
 #: ShapeRef の kind(§3.5)。領域は RegionRef 側で表す。
 SHAPE_KINDS = ("face", "edge", "vertex")
 
+#: **ソリッドを丸ごと指す種別**(2026-08-31。形状最適化の保持/除外ソリッドのため)。
+#:
+#: 参照の形は `{"body": BodyId, "kind": "body", "index": None, "provenance": None}` で、
+#: **`index` は使わない**(Bodyは他のBodyの部分形状ではないので、数え上げる添字が無い)。
+#:
+#: **「クリックしたボディの面を全部選択集合に入れる」案は採っていない** —— 1ボディ2835面の
+#: PCケースのような文書で、ボディを1つ指しただけで選択集合が数百件に膨れる。
+#:
+#: `move_body` の `require_bodies`(面・辺・頂点から属するBodyを逆引きする)とは**別物**で、
+#: あちらは「部分形状を指したついでにBodyが分かる」経路、こちらは「Bodyそのものを指す」経路。
+#: 逆引きの側もこの種別を拾う(`require_bodies`)ので、指し方が2つあっても行き先は1つになる。
+BODY_KIND = "body"
+
+#: `kind` キーを持つ参照(= Bodyに属するもの)の全部。`ref_kind` が受け付ける綴りでもある。
+BODY_BEARING_KINDS = SHAPE_KINDS + (BODY_KIND,)
+
 #: 領域を種別で絞るときの名前。**RegionRef は `kind` キーを持たない**(データモデルが
 #: `{sketch, index, provenance}` と定めている)ので、`"sketch"` キーの有無から導く。
 REGION_KIND = "region"
@@ -114,7 +131,7 @@ REGION_KIND = "region"
 SKETCH_ENTITY_KIND = "sketch_entity"
 
 #: `confirmed_items(kind=...)` に渡せる名前の全体
-SELECTABLE_KINDS = SHAPE_KINDS + (REGION_KIND, SKETCH_ENTITY_KIND)
+SELECTABLE_KINDS = BODY_BEARING_KINDS + (REGION_KIND, SKETCH_ENTITY_KIND)
 
 #: 出所(§3.5 `origin`)。"user"=人が確定した / "proposed"=AIの提案
 ORIGIN_USER = "user"
@@ -282,7 +299,7 @@ def confirmed_items(doc: Document, kind: Optional[str] = None) -> List[dict]:
 
 
 def ref_kind(ref: dict) -> str:
-    """参照の種別を返す(`"face"|"edge"|"vertex"|"region"|"sketch_entity"`)。
+    """参照の種別を返す(`"face"|"edge"|"vertex"|"body"|"region"|"sketch_entity"`)。
 
     **RegionRef も SketchEntityRef も `kind` キーを持たない**ので、`"sketch"` キーがあれば
     スケッチ側の2種で、そのうち `"entity"` を持つものが `SKETCH_ENTITY_KIND`、
@@ -296,7 +313,7 @@ def ref_kind(ref: dict) -> str:
         return SKETCH_ENTITY_KIND if "entity" in ref else REGION_KIND
     if "kind" in ref:
         kind = ref["kind"]
-        if kind not in SHAPE_KINDS:
+        if kind not in BODY_BEARING_KINDS:
             raise ValueError(f"unknown shape kind: {kind!r}")
         return kind
     raise ValueError("ref is neither a ShapeRef nor a RegionRef")
@@ -380,7 +397,10 @@ def require_bodies(doc: Document) -> List[BodyId]:
     """
     ordered: List[BodyId] = []
     for item in confirmed_items(doc):
-        if ref_kind(item) not in SHAPE_KINDS:
+        # **`kind="body"` の参照もここへ入る**(2026-08-31)。Bodyを直に指す種別を作った以上、
+        # 逆引きの側がそれを見ないと「ボディを選んだのに move_body が対象を見つけない」
+        # という、指し方によって結果が変わる穴が開く。
+        if ref_kind(item) not in BODY_BEARING_KINDS:
             continue
         body_id = item["body"]
         if body_id not in ordered:
@@ -388,6 +408,39 @@ def require_bodies(doc: Document) -> List[BodyId]:
     if not ordered:
         _raise_missing(doc, "face")
     return ordered
+
+
+# --------------------------------------------------------------------------------------
+# 集合代入のverbのための口 —— **要求するのは「確定していること」だけ**
+# --------------------------------------------------------------------------------------
+# 形状最適化の4 verb は**集合代入**である(「1つ足す」ではなく「この役割の集合を、いま確定
+# している選択集合そのものに置き換える」)。したがって**空の確定選択も正当な入力**で、
+# 「その役割を全部外す」を意味する —— ここで 0 件を拒むと、役割を空にする手段が
+# どこにも無くなる(解除専用のverbは作らない、と決めてある)。
+#
+# それでも名前が `require_` で始まるのは**嘘ではない**。要求しているのは
+# 「`origin="proposed"` のままではないこと」であり、そこは `confirmed_items` が
+# `SelectionNotCommitted` で守る。名前を揃えているのは、`catalog.Command.uses_selection`
+# の宣言と実体の一致を `tests/test_vertex_pick.py` が `require_` の接頭辞で照合するためで、
+# ここを別名にすると**この4 verb だけ自動 commit の対象から静かに漏れる**。
+def require_committed_bodies(doc: Document) -> List[BodyId]:
+    """確定選択の**`kind="body"` の参照**を、最初に現れた順で重複なく返す(**空でもよい**)。
+
+    面・辺・頂点からの逆引き(`require_bodies`)は**しない** —— 集合代入は「いま選ばれて
+    いるものがそのまま新しい集合になる」ので、拘束面を選んだついでにそのボディが保持へ
+    入る、のような取り違えが起きてはいけない。
+    """
+    ordered: List[BodyId] = []
+    for item in confirmed_items(doc, kind=BODY_KIND):
+        body_id = item["body"]
+        if body_id not in ordered:
+            ordered.append(body_id)
+    return ordered
+
+
+def require_committed_faces(doc: Document) -> List[dict]:
+    """確定選択の**面の参照**を選択順のまま返す(**空でもよい**。上のコメントが理由)。"""
+    return confirmed_items(doc, kind="face")
 
 
 def _raise_missing(doc: Document, kind: str) -> NoReturn:
@@ -485,6 +538,17 @@ def select_vertex(doc: Document, body_id: BodyId, vertex_index: int) -> dict:
     return _shape_ref(body_id, "vertex", vertex_index, count)
 
 
+def select_body(doc: Document, body_id: BodyId) -> dict:
+    """**ソリッドを丸ごと**指す参照を作る(2026-08-31。`BODY_KIND` のdocstring)。
+
+    不可視Body・存在しないBodyは例外(面・辺・頂点と同じ門番 `_visible_body`)。
+    `index` は `None` を明示的に持たせる —— キーごと落とすと、参照を読む側が
+    「まだ埋めていない」と「そもそも持たない」を見分けられない。
+    """
+    body = _visible_body(doc, body_id)
+    return {"body": body.id, "kind": BODY_KIND, "index": None, "provenance": None}
+
+
 def select_region(doc: Document, sketch_id: str, region_index: int) -> dict:
     """スケッチの領域を指す RegionRef を作る。
 
@@ -555,6 +619,9 @@ def same_ref(left: dict, right: dict) -> bool:
             # **点と辺は別物**(同じ図形の (x0,y0) と「図形全体」を混同しない)
             and left.get("point") == right.get("point")
         )
+    if left_kind == BODY_KIND:
+        # **添字で比べない**(Bodyの参照は `index` を持たない)。
+        return left["body"] == right["body"]
     return (
         left["body"] == right["body"]
         and left["kind"] == right["kind"]
@@ -580,10 +647,13 @@ def _coerce_ref(doc: Document, ref: dict) -> dict:
     if "kind" not in ref:
         raise ValueError("ShapeRef is missing 'kind'")
     kind = ref["kind"]
-    if kind not in SHAPE_KINDS:
+    if kind not in BODY_BEARING_KINDS:
         raise ValueError(f"unknown shape kind: {kind!r}")
     if "body" not in ref:
         raise ValueError("ShapeRef is missing 'body'")
+    if kind == BODY_KIND:
+        # **`index` は見ない**(Bodyの参照は添字を持たない。付いていても無視する)
+        return select_body(doc, ref["body"])
     if "index" not in ref:
         raise ValueError("ShapeRef is missing 'index'")
 

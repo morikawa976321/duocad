@@ -99,6 +99,12 @@ class Document:
         from .selection import Selection
 
         self.selection = Selection()
+        # 形状最適化(第3のモード)の条件。**選択と違って保存される** —— 書き込む口は
+        # `duocad/verbs/optimize_setup.py` の4 verb だけで、実体は操作ログに載る
+        # (ここにあるのはその再生結果)。遅延import の理由は上の2つと同じ。
+        from .optimize import OptimizeSetup
+
+        self.optimize = OptimizeSetup()
 
     @property
     def units(self) -> str:

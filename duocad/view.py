@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-from . import kernel, parameters, query, region, resolution, selection, sketch
+from . import kernel, optimize, parameters, query, region, resolution, selection, sketch
 from .document import Document
 
 
@@ -32,7 +32,11 @@ from .document import Document
 #: 履歴パネルが使うのは `source_name` と件数だけなので、本文は配らない。
 #: **ログそのもの(`document.log`)は無傷** —— 伏せるのは配信用の射影だけで、
 #: 保存(`to_json`)は本文を書く。
-_REDACTED_LOG_ARGS = ("step", "entities")
+#: 形状最適化の4 verb も**量を持つ引数**を積む(`faces` / `previous*` は面の指紋つきで、
+#: 面を数十枚選べば1操作で数KB)。履歴パネルが要るのは件数だけなので同じ扱いにする ——
+#: **`previous` が数値の操作(`set_parameter`)は素通りする**(下の射影は文字列と配列しか
+#: 置き換えない)。
+_REDACTED_LOG_ARGS = ("step", "entities", "faces", "previous", "previous_faces")
 
 
 def _log_args_for_state(args: dict) -> dict:
@@ -96,6 +100,11 @@ class DocumentView:
         self._edge_cache: dict = {}        # body_id -> (shape, tessellate_edges結果)(D)
         self._vertex_cache: dict = {}      # body_id -> (shape, vertex_positions結果)
         self._volume_cache: dict = {}      # body_id -> (shape, query.volume結果)
+        #: 形状最適化の条件の配りもの(`optimize.state_payload`)の増分維持。
+        #: **配信のたびに作り直さない** —— 作り直しは「条件が変わった」か
+        #: 「条件が指しているボディの形が差し替わった」ときだけで、他のボディは見ない
+        #: (engine `duocad-state-meta-recomputes-all-volumes` と同じ轍を踏まないため)。
+        self._optimize_cache = optimize.OptimizeStateCache()
 
     # ---------------------------------------------------------------- 可変解像度(ズーム連動)
     @property
@@ -272,6 +281,7 @@ class DocumentView:
         self._vertex_cache.clear()
         self._volume_cache.clear()
         self._sketch_cache.clear()
+        self._optimize_cache.clear()
         self._revision_state.clear()
         # **どの面を細かく測るかも捨てる**。面の添字は文書が変われば別のものを指す。
         self._view_focus = None
@@ -322,6 +332,14 @@ class DocumentView:
             "selection": selection.get_selection(self.document).to_dict(),
             # スケッチは平面の枠・図形・領域まで含めて配る(下記)。
             "sketches": self.sketches_state(),
+            # 形状最適化の条件(第3のモード)。**画面はこれを見て、verbを起動したときに
+            # 既にその役割が付いている対象をプリセレクトする** —— 配らないと
+            # 「既に付いているものが選択状態で現れる」という操作の流れが成立しない。
+            # 中身の契約と、指紋が合わなかった条件の扱い(`stale`)は
+            # `duocad/optimize.py` の `state_payload` のdocstringが正。
+            "optimize": optimize.state_payload(
+                self.document, self._optimize_cache, previewing=previewing
+            ),
         }
 
     # ---------------------------------------------------------------- C: スケッチの配信

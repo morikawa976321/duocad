@@ -33,6 +33,10 @@ from .verbs import (
     move_sketch_entities as move_sketch_entities_verb,
     pattern_circular as pattern_circular_verb,
     pattern_rectangular as pattern_rectangular_verb,
+    set_exclude_bodies as set_exclude_bodies_verb,
+    set_fixtures as set_fixtures_verb,
+    set_loads as set_loads_verb,
+    set_preserve_bodies as set_preserve_bodies_verb,
 )
 from .view import DocumentView
 
@@ -658,6 +662,43 @@ class Session:
             "copy": operation.args["copy"],
             "created": created,
             "changed_bodies": list(operation.args["bodies"]) + created,
+        })
+
+    # ---------------------------------------------------------------- 形状最適化の条件(第3のモード)
+    #
+    # **4つとも集合代入**で、対象は確定選択そのもの。**確定選択が空でもよい**
+    # (`selection.require_committed_*` のコメント) —— 空の代入が「その役割を全部外す」を
+    # 意味するので、解除専用のverbが要らない。
+    #
+    # `changed_bodies` は**返さない**。形は1つも変わらないので、画面が形を取り直す理由が
+    # 無い(役割の色は配信される `state.optimize` から描く)。
+    def set_preserve_bodies(self) -> dict:
+        """**確定選択のボディ**を保持ソリッドの集合にする(集合代入)。"""
+        body_ids = selection.require_committed_bodies(self.document)
+        operation = set_preserve_bodies_verb(self.document, body_ids)
+        return self._after_logged_verb({"bodies": list(operation.args["bodies"])})
+
+    def set_exclude_bodies(self) -> dict:
+        """**確定選択のボディ**を除外ソリッドの集合にする(集合代入)。"""
+        body_ids = selection.require_committed_bodies(self.document)
+        operation = set_exclude_bodies_verb(self.document, body_ids)
+        return self._after_logged_verb({"bodies": list(operation.args["bodies"])})
+
+    def set_fixtures(self) -> dict:
+        """**確定選択の面**を拘束面の集合にする(集合代入)。"""
+        faces = selection.require_committed_faces(self.document)
+        operation = set_fixtures_verb(self.document, faces)
+        return self._after_logged_verb({"face_count": len(operation.args["faces"])})
+
+    def set_loads(self, magnitude: Any, direction: Any) -> dict:
+        """**確定選択の面**を荷重面の集合にし、大きさ[N]と向きを持たせる(集合代入)。"""
+        faces = selection.require_committed_faces(self.document)
+        operation = set_loads_verb(self.document, faces, magnitude, direction)
+        return self._after_logged_verb({
+            "face_count": len(operation.args["faces"]),
+            "magnitude": operation.args["magnitude"],
+            "direction": operation.args["direction"],
+            "direction_vector": operation.args["vector"],
         })
 
     def set_parameter(self, name: str, value: float) -> dict:

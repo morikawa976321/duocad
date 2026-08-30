@@ -13,6 +13,12 @@ from .import_editable import import_step  # noqa: F401
 from .import_svg import import_svg  # noqa: F401
 from .move_body import move_body  # noqa: F401
 from .move_sketch import move_sketch_entities  # noqa: F401
+from .optimize_setup import (  # noqa: F401
+    set_exclude_bodies,
+    set_fixtures,
+    set_loads,
+    set_preserve_bodies,
+)
 from .pattern import pattern_circular, pattern_rectangular  # noqa: F401
 
 __all__ = [
@@ -24,6 +30,10 @@ __all__ = [
     "import_svg",
     "move_body",
     "move_sketch_entities",
+    "set_exclude_bodies",
+    "set_fixtures",
+    "set_loads",
+    "set_preserve_bodies",
     "pattern_circular",
     "pattern_rectangular",
 ]

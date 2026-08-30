@@ -76,6 +76,32 @@ def describe_edges(shape: Any) -> list:
     return described
 
 
+def face_fingerprint(shape: Any, face_index: int) -> dict:
+    """面1枚の**指紋**(面積・法線・重心)を返す。`{"index", "area", "normal", "center"}`。
+
+    値の作り方は `describe_faces` の1件と同じで、**面1枚ぶんしか測らない**のが違い ——
+    形状最適化の条件は数枚の面を指すだけなので、2835面のボディで全面を測る理由が無い
+    (`duocad/optimize.py`)。`kind` を含めないのは指紋に使わないためで、種別が要る用途は
+    `describe_faces` を使うこと。
+
+    添字は1始まり(`describe_faces` / `selection.select_face` と同じ体系)。範囲外は ValueError。
+    """
+    raw = _unwrap(shape)
+    count = kernel.face_count(raw)
+    index = int(face_index)
+    if not 1 <= index <= count:
+        raise ValueError(f"face index out of range: {index} (1..{count})")
+    wrapped = Face(kernel.face_of(raw, index))
+    normal = wrapped.normal_at()
+    center = wrapped.center()
+    return {
+        "index": index,
+        "area": float(wrapped.area),
+        "normal": [float(normal.X), float(normal.Y), float(normal.Z)],
+        "center": [float(center.X), float(center.Y), float(center.Z)],
+    }
+
+
 def describe_faces(shape: Any) -> list:
     """面を1始まりの添字つきで列挙する。
 

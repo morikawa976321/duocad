@@ -1,0 +1,715 @@
+"""形状最適化(第3のモード)の条件を置く4 verb の契約。
+
+固定するのは6つ。**どれも、外れても例外が出ないまま静かに間違う**種類のずれである:
+
+1. **集合代入** —— 「1つ足す」ではなく「その役割の集合を、確定選択そのものに置き換える」。
+   **空の確定選択も正当な入力**で、その役割を全部外すことを意味する(だから解除専用の
+   verbが要らない)。
+2. **排他は先勝ち** —— 既に相手の役割が付いている対象を割り当てようとしたら失敗し、
+   **どれが衝突したかを名指しする**。失敗した側は文書にもログにも何も残さない。
+3. **指紋の不一致** —— 面の参照は添字だけでは足りない。後から形を変えて添字が別の面を
+   指すようになったら、その条件は**使わずに** `stale` として名指しする(壊れないように
+   するのではなく、壊れたと気づけるようにする)。
+4. **保存 → 再オープンの往復** —— 条件は操作ログに載るので、`to_json` → `from_json` →
+   `replay` で完全に戻る。
+5. **undo / redo** —— 直前の集合へ戻り、やり直せる。
+6. **3経路** —— コア(`Session`)・WebSocket・MCPのどこから踏んでも同じ結果になる
+   (宣言は `duocad/catalog.py` の1箇所が正)。
+
+**選択種別 `body` の新設**もここで押さえる —— ソリッドを丸ごと指す手段が無いと、
+保持/除外ソリッドの対象を確定選択から取れない。
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+
+from duocad import optimize, selection
+from duocad.document import Document
+from duocad.mcp_server import DocumentTools, McpServer
+from duocad.oplog import OpLog
+from duocad.server import Server, Session
+
+DEVIATION = 0.2
+SIDE = 20.0
+
+
+@pytest.fixture()
+def session() -> Session:
+    return Session(None, DEVIATION)
+
+
+def _select(session: Session, refs: list) -> None:
+    """選択を `refs` で置き換える(人がクリックで選び直すのと同じ入口)。"""
+    session.clear_selection()
+    session.modify_selection(refs, [])
+
+
+def _box(session: Session, corner=(0.0, 0.0)):
+    """スケッチ→長方形→領域押し出しで 20mm の立方体を1つ作り、そのBodyを返す。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_rectangle(sketch_id, list(corner), SIDE, SIDE)
+    regions = len(session.state_meta()["sketches"][-1]["regions"])
+    _select(session, [{"sketch": sketch_id, "index": regions}])
+    session.extrude(SIDE, mode="new")
+    session.clear_selection()
+    return session.document.bodies[-1]
+
+
+def _body_refs(*bodies) -> list:
+    return [{"body": body.id, "kind": "body"} for body in bodies]
+
+
+def _face_refs(body, indices) -> list:
+    return [{"body": body.id, "kind": "face", "index": index} for index in indices]
+
+
+def _ids(refs: list) -> list:
+    return [ref["body"] for ref in refs]
+
+
+def _indices(refs: list) -> list:
+    return [ref["index"] for ref in refs]
+
+
+def _optimize(session: Session) -> dict:
+    return session.state_meta()["optimize"]
+
+
+class FakeConnection:
+    """`Server` が使うのは `send` だけ(`tests/test_feature_ui.py` と同じ形)。"""
+
+    def __init__(self) -> None:
+        self.payloads: list = []
+
+    async def send(self, raw: str) -> None:
+        self.payloads.append(json.loads(raw))
+
+
+def _browser(session: Session, script):
+    async def scenario():
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        client = FakeConnection()
+        server.clients.add(client)
+
+        async def send(command: dict) -> dict:
+            await server._dispatch(client, json.dumps(command))
+            return client.payloads[-1]
+
+        return await script(send)
+
+    return asyncio.run(scenario())
+
+
+# --------------------------------------------------------------------------------------
+# 1. 選択種別 `body`
+# --------------------------------------------------------------------------------------
+def test_a_body_can_be_selected_whole(session: Session) -> None:
+    """**ソリッドを丸ごと指せる**(面を全部入れる案は採っていない)。
+
+    落ちるのは「`kind='body'` の参照が選択機構を通らない」とき。保持/除外ソリッドは
+    確定選択から対象を取るので、通らなければverb自体が使えない。
+    """
+    body = _box(session)
+    ref = selection.select_body(session.document, body.id)
+    assert ref == {"body": body.id, "kind": "body", "index": None, "provenance": None}
+    assert selection.ref_kind(ref) == selection.BODY_KIND
+
+    _select(session, _body_refs(body))
+    items = session.get_selection()["items"]
+    # **面が展開されて入っていない**(2835面のボディで選択集合が膨れる案を採らないこと)
+    assert items == [ref], items
+    assert selection.require_committed_bodies(session.document) == [body.id]
+
+
+def test_the_same_body_is_not_selected_twice(session: Session) -> None:
+    """同じボディを2回 add しても重複しない(等価判定が添字を見ていないこと)。"""
+    body = _box(session)
+    session.clear_selection()
+    session.modify_selection(_body_refs(body), [])
+    session.modify_selection(_body_refs(body), [])
+    assert len(session.get_selection()["items"]) == 1
+    session.modify_selection([], _body_refs(body))
+    assert session.get_selection()["items"] == []
+
+
+# --------------------------------------------------------------------------------------
+# 2. 集合代入
+# --------------------------------------------------------------------------------------
+def test_assigning_bodies_replaces_the_whole_set(session: Session) -> None:
+    """**置き換えであって追加ではない。** 2回目の確定で1回目の中身が消える。
+
+    ここが「足す」に変わると、verbの中で外したはずのものが役割に残り続ける ——
+    解除専用のverbを作らない設計の前提そのものが崩れる。
+    """
+    first = _box(session)
+    second = _box(session, corner=(50.0, 0.0))
+
+    _select(session, _body_refs(first))
+    session.set_preserve_bodies()
+    assert _ids(_optimize(session)["preserve_bodies"]) == [first.id]
+
+    _select(session, _body_refs(second))
+    session.set_preserve_bodies()
+    assert _ids(_optimize(session)["preserve_bodies"]) == [second.id]
+
+
+def test_an_empty_selection_clears_the_role(session: Session) -> None:
+    """**空の確定選択で確定すると、その役割が空になる**(解除専用のverbを作らない根拠)。
+
+    ここが `SelectionEmpty` で拒まれると、一度付けた役割を外す手段がどこにも無くなる。
+    """
+    body = _box(session)
+    _select(session, _body_refs(body))
+    session.set_preserve_bodies()
+    session.clear_selection()
+
+    session.set_preserve_bodies()
+    assert _optimize(session)["preserve_bodies"] == []
+    # **ログには載る**(undoで戻せる1手である)
+    assert session.document.log.entries[-1].verb == "set_preserve_bodies"
+
+
+def test_assigning_faces_replaces_the_whole_set(session: Session) -> None:
+    """面の側も集合代入(拘束・荷重とも)。"""
+    body = _box(session)
+    _select(session, _face_refs(body, [1, 2]))
+    session.set_fixtures()
+    assert _indices(_optimize(session)["fixtures"]) == [1, 2]
+
+    _select(session, _face_refs(body, [3]))
+    session.set_fixtures()
+    assert _indices(_optimize(session)["fixtures"]) == [3]
+
+
+def test_a_proposed_selection_is_committed_by_running_the_verb(session: Session) -> None:
+    """AIの提案のままでも、**人がverbを実行する行為そのものが承認**になる(WS経由)。
+
+    宣言(`uses_selection`)と実体(`require_*` を呼ぶ)が揃っていないと、この自動確定から
+    静かに漏れる —— 漏れると、AIが提案した状態で人がボタンを押したときだけ詰む。
+    """
+    body = _box(session)
+    session.propose_selection(refs=_body_refs(body))
+    assert session.get_selection()["origin"] == "proposed"
+
+    async def script(send):
+        return await send({"cmd": "set_preserve_bodies"})
+
+    answer = _browser(session, script)
+    assert answer["type"] == "state", answer
+    assert session.get_selection()["origin"] == "user"
+    assert _ids(_optimize(session)["preserve_bodies"]) == [body.id]
+
+
+# --------------------------------------------------------------------------------------
+# 3. 排他は先勝ち
+# --------------------------------------------------------------------------------------
+def test_a_preserved_body_cannot_be_excluded(session: Session) -> None:
+    """**先勝ち**。しかも**どのボディが衝突したかを名指しする**(画面がトーストに出す)。
+
+    失敗した側は文書にもログにも何も残さない —— 半分だけ割り当たると、画面の色と
+    実際の割り当てが食い違ったまま気づけない。
+    """
+    body = _box(session)
+    _select(session, _body_refs(body))
+    session.set_preserve_bodies()
+
+    before = len(session.document.log.entries)
+    with pytest.raises(optimize.RoleConflict) as caught:
+        session.set_exclude_bodies()
+
+    assert [item["body"] for item in caught.value.conflicts] == [body.id]
+    assert body.id in str(caught.value), caught.value
+    assert len(session.document.log.entries) == before, "失敗したverbがログに残っている"
+    assert _optimize(session)["exclude_bodies"] == []
+    assert _ids(_optimize(session)["preserve_bodies"]) == [body.id]
+
+
+def test_the_exclusion_is_symmetric(session: Session) -> None:
+    """逆向き(除外 → 保持)も同じ。片方だけ守ると、順序で結果が変わる。"""
+    body = _box(session)
+    _select(session, _body_refs(body))
+    session.set_exclude_bodies()
+    with pytest.raises(optimize.RoleConflict):
+        session.set_preserve_bodies()
+
+
+def test_moving_a_body_between_roles_takes_two_steps(session: Session) -> None:
+    """移すには「元の役割で外す → 新しい役割で付ける」の2手(**意図した仕様**)。"""
+    body = _box(session)
+    _select(session, _body_refs(body))
+    session.set_preserve_bodies()
+
+    session.clear_selection()
+    session.set_preserve_bodies()  # 1手目: 元の役割から外す
+    _select(session, _body_refs(body))
+    session.set_exclude_bodies()  # 2手目: 新しい役割へ付ける
+
+    state = _optimize(session)
+    assert _ids(state["exclude_bodies"]) == [body.id]
+    assert state["preserve_bodies"] == []
+
+
+def test_a_fixed_face_cannot_be_loaded(session: Session) -> None:
+    """面の側も先勝ち。**衝突した面を添字で名指しする**。"""
+    body = _box(session)
+    _select(session, _face_refs(body, [1, 2]))
+    session.set_fixtures()
+
+    _select(session, _face_refs(body, [2, 3]))
+    with pytest.raises(optimize.RoleConflict) as caught:
+        session.set_loads(100.0, [0.0, 0.0, -1.0])
+    assert [item["index"] for item in caught.value.conflicts] == [2]
+    assert _optimize(session)["loads"] == []
+
+
+def test_the_conflict_is_an_invalid_argument_over_mcp(session: Session) -> None:
+    """MCPから見ると `invalid_argument`(**未知のコードを勝手に作らない**)。"""
+    body = _box(session)
+    tools = DocumentTools(session)
+    _select(session, _body_refs(body))
+    tools.set_preserve_bodies()
+
+    with pytest.raises(optimize.RoleConflict) as caught:
+        tools.set_exclude_bodies()
+    envelope = tools.error_envelope("set_exclude_bodies", caught.value)
+    assert envelope["code"] == "invalid_argument", envelope
+
+
+# --------------------------------------------------------------------------------------
+# 4. 荷重の how(大きさと向き)
+# --------------------------------------------------------------------------------------
+def test_a_load_direction_can_be_a_world_vector(session: Session) -> None:
+    """**面法線だけでは足りない**(棚受けは世界の -Z へ受ける)。ベクトルは単位化して控える。"""
+    body = _box(session)
+    _select(session, _face_refs(body, [1]))
+    applied = session.set_loads(250.0, [0.0, 0.0, -4.0])
+
+    assert applied["direction"] == "vector"
+    assert applied["direction_vector"] == [0.0, 0.0, -1.0], "向きを単位化していない"
+    load = _optimize(session)["load"]
+    assert load == {"magnitude": 250.0, "direction": "vector", "vector": [0.0, 0.0, -1.0]}
+
+
+def test_a_load_direction_can_follow_the_face_normal(session: Session) -> None:
+    """面法線とその逆向きも取れる(`vector` は持たない)。"""
+    body = _box(session)
+    _select(session, _face_refs(body, [1]))
+    session.set_loads(10.0, "-normal")
+    assert _optimize(session)["load"] == {
+        "magnitude": 10.0,
+        "direction": "-normal",
+        "vector": None,
+    }
+
+
+@pytest.mark.parametrize(
+    "magnitude, direction",
+    [
+        (0.0, [0.0, 0.0, -1.0]),          # 大きさ0は「荷重が無い」ことを表さない
+        (-5.0, [0.0, 0.0, -1.0]),
+        (10.0, [0.0, 0.0, 0.0]),          # 長さ0のベクトルは向きを持たない
+        (10.0, "sideways"),               # 知らないキーワードを黙って通さない
+        (10.0, [0.0, 0.0]),               # 3成分でない
+    ],
+)
+def test_a_bad_load_is_refused_without_touching_the_document(
+    session: Session, magnitude, direction
+) -> None:
+    """**不正なhowは文書にもログにも何も残さない。**"""
+    body = _box(session)
+    _select(session, _face_refs(body, [1]))
+    before = len(session.document.log.entries)
+    with pytest.raises(ValueError):
+        session.set_loads(magnitude, direction)
+    assert len(session.document.log.entries) == before
+    assert _optimize(session)["loads"] == []
+
+
+# --------------------------------------------------------------------------------------
+# 5. 面の指紋
+# --------------------------------------------------------------------------------------
+def test_a_face_condition_carries_a_fingerprint(session: Session) -> None:
+    """条件には**添字だけでなく重心・法線・面積**が焼き込まれている(操作ログにも載る)。"""
+    body = _box(session)
+    _select(session, _face_refs(body, [1]))
+    session.set_fixtures()
+
+    stored = session.document.log.entries[-1].args["faces"][0]
+    assert set(stored) == {"body", "index", "area", "normal", "center"}
+    assert stored["area"] == pytest.approx(SIDE * SIDE)
+
+
+def test_a_face_whose_fingerprint_moved_is_reported_and_not_used(session: Session) -> None:
+    """**形が変われば、その条件は使われず `stale` に名指しで出る。**
+
+    ここが効かないと、拘束のつもりで指した面が別の場所へ移ったまま最適化へ渡る ——
+    例外も出ないので、結果を見るまで誰も気づかない。
+
+    形の変え方に `move_body` を使うのは**検出を決定的にするため**である(平行移動は必ず
+    重心を動かす)。ついでに**既知の帰結**も固定している —— 添字が変わらない平行移動でも
+    指紋は合わなくなるので、ボディを動かしたら条件は付け直しになる。指紋を世界座標の
+    重心で持つと決めた以上こうなるので、うるさければ指紋の持ち方から変えること。
+    """
+    body = _box(session)
+    _select(session, _face_refs(body, [1]))
+    session.set_fixtures()
+    assert _optimize(session)["stale"] == []
+
+    _select(session, _face_refs(body, [1]))
+    session.move_body(0.0, 0.0, 30.0)
+
+    state = _optimize(session)
+    assert state["fixtures"] == [], "指紋が合わないのに条件を使っている"
+    assert len(state["stale"]) == 1
+    stale = state["stale"][0]
+    assert stale["role"] == "fixtures" and stale["index"] == 1
+    assert stale["code"] == "fingerprint", stale
+    assert stale["reason"], "**理由が空だと画面がトーストに出せない**"
+
+
+def test_a_stale_condition_comes_back_when_the_shape_comes_back(session: Session) -> None:
+    """指紋が合わない条件は**文書からは消えない** —— 形を戻せばまた使われる。
+
+    配信のときに落としているだけで、削除していないこと(操作ログが唯一の正)。
+    """
+    body = _box(session)
+    _select(session, _face_refs(body, [1]))
+    session.set_fixtures()
+
+    _select(session, _face_refs(body, [1]))
+    session.move_body(0.0, 0.0, 30.0)
+    assert _optimize(session)["fixtures"] == []
+    session.undo()
+
+    state = _optimize(session)
+    assert state["stale"] == []
+    assert _indices(state["fixtures"]) == [1]
+
+
+def test_a_hidden_body_drops_out_of_the_refs_but_says_why(session: Session) -> None:
+    """**見えないものは指せない**ので、隠したボディの割り当ては配る参照から外れる。
+
+    外すだけだと画面から黙って消えるので、`stale` に `code="hidden"` で出す ——
+    人が部品を隠すたびに出る種類なので、**トーストに出す側ではない**(だからコードで
+    区別できるようにしてある)。表示に戻せばそのまま戻る。
+    """
+    body = _box(session)
+    _select(session, _body_refs(body))
+    session.set_preserve_bodies()
+    _select(session, _face_refs(body, [1]))
+    session.set_fixtures()
+
+    session.set_visible(body.id, False)
+    state = _optimize(session)
+    assert state["preserve_bodies"] == [] and state["fixtures"] == []
+    assert sorted(item["code"] for item in state["stale"]) == ["hidden", "hidden"]
+    # **可視性は形状の同一性を動かさない** —— 増分維持の鍵に入れ忘れると、隠しても
+    # 前の配りものがそのまま返り続けてここが落ちる。
+
+    session.set_visible(body.id, True)
+    state = _optimize(session)
+    assert _ids(state["preserve_bodies"]) == [body.id]
+    assert _indices(state["fixtures"]) == [1]
+    assert state["stale"] == []
+
+
+def test_a_body_that_undo_removed_is_reported_as_missing(session: Session) -> None:
+    """作成ごとundoで消えたボディも、配る参照から外して理由を出す。"""
+    body = _box(session)
+    _select(session, _body_refs(body))
+    session.set_preserve_bodies()
+
+    # 割り当て → ボディの作成 の順にundoすると、割り当てだけが残る形を作れる
+    log = session.document.log
+    log.undo(session.document)  # set_preserve_bodies
+    redo_target = session.document.optimize.revision
+    log.undo(session.document)  # extrude(ボディが消える)
+    session.document.optimize.preserve_bodies = [body.id]
+    session.document.optimize.touch()
+    assert session.document.optimize.revision > redo_target
+
+    state = _optimize(session)
+    assert state["preserve_bodies"] == []
+    assert [item["code"] for item in state["stale"]] == ["missing"]
+
+
+def test_the_fingerprint_check_names_what_changed(session: Session) -> None:
+    """照合そのもの(面積が違えば不一致・同じなら一致)。"""
+    body = _box(session)
+    condition = optimize.face_condition(
+        session.document, {"body": body.id, "kind": "face", "index": 1}
+    )
+    assert optimize.fingerprint_mismatch(session.document, condition) is None
+
+    tampered = dict(condition, area=condition["area"] * 2.0)
+    reason = optimize.fingerprint_mismatch(session.document, tampered)
+    assert reason is not None and "面積" in reason, reason
+
+
+# --------------------------------------------------------------------------------------
+# 6. 保存 → 再オープンの往復 / undo / redo
+# --------------------------------------------------------------------------------------
+def test_the_setup_survives_a_save_and_reopen(session: Session) -> None:
+    """**保存の実体は操作ログのJSON**なので、条件も往復する。
+
+    落ちるのは「条件をログではなくセッション状態に置いた」とき —— 開き直すと黙って消える。
+    """
+    body = _box(session)
+    _select(session, _body_refs(body))
+    session.set_preserve_bodies()
+    _select(session, _face_refs(body, [1, 2]))
+    session.set_fixtures()
+    _select(session, _face_refs(body, [3]))
+    session.set_loads(120.0, [1.0, 0.0, 0.0])
+    before = _optimize(session)
+
+    reopened = Document()
+    OpLog.from_json(session.document.log.to_json()).replay(reopened)
+
+    assert optimize.state_payload(reopened) == before
+
+
+def test_undo_and_redo_walk_the_assignment_back(session: Session) -> None:
+    """undoは**直前の集合**へ戻り、redoでやり直せる(集合代入なので差分ではない)。"""
+    first = _box(session)
+    second = _box(session, corner=(50.0, 0.0))
+
+    _select(session, _body_refs(first))
+    session.set_preserve_bodies()
+    _select(session, _body_refs(second))
+    session.set_preserve_bodies()
+    assert _ids(_optimize(session)["preserve_bodies"]) == [second.id]
+
+    session.undo()
+    assert _ids(_optimize(session)["preserve_bodies"]) == [first.id]
+    session.undo()
+    assert _optimize(session)["preserve_bodies"] == []
+    session.redo()
+    assert _ids(_optimize(session)["preserve_bodies"]) == [first.id]
+    session.redo()
+    assert _ids(_optimize(session)["preserve_bodies"]) == [second.id]
+
+
+def test_redo_never_hits_the_exclusion_it_already_passed(session: Session) -> None:
+    """**戻してからやり直しても排他に当たらない**(やり直せない履歴を作らない)。
+
+    undoは排他の検査を通さず「以前に成立していた集合」へ戻すだけで、redoは元と同じ順序で
+    `_apply_*` を通す。したがってredoの時点で相手の役割が持っている中身は、最初に通った
+    ときと同じである —— ここが崩れると、**戻した後にやり直せない履歴**ができて、例外が
+    出るのは redo を押した瞬間になる(何が悪いのか人には見えない)。
+
+    役割をまたぐ2手(外す → 付ける)を挟むのは、そこが唯一「相手の役割が動いた状態で
+    同じボディを割り当て直す」形になるからである。
+    """
+    body = _box(session)
+    _select(session, _body_refs(body))
+    session.set_preserve_bodies()
+    session.clear_selection()
+    session.set_preserve_bodies()  # 保持から外す
+    _select(session, _body_refs(body))
+    session.set_exclude_bodies()  # 除外へ付け直す
+
+    session.undo()
+    session.undo()
+    assert _ids(_optimize(session)["preserve_bodies"]) == [body.id]
+
+    session.redo()
+    session.redo()  # ここで RoleConflict が出たら履歴が壊れている
+    state = _optimize(session)
+    assert _ids(state["exclude_bodies"]) == [body.id]
+    assert state["preserve_bodies"] == []
+
+
+def test_a_new_verb_after_undo_drops_the_redo_tail(session: Session) -> None:
+    """undoの後に別のverbを打つと、やり直せた末尾は捨てられる(`OpLog.append` の規律)。
+
+    捨て損なうと、**同じ役割への代入が2本の枝に残って**redoで思わぬ集合が戻る。
+    """
+    first = _box(session)
+    second = _box(session, corner=(50.0, 0.0))
+
+    _select(session, _body_refs(first))
+    session.set_preserve_bodies()
+    session.undo()
+
+    _select(session, _body_refs(second))
+    session.set_exclude_bodies()
+    assert not session.document.log.can_redo, "捨てられていない枝が残っている"
+    state = _optimize(session)
+    assert state["preserve_bodies"] == []
+    assert _ids(state["exclude_bodies"]) == [second.id]
+
+
+def test_undoing_a_load_restores_the_previous_how(session: Session) -> None:
+    """荷重は集合だけでなく**大きさ・向きも**直前へ戻る。"""
+    body = _box(session)
+    _select(session, _face_refs(body, [1]))
+    session.set_loads(100.0, [0.0, 0.0, -1.0])
+    _select(session, _face_refs(body, [2]))
+    session.set_loads(300.0, "normal")
+    session.undo()
+
+    assert _optimize(session)["load"] == {
+        "magnitude": 100.0,
+        "direction": "vector",
+        "vector": [0.0, 0.0, -1.0],
+    }
+
+
+def test_the_load_how_survives_hiding_the_body(session: Session) -> None:
+    """**`load` は文書が持つ how** で、面が一時的に使えなくなっても消えない。
+
+    隠しただけで大きさと向きが画面から消えると、表示に戻したときに打ち直しになる。
+    「いま荷重がかかる面」は `loads` の側が持つ。
+    """
+    body = _box(session)
+    _select(session, _face_refs(body, [1]))
+    session.set_loads(400.0, "normal")
+    session.set_visible(body.id, False)
+
+    state = _optimize(session)
+    assert state["loads"] == []
+    assert state["load"]["magnitude"] == 400.0
+
+
+def test_undoing_the_first_assignment_leaves_no_load(session: Session) -> None:
+    """最初の割り当てをundoすると荷重は**無い**(0Nの荷重が残らない)。"""
+    body = _box(session)
+    _select(session, _face_refs(body, [1]))
+    session.set_loads(100.0, "normal")
+    session.undo()
+    assert _optimize(session)["load"] is None
+    assert _optimize(session)["loads"] == []
+
+
+# --------------------------------------------------------------------------------------
+# 7. 3経路(コア / WebSocket / MCP)と状態の配信
+# --------------------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "verb", ["set_preserve_bodies", "set_exclude_bodies", "set_fixtures", "set_loads"]
+)
+def test_every_verb_is_reachable_from_all_three_surfaces(verb: str) -> None:
+    """**宣言は1箇所**(`catalog.py`)で、WSの表もMCPのツールもそこからの導出である。"""
+    from duocad import catalog
+    from duocad.server import FEATURE_COMMANDS
+
+    command = catalog.BY_NAME[verb]
+    assert command.uses_selection, f"{verb} が自動確定の対象から漏れている"
+    assert not command.resets_selection, "形を変えるverbではないので選択をリセットしない"
+    assert verb in FEATURE_COMMANDS, "WebSocketの表に無い"
+    assert verb in catalog.tool_names(), "MCPのツールに無い"
+
+
+def test_the_websocket_and_mcp_paths_agree(session: Session) -> None:
+    """WS経由とMCP経由で同じ結果になる(引数の綴りも同じ)。"""
+    body = _box(session)
+    _select(session, _face_refs(body, [1]))
+
+    async def script(send):
+        return await send({"cmd": "set_loads", "magnitude": 50.0, "direction": [0.0, 1.0, 0.0]})
+
+    answer = _browser(session, script)
+    assert answer["type"] == "state", answer
+    assert _optimize(session)["load"]["magnitude"] == 50.0
+
+    tools = DocumentTools(session)
+    _select(session, _face_refs(body, [2]))
+    tools.set_loads(magnitude=75.0, direction=[0.0, 1.0, 0.0])
+    state = _optimize(session)
+    assert state["load"]["magnitude"] == 75.0
+    assert _indices(state["loads"]) == [2]
+
+
+def test_the_mcp_schema_takes_only_the_how(session: Session) -> None:
+    """MCPのスキーマに**対象集合が現れない**(面もボディも確定選択から取る)。"""
+    server = McpServer(DocumentTools(session))
+    tools = {
+        tool["name"]: tool["inputSchema"]
+        for tool in server.handle(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+        )["result"]["tools"]
+    }
+    assert tools["set_preserve_bodies"]["properties"] == {}
+    assert tools["set_fixtures"]["properties"] == {}
+    assert set(tools["set_loads"]["properties"]) == {"magnitude", "direction"}
+
+
+def test_the_delivered_refs_can_be_fed_straight_back_into_the_selection(
+    session: Session,
+) -> None:
+    """**配る参照はそのまま `modify_selection` へ渡せる形**である。
+
+    画面はverbを起動したときに、既にその役割が付いている対象をこれでプリセレクトする ——
+    形が違うと画面側にもう1つ変換が生まれる(それが対象集合の二重管理の入口だった)。
+    """
+    body = _box(session)
+    _select(session, _body_refs(body))
+    session.set_preserve_bodies()
+    _select(session, _face_refs(body, [1, 2]))
+    session.set_fixtures()
+
+    state = _optimize(session)
+    session.clear_selection()
+    session.modify_selection(state["preserve_bodies"] + state["fixtures"], [])
+    assert session.get_selection()["count"] == 3
+    assert selection.require_committed_bodies(session.document) == [body.id]
+    assert len(selection.require_committed_faces(session.document)) == 2
+
+
+def test_the_state_is_not_rebuilt_on_every_broadcast(session: Session) -> None:
+    """**配信のたびに全ボディを走査しない**(engine `duocad-state-meta-recomputes-all-volumes`)。
+
+    照合が要るのは条件が指しているボディだけで、しかもその形が差し替わったときだけ。
+    ここが緩むと、面を何枚か指しただけで**全配信に指紋の測り直しの税**がかかる。
+    """
+    body = _box(session)
+    other = _box(session, corner=(50.0, 0.0))
+    _select(session, _face_refs(body, [1]))
+    session.set_fixtures()
+
+    session.state_meta()  # 1回目は当然作る(条件を置いた直後なので)。数えるのはその後
+    calls: list = []
+    original = optimize.face_fingerprint
+
+    def counted(doc, body_id, index):
+        calls.append((body_id, index))
+        return original(doc, body_id, index)
+
+    optimize.face_fingerprint = counted
+    try:
+        session.state_meta()
+        session.state_meta()
+        assert calls == [], f"条件が変わっていないのに測り直している: {calls}"
+
+        # **条件と関係の無いボディ**を変えても測り直さない
+        _select(session, _face_refs(other, [1]))
+        session.extrude_face(3.0)
+        session.state_meta()
+        assert calls == [], f"無関係なボディの変更で測り直している: {calls}"
+
+        # 条件が指しているボディの形が変われば、そこだけ測り直す
+        _select(session, _face_refs(body, [2]))
+        session.extrude_face(3.0)
+        session.state_meta()
+        assert [item[0] for item in calls] == [body.id], calls
+    finally:
+        optimize.face_fingerprint = original
+
+
+def test_the_log_broadcast_does_not_carry_every_fingerprint(session: Session) -> None:
+    """状態配信は面の指紋の本文を配らない(**保存(`to_json`)は書く**)。
+
+    配ると、面を数十枚指した1操作の指紋が**以後の全配信に乗り続ける**
+    (engine `embedding-into-the-log-also-inflates-the-live-feed` と同じ太り方)。
+    """
+    body = _box(session)
+    _select(session, _face_refs(body, [1, 2, 3]))
+    session.set_fixtures()
+
+    delivered = session.state_meta()["log"][-1]["args"]
+    assert "配信しない" in delivered["faces"], delivered
+    assert len(session.document.log.entries[-1].args["faces"]) == 3

@@ -63,6 +63,11 @@ VERB_TOOLS = {
     # 位置(2026-08-30。スケッチパラメータパネルの後継)
     "move_sketch_entities",
     "move_body",
+    # 形状最適化の条件(2026-08-31。第3のモード。最適化そのものとは接続していない)
+    "set_preserve_bodies",
+    "set_exclude_bodies",
+    "set_fixtures",
+    "set_loads",
     # ボディ・パラメータ
     "set_parameter",
     # 入出力
@@ -147,6 +152,12 @@ ARGUMENTS: dict = {
     # 位置の平行移動。**対象は選択から取る**ので引数は移動量と copy だけ
     "move_sketch_entities": ({"dx", "dy", "copy"}, {"dx", "dy"}),
     "move_body": ({"dx", "dy", "dz", "copy"}, {"dx", "dy", "dz"}),
+    # 形状最適化の条件。**対象(ボディ・面)は引数に無い** —— 確定選択そのものを代入する。
+    # howを持つのは `set_loads` だけで、大きさ[N]と向き(面法線 / 世界ベクトル)。
+    "set_preserve_bodies": (set(), set()),
+    "set_exclude_bodies": (set(), set()),
+    "set_fixtures": (set(), set()),
+    "set_loads": ({"magnitude", "direction"}, {"magnitude", "direction"}),
     "chamfer": ({"distance"}, {"distance"}),
     "pattern_rectangular": (
         {"sketch_id", "entities", "dx", "dy", "nx", "ny"},
