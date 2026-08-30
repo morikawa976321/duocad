@@ -67,6 +67,7 @@
    */
   import {
     COMMANDS,
+    argKinds,
     argSatisfied,
     findCommand,
     firstMissingArg,
@@ -81,6 +82,7 @@
     type NumberArgSpec,
     type Point2,
     type SelectableKind,
+    type SelectionArgSpec,
     type TextArgSpec,
   } from './command'
   import type { SelectionState } from '../session'
@@ -259,12 +261,16 @@
   const textArgs = $derived((command?.args ?? []).filter((spec) => spec.kind === 'text') as TextArgSpec[])
 
   /** このコマンドが選択から取る種別をアプリ層へ知らせる(辺のときだけ辺を取りに行く)。
-   *  無起動では何も要求しない(`[]`)——面・頂点は常に指せるので、それだけが既定状態に残る。 */
+   *  無起動では何も要求しない(`[]`)——面・頂点は常に指せるので、それだけが既定状態に残る。
+   *
+   *  **`argKinds` を通す**(2026-08-30)。`shapeKind` 1つだけを見ていると、複数の種別を食う
+   *  引数(`move_body` の面/辺/頂点)で**主たる種別しか要求されず、辺が指せないまま**になる ——
+   *  サーバは辺の選択を受け付けるのに画面から選べない、という穴が静かに開く。 */
   $effect(() => {
     onWants(
       (command?.args ?? [])
         .filter((spec) => spec.kind === 'selection')
-        .map((spec) => (spec as { shapeKind: SelectableKind }).shapeKind),
+        .flatMap((spec) => argKinds(spec as SelectionArgSpec)),
     )
   })
 

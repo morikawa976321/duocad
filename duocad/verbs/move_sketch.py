@@ -112,18 +112,23 @@ def _write_params(doc: Document, entity: Entity, values: Dict[str, float]) -> No
 
 
 def _moved_params(
-    doc: Document, entity: Entity, point: Any, dx: float, dy: float
+    kind: str, current: Dict[str, float], point: Any, dx: float, dy: float
 ) -> Dict[str, float]:
-    """1つの対象を動かした後の解決済み `params`。**書き込みはしない**(先に全部検査するため)。"""
-    current = _resolved_params(doc, entity)
+    """`current` の上から1つの対象を動かした `params` を返す(**書き込みはしない**)。
+
+    **渡された `current` を土台にする**のが要点である。「同じ図形の複数の点」を動かすとき、
+    毎回モデルから読み直すと**各対象が「自分だけを動かした完全な辞書」を作る**ことになり、
+    それを順に書き戻すと**最後の1つ以外が元の値で上書きされて消える**
+    (2026-08-30に実際に踏んだ: 線分の両端を選んで動かすと片方しか動かなかった)。
+    呼び出し側は同じ図形の対象をここで**積み上げてから**1回だけ書く。
+    """
     if point is None:
-        moved = entity_kind_ops(entity.kind).translate(current, dx, dy)
         # `translate` は種別ごとに「変える鍵だけ」を返すものと全部返すものが混在するので、
         # 元の値の上へ重ねて全鍵を揃える(半径・角度はそのまま残る)。
         result = dict(current)
-        result.update(moved)
+        result.update(entity_kind_ops(kind).translate(current, dx, dy))
         return result
-    x_key, y_key = entity_point_pair(entity.kind, str(point))
+    x_key, y_key = entity_point_pair(kind, str(point))
     result = dict(current)
     result[x_key] = current[x_key] + dx
     result[y_key] = current[y_key] + dy
@@ -131,16 +136,35 @@ def _moved_params(
 
 
 def _apply(doc: Document, targets: Sequence[dict], dx: float, dy: float) -> None:
-    """`copy=False` の本体。**全部の結果を先に作って検査してから**書き込む。
+    """`copy=False` の本体。**図形ごとに1つの計画へ併合してから**、全部検査して書き込む。
 
-    途中で書きながら検査すると、3つ目の点で「線分の長さが0になる」と分かったときに
-    1つ目・2つ目だけが動いた文書が残る(この verb を取り消す手はまだログに無い)。
+    2段階に分かれている:
+
+    1. **併合** —— 同じ図形に属する対象(線分の両端など)を1つの `params` へ積み上げる。
+       対象ごとに別々の完全な辞書を作って順に書くと、後の書き込みが前の書き込みを
+       丸ごと打ち消す(`_moved_params` のdocstring)。
+    2. **検査してから書く** —— 途中で書きながら検査すると、3つ目の点で「線分の長さが0に
+       なる」と分かったときに1つ目・2つ目だけが動いた文書が残る(この verb を取り消す手は
+       まだログに無い)。
+
+    `_normalize_targets` が「図形全体と、その図形の点」を既に畳んでいるので、1つの図形に
+    `point=None` と点が混ざって来ることはない。
     """
-    planned: List[tuple] = []
+    merged: dict = {}   # (sketch_id, entity_id) -> [entity, 積み上げ中の params]
+    order: List[tuple] = []
     for item in targets:
-        sketch = get_sketch(doc, item["sketch"])
-        entity = get_entity(sketch, item["entity"])
-        values = _moved_params(doc, entity, item["point"], dx, dy)
+        key = (item["sketch"], item["entity"])
+        if key not in merged:
+            sketch = get_sketch(doc, item["sketch"])
+            entity = get_entity(sketch, item["entity"])
+            merged[key] = [entity, _resolved_params(doc, entity)]
+            order.append(key)
+        entry = merged[key]
+        entry[1] = _moved_params(entry[0].kind, entry[1], item["point"], dx, dy)
+
+    planned: List[tuple] = []
+    for key in order:
+        entity, values = merged[key]
         require_valid_params(entity.kind, values)
         planned.append((entity, values))
     for entity, values in planned:
@@ -168,9 +192,7 @@ def _copy(
         if any(existing.id == new_id for existing in sketch.entities):
             raise ValueError(f"entity id already exists: {new_id!r}")
         entity = get_entity(sketch, entity_id)
-        current = _resolved_params(doc, entity)
-        values = dict(current)
-        values.update(entity_kind_ops(entity.kind).translate(current, dx, dy))
+        values = _moved_params(entity.kind, _resolved_params(doc, entity), None, dx, dy)
         require_valid_params(entity.kind, values)
         prepared.append((sketch, new_id, entity.kind, values))
     for sketch, new_id, kind, values in prepared:

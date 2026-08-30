@@ -181,6 +181,112 @@ def test_the_same_point_selected_twice_moves_once(session: Session) -> None:
     assert _params(session, sketch_id, entity_id)["x0"] == 5.0
 
 
+def test_two_points_of_one_entity_both_move(session: Session) -> None:
+    """**同じ図形の複数の点を同時に動かすと、全部動く。**
+
+    ウィンドウ選択で線分をまるごと囲えば両端が選ばれるので、これは普通に踏む経路である。
+    対象ごとに「自分だけを動かした完全な `params`」を作って順に書き戻す実装だと、
+    後の書き込みが前の書き込みを丸ごと打ち消して**最後の点しか動かない**
+    (2026-08-30に実際に踏んだ。`_apply` は図形ごとに1つの計画へ併合してから書く)。
+    """
+    sketch_id, entity_id = _line(session)
+    _select(session, [
+        {"sketch": sketch_id, "entity": entity_id, "point": "x0"},
+        {"sketch": sketch_id, "entity": entity_id, "point": "x1"},
+    ])
+    session.move_sketch_entities(0.0, 5.0)
+
+    assert _params(session, sketch_id, entity_id) == {
+        "x0": 0.0, "y0": 5.0, "x1": 10.0, "y1": 5.0
+    }
+
+
+def test_undo_restores_both_points_of_one_entity(session: Session) -> None:
+    """併合した移動のundoも、図形ごとに1つの計画へ併合される(片方だけ戻らない)。"""
+    sketch_id, entity_id = _line(session)
+    _select(session, [
+        {"sketch": sketch_id, "entity": entity_id, "point": "x0"},
+        {"sketch": sketch_id, "entity": entity_id, "point": "x1"},
+    ])
+    session.move_sketch_entities(3.0, 5.0)
+    session.undo()
+
+    restored = _params(session, sketch_id, entity_id)
+    assert restored["x0"] == pytest.approx(0.0, abs=1e-9)
+    assert restored["y0"] == pytest.approx(0.0, abs=1e-9)
+    assert restored["x1"] == pytest.approx(10.0, abs=1e-9)
+    assert restored["y1"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_two_control_points_of_one_bezier_both_move(session: Session) -> None:
+    """点が4つある種別(ベジエ)でも併合が効く(線分だけの性質ではない)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    # **ベジエを作るverbは無い**(取り込み専用の種別)ので、モデルへ直接置く。
+    doc = session.document
+    from duocad.sketch import Entity, get_sketch
+    from duocad import parameters as parameters_mod
+
+    params = {
+        "x0": 0.0, "y0": 0.0, "cx1": 1.0, "cy1": 2.0,
+        "cx2": 3.0, "cy2": 2.0, "x1": 4.0, "y1": 0.0,
+    }
+    refs = {key: parameters_mod.register_value(doc, value) for key, value in params.items()}
+    bezier_id = "entity-bezier-test"
+    get_sketch(doc, sketch_id).entities.append(
+        Entity(id=bezier_id, kind="bezier", params=refs)
+    )
+    _select(session, [
+        {"sketch": sketch_id, "entity": bezier_id, "point": "cx1"},
+        {"sketch": sketch_id, "entity": bezier_id, "point": "cx2"},
+    ])
+    session.move_sketch_entities(0.0, 1.0)
+
+    moved = _params(session, sketch_id, bezier_id)
+    assert moved["cy1"] == pytest.approx(3.0)
+    assert moved["cy2"] == pytest.approx(3.0)
+    assert moved["y0"] == pytest.approx(0.0)  # 選んでいない点は動かない
+
+
+def test_a_copy_whose_second_id_collides_adds_nothing(session: Session) -> None:
+    """**IDが衝突したら、図形を1つも足さずに落ちる**(部分更新の残骸を作らない)。
+
+    **2つ目のIDだけを衝突させる**のが要点である。1つ目で落ちる作りの検査だと、
+    「検査してから書く」を「書きながら検査する」へ崩しても赤くならない ——
+    1つ目の妥当性を通してから2つ目で落ちる形が、部分更新が起きる唯一の順序である。
+    """
+    from duocad.oplog import Operation
+    from duocad.verbs.move_sketch import _do_move_sketch_entities
+
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    first = session.add_circle(session.document.sketches[0].id, [0.0, 0.0], 2.0)["entity_id"]
+    second = session.add_circle(sketch_id, [10.0, 0.0], 2.0)["entity_id"]
+    before_ids = [entity.id for entity in sketch.get_sketch(session.document, sketch_id).entities]
+    before_parameters = dict(session.document.parameters)
+
+    fresh = "entity-brand-new-000"
+    operation = Operation(
+        seq=99,
+        verb="move_sketch_entities",
+        args={
+            "targets": [
+                {"sketch": sketch_id, "entity": first, "point": None},
+                {"sketch": sketch_id, "entity": second, "point": None},
+            ],
+            "dx": 0.0,
+            "dy": 20.0,
+            "copy": True,
+            # 1つ目は新しいID、**2つ目だけが既存のIDと衝突する**
+            "created": [fresh, second],
+        },
+    )
+    with pytest.raises(ValueError):
+        _do_move_sketch_entities(session.document, operation)
+
+    after_ids = [entity.id for entity in sketch.get_sketch(session.document, sketch_id).entities]
+    assert after_ids == before_ids, f"衝突で落ちたのに図形が増えている(部分更新): {after_ids}"
+    assert session.document.parameters == before_parameters, "名前つきの値だけが増えている"
+
+
 def test_moving_two_entities_moves_both(session: Session) -> None:
     sketch_id = session.sketch_create("XY")["sketch_id"]
     first = session.add_circle(sketch_id, [0.0, 0.0], 2.0)["entity_id"]

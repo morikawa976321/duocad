@@ -95,6 +95,25 @@ async function main() {
       })
     }
 
+    /** スケッチの図形を**その最初の点**のクリックで選ぶ(他の実機検査と同じ道具)。 */
+    async function clickEntityHandle(entityId) {
+      return withoutBrowserPanel(page, async () => {
+        const at = await page.evaluate((id) => {
+          const hook = window.__duocad
+          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          const entity = active?.entities.find((item) => item.entity_id === id)
+          if (!entity) return null
+          const p = entity.params
+          const uv = 'cx' in p ? [p.cx, p.cy] : 'x0' in p ? [p.x0, p.y0] : [p.x, p.y]
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectSketchPoint(uv[0], uv[1])
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        }, entityId)
+        if (!at) fail(`図形 ${entityId} の点が画面の中に無い`)
+        await page.mouse.click(at.x, at.y)
+      })
+    }
+
     /** スケッチ平面の点を中心にした矩形を左ドラッグで引く(ウィンドウ選択)。 */
     async function dragBox(from, to, key = null) {
       return withoutBrowserPanel(page, async () => {
@@ -376,7 +395,73 @@ async function main() {
     if (lines.length !== 2) fail(`線分が2本になっていない: ${lines.length}`)
     ok(`copy=true で図形が複製された(図形 ${countBeforeCopy} → ${countBeforeCopy + 1}・元も残っている)`)
 
+    // ================================================================ 6b. スケッチを直接切り替えると選択が残らない
+    //
+    // **`exitSketch` を通らずにAからBへ移る道がある**(ビューポートに浮かぶブラウザの
+    // スケッチ名クリック)。外さないと、Bで動かしたつもりでAの図形が動き、反復verbには
+    // **Aの図形IDがBの文脈で**渡る(サーバは entity_id を素直に解決するので黙って通る)。
+    const sketchA = await page.evaluate(() => window.__duocad.activeSketch)
+    // Aの図形を1つ選んでおく
+    await withoutBrowserPanel(page, async () => {
+      const mid = await planeAt((LINE.x0 + LINE.x1) / 2, moved.params.y0)
+      if (!mid) fail('線分の中ほどが画面の中に無い')
+      await page.mouse.click(mid.x, mid.y)
+    })
+    await waitFor(
+      () => (window.__duocad.selection?.items ?? []).some((item) => item.entity !== undefined),
+      'Aの図形を選べない',
+    )
+    // Bを作る(XZ平面。Aとは別のスケッチ)
+    await page.click('#sketch-exit')
+    await waitFor(() => window.__duocad.activeSketch === null, 'Aを抜けられない')
+    await frameAll(page)
+    await page.click('#sketch-create')
+    {
+      const at = await page.evaluate(() => {
+        const rect = document.querySelector('.viewport').getBoundingClientRect()
+        const position = window.__duocad.projectBasePlane('XZ')
+        return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+      })
+      if (!at) fail('基準平面XZを指せる画素が無い')
+      await page.mouse.click(at.x, at.y)
+    }
+    await waitFor(
+      (a) => window.__duocad.activeSketch !== null && window.__duocad.activeSketch !== a,
+      'XZ平面に2枚目のスケッチを作れない',
+      [sketchA],
+    )
+    const sketchB = await page.evaluate(() => window.__duocad.activeSketch)
+    // **Aへ戻り、Aの図形を選んでから、ブラウザのスケッチ名クリックで直接Bへ移る**
+    await page.click('#sketch-exit')
+    await waitFor(() => window.__duocad.activeSketch === null, 'Bを抜けられない')
+    await page.click(`[data-sketch-id="${sketchA}"] .sketch-name`)
+    await waitFor((a) => window.__duocad.activeSketch === a, 'Aへ再入場できない', [sketchA])
+    await page.click('#sketch-look')
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    await clickEntityHandle(lines[0].entity_id)
+    await waitFor(
+      (a) =>
+        (window.__duocad.selection?.items ?? []).some(
+          (item) => item.entity !== undefined && item.sketch === a,
+        ),
+      'Aの図形を選び直せない',
+      [sketchA],
+    )
+    await page.click(`[data-sketch-id="${sketchB}"] .sketch-name`)
+    await waitFor((b) => window.__duocad.activeSketch === b, 'Bへ直接移れない', [sketchB])
+    await waitFor(
+      () =>
+        !(window.__duocad.selection?.items ?? []).some((item) => item.entity !== undefined) &&
+        (window.__duocad.selectedEntities ?? []).length === 0,
+      'Aの図形の選択がBへ持ち越されている(enterSketchが外していない)',
+    )
+    ok('スケッチAで選んだ図形は、Bへ直接移った時点で選択から外れる')
+
     // ================================================================ 7. 領域を押し出してボディを作る
+    await page.click('#sketch-exit')
+    await waitFor(() => window.__duocad.activeSketch === null, 'Bを抜けられない(2回目)')
+    await page.click(`[data-sketch-id="${sketchA}"] .sketch-name`)
+    await waitFor((a) => window.__duocad.activeSketch === a, 'Aへ戻れない', [sketchA])
     await page.click('#sketch-exit')
     await waitFor(() => window.__duocad.activeSketch === null, 'ツールバーの「抜ける」でスケッチを抜けられない')
     ok('ツールバーの「抜ける」でスケッチモードを抜けた(移設先が機能している)')
@@ -457,6 +542,102 @@ async function main() {
       fail(`ボディの移動で選択が消えた: ${JSON.stringify(selectionAfterBodyMove)}`)
     }
     ok('ボディの移動の後も面の選択が残っている(添字が失効しないため)')
+
+    // ================================================================ 8b. move_body は辺からも踏める
+    //
+    // `MOVE_BODY` の選択引数は面/辺/頂点の3種を食う(コアの `require_bodies` が
+    // `ShapeRef.body` から逆引きする)。**画面側の配線が本当に届いているか**を見る ——
+    // `CommandHost` が主たる種別しか要求しないと、辺のピックが開かないまま
+    // 「サーバは受け付けるのに画面から選べない」穴になる(2026-08-30に実際そうなっていた)。
+    // **Escはコマンドを畳むだけで選択は消えない**(選択の正はコア側)。面の選択を
+    // Ctrl+クリックのトグルで外してから、辺だけで踏めることを見る。
+    await page.evaluate(() => document.activeElement?.blur?.())
+    await page.keyboard.press('Escape')
+    {
+      const at = await page.evaluate(
+        (id, index) => {
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectFace(id, index)
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        },
+        bodyId,
+        faceIndex,
+      )
+      if (!at) fail('選択中の面が画面の中に無い')
+      await page.keyboard.down('Control')
+      await page.mouse.click(at.x, at.y)
+      await page.keyboard.up('Control')
+    }
+    await waitFor(
+      () => (window.__duocad.selection?.count ?? -1) === 0,
+      'Ctrl+クリックで面の選択を外せない',
+    )
+    await page.click('#move-body')
+    await waitFor(
+      () => window.__duocad.wantsEdges === true,
+      'move_body を起動しても辺を要求しない(kinds の配線が届いていない)',
+    )
+    let edgePicked = null
+    for (const edgeIndex of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      const at = await page.evaluate(
+        (id, index) => {
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectEdge(id, index)
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        },
+        bodyId,
+        edgeIndex,
+      )
+      if (!at) continue
+      await page.mouse.click(at.x, at.y)
+      try {
+        await page.waitForFunction(
+          (id, index) =>
+            (window.__duocad.selection?.items ?? []).some(
+              (item) => item.body === id && item.kind === 'edge' && item.index === index,
+            ),
+          { timeout: 5000, polling: 50 },
+          bodyId,
+          edgeIndex,
+        )
+        edgePicked = edgeIndex
+        break
+      } catch {
+        // その辺は取れなかった(裏に回っている)。次を試す
+      }
+    }
+    if (edgePicked === null) fail('move_body を起動しても辺を1本もクリックで選べない')
+    const beforeEdgeMove = await page.evaluate(
+      (id) => window.__duocad.getGeometry(id).bbox.center,
+      bodyId,
+    )
+    await page.click('#move-body-move')
+    await typeInto('#move-body-dx', 6)
+    await typeInto('#move-body-dy', 0)
+    await typeInto('#move-body-dz', 0)
+    await page.keyboard.press('Enter')
+    await waitFor(
+      (id, x) => {
+        const geometry = window.__duocad.getGeometry(id)
+        return Boolean(geometry && Math.abs(geometry.bbox.center[0] - (x + 6)) < 0.5)
+      },
+      '辺の選択から move_body してもボディが動かない',
+      [bodyId, beforeEdgeMove[0]],
+    )
+    ok(`辺 ${edgePicked} を選んで move_body できた(面だけでなく辺からもボディを指せる)`)
+
+    // 面の選択へ戻す(次の複製は面から踏む)
+    await page.evaluate(() => document.activeElement?.blur?.())
+    await page.keyboard.press('Escape')
+    await clickFace(page, bodyId, faceIndex)
+    await waitFor(
+      (id, index) =>
+        (window.__duocad.selection?.items ?? []).some(
+          (item) => item.body === id && item.kind === 'face' && item.index === index,
+        ),
+      '面を選び直せない',
+      [bodyId, faceIndex],
+    )
 
     // ================================================================ 9. move_body(複製)
     await page.click('#move-body')

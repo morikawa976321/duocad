@@ -291,7 +291,8 @@ async function main() {
         await page.evaluate(() =>
           JSON.stringify(
             (window.__duocad.selection?.items ?? [])
-              .filter((item) => 'sketch' in item)
+              // **領域だけ**(`sketch_entity` も `sketch` を持つ)
+              .filter((item) => 'sketch' in item && !('entity' in item))
               .map((item) => `${item.sketch}:${item.index}`),
           ),
         ),

@@ -291,7 +291,11 @@ async function main() {
     await page.click('#sketch-look')
     await clickRegion(1)
     await waitFor(
-      () => (window.__duocad.selection?.items ?? []).some((item) => 'sketch' in item),
+      // **領域だけ**(`sketch_entity` も `sketch` を持つ。`refKind` 相当の判定)
+      () =>
+        (window.__duocad.selection?.items ?? []).some(
+          (item) => 'sketch' in item && !('entity' in item),
+        ),
       '領域を選べない',
     )
     ok('領域を本物のクリックで選んだ')
@@ -335,7 +339,11 @@ async function main() {
     await page.click('#sketch-look')
     await clickRegion(1)
     await waitFor(
-      () => (window.__duocad.selection?.items ?? []).some((item) => 'sketch' in item),
+      // **領域だけ**(`sketch_entity` も `sketch` を持つ)
+      () =>
+        (window.__duocad.selection?.items ?? []).some(
+          (item) => 'sketch' in item && !('entity' in item),
+        ),
       '穴の領域を選べない',
     )
     await page.click('#extrude-regions')

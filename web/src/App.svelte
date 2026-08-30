@@ -605,6 +605,10 @@
     ...new Set(
       (selection?.items ?? [])
         .filter((item): item is SketchEntityRef => refKind(item) === 'sketch_entity')
+        // **編集中のスケッチのものだけ**(反復verbは `sketch_id` と `entities` を別々に送るので、
+        // 混ざると「このスケッチに無い図形ID」をサーバへ渡すことになる)。`enterSketch` が
+        // 他のスケッチの選択を外すのが本筋で、ここはそれを二重に守る側である。
+        .filter((item) => item.sketch === sketchId)
         .map((item) => item.entity),
     ),
   ])
@@ -943,6 +947,15 @@
   }
 
   function enterSketch(id: string): void {
+    // **他のスケッチの図形の選択は持ち込まない**(2026-08-30)。`exitSketch` を通らずに
+    // スケッチAからBへ直接移る道がある(ブラウザのスケッチ名クリック)ので、ここでも外す ——
+    // 外さないと、Bで `move_sketch_entities` を実行するとAの図形が動き、反復verbには
+    // **Aの図形IDがBの文脈で**渡る(サーバは `entity_id` を素直に解決するので黙って通る)。
+    // **同じスケッチへ入り直したときは何も外さない**(選び直しを強いる理由が無い)。
+    const foreign = (selection?.items ?? []).filter(
+      (item) => refKind(item) === 'sketch_entity' && (item as SketchEntityRef).sketch !== id,
+    )
+    if (foreign.length > 0) modifySelection([], foreign)
     sketchId = id
     hoverPoint = null
     viewport?.setActiveSketch(id)

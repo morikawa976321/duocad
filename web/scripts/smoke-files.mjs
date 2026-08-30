@@ -266,8 +266,10 @@ async function main() {
       }
       await waitFor(
         (expected) =>
-          (window.__duocad.selection?.items ?? []).filter((item) => 'sketch' in item).length ===
-          expected,
+          // **領域だけ**(`sketch_entity` も `sketch` を持つ)
+          (window.__duocad.selection?.items ?? []).filter(
+            (item) => 'sketch' in item && !('entity' in item),
+          ).length === expected,
         `領域を${count}個選べない`,
         count,
       )

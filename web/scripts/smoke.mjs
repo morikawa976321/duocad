@@ -1272,7 +1272,13 @@ async function main() {
     await page.waitForFunction(
       () => {
         const items = window.__duocad.selection?.items ?? []
-        return items.length === 1 && 'sketch' in items[0] && items[0].index === 1
+        // **領域だけ**(`sketch_entity` も `sketch` を持つので `entity` の無いほうを見る)
+        return (
+          items.length === 1 &&
+          'sketch' in items[0] &&
+          !('entity' in items[0]) &&
+          items[0].index === 1
+        )
       },
       { timeout, polling: 50 },
     )

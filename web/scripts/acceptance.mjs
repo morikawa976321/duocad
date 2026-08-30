@@ -519,7 +519,12 @@ async function main() {
       })
       await clickRegion(target)
       await waitFor(
-        () => (window.__duocad.selection?.items ?? []).some((item) => 'sketch' in item),
+        // **領域だけを数える** —— スケッチの図形の参照(`sketch_entity`)も `sketch` キーを
+        // 持つので、`'sketch' in item` だけだと**図形の選択でも「領域を選べた」が通る**。
+        () =>
+          (window.__duocad.selection?.items ?? []).some(
+            (item) => 'sketch' in item && !('entity' in item),
+          ),
         '領域を選べない',
       )
       await page.click('#extrude-regions')
