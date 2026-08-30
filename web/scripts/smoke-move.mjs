@@ -252,6 +252,17 @@ async function main() {
     }
     ok('左ドラッグのウィンドウ選択で、矩形に完全包含された点(x1)だけが選ばれた')
 
+    // **向きは問わない**(本人明言)。同じ矩形を右下→左上へ引いても同じ1点が選ばれる。
+    await dragBox([LINE.x1 + 4, LINE.y1 + 4], [LINE.x1 - 4, LINE.y1 - 4])
+    await waitFor(
+      () => {
+        const items = window.__duocad.selection?.items ?? []
+        return items.length === 1 && items[0].point === 'x1'
+      },
+      '逆向きに引いた矩形では選べない(ドラッグの向きで判定が変わっている)',
+    )
+    ok('矩形を逆向き(右下→左上)に引いても同じ点が選ばれた(向きで判定を変えない)')
+
     // **囲まなかったものは選ばれない**(完全包含の確認): 線分の中ほどだけを囲む
     await dragBox([LINE.x0 + 6, LINE.y0 - 3], [LINE.x1 - 6, LINE.y1 + 3])
     await waitFor(
