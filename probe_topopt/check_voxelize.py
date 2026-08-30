@@ -634,6 +634,33 @@ def check_cell_center_convention() -> None:
         f"原点/1e4/1e6/1e8/1e10 mm での符号付き体積 {[round(v, 6) for v in volumes]}(期待8000)",
     )
 
+    # (d4) **殻ごとの**符号付き体積も、その殻自身の点を基準点にすること(2026-08-31のQA第2
+    #      ラウンドの指摘)。三角形の側だけ部分集合にして基準点を soup 全体から取ると、
+    #      離れた位置にある小さな殻でその殻の座標が基準点から大きく離れ、桁落ちが戻ってくる。
+    #      軸整列した箱では三重積が偶然きれいに相殺してしまうので、**傾けた**小箱で見る。
+    far_shells = []
+    for source in (Box(40, 40, 40) - Box(20, 20, 20), Pos(1e7, 1e7, 1e7) * (Rotation(17, 23, 31) * Box(4, 4, 4))):
+        explorer = TopExp_Explorer(vx._unwrap(source), TopAbs_SHELL)
+        while explorer.More():
+            far_shells.append(TopoDS.Shell_s(explorer.Current()))
+            explorer.Next()
+    builder = BRep_Builder()
+    far_compound = TopoDS_Compound()
+    builder.MakeCompound(far_compound)
+    for sh in far_shells:
+        builder.Add(far_compound, sh)
+    far_report = vx.inspect_soup(vx.triangles_from_shape(far_compound, deviation=0.5))
+    far_volumes = sorted(far_report["component_volumes"])
+    check(
+        "殻ごとの符号付き体積も、遠くに離れた小さな殻で桁落ちしない",
+        far_report["components"] == 3
+        and abs(far_volumes[0] + 8000.0) < 1e-6
+        and abs(far_volumes[1] - 64.0) < 1e-6
+        and abs(far_volumes[2] - 64000.0) < 1e-6,
+        f"殻{far_report['components']}個 体積{far_volumes}(期待 [-8000, 64, 64000]。"
+        "基準点を soup 全体から取ると 1e7mm 先の小箱が 3542.34 になる)",
+    )
+
     # (d) 余白がちょうど pad 要素ぶんある(格子が形状にぴったり張り付いていない)。
     lo, hi = model.grid.world_box()
     margin_lo = np.array([-20.0, -10.0, -5.0]) - lo

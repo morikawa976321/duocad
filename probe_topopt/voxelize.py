@@ -254,15 +254,24 @@ class TriangleSoup:
         体積は平行移動に対して不変なので、基準点を引くのは数値の都合だけの操作。
 
         `triangles` に三角形の添字を渡すと、その部分集合だけの符号付き体積を返す
-        (連結成分ごとに見るため)。
+        (連結成分ごとに見るため)。このとき**基準点はその部分集合自身の点から取る**。
+        soup 全体の bbox 中心を使うと、離れた位置にある小さな殻でその殻の座標が基準点から
+        大きく離れ、桁落ちが戻ってくる(2026-08-31のQA第2ラウンドの指摘)。
         """
         p = self.positions
         t = self.triangles if triangles is None else self.triangles[triangles]
-        origin = 0.5 * (p.min(axis=0) + p.max(axis=0))
-        a = p[t[:, 0]] - origin
-        b = p[t[:, 1]] - origin
-        c = p[t[:, 2]] - origin
-        return float(np.einsum("ij,ij->i", a, np.cross(b, c)).sum() / 6.0)
+        a_raw = p[t[:, 0]]
+        b_raw = p[t[:, 1]]
+        c_raw = p[t[:, 2]]
+        lo = np.minimum(np.minimum(a_raw.min(axis=0), b_raw.min(axis=0)), c_raw.min(axis=0))
+        hi = np.maximum(np.maximum(a_raw.max(axis=0), b_raw.max(axis=0)), c_raw.max(axis=0))
+        origin = 0.5 * (lo + hi)
+        return float(
+            np.einsum(
+                "ij,ij->i", a_raw - origin, np.cross(b_raw - origin, c_raw - origin)
+            ).sum()
+            / 6.0
+        )
 
     def area(self) -> float:
         a, b, c = self.triangle_vertices()
