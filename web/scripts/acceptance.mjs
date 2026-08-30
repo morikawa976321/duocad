@@ -60,6 +60,8 @@ const VERBS = [
   'chamfer',
   'pattern_rectangular',
   'pattern_circular',
+  'move_sketch_entities',
+  'move_body',
   'set_parameter',
   'set_visible',
   'import_step',
@@ -68,6 +70,19 @@ const VERBS = [
   'undo',
   'redo',
 ]
+
+/**
+ * **人間側の口を持たない操作**(= AI/MCPからしか踏めない)。
+ *
+ * 2026-08-30に本人が右サイドバーの数値入力欄(`SketchPanel.svelte`)を廃止し、位置の
+ * 打ち直しを直接選択 + `move_sketch_entities` / `move_body` へ置き換えた。**寸法**
+ * (半径・幅高さ・角度)の打ち直し口は今回作らないと決めた(スコープ外)ので、
+ * `set_parameter` は人間側の手が無い —— 到達表の「人間」列は**空欄**が正である。
+ *
+ * **ここに足すのは「作らないと決めた」ときだけ**にすること。実装漏れをここへ入れると、
+ * 到達表が「作っていないから通っている」を隠す表になる。
+ */
+const AI_ONLY = new Set(['set_parameter'])
 
 const results = { human: {}, ai: {}, interleaved: null, physical: null, fov: null, zup: null }
 
@@ -89,6 +104,8 @@ function failedLabels(collected) {
   const failed = []
   for (const side of ['human', 'ai']) {
     for (const verb of VERBS) {
+      // 人間側の口を持たないと**決めた**操作は、人間列を見ない(上記 `AI_ONLY`)。
+      if (side === 'human' && AI_ONLY.has(verb)) continue
       const entry = collected[side][verb]
       // **未実行も失敗として数える。** 黙って飛ばされた操作は ❌ より始末が悪い。
       if (entry === undefined) failed.push(`${side}/${verb}(未実行)`)
@@ -206,6 +223,30 @@ async function main() {
       await page.keyboard.up('Control')
       await page.keyboard.press('Backspace')
       await page.type(selector, String(value), { delay: 12 })
+    }
+
+    /**
+     * スケッチの図形を**3Dのクリックで選ぶ**(2026-08-30。旧「図形一覧のボタン」の後継)。
+     *
+     * 図形の**最初の点**(円・円弧は中心、線分・ベジエは始点、長方形は左下)を狙う ——
+     * 点はその図形の上にあり、当たり判定も点が最優先なので確実に掴める。
+     */
+    async function clickEntityHandle(entityId) {
+      return withoutBrowserPanel(page, async () => {
+        const at = await page.evaluate((id) => {
+          const hook = window.__duocad
+          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          const entity = active?.entities.find((item) => item.entity_id === id)
+          if (!entity) return null
+          const p = entity.params
+          const uv = 'cx' in p ? [p.cx, p.cy] : 'x0' in p ? [p.x0, p.y0] : [p.x, p.y]
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectSketchPoint(uv[0], uv[1])
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        }, entityId)
+        if (!at) throw new Error(`図形 ${entityId} の点が画面の中に無い`)
+        await page.mouse.click(at.x, at.y)
+      })
     }
 
     async function clickPlane(u, v) {
@@ -398,7 +439,7 @@ async function main() {
         const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
         return active.entities.find((entity) => entity.kind === 'circle').entity_id
       })
-      await page.click(`[id="entity-${circleId}"]`)
+      await clickEntityHandle(circleId)
       await waitFor(
         (id) => (window.__duocad.selectedEntities ?? []).includes(id),
         '図形を反復の対象に選べない',
@@ -427,7 +468,7 @@ async function main() {
         },
         '反復のundoが効かない',
       )
-      return '図形を一覧から選ぶ → 間隔と個数を打つ(1×2で展開を確認し、undoで戻した)'
+      return '図形を3Dでクリックして選ぶ → 間隔と個数を打つ(1×2で展開を確認し、undoで戻した)'
     })
 
     await attempt('human', 'pattern_circular', async () => {
@@ -440,7 +481,7 @@ async function main() {
         (id) => (window.__duocad.selectedEntities ?? []).includes(id),
         circleId,
       )
-      if (!picked) await page.click(`[id="entity-${circleId}"]`)
+      if (!picked) await clickEntityHandle(circleId)
       await page.click('#pattern-circular')
       await clickPlane(20, 45)
       await typeInto('#pattern-count', 4)
@@ -622,40 +663,149 @@ async function main() {
       return `辺 ${picked} を選び、長さ1で面取りした(面 ${before} → ${(await look()).parts[0].faces})`
     })
 
-    await attempt('human', 'set_parameter', async () => {
-      const before = (await look()).parts[0].volume
-      // **打ち直すのはSketchPanel**(ParametersPanel廃止)。長方形はもうスケッチモードの
-      // 外にいる図形なので、「再開」(BrowserPanelの名前クリック)でそのスケッチへ戻ってから
-      // 図形の一覧の入力欄を打つ —— 人間が実際にやる手順そのもの。
+    // **`set_parameter` は人間側の口を持たない**(2026-08-30本人決定。上の `AI_ONLY`)。
+    // 寸法の打ち直し欄(旧 `SketchPanel.svelte`)を廃止し、位置の直しは下の2つの move へ
+    // 移した。ここで代わりに動かすのがその後継である。
+    await attempt('human', 'move_sketch_entities', async () => {
+      // 長方形はもうスケッチモードの外にいるので、「再開」(BrowserPanelの名前クリック)で
+      // そのスケッチへ戻ってから、図形の点を掴んで動かす —— 人間が実際にやる手順そのもの。
       await page.click(`[data-sketch-id="${humanSketchId}"] .sketch-name`)
       await waitFor(
         (id) => window.__duocad.activeSketch === id,
         '長方形のスケッチへ再入場できない',
         humanSketchId,
       )
+      // **正面から見る**。再入場の視点は「入る前」に戻る作り(2026-08-26)なので、
+      // 図形が画面の外に居ることがある —— 点を1画素で狙う操作には寄せ直しが要る。
+      await page.click('#sketch-look')
+      await new Promise((resolve) => setTimeout(resolve, 500))
       const target = await page.evaluate(() => {
         const hook = window.__duocad
         const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        for (const entity of active.entities) {
-          for (const [key, value] of Object.entries(entity.params)) {
-            if (Math.abs(value - 60) < 1e-9) return { entityId: entity.entity_id, key } // 長方形の幅
-          }
-        }
-        return null
+        const rectangle = active.entities.find((entity) => entity.kind === 'rectangle')
+        return rectangle ? { entityId: rectangle.entity_id, params: { ...rectangle.params } } : null
       })
-      if (!target) throw new Error('長方形の幅がSketchPanelの図形一覧に出ていない')
-      await typeInto(`[id="param-${target.entityId}-${target.key}"]`, 50)
+      if (!target) throw new Error('長方形が見つからない')
+      await clickEntityHandle(target.entityId)
+      await waitFor(
+        (id) =>
+          (window.__duocad.selection?.items ?? []).some(
+            (item) => item.entity === id && item.point === 'x',
+          ),
+        '長方形の左下の点をクリックで選べない',
+        target.entityId,
+      )
+      await page.click('#sketch-move')
+      await page.click('#sketch-move-move')
+      await typeInto('#sketch-move-dx', 3)
+      await typeInto('#sketch-move-dy', 0)
       await page.keyboard.press('Enter')
       await waitFor(
-        (previous) => Math.abs(window.__duocad.parts[0].volume - previous) > 1e-6,
-        '打ち直しても形が追随しない',
-        before,
+        (id, x) => {
+          const hook = window.__duocad
+          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          const rectangle = active?.entities.find((entity) => entity.entity_id === id)
+          return Boolean(rectangle && Math.abs(rectangle.params.x - (x + 3)) < 1e-6)
+        },
+        '点を動かしても座標が変わらない',
+        target.entityId,
+        target.params.x,
       )
-      const after = (await look()).parts[0].volume
+      await pressUndo(page) // 以降の受入が前提にしている形へ戻す
+      await waitFor(
+        (id, x) => {
+          const hook = window.__duocad
+          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          const rectangle = active?.entities.find((entity) => entity.entity_id === id)
+          return Boolean(rectangle && Math.abs(rectangle.params.x - x) < 1e-6)
+        },
+        '移動のundoが効かない',
+        target.entityId,
+        target.params.x,
+      )
       await page.click('#sketch-exit')
       await waitFor(() => window.__duocad.activeSketch === null, '長方形のスケッチを抜けられない')
-      return `SketchPanelで再開して ${target.key} を 60 → 50 に打ち直した(体積 ${before.toFixed(2)} → ${after.toFixed(2)})`
+      await frameAll(page)
+      return `再開して長方形の左下の点を掴み、X+3 して undo で戻した(x ${target.params.x.toFixed(2)})`
     })
+
+    await attempt('human', 'move_body', async () => {
+      // **通常モードでシーン全体を見る**。直前の操作がスケッチへ寄っていると面を指せない
+      // (このスクリプトは落ちても止めない作りなので、前の手が途中で落ちた場合も含めて
+      // ここで整える —— 1つの ❌ が後続を巻き込むと、到達表の意味が消える)。
+      if (await page.evaluate(() => window.__duocad.activeSketch !== null)) {
+        await page.click('#sketch-exit')
+        await waitFor(() => window.__duocad.activeSketch === null, 'スケッチモードを抜けられない')
+      }
+      await frameAll(page)
+      const before = await page.evaluate(
+        (id) => window.__duocad.getGeometry(id)?.bbox.center ?? null,
+        bodyId,
+      )
+      if (!before) throw new Error('ボディの形が画面へ届いていない')
+      const faceIndex = await page.evaluate((id) => {
+        const geometry = window.__duocad.getGeometry(id)
+        for (const face of geometry.faces) {
+          if (window.__duocad.projectFace(id, face.index)) return face.index
+        }
+        return null
+      }, bodyId)
+      if (faceIndex === null) throw new Error('画面から指せる面が1つも無い')
+      const at = await page.evaluate(
+        (id, index) => {
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectFace(id, index)
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        },
+        bodyId,
+        faceIndex,
+      )
+      if (!at) throw new Error(`面 ${faceIndex} が画面の中に無い`)
+      await page.mouse.click(at.x, at.y)
+      await waitFor(
+        (id, index) =>
+          (window.__duocad.selection?.items ?? []).some(
+            (item) => item.body === id && item.kind === 'face' && item.index === index,
+          ),
+        'ボディを指す面をクリックで選べない',
+        bodyId,
+        faceIndex,
+      )
+      await page.click('#move-body')
+      await page.click('#move-body-move')
+      await typeInto('#move-body-dx', 0)
+      await typeInto('#move-body-dy', 0)
+      await typeInto('#move-body-dz', 5)
+      await page.keyboard.press('Enter')
+      await waitFor(
+        (id, z) => {
+          const geometry = window.__duocad.getGeometry(id)
+          return Boolean(geometry && Math.abs(geometry.bbox.center[2] - (z + 5)) < 0.5)
+        },
+        'ボディがZ方向へ動かない',
+        bodyId,
+        before[2],
+      )
+      await pressUndo(page) // 以降の受入が前提にしている位置へ戻す
+      await waitFor(
+        (id, z) => {
+          const geometry = window.__duocad.getGeometry(id)
+          return Boolean(geometry && Math.abs(geometry.bbox.center[2] - z) < 0.5)
+        },
+        'ボディの移動のundoが効かない',
+        bodyId,
+        before[2],
+      )
+      return `面 ${faceIndex} を選んでボディをZ+5し、undoで戻した`
+    })
+
+    // **次の受入(`set_visible` 以降と交互操作)は通常モードを前提にしている。**
+    // 上の2つは落ちても止まらないので、抜け損ねた場合に備えてここで整える。
+    if (await page.evaluate(() => window.__duocad.activeSketch !== null)) {
+      await page.click('#sketch-exit')
+      await waitFor(() => window.__duocad.activeSketch === null, 'スケッチモードを抜けられない')
+      await frameAll(page)
+    }
 
     await attempt('human', 'set_visible', async () => {
       await page.click(`.parts-row[data-body-id="${bodyId}"] input.visible-toggle`)
@@ -864,6 +1014,44 @@ async function main() {
       const name = circle.parameters.radius
       await mcp.callTool('set_parameter', { name, value: 14 })
       return `${name} を 12 → 14 にした(describe_document の parameters から辿れる)`
+    })
+
+    await attempt('ai', 'move_sketch_entities', async () => {
+      const document = await mcp.callTool('describe_document', {})
+      const sketch = document.sketches.find((item) => item.sketch_id === aiSketch)
+      const circle = sketch.entities.find((item) => item.entity_id === aiCircle)
+      const before = circle.params.cx
+      await mcp.callTool('propose_selection', {
+        refs: [{ sketch: aiSketch, entity: aiCircle, point: 'cx' }],
+      })
+      // **提案のままでは渡せない**(選択の門はAIにも同じに効く)
+      await mcp.callTool('commit_selection')
+      const applied = await mcp.callTool('move_sketch_entities', { dx: 2, dy: 0 })
+      const after = (await mcp.callTool('describe_document', {})).sketches
+        .find((item) => item.sketch_id === aiSketch)
+        .entities.find((item) => item.entity_id === aiCircle).params.cx
+      if (Math.abs(after - (before + 2)) > 1e-6) {
+        throw new Error(`円の中心が動いていない: ${before} -> ${after}`)
+      }
+      await mcp.callTool('undo', {}) // 以降のAI側の筋書きが前提にしている形へ戻す
+      return `円の中心の点を選んで X+2 した(seq ${applied.seq})。undoで戻した`
+    })
+
+    await attempt('ai', 'move_body', async () => {
+      const before = (await mcp.callTool('describe_document', { include_bbox: true })).bodies
+        .find((item) => item.body_id === aiBody)
+      if (!before?.bbox) throw new Error('bboxが返らない(include_bbox)')
+      await mcp.callTool('propose_selection', {
+        refs: [{ body: aiBody, kind: 'face', index: 1 }],
+      })
+      await mcp.callTool('commit_selection')
+      await mcp.callTool('move_body', { dx: 0, dy: 0, dz: 7 })
+      const after = (await mcp.callTool('describe_document', { include_bbox: true })).bodies
+        .find((item) => item.body_id === aiBody)
+      const lift = after.bbox.center[2] - before.bbox.center[2]
+      if (Math.abs(lift - 7) > 1e-6) throw new Error(`ボディがZ+7動いていない: ${lift}`)
+      await mcp.callTool('undo', {})
+      return `面1でボディを名指しして Z+7 した(体積は ${after.volume.toFixed(1)} のまま)。undoで戻した`
     })
 
     await attempt('ai', 'set_visible', async () => {
@@ -1601,12 +1789,14 @@ async function main() {
       const midY = rect.top + rect.height / 2
       const centerX = rect.left + rect.width / 2
       const swing = Math.min(220, rect.width / 3)
+      // **右ボタンで回す**(2026-08-30にマウスの割り当てを変えた —— 左ドラッグは
+      // ウィンドウ選択、中ドラッグはパン、回転は右になった。本人決定)。
       await page.mouse.move(centerX - swing, midY)
-      await page.mouse.down()
+      await page.mouse.down({ button: 'right' })
       for (let i = 1; i <= 10; i += 1) {
         await page.mouse.move(centerX - swing + (2 * swing * i) / 10, midY)
       }
-      await page.mouse.up()
+      await page.mouse.up({ button: 'right' })
       const turned = await settledPose()
       const turnedOffset = turned.position.map((value, i) => value - turned.target[i])
       const azimuthBefore = Math.atan2(offset[1], offset[0])
@@ -1616,7 +1806,7 @@ async function main() {
       const radius = Math.hypot(...offset)
       if (azimuthDelta < 0.5) {
         throw new Error(
-          `水平に${(2 * swing).toFixed(0)}画素ドラッグしても方位が ${azimuthDelta.toFixed(3)} rad しか回らない(オービットが効いていない)`,
+          `水平に${(2 * swing).toFixed(0)}画素**右ドラッグ**しても方位が ${azimuthDelta.toFixed(3)} rad しか回らない(オービットが効いていない)`,
         )
       }
       const heightDrift = Math.abs(turnedOffset[2] - offset[2])

@@ -72,3 +72,39 @@ def test_the_three_entity_kind_tables_agree_on_their_key_set():
         f"sketchのみ={sorted(canonical - ts_keys)})。"
         "新しい図形種別は entityKinds.ts にも1行(fromArgs・toPoints)足すこと。"
     )
+
+
+def _ts_point_keys() -> dict:
+    """`web/src/entityKinds.ts` の各種別の `pointKeys` をソースから拾う。
+
+    `<name>: {` の直後の行が `pointKeys: [...]` である前提で読む(表の書き方の規約)。
+    読めなかった種別は入らないので、下の検査が「片方にしか無い」で落ちる。
+    """
+    text = ENTITY_KINDS_TS.read_text(encoding="utf-8")
+    start = text.index("const ENTITY_KIND_TABLE")
+    end = text.index("export const ENTITY_KINDS")
+    block = text[start:end]
+    found: dict = {}
+    pattern = "^  (\w+): \{\n    pointKeys: (\[.*\]),$"
+    for kind, body in re.findall(pattern, block, re.M):
+        pairs = re.findall(r"\['(\w+)', '(\w+)'\]", body)
+        found[kind] = tuple(pairs)
+    return found
+
+
+def test_the_movable_point_tables_agree():
+    """**動かせる点の定義がPythonとTSで一致する。**
+
+    参照の `point` は「xキー」そのもの(`duocad/selection.py` の `SKETCH_ENTITY_KIND`)なので、
+    片方だけ直すと**画面が送った点の名前をコアが知らない**という形で落ちる ——
+    落ちるだけましだが、順序だけがずれた場合は「別の点が動く」という静かな事故になる。
+    """
+    ts_table = _ts_point_keys()
+    assert ts_table, "web/src/entityKinds.ts の pointKeys を読めていない"
+    python_table = {kind: tuple(sketch.entity_point_keys(kind)) for kind in sketch.ENTITY_KINDS}
+    assert ts_table == python_table, (
+        "動かせる点の表が食い違う"
+        f"(TS={ts_table} / Python={python_table})。"
+        "duocad/sketch.py の EntityKindOps.points と web/src/entityKinds.ts の pointKeys は"
+        "**順序も含めて**同じでなければならない"
+    )

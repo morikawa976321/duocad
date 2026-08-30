@@ -26,6 +26,7 @@ from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Copy,
+    BRepBuilderAPI_Transform,
     BRepBuilderAPI_MakeEdge,
     BRepBuilderAPI_MakeFace,
     BRepBuilderAPI_MakeWire,
@@ -54,7 +55,7 @@ from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
 from OCP.TopTools import TopTools_IndexedMapOfShape, TopTools_ListOfShape
 from OCP.TColgp import TColgp_Array1OfPnt
-from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pnt, gp_Vec
+from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
 #: describe_shape の faces_by_type が持つキー(この順序が正。query.py が初期化に使う)
 FACE_KINDS = (
@@ -388,6 +389,35 @@ DEFAULT_ANGULAR_DEFLECTION = 0.35
 
 #: 面の同一性を「重心の一致」で判定するときの相対許容差(after_face_index の探索)。
 _MATCH_TOL = 1.0e-6
+
+
+def translate_shape(
+    shape: "TopoDS_Shape", dx: float, dy: float, dz: float, *, copy: bool = False
+) -> "TopoDS_Shape":
+    """形状を (dx, dy, dz) だけ平行移動した形状を返す(元の形状は変えない)。
+
+    **面・辺・頂点の添字が変わらないこと**がこの関数の要点である。`move_body` の後も
+    選択に入っている参照がそのまま同じ実体を指し続けるので、確定選択をリセットしなくてよい
+    (`catalog.Command.resets_selection` の注記)。
+
+    - `copy=False` … `TopoDS_Shape.Moved` で**位置だけを差し替える**。下層の形状(TShape)を
+      共有するので、面の数え上げの順序は原理的に不変で、再計算も走らない(数十MBの
+      読み込みSTEPでも一瞬)。
+    - `copy=True`  … `BRepBuilderAPI_Transform(..., Copy=True)` で**独立した形状**を作る。
+      複製元と実体を共有すると、後から片方をフィレットしたときにもう片方の由来が壊れる。
+
+    **移動の合成は厳密**である。`gp_Trsf` の平行移動どうしの積は並進ベクトルの和になり、
+    `T(-d) * T(d)` は誤差なく単位変換に戻る —— `move_body` の undo が逆向きの平行移動で
+    済むのはこのため(形状のスナップショットを控えなくてよい)。
+    """
+    trsf = gp_Trsf()
+    trsf.SetTranslation(gp_Vec(float(dx), float(dy), float(dz)))
+    if copy:
+        builder = BRepBuilderAPI_Transform(shape, trsf, True)
+        if not builder.IsDone():
+            raise ValueError("形状の平行移動(複製)に失敗した")
+        return builder.Shape()
+    return shape.Moved(TopLoc_Location(trsf))
 
 
 def face_count(shape: "TopoDS_Shape") -> int:

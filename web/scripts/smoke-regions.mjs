@@ -55,6 +55,7 @@
  */
 import { findBrowser, launchBrowser, withoutBrowserPanel } from './browser.mjs'
 import { fail, ok, parseArgs } from './args.mjs'
+import { McpClient } from './mcp-client.mjs'
 import { startServer } from './server.mjs'
 
 const options = parseArgs(process.argv.slice(2))
@@ -83,6 +84,10 @@ async function main() {
   console.log(`smoke-regions: ${executablePath}`)
 
   const server = attachUrl === null ? await startServer({ wsPort, httpPort }) : null
+  // **MCPの口**(2026-08-30)。数値の打ち直し(`set_parameter`)は人間側のUIを持たなく
+  // なったので、その1手だけを同じプロセスのMCP側から打つ。`--attach` で外のサーバへ
+  // 繋いだときは子プロセスを持たないので `null` になり、使う直前に落とす(黙って飛ばさない)。
+  const mcp = server === null ? null : new McpClient(server.child, { timeout })
   const url = server?.url ?? attachUrl
   console.log(`  server : ${url}${server === null ? ' (既に立っているサーバへ接続)' : ''}`)
 
@@ -553,8 +558,18 @@ async function main() {
       'discSketchへ再入場できない',
       discSketch,
     )
-    await typeInto(`[id="param-${circleBEntityId}-radius"]`, DISC_B.shrunk)
-    await page.keyboard.press('Enter')
+    // **径の打ち直しはAI(MCP)の口だけになった**(2026-08-30に数値入力欄を廃止)。
+    // ここで見たいのは「選んだ領域が消える形の変更で `resets_selection` が効くか」で、
+    // それは**どの経路から打っても同じコアの契約**である(MCPもWSも `Session` を通る)。
+    const radiusName = await page.evaluate((id) => {
+      const hook = window.__duocad
+      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      return active.entities.find((entity) => entity.entity_id === id).refs.radius
+    }, circleBEntityId)
+    if (!radiusName) fail('2つめの円の半径に名前つきの値が付いていない')
+    if (mcp === null) fail('--attach では径を縮める操作を打てない(MCPの口が要る)')
+    await mcp.handshake('duocad-smoke-regions')
+    await mcp.callTool('set_parameter', { name: radiusName, value: DISC_B.shrunk })
     await waitFor(
       (sketch) => {
         const target = window.__duocad.sketches.find((item) => item.sketch_id === sketch)
@@ -578,7 +593,7 @@ async function main() {
       )
     }
     ok(
-      '**(a) resets_selection**: 添字3を選んだ状態でSketchPanelから径を縮めたら、' +
+      '**(a) resets_selection**: 添字3を選んだ状態で径を縮めたら、' +
         'コアが選択を1件→0件に空にした(領域は3→2、添字3は実在しなくなった)',
     )
 

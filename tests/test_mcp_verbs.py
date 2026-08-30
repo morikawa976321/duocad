@@ -60,6 +60,9 @@ VERB_TOOLS = {
     "chamfer",
     "pattern_rectangular",
     "pattern_circular",
+    # 位置(2026-08-30。スケッチパラメータパネルの後継)
+    "move_sketch_entities",
+    "move_body",
     # ボディ・パラメータ
     "set_parameter",
     # 入出力
@@ -141,6 +144,9 @@ ARGUMENTS: dict = {
     "extrude": ({"distance", "mode", "body_id"}, {"distance"}),
     "extrude_face": ({"distance"}, {"distance"}),
     "fillet": ({"radius"}, {"radius"}),
+    # 位置の平行移動。**対象は選択から取る**ので引数は移動量と copy だけ
+    "move_sketch_entities": ({"dx", "dy", "copy"}, {"dx", "dy"}),
+    "move_body": ({"dx", "dy", "dz", "copy"}, {"dx", "dy", "dz"}),
     "chamfer": ({"distance"}, {"distance"}),
     "pattern_rectangular": (
         {"sketch_id", "entities", "dx", "dy", "nx", "ny"},

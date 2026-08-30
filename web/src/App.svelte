@@ -20,7 +20,9 @@
   import {
     COMMANDS,
     faceRef,
+    refKind,
     sameRef,
+    sketchEntityRef,
     type CommandCategory,
     type Point2,
     type SelectableKind,
@@ -37,10 +39,10 @@
     SKETCH_CREATE,
     ghostEntity,
     runsOutsideSketch,
+    runsWithoutSketchId,
   } from './commands/sketch'
   import FilesPanel from './FilesPanel.svelte'
   import BrowserPanel from './BrowserPanel.svelte'
-  import SketchPanel from './SketchPanel.svelte'
   import Toast, { showToast } from './Toast.svelte'
   import {
     createSession,
@@ -58,6 +60,7 @@
     type SelectionState,
     type ServerState,
     type ShapeRef,
+    type SketchEntityRef,
     type SketchState,
     type VerticesPayload,
   } from './session'
@@ -68,6 +71,7 @@
     createViewport,
     FOV_DEFAULT,
     FOV_ORTHO,
+    type BoxSelectEvent,
     type PickEvent,
     type SketchDraw,
     type VertexMarker,
@@ -159,8 +163,6 @@
   let vertices = $state<Record<string, VerticesPayload>>({})
   /** 取り寄せ中のもの(辺と同じ形の印)。 */
   let verticesAsked = new Set<string>()
-  /** スケッチパネルで選んだ図形(反復のverbの引数。共有選択集合には入らない)。 */
-  let selectedEntities = $state<string[]>([])
 
   // ---------------------------------------------------------------- E: ファイルと履歴
   /** 直前に書いたファイル(画面の右上に出す。書き出しは他に痕跡が残らない)。 */
@@ -222,6 +224,14 @@
    * 開閉を挟んだら取り直すこと。
    */
   let dataPanelOpen = $state(true)
+  /**
+   * 右サイドバー(`AiPanel` だけ = **完全にAI専用**)を開いているか(2026-08-30本人決定)。
+   *
+   * 左サイドバー(`dataPanelOpen`)と**同じ形**にしてある —— `{#if}` で `<aside>` ごと
+   * 出し分け、開閉ボタンはヘッダーの逆端(`#sidebar-toggle`)。`.viewport` のサイズ指定は
+   * 動かさず、flex の配分だけが変わる(左と同じ不変条件)。
+   */
+  let sidebarOpen = $state(true)
   /**
    * 設定ダイアログ(`SettingsDialog.svelte`)を出しているか。**既定は閉じている。**
    * 見た目だけの状態で、コアにも操作ログにも行かない。
@@ -411,15 +421,8 @@
     if (sketchId !== null && !sketches.some((item) => item.sketch_id === sketchId)) {
       exitSketch() // undoでスケッチごと消えた
     }
-    // 反復に使った図形は反復に吸収され、undoで戻ればまた現れる。**消えたIDを
-    // 持ち続けない** —— 存在しない図形を引数にした反復は、押した瞬間にサーバで
-    // KeyError になるだけで、なぜ失敗したかが画面から分からない。
-    const known = new Set(
-      sketches.flatMap((item) => item.entities.map((entity) => entity.entity_id)),
-    )
-    if (selectedEntities.some((id) => !known.has(id))) {
-      selectedEntities = selectedEntities.filter((id) => known.has(id))
-    }
+    // **消えた図形のIDを持ち続ける心配は無くなった**(2026-08-30) —— 反復の対象は
+    // 共有選択集合から導くようになり、選択の掃除はコア側の責務になった。
 
     // **選択の変更イベントはverbの適用ではない**(`change: "selection"` で見分ける。
     // session.ts の `Applied` 参照)。verbの応答としてだけ `lastApplied` を動かす。
@@ -535,8 +538,8 @@
   /**
    * ファイル名を渡して保存する(新規保存も一覧からの上書きも同じverb)。
    *
-   * **`pendingOp` は立てない** —— `SketchPanel.svelte` の `onSetParameter`(打ち直し)と同じ
-   * 理由で、`FilesPanel.svelte` は `CommandHost` の応答待ちの外にいる。
+   * **`pendingOp` は立てない** —— `FilesPanel.svelte` は `CommandHost` の応答待ちの外にいる
+   * (一覧からのクリックは「対象を選ぶ」そのもので、引数収集の状態機械を通す理由が無い)。
    */
   function saveDocumentAs(name: string): void {
     const op = nextOp()
@@ -587,6 +590,25 @@
 
   // ---------------------------------------------------------------- 選択(コアを叩くだけ)
   const selection = $derived(model?.selection ?? null)
+  /**
+   * 反復のverbが引数で取る図形のID。
+   *
+   * **共有選択集合から導く**(2026-08-30)。スケッチの図形が選択の一種になった
+   * (`sketch_entity`)ので、以前の「スケッチパネルの一覧でだけ選べる」局所状態は要らない ——
+   * パネルごと消し、3Dのクリック/ドラッグで選んだものをそのまま反復の対象にする。
+   * 点で選んでも辺で選んでも**その図形1つ**を指す(重複は畳む)。
+   *
+   * **コア側では今までどおり引数**である(`entities` は選択集合から取らない。
+   * `duocad/catalog.py` の `pattern_rectangular` の note)—— 変えたのは人が選ぶ場所だけ。
+   */
+  const selectedEntities = $derived([
+    ...new Set(
+      (selection?.items ?? [])
+        .filter((item): item is SketchEntityRef => refKind(item) === 'sketch_entity')
+        .map((item) => item.entity),
+    ),
+  ])
+
   const selectedFaces = $derived(
     (selection?.items ?? []).filter(
       (item): item is ShapeRef => !('sketch' in item) && (item as ShapeRef).kind === 'face',
@@ -748,8 +770,9 @@
   /**
    * 1つの参照を選択集合の編集へ翻訳する(面・辺・領域で同じ規則。すべて3Dのクリック経由)。
    *
-   * Shift=追加 / Ctrl=除去 / 修飾なし=置き換え(`'replace'`)。置き換えは
-   * **1つだけ選んでいるものを再クリックしたら外す**(狙いを外したときに素で解除できる)。
+   * Shift / Ctrl=トグル(選ばれていれば外す・いなければ足す) / 修飾なし=置き換え。
+   * **除外専用の修飾キーは無い**(2026-08-30本人決定。間違えたらもう一度クリックする)。
+   * 置き換えは **1つだけ選んでいるものを再クリックしたら外す**(狙いを外したときに素で解除できる)。
    *
    * 置き換えのとき**自分自身は remove に入れない** —— コアは remove を後に適用するので、
    * 入れると足したそばから外れる(`duocad/selection.py` の契約)。
@@ -757,10 +780,47 @@
   function editSelection(ref: SelectionRef, mode: PickEvent['mode']): void {
     const current = selection?.items ?? []
     const already = current.some((item) => sameRef(item, ref))
-    if (mode === 'add') modifySelection([ref], [])
-    else if (mode === 'remove') modifySelection([], [ref])
-    else if (already && current.length === 1) modifySelection([], [ref])
+    if (mode === 'toggle') {
+      if (already) modifySelection([], [ref])
+      else modifySelection([ref], [])
+    } else if (already && current.length === 1) modifySelection([], [ref])
     else selectOnly(ref)
+  }
+
+  /**
+   * ウィンドウ選択(左ドラッグ)を選択集合の編集へ翻訳する。
+   *
+   * - 修飾なし … 囲んだものだけが選ばれている状態にする(**囲まなかったものは全部外れる**)。
+   *   空の矩形は「全部外す」であって空振りではない —— 何もない所を素でクリックしたときに
+   *   選択が解除されるのと同じ規則。
+   * - Shift / Ctrl … 囲んだものを1つずつトグルする(既存の選択は消さない)。
+   *
+   * **1回の `modify_selection` にまとめる**。参照ごとに送ると、20個囲んだドラッグが
+   * 20往復になり、途中の状態が全部画面へ配信される。
+   */
+  function onBoxSelect(event: BoxSelectEvent): void {
+    const picked: SelectionRef[] = [
+      ...event.faces.map((item) => faceRef(item.bodyId, item.faceIndex)),
+      ...event.edges.map((item) => ({ body: item.bodyId, kind: 'edge' as const, index: item.edgeIndex })),
+      ...event.vertices.map((item) => ({ body: item.bodyId, kind: 'vertex' as const, index: item.vertexIndex })),
+      ...event.regions.map((item) => ({ sketch: item.sketchId, index: item.index })),
+      ...event.sketchEntities.map((item) => sketchEntityRef(item.sketchId, item.entityId, item.point)),
+    ]
+    const current = selection?.items ?? []
+    if (event.mode === 'toggle') {
+      const already = picked.filter((ref) => current.some((item) => sameRef(item, ref)))
+      const fresh = picked.filter((ref) => !current.some((item) => sameRef(item, ref)))
+      modifySelection(fresh, already)
+      return
+    }
+    if (picked.length === 0) {
+      if (current.length > 0) session.clearSelection(nextOp())
+      return
+    }
+    modifySelection(
+      picked,
+      current.filter((item) => !picked.some((ref) => sameRef(item, ref))),
+    )
   }
 
   /**
@@ -837,11 +897,20 @@
 
   // ---------------------------------------------------------------- C: スケッチ
   const sketches = $derived(model?.sketches ?? [])
+  /** 今編集しているスケッチ(ツールバーの札が読む)。モード外・まだ届いていなければ null。 */
+  const activeSketch = $derived(
+    sketches.find((item) => item.sketch_id === sketchId) ?? null,
+  )
 
   /** 描画指示を組み立てる(選択中の領域だけ強調色になる)。 */
   function sketchDraws(): SketchDraw[] {
     const selectedRegions = (selection?.items ?? [])
-      .filter((item): item is { sketch: string; index: number } => 'sketch' in item)
+      // **`sketch` を持つ参照は2種類ある**(領域とスケッチの図形)。`refKind` で分ける ——
+      // `'sketch' in item` だけで拾うと、選んだ点が「領域の添字」として読まれる。
+      .filter((item): item is { sketch: string; index: number } => refKind(item) === 'region')
+    const selectedHandles = (selection?.items ?? []).filter(
+      (item): item is SketchEntityRef => refKind(item) === 'sketch_entity',
+    )
     return sketches
       .filter((item) => item.frame !== null)
       .map((item) => ({
@@ -852,6 +921,20 @@
         selectedRegions: selectedRegions
           .filter((ref) => ref.sketch === item.sketch_id)
           .map((ref) => ref.index),
+        // **点・辺を出すのは編集中のスケッチだけ**。全スケッチに出すと、通常モードの
+        // 画面が点だらけになるうえ、指せないもの(モード外のスケッチの図形)が
+        // 指せそうに見える(UI指針: 必要なものだけを出す)。
+        handles:
+          item.sketch_id === sketchId
+            ? item.entities.map((entity) => ({
+                entityId: entity.entity_id,
+                kind: entity.kind as string,
+                params: entity.params,
+              }))
+            : [],
+        selectedHandles: selectedHandles
+          .filter((ref) => ref.sketch === item.sketch_id)
+          .map((ref) => ({ entityId: ref.entity, point: ref.point })),
       }))
   }
 
@@ -868,9 +951,13 @@
   }
 
   function exitSketch(): void {
+    // **スケッチの図形の選択は持ち越さない**(モードを抜けたら指せなくなるものが
+    // 選ばれたまま残ると、通常モードのverbが「種別が違う」で断るだけになる)。
+    // 領域・面の選択はそのまま残す —— 抜けてから押し出す経路がある。
+    const staying = (selection?.items ?? []).filter((item) => refKind(item) === 'sketch_entity')
+    if (staying.length > 0) modifySelection([], staying)
     sketchId = null
     hoverPoint = null
-    selectedEntities = [] // 反復の対象はモードを抜けたら持ち越さない
     viewport?.setActiveSketch(null)
   }
 
@@ -885,6 +972,19 @@
     if (event.point && host?.wantsPoint()) {
       if (host.addPoint(event.point.u, event.point.v)) return
     }
+    // **図形は領域より先**(点・辺は領域の縁に乗っているので、領域が勝つと端点を掴めない)。
+    // 描くコマンドが起動している間は上の `addPoint` が先に食うので、ここへは来ない。
+    if (event.sketchEntity) {
+      editSelection(
+        sketchEntityRef(
+          event.sketchEntity.sketchId,
+          event.sketchEntity.entityId,
+          event.sketchEntity.point,
+        ),
+        event.mode,
+      )
+      return
+    }
     if (event.region) {
       editSelection({ sketch: event.region.sketchId, index: event.region.index }, event.mode)
       return
@@ -894,20 +994,7 @@
     }
   }
 
-  function setParameter(name: string, value: number): void {
-    session.runVerb('set_parameter', { name, value }, nextOp())
-  }
 
-  /**
-   * 反復の対象にする図形を選ぶ/外す。**共有選択集合には入れない** ——
-   * コアの選択集合が持てるのは面・辺・頂点・領域の4種で、図形はそこに入らない
-   * (MCP側も反復だけは図形IDを引数で受けている)。ここがその人間側の対。
-   */
-  function toggleEntity(entityId: string): void {
-    selectedEntities = selectedEntities.includes(entityId)
-      ? selectedEntities.filter((item) => item !== entityId)
-      : [...selectedEntities, entityId]
-  }
 
   // ---------------------------------------------------------------- コマンド層との繋ぎ
   /**
@@ -944,7 +1031,13 @@
         viewport?.showSketchGhost(sketchId, null) // 本物を頼んだので幽霊は消す
         // **引数名はコマンド定義とサーバの宣言で既に揃っている**(p0/p1・center/radius・
         // corner/width/height・center/radius/start_deg/end_deg)。ここで詰め替えない。
-        session.runVerb(verb, { ...args, sketch_id: sketchId }, op)
+        // **`move_sketch_entities` だけは `sketch_id` を足さない** —— どのスケッチかは
+        // 選んだ参照(`{sketch, entity, point}`)が持っている(`runsWithoutSketchId`)。
+        session.runVerb(
+          verb,
+          runsWithoutSketchId(verb) ? args : { ...args, sketch_id: sketchId },
+          op,
+        )
         return
       }
       // -------------------------------------------------------------- D: フィーチャ
@@ -1004,7 +1097,8 @@
     sks: SketchState[] = sketches,
   ): boolean {
     const refs = (sel?.items ?? []).filter(
-      (item): item is { sketch: string; index: number } => 'sketch' in item,
+      // 領域だけ(スケッチの図形の参照も `sketch` を持つので `refKind` で分ける)
+      (item): item is { sketch: string; index: number } => refKind(item) === 'region',
     )
     return refs.every((ref) =>
       sks.some(
@@ -1093,6 +1187,7 @@
     // 画面に出ないままになる(Svelte 5 runesの罠)。
     viewport.setFov(fov)
     viewport.onPick(onPick)
+    viewport.onBoxSelect(onBoxSelect)
     viewport.onPlaneMove((point) => {
       hoverPoint = point === null ? null : [point.u, point.v]
     })
@@ -1299,12 +1394,41 @@
     <button id="settings-open" class="tag" onclick={() => (settingsOpen = true)} title="設定を開く">
       設定
     </button>
+    <!-- 右サイドバー(AI)の開閉。**ヘッダーの右端**(ファイル一覧の開閉ボタンと同じ段の逆端。
+         2026-08-30本人指定)。`margin-left:auto` で押し出すので、間に何を足しても右端に残る。 -->
+    <button
+      id="sidebar-toggle"
+      class="tag end"
+      class:on={sidebarOpen}
+      onclick={() => (sidebarOpen = !sidebarOpen)}
+      title="AIパネルの表示/非表示"
+      aria-pressed={sidebarOpen}
+    >
+      AI
+    </button>
   </header>
 
   <!-- コマンドのツールバー。モードが変わったらコマンド層を作り直す(集めかけの引数を持ち越さない)。
        `FilesPanel` はここには載らない —— 2026-08-23にいったんここへ統合したが、
        2026-08-26に本人が左サイドバーへの復元を決定した(下の `.main` 直下の `.data-panel` 参照)。 -->
   <section class="toolbar">
+    <!-- **スケッチモードの札とモード操作**(2026-08-30に `SketchPanel.svelte` から移設)。
+         右サイドバーをAI専用にするため、モード表示・「正面から見る」・「抜ける」は
+         モードに応じて作り直されるこのツールバー側へ移した(本人決定)。
+         idは移設前と同じにしてある —— 実機検査が叩く口を変える理由が無い。 -->
+    {#if sketchId !== null && activeSketch}
+      <div class="mode-row">
+        <span class="label">スケッチ</span>
+        <span id="sketch-mode" class="tag on">
+          編集中 {activeSketch.plane.kind === 'base' ? activeSketch.plane.name : '面に貼ったスケッチ'}
+          ・図形 {activeSketch.entities.length} ・領域 {activeSketch.regions.length}
+        </span>
+        <button id="sketch-look" onclick={() => sketchId && viewport?.lookAtSketch(sketchId)}>
+          正面から見る
+        </button>
+        <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
+      </div>
+    {/if}
     {#key sketchId === null}
       <CommandHost
         bind:this={host}
@@ -1362,35 +1486,23 @@
       />
     </div>
 
-    <!-- AI・パラメータ・スケッチをまとめた右サイドバー。
-         .sidebar は overflow-y:auto で自分の中だけスクロールするので、
-         中のパネルが増減しても .viewport のサイズは変わらない(射影が動かない)。 -->
-    <aside class="sidebar">
-      <AiPanel
-        status={aiStatus}
-        transcript={aiTranscript}
-        onSend={sendAiMessage}
-        onCancel={() => session.aiCancel()}
-        onConfigure={(providerKind, modelName, baseUrl) =>
-          session.aiConfigure(providerKind, modelName, baseUrl)}
-      />
-
-      <!-- **スケッチモード中だけ**出す(2026-08-27本人裁定 [[duocad-show-only-what-is-needed]]
-           2段目「明確に必要でないものは出さない」)。通常モードでの再開は
-           BrowserPanelのスケッチ名クリック(`onEnterSketch`)に一本化してあるので、
-           ここに戻る口は無い。 -->
-      {#if sketchId !== null}
-        <SketchPanel
-          {sketches}
-          activeSketchId={sketchId}
-          onExit={exitSketch}
-          onLookAt={() => sketchId && viewport?.lookAtSketch(sketchId)}
-          onSetParameter={setParameter}
-          selectedEntities={selectedEntities}
-          onToggleEntity={toggleEntity}
+    <!-- 右サイドバー。**AiPanel だけ = 完全にAI専用**(2026-08-30本人決定)。
+         `SketchPanel.svelte` はここから外し、モード表示・「正面から見る」・「抜ける」は
+         上のコマンドツールバーへ移した(数値の打ち直しは `move_sketch_entities` が引き受ける)。
+         `{#if}` で `<aside>` ごと出し分けるのは左サイドバーと同じ形で、`.viewport` の
+         サイズ指定は動かさず flex の配分だけが変わる。 -->
+    {#if sidebarOpen}
+      <aside class="sidebar">
+        <AiPanel
+          status={aiStatus}
+          transcript={aiTranscript}
+          onSend={sendAiMessage}
+          onCancel={() => session.aiCancel()}
+          onConfigure={(providerKind, modelName, baseUrl) =>
+            session.aiConfigure(providerKind, modelName, baseUrl)}
         />
-      {/if}
-    </aside>
+      </aside>
+    {/if}
 
     <!-- エラーの札。**`.main` の中に置くが大きさは持たない**(position:absolute で浮く)ので、
          ビューポートの寸法＝カメラのアスペクトには触らない。出す側は `fail()` の1本だけ。 -->

@@ -99,6 +99,25 @@ header {
   flex: 0 0 auto;
 }
 
+/* スケッチモードの札とモード操作(2026-08-30に SketchPanel から移設)。
+   **スケッチモード中だけ1行増える** —— ツールバーの高さが変わるので、
+   画面の座標を覚えて使い回す側は入退室を挟んだら測り直すこと
+   (engine [[duocad-command-toolbar-height-varies-with-armed-state]] と同じ性質)。 */
+.toolbar .mode-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  row-gap: 4px;
+  margin-bottom: 6px;
+}
+
+.toolbar .mode-row .label {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-size: 12px;
+}
+
 .tag {
   padding: 0 6px;
   border: 1px solid var(--line);
@@ -108,6 +127,13 @@ header {
 .tag.on {
   color: var(--accent);
   border-color: var(--accent);
+}
+
+/* ヘッダーの**右端**へ押し出す(2026-08-30。右サイドバーの開閉ボタン)。
+   間に何を足しても右端に残るよう、位置ではなく余白で決める。
+   header は flex なので、高さにもビューポートの寸法にも影響しない。 */
+header .tag.end {
+  margin-left: auto;
 }
 
 .main {

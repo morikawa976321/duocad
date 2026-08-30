@@ -872,7 +872,7 @@ async function main() {
     )
     ok(`押し出しのundo後、選択がリセットされていたので面 ${target.index} を選び直した`)
 
-    // -------------------------------------------------------------- A1: SketchPanelはスケッチモード中だけ出る
+    // -------------------------------------------------------------- A1: モード操作はツールバーにだけ出る
     // **2026-08-28、`App.svelte` が `{#if sketchId !== null}` でSketchPanelをDOMごと
     // 出し分けるようにした回帰検査**(`20260827-2320-duocad-right-sidebar-panels` QA差し戻し1)。
     // 通常モード → 入る → 抜ける、の往復で「消えている・出る・また消える」の3点を通しで見る。
@@ -883,18 +883,34 @@ async function main() {
     // 自体は空のまま描いてしまう作りなので、4個のidだけを見ていると`App.svelte`側の
     // `{#if sketchId !== null}`を外す退行を拾えない(id群は内側の`{#if active}`にも守られて
     // 二重に隠れるため、外側のゲートだけを外しても赤くならない。実測で確認済み)。
-    const sketchPanelIds = ['.sketch-panel', '#sketch-mode', '#sketch-exit', '#sketch-look', '#sketch-entities']
-    const sketchPanelPresence = async () =>
+    // **2026-08-30に `SketchPanel.svelte` ごと廃止した**(右サイドバーはAI専用になった)。
+    // 検査の主張は2つに分かれる:
+    //
+    //   (a) モード操作(`#sketch-mode` / `#sketch-look` / `#sketch-exit`)は
+    //       **スケッチモード中だけ・ツールバーの中に**出る(往復で3点を通しで見る)
+    //   (b) 旧パネルの痕跡(`.sketch-panel` / `#sketch-entities` / 右サイドバーのモード操作)は
+    //       **どのモードでも1つも無い** —— 右サイドバーに戻す退行はここで赤くなる
+    //
+    // ここまでの検証区画は押し出し・undo・面の選び直しだけで、まだ一度もスケッチモードに
+    // 入っていない(=通常モード)ので、最初の非存在チェックの場所として素直。
+    const modeIds = ['.toolbar #sketch-mode', '.toolbar #sketch-exit', '.toolbar #sketch-look']
+    const goneIds = ['.sketch-panel', '#sketch-entities', '.sidebar #sketch-mode', '.sidebar #sketch-exit']
+    const presence = async (ids) =>
       Object.fromEntries(
-        await Promise.all(
-          sketchPanelIds.map(async (id) => [id, (await page.$(id)) !== null]),
-        ),
+        await Promise.all(ids.map(async (id) => [id, (await page.$(id)) !== null])),
       )
-    const presentBefore = await sketchPanelPresence()
-    if (Object.values(presentBefore).some(Boolean)) {
-      fail(`通常モードなのにSketchPanelの要素がDOMに残っている: ${JSON.stringify(presentBefore)}`)
+    async function requireNoSketchPanelTrace(where) {
+      const traces = await presence(goneIds)
+      if (Object.values(traces).some(Boolean)) {
+        fail(`${where}に旧SketchPanelの痕跡が残っている: ${JSON.stringify(traces)}`)
+      }
     }
-    ok('通常モード: SketchPanelの要素(.sketch-panel本体含む)がDOMに無い')
+    const presentBefore = await presence(modeIds)
+    if (Object.values(presentBefore).some(Boolean)) {
+      fail(`通常モードなのにモード操作がDOMに残っている: ${JSON.stringify(presentBefore)}`)
+    }
+    await requireNoSketchPanelTrace('通常モード')
+    ok('通常モード: モード操作も旧SketchPanelの痕跡もDOMに無い')
 
     // **面に貼るのも同じ2手**(「スケッチ」を起動 → 面をクリック)。基準平面のグリッドと
     // 面はどちらも1クリックで指せる同じ「貼る先」で、ボタンでの指し方は無くなった
@@ -908,12 +924,13 @@ async function main() {
     if (onFace.plane?.kind !== 'face') fail(`面に貼ったスケッチになっていない: ${JSON.stringify(onFace.plane)}`)
     ok('既存ソリッドの面にスケッチを作れた(スケッチモードに入り、平面は face 参照)')
 
-    // 入った直後: SketchPanelの要素が全部出ていること(A1の往復・出現側)。
-    const presentInSketch = await sketchPanelPresence()
+    // 入った直後: モード操作が**ツールバーに**出ていること(A1の往復・出現側)。
+    const presentInSketch = await presence(modeIds)
     if (Object.values(presentInSketch).some((shown) => !shown)) {
-      fail(`スケッチモード中なのにSketchPanelの要素が欠けている: ${JSON.stringify(presentInSketch)}`)
+      fail(`スケッチモード中なのにモード操作がツールバーに無い: ${JSON.stringify(presentInSketch)}`)
     }
-    ok('スケッチモード中: SketchPanelの要素が全部DOMに出た')
+    await requireNoSketchPanelTrace('スケッチモード')
+    ok('スケッチモード中: モード操作がコマンドツールバーに出た(右サイドバーには出ない)')
 
     await page.click('#sketch-exit')
     await page.waitForFunction(() => window.__duocad.activeSketch === null, { timeout, polling: 50 })
@@ -921,11 +938,12 @@ async function main() {
     // 抜けた直後: また消えていること(A1の往復・消滅側)。
     // **`{#if sketchId !== null}` を外して常時表示に戻すと、この検査だけが赤くなる**
     // (2026-08-28実測。QA差し戻しで足した検査なので、一度わざと壊して赤を確認済み)。
-    const presentAfterExit = await sketchPanelPresence()
+    const presentAfterExit = await presence(modeIds)
     if (Object.values(presentAfterExit).some(Boolean)) {
-      fail(`「抜ける」を押した後もSketchPanelの要素がDOMに残っている: ${JSON.stringify(presentAfterExit)}`)
+      fail(`「抜ける」を押した後もモード操作がDOMに残っている: ${JSON.stringify(presentAfterExit)}`)
     }
-    ok('通常モードへ戻った: SketchPanelの要素がまたDOMから消えた(A1の往復を固定)')
+    await requireNoSketchPanelTrace('抜けた直後')
+    ok('通常モードへ戻った: モード操作がまたDOMから消えた(A1の往復を固定)')
 
     // -------------------------------------------------------------- 平面でない面は「札」で断られる
     //
@@ -1141,39 +1159,102 @@ async function main() {
     )
     ok(`undoで図形が1つずつ消えた(${beforeUndo.entities} -> ${beforeUndo.entities - 1}。円弧だけが消えた)`)
 
-    // -------------------------------------------------------------- 検証2(後半): 値の打ち直し
-    // **クリックだけで置いた後も寸法を打ち直せる**(§3.4 パラメトリック・プリミティブ)。
-    // 円の半径を20->12へ。領域の面積が変われば、コアが作り直したものが届いている。
-    const areaBefore = await page.evaluate(() => {
-      const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-      return active.regions[0].area
-    })
-    // 属性セレクタで引く(図形IDは数字始まりもありうるので `#id` は使えない)
-    const radiusInput = await page.evaluate(() => {
+    // -------------------------------------------------------------- 検証2(後半): 置いた後に直せる
+    // **クリックだけで置いた後も位置を直せる**。
+    //
+    // **2026-08-30に「口」が変わった**: 数値入力欄(`SketchPanel.svelte`)を廃止し、
+    // **3Dで図形を選んで `move_sketch_entities`** に一本化した(本人決定)。
+    // 寸法(半径・幅高さ・角度)の打ち直しは**人間側の口を持たない**ことになり、
+    // `set_parameter` はAI(MCP)だけの操作になっている —— そちらの検証は
+    // `tests/test_parameters.py` と `acceptance.mjs` のAI側が持つ。
+    //
+    // ここで見るのは**位置の直し**である: 円を選んで動かし、領域の重心が同じだけ動くこと
+    // (= コアが作り直したものが画面へ届いている)。
+    await page.keyboard.press('Escape') // 描くコマンドを畳んで「選ぶ」へ戻す
+    const circleBefore = await page.evaluate(() => {
       const hook = window.__duocad
       const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
       const circle = active.entities.find((entity) => entity.kind === 'circle')
-      return `[id="param-${circle.entity_id}-radius"]`
+      return { entityId: circle.entity_id, params: { ...circle.params } }
     })
-    await typeInto(radiusInput, 12)
-    await page.keyboard.press('Enter')
-    await page.waitForFunction(
-      () => {
-        const hook = window.__duocad
-        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        const circle = active.entities.find((entity) => entity.kind === 'circle')
-        return Math.abs(circle.params.radius - 12) < 1e-9
-      },
-      { timeout, polling: 50 },
-    )
-    const areaAfter = await page.evaluate(() => {
+    const centroidBefore = await page.evaluate(() => {
       const hook = window.__duocad
       const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-      return active.regions[0].area
+      return [...active.regions[0].centroid]
     })
-    if (!(areaAfter < areaBefore)) fail(`半径を小さくしたのに領域の面積が減らない: ${areaBefore} -> ${areaAfter}`)
-    ok(`置いた後に寸法を打ち直せた(半径 20 -> 12。領域の面積 ${areaBefore.toFixed(1)} -> ${areaAfter.toFixed(1)} mm²)`)
+    // 円の中心の点(`cx`)を本物のクリックで掴む。
+    await withoutBrowserPanel(page, async () => {
+      const at = await page.evaluate(
+        (cx, cy) => {
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectSketchPoint(cx, cy)
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        },
+        circleBefore.params.cx,
+        circleBefore.params.cy,
+      )
+      if (!at) fail('円の中心が画面の中に無い')
+      await page.mouse.click(at.x, at.y)
+    })
+    await page.waitForFunction(
+      (id) =>
+        (window.__duocad.selection?.items ?? []).some(
+          (item) => item.entity === id && item.point === 'cx',
+        ),
+      { timeout, polling: 50 },
+      circleBefore.entityId,
+    )
+    await page.click('#sketch-move')
+    await page.click('#sketch-move-move')
+    await typeInto('#sketch-move-dx', 4)
+    await typeInto('#sketch-move-dy', 0)
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(
+      (id, cx) => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const circle = active.entities.find((entity) => entity.entity_id === id)
+        return Boolean(circle && Math.abs(circle.params.cx - (cx + 4)) < 1e-6)
+      },
+      { timeout, polling: 50 },
+      circleBefore.entityId,
+      circleBefore.params.cx,
+    )
+    const centroidAfter = await page.evaluate(() => {
+      const hook = window.__duocad
+      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      return [...active.regions[0].centroid]
+    })
+    const centroidShift = Math.hypot(
+      centroidAfter[0] - centroidBefore[0],
+      centroidAfter[1] - centroidBefore[1],
+      centroidAfter[2] - centroidBefore[2],
+    )
+    if (Math.abs(centroidShift - 4) > 0.2) {
+      fail(`円を4mm動かしたのに領域の重心が ${centroidShift.toFixed(3)}mm しか動かない`)
+    }
+    ok(`置いた後に位置を直せた(円の中心を選んで +4mm。領域の重心が ${centroidShift.toFixed(2)}mm 動いた)`)
+
+    // **元へ戻す**。以降の検証(領域のクリック)は動かす前の配置を前提にしているので、
+    // ここで戻さないと領域の並びが変わって別のものを指す。undoは選択も空にするので
+    // (`catalog` の `undo` は `resets_selection`)、掴んだままの点も一緒に外れる。
+    await pressUndo(page)
+    await page.waitForFunction(
+      (id, cx) => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const circle = active.entities.find((entity) => entity.entity_id === id)
+        return Boolean(
+          circle &&
+            Math.abs(circle.params.cx - cx) < 1e-6 &&
+            (window.__duocad.selection?.count ?? 0) === 0,
+        )
+      },
+      { timeout, polling: 50 },
+      circleBefore.entityId,
+      circleBefore.params.cx,
+    )
+    ok('移動をundoで戻した(座標が元へ戻り、選択も空になった)')
 
     // -------------------------------------------------------------- 検証3(後半): 領域をクリックで選ぶ
     // 描くコマンドはEscで抜けて「選ぶ」に戻っている。**3Dの領域を本物のクリックで選ぶ**。

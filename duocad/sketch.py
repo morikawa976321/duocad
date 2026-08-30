@@ -270,20 +270,42 @@ class EntityKindOps:
 
     `rotate` は同じ種別に閉じない(長方形の `rotate_copies=True` は4本の線分になる)ので、
     戻り値は常に `[{"kind":.., "params":..}, ...]` の**リスト**にしてある(他の種別は1要素)。
+
+    `points` は**動かせる点**の (xキー, yキー) の組(`move_sketch_entities` の「点」の定義)。
+    寸法(半径・幅高さ・角度)は点ではないので入れない —— 点を動かしても形は変わらず、
+    寸法を動かすと形が変わる(寸法の編集は今回スコープ外)。長方形は左下の1点だけで、
+    残り3隅は `width`/`height` から**導出される値**なので独立に動かせない。
     """
 
     validate: Callable[[Dict[str, float]], None]
     translate: Callable[[Dict[str, float], float, float], Dict[str, float]]
     rotate: Callable[[Dict[str, float], float, float, float, bool], List[dict]]
     center_2d: Callable[[Dict[str, float]], Tuple[float, float]]
+    #: 動かせる点の (xキー, yキー)。**xキーがその点の名前**(選択の参照が持つ値)。
+    points: Tuple[Tuple[str, str], ...] = ()
 
 
 _ENTITY_KIND_TABLE: Dict[str, EntityKindOps] = {
-    "line": EntityKindOps(_validate_line, _translate_line, _rotate_line, _center_line),
-    "circle": EntityKindOps(_validate_circle, _translate_circle, _rotate_circle, _center_circle),
-    "rectangle": EntityKindOps(_validate_rectangle, _translate_rectangle, _rotate_rectangle, _center_rectangle),
-    "arc": EntityKindOps(_validate_arc, _translate_arc, _rotate_arc, _center_arc),
-    "bezier": EntityKindOps(_validate_bezier, _translate_bezier, _rotate_bezier, _center_bezier),
+    "line": EntityKindOps(
+        _validate_line, _translate_line, _rotate_line, _center_line,
+        points=(("x0", "y0"), ("x1", "y1")),
+    ),
+    "circle": EntityKindOps(
+        _validate_circle, _translate_circle, _rotate_circle, _center_circle,
+        points=(("cx", "cy"),),
+    ),
+    "rectangle": EntityKindOps(
+        _validate_rectangle, _translate_rectangle, _rotate_rectangle, _center_rectangle,
+        points=(("x", "y"),),
+    ),
+    "arc": EntityKindOps(
+        _validate_arc, _translate_arc, _rotate_arc, _center_arc,
+        points=(("cx", "cy"),),
+    ),
+    "bezier": EntityKindOps(
+        _validate_bezier, _translate_bezier, _rotate_bezier, _center_bezier,
+        points=(("x0", "y0"), ("cx1", "cy1"), ("cx2", "cy2"), ("x1", "y1")),
+    ),
 }
 
 #: 図形の種別。**`_ENTITY_KIND_TABLE` のキーが唯一の正**(新種別は表に1行足すだけでよい)。
@@ -300,6 +322,41 @@ def entity_kind_ops(kind: str) -> EntityKindOps:
         return _ENTITY_KIND_TABLE[kind]
     except KeyError:
         raise ValueError(f"unknown entity kind: {kind!r} (one of {list(ENTITY_KINDS)})") from None
+
+
+def entity_point_keys(kind: str) -> Tuple[Tuple[str, str], ...]:
+    """その種別が持つ**動かせる点**の (xキー, yキー) の組。表に無い種別は ValueError。
+
+    `move_sketch_entities` の選択参照は「xキー」で点を名指しする(`{sketch, entity, point}`)。
+    y は必ずこの表から引く —— 参照に2つ書くと、片方だけ書き換わった参照が作れてしまう。
+    """
+    return entity_kind_ops(kind).points
+
+
+def entity_point_pair(kind: str, point: str) -> Tuple[str, str]:
+    """点の名前(xキー)から (xキー, yキー) を引く。その種別に無い名前は ValueError。"""
+    for x_key, y_key in entity_point_keys(kind):
+        if x_key == point:
+            return (x_key, y_key)
+    raise ValueError(
+        f"{kind} has no movable point {point!r} "
+        f"(one of {[x for x, _ in entity_point_keys(kind)]})"
+    )
+
+
+def get_entity(sketch: "Sketch", entity_id: EntityId) -> "Entity":
+    """スケッチの図形をIDで引く。無ければ KeyError(黙って None を返さない)。"""
+    for entity in sketch.entities:
+        if entity.id == entity_id:
+            return entity
+    raise KeyError(
+        unknown_id_message(
+            "entity",
+            entity_id,
+            [e.id for e in sketch.entities],
+            where=f"sketch {sketch.id!r}",
+        )
+    )
 
 
 VERB_SKETCH_CREATE = "sketch_create"

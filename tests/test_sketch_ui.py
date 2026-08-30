@@ -60,6 +60,7 @@ def test_only_the_registered_commands_are_reachable() -> None:
         "add_arc",
         "set_parameter",
         "import_svg",
+        "move_sketch_entities",
     }
 
 

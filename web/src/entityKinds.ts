@@ -37,6 +37,15 @@ interface EntityKindSpec {
    *  **`resolution` は「いまの画面でどれくらい細かく折るか」**(`adaptiveResolution.ts`)。
    *  以前は分割数が固定(円1周64)で、寄ると多角形の角が見えていた。 */
   toPoints(params: Record<string, number>, resolution: ViewResolution): Array<[number, number]>
+  /**
+   * **動かせる点**の (xキー, yキー)。コアの `EntityKindOps.points`(`duocad/sketch.py`)と
+   * 同じ並びでなければならない —— 参照が持つ `point` はこの**xキー**そのものである。
+   *
+   * 寸法(半径・幅高さ・角度)は入れない。点を動かしても形は変わらないが、寸法を動かすと
+   * 形が変わる(寸法の編集は今回のスコープ外)。長方形は左下の1点だけで、残り3隅は
+   * `width`/`height` からの導出値なので独立に動かせない。
+   */
+  pointKeys: ReadonlyArray<readonly [string, string]>
 }
 
 /**
@@ -85,6 +94,7 @@ function bezierPoints(
 
 const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
   line: {
+    pointKeys: [['x0', 'y0'], ['x1', 'y1']],
     verb: 'add_line',
     fromArgs(args) {
       const p0 = args.p0 as [number, number]
@@ -99,6 +109,7 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
     },
   },
   circle: {
+    pointKeys: [['cx', 'cy']],
     verb: 'add_circle',
     fromArgs(args) {
       const center = args.center as [number, number]
@@ -110,6 +121,7 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
     },
   },
   rectangle: {
+    pointKeys: [['x', 'y']],
     verb: 'add_rectangle',
     fromArgs(args) {
       const corner = args.corner as [number, number]
@@ -127,6 +139,7 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
     },
   },
   arc: {
+    pointKeys: [['cx', 'cy']],
     verb: 'add_arc',
     fromArgs(args) {
       const center = args.center as [number, number]
@@ -146,6 +159,7 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
     },
   },
   bezier: {
+    pointKeys: [['x0', 'y0'], ['cx1', 'cy1'], ['cx2', 'cy2'], ['x1', 'y1']],
     // **`verb` を持たない唯一の種別**(上の `EntityKindSpec.verb` のコメント)。
     toPoints(params, resolution) {
       return bezierPoints(
@@ -174,6 +188,22 @@ function entityKindSpec(kind: string): EntityKindSpec {
   const spec = (ENTITY_KIND_TABLE as Record<string, EntityKindSpec>)[kind]
   if (!spec) throw new Error(`unknown entity kind: ${kind}`)
   return spec
+}
+
+/**
+ * その図形の**動かせる点**を `{key, u, v}` で返す(`move_sketch_entities` の選択の的)。
+ *
+ * `key` はコアの参照が持つ `point` の値そのもの。表に無い種別は例外(`entityPoints` と同じ)。
+ */
+export function entityHandles(
+  kind: string,
+  params: Record<string, number>,
+): Array<{ key: string; u: number; v: number }> {
+  return entityKindSpec(kind).pointKeys.map(([xKey, yKey]) => ({
+    key: xKey,
+    u: params[xKey],
+    v: params[yKey],
+  }))
 }
 
 /**

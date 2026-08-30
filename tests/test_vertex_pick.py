@@ -342,7 +342,9 @@ def test_the_declaration_matches_which_verbs_read_the_selection() -> None:
         for inner in ast.walk(node):
             if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Attribute):
                 continue
-            if inner.func.attr in ("require_confirmed", "require_edges"):
+            # `selection.require_*` が確定選択を読む唯一の入口である(種別ごとに増える)。
+            # 綴りではなく接頭辞で見るのは、verbを足すたびにこの表を直し忘れるのを避けるため。
+            if inner.func.attr.startswith("require_"):
                 reads_selection.add(node.name)
 
     declared = {

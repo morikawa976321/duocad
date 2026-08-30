@@ -4,12 +4,12 @@
 両者が同じ選択集合を交互に触れるようにしたモデリングツール。**
 差別化はUIでも機能数でもなく **交互操作**（AIが集合を提案 → 人が過不足を直す → AIが操作を適用）にある。
 
-**状態:** 18操作すべてが人間（UI）とAI（MCP）の両側から使える。このREADMEは開発を再開するときの入口である。
+**状態:** 20操作。うち19操作が人間（UI）とAI（MCP）の両側から使える（`set_parameter` だけは2026-08-30に人間側の口を捨て、AI専用にした）。このREADMEは開発を再開するときの入口である。
 
 | | |
 |---|---|
 | ブランチ / コミット | `main`（最新は `git log -1`） |
-| テスト | **629件**（うち2本は実機が揃うときだけ走る＝ふだんはskip。**赤は1本も無い**） |
+| テスト | **694件**（うち2本は実機が揃うときだけ走る＝ふだんはskip。**赤は1本も無い**） |
 | 実行環境 | Python 3.11（`.venv`）／ Node（`web/node_modules` 導入済み）／ `web/dist` ビルド済み |
 | 単位 | mm 固定 |
 
@@ -82,7 +82,7 @@ AIに頼む日も同じもので立てる。**先にアプリを立てて、Clau
 
 - **アプリ内AIパネル**（画面右サイドバー）—— ローカルの llama-server（キー不要）。
   APIキーでのClaude利用はできない（Claudeを使う道は下のMCP経路）
-- **Claude Code**（MCPの28ツール）—— **サブスク認証のまま使えるのはこちらだけ**。繋ぎ方は1.2
+- **Claude Code**（MCPの30ツール）—— **サブスク認証のまま使えるのはこちらだけ**。繋ぎ方は1.2
 
 ### 1.1 立てる
 
@@ -131,7 +131,7 @@ duocad以外のディレクトリからも使いたい日だけ、手でuserス�
 claude mcp add --scope user --transport http duocad http://127.0.0.1:8766/mcp
 ```
 
-**既定にはしない** —— 28ツールが無関係なプロジェクトにも出てくるため。
+**既定にはしない** —— 30ツールが無関係なプロジェクトにも出てくるため。
 
 ### 1.3 frontendを直しながら見る（Vite dev server）
 
@@ -155,6 +155,7 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 | 8775/8776・8785/8786・8795/8796 | `smoke` / `smoke-features` / `smoke-files` | **各スクリプトが自分で立てる** |
 | 8805/8806・8815/8816 | `smoke-toast` / `smoke-regions` | 同上 |
 | 8865/8866・8885/8886 | `smoke-mcp` / `acceptance` | 同上 |
+| 8975/8976 | `smoke-move` | 同上 |
 
 ---
 
@@ -187,7 +188,7 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 
 ## 3. 自動検査の走らせ方
 
-### pytest（コア・MCPの契約 629件）
+### pytest（コア・MCPの契約 694件）
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
@@ -232,19 +233,24 @@ node scripts/smoke-svg.mjs
 
 # ⑨ ホバーの予告とクリックの結果が一致する(面・外へ出たら消える・選択済みにも明度・辺が先)
 node scripts/smoke-hover.mjs
+
+# ⑩ 直接選択とmove(右ドラッグ回転・中ドラッグパン・左ドラッグのウィンドウ選択・
+#    Shift/Ctrlのトグル・点/辺の移動と複製・ボディの移動と複製・
+#    モード操作のツールバー移設・右サイドバーの開閉)
+node scripts/smoke-move.mjs
 ```
 
 既に立てているサーバへ繋ぎたいときだけ `--url http://127.0.0.1:8766/` を渡す
 （その場合スクリプトはサーバを立てず、止めもしない）。
 
-### 一括受入チェック（18操作 × 人間/AI ＋ 交互操作）
+### 一括受入チェック（20操作 × 人間/AI ＋ 交互操作）
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; node web\scripts\acceptance.mjs
 ```
 
 MCPとWebSocketを1プロセスで持つサーバを自分で起動し、**人間側はブラウザの本物のクリックとキー、
-AI側は本物のJSON-RPC**で18操作を叩く。結果はJSONでstdout末尾に出る。数分。
+AI側は本物のJSON-RPC**で20操作を叩く（`set_parameter` の人間側だけは口が無いので空欄）。結果はJSONでstdout末尾に出る。数分。
 
 **❌ が1つでもあれば終了コード1で終わる。** ただし**途中では止めない** ——
 全セクションを最後まで走らせて RESULT_JSON を出し切ってから、`failed[]` を見て終了コードだけを決める。
@@ -360,7 +366,7 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 | `web/src/SettingsDialog.svelte` | **設定ダイアログ**。native `<dialog>` + `showModal()`。**一度決めたら触らない設定だけ**（いまは画角と正投影）。ビューポートを覆わず暗くもしない |
 | `web/src/viewSettings.ts` | **画面設定のlocalStorage**。入れてよいのはクライアント側だけの設定で、**文書の状態は入れない**。読み書きとも例外を投げない |
 
-### AI側（MCP・28ツール）
+### AI側（MCP・30ツール）
 
 **ツールの一覧は [MCP.md](MCP.md) が正**（ここに写すと、増減のたびに2箇所を直すことになる）。
 機械の正は `tests/test_mcp_verbs.py` の `EXPECTED_TOOLS` で、**顔ぶれを一致で固定**している。
@@ -454,7 +460,7 @@ duocad/
                          net/ はアプリ層との接点（ws.py=WebSocket／http.py=静的配信と/mcp／
                          tools_on_loop.py）。server.py はその入口で、再輸出と起動の番人だけ
                          agent/ はアプリ内AIエージェント（プロバイダ＋ループ・UIなし）
-  tests/                 629件。README.md はモジュール単位のAPI契約リファレンス
+  tests/                 694件。README.md はモジュール単位のAPI契約リファレンス
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
     scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。共有部品は

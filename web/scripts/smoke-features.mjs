@@ -178,6 +178,30 @@ async function main() {
     }
 
     /** スケッチ平面の (u,v) を**クリックの直前に射影して**押す(画面が動いても狂わない)。 */
+    /**
+     * スケッチの図形を**3Dのクリックで選ぶ**(2026-08-30。旧「図形一覧のボタン」の後継)。
+     *
+     * 図形の**最初の点**(円・円弧は中心、線分・ベジエは始点、長方形は左下)を狙う ——
+     * 点は必ずその図形の上にあり、当たり判定も点が最優先なので確実に掴める。
+     * 反復の `entities` 引数はこの選択から導かれる(`App.svelte` の `selectedEntities`)。
+     */
+    async function clickEntityHandle(entityId) {
+      return withoutBrowserPanel(page, async () => {
+        const at = await page.evaluate((id) => {
+          const hook = window.__duocad
+          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          const entity = active?.entities.find((item) => item.entity_id === id)
+          if (!entity) return null
+          const p = entity.params
+          const uv = 'cx' in p ? [p.cx, p.cy] : 'x0' in p ? [p.x0, p.y0] : [p.x, p.y]
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectSketchPoint(uv[0], uv[1])
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        }, entityId)
+        if (!at) fail(`図形 ${entityId} の点が画面の中に無い`)
+        await page.mouse.click(at.x, at.y)
+      })
+      }
     async function clickPlane(u, v) {
       // **浮いているブラウザを畳んでから**押す —— スケッチ平面の (u,v) は画面の1画素しかなく、
       // そこがパネルの下に来ると逃げ場が無い(理由は `browser.mjs` の `withoutBrowserPanel`)。
@@ -580,19 +604,20 @@ async function main() {
     )
     await page.keyboard.press('Escape')
 
-    // 図形をスケッチパネルから選ぶ(**共有選択集合には入らない**引数)
+    // 図形を**3Dのクリックで**選ぶ(2026-08-30。図形一覧のボタンはSketchPanelごと廃止)。
+    // 反復の `entities` 引数は共有選択集合の `sketch_entity` から導かれる。
     const entityId = await page.evaluate(() => {
       const hook = window.__duocad
       const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
       return active.entities[0].entity_id
     })
-    /** 図形が反復の対象に入っている状態にする(ボタンは**入り切りの切り替え**)。 */
+    /** 図形が反復の対象に入っている状態にする(既に入っていれば何もしない)。 */
     async function ensureEntityPicked(id) {
       const already = await page.evaluate(
         (target) => (window.__duocad.selectedEntities ?? []).includes(target),
         id,
       )
-      if (!already) await page.click(`[id="entity-${id}"]`)
+      if (!already) await clickEntityHandle(id)
       await waitFor(
         (target) => (window.__duocad.selectedEntities ?? []).includes(target),
         '図形を反復の対象に選べない',

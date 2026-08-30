@@ -23,6 +23,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { findBrowser, launchBrowser, withoutBrowserPanel, pressUndo, pressRedo, frameAll } from './browser.mjs'
 import { fail, ok, parseArgs } from './args.mjs'
+import { McpClient } from './mcp-client.mjs'
 import { startServer } from './server.mjs'
 
 const options = parseArgs(process.argv.slice(2))
@@ -50,6 +51,10 @@ async function main() {
   // 検査が書き換えてしまうので、既存の使い捨てworkdirをそのまま流用する
   // (STEP/STL書き出しの `join(workdir, ...)` と同じディレクトリで、実在確認が楽になる)。
   const server = attachUrl === null ? await startServer({ wsPort, httpPort, modelsDir: workdir }) : null
+  // **MCPの口**(2026-08-30)。数値の打ち直し(`set_parameter`)は人間側のUIを持たなく
+  // なったので、その1手だけを同じプロセスのMCP側から打つ。`--attach` で外のサーバへ
+  // 繋いだときは子プロセスを持たないので `null` になり、使う直前に落とす(黙って飛ばさない)。
+  const mcp = server === null ? null : new McpClient(server.child, { timeout })
   const url = server?.url ?? attachUrl
   console.log(`  server : ${url}${server === null ? ' (既に立っているサーバへ接続)' : ''}`)
 
@@ -193,6 +198,30 @@ async function main() {
       await page.mouse.click(at.x, at.y)
     }
 
+    /**
+     * スケッチの図形を**3Dのクリックで選ぶ**(2026-08-30。旧「図形一覧のボタン」の後継)。
+     *
+     * 図形の**最初の点**(円・円弧は中心、線分・ベジエは始点、長方形は左下)を狙う ——
+     * 点は必ずその図形の上にあり、当たり判定も点が最優先なので確実に掴める。
+     * 反復の `entities` 引数はこの選択から導かれる(`App.svelte` の `selectedEntities`)。
+     */
+    async function clickEntityHandle(entityId) {
+      return withoutBrowserPanel(page, async () => {
+        const at = await page.evaluate((id) => {
+          const hook = window.__duocad
+          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          const entity = active?.entities.find((item) => item.entity_id === id)
+          if (!entity) return null
+          const p = entity.params
+          const uv = 'cx' in p ? [p.cx, p.cy] : 'x0' in p ? [p.x0, p.y0] : [p.x, p.y]
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectSketchPoint(uv[0], uv[1])
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        }, entityId)
+        if (!at) fail(`図形 ${entityId} の点が画面の中に無い`)
+        await page.mouse.click(at.x, at.y)
+      })
+      }
     async function clickPlane(u, v) {
       // **浮いているブラウザを畳んでから**押す —— スケッチ平面の (u,v) は画面の1画素しかなく、
       // そこがパネルの下に来ると逃げ場が無い(理由は `browser.mjs` の `withoutBrowserPanel`)。
@@ -300,12 +329,10 @@ async function main() {
       const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
       return active.entities[0].entity_id
     })
-    await page.click(`[id="entity-${entityId}"]`)
-    await waitFor(
-      (id) => (window.__duocad.selectedEntities ?? []).includes(id),
-      '図形を反復の対象に選べない',
-      entityId,
-    )
+    // **反復の対象は3Dのクリックで選ぶ**(2026-08-30)。図形一覧のボタン(旧
+    // `#entity-<id>`)はSketchPanelごと廃止し、スケッチの図形そのものが選択の一種
+    // (`sketch_entity`)になった —— 反復の `entities` 引数はその選択から導かれる。
+    await clickEntityHandle(entityId)
     await page.click('#pattern-rectangular')
     await typeInto('#pattern-dx', HOLE.dx)
     await typeInto('#pattern-dy', 0)
@@ -350,8 +377,18 @@ async function main() {
       '穴のスケッチへ再入場できない',
       holeSketchId,
     )
-    await typeInto(`[id="param-${entityId}-radius"]`, 3)
-    await page.keyboard.press('Enter')
+    // **径の打ち直しはAI(MCP)の口だけになった**(2026-08-30に数値入力欄を廃止)。
+    // 見たいのは「1箇所直すと反復した穴が全部追随する」で、それはverbの性質であって
+    // 入力欄の性質ではないので、同じ文書へMCPから打ち込んで確かめる。
+    const radiusName = await page.evaluate((id) => {
+      const hook = window.__duocad
+      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      return active.entities.find((entity) => entity.entity_id === id).refs.radius
+    }, entityId)
+    if (!radiusName) fail('穴の半径に名前つきの値が付いていない')
+    if (mcp === null) fail('--attach では径の打ち直しを打てない(MCPの口が要る)')
+    await mcp.handshake('duocad-smoke-files')
+    await mcp.callTool('set_parameter', { name: radiusName, value: 3 })
     const biggerHoles = Math.PI * 3 ** 2 * PLATE.thickness * HOLE.count
     await waitFor(
       (before, expected) => {
@@ -366,7 +403,7 @@ async function main() {
     await page.click('#sketch-exit')
     await waitFor(() => window.__duocad.activeSketch === null, '穴のスケッチを抜けられない')
     ok(
-      `**SketchPanelで再開して径を1箇所だけ打ち直したら、反復した穴が全部追随した**` +
+      `**径を1箇所だけ打ち直したら、反復した穴が全部追随した**(打ち込みはMCP経由)` +
         `(半径 ${HOLE.radius}→3 で体積 ${withHoles.volume.toFixed(2)} -> ${afterResize.volume.toFixed(2)})`,
     )
 

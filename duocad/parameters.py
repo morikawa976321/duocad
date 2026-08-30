@@ -164,13 +164,20 @@ def rebuild(
     source = doc.log if log is None else log
 
     values: Dict[str, float] = {}
+    # **その名前を最後に書いた `set_parameter` の seq**。値の強制はこの seq より
+    # **前**のオペレーションにだけ効かせる(下の再生ループ)。
+    forced_before: Dict[str, int] = {}
     for operation in source._entries:
         if operation.seq > upto_seq:
             break
         if operation.verb == VERB_SET_PARAMETER:
             values[operation.args["name"]] = float(operation.args["value"])
+            forced_before[operation.args["name"]] = operation.seq
     if overrides:
+        # 試し再生の値はまだログに載っていない(= 一番後ろ)ので全オペレーションへ効かせる。
         values.update({key: float(value) for key, value in overrides.items()})
+        for key in overrides:
+            forced_before[key] = upto_seq + 1
 
     # 失敗しても文書を壊さないための退避。再生は必ず**新しい** Body / Sketch を作るので、
     # ここで持つ参照は再生中に書き換わらない(だから元に戻せる)。退避が無いと、
@@ -195,7 +202,13 @@ def rebuild(
                 break
             verb_handler(operation.verb).do(doc, operation)
             for key, value in values.items():
-                if key in doc.parameters:
+                # **その `set_parameter` を再生し終えた後は強制しない**。強制し続けると、
+                # 後ろに載った `move_sketch_entities` が同じ名前へ書いた座標が
+                # 毎回上書きされて**黙って消える**(再生のたびに移動がなかったことになる)。
+                # 「まだ再生していない `set_parameter` の値を先に当てておく」のがこの強制の
+                # 目的なので、当の操作を通り過ぎたら自然な順序に任せてよい —— 通り過ぎた
+                # 時点で `_do_set_parameter` が同じ値を入れているから、挙動は変わらない。
+                if key in doc.parameters and operation.seq < forced_before.get(key, 0):
                     doc.parameters[key] = value
     except Exception:
         doc.bodies[:] = saved_bodies

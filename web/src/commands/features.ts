@@ -42,6 +42,11 @@ function count(label: string, least: number): (value: number) => string | null {
  * **値そのものは送らない。** 対象集合(面・辺・領域)はコアが自分の確定選択から取るので、
  * ここで見るのは「人がまだ選んでいない」を画面へ出すためだけである。
  */
+/** 打った値が数値でありさえすればよい引数(移動量は0も負も正当)。 */
+function finite(label: string): (value: number) => string | null {
+  return (value) => (Number.isFinite(value) ? null : `${label}は数値`)
+}
+
 function missingSelection(values: ArgValues, name: string, label: string): string | null {
   return ((values[name] ?? []) as SelectionRef[]).length === 0 ? `${label}が選ばれていない` : null
 }
@@ -303,7 +308,84 @@ export const PATTERN_CIRCULAR: CommandDef = {
  * `App.svelte` が `COMMANDS`(`extrude_face`)の後ろへ繋ぐ。**反復はスケッチの
  * 図形を対象にするのでここには入らない**(下の `SKETCH_FEATURE_COMMANDS`)。
  */
-export const SOLID_FEATURE_COMMANDS: CommandDef[] = [EXTRUDE_REGIONS, FILLET, CHAMFER]
+/**
+ * ボディの平行移動 / 複製(2026-08-30)。**面でも辺でも頂点でもボディを指せる** ——
+ * コアの `selection.require_bodies` が `ShapeRef.body` から逆引きするので、
+ * この引数は3種を全部食う(`kinds`)。複数のボディにまたがる選択なら全部が同じ量だけ動く。
+ *
+ * **複製するかどうかは人に選ばせる**(既定を置かない) —— 押し出しの `mode` と同じ理由で、
+ * 「複製するつもりで動かした」は元に戻すまで気づきにくい。
+ */
+export const MOVE_BODY: CommandDef = {
+  id: 'move_body',
+  category: 'feature',
+  label: '動かす',
+  buttonId: 'move-body',
+  preview: 'none',
+  args: [
+    {
+      kind: 'selection',
+      name: 'target',
+      label: '動かすボディ(面/辺/頂点で指す)',
+      shapeKind: 'face',
+      kinds: ['face', 'edge', 'vertex'],
+      min: 1,
+      max: null,
+    },
+    {
+      kind: 'choice',
+      name: 'copy',
+      label: '複製',
+      options: [
+        { value: 'move', label: '動かす', buttonId: 'move-body-move' },
+        { value: 'copy', label: '複製する', buttonId: 'move-body-copy' },
+      ],
+    },
+    {
+      kind: 'number',
+      name: 'dx',
+      label: 'X',
+      unit: 'mm',
+      inputId: 'move-body-dx',
+      placeholder: 'mm',
+      reject: finite('X'),
+    },
+    {
+      kind: 'number',
+      name: 'dy',
+      label: 'Y',
+      unit: 'mm',
+      inputId: 'move-body-dy',
+      placeholder: 'mm',
+      reject: finite('Y'),
+    },
+    {
+      kind: 'number',
+      name: 'dz',
+      label: 'Z',
+      unit: 'mm',
+      inputId: 'move-body-dz',
+      placeholder: 'mm',
+      reject: finite('Z'),
+    },
+  ],
+  build(values) {
+    const empty = missingSelection(values, 'target', 'ボディ(面/辺/頂点)')
+    if (empty !== null) return { ok: false, reason: empty }
+    const dx = values.dx
+    const dy = values.dy
+    const dz = values.dz
+    if (typeof dx !== 'number' || typeof dy !== 'number' || typeof dz !== 'number') {
+      return { ok: false, reason: '移動量が数値でない' }
+    }
+    // **0,0,0 はコアも弾く**(移動なら何も起きず、複製なら元と完全に重なる)。
+    // ここで先に断るのは、理由を人の近くで出すため。
+    if (dx === 0 && dy === 0 && dz === 0) return { ok: false, reason: '移動量が全部0' }
+    return { ok: true, args: { dx, dy, dz, copy: values.copy === 'copy' } }
+  },
+}
+
+export const SOLID_FEATURE_COMMANDS: CommandDef[] = [EXTRUDE_REGIONS, FILLET, CHAMFER, MOVE_BODY]
 
 /**
  * スケッチモードで足すぶん。**領域押し出しは両方に居る** —— 描いた直後にそのまま

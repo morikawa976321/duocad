@@ -510,6 +510,66 @@ COMMANDS: tuple[Command, ...] = (
         resets_selection=True,
     ),
     Command(
+        name="move_sketch_entities",
+        category="sketch",
+        description=(
+            "スケッチの図形の位置を直すときに呼ぶ。確定選択のスケッチの点"
+            "(線の端点・円/弧の中心・長方形の左下・ベジエの制御点)または辺"
+            "(図形1つ全体)を dx, dy だけ動かす。copy=true なら元を残して複製する。"
+            "対象は選択から取る(引数では受けない)。"
+            "**半径・幅高さ・角度のような寸法は動かせない**(位置の平行移動だけ)。"
+        ),
+        params=(
+            Param("dx", "number", "X方向(スケッチ平面のu軸)の移動量(mm)", dimension=True),
+            Param("dy", "number", "Y方向(スケッチ平面のv軸)の移動量(mm)", dimension=True),
+            Param(
+                "copy",
+                "boolean",
+                "true=元を残して複製 / false=移動(既定)",
+                required=False,
+            ),
+        ),
+        uses_selection=True,
+        session="move_sketch_entities",
+        note=(
+            "**確定後に選択をリセットしない**(`resets_selection=False`)。リセットする契約は"
+            "「面・辺・領域の添字が形状変更で壊れる」ことが理由だが、この verb の対象は"
+            "`entity_id` で名指しする参照で、平行移動では失効しない —— 少しずつ動かして"
+            "位置を詰める使い方が主用途なので、1回ごとに選び直させない。"
+            "**押し出し済みのソリッドは追従しない**(本人が許容済み)"
+        ),
+    ),
+    Command(
+        name="move_body",
+        category="feature",
+        description=(
+            "ボディの位置を直すときに呼ぶ。確定選択の面/辺/頂点が**属するボディ**を"
+            " dx, dy, dz だけ動かす(複数のボディにまたがる選択なら全部を同じ量だけ動かす)。"
+            "copy=true なら元を残して複製する。対象は選択から取る(引数では受けない) ——"
+            "ボディを指すのに面を1枚選べばよい。"
+        ),
+        params=(
+            Param("dx", "number", "X方向の移動量(mm)", dimension=True),
+            Param("dy", "number", "Y方向の移動量(mm)", dimension=True),
+            Param("dz", "number", "Z方向の移動量(mm)", dimension=True),
+            Param(
+                "copy",
+                "boolean",
+                "true=元を残して複製 / false=移動(既定)",
+                required=False,
+            ),
+        ),
+        uses_selection=True,
+        session="move_body",
+        note=(
+            "**確定後に選択をリセットしない**(`move_sketch_entities` と同じ理由)。"
+            "平行移動は `TopLoc_Location` の差し替えなので面・辺・頂点の添字が変わらず、"
+            "リセットの根拠(添字の失効)が当たらない。"
+            "**プレビューに載せていない** —— 動かす前後の形は同じで、変わるのは位置だけなので、"
+            "幽霊を出しても本体と重なって見分けが付かない"
+        ),
+    ),
+    Command(
         name="pattern_rectangular",
         category="feature",
         description="スケッチ上の図形を矩形に反復するときに呼ぶ。",

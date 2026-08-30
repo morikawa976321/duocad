@@ -18,10 +18,17 @@
  * ここ(`command.ts`)は**Svelteに依存しない純粋な定義と道具**だけを持つ。
  * 状態機械・DOM・通信は `CommandHost.svelte` の側にある。
  */
-import type { Point2, SelectionRef, SelectionState, ShapeKind, ShapeRef } from '../session'
+import type {
+  Point2,
+  SelectionRef,
+  SelectionState,
+  ShapeKind,
+  ShapeRef,
+  SketchEntityRef,
+} from '../session'
 
-/** 選択の種別。コアの `SELECTABLE_KINDS` と同じ4つ。 */
-export type SelectableKind = ShapeKind | 'region'
+/** 選択の種別。コアの `SELECTABLE_KINDS` と同じ5つ。 */
+export type SelectableKind = ShapeKind | 'region' | 'sketch_entity'
 
 /** 種別ごとの数え方(「辺 4本」「面 2面」)。件数表示を1箇所に集める。 */
 const KIND_COUNTERS: Record<SelectableKind, string> = {
@@ -29,6 +36,7 @@ const KIND_COUNTERS: Record<SelectableKind, string> = {
   edge: '本',
   vertex: '点',
   region: '個',
+  sketch_entity: '個',
 }
 
 // --------------------------------------------------------------------------------------
@@ -39,7 +47,9 @@ const KIND_COUNTERS: Record<SelectableKind, string> = {
  * (§3.5のデータモデル。コアの `selection.ref_kind` と同じ規則)。
  */
 export function refKind(ref: SelectionRef): SelectableKind {
-  return 'sketch' in ref ? 'region' : (ref as ShapeRef).kind
+  if (!('sketch' in ref)) return (ref as ShapeRef).kind
+  // **どちらも `sketch` を持つ**ので `entity` の有無で見分ける(コアの `ref_kind` と同じ)。
+  return 'entity' in ref ? 'sketch_entity' : 'region'
 }
 
 /** 2つの参照が同じ実体を指すか(`provenance` は見ない。コアの `same_ref` と同じ)。 */
@@ -51,6 +61,12 @@ export function sameRef(left: SelectionRef, right: SelectionRef): boolean {
     const b = right as { sketch: string; index: number }
     return a.sketch === b.sketch && a.index === b.index
   }
+  if (kind === 'sketch_entity') {
+    const a = left as SketchEntityRef
+    const b = right as SketchEntityRef
+    // **点と辺は別物**(同じ図形の (x0,y0) と「図形全体」を混同しない)
+    return a.sketch === b.sketch && a.entity === b.entity && a.point === b.point
+  }
   const a = left as ShapeRef
   const b = right as ShapeRef
   return a.body === b.body && a.kind === b.kind && a.index === b.index
@@ -58,14 +74,31 @@ export function sameRef(left: SelectionRef, right: SelectionRef): boolean {
 
 /** 一覧の `{#each}` キー・DOMの `data-` 属性に使う一意な文字列。 */
 export function refKey(ref: SelectionRef): string {
-  return 'sketch' in ref
-    ? `region:${ref.sketch}:${ref.index}`
-    : `${(ref as ShapeRef).kind}:${(ref as ShapeRef).body}:${ref.index}`
+  const kind = refKind(ref)
+  if (kind === 'sketch_entity') {
+    const item = ref as SketchEntityRef
+    return `sketch_entity:${item.sketch}:${item.entity}:${item.point ?? ''}`
+  }
+  if (kind === 'region') {
+    const item = ref as { sketch: string; index: number }
+    return `region:${item.sketch}:${item.index}`
+  }
+  const item = ref as ShapeRef
+  return `${item.kind}:${item.body}:${item.index}`
 }
 
 /** 面の参照を作る(ビューポートのピック結果から)。添字は1始まり。 */
 export function faceRef(bodyId: string, faceIndex: number): ShapeRef {
   return { body: bodyId, kind: 'face', index: faceIndex }
+}
+
+/** スケッチの図形(または点)の参照を作る。`point` が null なら図形全体(= 辺)。 */
+export function sketchEntityRef(
+  sketchId: string,
+  entityId: string,
+  point: string | null,
+): SketchEntityRef {
+  return { sketch: sketchId, entity: entityId, point }
 }
 
 // --------------------------------------------------------------------------------------
@@ -82,7 +115,17 @@ export interface SelectionArgSpec {
   kind: 'selection'
   name: string
   label: string
+  /** 主たる種別(件数の数え方と問いの文言はこれで決まる)。 */
   shapeKind: SelectableKind
+  /**
+   * **食える種別が複数あるとき**の全体(省略すると `[shapeKind]`)。
+   *
+   * `move_body` がこれを使う唯一の例で、面でも辺でも頂点でもボディを名指しできる
+   * (コアの `selection.require_bodies` が3種のどれからでも逆引きする)。ここを
+   * `shapeKind` 1つに固定したままだと、辺だけ選んで move_body を起動したときに
+   * **サーバは通すのに画面だけが「面が選ばれていない」と言う**食い違いが出る。
+   */
+  kinds?: SelectableKind[]
   min: number
   max: number | null
 }
@@ -305,8 +348,13 @@ export function findCommand(id: string, list: CommandDef[] = COMMANDS): CommandD
  * 順序は選択の追加順のまま(コアが順序を保つ契約。フィレットの辺と半径の対応が
  * ずれないため)。
  */
+export function argKinds(spec: SelectionArgSpec): SelectableKind[] {
+  return spec.kinds ?? [spec.shapeKind]
+}
+
 export function itemsForArg(spec: SelectionArgSpec, selection: SelectionState | null): SelectionRef[] {
-  const items = (selection?.items ?? []).filter((item) => refKind(item) === spec.shapeKind)
+  const kinds = argKinds(spec)
+  const items = (selection?.items ?? []).filter((item) => kinds.includes(refKind(item)))
   return spec.max === null ? items : items.slice(0, spec.max)
 }
 
@@ -320,10 +368,11 @@ export function itemsForArg(spec: SelectionArgSpec, selection: SelectionState | 
 export function overflowNote(command: CommandDef, selection: SelectionState | null): string {
   for (const spec of command.args) {
     if (spec.kind !== 'selection' || spec.max === null) continue
-    const total = (selection?.items ?? []).filter((item) => refKind(item) === spec.shapeKind).length
+    const kinds = argKinds(spec)
+    const total = (selection?.items ?? []).filter((item) => kinds.includes(refKind(item))).length
     if (total > spec.max) {
       const counter = KIND_COUNTERS[spec.shapeKind]
-      return `${spec.label}は${spec.max}${counter}まで(いま${total}${counter}。Ctrl+クリックで減らす)`
+      return `${spec.label}は${spec.max}${counter}まで(いま${total}${counter}。Ctrl+クリックで外す)`
     }
   }
   return ''
@@ -424,7 +473,7 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
   if (spec.kind === 'selection') {
     const have = ((values[spec.name] ?? []) as SelectionRef[]).length
     const need = spec.min - have
-    return `${spec.label}を${need}${KIND_COUNTERS[spec.shapeKind]}選ぶ(クリック / Shift+クリックで追加)`
+    return `${spec.label}を${need}${KIND_COUNTERS[spec.shapeKind]}選ぶ(クリック / Shift・Ctrl+クリックでトグル / 左ドラッグで囲む)`
   }
   if (spec.kind === 'point') {
     return `${spec.label}をクリック(スケッチ平面の上)`
@@ -434,7 +483,7 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
   }
   if (spec.kind === 'entities') {
     const have = ((values[spec.name] ?? []) as string[]).length
-    return `${spec.label}を${spec.min - have}個選ぶ(スケッチパネルの図形一覧)`
+    return `${spec.label}を${spec.min - have}個選ぶ(スケッチの図形を3Dでクリック)`
   }
   if (spec.kind === 'text') {
     const text = values[spec.name]

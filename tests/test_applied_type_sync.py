@@ -521,6 +521,21 @@ def _run_chamfer(session: Session, tmp_path: Path) -> dict:
     return session.chamfer(RADIUS_THAT_WORKS)
 
 
+@_runner("move_sketch_entities")
+def _run_move_sketch_entities(session: Session, tmp_path: Path) -> dict:
+    sketch_id = _sketch(session)
+    entity_id = session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])["entity_id"]
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    return session.move_sketch_entities(3.0, 4.0)
+
+
+@_runner("move_body")
+def _run_move_body(session: Session, tmp_path: Path) -> dict:
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    return session.move_body(3.0, 4.0, 5.0)
+
+
 @_runner("import_step")
 def _run_import_step(session: Session, tmp_path: Path) -> dict:
     return session.import_step(str(_step_file(tmp_path)))

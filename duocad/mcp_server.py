@@ -657,6 +657,33 @@ class DocumentTools:
                         "point": described["point"],
                     }
                 )
+            elif kind == selection.SKETCH_ENTITY_KIND:
+                # **スケッチの図形**。点なら (u, v) を、辺(図形全体)なら解決済みの
+                # `params` をそのまま返す —— `move_sketch_entities` の dx, dy を
+                # 決めるのに要るのは「いまどこにあるか」だけである。
+                sketch_id = ref["sketch"]
+                entity_id = ref["entity"]
+                target = sketch.get_entity(
+                    sketch.get_sketch(self.session.document, sketch_id), entity_id
+                )
+                resolved = sketch.entity_params(
+                    self.session.document, sketch_id, entity_id
+                )
+                entry = {
+                    "kind": selection.SKETCH_ENTITY_KIND,
+                    "sketch": sketch_id,
+                    "entity": entity_id,
+                    "entity_kind": target.kind,
+                    "point": ref.get("point"),
+                }
+                if ref.get("point") is None:
+                    entry["params"] = resolved
+                else:
+                    x_key, y_key = sketch.entity_point_pair(
+                        target.kind, str(ref["point"])
+                    )
+                    entry["position"] = [resolved[x_key], resolved[y_key]]
+                items.append(entry)
             else:
                 raise ValueError(f"unmeasurable selection kind: {kind!r}")
         return {
@@ -780,6 +807,26 @@ class DocumentTools:
             rotate_copies=bool(rotate_copies),
         )
         return self._apply_logged(before, applied, pattern_id=applied["pattern_id"])
+
+    def move_sketch_entities(self, dx: float, dy: float, copy: bool = False) -> dict:
+        """**確定選択のスケッチの点・辺**を動かす / 複製する(選択から取るのは `Session`)。"""
+        before = self._revision_snapshot()
+        applied = self.session.move_sketch_entities(
+            float(dx), float(dy), copy=bool(copy)
+        )
+        return self._apply_logged(
+            before, applied, copy=applied["copy"], created=applied["created"]
+        )
+
+    def move_body(self, dx: float, dy: float, dz: float, copy: bool = False) -> dict:
+        """**確定選択の面/辺/頂点が属するボディ**を動かす / 複製する(逆引きは `Session`)。"""
+        before = self._revision_snapshot()
+        applied = self.session.move_body(
+            float(dx), float(dy), float(dz), copy=bool(copy)
+        )
+        return self._apply_logged(
+            before, applied, copy=applied["copy"], created=applied["created"]
+        )
 
     # ------------------------------------------------------------------ ボディ・パラメータ
     def set_parameter(self, name: str, value: float) -> dict:

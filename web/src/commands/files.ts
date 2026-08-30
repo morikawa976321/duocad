@@ -2,8 +2,8 @@
  * ファイル操作の判定 —— **`CommandDef` はもう1つも無い**(2026-08-28)。
  *
  * 保存/開く/新規/一覧/STEP読み込み/STEP書き出し/STL書き出しは `FilesPanel.svelte`(左サイド
- * バー)が担当し、`session.runVerb(...)` を直接呼ぶ(`SketchPanel.svelte` の
- * `onSetParameter` と同じ形。2026-08-27にツールバーの`CommandHost`から移設した)。
+ * バー)が担当し、`session.runVerb(...)` を直接呼ぶ(`CommandHost` を経由しない。
+ * 2026-08-27にツールバーの`CommandHost`から移設した)。
  * 残っていた `IMPORT_SVG` も2026-08-28に `commands/sketch.ts` へ移った ——
  * `sketch_id` を必須で取るスケッチのverbになり、ファイル操作ではなくスケッチモードの
  * コマンドになったため。**この結果、ツールバー(`CommandHost`)に載る `file` 分類の

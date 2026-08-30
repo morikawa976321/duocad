@@ -29,6 +29,8 @@ from .verbs import (
     fillet as fillet_verb,
     import_step as import_step_verb,
     import_svg as import_svg_verb,
+    move_body as move_body_verb,
+    move_sketch_entities as move_sketch_entities_verb,
     pattern_circular as pattern_circular_verb,
     pattern_rectangular as pattern_rectangular_verb,
 )
@@ -590,6 +592,47 @@ class Session:
             rotate_copies=rotate_copies,
         )
         return self._after_logged_verb({"pattern_id": pattern_id})
+
+    def move_sketch_entities(self, dx: float, dy: float, copy: bool = False) -> dict:
+        """**確定選択のスケッチの点・辺**を (dx, dy) だけ動かす(`copy=True` は複製)。
+
+        対象は引数ではなく選択から取る(`selection.require_sketch_entities`)——
+        パラメータパネルを廃止して直接選択へ移した後の、位置の打ち直しの唯一の口である。
+        **ソリッドは追従しない**(verb側のdocstring。本人が許容済み)ので `changed_bodies` は空。
+        """
+        targets = selection.require_sketch_entities(self.document)
+        sketch_ids = sorted({str(item["sketch"]) for item in targets})
+        operation = move_sketch_entities_verb(
+            self.document, targets, float(dx), float(dy), copy=bool(copy)
+        )
+        return self._after_logged_verb({
+            "dx": operation.args["dx"],
+            "dy": operation.args["dy"],
+            "copy": operation.args["copy"],
+            "created": list(operation.args["created"]),
+            "sketch_ids": sketch_ids,
+        })
+
+    def move_body(self, dx: float, dy: float, dz: float, copy: bool = False) -> dict:
+        """**確定選択の面/辺/頂点が属するボディ**を (dx, dy, dz) だけ動かす(`copy=True` は複製)。
+
+        複数のボディにまたがる選択なら全部を同じ量だけ動かす(1呼び出し = 1 undo)。
+        `changed_bodies` には動いたボディと、複製で増えたボディの両方を載せる ——
+        画面はここを見て形を取り直すので、どちらかを落とすと片方が古い位置のまま残る。
+        """
+        body_ids = selection.require_bodies(self.document)
+        operation = move_body_verb(
+            self.document, body_ids, float(dx), float(dy), float(dz), copy=bool(copy)
+        )
+        created = list(operation.args["created"])
+        return self._after_logged_verb({
+            "dx": operation.args["dx"],
+            "dy": operation.args["dy"],
+            "dz": operation.args["dz"],
+            "copy": operation.args["copy"],
+            "created": created,
+            "changed_bodies": list(operation.args["bodies"]) + created,
+        })
 
     def set_parameter(self, name: str, value: float) -> dict:
         before_shapes = {body.id: id(body.shape) for body in self.document.bodies}

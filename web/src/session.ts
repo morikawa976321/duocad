@@ -40,7 +40,24 @@ export interface RegionRef {
   provenance?: unknown
 }
 
-export type SelectionRef = ShapeRef | RegionRef
+/**
+ * スケッチの図形(または図形上の1点)を指す参照。
+ *
+ * **`entity` を持つことが `RegionRef` との見分け方**(どちらも `sketch` を持つ。コアの
+ * `duocad/selection.py` の `ref_kind` と同じ規則)。`point` が `null` なら図形1つ全体
+ * (= 辺)、文字列ならその点(`x0` / `cx` / `x` 等の**xキー**)を指す。
+ *
+ * **添字ではなく `entity_id`** で指すので、他の図形を足しても平行移動しても失効しない ——
+ * 面・辺・頂点の `ShapeRef` とはそこが違う。
+ */
+export interface SketchEntityRef {
+  sketch: string
+  entity: string
+  point: string | null
+  provenance?: unknown
+}
+
+export type SelectionRef = ShapeRef | RegionRef | SketchEntityRef
 
 /**
  * 共有される選択集合(`duocad/selection.py` の `Selection.to_dict()`)。
@@ -146,7 +163,7 @@ export interface SketchState {
   drawn: Array<{ kind: EntityKind; params: Record<string, number> }>
   /** 人が値を打ち直す対象(反復は展開しない)。 */
   entities: SketchEntity[]
-  /** 反復の打ち直し対象(間隔・個数)。`SketchPanel.svelte` が図形の一覧に続けて出す。 */
+  /** 反復(間隔・個数)。`entities` と対で、どの図形が反復に吸われているかを画面が知る。 */
   patterns: SketchPattern[]
   regions: SketchRegion[]
 }
@@ -267,6 +284,32 @@ export type Applied =
     })
   | (AppliedVerbBase & { verb: 'fillet'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'chamfer'; body_id: string; changed_bodies: string[] })
+  /**
+   * スケッチの点・辺の平行移動 / 複製。**ソリッドは追従しない**ので `changed_bodies` は無い
+   * (本人が許容済み。`duocad/verbs/move_sketch.py`)。`created` は `copy=true` のときだけ
+   * 中身が入る(移動なら空配列)。
+   */
+  | (AppliedVerbBase & {
+      verb: 'move_sketch_entities'
+      dx: number
+      dy: number
+      copy: boolean
+      created: string[]
+      sketch_ids: string[]
+    })
+  /**
+   * ボディの平行移動 / 複製。`changed_bodies` には動いたボディと複製で増えたボディの
+   * 両方が載る(片方を落とすと、もう片方が古い位置のまま画面に残る)。
+   */
+  | (AppliedVerbBase & {
+      verb: 'move_body'
+      dx: number
+      dy: number
+      dz: number
+      copy: boolean
+      created: string[]
+      changed_bodies: string[]
+    })
   | (AppliedVerbBase & { verb: 'pattern_rectangular'; pattern_id: string })
   | (AppliedVerbBase & { verb: 'pattern_circular'; pattern_id: string })
   | (AppliedVerbBase & {

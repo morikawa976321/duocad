@@ -100,7 +100,21 @@ SHAPE_KINDS = ("face", "edge", "vertex")
 REGION_KIND = "region"
 
 #: `confirmed_items(kind=...)` に渡せる名前の全体
-SELECTABLE_KINDS = SHAPE_KINDS + (REGION_KIND,)
+#: スケッチの図形そのものを指す種別(2026-08-30。`move_sketch_entities` の対象)。
+#:
+#: 参照の形は `{"sketch": SketchId, "entity": EntityId, "point": str|None, "provenance": None}`。
+#: **`point` が None なら「辺」= 図形1つ全体**、文字列ならその点(`sketch.entity_point_keys` の
+#: xキー)を指す。点と辺で種別を分けないのは、`move_sketch_entities` が両方を1回の呼び出しで
+#: 食うからである —— 分けると `require_confirmed` を2回呼んで自前で混ぜることになり、
+#: 「対象集合は1つの種別で取る」という他のverbの形と揃わない。
+#:
+#: **ShapeRef(面・辺・頂点)とは別構造**にしてある。あちらはBodyの上のOCCT部分形状で、
+#: 添字は形が変われば別の実体を指す。スケッチの図形は `entity_id` で名指しでき、
+#: 図形を足しても平行移動しても指す先が変わらない。
+SKETCH_ENTITY_KIND = "sketch_entity"
+
+#: `confirmed_items(kind=...)` に渡せる名前の全体
+SELECTABLE_KINDS = SHAPE_KINDS + (REGION_KIND, SKETCH_ENTITY_KIND)
 
 #: 出所(§3.5 `origin`)。"user"=人が確定した / "proposed"=AIの提案
 ORIGIN_USER = "user"
@@ -268,16 +282,18 @@ def confirmed_items(doc: Document, kind: Optional[str] = None) -> List[dict]:
 
 
 def ref_kind(ref: dict) -> str:
-    """参照の種別を返す(`"face"|"edge"|"vertex"|"region"`)。
+    """参照の種別を返す(`"face"|"edge"|"vertex"|"region"|"sketch_entity"`)。
 
-    **RegionRef は `kind` キーを持たない**ので、`"sketch"` キーがあれば `REGION_KIND`。
+    **RegionRef も SketchEntityRef も `kind` キーを持たない**ので、`"sketch"` キーがあれば
+    スケッチ側の2種で、そのうち `"entity"` を持つものが `SKETCH_ENTITY_KIND`、
+    持たないものが `REGION_KIND`(領域は計算されるものなので添字しか持たない)。
     種別の判定をこの1箇所に集めるのは、`confirmed_items` の絞り込みと `same_ref` の等価判定が
     別々の規則を持ち始めるのを防ぐため。どちらでもない形の辞書は ValueError。
     """
     if not isinstance(ref, dict):
         raise ValueError(f"ref must be a dict, got {type(ref).__name__}")
     if "sketch" in ref:
-        return REGION_KIND
+        return SKETCH_ENTITY_KIND if "entity" in ref else REGION_KIND
     if "kind" in ref:
         kind = ref["kind"]
         if kind not in SHAPE_KINDS:
@@ -340,6 +356,38 @@ def require_edges(doc: Document) -> tuple[List[int], BodyId]:
         _raise_missing(doc, "edge")
     refs = confirmed_items(doc, kind="edge")
     return edges, refs[0]["body"]
+
+
+def require_sketch_entities(doc: Document) -> List[dict]:
+    """確定選択のスケッチ図形(点・辺)を**選択順のまま**返す(`move_sketch_entities` 用)。
+
+    0件は `SelectionEmpty` / `SelectionKindMismatch`(`require_confirmed` と同じ拒否)。
+    種別は1つ(`SKETCH_ENTITY_KIND`)なので、点と辺が同じ呼び出しでまとめて返る。
+    """
+    return require_confirmed(doc, SKETCH_ENTITY_KIND)
+
+
+def require_bodies(doc: Document) -> List[BodyId]:
+    """確定選択の**面・辺・頂点が属するBody**を、最初に現れた順で重複なく返す(`move_body` 用)。
+
+    **「ボディ選択」という新しい概念は作らない**(2026-08-30本人判断) —— ShapeRef が既に
+    `body` を持つので、そこから逆引きすれば足りる。同じBodyの面と辺が両方選ばれていれば
+    1つに畳む(同じボディを2回動かさない)。
+
+    面・辺・頂点が1つも確定していなければ `SelectionEmpty` / `SelectionKindMismatch`。
+    3種のどれでもよいので `require_confirmed` を種別ごとに呼べない —— 先に3種を集めて、
+    全部空のときだけ `face` を代表にして拒否を組み立てる。
+    """
+    ordered: List[BodyId] = []
+    for item in confirmed_items(doc):
+        if ref_kind(item) not in SHAPE_KINDS:
+            continue
+        body_id = item["body"]
+        if body_id not in ordered:
+            ordered.append(body_id)
+    if not ordered:
+        _raise_missing(doc, "face")
+    return ordered
 
 
 def _raise_missing(doc: Document, kind: str) -> NoReturn:
@@ -461,6 +509,33 @@ def select_region(doc: Document, sketch_id: str, region_index: int) -> dict:
     return region_mod.region_ref(sketch_id, value).to_dict()
 
 
+def select_sketch_entity(
+    doc: Document, sketch_id: str, entity_id: str, point: Optional[str] = None
+) -> dict:
+    """スケッチの図形(または図形上の点)を指す参照を作る。
+
+    `point` を省く(None)と**図形全体 = 辺**を指す。文字列を渡すとその点で、名前は
+    `sketch.entity_point_keys(kind)` の**xキー**でなければ ValueError
+    (`"y0"` のようなyキーや、半径・幅のような寸法キーは点ではないので通さない)。
+
+    存在しないスケッチ・図形は KeyError。**添字ではなく `entity_id` で指す**ので、
+    他の図形を足しても、平行移動しても、指す先が変わらない(面・辺・頂点の添字とは
+    そこが違う —— `duocad-selection-resets-on-shape-change` の根拠が当たらない)。
+    """
+    from .sketch import entity_point_pair, get_entity, get_sketch
+
+    sketch = get_sketch(doc, sketch_id)  # 無ければ KeyError
+    entity = get_entity(sketch, entity_id)  # 無ければ KeyError
+    if point is not None:
+        entity_point_pair(entity.kind, str(point))  # その種別に無い点なら ValueError
+    return {
+        "sketch": sketch_id,
+        "entity": entity_id,
+        "point": None if point is None else str(point),
+        "provenance": None,
+    }
+
+
 def same_ref(left: dict, right: dict) -> bool:
     """2つの参照が同じ実体を指すか(`provenance` は見ない)。
 
@@ -473,6 +548,13 @@ def same_ref(left: dict, right: dict) -> bool:
         return False
     if left_kind == REGION_KIND:
         return left["sketch"] == right["sketch"] and int(left["index"]) == int(right["index"])
+    if left_kind == SKETCH_ENTITY_KIND:
+        return (
+            left["sketch"] == right["sketch"]
+            and left["entity"] == right["entity"]
+            # **点と辺は別物**(同じ図形の (x0,y0) と「図形全体」を混同しない)
+            and left.get("point") == right.get("point")
+        )
     return (
         left["body"] == right["body"]
         and left["kind"] == right["kind"]
@@ -487,6 +569,10 @@ def _coerce_ref(doc: Document, ref: dict) -> dict:
         raise ValueError(f"ref must be a dict, got {type(ref).__name__}")
 
     if "sketch" in ref:
+        if "entity" in ref:
+            return select_sketch_entity(
+                doc, ref["sketch"], ref["entity"], ref.get("point")
+            )
         if "index" not in ref:
             raise ValueError("RegionRef is missing 'index'")
         return select_region(doc, ref["sketch"], ref["index"])

@@ -250,6 +250,87 @@ export function runsOutsideSketch(verb: string): boolean {
 }
 
 /**
+ * スケッチの点・辺の平行移動 / 複製(2026-08-30。**パラメータパネルの後継**)。
+ *
+ * 対象はコアの確定選択から取る(3Dで点や辺をクリック / 左ドラッグで囲む)。
+ * `sketch_id` を取らない唯一のスケッチverbで、どのスケッチかは**選んだ参照が持っている**
+ * (下の `runsWithoutSketchId`)。
+ *
+ * **複製するかどうかは人に選ばせる**(既定を置かない)。`move_body` と同じ理由。
+ */
+export const MOVE_SKETCH_ENTITIES: CommandDef = {
+  id: 'move_sketch_entities',
+  category: 'sketch',
+  label: '動かす',
+  buttonId: 'sketch-move',
+  preview: 'none',
+  args: [
+    {
+      kind: 'selection',
+      name: 'target',
+      label: '動かす点・辺',
+      shapeKind: 'sketch_entity',
+      min: 1,
+      max: null,
+    },
+    {
+      kind: 'choice',
+      name: 'copy',
+      label: '複製',
+      options: [
+        { value: 'move', label: '動かす', buttonId: 'sketch-move-move' },
+        { value: 'copy', label: '複製する', buttonId: 'sketch-move-copy' },
+      ],
+    },
+    {
+      kind: 'number',
+      name: 'dx',
+      label: 'X',
+      unit: 'mm',
+      inputId: 'sketch-move-dx',
+      placeholder: 'mm',
+      // 片方の軸だけ動かすのは普通なので0は弾かない(両方0だけを `build` が断る)。
+      reject: () => null,
+    },
+    {
+      kind: 'number',
+      name: 'dy',
+      label: 'Y',
+      unit: 'mm',
+      inputId: 'sketch-move-dy',
+      placeholder: 'mm',
+      reject: () => null,
+    },
+  ],
+  build(values) {
+    const targets = (values.target ?? []) as unknown[]
+    if (targets.length === 0) return { ok: false, reason: '点も辺も選ばれていない' }
+    const dx = values.dx
+    const dy = values.dy
+    if (typeof dx !== 'number' || typeof dy !== 'number') {
+      return { ok: false, reason: '移動量が数値でない' }
+    }
+    if (dx === 0 && dy === 0) return { ok: false, reason: '移動量が両方0' }
+    // **対象そのものは送らない**(サーバがコアの確定選択から取る)。
+    return { ok: true, args: { dx, dy, copy: values.copy === 'copy' } }
+  },
+}
+
+/**
+ * そのverbは**スケッチモードの中で走るのに `sketch_id` を取らない**か。
+ *
+ * `runsOutsideSketch`(モードの外で走る)のちょうど半分だけ違う位置にいる ——
+ * `move_sketch_entities` はモードに入っていることを要求するが、どのスケッチかは
+ * 選んだ参照(`{sketch, entity, point}`)が持っているので引数に要らない。
+ *
+ * **列挙にしてある**(引数の形から導出しない)ので、スケッチverbを新しく足しても既定は
+ * 変わらない —— 足したverbは今までどおり `sketch_id` が付く。
+ */
+export function runsWithoutSketchId(verb: string): boolean {
+  return verb === MOVE_SKETCH_ENTITIES.id
+}
+
+/**
  * 何も描かないコマンド(スケッチモードの既定)。
  *
  * **これが既定でないと領域をクリックで選べない** —— 描くコマンドが常に点を待っていると、
@@ -275,6 +356,7 @@ export const SKETCH_COMMANDS: CommandDef[] = [
   ADD_CIRCLE,
   ADD_RECTANGLE,
   ADD_ARC,
+  MOVE_SKETCH_ENTITIES,
   IMPORT_SVG,
 ]
 export const DEFAULT_SKETCH_COMMAND_ID = SELECT_IN_SKETCH.id

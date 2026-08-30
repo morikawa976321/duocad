@@ -438,6 +438,8 @@ ENTER_REQUIRED = {
     "add_rectangle": True,         # 左下 + 幅 + 高さ
     "add_arc": True,               # 中心 + 半径 + 角度2つ
     "select_in_sketch": False,     # 引数が無い(完成させるクリックが無いので発火もしない)
+    "move_sketch_entities": True,  # 点・辺は何個でも + 移動量2つ + 複製の選択
+    "move_body": True,             # 面/辺/頂点は何個でも + 移動量3つ + 複製の選択
 }
 
 

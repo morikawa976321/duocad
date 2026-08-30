@@ -14,7 +14,7 @@
    *   無いので選択UIは出ないが、サーバの `AI_PROVIDERS` が増えれば自動で出る。
    * - **会話の時系列(`transcript`)はここが持つ状態ではない** —— **正は親(`App.svelte`)の
    *   `aiTranscript`**で、ここは`props`として受け取って描くだけ(パネルは何も覚えない、が
-   *   `SketchPanel.svelte`と同じ形。`duocad/agent/loop.py`の会話がサーバ側にしか残らない
+   *   パネルは何も覚えない。`duocad/agent/loop.py`の会話がサーバ側にしか残らない
    *   ための代わりとして`App.svelte`側に置いてある。`session.ts`の`AiTranscriptEntry`
    *   docstring参照)。**ここが自前で持つ状態**は、打ちかけの発話(`draft`)・設定フォームの
    *   開閉と打ちかけ・本体の開閉(`open`。下記)だけで、どれも見た目だけの状態(再読込で消える)。

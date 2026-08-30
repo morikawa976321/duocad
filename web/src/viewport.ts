@@ -21,7 +21,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 // 辺の折れ線の形は `session.ts` の `EdgeGeometry` が正(サーバが配る形そのもの)。
-import { entityPoints } from './entityKinds'
+import { entityHandles, entityPoints } from './entityKinds'
 import { DEFAULT_RESOLUTION, viewResolution, type ViewResolution } from './adaptiveResolution'
 import { sampleFaces, selectFineFaces, type BodySamples } from './faceCulling'
 import type { BasePlaneName, EdgeGeometry } from './session'
@@ -104,8 +104,15 @@ export interface BodyGeometryUpdate {
   geometry: GeometryPayload | null
 }
 
-/** クリックが選択集合に対して何をするか。修飾キーから決まる。 */
-export type PickMode = 'replace' | 'add' | 'remove'
+/**
+ * クリックが選択集合に対して何をするか。修飾キーから決まる。
+ *
+ * **2026-08-30に `add` / `remove` を `toggle` の1つへ統一した**(本人明言:
+ * 「間違えたらもう一回クリックすればいいので、除外専用の機能は実質無意味」)。
+ * Shift も Ctrl(Mac は Meta)も同じ `toggle` で、既存の選択を消さずに
+ * 「入っていれば外す・入っていなければ足す」。修飾なしは今までどおり `replace`。
+ */
+export type PickMode = 'replace' | 'toggle'
 
 export interface PickEvent {
   /** 当たった面(Body+添字)。外したら null。**スケッチモード中は常に null**(下記)。 */
@@ -123,8 +130,16 @@ export interface PickEvent {
    * 後だと、最小の的である頂点マーカーがその下の面に取られて二度と外せない。
    */
   vertex: VertexRef | null
-  /** Shift=追加 / Ctrl(Mac は Meta)=除去 / 修飾なし=置き換え。 */
+  /** Shift / Ctrl(Mac は Meta)=トグル / 修飾なし=置き換え。 */
   mode: PickMode
+  /**
+   * 当たったスケッチの図形(点または辺)。**スケッチモード中だけ** null 以外になる。
+   *
+   * `point` が文字列ならその点(コアの参照が持つ `point` と同じ**xキー**)、`null` なら
+   * 図形1つ全体(= 辺)である。点は辺より**先に**見る —— 点は必ず辺の上に乗っているので、
+   * 後に見ると端点を掴めない(頂点マーカーを辺より先に見るのと同じ理由)。
+   */
+  sketchEntity: SketchEntityHit | null
   /**
    * スケッチモード中の、クリックした点のスケッチ平面上の座標。
    * 平面がカメラの裏なら null。**これが「手で描く」の入力そのもの**。
@@ -149,6 +164,29 @@ export interface PickEvent {
   plane: BasePlaneName | null
 }
 
+/** スケッチの図形(点または辺)への当たり。`point` が null なら図形全体。 */
+export interface SketchEntityHit {
+  sketchId: string
+  entityId: string
+  point: string | null
+}
+
+/**
+ * 左ドラッグのウィンドウ選択の結果(**矩形に完全包含されたものだけ**)。
+ *
+ * 種別ごとに配列で返すのは、呼び出し側(`App.svelte`)が参照の形へ翻訳するときに
+ * 種別の分岐を1回で済ませるため。**空の配列でも呼ぶ** —— 何も囲まなかったドラッグは
+ * 「選択を空にする」であって「何も起きない」ではない(修飾なしのとき)。
+ */
+export interface BoxSelectEvent {
+  faces: FaceRef[]
+  edges: EdgeRef[]
+  vertices: VertexRef[]
+  regions: Array<{ sketchId: string; index: number }>
+  sketchEntities: SketchEntityHit[]
+  mode: PickMode
+}
+
 /** 1枚のスケッチの描画指示(three.js の型は出さない)。 */
 export interface SketchDraw {
   sketchId: string
@@ -159,6 +197,17 @@ export interface SketchDraw {
   regions: Array<{ index: number; positions: number[]; indices: number[] }>
   /** 選択中の領域の添字(強調して描く)。 */
   selectedRegions: number[]
+  /**
+   * **反復を展開していない**図形(`entity_id` つき)。点・辺のピックと点の表示に使う。
+   *
+   * `entities`(= コアの `drawn`)と分けてあるのは、あちらが反復を展開した「見えるもの」で
+   * `entity_id` を持たないからである。選択の参照は `entity_id` で指すので、指せるのは
+   * ここに載っている元の図形だけ(反復で増えた複製は指せない —— 複製は導出物であって
+   * 独立した図形ではない)。
+   */
+  handles: Array<{ entityId: string; kind: string; params: Record<string, number> }>
+  /** 選択中の図形(強調して描く)。`point` が null なら図形全体。 */
+  selectedHandles: Array<{ entityId: string; point: string | null }>
 }
 
 export interface Viewport {
@@ -353,6 +402,13 @@ export interface Viewport {
    */
   frameAll(): void
   /**
+   * 左ドラッグのウィンドウ選択が終わったときに呼ばれる(矩形に**完全包含**されたものだけ)。
+   *
+   * `onPick` と別の入口にしてあるのは、返すものが「1つの当たり」ではなく**集合**だから。
+   * ドラッグの向きは見ない(左右どちらへ引いても同じ判定。本人明言)。
+   */
+  onBoxSelect(listener: (event: BoxSelectEvent) => void): void
+  /**
    * カメラの画角[度]を変える。**`FOV_ORTHO`(0) は完全正投影**で、そのとき裏では
    * `OrthographicCamera` へ丸ごと差し替わる(近似ではない)。0以外は
    * `FOV_MIN`〜`FOV_MAX` に丸め、NaN・∞は無視する。
@@ -480,6 +536,10 @@ const HIGHLIGHT_COLOR = 0xffb454
 /** スケッチの線・確定前の線・領域。ソリッドの色と混ざらない色にする。 */
 const SKETCH_COLOR = 0xe8eef6
 const SKETCH_GHOST_COLOR = 0x7ee081
+//: スケッチの点マーカー(未選択)。線(`SKETCH_COLOR`)より暗くして線を主役に保つ。
+const SKETCH_HANDLE_COLOR = 0x9fb3c8
+//: 選択中のスケッチの点・辺。**選択の色は1つ**(面・辺・領域と同じ `HIGHLIGHT_COLOR`)。
+const SKETCH_SELECTED_COLOR = HIGHLIGHT_COLOR
 const REGION_COLOR = 0x4d7ea8
 const REGION_SELECTED_COLOR = 0xffb454
 /** AIの提案(`origin === "proposed"`)。確定(橙)と**色相で**離す。 */
@@ -493,6 +553,12 @@ const EDGE_COLOR = 0x3f4a56
 const PICK_EDGE_COLOR = 0xbfd4ea
 /** 辺の当たり判定の太さ[画素]。細すぎると掴めず、太すぎると隣の辺が取れる。 */
 const EDGE_PICK_PIXELS = 6
+//: スケッチの点マーカーの当たり半径[画素]。**辺より小さく**しておく
+//: (点は辺の上に乗っているので、同じ太さだと辺を狙えない)。
+const SKETCH_HANDLE_PIXELS = 5
+//: ウィンドウ選択と見なすドラッグの最小距離[画素]。**クリックの上限と同じ値**にして、
+//: 「クリックでもドラッグでもない画素」が生まれないようにする(下の `CLICK_MOVE_LIMIT_PX`)。
+const BOX_SELECT_MIN_PX = 6
 /** 頂点マーカーの半径[画素]。辺の当たり判定(`EDGE_PICK_PIXELS`)より細くする ——
     太いと、辺を狙うクリックが端点のマーカーに吸われる(頂点は必ず辺の端に乗っている)。 */
 const VERTEX_PIXELS = 4
@@ -732,6 +798,18 @@ export function createViewport(container: HTMLElement): Viewport {
     new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.dampingFactor = 0.15
+  // **マウスの割り当て(2026-08-30本人決定)**: 左=ウィンドウ選択(このファイルが自前で
+  // 実装する)/ 中=パン / 右=カメラ回転。
+  //
+  // `OrbitControls` の既定は LEFT=ROTATE / MIDDLE=DOLLY / RIGHT=PAN なので、**3つとも
+  // 変える**(中ボタンは「既定のままパン」ではなくドリーだった)。左を `null` にするのは、
+  // 左ドラッグを丸ごとこちらへ渡すため —— 左に何か割り当てたままだと、矩形を引く間に
+  // カメラが動いて「囲ったつもりの範囲」と実際の範囲がずれる。
+  controls.mouseButtons = {
+    LEFT: null,
+    MIDDLE: THREE.MOUSE.PAN,
+    RIGHT: THREE.MOUSE.ROTATE,
+  }
 
   const root = new THREE.Group()
   scene.add(root)
@@ -912,6 +990,7 @@ export function createViewport(container: HTMLElement): Viewport {
   /** プレビュー(幽霊)のメッシュ。**ピックの対象にしない**ので `bodies` とは別に持つ。 */
   const previewMeshes = new Map<string, { objects: THREE.Object3D[]; disposables: Array<{ dispose(): void }> }>()
   let pickListener: ((event: PickEvent) => void) | null = null
+  let boxSelectListener: ((event: BoxSelectEvent) => void) | null = null
   let planeMoveListener: ((point: { u: number; v: number } | null) => void) | null = null
 
   // ---------------------------------------------------------------- ホバー強調
@@ -1988,6 +2067,22 @@ export function createViewport(container: HTMLElement): Viewport {
 
   const sketchMaterial = new THREE.LineBasicMaterial({ color: SKETCH_COLOR })
   const sketchGhostMaterial = new THREE.LineBasicMaterial({ color: SKETCH_GHOST_COLOR })
+  // 選択中の図形の線。**線の材質を作り分けるだけ**で、形の作り方は未選択と同じ
+  // (`buildEntityLine` に材質を渡す形になっているのはこのため)。
+  const sketchSelectedMaterial = new THREE.LineBasicMaterial({ color: SKETCH_SELECTED_COLOR })
+  // 点マーカー。**深度を書かない**(`vertexMaterial` と同じ) —— 線の上に必ず出す。
+  const sketchHandleMaterial = new THREE.PointsMaterial({
+    color: SKETCH_HANDLE_COLOR,
+    size: SKETCH_HANDLE_PIXELS * 2,
+    sizeAttenuation: false,
+    depthTest: false,
+  })
+  const sketchHandleSelectedMaterial = new THREE.PointsMaterial({
+    color: SKETCH_SELECTED_COLOR,
+    size: SKETCH_HANDLE_PIXELS * 2,
+    sizeAttenuation: false,
+    depthTest: false,
+  })
   const regionMaterial = new THREE.MeshBasicMaterial({
     color: REGION_COLOR,
     side: THREE.DoubleSide,
@@ -2029,6 +2124,14 @@ export function createViewport(container: HTMLElement): Viewport {
     points: Array<[number, number]>
     /** 図形1本ごとの折れ線の点数(実機検査の `sketchPolylineCounts` が読む)。 */
     polylineCounts: number[]
+    /**
+     * 点のマーカー(**1点1オブジェクト**)。当たった点からコアの参照へ戻すために
+     * `userData` に `entityId` と `point`(xキー)を持つ ——
+     * まとめて1つの `Points` にすると戻れない(頂点マーカーと同じ理由)。
+     */
+    handleMeshes: THREE.Points[]
+    /** 図形の折れ線(**元の図形だけ**。`userData.entityId` を持つ)。辺のピック対象。 */
+    handleLines: THREE.Line[]
   }
   const sketches = new Map<string, SketchScene>()
   let ghost: { objects: THREE.Object3D[]; disposables: Array<{ dispose(): void }> } | null = null
@@ -2093,6 +2196,17 @@ export function createViewport(container: HTMLElement): Viewport {
       const regionMeshes: THREE.Mesh[] = []
       const points: Array<[number, number]> = []
       const polylineCounts: number[] = []
+      const handleMeshes: THREE.Points[] = []
+      const handleLines: THREE.Line[] = []
+      // 選ばれている図形・点の索き(`entityId` -> 選ばれた点のxキーの集合。図形全体は `null`)。
+      const pickedWhole = new Set(
+        entry.selectedHandles.filter((item) => item.point === null).map((item) => item.entityId),
+      )
+      const pickedPoints = new Set(
+        entry.selectedHandles
+          .filter((item) => item.point !== null)
+          .map((item) => `${item.entityId}|${item.point}`),
+      )
 
       // 領域を先に置く(線が領域の上に見えるように。奥行きは書かないので順序で決まる)
       const selected = new Set(entry.selectedRegions)
@@ -2129,6 +2243,48 @@ export function createViewport(container: HTMLElement): Viewport {
         points.push(...built.points)
         polylineCounts.push(built.points.length)
       }
+
+      // **元の図形(`handles`)を、展開した描画の上に重ねて置く。** ここに置くのは
+      // 「指せるもの」であって「見えるもの」ではない —— 反復で増えた複製は `entities`
+      // 側だけに出て、指す対象にはならない(複製は導出物で `entity_id` を持たない)。
+      for (const handle of entry.handles) {
+        const selected = pickedWhole.has(handle.entityId)
+        const built = buildEntityLine(
+          entry.frame,
+          handle,
+          selected ? sketchSelectedMaterial : sketchMaterial,
+        )
+        if (built) {
+          built.object.renderOrder = 12
+          built.object.userData.entityId = handle.entityId
+          sketchRoot.add(built.object)
+          objects.push(built.object)
+          disposables.push(built.geometry)
+          handleLines.push(built.object as THREE.Line)
+        }
+        for (const point of entityHandles(handle.kind, handle.params)) {
+          if (!Number.isFinite(point.u) || !Number.isFinite(point.v)) continue
+          const world = toWorld(entry.frame, point.u, point.v)
+          const geometry = new THREE.BufferGeometry()
+          geometry.setAttribute(
+            'position',
+            new THREE.BufferAttribute(new Float32Array([world.x, world.y, world.z]), 3),
+          )
+          geometry.computeBoundingSphere()
+          const picked = selected || pickedPoints.has(`${handle.entityId}|${point.key}`)
+          const mesh = new THREE.Points(
+            geometry,
+            picked ? sketchHandleSelectedMaterial : sketchHandleMaterial,
+          )
+          mesh.renderOrder = 13 // 深度を書かないので、描く順序で線(12)より手前に出す
+          mesh.userData.entityId = handle.entityId
+          mesh.userData.point = point.key
+          sketchRoot.add(mesh)
+          objects.push(mesh)
+          handleMeshes.push(mesh)
+          disposables.push(geometry)
+        }
+      }
       sketches.set(entry.sketchId, {
         frame: entry.frame,
         objects,
@@ -2136,6 +2292,8 @@ export function createViewport(container: HTMLElement): Viewport {
         regionMeshes,
         points,
         polylineCounts,
+        handleMeshes,
+        handleLines,
       })
     }
     invalidateHover() // 領域のメッシュを作り直したので印を捨てる
@@ -2270,6 +2428,49 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
+  /**
+   * その画素で当たるスケッチの図形(**アクティブなスケッチだけ**)。
+   *
+   * **点が先・辺が後**。点は必ず辺の上に乗っているので、辺を先に見ると端点を掴めない
+   * (頂点マーカーを辺より先に見るのと同じ理由)。当たり判定の太さは画素で決める
+   * (`edgeAt` / `vertexAt` と同じ —— 寄るほど掴みにくくなるのを避ける)。
+   */
+  function sketchEntityAt(offsetX: number, offsetY: number): SketchEntityHit | null {
+    if (activeSketchId === null) return null
+    const target = sketches.get(activeSketchId)
+    if (!target) return null
+    const { width, height } = size()
+    const ndc = new THREE.Vector2((offsetX / width) * 2 - 1, -(offsetY / height) * 2 + 1)
+    raycaster.setFromCamera(ndc, camera)
+
+    if (target.handleMeshes.length > 0) {
+      const previous = raycaster.params.Points?.threshold
+      raycaster.params.Points = { threshold: worldPerPixel() * SKETCH_HANDLE_PIXELS }
+      const hits = raycaster.intersectObjects(target.handleMeshes, false)
+      if (previous !== undefined) raycaster.params.Points = { threshold: previous }
+      if (hits.length > 0) {
+        const { entityId, point } = hits[0].object.userData
+        if (typeof entityId === 'string' && typeof point === 'string') {
+          return { sketchId: activeSketchId, entityId, point }
+        }
+      }
+    }
+
+    if (target.handleLines.length > 0) {
+      const previous = raycaster.params.Line?.threshold
+      raycaster.params.Line = { threshold: worldPerPixel() * EDGE_PICK_PIXELS }
+      const hits = raycaster.intersectObjects(target.handleLines, false)
+      if (previous !== undefined) raycaster.params.Line = { threshold: previous }
+      if (hits.length > 0) {
+        const { entityId } = hits[0].object.userData
+        if (typeof entityId === 'string') {
+          return { sketchId: activeSketchId, entityId, point: null }
+        }
+      }
+    }
+    return null
+  }
+
   function pickRegions(on: boolean): void {
     if (regionPickWanted === on) return
     regionPickWanted = on
@@ -2378,25 +2579,193 @@ export function createViewport(container: HTMLElement): Viewport {
     const position = mesh.geometry.getAttribute('position')
     const triangles = mesh.geometry.getIndex()
     if (!position || !triangles) return null
-    // 面の `project` と同じ流儀: 三角形の重心を狙い、**実際にその領域へ当たる点**を返す
+    // 面の `project` と同じ流儀: 三角形の内側の点を狙い、**実際にその領域へ当たる点**を返す。
+    //
+    // **1つの三角形につき4点試す**(重心 + 各頂点へ寄せた3点)。重心1点だけだと、
+    // スケッチモードで**点・辺のほうが手前で拾われる**画素に当たったときに候補が尽きる ——
+    // ベジエの制御点は曲線から離れた所(＝領域の内側)にも立つので、細長い三角形の重心が
+    // その近くに来ることが実際にある(2026-08-30、`smoke-svg` の丘の領域で踏んだ)。
+    const weights: ReadonlyArray<readonly [number, number, number]> = [
+      [1 / 3, 1 / 3, 1 / 3],
+      [0.5, 0.25, 0.25],
+      [0.25, 0.5, 0.25],
+      [0.25, 0.25, 0.5],
+    ]
     const point = new THREE.Vector3()
     const corner = new THREE.Vector3()
-    for (let triangle = 0; triangle < triangles.count / 3; triangle += 1) {
+    for (let sample = 0; sample < triangles.count / 3 * weights.length; sample += 1) {
+      const triangle = Math.floor(sample / weights.length)
+      const weight = weights[sample % weights.length]
       point.set(0, 0, 0)
       for (let vertex = 0; vertex < 3; vertex += 1) {
         const at = triangles.getX(triangle * 3 + vertex)
         corner.set(position.getX(at), position.getY(at), position.getZ(at))
-        point.add(corner)
+        point.addScaledVector(corner, weight[vertex])
       }
-      point.multiplyScalar(1 / 3)
       const screen = toScreen(point.clone())
       if (screen === null) continue
       // **スケッチも一致していること**を見る —— 通常モードでは全スケッチの領域が対象に
       // なるので、添字だけ見ると別のスケッチの同じ添字を「当たった」と読む。
       const hit = regionAt(screen.x, screen.y)
-      if (hit && hit.sketchId === sketchId && hit.index === index) return screen
+      if (!hit || hit.sketchId !== sketchId || hit.index !== index) continue
+      // **スケッチの図形が勝つ画素は返さない**(2026-08-30)。スケッチモード中は点・辺が
+      // 領域より手前で拾われるので、`regionAt` だけで確かめると「領域に当たるが、実際に
+      // クリックすると線が選ばれる」画素を返しうる —— `project*` の約束(その画素で
+      // 本当にそれが取れる)が破れる。判定は実際のクリックと同じ `sketchEntityAt` で行う。
+      if (sketchEntityAt(screen.x, screen.y) !== null) continue
+      return screen
     }
     return null
+  }
+
+  // ------------------------------------------------------------------ ウィンドウ選択(左ドラッグ)
+  //
+  // **矩形に完全包含されたものだけを選ぶ**(交差判定はしない。本人明言。向きも見ない)。
+  // 判定はすべて**画面座標**で行う —— 「囲った」は人が画面で見たとおりの意味であって、
+  // 世界座標の箱ではない(奥行きは関係ない)。
+  //
+  // 何を候補にするかは**クリックのゲートと同じ**にしてある(辺は辺を出している間だけ、
+  // 領域は要求している間だけ、スケッチの図形はスケッチモード中だけ)。ここだけ別の規則に
+  // すると、「クリックでは指せないものがドラッグでだけ選べる」ができてしまう。
+  const bandElement = document.createElement('div')
+  bandElement.style.position = 'absolute'
+  bandElement.style.border = '1px solid #ffb454'
+  bandElement.style.background = 'rgba(255, 180, 84, 0.12)'
+  // **クリックを吸わない**。吸うと `clickable()`(elementFromPoint)が canvas を見失い、
+  // 射影の穴が「その画素は取れない」と答え始める。
+  bandElement.style.pointerEvents = 'none'
+  bandElement.style.display = 'none'
+  // **大きさには影響しない**(position:absolute なのでフローの外)。親を基準にするために
+  // だけ `relative` を入れる —— `.viewport` の寸法指定そのものは動かさない(styles.css の不変条件)。
+  if (getComputedStyle(container).position === 'static') container.style.position = 'relative'
+  container.appendChild(bandElement)
+
+  /** 矩形を引いている最中か(引いていなければ、離したときの扱いはクリック)。 */
+  let boxActive = false
+
+  function boxRect(x: number, y: number): { left: number; top: number; right: number; bottom: number } {
+    return {
+      left: Math.min(downX, x),
+      right: Math.max(downX, x),
+      top: Math.min(downY, y),
+      bottom: Math.max(downY, y),
+    }
+  }
+
+  function showBand(x: number, y: number): void {
+    const rect = boxRect(x, y)
+    bandElement.style.display = 'block'
+    bandElement.style.left = `${rect.left}px`
+    bandElement.style.top = `${rect.top}px`
+    bandElement.style.width = `${rect.right - rect.left}px`
+    bandElement.style.height = `${rect.bottom - rect.top}px`
+  }
+
+  function hideBand(): void {
+    boxActive = false
+    bandElement.style.display = 'none'
+  }
+
+  const projectScratch = new THREE.Vector3()
+
+  /** 世界座標を**コンテナ内の画素**へ(視錐台の外・カメラの裏は null)。 */
+  function projectRaw(x: number, y: number, z: number): { x: number; y: number } | null {
+    projectScratch.set(x, y, z).project(camera)
+    if (projectScratch.z < -1 || projectScratch.z > 1) return null
+    const { width, height } = size()
+    return {
+      x: ((projectScratch.x + 1) / 2) * width,
+      y: ((1 - projectScratch.y) / 2) * height,
+    }
+  }
+
+  function inside(rect: ReturnType<typeof boxRect>, point: { x: number; y: number }): boolean {
+    return point.x >= rect.left && point.x <= rect.right && point.y >= rect.top && point.y <= rect.bottom
+  }
+
+  /**
+   * そのジオメトリの**全頂点**が矩形の中にあるか。1つでも外れたらその時点で false。
+   *
+   * **早期に打ち切るのが要点**である。27部品(2835面)の全三角形を毎回最後まで見ると
+   * ドラッグを離すたびに数十万点を射影することになるが、実際には矩形の外にある面が
+   * ほとんどで、1点目で落ちる。
+   */
+  function geometryInside(geometry: THREE.BufferGeometry, matrix: THREE.Matrix4, rect: ReturnType<typeof boxRect>): boolean {
+    const position = geometry.getAttribute('position')
+    if (!position || position.count === 0) return false
+    const world = new THREE.Vector3()
+    for (let at = 0; at < position.count; at += 1) {
+      world.set(position.getX(at), position.getY(at), position.getZ(at)).applyMatrix4(matrix)
+      const screen = projectRaw(world.x, world.y, world.z)
+      if (screen === null || !inside(rect, screen)) return false
+    }
+    return true
+  }
+
+  function objectInside(object: THREE.Object3D & { geometry: THREE.BufferGeometry }, rect: ReturnType<typeof boxRect>): boolean {
+    object.updateWorldMatrix(true, false)
+    return geometryInside(object.geometry, object.matrixWorld, rect)
+  }
+
+  function collectInBox(rect: ReturnType<typeof boxRect>): Omit<BoxSelectEvent, 'mode'> {
+    const faces: FaceRef[] = []
+    const edges: EdgeRef[] = []
+    const vertices: VertexRef[] = []
+    const regions: Array<{ sketchId: string; index: number }> = []
+    const sketchEntities: SketchEntityHit[] = []
+
+    if (activeSketchId === null) {
+      // **面は常に指せる**(クリックと同じ)。隠したBodyのメッシュは `visible=false` なので外す。
+      for (const [bodyId, entry] of bodies) {
+        for (const mesh of entry.faceMeshes) {
+          if (!mesh.visible) continue
+          if (!objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect)) continue
+          const faceIndex = mesh.userData.faceIndex
+          if (typeof faceIndex === 'number') faces.push({ bodyId, faceIndex })
+        }
+      }
+      // 辺・頂点は「出している間だけ」(クリックの `edgeAt` / `vertexAt` と同じゲート)
+      for (const line of edgeLines) {
+        if (!objectInside(line as THREE.Line & { geometry: THREE.BufferGeometry }, rect)) continue
+        const { bodyId, edgeIndex } = line.userData
+        if (typeof bodyId === 'string' && typeof edgeIndex === 'number') edges.push({ bodyId, edgeIndex })
+      }
+      for (const mesh of vertexMeshes) {
+        if (!objectInside(mesh as THREE.Points & { geometry: THREE.BufferGeometry }, rect)) continue
+        const { bodyId, vertexIndex } = mesh.userData
+        if (typeof bodyId === 'string' && typeof vertexIndex === 'number') vertices.push({ bodyId, vertexIndex })
+      }
+    } else {
+      // **スケッチモードでは図形だけ**。図形全体が入っていればその図形を、
+      // 入っていなければ矩形に入った点だけを返す(点と図形全体の二重取りを作らない)。
+      const target = sketches.get(activeSketchId)
+      const whole = new Set<string>()
+      for (const line of target?.handleLines ?? []) {
+        if (!objectInside(line as THREE.Line & { geometry: THREE.BufferGeometry }, rect)) continue
+        const entityId = line.userData.entityId
+        if (typeof entityId !== 'string') continue
+        whole.add(entityId)
+        sketchEntities.push({ sketchId: activeSketchId, entityId, point: null })
+      }
+      for (const mesh of target?.handleMeshes ?? []) {
+        const entityId = mesh.userData.entityId
+        const point = mesh.userData.point
+        if (typeof entityId !== 'string' || typeof point !== 'string') continue
+        if (whole.has(entityId)) continue
+        if (!objectInside(mesh as THREE.Points & { geometry: THREE.BufferGeometry }, rect)) continue
+        sketchEntities.push({ sketchId: activeSketchId, entityId, point })
+      }
+    }
+
+    // 領域は**クリックと同じゲート**(`regionPickTargets`)。スケッチモード中はそのスケッチだけ。
+    for (const mesh of regionPickTargets()) {
+      if (!objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect)) continue
+      const { sketchId, regionIndex } = mesh.userData
+      if (typeof sketchId === 'string' && typeof regionIndex === 'number') {
+        regions.push({ sketchId, index: regionIndex })
+      }
+    }
+    return { faces, edges, vertices, regions, sketchEntities }
   }
 
   // クリック(押した位置からほとんど動いていない)だけを選択として扱う。
@@ -2412,23 +2781,40 @@ export function createViewport(container: HTMLElement): Viewport {
     downX = event.offsetX
     downY = event.offsetY
     downValid = true
+    hideBand()
   }
 
   function onPointerUp(event: PointerEvent): void {
     // **ボタンの種類より先に解除する**。右/中ボタンで視点を回して離した場合、ここで
     // 解除しないと次の `pointermove` が来るまでホバーが止まったままになる。
     orbiting = false
-    if (event.button !== 0 || !downValid) return
+    if (event.button !== 0 || !downValid) {
+      if (event.button === 0) hideBand()
+      return
+    }
     downValid = false
     const moved = Math.hypot(event.offsetX - downX, event.offsetY - downY)
     const elapsed = performance.now() - downAt
+    // **矩形を引いていたならウィンドウ選択**(クリックにはしない)。引いた向きは見ない。
+    if (boxActive) {
+      const rect = boxRect(event.offsetX, event.offsetY)
+      hideBand()
+      boxSelectListener?.({ ...collectInBox(rect), mode: modeOf(event) })
+      return
+    }
     if (moved > CLICK_MOVE_LIMIT_PX || elapsed > CLICK_TIME_LIMIT_MS) return
-    const mode: PickMode = event.shiftKey
-      ? 'add'
-      : event.ctrlKey || event.metaKey
-        ? 'remove'
-        : 'replace'
-    pickListener?.({ ...resolveHit(event.offsetX, event.offsetY), mode })
+    pickListener?.({ ...resolveHit(event.offsetX, event.offsetY), mode: modeOf(event) })
+  }
+
+  /**
+   * 修飾キーから選択の扱いを決める。**クリックもウィンドウ選択も同じ規則**
+   * (2箇所に書くと片方だけ直したときに操作が食い違う)。
+   *
+   * **Shift も Ctrl(Mac は Meta)も同じトグル**(2026-08-30本人決定)。除外専用のキーは
+   * 持たない —— 間違えたらもう一度クリック(またはドラッグ)すればよい。
+   */
+  function modeOf(event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): PickMode {
+    return event.shiftKey || event.ctrlKey || event.metaKey ? 'toggle' : 'replace'
   }
 
   /**
@@ -2447,15 +2833,20 @@ export function createViewport(container: HTMLElement): Viewport {
       point: null,
       region: null,
       plane: null,
+      sketchEntity: null,
     }
     // **スケッチモード中は面を拾わない**。描いている最中に奥のソリッドの面を掴むと、
     // 線を引くつもりのクリックが選択の置き換えになる。領域が手前・平面の点がその次。
     if (activeSketchId !== null) {
       const region = regionAt(offsetX, offsetY)
       const plane = planePointAt(offsetX, offsetY)
+      // **図形は領域より手前**(点・辺は領域の縁に乗っているので、領域が勝つと
+      // 端点を掴めない)。ただし `point`(平面上の座標)は常に一緒に返す ——
+      // 描くコマンドが起動している間はそちらが優先で、判断は `App.svelte` が持つ。
       return {
         ...nothing,
         region,
+        sketchEntity: sketchEntityAt(offsetX, offsetY),
         point: plane === null ? null : { sketchId: activeSketchId, ...plane },
       }
     }
@@ -2506,9 +2897,14 @@ export function createViewport(container: HTMLElement): Viewport {
     // 視点回転中は取れるものの予告を出さない(**これはクリックにならない**)。境目は
     // `onPointerUp` の moved 判定と揃える。**`downValid` ではなく `buttons` で見る** ——
     // canvasの外でボタンを離されると `pointerup` が来ず、`downValid` は立ったままになる。
-    orbiting =
-      event.buttons !== 0 &&
-      Math.hypot(event.offsetX - downX, event.offsetY - downY) > CLICK_MOVE_LIMIT_PX
+    const dragged = Math.hypot(event.offsetX - downX, event.offsetY - downY)
+    orbiting = event.buttons !== 0 && dragged > CLICK_MOVE_LIMIT_PX
+    // **左ボタンを押したまま一定距離を越えたらウィンドウ選択**。`downValid` ではなく
+    // `buttons` も見るのは、canvasの外で離されたときに帯が出たままになるのを防ぐため。
+    if (downValid && (event.buttons & 1) !== 0 && dragged > BOX_SELECT_MIN_PX) {
+      boxActive = true
+      showBand(event.offsetX, event.offsetY)
+    }
     if (planeMoveListener === null) return
     planeMoveListener(activeSketchId === null ? null : planePointAt(event.offsetX, event.offsetY))
   }
@@ -2517,6 +2913,9 @@ export function createViewport(container: HTMLElement): Viewport {
   function onPointerLeave(): void {
     hoverAt = null
     orbiting = false
+    // **引きかけの矩形は捨てる**(帯だけが残って画面に貼り付くのを防ぐ)。
+    hideBand()
+    downValid = false
   }
 
   renderer.domElement.addEventListener('pointerdown', onPointerDown)
@@ -2552,9 +2951,13 @@ export function createViewport(container: HTMLElement): Viewport {
     const next = point === null ? null : resolveHit(point.x, point.y)
     // **頂点は出さない**(2026-08-27本人決定)。頂点が取れる画素では面も辺も光らない ——
     // そこをクリックしても面は選ばれないのだから、光らせないほうが正しい。
+    //
+    // **スケッチの点・辺も同じ扱い**(2026-08-30)。予告の色は付けないが、
+    // **そこが取れるときは領域を光らせない** —— 光らせると「クリックすれば取れるもの」の
+    // 予告が嘘になり、この機能の存在意義そのものが消える(点・辺は領域より手前で拾われる)。
     const face = next?.hit ?? null
     const edge = next?.edge ?? null
-    const region = next?.region ?? null
+    const region = next?.sketchEntity ? null : (next?.region ?? null)
     const plane = next?.plane ?? null
 
     const nextFaceKey = face === null ? '' : refKey(face.bodyId, face.faceIndex)
@@ -2602,6 +3005,9 @@ export function createViewport(container: HTMLElement): Viewport {
     prune,
     onPick(listener) {
       pickListener = listener
+    },
+    onBoxSelect(listener) {
+      boxSelectListener = listener
     },
     onPlaneMove(listener) {
       planeMoveListener = listener
@@ -2684,8 +3090,12 @@ export function createViewport(container: HTMLElement): Viewport {
       pickEdgeSelectedHoverMaterial.dispose()
       pickEdgeProposedHoverMaterial.dispose()
       for (const sketchId of [...sketches.keys()]) clearSketch(sketchId)
+      bandElement.remove()
       sketchMaterial.dispose()
       sketchGhostMaterial.dispose()
+      sketchSelectedMaterial.dispose()
+      sketchHandleMaterial.dispose()
+      sketchHandleSelectedMaterial.dispose()
       regionMaterial.dispose()
       regionSelectedMaterial.dispose()
       regionHoverMaterial.dispose()

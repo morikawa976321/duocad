@@ -336,11 +336,14 @@ class DocumentView:
              "drawn":    [{"kind","params"}],                      # 反復を展開した描画用
              "regions":  [{"index","area","centroid","positions","indices"}]}
 
-        **`entities` と `drawn` を分けている理由**: 前者は人が値を打ち直す対象(`refs` に
-        パラメータ名が入る)で、後者は反復を展開した「実際に見えるもの」。反復した図形が
-        画面に出ないのに領域だけ増える、を避けるため描画は必ず `drawn` を使う。**`patterns`**は
-        `entities` と対になる打ち直し用の口(反復の間隔・個数)で、`SketchPanel.svelte` が図形の
-        行に続けて出す(2026-08-27、`ParametersPanel.svelte` 廃止に伴い統合)。
+        **`entities` と `drawn` を分けている理由**: 前者は**指せるもの**(`entity_id` を持つ元の
+        図形。点・辺の選択と `move_sketch_entities` の対象)で、後者は反復を展開した
+        「実際に見えるもの」。反復した図形が画面に出ないのに領域だけ増える、を避けるため
+        描画は必ず `drawn` を使い、ピックは `entities` を使う(複製は導出物なので指せない)。
+        **`patterns`** は反復の寸法(間隔・個数)と、どの図形が反復に吸われているかを配る。
+        `refs`(パラメータ名)は `set_parameter` で打ち直すための口として残してある ——
+        2026-08-30に画面の数値入力欄(`SketchPanel.svelte`)を廃止したので、いま使うのは
+        AI(MCP)だけである。
 
         **領域の計算は重い**(`BRepAlgoAPI_Splitter`+テセレーション)。`state` は変更のたびに
         全接続へ配るので、**スケッチの内容の署名でキャッシュする**。署名には解決済みの数値が
