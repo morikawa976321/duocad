@@ -7,7 +7,7 @@
 
 固定する契約:
 
-1. `resets_selection=True` はカタログの中で正確にこの14verbだけである
+1. `resets_selection=True` はカタログの中で正確にこの16verbだけである
 2. 形を変えるverbが成功で確定すると、選択は空になる(`items=[]` / `origin="user"`)
 3. 形を変えない操作(可視性・選択操作そのもの)は選択に触らない
 4. undo/redo は「何を戻したか」に関わらず常にリセットする(単純な規則を保つため)
@@ -49,6 +49,10 @@ RESETTING_VERBS = frozenset(
         "set_parameter",
         "undo",
         "redo",
+        # 2026-08-30当初は「entity_idの参照は平行移動で失効しない」を理由に例外にしていたが、
+        # 本人が非として却下(2026-08-31)。他の形状変更verbと同じ既定に揃える。
+        "move_sketch_entities",
+        "move_body",
     }
 )
 

@@ -457,19 +457,19 @@ def test_the_move_survives_save_and_replay(session: Session) -> None:
         )
 
 
-def test_the_selection_survives_a_sketch_move(session: Session) -> None:
-    """**確定後に選択をリセットしない**(意図した契約。catalog の note 参照)。
+def test_the_selection_resets_after_a_sketch_move(session: Session) -> None:
+    """確定後に選択を空にする(他の形状変更verbと同じ既定の契約。catalog の note 参照)。
 
-    参照は `entity_id` で名指しするので平行移動では失効せず、少しずつ動かす使い方が
-    主用途である。`resets_selection=True` にすると1回動かすたびに選び直しになる。
+    2026-08-30時点では「参照は`entity_id`で名指しするので平行移動では失効せず、少しずつ
+    動かす使い方が主用途」という理由で例外にしていたが、本人が非として却下(2026-08-31)。
+    以後は毎回選び直す(`tests/test_server_selection_reset.py` の RESETTING_VERBS 参照)。
     """
     sketch_id, entity_id = _line(session)
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": "x0"}])
     session.move_sketch_entities(1.0, 0.0)
-    session.move_sketch_entities(1.0, 0.0)
 
-    assert session.get_selection()["count"] == 1
-    assert _params(session, sketch_id, entity_id)["x0"] == pytest.approx(2.0)
+    assert session.get_selection()["count"] == 0
+    assert _params(session, sketch_id, entity_id)["x0"] == pytest.approx(1.0)
 
 
 def test_a_later_set_parameter_does_not_erase_the_move(session: Session) -> None:
@@ -646,6 +646,7 @@ def test_the_body_move_survives_save_and_replay(session: Session) -> None:
     body, _sketch_id = _box(session)
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     session.move_body(10.0, 0.0, 0.0)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])  # move_bodyでリセットされるため選び直す
     session.move_body(0.0, 0.0, 5.0, copy=True)
     expected = [(b.id, _center(b)) for b in session.document.bodies]
 
@@ -658,15 +659,13 @@ def test_the_body_move_survives_save_and_replay(session: Session) -> None:
         assert _center(rebuilt) == pytest.approx(center)
 
 
-def test_the_selection_survives_a_body_move(session: Session) -> None:
-    """平行移動は面の添字を壊さないので、選択をリセットしない(意図した契約)。"""
+def test_the_selection_resets_after_a_body_move(session: Session) -> None:
+    """確定後に選択を空にする(他の形状変更verbと同じ既定の契約。本人が非として却下し2026-08-31に変更)。"""
     body, _sketch_id = _box(session)
     _select(session, [{"body": body.id, "kind": "face", "index": 3}])
     session.move_body(1.0, 0.0, 0.0)
-    session.move_body(1.0, 0.0, 0.0)
 
-    items = session.get_selection()["items"]
-    assert items == [{"body": body.id, "kind": "face", "index": 3, "provenance": None}]
+    assert session.get_selection()["items"] == []
 
 
 def test_the_face_indices_do_not_move_with_the_body(session: Session) -> None:

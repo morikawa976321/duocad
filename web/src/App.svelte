@@ -152,6 +152,7 @@
     setBasePlane(name: BasePlaneName): boolean
     useSelectedFaceAsPlane(): boolean
     restoreLastInputs(): void
+    commandSucceeded(): void
   } | null>(null)
 
   // ---------------------------------------------------------------- F: 形状最適化モード
@@ -542,7 +543,17 @@
         const count = applied.body_ids?.length ?? 0
         note(`STEPを読み込んだ(${count}部品)。そのまま面をクリックして押し出せる`)
       }
-      if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
+      if (applied.client_op !== null && applied.client_op === pendingOp) {
+        pendingOp = null
+        // **CommandHostが出した確定が、実際に成功したと確認できた**(2026-08-31)——ここで
+        // 初めて無起動へ戻す。`commit()` の時点(`onRun` を呼んだ直後)ではまだ成否が
+        // 分からず、先に戻すとOCCTのフィレット失敗時の打ち直し(`CommandHost.commit()`の
+        // コメント参照)が壊れる。`sketch`/`feature` 以外(`file`/`history`等)は
+        // CommandHostの外で走るので対象にしない——`import_step`(FilesPanel経由)の成功で
+        // 人が別コマンドに入力中のCommandHostを畳んではならない。
+        const category = CATEGORY_OF.get(applied.verb)
+        if (category === 'sketch' || category === 'feature') host?.commandSucceeded()
+      }
       lastApplied = applied
     }
   }
@@ -1273,7 +1284,7 @@
    * **引数を取る形にしてある**(2026-08-27)。呼び出し側(`runCommand`)は既定値の
    * 現在の `selection`/`sketches` で呼ぶが、テスト(`window.__duocad.regionsStillExist`)は
    * 合成データを渡して分岐を直接検査できる —— この関数がfalseを返す状況(選んだ領域が
-   * 実際に消えている)は、`duocad/catalog.py` の `resets_selection=True`(14verb全て。
+   * 実際に消えている)は、`duocad/catalog.py` の `resets_selection=True`(16verb全て。
    * `tests/test_server_selection_reset.py` が過不足なく固定)が領域を変えうるverbの
    * すべてに掛かっているため、**通常のUI操作では選択が先に空になり到達できない**
    * (`tests/test_server_selection_reset.py::test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish`

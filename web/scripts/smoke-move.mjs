@@ -351,14 +351,14 @@ async function main() {
         `${moved.params.y1.toFixed(3)}・y0 は不変)`,
     )
 
-    // **選択が残っている**(添字が失効しないので確定後にリセットしない契約)
+    // **選択は空になる**(他の形状変更verbと同じ既定の契約。2026-08-31に本人が非として却下し変更)
     const afterMoveSelection = await page.evaluate(() =>
       JSON.parse(JSON.stringify(window.__duocad.selection)),
     )
-    if (afterMoveSelection.count !== 1) {
-      fail(`移動の後に選択が消えた(連続で動かせない): ${JSON.stringify(afterMoveSelection)}`)
+    if (afterMoveSelection.count !== 0) {
+      fail(`移動の後も選択が残っている(リセットされていない): ${JSON.stringify(afterMoveSelection)}`)
     }
-    ok('移動の後も選択が残っている(少しずつ動かせる)')
+    ok('移動の後は選択が空になる(次は選び直しになる)')
 
     // ================================================================ 6. move_sketch_entities(複製)
     // 図形全体を選び直す(線の中ほどをクリック = 点ではなく辺)。
@@ -538,10 +538,10 @@ async function main() {
     const selectionAfterBodyMove = await page.evaluate(() =>
       JSON.parse(JSON.stringify(window.__duocad.selection)),
     )
-    if (selectionAfterBodyMove.count !== 1) {
-      fail(`ボディの移動で選択が消えた: ${JSON.stringify(selectionAfterBodyMove)}`)
+    if (selectionAfterBodyMove.count !== 0) {
+      fail(`ボディの移動の後も選択が残っている(リセットされていない): ${JSON.stringify(selectionAfterBodyMove)}`)
     }
-    ok('ボディの移動の後も面の選択が残っている(添字が失効しないため)')
+    ok('ボディの移動の後は選択が空になる(次は選び直しになる)')
 
     // ================================================================ 8b. move_body は辺からも踏める
     //
@@ -549,29 +549,14 @@ async function main() {
     // `ShapeRef.body` から逆引きする)。**画面側の配線が本当に届いているか**を見る ——
     // `CommandHost` が主たる種別しか要求しないと、辺のピックが開かないまま
     // 「サーバは受け付けるのに画面から選べない」穴になる(2026-08-30に実際そうなっていた)。
-    // **Escはコマンドを畳むだけで選択は消えない**(選択の正はコア側)。面の選択を
-    // Ctrl+クリックのトグルで外してから、辺だけで踏めることを見る。
+    // move_body は確定のたびに選択を空にする(2026-08-31〜)ので、選択は既に空。
+    // そのまま move-body を起動すれば辺のピックが開くはずである。
+    // **移動直後は1フレーム挟む**(`projectEdge` 等はレンダー済みの射影行列を読むため。
+    // 以前はここにCtrl+クリックの往復があり副次的にフレームを進めていたが、
+    // その往復自体は無くなったので明示的に呼ぶ)。
+    await frameAll(page)
     await page.evaluate(() => document.activeElement?.blur?.())
     await page.keyboard.press('Escape')
-    {
-      const at = await page.evaluate(
-        (id, index) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectFace(id, index)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        bodyId,
-        faceIndex,
-      )
-      if (!at) fail('選択中の面が画面の中に無い')
-      await page.keyboard.down('Control')
-      await page.mouse.click(at.x, at.y)
-      await page.keyboard.up('Control')
-    }
-    await waitFor(
-      () => (window.__duocad.selection?.count ?? -1) === 0,
-      'Ctrl+クリックで面の選択を外せない',
-    )
     await page.click('#move-body')
     await waitFor(
       () => window.__duocad.wantsEdges === true,

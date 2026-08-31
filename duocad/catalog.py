@@ -531,11 +531,8 @@ COMMANDS: tuple[Command, ...] = (
         ),
         uses_selection=True,
         session="move_sketch_entities",
+        resets_selection=True,
         note=(
-            "**確定後に選択をリセットしない**(`resets_selection=False`)。リセットする契約は"
-            "「面・辺・領域の添字が形状変更で壊れる」ことが理由だが、この verb の対象は"
-            "`entity_id` で名指しする参照で、平行移動では失効しない —— 少しずつ動かして"
-            "位置を詰める使い方が主用途なので、1回ごとに選び直させない。"
             "**押し出し済みのソリッドは追従しない**(本人が許容済み)"
         ),
     ),
@@ -561,10 +558,8 @@ COMMANDS: tuple[Command, ...] = (
         ),
         uses_selection=True,
         session="move_body",
+        resets_selection=True,
         note=(
-            "**確定後に選択をリセットしない**(`move_sketch_entities` と同じ理由)。"
-            "平行移動は `TopLoc_Location` の差し替えなので面・辺・頂点の添字が変わらず、"
-            "リセットの根拠(添字の失効)が当たらない。"
             "**プレビューに載せていない** —— 動かす前後の形は同じで、変わるのは位置だけなので、"
             "幽霊を出しても本体と重なって見分けが付かない"
         ),
