@@ -15,6 +15,16 @@
  *      で目視できるようにする)。
  *   5. **モードを抜けると装飾も役割色も消える**。
  *
+ * 加えて、2026-08-31のQA(第1段)指摘4件の回帰検査も持つ:
+ *
+ *   6. 装飾の**中身**(種別・対象の面・矢印の単位ベクトル・ラベル文字列)まで照合する
+ *      (総数だけでは拘束/荷重の取り違え・向きの逆転・ラベル欠落を検出できない)。
+ *   7. **最適化モードとスケッチモードは同時に真にならない**(`sketchId`/`optimizeMode`が
+ *      独立変数のままだと両立しうる)。
+ *   9. **空の確定選択で役割を外せる**(「0件だから送らない」最適化が入っていないこと)。
+ *   10. `stale` の `code` が変わると再通知される(`hidden` として記録済みでも
+ *      `fingerprint`/`missing` に変わればトーストが出る)。
+ *
  * サーバはこのスクリプトが空の文書で起動し、2つの立方体をMCP経由で作る(離して置くので
  * 画面上で別々の画素になる)。**`--models-dir` に使い捨てディレクトリを渡す**
  * (リポジトリ直下の実 `models/` を触らない)。
@@ -312,34 +322,222 @@ async function main() {
     }
     ok(`[5] 荷重面を確定した(magnitude=250N, direction=normal): ${JSON.stringify(loadState)}`)
 
-    // ====================================================================== 6. 装飾(拘束記号・荷重矢印)が見える
-    console.log('\n[6] 拘束の固定記号・荷重の矢印が実際に描かれている')
-    const annotationCount = await page.evaluate(() => window.__duocad.optimizeAnnotationCount())
-    if (annotationCount < 2) fail(`装飾がほぼ描かれていない(count=${annotationCount})`)
-    ok(`[6] 装飾が${annotationCount}個描かれている(拘束の固定記号1 + 荷重の矢印1 + ラベル1が目安)`)
+    // ====================================================================== 6. 装飾の中身(種別・向き・ラベル)まで照合する
+    // `optimizeAnnotationCount()`(総数)だけでは、拘束と荷重の取り違え・矢印の逆向き・
+    // ラベル欠落を検出できない(2026-08-31 QA指摘)。`optimizeAnnotations()` で種別ごとの
+    // 中身を読み、対象の面・単位ベクトル・ラベル文字列まで照合する。
+    console.log('\n[6] 装飾の中身(種別・向き・ラベル)まで照合する')
+    const annotations = await page.evaluate(() => window.__duocad.optimizeAnnotations())
+    if (annotations.fixtures.length !== 1) {
+      fail(`拘束の装飾が1個ではない: ${JSON.stringify(annotations.fixtures)}`)
+    }
+    if (!annotations.fixtures.some((item) => item.bodyId === bodyA && item.faceIndex === faceA_fixture)) {
+      fail(`拘束の装飾が対象の面(${bodyA}/${faceA_fixture})を指していない: ${JSON.stringify(annotations.fixtures)}`)
+    }
+    ok('[6] 拘束の装飾は1個・対象の面(拘束面そのもの)を指している')
 
-    // ====================================================================== 7. スクリーンショット
+    if (annotations.loads.length !== 1) {
+      fail(`荷重の装飾が1個ではない: ${JSON.stringify(annotations.loads)}`)
+    }
+    const loadAnnotation = annotations.loads[0]
+    if (loadAnnotation.bodyId !== bodyA || loadAnnotation.faceIndex !== faceA_load) {
+      fail(`荷重の装飾が対象の面(${bodyA}/${faceA_load})を指していない: ${JSON.stringify(loadAnnotation)}`)
+    }
+    if (loadAnnotation.label !== '250N') {
+      fail(`荷重のラベルが期待どおりでない(空/誤りの疑い): ${JSON.stringify(loadAnnotation.label)}`)
+    }
+    const [dx, dy, dz] = loadAnnotation.direction
+    const dirLength = Math.hypot(dx, dy, dz)
+    if (Math.abs(dirLength - 1) > 0.01) {
+      fail(`荷重の矢印の向きが単位ベクトルでない(長さ=${dirLength}): ${JSON.stringify(loadAnnotation.direction)}`)
+    }
+    // direction='normal' で確定したので、実際の面法線(サーバの配りものと同じ形)と矢印の
+    // 向きが**符号まで**一致するはず — 拘束/荷重の取り違え・矢印の逆さを内積で検出する。
+    const faceNormal = await page.evaluate(
+      (id, index) =>
+        window.__duocad.getGeometry(id)?.faces.find((face) => face.index === index)?.normal ?? null,
+      bodyA,
+      faceA_load,
+    )
+    if (!faceNormal) fail('荷重面の法線を取れない(getGeometryの穴が壊れている疑い)')
+    const dot = dx * faceNormal[0] + dy * faceNormal[1] + dz * faceNormal[2]
+    if (dot < 0.9) {
+      fail(
+        `荷重の矢印の向きが面法線と一致しない(direction='normal'のはずが逆さ/別方向): ` +
+          `矢印=${JSON.stringify(loadAnnotation.direction)} / 面法線=${JSON.stringify(faceNormal)} / 内積=${dot}`,
+      )
+    }
+    ok(`[6] 荷重の装飾は1個・対象の面を指し・ラベルは"250N"・向きは面法線と一致(内積 ${dot.toFixed(3)})`)
+
+    // ====================================================================== 7. 最適化モードとスケッチモードは排他
+    // `optimizeMode`(要求)と`sketchId`が独立変数のままだと、スケッチ名クリック
+    // (`BrowserPanel`。無条件で`enterSketch`を呼ぶ)経由で両方が同時に真になりうる
+    // (2026-08-31 QA指摘 — `App.svelte:80`の「状態機械は1つのまま」原則の実質違反)。
+    console.log('\n[7] 最適化モードとスケッチモードは同時に成立しない')
+    if (!(await page.evaluate(() => window.__duocad.optimizeMode))) {
+      fail('この検査の前提が崩れている(まだ最適化モードのはず)')
+    }
+    const targetSketchId = await page.evaluate(() => window.__duocad.sketches[0]?.sketch_id ?? null)
+    if (!targetSketchId) fail('スケッチが1つも無い(排他検査の前提が崩れている)')
+    // `BrowserPanel`のスケッチ名クリック(`exitOptimizeMode`を経由しない、最適化モード側に
+    // ガードの無い経路)で直接スケッチへ入る。
+    await page.click(`[data-sketch-id="${targetSketchId}"] .sketch-name`)
+    await waitFor(
+      (id) => window.__duocad.activeSketch === id,
+      'スケッチ名クリックでスケッチへ入れない',
+      [targetSketchId],
+    )
+    const bothTrueAtOnce = await page.evaluate(
+      () => window.__duocad.optimizeMode === true && window.__duocad.activeSketch !== null,
+    )
+    if (bothTrueAtOnce) {
+      fail('最適化モードとスケッチモードが同時に真になっている(排他が壊れている)')
+    }
+    ok('[7] スケッチへ入ると最適化モードは自動的に偽になる(同時に真にならない)')
+    const annotationsInSketch = await page.evaluate(() => window.__duocad.optimizeAnnotationCount())
+    if (annotationsInSketch !== 0) {
+      fail(`スケッチ編集中も最適化の装飾が描かれたままになっている(count=${annotationsInSketch})`)
+    }
+    ok('[7] スケッチ編集中は最適化の装飾(拘束記号・荷重矢印)も消えている')
+    await page.click('#sketch-exit')
+    await waitFor(() => window.__duocad.activeSketch === null, 'スケッチを抜けられない')
+    await waitFor(
+      () => window.__duocad.optimizeMode === true,
+      'スケッチを抜けても最適化モードへ戻らない(要求=optimizeModeRequestedは保持されるはず)',
+    )
+    ok('[7] スケッチを抜けると最適化モードへ自動的に戻る(要求は保持される)')
+
+    // ====================================================================== 8. スクリーンショット
     // モードに入り・保持と除外を割り当て・拘束と荷重を置いた状態(タスクの完了条件そのもの)。
-    console.log('\n[7] スクリーンショット')
+    // **この後の9・10節は役割を外す/壊す検査なので、見た目が壊れる前にここで撮る。**
+    console.log('\n[8] スクリーンショット')
     await page.evaluate(() => document.activeElement?.blur?.())
     await frameAll(page)
     await new Promise((resolve) => setTimeout(resolve, 300))
     mkdirSync(screenshotDir, { recursive: true })
     const screenshotPath = join(screenshotDir, 'optimize-mode.png')
     await page.screenshot({ path: screenshotPath })
-    ok(`[7] スクリーンショットを保存した: ${screenshotPath}`)
+    ok(`[8] スクリーンショットを保存した: ${screenshotPath}`)
 
-    // ====================================================================== 8. undo で戻る
-    console.log('\n[8] undo で荷重面の確定が戻る')
+    // ====================================================================== 9. undo で戻る
+    console.log('\n[9] undo で荷重面の確定が戻る')
     await pressUndo(page)
     await waitFor(
       () => (window.__duocad.state.optimize.loads ?? []).length === 0,
       'undoしても state.optimize.loads が空に戻らない',
     )
-    ok('[8] Ctrl+Z(undo)で荷重面の確定が戻った')
+    ok('[9] Ctrl+Z(undo)で荷重面の確定が戻った')
 
-    // ====================================================================== 9. モードを抜けると装飾も役割色も消える
-    console.log('\n[9] モードを抜けると装飾も役割色も消える')
+    // ====================================================================== 10. 空の確定で役割を外せる
+    // タスク仕様が名指しで注意した回帰穴: 「0件だから送らない」という最適化を入れると、
+    // 役割を外す唯一の手段(空の確定選択)が機能しなくなる(2026-08-31 QA指摘で検査を追加)。
+    console.log('\n[10] 空の確定で役割を外せる(0件だから送らない、をしていないことの検査)')
+    await page.click('#set-preserve-bodies')
+    await waitFor(() => window.__duocad.wantedKinds.includes('body'), '保持ソリッドのverbへ再起動できない')
+    await waitFor(
+      (id) => (window.__duocad.selection?.items ?? []).some((item) => item.kind === 'body' && item.body === id),
+      '再起動時に既存の割り当て(A)がプリセレクトされない',
+      [bodyA],
+    )
+    // 唯一選ばれているものを再クリック = 解除(`editSelection`の「置き換えで1件だけ選んで
+    // いれば外す」規則。`App.svelte`の`editSelection`docstring)。
+    await clickFace(bodyA, faceA_preserve)
+    await waitFor(
+      () => (window.__duocad.selection?.items ?? []).length === 0,
+      '再クリックしても選択が空にならない',
+    )
+    await page.keyboard.press('Enter')
+    await waitFor(
+      (id) => !(window.__duocad.state.optimize.preserve_bodies ?? []).some((item) => item.body === id),
+      '空の確定でも state.optimize.preserve_bodies からAが消えない(0件だから送らない、の疑い)',
+      [bodyA],
+    )
+    ok('[10] 空の確定で保持ソリッドの役割を外せた(Aはもう保持ではない)')
+
+    // ====================================================================== 11. staleのcode変化は再通知される
+    // 回帰穴(2026-08-31 QA指摘): `seenStaleKeys`の鍵が`role:body:index`だけだと、`hidden`
+    // (出さない側)として一度記録した対象が後で`fingerprint`(出す側)へ変わっても、
+    // 「もう見た」と誤判定されて二度と通知されない。専用の使い捨てボディ(C)で
+    // hidden → fingerprint と遷移させ、2回目のトーストが実際に出ることを見る
+    // (bodyA/Bは他の検査の対象なので、ここでは巻き込まない)。
+    console.log('\n[11] stale の code が変わると再通知される(hidden → fingerprint)')
+    const paramsBeforeC = await page.evaluate(() => Object.keys(window.__duocad.parameters))
+    const bodyC = await addBox([120, 0], 20, 20)
+    await waitFor(
+      (id) => (window.__duocad.parts ?? []).some((item) => item.body_id === id),
+      'ボディCがブラウザへ届かない',
+      [bodyC],
+    )
+    // A/Bのために合わせたカメラのままだと、離して置いたCが画角の外で `pickAnyFace` が
+    // 使える面を1つも見つけられない。
+    await frameAll(page)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    // **`d#`は登録順の連番**(`duocad/parameters.py`)なので、Cの作成前後の差集合が
+    // Cの角(x, y)・幅・高さの4パラメータ(この順)になる。ハードコードしない —— 直前の
+    // 検査がパラメータをいくつ使うかに依存させないため。
+    const paramsAfterC = await page.evaluate(() => Object.keys(window.__duocad.parameters))
+    const newParamNames = paramsAfterC.filter((name) => !paramsBeforeC.includes(name))
+    if (newParamNames.length !== 4) {
+      fail(`ボディCの新規パラメータが4個ではない(角x/y・幅・高さのはず): ${JSON.stringify(newParamNames)}`)
+    }
+    const [, , widthParam, heightParam] = newParamNames
+    const faceC = await pickAnyFace(bodyC)
+    // 拘束面として確定する(MCP経由。UIの検査は2節で既にやっている——ここはstaleの
+    // 再通知だけを見る)。
+    await mcp.callTool('propose_selection', { refs: [{ body: bodyC, kind: 'face', index: faceC }] })
+    await mcp.callTool('commit_selection')
+    await mcp.callTool('set_fixtures', {})
+    await waitFor(
+      (id, index) =>
+        (window.__duocad.state.optimize.fixtures ?? []).some((item) => item.body === id && item.index === index),
+      'MCP経由でボディCの面を拘束面にできない',
+      [bodyC, faceC],
+    )
+    const errorsBeforeHidden = await page.evaluate(() => window.__duocad.errors.length)
+    await mcp.callTool('set_visible', { body_id: bodyC, visible: false })
+    await waitFor(
+      (id, index) =>
+        (window.__duocad.state.optimize.stale ?? []).some(
+          (item) => item.role === 'fixtures' && item.body === id && item.index === index && item.code === 'hidden',
+        ),
+      '拘束面を隠しても stale(hidden) が現れない',
+      [bodyC, faceC],
+    )
+    const errorsAfterHidden = await page.evaluate(() => window.__duocad.errors.length)
+    if (errorsAfterHidden !== errorsBeforeHidden) {
+      fail(`hidden で新しいトーストが出た(出さない側のはず): before=${errorsBeforeHidden} after=${errorsAfterHidden}`)
+    }
+    ok('[11] 拘束面を隠した直後は stale(hidden) — トーストは出ない(想定どおり)')
+    // **`set_parameter`は可視性を見ない**(`duocad/parameters.py`。verbではなく文書全体の
+    // 再計算)。隠したままでも幅・高さを変えられ、面の重心が動いてfingerprintがずれる ——
+    // 幅・高さ**両方**を変えるのは、指した面がどちらの軸にも依存する保証を持つため
+    // (片方だけだと、たまたま影響を受けない面を拾っていた場合に検査が空振りする)。
+    await mcp.callTool('set_parameter', { name: widthParam, value: 80 })
+    await mcp.callTool('set_parameter', { name: heightParam, value: 80 })
+    await mcp.callTool('set_visible', { body_id: bodyC, visible: true })
+    await waitFor(
+      (id, index) =>
+        (window.__duocad.state.optimize.stale ?? []).some(
+          (item) =>
+            item.role === 'fixtures' && item.body === id && item.index === index && item.code === 'fingerprint',
+        ),
+      '拘束面の形を変えて表示に戻しても stale(fingerprint) が現れない',
+      [bodyC, faceC],
+    )
+    const errorsAfterFingerprint = await page.evaluate(() => window.__duocad.errors.length)
+    if (errorsAfterFingerprint <= errorsAfterHidden) {
+      fail(
+        'stale(hidden) → stale(fingerprint) への遷移でトースト通知が出ていない' +
+          `(再通知が握りつぶされている疑い): before=${errorsAfterHidden} after=${errorsAfterFingerprint}`,
+      )
+    }
+    ok(
+      `[11] hidden → fingerprint で再通知された(errors ${errorsAfterHidden} → ${errorsAfterFingerprint}。` +
+        '`hidden`として記録済みでも`code`が変われば別扱いになる)',
+    )
+
+    // ====================================================================== 12. モードを抜けると装飾も役割色も消える
+    console.log('\n[12] モードを抜けると装飾も役割色も消える')
     await page.click('#optimize-exit')
     await waitFor(() => window.__duocad.optimizeMode === false, '#optimize-exit を押してもモードを抜けない')
     await waitFor(
@@ -350,13 +548,21 @@ async function main() {
     if (baseAfterExit !== COLOR.base) {
       fail(`モードを抜けたのに素の色(${COLOR.base.toString(16)})に戻らない: ${baseAfterExit?.toString(16)}`)
     }
-    ok('[9] モードを抜けると装飾が消え、ボディの色も素へ戻った')
+    ok('[12] モードを抜けると装飾が消え、ボディの色も素へ戻った')
 
     // ====================================================================== エラーが出ていないこと
-    const errors = await page.evaluate(() => window.__duocad.errors ?? [])
-    if (errors.length > 0) fail(`走行中にエラーが出た: ${JSON.stringify(errors)}`)
+    // **「新しいエラーが1件も出ていない」ではない** —— 10節でわざと1件トーストを出させている
+    // (再通知の検査そのもの)。ここで見るのは`__duocad.errors`が想定外の追加をしていないこと
+    // (10節までの想定件数と一致すること)と、コンソールに素通ししたエラーが無いこと。
+    const finalErrorCount = await page.evaluate(() => window.__duocad.errors.length)
+    if (finalErrorCount !== errorsAfterFingerprint) {
+      fail(
+        `想定していないエラーが追加で出た(想定=${errorsAfterFingerprint} / 実際=${finalErrorCount}): ` +
+          `${JSON.stringify(await page.evaluate(() => window.__duocad.errors))}`,
+      )
+    }
     if (consoleErrors.length > 0) fail(`コンソールにエラー: ${consoleErrors.join(' / ')}`)
-    ok('走行中にエラーは1件も出ていない')
+    ok(`走行中のトーストは想定どおり${finalErrorCount}件だけ(10節の再通知検査ぶん)。コンソールにエラーなし`)
   } finally {
     if (browser) await browser.close()
     await server.stop()

@@ -366,8 +366,23 @@ export interface Viewport {
    * 形状最適化(第3のモード)の装飾(拘束記号+荷重矢印・ラベル)の数。**実機検査フック専用**
    * —— 「拘束と荷重が見える」を、個々のメッシュの形までは検証せず「何か描かれているか」の
    * 数で機械的に確かめる(`setOptimizeState` が空にすると0に戻る)。
+   *
+   * **種別を区別しない粗い数**なので、拘束と荷重の取り違え・向きの逆転・ラベル欠落までは
+   * 検出できない(2026-08-31 QA指摘)。そこまで見るには `optimizeAnnotations()` を使うこと。
    */
   optimizeAnnotationCount(): number
+  /**
+   * 形状最適化(第3のモード)の装飾の**中身**。**実機検査フック専用**。
+   *
+   * `fixtures` は固定記号を置いた面の参照、`loads` は矢印ごとの単位ベクトルとラベル文字列
+   * (`"250N"` のような表示テキストそのもの)。**種別を区別して数える・向きとラベルを
+   * 突き合わせる**ところまで実機検査で確かめられるようにするための穴
+   * (`optimizeAnnotationCount()` の粗さを補う。2026-08-31 QA指摘)。
+   */
+  optimizeAnnotations(): {
+    fixtures: FaceRef[]
+    loads: Array<{ bodyId: string; faceIndex: number; direction: [number, number, number]; label: string }>
+  }
   /**
    * 今ホバーで明るくしているもの(**実機検査フック専用**)。
    *
@@ -1695,11 +1710,25 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   // ------------------------------------------------------------------ 形状最適化(第3のモード)の装飾
+  /**
+   * いま描いている装飾の**中身**(実機検査フック専用)。
+   *
+   * `optimizeAnnotationCount()`(子オブジェクトの総数)だけでは、拘束記号と荷重矢印を
+   * 取り違えても・矢印が逆向きでも・ラベルが空文字でも数だけは合ってしまい検出できない
+   * (2026-08-31 QA指摘)。ここに種別ごとの中身(拘束は対象の面、荷重は単位ベクトルと
+   * ラベル文字列)を控えておき、`optimizeAnnotations()` で読めるようにする。
+   */
+  let optimizeAnnotationInfo: {
+    fixtures: FaceRef[]
+    loads: Array<{ bodyId: string; faceIndex: number; direction: [number, number, number]; label: string }>
+  } = { fixtures: [], loads: [] }
+
   /** 拘束記号・荷重矢印+ラベルを全部消す。`setOptimizeState` が最初に呼ぶ。 */
   function clearOptimizeAnnotations(): void {
     optimizeRoot.clear()
     for (const item of optimizeDisposables) item.dispose()
     optimizeDisposables = []
+    optimizeAnnotationInfo = { fixtures: [], loads: [] }
   }
 
   /**
@@ -1805,6 +1834,7 @@ export function createViewport(container: HTMLElement): Viewport {
         cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), measured.normal.clone().negate())
         cone.position.copy(measured.center).addScaledVector(measured.normal, markSize * 0.6)
         optimizeRoot.add(cone)
+        optimizeAnnotationInfo.fixtures.push({ bodyId: ref.bodyId, faceIndex: ref.faceIndex })
       }
     }
 
@@ -1832,6 +1862,12 @@ export function createViewport(container: HTMLElement): Viewport {
         sprite.position.copy(measured.center).addScaledVector(dir, length * 1.15)
         optimizeRoot.add(sprite)
         optimizeDisposables.push(...disposables)
+        optimizeAnnotationInfo.loads.push({
+          bodyId: ref.bodyId,
+          faceIndex: ref.faceIndex,
+          direction: [dir.x, dir.y, dir.z],
+          label: labelText,
+        })
       }
     }
   }
@@ -3455,6 +3491,15 @@ export function createViewport(container: HTMLElement): Viewport {
     },
     optimizeAnnotationCount() {
       return optimizeRoot.children.length
+    },
+    optimizeAnnotations() {
+      return {
+        fixtures: optimizeAnnotationInfo.fixtures.map((ref) => ({ ...ref })),
+        loads: optimizeAnnotationInfo.loads.map((item) => ({
+          ...item,
+          direction: [...item.direction] as [number, number, number],
+        })),
+      }
     },
     hoveredRef() {
       return {

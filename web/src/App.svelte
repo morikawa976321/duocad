@@ -156,14 +156,39 @@
 
   // ---------------------------------------------------------------- F: 形状最適化モード
   /**
-   * 第3のモード(形状最適化)に入っているか。**対応する文書実体が無い**ので、スケッチと
-   * 違い画面側だけの状態でよい(バックエンドには一切知らせない)。**状態機械は増やさない**
-   * —— 冒頭のコメント「状態機械は1つのまま、変わるのは一覧と既定だけ」のとおり、
-   * 変わるのはツールバーの一覧(`OPTIMIZE_MODE_COMMANDS`)と、それに応じた描画だけ。
+   * 「形状最適化」ボタンで**要求した**か。**これは実効状態ではない** —— 実効値は下の
+   * `optimizeMode`($derived)であり、テンプレート・effect・実機検査フックは必ずそちらを読む。
+   *
+   * 分けてある理由: スケッチと最適化は独立変数(`sketchId` / このフラグ)なので、素朴に
+   * booleanを足しただけでは「両方同時に真」という不正状態が組み合わせとして存在してしまう
+   * (`BrowserPanel` の既存スケッチ名クリックは常時 `enterSketch` を呼ぶので、最適化モード中
+   * でも無条件にスケッチへ入れてしまうガードの穴があった。2026-08-31 QA指摘で発見)。
+   * **「片方に入るときもう片方を畳む」という手続き的なガードは置かない** —— 呼び忘れる
+   * 経路が今後も増えうる。かわりに`optimizeMode`を`sketchId`からの**派生値**にして、
+   * 「スケッチ編集中は最適化モードが真になり得ない」を型と評価順で保証する
+   * (`wantsEdges`/`wantsRegions`/`wantsBasePlanes` と同じ「`sketchId === null` を先頭に
+   * 掛ける」既存の規律に、この状態も合わせただけ)。
    */
-  let optimizeMode = $state(false)
+  let optimizeModeRequested = $state(false)
   /**
-   * 直近にトーストへ出した `stale` の鍵(`role:body:index`)。**消えたら忘れる**
+   * 第3のモード(形状最適化)に**実際に**入っているか。**対応する文書実体が無い**ので、
+   * スケッチと違い画面側だけの状態でよい(バックエンドには一切知らせない)。
+   * **状態機械は増やさない** —— 冒頭のコメント「状態機械は1つのまま、変わるのは一覧と
+   * 既定だけ」のとおり、変わるのはツールバーの一覧(`OPTIMIZE_MODE_COMMANDS`)と、
+   * それに応じた描画だけ。
+   *
+   * **`sketchId === null` を先に掛ける** —— スケッチモード中は`optimizeModeRequested`が
+   * 真のままでも、この式が読まれる限り絶対に真にならない(スケッチへ入る経路がどこから
+   * 増えても、この1行を通る限り両立しない)。スケッチを抜けると要求が残っていれば
+   * 自動的に最適化モードへ戻る(一時停止からの復帰。`optimizeModeRequested` 自体は
+   * `enterOptimizeMode`/`exitOptimizeMode` の2箇所でしか書き換えない)。
+   */
+  const optimizeMode = $derived(sketchId === null && optimizeModeRequested)
+  /**
+   * 直近にトーストへ出した `stale` の鍵(`role:body:index:code`)。**`code` を含める**
+   * (2026-08-31 QA指摘で修正) —— 含めないと、`hidden`(出さない側)として一度記録された
+   * 対象が後で `fingerprint`/`missing`(出す側)に変わっても、role/body/indexだけが一致する
+   * ために「既に見た」と誤判定され、二度と通知されない。**消えたら忘れる**
    * (次に見た集合で作り直す)ので、直ってからまた壊れれば同じ組でも再度出す。
    */
   let seenStaleKeys = new Set<string>()
@@ -1075,6 +1100,11 @@
     // 外さないと、Bで `move_sketch_entities` を実行するとAの図形が動き、反復verbには
     // **Aの図形IDがBの文脈で**渡る(サーバは `entity_id` を素直に解決するので黙って通る)。
     // **同じスケッチへ入り直したときは何も外さない**(選び直しを強いる理由が無い)。
+    //
+    // **`optimizeMode` はここで触らなくてよい**(2026-08-31)。`BrowserPanel` のスケッチ名
+    // クリックは最適化モード中でも無条件にここを呼ぶが、`optimizeMode` は `sketchId` からの
+    // 派生値なので、次の代入(`sketchId = id`)だけで自動的に偽へ落ちる —— 手続き的に
+    // 「畳む」処理をここへ書き足す必要が無い(書き忘れる経路を作らないための設計)。
     const foreign = (selection?.items ?? []).filter(
       (item) => refKind(item) === 'sketch_entity' && (item as SketchEntityRef).sketch !== id,
     )
@@ -1097,20 +1127,25 @@
     viewport?.setActiveSketch(null)
   }
 
-  /** 第3のモード(形状最適化)へ入る。「形状最適化」ボタンから(スケッチと同じ作法)。 */
+  /**
+   * 第3のモード(形状最適化)へ入る。「形状最適化」ボタンから(スケッチと同じ作法)。
+   * **書き換えるのは要求(`optimizeModeRequested`)だけ** —— 実効値 `optimizeMode` は
+   * `sketchId` からの派生値なので、ここでは直接いじれない(いじる先が無いことが
+   * 「両立しない」設計の裏返り)。
+   */
   function enterOptimizeMode(): void {
-    optimizeMode = true
+    optimizeModeRequested = true
   }
 
   /**
-   * 第3のモードを抜けて通常モードへ戻る。**選択は持ち越さない** —— ボディ粒度で
+   * 第3のモードの要求を降ろし、通常モードへ戻る。**選択は持ち越さない** —— ボディ粒度で
    * 選んでいた `BodyRef` は通常モードのverbには使えない種別なので、`exitSketch` と
    * 同じ理由で外す(面の選択は残す。抜けてからそのまま押し出す経路がある)。
    */
   function exitOptimizeMode(): void {
     const staying = (selection?.items ?? []).filter((item) => refKind(item) === 'body')
     if (staying.length > 0) modifySelection([], staying)
-    optimizeMode = false
+    optimizeModeRequested = false
   }
 
   /**
@@ -1434,12 +1469,18 @@
    * たびに出るので出さない側、`"fingerprint"`/`"missing"` は出す側。文言では分岐しない。
    * **モードに関係なく見る** —— 割り当てが壊れるのは他のverb(undo・部品の削除)が
    * 起こすので、最適化モードに入っていないときにも気づけて良い。
+   *
+   * **鍵に `code` を含める**(2026-08-31 QA指摘で修正)。`role:body:index` だけだと、
+   * `hidden`(出さない側)として一度記録した対象が後で `fingerprint`/`missing`(出す側)へ
+   * 変わっても「もう見た」と誤判定され、二度と通知されない —— 表示に戻して直したつもりが
+   * 実は指す面が変わっていた、のような事故に人が気づけなくなる。`code` を鍵に混ぜれば、
+   * コードが変わった時点で別の鍵として扱われ、正しく再通知される。
    */
   $effect(() => {
     const stale = optimize?.stale ?? []
     const next = new Set<string>()
     for (const item of stale) {
-      const key = `${item.role}:${item.body}:${item.index ?? ''}`
+      const key = `${item.role}:${item.body}:${item.index ?? ''}:${item.code}`
       next.add(key)
       if (item.code !== 'hidden' && !seenStaleKeys.has(key)) fail(item.reason)
     }
@@ -1513,6 +1554,7 @@
       wantedKinds,
       faceColor: (bodyId: string, faceIndex: number) => viewport?.faceColor({ bodyId, faceIndex }) ?? null,
       optimizeAnnotationCount: () => viewport?.optimizeAnnotationCount() ?? 0,
+      optimizeAnnotations: () => viewport?.optimizeAnnotations() ?? { fixtures: [], loads: [] },
       // C: スケッチ。**実機検査が本物のクリックで描く**ための穴
       sketches,
       activeSketch: sketchId,
