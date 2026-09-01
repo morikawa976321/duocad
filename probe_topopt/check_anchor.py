@@ -654,6 +654,21 @@ def check_edge_rule() -> None:
         raised[:90] if raised else "例外が出なかった(黙って拘束なしになっている)",
     )
 
+    # **混ぜたときが本番**(2026-08-31に本人決定で「1つでも空なら落とす」へ変更)。合計で
+    # 見ていると、大きい面と一緒に指した空の面だけが黙って落ちる —— 2面を固定したつもりで
+    # 1面しか効いていない系が、例外も通知も無いまま最適化へ入る。
+    big = next(f for f in table_t.face_indices() if f not in empty)
+    raised = ""
+    try:
+        table_t.fixed_dofs([big, empty[0]])
+    except ValueError as exc:
+        raised = str(exc)
+    check(
+        "大きい面と空の面を一緒に指しても落ちる(空の面だけが黙って無視されない)",
+        "節点が1つも付いていない" in raised and f"面{empty[0]}" in raised,
+        raised[:90] if raised else "例外が出なかった(空の面が黙って無視されている)",
+    )
+
     # 稜線を共有する2面の荷重が二重に入っていないこと(節点が排他なので合計は素直に足せる)。
     top = _face_of(model.soup, "plane", normal=(0, 0, 1))
     side = _face_of(model.soup, "plane", normal=(1, 0, 0))

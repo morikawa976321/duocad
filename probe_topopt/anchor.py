@@ -273,7 +273,7 @@ class AnchorTable:
     def node_ids(self, faces: Iterable[int] | int) -> np.ndarray:
         """指定した面の節点の通し番号(昇順・重複なし)。面ごとの集合は排他なので単純に連結できる。
 
-        **節点が1つも付かなかった面だけを名指しされたら落とす。** 要素サイズより小さい面
+        **節点が1つも付かなかった面が1つでも混ざっていたら落とす。** 要素サイズより小さい面
         (フィレット・面取り・小さな段差)は、隣の大きい面に節点を全部持っていかれて
         空になる(実測: 231面のSTEPを要素サイズ1.54mmで割ると22面が空)。黙って空の
         集合を返すと、**拘束の無い系や荷重0の系がそのまま最適化に入る**。
@@ -285,15 +285,21 @@ class AnchorTable:
             raise AssertionError(
                 "面ごとの節点集合が排他でない(稜線の規則が壊れている)"
             )
-        self._require_nodes(picked, out.size)
+        self._require_nodes(picked)
         return out
 
-    def _require_nodes(self, picked: list[FaceAnchor], count: int) -> None:
-        """節点が1つも付いていない面の指定を落とす(`node_ids` と荷重の口で共有する)。"""
-        if count > 0:
+    def _require_nodes(self, picked: list[FaceAnchor]) -> None:
+        """空の面が**1つでも**混ざっていたら落とす(`node_ids` と荷重の口で共有する)。
+
+        **合計で見てはならない。** 大きい面と小さい面を一緒に指すと合計は正になり、
+        小さい面だけが黙って落ちる —— 2面を固定したつもりで1面しか効いていない系が、
+        例外も通知も無いまま最適化へ入る。
+        """
+        empty = [a for a in picked if a.node_count == 0]
+        if not empty:
             return
         names = ", ".join(
-            f"面{a.face_index}({a.kind}, CAD面積 {a.cad_area:.4g} mm^2)" for a in picked
+            f"面{a.face_index}({a.kind}, CAD面積 {a.cad_area:.4g} mm^2)" for a in empty
         )
         raise ValueError(
             f"指定した面に格子節点が1つも付いていない: {names}。"
@@ -333,7 +339,7 @@ class AnchorTable:
         force = np.asarray(total_force, dtype=float).reshape(3)
         ids = np.concatenate([a.node_ids for a in picked])
         areas = np.concatenate([a.areas for a in picked])
-        self._require_nodes(picked, ids.size)
+        self._require_nodes(picked)
         total = areas.sum()
         if not total > 0.0:
             raise ValueError(
@@ -373,7 +379,7 @@ class AnchorTable:
         大きさが `p * cad_area` になるわけではない)。
         """
         picked = self._selected(faces)
-        self._require_nodes(picked, sum(a.node_count for a in picked))
+        self._require_nodes(picked)
         f = np.zeros(self.node_grid.ndof) if out is None else out
         for anchor in picked:
             assigned = float(anchor.areas.sum())
