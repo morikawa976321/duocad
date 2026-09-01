@@ -349,24 +349,23 @@ def test_a_face_condition_carries_a_fingerprint(session: Session) -> None:
     assert stored["area"] == pytest.approx(SIDE * SIDE)
 
 
-def test_a_face_whose_fingerprint_moved_is_reported_and_not_used(session: Session) -> None:
+def test_a_face_that_changed_is_reported_and_not_used(session: Session) -> None:
     """**形が変われば、その条件は使われず `stale` に名指しで出る。**
 
     ここが効かないと、拘束のつもりで指した面が別の場所へ移ったまま最適化へ渡る ——
     例外も出ないので、結果を見るまで誰も気づかない。
 
-    形の変え方に `move_body` を使うのは**検出を決定的にするため**である(平行移動は必ず
-    重心を動かす)。ついでに**既知の帰結**も固定している —— 添字が変わらない平行移動でも
-    指紋は合わなくなるので、ボディを動かしたら条件は付け直しになる。指紋を世界座標の
-    重心で持つと決めた以上こうなるので、うるさければ指紋の持ち方から変えること。
+    形の変え方に辺1のフィレットを使うのは**検出を決定的にするため**である。実測で、
+    面1は同じ面のまま面積が 400→360 に減り(面積で捕まる)、面2は法線が
+    (0,1,0)→(0,0,-1) に変わる(=添字が別の面へ移った。これが指紋の本来の狙い)。
     """
     body = _box(session)
     _select(session, _face_refs(body, [1]))
     session.set_fixtures()
     assert _optimize(session)["stale"] == []
 
-    _select(session, _face_refs(body, [1]))
-    session.move_body(0.0, 0.0, 30.0)
+    _select(session, [{"body": body.id, "kind": "edge", "index": 1}])
+    session.fillet(2.0)
 
     state = _optimize(session)
     assert state["fixtures"] == [], "指紋が合わないのに条件を使っている"
@@ -375,6 +374,26 @@ def test_a_face_whose_fingerprint_moved_is_reported_and_not_used(session: Sessio
     assert stale["role"] == "fixtures" and stale["index"] == 1
     assert stale["code"] == "fingerprint", stale
     assert stale["reason"], "**理由が空だと画面がトーストに出せない**"
+
+
+def test_moving_a_body_does_not_invalidate_its_face_conditions(session: Session) -> None:
+    """**平行移動では条件が外れない**(2026-08-31本人決定)。
+
+    `move_body` は面の添字を変えず、指した面は同じ面のままなので、外れるのは誤検出で
+    ある。以前は指紋の重心を世界座標で照合していたためここが `stale` になり、部品の
+    位置を詰めるたびに条件の付け直しが必要だった。**照合から重心を外したのはこのため**で、
+    面積と法線は平行移動で不変なので、この検査が指紋の持ち方を固定している。
+    """
+    body = _box(session)
+    _select(session, _face_refs(body, [1]))
+    session.set_fixtures()
+
+    _select(session, _face_refs(body, [1]))
+    session.move_body(0.0, 0.0, 30.0)
+
+    state = _optimize(session)
+    assert state["stale"] == [], "平行移動しただけで条件が外れている"
+    assert _indices(state["fixtures"]) == [1]
 
 
 def test_a_stale_condition_comes_back_when_the_shape_comes_back(session: Session) -> None:
@@ -386,8 +405,8 @@ def test_a_stale_condition_comes_back_when_the_shape_comes_back(session: Session
     _select(session, _face_refs(body, [1]))
     session.set_fixtures()
 
-    _select(session, _face_refs(body, [1]))
-    session.move_body(0.0, 0.0, 30.0)
+    _select(session, [{"body": body.id, "kind": "edge", "index": 1}])
+    session.fillet(2.0)
     assert _optimize(session)["fixtures"] == []
     session.undo()
 

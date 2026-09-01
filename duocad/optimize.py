@@ -9,6 +9,7 @@ verbの本体は `duocad/verbs/optimize_setup.py`、状態を配る口は
    **添字は現時点のものであって、形が変われば別の実体を指す**)。重心・法線・面積を
    一緒に控えておき、配るときに照合する。**壊れないようにするのではなく、壊れたと
    気づけるようにする**のが狙いで、合わない条件は配らずに `stale` として名指しする。
+   **照合に使うのは面積と法線だけで、重心は記録するだけ**(理由は `fingerprint_mismatch`)。
 3. **配りもの** … `state_meta()` に載せる形(下記 `state_payload`)と、その**増分維持**。
 
 **配信のたびに全ボディを走査しない**(engine `duocad-state-meta-recomputes-all-volumes`)。
@@ -30,7 +31,7 @@ if TYPE_CHECKING:  # pragma: no cover - 型注釈のためだけ(実行時は読
 
 #: 面の指紋の許容差(相対・絶対)。
 #:
-#: **再生は決定的**(同じ操作列を同じOCCTへ流す)なので、開き直した文書の面積・重心・法線は
+#: **再生は決定的**(同じ操作列を同じOCCTへ流す)なので、開き直した文書の面積・法線は
 #: 記録した値と一致する。ここにあるのは丸め誤差ぶんの隙間でしかなく、**緩めると
 #: 「添字が別の面へ移った」を見逃す**(それを検出するために指紋を置いている)。
 FINGERPRINT_RTOL = 1e-6
@@ -121,6 +122,8 @@ class OptimizeSetup:
 def face_fingerprint(doc: "Document", body_id: str, index: int) -> dict:
     """いまの形から面1枚の指紋(面積・法線・重心)を測る。
 
+    **重心も測って記録する**が、照合には使わない(`fingerprint_mismatch`)。
+
     存在しないBodyは KeyError、範囲外の添字は ValueError(`query.face_fingerprint`)。
     """
     from . import query  # 遅延import(モジュール docstring)
@@ -162,6 +165,12 @@ def fingerprint_mismatch(doc: "Document", condition: dict) -> Optional[str]:
     理由を文字列で返すのは、画面がトーストにそのまま出すためである(「合わない」だけでは
     次の一手が書いていない)。**ここで文書を直さない** —— 条件は操作ログの上に残り、
     形を戻せば(undo)また合うようになる。消してしまうと戻せない。
+
+    **見るのは面積と法線だけで、重心は見ない**(2026-08-31本人決定)。重心は世界座標なので、
+    面の添字を変えない `move_body`(平行移動)でも不一致になり、位置を詰めるたびに条件が
+    付け直しになっていた。面積と法線は平行移動で不変で、かつ照合には添字の一致も要るため、
+    本来の狙い(添字が別の面を指すようになった)の検出力はほとんど落ちない。
+    重心は `center` として記録され続ける —— 不一致になったときに何が起きたかを見るため。
     """
     body_id = condition["body"]
     index = int(condition["index"])
@@ -176,11 +185,6 @@ def fingerprint_mismatch(doc: "Document", condition: dict) -> Optional[str]:
         return (
             f"面 #{index} の面積が変わった"
             f"(記録 {condition['area']:.6g} / いま {measured['area']:.6g})"
-        )
-    if not _close_point(measured["center"], condition["center"]):
-        return (
-            f"面 #{index} の重心が変わった"
-            f"(記録 {_fmt(condition['center'])} / いま {_fmt(measured['center'])})"
         )
     if not _close_point(measured["normal"], condition["normal"]):
         return (
