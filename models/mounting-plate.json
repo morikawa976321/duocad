@@ -5,7 +5,7 @@
       "seq": 1,
       "verb": "sketch_create",
       "args": {
-        "sketch_id": "sketch-9bf2416fc765",
+        "sketch_id": "sketch-b6c31d9e8812",
         "plane": {
           "kind": "base",
           "name": "XY",
@@ -16,638 +16,6145 @@
     },
     {
       "seq": 2,
-      "verb": "add_rectangle",
+      "verb": "import_svg",
       "args": {
-        "sketch_id": "sketch-9bf2416fc765",
-        "entity_id": "entity-418413925b31",
-        "kind": "rectangle",
-        "params": {
-          "x": -40.0,
-          "y": -30.0,
-          "width": 80.0,
-          "height": 60.0
-        }
-      },
-      "provenance": null
-    },
-    {
-      "seq": 3,
-      "verb": "extrude",
-      "args": {
-        "regions": [
-          {
-            "sketch": "sketch-9bf2416fc765",
-            "index": 1,
-            "provenance": null
-          }
-        ],
-        "distance": 8.0,
-        "mode": "new",
-        "body_id": "body-70633ceb7b54"
-      },
-      "provenance": null
-    },
-    {
-      "seq": 4,
-      "verb": "fillet",
-      "args": {
-        "edges": [
-          1,
-          2,
-          5,
-          8
-        ],
-        "radius": 8.0,
-        "body_id": "body-70633ceb7b54"
-      },
-      "provenance": {
-        "verb": "fillet",
-        "edges": [
-          1,
-          2,
-          5,
-          8
-        ],
-        "face_map": {
-          "1": [
-            1
-          ],
-          "2": [
-            6
-          ],
-          "3": [
-            10
-          ],
-          "4": [
-            7
-          ],
-          "5": [
-            2
-          ],
-          "6": [
-            5
-          ]
-        },
-        "deleted": [],
-        "new_faces": [
-          3,
-          4,
-          8,
-          9
-        ]
-      }
-    },
-    {
-      "seq": 5,
-      "verb": "sketch_create",
-      "args": {
-        "sketch_id": "sketch-f0b275ebe577",
-        "plane": {
-          "kind": "base",
-          "name": "XY",
-          "provenance": null
-        }
-      },
-      "provenance": null
-    },
-    {
-      "seq": 6,
-      "verb": "add_arc",
-      "args": {
-        "sketch_id": "sketch-f0b275ebe577",
-        "entity_id": "entity-4ef418bc1d5f",
-        "kind": "arc",
-        "params": {
-          "cx": 0.0,
-          "cy": 30.0,
-          "radius": 12.0,
-          "start_deg": 0.0,
-          "end_deg": 180.0
-        }
-      },
-      "provenance": null
-    },
-    {
-      "seq": 7,
-      "verb": "add_line",
-      "args": {
-        "sketch_id": "sketch-f0b275ebe577",
-        "entity_id": "entity-b3e720beac2e",
-        "kind": "line",
-        "params": {
-          "x0": 12.0,
-          "y0": 30.0,
-          "x1": -12.0,
-          "y1": 30.0
-        }
-      },
-      "provenance": null
-    },
-    {
-      "seq": 8,
-      "verb": "extrude",
-      "args": {
-        "regions": [
-          {
-            "sketch": "sketch-f0b275ebe577",
-            "index": 1,
-            "provenance": null
-          }
-        ],
-        "distance": 8.0,
-        "mode": "join",
-        "body_id": "body-70633ceb7b54"
-      },
-      "provenance": null
-    },
-    {
-      "seq": 9,
-      "verb": "sketch_create",
-      "args": {
-        "sketch_id": "sketch-192850f8a57c",
-        "plane": {
-          "kind": "base",
-          "name": "XY",
-          "provenance": null
-        }
-      },
-      "provenance": null
-    },
-    {
-      "seq": 10,
-      "verb": "add_circle",
-      "args": {
-        "sketch_id": "sketch-192850f8a57c",
-        "entity_id": "entity-23650187d0df",
-        "kind": "circle",
-        "params": {
-          "cx": -28.0,
-          "cy": -18.0,
-          "radius": 3.5
-        }
-      },
-      "provenance": null
-    },
-    {
-      "seq": 11,
-      "verb": "pattern_rectangular",
-      "args": {
-        "sketch_id": "sketch-192850f8a57c",
-        "pattern_id": "pattern-29cb72b20f36",
+        "source_name": "keyboard-layout_custom2_current_40.svg",
+        "scale": 1.0,
+        "sketch_id": "sketch-b6c31d9e8812",
         "entities": [
-          "entity-23650187d0df"
-        ],
-        "dx": 56.0,
-        "dy": 36.0,
-        "nx": 2,
-        "ny": 2
-      },
-      "provenance": null
-    },
-    {
-      "seq": 12,
-      "verb": "extrude",
-      "args": {
-        "regions": [
           {
-            "sketch": "sketch-192850f8a57c",
-            "index": 1,
-            "provenance": null
+            "entity_id": "entity-b078f11cf6ca",
+            "kind": "line",
+            "params": {
+              "x0": 16.0,
+              "y0": 344.0,
+              "x1": 208.4,
+              "y1": 344.0
+            }
           },
           {
-            "sketch": "sketch-192850f8a57c",
-            "index": 2,
-            "provenance": null
+            "entity_id": "entity-b84d69e67dae",
+            "kind": "arc",
+            "params": {
+              "cx": 208.4,
+              "cy": 338.0,
+              "radius": 6.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
           },
           {
-            "sketch": "sketch-192850f8a57c",
-            "index": 3,
-            "provenance": null
+            "entity_id": "entity-6a5ad52c22fa",
+            "kind": "line",
+            "params": {
+              "x0": 214.4,
+              "y0": 338.0,
+              "x1": 214.4,
+              "y1": 16.0
+            }
           },
           {
-            "sketch": "sketch-192850f8a57c",
-            "index": 4,
-            "provenance": null
+            "entity_id": "entity-03aae4b03cef",
+            "kind": "arc",
+            "params": {
+              "cx": 208.4,
+              "cy": 16.0,
+              "radius": 6.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-fb4566fad9ee",
+            "kind": "line",
+            "params": {
+              "x0": 208.4,
+              "y0": 10.0,
+              "x1": 16.0,
+              "y1": 10.0
+            }
+          },
+          {
+            "entity_id": "entity-d0158e504aa7",
+            "kind": "arc",
+            "params": {
+              "cx": 16.0,
+              "cy": 16.0,
+              "radius": 6.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-9985812e4808",
+            "kind": "line",
+            "params": {
+              "x0": 10.0,
+              "y0": 16.0,
+              "x1": 10.0,
+              "y1": 338.0
+            }
+          },
+          {
+            "entity_id": "entity-fb9c2520935b",
+            "kind": "arc",
+            "params": {
+              "cx": 16.0,
+              "cy": 338.0,
+              "radius": 6.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-7a6cda0c372b",
+            "kind": "line",
+            "params": {
+              "x0": 53.4,
+              "y0": 338.0,
+              "x1": 95.4,
+              "y1": 338.0
+            }
+          },
+          {
+            "entity_id": "entity-5f7ad2e8eb60",
+            "kind": "arc",
+            "params": {
+              "cx": 95.4,
+              "cy": 333.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-d9fa26e4876d",
+            "kind": "line",
+            "params": {
+              "x0": 100.4,
+              "y0": 333.0,
+              "x1": 100.4,
+              "y1": 291.0
+            }
+          },
+          {
+            "entity_id": "entity-914542a1799b",
+            "kind": "arc",
+            "params": {
+              "cx": 95.4,
+              "cy": 291.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-81f74c52305b",
+            "kind": "line",
+            "params": {
+              "x0": 95.4,
+              "y0": 286.0,
+              "x1": 53.4,
+              "y1": 286.0
+            }
+          },
+          {
+            "entity_id": "entity-1cf3bb04b7c7",
+            "kind": "arc",
+            "params": {
+              "cx": 53.4,
+              "cy": 291.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-1608f739af24",
+            "kind": "line",
+            "params": {
+              "x0": 48.4,
+              "y0": 291.0,
+              "x1": 48.4,
+              "y1": 333.0
+            }
+          },
+          {
+            "entity_id": "entity-0eb6edc0c846",
+            "kind": "arc",
+            "params": {
+              "cx": 53.4,
+              "cy": 333.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-a3c26f244996",
+            "kind": "line",
+            "params": {
+              "x0": 53.4,
+              "y0": 338.0,
+              "x1": 95.4,
+              "y1": 338.0
+            }
+          },
+          {
+            "entity_id": "entity-355e5afe2789",
+            "kind": "arc",
+            "params": {
+              "cx": 95.4,
+              "cy": 333.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-325237da284d",
+            "kind": "line",
+            "params": {
+              "x0": 100.4,
+              "y0": 333.0,
+              "x1": 100.4,
+              "y1": 291.0
+            }
+          },
+          {
+            "entity_id": "entity-f3282a0a40b7",
+            "kind": "arc",
+            "params": {
+              "cx": 95.4,
+              "cy": 291.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-717f75de0a7c",
+            "kind": "line",
+            "params": {
+              "x0": 95.4,
+              "y0": 286.0,
+              "x1": 53.4,
+              "y1": 286.0
+            }
+          },
+          {
+            "entity_id": "entity-18bd47509b96",
+            "kind": "arc",
+            "params": {
+              "cx": 53.4,
+              "cy": 291.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-dc23508c2516",
+            "kind": "line",
+            "params": {
+              "x0": 48.4,
+              "y0": 291.0,
+              "x1": 48.4,
+              "y1": 333.0
+            }
+          },
+          {
+            "entity_id": "entity-65203b91abec",
+            "kind": "arc",
+            "params": {
+              "cx": 53.4,
+              "cy": 333.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-fec49daa9432",
+            "kind": "line",
+            "params": {
+              "x0": 59.4,
+              "y0": 335.0,
+              "x1": 89.4,
+              "y1": 335.0
+            }
+          },
+          {
+            "entity_id": "entity-eeb07eeb7c73",
+            "kind": "arc",
+            "params": {
+              "cx": 89.4,
+              "cy": 330.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-1df83d844586",
+            "kind": "line",
+            "params": {
+              "x0": 94.4,
+              "y0": 330.0,
+              "x1": 94.4,
+              "y1": 300.0
+            }
+          },
+          {
+            "entity_id": "entity-8516e212a20a",
+            "kind": "arc",
+            "params": {
+              "cx": 89.4,
+              "cy": 300.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-320ede9f3fb0",
+            "kind": "line",
+            "params": {
+              "x0": 89.4,
+              "y0": 295.0,
+              "x1": 59.4,
+              "y1": 295.0
+            }
+          },
+          {
+            "entity_id": "entity-5b13cf623168",
+            "kind": "arc",
+            "params": {
+              "cx": 59.4,
+              "cy": 300.0,
+              "radius": 5.000000000000007,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-828cc1447760",
+            "kind": "line",
+            "params": {
+              "x0": 54.4,
+              "y0": 300.0,
+              "x1": 54.4,
+              "y1": 330.0
+            }
+          },
+          {
+            "entity_id": "entity-b205e5430800",
+            "kind": "arc",
+            "params": {
+              "cx": 59.4,
+              "cy": 330.0,
+              "radius": 5.000000000000007,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-b63514bd26a3",
+            "kind": "line",
+            "params": {
+              "x0": 59.4,
+              "y0": 335.0,
+              "x1": 89.4,
+              "y1": 335.0
+            }
+          },
+          {
+            "entity_id": "entity-3bfdd42a617d",
+            "kind": "arc",
+            "params": {
+              "cx": 89.4,
+              "cy": 330.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-fb44824ac3e1",
+            "kind": "line",
+            "params": {
+              "x0": 94.4,
+              "y0": 330.0,
+              "x1": 94.4,
+              "y1": 300.0
+            }
+          },
+          {
+            "entity_id": "entity-98114181934a",
+            "kind": "arc",
+            "params": {
+              "cx": 89.4,
+              "cy": 300.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-d665c0280157",
+            "kind": "line",
+            "params": {
+              "x0": 89.4,
+              "y0": 295.0,
+              "x1": 59.4,
+              "y1": 295.0
+            }
+          },
+          {
+            "entity_id": "entity-96671312e459",
+            "kind": "arc",
+            "params": {
+              "cx": 59.4,
+              "cy": 300.0,
+              "radius": 5.000000000000007,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-6c8a41f0716f",
+            "kind": "line",
+            "params": {
+              "x0": 54.4,
+              "y0": 300.0,
+              "x1": 54.4,
+              "y1": 330.0
+            }
+          },
+          {
+            "entity_id": "entity-4759651dece3",
+            "kind": "arc",
+            "params": {
+              "cx": 59.4,
+              "cy": 330.0,
+              "radius": 5.000000000000007,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-846c7c374073",
+            "kind": "line",
+            "params": {
+              "x0": 107.4,
+              "y0": 338.0,
+              "x1": 149.4,
+              "y1": 338.0
+            }
+          },
+          {
+            "entity_id": "entity-3756a8a8df25",
+            "kind": "arc",
+            "params": {
+              "cx": 149.4,
+              "cy": 333.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-cd534401fa6c",
+            "kind": "line",
+            "params": {
+              "x0": 154.4,
+              "y0": 333.0,
+              "x1": 154.4,
+              "y1": 291.0
+            }
+          },
+          {
+            "entity_id": "entity-6f0a41e818af",
+            "kind": "arc",
+            "params": {
+              "cx": 149.4,
+              "cy": 291.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-0b2fbac1dbdd",
+            "kind": "line",
+            "params": {
+              "x0": 149.4,
+              "y0": 286.0,
+              "x1": 107.4,
+              "y1": 286.0
+            }
+          },
+          {
+            "entity_id": "entity-a3b0a9bad3de",
+            "kind": "arc",
+            "params": {
+              "cx": 107.4,
+              "cy": 291.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-a5927cc34e91",
+            "kind": "line",
+            "params": {
+              "x0": 102.4,
+              "y0": 291.0,
+              "x1": 102.4,
+              "y1": 333.0
+            }
+          },
+          {
+            "entity_id": "entity-dcbc8e3a42ec",
+            "kind": "arc",
+            "params": {
+              "cx": 107.4,
+              "cy": 333.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-58597c2b1041",
+            "kind": "line",
+            "params": {
+              "x0": 107.4,
+              "y0": 338.0,
+              "x1": 149.4,
+              "y1": 338.0
+            }
+          },
+          {
+            "entity_id": "entity-815bf9cd945a",
+            "kind": "arc",
+            "params": {
+              "cx": 149.4,
+              "cy": 333.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-5d59fec00e23",
+            "kind": "line",
+            "params": {
+              "x0": 154.4,
+              "y0": 333.0,
+              "x1": 154.4,
+              "y1": 291.0
+            }
+          },
+          {
+            "entity_id": "entity-8ed03990c769",
+            "kind": "arc",
+            "params": {
+              "cx": 149.4,
+              "cy": 291.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-e149abc74bac",
+            "kind": "line",
+            "params": {
+              "x0": 149.4,
+              "y0": 286.0,
+              "x1": 107.4,
+              "y1": 286.0
+            }
+          },
+          {
+            "entity_id": "entity-8d86587e985d",
+            "kind": "arc",
+            "params": {
+              "cx": 107.4,
+              "cy": 291.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-1eec7045d963",
+            "kind": "line",
+            "params": {
+              "x0": 102.4,
+              "y0": 291.0,
+              "x1": 102.4,
+              "y1": 333.0
+            }
+          },
+          {
+            "entity_id": "entity-737cfc2f7187",
+            "kind": "arc",
+            "params": {
+              "cx": 107.4,
+              "cy": 333.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-f477d0695456",
+            "kind": "line",
+            "params": {
+              "x0": 113.4,
+              "y0": 335.0,
+              "x1": 143.4,
+              "y1": 335.0
+            }
+          },
+          {
+            "entity_id": "entity-0f14f24c4e31",
+            "kind": "arc",
+            "params": {
+              "cx": 143.4,
+              "cy": 330.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-928bf13696e8",
+            "kind": "line",
+            "params": {
+              "x0": 148.4,
+              "y0": 330.0,
+              "x1": 148.4,
+              "y1": 300.0
+            }
+          },
+          {
+            "entity_id": "entity-8cf224ef61a8",
+            "kind": "arc",
+            "params": {
+              "cx": 143.4,
+              "cy": 300.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-aae433aa71e4",
+            "kind": "line",
+            "params": {
+              "x0": 143.4,
+              "y0": 295.0,
+              "x1": 113.4,
+              "y1": 295.0
+            }
+          },
+          {
+            "entity_id": "entity-546e49359ca2",
+            "kind": "arc",
+            "params": {
+              "cx": 113.4,
+              "cy": 300.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-d2aecf498139",
+            "kind": "line",
+            "params": {
+              "x0": 108.4,
+              "y0": 300.0,
+              "x1": 108.4,
+              "y1": 330.0
+            }
+          },
+          {
+            "entity_id": "entity-875aabf024fd",
+            "kind": "arc",
+            "params": {
+              "cx": 113.4,
+              "cy": 330.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-9dfd5995f7a1",
+            "kind": "line",
+            "params": {
+              "x0": 113.4,
+              "y0": 335.0,
+              "x1": 143.4,
+              "y1": 335.0
+            }
+          },
+          {
+            "entity_id": "entity-dd4018de70bf",
+            "kind": "arc",
+            "params": {
+              "cx": 143.4,
+              "cy": 330.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-24eb2fbee601",
+            "kind": "line",
+            "params": {
+              "x0": 148.4,
+              "y0": 330.0,
+              "x1": 148.4,
+              "y1": 300.0
+            }
+          },
+          {
+            "entity_id": "entity-f1a7708d2680",
+            "kind": "arc",
+            "params": {
+              "cx": 143.4,
+              "cy": 300.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-3f63bb14a056",
+            "kind": "line",
+            "params": {
+              "x0": 143.4,
+              "y0": 295.0,
+              "x1": 113.4,
+              "y1": 295.0
+            }
+          },
+          {
+            "entity_id": "entity-70109fbcbdf4",
+            "kind": "arc",
+            "params": {
+              "cx": 113.4,
+              "cy": 300.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-6f224686fd01",
+            "kind": "line",
+            "params": {
+              "x0": 108.4,
+              "y0": 300.0,
+              "x1": 108.4,
+              "y1": 330.0
+            }
+          },
+          {
+            "entity_id": "entity-e820e837fab8",
+            "kind": "arc",
+            "params": {
+              "cx": 113.4,
+              "cy": 330.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-54263d2c132f",
+            "kind": "line",
+            "params": {
+              "x0": 161.4,
+              "y0": 338.0,
+              "x1": 203.4,
+              "y1": 338.0
+            }
+          },
+          {
+            "entity_id": "entity-50cdced8223e",
+            "kind": "arc",
+            "params": {
+              "cx": 203.4,
+              "cy": 333.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-ceedd93f1b05",
+            "kind": "line",
+            "params": {
+              "x0": 208.4,
+              "y0": 333.0,
+              "x1": 208.4,
+              "y1": 291.0
+            }
+          },
+          {
+            "entity_id": "entity-0d1bf46718f5",
+            "kind": "arc",
+            "params": {
+              "cx": 203.4,
+              "cy": 291.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-0cd4eb306175",
+            "kind": "line",
+            "params": {
+              "x0": 203.4,
+              "y0": 286.0,
+              "x1": 161.4,
+              "y1": 286.0
+            }
+          },
+          {
+            "entity_id": "entity-1da9e4912ca1",
+            "kind": "arc",
+            "params": {
+              "cx": 161.4,
+              "cy": 291.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-cef0f9af9999",
+            "kind": "line",
+            "params": {
+              "x0": 156.4,
+              "y0": 291.0,
+              "x1": 156.4,
+              "y1": 333.0
+            }
+          },
+          {
+            "entity_id": "entity-623dc1f8cf82",
+            "kind": "arc",
+            "params": {
+              "cx": 161.4,
+              "cy": 333.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-505c00da954f",
+            "kind": "line",
+            "params": {
+              "x0": 161.4,
+              "y0": 338.0,
+              "x1": 203.4,
+              "y1": 338.0
+            }
+          },
+          {
+            "entity_id": "entity-d3eafef041e7",
+            "kind": "arc",
+            "params": {
+              "cx": 203.4,
+              "cy": 333.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-50277abe7961",
+            "kind": "line",
+            "params": {
+              "x0": 208.4,
+              "y0": 333.0,
+              "x1": 208.4,
+              "y1": 291.0
+            }
+          },
+          {
+            "entity_id": "entity-eb815da2e5b9",
+            "kind": "arc",
+            "params": {
+              "cx": 203.4,
+              "cy": 291.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-bb6213257412",
+            "kind": "line",
+            "params": {
+              "x0": 203.4,
+              "y0": 286.0,
+              "x1": 161.4,
+              "y1": 286.0
+            }
+          },
+          {
+            "entity_id": "entity-8850b624aca0",
+            "kind": "arc",
+            "params": {
+              "cx": 161.4,
+              "cy": 291.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-0f33faa134e3",
+            "kind": "line",
+            "params": {
+              "x0": 156.4,
+              "y0": 291.0,
+              "x1": 156.4,
+              "y1": 333.0
+            }
+          },
+          {
+            "entity_id": "entity-9cb72fb59a0e",
+            "kind": "arc",
+            "params": {
+              "cx": 161.4,
+              "cy": 333.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-9c5a97336cb6",
+            "kind": "line",
+            "params": {
+              "x0": 167.4,
+              "y0": 335.0,
+              "x1": 197.4,
+              "y1": 335.0
+            }
+          },
+          {
+            "entity_id": "entity-c1f7d0ec27c3",
+            "kind": "arc",
+            "params": {
+              "cx": 197.4,
+              "cy": 330.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-c3bcca9d29b8",
+            "kind": "line",
+            "params": {
+              "x0": 202.4,
+              "y0": 330.0,
+              "x1": 202.4,
+              "y1": 300.0
+            }
+          },
+          {
+            "entity_id": "entity-9b93747074ed",
+            "kind": "arc",
+            "params": {
+              "cx": 197.4,
+              "cy": 300.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-023675e2d181",
+            "kind": "line",
+            "params": {
+              "x0": 197.4,
+              "y0": 295.0,
+              "x1": 167.4,
+              "y1": 295.0
+            }
+          },
+          {
+            "entity_id": "entity-278e2c34afe9",
+            "kind": "arc",
+            "params": {
+              "cx": 167.4,
+              "cy": 300.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-a923a4d96875",
+            "kind": "line",
+            "params": {
+              "x0": 162.4,
+              "y0": 300.0,
+              "x1": 162.4,
+              "y1": 330.0
+            }
+          },
+          {
+            "entity_id": "entity-08c0779bfd09",
+            "kind": "arc",
+            "params": {
+              "cx": 167.4,
+              "cy": 330.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-f48e14098296",
+            "kind": "line",
+            "params": {
+              "x0": 167.4,
+              "y0": 335.0,
+              "x1": 197.4,
+              "y1": 335.0
+            }
+          },
+          {
+            "entity_id": "entity-d5e719dff734",
+            "kind": "arc",
+            "params": {
+              "cx": 197.4,
+              "cy": 330.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-c26bc860c4b6",
+            "kind": "line",
+            "params": {
+              "x0": 202.4,
+              "y0": 330.0,
+              "x1": 202.4,
+              "y1": 300.0
+            }
+          },
+          {
+            "entity_id": "entity-597bcb8fdfe8",
+            "kind": "arc",
+            "params": {
+              "cx": 197.4,
+              "cy": 300.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-32340e296a25",
+            "kind": "line",
+            "params": {
+              "x0": 197.4,
+              "y0": 295.0,
+              "x1": 167.4,
+              "y1": 295.0
+            }
+          },
+          {
+            "entity_id": "entity-a2eb2e6c46be",
+            "kind": "arc",
+            "params": {
+              "cx": 167.4,
+              "cy": 300.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-f1fdc0e41821",
+            "kind": "line",
+            "params": {
+              "x0": 162.4,
+              "y0": 300.0,
+              "x1": 162.4,
+              "y1": 330.0
+            }
+          },
+          {
+            "entity_id": "entity-583cc21dd10b",
+            "kind": "arc",
+            "params": {
+              "cx": 167.4,
+              "cy": 330.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-c9514848ab37",
+            "kind": "line",
+            "params": {
+              "x0": 45.3,
+              "y0": 284.0,
+              "x1": 87.3,
+              "y1": 284.0
+            }
+          },
+          {
+            "entity_id": "entity-66eccf659ffa",
+            "kind": "arc",
+            "params": {
+              "cx": 87.3,
+              "cy": 279.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-9f664e8d0db3",
+            "kind": "line",
+            "params": {
+              "x0": 92.3,
+              "y0": 279.0,
+              "x1": 92.3,
+              "y1": 237.0
+            }
+          },
+          {
+            "entity_id": "entity-13ca01171235",
+            "kind": "arc",
+            "params": {
+              "cx": 87.3,
+              "cy": 237.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-ae789e6fbfdf",
+            "kind": "line",
+            "params": {
+              "x0": 87.3,
+              "y0": 232.0,
+              "x1": 45.3,
+              "y1": 232.0
+            }
+          },
+          {
+            "entity_id": "entity-174d4e142e36",
+            "kind": "arc",
+            "params": {
+              "cx": 45.3,
+              "cy": 237.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-4b9d220e1e4a",
+            "kind": "line",
+            "params": {
+              "x0": 40.3,
+              "y0": 237.0,
+              "x1": 40.3,
+              "y1": 279.0
+            }
+          },
+          {
+            "entity_id": "entity-8e1a843ca75c",
+            "kind": "arc",
+            "params": {
+              "cx": 45.3,
+              "cy": 279.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-8df576929b5e",
+            "kind": "line",
+            "params": {
+              "x0": 45.3,
+              "y0": 284.0,
+              "x1": 87.3,
+              "y1": 284.0
+            }
+          },
+          {
+            "entity_id": "entity-04c7fbed537d",
+            "kind": "arc",
+            "params": {
+              "cx": 87.3,
+              "cy": 279.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-6c44079d6bca",
+            "kind": "line",
+            "params": {
+              "x0": 92.3,
+              "y0": 279.0,
+              "x1": 92.3,
+              "y1": 237.0
+            }
+          },
+          {
+            "entity_id": "entity-19761402cf2d",
+            "kind": "arc",
+            "params": {
+              "cx": 87.3,
+              "cy": 237.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-d5a199614a91",
+            "kind": "line",
+            "params": {
+              "x0": 87.3,
+              "y0": 232.0,
+              "x1": 45.3,
+              "y1": 232.0
+            }
+          },
+          {
+            "entity_id": "entity-b87e8aa3d6f0",
+            "kind": "arc",
+            "params": {
+              "cx": 45.3,
+              "cy": 237.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-7354979ede61",
+            "kind": "line",
+            "params": {
+              "x0": 40.3,
+              "y0": 237.0,
+              "x1": 40.3,
+              "y1": 279.0
+            }
+          },
+          {
+            "entity_id": "entity-b57ae67336cd",
+            "kind": "arc",
+            "params": {
+              "cx": 45.3,
+              "cy": 279.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-5fd111852e6a",
+            "kind": "line",
+            "params": {
+              "x0": 51.3,
+              "y0": 281.0,
+              "x1": 81.3,
+              "y1": 281.0
+            }
+          },
+          {
+            "entity_id": "entity-de772eeacd61",
+            "kind": "arc",
+            "params": {
+              "cx": 81.3,
+              "cy": 276.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-0c038a4ccffd",
+            "kind": "line",
+            "params": {
+              "x0": 86.3,
+              "y0": 276.0,
+              "x1": 86.3,
+              "y1": 246.0
+            }
+          },
+          {
+            "entity_id": "entity-dd1fa2f79af4",
+            "kind": "arc",
+            "params": {
+              "cx": 81.3,
+              "cy": 246.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-d23ab000f22d",
+            "kind": "line",
+            "params": {
+              "x0": 81.3,
+              "y0": 241.0,
+              "x1": 51.3,
+              "y1": 241.0
+            }
+          },
+          {
+            "entity_id": "entity-85caf12f83e5",
+            "kind": "arc",
+            "params": {
+              "cx": 51.3,
+              "cy": 246.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-b2cb91cdb362",
+            "kind": "line",
+            "params": {
+              "x0": 46.3,
+              "y0": 246.0,
+              "x1": 46.3,
+              "y1": 276.0
+            }
+          },
+          {
+            "entity_id": "entity-058b37e1d64a",
+            "kind": "arc",
+            "params": {
+              "cx": 51.3,
+              "cy": 276.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-ad784216e4a0",
+            "kind": "line",
+            "params": {
+              "x0": 51.3,
+              "y0": 281.0,
+              "x1": 81.3,
+              "y1": 281.0
+            }
+          },
+          {
+            "entity_id": "entity-c532fa8f0fc4",
+            "kind": "arc",
+            "params": {
+              "cx": 81.3,
+              "cy": 276.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-4063a64c89fc",
+            "kind": "line",
+            "params": {
+              "x0": 86.3,
+              "y0": 276.0,
+              "x1": 86.3,
+              "y1": 246.0
+            }
+          },
+          {
+            "entity_id": "entity-ccdb8e2f5759",
+            "kind": "arc",
+            "params": {
+              "cx": 81.3,
+              "cy": 246.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-5cb60b776905",
+            "kind": "line",
+            "params": {
+              "x0": 81.3,
+              "y0": 241.0,
+              "x1": 51.3,
+              "y1": 241.0
+            }
+          },
+          {
+            "entity_id": "entity-565de590a3d8",
+            "kind": "arc",
+            "params": {
+              "cx": 51.3,
+              "cy": 246.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-a9970b36224f",
+            "kind": "line",
+            "params": {
+              "x0": 46.3,
+              "y0": 246.0,
+              "x1": 46.3,
+              "y1": 276.0
+            }
+          },
+          {
+            "entity_id": "entity-31ddf85fd17b",
+            "kind": "arc",
+            "params": {
+              "cx": 51.3,
+              "cy": 276.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-d913d552aa20",
+            "kind": "line",
+            "params": {
+              "x0": 99.3,
+              "y0": 284.0,
+              "x1": 141.3,
+              "y1": 284.0
+            }
+          },
+          {
+            "entity_id": "entity-67d50734b192",
+            "kind": "arc",
+            "params": {
+              "cx": 141.3,
+              "cy": 279.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-51222b92387d",
+            "kind": "line",
+            "params": {
+              "x0": 146.3,
+              "y0": 279.0,
+              "x1": 146.3,
+              "y1": 237.0
+            }
+          },
+          {
+            "entity_id": "entity-c46f4cfb631d",
+            "kind": "arc",
+            "params": {
+              "cx": 141.3,
+              "cy": 237.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-df5a4a35a1d8",
+            "kind": "line",
+            "params": {
+              "x0": 141.3,
+              "y0": 232.0,
+              "x1": 99.3,
+              "y1": 232.0
+            }
+          },
+          {
+            "entity_id": "entity-8d82d37b0296",
+            "kind": "arc",
+            "params": {
+              "cx": 99.3,
+              "cy": 237.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-85b7852d32b8",
+            "kind": "line",
+            "params": {
+              "x0": 94.3,
+              "y0": 237.0,
+              "x1": 94.3,
+              "y1": 279.0
+            }
+          },
+          {
+            "entity_id": "entity-92fcd186da27",
+            "kind": "arc",
+            "params": {
+              "cx": 99.3,
+              "cy": 279.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-49f8b08e0328",
+            "kind": "line",
+            "params": {
+              "x0": 99.3,
+              "y0": 284.0,
+              "x1": 141.3,
+              "y1": 284.0
+            }
+          },
+          {
+            "entity_id": "entity-dcfc5d60b39b",
+            "kind": "arc",
+            "params": {
+              "cx": 141.3,
+              "cy": 279.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-dbf0a0503a33",
+            "kind": "line",
+            "params": {
+              "x0": 146.3,
+              "y0": 279.0,
+              "x1": 146.3,
+              "y1": 237.0
+            }
+          },
+          {
+            "entity_id": "entity-e58c031ecf51",
+            "kind": "arc",
+            "params": {
+              "cx": 141.3,
+              "cy": 237.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-6daf6a868ce0",
+            "kind": "line",
+            "params": {
+              "x0": 141.3,
+              "y0": 232.0,
+              "x1": 99.3,
+              "y1": 232.0
+            }
+          },
+          {
+            "entity_id": "entity-09ef8e26e555",
+            "kind": "arc",
+            "params": {
+              "cx": 99.3,
+              "cy": 237.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-fd75364e2e41",
+            "kind": "line",
+            "params": {
+              "x0": 94.3,
+              "y0": 237.0,
+              "x1": 94.3,
+              "y1": 279.0
+            }
+          },
+          {
+            "entity_id": "entity-955a57a28e60",
+            "kind": "arc",
+            "params": {
+              "cx": 99.3,
+              "cy": 279.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-ee9fbda826b2",
+            "kind": "line",
+            "params": {
+              "x0": 105.3,
+              "y0": 281.0,
+              "x1": 135.3,
+              "y1": 281.0
+            }
+          },
+          {
+            "entity_id": "entity-9ea6f3bbd1b6",
+            "kind": "arc",
+            "params": {
+              "cx": 135.3,
+              "cy": 276.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-7d4c558fe617",
+            "kind": "line",
+            "params": {
+              "x0": 140.3,
+              "y0": 276.0,
+              "x1": 140.3,
+              "y1": 246.0
+            }
+          },
+          {
+            "entity_id": "entity-a408a5cd470f",
+            "kind": "arc",
+            "params": {
+              "cx": 135.3,
+              "cy": 246.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-cbd718fb84dc",
+            "kind": "line",
+            "params": {
+              "x0": 135.3,
+              "y0": 241.0,
+              "x1": 105.3,
+              "y1": 241.0
+            }
+          },
+          {
+            "entity_id": "entity-85ecba9bb5f9",
+            "kind": "arc",
+            "params": {
+              "cx": 105.3,
+              "cy": 246.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-193463336599",
+            "kind": "line",
+            "params": {
+              "x0": 100.3,
+              "y0": 246.0,
+              "x1": 100.3,
+              "y1": 276.0
+            }
+          },
+          {
+            "entity_id": "entity-0c719936f425",
+            "kind": "arc",
+            "params": {
+              "cx": 105.3,
+              "cy": 276.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-c831c631614b",
+            "kind": "line",
+            "params": {
+              "x0": 105.3,
+              "y0": 281.0,
+              "x1": 135.3,
+              "y1": 281.0
+            }
+          },
+          {
+            "entity_id": "entity-ff9148f5b4bc",
+            "kind": "arc",
+            "params": {
+              "cx": 135.3,
+              "cy": 276.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-1b52dd69ae0e",
+            "kind": "line",
+            "params": {
+              "x0": 140.3,
+              "y0": 276.0,
+              "x1": 140.3,
+              "y1": 246.0
+            }
+          },
+          {
+            "entity_id": "entity-90cd0043a486",
+            "kind": "arc",
+            "params": {
+              "cx": 135.3,
+              "cy": 246.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-f4faa256ac71",
+            "kind": "line",
+            "params": {
+              "x0": 135.3,
+              "y0": 241.0,
+              "x1": 105.3,
+              "y1": 241.0
+            }
+          },
+          {
+            "entity_id": "entity-283116ec79ff",
+            "kind": "arc",
+            "params": {
+              "cx": 105.3,
+              "cy": 246.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-ac0f473b2cb0",
+            "kind": "line",
+            "params": {
+              "x0": 100.3,
+              "y0": 246.0,
+              "x1": 100.3,
+              "y1": 276.0
+            }
+          },
+          {
+            "entity_id": "entity-a1350b44c219",
+            "kind": "arc",
+            "params": {
+              "cx": 105.3,
+              "cy": 276.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-391170eeab53",
+            "kind": "line",
+            "params": {
+              "x0": 153.3,
+              "y0": 284.0,
+              "x1": 195.3,
+              "y1": 284.0
+            }
+          },
+          {
+            "entity_id": "entity-00cf346425e2",
+            "kind": "arc",
+            "params": {
+              "cx": 195.3,
+              "cy": 279.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-36725a0eb0dc",
+            "kind": "line",
+            "params": {
+              "x0": 200.3,
+              "y0": 279.0,
+              "x1": 200.3,
+              "y1": 237.0
+            }
+          },
+          {
+            "entity_id": "entity-bd8e9d0d8b9c",
+            "kind": "arc",
+            "params": {
+              "cx": 195.3,
+              "cy": 237.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-73d52bfaca05",
+            "kind": "line",
+            "params": {
+              "x0": 195.3,
+              "y0": 232.0,
+              "x1": 153.3,
+              "y1": 232.0
+            }
+          },
+          {
+            "entity_id": "entity-d341ac484187",
+            "kind": "arc",
+            "params": {
+              "cx": 153.3,
+              "cy": 237.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-45eec9a5114a",
+            "kind": "line",
+            "params": {
+              "x0": 148.3,
+              "y0": 237.0,
+              "x1": 148.3,
+              "y1": 279.0
+            }
+          },
+          {
+            "entity_id": "entity-044f51fac7fd",
+            "kind": "arc",
+            "params": {
+              "cx": 153.3,
+              "cy": 279.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-1e9edc8582c0",
+            "kind": "line",
+            "params": {
+              "x0": 153.3,
+              "y0": 284.0,
+              "x1": 195.3,
+              "y1": 284.0
+            }
+          },
+          {
+            "entity_id": "entity-5a98e419f90e",
+            "kind": "arc",
+            "params": {
+              "cx": 195.3,
+              "cy": 279.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-b8432b0536f8",
+            "kind": "line",
+            "params": {
+              "x0": 200.3,
+              "y0": 279.0,
+              "x1": 200.3,
+              "y1": 237.0
+            }
+          },
+          {
+            "entity_id": "entity-8aaf66468539",
+            "kind": "arc",
+            "params": {
+              "cx": 195.3,
+              "cy": 237.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-ca81880bd0c5",
+            "kind": "line",
+            "params": {
+              "x0": 195.3,
+              "y0": 232.0,
+              "x1": 153.3,
+              "y1": 232.0
+            }
+          },
+          {
+            "entity_id": "entity-df68b93fc915",
+            "kind": "arc",
+            "params": {
+              "cx": 153.3,
+              "cy": 237.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-a5c955f7b214",
+            "kind": "line",
+            "params": {
+              "x0": 148.3,
+              "y0": 237.0,
+              "x1": 148.3,
+              "y1": 279.0
+            }
+          },
+          {
+            "entity_id": "entity-b25ae3d0731b",
+            "kind": "arc",
+            "params": {
+              "cx": 153.3,
+              "cy": 279.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-d531264f2f96",
+            "kind": "line",
+            "params": {
+              "x0": 159.3,
+              "y0": 281.0,
+              "x1": 189.3,
+              "y1": 281.0
+            }
+          },
+          {
+            "entity_id": "entity-8d5f8930581b",
+            "kind": "arc",
+            "params": {
+              "cx": 189.3,
+              "cy": 276.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-aa9518d81564",
+            "kind": "line",
+            "params": {
+              "x0": 194.3,
+              "y0": 276.0,
+              "x1": 194.3,
+              "y1": 246.0
+            }
+          },
+          {
+            "entity_id": "entity-ac186f566d41",
+            "kind": "arc",
+            "params": {
+              "cx": 189.3,
+              "cy": 246.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-f4a41bf16dad",
+            "kind": "line",
+            "params": {
+              "x0": 189.3,
+              "y0": 241.0,
+              "x1": 159.3,
+              "y1": 241.0
+            }
+          },
+          {
+            "entity_id": "entity-b042b7bb2057",
+            "kind": "arc",
+            "params": {
+              "cx": 159.3,
+              "cy": 246.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-d8e192e8c6fb",
+            "kind": "line",
+            "params": {
+              "x0": 154.3,
+              "y0": 246.0,
+              "x1": 154.3,
+              "y1": 276.0
+            }
+          },
+          {
+            "entity_id": "entity-5cffd40b8cd0",
+            "kind": "arc",
+            "params": {
+              "cx": 159.3,
+              "cy": 276.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-6d7e60a1c0fd",
+            "kind": "line",
+            "params": {
+              "x0": 159.3,
+              "y0": 281.0,
+              "x1": 189.3,
+              "y1": 281.0
+            }
+          },
+          {
+            "entity_id": "entity-4e9b0a13c166",
+            "kind": "arc",
+            "params": {
+              "cx": 189.3,
+              "cy": 276.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-23d1f83eeeff",
+            "kind": "line",
+            "params": {
+              "x0": 194.3,
+              "y0": 276.0,
+              "x1": 194.3,
+              "y1": 246.0
+            }
+          },
+          {
+            "entity_id": "entity-ffb075add8f6",
+            "kind": "arc",
+            "params": {
+              "cx": 189.3,
+              "cy": 246.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-e8d56708a5c9",
+            "kind": "line",
+            "params": {
+              "x0": 189.3,
+              "y0": 241.0,
+              "x1": 159.3,
+              "y1": 241.0
+            }
+          },
+          {
+            "entity_id": "entity-20a233ce35b1",
+            "kind": "arc",
+            "params": {
+              "cx": 159.3,
+              "cy": 246.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-9a8ae0740394",
+            "kind": "line",
+            "params": {
+              "x0": 154.3,
+              "y0": 246.0,
+              "x1": 154.3,
+              "y1": 276.0
+            }
+          },
+          {
+            "entity_id": "entity-446a0ddeb814",
+            "kind": "arc",
+            "params": {
+              "cx": 159.3,
+              "cy": 276.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-49aba6d2b945",
+            "kind": "line",
+            "params": {
+              "x0": 29.1,
+              "y0": 230.0,
+              "x1": 71.1,
+              "y1": 230.0
+            }
+          },
+          {
+            "entity_id": "entity-64c3a83866c6",
+            "kind": "arc",
+            "params": {
+              "cx": 71.1,
+              "cy": 225.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-9939963153df",
+            "kind": "line",
+            "params": {
+              "x0": 76.1,
+              "y0": 225.0,
+              "x1": 76.1,
+              "y1": 183.0
+            }
+          },
+          {
+            "entity_id": "entity-f0684ba11eb6",
+            "kind": "arc",
+            "params": {
+              "cx": 71.1,
+              "cy": 183.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-713d163d816a",
+            "kind": "line",
+            "params": {
+              "x0": 71.1,
+              "y0": 178.0,
+              "x1": 29.1,
+              "y1": 178.0
+            }
+          },
+          {
+            "entity_id": "entity-23a9113d5381",
+            "kind": "arc",
+            "params": {
+              "cx": 29.1,
+              "cy": 183.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-8fad85a37c56",
+            "kind": "line",
+            "params": {
+              "x0": 24.1,
+              "y0": 183.0,
+              "x1": 24.1,
+              "y1": 225.0
+            }
+          },
+          {
+            "entity_id": "entity-48fed7944cf3",
+            "kind": "arc",
+            "params": {
+              "cx": 29.1,
+              "cy": 225.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-75744c18b792",
+            "kind": "line",
+            "params": {
+              "x0": 29.1,
+              "y0": 230.0,
+              "x1": 71.1,
+              "y1": 230.0
+            }
+          },
+          {
+            "entity_id": "entity-aaa5fd029877",
+            "kind": "arc",
+            "params": {
+              "cx": 71.1,
+              "cy": 225.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-dfef926a1542",
+            "kind": "line",
+            "params": {
+              "x0": 76.1,
+              "y0": 225.0,
+              "x1": 76.1,
+              "y1": 183.0
+            }
+          },
+          {
+            "entity_id": "entity-b54e3de193a3",
+            "kind": "arc",
+            "params": {
+              "cx": 71.1,
+              "cy": 183.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-b16d021f81b7",
+            "kind": "line",
+            "params": {
+              "x0": 71.1,
+              "y0": 178.0,
+              "x1": 29.1,
+              "y1": 178.0
+            }
+          },
+          {
+            "entity_id": "entity-ae7f0b453bef",
+            "kind": "arc",
+            "params": {
+              "cx": 29.1,
+              "cy": 183.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-cc85e4c58500",
+            "kind": "line",
+            "params": {
+              "x0": 24.1,
+              "y0": 183.0,
+              "x1": 24.1,
+              "y1": 225.0
+            }
+          },
+          {
+            "entity_id": "entity-05f886329f9b",
+            "kind": "arc",
+            "params": {
+              "cx": 29.1,
+              "cy": 225.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-bc66e1d2e0d4",
+            "kind": "line",
+            "params": {
+              "x0": 35.1,
+              "y0": 227.0,
+              "x1": 65.1,
+              "y1": 227.0
+            }
+          },
+          {
+            "entity_id": "entity-4478a72fc25f",
+            "kind": "arc",
+            "params": {
+              "cx": 65.1,
+              "cy": 222.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-0a033d8cf31a",
+            "kind": "line",
+            "params": {
+              "x0": 70.1,
+              "y0": 222.0,
+              "x1": 70.1,
+              "y1": 192.0
+            }
+          },
+          {
+            "entity_id": "entity-09dfbe63939c",
+            "kind": "arc",
+            "params": {
+              "cx": 65.1,
+              "cy": 192.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-8f5f7b0df44d",
+            "kind": "line",
+            "params": {
+              "x0": 65.1,
+              "y0": 187.0,
+              "x1": 35.1,
+              "y1": 187.0
+            }
+          },
+          {
+            "entity_id": "entity-927ce228ce37",
+            "kind": "arc",
+            "params": {
+              "cx": 35.1,
+              "cy": 192.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-ec04f2bff9b6",
+            "kind": "line",
+            "params": {
+              "x0": 30.1,
+              "y0": 192.0,
+              "x1": 30.1,
+              "y1": 222.0
+            }
+          },
+          {
+            "entity_id": "entity-e31188dae7a1",
+            "kind": "arc",
+            "params": {
+              "cx": 35.1,
+              "cy": 222.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-47fc26fadefa",
+            "kind": "line",
+            "params": {
+              "x0": 35.1,
+              "y0": 227.0,
+              "x1": 65.1,
+              "y1": 227.0
+            }
+          },
+          {
+            "entity_id": "entity-6e1e349248ba",
+            "kind": "arc",
+            "params": {
+              "cx": 65.1,
+              "cy": 222.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-fe3f6b4d8160",
+            "kind": "line",
+            "params": {
+              "x0": 70.1,
+              "y0": 222.0,
+              "x1": 70.1,
+              "y1": 192.0
+            }
+          },
+          {
+            "entity_id": "entity-96e72d1c4140",
+            "kind": "arc",
+            "params": {
+              "cx": 65.1,
+              "cy": 192.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-66a4b69d4f24",
+            "kind": "line",
+            "params": {
+              "x0": 65.1,
+              "y0": 187.0,
+              "x1": 35.1,
+              "y1": 187.0
+            }
+          },
+          {
+            "entity_id": "entity-b8682542c9d3",
+            "kind": "arc",
+            "params": {
+              "cx": 35.1,
+              "cy": 192.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-7abd72a3473e",
+            "kind": "line",
+            "params": {
+              "x0": 30.1,
+              "y0": 192.0,
+              "x1": 30.1,
+              "y1": 222.0
+            }
+          },
+          {
+            "entity_id": "entity-392854ce31e3",
+            "kind": "arc",
+            "params": {
+              "cx": 35.1,
+              "cy": 222.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-2deecb14a440",
+            "kind": "line",
+            "params": {
+              "x0": 83.1,
+              "y0": 230.0,
+              "x1": 125.1,
+              "y1": 230.0
+            }
+          },
+          {
+            "entity_id": "entity-f1f64b66b917",
+            "kind": "arc",
+            "params": {
+              "cx": 125.1,
+              "cy": 225.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-cf1b7afd59af",
+            "kind": "line",
+            "params": {
+              "x0": 130.1,
+              "y0": 225.0,
+              "x1": 130.1,
+              "y1": 183.0
+            }
+          },
+          {
+            "entity_id": "entity-deb9acbda406",
+            "kind": "arc",
+            "params": {
+              "cx": 125.1,
+              "cy": 183.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-65e32895dde7",
+            "kind": "line",
+            "params": {
+              "x0": 125.1,
+              "y0": 178.0,
+              "x1": 83.1,
+              "y1": 178.0
+            }
+          },
+          {
+            "entity_id": "entity-5a92e9f8294f",
+            "kind": "arc",
+            "params": {
+              "cx": 83.1,
+              "cy": 183.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-c1910f06d406",
+            "kind": "line",
+            "params": {
+              "x0": 78.1,
+              "y0": 183.0,
+              "x1": 78.1,
+              "y1": 225.0
+            }
+          },
+          {
+            "entity_id": "entity-878b45f76bac",
+            "kind": "arc",
+            "params": {
+              "cx": 83.1,
+              "cy": 225.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-bf6f02cd2a51",
+            "kind": "line",
+            "params": {
+              "x0": 83.1,
+              "y0": 230.0,
+              "x1": 125.1,
+              "y1": 230.0
+            }
+          },
+          {
+            "entity_id": "entity-da3ca690a083",
+            "kind": "arc",
+            "params": {
+              "cx": 125.1,
+              "cy": 225.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-2db0c81c1a87",
+            "kind": "line",
+            "params": {
+              "x0": 130.1,
+              "y0": 225.0,
+              "x1": 130.1,
+              "y1": 183.0
+            }
+          },
+          {
+            "entity_id": "entity-4bf7590ad567",
+            "kind": "arc",
+            "params": {
+              "cx": 125.1,
+              "cy": 183.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-77c86786a449",
+            "kind": "line",
+            "params": {
+              "x0": 125.1,
+              "y0": 178.0,
+              "x1": 83.1,
+              "y1": 178.0
+            }
+          },
+          {
+            "entity_id": "entity-ade91ac8b95c",
+            "kind": "arc",
+            "params": {
+              "cx": 83.1,
+              "cy": 183.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-3faadf2e07a6",
+            "kind": "line",
+            "params": {
+              "x0": 78.1,
+              "y0": 183.0,
+              "x1": 78.1,
+              "y1": 225.0
+            }
+          },
+          {
+            "entity_id": "entity-1344f0dcd5af",
+            "kind": "arc",
+            "params": {
+              "cx": 83.1,
+              "cy": 225.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-4f41cfdad223",
+            "kind": "line",
+            "params": {
+              "x0": 89.1,
+              "y0": 227.0,
+              "x1": 119.1,
+              "y1": 227.0
+            }
+          },
+          {
+            "entity_id": "entity-a44b4d92b24b",
+            "kind": "arc",
+            "params": {
+              "cx": 119.1,
+              "cy": 222.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-28e192a3308c",
+            "kind": "line",
+            "params": {
+              "x0": 124.1,
+              "y0": 222.0,
+              "x1": 124.1,
+              "y1": 192.0
+            }
+          },
+          {
+            "entity_id": "entity-6b62a3b0f38a",
+            "kind": "arc",
+            "params": {
+              "cx": 119.1,
+              "cy": 192.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-ee6391ee84b7",
+            "kind": "line",
+            "params": {
+              "x0": 119.1,
+              "y0": 187.0,
+              "x1": 89.1,
+              "y1": 187.0
+            }
+          },
+          {
+            "entity_id": "entity-2bae8d6ede09",
+            "kind": "arc",
+            "params": {
+              "cx": 89.1,
+              "cy": 192.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-655c3d49684e",
+            "kind": "line",
+            "params": {
+              "x0": 84.1,
+              "y0": 192.0,
+              "x1": 84.1,
+              "y1": 222.0
+            }
+          },
+          {
+            "entity_id": "entity-a269d50712a5",
+            "kind": "arc",
+            "params": {
+              "cx": 89.1,
+              "cy": 222.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-737f7c323b1a",
+            "kind": "line",
+            "params": {
+              "x0": 89.1,
+              "y0": 227.0,
+              "x1": 119.1,
+              "y1": 227.0
+            }
+          },
+          {
+            "entity_id": "entity-6a8115e73863",
+            "kind": "arc",
+            "params": {
+              "cx": 119.1,
+              "cy": 222.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-73ee7143bec7",
+            "kind": "line",
+            "params": {
+              "x0": 124.1,
+              "y0": 222.0,
+              "x1": 124.1,
+              "y1": 192.0
+            }
+          },
+          {
+            "entity_id": "entity-2187199a84fe",
+            "kind": "arc",
+            "params": {
+              "cx": 119.1,
+              "cy": 192.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-c2455269b7ee",
+            "kind": "line",
+            "params": {
+              "x0": 119.1,
+              "y0": 187.0,
+              "x1": 89.1,
+              "y1": 187.0
+            }
+          },
+          {
+            "entity_id": "entity-400f55a17056",
+            "kind": "arc",
+            "params": {
+              "cx": 89.1,
+              "cy": 192.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-66d4cd0582da",
+            "kind": "line",
+            "params": {
+              "x0": 84.1,
+              "y0": 192.0,
+              "x1": 84.1,
+              "y1": 222.0
+            }
+          },
+          {
+            "entity_id": "entity-5bf2cc8c2c77",
+            "kind": "arc",
+            "params": {
+              "cx": 89.1,
+              "cy": 222.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-a213685d3134",
+            "kind": "line",
+            "params": {
+              "x0": 137.1,
+              "y0": 230.0,
+              "x1": 179.1,
+              "y1": 230.0
+            }
+          },
+          {
+            "entity_id": "entity-0c584ca4fb4e",
+            "kind": "arc",
+            "params": {
+              "cx": 179.1,
+              "cy": 225.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-687cf4d683be",
+            "kind": "line",
+            "params": {
+              "x0": 184.1,
+              "y0": 225.0,
+              "x1": 184.1,
+              "y1": 183.0
+            }
+          },
+          {
+            "entity_id": "entity-1985fca504ff",
+            "kind": "arc",
+            "params": {
+              "cx": 179.1,
+              "cy": 183.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-a5dc2369c70a",
+            "kind": "line",
+            "params": {
+              "x0": 179.1,
+              "y0": 178.0,
+              "x1": 137.1,
+              "y1": 178.0
+            }
+          },
+          {
+            "entity_id": "entity-3d98da3b4257",
+            "kind": "arc",
+            "params": {
+              "cx": 137.1,
+              "cy": 183.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-f8c3467b45f2",
+            "kind": "line",
+            "params": {
+              "x0": 132.1,
+              "y0": 183.0,
+              "x1": 132.1,
+              "y1": 225.0
+            }
+          },
+          {
+            "entity_id": "entity-7c05ce122704",
+            "kind": "arc",
+            "params": {
+              "cx": 137.1,
+              "cy": 225.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-d5c9b90c3b76",
+            "kind": "line",
+            "params": {
+              "x0": 137.1,
+              "y0": 230.0,
+              "x1": 179.1,
+              "y1": 230.0
+            }
+          },
+          {
+            "entity_id": "entity-660fea46c177",
+            "kind": "arc",
+            "params": {
+              "cx": 179.1,
+              "cy": 225.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-7f88235e7756",
+            "kind": "line",
+            "params": {
+              "x0": 184.1,
+              "y0": 225.0,
+              "x1": 184.1,
+              "y1": 183.0
+            }
+          },
+          {
+            "entity_id": "entity-fd03e8ec10ef",
+            "kind": "arc",
+            "params": {
+              "cx": 179.1,
+              "cy": 183.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-6b3f8a25c570",
+            "kind": "line",
+            "params": {
+              "x0": 179.1,
+              "y0": 178.0,
+              "x1": 137.1,
+              "y1": 178.0
+            }
+          },
+          {
+            "entity_id": "entity-4145552611a3",
+            "kind": "arc",
+            "params": {
+              "cx": 137.1,
+              "cy": 183.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-d0751dfaa87f",
+            "kind": "line",
+            "params": {
+              "x0": 132.1,
+              "y0": 183.0,
+              "x1": 132.1,
+              "y1": 225.0
+            }
+          },
+          {
+            "entity_id": "entity-1b62dd9aebc6",
+            "kind": "arc",
+            "params": {
+              "cx": 137.1,
+              "cy": 225.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-330f18c9ff82",
+            "kind": "line",
+            "params": {
+              "x0": 143.1,
+              "y0": 227.0,
+              "x1": 173.1,
+              "y1": 227.0
+            }
+          },
+          {
+            "entity_id": "entity-0250006936bb",
+            "kind": "arc",
+            "params": {
+              "cx": 173.1,
+              "cy": 222.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-98fd7b630469",
+            "kind": "line",
+            "params": {
+              "x0": 178.1,
+              "y0": 222.0,
+              "x1": 178.1,
+              "y1": 192.0
+            }
+          },
+          {
+            "entity_id": "entity-a7212ecccc0d",
+            "kind": "arc",
+            "params": {
+              "cx": 173.1,
+              "cy": 192.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-acde8bf545cd",
+            "kind": "line",
+            "params": {
+              "x0": 173.1,
+              "y0": 187.0,
+              "x1": 143.1,
+              "y1": 187.0
+            }
+          },
+          {
+            "entity_id": "entity-993b322b2c7b",
+            "kind": "arc",
+            "params": {
+              "cx": 143.1,
+              "cy": 192.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-e7b2fa983cf5",
+            "kind": "line",
+            "params": {
+              "x0": 138.1,
+              "y0": 192.0,
+              "x1": 138.1,
+              "y1": 222.0
+            }
+          },
+          {
+            "entity_id": "entity-dae2bc3fc54f",
+            "kind": "arc",
+            "params": {
+              "cx": 143.1,
+              "cy": 222.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-824228ab1852",
+            "kind": "line",
+            "params": {
+              "x0": 143.1,
+              "y0": 227.0,
+              "x1": 173.1,
+              "y1": 227.0
+            }
+          },
+          {
+            "entity_id": "entity-b6d0dda6af18",
+            "kind": "arc",
+            "params": {
+              "cx": 173.1,
+              "cy": 222.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-fc722aa485b4",
+            "kind": "line",
+            "params": {
+              "x0": 178.1,
+              "y0": 222.0,
+              "x1": 178.1,
+              "y1": 192.0
+            }
+          },
+          {
+            "entity_id": "entity-8dd18737ca06",
+            "kind": "arc",
+            "params": {
+              "cx": 173.1,
+              "cy": 192.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-5821039739d1",
+            "kind": "line",
+            "params": {
+              "x0": 173.1,
+              "y0": 187.0,
+              "x1": 143.1,
+              "y1": 187.0
+            }
+          },
+          {
+            "entity_id": "entity-10f627fcd893",
+            "kind": "arc",
+            "params": {
+              "cx": 143.1,
+              "cy": 192.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-d3de1ed539ea",
+            "kind": "line",
+            "params": {
+              "x0": 138.1,
+              "y0": 192.0,
+              "x1": 138.1,
+              "y1": 222.0
+            }
+          },
+          {
+            "entity_id": "entity-b23f71f17dc1",
+            "kind": "arc",
+            "params": {
+              "cx": 143.1,
+              "cy": 222.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-46a3ee36bdd1",
+            "kind": "line",
+            "params": {
+              "x0": 21.0,
+              "y0": 176.0,
+              "x1": 63.0,
+              "y1": 176.0
+            }
+          },
+          {
+            "entity_id": "entity-3d2e75500956",
+            "kind": "arc",
+            "params": {
+              "cx": 63.0,
+              "cy": 171.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-4a9c5523f3fe",
+            "kind": "line",
+            "params": {
+              "x0": 68.0,
+              "y0": 171.0,
+              "x1": 68.0,
+              "y1": 129.0
+            }
+          },
+          {
+            "entity_id": "entity-620b3e7d0dc4",
+            "kind": "arc",
+            "params": {
+              "cx": 63.0,
+              "cy": 129.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-2f793b18ed6c",
+            "kind": "line",
+            "params": {
+              "x0": 63.0,
+              "y0": 124.0,
+              "x1": 21.0,
+              "y1": 124.0
+            }
+          },
+          {
+            "entity_id": "entity-ead30f1590ec",
+            "kind": "arc",
+            "params": {
+              "cx": 21.0,
+              "cy": 129.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-30e390700c74",
+            "kind": "line",
+            "params": {
+              "x0": 16.0,
+              "y0": 129.0,
+              "x1": 16.0,
+              "y1": 171.0
+            }
+          },
+          {
+            "entity_id": "entity-f7f97b6334f0",
+            "kind": "arc",
+            "params": {
+              "cx": 21.0,
+              "cy": 171.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-261260792c21",
+            "kind": "line",
+            "params": {
+              "x0": 21.0,
+              "y0": 176.0,
+              "x1": 63.0,
+              "y1": 176.0
+            }
+          },
+          {
+            "entity_id": "entity-512ee14a2abd",
+            "kind": "arc",
+            "params": {
+              "cx": 63.0,
+              "cy": 171.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-3297701018a0",
+            "kind": "line",
+            "params": {
+              "x0": 68.0,
+              "y0": 171.0,
+              "x1": 68.0,
+              "y1": 129.0
+            }
+          },
+          {
+            "entity_id": "entity-1b46158ac020",
+            "kind": "arc",
+            "params": {
+              "cx": 63.0,
+              "cy": 129.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-55dde09e8d9a",
+            "kind": "line",
+            "params": {
+              "x0": 63.0,
+              "y0": 124.0,
+              "x1": 21.0,
+              "y1": 124.0
+            }
+          },
+          {
+            "entity_id": "entity-44e578874dbf",
+            "kind": "arc",
+            "params": {
+              "cx": 21.0,
+              "cy": 129.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-e20748b17f9d",
+            "kind": "line",
+            "params": {
+              "x0": 16.0,
+              "y0": 129.0,
+              "x1": 16.0,
+              "y1": 171.0
+            }
+          },
+          {
+            "entity_id": "entity-665222f16002",
+            "kind": "arc",
+            "params": {
+              "cx": 21.0,
+              "cy": 171.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-bb0a91920f37",
+            "kind": "line",
+            "params": {
+              "x0": 27.0,
+              "y0": 173.0,
+              "x1": 57.0,
+              "y1": 173.0
+            }
+          },
+          {
+            "entity_id": "entity-1e62ef12479a",
+            "kind": "arc",
+            "params": {
+              "cx": 57.0,
+              "cy": 168.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-e8427e52da14",
+            "kind": "line",
+            "params": {
+              "x0": 62.0,
+              "y0": 168.0,
+              "x1": 62.0,
+              "y1": 138.0
+            }
+          },
+          {
+            "entity_id": "entity-a31a02c0d20a",
+            "kind": "arc",
+            "params": {
+              "cx": 57.0,
+              "cy": 138.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-4e826394baf1",
+            "kind": "line",
+            "params": {
+              "x0": 57.0,
+              "y0": 133.0,
+              "x1": 27.0,
+              "y1": 133.0
+            }
+          },
+          {
+            "entity_id": "entity-d140c02e15b4",
+            "kind": "arc",
+            "params": {
+              "cx": 27.0,
+              "cy": 138.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-16131adca803",
+            "kind": "line",
+            "params": {
+              "x0": 22.0,
+              "y0": 138.0,
+              "x1": 22.0,
+              "y1": 168.0
+            }
+          },
+          {
+            "entity_id": "entity-d4875569e78d",
+            "kind": "arc",
+            "params": {
+              "cx": 27.0,
+              "cy": 168.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-b47812828c9d",
+            "kind": "line",
+            "params": {
+              "x0": 27.0,
+              "y0": 173.0,
+              "x1": 57.0,
+              "y1": 173.0
+            }
+          },
+          {
+            "entity_id": "entity-33f8e8259aa1",
+            "kind": "arc",
+            "params": {
+              "cx": 57.0,
+              "cy": 168.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-c18f84c2e8e1",
+            "kind": "line",
+            "params": {
+              "x0": 62.0,
+              "y0": 168.0,
+              "x1": 62.0,
+              "y1": 138.0
+            }
+          },
+          {
+            "entity_id": "entity-9cee2a5b0541",
+            "kind": "arc",
+            "params": {
+              "cx": 57.0,
+              "cy": 138.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-8ae90ec25e91",
+            "kind": "line",
+            "params": {
+              "x0": 57.0,
+              "y0": 133.0,
+              "x1": 27.0,
+              "y1": 133.0
+            }
+          },
+          {
+            "entity_id": "entity-6b717d78ecd3",
+            "kind": "arc",
+            "params": {
+              "cx": 27.0,
+              "cy": 138.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-ebdbf91c9255",
+            "kind": "line",
+            "params": {
+              "x0": 22.0,
+              "y0": 138.0,
+              "x1": 22.0,
+              "y1": 168.0
+            }
+          },
+          {
+            "entity_id": "entity-e171dca8d52b",
+            "kind": "arc",
+            "params": {
+              "cx": 27.0,
+              "cy": 168.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-b5ac7c50f931",
+            "kind": "line",
+            "params": {
+              "x0": 75.0,
+              "y0": 176.0,
+              "x1": 117.0,
+              "y1": 176.0
+            }
+          },
+          {
+            "entity_id": "entity-a2a1fc914644",
+            "kind": "arc",
+            "params": {
+              "cx": 117.0,
+              "cy": 171.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-26820d10ccd3",
+            "kind": "line",
+            "params": {
+              "x0": 122.0,
+              "y0": 171.0,
+              "x1": 122.0,
+              "y1": 129.0
+            }
+          },
+          {
+            "entity_id": "entity-992c6c644f0e",
+            "kind": "arc",
+            "params": {
+              "cx": 117.0,
+              "cy": 129.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-06d304811b38",
+            "kind": "line",
+            "params": {
+              "x0": 117.0,
+              "y0": 124.0,
+              "x1": 75.0,
+              "y1": 124.0
+            }
+          },
+          {
+            "entity_id": "entity-dd15f1b6966f",
+            "kind": "arc",
+            "params": {
+              "cx": 75.0,
+              "cy": 129.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-3300ad12e231",
+            "kind": "line",
+            "params": {
+              "x0": 70.0,
+              "y0": 129.0,
+              "x1": 70.0,
+              "y1": 171.0
+            }
+          },
+          {
+            "entity_id": "entity-d6d4e1c2cc7d",
+            "kind": "arc",
+            "params": {
+              "cx": 75.0,
+              "cy": 171.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-80b81da44923",
+            "kind": "line",
+            "params": {
+              "x0": 75.0,
+              "y0": 176.0,
+              "x1": 117.0,
+              "y1": 176.0
+            }
+          },
+          {
+            "entity_id": "entity-29844f5b4f01",
+            "kind": "arc",
+            "params": {
+              "cx": 117.0,
+              "cy": 171.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-c5062d8a2c82",
+            "kind": "line",
+            "params": {
+              "x0": 122.0,
+              "y0": 171.0,
+              "x1": 122.0,
+              "y1": 129.0
+            }
+          },
+          {
+            "entity_id": "entity-9d35a9592c1d",
+            "kind": "arc",
+            "params": {
+              "cx": 117.0,
+              "cy": 129.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-8d2df4d50509",
+            "kind": "line",
+            "params": {
+              "x0": 117.0,
+              "y0": 124.0,
+              "x1": 75.0,
+              "y1": 124.0
+            }
+          },
+          {
+            "entity_id": "entity-319a30deb8e9",
+            "kind": "arc",
+            "params": {
+              "cx": 75.0,
+              "cy": 129.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-261b9a1d2376",
+            "kind": "line",
+            "params": {
+              "x0": 70.0,
+              "y0": 129.0,
+              "x1": 70.0,
+              "y1": 171.0
+            }
+          },
+          {
+            "entity_id": "entity-1e59f48b5ebb",
+            "kind": "arc",
+            "params": {
+              "cx": 75.0,
+              "cy": 171.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-0cdc945f55e0",
+            "kind": "line",
+            "params": {
+              "x0": 81.0,
+              "y0": 173.0,
+              "x1": 111.0,
+              "y1": 173.0
+            }
+          },
+          {
+            "entity_id": "entity-fd8fae322991",
+            "kind": "arc",
+            "params": {
+              "cx": 111.0,
+              "cy": 168.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-f4baccd93d28",
+            "kind": "line",
+            "params": {
+              "x0": 116.0,
+              "y0": 168.0,
+              "x1": 116.0,
+              "y1": 138.0
+            }
+          },
+          {
+            "entity_id": "entity-088e9afe906f",
+            "kind": "arc",
+            "params": {
+              "cx": 111.0,
+              "cy": 138.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-dcc61961211f",
+            "kind": "line",
+            "params": {
+              "x0": 111.0,
+              "y0": 133.0,
+              "x1": 81.0,
+              "y1": 133.0
+            }
+          },
+          {
+            "entity_id": "entity-6af49b7ed374",
+            "kind": "arc",
+            "params": {
+              "cx": 81.0,
+              "cy": 138.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-dbe36ab6e493",
+            "kind": "line",
+            "params": {
+              "x0": 76.0,
+              "y0": 138.0,
+              "x1": 76.0,
+              "y1": 168.0
+            }
+          },
+          {
+            "entity_id": "entity-fd2baa72e9ce",
+            "kind": "arc",
+            "params": {
+              "cx": 81.0,
+              "cy": 168.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-8031894a5769",
+            "kind": "line",
+            "params": {
+              "x0": 81.0,
+              "y0": 173.0,
+              "x1": 111.0,
+              "y1": 173.0
+            }
+          },
+          {
+            "entity_id": "entity-e1fd0ea41d7b",
+            "kind": "arc",
+            "params": {
+              "cx": 111.0,
+              "cy": 168.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-451c7bc0da3f",
+            "kind": "line",
+            "params": {
+              "x0": 116.0,
+              "y0": 168.0,
+              "x1": 116.0,
+              "y1": 138.0
+            }
+          },
+          {
+            "entity_id": "entity-66fd5dc27dbb",
+            "kind": "arc",
+            "params": {
+              "cx": 111.0,
+              "cy": 138.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-23bc56f0af0c",
+            "kind": "line",
+            "params": {
+              "x0": 111.0,
+              "y0": 133.0,
+              "x1": 81.0,
+              "y1": 133.0
+            }
+          },
+          {
+            "entity_id": "entity-c7c0a7f01d13",
+            "kind": "arc",
+            "params": {
+              "cx": 81.0,
+              "cy": 138.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-abb667cb9dd2",
+            "kind": "line",
+            "params": {
+              "x0": 76.0,
+              "y0": 138.0,
+              "x1": 76.0,
+              "y1": 168.0
+            }
+          },
+          {
+            "entity_id": "entity-65d8ef68090c",
+            "kind": "arc",
+            "params": {
+              "cx": 81.0,
+              "cy": 168.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-1e1ec2e56ea7",
+            "kind": "line",
+            "params": {
+              "x0": 129.0,
+              "y0": 176.0,
+              "x1": 171.0,
+              "y1": 176.0
+            }
+          },
+          {
+            "entity_id": "entity-781cd4f4b73c",
+            "kind": "arc",
+            "params": {
+              "cx": 171.0,
+              "cy": 171.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-e639d2339a02",
+            "kind": "line",
+            "params": {
+              "x0": 176.0,
+              "y0": 171.0,
+              "x1": 176.0,
+              "y1": 129.0
+            }
+          },
+          {
+            "entity_id": "entity-581cf269ed1e",
+            "kind": "arc",
+            "params": {
+              "cx": 171.0,
+              "cy": 129.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-8c2f8255b9e6",
+            "kind": "line",
+            "params": {
+              "x0": 171.0,
+              "y0": 124.0,
+              "x1": 129.0,
+              "y1": 124.0
+            }
+          },
+          {
+            "entity_id": "entity-ca3d61ba1a7c",
+            "kind": "arc",
+            "params": {
+              "cx": 129.0,
+              "cy": 129.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-9c29f5889b40",
+            "kind": "line",
+            "params": {
+              "x0": 124.0,
+              "y0": 129.0,
+              "x1": 124.0,
+              "y1": 171.0
+            }
+          },
+          {
+            "entity_id": "entity-d966de9a3400",
+            "kind": "arc",
+            "params": {
+              "cx": 129.0,
+              "cy": 171.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-8a2747423a0f",
+            "kind": "line",
+            "params": {
+              "x0": 129.0,
+              "y0": 176.0,
+              "x1": 171.0,
+              "y1": 176.0
+            }
+          },
+          {
+            "entity_id": "entity-834d4fe48f14",
+            "kind": "arc",
+            "params": {
+              "cx": 171.0,
+              "cy": 171.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-d0dd9d8b81b3",
+            "kind": "line",
+            "params": {
+              "x0": 176.0,
+              "y0": 171.0,
+              "x1": 176.0,
+              "y1": 129.0
+            }
+          },
+          {
+            "entity_id": "entity-28c7f3e30e9f",
+            "kind": "arc",
+            "params": {
+              "cx": 171.0,
+              "cy": 129.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-d8a36cb9d82d",
+            "kind": "line",
+            "params": {
+              "x0": 171.0,
+              "y0": 124.0,
+              "x1": 129.0,
+              "y1": 124.0
+            }
+          },
+          {
+            "entity_id": "entity-bd4941e09eba",
+            "kind": "arc",
+            "params": {
+              "cx": 129.0,
+              "cy": 129.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-54ed1521ac07",
+            "kind": "line",
+            "params": {
+              "x0": 124.0,
+              "y0": 129.0,
+              "x1": 124.0,
+              "y1": 171.0
+            }
+          },
+          {
+            "entity_id": "entity-0d4f047afe08",
+            "kind": "arc",
+            "params": {
+              "cx": 129.0,
+              "cy": 171.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-abfa03232b3f",
+            "kind": "line",
+            "params": {
+              "x0": 135.0,
+              "y0": 173.0,
+              "x1": 165.0,
+              "y1": 173.0
+            }
+          },
+          {
+            "entity_id": "entity-1150d9b31c24",
+            "kind": "arc",
+            "params": {
+              "cx": 165.0,
+              "cy": 168.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-6c3286226b12",
+            "kind": "line",
+            "params": {
+              "x0": 170.0,
+              "y0": 168.0,
+              "x1": 170.0,
+              "y1": 138.0
+            }
+          },
+          {
+            "entity_id": "entity-b8f5d6c2d712",
+            "kind": "arc",
+            "params": {
+              "cx": 165.0,
+              "cy": 138.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-0d3f9f9b648f",
+            "kind": "line",
+            "params": {
+              "x0": 165.0,
+              "y0": 133.0,
+              "x1": 135.0,
+              "y1": 133.0
+            }
+          },
+          {
+            "entity_id": "entity-6b5b9be6b9c6",
+            "kind": "arc",
+            "params": {
+              "cx": 135.0,
+              "cy": 138.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-3cda432f1732",
+            "kind": "line",
+            "params": {
+              "x0": 130.0,
+              "y0": 138.0,
+              "x1": 130.0,
+              "y1": 168.0
+            }
+          },
+          {
+            "entity_id": "entity-2f788df440ef",
+            "kind": "arc",
+            "params": {
+              "cx": 135.0,
+              "cy": 168.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-81f185f77c7a",
+            "kind": "line",
+            "params": {
+              "x0": 135.0,
+              "y0": 173.0,
+              "x1": 165.0,
+              "y1": 173.0
+            }
+          },
+          {
+            "entity_id": "entity-41783b4ec159",
+            "kind": "arc",
+            "params": {
+              "cx": 165.0,
+              "cy": 168.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-7f8d8590a3e6",
+            "kind": "line",
+            "params": {
+              "x0": 170.0,
+              "y0": 168.0,
+              "x1": 170.0,
+              "y1": 138.0
+            }
+          },
+          {
+            "entity_id": "entity-e6c37070c28e",
+            "kind": "arc",
+            "params": {
+              "cx": 165.0,
+              "cy": 138.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-6f8af75a1700",
+            "kind": "line",
+            "params": {
+              "x0": 165.0,
+              "y0": 133.0,
+              "x1": 135.0,
+              "y1": 133.0
+            }
+          },
+          {
+            "entity_id": "entity-a6a3d591eefd",
+            "kind": "arc",
+            "params": {
+              "cx": 135.0,
+              "cy": 138.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-373af45bd28e",
+            "kind": "line",
+            "params": {
+              "x0": 130.0,
+              "y0": 138.0,
+              "x1": 130.0,
+              "y1": 168.0
+            }
+          },
+          {
+            "entity_id": "entity-0ab87472e49f",
+            "kind": "arc",
+            "params": {
+              "cx": 135.0,
+              "cy": 168.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-5643bc00d424",
+            "kind": "line",
+            "params": {
+              "x0": 37.2,
+              "y0": 122.0,
+              "x1": 79.2,
+              "y1": 122.0
+            }
+          },
+          {
+            "entity_id": "entity-2e7b87171904",
+            "kind": "arc",
+            "params": {
+              "cx": 79.2,
+              "cy": 117.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-6a563e31f2e8",
+            "kind": "line",
+            "params": {
+              "x0": 84.2,
+              "y0": 117.0,
+              "x1": 84.2,
+              "y1": 75.0
+            }
+          },
+          {
+            "entity_id": "entity-f4abdd906254",
+            "kind": "arc",
+            "params": {
+              "cx": 79.2,
+              "cy": 75.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-1adb104da862",
+            "kind": "line",
+            "params": {
+              "x0": 79.2,
+              "y0": 70.0,
+              "x1": 37.2,
+              "y1": 70.0
+            }
+          },
+          {
+            "entity_id": "entity-f4a8c531246b",
+            "kind": "arc",
+            "params": {
+              "cx": 37.2,
+              "cy": 75.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-63da80290933",
+            "kind": "line",
+            "params": {
+              "x0": 32.2,
+              "y0": 75.0,
+              "x1": 32.2,
+              "y1": 117.0
+            }
+          },
+          {
+            "entity_id": "entity-f9051c2d8b21",
+            "kind": "arc",
+            "params": {
+              "cx": 37.2,
+              "cy": 117.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-589e61f85170",
+            "kind": "line",
+            "params": {
+              "x0": 37.2,
+              "y0": 122.0,
+              "x1": 79.2,
+              "y1": 122.0
+            }
+          },
+          {
+            "entity_id": "entity-3f5bbdf4034c",
+            "kind": "arc",
+            "params": {
+              "cx": 79.2,
+              "cy": 117.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-f75c0865d62e",
+            "kind": "line",
+            "params": {
+              "x0": 84.2,
+              "y0": 117.0,
+              "x1": 84.2,
+              "y1": 75.0
+            }
+          },
+          {
+            "entity_id": "entity-13973eef2fab",
+            "kind": "arc",
+            "params": {
+              "cx": 79.2,
+              "cy": 75.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-403267b69b5d",
+            "kind": "line",
+            "params": {
+              "x0": 79.2,
+              "y0": 70.0,
+              "x1": 37.2,
+              "y1": 70.0
+            }
+          },
+          {
+            "entity_id": "entity-74519988f629",
+            "kind": "arc",
+            "params": {
+              "cx": 37.2,
+              "cy": 75.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-71e27dd7452e",
+            "kind": "line",
+            "params": {
+              "x0": 32.2,
+              "y0": 75.0,
+              "x1": 32.2,
+              "y1": 117.0
+            }
+          },
+          {
+            "entity_id": "entity-5ca6d9d4ef6f",
+            "kind": "arc",
+            "params": {
+              "cx": 37.2,
+              "cy": 117.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-6843d9b5a345",
+            "kind": "line",
+            "params": {
+              "x0": 43.2,
+              "y0": 119.0,
+              "x1": 73.2,
+              "y1": 119.0
+            }
+          },
+          {
+            "entity_id": "entity-8365a3e95fc1",
+            "kind": "arc",
+            "params": {
+              "cx": 73.2,
+              "cy": 114.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-7630fddd0b43",
+            "kind": "line",
+            "params": {
+              "x0": 78.2,
+              "y0": 114.0,
+              "x1": 78.2,
+              "y1": 84.0
+            }
+          },
+          {
+            "entity_id": "entity-f3ee59946647",
+            "kind": "arc",
+            "params": {
+              "cx": 73.2,
+              "cy": 84.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-a0ae75836b53",
+            "kind": "line",
+            "params": {
+              "x0": 73.2,
+              "y0": 79.0,
+              "x1": 43.2,
+              "y1": 79.0
+            }
+          },
+          {
+            "entity_id": "entity-ef181b1615e5",
+            "kind": "arc",
+            "params": {
+              "cx": 43.2,
+              "cy": 84.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-b9c8c1a33202",
+            "kind": "line",
+            "params": {
+              "x0": 38.2,
+              "y0": 84.0,
+              "x1": 38.2,
+              "y1": 114.0
+            }
+          },
+          {
+            "entity_id": "entity-43abb21e4da6",
+            "kind": "arc",
+            "params": {
+              "cx": 43.2,
+              "cy": 114.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-d1132ab76700",
+            "kind": "line",
+            "params": {
+              "x0": 43.2,
+              "y0": 119.0,
+              "x1": 73.2,
+              "y1": 119.0
+            }
+          },
+          {
+            "entity_id": "entity-bd01b5574a7c",
+            "kind": "arc",
+            "params": {
+              "cx": 73.2,
+              "cy": 114.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-1a125bfd9e9f",
+            "kind": "line",
+            "params": {
+              "x0": 78.2,
+              "y0": 114.0,
+              "x1": 78.2,
+              "y1": 84.0
+            }
+          },
+          {
+            "entity_id": "entity-f062c5ea0997",
+            "kind": "arc",
+            "params": {
+              "cx": 73.2,
+              "cy": 84.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-39d8023a8c22",
+            "kind": "line",
+            "params": {
+              "x0": 73.2,
+              "y0": 79.0,
+              "x1": 43.2,
+              "y1": 79.0
+            }
+          },
+          {
+            "entity_id": "entity-a3f9255e36ca",
+            "kind": "arc",
+            "params": {
+              "cx": 43.2,
+              "cy": 84.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-46290b58f2c6",
+            "kind": "line",
+            "params": {
+              "x0": 38.2,
+              "y0": 84.0,
+              "x1": 38.2,
+              "y1": 114.0
+            }
+          },
+          {
+            "entity_id": "entity-a8fad3bf4b0a",
+            "kind": "arc",
+            "params": {
+              "cx": 43.2,
+              "cy": 114.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-d44eed60844b",
+            "kind": "line",
+            "params": {
+              "x0": 91.2,
+              "y0": 122.0,
+              "x1": 133.2,
+              "y1": 122.0
+            }
+          },
+          {
+            "entity_id": "entity-e3bd0aa3f7b6",
+            "kind": "arc",
+            "params": {
+              "cx": 133.2,
+              "cy": 117.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-ecfbf27a8967",
+            "kind": "line",
+            "params": {
+              "x0": 138.2,
+              "y0": 117.0,
+              "x1": 138.2,
+              "y1": 75.0
+            }
+          },
+          {
+            "entity_id": "entity-09574d75319f",
+            "kind": "arc",
+            "params": {
+              "cx": 133.2,
+              "cy": 75.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-efabcbcfa252",
+            "kind": "line",
+            "params": {
+              "x0": 133.2,
+              "y0": 70.0,
+              "x1": 91.2,
+              "y1": 70.0
+            }
+          },
+          {
+            "entity_id": "entity-9dcc76ba89fb",
+            "kind": "arc",
+            "params": {
+              "cx": 91.2,
+              "cy": 75.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-0fb2ab9a7e85",
+            "kind": "line",
+            "params": {
+              "x0": 86.2,
+              "y0": 75.0,
+              "x1": 86.2,
+              "y1": 117.0
+            }
+          },
+          {
+            "entity_id": "entity-aa1afc9b363f",
+            "kind": "arc",
+            "params": {
+              "cx": 91.2,
+              "cy": 117.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-527d9708935c",
+            "kind": "line",
+            "params": {
+              "x0": 91.2,
+              "y0": 122.0,
+              "x1": 133.2,
+              "y1": 122.0
+            }
+          },
+          {
+            "entity_id": "entity-899827c7623e",
+            "kind": "arc",
+            "params": {
+              "cx": 133.2,
+              "cy": 117.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-d8af4c1f71b8",
+            "kind": "line",
+            "params": {
+              "x0": 138.2,
+              "y0": 117.0,
+              "x1": 138.2,
+              "y1": 75.0
+            }
+          },
+          {
+            "entity_id": "entity-82b2575fa574",
+            "kind": "arc",
+            "params": {
+              "cx": 133.2,
+              "cy": 75.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-60361e81e079",
+            "kind": "line",
+            "params": {
+              "x0": 133.2,
+              "y0": 70.0,
+              "x1": 91.2,
+              "y1": 70.0
+            }
+          },
+          {
+            "entity_id": "entity-d17c467eec15",
+            "kind": "arc",
+            "params": {
+              "cx": 91.2,
+              "cy": 75.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-35e66d425b64",
+            "kind": "line",
+            "params": {
+              "x0": 86.2,
+              "y0": 75.0,
+              "x1": 86.2,
+              "y1": 117.0
+            }
+          },
+          {
+            "entity_id": "entity-8f8b287b7e84",
+            "kind": "arc",
+            "params": {
+              "cx": 91.2,
+              "cy": 117.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-9e415ac56035",
+            "kind": "line",
+            "params": {
+              "x0": 97.2,
+              "y0": 119.0,
+              "x1": 127.19999999999999,
+              "y1": 119.0
+            }
+          },
+          {
+            "entity_id": "entity-6cdf80113bca",
+            "kind": "arc",
+            "params": {
+              "cx": 127.19999999999999,
+              "cy": 114.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-30a3ef5cefc6",
+            "kind": "line",
+            "params": {
+              "x0": 132.2,
+              "y0": 114.0,
+              "x1": 132.2,
+              "y1": 84.0
+            }
+          },
+          {
+            "entity_id": "entity-ae00f23ba6e5",
+            "kind": "arc",
+            "params": {
+              "cx": 127.19999999999999,
+              "cy": 84.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-8e689aa5994a",
+            "kind": "line",
+            "params": {
+              "x0": 127.19999999999999,
+              "y0": 79.0,
+              "x1": 97.2,
+              "y1": 79.0
+            }
+          },
+          {
+            "entity_id": "entity-a24d4b0fc110",
+            "kind": "arc",
+            "params": {
+              "cx": 97.2,
+              "cy": 84.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-58a98961f99b",
+            "kind": "line",
+            "params": {
+              "x0": 92.2,
+              "y0": 84.0,
+              "x1": 92.2,
+              "y1": 114.0
+            }
+          },
+          {
+            "entity_id": "entity-d7a9e9d84893",
+            "kind": "arc",
+            "params": {
+              "cx": 97.2,
+              "cy": 114.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-607c896a29b4",
+            "kind": "line",
+            "params": {
+              "x0": 97.2,
+              "y0": 119.0,
+              "x1": 127.19999999999999,
+              "y1": 119.0
+            }
+          },
+          {
+            "entity_id": "entity-eb4146a580e6",
+            "kind": "arc",
+            "params": {
+              "cx": 127.19999999999999,
+              "cy": 114.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-d16ae49dab09",
+            "kind": "line",
+            "params": {
+              "x0": 132.2,
+              "y0": 114.0,
+              "x1": 132.2,
+              "y1": 84.0
+            }
+          },
+          {
+            "entity_id": "entity-e1bd95ed1710",
+            "kind": "arc",
+            "params": {
+              "cx": 127.19999999999999,
+              "cy": 84.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-2ac8c69b67c9",
+            "kind": "line",
+            "params": {
+              "x0": 127.19999999999999,
+              "y0": 79.0,
+              "x1": 97.2,
+              "y1": 79.0
+            }
+          },
+          {
+            "entity_id": "entity-632ba8419037",
+            "kind": "arc",
+            "params": {
+              "cx": 97.2,
+              "cy": 84.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-58cac0210e39",
+            "kind": "line",
+            "params": {
+              "x0": 92.2,
+              "y0": 84.0,
+              "x1": 92.2,
+              "y1": 114.0
+            }
+          },
+          {
+            "entity_id": "entity-dcbf5583bb1f",
+            "kind": "arc",
+            "params": {
+              "cx": 97.2,
+              "cy": 114.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-175d994c6318",
+            "kind": "line",
+            "params": {
+              "x0": 145.2,
+              "y0": 122.0,
+              "x1": 187.2,
+              "y1": 122.0
+            }
+          },
+          {
+            "entity_id": "entity-2eb74daba2fe",
+            "kind": "arc",
+            "params": {
+              "cx": 187.2,
+              "cy": 117.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-bc71e56f39c8",
+            "kind": "line",
+            "params": {
+              "x0": 192.2,
+              "y0": 117.0,
+              "x1": 192.2,
+              "y1": 75.0
+            }
+          },
+          {
+            "entity_id": "entity-a067de203c4c",
+            "kind": "arc",
+            "params": {
+              "cx": 187.2,
+              "cy": 75.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-39b041a57b40",
+            "kind": "line",
+            "params": {
+              "x0": 187.2,
+              "y0": 70.0,
+              "x1": 145.2,
+              "y1": 70.0
+            }
+          },
+          {
+            "entity_id": "entity-3c54522397d3",
+            "kind": "arc",
+            "params": {
+              "cx": 145.2,
+              "cy": 75.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-925200279f92",
+            "kind": "line",
+            "params": {
+              "x0": 140.2,
+              "y0": 75.0,
+              "x1": 140.2,
+              "y1": 117.0
+            }
+          },
+          {
+            "entity_id": "entity-7c8ba7c8f75b",
+            "kind": "arc",
+            "params": {
+              "cx": 145.2,
+              "cy": 117.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-293d919b4180",
+            "kind": "line",
+            "params": {
+              "x0": 145.2,
+              "y0": 122.0,
+              "x1": 187.2,
+              "y1": 122.0
+            }
+          },
+          {
+            "entity_id": "entity-2a6042684f27",
+            "kind": "arc",
+            "params": {
+              "cx": 187.2,
+              "cy": 117.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-229b95334f11",
+            "kind": "line",
+            "params": {
+              "x0": 192.2,
+              "y0": 117.0,
+              "x1": 192.2,
+              "y1": 75.0
+            }
+          },
+          {
+            "entity_id": "entity-36debbfafda9",
+            "kind": "arc",
+            "params": {
+              "cx": 187.2,
+              "cy": 75.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-e2a4a47b4ec6",
+            "kind": "line",
+            "params": {
+              "x0": 187.2,
+              "y0": 70.0,
+              "x1": 145.2,
+              "y1": 70.0
+            }
+          },
+          {
+            "entity_id": "entity-d57aad77fd81",
+            "kind": "arc",
+            "params": {
+              "cx": 145.2,
+              "cy": 75.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-81fda37c9619",
+            "kind": "line",
+            "params": {
+              "x0": 140.2,
+              "y0": 75.0,
+              "x1": 140.2,
+              "y1": 117.0
+            }
+          },
+          {
+            "entity_id": "entity-b77369d6f0c4",
+            "kind": "arc",
+            "params": {
+              "cx": 145.2,
+              "cy": 117.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-35a351a725b7",
+            "kind": "line",
+            "params": {
+              "x0": 151.2,
+              "y0": 119.0,
+              "x1": 181.2,
+              "y1": 119.0
+            }
+          },
+          {
+            "entity_id": "entity-b32df8d39c80",
+            "kind": "arc",
+            "params": {
+              "cx": 181.2,
+              "cy": 114.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-5e1eb1ca5913",
+            "kind": "line",
+            "params": {
+              "x0": 186.2,
+              "y0": 114.0,
+              "x1": 186.2,
+              "y1": 84.0
+            }
+          },
+          {
+            "entity_id": "entity-fa0853bbcd12",
+            "kind": "arc",
+            "params": {
+              "cx": 181.2,
+              "cy": 84.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-8ac0e3379c6c",
+            "kind": "line",
+            "params": {
+              "x0": 181.2,
+              "y0": 79.0,
+              "x1": 151.2,
+              "y1": 79.0
+            }
+          },
+          {
+            "entity_id": "entity-1993a215c2eb",
+            "kind": "arc",
+            "params": {
+              "cx": 151.2,
+              "cy": 84.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-224fcd7ef131",
+            "kind": "line",
+            "params": {
+              "x0": 146.2,
+              "y0": 84.0,
+              "x1": 146.2,
+              "y1": 114.0
+            }
+          },
+          {
+            "entity_id": "entity-c61f9dfa6776",
+            "kind": "arc",
+            "params": {
+              "cx": 151.2,
+              "cy": 114.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-beb921203d13",
+            "kind": "line",
+            "params": {
+              "x0": 151.2,
+              "y0": 119.0,
+              "x1": 181.2,
+              "y1": 119.0
+            }
+          },
+          {
+            "entity_id": "entity-2b53f0d9e509",
+            "kind": "arc",
+            "params": {
+              "cx": 181.2,
+              "cy": 114.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-6a965457905d",
+            "kind": "line",
+            "params": {
+              "x0": 186.2,
+              "y0": 114.0,
+              "x1": 186.2,
+              "y1": 84.0
+            }
+          },
+          {
+            "entity_id": "entity-9b9d99b2b5d5",
+            "kind": "arc",
+            "params": {
+              "cx": 181.2,
+              "cy": 84.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-d4e14389c4e8",
+            "kind": "line",
+            "params": {
+              "x0": 181.2,
+              "y0": 79.0,
+              "x1": 151.2,
+              "y1": 79.0
+            }
+          },
+          {
+            "entity_id": "entity-80d3c80124d1",
+            "kind": "arc",
+            "params": {
+              "cx": 151.2,
+              "cy": 84.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-1eb4772798b9",
+            "kind": "line",
+            "params": {
+              "x0": 146.2,
+              "y0": 84.0,
+              "x1": 146.2,
+              "y1": 114.0
+            }
+          },
+          {
+            "entity_id": "entity-cc04f571815d",
+            "kind": "arc",
+            "params": {
+              "cx": 151.2,
+              "cy": 114.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-b43b077dffe2",
+            "kind": "line",
+            "params": {
+              "x0": 45.3,
+              "y0": 68.0,
+              "x1": 87.3,
+              "y1": 68.0
+            }
+          },
+          {
+            "entity_id": "entity-e6e9bf172c1c",
+            "kind": "arc",
+            "params": {
+              "cx": 87.3,
+              "cy": 63.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-aae87e2d147d",
+            "kind": "line",
+            "params": {
+              "x0": 92.3,
+              "y0": 63.0,
+              "x1": 92.3,
+              "y1": 21.0
+            }
+          },
+          {
+            "entity_id": "entity-fa5166c2f530",
+            "kind": "arc",
+            "params": {
+              "cx": 87.3,
+              "cy": 21.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-57537b97e75f",
+            "kind": "line",
+            "params": {
+              "x0": 87.3,
+              "y0": 16.0,
+              "x1": 45.3,
+              "y1": 16.0
+            }
+          },
+          {
+            "entity_id": "entity-38b4088b1a1f",
+            "kind": "arc",
+            "params": {
+              "cx": 45.3,
+              "cy": 21.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-43d303bdba6a",
+            "kind": "line",
+            "params": {
+              "x0": 40.3,
+              "y0": 21.0,
+              "x1": 40.3,
+              "y1": 63.0
+            }
+          },
+          {
+            "entity_id": "entity-ff10c0d91821",
+            "kind": "arc",
+            "params": {
+              "cx": 45.3,
+              "cy": 63.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-1846f5775b1d",
+            "kind": "line",
+            "params": {
+              "x0": 45.3,
+              "y0": 68.0,
+              "x1": 87.3,
+              "y1": 68.0
+            }
+          },
+          {
+            "entity_id": "entity-8d6e95e829d0",
+            "kind": "arc",
+            "params": {
+              "cx": 87.3,
+              "cy": 63.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-b87ff17d24f1",
+            "kind": "line",
+            "params": {
+              "x0": 92.3,
+              "y0": 63.0,
+              "x1": 92.3,
+              "y1": 21.0
+            }
+          },
+          {
+            "entity_id": "entity-9b90d4aed2dc",
+            "kind": "arc",
+            "params": {
+              "cx": 87.3,
+              "cy": 21.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-4248c501a447",
+            "kind": "line",
+            "params": {
+              "x0": 87.3,
+              "y0": 16.0,
+              "x1": 45.3,
+              "y1": 16.0
+            }
+          },
+          {
+            "entity_id": "entity-4902877b0a7f",
+            "kind": "arc",
+            "params": {
+              "cx": 45.3,
+              "cy": 21.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-b7efbc48a8e0",
+            "kind": "line",
+            "params": {
+              "x0": 40.3,
+              "y0": 21.0,
+              "x1": 40.3,
+              "y1": 63.0
+            }
+          },
+          {
+            "entity_id": "entity-4f8f893eae48",
+            "kind": "arc",
+            "params": {
+              "cx": 45.3,
+              "cy": 63.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-935be54f708d",
+            "kind": "line",
+            "params": {
+              "x0": 51.3,
+              "y0": 65.0,
+              "x1": 81.3,
+              "y1": 65.0
+            }
+          },
+          {
+            "entity_id": "entity-387b47190639",
+            "kind": "arc",
+            "params": {
+              "cx": 81.3,
+              "cy": 60.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-8e7b38446829",
+            "kind": "line",
+            "params": {
+              "x0": 86.3,
+              "y0": 60.0,
+              "x1": 86.3,
+              "y1": 30.0
+            }
+          },
+          {
+            "entity_id": "entity-e119b1775050",
+            "kind": "arc",
+            "params": {
+              "cx": 81.3,
+              "cy": 30.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-455c944f44b6",
+            "kind": "line",
+            "params": {
+              "x0": 81.3,
+              "y0": 25.0,
+              "x1": 51.3,
+              "y1": 25.0
+            }
+          },
+          {
+            "entity_id": "entity-20fbb126044d",
+            "kind": "arc",
+            "params": {
+              "cx": 51.3,
+              "cy": 30.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-2826a1b8195e",
+            "kind": "line",
+            "params": {
+              "x0": 46.3,
+              "y0": 30.0,
+              "x1": 46.3,
+              "y1": 60.0
+            }
+          },
+          {
+            "entity_id": "entity-ac06c0bdbac1",
+            "kind": "arc",
+            "params": {
+              "cx": 51.3,
+              "cy": 60.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-b443cb0c2f7b",
+            "kind": "line",
+            "params": {
+              "x0": 51.3,
+              "y0": 65.0,
+              "x1": 81.3,
+              "y1": 65.0
+            }
+          },
+          {
+            "entity_id": "entity-85eb6dd8b948",
+            "kind": "arc",
+            "params": {
+              "cx": 81.3,
+              "cy": 60.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-e4efede065bb",
+            "kind": "line",
+            "params": {
+              "x0": 86.3,
+              "y0": 60.0,
+              "x1": 86.3,
+              "y1": 30.0
+            }
+          },
+          {
+            "entity_id": "entity-d3a6e5e17bd5",
+            "kind": "arc",
+            "params": {
+              "cx": 81.3,
+              "cy": 30.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-d366a922a453",
+            "kind": "line",
+            "params": {
+              "x0": 81.3,
+              "y0": 25.0,
+              "x1": 51.3,
+              "y1": 25.0
+            }
+          },
+          {
+            "entity_id": "entity-997486c3fde4",
+            "kind": "arc",
+            "params": {
+              "cx": 51.3,
+              "cy": 30.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-679f98f70d3b",
+            "kind": "line",
+            "params": {
+              "x0": 46.3,
+              "y0": 30.0,
+              "x1": 46.3,
+              "y1": 60.0
+            }
+          },
+          {
+            "entity_id": "entity-31cd426ecf6a",
+            "kind": "arc",
+            "params": {
+              "cx": 51.3,
+              "cy": 60.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-df0a9d213255",
+            "kind": "line",
+            "params": {
+              "x0": 99.3,
+              "y0": 68.0,
+              "x1": 141.3,
+              "y1": 68.0
+            }
+          },
+          {
+            "entity_id": "entity-8c6ea9690bc6",
+            "kind": "arc",
+            "params": {
+              "cx": 141.3,
+              "cy": 63.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-5c78c74ca10c",
+            "kind": "line",
+            "params": {
+              "x0": 146.3,
+              "y0": 63.0,
+              "x1": 146.3,
+              "y1": 21.0
+            }
+          },
+          {
+            "entity_id": "entity-ba63c322e3b3",
+            "kind": "arc",
+            "params": {
+              "cx": 141.3,
+              "cy": 21.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-0c44560b8282",
+            "kind": "line",
+            "params": {
+              "x0": 141.3,
+              "y0": 16.0,
+              "x1": 99.3,
+              "y1": 16.0
+            }
+          },
+          {
+            "entity_id": "entity-267c0a94f053",
+            "kind": "arc",
+            "params": {
+              "cx": 99.3,
+              "cy": 21.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-4793cf00b9e4",
+            "kind": "line",
+            "params": {
+              "x0": 94.3,
+              "y0": 21.0,
+              "x1": 94.3,
+              "y1": 63.0
+            }
+          },
+          {
+            "entity_id": "entity-fa540719dd7d",
+            "kind": "arc",
+            "params": {
+              "cx": 99.3,
+              "cy": 63.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-1fc63b014570",
+            "kind": "line",
+            "params": {
+              "x0": 99.3,
+              "y0": 68.0,
+              "x1": 141.3,
+              "y1": 68.0
+            }
+          },
+          {
+            "entity_id": "entity-e7ef32807790",
+            "kind": "arc",
+            "params": {
+              "cx": 141.3,
+              "cy": 63.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-bd2854f6b14c",
+            "kind": "line",
+            "params": {
+              "x0": 146.3,
+              "y0": 63.0,
+              "x1": 146.3,
+              "y1": 21.0
+            }
+          },
+          {
+            "entity_id": "entity-881cc8de582d",
+            "kind": "arc",
+            "params": {
+              "cx": 141.3,
+              "cy": 21.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-c0389420cf44",
+            "kind": "line",
+            "params": {
+              "x0": 141.3,
+              "y0": 16.0,
+              "x1": 99.3,
+              "y1": 16.0
+            }
+          },
+          {
+            "entity_id": "entity-ce1cdb939983",
+            "kind": "arc",
+            "params": {
+              "cx": 99.3,
+              "cy": 21.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-615f15fd8472",
+            "kind": "line",
+            "params": {
+              "x0": 94.3,
+              "y0": 21.0,
+              "x1": 94.3,
+              "y1": 63.0
+            }
+          },
+          {
+            "entity_id": "entity-a21c93bbe75c",
+            "kind": "arc",
+            "params": {
+              "cx": 99.3,
+              "cy": 63.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-0fded8f41e8a",
+            "kind": "line",
+            "params": {
+              "x0": 105.3,
+              "y0": 65.0,
+              "x1": 135.3,
+              "y1": 65.0
+            }
+          },
+          {
+            "entity_id": "entity-0ec889452481",
+            "kind": "arc",
+            "params": {
+              "cx": 135.3,
+              "cy": 60.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-631066023865",
+            "kind": "line",
+            "params": {
+              "x0": 140.3,
+              "y0": 60.0,
+              "x1": 140.3,
+              "y1": 30.0
+            }
+          },
+          {
+            "entity_id": "entity-f613f59c1e39",
+            "kind": "arc",
+            "params": {
+              "cx": 135.3,
+              "cy": 30.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-32808a452641",
+            "kind": "line",
+            "params": {
+              "x0": 135.3,
+              "y0": 25.0,
+              "x1": 105.3,
+              "y1": 25.0
+            }
+          },
+          {
+            "entity_id": "entity-6d7c276cedeb",
+            "kind": "arc",
+            "params": {
+              "cx": 105.3,
+              "cy": 30.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-2fb86b3ceabe",
+            "kind": "line",
+            "params": {
+              "x0": 100.3,
+              "y0": 30.0,
+              "x1": 100.3,
+              "y1": 60.0
+            }
+          },
+          {
+            "entity_id": "entity-0bac7bd7efcf",
+            "kind": "arc",
+            "params": {
+              "cx": 105.3,
+              "cy": 60.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-e59bbf7108a1",
+            "kind": "line",
+            "params": {
+              "x0": 105.3,
+              "y0": 65.0,
+              "x1": 135.3,
+              "y1": 65.0
+            }
+          },
+          {
+            "entity_id": "entity-5760cc136066",
+            "kind": "arc",
+            "params": {
+              "cx": 135.3,
+              "cy": 60.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-d7006b90937f",
+            "kind": "line",
+            "params": {
+              "x0": 140.3,
+              "y0": 60.0,
+              "x1": 140.3,
+              "y1": 30.0
+            }
+          },
+          {
+            "entity_id": "entity-1ae3f8674bad",
+            "kind": "arc",
+            "params": {
+              "cx": 135.3,
+              "cy": 30.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-719260aedf77",
+            "kind": "line",
+            "params": {
+              "x0": 135.3,
+              "y0": 25.0,
+              "x1": 105.3,
+              "y1": 25.0
+            }
+          },
+          {
+            "entity_id": "entity-1a6c7648a84c",
+            "kind": "arc",
+            "params": {
+              "cx": 105.3,
+              "cy": 30.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-4e1b5300894c",
+            "kind": "line",
+            "params": {
+              "x0": 100.3,
+              "y0": 30.0,
+              "x1": 100.3,
+              "y1": 60.0
+            }
+          },
+          {
+            "entity_id": "entity-af7a5c43018b",
+            "kind": "arc",
+            "params": {
+              "cx": 105.3,
+              "cy": 60.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-ebdf03a9bc94",
+            "kind": "line",
+            "params": {
+              "x0": 153.3,
+              "y0": 68.0,
+              "x1": 195.3,
+              "y1": 68.0
+            }
+          },
+          {
+            "entity_id": "entity-cb49066b0ec4",
+            "kind": "arc",
+            "params": {
+              "cx": 195.3,
+              "cy": 63.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-7a15830b9c9a",
+            "kind": "line",
+            "params": {
+              "x0": 200.3,
+              "y0": 63.0,
+              "x1": 200.3,
+              "y1": 21.0
+            }
+          },
+          {
+            "entity_id": "entity-d21eb3dec981",
+            "kind": "arc",
+            "params": {
+              "cx": 195.3,
+              "cy": 21.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-fbd0bf56679a",
+            "kind": "line",
+            "params": {
+              "x0": 195.3,
+              "y0": 16.0,
+              "x1": 153.3,
+              "y1": 16.0
+            }
+          },
+          {
+            "entity_id": "entity-231fea0ebdd5",
+            "kind": "arc",
+            "params": {
+              "cx": 153.3,
+              "cy": 21.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-52234b6cb00b",
+            "kind": "line",
+            "params": {
+              "x0": 148.3,
+              "y0": 21.0,
+              "x1": 148.3,
+              "y1": 63.0
+            }
+          },
+          {
+            "entity_id": "entity-8df25dad6b74",
+            "kind": "arc",
+            "params": {
+              "cx": 153.3,
+              "cy": 63.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-054c78fd32f3",
+            "kind": "line",
+            "params": {
+              "x0": 153.3,
+              "y0": 68.0,
+              "x1": 195.3,
+              "y1": 68.0
+            }
+          },
+          {
+            "entity_id": "entity-6345ecbeeb72",
+            "kind": "arc",
+            "params": {
+              "cx": 195.3,
+              "cy": 63.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-a753637f1603",
+            "kind": "line",
+            "params": {
+              "x0": 200.3,
+              "y0": 63.0,
+              "x1": 200.3,
+              "y1": 21.0
+            }
+          },
+          {
+            "entity_id": "entity-0c2f8fc7fe97",
+            "kind": "arc",
+            "params": {
+              "cx": 195.3,
+              "cy": 21.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-0559b156f97c",
+            "kind": "line",
+            "params": {
+              "x0": 195.3,
+              "y0": 16.0,
+              "x1": 153.3,
+              "y1": 16.0
+            }
+          },
+          {
+            "entity_id": "entity-b96cd9311eaf",
+            "kind": "arc",
+            "params": {
+              "cx": 153.3,
+              "cy": 21.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-f0f28cfaf081",
+            "kind": "line",
+            "params": {
+              "x0": 148.3,
+              "y0": 21.0,
+              "x1": 148.3,
+              "y1": 63.0
+            }
+          },
+          {
+            "entity_id": "entity-6d4d4ef54ea9",
+            "kind": "arc",
+            "params": {
+              "cx": 153.3,
+              "cy": 63.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-efae9d444dda",
+            "kind": "line",
+            "params": {
+              "x0": 159.3,
+              "y0": 65.0,
+              "x1": 189.3,
+              "y1": 65.0
+            }
+          },
+          {
+            "entity_id": "entity-37a51c6a3aaa",
+            "kind": "arc",
+            "params": {
+              "cx": 189.3,
+              "cy": 60.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-327424763e6f",
+            "kind": "line",
+            "params": {
+              "x0": 194.3,
+              "y0": 60.0,
+              "x1": 194.3,
+              "y1": 30.0
+            }
+          },
+          {
+            "entity_id": "entity-1d34b9cea319",
+            "kind": "arc",
+            "params": {
+              "cx": 189.3,
+              "cy": 30.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-a242cf090a30",
+            "kind": "line",
+            "params": {
+              "x0": 189.3,
+              "y0": 25.0,
+              "x1": 159.3,
+              "y1": 25.0
+            }
+          },
+          {
+            "entity_id": "entity-3d15c5d67342",
+            "kind": "arc",
+            "params": {
+              "cx": 159.3,
+              "cy": 30.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-2ecd712e0622",
+            "kind": "line",
+            "params": {
+              "x0": 154.3,
+              "y0": 30.0,
+              "x1": 154.3,
+              "y1": 60.0
+            }
+          },
+          {
+            "entity_id": "entity-a63ec88ef683",
+            "kind": "arc",
+            "params": {
+              "cx": 159.3,
+              "cy": 60.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
+          },
+          {
+            "entity_id": "entity-91dbc7efbee6",
+            "kind": "line",
+            "params": {
+              "x0": 159.3,
+              "y0": 65.0,
+              "x1": 189.3,
+              "y1": 65.0
+            }
+          },
+          {
+            "entity_id": "entity-6cb2fd2c1446",
+            "kind": "arc",
+            "params": {
+              "cx": 189.3,
+              "cy": 60.0,
+              "radius": 5.0,
+              "start_deg": 0.0,
+              "end_deg": 90.0
+            }
+          },
+          {
+            "entity_id": "entity-3490c3ee980b",
+            "kind": "line",
+            "params": {
+              "x0": 194.3,
+              "y0": 60.0,
+              "x1": 194.3,
+              "y1": 30.0
+            }
+          },
+          {
+            "entity_id": "entity-deddaa47c4e7",
+            "kind": "arc",
+            "params": {
+              "cx": 189.3,
+              "cy": 30.0,
+              "radius": 5.0,
+              "start_deg": 270.0,
+              "end_deg": 0.0
+            }
+          },
+          {
+            "entity_id": "entity-da932c0765b1",
+            "kind": "line",
+            "params": {
+              "x0": 189.3,
+              "y0": 25.0,
+              "x1": 159.3,
+              "y1": 25.0
+            }
+          },
+          {
+            "entity_id": "entity-980a60f81c2d",
+            "kind": "arc",
+            "params": {
+              "cx": 159.3,
+              "cy": 30.0,
+              "radius": 5.0,
+              "start_deg": 180.0,
+              "end_deg": 270.0
+            }
+          },
+          {
+            "entity_id": "entity-e0eb8c6fc50a",
+            "kind": "line",
+            "params": {
+              "x0": 154.3,
+              "y0": 30.0,
+              "x1": 154.3,
+              "y1": 60.0
+            }
+          },
+          {
+            "entity_id": "entity-acb6223ffceb",
+            "kind": "arc",
+            "params": {
+              "cx": 159.3,
+              "cy": 60.0,
+              "radius": 5.0,
+              "start_deg": 90.0,
+              "end_deg": 180.0
+            }
           }
-        ],
-        "distance": 10.0,
-        "mode": "cut",
-        "body_id": "body-70633ceb7b54"
-      },
-      "provenance": null
-    },
-    {
-      "seq": 13,
-      "verb": "sketch_create",
-      "args": {
-        "sketch_id": "sketch-b852a0decc16",
-        "plane": {
-          "kind": "base",
-          "name": "XY",
-          "provenance": null
-        }
-      },
-      "provenance": null
-    },
-    {
-      "seq": 14,
-      "verb": "add_circle",
-      "args": {
-        "sketch_id": "sketch-b852a0decc16",
-        "entity_id": "entity-8541bb32b4b2",
-        "kind": "circle",
-        "params": {
-          "cx": 24.0,
-          "cy": 0.0,
-          "radius": 3.0
-        }
-      },
-      "provenance": null
-    },
-    {
-      "seq": 15,
-      "verb": "pattern_circular",
-      "args": {
-        "sketch_id": "sketch-b852a0decc16",
-        "pattern_id": "pattern-189a0e720cf7",
-        "entities": [
-          "entity-8541bb32b4b2"
-        ],
-        "center": [
-          0.0,
-          0.0
-        ],
-        "count": 6,
-        "total_angle": 360.0,
-        "rotate_copies": true
-      },
-      "provenance": null
-    },
-    {
-      "seq": 16,
-      "verb": "extrude",
-      "args": {
-        "regions": [
-          {
-            "sketch": "sketch-b852a0decc16",
-            "index": 1,
-            "provenance": null
-          },
-          {
-            "sketch": "sketch-b852a0decc16",
-            "index": 2,
-            "provenance": null
-          },
-          {
-            "sketch": "sketch-b852a0decc16",
-            "index": 3,
-            "provenance": null
-          },
-          {
-            "sketch": "sketch-b852a0decc16",
-            "index": 4,
-            "provenance": null
-          },
-          {
-            "sketch": "sketch-b852a0decc16",
-            "index": 5,
-            "provenance": null
-          },
-          {
-            "sketch": "sketch-b852a0decc16",
-            "index": 6,
-            "provenance": null
-          }
-        ],
-        "distance": 10.0,
-        "mode": "cut",
-        "body_id": "body-70633ceb7b54"
-      },
-      "provenance": null
-    },
-    {
-      "seq": 17,
-      "verb": "sketch_create",
-      "args": {
-        "sketch_id": "sketch-0b5a85c4c995",
-        "plane": {
-          "kind": "face",
-          "body": "body-70633ceb7b54",
-          "index": 5,
-          "provenance": null
-        }
-      },
-      "provenance": null
-    },
-    {
-      "seq": 18,
-      "verb": "add_circle",
-      "args": {
-        "sketch_id": "sketch-0b5a85c4c995",
-        "entity_id": "entity-e61d3788f4cf",
-        "kind": "circle",
-        "params": {
-          "cx": 0.0,
-          "cy": 0.0,
-          "radius": 16.0
-        }
-      },
-      "provenance": null
-    },
-    {
-      "seq": 19,
-      "verb": "extrude",
-      "args": {
-        "regions": [
-          {
-            "sketch": "sketch-0b5a85c4c995",
-            "index": 1,
-            "provenance": null
-          }
-        ],
-        "distance": 10.0,
-        "mode": "join",
-        "body_id": "body-70633ceb7b54"
-      },
-      "provenance": null
-    },
-    {
-      "seq": 20,
-      "verb": "extrude_face",
-      "args": {
-        "body_id": "body-70633ceb7b54",
-        "face_index": 26,
-        "distance": 6.0
-      },
-      "provenance": {
-        "verb": "extrude_face",
-        "face_index": 26,
-        "distance": 6.0,
-        "unified": true,
-        "face_map": {
-          "1": [
-            23
-          ],
-          "2": [
-            4
-          ],
-          "3": [
-            14
-          ],
-          "4": [
-            22
-          ],
-          "5": [
-            2
-          ],
-          "6": [
-            15
-          ],
-          "7": [
-            21
-          ],
-          "8": [
-            4
-          ],
-          "9": [
-            20
-          ],
-          "10": [
-            17
-          ],
-          "11": [
-            19
-          ],
-          "12": [
-            18
-          ],
-          "13": [
-            13
-          ],
-          "14": [
-            12
-          ],
-          "15": [
-            11
-          ],
-          "16": [
-            10
-          ],
-          "17": [
-            9
-          ],
-          "18": [
-            8
-          ],
-          "19": [
-            7
-          ],
-          "20": [
-            6
-          ],
-          "21": [
-            5
-          ],
-          "22": [
-            3
-          ],
-          "23": [
-            2
-          ],
-          "24": [
-            1
-          ],
-          "25": [
-            16
-          ],
-          "26": []
-        },
-        "deleted": [
-          26
-        ],
-        "new_faces": [
-          24
-        ],
-        "after_face_index": 24
-      }
-    },
-    {
-      "seq": 21,
-      "verb": "sketch_create",
-      "args": {
-        "sketch_id": "sketch-2ea0aa94167f",
-        "plane": {
-          "kind": "base",
-          "name": "XY",
-          "provenance": null
-        }
-      },
-      "provenance": null
-    },
-    {
-      "seq": 22,
-      "verb": "add_circle",
-      "args": {
-        "sketch_id": "sketch-2ea0aa94167f",
-        "entity_id": "entity-de800a30bd48",
-        "kind": "circle",
-        "params": {
-          "cx": 0.0,
-          "cy": 0.0,
-          "radius": 8.0
-        }
-      },
-      "provenance": null
-    },
-    {
-      "seq": 23,
-      "verb": "extrude",
-      "args": {
-        "regions": [
-          {
-            "sketch": "sketch-2ea0aa94167f",
-            "index": 1,
-            "provenance": null
-          }
-        ],
-        "distance": 26.0,
-        "mode": "cut",
-        "body_id": "body-70633ceb7b54"
-      },
-      "provenance": null
-    },
-    {
-      "seq": 24,
-      "verb": "chamfer",
-      "args": {
-        "edges": [
-          1
-        ],
-        "distance": 1.5,
-        "body_id": "body-70633ceb7b54"
-      },
-      "provenance": {
-        "verb": "chamfer",
-        "edges": [
-          1
-        ],
-        "face_map": {
-          "1": [
-            1
-          ],
-          "2": [
-            4
-          ],
-          "3": [
-            3
-          ],
-          "4": [
-            25
-          ],
-          "5": [
-            5
-          ],
-          "6": [
-            6
-          ],
-          "7": [
-            7
-          ],
-          "8": [
-            8
-          ],
-          "9": [
-            9
-          ],
-          "10": [
-            10
-          ],
-          "11": [
-            11
-          ],
-          "12": [
-            12
-          ],
-          "13": [
-            13
-          ],
-          "14": [
-            14
-          ],
-          "15": [
-            15
-          ],
-          "16": [
-            16
-          ],
-          "17": [
-            17
-          ],
-          "18": [
-            18
-          ],
-          "19": [
-            19
-          ],
-          "20": [
-            20
-          ],
-          "21": [
-            21
-          ],
-          "22": [
-            22
-          ],
-          "23": [
-            23
-          ],
-          "24": [
-            24
-          ],
-          "25": [
-            26
-          ]
-        },
-        "deleted": [],
-        "new_faces": [
-          2
         ]
-      }
-    },
-    {
-      "seq": 25,
-      "verb": "set_parameter",
-      "args": {
-        "name": "d16",
-        "value": 4.0,
-        "previous": 3.5
-      },
-      "provenance": null
-    },
-    {
-      "seq": 26,
-      "verb": "sketch_create",
-      "args": {
-        "sketch_id": "sketch-3180055b9152",
-        "plane": {
-          "kind": "base",
-          "name": "XY",
-          "provenance": null
-        }
-      },
-      "provenance": null
-    },
-    {
-      "seq": 27,
-      "verb": "sketch_create",
-      "args": {
-        "sketch_id": "sketch-11ed7deae0e1",
-        "plane": {
-          "kind": "face",
-          "body": "body-70633ceb7b54",
-          "index": 3,
-          "provenance": null
-        }
       },
       "provenance": null
     }

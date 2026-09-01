@@ -35,9 +35,13 @@
    * 初期値は `defaultCommandId ?? null`。`App.svelte` は通常モードで `undefined` を渡す
    * (→ 無起動)。スケッチモードは `DEFAULT_SKETCH_COMMAND_ID`(= `select_in_sketch`)を渡すので
    * 今までどおり「選ぶ」が既定のまま(描くコマンドが常に点を待つと領域をクリックで選べなくなる
-   * ため、こちらは無起動にしない)。**Escは常にこの初期値へ戻る**(`abort()`)——通常モードは
-   * 無起動、スケッチモードは「選ぶ」。確定後はコマンドが構えたままなので(下記「確定 / 中断」)、
-   * 無起動へ戻る手はEscだけである。
+   * ため、こちらは無起動にしない)。**Escも、確定が実際に成功したときも、この初期値へ戻る**
+   * (`abort()` / `commandSucceeded()` が共有する `returnToIdle()`。2026-08-31・本人指示)——
+   * 通常モードは無起動、スケッチモードは「選ぶ」。以前は確定後もコマンドが構えたままで
+   * 連続入力ができたが、「verbを実行したら中断ボタンを押さなくても実行中状態が終わって
+   * ほしい」という要望により、確定成功でも降りるようにした。**成功の確認を待つ**のが要点
+   * (`commit()` 直後ではない) —— 先に降りると、失敗したときに打ち直す入力欄まで消える
+   * (`commit()` のコメント参照)。同じverbをもう一度使うにはツールバーのボタンを押し直す。
    *
    * ## 引数収集は、まず共有選択集合を見る
    *
@@ -406,6 +410,38 @@
     lastInputs = { numbers: { ...numberText }, points: { ...points }, choices: { ...choices } }
     onRun(command.id, built.args)
     reset()
+    // **ここでは無起動へ戻さない。** `onRun` はサーバへ投げるだけの楽観的な発火で、
+    // 成否はまだ分からない —— OCCTのフィレットのように、半径次第で `IsDone()=False` に
+    // 落ちることがある(`lastInputs`/`restoreLastInputs` のdocstring参照)。ここで
+    // 無起動にすると、失敗が返ってきて `restoreLastInputs()` が半径を戻しても
+    // `command === null` なので入力欄ごと消えたままになり、「失敗したらすぐ近くの値で
+    // 打ち直す」という文書化済みの必須ワークフロー(`tests/README.md`)が壊れる
+    // (2026-08-31・実機smoke `smoke-features.mjs` で実際に踏んだ)。**無起動へ戻すのは
+    // 確定成功が実サーバから返ってきたとき**(`commandSucceeded()`)だけにする。
+  }
+
+  /**
+   * 無起動(通常モードは`null`・スケッチモードは「選ぶ」)へ戻す。**`abort()` から呼ぶ**ほか、
+   * **確定が実際に成功したとき**は `commandSucceeded()` 経由で呼ばれる。
+   */
+  function returnToIdle(): void {
+    const idleId = defaultCommandId ?? null
+    if (commandId !== idleId) commandId = idleId
+  }
+
+  /**
+   * **確定した verb がサーバで実際に成功した**ときに呼ぶ(`App.svelte` の外側から)。
+   *
+   * 「verbを実行したら中断ボタンを押さなくても実行中状態が終わってほしい」という要望
+   * (2026-08-31)への対応 —— 以前は確定後もコマンドが構えたままで、続けて同じverbを
+   * 打てた。**`commit()` 自身では呼ばない**のが要点: `onRun` の時点ではまだ成否が
+   * 分からず、先に無起動へ戻すと失敗時に打った値を見せる場所(入力欄)が消える
+   * (`commit()` のコメント参照)。呼び出し側は自分が出した操作(`client_op`)の応答だと
+   * 確認してから呼ぶこと —— 無関係な操作(AIが別の対象へ実行したverb等)の成功で
+   * 人の入力中のコマンドを畳んではならない。
+   */
+  export function commandSucceeded(): void {
+    returnToIdle()
   }
 
   /**
@@ -440,10 +476,10 @@
    *
    * **戻り先は`defaultCommandId ?? null`**(通常モードは無起動・スケッチモードは
    * 「選ぶ」)。以前の「既定コマンドへ戻す」がそのまま「無起動へ戻す」になった
-   * ——2026-08-27本人裁定でこの構えが覆ったのはここだけで、他の挙動は変えていない。
+   * ——2026-08-27本人裁定。**確定が実際に成功したとき(`commandSucceeded()`)も同じ
+   * 戻り先(`returnToIdle()`)へ降りる**(2026-08-31)——以前はここ(中断)だけの挙動だった。
    */
   function abort(): void {
-    const idleId = defaultCommandId ?? null
     const wasArmed =
       Object.values(numberText).some((text) => text !== '') ||
       Object.keys(points).length > 0 ||
@@ -451,7 +487,7 @@
       Object.keys(planes).length > 0 ||
       ready
     reset()
-    if (commandId !== idleId) commandId = idleId
+    returnToIdle()
     if (wasArmed) onNote('中断した(文書は変わっていない)')
   }
 
@@ -510,8 +546,8 @@
     points = { ...points, [spec.name]: [u, v] }
     // **この1クリックで引数が揃い、Enterが要らないなら、そのまま適用する**(線分の2点目)。
     // `values` は `$derived` なので、上の代入の直後に読めば新しい点が入っている。
-    // 確定してもコマンドは構えたまま(`reset()` が消すのは集めた点だけ)なので、
-    // 続けて次の線を引ける —— これは `commands/sketch.ts` の設計で、崩さない。
+    // **確定が成功すると無起動(スケッチモードは「選ぶ」)へ戻る**(`commandSucceeded()`。
+    // 2026-08-31)——続けて次の線を引くには、確定のたびにツールボタンを押し直す。
     if (!needsEnter(command) && firstMissingArg(command, values) === null) {
       commit()
       return true
