@@ -1,0 +1,467 @@
+"""verb `delete` の契約 —— **消す手段が undo しか無かった状態を終わらせる1本**。
+
+固定するのは5つ:
+
+1. **選択の読み方**(`selection.require_deletable`) —— ボディ由来(面/辺/頂点/ボディ)と
+   スケッチ図形を**同時に**畳む。片方が0件でも壊れない(既存の `require_*` は
+   「1つも無ければ例外」なので、2つ呼ぶと片方しか選ばれていないときに壊れる)。
+   **領域が混ざっていたら拒否**し、黙って残りだけ消さない。
+2. **粒度** —— 混ざった選択でも**1回のverb呼び出し = 1行のログ = 1回のundo**
+   ([[cad-verb-granularity-rule]])。
+3. **undo が対象によって別物**である —— ボディは `_common.SNAPSHOTS`(並びと active ごと)、
+   図形は args の生の数値。**名前つきの値は解放され、undoで同じ名前が戻る**。
+4. **保存 -> 開く(再生) -> undo** が通る(スナップショットは再生が埋める)。
+5. **消したあとに壊れないこと** —— ボディのキャッシュは既存の生存集合差分が落とし、
+   反復の元を消しても状態の配りものは落ちない。
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+
+from duocad import region, selection, sketch
+from duocad.oplog import OpLog
+from duocad.server import Server, Session
+from duocad.verbs import delete as delete_verb
+
+DEVIATION = 0.2
+SIDE = 20.0
+
+
+@pytest.fixture()
+def session(tmp_path) -> Session:
+    return Session(None, DEVIATION, models_dir=tmp_path / "models")
+
+
+def _select(session: Session, refs: list) -> None:
+    session.clear_selection()
+    session.modify_selection(refs, [])
+
+
+def _box(session: Session):
+    """スケッチ→長方形→領域押し出しで 20mm の立方体を1つ作る(人の順序そのもの)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
+    _select(session, [{"sketch": sketch_id, "index": 1}])
+    session.extrude(SIDE, mode="join")
+    session.clear_selection()
+    return session.document.bodies[-1], sketch_id
+
+
+def _body_ids(session: Session) -> list:
+    return [body.id for body in session.document.bodies]
+
+
+def _entity_ids(session: Session, sketch_id: str) -> list:
+    return [entity.id for entity in sketch.get_sketch(session.document, sketch_id).entities]
+
+
+# --------------------------------------------------------------------------------------
+# 1. 選択の読み方(`require_deletable`)
+# --------------------------------------------------------------------------------------
+def test_a_face_a_body_and_an_entity_all_resolve_in_one_call(session: Session) -> None:
+    """面はボディへ逆引きされ、図形はそのまま。**両方あれば両方返る**。"""
+    body, sketch_id = _box(session)
+    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
+    _select(
+        session,
+        [
+            {"body": body.id, "kind": "face", "index": 1},
+            {"body": body.id, "kind": "edge", "index": 1},  # 同じボディは1つに畳む
+            {"sketch": sketch_id, "entity": entity_id, "point": None},
+        ],
+    )
+
+    targets = selection.require_deletable(session.document)
+    assert targets.bodies == [body.id]
+    assert targets.entities == [{"sketch": sketch_id, "entity": entity_id}]
+
+
+def test_a_point_reference_folds_into_the_whole_entity(session: Session) -> None:
+    """点は図形の一部であって図形ではない。**同じ図形を点と辺で選んでも1つ**。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    entity_id = session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])["entity_id"]
+    _select(
+        session,
+        [
+            {"sketch": sketch_id, "entity": entity_id, "point": "x0"},
+            {"sketch": sketch_id, "entity": entity_id, "point": None},
+        ],
+    )
+
+    targets = selection.require_deletable(session.document)
+    assert targets.bodies == []
+    assert targets.entities == [{"sketch": sketch_id, "entity": entity_id}]
+
+
+def test_only_sketch_entities_is_a_valid_selection(session: Session) -> None:
+    """**ボディが0件でも通る** —— `require_bodies` を素で呼んでいたらここで壊れる。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    entity_id = session.add_circle(sketch_id, [0.0, 0.0], 3.0)["entity_id"]
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+
+    targets = selection.require_deletable(session.document)
+    assert targets.bodies == [] and len(targets.entities) == 1
+
+
+def test_an_empty_confirmed_selection_is_selection_empty(session: Session) -> None:
+    _box(session)
+    session.clear_selection()
+    with pytest.raises(selection.SelectionEmpty) as raised:
+        selection.require_deletable(session.document)
+    # 空は `SelectionKindMismatch` ではない(MCPのエラーコードが分かれている)
+    assert not isinstance(raised.value, selection.SelectionKindMismatch)
+
+
+def test_a_proposed_selection_is_not_deletable(session: Session) -> None:
+    """提案のままでは消えない(`confirmed_items` の門番がここでも効く)。"""
+    body, _ = _box(session)
+    session.propose_selection([{"body": body.id, "kind": "face", "index": 1}])
+    with pytest.raises(selection.SelectionNotCommitted):
+        selection.require_deletable(session.document)
+
+
+def test_a_region_in_the_selection_is_refused_and_nothing_is_deleted(session: Session) -> None:
+    """領域が混ざっていたら**残りだけ黙って消さない**。内訳を名指しして拒否する。"""
+    body, sketch_id = _box(session)
+    _select(
+        session,
+        [
+            {"body": body.id, "kind": "face", "index": 1},
+            {"sketch": sketch_id, "index": 1},
+        ],
+    )
+    before = _body_ids(session)
+    applied_before = session.applied_count
+
+    with pytest.raises(selection.SelectionKindMismatch) as raised:
+        session.delete()
+
+    # `present` は**確定選択の内訳全部**(`_raise_missing` と同じ値)
+    assert raised.value.present == {"face": 1, "region": 1}
+    assert "region" in str(raised.value)
+    # **食える種別が2つあるverbなので `required_kind` は1語で書けない**
+    assert raised.value.kind == "body|sketch_entity"
+    # 既定の hint(「その種別が1つも無い」)は嘘になるので、例外が自分の一文を持つ
+    assert raised.value.hint is not None and "cannot be deleted" in raised.value.hint
+    # 文書もログも動いていない
+    assert _body_ids(session) == before
+    assert session.applied_count == applied_before
+    assert session.document.log.entries[-1].verb == "extrude"
+
+
+def test_the_mcp_envelope_names_the_kind_that_cannot_be_deleted(session: Session) -> None:
+    """MCPの拒否が `selection_kind_mismatch` で、**嘘の hint を返さない**。
+
+    既定の hint は「その種別が1つも無い」と言い切るので、面(=ボディ)が実際に確定して
+    いるこの場面では嘘になる。AIはこの1文だけを見て次の手を決める。
+    """
+    from duocad.mcp_server import DocumentTools
+
+    body, sketch_id = _box(session)
+    _select(
+        session,
+        [
+            {"body": body.id, "kind": "face", "index": 1},
+            {"sketch": sketch_id, "index": 1},
+        ],
+    )
+    tools = DocumentTools(session)
+    with pytest.raises(selection.SelectionKindMismatch) as raised:
+        session.delete()
+    envelope = tools.error_envelope("delete", raised.value)
+
+    assert envelope["code"] == "selection_kind_mismatch"
+    assert envelope["present_kinds"] == {"face": 1, "region": 1}
+    assert "has no" not in envelope["hint"]
+    assert "region" in envelope["hint"]
+
+
+# --------------------------------------------------------------------------------------
+# 2〜3. 削除の粒度と undo / redo
+# --------------------------------------------------------------------------------------
+def test_deleting_a_body_and_an_entity_is_one_operation_and_one_undo(session: Session) -> None:
+    """**混在した確定選択でも1回のverb呼び出し・1行のログ・1回のundo**。"""
+    body, sketch_id = _box(session)
+    base = _entity_ids(session, sketch_id)  # `_box` が引いた長方形
+    kept = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
+    doomed = session.add_circle(sketch_id, [12.0, 12.0], 3.0)["entity_id"]
+    _select(
+        session,
+        [
+            {"body": body.id, "kind": "face", "index": 1},
+            {"sketch": sketch_id, "entity": doomed, "point": None},
+        ],
+    )
+    log_before = len(session.document.log.entries)
+
+    applied = session.delete()
+
+    assert applied["verb"] == "delete"
+    assert len(session.document.log.entries) == log_before + 1  # 1行だけ
+    assert body.id not in _body_ids(session)
+    assert _entity_ids(session, sketch_id) == base + [kept]
+    # 形を変えるverbなので選択は空になる
+    assert session.get_selection() == {"items": [], "origin": "user", "count": 0}
+
+    session.undo()  # **1回で両方戻る**
+    assert body.id in _body_ids(session)
+    assert _entity_ids(session, sketch_id) == base + [kept, doomed]
+
+    session.redo()
+    assert body.id not in _body_ids(session)
+    assert _entity_ids(session, sketch_id) == base + [kept]
+
+
+def test_undo_puts_the_body_back_where_it_was(session: Session) -> None:
+    """**並びと active も戻る** —— 末尾へ足し直すだけだと順序だけが黙って変わる。"""
+    first, sketch_id = _box(session)
+    _select(session, [{"sketch": sketch_id, "index": 1}])
+    session.extrude(SIDE, mode="new")
+    session.clear_selection()
+    second = session.document.bodies[-1]
+    order = _body_ids(session)
+    assert order == [first.id, second.id]
+    session.document.set_active_body(second.id)
+
+    _select(session, [{"body": first.id, "kind": "body", "index": None}])
+    session.delete()
+    assert _body_ids(session) == [second.id]
+    # 消したのは active ではないので active は動かない
+    assert session.document.active_body().id == second.id
+
+    session.undo()
+    assert _body_ids(session) == order
+    assert session.document.active_body().id == second.id
+    # 形も同じ実体が戻っている(作り直しではない)
+    assert session.document.get_body(first.id).shape is first.shape
+
+
+def test_undo_restores_the_active_body_that_was_deleted(session: Session) -> None:
+    body, _ = _box(session)
+    session.document.set_active_body(body.id)
+    _select(session, [{"body": body.id, "kind": "body", "index": None}])
+
+    session.delete()
+    assert session.document.active_body() is None
+
+    session.undo()
+    assert session.document.active_body().id == body.id
+
+
+def test_deleting_an_entity_releases_its_parameters_and_undo_restores_the_names(
+    session: Session,
+) -> None:
+    """**`release_param_refs` を対にする** —— 忘れると名前つきの値が誰にも参照されず残る。
+
+    undoは同じ順に登録し直すので**同じ名前**が振り直される(後ろに載った
+    `set_parameter` が記録した名前が別の値を指さないための条件)。
+    """
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    kept = session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])["entity_id"]
+    doomed = session.add_circle(sketch_id, [4.0, 4.0], 2.0)["entity_id"]
+    before = dict(session.document.parameters)
+    doomed_names = set(
+        sketch.get_sketch(session.document, sketch_id).entities[1].params.values()
+    )
+    assert doomed_names  # 図形は名前つきの値を持っている(この検査の前提)
+
+    _select(session, [{"sketch": sketch_id, "entity": doomed, "point": None}])
+    session.delete()
+
+    assert set(session.document.parameters) == set(before) - doomed_names
+
+    session.undo()
+    assert session.document.parameters == before
+    assert _entity_ids(session, sketch_id) == [kept, doomed]
+    assert sketch.entity_params(session.document, sketch_id, doomed) == {
+        "cx": 4.0,
+        "cy": 4.0,
+        "radius": 2.0,
+    }
+
+
+def test_deleting_an_imported_curve_does_not_turn_it_into_named_values(
+    session: Session, tmp_path
+) -> None:
+    """取り込んだベジエは**素の数値のまま**戻る(undoで `d1` が数千個生えない)。"""
+    svg = tmp_path / "curve.svg"
+    svg.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+        '<path d="M 10 10 C 20 20 30 20 40 10"/></svg>',
+        encoding="utf-8",
+    )
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    entity_id = session.import_svg(sketch_id, str(svg))["entity_ids"][0]
+    before_params = dict(session.document.parameters)
+    before = sketch.entity_params(session.document, sketch_id, entity_id)
+
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    session.delete()
+    session.undo()
+
+    restored = sketch.get_sketch(session.document, sketch_id).entities[0]
+    assert all(not isinstance(value, str) for value in restored.params.values())
+    assert session.document.parameters == before_params
+    assert sketch.entity_params(session.document, sketch_id, entity_id) == before
+
+
+def test_deleting_nothing_is_refused(session: Session) -> None:
+    """verbを直に呼んだときも、対象0件は通さない(undoを1手消費する空振りを作らない)。"""
+    with pytest.raises(ValueError):
+        delete_verb(session.document)
+
+
+def test_a_hidden_or_reference_body_is_refused(session: Session) -> None:
+    """隠したボディは指せない(`fillet` / `move_body` と同じ門番)。"""
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "body", "index": None}])
+    session.set_visible(body.id, False)
+
+    with pytest.raises(ValueError, match="hidden"):
+        session.delete()
+    assert body.id in _body_ids(session)
+
+
+# --------------------------------------------------------------------------------------
+# 4. 保存 -> 開く(再生)-> undo
+# --------------------------------------------------------------------------------------
+def test_the_document_survives_save_reopen_and_can_still_be_undone(session: Session) -> None:
+    """再生が同じ結果を作り、**再生後は undo も通る**(スナップショットは再生が埋める)。"""
+    body, sketch_id = _box(session)
+    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
+    _select(
+        session,
+        [
+            {"body": body.id, "kind": "face", "index": 1},
+            {"sketch": sketch_id, "entity": entity_id, "point": None},
+        ],
+    )
+    session.delete()
+    session.save_document("deleted.json")
+
+    session.open_document("deleted.json")
+    assert _body_ids(session) == []
+    assert entity_id not in _entity_ids(session, sketch_id)
+
+    session.undo()
+    assert len(_body_ids(session)) == 1
+    assert entity_id in _entity_ids(session, sketch_id)
+
+
+def test_undo_without_replay_fails_loudly_for_bodies(session: Session) -> None:
+    """読んだだけのログでボディの削除を undo すると **KeyError**(黙って空振りしない)。"""
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "body", "index": None}])
+    session.delete()
+
+    log = OpLog.from_json(session.document.log.to_json())
+    fresh = Session(None, DEVIATION).document
+    with pytest.raises(KeyError):
+        log.undo(fresh)
+
+
+def test_a_parameter_edit_after_a_delete_replays_the_delete(session: Session) -> None:
+    """`set_parameter` はログを頭から再生する。**削除も再生される**(消したものは戻らない)。"""
+    body, sketch_id = _box(session)
+    session.add_circle(sketch_id, [5.0, 5.0], 2.0)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    session.delete()
+
+    radius = next(
+        name for name, value in session.document.parameters.items() if value == 2.0
+    )
+    session.set_parameter(radius, 3.0)
+
+    assert _body_ids(session) == []
+    assert session.document.parameters[radius] == 3.0
+
+
+# --------------------------------------------------------------------------------------
+# 5. 消したあとに壊れないこと
+# --------------------------------------------------------------------------------------
+def test_the_caches_of_a_deleted_body_are_pruned(session: Session) -> None:
+    """ボディ削除専用のキャッシュ処理は要らない(既存の生存集合差分が落とす)。"""
+    body, _ = _box(session)
+    session.geometry(body.id)
+    session.state_meta()
+    assert body.id in session.view._geometry_cache
+
+    _select(session, [{"body": body.id, "kind": "body", "index": None}])
+    session.delete()
+    session.state_meta()
+
+    assert body.id not in session.view._geometry_cache
+    assert body.id not in session.view._volume_cache
+
+
+def test_deleting_the_source_of_a_pattern_does_not_break_the_state(session: Session) -> None:
+    """反復の元を消しても落ちない(依存グラフは作らない。undoで元どおり展開される)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    entity_id = session.add_circle(sketch_id, [0.0, 0.0], 2.0)["entity_id"]
+    session.pattern_rectangular(sketch_id, [entity_id], 10.0, 10.0, 2, 2)
+    assert len(region.regions(session.document, sketch_id)) == 4
+
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    session.delete()
+
+    assert region.regions(session.document, sketch_id) == []
+    session.state_meta()  # 配りものが落ちない(毎回この経路を通る)
+
+    session.undo()
+    assert len(region.regions(session.document, sketch_id)) == 4
+
+
+def test_deleting_a_body_leaves_a_sketch_pasted_on_its_face_alone(session: Session) -> None:
+    """スケッチ平面は作成時点で焼き付けてあるので、貼った面のボディが消えても壊れない。"""
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    on_face = session.sketch_create()["sketch_id"]
+    session.add_circle(on_face, [3.0, 3.0], 1.0)
+
+    _select(session, [{"body": body.id, "kind": "body", "index": None}])
+    session.delete()
+
+    state = session.state_meta()
+    assert state["bodies"] == []
+    frame = next(item for item in state["sketches"] if item["sketch_id"] == on_face)
+    assert frame["frame"] is not None
+
+
+# --------------------------------------------------------------------------------------
+# WebSocket 経由(**提案は自動で確定してから走る**)
+# --------------------------------------------------------------------------------------
+class _FakeConnection:
+    def __init__(self) -> None:
+        self.payloads: list = []
+
+    async def send(self, raw: str) -> None:
+        self.payloads.append(json.loads(raw))
+
+
+def test_the_browser_can_delete_and_an_ai_proposal_is_committed_first(session: Session) -> None:
+    """`uses_selection=True` なので、提案のままでもブラウザからの実行は通る。
+
+    `previewable=False` との組み合わせ(プレビューせず即実行)がWSの表で捌けることも
+    ここで一緒に見る —— 引数を1つも取らないコマンドが `FEATURE_COMMANDS` に載る初めての例。
+    """
+    body, _ = _box(session)
+    session.propose_selection([{"body": body.id, "kind": "face", "index": 1}])
+
+    async def scenario():
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        client = _FakeConnection()
+        server.clients.add(client)
+        await server._push(client, applied=None, only=client)
+        client.payloads.clear()
+        await server._dispatch(client, json.dumps({"cmd": "delete", "client_op": 7}))
+        return client.payloads[-1]
+
+    answer = asyncio.run(scenario())
+    assert answer["type"] == "state", answer
+    assert answer["applied"]["verb"] == "delete"
+    assert answer["applied"]["bodies"] == [body.id]
+    assert _body_ids(session) == []

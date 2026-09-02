@@ -385,7 +385,56 @@ export const MOVE_BODY: CommandDef = {
   },
 }
 
-export const SOLID_FEATURE_COMMANDS: CommandDef[] = [EXTRUDE_REGIONS, FILLET, CHAMFER, MOVE_BODY]
+/**
+ * 削除(2026-09-03)。**通常モードでもスケッチモードでも同じ1つ**である。
+ *
+ * `CommandDef` を2つに割らないのは、コアの verb が1つだから ——
+ * `selection.require_deletable` がボディ由来(面/辺/頂点/ボディ)と図形の**両方**を1回で
+ * 畳むので、UI側で分けると「どちらのボタンを押したか」でサーバの挙動が変わるように見える
+ * (実際には変わらない)。`EXTRUDE_REGIONS` が既に両方の一覧に居るのと同じ形で、
+ * この1つを `SOLID_FEATURE_COMMANDS` と `commands/sketch.ts` の一覧の両方へ入れる。
+ *
+ * `kinds` に **`region` を入れていない**のは、コアが領域を削除できないからである
+ * (`duocad/verbs/delete.py`)。**逆に、コアが食える種別は全部入れてある** —— ここを
+ * 絞ると「サーバは通すのに画面だけが対象を数え落とす」食い違いになり、しかも消えるのは
+ * 数え落としたほうのボディなので、**画面が「1個」と言いながら2個消える**。
+ *
+ * **howが無い**(引数は対象だけ)。`needsEnter` は `max: null` の側で真になるので、
+ * 選び終わりは人がEnter(またはボタンの押し直し)で言う。
+ */
+export const DELETE_SELECTION: CommandDef = {
+  id: 'delete',
+  category: 'feature',
+  label: '削除する',
+  buttonId: 'delete',
+  preview: 'none',
+  args: [
+    {
+      kind: 'selection',
+      name: 'target',
+      label: '削除するボディ・図形',
+      // 件数の数え方は「個」。面でも図形でも消える単位はボディ1つ / 図形1つである。
+      shapeKind: 'body',
+      kinds: ['body', 'face', 'edge', 'vertex', 'sketch_entity'],
+      min: 1,
+      max: null,
+    },
+  ],
+  build(values) {
+    const empty = missingSelection(values, 'target', '削除するボディ・図形')
+    if (empty !== null) return { ok: false, reason: empty }
+    // **対象そのものは送らない**(サーバがコアの確定選択から取る)。引数は1つも無い。
+    return { ok: true, args: {} }
+  },
+}
+
+export const SOLID_FEATURE_COMMANDS: CommandDef[] = [
+  EXTRUDE_REGIONS,
+  FILLET,
+  CHAMFER,
+  MOVE_BODY,
+  DELETE_SELECTION,
+]
 
 /**
  * スケッチモードで足すぶん。**領域押し出しは両方に居る** —— 描いた直後にそのまま
@@ -399,6 +448,9 @@ export const SKETCH_FEATURE_COMMANDS: CommandDef[] = [
   EXTRUDE_REGIONS,
   PATTERN_RECTANGULAR,
   PATTERN_CIRCULAR,
+  // **削除は通常モードと同じ1つ**(`DELETE_SELECTION` のdocstring)。スケッチモードでは
+  // 3Dで点・辺をクリックした `sketch_entity` が選択に入るので、同じボタンが図形を消す。
+  DELETE_SELECTION,
 ]
 
 /**

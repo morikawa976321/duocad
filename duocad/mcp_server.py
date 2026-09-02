@@ -444,7 +444,10 @@ class DocumentTools:
                 "required_kind": error.kind,
                 # 実際に確定している種別と件数(`{"face": 3}`)。画面もモデルも数え直さない。
                 "present_kinds": error.present,
-                "hint": (
+                # **例外が自分の一文を持っていればそれを使う**(2026-09-03)。既定の文は
+                # 「その種別が1つも無い」と言い切るので、食える種別が複数あるverb
+                # (`delete`)では嘘になる(`selection.SelectionKindMismatch` のdocstring)。
+                "hint": getattr(error, "hint", None) or (
                     f"the confirmed selection is not empty but has no {error.kind}: "
                     f"select {error.kind}(s) and commit before calling this verb"
                 ),
@@ -841,6 +844,21 @@ class DocumentTools:
         )
         return self._apply_logged(
             before, applied, copy=applied["copy"], created=applied["created"]
+        )
+
+    def delete(self) -> dict:
+        """**確定選択のボディとスケッチ図形**をまとめて消す(逆引きと畳み込みは `Session`)。
+
+        混ざった選択でも1回で処理し、undoは1回で全部戻る。領域が混ざっていると
+        `selection_kind_mismatch`(黙って残りだけ消さない)。
+        """
+        before = self._revision_snapshot()
+        applied = self.session.delete()
+        return self._apply_logged(
+            before,
+            applied,
+            bodies=applied["bodies"],
+            entities=applied["entities"],
         )
 
     # ------------------------------------------------------------------ 形状最適化の条件

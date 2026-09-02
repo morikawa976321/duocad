@@ -24,6 +24,7 @@ from .paths import DEFAULT_MODELS_DIR
 from .speculative import speculative
 from .verbs import (
     chamfer as chamfer_verb,
+    delete as delete_verb,
     extrude as extrude_verb,
     extrude_face as extrude_face_verb,
     fillet as fillet_verb,
@@ -662,6 +663,30 @@ class Session:
             "copy": operation.args["copy"],
             "created": created,
             "changed_bodies": list(operation.args["bodies"]) + created,
+        })
+
+    def delete(self) -> dict:
+        """**確定選択のボディとスケッチ図形**をまとめて消す(1回のundoで全部戻る)。
+
+        対象は引数ではなく選択から取る(`selection.require_deletable`)。ボディ由来
+        (面/辺/頂点/ボディ)と図形が**混ざっていても1回の呼び出し**で処理する ——
+        `require_bodies` と `require_sketch_entities` を2つ呼ぶと、片方しか選ばれて
+        いないときに `SelectionKindMismatch` で壊れる(あちらは「1つも無ければ例外」で、
+        単一種別しか食わないverb用の口である)。
+
+        **`changed_bodies` は返さない** —— 消えたボディは配りものの `bodies` から丸ごと
+        居なくなる(形が変わったのではない)。画面が形を取り直す対象は1つも無い。
+        """
+        targets = selection.require_deletable(self.document)
+        operation = delete_verb(
+            self.document, targets.bodies, targets.entities
+        )
+        return self._after_logged_verb({
+            "bodies": list(operation.args["bodies"]),
+            "entities": [spec["entity_id"] for spec in operation.args["entities"]],
+            "sketch_ids": sorted(
+                {str(spec["sketch_id"]) for spec in operation.args["entities"]}
+            ),
         })
 
     # ---------------------------------------------------------------- 形状最適化の条件(第3のモード)

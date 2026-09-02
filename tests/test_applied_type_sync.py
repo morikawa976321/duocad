@@ -536,6 +536,22 @@ def _run_move_body(session: Session, tmp_path: Path) -> dict:
     return session.move_body(3.0, 4.0, 5.0)
 
 
+@_runner("delete")
+def _run_delete(session: Session, tmp_path: Path) -> dict:
+    """**ボディと図形を混ぜて**走らせる —— 片方だけで走らせると、宣言の
+    `bodies` / `entities` / `sketch_ids` のどれかが一度も中身を持たないまま緑になる。"""
+    body, sketch_id = _box(session)
+    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
+    _select(
+        session,
+        [
+            {"body": body.id, "kind": "face", "index": 1},
+            {"sketch": sketch_id, "entity": entity_id, "point": None},
+        ],
+    )
+    return session.delete()
+
+
 @_runner("set_preserve_bodies")
 def _run_set_preserve_bodies(session: Session, tmp_path: Path) -> dict:
     body, _ = _box(session)

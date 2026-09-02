@@ -74,11 +74,20 @@ class SelectionKindMismatch(SelectionEmpty):
     通る。分けてあるのはMCPのエラーコードのためで、`_error_payload` は**この型を先に**見て
     `selection_kind_mismatch` を返す。`present` に**実際に確定している種別と件数**を持つ
     (`{"face": 3}`)。文面の生成元と同じ値なので、画面もモデルも数え直さなくてよい。
+
+    `hint` は**MCPの `hint` を差し替える**任意の一文(2026-09-03)。既定(None)なら
+    `_error_payload` が `kind` から「その種別が1つも無い」という一文を組み立てるが、
+    **食える種別が複数あるverb**(`delete`)では「no body」が嘘になる —— 面から逆引きした
+    ボディは実際に在って、拒否の理由は**別の種別が混ざっていること**だからである。
+    既存の `_raise_missing` は渡さないので、そちらの文面は1文字も変わらない。
     """
 
-    def __init__(self, message: str, kind: str, present: dict) -> None:
+    def __init__(
+        self, message: str, kind: str, present: dict, hint: Optional[str] = None
+    ) -> None:
         super().__init__(message, kind)
         self.present = dict(present)
+        self.hint = hint
 
 
 class SelectionAmbiguous(ValueError):
@@ -410,6 +419,93 @@ def require_bodies(doc: Document) -> List[BodyId]:
     return ordered
 
 
+@dataclass(frozen=True)
+class DeleteTargets:
+    """`require_deletable` が返す削除対象の内訳。
+
+    bodies   : BodyId の並び(**最初に現れた順・重複なし**)。面/辺/頂点/`kind="body"` の
+               どれから指しても、行き先は「そのボディ」1つになる(`require_bodies` と同じ逆引き)。
+    entities : `{"sketch": SketchId, "entity": EntityId}` の並び(**最初に現れた順・重複なし**)。
+               **点の参照(`point` が文字列)も図形1つへ畳む** —— 点は図形の一部であって
+               それ自体が図形ではないので、「その点を消す」は意味を持たない
+               (`move_sketch_entities` の複製が同じ理由で図形単位なのと揃えてある)。
+
+    **両方空にはならない**(`require_deletable` が先に拒否する)が、**片方だけ空はありうる**
+    (ボディだけ / 図形だけの削除)。これが `require_bodies` と `require_sketch_entities` を
+    2つ呼ぶのでは足りない理由そのもので、片方を `require_*` で取ると、もう片方しか
+    選ばれていないときに `SelectionKindMismatch` で壊れる。
+    """
+
+    bodies: List[BodyId] = field(default_factory=list)
+    entities: List[dict] = field(default_factory=list)
+
+
+def require_deletable(doc: Document) -> DeleteTargets:
+    """確定選択を**削除できる対象の内訳**へ畳む(verb `delete` 用)。
+
+    - 確定選択が**丸ごと空** → `SelectionEmpty`(`_raise_missing` と同じ形)
+    - ボディにも図形にも**解決できない項目が混ざっている**(いまは領域だけ) →
+      `SelectionKindMismatch`。**黙って残りだけ消さない** —— 消したものは undo でしか
+      戻らないので、「領域も消したつもり」と「領域は残った」の食い違いを実行後に
+      気づかせるより、実行前に断って選び直させるほうが安い。`present` には
+      **確定選択の内訳全部**を入れる(`_raise_missing` と同じ値なので、画面もモデルも
+      数え直さなくてよい)。
+    - **ボディ由来と図形が両方あれば両方とも対象**。これは「一部無視」ではなく
+      「どちらも解決できた」なので上の拒否には当たらない —— 1回の呼び出しで両方消えることが
+      [[cad-verb-granularity-rule]](1回のundo = 1行のログ = 1回のverb呼び出し)の要件である。
+
+    **名前が `require_` で始まる必要がある** —— `catalog.Command.uses_selection` の宣言と
+    実体の一致を `tests/test_vertex_pick.py` が接頭辞で照合しており、別名にすると
+    この verb だけが WebSocket の自動 commit から静かに漏れる(`require_committed_bodies` の
+    コメントと同じ事情)。
+    """
+    items = confirmed_items(doc)  # 提案のままなら SelectionNotCommitted
+    if not items:
+        _raise_missing(doc, BODY_KIND)
+
+    bodies: List[BodyId] = []
+    entities: List[dict] = []
+    seen_entities: set = set()
+    unsupported: List[str] = []
+    for item in items:
+        kind = ref_kind(item)
+        if kind in BODY_BEARING_KINDS:
+            body_id = item["body"]
+            if body_id not in bodies:
+                bodies.append(body_id)
+        elif kind == SKETCH_ENTITY_KIND:
+            key = (item["sketch"], item["entity"])
+            if key not in seen_entities:
+                seen_entities.add(key)
+                entities.append({"sketch": key[0], "entity": key[1]})
+        elif kind not in unsupported:
+            unsupported.append(kind)
+
+    if unsupported:
+        counts = _kind_counts(items)
+        described = ", ".join(
+            f"{count} {item_kind}" for item_kind, count in sorted(counts.items())
+        )
+        listed = ", ".join(sorted(unsupported))
+        raise SelectionKindMismatch(
+            f"delete cannot remove {listed} "
+            f"(the confirmed selection has {described}): "
+            "領域(region)は描くものではなく図形の配置から計算されるものなので削除できない"
+            "(その領域を作っている図形を選び直すこと)。"
+            "**残りだけを黙って消すことはしない**",
+            # **食える種別が2つある**ので `required_kind` は1語で書けない。綴りは
+            # `SELECTABLE_KINDS` の名前をそのまま `|` で並べる(新しい語彙は作らない)。
+            f"{BODY_KIND}|{SKETCH_ENTITY_KIND}",
+            counts,
+            hint=(
+                f"delete removes bodies and sketch entities, but the confirmed selection "
+                f"also has {listed}, which cannot be deleted: deselect it "
+                "(or select the entities that form the region) and call delete again"
+            ),
+        )
+    return DeleteTargets(bodies=bodies, entities=entities)
+
+
 # --------------------------------------------------------------------------------------
 # 集合代入のverbのための口 —— **要求するのは「確定していること」だけ**
 # --------------------------------------------------------------------------------------
@@ -443,6 +539,19 @@ def require_committed_faces(doc: Document) -> List[dict]:
     return confirmed_items(doc, kind="face")
 
 
+def _kind_counts(items: Iterable[dict]) -> dict:
+    """参照の並びを `{種別: 件数}` へ数える(`SelectionKindMismatch.present` の中身)。
+
+    `_raise_missing` と `require_deletable` が**同じ値**を返すための1箇所。別々に数えると、
+    片方だけ新しい種別を数え漏らしても誰も気づかない。
+    """
+    counts: dict[str, int] = {}
+    for item in items:
+        item_kind = ref_kind(item)
+        counts[item_kind] = counts.get(item_kind, 0) + 1
+    return counts
+
+
 def _raise_missing(doc: Document, kind: str) -> NoReturn:
     """種別 `kind` が確定選択に無いときの拒否を**1箇所で**組み立てる。
 
@@ -457,10 +566,7 @@ def _raise_missing(doc: Document, kind: str) -> NoReturn:
     others = confirmed_items(doc)
     if not others:
         raise SelectionEmpty(f"no {kind} in the confirmed selection", kind)
-    counts: dict[str, int] = {}
-    for item in others:
-        item_kind = ref_kind(item)
-        counts[item_kind] = counts.get(item_kind, 0) + 1
+    counts = _kind_counts(others)
     described = ", ".join(
         f"{count} {item_kind}" for item_kind, count in sorted(counts.items())
     )

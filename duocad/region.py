@@ -84,6 +84,14 @@ def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
 
     反復に参照されている図形は単独では出さない(格子の (0,0) / 円形の i=0 が元の位置)。
     kernel は名前を知らないので、ここですべて素の数値にする。
+
+    **反復の元が文書に無ければ、その元は展開しない**(2026-09-03)。verb `delete` は
+    図形どうしの依存グラフを持たないので、反復の元になっている図形も普通に消せる ——
+    ここで `by_id[source_id]` と引くと KeyError になり、**状態を配るたびに落ちる**
+    (`DocumentView.sketches_state` が毎回この関数を通る)ので、アプリごと使えなくなる。
+    消えた元は展開されなくなるだけで、undoで元が戻れば反復も元どおり展開される。
+    **反復そのものを消したり `sources` を書き換えたりはしない** —— それは undo で
+    戻すべき状態を1つ増やすことになり、依存の作り込みを始めることになる。
     """
     sketch = get_sketch(doc, sketch_id)
     patterned = {
@@ -117,7 +125,9 @@ def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
             else:
                 step = total_angle / (count - 1)
             for source_id in pattern.sources:
-                entity = by_id[source_id]
+                entity = by_id.get(source_id)
+                if entity is None:  # 元が消えている(docstring)
+                    continue
                 base = {
                     key: parameters.resolve(doc, ref)
                     for key, ref in entity.params.items()
@@ -137,7 +147,9 @@ def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
         nx = int(parameters.resolve(doc, pattern.params["nx"]))
         ny = int(parameters.resolve(doc, pattern.params["ny"]))
         for source_id in pattern.sources:
-            entity = by_id[source_id]
+            entity = by_id.get(source_id)
+            if entity is None:  # 元が消えている(docstring)
+                continue
             base = {
                 key: parameters.resolve(doc, ref)
                 for key, ref in entity.params.items()

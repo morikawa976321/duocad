@@ -403,6 +403,20 @@ export type Applied =
       changed_bodies: string[]
     })
   /**
+   * 削除(ボディ + スケッチ図形。混ざっていても1回・1 undo)。
+   *
+   * **`changed_bodies` は無い** —— 消えたボディは配りものの `bodies` から丸ごと居なくなる
+   * (形が変わったのではないので、取り直す対象が1つも無い)。`bodies` は消したボディのID、
+   * `entities` は消した図形のID、`sketch_ids` はそれが属していたスケッチ(重複なし・昇順)。
+   * どちらも空になりうる(ボディだけ / 図形だけの削除)が、両方空にはならない。
+   */
+  | (AppliedVerbBase & {
+      verb: 'delete'
+      bodies: string[]
+      entities: string[]
+      sketch_ids: string[]
+    })
+  /**
    * 形状最適化の条件(集合代入)。**形は1つも変わらない**ので `changed_bodies` は無い ——
    * 役割の色は配信される `state.optimize` から描く。
    */

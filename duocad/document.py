@@ -111,14 +111,22 @@ class Document:
         """常に "mm"。セッターを持たないため代入は AttributeError になる。"""
         return self._units
 
-    def add_body(self, body: Body) -> BodyId:
+    def add_body(self, body: Body, index: Optional[int] = None) -> BodyId:
         """bodiesへ追加し、追加したボディを常にactiveにして body.id を返す。
 
         同じIDのボディが既にある場合は ValueError(黙って上書き・重複させない)。
+
+        `index` を渡すとその位置へ差し込む(既定は末尾)。**使うのは削除のundoだけ**で、
+        消したボディを元の並びへ戻すために要る —— 末尾へ足すだけだと、undoしたのに
+        ブラウザのパーツ一覧の順序だけが変わり、「取り消したのに元に戻っていない」
+        という説明のつかない差が残る(形は同じなので誰も落とせない)。
         """
         if self._find(body.id) is not None:
             raise ValueError(f"body id already exists: {body.id!r}")
-        self.bodies.append(body)
+        if index is None:
+            self.bodies.append(body)
+        else:
+            self.bodies.insert(int(index), body)
         self._active_body_id = body.id
         return body.id
 
