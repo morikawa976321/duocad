@@ -25,6 +25,7 @@ import { entityHandles, entityPoints } from './entityKinds'
 import { DEFAULT_RESOLUTION, viewResolution, type ViewResolution } from './adaptiveResolution'
 import { sampleFaces, selectFineFaces, type BodySamples } from './faceCulling'
 import { BASE_EXTENT, extentFor, stepFor } from './gridScale'
+import { cellBox, cellDirection, regionCells, upForDirection } from './viewCube'
 import type { BasePlaneName, EdgeGeometry } from './session'
 
 /** kernel.tessellate() が返す1面ぶん(サーバのJSONそのまま)。 */
@@ -582,6 +583,13 @@ export interface Viewport {
    * 結果は領域のピックにならない)。
    */
   projectRegion(sketchId: string, index: number): { x: number; y: number } | null
+  /**
+   * ビューポート右上に常設するビューキューブの矩形(コンテナ内のCSSピクセル、左上原点)。
+   * **実機検査フック専用**(タスク仕様の落とし穴3) —— 寸法が変わると右上アンカーごと
+   * 矩形も動く([[viewport-resize-silently-changes-what-a-click-grabs]] と同型)ので、
+   * 検査が決め打ちの座標を使わずここから読めるようにする。
+   */
+  viewCubeRect(): { x: number; y: number; w: number; h: number }
   dispose(): void
 }
 
@@ -775,6 +783,31 @@ const CLICK_TIME_LIMIT_MS = 500
 const HOVER_LIGHTEN = 0.16
 /** ホバー中の基準平面に重ねる板の濃さ。グリッドの線が透けて見える程度に留める。 */
 const BASE_PLANE_HOVER_OPACITY = 0.14
+
+/**
+ * ビューキューブ(常設・26領域)。一辺[画素]と右上の余白[画素](タスク仕様: 120px角、余白12px)。
+ * ビューポート左上には浮くブラウザがある([[duocad-ui-moved-to-fusion-layout]])ので右上は空いている。
+ */
+const CUBE_SIZE_PX = 120
+const CUBE_MARGIN_PX = 12
+/** `pointerdown` からこれだけ動いたらドラッグ(それ未満で `pointerup` ならクリック=スナップ)。 */
+const CUBE_DRAG_THRESHOLD_PX = 4
+/** クリックでスナップするときの視点アニメーション時間[ms](タスク仕様: 300ms前後)。 */
+const CUBE_SNAP_MS = 300
+/** キューブ用の独立した正投影カメラの視錐台半幅。キューブは半幅1の立方体(対角 `sqrt(3)`)なので、
+ *  角が切れない程度に広く取る。 */
+const CUBE_ORTHO_HALF = 1.8
+/** キューブ用カメラを置く距離。正投影なので見かけの大きさには影響しない(near/farに収まればよい)。 */
+const CUBE_CAMERA_DISTANCE = 4
+/** 面セルの日本語ラベル。キーは `"i,j,k"`。Z-up右手系(タスク仕様: 上=+Z/下=-Z/前=-Y/後=+Y/右=+X/左=-X)。 */
+const CUBE_FACE_LABELS: Readonly<Record<string, string>> = {
+  '1,0,0': '右',
+  '-1,0,0': '左',
+  '0,1,0': '後',
+  '0,-1,0': '前',
+  '0,0,1': '上',
+  '0,0,-1': '下',
+}
 
 /** 色相・彩度はそのままに明度だけ上げる(`HOVER_LIGHTEN` の実体)。 */
 function lighten(hex: number, amount: number): number {
@@ -1031,6 +1064,314 @@ export function createViewport(container: HTMLElement): Viewport {
   let gridExtent = BASE_EXTENT
   let gridStep = stepFor(BASE_EXTENT)
   rebuildGrid(gridExtent, gridStep)
+
+  // ------------------------------------------------------------------ ビューキューブ(常設・26領域)
+  //
+  // 同一canvasへの**第2パス**(`renderCubePass`。`tick` が毎フレーム呼ぶ)。**別のDOM要素で
+  // 浮かせない**(engine [[duocad-floating-panel-eats-viewport-clicks]] の逆向きの落とし穴 ——
+  // 同じcanvasに描くぶん、`elementFromPoint` は常にcanvasを返すので、メインのポインタ経路
+  // (`clickable`)の側でキューブの矩形を明示的に除外する)。
+  //
+  // 独立した `THREE.Scene`+`OrthographicCamera`+専用の光を持つ。**キューブ自体はワールドに
+  // 固定し、カメラの方だけをメインカメラの向きに追従させる**(タスク仕様 ——
+  // キューブ側を回転させると、正投影/透視の切替やupの変更で崩れる回転行列の逆算が要る)。
+  const cubeScene = new THREE.Scene()
+  const cubeCamera = new THREE.OrthographicCamera(
+    -CUBE_ORTHO_HALF, CUBE_ORTHO_HALF, CUBE_ORTHO_HALF, -CUBE_ORTHO_HALF, 0.1, 10,
+  )
+  cubeScene.add(cubeCamera)
+  // 専用の光1つ(本編の照明は共有しない —— 本編の照明構成は別タスクで変わる予定があるため)。
+  // カメラの子にする(本編の `headlight` と同じ技法) —— キューブがどの向きでも視点側から当たる。
+  const cubeLight = new THREE.DirectionalLight(0xffffff, 1.6)
+  cubeLight.position.set(0.4, 0.7, 1)
+  cubeCamera.add(cubeLight)
+
+  const cubeGroup = new THREE.Group()
+  const cubeLabelGroup = new THREE.Group()
+  cubeScene.add(cubeGroup, cubeLabelGroup)
+
+  const cubeDisposables: Array<{ dispose(): void }> = []
+  /** `"i,j,k"` -> そのセルの材質(ホバーで明度を変えるためインスタンスを分ける)。 */
+  const cubeMaterials = new Map<string, THREE.MeshLambertMaterial>()
+
+  for (const [i, j, k] of regionCells()) {
+    const { center, size } = cellBox(i, j, k)
+    const geometry = new THREE.BoxGeometry(size[0], size[1], size[2])
+    const material = new THREE.MeshLambertMaterial({ color: BASE_COLOR })
+    const mesh = new THREE.Mesh(geometry, material)
+    mesh.position.set(center[0], center[1], center[2])
+    mesh.userData = { i, j, k }
+    cubeGroup.add(mesh)
+    cubeMaterials.set(`${i},${j},${k}`, material)
+    cubeDisposables.push(geometry, material)
+  }
+
+  /**
+   * 面セルの外側に立てる、指せない日本語ラベル板。**セル側(`cubeGroup`)だけがピックの対象**
+   * ——`mesh.raycast` を無効化し(タスク仕様)、かつ `cubeHitAt` は `cubeGroup.children` しか
+   * 見ないので二重に確実。板の向き(`lookAt`の技法)は、法線を「向く先」・`upForDirection`を
+   * 「上」として、テキストがその面を正面から見たときに正しい向きで読める基底を作る。
+   */
+  function buildCubeLabel(i: number, j: number, k: number, text: string): void {
+    const normal = new THREE.Vector3(i, j, k) // 面セルなので既に単位ベクトル
+    const up = upForDirection([i, j, k])
+    const basis = new THREE.Matrix4().lookAt(normal, new THREE.Vector3(0, 0, 0), new THREE.Vector3(...up))
+    const canvas = document.createElement('canvas')
+    canvas.width = 128
+    canvas.height = 128
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      ctx.fillStyle = '#e8eef6'
+      ctx.font = 'bold 84px sans-serif'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 4)
+    }
+    const texture = new THREE.CanvasTexture(canvas)
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true })
+    const labelSize = 0.55
+    const geometry = new THREE.PlaneGeometry(labelSize, labelSize)
+    const mesh = new THREE.Mesh(geometry, material)
+    mesh.quaternion.setFromRotationMatrix(basis)
+    // 面セルの外側へ +0.001 だけ出す(タスク仕様。z-fightingを避ける程度の薄い浮かせ)。
+    // **面セルの外側の面は、どのセルでも必ず立方体の表面(±1)にちょうど一致する**
+    // (`cellBox`の不変条件 —— `tests/eval_view_cube.mjs`が検査済み)ので、`normal`(単位
+    // ベクトル)を`1 + 0.001`倍するだけでよい。`cellBox`の`size`から出す必要は無い
+    // (一度それで書いて、EDGE_T側の薄い寸法と取り違えて立方体の中に埋もれる回帰を作った)。
+    mesh.position.copy(normal).multiplyScalar(1.001)
+    mesh.raycast = () => {} // ピックされるのは面セル(cubeGroup)の側
+    cubeLabelGroup.add(mesh)
+    cubeDisposables.push(geometry, material, texture)
+  }
+  for (const [i, j, k] of regionCells()) {
+    const label = CUBE_FACE_LABELS[`${i},${j},${k}`]
+    if (label !== undefined) buildCubeLabel(i, j, k, label)
+  }
+
+  /** ビューポート右上のキューブの矩形(コンテナ内のCSSピクセル、左上原点。`offsetX`/`offsetY` と同じ)。 */
+  function viewCubeRect(): { x: number; y: number; w: number; h: number } {
+    const { width } = size()
+    return { x: width - CUBE_MARGIN_PX - CUBE_SIZE_PX, y: CUBE_MARGIN_PX, w: CUBE_SIZE_PX, h: CUBE_SIZE_PX }
+  }
+
+  /** その画素がキューブの矩形の内側か。 */
+  function insideCubeRect(x: number, y: number): boolean {
+    const rect = viewCubeRect()
+    return x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h
+  }
+
+  const cubeRaycaster = new THREE.Raycaster()
+  const cubeNdc = new THREE.Vector2()
+
+  /** 画面座標(キューブ矩形の内側)から、当たった領域の `(i,j,k)`(外れなら null)。 */
+  function cubeHitAt(x: number, y: number): { i: number; j: number; k: number } | null {
+    const rect = viewCubeRect()
+    if (x < rect.x || x > rect.x + rect.w || y < rect.y || y > rect.y + rect.h) return null
+    cubeNdc.set(((x - rect.x) / rect.w) * 2 - 1, -(((y - rect.y) / rect.h) * 2 - 1))
+    cubeRaycaster.setFromCamera(cubeNdc, cubeCamera)
+    const hits = cubeRaycaster.intersectObjects(cubeGroup.children, false)
+    if (hits.length === 0) return null
+    const data = hits[0].object.userData as { i: number; j: number; k: number }
+    return { i: data.i, j: data.j, k: data.k }
+  }
+
+  /**
+   * キューブ用カメラを、いまのメインカメラの向きへ追従させる(位置とupだけ)。
+   * `dir = normalize(camera.position - controls.target)` を距離 `CUBE_CAMERA_DISTANCE` に置き、
+   * `up` を写して `lookAt(0,0,0)` する —— これでロール(傾き)まで自動的に一致する
+   * (タスク仕様。透視・正投影のどちらがアクティブでも `camera`/`controls` を読むだけなので同じに動く)。
+   */
+  function updateCubeCamera(): void {
+    const offset = camera.position.clone().sub(controls.target)
+    if (offset.lengthSq() < 1e-12) offset.copy(HOME_VIEW_OFFSET) // 退化(注視点に重なる)の逃げ場
+    const dir = offset.normalize()
+    cubeCamera.position.copy(dir).multiplyScalar(CUBE_CAMERA_DISTANCE)
+    cubeCamera.up.copy(camera.up)
+    cubeCamera.lookAt(0, 0, 0)
+  }
+
+  // ---------------------------------------------------------------- ホバー(明るくなる)
+  /** ポインタがキューブの矩形の内側にあるときだけ非null(main側の `hoverAt` と対になる)。 */
+  let cubeHoverAt: { x: number; y: number } | null = null
+  let cubeHoverKey = ''
+
+  function applyCubeMaterials(): void {
+    for (const [key, material] of cubeMaterials) {
+      material.color.setHex(key === cubeHoverKey ? lighten(BASE_COLOR, HOVER_LIGHTEN) : BASE_COLOR)
+    }
+  }
+
+  function updateCubeHover(): void {
+    const hit = cubeHoverAt === null ? null : cubeHitAt(cubeHoverAt.x, cubeHoverAt.y)
+    const key = hit === null ? '' : `${hit.i},${hit.j},${hit.k}`
+    if (key === cubeHoverKey) return
+    cubeHoverKey = key
+    applyCubeMaterials()
+  }
+
+  // ---------------------------------------------------------------- クリック=スナップ(視点アニメーション)
+  interface CubeSnap {
+    start: number
+    fromDir: THREE.Vector3
+    fromUp: THREE.Vector3
+    dirQuat: THREE.Quaternion
+    upQuat: THREE.Quaternion
+    distance: number
+  }
+  let cubeSnap: CubeSnap | null = null
+
+  /**
+   * カメラを `dir` 方向(注視点からの距離は保つ)・`up` 姿勢へアニメーションで移す。
+   * 位置は**方向を球面上で補間して距離を掛ける**(直線補間だと注視点の近くを一瞬めり込む。
+   * タスク仕様)。upも合わせて補間し、最後に正規化する。
+   *
+   * **再利用できる形にしてある**(タスク仕様 —— 後続が `lookAtSketch` 等から呼べるように)。
+   * three.js の型だけに依存し、キューブ固有の状態(`cubeSnap` 以外)には触れない。
+   */
+  function animateCameraTo(dir: THREE.Vector3, up: THREE.Vector3): void {
+    const distance = Math.max(camera.position.distanceTo(controls.target), 1e-6)
+    const fromDir = camera.position.clone().sub(controls.target).normalize()
+    const fromUp = camera.up.clone().normalize()
+    const toDir = dir.clone().normalize()
+    const toUp = up.clone().normalize()
+    cubeSnap = {
+      start: performance.now(),
+      fromDir,
+      fromUp,
+      // **球面補間の実体**: `setFromUnitVectors` は反対方向(dot≈-1)も安全に扱う
+      // (three.js側が任意の直交軸を選んで処理する)ので、対蹠点への遷移でも壊れない。
+      dirQuat: new THREE.Quaternion().setFromUnitVectors(fromDir, toDir),
+      upQuat: new THREE.Quaternion().setFromUnitVectors(fromUp, toUp),
+      distance,
+    }
+  }
+
+  /** アニメーションを1フレームぶん進める(`tick` が毎フレーム呼ぶ。動いていなければ何もしない)。 */
+  function stepCubeSnap(now: number): void {
+    if (cubeSnap === null) return
+    const t = Math.min(1, (now - cubeSnap.start) / CUBE_SNAP_MS)
+    // 軽いease-in-out(見た目だけの調整。等速でも瞬間移動でもない)。
+    const eased = t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2
+    const dirQ = new THREE.Quaternion().slerp(cubeSnap.dirQuat, eased)
+    const upQ = new THREE.Quaternion().slerp(cubeSnap.upQuat, eased)
+    const dir = cubeSnap.fromDir.clone().applyQuaternion(dirQ).normalize()
+    const up = cubeSnap.fromUp.clone().applyQuaternion(upQ).normalize()
+    camera.position.copy(controls.target).addScaledVector(dir, cubeSnap.distance)
+    camera.up.copy(up)
+    camera.lookAt(controls.target)
+    if (t >= 1) cubeSnap = null
+  }
+
+  function handleCubeClick(x: number, y: number): void {
+    const hit = cubeHitAt(x, y)
+    if (hit === null) return
+    const dir = cellDirection(hit.i, hit.j, hit.k)
+    const up = upForDirection(dir)
+    animateCameraTo(new THREE.Vector3(...dir), new THREE.Vector3(...up))
+  }
+
+  // ---------------------------------------------------------------- ドラッグ=自由回転(Pointer Lock)
+  let cubeDownX = 0
+  let cubeDownY = 0
+  /** そのポインタIDを `setPointerCapture` した(解放のために控える。していなければ -1)。 */
+  let cubePointerId = -1
+  /** `pointerdown` はキューブの内側で起きたが、まだクリックかドラッグか未確定。 */
+  let cubePointerActive = false
+  /** しきい値を超えてドラッグと確定した。 */
+  let cubeDragging = false
+  /** Pointer Lockが実際に掛かっている(`document.pointerLockElement === renderer.domElement`)。 */
+  let cubeLocked = false
+
+  function releaseCubePointerCapture(): void {
+    if (cubePointerId === -1) return
+    try {
+      renderer.domElement.releasePointerCapture(cubePointerId)
+    } catch {
+      // 既に外れていた場合も含め、失敗しても実害は無い(次のdownで取り直す)。
+    }
+    cubePointerId = -1
+  }
+
+  /**
+   * Pointer Lockを要求する。**Promiseで失敗したら、`unadjustedMovement` が理由の可能性がある**
+   * ので、オプション無しで1回だけ再試行する(タスク仕様)。どちらも失敗したときの
+   * フォールバック(カーソルを出したままの通常ドラッグ)は `pointerlockerror` 側で行う ——
+   * 古い実装は成功/失敗をPromiseではなくイベントだけで知らせるため、ここでは待たない。
+   */
+  function requestCubeLock(): void {
+    let request: Promise<void> | undefined
+    try {
+      request = renderer.domElement.requestPointerLock({ unadjustedMovement: true })
+    } catch {
+      request = undefined
+    }
+    request?.catch(() => {
+      try {
+        renderer.domElement.requestPointerLock()?.catch(() => {
+          /* `pointerlockerror` がフォールバックへの切替を行う */
+        })
+      } catch {
+        /* 同上 */
+      }
+    })
+  }
+
+  function beginCubeDrag(): void {
+    cubeDragging = true
+    cubeHoverAt = null // 回している間は「明るい」予告を残さない
+    if (cubeHoverKey !== '') { cubeHoverKey = ''; applyCubeMaterials() }
+    requestCubeLock()
+  }
+
+  function endCubeDrag(): void {
+    cubeDragging = false
+    cubePointerActive = false
+    releaseCubePointerCapture()
+    if (document.pointerLockElement === renderer.domElement) document.exitPointerLock()
+  }
+
+  function handleCubePointerLockChange(): void {
+    const locked = document.pointerLockElement === renderer.domElement
+    if (locked) {
+      cubeLocked = true
+      return
+    }
+    if (cubeLocked) {
+      // **ロックが外れたらドラッグ終了として扱う**(Esc・ウィンドウのフォーカス移動など。タスク仕様)。
+      cubeLocked = false
+      if (cubeDragging) endCubeDrag()
+    }
+  }
+  function handleCubePointerLockError(): void {
+    // **ロックが取れないことを理由に回転自体を諦めない** —— カーソルを出したまま
+    // (画面端で頭打ちになる)従来どおりのドラッグへフォールバックする(タスク仕様)。
+    // `movementX/movementY` は非ロック時の `pointermove` でも運ばれるので、
+    // `handleCubePointerMove` 側の回転計算はロックの有無に関係なく成立する。
+    cubeLocked = false
+  }
+  document.addEventListener('pointerlockchange', handleCubePointerLockChange)
+  document.addEventListener('pointerlockerror', handleCubePointerLockError)
+
+  /**
+   * キューブのドラッグ中の `pointermove`。ロック中は `clientX/clientY` が凍結し
+   * `movementX/movementY` だけが動く。フォールバック(ロック不可)でも通常の
+   * `pointermove` は `movementX/movementY` を運ぶので、**回転量の計算はどちらでも同じ**
+   * (タスク仕様)。回転は右ドラッグの軌道回転と同じ意味にする ——
+   * `OrbitControls._handleMouseMoveRotate` と同じ式(`rotateLeft`/`rotateUp` は公開API)。
+   * **上下の可動域は新たに制限しない**(既存の `OrbitControls` がそもそも制限を持たない)。
+   */
+  function handleCubePointerMove(event: PointerEvent): void {
+    if (!cubeDragging) {
+      const dx = event.offsetX - cubeDownX
+      const dy = event.offsetY - cubeDownY
+      if (Math.hypot(dx, dy) < CUBE_DRAG_THRESHOLD_PX) return
+      beginCubeDrag()
+    }
+    cubeSnap = null // ドラッグが来たらアニメーションは中断してよい(タスク仕様)
+    const height = renderer.domElement.clientHeight || 1
+    controls.rotateLeft((2 * Math.PI * event.movementX * controls.rotateSpeed) / height)
+    controls.rotateUp((2 * Math.PI * event.movementY * controls.rotateSpeed) / height)
+  }
 
   function applyBasePlaneHover(): void {
     for (const [name, mesh] of basePlaneHoverMeshes) mesh.visible = hoverPlane === name
@@ -2990,6 +3331,9 @@ export function createViewport(container: HTMLElement): Viewport {
    * それを直接答えるのが `elementFromPoint` である。
    */
   function clickable(x: number, y: number): boolean {
+    // **キューブは同一canvasの第2パスなので `elementFromPoint` だけでは判定できない**
+    // ——常にcanvasを返し続けるので、ここで明示的に矩形を除外する(タスク仕様の落とし穴1)。
+    if (insideCubeRect(x, y)) return false
     const rect = container.getBoundingClientRect()
     return document.elementFromPoint(rect.left + x, rect.top + y) === renderer.domElement
   }
@@ -3215,7 +3559,25 @@ export function createViewport(container: HTMLElement): Viewport {
   let downValid = false
 
   function onPointerDown(event: PointerEvent): void {
+    // 新しいポインタ操作が来たら、進行中のキューブ視点アニメーションは中断してよい(タスク仕様)。
+    cubeSnap = null
     if (event.button !== 0) return
+    // **キューブの内側で始まった左ボタン押下は、キューブが引き取る**(モデルのピック・
+    // 矩形選択の開始へ漏らさない。タスク仕様の落とし穴1)。まだクリックかドラッグかは
+    // 未確定 —— `CUBE_DRAG_THRESHOLD_PX` を超えて動いたら `handleCubePointerMove` がドラッグへ。
+    if (insideCubeRect(event.offsetX, event.offsetY)) {
+      cubeDownX = event.offsetX
+      cubeDownY = event.offsetY
+      cubePointerActive = true
+      cubeDragging = false
+      cubePointerId = event.pointerId
+      try {
+        renderer.domElement.setPointerCapture(event.pointerId)
+      } catch {
+        // 対応していない環境でもフォールバック(通常ドラッグ)は成立する
+      }
+      return
+    }
     downAt = performance.now()
     downX = event.offsetX
     downY = event.offsetY
@@ -3227,6 +3589,18 @@ export function createViewport(container: HTMLElement): Viewport {
     // **ボタンの種類より先に解除する**。右/中ボタンで視点を回して離した場合、ここで
     // 解除しないと次の `pointermove` が来るまでホバーが止まったままになる。
     orbiting = false
+    if (event.button === 0 && (cubePointerActive || cubeDragging)) {
+      const wasClick = cubePointerActive && !cubeDragging
+      const x = event.offsetX
+      const y = event.offsetY
+      if (cubeDragging) endCubeDrag()
+      else {
+        cubePointerActive = false
+        releaseCubePointerCapture()
+      }
+      if (wasClick) handleCubeClick(x, y)
+      return
+    }
     if (event.button !== 0 || !downValid) {
       if (event.button === 0) hideBand()
       return
@@ -3329,6 +3703,19 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function onPointerMove(event: PointerEvent): void {
+    // **キューブが引き取ったポインタはメインの経路を一切通らない**(タスク仕様の落とし穴1)。
+    if (cubePointerActive || cubeDragging) {
+      handleCubePointerMove(event)
+      return
+    }
+    // ポインタがキューブの矩形の内側にあるあいだは、メインのホバー予告・矩形選択開始の
+    // どちらも早期に打ち切る(まだ何も押していない=ホバーのみの場合)。
+    const overCube = insideCubeRect(event.offsetX, event.offsetY)
+    cubeHoverAt = overCube ? { x: event.offsetX, y: event.offsetY } : null
+    if (overCube) {
+      hoverAt = null
+      return
+    }
     // **座標を控えるだけ**。当たり判定は `tick` が1フレームに1回だけ回す
     // (pointermove は1フレームに何度も飛ぶので、ここで解決すると同じ絵のために
     // 何度もレイキャストすることになる)。
@@ -3355,6 +3742,10 @@ export function createViewport(container: HTMLElement): Viewport {
     // **引きかけの矩形は捨てる**(帯だけが残って画面に貼り付くのを防ぐ)。
     hideBand()
     downValid = false
+    // キューブの操作中(クリック判定待ち・ドラッグ中)は無視する —— `setPointerCapture` で
+    // 押下中は座標がどこへ行ってもこの要素が受け取り続けるので、`pointerleave` が来ても
+    // 操作を打ち切らない(ロック中はそもそも座標が凍結して動かない)。
+    if (!cubePointerActive && !cubeDragging) cubeHoverAt = null
   }
 
   renderer.domElement.addEventListener('pointerdown', onPointerDown)
@@ -3423,15 +3814,44 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
+  /**
+   * ビューキューブを同一canvasへ**第2パス**として描く。メインの描画のあと
+   * `autoClear=false`→`clearDepth()`→`setViewport`/`setScissor`/`setScissorTest(true)` で
+   * 描き、**終わったら必ずフルサイズのviewportと`setScissorTest(false)`に戻す**
+   * (戻し忘れると次フレームの本編が隅に描かれる。タスク仕様)。
+   *
+   * `setViewport`/`setScissor` はCSSピクセルで渡す(three.js側が`pixelRatio`を掛ける)—— ただし
+   * **y軸はWebGLネイティブの下原点**なので、`viewCubeRect()`(左上原点、CSSの慣習)から
+   * `height - rect.y - rect.h` で変換する。
+   */
+  function renderCubePass(): void {
+    updateCubeCamera()
+    const rect = viewCubeRect()
+    const { width, height } = size()
+    const glY = height - rect.y - rect.h
+    renderer.autoClear = false
+    renderer.clearDepth()
+    renderer.setViewport(rect.x, glY, rect.w, rect.h)
+    renderer.setScissor(rect.x, glY, rect.w, rect.h)
+    renderer.setScissorTest(true)
+    renderer.render(cubeScene, cubeCamera)
+    renderer.setScissorTest(false)
+    renderer.setViewport(0, 0, width, height)
+    renderer.autoClear = true
+  }
+
   function tick(): void {
     if (!alive) return
+    stepCubeSnap(performance.now())
     controls.update()
     // **描画ループで見る**(`OrbitControls` の 'change' ではない) —— 減衰つきのドリーは
     // イベントが止まった後も数十フレーム動き続けるので、「止まったか」はフレーム側でしか
     // 分からない。中身は算術数本で、当たったときだけ作り直しが走る。
     updateResolution(performance.now())
     updateHover()
+    updateCubeHover()
     renderer.render(scene, camera)
+    renderCubePass()
     frameHandle = requestAnimationFrame(tick)
   }
   frameHandle = requestAnimationFrame(tick)
@@ -3534,6 +3954,7 @@ export function createViewport(container: HTMLElement): Viewport {
     projectSketchPoint,
     projectBasePlane,
     projectRegion,
+    viewCubeRect,
     dispose() {
       alive = false
       cancelAnimationFrame(frameHandle)
@@ -3543,6 +3964,15 @@ export function createViewport(container: HTMLElement): Viewport {
       renderer.domElement.removeEventListener('pointermove', onPointerMove)
       renderer.domElement.removeEventListener('pointerleave', onPointerLeave)
       renderer.domElement.removeEventListener('pointercancel', onPointerLeave)
+      document.removeEventListener('pointerlockchange', handleCubePointerLockChange)
+      document.removeEventListener('pointerlockerror', handleCubePointerLockError)
+      if (document.pointerLockElement === renderer.domElement) document.exitPointerLock()
+      releaseCubePointerCapture()
+      // `THREE.Light` に `dispose()` は無い(GPUリソースを直接持たない) —— 幾何・材質・
+      // テクスチャだけ `cubeDisposables` から片付ける。
+      for (const item of cubeDisposables) item.dispose()
+      cubeGroup.clear()
+      cubeLabelGroup.clear()
       clearPreview()
       clearGhost()
       clearEdges()
