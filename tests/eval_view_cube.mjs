@@ -80,16 +80,17 @@ for (const [i, j, k] of cells) {
 function dot(a, b) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
+// **本物の直交性**: 26方向すべてで |up・d| がほぼ0であること(2026-09-03 QA指摘で強化。
+// 以前は「(反)平行でなければよい」という非退化だけを見ていたが、実装をGram-Schmidt射影に
+// 変えたので、水平/真上/真下に限らず全方向で厳密な直交を要求できる)。
 for (const [i, j, k] of cells) {
   const d = cellDirection(i, j, k)
   const up = upForDirection(d)
   const length = Math.hypot(...up)
   assert.ok(Math.abs(length - 1) < 1e-9, `upForDirection(${d}) が単位ベクトルでない`)
-  // **非退化**: up が d と(反)平行にならない(lookAt の基底が不定にならないことの必要条件)。
-  // これが壊れるのは |d.z| が1に極めて近いのに +Z を返してしまう実装だけである。
-  assert.ok(Math.abs(dot(up, d)) < 1 - 1e-6, `upForDirection(${d}) が方向と(反)平行=退化している: up=${up}`)
+  assert.ok(Math.abs(dot(up, d)) < 1e-9, `upForDirection(${d}) が方向と直交していない: up=${up}, dot=${dot(up, d)}`)
 }
-// 真上・真下は厳密に ±Y で、d ((0,0,±1)) と厳密に直交する。
+// 真上・真下は厳密に ±Y。
 {
   const up = upForDirection([0, 0, 1])
   assert.deepEqual(up, [0, 1, 0], '真上(+Z)の up は +Y のはず')
@@ -100,13 +101,20 @@ for (const [i, j, k] of cells) {
   assert.deepEqual(up, [0, -1, 0], '真下(-Z)の up は -Y のはず')
   assert.equal(dot(up, [0, 0, -1]), 0)
 }
-// 真上・真下でない既定ケース(水平方向。d.z===0)は +Z で、d と厳密に直交する。
+// 水平方向(d.z===0)では射影が何もしないので、既定の +Z のまま返る(仕様の「既定は+Z」の実例)。
 for (const [i, j, k] of cells) {
   const d = cellDirection(i, j, k)
   if (d[2] !== 0) continue
   const up = upForDirection(d)
   assert.deepEqual(up, [0, 0, 1], `水平方向(${d})の up は既定の +Z のはず`)
-  assert.equal(dot(up, d), 0)
+}
+// 斜め方向(辺・角の一部)では、射影により +Z から傾く(=非自明な直交ベクトルになる)ことも見る
+// (射影が実際に効いていること自体の検査。既定+Zをそのまま返すだけの実装だと、ここが+Zのままで
+// 上の直交性検査にひっかかるはず)。
+{
+  const d = cellDirection(1, -1, 1) // 角(コーナー)の1つ。z成分が0でも±1でもない
+  const up = upForDirection(d)
+  assert.ok(Math.abs(up[0] - 0) > 1e-6 || Math.abs(up[1] - 0) > 1e-6, `斜め方向で up が +Z のまま(射影が効いていない): up=${up}`)
 }
 
 console.log('view cube: all assertions passed')

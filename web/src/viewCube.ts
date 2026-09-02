@@ -79,17 +79,28 @@ export function cellDirection(i: number, j: number, k: number): [number, number,
 /**
  * 方向 `d`(正規化済み)に対する `camera.up`。
  *
- * **既定は +Z をそのまま返す**(直交化はしない —— `camera.up` は three.js の
- * `lookAt` 側が向きから直交基底を作るための「ヒント」であり、この実装の他の場所
- * (`HOME_VIEW_OFFSET` を使う初期視点・通常の軌道回転)も既に非直交のヒントのまま
- * +Z を使い続けている。ここだけ厳密に直交化すると、その規約と食い違う)。
+ * **世界の+ZをGram-Schmidt射影で `d` に直交化して返す**: `up = normalize(zHat - (zHat・d) d)`。
+ * three.js の `camera.lookAt` / `Matrix4.lookAt` が「upヒント」から基底を作るときに内部で
+ * 行っている直交化と同一の式なので、**このモジュールが+Zを厳密な直交ベクトルとして返しても
+ * lookAt側の見え方(カメラの姿勢)は変わらない** —— 従来「非直交のヒントのままでよい」としていた
+ * 判断を撤回し、`upForDirection` の出力そのものを直交ベクトルにする(2026-09-03 QA指摘で修正)。
  *
- * **ただし `|d.z| > 0.99`(真上・真下)では +Z がほぼ `d` 自身と重なり、ヒントとして
- * 退化する**(`lookAt` の基底が不定になる) —— そこだけ **+Y(上面図)/ −Y(底面図)** に
- * 差し替える。上面図で「前(−Y)」が画面の下に来る、一般的なCADの並びになる。
+ * `d` が水平(`z===0`)なら射影は何もせず結果はそのまま `(0,0,1)`(既定+Zの記述と矛盾しない)。
+ *
+ * **ただし `|d.z| > 0.99`(真上・真下)では射影が退化する**(`zHat - (zHat・d) d` がほぼ零ベクトルに
+ * なり正規化できない) —— そこだけ **+Y(上面図)/ −Y(底面図)** に差し替える。上面図で
+ * 「前(−Y)」が画面の下に来る、一般的なCADの並びになる。
  */
 export function upForDirection(d: readonly [number, number, number]): [number, number, number] {
   const z = d[2]
   if (Math.abs(z) > 0.99) return z > 0 ? [0, 1, 0] : [0, -1, 0]
-  return [0, 0, 1]
+  // zHat=(0,0,1) なので zHat・d = z。射影 zHat - z*d を正規化する。
+  const ux = -z * d[0]
+  const uy = -z * d[1]
+  const uz = 1 - z * d[2]
+  const length = Math.hypot(ux, uy, uz)
+  // `-0` を避ける(`+ 0` はIEEE754で `-0 -> 0` にだけ効き、他の値は変えない) —— 
+  // 水平方向では ux/uy が厳密に0のはずなのに符号だけ `-0` になり、`Object.is` ベースの
+  // 等値検査(`assert.deepEqual` の strict版)で `0` と食い違って見える(2026-09-03実測)。
+  return [ux / length + 0, uy / length + 0, uz / length + 0]
 }
