@@ -5,7 +5,7 @@
 1. **選択の読み方**(`selection.require_deletable`) —— ボディ由来(面/辺/頂点/ボディ)と
    スケッチ図形を**同時に**畳む。片方が0件でも壊れない(既存の `require_*` は
    「1つも無ければ例外」なので、2つ呼ぶと片方しか選ばれていないときに壊れる)。
-   **領域が混ざっていたら拒否**し、黙って残りだけ消さない。
+   **領域が混ざっていても黙って無視**し、残りを消す。領域**だけ**なら拒否する。
 2. **粒度** —— 混ざった選択でも**1回のverb呼び出し = 1行のログ = 1回のundo**
    ([[cad-verb-granularity-rule]])。
 3. **undo が対象によって別物**である —— ボディは `_common.SNAPSHOTS`(並びと active ごと)、
@@ -123,8 +123,12 @@ def test_a_proposed_selection_is_not_deletable(session: Session) -> None:
         selection.require_deletable(session.document)
 
 
-def test_a_region_in_the_selection_is_refused_and_nothing_is_deleted(session: Session) -> None:
-    """領域が混ざっていたら**残りだけ黙って消さない**。内訳を名指しして拒否する。"""
+def test_a_region_in_the_selection_is_ignored_and_the_rest_is_deleted(session: Session) -> None:
+    """領域が選択に混ざっていても、残りは問題なく消える(領域は黙って無視。2026-09-03)。
+
+    領域は図形の配置から計算されるだけの見た目で、それ自体を消す操作は無い。
+    面(=ボディ)を選んで消せば、領域はその図形が無くなった時点で自然に消える。
+    """
     body, sketch_id = _box(session)
     _select(
         session,
@@ -134,49 +138,47 @@ def test_a_region_in_the_selection_is_refused_and_nothing_is_deleted(session: Se
         ],
     )
     before = _body_ids(session)
+    assert body.id in before
+
+    session.delete()
+
+    assert body.id not in _body_ids(session)
+    assert session.document.log.entries[-1].verb == "delete"
+
+
+def test_a_selection_of_only_regions_is_refused(session: Session) -> None:
+    """領域**だけ**を選んでいるときは、削除できる対象が無いので従来どおり拒否する。"""
+    _, sketch_id = _box(session)
+    _select(session, [{"sketch": sketch_id, "index": 1}])
+    before = _body_ids(session)
     applied_before = session.applied_count
 
     with pytest.raises(selection.SelectionKindMismatch) as raised:
         session.delete()
 
-    # `present` は**確定選択の内訳全部**(`_raise_missing` と同じ値)
-    assert raised.value.present == {"face": 1, "region": 1}
-    assert "region" in str(raised.value)
-    # **食える種別が2つあるverbなので `required_kind` は1語で書けない**
-    assert raised.value.kind == "body|sketch_entity"
-    # 既定の hint(「その種別が1つも無い」)は嘘になるので、例外が自分の一文を持つ
-    assert raised.value.hint is not None and "cannot be deleted" in raised.value.hint
+    assert raised.value.present == {"region": 1}
+    assert raised.value.kind == "body"
     # 文書もログも動いていない
     assert _body_ids(session) == before
     assert session.applied_count == applied_before
-    assert session.document.log.entries[-1].verb == "extrude"
 
 
-def test_the_mcp_envelope_names_the_kind_that_cannot_be_deleted(session: Session) -> None:
-    """MCPの拒否が `selection_kind_mismatch` で、**嘘の hint を返さない**。
-
-    既定の hint は「その種別が1つも無い」と言い切るので、面(=ボディ)が実際に確定して
-    いるこの場面では嘘になる。AIはこの1文だけを見て次の手を決める。
-    """
+def test_the_mcp_envelope_reports_a_region_only_selection_as_kind_mismatch(
+    session: Session,
+) -> None:
+    """MCPの拒否は `selection_kind_mismatch` で、AIが次の一手を決められる文言を持つ。"""
     from duocad.mcp_server import DocumentTools
 
-    body, sketch_id = _box(session)
-    _select(
-        session,
-        [
-            {"body": body.id, "kind": "face", "index": 1},
-            {"sketch": sketch_id, "index": 1},
-        ],
-    )
+    _, sketch_id = _box(session)
+    _select(session, [{"sketch": sketch_id, "index": 1}])
     tools = DocumentTools(session)
     with pytest.raises(selection.SelectionKindMismatch) as raised:
         session.delete()
     envelope = tools.error_envelope("delete", raised.value)
 
     assert envelope["code"] == "selection_kind_mismatch"
-    assert envelope["present_kinds"] == {"face": 1, "region": 1}
-    assert "has no" not in envelope["hint"]
-    assert "region" in envelope["hint"]
+    assert envelope["present_kinds"] == {"region": 1}
+    assert "no body" in envelope["hint"]
 
 
 # --------------------------------------------------------------------------------------
