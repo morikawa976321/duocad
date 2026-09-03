@@ -1,32 +1,32 @@
 /**
- * 実機での確認 — 基準グリッドの範囲・刻みがモデルの大きさへ追随し、基準平面のピック範囲も
- * 同じ値から引かれ、縮小にはヒステリシスが効く。
+ * 実機での確認 — グリッドの3段(1/10/100mm)が固定で、線間隔pxで連続にフェードし、
+ * 表示する平面が状態で決まり、**ピック範囲だけ**が内容の大きさへ追随する。
  *
  *   node scripts/smoke-grid-scale.mjs [--port 8987] [--http-port 8988]
  *
- * 完了条件を3つの姿勢で見る(A/B/Cは互いに独立):
+ * 完了条件を6つの姿勢で見る(A〜Fは互いに独立):
  *
- *   A. **範囲・刻みが内容から導かれ、丸い数字に載る**。空の文書相当(小さな立方体だけ)は
- *      現状(±100mm/10mm刻み)のまま。タスク文書の完了条件に書かれた例そのもの
- *      (半幅252mm → extent 500 / step 50)を実際に作って `gridScale()` の数値で確かめる。
- *      分割数(extent/step)がGRID_DIVISIONS(=10)のまま保たれることも見る。
+ *   A. **刻みは3段固定**。内容を25倍にしても `gridTiers().tiers` の刻みは 1/10/100mm の
+ *      まま。段ごとの不透明度は常に [0,1] で、**粗い段ほど濃い**(細い段から順に消える)。
  *
- *   B. **基準平面のピック範囲が同じ `gridExtent` から引かれる**。旧来の固定100mmを大きく
- *      超えた画素でも基準平面をホバーできる一方、いまのextentのすぐ外はホバーできない
- *      (`viewport.ts` の `basePlaneAt` が使う `gridExtent` と、格子線・ホバー板を描く
- *      `rebuildGrid` の `extent` が同じ値であることの実機での裏取り)。
+ *   B. **連続的なフェード**。寄り切って1mm段が完全に濃い状態から少しずつ引くと、不透明度は
+ *      単調に下がり、**0でも1でもない中間値を何度も通ってから**0になる。ON/OFFの瞬間切替
+ *      だとここが取れない(閾値を跨ぐたびの点滅は、この中間値があることで原理的に起きない)。
+ *      同時に10mm段が濃いままであること(3段が一斉に消えたりしないこと)も見る。
  *
- *   C. **縮小のヒステリシス**: 大きな内容を作った後にundoで消しても、グリッドは即座には
- *      縮まない(ふつうの編集)。`frameAll` を呼んだときだけ実際に縮む。**新規文書**
- *      (`#file-new`)でも同じく縮む。
+ *   C. **ピック範囲は内容から導かれ、丸い数字に載る**(`gridScale().extent`)。描画は無限に
+ *      なったが、**指せる範囲まで無限にはしていない**ことの裏取り。
  *
- *   D. **内容を全部消した後の`frameAll`でも縮む**(2026-08-31 QA指摘の回帰検査)。
- *      `frameToContent()`は`root`が空なら姿勢を合わせずに`false`を返す早期returnを持つが、
- *      グリッドの縮小許可はそれとは独立に必ず1回通る必要がある——通っていないと、
- *      大きなモデルを読んで広がったグリッドが、モデルを全部消して`frameAll`しても
- *      二度と縮まない(新規文書にするまで巨大なグリッドが残り続ける)。**姿勢(カメラ)は
- *      合わせられない(=動かない)ままであることも一緒に見る**(この回帰の直し方によっては
- *      姿勢の契約=戻り値の意味を壊しうるため)。
+ *   D. **基準平面のピック範囲が同じ `gridExtent` から引かれる**。旧来の固定100mmを大きく
+ *      超えた画素でも基準平面をホバーできる一方、いまのextentのすぐ外はホバーできない。
+ *      **対象待ちでは3平面すべてが出ている**ことも一緒に見る。
+ *
+ *   E. **縮小のヒステリシス**(ピック範囲): 大きな内容をundoで消しても即座には縮まず、
+ *      `frameAll` と**新規文書**でだけ縮む。内容を全部消した後の `frameAll` でも縮む
+ *      (2026-08-31 QA指摘の回帰検査。姿勢=カメラは動かないままであることも見る)。
+ *
+ *   F. **表示する平面は状態で決まる**。通常はXY平面+Z軸、基準平面へのスケッチ中はその平面+
+ *      それに直交する軸(XZへ貼れば XZ + Y軸)。
  *
  * サーバはこのスクリプトが空の文書で起動し、形はMCP経由で作る。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
@@ -46,7 +46,7 @@ const timeout = Number.parseInt(options.timeout ?? '60000', 10)
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** ホバーは描画ループ(`tick`)で解決するので、動かしたあと数フレーム待つ(`smoke-hover.mjs`と同じ)。 */
+/** 段の不透明度は描画ループ(`tick`)で入れ直すので、読む前に数フレーム待つ。 */
 async function settle(page) {
   await page.evaluate(
     () =>
@@ -65,6 +65,21 @@ async function assertNoErrors(page, consoleErrors) {
   ok('走行中にエラーは1件も出ていない')
 }
 
+/** 3段の刻みが固定で、不透明度が [0,1] かつ粗い段ほど濃いこと(どの姿勢でも成り立つ)。 */
+function assertTierShape(tiers, where) {
+  const steps = tiers.tiers.map((tier) => tier.step)
+  if (JSON.stringify(steps) !== JSON.stringify([1, 10, 100])) {
+    fail(`${where}: 刻みが 1/10/100mm から動いた: ${JSON.stringify(steps)}`)
+  }
+  const alphas = tiers.tiers.map((tier) => tier.alpha)
+  for (const alpha of alphas) {
+    if (!(alpha >= 0 && alpha <= 1)) fail(`${where}: 不透明度が [0,1] の外: ${JSON.stringify(alphas)}`)
+  }
+  if (!(alphas[0] <= alphas[1] + 1e-9 && alphas[1] <= alphas[2] + 1e-9)) {
+    fail(`${where}: 粗い段のほうが薄い(段の順序が壊れている): ${JSON.stringify(alphas)}`)
+  }
+}
+
 async function main() {
   const executablePath = findBrowser()
   const workdir = mkdtempSync(join(tmpdir(), 'duocad-grid-scale-'))
@@ -77,7 +92,7 @@ async function main() {
     // ---------------------------------------------------------------- 準備: 原点近くの小さな立方体(常駐)
     // 大きな箱をundoで消しても文書が完全には空にならないようにしておく(完全に空だと
     // `frameToContent`が早期returnし、`frameAll`が縮小を試す機会そのものが無くなって
-    // Cの検査の切り分けができない)。
+    // Eの検査の切り分けができない)。
     async function addBox(corner, width, height, distance) {
       const sketch = await mcp.callTool('sketch_create', { base_plane: 'XY' })
       await mcp.callTool('add_rectangle', { sketch_id: sketch.sketch_id, corner, width, height })
@@ -107,47 +122,105 @@ async function main() {
     })
     await sleep(200)
 
-    // ====================================================================== A. 範囲・刻みが内容から導かれる
-    console.log('\n[A] 範囲・刻みが内容から導かれ、丸い数字に載る')
-    const baseline = await page.evaluate(() => window.__duocad.gridScale())
-    if (baseline.extent !== 100 || baseline.step !== 10) {
-      fail(`小さな立方体(10mm)だけでは現状(±100mm/10mm刻み)のはず: ${JSON.stringify(baseline)}`)
+    const tiersNow = () => page.evaluate(() => window.__duocad.gridTiers())
+    const extentNow = () => page.evaluate(() => window.__duocad.gridScale().extent)
+
+    /** ビューポート中央へカーソルを置く(ホイールはカーソル位置で発火する)。 */
+    async function centerCursor() {
+      const center = await page.evaluate(() => {
+        const box = document.querySelector('.viewport').getBoundingClientRect()
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+      })
+      await page.mouse.move(center.x, center.y)
+      return center
     }
-    ok(`[A] 小さな内容(10mm)ではBASE_EXTENTのまま(現状と同じ見え方): ${JSON.stringify(baseline)}`)
+
+    // ====================================================================== A. 刻みは3段固定
+    console.log('\n[A] 刻みは 1/10/100mm の3段固定(内容の大きさで変わらない)')
+    const baseline = await tiersNow()
+    assertTierShape(baseline, '[A] 小さな内容')
+    ok(`[A] 小さな内容(10mm)で3段固定: ${JSON.stringify(baseline.tiers)}`)
 
     const sketchCountBaseline = await page.evaluate(() => window.__duocad.sketches.length)
-    // タスクの完了条件に書かれた例そのもの(半幅252mm → extent 500 / step 50)。
-    const big = await addBox([0, 0], 252, 10, 10)
+    await addBox([0, 0], 252, 10, 10)
     await page.waitForFunction((before) => window.__duocad.parts.length > before, {
       timeout,
       polling: 100,
     }, 1)
     await sleep(300)
-
-    const grown = await page.evaluate(() => window.__duocad.gridScale())
-    if (grown.extent !== 500 || grown.step !== 50) {
-      fail(`半幅252mmの内容で extent=500/step=50 にならない(タスクの完了条件の例と食い違う): ${JSON.stringify(grown)}`)
+    const afterBig = await tiersNow()
+    assertTierShape(afterBig, '[A] 25倍の内容')
+    if (JSON.stringify(afterBig.tiers.map((t) => t.step)) !== JSON.stringify([1, 10, 100])) {
+      fail(`[A] 内容を大きくしたら刻みが動いた: ${JSON.stringify(afterBig.tiers)}`)
     }
-    ok(`[A] 半幅252mmの内容(タスクの完了条件の例)で extent=500/step=50 になった: ${JSON.stringify(grown)}`)
-    if (grown.extent / grown.step !== 10) {
-      fail(`分割数(extent/step)がGRID_DIVISIONS(10)からずれている: ${JSON.stringify(grown)}`)
-    }
-    ok('[A] 分割数(extent/step)が10のまま保たれている(モデルが大きくなっても線が密になって潰れない)')
+    ok('[A] 内容を25倍(半幅252mm)にしても刻みは 1/10/100mm のまま(内容に追随しない)')
 
-    // カメラを大きな内容へ合わせ直す(実機検査が図形を画面内へ収めるための穴。この後の
-    // Bのピック範囲検査は画面に映っている画素でしか行えない)。
+    // ====================================================================== B. 連続的なフェード
+    console.log('\n[B] 段は線間隔pxで連続にフェードする(ON/OFFの瞬間切替ではない)')
     await page.evaluate(() => window.__duocad.frameAll())
     await sleep(200)
-    const afterFrameAll = await page.evaluate(() => window.__duocad.gridScale())
-    if (afterFrameAll.extent !== 500 || afterFrameAll.step !== 50) {
-      fail(`frameAll後にextent/stepが変わった(内容が縮んでいないのに縮小してはいけない): ${JSON.stringify(afterFrameAll)}`)
-    }
-    ok('[A] frameAllで再フレーミングしても、内容が縮んでいないのでextent/stepは変わらない')
+    await centerCursor()
 
-    // ====================================================================== B. ピック範囲が同じgridExtentから引かれる
-    console.log('\n[B] 基準平面のピック範囲が同じgridExtentから引かれる')
-    // 面に隠れないよう全部隠してから、スケッチ作成を起動して基準平面を指せる状態にする
-    // (`smoke.mjs`の「先に部品を全部隠す」と同じ流儀)。
+    // まず1mm段が完全に濃くなるまで寄る。
+    let zoomedIn = false
+    for (let i = 0; i < 120; i += 1) {
+      const tiers = await tiersNow()
+      if (tiers.tiers[0].alpha >= 1) {
+        zoomedIn = true
+        break
+      }
+      await page.mouse.wheel({ deltaY: -240 })
+      await sleep(30)
+    }
+    if (!zoomedIn) fail('寄り切っても1mm段の不透明度が1にならない')
+    ok('[B] 寄ると1mm段が完全に濃くなる')
+
+    // そこから少しずつ引いて、不透明度の列を採る。
+    const fineAlphas = []
+    const midAlphas = []
+    for (let i = 0; i < 200; i += 1) {
+      await settle(page)
+      const tiers = await tiersNow()
+      assertTierShape(tiers, `[B] 引きの途中(${i})`)
+      fineAlphas.push(tiers.tiers[0].alpha)
+      midAlphas.push(tiers.tiers[1].alpha)
+      if (tiers.tiers[0].alpha <= 0) break
+      await page.mouse.wheel({ deltaY: 120 })
+      await sleep(25)
+    }
+    if (fineAlphas[fineAlphas.length - 1] > 0) {
+      fail(`引き続けても1mm段が消えない: ${JSON.stringify(fineAlphas.slice(-5))}`)
+    }
+    for (let i = 1; i < fineAlphas.length; i += 1) {
+      if (fineAlphas[i] > fineAlphas[i - 1] + 1e-6) {
+        fail(`引いたのに1mm段が濃くなった(単調性が壊れている): ${JSON.stringify(fineAlphas)}`)
+      }
+    }
+    const partial = fineAlphas.filter((alpha) => alpha > 0.05 && alpha < 0.95)
+    if (partial.length < 3) {
+      fail(
+        `1mm段が0と1しか取らない(＝ON/OFFの瞬間切替になっている。閾値を跨ぐたびに点滅する): ` +
+          JSON.stringify(fineAlphas),
+      )
+    }
+    ok(`[B] 1mm段が1→0へ単調に、中間値を${partial.length}回通って連続に消えた`)
+    if (midAlphas[midAlphas.length - 1] < 0.5) {
+      fail(`1mm段が消えるところで10mm段まで薄くなっている(段が一斉に消えている): ${midAlphas.at(-1)}`)
+    }
+    ok('[B] 1mm段が消えた時点でも10mm段は濃いまま(段は順に消える)')
+
+    // ====================================================================== C. ピック範囲は内容から
+    console.log('\n[C] ピック範囲(gridScale().extent)は内容から導かれ、丸い数字に載る')
+    await page.evaluate(() => window.__duocad.frameAll())
+    await sleep(200)
+    const grownExtent = await extentNow()
+    if (grownExtent !== 500) {
+      fail(`半幅252mmの内容で extent=500 にならない(1-2-5の丸めが効いていない): ${grownExtent}`)
+    }
+    ok(`[C] 半幅252mmの内容でピック範囲が extent=500 になった(描画は無限でもここは有限)`)
+
+    // ====================================================================== D. ピック範囲と対象待ちの3平面
+    console.log('\n[D] 基準平面のピック範囲が同じgridExtentから引かれる(対象待ちは3平面)')
     await page.click('#parts-hide-all')
     await page.waitForFunction(() => window.__duocad.parts.every((item) => !item.visible), {
       timeout,
@@ -158,19 +231,22 @@ async function main() {
       timeout,
       polling: 50,
     })
+    await settle(page)
+    const armed = await tiersNow()
+    if (JSON.stringify(armed.planes) !== JSON.stringify(['XY', 'XZ', 'YZ'])) {
+      fail(`[D] 対象待ちなのに3平面が出ていない(基準平面を指せなくなる): ${JSON.stringify(armed.planes)}`)
+    }
+    if (armed.axis !== null) {
+      fail(`[D] 3平面のときは面外の軸を別に描く必要が無いはず: ${armed.axis}`)
+    }
+    ok('[D] 対象待ちでは3平面すべてが出ている(基準平面をクリックして指せる)')
 
     /**
-     * **`frameAll`は内容(bodyの外接箱、約252mm)に合わせるだけで、500mmのグリッド全体は
-     * 画面に入らない。** 実際のホイール操作で、指定したワールド座標が画面内に映るまで
-     * 引く(`smoke-clip-planes.mjs`の「実カメラで寄る」と対の「実カメラで引く」)。
-     * **ホイールはカーソル位置で発火する**ので、先にビューポート中央へ置く。
+     * **`frameAll`は内容(bodyの外接箱、約252mm)に合わせるだけで、500mmのピック範囲全体は
+     * 画面に入らない。** 実際のホイール操作で、指定したワールド座標が画面内に映るまで引く。
      */
     async function zoomOutUntilVisible(worldPoint, maxNotches = 200) {
-      const center = await page.evaluate(() => {
-        const box = document.querySelector('.viewport').getBoundingClientRect()
-        return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
-      })
-      await page.mouse.move(center.x, center.y)
+      await centerCursor()
       for (let i = 0; i < maxNotches; i += 1) {
         const rect = await page.evaluate(() => {
           const box = document.querySelector('.viewport').getBoundingClientRect()
@@ -198,10 +274,8 @@ async function main() {
       return { screen: at, plane: hovered ? hovered.plane : null }
     }
 
-    const insideExtent = grown.extent - 30 // 旧来の固定100mmを大きく超えるが、いまの範囲の内側
-    const outsideExtent = grown.extent + 30
-    // **外側の点が画面に映るまで引く** —— 内側の点(原点により近い)はそれより広い視野で
-    // 必ず一緒に映るので、これで両方の判定に必要な視野が揃う。
+    const insideExtent = grownExtent - 30 // 旧来の固定100mmを大きく超えるが、いまの範囲の内側
+    const outsideExtent = grownExtent + 30
     if (!(await zoomOutUntilVisible([outsideExtent, 0, 0]))) {
       fail(`ズームアウトを繰り返しても extent+30(${outsideExtent}mm)が画面に映らない`)
     }
@@ -210,17 +284,17 @@ async function main() {
     const inside = await hoverPlaneAt([insideExtent, 0, 0])
     if (inside.plane !== 'XY') {
       fail(
-        `拡張後のextent(${grown.extent}mm)の内側(u=${insideExtent})なのにXY平面がホバーできない: ` +
+        `拡張後のextent(${grownExtent}mm)の内側(u=${insideExtent})なのにXY平面がホバーできない: ` +
           JSON.stringify(inside),
       )
     }
-    ok(`[B] 旧来の固定100mmを大きく超えた u=${insideExtent} でXY平面をホバーできる(pick範囲がgridExtentに追随)`)
+    ok(`[D] 旧来の固定100mmを大きく超えた u=${insideExtent} でXY平面をホバーできる(pick範囲がgridExtentに追随)`)
 
     const outside = await hoverPlaneAt([outsideExtent, 0, 0])
     if (outside.plane === 'XY') {
-      fail(`いまのextent(${grown.extent}mm)の外側(u=${outsideExtent})なのにXY平面がホバーできてしまう`)
+      fail(`いまのextent(${grownExtent}mm)の外側(u=${outsideExtent})なのにXY平面がホバーできてしまう`)
     }
-    ok(`[B] いまのextentのすぐ外(u=${outsideExtent})はホバーできない(pick範囲がgridExtentで足切りされている)`)
+    ok(`[D] いまのextentのすぐ外(u=${outsideExtent})はホバーできない(描画が無限でもpick範囲は有限)`)
 
     await page.keyboard.press('Escape')
     await page.click('#parts-show-all')
@@ -229,11 +303,9 @@ async function main() {
       polling: 50,
     })
 
-    // ====================================================================== C. 縮小のヒステリシス
-    console.log('\n[C] 縮小のヒステリシス: ふつうの編集では縮まない、frameAll/新規文書でだけ縮む')
+    // ====================================================================== E. 縮小のヒステリシス
+    console.log('\n[E] 縮小のヒステリシス: ふつうの編集では縮まない、frameAll/新規文書でだけ縮む')
     // 大きな箱ぶん(sketch_create → add_rectangle → extrude の3verb)をundoで消す。
-    // **`describe_document`ではなくブラウザ側の状態で判定する** —— グリッドの
-    // 縮小許可を見るのはブラウザ(viewport.ts)側の仕事だから。
     for (let i = 0; i < 3; i += 1) await mcp.callTool('undo')
     await page.waitForFunction(
       (expectedSketches, expectedParts) =>
@@ -245,75 +317,53 @@ async function main() {
     await sleep(200)
     ok(`大きな箱をundo(3回)で消した(sketches=${sketchCountBaseline} / parts=1 に戻った)`)
 
-    const afterUndo = await page.evaluate(() => window.__duocad.gridScale())
-    if (afterUndo.extent !== 500 || afterUndo.step !== 50) {
-      fail(
-        `ふつうの編集(undo)で内容が縮んだ直後にグリッドが即座に縮んでしまった` +
-          `(ヒステリシス違反): ${JSON.stringify(afterUndo)}`,
-      )
+    if ((await extentNow()) !== 500) {
+      fail(`ふつうの編集(undo)で内容が縮んだ直後にピック範囲が即座に縮んでしまった(ヒステリシス違反)`)
     }
-    ok(`[C] undoで内容が縮んでも、グリッドは即座には縮まない(点滅しない): ${JSON.stringify(afterUndo)}`)
+    ok('[E] undoで内容が縮んでも、ピック範囲は即座には縮まない')
 
     await page.evaluate(() => window.__duocad.frameAll())
     await sleep(200)
-    const afterFrameAllShrink = await page.evaluate(() => window.__duocad.gridScale())
-    if (afterFrameAllShrink.extent !== 100 || afterFrameAllShrink.step !== 10) {
-      fail(`frameAllを呼んでもグリッドが縮まない(縮小の許可が効いていない): ${JSON.stringify(afterFrameAllShrink)}`)
+    if ((await extentNow()) !== 100) {
+      fail(`frameAllを呼んでもピック範囲が縮まない(縮小の許可が効いていない): ${await extentNow()}`)
     }
-    ok(`[C] frameAllを呼ぶと実際に縮む(BASE_EXTENTへ戻った): ${JSON.stringify(afterFrameAllShrink)}`)
+    ok('[E] frameAllを呼ぶと実際に縮む(BASE_EXTENTへ戻った)')
 
-    // ---- 新規文書でも縮む(カメラは動かさない`resetGrid`経路)
     await addBox([0, 0], 252, 10, 10)
     await page.waitForFunction((before) => window.__duocad.parts.length > before, {
       timeout,
       polling: 100,
     }, 1)
     await sleep(300)
-    const grownAgain = await page.evaluate(() => window.__duocad.gridScale())
-    if (grownAgain.extent !== 500 || grownAgain.step !== 50) {
-      fail(`もう一度252mmの箱を作ってもextent=500/step=50に戻らない: ${JSON.stringify(grownAgain)}`)
-    }
-    ok('[C] もう一度大きな箱を作るとグリッドが即座に広がった(広げるのは常に即座)')
+    if ((await extentNow()) !== 500) fail('もう一度252mmの箱を作っても extent=500 に戻らない')
+    ok('[E] もう一度大きな箱を作るとピック範囲が即座に広がった(広げるのは常に即座)')
 
-    // ====================================================================== D. 全部消してframeAllで縮む
-    console.log('\n[D] 全部消した後のframeAll: 姿勢を合わせられなくてもグリッドは縮む')
-    // **root(ボディ)もsketchRoot(スケッチ)も両方空にする** —— QA指摘の再現条件そのもの:
-    // `frameToContent()`は`root`が空なら早期returnするが、`contentBoxForGrid()`は
-    // `sketchRoot`も見るので、ボディだけ消してスケッチが残っていても同じ早期returnを通る。
-    // 常駐させていた小さな立方体(sketch_create→add_rectangle→extrudeの3verb)と、直前で
-    // 作り直した大きな箱(同じく3verb)の両方をundoで消し、文書を完全に空にする。
+    // ---- 全部消してframeAllで縮む(2026-08-31 QA指摘の回帰検査)
+    // **root(ボディ)もsketchRoot(スケッチ)も両方空にする** —— `frameToContent()`は`root`が
+    // 空なら早期returnするが、グリッドの縮小許可はそれとは独立に必ず1回通る必要がある。
     for (let i = 0; i < 6; i += 1) await mcp.callTool('undo')
     await page.waitForFunction(
       () => window.__duocad.parts.length === 0 && window.__duocad.sketches.length === 0,
       { timeout, polling: 100 },
     )
     await sleep(200)
-    ok('文書を完全に空にした(parts=0 / sketches=0)')
-
-    const emptyBeforeFrameAll = await page.evaluate(() => window.__duocad.gridScale())
-    if (emptyBeforeFrameAll.extent !== 500 || emptyBeforeFrameAll.step !== 50) {
-      fail(
-        `文書を空にした直後にグリッドが即座に縮んでしまった(ヒステリシス違反。空にする操作は` +
-          `frameAllでも新規文書でもない、ふつうの編集のはず): ${JSON.stringify(emptyBeforeFrameAll)}`,
-      )
+    if ((await extentNow()) !== 500) {
+      fail('文書を空にした直後にピック範囲が即座に縮んでしまった(ヒステリシス違反)')
     }
-    ok(`[D] 空にした直後はまだ縮まない(点滅しない): ${JSON.stringify(emptyBeforeFrameAll)}`)
+    ok('[E] 空にした直後はまだ縮まない')
 
     const poseBeforeEmptyFrameAll = await page.evaluate(() => window.__duocad.cameraPose())
     await page.evaluate(() => window.__duocad.frameAll())
     await sleep(200)
-    const afterEmptyFrameAll = await page.evaluate(() => window.__duocad.gridScale())
-    if (afterEmptyFrameAll.extent !== 100 || afterEmptyFrameAll.step !== 10) {
+    if ((await extentNow()) !== 100) {
       fail(
-        `文書が空の状態でframeAllを呼んでもグリッドが縮まない` +
-          `(frameToContentの早期returnがapplyGridScaleより前にあると起きる回帰): ` +
-          `${JSON.stringify(afterEmptyFrameAll)}`,
+        `文書が空の状態でframeAllを呼んでもピック範囲が縮まない` +
+          `(frameToContentの早期returnがapplyGridScaleより前にあると起きる回帰)`,
       )
     }
-    ok(`[D] 内容が空でもframeAllでグリッドは縮む(BASE_EXTENTへ戻った): ${JSON.stringify(afterEmptyFrameAll)}`)
+    ok('[E] 内容が空でもframeAllでピック範囲は縮む(BASE_EXTENTへ戻った)')
 
-    // **姿勢(カメラ)は動かない契約のまま** —— 空の箱には合わせられないので、
-    // frameToContentは早期returnし続ける(戻り値=falseの意味を壊していないことの裏取り)。
+    // **姿勢(カメラ)は動かない契約のまま**(戻り値=falseの意味を壊していないことの裏取り)。
     const poseAfterEmptyFrameAll = await page.evaluate(() => window.__duocad.cameraPose())
     const emptyFrameAllMoved = Math.hypot(
       poseAfterEmptyFrameAll.position[0] - poseBeforeEmptyFrameAll.position[0],
@@ -326,7 +376,7 @@ async function main() {
           `契約が壊れている疑い): 移動量=${emptyFrameAllMoved.toFixed(3)}mm`,
       )
     }
-    ok('[D] 空の文書でframeAllを呼んでもカメラは動かない(姿勢の契約は変えていない)')
+    ok('[E] 空の文書でframeAllを呼んでもカメラは動かない(姿勢の契約は変えていない)')
 
     const poseBeforeNew = await page.evaluate(() => window.__duocad.cameraPose())
     await page.click('#file-new')
@@ -335,11 +385,8 @@ async function main() {
       { timeout, polling: 100 },
     )
     await sleep(200)
-    const afterNew = await page.evaluate(() => window.__duocad.gridScale())
-    if (afterNew.extent !== 100 || afterNew.step !== 10) {
-      fail(`新規文書にしてもグリッドが縮まない(resetGridの配線が効いていない): ${JSON.stringify(afterNew)}`)
-    }
-    ok(`[C] 新規文書にするとグリッドが縮む(BASE_EXTENTへ戻った): ${JSON.stringify(afterNew)}`)
+    if ((await extentNow()) !== 100) fail('新規文書にしてもピック範囲が縮まない(resetGridの配線が効いていない)')
+    ok('[E] 新規文書にするとピック範囲が縮む(BASE_EXTENTへ戻った)')
     const poseAfterNew = await page.evaluate(() => window.__duocad.cameraPose())
     const cameraMoved = Math.hypot(
       poseAfterNew.position[0] - poseBeforeNew.position[0],
@@ -347,9 +394,57 @@ async function main() {
       poseAfterNew.position[2] - poseBeforeNew.position[2],
     )
     if (cameraMoved > 1e-6) {
-      fail(`新規文書でグリッドを縮めるついでにカメラまで動いてしまった(移動量=${cameraMoved.toFixed(3)}mm、本タスクの範囲外の副作用)`)
+      fail(`新規文書でピック範囲を縮めるついでにカメラまで動いてしまった(移動量=${cameraMoved.toFixed(3)}mm)`)
     }
-    ok('[C] 新規文書でグリッドを縮めても、カメラの姿勢は一切動いていない')
+    ok('[E] 新規文書でピック範囲を縮めても、カメラの姿勢は一切動いていない')
+
+    // ====================================================================== F. 表示する平面は状態で決まる
+    console.log('\n[F] 表示する平面: 通常=XY+Z軸 / 基準平面へのスケッチ中=その平面+直交する軸')
+    await settle(page)
+    const plain = await tiersNow()
+    if (JSON.stringify(plain.planes) !== JSON.stringify(['XY']) || plain.axis !== 'Z') {
+      fail(`[F] 通常はXY平面+Z軸のはず: ${JSON.stringify({ planes: plain.planes, axis: plain.axis })}`)
+    }
+    ok('[F] スケッチ外ではXY平面+Z軸だけが出ている')
+
+    // **スケッチを作る2手**: 「スケッチ」を起動 → 貼る先(XZ平面)をクリック
+    // (`smoke.mjs` の `createSketchOnBase` と同じ流儀。MCPから作っても画面側は
+    // スケッチモードへ入らないので、人と同じ経路で入る)。
+    await page.click('#sketch-create')
+    const xzAt = await (
+      await page.waitForFunction(
+        () => {
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectBasePlane('XZ')
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        },
+        { timeout, polling: 50 },
+      )
+    ).jsonValue()
+    await page.mouse.click(xzAt.x, xzAt.y)
+    await page.waitForFunction(() => window.__duocad.activeSketch !== null, { timeout, polling: 50 })
+    await page.waitForFunction(
+      () => {
+        const tiers = window.__duocad.gridTiers()
+        return tiers !== null && tiers.planes.length === 1 && tiers.planes[0] === 'XZ'
+      },
+      { timeout, polling: 50 },
+    )
+    const onXz = await tiersNow()
+    if (onXz.axis !== 'Y') {
+      fail(`[F] XZへのスケッチ中は直交するY軸を描くはず: ${JSON.stringify(onXz)}`)
+    }
+    assertTierShape(onXz, '[F] XZへのスケッチ中')
+    ok('[F] XZへのスケッチ中はXZ平面+Y軸だけが出ている(3段の規則はそのまま)')
+
+    await page.click('#sketch-exit')
+    await page.waitForFunction(() => window.__duocad.activeSketch === null, { timeout, polling: 50 })
+    await settle(page)
+    const backToPlain = await tiersNow()
+    if (JSON.stringify(backToPlain.planes) !== JSON.stringify(['XY']) || backToPlain.axis !== 'Z') {
+      fail(`[F] スケッチを抜けたら通常(XY+Z軸)へ戻るはず: ${JSON.stringify(backToPlain)}`)
+    }
+    ok('[F] スケッチを抜けると通常(XY平面+Z軸)へ戻る')
 
     await assertNoErrors(page, consoleErrors)
   } finally {

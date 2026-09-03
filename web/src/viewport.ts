@@ -24,7 +24,15 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { entityHandles, entityPoints } from './entityKinds'
 import { DEFAULT_RESOLUTION, viewResolution, type ViewResolution } from './adaptiveResolution'
 import { sampleFaces, selectFineFaces, type BodySamples } from './faceCulling'
-import { BASE_EXTENT, extentFor, stepFor } from './gridScale'
+import {
+  BASE_EXTENT,
+  TIERS,
+  extentFor,
+  mmPerPixel,
+  tierAlphas,
+  type CameraProjection,
+} from './gridScale'
+import { createPlaneGrid, type PlaneFrame, type PlaneGrid } from './planeGrid'
 import { cellBox, cellDirection, regionCells, upForDirection } from './viewCube'
 import type { BasePlaneName, EdgeGeometry } from './session'
 
@@ -546,12 +554,29 @@ export interface Viewport {
     far: number
   }
   /**
-   * 基準グリッドの今の半幅・刻み[mm](`gridScale.ts` の `extentFor`/`stepFor` が導いた値)。
-   * **実機検査フック専用**(2026-08-30) —— 「グリッドが大きなモデルに合わせて広がった」
+   * 基準平面の**ピック範囲**の今の半幅[mm](`gridScale.ts` の `extentFor` が導いた値)。
+   * near/farの下限と面外の軸線の長さも同じ値から引く。**描画の範囲ではない** ——
+   * 格子はシェーダーで無限に描く(2026-09-03)。
+   *
+   * **実機検査フック専用**(2026-08-30) —— 「指せる範囲が大きなモデルに合わせて広がった」
    * ことは見た目からは何mmかまで分からないので、値そのものを機械で見られるようにする。
    * 文書の状態ではないので、コアへは何も飛ばさない(`cameraPose` と同じ方針)。
    */
-  gridScale(): { extent: number; step: number }
+  gridScale(): { extent: number }
+  /**
+   * グリッドの3段(1/10/100mm)の今の見え方。**実機検査フック専用**(2026-09-03に
+   * `gridScale().step` を置き換えたもの —— 刻みが固定になり `step` は何も語らなくなった
+   * ので、代わりに「いま各段がどれだけ濃いか」と「どの平面を出しているか」を出す)。
+   *
+   * `planes` は表示中の平面の名前(基準平面は `XY`/`XZ`/`YZ`、それ以外は `face`)、
+   * `axis` は**面外に線として描いている軸**(無ければ null)。
+   */
+  gridTiers(): {
+    mmPerPixel: number
+    tiers: Array<{ step: number; alpha: number }>
+    planes: string[]
+    axis: 'X' | 'Y' | 'Z' | null
+  }
   /**
    * ワールド座標の点が画面のどこに写るか(ビューポート左上を原点とする画素)。
    * カメラの前後のクリップ範囲の外なら null。
@@ -664,11 +689,11 @@ const BOX_SELECT_MIN_PX = 6
 const VERTEX_PIXELS = 4
 const BACKGROUND_COLOR = 0x161a1f
 /**
- * 基準3平面(XY/XZ/YZ)のグリッド。単位は mm。**範囲・刻みは固定ではない** ——
- * いま画面にある内容の大きさから `gridScale.ts`(`extentFor`/`stepFor`)が導く
- * (`rebuildGrid`/`applyGridScale`)。空の文書では `BASE_EXTENT`(=100mm、スケッチの
- * 最初の長方形(60×40)が収まり、原点の位置が読める大きさ)のまま、現状と同じ見え方になる。
- * `root` には入れない(初回フレーミングがグリッドの箱に引っ張られるのを避ける)。
+ * 平面グリッドの格子線。単位は mm。**刻みは 1/10/100mm の3段固定**(`gridScale.ts` の
+ * `TIERS`)で、内容の大きさでも視点でも変わらない —— 変わるのは段ごとの不透明度だけで、
+ * 線の太さがそのまま寸法の意味になる(2026-09-03本人決定)。描くのは `planeGrid.ts` の
+ * 無限グリッドで、範囲という概念を持たない。`root` には入れない(初回フレーミングが
+ * グリッドの箱に引っ張られるのを避ける)。
  */
 const GRID_COLOR = 0x3a4450
 /**
@@ -678,9 +703,13 @@ const GRID_COLOR = 0x3a4450
 const GRID_ARMED_COLOR = 0x7a90ab
 
 /**
- * 基準3平面の解析的な定義(**描いているグリッドとは別物**)。並びと軸は
- * `pushPlaneGrid` の3回の呼び出しと同じで、範囲もグリッドと同じ ±`gridExtent`(可変)。
- * 3枚とも原点を通るので three.js の `Plane` の `constant` は 0 でよい。
+ * 基準3平面の解析的な定義(**描いているグリッドとは別物**)。ピック範囲は ±`gridExtent`
+ * (可変)。3枚とも原点を通るので three.js の `Plane` の `constant` は 0 でよい。
+ *
+ * **u/v はコアの `_BASE_PLANE_AXES`(`duocad/kernel.py`)と同じ取り方**にしてある ——
+ * スケッチのframeがどの基準平面のものかは、この表との一致で判定する
+ * (`basePlaneForFrame`)。法線の符号だけはコアと違う(XZがコアでは -Y)が、
+ * 解析交差にも一致判定にも符号は効かないので揃えていない。
  */
 const BASE_PLANES: ReadonlyArray<{
   name: BasePlaneName
@@ -713,6 +742,60 @@ const BASE_PLANE_PROBES: ReadonlyArray<readonly [number, number]> = [
 const AXIS_X_COLOR = 0xc45c5c
 const AXIS_Y_COLOR = 0x5cad6e
 const AXIS_Z_COLOR = 0x5a8ec4
+
+/**
+ * 基準平面ごとの「面内の2軸」と「面外の軸」。**面内の軸は平面グリッドのシェーダーが描き、
+ * 面外の軸だけ線ジオメトリで描く**(`planeGrid.ts` は平面の中しか知らないため)。
+ *
+ * 3平面を同時に出すとき(スケッチの対象待ち)は、同じ世界軸を2枚が二重に描かないよう
+ * `desiredGridPlanes` が面内の軸を割り振る —— この表はあくまで「その平面の u/v は
+ * どの軸か」を持つだけである。
+ */
+const BASE_PLANE_AXES: Record<
+  BasePlaneName,
+  {
+    uColor: number
+    vColor: number
+    /** 面外の軸(その平面に直交する world 軸)。 */
+    outOfPlane: { name: 'X' | 'Y' | 'Z'; dir: readonly [number, number, number]; color: number }
+  }
+> = {
+  XY: { uColor: AXIS_X_COLOR, vColor: AXIS_Y_COLOR, outOfPlane: { name: 'Z', dir: [0, 0, 1], color: AXIS_Z_COLOR } },
+  XZ: { uColor: AXIS_X_COLOR, vColor: AXIS_Z_COLOR, outOfPlane: { name: 'Y', dir: [0, 1, 0], color: AXIS_Y_COLOR } },
+  YZ: { uColor: AXIS_Y_COLOR, vColor: AXIS_Z_COLOR, outOfPlane: { name: 'X', dir: [1, 0, 0], color: AXIS_X_COLOR } },
+}
+
+/**
+ * **描く順序の層番号(1箇所にまとめる)。** 生の数値をコード中に書かない
+ * (engine `duocad-depth-overlay-rule` の併記事項)。
+ *
+ * 負の3つは装飾(B群。深度検査あり・深度書き込み無し)、0以上は既存の階段
+ * (A群＝ピック対象は `depthTest: false` なので、順序がそのまま前後関係になる)。
+ */
+const LAYER = {
+  planeGrid: -3,
+  gridAxisLine: -2,
+  basePlaneHover: -1,
+  solid: 0,
+  optimize: 1,
+  edge: 10,
+  region: 11,
+  sketchLine: 12,
+  sketchPoint: 13,
+} as const
+
+/**
+ * **B群の深度バイアスの単位量**(クリップ空間。`gl_Position.z -= 層番号 * これ * w`)。
+ * 法線方向にジオメトリを動かして逃がすことは禁止 —— 描画のズレをレイ検査へ持ち込まない
+ * (engine `duocad-depth-overlay-rule`)。
+ *
+ * 1e-4 は「共平面の面より確実に手前」かつ「1mm程度の段差なら順序が入れ替わらない」
+ * 大きさとして選んだ(near=0.1・far=数千mmの視錐台での実測レンジ)。
+ */
+const DEPTH_BIAS_UNIT = 1.0e-4
+
+/** B群の層番号(大きいほどカメラ側)。 */
+const DEPTH_BIAS_LAYER = { planeGrid: 1, gridAxisLine: 2, basePlaneHover: 3 } as const
 
 /**
  * カメラの画角[度]の下限・上限・既定。**UIとlocalStorage(`viewSettings.ts`)も
@@ -829,58 +912,32 @@ interface BodyMeshes {
   disposables: Array<{ dispose(): void }>
 }
 
-/** 1本の軸に沿った線分を `positions` へ足す(LineSegments の2頂点)。 */
-function pushSegment(
-  positions: number[],
-  a: readonly [number, number, number],
-  b: readonly [number, number, number],
-): void {
-  positions.push(a[0], a[1], a[2], b[0], b[1], b[2])
-}
-
 /**
- * 基準平面1枚ぶんの格子。軸そのもの(t=0)は RGB の軸線で別描きするのでここでは足さない
- * (同じ線を重ねると深度でちらつく)。**`extent`/`step` は呼び出し元(`rebuildGrid`)が
- * いまの `gridExtent`/`gridStep` を渡す** —— このファイル自身は固定値を持たない。
+ * B群(装飾。ピック対象でない)の深度バイアスを材質へ仕込む —— クリップ空間で
+ * `gl_Position.z -= 層番号 * 単位量 * w` だけカメラ側へ寄せる
+ * (engine `duocad-depth-overlay-rule`)。**ジオメトリは1mmも動かさない**ので、
+ * 描画のズレがレイ検査(`basePlaneAt` の解析交差・面のピック)へ漏れない。
+ *
+ * `customProgramCacheKey` を層ごとに変える —— 変えないと、同じ材質種で層の違う
+ * プログラムが1つに共有されて**後から作った方のバイアスが効かない**。
+ *
+ * `#include <project_vertex>` が無い材質へ掛けたら例外にする(黙って素通しにしない)。
  */
-function pushPlaneGrid(
-  positions: number[],
-  uAxis: readonly [number, number, number],
-  vAxis: readonly [number, number, number],
-  extent: number,
-  step: number,
-): void {
-  const steps = Math.round((extent * 2) / step)
-  for (let i = 0; i <= steps; i += 1) {
-    const t = -extent + i * step
-    if (t === 0) continue
-    pushSegment(
-      positions,
-      [
-        t * uAxis[0] + -extent * vAxis[0],
-        t * uAxis[1] + -extent * vAxis[1],
-        t * uAxis[2] + -extent * vAxis[2],
-      ],
-      [
-        t * uAxis[0] + extent * vAxis[0],
-        t * uAxis[1] + extent * vAxis[1],
-        t * uAxis[2] + extent * vAxis[2],
-      ],
-    )
-    pushSegment(
-      positions,
-      [
-        -extent * uAxis[0] + t * vAxis[0],
-        -extent * uAxis[1] + t * vAxis[1],
-        -extent * uAxis[2] + t * vAxis[2],
-      ],
-      [
-        extent * uAxis[0] + t * vAxis[0],
-        extent * uAxis[1] + t * vAxis[1],
-        extent * uAxis[2] + t * vAxis[2],
-      ],
+function withDepthBias<T extends THREE.Material>(material: T, layer: number): T {
+  const bias = (layer * DEPTH_BIAS_UNIT).toFixed(8)
+  material.onBeforeCompile = (shader) => {
+    const marker = '#include <project_vertex>'
+    if (!shader.vertexShader.includes(marker)) {
+      throw new Error(`深度バイアスを掛けられない材質(project_vertexが無い): ${material.type}`)
+    }
+    shader.vertexShader = shader.vertexShader.replace(
+      marker,
+      `${marker}
+	gl_Position.z -= ${bias} * gl_Position.w;`,
     )
   }
+  material.customProgramCacheKey = () => `duocad-depth-bias-${bias}`
+  return material
 }
 
 export function createViewport(container: HTMLElement): Viewport {
@@ -910,9 +967,9 @@ export function createViewport(container: HTMLElement): Viewport {
   const perspective = new THREE.PerspectiveCamera(FOV_DEFAULT, 1, 0.1, 10000)
   const orthographic = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10000)
   let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = perspective
-  // 空の文書でもグリッド全体が見える位置。部品が届いたら `frameToContent` が上書きする。
+  // 空の文書でも原点まわりが見える位置。部品が届いたら `frameToContent` が上書きする。
   // **`BASE_EXTENT` を使う**(可変の `gridExtent` ではない) —— ここは起動直後の1回きりで、
-  // グリッドはまだ組んでおらず(下の `rebuildGrid` の初回呼び出しより前)、その初期値は
+  // `gridExtent` はまだ宣言されておらず(下の平面グリッドの節より前)、その初期値は
   // 常に `BASE_EXTENT` だから同じ値になる。
   {
     const diagonal = Math.hypot(BASE_EXTENT * 2, BASE_EXTENT * 2, BASE_EXTENT * 2)
@@ -954,90 +1011,202 @@ export function createViewport(container: HTMLElement): Viewport {
   // 外接直方体に混ざると初回フレーミングやnear/far計算を歪める)。**指せない**(装飾)ので
   // ピックの対象にも足さない。`setOptimizeState` が唯一の書き手。
   const optimizeRoot = new THREE.Group()
-  optimizeRoot.renderOrder = 1
+  optimizeRoot.renderOrder = LAYER.optimize
   scene.add(optimizeRoot)
   let optimizeDisposables: Array<{ dispose(): void }> = []
 
-  // ------------------------------------------------------------------ 基準3平面のグリッド
+  // ------------------------------------------------------------------ 平面グリッド(3段固定・無限)
   //
-  // **常時出す**。スケッチ平面そのもの(無限に広がる面)は描かないが、原点の XY/XZ/YZ に
-  // 有限の格子を置くのは「今どこを見ているか」の基準になる。`root` には入れない ——
-  // 入れると初回の `frameToContent` がグリッドの箱に引っ張られ、小さな部品が画面の端に
-  // 寄る。ピック対象にもしない(線なので面のクリックを奪わない)。
+  // **「ある平面frame(原点・u軸・v軸)を受け取って描くもの」**(`planeGrid.ts`)。XY床は
+  // その一利用者にすぎず、どの平面を出すかは状態が決める(`desiredGridPlanes`)。
+  // `root` には入れない —— 入れると初回の `frameToContent` がグリッドの箱に引っ張られる。
+  // ピック対象にもしない(判定は `basePlaneAt` の解析交差が別に持つ)。
   const gridRoot = new THREE.Group()
+  // Group の `renderOrder` は three.js では groupOrder として子全体に効く。中身どうしの
+  // 前後は各オブジェクトの `LAYER.*` が決める。
   gridRoot.renderOrder = -1
   scene.add(gridRoot)
-  // **`rebuildGrid` が呼ばれるたびに作り直され、直前の分をここから捨てる**
-  // (`gridMaterial` だけは例外 —— 下のコメント参照)。
-  let gridDisposables: Array<{ dispose(): void }> = []
-  // **材質だけ`rebuildGrid`の外に出してある** —— `showBasePlanes` が色を差し替えるため
-  // (グリッドは3平面ぶんが1つのジオメトリに混ざっているので、平面ごとの色分けはしない)。
-  // 組み直すたびに作り直すと、その時点の「起動中か」の色をここで読み直す必要が生まれる。
-  const gridMaterial = new THREE.LineBasicMaterial({ color: GRID_COLOR })
+
   /**
-   * ホバー中の基準平面に重ねる板(**同時に見えるのは多くても1枚**)。`rebuildGrid` が
-   * 作り直すたびに中身を差し替える(`basePlaneHoverMeshes.clear()` → 作り直し)。
+   * 基準平面のピック範囲の半幅[mm]。**描画範囲ではない**(格子は無限) ——
+   * `basePlaneAt` のピック範囲・`updateClipPlanes` のnear/far下限・面外の軸線の長さが
+   * ここを見る。`applyGridScale` だけが動かす。
+   */
+  let gridExtent = BASE_EXTENT
+
+  /** 基準3平面を指せるか(`showBasePlanes`)。**出していない間は当たり判定を回さない**。 */
+  let basePlanesOn = false
+
+  /**
+   * スケッチ中のスケッチ平面のframe(モード外は null)。**書き手は `setGridSketchFrame`
+   * だけ**で、`setActiveSketch` と `showSketches` の両方から呼ぶ —— モードに入った時点では
+   * まだ描画指示が届いておらず、frameを知らないことがある。
+   */
+  let sketchGridFrame: PlaneFrame | null = null
+
+  /** 実機検査フック(`gridTiers`)へ出す、いま表示している平面の名前。 */
+  let gridPlanesShown: string[] = []
+
+  /**
+   * 同時に出しうる平面は最大3枚(対象待ちの XY/XZ/YZ)。**作り直さず使い回す** ——
+   * frameを差し替えるだけで別の平面になる。
+   */
+  const planeGrids: PlaneGrid[] = [createPlaneGrid(), createPlaneGrid(), createPlaneGrid()]
+  for (const grid of planeGrids) {
+    grid.object.renderOrder = LAYER.planeGrid
+    grid.setDepthBias(DEPTH_BIAS_LAYER.planeGrid * DEPTH_BIAS_UNIT)
+    grid.setVisible(false)
+    gridRoot.add(grid.object)
+  }
+
+  /** 面外の軸(1本)。面内の軸はグリッドのシェーダーが描くので、線にするのはこれだけ。 */
+  const gridAxisMaterial = withDepthBias(
+    new THREE.LineBasicMaterial({
+      color: AXIS_Z_COLOR,
+      // 不透明だが**透明パスへ入れる** —— 実体より後に描かないと、共平面の面に隠れる。
+      transparent: true,
+      depthWrite: false,
+    }),
+    DEPTH_BIAS_LAYER.gridAxisLine,
+  )
+  let gridAxisLine: THREE.Line | null = null
+  let gridAxisShown: 'X' | 'Y' | 'Z' | null = null
+
+  /**
+   * ホバー中の基準平面に重ねる板(**同時に見えるのは多くても1枚**)。ピック範囲が変わる
+   * たびに作り直す(`rebuildBasePlaneHover`)。
    *
-   * グリッドの線は3平面ぶんが1つのジオメトリに混ざっていて平面ごとに色を変えられない
-   * (`showBasePlanes` のコメント)。線を3本に割る代わりに半透明の板を重ねて
-   * 「今カーソルが指しているのはこの平面」を出す(2026-08-27本人決定)。
-   * **当たり判定には使わない** —— 判定は今までどおり `basePlaneAt` の解析交差である。
+   * 平面ごとの色分けを線でやる代わりに半透明の板を重ねて「今カーソルが指しているのは
+   * この平面」を出す(2026-08-27本人決定)。**当たり判定には使わない** —— 判定は
+   * 今までどおり `basePlaneAt` の解析交差である。
    */
   const basePlaneHoverMeshes = new Map<BasePlaneName, THREE.Mesh>()
+  let basePlaneHoverDisposables: Array<{ dispose(): void }> = []
+
+  function basePlaneSpec(name: BasePlaneName): (typeof BASE_PLANES)[number] {
+    const found = BASE_PLANES.find((spec) => spec.name === name)
+    if (found === undefined) throw new Error(`基準平面が表に無い: ${name}`)
+    return found
+  }
+
+  function baseFrame(name: BasePlaneName): PlaneFrame {
+    const spec = basePlaneSpec(name)
+    return { origin: [0, 0, 0], u: spec.u, v: spec.v }
+  }
 
   /**
-   * 格子線・3軸の色付き線・ホバー用の半透明板を、**この3つとも同じ `extent`/`step`
-   * から**組み直す(2026-08-30) —— これを取りこぼすと「グリッドは見えているのに
-   * 基準平面が指せない」という原因の遠い壊れ方をする(`basePlaneAt` の pick 範囲も
-   * 同じ `gridExtent` を見ている。呼び出し元の `applyGridScale` 参照)。
+   * frameがどの基準平面のものか(u/vの一致で見る)。基準平面でなければ null ——
+   * **任意面のスケッチはここで null になり、表示は通常(XY床)へ落ちる**(本タスクの
+   * スコープ外。後続タスクが触るのはここではなく `desiredGridPlanes` 側)。
+   */
+  function basePlaneForFrame(frame: PlaneFrame): BasePlaneName | null {
+    const same = (a: readonly number[], b: readonly number[]): boolean =>
+      Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6 && Math.abs(a[2] - b[2]) < 1e-6
+    if (!same(frame.origin, [0, 0, 0])) return null
+    for (const spec of BASE_PLANES) {
+      if (same(frame.u, spec.u) && same(frame.v, spec.v)) return spec.name
+    }
+    return null
+  }
+
+  interface GridPlaneSpec {
+    /** 実機検査フック(`gridTiers`)へ出す名前。 */
+    name: string
+    frame: PlaneFrame
+    /** 面内の軸の色。`null` の側は描かない(同じ世界軸を2枚が二重に描かないため)。 */
+    uColor: number | null
+    vColor: number | null
+  }
+
+  /**
+   * いま出す平面と、面外に線で描く軸(完了条件4の表そのもの)。
    *
-   * **`gridMaterial` は再生成しない**(上のコメント) —— `showBasePlanes` が持つ
-   * 「起動中か」の色は生き続ける。
+   * | 状態 | 表示 |
+   * |---|---|
+   * | 通常(スケッチ外) | XY平面 + Z軸 |
+   * | スケッチ起動中(対象待ち・`showBasePlanes(true)`) | 3平面すべて |
+   * | 基準平面へのスケッチ中 | その平面 + それに直交する軸 |
+   *
+   * **任意面へのスケッチ中はスコープ外**なので通常(XY+Z軸)へ落とす。後続タスクは
+   * `sketchGridFrame` をそのまま1枚のグリッドへ渡せばよい —— `planeGrid.ts` は
+   * 基準平面かどうかを知らない。
+   *
+   * 対象待ちを3平面のままにするのは、基準平面も**クリックして指す**から
+   * (engine `duocad-sketch-start-is-two-steps-by-pointing`)。ここでXZ/YZを隠すと
+   * 指せなくなる。3枚のときは3本の軸が全部どれかの面内に出るので、面外の軸は要らない。
+   */
+  function desiredGridPlanes(): {
+    planes: GridPlaneSpec[]
+    axis: (typeof BASE_PLANE_AXES)[BasePlaneName]['outOfPlane'] | null
+  } {
+    if (basePlanesOn) {
+      return {
+        planes: [
+          { name: 'XY', frame: baseFrame('XY'), uColor: AXIS_X_COLOR, vColor: AXIS_Y_COLOR },
+          { name: 'XZ', frame: baseFrame('XZ'), uColor: null, vColor: AXIS_Z_COLOR },
+          { name: 'YZ', frame: baseFrame('YZ'), uColor: null, vColor: null },
+        ],
+        axis: null,
+      }
+    }
+    const sketchPlane = sketchGridFrame === null ? null : basePlaneForFrame(sketchGridFrame)
+    const name: BasePlaneName = sketchPlane ?? 'XY'
+    const axes = BASE_PLANE_AXES[name]
+    return {
+      planes: [{ name, frame: baseFrame(name), uColor: axes.uColor, vColor: axes.vColor }],
+      axis: axes.outOfPlane,
+    }
+  }
+
+  function rebuildGridAxisLine(
+    axis: (typeof BASE_PLANE_AXES)[BasePlaneName]['outOfPlane'] | null,
+  ): void {
+    if (gridAxisLine !== null) {
+      gridRoot.remove(gridAxisLine)
+      gridAxisLine.geometry.dispose()
+      gridAxisLine = null
+    }
+    gridAxisShown = axis === null ? null : axis.name
+    if (axis === null) return
+    gridAxisMaterial.color.setHex(axis.color)
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-axis.dir[0], -axis.dir[1], -axis.dir[2]).multiplyScalar(gridExtent),
+      new THREE.Vector3(axis.dir[0], axis.dir[1], axis.dir[2]).multiplyScalar(gridExtent),
+    ])
+    const line = new THREE.Line(geometry, gridAxisMaterial)
+    line.renderOrder = LAYER.gridAxisLine
+    line.raycast = () => {}
+    gridRoot.add(line)
+    gridAxisLine = line
+  }
+
+  /**
+   * ホバー板をいまのピック範囲で作り直す。**`basePlaneAt` の判定範囲と同じ `gridExtent`
+   * から作る** —— ここを取りこぼすと「板は見えているのに指せない(逆も)」という原因の
+   * 遠い壊れ方をする。
    *
    * `applyBasePlaneHover()` はここでは呼ばない —— 初回呼び出しはまだ `hoverPlane` が
-   * 宣言される前(TDZ)に走るため。組み直し後にホバー状態を反映するのは呼び出し元
+   * 宣言される前(TDZ)に走るため。作り直し後にホバー状態を反映するのは呼び出し元
    * (`applyGridScale`)の仕事にしてある。
    */
-  function rebuildGrid(extent: number, step: number): void {
-    for (const item of gridDisposables) item.dispose()
-    gridDisposables = []
-    gridRoot.clear()
+  function rebuildBasePlaneHover(extent: number): void {
+    for (const item of basePlaneHoverDisposables) item.dispose()
+    basePlaneHoverDisposables = []
+    for (const mesh of basePlaneHoverMeshes.values()) gridRoot.remove(mesh)
     basePlaneHoverMeshes.clear()
 
-    const gridPositions: number[] = []
-    pushPlaneGrid(gridPositions, [1, 0, 0], [0, 1, 0], extent, step) // XY (z=0)
-    pushPlaneGrid(gridPositions, [1, 0, 0], [0, 0, 1], extent, step) // XZ (y=0)
-    pushPlaneGrid(gridPositions, [0, 1, 0], [0, 0, 1], extent, step) // YZ (x=0)
-    const gridGeometry = new THREE.BufferGeometry()
-    gridGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(gridPositions), 3))
-    const gridLines = new THREE.LineSegments(gridGeometry, gridMaterial)
-    gridRoot.add(gridLines)
-    gridDisposables.push(gridGeometry)
-
-    const axes: Array<{ color: number; a: [number, number, number]; b: [number, number, number] }> = [
-      { color: AXIS_X_COLOR, a: [-extent, 0, 0], b: [extent, 0, 0] },
-      { color: AXIS_Y_COLOR, a: [0, -extent, 0], b: [0, extent, 0] },
-      { color: AXIS_Z_COLOR, a: [0, 0, -extent], b: [0, 0, extent] },
-    ]
-    for (const axis of axes) {
-      const geometry = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(...axis.a),
-        new THREE.Vector3(...axis.b),
-      ])
-      const material = new THREE.LineBasicMaterial({ color: axis.color })
-      gridRoot.add(new THREE.Line(geometry, material))
-      gridDisposables.push(geometry, material)
-    }
-
-    const hoverMaterial = new THREE.MeshBasicMaterial({
-      color: GRID_ARMED_COLOR,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: BASE_PLANE_HOVER_OPACITY,
-      // 半透明どうしで真っ黒にならないように奥行きは書かない(`previewMaterial` と同じ)。
-      depthWrite: false,
-    })
-    gridDisposables.push(hoverMaterial)
+    const hoverMaterial = withDepthBias(
+      new THREE.MeshBasicMaterial({
+        color: GRID_ARMED_COLOR,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: BASE_PLANE_HOVER_OPACITY,
+        // 半透明どうしで真っ黒にならないように奥行きは書かない(`previewMaterial` と同じ)。
+        depthWrite: false,
+      }),
+      DEPTH_BIAS_LAYER.basePlaneHover,
+    )
+    basePlaneHoverDisposables.push(hoverMaterial)
     for (const spec of BASE_PLANES) {
       const corners = ([[-1, -1], [1, -1], [1, 1], [-1, 1]] as const).map(
         ([su, sv]) =>
@@ -1052,18 +1221,69 @@ export function createViewport(container: HTMLElement): Viewport {
         corners[0], corners[2], corners[3],
       ])
       const mesh = new THREE.Mesh(geometry, hoverMaterial)
+      mesh.renderOrder = LAYER.basePlaneHover
       mesh.visible = false
       gridRoot.add(mesh)
-      gridDisposables.push(geometry)
+      basePlaneHoverDisposables.push(geometry)
       basePlaneHoverMeshes.set(spec.name, mesh)
     }
   }
 
-  /** グリッドの現在の半幅・刻み[mm]。**空の文書は `BASE_EXTENT`/`stepFor(BASE_EXTENT)`**
-   *  で、現状(固定 ±100mm・10mm刻み)と同じ見え方になる。`applyGridScale` だけが動かす。 */
-  let gridExtent = BASE_EXTENT
-  let gridStep = stepFor(BASE_EXTENT)
-  rebuildGrid(gridExtent, gridStep)
+  /** 出す平面・面内の軸・色・面外の軸線を、いまの状態から入れ直す。 */
+  function applyGridPlanes(): void {
+    const wanted = desiredGridPlanes()
+    const color = basePlanesOn ? GRID_ARMED_COLOR : GRID_COLOR
+    planeGrids.forEach((grid, index) => {
+      const spec: GridPlaneSpec | undefined = wanted.planes[index]
+      if (spec === undefined) {
+        grid.setVisible(false)
+        return
+      }
+      grid.setFrame(spec.frame)
+      grid.setAxisColors(spec.uColor, spec.vColor)
+      grid.setColor(color)
+      // **指せるときだけピック範囲で切る**(「見えるもの＝指せるもの」)。指せない
+      // 装飾のときは無限 —— 3枚を無限に重ねると画面が線で埋まって何も読めなくなる、
+      // という実測もある(2026-09-03のスクリーンショット確認)。
+      grid.setExtent(basePlanesOn ? gridExtent : null)
+      grid.setVisible(true)
+    })
+    gridPlanesShown = wanted.planes.map((spec) => spec.name)
+    rebuildGridAxisLine(wanted.axis)
+  }
+
+  /** スケッチ平面のframeを差し替える(モード外は null)。表示する平面がこれで決まる。 */
+  function setGridSketchFrame(frame: PlaneFrame | null): void {
+    sketchGridFrame = frame
+    applyGridPlanes()
+  }
+
+  /**
+   * 段ごとの不透明度とカメラ行列を毎フレーム入れ直す。**CPUの仕事はこれだけ**で、
+   * ジオメトリには一切触らない(格子はシェーダーが作る)。
+   *
+   * 不透明度は `gridScale.ts` の `tierAlpha`(＝Nodeから検査できる純関数)が決める。
+   * シェーダーはそれを上限に、1画素ごとの局所的な線間隔でさらに落とす。
+   */
+  let gridMmPerPixel = 0
+  let gridTierAlphaValues: [number, number, number] = [0, 0, 0]
+  const gridViewProjection = new THREE.Matrix4()
+  const gridInverseViewProjection = new THREE.Matrix4()
+
+  function updateGridUniforms(): void {
+    gridMmPerPixel = worldPerPixel()
+    gridTierAlphaValues = tierAlphas(gridMmPerPixel)
+    camera.updateMatrixWorld()
+    gridViewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+    gridInverseViewProjection.copy(gridViewProjection).invert()
+    for (const grid of planeGrids) {
+      grid.setTierAlphas(gridTierAlphaValues)
+      grid.setCamera(gridViewProjection, gridInverseViewProjection)
+    }
+  }
+
+  rebuildBasePlaneHover(gridExtent)
+  applyGridPlanes()
 
   // ------------------------------------------------------------------ ビューキューブ(常設・26領域)
   //
@@ -1866,25 +2086,25 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * グリッドの半幅・刻みを内容の大きさへ合わせる(`gridScale.ts` の `extentFor`/`stepFor`)。
+   * **基準平面のピック範囲**の半幅を内容の大きさへ合わせる(`gridScale.ts` の `extentFor`)。
+   * **格子の見た目には効かない** —— 刻みは3段固定で、格子はシェーダーが無限に描く。
    *
    * **広げるのは常に即座**(`allowShrink` に関係なく)。**縮めるのは `allowShrink` が
    * 立っているときだけ** —— `frameToContent` が実際に合わせたとき(＝`frameAll`)と、
    * 新規文書にしたとき(`resetGrid`)に限る。ふつうの編集(`refreshContentDiagonal` からの
-   * 呼び出し)は常に `allowShrink: false` で、内容がしきい値付近で揺れてもグリッドが
-   * 縮んで点滅することはない。
+   * 呼び出し)は常に `allowShrink: false` で、内容がしきい値付近で揺れても指せる範囲が
+   * 前後に揺れることはない。
    *
-   * 範囲が変わったら、格子線・3軸の色付き線・ホバー板の**3つとも**組み直し
-   * (`rebuildGrid`)、基準平面のピック範囲(`basePlaneAt` の `gridExtent` 参照)と
-   * near/farの下限(`updateClipPlanes`)も同じ値へ引き直す。
+   * 範囲が変わったら、ホバー板(`rebuildBasePlaneHover`)と面外の軸線の長さ
+   * (`applyGridPlanes`)を組み直し、near/farの下限(`updateClipPlanes`)も引き直す。
    */
   function applyGridScale(box: THREE.Box3, allowShrink: boolean): void {
     const extent = extentFor(box)
     if (extent === gridExtent) return
     if (extent < gridExtent && !allowShrink) return
     gridExtent = extent
-    gridStep = stepFor(extent)
-    rebuildGrid(gridExtent, gridStep)
+    rebuildBasePlaneHover(gridExtent)
+    applyGridPlanes() // 面外の軸線は `gridExtent` の長さで引いている
     applyBasePlaneHover() // 組み直した新しいメッシュへ、いまのホバー状態を反映し直す
     updateClipPlanes()
   }
@@ -2242,14 +2462,15 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   // ------------------------------------------------------------------ 基準3平面(スケッチを貼る先)
-  /** 基準3平面を指せるか(`showBasePlanes`)。**出していない間は当たり判定を回さない**。 */
-  let basePlanesOn = false
+  //
+  // 「指せるか」の旗(`basePlanesOn`)は平面グリッドの節で宣言してある —— **どの平面を
+  // 出すかがその旗で決まる**(`desiredGridPlanes`)ので、表示側と同じ場所に置く。
 
   function showBasePlanes(on: boolean): void {
     if (basePlanesOn === on) return
     basePlanesOn = on
     pickChanged()
-    gridMaterial.color.setHex(on ? GRID_ARMED_COLOR : GRID_COLOR)
+    applyGridPlanes() // 出す平面(1枚 ⇄ 3枚)と色(通常 ⇄ 起動中)がこの旗で変わる
     // 指せなくなった平面の板を残さない(`basePlaneAt` が null を返すので次のフレームでも
     // 消えるが、ゲートを閉じた瞬間に消えるほうが「もう指せない」が伝わる)。
     if (!on) {
@@ -2261,12 +2482,15 @@ export function createViewport(container: HTMLElement): Viewport {
   /**
    * 基準3平面のうち当たった1枚と、そのレイ距離(当たらなければ null)。
    *
-   * **描いているグリッドは判定に使わない**(3平面の線が1つのジオメトリに混ざっており、
-   * 当たった線からどの平面かを復元できない)。`planePointAt` と同じ解析交差を3枚ぶん回し、
-   * グリッドの描画範囲の外(|u| か |v| が `gridExtent` 超)は捨て、**レイ距離が最小の
-   * 1枚**を採る。**`gridExtent` は `rebuildGrid` が実際に描いている範囲と同じ値**
-   * (2026-08-30) —— ここだけ古い定数のままだと、「グリッドは見えているのに指せない」
-   * という遠い壊れ方をする。
+   * **描いているグリッドは判定に使わない**(格子はシェーダーが無限に描くので、そもそも
+   * 当たれるジオメトリが無い)。`planePointAt` と同じ解析交差を3枚ぶん回し、**ピック範囲**
+   * の外(|u| か |v| が `gridExtent` 超)は捨て、**レイ距離が最小の1枚**を採る。
+   *
+   * **描画が無限になってもピック範囲は無限にしない**(2026-09-03) —— 無限にすると
+   * engine `duocad-base-planes-lose-to-solids-by-depth` と
+   * `viewport-resize-silently-changes-what-a-click-grabs` が同時に悪化する。
+   * ホバー板(`rebuildBasePlaneHover`)も同じ `gridExtent` から作る —— ここだけずれると
+   * 「板は見えているのに指せない」という遠い壊れ方をする。
    */
   function basePlaneAt(
     offsetX: number,
@@ -2424,7 +2648,7 @@ export function createViewport(container: HTMLElement): Viewport {
       )
       geometry.computeBoundingSphere()
       const line = new THREE.Line(geometry, pickEdgeMaterial)
-      line.renderOrder = 10 // 深度を書かないぶん、描く順序で面より手前に出す
+      line.renderOrder = LAYER.edge // 深度を書かないぶん、描く順序で面より手前に出す
       line.userData.bodyId = bodyId
       line.userData.edgeIndex = edge.index
       edgeRoot.add(line)
@@ -2469,12 +2693,28 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
+   * いまのカメラを投影の種類ごとの最小限の形へ落とす(`gridScale.ts` の純関数へ渡す用)。
+   * **正投影には「距離」に相当する量が無い**ので、透視と同じ形にはできない。
+   */
+  function cameraProjection(): CameraProjection {
+    if (camera === orthographic) {
+      return { kind: 'ortho', frustumHeight: 2 * Math.max(viewHalfHeight(), 1e-6) }
+    }
+    return {
+      kind: 'persp',
+      fovDeg: perspective.fov,
+      distance: camera.position.distanceTo(controls.target),
+    }
+  }
+
+  /**
    * 画面1画素ぶんの世界座標の長さ(当たり判定の太さを画素で決めるため)。
-   * **正投影でも同じ式で出る** —— 縦の見え方の正は `viewHalfHeight` 1つに寄せてある。
+   * **式は `gridScale.ts` の `mmPerPixel` 1つに寄せてある** —— グリッドの段の判定と
+   * 当たり判定の太さが同じ物差しで動く(ずれると「見えている線が指せない」になる)。
    */
   function worldPerPixel(): number {
     const { height } = size()
-    return (2 * Math.max(viewHalfHeight(), 1e-6)) / height
+    return Math.max(mmPerPixel(cameraProjection(), height), 1e-9)
   }
 
   // ------------------------------------------------------------------ 可変解像度(ズーム連動)
@@ -2791,7 +3031,7 @@ export function createViewport(container: HTMLElement): Viewport {
       )
       geometry.computeBoundingSphere()
       const mesh = new THREE.Points(geometry, material)
-      mesh.renderOrder = 11 // 深度を書かないぶん、描く順序で辺(10)より手前に出す
+      mesh.renderOrder = LAYER.region // 深度を書かないぶん、描く順序で辺より手前に出す
       mesh.userData.bodyId = marker.bodyId
       mesh.userData.vertexIndex = marker.vertexIndex
       mesh.userData.point = marker.point
@@ -3034,7 +3274,7 @@ export function createViewport(container: HTMLElement): Viewport {
           selected ? sketchSelectedMaterial : sketchMaterial,
         )
         if (built) {
-          built.object.renderOrder = 12
+          built.object.renderOrder = LAYER.sketchLine
           built.object.userData.entityId = handle.entityId
           sketchRoot.add(built.object)
           objects.push(built.object)
@@ -3055,7 +3295,7 @@ export function createViewport(container: HTMLElement): Viewport {
             geometry,
             picked ? sketchHandleSelectedMaterial : sketchHandleMaterial,
           )
-          mesh.renderOrder = 13 // 深度を書かないので、描く順序で線(12)より手前に出す
+          mesh.renderOrder = LAYER.sketchPoint // 深度を書かないので、描く順序で線より手前に出す
           mesh.userData.entityId = handle.entityId
           mesh.userData.point = point.key
           sketchRoot.add(mesh)
@@ -3078,6 +3318,7 @@ export function createViewport(container: HTMLElement): Viewport {
     invalidateHover() // 領域のメッシュを作り直したので印を捨てる
     refreshContentDiagonal() // 見えているものの大きさが変わった(解像度の上下限に効く)
     updateClipPlanes() // 内容が変わった → 視錐台を引き直す
+    refreshGridSketchFrame() // 編集中スケッチのframeがここで初めて届くことがある
   }
 
   /** 領域の材質を決める。**選択とホバーの両方を見る唯一の場所**(面・辺と同じ規律)。 */
@@ -3099,6 +3340,18 @@ export function createViewport(container: HTMLElement): Viewport {
             : regionMaterial
       }
     }
+  }
+
+  /**
+   * いま編集中のスケッチ平面のframeをグリッドへ渡す(モード外は null)。
+   *
+   * **`setActiveSketch` と `showSketches` の両方から呼ぶ** —— モードに入った時点では
+   * そのスケッチの描画指示がまだ届いておらず、frameを知らないことがある。届いた時点で
+   * 呼び直さないと、基準平面へのスケッチ中もXY床が出たままになる。
+   */
+  function refreshGridSketchFrame(): void {
+    const target = activeSketchId === null ? undefined : sketches.get(activeSketchId)
+    setGridSketchFrame(target?.frame ?? null)
   }
 
   function clearGhost(): void {
@@ -3153,6 +3406,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const wasActive = activeSketchId !== null
     if (activeSketchId !== sketchId) pickChanged() // モードの出入りで優先順位ごと変わる
     activeSketchId = sketchId
+    refreshGridSketchFrame() // 出すグリッドの平面がモードの出入りで変わる
     if (sketchId !== null) {
       // **入る「とき」だけ控える**。`lookAtSketch` の側で控えないのは、あれが
       // 「正面から見る」でも呼ばれるから —— そこで控えると戻り先が寄った視点に化ける。
@@ -3850,6 +4104,8 @@ export function createViewport(container: HTMLElement): Viewport {
     updateResolution(performance.now())
     updateHover()
     updateCubeHover()
+    // グリッドは毎フレームここだけを更新する(段の不透明度とカメラ行列。ジオメトリは無い)。
+    updateGridUniforms()
     renderer.render(scene, camera)
     renderCubePass()
     frameHandle = requestAnimationFrame(tick)
@@ -3946,7 +4202,15 @@ export function createViewport(container: HTMLElement): Viewport {
       applyGridScale(contentBoxForGrid(), true)
     },
     gridScale() {
-      return { extent: gridExtent, step: gridStep }
+      return { extent: gridExtent }
+    },
+    gridTiers() {
+      return {
+        mmPerPixel: gridMmPerPixel,
+        tiers: TIERS.map((step, index) => ({ step, alpha: gridTierAlphaValues[index] })),
+        planes: [...gridPlanesShown],
+        axis: gridAxisShown,
+      }
     },
     setFov,
     cameraPose,
@@ -3997,8 +4261,10 @@ export function createViewport(container: HTMLElement): Viewport {
       regionHoverMaterial.dispose()
       regionSelectedHoverMaterial.dispose()
       for (const bodyId of [...bodies.keys()]) clearBody(bodyId)
-      for (const item of gridDisposables) item.dispose()
-      gridMaterial.dispose() // `rebuildGrid`は使い回すので、消えるのは最終teardownのここだけ
+      for (const item of basePlaneHoverDisposables) item.dispose()
+      for (const grid of planeGrids) grid.dispose()
+      gridAxisLine?.geometry.dispose()
+      gridAxisMaterial.dispose()
       gridRoot.clear()
       controls.dispose()
       for (const material of faceMaterialCache.values()) material.dispose()
