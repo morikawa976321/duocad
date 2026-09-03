@@ -358,6 +358,10 @@ export const SELECT_IN_SKETCH: CommandDef = {
   category: 'ui',
   label: '選ぶ',
   buttonId: 'sketch-select',
+  // **ボタンは出さない**(2026-09-03本人決定)。領域を直接クリックして選べるので、
+  // 人間向けのボタンは重複だった。既定コマンド(`DEFAULT_SKETCH_COMMAND_ID`)としての
+  // 役割はそのまま——Escや確定後はここへ戻る(`CommandHost` のdocstring参照)。
+  hidden: true,
   preview: 'none',
   args: [],
   build: () => ({ ok: false, reason: '領域をクリックして選ぶ(図形を描くなら上のボタン)' }),

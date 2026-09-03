@@ -280,6 +280,13 @@ export interface CommandDef {
   label: string
   /** ツールバーのボタンの `id`(実機検査がここを叩く)。 */
   buttonId: string
+  /**
+   * ツールバーにボタンを出さない(2026-09-03)。verb自体は生きたまま
+   * (`id`/`category`/`build` は通常どおり機能する)、`CommandHost` の描画だけ外す ——
+   * 対象は `select_in_sketch` のみ:直接クリックでの選択と重複するボタンを人間向けUIから
+   * 落とす一方、verbとしては(AI等の別経路のために)残す。
+   */
+  hidden?: boolean
   args: ArgSpec[]
   /**
    * 確定前の姿の出し方:

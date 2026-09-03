@@ -689,7 +689,7 @@
 >
   <div class="row">
     <span class="label">コマンド</span>
-    {#each commands as candidate (candidate.id)}
+    {#each commands.filter((c) => !c.hidden) as candidate (candidate.id)}
       <button
         id={candidate.buttonId}
         class:on={command !== null && candidate.id === command.id}
