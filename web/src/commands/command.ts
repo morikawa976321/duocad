@@ -261,12 +261,16 @@ export type BuildResult =
  *
  * - `sketch`  … スケッチのverb(`sketch_id` を足して送る。スケッチモードでなければ送らない)
  * - `feature` … ソリッドのverb(失敗しても打った値を戻して打ち直せるようにする)
- * - `file`    … ファイル操作(応答が状態配信で返るとは限らない。`changesDocument` 参照)
  * - `ui`      … サーバへ何も送らない道具(スケッチモードの「選ぶ」だけ)
+ *
+ * **ファイル操作(保存/開く/STEP入出力等)はこの分類を経由しない**(2026-08-27に
+ * `FilesPanel.svelte` が `session.runVerb` を直接呼ぶ形へ移設した。`App.svelte` の
+ * `runFileOp`/`changesDocument` 参照)。かつて存在した `file` 分類は、この移設で
+ * `CommandDef` 側の使用が0件になったため2026-09-03に削除した。
  *
  * **`ui` 以外はコアの宣言(`duocad/catalog.py`)の `category` と同じ値**である。
  */
-export type CommandCategory = 'sketch' | 'feature' | 'file' | 'ui'
+export type CommandCategory = 'sketch' | 'feature' | 'ui'
 
 export interface CommandDef {
   /** verb名。**プレビューと確定で同じものをサーバへ送る**(食い違うと嘘のプレビューになる)。 */

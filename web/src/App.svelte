@@ -1328,16 +1328,6 @@
         session.runVerb(verb, needsSketchId(verb) ? { ...args, sketch_id: sketchId } : args, op)
         return
       }
-      // -------------------------------------------------------------- E: ファイル操作
-      case 'file': {
-        const op = nextOp()
-        lastFileOp = op
-        // **文書を変えないもの(保存・書き出し)は状態配信では返ってこない**ので、
-        // 「応答待ち」は立てない —— 立てると `handleFile` が来るまでEnterが拒否される。
-        if (changesDocument(verb)) pendingOp = op
-        session.runVerb(verb, args, op)
-        return
-      }
       default: {
         // **分類を1つ足すとここで型が落ちる**(`never` に狭まらなくなる)。
         // 送り方を書かずに分類だけ増やすことができない、というのがこの1行の役目。
