@@ -562,33 +562,52 @@ async function main() {
       () => window.__duocad.wantsEdges === true,
       'move_body を起動しても辺を要求しない(kinds の配線が届いていない)',
     )
+    // **`wantsEdges` が真になっても、辺の実データはまだ無い**(2026-09-03に原因を特定)。
+    // あれは `CommandHost` の同期的な `$effect` で即座に立つが、辺そのものは版が違えば
+    // `showEdges(null, [])` で空にしてからWS往復で取り直す(`App.svelte`)。その窓では
+    // `projectEdge` が `edgeBodyId !== bodyId` の早期returnで**全indexに対しnull**を返し、
+    // 下のループが待たずに8本を撃ち切って「1本も選べない」と誤判定していた。**エラーは
+    // 1件も出ない**ので原因が遠い(engine `move-body-edge-pick-fails-on-clean-main`)。
+    //
+    // **2周するのは、ループの最中に足元が抜ける経路があるため** —— カメラを動かすと
+    // 可変解像度が180ms後に `set_view_resolution` を送り、サーバは粗さを版の鍵に入れて
+    // いるので形が同じでも配信し直す。その配信で `viewport.update()` が表示中の辺を消すため、
+    // 全indexが途中でnullへ落ちうる。取り直しを待ってもう1周すれば通る。
     let edgePicked = null
-    for (const edgeIndex of [1, 2, 3, 4, 5, 6, 7, 8]) {
-      const at = await page.evaluate(
-        (id, index) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectEdge(id, index)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        bodyId,
-        edgeIndex,
+    for (let attempt = 0; attempt < 2 && edgePicked === null; attempt++) {
+      await waitFor(
+        (id) =>
+          [1, 2, 3, 4, 5, 6, 7, 8].some((index) => window.__duocad.projectEdge(id, index) !== null),
+        '辺の実データが届かない(move_body 起動後、projectEdge がどのindexでもnullのまま)',
+        [bodyId],
       )
-      if (!at) continue
-      await page.mouse.click(at.x, at.y)
-      try {
-        await page.waitForFunction(
-          (id, index) =>
-            (window.__duocad.selection?.items ?? []).some(
-              (item) => item.body === id && item.kind === 'edge' && item.index === index,
-            ),
-          { timeout: 5000, polling: 50 },
+      for (const edgeIndex of [1, 2, 3, 4, 5, 6, 7, 8]) {
+        const at = await page.evaluate(
+          (id, index) => {
+            const rect = document.querySelector('.viewport').getBoundingClientRect()
+            const position = window.__duocad.projectEdge(id, index)
+            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+          },
           bodyId,
           edgeIndex,
         )
-        edgePicked = edgeIndex
-        break
-      } catch {
-        // その辺は取れなかった(裏に回っている)。次を試す
+        if (!at) continue
+        await page.mouse.click(at.x, at.y)
+        try {
+          await page.waitForFunction(
+            (id, index) =>
+              (window.__duocad.selection?.items ?? []).some(
+                (item) => item.body === id && item.kind === 'edge' && item.index === index,
+              ),
+            { timeout: 5000, polling: 50 },
+            bodyId,
+            edgeIndex,
+          )
+          edgePicked = edgeIndex
+          break
+        } catch {
+          // その辺は取れなかった(裏に回っている)。次を試す
+        }
       }
     }
     if (edgePicked === null) fail('move_body を起動しても辺を1本もクリックで選べない')
