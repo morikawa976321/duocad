@@ -1079,6 +1079,10 @@
       .map((item) => ({
         sketchId: item.sketch_id,
         frame: item.frame as NonNullable<typeof item.frame>,
+        plane:
+          item.plane.kind === 'base'
+            ? { kind: 'base' as const }
+            : { kind: 'face' as const, bodyId: item.plane.body, faceIndex: item.plane.index },
         entities: item.drawn,
         regions: item.regions,
         selectedRegions: selectedRegions

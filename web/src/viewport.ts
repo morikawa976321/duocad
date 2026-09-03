@@ -29,6 +29,7 @@ import {
   TIERS,
   extentFor,
   mmPerPixel,
+  snap125,
   tierAlphas,
   type CameraProjection,
 } from './gridScale'
@@ -214,11 +215,20 @@ export interface BoxSelectEvent {
   mode: PickMode
 }
 
+/**
+ * スケッチを貼った平面。**基準3面か、既存ソリッドの面か**(session.ts の `PlaneRef` と
+ * 同じ語彙。`face` 側は `FaceRef` と同じ形にして、面メッシュの索きをそのまま使えるようにする)。
+ * グリッドの表示平面決定(`desiredGridPlanes`)と範囲の見積もり(`faceUvExtent`)が読む。
+ */
+export type SketchPlaneRef = { kind: 'base' } | ({ kind: 'face' } & FaceRef)
+
 /** 1枚のスケッチの描画指示(three.js の型は出さない)。 */
 export interface SketchDraw {
   sketchId: string
   /** `p = origin + u*uAxis + v*vAxis`(コアが配る枠。session.ts の `SketchFrame`)。 */
   frame: { origin: number[]; u: number[]; v: number[]; normal: number[] }
+  /** 貼った平面(基準面か、既存ソリッドの面か)。 */
+  plane: SketchPlaneRef
   /** 反復を展開した描画対象。`params` はコアの `Entity.params` と同じキー。 */
   entities: Array<{ kind: string; params: Record<string, number> }>
   regions: Array<{ index: number; positions: number[]; indices: number[] }>
@@ -568,15 +578,18 @@ export interface Viewport {
    * `gridScale().step` を置き換えたもの —— 刻みが固定になり `step` は何も語らなくなった
    * ので、代わりに「いま各段がどれだけ濃いか」と「どの平面を出しているか」を出す)。
    *
-   * `planes` は表示中の平面の名前で、いまは基準平面の `XY`/`XZ`/`YZ` しか出ない
-   * (任意面のグリッドは未実装。増やすときは `desiredGridPlanes` が名前も付ける)。
+   * `planes` は表示中の平面の名前で、基準平面(`XY`/`XZ`/`YZ`)か、任意面へのスケッチ中は
+   * `sketch-face`(名前は `desiredGridPlanes` が付ける)。
    * `axis` は**面外に線として描いている軸**(無ければ null)。
+   * `sketchFaceExtent` は任意面グリッドの表示範囲の半幅[mm](`faceUvExtent` の目安。
+   * 無限のまま・任意面でないときは null)。
    */
   gridTiers(): {
     mmPerPixel: number
     tiers: Array<{ step: number; alpha: number }>
     planes: string[]
     axis: 'X' | 'Y' | 'Z' | null
+    sketchFaceExtent: number | null
   }
   /**
    * ワールド座標の点が画面のどこに写るか(ビューポート左上を原点とする画素)。
@@ -795,8 +808,13 @@ const LAYER = {
  */
 const DEPTH_BIAS_UNIT = 1.0e-4
 
-/** B群の層番号(大きいほどカメラ側)。 */
-const DEPTH_BIAS_LAYER = { planeGrid: 1, gridAxisLine: 2, basePlaneHover: 3 } as const
+/**
+ * B群の層番号(大きいほどカメラ側)。**`sketchFaceGrid` は別枠**(2026-09-03) ——
+ * 任意面のスケッチ平面は貼り付けた面(A群のソリッド。深度書き込みあり)と完全に同一平面で
+ * 争うので、床・基準平面グリッド(`planeGrid`。通常は開いた空間に浮いていて争う相手がいない)
+ * と同じバイアス経路を使いつつ、層番号だけ分けて併記事項の規約(層は名前付き定数表)に従う。
+ */
+const DEPTH_BIAS_LAYER = { planeGrid: 1, gridAxisLine: 2, basePlaneHover: 3, sketchFaceGrid: 4 } as const
 
 /**
  * カメラの画角[度]の下限・上限・既定。**UIとlocalStorage(`viewSettings.ts`)も
@@ -1045,6 +1063,13 @@ export function createViewport(container: HTMLElement): Viewport {
    */
   let sketchGridFrame: PlaneFrame | null = null
 
+  /**
+   * `sketchGridFrame` が任意面(基準平面でない)のときの表示範囲の半幅[mm]。
+   * `faceUvExtent` が測れなかった・基準平面のときは `null`(無限)。**書き手は
+   * `setGridSketchFrame` だけ**(`sketchGridFrame` と対で更新する)。
+   */
+  let sketchGridExtent: number | null = null
+
   /** 実機検査フック(`gridTiers`)へ出す、いま表示している平面の名前。 */
   let gridPlanesShown: string[] = []
 
@@ -1055,7 +1080,8 @@ export function createViewport(container: HTMLElement): Viewport {
   const planeGrids: PlaneGrid[] = [createPlaneGrid(), createPlaneGrid(), createPlaneGrid()]
   for (const grid of planeGrids) {
     grid.object.renderOrder = LAYER.planeGrid
-    grid.setDepthBias(DEPTH_BIAS_LAYER.planeGrid * DEPTH_BIAS_UNIT)
+    // 深度バイアスは `applyGridPlanes()`(直後に必ず呼ぶ)が状態ごとに入れ直す
+    // (`GridPlaneSpec.depthBiasLayer`) —— ここでは初期化しない。
     grid.setVisible(false)
     gridRoot.add(grid.object)
   }
@@ -1097,8 +1123,8 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /**
    * frameがどの基準平面のものか(u/vの一致で見る)。基準平面でなければ null ——
-   * **任意面のスケッチはここで null になり、表示は通常(XY床)へ落ちる**(本タスクの
-   * スコープ外。後続タスクが触るのはここではなく `desiredGridPlanes` 側)。
+   * **任意面のスケッチはここで null になる**。`desiredGridPlanes` はそれを見て、
+   * 通常(XY床)へ落とすのではなく、そのframeへ直接グリッドを乗せる(2026-09-03)。
    */
   function basePlaneForFrame(frame: PlaneFrame): BasePlaneName | null {
     const same = (a: readonly number[], b: readonly number[]): boolean =>
@@ -1117,6 +1143,10 @@ export function createViewport(container: HTMLElement): Viewport {
     /** 面内の軸の色。`null` の側は描かない(同じ世界軸を2枚が二重に描かないため)。 */
     uColor: number | null
     vColor: number | null
+    /** 表示範囲の半幅[mm]。`null` は無限(指せない・面の輪郭が測れない装飾)。 */
+    extent: number | null
+    /** クリップ空間の深度バイアスの層番号(`DEPTH_BIAS_LAYER`)。 */
+    depthBiasLayer: number
   }
 
   /**
@@ -1127,10 +1157,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * | 通常(スケッチ外) | XY平面 + Z軸 |
    * | スケッチ起動中(対象待ち・`showBasePlanes(true)`) | 3平面すべて |
    * | 基準平面へのスケッチ中 | その平面 + それに直交する軸 |
-   *
-   * **任意面へのスケッチ中はスコープ外**なので通常(XY+Z軸)へ落とす。後続タスクは
-   * `sketchGridFrame` をそのまま1枚のグリッドへ渡せばよい —— `planeGrid.ts` は
-   * 基準平面かどうかを知らない。
+   * | 任意面へのスケッチ中 | その面のframeのグリッドのみ(直交軸なし。本人指定) |
    *
    * 対象待ちを3平面のままにするのは、基準平面も**クリックして指す**から
    * (engine `duocad-sketch-start-is-two-steps-by-pointing`)。ここでXZ/YZを隠すと
@@ -1143,18 +1170,46 @@ export function createViewport(container: HTMLElement): Viewport {
     if (basePlanesOn) {
       return {
         planes: [
-          { name: 'XY', frame: baseFrame('XY'), uColor: AXIS_X_COLOR, vColor: AXIS_Y_COLOR },
-          { name: 'XZ', frame: baseFrame('XZ'), uColor: null, vColor: AXIS_Z_COLOR },
-          { name: 'YZ', frame: baseFrame('YZ'), uColor: null, vColor: null },
+          { name: 'XY', frame: baseFrame('XY'), uColor: AXIS_X_COLOR, vColor: AXIS_Y_COLOR, extent: gridExtent, depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid },
+          { name: 'XZ', frame: baseFrame('XZ'), uColor: null, vColor: AXIS_Z_COLOR, extent: gridExtent, depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid },
+          { name: 'YZ', frame: baseFrame('YZ'), uColor: null, vColor: null, extent: gridExtent, depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid },
         ],
         axis: null,
       }
     }
     const sketchPlane = sketchGridFrame === null ? null : basePlaneForFrame(sketchGridFrame)
+    if (sketchGridFrame !== null && sketchPlane === null) {
+      // 任意面(3基準平面のいずれでもない)へのスケッチ中。その面のframeへそのまま乗せる ——
+      // 原点・u/v軸はスケッチ平面のもの(完了条件4)。直交軸は出さない(完了条件3・本人指定)。
+      // 貼り付けた面(A群のソリッド)と完全同一平面になるので、バイアスの層番号は別枠
+      // (`sketchFaceGrid`)を使う([[duocad-depth-overlay-rule]] B群・タスク指示)。
+      return {
+        planes: [
+          {
+            name: 'sketch-face',
+            frame: sketchGridFrame,
+            uColor: null,
+            vColor: null,
+            extent: sketchGridExtent,
+            depthBiasLayer: DEPTH_BIAS_LAYER.sketchFaceGrid,
+          },
+        ],
+        axis: null,
+      }
+    }
     const name: BasePlaneName = sketchPlane ?? 'XY'
     const axes = BASE_PLANE_AXES[name]
     return {
-      planes: [{ name, frame: baseFrame(name), uColor: axes.uColor, vColor: axes.vColor }],
+      planes: [
+        {
+          name,
+          frame: baseFrame(name),
+          uColor: axes.uColor,
+          vColor: axes.vColor,
+          extent: null,
+          depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid,
+        },
+      ],
       axis: axes.outOfPlane,
     }
   }
@@ -1245,17 +1300,26 @@ export function createViewport(container: HTMLElement): Viewport {
       grid.setColor(color)
       // **指せるときだけピック範囲で切る**(「見えるもの＝指せるもの」)。指せない
       // 装飾のときは無限 —— 3枚を無限に重ねると画面が線で埋まって何も読めなくなる、
-      // という実測もある(2026-09-03のスクリーンショット確認)。
-      grid.setExtent(basePlanesOn ? gridExtent : null)
+      // という実測もある(2026-09-03のスクリーンショット確認)。任意面のスケッチ平面は
+      // 指せる対象ではないが、面の外接範囲の外まで無限に伸びると画面を横切って見えるので
+      // (タスク仕様)、`spec.extent`(`faceUvExtent` の目安)で切る。
+      grid.setExtent(spec.extent)
+      // 任意面は貼り付けた面と同一平面になるので、バイアスの層番号を別枠にする
+      // (`desiredGridPlanes` が選ぶ)。他の状態は従来どおり `planeGrid` のまま。
+      grid.setDepthBias(spec.depthBiasLayer * DEPTH_BIAS_UNIT)
       grid.setVisible(true)
     })
     gridPlanesShown = wanted.planes.map((spec) => spec.name)
     rebuildGridAxisLine(wanted.axis)
   }
 
-  /** スケッチ平面のframeを差し替える(モード外は null)。表示する平面がこれで決まる。 */
-  function setGridSketchFrame(frame: PlaneFrame | null): void {
+  /**
+   * スケッチ平面のframeを差し替える(モード外は null)。表示する平面がこれで決まる。
+   * `extent` は任意面のときだけ効く(基準平面・モード外は `desiredGridPlanes` が無視する)。
+   */
+  function setGridSketchFrame(frame: PlaneFrame | null, extent: number | null): void {
     sketchGridFrame = frame
+    sketchGridExtent = extent
     applyGridPlanes()
   }
 
@@ -2329,6 +2393,43 @@ export function createViewport(container: HTMLElement): Viewport {
     return { center, normal }
   }
 
+  /**
+   * 貼った面の外接範囲を、スケッチのframe(u,v)で測る(`setExtent` へ渡す目安)。
+   * 1-2-5の丸め(`snap125`。`gridScale.ts`)は基準平面のピック範囲と使い回すが、
+   * **`extentFor` はそのまま使わない** —— あれの `BASE_EXTENT`(100mm)下限は
+   * 「空の文書でもこれより狭くしない」という文書スケールの前提で、面のframeの原点は
+   * 面の中心ではなく**面の隅(OCCTのUVパラメータ化の原点)のことが多い**。実測で
+   * 40×20mmの面に対して`extentFor`が100mmを返し、面の何倍もの大きさでグリッドが
+   * 描かれて背景が線で埋まる破綻を起こした(スクリーンショットで発見)。ここでは
+   * 面が小さければ小さいなりの範囲にする。
+   *
+   * 見つからなければ `null`(=無限のまま描く。面が消えた・非表示等で測れないときに
+   * 装飾が消えるより、広めに描いて残る方が安全)。**面の実際の輪郭では切らない**
+   * (タスク仕様 —— トリム境界のマスクはステンシルが要り費用に見合わない)。
+   */
+  function faceUvExtent(bodyId: string, faceIndex: number, frame: PlaneFrame): number | null {
+    const mesh = allFaceMeshes.find(
+      (candidate) => candidate.userData.bodyId === bodyId && candidate.userData.faceIndex === faceIndex,
+    )
+    if (!mesh) return null
+    const position = mesh.geometry.getAttribute('position') as THREE.BufferAttribute
+    if (!position || position.count === 0) return null
+    const origin = new THREE.Vector3(...(frame.origin as [number, number, number]))
+    const axisU = new THREE.Vector3(...(frame.u as [number, number, number])).normalize()
+    const axisV = new THREE.Vector3(...(frame.v as [number, number, number])).normalize()
+    const rel = new THREE.Vector3()
+    let maxU = 0
+    let maxV = 0
+    for (let i = 0; i < position.count; i++) {
+      rel.set(position.getX(i), position.getY(i), position.getZ(i)).sub(origin)
+      maxU = Math.max(maxU, Math.abs(rel.dot(axisU)))
+      maxV = Math.max(maxV, Math.abs(rel.dot(axisV)))
+    }
+    const reach = Math.max(maxU, maxV)
+    if (!(reach > 0)) return null
+    return snap125(reach * 1.2)
+  }
+
   /** 荷重の大きさのラベル(canvasテクスチャの札)。**モデルの大きさへ追随**させる
    *  (`height` は呼び出し側が `contentDiagonal` から決める)。 */
   function makeMagnitudeLabel(
@@ -3136,6 +3237,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
   interface SketchScene {
     frame: SketchDraw['frame']
+    plane: SketchDraw['plane']
     objects: THREE.Object3D[]
     disposables: Array<{ dispose(): void }>
     /** 領域のメッシュ(ピック対象)。 */
@@ -3307,6 +3409,7 @@ export function createViewport(container: HTMLElement): Viewport {
       }
       sketches.set(entry.sketchId, {
         frame: entry.frame,
+        plane: entry.plane,
         objects,
         disposables,
         regionMeshes,
@@ -3352,7 +3455,12 @@ export function createViewport(container: HTMLElement): Viewport {
    */
   function refreshGridSketchFrame(): void {
     const target = activeSketchId === null ? undefined : sketches.get(activeSketchId)
-    setGridSketchFrame(target?.frame ?? null)
+    const frame = target?.frame ?? null
+    const extent =
+      frame !== null && target !== undefined && target.plane.kind === 'face'
+        ? faceUvExtent(target.plane.bodyId, target.plane.faceIndex, frame)
+        : null
+    setGridSketchFrame(frame, extent)
   }
 
   function clearGhost(): void {
@@ -4211,6 +4319,9 @@ export function createViewport(container: HTMLElement): Viewport {
         tiers: TIERS.map((step, index) => ({ step, alpha: gridTierAlphaValues[index] })),
         planes: [...gridPlanesShown],
         axis: gridAxisShown,
+        sketchFaceExtent: sketchGridFrame !== null && basePlaneForFrame(sketchGridFrame) === null
+          ? sketchGridExtent
+          : null,
       }
     },
     setFov,
