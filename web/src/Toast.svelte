@@ -116,16 +116,17 @@
 </div>
 
 <style>
-  /* ビューポートの右上に浮かせる。`.main` が位置の基準(styles.css で position:relative)。
-     右サイドバーの幅は `--sidebar-w` が正 —— ここに 300px を書き写すと、幅を変えた日に
+  /* ビューポートの右下に浮かせる。`.main` が位置の基準(styles.css で position:relative)。
+     右サイドバー(AIパネル)の幅は `--sidebar-w` が正 —— ここに 300px を書き写すと、幅を変えた日に
      トーストだけサイドバーの下へ潜る。 */
   .toasts {
     position: absolute;
-    top: 12px;
+    bottom: 12px;
     right: calc(var(--sidebar-w) + 16px);
     z-index: 20;
     display: flex;
-    flex-direction: column;
+    /* 新しい札をコーナー側(下)に置く。column-reverseなので配列の先頭(最新)が一番下に来る。 */
+    flex-direction: column-reverse;
     gap: 6px;
     width: 360px;
     max-width: 40%;
