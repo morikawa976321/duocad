@@ -29,6 +29,16 @@
 代わりに、**除外が保持を食っているケース**(塊から引いた結果、保持ソリッドが塊に入らなくなる)は
 保持のはみ出しとして現れ、`DesignSpaceTooSmallError` になる。文面でその可能性を名指しする。
 
+## 拘束と荷重がひと続きかを見る(連結性ガード)
+
+塊から除外ソリッドを引いた結果、**拘束面と荷重面が別々の連結成分に落ちる**ことがある。そのまま
+最適化に通しても**多くの場合エラーは出ない** —— 空要素も剛性の下限 `emin` を持つので行列は
+特異にならず残差検算も通り、最後まで走って STL が出る(実測は6配置中4配置。残り2配置は OC 更新の
+中で `ZeroDivisionError`。README「切れている塊をそのまま最適化に通すと何が起きるか」)。
+利用者は塊を見ないので、何が起きたか気づく手段が無い。だから `derive` が**つながりを確認してから返す**
+(`assert_faces_connected` → `DesignSpaceDisconnectedError`)。連結性の定義は **6近傍**
+(`NEIGHBOURHOOD`)で、理由はその定数のところに書いてある。
+
 ## 格子の外は誰も見ていない
 
 `voxelize` のはみ出し判定は**格子の内側しか見ていない** —— 保持ソリッドが格子の外へ出た分は
@@ -48,6 +58,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 import numpy as np
+from scipy import ndimage
 
 import anchor as an
 import voxelize as vx
@@ -67,6 +78,160 @@ class DesignSpaceTooSmallError(vx.OutsideDesignSpaceError):
     `except vx.OutsideDesignSpaceError` はそのまま効く。**案1では余白を上げるのが正しい直し方**
     なので、文面でそれを名指しする(汎用の文面は「座標系・単位が違う」を疑わせて誤誘導する)。
     """
+
+
+class DesignSpaceDisconnectedError(ValueError):
+    """塊の中で拘束面と荷重面がひと続きになっていない(壁と荷重をつなぐ道が無い)。
+
+    **`DesignSpaceTooSmallError` とは別の型にしてある。** あちらは「余白を上げろ」と言う文面で、
+    分断には効かない直し方を指す —— 分断の直し方は除外ソリッドを削るか条件を置き直すことで、
+    余白を上げても塞がれた道は開かない。`ValueError` の派生なので既存の `except ValueError` は
+    そのまま効く。
+
+    `components`(塊の連結成分の数)/ `fixed_labels` / `load_labels` を属性で持つので、
+    呼び出し側は文面を読まずに機械で分岐できる。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        components: int = 0,
+        fixed_labels: Sequence[int] = (),
+        load_labels: Sequence[int] = (),
+    ) -> None:
+        super().__init__(message)
+        self.components = int(components)
+        self.fixed_labels = [int(v) for v in fixed_labels]
+        self.load_labels = [int(v) for v in load_labels]
+
+
+# ---------------------------------------------------------------------------
+# 連結性(拘束↔荷重の道)
+# ---------------------------------------------------------------------------
+# **連結性は 6近傍(面で接する)で定義する。** 26近傍にすると、角1点・稜1本だけで触れている
+# 2つの島を「つながっている」と数える。構造格子の六面体要素では、角で触れた2要素が共有するのは
+# 節点1つだけで、それは回転を止められないピン接合(機構)にしかならない —— 力の道としては
+# 成立しないので、26近傍で見るとこの検査は「切れていない」と言い張りながら宙に浮いた形を通す。
+# 検査[10]がこの定義と実装が一致していることを、角1点で接する2島で見張る。
+NEIGHBOURHOOD = 6
+_RANK_OF_NEIGHBOURHOOD = {6: 1, 18: 2, 26: 3}
+
+
+def element_components(
+    design: np.ndarray, *, neighbourhood: int = NEIGHBOURHOOD
+) -> tuple[np.ndarray, int]:
+    """塊の連結成分。`(labels, n)` を返す(`labels == 0` は塊の外)。
+
+    `neighbourhood` は連結性の定義で、**塊のガードは常に 6近傍**(`NEIGHBOURHOOD`)。
+    18/26 を受けるのは「定義を変えると答えが変わる」ことを検査で見せるためだけの口で、
+    導出の経路からは 6 以外を渡さない。
+    """
+    mask = np.asarray(design, dtype=bool)
+    if mask.ndim != 3:
+        raise ValueError(f"design は3次元の配列であること(いま shape={mask.shape})")
+    try:
+        rank = _RANK_OF_NEIGHBOURHOOD[int(neighbourhood)]
+    except KeyError:
+        raise ValueError(
+            f"neighbourhood は {sorted(_RANK_OF_NEIGHBOURHOOD)} のいずれか(いま {neighbourhood!r})"
+        ) from None
+    labels, count = ndimage.label(mask, structure=ndimage.generate_binary_structure(3, rank))
+    return labels, int(count)
+
+
+def assert_load_path(
+    design: np.ndarray,
+    fixed_elements: np.ndarray,
+    load_elements: np.ndarray,
+) -> dict:
+    """**塊の中で拘束側と荷重側が同じ連結成分にいることを確かめる。** 違えば例外。
+
+    **切れていても最適化は落ちてくれない。** 空要素も剛性の下限 `emin` を持つので行列は特異に
+    ならず、`simp` の残差検算も通る。実測では6配置中4配置が60反復を走り切って STL まで出し、
+    出てきたのは**拘束側と荷重側が別々に浮いた形**だった(材料は3〜4個の島に割れ、両者は一度も
+    同じ島に入らない)。残り2配置は OC 更新の中で `ZeroDivisionError` になるが、その文面には
+    設計空間も連結性も出てこない。利用者は塊を見ないので
+    (engine `topopt-design-space-never-shown-to-the-user`)どちらも気づく手段が無い。
+    **だから塊を組み立てる側で落とす。** 数字は README。
+
+    `fixed_elements` / `load_elements` は要素マスク(`AnchorTable.element_mask`)。
+    **塊の外にはみ出した分は落として数える** —— 除外ソリッドが拘束面のすぐ外側を削っていると、
+    アンカー要素の一部は塊の外に立つ。道になるのは塊の中の要素だけ。
+    """
+    mask = np.asarray(design, dtype=bool)
+    fixed = np.asarray(fixed_elements, dtype=bool)
+    load = np.asarray(load_elements, dtype=bool)
+    for name, arr in (("fixed_elements", fixed), ("load_elements", load)):
+        if arr.shape != mask.shape:
+            raise ValueError(f"{name} のかたち {arr.shape} が塊 {mask.shape} と違う")
+
+    labels, count = element_components(mask)
+    sizes = np.bincount(labels.ravel(), minlength=count + 1)
+    fixed_labels = sorted(int(v) for v in np.unique(labels[fixed & mask]) if v != 0)
+    load_labels = sorted(int(v) for v in np.unique(labels[load & mask]) if v != 0)
+    shared = sorted(set(fixed_labels) & set(load_labels))
+    report = {
+        "neighbourhood": NEIGHBOURHOOD,
+        "components": count,
+        "component_sizes": [int(sizes[i]) for i in range(1, count + 1)],
+        "design_elements": int(np.count_nonzero(mask)),
+        "fixed_elements": int(np.count_nonzero(fixed & mask)),
+        "load_elements": int(np.count_nonzero(load & mask)),
+        "fixed_labels": fixed_labels,
+        "load_labels": load_labels,
+        "shared_labels": shared,
+    }
+    where = (
+        f"塊の連結成分は {count} 個(要素数 {report['component_sizes']}、{NEIGHBOURHOOD}近傍で判定)。"
+        f"拘束側は成分 {fixed_labels or '無し'} / 荷重側は成分 {load_labels or '無し'} にいる。"
+    )
+    if not fixed_labels or not load_labels:
+        missing = "拘束側" if not fixed_labels else "荷重側"
+        raise DesignSpaceDisconnectedError(
+            f"{missing}のアンカー要素が塊の中に1つも無い。{where}"
+            "除外ソリッドが条件面を削っていないか確認すること"
+            "(削られた面には材料が付けられないので、荷重も拘束も伝わらない)。",
+            components=count,
+            fixed_labels=fixed_labels,
+            load_labels=load_labels,
+        )
+    if not shared:
+        raise DesignSpaceDisconnectedError(
+            f"拘束面と荷重面が塊の中でつながっていない。{where}"
+            "共通の成分が1つも無いので、壁と荷重をつなぐ道が塊に存在しない。"
+            "除外ソリッドが両者の間を塞いでいないか、条件面の位置を確認すること"
+            "(このまま最適化に通すと、多くの場合エラーも警告も出ないまま"
+            "拘束側と荷重側が別々に浮いた形が出る)。",
+            components=count,
+            fixed_labels=fixed_labels,
+            load_labels=load_labels,
+        )
+    return report
+
+
+def assert_faces_connected(
+    design: np.ndarray,
+    table: an.AnchorTable,
+    fixed_face: int,
+    load_face: int,
+    *,
+    layers: int = 1,
+) -> dict:
+    """拘束面・荷重面のアンカー要素で `assert_load_path` を呼ぶ。
+
+    `layers=1` は `anchor.run_pipeline` が ρ=1 に固定する範囲(`keep_layers` の既定)と同じ。
+    **節点が1つも付かなかった条件面があるときは連結性を見ない** —— それは
+    「要素サイズより小さい面にアンカーが付かない」という別の穴(engine
+    `face-to-node-anchoring-loses-faces-smaller-than-the-cell`)で、ここで落とすと
+    `empty_faces()` を見る既存の口より手前で別の例外に化けて原因が分かりにくくなる。
+    """
+    empty = [int(f) for f in (fixed_face, load_face) if int(f) in table.empty_faces()]
+    if empty:
+        return {"skipped": "empty_anchor_faces", "empty_faces": empty}
+    fixed = table.element_mask([int(fixed_face)], layers=layers)
+    load = table.element_mask([int(load_face)], layers=layers)
+    return assert_load_path(design, fixed, load)
 
 
 @dataclass(frozen=True)
@@ -310,8 +475,28 @@ def derive(
             getattr(exc, "outside", {}),
         ) from exc
 
+    # **つながりを確認してから返す。** 拘束面と荷重面が塊の中でひと続きでなければ、壁と荷重を
+    # つなぐ道が塊に存在しない。切れていても SIMP は落ちない(実測は README「切れている塊を
+    # そのまま最適化に通すと何が起きるか」)ので、ここで落とさないと誰も気づけない。
+    #
+    # **順序**: 契約(前タスク)は「格子外ガードより前」に置けと書いているが、
+    # `model_from_design_mask`(= 保持が塊に入っているかの確認)の**後**に置いてある。除外が
+    # 保持を食っている配置では「保持がはみ出している」ほうが原因に近い診断で、順序を入れ替えると
+    # その配置が `DesignSpaceDisconnectedError` に化けて `check_design_space.py` の検査[6]が
+    # 別の例外を受け取る。**この行を上へ動かすと検査[6]が落ちる。**
+    #
+    # アンカーの表は `run_pipeline` と同じ作り方(全面・既定の半径)で作る。`faces=` で2面に
+    # 絞ると稜線の規則(節点は最も面積を配った面が持つ)の競争相手が減り、**向こうとは別の
+    # 節点集合**になる —— 同じものを見ているつもりで違うものを見ることになる。
+    table = an.build_anchors(soup, grid)
+    connectivity = assert_faces_connected(
+        design, table, conditions.fixed_face, conditions.load_face
+    )
+
     stats = {
         "seconds": 0.0,
+        "connectivity": connectivity,
+        "anchor_seconds": float(table.stats["seconds"]),
         "margin_ratio": ratio,
         "margin": float(margin),
         "deviation": dev,
@@ -419,6 +604,30 @@ def demo_conditions(angle_deg: float = 0.0) -> Conditions:
     fixed = _rotated_face(soup, angle_deg, normal=(-1, 0, 0), point=(-33, 0, 0))
     load = _rotated_face(soup, angle_deg, normal=(0, 0, 1), point=(26, 0, 18))
     return Conditions(keep=keep, fixed_face=fixed, load_face=load, obstacle=obstacle)
+
+
+def severed_conditions(angle_deg: float = 0.0, *, thickness: float = 10.0) -> Conditions:
+    """`demo_conditions` の除外ソリッドを、**拘束と荷重の間を丸ごと塞ぐ壁**に差し替えた配置。
+
+    受入検査[10]と README の実測(切れている系をそのまま最適化に通す)が共有する題材。
+    壁は2つのパッドの間(x=0)に立て、y/z 方向は塊よりずっと大きく取る —— 塊の断面を端まで
+    塞がないと、**縁を回り込む道が残って「切れている」配置にならない**(既定の余白比率 0.25 で
+    塊は y -28..28 / z -28..34 程度なので、±100 あれば余白比率を振っても足りる)。
+
+    `thickness` は壁の厚み[mm]。**要素サイズより十分厚くすること** —— 要素中心が壁に入らないと
+    塊が1要素も削れず、塞いだつもりの配置がつながったまま通る。
+    """
+    from build123d import Box, Pos, Rot
+
+    base = demo_conditions(angle_deg)
+    wall = Rot(0, 0, float(angle_deg)) * (Pos(0, 0, 0) * Box(float(thickness), 200, 200))
+    return Conditions(
+        keep=base.keep,
+        fixed_face=base.fixed_face,
+        load_face=base.load_face,
+        obstacle=wall,
+        anchor_shape=base.anchor_shape,
+    )
 
 
 def _rotated_face(

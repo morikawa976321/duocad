@@ -37,6 +37,16 @@
 8. **除外ソリッドが引かれている** — 除外の領域に塊の要素が1つも無いことを、除外の占有を
    独立に計算し直して見る。**除外は点群に入らない**(遠くに足しても外接直方体が動かない)。
 9. **余白を外すと壊れる** — 比率を下げていくと必ず壊れる比率がある。既定値はそこから離れている。
+
+[10] の構成(連結性ガード。タスク `20260903-2235`):
+
+10. **拘束と荷重が塊の中でひと続きか** — 正常系が通る / 拘束と荷重の間を除外ソリッドで
+    断ち切ると `DesignSpaceDisconnectedError`(文面に成分数と両者の成分が出る。
+    `DesignSpaceTooSmallError` ではない)/ 塊を直接2つの島にすると落ちる /
+    **角1点だけで接している2島は落ちる**(6近傍の定義が実装と一致していることの検査。
+    26近傍なら1成分になることを同じコードで見せる)/ 片側のアンカー要素が塊に無い場合も落ちる。
+    **変異検査は2つ**: `derive` の呼び出しを外す(10-2 が素通り)/ `assert_load_path` の
+    判定を外す(10-2・10-3・10-4 が素通り)。README「変異検査」に結果がある。
 """
 
 from __future__ import annotations
@@ -750,10 +760,158 @@ def check_case1_margin_is_load_bearing() -> None:
     RESULTS["case1_margin_verdicts"] = [[float(r), v] for r, v in verdicts]
 
 
+# ===========================================================================
+# 連結性ガード: 塊の中で拘束と荷重がひと続きか
+#   タスク 20260903-2235。**変異検査で検出力を確認してある**(README「変異検査」)。
+# ===========================================================================
+def _two_islands(shape=(10, 6, 6)):
+    """x 方向に隙間を空けた2つの島。拘束は左の島、荷重は右の島に置く。
+
+    **導出ロジックを経由しない直接入力。** 塊を bool マスクで与えられる口(検査[1])があるので、
+    連結性の判定そのものを、答えが手で分かっているマスクで突ける。
+    """
+    design = np.zeros(shape, dtype=bool)
+    design[0:4] = True
+    design[6:10] = True  # x=4,5 が空 → 6近傍でも26近傍でも2成分
+    fixed = np.zeros(shape, dtype=bool)
+    fixed[0, 0, 0] = True
+    load = np.zeros(shape, dtype=bool)
+    load[9, 5, 5] = True
+    return design, fixed, load
+
+
+def _corner_touch(shape=(8, 8, 8)):
+    """**角1点だけで接している2つの島。** 6近傍なら2成分、26近傍なら1成分になる。
+
+    要素 (3,3,3) と (4,4,4) が共有するのは節点1つだけ。構造としてはピン接合(機構)で、
+    力の道にはならない —— だから 6近傍で判定する。
+    """
+    design = np.zeros(shape, dtype=bool)
+    design[0:4, 0:4, 0:4] = True
+    design[4:8, 4:8, 4:8] = True
+    fixed = np.zeros(shape, dtype=bool)
+    fixed[0, 0, 0] = True
+    load = np.zeros(shape, dtype=bool)
+    load[7, 7, 7] = True
+    return design, fixed, load
+
+
+def check_case1_connectivity() -> None:
+    print("\n[10] 連結性: 塊の中で拘束面と荷重面がひと続きか")
+    _cond, space = case1_space()
+
+    # --- 10-1 正常系が通る ------------------------------------------------
+    report = space.stats.get("connectivity", {})
+    check(
+        "正常系(案1の導出)で例外が上がらず、拘束と荷重が同じ連結成分にいる",
+        bool(report.get("shared_labels"))
+        and report.get("components") == 1
+        and report.get("neighbourhood") == ds.NEIGHBOURHOOD,
+        f"{report}",
+    )
+    check(
+        "検査が自明に通っていない(両側のアンカー要素が塊の中に実際にある)",
+        int(report.get("fixed_elements", 0)) > 0 and int(report.get("load_elements", 0)) > 0,
+        f"拘束側 {report.get('fixed_elements')} 要素 / 荷重側 {report.get('load_elements')} 要素",
+    )
+
+    # --- 10-2 除外ソリッドで塞ぐと落ちる ----------------------------------
+    raised = None
+    try:
+        ds.derive(ds.severed_conditions(0.0), elements_long_axis=CASE1_LONG_AXIS)
+    except ds.DesignSpaceDisconnectedError as e:
+        raised = e
+    check(
+        "拘束と荷重の間を除外ソリッドで断ち切ると例外になる",
+        raised is not None,
+        f"{type(raised).__name__ if raised else '例外が上がらなかった'}",
+    )
+    if raised is not None:
+        check(
+            "文面に成分の数と、拘束側/荷重側がどの成分にいるかが出る",
+            "連結成分は 2 個" in str(raised)
+            and raised.components == 2
+            and raised.fixed_labels
+            and raised.load_labels
+            and not set(raised.fixed_labels) & set(raised.load_labels),
+            f"成分{raised.components} 拘束={raised.fixed_labels} 荷重={raised.load_labels} / "
+            f"{str(raised)[:90]}",
+        )
+        # **型を分けてあることを見る。** `DesignSpaceTooSmallError` は「余白を上げろ」と言う
+        # 文面で、分断には効かない直し方を指す(余白を上げても塞がれた道は開かない)。
+        check(
+            "分断は DesignSpaceTooSmallError ではない(余白を上げろと誤誘導しない)",
+            not isinstance(raised, ds.DesignSpaceTooSmallError)
+            and isinstance(raised, ValueError),
+            f"{type(raised).__mro__[1].__name__} を継承 / "
+            f"「margin_ratio」を含む={('margin_ratio' in str(raised))}",
+        )
+    # 対照: 同じ条件から壁だけを外すと通る(落ちた原因が壁であることの裏取り)。
+    check(
+        "壁を外すと同じ条件が通る(落とした原因が除外ソリッドの壁であることの裏取り)",
+        ds.derive(ds.demo_conditions(0.0), elements_long_axis=CASE1_LONG_AXIS).stats[
+            "connectivity"
+        ]["components"]
+        == 1,
+        "壁なしの demo_conditions は1成分",
+    )
+
+    # --- 10-3 塊を直接2つの島にすると落ちる -------------------------------
+    design, fixed, load = _two_islands()
+    check(
+        "塊を直接2つの島にして渡すと例外(導出ロジックを経由しない直接入力)",
+        _raises(ds.assert_load_path, ds.DesignSpaceDisconnectedError, design, fixed, load),
+        f"{design.shape} の塊を x=4,5 で切った",
+    )
+    joined = design.copy()
+    joined[4:6] = True  # 隙間を埋める
+    ok_report = ds.assert_load_path(joined, fixed, load)
+    check(
+        "隙間を埋めると同じ入力が通る(検査3が構造的に落ちているのではない)",
+        ok_report["components"] == 1 and ok_report["shared_labels"] == [1],
+        f"{ok_report['components']} 成分 / 共通 {ok_report['shared_labels']}",
+    )
+
+    # --- 10-4 6近傍と26近傍の違いが効いている ------------------------------
+    corner, c_fixed, c_load = _corner_touch()
+    n6 = ds.element_components(corner, neighbourhood=6)[1]
+    n26 = ds.element_components(corner, neighbourhood=26)[1]
+    check(
+        "足場: 角1点だけで接する2島は 6近傍で2成分・26近傍で1成分",
+        n6 == 2 and n26 == 1,
+        f"6近傍 {n6} 成分 / 26近傍 {n26} 成分",
+    )
+    check(
+        "角1点で接しているだけの配置は落ちる(明文化した 6近傍の定義と実装が一致している)",
+        ds.NEIGHBOURHOOD == 6
+        and _raises(
+            ds.assert_load_path, ds.DesignSpaceDisconnectedError, corner, c_fixed, c_load
+        ),
+        f"NEIGHBOURHOOD={ds.NEIGHBOURHOOD}",
+    )
+
+    # --- 10-5 アンカー要素が塊の中に1つも無い場合も落ちる ------------------
+    empty_side = np.zeros_like(design)
+    check(
+        "片側のアンカー要素が塊の中に1つも無い場合も落ちる(黙って通さない)",
+        _raises(ds.assert_load_path, ds.DesignSpaceDisconnectedError, joined, fixed, empty_side),
+        "荷重側のアンカー要素が0個",
+    )
+
+    RESULTS["connectivity_neighbourhood"] = int(ds.NEIGHBOURHOOD)
+    RESULTS["case1_connectivity"] = {
+        "components": report.get("components"),
+        "fixed_elements": report.get("fixed_elements"),
+        "load_elements": report.get("load_elements"),
+    }
+    if raised is not None:
+        RESULTS["severed_components"] = int(raised.components)
+
+
 def main() -> int:
     print("=" * 72)
     print("check_design_space.py : 塊(設計空間)の受入検査")
-    print("  [1]-[4] 塊と面アンカーの対象ソリッドの分離 / [5]-[9] 案1(外接直方体+余白)")
+    print("  [1]-[4] 分離 / [5]-[9] 案1(外接直方体+余白) / [10] 連結性ガード")
     print("=" * 72)
     # **1件が例外で落ちても残りを走らせる。** 実装を壊したときに最初の1件で止まると、
     # 何がどこまで壊れているかが1周では分からない(`check()` と同じ方針を関数の粒度でも取る)。
@@ -767,6 +925,7 @@ def main() -> int:
         check_case1_anchors_not_empty,
         check_case1_obstacle,
         check_case1_margin_is_load_bearing,
+        check_case1_connectivity,
     ):
         try:
             section()

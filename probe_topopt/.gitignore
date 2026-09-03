@@ -2,3 +2,7 @@
 # 設定を変えるたびに全部差し替わるのでリポジトリには入れない(README「ファイル」節)。
 output/design_space_rot*.stl
 output/design_space_margin*.stl
+
+# 連結性ガードの実測(切れている塊をそのまま最適化に通す。README「切れている塊をそのまま
+# 最適化に通すと何が起きるか」)が書き出すSTL。受入検査は書き出さない。
+output/severed_*.stl
