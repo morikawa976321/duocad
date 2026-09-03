@@ -3792,8 +3792,14 @@ export function createViewport(container: HTMLElement): Viewport {
     }
     const previous = camera.position.distanceTo(controls.target)
     const distance = radius > 0 ? Math.max(fitDistance(radius * SKETCH_FIT_MARGIN), 1) : Math.max(previous, 1)
-    // 上方向を平面のv軸に合わせる(そうしないと真上から見たときに回転が不定になる)
-    camera.up.set(...(frame.v as [number, number, number]))
+    // 上方向はビューキューブと同じ規則(`upForDirection`)で決める。ほとんどの平面では
+    // WORLD_UPのまま変わらない —— `OrbitControls`は生成時に焼いたZ軸を回転の極として
+    // 使い続ける(`WORLD_UP`の説明参照)ので、camera.upをそこから逸らすとキューブの見た目
+    // (`cubeCamera.up`がcamera.upをそのまま写す)と実際の回転軸がずれ、スケッチ中だけ
+    // ビューキューブの動きがおかしくなっていた。`frame.v`を直接使っていたのが原因
+    // (基準平面のXZ/YZはたまたまv=Zで無害だったが、任意面やXY平面ではvがZからずれる)。
+    // 真上・真下に近い面(cube側の上面図/底面図と同じ閾値)だけ±Yへ差し替わる。
+    camera.up.set(...upForDirection([normal.x, normal.y, normal.z]))
     camera.position.copy(center).add(normal.multiplyScalar(distance))
     controls.target.copy(center)
     // 正投影は距離では寄れない(`frameToContent` と同じ理由)。描いてあるものが無いときは
@@ -4326,10 +4332,36 @@ export function createViewport(container: HTMLElement): Viewport {
     renderer.autoClear = true
   }
 
+  /**
+   * 毎フレーム、いまの視線方向に合わせて`camera.up`を引き直す。
+   *
+   * `OrbitControls`は生成時に焼いた軸(`WORLD_UP`)だけを回転の極として使うので、
+   * 位置そのものの計算は`camera.up`の値に影響されない —— が、`controls.update()`が
+   * 最後に呼ぶ`object.lookAt()`は**そのときの`camera.up`**でロール(傾き)を決める。
+   * ビューキューブの上面図/底面図クリック(`upForDirection`)も`lookAtSketch`も、
+   * 極(真上/真下)付近の縮退を避けるために一時的に`camera.up`をYへ傾けるが、
+   * 従来はそこから離れても誰も戻していなかった —— 傾いたままの`up`で`lookAt`し続け、
+   * 「キューブの上面をクリックしてから回すと絵が転がる」形で見えた(2026-09-03本人報告)。
+   *
+   * 対策は「今の視線方向にとって正しいupを毎フレーム置き直す」こと。キューブのクリック
+   * スナップ中(`cubeSnap !== null`)は`stepCubeSnap`自身がupを滑らかに補間しているので
+   * ここでは触らない —— `upForDirection`は閾値0.99の階段関数なので、アニメの途中で
+   * 上書きすると補間中にupが跳ねる。
+   */
+  function syncCameraUp(): void {
+    if (cubeSnap !== null) return
+    const offset = camera.position.clone().sub(controls.target)
+    if (offset.lengthSq() < 1e-12) return // 退化(注視点に重なる)
+    offset.normalize()
+    camera.up.set(...upForDirection([offset.x, offset.y, offset.z]))
+    camera.lookAt(controls.target)
+  }
+
   function tick(): void {
     if (!alive) return
     stepCubeSnap(performance.now())
     controls.update()
+    syncCameraUp()
     // **描画ループで見る**(`OrbitControls` の 'change' ではない) —— 減衰つきのドリーは
     // イベントが止まった後も数十フレーム動き続けるので、「止まったか」はフレーム側でしか
     // 分からない。中身は算術数本で、当たったときだけ作り直しが走る。
