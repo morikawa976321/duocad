@@ -1,5 +1,5 @@
 /**
- * **ある平面frame(原点・u軸・v軸)を受け取って、その面に無限のグリッドを描くもの。**
+ * **ある平面frame(原点・u軸・v軸)を受け取って、その面にグリッドを描くもの。**
  *
  * XY床はこの仕組みの一利用者にすぎない —— 呼び出し元が渡す `frame` を差し替えれば、
  * 基準平面でも任意面でも同じコードが同じように描く。
@@ -32,7 +32,7 @@
  */
 import * as THREE from 'three'
 
-import { FADE_FULL, FADE_MIN, TIERS } from './gridScale'
+import { FADE_FULL, FADE_MIN, TIERS, type UvBounds } from './gridScale'
 
 /** 平面の枠。`p = origin + u * uAxis + v * vAxis`(コアが配る `SketchFrame` と同じ規則)。 */
 export interface PlaneFrame {
@@ -79,7 +79,8 @@ uniform vec3 uAxisColorU;
 uniform vec3 uAxisColorV;
 uniform vec2 uAxisOn;
 uniform float uDepthBias;
-uniform float uExtent;
+uniform vec2 uBoundsCenter;
+uniform float uBoundsHalf;
 
 varying vec2 vNdc;
 
@@ -163,10 +164,12 @@ void main() {
     acc = over(acc, vec4(uAxisColorV, axisCoverage(uv.x, ${AXIS_HALF_WIDTH_PX.toFixed(2)})));
   }
 
-  // 指せる範囲で切る(uExtent > 0 のときだけ)。縁は距離を画素で測ってAAを付ける。
-  if (uExtent > 0.0) {
-    float edgeU = (abs(uv.x) - uExtent) / max(fwidth(uv.x), 1e-8);
-    float edgeV = (abs(uv.y) - uExtent) / max(fwidth(uv.y), 1e-8);
+  // 描く範囲(正方形)で切る。**原点対称ではなく中心を持つ** —— 面のframeの原点は
+  // 面の隅のことが多く、対称な枠だと面の片側へ大きく偏る。縁は距離を画素で測ってAAを付け、
+  // きっぱり切る(ぼかしてフェードアウトさせない。本人指定「その部分までだけ描画する」)。
+  if (uBoundsHalf > 0.0) {
+    float edgeU = (abs(uv.x - uBoundsCenter.x) - uBoundsHalf) / max(fwidth(uv.x), 1e-8);
+    float edgeV = (abs(uv.y - uBoundsCenter.y) - uBoundsHalf) / max(fwidth(uv.y), 1e-8);
     acc.a *= (1.0 - smoothstep(-0.5, 0.5, edgeU)) * (1.0 - smoothstep(-0.5, 0.5, edgeV));
   }
 
@@ -206,14 +209,13 @@ export interface PlaneGrid {
   /** 深度バイアス(クリップ空間。層番号 × 単位量)。 */
   setDepthBias(bias: number): void
   /**
-   * 描く範囲の半幅[mm](frame上の |u|・|v|)。`null` で無限。
+   * 描く正方形(frame上の中心と半径[mm])。`null` で無限。
    *
-   * **その平面が指せるときだけ範囲で切る**ためにある —— duocadの不変条件は
-   * 「見えるもの＝指せるもの」(engine `duocad-depth-overlay-rule`)で、指せる範囲の
-   * 外まで無限に描くと「見えているのに指せない」面が生まれる。装飾として出している
-   * だけのとき(スケッチ外のXY床・スケッチ中のスケッチ平面)は無限でよい。
+   * **無限は既定ではない**(2026-09-03本人決定) —— 呼び出し元は内容を一回り大きく包む
+   * 正方形(`gridScale.ts` の `boundingSquare`)を必ず渡す。`null` は「範囲が測れなかった」
+   * ときの安全側の逃げ道で、装飾が消えるより広めに描いて残す方を採るためにだけ残してある。
    */
-  setExtent(extent: number | null): void
+  setBounds(bounds: UvBounds | null): void
   setVisible(visible: boolean): void
   dispose(): void
 }
@@ -265,7 +267,8 @@ export function createPlaneGrid(): PlaneGrid {
     uAxisColorV: { value: new THREE.Color(0xffffff) },
     uAxisOn: { value: new THREE.Vector2(0, 0) },
     uDepthBias: { value: 0 },
-    uExtent: { value: 0 },
+    uBoundsCenter: { value: new THREE.Vector2(0, 0) },
+    uBoundsHalf: { value: 0 },
   }
 
   const material = new THREE.ShaderMaterial({
@@ -318,8 +321,13 @@ export function createPlaneGrid(): PlaneGrid {
     setDepthBias(bias) {
       uniforms.uDepthBias.value = bias
     },
-    setExtent(extent) {
-      uniforms.uExtent.value = extent === null ? 0 : Math.max(0, extent)
+    setBounds(bounds) {
+      if (bounds === null) {
+        uniforms.uBoundsHalf.value = 0
+        return
+      }
+      uniforms.uBoundsCenter.value.set(bounds.centerU, bounds.centerV)
+      uniforms.uBoundsHalf.value = Math.max(0, bounds.half)
     },
     setVisible(visible) {
       mesh.visible = visible

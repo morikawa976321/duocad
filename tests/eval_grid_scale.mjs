@@ -14,10 +14,13 @@ import {
   FADE_FULL,
   FADE_MIN,
   TIERS,
+  BOUNDS_MARGIN_RATIO,
+  boundingSquare,
   extentFor,
   fadeFromSpacingPx,
   mmPerPixel,
   snap125,
+  snapForSpan,
   tierAlpha,
   tierAlphas,
 } from '../web/src/gridScale.ts'
@@ -183,5 +186,64 @@ const farFromOrigin = {
   max: { x: 500, y: 500, z: 10 },
 }
 assert.equal(extentFor(farFromOrigin), 1000) // reach=500 → *1.2=600 → snap125 → 1000
+
+// ============================================================== snapForSpan(枠の縁を載せる刻み)
+assert.equal(snapForSpan(200), 100, '長辺200mm → 100mm段に載せる')
+assert.equal(snapForSpan(40), 10, '40mmの面を100mm角の枠で囲まない(面の何倍もの破綻に戻る)')
+assert.equal(snapForSpan(3), 1)
+assert.equal(snapForSpan(0), 1, '退化した入力でも最小段へ倒す')
+assert.equal(snapForSpan(-5), 1)
+assert.equal(snapForSpan(Number.NaN), 1)
+
+// ============================================================== boundingSquare(描画範囲)
+const bs = (box, includeOrigin = false) => boundingSquare(box, { includeOrigin })
+
+assert.deepEqual(
+  boundingSquare(null, { includeOrigin: true }),
+  { centerU: 0, centerV: 0, half: BASE_EXTENT },
+  '空の文書は従来どおり ±100mm',
+)
+
+// **正方形であること**と、四辺が段の倍数に載ること。
+{
+  const b = bs({ uMin: 0, uMax: 100, vMin: 0, vMax: 100 }, true)
+  const step = snapForSpan(100)
+  for (const edge of [b.centerU - b.half, b.centerU + b.half, b.centerV - b.half, b.centerV + b.half]) {
+    assert.equal(Math.round(edge / step) * step, edge, `縁 ${edge} が ${step}mm の倍数に載っていない`)
+  }
+  // 内容が縁ぴったりでも余白が付く(0..100 が枠の内側に入る)。
+  assert.ok(b.centerU - b.half < 0 && b.centerU + b.half > 100, '一回り分の余白が付いていない')
+}
+
+// **面の中心に載る**(原点対称の半幅をやめた件)。u:0-40 / v:-20-0 の面は中心(20,-10)。
+{
+  const b = bs({ uMin: 0, uMax: 40, vMin: -20, vMax: 0 })
+  assert.equal(b.centerU, 20)
+  assert.equal(b.centerV, -10)
+  assert.ok(b.half >= 20, '面を覆えていない')
+  assert.ok(b.half <= 40, '面の何倍もの大きさになっている')
+}
+
+// **原点を必ず含める**(基準平面。モデルが原点から遠くても原点が枠の外へ出ない)。
+{
+  const far = { uMin: 400, uMax: 500, vMin: 400, vMax: 500 }
+  const withOrigin = bs(far, true)
+  assert.ok(
+    withOrigin.centerU - withOrigin.half <= 0 && withOrigin.centerV - withOrigin.half <= 0,
+    '原点が枠の外へ出ている',
+  )
+  const withoutOrigin = bs(far)
+  assert.ok(withoutOrigin.half < withOrigin.half, '原点を含めない方が枠は小さいはず')
+  assert.ok(withoutOrigin.centerU > 0, '原点を含めなければ内容側に寄る')
+}
+
+// 非有限な入力は空の文書と同じ扱いへ倒す(壊れた値で画面を埋めない)。
+assert.deepEqual(bs({ uMin: 0, uMax: Number.NaN, vMin: 0, vMax: 1 }), {
+  centerU: 0,
+  centerV: 0,
+  half: BASE_EXTENT,
+})
+
+assert.ok(BOUNDS_MARGIN_RATIO > 0, '余白の比が正でない')
 
 console.log('grid scale: all assertions passed')

@@ -7,12 +7,11 @@
  * 1. **刻みと不透明度**(`TIERS` / `mmPerPixel` / `tierAlpha`)。刻みは 1/10/100mm の
  *    **絶対値で固定**で、内容の大きさでも視点でも変わらない。変わるのは段ごとの不透明度
  *    だけで、**画面上の線間隔[px]** という1つの量から1本の規則で決まる。
- * 2. **範囲**(`BASE_EXTENT` / `snap125` / `extentFor`)。**描画には使わない** ——
- *    格子はシェーダーで無限に描く。ここが決めるのは**基準平面のピック範囲**
- *    (`viewport.ts` の `basePlaneAt`)と **near/far の下限**(`updateClipPlanes`)、
- *    面外の軸線の長さである。描画を無限にしたからといってピック範囲まで無限にはしない
- *    (engine `duocad-base-planes-lose-to-solids-by-depth` /
- *    `viewport-resize-silently-changes-what-a-click-grabs` が同時に悪化する)。
+ * 2. **ピック範囲**(`BASE_EXTENT` / `snap125` / `extentFor`)。基準平面の当たり判定
+ *    (`viewport.ts` の `basePlaneAt`)と near/far の下限(`updateClipPlanes`)が使う。
+ * 3. **描画範囲**(`boundingSquare` / `snapForSpan`)。**格子を無限に描くのはやめた**
+ *    (2026-09-03本人決定) —— 内容(すべてのスケッチとソリッド)を一回り大きく包む
+ *    **正方形**の内側だけに描く。
  */
 
 // ======================================================================== 刻みと不透明度
@@ -131,4 +130,89 @@ export function extentFor(box: Box3Like): number {
     Math.abs(box.min.z), Math.abs(box.max.z),
   )
   return Math.max(BASE_EXTENT, snap125(reach * 1.2))
+}
+
+// ======================================================================== 描画範囲(正方形)
+
+/**
+ * 格子を描く正方形。frame上の u/v[mm] で、`centerU ± half` / `centerV ± half` が枠。
+ *
+ * **半幅ではなく中心と半径で持つ** —— 原点対称の半幅だと、面のframeの原点が面の隅に
+ * 来る(OCCTのUVパラメータ化の原点は面の中心ではない)ときに枠が面の片側へ大きく偏る。
+ * 実測: u:0-40 / v:-20-0 の面に対して ±50mm の対称な枠が出た。
+ */
+export interface UvBounds {
+  centerU: number
+  centerV: number
+  /** 一辺の半分[mm]。 */
+  half: number
+}
+
+/** 「一回り大きく」の余白(内容の長辺に対する比)。 */
+export const BOUNDS_MARGIN_RATIO = 0.08
+
+/** 内容が枠の縁ぴったりに来たときでも必ず余白が付くための下限[mm]。 */
+const BOUNDS_MIN_MARGIN = 1e-6
+
+/**
+ * 枠の縁を載せる刻み[mm]。**内容の大きさに合わせて段を選ぶ** —— 縁が段の倍数に載ると
+ * 枠が太線で終わって意図的に見えるが、常に100mmに載せると40mmの面の枠が100mm角になり、
+ * 「面の何倍もの大きさで描かれる」破綻に戻る。長辺の半分以下で最も粗い段を採る。
+ */
+export function snapForSpan(span: number): number {
+  if (!Number.isFinite(span) || span <= 0) return TIERS[0]
+  let chosen: number = TIERS[0]
+  for (const tier of TIERS) {
+    if (tier <= span / 2) chosen = tier
+  }
+  return chosen
+}
+
+/** frame上へ射影した内容の外接矩形[mm]。測れないときは `null`。 */
+export interface UvBox {
+  uMin: number
+  uMax: number
+  vMin: number
+  vMax: number
+}
+
+/**
+ * 内容を一回り大きく包む**正方形**を出す。四辺はすべて `snapForSpan` の倍数に載り、
+ * かつ辺の長さが等しい(足りない軸は**段の整数個ぶん**ずつ両側へ伸ばす。半端に伸ばすと
+ * 縁が倍数から外れる)。
+ *
+ * `includeOrigin` は基準平面用。モデルが原点から遠いときに原点が枠の外へ出ると
+ * 「原点がどこか読める」というグリッド本来の役割が失われるので、**内容 ∪ 原点**を包む。
+ * 面グリッドでは面自身の範囲が正なので `false` にする。
+ *
+ * 内容が無い(`box === null`)ときは従来どおり ±`BASE_EXTENT`(100mm)。
+ */
+export function boundingSquare(box: UvBox | null, opts: { includeOrigin: boolean }): UvBounds {
+  if (box === null) return { centerU: 0, centerV: 0, half: BASE_EXTENT }
+  if (![box.uMin, box.uMax, box.vMin, box.vMax].every(Number.isFinite)) {
+    return { centerU: 0, centerV: 0, half: BASE_EXTENT }
+  }
+  const uMin = opts.includeOrigin ? Math.min(box.uMin, 0) : box.uMin
+  const uMax = opts.includeOrigin ? Math.max(box.uMax, 0) : box.uMax
+  const vMin = opts.includeOrigin ? Math.min(box.vMin, 0) : box.vMin
+  const vMax = opts.includeOrigin ? Math.max(box.vMax, 0) : box.vMax
+
+  const span = Math.max(uMax - uMin, vMax - vMin)
+  const margin = Math.max(span * BOUNDS_MARGIN_RATIO, BOUNDS_MIN_MARGIN)
+  const step = snapForSpan(span)
+
+  const u0 = Math.floor((uMin - margin) / step) * step
+  const u1 = Math.ceil((uMax + margin) / step) * step
+  const v0 = Math.floor((vMin - margin) / step) * step
+  const v1 = Math.ceil((vMax + margin) / step) * step
+
+  const uSteps = Math.round((u1 - u0) / step)
+  const vSteps = Math.round((v1 - v0) / step)
+  const side = Math.max(uSteps, vSteps)
+  const uLo = u0 - Math.floor((side - uSteps) / 2) * step
+  const uHi = u1 + Math.ceil((side - uSteps) / 2) * step
+  const vLo = v0 - Math.floor((side - vSteps) / 2) * step
+  const vHi = v1 + Math.ceil((side - vSteps) / 2) * step
+
+  return { centerU: (uLo + uHi) / 2, centerV: (vLo + vHi) / 2, half: (side * step) / 2 }
 }
