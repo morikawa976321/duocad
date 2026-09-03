@@ -754,6 +754,10 @@ def run_pipeline(
     keep_layers: int = 1,
     fixed_face: Optional[int] = None,
     load_face: Optional[int] = None,
+    design_mask: Any = None,
+    design_grid: Optional[vx.Grid] = None,
+    keep: Any = None,
+    obstacle: Any = None,
     stl_path: Optional[str | Path] = None,
     progress: Any = None,
 ) -> dict:
@@ -765,6 +769,14 @@ def run_pipeline(
 
     `keep_anchor_material=True`(既定)のとき、固定面・荷重面のアンカー節点に接する要素を
     保持領域(ρ=1)に固定する。**これを切ると最適化は荷重直下の材料を溶かす。**
+
+    `design_mask` と `design_grid` を両方渡すと、**塊(設計空間)はそのマスクになり、`shape` は
+    面アンカーの対象になる**(`vx.model_from_design_mask` を通る)。この経路では材料は入力
+    ソリッドの外へ出られる。`shape` には面を選ぶのに使った `TriangleSoup` をそのまま渡してよい。
+    塊をどのロジックで決めるかはここでは決めない —— 呼び出し側が渡す。
+
+    `keep` / `obstacle`(保持ソリッド / 除外ソリッド)はどちらの経路でも同じ格子に載る。
+    `design_mask` の経路では**塊からはみ出したら例外**(`vx.OutsideDesignSpaceError`)。
     """
     if (fixed_face is None) != (load_face is None):
         raise ValueError("fixed_face と load_face は両方渡すか、両方省略すること")
@@ -773,14 +785,26 @@ def run_pipeline(
             "自分の形を渡すときは fixed_face / load_face も渡すこと"
             "(面添字は形ごとに違うので、デモの選び方は使えない)"
         )
+    if (design_mask is None) != (design_grid is None):
+        raise ValueError("design_mask と design_grid は両方渡すか、両方省略すること")
+    if design_mask is not None and shape is None:
+        raise ValueError(
+            "design_mask を渡すときは面アンカーの対象(shape)も渡すこと"
+            "(塊の面ではなく、拘束・荷重を指定できる面がどこから来るかを明示する)"
+        )
     import mesh
     import simp
 
     timings: dict[str, float] = {}
     t0 = time.perf_counter()
-    if shape is None:
-        shape = demo_bracket()
-    model = vx.voxelize(shape, elements_long_axis)
+    if design_mask is not None:
+        model = vx.model_from_design_mask(
+            design_grid, design_mask, anchor_shape=shape, keep=keep, obstacle=obstacle
+        )
+    else:
+        if shape is None:
+            shape = demo_bracket()
+        model = vx.voxelize(shape, elements_long_axis, keep=keep, obstacle=obstacle)
     timings["voxelize"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
@@ -831,6 +855,8 @@ def run_pipeline(
         "model": model,
         "table": table,
         "result": result,
+        "solid": solid,
+        "void": void,
         "surface": surface,
         "stl": str(out),
         "fixed_face": fixed_face,

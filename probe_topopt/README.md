@@ -127,6 +127,83 @@ model.initial_density(0.3)  # SIMP へ渡す初期密度場(保持=1 / 障害物
 (円錐の頂点まわりで実測1枚。`shelf_attachment_7.step` では0枚)、入力で弾くのではなく
 ここで正しく扱う。**stage2 は面へ戻る経路をこの関数に頼るので、ここの誤りはそのまま伝播する。**
 
+## 塊(設計空間)と面アンカーの対象ソリッドの分離(2026-09-04)
+
+`voxelize(shape, ...)` は**1つのソリッドに2つの役割を兼ねさせる** —— そのソリッドの占有が
+`VoxelModel.design`(削る前の塊)になり、同じソリッドの三角形が `VoxelModel.soup` になって
+**拘束・荷重に指定できる面はその面だけ**になる。`run_pipeline` は `void = ~design | obstacle` を
+最適化へ渡すので、この経路では**材料は入力ソリッドの外へ一切出られない**(答えは必ず「元の形に
+穴が開いたもの」になる)。duocad 本体では塊は利用者に見せない合成物で、拘束面・荷重面は保持
+ソリッド等の**別のボディ**に付く。この2つを切り離した入口を足したのがここ。
+
+### 塊はどこから来るか
+
+`voxelize.model_from_design_mask(grid, design, *, anchor_shape, keep=None, obstacle=None, on_outside="raise", ...)`。
+**塊は呼び出し側が渡す bool マスク**(`grid.shape` と同じかたち)で、ソリッドの占有である必要は
+ない。マスクは複製して持つので、呼び出し側があとから書き換えても `VoxelModel` の中身は変わらない。
+かたちが格子と違う場合・全要素 False の場合は `ValueError`(黙って全体を塊にしない)。
+戻り値は既存と同じ `VoxelModel` で、`stats` は `voxelize()` と同じキーに `design_source="mask"` と
+`on_outside` を足したもの。**`occupancy` キーは無い**(塊がソリッド由来でないため)。
+
+### 面アンカーの対象はどこから来るか
+
+`anchor_shape` から来る。`TopoDS_Shape` / build123d のオブジェクト / **既に作った `TriangleSoup`**
+のいずれかを受ける。**面添字は渡したものの面の並びで決まる**ので、面を選ぶのに使った
+`TriangleSoup` があるならそれをそのまま渡すこと(作り直すと面添字が食い違いうる)。
+`build_anchors(soup, grid, ...)` はもともと三角形群と格子を別々に受け取っていて**下位は既に
+分かれていた**。束ねていたのは `voxelize()` と `anchors_for()` の側だけで、
+`anchors_for(model)` は `build_anchors(model.soup, model.grid)` のままでよい。
+
+### はみ出しは例外
+
+`keep` / `obstacle` は同じ格子に載せる(内部は `voxelize(..., grid=grid)` と同じ道)。
+**塊からはみ出したら既定で `voxelize.OutsideDesignSpaceError`**。`ValueError` の派生なので既存の
+`except ValueError` はそのまま効く。文面に「どの領域が何要素はみ出したか(領域の総要素数つき)」を
+書き、`e.outside`(`{"keep": n, "obstacle": n}`)で機械からも引ける。旧経路 `voxelize()` は
+`keep & design` で黙って切り詰め、件数は `stats["keep_dropped_outside"]` に残るだけだった。
+**塊を自動で決めるようになるとはみ出しは普通に起こる**ので、新しい入口では既定を例外にした。
+切り詰めてよいと分かっているときだけ `on_outside="clip"` を明示する(結果は旧経路と一致する)。
+
+### 端から端まで
+
+`anchor.run_pipeline(shape=soup, design_mask=mask, design_grid=grid, fixed_face=..., load_face=...)`。
+`design_mask` と `design_grid` は両方渡すか両方省略する(片方だけは `ValueError`)。渡したときは
+**`shape` は塊ではなく面アンカーの対象**になり、`shape` の省略は許さない。あわせて `keep` /
+`obstacle`(保持ソリッド / 除外ソリッド)をどちらの経路でも渡せるようにした(どちらも同じ格子に
+載り、マスク経路でははみ出しが例外になる)。省略時(既存のデモ経路)の挙動は1ビットも変えていない。
+戻り値に `solid`(ρ=1 に固定した要素のマスク)と `void` を足した(既存キーは不変)。
+
+### まだやっていないこと
+
+**塊をどのロジックで決めるか(箱・凸包・カプセル・粗く回す等)は未着手。** ここでやったのは分離
+だけで、下の検査4で使う「一回り大きい箱」は**分離を実証するための足場**であって、採用した導出
+ロジックではない。4条件(保持ソリッド・除外ソリッド・拘束面・荷重面)から塊を導く経路は後続
+タスクで入れる。
+
+### 実測(2026-09-04・分離の実証。`check_design_space.py` の検査4)
+
+合成ブラケット(`demo_bracket()`: 60×24×24 の箱 + 8×8×6 の耳。bbox は x -30..30 / y -12..12 /
+z -12..18)の**面はそのまま**にして、**塊だけ**を差し替える。格子は両方とも同じ
+(28, 15, 18) / 要素サイズ 2.769mm。固定=面1(x=-30)、荷重=面10(耳の上面、-z へ 1.0)、
+volfrac 0.3、30反復。
+
+| 塊 | 塊の要素数 | ρ>0.5 で**ブラケットの外**に出た要素 | 30反復の所要 | 最終コンプライアンス |
+|---|---|---|---|---|
+| 一回り大きい箱(x -31..31 / y -13..13 / z -13..25) | 2,772 | **331** | 8.4秒 | 9.93 |
+| ブラケットの占有(=旧来の `voxelize()` と同じ塊) | 1,602 | **0**(`void = ~design` により構造的に0) | 5.7秒 | 5.73 |
+
+331 は `run_pipeline` が拘束・荷重の近傍を ρ=1 に固定した分を**除いた**数(除かないと固定分だけで
+検査が自明に通ってしまう)。外に出た材料の範囲は [-29.08, -11.08, -12.23] .. [20.77, 11.08, 23.77]
+で、耳の上・箱の上下いずれにも出ている。`check_design_space.py` 全体で約20秒。
+
+**注意(後続タスクへの申し送り)**: 塊を大きくすると**コンプライアンスは悪化した**(5.73 → 9.93)。
+材料は増えている(583 → 975 要素)のに悪くなるのは、体積制約が相対(`volfrac × 自由要素数 +
+固定要素数`)なので**塊を変えると別の問題を解いていること**と、大きい塊では OC 法が灰色を
+多く残したまま止まること(120反復でも 9.83 / 設計要素の 38% が 0.1<ρ<0.9)の合わせ技。
+120反復まで伸ばしても順位は変わらず、材料は1つの連結成分にまとまっていて浮島は無い。
+**これは「体積制約を絶対量(mm³/g)へ倒す」未決の判断の材料**であって、分離が壊れている
+という意味ではない(塊=ブラケットにすれば旧経路と同じ答えが出る)。
+
 ## CADの面 → 格子の節点(anchor.py)
 
 `voxelize.py` が起こした格子の上に、**「ボディXの面#42」を「これらの格子節点」へ翻訳する
@@ -290,6 +367,7 @@ venvを作り直したときはこのコマンドで復元する)。
 | `check_voxelize.py` | **受入検査(合否そのもの)**。ボクセル化側(下記8項目)を assert する |
 | `anchor.py` | **CADの面 → 格子の節点の対応表(面アンカー)**。担当面積つき。固定/荷重/非設計領域の口と、端から端まで通す `run_pipeline`。CLIとしても動く(`python anchor.py --table-only --n 32`) |
 | `check_anchor.py` | **受入検査(合否そのもの)**。面アンカー側(下記8項目)を assert する。端から端まで1回通すので約2分 |
+| `check_design_space.py` | **受入検査(合否そのもの)**。塊と面アンカーの対象ソリッドの分離を assert する。SIMPを2回(30反復)回すので約20秒 |
 | `server.py` | 静的配信(**8775**) + WebSocket(**8776**)。反復ごとにボクセルを、完了時に平滑化メッシュを配る。`mode:"anchors"` で面アンカーを配る |
 | `web/index.html` | ビューポート + ボタン1つ。反復中は`InstancedMesh`、完了時は`BufferGeometry`(平滑化メッシュ)に差し替える。`?debug=anchors` で面アンカー表示 |
 | `web/vendor/three/` | three.js 0.185.1 を `duocad/web/node_modules` からコピーしたもの(**CDNを使わない**) |
@@ -297,6 +375,8 @@ venvを作り直したときはこのコマンドで復元する)。
 | `shot_anchors.mjs` | 実機確認。`?debug=anchors` を開いて `screenshots/result_anchors.png` に撮る。**画面のピクセルを数えて2色が本当に出ているかまで見る** |
 | `output/optimized.stl` | 実測値節にある実行で書き出したSTL |
 | `output/bracket.stl` | 面アンカーで境界条件を入れた端から端までの実行で書き出したSTL |
+| `output/design_space_box.stl` | 塊を「一回り大きい箱」にした実行(`check_design_space.py` 検査4)で書き出したSTL |
+| `output/design_space_bracket.stl` | 同じ格子・同じ面で塊=ブラケットにした比較対象の実行で書き出したSTL |
 | `screenshots/result.png` | (旧)ボクセル版の実機確認。marching cubes導入前の記録として残置 |
 | `screenshots/result_smooth.png` | 平滑化メッシュ版の実機確認 |
 | `screenshots/result_anchors.png` | 面アンカーの実機確認(固定=緑シアン / 荷重=橙赤) |
@@ -527,6 +607,9 @@ Set-Location C:\Users\tm976\mf\duocad\probe_topopt
 
 # 面アンカー側の正しさ。端から端まで1回通すので約2分
 & ..\.venv\Scripts\python.exe check_anchor.py
+
+# 塊と面アンカーの対象ソリッドの分離。SIMPを2回(30反復)回すので約20秒
+& ..\.venv\Scripts\python.exe check_design_space.py
 
 # 実機確認(完了条件3・4)。約1.5〜2分。server.py は自分で起こして自分で落とす
 node shot.mjs

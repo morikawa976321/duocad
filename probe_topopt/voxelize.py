@@ -942,6 +942,135 @@ def voxelize(
     )
 
 
+class OutsideDesignSpaceError(ValueError):
+    """保持/障害物領域が塊(設計空間)からはみ出した。
+
+    `ValueError` の派生なので、既存の `except ValueError` はそのまま効く。はみ出した要素数は
+    `outside`(キーは `"keep"` / `"obstacle"`、値は要素数)で引ける。
+    """
+
+    def __init__(self, message: str, outside: dict) -> None:
+        super().__init__(message)
+        self.outside = dict(outside)
+
+
+def model_from_design_mask(
+    grid: Grid,
+    design: Any,
+    *,
+    anchor_shape: Any,
+    keep: Any = None,
+    obstacle: Any = None,
+    on_outside: str = "raise",
+    deviation: Optional[float] = None,
+    deviation_ratio: float = DEFAULT_DEVIATION_RATIO,
+    angular_deflection: float = DEFAULT_ANGULAR_DEFLECTION,
+) -> VoxelModel:
+    """塊(設計空間)を bool マスクで、面アンカーの対象ソリッドを別に受け取って組み立てる。
+
+    `voxelize()` は1つのソリッドに「削る前の塊」と「拘束・荷重に指定できる面」を兼ねさせる。
+    こちらはその2つを切り離した入口で、塊は `design`(格子と同じ形の bool 配列)から、面は
+    `anchor_shape` から来る。**塊をどのロジックで決めるかはここでは決めない**(呼び出し側の話)。
+
+    `anchor_shape` は OCCT の `TopoDS_Shape` / build123d のオブジェクト / 既に作った
+    `TriangleSoup` のいずれか。**面添字は渡したものの面の並びで決まる**ので、面を選ぶのに
+    使った `TriangleSoup` があるならそれをそのまま渡すこと(作り直すと面添字が食い違いうる)。
+
+    `keep` / `obstacle` は同じ格子に載せる。**塊からはみ出したら既定で
+    `OutsideDesignSpaceError`**。`on_outside="clip"` を明示したときだけ `voxelize()` と同じに
+    切り詰める。塊を自動で決めるようになるとはみ出しは普通に起こるので、既定は例外にしてある。
+    """
+    started = time.perf_counter()
+    mode = str(on_outside)
+    if mode not in ("raise", "clip"):
+        raise ValueError(f"on_outside must be 'raise' or 'clip', got {on_outside!r}")
+
+    mask = np.asarray(design)
+    if mask.shape != tuple(grid.shape):
+        raise ValueError(
+            f"design のかたちが格子と違う: design {tuple(mask.shape)} / 格子 {tuple(grid.shape)}"
+        )
+    # 呼び出し側の配列と共有しない(後で書き換えられると `VoxelModel` の中身が黙って変わる)。
+    design_mask = np.array(mask, dtype=bool)
+    if not design_mask.any():
+        raise ValueError(
+            f"塊(設計空間)が空。格子 {tuple(grid.shape)} の全要素が False では最適化する場所が無い。"
+        )
+
+    dev = float(deviation) if deviation else max(grid.spacing * deviation_ratio, 1e-6)
+    if isinstance(anchor_shape, TriangleSoup):
+        soup = anchor_shape
+    else:
+        soup = triangles_from_shape(
+            _unwrap(anchor_shape), deviation=dev, angular_deflection=angular_deflection
+        )
+    report = inspect_soup(soup)
+
+    stats = {
+        "seconds": 0.0,
+        "deviation": dev,
+        "grid": grid.as_dict(),
+        "design_source": "mask",
+        "on_outside": mode,
+        "surface": report,
+        "design_elements": int(np.count_nonzero(design_mask)),
+        "keep_elements": 0,
+        "obstacle_elements": 0,
+        "keep_dropped_outside": 0,
+        "obstacle_dropped_outside": 0,
+    }
+
+    raw_of: dict[str, np.ndarray] = {}
+    for name, region, label in (("keep", keep, "保持"), ("obstacle", obstacle, "障害物")):
+        if region is None:
+            continue
+        raw, sub = _voxelize_region(
+            region, grid, deviation=dev, angular=angular_deflection, label=label
+        )
+        raw_of[name] = raw
+        stats[f"{name}_surface"] = sub
+        stats[f"{name}_dropped_outside"] = int(np.count_nonzero(raw & ~design_mask))
+
+    outside = {n: int(stats[f"{n}_dropped_outside"]) for n in raw_of}
+    if mode == "raise" and any(outside.values()):
+        labels = {"keep": "保持", "obstacle": "障害物"}
+        parts = [
+            f"{labels[n]}領域が塊(設計空間)から {c} 要素はみ出している"
+            f"(領域 {int(np.count_nonzero(raw_of[n]))} 要素中)"
+            for n, c in outside.items()
+            if c
+        ]
+        raise OutsideDesignSpaceError(
+            "。".join(parts)
+            + "。塊が条件を含むだけ大きく取れていないか、座標系・単位が違う。"
+            "切り詰めてよいと分かっているなら on_outside='clip' を渡すこと(黙っては切らない)。",
+            outside,
+        )
+
+    keep_mask = raw_of.get("keep", np.zeros_like(design_mask)) & design_mask
+    obstacle_mask = raw_of.get("obstacle", np.zeros_like(design_mask)) & design_mask
+
+    overlap = int(np.count_nonzero(keep_mask & obstacle_mask))
+    if overlap:
+        raise ValueError(
+            f"保持領域と障害物領域が {overlap} 要素で重なっている。"
+            "「必ず材料を残す」と「材料を入れない」は同時に満たせないので、"
+            "どちらを優先するかは呼び出し側が決めること(黙って片方を勝たせない)。"
+        )
+
+    stats["keep_elements"] = int(np.count_nonzero(keep_mask))
+    stats["obstacle_elements"] = int(np.count_nonzero(obstacle_mask))
+    stats["seconds"] = time.perf_counter() - started
+    return VoxelModel(
+        grid=grid,
+        design=design_mask,
+        keep=keep_mask,
+        obstacle=obstacle_mask,
+        soup=soup,
+        stats=stats,
+    )
+
+
 def _voxelize_region(region: Any, grid: Grid, deviation: float, angular: float, label: str):
     """保持/障害物の領域を設計空間と同じ格子に載せる。
 
