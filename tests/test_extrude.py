@@ -346,35 +346,6 @@ def test_cut_without_a_target_body_fails():
     assert document.bodies == []
 
 
-#: reference判定は `_resolve_target` でmode分岐より前に効くので、joinだけで足りる。
-@pytest.mark.parametrize("mode", ["join"])
-def test_extrude_rejects_a_reference_body(mode):
-    """読み込んだ参照ボディ(kind="reference")は押し出しの対象にならない(M0の読み取り専用契約)。
-
-    M1も `extrude_face` で同じ契約を固定していた(2026-08-22に該当テストは削除)。
-    M2でも同じ穴を空けない。
-    """
-    document = Document()
-    document.add_body(
-        Body(
-            id="ref",
-            name="ref",
-            kind="reference",
-            shape=BRepPrimAPI_MakeBox(40.0, 30.0, 10.0).Shape(),
-        )
-    )
-    sketch_id = sketch_create(document, "XY")
-    add_circle(document, sketch_id, HOLE_CENTER, HOLE_RADIUS)
-    target = regions(document, sketch_id)[0]
-    entries_before = len(document.log.entries)
-
-    with pytest.raises(ValueError):
-        extrude(document, [region_ref(sketch_id, target.index)], 5.0, mode=mode, body_id="ref")
-
-    assert len(document.log.entries) == entries_before
-    assert len(document.bodies) == 1
-
-
 # --------------------------------------------------------------------------------------
 # 受入テストへの前進 — 棚取付具の「板と穴」
 # --------------------------------------------------------------------------------------

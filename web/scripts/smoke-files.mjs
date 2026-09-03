@@ -783,9 +783,8 @@ async function main() {
     if (stl.deviation !== 0.05) fail(`偏差が渡っていない: ${stl.deviation}`)
     ok(`STLを書き出した(${statSync(stlPath).size} B / 偏差 ${stl.deviation}mm)`)
 
-    // ================================================================ 検証3: 参照部品
-    // 読み込んだ時点で編集可能なボディができ、参照ボディは隠れて画面から指せない
-    // (隠したBodyは形状が配信されないので `projectFace` が null を返す)。
+    // ================================================================ 検証3: 読み込み
+    // 読み込んだ時点で編集可能なボディができる。
     const originalVolume = (await look()).bodies[0].volume
     const idsBefore = await page.evaluate(() =>
       window.__duocad.parts.map((body) => body.body_id),
@@ -804,17 +803,6 @@ async function main() {
     }, idsBefore)
     if (!importedId) fail('読み込んでできた編集用ボディが特定できない')
 
-    const references = await page.evaluate(() => {
-      const refs = window.__duocad.state.bodies.filter((body) => body.kind === 'reference')
-      return {
-        count: refs.length,
-        hidden: refs.filter((body) => body.visible === false).length,
-      }
-    })
-    if (references.count < 1) fail('参照ボディが増えていない')
-    if (references.hidden !== references.count) {
-      fail(`参照ボディが隠れていない: ${references.count} 個中 非表示 ${references.hidden}`)
-    }
     // **UIから出したSTEPを読み戻して体積が一致する**(タスクEの検証4の「UIから出しても同じ」)。
     // 許容差は相対 1e-6 —— §7の訂正どおり `==` では成立しない(再読込で数値積分の順序が変わる)。
     const importedVolume = await page.evaluate(
@@ -832,8 +820,7 @@ async function main() {
     // **この後の検証5(表示中のみ書き出し)と即適用の検査が使う下ごしらえ。**
     // **先に他を隠して対象だけ表示に戻す** —— 読み込んだのは自分を書き出したSTEPなので、
     // 元のソリッドと同じ場所に重なっている(「手前を隠すと奥が選べる」= M3.5の可視性)。
-    // そのうえで**読み込んだボディの面を1枚選ぶ**(読んだ時点で編集できることの実地確認でもある
-    // —— 参照ボディはパーツ一覧に出ず、面も指せない)。
+    // そのうえで**読み込んだボディの面を1枚選ぶ**(読んだ時点で編集できることの実地確認でもある)。
     await page.click('#parts-hide-all')
     await waitFor(
       () => window.__duocad.parts.every((body) => !body.visible),
@@ -874,9 +861,7 @@ async function main() {
     // ================================================================ 検証5: 表示中のみ書き出し
     // **いまの状態を使い回す**(元の板 = 非表示、読み込んだボディ = 可視の1個だけ)。
     // 「表示中(visible)のBodyだけを書き出し、対象を選ぶ引数は無い」契約を実地で踏む
-    // (2026-08-27 export-visible-only)。参照ボディはそもそも候補にならない
-    // (kind==="solid"の候補があるので参照へのフォールバックは起きない)ので、
-    // 除外1件は「元の板」だけになるはず。
+    // (2026-08-27 export-visible-only)。除外1件は「元の板」だけになるはず。
     const hiddenPlateId = idsBefore[0]
     const visibleOnlyStepPath = join(workdir, 'visible-only.step')
     await typeInto('#file-export-step-path', visibleOnlyStepPath)

@@ -628,7 +628,7 @@ def test_a_saved_document_opens_after_the_imported_step_is_renamed(
          round(query.volume(body.shape), 9))
         for body in session.document.bodies
     ]
-    assert len(before) == 4, "ソリッド2つ × (参照 + 編集用)"
+    assert len(before) == 2, "ソリッド2つぶんの編集用ボディ"
     session.save_document("imported.json")
 
     step_path.rename(tmp_path / "somewhere_else.step")

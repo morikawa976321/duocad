@@ -201,27 +201,13 @@ class DocumentTools:
     # ------------------------------------------------------------------ 実体
     def describe_document(
         self,
-        include_references: bool = False,
         include_bbox: bool = False,
         include_regions: bool = False,
     ) -> dict:
-        """ボディ一覧・スケッチ一覧とパラメータ一覧。
-
-        **既定では参照ボディ(kind="reference")を出さない**。STEPを読むとソリッドごとに
-        「参照(読み取り専用・隠されている)」と「編集用コピー」の2つができる
-        (verb `import_step`)ので、そのまま全部見せると同じ部品が2回並び、AIが
-        隠しても画面が変わらない方(参照)を掴む。**編集対象だけを既定にする**のが
-        AIから見た文書の姿として正しい。件数は `reference_count` で必ず知らせるので、
-        隠していることは分かる(黙って落とさない)。
-        """
+        """ボディ一覧・スケッチ一覧とパラメータ一覧。"""
         document = self.session.document
         bodies = []
-        reference_count = 0
         for body in document.bodies:
-            if body.kind == "reference":
-                reference_count += 1
-                if not include_references:
-                    continue
             entry = {
                 "body_id": body.id,
                 "name": body.name,
@@ -260,8 +246,6 @@ class DocumentTools:
             "active_body_id": active.id if active is not None else None,
             "body_count": len(bodies),
             "visible_count": sum(1 for body in bodies if body["visible"]),
-            "reference_count": reference_count,
-            "reference_included": bool(include_references),
             "bodies": bodies,
             "sketches": sketches_out,
             "parameters": dict(document.parameters),
@@ -291,16 +275,6 @@ class DocumentTools:
         if not isinstance(visible, bool):
             raise ValueError(f"visible must be a boolean, got {type(visible).__name__}")
         before = self._find_body(body_id)
-        if before.kind == "reference":
-            # **参照ボディの可視性は触らせない**。参照は読み込んだ
-            # STEPの原本で、読み込み(`import_step`)の時点で隠してある。
-            # ここを表示に戻すと**同じソリッドが二重に描かれる**——1ソリッドにつき
-            # 同時に見えるのは1つという制約が、AI経路だけで破られてしまう。
-            # `include_references=True` は**見せる**ためのもので、触ってよいという意味ではない。
-            raise ValueError(
-                f"body {body_id!r} is a reference body: 参照ボディは読み取り専用の原本なので"
-                "表示を切り替えられない(編集用コピーの body_id を使うこと)"
-            )
         revisions = self._revision_snapshot()
         applied = self.session.set_visible(body_id, visible)
         return {
@@ -311,11 +285,7 @@ class DocumentTools:
             "previous": applied["previous"],
             "changed": applied["changed"],
             "changed_bodies": self._changed_bodies(revisions),
-            "visible_count": sum(
-                1
-                for body in self.session.document.bodies
-                if body.kind != "reference" and body.visible
-            ),
+            "visible_count": sum(1 for body in self.session.document.bodies if body.visible),
         }
 
     def describe_shape(self, body_id: str) -> dict:
@@ -339,7 +309,7 @@ class DocumentTools:
         if body is None:
             # **文面は `document.unknown_id_message` に一本化してある**(スケッチ・図形・
             # パラメータのエラーと同じ形で、有効IDかその出し方を必ず添える)。
-            known = [b.id for b in self.session.document.bodies if b.kind != "reference"]
+            known = [b.id for b in self.session.document.bodies]
             raise KeyError(unknown_id_message("body", body_id, known))
         return body
 
@@ -935,16 +905,7 @@ class DocumentTools:
         """
         before = self._revision_snapshot()
         applied = self.session.import_step(path)
-        return self._apply_logged(
-            before,
-            applied,
-            body_ids=list(applied["body_ids"]),
-            reference_ids=list(applied["reference_ids"]),
-            hint=(
-                "body_ids はそのまま編集できる。"
-                "reference_ids は隠してある読み込みの原本"
-            ),
-        )
+        return self._apply_logged(before, applied, body_ids=list(applied["body_ids"]))
 
     def import_svg(
         self,
@@ -1380,8 +1341,7 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
             _log(f"  MCP(HTTP): {mcp_url}")
             if args.open:
                 webbrowser.open(page_url)
-        body_count = len([b for b in session.document.bodies if b.kind != "reference"])
-        _log(f"  bodies={body_count} (参照ボディを除く)")
+        _log(f"  bodies={len(session.document.bodies)}")
         await serve_stdio(McpServer(tools))
     _log("duocad MCP server: stdin closed, bye")
 

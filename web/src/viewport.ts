@@ -2236,8 +2236,8 @@ export function createViewport(container: HTMLElement): Viewport {
    * **実際に合わせたかを boolean で返す**(2026-08-30)。箱が空(=描くものがまだ無い)なら
    * 何もせず `false` を返す —— 呼び出し側の `update()` はこれを見て初めて「一度きりの機会」
    * (`framed` フラグ)を消費する。戻り値を見ずに常に `framed = true` にすると、
-   * `geometry: null` のBodyだけが届いた1通(参照ボディだけ・本体がまだ無い等)で
-   * 空振りのまま機会が焼き切れ、以後どれだけ内容が届いても初回フレーミングが起きなくなる。
+   * `geometry: null` のBodyだけが届いた1通(本体の形状がまだ無い等)で空振りのまま
+   * 機会が焼き切れ、以後どれだけ内容が届いても初回フレーミングが起きなくなる。
    */
   function frameToContent(): boolean {
     const box = new THREE.Box3().setFromObject(root)

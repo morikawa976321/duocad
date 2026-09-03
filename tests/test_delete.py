@@ -314,8 +314,12 @@ def test_deleting_nothing_is_refused(session: Session) -> None:
         delete_verb(session.document)
 
 
-def test_a_hidden_or_reference_body_is_refused(session: Session) -> None:
-    """隠したボディは指せない(`fillet` / `move_body` と同じ門番)。"""
+def test_a_hidden_body_is_refused(session: Session) -> None:
+    """隠したボディは指せない(`fillet` / `move_body` と同じ門番)。
+
+    参照ボディ(`kind="reference"`)は2026-09-03に概念ごと撤去したので
+    ([[duocad-reference-body-removal-decided]])、その拒否は構成すらできなくなった。
+    """
     body, _ = _box(session)
     _select(session, [{"body": body.id, "kind": "body", "index": None}])
     session.set_visible(body.id, False)

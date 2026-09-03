@@ -210,23 +210,7 @@ async function main() {
         { timeout, polling: 100 },
         expectedParts,
       )
-      const references = await page.evaluate(() => {
-        const refs = window.__duocad.state.bodies.filter((body) => body.kind === 'reference')
-        return {
-          count: refs.length,
-          hidden: refs.filter((body) => body.visible === false).length,
-        }
-      })
-      if (references.count !== expectedParts || references.hidden !== expectedParts) {
-        fail(
-          `参照ボディが隠れていない: ${references.count} 個中 非表示 ${references.hidden} ` +
-            `(期待 ${expectedParts} 個すべて visible === false)`,
-        )
-      }
-      ok(
-        `STEP読み込みで${expectedParts}部品が編集可能な状態で入った` +
-          `(参照ボディ ${references.count} 個はすべて非表示)`,
-      )
+      ok(`STEP読み込みで${expectedParts}部品が編集可能な状態で入った`)
     } else if (partCount === expectedParts) {
       ok('既に読み込み済み(前回の実行のサーバを使い回している)')
     } else {

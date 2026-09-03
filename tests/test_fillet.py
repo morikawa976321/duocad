@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 from duocad import kernel, query
-from duocad.document import Body, Document
+from duocad.document import Document
 from duocad.sketch import add_circle, base_plane, sketch_create
 from duocad.verbs import extrude, fillet
 from duocad.region import region_ref
@@ -299,15 +299,6 @@ def test_fillet_rejects_an_unknown_edge_index():
     with pytest.raises(ValueError):
         fillet(doc, [999], 1.0, body_id=body_id)
     assert len(doc.log.entries) == log_before
-
-
-def test_fillet_refuses_a_reference_body():
-    """参照ボディ（読み込んだSTEPの原本）は編集できない（既存verbと同じ契約）。"""
-    doc = Document()
-    doc.add_body(Body(id="ref-1", name="original", kind="reference", shape=None))
-    with pytest.raises(ValueError):
-        fillet(doc, [1], 1.0, body_id="ref-1")
-    assert doc.log.entries == []
 
 
 def test_fillet_needs_at_least_one_edge():

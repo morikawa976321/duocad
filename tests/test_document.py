@@ -13,18 +13,23 @@ def test_document_units_cannot_be_reassigned():
         doc.units = "in"
 
 
-def test_body_kind_must_be_solid_or_reference():
-    """Bodyのkindは"solid"か"reference"以外を受け付けない(ValueError)。"""
+def test_body_kind_must_be_solid():
+    """Bodyのkindは"solid"以外を受け付けない(ValueError)。
+
+    参照ボディ(`kind="reference"`)は2026-09-03に概念ごと撤去した
+    ([[duocad-reference-body-removal-decided]])ので、"reference"も他の未知の値と
+    同じく拒否される。
+    """
     with pytest.raises(ValueError):
         Body(id="b1", name="x", kind="mesh")
+    with pytest.raises(ValueError):
+        Body(id="b1", name="x", kind="reference")
 
 
-def test_body_accepts_solid_and_reference_kinds():
-    """kind="solid"とkind="reference"はどちらも正当なBodyとして生成できる。"""
+def test_body_accepts_solid_kind():
+    """kind="solid"は正当なBodyとして生成できる。"""
     solid = Body(id="b1", name="solid-body", kind="solid")
-    reference = Body(id="b2", name="ref-body", kind="reference")
     assert solid.kind == "solid"
-    assert reference.kind == "reference"
 
 
 def test_new_document_active_body_is_none():
@@ -74,7 +79,7 @@ def test_set_active_body_switches_the_active_body():
     """set_active_bodyでactiveなボディを明示的に切り替えられる(複数ボディ対応の要)。"""
     doc = Document()
     body1 = Body(id="b1", name="first", kind="solid")
-    body2 = Body(id="b2", name="second", kind="reference")
+    body2 = Body(id="b2", name="second", kind="solid")
     doc.add_body(body1)
     doc.add_body(body2)
     doc.set_active_body("b1")
@@ -86,14 +91,6 @@ def test_set_active_body_unknown_id_raises_key_error():
     doc = Document()
     with pytest.raises(KeyError):
         doc.set_active_body("does-not-exist")
-
-
-def test_reference_body_is_not_editable():
-    """kind="reference"のボディはis_editable=Falseで、編集操作(verb)の対象にならない。"""
-    doc = Document()
-    ref_body = Body(id="b1", name="imported", kind="reference")
-    doc.add_body(ref_body)
-    assert doc.is_editable("b1") is False
 
 
 def test_solid_body_is_editable():

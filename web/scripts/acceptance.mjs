@@ -852,8 +852,7 @@ async function main() {
 
     await attempt('human', 'import_step', async () => {
       // **読んだ時点で編集できることまで見る。** `parts` は `kind === "solid"` だけを
-      // 並べるので(参照ボディは隠されて出ない)、ここが増えていれば編集用ボディができている。
-      // `bodies` の側で数えると、参照ボディだけが増えた実装でも緑になってしまう。
+      // 並べるので、ここが増えていれば編集用ボディができている。
       const before = (await look()).parts.length
       await typeInto('#file-import-path', humanStep)
       await page.keyboard.press('Enter')
@@ -1086,17 +1085,12 @@ async function main() {
 
     await attempt('ai', 'import_step', async () => {
       // **STEP読み込みのツールは1つだけ**(ツール名 == ログのverb名)。読んだ時点で
-      // 編集可能なボディができ、原本の参照ボディは隠したまま同じ1操作で入る。
+      // 編集可能なボディができる(参照ボディの概念は2026-09-03に撤去済み)。
       const result = await mcp.callTool('import_step', { path: aiStep })
       if (!Array.isArray(result.body_ids) || result.body_ids.length === 0) {
         throw new Error(`編集可能なボディが返らない: ${JSON.stringify(result.body_ids)}`)
       }
-      if (result.reference_ids.length !== result.body_ids.length) {
-        throw new Error(
-          `参照と編集用が対になっていない: ${result.reference_ids.length} / ${result.body_ids.length}`,
-        )
-      }
-      return `編集可能なボディ ${result.body_ids.length} 個(原本 ${result.reference_ids.length} 個は隠したまま)`
+      return `編集可能なボディ ${result.body_ids.length} 個`
     })
 
     await attempt('ai', 'undo', async () => {

@@ -89,11 +89,7 @@ def _add_solid_body(doc: Document, name: str, box) -> str:
 
 
 def _editable_bodies(doc: Document) -> list:
-    """`import_step` が作った**編集用ボディ**だけ(参照は同じ形の原本なので数えない)。
-
-    読み込みは1ソリッドにつき参照+編集用の2つを作るので、書き出したファイルに何ソリッド
-    入っていたかを数えるにはこちらを見る。
-    """
+    """`import_step` が作った編集用ボディ(`kind="solid"`のみなので`doc.bodies`と同じ)。"""
     return [body for body in doc.bodies if body.kind == "solid"]
 
 
@@ -156,49 +152,18 @@ def test_export_raises_a_dedicated_error_when_all_candidates_are_hidden(tmp_path
         export_step(Document(), step_path)
 
 
-def test_export_from_a_reference_only_document_still_works(tmp_path):
-    """`kind="reference"` しか無い可視の文書でも書き出せる —— フォールバックの順序
-    (kindで候補→可視でフィルタ)を守れているかの検査。ここを落とすと「可視→kind」の
-    逆順に戻った事故に気づけない。
+def test_export_after_import_step_exports_both_solids(tmp_path):
+    """`import_step` 直後は作った編集用ボディが両方とも書き出される。
 
-    **この状態はBodyを直接足して作る。** 2026-08-27に読み込みが `import_step` 1本へ
-    統合され、参照ボディは必ず編集用ボディと対で・`visible=False` で入るようになったので、
-    verbを通しては「参照だけ・全部可視」の文書をもう作れない。`_export_candidates` の
-    フォールバック(solidが1つも無ければ形状を持つ全Body)はコードに残っており、
-    その分岐を実行時に踏むにはここで直に組み立てるしかない。
-    """
-    doc = Document()
-    boxes = [
-        BRepPrimAPI_MakeBox(20.0, 10.0, 5.0).Shape(),
-        BRepPrimAPI_MakeBox(gp_Pnt(50.0, 0.0, 0.0), 6.0, 6.0, 6.0).Shape(),
-    ]
-    body_ids = []
-    for number, box in enumerate(boxes, start=1):
-        body_id = new_body_id()
-        doc.add_body(Body(id=body_id, name=f"ref_{number}", kind="reference", shape=box))
-        body_ids.append(body_id)
-    assert all(body.visible for body in doc.bodies), "この検査の前提(全部可視)が崩れている"
-    assert not _editable_bodies(doc), "フォールバックへ落ちる前提(solidが無い)が崩れている"
-
-    out_path = tmp_path / "from_reference.step"
-    export_step(doc, out_path)
-    assert out_path.exists()
-    assert export_body_ids(doc) == body_ids
-    assert export_skipped_hidden(doc) == []
-
-
-def test_export_after_import_step_exports_only_the_editable_copy(tmp_path):
-    """`import_step` 直後は編集用コピーだけが書き出される(同じ形が二重に出ない)。
-
-    参照ボディは `visible=False` で追加されるので、可視フィルタで落ちる。
+    2026-09-03に参照ボディ(`kind="reference"`・不可視の読み込み原本)の概念を撤去した
+    ([[duocad-reference-body-removal-decided]])ので、`import_step` はもうソリッドごとに
+    1つのボディしか作らない。「編集用だけが書き出され、対になる参照が可視フィルタで
+    落ちる」という以前の検査対象は無くなった。
     """
     doc = Document()
     source = _two_solid_step(tmp_path)
     body_ids = import_step(doc, source)
-    reference_ids = [b.id for b in doc.bodies if b.kind == "reference"]
-    assert len(reference_ids) == 2 and all(
-        not b.visible for b in doc.bodies if b.kind == "reference"
-    )
+    assert len(_editable_bodies(doc)) == 2
 
     out_path = tmp_path / "editable_only.step"
     export_step(doc, out_path)
@@ -207,7 +172,7 @@ def test_export_after_import_step_exports_only_the_editable_copy(tmp_path):
 
     reimported = Document()
     import_step(reimported, out_path)
-    assert len(_editable_bodies(reimported)) == 2, "参照ボディが紛れ込んでいる"
+    assert len(_editable_bodies(reimported)) == 2
 
 
 # --------------------------------------------------------------------------------------
@@ -244,8 +209,8 @@ def test_import_step_logs_the_step_text_and_no_path(tmp_path):
     パスが残っていると、それが「第二の正」になり得る(再生がそちらを読む実装へ
     いつでも戻れてしまう)。`source_name` は名前だけで、ディレクトリを含まないこと。
 
-    **`args` の顔ぶれそのものが契約**である —— 作った全ID(`reference_ids` / `body_ids`)が
-    記録されていないと、再生で別のIDが振られて選択集合や押し出しの参照先が迷子になる。
+    **`args` の顔ぶれそのものが契約**である —— 作った全ID(`body_ids`)が記録されていないと、
+    再生で別のIDが振られて選択集合や押し出しの参照先が迷子になる。
     **ソリッドが何個あってもログは1行**(`(operation,) = ...` がそれを押さえている)。
     """
     doc = Document()
@@ -255,10 +220,10 @@ def test_import_step_logs_the_step_text_and_no_path(tmp_path):
 
     (operation,) = doc.log.entries
     assert operation.verb == "import_step"
-    assert set(operation.args) == {"source_name", "step", "reference_ids", "body_ids"}
+    assert set(operation.args) == {"source_name", "step", "body_ids"}
     assert operation.args["source_name"] == "two_solids.step"
     assert operation.args["body_ids"] == body_ids
-    assert len(operation.args["reference_ids"]) == len(body_ids) == 2
+    assert len(body_ids) == 2
     step_text = operation.args["step"]
     assert isinstance(step_text, str), "base64やバイト列ではなく生テキストで持つこと"
     assert step_text.startswith("ISO-10303-21"), step_text[:40]
@@ -266,21 +231,18 @@ def test_import_step_logs_the_step_text_and_no_path(tmp_path):
 
 
 def test_replay_rebuilds_the_shape_after_the_original_step_is_gone(tmp_path):
-    """**元のSTEPを消してから再生しても同じ形が出る**(参照+編集用+可視性まで)。
+    """**元のSTEPを消してから再生しても同じ形が出る**(名前・面数・体積・可視性まで)。
 
-    保存形式(JSON)を往復させたうえで、参照していたSTEPをリネーム(=移動・改名・削除・
+    保存形式(JSON)を往復させたうえで、読み込み元のSTEPをリネーム(=移動・改名・削除・
     別PCへの持ち出しと同じ状況)してから `replay` する。**読み込みの経路はこれ1本**なので、
     ここが通らなければ「保存ファイルが自己完結する」は実質成立しない。
-
-    **可視性まで見る** —— 参照ボディは `visible=False` で入るので、再生がそれを落とすと
-    同じ形が二重に描かれる(手前を消しても参照側のメッシュが残る)。
     """
     doc = Document()
     step_path = _two_solid_step(tmp_path)
     import_step(doc, step_path)
     before = _shape_fingerprint(doc)
     visible_before = [body.visible for body in doc.bodies]
-    assert len(before) == 4, "ソリッド2つ × (参照 + 編集用)であること(前提の確認)"
+    assert len(before) == 2, "ソリッド2つぶんの編集用ボディであること(前提の確認)"
 
     saved = doc.log.to_json()
     step_path.rename(tmp_path / "moved_away.step")  # 元のSTEPはもう無い

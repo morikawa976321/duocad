@@ -195,14 +195,6 @@ COMMANDS: tuple[Command, ...] = (
         ),
         params=(
             Param(
-                "include_references",
-                "boolean",
-                "読み込んだSTEPの参照ボディ(kind='reference'・編集対象外で"
-                "既定では隠されている)も含めるか。既定 false",
-                required=False,
-                ws=False,
-            ),
-            Param(
                 "include_bbox",
                 "boolean",
                 "各ボディの境界箱(min/max/center/size)を含めるか。"

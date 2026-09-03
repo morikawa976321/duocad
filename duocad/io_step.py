@@ -21,12 +21,9 @@ TransferRoots() を呼ぶと、Python例外にはならず**プロセスごと�
 無い=ValueError(**ファイルを作らない**)。いずれも doc.bodies / doc.log に変更を残さない。
 
 **書き出し対象は「いま表示中(`visible=True`)のBody」に固定してある**（対象を選ぶ引数は無い）。
-候補は `kind == "solid"` の全Body、1つも無ければ形状を持つ全Body(参照だけの文書の救済)。
-**この2段のどちらで候補を決めるかを先に済ませ、その結果に可視フィルタを乗せる順序を守ること**
-——逆にする(可視の中からkindで絞る)と、編集用ソリッドを全部隠したときに参照ボディが代わりに
-書き出されてしまう。可視性とkindは別の軸であり、混ぜてはいけない。候補はあるのに全部非表示なら
-専用の ValueError(`set_visible(visible=True)` で戻す手順つき)を出し、候補が最初から無い場合の
-文言とは分ける。含めたくないBodyは呼び出し側が `set_visible` で隠してから書き出すのが唯一の経路。
+候補は形状を持つ全Body。候補はあるのに全部非表示なら専用の ValueError
+(`set_visible(visible=True)` で戻す手順つき)を出し、候補が最初から無い場合の文言とは分ける。
+含めたくないBodyは呼び出し側が `set_visible` で隠してから書き出すのが唯一の経路。
 """
 from __future__ import annotations
 
@@ -55,9 +52,9 @@ def read_step_source(path: PathLike) -> tuple[str, str]:
 
 
 def solid_names(source_name: str, count: int) -> list[str]:
-    """参照ボディの名前 `<元ファイル名の拡張子抜き>_1` … `_N`。
+    """編集用ボディの名前 `<元ファイル名の拡張子抜き>_1` … `_N`。
 
-    verb `import_step` の `_reference_names` の実体がこれである(命名を1箇所に持つ)。
+    verb `import_step` の `_names` の実体がこれである(命名を1箇所に持つ)。
     """
     stem = Path(source_name).stem
     return [f"{stem}_{n}" for n in range(1, count + 1)]
@@ -89,24 +86,15 @@ def export_skipped_hidden(doc: Document) -> list[BodyId]:
 
 
 def _export_candidates(doc: Document) -> list[Body]:
-    """kindだけで決まる書き出し候補(可視性はまだ見ない)。
-
-    既定は `kind="solid"` の全Body、1つも無ければ形状を持つ全Bodyへフォールバックする。
-    `Session.load_step` は各ソリッドを参照ボディと編集用コピーの両方で持つので、
-    「形状を持つ全Body」を素の既定にすると同じソリッドが二重に書き出される。
-    """
-    candidates = [b for b in doc.bodies if b.kind == "solid" and b.shape is not None]
-    if not candidates:
-        candidates = [b for b in doc.bodies if b.shape is not None]
-    return candidates
+    """書き出し候補(可視性はまだ見ない)。形状を持つ全Body。"""
+    return [b for b in doc.bodies if b.shape is not None]
 
 
 def _bodies_to_export(doc: Document) -> list[Body]:
     """書き出し対象の Body 一覧(表示中のものだけ)。無ければ ValueError(ファイルは作らない)。
 
-    **kindで候補を決めてから可視フィルタを乗せる順序を守ること**(逆にすると、編集用ソリッドを
-    全部隠したときに参照ボディが代わりに書き出される)。候補が最初から無い場合と、候補はあるが
-    全部非表示の場合とで文言を分ける(前者は形が無い、後者は隠されているだけで復旧できる)。
+    候補が最初から無い場合と、候補はあるが全部非表示の場合とで文言を分ける
+    (前者は形が無い、後者は隠されているだけで復旧できる)。
     """
     candidates = _export_candidates(doc)
     if not candidates:

@@ -83,22 +83,14 @@ async function main() {
     if (imported.body_ids.length !== expectedBodies) {
       fail(`編集可能なボディが ${expectedBodies} 個でない: ${imported.body_ids.length}`)
     }
-    if (imported.reference_ids.length !== expectedBodies) {
-      fail(`原本の参照ボディが ${expectedBodies} 個でない: ${imported.reference_ids.length}`)
-    }
-    ok(
-      `MCPの import_step: 編集可能なボディ ${imported.body_ids.length} 個(原本 ${imported.reference_ids.length} 個は隠したまま)`,
-    )
+    ok(`MCPの import_step: 編集可能なボディ ${imported.body_ids.length} 個`)
 
     // ---------------------------------------------------------------- 検証1: 27件のBody
     const document = await mcp.callTool('describe_document')
     if (document.body_count !== expectedBodies) {
       fail(`describe_document が ${expectedBodies} 件でない: ${document.body_count} 件`)
     }
-    ok(
-      `describe_document: ${document.body_count} 件のBody` +
-        `(参照ボディ ${document.reference_count} 件は既定で出さない) / units=${document.units}`,
-    )
+    ok(`describe_document: ${document.body_count} 件のBody / units=${document.units}`)
 
     // ---------------------------------------------------------------- ブラウザを開く
     browser = await launchBrowser(executablePath)
@@ -408,11 +400,8 @@ async function main() {
     if (reimported.verb !== 'import_step') {
       fail(`import_step の verb が一致しない: ${reimported.verb}`)
     }
-    if (reimported.body_ids.length < 1 || reimported.reference_ids.length !== reimported.body_ids.length) {
-      fail(
-        `読み込みが参照と編集用の対になっていない: ` +
-          `${reimported.reference_ids.length} / ${reimported.body_ids.length}`,
-      )
+    if (reimported.body_ids.length < 1) {
+      fail(`読み込みが編集可能なボディを1つも作らない: ${reimported.body_ids.length}`)
     }
     await page.waitForFunction(
       (expected) => window.__duocad.parts.length === expected,
@@ -429,9 +418,8 @@ async function main() {
     )
     rmSync(roundTripStep, { force: true })
     ok(
-      `ブラウザのCtrl+Z **1回**で、AIが読み込んだ ${reimported.body_ids.length} 部品` +
-        `(原本 ${reimported.reference_ids.length} 個ごと)がまとめて消えた` +
-        `(AIと人間が同じ操作ログを共有していて、読み込みはundo1回)`,
+      `ブラウザのCtrl+Z **1回**で、AIが読み込んだ ${reimported.body_ids.length} 部品が` +
+        `まとめて消えた(AIと人間が同じ操作ログを共有していて、読み込みはundo1回)`,
     )
 
     const stillHidden = await page.evaluate(

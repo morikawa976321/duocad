@@ -744,17 +744,14 @@ class Session:
     def import_step(self, path: Any) -> dict:
         """STEPを読み、**編集可能なボディまで作る**(verb `import_step`)。
 
-        **STEPの読み込みはこれ1本**(2026-08-27に統合) —— ソリッドごとに参照ボディ(隠す)と
-        編集用ボディを作る1回のverbで、何部品あってもログ1行・undo1回である。
+        **STEPの読み込みはこれ1本**(2026-08-27に統合) —— ソリッドごとに編集用ボディを作る
+        1回のverbで、何部品あってもログ1行・undo1回である。参照ボディ(隠した読み込みの
+        原本)は2026-09-03に概念ごと撤去した([[duocad-reference-body-removal-decided]])。
         **メソッド名・WSのコマンド名・ログのverb名を同じ綴りにしてある**(1コマンドを引数で
         2つのverbに打ち分けると、コマンド名と積まれるverbが食い違う)。
         """
         body_ids = import_step_verb(self.document, str(self._resolve(path)))
-        args = self.document.log.entries[-1].args
-        return self._after_logged_verb({
-            "body_ids": list(body_ids),
-            "reference_ids": list(args["reference_ids"]),
-        })
+        return self._after_logged_verb({"body_ids": list(body_ids)})
 
     def import_svg(self, sketch_id: str, path: Any, scale: Any = None) -> dict:
         """SVGの図形を**いま開いているスケッチ(`sketch_id`)へ**取り込む(verb `import_svg`)。

@@ -1,7 +1,8 @@
 """文書とボディのデータモデル。
 
 - `Document.units` は "mm" 固定で変更できない(セッターを持たないプロパティ)。
-- `Body.kind` は "solid"(編集対象)か "reference"(読み込んだSTEP等・読み取り専用)。
+- `Body.kind` は "solid"(編集対象)のみ。読み込んだSTEPの参照ボディ(`kind="reference"`)は
+  2026-09-03に概念ごと撤去した([[duocad-reference-body-removal-decided]])。
 
 存在しないBodyIdを渡された `remove_body` / `set_active_body` / `is_editable` は KeyError、
 ID重複の `add_body` は ValueError で落とす(黙って無視すると、取り消しや再生の空振りが
@@ -15,7 +16,7 @@ from uuid import uuid4
 
 BodyId = str
 
-_VALID_KINDS = {"solid", "reference"}
+_VALID_KINDS = {"solid"}
 
 #: 存在しないIDのエラーに並べる有効IDの上限。超えたぶんは件数だけ言って列挙ツールへ送る
 #: (エラー文がスケッチ1枚ぶんの図形IDで埋まると、AIの文脈をそれだけで食う)。
@@ -59,7 +60,7 @@ def new_body_id() -> BodyId:
 
 @dataclass
 class Body:
-    """1つのボディ。`kind="reference"`(読み込んだSTEP等)は編集操作の対象にならない。
+    """1つのボディ。
 
     `visible` は**選択機構の一部**(見えないものは指せない)で、選択と同じく
     **操作ログに載らず保存もされない** —— 切り替えは `duocad.selection.set_visible`。
@@ -167,11 +168,7 @@ class Document:
         body = self._find(body_id)
         if body is None:
             raise KeyError(
-                unknown_id_message(
-                    "body",
-                    body_id,
-                    [b.id for b in self.bodies if b.kind != "reference"],
-                )
+                unknown_id_message("body", body_id, [b.id for b in self.bodies])
             )
         return body
 

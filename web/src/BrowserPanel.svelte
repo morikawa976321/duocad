@@ -27,7 +27,7 @@
     onHideAll,
     onEnterSketch,
   }: {
-    /** ユーザーに見せるボディ(参照ボディを除いた `kind==="solid"` だけ)。 */
+    /** ユーザーに見せるボディ(常に `kind==="solid"`)。 */
     bodies: BodyMeta[]
     sketches: SketchState[]
     /** 編集中のスケッチ(無ければ null)。行に「編集中」の印を出すのに使う。 */

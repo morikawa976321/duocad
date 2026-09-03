@@ -161,13 +161,14 @@ def _single_solid_step(tmp_path) -> Path:
 
 
 def test_join_right_after_importing_a_step_does_not_fail(tmp_path):
-    """参照STEPを読んだ直後でも `join` が通る(受入対象そのものの経路)。
+    """STEPを読んだ直後でも `join` が通る(受入対象そのものの経路)。
 
-    かつては読み込みが `kind="reference"` のボディだけを足していたため、直後の
+    かつては読み込みが `kind="reference"` のボディ**だけ**を足していたため、直後の
     アクティブが参照ボディになり、`join` が「参照ボディは触れない」の ValueError で
-    落ちていた —— **最初の板が作れない**。`import_step` が参照ボディの**後に**編集用
-    ボディを足す(＝アクティブが常に編集可能になる)ことでの修正なので、ここでは
-    「読み込み直後のアクティブが編集可能か」と「その状態で join が通るか」の両方を見る。
+    落ちていた —— **最初の板が作れない**。2026-09-03に参照ボディの概念そのものを
+    撤去した([[duocad-reference-body-removal-decided]])ので、この壊れ方は構造的に
+    再発しえない(`import_step` は編集用ボディしか作らず、それが常にアクティブになる)。
+    ここでは「読み込み直後のアクティブが編集可能か」と「その状態で join が通るか」を見る。
 
     体積: 20×10 の底面を10mm押し出した角柱(2000)が、その中に丸ごと入る箱(1000)を
     飲み込むので、融合後は 2000 ちょうどになる。
@@ -177,7 +178,7 @@ def test_join_right_after_importing_a_step_does_not_fail(tmp_path):
 
     active = document.active_body()
     assert active is not None and active.id == body_ids[-1]
-    assert document.is_editable(active.id), "アクティブが参照ボディのままだと join が落ちる"
+    assert document.is_editable(active.id)
 
     sketch_id = sketch_create(document, "XY")
     add_rectangle(document, sketch_id, (0.0, 0.0), 20.0, 10.0)
@@ -188,8 +189,4 @@ def test_join_right_after_importing_a_step_does_not_fail(tmp_path):
 
     assert math.isclose(
         query.volume(document.get_body(body_ids[0]).shape), 2000.0, rel_tol=1e-9
-    )
-    reference = next(body for body in document.bodies if body.kind == "reference")
-    assert math.isclose(query.volume(reference.shape), 1000.0, rel_tol=1e-9), (
-        "読み込みの原本が押し出しに巻き込まれている"
     )

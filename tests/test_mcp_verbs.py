@@ -120,7 +120,7 @@ EXPECTED_TOOLS = VERB_TOOLS | QUERY_TOOLS | SELECTION_TOOLS | EXTRA_LOGGING_TOOL
 ARGUMENTS: dict = {
     # ---- 問い合わせ
     "describe_document": (
-        {"include_references", "include_bbox", "include_regions"},
+        {"include_bbox", "include_regions"},
         set(),
     ),
     "describe_shape": ({"body_id"}, {"body_id"}),

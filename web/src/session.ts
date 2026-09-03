@@ -462,10 +462,10 @@ export type Applied =
       entity_count: number
     })
   /**
-   * STEP読み込みが作ったボディ。**読み込みは1 verbだけ**で、編集用(`body_ids`)と
-   * 原本の参照(`reference_ids`)の両方が1回の応答で返る。
+   * STEP読み込みが作ったボディ。**読み込みは1 verbだけ**で、何部品あっても
+   * `body_ids` が1回の応答で返る。
    */
-  | (AppliedVerbBase & { verb: 'import_step'; body_ids: string[]; reference_ids: string[] })
+  | (AppliedVerbBase & { verb: 'import_step'; body_ids: string[] })
   | (AppliedVerbBase & { verb: 'undo'; undone: string })
   | (AppliedVerbBase & { verb: 'redo'; redone: string })
   /** 選択の変更イベント。verbではない(操作ログに載らない)。 */

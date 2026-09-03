@@ -858,10 +858,10 @@
    * 選択優先なら、面をクリックしてからフィレットを起動すれば必ずその部品の辺が出る。
    */
   const edgeTargetBody = $derived.by(() => {
-    // **見えているボディだけを対象にする**。AIが述語で
-    // 提案した集合は参照ボディ(既定で隠れている)にまたがりうる。そこを対象にすると
-    // サーバが「隠れているものの辺は指せない」と断り、画面にはエラーだけが出て
-    // **見えている辺も出なくなる**。選択のうち見えているものを先に見る。
+    // **見えているボディだけを対象にする**。AIが述語で提案した集合は
+    // 隠したボディにまたがりうる。そこを対象にするとサーバが「隠れているものの辺は
+    // 指せない」と断り、画面にはエラーだけが出て**見えている辺も出なくなる**。
+    // 選択のうち見えているものを先に見る。
     const visible = new Set(
       (model?.bodies ?? []).filter((body) => body.visible).map((body) => body.body_id),
     )
@@ -1450,11 +1450,10 @@
   // ---------------------------------------------------------------- 可視性(パーツ一覧から)
   // **コアの `set_visible` verb を呼ぶだけ**(アプリ層に可視性の状態を持たせない)。
   //
-  // `model.bodies` には**参照ボディ(`kind="reference"`)も混ざっている**ので、
-  // パーツ一覧・一括操作とも `kind==="solid"` だけを扱う(`duocad/server.py` の
-  // `load_step` docstring参照)。ここを `bodies` 全部にすると「全表示」が参照ボディまで
-  // 可視にしてしまい、1ソリッドにつき2つの同じ形が重なって描かれる。
-  const partBodies = $derived((model?.bodies ?? []).filter((body) => body.kind === 'solid'))
+  // `model.bodies` は常に編集用ボディ(`kind="solid"`)だけを持つ。参照ボディ
+  // (`kind="reference"`・読み込みの原本を不可視のまま持つ二重管理)は2026-09-03に
+  // 概念ごと撤去した([[duocad-reference-body-removal-decided]])。
+  const partBodies = $derived(model?.bodies ?? [])
 
   function setVisible(bodyId: string, visible: boolean): void {
     session.setVisible(bodyId, visible, nextOp())
@@ -1590,7 +1589,7 @@
       ready: status === 'open' && model !== null,
       status,
       state: model,
-      // ユーザーに見せる27部品(参照ボディを除いた kind==="solid" だけ)
+      // ユーザーに見せる部品一覧(常に kind==="solid" だけ)
       parts: partBodies,
       // 直近にviewportへ渡した生geometryを問い合わせる(正はviewportの描画に一本化してある)。
       getGeometry: (bodyId: string) => viewport?.getGeometry(bodyId) ?? null,
