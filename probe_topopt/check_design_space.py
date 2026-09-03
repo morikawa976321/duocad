@@ -1,12 +1,16 @@
-"""塊(設計空間)と面アンカーの対象ソリッドの分離の受入検査。
+"""塊(設計空間)の受入検査。
 
     ..\\.venv\\Scripts\\python.exe check_design_space.py
 
-**このファイルが合否そのものである。** タスク
-`20260903-2216-topopt-split-design-space-from-anchor-soup` の完了条件1〜3を assert する。
-どれか1つでも落ちればプロセスは非ゼロで終わる。
+**このファイルが合否そのものである。** どれか1つでも落ちればプロセスは非ゼロで終わる。
 
-検査の構成:
+- **[1]〜[4]**: タスク `20260903-2216-topopt-split-design-space-from-anchor-soup`
+  (塊と面アンカーの対象ソリッドの分離)の完了条件1〜3。
+- **[5]〜[9]**: タスク `20260903-2234-topopt-design-space-from-bbox`
+  (案1: 4条件から外接直方体+余白で塊を導出する)の受入検査。**[5]〜[9]は変異検査を通してある**
+  —— 実装を壊すと実際に落ちることを1件ずつ確認した(対応表は README「変異検査」)。
+
+[1]〜[4] の構成:
 
 1. **塊がソリッドから来ない** — 渡した bool マスクが要素単位でそのまま `VoxelModel.design`
    になる(かつ呼び出し側の配列と共有していない)。
@@ -19,10 +23,25 @@
    ブラケットのものを使って SIMP を回すと、**元のブラケットの外に ρ>0.5 の要素ができる**。
    同じ格子・同じ面で旧経路(塊=ブラケット)を回すと、`void = ~design` により構造的に0個。
    収束を見る検査ではないので格子は粗く、反復も少なくてよい。
+
+[5]〜[9] の構成(案1):
+
+5. **4条件だけで塊が出る** — 設計空間ソリッドを渡す口が型に無いことを見たうえで、
+   4条件 → 塊 → 面アンカー → SIMP → marching cubes → STL を通し、**条件のどのソリッドにも
+   入っていない空間に材料ができる**ことを見る。
+6. **保持ソリッドが塊に入っている** — はみ出し0要素。**「はみ出し0」だけでは足りない**ので、
+   保持が塊の中で1要素以上に表現されていること・格子そのものの内側にあることも見る。さらに
+   除外が保持を食う配置を作り、**黙って切り詰めず例外になる**ことを見る。
+7. **拘束面・荷重面のアンカーが空にならない** — `empty_faces()` に条件面が入らない。
+   保持ソリッドから離れた面を条件にした配置も1つ通す(点群が保持の頂点だけだと落ちる)。
+8. **除外ソリッドが引かれている** — 除外の領域に塊の要素が1つも無いことを、除外の占有を
+   独立に計算し直して見る。**除外は点群に入らない**(遠くに足しても外接直方体が動かない)。
+9. **余白を外すと壊れる** — 比率を下げていくと必ず壊れる比率がある。既定値はそこから離れている。
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 import time
@@ -39,6 +58,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import anchor as an
+import design_space as ds
 import voxelize as vx
 
 FAILURES: list[str] = []
@@ -381,14 +401,380 @@ def check_material_leaves_the_input_solid() -> None:
     RESULTS["check4_compliance_old"] = old["compliance_last"]
 
 
+# ===========================================================================
+# 案1(外接直方体+余白): 4条件だけから塊を導出する
+#   タスク 20260903-2234。以下は `design_space.py` の受入検査で、
+#   **どれも「実装を壊すと実際に落ちる」ことを変異検査で確認してある**(README に記録)。
+# ===========================================================================
+# 検査の格子。**収束ではなく導出の性質を見るので粗い。**
+CASE1_LONG_AXIS = 22
+CASE1_MAX_ITER = 25
+_CASE1: dict = {}
+
+
+def case1_space():
+    """案1の導出を1回だけ回して使い回す(検査5〜8が同じものを見る)。"""
+    if "space" not in _CASE1:
+        cond = ds.demo_conditions(0.0)
+        _CASE1["conditions"] = cond
+        _CASE1["space"] = ds.derive(cond, elements_long_axis=CASE1_LONG_AXIS)
+    return _CASE1["conditions"], _CASE1["space"]
+
+
+# ---------------------------------------------------------------------------
+# 5. 4条件だけで塊が出て、端から端まで通る
+# ---------------------------------------------------------------------------
+def check_case1_end_to_end() -> None:
+    print("\n[5] 案1: 4条件だけ(設計空間ソリッド無し)で端から端まで通る")
+    cond, space = case1_space()
+    # `Conditions` に設計空間ソリッドを入れる場所が無いことを型で見る。**渡していない**の
+    # 根拠を「渡さなかった」という自己申告に置かない。
+    field_names = {f.name for f in dataclasses.fields(ds.Conditions)}
+    check(
+        "条件は4つだけ(設計空間ソリッドを受け取る口が無い)",
+        field_names == {"keep", "fixed_face", "load_face", "obstacle", "anchor_shape"},
+        f"{sorted(field_names)}",
+    )
+    print(
+        f"  格子 {space.grid.shape} spacing={space.grid.spacing:.3f}mm / "
+        f"塊 {space.element_count} 要素 / 余白 {space.margin:.2f}mm(比率 {space.margin_ratio}) / "
+        f"面 固定={space.fixed_face} 荷重={space.load_face}",
+        flush=True,
+    )
+
+    stl = Path(__file__).resolve().parent / "output" / "check_design_space_case1.stl"
+    if stl.exists():
+        stl.unlink()
+    t0 = time.perf_counter()
+    out = ds.run_topopt(space, max_iter=CASE1_MAX_ITER, volfrac=VOLFRAC, stl_path=stl)
+    seconds = time.perf_counter() - t0
+    check(
+        "STL まで出る(塊 → 面アンカー → SIMP → marching cubes → STL)",
+        stl.exists() and stl.stat().st_size > 0 and out["iterations"] == CASE1_MAX_ITER,
+        f"{stl.name} {stl.stat().st_size if stl.exists() else 0} bytes / "
+        f"{out['iterations']}反復 / {seconds:.1f}秒",
+    )
+
+    # **本丸**: 条件のどのソリッドにも入っていない空間に材料が置かれた = 塊が条件から作られ、
+    # かつ最適化がその中で自由に形を作った。ここが0だと「保持ソリッドを塗っただけ」になる。
+    keep_occ, _ = vx.occupancy(
+        vx.triangles_from_shape(vx._unwrap(cond.keep), deviation=space.stats["deviation"]),
+        space.grid,
+    )
+    grown = (out["result"].rho > 0.5) & ~keep_occ & ~np.asarray(out["solid"], dtype=bool)
+    check(
+        "条件のソリッドが無い空間に材料ができた(塊が条件だけから起きている)",
+        int(grown.sum()) >= 1,
+        f"{int(grown.sum())} 要素 (全体の ρ>0.5 は {int((out['result'].rho > 0.5).sum())} 要素)",
+    )
+    _CASE1["out"] = out
+    _CASE1["keep_occ"] = keep_occ
+    RESULTS["case1_grid_shape"] = list(space.grid.shape)
+    RESULTS["case1_spacing"] = float(space.grid.spacing)
+    RESULTS["case1_design_elements"] = space.element_count
+    RESULTS["case1_margin_mm"] = round(space.margin, 3)
+    RESULTS["case1_grown_elements"] = int(grown.sum())
+    RESULTS["case1_seconds"] = round(seconds, 1)
+
+
+# ---------------------------------------------------------------------------
+# 6. 保持ソリッドが塊に入っている
+# ---------------------------------------------------------------------------
+def check_case1_keep_inside() -> None:
+    print("\n[6] 案1: 保持ソリッドが塊に完全に含まれている")
+    _cond, space = case1_space()
+    outside = int(np.count_nonzero(space.model.keep & ~space.mask))
+    dropped = int(space.model.stats["keep_dropped_outside"])
+    check(
+        "保持のはみ出しが0要素",
+        outside == 0 and dropped == 0,
+        f"塊の外に出た保持 {outside} 要素 / voxelize が捨てた {dropped} 要素",
+    )
+    # **「はみ出し0」だけでは足りない。** 解像度が粗すぎて保持が1要素も立たないと、はみ出しも
+    # 0になって検査が自明に通る(前タスクのQAが指摘した「構造的恒真」と同じ穴)。
+    keep_elements = int(np.count_nonzero(space.model.keep))
+    check(
+        "保持が塊の中で1要素以上に表現されている(はみ出し0が自明に通るのを防ぐ)",
+        keep_elements > 0,
+        f"{keep_elements} 要素",
+    )
+    # 格子の外は voxelize が見ていないので、格子が保持を覆っていることも別に見る。
+    g_lo, g_hi = space.grid.world_box()
+    k_lo, k_hi = vx._shape_bbox(vx._unwrap(_cond.keep))
+    check(
+        "保持ソリッドが格子そのものの内側にある(格子の外は誰も数えていない)",
+        bool(np.all(k_lo >= g_lo - 1e-9) and np.all(k_hi <= g_hi + 1e-9)),
+        f"保持 {np.round(k_lo, 2).tolist()}..{np.round(k_hi, 2).tolist()} / "
+        f"格子 {np.round(g_lo, 2).tolist()}..{np.round(g_hi, 2).tolist()}",
+    )
+    RESULTS["case1_keep_elements"] = keep_elements
+
+    # **黙って切り詰めないこと。** 除外が保持に重なると、塊 = 直方体 − 除外 の結果として保持が
+    # 塊からはみ出す。ここで `on_outside="clip"` に倒れていると、保持ソリッドの一部が黙って
+    # 消えたまま最適化が回ってしまう(利用者は塊を見ないので永久に気づけない)。
+    from build123d import Box, Pos
+
+    eater = Pos(-30, 0, 0) * Box(10, 30, 30)  # 固定側パッドを丸ごと覆う除外
+    greedy = ds.Conditions(
+        keep=_cond.keep,
+        fixed_face=_cond.fixed_face,
+        load_face=_cond.load_face,
+        obstacle=eater,
+    )
+    raised = None
+    try:
+        ds.derive(greedy, elements_long_axis=CASE1_LONG_AXIS)
+    except ds.DesignSpaceTooSmallError as e:
+        raised = e
+    check(
+        "除外が保持を食うと例外になる(黙って切り詰めない)",
+        raised is not None and isinstance(raised, vx.OutsideDesignSpaceError),
+        f"{type(raised).__name__ if raised else '例外が上がらなかった'}",
+    )
+    if raised is not None:
+        check(
+            "文面が除外ソリッドの重なりを名指しする(「座標系が違う」で誤誘導しない)",
+            "除外ソリッド" in str(raised) and "margin_ratio" in str(raised),
+            f"{str(raised)[:120]}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# 7. 拘束面・荷重面のアンカーが空にならない
+# ---------------------------------------------------------------------------
+def check_case1_anchors_not_empty() -> None:
+    print("\n[7] 案1: 拘束面・荷重面のアンカーが空にならない")
+    _cond, space = case1_space()
+    table = an.build_anchors(space.soup, space.grid)
+    empty = table.empty_faces()
+    bad = [f for f in (space.fixed_face, space.load_face) if f in empty]
+    check(
+        "拘束面・荷重面が empty_faces() に入っていない",
+        not bad,
+        f"空になった条件面 {bad} / 空の面は全体で {len(empty)} 面",
+    )
+    n_fixed = table[space.fixed_face].node_count
+    n_load = table[space.load_face].node_count
+    check(
+        "両面とも節点が付いている",
+        n_fixed > 0 and n_load > 0,
+        f"拘束面 {n_fixed} 節点 / 荷重面 {n_load} 節点",
+    )
+    check(
+        "拘束面から固定自由度が引ける(SIMP に渡せる)",
+        table.fixed_dofs(space.fixed_face).size >= 3,
+        f"{table.fixed_dofs(space.fixed_face).size} 自由度",
+    )
+    RESULTS["case1_fixed_nodes"] = int(n_fixed)
+    RESULTS["case1_load_nodes"] = int(n_load)
+
+    # **条件面は保持ソリッドの外にも置ける。** 点群が保持ソリッドの頂点だけで作られていると、
+    # 離れた場所にある拘束面が塊に入らず、そこにアンカーを張れない。デモでは面が保持の上に
+    # 乗っているのでこの穴は見えない —— 面が離れている配置を1つ作って直接突く。
+    from build123d import Box, Pos
+
+    remote = Pos(70, 0, 0) * Box(6, 20, 20)  # 保持ではない、拘束面だけを提供する板
+    anchor_shape = _cond.keep + remote
+    a_soup = vx.triangles_from_shape(vx._unwrap(anchor_shape), deviation=0.2)
+    far_fixed = an.faces_matching(
+        a_soup, kind="plane", normal=(1, 0, 0), near_point=(73, 0, 0), near_tol=1e-4
+    )
+    far_load = an.faces_matching(
+        a_soup, kind="plane", normal=(0, 0, 1), near_point=(26, 0, 18), near_tol=1e-4
+    )
+    check(
+        "足場: 離れた板の面を一意に選べた",
+        len(far_fixed) == 1 and len(far_load) == 1,
+        f"拘束={far_fixed} 荷重={far_load}",
+    )
+    if len(far_fixed) == 1 and len(far_load) == 1:
+        far_space = ds.derive(
+            ds.Conditions(
+                keep=_cond.keep,
+                fixed_face=far_fixed[0],
+                load_face=far_load[0],
+                obstacle=_cond.obstacle,
+                anchor_shape=anchor_shape,
+            ),
+            elements_long_axis=CASE1_LONG_AXIS,
+        )
+        check(
+            "保持ソリッドの外にある条件面が外接直方体に入っている",
+            float(far_space.bbox_max[0]) >= 73.0 - 1e-6,
+            f"外接直方体の x 上限 {float(far_space.bbox_max[0]):.3f}mm "
+            f"(保持だけなら 30.0mm、板の面は 73.0mm)",
+        )
+        far_table = an.build_anchors(far_space.soup, far_space.grid)
+        check(
+            "離れた条件面にもアンカーが張れている",
+            far_space.fixed_face not in far_table.empty_faces()
+            and far_table[far_space.fixed_face].node_count > 0,
+            f"{far_table[far_space.fixed_face].node_count} 節点",
+        )
+
+
+# ---------------------------------------------------------------------------
+# 8. 除外ソリッドが引かれている / 点群には入らない / 塊の外の除外は no-op
+# ---------------------------------------------------------------------------
+def check_case1_obstacle() -> None:
+    print("\n[8] 案1: 除外ソリッドが塊から引かれている")
+    from build123d import Box, Pos
+
+    cond, space = case1_space()
+    # 塊の中の除外領域を**独立に**計算し直す(design_space.py が引いた結果を再利用しない)。
+    obs_soup = vx.triangles_from_shape(
+        vx._unwrap(cond.obstacle), deviation=space.stats["deviation"]
+    )
+    obs, _ = vx.occupancy(obs_soup, space.grid)
+    overlap = int(np.count_nonzero(space.mask & obs))
+    removed = int(space.stats["obstacle_elements_removed"])
+    check(
+        "除外の領域に塊の要素が1つも無い",
+        overlap == 0,
+        f"重なり {overlap} 要素(引かれたのは {removed} 要素)",
+    )
+    check(
+        "除外は実際に何かを引いている(検査が自明に通っていない)",
+        removed > 0 and int(obs.sum()) > 0,
+        f"除外の占有 {int(obs.sum())} 要素 / うち直方体の中 {removed} 要素",
+    )
+
+    # **除外は点群に入らない。** 遠くに除外を足しても外接直方体は1mmも動かない。
+    far = Pos(300, 0, 0) * Box(20, 20, 20)
+    cond_far = ds.Conditions(
+        keep=cond.keep,
+        fixed_face=cond.fixed_face,
+        load_face=cond.load_face,
+        obstacle=cond.obstacle + far,
+    )
+    space_far = ds.derive(cond_far, elements_long_axis=CASE1_LONG_AXIS)
+    check(
+        "遠くの除外を足しても条件の外接直方体が変わらない(除外は塊を広げない)",
+        bool(
+            np.allclose(space_far.bbox_min, space.bbox_min)
+            and np.allclose(space_far.bbox_max, space.bbox_max)
+        ),
+        f"{np.round(space_far.bbox_min, 3).tolist()}..{np.round(space_far.bbox_max, 3).tolist()}",
+    )
+    check(
+        "塊の外の除外はただの no-op(例外にせず、塊も変わらない)",
+        bool(np.array_equal(space_far.mask, space.mask)),
+        f"塊 {space_far.element_count} 要素 (元は {space.element_count} 要素)",
+    )
+
+    # **設計判断の記録**: 同じ除外を `model_from_design_mask` の `obstacle` に渡すと、塊から
+    # 引き切ってあるぶん**必ず全要素はみ出して**例外になる。だから渡さない(design_space.py の
+    # docstring)。ここが将来通るようになったら、その判断の前提が消えたということ。
+    raised = None
+    try:
+        vx.model_from_design_mask(
+            space.grid,
+            space.mask,
+            anchor_shape=space.soup,
+            keep=cond.keep,
+            obstacle=cond.obstacle,
+        )
+    except vx.OutsideDesignSpaceError as e:
+        raised = e
+    check(
+        "引き切った除外を obstacle として渡すと必ず例外になる(渡さない判断の根拠)",
+        raised is not None and raised.outside.get("obstacle", 0) > 0,
+        f"outside={getattr(raised, 'outside', None)}",
+    )
+    check(
+        "導出した塊の VoxelModel は obstacle を持たない(除外は塊に畳んである)",
+        not bool(space.model.obstacle.any()),
+        f"obstacle {int(space.model.obstacle.sum())} 要素",
+    )
+    RESULTS["case1_obstacle_removed"] = removed
+
+
+# ---------------------------------------------------------------------------
+# 9. 余白を外すと壊れる(余白が自由パラメータであることを検査で固定する)
+# ---------------------------------------------------------------------------
+def check_case1_margin_is_load_bearing() -> None:
+    print("\n[9] 案1: 余白を外すと壊れる(余白が自由パラメータであることの固定)")
+    cond, _space = case1_space()
+    ladder = [ds.DEFAULT_MARGIN_RATIO, 0.10, 0.05, 0.02, 0.0, -0.01, -0.02, -0.05, -0.10]
+    verdicts: list[tuple[float, str]] = []
+    for ratio in ladder:
+        try:
+            sp = ds.derive(cond, margin_ratio=ratio, elements_long_axis=CASE1_LONG_AXIS)
+        except ds.DesignSpaceTooSmallError as e:
+            verdicts.append((ratio, "格子外" if "格子" in str(e) else "保持がはみ出す"))
+            continue
+        except ValueError as e:  # noqa: PERF203 — 比率ごとに理由を残す
+            verdicts.append((ratio, f"ValueError({str(e)[:30]})"))
+            continue
+        table = an.build_anchors(sp.soup, sp.grid)
+        empty = [f for f in (sp.fixed_face, sp.load_face) if f in table.empty_faces()]
+        verdicts.append((ratio, "アンカーが空" if empty else "OK"))
+    for ratio, verdict in verdicts:
+        print(f"      余白比率 {ratio:+.2f} → {verdict}")
+
+    broke = [r for r, v in verdicts if v != "OK"]
+    check(
+        "余白を削っていくと必ず壊れる比率がある(余白は自由パラメータで、外すと壊れる)",
+        bool(broke),
+        f"壊れた比率 {broke}",
+    )
+    if broke:
+        cliff = max(broke)
+        # ここが言えるのは「壊れる比率は既定より下にある」までで、**既定が安全であることの
+        # 裏付けにはならない**。cliff は負(-0.05)なので、既定を 0.02 まで下げてもこの assert は
+        # 通る。既定 0.25 の根拠は検査ではなく実測(README「余白比率をどう決めたか」)にある。
+        check(
+            "壊れる比率は既定より下にある",
+            cliff < ds.DEFAULT_MARGIN_RATIO,
+            f"最も大きい壊れる比率 {cliff:+.2f} / 既定 {ds.DEFAULT_MARGIN_RATIO} "
+            f"(隔たり {ds.DEFAULT_MARGIN_RATIO - cliff:.2f})",
+        )
+        RESULTS["case1_margin_cliff"] = float(cliff)
+    ok_ratios = [r for r, v in verdicts if v == "OK"]
+    check(
+        "既定の余白比率では壊れない",
+        ds.DEFAULT_MARGIN_RATIO in ok_ratios,
+        f"通った比率 {ok_ratios}",
+    )
+    # **格子の外は voxelize が数えていない。** 余白を大きく削ると保持が格子そのものから出るが、
+    # 格子の外にはセル中心が無いので、はみ出しは件数にも例外にも現れない(前タスクのQA指摘)。
+    # design_space.py はそれを自分で見て落とす。ここが消えたら黙って削れるようになる。
+    check(
+        "余白を大きく削ると「格子の外」として落ちる(件数に現れないはみ出しを塞いである)",
+        "格子外" in [v for _r, v in verdicts],
+        f"{[(r, v) for r, v in verdicts if v != 'OK']}",
+    )
+    # **既定値が「壊れない一番小さい値」ではない**ことを記録する。検査2・3は「保持が入るか」
+    # しか見ておらず、「答えの居場所が残っているか」は見ていない —— 余白ゼロでも検査は通る。
+    # 既定値の根拠は検査ではなく README の実測(壁に接する材料の量)にある。
+    RESULTS["case1_margin_verdicts"] = [[float(r), v] for r, v in verdicts]
+
+
 def main() -> int:
     print("=" * 72)
-    print("check_design_space.py : 塊と面アンカーの対象ソリッドの分離の受入検査")
+    print("check_design_space.py : 塊(設計空間)の受入検査")
+    print("  [1]-[4] 塊と面アンカーの対象ソリッドの分離 / [5]-[9] 案1(外接直方体+余白)")
     print("=" * 72)
-    check_mask_is_the_design_space()
-    check_anchors_independent_of_design()
-    check_outside_raises()
-    check_material_leaves_the_input_solid()
+    # **1件が例外で落ちても残りを走らせる。** 実装を壊したときに最初の1件で止まると、
+    # 何がどこまで壊れているかが1周では分からない(`check()` と同じ方針を関数の粒度でも取る)。
+    for section in (
+        check_mask_is_the_design_space,
+        check_anchors_independent_of_design,
+        check_outside_raises,
+        check_material_leaves_the_input_solid,
+        check_case1_end_to_end,
+        check_case1_keep_inside,
+        check_case1_anchors_not_empty,
+        check_case1_obstacle,
+        check_case1_margin_is_load_bearing,
+    ):
+        try:
+            section()
+        except Exception as exc:  # noqa: BLE001 — 検査中の例外も不合格として記録する
+            import traceback
+
+            traceback.print_exc()
+            check(f"{section.__name__} が例外で落ちた", False, f"{type(exc).__name__}: {exc}")
 
     print("\n" + "=" * 72)
     print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))

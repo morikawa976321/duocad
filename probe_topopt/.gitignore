@@ -1,0 +1,4 @@
+# 案1の実測(`design_space.py --measure`)が書き出すSTL。実測を回すと再生成され、
+# 設定を変えるたびに全部差し替わるのでリポジトリには入れない(README「ファイル」節)。
+output/design_space_rot*.stl
+output/design_space_margin*.stl
