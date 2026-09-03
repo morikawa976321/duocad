@@ -583,6 +583,10 @@ export interface Viewport {
    * `axis` は**面外に線として描いている軸**(無ければ null)。
    * `sketchFaceExtent` は任意面グリッドの表示範囲の半幅[mm](`faceUvExtent` の目安。
    * 無限のまま・任意面でないときは null)。
+   * `depthBiasLayers` は `planes` と同じ並びの深度バイアス層番号(`DEPTH_BIAS_LAYER`)。
+   * 任意面のグリッドが基準平面と別枠(`sketchFaceGrid`)を使っているかを機械で見るための穴
+   * (2026-09-03 QA指摘 —— frameが基準平面と数値的に一致する実ジオメトリの面でも、
+   * 正しく `sketchFaceGrid` になっていることをここで検査する)。
    */
   gridTiers(): {
     mmPerPixel: number
@@ -590,6 +594,7 @@ export interface Viewport {
     planes: string[]
     axis: 'X' | 'Y' | 'Z' | null
     sketchFaceExtent: number | null
+    depthBiasLayers: number[]
   }
   /**
    * ワールド座標の点が画面のどこに写るか(ビューポート左上を原点とする画素)。
@@ -1070,8 +1075,29 @@ export function createViewport(container: HTMLElement): Viewport {
    */
   let sketchGridExtent: number | null = null
 
+  /**
+   * いまのスケッチが**実ジオメトリの面(`plane.kind === 'face'`)へ貼られているか**。
+   * **QA指摘で追加(2026-09-03)** —— 以前は `basePlaneForFrame(sketchGridFrame)` の
+   * frame一致だけで「基準平面か任意面か」を判定していたが、「XY床にスケッチ→押し出し→
+   * その底面に再度スケッチ」のように**実ジオメトリの面でも frame が数値的に基準平面と
+   * 一致する**ことがあり(原点(0,0,0)・u/vが基準平面と同じ)、その場合に任意面のグリッド
+   * (深度バイアス層・extentの有限化・直交軸なし)が不発になっていた。**その面は実ソリッドの
+   * メッシュと完全同一平面**なので、本来はz-fighting対策が最も要る場面である。
+   * 判定は `plane.kind` を正とし、`basePlaneForFrame` はもう「基準平面か否か」の判定には
+   * 使わない(使うのは `plane.kind==='base'` のときにXY/XZ/YZのどれかを選ぶ用途だけ)。
+   */
+  let sketchGridIsFacePlane = false
+
   /** 実機検査フック(`gridTiers`)へ出す、いま表示している平面の名前。 */
   let gridPlanesShown: string[] = []
+  /**
+   * `gridPlanesShown` と対で持つ、各グリッドに適用中の深度バイアス層番号
+   * (`DEPTH_BIAS_LAYER`)。**実機検査フック専用**(2026-09-03 QA指摘) —— 任意面のグリッドが
+   * 本当に `sketchFaceGrid` 層(基準平面の `planeGrid` 層とは別)を使っているかは、
+   * z-fightingの有無を静止画のスクリーンショットだけでは機械的に見分けられないため、
+   * 数値そのものを検査できるようにする。
+   */
+  let gridDepthBiasLayers: number[] = []
 
   /**
    * 同時に出しうる平面は最大3枚(対象待ちの XY/XZ/YZ)。**作り直さず使い回す** ——
@@ -1122,9 +1148,13 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * frameがどの基準平面のものか(u/vの一致で見る)。基準平面でなければ null ——
-   * **任意面のスケッチはここで null になる**。`desiredGridPlanes` はそれを見て、
-   * 通常(XY床)へ落とすのではなく、そのframeへ直接グリッドを乗せる(2026-09-03)。
+   * frameがどの基準平面のものか(u/vの一致で見る)。基準平面でなければ null。
+   *
+   * **これは「基準平面か任意面か」の判定には使わない**(2026-09-03 QA指摘で訂正) ——
+   * 実ジオメトリの面(`plane.kind==='face'`)でも、frameが基準平面と数値的に一致することが
+   * ある(「XY床にスケッチ→押し出し→その底面に再度スケッチ」が典型例。原点(0,0,0)・u/vが
+   * 基準平面と同じになる)。その判定は `sketchGridIsFacePlane`(`plane.kind` を正とする)が
+   * 持つ。ここが答えるのは「`plane.kind==='base'` のとき、XY/XZ/YZのどれを表示するか」だけ。
    */
   function basePlaneForFrame(frame: PlaneFrame): BasePlaneName | null {
     const same = (a: readonly number[], b: readonly number[]): boolean =>
@@ -1177,12 +1207,15 @@ export function createViewport(container: HTMLElement): Viewport {
         axis: null,
       }
     }
-    const sketchPlane = sketchGridFrame === null ? null : basePlaneForFrame(sketchGridFrame)
-    if (sketchGridFrame !== null && sketchPlane === null) {
-      // 任意面(3基準平面のいずれでもない)へのスケッチ中。その面のframeへそのまま乗せる ——
-      // 原点・u/v軸はスケッチ平面のもの(完了条件4)。直交軸は出さない(完了条件3・本人指定)。
-      // 貼り付けた面(A群のソリッド)と完全同一平面になるので、バイアスの層番号は別枠
-      // (`sketchFaceGrid`)を使う([[duocad-depth-overlay-rule]] B群・タスク指示)。
+    if (sketchGridFrame !== null && sketchGridIsFacePlane) {
+      // 実ジオメトリの面(`plane.kind==='face'`)へのスケッチ中。その面のframeへそのまま
+      // 乗せる —— 原点・u/v軸はスケッチ平面のもの(完了条件4)。直交軸は出さない
+      // (完了条件3・本人指定)。**frameが基準平面と数値的に一致していてもここへ来る**
+      // (2026-09-03 QA指摘で修正。以前は `basePlaneForFrame` のframe一致だけで判定しており、
+      // 「XY床にスケッチ→押し出し→その底面に再度スケッチ」のような日常的な構成で
+      // 基準平面の分岐へ誤って落ちていた)。貼り付けた面(A群のソリッド)と完全同一平面に
+      // なるので、バイアスの層番号は別枠(`sketchFaceGrid`)を使う
+      // ([[duocad-depth-overlay-rule]] B群・タスク指示)。
       return {
         planes: [
           {
@@ -1197,6 +1230,10 @@ export function createViewport(container: HTMLElement): Viewport {
         axis: null,
       }
     }
+    // ここへ来るのは「スケッチ外(通常表示)」か「`plane.kind==='base'` のスケッチ中」だけ。
+    // 後者の平面名は frame一致で解決する(基準平面のframeは常に3つのどれかと一致するので
+    // `sketchPlane` は通常 null にならないが、万一の不一致は安全側の既定 'XY' へ落とす)。
+    const sketchPlane = sketchGridFrame === null ? null : basePlaneForFrame(sketchGridFrame)
     const name: BasePlaneName = sketchPlane ?? 'XY'
     const axes = BASE_PLANE_AXES[name]
     return {
@@ -1310,16 +1347,24 @@ export function createViewport(container: HTMLElement): Viewport {
       grid.setVisible(true)
     })
     gridPlanesShown = wanted.planes.map((spec) => spec.name)
+    gridDepthBiasLayers = wanted.planes.map((spec) => spec.depthBiasLayer)
     rebuildGridAxisLine(wanted.axis)
   }
 
   /**
    * スケッチ平面のframeを差し替える(モード外は null)。表示する平面がこれで決まる。
-   * `extent` は任意面のときだけ効く(基準平面・モード外は `desiredGridPlanes` が無視する)。
+   * `isFacePlane` は `plane.kind==='face'` かどうか(基準平面か任意面かの判定そのもの。
+   * 2026-09-03 QA指摘でframe一致判定から切り替えた)。`extent` は `isFacePlane` のときだけ
+   * 効く(基準平面・モード外は `desiredGridPlanes` が無視する)。
    */
-  function setGridSketchFrame(frame: PlaneFrame | null, extent: number | null): void {
+  function setGridSketchFrame(
+    frame: PlaneFrame | null,
+    extent: number | null,
+    isFacePlane: boolean,
+  ): void {
     sketchGridFrame = frame
     sketchGridExtent = extent
+    sketchGridIsFacePlane = isFacePlane
     applyGridPlanes()
   }
 
@@ -3456,11 +3501,12 @@ export function createViewport(container: HTMLElement): Viewport {
   function refreshGridSketchFrame(): void {
     const target = activeSketchId === null ? undefined : sketches.get(activeSketchId)
     const frame = target?.frame ?? null
+    const isFacePlane = target !== undefined && target.plane.kind === 'face'
     const extent =
       frame !== null && target !== undefined && target.plane.kind === 'face'
         ? faceUvExtent(target.plane.bodyId, target.plane.faceIndex, frame)
         : null
-    setGridSketchFrame(frame, extent)
+    setGridSketchFrame(frame, extent, isFacePlane)
   }
 
   function clearGhost(): void {
@@ -4319,9 +4365,10 @@ export function createViewport(container: HTMLElement): Viewport {
         tiers: TIERS.map((step, index) => ({ step, alpha: gridTierAlphaValues[index] })),
         planes: [...gridPlanesShown],
         axis: gridAxisShown,
-        sketchFaceExtent: sketchGridFrame !== null && basePlaneForFrame(sketchGridFrame) === null
-          ? sketchGridExtent
-          : null,
+        // `sketchGridIsFacePlane` が判定の正(`plane.kind`ベース。2026-09-03修正 —— 以前は
+        // frame一致で再判定しており、基準平面と数値的に一致する実ジオメトリの面を見誤っていた)。
+        sketchFaceExtent: sketchGridFrame !== null && sketchGridIsFacePlane ? sketchGridExtent : null,
+        depthBiasLayers: [...gridDepthBiasLayers],
       }
     },
     setFov,
