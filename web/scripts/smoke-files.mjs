@@ -151,7 +151,18 @@ async function main() {
         const box = document.querySelector('.viewport').getBoundingClientRect()
         return { left: box.left, top: box.top, width: box.width, height: box.height }
       })
-      for (const [fx, fy] of [[0.97, 0.97], [0.03, 0.97], [0.97, 0.03], [0.5, 0.97]]) {
+      // **ビューキューブの矩形を候補から外す**(2026-09-03)。キューブは右上のクリックを吸うので
+      // `[0.97, 0.03]` がそのまま矩形の内側に入る。矩形は右上アンカーで**ビューポートの寸法が
+      // 変わると動く**ので、座標を書き換えるのではなく毎回 `viewCubeRect()` に聞いて弾く
+      // (座標を決め打ちで動かすと [[viewport-resize-silently-changes-what-a-click-grabs]] を踏む)。
+      const cube = await page.evaluate(() => window.__duocad.viewCubeRect?.() ?? null)
+      const insideCube = (x, y) =>
+        cube !== null && x >= cube.x && x < cube.x + cube.w && y >= cube.y && y < cube.y + cube.h
+      const candidates = [[0.97, 0.97], [0.03, 0.97], [0.97, 0.03], [0.5, 0.97]].filter(
+        ([fx, fy]) => !insideCube(rect.width * fx, rect.height * fy),
+      )
+      if (candidates.length === 0) fail('空白クリックの候補が全部ビューキューブの矩形の下だった')
+      for (const [fx, fy] of candidates) {
         await page.mouse.click(rect.left + rect.width * fx, rect.top + rect.height * fy)
         try {
           await page.waitForFunction(
