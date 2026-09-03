@@ -57,7 +57,7 @@ for (const axis of [0, 1, 2]) {
   assert.ok(Math.abs(neg.hi - mid.lo) < 1e-9, `axis=${axis} で -1側と中央のセルが重なる/隙間がある`)
   assert.ok(Math.abs(mid.hi - pos.lo) < 1e-9, `axis=${axis} で中央と1側のセルが重なる/隙間がある`)
 }
-// EDGE_T が想定どおり効いていること(既定値0.3の場合の具体例)。
+// EDGE_T が想定どおり効いていること(値そのものには依存させない)。
 {
   const { center, size } = cellBox(1, 0, 0)
   assert.ok(Math.abs(center[0] - (1 - EDGE_T)) < 1e-9)

@@ -34,7 +34,7 @@ import {
   type CameraProjection,
 } from './gridScale'
 import { createPlaneGrid, type PlaneFrame, type PlaneGrid } from './planeGrid'
-import { cellBox, cellDirection, regionCells, upForDirection } from './viewCube'
+import { EDGE_T, cellBox, cellDirection, regionCells, upForDirection } from './viewCube'
 import type { BasePlaneName, EdgeGeometry } from './session'
 
 /** kernel.tessellate() が返す1面ぶん(サーバのJSONそのまま)。 */
@@ -892,10 +892,15 @@ const HOVER_LIGHTEN = 0.16
 const BASE_PLANE_HOVER_OPACITY = 0.14
 
 /**
- * ビューキューブ(常設・26領域)。一辺[画素]と右上の余白[画素](タスク仕様: 120px角、余白12px)。
+ * ビューキューブ(常設・26領域)。一辺[画素]と右上の余白[画素]。
  * ビューポート左上には浮くブラウザがある([[duocad-ui-moved-to-fusion-layout]])ので右上は空いている。
+ *
+ * 初版は120px角だったが小さく読み取りにくかったので **144px** へ広げた(2026-09-03本人指示)。
+ * **これはクリックを吸う矩形でもある**(`viewCubeRect` / `insideCubeRect`)ので、広げるほど
+ * 右上でモデルを指せる領域が減る。`web/scripts/smoke-files.mjs` の空白クリック候補のように
+ * 画面の隅を突く検査があることに注意(落とし穴は [[viewport-resize-silently-changes-what-a-click-grabs]])。
  */
-const CUBE_SIZE_PX = 120
+const CUBE_SIZE_PX = 144
 const CUBE_MARGIN_PX = 12
 /** `pointerdown` からこれだけ動いたらドラッグ(それ未満で `pointerup` ならクリック=スナップ)。 */
 const CUBE_DRAG_THRESHOLD_PX = 4
@@ -1459,7 +1464,9 @@ export function createViewport(container: HTMLElement): Viewport {
     }
     const texture = new THREE.CanvasTexture(canvas)
     const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true })
-    const labelSize = 0.55
+    // 面セルの一辺(`2 * (1 - 2*EDGE_T)`)に対する比で持つ。直値にすると EDGE_T を変えて
+    // 面を広げたときにラベルだけ相対的に痩せる(面と文字の見た目の比が崩れる)。
+    const labelSize = 2 * (1 - 2 * EDGE_T) * 0.7
     const geometry = new THREE.PlaneGeometry(labelSize, labelSize)
     const mesh = new THREE.Mesh(geometry, material)
     mesh.quaternion.setFromRotationMatrix(basis)
