@@ -1357,7 +1357,7 @@
    * **引数を取る形にしてある**(2026-08-27)。呼び出し側(`runCommand`)は既定値の
    * 現在の `selection`/`sketches` で呼ぶが、テスト(`window.__duocad.regionsStillExist`)は
    * 合成データを渡して分岐を直接検査できる —— この関数がfalseを返す状況(選んだ領域が
-   * 実際に消えている)は、`duocad/catalog.py` の `resets_selection=True`(16verb全て。
+   * 実際に消えている)は、`duocad/catalog.py` の `resets_selection=True`(17verb全て。
    * `tests/test_server_selection_reset.py` が過不足なく固定)が領域を変えうるverbの
    * すべてに掛かっているため、**通常のUI操作では選択が先に空になり到達できない**
    * (`tests/test_server_selection_reset.py::test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish`

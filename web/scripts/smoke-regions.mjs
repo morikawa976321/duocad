@@ -453,7 +453,10 @@ async function main() {
     // 板は**その領域から押し出したもの**なので、領域(z=0)の真上に厚み10の板が載っている。
     // 初回のソリッド到着でカメラは +x/+y/+z 側へ自動フレームされる(`viewport.update`)ので、
     // 領域の点へ向かうレイは必ず板の上面を通る ——「板に隠れている領域」を押す状況になる。
-    await waitFor(() => window.__duocad.wantsRegions === true, '確定後にコマンドが外れている')
+    // **確定成功でコマンドは無起動へ戻る**(2026-09-01 1cf190d `commandSucceeded()`)ので、
+    // 検証4のEnterで既に降りている。ここで改めて起動し直す(:377/:533と同じ形)。
+    await page.click('#extrude-regions')
+    await waitFor(() => window.__duocad.wantsRegions === true, '「領域を押し出す」で領域を要求しない')
     // **指す場所は板の真ん中**(スケッチ座標で (20,15) = 長方形の中心)。領域の内側であり、
     // かつ真上に厚み10の板が載っている ——「面と領域が同じ場所で競合する」1点である。
     const middle = [PLATE.width / 2, PLATE.height / 2]
