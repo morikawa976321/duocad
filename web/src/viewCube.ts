@@ -21,6 +21,15 @@
  */
 export const EDGE_T = 0.25
 
+/**
+ * 真上・真下とみなす境界(`|d.z|`がこれを超えたら極)。`upForDirection`の射影が退化する
+ * 側の閾値そのものだが、`viewport.ts`の`syncCameraUp`(極を離れたら`camera.up`を
+ * WORLD_UPへ戻す判定)も**同じ境界**を見る必要があるので、ここに1つだけ持ってexportする——
+ * 2箇所に0.99を書き写すと、片方だけ動かした日に「極のすぐ外側なのに戻らない/戻り過ぎる」
+ * 帯ができる。
+ */
+export const POLE_Z = 0.99
+
 /** 27セルから中心を除いた26領域。(i,j,k) は視点方向でもある。 */
 export function regionCells(): Array<[number, number, number]> {
   const cells: Array<[number, number, number]> = []
@@ -98,7 +107,7 @@ export function cellDirection(i: number, j: number, k: number): [number, number,
  */
 export function upForDirection(d: readonly [number, number, number]): [number, number, number] {
   const z = d[2]
-  if (Math.abs(z) > 0.99) return z > 0 ? [0, 1, 0] : [0, -1, 0]
+  if (Math.abs(z) > POLE_Z) return z > 0 ? [0, 1, 0] : [0, -1, 0]
   // zHat=(0,0,1) なので zHat・d = z。射影 zHat - z*d を正規化する。
   const ux = -z * d[0]
   const uy = -z * d[1]

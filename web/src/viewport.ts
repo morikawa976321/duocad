@@ -36,7 +36,7 @@ import {
   type UvBox,
 } from './gridScale'
 import { createPlaneGrid, type PlaneFrame, type PlaneGrid } from './planeGrid'
-import { EDGE_T, cellBox, cellDirection, regionCells, upForDirection } from './viewCube'
+import { EDGE_T, POLE_Z, cellBox, cellDirection, regionCells, upForDirection } from './viewCube'
 import type { BasePlaneName, EdgeGeometry } from './session'
 
 /** kernel.tessellate() が返す1面ぶん(サーバのJSONそのまま)。 */
@@ -459,13 +459,20 @@ export interface Viewport {
    */
   showSketches(sketches: SketchDraw[]): void
   /**
-   * 確定前の図形(スケッチの幽霊)を描く。`entity` が null で消える。
+   * 確定前の図形(スケッチの幽霊)を1つ描く。`entity` が null で消える。
+   * **`showSketchGhosts([entity])` の薄い衣**(単発の呼び出し側を増やさないため)。
    *
    * **サーバへ投げない**。図形の形はブラウザ側で分かっており、コアで投機実行すると
    * 文書に一度は入る(戻すとはいえ)。Escで中断しても文書が変わらないことを、
    * 「そもそも送らない」で成立させる。
    */
   showSketchGhost(sketchId: string, entity: { kind: string; params: Record<string, number> } | null): void
+  /**
+   * 確定前の図形(スケッチの幽霊)を**複数**描く(2026-09-04。`move_sketch_entities` 用)。
+   * 空配列で消える。**個々の図形は`buildEntityLine`が失敗しても他は描く**(表に無い種別・
+   * 折れ線化できない図形が1つ混ざっていても、残りの幽霊まで消さない)。
+   */
+  showSketchGhosts(sketchId: string, entities: Array<{ kind: string; params: Record<string, number> }>): void
   /**
    * スケッチモードの対象を決める。`null` でモードを抜ける。
    *
@@ -3593,17 +3600,31 @@ export function createViewport(container: HTMLElement): Viewport {
     ghost = null
   }
 
+  function showSketchGhosts(
+    sketchId: string,
+    entities: Array<{ kind: string; params: Record<string, number> }>,
+  ): void {
+    clearGhost()
+    const target = sketches.get(sketchId)
+    if (entities.length === 0 || !target) return
+    const objects: THREE.Object3D[] = []
+    const disposables: Array<{ dispose(): void }> = []
+    for (const entity of entities) {
+      const built = buildEntityLine(target.frame, entity, sketchGhostMaterial)
+      if (!built) continue
+      sketchRoot.add(built.object)
+      objects.push(built.object)
+      disposables.push(built.geometry)
+    }
+    if (objects.length === 0) return
+    ghost = { objects, disposables }
+  }
+
   function showSketchGhost(
     sketchId: string,
     entity: { kind: string; params: Record<string, number> } | null,
   ): void {
-    clearGhost()
-    const target = sketches.get(sketchId)
-    if (!entity || !target) return
-    const built = buildEntityLine(target.frame, entity, sketchGhostMaterial)
-    if (!built) return
-    sketchRoot.add(built.object)
-    ghost = { objects: [built.object], disposables: [built.geometry] }
+    showSketchGhosts(sketchId, entity ? [entity] : [])
   }
 
   /**
@@ -4333,27 +4354,36 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 毎フレーム、いまの視線方向に合わせて`camera.up`を引き直す。
+   * 視線が極(真上/真下)から離れたら、`camera.up`をWORLD_UPへ戻す。
    *
    * `OrbitControls`は生成時に焼いた軸(`WORLD_UP`)だけを回転の極として使うので、
    * 位置そのものの計算は`camera.up`の値に影響されない —— が、`controls.update()`が
    * 最後に呼ぶ`object.lookAt()`は**そのときの`camera.up`**でロール(傾き)を決める。
    * ビューキューブの上面図/底面図クリック(`upForDirection`)も`lookAtSketch`も、
-   * 極(真上/真下)付近の縮退を避けるために一時的に`camera.up`をYへ傾けるが、
-   * 従来はそこから離れても誰も戻していなかった —— 傾いたままの`up`で`lookAt`し続け、
-   * 「キューブの上面をクリックしてから回すと絵が転がる」形で見えた(2026-09-03本人報告)。
+   * 極付近の縮退(upが視線と平行になり`lookAt`の直交化が壊れる)を避けるために
+   * 一時的に`camera.up`をYへ傾けるが、従来はそこから離れても誰も戻していなかった ——
+   * 傾いたままの`up`で`lookAt`し続け、「キューブの上面をクリックしてから回すと
+   * 絵が転がる」形で見えた(2026-09-03本人報告)。
    *
-   * 対策は「今の視線方向にとって正しいupを毎フレーム置き直す」こと。キューブのクリック
-   * スナップ中(`cubeSnap !== null`)は`stepCubeSnap`自身がupを滑らかに補間しているので
-   * ここでは触らない —— `upForDirection`は閾値0.99の階段関数なので、アニメの途中で
-   * 上書きすると補間中にupが跳ねる。
+   * **極に近い間(`|z| > POLE_Z`)は何もしない**(2026-09-03改訂)。最初の実装は
+   * 毎フレーム`upForDirection(今の向き)`を焼き直していたが、あの関数は極付近で
+   * 定数`(0,±1,0)`を返す階段関数なので、**通常のドラッグで極をまたぐだけで
+   * 上が固定されたように(勝手に上下が揃うように)見えた**(本人報告その2)。
+   * 普段のドラッグはそもそも`camera.up`を一切書き換えなくても、`controls`側の
+   * 回転計算(常にZ軸が極)だけで滑らかに繋がる —— `upForDirection`のGram-Schmidt射影は
+   * 素の`(0,0,1)`を渡した場合と`lookAt`内部の直交化後は同じ絵になる(`upForDirection`の
+   * docstring参照)ので、**極から離れているときはWORLD_UPのまま放っておけばよい**。
+   * 直したいのは「極ぴったりへ明示的にスナップした直後、そこから離れても誰も戻さない」
+   * ことだけなので、**極から外れた瞬間にWORLD_UPへ戻す片方向の掃除**に留める。
    */
   function syncCameraUp(): void {
     if (cubeSnap !== null) return
     const offset = camera.position.clone().sub(controls.target)
-    if (offset.lengthSq() < 1e-12) return // 退化(注視点に重なる)
-    offset.normalize()
-    camera.up.set(...upForDirection([offset.x, offset.y, offset.z]))
+    const length = offset.length()
+    if (length < 1e-6) return // 退化(注視点に重なる)
+    if (Math.abs(offset.z / length) > POLE_Z) return // 極付近では触らない(上の理由)
+    if (camera.up.distanceToSquared(WORLD_UP) < 1e-12) return // 既に合っているなら何もしない
+    camera.up.copy(WORLD_UP)
     camera.lookAt(controls.target)
   }
 
@@ -4456,6 +4486,7 @@ export function createViewport(container: HTMLElement): Viewport {
     project,
     showSketches,
     showSketchGhost,
+    showSketchGhosts,
     setActiveSketch,
     lookAtSketch,
     frameAll() {
