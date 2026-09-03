@@ -38,6 +38,7 @@
     DEFAULT_SKETCH_COMMAND_ID,
     SKETCH_COMMANDS,
     SKETCH_CREATE,
+    SKETCH_PENDING_COMMANDS,
     ghostEntity,
     runsOutsideSketch,
     runsWithoutSketchId,
@@ -82,16 +83,19 @@
 
   /**
    * ツールバーの中身(モードごと)。**状態機械は1つのまま**で、変わるのは一覧と既定だけ。
-   * ソリッド側の一覧には3つ、スケッチ側には反復の2つが載る ——
+   * ソリッド側の一覧には2つ、スケッチ側には反復の2つが載る ——
    * 領域押し出しは**両方に居る**(描いた直後に押し出すのと、モードを抜けてから
    * 領域を選んで押し出すのは、どちらも実際に使う)。
+   *
+   * **`sketch_create` はもうここに載らない**(2026-09-03)。あれはverbの行に置くと
+   * 「押すと戻ってくる操作」(押し出し・フィレット)と同じ見た目で**モードを切り替える**
+   * ボタンになる —— 入口だけがverbの次元に取り残されていた。いまはモードの行
+   * (`.mode-row`)に上げてあり、押すと `sketch-pending` へ入って
+   * `SKETCH_PENDING_COMMANDS` が起動済みで現れる(下の `mode` のdocstring)。
    */
   const SOLID_COMMANDS = [
     ...COMMANDS,
     ...SOLID_FEATURE_COMMANDS,
-    // **`sketch_create` はスケッチ分類だがここに載る** —— `sketch_id` を取らず、
-    // スケッチモードの外で走る唯一のverbだからである(`commands/sketch.ts` のdocstring)。
-    SKETCH_CREATE,
     // **`file` 分類の `CommandDef` はもう1つも無い**(2026-08-28。`commands/files.ts` の
     // モジュールdocstring)。`IMPORT_SVG` はスケッチモードのコマンドへ移り、`SKETCH_COMMANDS`
     // (下)側に載っている。
@@ -102,14 +106,17 @@
    * verb名 -> そのコマンドの分類。**送信経路の分岐はこれだけで決まる。**
    *
    * 知らない名前は `undefined` になり、`runCommand` がその場で断る。
-   * **`OPTIMIZE_MODE_COMMANDS` も含める** —— 忘れると `runCommand` が
-   * `set_preserve_bodies` 等を「未知のコマンド」で断ってしまう。
+   * **モードごとの一覧を全部含める** —— 1つ忘れると `runCommand` がそのモードのverbを
+   * 「未知のコマンド」で断ってしまう(`sketch_create` が `SOLID_COMMANDS` を離れた
+   * 2026-09-03に、`SKETCH_PENDING_COMMANDS` を足し忘れると即これを踏む)。
    */
   const CATEGORY_OF: Map<string, CommandCategory> = new Map(
-    [...SOLID_COMMANDS, ...SKETCH_MODE_COMMANDS, ...OPTIMIZE_MODE_COMMANDS].map((command) => [
-      command.id,
-      command.category,
-    ]),
+    [
+      ...SOLID_COMMANDS,
+      ...SKETCH_PENDING_COMMANDS,
+      ...SKETCH_MODE_COMMANDS,
+      ...OPTIMIZE_MODE_COMMANDS,
+    ].map((command) => [command.id, command.category]),
   )
 
   let container: HTMLDivElement
@@ -139,9 +146,57 @@
   /** 画面に幽霊が出ているか(テスト用フックが見る)。 */
   let previewing = $state(false)
 
-  // ---------------------------------------------------------------- C: スケッチモード
-  /** 今どのスケッチを編集しているか(null なら通常モード)。**図形も領域もコアが持つ**。 */
-  let sketchId = $state<string | null>(null)
+  // ---------------------------------------------------------------- モード(verbより1つ上の次元)
+  /**
+   * スケッチを抜けたときの戻り先。**「一時停止からの復帰」を型で持つ**(2026-09-03) ——
+   * 最適化モードの最中に(ブラウザのスケッチ名クリックで)スケッチへ入ったら、抜けたときに
+   * 最適化モードへ戻る。以前は独立した `optimizeModeRequested` という掛けっぱなしの
+   * ラッチから**偶然そうなっていた**だけで、どこにも書かれていなかった。
+   */
+  type ResumeMode = 'idle' | 'optimize'
+  /**
+   * **モードはverbより1つ上の次元**(2026-09-03の本人決定)。
+   *
+   * モード = **文書のどの部分系を編集対象にしているか**(通常=ボディ群 / スケッチ=`sketches[i]` /
+   * 最適化=`Document.optimize`)であり、verb = **その対象に1操作を適用すること**。次元が
+   * 違うので、同じツールバーの行に並べない —— モードの行(`.mode-row`)が上、verbの行
+   * (`CommandHost`)が下。以前は最適化だけが上の行にいて、**スケッチの入口だけが
+   * `SOLID_COMMANDS` の中に取り残されていた**(出口の「抜ける」は既に上の行にあった)。
+   *
+   * **不正な状態が表現できない**のが型にした理由である。以前は `sketchId`(string|null)と
+   * `optimizeModeRequested`(boolean)の独立した2変数で、「両方が同時に真」という状態が
+   * 組み合わせとして存在し、`optimizeMode` を派生値にする防御(`sketchId === null` を
+   * 先に掛ける)で潰していた —— その防御が要るのは、`BrowserPanel` のスケッチ名クリックが
+   * 両立させる穴を実際に開けたからである(2026-08-31 QA指摘)。タグ付きユニオンなら
+   * その状態が書けない。
+   *
+   * `sketch-pending` は**スケッチモードに入ったが、まだどのスケッチも開いていない**状態
+   * (貼る先のクリック待ち)。これは新設した状態ではなく、**通常モードで `sketch_create` を
+   * 起動している間**として今までも存在していたものを、モードの側へ持ち上げただけである
+   * —— だから手数は変わらない(「スケッチ」を押す → 貼る先をクリックの2手)。
+   *
+   * **コアには持ち込まない。** `duocad/` 側にモードの概念は1つも無く(`Document` にフラグが
+   * 無い・verbは毎回 `sketch_id` を明示で受ける・MCPのツール一覧はモードによらず固定)、
+   * それが人とAIの交互操作を成立させている(人がスケッチAを見ている間にAIがBを触れる)。
+   * モード遷移は「1回のundo / 操作ログ1行 / MCP1呼び出し」のどれとも一致しないので
+   * verbではない(engine [[cad-verb-granularity-rule]])—— ここは画面だけの状態である。
+   */
+  type Mode =
+    | { kind: 'idle' }
+    | { kind: 'sketch-pending'; resume: ResumeMode }
+    | { kind: 'sketch'; id: string; resume: ResumeMode }
+    | { kind: 'optimize' }
+  let mode = $state<Mode>({ kind: 'idle' })
+
+  /**
+   * 今どのスケッチを編集しているか(null なら編集していない)。**図形も領域もコアが持つ**。
+   *
+   * **`mode` からの派生**にしてあるので、これを読む側(この画面と `viewport.ts` で計100箇所
+   * 以上)は今までと1文字も変わらない。`sketch-pending` では **null のまま**なのが要点で、
+   * 「基準平面を指せるのは `sketchId === null` のときだけ」等の既存の規律
+   * (`wantsBasePlanes` / `wantsEdges` / `wantsRegions`)がそのまま貼る先待ちに効く。
+   */
+  const sketchId = $derived(mode.kind === 'sketch' ? mode.id : null)
   /** ポインタが指しているスケッチ平面上の点(確定前の線を見せるためだけ)。 */
   let hoverPoint = $state<Point2 | null>(null)
   /** コマンド層への参照(クリックで集めた点を渡す・失敗したら打った値を戻す)。 */
@@ -155,36 +210,17 @@
     commandSucceeded(): void
   } | null>(null)
 
-  // ---------------------------------------------------------------- F: 形状最適化モード
   /**
-   * 「形状最適化」ボタンで**要求した**か。**これは実効状態ではない** —— 実効値は下の
-   * `optimizeMode`($derived)であり、テンプレート・effect・実機検査フックは必ずそちらを読む。
+   * 第3のモード(形状最適化)に入っているか。**対応する文書実体が無い**ので、スケッチと違い
+   * 画面側だけの状態でよい(バックエンドには一切知らせない)。**状態機械は増やさない** ——
+   * 変わるのはツールバーの一覧(`OPTIMIZE_MODE_COMMANDS`)と、それに応じた描画だけ。
    *
-   * 分けてある理由: スケッチと最適化は独立変数(`sketchId` / このフラグ)なので、素朴に
-   * booleanを足しただけでは「両方同時に真」という不正状態が組み合わせとして存在してしまう
-   * (`BrowserPanel` の既存スケッチ名クリックは常時 `enterSketch` を呼ぶので、最適化モード中
-   * でも無条件にスケッチへ入れてしまうガードの穴があった。2026-08-31 QA指摘で発見)。
-   * **「片方に入るときもう片方を畳む」という手続き的なガードは置かない** —— 呼び忘れる
-   * 経路が今後も増えうる。かわりに`optimizeMode`を`sketchId`からの**派生値**にして、
-   * 「スケッチ編集中は最適化モードが真になり得ない」を型と評価順で保証する
-   * (`wantsEdges`/`wantsRegions`/`wantsBasePlanes` と同じ「`sketchId === null` を先頭に
-   * 掛ける」既存の規律に、この状態も合わせただけ)。
+   * **スケッチとの排他は `Mode` が持つ**(2026-09-03)。以前の `optimizeModeRequested`
+   * (要求)と `optimizeMode`(実効)の2段構えは、独立した2変数が両立しうることへの防御
+   * だった —— タグ付きユニオンでは `sketch` と `optimize` が同じ1つの値の別の枝なので、
+   * 「同時に真」が書けない。要求の保持(スケッチから戻ってくる)は `ResumeMode` が担う。
    */
-  let optimizeModeRequested = $state(false)
-  /**
-   * 第3のモード(形状最適化)に**実際に**入っているか。**対応する文書実体が無い**ので、
-   * スケッチと違い画面側だけの状態でよい(バックエンドには一切知らせない)。
-   * **状態機械は増やさない** —— 冒頭のコメント「状態機械は1つのまま、変わるのは一覧と
-   * 既定だけ」のとおり、変わるのはツールバーの一覧(`OPTIMIZE_MODE_COMMANDS`)と、
-   * それに応じた描画だけ。
-   *
-   * **`sketchId === null` を先に掛ける** —— スケッチモード中は`optimizeModeRequested`が
-   * 真のままでも、この式が読まれる限り絶対に真にならない(スケッチへ入る経路がどこから
-   * 増えても、この1行を通る限り両立しない)。スケッチを抜けると要求が残っていれば
-   * 自動的に最適化モードへ戻る(一時停止からの復帰。`optimizeModeRequested` 自体は
-   * `enterOptimizeMode`/`exitOptimizeMode` の2箇所でしか書き換えない)。
-   */
-  const optimizeMode = $derived(sketchId === null && optimizeModeRequested)
+  const optimizeMode = $derived(mode.kind === 'optimize')
   /**
    * 直近にトーストへ出した `stale` の鍵(`role:body:index:code`)。**`code` を含める**
    * (2026-08-31 QA指摘で修正) —— 含めないと、`hidden`(出さない側)として一度記録された
@@ -1109,58 +1145,91 @@
     viewport?.showSketches(sketchDraws())
   }
 
-  function enterSketch(id: string): void {
-    // **他のスケッチの図形の選択は持ち込まない**(2026-08-30)。`exitSketch` を通らずに
-    // スケッチAからBへ直接移る道がある(ブラウザのスケッチ名クリック)ので、ここでも外す ——
-    // 外さないと、Bで `move_sketch_entities` を実行するとAの図形が動き、反復verbには
-    // **Aの図形IDがBの文脈で**渡る(サーバは `entity_id` を素直に解決するので黙って通る)。
-    // **同じスケッチへ入り直したときは何も外さない**(選び直しを強いる理由が無い)。
-    //
-    // **`optimizeMode` はここで触らなくてよい**(2026-08-31)。`BrowserPanel` のスケッチ名
-    // クリックは最適化モード中でも無条件にここを呼ぶが、`optimizeMode` は `sketchId` からの
-    // 派生値なので、次の代入(`sketchId = id`)だけで自動的に偽へ落ちる —— 手続き的に
-    // 「畳む」処理をここへ書き足す必要が無い(書き忘れる経路を作らないための設計)。
-    const foreign = (selection?.items ?? []).filter(
-      (item) => refKind(item) === 'sketch_entity' && (item as SketchEntityRef).sketch !== id,
-    )
-    if (foreign.length > 0) modifySelection([], foreign)
-    sketchId = id
+  /**
+   * **モード遷移はここ1本だけ**(2026-09-03)。以前は `enterSketch` / `exitSketch` /
+   * `enterOptimizeMode` / `exitOptimizeMode` の4つが**それぞれ違う流儀で**選択を掃除して
+   * いた(外国スケッチの図形だけ / 図形を全部 / 何もしない / ボディだけ)。遷移が型として
+   * 存在せず手書きで散っているのが、`duocad-sketch-switch-keeps-foreign-selection`
+   * (スケッチAからBへ直接移る抜け道)や最適化⇄スケッチの両立の穴を生んだ形である。
+   *
+   * **掃除の規則は「行き先が使えない参照を落とす」の1つだけ。** 出口側で列挙するのを
+   * やめたので、経路が増えても書き忘れる場所が無い:
+   *
+   * - **スケッチの図形** … 行き先のスケッチのものでなければ落とす(同じスケッチへ入り直す
+   *   ときは何も落ちない。行き先がスケッチでなければ全部落ちる)。混ざったまま持ち越すと、
+   *   Bで `move_sketch_entities` を実行したときにAの図形が動く —— サーバは `entity_id` を
+   *   素直に解決するので黙って通る。
+   * - **ボディ(`kind:'body'`)** … 行き先が最適化モードでなければ落とす。保持/除外の
+   *   割り当てにしか使えない種別で、他のモードのverbは「種別が違う」と断るだけになる。
+   * - **面・辺・頂点・領域はどのモードでも残す** —— スケッチを抜けてそのまま押し出す、
+   *   最適化を抜けてそのまま面取りする、はどちらも実際に使う経路である。
+   */
+  function setMode(next: Mode): void {
+    const nextSketch = next.kind === 'sketch' ? next.id : null
+    const unusable = (selection?.items ?? []).filter((item) => {
+      const kind = refKind(item)
+      if (kind === 'sketch_entity') return (item as SketchEntityRef).sketch !== nextSketch
+      if (kind === 'body') return next.kind !== 'optimize'
+      return false
+    })
+    if (unusable.length > 0) modifySelection([], unusable)
+    mode = next
     hoverPoint = null
-    viewport?.setActiveSketch(id)
+    viewport?.setActiveSketch(nextSketch)
+    // **どの遷移でも描き直す**(`$effect` に任せない)。入る側は直後の `lookAtSketch` が
+    // 平面の枠を要るので1手遅らせられない(`handleState` と同じ理由)。**抜ける側にも呼ぶ**
+    // —— 旧 `exitSketch` はここを呼んでおらず、抜けたスケッチの点マーカーが次の状態配信まで
+    // 画面に残っていた(選択の掃除が空振りするとWS往復が起きず、その配信も来ない)。
+    // 残ったマーカーは手前に浮くのでクリックを奪いうる([[duocad-sketch-handles-crowd-region-picking]]
+    // と同じ型)。**`smoke-move.mjs` の辺ピックの失敗がこれで直るかは未確認** ——
+    // あの失敗は実測でflake(同じビルドで5回中2回緑)であり、因果は結べていない。
     drawSketches()
-    viewport?.lookAtSketch(id)
+    if (next.kind === 'sketch') viewport?.lookAtSketch(next.id)
   }
 
+  /** 今のモードから見た「スケッチを抜けたときの戻り先」。 */
+  function resumeOf(current: Mode): ResumeMode {
+    if (current.kind === 'optimize') return 'optimize'
+    if (current.kind === 'sketch' || current.kind === 'sketch-pending') return current.resume
+    return 'idle'
+  }
+
+  /**
+   * **スケッチモードへ入る**(まだ貼る先は決まっていない)。「スケッチ」ボタンから。
+   *
+   * 入った先の `sketch-pending` では `SKETCH_PENDING_COMMANDS` が**起動済みで**現れる
+   * (`CommandHost` の `startCommandId`)ので、次の1クリックで貼る先が決まる ——
+   * ボタン→クリックの2手は変わらない([[duocad-sketch-start-is-two-steps-by-pointing]])。
+   */
+  function startSketchMode(): void {
+    setMode({ kind: 'sketch-pending', resume: resumeOf(mode) })
+  }
+
+  /**
+   * **そのスケッチを開く。** `sketch_create` の成功(`handleState`)と、ブラウザパネルの
+   * スケッチ名クリックの2箇所から呼ばれる。
+   *
+   * **後者はもう「抜け道」ではない**(2026-09-03)。以前は最適化モード中でも無条件に
+   * ここへ来て両モードを両立させかけたが、いまは他と同じ `setMode` の1本を通る ——
+   * 戻り先(`resume`)を持って移るので、抜ければ最適化モードへ戻る。
+   */
+  function enterSketch(id: string): void {
+    setMode({ kind: 'sketch', id, resume: resumeOf(mode) })
+  }
+
+  /** スケッチモードを抜ける。**戻り先は入る前のモード**(通常 or 最適化)。 */
   function exitSketch(): void {
-    // **スケッチの図形の選択は持ち越さない**(モードを抜けたら指せなくなるものが
-    // 選ばれたまま残ると、通常モードのverbが「種別が違う」で断るだけになる)。
-    // 領域・面の選択はそのまま残す —— 抜けてから押し出す経路がある。
-    const staying = (selection?.items ?? []).filter((item) => refKind(item) === 'sketch_entity')
-    if (staying.length > 0) modifySelection([], staying)
-    sketchId = null
-    hoverPoint = null
-    viewport?.setActiveSketch(null)
+    setMode(resumeOf(mode) === 'optimize' ? { kind: 'optimize' } : { kind: 'idle' })
   }
 
-  /**
-   * 第3のモード(形状最適化)へ入る。「形状最適化」ボタンから(スケッチと同じ作法)。
-   * **書き換えるのは要求(`optimizeModeRequested`)だけ** —— 実効値 `optimizeMode` は
-   * `sketchId` からの派生値なので、ここでは直接いじれない(いじる先が無いことが
-   * 「両立しない」設計の裏返り)。
-   */
+  /** 第3のモード(形状最適化)へ入る。「形状最適化」ボタンから(スケッチと同じ作法)。 */
   function enterOptimizeMode(): void {
-    optimizeModeRequested = true
+    setMode({ kind: 'optimize' })
   }
 
-  /**
-   * 第3のモードの要求を降ろし、通常モードへ戻る。**選択は持ち越さない** —— ボディ粒度で
-   * 選んでいた `BodyRef` は通常モードのverbには使えない種別なので、`exitSketch` と
-   * 同じ理由で外す(面の選択は残す。抜けてからそのまま押し出す経路がある)。
-   */
+  /** 第3のモードを抜けて通常モードへ戻る。 */
   function exitOptimizeMode(): void {
-    const staying = (selection?.items ?? []).filter((item) => refKind(item) === 'body')
-    if (staying.length > 0) modifySelection([], staying)
-    optimizeModeRequested = false
+    setMode({ kind: 'idle' })
   }
 
   /**
@@ -1574,6 +1643,10 @@
       // F: 形状最適化(第3のモード)。**実機検査がモードの出入りと`wantedKinds`(ボディ粒度)
       // を見るための穴** —— 配りものそのものは `state.optimize` にある。
       optimizeMode,
+      // **今のモード**(`'idle' | 'sketch-pending' | 'sketch' | 'optimize'`。2026-09-03)。
+      // `optimizeMode`(真偽)と `activeSketch`(ID or null)だけでは**貼る先待ち**が
+      // 「通常モード」と同じ見え方になり、モードの遷移を外から検算できない。
+      mode: mode.kind,
       wantedKinds,
       faceColor: (bodyId: string, faceIndex: number) => viewport?.faceColor({ bodyId, faceIndex }) ?? null,
       optimizeAnnotationCount: () => viewport?.optimizeAnnotationCount() ?? 0,
@@ -1706,11 +1779,54 @@
        `FilesPanel` はここには載らない —— 2026-08-23にいったんここへ統合したが、
        2026-08-26に本人が左サイドバーへの復元を決定した(下の `.main` 直下の `.data-panel` 参照)。 -->
   <section class="toolbar">
+    <!-- **モードの行**(`.mode-row`)。**ここがverbより1つ上の次元**(2026-09-03) ——
+         入口・札・「抜ける」がここに揃い、verbは下の `CommandHost` にだけ並ぶ。
+         **常設の表示は増えていない**: 通常モードに出るのは入口ボタン2つで、
+         そのうち「スケッチ」は下のverbの行から**移設**したもの、「形状最適化」は
+         元からこの位置にいた([[duocad-idle-default-state]] の「画面に何かを足して
+         既定に据えるのではない」に触れない)。 -->
+    {#if mode.kind === 'idle'}
+      <div class="mode-row">
+        <!-- **スケッチの入口**(2026-09-03にverbの行から移設)。idは `sketch_create` の
+             コマンドボタンと同じ `sketch-create` のまま —— 押したときに起きること
+             (スケッチモードへ入り、貼る先のクリックを待つ)は変わっておらず、
+             実機検査が叩く口を変える理由が無い。**両方が同時にDOMへ出ることはない**
+             (この行は通常モードだけ、コマンドボタンは貼る先待ちのときだけ)。 -->
+        <button
+          id="sketch-create"
+          class="tag"
+          onclick={startSketchMode}
+          title="スケッチモードに入る(このあと貼る先の基準平面か面をクリックする)"
+        >
+          スケッチ
+        </button>
+        <!-- **形状最適化(第3のモード)への入口**(2026-08-31)。対応する文書実体が無く
+             viewport上に「これをクリックすれば入れる」実物が存在しないので、UI指針1の
+             裏返しとしてボタンを置く(スケッチと同じ「モードに入るボタン」の作法)。 -->
+        <button
+          id="optimize-enter"
+          class="tag"
+          onclick={enterOptimizeMode}
+          title="形状最適化モードに入る(保持/除外ソリッド・拘束面・荷重面を決める)"
+        >
+          形状最適化
+        </button>
+      </div>
+    {/if}
+    <!-- **スケッチモードだが、まだどのスケッチも開いていない**(貼る先のクリック待ち)。
+         下の `CommandHost` には `sketch_create` が1つだけ、**起動済みで**出ている。 -->
+    {#if mode.kind === 'sketch-pending'}
+      <div class="mode-row">
+        <span class="label">スケッチ</span>
+        <span id="sketch-mode" class="tag on">貼る先をクリック(基準平面 XY/XZ/YZ か、ソリッドの面)</span>
+        <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
+      </div>
+    {/if}
     <!-- **スケッチモードの札とモード操作**(2026-08-30に `SketchPanel.svelte` から移設)。
          右サイドバーをAI専用にするため、モード表示・「正面から見る」・「抜ける」は
          モードに応じて作り直されるこのツールバー側へ移した(本人決定)。
          idは移設前と同じにしてある —— 実機検査が叩く口を変える理由が無い。 -->
-    {#if sketchId !== null && activeSketch}
+    {#if mode.kind === 'sketch' && activeSketch}
       <div class="mode-row">
         <span class="label">スケッチ</span>
         <span id="sketch-mode" class="tag on">
@@ -1723,20 +1839,7 @@
         <button id="sketch-exit" onclick={exitSketch}>抜ける</button>
       </div>
     {/if}
-    <!-- **形状最適化(第3のモード)への入口**(2026-08-31)。対応する文書実体が無く
-         viewport上に「これをクリックすれば入れる」実物が存在しないので、UI指針1の
-         裏返しとしてボタンを置く(スケッチと同じ「モードに入るボタン」の作法)。 -->
-    {#if sketchId === null && !optimizeMode}
-      <button
-        id="optimize-enter"
-        class="tag"
-        onclick={enterOptimizeMode}
-        title="形状最適化モードに入る(保持/除外ソリッド・拘束面・荷重面を決める)"
-      >
-        形状最適化
-      </button>
-    {/if}
-    {#if optimizeMode}
+    {#if mode.kind === 'optimize'}
       <div class="mode-row">
         <span class="label">形状最適化</span>
         <span id="optimize-mode" class="tag on">
@@ -1746,14 +1849,23 @@
         <button id="optimize-exit" onclick={exitOptimizeMode}>抜ける</button>
       </div>
     {/if}
-    {#key sketchId === null ? (optimizeMode ? 'optimize' : 'solid') : 'sketch'}
+    <!-- **verbの行。** モードが変わったらコマンド層ごと作り直す(集めかけの引数を持ち越さない)。
+         鍵はモードのタグそのもの —— スケッチAからBへ移るときは作り直さない(今までどおり)。 -->
+    {#key mode.kind}
       <CommandHost
         bind:this={host}
         {selection}
         busy={pendingOp !== null}
         {selfSelections}
-        commands={sketchId !== null ? SKETCH_MODE_COMMANDS : optimizeMode ? OPTIMIZE_MODE_COMMANDS : SOLID_COMMANDS}
-        defaultCommandId={sketchId === null ? undefined : DEFAULT_SKETCH_COMMAND_ID}
+        commands={mode.kind === 'sketch'
+          ? SKETCH_MODE_COMMANDS
+          : mode.kind === 'sketch-pending'
+            ? SKETCH_PENDING_COMMANDS
+            : mode.kind === 'optimize'
+              ? OPTIMIZE_MODE_COMMANDS
+              : SOLID_COMMANDS}
+        defaultCommandId={mode.kind === 'sketch' ? DEFAULT_SKETCH_COMMAND_ID : undefined}
+        startCommandId={mode.kind === 'sketch-pending' ? SKETCH_CREATE.id : undefined}
         hover={hoverPoint}
         entities={selectedEntities}
         onRun={runCommand}

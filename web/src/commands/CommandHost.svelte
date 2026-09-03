@@ -43,6 +43,11 @@
    * (`commit()` 直後ではない) —— 先に降りると、失敗したときに打ち直す入力欄まで消える
    * (`commit()` のコメント参照)。同じverbをもう一度使うにはツールバーのボタンを押し直す。
    *
+   * **「入った時点で起動済み」は `startCommandId` が別に持つ**(2026-09-03)。戻り先
+   * (`defaultCommandId`)と起動状態は別の問いで、前者は代入しかしないため即適用の
+   * 待ち受けを構えない —— 混ぜると、スケッチモードで貼る先の面をクリックしても
+   * 何も起きない。
+   *
    * ## 引数収集は、まず共有選択集合を見る
    *
    * 選択引数の値は**コアの選択集合から導出する**(ここには持たない)。空のときだけ
@@ -69,6 +74,7 @@
    * **Enterはプレビューを待たない。** プレビューは確認のための表示であって、確定の前提
    * ではない。
    */
+  import { onMount } from 'svelte'
   import {
     COMMANDS,
     argKinds,
@@ -97,6 +103,7 @@
     selfSelections = 0,
     commands = COMMANDS,
     defaultCommandId,
+    startCommandId,
     hover = null,
     entities = [],
     onStart = () => {},
@@ -132,6 +139,17 @@
     commands?: CommandDef[]
     /** 起動していない状態を表すには渡さない(`undefined`)。渡さなければ `null`(無起動)になる。 */
     defaultCommandId?: string
+    /**
+     * **最初から起動しておく**コマンド(`start()` を1回だけ通す)。`defaultCommandId` とは
+     * 別物である —— あちらは「Esc・確定成功のあとで戻る先」で、代入しかしないので
+     * **即適用の待ち受け(`armedSelections`)が構えない**。モードに入った時点で人の
+     * クリックを待たせたい側(スケッチモードの貼る先待ち)はこちらを使う。
+     *
+     * **戻り先にはしない。** Escで降りたら無起動(`defaultCommandId ?? null`)になり、
+     * 基準平面も面も指せなくなる —— 「起動 → Esc のあとのクリックでは発火しない」
+     * (`smoke-files.mjs` の(c))を、モードを新設しても同じ形で保つ。
+     */
+    startCommandId?: string
     /**
      * スケッチ平面上でポインタが今指している点。**幽霊にだけ使う**。
      * これが無いと、線分は2点目を置くまで何も見えない。
@@ -532,6 +550,20 @@
     onStart(nextId)
     focusFirstNumber()
   }
+
+  /**
+   * **モードに入った瞬間から起動しておく**(`startCommandId`。2026-09-03)。
+   *
+   * `commandId` への代入ではなく `start()` を通すのが要点 —— 即適用の待ち受け
+   * (`armedSelections`)を構えるのは `start()` だけなので、代入だけでは
+   * 「面をクリックしてスケッチを貼る」経路が黙って死ぬ。
+   *
+   * **`onMount` で1回だけ**。モードが変わるときは `App.svelte` が `{#key}` でこの
+   * コンポーネントごと作り直すので、これが再入の唯一の口になる。
+   */
+  onMount(() => {
+    if (startCommandId !== undefined) start(startCommandId)
+  })
 
   /**
    * スケッチ平面のクリックを、待っている点引数へ入れる。

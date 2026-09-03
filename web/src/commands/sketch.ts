@@ -203,8 +203,10 @@ export const IMPORT_SVG: CommandDef = {
 /**
  * スケッチを作る —— **「スケッチ」を押して、貼る先をクリックする2手**。
  *
- * 分類は `sketch` だが `sketch_id` を取らず、**スケッチモードの外で走る唯一のverb**である
- * (だから一覧も `SKETCH_COMMANDS` ではなく `App.svelte` のソリッド側に載る)。反復
+ * 分類は `sketch` だが `sketch_id` を取らず、**まだどのスケッチも開いていない状態で走る
+ * 唯一のverb**である(2026-09-03の言い換え。以前は「スケッチモードの外で走る」と書いていたが、
+ * モードの入口が上位次元へ上がり、これが走る場所は**スケッチモードの貼る先待ち**
+ * (`sketch-pending`)になった。走らせ方は変わっていない —— `sketch_id` を足さずに送る)。反復
  * (`pattern_*`)が「分類は feature だが `sketch_id` が要る」のちょうど裏返しで、`App.svelte` の
  * 送信経路はその2箇所を `needsSketchId`(features.ts)と下の `runsOutsideSketch` で捌く。
  *
@@ -236,10 +238,19 @@ export const SKETCH_CREATE: CommandDef = {
 }
 
 /**
- * そのverbは**スケッチモードの外で走る**か(= `sketch_id` を足さずに送るか)。
+ * スケッチモードの**貼る先待ち**(`sketch-pending`)のツールバー。
  *
- * 該当するのは `sketch_create` だけである —— スケッチを作るverbなので、モードに入っている
- * ことを要求すると永久に起動できない。`features.ts` の `needsSketchId` のちょうど裏返しで、
+ * **1つだけ**である —— この状態でできることは「どこに貼るかを指す」しかない。
+ * `App.svelte` が `startCommandId` でこれを起動済みにして入るので、モードに入った次の
+ * 1クリック(基準平面 or 面)がそのまま `sketch_create` の確定になる(2手のまま)。
+ */
+export const SKETCH_PENDING_COMMANDS: CommandDef[] = [SKETCH_CREATE]
+
+/**
+ * そのverbは**まだどのスケッチも開いていない状態で走る**か(= `sketch_id` を足さずに送るか)。
+ *
+ * 該当するのは `sketch_create` だけである —— スケッチを作るverbなので、開いていることを
+ * 要求すると永久に起動できない。`features.ts` の `needsSketchId` のちょうど裏返しで、
  * **分類だけでは送り方が決まらない2箇所**をこの2つの述語で名指ししている。
  *
  * **列挙にしてある**(「引数に `plane` があるか」等で導出しない)ので、スケッチモードのverbを

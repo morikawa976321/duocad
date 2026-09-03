@@ -142,6 +142,59 @@ async function main() {
     )
     ok('Escで無起動へ戻った(#command-abort・#distanceともDOMから消えた)')
 
+    // ------------------------------------------------- 項番0b: モードはverbより1つ上の次元
+    // **2026-09-03、スケッチの入口をverbの行からモードの行へ移した。** それまでは
+    // 「スケッチ」だけが押し出し・フィレットと同じ `CommandHost` の行に並んでいて、
+    // 押すとツールバーごと入れ替わる(=モードを切り替える)のに見た目が同格だった。
+    // ここが見るのは**次元の分離**そのもの: 入口はモードの行(`.toolbar .mode-row`)に
+    // あってverbの行(`.command-host`)には無い / 入った先ではverbのボタンが1つも無い。
+    const modeRowIdle = await page.evaluate(() => ({
+      mode: window.__duocad.mode,
+      sketchInModeRow: document.querySelector('.toolbar .mode-row #sketch-create') !== null,
+      optimizeInModeRow: document.querySelector('.toolbar .mode-row #optimize-enter') !== null,
+      sketchInCommandHost: document.querySelector('.command-host #sketch-create') !== null,
+    }))
+    if (modeRowIdle.mode !== 'idle') fail(`起動直後のモードが idle でない: ${modeRowIdle.mode}`)
+    if (!modeRowIdle.sketchInModeRow || !modeRowIdle.optimizeInModeRow) {
+      fail(`モードの入口がモードの行に無い: ${JSON.stringify(modeRowIdle)}`)
+    }
+    if (modeRowIdle.sketchInCommandHost) {
+      fail('「スケッチ」がverbの行(.command-host)に居る —— 入口がverbの次元へ戻っている')
+    }
+    ok('通常モード: モードの入口2つはモードの行にあり、verbの行には無い')
+
+    await page.click('#sketch-create')
+    await page.waitForFunction(() => window.__duocad.mode === 'sketch-pending', {
+      timeout,
+      polling: 50,
+    })
+    const pending = await page.evaluate(() => ({
+      activeSketch: window.__duocad.activeSketch,
+      // 貼る先待ちは**起動済み**で入る(`CommandHost` の `startCommandId`)。基準平面が
+      // 指せていることが、即適用の待ち受けまで構えている唯一の外から見える証拠になる。
+      wantsBasePlanes: window.__duocad.wantsBasePlanes,
+      armedButtons: document.querySelectorAll('.command-host button.on').length,
+      // モードの行が入れ替わっている(入口ではなく札と「抜ける」)。
+      exit: document.querySelector('.toolbar .mode-row #sketch-exit') !== null,
+      // **verbのボタンは1つも無い**(押し出しはこのモードには居ない)。
+      extrude: document.querySelector('#extrude') !== null,
+    }))
+    if (pending.activeSketch !== null) fail('貼る先待ちなのにスケッチが開いている')
+    if (!pending.wantsBasePlanes) fail('貼る先待ちなのに基準平面を指せない(起動していない)')
+    if (pending.armedButtons !== 1) {
+      fail(`貼る先待ちで起動中のコマンドが1つでない: ${pending.armedButtons}個`)
+    }
+    if (!pending.exit) fail('貼る先待ちに「抜ける」が無い(モードから出られない)')
+    if (pending.extrude) fail('貼る先待ちなのに押し出しのボタンが出ている(モードの分離が壊れている)')
+    ok('「スケッチ」を押すと貼る先待ちへ入る(起動済み・verbのボタンは消える・抜けるが出る)')
+
+    await page.click('#sketch-exit')
+    await page.waitForFunction(
+      () => window.__duocad.mode === 'idle' && document.querySelector('#extrude') !== null,
+      { timeout, polling: 50 },
+    )
+    ok('「抜ける」で通常モードへ戻る(verbの行が返ってくる)')
+
     // サーバは空で立つ。前回の実行のサーバを使い回している場合は既に読まれている。
     const partCount = await page.evaluate(() => window.__duocad.parts.length)
     if (partCount === 0) {
