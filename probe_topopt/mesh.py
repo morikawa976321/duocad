@@ -15,6 +15,10 @@
    `pyvista` / `vtk` / `pymeshlab` は使わない。
 5. **STL書き出し** — 自前のバイナリSTLライタ(依存追加なし)。
 
+`faces` の巻き順は3の直後に**外向き規約**(`(v1-v0)x(v2-v0)` が外向き法線)へ揃える。
+以後この配列を受け取る側 — STL書き出し・ブラウザ描画(`server.py` → three.js) — は
+どちらも入れ替えを行わない。
+
 新規依存は `scikit-image`(marching cubes)だけ。インストールコマンドは
 `probe_topopt/README.md` を参照。
 """
@@ -102,8 +106,20 @@ def run_marching_cubes(
     座標は半要素ぶん(整数ではなく半整数)ずれるため、offset適用後に計算すると
     軸判定が丸ごと反転し「常に0.5」という誤った結果になる
     (2026-08-30、セル中心オフセットの修正と同時に実測して発見)。
+
+    **巻き順もここで直す。** `skimage.measure.marching_cubes` が返す巻き順は、
+    `(v1-v0)x(v2-v0)` を外向き法線とする一般的な規約(STL/OCCT/three.js)に対して逆向き
+    (実測: 単純な直方体で発散定理の符号付き体積が負になる)。列を `[0, 2, 1]` へ
+    入れ替えて**生成側で**規約に合わせ、以後 `faces` を受け取る側は全て外向きを
+    前提にしてよいことにする。**書き出し直前で直してはいけない** — 2026-08-30の対策が
+    それで、消費者がSTLだけのうちは正しかったが、`faces` を直接ブラウザへ送る経路
+    (`server.py` → three.js の `computeVertexNormals`)が増えた時点で、そちらが
+    内向き法線のまま残った(2026-09-02発見。engine
+    `winding-fix-at-export-only-leaks-to-other-consumers`)。`check_mesh.py` の検査9が
+    これを機械で見張る。
     """
     verts, faces, _normals, _values = marching_cubes(rho_padded, level=level, spacing=spacing)
+    faces = faces[:, (0, 2, 1)]
     interpolation_ratios = edge_interpolation_ratios(verts, spacing=spacing)
     offset = np.asarray(spacing, dtype=float) * (pad_width - 0.5)
     verts = verts - offset
@@ -257,15 +273,13 @@ def min_wall_thickness(
 def write_stl(path: str | Path, verts: np.ndarray, faces: np.ndarray) -> None:
     """バイナリSTL(80バイトヘッダ + uint32三角形数 + 三角形ごとに法線+3頂点+attr2バイト)。
 
-    **`faces`の頂点順を[0,2,1]へ入れ替えて書き出す。** `skimage.measure.marching_cubes`
-    が返す巻き順は、`(v1-v0)x(v2-v0)` を外向き法線とする一般的なSTL/OCCTの規約に対して
-    向きが逆(実測: 単純な直方体で発散定理の符号付き体積が負になる)。ここで直さずに
-    そのまま書き出すと、`build123d.Mesher().read()` で読み戻したSolidの体積が符号だけ
-    反転する(2026-08-30実測: -3022.04 になるはずが期待値+3022.04)。`mesh_volume` や
-    隣接行列など`faces`を使う他の処理は巻き順に依存しないので、向きを直すのはここだけでよい。
+    **`faces` の巻き順はここでは触らない。** 外向き規約へ合わせるのは
+    `run_marching_cubes` の仕事(そちらのdocstring)であり、ここで再度 `[0,2,1]` へ
+    入れ替えると二重反転してSTLだけが裏返る。書き出す法線も `faces` の巻き順から
+    そのまま計算する。
     """
     verts32 = np.asarray(verts, dtype=np.float32)
-    faces = np.asarray(faces, dtype=np.int64)[:, (0, 2, 1)]
+    faces = np.asarray(faces, dtype=np.int64)
     tri = verts32[faces]
     normals = np.cross(
         tri[:, 1].astype(np.float64) - tri[:, 0].astype(np.float64),

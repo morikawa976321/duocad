@@ -3,7 +3,7 @@
     ..\.venv\Scripts\python.exe check_mesh.py
 
 **このファイルが合否そのものである。** タスクの完了条件1「`check_mesh.py` が緑」を、
-下記8項目の assert で判定する。1つでも落ちればプロセスは非ゼロで終わる。
+下記9項目の assert で判定する。1つでも落ちればプロセスは非ゼロで終わる。
 
 検査の構成:
 
@@ -26,6 +26,14 @@
    形は位置のズレでは変わらない)なので、**全軸を一律に半セルずらす**類のバグを検出できない
    (2026-08-30にQAが発見: `rho[ex]`はセル`ex`の中心の値なのに、パディング除去のオフセット
    計算がそれを踏まえておらず、marching cubesの面が設計空間に対して常に半要素ずれていた)。
+9. **面の向き(巻き順が外向き)** — 閉曲面の向きは「全部外向き」か「全部内向き」の
+   2通りしかないので、(a)向きが全面で一貫している(共有辺を2枚の三角形が必ず逆向きに
+   たどる＝同じ有向辺が2度現れない)ことと、(b)発散定理の符号付き体積が正であること、の
+   2つで確定する。(a)だけだと全体反転を、(b)だけだと一部反転の打ち消し合いを見逃す。
+   閾値は無い。1〜8で巻き順を見るのは検査7だけで、それは**STL経路しか通らない**ため、
+   `mr.faces` を直接使う消費者(`server.py`→three.js描画)が内向きのまま残る事故を
+   捕まえられなかった(2026-09-02発見。engine
+   `winding-fix-at-export-only-leaks-to-other-consumers`)。
 
 実行には`simp.py`のプリセット(40x16x16・60反復)を1回回す(約1.5〜2分)。8番目の検査だけは
 高速な合成密度場で行うので、この所要時間には影響しない。
@@ -313,6 +321,47 @@ def check_bounding_box_alignment() -> None:
     RESULTS["bbox_alignment_err_max"] = err_max
 
 
+# ---------------------------------------------------------------------------
+# 9. 面の向き(巻き順が外向き)
+# ---------------------------------------------------------------------------
+def check_face_winding(mr: mesh.MeshResult) -> None:
+    print("\n[9] 面の向き(巻き順が外向き)")
+    verts = mr.verts_raw
+    faces = mr.faces
+    tri = verts[faces]
+    signed = float(
+        np.einsum("ij,ij->i", tri[:, 0], np.cross(tri[:, 1], tri[:, 2])).sum() / 6.0
+    )
+    check(
+        "発散定理の符号付き体積が正(閉曲面が外向きに巻かれている)",
+        signed > 0.0,
+        f"符号付き体積={signed:.3f}",
+    )
+
+    # 符号付き体積は総和なので、一部の三角形だけ裏返っていても打ち消し合いで正のまま
+    # になりうる。向きが全面で一貫していることは有向辺で判定できる —— 向きの揃った
+    # 閉多様体では、有向辺 (a,b) はちょうど1本、その逆向き (b,a) もちょうど1本になる。
+    # **重心方向との内積では判定できない**: トポロジー最適化の結果は星形ではないので、
+    # 正しく外向きでも重心から見て後ろを向く面が普通にある。
+    n_verts = verts.shape[0]
+    directed = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
+    key = directed[:, 0].astype(np.int64) * n_verts + directed[:, 1]
+    rev = directed[:, 1].astype(np.int64) * n_verts + directed[:, 0]
+    n_dup = int(key.size - np.unique(key).size)
+    check(
+        "同じ有向辺が2度現れない(裏返った三角形が無い)",
+        n_dup == 0,
+        f"重複した有向辺={n_dup} / 有向辺={key.size}",
+    )
+    check(
+        "すべての有向辺に逆向きの相手がいる(向きが全面で一貫)",
+        np.array_equal(np.sort(key), np.sort(rev)),
+        f"有向辺={key.size} 一致={bool(np.array_equal(np.sort(key), np.sort(rev)))}",
+    )
+    RESULTS["duplicate_directed_edges"] = n_dup
+    RESULTS["signed_volume"] = round(signed, 3)
+
+
 def main() -> int:
     print("=" * 72)
     print("check_mesh.py : marching cubes + Taubin平滑化の受入検査")
@@ -326,6 +375,7 @@ def main() -> int:
     check_min_wall_thickness(mr)
     check_stl_roundtrip(mr)
     check_bounding_box_alignment()
+    check_face_winding(mr)
 
     print("\n" + "=" * 72)
     print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))
