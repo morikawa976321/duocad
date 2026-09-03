@@ -128,10 +128,12 @@ def _resolve_target(
         return None, None
 
     if not doc.is_editable(body_id):
+        # **現状は常にTrueなので通らない**(`_VALID_KINDS`が"solid"のみを許すため。
+        # 参照ボディ(kind="reference")は2026-09-03に概念ごと撤去した
+        # [[duocad-reference-body-removal-decided]])。それでも消さずに残すのは、
+        # 編集不可なkindが将来また増えたときの安全弁として(:96-110のdocstringと同じ理由)。
         raise ValueError(
-            f"body {body_id!r} is not editable (kind='reference'). "
-            "参照ボディは読み込みの原本なので触れない —— import_step が同じソリッドに"
-            "作る編集用ボディ(kind='solid')の body_id を使うこと"
+            f"body {body_id!r} is not editable (kind={doc.get_body(body_id).kind!r})"
         )
     body = doc.get_body(body_id)
     if body.shape is None:

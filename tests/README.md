@@ -30,8 +30,8 @@ BodyId = str
 Body(id: BodyId, name: str, kind: str, shape: Any = None, visible: bool = True)
 ```
 
-- `kind` は `"solid"`（編集対象）か `"reference"`（読み込んだSTEPの原本・読み取り専用）以外は
-  `ValueError`（`__post_init__` で検査）。
+- `kind` は `"solid"`（編集対象）以外は `ValueError`（`__post_init__` で検査）。
+  読み取り専用の「参照ボディ」（`kind="reference"`）は2026-09-03に概念ごと撤去した。
 
 ```python
 Document()
@@ -89,29 +89,30 @@ OpLog.FORMAT_VERSION = 2
   （`parameters.rebuild` はこれを踏まえた実装になっている）。
 - 保存形式の版は `FORMAT_VERSION = 2`。**版1のファイルは明示的に断る**。旧版は
   `args={"path": str, "body_id": BodyId}` の形で `import_step` を記録していたが、
-  現行は `{"source_name": str, "step": <STEP本文>, "reference_ids": [...], "body_ids": [...]}`
+  現行は `{"source_name": str, "step": <STEP本文>, "body_ids": [...]}`
   で**形そのものがログの中にある**（再生は外部ファイルを一切読まない）。
+  **旧`reference_ids`キー**（2026-09-03の参照ボディ撤去前に書かれた保存ファイルが持つ）は
+  `from_json`が未知のキーとして黙って無視する。
 - `Operation.selection` フィールドは廃止済み（読むのはテストのみだった。存在しない）。
   **後方互換**: 旧フィールドを含む保存ファイルは `from_json` が黙って無視して読み込める。
 
 ## `duocad/io_step.py` と verb `import_step`（`duocad/verbs/import_editable.py`）
 
-STEPの読み込みverbは**1本だけ**（`import_step`）。参照ボディだけを足す読み込みと、それを
-後から編集可能にする複製のverb（`make_editable_copy`）は無い — 参照ボディを起点にする経路は
-存在しない。
+STEPの読み込みverbは**1本だけ**（`import_step`）。参照ボディという概念自体が2026-09-03に
+撤去されたため、それを足す読み込みも、後から編集可能にする複製のverb（`make_editable_copy`。
+これは2026-08-26に既に削除済み）も無い。
 
 ```python
 # duocad/verbs/import_editable.py
 import_step(doc: Document, path: str | Path) -> list[BodyId]   # 戻り値は編集用ボディのID
 ```
 
-- ソリッドごとに**参照ボディ**（`kind="reference"`・**`visible=False`**）と**編集用ボディ**
-  （`kind="solid"`・可視）の2つを追加する。名前は `<ファイル名(拡張子なし)>_N` と
-  `_N-edit`。**単一ソリッドでも1要素のリストを返す**（戻り値の型が入力に依存すると呼び出し側が
-  必ず分岐を書く羽目になる）。
-- **操作ログは1行**（`args={"source_name":.., "step": <STEP本文>, "reference_ids":[...],
-  "body_ids":[...]}`）。**形はログの中にある** — `step` にSTEP本文を生テキストで持つので、
-  redo/replayは外部ファイルを一切読まない。undo1回で全ボディ（参照+編集用）がまとめて消える。
+- ソリッドごとに**編集用ボディ**（`kind="solid"`・可視）を1つ追加する。名前は
+  `<ファイル名(拡張子なし)>_N`。**単一ソリッドでも1要素のリストを返す**（戻り値の型が
+  入力に依存すると呼び出し側が必ず分岐を書く羽目になる）。
+- **操作ログは1行**（`args={"source_name":.., "step": <STEP本文>, "body_ids":[...]}`）。
+  **形はログの中にある** — `step` にSTEP本文を生テキストで持つので、redo/replayは
+  外部ファイルを一切読まない。undo1回で全ボディがまとめて消える。
 - 参照ボディを可視のまま持つと同じ形が二重にテセレーション・二重に送信され、手前を消しても
   参照側のメッシュが残ってピック失敗が再発するため、**参照ボディは追加した時点で
   `visible=False`**。
@@ -330,7 +331,8 @@ MODES = ("join", "cut", "new")
   `ValueError`**（黙って無視すると「そのボディへ足したつもりが別ボディになっていた」が
   形が増えるぶん失敗に見えないまま通る）。再生でも既に同じIDのボディがいたら `ValueError`
   （黙って融合・上書きしない）。
-- `body_id` の既定はアクティブボディ。`kind="reference"` は `ValueError`（読み取り専用契約）。
+- `body_id` の既定はアクティブボディ。編集不可なkind（現状は存在しないが将来の安全弁として
+  ガードは残してある）は `ValueError`。
 - ログの `args` は `{"regions":[<dict>...], "distance":.., "mode":.., "body_id":..}`。`join`
   が新しくボディを作った場合もそのIDを `args["body_id"]` に記録する。
 - 失敗時は document・ログのどちらにも変更を残さない（幾何計算を `append` より先に済ませる）。
@@ -762,7 +764,7 @@ Bodyの一覧）が常に空になるため。
 `changed_bodies`（この操作で形状か可視性が変わったBodyId）・`bodies`（変更後の姿。キーは
 `body_id`/`name`/`kind`/`visible`/`face_count`/`volume` の6つ）・`can_undo`/`can_redo`。
 加えて作ったものの**IDを返す**（`sketch_create`→`sketch_id`、`add_*`→`entity_id`、
-`pattern_*`→`pattern_id`、`import_step`→`body_ids`と`reference_ids`）。
+`pattern_*`→`pattern_id`、`import_step`→`body_ids`）。
 
 **`changed_bodies` は `Session.body_revision` の呼び出し前後の差から導く**（verbごとに
 「これはbodyを変える」と数え上げる実装だと増設のたびに静かに漏れる。上の`Session`節と同じ
@@ -795,9 +797,8 @@ Bodyの一覧）が常に空になるため。
   2つしか返らない」をAIが自分の誤りと解釈する）。
 - `describe_document` は各図形について `params`（解決済みの数値）と `parameters`
   （その数値を持つパラメータ名）の**両方**を出す — 数値だけでは `set_parameter` の引数が
-  作れず、名前だけでは今の値が分からない。参照ボディは既定で出さない
-  （`include_references=True`で出せる。件数は既定でも`reference_count`に出る）。領域の
-  数え上げは計算コストがあるので `include_regions` で任意にする。
+  作れず、名前だけでは今の値が分からない。領域の数え上げは計算コストがあるので
+  `include_regions` で任意にする。
 
 ### ツール名 = verb名の一致規律
 
