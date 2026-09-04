@@ -118,16 +118,25 @@
      そもそも描かないので、透明化する相手がいない。暗くしないという要件は、モーダルを
      やめたこと自体が満たしている。 */
 
-  /* 画面の右端に小さく出す(`margin: auto` の中央寄せを打ち消す)。
-     `position: fixed` なのでどのパネルのレイアウトにも影響しない(＝`.viewport` の寸法に
-     触らない)。**非モーダルは top-layer に入らない**ので重なり順は `z-index` で決める ——
-     このプロジェクトは styles.css に z-index を1つも持たず全て文書順で解決しているため、
-     ここが唯一の指定になる(小さい値で足りる)。 */
+  /* **ビューポート左上のブラウザ(`BrowserPanel.svelte`)のすぐ右**に小さく出す
+     (`margin: auto` の中央寄せを打ち消す)。位置の基準は `.stage`(App.svelte で
+     `position: relative`)なので、**左右のサイドバーを開閉してもブラウザとの隣接が保たれる**。
+     以前は画面右上の `position: fixed` だったが、そこはビューキューブの居場所でもあり、
+     AIサイドバーを閉じるとキューブの70%を覆っていた(2026-09-04実測)。
+
+     `10px` はブラウザが浮いている余白と同じ値(`.browser-panel` の `top`/`left`)で、
+     幅は `--browser-panel-w` を共有している —— 直値で持つと、片方だけ動かした日に
+     重なるか妙な隙間が空く。
+
+     `position: absolute` はフローの外なので、ブラウザや Toast と同じく `.viewport` の
+     寸法＝カメラのアスペクトには触らない(styles.css の不変条件)。**非モーダルは
+     top-layer に入らない**ので重なり順は `z-index` で決める —— 隣り合うブラウザが
+     `z-index: 5` なので、それより上に置く。 */
   #settings-dialog {
-    position: fixed;
+    position: absolute;
     inset: auto;
-    top: 64px;
-    right: 16px;
+    top: 10px;
+    left: calc(10px + var(--browser-panel-w) + 10px);
     z-index: 10;
     width: 260px;
     margin: 0;

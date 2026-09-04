@@ -141,7 +141,8 @@
     top: 10px;
     left: 10px;
     z-index: 5;
-    width: 232px;
+    /* 幅は `styles.css` の `:root` が持つ(設定ダイアログの位置がこれを見るため)。 */
+    width: var(--browser-panel-w);
     max-height: calc(100% - 20px);
     display: flex;
     flex-direction: column;

@@ -55,6 +55,10 @@
      ここを大きく広げると .viewport が痩せ、frameToContent がアスペクト比を見ない分だけ
      「画面の中に無い」判定が出やすくなる(下の .sidebar のコメント参照)。 */
   --data-panel-w: 240px;
+  /* ビューポート左上に浮くブラウザ(`BrowserPanel.svelte`)の幅。**設定ダイアログが
+     「ブラウザの右」に出る位置をここから計算する**ので、共有の変数にしてある ——
+     片方だけ動かすと、重なるか妙な隙間が空くかのどちらかになる。 */
+  --browser-panel-w: 232px;
   --font: "PlemolJP Console", "Consolas", "Cascadia Mono", "Meiryo", monospace;
 }
 

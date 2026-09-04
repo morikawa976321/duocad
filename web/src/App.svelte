@@ -1920,6 +1920,21 @@
         onHideAll={hideAllParts}
         onEnterSketch={enterSketch}
       />
+
+      <!-- 設定ダイアログ。**`.stage` の中に置くのは「ブラウザの右」に出すため**(2026-09-04
+           本人指示) —— 位置の基準が `.stage` になるので、左右のサイドバーを開閉しても
+           ブラウザとの隣接が保たれる。以前は画面右上(`position: fixed`)に出しており、
+           **AIサイドバーを閉じるとビューキューブの70%を覆っていた**(同日実測。キューブは
+           ビューポートの右上アンカーなので、ビューポートが右へ伸びるとダイアログの下へ入る)。
+           **大きさは持たない**(`position: absolute` でフローの外)ので、ブラウザや Toast と
+           同じく `.viewport` の寸法＝カメラのアスペクトには触らない。 -->
+      <SettingsDialog
+        open={settingsOpen}
+        {fov}
+        angle={fovAngle}
+        onFov={applyFov}
+        onClose={() => (settingsOpen = false)}
+      />
     </div>
 
     <!-- 右サイドバー。**AiPanel だけ = 完全にAI専用**(2026-08-30本人決定)。
@@ -1944,15 +1959,4 @@
          ビューポートの寸法＝カメラのアスペクトには触らない。出す側は `fail()` の1本だけ。 -->
     <Toast />
   </div>
-
-  <!-- 設定ダイアログ。**`position: fixed` なのでレイアウトの大きさを持たない** ——
-       どこに書いても `.viewport` の寸法＝カメラのアスペクトには触らない
-       (非モーダル化で top-layer からは外れたが、この不変条件は fixed の側が持っている)。 -->
-  <SettingsDialog
-    open={settingsOpen}
-    {fov}
-    angle={fovAngle}
-    onFov={applyFov}
-    onClose={() => (settingsOpen = false)}
-  />
 </div>
