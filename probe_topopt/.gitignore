@@ -28,3 +28,11 @@ output/perf-*.json
 
 # 4題材の通し検査(`check_design_space.py` [12])が書き出すSTL。合否は検査の出力が持つ。
 output/check_case_*.stl
+
+# CPU並列化の受入検査(`check_parallel.py` [6])が threads の伝播を確かめるために書き出す
+# STL。合否は rho 場の突き合わせが持つので、成果物としては追跡しない。
+output/_check_parallel_propagation.stl
+
+# CPU並列化のスケーリング測定(`perf.py --threads`)が書き出す JSON。`perf-*.json` と同じ
+# 理由(測り直すたびに全部差し替わる)で追跡しない。
+output/scaling_*.json

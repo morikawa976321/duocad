@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import time
 import warnings
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -420,23 +422,174 @@ def _mg_setup(kf: sp.csr_matrix, transfers: list[sp.csr_matrix], opts: MGOptions
     return levels, spla.splu(a.tocsc())
 
 
-def _vcycle(levels: list, lu, b: np.ndarray, level: int, opts: MGOptions) -> np.ndarray:
+def _vcycle(
+    levels: list,
+    lu,
+    b: np.ndarray,
+    level: int,
+    opts: MGOptions,
+    blocked: list | None = None,
+) -> np.ndarray:
     """対称 V-cycle。**前平滑化と後平滑化の回数を揃えること**(揃えないと前処理が非対称に
     なり、CG が収束しない/嘘の解を返す)。`check_multigrid.py` [2] がここを直接見ている。
+
+    `blocked` は `_build_blocked_levels` が作る並列 matvec の並び(`levels` と同じ長さ)。
+    **`None`(既定)のときは `a @ x` を直に呼び、以前と1バイトも違わない経路になる**——
+    `check_multigrid.py` は `blocked` を渡さずに呼ぶので、この関数の意味を変えていない。
     """
     if level >= len(levels):
         return lu.solve(b)
     a, s, p = levels[level]
+    if blocked is None:
+        av: Callable[[np.ndarray], np.ndarray] = a.__matmul__
+        pv: Callable[[np.ndarray], np.ndarray] = p.__matmul__
+        ptv: Callable[[np.ndarray], np.ndarray] = p.T.__matmul__
+    else:
+        av, pv, ptv = blocked[level]
     nu = int(opts.smooth_steps) * max(1, int(opts.smooth_growth)) ** level
     x = s * b if nu > 0 else np.zeros_like(b)
     for _ in range(nu - 1):
-        x += s * (b - a @ x)
+        x += s * (b - av(x))
     if opts.coarse_correction:
         for _ in range(max(1, int(opts.cycle_gamma))):
-            x += p @ _vcycle(levels, lu, p.T @ (b - a @ x), level + 1, opts)
+            x += pv(_vcycle(levels, lu, ptv(b - av(x)), level + 1, opts, blocked))
     for _ in range(nu):
-        x += s * (b - a @ x)
+        x += s * (b - av(x))
     return x
+
+
+# ---------------------------------------------------------------------------
+# CPU 並列化 (solve(threads=...))
+# ---------------------------------------------------------------------------
+# **律速は CG の反復**(V-cycle の平滑化 `A@x`・移送 `P@e`/`P.T@r`、および CG 自身の `A@x`)
+# であって、**RAP(疎行列×疎行列)と `splu`(SuperLU の数値分解)ではない**
+# (`20260904-1414` の契約: RAP+splu の組み直しが solve の 16〜46% を占めるが、
+# scipy の疎行列積も SuperLU もスレッド並列しない)。実測でも確かめた:
+# 46x28x31 格子(自由度128,064)で RAP を行ブロックに割って `ThreadPoolExecutor` に
+# 投げても **0.5〜0.6倍(遅くなる)**——`vstack` での組み直しコストが並列化の利得を上回る。
+# splu 自体はそもそもスレッドプールへ切り出す形をしていない。
+#
+# 一方 **scipy の CSR 行列ベクトル積(疎行列×密ベクトル)は C 実装で GIL を解放する**
+# (実測: 同じ格子で 12スレッド 3.8倍。`_dot` の呼び出しだけをスレッドへ投げれば速くなる)。
+# したがってスレッド化するのは「疎行列×密ベクトル」の積だけに絞る。
+#
+# **行ブロックへの分割は答えを変えない**: CSR の行 i の内積は行 i の非零要素だけで決まり、
+# 他の行・他のスレッドの計算と独立。どのスレッドがどの行を計算しても、スレッド数を
+# 変えても、**丸め誤差が発生する順序は変わらずビット単位で同じ結果になる**
+# (numpy の縮約(内積・ノルム。CG 本体が使う)はここでは並列化していないので、
+# そちらの再現性はそもそも揺れない)。README「答えの再現性」の選択(a)——加算順序を
+# 固定して再現性を保つ——を**追加コストなしで**満たせるのはこのため。
+
+# 環境変数 `TOPOPT_THREADS` で上書きできる既定のスレッド数。**呼び出し時に読む**
+# (`MG_DEFAULT` と同じ流儀)。値を取れなければ 1(直列。壊れた環境変数で黙って
+# 並列化が有効になるより、壊れた値は無視して安全側へ倒す)。
+def _default_thread_count() -> int:
+    override = os.environ.get("TOPOPT_THREADS")
+    if override:
+        try:
+            return max(1, int(override))
+        except ValueError:
+            return 1
+    return max(1, os.cpu_count() or 1)
+
+
+PARALLEL_THREADS: int = _default_thread_count()
+
+# プロセスの寿命だけ生存させるスレッドプールのキャッシュ(スレッド数ごとに1つ)。
+# **明示的に閉じない**——閉じても次の solve でまた同じ数だけ要るので、生成コストを
+# 毎回払わせない。デーモンスレッドではないが、プロセス終了時に daemon 属性が無くても
+# インタプリタは残ったワーカーを待たずに終了する(標準ライブラリの `atexit` フックが
+# `shutdown(wait=True)` を試みるので、通常のプロセス終了では待つ。使い切りのCLI
+# (`perf.py` / `check_*.py`)ではプロセスごと終わるので問題にならない)。
+_THREAD_POOLS: dict[int, ThreadPoolExecutor] = {}
+
+
+def _thread_pool(n: int) -> ThreadPoolExecutor:
+    pool = _THREAD_POOLS.get(n)
+    if pool is None:
+        pool = ThreadPoolExecutor(max_workers=n, thread_name_prefix="topopt-spmv")
+        _THREAD_POOLS[n] = pool
+    return pool
+
+
+# 1スレッドあたりこれ未満の行数しか無い行列は、スレッド化のオーバーヘッド
+# (`submit`/`result` の往復)のほうが計算そのものより高くつく。**しきい値の根拠**:
+# 最粗格子の1つ上の段(1,000〜数千行)でもスレッド数を機械的に絞らないと、
+# 検査で使う小さい格子(数百行)でむしろ遅くなる実測があった。
+_MIN_ROWS_PER_THREAD = 512
+
+
+def _effective_threads(n_rows: int, threads: int) -> int:
+    """要求されたスレッド数を、行列の大きさに見合う数へ切り詰める。"""
+    threads = max(1, int(threads))
+    if n_rows <= 0:
+        return 1
+    return max(1, min(threads, n_rows // _MIN_ROWS_PER_THREAD or 1))
+
+
+class _BlockedMatvec:
+    """CSR行列を行ブロックへ割った並列 `A @ x`。**スレッド数に関わらずビット一致する**
+    (このセクション冒頭の説明を参照)。`threads<=1` または行数がスレッド数に対して
+    少なすぎるときは、プールへ投げずに `a @ x` を直に呼ぶ(オーバーヘッドを払わない)。
+
+    行ブロックへの分割(スライス)は**構築時に1回だけ**行う。密度が変わるたびに
+    作り直す必要があるので(`_mg_setup` や `Model.solve` が呼ぶ側で)、`solve` 1回の
+    寿命を超えてキャッシュしない。
+    """
+
+    __slots__ = ("mat", "bounds", "blocks", "pool")
+
+    def __init__(self, mat: sp.spmatrix, threads: int) -> None:
+        mat = mat.tocsr() if not sp.isspmatrix_csr(mat) else mat
+        self.mat = mat
+        eff = _effective_threads(mat.shape[0], threads)
+        if eff <= 1:
+            self.bounds = None
+            self.blocks = None
+            self.pool = None
+        else:
+            self.bounds = np.linspace(0, mat.shape[0], eff + 1).astype(np.int64)
+            self.blocks = [mat[self.bounds[i] : self.bounds[i + 1]] for i in range(eff)]
+            self.pool = _thread_pool(eff)
+
+    def __call__(self, x: np.ndarray) -> np.ndarray:
+        if self.pool is None:
+            return self.mat @ x
+        out = np.empty(self.mat.shape[0], dtype=float)
+        futures = [self.pool.submit(_block_dot, block, x) for block in self.blocks]
+        for lo, hi, fut in zip(self.bounds[:-1], self.bounds[1:], futures, strict=True):
+            out[lo:hi] = fut.result()
+        return out
+
+
+def _block_dot(block: sp.csr_matrix, x: np.ndarray) -> np.ndarray:
+    return block @ x
+
+
+def parallel_matvec(a: sp.spmatrix, x: np.ndarray, threads: int = 1) -> np.ndarray:
+    """`a @ x` を行ブロックへ割って `threads` 個のスレッドで計算する(公開の使い切り口)。
+
+    毎回ブロック分割を作り直すので、同じ `a` に対して繰り返し呼ぶ用途には向かない
+    (`Model.solve` / `_vcycle` の内部は `_BlockedMatvec` を密度が変わるたびに1回だけ
+    作って使い回している)。`perf.py` の帯域測定と `check_parallel.py` の検出力用。
+    """
+    return _BlockedMatvec(a, threads)(x)
+
+
+def _build_blocked_levels(levels: list, threads: int) -> list | None:
+    """V-cycle の各段について `A` / `P` / `P^T` の並列 matvec をあらかじめ作る。
+
+    **`_vcycle` の再帰1回ごとに作り直さないためのキャッシュ**(密度が変わるたびに
+    `_mg_setup` と同じ頻度=solve 1回に1回だけ作ればよい)。`threads<=1` なら
+    何も作らず `None` を返す——`_vcycle` はこれを「並列化しない」の合図として扱う。
+    """
+    if threads <= 1:
+        return None
+    built = []
+    for a, _s, p in levels:
+        pt = p.transpose().tocsr()
+        built.append((_BlockedMatvec(a, threads), _BlockedMatvec(p, threads), _BlockedMatvec(pt, threads)))
+    return built
 
 
 class Model:
@@ -556,17 +709,21 @@ class Model:
         return cached
 
     def mg_preconditioner(
-        self, kf: sp.spmatrix, opts: MGOptions | None = None
+        self, kf: sp.spmatrix, opts: MGOptions | None = None, *, threads: int = 1
     ) -> spla.LinearOperator:
         """`kf`(自由DOFに縮めた K)に対する V-cycle 前処理。
 
         **対称正定値**である(`_smoothing_weight` の重み・前後で同じ回数の平滑化・
         R = P^T・最粗格子は直接解法)。CG に差せるのはそのため。
+
+        `threads>1` なら V-cycle の行列ベクトル積(平滑化・移送)を行ブロックで並列化する
+        (`_build_blocked_levels`)。**答えは変わらない**——`_vcycle` のセクション冒頭を参照。
         """
         opts = MG_DEFAULT if opts is None else opts
         levels, lu = _mg_setup(kf.tocsr(), self.mg_transfers(opts), opts)
+        blocked = _build_blocked_levels(levels, threads)
         return spla.LinearOperator(
-            kf.shape, matvec=lambda b: _vcycle(levels, lu, b, 0, opts), dtype=float
+            kf.shape, matvec=lambda b: _vcycle(levels, lu, b, 0, opts, blocked), dtype=float
         )
 
     def solve(
@@ -578,6 +735,7 @@ class Model:
         cg_rtol: float = 1e-9,
         u0: np.ndarray | None = None,
         mg: MGOptions | None = None,
+        threads: int | None = None,
     ) -> np.ndarray:
         """K U = F を解いて U (ndof,) を返す。拘束DOFの成分はきっかり 0.0。
 
@@ -588,6 +746,13 @@ class Model:
         が返り、最適化はその値を信じて進んだ末に別の場所で落ちる(実測 OC 更新で
         `ZeroDivisionError`)。**原因から遠い場所で落ちるのが最悪**なので、ここで名指しする。
         剛体運動の完全な検出はしない —— 残差が通らなければ落とす、それだけでよい。
+
+        `threads` は CG 反復・V-cycle が使うスレッド数(**行列ベクトル積だけを並列化**、
+        RAP と `splu` は並列化しても速くならないので触らない。README「CPU並列化」参照)。
+        **既定は `None` → `simp.PARALLEL_THREADS`**(呼び出し時に読む。`MG_DEFAULT` と同じ
+        流儀で `simp.PARALLEL_THREADS = 1` を代入すれば全経路が直列に戻る)。
+        `threads=1` は並列化の前と**同じコード経路**(`blocked=None` のまま `_vcycle` を呼ぶ・
+        CG にも生の `kf` を渡す)を通るので、速度も答えも変わらない(退避経路)。
         """
         if solver not in ("mg", "cg", "direct"):
             raise ValueError(f"未知の解法: {solver!r}")
@@ -595,6 +760,7 @@ class Model:
         # 差し替えるだけで V-cycle の形を全経路(anchor → design_space → perf)で
         # 一斉に変えられる。既定値の当たりを取るのに要る。
         mg = MG_DEFAULT if mg is None else mg
+        threads = PARALLEL_THREADS if threads is None else max(1, int(threads))
         stats = _SOLVE_STATS
         t0 = time.perf_counter()
         kg = self.assemble(rho, penal)
@@ -611,7 +777,7 @@ class Model:
         else:
             if solver == "mg":
                 t_setup = time.perf_counter()
-                precond = self.mg_preconditioner(kf, mg)
+                precond = self.mg_preconditioner(kf, mg, threads=threads)
                 setup_seconds = time.perf_counter() - t_setup
             else:
                 diag = kf.diagonal()
@@ -623,7 +789,13 @@ class Model:
                     nonlocal iterations
                     iterations += 1
 
-            u_free, info = spla.cg(kf, ff, x0=x0, M=precond, rtol=cg_rtol, callback=counter)
+            # **CG 自身の `A@x` も行ブロックで並列化する**(threads<=1 なら `kf` を生のまま
+            # 渡すので `spla.cg` は元のコード経路と同じ:`_BlockedMatvec` を経由しない)。
+            a_op: sp.spmatrix | spla.LinearOperator = kf
+            if threads > 1:
+                a_mv = _BlockedMatvec(kf, threads)
+                a_op = spla.LinearOperator(kf.shape, matvec=a_mv, dtype=float)
+            u_free, info = spla.cg(a_op, ff, x0=x0, M=precond, rtol=cg_rtol, callback=counter)
             fell_back = info != 0
             if info != 0:
                 warnings.warn(
@@ -865,6 +1037,7 @@ def optimize(
     move: float = 0.2,
     solver: str = "mg",
     cg_rtol: float = 1e-9,
+    threads: int | None = None,
     callback: Callable[[Iteration, np.ndarray], None] | None = None,
     fixed_dofs: np.ndarray | None = None,
     load: np.ndarray | None = None,
@@ -873,6 +1046,8 @@ def optimize(
     keep_model: bool = False,
 ) -> Result:
     """SIMPでコンプライアンス最小化を行う。
+
+    `threads` は `Model.solve` へそのまま渡る(既定 `None` → `simp.PARALLEL_THREADS`)。
 
     `fixed_dofs` / `load` は境界条件の差し替え(`Model` へそのまま渡る)。
     `void_mask` / `solid_mask` は**設計変数を動かさない要素**(パッシブ要素)で、
@@ -974,7 +1149,7 @@ def optimize(
 
     for it in range(1, max_iter + 1):
         t0 = time.perf_counter()
-        u = model.solve(x_phys, penal, solver=solver, cg_rtol=cg_rtol, u0=u)
+        u = model.solve(x_phys, penal, solver=solver, cg_rtol=cg_rtol, u0=u, threads=threads)
         c, ce = model.compliance(x_phys, penal, u)
         dc = -penal * x_phys ** (penal - 1.0) * (E - emin) * ce
         dv = np.ones_like(x)

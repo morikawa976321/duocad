@@ -95,22 +95,34 @@ def _model_for_spmv(space: ds.DesignSpace, force) -> tuple[simp.Model, np.ndarra
     return model, rho
 
 
-def _spmv_bandwidth(model: simp.Model, rho: np.ndarray, repeat: int = SPMV_REPEAT) -> dict:
+def _spmv_bandwidth(
+    model: simp.Model, rho: np.ndarray, repeat: int = SPMV_REPEAT, threads: int = 1
+) -> dict:
     """1回の行列ベクトル積の秒数と実効帯域。
 
     **帯域の定義**: `(行列のバイト数 + x + y) / 秒`。行列は CSC の `data`/`indices`/`indptr`
     をそのまま数える(`data` は float64、`indices` は scipy が選んだ整数型)。x の再読み込みや
     キャッシュヒットは数えない —— **絶対値を他所と比べるための数字ではなく、同じ機械で
     「メモリ律速に張り付いているか」を見るための数字**である。
+
+    `threads>1` は `simp.parallel_matvec` を使う(CG/V-cycle が内部で使うのと同じ行ブロック
+    分割)。**CPU並列化のスケーリング曲線(頭打ちがどこで起きるか)はここが素の数字**——
+    設計反復1回分の秒数には組立・RAP・splu も混ざるので、SpMV 単体の帯域のほうが
+    「並列化した部分だけ」の頭打ちを素直に見せる。
     """
     kg = model.assemble(rho, 3.0)
     kf = kg[model.free, :][:, model.free].tocsc()
     x = np.ones(kf.shape[1])
-    kf @ x  # 初回はキャッシュを暖めるぶんだけ遅いので捨てる
+    if threads > 1:
+        kf_csr = kf.tocsr()
+        mv = simp._BlockedMatvec(kf_csr, threads)  # noqa: SLF001 — 同じプロセス内の使い切り測定
+    else:
+        mv = kf.__matmul__
+    mv(x)  # 初回はキャッシュを暖めるぶんだけ遅いので捨てる
     best = float("inf")
     for _ in range(int(repeat)):
         t0 = time.perf_counter()
-        kf @ x
+        mv(x)
         best = min(best, time.perf_counter() - t0)
     moved = int(kf.data.nbytes + kf.indices.nbytes + kf.indptr.nbytes + x.nbytes * 2)
     return {
@@ -119,6 +131,7 @@ def _spmv_bandwidth(model: simp.Model, rho: np.ndarray, repeat: int = SPMV_REPEA
         "bytes": moved,
         "seconds": best,
         "gbps": moved / best / 1e9,
+        "threads": int(threads),
     }
 
 
@@ -130,6 +143,7 @@ def measure_case(
     volfrac: float = VOLFRAC,
     spmv_repeat: int = SPMV_REPEAT,
     solver: str | None = None,
+    threads: int | None = None,
 ) -> dict:
     """題材1つ × 解像度1つ。**端から端まで(導出 → 連結性ガード → SIMP → STL)通す。**"""
     case = ds.CASES[name]
@@ -160,6 +174,7 @@ def measure_case(
             force=tuple(float(v) for v in case.force),
             stl_path=stl,
             solver=solver,
+            threads=threads,
         )
     run_seconds = time.perf_counter() - t0
 
@@ -176,7 +191,9 @@ def measure_case(
         )
 
     model, rho0 = _model_for_spmv(space, case.force)
-    spmv = _spmv_bandwidth(model, rho0, repeat=spmv_repeat)
+    spmv = _spmv_bandwidth(
+        model, rho0, repeat=spmv_repeat, threads=int(threads) if threads else 1
+    )
 
     grid = space.grid
     solve_seconds = float(stats["solve_seconds"])
@@ -186,6 +203,7 @@ def measure_case(
     return {
         "case": name,
         "solver": solver or "(既定)",
+        "threads": int(threads) if threads else int(simp.PARALLEL_THREADS),
         "covers": case.covers,
         "resolution": int(resolution),
         "margin_ratio": float(case.margin_ratio),
@@ -365,6 +383,13 @@ def main(argv: list[str] | None = None) -> int:
         help="解法を上書きする(既定は simp 側の既定 = マルチグリッド)。"
         "**旧い解法の基準線を同じセッションで撮り直すため**の口: --solver cg",
     )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="CG/V-cycle のスレッド数を上書きする(既定は None = simp.PARALLEL_THREADS)。"
+        "**スケーリング曲線を撮るための口**: --threads 1 / 2 / 4 / 8 / 14",
+    )
     parser.add_argument("--json", type=str, default=None, help="測定値の書き出し先")
     parser.add_argument(
         "--baseline",
@@ -394,6 +419,7 @@ def main(argv: list[str] | None = None) -> int:
                 volfrac=args.volfrac,
                 spmv_repeat=args.spmv_repeat,
                 solver=args.solver,
+                threads=args.threads,
             )
             rows.append(row)
             print(
@@ -405,13 +431,14 @@ def main(argv: list[str] | None = None) -> int:
 
     payload = {
         "solver": args.solver or "(既定)",
+        "threads": int(args.threads) if args.threads else int(simp.PARALLEL_THREADS),
         "max_iter": args.max_iter,
         "volfrac": args.volfrac,
         "seconds_wall": time.perf_counter() - started,
         "rows": rows,
     }
     print_tables(rows, baseline)
-    print(f"\n合計 {payload['seconds_wall']:.1f}秒")
+    print(f"\n合計 {payload['seconds_wall']:.1f}秒 (threads={payload['threads']})")
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)

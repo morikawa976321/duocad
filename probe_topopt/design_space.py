@@ -801,6 +801,7 @@ def run_topopt(
     stl_path: Optional[str | Path] = None,
     progress: Any = None,
     solver: Optional[str] = None,
+    threads: Optional[int] = None,
 ) -> dict:
     """導出した塊を端から端まで回す(塊 → 面アンカー → SIMP → marching cubes → STL)。
 
@@ -829,6 +830,7 @@ def run_topopt(
         stl_path=out,
         progress=progress,
         solver=solver,
+        threads=threads,
     )
     # `run_pipeline` は保持ソリッドを**自分でもう一度**格子へ載せる。三角形分割の細かさが
     # `derive` と食い違うと、ここで通した塊が向こうでは通らない(逆もある)。揃えてあることを

@@ -762,6 +762,7 @@ def run_pipeline(
     stl_path: Optional[str | Path] = None,
     progress: Any = None,
     solver: Optional[str] = None,
+    threads: Optional[int] = None,
 ) -> dict:
     """ソリッドを端から端まで1回通す。戻り値は各段の実測と成果物。
 
@@ -789,6 +790,9 @@ def run_pipeline(
     **性能の新旧比較のためだけにある口**で、`perf.py --solver cg` が旧い解法(Jacobi 前処理)
     を同じセッションで撮り直すのに使う。None のときは `simp.optimize` へ渡さないので、
     既定の挙動は1ビットも変わらない。
+
+    `threads` も同じ形の上書き(既定 None = `simp.PARALLEL_THREADS`)。**`perf.py --threads`
+    がスレッド数を振ったスケーリング測定に使う**口で、None のときは渡さない。
     """
     import mesh
     import simp
@@ -852,6 +856,7 @@ def run_pipeline(
         solid_mask=solid,
         callback=progress,
         **({} if solver is None else {"solver": solver}),
+        **({} if threads is None else {"threads": threads}),
     )
     timings["optimize"] = time.perf_counter() - t0
 
