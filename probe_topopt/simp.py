@@ -69,6 +69,12 @@ def collect_solve_stats() -> Iterator[dict]:
 # (PRESET は片持ち梁の題材、こちらは `optimize` の既定値)。値は歴史的に一致している。
 DEFAULT_VOLFRAC = 0.3
 
+# `rmin` も `rmin_mm` も渡さなかったときのフィルタ半径[要素]。**PRESET の rmin とは別物**
+# (PRESET は片持ち梁の題材、こちらは `optimize` の既定値)。値は歴史的に一致している。
+# 1.5要素という値の根拠(下回るとチェッカーボードが出る)は `check_filter_radius.py` が
+# 実測で示す(README「1.5要素という下限の根拠」)。
+DEFAULT_RMIN = 1.5
+
 # 片持ち梁の基準題材。**受入検査3本がこれを回すので、大きさがそのまま検証の1周の長さになる。**
 # 40x16x16(1周およそ11分)から 20x8x8 へ落としてある(2026-09-04)。**反復数は 60 のまま** ——
 # 30反復まで落とすと終盤10反復の変動が 2.47% になり、`check_simp.py` (b) の1%を割る。
@@ -898,6 +904,9 @@ class Result:
     target_volume: float = float("nan")  # 要素数
     volfrac: float = float("nan")  # 動かせる要素に対する実効分率
     element_volume_mm3: float | None = None
+    # 実際に使ったフィルタ半径[要素]。**入力をそのまま写したものではない** —— mm で渡された
+    # 場合はここに換算後の値が入る(volfrac/target_volume と同じ役割分担)。
+    rmin: float = float("nan")
     # `optimize(keep_model=True)` のときだけ入る、実際に解いた `Model`。**既定は None** ——
     # `Model` は `_iK`/`_jK` に要素数×576 の添字配列を2本持つので、要らない呼び出しにまで
     # 数十MBを持たせない。後処理(`stress.py`)が拘束・荷重を手で組み直さずに済むための口で、
@@ -917,6 +926,14 @@ class Result:
         if self.element_volume_mm3 is None:
             return None
         return float(self.rho.sum()) * self.element_volume_mm3
+
+    @property
+    def rmin_mm(self) -> float | None:
+        """実効フィルタ半径[mm]。要素体積を渡していなければ None(格子は立方体要素なので
+        `element_volume_mm3 ** (1/3)` が要素サイズ[mm]に厳密に一致する)。"""
+        if self.element_volume_mm3 is None:
+            return None
+        return self.rmin * (self.element_volume_mm3 ** (1.0 / 3.0))
 
 
 class VolumeTargetError(ValueError):
@@ -951,6 +968,107 @@ class VolumeTargetError(ValueError):
         self.shortfall_mm3 = shortfall_mm3
         self.side = side
         self.element_volume_mm3 = element_volume_mm3
+
+
+class FilterRadiusError(ValueError):
+    """密度フィルタ半径を mm で指定したが、要素サイズから決まる下限(1.5要素)を下回る。
+
+    **`rmin` が1要素を大きく下回るとフィルタが実質効かなくなり、チェッカーボード
+    (市松模様の密度)が出る**(README「1.5要素という下限の根拠」が隣接要素の密度差の指標で
+    実測している)。1.5要素は安全側に取った下限で、`DEFAULT_RMIN` と同じ値。
+
+    **逃げ道を2つとも数字で持つ**(0142 の `VolumeTargetError` と同じ形):
+    `max_element_size_mm`(この `rmin_mm` を通すには要素サイズをいくつ以下にすればよいか)・
+    `min_elements_long_axis`(それが最長軸の分割数でいくつに当たるか)・
+    `min_rmin_mm`(この解像度で指定できる `rmin_mm` の下限)。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        rmin_mm: float,
+        element_size_mm: float,
+        min_rmin_mm: float,
+        max_element_size_mm: float,
+        min_elements_long_axis: int,
+        shortfall_mm: float,
+    ) -> None:
+        super().__init__(message)
+        self.rmin_mm = rmin_mm
+        self.element_size_mm = element_size_mm
+        self.min_rmin_mm = min_rmin_mm
+        self.max_element_size_mm = max_element_size_mm
+        self.min_elements_long_axis = min_elements_long_axis
+        self.shortfall_mm = shortfall_mm
+
+
+def check_rmin_target(rmin: float | None, rmin_mm: float | None) -> None:
+    """密度フィルタ半径の**引数の形**だけを検算する(格子を作る前に落とすための口)。
+
+    上位層(`anchor.run_pipeline` 等)がボクセル化の前にこれを呼ぶ。要素サイズを知っている
+    層でしか見られない「下限を割っていないか」の判定は `_resolve_rmin` が持つ
+    (`check_volume_target` / `_resolve_volume_target` と同じ役割分担)。
+    """
+    if rmin is not None and rmin_mm is not None:
+        raise ValueError(
+            "rmin と rmin_mm は排他(どちらか一方だけ渡すこと)。"
+            f"rmin={rmin!r} / rmin_mm={rmin_mm!r}"
+        )
+    if rmin is not None and not float(rmin) > 0.0:
+        raise ValueError(f"rmin は正の値であること(受け取った値: {rmin!r})")
+    if rmin_mm is not None and not float(rmin_mm) > 0.0:
+        raise ValueError(f"rmin_mm は正の値であること(受け取った値: {rmin_mm!r})")
+
+
+def _resolve_rmin(
+    *,
+    rmin: float | None,
+    rmin_mm: float | None,
+    element_volume_mm3: float | None,
+    nelx: int,
+    nely: int,
+    nelz: int,
+) -> float:
+    """フィルタ半径を実効値(要素単位)へ畳む。
+
+    `rmin_mm` は要素サイズが要る。格子は立方体要素(`voxelize.Grid`)なので
+    `element_volume_mm3 ** (1/3)` が要素の一辺 = 要素サイズ[mm]に厳密に一致する
+    (別の値を測り直す必要はない)。要素サイズから決まる下限(`DEFAULT_RMIN` = 1.5要素)を
+    下回ると `FilterRadiusError`。
+    """
+    if rmin_mm is None:
+        return DEFAULT_RMIN if rmin is None else float(rmin)
+    if element_volume_mm3 is None:
+        raise ValueError(
+            "rmin_mm を渡すときは element_volume_mm3(要素1つの体積[mm^3])も渡すこと"
+            "(optimize は格子の寸法を知らないので、mm から要素単位へ換算できない)"
+        )
+    element_size_mm = float(element_volume_mm3) ** (1.0 / 3.0)
+    resolved = float(rmin_mm) / element_size_mm
+    if resolved < DEFAULT_RMIN:
+        min_rmin_mm = DEFAULT_RMIN * element_size_mm
+        max_element_size_mm = float(rmin_mm) / DEFAULT_RMIN
+        elements_long_axis = max(int(nelx), int(nely), int(nelz))
+        length_long_axis_mm = element_size_mm * elements_long_axis
+        min_elements_long_axis = int(np.ceil(length_long_axis_mm / max_element_size_mm))
+        raise FilterRadiusError(
+            f"rmin_mm={float(rmin_mm):.6g} はこの解像度(要素サイズ {element_size_mm:.6g}mm、"
+            f"最長軸 {elements_long_axis}分割)では表現できない: 換算すると "
+            f"{resolved:.4g}要素で、下限の {DEFAULT_RMIN}要素に "
+            f"{min_rmin_mm - float(rmin_mm):.6g}mm 足りない。"
+            "**逃げ道は2つ**: "
+            f"(1) この rmin_mm を通すには要素サイズを {max_element_size_mm:.6g}mm 以下にする"
+            f"(最長軸で {min_elements_long_axis}分割以上に相当)。"
+            f"(2) この解像度で指定できる rmin_mm の下限は {min_rmin_mm:.6g}mm。",
+            rmin_mm=float(rmin_mm),
+            element_size_mm=element_size_mm,
+            min_rmin_mm=min_rmin_mm,
+            max_element_size_mm=max_element_size_mm,
+            min_elements_long_axis=min_elements_long_axis,
+            shortfall_mm=min_rmin_mm - float(rmin_mm),
+        )
+    return resolved
 
 
 def check_volume_target(volfrac: float | None, material_mm3: float | None) -> None:
@@ -1033,7 +1151,8 @@ def optimize(
     material_mm3: float | None = None,
     element_volume_mm3: float | None = None,
     penal: float = 3.0,
-    rmin: float = 1.5,
+    rmin: float | None = None,
+    rmin_mm: float | None = None,
     max_iter: int = 60,
     change_tol: float = 0.01,
     E: float = 1.0,
@@ -1078,8 +1197,19 @@ def optimize(
     `keep_model=True` にすると `Result.model` に**実際に解いた `Model`** が入る
     (既定は入らない)。応力の後処理(`stress.py`)が拘束・荷重・浮いた節点の扱いを
     手で組み直さずに済ませるための口で、**数値は1ビットも変わらない**。
+
+    フィルタ半径も2通りで渡せる。**`rmin` と `rmin_mm` は排他**(両方渡すと例外):
+
+    - `rmin` —— 要素単位。**格子(解像度)を変えると物理的な平滑化スケールが変わる。**
+    - `rmin_mm` + `element_volume_mm3` —— **物理単位(mm)で**指定する。`optimize` は
+      格子の寸法を知らないので、要素1つの体積 `element_volume_mm3` を一緒に渡す
+      (格子は立方体要素なので、その立方根が要素サイズ[mm]になる)。要素サイズから決まる
+      下限(`DEFAULT_RMIN` = 1.5要素。下回るとチェッカーボードが出る)を下回ると
+      `FilterRadiusError`(逃げ道2つを数字で持つ)。
+    - どちらも渡さなければ `DEFAULT_RMIN`(=1.5要素)。**既定の挙動は1ビットも変わらない。**
     """
     check_volume_target(volfrac, material_mm3)
+    check_rmin_target(rmin, rmin_mm)
     if material_mm3 is not None and element_volume_mm3 is None:
         raise ValueError(
             "material_mm3 を渡すときは element_volume_mm3(要素1つの体積[mm^3])も渡すこと"
@@ -1115,7 +1245,15 @@ def optimize(
         load=load,
         extra_fixed_dofs=floating,
     )
-    kernel, r = _filter_kernel(rmin)
+    rmin_resolved = _resolve_rmin(
+        rmin=rmin,
+        rmin_mm=rmin_mm,
+        element_volume_mm3=element_volume_mm3,
+        nelx=nelx,
+        nely=nely,
+        nelz=nelz,
+    )
+    kernel, r = _filter_kernel(rmin_resolved)
     hs = _filter_conv(np.ones((nelx, nely, nelz)), kernel, r)
     movable = ~void & ~solid
     n_movable = int(movable.sum())
@@ -1240,6 +1378,7 @@ def optimize(
         element_volume_mm3=(
             None if element_volume_mm3 is None else float(element_volume_mm3)
         ),
+        rmin=rmin_resolved,
         model=model if keep_model else None,
     )
 

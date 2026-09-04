@@ -128,6 +128,13 @@ DESIGN_SPACE_FOUR_CASES: dict = {
     "coarse_max_iter": 6,
 }
 
+# `check_filter_radius.py` チェッカーボード実測用の格子。**プリセット(`simp.PRESET`)と
+# 同じ 20x8x8・volfrac 0.3** —— 別の格子を使うと「1.5要素という下限」がこの格子固有の話に
+# 見えてしまう。反復数は20(60は要らない —— チェッカーボードが出るか出ないかは早い反復で
+# 決まる。3点(下限より下・既定・上)を通しても20反復なら合計5〜6秒。README「1.5要素という
+# 下限の根拠」参照)。
+FILTER_RADIUS_CHECKERBOARD: dict = {"nelx": 20, "nely": 8, "nelz": 8, "max_iter": 20, "volfrac": 0.3}
+
 # `check_safety_loop.py` が使う題材の大きさ。**bracket(`demo_conditions`)だけ使う** ——
 # 単調性そのものの実測(4題材・10点)は `safety_loop.py` の README節にあり、この検査は
 # 配線が壊れていないこと(回帰)だけを見る。`derive_from_coarse_run` の引数と同じ名前で持つ。

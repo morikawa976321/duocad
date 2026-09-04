@@ -890,6 +890,8 @@ def run_topopt(
     *,
     volfrac: Optional[float] = None,
     material_mm3: Optional[float] = None,
+    rmin: Optional[float] = None,
+    rmin_mm: Optional[float] = None,
     max_iter: int = 60,
     force: Sequence[float] = (0.0, 0.0, -1.0),
     stl_path: Optional[str | Path] = None,
@@ -907,6 +909,10 @@ def run_topopt(
     (両方渡すと例外)。**塊を自動で導出する経路では絶対量を使うこと** —— 余白比率や姿勢で
     塊の大きさが変わると、同じ分率でも材料の量が変わってしまう。どちらも渡さなければ
     `simp.DEFAULT_VOLFRAC`。
+
+    密度フィルタ半径は `rmin`(要素単位)か `rmin_mm`(mm)のどちらか一方(排他)。
+    どちらも渡さなければ `simp.DEFAULT_RMIN`(=1.5要素、既定の挙動は変わらない)。
+    `anchor.run_pipeline` へそのまま渡す(要素サイズはそちらが格子から決める)。
 
     `keep_model=True` は `anchor.run_pipeline` へそのまま渡る(既定 `False`。数値は
     1ビットも変わらない)。
@@ -930,6 +936,8 @@ def run_topopt(
         load_face=space.load_face,
         volfrac=volfrac,
         material_mm3=material_mm3,
+        rmin=rmin,
+        rmin_mm=rmin_mm,
         max_iter=max_iter,
         force=force,
         stl_path=out,

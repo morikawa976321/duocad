@@ -2053,6 +2053,133 @@ bracket(`demo_conditions`)だけを使う回帰検査 —— **単調性その�
 という方針に反する)。検査は3点だけの粗いスポット確認に留め、配線(`load_n` / `keep_model` /
 入口 / 例外 / 収束)を高速に(実測45秒)守る。内訳は README「検査の走らせ方」参照。
 
+## 密度フィルタ半径を mm で指定する(2026-09-05)
+
+**`rmin`(密度フィルタの半径)は要素単位である**(`simp.PRESET` の `rmin: 1.5`)。
+解像度(要素サイズ)を変えると、要素単位で同じ `rmin` でも**物理的な平滑化スケールが変わる**
+——40分割・要素3.85mmなら `rmin=1.5` は5.8mmの塊を平滑化するが、100分割・要素1.54mmなら
+2.3mm。**細かくすると細い部材が許されるようになる = 別の設計問題を解いている。** これは
+`20260904-0142`(体積目標が塊の大きさで材料量を変えていた欠陥)とまったく同じ型の欠陥で、
+直し方も同じ形に揃えてある。
+
+### 口(3層とも同じ2語)
+
+| 層 | 呼び方 |
+|---|---|
+| `simp.optimize` | `rmin=`(要素単位)/ `rmin_mm=`(mm)+ `element_volume_mm3=`(要素1つの体積) |
+| `anchor.run_pipeline` | `rmin=` / `rmin_mm=`(要素サイズは**格子から自分で決める**) |
+| `design_space.run_topopt` | `rmin=` / `rmin_mm=`(そのまま `run_pipeline` へ) |
+
+- **`rmin` と `rmin_mm` は排他**(両方渡すと `ValueError`)。どちらも省略すると
+  `simp.DEFAULT_RMIN`(=1.5要素。**既定の挙動は1ビットも変わらない** — 下記)。
+- **`optimize` は格子の寸法を知らない**ので、mm で渡すときは `element_volume_mm3` も要る。
+  格子は立方体要素(`voxelize.Grid`)なので、その立方根が要素サイズ[mm]に厳密に一致する
+  (別の値を測り直す必要はない)。上位2層(`run_pipeline` / `run_topopt`)は
+  `voxelize.Grid.element_volume` から自分で決めて渡すので、**呼び出し側が
+  `mm → 要素` の換算を自分で書く必要はない**(体積目標(`20260904-0142`)と同じ理由 ——
+  書くと、格子の作り方が変わったときに黙ってずれる)。
+- 要素単位で渡しても、要素体積が渡っていれば `Result.rmin_mm` で mm 換算が引ける
+  (`target_material_mm3` と同じ役割分担)。
+
+### 要素サイズから決まる下限は 1.5要素(下回ると `simp.FilterRadiusError`)
+
+```python
+result = simp.optimize(nelx, nely, nelz, rmin_mm=2.0, element_volume_mm3=grid.element_volume)
+```
+
+要素サイズが `rmin_mm / 1.5` より大きいと、この `rmin_mm` を実現するには要素が粗すぎる
+—— `simp.FilterRadiusError`(`ValueError` の派生)で落ちる。**逃げ道を2つとも数字で持つ**
+(`20260904-0142` の `VolumeTargetError` と同じ形):
+
+```
+rmin_mm=3 はこの解像度(要素サイズ 3mm、最長軸 10分割)では表現できない: 換算すると 1要素で、
+下限の 1.5要素に 1.5mm 足りない。**逃げ道は2つ**: (1) この rmin_mm を通すには要素サイズを
+2mm 以下にする(最長軸で 15分割以上に相当)。(2) この解像度で指定できる rmin_mm の下限は 4.5mm。
+```
+
+属性 `min_rmin_mm`(逃げ道2: この解像度で指定できる下限)・`max_element_size_mm`(逃げ道1:
+要素サイズをいくつ以下にすればよいか)・`min_elements_long_axis`(それが最長軸の分割数で
+いくつに当たるか)・`shortfall_mm`(不足量)・`rmin_mm` / `element_size_mm`(受け取った値)
+で機械から引ける。
+
+**1.5要素という値の根拠(検出力の実測)。** `rmin` が1要素を大きく下回ると `_filter_kernel`
+の半径 `r = int(ceil(rmin)) - 1` が0になり、フィルタが実質「近傍を見ない」= 未フィルタと
+同じになる。未フィルタのSIMPはチェッカーボード(市松模様の密度)が出ることが知られている。
+`check_filter_radius.py` [6] が片持ち梁プリセットと同じ格子(20×8×8・volfrac 0.3・20反復)
+で実測(隣接要素の離散ラプラシアンの絶対値平均。市松模様で最大化・滑らかな解でほぼ0):
+
+| `rmin` | 指標(roughness) |
+|---|---|
+| 1.0要素(下限より下) | **1.4111** |
+| 1.5要素(既定 = 下限) | **0.4178** |
+| 2.5要素 | 0.1735 |
+
+下限を境に指標が**3.4倍**跳ね上がり、半径を増やすほど単調に滑らかになる。1.5は「下限を
+割ったらどうなるか」を実測して**安全側に**取った値であって(1.0要素ちょうどでフィルタが
+無効化する境目そのものではない)、この数字自体は `simp.DEFAULT_RMIN` が正、実測が検査の
+しきい値(1.0)の根拠。**「1.5を assert するだけの検査」にしない**ため、`FilterRadiusError`
+のガードを外した(=ガードの下限を弱めた)状態で受入検査を再実行すると、この実測に基づく
+6件が実際に落ちることを確認済み(ガードなしでの再実行は使い捨てスクリプトで確認。恒久的な
+変異検査としては入れていない — 検査ファイル自体を書き換えないと再現できないため)。
+
+### 既定の挙動が変わっていないことの担保
+
+`check_absolute_volume.py` [4] が、**基準として採取した `simp.py` の出力**(プリセット /
+パッシブ要素経路の ρ 場の SHA-256)と厳密一致するかを見ている。`rmin` の型を
+`float = 1.5` から `float | None = None`(+ `DEFAULT_RMIN = 1.5`)へ変えても、
+`simp.PRESET["rmin"]` は変わらず明示的に `1.5` を渡すので、**この変更の前後でSHA-256は
+1ビットも動いていない**(2026-09-05確認)。`volfrac`(`20260904-0142`)と同じ形の変更
+(排他を判定するには既定値が値であってはいけない)。
+
+### 単位の等価性
+
+同じ物理半径を `rmin`(要素)と `rmin_mm`(mm、同じ要素サイズへ換算した値)のどちらで渡しても
+密度場は一致する(`check_filter_radius.py` [5]。`max|rho_elem - rho_mm|=0.0`)。
+
+### 製造側の下限とREADMEに載せる目安(2026-09-05)
+
+**PETG / 0.4mmノズル。** 押し出し幅 0.4〜0.48mm、壁2本で 0.8mm は「形はできるが構造ではない」。
+設計値が出る最小部材幅はおおむね **2〜3mm**(それ以下は層間剥離と座屈が支配)。
+
+**密度フィルタは最小寸法を厳密には保証しない**(保証するにはロバスト定式化＋投影が要る ——
+このタスクの範囲外)。目安として、出てくる部材の幅はおよそ **`rmin` 〜 2×`rmin`**。
+したがって最小部材幅 2〜3mm を狙うなら **`rmin` ≈ 1.5〜2mm**。
+
+**数値側の下限**: `rmin` ≥ 1.5要素(上の検出力の実測が根拠)。つまり **要素サイズ ≤ `rmin` / 1.5**。
+
+実物部品(最長辺154mm)で、分割数 → 要素サイズ → `rmin`=1.5要素(数値側の下限)→
+相当する最小部材幅:
+
+| 分割数 | 要素サイズ | `rmin`=1.5要素 | 相当する最小部材幅 |
+|---|---|---|---|
+| 40 | 3.85mm | 5.8mm | 6〜12mm |
+| 60 | 2.57mm | 3.9mm | 4〜8mm |
+| 100 | 1.54mm | 2.3mm | 2〜5mm |
+| 128 | 1.20mm | 1.8mm | 2〜4mm |
+
+**既定は要素単位の `1.5` のまま変えていない**(**2.0mm を既定にしない**)。理由:
+2.0mmを満たすには要素サイズ ≤ 1.33mm が要り、`server.py` のデモ(最長軸22分割)も
+`design_space` の題材もそこには届かない ——既定にすると現状のデモが全部落ちる。
+2.0mmは**目標**として残し、mmの口は**明示的に渡したときだけ**効く。
+
+**結論(1行)**: 製造下限が解像度の要求を決める。`rmin` 2.0mm を満たすには要素サイズ
+1.33mm 以下が要り、それが `20260904-1414`(マルチグリッド)/ `1415`(CPU並列)が取り組んで
+いる速度の話に直結する。
+
+### 上位2層への配線
+
+`anchor.run_pipeline` / `design_space.run_topopt` の両方が `rmin` / `rmin_mm` を受け取り、
+排他違反はボクセル化の前に弾く(`simp.check_rmin_target`。`check_volume_target` と同じ
+役割分担)。`FilterRadiusError` は要素サイズが分かった後(ボクセル化後)にしか判定できない
+ので、`simp.optimize` の内側(体積目標の `VolumeTargetError` と同じ位置)で上がる。
+
+### 受入検査(`check_filter_radius.py`。31件・約10秒)
+
+引数の形(排他・非正・要素体積の欠落) / 下限を下回ったときの `FilterRadiusError` の属性値
+(手計算した期待値と一致) / 境界(ちょうど1.5要素は通り、わずか下は落ちる) / 既定の挙動
+(`DEFAULT_RMIN == PRESET["rmin"]`) / 単位の等価性 / チェッカーボードの検出力(上表) /
+`anchor.run_pipeline` と `design_space.run_topopt` への配線、を assert する。
+
 ## CADの面 → 格子の節点(anchor.py)
 
 `voxelize.py` が起こした格子の上に、**「ボディXの面#42」を「これらの格子節点」へ翻訳する
@@ -2221,6 +2348,7 @@ venvを作り直したときはこのコマンドで復元する)。
 | `anchor.py` | **CADの面 → 格子の節点の対応表(面アンカー)**。担当面積つき。固定/荷重/非設計領域の口と、端から端まで通す `run_pipeline`。CLIとしても動く(`python anchor.py --table-only --n 32`) |
 | `check_anchor.py` | **受入検査(合否そのもの)**。面アンカー側(下記8項目)を assert する。端から端まで1回通すので約38〜49秒(うち約27秒が検査[5]の円筒面) |
 | `check_absolute_volume.py` | **受入検査(合否そのもの)**。体積目標を絶対量(mm^3)で指定する口(排他・達成不能の例外・塊の大きさに依存しないこと・既定の挙動が1ビットも変わらないこと)を assert する。プリセットを1回回すので約15秒 |
+| `check_filter_radius.py` | **受入検査(合否そのもの)**。密度フィルタ半径を mm で指定する口(排他・要素サイズから決まる下限を下回ると `FilterRadiusError`・境界・既定の挙動が1ビットも変わらないこと・単位の等価性・チェッカーボードの検出力・上位2層への配線)を assert する。約10秒 |
 | `stress.py` | **密度場と変位 → 要素ごとの von Mises 応力・代表応力・最小安全率**(後処理)。無次元 → 実単位の換算則(`UnitScale`)を持つ。**最適化には手を入れない**(応力制約の定式化は採らない。engine `safety-factor-goes-outside-the-optimizer`) |
 | `check_stress.py` | **受入検査(合否そのもの)**。[0] B行列と局所節点順 + [1] 一様な棒の単軸引張(解析解) + [2] 片持ち梁の曲げの M·c/I への収束(3解像度) + [3] 実単位への換算則 + [4] 代表応力の規則 + [5] 安全率を assert する。約14秒 |
 | `design_space.py` | **4条件(保持ソリッド・除外ソリッド・拘束面・荷重面) → 塊(設計空間)**。案1(`derive`)=条件の点群の外接直方体+余白から除外ソリッドを引く / 案5(`derive_from_coarse_run`)=粗い格子で1回 SIMP を回し、出た材料を膨らませる。**どちらも塊の中で拘束と荷重がひと続きかを6近傍で確かめてから返す**(`DesignSpaceDisconnectedError`)。**既定は案5**(2026-09-04〜。入口は `derive_default`)。CLIとしても動く(`--measure` で案1の表、`--compare --material-mm3 <量>` で案1対案5の表を作り直す) |
@@ -2244,6 +2372,7 @@ venvを作り直したときはこのコマンドで復元する)。
 | `output/check_case_<題材>.stl` | `check_design_space.py` [12] が4題材それぞれで書き出すSTL。**リポジトリには入れていない** |
 | `output/perf-baseline.json` | `perf.py --json` が残した基準線の測定値。**リポジトリには入れていない**(後続タスクが `--baseline` に渡すのは、その場で撮り直した同じセッションのものだけ) |
 | `output/absolute_volume_tmp.stl` | `check_absolute_volume.py` [2b] が実経路を通すたびに上書きするSTL。**リポジトリには入れていない**(検査の成果物ではなく副産物) |
+| `output/filter_radius_tmp.stl` | `check_filter_radius.py` [7] が実経路を通すたびに上書きするSTL。**リポジトリには入れていない**(検査の成果物ではなく副産物) |
 | `output/server_conditions_demo.stl` | `server.py` がボタンの実行のたびに書き出すSTL(`DEMO_STL_PATH`)。**リポジトリには入れていない**(押すたびに上書きされる) |
 | `output/safety_loop_search.stl` | `safety_loop.py` の二分探索が候補材料量ごとに上書きするSTL。**リポジトリには入れていない**(最後に評価した候補が残るだけで、採用した材料量とは限らない) |
 | `output/check_safety_loop_*.stl` | `check_safety_loop.py` の `keep_model` 配線検査が書き出す使い捨てのSTL(`output/bracket.stl` / `output/design_space_case1.stl` を上書きしないための専用パス)。**リポジトリには入れていない** |
@@ -2409,6 +2538,15 @@ design_space 17.6 / anchor 50.9 秒。**増分の大半は [12] ではない** �
 `check_design_space` 109 / `check_stress` 40 / `check_voxelize` 48 / `check_multigrid` 46 /
 `check_parallel` 41 / `check_safety_loop` 30。**減らした項目は無い。**
 
+**2026-09-05(拘束面・荷重面が空のときのメッセージ)以降は 471 件**(`check_design_space`
+109 → 124 = 空条件面の入口層の検査[14] 11件 + 案5の粗い段ガード[14-6/14-7] 4件)。
+
+**2026-09-05(密度フィルタ半径をmmで指定)以降は 502 件**(`check_filter_radius.py` を
+31件で新設)。内訳は
+`check_simp` 24 / `check_mesh` 15 / `check_absolute_volume` 44 / `check_anchor` 59 /
+`check_design_space` 124 / `check_stress` 40 / `check_voxelize` 48 / `check_multigrid` 46 /
+`check_parallel` 41 / `check_safety_loop` 30 / `check_filter_radius` 31。**減らした項目は無い。**
+
 **9本の通し(2026-09-04・既定を案5へ倒したあと。2回とも合格・不合格0件)**: 合計
 **141秒 / 147秒**(2回目の内訳: `check_simp` 6 / `check_mesh` 14 / `check_voxelize` 8 /
 `check_anchor` 41 / `check_design_space` **20** / `check_absolute_volume` 16 /
@@ -2421,6 +2559,14 @@ design_space 17.6 / anchor 50.9 秒。**増分の大半は [12] ではない** �
 `check_design_space` 20 / `check_absolute_volume` 15〜16 / `check_stress` 6〜7 /
 `check_multigrid` 19〜21 / `check_parallel` 15〜16 / `check_safety_loop` **43〜45**)。
 新設分がそのまま合計に乗る形で、既存9本の時間は変わっていない。
+
+**11本の通し(2026-09-05・`check_filter_radius.py` を足したあと。合格・不合格0件)**: 合計
+**185秒**(`check_simp` 5 / `check_mesh` 12 / `check_voxelize` 7 / `check_anchor` 39 /
+`check_design_space` 17 / `check_absolute_volume` 14 / `check_stress` 6 /
+`check_multigrid` 19 / `check_parallel` 15 / `check_safety_loop` 40 /
+`check_filter_radius` **10**)。新設分がそのまま合計に乗る形で、既存10本の時間は変わって
+いない(機械の熱状態で前回計測との秒単位の差はある。engine
+`benchmark-seconds-swing-with-thermal-state`)。
 
 案5を足したあとの通し(同日・7本を続けて1回。**どれも合格・不合格0件**):
 `check_simp` 4.0 / `check_mesh` 16.1 / `check_absolute_volume` 10.0 / `check_anchor` 36.6 /
@@ -2656,6 +2802,10 @@ Set-Location C:\Users\tm976\mf\duocad\probe_topopt
 # 安全率の外側ループ(load_n/keep_modelの配線・単調性のスポット確認3点・入口・達成不能の例外・
 # 収束・引数検証)。bracketだけの回帰検査なので約43〜45秒(4題材の単調性の実測はREADME側)
 & ..\.venv\Scripts\python.exe check_safety_loop.py
+
+# 密度フィルタ半径をmmで指定する口(排他・下限を下回るとFilterRadiusError・境界・既定不変・
+# 単位の等価性・チェッカーボードの検出力・上位2層への配線)。約10秒
+& ..\.venv\Scripts\python.exe check_filter_radius.py
 
 # 性能の基準線(README「性能の基準線」の2つの表を作り直す)。**受入検査ではない。** 約5分
 & ..\.venv\Scripts\python.exe perf.py --json output\perf-baseline.json

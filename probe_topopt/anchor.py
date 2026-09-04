@@ -830,6 +830,8 @@ def run_pipeline(
     elements_long_axis: int = 40,
     volfrac: Optional[float] = None,
     material_mm3: Optional[float] = None,
+    rmin: Optional[float] = None,
+    rmin_mm: Optional[float] = None,
     max_iter: int = 40,
     force: Sequence[float] = (0.0, 0.0, -1.0),
     radius_ratio: float = DEFAULT_RADIUS_RATIO,
@@ -869,6 +871,11 @@ def run_pipeline(
     `mm^3 → 要素数` の換算を自分で書くと、格子の作り方が変わったときに黙ってずれる。
     どちらの経路でも戻り値に mm^3 の実測が入る。
 
+    密度フィルタ半径は `rmin`(要素単位)か `rmin_mm`(mm)のどちらか一方(排他。
+    `simp.optimize` と同じ形)。どちらも渡さなければ `simp.DEFAULT_RMIN`(=1.5要素)。
+    **要素サイズはここが格子から決めて `simp.optimize` へ渡す**(体積目標と同じ理由)。
+    要素サイズから決まる下限を `rmin_mm` が下回ると `simp.FilterRadiusError`。
+
     `solver` は `simp.optimize` の解法の**上書き**(既定は None = `simp` 側の既定)。
     **性能の新旧比較のためだけにある口**で、`perf.py --solver cg` が旧い解法(Jacobi 前処理)
     を同じセッションで撮り直すのに使う。None のときは `simp.optimize` へ渡さないので、
@@ -893,6 +900,7 @@ def run_pipeline(
     import simp
 
     simp.check_volume_target(volfrac, material_mm3)
+    simp.check_rmin_target(rmin, rmin_mm)
     if (fixed_face is None) != (load_face is None):
         raise ValueError("fixed_face と load_face は両方渡すか、両方省略すること")
     if shape is not None and fixed_face is None:
@@ -969,6 +977,8 @@ def run_pipeline(
         volfrac=volfrac,
         material_mm3=material_mm3,
         element_volume_mm3=model.grid.element_volume,
+        rmin=rmin,
+        rmin_mm=rmin_mm,
         max_iter=max_iter,
         fixed_dofs=fixed_dofs,
         load=load,
@@ -1013,6 +1023,8 @@ def run_pipeline(
         "free_elements": free_elements,
         "target_volfrac": result.volfrac,
         "target_volume": target_volume,
+        "rmin": result.rmin,
+        "rmin_mm": result.rmin_mm,
         "achieved_volume": float(result.rho.sum()),
         "element_volume_mm3": element_volume,
         "target_material_mm3": target_volume * element_volume,
