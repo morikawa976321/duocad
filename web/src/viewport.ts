@@ -916,11 +916,25 @@ const CUBE_MARGIN_PX = 12
 const CUBE_DRAG_THRESHOLD_PX = 4
 /** クリックでスナップするときの視点アニメーション時間[ms](タスク仕様: 300ms前後)。 */
 const CUBE_SNAP_MS = 300
-/** キューブ用の独立した正投影カメラの視錐台半幅。キューブは半幅1の立方体(対角 `sqrt(3)`)なので、
- *  角が切れない程度に広く取る。 */
+/** キューブ用正投影カメラの視錐台半幅。キューブは半幅1の立方体(対角 `sqrt(3)`)なので、
+ *  角が切れない程度に広く取る。
+ *
+ *  **2026-09-04以降、透視のときの距離式( `CUBE_ORTHO_HALF / sin(fov/2)` )の分子としても使う**
+ *  ——「見かけの大きさが正投影のいまの見え方とおおむね揃う係数」がこの値そのものなので、
+ *  定数を2本持たずに済む。fov→0でこの式はdistance→∞に発散し、正投影の見え方へ連続的に
+ *  近づく(あいだで見え方が飛ばない)。 */
 const CUBE_ORTHO_HALF = 1.8
-/** キューブ用カメラを置く距離。正投影なので見かけの大きさには影響しない(near/farに収まればよい)。 */
+/** キューブ用カメラを置く距離(正投影のとき)。正投影なので見かけの大きさには影響しない
+ *  (near/farに収まればよい)。透視のときの距離は `updateCubeCamera` が毎フレームfovから導く。 */
 const CUBE_CAMERA_DISTANCE = 4
+/** キューブ(半幅1の立方体)の外接球の半径。透視のときのnear/farをここから導く
+ *  (`updateCubeCamera` の「near に食われる」節)。 */
+const CUBE_CIRCUMRADIUS = Math.sqrt(3)
+/** 透視のときのnear平面の安全率(1未満)。手前の角(カメラから `distance - CUBE_CIRCUMRADIUS` の
+ *  位置)より内側に余裕を残す —— 角がまるごと消える(near に食われる)のを防ぐ。 */
+const CUBE_NEAR_SAFETY = 0.5
+/** 透視のときのfar平面の余裕率(1超)。奥の角(`distance + CUBE_CIRCUMRADIUS`)より外側に余裕を残す。 */
+const CUBE_FAR_MARGIN = 1.5
 /** 面セルの日本語ラベル。キーは `"i,j,k"`。Z-up右手系(タスク仕様: 上=+Z/下=-Z/前=-Y/後=+Y/右=+X/左=-X)。 */
 const CUBE_FACE_LABELS: Readonly<Record<string, string>> = {
   '1,0,0': '右',
@@ -1429,19 +1443,30 @@ export function createViewport(container: HTMLElement): Viewport {
   // 同じcanvasに描くぶん、`elementFromPoint` は常にcanvasを返すので、メインのポインタ経路
   // (`clickable`)の側でキューブの矩形を明示的に除外する)。
   //
-  // 独立した `THREE.Scene`+`OrthographicCamera`+専用の光を持つ。**キューブ自体はワールドに
-  // 固定し、カメラの方だけをメインカメラの向きに追従させる**(タスク仕様 ——
-  // キューブ側を回転させると、正投影/透視の切替やupの変更で崩れる回転行列の逆算が要る)。
+  // 独立した `THREE.Scene`+専用の光を持つ。**キューブ自体はワールドに固定し、カメラの方だけを
+  // メインカメラの向きに追従させる**(タスク仕様 —— キューブ側を回転させると、正投影/透視の
+  // 切替やupの変更で崩れる回転行列の逆算が要る)。
+  //
+  // **カメラは本編と同じ「2台持ち」**(2026-09-04 —— 本編のFOVに追従して同じ強さでひずむように
+  // なった。`cubePerspective`/`cubeOrthographic` を作り置きし、`cubeActive` がいま使っている方を
+  // 指す。1台の可変カメラにしなかったのは本編(`activateCamera`)と同じ理由 —— 投影の種類が
+  // 変わるたびに作り直すと、`cubeLight`(カメラの子)の付け替えと`updateProjectionMatrix`の
+  // 呼び忘れが両方の経路に散る)。
   const cubeScene = new THREE.Scene()
-  const cubeCamera = new THREE.OrthographicCamera(
+  const cubeOrthographic = new THREE.OrthographicCamera(
     -CUBE_ORTHO_HALF, CUBE_ORTHO_HALF, CUBE_ORTHO_HALF, -CUBE_ORTHO_HALF, 0.1, 10,
   )
-  cubeScene.add(cubeCamera)
+  // near/farは初期値でしかない —— 透視のときは `updateCubeCamera` が毎フレーム距離から
+  // 引き直す(下記「near に食われる」対策)。
+  const cubePerspective = new THREE.PerspectiveCamera(FOV_DEFAULT, 1, 0.1, 10)
+  cubeScene.add(cubeOrthographic, cubePerspective)
+  let cubeActive: THREE.PerspectiveCamera | THREE.OrthographicCamera = cubeOrthographic
   // 専用の光1つ(本編の照明は共有しない —— 本編の照明構成は別タスクで変わる予定があるため)。
-  // カメラの子にする(本編の `headlight` と同じ技法) —— キューブがどの向きでも視点側から当たる。
+  // いまアクティブなカメラの子にする(本編の `headlight` と同じ技法) —— キューブがどの向きでも
+  // 視点側から当たる。カメラを切り替えるたびに `updateCubeCamera` が付け替える。
   const cubeLight = new THREE.DirectionalLight(0xffffff, 1.6)
   cubeLight.position.set(0.4, 0.7, 1)
-  cubeCamera.add(cubeLight)
+  cubeActive.add(cubeLight)
 
   const cubeGroup = new THREE.Group()
   const cubeLabelGroup = new THREE.Group()
@@ -1522,12 +1547,17 @@ export function createViewport(container: HTMLElement): Viewport {
   const cubeRaycaster = new THREE.Raycaster()
   const cubeNdc = new THREE.Vector2()
 
-  /** 画面座標(キューブ矩形の内側)から、当たった領域の `(i,j,k)`(外れなら null)。 */
+  /** 画面座標(キューブ矩形の内側)から、当たった領域の `(i,j,k)`(外れなら null)。
+   *
+   * **`cubeActive`(いま描画に使っているカメラ)でレイを作る** —— 描画と別のカメラでレイを
+   * 作ると、パースの強い設定(FOV 90)で「見えている角をクリックしたのに隣の辺が取れる」が
+   * 起きる(完了条件5)。`cubeActive` は毎フレーム `updateCubeCamera` が更新するので、
+   * ここで読む時点では直前の描画と同じ状態になっている。 */
   function cubeHitAt(x: number, y: number): { i: number; j: number; k: number } | null {
     const rect = viewCubeRect()
     if (x < rect.x || x > rect.x + rect.w || y < rect.y || y > rect.y + rect.h) return null
     cubeNdc.set(((x - rect.x) / rect.w) * 2 - 1, -(((y - rect.y) / rect.h) * 2 - 1))
-    cubeRaycaster.setFromCamera(cubeNdc, cubeCamera)
+    cubeRaycaster.setFromCamera(cubeNdc, cubeActive)
     const hits = cubeRaycaster.intersectObjects(cubeGroup.children, false)
     if (hits.length === 0) return null
     const data = hits[0].object.userData as { i: number; j: number; k: number }
@@ -1535,18 +1565,49 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * キューブ用カメラを、いまのメインカメラの向きへ追従させる(位置とupだけ)。
-   * `dir = normalize(camera.position - controls.target)` を距離 `CUBE_CAMERA_DISTANCE` に置き、
-   * `up` を写して `lookAt(0,0,0)` する —— これでロール(傾き)まで自動的に一致する
-   * (タスク仕様。透視・正投影のどちらがアクティブでも `camera`/`controls` を読むだけなので同じに動く)。
+   * キューブ用カメラを、いまのメインカメラの向き・投影の両方へ追従させる。
+   * `dir = normalize(camera.position - controls.target)` を距離に置き、`up` を写して
+   * `lookAt(0,0,0)` する —— これでロール(傾き)まで自動的に一致する(タスク仕様)。
+   *
+   * **本編がどちらのカメラを使っているかは `camera === orthographic` で見る**(FOVの値を
+   * キューブ側へコピーして保持しない —— 写しを持つと `setFov` からの通知が要る)。
+   * `tick` が毎フレーム(`renderCubePass` 経由で)ここを呼ぶので、`setFov` から明示的に
+   * 通知しなくてもスライダーを動かしている最中に自動で追従する(完了条件6)。
+   *
+   * - **正投影**: 距離は `CUBE_CAMERA_DISTANCE` で固定(正投影なので距離は見え方に効かない)。
+   * - **透視**: 距離はFOVから導く(`CUBE_ORTHO_HALF / sin(fov/2)`。「距離補正」節) ——
+   *   FOVが大きいほどカメラが近づき、パースが強くひずむ。**near/farも距離から引き直す**
+   *   (「near に食われる」節) —— 定数のままだと、FOVが大きいほどカメラが近づいて
+   *   手前の角がnearを割り、丸ごと消える。
    */
   function updateCubeCamera(): void {
+    const wantOrtho = camera === orthographic
+    const next = wantOrtho ? cubeOrthographic : cubePerspective
+    if (next !== cubeActive) {
+      // 投影の種類が変わった —— 光(カメラの子)を付け替える(付け替え忘れるとキューブが
+      // 真っ暗になる)。
+      cubeActive.remove(cubeLight)
+      next.add(cubeLight)
+      cubeActive = next
+    }
     const offset = camera.position.clone().sub(controls.target)
     if (offset.lengthSq() < 1e-12) offset.copy(HOME_VIEW_OFFSET) // 退化(注視点に重なる)の逃げ場
     const dir = offset.normalize()
-    cubeCamera.position.copy(dir).multiplyScalar(CUBE_CAMERA_DISTANCE)
-    cubeCamera.up.copy(camera.up)
-    cubeCamera.lookAt(0, 0, 0)
+    let distance = CUBE_CAMERA_DISTANCE
+    if (!wantOrtho) {
+      cubePerspective.fov = perspective.fov
+      distance = CUBE_ORTHO_HALF / Math.sin(THREE.MathUtils.degToRad(perspective.fov) / 2)
+      // 角は中心から`CUBE_CIRCUMRADIUS`、カメラは中心から`distance`なので、カメラから見た
+      // 手前の角までの距離は`distance - CUBE_CIRCUMRADIUS`。そこへ安全率・余裕率を掛けて
+      // near/farにする(定数のまま放置しない —— FOVが大きいほどdistanceが縮み、near/farも
+      // 追随して縮めないと手前の角がnearに食われる)。
+      cubePerspective.near = Math.max((distance - CUBE_CIRCUMRADIUS) * CUBE_NEAR_SAFETY, 0.01)
+      cubePerspective.far = (distance + CUBE_CIRCUMRADIUS) * CUBE_FAR_MARGIN
+      cubePerspective.updateProjectionMatrix()
+    }
+    cubeActive.position.copy(dir).multiplyScalar(distance)
+    cubeActive.up.copy(camera.up)
+    cubeActive.lookAt(0, 0, 0)
   }
 
   // ---------------------------------------------------------------- ホバー(明るくなる)
@@ -3816,7 +3877,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // 上方向はビューキューブと同じ規則(`upForDirection`)で決める。ほとんどの平面では
     // WORLD_UPのまま変わらない —— `OrbitControls`は生成時に焼いたZ軸を回転の極として
     // 使い続ける(`WORLD_UP`の説明参照)ので、camera.upをそこから逸らすとキューブの見た目
-    // (`cubeCamera.up`がcamera.upをそのまま写す)と実際の回転軸がずれ、スケッチ中だけ
+    // (`cubeActive.up`がcamera.upをそのまま写す)と実際の回転軸がずれ、スケッチ中だけ
     // ビューキューブの動きがおかしくなっていた。`frame.v`を直接使っていたのが原因
     // (基準平面のXZ/YZはたまたまv=Zで無害だったが、任意面やXY平面ではvがZからずれる)。
     // 真上・真下に近い面(cube側の上面図/底面図と同じ閾値)だけ±Yへ差し替わる。
@@ -4369,7 +4430,7 @@ export function createViewport(container: HTMLElement): Viewport {
     renderer.setViewport(rect.x, glY, rect.w, rect.h)
     renderer.setScissor(rect.x, glY, rect.w, rect.h)
     renderer.setScissorTest(true)
-    renderer.render(cubeScene, cubeCamera)
+    renderer.render(cubeScene, cubeActive)
     renderer.setScissorTest(false)
     renderer.setViewport(0, 0, width, height)
     renderer.autoClear = true

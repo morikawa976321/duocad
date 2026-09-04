@@ -1379,6 +1379,50 @@ async function main() {
       })
     }
 
+    /**
+     * 次の描画が終わるまで待つ(2フレーム分)。`setFovTo`/`dragFovTo` は
+     * `window.__duocad.fov` の値が変わったことしか待たないので、その直後に
+     * スクリーンショットを撮ると更新前のcanvasを拾う恐れがある(`tick`のrAFループが
+     * 実際に1回まわったことを保証するため2回分待つ)。
+     */
+    async function waitTwoFrames() {
+      await page.evaluate(
+        () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+      )
+    }
+
+    /**
+     * ビューキューブの矩形(ページ絶対座標・CSSピクセル)。`viewCubeRect()` は
+     * `.viewport` コンテナ内相対(左上原点)を返すので、コンテナの位置を足す
+     * (`clearSelectionByClickingNothing`と同じ変換。`smoke-files.mjs`参照)。
+     */
+    async function cubeRectAbsolute() {
+      return await page.evaluate(() => {
+        const box = document.querySelector('.viewport').getBoundingClientRect()
+        const cube = window.__duocad.viewCubeRect()
+        return { x: box.left + cube.x, y: box.top + cube.y, width: cube.w, height: cube.h }
+      })
+    }
+
+    /** ビューキューブの矩形だけを切り取ったスクリーンショット(PNGのバイト列)。 */
+    async function cubeShot(rect) {
+      return await page.screenshot({ clip: rect, encoding: 'binary' })
+    }
+
+    /**
+     * 2枚のPNGバイト列がどれだけ違うか。**画素単位のデコードはしない**(依存を増やさない)
+     * —— 単純なバイト単位の不一致数(+長さの差)を「見え方がどれだけ違うか」の粗い代理指標
+     * として使う。Chromeのheadlessスクリーンショットは同じ画素からは決定論的にエンコードされる
+     * ので、同一カメラ・同一FOVの制御群同士なら理論上0になる(タイムスタンプ等の非決定要素は
+     * PNGチャンクに含まれない)。
+     */
+    function pngByteDiff(a, b) {
+      const len = Math.min(a.length, b.length)
+      let diff = Math.abs(a.length - b.length)
+      for (let i = 0; i < len; i += 1) if (a[i] !== b[i]) diff += 1
+      return diff
+    }
+
     try {
       await setSettingsOpen(false)
       await setFovTo(45)
@@ -1613,12 +1657,59 @@ async function main() {
         )
       }
 
+      // (6) **ビューキューブがFOVに追従してひずむこと**(2026-09-04 —— 専用の正投影カメラを
+      //     やめ、本編と同じ画角で描くようにしたタスクの完了条件1・6)。カメラの**向きは
+      //     動かさず**(`frameAll`は最初の1回だけ)、FOVだけを変えてキューブ矩形の画素を
+      //     比べる —— スライダーを動かしている最中の実運用と同じ操作列にすることで、
+      //     `setFov`から明示的に通知しなくても毎フレームの`updateCubeCamera`が追随する
+      //     (完了条件6)ことも一緒に確かめる。
+      //
+      //     **制御群(同一FOV同士の差分)を挟む** —— スクリーンショットのPNGエンコードや
+      //     アンチエイリアスの揺らぎだけを「変わった」と誤検出しないため、30度↔90度の差分が
+      //     制御群の差分より明確に大きいことを見る(byte-diffの絶対値ではなく比で判定する)。
+      console.log('\n  --- ビューキューブがFOVに追従するか(画素の実測) ---')
+      await setFovTo(45)
+      await frameAll(page) // 角視点(HOME_VIEW_OFFSETの向き=前・上・右)に固定
+      const cubeRect = await cubeRectAbsolute()
+      await waitTwoFrames()
+      const cubeAt45a = await cubeShot(cubeRect)
+      // **frameAllは呼ばない** —— 向きはそのまま、FOVだけを変える(スライダーを動かしている
+      // 最中と同じ操作。frameAllを挟むと向きも寄り引きも変わり、キューブの追従だけを見る
+      // 検査にならない)。
+      await setFovTo(30)
+      await waitTwoFrames()
+      const cubeAt30 = await cubeShot(cubeRect)
+      await setFovTo(90)
+      await waitTwoFrames()
+      const cubeAt90 = await cubeShot(cubeRect)
+      await setFovTo(45)
+      await waitTwoFrames()
+      const cubeAt45b = await cubeShot(cubeRect) // 制御群: 最初と同じ向き・同じFOV
+
+      const cubeControlDiff = pngByteDiff(cubeAt45a, cubeAt45b)
+      const cubeFovDiff = pngByteDiff(cubeAt30, cubeAt90)
+      // しきい値は実測から作った(2026-09-04)。同一FOV制御群の差分は実測0バイト
+      // (決定論的な描画・エンコード)なので、1バイトでも大きければ検出できるはずだが、
+      // 将来の非決定要素(タイムスタンプ入りメタデータ等)の混入に備えて8倍の余裕を見る。
+      if (!(cubeFovDiff > 200 && cubeFovDiff > cubeControlDiff * 8)) {
+        throw new Error(
+          `キューブの見え方がFOV30→90でほとんど変わらない(差分 ${cubeFovDiff}バイト。` +
+            `同一FOVの制御群の差分は ${cubeControlDiff}バイト)`,
+        )
+      }
+      console.log(
+        `  OK   ビューキューブ: FOV30↔90でPNG差分 ${cubeFovDiff}バイト` +
+          `(同一FOV制御群 ${cubeControlDiff}バイト)`,
+      )
+
       await setFovTo(45)
       await frameAll(page)
 
       results.fov = {
         ok: true,
         framed,
+        cubeControlDiffBytes: cubeControlDiff,
+        cubeFov30to90DiffBytes: cubeFovDiff,
         backTo45,
         orthoShown,
         orthoRatio: Number(orthoProbe.ratio.toFixed(4)),
