@@ -60,6 +60,29 @@
      片方だけ動かすと、重なるか妙な隙間が空くかのどちらかになる。 */
   --browser-panel-w: 232px;
   --font: "PlemolJP Console", "Consolas", "Cascadia Mono", "Meiryo", monospace;
+
+  /* ---- 文字の大きさ。**2段しかない**(2026-09-05) ----
+     `--fs` が既定で、`--fs-meta` は「本文に添える情報」だけに使う(件数・バイト数・
+     入力欄の注意書き・空の知らせ)。**大きさは役割で決まる**ので、コンポーネントが
+     自分の都合で3つ目を作らないこと(生のpxでfont-sizeを書かない。grepで守れる)。
+
+     以前は 11/12/13px が混在していたが、決めていたのは役割ではなく**そのファイルで
+     誰かが font-size を書いたかどうか**だった —— 同じボタンがヘッダで13px・
+     ファイル一覧で11px・ブラウザで11px、ファイル一覧の1行が名前12px＋メタ11px、
+     232pxのブラウザの中だけで13/12/11pxが揃い踏み。差が8%では階層は伝わらず、
+     不揃いだけが見える。 */
+  --fs: 13px;
+  --fs-meta: 11px;
+
+  /* ---- 操作子の面(2026-09-05) ----
+     **ボタンは線ではなく面で見せる。** `--line` を区画境界と枠で共用していた頃は、
+     ツールバーに並ぶ12個のボタンの枠が header/.toolbar/サイドバーの境界線と
+     まったく同じ濃さで並び、**線が「どこが区画で、どこが押せるものか」を答えられなかった**。
+     いまは **打ち込む欄は凹み(--input-bg、地より暗い)・押すものは出っぱり(--control-bg、
+     地より明るい)** で見分け、線は区画に譲る(上の --line のコメントが言う「枠だけ弱く
+     したい理由」がこれである)。 */
+  --control-bg: oklch(28.5% 0.007 250);
+  --control-bg-hover: oklch(34% 0.009 250);
 }
 
 * {
@@ -76,7 +99,7 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font: 13px/1.5 var(--font);
+  font: var(--fs)/1.5 var(--font);
 }
 
 .app {
@@ -119,18 +142,29 @@ header {
 .toolbar .mode-row .label {
   flex: 0 0 auto;
   color: var(--dim);
-  font-size: 12px;
 }
 
+/* 読み札(`<span class="tag">`)と押せる札(`<button class="tag">`)を同じ見た目にしない
+   (2026-09-05)。ヘッダで「保存済み」(読むだけ)と「保存」(押す)が同じ箱で隣り合っていた
+   のが以前の形で、**形が同じである以上「押せるかどうか」は押してみるまで分からなかった**。
+   分ける手段は面(下の button のルール)であって枠ではない —— 枠は1pxぶん確保したまま
+   色だけ変える。太らせたり消したりすると高さが動き、ヘッダとツールバーの行高、
+   ひいてはビューポートの実寸(冒頭の不変条件)に響く。 */
 .tag {
   padding: 0 6px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   color: var(--dim);
 }
 
+/* 人の手が要る状態(未保存・編集中・貼る先待ち)。**読み札は琥珀の文字だけで言う** ——
+   箱で言うと、画面でいちばん目立つのが「押せないもの」になる。 */
 .tag.on {
   color: var(--accent);
+}
+
+button.tag.on {
   border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 /* ヘッダーの**右端**へ押し出す(2026-08-30。右サイドバーの開閉ボタン)。
@@ -216,6 +250,15 @@ header .tag.end {
   white-space: nowrap;
 }
 
+/* **本文に添える情報。小さくしてよいのはこれだけ**(2026-09-05)。件数・大きさ・
+   入力欄の注意書き・「無い」の知らせ。色は用途で分かれる(注意書きは琥珀、他は --dim)ので
+   ここでは大きさだけを決め、色は各コンポーネントに残す。 */
+.meta,
+.hint,
+.empty {
+  font-size: var(--fs-meta);
+}
+
 .dim {
   color: var(--dim);
 }
@@ -224,14 +267,42 @@ input,
 button {
   font: inherit;
   color: var(--text);
-  background: var(--input-bg);
-  border: 1px solid var(--line);
   padding: 4px 10px;
+  /* 枠は**常に1pxぶん確保して色だけ変える**(`.tag` と同じ理由。高さを動かさない)。 */
+  border: 1px solid transparent;
 }
 
+/* 打ち込む欄は**凹ませる**(地より暗い面＋淡い枠)。 */
 input {
   width: 7em;
   text-align: right;
+  background: var(--input-bg);
+  border-color: var(--line-soft);
+}
+
+/* 押すものは**出っぱらせる**(地より明るい面。枠は持たない)。 */
+button {
+  background: var(--control-bg);
+}
+
+/* **`input` の既定(width:7em / text-align:right / 凹んだ面)は打ち込む欄のためのもの**で、
+   チェックボックス・ラジオ・スライダーに当たってはいけない(2026-09-05に塞いだ)。
+   当たっていた頃、ブラウザのボディ一覧のチェックボックスは flex の中で 7em の箱として
+   扱われ、**同じ列なのに行ごとに 26〜39px と幅が変わり**(名前と面数の長さで潰れ方が
+   変わる)、名前の左端が行ごとに 298〜311px でがたついていた。SettingsDialog は
+   `#settings-ortho`/`#settings-fov` で個別に打ち消していたが、**打ち消す側が増えるのは
+   規則の置き場所が違う印**である。
+   `accent-color` も併せて指定する —— 素のままだとブラウザ既定の青が出て、27個の
+   チェックボックスだけが琥珀の配色から外れる。 */
+input[type='checkbox'],
+input[type='radio'],
+input[type='range'] {
+  width: auto;
+  flex: 0 0 auto;
+  padding: 0;
+  background: none;
+  border: none;
+  accent-color: var(--accent);
 }
 
 button:not(:disabled) {
@@ -239,6 +310,7 @@ button:not(:disabled) {
 }
 
 button:not(:disabled):hover {
+  background: var(--control-bg-hover);
   border-color: var(--accent);
 }
 
@@ -247,6 +319,9 @@ button:focus {
   outline: 1px solid var(--accent);
 }
 
+/* 押せないものは**面を薄める**。消し切らないのは、そこに操作があること自体は
+   読めていないといけないため(消すと「何が足りないから押せないのか」を探せなくなる)。 */
 button:disabled {
-  color: var(--dim);
+  color: var(--dim-2);
+  background: color-mix(in oklab, var(--control-bg) 45%, transparent);
 }

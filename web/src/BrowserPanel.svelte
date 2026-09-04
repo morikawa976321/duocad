@@ -69,7 +69,7 @@
       <div class="group">
         <div class="group-head">
           <span class="group-name">モデル</span>
-          <span class="dim">{visibleCount}/{bodies.length} 表示</span>
+          <span class="meta dim">{visibleCount}/{bodies.length} 表示</span>
         </div>
         <div class="group-bulk">
           <button id="parts-show-all" onclick={onShowAll}>全表示</button>
@@ -101,7 +101,7 @@
       <div class="group">
         <div class="group-head">
           <span class="group-name">スケッチ</span>
-          <span class="dim">{sketches.length}</span>
+          <span class="meta dim">{sketches.length}</span>
         </div>
         <ul class="sketch-list" id="browser-sketches">
           {#if sketches.length === 0}
@@ -226,7 +226,6 @@
   .group-bulk button {
     flex: 1 1 auto;
     padding: 2px 4px;
-    font-size: 11px;
   }
 
   .parts-list,
@@ -259,10 +258,13 @@
     cursor: pointer;
   }
 
+  /* 面数・図形数は**本文に添える情報**なので `--fs-meta`(styles.css)。
+     名前と同じ列に2つの大きさが並ぶのはここが正しい使い方で、以前のように
+     名前12px・メタ11pxと**わずかにずらす**のは階層にならない。 */
   .parts-count,
   .sketch-count {
     flex: 0 0 auto;
-    font-size: 11px;
+    font-size: var(--fs-meta);
   }
 
   .sketch-row.active {
@@ -277,14 +279,19 @@
     white-space: nowrap;
     text-align: left;
     padding: 2px 4px;
-    font-size: 12px;
     background: none;
     border: 1px solid transparent;
   }
 
+  /* 一覧の行は素のまま、hoverでだけ光る(FilesPanel の `.files-open` と同じ形)。 */
+  .sketch-name:hover {
+    background: var(--control-bg);
+    border-color: transparent;
+  }
+
+  /* 大きさは styles.css の `.empty` が持つ(--fs-meta)。 */
   .empty {
     padding: 3px 8px;
-    font-size: 11px;
   }
 
   .dim {

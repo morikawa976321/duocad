@@ -807,7 +807,6 @@
   .label {
     flex: 0 0 auto;
     color: var(--dim);
-    font-size: 12px;
   }
 
   .value {

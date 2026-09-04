@@ -290,7 +290,7 @@
   }
 
   .badge.running {
-    font-size: 11px;
+    font-size: var(--fs-meta);
     padding: 1px 6px;
     border-radius: 8px;
     background: var(--accent);
@@ -311,19 +311,26 @@
     justify-content: space-between;
     align-items: center;
     gap: 6px;
-    font-size: 11px;
     color: var(--dim);
+    /* **ラベルは折らない。** 折れると2行目が1文字だけ残って行の高さが跳ねる
+       (「エンドポイント」が「エンドポイン/ト」になった)。詰めるのは欄側の仕事で、
+       下の `min-width: 0` がそれを許している。 */
+    white-space: nowrap;
   }
 
+  /* **幅は残りに合わせる**(以前は 15em 固定)。ラベルを本文と同じ大きさへ戻した分
+     「エンドポイント」の行が 300px のサイドバーからはみ出すので、欄側が譲る。 */
   .ai-settings input,
   .ai-settings select {
-    width: 15em;
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
     text-align: left;
   }
 
+  /* 大きさは styles.css の `.hint` が持つ(--fs-meta)。 */
   .hint {
     margin: 4px 0 0;
-    font-size: 11px;
   }
 
   .ai-transcript {
@@ -335,7 +342,6 @@
 
   .line {
     margin: 2px 0;
-    font-size: 12px;
     white-space: pre-wrap;
     word-break: break-word;
   }

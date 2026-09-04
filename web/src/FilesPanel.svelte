@@ -214,7 +214,7 @@
 
   <div class="list" id="files-list">
     {#if sorted.length === 0}
-      <span class="value dim">models/ にファイルが無い</span>
+      <span class="value empty dim">models/ にファイルが無い</span>
     {/if}
     {#each sorted as file (file.name)}
       <div class="files-row" data-name={file.name}>
@@ -332,7 +332,6 @@
   .label {
     flex: 0 0 auto;
     color: var(--dim);
-    font-size: 12px;
   }
 
   .row .value {
@@ -343,7 +342,6 @@
 
   .row button {
     flex: 0 0 auto;
-    font-size: 11px;
   }
 
   .new-row {
@@ -358,16 +356,16 @@
   }
 
   .new-row input.deviation {
-    flex: 0 0 56px;
+    flex: 0 0 48px;
   }
 
   .new-row button {
     flex: 0 0 auto;
-    font-size: 11px;
   }
 
+  /* 大きさは styles.css の `.hint` が持つ(--fs-meta)。ここは色だけ —— 打った値が
+     通らない理由なので、他の添え物と違って琥珀で言う。 */
   .hint {
-    font-size: 11px;
     color: var(--accent);
   }
 
@@ -386,6 +384,10 @@
     gap: 6px;
   }
 
+  /* **一覧の行はボタンの面を持たない**(2026-09-05)。押せるものは面で見せる(styles.css の
+     `button`)のが既定だが、それは「行の中に置かれた操作子」の話で、**行そのものが
+     押せる**ときに面を敷くと、ファイルが20個あれば面が20枚並ぶ。ブラウザ側の
+     `.sketch-name` と同じ「素のまま、hoverでだけ光る」形に揃える。 */
   .files-open {
     flex: 1 1 auto;
     min-width: 0;
@@ -394,12 +396,16 @@
     white-space: nowrap;
     text-align: left;
     padding: 2px 4px;
-    font-size: 12px;
+    background: none;
+  }
+
+  .files-open:hover {
+    background: var(--control-bg);
+    border-color: transparent;
   }
 
   .meta {
     flex: 0 0 auto;
-    font-size: 11px;
   }
 
   .dim {

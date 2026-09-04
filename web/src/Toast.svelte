@@ -157,7 +157,7 @@
 
   .toast-count {
     flex: 0 0 auto;
-    font-size: 11px;
+    font-size: var(--fs-meta);
     color: var(--dim);
   }
 

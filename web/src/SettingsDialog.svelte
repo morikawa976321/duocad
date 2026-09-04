@@ -163,11 +163,13 @@
     justify-content: space-between;
     align-items: center;
     gap: 6px;
-    font-size: 11px;
     color: var(--dim);
+    /* AiPanel と同じ理由でラベルは折らない。 */
+    white-space: nowrap;
   }
 
-  /* 素の `input` は width:7em / text-align:right(styles.css)。スライダーには効かせない。 */
+  /* 幅と面は styles.css の `input[type='range']` が持つ(2026-09-05に打ち消しをやめた)。
+     ここに残すのはこのダイアログ固有の「残り幅いっぱいに伸ばす」だけ。 */
   #settings-fov {
     flex: 1 1 auto;
     width: auto;
@@ -182,13 +184,10 @@
     opacity: 0.4;
   }
 
-  /* チェックボックスは幅を持たせない(素の `input` の width:7em を打ち消す)。 */
+  /* 幅・面・accent-color は styles.css の `input[type='checkbox']` が持つ。
+     ここは既定の外余白を消すだけ。 */
   #settings-ortho {
-    flex: 0 0 auto;
-    width: auto;
-    min-width: 0;
     margin: 0;
-    accent-color: var(--accent);
   }
 
   #settings-fov-value {
@@ -198,8 +197,8 @@
     flex: 0 0 auto;
   }
 
+  /* 大きさは styles.css の `.hint` が持つ(--fs-meta)。 */
   .hint {
     margin: 6px 0 0;
-    font-size: 11px;
   }
 </style>
