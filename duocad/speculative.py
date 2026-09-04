@@ -43,7 +43,12 @@ def speculative(doc: Document) -> Iterator[None]:
 def _snapshot(doc: Document) -> dict:
     """巻き戻しに要るものを控える。"""
     return {
-        "bodies": [(body, body.shape, body.visible, body.name, body.kind) for body in doc.bodies],
+        # **`mesh` も控える**(2026-09-05)。いまメッシュを差し替えるverbは無いが、控えから
+        # 落ちているフィールドは「戻したはずなのに戻っていない」という形で後から効く。
+        "bodies": [
+            (body, body.shape, body.visible, body.name, body.kind, body.mesh)
+            for body in doc.bodies
+        ],
         # `active_body()` はBodyを返すのでIDに落として控える(Bodyごと消えていても戻せる)
         "active_body_id": doc._active_body_id,
         "sketches": copy.deepcopy(doc.sketches),
@@ -60,11 +65,12 @@ def _restore(doc: Document, snapshot: dict) -> None:
     新しいリストで置き換えると、`doc.bodies` を掴んでいる呼び出し側が古いリストを見続ける。
     """
     doc.bodies[:] = [entry[0] for entry in snapshot["bodies"]]
-    for body, shape, visible, name, kind in snapshot["bodies"]:
+    for body, shape, visible, name, kind, mesh in snapshot["bodies"]:
         body.shape = shape
         body.visible = visible
         body.name = name
         body.kind = kind
+        body.mesh = mesh
     # `set_active_body` は None を受け付けない(存在しないIDとして KeyError)ので直接戻す。
     doc._active_body_id = snapshot["active_body_id"]
     doc.sketches[:] = snapshot["sketches"]

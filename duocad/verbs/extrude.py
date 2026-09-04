@@ -23,8 +23,8 @@ from __future__ import annotations
 
 from typing import Any, List, Optional, Sequence
 
-from .. import kernel
-from ..document import Body, BodyId, Document, new_body_id
+from .. import kernel, meshbody
+from ..document import MESH_KIND, Body, BodyId, Document, new_body_id
 from ..oplog import Operation, register_verb
 from ._common import recall, remember
 from ..region import RegionRef, _regions_detailed
@@ -128,12 +128,13 @@ def _resolve_target(
         return None, None
 
     if not doc.is_editable(body_id):
-        # **現状は常にTrueなので通らない**(`_VALID_KINDS`が"solid"のみを許すため。
-        # 参照ボディ(kind="reference")は2026-09-03に概念ごと撤去した
-        # [[duocad-reference-body-removal-decided]])。それでも消さずに残すのは、
-        # 編集不可なkindが将来また増えたときの安全弁として(:96-110のdocstringと同じ理由)。
+        # ここは `_common.editable_body()` を経由しない専用の解決関数なので、
+        # **メッシュボディの断りを写す**(断り文の中身は1箇所 `meshbody.reject`)。
+        target = doc.get_body(body_id)
+        if target.kind == MESH_KIND:
+            meshbody.reject(target, "押し出しの対象にする")
         raise ValueError(
-            f"body {body_id!r} is not editable (kind={doc.get_body(body_id).kind!r})"
+            f"body {body_id!r} is not editable (kind={target.kind!r})"
         )
     body = doc.get_body(body_id)
     if body.shape is None:

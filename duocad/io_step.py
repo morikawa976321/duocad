@@ -30,7 +30,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Union
 
-from . import kernel
+from . import kernel, meshbody
 from .document import Body, BodyId, Document
 
 PathLike = Union[str, Path]
@@ -61,15 +61,59 @@ def solid_names(source_name: str, count: int) -> list[str]:
 
 
 def export_step(doc: Document, path: PathLike) -> None:
-    """対象は `_bodies_to_export` 参照(いま表示中のBodyのみ)。複数Bodyならcompoundへまとめる。"""
+    """対象は `_bodies_to_export` 参照(いま表示中のBodyのみ)。複数Bodyならcompoundへまとめる。
+
+    **メッシュボディが対象に1つでも入っていたら断る**(ファイルを作らない)。STEPは境界表現の
+    形式なので三角形の集まりを書く先が無い —— 黙って落とすと「書き出したのに形が足りない」
+    という、開いてみるまで分からない失敗になる。
+    """
+    meshes = [b for b in _bodies_to_export(doc) if b.mesh is not None]
+    if meshes:
+        raise ValueError(
+            "cannot export a mesh body to STEP: "
+            f"{[b.id for b in meshes]} は三角形メッシュで、STEPには書けない。"
+            "STLで書き出すか、set_visible(visible=false) で隠してから呼ぶこと"
+        )
     shape = _shape_to_export(doc)
     kernel.write_step(shape, str(path))
 
 
 def export_stl(doc: Document, path: PathLike, deviation: float) -> None:
-    """deviation(mm)は**絶対**の線形偏差。対象は export_step と同じ。"""
-    shape = _shape_to_export(doc)
-    kernel.write_stl(shape, str(path), deviation)
+    """deviation(mm)は**絶対**の線形偏差。対象は export_step と同じ。
+
+    **B-repとメッシュが混ざった文書は、両方を1本のSTLへ書く**(2026-09-05決定)。
+    メッシュボディの三角形は**テッセレーションを通さずそのまま**書く —— deviation は
+    B-rep側にしか効かない(既に三角形になっているものを測り直す意味が無い)。
+
+    **メッシュボディが対象に1つも無いときは、従来どおり `kernel.write_stl` を通す。**
+    自前のライタへ一本化していないのは、B-repだけの文書の書き出しを1ビットも変えないため
+    (OCCTのSTLライタと自前のライタでは、同じ三角形でも浮動小数の丸めが一致する保証が無い)。
+    """
+    bodies = _bodies_to_export(doc)
+    if not any(b.mesh is not None for b in bodies):
+        shape = _shape_to_export(doc)
+        kernel.write_stl(shape, str(path), deviation)
+        return
+    # **メッシュだけの文書でも deviation を検査する** —— この道では誰も使わないが、
+    # 「文書に何が入っているか」で引数の検査が緩んだり厳しくなったりすると、
+    # 呼び出し側から見た契約が文書の中身に依存してしまう(`kernel.write_stl` と同じ文言)。
+    if not deviation > 0:
+        raise ValueError(f"deviation must be positive (mm), got {deviation!r}")
+    meshbody.write_stl(str(path), [_triangles_of(b, deviation) for b in bodies])
+
+
+def _triangles_of(body: Body, deviation: float):
+    """1Bodyぶんの三角形。メッシュは持っている三角形、B-repはその場でテッセレーションする。
+
+    B-rep側を `kernel.tessellate` で三角形化するのは、`kernel.write_stl` が1つの
+    `TopoDS_Shape` しか受け取らず、メッシュを混ぜる口が無いため。**混在のときだけ通る道**で、
+    B-repだけの文書は `export_stl` の上の分岐で従来の経路へ行く。
+    """
+    if body.mesh is not None:
+        return meshbody.triangles(body.mesh)
+    return meshbody.triangles(
+        meshbody.from_tessellation(kernel.tessellate(body.shape, deviation))
+    )
 
 
 def export_body_ids(doc: Document) -> list[BodyId]:
@@ -86,8 +130,8 @@ def export_skipped_hidden(doc: Document) -> list[BodyId]:
 
 
 def _export_candidates(doc: Document) -> list[Body]:
-    """書き出し候補(可視性はまだ見ない)。形状を持つ全Body。"""
-    return [b for b in doc.bodies if b.shape is not None]
+    """書き出し候補(可視性はまだ見ない)。**形を持つ**全Body(B-repでもメッシュでもよい)。"""
+    return [b for b in doc.bodies if b.shape is not None or b.mesh is not None]
 
 
 def _bodies_to_export(doc: Document) -> list[Body]:

@@ -23,6 +23,7 @@ from .oplog import OpLog
 from .paths import DEFAULT_MODELS_DIR
 from .speculative import speculative
 from .verbs import (
+    add_mesh_body as add_mesh_body_verb,
     chamfer as chamfer_verb,
     delete as delete_verb,
     extrude as extrude_verb,
@@ -740,6 +741,19 @@ class Session:
             "previous": operation.args["previous"],
             "changed_bodies": changed_bodies,
         })
+
+    def add_mesh_body(
+        self, positions: Any, indices: Any, name: Any = None
+    ) -> dict:
+        """三角形メッシュのボディを1つ足す(verb `add_mesh_body`)。
+
+        **WSのコマンドとしては開けていない**(`catalog` の `ws="none"`) —— 画面から
+        三角形を手で打つ操作は無く、入口はMCPと、形状最適化の結果を入れるコード側である。
+        """
+        body_id = add_mesh_body_verb(
+            self.document, positions, indices, None if name is None else str(name)
+        )
+        return self._after_logged_verb({"body_id": body_id})
 
     def import_step(self, path: Any) -> dict:
         """STEPを読み、**編集可能なボディまで作る**(verb `import_step`)。

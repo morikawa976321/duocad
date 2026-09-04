@@ -69,7 +69,7 @@ from .. import parameters
 from ..document import Document
 from ..oplog import Operation, register_verb
 from ..sketch import Entity, get_entity, get_sketch
-from ._common import editable_body, recall, remember
+from ._common import deletable_body, recall, remember
 
 VERB_DELETE = "delete"
 
@@ -145,10 +145,11 @@ def delete(
         raise ValueError(f"delete got duplicate sketch entities: {entity_keys!r}")
 
     for body_id in body_ids:
-        # 参照ボディ(読み込みの原本)・隠したボディ・形の無いボディを弾く。
-        # `require_visible=True` は `fillet` / `move_body` と同じ理由 —— 選んだ後・verbを
-        # 呼ぶ前に人がそのボディを隠す順序が、AIと人が並行して動くと実際に起きる。
-        editable_body(doc, body_id, what="delete", require_visible=True)
+        # 隠したボディ・形の無いボディを弾く(可視性を見るのは `fillet` / `move_body` と
+        # 同じ理由 —— 選んだ後・verbを呼ぶ前に人がそのボディを隠す順序が、AIと人が並行して
+        # 動くと実際に起きる)。**種別は問わない** —— メッシュボディは編集できないが消せる
+        # (2026-09-05。`_common.deletable_body` のdocstring)。
+        deletable_body(doc, body_id)
     entity_specs = _entity_snapshots(doc, entities)
 
     removed = _remove(doc, body_ids, entity_specs)
@@ -209,7 +210,7 @@ def _do_delete(document: Document, operation: Operation) -> None:
     body_ids = [str(body_id) for body_id in args["bodies"]]
     entity_specs = [dict(spec) for spec in args["entities"]]
     for body_id in body_ids:
-        editable_body(document, body_id, what="delete", require_visible=True)
+        deletable_body(document, body_id)
     removed = _remove(document, body_ids, entity_specs)
     if body_ids:
         remember(document, _SNAPSHOT_KEY, operation.seq, removed)

@@ -1,8 +1,12 @@
 """文書とボディのデータモデル。
 
 - `Document.units` は "mm" 固定で変更できない(セッターを持たないプロパティ)。
-- `Body.kind` は "solid"(編集対象)のみ。読み込んだSTEPの参照ボディ(`kind="reference"`)は
-  2026-09-03に概念ごと撤去した([[duocad-reference-body-removal-decided]])。
+- `Body.kind` は "solid"(B-rep・編集対象)と "mesh"(三角形メッシュ・**表示とSTL書き出しだけ**)。
+  読み込んだSTEPの参照ボディ(`kind="reference"`)は2026-09-03に概念ごと撤去した
+  ([[duocad-reference-body-removal-decided]])。
+- **形の持ち方はkindごとに1本だけ**: "solid" は `shape`(TopoDS_Shape)、"mesh" は `mesh`(`Mesh`)。
+  両方を同時に持つBodyは作れない(`__post_init__` が弾く)。**混ぜられるようにすると、
+  `body.shape is None` で分岐している既存の経路が「どちらの意味か」を判定できなくなる。**
 
 存在しないBodyIdを渡された `remove_body` / `set_active_body` / `is_editable` は KeyError、
 ID重複の `add_body` は ValueError で落とす(黙って無視すると、取り消しや再生の空振りが
@@ -16,7 +20,12 @@ from uuid import uuid4
 
 BodyId = str
 
-_VALID_KINDS = {"solid"}
+#: B-rep(編集できる)
+SOLID_KIND = "solid"
+#: 三角形メッシュ(**表示とSTL書き出しだけ**。編集verbは拒否する)
+MESH_KIND = "mesh"
+
+_VALID_KINDS = {SOLID_KIND, MESH_KIND}
 
 #: 存在しないIDのエラーに並べる有効IDの上限。超えたぶんは件数だけ言って列挙ツールへ送る
 #: (エラー文がスケッチ1枚ぶんの図形IDで埋まると、AIの文脈をそれだけで食う)。
@@ -58,6 +67,62 @@ def new_body_id() -> BodyId:
     return f"body-{uuid4().hex[:12]}"
 
 
+@dataclass(frozen=True)
+class Mesh:
+    """三角形メッシュ(頂点＋三角形)。**不変**。
+
+    `positions` は x,y,z を平らに並べた頂点座標[mm]、`indices` は頂点添字を3つずつ並べた
+    三角形(**0始まり**。`kernel.tessellate` が面ごとに返すのと同じ並べ方)。
+    どちらもタプルなので、`Body` を控えて戻すだけの巻き戻し(`duocad.speculative`)が
+    そのまま効く —— **書き換える経路を作らないこと**(編集verbを拒否する設計と対)。
+
+    `dict`/`list` ではなくこの型にしてあるのは、**検査を通った三角形群であることを型で示す**
+    ため。生のリストを持ち回すと、範囲外の添字や3の倍数でない長さが画面まで届く。
+    """
+
+    positions: tuple
+    indices: tuple
+
+    def __post_init__(self) -> None:
+        if len(self.positions) % 3 != 0:
+            raise ValueError(
+                f"positions must be a flat x,y,z list (length divisible by 3), got {len(self.positions)}"
+            )
+        if len(self.indices) % 3 != 0:
+            raise ValueError(
+                f"indices must be a flat triangle list (length divisible by 3), got {len(self.indices)}"
+            )
+        if not self.indices:
+            raise ValueError("mesh has no triangle: 三角形が0枚のメッシュボディは作らない")
+        limit = len(self.positions) // 3
+        for index in self.indices:
+            if not (0 <= index < limit):
+                raise ValueError(
+                    f"triangle index out of range: {index} (vertices: {limit})"
+                )
+
+    @property
+    def vertex_count(self) -> int:
+        return len(self.positions) // 3
+
+    @property
+    def triangle_count(self) -> int:
+        return len(self.indices) // 3
+
+
+def make_mesh(positions, indices) -> Mesh:
+    """素の並び(list / tuple / 数値)から `Mesh` を作る。**値の型もここで確定させる**。
+
+    `positions` は float、`indices` は int へ落とす —— JSONから戻ってきた値・numpyの
+    スカラーがそのまま入ると、保存のたびに `1.0` と `np.float64(1.0)` のような
+    表現の違いがログへ漏れる。
+    """
+    return Mesh(
+        positions=tuple(float(value) for value in positions),
+        indices=tuple(int(value) for value in indices),
+    )
+
+
 @dataclass
 class Body:
     """1つのボディ。
@@ -71,10 +136,24 @@ class Body:
     kind: str
     shape: Any = None
     visible: bool = True
+    #: `kind="mesh"` のときだけ入る三角形メッシュ。B-repボディでは常に None。
+    mesh: Optional[Mesh] = None
 
     def __post_init__(self) -> None:
         if self.kind not in _VALID_KINDS:
             raise ValueError(f"kind must be one of {sorted(_VALID_KINDS)!r}, got {self.kind!r}")
+        if self.kind == MESH_KIND:
+            if not isinstance(self.mesh, Mesh):
+                raise ValueError(f"kind={MESH_KIND!r} needs a Mesh in `mesh`, got {self.mesh!r}")
+            if self.shape is not None:
+                raise ValueError(
+                    f"kind={MESH_KIND!r} must not carry a B-rep shape "
+                    "(形の持ち方はkindごとに1本だけ)"
+                )
+        elif self.mesh is not None:
+            raise ValueError(
+                f"kind={self.kind!r} must not carry a mesh (`mesh` は kind={MESH_KIND!r} 専用)"
+            )
 
 
 class Document:
@@ -154,10 +233,12 @@ class Document:
         self._active_body_id = body_id
 
     def is_editable(self, body_id: BodyId) -> bool:
+        """編集verbを掛けてよいボディか。**"mesh" は False**(拒否の入口は
+        `duocad.verbs._common.editable_body`。理由は `duocad/meshbody.py` のdocstring)。"""
         body = self._find(body_id)
         if body is None:
             raise KeyError(f"no such body: {body_id!r}")
-        return body.kind == "solid"
+        return body.kind == SOLID_KIND
 
     def get_body(self, body_id: BodyId) -> Body:
         """IDでボディを引く。**無ければ KeyError**(黙ってNoneを返さない)。

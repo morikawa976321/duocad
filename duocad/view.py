@@ -19,8 +19,30 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-from . import kernel, optimize, parameters, query, region, resolution, selection, sketch
+from . import (
+    kernel,
+    meshbody,
+    optimize,
+    parameters,
+    query,
+    region,
+    resolution,
+    selection,
+    sketch,
+)
 from .document import Document
+
+
+def _face_count(body) -> int:
+    """`body_meta` が配る面の数。**メッシュボディは常に1**。
+
+    メッシュは「面1枚」として配る(`meshbody.geometry`)ので、封筒の `face_count` も
+    それに合わせる。**三角形の枚数を入れない** —— 画面の「面」の数と食い違う値を同じキーに
+    入れると、面添字で指すという前提(B-rep側)がメッシュにも成り立つように見えてしまう。
+    """
+    if body.mesh is not None:
+        return 1
+    return kernel.face_count(body.shape)
 
 
 #: 状態配信で本文を伏せるログ引数。値の代わりに文字数だけを配る。
@@ -470,7 +492,9 @@ class DocumentView:
         # **粗さも「状態」のうち**(2026-08-30、可変解像度)。ズームで目標精度が変われば
         # 配るべきgeometryも変わるので、ここに入れておかないと差分配信が
         # 「版が同じ=変わっていない」と判断して**古い粗さのメッシュを画面に残す**。
-        key = (id(body.shape), body.visible, self.body_recipe(body_id))
+        # メッシュボディは `shape` が常に None なので、**メッシュの同一性も鍵に入れる**
+        # (`id(None)` は常に同じ値で、入れ忘れると版が二度と上がらない)。
+        key = (id(body.shape), id(body.mesh), body.visible, self.body_recipe(body_id))
         if self._revision_state.get(body_id) != key:
             self._revision_state[body_id] = key
             self._revision_counter[body_id] = self._revision_counter.get(body_id, 0) + 1
@@ -485,6 +509,18 @@ class DocumentView:
         body = self.document.get_body(body_id)
         if not body.visible:
             raise ValueError(f"body {body_id!r} is not visible: 不可視Bodyは測らない")
+        if body.mesh is not None:
+            # **持っている三角形をそのまま配る**(画面の可変解像度は効かない)。
+            # 測り直しは無いが**キャッシュはする** —— `body_state()` は接続と状態配信のたびに
+            # 呼ばれ、`meshbody.geometry` は毎回 positions/indices をリストへ写す。
+            # 数万三角形では1回あたり十数万要素の複製になる。鍵はB-rep側と同じ規律で
+            # **メッシュの同一性**(`is`)。
+            cached = self._geometry_cache.get(body_id)
+            if cached is not None and cached[0] is body.mesh:
+                return cached[2]
+            result = meshbody.geometry(body.mesh)
+            self._geometry_cache[body_id] = (body.mesh, None, result)
+            return result
         recipe = self.body_recipe(body_id)
         cached = self._geometry_cache.get(body_id)
         if cached is not None and cached[0] is body.shape and cached[1] == recipe:
@@ -514,6 +550,8 @@ class DocumentView:
         (＝別の辺が丸まる)経路が閉じる。
         """
         body = self.document.get_body(body_id)
+        if body.mesh is not None:
+            meshbody.reject(body, "辺を数える")
         if body.shape is None:
             raise ValueError(f"body {body_id!r} has no shape (辺を数えられない)")
         # **不可視Bodyの辺は配らない**(`geometry()` と同じ規律)。
@@ -546,6 +584,8 @@ class DocumentView:
         描き続ける経路が閉じる。
         """
         body = self.document.get_body(body_id)
+        if body.mesh is not None:
+            meshbody.reject(body, "頂点を数える")
         if body.shape is None:
             raise ValueError(f"body {body_id!r} has no shape (頂点を数えられない)")
         # **不可視Bodyの頂点は配らない**(`geometry()` / `edges()` と同じ規律)。
@@ -621,7 +661,7 @@ class DocumentView:
             "kind": body.kind,
             "visible": body.visible,
             "revision": self.body_revision(body.id),
-            "face_count": kernel.face_count(body.shape),
+            "face_count": _face_count(body),
             "volume": self._body_volume(body),
         }
 
@@ -634,6 +674,13 @@ class DocumentView:
         `query.volume` は面ごとの数値積分でここにだけキャッシュが無く、可視性を切り替えた
         だけでも全ボディぶん測り直していた(PCケースで693ms/回)。
         """
+        if body.mesh is not None:
+            cached = self._volume_cache.get(body.id)
+            if cached is not None and cached[0] is body.mesh:
+                return cached[1]
+            result = meshbody.volume(body.mesh)
+            self._volume_cache[body.id] = (body.mesh, result)
+            return result
         cached = self._volume_cache.get(body.id)
         if cached is not None and cached[0] is body.shape:
             return cached[1]

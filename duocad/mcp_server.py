@@ -65,7 +65,17 @@ from typing import Any, Optional
 
 from websockets.asyncio.server import serve
 
-from . import catalog, io_step, kernel, predicates, query, region, selection, sketch
+from . import (
+    catalog,
+    io_step,
+    kernel,
+    meshbody,
+    predicates,
+    query,
+    region,
+    selection,
+    sketch,
+)
 from .document import unknown_id_message
 from .server import (
     DEFAULT_WEB_DIST,
@@ -208,16 +218,21 @@ class DocumentTools:
         document = self.session.document
         bodies = []
         for body in document.bodies:
+            # **メッシュボディはB-repの測り方を通せない**(`kernel.face_count(None)` が落ちる)。
+            # 面は1枚として数える(`view._face_count` と同じ規約)。
+            is_mesh = body.mesh is not None
             entry = {
                 "body_id": body.id,
                 "name": body.name,
                 "kind": body.kind,
                 "visible": body.visible,
-                "face_count": kernel.face_count(body.shape),
-                "volume": query.volume(body.shape),
+                "face_count": 1 if is_mesh else kernel.face_count(body.shape),
+                "volume": meshbody.volume(body.mesh) if is_mesh else query.volume(body.shape),
             }
             if include_bbox:
-                entry["bbox"] = kernel.bounding_box(body.shape)
+                entry["bbox"] = (
+                    meshbody.bbox(body.mesh) if is_mesh else kernel.bounding_box(body.shape)
+                )
             bodies.append(entry)
 
         sketches_out = []
@@ -291,6 +306,22 @@ class DocumentTools:
     def describe_shape(self, body_id: str) -> dict:
         """1ボディの形状(面・辺の数と種別内訳・体積・境界箱)。読み取りのみ。"""
         body = self._find_body(str(body_id))
+        if body.mesh is not None:
+            # **面・辺の内訳を作らない**(メッシュには面の種別も辺の同一性も無い)。
+            # キーは落とさず0を入れる —— 封筒の形が種別で変わると、読む側が両方の形を
+            # 知っていないと壊れる。三角形の枚数だけは `triangle_count` で別に見せる。
+            return {
+                "body_id": body.id,
+                "name": body.name,
+                "kind": body.kind,
+                "visible": body.visible,
+                "face_count": 1,
+                "edge_count": 0,
+                "faces_by_type": {},
+                "triangle_count": body.mesh.triangle_count,
+                "volume": meshbody.volume(body.mesh),
+                "bbox": meshbody.bbox(body.mesh),
+            }
         described = query.describe_shape(body.shape)
         return {
             "body_id": body.id,
@@ -888,6 +919,22 @@ class DocumentTools:
         )
 
     # ------------------------------------------------------------------ 入出力
+    def add_mesh_body(
+        self, positions: list, indices: list, name: Optional[str] = None
+    ) -> dict:
+        """三角形メッシュのボディを1つ足す(verb `add_mesh_body`)。
+
+        **足したメッシュは編集できない**(押し出し・フィレット・面取りは断られる)。
+        できるのは 表示 / STLへの書き出し / 削除 / 表示の切り替え だけである
+        —— 理由は `duocad/meshbody.py` のモジュールdocstring。
+
+        **三角形をそのまま操作ログへ積む**ので、数万三角形を渡すとモデルのJSONが数MBになる。
+        AIが手で三角形を並べるための口ではなく、**計算した結果を入れる**ための口である。
+        """
+        before = self._revision_snapshot()
+        applied = self.session.add_mesh_body(positions, indices, name)
+        return self._apply_logged(before, applied, body_id=applied["body_id"])
+
     def import_step(self, path: str) -> dict:
         """STEPを読み、**編集可能なボディまで作る**(verb `import_step`)。
 

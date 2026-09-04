@@ -42,7 +42,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Iterable, List, NoReturn, Optional, Sequence
 
-from . import kernel  # noqa: F401  face_count / count_subshapes を使う(OCPは kernel の中だけ)
+from . import kernel, meshbody  # noqa: F401  face_count / count_subshapes を使う(OCPは kernel の中だけ)
 from .document import BodyId, Document
 
 
@@ -606,8 +606,12 @@ def selectable_bodies(doc: Document) -> List[BodyId]:
 
 
 def select_face(doc: Document, body_id: BodyId, face_index: int) -> dict:
-    """面を指す ShapeRef を作る。不可視Body・存在しないBody・範囲外の添字は例外。"""
+    """面を指す ShapeRef を作る。不可視Body・存在しないBody・範囲外の添字は例外。
+
+    **メッシュボディは断る**(下記 `_reject_mesh`)。
+    """
     body = _visible_body(doc, body_id)
+    _reject_mesh(body, "面を指す")
     count = kernel.face_count(body.shape)
     return _shape_ref(body_id, "face", face_index, count)
 
@@ -615,6 +619,7 @@ def select_face(doc: Document, body_id: BodyId, face_index: int) -> dict:
 def select_edge(doc: Document, body_id: BodyId, edge_index: int) -> dict:
     """辺を指す ShapeRef を作る(添字は `query.describe_edges` / `fillet` と同じ1始まり)。"""
     body = _visible_body(doc, body_id)
+    _reject_mesh(body, "辺を指す")
     count = kernel.edge_count(body.shape)
     return _shape_ref(body_id, "edge", edge_index, count)
 
@@ -622,8 +627,30 @@ def select_edge(doc: Document, body_id: BodyId, edge_index: int) -> dict:
 def select_vertex(doc: Document, body_id: BodyId, vertex_index: int) -> dict:
     """頂点を指す ShapeRef を作る(添字は `kernel.count_subshapes(shape, "vertex")` の1始まり)。"""
     body = _visible_body(doc, body_id)
+    _reject_mesh(body, "頂点を指す")
     count = kernel.count_subshapes(body.shape, "vertex")
     return _shape_ref(body_id, "vertex", vertex_index, count)
+
+
+#: 断り文に出す種別の呼び名(`_coerce_refs` が単発の `select_*` と同じ文言を作るために使う)。
+_KIND_LABELS = {"face": "面", "edge": "辺", "vertex": "頂点"}
+
+
+def _reject_mesh(body, what: str) -> None:
+    """メッシュボディへの面/辺/頂点の参照を断る。**選択の粒度はボディ単位だけ**(2026-09-05)。
+
+    三角形メッシュには面の指紋(選択の安定性の仕組み)が無く、面添字に相当するものも無い ——
+    `meshbody.geometry` が「面1枚」として配る添字1は payload の形をそろえるためだけの
+    ものなので、それで面を選べる形にすると**指した先が保存も再現もできない選択**になる。
+    メッシュを指すときは `kind="body"`(`select_body`)を使う。
+
+    **弾くと、そのボディを含むドラッグ一括選択は丸ごと落ちる**(`modify_selection` の
+    「不正な参照は落ちて、選択を変更しない」の契約どおり)。範囲外の添字を渡したときと
+    同じ挙動で、**わざとそろえてある** —— ここだけ黙って読み飛ばすと、
+    「囲んだのに入っていないものがある」が選択の側から見えなくなる。
+    """
+    if body.mesh is not None:
+        meshbody.reject(body, what)
 
 
 def select_body(doc: Document, body_id: BodyId) -> dict:
@@ -830,6 +857,9 @@ def _coerce_refs(
                 if body_id not in bodies:
                     bodies[body_id] = _visible_body(doc, body_id)
                 body = bodies[body_id]
+                # **単発の `select_*` と同じ門番**(このループは数え上げを減らすために
+                # `select_face` 等を通らないので、断りもここへ写す必要がある)。
+                _reject_mesh(body, f"{_KIND_LABELS[kind]}を指す")
                 if kind == "face":
                     counts[count_key] = kernel.face_count(body.shape)
                 elif kind == "edge":

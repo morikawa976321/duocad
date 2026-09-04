@@ -73,6 +73,8 @@ VERB_TOOLS = {
     # ボディ・パラメータ
     "set_parameter",
     # 入出力
+    # メッシュボディ(2026-09-05。表示とSTL書き出しだけ。編集verbは拒否する)
+    "add_mesh_body",
     "import_step",
     "import_svg",
     "export_step",
@@ -174,6 +176,7 @@ ARGUMENTS: dict = {
     # ---- ボディ・パラメータ
     "set_visible": ({"body_id", "visible"}, {"body_id", "visible"}),
     "set_parameter": ({"name", "value"}, {"name", "value"}),
+    "add_mesh_body": ({"positions", "indices", "name"}, {"positions", "indices"}),
     # ---- 入出力
     # STEP読み込みは**1ツール**(2026-08-27に統合)。読んだ時点で編集可能なボディまでできる。
     # **`editable` のような引数で経路を打ち分けない** —— 引数で分けると、ログに載るverb名と

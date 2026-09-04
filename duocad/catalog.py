@@ -793,6 +793,31 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="add_mesh_body",
+        category="file",
+        description=(
+            "計算で作った三角形メッシュ(頂点＋三角形)をボディとして文書へ足すときに呼ぶ。"
+            "**足したメッシュは編集できない** —— 表示 / STLへの書き出し / 削除 / "
+            "表示の切り替えだけができる。押し出し・フィレット・面取りは断られる。"
+            "三角形をそのまま操作ログへ積むので、手で並べるための口ではない。"
+        ),
+        params=(
+            Param("positions", "array", "頂点座標[mm]を x,y,z の順に平らに並べた配列"),
+            Param("indices", "array", "三角形を作る頂点添字(**0始まり**)を3つずつ並べた配列"),
+            Param("name", "string", "ボディの名前(省略時 \"mesh\")", required=False, ws=False),
+        ),
+        session="add_mesh_body",
+        # **WSには開けない**(2026-09-05)。画面から三角形を手で打つ操作は無く、入口は
+        # MCPと、形状最適化の結果を入れるコード側だけである。UIから作る口が要るのは
+        # 最適化を配線するとき(`20260904-1704`)で、そのときに `ws` を開ければよい。
+        ws="none",
+        note=(
+            "**メッシュボディは編集verbを拒否する**(2026-09-04本人決定)。"
+            "三角形1枚を1面とするシェルとしてOCCTへ入れると面数が数万になり、"
+            "`kernel.face_count` は2,835面で既に律速である。理由は `duocad/meshbody.py` のdocstring"
+        ),
+    ),
+    Command(
         name="import_step",
         category="file",
         description=(

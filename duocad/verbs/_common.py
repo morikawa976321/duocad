@@ -13,7 +13,8 @@ import math
 from typing import Any, List, Optional, Sequence, Union
 from weakref import WeakKeyDictionary
 
-from ..document import Body, BodyId, Document
+from .. import meshbody
+from ..document import MESH_KIND, Body, BodyId, Document
 
 #: undo用のスナップショット。`(body_id, seq) -> 直前の形状`。
 #:
@@ -69,12 +70,13 @@ def editable_body(
             raise ValueError(f"no active body to {what} (document is empty)")
         body_id = active.id
     if not doc.is_editable(body_id):  # 存在しないIDは KeyError(document側の契約)
-        # **現状は常にTrueなので通らない**(`_VALID_KINDS`が"solid"のみを許すため。
-        # 参照ボディ(kind="reference")は2026-09-03に概念ごと撤去した
-        # [[duocad-reference-body-removal-decided]])。それでも消さずに残すのは、
-        # 編集不可なkindが将来また増えたときの安全弁として。
+        # **編集verbがメッシュボディを断る唯一の入口**(2026-09-05)。verbごとに
+        # `kind` を見て分岐させると、verbが増えるたびに断り漏れが1本ずつできる。
+        body = doc.get_body(body_id)
+        if body.kind == MESH_KIND:
+            meshbody.reject(body, what)
         raise ValueError(
-            f"body {body_id!r} is not editable (kind={doc.get_body(body_id).kind!r})"
+            f"body {body_id!r} is not editable (kind={body.kind!r})"
         )
     body = doc.get_body(body_id)
     if require_visible and not body.visible:
@@ -83,6 +85,24 @@ def editable_body(
         )
     if body.shape is None:
         raise ValueError(f"body {body_id!r} has no shape to {what}")
+    return body
+
+
+def deletable_body(doc: Document, body_id: BodyId) -> Body:
+    """削除の対象になるボディ。**編集できるかは問わない**(メッシュボディも消せる)。
+
+    `editable_body` と分けてあるのは、**削除だけは種別に関係なく通す**から ——
+    「編集できないから消せもしない」ボディがあると、間違えて入れた形を取り除けなくなる。
+    可視性の門番(`require_visible` 相当)は `editable_body` と同じ理由で課す:
+    確定選択した後・verbを呼ぶ前に人がそのボディを隠す順序が実際に起きる。
+    """
+    body = doc.get_body(body_id)  # 存在しないIDは KeyError(document側の契約)
+    if not body.visible:
+        raise ValueError(
+            f"body {body_id!r} is hidden: 見えないものは指せない(set_visible で表示すること)"
+        )
+    if body.shape is None and body.mesh is None:
+        raise ValueError(f"body {body_id!r} has no shape to delete")
     return body
 
 
