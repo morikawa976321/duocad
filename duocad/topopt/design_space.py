@@ -1211,28 +1211,6 @@ def _face_on_plane(
     return hits[0]
 
 
-def wall_contact(space: DesignSpace, out: dict, threshold: float = 0.5) -> int:
-    """**最適化が置いた材料のうち、塊の壁に接している要素の数。**
-
-    余白の既定値を決める根拠になる数字。ここが0でないなら、塊の壁が答えを切っている可能性が
-    ある(利用者は塊を見ないので、切られても誰も気づけない)。**アンカーで ρ=1 に固定した分は
-    除く** —— 固定した要素は最適化の答えではないうえ、拘束面・荷重面は定義上いつも塊の縁にある。
-    格子の外は塊の外として数える。
-    """
-    rho = np.asarray(out["result"].rho)
-    filled = (rho > threshold) & space.mask & ~np.asarray(out["solid"], dtype=bool)
-    outside = np.pad(~space.mask, 1, constant_values=True)
-    neighbour_outside = (
-        outside[:-2, 1:-1, 1:-1]
-        | outside[2:, 1:-1, 1:-1]
-        | outside[1:-1, :-2, 1:-1]
-        | outside[1:-1, 2:, 1:-1]
-        | outside[1:-1, 1:-1, :-2]
-        | outside[1:-1, 1:-1, 2:]
-    )
-    return int(np.count_nonzero(filled & neighbour_outside))
-
-
 def _cli() -> int:
     import argparse
 
