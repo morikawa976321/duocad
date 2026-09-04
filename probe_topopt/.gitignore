@@ -20,3 +20,11 @@ output/absolute_volume_tmp.stl
 output/design_space_case1_*.stl
 output/design_space_case5_*.stl
 output/design_space_coarse*.stl
+
+# 性能の基準線(`perf.py`)が書き出すSTLと測定値のJSON。題材 × 解像度ごとに1本増え、
+# 測り直すたびに全部差し替わるのでリポジトリには入れない(README「性能の基準線」)。
+output/perf_*.stl
+output/perf-*.json
+
+# 4題材の通し検査(`check_design_space.py` [12])が書き出すSTL。合否は検査の出力が持つ。
+output/check_case_*.stl

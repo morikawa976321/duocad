@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import time
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 import numpy as np
@@ -15,6 +16,49 @@ import scipy.sparse.linalg as spla
 # 1e-14 程度まで出るので、1e-6 は「収束した解」に対して6桁以上の余裕がある。
 # **拘束不足の系を黙って通さないための関門**であって、精度の要求ではない。
 SOLVE_RESIDUAL_TOL = 1e-6
+
+# ---------------------------------------------------------------------------
+# 性能計測の口
+# ---------------------------------------------------------------------------
+# `Model.solve` が反復数と各段の秒数を積む先。**None のときは何も積まず、callback も渡さない**
+# ので、本番経路の数値は1ビットも変わらない(`check_absolute_volume.py` [4] がそれを見ている)。
+#
+# **外から `scipy.sparse.linalg.cg` を差し替えて数える方式を採らない。** 解法を差し替えた
+# 瞬間に数え口が外れ、反復数が黙って 0 になる —— マルチグリッド前処理を入れるタスクが
+# まさにそこを差し替えるので、数え口は解法と同じ場所に置く。
+_SOLVE_STATS: dict | None = None
+
+
+def new_solve_stats() -> dict:
+    """`collect_solve_stats` が積む器。鍵を1か所に置くためだけの関数。"""
+    return {
+        "solves": 0,
+        "cg_iterations": 0,
+        "cg_iterations_each": [],
+        "assemble_seconds": 0.0,
+        "slice_seconds": 0.0,
+        "solve_seconds": 0.0,
+        "fallbacks": 0,
+        "direct_solves": 0,
+    }
+
+
+@contextlib.contextmanager
+def collect_solve_stats() -> Iterator[dict]:
+    """この文脈の中で `Model.solve` が積んだ実測を返す。**入れ子にしない**(後勝ちになる)。
+
+    `cg_iterations_each` は solve 1回ごとの反復数。合計や平均だけだと、設計反復が進んで
+    密度が二値へ寄るにつれ条件数が悪化する分が見えない。
+    """
+    global _SOLVE_STATS
+    previous = _SOLVE_STATS
+    stats = new_solve_stats()
+    _SOLVE_STATS = stats
+    try:
+        yield stats
+    finally:
+        _SOLVE_STATS = previous
+
 
 # `volfrac` も絶対量も渡さなかったときの分率。**PRESET の volfrac とは別物**
 # (PRESET は片持ち梁の題材、こちらは `optimize` の既定値)。値は歴史的に一致している。
@@ -277,16 +321,30 @@ class Model:
         """
         if solver not in ("cg", "direct"):
             raise ValueError(f"未知の解法: {solver!r}")
+        stats = _SOLVE_STATS
+        t0 = time.perf_counter()
         kg = self.assemble(rho, penal)
+        t1 = time.perf_counter()
         kf = kg[self.free, :][:, self.free].tocsc()
         ff = self.f[self.free]
+        t2 = time.perf_counter()
         x0 = np.zeros(self.free.size) if u0 is None else u0[self.free].copy()
+        iterations = 0
+        fell_back = False
         if solver == "direct":
             u_free = spla.spsolve(kf, ff)
         else:
             diag = kf.diagonal()
             precond = spla.LinearOperator(kf.shape, matvec=lambda v, d=diag: v / d)
-            u_free, info = spla.cg(kf, ff, x0=x0, M=precond, rtol=cg_rtol)
+            counter = None
+            if stats is not None:
+
+                def counter(_xk: np.ndarray) -> None:
+                    nonlocal iterations
+                    iterations += 1
+
+            u_free, info = spla.cg(kf, ff, x0=x0, M=precond, rtol=cg_rtol, callback=counter)
+            fell_back = info != 0
             if info != 0:
                 warnings.warn(
                     f"CG が収束しませんでした (info={info})。直接解法へフォールバックします。",
@@ -297,6 +355,15 @@ class Model:
                     # 特異行列の警告はここでは要らない(下の残差検査が本番の判定)。
                     warnings.simplefilter("ignore")
                     u_free = spla.spsolve(kf, ff)
+        if stats is not None:
+            stats["solves"] += 1
+            stats["assemble_seconds"] += t1 - t0
+            stats["slice_seconds"] += t2 - t1
+            stats["solve_seconds"] += time.perf_counter() - t2
+            stats["cg_iterations"] += iterations
+            stats["cg_iterations_each"].append(iterations)
+            stats["fallbacks"] += int(fell_back)
+            stats["direct_solves"] += int(solver == "direct")
         self._verify_solution(kf, ff, u_free)
         u = np.zeros(self.ndof)
         u[self.free] = u_free

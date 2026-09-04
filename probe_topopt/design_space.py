@@ -898,6 +898,146 @@ def severed_conditions(angle_deg: float = 0.0, *, thickness: float = 10.0) -> Co
     )
 
 
+# ---------------------------------------------------------------------------
+# 性能の基準線を測るための題材(4つ)。**受入検査の題材とは別物**
+# (受入検査は速さが命なので `bench.py` が別に小さい解像度を持っている)。
+# ---------------------------------------------------------------------------
+def plate_conditions(angle_deg: float = 0.0) -> Conditions:
+    """薄板。**極端なアスペクト比**を作るための題材。
+
+    保持は板の両端のパッド2つだけで、除外は無い。**余白比率は既定(0.25)ではなく 0.05**
+    —— 余白は「条件の最長辺 × 比率」なので、既定のままだと長辺 182mm に対して余白が
+    45mm 付き、厚み 12mm の板が厚さ 100mm の塊になって薄板でなくなる
+    (`CASES["plate"].margin_ratio` が正)。
+    """
+    from build123d import Box, Pos, Rot
+
+    fixed_pad = Pos(-85, 0, 0) * Box(10, 80, 12)
+    load_pad = Pos(85, 0, 0) * Box(14, 24, 12)
+    keep = fixed_pad + load_pad
+
+    rot = Rot(0, 0, float(angle_deg))
+    keep = rot * keep
+
+    soup = vx.triangles_from_shape(vx._unwrap(keep), deviation=0.2)
+    fixed = _rotated_face(soup, angle_deg, normal=(-1, 0, 0), point=(-90, 0, 0))
+    load = _rotated_face(soup, angle_deg, normal=(0, 0, 1), point=(85, 0, 6))
+    return Conditions(keep=keep, fixed_face=fixed, load_face=load, obstacle=None)
+
+
+def branching_conditions(angle_deg: float = 0.0) -> Conditions:
+    """支持が2本の脚に分かれ、**荷重経路が分岐する**題材。
+
+    拘束側は中央に切り欠きを入れた C 形パッドで、その x 最小面は**1枚の U 字面**になる
+    (脚2本＋底の帯)。**`Conditions` は面添字を1つずつしか持てない**ので、支持を2箇所に
+    分けるにはこうして1枚の面を分岐させるしかない —— 独立した2面を渡す口は型に無い
+    (`Conditions` のフィールド集合は `check_design_space.py` の検査[5]が固定している)。
+    荷重は板の中心から y へ寄せた位置に置き、力も斜めにして(`CASES["branching"].force`)
+    2本の脚が担う量を変えてある。
+    """
+    from build123d import Box, Pos, Rot
+
+    # 切り欠きは上へ抜ける(貫通させると面が2枚に割れて面添字が1つで足りなくなる)。
+    fixed_pad = Pos(-40, 0, 0) * Box(8, 56, 40) - Pos(-40, 0, 8) * Box(12, 26, 36)
+    load_pad = Pos(34, 12, 4) * Box(10, 14, 10)
+    keep = fixed_pad + load_pad
+
+    rot = Rot(0, 0, float(angle_deg))
+    keep = rot * keep
+
+    soup = vx.triangles_from_shape(vx._unwrap(keep), deviation=0.2)
+    # **U 字面は重心で名指しできない**(切り欠きの形で重心が動く)ので、法線方向の位置で選ぶ。
+    fixed = _face_on_plane(soup, angle_deg, normal=(-1, 0, 0), offset=44.0)
+    load = _rotated_face(soup, angle_deg, normal=(0, 0, 1), point=(34, 12, 9))
+    return Conditions(keep=keep, fixed_face=fixed, load_face=load, obstacle=None)
+
+
+def tilted_conditions(angle_deg: float = 30.0, *, radius: float = 26.0) -> Conditions:
+    """**軸に乗らない姿勢**(既定 z 軸 30°)で、除外が塊の中央を大きく貫く題材。
+
+    30° を既定にしてあるのは、45° ではなく **30° が塊を一番膨らませる**という実測による
+    (`20260903-2234`。45° は条件の最長辺が縮むぶん余白も縮む)。除外は 2 つのパッドの間を
+    貫く太い円柱で、既定の `radius=26` は**箱の 25% を削る**(解像度 14/18/30/44 で実測)。
+
+    **`radius` を上げても `DesignSpaceDisconnectedError` にはならない。** 円柱は塊の上下を
+    塞がないので道が残り、先に `radius=34` で `DesignSpaceTooSmallError`
+    (除外が保持ソリッドを食う)が出る。34 で落ちるのは連結が切れたからではない。
+    """
+    from build123d import Box, Cylinder, Pos, Rot
+
+    fixed_pad = Pos(-34, 0, 0) * Box(6, 28, 28)
+    load_pad = Pos(30, 0, 16) * Box(8, 10, 6)
+    keep = fixed_pad + load_pad
+    obstacle = Rot(90, 0, 0) * Cylinder(radius=float(radius), height=80)
+
+    rot = Rot(0, 0, float(angle_deg))
+    keep = rot * keep
+    obstacle = rot * obstacle
+
+    soup = vx.triangles_from_shape(vx._unwrap(keep), deviation=0.2)
+    fixed = _rotated_face(soup, angle_deg, normal=(-1, 0, 0), point=(-37, 0, 0))
+    load = _rotated_face(soup, angle_deg, normal=(0, 0, 1), point=(30, 0, 19))
+    return Conditions(keep=keep, fixed_face=fixed, load_face=load, obstacle=obstacle)
+
+
+@dataclass(frozen=True)
+class BenchCase:
+    """性能の基準線を測る題材1つ。**塊の導出設定まで含めて1つ**にしてある。
+
+    余白比率も力の向きも題材ごとに違い、片方だけ表にすると「同じ設定で回した」と
+    読めてしまう。`covers` は**この題材が何を覆うために居るか**の1行で、README の表と
+    同じ文字列を機械側にも置いてある(片方だけ直したときに気づけるようにするため)。
+    """
+
+    name: str
+    conditions: Any  # `angle_deg` を1つ取り `Conditions` を返す呼び出し可能
+    covers: str
+    margin_ratio: float = DEFAULT_MARGIN_RATIO
+    angle_deg: float = 0.0
+    force: Sequence[float] = (0.0, 0.0, -1.0)
+
+    def make(self) -> Conditions:
+        return self.conditions(self.angle_deg)
+
+    def derive_space(self, **overrides: Any) -> DesignSpace:
+        """この題材の設定で `derive()` を呼ぶ。`overrides` で解像度などを差し替える。"""
+        kwargs: dict = {"margin_ratio": self.margin_ratio}
+        kwargs.update(overrides)
+        return derive(self.make(), **kwargs)
+
+
+# 名前 → 題材。**後続タスクはこの表を1ループ回すだけで全題材を通せる。**
+# 並びは README の表の並びと同じ(①〜④)。
+CASES: dict[str, BenchCase] = {
+    "bracket": BenchCase(
+        name="bracket",
+        conditions=demo_conditions,
+        covers="汎用。保持2つ・除外1つ(円柱)・拘束1面・荷重1面。既定の余白比率のまま",
+        margin_ratio=DEFAULT_MARGIN_RATIO,
+    ),
+    "plate": BenchCase(
+        name="plate",
+        conditions=plate_conditions,
+        covers="極端なアスペクト比。厚み方向の要素数が長辺の6分の1しかなく、幾何マルチグリッドの粗格子化が一番効かない",
+        margin_ratio=0.05,
+    ),
+    "branching": BenchCase(
+        name="branching",
+        conditions=branching_conditions,
+        covers="荷重経路が分岐する。U字面で支持が2本の脚に分かれ、荷重は片寄り、力も斜め",
+        margin_ratio=0.15,
+        force=(0.35, 0.0, -1.0),
+    ),
+    "tilted": BenchCase(
+        name="tilted",
+        conditions=tilted_conditions,
+        covers="軸に乗らない姿勢(z軸30°)＋塊の中央を大きく貫く除外。連結性が際どく条件数も悪い",
+        margin_ratio=DEFAULT_MARGIN_RATIO,
+        angle_deg=30.0,
+    ),
+}
+
+
 def _rotated_face(
     soup: vx.TriangleSoup, angle_deg: float, *, normal: Sequence[float], point: Sequence[float]
 ) -> int:
@@ -917,6 +1057,31 @@ def _rotated_face(
         raise ValueError(
             f"デモの面を一意に選べなかった(法線={np.round(n, 4).tolist()}"
             f" 重心={np.round(p, 4).tolist()} → {hits})。demo_conditions を変えたら見直すこと"
+        )
+    return hits[0]
+
+
+def _face_on_plane(
+    soup: vx.TriangleSoup, angle_deg: float, *, normal: Sequence[float], offset: float
+) -> int:
+    """法線と**その法線方向の位置**で平面を一意に選ぶ(重心は使わない)。
+
+    切り欠きのある面は重心が形の詳細で動くので `_rotated_face` では名指しできない。
+    `offset` は回す前の座標系での `dot(面上の点, normal)`。
+    """
+    c, s_ = math.cos(math.radians(angle_deg)), math.sin(math.radians(angle_deg))
+    rot = np.array([[c, -s_, 0.0], [s_, c, 0.0], [0.0, 0.0, 1.0]])
+    n = rot @ np.asarray(normal, dtype=float)
+    n = n / np.linalg.norm(n)
+    hits = [
+        f
+        for f in an.faces_matching(soup, kind="plane", normal=n, normal_tol=1e-6)
+        if abs(float(np.dot(np.asarray(soup.face_props[f]["centroid"], dtype=float), n)) - float(offset))
+        <= 1e-4
+    ]
+    if len(hits) != 1:
+        raise ValueError(
+            f"平面を一意に選べなかった(法線={np.round(n, 4).tolist()} 位置={offset} → {hits})"
         )
     return hits[0]
 

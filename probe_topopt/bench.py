@@ -107,3 +107,12 @@ ABSOLUTE_VOLUME_BASE: tuple = (8, 4, 4)
 # **9.0 以上にすると `occupancy` のレイが縮退して `derive` が落ちる**(2026-09-04実測。
 # 6.0〜8.5 は通る)。通る帯の真ん中を採ってある。
 ABSOLUTE_VOLUME: dict = {"spacing": 7.5, "max_iter": 5}
+
+# `check_design_space.py` [12] 4題材が端から端まで通ることの確認。
+# **性能測定の題材の大きさはここではなく `perf.py` が持つ**(受入検査は速さが命、性能測定は
+# 大きさが要る。同じ定数で兼ねると、検証を速くするたびに性能の基準線が黙って別物になる)。
+# **下限は 14**(2026-09-04実測): 13 まで落とすと薄板の保持パッド(厚み12mm)に対して
+# 要素が 15.4mm になり、`model_from_design_mask` が
+# 「保持領域が1要素も掴めなかった」で落ちる。**帯の下端から2つ上の 16 を採ってある**
+# (`voxelize.occupancy` のレイ縮退は解像度に対して単調でないので、下限ぎりぎりを採らない)。
+DESIGN_SPACE_FOUR_CASES: dict = {"elements_long_axis": 16, "max_iter": 6}
