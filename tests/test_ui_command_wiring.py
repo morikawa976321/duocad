@@ -416,14 +416,19 @@ def _needs_enter(args: list[tuple[str, str]]) -> bool:
 #: そのとき**Enterが要るかを1回考える**のが狙いで、表そのものが実装の入力になっている
 #: わけではない(判定は `args` からの導出が正)。
 #:
-#: **`save_document`/`open_document`/`import_step`/`export_step`/`export_stl` はこの表に
-#: 無い** —— `CommandHost` から外れて `FilesPanel.svelte` へ移ったため、この表
+#: **`save_document`/`open_document`/`export_step`/`export_stl` はこの表に無い** ——
+#: `CommandHost` から外れて `FilesPanel.svelte` へ移ったため、この表
 #: (`web/src/commands/*.ts` の `CommandDef` から読む)には現れない。サーバ側のverbとしては
 #: 変わらず存在する(`save_document`/`open_document`は`tests/test_files_ui.py`、
-#: `import_step`/`export_step`/`export_stl`は`tests/test_io_step.py`)。
-#: STEP/STLは2026-08-27にツールバーから左サイドバーへ移設した(`FilesPanel.svelte`の
-#: 入力欄はEnterでも行内のボタンと同じ送信をするが、判定対象は`CommandDef.args`からの
-#: 導出であり、`CommandDef`自体が無くなったのでこの表の対象にならない)。
+#: `export_step`/`export_stl`は`tests/test_io_step.py`)。この4つは文書を変えないか、
+#: 変えても操作ログに載らない側で、`FilesPanel.svelte` の入力欄はEnterでも行内のボタンと
+#: 同じ送信をするが、判定対象は`CommandDef.args`からの導出であり、`CommandDef`自体が
+#: 無いのでこの表の対象にならない。
+#:
+#: **`import_step` だけは2026-09-05にこの表へ戻った** —— 2026-08-27に左サイドバーへ
+#: 移した3つのうち、これ1つをツールバーの `CommandHost` へ引き上げた(本人決定。
+#: 文書を変えるverbであり、ファイルの出し入れではなくモデリングの1手だから)。
+#: `web/src/commands/files.ts` の `IMPORT_STEP` がその `CommandDef` である。
 ENTER_REQUIRED = {
     "extrude_face": True,          # 面1つ + 距離(how)
     "extrude": True,               # 領域は何個でも + 距離 + 結合/切り取り
@@ -432,6 +437,7 @@ ENTER_REQUIRED = {
     "pattern_rectangular": True,   # 図形は何個でも + 個数と間隔
     "pattern_circular": True,      # 図形は何個でも + 中心 + 個数と角度
     "import_svg": True,            # パス(howがある → Enterが要る。sketch_idはApp.svelteが足す)
+    "import_step": True,           # パス(howがある → Enterが要る。targetは取らない)
     "add_line": False,             # **点2つだけ。howが無い → 即適用**
     "sketch_create": False,        # **貼る先を1つ指すだけ。howが無い → 即適用**
     "add_circle": True,            # 中心 + 半径

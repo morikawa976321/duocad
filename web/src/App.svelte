@@ -33,7 +33,7 @@
     SOLID_FEATURE_COMMANDS,
     needsSketchId,
   } from './commands/features'
-  import { changesDocument } from './commands/files'
+  import { IMPORT_STEP, changesDocument } from './commands/files'
   import { OPTIMIZE_MODE_COMMANDS, OPTIMIZE_PRESET_ROLE } from './commands/optimize'
   import {
     DEFAULT_SKETCH_COMMAND_ID,
@@ -97,9 +97,11 @@
   const SOLID_COMMANDS = [
     ...COMMANDS,
     ...SOLID_FEATURE_COMMANDS,
-    // **`file` 分類の `CommandDef` はもう1つも無い**(2026-08-28。`commands/files.ts` の
-    // モジュールdocstring)。`IMPORT_SVG` はスケッチモードのコマンドへ移り、`SKETCH_COMMANDS`
-    // (下)側に載っている。
+    // **`file` 分類はこの1つだけ**(2026-09-05に `FilesPanel` から引き上げた。理由は
+    // `commands/files.ts` のモジュールdocstring)。書き出し(`export_step`/`export_stl`)と
+    // 保存/開く/新規は左サイドバーに残るので、`CommandDef` を持たずここにも載らない。
+    // `IMPORT_SVG` はスケッチモードのコマンドへ移り、`SKETCH_COMMANDS`(下)側に載っている。
+    IMPORT_STEP,
   ]
   const SKETCH_MODE_COMMANDS = [...SKETCH_COMMANDS, ...SKETCH_FEATURE_COMMANDS]
 
@@ -585,11 +587,15 @@
         // **CommandHostが出した確定が、実際に成功したと確認できた**(2026-08-31)——ここで
         // 初めて無起動へ戻す。`commit()` の時点(`onRun` を呼んだ直後)ではまだ成否が
         // 分からず、先に戻すとOCCTのフィレット失敗時の打ち直し(`CommandHost.commit()`の
-        // コメント参照)が壊れる。`sketch`/`feature` 以外(`file`/`history`等)は
-        // CommandHostの外で走るので対象にしない——`import_step`(FilesPanel経由)の成功で
-        // 人が別コマンドに入力中のCommandHostを畳んではならない。
+        // コメント参照)が壊れる。**`CommandHost` を通るverbだけが対象**で、`CATEGORY_OF` に
+        // 載っていないもの(`export_step`/`export_stl`/`save_document` 等、`FilesPanel` が
+        // 直接送るぶん)は `undefined` になってここを素通りする —— 人が別コマンドに
+        // 入力しているCommandHostを、外で走った操作の成功で畳んではならない。
+        // **`file` が対象に入ったのは2026-09-05**に `import_step` がツールバーへ戻ってから。
         const category = CATEGORY_OF.get(applied.verb)
-        if (category === 'sketch' || category === 'feature') host?.commandSucceeded()
+        if (category === 'sketch' || category === 'feature' || category === 'file') {
+          host?.commandSucceeded()
+        }
       }
       lastApplied = applied
     }
@@ -726,10 +732,6 @@
     lastFileOp = op
     if (changesDocument(verb)) pendingOp = op
     session.runVerb(verb, args, op)
-  }
-
-  function importStep(path: string): void {
-    runFileOp('import_step', { path })
   }
 
   function exportStep(path: string): void {
@@ -1337,6 +1339,15 @@
         session.runVerb(verb, needsSketchId(verb) ? { ...args, sketch_id: sketchId } : args, op)
         return
       }
+      // -------------------------------------------------------------- F: ファイル
+      case 'file': {
+        // **`runFileOp` をそのまま呼ぶ**(2026-09-05)。`FilesPanel` から送っていた頃と
+        // 同じ関数で、`changesDocument` が `pendingOp` を立てるかどうかを決める。
+        // ここで二重化すると「ツールバー経由の import_step だけ応答待ちの解き方が違う」
+        // という差が生まれる。
+        runFileOp(verb, args)
+        return
+      }
       default: {
         // **分類を1つ足すとここで型が落ちる**(`never` に狭まらなくなる)。
         // 送り方を書かずに分類だけ増やすことができない、というのがこの1行の役目。
@@ -1904,7 +1915,6 @@
           onSave={saveDocumentAs}
           onOpen={openDocumentByName}
           onNew={newDocument}
-          onImportStep={importStep}
           onExportStep={exportStep}
           onExportStl={exportStl}
         />

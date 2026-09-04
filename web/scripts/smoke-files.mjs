@@ -466,6 +466,9 @@ async function main() {
     // **2026-08-27にSTEP/STLの入出力も同じパネルへ移設**され、共用だった `#file-path` は
     // 廃止(`#file-import-path` / `#file-export-step-path` /
     // `#file-export-stl-path` の3つに分かれた)。
+    // **2026-09-05にSTEP読み込みだけがツールバーへ戻った** —— `#file-import-path` は
+    // このパネルには無く、`#file-import-step` を押して起動したときだけDOMに出る
+    // (`commands/files.ts` の `IMPORT_STEP`)。書き出しの2つはここに残る。
     // **2026-08-30に一覧の行から `.files-overwrite` を撤去**した —— 上書きの口は
     // ヘッダの保存ボタン(`#file-save`)と Ctrl+S だけになり、行き先は常に
     // 「いま編集しているファイル」1つに固定された(検証2bを参照)。
@@ -790,8 +793,12 @@ async function main() {
       window.__duocad.parts.map((body) => body.body_id),
     )
     const partsBefore = idsBefore.length
-    await typeInto('#file-import-path', stepPath)
+    // **STEP読み込みはツールバーのコマンド**(2026-09-05に `FilesPanel` から戻った)。
+    // 起動して初めてパス欄が現れるので**押す→打つ→Enter**の順になる
+    // (`commands/files.ts` の `IMPORT_STEP`)。
     await page.click('#file-import-step')
+    await typeInto('#file-import-path', stepPath)
+    await page.keyboard.press('Enter')
     await waitFor(
       (previous) => window.__duocad.parts.length === previous + 1,
       'STEPを読み込めない',

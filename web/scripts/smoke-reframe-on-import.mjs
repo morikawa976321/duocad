@@ -157,8 +157,12 @@ async function checkImportReframes(executablePath) {
       await page.keyboard.press('Backspace')
       await page.type(selector, String(value), { delay: 15 })
     }
-    await typeInto('#file-import-path', stepPath)
+    // **STEP読み込みはツールバーのコマンド**(2026-09-05に `FilesPanel` から戻った)。
+    // 起動して初めてパス欄が現れるので**押す→打つ→Enter**の順になる
+    // (`commands/files.ts` の `IMPORT_STEP`)。
     await page.click('#file-import-step')
+    await typeInto('#file-import-path', stepPath)
+    await page.keyboard.press('Enter')
     await page.waitForFunction(
       (before) => window.__duocad.parts.length > before,
       { timeout, polling: 100 },

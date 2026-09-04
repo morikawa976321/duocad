@@ -854,6 +854,9 @@ async function main() {
       // **読んだ時点で編集できることまで見る。** `parts` は `kind === "solid"` だけを
       // 並べるので、ここが増えていれば編集用ボディができている。
       const before = (await look()).parts.length
+      // **押す→打つ→Enter**(2026-09-05にツールバーのコマンドへ戻った。
+      // `commands/files.ts` の `IMPORT_STEP`)。起動して初めてパス欄が現れる。
+      await page.click('#file-import-step')
       await typeInto('#file-import-path', humanStep)
       await page.keyboard.press('Enter')
       await waitFor(

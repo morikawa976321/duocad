@@ -105,6 +105,10 @@ async function main() {
     /** 対応する欄へパスを打ち、ボタンを押して確定する(入力欄は毎回消してから打つ)。 */
     const run = async (buttonId, path) => {
       const inputId = INPUT_FOR_BUTTON[buttonId]
+      // **STEP読み込みだけはツールバーのコマンド**(2026-09-05に `FilesPanel` から戻った)。
+      // 起動して初めてパス欄がDOMに出るので、無ければ先にボタンを押して起こす。
+      // 書き出しは左サイドバーの常設の欄なので、この分岐は素通りする。
+      if ((await page.$(`#${inputId}`)) === null) await page.click(`#${buttonId}`)
       await page.click(`#${inputId}`)
       await page.keyboard.down('Control')
       await page.keyboard.press('KeyA')

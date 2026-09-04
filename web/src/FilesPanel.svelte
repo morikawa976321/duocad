@@ -29,12 +29,16 @@
    * 消えるのが「まだどこにも書いていない編集」だからで、書いてあるファイルを潰す操作
    * (上の上書き)とは別の話である** —— 後者は確認ではなく**経路ごと**塞いだ。
    *
-   * **STEP読み込み・STEP書き出し・STL書き出しも一覧の下に置く**(2026-08-27に本人が決定。
-   * それまでツールバーの `CommandHost` に残っていた)。この3つも保存/開くと同じ形で
-   * `App.svelte` が `session.runVerb(...)` を直接呼ぶ(`CommandHost` を経由しない)。
-   * **SVG読み込み(`import_svg`)はここには無い**(2026-08-28) —— 「開いているスケッチへ
-   * 取り込む」形になり、スケッチモードのコマンド(`commands/sketch.ts` の `IMPORT_SVG`)へ
-   * 移った。`commands/files.ts` の `CommandDef` はもう1つも無い。
+   * **一覧の下に置くのは書き出しの2つだけ**(STEP書き出し・STL書き出し)。どちらも
+   * 保存/開くと同じ形で `App.svelte` が `session.runVerb(...)` を直接呼ぶ
+   * (`CommandHost` を経由しない)。**文書を変えないから**ここでよい ——
+   * 操作ログに載らず、undoの対象でもなく、モデルは1ミリも動かない。
+   *
+   * **STEP読み込み(`import_step`)は2026-09-05にここを出てツールバーへ戻った**
+   * (本人決定。理由は `commands/files.ts` の `IMPORT_STEP` のdocstring) ——
+   * あれだけは文書を変えるverbで、ファイルの出し入れではなくモデリングの1手だった。
+   * **SVG読み込み(`import_svg`)も同じ理由でここには無い**(2026-08-28にスケッチモードの
+   * コマンド `commands/sketch.ts` の `IMPORT_SVG` へ移った)。
    *
    * **送信後もパス欄は消さない**(ファイル名欄=`draftName`とは逆の規律)。STEP/STLのパスは
    * 同じ値へ書き出し直す・同じファイルを読み直すことが多く、毎回打ち直させると手間になる
@@ -48,7 +52,6 @@
     onSave,
     onOpen,
     onNew,
-    onImportStep,
     onExportStep,
     onExportStl,
   }: {
@@ -58,6 +61,10 @@
      * **いま編集しているファイル名**(サーバの `state.current_name` の写し。無ければ `null`)。
      *
      * ヘッダの `#current-file` と同じ値で、ヘッダの保存ボタンが書く先そのものである。
+     * **このパネルは名前を文字で出さない**(2026-09-05に `#current-document` を撤去)——
+     * 同じ文字列がヘッダと150px離れて2度出ていた。代わりに**一覧の中の当該行を光らせる**:
+     * 「どれを開いているか」は一覧を見るときの問いなので、答えは一覧の中にあるべきで、
+     * `BrowserPanel.svelte` が編集中のスケッチを `.sketch-row.active` で示すのと同じ形。
      */
     currentName: string | null
     /**
@@ -71,8 +78,6 @@
     onOpen: (name: string) => void
     /** 空の文書にする(引数なし。ファイルはまだ1つも決まっていない)。 */
     onNew: () => void
-    /** STEPのパスを渡して読み込む(文書を変える。編集可能なボディが増える)。 */
-    onImportStep: (path: string) => void
     /** 書き出し先のパスを渡してSTEPへ書き出す(文書は変えない)。 */
     onExportStep: (path: string) => void
     /** 書き出し先のパスと偏差(mm)を渡してSTLへ書き出す(文書は変えない)。 */
@@ -132,14 +137,6 @@
     return text.trim() === '' ? 'パスを打つ' : null
   }
 
-  let importPath = $state('')
-  const importProblem = $derived(pathProblem(importPath))
-
-  function submitImportStep(): void {
-    if (importProblem !== null) return
-    onImportStep(importPath.trim())
-  }
-
   let exportStepPath = $state('')
   const exportStepProblem = $derived(pathProblem(exportStepPath))
 
@@ -176,18 +173,18 @@
 </script>
 
 <section class="files-panel">
+  <!-- **見出しも編集中のファイル名も置かない**(2026-09-05に2つとも撤去)。
+       「ファイル」の語はヘッダの開閉ボタン(`#data-panel-toggle`)が既に言っており、
+       そのすぐ下の列にもう一度書く意味が無かった。編集中の名前(旧 `#current-document`)は
+       ヘッダの `#current-file` と同じ文字列が150px離れて2度出ていたので、
+       **文字ではなく一覧の行の強調**(下の `.files-row.active`)で示す。 -->
   <div class="row">
-    <span class="label">ファイル</span>
     <!-- **新規は一覧の外にある** —— 開くのが「一覧のどれかを指す」操作なのに対し、こちらは
          指す先が無い(空の文書にする)。名前を打つ欄より前に置いて、ファイル名の入力と
          「新規保存」の組から離してある。 -->
     <button id="file-new" onclick={onNew} title="今の文書を捨てて空から始める(保存していない編集は消える)">
       新規
     </button>
-    <!-- **編集中のファイル名**。ヘッダの `#current-file` と同じ値・同じ言葉にしてある
-         (2026-08-30に「(未保存)」から「(無題)」へ揃えた) —— 名前が無いことと
-         保存できていないことは別の問いで、後者を言うのは `#save-state` の役目である。 -->
-    <span id="current-document" class="value dim">{currentName ?? '(無題)'}</span>
   </div>
 
   <div class="new-row">
@@ -217,7 +214,9 @@
       <span class="value empty dim">models/ にファイルが無い</span>
     {/if}
     {#each sorted as file (file.name)}
-      <div class="files-row" data-name={file.name}>
+      <!-- **編集中の1行を光らせる**(2026-09-05。`BrowserPanel` の `.sketch-row.active` と
+           同じ形)。撤去した `#current-document` の役目をここが引き受けている。 -->
+      <div class="files-row" class:active={file.name === currentName} data-name={file.name}>
         <button class="files-open" onclick={() => onOpen(file.name)} title="クリックで開く">
           {file.name}
         </button>
@@ -231,28 +230,10 @@
     {/each}
   </div>
 
-  <!-- STEP/STLの入出力。一覧の下に区切りを置いて積む(2026-08-27に本人がツールバーから
-       ここへ寄せると決定)。「入力欄+ボタン」の見た目は上の新規保存の行と揃えてある。 -->
+  <!-- STEP/STLの**書き出し**。一覧の下に区切りを置いて積む(2026-08-27に本人がツールバーから
+       ここへ寄せると決定。読み込みだけは2026-09-05にツールバーへ戻した ——
+       冒頭のdocstring)。「入力欄+ボタン」の見た目は上の新規保存の行と揃えてある。 -->
   <div class="io-section">
-    <div class="new-row">
-      <input
-        id="file-import-path"
-        type="text"
-        autocomplete="off"
-        spellcheck="false"
-        placeholder="part.step"
-        value={importPath}
-        oninput={(event) => (importPath = (event.target as HTMLInputElement).value)}
-        onkeydown={(event) => onRowEnter(event, submitImportStep)}
-      />
-      <button id="file-import-step" onclick={submitImportStep} disabled={importProblem !== null}>
-        STEP読み込み
-      </button>
-    </div>
-    {#if importPath !== '' && importProblem !== null}
-      <span class="hint">{importProblem}</span>
-    {/if}
-
     <div class="new-row">
       <input
         id="file-export-step-path"
@@ -329,17 +310,6 @@
     flex: 0 0 auto;
   }
 
-  .label {
-    flex: 0 0 auto;
-    color: var(--dim);
-  }
-
-  .row .value {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   .row button {
     flex: 0 0 auto;
   }
@@ -382,6 +352,11 @@
     display: flex;
     align-items: center;
     gap: 6px;
+  }
+
+  /* いま開いているファイル(`BrowserPanel` の `.sketch-row.active` と同じ見せ方)。 */
+  .files-row.active {
+    background: var(--accent-soft);
   }
 
   /* **一覧の行はボタンの面を持たない**(2026-09-05)。押せるものは面で見せる(styles.css の

@@ -198,13 +198,14 @@ async function main() {
     // サーバは空で立つ。前回の実行のサーバを使い回している場合は既に読まれている。
     const partCount = await page.evaluate(() => window.__duocad.parts.length)
     if (partCount === 0) {
-      // **STEP読み込みは左サイドバーのファイルパネルへ移設**(2026-08-27。
-      // `commands/files.ts`・`FilesPanel.svelte` docstring参照)。ツールバーの
-      // `CommandHost` を経由しないので、`CommandHost`のcommandIdへ一切触らない
-      // ——2026-08-28、通常モードの既定は無起動になったが、それはCommandHost自身の
-      // 初期状態の話であり、STEP読み込みの経路には関係が無い。
-      await typeInto('#file-import-path', stepPath)
+      // **STEP読み込みはツールバーのコマンドへ戻った**(2026-09-05。2026-08-27に
+      // 左サイドバーへ移していたのを本人決定で引き上げた。`commands/files.ts` の
+      // `IMPORT_STEP`・`FilesPanel.svelte` のdocstring参照)。他のverbと同じく
+      // `CommandHost` を通るので、**押す(起動)→打つ→Enter(確定)**の3手になる ——
+      // 起動して初めて `#file-import-path` がDOMに出るため、先に打つことはできない。
       await page.click('#file-import-step')
+      await typeInto('#file-import-path', stepPath)
+      await page.keyboard.press('Enter')
       await page.waitForFunction(
         (expected) => window.__duocad.parts.length === expected,
         { timeout, polling: 100 },

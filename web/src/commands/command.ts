@@ -277,7 +277,7 @@ export type BuildResult =
  *
  * **`ui` 以外はコアの宣言(`duocad/catalog.py`)の `category` と同じ値**である。
  */
-export type CommandCategory = 'sketch' | 'feature' | 'ui'
+export type CommandCategory = 'sketch' | 'feature' | 'file' | 'ui'
 
 export interface CommandDef {
   /** verb名。**プレビューと確定で同じものをサーバへ送る**(食い違うと嘘のプレビューになる)。 */
