@@ -122,6 +122,35 @@ class DesignSpaceDisconnectedError(ValueError):
         self.load_labels = [int(v) for v in load_labels]
 
 
+class CoarseRunConditionFacesEmptyError(ValueError):
+    """案5(`derive_from_coarse_run`)の**粗い段**で拘束面・荷重面のアンカーが空になった。
+
+    `run_topopt(coarse, ...)` は `anchor.run_pipeline` の契約どおり例外にせず
+    `empty_condition_faces` を積んだ辞書を返す(`"result"` は `None`)。しかし
+    `derive_from_coarse_run` は `DesignSpace` を返す契約の関数で、`run_topopt` のような
+    「早期returnで辞書を返す」形は取れない —— **入口層(`run_topopt`/`anchor.run_pipeline`)の
+    戻り値の形はこの関数のために変えない**(2026-09-05 QA指摘への対応)。そこでここは
+    同じ診断を例外に載せて落とす。`empty_condition_faces` に
+    `anchor.AnchorTable.condition_face_diagnoses` と同じ形のリストが入る。
+
+    このガードが無いと `coarse_out["result"]` が `None` のまま `.rho` に触れて
+    `AttributeError` になる(このタスクの変更前は `_require_nodes` の `ValueError` だった —
+    情報量は落ちるが、少なくとも「空の面」だと分かる例外ではあった。この例外はそれを
+    「案5の粗い段で」という文脈つきで復元する)。
+    """
+
+    def __init__(self, empty_condition_faces: Sequence[dict]) -> None:
+        diagnoses = list(empty_condition_faces)
+        detail = an.format_condition_face_warning(diagnoses)
+        message = (
+            "案5(derive_from_coarse_run)の粗い段で拘束面・荷重面のアンカーが空になった: "
+            f"{detail} coarse_elements_long_axis を上げるか、条件面を選び直すこと"
+            "(本番解像度 elements_long_axis では空でなくても、粗い段だけ空になりうる)。"
+        )
+        super().__init__(message)
+        self.empty_condition_faces = diagnoses
+
+
 # ---------------------------------------------------------------------------
 # 連結性(拘束↔荷重の道)
 # ---------------------------------------------------------------------------
@@ -696,6 +725,16 @@ def derive_from_coarse_run(
         max_iter=int(coarse_max_iter),
         stl_path=coarse_stl,
     )
+    # **`run_topopt` は拘束面・荷重面のアンカーが空だと例外にせず早期returnする**
+    # (`"result"` が `None` のまま返る。上「拘束面・荷重面のアンカーが空のときに
+    # メッセージを出す」節)。ここで見ずに `coarse_out["result"].rho` へ触ると
+    # `AttributeError` になる —— 情報の無い落ち方で、変更前の `_require_nodes` の
+    # `ValueError`(空の面だとは分かった)より後退する。**入口層(`run_topopt`)の
+    # 戻り値の形はここのために変えない**ので、ここで検知して構造化された例外に変換する
+    # (2026-09-05 QA指摘。粗い段だけ本番解像度より要素サイズが大きく、条件面が
+    # 粗い段でだけ空になりうる)。
+    if coarse_out.get("empty_condition_faces"):
+        raise CoarseRunConditionFacesEmptyError(coarse_out["empty_condition_faces"])
     coarse_seconds = time.perf_counter() - t_coarse
 
     rho = np.asarray(coarse_out["result"].rho, dtype=float)

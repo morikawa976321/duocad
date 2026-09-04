@@ -946,6 +946,37 @@ ValueError: 指定した面に格子節点が1つも付いていない: 面7(pla
 - **変異検査**: `AnchorTable.condition_face_diagnoses` を「常に `[]` を返す」に差し替えると、
   `anchor.run_pipeline` が元の `_require_nodes` の `ValueError` に戻ることを確認(検出力)。
 
+### `derive_from_coarse_run`(案5・既定の導出)の粗い段も塞ぐ(2026-09-05・QAのfollow-up指摘)
+
+**この早期returnが新しい穴を作っていた。** `derive_from_coarse_run`(案5。`DEFAULT_DERIVATION`
+そのもの)は粗い段を `run_topopt(coarse, ...)` で回し、`coarse_out["result"].rho` を無条件に
+読んでいた。**粗い段は本番解像度より要素サイズが大きい**ので、本番(`elements_long_axis`)では
+空でない条件面が**粗い段だけ**空になりうる。そこへ今回の早期return(`"result"` が `None`)が
+入ったことで、`None.rho` の **`AttributeError`** になる経路ができた。**このタスクの変更前は
+ここが `_require_nodes` の `ValueError` だった**(情報は少ないが「空の面」だとは分かる例外)ので、
+このままでは**後退**になる。QA(2026-09-05・composer-2.5第2段)がMAJORとして指摘し、この枠で
+修正した。
+
+- **`design_space.CoarseRunConditionFacesEmptyError(ValueError)`** を新設。`coarse_out.get(
+  "empty_condition_faces")` を `.rho` へ触る**前**に見て、非空なら
+  `empty_condition_faces`(`condition_face_diagnoses` と同じ形のリスト。属性で機械から引ける)
+  を積んでこれを投げる。
+- **入口層(`run_topopt` / `anchor.run_pipeline`)の戻り値の形は変えていない。** `run_topopt` は
+  `DesignSpace` ではなく辞書を返す契約なので早期returnが自然に収まるが、
+  `derive_from_coarse_run` は `DesignSpace` を返す契約の関数で、辞書を返す形は取れない ——
+  だから**ここだけ例外に変換する**(2箇所で流儀が違うのはこの型の違いによるもので、
+  気まぐれではない)。
+- **`derive_default`(既定の入口。`DEFAULT_DERIVATION == "coarse_run"`)経由でも同じ例外**
+  になることを確認済み(実務上こちらを通る側のほうが多い)。
+- `server.py:407` 付近にも同型のギャップがある(QA指摘)が、**duocad本体はこのタスクの制約で
+  触っていない**。配線タスク(`20260904-1704-duocad-wire-optimize-backend`)側の担当として
+  下の「後続への契約」に注意点として残す。
+- **検査(`check_design_space.py` 14-6/14-7)**: 粗い段だけ条件面が空になる配置(本番解像度と
+  粗い段を同じ要素数にして確実に踏む)で、`derive_from_coarse_run` と `derive_default` の両方が
+  `CoarseRunConditionFacesEmptyError` になり `AttributeError` にならないこと、例外に構造化された
+  診断が乗っていること。**変異検査**: `run_topopt` の戻り値から `empty_condition_faces` を消す
+  ラッパーに差し替えると、元の `AttributeError` に戻ることを確認(検出力)。
+
 ### 本当の解決は保留する(なぜ保留か)
 
 **要素サイズより小さい面にも節点を付けること自体は可能**(「表の作り方」の3段目、稜線の規則の
@@ -3074,9 +3105,12 @@ node shot_anchors.mjs
 | 変異 | 壊し方 | 落ちた検査 |
 |---|---|---|
 | M1 | `AnchorTable.condition_face_diagnoses` を常に `[]` を返す関数に差し替える | 14-5(空の条件面でも例外にならないことの確認)—— 差し替えた状態では元の `_require_nodes` の `ValueError`(「指定した面に格子節点が1つも付いていない」)に戻ることを見る |
+| M2(2026-09-05追加) | `design_space.run_topopt` をラップし、戻り値の `"empty_condition_faces"` を空リストへ差し替える | 14-7(`derive_from_coarse_run` の粗い段ガードの確認)—— 差し替えた状態では `CoarseRunConditionFacesEmptyError` が飛ばず、元の `AttributeError`(`'NoneType' object has no attribute 'rho'`)に戻ることを見る |
 
 M1 が示すのは「早期returnの判定を外すと、この経路は(本タスクが変える前の)`ValueError` に
 そのまま戻る」ことで、**新しく足した仕組みが実際に例外を防いでいる**ことの裏取りになっている。
+M2 も同じ形で、`derive_from_coarse_run` のガード(2026-09-05のfollow-up修正)を外すと
+**このタスク自身が新設した早期returnが引き起こしていた `AttributeError`** に戻ることを示す。
 
 ## 制限(承知のうえで残しているもの)
 

@@ -76,6 +76,12 @@
     `DesignSpace.stats` にも同じ診断が載ること / **通常経路(空の条件面なし)は影響を受けない**
     (回帰確認)/ **変異検査**(空面診断を外すと元の `ValueError` に戻ることを毎回自動で確認。
     README「変異検査の記録(2026-09-05)」)。
+    **14-6/14-7(2026-09-05 QAのfollow-up指摘への対応)**: `derive_from_coarse_run`(案5・
+    既定の導出)の**粗い段**は `run_topopt(coarse, ...)` の戻り値の `"result"` を無条件に
+    使っていたため、粗い段だけ条件面のアンカーが空になると `AttributeError` になっていた
+    (14の早期returnが作った新しい穴)。`CoarseRunConditionFacesEmptyError` を新設して検知し、
+    `derive_default`(既定の入口)経由でも同じ例外になることと、変異検査(ガードを外すと
+    `AttributeError` に戻ること)を見る。
 """
 
 from __future__ import annotations
@@ -1611,6 +1617,95 @@ def check_empty_condition_face_warning() -> None:
         "14-5 変異検査: 空面診断を外すと _require_nodes の元の例外に戻る(検出力の確認)",
         "節点が1つも付いていない" in raised,
         raised[:120] if raised else "例外が出なかった(検出力なし — 診断を外しても壊れたことに気づけない)",
+    )
+
+    # --- 14-6: derive_from_coarse_run(案5・既定の導出)の粗い段で条件面が空だと
+    #           AttributeErrorではなく構造化された例外になる(2026-09-05 QA指摘の修正) ---
+    # 粗い段(coarse_elements_long_axis)は本番解像度より要素サイズが大きいので、本番では
+    # 空でない条件面が粗い段でだけ空になりうる。ここではどちらも同じ8要素/軸にして
+    # 確実に踏む(スカッフォールドで確認済み)。
+    raised_type = ""
+    raised_faces: list = []
+    raised_msg = ""
+    try:
+        ds.derive_from_coarse_run(
+            cond,
+            elements_long_axis=8,
+            coarse_elements_long_axis=8,
+            coarse_max_iter=2,
+            margin_ratio=0.1,
+        )
+    except ds.CoarseRunConditionFacesEmptyError as exc:
+        raised_type = type(exc).__name__
+        raised_faces = exc.empty_condition_faces
+        raised_msg = str(exc)
+    except Exception as exc:  # noqa: BLE001 — 想定外の例外型も記録して不合格にする
+        raised_type = type(exc).__name__
+        raised_msg = str(exc)
+    check(
+        "14-6 derive_from_coarse_run(案5)の粗い段で条件面が空でも AttributeError にならない",
+        raised_type == "CoarseRunConditionFacesEmptyError",
+        f"{raised_type}: {raised_msg[:120]}",
+    )
+    check(
+        "14-6 例外に構造化された診断(empty_condition_faces)が乗っている",
+        len(raised_faces) == 1
+        and raised_faces[0]["side"] == "load"
+        and raised_faces[0]["face_index"] == empty_face,
+        f"{raised_faces}",
+    )
+
+    # 案5が既定の導出(DEFAULT_DERIVATION)なので、derive_default 経由でも同じ例外になることを
+    # 実際に確かめる(実務上ここを通るのは derive_default 経由のほうが多い)。
+    default_raised_type = ""
+    try:
+        ds.derive_default(
+            cond,
+            derivation="coarse_run",
+            elements_long_axis=8,
+            coarse_elements_long_axis=8,
+            coarse_max_iter=2,
+            margin_ratio=0.1,
+        )
+    except ds.CoarseRunConditionFacesEmptyError as exc:
+        default_raised_type = type(exc).__name__
+    except Exception as exc:  # noqa: BLE001
+        default_raised_type = type(exc).__name__
+    check(
+        "14-6 既定の入口(derive_default, DEFAULT_DERIVATION='coarse_run')を通しても同じ例外になる",
+        default_raised_type == "CoarseRunConditionFacesEmptyError",
+        f"{default_raised_type}",
+    )
+
+    # --- 14-7: 変異検査 — derive_from_coarse_run のガードを外すと元の AttributeError に
+    #           戻る(検出力の確認。今回のfollow-up修正そのものの検出力) ---
+    original_run_topopt = ds.run_topopt
+
+    def _strip_empty_condition_faces(*args, **kwargs):
+        out = original_run_topopt(*args, **kwargs)
+        if "empty_condition_faces" in out:
+            out = dict(out)
+            out["empty_condition_faces"] = []  # 診断が無かったことにする(ガードを無力化)
+        return out
+
+    ds.run_topopt = _strip_empty_condition_faces
+    raised_type2 = ""
+    try:
+        ds.derive_from_coarse_run(
+            cond,
+            elements_long_axis=8,
+            coarse_elements_long_axis=8,
+            coarse_max_iter=2,
+            margin_ratio=0.1,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raised_type2 = type(exc).__name__
+    finally:
+        ds.run_topopt = original_run_topopt
+    check(
+        "14-7 変異検査: derive_from_coarse_runのガードを外すと元のAttributeErrorに戻る(検出力の確認)",
+        raised_type2 == "AttributeError",
+        f"{raised_type2}(空リストで無力化した場合)",
     )
 
 
