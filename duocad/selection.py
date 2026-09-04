@@ -210,7 +210,7 @@ def propose_selection(
         raise ValueError("propose_selection needs exactly one of refs or predicate")
 
     if refs is not None:
-        items = [_coerce_ref(doc, ref) for ref in refs]
+        items = _coerce_refs(doc, refs)
     else:
         from . import predicates
 
@@ -244,8 +244,8 @@ def modify_selection(
     add_list = list(add)
     remove_list = list(remove)
     # 全参照を検査してから書き換える(途中で落ちると選択が壊れる)
-    coerced_add = [_coerce_ref(doc, ref) for ref in add_list]
-    coerced_remove = [_coerce_ref(doc, ref) for ref in remove_list]
+    coerced_add = _coerce_refs(doc, add_list)
+    coerced_remove = _coerce_refs(doc, remove_list)
 
     selection = get_selection(doc)
     items = list(selection.items)
@@ -769,6 +769,58 @@ def _coerce_ref(doc: Document, ref: dict) -> dict:
     if kind == "edge":
         return select_edge(doc, body_id, index)
     return select_vertex(doc, body_id, index)
+
+
+def _coerce_refs(doc: Document, refs: Sequence[dict]) -> List[dict]:
+    """`_coerce_ref` を複数件まとめて処理する版(2026-09-04)。
+
+    面・辺・頂点への参照は `select_face`/`select_edge`/`select_vertex` を経由すると、
+    参照1件ごとに `kernel.face_count`/`edge_count`/`count_subshapes` を呼ぶ。その中の
+    `_face_map`/`_edge_map`/`_vertex_map` は `TopExp.MapShapes_s` で**形状全体を毎回
+    走査し直す**ので、同じボディを何度も指す一括選択(ドラッグ選択)では選択件数ぶん
+    同じ全走査を繰り返すことになる。
+
+    ここでは `(body_id, kind)` の組ごとに数え上げを1回だけ行い、結果を使い回す。
+    **通す/弾くの判定は `_coerce_ref` と1件も変えない** —— 可視性の門番
+    (`_visible_body`)・範囲外検査・例外の種類とメッセージは、`select_face` /
+    `select_edge` / `select_vertex` / `_shape_ref` が組み立てるのと同じ形をここでも
+    そのまま組み立てているだけなので、数える回数を減らしても結果は等価になる。
+
+    `kernel.py` にはキャッシュを持たない(寿命の受け皿が無い上、`_face_map` の戻り値は
+    可変の `TopTools_IndexedMapOfShape` で17箇所が共有すると壊れる) —— この関数のスコープ
+    (1回の呼び出し)の中だけで数え済みの値を持ち回す。
+
+    region / sketch_entity / body 種別・壊れた参照は数え上げの重複が無い経路なので、
+    `_coerce_ref` 単発へそのまま流す。
+    """
+    bodies: dict = {}
+    counts: dict = {}
+    out: List[dict] = []
+    for ref in refs:
+        if (
+            isinstance(ref, dict)
+            and "sketch" not in ref
+            and ref.get("kind") in SHAPE_KINDS
+            and "body" in ref
+            and "index" in ref
+        ):
+            kind = ref["kind"]
+            body_id = ref["body"]
+            count_key = (body_id, kind)
+            if count_key not in counts:
+                if body_id not in bodies:
+                    bodies[body_id] = _visible_body(doc, body_id)
+                body = bodies[body_id]
+                if kind == "face":
+                    counts[count_key] = kernel.face_count(body.shape)
+                elif kind == "edge":
+                    counts[count_key] = kernel.edge_count(body.shape)
+                else:
+                    counts[count_key] = kernel.count_subshapes(body.shape, "vertex")
+            out.append(_shape_ref(body_id, kind, ref["index"], counts[count_key]))
+        else:
+            out.append(_coerce_ref(doc, ref))
+    return out
 
 
 def _visible_body(doc: Document, body_id: BodyId):
