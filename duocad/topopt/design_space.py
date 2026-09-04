@@ -2,57 +2,38 @@
 
     .\\.venv\\Scripts\\python.exe -m duocad.topopt.design_space
 
-導出は2つ入っている。**既定は案5**(`derive_from_coarse_run`。2026-09-04に案1から倒した)で、
-案1(`derive`)は比較のベースラインと退避経路として残してある。**導出にこだわりのない
-呼び出し側は `derive_default` を通ること** —— 既定を次に倒すときに書き換える場所を1箇所に
-閉じ込めるための入口である。根拠の実測は docs/TOPOPT.md「既定をどちらにすべきか」。
-
-**案1(外接直方体+余白。`derive`)。** 条件の点群の軸整列外接直方体に余白を足し、そこから
-除外ソリッドを引いたものを塊にする。**案5の比較対象(ベースライン)でもある。**
-案1の弱点は2つで、どちらも数字が docs/TOPOPT.md にある:
-
-1. **余白が自由パラメータ** —— 利用者に見せない値なので、小さすぎると答えの居場所を黙って削り、
-   誰も気づけない(engine `topopt-design-space-never-shown-to-the-user`)。
-2. **姿勢依存** —— 軸整列の直方体なので、同じ部品を世界軸に対して回すと塊が膨らむ。膨らんだ塊は
-   要素数・所要時間だけでなく**出てくる材料の量まで変える**(相対体積制約のため)。
+導出は2つ入っている。**既定は案5**(`derive_from_coarse_run`)、案1(`derive`)は比較の
+ベースラインと退避経路として残してある。**導出にこだわりのない呼び出し側は `derive_default`
+を通ること** —— 既定を次に倒すときに書き換える場所を1箇所に閉じ込めるための入口である。
+両方式の弱点・比較の数字は docs/TOPOPT.md「4条件から塊(設計空間)を導出する」以降の各節。
 
 ## 除外ソリッドの扱い(設計判断)
 
 除外ソリッドは**塊を作る時点で引き切り**、`voxelize.model_from_design_mask` の `obstacle` には
-**渡さない**。理由は3つ:
-
-- 塊 = 直方体 − 除外 と定義した以上、除外領域には塊の要素が1つも無い。`model_from_design_mask` は
-  `keep` / `obstacle` が塊の内側に収まることを要求するので、同じ除外ソリッドを `obstacle` として
-  渡すと**必ず全要素はみ出して `OutsideDesignSpaceError` になる**(しかも文面は「座標系・単位が
-  違う」と誤誘導する)。
-- 最適化に渡る情報は同じ。`anchor.run_pipeline` は `void = ~design | obstacle` を作るので、
-  除外を塊から引いてあれば `~design` 側で同じ要素が落ちる。
-- **`on_outside="clip"` へ倒す選択はしない。** clip は「塊からはみ出した保持/除外を黙って切る」
-  指定で、前タスクが入れた「はみ出しは例外」という保証をこの経路だけ骨抜きにする。塊の外の除外は
-  本来ただの no-op であって、切り詰めが要る状況ではない。
-
-代わりに、**除外が保持を食っているケース**(塊から引いた結果、保持ソリッドが塊に入らなくなる)は
-保持のはみ出しとして現れ、`DesignSpaceTooSmallError` になる。文面でその可能性を名指しする。
+**渡さない** —— 塊 = 直方体 − 除外 と定義した以上、同じ除外ソリッドを `obstacle` にも渡すと
+**必ず全要素はみ出して `OutsideDesignSpaceError` になる**。**`on_outside="clip"` へ倒す選択も
+しない** —— clip は「塊からはみ出した保持/除外を黙って切る」指定で、「はみ出しは例外」という
+保証をこの経路だけ骨抜きにする。**除外が保持を食っているケース**(塊から引いた結果、保持が塊に
+入らなくなる)は保持のはみ出しとして現れ、`DesignSpaceTooSmallError` になる。理由の全文は
+docs/TOPOPT.md「除外ソリッドの扱い(設計判断)」。
 
 ## 拘束と荷重がひと続きかを見る(連結性ガード)
 
 塊から除外ソリッドを引いた結果、**拘束面と荷重面が別々の連結成分に落ちる**ことがある。そのまま
-最適化に通しても**多くの場合エラーは出ない** —— 空要素も剛性の下限 `emin` を持つので行列は
-特異にならず残差検算も通り、最後まで走って STL が出る(実測は6配置中4配置。残り2配置は OC 更新の
-中で `ZeroDivisionError`。docs/TOPOPT.md「切れている塊をそのまま最適化に通すと何が起きるか」)。
-利用者は塊を見ないので、何が起きたか気づく手段が無い。だから `derive` が**つながりを確認してから返す**
-(`assert_faces_connected` → `DesignSpaceDisconnectedError`)。連結性の定義は **6近傍**
-(`NEIGHBOURHOOD`)で、理由はその定数のところに書いてある。
+最適化に通しても**多くの場合エラーは出ない**(空要素も剛性の下限 `emin` を持つので残差検算も
+通ってしまう)。利用者は塊を見ないので気づく手段が無い。だから `derive` が**つながりを確認して
+から返す**(`assert_faces_connected` → `DesignSpaceDisconnectedError`)。連結性の定義は
+**6近傍**(`NEIGHBOURHOOD`。理由はその定数のところ)。実測は docs/TOPOPT.md
+「塊の中で拘束と荷重がひと続きかを検査する(連結性ガード)」。
 
 ## 案5(粗く1回回して膨らませる。`derive_from_coarse_run`)
 
 案1〜案4は**条件の位置だけ**から塊を決める(どこに材料が要るかを見ていない)。案5だけが
 **一度解いてから決める** —— 案1で粗い塊を作って SIMP を短く回し、出てきた材料を二値化して
-本番の格子へ再サンプルし、mm で膨らませ、4条件の要素を無条件に足す。塊は案1の 0.62〜0.84倍に
-なり、**姿勢依存がほぼ消える**(案1の塊は 0°→30° で 1.38倍、案5は 1.01倍)。数字は docs/TOPOPT.md
-「案1との比較」。**2026-09-04に既定を案5へ倒した**(入口は `derive_default`)。壁に接した
-材料の割合だけは 0° で案1に負けるが、これは**代理指標**であって本命はコンプライアンス
-(同等以上)である。docs/TOPOPT.md「既定をどちらにすべきか」。
+本番の格子へ再サンプルし、mm で膨らませ、4条件の要素を無条件に足す。**姿勢依存がほぼ消える**
+のが利点(壁に接した材料の割合だけは代理指標として負けるが、本命のコンプライアンスは同等以上)。
+既定は案5(入口は `derive_default`)。数字の根拠は docs/TOPOPT.md「4条件から塊を導出する —
+案5」・「既定をどちらにすべきか」。
 
 ## 格子の外は誰も見ていない
 
@@ -129,14 +110,10 @@ class CoarseRunConditionFacesEmptyError(ValueError):
     `empty_condition_faces` を積んだ辞書を返す(`"result"` は `None`)。しかし
     `derive_from_coarse_run` は `DesignSpace` を返す契約の関数で、`run_topopt` のような
     「早期returnで辞書を返す」形は取れない —— **入口層(`run_topopt`/`anchor.run_pipeline`)の
-    戻り値の形はこの関数のために変えない**(2026-09-05 QA指摘への対応)。そこでここは
-    同じ診断を例外に載せて落とす。`empty_condition_faces` に
-    `anchor.AnchorTable.condition_face_diagnoses` と同じ形のリストが入る。
-
-    このガードが無いと `coarse_out["result"]` が `None` のまま `.rho` に触れて
-    `AttributeError` になる(このタスクの変更前は `_require_nodes` の `ValueError` だった —
-    情報量は落ちるが、少なくとも「空の面」だと分かる例外ではあった。この例外はそれを
-    「案5の粗い段で」という文脈つきで復元する)。
+    戻り値の形はこの関数のために変えない。** そこでここは同じ診断を例外に載せて落とす。
+    `empty_condition_faces` に `anchor.AnchorTable.condition_face_diagnoses` と同じ形の
+    リストが入る。**このガードが無いと** `coarse_out["result"]` が `None` のまま `.rho` に
+    触れて素の `AttributeError` になる(空の面だとすら分からない)。
     """
 
     def __init__(self, empty_condition_faces: Sequence[dict]) -> None:
@@ -193,13 +170,10 @@ def assert_load_path(
     """**塊の中で拘束側と荷重側が同じ連結成分にいることを確かめる。** 違えば例外。
 
     **切れていても最適化は落ちてくれない。** 空要素も剛性の下限 `emin` を持つので行列は特異に
-    ならず、`simp` の残差検算も通る。実測では6配置中4配置が60反復を走り切って STL まで出し、
-    出てきたのは**拘束側と荷重側が別々に浮いた形**だった(材料は3〜4個の島に割れ、両者は一度も
-    同じ島に入らない)。残り2配置は OC 更新の中で落ちる(2026-09-04以降は
-    `simp.VolumeTargetError`。それまでは `ZeroDivisionError`)が、その文面には
-    設計空間も連結性も出てこない。利用者は塊を見ないので
-    (engine `topopt-design-space-never-shown-to-the-user`)どちらも気づく手段が無い。
-    **だから塊を組み立てる側で落とす。** 数字は docs/TOPOPT.md。
+    ならず、`simp` の残差検算も通る。切れた系は「拘束側と荷重側が別々に浮いた形」で黙って
+    STL まで出るか、原因の分からない場所(OC更新)で落ちるかのどちらかになる(利用者は塊を
+    見ないのでどちらも気づく手段が無い)。**だから塊を組み立てる側で落とす。** 実測は
+    docs/TOPOPT.md「切れている塊をそのまま最適化に通すと何が起きるか」。
 
     `fixed_elements` / `load_elements` は要素マスク(`AnchorTable.element_mask`)。
     **塊の外にはみ出した分は落として数える** —— 除外ソリッドが拘束面のすぐ外側を削っていると、
@@ -420,9 +394,9 @@ def derive(
 
     anchor_shape = conditions.anchor
     # 三角形分割の細かさは要素サイズから決めたいが、要素サイズは塊が決まるまで分からない。
-    # そこで **B-rep の bbox** から要素サイズの当たりを付ける。`vx._shape_bbox` をそのまま使うのは
-    # 「useTriangulation=False で呼ばないと同じ形を2回ボクセル化したとき値が動く」という
-    # 2026-08-31の教訓がそこに閉じ込めてあるため(写すと片方だけ直る事故になる)。
+    # そこで **B-rep の bbox** から要素サイズの当たりを付ける。**`vx._shape_bbox` をそのまま使い、
+    # ロジックを写さないこと** —— 「useTriangulation=False で呼ばないと同じ形を2回
+    # ボクセル化したとき値が動く」という教訓がそこに閉じ込めてある(写すと片方だけ直る事故になる)。
     lo_b, hi_b = vx._shape_bbox(vx._unwrap(conditions.keep))
     if anchor_shape is not conditions.keep:
         a_lo, a_hi = vx._shape_bbox(vx._unwrap(anchor_shape))
@@ -608,7 +582,7 @@ def grow_by_mm(mask: np.ndarray, grid: vx.Grid, distance_mm: float) -> np.ndarra
     """マスクを距離 `distance_mm`[mm] だけ膨らませる(ユークリッド距離)。
 
     **膨張は層数ではなく mm で持つ。** 格子は箱に合わせて切り直されるので要素サイズは姿勢と
-    余白ごとに変わり(`20260904-0142` の実測で要素体積 62.99 → 66.43 mm^3)、層数で持つと
+    余白ごとに変わり(実測で要素体積 62.99 → 66.43 mm^3)、層数で持つと
     同じ設定が姿勢ごとに別の物理距離になる。
     """
     m = np.asarray(mask, dtype=bool)
@@ -684,10 +658,10 @@ def derive_from_coarse_run(
     `coarse_material_mm3` に同じ量を渡すこと** —— 塊は「その量の材料がどこへ行きたいか」で
     決まるべきで、粗い段だけ別の量で解くと別の形の周りを膨らませることになる。
     **目標を達成可能区間の端に置かないこと**(`volfrac=1.0`/`0.0` 相当は OC の二分探索が
-    退化する。`20260904-0142` の罠。**2026-09-04以降その退化は `simp.VolumeTargetError`
-    (`side="above_capacity"`)で落ちる** —— 塊の容量と、この反復で到達できる最大が文面に出る。
+    退化する。**その退化は `simp.VolumeTargetError`(`side="above_capacity"`)で落ちる**
+    —— 塊の容量と、この反復で到達できる最大が文面に出る)。
     **区間の内側でも落ちることがある**: 密度フィルタが塊の縁で目減りさせるので、
-    要素数で入る量でも届かない配置がある。**膨張を絞りすぎると踏む**)。
+    要素数で入る量でも届かない配置がある。**膨張を絞りすぎると踏む**。
     """
     started = time.perf_counter()
     thr = float(threshold)
@@ -726,13 +700,10 @@ def derive_from_coarse_run(
         stl_path=coarse_stl,
     )
     # **`run_topopt` は拘束面・荷重面のアンカーが空だと例外にせず早期returnする**
-    # (`"result"` が `None` のまま返る。上「拘束面・荷重面のアンカーが空のときに
-    # メッセージを出す」節)。ここで見ずに `coarse_out["result"].rho` へ触ると
-    # `AttributeError` になる —— 情報の無い落ち方で、変更前の `_require_nodes` の
-    # `ValueError`(空の面だとは分かった)より後退する。**入口層(`run_topopt`)の
-    # 戻り値の形はここのために変えない**ので、ここで検知して構造化された例外に変換する
-    # (2026-09-05 QA指摘。粗い段だけ本番解像度より要素サイズが大きく、条件面が
-    # 粗い段でだけ空になりうる)。
+    # (`"result"` が `None` のまま返る)。ここで見ずに `coarse_out["result"].rho` へ触ると
+    # 素の `AttributeError` になる。**入口層(`run_topopt`)の戻り値の形はここのために
+    # 変えない**ので、ここで検知して構造化された例外に変換する(粗い段だけ本番解像度より
+    # 要素サイズが大きく、条件面が粗い段でだけ空になりうる)。
     if coarse_out.get("empty_condition_faces"):
         raise CoarseRunConditionFacesEmptyError(coarse_out["empty_condition_faces"])
     coarse_seconds = time.perf_counter() - t_coarse
@@ -740,12 +711,9 @@ def derive_from_coarse_run(
     rho = np.asarray(coarse_out["result"].rho, dtype=float)
     # 二値化に固定要素(ρ=1)を明示的に足す。閾値がどれだけ高くても条件は落とさない。
     binary = ((rho >= thr) | np.asarray(coarse_out["solid"], dtype=bool)) & coarse.mask
-    # **膨張は本番の格子でかける(再サンプルのあと)。** 膨張の量は mm で持つと決めたので
-    # (`grow_by_mm`)、どちらの格子でかけるかは「その mm が何段階に量子化されるか」を決める:
-    # 粗い格子でかけると量子は粗い要素サイズ(実測 6.75mm)になり、**0〜6.74mm がすべて
-    # 膨張0と同じ塊になる**(2026-09-04実測: 2mm / 4mm が 0mm と同じ 2414 要素)。本番の
-    # 格子なら量子は本番の要素サイズ(3.63mm)まで下がる。タスクの手順は膨張→再サンプルの
-    # 順だが、**その順序では mm の指定が実質2〜3段階しか取れない**ので入れ替えた。
+    # **膨張は本番の格子でかける(再サンプルのあと)。** 粗い格子でかけると膨張の量が粗い
+    # 要素サイズに量子化され、mm の指定が実質2〜3段階しか取れなくなる(実測は docs/TOPOPT.md
+    # 「4条件から塊を導出する — 案5」)。本番の格子でかければ量子は本番の要素サイズまで下がる。
     resampled = resample_nearest(binary, coarse.grid, fine.grid)
     grown = grow_by_mm(resampled, fine.grid, dilate_mm)
 
@@ -848,9 +816,9 @@ def derive_from_coarse_run(
 # 既定の導出(入口を1つにする)
 # ---------------------------------------------------------------------------
 
-# **既定の導出。** 2026-09-04に案1(`"bbox"`)から案5(`"coarse_run"`)へ倒した。
-# 根拠は docs/TOPOPT.md「既定をどちらにすべきか」——「速い・姿勢依存が消える・コンプライアンスは
-# 同等以上」で、負けているのは代理指標(壁に接した材料の割合)の 0° の1項目だけ。
+# **既定の導出は案5(`"coarse_run"`)。** 根拠は docs/TOPOPT.md「既定をどちらにすべきか」
+# ——「速い・姿勢依存が消える・コンプライアンスは同等以上」で、負けているのは
+# 代理指標(壁に接した材料の割合)の 0° の1項目だけ。
 DEFAULT_DERIVATION = "coarse_run"
 
 # 名前 → 導出。名前を受け取る側(`perf.py --derivation` / 受入検査)がここを引く。
@@ -1076,7 +1044,7 @@ def tilted_conditions(angle_deg: float = 30.0, *, radius: float = 26.0) -> Condi
     """**軸に乗らない姿勢**(既定 z 軸 30°)で、除外が塊の中央を大きく貫く題材。
 
     30° を既定にしてあるのは、45° ではなく **30° が塊を一番膨らませる**という実測による
-    (`20260903-2234`。45° は条件の最長辺が縮むぶん余白も縮む)。除外は 2 つのパッドの間を
+    (45° は条件の最長辺が縮むぶん余白も縮む)。除外は 2 つのパッドの間を
     貫く太い円柱で、既定の `radius=26` は**箱の 25% を削る**(解像度 14/18/30/44 で実測)。
 
     **`radius` を上げても `DesignSpaceDisconnectedError` にはならない。** 円柱は塊の上下を
