@@ -62,6 +62,7 @@ for _stream in (sys.stdout, sys.stderr):
 from build123d import Box, Cylinder, Pos, Rotation  # noqa: E402
 
 import anchor as an  # noqa: E402
+import bench  # noqa: E402
 import simp  # noqa: E402
 import voxelize as vx  # noqa: E402
 
@@ -72,6 +73,9 @@ RESULTS: dict[str, object] = {}
 TILTED = Rotation(12.0, 31.0, 7.0) * Box(40, 24, 16)
 PLATE = Box(40, 24, 10)
 HALF_CYLINDER = Cylinder(10, 30) & Pos(10, 0, 0) * Box(20, 30, 40)
+# 検査[5]の曲面。**モジュール定数にしてあるのは `_table` のメモ化を効かせるため**
+# (呼ぶたびに `Cylinder(12, 40)` を作ると別物になり、同じ格子を作り直すことになる)。
+FULL_CYLINDER = Cylinder(12, 40)
 
 
 def check(name: str, ok: bool, detail: str) -> None:
@@ -81,9 +85,17 @@ def check(name: str, ok: bool, detail: str) -> None:
         FAILURES.append(f"{name}: {detail}")
 
 
+_TABLES: dict = {}
+
+
 def _table(shape, n: int, **kw) -> tuple[vx.VoxelModel, an.AnchorTable]:
-    model = vx.voxelize(shape, n)
-    return model, an.build_anchors(model.soup, model.grid, **kw)
+    """同じ (形, 解像度) は作り直さない。**返す値は素の構築と同一** —— 検査の意味は変えず、
+    同じ格子を何度も組み直していたぶんだけを削っている。"""
+    key = (id(shape), n, tuple(sorted(kw.items())))
+    if key not in _TABLES:
+        model = vx.voxelize(shape, n)
+        _TABLES[key] = (model, an.build_anchors(model.soup, model.grid, **kw))
+    return _TABLES[key]
 
 
 def _face_of(soup: vx.TriangleSoup, kind: str, normal=None, near=None) -> int:
@@ -298,9 +310,10 @@ def check_load_conservation() -> None:
 # ---------------------------------------------------------------------------
 def check_resolution_convergence() -> None:
     print("[2] 解像度非依存(重心・担当面積が真の面へ収束する)")
+    res = bench.ANCHOR_CONVERGENCE["resolutions"]
     cases = (
-        ("傾けた箱の平面", TILTED, _tilted_face, (16, 32, 64)),
-        ("半円柱の曲面", HALF_CYLINDER, lambda s: _face_of(s, "cylinder_partial"), (16, 32, 64)),
+        ("傾けた箱の平面", TILTED, _tilted_face, res),
+        ("半円柱の曲面", HALF_CYLINDER, lambda s: _face_of(s, "cylinder_partial"), res),
     )
     for label, shape, pick, resolutions in cases:
         area_err = []
@@ -463,7 +476,11 @@ def check_normals() -> None:
 # 5. 偽の集中が出ていない
 # ---------------------------------------------------------------------------
 def _smoothed_uniformity(
-    model: vx.VoxelModel, table: an.AnchorTable, face: int, loads: np.ndarray | None = None
+    model: vx.VoxelModel,
+    table: an.AnchorTable,
+    face: int,
+    loads: np.ndarray | None = None,
+    cache: dict | None = None,
 ) -> tuple[np.ndarray, int]:
     """節点荷重をガウス平滑化し、面の内側での荷重密度のばらつきを返す。
 
@@ -488,14 +505,23 @@ def _smoothed_uniformity(
     P = np.concatenate(pts_list)
     A = np.concatenate(area_list)
 
+    # `smooth_true` は `loads` に依存しない(節点位置と真の面積分布だけで決まる)。
+    # **同じ面を本番と対照で2回通すので、ここを共有しないと支配項を2度払う**
+    # (実測: 円筒の面で 1回 25秒。節点3,708 x 標本178,848 の exp が費用の全部)。
     smooth_load = np.empty(X.shape[0])
-    smooth_true = np.empty(X.shape[0])
+    smooth_true = cache.get("smooth_true") if cache is not None else None
+    want_true = smooth_true is None
+    if want_true:
+        smooth_true = np.empty(X.shape[0])
     for s in range(0, X.shape[0], 128):
         x = X[s : s + 128]
         d2 = ((x[:, None, :] - X[None, :, :]) ** 2).sum(axis=2)
         smooth_load[s : s + 128] = (np.exp(-d2 * inv) * L).sum(axis=1)
-        d2 = ((x[:, None, :] - P[None, :, :]) ** 2).sum(axis=2)
-        smooth_true[s : s + 128] = (np.exp(-d2 * inv) * A).sum(axis=1)
+        if want_true:
+            d2 = ((x[:, None, :] - P[None, :, :]) ** 2).sum(axis=2)
+            smooth_true[s : s + 128] = (np.exp(-d2 * inv) * A).sum(axis=1)
+    if want_true and cache is not None:
+        cache["smooth_true"] = smooth_true
     # 縁の効果が入らない節点だけを見る(核が面からはみ出していない = 真の平滑値が最大付近)。
     interior = smooth_true >= 0.985 * smooth_true.max()
     ratio = smooth_load[interior] / smooth_true[interior]
@@ -508,7 +534,7 @@ def check_no_false_concentration() -> None:
     for label, shape, pick, n in (
         ("軸に整列した平面", PLATE, lambda s: _face_of(s, "plane", normal=(0, 0, 1)), 32),
         ("傾けた平面", TILTED, _tilted_face, 32),
-        ("曲面(円筒)", Cylinder(12, 40), lambda s: _face_of(s, "cylinder_full"), 24),
+        ("曲面(円筒)", FULL_CYLINDER, lambda s: _face_of(s, "cylinder_full"), 24),
     ):
         model, table = _table(shape, n)
         a = table[pick(model.soup)]
@@ -525,16 +551,17 @@ def check_no_false_concentration() -> None:
     spread = {}
     for label, shape, pick, n in (
         ("傾けた平面", TILTED, _tilted_face, 32),
-        ("曲面(円筒)", Cylinder(12, 40), lambda s: _face_of(s, "cylinder_full"), 32),
+        ("曲面(円筒)", FULL_CYLINDER, lambda s: _face_of(s, "cylinder_full"), 32),
     ):
         model, table = _table(shape, n)
         face = pick(model.soup)
-        ratio, count = _smoothed_uniformity(model, table, face)
+        shared: dict = {}
+        ratio, count = _smoothed_uniformity(model, table, face, cache=shared)
         dev = float(np.abs(ratio - 1.0).max())
         # 対照: 面積重みを外して節点で等分する(これが落ちることで検査が効いていると分かる)。
         a = table[face]
         equal = np.full(a.areas.shape, a.areas.sum() / a.areas.size)
-        ratio_eq, _ = _smoothed_uniformity(model, table, face, loads=equal)
+        ratio_eq, _ = _smoothed_uniformity(model, table, face, loads=equal, cache=shared)
         dev_eq = float(np.abs(ratio_eq - 1.0).max())
         spread[label] = {"anchor": dev, "equal_split_control": dev_eq, "nodes": count}
         check(
@@ -688,7 +715,10 @@ def check_end_to_end() -> None:
     out_path = Path(__file__).resolve().parent / "output" / "bracket.stl"
     t0 = time.perf_counter()
     out = an.run_pipeline(
-        elements_long_axis=32, max_iter=60, volfrac=0.3, stl_path=out_path
+        elements_long_axis=bench.ANCHOR_END_TO_END["elements_long_axis"],
+        max_iter=bench.ANCHOR_END_TO_END["max_iter"],
+        volfrac=0.3,
+        stl_path=out_path,
     )
     seconds = time.perf_counter() - t0
     model = out["model"]
@@ -712,7 +742,7 @@ def check_end_to_end() -> None:
         history[-1] < history[0],
         f"C {history[0]:.4f} → {history[-1]:.4f} ({len(history)}反復)",
     )
-    tail = np.array(history[-10:])
+    tail = np.array(history[-bench.TAIL_WINDOW :])
     swing = float((tail.max() - tail.min()) / tail.mean())
     check(
         "終盤10反復の変動が1%未満(check_simp の完了条件1-(b)と同じ基準)",

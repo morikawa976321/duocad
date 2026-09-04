@@ -35,7 +35,8 @@
    捕まえられなかった(2026-09-02発見。engine
    `winding-fix-at-export-only-leaks-to-other-consumers`)。
 
-実行には`simp.py`のプリセット(40x16x16・60反復)を1回回す(約1.5〜2分)。8番目の検査だけは
+実行には片持ち梁を1回回す(`bench.MESH_MATERIAL` = 35x14x14・15反復。約11秒)。**ここだけ
+プリセット(20x8x8)を使わない** —— 理由は `bench.py` の該当コメント。8番目の検査だけは
 高速な合成密度場で行うので、この所要時間には影響しない。
 """
 
@@ -55,6 +56,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
+import bench
 import mesh
 import simp
 
@@ -73,14 +75,14 @@ def check(name: str, ok: bool, detail: str) -> None:
 # 準備: プリセットのSIMPを1回回し、そこから mesh.build_surface でメッシュを作る
 # ---------------------------------------------------------------------------
 def run_pipeline() -> tuple[simp.Result, mesh.MeshResult]:
-    p = simp.PRESET
+    p = bench.MESH_MATERIAL
     print(
-        f"[0] プリセットの片持ち梁を最適化 "
+        f"[0] 片持ち梁を最適化 "
         f"({p['nelx']}x{p['nely']}x{p['nelz']} = {p['nelx'] * p['nely'] * p['nelz']}要素, "
-        f"最大{p['max_iter']}反復)"
+        f"最大{p['max_iter']}反復。**プリセットより細かい** —— 理由は bench.MESH_MATERIAL)"
     )
     t0 = time.perf_counter()
-    result = simp.run_preset()
+    result = simp.run_preset(**p)
     elapsed = time.perf_counter() - t0
     print(f"  SIMP完了: {len(result.history)}反復 / {elapsed:.1f}秒")
 

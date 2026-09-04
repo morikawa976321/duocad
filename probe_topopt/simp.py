@@ -20,10 +20,16 @@ SOLVE_RESIDUAL_TOL = 1e-6
 # (PRESET は片持ち梁の題材、こちらは `optimize` の既定値)。値は歴史的に一致している。
 DEFAULT_VOLFRAC = 0.3
 
+# 片持ち梁の基準題材。**受入検査3本がこれを回すので、大きさがそのまま検証の1周の長さになる。**
+# 40x16x16(1周およそ11分)から 20x8x8 へ落としてある(2026-09-04)。**反復数は 60 のまま** ——
+# 30反復まで落とすと終盤10反復の変動が 2.47% になり、`check_simp.py` (b) の1%を割る。
+# 消してはならないが、検査の基準として使い続ける限り寸法と反復数は変えてよい
+# (engine `cantilever-preset-is-the-regression-baseline-not-a-demo`)。
+# **`nelz` は偶数**(奇数だと `_build_load` が荷重を2節点へ割り、z対称性の検査の意味が変わる)。
 PRESET: dict = {
-    "nelx": 40,
-    "nely": 16,
-    "nelz": 16,
+    "nelx": 20,
+    "nely": 8,
+    "nelz": 8,
     "volfrac": 0.3,
     "penal": 3.0,
     "rmin": 1.5,

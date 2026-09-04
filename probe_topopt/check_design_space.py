@@ -68,6 +68,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import anchor as an
+import bench
 import design_space as ds
 import voxelize as vx
 
@@ -75,8 +76,8 @@ FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
 
 # 検査4の格子。60mm のブラケットを一回り大きい箱で包む。**収束ではなく分離を見るので粗い。**
-LONG_AXIS = 26
-MAX_ITER = 30
+LONG_AXIS = bench.DESIGN_SPACE_BOX["elements_long_axis"]
+MAX_ITER = bench.DESIGN_SPACE_BOX["max_iter"]
 VOLFRAC = 0.3
 # 塊にする箱(ワールド座標)。ブラケットの bbox は x -30..30 / y -12..12 / z -12..18。
 DESIGN_BOX_LO = (-31.0, -13.0, -13.0)
@@ -417,8 +418,8 @@ def check_material_leaves_the_input_solid() -> None:
 #   **どれも「実装を壊すと実際に落ちる」ことを変異検査で確認してある**(README に記録)。
 # ===========================================================================
 # 検査の格子。**収束ではなく導出の性質を見るので粗い。**
-CASE1_LONG_AXIS = 22
-CASE1_MAX_ITER = 25
+CASE1_LONG_AXIS = bench.DESIGN_SPACE_CASE1["elements_long_axis"]
+CASE1_MAX_ITER = bench.DESIGN_SPACE_CASE1["max_iter"]
 _CASE1: dict = {}
 
 

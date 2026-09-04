@@ -38,6 +38,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
+import bench
 import simp
 import stress
 
@@ -388,7 +389,8 @@ def build_tapered_plate(mult: int) -> tuple[simp.Model, np.ndarray, float]:
     x > L/3 から上端が45度で下がり、幅が半分になる。細い側の公称応力 F/A が分かって
     いるので、「本当の応力集中」と「階段の角の離散化ノイズ」を数字で分けられる。
     """
-    nelx, nely, nelz = 24 * mult, 16 * mult, 2 * mult
+    bx, by, bz = bench.STRESS_TAPERED["base"]
+    nelx, nely, nelz = bx * mult, by * mult, bz * mult
     solid = np.zeros((nelx, nely, nelz), dtype=bool)
     for i in range(nelx):
         top = max(nely - max(0, i - nelx // 3), nely // 2)
@@ -430,7 +432,7 @@ def build_tapered_plate(mult: int) -> tuple[simp.Model, np.ndarray, float]:
 def check_representative_rule() -> None:
     print("\n[4] 代表応力の規則 / 素の max との比較 (完了条件3)")
     rows = []
-    for mult in (1, 2, 3):
+    for mult in bench.STRESS_TAPERED["mults"]:
         model, rho, nominal = build_tapered_plate(mult)
         t0 = time.perf_counter()
         u = model.solve(rho, 3.0, solver="direct")
@@ -489,7 +491,7 @@ def check_representative_rule() -> None:
 def check_representative_on_simp_output() -> None:
     print("\n[4b] 実際の SIMP 出力(中間密度あり)でも同じ規則が効く")
     t0 = time.perf_counter()
-    result = simp.run_preset(nelx=20, nely=10, nelz=10, max_iter=25, keep_model=True)
+    result = simp.run_preset(**bench.STRESS_SIMP, keep_model=True)
     check(
         "keep_model=True で解いた Model が Result から取れる",
         isinstance(result.model, simp.Model),

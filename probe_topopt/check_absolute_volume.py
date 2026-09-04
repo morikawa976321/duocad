@@ -47,6 +47,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import anchor as an
+import bench
 import design_space as ds
 import simp
 
@@ -71,7 +72,7 @@ def rel(a: float, b: float) -> float:
 # ---------------------------------------------------------------------------
 # 合成問題: 基準の設計領域のまわりに空きの層を足した片持ち梁
 # ---------------------------------------------------------------------------
-BASE = (12, 6, 6)  # 物理として解く部分の要素数(pad によらず同じ)
+BASE = bench.ABSOLUTE_VOLUME_BASE  # 物理として解く部分の要素数(pad によらず同じ)
 SPACING = 2.0  # mm
 ELEMENT_VOLUME = SPACING**3  # 8.0 mm^3
 
@@ -225,7 +226,9 @@ def check_padding_invariance() -> None:
     spaces = {}
     for ratio in (0.10, 0.40):
         t0 = time.perf_counter()
-        spaces[ratio] = ds.derive(conditions, margin_ratio=ratio, spacing=4.0)
+        spaces[ratio] = ds.derive(
+            conditions, margin_ratio=ratio, spacing=bench.ABSOLUTE_VOLUME["spacing"]
+        )
         print(
             f"    余白比率 {ratio}: 格子 {spaces[ratio].grid.shape} / 塊 "
             f"{spaces[ratio].element_count} 要素 / 要素体積 "
@@ -243,7 +246,12 @@ def check_padding_invariance() -> None:
     target = 100000.0  # mm^3
     got = {}
     for name, space in (("small", small), ("large", large)):
-        out = ds.run_topopt(space, material_mm3=target, max_iter=5, stl_path=STL_TMP)
+        out = ds.run_topopt(
+            space,
+            material_mm3=target,
+            max_iter=bench.ABSOLUTE_VOLUME["max_iter"],
+            stl_path=STL_TMP,
+        )
         got[name] = out["achieved_material_mm3"]
         check(
             f"絶対量({name}): 指定どおり(相対1e-6)",
@@ -260,7 +268,12 @@ def check_padding_invariance() -> None:
     )
     vf = {}
     for name, space in (("small", small), ("large", large)):
-        out = ds.run_topopt(space, volfrac=0.3, max_iter=5, stl_path=STL_TMP)
+        out = ds.run_topopt(
+            space,
+            volfrac=0.3,
+            max_iter=bench.ABSOLUTE_VOLUME["max_iter"],
+            stl_path=STL_TMP,
+        )
         vf[name] = out["achieved_material_mm3"]
     check(
         "分率: 余白比率を変えると材料の総体積が変わる(検出力の確認)",
@@ -424,14 +437,17 @@ def check_unreachable() -> None:
 # ---------------------------------------------------------------------------
 # 4. 既定の挙動が1ビットも変わっていない
 # ---------------------------------------------------------------------------
+# **題材を変えたら取り直すのが正しい。** この検査の意味は「この変更の前後で1ビットも
+# 変わらない」ことであって、特定の数値を守ることではない。下のプリセットの値は
+# 2026-09-04 に格子を 40x16x16 → 20x8x8 へ縮めたときに取り直した(2回走らせて一致を確認)。
 BASELINES = {
     "preset": {
         "n_iter": 60,
         "stopped_by": "max_iter",
-        "c_first": "0x1.243b0e568cec5p+8",
-        "c_last": "0x1.ec36dd1c25ea6p+3",
-        "vol_sum": "0x1.8000000001779p+11",
-        "rho_sha": "1fdbe612d96cb8f2a23b2494d846139db8f79468cde747efc1da503e361b9281",
+        "c_first": "0x1.b857e1fe15ed2p+8",
+        "c_last": "0x1.1258af5bb9daap+5",
+        "vol_sum": "0x1.7fffffffc728cp+8",
+        "rho_sha": "8d037d7e9074d5d956db86337b628742f44a26b1c78796091fc65e1c41e27cdd",
     },
     "passive": {
         "n_iter": 12,

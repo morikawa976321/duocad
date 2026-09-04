@@ -376,7 +376,11 @@ def _cli() -> int:
     parser.add_argument("--out", default=str(_ROOT / "output" / "optimized.stl"))
     args = parser.parse_args()
 
-    print("SIMP最適化を実行中(プリセット 40x16x16、約2分)...")
+    p = simp.PRESET
+    print(
+        f"SIMP最適化を実行中(プリセット {p['nelx']}x{p['nely']}x{p['nelz']} / "
+        f"{p['max_iter']}反復)..."
+    )
     t0 = time.perf_counter()
     result = simp.run_preset()
     simp_seconds = time.perf_counter() - t0

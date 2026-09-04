@@ -36,6 +36,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
+import bench
 import simp
 
 # --- 弾性論から出る参照値(E=1, nu=0.3) --------------------------------------
@@ -174,7 +175,7 @@ def z_symmetry_error(rho: np.ndarray) -> float:
 # 3〜5. 完了条件1 (a)(b)(c)
 # ---------------------------------------------------------------------------
 def check_preset() -> simp.Result:
-    p = simp.PRESET
+    p = bench.PRESET
     print(
         f"\n[3-5] プリセットの片持ち梁 "
         f"({p['nelx']}x{p['nely']}x{p['nelz']} = {p['nelx'] * p['nely'] * p['nelz']}要素, "
@@ -210,8 +211,12 @@ def check_preset() -> simp.Result:
     )
     check("有限値のみ", bool(np.isfinite(c_hist).all()), "NaN/infなし")
     check("すべて正", bool((c_hist > 0).all()), f"min={c_hist.min():.4f}")
-    tail = c_hist[-10:]
-    check("終盤10反復あるか", tail.size == 10, f"len={tail.size}")
+    tail = c_hist[-bench.TAIL_WINDOW :]
+    check(
+        f"終盤{bench.TAIL_WINDOW}反復あるか",
+        tail.size == bench.TAIL_WINDOW,
+        f"len={tail.size}",
+    )
     swing = float((tail.max() - tail.min()) / tail.mean())
     check("終盤10反復の変動が1%未満", swing < 0.01, f"(max-min)/mean={swing:.4%}")
 
@@ -244,9 +249,15 @@ def check_preset() -> simp.Result:
 def check_symmetry_direct() -> None:
     """直接解法での対称性。**反復解法の丸めを排して定式化そのものを見る**ので、
     許容は1e-6ではなく1e-9に取る(ここが緩いと(c)は反復回数を増やすだけで崩れうる)。"""
-    print("\n  (c-2) z対称性(直接解法 20x10x10 / 30反復)")
+    g = bench.SYMMETRY_DIRECT
+    print(
+        f"\n  (c-2) z対称性(直接解法 "
+        f"{g['nelx']}x{g['nely']}x{g['nelz']} / {g['max_iter']}反復)"
+    )
     t0 = time.perf_counter()
-    res = simp.optimize(20, 10, 10, max_iter=30, solver="direct")
+    res = simp.optimize(
+        g["nelx"], g["nely"], g["nelz"], max_iter=g["max_iter"], solver="direct"
+    )
     err = z_symmetry_error(res.rho)
     check(
         "直接解法の密度場がz対称",
