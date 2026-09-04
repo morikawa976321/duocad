@@ -156,7 +156,7 @@ def check_watertight(mr: mesh.MeshResult) -> None:
 # 2. 体積の一致(marching cubes直後)
 # ---------------------------------------------------------------------------
 def check_volume_matches_density(mr: mesh.MeshResult) -> None:
-    print("\n[2] 体積の一致(平滑化前 vs sum(rho)x要素体積)")
+    print("\n[2] 体積の一致(marching cubesに実際に渡した場 vs sum(rho_clean)x要素体積)")
     # `mr.rho_clean` は**段0(ガウシアン平滑化+塗り直し)を経た後**の場(`mesh.build_surface`
     # の実装順序どおり)。既定で段0が有効なので、ここは常に「marching cubesが実際に
     # 受け取った場」と比べていることになる — 平滑化の有無に関わらず同じ式で書ける。
