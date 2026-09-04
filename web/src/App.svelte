@@ -35,6 +35,7 @@
   } from './commands/features'
   import { IMPORT_STEP, changesDocument } from './commands/files'
   import { OPTIMIZE_MODE_COMMANDS, OPTIMIZE_PRESET_ROLE } from './commands/optimize'
+  import OptimizePanel, { type OptimizeNotice } from './OptimizePanel.svelte'
   import {
     DEFAULT_SKETCH_COMMAND_ID,
     SKETCH_COMMANDS,
@@ -59,6 +60,10 @@
     type DocumentInfo,
     type EdgesPayload,
     type FilePayload,
+    type OptimizeConditionsReport,
+    type OptimizeProgress,
+    type OptimizeResolutionPayload,
+    type OptimizeResultPayload,
     type PreviewPayload,
     type SelectionRef,
     type SelectionState,
@@ -434,7 +439,104 @@
     onAiToolCall: (call) => (aiTranscript = [...aiTranscript, { kind: 'tool', call }]),
     onAiResult: (result) => (aiTranscript = [...aiTranscript, { kind: 'result', result }]),
     onAiError: handleAiError,
+    onOptimizeConditions: (report) => (optimizeConditions = report),
+    onOptimizeResolution: (payload) => (optimizeResolution = payload),
+    onOptimizeStatus: (running, cancelling) => {
+      optimizeRunning = running
+      // **中断中の印は「走っている間」だけ**。走り終わったら畳む —— 畳まないと、
+      // 次に実行を押した瞬間に中断表示から始まって見える。
+      optimizeCancelling = running && cancelling ? true : running ? optimizeCancelling : false
+    },
+    onOptimizeProgress: (event) => (optimizeProgress = event),
+    onOptimizeResult: handleOptimizeResult,
+    onOptimizeError: (message, problems, cancelled) => {
+      optimizeProgress = null
+      // **中断はエラーではない**(人がそう言ったのだから、赤いトーストで驚かせない)。
+      // パネルには残す —— 「押したのに何も増えていない」の理由が画面から読める必要がある。
+      if (cancelled) {
+        optimizeNotice = {
+          kind: 'info',
+          lines: ['中断した。文書は1ビットも変わっていない(結果のボディは足していない)'],
+        }
+        return
+      }
+      optimizeNotice = { kind: 'bad', lines: [message, ...problems] }
+      fail(`最適化: ${message}`)
+    },
   })
+
+  // ---------------------------------------------------------------- H: 形状最適化を走らせる
+  //
+  // **配りもの(`state.optimize`)とは別の口**である —— あちらは「条件がどう置かれているか」、
+  // ここにあるのは「走らせられるか / どの解像度で / いま何反復目か / 結果はどうだったか」で、
+  // どれも操作ログに載らない(`duocad/catalog.py` の `category="protocol"`)。
+  let optimizeConditions = $state<OptimizeConditionsReport | null>(null)
+  let optimizeResolution = $state<OptimizeResolutionPayload | null>(null)
+  /** 最小部材幅の入力欄の**生の文字列**。数にできない途中の打鍵を握り潰さない。 */
+  let optimizeRminText = $state('')
+  /** 解像度の目盛りの位置。**0が既定(いちばん粗い)**で、増やすほど細かい。 */
+  let optimizeStepIndex = $state(0)
+  let optimizeRunning = $state(false)
+  let optimizeCancelling = $state(false)
+  let optimizeProgress = $state<OptimizeProgress | null>(null)
+  /** **次に走らせるまで消えない通知**(トーストは8秒で消えるので、結果の信用度はこちら)。 */
+  let optimizeNotice = $state<OptimizeNotice | null>(null)
+
+  /** 入力欄の文字列を、サーバへ渡せる数へ(空・数でない・0以下は「指定なし」)。 */
+  const optimizeRminMm = $derived.by(() => {
+    const value = Number.parseFloat(optimizeRminText)
+    return Number.isFinite(value) && value > 0 ? value : null
+  })
+
+  /** いま選ばれている段。目盛りが縮んだときのために毎回丸め直す。 */
+  const optimizeStep = $derived.by(() => {
+    const steps = optimizeResolution?.steps ?? []
+    if (steps.length === 0) return null
+    return steps[Math.min(optimizeStepIndex, steps.length - 1)] ?? null
+  })
+
+  function runOptimization(): void {
+    optimizeProgress = null
+    optimizeNotice = null
+    session.runOptimization({
+      rminMm: optimizeRminMm,
+      elementSizeMm: optimizeStep?.element_size_mm ?? null,
+    })
+  }
+
+  /**
+   * 結果を受けた。**`state` で3つに分かれる**(`20260904-1704` の契約①)。
+   *
+   * **`"done"` 以外は文書が1ビットも変わっていない**ので、そのことを通知に書く ——
+   * 「走ったのに何も増えていない」を、利用者が画面から読めるようにするため。
+   * `warning` はトーストにも出る(`onWarning` 経由)が、あちらは気づかせる役で、
+   * **読み返す役はここ**である。
+   */
+  function handleOptimizeResult(result: OptimizeResultPayload): void {
+    optimizeProgress = null
+    if (result.state === 'done') {
+      const safety = result.safety_factor === null ? '—' : result.safety_factor.toFixed(2)
+      optimizeNotice = {
+        kind: result.warning ? 'bad' : 'info',
+        lines: [
+          `結果を「${result.name}」として足した(三角形 ${result.triangle_count} 枚 ・ ` +
+            `安全率 ${safety} ・ ${Math.round(result.seconds)}秒)`,
+          '元のボディは1つも消えていない。結果は表示とSTL書き出しだけができる(編集はできない)',
+          ...(result.warning ? [result.warning] : []),
+        ],
+      }
+      note(`最適化が終わった: ${result.name}`)
+      return
+    }
+    optimizeNotice = {
+      kind: 'bad',
+      lines: [
+        result.warning ?? '結果を作れなかった',
+        '文書は1ビットも変わっていない(結果のボディは足していない)。' +
+          '解像度を1段細かくするか、条件面を大きい面に取り直すこと',
+      ],
+    }
+  }
 
   /**
    * **情報**を1行、ステータスバーへ出す(状態の説明・成功の報告)。
@@ -975,9 +1077,25 @@
    * 画面全体を囲むドラッグ(実測2835面)を、既に大きく選んだ状態の上へ重ねたときだけ
    * 効く経路なので、選択を空にして測ると表に出ない。
    */
+  /**
+   * 当たった面を選択の参照へ翻訳する。**メッシュボディだけはボディ参照へ畳む。**
+   *
+   * メッシュに指せる面は無い(`selection.select_face` が断る)が、**指せるものが
+   * 何も無いわけではない** —— ボディ単位なら選べて、そのまま削除できる。畳んでおけば
+   * 「クリックしても何も起きない」も「一括選択が丸ごと落ちる」も起きず、しかも
+   * **編集verbは自然に押せないまま**になる(`move_body` / `fillet` / `chamfer` /
+   * 領域押し出しはどれも `kinds` にボディを持たないので、選択要件を満たさない)。
+   * **押せるのに断られる、を画面から消すのはこの1本**である。
+   */
+  function pickedRef(bodyId: string, faceIndex: number): SelectionRef {
+    if (meshBodyIds.has(bodyId)) return { body: bodyId, kind: 'body', index: null }
+    return faceRef(bodyId, faceIndex)
+  }
+
   function onBoxSelect(event: BoxSelectEvent): void {
     const picked: SelectionRef[] = [
-      ...event.faces.map((item) => faceRef(item.bodyId, item.faceIndex)),
+      // **同じボディの面が何枚囲まれても参照は1つ**(`refKey` で重複を落とす)。
+      ...dedupeRefs(event.faces.map((item) => pickedRef(item.bodyId, item.faceIndex))),
       ...event.edges.map((item) => ({ body: item.bodyId, kind: 'edge' as const, index: item.edgeIndex })),
       ...event.vertices.map((item) => ({ body: item.bodyId, kind: 'vertex' as const, index: item.vertexIndex })),
       ...event.regions.map((item) => ({ sketch: item.sketchId, index: item.index })),
@@ -1013,6 +1131,17 @@
   function selectOnly(ref: SelectionRef): void {
     const current = selection?.items ?? []
     modifySelection([ref], current.filter((item) => !sameRef(item, ref)))
+  }
+
+  /** 同じ参照が2つ以上入らないようにする(メッシュの面を畳むと同じボディ参照が並ぶ)。 */
+  function dedupeRefs(refs: SelectionRef[]): SelectionRef[] {
+    const seen = new Set<string>()
+    return refs.filter((ref) => {
+      const key = refKey(ref)
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
   }
 
   /** `selectOnly` の複数版 —— 選択集合を `refs` そのものに置き換える。 */
@@ -1057,6 +1186,13 @@
         return
       }
       if (event.hit !== null) {
+        // **メッシュボディには貼れない**(平面が取れない。`sketch.resolve_plane` が断る)。
+        // ここはピックを畳まずに理由を出す —— ボディ参照へ畳んでも `sketch_create` は
+        // 面を要求するので、押した結果は変わらないまま理由だけが消える。
+        if (meshBodyIds.has(event.hit.bodyId)) {
+          note('メッシュボディにはスケッチを貼れない(平面が取れない)')
+          return
+        }
         host.useSelectedFaceAsPlane()
         selectOnly(faceRef(event.hit.bodyId, event.hit.faceIndex))
         return
@@ -1102,7 +1238,7 @@
       editSelection({ body: event.hit.bodyId, kind: 'body', index: null }, event.mode)
       return
     }
-    editSelection(faceRef(event.hit.bodyId, event.hit.faceIndex), event.mode)
+    editSelection(pickedRef(event.hit.bodyId, event.hit.faceIndex), event.mode)
   }
 
   // ---------------------------------------------------------------- C: スケッチ
@@ -1464,6 +1600,18 @@
   // (`kind="reference"`・読み込みの原本を不可視のまま持つ二重管理)は2026-09-03に
   // 概念ごと撤去した([[duocad-reference-body-removal-decided]])。
   const partBodies = $derived(model?.bodies ?? [])
+  /**
+   * **面を持たないボディ**(三角形メッシュ)のID。`duocad.document.MESH_KIND` と同じ綴り。
+   *
+   * これが要るのは**ピックの畳み込み**のためである(`pickedRef`)。viewport は
+   * メッシュも1枚の面(添字1)として描くので、素直に翻訳すると `{kind:'face'}` の
+   * 参照が飛び、コアの `select_face` が「メッシュボディには面が無い」と断る
+   * (`20260904-1703` の契約②)。**ドラッグの一括選択はまとめて1回で送る**ので、
+   * 画面を囲んだドラッグにメッシュが1つ入っているだけで**選択が丸ごと落ちる**。
+   */
+  const meshBodyIds = $derived(
+    new Set(partBodies.filter((body) => body.kind === 'mesh').map((body) => body.body_id)),
+  )
 
   function setVisible(bodyId: string, visible: boolean): void {
     session.setVisible(bodyId, visible, nextOp())
@@ -1553,6 +1701,25 @@
       loads: optimize.loads.map((item) => ({ bodyId: item.body, faceIndex: item.index })),
       load: optimize.load,
     })
+  })
+
+  /**
+   * 最適化モードにいる間、**条件の点検と解像度の目盛りを取り直す**。
+   *
+   * 引き金は3つ: モードの出入り / 配りものの `state.optimize` が変わった(4 verb を
+   * 打った・undoした・部品を消した) / 最小部材幅を打ち替えた。**どちらも軽い**
+   * (点検は文書を舐めるだけ、解像度は条件面のbboxを数枚測るだけ)ので、
+   * 状態が届くたびに聞き直してよい。
+   *
+   * **走っている最中は聞き直さない** —— 実行の途中で `state` が動く経路は無いのに、
+   * 進捗のたびに往復を足す理由が無い。
+   */
+  $effect(() => {
+    void optimize
+    void optimizeRminMm
+    if (!optimizeMode || status !== 'open' || optimizeRunning) return
+    session.optimizeConditions()
+    session.optimizeResolution(optimizeRminMm)
   })
 
   /**
@@ -1659,6 +1826,15 @@
       wantedKinds,
       faceColor: (bodyId: string, faceIndex: number) => viewport?.faceColor({ bodyId, faceIndex }) ?? null,
       optimizeAnnotationCount: () => viewport?.optimizeAnnotationCount() ?? 0,
+      // H: 走らせる側。**実機検査が「押せるか / 何反復目か / 何が通知されたか」を
+      // 見るための穴**(どれも読むだけで、コアへは何も飛ばない)。
+      optimizeRunning,
+      optimizeCancelling,
+      optimizeConditions,
+      optimizeResolution,
+      optimizeStepIndex,
+      optimizeProgress,
+      optimizeNotice,
       optimizeAnnotations: () => viewport?.optimizeAnnotations() ?? { fixtures: [], loads: [] },
       // C: スケッチ。**実機検査が本物のクリックで描く**ための穴
       sketches,
@@ -1870,7 +2046,11 @@
           保持 {optimize?.preserve_bodies.length ?? 0} ・除外 {optimize?.exclude_bodies.length ?? 0}
           ・拘束 {optimize?.fixtures.length ?? 0} ・荷重 {optimize?.loads.length ?? 0}
         </span>
-        <button id="optimize-exit" onclick={exitOptimizeMode}>抜ける</button>
+        <!-- **走っている間は抜けさせない。** 抜けるとパネルごと消えて中断ボタンが
+             画面から無くなる(止める手段がゼロになる)。 -->
+        <button id="optimize-exit" disabled={optimizeRunning} onclick={exitOptimizeMode}>
+          抜ける
+        </button>
       </div>
     {/if}
     <!-- **verbの行。** モードが変わったらコマンド層ごと作り直す(集めかけの引数を持ち越さない)。
@@ -1879,7 +2059,7 @@
       <CommandHost
         bind:this={host}
         {selection}
-        busy={pendingOp !== null}
+        busy={pendingOp !== null || optimizeRunning}
         {selfSelections}
         commands={mode.kind === 'sketch'
           ? SKETCH_MODE_COMMANDS
@@ -1945,6 +2125,26 @@
            ビューポートの右上アンカーなので、ビューポートが右へ伸びるとダイアログの下へ入る)。
            **大きさは持たない**(`position: absolute` でフローの外)ので、ブラウザや Toast と
            同じく `.viewport` の寸法＝カメラのアスペクトには触らない。 -->
+      <!-- 形状最適化を走らせるパネル。**最適化モードのあいだだけ**出す。
+           `SettingsDialog` と同じく `.stage` の中の `position: absolute` なので、
+           `.viewport` の寸法＝カメラのアスペクトには触らない(styles.css の不変条件)。 -->
+      {#if optimizeMode}
+        <OptimizePanel
+          conditions={optimizeConditions}
+          resolution={optimizeResolution}
+          rminText={optimizeRminText}
+          stepIndex={optimizeStepIndex}
+          running={optimizeRunning}
+          cancelling={optimizeCancelling}
+          progress={optimizeProgress}
+          notice={optimizeNotice}
+          onRmin={(text) => (optimizeRminText = text)}
+          onStep={(index) => (optimizeStepIndex = index)}
+          onRun={runOptimization}
+          onCancel={() => session.cancelOptimization()}
+        />
+      {/if}
+
       <SettingsDialog
         open={settingsOpen}
         {fov}

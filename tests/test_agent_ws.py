@@ -127,7 +127,7 @@ async def _drain() -> None:
     (実行器スレッドからの `call_soon_threadsafe` はOSのスケジューラをまたぐので、
     1回のループ反復に収まる保証が無い)ので、実時間のスリープも混ぜる。
 
-    **それでも稀に(数%)「coroutine 'Server._broadcast_ai' was never awaited」が出ることがある**
+    **それでも稀に(数%)「coroutine 'Server._broadcast' was never awaited」が出ることがある**
     ——実行器スレッド発のスケジューリングとasyncioのready queueの相対順序は、この
     テストハーネス(1回の `asyncio.run` が数十ms で閉じる)の外では起きない競合であり、
     製品コード(イベントループが閉じない実サーバ)側の不具合ではない。`pyproject.toml` は

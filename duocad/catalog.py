@@ -1037,6 +1037,93 @@ COMMANDS: tuple[Command, ...] = (
             "`ws=\"special\"`)"
         ),
     ),
+    # ---------------------------------------------------------------- 形状最適化を走らせる(protocol)
+    #
+    # **verbではない。** 文書へ積まれるのは `run_optimization` が中で呼ぶ `add_mesh_body`
+    # 1本だけで、この4つは「点検する / 見積もる / 走らせる / 止める」であり操作ログに
+    # 載らない(`changes_document=False`。`run_optimization` が結果を入れる経路は
+    # `add_mesh_body` の側でログに載る)。したがって `catalog` の分類は `protocol` である。
+    #
+    # **4つとも `mcp=False`。** AIに走らせる口は今回は開けない —— 数分かかる同期の呼び出しを
+    # MCPのツールとして出すと、進捗も中断も運べないまま呼び出し側がタイムアウトする
+    # (WSは進捗イベントと `cancel_optimization` を持つのでこの経路だけを開ける)。
+    # AI から走らせたくなったら、まず**進捗と中断をMCPで運ぶ形**を決めること。
+    #
+    # **`ws="special"`** —— 表(`ws="table"`)は「載せた引数は全部必須」であり、ここは
+    # 省略できる引数しか無い(既定＝いちばん粗い設定で走る)。
+    Command(
+        name="optimize_conditions",
+        category="protocol",
+        description="",
+        session="optimize_conditions",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**走らせる前の点検**(`optimize_run.conditions_report`)。`problems` は"
+            "そのまま人に見せる文で、画面は実行ボタンの可否をここで決める。"
+            "**この版は拘束面1枚・荷重面1枚だけ**なので、2枚以上あることもここが断る"
+        ),
+    ),
+    Command(
+        name="optimize_resolution",
+        category="protocol",
+        description="",
+        params=(
+            Param(
+                "rmin_mm",
+                "number",
+                "最小部材幅[mm](省略すると要素サイズの上限は条件面だけで決まる)",
+                required=False,
+            ),
+        ),
+        session="optimize_resolution",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**軽い**(OCCTは条件面のbboxを数枚測るだけ)ので、最小部材幅を打つたびに"
+            "呼んでよい。返る `steps` が**粗い側の端から細かい方向へだけ**動く目盛りで、"
+            "各段に予想時間が付く。**時間は入力にしない**(時間から解像度を逆算すると、"
+            "最小部材幅と条件面の要求を黙って割る)"
+        ),
+    ),
+    Command(
+        name="run_optimization",
+        category="protocol",
+        description="",
+        params=(
+            Param("rmin_mm", "number", "最小部材幅[mm]", required=False),
+            Param("element_size_mm", "number", "要素サイズ[mm]。省くと上限側(既定)", required=False),
+            Param("target_safety_factor", "number", "目標安全率", required=False),
+            Param("name", "string", "結果のメッシュボディの名前", required=False),
+        ),
+        session="run_optimization",
+        ws="special",
+        mcp=False,
+        # **文書は変わりうる**が、載るのは中で呼ぶ `add_mesh_body` のログ1行であり、
+        # この名前でログに載るverbは無い。`changes_document` は「この名前がログに載るか」
+        # を意味する(`registered_verbs()` との突き合わせに使われる)ので偽にする。
+        changes_document=False,
+        note=(
+            "**重い**(既定の設定でも数十秒〜数分)。`net/ws.py` が `asyncio.to_thread` で"
+            "回し、進捗は `optimize_progress`、結果は `optimize_result` として配る"
+            "(応答は状態配信ではない)。**失敗しても文書は1ビットも変わらない**"
+        ),
+    ),
+    Command(
+        name="cancel_optimization",
+        category="protocol",
+        description="",
+        session="cancel_optimization",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**旗を立てるだけ**。実際に降りるのは次に進捗が出た時点で、"
+            "粗い段(1.2〜1.6秒)の中では止まらない(`20260904-1704` の契約③)"
+        ),
+    ),
     Command(
         name="get_edges",
         category="protocol",

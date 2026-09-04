@@ -642,6 +642,117 @@ export type AiTranscriptEntry =
   | { kind: 'result'; result: AiRunResult }
   | { kind: 'error'; message: string }
 
+// --------------------------------------------------------------------------------------
+// H: 形状最適化を走らせる — **verbではない**(`duocad/catalog.py` の `category="protocol"`)
+// --------------------------------------------------------------------------------------
+/**
+ * 走らせる前の点検(`duocad/optimize_run.py` の `conditions_report`)。
+ *
+ * **`problems` はそのまま人に見せる文**であって、画面が組み立て直すものではない ——
+ * 「拘束面が2枚ある。この版が扱えるのは1枚だけである」のように**理由と次の一手**が
+ * 入っている(`20260904-1704` の契約①)。ここで文言を作ると、コアの制限が変わっても
+ * 画面が古い説明を出し続ける。
+ */
+export interface OptimizeConditionsReport {
+  ready: boolean
+  problems: string[]
+  preserve_bodies: string[]
+  exclude_bodies: string[]
+  fixtures: Array<Record<string, unknown>>
+  loads: Array<Record<string, unknown>>
+  load: { magnitude: number; direction: string; vector: number[] | null } | null
+}
+
+/**
+ * 解像度の目盛り1段。**添字0がいちばん粗い**(＝既定)で、進むほど細かい。
+ *
+ * `seconds_typical` / `seconds_worst` は**予測ではなく2〜3倍の幅で読む値**である
+ * (`optimize_run.estimate_seconds` の `accuracy`)。画面はそれを添えて出すこと。
+ */
+export interface OptimizeResolutionStep {
+  index: number
+  element_size_mm: number
+  element_count: number
+  seconds_typical: number
+  seconds_worst: number
+}
+
+/**
+ * 要素サイズの上限・下限・目盛り(`optimize_run.resolution_limits`)。
+ *
+ * **`error` が入っていたら他のキーは無い** —— 条件面がまだ1枚も無いなど、
+ * 「設定の途中」で見積もれない状態(サーバは赤い札にせずここへ入れて返す)。
+ */
+export interface OptimizeResolutionPayload {
+  error?: string
+  max_element_size_mm?: number
+  min_element_size_mm?: number
+  default_element_size_mm?: number
+  from_rmin_mm?: number | null
+  from_condition_faces_mm?: number
+  max_elements?: number
+  feasible?: boolean
+  steps?: OptimizeResolutionStep[]
+  estimate?: {
+    element_count: number
+    max_iter: number
+    evaluations: number
+    seconds_per_evaluation: number
+    seconds_typical: number
+    seconds_worst: number
+    accuracy: string
+  }
+}
+
+/**
+ * 進捗1件(`optimize_run.run()` の `progress`)。`phase` ごとにキーが増える
+ * (`20260904-1704` の契約①)ので、共通の3つだけを必須にする。
+ */
+export interface OptimizeProgress {
+  phase: string
+  message: string
+  evaluation: number
+  iteration?: number
+  design_elements?: number
+  material_mm3?: number
+  safety_factor?: number
+  outcome?: string
+  compliance?: number
+  volfrac?: number
+  change?: number
+}
+
+/**
+ * 実行の結果。**`state` で3つに分岐する**(`20260904-1704` の契約①)。
+ * **`"done"` 以外では文書は1ビットも変わっていない。**
+ */
+export interface OptimizeResultPayload {
+  state: 'done' | 'empty_condition_faces' | 'unrepresented_regions'
+  warning: string | null
+  body_id: string | null
+  name: string | null
+  triangle_count: number | null
+  vertex_count: number | null
+  safety_factor: number | null
+  target_safety_factor: number
+  material_mm3: number | null
+  achieved_material_mm3: number | null
+  converged: boolean | null
+  evaluations: number
+  element_size_mm: number
+  design_elements: number
+  seconds: number
+  empty_condition_faces?: Array<Record<string, unknown>>
+  unrepresented_regions?: Array<Record<string, unknown>>
+}
+
+/** 実行の摘み。**省いたものはコアの既定**(既定＝いちばん粗くて安い設定)。 */
+export interface OptimizeRunOptions {
+  rminMm?: number | null
+  elementSizeMm?: number | null
+  name?: string | null
+}
+
 export type ConnectionStatus = 'connecting' | 'open' | 'closed'
 
 export interface SessionHooks {
@@ -670,6 +781,22 @@ export interface SessionHooks {
   onAiResult(result: AiRunResult): void
   /** 空メッセージ・実行中の2通目・プロバイダ未設定など、**繋がらない理由**。 */
   onAiError(message: string): void
+  // ---------------------------------------------------------------- H: 形状最適化を走らせる
+  /** 走らせる前の点検が返ってきた(要求した接続にだけ届く)。 */
+  onOptimizeConditions(report: OptimizeConditionsReport): void
+  /** 解像度の上限・下限・目盛りが返ってきた(要求した接続にだけ届く)。 */
+  onOptimizeResolution(payload: OptimizeResolutionPayload): void
+  /** 走っているかどうかが変わった(全接続へ配られる)。 */
+  onOptimizeStatus(running: boolean, cancelling: boolean): void
+  /** 進捗1件(反復ごと・候補材料量ごと)。 */
+  onOptimizeProgress(event: OptimizeProgress): void
+  /** 走り終わった。**`state` が "done" でなければ文書は変わっていない。** */
+  onOptimizeResult(result: OptimizeResultPayload): void
+  /**
+   * 走らせられなかった / 途中で落ちた / **中断した**。`problems` は条件が
+   * 足りないときだけ入る。**`cancelled` は失敗ではない** —— 人が中断を押した結果である。
+   */
+  onOptimizeError(message: string, problems: string[], cancelled: boolean): void
 }
 
 export interface Session {
@@ -742,6 +869,24 @@ export interface Session {
   aiSend(message: string): void
   /** 中断する。走っているツールの結果は `onAiResult` の `tool_calls` に残る。 */
   aiCancel(): void
+  // ---------------------------------------------------------------- H: 形状最適化を走らせる
+  /** 4条件がそろって走らせられるかを聞く(応答は `onOptimizeConditions`)。 */
+  optimizeConditions(): void
+  /**
+   * 要素サイズの上限・下限・目盛りを聞く(応答は `onOptimizeResolution`)。
+   * **軽い**(条件面のbboxを数枚測るだけ)ので、最小部材幅を打つたびに呼んでよい。
+   */
+  optimizeResolution(rminMm: number | null): void
+  /**
+   * 走らせる。**待たずに返る** —— 進捗は `onOptimizeProgress`、結果は `onOptimizeResult`
+   * へ届き、結果が文書へ入ったことは通常の状態配信として別途来る。
+   */
+  runOptimization(options: OptimizeRunOptions): void
+  /**
+   * 中断の旗を立てる。**実際に降りるのは次に進捗が出た時点**で、
+   * 塊を起こす粗い段(1.2〜1.6秒)の中では止まらない(`20260904-1704` の契約③)。
+   */
+  cancelOptimization(): void
   dispose(): void
 }
 
@@ -847,6 +992,12 @@ export function createSession(hooks: SessionHooks): Session {
       tool_calls?: Array<{ name: string; arguments: Record<string, unknown>; ok: boolean }>
       usage?: Record<string, number>
       text?: string
+      // ---------------------------------------------------------------- H
+      // **形状最適化の応答は丸ごと型変換して渡す**(`optimize_result` だけで20キー近くあり、
+      // ここへ書き写すと同じ宣言が2箇所になる)。分岐に要るキーだけをここに置く。
+      cancelling?: boolean
+      cancelled?: boolean
+      problems?: string[]
     }
     try {
       message = JSON.parse(raw)
@@ -917,6 +1068,22 @@ export function createSession(hooks: SessionHooks): Session {
       })
     } else if (message.type === 'ai_error') {
       hooks.onAiError(message.message ?? '(理由なし)')
+    } else if (message.type === 'optimize_conditions') {
+      hooks.onOptimizeConditions(message as unknown as OptimizeConditionsReport)
+    } else if (message.type === 'optimize_resolution') {
+      hooks.onOptimizeResolution(message as unknown as OptimizeResolutionPayload)
+    } else if (message.type === 'optimize_status') {
+      hooks.onOptimizeStatus(message.running ?? false, message.cancelling ?? false)
+    } else if (message.type === 'optimize_progress') {
+      hooks.onOptimizeProgress(message as unknown as OptimizeProgress)
+    } else if (message.type === 'optimize_result') {
+      hooks.onOptimizeResult(message as unknown as OptimizeResultPayload)
+    } else if (message.type === 'optimize_error') {
+      hooks.onOptimizeError(
+        message.message ?? '(理由なし)',
+        message.problems ?? [],
+        message.cancelled ?? false,
+      )
     }
   }
 
@@ -1009,6 +1176,23 @@ export function createSession(hooks: SessionHooks): Session {
     },
     aiCancel() {
       send({ cmd: 'ai_cancel' })
+    },
+    optimizeConditions() {
+      send({ cmd: 'optimize_conditions' })
+    },
+    optimizeResolution(rminMm) {
+      send({ cmd: 'optimize_resolution', rmin_mm: rminMm })
+    },
+    runOptimization(options) {
+      send({
+        cmd: 'run_optimization',
+        rmin_mm: options.rminMm ?? null,
+        element_size_mm: options.elementSizeMm ?? null,
+        name: options.name ?? null,
+      })
+    },
+    cancelOptimization() {
+      send({ cmd: 'cancel_optimization' })
     },
     dispose() {
       disposed = true

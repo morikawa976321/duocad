@@ -80,6 +80,12 @@ COARSE_DERIVE_SECONDS = 1.4
 #: `safety_loop.DEFAULT_MAX_EVALUATIONS`。
 TYPICAL_EVALUATIONS = 6
 
+#: 解像度の梯子の段数(既定=いちばん粗い、を含む)。**粗い側の端から細かい方向へだけ**
+#: 動くスライダの目盛りで、画面はこの並びの添字を持つ(`resolution_limits()["steps"]`)。
+#: **時間を入力にしないための形**でもある —— 段ごとに予想時間が付いて回るので、
+#: 「時間から解像度を逆算する」経路が画面に生えない(タスク `20260904-1705` の設計)。
+RESOLUTION_STEPS = 6
+
 #: 目標安全率の既定。**利用者が入れる値**で、ここにあるのは画面が最初に出す初期値でしかない。
 DEFAULT_TARGET_SAFETY_FACTOR = 2.0
 
@@ -520,6 +526,8 @@ def resolution_limits(doc: "Document", *, rmin_mm: Optional[float] = None) -> di
         "max_element_size_mm": upper,
         "min_element_size_mm": lower,
         "default_element_size_mm": upper,
+        # **粗い側の端から細かい方向へだけ**動く目盛り(添字0が既定=上限側)。
+        "steps": _resolution_steps(lo, hi, upper, lower),
         "from_rmin_mm": from_rmin,
         "from_condition_faces_mm": from_faces,
         "condition_faces": faces,
@@ -531,6 +539,48 @@ def resolution_limits(doc: "Document", *, rmin_mm: Optional[float] = None) -> di
         "feasible": lower <= upper,
         "estimate": estimate_seconds(_element_count(lo, hi, upper)),
     }
+
+
+def _resolution_steps(lo, hi, upper: float, lower: float) -> List[dict]:
+    """要素サイズの梯子。**添字0が上限側(いちばん粗くて安い=既定)**で、進むほど細かい。
+
+    **粗い側へ動く目盛りを作らない。** 粗い側の端は「正しさ」の境界(割ると条件が消え、
+    最小部材幅が表現できない。しかも silent)であり、細かい側の端は「都合」の境界
+    (遅い・落ちる、それだけ)である —— 性質が違うので、片側だけ開ける
+    (タスク `20260904-1705` の設計。本人了承)。
+
+    段は上限から下限までの**等比**で刻む(要素数は要素サイズの3乗に反比例するので、
+    等差にすると最後の1段だけで要素数が桁で跳ねる)。**予想時間を段ごとに付ける**ので、
+    画面は往復せずに「細かくすると何秒になるか」を出せる。
+
+    上限が下限以下(部品に対して条件面が小さすぎる)のときは**空**を返す ——
+    「間違わない解像度」が作れないので、選ばせる目盛りが無い(`feasible` が偽になる)。
+    """
+    if not (upper > 0.0 and lower > 0.0) or lower > upper:
+        return []
+    count = max(int(RESOLUTION_STEPS), 1)
+    ratio = (lower / upper) ** (1.0 / (count - 1)) if count > 1 else 1.0
+    steps: List[dict] = []
+    seen: set = set()
+    for index in range(count):
+        # 最後の段は等比の丸めを使わず下限そのものに合わせる(端が届かないと、
+        # 「いちばん細かい」が選べない目盛りになる)。
+        size = lower if index == count - 1 else upper * (ratio ** index)
+        elements = _element_count(lo, hi, size)
+        if elements in seen:
+            continue
+        seen.add(elements)
+        estimate = estimate_seconds(elements)
+        steps.append(
+            {
+                "index": len(steps),
+                "element_size_mm": float(size),
+                "element_count": int(elements),
+                "seconds_typical": float(estimate["seconds_typical"]),
+                "seconds_worst": float(estimate["seconds_worst"]),
+            }
+        )
+    return steps
 
 
 def _face_max_spacing_mm(cad_area_mm2: float) -> float:

@@ -73,10 +73,11 @@ MCP起点の変更から `applied` を落として配るため。`set_visible` �
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 from typing import Any, Optional  # Any: listeners / 接続
 
-from .. import catalog, selection
+from .. import catalog, optimize_run, selection
 from ..agent import AgentLoop, Cancellation, ProviderError
 from ..agent.providers import DEFAULT_OPENAI_COMPAT_BASE_URL
 from ..session import Session
@@ -177,6 +178,13 @@ class Server:
         self._ai_running = False
         #: 実行中のバックグラウンド往復(GCされないよう保持。`_pending_pushes` と同じ理由)。
         self._pending_ai_runs: set = set()
+        # -------------------------------------------------- H: 形状最適化を走らせる
+        # **重い(数十秒〜数分)ので別スレッドで回す**(`_optimize_start`)。ここに持つのは
+        # 「いま走っているか」だけで、中断の旗は `Session._optimize_cancel` が持つ
+        # (旗を畳むのは `Session.run_optimization` の入口。`20260904-1704` の契約)。
+        self._optimize_running = False
+        #: 実行中の最適化タスク(`_pending_ai_runs` と同じ理由で参照を保持する)。
+        self._pending_optimize_runs: set = set()
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """配信に使うイベントループを覚える(`run()` と `mcp_server` が起動時に呼ぶ)。
@@ -276,6 +284,13 @@ class Server:
         **誰も見ていない状態でAIの実行(=文書の変更)を放置しない**。**最後の1接続が切れた
         ときだけ中断する** —— 他の画面がまだ見ている間に片方が閉じても実行は続ける
         (`ai_*` は接続ごとではなく共有の1会話という設計と揃える)。
+
+        **形状最適化(`_optimize_running`)は同じ扱いにしない**(2026-09-05の判断)。
+        あちらは**1回で終わる有界な仕事**で、終われば `add_mesh_body` 1行が積まれるだけ
+        (要らなければ選んで消せる)。対してAIのループは何回ツールを呼ぶか決まっていない。
+        ここで切ると、**画面をリロードしただけで数分の実行が黙って消える** ——
+        リロードは日常の操作であり、失うものの方が大きい。再接続した画面には結果が
+        通常の状態配信として届く。
         """
         if not self.clients and self._ai_running:
             self._ai_cancel()
@@ -477,15 +492,40 @@ class Server:
                     message.get("provider"), message.get("model"), message.get("base_url")
                 )
                 # **ここは既にイベントループのスレッド**(`_dispatch` の中)なので、
-                # `_emit_ai_event` の `call_soon_threadsafe` を挟まず直接 `await` する
+                # `_emit_event` の `call_soon_threadsafe` を挟まず直接 `await` する
                 # (待たずに関数を抜けると、テストのようにここで `asyncio.run` が閉じる
                 # 呼び方では配信タスクが実行される前に握りつぶされる)。
-                await self._broadcast_ai({"type": "ai_status", **status})
+                await self._broadcast({"type": "ai_status", **status})
             elif command == "ai_send":
                 await self._ai_start(connection, str(message.get("message") or ""))
             elif command == "ai_cancel":
                 self._ai_cancel()
-                await self._broadcast_ai({"type": "ai_status", **self._ai_status()})
+                await self._broadcast({"type": "ai_status", **self._ai_status()})
+            # -------------------------------------------------- H: 形状最適化を走らせる
+            # **verbではない**(`catalog` の `category="protocol"`) —— 応答は状態配信ではなく
+            # 専用のイベント(`optimize_conditions` / `optimize_resolution` /
+            # `optimize_status` / `optimize_progress` / `optimize_result` / `optimize_error`)。
+            # 結果が文書へ入ったことは、`Session` のリスナ経由(`_on_core_change`)で
+            # 通常の状態配信として別途届く。
+            elif command == "optimize_conditions":
+                await _send(
+                    connection,
+                    {"type": "optimize_conditions", **self.session.optimize_conditions()},
+                )
+            # **失敗を `type: "error"` に落とさない**(下の except へ行かせない)。
+            # 条件面がまだ1枚も無い状態は「設定の途中」であって事故ではなく、画面は
+            # このメッセージをパネルの中に出す —— 赤い札で流すと、条件を置いている
+            # 最中ずっとエラーが点滅することになる。
+            elif command == "optimize_resolution":
+                try:
+                    payload = self.session.optimize_resolution(message.get("rmin_mm"))
+                except ValueError as error:
+                    payload = {"error": str(error)}
+                await _send(connection, {"type": "optimize_resolution", **payload})
+            elif command == "run_optimization":
+                await self._optimize_start(connection, message)
+            elif command == "cancel_optimization":
+                await self._optimize_cancel(connection)
             else:
                 raise ValueError(f"unknown command: {command!r}")
         except Exception as error:  # 1つの失敗でサーバを落とさない。必ず画面へ返す
@@ -630,9 +670,9 @@ class Server:
 
     def _ai_progress(self, name: str, arguments: dict, result: Any, ok: bool) -> None:
         """`AgentLoop` の進捗コールバック。**実行器スレッドから呼ばれる**
-        (`_ai_start` の `run_in_executor`)ので、`_emit_ai_event` 経由でイベントループへ戻す。
+        (`_ai_start` の `run_in_executor`)ので、`_emit_event` 経由でイベントループへ戻す。
         """
-        self._emit_ai_event(
+        self._emit_event(
             {
                 "type": "ai_tool_call",
                 "name": name,
@@ -670,7 +710,7 @@ class Server:
 
         self._ai_running = True
         self._ai_cancellation.clear()
-        await self._broadcast_ai({"type": "ai_status", **self._ai_status()})
+        await self._broadcast({"type": "ai_status", **self._ai_status()})
 
         running_loop = asyncio.get_running_loop()
         future = running_loop.run_in_executor(None, loop_obj.run, prompt)
@@ -682,12 +722,12 @@ class Server:
             if not fut.cancelled():
                 error = fut.exception()
                 if error is not None:
-                    self._emit_ai_event(
+                    self._emit_event(
                         {"type": "ai_error", "message": f"{type(error).__name__}: {error}"}
                     )
                 else:
-                    self._emit_ai_event({"type": "ai_result", **fut.result().to_dict()})
-            self._emit_ai_event({"type": "ai_status", **self._ai_status()})
+                    self._emit_event({"type": "ai_result", **fut.result().to_dict()})
+            self._emit_event({"type": "ai_status", **self._ai_status()})
 
         future.add_done_callback(finished)
 
@@ -698,19 +738,123 @@ class Server:
         """
         self._ai_cancellation.cancel()
 
-    def _emit_ai_event(self, payload: dict) -> None:
-        """AI関連のイベントを全接続へ配る配信をイベントループへ確実に乗せる。
-        **どのスレッドからでも呼べる**(`_ai_progress` は実行器スレッドから来る。
-        `call_soon_threadsafe` は呼び出し元がイベントループのスレッドでも安全)。
+    # ------------------------------------------------------------------ H: 形状最適化を走らせる
+    def _optimize_status(self) -> dict:
+        """画面が実行ボタンと中断ボタンの出し分けに使う最小限。"""
+        return {"running": self._optimize_running}
+
+    async def _optimize_start(self, connection: Any, message: dict) -> None:
+        """最適化を1回走らせる。**`run_optimization()` を待たずに返る**(`_ai_start` と同じ形)。
+
+        既定の設定でも数十秒〜数分かかるので、ここで `await` すると同じ接続からの次の
+        メッセージ(**`cancel_optimization` を含む**)が読めなくなる —— `handle()` は
+        1接続を直列に処理する。したがって別タスクへ投げ、進捗・結果は後からイベントで届ける。
+
+        **走らせる前に条件を点検する。** 条件が足りないまま `run_optimization` を呼ぶと
+        例外の文言だけが返るが、画面が出したいのは「何が足りないか」の一覧
+        (`conditions_report` の `problems`)である。
+        """
+        if self._optimize_running:
+            await _send(
+                connection,
+                {"type": "optimize_error", "message": "最適化が既に走っている(中断してから)"},
+            )
+            return
+        report = self.session.optimize_conditions()
+        if not report["ready"]:
+            await _send(
+                connection,
+                {
+                    "type": "optimize_error",
+                    "message": "条件がそろっていない",
+                    "problems": list(report["problems"]),
+                },
+            )
+            return
+
+        kwargs = {
+            key: message[key]
+            for key in ("rmin_mm", "element_size_mm", "target_safety_factor", "name")
+            if message.get(key) is not None
+        }
+        self._optimize_running = True
+        await self._broadcast({"type": "optimize_status", **self._optimize_status()})
+        task = asyncio.get_running_loop().create_task(self._optimize_run(kwargs))
+        self._pending_optimize_runs.add(task)
+        task.add_done_callback(self._pending_optimize_runs.discard)
+
+    async def _optimize_run(self, kwargs: dict) -> None:
+        """別スレッドで端から端まで回し、結果を配る。**例外を握り潰さない**。
+
+        `optimize_run.run()` の例外は「次に何をすればよいか」を文面に持っている
+        (`20260904-1704` の契約①)ので、そのまま `optimize_error` として画面へ出す。
+
+        **最後に必ず状態を配り直す**(`_push`)。文書が変わったぶんはコアのリスナ
+        (`_on_core_change`)が配るが、`state != "done"` のときは文書が変わらないので
+        その配信が起きない —— **`Session.warnings` に積まれた通知**(条件面が空 /
+        保持・除外が表現できていない)を運ぶ経路がそこしか無いので、ここで流し切る。
+        """
+        payload: dict
+        try:
+            result = await asyncio.to_thread(
+                functools.partial(
+                    self.session.run_optimization, progress=self._optimize_progress, **kwargs
+                )
+            )
+            payload = {"type": "optimize_result", **result}
+        except Exception as error:  # noqa: BLE001 - 文面をそのまま画面へ出す
+            payload = {
+                "type": "optimize_error",
+                "message": f"{type(error).__name__}: {error}",
+                # **中断は失敗ではない**(人がそう言ったのだから、赤い札で驚かせる理由が無い)。
+                # 画面はこの印を見て、通知の色とトーストの有無を変える。
+                "cancelled": isinstance(error, optimize_run.OptimizeCancelled),
+            }
+        finally:
+            self._optimize_running = False
+        await self._broadcast(payload)
+        await self._broadcast({"type": "optimize_status", **self._optimize_status()})
+        await self._push(None, applied=None)
+
+    def _optimize_progress(self, event: dict) -> None:
+        """`optimize_run.run()` の進捗。**実行器スレッドから呼ばれる**ので `_emit_event` 経由。
+
+        中身は `{"phase", "message", "evaluation"}` + phase ごとの追加(`20260904-1704`
+        の契約①)。**素の値だけでできている**のでそのまま載せてよい。
+        """
+        self._emit_event({"type": "optimize_progress", **event})
+
+    async def _optimize_cancel(self, connection: Any) -> None:
+        """中断の旗を立てる。**実際に降りるのは次に進捗が出た時点**(粗い段の中では止まらない)。
+
+        走っていないときに呼ばれても旗は立てない —— `Session.cancel_optimization` の
+        旗を畳むのは `run_optimization` の入口なので実害は無いが、走っていないのに
+        「中断中」と画面へ出すと、次の実行が始まった瞬間に中断表示から始まって見える。
+        """
+        if not self._optimize_running:
+            await _send(connection, {"type": "optimize_status", **self._optimize_status()})
+            return
+        self.session.cancel_optimization()
+        await self._broadcast(
+            {"type": "optimize_status", **self._optimize_status(), "cancelling": True}
+        )
+
+    def _emit_event(self, payload: dict) -> None:
+        """状態配信ではないイベント(AI・形状最適化)を全接続へ配る配信を、
+        イベントループへ確実に乗せる。
+
+        **どのスレッドからでも呼べる**(`_ai_progress` も `_optimize_progress` も
+        実行器スレッドから来る。`call_soon_threadsafe` は呼び出し元がイベントループの
+        スレッドでも安全)。
         """
         loop = self._loop
         if loop is None:
             return
-        loop.call_soon_threadsafe(self._spawn_ai_broadcast, payload)
+        loop.call_soon_threadsafe(self._spawn_broadcast, payload)
 
-    def _spawn_ai_broadcast(self, payload: dict) -> None:
+    def _spawn_broadcast(self, payload: dict) -> None:
         """`_spawn_push` と同じ形(タスクの参照を保持し、失敗を警告として拾う)。"""
-        task = asyncio.get_running_loop().create_task(self._broadcast_ai(payload))
+        task = asyncio.get_running_loop().create_task(self._broadcast(payload))
         self._pending_pushes.add(task)
 
         def finished(done: "asyncio.Task") -> None:
@@ -720,13 +864,13 @@ class Server:
             error = done.exception()
             if error is not None:
                 self.session.warnings.append(
-                    f"AIイベントの配信に失敗: {type(error).__name__}: {error}"
+                    f"イベントの配信に失敗: {type(error).__name__}: {error}"
                 )
 
         task.add_done_callback(finished)
 
-    async def _broadcast_ai(self, payload: dict) -> None:
-        """AI関連のイベントを全接続へ配る(進捗・結果はどの画面から見ても同じ会話の続き)。"""
+    async def _broadcast(self, payload: dict) -> None:
+        """イベントを全接続へ配る(進捗・結果はどの画面から見ても同じ1つの出来事)。"""
         for target in list(self.clients):
             try:
                 await _send(target, payload)
