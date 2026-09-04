@@ -7,11 +7,22 @@
    *
    * **仕組みを作らない。** スキーマ駆動・カテゴリ・タブは持たず、平らな並びに行を足していく。
    *
-   * **ビューポートを覆わない・暗くしない。** 画面の端に小さく出し、`::backdrop` は透明。
+   * **ビューポートを覆わない・暗くしない・操作を止めない。** 画面の端に小さく出す。
    * FOVは**見ながら決める**設定なので、判断材料を隠したらこの機能は使えないものになる。
-   * native `<dialog>` + `showModal()` を使うので Esc・フォーカストラップ・top-layer が
-   * ただで付き、**position:fixed / top-layer なのでレイアウトの大きさを持たない**
-   * (＝`.viewport` の寸法＝カメラのアスペクトに触らない。styles.css の不変条件)。
+   *
+   * **`showModal()` ではなく `show()`(非モーダル)で開く**(2026-09-04本人指示)。
+   * `showModal()` は**背後の文書を inert にする** —— 見えてはいても、ビューポートも
+   * ビューキューブも pointer/keyboard イベントを一切受け取れなくなる。「見ながら決める」の
+   * 「見る」だけが残り「回して確かめる」が死ぬので、覆わない・暗くしないという設計と
+   * 同じ理由で inert も外す。
+   *
+   * 代わりに `showModal()` がただで付けていたものを2つ自前で持つ:
+   * - **Esc で閉じる** —— 非モーダルの `<dialog>` は Esc を拾わないので `svelte:window` で拾う。
+   * - **重なり順** —— 非モーダルは top-layer に入らないので、CSSで `z-index` を明示する。
+   *
+   * フォーカストラップは**戻さない**(ビューポートを触らせるのが目的なので、閉じ込めては困る)。
+   * **レイアウトの大きさを持たないのは `position: fixed` による**(top-layer が理由ではない)ので、
+   * 非モーダルでも `.viewport` の寸法＝カメラのアスペクトには触らない(styles.css の不変条件)。
    *
    * **状態の正は `App.svelte`**。ここは値と口を受け取るだけの presentational な部品で、
    * 双方向束縛をコンポーネントの境界に持ち込まない。
@@ -38,13 +49,29 @@
 
   let dialog: HTMLDialogElement
 
-  // 開閉は props に従う。**`showModal()` は開いている <dialog> に呼ぶと例外**なので
-  // 現在の状態を見てから呼ぶ。Esc で閉じたときは `onclose` が App 側へ返す。
+  // 開閉は props に従う。**開いている <dialog> に `show()` を呼ぶと例外**なので
+  // 現在の状態を見てから呼ぶ。`close()` は `onclose` が App 側へ返す。
   $effect(() => {
-    if (open && !dialog.open) dialog.showModal()
+    if (open && !dialog.open) dialog.show()
     if (!open && dialog.open) dialog.close()
   })
+
+  /**
+   * Esc で閉じる。**非モーダルの `<dialog>` は Esc を拾わない**(close request は
+   * `showModal()` で開いたものにしか来ない)ので、開いているあいだだけ window で拾う。
+   *
+   * **`preventDefault()` も `stopPropagation()` もしない** —— 同じ Esc を
+   * `CommandHost` が構え中のコマンドの中断に使っており(`CommandHost.svelte` の
+   * `onKeydown`)、モーダルだった頃も両方が起きていた。片方を止めると、この修正が
+   * 変えるつもりの無い挙動まで変わる。
+   */
+  function onWindowKeydown(event: KeyboardEvent): void {
+    if (!open || event.key !== 'Escape') return
+    onClose()
+  }
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} />
 
 <dialog id="settings-dialog" bind:this={dialog} onclose={onClose}>
   <div class="settings-head">
@@ -87,18 +114,21 @@
 </dialog>
 
 <style>
-  /* **暗くしない。** 覆うと、見ながら決めるという設定の前提が壊れる。 */
-  #settings-dialog::backdrop {
-    background: transparent;
-  }
+  /* **`::backdrop` の指定は置かない。** 非モーダル(`show()`)の <dialog> は backdrop を
+     そもそも描かないので、透明化する相手がいない。暗くしないという要件は、モーダルを
+     やめたこと自体が満たしている。 */
 
   /* 画面の右端に小さく出す(`margin: auto` の中央寄せを打ち消す)。
-     top-layer にいるので、この位置指定はどのパネルのレイアウトにも影響しない。 */
+     `position: fixed` なのでどのパネルのレイアウトにも影響しない(＝`.viewport` の寸法に
+     触らない)。**非モーダルは top-layer に入らない**ので重なり順は `z-index` で決める ——
+     このプロジェクトは styles.css に z-index を1つも持たず全て文書順で解決しているため、
+     ここが唯一の指定になる(小さい値で足りる)。 */
   #settings-dialog {
     position: fixed;
     inset: auto;
     top: 64px;
     right: 16px;
+    z-index: 10;
     width: 260px;
     margin: 0;
     padding: 8px 10px;
