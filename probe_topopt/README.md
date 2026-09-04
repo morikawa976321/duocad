@@ -2,7 +2,7 @@
 
 **ここは実験場である。壊してよい。** 最適化のコード(`simp` / `voxelize` / `anchor` /
 `mesh` / `design_space` / `stress` / `safety_loop` / `bench` / `perf`)と受入検査は
-2026-09-05 に **`duocad/topopt/` と `duocad/topopt_checks/` へ移した**。ここに残っているのは
+2026-09-05 に **`duocad/topopt/` と `topopt_checks/`(リポジトリ直下)へ移した**。ここに残っているのは
 **画面(`server.py` / `web/`)と実機確認(`shot*.mjs` / `screenshots/`)だけ**である。
 
 **依存は probe → 本体の一方向。** ここは `duocad.topopt` を import して動く。
