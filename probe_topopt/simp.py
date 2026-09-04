@@ -38,6 +38,9 @@ def new_solve_stats() -> dict:
         "assemble_seconds": 0.0,
         "slice_seconds": 0.0,
         "solve_seconds": 0.0,
+        # `solve_seconds` の内数。マルチグリッドは密度が変わるたびに各段の作用素(RAP)と
+        # 最粗格子の LU を組み直すので、その費用だけ別に見えるようにしてある。
+        "mg_setup_seconds": 0.0,
         "fallbacks": 0,
         "direct_solves": 0,
     }
@@ -199,6 +202,243 @@ def _filter_conv(field: np.ndarray, kernel: np.ndarray, r: int) -> np.ndarray:
     return out
 
 
+# ---------------------------------------------------------------------------
+# 幾何マルチグリッド前処理 (solver="mg")
+# ---------------------------------------------------------------------------
+# **なぜこれが要るか**: 対角(Jacobi)前処理では CG の反復数が格子の細かさに比例して増える
+# (条件数 ∝ h^-2、CG反復 ∝ √条件数 ∝ h^-1)。1反復の費用が N に比例するので合計は N^(4/3)
+# になる。マルチグリッドは反復数を格子非依存にするので、**指数が 4/3 から 1 へ落ちる。**
+#
+# 決めた3点(選択肢があるところ。理由は README「マルチグリッド前処理」節にも書いてある):
+#
+# 1. **粗格子作用素は Galerkin (A_c = P^T A P)。密度を粗格子へ移さない。**
+#    `emin=1e-9` と `penal=3` で実効剛性は 10^9 倍開くので、密度を算術平均で落とすと
+#    空の領域が硬くなりすぎて粗格子が別の問題になる(調和平均・最小値でも「どれだけ
+#    間違えるか」が変わるだけ)。**RAP は近似ではなく、細格子の作用素そのものを粗空間へ
+#    射影した唯一の対称作用素**なので、移し方を選ぶ問題自体が消える。加えて、拘束
+#    (固定DOF)と浮いた節点の扱いが自動的に引き継がれる —— 粗格子で境界条件を組み直す
+#    必要がない。代償は毎 solve の RAP 費用(実測は README の表)。
+# 2. **平滑化は damped Jacobi。** Gauss-Seidel より1回あたりの効きは弱いが、
+#    行列ベクトル積と要素ごとの積だけで書けるので `20260904-1415`(CPU並列)がそのまま
+#    載せられる。減衰係数は下記のとおり**行ごとの絶対和(Gershgorin)から決める**。
+# 3. **粗視化は軸ごとに独立**(`_coarse_axis`)。要素数が `min_axis_elements`(既定4)
+#    未満の軸は間引かない —— 薄板題材では厚み方向が先に潰れるので、**等方に間引き続けると
+#    粗格子が形をなさなくなる**。この規則は自動的に半粗視化になる(薄い軸だけ残る)。
+#    要素数が奇数の軸も扱える: 粗節点を 0,2,4,... と採り、端が合わなければ最後の1つだけ
+#    幅1の粗セルにする。**格子寸法が2の冪でない**(ボクセル化が決めるので当然そうなる)
+#    ので、偶数しか扱えない実装では2段目でほぼ必ず止まる。
+
+
+@dataclass(frozen=True)
+class MGOptions:
+    """V-cycle の形。**既定以外の値は主に検出力の検査(`check_multigrid.py`)のためにある。**
+
+    `coarse_correction=False` / `max_levels=1` / `weight_scale` を下げる、は前処理を意図的に
+    劣化させる口で、これで反復数が増えないなら**その部品は最初から効いていない**。
+
+    既定値の根拠(片持ち梁 30x12x12〜60x24x24 の実密度で実測。README「マルチグリッド前処理」):
+
+    - `smooth_steps=2` —— 1 にすると反復が 1.25倍、3 にしても 1割しか減らず1回が重くなる。
+    - `smooth_growth=2` —— **粗い段ほど平滑化を増やす。** SIMP の 10^9 の剛性差のせいで
+      粗格子の補正が段ごとに劣化するのを、粗い段の安い平滑化で買い戻す
+      (60x24x24 で 37 → 34反復、秒はむしろ短い。粗い段の非零は細い段の 13% しかない)。
+    - `cycle_gamma=1`(V-cycle)—— 2(W-cycle)にすると反復は 34 → 30 に減るが、
+      **秒は 2.39 → 3.30 と伸びる**ので既定にしない。
+    - `direct_dofs=6000` —— 最粗格子を直接解法(`splu`)で解く上限。ここを上げると2段で
+      済んで反復は 19 まで落ちるが、**`splu` の費用が急に効く**(粗15,210自由度で 0.96秒/solve・
+      充填 1,680万。粗2,205自由度なら 0.04秒)。6000 は「splu が 0.1秒未満に収まる最大の段」。
+    """
+
+    smooth_steps: int = 2
+    smooth_growth: int = 2
+    cycle_gamma: int = 1
+    coarse_correction: bool = True
+    max_levels: int = 8
+    min_axis_elements: int = 4
+    direct_dofs: int = 6000
+    weight_scale: float = 1.0
+
+
+MG_DEFAULT = MGOptions()
+
+
+def _coarse_axis(n_elem: int, min_axis_elements: int) -> np.ndarray | None:
+    """1軸の粗節点位置(細格子の節点番号)。間引かないと決めたら None。
+
+    要素数が `min_axis_elements` 未満の軸は間引かない。既定の 4 は「粗格子でも各軸に
+    2要素以上残す」という意味で、**1要素まで潰れた軸は曲げを表現できない**。
+    """
+    if n_elem < max(2, int(min_axis_elements)):
+        return None
+    pos = np.arange(0, n_elem + 1, 2)
+    if pos[-1] != n_elem:
+        pos = np.append(pos, n_elem)
+    return pos
+
+
+def _interp_axis(n_elem: int, pos: np.ndarray) -> sp.csr_matrix:
+    """1軸の線形補間 (n_elem+1, len(pos))。`pos` が全節点なら単位行列になる。"""
+    fine = np.arange(n_elem + 1)
+    idx = np.clip(np.searchsorted(pos, fine, side="right") - 1, 0, pos.size - 2)
+    left = pos[idx].astype(float)
+    right = pos[idx + 1].astype(float)
+    w = (fine - left) / (right - left)
+    m = sp.coo_matrix(
+        (
+            np.concatenate([1.0 - w, w]),
+            (np.concatenate([fine, fine]), np.concatenate([idx, idx + 1])),
+        ),
+        shape=(n_elem + 1, pos.size),
+    ).tocsr()
+    m.eliminate_zeros()
+    return m
+
+
+def _prolongation(dims: tuple[int, int, int], pos: list[np.ndarray]) -> sp.csr_matrix:
+    """粗→細の補間 P(全自由度)。節点番号の規約は `_build_edof` と同じ。"""
+    node = sp.kron(
+        _interp_axis(dims[0], pos[0]),
+        sp.kron(_interp_axis(dims[1], pos[1]), _interp_axis(dims[2], pos[2]), format="csr"),
+        format="csr",
+    )
+    return sp.kron(node, sp.identity(3, format="csr"), format="csr").tocsr()
+
+
+def build_mg_transfers(
+    dims: tuple[int, int, int], free: np.ndarray, opts: MGOptions | None = None
+) -> list[sp.csr_matrix]:
+    """階層の補間作用素を粗い側へ向かって並べて返す。**密度に依らない**(格子と拘束だけ)。
+
+    各 P は「その段の自由DOF × 次の段の自由DOF」。粗格子の自由DOFは**細格子で自由だった
+    節点に一致する粗節点**だけ採る —— こうすると P の該当行は単位行列になるので、
+    P は必ず**列フルランク**になる。したがって `A` が正定値である限り `P^T A P` も正定値
+    (`x != 0` なら `P x != 0`)。**`A` 自体が特異なとき(拘束不足)は保証の外**で、そちらは
+    `Model.solve` の残差検査が落とす担当。
+    """
+    opts = MG_DEFAULT if opts is None else opts
+    transfers: list[sp.csr_matrix] = []
+    dims = tuple(int(d) for d in dims)
+    free = np.asarray(free, dtype=np.int64)
+    for depth in range(max(0, int(opts.max_levels))):
+        # **1段目は自由度数に関わらず必ず作る。** ここで `direct_dofs` を見てしまうと、
+        # 小さい題材(受入検査の 16x8x8 など)が黙って直接解法になり、`solver="mg"` の経路が
+        # 検査されないまま通る。
+        if depth > 0 and free.size <= int(opts.direct_dofs):
+            break
+        pos: list[np.ndarray] = []
+        coarsened = False
+        for d in dims:
+            axis = _coarse_axis(d, opts.min_axis_elements)
+            if axis is None:
+                pos.append(np.arange(d + 1))
+            else:
+                pos.append(axis)
+                coarsened = True
+        if not coarsened:
+            break
+        p_dof = _prolongation(dims, pos)
+        ny1, nz1 = dims[1] + 1, dims[2] + 1
+        cx, cy, cz = np.meshgrid(pos[0], pos[1], pos[2], indexing="ij")
+        fine_node = (cx * ny1 * nz1 + cy * nz1 + cz).ravel()
+        fine_dof = 3 * np.repeat(fine_node, 3) + np.tile(np.arange(3), fine_node.size)
+        is_free = np.zeros(3 * (dims[0] + 1) * ny1 * nz1, dtype=bool)
+        is_free[free] = True
+        coarse_free = np.flatnonzero(is_free[fine_dof])
+        if coarse_free.size == 0 or coarse_free.size >= free.size:
+            break
+        transfers.append(p_dof[free][:, coarse_free].tocsr())
+        dims = tuple(p.size - 1 for p in pos)
+        free = coarse_free
+    return transfers
+
+
+def _lambda_max(a: sp.csr_matrix, diag: np.ndarray, iters: int = 8) -> float:
+    """`D^-1 A` の最大固有値をべき乗法で下から見積もる。**開始ベクトルは固定**
+
+    (乱数だと同じ入力で結果が変わり、`check_absolute_volume.py` [4] の SHA が揺れる)。
+    レイリー商は下からしか近づかないので、使う側は必ず安全率を掛けること。
+    """
+    n = a.shape[0]
+    v = np.sin(np.arange(n, dtype=float) * 0.7 + 1.0)
+    v /= np.linalg.norm(v)
+    lam = 0.0
+    for _ in range(max(1, int(iters))):
+        av = a @ v
+        lam = float(v @ av) / float(v @ (diag * v))
+        w = av / diag
+        nrm = float(np.linalg.norm(w))
+        if not np.isfinite(nrm) or nrm == 0.0:
+            break
+        v = w / nrm
+    return lam
+
+
+def _smoothing_weight(a: sp.csr_matrix, diag: np.ndarray, scale: float) -> np.ndarray:
+    """damped Jacobi の重み `omega / diag` を返す。
+
+    **`omega < 2 / λmax(D^-1 A)` が前処理の対称正定値性の十分条件**(`2D/omega - A` が
+    正定値)であり、ここを緩めると CG が壊れる。一方 `omega` を必要以上に小さくすると
+    平滑化が効かず反復数が増える(実測: Gershgorin の上界そのままだと λmax の 1.7倍を
+    見積もることになり、n=50x20x20 の実密度で 56 → 48 反復の差になった)。
+
+    そこでべき乗法の見積もり `lam`(下から)に安全率 1.2 を掛けた `hi` を使い、
+    **`gershgorin <= 2.4 * lam` が成り立つときだけ**それを採る —— 成り立てば
+    `λmax <= gershgorin <= 2.4 lam = 2 hi` なので `omega = 1/hi < 2/λmax` が**証明できる**。
+    成り立たなければ Gershgorin の上界へ退避する(必ず安全側)。
+    """
+    if float(scale) > 1.0:
+        # **1 より大きい値は禁止。** `omega` が `2/λmax` を超えると damped Jacobi が
+        # 非正定値になり、V-cycle 全体も非正定値になって CG が壊れる(委譲レビューの実測:
+        # 20x8x8・rho=0.3 で `weight_scale=5.0` にすると `v^T M v` が負になり CG が
+        # 500反復で収束しなくなった)。この口は**弱める側にしか使わない**。
+        raise ValueError(
+            f"MGOptions.weight_scale は 1.0 以下であること(受け取った値: {scale})。"
+            "1 を超えると前処理が正定値でなくなり CG が収束しない"
+        )
+    abs_rows = sp.csr_matrix((np.abs(a.data), a.indices, a.indptr), shape=a.shape) @ np.ones(
+        a.shape[0]
+    )
+    gershgorin = float(np.max(abs_rows / diag))
+    lam = _lambda_max(a, diag)
+    hi = 1.2 * lam if 2.4 * lam >= gershgorin else gershgorin
+    return (float(scale) / hi) / diag
+
+
+def _mg_setup(kf: sp.csr_matrix, transfers: list[sp.csr_matrix], opts: MGOptions) -> tuple:
+    """各段の作用素・平滑化の重み・最粗格子の LU を作る。**密度が変わるたびに作り直す。**"""
+    a = kf.tocsr()
+    levels = []
+    for p in transfers:
+        diag = a.diagonal()
+        if not np.all(diag > 0.0):
+            raise ValueError("剛性行列の対角に非正の値がある(マルチグリッドの前提が崩れている)")
+        levels.append((a, _smoothing_weight(a, diag, opts.weight_scale), p))
+        a = (p.T @ a @ p).tocsr()
+    diag = a.diagonal()
+    if not np.all(diag > 0.0):
+        raise ValueError("最粗格子の対角に非正の値がある")
+    return levels, spla.splu(a.tocsc())
+
+
+def _vcycle(levels: list, lu, b: np.ndarray, level: int, opts: MGOptions) -> np.ndarray:
+    """対称 V-cycle。**前平滑化と後平滑化の回数を揃えること**(揃えないと前処理が非対称に
+    なり、CG が収束しない/嘘の解を返す)。`check_multigrid.py` [2] がここを直接見ている。
+    """
+    if level >= len(levels):
+        return lu.solve(b)
+    a, s, p = levels[level]
+    nu = int(opts.smooth_steps) * max(1, int(opts.smooth_growth)) ** level
+    x = s * b if nu > 0 else np.zeros_like(b)
+    for _ in range(nu - 1):
+        x += s * (b - a @ x)
+    if opts.coarse_correction:
+        for _ in range(max(1, int(opts.cycle_gamma))):
+            x += p @ _vcycle(levels, lu, p.T @ (b - a @ x), level + 1, opts)
+    for _ in range(nu):
+        x += s * (b - a @ x)
+    return x
+
+
 class Model:
     """片持ち梁の格子・DOF・境界条件・荷重。密度に依らない部分をここに持つ。"""
 
@@ -293,6 +533,9 @@ class Model:
             )
         self._iK = np.kron(self.edof, np.ones((24, 1), dtype=np.int32)).ravel()
         self._jK = np.kron(self.edof, np.ones((1, 24), dtype=np.int32)).ravel()
+        # マルチグリッドの補間作用素は格子と拘束だけで決まる(密度に依らない)ので、
+        # 設計反復のあいだ使い回す。作り直すのは各段の作用素と LU のほうだけ。
+        self._mg_transfers: dict[tuple, list] = {}
 
     def assemble(self, rho: np.ndarray, penal: float) -> sp.spmatrix:
         """全体剛性行列 K (ndof,ndof) を返す。SIMP補間 E_e = emin + rho_e**penal * (E - emin)。"""
@@ -300,14 +543,41 @@ class Model:
         sk = (self.ke.ravel()[None, :] * ee[:, None]).ravel()
         return sp.coo_matrix((sk, (self._iK, self._jK)), shape=(self.ndof, self.ndof)).tocsc()
 
+    def mg_transfers(self, opts: MGOptions | None = None) -> list[sp.csr_matrix]:
+        """この格子・この拘束に対する補間作用素の階層(密度に依らないのでキャッシュする)。"""
+        opts = MG_DEFAULT if opts is None else opts
+        key = (opts.max_levels, opts.min_axis_elements, opts.direct_dofs)
+        cached = self._mg_transfers.get(key)
+        if cached is None:
+            cached = build_mg_transfers(
+                (self.nelx, self.nely, self.nelz), self.free, opts
+            )
+            self._mg_transfers[key] = cached
+        return cached
+
+    def mg_preconditioner(
+        self, kf: sp.spmatrix, opts: MGOptions | None = None
+    ) -> spla.LinearOperator:
+        """`kf`(自由DOFに縮めた K)に対する V-cycle 前処理。
+
+        **対称正定値**である(`_smoothing_weight` の重み・前後で同じ回数の平滑化・
+        R = P^T・最粗格子は直接解法)。CG に差せるのはそのため。
+        """
+        opts = MG_DEFAULT if opts is None else opts
+        levels, lu = _mg_setup(kf.tocsr(), self.mg_transfers(opts), opts)
+        return spla.LinearOperator(
+            kf.shape, matvec=lambda b: _vcycle(levels, lu, b, 0, opts), dtype=float
+        )
+
     def solve(
         self,
         rho: np.ndarray,
         penal: float,
         *,
-        solver: str = "cg",
+        solver: str = "mg",
         cg_rtol: float = 1e-9,
         u0: np.ndarray | None = None,
+        mg: MGOptions | None = None,
     ) -> np.ndarray:
         """K U = F を解いて U (ndof,) を返す。拘束DOFの成分はきっかり 0.0。
 
@@ -319,8 +589,12 @@ class Model:
         `ZeroDivisionError`)。**原因から遠い場所で落ちるのが最悪**なので、ここで名指しする。
         剛体運動の完全な検出はしない —— 残差が通らなければ落とす、それだけでよい。
         """
-        if solver not in ("cg", "direct"):
+        if solver not in ("mg", "cg", "direct"):
             raise ValueError(f"未知の解法: {solver!r}")
+        # **既定を束縛時ではなく呼び出し時に読む。** こうしておくと `simp.MG_DEFAULT` を
+        # 差し替えるだけで V-cycle の形を全経路(anchor → design_space → perf)で
+        # 一斉に変えられる。既定値の当たりを取るのに要る。
+        mg = MG_DEFAULT if mg is None else mg
         stats = _SOLVE_STATS
         t0 = time.perf_counter()
         kg = self.assemble(rho, penal)
@@ -331,11 +605,17 @@ class Model:
         x0 = np.zeros(self.free.size) if u0 is None else u0[self.free].copy()
         iterations = 0
         fell_back = False
+        setup_seconds = 0.0
         if solver == "direct":
             u_free = spla.spsolve(kf, ff)
         else:
-            diag = kf.diagonal()
-            precond = spla.LinearOperator(kf.shape, matvec=lambda v, d=diag: v / d)
+            if solver == "mg":
+                t_setup = time.perf_counter()
+                precond = self.mg_preconditioner(kf, mg)
+                setup_seconds = time.perf_counter() - t_setup
+            else:
+                diag = kf.diagonal()
+                precond = spla.LinearOperator(kf.shape, matvec=lambda v, d=diag: v / d)
             counter = None
             if stats is not None:
 
@@ -362,6 +642,7 @@ class Model:
             stats["solve_seconds"] += time.perf_counter() - t2
             stats["cg_iterations"] += iterations
             stats["cg_iterations_each"].append(iterations)
+            stats["mg_setup_seconds"] += setup_seconds
             stats["fallbacks"] += int(fell_back)
             stats["direct_solves"] += int(solver == "direct")
         self._verify_solution(kf, ff, u_free)
@@ -582,7 +863,7 @@ def optimize(
     nu: float = 0.3,
     emin: float = 1e-9,
     move: float = 0.2,
-    solver: str = "cg",
+    solver: str = "mg",
     cg_rtol: float = 1e-9,
     callback: Callable[[Iteration, np.ndarray], None] | None = None,
     fixed_dofs: np.ndarray | None = None,

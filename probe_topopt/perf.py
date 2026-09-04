@@ -129,6 +129,7 @@ def measure_case(
     max_iter: int = MAX_ITER,
     volfrac: float = VOLFRAC,
     spmv_repeat: int = SPMV_REPEAT,
+    solver: str | None = None,
 ) -> dict:
     """題材1つ × 解像度1つ。**端から端まで(導出 → 連結性ガード → SIMP → STL)通す。**"""
     case = ds.CASES[name]
@@ -158,6 +159,7 @@ def measure_case(
             max_iter=int(max_iter),
             force=tuple(float(v) for v in case.force),
             stl_path=stl,
+            solver=solver,
         )
     run_seconds = time.perf_counter() - t0
 
@@ -183,6 +185,7 @@ def measure_case(
     step_seconds = assemble_seconds + slice_seconds + solve_seconds
     return {
         "case": name,
+        "solver": solver or "(既定)",
         "covers": case.covers,
         "resolution": int(resolution),
         "margin_ratio": float(case.margin_ratio),
@@ -217,6 +220,13 @@ def measure_case(
         "assemble_seconds": assemble_seconds,
         "slice_seconds": slice_seconds,
         "solve_seconds": solve_seconds,
+        # マルチグリッドが**密度が変わるたびに**組み直す各段の作用素(RAP)と最粗格子の LU の
+        # 費用。`solve_seconds` の内数で、Jacobi 経路では 0。**並列化の当たりを決める数字**
+        # (反復側を速くしても、ここが solve の半分なら全体は2倍までしか速くならない)。
+        "mg_setup_seconds": float(stats["mg_setup_seconds"]),
+        "mg_setup_share": (
+            float(stats["mg_setup_seconds"]) / solve_seconds if solve_seconds else 0.0
+        ),
         "assemble_share": assemble_seconds / step_seconds,
         "slice_share": slice_seconds / step_seconds,
         "cg_share": solve_seconds / step_seconds,
@@ -227,6 +237,33 @@ def measure_case(
         "stl": str(stl),
         "spmv": spmv,
     }
+
+
+def growth_exponents(rows: list[dict]) -> dict[str, dict]:
+    """題材ごとの伸びの指数 p(量 ∝ DOF^p)を最小二乗で出す。
+
+    **「速くなった」ではなく「指数がいくつからいくつになったか」を出すための口。**
+    前処理を変えると `CG反復/solve` の指数が変わり(対角前処理は DOF^0.41〜0.45、
+    格子非依存なら 0)、それがそのまま合計費用の指数に効く。解像度が1点しかない題材は
+    `None` を返す(2点以上ないと直線が引けない)。
+    """
+    out: dict[str, dict] = {}
+    for name in dict.fromkeys(r["case"] for r in rows):
+        group = sorted((r for r in rows if r["case"] == name), key=lambda r: r["ndof"])
+        if len(group) < 2:
+            out[name] = {"cg": None, "seconds": None, "points": len(group)}
+            continue
+        x = np.log([float(r["ndof"]) for r in group])
+        out[name] = {
+            "cg": float(np.polyfit(x, np.log([r["cg_iterations_mean"] for r in group]), 1)[0]),
+            "seconds": float(
+                np.polyfit(x, np.log([r["seconds_per_iteration"] for r in group]), 1)[0]
+            ),
+            "points": len(group),
+            "ndof": [int(r["ndof"]) for r in group],
+            "cg_iterations": [float(r["cg_iterations_mean"]) for r in group],
+        }
+    return out
 
 
 def _fmt_ratio(new: float, old: float | None) -> str:
@@ -264,18 +301,38 @@ def print_tables(rows: list[dict], baseline: dict | None = None) -> None:
 
     print("\n### 1回の solve の内訳(本番の全 solve の合計から)\n")
     print(
-        "| 題材 | 格子 | 組立 | スライス | CG | solve が設計反復に占める割合 | "
-        "非零要素 | SpMV 1回[ms] | 実効帯域[GB/s] |"
+        "| 題材 | 格子 | 組立 | スライス | CG | うち前処理の組み直し(CG欄の内数) | "
+        "solve が設計反復に占める割合 | 非零要素 | SpMV 1回[ms] | 実効帯域[GB/s] |"
     )
-    print("|---|---|---|---|---|---|---|---|---|")
+    print("|---|---|---|---|---|---|---|---|---|---|")
     for r in rows:
         s = r["spmv"]
         print(
             f"| {r['case']} n={r['resolution']} "
             f"| {r['grid'][0]}x{r['grid'][1]}x{r['grid'][2]} "
             f"| {r['assemble_share']:.1%} | {r['slice_share']:.1%} | {r['cg_share']:.1%} "
+            f"| {r.get('mg_setup_share', 0.0):.1%} "
             f"| {r['step_share_of_iteration']:.1%} "
             f"| {s['nnz']:,} | {s['seconds'] * 1e3:.2f} | {s['gbps']:.1f} |"
+        )
+
+    print("\n### 伸びの指数(量 ∝ DOF^p。解像度2点以上の題材だけ)\n")
+    now = growth_exponents(rows)
+    was = growth_exponents(baseline.get("rows", [])) if baseline else {}
+    print("| 題材 | DOF | CG反復/solve | CG反復の指数 p | 秒/設計反復の指数 p |")
+    print("|---|---|---|---|---|")
+    for name, g in now.items():
+        if g["cg"] is None:
+            continue
+        old_g = was.get(name)
+        old_cg = f" (旧 {old_g['cg']:.3f})" if old_g and old_g.get("cg") is not None else ""
+        old_sec = (
+            f" (旧 {old_g['seconds']:.3f})" if old_g and old_g.get("seconds") is not None else ""
+        )
+        dofs = " → ".join(f"{v:,}" for v in g["ndof"])
+        iters = " → ".join(f"{v:.1f}" for v in g["cg_iterations"])
+        print(
+            f"| {name} | {dofs} | {iters} | {g['cg']:.3f}{old_cg} | {g['seconds']:.3f}{old_sec} |"
         )
 
     print("\n### 題材が覆う性質\n")
@@ -300,6 +357,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-iter", type=int, default=MAX_ITER)
     parser.add_argument("--volfrac", type=float, default=VOLFRAC)
     parser.add_argument("--spmv-repeat", type=int, default=SPMV_REPEAT)
+    parser.add_argument(
+        "--solver",
+        type=str,
+        default=None,
+        choices=("mg", "cg", "direct"),
+        help="解法を上書きする(既定は simp 側の既定 = マルチグリッド)。"
+        "**旧い解法の基準線を同じセッションで撮り直すため**の口: --solver cg",
+    )
     parser.add_argument("--json", type=str, default=None, help="測定値の書き出し先")
     parser.add_argument(
         "--baseline",
@@ -328,6 +393,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_iter=args.max_iter,
                 volfrac=args.volfrac,
                 spmv_repeat=args.spmv_repeat,
+                solver=args.solver,
             )
             rows.append(row)
             print(
@@ -338,6 +404,7 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     payload = {
+        "solver": args.solver or "(既定)",
         "max_iter": args.max_iter,
         "volfrac": args.volfrac,
         "seconds_wall": time.perf_counter() - started,

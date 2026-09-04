@@ -761,6 +761,7 @@ def run_pipeline(
     obstacle: Any = None,
     stl_path: Optional[str | Path] = None,
     progress: Any = None,
+    solver: Optional[str] = None,
 ) -> dict:
     """ソリッドを端から端まで1回通す。戻り値は各段の実測と成果物。
 
@@ -783,6 +784,11 @@ def run_pipeline(
     **要素体積はここが格子から決めて `simp.optimize` へ渡す** —— 呼び出し側が
     `mm^3 → 要素数` の換算を自分で書くと、格子の作り方が変わったときに黙ってずれる。
     どちらの経路でも戻り値に mm^3 の実測が入る。
+
+    `solver` は `simp.optimize` の解法の**上書き**(既定は None = `simp` 側の既定)。
+    **性能の新旧比較のためだけにある口**で、`perf.py --solver cg` が旧い解法(Jacobi 前処理)
+    を同じセッションで撮り直すのに使う。None のときは `simp.optimize` へ渡さないので、
+    既定の挙動は1ビットも変わらない。
     """
     import mesh
     import simp
@@ -845,6 +851,7 @@ def run_pipeline(
         void_mask=void,
         solid_mask=solid,
         callback=progress,
+        **({} if solver is None else {"solver": solver}),
     )
     timings["optimize"] = time.perf_counter() - t0
 

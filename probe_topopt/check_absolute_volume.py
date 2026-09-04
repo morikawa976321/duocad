@@ -449,13 +449,20 @@ BASELINES = {
         "vol_sum": "0x1.7fffffffc728cp+8",
         "rho_sha": "8d037d7e9074d5d956db86337b628742f44a26b1c78796091fc65e1c41e27cdd",
     },
+    # **パッシブ要素経路の値は 2026-09-04 に取り直した。** `optimize` の既定の解法を
+    # Jacobi 前処理付きCG(`solver="cg"`)から幾何マルチグリッド(`"mg"`)へ切り替えたため。
+    # 同じ方程式を `rtol=1e-9` で解いた別の近似解なので、コンプライアンスは
+    # 上位13桁まで一致し(0x1.b57e0c569f1c2 → …f294)、下位だけが動く。**検査を緩めるのでは
+    # なく値を取り直した**(3回走らせて一致を確認)。プリセットのほうは `simp.PRESET` が
+    # `solver="cg"` を明示しているので**1ビットも動いていない** —— 退避経路が生きている
+    # ことの証拠でもある。
     "passive": {
         "n_iter": 12,
         "stopped_by": "max_iter",
-        "c_first": "0x1.b57e0c569f1c2p+7",
-        "c_last": "0x1.b39bd2b5b389ep+4",
-        "vol_sum": "0x1.1733333291cecp+8",
-        "rho_sha": "4f478c5104d9d7b7d615c7640eb2c9c5021774ca9620487bfb8be7be7ceaa65a",
+        "c_first": "0x1.b57e0c569f294p+7",
+        "c_last": "0x1.b39bd2b5bbd94p+4",
+        "vol_sum": "0x1.173333329ed0dp+8",
+        "rho_sha": "eefc4b58c60961e6994375116f95c1a42be6921608c582d5144503b167841b93",
     },
 }
 
