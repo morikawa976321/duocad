@@ -3964,11 +3964,17 @@ export function createViewport(container: HTMLElement): Viewport {
 
   const projectScratch = new THREE.Vector3()
 
-  /** 世界座標を**コンテナ内の画素**へ(視錐台の外・カメラの裏は null)。 */
-  function projectRaw(x: number, y: number, z: number): { x: number; y: number } | null {
+  /** 世界座標を**コンテナ内の画素**へ(視錐台の外・カメラの裏は null)。
+   *  `width`/`height` は呼び出し元から渡す —— `geometryInside` の頂点ループから
+   *  頂点ごとに `size()`(= DOM の `clientWidth`/`clientHeight` 読み取り)を呼ぶと、
+   *  矩形選択の実測で射影時間の92%を占めるほど遅い(2026-09-04計測)。
+   *  ここでモジュール側にキャッシュしないこと —— リサイズで寸法が変わるため、
+   *  キャッシュすると「同じ画素が別のものを指す」落とし穴に直結する
+   *  ([[viewport-resize-silently-changes-what-a-click-grabs]])。呼び出し元が
+   *  1回の矩形選択の中でだけ `size()` を読んで使い回す。 */
+  function projectRaw(x: number, y: number, z: number, width: number, height: number): { x: number; y: number } | null {
     projectScratch.set(x, y, z).project(camera)
     if (projectScratch.z < -1 || projectScratch.z > 1) return null
-    const { width, height } = size()
     return {
       x: ((projectScratch.x + 1) / 2) * width,
       y: ((1 - projectScratch.y) / 2) * height,
@@ -3986,21 +3992,32 @@ export function createViewport(container: HTMLElement): Viewport {
    * ドラッグを離すたびに数十万点を射影することになるが、実際には矩形の外にある面が
    * ほとんどで、1点目で落ちる。
    */
-  function geometryInside(geometry: THREE.BufferGeometry, matrix: THREE.Matrix4, rect: ReturnType<typeof boxRect>): boolean {
+  function geometryInside(
+    geometry: THREE.BufferGeometry,
+    matrix: THREE.Matrix4,
+    rect: ReturnType<typeof boxRect>,
+    width: number,
+    height: number,
+  ): boolean {
     const position = geometry.getAttribute('position')
     if (!position || position.count === 0) return false
     const world = new THREE.Vector3()
     for (let at = 0; at < position.count; at += 1) {
       world.set(position.getX(at), position.getY(at), position.getZ(at)).applyMatrix4(matrix)
-      const screen = projectRaw(world.x, world.y, world.z)
+      const screen = projectRaw(world.x, world.y, world.z, width, height)
       if (screen === null || !inside(rect, screen)) return false
     }
     return true
   }
 
-  function objectInside(object: THREE.Object3D & { geometry: THREE.BufferGeometry }, rect: ReturnType<typeof boxRect>): boolean {
+  function objectInside(
+    object: THREE.Object3D & { geometry: THREE.BufferGeometry },
+    rect: ReturnType<typeof boxRect>,
+    width: number,
+    height: number,
+  ): boolean {
     object.updateWorldMatrix(true, false)
-    return geometryInside(object.geometry, object.matrixWorld, rect)
+    return geometryInside(object.geometry, object.matrixWorld, rect, width, height)
   }
 
   function collectInBox(rect: ReturnType<typeof boxRect>): Omit<BoxSelectEvent, 'mode'> {
@@ -4010,24 +4027,29 @@ export function createViewport(container: HTMLElement): Viewport {
     const regions: Array<{ sketchId: string; index: number }> = []
     const sketchEntities: SketchEntityHit[] = []
 
+    // ビューポートの寸法はこの呼び出し1回の間ずっと不変なので、頂点ごとに読まず
+    // ここで1回だけ読んで使い回す(モジュール側にはキャッシュしない —
+    // `projectRaw` のコメント参照)。
+    const { width, height } = size()
+
     if (activeSketchId === null) {
       // **面は常に指せる**(クリックと同じ)。隠したBodyのメッシュは `visible=false` なので外す。
       for (const [bodyId, entry] of bodies) {
         for (const mesh of entry.faceMeshes) {
           if (!mesh.visible) continue
-          if (!objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect)) continue
+          if (!objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
           const faceIndex = mesh.userData.faceIndex
           if (typeof faceIndex === 'number') faces.push({ bodyId, faceIndex })
         }
       }
       // 辺・頂点は「出している間だけ」(クリックの `edgeAt` / `vertexAt` と同じゲート)
       for (const line of edgeLines) {
-        if (!objectInside(line as THREE.Line & { geometry: THREE.BufferGeometry }, rect)) continue
+        if (!objectInside(line as THREE.Line & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
         const { bodyId, edgeIndex } = line.userData
         if (typeof bodyId === 'string' && typeof edgeIndex === 'number') edges.push({ bodyId, edgeIndex })
       }
       for (const mesh of vertexMeshes) {
-        if (!objectInside(mesh as THREE.Points & { geometry: THREE.BufferGeometry }, rect)) continue
+        if (!objectInside(mesh as THREE.Points & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
         const { bodyId, vertexIndex } = mesh.userData
         if (typeof bodyId === 'string' && typeof vertexIndex === 'number') vertices.push({ bodyId, vertexIndex })
       }
@@ -4037,7 +4059,7 @@ export function createViewport(container: HTMLElement): Viewport {
       const target = sketches.get(activeSketchId)
       const whole = new Set<string>()
       for (const line of target?.handleLines ?? []) {
-        if (!objectInside(line as THREE.Line & { geometry: THREE.BufferGeometry }, rect)) continue
+        if (!objectInside(line as THREE.Line & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
         const entityId = line.userData.entityId
         if (typeof entityId !== 'string') continue
         whole.add(entityId)
@@ -4048,14 +4070,14 @@ export function createViewport(container: HTMLElement): Viewport {
         const point = mesh.userData.point
         if (typeof entityId !== 'string' || typeof point !== 'string') continue
         if (whole.has(entityId)) continue
-        if (!objectInside(mesh as THREE.Points & { geometry: THREE.BufferGeometry }, rect)) continue
+        if (!objectInside(mesh as THREE.Points & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
         sketchEntities.push({ sketchId: activeSketchId, entityId, point })
       }
     }
 
     // 領域は**クリックと同じゲート**(`regionPickTargets`)。スケッチモード中はそのスケッチだけ。
     for (const mesh of regionPickTargets()) {
-      if (!objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect)) continue
+      if (!objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
       const { sketchId, regionIndex } = mesh.userData
       if (typeof sketchId === 'string' && typeof regionIndex === 'number') {
         regions.push({ sketchId, index: regionIndex })
