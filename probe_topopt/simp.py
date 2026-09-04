@@ -372,6 +372,11 @@ class Result:
     target_volume: float = float("nan")  # 要素数
     volfrac: float = float("nan")  # 動かせる要素に対する実効分率
     element_volume_mm3: float | None = None
+    # `optimize(keep_model=True)` のときだけ入る、実際に解いた `Model`。**既定は None** ——
+    # `Model` は `_iK`/`_jK` に要素数×576 の添字配列を2本持つので、要らない呼び出しにまで
+    # 数十MBを持たせない。後処理(`stress.py`)が拘束・荷重を手で組み直さずに済むための口で、
+    # 組み直しを誤ると**落ちずに違う応力**が出る。
+    model: "Model | None" = None
 
     @property
     def target_material_mm3(self) -> float | None:
@@ -511,6 +516,7 @@ def optimize(
     load: np.ndarray | None = None,
     void_mask: np.ndarray | None = None,
     solid_mask: np.ndarray | None = None,
+    keep_model: bool = False,
 ) -> Result:
     """SIMPでコンプライアンス最小化を行う。
 
@@ -534,6 +540,10 @@ def optimize(
 
     `element_volume_mm3` は `volfrac` の側でも渡してよい(体積目標は変わらず、`Result` が
     mm^3 でも答えられるようになるだけ)。
+
+    `keep_model=True` にすると `Result.model` に**実際に解いた `Model`** が入る
+    (既定は入らない)。応力の後処理(`stress.py`)が拘束・荷重・浮いた節点の扱いを
+    手で組み直さずに済ませるための口で、**数値は1ビットも変わらない**。
     """
     check_volume_target(volfrac, material_mm3)
     if material_mm3 is not None and element_volume_mm3 is None:
@@ -671,6 +681,7 @@ def optimize(
         element_volume_mm3=(
             None if element_volume_mm3 is None else float(element_volume_mm3)
         ),
+        model=model if keep_model else None,
     )
 
 
