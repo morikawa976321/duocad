@@ -30,7 +30,11 @@
   </script>
 </head>
 <body>
-  <button id="run" type="button">最適化を実行</button>
+  <!-- **既定表示(4条件)を読み込むまでは押せない**(`disabled`)。読み込み中に押しても
+       クリックハンドラが発火しないので、条件読み込み用のソケットとボタンが開く実行用の
+       ソケットが競合しない(2026-09-04: 早押しで両方が同時に走り、片方の応答が
+       もう片方の状態を上書きして `done` に辿り着けなくなる実害を実機で踏んだ)。 -->
+  <button id="run" type="button" disabled>読み込み中…</button>
   <script type="module">
   import * as THREE from 'three';
   import { OrbitControls } from './vendor/three/OrbitControls.js';
@@ -44,11 +48,26 @@
   // 既定(付けない場合)は完了時に平滑化した面へ差し替わる。
   const VOXEL_ONLY = new URLSearchParams(location.search).get('voxel') === '1';
   // **`?debug=anchors` を付けたときは最適化を回さず、面アンカー(CADの面に割り当てた
-  // 格子節点)を描く**。固定に割り当てた節点と荷重に割り当てた節点を別々の色で出す。
+  // 格子節点)を描く**。固定に割り当てた節点と荷重に割り当てた節点を別々の色で出す
+  // (面アンカーが効いていることの唯一の目視確認。既定表示に切り替えても消さずに残す)。
   const ANCHOR_DEBUG = new URLSearchParams(location.search).get('debug') === 'anchors';
-  // 実機検査(shot_anchors.mjs)が「2色が本当に画面に出ているか」を数えるための基準色。
-  const FIXED_COLOR = 0x2ee6a8;   // 固定 = 緑シアン
-  const LOAD_COLOR = 0xff5c2e;    // 荷重 = 橙赤
+  // **`?debug=space` を付けたときだけ、塊(設計空間)のボクセルを重ねて描く**。
+  // 利用者には塊を見せないのが本体のUX決定(engine
+  // `topopt-design-space-never-shown-to-the-user`)なので既定はオフ —— ただしここは
+  // 開発用プローブなので、答えがおかしいときに「塊が悪いのか最適化が悪いのか」を
+  // 切り分ける手段として残す。
+  const SHOW_SPACE = new URLSearchParams(location.search).get('debug') === 'space';
+  // `?debug=anchors` の節点色(固定=緑シアン/荷重=橙赤)。既定表示の4色とは別物。
+  const ANCHOR_FIXED_COLOR = 0x2ee6a8;
+  const ANCHOR_LOAD_COLOR = 0xff5c2e;
+  // **既定表示の4色。duocad 本体(`web/src/viewport.ts` の `OPTIMIZE_*_COLOR`)とそのまま
+  // 揃える** —— ここで見た目を先に詰めて、本体側の色分けを直すときはこの2箇所を両方
+  // 直すのではなく、そちら1箇所を直せば済むようにする(タスクの契約表)。
+  const KEEP_COLOR = 0x3f9b58;      // 保持(面を塗る)
+  const EXCLUDE_COLOR = 0xc75448;   // 除外(面を塗る)
+  const FIXTURE_COLOR = 0x3f7fc2;   // 拘束面(面を塗る)
+  const FIXTURE_MARK_COLOR = 0x1c3550; // 拘束の固定記号(四角錐)
+  const LOAD_COLOR = 0xffc857;      // 荷重(矢印+ラベル)
   const runBtn = document.getElementById('run');
 
   const probe = {
@@ -60,6 +79,8 @@
     surface: null,
     // `?debug=anchors` のときだけ入る {fixed, load, design, fixedColor, loadColor}。
     anchors: null,
+    // 既定表示(4条件)のときだけ入る {keepTriangles, obstacleTriangles, ...}。
+    conditions: null,
   };
   window.__probe = probe;
 
@@ -85,6 +106,15 @@
   let designMesh = null;
   let fixedMesh = null;
   let loadMesh = null;
+  // 既定表示(4条件)の装飾。`start`(最適化開始)で全部消す —— ボクセル/平滑化メッシュと
+  // 同じ場所に B-rep の面が重なって z-fighting するのを避けるため。
+  let keepMesh = null;
+  let excludeMesh = null;
+  let fixtureMesh = null;
+  let fixtureMark = null;
+  let loadArrow = null;
+  let loadLabel = null;
+  let spaceMesh = null;
   let boundsHelper = null;
   let nelx = 0;
   let nely = 0;
@@ -111,13 +141,19 @@
    * **「格子の最大辺 × 係数」で決めない** —— 視野角と縦横比を無視した目分量になり、
    * 40x16x16 だと画面の1/6ほどの大きさにしか映らなかった(2026-08-29に実測)。
    * 外接球の半径から必要な距離を三角法で出す。
+   *
+   * **視線の向き(2026-09-04実測で調整)**: `demo_conditions()` の拘束面(固定側パッドの
+   * x最小面、法線 -x)は軸整列の平面なので、カメラの向きが -x 成分を十分持たないと
+   * 隣接する面の陰に隠れてほぼ見えなくなる(旧来の `(0.72,0.45,0.86)` では拘束面の
+   * 画素がほぼ0だった実測)。荷重面(+z、上面)は元々どの向きからでも見えるので、
+   * `x` の符号だけ反転し大きさも強めて4色とも十分な画素が出る向きにした。
    */
   function fitCamera() {
     const radius = 0.5 * Math.hypot(nelx || 1, nely || 1, nelz || 1);
     const vFov = THREE.MathUtils.degToRad(camera.fov);
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
     const dist = Math.max(radius / Math.sin(vFov / 2), radius / Math.sin(hFov / 2)) * 1.08;
-    camera.position.copy(new THREE.Vector3(0.72, 0.45, 0.86).normalize().multiplyScalar(dist));
+    camera.position.copy(new THREE.Vector3(-0.75, 0.5, 0.6).normalize().multiplyScalar(dist));
     camera.near = dist / 100;
     camera.far = dist * 20;
     camera.updateProjectionMatrix();
@@ -262,8 +298,8 @@
       scene.add(m);
       return m;
     };
-    fixedMesh = build(msg.fixed, FIXED_COLOR);
-    loadMesh = build(msg.load, LOAD_COLOR);
+    fixedMesh = build(msg.fixed, ANCHOR_FIXED_COLOR);
+    loadMesh = build(msg.load, ANCHOR_LOAD_COLOR);
     nodeGeo.dispose();
 
     updateBounds();
@@ -276,15 +312,187 @@
       fixedArea: msg.fixed_area,
       loadArea: msg.load_area,
       seconds: msg.seconds,
-      fixedColor: FIXED_COLOR,
+      fixedColor: ANCHOR_FIXED_COLOR,
+      loadColor: ANCHOR_LOAD_COLOR,
+    };
+  }
+
+  /**
+   * サーバが送ってきた `{positions, triangles}` から不透明な `THREE.Mesh` を作る。
+   * **両面描画にする**(`side: THREE.DoubleSide`) —— `keep` はちょうど拘束面ぶんだけ
+   * 三角形を除いた「穴あき」メッシュなので、その穴の縁を裏側から見ると本来なら見える
+   * `fixture` 面が既定のカリング(表向きだけ描画)だとバックフェースとして消える
+   * (デモの拘束面はカメラの反対側を向いているため、既定のカメラ位置では常に裏から見る)。
+   * OrbitControlsで自由に回せることも踏まえ、3色すべて両面にして向きに依存しない表示にする。
+   */
+  function buildTriMesh(data, color) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(data.positions, 3));
+    geometry.setIndex(new THREE.Uint32BufferAttribute(data.triangles, 1));
+    geometry.computeVertexNormals();
+    const material = new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide });
+    const m = new THREE.Mesh(geometry, material);
+    scene.add(m);
+    return m;
+  }
+
+  /** 荷重の大きさのラベル(canvasテクスチャの札)。duocad `viewport.ts` の
+   *  `makeMagnitudeLabel` と同じ作り方(記号の一致までは求めない。タスクの制約)。 */
+  function makeMagnitudeLabel(text, height) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 96;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = 'rgba(16, 22, 30, 0.85)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#ffc857';
+      ctx.font = 'bold 48px sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, 12, canvas.height / 2);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.SpriteMaterial({
+      map: texture, depthTest: false, depthWrite: false, transparent: true,
+    });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(height * (canvas.width / canvas.height), height, 1);
+    return sprite;
+  }
+
+  /** 既定表示(4条件)の装飾を全部消す。`start`(最適化開始)のたびに呼ぶ。 */
+  function disposeConditions() {
+    keepMesh = disposeMesh(keepMesh);
+    excludeMesh = disposeMesh(excludeMesh);
+    fixtureMesh = disposeMesh(fixtureMesh);
+    fixtureMark = disposeMesh(fixtureMark);
+    if (loadArrow) {
+      scene.remove(loadArrow);
+      loadArrow.dispose();
+      loadArrow = null;
+    }
+    if (loadLabel) {
+      scene.remove(loadLabel);
+      loadLabel.material.map.dispose();
+      loadLabel.material.dispose();
+      loadLabel = null;
+    }
+    spaceMesh = disposeMesh(spaceMesh);
+  }
+
+  /**
+   * 既定表示: 起動直後に4条件を duocad 本体と同じ色分けで描く(完了条件1)。
+   * `mode:'conditions'` の応答1発だけを受けて描き、最適化は回さない。
+   *
+   * 座標はサーバ側(`_to_index_space`)で `(mm - grid.origin) / spacing - shape/2` へ
+   * 変換済み —— ボクセルの立方体(`updateInstances`)や `?debug=anchors` の節点と
+   * **同じ規約**なので、ここでは足し引きしない(両側で引くと二重にずれる)。
+   */
+  function showConditions(msg) {
+    nelx = msg.nelx;
+    nely = msg.nely;
+    nelz = msg.nelz;
+    maxIter = msg.max_iter;
+    disposeConditions();
+
+    keepMesh = buildTriMesh(msg.keep, KEEP_COLOR);
+    if (msg.obstacle) excludeMesh = buildTriMesh(msg.obstacle, EXCLUDE_COLOR);
+    fixtureMesh = buildTriMesh(msg.fixed.mesh, FIXTURE_COLOR);
+
+    // 記号の大きさは格子の見かけの大きさ(index空間の単位)に合わせる。
+    // duocad は `contentDiagonal`(モデルの対角線)を基準にしており、ここでの
+    // 「格子の最大辺」がその代わり。
+    const scale = Math.max(nelx, nely, nelz);
+
+    // 拘束の固定記号(四角錐)。**面に刺さる向き**(法線の逆)へ向け、根元を面の
+    // 少し上(法線方向)へ持ち上げる。duocad `setOptimizeState` と同じ作り方。
+    const markSize = scale * 0.12;
+    const markGeo = new THREE.ConeGeometry(markSize * 0.6, markSize, 4);
+    const markMat = new THREE.MeshLambertMaterial({ color: FIXTURE_MARK_COLOR });
+    fixtureMark = new THREE.Mesh(markGeo, markMat);
+    const fn = new THREE.Vector3(...msg.fixed.normal).normalize();
+    fixtureMark.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), fn.clone().negate());
+    fixtureMark.position
+      .set(msg.fixed.centroid[0], msg.fixed.centroid[1], msg.fixed.centroid[2])
+      .addScaledVector(fn, markSize * 0.6);
+    scene.add(fixtureMark);
+
+    // 荷重の矢印+大きさのラベル。**面の法線ではなく、実際に最適化へ渡す力の向き**
+    // (`msg.load.direction`)を描く —— 見た目と計算の入力を揃えるため。
+    const loadOrigin = new THREE.Vector3(...msg.load.centroid);
+    const loadDir = new THREE.Vector3(...msg.load.direction).normalize();
+    const arrowLen = scale * 0.32;
+    loadArrow = new THREE.ArrowHelper(
+      loadDir, loadOrigin, arrowLen, LOAD_COLOR, arrowLen * 0.3, arrowLen * 0.18,
+    );
+    scene.add(loadArrow);
+    loadLabel = makeMagnitudeLabel(`${msg.load.magnitude.toFixed(1)}N`, scale * 0.09);
+    loadLabel.position.copy(loadOrigin).addScaledVector(loadDir, arrowLen * 1.15);
+    scene.add(loadLabel);
+
+    // 塊(設計空間)は既定では描かない(本体のUX決定)。`?debug=space` のときだけ、
+    // 答えがおかしいときの切り分け用に半透明で重ねる。
+    if (SHOW_SPACE && msg.space && msg.space.design.length > 0) {
+      spaceMesh = new THREE.InstancedMesh(
+        new THREE.BoxGeometry(1, 1, 1),
+        new THREE.MeshLambertMaterial({ color: 0x39445e, transparent: true, opacity: 0.28 }),
+        msg.space.design.length,
+      );
+      spaceMesh.count = msg.space.design.length;
+      for (let i = 0; i < msg.space.design.length; i++) {
+        const [ex, ey, ez] = flatToExyz(msg.space.design[i]);
+        dummy.position.set(ex + 0.5 - nelx / 2, ey + 0.5 - nely / 2, ez + 0.5 - nelz / 2);
+        dummy.updateMatrix();
+        spaceMesh.setMatrixAt(i, dummy.matrix);
+      }
+      spaceMesh.instanceMatrix.needsUpdate = true;
+      scene.add(spaceMesh);
+    }
+
+    updateBounds();
+    probe.conditions = {
+      keepTriangles: msg.keep.triangles.length / 3,
+      obstacleTriangles: msg.obstacle ? msg.obstacle.triangles.length / 3 : 0,
+      fixtureTriangles: msg.fixed.mesh.triangles.length / 3,
+      loadMagnitude: msg.load.magnitude,
+      spaceElements: msg.space ? msg.space.design.length : 0,
+      keepColor: KEEP_COLOR,
+      excludeColor: EXCLUDE_COLOR,
+      fixtureColor: FIXTURE_COLOR,
       loadColor: LOAD_COLOR,
     };
   }
 
   /**
-   * 画面に**2色が本当に出ているか**を数える(実機検査の穴)。
+   * **検出力を確認するための穴**(タスク要求: 「描画を1色ずつ止めて、その色の判定が
+   * 実際に落ちることを見る」)。`shot_anchors.mjs` が変異検査として使う —— 集計だけの
+   * 検査は「描かれていない色を見逃す」ことがある(2026-09-02の実例)ので、閾値を決める前に
+   * 1色ずつ隠して本当に0付近まで落ちることを機械で確かめる。
+   */
+  probe.setVisible = (role, visible) => {
+    if (role === 'keep' && keepMesh) keepMesh.visible = visible;
+    if (role === 'exclude' && excludeMesh) excludeMesh.visible = visible;
+    if (role === 'fixture') {
+      if (fixtureMesh) fixtureMesh.visible = visible;
+      if (fixtureMark) fixtureMark.visible = visible;
+    }
+    if (role === 'load') {
+      if (loadArrow) loadArrow.visible = visible;
+      if (loadLabel) loadLabel.visible = visible;
+    }
+    if (role === 'bounds' && boundsHelper) boundsHelper.visible = visible;
+  };
+
+  /**
+   * 画面に色が本当に出ているかを数える(実機検査の穴)。
    * 直前に自分で1フレーム描いてから読むので `preserveDrawingBuffer` は要らない。
-   * 「両方の節点集合を描いたつもりで、片方が形状の裏に隠れている/同じ色だった」を弾く。
+   * 「描いたつもりで、裏に隠れている/他の色に埋もれている」を弾く。
+   *
+   * **既定表示の4色ぶんに判定を作り直した(2026-09-04)** —— 旧`?debug=anchors`の
+   * 節点色(緑シアン/橙赤)向けの単純な比較(`g > 1.6r` 等)は、duocad の青
+   * `#3f7fc2`(`127 > 223` で落ちる)と黄`#ffc857`(`255 > 360` で落ちる)を通せない。
+   * 4色は同時には出ない(既定表示 or `?debug=anchors` のどちらか)ので、両方の
+   * 判定を毎回まとめて数えても実害は無い。
    */
   probe.pixelCensus = () => {
     renderer.render(scene, camera);
@@ -293,14 +501,34 @@
     const h = gl.drawingBufferHeight;
     const buf = new Uint8Array(w * h * 4);
     gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
-    let fixed = 0;
-    let load = 0;
+    let fixed = 0;   // ?debug=anchors の固定色(緑シアン)
+    let load = 0;    // ?debug=anchors の荷重色(橙赤)
+    let keep = 0;    // 既定表示: 保持(#3f9b58)
+    let exclude = 0; // 既定表示: 除外(#c75448)
+    let fixture = 0; // 既定表示: 拘束面(#3f7fc2)
+    let loadColor = 0; // 既定表示: 荷重の矢印/ラベル(#ffc857)
     for (let i = 0; i < buf.length; i += 4) {
       const r = buf[i], g = buf[i + 1], b = buf[i + 2];
       if (g > 110 && g > 1.6 * r && g > 1.15 * b) fixed++;
-      else if (r > 110 && r > 1.8 * g && r > 2.2 * b) load++;
+      if (r > 110 && r > 1.8 * g && r > 2.2 * b) load++;
+      // 保持 #3f9b58 相当: 陰影後の実測は概ね (24,72,40) 前後。G が最大で R・B より
+      // はっきり大きい。
+      if (g > 40 && g > 1.6 * r && g > 1.3 * b) keep++;
+      // 除外 #c75448 相当: 陰影後の実測は概ね (72,24,24)〜(136,56,48)。R が最大で
+      // G・B(ほぼ同じ値)よりはっきり大きい。
+      if (r > 40 && r > 1.8 * g && r > 1.8 * b) exclude++;
+      // 拘束面 #3f7fc2 相当: 陰影後の実測は概ね (16,40,72)(直射光が当たらず環境光
+      // だけになる向きのため元の16進より暗い)。**`boundsHelper`(半透明の青灰
+      // `#5577aa`)が背景と混ざった色 `(48,56,88)` 前後が紛れ込みやすい**ので、
+      // `b > 1.6*g` で弾く(境界線ブレンドは b/g≈1.2 止まりだが実際の拘束面は
+      // b/g≈1.8 前後。2026-09-04にここで実際に検出力ゼロを踏んだ)。
+      if (b > 45 && b > 1.8 * r && b > 1.6 * g) fixture++;
+      // 荷重の矢印/ラベル #ffc857 相当(ArrowHelper・ラベルは非lit素材なので元の色に
+      // 近いまま出る)。R と G が拮抗して高く(R/G が1に近い)、B だけ低い
+      // (`exclude` の「R>>G」と違って R と G の比が 1 に近い)。
+      if (r > 140 && g > 100 && r > 1.9 * b && r < 1.6 * g) loadColor++;
     }
-    return { width: w, height: h, fixed, load };
+    return { width: w, height: h, fixed, load, keep, exclude, fixture, loadColor };
   };
 
   function flatToExyz(e) {
@@ -351,7 +579,21 @@
       }
       return;
     }
+    if (msg.type === 'conditions') {
+      showConditions(msg);
+      setProbeState('conditions');
+      runBtn.disabled = false;
+      runBtn.textContent = '最適化を実行';
+      if (socket) {
+        socket.close();
+        socket = null;
+      }
+      return;
+    }
     if (msg.type === 'start') {
+      // **その時点で最新の最適化経路を可視化する**(本人指示)。既定表示の装飾
+      // (保持/除外/拘束/荷重)は反復のボクセルと同じ場所に重なるので、ここで消す。
+      disposeConditions();
       maxIter = msg.max_iter;
       initMesh(msg.nelx, msg.nely, msg.nelz);
       runBtn.textContent = `反復 0/${maxIter}`;
@@ -397,7 +639,26 @@
     }
   }
 
-  if (ANCHOR_DEBUG) runBtn.textContent = '面アンカーを表示';
+  if (ANCHOR_DEBUG) {
+    // `?debug=anchors` は従来どおりボタン待ち(押すまで何も接続しない)。
+    // HTML側の既定は `disabled`(既定表示の読み込み待ち用)なので、ここで明示的に外す。
+    runBtn.disabled = false;
+    runBtn.textContent = '面アンカーを表示';
+  } else {
+    // **既定表示: ページを開いた時点で(ボタンを押す前に)4条件を読み込んで描く**
+    // (完了条件1「フラグ不要」)。一度きりの応答なので専用のソケットで済ませる。
+    const s = new WebSocket(WS_URL);
+    s.addEventListener('open', () => {
+      s.send(JSON.stringify({ type: 'start', mode: 'conditions' }));
+    });
+    s.addEventListener('message', (ev) => handleMessage(JSON.parse(ev.data)));
+    s.addEventListener('error', () => {
+      setProbeState('error');
+      probe.error = '条件の読み込みに失敗しました(WebSocket接続エラー)';
+      runBtn.disabled = false;
+      runBtn.textContent = probe.error;
+    });
+  }
 
   runBtn.addEventListener('click', () => {
     if (probe.state === 'running') return;

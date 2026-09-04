@@ -9,11 +9,13 @@ import threading
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 from websockets.asyncio.server import serve
 
 import anchor
+import design_space as ds
 import mesh
 import simp
 import voxelize as vx
@@ -27,6 +29,39 @@ _HOST = "127.0.0.1"
 # プローブを先に立てると**本体の起動が黙って失敗する**。
 _HTTP_PORT = int(os.environ.get("PROBE_HTTP_PORT", "8775"))
 _WS_PORT = int(os.environ.get("PROBE_WS_PORT", "8776"))
+
+# **ボタンが解く問題(2026-09-04〜)。** 表示・確認用なので解像度・反復数は短くて良いが、
+# `check_design_space.py` の `CASE1_LONG_AXIS`(=22)と同じ値にしてある —— そちらは
+# 4条件から連結性ガードまで通ることを検査済みの解像度で、ここで独自の値を選んで
+# 未検査の組み合わせを踏むリスクを避ける。実測は README「起動直後の4条件表示」節。
+DEMO_ELEMENTS_LONG_AXIS = 22
+DEMO_VOLFRAC = 0.3
+DEMO_MAX_ITER = 30
+DEMO_FORCE = (0.0, 0.0, -1.0)
+# `run_topopt` の既定出力(`output/design_space_case1.stl`)や `check_anchor.py` の成果物
+# (`output/bracket.stl`)を上書きしないよう、専用の出力先を明示する。
+DEMO_STL_PATH = _ROOT / "output" / "server_conditions_demo.stl"
+
+_demo_space_lock = threading.Lock()
+_demo_space: ds.DesignSpace | None = None
+
+
+def _get_demo_space() -> ds.DesignSpace:
+    """既定表示(4条件)とボタンが解く問題を**同じオブジェクト**で共有する。
+
+    起動直後の表示と最適化の入口を別々に `derive()` すると、余白や格子が独立に決まりうる
+    ——「見せている問題と解いている問題が別物」になる(このタスクの完了条件3)。初回アクセスで
+    1回だけ導出し、以後はプロセスが生きている間キャッシュする(`derive` は毎回 B-rep から
+    三角形分割をやり直すので、リクエストのたびに呼ぶのは無駄に遅い)。
+    """
+    global _demo_space
+    if _demo_space is None:
+        with _demo_space_lock:
+            if _demo_space is None:
+                _demo_space = ds.derive(
+                    ds.demo_conditions(), elements_long_axis=DEMO_ELEMENTS_LONG_AXIS
+                )
+    return _demo_space
 
 
 class _StaticHandler(SimpleHTTPRequestHandler):
@@ -49,14 +84,20 @@ class _AppState:
 
 
 def _start_message() -> dict[str, object]:
-    preset = simp.PRESET
+    """ボタンが解く問題(2026-09-04〜: 4条件から導出した塊)の反復開始通知。
+
+    **`_get_demo_space()` と同じキャッシュを読む** —— ここで別の解像度を渡すと、
+    `start` が予告する `nelx/nely/nelz` と実際に流れてくる `iter` メッセージの
+    ボクセル形状が食い違う。
+    """
+    nelx, nely, nelz = _get_demo_space().grid.shape
     return {
         "type": "start",
-        "nelx": preset["nelx"],
-        "nely": preset["nely"],
-        "nelz": preset["nelz"],
-        "max_iter": preset["max_iter"],
-        "volfrac": preset["volfrac"],
+        "nelx": int(nelx),
+        "nely": int(nely),
+        "nelz": int(nelz),
+        "max_iter": DEMO_MAX_ITER,
+        "volfrac": DEMO_VOLFRAC,
     }
 
 
@@ -96,6 +137,109 @@ def _build_mesh_payload(rho: np.ndarray) -> dict[str, object]:
     return {
         "vertices": verts.ravel().tolist(),
         "faces": mr.faces.astype(np.int64).ravel().tolist(),
+    }
+
+
+def _to_index_space(points: np.ndarray, grid: vx.Grid) -> np.ndarray:
+    """B-repのmm座標 → ビューアの規約(要素1個=1単位、原点は格子の中心)。
+
+    ボクセルの立方体は要素 `(ex,ey,ez)` の中心を `(ex+0.5-nelx/2, ...)` に置く
+    (`index.html` の `updateInstances` / `showAnchors` と同じ規約)。B-rep由来の三角形を
+    同じ場所に重ねるには mm座標を `(mm - grid.origin) / spacing - shape/2` へ変換する必要が
+    ある —— ここを取り違えると、条件の見た目は正しいのに実際に解いている格子とは
+    半セル〜1セルぶんずれる。
+    """
+    lo, _ = grid.world_box()
+    shape = np.asarray(grid.shape, dtype=float)
+    return (np.asarray(points, dtype=float) - lo) / float(grid.spacing) - shape / 2.0
+
+
+def _mesh_of(positions_index_space: np.ndarray, triangles: np.ndarray) -> dict[str, object]:
+    return {
+        "positions": np.round(positions_index_space, 4).ravel().tolist(),
+        "triangles": np.asarray(triangles, dtype=np.int64).ravel().tolist(),
+    }
+
+
+def _build_condition_payload(space: ds.DesignSpace) -> dict[str, object]:
+    """起動直後の既定表示: 4条件を duocad 本体と同じ色分けで描く材料を送る。
+
+    **`space` は `run_topopt` に渡すのと同じオブジェクト**であること(このタスクの完了条件3)。
+    ここで別に `derive()` し直すと、見せている問題と解く問題が別物になりうる。
+
+    塗り分け(duocad `web/src/viewport.ts` に合わせる。詳細はタスクの契約表):
+    - 保持 = `conditions.keep` の三角形(拘束面ぶんは除く。**duocadは拘束面が勝つ**
+      —— `applyFaceMaterials` の役割解決で `fixture` が `preserve` より優先される)。
+    - 除外 = `conditions.obstacle` の三角形。**`space.model.obstacle`(ボクセルのマスク)は
+      使わない** —— `derive()` は除外を塊から引き切っているので、そのマスクは常に全 False
+      (`model_from_design_mask` に `obstacle` を渡していない。モジュール docstring)。
+    - 拘束面・荷重面は `soup.triangles_of_face(face)` で当該面だけを塗る/装飾する
+      (面添字は `space.fixed_face` / `space.load_face`)。荷重面はduocad同様**面の色は
+      変えず**(保持のまま)矢印とラベルだけを重ねる。
+    """
+    grid = space.grid
+    soup = space.soup
+    conditions = space.conditions
+    if conditions.anchor is not conditions.keep:
+        # デモは anchor_shape を省略している(= keep がそのまま面アンカーの対象)ので
+        # space.soup がそのまま保持ソリッドの三角形分割になる。ここが崩れる呼び出しは
+        # 想定していない(黙って別の形を「保持」として塗ることになるので早期に落とす)。
+        raise ValueError(
+            "conditions.anchor_shape が keep と異なる: 既定表示は space.soup を"
+            "保持ソリッドの三角形分割として流用しているため、この経路は未対応"
+        )
+    fixed_face = space.fixed_face
+    load_face = space.load_face
+    fixed_tri = soup.triangles_of_face(fixed_face)
+    keep_tri = np.setdiff1d(np.arange(soup.triangle_count), fixed_tri)
+    positions = _to_index_space(soup.positions, grid)
+
+    obstacle_mesh: Optional[dict[str, object]] = None
+    if conditions.obstacle is not None:
+        # 除外ソリッドは面アンカーの対象(`soup`)に含まれないので、自分で三角形分割する。
+        # `deviation` は `derive()` が塊の格子を決めるのに使った値と揃える(見た目だけの
+        # 都合で、揃えなくても正しさには影響しない)。
+        dev = float(space.stats["deviation"])
+        obs_soup = vx.triangles_from_shape(vx._unwrap(conditions.obstacle), deviation=dev)
+        obstacle_mesh = _mesh_of(_to_index_space(obs_soup.positions, grid), obs_soup.triangles)
+
+    fixed_centroid = _to_index_space(
+        np.asarray(soup.face_props[fixed_face]["centroid"], dtype=float).reshape(1, 3), grid
+    )[0]
+    fixed_normal = np.asarray(soup.face_props[fixed_face]["normal"], dtype=float)
+    load_centroid = _to_index_space(
+        np.asarray(soup.face_props[load_face]["centroid"], dtype=float).reshape(1, 3), grid
+    )[0]
+    force = np.asarray(DEMO_FORCE, dtype=float)
+    norm = float(np.linalg.norm(force))
+    # **矢印は実際に最適化へ渡す力の向き**(`DEMO_FORCE`)を描く。面法線ではない
+    # —— duocad も `direction: 'vector' | '-normal' | 'normal'` を区別して持つのと同じ理由で、
+    # 見た目と計算の入力を別々に決めると食い違いに気づけなくなる。
+    direction = (force / norm).tolist() if norm > 0 else [0.0, 0.0, -1.0]
+
+    nelx, nely, nelz = grid.shape
+    return {
+        "type": "conditions",
+        "nelx": int(nelx),
+        "nely": int(nely),
+        "nelz": int(nelz),
+        "max_iter": DEMO_MAX_ITER,
+        "volfrac": DEMO_VOLFRAC,
+        "keep": _mesh_of(positions, soup.triangles[keep_tri]),
+        "obstacle": obstacle_mesh,
+        "fixed": {
+            "mesh": _mesh_of(positions, soup.triangles[fixed_tri]),
+            "centroid": np.round(fixed_centroid, 4).tolist(),
+            "normal": np.round(fixed_normal, 6).tolist(),
+        },
+        "load": {
+            "centroid": np.round(load_centroid, 4).tolist(),
+            "direction": [round(float(v), 6) for v in direction],
+            "magnitude": norm,
+        },
+        # `?debug=space` のときだけクライアントが使う(本体のUX決定で塊は既定では見せない。
+        # engine `topopt-design-space-never-shown-to-the-user`)。
+        "space": {"design": np.flatnonzero(space.mask.ravel()).tolist()},
     }
 
 
@@ -158,7 +302,8 @@ async def _ws_handler(websocket, state: _AppState) -> None:
                 continue
 
             if msg.get("mode") == "anchors":
-                # **面アンカーの表示だけ**(最適化は回さない)。完了条件4の実機確認はこの経路。
+                # **面アンカーの表示だけ**(最適化は回さない)。`?debug=anchors` 専用の
+                # デモ(`anchor.demo_bracket()`)で、`design_space.demo_conditions()` とは別物。
                 state.running = True
                 try:
                     payload = await asyncio.to_thread(_build_anchor_payload)
@@ -168,6 +313,27 @@ async def _ws_handler(websocket, state: _AppState) -> None:
                         await websocket.send(
                             json.dumps(
                                 {"type": "error", "message": f"面アンカーの構築に失敗: {exc}"},
+                                ensure_ascii=False,
+                            )
+                        )
+                    except Exception:
+                        pass
+                finally:
+                    state.running = False
+                continue
+
+            if msg.get("mode") == "conditions":
+                # **起動直後の既定表示**(最適化は回さない)。完了条件1の実機確認はこの経路
+                # (`shot_anchors.mjs` がボタンを押さずにこの応答だけで4色を数える)。
+                state.running = True
+                try:
+                    payload = await asyncio.to_thread(_build_condition_payload, _get_demo_space())
+                    await websocket.send(json.dumps(payload, ensure_ascii=False))
+                except Exception as exc:  # noqa: BLE001
+                    try:
+                        await websocket.send(
+                            json.dumps(
+                                {"type": "error", "message": f"条件表示の構築に失敗: {exc}"},
                                 ensure_ascii=False,
                             )
                         )
@@ -202,7 +368,21 @@ async def _ws_handler(websocket, state: _AppState) -> None:
 
             sender_task = asyncio.create_task(sender())
             try:
-                result = await asyncio.to_thread(simp.run_preset, callback=callback)
+                # **ボタンは `design_space.run_topopt()` を回す(2026-09-04〜)。** 片持ち梁
+                # プリセット(`simp.run_preset`)はもう呼ばない —— `check_simp.py` /
+                # `check_mesh.py` / `check_anchor.py:173-182` がプリセットの既定挙動に
+                # 依存しているので、プリセット自体(`simp.PRESET` / `Model` の既定境界条件)は
+                # 消さずに残し、**呼ぶ先だけ**ここで切り替える。`_get_demo_space()` で
+                # `_start_message()` と同じ `DesignSpace` を使う(表示と計算を一致させる完了条件3)。
+                pipeline_result = await asyncio.to_thread(
+                    ds.run_topopt,
+                    _get_demo_space(),
+                    volfrac=DEMO_VOLFRAC,
+                    max_iter=DEMO_MAX_ITER,
+                    force=DEMO_FORCE,
+                    stl_path=DEMO_STL_PATH,
+                    progress=callback,
+                )
             except Exception as exc:
                 await queue.put(None)
                 await sender_task
@@ -215,6 +395,7 @@ async def _ws_handler(websocket, state: _AppState) -> None:
             else:
                 await queue.put(None)
                 await sender_task
+                result = pipeline_result["result"]  # simp.optimize() の生の Result
                 last = result.history[-1] if result.history else None
                 # **完了時にだけ**平滑化した面を作って一緒に送る(反復中は間に合わないので
                 # やらない/やる必要が無い。ボクセルのままdoneを受け取った側=`?voxel=1`は

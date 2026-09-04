@@ -124,6 +124,12 @@ try {
   // ESMの読み込みが終わって検査用の穴が生えるまで待つ
   await page.waitForFunction(() => window.__probe !== undefined, { timeout: 30000 })
 
+  // **2026-09-04〜: ボタンは起動直後の既定表示(4条件)を読み込むまで `disabled`。**
+  // ここを待たずに押すと、押した瞬間はまだクリックハンドラが付いていない(何も起きない)
+  // ので、`state` が `conditions` のまま止まって二度と `done`/`error` に辿り着けない
+  // (実機で15分タイムアウトを1回踏んだ)。
+  await page.waitForFunction(() => window.__probe.state === 'conditions', { timeout: 30000 })
+
   const label0 = await page.$eval('#run', (el) => el.textContent)
   console.log(`  ボタン : "${label0}"`)
 
