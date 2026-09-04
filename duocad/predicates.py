@@ -33,7 +33,7 @@ from __future__ import annotations
 import math
 from typing import List, Sequence, Tuple
 
-from . import kernel, query
+from . import kernel, meshbody, query
 from .document import Document
 from .selection import selectable_bodies
 
@@ -236,13 +236,34 @@ def _normalize_axis(axis) -> Tuple[float, float, float]:
 
 
 def _target_bodies(doc: Document, body_id, where: Sequence[dict]) -> list:
-    """走査対象のBody列。不可視は除外。明示指定の契約は `_visible_body` と同じ。"""
+    """走査対象のBody列。不可視は除外。明示指定の契約は `_visible_body` と同じ。
+
+    **メッシュボディの扱いは「名指ししたら断る / 導出した集合からは黙って外す」**
+    (2026-09-05。このタスクの他の門と同じ線)。
+
+    - `body` を**明示された**ら断る(`meshbody.reject`) —— 「このボディの辺を選べ」は、
+      面も辺も持たない形に対する誤った要求であり、`selection.select_edge(mesh, 3)` と
+      同じ性格の誤りである。黙って0件を返すと、AIは「条件に合う辺が無かった」と読んで
+      条件を緩める側へ動く(実際には辺という概念が無い)。
+    - `body` を**省略された**ら黙って外す —— このときの走査集合は呼び出し側が主張した
+      ものではなく**導出**であり(不可視Bodyを黙って外しているのと同じ)、外しても
+      呼び出し側の主張と矛盾しない。ここで断ると、**最適化結果のメッシュが文書に1つ
+      あるだけで、述語による選択が丸ごと使えなくなる**。
+    """
     from .selection import _visible_body
 
     if body_id is not None:
-        return [_visible_body(doc, body_id)]
+        body = _visible_body(doc, body_id)
+        if body.mesh is not None:
+            meshbody.reject(body, "述語で面や辺を絞る")
+        return [body]
 
-    visible_ids = selectable_bodies(doc)
+    # **メッシュボディを先に外してから単一Body検査へ掛ける**。後にすると、可視のメッシュが
+    # 1つあるだけで `on_boundary_of_face` が「複数のBodyが見えている」で断られる。
+    mesh_ids = {body.id for body in doc.bodies if body.mesh is not None}
+    visible_ids = [
+        candidate for candidate in selectable_bodies(doc) if candidate not in mesh_ids
+    ]
     if _needs_single_body(where) and len(visible_ids) != 1:
         # **0件と複数件で言うことを変える**。0件は「複数ある」ではないし、
         # `body` を明示しても解決しない —— AIが次に何を試せばよいかが逆になる。

@@ -16,7 +16,7 @@ import struct
 import pytest
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
-from duocad import io_step, kernel, meshbody, query, selection
+from duocad import io_step, kernel, meshbody, optimize, predicates, query, selection, sketch
 from duocad.document import MESH_KIND, Body, Document, make_mesh
 from duocad.mcp_server import DocumentTools
 from duocad.oplog import OpLog
@@ -168,6 +168,27 @@ def test_undo_and_redo_move_the_mesh_body_in_and_out():
     assert doc.get_body(body_id).mesh.triangle_count == 4
 
 
+def test_a_mesh_body_survives_a_parameter_rebuild():
+    """`parameters.rebuild()` は **`doc.bodies` を空にしてログを頭から再生する**別の経路。
+
+    `OpLog.replay` の検査(上)とは通る道が違い、`set_parameter` を1回打つだけで踏む ——
+    ここで復元されないと、寸法をひとつ直しただけで最適化結果が黙って消える。
+    """
+    session = _box_session()
+    tools = DocumentTools(session)
+    sketch_id = tools.call("sketch_create", {"base_plane": "XY"})["sketch_id"]
+    tools.call(
+        "add_rectangle",
+        {"sketch_id": sketch_id, "corner": [0.0, 0.0], "width": 10.0, "height": 10.0},
+    )
+    added = tools.call("add_mesh_body", {"positions": TETRA_POSITIONS, "indices": TETRA_INDICES})
+    name = next(iter(session.document.parameters))
+    tools.call("set_parameter", {"name": name, "value": 14.0})
+    body = session.document.get_body(added["body_id"])
+    assert body.kind == MESH_KIND
+    assert list(body.mesh.indices) == TETRA_INDICES
+
+
 def test_speculative_restores_a_mesh_body():
     """`speculative` の控えから `mesh` が落ちていないこと(プレビューの土台)。"""
     doc, body_id = _tetra_doc()
@@ -315,6 +336,81 @@ def test_edges_and_vertices_are_not_delivered_for_a_mesh_body():
         session.view.edges(body_id)
     with pytest.raises(ValueError, match="is a mesh body"):
         session.view.vertices(body_id)
+
+
+# --------------------------------------------------- §6.5 述語・面を名指しする他の経路
+#
+# **「名指ししたら断る / 導出した集合からは黙って外す」**が、このタスクの門の一貫した線
+# である(`predicates._target_bodies` のdocstring)。§6 が前半、ここが後半を見る。
+def test_predicates_skip_mesh_bodies_when_no_body_was_named():
+    """**メッシュだけの文書でも述語が落ちない**(2026-09-05のQA指摘。9箇所目の塞ぎ漏れ)。
+
+    走査集合は呼び出し側の主張ではなく導出なので、**黙って外す**(不可視Bodyと同じ扱い)。
+    ここで断ると、最適化結果のメッシュが文書に1つあるだけで述語選択が丸ごと使えなくなる。
+    """
+    doc, _ = _tetra_doc()
+    assert predicates.evaluate(doc, {"kind": "edge", "where": []}) == []
+    assert predicates.evaluate(doc, {"kind": "face", "where": []}) == []
+
+
+def test_predicates_still_see_the_b_rep_bodies_of_a_mixed_document():
+    """混在した文書では**B-rep側が今までどおり全部出る**(メッシュのぶんだけ落とす)。"""
+    doc, mesh_id = _tetra_doc()
+    doc.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
+    edges = predicates.evaluate(doc, {"kind": "edge", "where": []})
+    faces = predicates.evaluate(doc, {"kind": "face", "where": []})
+    assert len(edges) == 12 and len(faces) == 6, "立方体の辺12・面6が出ない"
+    assert all(ref["body"] == "box" for ref in edges + faces), "メッシュボディが混ざった"
+
+
+def test_on_boundary_of_face_still_works_when_a_mesh_body_is_visible():
+    """**メッシュを外してから単一Body検査に掛ける**(後にすると可視のメッシュ1つで断られる)。"""
+    doc, _ = _tetra_doc()
+    doc.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
+    matched = predicates.evaluate(
+        doc, {"kind": "edge", "where": [{"op": "on_boundary_of_face", "face": 1}]}
+    )
+    assert len(matched) == 4, "面1枚の外周辺4本が出ない"
+
+
+def test_naming_a_mesh_body_in_a_predicate_is_refused():
+    """名指しは断る —— 黙って0件を返すと「条件に合う辺が無かった」と読まれる。"""
+    doc, body_id = _tetra_doc()
+    with pytest.raises(ValueError) as error:
+        predicates.evaluate(doc, {"kind": "edge", "body": body_id, "where": []})
+    assert EXPECTED_HINT in str(error.value)
+
+
+def test_the_face_fingerprint_of_a_mesh_body_is_refused():
+    """形状最適化の条件(拘束面・荷重面)が名指しでメッシュの面を測ろうとする経路。"""
+    doc, body_id = _tetra_doc()
+    with pytest.raises(ValueError) as error:
+        optimize.face_fingerprint(doc, body_id, 1)
+    assert EXPECTED_HINT in str(error.value)
+
+
+def test_a_sketch_cannot_be_pinned_to_a_mesh_body():
+    """面に貼るスケッチの解決(`sketch.resolve_plane`)も名指しの面参照である。"""
+    doc, body_id = _tetra_doc()
+    with pytest.raises(ValueError) as error:
+        sketch.resolve_plane(doc, {"kind": "face", "body": body_id, "index": 1})
+    assert EXPECTED_HINT in str(error.value)
+
+
+def test_measure_reports_a_mesh_body_selected_as_a_whole():
+    """選択に入ったメッシュボディを `measure` が測れる(`body_meta` 経由なので落ちない)。"""
+    session = _box_session()
+    tools = DocumentTools(session)
+    added = tools.call("add_mesh_body", {"positions": TETRA_POSITIONS, "indices": TETRA_INDICES})
+    tools.call(
+        "propose_selection",
+        {"refs": [{"body": added["body_id"], "kind": "body", "index": None}]},
+    )
+    measured = tools.call("measure", {})
+    entry = next(item for item in measured["items"] if item["body"] == added["body_id"])
+    assert entry["kind"] == "body"
+    assert entry["face_count"] == 1
+    assert entry["volume"] == pytest.approx(1.0 / 6.0)
 
 
 # ======================================================================== §7 書き出し

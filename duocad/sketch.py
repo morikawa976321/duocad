@@ -625,6 +625,11 @@ def resolve_plane(doc: Document, plane: Any) -> dict:
         body = next((candidate for candidate in doc.bodies if candidate.id == body_id), None)
         if body is None:
             raise KeyError(f"no such body: {body_id!r}")
+        if body.mesh is not None:
+            # **名指しの面参照なので断る**(2026-09-05。断り文は `meshbody.reject` へ一元化)。
+            from . import meshbody
+
+            meshbody.reject(body, "スケッチを貼る面にする")
         if body.shape is None:
             raise ValueError(f"body {body_id!r} has no shape")
         return {

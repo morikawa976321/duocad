@@ -19,7 +19,7 @@
 |---|---|---|
 | [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | **設計の現行の正**。何を作るか・到達表・残タスク | 仕様を確かめるとき |
 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | **なぜこう作るか**（§2 分業の原則が企画の主張） | 判断の背景を辿るとき |
-| [MCP.md](MCP.md) | **MCPツール一覧の正**（32個）と登録手順 | AI側から触るとき |
+| [MCP.md](MCP.md) | **MCPツール一覧の正**（36個）と登録手順 | AI側から触るとき |
 | [tests/README.md](tests/README.md) | テストが定義するAPI契約 | コアの挙動を疑うとき |
 | [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化の実測の記録**(費用の表・余白比率・案5の比較・応力・面アンカー・変異検査) | 数字の根拠を辿るとき |
 
@@ -199,7 +199,7 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 
 ## 3. 自動検査の走らせ方
 
-### pytest（コア・MCPの契約 846件）
+### pytest（コア・MCPの契約 854件）
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
@@ -396,6 +396,14 @@ AI側は本物のJSON-RPC**で20操作を叩く（`set_parameter` の人間側�
 
 決めたこと3つ:
 
+- **メッシュボディの扱いは「名指ししたら断る / 導出した集合からは黙って外す」。**
+  この1本の線で全部の門が決まる —— `select_face`/`edge`/`vertex`・`predicates` の `body` 明示・
+  `optimize.face_fingerprint`・`sketch` の貼る先は**名指し**なので断り、
+  `predicates` の `body` 省略（可視Body全部）と `export_stl` の対象集合は**導出**なので、
+  前者は黙って外し後者は含める。判断の根拠は「呼び出し側が何を主張したか」である ——
+  名指しは「このボディには面がある」という誤った主張なので断る。導出された集合から外すのは
+  不可視Bodyを外しているのと同じで、主張と矛盾しない。**ここで断ると、最適化結果のメッシュが
+  文書に1つあるだけで述語による選択が丸ごと使えなくなる。**
 - **選択の粒度はボディ単位だけ。** メッシュには面の指紋（選択の安定性の仕組み）が無いので、
   `select_face` / `select_edge` / `select_vertex` はメッシュボディを断る（`kind="body"` を使う）。
   **その結果、メッシュボディを含むドラッグ一括選択は丸ごと落ちる** —— 範囲外の添字を渡した
@@ -571,7 +579,7 @@ duocad/
                          net/ はアプリ層との接点（ws.py=WebSocket／http.py=静的配信と/mcp／
                          tools_on_loop.py）。server.py はその入口で、再輸出と起動の番人だけ
                          agent/ はアプリ内AIエージェント（プロバイダ＋ループ・UIなし）
-  tests/                 846件。README.md はモジュール単位のAPI契約リファレンス
+  tests/                 854件。README.md はモジュール単位のAPI契約リファレンス
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
     scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。共有部品は

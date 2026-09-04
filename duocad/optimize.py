@@ -129,6 +129,12 @@ def face_fingerprint(doc: "Document", body_id: str, index: int) -> dict:
     from . import query  # 遅延import(モジュール docstring)
 
     body = doc.get_body(body_id)
+    if body.mesh is not None:
+        # **名指しの面参照なので断る**(2026-09-05。`predicates._target_bodies` と同じ線)。
+        # 断り文は `meshbody.reject` に一元化してある。
+        from . import meshbody  # 遅延import(モジュール docstring)
+
+        meshbody.reject(body, "面の指紋を測る")
     if body.shape is None:
         raise ValueError(f"body {body_id!r} has no shape (面を測れない)")
     return query.face_fingerprint(body.shape, int(index))
