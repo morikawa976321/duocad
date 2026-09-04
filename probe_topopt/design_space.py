@@ -871,6 +871,13 @@ def run_topopt(
 
     `keep_model=True` は `anchor.run_pipeline` へそのまま渡る(既定 `False`。数値は
     1ビットも変わらない)。
+
+    拘束面・荷重面が要素サイズより小さくて格子節点が1つも付かないと
+    (`anchor.AnchorTable.empty_faces()`)、**例外にはせず**戻り値の
+    `"empty_condition_faces"` に診断が積まれて早期returnする(`anchor.run_pipeline` の契約
+    そのまま)。同じ診断を `space.stats["empty_condition_faces_warning"]` にも書く
+    (`DesignSpace` は呼び出し元がそのまま持っているので、戻り値を経由しなくても後から
+    見える。当面の措置 — README「面が小さすぎて空になる」参照)。
     """
     out = Path(stl_path) if stl_path is not None else _HERE / "output" / "design_space_case1.stl"
     result = an.run_pipeline(
@@ -902,6 +909,8 @@ def run_topopt(
             "derive() に deviation を明示的に渡していないか確認すること"
             "(run_pipeline は要素サイズから決め直す)。"
         )
+    if result.get("empty_condition_faces"):
+        space.stats["empty_condition_faces_warning"] = result["empty_condition_faces"]
     return result
 
 

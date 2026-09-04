@@ -66,6 +66,16 @@
     (比較のベースラインであり退避経路)/ `derivation="bbox"` で案1へ戻せる / 未知の名前は
     例外 / **導出にこだわりのない呼び出し側(`server.py` / `perf.py`)が導出を名指ししていない**
     —— 名指しが1つでも残っていると、次に既定を倒すときにそこだけ取り残される。
+
+[14] の構成(空の条件面のメッセージ。タスク `20260904-1556`):
+
+14. **拘束面・荷重面のアンカーが空でも例外にせず、メッセージが返る** — `anchor.run_pipeline` /
+    `design_space.run_topopt` の両方で、荷重側・拘束側それぞれが空のときに
+    `empty_condition_faces`(側つきの診断)が戻り値に載ること。診断の数値(要素サイズ・
+    CAD面積・代表寸法)とメッセージの文言(面添字・逃げ道2つ)を見る / `design_space` 側は
+    `DesignSpace.stats` にも同じ診断が載ること / **通常経路(空の条件面なし)は影響を受けない**
+    (回帰確認)/ **変異検査**(空面診断を外すと元の `ValueError` に戻ることを毎回自動で確認。
+    README「変異検査の記録(2026-09-05)」)。
 """
 
 from __future__ import annotations
@@ -73,6 +83,7 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -1459,12 +1470,156 @@ def check_default_derivation() -> None:
     }
 
 
+# ---------------------------------------------------------------------------
+# 14. 拘束面・荷重面のアンカーが空のときにメッセージを出す(タスク 20260904-1556)
+# ---------------------------------------------------------------------------
+def check_empty_condition_face_warning() -> None:
+    print(
+        "\n[14] 拘束面・荷重面のアンカーが空のときにメッセージが出る"
+        "(落とさない — メッセージを出すだけ)"
+    )
+    from build123d import Box, Pos
+
+    # `check_anchor.py` [6] と同じ形: 40x24x10 の箱に 0.5x0.5x0.5 の小突起。突起の面は
+    # 要素サイズ(elements_long_axis=8 → 5mm 前後)に対して小さすぎて空になる。
+    tiny = Box(40, 24, 10) + Pos(0, 0, 5.25) * Box(0.5, 0.5, 0.5)
+    scaffold_model = vx.voxelize(tiny, 8)
+    scaffold_table = an.build_anchors(scaffold_model.soup, scaffold_model.grid)
+    empty = scaffold_table.empty_faces()
+    big = [f for f in scaffold_table.face_indices() if f not in empty]
+    check(
+        "足場: 突起の面が空になり、箱本体の面は空にならない",
+        len(empty) >= 1 and len(big) >= 2,
+        f"空の面 {empty} / 空でない面 {big}",
+    )
+    if not (empty and len(big) >= 2):
+        return
+    empty_face = empty[0]
+    big_face = big[0]
+    scratch_stl = Path(__file__).resolve().parent / "output" / "_check_empty_condition_face.stl"
+
+    # --- 14-1: anchor.run_pipeline(荷重面が空) -----------------------------
+    out = an.run_pipeline(
+        shape=tiny,
+        elements_long_axis=8,
+        fixed_face=big_face,
+        load_face=empty_face,
+        max_iter=2,
+        stl_path=scratch_stl,
+    )
+    check(
+        "14-1 荷重面が空でも run_pipeline は例外にならない(落とさない)",
+        out.get("result") is None and out.get("stl") is None,
+        f"result={out.get('result')!r} stl={out.get('stl')!r}",
+    )
+    diag = out.get("empty_condition_faces") or []
+    check(
+        "14-1 empty_condition_faces に荷重側の診断が1件載る",
+        len(diag) == 1 and diag[0]["side"] == "load" and diag[0]["face_index"] == empty_face,
+        f"{diag}",
+    )
+    if diag:
+        d = diag[0]
+        check(
+            "14-1 診断に要素サイズ・CAD面積・代表寸法が正の数で入っている",
+            d["element_size_mm"] > 0
+            and d["cad_area_mm2"] > 0
+            and math.isfinite(d["representative_length_mm"])
+            and d["representative_length_mm"] > 0,
+            f"element_size_mm={d['element_size_mm']} cad_area_mm2={d['cad_area_mm2']} "
+            f"representative_length_mm={d['representative_length_mm']}",
+        )
+        msg = an.format_condition_face_warning(diag)
+        check(
+            "14-1 メッセージに面添字と逃げ道2つ(別の面/要素サイズ)が文字として入っている",
+            f"面{empty_face}" in msg and "別の" in msg and "要素サイズを" in msg,
+            msg,
+        )
+    RESULTS["empty_condition_face_load"] = diag
+
+    # --- 14-2: 拘束面が空(側の表示が入れ替わることの確認) --------------------
+    out_fixed = an.run_pipeline(
+        shape=tiny,
+        elements_long_axis=8,
+        fixed_face=empty_face,
+        load_face=big_face,
+        max_iter=2,
+        stl_path=scratch_stl,
+    )
+    diag_fixed = out_fixed.get("empty_condition_faces") or []
+    check(
+        "14-2 拘束面が空だと side='fixed' で載る(荷重側と取り違えない)",
+        len(diag_fixed) == 1 and diag_fixed[0]["side"] == "fixed"
+        and diag_fixed[0]["face_index"] == empty_face,
+        f"{diag_fixed}",
+    )
+
+    # --- 14-3: design_space.run_topopt からも同じ警告が返り、stats にも載る ---
+    cond = ds.Conditions(keep=tiny, fixed_face=big_face, load_face=empty_face, obstacle=None)
+    space = ds.derive(cond, elements_long_axis=8, margin_ratio=0.1)
+    check(
+        "足場: derive() の connectivity も空の条件面をスキップと報告する(前提の確認)",
+        space.stats.get("connectivity", {}).get("skipped") == "empty_anchor_faces",
+        f"{space.stats.get('connectivity')}",
+    )
+    out_ds = ds.run_topopt(space, max_iter=2, stl_path=scratch_stl)
+    check(
+        "14-3 design_space.run_topopt も例外にならず、戻り値に診断が載る",
+        out_ds.get("result") is None and bool(out_ds.get("empty_condition_faces")),
+        f"result={out_ds.get('result')!r} empty_condition_faces={out_ds.get('empty_condition_faces')}",
+    )
+    check(
+        "14-3 DesignSpace.stats にも同じ診断が載る(戻り値を経由しなくても後から見える)",
+        space.stats.get("empty_condition_faces_warning") == out_ds.get("empty_condition_faces"),
+        f"stats={space.stats.get('empty_condition_faces_warning')}",
+    )
+
+    # --- 14-4: 通常経路(空の条件面なし)は影響を受けない(回帰確認) -----------
+    normal_out = an.run_pipeline(
+        shape=tiny,
+        elements_long_axis=8,
+        fixed_face=big[0],
+        load_face=big[1],
+        max_iter=2,
+        stl_path=scratch_stl,
+    )
+    check(
+        "14-4 空の条件面が無ければ empty_condition_faces は空リストで、通常どおり最後まで解く",
+        normal_out.get("empty_condition_faces") == [] and normal_out.get("result") is not None,
+        f"empty_condition_faces={normal_out.get('empty_condition_faces')} "
+        f"result_is_none={normal_out.get('result') is None}",
+    )
+
+    # --- 14-5: 変異検査 — 診断を外すと元の _require_nodes 例外に戻る(検出力) --
+    original = an.AnchorTable.condition_face_diagnoses
+    an.AnchorTable.condition_face_diagnoses = lambda self, fixed_face, load_face: []
+    raised = ""
+    try:
+        an.run_pipeline(
+            shape=tiny,
+            elements_long_axis=8,
+            fixed_face=big_face,
+            load_face=empty_face,
+            max_iter=2,
+            stl_path=scratch_stl,
+        )
+    except ValueError as exc:
+        raised = str(exc)
+    finally:
+        an.AnchorTable.condition_face_diagnoses = original
+    check(
+        "14-5 変異検査: 空面診断を外すと _require_nodes の元の例外に戻る(検出力の確認)",
+        "節点が1つも付いていない" in raised,
+        raised[:120] if raised else "例外が出なかった(検出力なし — 診断を外しても壊れたことに気づけない)",
+    )
+
+
 def main() -> int:
     print("=" * 72)
     print("check_design_space.py : 塊(設計空間)の受入検査")
     print("  [1]-[4] 分離 / [5]-[9] 案1(外接直方体+余白) / [10] 連結性ガード")
     print("  [11] 案5(粗く1回回して膨らませる) / [12] 性能の基準線の題材(4つ)")
-    print("  [13] 既定の導出(入口が1つ)")
+    print("  [13] 既定の導出(入口が1つ) / [14] 空の条件面のメッセージ")
     print("=" * 72)
     # **1件が例外で落ちても残りを走らせる。** 実装を壊したときに最初の1件で止まると、
     # 何がどこまで壊れているかが1周では分からない(`check()` と同じ方針を関数の粒度でも取る)。
@@ -1482,6 +1637,7 @@ def main() -> int:
         check_case5_coarse_run,
         check_four_benchmark_cases,
         check_default_derivation,
+        check_empty_condition_face_warning,
     ):
         try:
             section()

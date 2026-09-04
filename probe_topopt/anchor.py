@@ -75,6 +75,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 import time
 from dataclasses import dataclass, field
@@ -253,6 +254,61 @@ class AnchorTable:
     def empty_faces(self) -> list[int]:
         """節点が1つも付かなかった面(要素サイズより小さい面)。指定する前に見るための口。"""
         return [f for f in self.face_indices() if self.anchors[f].node_count == 0]
+
+    def empty_face_diagnosis(self, face_index: int) -> dict:
+        """`face_index` が空になった理由の当たりと、逃げ道2つの数字。**空でない面は例外**
+        (呼び出し側の勘違いを早く拾うため —— 空の面だけを渡す前提の口)。
+
+        - `absorbed_by_faces`: 稜線の規則(最も多く面積を配った面が持ち主)でこの面の
+          `raw_node_ids`(持ち主を決める前に配った先)を実際に持っていった面。**この面を
+          指し直せば拘束・荷重が乗る**という具体的な逃げ道1。標本点が1つも節点の球に
+          入らなかった(=raw_node_ids も空の)極端に小さい面では特定できず、空リストになる。
+        - `representative_length_mm` = `sqrt(cad_area)`。**近似**(正方形とみなした代表寸法。
+          曲面・極端な縦横比の面では粗い)。逃げ道2「要素サイズをこれ以下にすれば節点が付く
+          見込み」として `suggested_max_spacing_mm` にも同じ値を出す —— 保証ではなく目安
+          (実際に付くかは対象の要素サイズで `empty_faces()` を取り直して確認すること)。
+        """
+        anchor = self[int(face_index)]
+        if anchor.node_count != 0:
+            raise ValueError(
+                f"面 {face_index} は空でない({anchor.node_count} 節点)。"
+                "empty_face_diagnosis は empty_faces() に入っている面だけを受け付ける"
+            )
+        raw_ids = np.unique(anchor.raw_node_ids)
+        absorbed_by: set[int] = set()
+        if raw_ids.size > 0:
+            for f, other in self.anchors.items():
+                if f == anchor.face_index or other.node_count == 0:
+                    continue
+                if np.intersect1d(raw_ids, other.node_ids, assume_unique=False).size > 0:
+                    absorbed_by.add(int(f))
+        area = float(anchor.cad_area)
+        representative_length = math.sqrt(area) if area > 0.0 else float("nan")
+        return {
+            "face_index": int(face_index),
+            "kind": anchor.kind,
+            "cad_area_mm2": area,
+            "element_size_mm": float(self.grid.spacing),
+            "representative_length_mm": representative_length,
+            "suggested_max_spacing_mm": representative_length,
+            "absorbed_by_faces": sorted(absorbed_by),
+        }
+
+    def condition_face_diagnoses(self, fixed_face: int, load_face: int) -> list[dict]:
+        """拘束面・荷重面のうち `empty_faces()` に入っているものだけの診断(側の別つき)。
+
+        `run_pipeline` の入口で使う。**両方とも空でなければ空リスト** —— 通常経路の
+        戻り値には影響しない(新しい通知の仕組みではなく、既存の `empty_faces()` を
+        機械可読な形に整えるだけの薄い層)。
+        """
+        empty = set(self.empty_faces())
+        out: list[dict] = []
+        for side, face in (("fixed", fixed_face), ("load", load_face)):
+            if int(face) in empty:
+                d = self.empty_face_diagnosis(face)
+                d["side"] = side
+                out.append(d)
+        return out
 
     def __getitem__(self, face_index: int) -> FaceAnchor:
         try:
@@ -739,6 +795,32 @@ def demo_faces(soup: vx.TriangleSoup) -> tuple[int, int]:
     return fixed[0], load[0]
 
 
+def format_condition_face_warning(diagnoses: list[dict]) -> str:
+    """`AnchorTable.condition_face_diagnoses` の結果を利用者向けの1メッセージにする。
+
+    `run_pipeline` / `design_space.run_topopt` が空リスト(=空の条件面なし)ならこの関数を
+    呼ばない。呼ぶのは1件以上あるときだけを想定している(空リストを渡すと空文字列)。
+    """
+    parts = []
+    for d in diagnoses:
+        side_ja = "拘束面" if d["side"] == "fixed" else "荷重面"
+        rep = d["representative_length_mm"]
+        rep_txt = f"約{rep:.3g}mm" if math.isfinite(rep) else "不明"
+        if d["absorbed_by_faces"]:
+            escape1 = f"別の面(面{d['absorbed_by_faces']})を選ぶ"
+        else:
+            escape1 = "別の(もっと大きい)面を選ぶ"
+        parts.append(
+            f"{side_ja}(面{d['face_index']})に格子節点が1つも付いていない: "
+            f"CAD面積 {d['cad_area_mm2']:.4g} mm^2(代表寸法 {rep_txt})が"
+            f"要素サイズ {d['element_size_mm']:.4g} mm に対して小さすぎる。"
+            f"このままでは{side_ja}の条件が最適化に伝わらない。"
+            f"逃げ道: {escape1}か、要素サイズを{rep_txt}以下にする"
+            "(節点が付く保証はない目安 — 実際に付くかはその要素サイズで確認すること)。"
+        )
+    return " / ".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # 端から端まで(ソリッド → 格子 → 面アンカー → SIMP → marching cubes → STL)
 # ---------------------------------------------------------------------------
@@ -798,6 +880,14 @@ def run_pipeline(
     `keep_model=True` は `simp.optimize` へそのまま渡る。`result.model`(戻り値 dict の
     `"result"` キー)に実際に解いた `Model` が入るので、`stress.py` の後処理が拘束・荷重を
     手で組み直さずに済む。既定 `False` では入らない(数値は1ビットも変わらない)。
+
+    `fixed_face` / `load_face` が要素サイズより小さくて格子節点が1つも付かないと
+    (`AnchorTable.empty_faces()`)、**例外にはせず**戻り値の `"empty_condition_faces"`
+    (`AnchorTable.condition_face_diagnoses` の結果。空でなければ1件以上)に診断を積んで
+    早期returnする(当面の措置。本当の解決は保留 — README「面が小さすぎて空になる」参照)。
+    このとき `"result"` / `"solid"` / `"void"` / `"surface"` / `"stl"` は `None`
+    (`simp.optimize` を呼んでいない)。通常どおり最後まで走った戻り値では
+    `"empty_condition_faces"` は常に `[]`。
     """
     import mesh
     import simp
@@ -836,6 +926,31 @@ def run_pipeline(
         fixed_face, load_face = demo_faces(soup)
     table = build_anchors(soup, model.grid, radius_ratio=radius_ratio)
     timings["anchor"] = time.perf_counter() - t0
+
+    # **実行経路の入口。** `fixed_face` / `load_face` が要素サイズより小さくて節点が1つも
+    # 付かないと(`table.empty_faces()`)、この先 `table.fixed_dofs` / `table.load_vector` の
+    # `_require_nodes` が例外を投げる(その例外自体は消さない・弱めない — 空の面を名指しして
+    # 拘束・荷重を掛けたら黙って0にせず落ちる、という既存の安全策)。**そこへ落ちる前に、
+    # ここで一度立ち止まってメッセージを返す。** 本人指示で「落とさない・メッセージを出すだけ」
+    # なので、`simp.optimize` は呼ばずに戻り値へ診断を積んで早期returnする(2026-09-05)。
+    empty_condition_faces = table.condition_face_diagnoses(fixed_face, load_face)
+    if empty_condition_faces:
+        warning = format_condition_face_warning(empty_condition_faces)
+        print(f"[anchor.run_pipeline] 警告: {warning}", file=sys.stderr)
+        return {
+            "model": model,
+            "table": table,
+            "result": None,
+            "solid": None,
+            "void": None,
+            "surface": None,
+            "stl": None,
+            "fixed_face": fixed_face,
+            "load_face": load_face,
+            "timings": timings,
+            "empty_condition_faces": empty_condition_faces,
+            "warning": warning,
+        }
 
     nx, ny, nz = model.grid.shape
     fixed_dofs = table.fixed_dofs(fixed_face)
@@ -893,6 +1008,7 @@ def run_pipeline(
         "fixed_face": fixed_face,
         "load_face": load_face,
         "timings": timings,
+        "empty_condition_faces": [],
         "design_elements": design_elements,
         "free_elements": free_elements,
         "target_volfrac": result.volfrac,

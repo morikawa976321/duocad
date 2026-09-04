@@ -42,3 +42,8 @@ output/scaling_*.json
 # (README「STL は候補材料量ごとに書く」)。
 output/safety_loop_search.stl
 output/check_safety_loop_*.stl
+
+# 空の条件面メッセージの受入検査(`check_design_space.py` [14])が使い回すスクラッチSTL。
+# 空の条件面では書かれず(早期return)、通常経路の対照(14-4)でだけ上書きされる。
+# 合否は戻り値の "empty_condition_faces" が持つので、成果物としては追跡しない。
+output/_check_empty_condition_face.stl
