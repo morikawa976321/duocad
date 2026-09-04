@@ -1,8 +1,8 @@
 """B-repソリッド(OCCT)から、トポロジー最適化の設計空間になる規則格子を起こす。
 
-    ..\\.venv\\Scripts\\python.exe check_voxelize.py     # 受入検査
+    .\\.venv\\Scripts\\python.exe topopt_checks\\check_voxelize.py   # 受入検査
 
-これは `probe_topopt` の **stage1**。担当は「形 → 格子」だけで、境界条件を面に紐づける
+これは `duocad.topopt` の **stage1**。担当は「形 → 格子」だけで、境界条件を面に紐づける
 処理(stage2「面アンカー」)は入っていない。ただし**そのための材料は捨てない** —
 `TriangleSoup` は三角形ごとに OCCT の面添字(1始まり)を持ち、`Grid` は原点と要素サイズを
 持つので、stage2 は「格子の要素 ↔ ワールド座標 ↔ 面」を本モジュールだけで往復できる。

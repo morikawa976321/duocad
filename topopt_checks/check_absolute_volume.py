@@ -1,6 +1,6 @@
 """体積目標を絶対量(mm^3)で指定する口の受入検査。
 
-    ..\\.venv\\Scripts\\python.exe check_absolute_volume.py
+    .\\.venv\\Scripts\\python.exe topopt_checks\\check_absolute_volume.py
 
 **このファイルが合否そのものである。** タスク `20260904-0142` の完了条件を assert する。
 どれか1つでも落ちればプロセスは非ゼロで終わる。

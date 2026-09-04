@@ -1,6 +1,6 @@
 """幾何マルチグリッド前処理(`simp.py` の `solver="mg"`)の受入検査。
 
-    ..\\.venv\\Scripts\\python.exe check_multigrid.py
+    .\\.venv\\Scripts\\python.exe topopt_checks\\check_multigrid.py
 
 **この検査の存在理由**: マルチグリッド前処理が壊れていても、**CG は遅くなるだけで
 正しい答えに収束する**。だから「速くなった」「答えが合っている」の2つを見ても実装の

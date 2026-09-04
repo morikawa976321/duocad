@@ -1,6 +1,6 @@
 """SIMPトポロジー最適化(`simp.py`)の受入検査。
 
-    ..\.venv\Scripts\python.exe check_simp.py
+    .\\.venv\\Scripts\\python.exe topopt_checks\\check_simp.py
 
 **このファイルが合否そのものである。** タスクの完了条件1の (a)(b)(c) を、
 それだけでは通らない下支えの検査(要素剛性行列・全体系の釣り合い)と一緒に assert する。

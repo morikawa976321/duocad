@@ -1,6 +1,6 @@
 """性能の基準線を測る道具。**受入検査ではない**(合否を出さない)。
 
-    ..\\.venv\\Scripts\\python.exe perf.py --json output\\perf-before.json
+    .\\.venv\\Scripts\\python.exe -m duocad.topopt.perf --json duocad\\topopt\\output\\perf-before.json
 
 `design_space.CASES` の4題材 × 複数解像度を回し、docs/TOPOPT.md の2つの表をそのまま吐く。
 マルチグリッド前処理(`20260904-1414`)と CPU 並列化(`20260904-1415`)は**このファイルを

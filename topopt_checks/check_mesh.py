@@ -1,6 +1,6 @@
 """marching cubes + Taubin平滑化(`mesh.py`)の受入検査。
 
-    ..\.venv\Scripts\python.exe check_mesh.py
+    .\\.venv\\Scripts\\python.exe topopt_checks\\check_mesh.py
 
 **このファイルが合否そのものである。** タスクの完了条件1「`check_mesh.py` が緑」を、
 下記9項目の assert で判定する。1つでも落ちればプロセスは非ゼロで終わる。

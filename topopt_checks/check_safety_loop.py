@@ -1,6 +1,6 @@
 """安全率の外側ループ(`safety_loop.py`)の受入検査。
 
-    ..\\.venv\\Scripts\\python.exe check_safety_loop.py
+    .\\.venv\\Scripts\\python.exe topopt_checks\\check_safety_loop.py
 
 **このファイルが合否そのものである。** どれか1つでも落ちればプロセスは非ゼロで終わる。
 題材の大きさは `bench.SAFETY_LOOP`(bracket = `demo_conditions` だけ)が正 ——

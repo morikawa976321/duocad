@@ -1,6 +1,6 @@
 """密度フィルタ半径を mm で指定する口の受入検査。
 
-    ..\\.venv\\Scripts\\python.exe check_filter_radius.py
+    .\\.venv\\Scripts\\python.exe topopt_checks\\check_filter_radius.py
 
 **このファイルが合否そのものである。** タスク
 `20260904-1557-topopt-filter-radius-in-mm` の完了条件を assert する。

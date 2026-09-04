@@ -1,6 +1,6 @@
 """4条件(保持ソリッド・除外ソリッド・拘束面・荷重面)から塊(設計空間)を導出する。
 
-    ..\\.venv\\Scripts\\python.exe design_space.py --measure
+    .\\.venv\\Scripts\\python.exe -m duocad.topopt.design_space --measure
 
 導出は2つ入っている。**既定は案5**(`derive_from_coarse_run`。2026-09-04に案1から倒した)で、
 案1(`derive`)は比較のベースラインと退避経路として残してある。**導出にこだわりのない

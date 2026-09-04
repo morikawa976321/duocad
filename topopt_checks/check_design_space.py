@@ -1,6 +1,6 @@
 """塊(設計空間)の受入検査。
 
-    ..\\.venv\\Scripts\\python.exe check_design_space.py
+    .\\.venv\\Scripts\\python.exe topopt_checks\\check_design_space.py
 
 **このファイルが合否そのものである。** どれか1つでも落ちればプロセスは非ゼロで終わる。
 

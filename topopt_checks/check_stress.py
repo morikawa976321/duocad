@@ -1,6 +1,6 @@
 """von Mises応力・実単位換算・代表応力・最小安全率(`stress.py`)の受入検査。
 
-    ..\\.venv\\Scripts\\python.exe check_stress.py
+    .\\.venv\\Scripts\\python.exe topopt_checks\\check_stress.py
 
 **このファイルが合否そのものである。** タスク `20260904-0143` の完了条件1〜5を、
 それだけでは通らない下支えの検査(B行列と `simp` の局所節点順が一致しているか)と

@@ -1,9 +1,9 @@
 """CAD の**面**と、格子の**節点**の対応表(面アンカー)。
 
-    ..\\.venv\\Scripts\\python.exe check_anchor.py     # 受入検査
-    ..\\.venv\\Scripts\\python.exe anchor.py           # 合成ブラケットを端から端まで1回通す
+    .\\.venv\\Scripts\\python.exe topopt_checks\\check_anchor.py     # 受入検査
+    .\\.venv\\Scripts\\python.exe -m duocad.topopt.anchor           # 合成ブラケットを端から端まで1回通す
 
-これは `probe_topopt` の **stage2**。stage1(`voxelize.py`)が作った格子の上に、
+これは `duocad.topopt` の **stage2**。stage1(`voxelize.py`)が作った格子の上に、
 「ボディXの面#42」→「これらの格子節点」の翻訳を載せる。これが無いと固定面・荷重面を
 指定できず、統合時の `add_fixture` / `add_load` verb も書けない。
 

@@ -1,6 +1,6 @@
 """CPU 並列化(`simp.py` の `solve(threads=...)`)の受入検査。
 
-    ..\\.venv\\Scripts\\python.exe check_parallel.py
+    .\\.venv\\Scripts\\python.exe topopt_checks\\check_parallel.py
 
 **この検査の存在理由**: 並列化はスレッド数を変えても「速くなったように見えるが答えが違う」
 「1スレッドに戻すと元より遅い/答えが違う(退避経路が壊れている)」という壊れ方をする。
