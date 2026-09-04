@@ -884,6 +884,43 @@ get_edges -> {"type":"edges", body_id, revision, edges:[...]}
   返る）。常時配ると初回配信に折れ線が丸ごと乗り、差分配信で稼いだ帯域を使い切る。
   `revision` を返すのは、クライアントが「今の形の辺か」を判定できるようにするため。
 
+## `duocad/optimize_run.py` — 形状最適化の配線（`test_optimize_backend.py`）
+
+4条件を `duocad.topopt` の `Conditions` へ翻訳し、端から端まで回して結果をメッシュボディとして
+足す層。**SIMPを実際に回す検査はここには無い**（`topopt_checks/check_optimize_wiring.py`）。
+pytestが固定しているのは以下:
+
+```python
+optimize_run.conditions_report(doc) -> dict     # {"ready", "problems", ...}
+optimize_run.build_conditions(doc) -> ConditionBundle
+optimize_run.resolution_limits(doc, *, rmin_mm=None) -> dict
+optimize_run.run(doc, options=None, *, progress=None, should_cancel=None) -> dict
+optimize_run.allowable_stress() -> dict
+Session.optimize_conditions() / optimize_resolution(rmin_mm) / run_optimization(**opts) / cancel_optimization()
+```
+
+- **走らせられる条件は「保持ソリッド1つ以上・拘束面ちょうど1枚・荷重面ちょうど1枚・
+  荷重の大きさ > 0」**。2枚以上の条件面は `OptimizeInputError` で断り、文面に理由
+  （`Conditions.fixed_face` が面添字を1つしか持たない）を含む。指紋が合わない条件面も断る。
+- **メッシュボディは保持・除外に指定できない**（`meshbody.reject` の文言。verbの入口と
+  `conditions_report` の2箇所で断る。**`_apply_bodies` には門を置かない** — 過去のログの
+  再生を後から足した門で落とさないため）。
+- **面添字は `kernel.make_compound` でまとめた形の中の添字**で、ボディごとの `face_count` の
+  累積だけずれる。`_verify_face_mapping` が面積・法線・**重心**で対応を測り直し、ずれていれば
+  `FaceMappingError`（`RuntimeError` 派生 = `except ValueError` に拾われない）。
+- **要素サイズの上限 = min(`rmin_mm` / `simp.DEFAULT_RMIN`, min(sqrt(条件面のCAD面積)))**、
+  下限は総要素数 `MAX_ELEMENTS` から。範囲外の指定は `OptimizeInputError`。
+- **結果メッシュの頂点は要素添字空間で来る**ので `grid.origin + verts * grid.spacing` で
+  ワールド[mm]へ直す。格子の箱から出ていたら `FaceMappingError`。
+- **中断**は `should_cancel()` が真なら `OptimizeCancelled`（`RuntimeError` 派生）。
+  `Session.run_optimization` は**入口で旗を畳む**（畳まないと前回の中断が次を即死させる）。
+- **`import duocad.session` で `skimage` と `duocad.topopt` が来ない**（`duocad.topopt` の
+  importは関数の中）。`scipy` は `duocad/view.py` が既に読んでいるので指標にならない。
+- `duocad/topopt/safety_loop.py` 側で固定しているもの: 本番解像度で条件面が空なら
+  `ConditionFacesEmptyError`（**生の `AttributeError` ではない**）／`run_progress` が
+  `run_topopt` の `progress` へ素通しされる／`keep_model=True` が渡る／候補材料量が
+  `derive_default(coarse_material_mm3=...)` へ届く。
+
 ## 回帰ガード（`test_m2_regressions.py` / `test_m3_regressions.py`）
 
 契約テストとは別に、実測で見つかった壊れ方を再発防止として固定してある2ファイル。現在も

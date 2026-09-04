@@ -101,6 +101,35 @@ class SafetyTargetError(ValueError):
         self.bound = bound
 
 
+class ConditionFacesEmptyError(ValueError):
+    """**本番解像度の最終solve**で拘束面・荷重面のアンカーが空だった(2026-09-05に追加)。
+
+    `design_space.run_topopt` は `anchor.run_pipeline` の契約どおり例外にせず
+    `empty_condition_faces` を積んだ辞書を返し、`"result"` は `None` のままになる。
+    `_derive_and_run` はそれを見ずに `run["result"].model` へ触っていたので、
+    **生の `AttributeError` が上まで抜けていた**(`20260904-1556` の契約④が
+    「未修正のまま残っている」と名指ししていた穴)。
+
+    **`_evaluate` の分類(`"too_little"` / `"too_much"`)へ落とさない。** 条件面が空なのは
+    要素サイズの問題であって材料量の問題ではないので、二分探索を続けても直らない
+    (材料量を振っても格子は変わらない)。`design_space.CoarseRunConditionFacesEmptyError`
+    (粗い段の同じ失敗)と同じ形で、`empty_condition_faces` に
+    `anchor.AnchorTable.condition_face_diagnoses` と同じリストを持つ。
+    """
+
+    def __init__(self, empty_condition_faces: Sequence[dict]) -> None:
+        diagnoses = [dict(item) for item in empty_condition_faces]
+        faces = "、".join(
+            f"{item.get('side')}側の面{item.get('face_index')}" for item in diagnoses
+        )
+        super().__init__(
+            f"本番解像度で条件面のアンカーが空だった({faces})。"
+            "材料量を振っても格子は変わらないので探索を続けても直らない —— "
+            "要素サイズを下げるか、隣接する大きい面を指定すること"
+        )
+        self.empty_condition_faces = diagnoses
+
+
 @dataclass(frozen=True, eq=False)
 class SafetyLoopStep:
     """二分探索の1回の評価。**成功しなかった評価も残す**(履歴が探索の軌跡そのものになる)。"""
@@ -153,6 +182,7 @@ def _derive_and_run(
     percentile: float,
     derivation_kwargs: dict,
     stl_path: Optional[Any] = None,
+    run_progress: Optional[Callable[[Any, Any], None]] = None,
 ) -> tuple[Any, dict, Any]:
     """1つの材料量について、塊を導出し直してから最適化して安全率まで出す(この段の中核)。
 
@@ -173,7 +203,13 @@ def _derive_and_run(
         threads=threads,
         keep_model=True,
         stl_path=_SEARCH_STL_PATH if stl_path is None else stl_path,
+        progress=run_progress,
     )
+    # **`run["result"]` は空条件面のとき `None` になる**(`run_topopt` の早期return)。
+    # ここで見ずに `.model` へ触ると生の `AttributeError` になる —— 上の
+    # `ConditionFacesEmptyError` の docstring 参照。
+    if run.get("empty_condition_faces"):
+        raise ConditionFacesEmptyError(run["empty_condition_faces"])
     result = run["result"]
     scale = stress.UnitScale.for_model(
         result.model,
@@ -233,6 +269,7 @@ def solve_for_safety_factor(
     threads: Optional[int] = None,
     derivation_kwargs: Optional[dict] = None,
     progress: Optional[Callable[[SafetyLoopStep], None]] = None,
+    run_progress: Optional[Callable[[Any, Any], None]] = None,
 ) -> SafetyLoopResult:
     """**安全率を入力に取る入口。** 目標安全率を満たす材料量で最適化した結果を返す。
 
@@ -261,6 +298,14 @@ def solve_for_safety_factor(
     採用した形の STL が欲しいときは、呼び出し側が `design_space.run_topopt(result.space,
     material_mm3=result.material_mm3, ..., stl_path=<自分のパス>)` をもう一度呼ぶこと
     (`optimize` は決定的なので、同じ入力からは同じ ρ 場が返る)。
+
+    進捗は2段ある。**`progress` は候補材料量ごと**(`SafetyLoopStep`。1回が数十秒〜数分)で、
+    **`run_progress` は SIMP の設計反復ごと**(`callback(Iteration, rho)` をそのまま
+    `design_space.run_topopt` の `progress` へ渡す。既定 `None` = 何も渡さないので挙動は不変)。
+    長い処理を外から止める手段は `run_progress` の中から例外を投げることで、その例外は
+    `_evaluate` の分類(`ValueError` 系)に拾われない型にすること
+    (`duocad/optimize_run.py` の `OptimizeCancelled` は `RuntimeError` にしてある)。
+    **粗い段(案5の内部)には進捗が無い**ので、そこだけは1.2〜1.6秒止まらない。
     """
     if not math.isfinite(target_safety_factor) or target_safety_factor <= 0.0:
         raise ValueError(f"target_safety_factor は有限の正の値であること(受け取った値: {target_safety_factor!r})")
@@ -286,6 +331,7 @@ def solve_for_safety_factor(
         rho_min=rho_min,
         percentile=percentile,
         derivation_kwargs=dict(derivation_kwargs or {}),
+        run_progress=run_progress,
     )
 
     history: list[SafetyLoopStep] = []

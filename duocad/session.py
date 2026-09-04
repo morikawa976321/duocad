@@ -14,10 +14,21 @@ verbの呼び出し・選択・パラメータ・操作ログ・保存/開くを
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from typing import Any, Optional  # Any: Session verb wrappers / listeners
 
-from . import catalog, io_step, kernel, parameters, query, region, selection, sketch
+from . import (
+    catalog,
+    io_step,
+    kernel,
+    optimize_run,
+    parameters,
+    query,
+    region,
+    selection,
+    sketch,
+)
 from .document import Document
 from .oplog import OpLog
 from .paths import DEFAULT_MODELS_DIR
@@ -95,6 +106,9 @@ class Session:
         self._setup_floor_seq = 0  # load_step が積んだ最後のseq(これ以下はundoの対象外)
         self._listeners: list = []  # 文書が変わったときに呼ぶ購読者(下記 add_listener)
         self._suppress_events = 0  # >0 の間は `_emit` が配らない(プレビュー。`preview` 参照)
+        #: 形状最適化の中断の旗。**別スレッドから立てられる**(実行はワーカースレッド、
+        #: `cancel_optimization` はイベントループのスレッド)ので `Event` にしてある。
+        self._optimize_cancel = threading.Event()
         if step_path is not None:
             self.load_step(step_path)
 
@@ -726,6 +740,77 @@ class Session:
             "direction": operation.args["direction"],
             "direction_vector": operation.args["vector"],
         })
+
+    # ---------------------------------------------------------------- 形状最適化を走らせる
+    # 条件を置く4 verb の**続き**(`duocad/optimize_run.py`)。ここにあるのは委譲と、
+    # 「中断の旗」と「結果を1つのボディとして足したことの通知」だけである。
+    def optimize_conditions(self) -> dict:
+        """4条件がそろって走らせられるか(`optimize_run.conditions_report`)。"""
+        return optimize_run.conditions_report(self.document)
+
+    def optimize_resolution(self, rmin_mm: Any = None) -> dict:
+        """要素サイズの上限・下限・既定と、その設定での予想時間。"""
+        return optimize_run.resolution_limits(
+            self.document, rmin_mm=None if rmin_mm is None else float(rmin_mm)
+        )
+
+    def cancel_optimization(self) -> dict:
+        """走っている最適化に降りるよう伝える(**旗を立てるだけ**)。
+
+        実際に降りるのは次に進捗が出た時点で、`run_optimization` が `OptimizeCancelled` を
+        投げる。**旗は次の `run_optimization` が畳む** —— ここで畳むと、中断の直後に
+        立て直された旗を新しい実行が拾ってしまう。
+        """
+        self._optimize_cancel.set()
+        return {"cancelled": True}
+
+    def run_optimization(
+        self,
+        *,
+        rmin_mm: Any = None,
+        target_safety_factor: Any = optimize_run.DEFAULT_TARGET_SAFETY_FACTOR,
+        element_size_mm: Any = None,
+        max_iter: Any = None,
+        max_evaluations: Any = None,
+        name: Any = None,
+        progress: Any = None,
+    ) -> dict:
+        """形状最適化を端から端まで走らせ、結果をメッシュボディとして足す。
+
+        **重い(数十秒〜数分)。** 呼び出し側はイベントループを塞がないよう別スレッドで
+        回すこと(`asyncio.to_thread`)。`progress(event: dict)` はそのスレッドから呼ばれる。
+
+        戻り値は `optimize_run.run()` のものに、成功時だけ `"applied"`(変更イベントの封筒)を
+        足したもの。**`state != "done"` のときは文書を1ビットも変えていない**。
+        """
+        self._optimize_cancel.clear()
+        options = optimize_run.OptimizeOptions(
+            rmin_mm=None if rmin_mm is None else float(rmin_mm),
+            target_safety_factor=float(target_safety_factor),
+            element_size_mm=None if element_size_mm is None else float(element_size_mm),
+            max_iter=None if max_iter is None else int(max_iter),
+            max_evaluations=None if max_evaluations is None else int(max_evaluations),
+            name=None if name is None else str(name),
+        )
+        result = optimize_run.run(
+            self.document,
+            options,
+            progress=progress,
+            should_cancel=self._optimize_cancel.is_set,
+        )
+        if result.get("warning"):
+            # 既存の警告の口へ載せる(新しい運び方を作らない)。
+            self.warnings.append(result["warning"])
+        if result["state"] != "done":
+            return result
+        applied = self._after_logged_verb(
+            {
+                "body_id": result["body_id"],
+                "name": result["name"],
+                "triangle_count": result["triangle_count"],
+            }
+        )
+        return dict(result, applied=applied)
 
     def set_parameter(self, name: str, value: float) -> dict:
         before_shapes = {body.id: id(body.shape) for body in self.document.bodies}

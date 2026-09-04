@@ -18,6 +18,11 @@ verbを起動すると**既にその役割が付いている対象が選択状�
 **v1の制限: 1文書につき荷重は1種類**(集合代入なので、選ばれた面すべてが同じ大きさ[N]と
 向きを共有する)。複数の荷重ケースが要ると分かった時点で拡張する。
 
+**メッシュボディは4つとも受け付けない**(2026-09-05)。保持/除外はここが `meshbody.reject` で
+断り、拘束/荷重は `optimize.face_fingerprint` が断る。ボディや面を**名指しして**
+「これをボクセル化できる/これに面がある」と主張する経路だからである
+(`done/20260904-1703` の契約②の線)。
+
 保存と復元:
 
 - **ボディの参照は `body_id` だけ**でよい(`body-{uuid}` は形が変わっても動かない)。
@@ -68,7 +73,19 @@ def _assign_bodies(doc: Document, verb: str, body_ids: Sequence[BodyId]) -> Oper
     role = _BODY_VERB_ROLE[verb]
     wanted = _unique([str(body_id) for body_id in body_ids])
     for body_id in wanted:
-        doc.get_body(body_id)  # 存在しないIDは KeyError(黙って残さない)
+        body = doc.get_body(body_id)  # 存在しないIDは KeyError(黙って残さない)
+        if body.mesh is not None:
+            # **メッシュボディは保持/除外に指定できない**(2026-09-05 `20260904-1704` の判断)。
+            # ボディを名指しして「これをボクセル化して塊に載せろ」と主張する経路であり、
+            # 三角形メッシュにはB-repの面が無いのでその主張は成り立たない
+            # (`done/20260904-1703` の契約②「名指ししたら断る / 導出した集合からは黙って外す」の
+            # 名指し側)。**断り文の実体は `meshbody.reject` の1箇所**。
+            # `_apply_bodies` ではなくここに置いてあるのは、`_apply_bodies` を
+            # redo / replay も通るためである —— 過去に受け付けたログの再生を、あとから
+            # 足した門で落として文書が開けなくなる、という壊し方をしない。
+            from .. import meshbody
+
+            meshbody.reject(body, f"{optimize.ROLE_LABEL[role]}に指定する")
     previous = list(getattr(doc.optimize, role))
     _apply_bodies(doc, role, wanted)
     return doc.log.append(verb, {"bodies": wanted, "previous": previous})

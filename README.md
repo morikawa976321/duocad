@@ -9,7 +9,7 @@
 | | |
 |---|---|
 | ブランチ / コミット | `main`（最新は `git log -1`） |
-| テスト | **809件**（うち2本は実機が揃うときだけ走る＝ふだんはskip。**赤は1本も無い**） |
+| テスト | **877件**（うち2本は実機が揃うときだけ走る＝ふだんはskip。**赤は1本も無い**） |
 | 実行環境 | Python 3.11（`.venv`）／ Node（`web/node_modules` 導入済み）／ `web/dist` ビルド済み |
 | 単位 | mm 固定 |
 
@@ -199,7 +199,7 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 
 ## 3. 自動検査の走らせ方
 
-### pytest（コア・MCPの契約 854件）
+### pytest（コア・MCPの契約 877件）
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
@@ -207,7 +207,7 @@ cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
 
 サーバもブラウザも要らない。実STEPを読む重いテストは含まない。
 
-### 形状最適化の受入検査(11本・502件。通しで約200秒)
+### 形状最適化の受入検査(12本・530件。通しで約215秒)
 
 **pytest には入れていない。** 通しで約200秒あり、`tests/` へ入れると `pytest -q` が毎回
 それだけ重くなる。マーカーで既定から外す案も採らない —— duocad に CI が無いので、既定から
@@ -249,10 +249,13 @@ cd C:\Users\tm976\mf\duocad
 
 # 密度フィルタ半径をmmで指定する口(排他・下限・境界・既定不変・単位の等価性・検出力・配線)。約10秒
 & .\.venv\Scripts\python.exe topopt_checks\check_filter_radius.py
+
+# duocad本体への配線(4条件 -> 塊 -> 最適化 -> メッシュボディ。位置・進捗・中断・事後検出)。約16秒
+& .\.venv\Scripts\python.exe topopt_checks\check_optimize_wiring.py
 ```
 
-**どれも最後の行が `OK:` で、終了コードが 0 なら合格。** 11本すべてで合計 **502件**
-(24 / 15 / 48 / 59 / 124 / 44 / 40 / 46 / 41 / 30 / 31)。**項目数を減らさないこと。**
+**どれも最後の行が `OK:` で、終了コードが 0 なら合格。** 12本すべてで合計 **530件**
+(24 / 15 / 48 / 59 / 124 / 44 / 40 / 46 / 41 / 30 / 31 / 28)。**項目数を減らさないこと。**
 秒数は熱状態で 1.2〜1.7倍振れる(engine `benchmark-seconds-swing-with-thermal-state`)ので、
 所要は目安である。何を守っている検査かは [docs/TOPOPT.md](docs/TOPOPT.md)
 「受入検査が見ているもの」に書いてある。
@@ -398,7 +401,8 @@ AI側は本物のJSON-RPC**で20操作を叩く（`set_parameter` の人間側�
 
 - **メッシュボディの扱いは「名指ししたら断る / 導出した集合からは黙って外す」。**
   この1本の線で全部の門が決まる —— `select_face`/`edge`/`vertex`・`predicates` の `body` 明示・
-  `optimize.face_fingerprint`・`sketch` の貼る先は**名指し**なので断り、
+  `optimize.face_fingerprint`・`sketch` の貼る先・**保持/除外ソリッドへの割り当て**（2026-09-05）は
+  **名指し**なので断り、
   `predicates` の `body` 省略（可視Body全部）と `export_stl` の対象集合は**導出**なので、
   前者は黙って外し後者は含める。判断の根拠は「呼び出し側が何を主張したか」である ——
   名指しは「このボディには面がある」という誤った主張なので断る。導出された集合から外すのは
@@ -421,6 +425,64 @@ AI側は本物のJSON-RPC**で20操作を叩く（`set_parameter` の人間側�
 
 `add_mesh_body` は**WebSocketには開けていない**（`catalog` の `ws="none"`）。画面から三角形を
 手で打つ操作は無く、入口はMCPと、形状最適化の結果を入れるコード側だけである。
+
+### 形状最適化を走らせる（2026-09-05）
+
+条件を置く4 verb（`set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads`）の
+**続き**が `duocad/optimize_run.py` である。verbは1本も足していない —— 結果を文書へ入れる口は
+既存の `add_mesh_body` だけで、**元のボディは1つも消さず・形も差し替えない**（2026-09-04本人決定。
+最適化は編集ではなく「条件から新しい形を1つ作る」操作）。
+
+```
+Session.optimize_conditions()     4条件がそろって走らせられるか（足りないものを名指しする）
+Session.optimize_resolution(rmin_mm=...)   要素サイズの上限・下限・既定と予想時間
+Session.run_optimization(...)     端から端まで走らせ、結果をメッシュボディとして足す（重い）
+Session.cancel_optimization()     走っている最適化に降りるよう伝える（旗を立てるだけ）
+```
+
+**要素サイズの上限＝「これより粗いと間違う」**を2つの要求の min で決める:
+
+- **最小部材幅から** — `rmin_mm / simp.DEFAULT_RMIN`（=1.5要素。`20260904-1557` の下限）
+- **条件面から** — `sqrt(CAD面積)`。**利用者に聞かない**。`anchor.empty_face_diagnosis` の
+  `suggested_max_spacing_mm` と同じ式で、**近似であって保証ではない**（正方形とみなした
+  代表寸法なので、曲面や極端な縦横比の面では過大にも過小にもなる）
+
+**要素サイズの下限は暫定の固定値**（総要素数 `MAX_ELEMENTS = 120,000`）。本来はメモリで決まる
+——`simp.Model` が `_iK`/`_jK` に要素数×576 の int32 を2本常駐で持つので12万要素で約0.55GBあり、
+COOの値配列とCSC化の一時がこれに乗る。**matrix-free（`20260904-1415`）が入るとこの常駐が丸ごと
+消えて下限が桁で動く**ので、いま精密に作っても作り直しになる。**既定は上限側**（＝条件と最小
+部材幅を満たす、最も粗くて安い設定）で、**時間は制約にしない** —— 予想時間は帰結として出るだけ。
+
+**保持・除外ソリッドからは上限を厳密に計算できない**（細い通路の表現に必要な要素サイズは
+中心軸変換に近い話で、バウンディングボックスや体積では取りこぼす）。だから**ボクセル化した
+あとに数えて通知する** —— 保持/除外を**1つずつ**格子へ載せ、0要素なら最適化を回さずに
+`state == "unrepresented_regions"` で戻る（合計で見ると、大きい保持ソリッド1つで小さいほうの
+消失が隠れる）。運び方は `20260904-1556`（空の条件面）と同じで、新しい通知の仕組みは作らない。
+
+**許容応力は 40MPa 固定**（PETG 降伏 50MPa × 3Dプリント低減 0.8。暫定・本人決定）。duocad 側でも
+材料を選ばせない。導出は `optimize_run.allowable_stress()` から引ける。利用者が入れるのは
+**目標安全率**で、そこから材料量を二分探索する（`safety_loop.solve_for_safety_factor`）。
+
+**この版の制限**:
+
+- **拘束面1枚・荷重面1枚だけ**（`design_space.Conditions` の `fixed_face` / `load_face` が
+  面添字を1つしか持たない）。2枚以上は名指しで断る。
+- **保持ソリッドは1つ以上必須**（塊は保持ソリッドと条件面から起こす）。
+- **メッシュボディは保持・除外に指定できない**（下の「名指ししたら断る」の線）。
+
+**面の対応がこの配線でいちばん壊れやすい。** duocad は面を `(body_id, 1始まりの添字)` で持ち、
+`duocad.topopt` は `TriangleSoup` の面添字で持つ。どちらも `kernel._face_map` の数え方なので
+**同じ形状を渡すかぎり一致する**が、条件面が複数のボディに散ると `kernel.make_compound` で
+1つにまとめるため `face_count` の累積ぶんずれる。**ずれても例外は出ない**（荷重が別の面に入り、
+最適化はもっともらしく収束する）ので、網を2枚張ってある:
+
+1. `_verify_face_mapping` — まとめた形の側で測り直した指紋（面積・法線・**重心**）が、ボディ
+   単体で測った指紋と一致するか。**重心を外すと同形の別ボディを取り違えても通る。**
+2. `_check_anchor_centroids` — 実際にできた面アンカーの節点の重心が、条件面の重心の近くにあるか。
+
+同じ性格の門がもう1つある: **結果メッシュの頂点は要素添字空間（`spacing=(1,1,1)`・セル中心規約）
+で返る**ので、`grid.origin + verts * grid.spacing` でワールド[mm]へ直す（`_mesh_to_world`）。
+忘れると原点付近に縮んだメッシュが黙って入るだけなので、`_check_mesh_placement` が毎回見る。
 
 ### 前提にしないこと
 
@@ -579,7 +641,7 @@ duocad/
                          net/ はアプリ層との接点（ws.py=WebSocket／http.py=静的配信と/mcp／
                          tools_on_loop.py）。server.py はその入口で、再輸出と起動の番人だけ
                          agent/ はアプリ内AIエージェント（プロバイダ＋ループ・UIなし）
-  tests/                 854件。README.md はモジュール単位のAPI契約リファレンス
+  tests/                 877件。README.md はモジュール単位のAPI契約リファレンス
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
     scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。共有部品は
