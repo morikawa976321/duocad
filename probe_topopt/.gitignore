@@ -6,3 +6,6 @@ output/design_space_margin*.stl
 # 連結性ガードの実測(切れている塊をそのまま最適化に通す。README「切れている塊をそのまま
 # 最適化に通すと何が起きるか」)が書き出すSTL。受入検査は書き出さない。
 output/severed_*.stl
+
+# ブラウザの「最適化を実行」/ shot.mjs が回るたび上書きされる結果STL(2026-09-04)。
+output/server_conditions_demo.stl
