@@ -1709,6 +1709,215 @@ volfrac 0.3)。合計は **106.1秒(案1) → 110.2秒(案5)**。
 4. **塊の縮み方は題材で違う**(0.67〜0.91倍)。いちばん縮むのは薄板(`plate`)で、
    いちばん縮まないのは `bracket` n=44。**「案5はいつも 0.8倍」と覚えないこと。**
 
+## 安全率を入力に、材料量を二分探索する外側ループ(`safety_loop.py`。2026-09-05)
+
+材料量は「**内部表現は絶対量(mm^3)、利用者の入力は安全率**」の2層にする、と2026-09-04に
+決まっている(engine `safety-factor-goes-outside-the-optimizer`)。内側の2枚 ——
+`design_space.py`(絶対量の口)と `stress.py`(応力と最小安全率)—— の上に立つ**外側の層**で、
+**最適化そのものには手を入れていない**。応力制約トポロジー最適化(応力を制約に入れて最軽量を
+解く型)は同ノートの理由により**採らない**。ここにあるのは「最適化を外から何度か回して
+材料量を決めるループ」だけ。
+
+### 口
+
+```python
+import design_space as ds
+import safety_loop as sl
+
+cond = ds.demo_conditions()  # load_n(荷重の実際の大きさ[N])が新設フィールド。既定1.0
+result = sl.solve_for_safety_factor(
+    cond,
+    target_safety_factor=2.0,
+    material_min_mm3=60000.0,   # 呼び出し側が決める(このprobeは「常識的な材料量」を知らない)
+    material_max_mm3=300000.0,
+    derivation_kwargs=dict(elements_long_axis=40),  # 既定は本番相当(重い)。検証は縮めて渡す
+)
+result.material_mm3      # 目標以上を満たす最小の材料量[mm^3]
+result.safety_factor      # そこでの最小安全率
+result.converged          # 材料量の相対幅が rel_tol 以内で止まったか
+result.space               # 採用した材料量で導出した DesignSpace
+result.run                 # design_space.run_topopt() の戻り値
+result.report               # stress.SafetyReport
+```
+
+達成不能なら `SafetyTargetError`(`ValueError` の派生)。属性 `side` が
+`"unreachable_within_max_material"`(`material_max_mm3` まで使っても届かない。`shortfall` に
+不足分)か `"invalid_bound"`(`material_min_mm3`/`material_max_mm3` そのものが塊として
+導出できない。元の例外を `__cause__` に連鎖)。**文面にどちら側にどれだけ足りないかが出る。**
+
+### 塊が材料量に追従する問題 —— 案aを選んだ
+
+`20260904-1416` で塊の導出の既定が案5(粗く1回回して膨らませる)になり、案5の塊は
+**材料の居場所**から作るので、材料量が変われば塊も変わる(`derive_from_coarse_run` の
+`coarse_material_mm3`)。外側のループは材料量を動かすので、これが直接ぶつかる。タスク本文が
+挙げた3案のうち、**(a)二分探索の各段で塊を導出し直す**を選んだ。
+
+**選んだ理由**: (a)は塊と材料量が常に噛み合う(塊を固定する(b)/(c)は、探索の反対側の端で
+塊が締め付ける/緩すぎる)。「段ごとに塊が変わるので、安全率の変化が材料のせいか塊のせいか
+切り分けられない」という(a)の弱点は、**この解像度でのコストが実測で無視できる大きさ
+(1点あたり0.4〜0.5秒の導出 + 1.8〜2.8秒の最適化)だったので、切り分けを諦めてでも
+噛み合わせを取った。**
+
+**比較実測**(bracket、`elements_long_axis=14` / `coarse_elements_long_axis=12` /
+`coarse_max_iter=6` / `dilate_mm=8.0` / `max_iter=20`。(c)は最大材料量(249,882mm^3)で
+1回だけ塊を固定し、以後はその塊のまま材料量だけ振った):
+
+| 材料量[mm^3] | (a) 安全率 | (c) 安全率 | 相対差 |
+|---:|---:|---:|---:|
+| 96,108 | 5,078.7 | 5,071.9 | 0.13% |
+| 134,552 | 5,831.4 | 5,594.8 | 4.23% |
+| 172,995 | 6,008.4 | 5,990.9 | 0.29% |
+| 211,438 | 6,260.1 | 6,259.6 | 0.01% |
+| 249,882 | 6,417.7 | 6,417.7 | 0.00%(同じ呼び出し) |
+
+材料量が (c) の固定点(249,882mm^3)に近いほど一致し、遠いほど(特に134,552mm^3で4.2%)
+ずれる —— (c)の塊は固定点向けに膨らませてあるので、それより少ない材料では塊が
+「緩すぎる」側に振れる。どちらも**材料量に対して単調増加**で、二分探索そのものは両方で
+成立した。(b)(=固定するだけで最大点も取らない案)は(c)の劣化版なのでここでは測っていない。
+
+### 単調性を測る(4題材・各10点)
+
+二分探索は「材料量を増やせば安全率が上がる」を前提にする。**これは自明ではない**(材料が
+増えると形そのものが変わり、応力集中の位置も変わるため)。`20260904-1413` の4題材
+(`design_space.CASES` の `bracket`/`plate`/`branching`/`tilted`)それぞれで、選んだ案a
+(塊を毎回導出し直す)で材料量を振り、達成可能区間のうち導出が通る帯を10点測った
+(許容応力40MPa・`load_n=1.0`・`youngs_modulus_mpa=2000.0`。安全率の絶対値そのものは
+ボクセルFEAの階段の問題があるので信用しないこと ——「単調に増えるか」だけを見る)。
+
+**検証は check-scale の解像度で行った**(`elements_long_axis=14` 前後。本番の40ではない)。
+理由は `20260904-1345` と同じ —— この段の成果物は「単調性という性質」であって、絶対値の
+精度ではない。1点が数秒で済むので4題材×10点が数分で回る。
+
+| 題材 | capacity_ref[mm^3] | 安全率の範囲(材料量の範囲) | 単調か |
+|---|---:|---|---|
+| bracket | 384,434 | 2,200.9(57,665) → 6,492.5(288,325) | **単調増加(10/10)** |
+| branching | 634,517 | 2,642.3(126,903) → 20,239.1(475,888) | **単調増加(10/10)** |
+| tilted | 566,265 | 972.9(84,940) → 9,471.9(396,385) | **単調増加(10/10)** |
+| plate | 668,669 | 1,041.0(200,601) → 2,676.2(521,562) | 単調増加(10/10)だが**後半で頭打ち**(下記) |
+
+4題材とも測った範囲では単調増加だった。ただし2点、単調性の測定そのものが値打ちを持つ
+発見があった:
+
+1. **plate は材料量343,250mm^3を過ぎるとほぼ横ばいになる**(2,653.7 → 2,660.1 → 2,663.3 →
+   2,666.2 → 2,668.1 → 2,676.2、材料が1.5倍に増えても安全率は1%も動かない)。**技術的には
+   単調(壊れてはいない)だが、二分探索の収束判定を「材料量の相対幅」だけに置くと、この
+   なだらかな領域で `rel_tol` を割るまでに評価回数を浪費する**(下記「収束条件」の
+   注記どおり、材料量の幅だけでなく安全率側の変化も見たほうがよい場面がある、という
+   実例)。原因は `dilate_mm` が板厚に対して小さく、材料を増やしても塊(縁)がすぐ
+   飽和すること(下記「plate は既定の粗い段の設定が効かない」参照)。
+2. **branching は材料量が少ないと塊が非連結になる**(実測: capacity_ref の15%相当
+   〈95,177mm^3〉で `DesignSpaceDisconnectedError`。塊の連結成分が2つに割れ、拘束側と
+   荷重側が繋がらない)。これは「安全率が低い」のではなく「そもそも形にならない」という
+   別の失敗モードで、`safety_loop.py` は `VolumeTargetError(below_minimum)` と同じ側
+   (`"too_little"`)に分類して扱う(下記「達成不能の分類」)。
+
+**plate は既定の粗い段の設定が効かない**: `bench.DESIGN_SPACE_COARSE` の
+`dilate_mm=8.0` はブラケット題材(要素サイズ約22mm)向けの値で、plate の要素サイズ
+(11〜14mm、極端なアスペクト比なので同じ `elements_long_axis` でも要素が小さくなる)に
+対しては1要素弱にしかならず、膨張がほとんど効かない。実測で `dilate_mm` を8→40mmまで
+振ると、塊の容量が塊全体(=案1の箱)に飽和するまで大きくなる。**単調性の測定では
+`dilate_mm=24.0` へ広げ、`coarse_elements_long_axis` も14(fine と同じ)にして通した**
+——それでも材料量15〜25%の帯は連結せず測れなかった(frac_lo を0.30まで上げてある)。
+**この題材固有の調整であり、`safety_loop.py` の既定値は変えていない**(呼び出し側が
+`derivation_kwargs` で渡す)。
+
+### 探索の目標は「以上で最小」
+
+利用者が欲しいのは「安全率がぴったり目標の形」ではなく「**目標を満たす最も軽い形**」なので、
+`solve_for_safety_factor` は**目標安全率以上を満たす最小の材料量**を返す(ちょうど、ではない)。
+単調なら両者は一致するが、目標をどちらに置いたかで「届かないときの扱い」が変わる ——
+「以上で最小」なら「上端まで使っても届かない」だけが失敗になり、「ちょうど」だと
+「オーバーシュートしたら失敗」という余分な失敗モードが増える。
+
+### 達成不能の分類
+
+各候補材料量の評価は3つに分類する(`safety_loop._evaluate`):
+
+- `"ok"` —— 通常どおり安全率が出る。
+- `"too_little"` —— この材料量では塊が細すぎる。`design_space.DesignSpaceDisconnectedError`
+  (拘束と荷重が繋がらない)/ `design_space.DesignSpaceTooSmallError` /
+  `simp.VolumeTargetError(side="below_minimum")` のいずれか。**安全率で言えば「目標に
+  届かない」と同じ側として扱う**(この材料量とその下は不採用)。
+- `"too_much"` —— この材料量**そのものを目標に**導出した塊でも、密度フィルタの目減りで
+  材料が収まらない(`simp.VolumeTargetError(side="above_capacity")`)。安全率は測れていない
+  ので、この材料量とその上は判定を保留して引き返す。
+
+二分探索の境界(`material_min_mm3` / `material_max_mm3`)自体がこの分類に落ちた場合は
+`SafetyTargetError(side="invalid_bound")` で止める(黙って範囲を書き換えない)。
+
+### 許容応力の導出
+
+**PETG の降伏応力 50MPa に、3Dプリントを想定した低減係数 0.8 を掛けた 40MPa を暫定で使う**
+(2026-09-04本人決定)。`safety_loop.PETG_YIELD_MPA = 50.0` / `safety_loop.PRINT_DERATE = 0.8`
+を別々に定義し、`DEFAULT_ALLOWABLE_MPA = PETG_YIELD_MPA * PRINT_DERATE`(40.0)を使う ——
+**40 という数字だけをハードコードしない**。50 はフィラメントのデータシート級の公称値で、
+実際に使う銘柄の値へ差し替えられる。
+
+**留保**: 0.8 は積層方向(Z)には楽観的である。FDM の層間接着はふつう XY 方向の40〜60%で、
+0.8 には届かない。さらにトポロジー最適化が出す形は、どの部分がどの向きに荷重を受けるかが
+最適化の時点では分からないので、造形姿勢が決まるまで一つのスカラーでは異方性を代表できない。
+**暫定値である。**
+
+安全率(利用者入力)とは**二重に効く**。0.8 は材料側の低減、安全率は設計側の余裕であり、
+両方掛かるのは意図どおり(片方に畳み込むと、造形法を変えたときにどちらを動かせばよいか
+分からなくなる)。
+
+### 荷重を実単位[N]で持つ(`Conditions.load_n`)
+
+`stress.UnitScale.for_model` は `load_n`[N] を要求するが、`Conditions` はそれまで荷重の
+**向き**(`force=(0,0,-1)`、`run_topopt`/`run_pipeline` の引数)しか持たず、大きさは無次元1.0
+だった。`Conditions` に `load_n: float = 1.0` を足した ——**最適化そのもの(`force` の合力)は
+無次元のまま変えていない**。`load_n` は `stress.UnitScale.for_model(..., load_n=conditions.load_n)`
+が応力を実単位[MPa]へ換算するときにだけ参照する。`check_design_space.py` [5] の
+フィールド集合の assert を更新した(5つに増えた: `keep` / `fixed_face` / `load_face` /
+`obstacle` / `anchor_shape` / `load_n`)。
+
+### `keep_model` を2層に通す
+
+`0143` が名指しで残した配線。`anchor.run_pipeline` と `design_space.run_topopt` は
+`simp.optimize` に `keep_model` を渡していなかったので、`result.model` が常に `None` で
+応力を測れなかった。両方に `keep_model: bool = False`(既定)を足し、そのまま
+`simp.optimize(keep_model=keep_model)` へ渡す。**数値は1ビットも変わらない**
+(`check_safety_loop.py` [1] が `keep_model` の有無で `rho` が一致することを確認している)。
+
+### 収束条件と回数上限をどう決めたか
+
+- **`rel_tol=0.02`(材料量の相対幅2%)**: この解像度(数百〜千要素)では、材料量が数%動くと
+  塊の要素数が数十〜百単位で変わる(上表の `elements` 列参照)。2%より細かく詰めても、
+  ボクセルの量子化と密度フィルタの目減りに埋もれて意味のある違いにならない。plate の
+  頭打ち領域のように、材料量の幅だけでは収束の質を保証できない場面があることは実測で
+  分かっている(上記)ので、**疑わしい題材では `result.history` を見て安全率側の変化幅も
+  確認すること**。
+- **`max_evaluations=15`**: 境界2回 + 二分探索。`rel_tol=0.02` まで詰めるのに必要な回数は
+  `log2(1/0.02) ≈ 5.6` 回なので、境界込みで8回あれば普通は収束する。実測(README上表の
+  bracket、目標5,500)では**9回で収束**した。`too_little`/`too_much` を踏んで区間の詰まりが
+  遅くなる場合の余裕として15にしてある。
+- **`max_iter=40`**: `anchor.run_pipeline` の既定と揃えた。二分探索は最適化を評価回数ぶん
+  回すので(`20260904-1414`/`1415` のマルチグリッド・CPU並列化が前提)素直に10倍前後
+  掛かるが、**このタスクでは素直に回してよい**とタスク本文にある。粗い段で探索して最後に
+  1回だけ本番、という2段構えは組んでいない(`20260904-1400` の案5と同じ機構になるので、
+  必要になったらそちらと合わせて作るほうが確実)。
+
+### STL は候補材料量ごとに書く(scratch)
+
+二分探索は候補材料量ごとに `design_space.run_topopt` を呼ぶ(= STLを書く)。既定の出力先を
+`design_space.run_topopt` の既定(`output/design_space_case1.stl`)や `anchor.run_pipeline` の
+既定(`output/bracket.stl`)へ向けると、**他の受入検査(`check_design_space.py` [5] /
+`check_anchor.py`)がその検査自身の標準実行の成果物として当てにしているファイルを
+検証のたびに上書きしてしまう**(実装中に一度実際に踏んだ)。`safety_loop.py` は専用の
+scratch(`output/safety_loop_search.stl`。`.gitignore` 対象)へ書く。**探索が終わった時点の
+中身は最後に評価した候補のもので、採用した材料量(`result.material_mm3`)とは限らない。**
+採用した形の STL が欲しい場合は `design_space.run_topopt(result.space,
+material_mm3=result.material_mm3, ..., stl_path=<自分のパス>)` をもう一度呼ぶこと
+(`optimize` は決定的なので同じ ρ 場が返る)。
+
+### 受入検査(`check_safety_loop.py`。30件)
+
+bracket(`demo_conditions`)だけを使う回帰検査 —— **単調性そのものの実測(4題材・10点)は
+検査ではなくこの節にある**(検査で毎回4題材×10点を回すと数分かかり、受入検査の「速さが命」
+という方針に反する)。検査は3点だけの粗いスポット確認に留め、配線(`load_n` / `keep_model` /
+入口 / 例外 / 収束)を高速に(実測45秒)守る。内訳は README「検査の走らせ方」参照。
+
 ## CADの面 → 格子の節点(anchor.py)
 
 `voxelize.py` が起こした格子の上に、**「ボディXの面#42」を「これらの格子節点」へ翻訳する
@@ -1881,6 +2090,8 @@ venvを作り直したときはこのコマンドで復元する)。
 | `check_stress.py` | **受入検査(合否そのもの)**。[0] B行列と局所節点順 + [1] 一様な棒の単軸引張(解析解) + [2] 片持ち梁の曲げの M·c/I への収束(3解像度) + [3] 実単位への換算則 + [4] 代表応力の規則 + [5] 安全率を assert する。約14秒 |
 | `design_space.py` | **4条件(保持ソリッド・除外ソリッド・拘束面・荷重面) → 塊(設計空間)**。案1(`derive`)=条件の点群の外接直方体+余白から除外ソリッドを引く / 案5(`derive_from_coarse_run`)=粗い格子で1回 SIMP を回し、出た材料を膨らませる。**どちらも塊の中で拘束と荷重がひと続きかを6近傍で確かめてから返す**(`DesignSpaceDisconnectedError`)。**既定は案5**(2026-09-04〜。入口は `derive_default`)。CLIとしても動く(`--measure` で案1の表、`--compare --material-mm3 <量>` で案1対案5の表を作り直す) |
 | `check_design_space.py` | **受入検査(合否そのもの)**。[1]-[4] 塊と面アンカーの対象ソリッドの分離 + [5]-[9] 案1の導出 + [10] 連結性ガード(拘束と荷重がひと続きか) + [11] 案5(粗く1回回して膨らませる) + [12] 性能の基準線の題材(4つ)が端から端まで通ること + [13] 既定の導出(入口が1つ・案1が残っている・`coarse_material_mm3` の素通し)を assert する |
+| `safety_loop.py` | **安全率を入力に、材料量(mm^3)を二分探索する外側ループ**。`solve_for_safety_factor` が入口。目標以上を満たす最小の材料量を探す。塊は案a(候補材料量ごとに `derive_default` を呼び直す)。許容応力の導出(PETG × 低減係数)を持つ。**最適化そのものには手を入れない** |
+| `check_safety_loop.py` | **受入検査(合否そのもの)**。`load_n`/`keep_model` の配線 + 単調性のスポット確認(3点) + 入口が端から端まで動くこと + 達成不能な場合の例外(どちら側にどれだけ足りないか) + 下端で既に満たす場合の早期終了 + 引数検証を assert する。bracket だけの回帰検査で約43〜45秒(4題材・10点の単調性の実測は本文) |
 | `server.py` | 静的配信(**8775**) + WebSocket(**8776**)。`mode:"conditions"` で起動直後の既定表示(4条件)の材料を配り、無印の `start` で `design_space.run_topopt()` を回して反復ごとにボクセルを・完了時に平滑化メッシュを配る(`_get_demo_space()` が表示と計算で同じ `DesignSpace` を使い回す)。`mode:"anchors"` で(別デモの)面アンカーを配る |
 | `web/index.html` | ビューポート + ボタン1つ。**起動直後(ボタンを押す前)に4条件を duocad と同じ色で描く**(既定)。反復中は`InstancedMesh`、完了時は`BufferGeometry`(平滑化メッシュ)に差し替える。`?debug=space` で塊を薄く重ねる。`?debug=anchors` で(別デモの)面アンカー表示 |
 | `web/vendor/three/` | three.js 0.185.1 を `duocad/web/node_modules` からコピーしたもの(**CDNを使わない**) |
@@ -1899,6 +2110,8 @@ venvを作り直したときはこのコマンドで復元する)。
 | `output/perf-baseline.json` | `perf.py --json` が残した基準線の測定値。**リポジトリには入れていない**(後続タスクが `--baseline` に渡すのは、その場で撮り直した同じセッションのものだけ) |
 | `output/absolute_volume_tmp.stl` | `check_absolute_volume.py` [2b] が実経路を通すたびに上書きするSTL。**リポジトリには入れていない**(検査の成果物ではなく副産物) |
 | `output/server_conditions_demo.stl` | `server.py` がボタンの実行のたびに書き出すSTL(`DEMO_STL_PATH`)。**リポジトリには入れていない**(押すたびに上書きされる) |
+| `output/safety_loop_search.stl` | `safety_loop.py` の二分探索が候補材料量ごとに上書きするSTL。**リポジトリには入れていない**(最後に評価した候補が残るだけで、採用した材料量とは限らない) |
+| `output/check_safety_loop_*.stl` | `check_safety_loop.py` の `keep_model` 配線検査が書き出す使い捨てのSTL(`output/bracket.stl` / `output/design_space_case1.stl` を上書きしないための専用パス)。**リポジトリには入れていない** |
 | `screenshots/result.png` | (旧)ボクセル版の実機確認。marching cubes導入前の記録として残置 |
 | `screenshots/result_smooth.png` | 平滑化メッシュ版の実機確認 |
 | `screenshots/result_anchors.png` | 既定表示(4条件)の実機確認(保持=緑 / 除外=赤 / 拘束=青 / 荷重=黄。2026-09-04〜。旧版は面アンカー用だった) |
@@ -2054,10 +2267,12 @@ design_space 17.6 / anchor 50.9 秒。**増分の大半は [12] ではない** �
 **2026-09-04(CPU並列化)以降は 411 件**(`check_parallel.py` を 41件で新設)、
 **2026-09-04(塊の導出の既定を案5へ)以降は 426 件**(`check_design_space` 97 → 109 =
 既定の導出の検査[13] 12件 / `check_absolute_volume` 41 → 44 = OC の退化を体積の言葉で
-落とす検査 3件)。内訳は
+落とす検査 3件)。
+**2026-09-05(安全率の外側ループ)以降は 456 件**(`check_safety_loop.py` を 30件で新設)。
+内訳は
 `check_simp` 24 / `check_mesh` 15 / `check_absolute_volume` 44 / `check_anchor` 59 /
 `check_design_space` 109 / `check_stress` 40 / `check_voxelize` 48 / `check_multigrid` 46 /
-`check_parallel` 41。**減らした項目は無い。**
+`check_parallel` 41 / `check_safety_loop` 30。**減らした項目は無い。**
 
 **9本の通し(2026-09-04・既定を案5へ倒したあと。2回とも合格・不合格0件)**: 合計
 **141秒 / 147秒**(2回目の内訳: `check_simp` 6 / `check_mesh` 14 / `check_voxelize` 8 /
@@ -2065,6 +2280,12 @@ design_space 17.6 / anchor 50.9 秒。**増分の大半は [12] ではない** �
 `check_stress` 7 / `check_multigrid` 20 / `check_parallel` 15)。`check_design_space` が
 15 → 20秒に伸びたのは**[12] が4題材とも粗い段を回すようになったから**(4題材の導出で
 約4.9秒)と、[13] のぶん。
+
+**10本の通し(2026-09-05・`check_safety_loop.py` を足したあと。合格・不合格0件)**: 合計
+**186秒**(`check_simp` 5 / `check_mesh` 12〜13 / `check_voxelize` 8 / `check_anchor` 40 /
+`check_design_space` 20 / `check_absolute_volume` 15〜16 / `check_stress` 6〜7 /
+`check_multigrid` 19〜21 / `check_parallel` 15〜16 / `check_safety_loop` **43〜45**)。
+新設分がそのまま合計に乗る形で、既存9本の時間は変わっていない。
 
 案5を足したあとの通し(同日・7本を続けて1回。**どれも合格・不合格0件**):
 `check_simp` 4.0 / `check_mesh` 16.1 / `check_absolute_volume` 10.0 / `check_anchor` 36.6 /
@@ -2296,6 +2517,10 @@ Set-Location C:\Users\tm976\mf\duocad\probe_topopt
 
 # CPU並列化(行ブロック並列matvecの正しさ・退避経路・スレッド数を振ってもビット一致)。約13秒
 & ..\.venv\Scripts\python.exe check_parallel.py
+
+# 安全率の外側ループ(load_n/keep_modelの配線・単調性のスポット確認3点・入口・達成不能の例外・
+# 収束・引数検証)。bracketだけの回帰検査なので約43〜45秒(4題材の単調性の実測はREADME側)
+& ..\.venv\Scripts\python.exe check_safety_loop.py
 
 # 性能の基準線(README「性能の基準線」の2つの表を作り直す)。**受入検査ではない。** 約5分
 & ..\.venv\Scripts\python.exe perf.py --json output\perf-baseline.json

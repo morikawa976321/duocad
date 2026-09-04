@@ -1,0 +1,405 @@
+"""安全率を入力に、材料量(mm^3)を二分探索する外側ループ。
+
+材料量は「内部表現は絶対量(mm^3)、利用者の入力は安全率」の2層(2026-09-04 engine
+`safety-factor-goes-outside-the-optimizer`)。内側の2枚 —— `design_space.py`(絶対量の口)と
+`stress.py`(応力と最小安全率)—— の上に立つ**外側の層**で、最適化そのものには手を入れない。
+**応力制約トポロジー最適化(応力を制約に入れて最軽量を解く型)は採らない**(理由4点は同ノート)。
+ここにあるのは「最適化を外から何度か回して材料量を決めるループ」だけ。
+
+塊の扱い(README「塊が材料量に追従する」参照): **各段で塊を導出し直す(案a)を選んだ**。
+`design_space.derive_default(conditions, coarse_material_mm3=material, ...)` を二分探索の
+候補材料量そのままで毎回呼ぶ —— 塊と材料量が常に噛み合う。固定して使い回す案(c)と比べて
+安全率・材料量ともに実測でよく一致したが(README表)、(a) は塊が段ごとに変わるため厳密には
+「材料が増えたから安全率が上がったのか、塊が変わったからなのか」を切り分けられない。
+コスト差は実測で無視できる大きさだったので、切り分けを諦めてでも塊と材料量を噛み合わせる
+(a) を既定にした。
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Optional, Sequence
+
+import design_space as ds
+import simp
+import stress
+
+_HERE = Path(__file__).resolve().parent
+
+# 二分探索は候補材料量ごとに `design_space.run_topopt` を呼ぶ(= STLを書く)。**既定の出力先を
+# `design_space.run_topopt` の既定(`output/design_space_case1.stl`)や `anchor.run_pipeline` の
+# 既定(`output/bracket.stl`)へ向けてはいけない** —— どちらも他の受入検査(`check_design_space.py`
+# [5] / `check_anchor.py`)が「その検査自身の標準的な実行の成果物」として当てにしている。
+# ここは**探索の途中経過の使い捨て**なので専用の scratch ファイルへ書く
+# (`.gitignore` 対象。「最後に評価した候補」のメッシュが残るだけで、採用した材料量とは限らない)。
+_SEARCH_STL_PATH = _HERE / "output" / "safety_loop_search.stl"
+
+# ---------------------------------------------------------------------------
+# 許容応力(2026-09-04本人決定)。**40 という数字だけをハードコードしない** ——
+# 後で必ず「この40はどこから来た」と聞かれる。
+# ---------------------------------------------------------------------------
+
+# PETG の降伏応力。フィラメントのデータシート級の公称値。実際に使う銘柄の値へ差し替えられる。
+PETG_YIELD_MPA = 50.0
+
+# 3Dプリントを想定した低減係数。**留保**: 積層方向(Z)には楽観的 —— FDM の層間接着は
+# ふつう XY 方向の40〜60%で、0.8 には届かない。さらにトポロジー最適化が出す形は、どの部分が
+# どの向きに荷重を受けるかが最適化の時点では分からないので、造形姿勢が決まるまで一つの
+# スカラーでは異方性を代表できない。**暫定値である。**
+PRINT_DERATE = 0.8
+
+# 許容応力 = 降伏応力 × 低減係数。**安全率(利用者入力)とは二重に効く** ——
+# 0.8 は材料側の低減、安全率は設計側の余裕であり、両方掛かるのは意図どおり
+# (片方に畳み込むと、造形法を変えたときにどちらを動かせばよいか分からなくなる)。
+DEFAULT_ALLOWABLE_MPA = PETG_YIELD_MPA * PRINT_DERATE  # 40.0
+
+# `stress.UnitScale` は正の有限値を要求するが、**安全率は E に依存しない**
+# (`stress.py` の契約。E が効くのは変位だけ)。ここでは表示用の変位を出すためだけの
+# 名目値(PETG のヤング率はおよそ1.5〜2.1GPa)を既定にしてある。安全率の結果には影響しない。
+DEFAULT_YOUNGS_MODULUS_MPA = 2000.0
+
+# 二分探索の既定値。根拠は README「収束条件と回数上限をどう決めたか」。
+DEFAULT_REL_TOL = 0.02  # 材料量の相対幅(区間の [lo, hi] が (hi-lo)/hi <= 2% で収束と見なす)
+DEFAULT_MAX_EVALUATIONS = 15  # 境界2回 + 二分探索の反復上限(2%まで詰めるのに必要な約6回に余裕)
+DEFAULT_MAX_ITER = 40  # 各段の SIMP 反復数。anchor.run_pipeline の既定と揃えた
+
+
+class SafetyTargetError(ValueError):
+    """目標安全率が指定した材料量の範囲(`[material_min_mm3, material_max_mm3]`)で
+    達成できない。**どちら側にどれだけ足りないかを名指しする。**
+
+    `side`:
+
+    - `"unreachable_within_max_material"` —— `material_max_mm3` まで材料を使っても
+      目標安全率に届かない。`safety_factor` に実際に得られた最小安全率、
+      `shortfall` に `target_safety_factor - safety_factor` が入る。
+    - `"invalid_bound"` —— `material_min_mm3` か `material_max_mm3` そのものが
+      塊として導出できない(接続できない・体積目標が達成できない、のいずれか)。
+      元の例外は `__cause__` に連鎖してある。`bound` に `"material_min_mm3"` か
+      `"material_max_mm3"` が入る。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        side: str,
+        target_safety_factor: float,
+        material_mm3: float,
+        safety_factor: Optional[float] = None,
+        shortfall: Optional[float] = None,
+        bound: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.side = side
+        self.target_safety_factor = target_safety_factor
+        self.material_mm3 = material_mm3
+        self.safety_factor = safety_factor
+        self.shortfall = shortfall
+        self.bound = bound
+
+
+@dataclass(frozen=True, eq=False)
+class SafetyLoopStep:
+    """二分探索の1回の評価。**成功しなかった評価も残す**(履歴が探索の軌跡そのものになる)。"""
+
+    material_mm3: float
+    outcome: str  # "ok" / "too_little" / "too_much"
+    safety_factor: Optional[float] = None
+    elements: Optional[int] = None
+    error: Optional[str] = None
+
+
+@dataclass(frozen=True, eq=False)
+class SafetyLoopResult:
+    """安全率入力ループの答え。**材料量は「目標以上を満たす最小」**(ちょうどではない。
+    README「探索の目標は『ちょうど』ではなく『以上で最小』」参照)。
+    """
+
+    material_mm3: float
+    achieved_material_mm3: float
+    safety_factor: float
+    target_safety_factor: float
+    allowable_mpa: float
+    converged: bool
+    evaluations: int
+    history: list = field(default_factory=list)  # list[SafetyLoopStep]
+    space: Any = None  # design_space.DesignSpace(最終採用した材料量で導出した塊)
+    run: Optional[dict] = None  # design_space.run_topopt() の戻り値
+    report: Any = None  # stress.SafetyReport
+
+    def summary(self) -> str:
+        conv = "収束" if self.converged else "未収束(回数上限)"
+        return (
+            f"材料 {self.material_mm3:.6g}mm^3 で最小安全率 {self.safety_factor:.4f}"
+            f"(目標 {self.target_safety_factor:.4f} 以上) / {conv} / "
+            f"評価 {self.evaluations} 回"
+        )
+
+
+def _derive_and_run(
+    conditions: ds.Conditions,
+    material_mm3: float,
+    *,
+    allowable_mpa: float,
+    youngs_modulus_mpa: float,
+    max_iter: int,
+    force: Sequence[float],
+    solver: Optional[str],
+    threads: Optional[int],
+    rho_min: float,
+    percentile: float,
+    derivation_kwargs: dict,
+    stl_path: Optional[Any] = None,
+) -> tuple[Any, dict, Any]:
+    """1つの材料量について、塊を導出し直してから最適化して安全率まで出す(この段の中核)。
+
+    **塊は毎回この材料量で導出し直す(選んだ案a)。** `derive_default` は既定の導出
+    (`design_space.DEFAULT_DERIVATION`、いまは案5)へ委ねるので、既定を案1へ戻すと
+    `coarse_material_mm3` は `TypeError` になる(`derive_default` の契約どおり ——
+    黙って捨てない)。
+    """
+    kwargs = dict(derivation_kwargs)
+    kwargs.setdefault("coarse_material_mm3", material_mm3)
+    space = ds.derive_default(conditions, **kwargs)
+    run = ds.run_topopt(
+        space,
+        material_mm3=material_mm3,
+        max_iter=max_iter,
+        force=force,
+        solver=solver,
+        threads=threads,
+        keep_model=True,
+        stl_path=_SEARCH_STL_PATH if stl_path is None else stl_path,
+    )
+    result = run["result"]
+    scale = stress.UnitScale.for_model(
+        result.model,
+        element_mm=space.grid.spacing,
+        load_n=conditions.load_n,
+        youngs_modulus_mpa=youngs_modulus_mpa,
+    )
+    # 変位解法は "mg" を明示する(simp.optimize の既定と揃える)。stress.evaluate 自体の既定
+    # "cg" は 0143 が組んだ当時(マルチグリッド導入前)のままなので、ここでは触らずに上書きする。
+    report = stress.evaluate(
+        result.model,
+        result.rho,
+        scale=scale,
+        allowable_mpa=allowable_mpa,
+        solver="mg",
+        rho_min=rho_min,
+        percentile=percentile,
+    )
+    return space, run, report
+
+
+def _evaluate(conditions: ds.Conditions, material_mm3: float, **kwargs: Any) -> tuple[str, Any]:
+    """材料量1点を評価する。**失敗も分類して返す**(例外を上まで素通しにしない)。
+
+    - `"ok"` —— 通常どおり (space, run, report)。
+    - `"too_little"` —— この材料量では塊が細すぎる(接続できない/体積目標が
+      `below_minimum`)。安全率で言えば「目標に届かない」と同じ側として扱う
+      (この材料量とその下は不採用)。
+    - `"too_much"` —— この材料量**そのものを目標に**導出した塊でも、密度フィルタの
+      目減りで材料が収まらない(`VolumeTargetError(side="above_capacity")`)。
+      安全率は測れていないので、この材料量とその上は判定を保留して引き返す。
+    """
+    try:
+        space, run, report = _derive_and_run(conditions, material_mm3, **kwargs)
+        return "ok", (space, run, report)
+    except simp.VolumeTargetError as exc:
+        return ("too_much" if exc.side == "above_capacity" else "too_little"), exc
+    except (ds.DesignSpaceDisconnectedError, ds.DesignSpaceTooSmallError) as exc:
+        return "too_little", exc
+
+
+def solve_for_safety_factor(
+    conditions: ds.Conditions,
+    *,
+    target_safety_factor: float,
+    material_min_mm3: float,
+    material_max_mm3: float,
+    allowable_mpa: float = DEFAULT_ALLOWABLE_MPA,
+    youngs_modulus_mpa: float = DEFAULT_YOUNGS_MODULUS_MPA,
+    max_iter: int = DEFAULT_MAX_ITER,
+    rho_min: float = stress.DEFAULT_RHO_MIN,
+    percentile: float = stress.DEFAULT_PERCENTILE,
+    rel_tol: float = DEFAULT_REL_TOL,
+    max_evaluations: int = DEFAULT_MAX_EVALUATIONS,
+    force: Sequence[float] = (0.0, 0.0, -1.0),
+    solver: Optional[str] = None,
+    threads: Optional[int] = None,
+    derivation_kwargs: Optional[dict] = None,
+    progress: Optional[Callable[[SafetyLoopStep], None]] = None,
+) -> SafetyLoopResult:
+    """**安全率を入力に取る入口。** 目標安全率を満たす材料量で最適化した結果を返す。
+
+    `[material_min_mm3, material_max_mm3]` の中で、**目標安全率以上を満たす最小の材料量**を
+    二分探索する(「ちょうど」ではない。README「探索の目標」参照)。**単調性
+    (材料量を増やすと最小安全率が上がる)を前提にする** —— README「単調性を測る」で
+    4題材について実測して確かめてあるが、**理論的な保証ではない**。任意の `conditions` で
+    単調とは限らないので、疑わしい形では `derivation_kwargs` を揃えて自分で数点測ること。
+
+    材料量の探索範囲は呼び出し側が決める(このprobeは形ごとの「常識的な材料量」を知らない)。
+    `material_min_mm3` は少なくとも保持ソリッドの体積より大きいこと、`material_max_mm3` は
+    塊の容量の99.9%未満にすること(端ちょうどは `simp` の OC 二分探索が退化する。
+    `20260904-0142` の罠)。
+
+    達成不能なときは `SafetyTargetError` —— どちら側にどれだけ足りないかを名指しする
+    (クラスdocstring参照)。
+
+    `derivation_kwargs` は `design_space.derive_default` への追加引数
+    (`margin_ratio` / `elements_long_axis` / `coarse_elements_long_axis` /
+    `coarse_max_iter` / `dilate_mm` / `threshold` など)。`coarse_material_mm3` は
+    ここが二分探索の候補材料量で埋めるので**渡さないこと**(渡しても上書きされる)。
+
+    **STL は候補材料量ごとに書く(= 二分探索の回数ぶん上書きする)。** 既定の書き出し先は
+    `output/safety_loop_search.stl`(scratch。`.gitignore` 対象)で、**探索が終わった時点の
+    中身は最後に評価した候補のもので、採用した材料量(`result.material_mm3`)とは限らない**。
+    採用した形の STL が欲しいときは、呼び出し側が `design_space.run_topopt(result.space,
+    material_mm3=result.material_mm3, ..., stl_path=<自分のパス>)` をもう一度呼ぶこと
+    (`optimize` は決定的なので、同じ入力からは同じ ρ 場が返る)。
+    """
+    if not math.isfinite(target_safety_factor) or target_safety_factor <= 0.0:
+        raise ValueError(f"target_safety_factor は有限の正の値であること(受け取った値: {target_safety_factor!r})")
+    if not material_min_mm3 > 0.0 or not math.isfinite(material_min_mm3):
+        raise ValueError(f"material_min_mm3 は有限の正の値であること(受け取った値: {material_min_mm3!r})")
+    if not material_max_mm3 > material_min_mm3 or not math.isfinite(material_max_mm3):
+        raise ValueError(
+            "material_max_mm3 は material_min_mm3 より大きい有限の値であること"
+            f"(min={material_min_mm3!r} / max={material_max_mm3!r})"
+        )
+    if not 0.0 < rel_tol < 1.0:
+        raise ValueError(f"rel_tol は (0, 1) であること(受け取った値: {rel_tol!r})")
+    if max_evaluations < 2:
+        raise ValueError(f"max_evaluations は2以上であること(受け取った値: {max_evaluations!r})")
+
+    eval_kwargs = dict(
+        allowable_mpa=allowable_mpa,
+        youngs_modulus_mpa=youngs_modulus_mpa,
+        max_iter=max_iter,
+        force=force,
+        solver=solver,
+        threads=threads,
+        rho_min=rho_min,
+        percentile=percentile,
+        derivation_kwargs=dict(derivation_kwargs or {}),
+    )
+
+    history: list[SafetyLoopStep] = []
+    best: Optional[tuple[float, Any, Any, Any]] = None  # (material, space, run, report)
+
+    def record(material: float, outcome: str, payload: Any) -> None:
+        if outcome == "ok":
+            _space, _run, report = payload
+            step = SafetyLoopStep(
+                material_mm3=material,
+                outcome="ok",
+                safety_factor=report.safety_factor,
+                elements=_space.element_count,
+            )
+        else:
+            step = SafetyLoopStep(material_mm3=material, outcome=outcome, error=str(payload))
+        history.append(step)
+        if progress is not None:
+            progress(step)
+
+    def evaluate(material: float) -> tuple[str, Any]:
+        outcome, payload = _evaluate(conditions, material, **eval_kwargs)
+        record(material, outcome, payload)
+        return outcome, payload
+
+    # --- 上端を評価する。ここが「材料が足りない」を判定する基準になる。---
+    outcome_hi, payload_hi = evaluate(material_max_mm3)
+    if outcome_hi != "ok":
+        raise SafetyTargetError(
+            f"material_max_mm3={material_max_mm3:.6g}mm^3 そのものが塊として導出できない"
+            f"({outcome_hi}): {payload_hi}",
+            side="invalid_bound",
+            target_safety_factor=target_safety_factor,
+            material_mm3=material_max_mm3,
+            bound="material_max_mm3",
+        ) from (payload_hi if isinstance(payload_hi, BaseException) else None)
+    _space_hi, _run_hi, report_hi = payload_hi
+    if report_hi.safety_factor < target_safety_factor:
+        raise SafetyTargetError(
+            f"material_max_mm3={material_max_mm3:.6g}mm^3 まで材料を使っても"
+            f"最小安全率は {report_hi.safety_factor:.4f} で、目標 {target_safety_factor:.4f} に"
+            f"{target_safety_factor - report_hi.safety_factor:.4f} 足りない"
+            "(material_max_mm3 を上げるか、目標安全率を下げること)",
+            side="unreachable_within_max_material",
+            target_safety_factor=target_safety_factor,
+            material_mm3=material_max_mm3,
+            safety_factor=report_hi.safety_factor,
+            shortfall=target_safety_factor - report_hi.safety_factor,
+        )
+    best = (material_max_mm3, _space_hi, _run_hi, report_hi)
+
+    # --- 下端を評価する。既にここで目標を満たしていれば探索は要らない。---
+    outcome_lo, payload_lo = evaluate(material_min_mm3)
+    if outcome_lo == "too_much":
+        raise SafetyTargetError(
+            f"material_min_mm3={material_min_mm3:.6g}mm^3 そのものが塊として導出できない"
+            f"(too_much): {payload_lo}",
+            side="invalid_bound",
+            target_safety_factor=target_safety_factor,
+            material_mm3=material_min_mm3,
+            bound="material_min_mm3",
+        ) from (payload_lo if isinstance(payload_lo, BaseException) else None)
+    if outcome_lo == "ok":
+        _space_lo, _run_lo, report_lo = payload_lo
+        if report_lo.safety_factor >= target_safety_factor:
+            best = (material_min_mm3, _space_lo, _run_lo, report_lo)
+            return _finish(best, target_safety_factor, allowable_mpa, history, converged=True)
+        lo, sf_lo_known = material_min_mm3, True
+    else:  # "too_little" —— 下端はもとから不採用側なので、そのまま lo として使える。
+        lo, sf_lo_known = material_min_mm3, False
+    hi = material_max_mm3
+
+    # --- 二分探索本体。---
+    while len(history) < max_evaluations:
+        if (hi - lo) / hi <= rel_tol:
+            break
+        mid = 0.5 * (lo + hi)
+        outcome_mid, payload_mid = evaluate(mid)
+        if outcome_mid == "ok":
+            _space_mid, _run_mid, report_mid = payload_mid
+            if report_mid.safety_factor >= target_safety_factor:
+                hi = mid
+                if mid < best[0]:
+                    best = (mid, _space_mid, _run_mid, report_mid)
+            else:
+                lo = mid
+        elif outcome_mid == "too_little":
+            lo = mid  # 材料不足の一種として扱う(README「② 依存してはいけないもの」参照)
+        else:  # "too_much"
+            hi = mid  # この材料量とその上はこの導出戦略では判定できない
+
+    converged = (hi - lo) / hi <= rel_tol
+    return _finish(best, target_safety_factor, allowable_mpa, history, converged=converged)
+
+
+def _finish(
+    best: tuple[float, Any, Any, Any],
+    target_safety_factor: float,
+    allowable_mpa: float,
+    history: list,
+    *,
+    converged: bool,
+) -> SafetyLoopResult:
+    material, space, run, report = best
+    return SafetyLoopResult(
+        material_mm3=material,
+        achieved_material_mm3=run["achieved_material_mm3"],
+        safety_factor=report.safety_factor,
+        target_safety_factor=target_safety_factor,
+        allowable_mpa=allowable_mpa,
+        converged=converged,
+        evaluations=len(history),
+        history=history,
+        space=space,
+        run=run,
+        report=report,
+    )

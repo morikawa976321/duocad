@@ -127,3 +127,18 @@ DESIGN_SPACE_FOUR_CASES: dict = {
     "coarse_elements_long_axis": 14,
     "coarse_max_iter": 6,
 }
+
+# `check_safety_loop.py` が使う題材の大きさ。**bracket(`demo_conditions`)だけ使う** ——
+# 単調性そのものの実測(4題材・10点)は `safety_loop.py` の README節にあり、この検査は
+# 配線が壊れていないこと(回帰)だけを見る。`derive_from_coarse_run` の引数と同じ名前で持つ。
+# `elements_long_axis`(14)/`coarse_elements_long_axis`(12)/`coarse_max_iter`(6)/
+# `dilate_mm`(8.0)は `DESIGN_SPACE_COARSE` と同じ値(同じ題材・同じ帯なので流用できる)。
+# `max_iter`(20)は本番の既定(40)より小さい —— 二分探索は1回の答えの精度より
+# **1点1点が数秒で返ることが受入検査としての値打ち**なので、収束の質は落として速さを取った。
+SAFETY_LOOP: dict = {
+    "elements_long_axis": 14,
+    "coarse_elements_long_axis": 12,
+    "coarse_max_iter": 6,
+    "dilate_mm": 8.0,
+    "max_iter": 20,
+}

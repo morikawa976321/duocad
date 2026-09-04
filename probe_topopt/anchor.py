@@ -763,6 +763,7 @@ def run_pipeline(
     progress: Any = None,
     solver: Optional[str] = None,
     threads: Optional[int] = None,
+    keep_model: bool = False,
 ) -> dict:
     """ソリッドを端から端まで1回通す。戻り値は各段の実測と成果物。
 
@@ -793,6 +794,10 @@ def run_pipeline(
 
     `threads` も同じ形の上書き(既定 None = `simp.PARALLEL_THREADS`)。**`perf.py --threads`
     がスレッド数を振ったスケーリング測定に使う**口で、None のときは渡さない。
+
+    `keep_model=True` は `simp.optimize` へそのまま渡る。`result.model`(戻り値 dict の
+    `"result"` キー)に実際に解いた `Model` が入るので、`stress.py` の後処理が拘束・荷重を
+    手で組み直さずに済む。既定 `False` では入らない(数値は1ビットも変わらない)。
     """
     import mesh
     import simp
@@ -855,6 +860,7 @@ def run_pipeline(
         void_mask=void,
         solid_mask=solid,
         callback=progress,
+        keep_model=keep_model,
         **({} if solver is None else {"solver": solver}),
         **({} if threads is None else {"threads": threads}),
     )

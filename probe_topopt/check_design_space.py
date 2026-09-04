@@ -462,8 +462,8 @@ def check_case1_end_to_end() -> None:
     # 根拠を「渡さなかった」という自己申告に置かない。
     field_names = {f.name for f in dataclasses.fields(ds.Conditions)}
     check(
-        "条件は4つだけ(設計空間ソリッドを受け取る口が無い)",
-        field_names == {"keep", "fixed_face", "load_face", "obstacle", "anchor_shape"},
+        "条件は5つだけ(設計空間ソリッドを受け取る口が無い。load_n は荷重の実際の大きさ[N])",
+        field_names == {"keep", "fixed_face", "load_face", "obstacle", "anchor_shape", "load_n"},
         f"{sorted(field_names)}",
     )
     print(

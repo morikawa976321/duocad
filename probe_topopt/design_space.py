@@ -257,6 +257,11 @@ class Conditions:
 
     `fixed_face` / `load_face` は `anchor_shape`(省略時は `keep`)の三角形群での面添字。
     面添字は渡した形の面の並びで決まるので、面を選ぶのに使った形をそのまま渡すこと。
+
+    `load_n` は荷重の**実際の大きさ**[N]。最適化そのもの(`simp.optimize` / `run_topopt` の
+    `force`)は向きだけを持つ無次元(合力の大きさは1.0)で回り続ける ——
+    `load_n` はここでは使われず、`stress.UnitScale.for_model(..., load_n=conditions.load_n)`
+    が応力を実単位[MPa]へ換算するときにだけ参照する(`safety_loop.py`)。
     """
 
     keep: Any
@@ -264,6 +269,7 @@ class Conditions:
     load_face: int
     obstacle: Any = None
     anchor_shape: Any = None
+    load_n: float = 1.0
 
     @property
     def anchor(self) -> Any:
@@ -851,6 +857,7 @@ def run_topopt(
     progress: Any = None,
     solver: Optional[str] = None,
     threads: Optional[int] = None,
+    keep_model: bool = False,
 ) -> dict:
     """導出した塊を端から端まで回す(塊 → 面アンカー → SIMP → marching cubes → STL)。
 
@@ -861,6 +868,9 @@ def run_topopt(
     (両方渡すと例外)。**塊を自動で導出する経路では絶対量を使うこと** —— 余白比率や姿勢で
     塊の大きさが変わると、同じ分率でも材料の量が変わってしまう。どちらも渡さなければ
     `simp.DEFAULT_VOLFRAC`。
+
+    `keep_model=True` は `anchor.run_pipeline` へそのまま渡る(既定 `False`。数値は
+    1ビットも変わらない)。
     """
     out = Path(stl_path) if stl_path is not None else _HERE / "output" / "design_space_case1.stl"
     result = an.run_pipeline(
@@ -880,6 +890,7 @@ def run_topopt(
         progress=progress,
         solver=solver,
         threads=threads,
+        keep_model=keep_model,
     )
     # `run_pipeline` は保持ソリッドを**自分でもう一度**格子へ載せる。三角形分割の細かさが
     # `derive` と食い違うと、ここで通した塊が向こうでは通らない(逆もある)。揃えてあることを
