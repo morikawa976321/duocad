@@ -549,6 +549,24 @@ def check_representative_on_simp_output() -> None:
         "ValueError" in raised,
         raised[:120],
     )
+    # 応力側に非有限が混ざったら落とすこと(nan は比較が常に False なので、
+    # 黙って通すと「危険側」の判定にも引っかからないまま安全率が nan になる)。
+    poisoned = stress.StressField(
+        von_mises=np.where(np.arange(report.field.von_mises.size).reshape(report.field.von_mises.shape) == 0,
+                           np.nan, report.field.von_mises),
+        tensor=report.field.tensor,
+        unit=report.field.unit,
+    )
+    try:
+        stress.representative_stress(poisoned, result.rho)
+        raised = "(例外が出なかった)"
+    except Exception as exc:  # 変異検査で別の例外に化けても検出できるように広く受ける
+        raised = f"{type(exc).__name__}: {exc}"
+    check(
+        "von Mises に非有限が混ざったら落ちる(nan の安全率を返さない)",
+        "ValueError" in raised,
+        raised[:120],
+    )
     RESULTS["simp_output"] = {
         "raw_max_mpa": rep.raw_max,
         "dense_max_mpa": rep.dense_max,

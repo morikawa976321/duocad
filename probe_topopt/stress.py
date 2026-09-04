@@ -248,6 +248,14 @@ def representative_stress(
             f"最大の ρ は {float(density.max()) if density.size else float('nan'):.4g}"
         )
     picked = values[dense]
+    # 非有限が混ざると percentile が黙って nan を返し、安全率が nan のまま下流へ流れる
+    # (nan は比較が常に False なので「危険側」の判定にも引っかからない)
+    bad = int(np.count_nonzero(~np.isfinite(picked)))
+    if bad:
+        raise ValueError(
+            f"母集団の von Mises 応力に非有限値が {bad} 個ある(全 {count} 要素)。"
+            "解が発散しているか、拘束・荷重の与え方が壊れている"
+        )
     return RepresentativeStress(
         value=float(np.percentile(picked, percentile)),
         raw_max=float(values.max()),
