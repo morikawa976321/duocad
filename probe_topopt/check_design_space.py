@@ -47,6 +47,16 @@
     26近傍なら1成分になることを同じコードで見せる)/ 片側のアンカー要素が塊に無い場合も落ちる。
     **変異検査は2つ**: `derive` の呼び出しを外す(10-2 が素通り)/ `assert_load_path` の
     判定を外す(10-2・10-3・10-4 が素通り)。README「変異検査」に結果がある。
+
+[11] の構成(案5: 粗く1回回して膨らませる。タスク `20260904-1400`):
+
+11. **粗い段の答えから塊を起こす** — 再サンプルが**物理座標**で対応を取る(添字の割り算だと
+    別の答えになることを同じ配置で見せる)/ 膨張が **mm** で効く(要素サイズが違う2つの格子で
+    層数が変わり物理距離が同じ)/ 案1と同じ型の `DesignSpace` が返り `run_topopt` がそのまま
+    通る / 案1より小さい / **4条件の要素が必ず塊に入る**(膨張0でも入る。粗い段から届かない
+    条件の要素が実際にあることも見る)/ 除外が引かれている / 膨張を増やすと塊が単調に増える /
+    連結性ガードを通っている(**閾値0.99・膨張0では案5の塊が切れて落ちる** —— 案1の箱は同じ
+    条件で通るので、案5が自分でガードを通していなければ素通りする)/ 引数の検証。
 """
 
 from __future__ import annotations
@@ -909,6 +919,241 @@ def check_case1_connectivity() -> None:
         RESULTS["severed_components"] = int(raised.components)
 
 
+# ===========================================================================
+# 案5(粗く1回回して膨らませる): タスク 20260904-1400
+# ===========================================================================
+CASE5 = bench.DESIGN_SPACE_COARSE
+
+
+def _case5(**over):
+    """検査の題材で案5を1回導出する。大きさは `bench.DESIGN_SPACE_COARSE` が正。"""
+    kw = {
+        "elements_long_axis": CASE5["elements_long_axis"],
+        "coarse_elements_long_axis": CASE5["coarse_elements_long_axis"],
+        "coarse_max_iter": CASE5["coarse_max_iter"],
+        "dilate_mm": CASE5["dilate_mm"],
+    }
+    kw.update(over)
+    return ds.derive_from_coarse_run(ds.demo_conditions(0.0), **kw)
+
+
+def check_case5_coarse_run() -> None:
+    print("\n[11] 案5: 粗く1回回して膨らませた塊")
+
+    # --- 11-1 再サンプルは物理座標で対応を取る(単体) ----------------------
+    # 原点も要素サイズも違う2つの格子。**添字の割り算だと別の答えになる**配置にしてある。
+    coarse = vx.Grid(origin=(0.0, 0.0, 0.0), spacing=10.0, shape=(4, 1, 1))
+    fine = vx.Grid(origin=(1.0, 0.0, 0.0), spacing=4.0, shape=(8, 1, 1))
+    src = np.zeros(coarse.shape, dtype=bool)
+    src[1, 0, 0] = True  # 中心 x=15mm(範囲 10..20mm)
+    got = ds.resample_nearest(src, coarse, fine)
+    # 本番のセル中心は 3,7,11,15,19,23,27,31mm。最も近い粗い中心(5,15,25,35)が 15 なのは 11/15/19。
+    want = np.zeros(fine.shape, dtype=bool)
+    want[2:5, 0, 0] = True
+    check(
+        "再サンプルが物理座標で対応する(原点も要素サイズも違う格子)",
+        np.array_equal(got, want),
+        f"True の添字 {np.flatnonzero(got[:, 0, 0]).tolist()} (期待 [2, 3, 4])",
+    )
+    # 検出力: 添字の割り算(本番8要素 / 粗い4要素 = 2)だと [2, 3] になる。
+    naive = np.zeros(fine.shape, dtype=bool)
+    naive[(np.arange(8) // 2) == 1, 0, 0] = True
+    check(
+        "検出力: 添字の割り算で済ませた場合と答えが違う(この検査が対応の取り方を見ている)",
+        not np.array_equal(naive, want),
+        f"割り算だと {np.flatnonzero(naive[:, 0, 0]).tolist()}",
+    )
+    # 粗い格子の外に出た本番セルは塊にしない(端で1列ぶん値を引き伸ばさない)。
+    # 粗い格子が覆うのは 0..40mm。本番のセル中心は 32/36/40/44mm なので、44mm の1つだけが
+    # 「最も近い粗い中心(35mm)から要素の半分(5mm)より遠い」= 格子の外になる。
+    outside = vx.Grid(origin=(30.0, 0.0, 0.0), spacing=4.0, shape=(4, 1, 1))
+    src_all = np.ones(coarse.shape, dtype=bool)
+    edge = ds.resample_nearest(src_all, coarse, outside)[:, 0, 0]
+    check(
+        "粗い格子の外へ出た本番セルは塊に入らない(端で値を引き伸ばさない)",
+        edge.tolist() == [True, True, True, False],
+        f"中心 32/36/40/44mm の結果 {edge.tolist()} (粗い格子が覆うのは 0..40mm)",
+    )
+
+    # --- 11-2 膨張は mm(要素サイズが違っても同じ物理距離)------------------
+    g_coarse = vx.Grid(origin=(0.0, 0.0, 0.0), spacing=2.0, shape=(11, 1, 1))
+    g_fine = vx.Grid(origin=(0.0, 0.0, 0.0), spacing=1.0, shape=(22, 1, 1))
+    seed_c = np.zeros(g_coarse.shape, dtype=bool)
+    seed_c[5, 0, 0] = True
+    seed_f = np.zeros(g_fine.shape, dtype=bool)
+    seed_f[11, 0, 0] = True
+    grown_c = ds.grow_by_mm(seed_c, g_coarse, 4.0)
+    grown_f = ds.grow_by_mm(seed_f, g_fine, 4.0)
+    layers_c = int(grown_c.sum() - 1) // 2
+    layers_f = int(grown_f.sum() - 1) // 2
+    check(
+        "膨張は mm で効く(要素 2mm なら 2層 / 要素 1mm なら 4層 = どちらも 4mm)",
+        layers_c == 2 and layers_f == 4,
+        f"要素2mm → {layers_c}層 / 要素1mm → {layers_f}層",
+    )
+    check(
+        "膨張0は1要素も広げない",
+        np.array_equal(ds.grow_by_mm(seed_f, g_fine, 0.0), seed_f),
+        f"{int(ds.grow_by_mm(seed_f, g_fine, 0.0).sum())} 要素(種は1要素)",
+    )
+
+    # --- 11-3 案1と同じ型・同じ不変条件の DesignSpace が返る ---------------
+    space = _case5()
+    st = space.stats
+    check(
+        "案5の入口が DesignSpace を返す(案1と同じ型)",
+        isinstance(space, ds.DesignSpace)
+        and tuple(space.mask.shape) == tuple(space.grid.shape)
+        and st.get("derivation") == "coarse_run",
+        f"塊 {space.element_count} 要素 / 格子 {space.grid.shape} / "
+        f"spacing {space.grid.spacing:.3f}mm / derivation={st.get('derivation')}",
+    )
+    check(
+        "案1と同じ不変条件: model.obstacle が全 False(除外は塊から引き切っている)",
+        not np.asarray(space.model.obstacle).any(),
+        f"obstacle {int(np.asarray(space.model.obstacle).sum())} 要素",
+    )
+
+    # --- 11-4 run_topopt がそのまま通る(表示側を改造せずに受けられる)------
+    stl = Path(__file__).resolve().parent / "output" / "check_design_space_case5.stl"
+    if stl.exists():
+        stl.unlink()
+    t0 = time.perf_counter()
+    out = ds.run_topopt(space, max_iter=CASE5["max_iter"], volfrac=VOLFRAC, stl_path=stl)
+    seconds = time.perf_counter() - t0
+    check(
+        "案5の塊がそのまま run_topopt を通る(塊 → 面アンカー → SIMP → STL)",
+        stl.exists() and stl.stat().st_size > 0 and out["iterations"] == CASE5["max_iter"],
+        f"{stl.name} {stl.stat().st_size if stl.exists() else 0} bytes / "
+        f"{out['iterations']}反復 / {seconds:.1f}秒 / C={out['compliance_last']:.4f}",
+    )
+
+    # --- 11-5 案1より小さい(案5の存在理由)-------------------------------
+    check(
+        "案5の塊が案1の塊より小さい",
+        space.element_count < int(st["case1_elements"]),
+        f"案1 {st['case1_elements']} → 案5 {space.element_count} 要素 "
+        f"({st['shrink_vs_case1']:.3f}倍)",
+    )
+
+    # --- 11-6 4条件の要素が必ず塊に入る ------------------------------------
+    keep_outside = int(np.count_nonzero(np.asarray(space.model.keep) & ~space.mask))
+    dropped = int(space.model.stats["keep_dropped_outside"])
+    check(
+        "保持ソリッドの要素が1つも塊から落ちていない",
+        keep_outside == 0 and dropped == 0 and int(np.asarray(space.model.keep).sum()) > 0,
+        f"はみ出し {keep_outside} 要素 / 格子外 {dropped} 要素 / "
+        f"保持 {int(np.asarray(space.model.keep).sum())} 要素",
+    )
+    table = space.table if space.table is not None else an.build_anchors(space.soup, space.grid)
+    anchors = table.element_mask([space.fixed_face, space.load_face], layers=1)
+    check(
+        "拘束・荷重のアンカー要素が1つも塊から落ちていない",
+        int(np.count_nonzero(anchors & ~space.mask)) == 0 and int(anchors.sum()) > 0,
+        f"はみ出し {int(np.count_nonzero(anchors & ~space.mask))} 要素 / "
+        f"アンカー {int(anchors.sum())} 要素",
+    )
+    # 検出力: 膨張を0にすると、**粗い段の材料からは届かない条件の要素**が出る。それでも
+    # 上のはみ出しが0のままなら、無条件の OR が実際に効いている証拠になる。
+    bare = _case5(dilate_mm=0.0)
+    bare_anchors = (
+        (bare.table or an.build_anchors(bare.soup, bare.grid))
+        .element_mask([bare.fixed_face, bare.load_face], layers=1)
+    )
+    check(
+        "検出力: 膨張0でも条件の要素は塊に入る(粗い段の材料が届かない要素が実際にある)",
+        int(bare.stats["condition_only_elements"]) > 0
+        and int(np.count_nonzero(np.asarray(bare.model.keep) & ~bare.mask)) == 0
+        and int(np.count_nonzero(bare_anchors & ~bare.mask)) == 0,
+        f"粗い段からは入らなかった条件の要素 {bare.stats['condition_only_elements']} 個 / "
+        f"はみ出し 保持{int(np.count_nonzero(np.asarray(bare.model.keep) & ~bare.mask))}・"
+        f"アンカー{int(np.count_nonzero(bare_anchors & ~bare.mask))}",
+    )
+
+    # --- 11-7 除外ソリッドが引かれている ----------------------------------
+    obs_soup = vx.triangles_from_shape(
+        vx._unwrap(space.conditions.obstacle), deviation=space.stats["deviation"]
+    )
+    obs, _ = vx.occupancy(obs_soup, space.grid)
+    check(
+        "除外ソリッドの領域に案5の塊の要素が1つも無い(独立に計算し直して確認)",
+        int(np.count_nonzero(obs & space.mask)) == 0 and int(obs.sum()) > 0,
+        f"重なり {int(np.count_nonzero(obs & space.mask))} 要素 / 除外 {int(obs.sum())} 要素",
+    )
+
+    # --- 11-8 膨張が効いている(単調性)------------------------------------
+    counts = {0.0: bare.element_count, CASE5["dilate_mm"]: space.element_count}
+    wide = _case5(dilate_mm=CASE5["dilate_mm"] + 4.0)
+    counts[CASE5["dilate_mm"] + 4.0] = wide.element_count
+    ordered = [counts[k] for k in sorted(counts)]
+    check(
+        "膨張の量を増やすと塊が単調に大きくなる(膨張が結果を動かしている)",
+        ordered[0] < ordered[1] < ordered[2] <= int(st["case1_elements"]),
+        f"{{{', '.join(f'{k:g}mm: {counts[k]}' for k in sorted(counts))}}} / "
+        f"案1 {st['case1_elements']}",
+    )
+
+    # --- 11-9 連結性ガードを通っている ------------------------------------
+    report = st.get("connectivity", {})
+    check(
+        "案5の塊でも拘束と荷重が同じ連結成分にいることを確認してから返している",
+        bool(report.get("shared_labels"))
+        and report.get("neighbourhood") == ds.NEIGHBOURHOOD
+        and int(report.get("fixed_elements", 0)) > 0
+        and int(report.get("load_elements", 0)) > 0,
+        f"成分 {report.get('components')} 個 / 共通 {report.get('shared_labels')} / "
+        f"拘束側 {report.get('fixed_elements')} 要素 / 荷重側 {report.get('load_elements')} 要素",
+    )
+    # 検出力: 閾値を上げて粗い段の材料をほぼ全部落とすと、**案1の箱は通るのに案5の塊は切れる**。
+    # 案5がガードを自分で通していなければ、ここは黙って通ってしまう。
+    severed = None
+    try:
+        _case5(threshold=0.99, dilate_mm=0.0)
+    except ds.DesignSpaceDisconnectedError as e:
+        severed = e
+    check(
+        "検出力: 閾値0.99・膨張0で塊が切れると案5も落ちる(案1の箱は同じ条件で通る)",
+        severed is not None and not isinstance(severed, ds.DesignSpaceTooSmallError),
+        f"{type(severed).__name__ if severed else '例外が上がらなかった'}"
+        + (f" / 成分 {severed.components} 個" if severed is not None else ""),
+    )
+
+    # --- 11-10 引数の検証 --------------------------------------------------
+    cond = ds.demo_conditions(0.0)
+    check(
+        "閾値が 0 < t < 1 の外なら例外(0 や 1 を黙って受けない)",
+        _raises(ds.derive_from_coarse_run, ValueError, cond, threshold=0.0)
+        and _raises(ds.derive_from_coarse_run, ValueError, cond, threshold=1.0),
+        "threshold=0.0 / 1.0",
+    )
+    check(
+        "膨張が負なら例外",
+        _raises(ds.derive_from_coarse_run, ValueError, cond, dilate_mm=-1.0),
+        "dilate_mm=-1.0",
+    )
+    check(
+        "粗い段の体積目標は volfrac と material_mm3 の排他(両方渡すと例外)",
+        _raises(
+            ds.derive_from_coarse_run,
+            ValueError,
+            cond,
+            coarse_volfrac=0.3,
+            coarse_material_mm3=1000.0,
+        ),
+        "coarse_volfrac と coarse_material_mm3 を両方渡した",
+    )
+
+    RESULTS["case5"] = {
+        "case1_elements": int(st["case1_elements"]),
+        "design_elements": space.element_count,
+        "shrink_vs_case1": round(float(st["shrink_vs_case1"]), 4),
+        "threshold": st["threshold"],
+        "dilate_mm": st["dilate_mm"],
+        "coarse_seconds": round(float(st["coarse"]["seconds"]), 2),
+        "dilate_elements": {f"{k:g}": counts[k] for k in sorted(counts)},
+    }
+
+
 def main() -> int:
     print("=" * 72)
     print("check_design_space.py : 塊(設計空間)の受入検査")
@@ -927,6 +1172,7 @@ def main() -> int:
         check_case1_obstacle,
         check_case1_margin_is_load_bearing,
         check_case1_connectivity,
+        check_case5_coarse_run,
     ):
         try:
             section()

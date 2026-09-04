@@ -13,3 +13,10 @@ output/server_conditions_demo.stl
 # 絶対量の受入検査(`check_absolute_volume.py` [2b])が実経路を通すたびに上書きするSTL。
 # 検査の成果物ではないのでリポジトリには入れない。
 output/absolute_volume_tmp.stl
+
+# 案1対案5の比較(`design_space.py --compare`)と、案5の粗い段が書き出すSTL。設定の
+# 組み合わせごとに1本増えるのでリポジトリには入れない(受入検査の成果物は
+# `output/check_design_space_case5.stl` のほうで、こちらは追跡する)。
+output/design_space_case1_*.stl
+output/design_space_case5_*.stl
+output/design_space_coarse*.stl

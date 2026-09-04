@@ -2,9 +2,12 @@
 
     ..\\.venv\\Scripts\\python.exe design_space.py --measure
 
-**案1(外接直方体+余白)。** 条件の点群の軸整列外接直方体に余白を足し、そこから除外ソリッドを
-引いたものを塊にする。これは最終形ではなく、後続で入れる「粗く1回回して膨らませる」案(案5)と
-比べるための**ベースライン**である。案1の弱点は2つで、どちらも数字が README にある:
+導出は2つ入っている。**既定は案1**(`derive`)で、案5(`derive_from_coarse_run`)は並べて
+足してある —— 置き換えではない。どちらを既定にすべきかは README「既定をどちらにすべきか」。
+
+**案1(外接直方体+余白。`derive`)。** 条件の点群の軸整列外接直方体に余白を足し、そこから
+除外ソリッドを引いたものを塊にする。**案5の比較対象(ベースライン)でもある。**
+案1の弱点は2つで、どちらも数字が README にある:
 
 1. **余白が自由パラメータ** —— 利用者に見せない値なので、小さすぎると答えの居場所を黙って削り、
    誰も気づけない(engine `topopt-design-space-never-shown-to-the-user`)。
@@ -38,6 +41,14 @@
 利用者は塊を見ないので、何が起きたか気づく手段が無い。だから `derive` が**つながりを確認してから返す**
 (`assert_faces_connected` → `DesignSpaceDisconnectedError`)。連結性の定義は **6近傍**
 (`NEIGHBOURHOOD`)で、理由はその定数のところに書いてある。
+
+## 案5(粗く1回回して膨らませる。`derive_from_coarse_run`)
+
+案1〜案4は**条件の位置だけ**から塊を決める(どこに材料が要るかを見ていない)。案5だけが
+**一度解いてから決める** —— 案1で粗い塊を作って SIMP を短く回し、出てきた材料を二値化して
+本番の格子へ再サンプルし、mm で膨らませ、4条件の要素を無条件に足す。塊は案1の 0.62〜0.84倍に
+なり、**姿勢依存がほぼ消える**(案1の塊は 0°→30° で 1.38倍、案5は 1.01倍)。数字は README
+「案1との比較」。**既定はまだ案1**(比較表の全項目で案5が上ではない)。
 
 ## 格子の外は誰も見ていない
 
@@ -272,6 +283,11 @@ class DesignSpace:
     margin: float
     margin_ratio: float
     stats: dict = field(default_factory=dict)
+    # 導出の中で作った面アンカーの表(連結性の確認に使ったもの)。**再利用のために持たせてある**
+    # —— 案5は同じ格子でもう一度アンカー要素が要るので、無いと表を2回作ることになる
+    # (本番解像度では導出時間の大半がこれ)。`None` を許すのは、塊を直接組んだ
+    # `DesignSpace` を検査が作れるようにするため。
+    table: Any = None
 
     @property
     def element_count(self) -> int:
@@ -533,6 +549,245 @@ def derive(
         margin=float(margin),
         margin_ratio=ratio,
         stats=stats,
+        table=table,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 案5(粗く1回回して膨らませる)
+# ---------------------------------------------------------------------------
+# 既定値の根拠はすべて実測(README「案5の既定値をどう決めたか」)。**「なんとなく」の既定を
+# 置いていない** —— 案1の `margin_ratio` と同じ扱いで、検査ではなく実測が根拠である。
+COARSE_ELEMENTS_LONG_AXIS = 14
+COARSE_MAX_ITER = 20
+COARSE_THRESHOLD = 0.3
+COARSE_DILATE_MM = 12.0
+
+
+def grow_by_mm(mask: np.ndarray, grid: vx.Grid, distance_mm: float) -> np.ndarray:
+    """マスクを距離 `distance_mm`[mm] だけ膨らませる(ユークリッド距離)。
+
+    **膨張は層数ではなく mm で持つ。** 格子は箱に合わせて切り直されるので要素サイズは姿勢と
+    余白ごとに変わり(`20260904-0142` の実測で要素体積 62.99 → 66.43 mm^3)、層数で持つと
+    同じ設定が姿勢ごとに別の物理距離になる。
+    """
+    m = np.asarray(mask, dtype=bool)
+    d = float(distance_mm)
+    if not math.isfinite(d) or d < 0:
+        raise ValueError(f"distance_mm must be a finite number >= 0, got {distance_mm!r}")
+    if d == 0.0 or not m.any():
+        return m.copy()
+    # `distance_transform_edt(~m)` は「m でないセルから最も近い m のセルまでの距離」。
+    dist = ndimage.distance_transform_edt(~m, sampling=float(grid.spacing))
+    return m | (dist <= d + 1e-9)
+
+
+def resample_nearest(mask: np.ndarray, source: vx.Grid, target: vx.Grid) -> np.ndarray:
+    """`source` 格子のマスクを `target` 格子へ最近傍で移す。**対応は物理座標で取る。**
+
+    粗い格子と本番の格子は**原点も要素サイズも違う**(どちらも箱に合わせて切り直されるので、
+    要素数の比にも要素サイズの比にもならない)。軸ごとに本番のセル中心へ最も近い粗いセル中心を
+    探し、**距離が粗い要素の半分を超えたら粗い格子の外**として False にする(端で1列ぶん値を
+    引き伸ばさないため)。
+    """
+    src = np.asarray(mask, dtype=bool)
+    if tuple(src.shape) != tuple(source.shape):
+        raise ValueError(f"mask のかたち {src.shape} が source 格子 {source.shape} と違う")
+    idx: list[np.ndarray] = []
+    valid: list[np.ndarray] = []
+    for axis in range(3):
+        tc = target.centers_1d(axis)
+        sc = source.centers_1d(axis)
+        j = np.clip(np.rint((tc - sc[0]) / float(source.spacing)).astype(int), 0, sc.size - 1)
+        idx.append(j)
+        valid.append(np.abs(tc - sc[j]) <= 0.5 * float(source.spacing) + 1e-9)
+    out = src[np.ix_(idx[0], idx[1], idx[2])]
+    return out & (valid[0][:, None, None] & valid[1][None, :, None] & valid[2][None, None, :])
+
+
+def derive_from_coarse_run(
+    conditions: Conditions,
+    *,
+    margin_ratio: float = DEFAULT_MARGIN_RATIO,
+    elements_long_axis: int = DEFAULT_ELEMENTS_LONG_AXIS,
+    spacing: Optional[float] = None,
+    coarse_elements_long_axis: int = COARSE_ELEMENTS_LONG_AXIS,
+    coarse_max_iter: int = COARSE_MAX_ITER,
+    coarse_volfrac: Optional[float] = None,
+    coarse_material_mm3: Optional[float] = None,
+    threshold: float = COARSE_THRESHOLD,
+    dilate_mm: float = COARSE_DILATE_MM,
+    coarse_stl_path: Optional[str | Path] = None,
+    deviation: Optional[float] = None,
+    deviation_ratio: float = vx.DEFAULT_DEVIATION_RATIO,
+    angular_deflection: float = vx.DEFAULT_ANGULAR_DEFLECTION,
+) -> DesignSpace:
+    """**案5: 粗い格子で1回だけ SIMP を回し、出てきた材料を膨らませたものを塊にする。**
+
+    案1(`derive`)と**同じ型・同じ不変条件**の `DesignSpace` を返すので、`run_topopt(space, ...)`
+    も表示側もそのまま受けられる。案1は条件の位置だけから塊を決める(どこに材料が要るかを見て
+    いない)のに対し、案5は**一度解いてから決める**。
+
+    手順(この順序で組んである):
+
+    1. **案1で粗い塊を作る**(`derive` を粗い解像度で呼ぶ。新しい箱の作り方は発明しない)。
+    2. 粗い塊で SIMP を短く回す(`run_topopt`)。
+    3. ρ を `threshold` で二値化し、本番の格子へ最近傍で再サンプルする
+       (**対応は物理座標で取る** —— 粗い格子と本番の格子は原点も要素サイズも違う)。
+    4. `dilate_mm`[mm] だけ膨らませる。**本番の格子でかける** —— 理由は下の実測コメント。
+    5. **4条件の要素(保持・拘束アンカー・荷重アンカー)を無条件で OR し、除外を引く。**
+       粗い段で削れても膨張で届かなくても、条件の要素は必ず塊に入る。
+    6. 連結性ガード(`assert_faces_connected`。6近傍)を通す。
+
+    `coarse_volfrac` / `coarse_material_mm3` は粗い段の体積目標(排他。どちらも省略すると
+    `simp.DEFAULT_VOLFRAC`)。**本番で使う材料の量が分かっているなら
+    `coarse_material_mm3` に同じ量を渡すこと** —— 塊は「その量の材料がどこへ行きたいか」で
+    決まるべきで、粗い段だけ別の量で解くと別の形の周りを膨らませることになる。
+    **目標を達成可能区間の端に置かないこと**(`volfrac=1.0`/`0.0` 相当は
+    OC の二分探索が退化して `ZeroDivisionError` になる。`20260904-0142` の罠)。
+    """
+    started = time.perf_counter()
+    thr = float(threshold)
+    if not 0.0 < thr < 1.0:
+        raise ValueError(f"threshold は 0 < t < 1 であること(いま {threshold!r})")
+    if float(dilate_mm) < 0 or not math.isfinite(float(dilate_mm)):
+        raise ValueError(f"dilate_mm must be a finite number >= 0, got {dilate_mm!r}")
+    if int(coarse_elements_long_axis) < 1:
+        raise ValueError(
+            f"coarse_elements_long_axis must be >= 1, got {coarse_elements_long_axis!r}"
+        )
+    simp.check_volume_target(coarse_volfrac, coarse_material_mm3)
+
+    common = {
+        "margin_ratio": margin_ratio,
+        "deviation": deviation,
+        "deviation_ratio": deviation_ratio,
+        "angular_deflection": angular_deflection,
+    }
+    # 本番の塊(案1の箱)。**案5の塊はこの中にしか作らない** —— 箱は上限であって答えではない。
+    fine = derive(
+        conditions, elements_long_axis=elements_long_axis, spacing=spacing, **common
+    )
+    t_coarse = time.perf_counter()
+    coarse = derive(conditions, elements_long_axis=int(coarse_elements_long_axis), **common)
+    coarse_stl = (
+        Path(coarse_stl_path)
+        if coarse_stl_path is not None
+        else _HERE / "output" / "design_space_coarse.stl"
+    )
+    coarse_out = run_topopt(
+        coarse,
+        volfrac=coarse_volfrac,
+        material_mm3=coarse_material_mm3,
+        max_iter=int(coarse_max_iter),
+        stl_path=coarse_stl,
+    )
+    coarse_seconds = time.perf_counter() - t_coarse
+
+    rho = np.asarray(coarse_out["result"].rho, dtype=float)
+    # 二値化に固定要素(ρ=1)を明示的に足す。閾値がどれだけ高くても条件は落とさない。
+    binary = ((rho >= thr) | np.asarray(coarse_out["solid"], dtype=bool)) & coarse.mask
+    # **膨張は本番の格子でかける(再サンプルのあと)。** 膨張の量は mm で持つと決めたので
+    # (`grow_by_mm`)、どちらの格子でかけるかは「その mm が何段階に量子化されるか」を決める:
+    # 粗い格子でかけると量子は粗い要素サイズ(実測 6.75mm)になり、**0〜6.74mm がすべて
+    # 膨張0と同じ塊になる**(2026-09-04実測: 2mm / 4mm が 0mm と同じ 2414 要素)。本番の
+    # 格子なら量子は本番の要素サイズ(3.63mm)まで下がる。タスクの手順は膨張→再サンプルの
+    # 順だが、**その順序では mm の指定が実質2〜3段階しか取れない**ので入れ替えた。
+    resampled = resample_nearest(binary, coarse.grid, fine.grid)
+    grown = grow_by_mm(resampled, fine.grid, dilate_mm)
+
+    table = fine.table if fine.table is not None else an.build_anchors(fine.soup, fine.grid)
+    # **4条件の要素は無条件で入れる。** 粗い段で削れた・膨張が届かなかった、のどちらでも
+    # 条件の要素が塊から落ちてはならない(落ちると拘束も荷重も伝わらない)。
+    conditions_mask = np.asarray(fine.model.keep, dtype=bool).copy()
+    empty = [f for f in (fine.fixed_face, fine.load_face) if f in table.empty_faces()]
+    if not empty:
+        conditions_mask |= table.element_mask([fine.fixed_face, fine.load_face], layers=1)
+    # 除外は `fine.mask`(= 箱 − 除外)を掛けることで引く。条件の要素であっても除外の中には
+    # 置かない —— 除外を跨ぐ塊を許すと、案1で `DesignSpaceTooSmallError` になる配置が
+    # 案5だけ黙って通ることになる。
+    mask = (grown | conditions_mask) & fine.mask
+    if not mask.any():
+        raise DesignSpaceTooSmallError(
+            f"案5の塊が空になった(閾値 {thr} / 膨張 {float(dilate_mm)}mm)。"
+            "粗い段の反復数か体積目標を見直すこと。",
+            {"coarse": -1},
+        )
+
+    dev = float(fine.stats["deviation"])
+    try:
+        model = vx.model_from_design_mask(
+            fine.grid,
+            mask,
+            anchor_shape=fine.soup,
+            keep=conditions.keep,
+            deviation=dev,
+            angular_deflection=angular_deflection,
+        )
+    except vx.OutsideDesignSpaceError as exc:
+        raise DesignSpaceTooSmallError(
+            f"案5の塊(閾値 {thr} / 膨張 {float(dilate_mm)}mm)が保持ソリッドを含みきれていない: "
+            f"{exc} 案5では保持は無条件に塊へ入れているので、これは除外ソリッドが保持を"
+            "食っている配置(案1でも同じ理由で落ちる)。",
+            getattr(exc, "outside", {}),
+        ) from exc
+
+    connectivity = assert_faces_connected(mask, table, fine.fixed_face, fine.load_face)
+
+    stats = dict(fine.stats)
+    stats.update(
+        {
+            "derivation": "coarse_run",
+            "connectivity": connectivity,
+            "case1_elements": fine.element_count,
+            "design_elements": int(np.count_nonzero(mask)),
+            "shrink_vs_case1": (
+                float(np.count_nonzero(mask)) / fine.element_count if fine.element_count else 0.0
+            ),
+            "keep_elements": int(model.stats["keep_elements"]),
+            "coarse": {
+                "seconds": coarse_seconds,
+                "elements_long_axis": int(coarse_elements_long_axis),
+                "grid": list(coarse.grid.shape),
+                "spacing": float(coarse.grid.spacing),
+                "design_elements": coarse.element_count,
+                "max_iter": int(coarse_max_iter),
+                "iterations": int(coarse_out["iterations"]),
+                "volfrac": float(coarse_out["target_volfrac"]),
+                "material_mm3": float(coarse_out["achieved_material_mm3"]),
+                "compliance_last": float(coarse_out["compliance_last"]),
+                "grey_fraction": float(
+                    np.count_nonzero((rho > 0.1) & (rho < 0.9) & ~np.asarray(coarse_out["void"]))
+                )
+                / max(1, int(np.count_nonzero(~np.asarray(coarse_out["void"])))),
+                "binary_elements": int(np.count_nonzero(binary)),
+                "binary_resampled_elements": int(np.count_nonzero(resampled)),
+            },
+            "threshold": thr,
+            "dilate_mm": float(dilate_mm),
+            "dilate_layers_fine": float(dilate_mm) / float(fine.grid.spacing),
+            "resampled_elements": int(np.count_nonzero(resampled)),
+            "grown_elements_fine": int(np.count_nonzero(grown)),
+            "condition_elements": int(np.count_nonzero(conditions_mask & fine.mask)),
+            "condition_only_elements": int(
+                np.count_nonzero(conditions_mask & fine.mask & ~grown)
+            ),
+            "fine_seconds": float(fine.stats["seconds"]),
+        }
+    )
+    stats["seconds"] = time.perf_counter() - started
+    return DesignSpace(
+        grid=fine.grid,
+        mask=mask,
+        model=model,
+        soup=fine.soup,
+        conditions=conditions,
+        bbox_min=fine.bbox_min,
+        bbox_max=fine.bbox_max,
+        margin=fine.margin,
+        margin_ratio=fine.margin_ratio,
+        stats=stats,
+        table=table,
     )
 
 
@@ -791,11 +1046,116 @@ def measure_margin(
     return rows
 
 
+def measure_case5(
+    angles: Sequence[float],
+    *,
+    spacing: float,
+    max_iter: int,
+    material_mm3: float,
+    margin_ratio: float = DEFAULT_MARGIN_RATIO,
+    settings: Optional[Sequence[dict]] = None,
+    with_case1: bool = True,
+) -> list[dict]:
+    """**案1 と案5 を同じ材料の総体積で比べる。** README の比較表と既定値の実測を作る。
+
+    `volfrac` では比べられない —— 分率は動かせる要素に対する量なので、塊の大きさが違う案1と
+    案5を同じ分率で回すと**別の材料量の結果を並べただけ**になる。`material_mm3` を揃える。
+
+    **粗い段の体積目標にも同じ絶対量を渡す。** 塊は「その量の材料がどこへ行きたいか」で
+    決まるべきで、粗い段だけ別の量で解くと別の形の周りを膨らませることになる。
+
+    `settings` は案5の設定の並び(`{"threshold":..., "dilate_mm":...,
+    "coarse_elements_long_axis":..., "coarse_max_iter":...}` の dict。省略した鍵は既定値)。
+    落ちた設定は理由ごと表に残す —— **案5が負ける・壊れる可能性を潰さない。**
+    """
+    rows: list[dict] = []
+    if settings is None:
+        settings = [{"dilate_mm": COARSE_DILATE_MM}, {"dilate_mm": 0.0}]
+    for angle in angles:
+        conditions = demo_conditions(angle)
+        tag = f"a{int(round(angle))}"
+        plan: list[tuple[str, Optional[dict]]] = [("case1", None)] if with_case1 else []
+        for cfg in settings:
+            cfg = dict(cfg)
+            name = (
+                f"case5_t{cfg.get('threshold', COARSE_THRESHOLD):g}"
+                f"_d{cfg.get('dilate_mm', COARSE_DILATE_MM):g}"
+                f"_n{cfg.get('coarse_elements_long_axis', COARSE_ELEMENTS_LONG_AXIS)}"
+                f"_i{cfg.get('coarse_max_iter', COARSE_MAX_ITER)}"
+            )
+            plan.append((name, cfg))
+        for label, cfg in plan:
+            t_derive = time.perf_counter()
+            try:
+                if cfg is None:
+                    space = derive(conditions, margin_ratio=margin_ratio, spacing=spacing)
+                else:
+                    space = derive_from_coarse_run(
+                        conditions,
+                        margin_ratio=margin_ratio,
+                        spacing=spacing,
+                        coarse_material_mm3=material_mm3,
+                        coarse_stl_path=_HERE / "output" / f"design_space_coarse_{tag}.stl",
+                        **cfg,
+                    )
+            except (vx.OutsideDesignSpaceError, ValueError) as exc:
+                rows.append(
+                    {
+                        "derivation": label,
+                        "angle_deg": float(angle),
+                        "seconds_derive": round(time.perf_counter() - t_derive, 2),
+                        "error": type(exc).__name__,
+                        "message": str(exc)[:200],
+                    }
+                )
+                print("  " + json.dumps(rows[-1], ensure_ascii=False), flush=True)
+                continue
+            t0 = time.perf_counter()
+            try:
+                out = run_topopt(
+                    space,
+                    material_mm3=material_mm3,
+                    max_iter=max_iter,
+                    stl_path=_HERE / "output" / f"design_space_{label}_{tag}.stl",
+                )
+            except Exception as exc:  # noqa: BLE001 —— 端に置いた目標は ZeroDivisionError も出す
+                rows.append(
+                    {
+                        "derivation": label,
+                        "angle_deg": float(angle),
+                        "design_elements": space.element_count,
+                        "seconds_derive": round(float(space.stats["seconds"]), 2),
+                        "error": type(exc).__name__,
+                        "message": str(exc)[:200],
+                    }
+                )
+                print("  " + json.dumps(rows[-1], ensure_ascii=False), flush=True)
+                continue
+            row = _row(space, out, time.perf_counter() - t0, angle=float(angle))
+            row["derivation"] = label
+            rows.append(row)
+            print("  " + json.dumps(rows[-1], ensure_ascii=False), flush=True)
+    return rows
+
+
 def _row(space: DesignSpace, out: dict, seconds: float, *, angle: float) -> dict:
-    """表の1行。**体積は mm^3 の絶対量でも出す** —— 要素数が変わると相対体積は比べられない。"""
+    """表の1行。**体積は mm^3 の絶対量でも出す** —— 要素数が変わると相対体積は比べられない。
+
+    秒数は3つに割る: `seconds_coarse`(案5の粗い段。案1は `None`)/ `seconds_run`(本番の
+    端から端まで)/ `seconds_total`(**導出の全部 + 本番**。案5の粗い段はここに入っている)。
+    """
     ev = space.grid.element_volume
+    coarse = space.stats.get("coarse") or {}
     return {
         "angle_deg": angle,
+        "derivation": space.stats.get("derivation", "bbox_margin"),
+        "seconds_derive": round(float(space.stats.get("seconds", 0.0)), 2),
+        "seconds_coarse": (round(float(coarse["seconds"]), 2) if coarse else None),
+        "seconds_run": round(seconds, 2),
+        "seconds_total": round(float(space.stats.get("seconds", 0.0)) + seconds, 2),
+        "case1_elements": space.stats.get("case1_elements"),
+        "threshold": space.stats.get("threshold"),
+        "dilate_mm": space.stats.get("dilate_mm"),
         "margin_ratio": space.margin_ratio,
         "margin_mm": round(space.margin, 4),
         "spacing_mm": round(float(space.grid.spacing), 5),
@@ -804,12 +1164,14 @@ def _row(space: DesignSpace, out: dict, seconds: float, *, angle: float) -> dict
         "free_elements": int(out["free_elements"]),
         "solid_elements": int(out["solid_elements"]),
         "seconds_optimize": round(float(out["timings"]["optimize"]), 2),
-        "seconds_total": round(seconds, 2),
         "iterations": int(out["iterations"]),
         "target_volume_elements": round(float(out["target_volume"]), 2),
         "material_mm3": round(float(out["achieved_volume"]) * ev, 1),
         "design_volume_mm3": round(space.element_count * ev, 1),
         "wall_contact": wall_contact(space, out),
+        # **壁への接触は「材料比」で見る**(塊比は塊を広げると分母が膨らむぶん勝手に下がる)。
+        # 分母は最適化が置いた材料の要素数(ρ>0.5)。表の括弧を手で計算し直さないための列。
+        "filled_elements": int(np.count_nonzero(np.asarray(out["result"].rho) > 0.5)),
         "volfrac": round(float(out["target_volfrac"]), 5),
         "compliance_last": round(float(out["compliance_last"]), 4),
     }
@@ -818,8 +1180,18 @@ def _row(space: DesignSpace, out: dict, seconds: float, *, angle: float) -> dict
 def _cli() -> int:
     import argparse
 
-    parser = argparse.ArgumentParser(description="4条件から塊(設計空間)を導出する(案1)")
+    parser = argparse.ArgumentParser(description="4条件から塊(設計空間)を導出する(案1/案5)")
     parser.add_argument("--measure", action="store_true", help="README の表を作る実測を回す")
+    parser.add_argument(
+        "--compare",
+        action="store_true",
+        help="案1と案5を同じ材料の総体積で比べる(--material-mm3 が要る)",
+    )
+    parser.add_argument("--thresholds", type=float, nargs="*", default=[COARSE_THRESHOLD])
+    parser.add_argument("--dilations", type=float, nargs="*", default=[COARSE_DILATE_MM, 0.0])
+    parser.add_argument("--coarse-n", type=int, nargs="*", default=[COARSE_ELEMENTS_LONG_AXIS])
+    parser.add_argument("--coarse-iter", type=int, nargs="*", default=[COARSE_MAX_ITER])
+    parser.add_argument("--no-case1", action="store_true", help="比較から案1の行を外す")
     parser.add_argument("--elements-long-axis", type=int, default=28)
     parser.add_argument(
         "--spacing",
@@ -851,6 +1223,45 @@ def _cli() -> int:
             _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
         except (AttributeError, ValueError):
             pass
+
+    if args.compare:
+        if not args.material_mm3:
+            print("--compare には --material-mm3 が要る(分率で比べると比較が無意味になる)")
+            return 2
+        settings = [
+            {
+                "threshold": float(t),
+                "dilate_mm": float(d),
+                "coarse_elements_long_axis": int(n),
+                "coarse_max_iter": int(i),
+            }
+            for n in args.coarse_n
+            for i in args.coarse_iter
+            for t in args.thresholds
+            for d in args.dilations
+        ]
+        payload = {
+            "spacing_mm": args.spacing,
+            "max_iter": args.max_iter,
+            "margin_ratio": args.margin_ratio,
+            "material_mm3": args.material_mm3,
+            "settings": settings,
+        }
+        print("[案1 対 案5(材料の総体積を固定)]", flush=True)
+        payload["compare"] = measure_case5(
+            args.angles,
+            spacing=args.spacing,
+            max_iter=args.max_iter,
+            material_mm3=args.material_mm3,
+            margin_ratio=args.margin_ratio,
+            settings=settings,
+            with_case1=not args.no_case1,
+        )
+        text = json.dumps(payload, ensure_ascii=False, default=float, indent=2)
+        if args.out:
+            Path(args.out).write_text(text, encoding="utf-8")
+        print(text)
+        return 0
 
     if not args.measure:
         space = derive(
