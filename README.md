@@ -9,7 +9,7 @@
 | | |
 |---|---|
 | ブランチ / コミット | `main`（最新は `git log -1`） |
-| テスト | **888件**（うち2本は実機が揃うときだけ走る＝ふだんはskip。**赤は1本も無い**） |
+| テスト | **886 passed / 2 skipped**（skipの2本は実機が揃うときだけ走る。**赤は1本も無い**） |
 | 実行環境 | Python 3.11（`.venv`）／ Node（`web/node_modules` 導入済み）／ `web/dist` ビルド済み |
 | 単位 | mm 固定 |
 
@@ -200,13 +200,15 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 
 ## 3. 自動検査の走らせ方
 
-### pytest（コア・MCPの契約 888件）
+### pytest（コア・MCPの契約 886 passed / 2 skipped）
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
 ```
 
 サーバもブラウザも要らない。実STEPを読む重いテストは含まない。
+
+**件数は `pytest -q` の最終行をそのまま写す**（`886 passed / 2 skipped` の形）。「合計何件」という書き方をしない —— passed だけの数なのか skip を足した数なのかが読み手に分からず、**このREADMEでは実際に3回続けて食い違った**（`readme.md` の件数は冒頭の状態表・この見出し・§5の文書地図の3箇所にある）。
 
 ### 形状最適化の受入検査(12本・536件。通しで約215秒)
 
@@ -708,7 +710,7 @@ duocad/
                          net/ はアプリ層との接点（ws.py=WebSocket／http.py=静的配信と/mcp／
                          tools_on_loop.py）。server.py はその入口で、再輸出と起動の番人だけ
                          agent/ はアプリ内AIエージェント（プロバイダ＋ループ・UIなし）
-  tests/                 888件。README.md はモジュール単位のAPI契約リファレンス
+  tests/                 886 passed / 2 skipped。README.md はモジュール単位のAPI契約リファレンス
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
     scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。共有部品は
