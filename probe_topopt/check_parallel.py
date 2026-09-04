@@ -185,8 +185,8 @@ def check_default_thread_count() -> None:
         del os.environ["TOPOPT_THREADS"]
         via_cpu = simp._default_thread_count()
         check(
-            "3-4 未設定なら os.cpu_count() を使う",
-            via_cpu == max(1, os.cpu_count() or 1),
+            "3-4 未設定なら総論理コアの半分を使う(下限1)",
+            via_cpu == max(1, (os.cpu_count() or 1) // 2),
             f"os.cpu_count()={os.cpu_count()} → {via_cpu}",
         )
     finally:

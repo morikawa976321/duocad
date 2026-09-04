@@ -496,7 +496,10 @@ def _default_thread_count() -> int:
             return max(1, int(override))
         except ValueError:
             return 1
-    return max(1, os.cpu_count() or 1)
+    # 総論理コアの半分(下限1)。duocad本体はこのマシン上でユーザーの操作と同時に
+    # 走るので、既定が全論理コアを占有するとフロントエンドまで応答しなくなる
+    # (probe単体なら困らないが、既定が本体まで持っていかれると困る)。
+    return max(1, (os.cpu_count() or 1) // 2)
 
 
 PARALLEL_THREADS: int = _default_thread_count()
