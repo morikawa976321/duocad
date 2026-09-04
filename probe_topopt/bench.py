@@ -115,4 +115,15 @@ ABSOLUTE_VOLUME: dict = {"spacing": 7.5, "max_iter": 5}
 # 要素が 15.4mm になり、`model_from_design_mask` が
 # 「保持領域が1要素も掴めなかった」で落ちる。**帯の下端から2つ上の 16 を採ってある**
 # (`voxelize.occupancy` のレイ縮退は解像度に対して単調でないので、下限ぎりぎりを採らない)。
-DESIGN_SPACE_FOUR_CASES: dict = {"elements_long_axis": 16, "max_iter": 6}
+# **粗い段の大きさもここが正**(2026-09-04に既定の導出が案5になり、[12] も既定を通るように
+# なったため)。**`coarse_elements_long_axis` を 14 未満にしない** —— 12 に落とすと薄板だけが
+# `voxelize.occupancy` のレイ縮退で落ちる(2026-09-04実測。長辺12で要素 18.9mm に対し板の厚み
+# 12mm。`DESIGN_SPACE_COARSE` は別の題材なので 12 のままでよい)。反復は本番と同じ 6 ——
+# **受入検査は粗い段の答えの質を見ていない**(見ているのは端から端まで通ること)。
+# 既定の 20 反復にすると4題材の導出が 4.9秒 → 9.3秒になる(実測)。
+DESIGN_SPACE_FOUR_CASES: dict = {
+    "elements_long_axis": 16,
+    "max_iter": 6,
+    "coarse_elements_long_axis": 14,
+    "coarse_max_iter": 6,
+}

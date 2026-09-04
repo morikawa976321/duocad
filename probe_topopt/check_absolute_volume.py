@@ -334,28 +334,35 @@ def check_unreachable() -> None:
 
     # **ガードを外したら何が起きるかを実測する(検出力)。** 絶対量は分率へ畳んでから
     # OC に入るので、達成不能な指定に相当する分率をそのまま渡せば「ガードが無い世界」に
-    # なる。**「黙って端に張り付く」のではなく、体積とは無関係な名前で落ちる** ——
-    # ガードの値打ちは「落ちるようにすること」ではなく「どこがどれだけ足りないかを
-    # 名指しすること」である(2026-09-04実測)。
-    def outcome_without_guard(material: float) -> str:
+    # なる。**ガードの値打ちは「落ちるようにすること」ではなく「どこがどれだけ足りないかを
+    # 名指しすること」である。**
+    # **2026-09-04に取り直した**: OC の二分探索の退化そのものが体積の言葉で落ちるように
+    # なった(`20260904-1400` の契約③の宿題)ので、「ガードが無いと `ZeroDivisionError`」は
+    # もう成り立たない。**代わりに、上位ガードが無いと ①利用者が渡した mm^3 も不足量も
+    # 文面に出ない ②1反復回してからでないと分からない** を見る。
+    def outcome_without_guard(material: float) -> tuple[str, str]:
         fraction = (material / ELEMENT_VOLUME - case["n_solid"]) / case["n_movable"]
         try:
             solve(case, volfrac=fraction, max_iter=3)
-            return "落ちない"
+            return "落ちない", ""
         except Exception as exc:  # noqa: BLE001 - 何で落ちるかを見るのが目的
-            return f"{type(exc).__name__}: {str(exc)[:60]}"
+            return type(exc).__name__, str(exc)
 
-    over_raw = outcome_without_guard(over)
-    under_raw = outcome_without_guard(under)
+    over_kind, over_text = outcome_without_guard(over)
+    under_kind, under_text = outcome_without_guard(under)
     check(
-        "検出力: ガードが無いと総体積超過は体積と無関係な例外になる",
-        "ZeroDivisionError" in over_raw,
-        f"分率 {(over / ELEMENT_VOLUME - case['n_solid']) / case['n_movable']:.3f} 相当 → {over_raw}",
+        "検出力: ガードが無いと総体積超過は mm^3 の言葉で落ちない(要素数の話になる)",
+        over_kind != "落ちない"
+        and f"{over:.6g}" not in over_text
+        and f"{over - capacity:.6g}" not in over_text,
+        f"分率 {(over / ELEMENT_VOLUME - case['n_solid']) / case['n_movable']:.3f} 相当 → "
+        f"{over_kind}: {over_text[:60]}",
     )
     check(
-        "検出力: ガードが無いと下限割れも体積と無関係な例外になる",
-        "体積" not in under_raw and under_raw != "落ちない",
-        f"分率 {(under / ELEMENT_VOLUME - case['n_solid']) / case['n_movable']:.3f} 相当 → {under_raw}",
+        "検出力: ガードが無いと下限割れは体積と無関係な例外になる",
+        "体積" not in under_text and under_kind != "落ちない",
+        f"分率 {(under / ELEMENT_VOLUME - case['n_solid']) / case['n_movable']:.3f} 相当 → "
+        f"{under_kind}: {under_text[:60]}",
     )
 
     nearly_full = capacity * 0.999
@@ -368,8 +375,9 @@ def check_unreachable() -> None:
 
     # **上端ちょうど(容量と等しい指定)は体積の口では弾かない** —— 数学的には達成可能な
     # 指定だから。ただし OC の二分探索は「動かせる要素が全部 ρ=1」で退化して落ちる。
-    # これは絶対量の口が入る前からある性質(`volfrac=1.0` でも同じ)で、この検査は
-    # **どちらの落ち方をするか**を固定しておくためにある(OC 側が直ったら書き換えてよい)。
+    # **2026-09-04に取り直した**: 退化そのものが `VolumeTargetError(above_capacity)` に
+    # なった(それまでは `ZeroDivisionError`)。この検査は**どちらの落ち方をするか**を
+    # 固定しておくためにあるので、名前が付いた側へ書き換える。
     try:
         solve(case, material_mm3=capacity, max_iter=1)
         outcome = "落ちない"
@@ -379,8 +387,46 @@ def check_unreachable() -> None:
         outcome = "ZeroDivisionError"
     check(
         "上端ちょうどは体積の口では弾かれない(落ちるなら OC の退化として)",
-        outcome in ("落ちない", "ZeroDivisionError"),
+        outcome in ("落ちない", "VolumeTargetError(above_capacity)"),
         f"容量 {capacity:.3f} mm^3 ちょうどの指定 → {outcome}",
+    )
+
+    # --- 区間の内側でも届かないことがある(2026-09-04に足したガード) -----------
+    # **要素数で入る量でも、密度フィルタが塊の縁で目減りさせるぶん届かない。**
+    # `20260904-1400` が案5の膨張0で踏んだのがこれで(目標が容量の 92.8% で
+    # `ZeroDivisionError`)、**案5を既定にするなら名指しで落とす口が要る**というのが
+    # その契約③の宿題だった。ここはその口の受入検査。
+    slab = np.zeros(case["shape"], dtype=bool)
+    slab[:, :, case["shape"][2] - 1 :] = True  # 塊の縁を増やす(フィルタの目減りを効かせる)
+    slab_movable = int(np.count_nonzero(~slab & ~case["solid_mask"]))
+    slab_capacity = (slab_movable + case["n_solid"]) * ELEMENT_VOLUME
+    inside = slab_capacity * 0.98  # **区間の内側**(上端ではない)
+    try:
+        solve(case, material_mm3=inside, max_iter=1, void_mask=slab)
+        inside_outcome, inside_text = "落ちない", ""
+    except simp.VolumeTargetError as exc:
+        inside_outcome, inside_text = f"VolumeTargetError({exc.side})", str(exc)
+    except Exception as exc:  # noqa: BLE001 - 別の例外で落ちるのも不合格
+        inside_outcome, inside_text = type(exc).__name__, str(exc)
+    check(
+        "区間の内側(容量の98%)でも届かない配置が体積の言葉で落ちる",
+        inside_outcome == "VolumeTargetError(above_capacity)",
+        f"容量 {slab_capacity:.1f} mm^3 の 98% を要求 → {inside_outcome}",
+    )
+    check(
+        "その文面に目標・到達できた最大・容量・割合が入っている",
+        all(w in inside_text for w in ("体積目標", "到達できる最大", "塊の容量", "%"))
+        and "dilate_mm" in inside_text,
+        inside_text[:150],
+    )
+    # **落ちるだけでは足りない**(緩い側に倒れていないこと)。同じ配置の 95% は通る。
+    ok_sum = float(
+        solve(case, material_mm3=slab_capacity * 0.95, max_iter=1, void_mask=slab).rho.sum()
+    )
+    check(
+        "同じ配置で容量の95%は通る(ガードが手前で落ちていない)",
+        rel(ok_sum * ELEMENT_VOLUME, slab_capacity * 0.95) < 1e-6,
+        f"指定 {slab_capacity * 0.95:.3f} / 出た値 {ok_sum * ELEMENT_VOLUME:.3f} mm^3",
     )
 
     for name, kwargs, kind in (

@@ -926,6 +926,11 @@ class VolumeTargetError(ValueError):
     体積と無関係な例外(`ZeroDivisionError` / 「K U = F が解けていない」)で落ちる
     (2026-09-04実測。README「体積目標を絶対量(mm^3)で指定する」)。
     属性 `side` は "below_minimum" か "above_capacity"。
+
+    **区間の内側でも `above_capacity` で落ちることがある**(2026-09-04に足した)。要素数で
+    見れば入る量でも、密度フィルタが塊の縁で目減りさせるぶん、ρ を上限まで上げても目標体積に
+    届かない配置があり、そのとき OC の二分探索が退化する。`volfrac` 指定の経路でも起きるので、
+    その場合 `material_mm3` / `min_mm3` / `max_mm3` は NaN(要素体積を知らされていない)。
     """
 
     def __init__(
@@ -1161,7 +1166,12 @@ def optimize(
         # 全反復へ伝播する(その要素はどのみち下の上書きで固定されるので値は使わない)。
         dvn = np.maximum(dvn, 1e-300)
         l1, l2 = 0.0, 1e9
-        while (l2 - l1) / (l1 + l2) > 1e-9:
+        # **二分探索が退化することがある。** 目標体積がこの反復で到達できる上限
+        # (移動制限 `move` と、密度フィルタが塊の縁で落とすぶん)を超えていると、`l2` が 0 まで
+        # 潰れて `(l2 - l1) / (l1 + l2)` が 0除算になる —— 文面に体積も塊も出ないので、
+        # 原因から一番遠い場所で落ちる(`20260904-1400` の契約)。**健全な側の計算は
+        # 1ビットも変えない**: `l1 + l2 > 0.0` は退化していない限りつねに真。
+        while l1 + l2 > 0.0 and (l2 - l1) / (l1 + l2) > 1e-9:
             lm = 0.5 * (l1 + l2)
             # `-dcn` は理屈上つねに正だが、`ce` がきっかり0の要素(荷重の届かない孤島)や
             # 丸めで符号が反転した要素があると sqrt が NaN を返し、**以後の反復が全部
@@ -1179,6 +1189,26 @@ def optimize(
                 l1 = lm
             else:
                 l2 = lm
+        if l1 + l2 <= 0.0:
+            ev = float(element_volume_mm3) if element_volume_mm3 is not None else float("nan")
+            n_solid = int(np.count_nonzero(solid))
+            capacity = float(n_movable + n_solid)
+            reached = float(xp.sum())
+            raise VolumeTargetError(
+                f"体積目標 {target_volume:.6g} 要素に対し、この反復("
+                f"it={it})で到達できる最大が {reached:.6g} 要素しかない: "
+                f"塊の容量は {capacity:.6g} 要素(動かせる {n_movable} + 固定材料 {n_solid})で、"
+                f"目標はその {target_volume / capacity:.1%}。"
+                "**塊に対して材料が多すぎる** —— 密度フィルタが塊の縁で目減りさせるぶん、"
+                "要素数で入る量でも ρ を上限まで上げて届かないことがある。"
+                "塊を広げる(案5なら dilate_mm を上げる)か、材料を減らすこと",
+                material_mm3=target_volume * ev,
+                min_mm3=float("nan"),
+                max_mm3=capacity * ev,
+                shortfall_mm3=(target_volume - reached) * ev,
+                side="above_capacity",
+                element_volume_mm3=ev,
+            )
         change = float(np.abs(xnew - x).max())
         x = xnew
         x_phys = _physical(x)

@@ -30,10 +30,12 @@ _HOST = "127.0.0.1"
 _HTTP_PORT = int(os.environ.get("PROBE_HTTP_PORT", "8775"))
 _WS_PORT = int(os.environ.get("PROBE_WS_PORT", "8776"))
 
-# **ボタンが解く問題(2026-09-04〜)。** 表示・確認用なので解像度・反復数は短くて良いが、
-# `check_design_space.py` の `CASE1_LONG_AXIS`(=22)と同じ値にしてある —— そちらは
-# 4条件から連結性ガードまで通ることを検査済みの解像度で、ここで独自の値を選んで
-# 未検査の組み合わせを踏むリスクを避ける。実測は README「起動直後の4条件表示」節。
+# **ボタンが解く問題(2026-09-04〜)。** 表示・確認用なので解像度・反復数は短くて良い。
+# 22 は「4条件から連結性ガードまで通る」ことを実測で確かめてある解像度
+# (`check_design_space.py` が 22 を使っていた頃に合わせた値。**検査側は 14 へ下がったので
+# その関係はもう無い** —— 22 のまま据え置いてあるのは実測済みの値だからで、
+# `voxelize.occupancy` のレイ縮退が解像度に対して単調でない以上、理由なく動かさない)。
+# 実測は README「起動直後の4条件表示」節。
 DEMO_ELEMENTS_LONG_AXIS = 22
 DEMO_VOLFRAC = 0.3
 DEMO_MAX_ITER = 30
@@ -49,17 +51,24 @@ _demo_space: ds.DesignSpace | None = None
 def _get_demo_space() -> ds.DesignSpace:
     """既定表示(4条件)とボタンが解く問題を**同じオブジェクト**で共有する。
 
-    起動直後の表示と最適化の入口を別々に `derive()` すると、余白や格子が独立に決まりうる
+    起動直後の表示と最適化の入口を別々に導出すると、余白や格子が独立に決まりうる
     ——「見せている問題と解いている問題が別物」になる(このタスクの完了条件3)。初回アクセスで
-    1回だけ導出し、以後はプロセスが生きている間キャッシュする(`derive` は毎回 B-rep から
+    1回だけ導出し、以後はプロセスが生きている間キャッシュする(導出は毎回 B-rep から
     三角形分割をやり直すので、リクエストのたびに呼ぶのは無駄に遅い)。
+
+    **導出は名指ししない**(`ds.derive_default`)。画面はその時点での最新の最適化処理を
+    可視化する、という方針なので、既定が倒れたら画面も一緒に倒れるのが正しい
+    (2026-09-04に既定は案5になった)。粗い段には**本番と同じ体積目標**を渡す ——
+    別の量で解くと「別の形の周り」を膨らませた塊になる(`derive_from_coarse_run` の docstring)。
     """
     global _demo_space
     if _demo_space is None:
         with _demo_space_lock:
             if _demo_space is None:
-                _demo_space = ds.derive(
-                    ds.demo_conditions(), elements_long_axis=DEMO_ELEMENTS_LONG_AXIS
+                _demo_space = ds.derive_default(
+                    ds.demo_conditions(),
+                    elements_long_axis=DEMO_ELEMENTS_LONG_AXIS,
+                    coarse_volfrac=DEMO_VOLFRAC,
                 )
     return _demo_space
 
@@ -171,7 +180,7 @@ def _build_condition_payload(space: ds.DesignSpace) -> dict[str, object]:
     - 保持 = `conditions.keep` の三角形(拘束面ぶんは除く。**duocadは拘束面が勝つ**
       —— `applyFaceMaterials` の役割解決で `fixture` が `preserve` より優先される)。
     - 除外 = `conditions.obstacle` の三角形。**`space.model.obstacle`(ボクセルのマスク)は
-      使わない** —— `derive()` は除外を塊から引き切っているので、そのマスクは常に全 False
+      使わない** —— どちらの導出も除外を塊から引き切っているので、そのマスクは常に全 False
       (`model_from_design_mask` に `obstacle` を渡していない。モジュール docstring)。
     - 拘束面・荷重面は `soup.triangles_of_face(face)` で当該面だけを塗る/装飾する
       (面添字は `space.fixed_face` / `space.load_face`)。荷重面はduocad同様**面の色は
@@ -197,7 +206,7 @@ def _build_condition_payload(space: ds.DesignSpace) -> dict[str, object]:
     obstacle_mesh: Optional[dict[str, object]] = None
     if conditions.obstacle is not None:
         # 除外ソリッドは面アンカーの対象(`soup`)に含まれないので、自分で三角形分割する。
-        # `deviation` は `derive()` が塊の格子を決めるのに使った値と揃える(見た目だけの
+        # `deviation` は導出が塊の格子を決めるのに使った値と揃える(見た目だけの
         # 都合で、揃えなくても正しさには影響しない)。
         dev = float(space.stats["deviation"])
         obs_soup = vx.triangles_from_shape(vx._unwrap(conditions.obstacle), deviation=dev)

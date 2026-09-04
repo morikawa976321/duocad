@@ -57,11 +57,21 @@
     条件の要素が実際にあることも見る)/ 除外が引かれている / 膨張を増やすと塊が単調に増える /
     連結性ガードを通っている(**閾値0.99・膨張0では案5の塊が切れて落ちる** —— 案1の箱は同じ
     条件で通るので、案5が自分でガードを通していなければ素通りする)/ 引数の検証。
+
+[13] の構成(既定の導出。タスク `20260904-1416`):
+
+13. **既定が案5で、入口が1つ** — `derive_default` が案5を返す / **`coarse_material_mm3` が
+    素通しになっている**(粗い段が実際にその量で解かれたことを achieved で見る。後続の
+    安全率の外側ループがこの引数を使う)/ 案1(`derive`)が残っていて既定値も動いていない
+    (比較のベースラインであり退避経路)/ `derivation="bbox"` で案1へ戻せる / 未知の名前は
+    例外 / **導出にこだわりのない呼び出し側(`server.py` / `perf.py`)が導出を名指ししていない**
+    —— 名指しが1つでも残っていると、次に既定を倒すときにそこだけ取り残される。
 """
 
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import json
 import sys
 import time
@@ -1182,7 +1192,15 @@ def check_four_benchmark_cases() -> None:
     measured: dict[str, dict] = {}
     for name in names:
         case = ds.CASES[name]
-        space = case.derive_space(elements_long_axis=FOUR["elements_long_axis"])
+        # **導出を名指ししない**(`derive_space` は既定の入口を通る)。基準線が既定で
+        # 回るのだから、その題材が端から端まで通ることの検査も既定で回す。
+        # 粗い段の大きさは `bench.DESIGN_SPACE_FOUR_CASES` が正。
+        space = case.derive_space(
+            elements_long_axis=FOUR["elements_long_axis"],
+            coarse_elements_long_axis=FOUR["coarse_elements_long_axis"],
+            coarse_max_iter=FOUR["coarse_max_iter"],
+            coarse_volfrac=0.3,
+        )
         table = space.table
         empty = sorted(int(f) for f in table.empty_faces())
         conn = space.stats.get("connectivity")
@@ -1208,6 +1226,7 @@ def check_four_benchmark_cases() -> None:
         free_material = int(np.count_nonzero((rho > 0.5) & ~np.asarray(out["solid"], dtype=bool)))
         measured[name] = {
             "grid": list(space.grid.shape),
+            "derivation": str(space.stats.get("derivation", "bbox")),
             "design_elements": space.element_count,
             "fixed_dofs": int(table.fixed_dofs(space.fixed_face).size),
             "load_nodes": int(table[space.load_face].node_count),
@@ -1300,11 +1319,152 @@ def check_four_benchmark_cases() -> None:
     )
 
 
+# ===========================================================================
+# 既定の導出(入口を1つにする): タスク 20260904-1416
+# ===========================================================================
+def check_default_derivation() -> None:
+    print("\n[13] 既定の導出(入口が1つ)")
+
+    cond = ds.demo_conditions(0.0)
+    small = {
+        "elements_long_axis": CASE5["elements_long_axis"],
+        "coarse_elements_long_axis": CASE5["coarse_elements_long_axis"],
+        "coarse_max_iter": CASE5["coarse_max_iter"],
+        "dilate_mm": CASE5["dilate_mm"],
+    }
+
+    # --- 13-1 既定は案5 ----------------------------------------------------
+    check(
+        "13-1 既定の導出が案5(coarse_run)",
+        ds.DEFAULT_DERIVATION == "coarse_run" and ds.DEFAULT_DERIVATION in ds.DERIVATIONS,
+        f"DEFAULT_DERIVATION={ds.DEFAULT_DERIVATION!r} / 選べるのは {sorted(ds.DERIVATIONS)}",
+    )
+    default_space = ds.derive_default(cond, **small)
+    check(
+        "13-1 入口が返す塊が案5のもの(粗い段の記録が付いている)",
+        default_space.stats.get("derivation") == "coarse_run"
+        and isinstance(default_space.stats.get("coarse"), dict)
+        and default_space.stats["coarse"]["iterations"] >= 1,
+        f"derivation={default_space.stats.get('derivation')!r} / "
+        f"粗い段 {default_space.stats.get('coarse', {}).get('iterations')} 反復",
+    )
+
+    # --- 13-2 案1は残っている(ベースライン兼退避経路) ----------------------
+    case1 = ds.derive(cond, elements_long_axis=CASE5["elements_long_axis"])
+    check(
+        "13-2 案1(derive)が残っていて、案5より大きい塊を返す",
+        "coarse" not in case1.stats and case1.element_count > default_space.element_count,
+        f"案1 {case1.element_count} 要素 / 案5 {default_space.element_count} 要素",
+    )
+    sig = inspect.signature(ds.derive)
+    defaults = {
+        "margin_ratio": sig.parameters["margin_ratio"].default,
+        "elements_long_axis": sig.parameters["elements_long_axis"].default,
+    }
+    check(
+        "13-2 案1の既定値が動いていない(余白比率 0.25 / 長辺 40要素)",
+        defaults == {"margin_ratio": ds.DEFAULT_MARGIN_RATIO, "elements_long_axis": 40}
+        and ds.DEFAULT_MARGIN_RATIO == 0.25,
+        f"{defaults}",
+    )
+    # **案5の既定値も動かさない**(すべて `20260904-1400` が実測で決めた値)。
+    case5_defaults = {
+        "coarse_elements_long_axis": ds.COARSE_ELEMENTS_LONG_AXIS,
+        "coarse_max_iter": ds.COARSE_MAX_ITER,
+        "threshold": ds.COARSE_THRESHOLD,
+        "dilate_mm": ds.COARSE_DILATE_MM,
+    }
+    check(
+        "13-2 案5の既定値が動いていない(粗い段 14要素・20反復 / 閾値 0.3 / 膨張 12mm)",
+        case5_defaults
+        == {
+            "coarse_elements_long_axis": 14,
+            "coarse_max_iter": 20,
+            "threshold": 0.3,
+            "dilate_mm": 12.0,
+        },
+        f"{case5_defaults}",
+    )
+
+    # --- 13-3 退避経路と未知の名前 ------------------------------------------
+    fallback = ds.derive_default(
+        cond, derivation="bbox", elements_long_axis=CASE5["elements_long_axis"]
+    )
+    check(
+        "13-3 derivation='bbox' で案1へ戻せる(退避経路)",
+        "coarse" not in fallback.stats and fallback.element_count == case1.element_count,
+        f"{fallback.element_count} 要素(案1 {case1.element_count} 要素)",
+    )
+    check(
+        "13-3 知らない導出名は例外(黙って既定へ落ちない)",
+        _raises(ds.derive_default, ValueError, cond, derivation="nope"),
+        "derivation='nope'",
+    )
+
+    # --- 13-4 coarse_material_mm3 が素通しになっている -----------------------
+    # **後続(安全率の外側ループ)がこの引数を使う。** 塞ぐと「本番と同じ材料の量で粗い段を
+    # 解く」ができなくなり、別の形の周りを膨らませた塊になる。
+    coarse_box = ds.derive(cond, elements_long_axis=CASE5["coarse_elements_long_axis"])
+    coarse_capacity = coarse_box.element_count * float(coarse_box.grid.spacing) ** 3
+    # 既定(volfrac 0.3)と**はっきり違う量**にする —— 同じ量だと素通ししていなくても通る。
+    wanted = 0.15 * coarse_capacity
+    passed = ds.derive_default(cond, coarse_material_mm3=wanted, **small)
+    achieved = float(passed.stats["coarse"]["material_mm3"])
+    check(
+        "13-4 coarse_material_mm3 が粗い段まで届いている",
+        abs(achieved - wanted) / wanted < 0.01,
+        f"渡した {wanted:.1f} mm^3 / 粗い段が出した {achieved:.1f} mm^3 "
+        f"(既定の volfrac 0.3 なら {default_space.stats['coarse']['material_mm3']:.1f})",
+    )
+    check(
+        "13-4 粗い段の体積目標は排他のまま(両方渡すと例外)",
+        _raises(
+            ds.derive_default, ValueError, cond, coarse_volfrac=0.3, coarse_material_mm3=1.0
+        ),
+        "coarse_volfrac と coarse_material_mm3 の同時指定",
+    )
+
+    # --- 13-5 呼び出し側が導出を名指ししていない ----------------------------
+    # **ソースを読む検査。** 名指しが1つでも残っていると、次に既定を倒したときにそこだけ
+    # 取り残される(このタスクが直したのは server.py の1箇所と BenchCase.derive_space)。
+    here = Path(__file__).resolve().parent
+    for fname in ("server.py", "perf.py"):
+        text = (here / fname).read_text(encoding="utf-8")
+        code = "\n".join(
+            line for line in text.splitlines() if not line.lstrip().startswith("#")
+        )
+        check(
+            f"13-5 {fname} が導出を名指ししていない",
+            "ds.derive(" not in code and "ds.derive_from_coarse_run(" not in code,
+            f"入口 derive_default/derive_space 経由: {'derive_default' in code or 'derive_space' in code}",
+        )
+    check(
+        "13-5 題材(BenchCase.derive_space)が既定の入口を通る",
+        ds.CASES["bracket"]
+        .derive_space(
+            elements_long_axis=CASE5["elements_long_axis"],
+            coarse_elements_long_axis=CASE5["coarse_elements_long_axis"],
+            coarse_max_iter=CASE5["coarse_max_iter"],
+        )
+        .stats.get("derivation")
+        == ds.DEFAULT_DERIVATION,
+        "derive_space が DEFAULT_DERIVATION の塊を返す",
+    )
+
+    RESULTS["default_derivation"] = {
+        "name": ds.DEFAULT_DERIVATION,
+        "case5_elements": default_space.element_count,
+        "case1_elements": case1.element_count,
+        "coarse_material_mm3": achieved,
+    }
+
+
 def main() -> int:
     print("=" * 72)
     print("check_design_space.py : 塊(設計空間)の受入検査")
     print("  [1]-[4] 分離 / [5]-[9] 案1(外接直方体+余白) / [10] 連結性ガード")
     print("  [11] 案5(粗く1回回して膨らませる) / [12] 性能の基準線の題材(4つ)")
+    print("  [13] 既定の導出(入口が1つ)")
     print("=" * 72)
     # **1件が例外で落ちても残りを走らせる。** 実装を壊したときに最初の1件で止まると、
     # 何がどこまで壊れているかが1周では分からない(`check()` と同じ方針を関数の粒度でも取る)。
@@ -1321,6 +1481,7 @@ def main() -> int:
         check_case1_connectivity,
         check_case5_coarse_run,
         check_four_benchmark_cases,
+        check_default_derivation,
     ):
         try:
             section()

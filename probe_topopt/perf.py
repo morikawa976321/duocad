@@ -27,6 +27,13 @@
    反復数を減らす。**両方の欄があって初めてどちらが効いたか切り分けられる。**
 4. **新旧は同じセッション内で測る。** 別の日に測った秒数どうしを比べない
    (`--baseline` は同じセッションで撮り直した JSON を渡すためにある)。
+
+## 塊の導出は既定(`design_space.derive_default`)を通る
+
+**題材は導出を名指ししない。** 基準線は「既定で回したときにどうなるか」なので、既定が倒れたら
+ここも一緒に倒れるのが正しい(2026-09-04に既定は案5になった)。旧い導出の基準線を**同じ
+セッションで**撮り直す口が `--derivation bbox`(`--solver cg` と同じ用途)。
+**`seconds_derive` は導出の全部**なので、案5では粗い段の SIMP もそこに入る。
 """
 
 from __future__ import annotations
@@ -81,7 +88,7 @@ def _model_for_spmv(space: ds.DesignSpace, force) -> tuple[simp.Model, np.ndarra
     """
     table = space.table
     if table is None:
-        raise ValueError("space.table が無い(derive() を通っていない DesignSpace)")
+        raise ValueError("space.table が無い(導出を通っていない DesignSpace)")
     nx, ny, nz = space.grid.shape
     fixed_dofs = table.fixed_dofs(space.fixed_face)
     load = table.load_vector(space.load_face, force)
@@ -144,11 +151,21 @@ def measure_case(
     spmv_repeat: int = SPMV_REPEAT,
     solver: str | None = None,
     threads: int | None = None,
+    derivation: str | None = None,
 ) -> dict:
-    """題材1つ × 解像度1つ。**端から端まで(導出 → 連結性ガード → SIMP → STL)通す。**"""
+    """題材1つ × 解像度1つ。**端から端まで(導出 → 連結性ガード → SIMP → STL)通す。**
+
+    `derivation` は塊の導出の上書き(既定 `None` = `design_space.DEFAULT_DERIVATION`)。
+    """
     case = ds.CASES[name]
+    resolved = ds.DEFAULT_DERIVATION if derivation is None else str(derivation)
+    kwargs: dict = {"elements_long_axis": int(resolution), "derivation": derivation}
+    if resolved == "coarse_run":
+        # **粗い段の体積目標は本番と同じにする。** 別の量で解くと「別の形の周り」を
+        # 膨らませた塊を測ることになる(`derive_from_coarse_run` の docstring)。
+        kwargs["coarse_volfrac"] = float(volfrac)
     t0 = time.perf_counter()
-    space = case.derive_space(elements_long_axis=int(resolution))
+    space = case.derive_space(**kwargs)
     derive_seconds = time.perf_counter() - t0
 
     table = space.table
@@ -203,6 +220,7 @@ def measure_case(
     return {
         "case": name,
         "solver": solver or "(既定)",
+        "derivation": str(space.stats.get("derivation", "bbox")),
         "threads": int(threads) if threads else int(simp.PARALLEL_THREADS),
         "covers": case.covers,
         "resolution": int(resolution),
@@ -297,6 +315,8 @@ def print_tables(rows: list[dict], baseline: dict | None = None) -> None:
         base = {(r["case"], r["resolution"]): r for r in baseline.get("rows", [])}
 
     print("\n### 基準線\n")
+    kinds = sorted({str(r.get("derivation", "bbox")) for r in rows})
+    print(f"塊の導出: {', '.join(kinds)}(既定は `design_space.DEFAULT_DERIVATION`)")
     print(
         "| 題材 | 格子 | 要素数(塊/格子) | DOF | 拘束DOF | 荷重節点 | CG反復/solve | "
         "秒/設計反復(中央値) | 最小〜最大 | 合計[秒] | コンプライアンス |"
@@ -390,6 +410,14 @@ def main(argv: list[str] | None = None) -> int:
         help="CG/V-cycle のスレッド数を上書きする(既定は None = simp.PARALLEL_THREADS)。"
         "**スケーリング曲線を撮るための口**: --threads 1 / 2 / 4 / 8 / 14",
     )
+    parser.add_argument(
+        "--derivation",
+        type=str,
+        default=None,
+        choices=tuple(sorted(ds.DERIVATIONS)),
+        help="塊の導出を上書きする(既定は design_space.DEFAULT_DERIVATION)。"
+        "**旧い導出の基準線を同じセッションで撮り直すため**の口: --derivation bbox",
+    )
     parser.add_argument("--json", type=str, default=None, help="測定値の書き出し先")
     parser.add_argument(
         "--baseline",
@@ -420,6 +448,7 @@ def main(argv: list[str] | None = None) -> int:
                 spmv_repeat=args.spmv_repeat,
                 solver=args.solver,
                 threads=args.threads,
+                derivation=args.derivation,
             )
             rows.append(row)
             print(
@@ -431,6 +460,7 @@ def main(argv: list[str] | None = None) -> int:
 
     payload = {
         "solver": args.solver or "(既定)",
+        "derivation": args.derivation or ds.DEFAULT_DERIVATION,
         "threads": int(args.threads) if args.threads else int(simp.PARALLEL_THREADS),
         "max_iter": args.max_iter,
         "volfrac": args.volfrac,

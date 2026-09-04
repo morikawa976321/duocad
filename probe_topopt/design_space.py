@@ -2,8 +2,10 @@
 
     ..\\.venv\\Scripts\\python.exe design_space.py --measure
 
-導出は2つ入っている。**既定は案1**(`derive`)で、案5(`derive_from_coarse_run`)は並べて
-足してある —— 置き換えではない。どちらを既定にすべきかは README「既定をどちらにすべきか」。
+導出は2つ入っている。**既定は案5**(`derive_from_coarse_run`。2026-09-04に案1から倒した)で、
+案1(`derive`)は比較のベースラインと退避経路として残してある。**導出にこだわりのない
+呼び出し側は `derive_default` を通ること** —— 既定を次に倒すときに書き換える場所を1箇所に
+閉じ込めるための入口である。根拠の実測は README「既定をどちらにすべきか」。
 
 **案1(外接直方体+余白。`derive`)。** 条件の点群の軸整列外接直方体に余白を足し、そこから
 除外ソリッドを引いたものを塊にする。**案5の比較対象(ベースライン)でもある。**
@@ -48,7 +50,9 @@
 **一度解いてから決める** —— 案1で粗い塊を作って SIMP を短く回し、出てきた材料を二値化して
 本番の格子へ再サンプルし、mm で膨らませ、4条件の要素を無条件に足す。塊は案1の 0.62〜0.84倍に
 なり、**姿勢依存がほぼ消える**(案1の塊は 0°→30° で 1.38倍、案5は 1.01倍)。数字は README
-「案1との比較」。**既定はまだ案1**(比較表の全項目で案5が上ではない)。
+「案1との比較」。**2026-09-04に既定を案5へ倒した**(入口は `derive_default`)。壁に接した
+材料の割合だけは 0° で案1に負けるが、これは**代理指標**であって本命はコンプライアンス
+(同等以上)である。README「既定をどちらにすべきか」。
 
 ## 格子の外は誰も見ていない
 
@@ -162,7 +166,8 @@ def assert_load_path(
     **切れていても最適化は落ちてくれない。** 空要素も剛性の下限 `emin` を持つので行列は特異に
     ならず、`simp` の残差検算も通る。実測では6配置中4配置が60反復を走り切って STL まで出し、
     出てきたのは**拘束側と荷重側が別々に浮いた形**だった(材料は3〜4個の島に割れ、両者は一度も
-    同じ島に入らない)。残り2配置は OC 更新の中で `ZeroDivisionError` になるが、その文面には
+    同じ島に入らない)。残り2配置は OC 更新の中で落ちる(2026-09-04以降は
+    `simp.VolumeTargetError`。それまでは `ZeroDivisionError`)が、その文面には
     設計空間も連結性も出てこない。利用者は塊を見ないので
     (engine `topopt-design-space-never-shown-to-the-user`)どちらも気づく手段が無い。
     **だから塊を組み立てる側で落とす。** 数字は README。
@@ -643,8 +648,11 @@ def derive_from_coarse_run(
     `simp.DEFAULT_VOLFRAC`)。**本番で使う材料の量が分かっているなら
     `coarse_material_mm3` に同じ量を渡すこと** —— 塊は「その量の材料がどこへ行きたいか」で
     決まるべきで、粗い段だけ別の量で解くと別の形の周りを膨らませることになる。
-    **目標を達成可能区間の端に置かないこと**(`volfrac=1.0`/`0.0` 相当は
-    OC の二分探索が退化して `ZeroDivisionError` になる。`20260904-0142` の罠)。
+    **目標を達成可能区間の端に置かないこと**(`volfrac=1.0`/`0.0` 相当は OC の二分探索が
+    退化する。`20260904-0142` の罠。**2026-09-04以降その退化は `simp.VolumeTargetError`
+    (`side="above_capacity"`)で落ちる** —— 塊の容量と、この反復で到達できる最大が文面に出る。
+    **区間の内側でも落ちることがある**: 密度フィルタが塊の縁で目減りさせるので、
+    要素数で入る量でも届かない配置がある。**膨張を絞りすぎると踏む**)。
     """
     started = time.perf_counter()
     thr = float(threshold)
@@ -789,6 +797,47 @@ def derive_from_coarse_run(
         stats=stats,
         table=table,
     )
+
+
+# ---------------------------------------------------------------------------
+# 既定の導出(入口を1つにする)
+# ---------------------------------------------------------------------------
+
+# **既定の導出。** 2026-09-04に案1(`"bbox"`)から案5(`"coarse_run"`)へ倒した。
+# 根拠は README「既定をどちらにすべきか」——「速い・姿勢依存が消える・コンプライアンスは
+# 同等以上」で、負けているのは代理指標(壁に接した材料の割合)の 0° の1項目だけ。
+DEFAULT_DERIVATION = "coarse_run"
+
+# 名前 → 導出。名前を受け取る側(`perf.py --derivation` / 受入検査)がここを引く。
+# **塊を作りたいだけの呼び出し側はこの表を引かない** —— 引くと既定を倒す場所が増える。
+DERIVATIONS = {"bbox": derive, "coarse_run": derive_from_coarse_run}
+
+
+def derive_default(
+    conditions: Conditions, *, derivation: Optional[str] = None, **kwargs: Any
+) -> DesignSpace:
+    """**導出にこだわりのない呼び出し側の入口。** 既定(`DEFAULT_DERIVATION`)へ委ねる。
+
+    `server.py` / `perf.py` / `BenchCase.derive_space` はここを通る。案1・案5を名指しで
+    呼びたい側(比較の実測・受入検査)は `derive` / `derive_from_coarse_run` を直接呼ぶ ——
+    **名指しの呼び出しを既定の変更で動かしてはいけない**(比較のベースラインが黙って
+    入れ替わる)。
+
+    `kwargs` は**そのまま既定の導出へ渡る**(素通し)。したがって受け付ける引数は
+    `DEFAULT_DERIVATION` が指す関数のもので、いまは案5:
+    **`coarse_material_mm3` を塞がないこと** —— 本番で使う材料の量が分かっているなら
+    粗い段にも同じ量を渡す必要があり(`derive_from_coarse_run` の docstring)、
+    ここで受けないと外側のループ(安全率)がその量を渡す手段を失う。
+
+    `derivation="bbox"` は**退避経路**。既定を倒したあとに案1の挙動へ戻して比べるための口で、
+    ここで名指しした側は `DEFAULT_DERIVATION` が変わっても動かない。
+    """
+    name = DEFAULT_DERIVATION if derivation is None else str(derivation)
+    try:
+        fn = DERIVATIONS[name]
+    except KeyError:
+        raise ValueError(f"未知の導出 {name!r}(選べるのは {sorted(DERIVATIONS)})") from None
+    return fn(conditions, **kwargs)
 
 
 def run_topopt(
@@ -1004,10 +1053,15 @@ class BenchCase:
         return self.conditions(self.angle_deg)
 
     def derive_space(self, **overrides: Any) -> DesignSpace:
-        """この題材の設定で `derive()` を呼ぶ。`overrides` で解像度などを差し替える。"""
+        """この題材の設定で**既定の導出**(`derive_default`)を呼ぶ。
+
+        **題材は導出を名指ししない。** 性能の基準線も受入検査[12]も「既定で回したときに
+        どうなるか」を見る側なので、既定を倒したらこちらも一緒に動くのが正しい。
+        案1と名指しで比べたいときは `derive_space(derivation="bbox")`。
+        """
         kwargs: dict = {"margin_ratio": self.margin_ratio}
         kwargs.update(overrides)
-        return derive(self.make(), **kwargs)
+        return derive_default(self.make(), **kwargs)
 
 
 # 名前 → 題材。**後続タスクはこの表を1ループ回すだけで全題材を通せる。**
@@ -1287,7 +1341,7 @@ def measure_case5(
                     max_iter=max_iter,
                     stl_path=_HERE / "output" / f"design_space_{label}_{tag}.stl",
                 )
-            except Exception as exc:  # noqa: BLE001 —— 端に置いた目標は ZeroDivisionError も出す
+            except Exception as exc:  # noqa: BLE001 —— 端に置いた目標は VolumeTargetError を出す
                 rows.append(
                     {
                         "derivation": label,
