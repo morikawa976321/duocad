@@ -36,13 +36,14 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-import simp
+import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from duocad.topopt import simp
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
 
 # 検査で使う格子。**受入検査は速さが命**なので、性能の基準線(`perf.py`)より小さい。
-# 反復数の格子非依存性はここでも見えている(実測は README「マルチグリッド前処理」)。
+# 反復数の格子非依存性はここでも見えている(実測は docs/TOPOPT.md「マルチグリッド前処理」)。
 GRIDS = ((20, 8, 8), (28, 12, 12), (36, 14, 14))
 # 薄板題材と同じ「厚み方向だけ極端に薄い」格子。粗視化が一番効かない形。
 THIN_GRID = (36, 14, 5)

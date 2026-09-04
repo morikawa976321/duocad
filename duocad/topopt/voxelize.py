@@ -48,20 +48,13 @@
 
 from __future__ import annotations
 
-import sys
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Iterable, Optional
 
 import numpy as np
 
-# duocad 本体はvenvに入っている前提だが、入っていない環境でも読めるようにリポジトリ直下を足す。
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-from duocad import kernel  # noqa: E402  (sys.path を整えてから)
+from .. import kernel
 
 # レイを列の中心からずらす幅(要素サイズに対する比)。軸整列した形状で縮退が系統的に
 # 起きるのを避けるためのもので、乱数ではない。2軸で違う無理数比にして、両軸が同時に

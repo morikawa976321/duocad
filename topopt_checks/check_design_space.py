@@ -8,7 +8,7 @@
   (塊と面アンカーの対象ソリッドの分離)の完了条件1〜3。
 - **[5]〜[9]**: タスク `20260903-2234-topopt-design-space-from-bbox`
   (案1: 4条件から外接直方体+余白で塊を導出する)の受入検査。**[5]〜[9]は変異検査を通してある**
-  —— 実装を壊すと実際に落ちることを1件ずつ確認した(対応表は README「変異検査」)。
+  —— 実装を壊すと実際に落ちることを1件ずつ確認した(対応表は docs/TOPOPT.md「変異検査」)。
 
 [1]〜[4] の構成:
 
@@ -46,7 +46,7 @@
     **角1点だけで接している2島は落ちる**(6近傍の定義が実装と一致していることの検査。
     26近傍なら1成分になることを同じコードで見せる)/ 片側のアンカー要素が塊に無い場合も落ちる。
     **変異検査は2つ**: `derive` の呼び出しを外す(10-2 が素通り)/ `assert_load_path` の
-    判定を外す(10-2・10-3・10-4 が素通り)。README「変異検査」に結果がある。
+    判定を外す(10-2・10-3・10-4 が素通り)。docs/TOPOPT.md「変異検査」に結果がある。
 
 [11] の構成(案5: 粗く1回回して膨らませる。タスク `20260904-1400`):
 
@@ -64,7 +64,7 @@
     素通しになっている**(粗い段が実際にその量で解かれたことを achieved で見る。後続の
     安全率の外側ループがこの引数を使う)/ 案1(`derive`)が残っていて既定値も動いていない
     (比較のベースラインであり退避経路)/ `derivation="bbox"` で案1へ戻せる / 未知の名前は
-    例外 / **導出にこだわりのない呼び出し側(`server.py` / `perf.py`)が導出を名指ししていない**
+    例外 / **導出にこだわりのない呼び出し側(`perf.py` / `safety_loop.py`)が導出を名指ししていない**
     —— 名指しが1つでも残っていると、次に既定を倒すときにそこだけ取り残される。
 
 [14] の構成(空の条件面のメッセージ。タスク `20260904-1556`):
@@ -75,7 +75,7 @@
     CAD面積・代表寸法)とメッセージの文言(面添字・逃げ道2つ)を見る / `design_space` 側は
     `DesignSpace.stats` にも同じ診断が載ること / **通常経路(空の条件面なし)は影響を受けない**
     (回帰確認)/ **変異検査**(空面診断を外すと元の `ValueError` に戻ることを毎回自動で確認。
-    README「変異検査の記録(2026-09-05)」)。
+    docs/TOPOPT.md「変異検査の記録(2026-09-05)」)。
     **14-6/14-7(2026-09-05 QAのfollow-up指摘への対応)**: `derive_from_coarse_run`(案5・
     既定の導出)の**粗い段**は `run_topopt(coarse, ...)` の戻り値の `"result"` を無条件に
     使っていたため、粗い段だけ条件面のアンカーが空になると `AttributeError` になっていた
@@ -104,10 +104,13 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-import anchor as an
-import bench
-import design_space as ds
-import voxelize as vx
+import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from _bootstrap import _REPO_ROOT
+from duocad.topopt import OUTPUT_DIR
+from duocad.topopt import anchor as an
+from duocad.topopt import bench
+from duocad.topopt import design_space as ds
+from duocad.topopt import voxelize as vx
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
@@ -390,7 +393,7 @@ def check_material_leaves_the_input_solid() -> None:
         volfrac=VOLFRAC,
         fixed_face=fixed_face,
         load_face=load_face,
-        stl_path=Path(__file__).resolve().parent / "output" / "design_space_box.stl",
+        stl_path=OUTPUT_DIR / "design_space_box.stl",
     )
     seconds_new = time.perf_counter() - t0
 
@@ -426,7 +429,7 @@ def check_material_leaves_the_input_solid() -> None:
         fixed_face=fixed_face,
         load_face=load_face,
         # 既定の出力先は `output/bracket.stl` で、**check_anchor.py の成果物を上書きしてしまう**。
-        stl_path=Path(__file__).resolve().parent / "output" / "design_space_bracket.stl",
+        stl_path=OUTPUT_DIR / "design_space_bracket.stl",
     )
     seconds_old = time.perf_counter() - t0
     old_out = int(((old["result"].rho > 0.5) & ~occupied).sum())
@@ -452,7 +455,7 @@ def check_material_leaves_the_input_solid() -> None:
 # ===========================================================================
 # 案1(外接直方体+余白): 4条件だけから塊を導出する
 #   タスク 20260903-2234。以下は `design_space.py` の受入検査で、
-#   **どれも「実装を壊すと実際に落ちる」ことを変異検査で確認してある**(README に記録)。
+#   **どれも「実装を壊すと実際に落ちる」ことを変異検査で確認してある**(docs/TOPOPT.md に記録)。
 # ===========================================================================
 # 検査の格子。**収束ではなく導出の性質を見るので粗い。**
 CASE1_LONG_AXIS = bench.DESIGN_SPACE_CASE1["elements_long_axis"]
@@ -490,7 +493,7 @@ def check_case1_end_to_end() -> None:
         flush=True,
     )
 
-    stl = Path(__file__).resolve().parent / "output" / "check_design_space_case1.stl"
+    stl = OUTPUT_DIR / "check_design_space_case1.stl"
     if stl.exists():
         stl.unlink()
     t0 = time.perf_counter()
@@ -770,7 +773,7 @@ def check_case1_margin_is_load_bearing() -> None:
         cliff = max(broke)
         # ここが言えるのは「壊れる比率は既定より下にある」までで、**既定が安全であることの
         # 裏付けにはならない**。cliff は負(-0.05)なので、既定を 0.02 まで下げてもこの assert は
-        # 通る。既定 0.25 の根拠は検査ではなく実測(README「余白比率をどう決めたか」)にある。
+        # 通る。既定 0.25 の根拠は検査ではなく実測(docs/TOPOPT.md「余白比率をどう決めたか」)にある。
         check(
             "壊れる比率は既定より下にある",
             cliff < ds.DEFAULT_MARGIN_RATIO,
@@ -794,13 +797,13 @@ def check_case1_margin_is_load_bearing() -> None:
     )
     # **既定値が「壊れない一番小さい値」ではない**ことを記録する。検査2・3は「保持が入るか」
     # しか見ておらず、「答えの居場所が残っているか」は見ていない —— 余白ゼロでも検査は通る。
-    # 既定値の根拠は検査ではなく README の実測(壁に接する材料の量)にある。
+    # 既定値の根拠は検査ではなく docs/TOPOPT.md の実測(壁に接する材料の量)にある。
     RESULTS["case1_margin_verdicts"] = [[float(r), v] for r, v in verdicts]
 
 
 # ===========================================================================
 # 連結性ガード: 塊の中で拘束と荷重がひと続きか
-#   タスク 20260903-2235。**変異検査で検出力を確認してある**(README「変異検査」)。
+#   タスク 20260903-2235。**変異検査で検出力を確認してある**(docs/TOPOPT.md「変異検査」)。
 # ===========================================================================
 def _two_islands(shape=(10, 6, 6)):
     """x 方向に隙間を空けた2つの島。拘束は左の島、荷重は右の島に置く。
@@ -1042,7 +1045,7 @@ def check_case5_coarse_run() -> None:
     )
 
     # --- 11-4 run_topopt がそのまま通る(表示側を改造せずに受けられる)------
-    stl = Path(__file__).resolve().parent / "output" / "check_design_space_case5.stl"
+    stl = OUTPUT_DIR / "check_design_space_case5.stl"
     if stl.exists():
         stl.unlink()
     t0 = time.perf_counter()
@@ -1190,7 +1193,7 @@ FOUR = bench.DESIGN_SPACE_FOUR_CASES
 def check_four_benchmark_cases() -> None:
     print("\n[12] 性能の基準線の題材(4つ)が端から端まで通る")
 
-    import perf
+    from duocad.topopt import perf
 
     # --- 12-1 表が4つあり、①は既存の `demo_conditions` のまま ---------------
     names = list(ds.CASES)
@@ -1221,7 +1224,7 @@ def check_four_benchmark_cases() -> None:
         table = space.table
         empty = sorted(int(f) for f in table.empty_faces())
         conn = space.stats.get("connectivity")
-        stl = Path(__file__).resolve().parent / "output" / f"check_case_{name}.stl"
+        stl = OUTPUT_DIR / f"check_case_{name}.stl"
         out = ds.run_topopt(
             space,
             volfrac=0.3,
@@ -1313,12 +1316,12 @@ def check_four_benchmark_cases() -> None:
         f"{removed}(削った要素数)",
     )
 
-    # --- 12-6 各題材が「何を覆うために居るか」が README にある ---------------
+    # --- 12-6 各題材が「何を覆うために居るか」が実測の記録にある ---------------
     # **この1行が無いと、後で「似ているから減らそう」と言われたときに判断できない。**
-    readme = (Path(__file__).resolve().parent / "README.md").read_text(encoding="utf-8")
-    missing = [name for name, case in ds.CASES.items() if case.covers not in readme]
+    doc = (_REPO_ROOT / "docs" / "TOPOPT.md").read_text(encoding="utf-8")
+    missing = [name for name, case in ds.CASES.items() if case.covers not in doc]
     check(
-        "12-6 4題材の「覆う性質」がそのまま README にある",
+        "12-6 4題材の「覆う性質」がそのまま docs/TOPOPT.md にある",
         not missing,
         f"欠けている題材: {missing}" if missing else "4件とも一致",
     )
@@ -1443,10 +1446,11 @@ def check_default_derivation() -> None:
 
     # --- 13-5 呼び出し側が導出を名指ししていない ----------------------------
     # **ソースを読む検査。** 名指しが1つでも残っていると、次に既定を倒したときにそこだけ
-    # 取り残される(このタスクが直したのは server.py の1箇所と BenchCase.derive_space)。
-    here = Path(__file__).resolve().parent
-    for fname in ("server.py", "perf.py"):
-        text = (here / fname).read_text(encoding="utf-8")
+    # 取り残される。**読むのは本体側の呼び出し側だけ** —— `probe_topopt/server.py` にも
+    # 同じ不変条件があるが、そこを読むと本体の検査が実験場に依存する(2026-09-05の移設で
+    # 依存の向きを probe → 本体の一方向にした)。probe 側は docs/TOPOPT.md の制約が担う。
+    for fname in ("perf.py", "safety_loop.py"):
+        text = (_REPO_ROOT / "duocad" / "topopt" / fname).read_text(encoding="utf-8")
         code = "\n".join(
             line for line in text.splitlines() if not line.lstrip().startswith("#")
         )
@@ -1502,7 +1506,7 @@ def check_empty_condition_face_warning() -> None:
         return
     empty_face = empty[0]
     big_face = big[0]
-    scratch_stl = Path(__file__).resolve().parent / "output" / "_check_empty_condition_face.stl"
+    scratch_stl = OUTPUT_DIR / "_check_empty_condition_face.stl"
 
     # --- 14-1: anchor.run_pipeline(荷重面が空) -----------------------------
     out = an.run_pipeline(

@@ -38,9 +38,10 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-import bench
-import simp
-import stress
+import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from duocad.topopt import bench
+from duocad.topopt import simp
+from duocad.topopt import stress
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}

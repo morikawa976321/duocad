@@ -1,0 +1,45 @@
+# `output/` は受入検査・性能測定・実験が書き出す場所。**成果物として追跡するのは、検査が
+# 「その検査自身の標準的な実行の成果物」として当てにしている数本だけ**で、残りは回すたびに
+# 差し替わるので入れない(2026-09-05に `probe_topopt/` から移設。理由は元の記述のまま)。
+
+# 姿勢依存の実測(`design_space.py --measure`)が書き出すSTL。
+output/design_space_rot*.stl
+
+# 連結性ガードの実測(切れている塊をそのまま最適化に通す)が書き出すSTL。受入検査は書き出さない。
+output/severed_*.stl
+
+# 絶対量の受入検査(`check_absolute_volume.py` [2b])が実経路を通すたびに上書きするSTL。
+output/absolute_volume_tmp.stl
+
+# フィルタ半径mm指定の受入検査(`check_filter_radius.py` [7])が実経路を通すたびに
+# 上書きするSTL。
+output/filter_radius_tmp.stl
+
+# 案1対案5の比較(`design_space.py --compare`)と、案5の粗い段が書き出すSTL。設定の
+# 組み合わせごとに1本増える(受入検査の成果物は `output/check_design_space_case5.stl` の
+# ほうで、こちらは追跡する)。
+output/design_space_case1_*.stl
+output/design_space_case5_*.stl
+output/design_space_coarse*.stl
+
+# 性能の基準線(`perf.py`)が書き出すSTLと測定値のJSON。題材 × 解像度ごとに1本増える。
+output/perf_*.stl
+output/perf-*.json
+
+# 4題材の通し検査(`check_design_space.py` [12])が書き出すSTL。合否は検査の出力が持つ。
+output/check_case_*.stl
+
+# CPU並列化の受入検査(`check_parallel.py` [6])が threads の伝播を確かめるために書き出す
+# STL。合否は rho 場の突き合わせが持つ。
+output/_check_parallel_propagation.stl
+
+# CPU並列化のスケーリング測定(`perf.py --threads`)が書き出す JSON。
+output/scaling_*.json
+
+# 安全率の外側ループ(`safety_loop.py`)が二分探索の候補材料量ごとに上書きするSTL。
+# 「最後に評価した候補」が残るだけで採用した材料量とは限らない。
+output/safety_loop_search.stl
+output/check_safety_loop_*.stl
+
+# 空の条件面メッセージの受入検査(`check_design_space.py` [14])が使い回すスクラッチSTL。
+output/_check_empty_condition_face.stl

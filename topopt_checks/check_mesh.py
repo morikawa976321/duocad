@@ -31,7 +31,7 @@
    たどる＝同じ有向辺が2度現れない)ことと、(b)発散定理の符号付き体積が正であること、の
    2つで確定する。(a)だけだと全体反転を、(b)だけだと一部反転の打ち消し合いを見逃す。
    閾値は無い。1〜8で巻き順を見るのは検査7だけで、それは**STL経路しか通らない**ため、
-   `mr.faces` を直接使う消費者(`server.py`→three.js描画)が内向きのまま残る事故を
+   `mr.faces` を直接使う消費者(`probe_topopt/server.py`→three.js描画)が内向きのまま残る事故を
    捕まえられなかった(2026-09-02発見。engine
    `winding-fix-at-export-only-leaks-to-other-consumers`)。
 
@@ -56,9 +56,11 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-import bench
-import mesh
-import simp
+import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from duocad.topopt import OUTPUT_DIR
+from duocad.topopt import bench
+from duocad.topopt import mesh
+from duocad.topopt import simp
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
@@ -250,7 +252,7 @@ def check_stl_roundtrip(mr: mesh.MeshResult) -> None:
 
     from build123d import Mesher
 
-    out_path = Path(__file__).resolve().parent / "output" / "optimized.stl"
+    out_path = OUTPUT_DIR / "optimized.stl"
     mesh.write_stl(out_path, mr.verts_smooth, mr.faces)
     size_kb = out_path.stat().st_size / 1024.0
     print(f"  書き出し: {out_path} ({size_kb:.1f} KB)")
@@ -284,7 +286,7 @@ def check_stl_roundtrip(mr: mesh.MeshResult) -> None:
 # ---------------------------------------------------------------------------
 def check_bounding_box_alignment() -> None:
     """既知の位置に置いた合成密度場で、marching cubesが返す面のバウンディングボックスが
-    「セル中心」規約(`rho[ex]` はセル `ex` の中心の値。`web/index.html` のボクセル描画も
+    「セル中心」規約(`rho[ex]` はセル `ex` の中心の値。`probe_topopt/web/index.html` のボクセル描画も
     `ex+0.5-nelx/2` でこの規約)どおりの位置にあるかを見る。
 
     上の1〜7はどれも並進不変(体積・水密性・分布の形は位置のズレでは変わらない)なので、

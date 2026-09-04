@@ -13,7 +13,7 @@
 3. **`Model.solve` の退避経路** —— `threads=1` が並列化を入れる前と**同じコード経路**
    (`blocked=None`)を通り、速度も答えも変わらないこと。
 4. **`Model.solve` の並列一致性** —— `threads` を 1/2/4/8 と振っても、mg/cg どちらの解法でも
-   コンプライアンス・変位場が**ビット一致**すること(README「答えの再現性」の選択(a))。
+   コンプライアンス・変位場が**ビット一致**すること(docs/TOPOPT.md「答えの再現性」の選択(a))。
    V-cycle 単体・`optimize`/`run_pipeline` の口まで含めて確認する。
 
 **スケーリングの実測(頭打ちの有無・題材ごとの倍率)は `perf.py` の役目**であり、ここでは
@@ -39,7 +39,9 @@ for _stream in (sys.stdout, sys.stderr):
 
 import scipy.sparse as sp
 
-import simp
+import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from duocad.topopt import OUTPUT_DIR
+from duocad.topopt import simp
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
@@ -325,15 +327,15 @@ def check_parallel_consistency() -> None:
 # ---------------------------------------------------------------------------
 def check_propagation() -> None:
     print("\n[6] threads の伝播(optimize → anchor.run_pipeline → design_space.run_topopt)")
-    import anchor
+    from duocad.topopt import anchor
 
     r_1 = anchor.run_pipeline(
         elements_long_axis=12, max_iter=6, solver="mg", threads=1,
-        stl_path="output/_check_parallel_propagation.stl",
+        stl_path=OUTPUT_DIR / "_check_parallel_propagation.stl",
     )
     r_8 = anchor.run_pipeline(
         elements_long_axis=12, max_iter=6, solver="mg", threads=8,
-        stl_path="output/_check_parallel_propagation.stl",
+        stl_path=OUTPUT_DIR / "_check_parallel_propagation.stl",
     )
     check(
         "6-1 anchor.run_pipeline は threads を simp.optimize まで伝え、"
@@ -346,7 +348,7 @@ def check_propagation() -> None:
         anchor.run_pipeline.__kwdefaults__["threads"] is None,
         f"run_pipeline の既定 threads={anchor.run_pipeline.__kwdefaults__['threads']!r}",
     )
-    import design_space as ds
+    from duocad.topopt import design_space as ds
 
     check(
         "6-3 design_space.run_topopt の既定 threads も None",

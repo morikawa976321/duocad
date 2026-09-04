@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import threading
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -14,11 +15,18 @@ from typing import Optional
 import numpy as np
 from websockets.asyncio.server import serve
 
-import anchor
-import design_space as ds
-import mesh
-import simp
-import voxelize as vx
+# **依存の向きは probe → 本体の一方向。** 最適化のコードは 2026-09-05 に
+# `duocad/topopt/` へ移設した(本体は probe を一切参照しない)。この実験場は素の
+# `python server.py` で立てるので、リポジトリ直下を sys.path へ足してから import する。
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from duocad.topopt import anchor  # noqa: E402
+from duocad.topopt import design_space as ds  # noqa: E402
+from duocad.topopt import mesh  # noqa: E402
+from duocad.topopt import simp  # noqa: E402
+from duocad.topopt import voxelize as vx  # noqa: E402
 
 _ROOT = Path(__file__).resolve().parent
 _WEB_DIR = _ROOT / "web"

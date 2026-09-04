@@ -5,7 +5,7 @@
 **このファイルが合否そのものである。** 1件でも落ちればプロセスは非ゼロで終わる。
 検査で使う形状は **build123d でその場生成する合成ソリッドだけ**で、リポジトリ外の
 私物STEPには依存しない(engine `duocad-drops-private-step-test-dependency` —
-私物STEP依存でテスト151件を捨てた実例がある)。実物STEPを1回通した実測は README にある。
+私物STEP依存でテスト151件を捨てた実例がある)。実物STEPを1回通した実測は docs/TOPOPT.md にある。
 
 検査の構成:
 
@@ -69,7 +69,8 @@ from OCP.TopExp import TopExp_Explorer  # noqa: E402
 from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shell  # noqa: E402
 from OCP.TopAbs import TopAbs_SHELL  # noqa: E402
 
-import voxelize as vx  # noqa: E402
+import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from duocad.topopt import voxelize as vx  # noqa: E402
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}

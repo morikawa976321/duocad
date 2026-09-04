@@ -21,6 +21,7 @@
 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | **なぜこう作るか**（§2 分業の原則が企画の主張） | 判断の背景を辿るとき |
 | [MCP.md](MCP.md) | **MCPツール一覧の正**（32個）と登録手順 | AI側から触るとき |
 | [tests/README.md](tests/README.md) | テストが定義するAPI契約 | コアの挙動を疑うとき |
+| [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化の実測の記録**(費用の表・余白比率・案5の比較・応力・面アンカー・変異検査) | 数字の根拠を辿るとき |
 
 ---
 
@@ -203,6 +204,56 @@ cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
 ```
 
 サーバもブラウザも要らない。実STEPを読む重いテストは含まない。
+
+### 形状最適化の受入検査(11本・502件。通しで約200秒)
+
+**pytest には入れていない。** 通しで約200秒あり、`tests/` へ入れると `pytest -q` が毎回
+それだけ重くなる。マーカーで既定から外す案も採らない —— duocad に CI が無いので、既定から
+外した瞬間に誰も回さなくなる(`pytest -q` が緑で返るため、無人の runner は「緑だ」と
+報告して先へ進む)。**強制力は、タスクに書く「受入検査がすべて緑」の一文と runner が担う。**
+
+```powershell
+cd C:\Users\tm976\mf\duocad
+
+# SIMP側の数値の正しさ。約6秒
+& .\.venv\Scripts\python.exe topopt_checks\check_simp.py
+
+# メッシュ化側の正しさ。SIMPを1回回すので約13〜30秒(機械の状態による)
+& .\.venv\Scripts\python.exe topopt_checks\check_mesh.py
+
+# ボクセル化側の正しさ。SIMPを回さないので約8秒
+& .\.venv\Scripts\python.exe topopt_checks\check_voxelize.py
+
+# 面アンカー側の正しさ。端から端まで1回通すので約37〜49秒(うち約27秒が検査[5]の円筒面)
+& .\.venv\Scripts\python.exe topopt_checks\check_anchor.py
+
+# 塊(設計空間)。分離 + 案1 + 連結性ガード + 案5 + 4題材の通し + 既定の導出 + 空の条件面。約19秒
+& .\.venv\Scripts\python.exe topopt_checks\check_design_space.py
+
+# 体積目標を絶対量(mm^3)で指定する口。プリセットを再現するので約16秒
+& .\.venv\Scripts\python.exe topopt_checks\check_absolute_volume.py
+
+# von Mises応力・実単位換算・代表応力・最小安全率。約8秒
+& .\.venv\Scripts\python.exe topopt_checks\check_stress.py
+
+# 幾何マルチグリッド前処理(階層・対称正定値性・検出力・格子非依存性・答えの一致)。約21秒
+& .\.venv\Scripts\python.exe topopt_checks\check_multigrid.py
+
+# CPU並列化(行ブロック並列matvecの正しさ・退避経路・スレッド数を振ってもビット一致)。約15秒
+& .\.venv\Scripts\python.exe topopt_checks\check_parallel.py
+
+# 安全率の外側ループ(配線・単調性のスポット確認・入口・達成不能の例外・収束・引数検証)。約39〜48秒
+& .\.venv\Scripts\python.exe topopt_checks\check_safety_loop.py
+
+# 密度フィルタ半径をmmで指定する口(排他・下限・境界・既定不変・単位の等価性・検出力・配線)。約10秒
+& .\.venv\Scripts\python.exe topopt_checks\check_filter_radius.py
+```
+
+**どれも最後の行が `OK:` で、終了コードが 0 なら合格。** 11本すべてで合計 **502件**
+(24 / 15 / 48 / 59 / 124 / 44 / 40 / 46 / 41 / 30 / 31)。**項目数を減らさないこと。**
+秒数は熱状態で 1.2〜1.7倍振れる(engine `benchmark-seconds-swing-with-thermal-state`)ので、
+所要は目安である。何を守っている検査かは [docs/TOPOPT.md](docs/TOPOPT.md)
+「受入検査が見ているもの」に書いてある。
 
 ### 実ブラウザのsmoke（本物のクリックとキー入力）
 

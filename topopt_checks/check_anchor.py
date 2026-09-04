@@ -61,10 +61,12 @@ for _stream in (sys.stdout, sys.stderr):
 
 from build123d import Box, Cylinder, Pos, Rotation  # noqa: E402
 
-import anchor as an  # noqa: E402
-import bench  # noqa: E402
-import simp  # noqa: E402
-import voxelize as vx  # noqa: E402
+import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from duocad.topopt import OUTPUT_DIR
+from duocad.topopt import anchor as an  # noqa: E402
+from duocad.topopt import bench  # noqa: E402
+from duocad.topopt import simp  # noqa: E402
+from duocad.topopt import voxelize as vx  # noqa: E402
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
@@ -712,7 +714,7 @@ def check_edge_rule() -> None:
 # ---------------------------------------------------------------------------
 def check_end_to_end() -> None:
     print("[7] 端から端まで(ソリッド → 格子 → 面アンカー → SIMP → marching cubes → STL)")
-    out_path = Path(__file__).resolve().parent / "output" / "bracket.stl"
+    out_path = OUTPUT_DIR / "bracket.stl"
     t0 = time.perf_counter()
     out = an.run_pipeline(
         elements_long_axis=bench.ANCHOR_END_TO_END["elements_long_axis"],

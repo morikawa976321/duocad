@@ -46,15 +46,17 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-import anchor as an
-import bench
-import design_space as ds
-import simp
+import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from duocad.topopt import OUTPUT_DIR
+from duocad.topopt import anchor as an
+from duocad.topopt import bench
+from duocad.topopt import design_space as ds
+from duocad.topopt import simp
 
 FAILURES: list[str] = []
 
 # 実経路の検査が書き出す STL。**受入検査の成果物ではない**ので .gitignore にある。
-STL_TMP = "output/absolute_volume_tmp.stl"
+STL_TMP = OUTPUT_DIR / "absolute_volume_tmp.stl"
 
 
 def check(name: str, ok: bool, detail: str) -> None:
@@ -560,7 +562,7 @@ def check_unchanged_defaults() -> None:
                 got[key] == want[key],
                 f"{got[key]} (基準 {want[key]})",
             )
-    # 読み手のために10進でも出す(README の 292.2307 → 15.3817 と突き合わせるため)。
+    # 読み手のために10進でも出す(docs/TOPOPT.md の 292.2307 → 15.3817 と突き合わせるため)。
     print(
         f"    プリセット C: {float.fromhex(preset['c_first']):.4f} → "
         f"{float.fromhex(preset['c_last']):.4f}",

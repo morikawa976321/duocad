@@ -2,7 +2,7 @@
 
     ..\\.venv\\Scripts\\python.exe perf.py --json output\\perf-before.json
 
-`design_space.CASES` の4題材 × 複数解像度を回し、README の2つの表をそのまま吐く。
+`design_space.CASES` の4題材 × 複数解像度を回し、docs/TOPOPT.md の2つの表をそのまま吐く。
 マルチグリッド前処理(`20260904-1414`)と CPU 並列化(`20260904-1415`)は**このファイルを
 実行して新旧を比べる**。手で測って手で表を書くと、条件が揃っているかを誰も確かめられない。
 
@@ -54,13 +54,13 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-import design_space as ds
-import simp
+from . import design_space as ds
+from . import simp
 
 _HERE = Path(__file__).resolve().parent
 
 # 基準線を取る解像度(最長軸方向の要素数)。**2段以上**でないと伸びの変化が見えない
-# (マルチグリッドの効きは格子が細かいほど大きい)。値の決め方は README「基準線の測り方」。
+# (マルチグリッドの効きは格子が細かいほど大きい)。値の決め方は docs/TOPOPT.md「基準線の測り方」。
 RESOLUTIONS: tuple[int, ...] = (30, 44)
 
 # 設計反復の回数。**基準線は収束を見ていない** —— 見ているのは1反復の費用と CG の反復数で、
@@ -309,7 +309,7 @@ def _fmt_ratio(new: float, old: float | None) -> str:
 
 
 def print_tables(rows: list[dict], baseline: dict | None = None) -> None:
-    """README にそのまま貼れる2つの表を出す。"""
+    """docs/TOPOPT.md にそのまま貼れる2つの表を出す。"""
     base = {}
     if baseline:
         base = {(r["case"], r["resolution"]): r for r in baseline.get("rows", [])}

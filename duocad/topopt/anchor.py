@@ -84,11 +84,9 @@ from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
 
-_HERE = Path(__file__).resolve().parent
-if str(_HERE) not in sys.path:
-    sys.path.insert(0, str(_HERE))
+from . import voxelize as vx
 
-import voxelize as vx  # noqa: E402
+_HERE = Path(__file__).resolve().parent
 
 # 標本点の目標間隔(要素サイズ比)。小さいほど分布が滑らかになり、標本点の数は2乗で増える。
 DEFAULT_SAMPLE_RATIO = 0.25
@@ -891,13 +889,13 @@ def run_pipeline(
     `fixed_face` / `load_face` が要素サイズより小さくて格子節点が1つも付かないと
     (`AnchorTable.empty_faces()`)、**例外にはせず**戻り値の `"empty_condition_faces"`
     (`AnchorTable.condition_face_diagnoses` の結果。空でなければ1件以上)に診断を積んで
-    早期returnする(当面の措置。本当の解決は保留 — README「面が小さすぎて空になる」参照)。
+    早期returnする(当面の措置。本当の解決は保留 — docs/TOPOPT.md「面が小さすぎて空になる」参照)。
     このとき `"result"` / `"solid"` / `"void"` / `"surface"` / `"stl"` は `None`
     (`simp.optimize` を呼んでいない)。通常どおり最後まで走った戻り値では
     `"empty_condition_faces"` は常に `[]`。
     """
-    import mesh
-    import simp
+    from . import mesh
+    from . import simp
 
     simp.check_volume_target(volfrac, material_mm3)
     simp.check_rmin_target(rmin, rmin_mm)

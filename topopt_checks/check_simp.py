@@ -36,8 +36,9 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-import bench
-import simp
+import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from duocad.topopt import bench
+from duocad.topopt import simp
 
 # --- 弾性論から出る参照値(E=1, nu=0.3) --------------------------------------
 E_REF, NU_REF = 1.0, 0.3

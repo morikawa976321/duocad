@@ -5,11 +5,11 @@
 導出は2つ入っている。**既定は案5**(`derive_from_coarse_run`。2026-09-04に案1から倒した)で、
 案1(`derive`)は比較のベースラインと退避経路として残してある。**導出にこだわりのない
 呼び出し側は `derive_default` を通ること** —— 既定を次に倒すときに書き換える場所を1箇所に
-閉じ込めるための入口である。根拠の実測は README「既定をどちらにすべきか」。
+閉じ込めるための入口である。根拠の実測は docs/TOPOPT.md「既定をどちらにすべきか」。
 
 **案1(外接直方体+余白。`derive`)。** 条件の点群の軸整列外接直方体に余白を足し、そこから
 除外ソリッドを引いたものを塊にする。**案5の比較対象(ベースライン)でもある。**
-案1の弱点は2つで、どちらも数字が README にある:
+案1の弱点は2つで、どちらも数字が docs/TOPOPT.md にある:
 
 1. **余白が自由パラメータ** —— 利用者に見せない値なので、小さすぎると答えの居場所を黙って削り、
    誰も気づけない(engine `topopt-design-space-never-shown-to-the-user`)。
@@ -39,7 +39,7 @@
 塊から除外ソリッドを引いた結果、**拘束面と荷重面が別々の連結成分に落ちる**ことがある。そのまま
 最適化に通しても**多くの場合エラーは出ない** —— 空要素も剛性の下限 `emin` を持つので行列は
 特異にならず残差検算も通り、最後まで走って STL が出る(実測は6配置中4配置。残り2配置は OC 更新の
-中で `ZeroDivisionError`。README「切れている塊をそのまま最適化に通すと何が起きるか」)。
+中で `ZeroDivisionError`。docs/TOPOPT.md「切れている塊をそのまま最適化に通すと何が起きるか」)。
 利用者は塊を見ないので、何が起きたか気づく手段が無い。だから `derive` が**つながりを確認してから返す**
 (`assert_faces_connected` → `DesignSpaceDisconnectedError`)。連結性の定義は **6近傍**
 (`NEIGHBOURHOOD`)で、理由はその定数のところに書いてある。
@@ -49,10 +49,10 @@
 案1〜案4は**条件の位置だけ**から塊を決める(どこに材料が要るかを見ていない)。案5だけが
 **一度解いてから決める** —— 案1で粗い塊を作って SIMP を短く回し、出てきた材料を二値化して
 本番の格子へ再サンプルし、mm で膨らませ、4条件の要素を無条件に足す。塊は案1の 0.62〜0.84倍に
-なり、**姿勢依存がほぼ消える**(案1の塊は 0°→30° で 1.38倍、案5は 1.01倍)。数字は README
+なり、**姿勢依存がほぼ消える**(案1の塊は 0°→30° で 1.38倍、案5は 1.01倍)。数字は docs/TOPOPT.md
 「案1との比較」。**2026-09-04に既定を案5へ倒した**(入口は `derive_default`)。壁に接した
 材料の割合だけは 0° で案1に負けるが、これは**代理指標**であって本命はコンプライアンス
-(同等以上)である。README「既定をどちらにすべきか」。
+(同等以上)である。docs/TOPOPT.md「既定をどちらにすべきか」。
 
 ## 格子の外は誰も見ていない
 
@@ -75,14 +75,14 @@ from typing import Any, Optional, Sequence
 import numpy as np
 from scipy import ndimage
 
-import anchor as an
-import simp
-import voxelize as vx
+from . import anchor as an
+from . import simp
+from . import voxelize as vx
 
 _HERE = Path(__file__).resolve().parent
 
 # 余白は**条件の外接直方体の最長辺に対する比率**で持つ(絶対mmでは部品の大きさに追従しない)。
-# 既定値の根拠は README「余白比率をどう決めたか」。安全側=大きめに倒してある。
+# 既定値の根拠は docs/TOPOPT.md「余白比率をどう決めたか」。安全側=大きめに倒してある。
 DEFAULT_MARGIN_RATIO = 0.25
 DEFAULT_ELEMENTS_LONG_AXIS = 40
 
@@ -199,7 +199,7 @@ def assert_load_path(
     `simp.VolumeTargetError`。それまでは `ZeroDivisionError`)が、その文面には
     設計空間も連結性も出てこない。利用者は塊を見ないので
     (engine `topopt-design-space-never-shown-to-the-user`)どちらも気づく手段が無い。
-    **だから塊を組み立てる側で落とす。** 数字は README。
+    **だから塊を組み立てる側で落とす。** 数字は docs/TOPOPT.md。
 
     `fixed_elements` / `load_elements` は要素マスク(`AnchorTable.element_mask`)。
     **塊の外にはみ出した分は落として数える** —— 除外ソリッドが拘束面のすぐ外側を削っていると、
@@ -533,7 +533,7 @@ def derive(
         ) from exc
 
     # **つながりを確認してから返す。** 拘束面と荷重面が塊の中でひと続きでなければ、壁と荷重を
-    # つなぐ道が塊に存在しない。切れていても SIMP は落ちない(実測は README「切れている塊を
+    # つなぐ道が塊に存在しない。切れていても SIMP は落ちない(実測は docs/TOPOPT.md「切れている塊を
     # そのまま最適化に通すと何が起きるか」)ので、ここで落とさないと誰も気づけない。
     #
     # **順序(実測で確かめた。契約(前タスク)の「格子外ガードより前」からは意図的に外している)**:
@@ -596,7 +596,7 @@ def derive(
 # ---------------------------------------------------------------------------
 # 案5(粗く1回回して膨らませる)
 # ---------------------------------------------------------------------------
-# 既定値の根拠はすべて実測(README「案5の既定値をどう決めたか」)。**「なんとなく」の既定を
+# 既定値の根拠はすべて実測(docs/TOPOPT.md「案5の既定値をどう決めたか」)。**「なんとなく」の既定を
 # 置いていない** —— 案1の `margin_ratio` と同じ扱いで、検査ではなく実測が根拠である。
 COARSE_ELEMENTS_LONG_AXIS = 14
 COARSE_MAX_ITER = 20
@@ -849,7 +849,7 @@ def derive_from_coarse_run(
 # ---------------------------------------------------------------------------
 
 # **既定の導出。** 2026-09-04に案1(`"bbox"`)から案5(`"coarse_run"`)へ倒した。
-# 根拠は README「既定をどちらにすべきか」——「速い・姿勢依存が消える・コンプライアンスは
+# 根拠は docs/TOPOPT.md「既定をどちらにすべきか」——「速い・姿勢依存が消える・コンプライアンスは
 # 同等以上」で、負けているのは代理指標(壁に接した材料の割合)の 0° の1項目だけ。
 DEFAULT_DERIVATION = "coarse_run"
 
@@ -863,7 +863,7 @@ def derive_default(
 ) -> DesignSpace:
     """**導出にこだわりのない呼び出し側の入口。** 既定(`DEFAULT_DERIVATION`)へ委ねる。
 
-    `server.py` / `perf.py` / `BenchCase.derive_space` はここを通る。案1・案5を名指しで
+    `probe_topopt/server.py` / `perf.py` / `BenchCase.derive_space` はここを通る。案1・案5を名指しで
     呼びたい側(比較の実測・受入検査)は `derive` / `derive_from_coarse_run` を直接呼ぶ ——
     **名指しの呼び出しを既定の変更で動かしてはいけない**(比較のベースラインが黙って
     入れ替わる)。
@@ -922,7 +922,7 @@ def run_topopt(
     `"empty_condition_faces"` に診断が積まれて早期returnする(`anchor.run_pipeline` の契約
     そのまま)。同じ診断を `space.stats["empty_condition_faces_warning"]` にも書く
     (`DesignSpace` は呼び出し元がそのまま持っているので、戻り値を経由しなくても後から
-    見える。当面の措置 — README「面が小さすぎて空になる」参照)。
+    見える。当面の措置 — docs/TOPOPT.md「面が小さすぎて空になる」参照)。
     """
     out = Path(stl_path) if stl_path is not None else _HERE / "output" / "design_space_case1.stl"
     result = an.run_pipeline(
@@ -997,7 +997,7 @@ def demo_conditions(angle_deg: float = 0.0) -> Conditions:
 def severed_conditions(angle_deg: float = 0.0, *, thickness: float = 10.0) -> Conditions:
     """`demo_conditions` の除外ソリッドを、**拘束と荷重の間を丸ごと塞ぐ壁**に差し替えた配置。
 
-    受入検査[10]と README の実測(切れている系をそのまま最適化に通す)が共有する題材。
+    受入検査[10]と docs/TOPOPT.md の実測(切れている系をそのまま最適化に通す)が共有する題材。
     壁は2つのパッドの間(x=0)に立て、y/z 方向は塊よりずっと大きく取る —— 塊の断面を端まで
     塞がないと、**縁を回り込む道が残って「切れている」配置にならない**(既定の余白比率 0.25 で
     塊は y -28..28 / z -28..34 程度なので、±100 あれば余白比率を振っても足りる)。
@@ -1105,7 +1105,7 @@ class BenchCase:
     """性能の基準線を測る題材1つ。**塊の導出設定まで含めて1つ**にしてある。
 
     余白比率も力の向きも題材ごとに違い、片方だけ表にすると「同じ設定で回した」と
-    読めてしまう。`covers` は**この題材が何を覆うために居るか**の1行で、README の表と
+    読めてしまう。`covers` は**この題材が何を覆うために居るか**の1行で、docs/TOPOPT.md の表と
     同じ文字列を機械側にも置いてある(片方だけ直したときに気づけるようにするため)。
     """
 
@@ -1132,7 +1132,7 @@ class BenchCase:
 
 
 # 名前 → 題材。**後続タスクはこの表を1ループ回すだけで全題材を通せる。**
-# 並びは README の表の並びと同じ(①〜④)。
+# 並びは docs/TOPOPT.md の表の並びと同じ(①〜④)。
 CASES: dict[str, BenchCase] = {
     "bracket": BenchCase(
         name="bracket",
@@ -1234,7 +1234,7 @@ def wall_contact(space: DesignSpace, out: dict, threshold: float = 0.5) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 実測(README の表を作る)
+# 実測(docs/TOPOPT.md の表を作る)
 # ---------------------------------------------------------------------------
 def measure_rotation(
     angles: Sequence[float],
@@ -1266,76 +1266,6 @@ def measure_rotation(
     return rows
 
 
-def measure_margin(
-    ratios: Sequence[float],
-    *,
-    angle: float = 0.0,
-    spacing: float,
-    max_iter: int,
-    volfrac: float,
-    material_mm3: Optional[float] = None,
-) -> list[dict]:
-    """余白比率 × (要素数, 所要, 材料の総体積, 壁に接した材料)。落ちた比率は理由ごと表に残す。
-
-    `material_mm3` を渡すと、**体積制約を絶対量に倒したとき**の比較になる(出てくる材料の
-    総体積が比率によらず揃う)。相対体積のままだと塊が変わると材料の量まで変わり、
-    「塊の大きさで答えがどう変わるか」と「材料の量で答えがどう変わるか」が混ざる。
-    """
-    rows = []
-    conditions = demo_conditions(angle)
-    for ratio in ratios:
-        try:
-            space = derive(conditions, margin_ratio=ratio, spacing=spacing)
-        except (vx.OutsideDesignSpaceError, ValueError) as exc:
-            rows.append(
-                {
-                    "margin_ratio": float(ratio),
-                    "error": type(exc).__name__,
-                    "message": str(exc)[:160],
-                }
-            )
-            print("  " + json.dumps(rows[-1], ensure_ascii=False), flush=True)
-            continue
-        table = an.build_anchors(space.soup, space.grid)
-        empty = [f for f in (space.fixed_face, space.load_face) if f in table.empty_faces()]
-        if empty:
-            rows.append(
-                {
-                    "margin_ratio": float(ratio),
-                    "design_elements": space.element_count,
-                    "spacing": float(space.grid.spacing),
-                    "error": "empty_anchor_faces",
-                    "message": f"アンカーが空になった面 {empty}",
-                }
-            )
-            print("  " + json.dumps(rows[-1], ensure_ascii=False), flush=True)
-            continue
-        stl = _HERE / "output" / f"design_space_margin{ratio:g}.stl"
-        t0 = time.perf_counter()
-        try:
-            out = run_topopt(
-                space,
-                volfrac=None if material_mm3 is not None else volfrac,
-                material_mm3=material_mm3,
-                max_iter=max_iter,
-                stl_path=stl,
-            )
-        except simp.VolumeTargetError as exc:
-            rows.append(
-                {
-                    "margin_ratio": float(ratio),
-                    "design_elements": space.element_count,
-                    "error": type(exc).__name__,
-                    "message": str(exc)[:160],
-                }
-            )
-            print("  " + json.dumps(rows[-1], ensure_ascii=False), flush=True)
-            continue
-        rows.append(_row(space, out, time.perf_counter() - t0, angle=float(angle)))
-        print("  " + json.dumps(rows[-1], ensure_ascii=False), flush=True)
-    return rows
-
-
 def measure_case5(
     angles: Sequence[float],
     *,
@@ -1346,7 +1276,7 @@ def measure_case5(
     settings: Optional[Sequence[dict]] = None,
     with_case1: bool = True,
 ) -> list[dict]:
-    """**案1 と案5 を同じ材料の総体積で比べる。** README の比較表と既定値の実測を作る。
+    """**案1 と案5 を同じ材料の総体積で比べる。** docs/TOPOPT.md の比較表と既定値の実測を作る。
 
     `volfrac` では比べられない —— 分率は動かせる要素に対する量なので、塊の大きさが違う案1と
     案5を同じ分率で回すと**別の材料量の結果を並べただけ**になる。`material_mm3` を揃える。
@@ -1471,7 +1401,7 @@ def _cli() -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description="4条件から塊(設計空間)を導出する(案1/案5)")
-    parser.add_argument("--measure", action="store_true", help="README の表を作る実測を回す")
+    parser.add_argument("--measure", action="store_true", help="docs/TOPOPT.md の表を作る実測を回す")
     parser.add_argument(
         "--compare",
         action="store_true",
@@ -1493,12 +1423,6 @@ def _cli() -> int:
     parser.add_argument("--volfrac", type=float, default=0.3)
     parser.add_argument("--margin-ratio", type=float, default=DEFAULT_MARGIN_RATIO)
     parser.add_argument("--angles", type=float, nargs="*", default=[0.0, 30.0, 45.0])
-    parser.add_argument(
-        "--ratios",
-        type=float,
-        nargs="*",
-        default=[-0.02, 0.0, 0.05, 0.10, 0.25, 0.40, 0.50],
-    )
     parser.add_argument(
         "--material-mm3",
         type=float,
@@ -1576,23 +1500,6 @@ def _cli() -> int:
         max_iter=args.max_iter,
         volfrac=args.volfrac,
     )
-    print("[余白比率 / 相対体積制約(volfrac 固定)]", flush=True)
-    payload["margin"] = measure_margin(
-        args.ratios,
-        spacing=args.spacing,
-        max_iter=args.max_iter,
-        volfrac=args.volfrac,
-    )
-    if args.material_mm3:
-        print("[余白比率 / 絶対体積制約(材料の総体積を固定)]", flush=True)
-        payload["material_mm3"] = args.material_mm3
-        payload["margin_absolute"] = measure_margin(
-            args.ratios,
-            spacing=args.spacing,
-            max_iter=args.max_iter,
-            volfrac=args.volfrac,
-            material_mm3=args.material_mm3,
-        )
     text = json.dumps(payload, ensure_ascii=False, default=float, indent=2)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")

@@ -10,7 +10,7 @@
 (受入検査の一様な棒・片持ち梁)でも同じ口で動く必要があるため。費用は60反復に対して1回。
 
 無次元と実単位: `simp` は `E=1.0` / 総荷重 1.0 / 要素サイズ 1 の無次元で解く。
-換算は後処理側の責任で、`UnitScale` が持つ(README「応力の実単位への換算則」)。
+換算は後処理側の責任で、`UnitScale` が持つ(docs/TOPOPT.md「応力の実単位への換算則」)。
 """
 
 from __future__ import annotations
@@ -20,10 +20,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-import simp
+from . import simp
 
 # 代表応力の既定の規則。**素の max ではない。** 階段状境界の角にある1要素は離散化の産物で、
-# そこで安全率が決まると解像度を上げるほど安全率が下がり続ける(README の実測表)。
+# そこで安全率が決まると解像度を上げるほど安全率が下がり続ける(docs/TOPOPT.md の実測表)。
 DEFAULT_RHO_MIN = 0.5
 DEFAULT_PERCENTILE = 99.5
 
@@ -222,7 +222,7 @@ def representative_stress(
 ) -> RepresentativeStress:
     """代表応力 = 「ρ >= rho_min の要素」の von Mises の上位パーセンタイル。
 
-    **素の max を使わない。** 規則は2段で、どちらも実測に裏がある(README の表):
+    **素の max を使わない。** 規則は2段で、どちらも実測に裏がある(docs/TOPOPT.md の表):
 
     1. ρ が低い要素を落とす —— そこの応力は物理的に意味が薄いうえ、実測では
        全要素の max が代表値の 13〜40倍まで跳ね、解像度を上げるほど大きくなる。

@@ -4,7 +4,7 @@
 
 **このファイルが合否そのものである。** どれか1つでも落ちればプロセスは非ゼロで終わる。
 題材の大きさは `bench.SAFETY_LOOP`(bracket = `demo_conditions` だけ)が正 ——
-**単調性そのものの実測(4題材・10点)は `check_*.py` ではなく README にある**。ここは
+**単調性そのものの実測(4題材・10点)は `check_*.py` ではなく docs/TOPOPT.md にある**。ここは
 配線が壊れていないことだけを高速に見る回帰検査で、単調性は3点だけの粗いスポット確認に留める。
 
 検査の構成:
@@ -14,7 +14,7 @@
 1. **`keep_model` が2層(`anchor.run_pipeline` / `design_space.run_topopt`)に通っている** ——
    `0143` が名指しで残した配線。
 2. **単調性のスポット確認**(3点) — 材料量を増やすと最小安全率が下がらないこと
-   (フル4題材・10点の実測は README)。
+   (フル4題材・10点の実測は docs/TOPOPT.md)。
 3. **入口が動く(端から端まで)** — 安全率を入力に、目標以上を満たす最小の材料量が返る。
 4. **達成不能なら例外**(どちら側にどれだけ足りないか名指し) —
    `material_max_mm3` まで使っても届かない場合 / 探索の境界そのものが導出できない場合。
@@ -34,10 +34,12 @@ for _stream in (sys.stdout, sys.stderr):
 
 import dataclasses
 
-import bench
-import design_space as ds
-import safety_loop as sl
-import simp
+import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from duocad.topopt import OUTPUT_DIR
+from duocad.topopt import bench
+from duocad.topopt import design_space as ds
+from duocad.topopt import safety_loop as sl
+from duocad.topopt import simp
 
 FAILURES: list[str] = []
 
@@ -92,7 +94,7 @@ def check_keep_model_wiring() -> None:
     # **`stl_path` を明示する。** 既定(`output/design_space_case1.stl`)は
     # `check_design_space.py` [5] 自身の成果物なので、そこへ書くとこの検査を走らせるたびに
     # 他の検査の成果物を上書きしてしまう。
-    scratch = bench.__file__.replace("bench.py", "output/check_safety_loop_keep_model.stl")
+    scratch = OUTPUT_DIR / "check_safety_loop_keep_model.stl"
 
     out_false = ds.run_topopt(space, volfrac=0.3, max_iter=3, keep_model=False, stl_path=scratch)
     check(
@@ -112,12 +114,12 @@ def check_keep_model_wiring() -> None:
         "rho が一致",
     )
 
-    import anchor as an
+    from duocad.topopt import anchor as an
 
     # **`stl_path` を明示する。** 既定(`output/bracket.stl`)は `check_anchor.py` 自身の
     # 標準実行の成果物なので、そこへ書くとこの検査を走らせるたびに他の検査の成果物を
     # 上書きしてしまう(`.gitignore` の「安全率の外側ループ」節参照)。
-    scratch = bench.__file__.replace("bench.py", "output/check_safety_loop_keep_model.stl")
+    scratch = OUTPUT_DIR / "check_safety_loop_keep_model.stl"
     demo_out_false = an.run_pipeline(
         elements_long_axis=12, max_iter=3, keep_model=False, stl_path=scratch
     )
@@ -137,7 +139,7 @@ def check_keep_model_wiring() -> None:
 
 
 def check_monotonic_spotcheck() -> None:
-    print("\n[2] 単調性のスポット確認(3点。フルの実測はREADME)")
+    print("\n[2] 単調性のスポット確認(3点。フルの実測はdocs/TOPOPT.md)")
     cond, capacity, _solid = _bracket_capacity()
     fracs = (0.20, 0.45, 0.70)
     safety_factors = []
@@ -171,7 +173,7 @@ def check_entry_point() -> tuple[ds.Conditions, float, float]:
     material_min = capacity * 0.15
     material_max = capacity * 0.75
     # 実測(bracket, この解像度)で 15%-75% の区間はおよそ sf 2200 - 6490 に対応する
-    # (README「単調性を測る」)。中間の 5500 は境界に寄らない値として選んである。
+    # (docs/TOPOPT.md「単調性を測る」)。中間の 5500 は境界に寄らない値として選んである。
     target = 5500.0
     result = sl.solve_for_safety_factor(
         cond,

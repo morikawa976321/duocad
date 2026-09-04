@@ -40,15 +40,17 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-import anchor as an
-import bench
-import design_space as ds
-import simp
+import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from duocad.topopt import OUTPUT_DIR
+from duocad.topopt import anchor as an
+from duocad.topopt import bench
+from duocad.topopt import design_space as ds
+from duocad.topopt import simp
 
 FAILURES: list[str] = []
 
 # 実経路の検査が書き出す STL。**受入検査の成果物ではない**ので .gitignore にある。
-STL_TMP = "output/filter_radius_tmp.stl"
+STL_TMP = OUTPUT_DIR / "filter_radius_tmp.stl"
 
 
 def check(name: str, ok: bool, detail: str) -> None:

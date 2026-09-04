@@ -6,10 +6,10 @@
 **応力制約トポロジー最適化(応力を制約に入れて最軽量を解く型)は採らない**(理由4点は同ノート)。
 ここにあるのは「最適化を外から何度か回して材料量を決めるループ」だけ。
 
-塊の扱い(README「塊が材料量に追従する」参照): **各段で塊を導出し直す(案a)を選んだ**。
+塊の扱い(docs/TOPOPT.md「塊が材料量に追従する」参照): **各段で塊を導出し直す(案a)を選んだ**。
 `design_space.derive_default(conditions, coarse_material_mm3=material, ...)` を二分探索の
 候補材料量そのままで毎回呼ぶ —— 塊と材料量が常に噛み合う。固定して使い回す案(c)と比べて
-安全率・材料量ともに実測でよく一致したが(README表)、(a) は塊が段ごとに変わるため厳密には
+安全率・材料量ともに実測でよく一致したが(docs/TOPOPT.md表)、(a) は塊が段ごとに変わるため厳密には
 「材料が増えたから安全率が上がったのか、塊が変わったからなのか」を切り分けられない。
 コスト差は実測で無視できる大きさだったので、切り分けを諦めてでも塊と材料量を噛み合わせる
 (a) を既定にした。
@@ -22,9 +22,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
-import design_space as ds
-import simp
-import stress
+from . import design_space as ds
+from . import simp
+from . import stress
 
 _HERE = Path(__file__).resolve().parent
 
@@ -60,7 +60,7 @@ DEFAULT_ALLOWABLE_MPA = PETG_YIELD_MPA * PRINT_DERATE  # 40.0
 # 名目値(PETG のヤング率はおよそ1.5〜2.1GPa)を既定にしてある。安全率の結果には影響しない。
 DEFAULT_YOUNGS_MODULUS_MPA = 2000.0
 
-# 二分探索の既定値。根拠は README「収束条件と回数上限をどう決めたか」。
+# 二分探索の既定値。根拠は docs/TOPOPT.md「収束条件と回数上限をどう決めたか」。
 DEFAULT_REL_TOL = 0.02  # 材料量の相対幅(区間の [lo, hi] が (hi-lo)/hi <= 2% で収束と見なす)
 DEFAULT_MAX_EVALUATIONS = 15  # 境界2回 + 二分探索の反復上限(2%まで詰めるのに必要な約6回に余裕)
 DEFAULT_MAX_ITER = 40  # 各段の SIMP 反復数。anchor.run_pipeline の既定と揃えた
@@ -115,7 +115,7 @@ class SafetyLoopStep:
 @dataclass(frozen=True, eq=False)
 class SafetyLoopResult:
     """安全率入力ループの答え。**材料量は「目標以上を満たす最小」**(ちょうどではない。
-    README「探索の目標は『ちょうど』ではなく『以上で最小』」参照)。
+    docs/TOPOPT.md「探索の目標は『ちょうど』ではなく『以上で最小』」参照)。
     """
 
     material_mm3: float
@@ -237,8 +237,8 @@ def solve_for_safety_factor(
     """**安全率を入力に取る入口。** 目標安全率を満たす材料量で最適化した結果を返す。
 
     `[material_min_mm3, material_max_mm3]` の中で、**目標安全率以上を満たす最小の材料量**を
-    二分探索する(「ちょうど」ではない。README「探索の目標」参照)。**単調性
-    (材料量を増やすと最小安全率が上がる)を前提にする** —— README「単調性を測る」で
+    二分探索する(「ちょうど」ではない。docs/TOPOPT.md「探索の目標」参照)。**単調性
+    (材料量を増やすと最小安全率が上がる)を前提にする** —— docs/TOPOPT.md「単調性を測る」で
     4題材について実測して確かめてあるが、**理論的な保証ではない**。任意の `conditions` で
     単調とは限らないので、疑わしい形では `derivation_kwargs` を揃えて自分で数点測ること。
 
@@ -373,7 +373,7 @@ def solve_for_safety_factor(
             else:
                 lo = mid
         elif outcome_mid == "too_little":
-            lo = mid  # 材料不足の一種として扱う(README「② 依存してはいけないもの」参照)
+            lo = mid  # 材料不足の一種として扱う(docs/TOPOPT.md「② 依存してはいけないもの」参照)
         else:  # "too_much"
             hi = mid  # この材料量とその上はこの導出戦略では判定できない
 

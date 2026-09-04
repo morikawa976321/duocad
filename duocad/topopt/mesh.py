@@ -16,11 +16,11 @@
 5. **STL書き出し** — 自前のバイナリSTLライタ(依存追加なし)。
 
 `faces` の巻き順は3の直後に**外向き規約**(`(v1-v0)x(v2-v0)` が外向き法線)へ揃える。
-以後この配列を受け取る側 — STL書き出し・ブラウザ描画(`server.py` → three.js) — は
+以後この配列を受け取る側 — STL書き出し・ブラウザ描画(`probe_topopt/server.py` → three.js) — は
 どちらも入れ替えを行わない。
 
 新規依存は `scikit-image`(marching cubes)だけ。インストールコマンドは
-`probe_topopt/README.md` を参照。
+`docs/TOPOPT.md` の「ファイル」節を参照。
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ DEFAULT_LEVEL = 0.5
 DEFAULT_LAMBDA = 0.5
 DEFAULT_MU = -0.53
 DEFAULT_ITERS = 30
-DEFAULT_SPACING = (1.0, 1.0, 1.0)  # [mm]。1要素=1mmという既存の描画規約(web/index.html の
+DEFAULT_SPACING = (1.0, 1.0, 1.0)  # [mm]。1要素=1mmという既存の描画規約(probe_topopt/web/index.html の
 # BoxGeometry(1,1,1))に合わせた。probe_topoptに他の物理スケールの定義は無い。
 DEFAULT_PAD = 1
 
@@ -92,7 +92,7 @@ def run_marching_cubes(
     """`rho_padded`(連続値・パッド済み)から (verts, faces, interpolation_ratios) を返す。
 
     座標は「パディングしていない元の格子」の**セル中心規約**に戻す。`rho[ex]` は要素 `ex` の
-    **中心**の値であり(`web/index.html` のボクセル描画も `ex+0.5-nelx/2` でこの規約に
+    **中心**の値であり(`probe_topopt/web/index.html` のボクセル描画も `ex+0.5-nelx/2` でこの規約に
     合わせている)、パッド済み配列の添字 `i` は元の添字 `ex = i - pad_width` に対応する。
     `marching_cubes` は添字 `i` をそのまま `i*spacing` の位置とみなして頂点を置くので、
     それを中心規約の座標 `(ex+0.5)*spacing = (i-pad_width+0.5)*spacing` へ戻すには
@@ -113,7 +113,7 @@ def run_marching_cubes(
     入れ替えて**生成側で**規約に合わせ、以後 `faces` を受け取る側は全て外向きを
     前提にしてよいことにする。**書き出し直前で直してはいけない** — 2026-08-30の対策が
     それで、消費者がSTLだけのうちは正しかったが、`faces` を直接ブラウザへ送る経路
-    (`server.py` → three.js の `computeVertexNormals`)が増えた時点で、そちらが
+    (`probe_topopt/server.py` → three.js の `computeVertexNormals`)が増えた時点で、そちらが
     内向き法線のまま残った(2026-09-02発見。engine
     `winding-fix-at-export-only-leaks-to-other-consumers`)。`check_mesh.py` の検査9が
     これを機械で見張る。

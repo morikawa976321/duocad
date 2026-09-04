@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-import simp
+from . import simp
 
 # 片持ち梁プリセット。定義は `simp.PRESET`(上記の理由で移していない)。
 PRESET: dict = simp.PRESET
@@ -39,7 +39,7 @@ TAIL_WINDOW = 10
 SYMMETRY_DIRECT: dict = {"nelx": 12, "nely": 6, "nelz": 6, "max_iter": 20}
 
 # `check_anchor.py` [7] 端から端まで。合成ブラケットの長辺の要素数。
-# **粗くしすぎると面アンカーが空になる面が増えて検査の意味が変わる**(README「面が空になる面数」)。
+# **粗くしすぎると面アンカーが空になる面が増えて検査の意味が変わる**(docs/TOPOPT.md「面が空になる面数」)。
 ANCHOR_END_TO_END: dict = {"elements_long_axis": 16, "max_iter": 40}
 # **反復数を 24 まで落とすと終盤10反復の変動が 2.12% になり、[7] の1%を割る**(2026-09-04実測)。
 
@@ -131,12 +131,12 @@ DESIGN_SPACE_FOUR_CASES: dict = {
 # `check_filter_radius.py` チェッカーボード実測用の格子。**プリセット(`simp.PRESET`)と
 # 同じ 20x8x8・volfrac 0.3** —— 別の格子を使うと「1.5要素という下限」がこの格子固有の話に
 # 見えてしまう。反復数は20(60は要らない —— チェッカーボードが出るか出ないかは早い反復で
-# 決まる。3点(下限より下・既定・上)を通しても20反復なら合計5〜6秒。README「1.5要素という
+# 決まる。3点(下限より下・既定・上)を通しても20反復なら合計5〜6秒。docs/TOPOPT.md「1.5要素という
 # 下限の根拠」参照)。
 FILTER_RADIUS_CHECKERBOARD: dict = {"nelx": 20, "nely": 8, "nelz": 8, "max_iter": 20, "volfrac": 0.3}
 
 # `check_safety_loop.py` が使う題材の大きさ。**bracket(`demo_conditions`)だけ使う** ——
-# 単調性そのものの実測(4題材・10点)は `safety_loop.py` の README節にあり、この検査は
+# 単調性そのものの実測(4題材・10点)は `safety_loop.py` の docs/TOPOPT.md節にあり、この検査は
 # 配線が壊れていないこと(回帰)だけを見る。`derive_from_coarse_run` の引数と同じ名前で持つ。
 # `elements_long_axis`(14)/`coarse_elements_long_axis`(12)/`coarse_max_iter`(6)/
 # `dilate_mm`(8.0)は `DESIGN_SPACE_COARSE` と同じ値(同じ題材・同じ帯なので流用できる)。
