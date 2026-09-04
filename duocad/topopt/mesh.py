@@ -304,7 +304,9 @@ def write_stl(path: str | Path, verts: np.ndarray, faces: np.ndarray) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as f:
-        f.write(b"probe_topopt: marching cubes + Taubin smoothing".ljust(80, b"\0")[:80])
+        # 80バイトのヘッダは利用者のスライサーまで届く。**"solid" で始めないこと**
+        # (ASCII STL と誤判定される)。
+        f.write(b"duocad topopt: marching cubes + Taubin smoothing".ljust(80, b"\0")[:80])
         f.write(struct.pack("<I", len(faces)))
         f.write(records.tobytes())
 

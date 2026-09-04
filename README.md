@@ -522,7 +522,7 @@ duocad/
                          net/ はアプリ層との接点（ws.py=WebSocket／http.py=静的配信と/mcp／
                          tools_on_loop.py）。server.py はその入口で、再輸出と起動の番人だけ
                          agent/ はアプリ内AIエージェント（プロバイダ＋ループ・UIなし）
-  tests/                 701件。README.md はモジュール単位のAPI契約リファレンス
+  tests/                 809件。README.md はモジュール単位のAPI契約リファレンス
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
     scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。共有部品は

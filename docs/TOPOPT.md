@@ -402,8 +402,11 @@ x 最小面、荷重面=荷重側パッドの上面)。**要素サイズは固�
 塊は「その量の材料がどこへ行きたいか」で決まるべきで、粗い段だけ別の量で解くと別の形の周りを
 膨らませることになる。
 
-    .\.venv\Scripts\python.exe -m duocad.topopt.design_space --compare --angles 0 30 \
-        --spacing 3.635 --max-iter 60 --material-mm3 107616 --thresholds 0.3 --dilations 12 0
+**当時の測り方**(2026-09-04。`design_space.py --compare`。角度 0/30、要素サイズ 3.635mm、
+本番60反復、材料 107,616 mm³、閾値 0.3、膨張 12mm と 0mm)。**この CLI は 2026-09-05 に
+削除した** —— 済んだ調査のコードは残さず、結果と判断だけを残す方針による(engine
+`keep-the-finding-not-the-code-that-found-it`)。撮り直すなら `design_space.derive` /
+`derive_from_coarse_run` を直に呼ぶ短い script を書く。
 
 要素サイズ固定 3.635mm / 本番60反復 / 案5の既定(粗い段は長辺14要素・20反復、閾値 0.3、膨張 12mm)
 
@@ -2308,7 +2311,7 @@ venvを作り直したときはこのコマンドで復元する)。
 | `duocad/topopt/voxelize.py` | **B-repソリッド → 規則格子**(占有マスク・保持/障害物領域)。`duocad.kernel.tessellate` の三角形へ +z のレイを飛ばして巻き数で内外を決める。CLIとしても動く(`python -m duocad.topopt.voxelize --step <path> --n 100`) |
 | `duocad/topopt/anchor.py` | **CADの面 → 格子の節点の対応表(面アンカー)**。担当面積つき。固定/荷重/非設計領域の口と、端から端まで通す `run_pipeline`。CLIとしても動く(`python -m duocad.topopt.anchor --table-only --n 32`) |
 | `duocad/topopt/stress.py` | **密度場と変位 → 要素ごとの von Mises 応力・代表応力・最小安全率**(後処理)。無次元 → 実単位の換算則(`UnitScale`)を持つ。**最適化には手を入れない**(応力制約の定式化は採らない。engine `safety-factor-goes-outside-the-optimizer`) |
-| `duocad/topopt/design_space.py` | **4条件(保持ソリッド・除外ソリッド・拘束面・荷重面) → 塊(設計空間)**。案1(`derive`)=条件の点群の外接直方体+余白から除外ソリッドを引く / 案5(`derive_from_coarse_run`)=粗い格子で1回 SIMP を回し、出た材料を膨らませる。**どちらも塊の中で拘束と荷重がひと続きかを6近傍で確かめてから返す**(`DesignSpaceDisconnectedError`)。**既定は案5**(2026-09-04〜。入口は `derive_default`)。CLIとしても動く(`python -m duocad.topopt.design_space --measure` で姿勢依存の表、`--compare --material-mm3 <量>` で案1対案5の表を作り直す) |
+| `duocad/topopt/design_space.py` | **4条件(保持ソリッド・除外ソリッド・拘束面・荷重面) → 塊(設計空間)**。案1(`derive`)=条件の点群の外接直方体+余白から除外ソリッドを引く / 案5(`derive_from_coarse_run`)=粗い格子で1回 SIMP を回し、出た材料を膨らませる。**どちらも塊の中で拘束と荷重がひと続きかを6近傍で確かめてから返す**(`DesignSpaceDisconnectedError`)。**既定は案5**(2026-09-04〜。入口は `derive_default`)。CLIとしても動く(`python -m duocad.topopt.design_space` で `demo_conditions(0°)` の塊を導出して stats を出す。表を作る `--measure` / `--compare` は2026-09-05に削除した) |
 | `duocad/topopt/safety_loop.py` | **安全率を入力に、材料量(mm^3)を二分探索する外側ループ**。`solve_for_safety_factor` が入口。目標以上を満たす最小の材料量を探す。塊は案a(候補材料量ごとに `derive_default` を呼び直す)。許容応力の導出(PETG × 低減係数)を持つ。**最適化そのものには手を入れない** |
 | `duocad/topopt/__init__.py` | パッケージの入口。**サブモジュールを import しない**(`import duocad` の費用に scipy / skimage を足さないため)。`OUTPUT_DIR`(= `duocad/topopt/output/`)だけを公開する |
 | `topopt_checks/check_simp.py` | **受入検査(合否そのもの)**。SIMP側を assert する |
@@ -2742,9 +2745,9 @@ z=436.8mm / 462.9mm / 489.1mm の3断面いずれも、輪郭が連続した1〜
 & .\.venv\Scripts\python.exe -m duocad.topopt.perf --resolutions 44 --threads 1 --json duocad\topopt\output\scaling_t1.json
 & .\.venv\Scripts\python.exe -m duocad.topopt.perf --resolutions 44 --threads 14 --json duocad\topopt\output\scaling_t14.json
 
-# 姿勢依存の実測(「4条件から塊を導出する」の表を作り直す)。約13分
-& .\.venv\Scripts\python.exe -m duocad.topopt.design_space --measure --max-iter 60 --spacing 3.635 `
-    --angles 0 30 45 --material-mm3 107616
+# (姿勢依存と案1対案5の実測を回す `design_space.py --measure` / `--compare` は
+#  2026-09-05に削除した。済んだ調査のコードは残さない方針。撮り直すなら
+#  `design_space.derive` / `derive_from_coarse_run` を直に呼ぶ短い script を書く)
 ```
 
 ## 受入検査が見ているもの

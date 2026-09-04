@@ -1,6 +1,6 @@
 """4条件(保持ソリッド・除外ソリッド・拘束面・荷重面)から塊(設計空間)を導出する。
 
-    .\\.venv\\Scripts\\python.exe -m duocad.topopt.design_space --measure
+    .\\.venv\\Scripts\\python.exe -m duocad.topopt.design_space
 
 導出は2つ入っている。**既定は案5**(`derive_from_coarse_run`。2026-09-04に案1から倒した)で、
 案1(`derive`)は比較のベースラインと退避経路として残してある。**導出にこだわりのない
@@ -1233,203 +1233,12 @@ def wall_contact(space: DesignSpace, out: dict, threshold: float = 0.5) -> int:
     return int(np.count_nonzero(filled & neighbour_outside))
 
 
-# ---------------------------------------------------------------------------
-# 実測(docs/TOPOPT.md の表を作る)
-# ---------------------------------------------------------------------------
-def measure_rotation(
-    angles: Sequence[float],
-    *,
-    margin_ratio: float = DEFAULT_MARGIN_RATIO,
-    spacing: float,
-    max_iter: int,
-    volfrac: float,
-) -> list[dict]:
-    """姿勢依存。同じ部品を世界軸に対して回したときの塊の要素数・所要時間・材料の総体積。
-
-    **要素サイズは固定する。** `elements_long_axis` を固定すると回転で最長辺が変わって解像度まで
-    動き、「回したから増えた」のか「細かくなったから増えた」のか分けられなくなる。
-    """
-    rows = []
-    for angle in angles:
-        space = derive(
-            demo_conditions(angle), margin_ratio=margin_ratio, spacing=spacing
-        )
-        t0 = time.perf_counter()
-        out = run_topopt(
-            space,
-            volfrac=volfrac,
-            max_iter=max_iter,
-            stl_path=_HERE / "output" / f"design_space_rot{int(round(angle))}.stl",
-        )
-        rows.append(_row(space, out, time.perf_counter() - t0, angle=float(angle)))
-        print("  " + json.dumps(rows[-1], ensure_ascii=False), flush=True)
-    return rows
-
-
-def measure_case5(
-    angles: Sequence[float],
-    *,
-    spacing: float,
-    max_iter: int,
-    material_mm3: float,
-    margin_ratio: float = DEFAULT_MARGIN_RATIO,
-    settings: Optional[Sequence[dict]] = None,
-    with_case1: bool = True,
-) -> list[dict]:
-    """**案1 と案5 を同じ材料の総体積で比べる。** docs/TOPOPT.md の比較表と既定値の実測を作る。
-
-    `volfrac` では比べられない —— 分率は動かせる要素に対する量なので、塊の大きさが違う案1と
-    案5を同じ分率で回すと**別の材料量の結果を並べただけ**になる。`material_mm3` を揃える。
-
-    **粗い段の体積目標にも同じ絶対量を渡す。** 塊は「その量の材料がどこへ行きたいか」で
-    決まるべきで、粗い段だけ別の量で解くと別の形の周りを膨らませることになる。
-
-    `settings` は案5の設定の並び(`{"threshold":..., "dilate_mm":...,
-    "coarse_elements_long_axis":..., "coarse_max_iter":...}` の dict。省略した鍵は既定値)。
-    落ちた設定は理由ごと表に残す —— **案5が負ける・壊れる可能性を潰さない。**
-    """
-    rows: list[dict] = []
-    if settings is None:
-        settings = [{"dilate_mm": COARSE_DILATE_MM}, {"dilate_mm": 0.0}]
-    for angle in angles:
-        conditions = demo_conditions(angle)
-        tag = f"a{int(round(angle))}"
-        plan: list[tuple[str, Optional[dict]]] = [("case1", None)] if with_case1 else []
-        for cfg in settings:
-            cfg = dict(cfg)
-            name = (
-                f"case5_t{cfg.get('threshold', COARSE_THRESHOLD):g}"
-                f"_d{cfg.get('dilate_mm', COARSE_DILATE_MM):g}"
-                f"_n{cfg.get('coarse_elements_long_axis', COARSE_ELEMENTS_LONG_AXIS)}"
-                f"_i{cfg.get('coarse_max_iter', COARSE_MAX_ITER)}"
-            )
-            plan.append((name, cfg))
-        for label, cfg in plan:
-            t_derive = time.perf_counter()
-            try:
-                if cfg is None:
-                    space = derive(conditions, margin_ratio=margin_ratio, spacing=spacing)
-                else:
-                    space = derive_from_coarse_run(
-                        conditions,
-                        margin_ratio=margin_ratio,
-                        spacing=spacing,
-                        coarse_material_mm3=material_mm3,
-                        coarse_stl_path=_HERE / "output" / f"design_space_coarse_{tag}.stl",
-                        **cfg,
-                    )
-            except (vx.OutsideDesignSpaceError, ValueError) as exc:
-                rows.append(
-                    {
-                        "derivation": label,
-                        "angle_deg": float(angle),
-                        "seconds_derive": round(time.perf_counter() - t_derive, 2),
-                        "error": type(exc).__name__,
-                        "message": str(exc)[:200],
-                    }
-                )
-                print("  " + json.dumps(rows[-1], ensure_ascii=False), flush=True)
-                continue
-            t0 = time.perf_counter()
-            try:
-                out = run_topopt(
-                    space,
-                    material_mm3=material_mm3,
-                    max_iter=max_iter,
-                    stl_path=_HERE / "output" / f"design_space_{label}_{tag}.stl",
-                )
-            except Exception as exc:  # noqa: BLE001 —— 端に置いた目標は VolumeTargetError を出す
-                rows.append(
-                    {
-                        "derivation": label,
-                        "angle_deg": float(angle),
-                        "design_elements": space.element_count,
-                        "seconds_derive": round(float(space.stats["seconds"]), 2),
-                        "error": type(exc).__name__,
-                        "message": str(exc)[:200],
-                    }
-                )
-                print("  " + json.dumps(rows[-1], ensure_ascii=False), flush=True)
-                continue
-            row = _row(space, out, time.perf_counter() - t0, angle=float(angle))
-            row["derivation"] = label
-            rows.append(row)
-            print("  " + json.dumps(rows[-1], ensure_ascii=False), flush=True)
-    return rows
-
-
-def _row(space: DesignSpace, out: dict, seconds: float, *, angle: float) -> dict:
-    """表の1行。**体積は mm^3 の絶対量でも出す** —— 要素数が変わると相対体積は比べられない。
-
-    秒数は3つに割る: `seconds_coarse`(案5の粗い段。案1は `None`)/ `seconds_run`(本番の
-    端から端まで)/ `seconds_total`(**導出の全部 + 本番**。案5の粗い段はここに入っている)。
-    """
-    ev = space.grid.element_volume
-    coarse = space.stats.get("coarse") or {}
-    return {
-        "angle_deg": angle,
-        "derivation": space.stats.get("derivation", "bbox_margin"),
-        "seconds_derive": round(float(space.stats.get("seconds", 0.0)), 2),
-        "seconds_coarse": (round(float(coarse["seconds"]), 2) if coarse else None),
-        "seconds_run": round(seconds, 2),
-        "seconds_total": round(float(space.stats.get("seconds", 0.0)) + seconds, 2),
-        "case1_elements": space.stats.get("case1_elements"),
-        "threshold": space.stats.get("threshold"),
-        "dilate_mm": space.stats.get("dilate_mm"),
-        "margin_ratio": space.margin_ratio,
-        "margin_mm": round(space.margin, 4),
-        "spacing_mm": round(float(space.grid.spacing), 5),
-        "grid": list(space.grid.shape),
-        "design_elements": space.element_count,
-        "free_elements": int(out["free_elements"]),
-        "solid_elements": int(out["solid_elements"]),
-        "seconds_optimize": round(float(out["timings"]["optimize"]), 2),
-        "iterations": int(out["iterations"]),
-        "target_volume_elements": round(float(out["target_volume"]), 2),
-        "material_mm3": round(float(out["achieved_volume"]) * ev, 1),
-        "design_volume_mm3": round(space.element_count * ev, 1),
-        "wall_contact": wall_contact(space, out),
-        # **壁への接触は「材料比」で見る**(塊比は塊を広げると分母が膨らむぶん勝手に下がる)。
-        # 分母は最適化が置いた材料の要素数(ρ>0.5)。表の括弧を手で計算し直さないための列。
-        "filled_elements": int(np.count_nonzero(np.asarray(out["result"].rho) > 0.5)),
-        "volfrac": round(float(out["target_volfrac"]), 5),
-        "compliance_last": round(float(out["compliance_last"]), 4),
-    }
-
-
 def _cli() -> int:
     import argparse
 
     parser = argparse.ArgumentParser(description="4条件から塊(設計空間)を導出する(案1/案5)")
-    parser.add_argument("--measure", action="store_true", help="docs/TOPOPT.md の表を作る実測を回す")
-    parser.add_argument(
-        "--compare",
-        action="store_true",
-        help="案1と案5を同じ材料の総体積で比べる(--material-mm3 が要る)",
-    )
-    parser.add_argument("--thresholds", type=float, nargs="*", default=[COARSE_THRESHOLD])
-    parser.add_argument("--dilations", type=float, nargs="*", default=[COARSE_DILATE_MM, 0.0])
-    parser.add_argument("--coarse-n", type=int, nargs="*", default=[COARSE_ELEMENTS_LONG_AXIS])
-    parser.add_argument("--coarse-iter", type=int, nargs="*", default=[COARSE_MAX_ITER])
-    parser.add_argument("--no-case1", action="store_true", help="比較から案1の行を外す")
-    parser.add_argument("--elements-long-axis", type=int, default=28)
-    parser.add_argument(
-        "--spacing",
-        type=float,
-        default=3.635,
-        help="実測で固定する要素サイズ[mm](既定は 0°/余白0.25 を長辺26要素で切ったときの値)",
-    )
-    parser.add_argument("--max-iter", type=int, default=60)
-    parser.add_argument("--volfrac", type=float, default=0.3)
     parser.add_argument("--margin-ratio", type=float, default=DEFAULT_MARGIN_RATIO)
-    parser.add_argument("--angles", type=float, nargs="*", default=[0.0, 30.0, 45.0])
-    parser.add_argument(
-        "--material-mm3",
-        type=float,
-        default=0.0,
-        help="余白の表を絶対体積制約でも取る(材料の総体積[mm^3]を固定する)。0で取らない",
-    )
-    parser.add_argument("--out", type=str, default=None, help="実測をJSONで書き出す先")
+    parser.add_argument("--elements-long-axis", type=int, default=28)
     args = parser.parse_args()
 
     for _stream in (sys.stdout, sys.stderr):
@@ -1438,72 +1247,12 @@ def _cli() -> int:
         except (AttributeError, ValueError):
             pass
 
-    if args.compare:
-        if not args.material_mm3:
-            print("--compare には --material-mm3 が要る(分率で比べると比較が無意味になる)")
-            return 2
-        settings = [
-            {
-                "threshold": float(t),
-                "dilate_mm": float(d),
-                "coarse_elements_long_axis": int(n),
-                "coarse_max_iter": int(i),
-            }
-            for n in args.coarse_n
-            for i in args.coarse_iter
-            for t in args.thresholds
-            for d in args.dilations
-        ]
-        payload = {
-            "spacing_mm": args.spacing,
-            "max_iter": args.max_iter,
-            "margin_ratio": args.margin_ratio,
-            "material_mm3": args.material_mm3,
-            "settings": settings,
-        }
-        print("[案1 対 案5(材料の総体積を固定)]", flush=True)
-        payload["compare"] = measure_case5(
-            args.angles,
-            spacing=args.spacing,
-            max_iter=args.max_iter,
-            material_mm3=args.material_mm3,
-            margin_ratio=args.margin_ratio,
-            settings=settings,
-            with_case1=not args.no_case1,
-        )
-        text = json.dumps(payload, ensure_ascii=False, default=float, indent=2)
-        if args.out:
-            Path(args.out).write_text(text, encoding="utf-8")
-        print(text)
-        return 0
-
-    if not args.measure:
-        space = derive(
-            demo_conditions(0.0),
-            margin_ratio=args.margin_ratio,
-            elements_long_axis=args.elements_long_axis,
-        )
-        print(json.dumps(space.stats, ensure_ascii=False, default=float, indent=2))
-        return 0
-
-    payload = {
-        "spacing_mm": args.spacing,
-        "max_iter": args.max_iter,
-        "volfrac": args.volfrac,
-        "margin_ratio": args.margin_ratio,
-    }
-    print("[姿勢依存]", flush=True)
-    payload["rotation"] = measure_rotation(
-        args.angles,
+    space = derive(
+        demo_conditions(0.0),
         margin_ratio=args.margin_ratio,
-        spacing=args.spacing,
-        max_iter=args.max_iter,
-        volfrac=args.volfrac,
+        elements_long_axis=args.elements_long_axis,
     )
-    text = json.dumps(payload, ensure_ascii=False, default=float, indent=2)
-    if args.out:
-        Path(args.out).write_text(text, encoding="utf-8")
-    print(text)
+    print(json.dumps(space.stats, ensure_ascii=False, default=float, indent=2))
     return 0
 
 
