@@ -56,39 +56,46 @@ export function refKind(ref: SelectionRef): SelectableKind {
   return 'entity' in ref ? 'sketch_entity' : 'region'
 }
 
-/** 2つの参照が同じ実体を指すか(`provenance` は見ない。コアの `same_ref` と同じ)。 */
-export function sameRef(left: SelectionRef, right: SelectionRef): boolean {
-  const kind = refKind(left)
-  if (kind !== refKind(right)) return false
-  if (kind === 'region') {
-    const a = left as { sketch: string; index: number }
-    const b = right as { sketch: string; index: number }
-    return a.sketch === b.sketch && a.index === b.index
-  }
-  if (kind === 'sketch_entity') {
-    const a = left as SketchEntityRef
-    const b = right as SketchEntityRef
-    // **点と辺は別物**(同じ図形の (x0,y0) と「図形全体」を混同しない)
-    return a.sketch === b.sketch && a.entity === b.entity && a.point === b.point
-  }
-  const a = left as ShapeRef
-  const b = right as ShapeRef
-  return a.body === b.body && a.kind === b.kind && a.index === b.index
-}
-
-/** 一覧の `{#each}` キー・DOMの `data-` 属性に使う一意な文字列。 */
+/**
+ * 参照の**同一性の鍵**(コアの `selection.ref_key` と同じ規則)。等しい鍵 ⇔ 同じ実体。
+ *
+ * **等価判定を書き下ろす場所はここ1つだけ**にしてある(`sameRef` はこの一致で定義される)。
+ * 鍵と同値判定を別々に書くと「Set が落とす重複と `sameRef` が言う重複がずれる」が
+ * 静かに入る —— コア側の `ref_key` と同じ理由。`Set`/`Map` の引き当てに使うので**文字列**。
+ *
+ * | 種別 | 鍵 |
+ * |---|---|
+ * | region | `region:<sketch>:<index>` |
+ * | sketch_entity | `sketch_entity:<sketch>:<entity>:<point>` |
+ * | body | `body:<body>` —— **添字を見ない**(Bodyは他のBodyの部分形状ではない) |
+ * | face / edge / vertex | `<kind>:<body>:<index>` |
+ *
+ * `provenance` は鍵に入れない(コアの `same_ref` が見ていない)。
+ * **点は `p` を付けて書く** —— 素で並べると `point: null`(図形全体)と、仮に空文字の点名が
+ * 来たときが同じ鍵になる。第1要素が種別なので、種別が違えば必ず別の鍵になる。
+ */
 export function refKey(ref: SelectionRef): string {
   const kind = refKind(ref)
   if (kind === 'sketch_entity') {
     const item = ref as SketchEntityRef
-    return `sketch_entity:${item.sketch}:${item.entity}:${item.point ?? ''}`
+    // **点と辺は別物**(同じ図形の (x0,y0) と「図形全体」を混同しない)
+    const point = item.point ?? null
+    return `sketch_entity:${item.sketch}:${item.entity}:${point === null ? '' : `p${point}`}`
   }
   if (kind === 'region') {
     const item = ref as { sketch: string; index: number }
     return `region:${item.sketch}:${item.index}`
   }
   const item = ref as ShapeRef
+  // **Bodyそのものは添字を持たない**。`index` を鍵に混ぜると、`index` が付いた参照と
+  // 付いていない参照が別物になる(コアの `ref_key` と同じ扱い)。
+  if (kind === 'body') return `body:${item.body}`
   return `${item.kind}:${item.body}:${item.index}`
+}
+
+/** 2つの参照が同じ実体を指すか(`provenance` は見ない。コアの `same_ref` と同じ)。 */
+export function sameRef(left: SelectionRef, right: SelectionRef): boolean {
+  return refKey(left) === refKey(right)
 }
 
 /** 面の参照を作る(ビューポートのピック結果から)。添字は1始まり。 */

@@ -20,6 +20,7 @@
   import {
     COMMANDS,
     faceRef,
+    refKey,
     refKind,
     sameRef,
     sketchEntityRef,
@@ -967,6 +968,10 @@
    *
    * **1回の `modify_selection` にまとめる**。参照ごとに送ると、20個囲んだドラッグが
    * 20往復になり、途中の状態が全部画面へ配信される。
+   *
+   * **突き合わせは `refKey` の `Set` で行う**(2026-09-04。総当たりのM×Nをやめた)。
+   * 画面全体を囲むドラッグ(実測2835面)を、既に大きく選んだ状態の上へ重ねたときだけ
+   * 効く経路なので、選択を空にして測ると表に出ない。
    */
   function onBoxSelect(event: BoxSelectEvent): void {
     const picked: SelectionRef[] = [
@@ -977,9 +982,10 @@
       ...event.sketchEntities.map((item) => sketchEntityRef(item.sketchId, item.entityId, item.point)),
     ]
     const current = selection?.items ?? []
+    const currentKeys = new Set(current.map(refKey))
     if (event.mode === 'toggle') {
-      const already = picked.filter((ref) => current.some((item) => sameRef(item, ref)))
-      const fresh = picked.filter((ref) => !current.some((item) => sameRef(item, ref)))
+      const already = picked.filter((ref) => currentKeys.has(refKey(ref)))
+      const fresh = picked.filter((ref) => !currentKeys.has(refKey(ref)))
       modifySelection(fresh, already)
       return
     }
@@ -987,9 +993,10 @@
       if (current.length > 0) session.clearSelection(nextOp())
       return
     }
+    const pickedKeys = new Set(picked.map(refKey))
     modifySelection(
       picked,
-      current.filter((item) => !picked.some((ref) => sameRef(item, ref))),
+      current.filter((item) => !pickedKeys.has(refKey(item))),
     )
   }
 
@@ -1009,9 +1016,11 @@
   /** `selectOnly` の複数版 —— 選択集合を `refs` そのものに置き換える。 */
   function presetSelection(refs: SelectionRef[]): void {
     const current = selection?.items ?? []
+    // `onBoxSelect` と同じ理由で `Set` 引き(保持/除外ソリッドは数百件になりうる)。
+    const refKeys = new Set(refs.map(refKey))
     modifySelection(
       refs,
-      current.filter((item) => !refs.some((ref) => sameRef(item, ref))),
+      current.filter((item) => !refKeys.has(refKey(item))),
     )
   }
 

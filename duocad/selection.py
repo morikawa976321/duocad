@@ -236,6 +236,9 @@ def modify_selection(
     - **既に入っている参照を再度 add しても、位置は動かさない**。同じものをもう一度
       クリックしただけで並びが変わると、`fillet` の辺リストと半径リストの対応もずれる。
 
+    等価判定は `ref_key`(= `same_ref` の実体)で行い、**集合引き**で重複を落とす ——
+    件数に対して線形。総当たりだと画面全体を囲むドラッグ(実測2835面)でここだけ約0.8秒かかる。
+
     失敗の契約は `propose_selection` と同じ —— **不正な参照は落ちて、選択を変更しない**。
     """
     add_list = list(add)
@@ -246,15 +249,17 @@ def modify_selection(
 
     selection = get_selection(doc)
     items = list(selection.items)
+    # 既存の鍵を先に集める。**追加した分もその場で足す**ので、`add` の中の重複も落ちる
+    # (総当たりのときに `items` が伸びながら比較されていたのと同じ挙動)。
+    seen = {ref_key(existing) for existing in items}
     for ref in coerced_add:
-        if not any(same_ref(existing, ref) for existing in items):
-            items.append(ref)
+        key = ref_key(ref)
+        if key not in seen:
+            seen.add(key)
+            items.append(ref)  # **末尾に足すだけ**なので既存の並びは1件も動かない
     if coerced_remove:
-        items = [
-            existing
-            for existing in items
-            if not any(same_ref(existing, ref) for ref in coerced_remove)
-        ]
+        dropped = {ref_key(ref) for ref in coerced_remove}
+        items = [existing for existing in items if ref_key(existing) not in dropped]
 
     selection.items = items
     selection.origin = ORIGIN_USER
@@ -679,33 +684,54 @@ def select_sketch_entity(
     }
 
 
+def ref_key(ref: dict) -> tuple:
+    """参照の**同一性の鍵**。等しい鍵 ⇔ 同じ実体を指す(`same_ref` はこれで定義される)。
+
+    **等価判定を書き下ろす場所はここ1つだけ**にしてある。`same_ref` を別に書くと
+    「重複が残る / 別物を同一視する」が静かに入る(`same_ref` のdocstringと同じ趣旨)。
+    ハッシュ可能なタプルなので、`modify_selection` は集合引きで重複を落とせる
+    (2026-09-04。総当たりのM^2をやめた)。
+
+    | 種別 | 鍵 |
+    |---|---|
+    | region | `("region", sketch, int(index))` |
+    | sketch_entity | `("sketch_entity", sketch, entity, point)` |
+    | body | `("body", body)` —— **添字を見ない** |
+    | face / edge / vertex | `(kind, body, int(index))` |
+
+    落とせない点:
+
+    - **`provenance` は鍵に入れない**(同じ実体を由来違いで二重に持たないため)。
+    - **`int(index)` に正規化する** —— 文字列の `"3"` と `3` は同じ実体。
+    - **`point` は `.get("point")`** —— キーの欠落と `None` を同じものへ畳む。
+      **点と辺は別物**(同じ図形の (x0,y0) と「図形全体」を混同しない)。
+    - **種別は第1要素だけが持つ**。face/edge/vertex では第1要素が `ref["kind"]` そのもの
+      なので、`ref["kind"]` を別の要素として重ねて置かない —— 重ねると「種別を鍵から抜く」
+      変異がもう一方に吸収され、**この要素が効いていることを検査で示せなくなる**。
+
+    形が参照でなければ `ref_kind` と同じ ValueError。
+    """
+    kind = ref_kind(ref)
+    if kind == REGION_KIND:
+        return (REGION_KIND, ref["sketch"], int(ref["index"]))
+    if kind == SKETCH_ENTITY_KIND:
+        return (SKETCH_ENTITY_KIND, ref["sketch"], ref["entity"], ref.get("point"))
+    if kind == BODY_KIND:
+        # **添字を鍵に入れない**(Bodyの参照は `index` を持たない)。
+        return (BODY_KIND, ref["body"])
+    return (kind, ref["body"], int(ref["index"]))
+
+
 def same_ref(left: dict, right: dict) -> bool:
     """2つの参照が同じ実体を指すか(`provenance` は見ない)。
 
     重複除去と `remove` の両方がこの1つの判定を使う。別々に書くと「addでは重複扱いなのに
     removeでは別物」という非対称が静かに入る。種別が違えば別物。
+
+    **判定の実体は `ref_key`** —— 鍵と同値判定を別々に書き下ろすと、集合引きで落ちる重複と
+    この関数が言う重複がずれる(2026-09-04)。
     """
-    left_kind = ref_kind(left)
-    right_kind = ref_kind(right)
-    if left_kind != right_kind:
-        return False
-    if left_kind == REGION_KIND:
-        return left["sketch"] == right["sketch"] and int(left["index"]) == int(right["index"])
-    if left_kind == SKETCH_ENTITY_KIND:
-        return (
-            left["sketch"] == right["sketch"]
-            and left["entity"] == right["entity"]
-            # **点と辺は別物**(同じ図形の (x0,y0) と「図形全体」を混同しない)
-            and left.get("point") == right.get("point")
-        )
-    if left_kind == BODY_KIND:
-        # **添字で比べない**(Bodyの参照は `index` を持たない)。
-        return left["body"] == right["body"]
-    return (
-        left["body"] == right["body"]
-        and left["kind"] == right["kind"]
-        and int(left["index"]) == int(right["index"])
-    )
+    return ref_key(left) == ref_key(right)
 
 
 # --------------------------------------------------------------------------------------
