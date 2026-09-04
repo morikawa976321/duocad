@@ -243,9 +243,13 @@ def modify_selection(
     """
     add_list = list(add)
     remove_list = list(remove)
-    # 全参照を検査してから書き換える(途中で落ちると選択が壊れる)
-    coerced_add = _coerce_refs(doc, add_list)
-    coerced_remove = _coerce_refs(doc, remove_list)
+    # 全参照を検査してから書き換える(途中で落ちると選択が壊れる)。
+    # `bodies`/`counts` を add/remove の両呼び出しで共有し、同じ (body_id, kind) を
+    # この1回の modify_selection の中で2回数えない(2026-09-04)。
+    bodies: dict = {}
+    counts: dict = {}
+    coerced_add = _coerce_refs(doc, add_list, bodies=bodies, counts=counts)
+    coerced_remove = _coerce_refs(doc, remove_list, bodies=bodies, counts=counts)
 
     selection = get_selection(doc)
     items = list(selection.items)
@@ -771,7 +775,13 @@ def _coerce_ref(doc: Document, ref: dict) -> dict:
     return select_vertex(doc, body_id, index)
 
 
-def _coerce_refs(doc: Document, refs: Sequence[dict]) -> List[dict]:
+def _coerce_refs(
+    doc: Document,
+    refs: Sequence[dict],
+    *,
+    bodies: Optional[dict] = None,
+    counts: Optional[dict] = None,
+) -> List[dict]:
     """`_coerce_ref` を複数件まとめて処理する版(2026-09-04)。
 
     面・辺・頂点への参照は `select_face`/`select_edge`/`select_vertex` を経由すると、
@@ -786,15 +796,24 @@ def _coerce_refs(doc: Document, refs: Sequence[dict]) -> List[dict]:
     `select_edge` / `select_vertex` / `_shape_ref` が組み立てるのと同じ形をここでも
     そのまま組み立てているだけなので、数える回数を減らしても結果は等価になる。
 
+    `bodies`/`counts` は**呼び出し元と共有できるように引数で受ける**(2026-09-04)。
+    `modify_selection` は `add`/`remove` の2回この関数を呼ぶが、同じ文書に対する
+    1回の呼び出しの中で同じ `(body_id, kind)` を2回数えないよう、呼び出し元が
+    1つの辞書を両方の呼び出しへ渡す。省略時(`None`)は呼び出し1回限りの空辞書を
+    自分で作る(単発呼び出しの `propose_selection` はこちらでよい)。
+
     `kernel.py` にはキャッシュを持たない(寿命の受け皿が無い上、`_face_map` の戻り値は
-    可変の `TopTools_IndexedMapOfShape` で17箇所が共有すると壊れる) —— この関数のスコープ
-    (1回の呼び出し)の中だけで数え済みの値を持ち回す。
+    可変の `TopTools_IndexedMapOfShape` で17箇所が共有すると壊れる) —— キャッシュの
+    寿命は常に**呼び出し元が明示的に持ち回る辞書**の寿命(=1回の `modify_selection`/
+    `propose_selection` 呼び出し)に閉じる。
 
     region / sketch_entity / body 種別・壊れた参照は数え上げの重複が無い経路なので、
     `_coerce_ref` 単発へそのまま流す。
     """
-    bodies: dict = {}
-    counts: dict = {}
+    if bodies is None:
+        bodies = {}
+    if counts is None:
+        counts = {}
     out: List[dict] = []
     for ref in refs:
         if (

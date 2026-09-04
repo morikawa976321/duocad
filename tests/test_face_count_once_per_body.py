@@ -12,10 +12,19 @@
 既存テストでは**検出できない**(実装時の変異検査で実際に確認した — キャッシュ鍵から
 `body_id` を落としても既存799件は全緑のまま通った)。ここでは意図的に面数・辺数が異なる
 形状(箱6面12辺 / 円柱3面)を混ぜ、そのクラスの回帰を検出できるようにする。
+
+**`bodies`/`counts` を `modify_selection` の `add`/`remove` 間で共有する(2026-09-04、
+QA指摘)**: `modify_selection` 内部では `_coerce_refs` が add 用・remove 用の2回呼ばれる。
+最初の実装は呼び出しごとに新しい辞書を作っていたため、`add` と `remove` に同じボディの
+面/辺参照が混ざると1回の `modify_selection` 呼び出しの中で最大2回数えていた ——
+完了条件1「1回の `modify_selection`/`propose_selection` で、同じボディの面数・辺数を
+2回以上数えない」の文言に対する実質的なギャップだった(括弧内の受入例が `add` のみの
+経路だったため既存テストでは見えていなかった)。`_coerce_refs` に `bodies`/`counts` を
+外から渡せる引数を足し、`modify_selection` がその2回の呼び出しへ同じ辞書を渡す形で埋めた。
 """
 from __future__ import annotations
 
-from typing import Callable, List
+from typing import List
 
 import pytest
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
@@ -86,11 +95,16 @@ def test_edge_count_is_looked_up_once_per_body_not_per_ref(
     assert edge_calls[0] == 1  # 箱1体ぶんだけ(12回なら参照1件ごとに数えている)
 
 
-def test_face_count_lookup_is_not_shared_across_add_and_remove(
+def test_separate_modify_selection_calls_each_recount(
     two_shapes: Document, monkeypatch: pytest.MonkeyPatch
 ):
-    """`add` と `remove` を同時に渡しても(それぞれ `_coerce_refs` を1回呼ぶ)、
-    合計の数え上げ回数はボディ数の定数倍で頭打ちになる(件数に比例しない)。"""
+    """`add` 用・`remove` 用に**別々の** `modify_selection` 呼び出しを行う場合
+    (1回の呼び出しに `add` と `remove` を同時に渡す場合とは別のシナリオ ——
+    そちらは `test_add_and_remove_in_the_same_call_share_the_count_cache` が見る)。
+
+    キャッシュの寿命は「1回の `modify_selection` 呼び出し」に閉じる契約なので、
+    呼び出しをまたいで使い回されないのは仕様どおり。各呼び出しにつき箱1体ぶん
+    (1回)を数え直す。"""
     face_calls = _count_kernel_calls(monkeypatch, "face_count")
     add_refs = [{"body": "box", "kind": "face", "index": i + 1} for i in range(6)]
     selection.modify_selection(two_shapes, add=add_refs)
@@ -99,7 +113,27 @@ def test_face_count_lookup_is_not_shared_across_add_and_remove(
     remove_refs = [{"body": "box", "kind": "face", "index": i + 1} for i in range(3)]
     selection.modify_selection(two_shapes, remove=remove_refs)
 
-    assert face_calls[0] <= 1  # add実行済みなのでremove側も高々1回
+    assert face_calls[0] == 1  # 呼び出しが別なので独立に1回数え直す(0にはならない)
+
+
+def test_add_and_remove_in_the_same_call_share_the_count_cache(
+    two_shapes: Document, monkeypatch: pytest.MonkeyPatch
+):
+    """完了条件1「1回の `modify_selection`/`propose_selection` で、同じボディの
+    面数・辺数を2回以上数えない」の `add`+`remove` 同時指定版(2026-09-04、QA指摘)。
+
+    `modify_selection(add=, remove=)` の内部では `_coerce_refs` が `add` 用・
+    `remove` 用の2回呼ばれるが、**この1回の `modify_selection` 呼び出しの中**では
+    同じ `(body_id, kind)` を2回数えてはいけない —— `bodies`/`counts` を2回の
+    `_coerce_refs` 呼び出しで共有することで満たす。"""
+    face_calls = _count_kernel_calls(monkeypatch, "face_count")
+    add_refs = [{"body": "box", "kind": "face", "index": i + 1} for i in range(6)]
+    remove_refs = [{"body": "box", "kind": "face", "index": 1}]
+
+    result = selection.modify_selection(two_shapes, add=add_refs, remove=remove_refs)
+
+    assert [item["index"] for item in result.items] == [2, 3, 4, 5, 6]
+    assert face_calls[0] == 1  # add・removeを合わせてもこの呼び出し中は1回だけ
 
 
 # --------------------------------------------------------------------------------------
