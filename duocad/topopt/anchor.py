@@ -990,7 +990,11 @@ def run_pipeline(
     timings["optimize"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    surface = mesh.build_surface(result.rho)
+    # `solid` / `void` はここで `simp.optimize` へ渡したのと同じマスク(保持ソリッド+
+    # アンカー材料 / 設計空間の外∪除外)。密度場側のガウシアン平滑化(段0)がこれらを
+    # にじませるので、平滑化の後に同じマスクで塗り直す(`mesh.build_surface` の
+    # docstring・`docs/TOPOPT.md`「密度場側のガウシアン平滑化」)。
+    surface = mesh.build_surface(result.rho, keep_mask=solid, zero_mask=void)
     timings["mesh"] = time.perf_counter() - t0
 
     out = Path(stl_path) if stl_path is not None else _HERE / "output" / "bracket.stl"

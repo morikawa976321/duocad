@@ -2,8 +2,23 @@
 
 パイプライン(この順序で。段を飛ばさない):
 
+0. **ガウシアン平滑化+塗り直し**(2026-09-05追加) — 密度場の**コピー**を
+   `scipy.ndimage.gaussian_filter` で均し、保持マスク(`keep_mask`)を渡されていれば
+   ρ=1へ、除外・設計空間外マスク(`zero_mask`)を渡されていればρ=0へ塗り直す。
+   marching cubesの**前**に密度場側でうねりを消すのがこの段の目的 — Taubin(メッシュ側の
+   低域通過)は中周波(k≈0.25〜0.5)の除去効率が悪く、marching cubes出力に残ったうねりを
+   目立たせたまま反復数を増やしても取り切れない(伝達関数の実測。詳細は
+   `docs/TOPOPT.md`「密度場側のガウシアン平滑化」)。ぼかすと保持・除外・設計空間の外が
+   すべてにじむので、ぼかした**後**に塗り直す — `docs/TOPOPT.md`「パッシブ要素は密度フィルタ
+   の後で上書きする」(設計変数フィルタのにじみ対策)と同型の問題への、同じ手当て。
+   マスクを渡さなければ塗り直しはしない(`mesh.py`のCLIと`check_mesh.py`は片持ち梁の
+   密度場を直接渡すので保持・除外の概念自体を持たない)。
 1. **浮島の除去** — 二値化した場で `scipy.ndimage.label` を取り、最大連結成分だけを残す。
    連続場のほうを直接ゼロで塗り、後段(marching cubes)には二値化していない連続値を渡す。
+   **段0の出力(平滑化+塗り直し後の場)に対して行う** — 塗り直しで保持ソリッドが
+   本体から浮いた孤立領域になっていたら、ここで拾われずに消える(2026-09-05時点では
+   保持ソリッドは通常、荷重伝達のため本体と連結しているはずという前提。孤立浮島に
+   なる保持の扱いは別タスク)。
 2. **ゼロの縁を1層足す** — 材料が設計空間の端に接しているとメッシュが開き、水密でない
    (=スライサに通らない)STLになる。
 3. **marching cubes** — `skimage.measure.marching_cubes` に連続値の密度場を渡す。
@@ -12,12 +27,18 @@
    「補間で面の位置が要素サイズより細かく決まる」ことにあるので、ここを間違えると
    marching cubesを使う意味が消える。`check_mesh.py` の検査5がこれを機械で見張る。
 4. **Taubin平滑化** — 自前実装(scipyの疎行列でラプラシアンを1度作るだけ)。
-   `pyvista` / `vtk` / `pymeshlab` は使わない。
+   `pyvista` / `vtk` / `pymeshlab` は使わない。段0が中周波のうねりを密度場側で
+   ほぼ消しているので、ここでの反復数は「格子ファセット(marching cubesの階段状の
+   高周波成分)を取る」だけで足りる(下記 `DEFAULT_ITERS` 参照)。
 5. **STL書き出し** — 自前のバイナリSTLライタ(依存追加なし)。
 
 `faces` の巻き順は3の直後に**外向き規約**(`(v1-v0)x(v2-v0)` が外向き法線)へ揃える。
 以後この配列を受け取る側 — STL書き出し・ブラウザ描画(`probe_topopt/server.py` → three.js) — は
 どちらも入れ替えを行わない。
+
+**応力・安全率は段0より前(平滑化していない密度場)の上で計算されている。** 出力する形状
+(平滑化後)と評価した形状(平滑化前)は厳密には一致しない — σ=1要素程度なら差は小さいはずだが、
+測ってはいないので「小さい」とは言い切らない(利用者への留保は `docs/TOPOPT.md` 参照)。
 
 新規依存は `scikit-image`(marching cubes)だけ。インストールコマンドは
 `docs/TOPOPT.md` の「ファイル」節を参照。
@@ -44,10 +65,55 @@ _ROOT = Path(__file__).resolve().parent
 DEFAULT_LEVEL = 0.5
 DEFAULT_LAMBDA = 0.5
 DEFAULT_MU = -0.53
-DEFAULT_ITERS = 30
+# 2026-09-05: 30 → 12(密度場側のガウシアン平滑化(下記 DEFAULT_SMOOTH_SIGMA)が中周波の
+# うねりを引き受けたので、Taubin側は格子ファセット(k≥1)を取るだけで足りる。
+# k≥1 の伝達関数 (1-λk)(1-μk)=0.765 の12乗で 0.765^12 ≈ 4.0% まで落ちる)。
+# **これ自体は未検証の決め打ち値** — 2026-09-05に本人判断で、探索・比較をせずに
+# そのまま採用した。実測の根拠は無い(下の DEFAULT_SMOOTH_SIGMA と同じ扱い)。
+DEFAULT_ITERS = 12
 DEFAULT_SPACING = (1.0, 1.0, 1.0)  # [mm]。1要素=1mmという既存の描画規約(probe_topopt/web/index.html の
 # BoxGeometry(1,1,1))に合わせた。probe_topoptに他の物理スケールの定義は無い。
 DEFAULT_PAD = 1
+# 密度場ガウシアン平滑化のσ[要素]。**2026-09-05に本人判断で未検証のまま決め打ちした値。
+# 実測の根拠は無い**(このモジュールの他の既定値 — λ/μ/level — はいずれも実測か伝達関数の
+# 計算で裏付けがあるが、σとTaubin反復数(上のDEFAULT_ITERS)の2つだけはこの原則の例外。
+# 探索・比較表は作らない、というのが本人の明示指示 — `docs/TOPOPT.md` 参照)。
+DEFAULT_SMOOTH_SIGMA = 1.0
+
+
+# ---------------------------------------------------------------------------
+# 0. ガウシアン平滑化 + 保持/除外の塗り直し
+# ---------------------------------------------------------------------------
+def smooth_density(
+    rho: np.ndarray,
+    *,
+    sigma: float | None = DEFAULT_SMOOTH_SIGMA,
+    keep_mask: np.ndarray | None = None,
+    zero_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """密度場の**コピー**をガウシアンで均し、保持・除外/設計空間外を塗り直す。
+
+    `rho` は書き換えない — `Result.rho` を平滑化の入力にそのまま渡しても、
+    このコピーだけが変わる(応力・安全率・体積の評価は呼び出し側が別に持つ
+    `rho` の上でそのまま行われる。段を跨いで書き換えると出力用の場の上で
+    評価が行われることになる)。
+
+    `sigma` が真値(0でない)なら `scipy.ndimage.gaussian_filter` を1回掛ける。
+    `keep_mask` を渡せばその要素をρ=1へ、`zero_mask` を渡せばその要素をρ=0へ、
+    **平滑化の後に**塗り直す(にじみの向きは保持→材料が増える側、除外→減る側で
+    非対称なので、順序が逆だと塗り直しの意味が無い)。どちらも渡さなければ
+    塗り直しはしない。両方に含まれる要素があれば `keep_mask` が勝つ(塗り直しの
+    適用順で決まる — `keep_mask` を先に書くと後の `zero_mask` が上書きしてしまうので、
+    実装は `zero_mask` を先に適用し `keep_mask` を後に適用する)。
+    """
+    field = np.array(rho, dtype=np.float64, copy=True)
+    if sigma:
+        field = ndimage.gaussian_filter(field, sigma=sigma)
+    if zero_mask is not None:
+        field[np.asarray(zero_mask, dtype=bool)] = 0.0
+    if keep_mask is not None:
+        field[np.asarray(keep_mask, dtype=bool)] = 1.0
+    return field
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +395,7 @@ class MeshResult:
     mu: float
     n_iter: int
     interpolation_ratios: np.ndarray
+    smooth_sigma: float  # 段0で実際に使ったσ(0.0なら平滑化なし)。診断・検査用。
 
 
 def build_surface(
@@ -340,10 +407,22 @@ def build_surface(
     mu: float = DEFAULT_MU,
     n_iter: int = DEFAULT_ITERS,
     pad_width: int = DEFAULT_PAD,
+    smooth_sigma: float | None = DEFAULT_SMOOTH_SIGMA,
+    keep_mask: np.ndarray | None = None,
+    zero_mask: np.ndarray | None = None,
 ) -> MeshResult:
-    """密度場から「浮島除去→パディング→marching cubes→Taubin平滑化」までを一度に行う。"""
+    """密度場から「ガウシアン平滑化+塗り直し→浮島除去→パディング→marching cubes→
+    Taubin平滑化」までを一度に行う(モジュールdocstringの段0〜4)。
+
+    `smooth_sigma` は既定で有効(`DEFAULT_SMOOTH_SIGMA`)。0 か None を渡すと段0の
+    ガウシアンを切れる。`keep_mask` / `zero_mask` は `rho` と同じ形の bool 配列
+    (保持ソリッド / 除外ソリッド・設計空間の外)。渡さなければ塗り直しはしない
+    — 呼び出し側(`mesh.py` CLI・`check_mesh.py`)が保持・除外の概念を持たない
+    片持ち梁の密度場を直接渡す経路がそれに当たる。
+    """
     t0 = time.perf_counter()
-    rho_clean = remove_islands(rho, threshold=level)
+    rho_smoothed = smooth_density(rho, sigma=smooth_sigma, keep_mask=keep_mask, zero_mask=zero_mask)
+    rho_clean = remove_islands(rho_smoothed, threshold=level)
     padded = pad_field(rho_clean, width=pad_width)
     verts_raw, faces, interpolation_ratios = run_marching_cubes(
         padded, level=level, spacing=spacing, pad_width=pad_width
@@ -364,6 +443,7 @@ def build_surface(
         mu=mu,
         n_iter=n_iter,
         interpolation_ratios=interpolation_ratios,
+        smooth_sigma=float(smooth_sigma or 0.0),
     )
 
 
@@ -375,6 +455,12 @@ def _cli() -> int:
     parser.add_argument("--lam", type=float, default=DEFAULT_LAMBDA)
     parser.add_argument("--mu", type=float, default=DEFAULT_MU)
     parser.add_argument("--iters", type=int, default=DEFAULT_ITERS)
+    parser.add_argument(
+        "--smooth-sigma",
+        type=float,
+        default=DEFAULT_SMOOTH_SIGMA,
+        help="密度場ガウシアン平滑化のσ[要素]。0で段0を切る(未検証の決め打ち既定 — モジュールdocstring参照)",
+    )
     parser.add_argument("--out", default=str(_ROOT / "output" / "optimized.stl"))
     args = parser.parse_args()
 
@@ -388,7 +474,14 @@ def _cli() -> int:
     simp_seconds = time.perf_counter() - t0
     print(f"  完了: {len(result.history)}反復 / {simp_seconds:.1f}秒")
 
-    mr = build_surface(result.rho, level=args.level, lam=args.lam, mu=args.mu, n_iter=args.iters)
+    mr = build_surface(
+        result.rho,
+        level=args.level,
+        lam=args.lam,
+        mu=args.mu,
+        n_iter=args.iters,
+        smooth_sigma=args.smooth_sigma,
+    )
     write_stl(args.out, mr.verts_smooth, mr.faces)
     out_path = Path(args.out)
     size_kb = out_path.stat().st_size / 1024.0
