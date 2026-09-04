@@ -1236,54 +1236,20 @@ async function main() {
     }
 
     /**
-     * スライダーを**本物のキー操作で** `target` まで動かす(range の step は 1 なので
-     * 矢印キー1回が1度)。値を直接代入しないのは、`oninput` を経由しない代入では
-     * 「スライダーを動かすとその場で効く」が検証にならないため。
+     * 画角を `value` にする。**UIを経由せず内部API(`window.__duocad.setFov`)を直呼び**
+     * する(2026-09-04本人決定でUIが正投影/透視30度の2値になったため、30〜90の連続値は
+     * もうUIから到達できない —— ここで検査しているのはビューポートの責務(距離補正・
+     * `frameAll`・正投影の性質)であってUIの責務ではないので、経路をAPIへ移すだけで
+     * 検査の中身は変えない)。`window.__duocad.fov` が変わるまで待つのは今と同じ。
      */
-    async function dragFovTo(target) {
-      await setSettingsOpen(true)
-      await page.focus('#settings-fov')
-      for (let guard = 0; guard < 100; guard += 1) {
-        const now = await page.$eval('#settings-fov', (element) => Number(element.value))
-        if (now === target) break
-        const step = now < target ? 'ArrowRight' : 'ArrowLeft'
-        for (let i = 0; i < Math.min(Math.abs(target - now), 10); i += 1) {
-          await page.keyboard.press(step)
-        }
-      }
+    async function setFovTo(value) {
+      await page.evaluate((deg) => window.__duocad.setFov(deg), value)
       await page.waitForFunction(
         (want) => window.__duocad.fov === want,
         { timeout: 30000, polling: 20 },
-        target,
+        value,
       )
-      const shown = await page.$eval('#settings-fov-value', (element) => element.textContent.trim())
-      await setSettingsOpen(false)
-      return shown
-    }
-
-    /** 完全正投影(0度)の入切。**スライダーとは別の口**(`#settings-ortho`)。 */
-    async function setOrtho(on) {
-      await setSettingsOpen(true)
-      const now = await page.$eval('#settings-ortho', (element) => element.checked)
-      if (now !== on) await page.click('#settings-ortho')
-      await page.waitForFunction(
-        (want) => (window.__duocad.fov === 0) === want,
-        { timeout: 30000, polling: 20 },
-        on,
-      )
-      const shown = await page.$eval('#settings-fov-value', (element) => element.textContent.trim())
-      await setSettingsOpen(false)
-      return shown
-    }
-
-    /**
-     * 画角を `value` にする。**0は正投影のチェックボックス、それ以外はスライダー**。
-     * 正投影のあいだスライダーは disabled なので、角度へ戻すときは先にチェックを外す。
-     */
-    async function setFovTo(value) {
-      if (value === 0) return await setOrtho(true)
-      await setOrtho(false)
-      return await dragFovTo(value)
+      return value
     }
 
     /**
@@ -1385,7 +1351,7 @@ async function main() {
     }
 
     /**
-     * 次の描画が終わるまで待つ(2フレーム分)。`setFovTo`/`dragFovTo` は
+     * 次の描画が終わるまで待つ(2フレーム分)。`setFovTo` は
      * `window.__duocad.fov` の値が変わったことしか待たないので、その直後に
      * スクリーンショットを撮ると更新前のcanvasを拾う恐れがある(`tick`のrAFループが
      * 実際に1回まわったことを保証するため2回分待つ)。
@@ -1604,12 +1570,7 @@ async function main() {
         return previous
       }
       const orthoShown = await setFovTo(0)
-      if (orthoShown !== '0°') throw new Error(`正投影の表示が「${orthoShown}」になっている`)
-      // スライダーは正投影のあいだ効かない(押せるのに効かない口を出さない)。
-      await setSettingsOpen(true)
-      const sliderDisabled = await page.$eval('#settings-fov', (element) => element.disabled)
-      await setSettingsOpen(false)
-      if (!sliderDisabled) throw new Error('正投影なのに画角のスライダーが効いたままになっている')
+      if (orthoShown !== 0) throw new Error(`正投影のfovが${orthoShown}になっている`)
       const orthoProbe = await depthProbe(scale)
       if (orthoProbe === null) throw new Error('正投影での前後の比が測れない')
       if (Math.abs(orthoProbe.ratio - 1) > 0.01) {
@@ -1665,7 +1626,7 @@ async function main() {
       // (6) **ビューキューブがFOVに追従してひずむこと**(2026-09-04 —— 専用の正投影カメラを
       //     やめ、本編と同じ画角で描くようにしたタスクの完了条件1・6)。カメラの**向きは
       //     動かさず**(`frameAll`は最初の1回だけ)、FOVだけを変えてキューブ矩形の画素を
-      //     比べる —— スライダーを動かしている最中の実運用と同じ操作列にすることで、
+      //     比べる —— 画角を変えている最中の実運用と同じ操作列にすることで、
       //     `setFov`から明示的に通知しなくても毎フレームの`updateCubeCamera`が追随する
       //     (完了条件6)ことも一緒に確かめる。
       //
@@ -1678,7 +1639,7 @@ async function main() {
       const cubeRect = await cubeRectAbsolute()
       await waitTwoFrames()
       const cubeAt45a = await cubeShot(cubeRect)
-      // **frameAllは呼ばない** —— 向きはそのまま、FOVだけを変える(スライダーを動かしている
+      // **frameAllは呼ばない** —— 向きはそのまま、FOVだけを変える(画角を変えている
       // 最中と同じ操作。frameAllを挟むと向きも寄り引きも変わり、キューブの追従だけを見る
       // 検査にならない)。
       await setFovTo(30)
@@ -1706,6 +1667,24 @@ async function main() {
         `  OK   ビューキューブ: FOV30↔90でPNG差分 ${cubeFovDiff}バイト` +
           `(同一FOV制御群 ${cubeControlDiff}バイト)`,
       )
+
+      // (7) **2値のUIそのもの。** `#settings-fov`(スライダー)は要素ごと消えている。
+      //     `#settings-ortho` を入れると `fov===0`、外すと常に `FOV_DEFAULT`(30) に戻る
+      //     ——「戻る角度を覚える仕組み」を消した設計なので、内部APIで選べない値(70)を
+      //     入れてあっても戻り先は変わらない(2026-09-04本人決定「覚え直す仕掛けを
+      //     再発明しない」)。
+      await setFovTo(70)
+      await setSettingsOpen(true)
+      const sliderGone = await page.$('#settings-fov')
+      if (sliderGone !== null) throw new Error('スライダー(#settings-fov)がまだ存在する')
+      const orthoBefore = await page.$eval('#settings-ortho', (element) => element.checked)
+      if (orthoBefore) throw new Error('画角70(透視)なのに正投影チェックボックスが入っている')
+      await page.click('#settings-ortho')
+      await page.waitForFunction(() => window.__duocad.fov === 0, { timeout: 30000, polling: 20 })
+      await page.click('#settings-ortho')
+      await page.waitForFunction(() => window.__duocad.fov === 30, { timeout: 30000, polling: 20 })
+      await setSettingsOpen(false)
+      console.log('  OK   画角UI: スライダーは存在せず、チェックボックスの入切だけで 0 ↔ 30 が切り替わる')
 
       await setFovTo(45)
       await frameAll(page)

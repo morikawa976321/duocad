@@ -37,6 +37,6 @@ export function saveFov(deg: number): void {
   try {
     window.localStorage.setItem(FOV_KEY, String(deg))
   } catch {
-    // 書けないままでよい(次回は既定の45で起動する)。
+    // 書けないままでよい(次回は既定の30で起動する)。
   }
 }

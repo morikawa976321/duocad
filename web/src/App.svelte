@@ -78,8 +78,6 @@
   import { loadFov, saveFov } from './viewSettings'
   import {
     createViewport,
-    FOV_DEFAULT,
-    FOV_ORTHO,
     type BoxSelectEvent,
     type PickEvent,
     type SketchDraw,
@@ -339,17 +337,18 @@
    * 永続化はブラウザのlocalStorageだけ(`viewSettings.ts`)。`FOV_ORTHO`(0)は完全正投影。
    */
   let fov = $state(savedFov)
-  /**
-   * **正投影から戻る先の角度**(`FOV_MIN`〜`FOV_MAX`)。0は角度ではないので別に覚える ——
-   * これが無いと、正投影を外したときに戻る先が既定の45へ落ち、直前まで見ていた画角が失われる。
-   */
-  let fovAngle = $state(savedFov === FOV_ORTHO ? FOV_DEFAULT : savedFov)
 
-  /** 設定からの変更。**その場で効かせて、そのまま覚える**(「適用」を挟まない)。 */
+  /**
+   * 設定からの変更。**その場で効かせて、そのまま覚える**(「適用」を挟まない)。
+   *
+   * **「戻る先の角度」を覚える仕組みは持たない**(2026-09-04本人決定でUIが2値になった
+   * ことで不要になった複雑さ)。正投影を外すと常に `FOV_DEFAULT` へ戻る —— コンソールから
+   * `window.__duocad.setFov(70)` のような内部APIで選べない値を入れていても、正投影を
+   * 入切すれば `FOV_DEFAULT` へ落ちる(覚え直す仕掛けを再発明しない)。
+   */
   function applyFov(deg: number): void {
     if (!Number.isFinite(deg)) return
     fov = deg
-    if (deg !== FOV_ORTHO) fovAngle = deg
     saveFov(deg)
   }
   /**
@@ -2148,7 +2147,6 @@
       <SettingsDialog
         open={settingsOpen}
         {fov}
-        angle={fovAngle}
         onFov={applyFov}
         onClose={() => (settingsOpen = false)}
       />

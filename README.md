@@ -613,7 +613,7 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 | `web/src/{Browser,Files,Sketch,Parameters}Panel.svelte` | 各パネル（コアが持つものを描き直すだけ）。**選択パネルは無い**（選択を直すのは3Dクリックだけ） |
 | `web/src/Toast.svelte` | **エラーの札**。`showToast(message)` の1本だけを公開し、出すのは `App.svelte` の `fail()` から |
 | `web/src/AiPanel.svelte` | **AIパネル**。プロバイダ選択・対話・ツール呼び出しの進捗・中断。文書は描かない。**`#ai-collapse`(`BrowserPanel.svelte`と同じ形)で畳める** |
-| `web/src/SettingsDialog.svelte` | **設定ダイアログ**。native `<dialog>` + `showModal()`。**一度決めたら触らない設定だけ**（いまは画角と正投影）。ビューポートを覆わず暗くもしない |
+| `web/src/SettingsDialog.svelte` | **設定ダイアログ**。native `<dialog>`（非モーダル、`show()`）。**一度決めたら触らない設定だけ**（いまは正投影のチェックボックス1つ。画角は正投影/透視30度の2値で、スライダーは無い）。ビューポートを覆わず暗くもしない |
 | `web/src/viewSettings.ts` | **画面設定のlocalStorage**。入れてよいのはクライアント側だけの設定で、**文書の状態は入れない**。読み書きとも例外を投げない |
 
 ### AI側（MCP・36ツール）

@@ -844,7 +844,7 @@ const DEPTH_BIAS_LAYER = { planeGrid: 1, gridAxisLine: 2, basePlaneHover: 3, ske
  */
 export const FOV_MIN = 30
 export const FOV_MAX = 90
-export const FOV_DEFAULT = 45
+export const FOV_DEFAULT = 30
 
 /**
  * 完全正投影を表す画角(2026-08-28本人指示で追加)。**「とても小さい画角」ではない**
@@ -1024,9 +1024,18 @@ export function createViewport(container: HTMLElement): Viewport {
   // **`BASE_EXTENT` を使う**(可変の `gridExtent` ではない) —— ここは起動直後の1回きりで、
   // `gridExtent` はまだ宣言されておらず(下の平面グリッドの節より前)、その初期値は
   // 常に `BASE_EXTENT` だから同じ値になる。
+  //
+  // **距離は `fitDistance` で求める(2026-09-04訂正)。** 以前はここだけ `diagonal * 1.2`
+  // という決め打ち定数を持っていた —— `fitDistance` が無かった頃の名残で、FOV_DEFAULTが
+  // 45度だったあいだは `radius / tan(22.5°) ≈ radius * 2.4142`(半径ベースでは `diagonal
+  // * 1.2071`)とほぼ一致していたので気づかれなかった(差0.6%)。**既定を30度へ下げたら
+  // この定数は式と55%もずれ**、起動直後の空の文書やまだ内容の無いスケッチ(`lookAtSketch`
+  // が半径0で「前の距離のまま」に倒すとき)がFOV30度の想定より大きく寄って見える事故になる
+  // (`smoke-move.mjs` の辺クリックがこれで外れて実測した)。`frameToContent` と同じ式を
+  // 通すことで、FOV_DEFAULTがいくつでも起動直後の見かけの大きさが揃う。
   {
     const diagonal = Math.hypot(BASE_EXTENT * 2, BASE_EXTENT * 2, BASE_EXTENT * 2)
-    const distance = diagonal * 1.2
+    const distance = fitDistance(diagonal / 2)
     camera.position.copy(HOME_VIEW_OFFSET).multiplyScalar(distance)
   }
   scene.add(camera)
@@ -2147,10 +2156,13 @@ export function createViewport(container: HTMLElement): Viewport {
    * 半径 `radius` の球が画面に収まる、注視点からの距離。FOVとアスペクトの狭い方で決まる。
    *
    * **FOVを可変にした以上、収まる距離を定数で決め打ちできない**(2026-08-28)。
-   * 45度・アスペクト1以上では `radius / tan(22.5°) = radius * 2.4142` になる。
-   * `frameToContent` はこれを `radius = diagonal / 2` で呼ぶので `diagonal * 1.2071` となり、
-   * **以前の決め打ち定数 `diagonal * 1.2` はこの式を45度で評価して丸めた値そのもの**である
-   * (差は0.6%)。**したがって既定のFOVでの見え方は実質変わらない。**
+   * 既定の30度・アスペクト1以上では `radius / tan(15°) = radius * 3.7321` になる。
+   * `frameToContent` はこれを `radius = diagonal / 2` で呼ぶので `diagonal * 1.8660` となる。
+   * **既定を45度から30度へ下げた(2026-09-04)ことで、カメラは以前より約1.55倍遠くに
+   * 置かれる**(45度では `radius / tan(22.5°) = radius * 2.4142` で `diagonal * 1.2071`。
+   * **以前の決め打ち定数 `diagonal * 1.2` はこの式を45度で評価して丸めた値そのもの**だった
+   * が、既定FOVが変わった今は数値が一致しない。「既定のFOVでの見え方は実質変わらない」は
+   * もう成り立たない —— 30度は45度よりパースが弱く見え、そのぶんカメラは遠い。
    * 縦長のビューポート(aspect<1)では距離が伸びるが、これは以前が横方向を見ていなかった
    * 取りこぼしの修正にあたる(狭い方に合わせないと横がはみ出す)。
    *
