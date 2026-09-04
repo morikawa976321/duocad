@@ -746,7 +746,8 @@ def run_pipeline(
     shape: Any = None,
     *,
     elements_long_axis: int = 40,
-    volfrac: float = 0.3,
+    volfrac: Optional[float] = None,
+    material_mm3: Optional[float] = None,
     max_iter: int = 40,
     force: Sequence[float] = (0.0, 0.0, -1.0),
     radius_ratio: float = DEFAULT_RADIUS_RATIO,
@@ -777,7 +778,16 @@ def run_pipeline(
 
     `keep` / `obstacle`(保持ソリッド / 除外ソリッド)はどちらの経路でも同じ格子に載る。
     `design_mask` の経路では**塊からはみ出したら例外**(`vx.OutsideDesignSpaceError`)。
+
+    体積目標は `volfrac`(分率)か `material_mm3`(材料の総体積[mm^3])のどちらか一方。
+    **要素体積はここが格子から決めて `simp.optimize` へ渡す** —— 呼び出し側が
+    `mm^3 → 要素数` の換算を自分で書くと、格子の作り方が変わったときに黙ってずれる。
+    どちらの経路でも戻り値に mm^3 の実測が入る。
     """
+    import mesh
+    import simp
+
+    simp.check_volume_target(volfrac, material_mm3)
     if (fixed_face is None) != (load_face is None):
         raise ValueError("fixed_face と load_face は両方渡すか、両方省略すること")
     if shape is not None and fixed_face is None:
@@ -792,8 +802,6 @@ def run_pipeline(
             "design_mask を渡すときは面アンカーの対象(shape)も渡すこと"
             "(塊の面ではなく、拘束・荷重を指定できる面がどこから来るかを明示する)"
         )
-    import mesh
-    import simp
 
     timings: dict[str, float] = {}
     t0 = time.perf_counter()
@@ -829,6 +837,8 @@ def run_pipeline(
         ny,
         nz,
         volfrac=volfrac,
+        material_mm3=material_mm3,
+        element_volume_mm3=model.grid.element_volume,
         max_iter=max_iter,
         fixed_dofs=fixed_dofs,
         load=load,
@@ -849,7 +859,10 @@ def run_pipeline(
     design_elements = int(np.count_nonzero(model.design))
     movable = ~void & ~solid
     free_elements = int(np.count_nonzero(movable))
-    target_volume = volfrac * free_elements + float(np.count_nonzero(solid))
+    # **目標は `optimize` が実際に使った値を引く。** ここで再計算すると、絶対量で渡された
+    # ときに換算をもう一度書くことになり、片方だけ直したときに黙ってずれる。
+    target_volume = result.target_volume
+    element_volume = model.grid.element_volume
     history = result.history
     return {
         "model": model,
@@ -864,9 +877,12 @@ def run_pipeline(
         "timings": timings,
         "design_elements": design_elements,
         "free_elements": free_elements,
-        "target_volfrac": volfrac,
+        "target_volfrac": result.volfrac,
         "target_volume": target_volume,
         "achieved_volume": float(result.rho.sum()),
+        "element_volume_mm3": element_volume,
+        "target_material_mm3": target_volume * element_volume,
+        "achieved_material_mm3": float(result.rho.sum()) * element_volume,
         "solid_elements": int(np.count_nonzero(solid)),
         "void_elements": int(np.count_nonzero(void)),
         "achieved_volfrac": (

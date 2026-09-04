@@ -9,3 +9,7 @@ output/severed_*.stl
 
 # ブラウザの「最適化を実行」/ shot.mjs が回るたび上書きされる結果STL(2026-09-04)。
 output/server_conditions_demo.stl
+
+# 絶対量の受入検査(`check_absolute_volume.py` [2b])が実経路を通すたびに上書きするSTL。
+# 検査の成果物ではないのでリポジトリには入れない。
+output/absolute_volume_tmp.stl

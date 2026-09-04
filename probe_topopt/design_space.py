@@ -61,6 +61,7 @@ import numpy as np
 from scipy import ndimage
 
 import anchor as an
+import simp
 import voxelize as vx
 
 _HERE = Path(__file__).resolve().parent
@@ -538,7 +539,8 @@ def derive(
 def run_topopt(
     space: DesignSpace,
     *,
-    volfrac: float = 0.3,
+    volfrac: Optional[float] = None,
+    material_mm3: Optional[float] = None,
     max_iter: int = 60,
     force: Sequence[float] = (0.0, 0.0, -1.0),
     stl_path: Optional[str | Path] = None,
@@ -548,6 +550,11 @@ def run_topopt(
 
     `stl_path` は**必ず渡すか、既定のこの関数の出力先に任せる**。`anchor.run_pipeline` の既定は
     `output/bracket.stl` で、それは `check_anchor.py` の成果物である。
+
+    体積目標は `volfrac`(分率)か `material_mm3`(材料の総体積[mm^3])のどちらか一方
+    (両方渡すと例外)。**塊を自動で導出する経路では絶対量を使うこと** —— 余白比率や姿勢で
+    塊の大きさが変わると、同じ分率でも材料の量が変わってしまう。どちらも渡さなければ
+    `simp.DEFAULT_VOLFRAC`。
     """
     out = Path(stl_path) if stl_path is not None else _HERE / "output" / "design_space_case1.stl"
     result = an.run_pipeline(
@@ -560,6 +567,7 @@ def run_topopt(
         fixed_face=space.fixed_face,
         load_face=space.load_face,
         volfrac=volfrac,
+        material_mm3=material_mm3,
         max_iter=max_iter,
         force=force,
         stl_path=out,
@@ -724,8 +732,8 @@ def measure_margin(
 ) -> list[dict]:
     """余白比率 × (要素数, 所要, 材料の総体積, 壁に接した材料)。落ちた比率は理由ごと表に残す。
 
-    `material_mm3` を渡すと、**体積制約を絶対量に倒したとき**の比較になる(比率ごとに volfrac を
-    逆算して、出てくる材料の総体積を揃える)。相対体積のままだと塊が変わると材料の量まで変わり、
+    `material_mm3` を渡すと、**体積制約を絶対量に倒したとき**の比較になる(出てくる材料の
+    総体積が比率によらず揃う)。相対体積のままだと塊が変わると材料の量まで変わり、
     「塊の大きさで答えがどう変わるか」と「材料の量で答えがどう変わるか」が混ざる。
     """
     rows = []
@@ -758,33 +766,26 @@ def measure_margin(
             print("  " + json.dumps(rows[-1], ensure_ascii=False), flush=True)
             continue
         stl = _HERE / "output" / f"design_space_margin{ratio:g}.stl"
-        fraction = volfrac
-        if material_mm3 is not None:
-            # 固定される要素(ρ=1)と動かせる要素の数は最適化を1反復も回さずに引ける。
-            # **自分で数え直さない** —— run_pipeline の作り方(アンカー近傍の固定)を写すと、
-            # 向こうが変わったときに黙ってずれる。
-            probe = run_topopt(space, volfrac=volfrac, max_iter=0, stl_path=stl)
-            free_n = int(probe["free_elements"])
-            solid_n = int(probe["solid_elements"])
-            fraction = (material_mm3 / space.grid.element_volume - solid_n) / max(free_n, 1)
-            if not 0.0 < fraction < 1.0:
-                rows.append(
-                    {
-                        "margin_ratio": float(ratio),
-                        "design_elements": space.element_count,
-                        "error": "volfrac_out_of_range",
-                        "message": f"絶対体積 {material_mm3}mm^3 を満たす volfrac が {fraction:.4f}",
-                    }
-                )
-                print("  " + json.dumps(rows[-1], ensure_ascii=False), flush=True)
-                continue
         t0 = time.perf_counter()
-        out = run_topopt(
-            space,
-            volfrac=fraction,
-            max_iter=max_iter,
-            stl_path=stl,
-        )
+        try:
+            out = run_topopt(
+                space,
+                volfrac=None if material_mm3 is not None else volfrac,
+                material_mm3=material_mm3,
+                max_iter=max_iter,
+                stl_path=stl,
+            )
+        except simp.VolumeTargetError as exc:
+            rows.append(
+                {
+                    "margin_ratio": float(ratio),
+                    "design_elements": space.element_count,
+                    "error": type(exc).__name__,
+                    "message": str(exc)[:160],
+                }
+            )
+            print("  " + json.dumps(rows[-1], ensure_ascii=False), flush=True)
+            continue
         rows.append(_row(space, out, time.perf_counter() - t0, angle=float(angle)))
         print("  " + json.dumps(rows[-1], ensure_ascii=False), flush=True)
     return rows

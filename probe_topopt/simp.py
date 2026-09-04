@@ -16,6 +16,10 @@ import scipy.sparse.linalg as spla
 # **拘束不足の系を黙って通さないための関門**であって、精度の要求ではない。
 SOLVE_RESIDUAL_TOL = 1e-6
 
+# `volfrac` も絶対量も渡さなかったときの分率。**PRESET の volfrac とは別物**
+# (PRESET は片持ち梁の題材、こちらは `optimize` の既定値)。値は歴史的に一致している。
+DEFAULT_VOLFRAC = 0.3
+
 PRESET: dict = {
     "nelx": 40,
     "nely": 16,
@@ -363,6 +367,125 @@ class Result:
     nelz: int
     seconds: float
     stopped_by: str
+    # 実際に使った体積目標。**入力をそのまま写したものではない** —— 絶対量で渡された場合は
+    # ここに換算後の値が入る。呼び出し側が「何を目標に解いたか」を入力の再計算なしで引ける。
+    target_volume: float = float("nan")  # 要素数
+    volfrac: float = float("nan")  # 動かせる要素に対する実効分率
+    element_volume_mm3: float | None = None
+
+    @property
+    def target_material_mm3(self) -> float | None:
+        """目標の材料総体積[mm^3]。要素体積を渡していなければ None。"""
+        if self.element_volume_mm3 is None:
+            return None
+        return self.target_volume * self.element_volume_mm3
+
+    @property
+    def achieved_material_mm3(self) -> float | None:
+        """出てきた材料の総体積[mm^3]。要素体積を渡していなければ None。"""
+        if self.element_volume_mm3 is None:
+            return None
+        return float(self.rho.sum()) * self.element_volume_mm3
+
+
+class VolumeTargetError(ValueError):
+    """絶対量(mm^3)の体積目標が達成できない。
+
+    **どちら側にどれだけ足りないかを名指しするための例外。** これが無いと OC の二分探索が
+    体積と無関係な例外(`ZeroDivisionError` / 「K U = F が解けていない」)で落ちる
+    (2026-09-04実測。README「体積目標を絶対量(mm^3)で指定する」)。
+    属性 `side` は "below_minimum" か "above_capacity"。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        material_mm3: float,
+        min_mm3: float,
+        max_mm3: float,
+        shortfall_mm3: float,
+        side: str,
+        element_volume_mm3: float,
+    ) -> None:
+        super().__init__(message)
+        self.material_mm3 = material_mm3
+        self.min_mm3 = min_mm3
+        self.max_mm3 = max_mm3
+        self.shortfall_mm3 = shortfall_mm3
+        self.side = side
+        self.element_volume_mm3 = element_volume_mm3
+
+
+def check_volume_target(volfrac: float | None, material_mm3: float | None) -> None:
+    """体積目標の**引数の形**だけを検算する(格子を作る前に落とすための口)。
+
+    上位層(`anchor.run_pipeline` 等)がボクセル化の前にこれを呼ぶ。要素体積を知っている
+    層でしか見られない「達成できるか」の判定は `_resolve_volume_target` が持つ。
+    """
+    if volfrac is not None and material_mm3 is not None:
+        raise ValueError(
+            "volfrac と material_mm3 は排他(どちらか一方だけ渡すこと)。"
+            f"volfrac={volfrac!r} / material_mm3={material_mm3!r}"
+        )
+    if material_mm3 is not None and not float(material_mm3) > 0.0:
+        raise ValueError(f"material_mm3 は正の値であること(受け取った値: {material_mm3!r})")
+
+
+def _resolve_volume_target(
+    *,
+    volfrac: float | None,
+    material_mm3: float | None,
+    element_volume_mm3: float | None,
+    n_movable: int,
+    n_solid: int,
+) -> tuple[float, float]:
+    """体積目標を (実効 volfrac, 目標体積[要素数]) へ畳む。
+
+    **絶対量は「材料の総体積」** —— `solid_mask` で ρ=1 に固定された要素のぶんを含む。
+    したがって達成できるのは `[solid, solid + movable]` の区間だけ。区間の外は
+    **指定と違う量が出る**ので、ここで不足量つきの例外にする(下流の OC も落ちはするが、
+    文面に体積の話が出ない)。
+    """
+    if material_mm3 is None:
+        fraction = DEFAULT_VOLFRAC if volfrac is None else float(volfrac)
+        return fraction, fraction * n_movable + float(n_solid)
+
+    ev = float(element_volume_mm3)  # type: ignore[arg-type]
+    target = float(material_mm3) / ev
+    lo, hi = float(n_solid), float(n_solid + n_movable)
+    # 端ちょうどの指定が丸めで区間の外へ出るのを許す(1要素の1e-9倍の幅)。
+    tol = 1e-9 * max(1.0, hi)
+    if target < lo - tol:
+        shortfall = lo * ev - float(material_mm3)
+        raise VolumeTargetError(
+            f"体積目標 {float(material_mm3):.6g}mm^3 は達成できない: "
+            f"solid_mask で材料に固定された {n_solid} 要素だけで {lo * ev:.6g}mm^3 あり、"
+            f"目標が {shortfall:.6g}mm^3 下回っている"
+            "(solid_mask を減らすか、目標を上げること)",
+            material_mm3=float(material_mm3),
+            min_mm3=lo * ev,
+            max_mm3=hi * ev,
+            shortfall_mm3=shortfall,
+            side="below_minimum",
+            element_volume_mm3=ev,
+        )
+    if target > hi + tol:
+        shortfall = float(material_mm3) - hi * ev
+        raise VolumeTargetError(
+            f"体積目標 {float(material_mm3):.6g}mm^3 は達成できない: "
+            f"動かせる {n_movable} 要素と固定材料 {n_solid} 要素を全部埋めても "
+            f"{hi * ev:.6g}mm^3 で、目標が {shortfall:.6g}mm^3 超えている"
+            "(塊を広げるか、目標を下げること)",
+            material_mm3=float(material_mm3),
+            min_mm3=lo * ev,
+            max_mm3=hi * ev,
+            shortfall_mm3=shortfall,
+            side="above_capacity",
+            element_volume_mm3=ev,
+        )
+    target = min(max(target, lo), hi)
+    return (target - lo) / n_movable, target
 
 
 def optimize(
@@ -370,7 +493,9 @@ def optimize(
     nely: int,
     nelz: int,
     *,
-    volfrac: float = 0.3,
+    volfrac: float | None = None,
+    material_mm3: float | None = None,
+    element_volume_mm3: float | None = None,
     penal: float = 3.0,
     rmin: float = 1.5,
     max_iter: int = 60,
@@ -397,7 +522,29 @@ def optimize(
     体積制約は動かせる要素だけに掛ける(目標体積 = volfrac × 自由要素数 + 固定ρ=1 要素数)。
     そうしないと、設計空間の外の空要素を「もう十分軽い」と数えて、
     設計空間の中がほとんど埋まったまま止まる。
+
+    体積目標は2通りで渡せる。**`volfrac` と `material_mm3` は排他**(両方渡すと例外):
+
+    - `volfrac` —— 動かせる要素に対する分率。塊の大きさが変われば材料の量も変わる。
+    - `material_mm3` + `element_volume_mm3` —— **材料の総体積を mm^3 の絶対量で**指定する
+      (`solid_mask` のぶんを含む)。`optimize` は格子の寸法を知らないので、要素1つの体積
+      `element_volume_mm3` を一緒に渡す(呼び出し側は `voxelize.Grid.element_volume`)。
+      **質量(グラム)は扱わない** —— 密度を掛けるのは表示の仕事で、内部表現は体積である。
+    - どちらも渡さなければ `DEFAULT_VOLFRAC`。
+
+    `element_volume_mm3` は `volfrac` の側でも渡してよい(体積目標は変わらず、`Result` が
+    mm^3 でも答えられるようになるだけ)。
     """
+    check_volume_target(volfrac, material_mm3)
+    if material_mm3 is not None and element_volume_mm3 is None:
+        raise ValueError(
+            "material_mm3 を渡すときは element_volume_mm3(要素1つの体積[mm^3])も渡すこと"
+            "(optimize は格子の寸法を知らないので、要素数へ換算できない)"
+        )
+    if element_volume_mm3 is not None and not float(element_volume_mm3) > 0.0:
+        raise ValueError(
+            f"element_volume_mm3 は正の値であること(受け取った値: {element_volume_mm3!r})"
+        )
     t_total = time.perf_counter()
     shape = (nelx, nely, nelz)
     void = _as_mask(void_mask, shape, "void_mask")
@@ -430,7 +577,13 @@ def optimize(
     n_movable = int(movable.sum())
     if n_movable == 0:
         raise ValueError("動かせる要素が1つも無い(void と solid で埋まっている)")
-    target_volume = volfrac * n_movable + float(np.count_nonzero(solid))
+    volfrac, target_volume = _resolve_volume_target(
+        volfrac=volfrac,
+        material_mm3=material_mm3,
+        element_volume_mm3=element_volume_mm3,
+        n_movable=n_movable,
+        n_solid=int(np.count_nonzero(solid)),
+    )
     live = movable.astype(float)
 
     def _physical(design: np.ndarray) -> np.ndarray:
@@ -513,6 +666,11 @@ def optimize(
         nelz=nelz,
         seconds=time.perf_counter() - t_total,
         stopped_by=stopped_by,
+        target_volume=target_volume,
+        volfrac=volfrac,
+        element_volume_mm3=(
+            None if element_volume_mm3 is None else float(element_volume_mm3)
+        ),
     )
 
 
