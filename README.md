@@ -9,7 +9,7 @@
 | | |
 |---|---|
 | ブランチ / コミット | `main`（最新は `git log -1`） |
-| テスト | **755件**（うち2本は実機が揃うときだけ走る＝ふだんはskip。**赤は1本も無い**） |
+| テスト | **809件**（うち2本は実機が揃うときだけ走る＝ふだんはskip。**赤は1本も無い**） |
 | 実行環境 | Python 3.11（`.venv`）／ Node（`web/node_modules` 導入済み）／ `web/dist` ビルド済み |
 | 単位 | mm 固定 |
 
@@ -170,8 +170,10 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
   アスペクトが変わり、実機検査の座標決め打ちが黙って別の場所を掴む
   （[[viewport-resize-silently-changes-what-a-click-grabs]]）。
 - 通常モードで右サイドバーに `AiPanel` だけが残り空きの帯になるのは**意図した見た目**。
-- 設定ダイアログは `showModal()` で背後を inert にするので、**開いている間はビューポートの
-  クリックが効かない**。
+- 設定ダイアログは**非モーダル**（`show()`）で、**開いている間もビューポートは触れる**
+  （2026-09-04に `showModal()` から切り替え）。FOVは見ながら決める設定なので、背後を
+  inert にすると「見る」だけが残って「回して確かめる」が死ぬ。`showModal()` がただで
+  付けていた Esc と重なり順は自前で持ち直してある（`SettingsDialog.svelte`）。
 - **Enterが要らないコマンドは2つ（線分・スケッチ）**。
 - undo/redoは**キーボードのみ**（Ctrl+Z / Ctrl+Y）。
 - **保存できる先は「いま編集しているファイル」1つだけ**（2026-08-30）。上書きの口は
@@ -197,7 +199,7 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 
 ## 3. 自動検査の走らせ方
 
-### pytest（コア・MCPの契約 701件）
+### pytest（コア・MCPの契約 809件）
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
@@ -257,7 +259,7 @@ cd C:\Users\tm976\mf\duocad
 
 ### 実ブラウザのsmoke（本物のクリックとキー入力）
 
-**サーバを立てる手順は要らない**。**9本とも自分で `duocad.mcp_server` を立てて、
+**サーバを立てる手順は要らない**。**10本とも自分で `duocad.mcp_server` を立てて、
 終わったら止める**ので、コマンドは1本ずつ叩くだけでよい。**毎回まっさらな文書で始まる**。
 
 ブラウザは**Chromeを先に見る**（無ければEdge。`DUOCAD_BROWSER` で明示すればそれが最優先）。
