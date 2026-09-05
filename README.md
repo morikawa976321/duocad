@@ -287,6 +287,11 @@ node scripts/smoke-mesh-body.mjs
 #    進捗→中断→表現できない保持の通知→走り切って結果のメッシュが出る→STL→メッシュのピック)
 #    **本物のSIMPを1回通す**(中断と「表現できていない」は SIMP を回さずに戻る)
 node scripts/smoke-optimize.mjs
+
+# ⑬ 開発用のデバッグ表示(`?debug=space` / `?debug=anchors` / `?voxel=1`)が出る。
+#    **フラグ無しの画面には1つも出ない**ことと、**デモ題材ではないボディ**で出ることを見る。
+#    **本物のSIMPを1回通す**(塊も節点も密度場も、走らせなければ1つも生まれない)
+node scripts/smoke-optimize-debug.mjs
 ```
 
 既に立てているサーバへ繋ぎたいときだけ `--url http://127.0.0.1:8766/` を渡す
@@ -515,6 +520,73 @@ MCPで運ぶ形**を決めること。**`add_mesh_body` は `ws="none"` のま�
 選択のたびに作り直すと集めかけの引数が落ちる。「押せるのに断られる」を消しているのは
 **この畳み込み1本**である。スケッチを貼る先だけは畳まずに断る（ボディ参照にしても
 `sketch_create` は面を要求するので、押した結果が変わらないまま理由だけが消える）。
+
+#### 開発用のデバッグ表示（URLパラメータ・2026-09-05）
+
+**答えがおかしいときに「塊が悪いのか最適化が悪いのか」を切り分ける道具。**
+`probe_topopt/` にしか無かった3つを本体へ移した（`web/src/debugFlags.ts`）。
+
+| 付けるもの | 出るもの |
+|---|---|
+| `?debug=space` | **塊（設計空間）**のボクセルを薄く重ねる |
+| `?debug=anchors` | **拘束/荷重に割り当たった格子節点**を色分けした球で（固定=緑シアン / 荷重=橙赤） |
+| `?voxel=1` | **平滑化する前のボクセル**。結果のメッシュボディは表示だけ隠す |
+
+`?debug=space,anchors` のように**まとめて指定できる**。走らせたときにだけ材料が生まれるので、
+**実行を押すまでは何も出ない**（塊と節点は実行の数秒後、密度場は走り切ったあと）。
+
+- **ビルドで落とさない。** 落とすと利用者の環境で起きた問題を調べられなくなる（本人指示）。
+  代わりに **フラグが無いときの画面は1ピクセルも変わらない**（`smoke-optimize-debug.mjs` の[1]と、
+  既存の実機smokeが番人）。
+- **デモ題材に固定されていない。** 材料は**いま走らせた最適化そのもの**から来るので、
+  利用者が置いた任意の条件・任意のボディで出る（probe は `design_space.CASES` しか描けなかった）。
+- **塊は既定では見せない**という決定は変わっていない（engine
+  `topopt-design-space-never-shown-to-the-user`）。フラグの下でだけ出る。
+- **画面にフラグの状態は出さない**（出すとフラグ無しの画面と差ができる）。確かめるのは
+  `location.search` と `window.__duocad.optimizeDebugCounts()`。
+- 実物の部品は要素数が桁で大きくなりうるので、**上限（15万立方体）を超えたら軸方向に間引く**。
+  間引いたことは `optimizeDebugCounts().spaceStride` に出る（黙って切り捨てない）。
+
+配線は `duocad/optimize_run.py` の `_DebugSink` →（`run_optimization` の `debug` で頼んだときだけ）
+`optimize_debug` イベント → `web/src/viewport.ts` の `setOptimizeDebug`。
+**頼まなければサーバは配列を1本も作らない**（既定の実行の費用は1ビットも増えない）。
+
+#### 比較スクリーンショットの撮影台（`web/scripts/shoot-topopt.mjs`・2026-09-05）
+
+**設定を2つ以上並べて撮る。1本のコマンドで終わる**（最適化・描画・ラベル焼きを全部やる。
+サーバも自分で立てて自分で止める）。
+
+```powershell
+cd C:\Users\tm976\mf\duocad\web
+
+# 合成題材(design_space.CASES)で、アルゴリズムの設定を3つ並べる
+node scripts/shoot-topopt.mjs --case tilted `
+  --panel "old(shipped):rmin=1.5,sigma=1.0,iters=12" `
+  --panel "old(no gaussian):rmin=1.5,sigma=0,iters=30" `
+  --panel "new:rmin=2.5,sigma=0,iters=30"
+
+# 実際の文書(models/ 配下)で、製品のつまみを2つ並べる
+node scripts/shoot-topopt.mjs --model mounting-plate.json `
+  --panel "既定:" --panel "細かく:element_mm=2.5" --views iso,side
+```
+
+- **題材・視点・出力先はすべて引数**（撮るたびにスクリプトを書き換えない）。
+  `--views iso,side,threeq,zoom` / `--dir x,y,z` / `--out <dir>` / `--width` / `--height`。
+- **カメラ・光源・背景・画角は面をまたいで完全に同一。** 1枚のcanvasに `setScissor` で並べて
+  描くので、面ごとに別の値を持つことが構造としてできない（ずれた比較は無価値）。
+- **同じ設定の面は最適化を1回しか回さない**（σ と Taubin 反復数だけが違う面は、
+  同じ密度場から2本切るのが正しい）。
+- **`--skip-export`** で前回の最適化結果を使い回す（向きだけ撮り直すときに使う。
+  別の題材のデータが入っていたら断る）。
+- 既定の出力先は `screenshots/topopt-compare`（`/screenshots/` は `.gitignore` 対象なので、
+  文書に載せる絵はそれ以外の場所を `--out` で指定すること）。
+- **新しいパッケージは入れていない**（three.js と puppeteer-core は `web/node_modules` から借り、
+  ラベルはブラウザのDOMで焼く）。
+
+**再現の限界**: `--case` の粗い段（案5）は**その時点の `simp.DEFAULT_RMIN`** で回るので、
+既定を動かしたあとに撮り直すと `probe_topopt/screenshots/smooth_compare/` の16枚と
+ビット単位では一致しない（撮影当時は 1.5、いまは 2.5）。**これは `compare_shots.py` と
+同じ制限**であって、この撮影台で新たに落ちたものではない。
 
 ### 前提にしないこと
 

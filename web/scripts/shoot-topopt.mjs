@@ -1,0 +1,413 @@
+/**
+ * 形状最適化の**比較スクリーンショットの撮影台**(20260905-1700)。
+ *
+ *   web> node scripts/shoot-topopt.mjs --case tilted \
+ *          --panel "old(shipped):rmin=1.5,sigma=1.0,iters=12" \
+ *          --panel "old(no gaussian):rmin=1.5,sigma=0,iters=30" \
+ *          --panel "new:rmin=2.5,sigma=0,iters=30"
+ *
+ * **1本のコマンドで終わる。** 重い段(面ごとに最適化を回す)も、描く段も、並べてラベルを
+ * 焼く段も、ここが全部やる —— 使うたびに手順書を読み返す道具は使われなくなる
+ * (本人・2026-09-05「使用時のコストが軽いこと」が要求)。
+ *
+ * ## 引数
+ *
+ *   --case <name>      合成題材(`design_space.CASES`: bracket / plate / branching / tilted)
+ *   --model <name>     **利用者の文書**(`models/` 配下の操作ログ。条件は文書のものを使う)
+ *   --models-dir <dir> `--model` の置き場(既定はリポジトリ直下の `models/`)
+ *   --panel "<ラベル>:<つまみ>"   **2つ以上**。左から順に並ぶ
+ *                      `--case` のつまみ: rmin(要素) / sigma / iters / n(長辺の要素数)
+ *                      `--model` のつまみ: rmin_mm / element_mm
+ *   --views iso,side,threeq,zoom   撮る向き(既定は4つ全部)
+ *   --dir x,y,z        `--views custom` と併せて任意の向き(`--zoom` で距離を詰める)
+ *   --out <dir>        出力先(既定 `screenshots/topopt-compare`)
+ *   --skip-export      `<out>/_data` にある前回の最適化結果を使い回す(向きだけ撮り直す)
+ *   --width / --height 1面の画素(既定 900 x 700)
+ *
+ * ## 守っていること
+ *
+ * - **カメラ・光源・背景・画角は面をまたいで完全に同一**である。ずれた比較は無価値なので、
+ *   面ごとの自由度を1つも持たせていない —— **1枚のcanvasに `setScissor` で並べて描く**ので、
+ *   構造として別の値を持てない(面ごとにレンダラを作る作りだと、いつか片方だけ変わる)。
+ * - **距離は全部の面の頂点から1つだけ決める**。外接球ではなく**その視線方向での実際の投影**
+ *   から決める(外接球で決めると細長い題材が画面の3分の1にしか映らず、見たいものが見えない)。
+ * - **サーバは自分で立てて自分で止める**(実ブラウザ検査9本と同じ流儀)。
+ *   **ポートは 0 を渡してOSに空きを選ばせる**ので、8765/8775 が埋まっていてもぶつからない
+ *   (engine `headless-shot-photographs-a-stale-server-when-the-port-is-taken`)。
+ * - **三角形が1枚もGPUへ行っていない面があったら落とす**(真っ黒の合格を防ぐ)。
+ *
+ * ## 新しいパッケージを入れていない
+ *
+ * three.js は本体の `web/node_modules/three`、puppeteer-core も同じ場所から借りる。
+ * ラベルは**ブラウザのDOM**で焼く(PIL のような画像ライブラリを足さない) ——
+ * canvas の上に帯を置いて、ページごと1枚に撮る。
+ */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { createServer } from 'node:http'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { parseArgs } from './args.mjs'
+import { findBrowser, launchBrowser } from './browser.mjs'
+import { PYTHON, REPO_ROOT } from './server.mjs'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+
+// --------------------------------------------------------------------------------------
+// 引数
+// --------------------------------------------------------------------------------------
+const argv = process.argv.slice(2)
+const options = parseArgs(argv)
+/** `--panel` は繰り返せる(`parseArgs` は最後の1つしか残さないので自分で拾う)。 */
+const panels = argv.flatMap((item, i) => (item === '--panel' ? [argv[i + 1]] : []))
+
+if (options.help || (!options.case && !options.model)) {
+  console.log(readFileSync(new URL(import.meta.url)).toString().split('*/')[0])
+  process.exit(options.help ? 0 : 1)
+}
+if (panels.length < 2) {
+  console.error('--panel を2つ以上渡すこと(左右に並べるための最小)')
+  process.exit(1)
+}
+
+const WIDTH = Number.parseInt(options.width ?? '900', 10)
+const HEIGHT = Number.parseInt(options.height ?? '700', 10)
+/** ラベルの帯と面のすきま(`probe_topopt/screenshots/smooth_compare/` と同じ寸法)。 */
+const BAND = 34
+const GAP = 6
+// **index.html の既定表示から写した値。片方だけ変えないこと**(比較の土俵が変わる)。
+const FOV = 50
+const BG = '#0a0a12'
+const MESH_COLOR = 0x6fa8dc
+
+/** 撮る向き。`smooth_compare/README.md` の「題材と方向」と同じ4つ。 */
+const VIEWS = {
+  iso: { dir: [-0.75, 0.5, 0.6], zoom: 1.0 }, // 3/4俯瞰(probe の既定視点と同じ向き)
+  side: { dir: [-0.06, -1.0, 0.08], zoom: 1.0 }, // ほぼ真横。輪郭のシルエットが出る
+  threeq: { dir: [0.62, 0.66, 0.42], zoom: 1.0 }, // iso の反対側からの3/4
+  zoom: { dir: [-0.75, 0.5, 0.6], zoom: 0.62 }, // iso と同じ向きで距離だけ詰めた拡大
+}
+if (options.dir) {
+  VIEWS.custom = {
+    dir: options.dir.split(',').map((v) => Number.parseFloat(v)),
+    zoom: Number.parseFloat(options.zoom ?? '1'),
+  }
+}
+const wantViews = (options.views ?? (options.dir ? 'custom' : 'iso,side,threeq,zoom'))
+  .split(',')
+  .map((name) => name.trim())
+  .filter(Boolean)
+for (const name of wantViews) {
+  if (!(name in VIEWS)) {
+    console.error(`知らない向き ${name}(あるのは ${Object.keys(VIEWS).join(', ')})`)
+    process.exit(1)
+  }
+}
+
+/** 出力の名前になる題材名。`--model` の `.json` はファイル名に混ぜない。 */
+const subject = (options.case ?? options.model).replace(/\.json$/i, '')
+const outDir = resolve(REPO_ROOT, options.out ?? join('screenshots', 'topopt-compare'))
+const dataDir = join(outDir, '_data')
+mkdirSync(dataDir, { recursive: true })
+
+// --------------------------------------------------------------------------------------
+// 1. 重い段 —— 面ごとに最適化を回す(Python)
+// --------------------------------------------------------------------------------------
+async function runExport() {
+  const args = [
+    join(HERE, 'shoot_topopt_export.py'),
+    '--out',
+    dataDir,
+    ...(options.case ? ['--case', options.case] : ['--model', options.model]),
+    ...(options['models-dir'] ? ['--models-dir', options['models-dir']] : []),
+    ...panels.flatMap((spec) => ['--panel', spec]),
+  ]
+  console.log(`[1/2] 最適化 ${panels.length}面(重い。題材と設定によっては数分〜十数分)`)
+  await new Promise((done, failed) => {
+    const child = spawn(PYTHON, args, {
+      cwd: REPO_ROOT,
+      stdio: ['ignore', 'inherit', 'inherit'],
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    })
+    child.on('exit', (code) =>
+      code === 0 ? done() : failed(new Error(`最適化の段が失敗した(code ${code})`)),
+    )
+  })
+}
+
+if (options['skip-export']) {
+  if (!existsSync(join(dataDir, 'manifest.json'))) {
+    console.error(`--skip-export だが前回の結果が無い: ${dataDir}`)
+    process.exit(1)
+  }
+  console.log(`[1/2] 最適化は飛ばす(--skip-export。${dataDir} を使い回す)`)
+} else {
+  await runExport()
+}
+
+const manifest = JSON.parse(readFileSync(join(dataDir, 'manifest.json'), 'utf8'))
+const PANEL_COUNT = manifest.panels.length
+// **使い回すデータが別の題材のものでないことを確かめる。** `_data` は出力先ごとに1つなので、
+// 同じ `--out` へ別の題材を撮ると上書きされる —— 気づかずに `--skip-export` すると
+// **ラベルは新しい題材、絵は前の題材**という、画像を見ても分からない嘘ができる。
+if (options['skip-export'] && manifest.subject !== subject) {
+  console.error(
+    `--skip-export だが ${dataDir} に入っているのは ${manifest.subject} の結果` +
+      `(いま指定したのは ${subject})。--out を分けるか、--skip-export を外すこと`,
+  )
+  process.exit(1)
+}
+
+// --------------------------------------------------------------------------------------
+// 2. 描く段 —— 1枚のcanvasに全部の面を並べて撮る
+// --------------------------------------------------------------------------------------
+/** 面 `i` の頂点(mm)。距離と中心を**面をまたいで1つに決める**ために読む。 */
+function vertsOf(index) {
+  const payload = JSON.parse(readFileSync(join(dataDir, `panel-${index}.json`), 'utf8'))
+  const buffer = Buffer.from(payload.verts_b64, 'base64')
+  return new Float32Array(
+    buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+  )
+}
+
+const allVerts = manifest.panels.map((_, index) => vertsOf(index))
+
+/** 全部の面の外接箱の中心。**同じ点を見る**ので比較の土俵は崩れない。 */
+function commonCentre() {
+  const lo = [Infinity, Infinity, Infinity]
+  const hi = [-Infinity, -Infinity, -Infinity]
+  for (const verts of allVerts) {
+    for (let i = 0; i < verts.length; i += 3) {
+      for (let a = 0; a < 3; a += 1) {
+        lo[a] = Math.min(lo[a], verts[i + a])
+        hi[a] = Math.max(hi[a], verts[i + a])
+      }
+    }
+  }
+  return [0, 1, 2].map((a) => (lo[a] + hi[a]) / 2)
+}
+
+/**
+ * その視線方向で**全部の面が画面に収まる**距離を1つ決める。
+ * 外接球ではなく実際の投影から決める —— 外接球だと細長い題材が画面の3分の1にしか映らない。
+ */
+function distanceFor(dir, centre) {
+  const n = Math.hypot(...dir)
+  const d = dir.map((v) => v / n)
+  const f = d.map((v) => -v)
+  const up = [0, 0, 1]
+  const cross = (a, b) => [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ]
+  const norm = (a) => {
+    const len = Math.hypot(...a)
+    return a.map((v) => v / len)
+  }
+  const right = norm(cross(f, up))
+  const upv = cross(right, f)
+  const tanV = Math.tan((FOV * Math.PI) / 180 / 2)
+  const tanH = tanV * (WIDTH / HEIGHT)
+  let dist = 0
+  for (const verts of allVerts) {
+    for (let i = 0; i < verts.length; i += 3) {
+      const p = [verts[i] - centre[0], verts[i + 1] - centre[1], verts[i + 2] - centre[2]]
+      const along = p[0] * d[0] + p[1] * d[1] + p[2] * d[2]
+      const x = Math.abs(p[0] * right[0] + p[1] * right[1] + p[2] * right[2])
+      const y = Math.abs(p[0] * upv[0] + p[1] * upv[1] + p[2] * upv[2])
+      dist = Math.max(dist, along + x / tanH, along + y / tanV)
+    }
+  }
+  return dist * 1.06
+}
+
+const CANVAS_W = WIDTH * PANEL_COUNT + GAP * (PANEL_COUNT - 1)
+
+const PAGE = `<!doctype html><html><head><meta charset="utf-8">
+<style>
+  html,body{margin:0;padding:0;background:${BG};overflow:hidden}
+  #band{display:flex;gap:${GAP}px;height:${BAND}px;width:${CANVAS_W}px}
+  #band div{width:${WIDTH}px;color:#e6e6f0;font:15px/34px system-ui,sans-serif;
+            padding-left:10px;box-sizing:border-box;white-space:nowrap;overflow:hidden}
+  #band b{color:#9fb4d8;margin-right:8px}
+</style>
+<script type="importmap">{"imports":{"three":"/vendor/three.module.js"}}</script>
+</head><body>
+<div id="band"></div>
+<script type="module">
+import * as THREE from 'three';
+const PANELS = ${PANEL_COUNT}, W = ${WIDTH}, H = ${HEIGHT}, GAP = ${GAP};
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(${CANVAS_W}, H, false);
+renderer.setScissorTest(true);
+renderer.autoClear = false;
+// **面と面のすきまも同じ色で塗る。** clear() はシザー矩形の中だけを既定色で塗るので、
+// ここを揃えないと 6px の隙間だけ真っ黒になる(smooth_compare と同じ色にする)。
+renderer.setClearColor(new THREE.Color('${BG}'), 1);
+document.body.appendChild(renderer.domElement);
+
+// **光源は全部の面で同一。** 1つの scene を使い回すので、面ごとに別の値を持てない。
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('${BG}');
+scene.add(new THREE.HemisphereLight(0xffffff, 0x333344, 0.65));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.85);
+dirLight.position.set(2, 3, 1);
+scene.add(dirLight);
+// **カメラ追従の弱い正面光。** 4方向から撮るので、背面側の視点(side)がこれ無しでは
+// 真っ黒になる('smooth_compare/README.md' の「光源」)。全部の面で同一。
+const headLight = new THREE.DirectionalLight(0xffffff, 0.45);
+scene.add(headLight);
+
+const camera = new THREE.PerspectiveCamera(${FOV}, W / H, 0.1, 50000);
+camera.up.set(0, 0, 1);
+
+function b64(text) {
+  const bin = atob(text);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out.buffer;
+}
+
+const meshes = [];
+window.__load = async () => {
+  const band = document.getElementById('band');
+  for (let i = 0; i < PANELS; i += 1) {
+    const payload = await (await fetch('/data/panel-' + i + '.json')).json();
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position',
+      new THREE.BufferAttribute(new Float32Array(b64(payload.verts_b64)), 3));
+    geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(b64(payload.faces_b64)), 1));
+    geometry.computeVertexNormals();
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ color: ${MESH_COLOR} }));
+    mesh.visible = false;
+    scene.add(mesh);
+    meshes.push(mesh);
+    // **位置の名前を頭に付ける**(smooth_compare の 'LEFT  old(shipped)' と同じ形)。
+    // 3面までは LEFT / MID / RIGHT、それ以上は番号。ラベルだけだと「どっちが後か」を
+    // 画像だけ見て言えない。
+    const names = PANELS === 2 ? ['LEFT', 'RIGHT']
+      : PANELS === 3 ? ['LEFT', 'MID', 'RIGHT']
+      : Array.from({ length: PANELS }, (_, k) => '#' + (k + 1));
+    const label = document.createElement('div');
+    label.innerHTML = '<b></b>';
+    label.querySelector('b').textContent = names[i];
+    label.appendChild(document.createTextNode(payload.label));
+    band.appendChild(label);
+  }
+  return meshes.length;
+};
+
+window.__render = (dir, dist, centre) => {
+  const c = new THREE.Vector3(...centre);
+  camera.position.copy(new THREE.Vector3(...dir).normalize().multiplyScalar(dist).add(c));
+  camera.near = Math.max(dist / 500, 0.01);
+  camera.far = dist * 20;
+  camera.lookAt(c);
+  headLight.position.copy(camera.position);
+  camera.updateProjectionMatrix();
+  renderer.setScissor(0, 0, ${CANVAS_W}, H);
+  renderer.clear();
+  // **面ごとの数を返す。** 合算すると「1面だけ真っ黒」が他の面に隠れて合格する。
+  const triangles = [];
+  for (let i = 0; i < PANELS; i += 1) {
+    const x = i * (W + GAP);
+    renderer.setViewport(x, 0, W, H);
+    renderer.setScissor(x, 0, W, H);
+    for (let j = 0; j < PANELS; j += 1) meshes[j].visible = j === i;
+    renderer.info.reset();
+    renderer.render(scene, camera);
+    triangles.push(renderer.info.render.triangles);
+  }
+  for (const mesh of meshes) mesh.visible = false;
+  return triangles;
+};
+window.__ready = true;
+</script></body></html>`
+
+/** three.js とデータを配る最小のHTTPサーバ。**ポートは0**(OSに空きを選ばせる)。 */
+const THREE_DIR = join(REPO_ROOT, 'web', 'node_modules', 'three', 'build')
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json' }
+const server = createServer((request, response) => {
+  const url = new URL(request.url, 'http://127.0.0.1')
+  if (url.pathname === '/page') {
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+    response.end(PAGE)
+    return
+  }
+  // **favicon は 204 で返す。** 404 にするとブラウザのコンソールにエラーが1件出て、
+  // 「ページ側でエラー」の網に毎回かかる(絵とは無関係の失敗で撮影が止まる)。
+  if (url.pathname === '/favicon.ico') {
+    response.writeHead(204)
+    response.end()
+    return
+  }
+  const rel = decodeURIComponent(url.pathname).replace(/^\/+/, '')
+  const file = rel.startsWith('vendor/')
+    ? join(THREE_DIR, rel.slice('vendor/'.length))
+    : join(dataDir, rel.replace(/^data\//, ''))
+  if (!existsSync(file)) {
+    response.writeHead(404)
+    response.end('no')
+    return
+  }
+  response.writeHead(200, {
+    'content-type': MIME[file.slice(file.lastIndexOf('.'))] ?? 'application/octet-stream',
+  })
+  response.end(readFileSync(file))
+})
+await new Promise((done) => server.listen(0, '127.0.0.1', done))
+const PORT = server.address().port
+
+console.log(`[2/2] 描画(${PANEL_COUNT}面 x ${wantViews.length}方向 / 1面 ${WIDTH}x${HEIGHT})`)
+const browser = await launchBrowser(findBrowser())
+const written = []
+try {
+  const page = await browser.newPage()
+  await page.setViewport({ width: CANVAS_W, height: HEIGHT + BAND })
+  // **ページ側の例外は握り潰さない。** ハンドラの中で throw しても呼び出し元へは
+  // 伝わらない(未処理のPromise拒否になるだけ)ので、溜めて描画の後で見る。
+  const pageErrors = []
+  page.on('pageerror', (error) => pageErrors.push(String(error)))
+  page.on('console', (message) => {
+    if (message.type() === 'error') pageErrors.push(message.text())
+  })
+  await page.goto(`http://127.0.0.1:${PORT}/page`, { waitUntil: 'load' })
+  await page.waitForFunction('window.__ready === true', { timeout: 30000 })
+  const loaded = await page.evaluate(() => window.__load())
+  if (loaded !== PANEL_COUNT) throw new Error(`面が ${loaded} 枚しか読めていない`)
+
+  const centre = commonCentre()
+  for (const name of wantViews) {
+    const view = VIEWS[name]
+    const dist = distanceFor(view.dir, centre) * view.zoom
+    const triangles = await page.evaluate(
+      (d, r, c) => window.__render(d, r, c),
+      view.dir,
+      dist,
+      centre,
+    )
+    // **真っ黒の合格を防ぐ。** **面ごとに**最低1枚は三角形がGPUへ行っていること
+    // (合算で見ると、1面だけ真っ黒でも他の面に隠れて合格する)。
+    const empty = triangles.flatMap((count, i) => (count > 0 ? [] : [i]))
+    if (empty.length > 0) {
+      throw new Error(
+        `${name}: 面 ${empty.join(',')} に三角形が1つもGPUへ行っていない` +
+          `(面ごとの三角形数 ${triangles.join(' / ')})`,
+      )
+    }
+    if (pageErrors.length > 0) throw new Error(`ページ側でエラー: ${pageErrors[0]}`)
+    const png = await page.screenshot({ type: 'png' })
+    const path = join(outDir, `${subject}_${name}.png`)
+    writeFileSync(path, png)
+    written.push(path)
+    console.log(`  ${path}  (三角形 ${triangles.join(' / ')} / 距離 ${dist.toFixed(1)}mm)`)
+  }
+} finally {
+  await browser.close()
+  server.close()
+}
+
+console.log(`\nshoot-topopt: ${written.length} 枚`)

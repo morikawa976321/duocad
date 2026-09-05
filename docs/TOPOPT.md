@@ -2435,7 +2435,9 @@ marching cubes へ渡す場が、保持/除外の塗り直しを除いて同一�
 「旧い既定(`rmin`=1.5要素・σ=1・Taubin 12反復)対 新しい既定(`rmin`=2.5要素・σ=0・
 Taubin 30反復)」で撮り直した**(次節)。撮り直す道具は使い捨てにせず
 `probe_topopt/compare_shots.py` / `compare_shots.mjs` としてコミットしてある。
-詳細は同ディレクトリの `README.md`。
+詳細は同ディレクトリの `README.md`。**2026-09-05にこの道具は本体へ移した** ——
+いま撮るなら `web/scripts/shoot-topopt.mjs`(1コマンド・題材と視点と出力先は引数・
+`--model` で実物の文書も撮れる。readme.md §4)。
 
 **以下は撮り直す前(ガウシアン平滑化の前後比較)の観測で、画像はもう置き換わっている。**
 現象そのもの(σ が薄い部材を食う)は次節の段3で数字になっているので、記録として残す。
@@ -2841,7 +2843,7 @@ LEFT が隠していたものが見える。
 | `duocad/topopt/stress.py` | **密度場と変位 → 要素ごとの von Mises 応力・代表応力・最小安全率**(後処理)。無次元 → 実単位の換算則(`UnitScale`)を持つ。**最適化には手を入れない**(応力制約の定式化は採らない。engine `safety-factor-goes-outside-the-optimizer`) |
 | `duocad/topopt/design_space.py` | **4条件(保持ソリッド・除外ソリッド・拘束面・荷重面) → 塊(設計空間)**。案1(`derive`)=条件の点群の外接直方体+余白から除外ソリッドを引く / 案5(`derive_from_coarse_run`)=粗い格子で1回 SIMP を回し、出た材料を膨らませる。**どちらも塊の中で拘束と荷重がひと続きかを6近傍で確かめてから返す**(`DesignSpaceDisconnectedError`)。**既定は案5**(2026-09-04〜。入口は `derive_default`)。CLIとしても動く(`python -m duocad.topopt.design_space` で `demo_conditions(0°)` の塊を導出して stats を出す。表を作る `--measure` / `--compare` は2026-09-05に削除した) |
 | `duocad/topopt/safety_loop.py` | **安全率を入力に、材料量(mm^3)を二分探索する外側ループ**。`solve_for_safety_factor` が入口。目標以上を満たす最小の材料量を探す。塊は案a(候補材料量ごとに `derive_default` を呼び直す)。許容応力の導出(PETG × 低減係数)を持つ。**最適化そのものには手を入れない** |
-| `probe_topopt/compare_shots.py` / `compare_shots.mjs` | **受入検査ではない。** `screenshots/smooth_compare/` の比較画像を撮り直す道具(export=最適化してメッシュをJSONへ / mjs=固定カメラで描画 / join=並べて1枚に)。設定を2〜3面まで並べられる |
+| `probe_topopt/compare_shots.py` / `compare_shots.mjs` | **受入検査ではない。** `screenshots/smooth_compare/` の比較画像を撮り直す道具(export=最適化してメッシュをJSONへ / mjs=固定カメラで描画 / join=並べて1枚に)。設定を2〜3面まで並べられる。**2026-09-05に本体の `web/scripts/shoot-topopt.mjs` へ移した**(1コマンドにまとまり、面数の上限が無く、`--model` で実物の文書も撮れる)。こちらは `probe_topopt/` を消すときに一緒に消える |
 | `duocad/topopt/__init__.py` | パッケージの入口。**サブモジュールを import しない**(`import duocad` の費用に scipy / skimage を足さないため)。`OUTPUT_DIR`(= `duocad/topopt/output/`)だけを公開する |
 | `topopt_checks/check_simp.py` | **受入検査(合否そのもの)**。SIMP側を assert する |
 | `topopt_checks/check_mesh.py` | **受入検査(合否そのもの)**。メッシュ化側(下記10項目。2026-09-05にガウシアン平滑化+塗り直しの検査を追加)を assert する |
