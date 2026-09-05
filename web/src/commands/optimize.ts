@@ -2,7 +2,7 @@
  * 形状最適化(第3のモード)の4つの `CommandDef`。
  *
  * コア側の契約は `duocad/optimize.py` の `state_payload` docstring、verbの実体は
- * `duocad/verbs/optimize_setup.py`(2026-08-31・`20260831-0108-duocad-optimize-mode-verbs-backend`)。
+ * `duocad/verbs/optimize_setup.py`。
  * **4つとも集合代入**である —— 「対象は確定選択そのもの」で、ここが送るのは
  * `set_loads` の大きさ・向きだけ(他の3つはサーバへ何も送らない)。
  *
