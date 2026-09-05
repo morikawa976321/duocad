@@ -786,14 +786,13 @@
       }
       if (applied.client_op !== null && applied.client_op === pendingOp) {
         pendingOp = null
-        // **CommandHostが出した確定が、実際に成功したと確認できた**(2026-08-31)——ここで
+        // **CommandHostが出した確定が、実際に成功したと確認できた**——ここで
         // 初めて無起動へ戻す。`commit()` の時点(`onRun` を呼んだ直後)ではまだ成否が
         // 分からず、先に戻すとOCCTのフィレット失敗時の打ち直し(`CommandHost.commit()`の
         // コメント参照)が壊れる。**`CommandHost` を通るverbだけが対象**で、`CATEGORY_OF` に
         // 載っていないもの(`export_step`/`export_stl`/`save_document` 等、`FilesPanel` が
         // 直接送るぶん)は `undefined` になってここを素通りする —— 人が別コマンドに
         // 入力しているCommandHostを、外で走った操作の成功で畳んではならない。
-        // **`file` が対象に入ったのは2026-09-05**に `import_step` がツールバーへ戻ってから。
         const category = CATEGORY_OF.get(applied.verb)
         if (category === 'sketch' || category === 'feature' || category === 'file') {
           host?.commandSucceeded()

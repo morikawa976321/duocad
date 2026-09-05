@@ -278,10 +278,10 @@ export type BuildResult =
  * - `feature` … ソリッドのverb(失敗しても打った値を戻して打ち直せるようにする)
  * - `ui`      … サーバへ何も送らない道具(スケッチモードの「選ぶ」だけ)
  *
- * **ファイル操作(保存/開く/STEP入出力等)はこの分類を経由しない**(2026-08-27に
- * `FilesPanel.svelte` が `session.runVerb` を直接呼ぶ形へ移設した。`App.svelte` の
- * `runFileOp`/`changesDocument` 参照)。かつて存在した `file` 分類は、この移設で
- * `CommandDef` 側の使用が0件になったため2026-09-03に削除した。
+ * **ファイル操作(保存/開く/STEP入出力等)の多くはこの分類を経由しない**(`FilesPanel.svelte`
+ * が `session.runVerb` を直接呼ぶ。`App.svelte` の `runFileOp`/`changesDocument` 参照)。
+ * ただし `file` は現役の分類である —— `commands/files.ts` の `IMPORT_STEP` がこの分類を持ち、
+ * `App.svelte` の送信経路(`CATEGORY_OF`)もこれを見て `CommandHost` の確定完了を判定する。
  *
  * **`ui` 以外はコアの宣言(`duocad/catalog.py`)の `category` と同じ値**である。
  */
@@ -357,8 +357,8 @@ export const EXTRUDE_FACE: CommandDef = {
 /**
  * ソリッドを触るモードの一覧のうち、**このファイルが定義するぶん**(押し出し1つ)。
  * `App.svelte` が `SOLID_FEATURE_COMMANDS`(features.ts)と `SKETCH_CREATE`(sketch.ts)を
- * 後ろに繋いで1つの並びにする(`file` 分類の `CommandDef` は2026-08-28からもう無い ——
- * `commands/files.ts` のモジュールdocstring)。スケッチモードの一覧は `commands/sketch.ts`。
+ * 後ろに繋いで1つの並びにする(`file` 分類の `CommandDef` は `commands/files.ts` にある ——
+ * そちらのモジュールdocstring参照)。スケッチモードの一覧は `commands/sketch.ts`。
  */
 export const COMMANDS: CommandDef[] = [EXTRUDE_FACE]
 
