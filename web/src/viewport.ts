@@ -99,13 +99,10 @@ export function createViewport(container: HTMLElement): Viewport {
   // `gridExtent` はまだ宣言されておらず(下の平面グリッドの節より前)、その初期値は
   // 常に `BASE_EXTENT` だから同じ値になる。
   //
-  // **距離は `fitDistance` で求める(2026-09-04訂正)。** 以前はここだけ `diagonal * 1.2`
-  // という決め打ち定数を持っていた —— `fitDistance` が無かった頃の名残で、FOV_DEFAULTが
-  // 45度だったあいだは `radius / tan(22.5°) ≈ radius * 2.4142`(半径ベースでは `diagonal
-  // * 1.2071`)とほぼ一致していたので気づかれなかった(差0.6%)。**既定を30度へ下げたら
-  // この定数は式と55%もずれ**、起動直後の空の文書やまだ内容の無いスケッチ(`lookAtSketch`
-  // が半径0で「前の距離のまま」に倒すとき)がFOV30度の想定より大きく寄って見える事故になる
-  // (`smoke-move.mjs` の辺クリックがこれで外れて実測した)。`frameToContent` と同じ式を
+  // **距離は `fitDistance` で求める**。決め打ちの `diagonal * 1.2` のような定数は
+  // FOV_DEFAULT を変えると式とずれる(45度では差0.6%で気づきにくいが、30度では55%もずれ、
+  // 起動直後の空の文書やまだ内容の無いスケッチが想定より大きく寄って見える事故になる ——
+  // `smoke-move.mjs` の辺クリックが実際にこれで外れた)。`frameToContent` と同じ式を
   // 通すことで、FOV_DEFAULTがいくつでも起動直後の見かけの大きさが揃う。
   {
     const diagonal = Math.hypot(BASE_EXTENT * 2, BASE_EXTENT * 2, BASE_EXTENT * 2)
@@ -125,7 +122,7 @@ export function createViewport(container: HTMLElement): Viewport {
     new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
   controls.dampingFactor = 0.15
-  // **マウスの割り当て(2026-08-30本人決定)**: 左=ウィンドウ選択(このファイルが自前で
+  // **マウスの割り当て**: 左=ウィンドウ選択(このファイルが自前で
   // 実装する)/ 中=パン / 右=カメラ回転。
   //
   // `OrbitControls` の既定は LEFT=ROTATE / MIDDLE=DOLLY / RIGHT=PAN なので、**3つとも
@@ -210,14 +207,13 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /**
    * いまのスケッチが**実ジオメトリの面(`plane.kind === 'face'`)へ貼られているか**。
-   * **QA指摘で追加(2026-09-03)** —— 以前は `basePlaneForFrame(sketchGridFrame)` の
-   * frame一致だけで「基準平面か任意面か」を判定していたが、「XY床にスケッチ→押し出し→
-   * その底面に再度スケッチ」のように**実ジオメトリの面でも frame が数値的に基準平面と
-   * 一致する**ことがあり(原点(0,0,0)・u/vが基準平面と同じ)、その場合に任意面のグリッド
-   * (深度バイアス層・extentの有限化・直交軸なし)が不発になっていた。**その面は実ソリッドの
-   * メッシュと完全同一平面**なので、本来はz-fighting対策が最も要る場面である。
-   * 判定は `plane.kind` を正とし、`basePlaneForFrame` はもう「基準平面か否か」の判定には
-   * 使わない(使うのは `plane.kind==='base'` のときにXY/XZ/YZのどれかを選ぶ用途だけ)。
+   * **`basePlaneForFrame(sketchGridFrame)` のframe一致だけでは判定できない** ——
+   * 「XY床にスケッチ→押し出し→その底面に再度スケッチ」のように**実ジオメトリの面でも
+   * frame が数値的に基準平面と一致する**ことがあり(原点(0,0,0)・u/vが基準平面と同じ)、
+   * frame一致だけで判定すると任意面のグリッド(深度バイアス層・extentの有限化・直交軸なし)が
+   * 不発になる。**その面は実ソリッドのメッシュと完全同一平面**なので、本来はz-fighting対策が
+   * 最も要る場面である。判定は `plane.kind` を正とし、`basePlaneForFrame` は
+   * `plane.kind==='base'` のときにXY/XZ/YZのどれかを選ぶ用途にしか使わない。
    */
   let sketchGridIsFacePlane = false
 
@@ -225,7 +221,7 @@ export function createViewport(container: HTMLElement): Viewport {
   let gridPlanesShown: string[] = []
   /**
    * `gridPlanesShown` と対で持つ、各グリッドに適用中の深度バイアス層番号
-   * (`DEPTH_BIAS_LAYER`)。**実機検査フック専用**(2026-09-03 QA指摘) —— 任意面のグリッドが
+   * (`DEPTH_BIAS_LAYER`)。**実機検査フック専用** —— 任意面のグリッドが
    * 本当に `sketchFaceGrid` 層(基準平面の `planeGrid` 層とは別)を使っているかは、
    * z-fightingの有無を静止画のスクリーンショットだけでは機械的に見分けられないため、
    * 数値そのものを検査できるようにする。
@@ -266,7 +262,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * たびに作り直す(`rebuildBasePlaneHover`)。
    *
    * 平面ごとの色分けを線でやる代わりに半透明の板を重ねて「今カーソルが指しているのは
-   * この平面」を出す(2026-08-27本人決定)。**当たり判定には使わない** —— 判定は
+   * この平面」を出す。**当たり判定には使わない** —— 判定は
    * 今までどおり `basePlaneAt` の解析交差である。
    */
   const basePlaneHoverMeshes = new Map<BasePlaneName, THREE.Mesh>()
@@ -286,7 +282,7 @@ export function createViewport(container: HTMLElement): Viewport {
   /**
    * frameがどの基準平面のものか(u/vの一致で見る)。基準平面でなければ null。
    *
-   * **これは「基準平面か任意面か」の判定には使わない**(2026-09-03 QA指摘で訂正) ——
+   * **これは「基準平面か任意面か」の判定には使わない** ——
    * 実ジオメトリの面(`plane.kind==='face'`)でも、frameが基準平面と数値的に一致することが
    * ある(「XY床にスケッチ→押し出し→その底面に再度スケッチ」が典型例。原点(0,0,0)・u/vが
    * 基準平面と同じになる)。その判定は `sketchGridIsFacePlane`(`plane.kind` を正とする)が
@@ -347,10 +343,9 @@ export function createViewport(container: HTMLElement): Viewport {
       // 実ジオメトリの面(`plane.kind==='face'`)へのスケッチ中。その面のframeへそのまま
       // 乗せる —— 原点・u/v軸はスケッチ平面のもの(完了条件4)。直交軸は出さない
       // (完了条件3・本人指定)。**frameが基準平面と数値的に一致していてもここへ来る**
-      // (2026-09-03 QA指摘で修正。以前は `basePlaneForFrame` のframe一致だけで判定しており、
-      // 「XY床にスケッチ→押し出し→その底面に再度スケッチ」のような日常的な構成で
-      // 基準平面の分岐へ誤って落ちていた)。貼り付けた面(A群のソリッド)と完全同一平面に
-      // なるので、バイアスの層番号は別枠(`sketchFaceGrid`)を使う
+      // (`sketchGridIsFacePlane` が `plane.kind` を正として判定するため —— frame一致だけでは
+      // 判別できない事情は `sketchGridIsFacePlane` のdocstring参照)。貼り付けた面
+      // (A群のソリッド)と完全同一平面になるので、バイアスの層番号は別枠(`sketchFaceGrid`)を使う
       // ([[duocad-depth-overlay-rule]] B群・タスク指示)。
       return {
         planes: [
@@ -472,7 +467,7 @@ export function createViewport(container: HTMLElement): Viewport {
       grid.setFrame(spec.frame)
       grid.setAxisColors(spec.uColor, spec.vColor)
       grid.setColor(color)
-      // **常に内容を一回り大きく包む正方形で切る**(2026-09-03本人決定。無限に描くのをやめた)。
+      // **常に内容を一回り大きく包む正方形で切る**。
       // 基準平面は「すべてのスケッチとソリッド ∪ 原点」、任意面はその面自身の範囲が正。
       grid.setBounds(spec.bounds)
       // 任意面は貼り付けた面と同一平面になるので、バイアスの層番号を別枠にする
@@ -489,8 +484,8 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /**
    * スケッチ平面のframeを差し替える(モード外は null)。表示する平面がこれで決まる。
-   * `isFacePlane` は `plane.kind==='face'` かどうか(基準平面か任意面かの判定そのもの。
-   * 2026-09-03 QA指摘でframe一致判定から切り替えた)。`bounds` は `isFacePlane` のときだけ
+   * `isFacePlane` は `plane.kind==='face'` かどうか(基準平面か任意面かの判定そのもの)。
+   * `bounds` は `isFacePlane` のときだけ
    * 効く(基準平面・モード外は `desiredGridPlanes` が無視する)。
    */
   function setGridSketchFrame(
@@ -590,7 +585,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * 役割が無かった頃の6個(base/highlight/proposed × 通常/ホバー)から3倍に増える軸を、
    * 静的な定数ではなく関数1つに閉じるための形。
    *
-   * **選択は役割に勝つ**(本人決定)。`state !== 'plain'` のときは役割を見ない ——
+   * **選択は役割に勝つ**。`state !== 'plain'` のときは役割を見ない ——
    * 保持ソリッド(緑)を選ぶとハイライト色になり、緑は一時的に見えなくなる。
    */
   type OptimizeFaceRole = 'none' | 'preserve' | 'exclude' | 'fixture'
@@ -657,7 +652,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // ---------------------------------------------------------------- ホバー強調
   //
-  // **「そのままクリックしたら取れるもの」を1つだけ明るくする**(2026-08-27本人決定)。
+  // **「そのままクリックしたら取れるもの」を1つだけ明るくする**。
   // 対象は面・辺・領域・基準平面で、**頂点は出さない** —— 選択に入っている頂点しか
   // マーカーが無く、「クリックすれば選択されるもの」を出せる状態にない。
   //
@@ -831,7 +826,7 @@ export function createViewport(container: HTMLElement): Viewport {
     refreshContentDiagonal() // 見えているものの大きさが変わった(解像度の上下限に効く)
     updateClipPlanes() // 内容が変わった → 視錐台を引き直す(姿勢は初回のみ下で決める)
 
-    // **`frameToContent()` が実際に合わせたときだけ機会を消費する**(2026-08-30)。
+    // **`frameToContent()` が実際に合わせたときだけ機会を消費する**。
     // 空振り(箱が空)で `framed = true` にすると、以後どんなに大きな内容が届いても
     // 初回フレーミングが二度と起きない(上の関数docstring参照)。
     if (!framed && frameToContent()) {
@@ -962,16 +957,12 @@ export function createViewport(container: HTMLElement): Viewport {
   /**
    * 半径 `radius` の球が画面に収まる、注視点からの距離。FOVとアスペクトの狭い方で決まる。
    *
-   * **FOVを可変にした以上、収まる距離を定数で決め打ちできない**(2026-08-28)。
-   * 既定の30度・アスペクト1以上では `radius / tan(15°) = radius * 3.7321` になる。
-   * `frameToContent` はこれを `radius = diagonal / 2` で呼ぶので `diagonal * 1.8660` となる。
-   * **既定を45度から30度へ下げた(2026-09-04)ことで、カメラは以前より約1.55倍遠くに
-   * 置かれる**(45度では `radius / tan(22.5°) = radius * 2.4142` で `diagonal * 1.2071`。
-   * **以前の決め打ち定数 `diagonal * 1.2` はこの式を45度で評価して丸めた値そのもの**だった
-   * が、既定FOVが変わった今は数値が一致しない。「既定のFOVでの見え方は実質変わらない」は
-   * もう成り立たない —— 30度は45度よりパースが弱く見え、そのぶんカメラは遠い。
-   * 縦長のビューポート(aspect<1)では距離が伸びるが、これは以前が横方向を見ていなかった
-   * 取りこぼしの修正にあたる(狭い方に合わせないと横がはみ出す)。
+   * **FOVを可変にした以上、収まる距離を定数で決め打ちできない** —— 既定の30度・
+   * アスペクト1以上では `radius / tan(15°) = radius * 3.7321`(`frameToContent` は
+   * `radius = diagonal / 2` で呼ぶので `diagonal * 1.8660`)。45度なら
+   * `radius / tan(22.5°) = radius * 2.4142`(`diagonal * 1.2071`)—— FOVが変われば
+   * この係数も変わり、30度は45度よりパースが弱く見えるぶんカメラは約1.55倍遠くに置かれる。
+   * 縦長のビューポート(aspect<1)では狭い方(横)に合わせるため距離がさらに伸びる。
    *
    * **正投影のときも透視の画角で評価する。** 正投影では距離が見え方に効かないので、
    * ここが返すのは「透視と同じ場所にカメラを置くための距離」でしかない(収める仕事は
@@ -1066,7 +1057,7 @@ export function createViewport(container: HTMLElement): Viewport {
   /**
    * near/far(視錐台の前後端)を、いまの内容とカメラ距離から引き直す。
    *
-   * **`frameToContent`(姿勢)から独立させてある**(2026-08-30)。姿勢はページ読み込みで
+   * **`frameToContent`(姿勢)から独立させてある**。姿勢はページ読み込みで
    * 1回決めれば十分だが、near/farは「最初に届いた形の大きさ」で固定してよいものではない
    * —— 後から大きなSTEPが届けばfarを追い越して手前が切り取られ(farはズーム・オービットでは
    * 一切広がらない)、逆に小さな細部へ深く寄ればnearが大きいまま手前が切れる。**内容が変わる
@@ -1080,7 +1071,7 @@ export function createViewport(container: HTMLElement): Viewport {
    *
    * `span` の下限に `gridExtent * 2` を置くのは、空の文書やグリッドしか無い場面でも
    * 視錐台がグリッド全体を収める大きさを保つため(`contentDiagonal` はボディが無いと0)。
-   * **`gridExtent` は固定ではない**(2026-08-30。`applyGridScale`)ので、グリッドが
+   * **`gridExtent` は固定ではない**(`applyGridScale`)ので、グリッドが
    * 広がればここの下限も一緒に広がる —— 取りこぼすと、グリッドは見えているのに
    * その外側でnear/farが詰まる、という遠い壊れ方をする。
    */
@@ -1106,7 +1097,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /**
    * 基準平面のグリッドを描く正方形。**すべてのスケッチとソリッドの外接直方体**を、その平面の
-   * u/v へ射影して求める(2026-09-03本人決定 —— 無限に描くのをやめた)。
+   * u/v へ射影して求める。
    *
    * 射影するのは**箱の8隅**である。箱は軸並行なので、どの向きのframeでも8隅の射影の
    * 最小・最大が射影像の外接矩形になる(面の頂点を全部回す `faceUvBounds` と違い、内容が
@@ -1180,7 +1171,7 @@ export function createViewport(container: HTMLElement): Viewport {
    *
    * **姿勢(位置・向き)だけを決める。** near/farは `updateClipPlanes` の仕事(上記コメント)。
    *
-   * **実際に合わせたかを boolean で返す**(2026-08-30)。箱が空(=描くものがまだ無い)なら
+   * **実際に合わせたかを boolean で返す**。箱が空(=描くものがまだ無い)なら
    * 何もせず `false` を返す —— 呼び出し側の `update()` はこれを見て初めて「一度きりの機会」
    * (`framed` フラグ)を消費する。戻り値を見ずに常に `framed = true` にすると、
    * `geometry: null` のBodyだけが届いた1通(本体の形状がまだ無い等)で空振りのまま
@@ -1188,8 +1179,8 @@ export function createViewport(container: HTMLElement): Viewport {
    */
   function frameToContent(): boolean {
     const box = new THREE.Box3().setFromObject(root)
-    // **姿勢を合わせられるか(box空)に関わらず、グリッドの縮小許可は必ず1回通す**
-    // (2026-08-31 QA指摘で修正)。`frameAll()`はここ(`frameToContent`)を呼ぶだけで、
+    // **姿勢を合わせられるか(box空)に関わらず、グリッドの縮小許可は必ず1回通す**。
+    // `frameAll()`はここ(`frameToContent`)を呼ぶだけで、
     // 縮小の許可はここにしか無い —— 下の `box.isEmpty()` の早期returnより前に置かないと、
     // モデルを全部消してから`frameAll()`しても、広がったグリッドが二度と縮まなかった
     // (`contentBoxForGrid()`は`sketchRoot`も見るので、ボディだけ消してスケッチが残る
@@ -1210,7 +1201,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // **`fitHalfHeight` をそのまま渡さない。** `HOME_VIEW_OFFSET` の長さが1ではないので、
     // 透視が実際に出すのは `fitHalfHeight` の 1.5362倍ぶん引いた絵である —— 素の
     // `fitHalfHeight` で視錐台を作ると、`frameAll` のたびに**正投影だけが1.54倍に寄る**
-    // (2026-08-28に受入で実測。93.6px → 143.7px)。同じ係数を掛けて、どちらの投影でも
+    // (実測: 93.6px → 143.7px)。同じ係数を掛けて、どちらの投影でも
     // `frameAll` の見かけが揃うようにする。
     if (camera === orthographic) {
       setViewHalfHeight(fitHalfHeight(diagonal / 2) * HOME_VIEW_OFFSET.length())
@@ -1342,7 +1333,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * 対して100mmを返し、面の何倍もの大きさでグリッドが描かれて背景が線で埋まる破綻を
    * 起こした(スクリーンショットで発見。engine `extent-for-floor-leaks-document-scale-into-face-scale`)。
    *
-   * **原点対称の半幅ではなく実測の min/max を返す**(2026-09-03) —— 面のframeの原点は
+   * **原点対称の半幅ではなく実測の min/max を返す** —— 面のframeの原点は
    * 面の中心ではなく**面の隅(OCCTのUVパラメータ化の原点)のことが多く**、対称な枠だと
    * 枠が面の片側へ大きく偏る(実測: u:0-40 / v:-20-0 の面に ±50mm の枠が出た)。
    *
@@ -1457,7 +1448,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * 当たれるジオメトリが無い)。`planePointAt` と同じ解析交差を3枚ぶん回し、**ピック範囲**
    * の外(|u| か |v| が `gridExtent` 超)は捨て、**レイ距離が最小の1枚**を採る。
    *
-   * **描画が無限になってもピック範囲は無限にしない**(2026-09-03) —— 無限にすると
+   * **描画が無限になってもピック範囲は無限にしない** —— 無限にすると
    * engine `duocad-base-planes-lose-to-solids-by-depth` と
    * `viewport-resize-silently-changes-what-a-click-grabs` が同時に悪化する。
    * ホバー板(`rebuildBasePlaneHover`)も同じ `gridExtent` から作る —— ここだけずれると
@@ -1757,7 +1748,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * **一致ではなく閾値で見る。** `OrbitControls` の減衰は指数で近づくので、カメラは
    * いつまでも「完全には」止まらない —— 値の一致を「止まった」の条件にすると
    * `steadySince` が毎フレーム振り出しに戻り、**解像度が二度と採り直されない**
-   * (2026-08-30に実測。ホイールを回しても目標偏差が動かなくなった)。
+   * (実測: ホイールを回しても目標偏差が動かなくなった)。
    * 閾値は `worldPerPixel` と同じ流儀で**画面の画素**で決める —— 世界座標のmmで決めると、
    * 20mmの立方体と600mmの筐体で「止まった」の意味が変わる。
    */
@@ -1834,7 +1825,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * 視錐台が変わっても気づけない。落ち着いたあと `computeFocus` は2835面を走査するので、
    * 姿勢と `focusGeneration` が同じなら再走査しない。
    *
-   * **`moved` の分岐に `updateClipPlanes()` を相乗りさせてある**(2026-08-30)。near/farは
+   * **`moved` の分岐に `updateClipPlanes()` を相乗りさせてある**。near/farは
    * カメラ距離が変わるたびに引き直すべきだが、毎フレーム呼ぶ必要は無い —— この分岐は
    * 既存の画素基準の閾値判定(`cameraMoved()`)で門が閉じているので、オービット/パン/ドリーの
    * 減衰が画素以下に収まった時点で自然に呼ばれなくなる(動いている間は毎フレーム呼ばれるが、
@@ -1989,7 +1980,7 @@ export function createViewport(container: HTMLElement): Viewport {
     opacity: 0.55,
     depthWrite: false,
   })
-  // ホバー中の領域。**3Dに領域の色を新しく作らない**(2026-08-27本人決定) ——
+  // ホバー中の領域。**3Dに領域の色を新しく作らない** ——
   // 面・辺と同じで、既にここにある色に明度を足すだけ。
   const regionHoverMaterial = new THREE.MeshBasicMaterial({
     color: lighten(REGION_COLOR, HOVER_LIGHTEN),
@@ -2282,7 +2273,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * **40mmの板が画面の外に残る**。視点を全体へ戻すボタンは `7363c76`(下段バーの削除)で
    * 落としてあり、人に残る手は手動のオービット/ズームしかない —— **抜けたら入る前へ戻す**。
    * 「全体が入る視点」ではなく「入る前の視点」なのは、スケッチに入る前に自分で寄せていた
-   * 視点まで毎回捨てないため(本人裁定・2026-08-26)。
+   * 視点まで毎回捨てないため。
    *
    * `framedAtEntry` は入った時点で**もう何か描かれていたか**を覚える。**最初の板は
    * スケッチの中で生まれる**ので(`update` の初回 `frameToContent`)、そのときの「入る前」は
@@ -2528,7 +2519,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // **1つの三角形につき4点試す**(重心 + 各頂点へ寄せた3点)。重心1点だけだと、
     // スケッチモードで**点・辺のほうが手前で拾われる**画素に当たったときに候補が尽きる ——
     // ベジエの制御点は曲線から離れた所(＝領域の内側)にも立つので、細長い三角形の重心が
-    // その近くに来ることが実際にある(2026-08-30、`smoke-svg` の丘の領域で踏んだ)。
+    // その近くに来ることが実際にある(`smoke-svg` の丘の領域で実際に踏んだ)。
     const weights: ReadonlyArray<readonly [number, number, number]> = [
       [1 / 3, 1 / 3, 1 / 3],
       [0.5, 0.25, 0.25],
@@ -2552,7 +2543,7 @@ export function createViewport(container: HTMLElement): Viewport {
       // なるので、添字だけ見ると別のスケッチの同じ添字を「当たった」と読む。
       const hit = regionAt(screen.x, screen.y)
       if (!hit || hit.sketchId !== sketchId || hit.index !== index) continue
-      // **スケッチの図形が勝つ画素は返さない**(2026-08-30)。スケッチモード中は点・辺が
+      // **スケッチの図形が勝つ画素は返さない**。スケッチモード中は点・辺が
       // 領域より手前で拾われるので、`regionAt` だけで確かめると「領域に当たるが、実際に
       // クリックすると線が選ばれる」画素を返しうる —— `project*` の約束(その画素で
       // 本当にそれが取れる)が破れる。判定は実際のクリックと同じ `sketchEntityAt` で行う。
@@ -2615,7 +2606,7 @@ export function createViewport(container: HTMLElement): Viewport {
   /** 世界座標を**コンテナ内の画素**へ(視錐台の外・カメラの裏は null)。
    *  `width`/`height` は呼び出し元から渡す —— `geometryInside` の頂点ループから
    *  頂点ごとに `size()`(= DOM の `clientWidth`/`clientHeight` 読み取り)を呼ぶと、
-   *  矩形選択の実測で射影時間の92%を占めるほど遅い(2026-09-04計測)。
+   *  矩形選択の実測で射影時間の92%を占めるほど遅い。
    *  ここでモジュール側にキャッシュしないこと —— リサイズで寸法が変わるため、
    *  キャッシュすると「同じ画素が別のものを指す」落とし穴に直結する
    *  ([[viewport-resize-silently-changes-what-a-click-grabs]])。呼び出し元が
@@ -2782,7 +2773,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * 修飾キーから選択の扱いを決める。**クリックもウィンドウ選択も同じ規則**
    * (2箇所に書くと片方だけ直したときに操作が食い違う)。
    *
-   * **Shift も Ctrl(Mac は Meta)も同じトグル**(2026-08-30本人決定)。除外専用のキーは
+   * **Shift も Ctrl(Mac は Meta)も同じトグル**。除外専用のキーは
    * 持たない —— 間違えたらもう一度クリック(またはドラッグ)すればよい。
    */
   function modeOf(event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): PickMode {
@@ -2845,8 +2836,8 @@ export function createViewport(container: HTMLElement): Viewport {
     //
     // **ただし同着は面が勝つ。** 基準平面に描いて押し出すと、その面は平面とぴったり重なり、
     // 2つのレイ距離が同着になる —— 素の `<` では**どちらが手前かが浮動小数の最後の桁で
-    // 決まり**、見た目が同じなのに指すたび結果が変わる(2026-08-28、無関係な式の書き換えで
-    // カメラが 7e-14 動いただけで面→XZ平面へ反転した)。そこで**画面で1画素にも満たない差を
+    // 決まり**、見た目が同じなのに指すたび結果が変わる(無関係な式の書き換えでカメラが
+    // 7e-14 動いただけで面→XZ平面へ反転したことが実際にあった)。そこで**画面で1画素にも満たない差を
     // 「手前」と見なさない** —— 見分けが付かないなら、実体のある面のほうが狙いである。
     // しきい値はシーンの寸法に依らないよう `worldPerPixel()`(注視点で1画素ぶんの世界長さ)
     // から作る。この不変は `smoke-files.mjs` の(d)が画角を振って固定している。
@@ -2938,10 +2929,10 @@ export function createViewport(container: HTMLElement): Viewport {
     if (probe === hoverProbe) return
     hoverProbe = probe
     const next = point === null ? null : resolveHit(point.x, point.y)
-    // **頂点は出さない**(2026-08-27本人決定)。頂点が取れる画素では面も辺も光らない ——
+    // **頂点は出さない**。頂点が取れる画素では面も辺も光らない ——
     // そこをクリックしても面は選ばれないのだから、光らせないほうが正しい。
     //
-    // **スケッチの点・辺も同じ扱い**(2026-08-30)。予告の色は付けないが、
+    // **スケッチの点・辺も同じ扱い**。予告の色は付けないが、
     // **そこが取れるときは領域を光らせない** —— 光らせると「クリックすれば取れるもの」の
     // 予告が嘘になり、この機能の存在意義そのものが消える(点・辺は領域より手前で拾われる)。
     const face = next?.hit ?? null
@@ -2981,15 +2972,13 @@ export function createViewport(container: HTMLElement): Viewport {
    * 最後に呼ぶ`object.lookAt()`は**そのときの`camera.up`**でロール(傾き)を決める。
    * ビューキューブの上面図/底面図クリック(`upForDirection`)も`lookAtSketch`も、
    * 極付近の縮退(upが視線と平行になり`lookAt`の直交化が壊れる)を避けるために
-   * 一時的に`camera.up`をYへ傾けるが、従来はそこから離れても誰も戻していなかった ——
-   * 傾いたままの`up`で`lookAt`し続け、「キューブの上面をクリックしてから回すと
-   * 絵が転がる」形で見えた(2026-09-03本人報告)。
+   * 一時的に`camera.up`をYへ傾ける。**傾けたまま戻さないと**、「キューブの上面を
+   * クリックしてから回すと絵が転がる」形で壊れる —— 極から離れたら必ずここで戻すこと。
    *
-   * **極に近い間(`|z| > POLE_Z`)は何もしない**(2026-09-03改訂)。最初の実装は
-   * 毎フレーム`upForDirection(今の向き)`を焼き直していたが、あの関数は極付近で
-   * 定数`(0,±1,0)`を返す階段関数なので、**通常のドラッグで極をまたぐだけで
-   * 上が固定されたように(勝手に上下が揃うように)見えた**(本人報告その2)。
-   * 普段のドラッグはそもそも`camera.up`を一切書き換えなくても、`controls`側の
+   * **極に近い間(`|z| > POLE_Z`)は何もしない。** 毎フレーム`upForDirection(今の向き)`を
+   * 焼き直す実装は、あの関数が極付近で定数`(0,±1,0)`を返す階段関数であるため、
+   * **通常のドラッグで極をまたぐだけで上が固定されたように(勝手に上下が揃うように)
+   * 見える**壊れ方になる。普段のドラッグはそもそも`camera.up`を一切書き換えなくても、`controls`側の
    * 回転計算(常にZ軸が極)だけで滑らかに繋がる —— `upForDirection`のGram-Schmidt射影は
    * 素の`(0,0,1)`を渡した場合と`lookAt`内部の直交化後は同じ絵になる(`upForDirection`の
    * docstring参照)ので、**極から離れているときはWORLD_UPのまま放っておけばよい**。
@@ -3132,8 +3121,8 @@ export function createViewport(container: HTMLElement): Viewport {
         tiers: TIERS.map((step, index) => ({ step, alpha: gridTierAlphaValues[index] })),
         planes: [...gridPlanesShown],
         axis: gridAxisShown,
-        // `sketchGridIsFacePlane` が判定の正(`plane.kind`ベース。2026-09-03修正 —— 以前は
-        // frame一致で再判定しており、基準平面と数値的に一致する実ジオメトリの面を見誤っていた)。
+        // `sketchGridIsFacePlane` が判定の正(`plane.kind`ベース。frame一致だけでは見分けが
+        // つかない場合がある —— その宣言のdocstring参照)。
         sketchFaceExtent:
           sketchGridFrame !== null && sketchGridIsFacePlane ? (sketchGridBounds?.half ?? null) : null,
         depthBiasLayers: [...gridDepthBiasLayers],
