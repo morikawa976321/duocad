@@ -135,6 +135,8 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 
 ## 2. UIチートシート
 
+**読むとき**: UI操作(クリック/ピック/選択/undo)・保存まわり・サイドバー寸法を変更するとき、または実機検査の座標がずれたとき。
+
 操作手順・キー割当・ボタン文言は各コンポーネントのコメントが正
 （`CommandHost.svelte`・`commands/*.ts`・`FilesPanel.svelte`・`catalog.py` など）。
 ここに書くのは、コードを読むだけでは分からないことだけ。
@@ -170,6 +172,8 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 ---
 
 ## 3. 自動検査の走らせ方
+
+**読むとき**: 変更後に検査を選んで実行するとき(pytest・形状最適化受入・実ブラウザsmoke・一括受入チェックの4小節から該当するものだけ)。
 
 ### pytest（コア・MCPの契約）
 
@@ -306,6 +310,14 @@ AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_par
 ---
 
 ## 4. アーキテクチャ
+
+**読むとき**（小節ごと）:
+- 中核の決めごと／前提にしないこと／モジュールとimport境界 — 実装タスクでは前提として毎回読む
+- ボディの種別(B-rep/三角形メッシュ) — ボディの種類分岐に触るとき
+- 形状最適化を走らせる — topopt実行フローを変更・確認するとき
+- frontend(`web/`) — フロントエンドのファイル配置を変更するとき
+- AI側(MCP) — MCPツールを追加・変更するとき
+- AI側(アプリ内エージェント) — アプリ内AIエージェントの挙動を変更するとき
 
 **層の図と「外してはいけない3つ」の正は [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) §2。**
 
