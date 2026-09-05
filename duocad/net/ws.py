@@ -66,7 +66,7 @@ MCP起点の変更から `applied` を落として配るため。`set_visible` �
 届いているのと同じ場所)。選択の変更イベントは
 `{"change": "selection", "selection": {...}, "client_op": ...}` の形で、verbの `applied` とは
 キーで区別する(選択はverbではなく、操作ログにも載らない)。**可視性も同じ `change` 系**
-(`{"change": "visibility", ...}`)—— こちらもverbではない(2026-08-26)。
+(`{"change": "visibility", ...}`)—— こちらもverbではない。
 
 **OCPを直接importしない**(境界はkernel.pyだけ)。
 """
@@ -104,12 +104,12 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 #: **文書を変えるかどうかで応答が違う**のがこの表だけの事情:
 #:
 #: - `import_step` … 文書を変える(ログに載る)。応答は状態配信(`import_svg` はスケッチの
-#:   コマンドへ移り、2026-08-28からこの表に無い —— `SKETCH_COMMANDS` 側にいる)
+#:   コマンドなので、この表には無い —— `SKETCH_COMMANDS` 側にいる)
 #: - `export_step` / `export_stl` … 文書を変えない。応答は書いた先の
 #:   パスとバイト数だけ(要求した接続にだけ返る。`preview` と同じ扱い)
 #: - `open_document` はどちらでもない —— 文書を**差し替える**ので全接続へ配る必要があり、
 #:   表からは外して `_dispatch` で個別に扱う。
-#: - **`save_document` も2026-08-30に表から外れた** —— `name` が任意引数になり、
+#: - **`save_document` も表から外れている** —— `name` が任意引数になり、
 #:   「表に載る引数は全部必須」の規律に合わなくなったため(`catalog.Param.ws` 参照)。
 #:   応答は `file` の封筒 + 状態の配り直し(現在ファイル名が変わるため)。
 FILE_COMMANDS: dict = catalog.file_table()
@@ -120,7 +120,6 @@ FILE_COMMANDS: dict = catalog.file_table()
 SELECTION_CONSUMING_COMMANDS: set = catalog.selection_consuming_commands()
 
 #: アプリ内AIが繋げるプロバイダ(`ai_configure` が受け付ける綴り・`ai_status.providers`)。
-#: **2026-08-27に `anthropic` を落として1つになった** —— ClaudeをAPIキーで叩く経路の廃止。
 #: Claudeへ繋ぐ道はMCP(サブスク認証のClaude Codeが `/mcp` へ来る)側に残っている。
 #: **列のまま残すのは次のプロバイダの差込口だから**で、画面はこの長さで選択UIの要否を決める。
 AI_PROVIDERS: tuple = ("openai_compat",)
@@ -135,7 +134,7 @@ class Server:
     Bodyを持つぶん、接続によって最後に送った版が違いうる(例: 遅れて `get_state` した接続は
     まだ何も知らない)。差分(`Session.delta`)はこの接続ごとの版を基準に計算する。
 
-    **同時編集は前提にしない**(2026-08-27決定)。複数接続へ配信する作りだが、想定するのは
+    **同時編集は前提にしない**。複数接続へ配信する作りだが、想定するのは
     「1人が1つのブラウザで開いている」ことだけで、**同じ文書を複数の接続が同時に編集する
     経路に `Session` 全体を守る排他は無い**。verbの適用自体は同期でawaitを挟まないので
     形状が壊れることはないが、ある接続が `_push` のawaitで待っている間に別の接続の操作が
@@ -168,8 +167,6 @@ class Server:
         # `server` をimportしているので逆方向は循環になる)ので、実体は `mcp_server._run`
         # が渡す。`ToolSurface`(`descriptors`/`call`/`error_envelope`)を満たせば何でもよい。
         self._ai_tools: Optional[Any] = None
-        # **プロバイダは1つしか無い**(2026-08-27。ClaudeをAPIキーで叩く経路を廃止した)。
-        # 選ぶ仕組み自体は残してある —— 次のプロバイダの差込口である。
         self._ai_provider_kind = "openai_compat"
         self._ai_model: Optional[str] = None
         self._ai_base_url: Optional[str] = None
@@ -285,7 +282,7 @@ class Server:
         ときだけ中断する** —— 他の画面がまだ見ている間に片方が閉じても実行は続ける
         (`ai_*` は接続ごとではなく共有の1会話という設計と揃える)。
 
-        **形状最適化(`_optimize_running`)は同じ扱いにしない**(2026-09-05の判断)。
+        **形状最適化(`_optimize_running`)は同じ扱いにしない**。
         あちらは**1回で終わる有界な仕事**で、終われば `add_mesh_body` 1行が積まれるだけ
         (要らなければ選んで消せる)。対してAIのループは何回ツールを呼ぶか決まっていない。
         ここで切ると、**画面をリロードしただけで数分の実行が黙って消える** ——
@@ -408,11 +405,11 @@ class Server:
             # するときに何を変えるかは `DocumentView.set_view_resolution` の docstring)。
             # 変わらなかったときは何も送らない —— ズーム操作は連続で飛んでくるので、
             # 同じ値での再配信を許すと27部品ぶんのメッシュが無駄に流れる。
-            # `focus` は **face単位**の高精度化(2026-08-30)。`{body_id: [1始まりの面添字]}` で
+            # `focus` は **face単位**の高精度化。`{body_id: [1始まりの面添字]}` で
             # 「視錐台に入っている/カメラに正面を向けている面」だけを細かく測らせる。
             # **判定は画面側にしか作れない**(カメラを持っているのがそちらだから)ので、
             # ここは受け取った事実を渡すだけにする。省略・不正な値なら全面が細かい側になり、
-            # 2026-08-29の可変解像度と同じ挙動に戻る(旧クライアント互換)。
+            # 可変解像度の既定と同じ挙動に戻る(旧クライアント互換)。
             elif command == "set_view_resolution":
                 changed = self.session.set_view_resolution(
                     message["world_per_pixel"],
@@ -422,9 +419,9 @@ class Server:
                 if changed:
                     await self._push(connection, applied=None)
             # -------------------------------------------------- E: ファイル操作
-            # **SVG読み込みはもうここに無い**(2026-08-28) —— `import_svg` はスケッチのverbに
-            # なり、`sketch_id` が必須引数になったので表(`SKETCH_COMMANDS`)に載る側へ移った
-            # (上のC節で他のスケッチのverbと一緒に捌かれる)。
+            # **SVG読み込みはここには無い** —— `import_svg` はスケッチのverbで
+            # `sketch_id` を必須引数に取るため表(`SKETCH_COMMANDS`)に載る側で捌く
+            # (上のC節で他のスケッチのverbと一緒に扱う)。
             # **verbかどうかで応答が違う**(`FILE_COMMANDS` の3つ目の値)。文書を変えるものは
             # 状態を全接続へ配り、書き出すだけのものは要求した接続へ結果だけ返す。
             elif command in FILE_COMMANDS:
@@ -438,7 +435,7 @@ class Server:
                     await self._push(connection, applied=applied)
                 else:
                     await _send(connection, {"type": "file", **applied})
-            # **保存は表に載らない**(2026-08-30) —— `name` が任意引数になったため。
+            # **保存は表に載らない** —— `name` が任意引数になったため。
             # 表(`FILE_COMMANDS`)は載せた引数を全部必須にする規律なので、省略を許す
             # コマンドはここで個別に捌く(`catalog.Param.ws` のdocstring)。
             #
@@ -540,7 +537,7 @@ class Server:
             )
 
     async def _commit_before_verb(self, connection: Any, command: Any, message: dict) -> None:
-        """**人がツールバーからコマンドを実行する行為そのものを承認とみなす**(2026-08-23本人裁定)。
+        """**人がツールバーからコマンドを実行する行為そのものを承認とみなす**。
 
         対象集合を確定選択から取るverb(`SELECTION_CONSUMING_COMMANDS`)がこのソケットへ
         届いたとき、選択が `origin="proposed"`(AIの提案)のままなら、先に
@@ -560,7 +557,7 @@ class Server:
         **サーバの origin だけが `user` になり、画面は `proposed` のまま残る**。
         `SelectionPanel` を廃した今、origin を人へ伝えるのは3Dの色だけであり、
         AI側が `get_selection` で読む値でもあるので、この食い違いは
-        「人が承認していないのに承認済みに見える」状態そのものになる(2026-08-23 QA指摘・実測で再現)。
+        「人が承認していないのに承認済みに見える」状態そのものになる(実測で再現)。
 
         **`client_op` は載せない(`None`)**。これは人が出した選択編集ではなく、サーバが
         自動で行う確定である。verbの `client_op` を載せると、アプリ層がこれを
@@ -573,8 +570,8 @@ class Server:
         # **貼る先が引数で来ていたら選択は読まない** —— そのときは選択が使われない。
         # 使われない集合を承認扱いにすると、「基準平面を指しただけなのにAIの提案が
         # 確定していた」という静かな変化になる。**スケッチを作るverbは `sketch_create` だけ**
-        # (2026-08-28: `import_svg` は `sketch_id` を取る側へ変わり、対象集合を確定選択から
-        # 取らなくなったので `SELECTION_CONSUMING_COMMANDS` に入らず、この関数の対象からも外れた)。
+        # (`import_svg` は `sketch_id` を取る側なので対象集合を確定選択から取らず、
+        # `SELECTION_CONSUMING_COMMANDS` に入らないためこの関数の対象からも外れる)。
         if name == "sketch_create" and message.get("base_plane") is not None:
             return
         if not selection.get_selection(self.session.document).is_proposed():
@@ -597,8 +594,8 @@ class Server:
 
     # ------------------------------------------------------------------ G: アプリ内AIエージェント
     def _ai_status(self) -> dict:
-        """画面に出してよい設定の全部。**鍵の類は一切載せない**(2026-08-27) ——
-        `api_key_configured` も廃止した(APIキーで繋ぐプロバイダがもう無い)。
+        """画面に出してよい設定の全部。**鍵の類は一切載せない** ——
+        `api_key_configured` も無い(APIキーで繋ぐプロバイダが無いため)。
 
         `model` / `base_url` は明示的に選んでいなければ**プロバイダの既定値**を返す
         (`null` のままだと画面が「何と話しているか」を言えない)。
@@ -627,7 +624,7 @@ class Server:
         今ある `openai_compat` はローカルのllama-serverで鍵を持たないので、任意のホストを
         指しても飛ぶのはキーの無いリクエストだけになる(WebSocketは同一オリジンポリシーで
         止まらないので、127.0.0.1 bindは防御にならない —— 鍵を持つプロバイダを足すときは
-        この節に拒否を書き戻すこと。2026-08-27にClaudeのAPIキー経路ごと消した)。
+        この節に拒否を書き戻すこと)。
         """
         if self._ai_running:
             return {**self._ai_status(), "error": "AI応答中は設定を変更できない(中断してから)"}

@@ -55,7 +55,7 @@ class ToolsOnLoop:
         # **既にイベントループのスレッド上にいるなら、直接呼ぶ**。`run()` が実行器を挟まずに
         # 呼ばれる経路(`tests/test_agent_ws.py` が `asyncio.run(scenario())` の中から直に
         # 呼ぶ検査)では、`run_coroutine_threadsafe(...).result()` は**自分自身が塞いでいる
-        # ループの完了を自分自身で待つ**ことになり、必ず固まる(2026-08-20実測)。
+        # ループの完了を自分自身で待つ**ことになり、必ず固まる(実測)。
         # 同じスレッドなら投げ返す意味が無いので、そのまま呼んで済ませる。
         try:
             running = asyncio.get_running_loop()

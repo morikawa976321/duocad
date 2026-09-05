@@ -12,7 +12,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-#: MCPのHTTPトランスポートの口(2026-08-26)。ブラウザが開くページと同じ8766に生やす
+#: MCPのHTTPトランスポートの口。ブラウザが開くページと同じ8766に生やす
 #: —— 人もClaude Codeも覚えるURLが1つで済む。
 MCP_HTTP_PATH = "/mcp"
 
@@ -52,8 +52,8 @@ class WebHandler(SimpleHTTPRequestHandler):
         # **検査より先に本文を読み切る。** 読まずに 4xx を返して接続を閉じると、まだ書いている
         # クライアントの側で接続が中断される(Windowsでは `ConnectionAbortedError`)——
         # 拒否は届いているのにクライアントからは通信エラーに見える、という紛らわしい形になる。
-        # 2026-08-26、`tests/test_mcp_http.py` の403の検査が**この競合で散発的に赤くなって**
-        # 見つかった(1回目は緑・2回目で赤)。上限で頭打ちにしてあるので読み切って安全である。
+        # `tests/test_mcp_http.py` の403の検査がこの競合で**散発的に赤くなる**(1回目は緑・
+        # 2回目で赤)。上限で頭打ちにしてあるので読み切って安全である。
         raw = self.rfile.read(length) if length > 0 else b""
 
         if self.path.split("?")[0] != MCP_HTTP_PATH or self.mcp_server is None:
@@ -101,7 +101,7 @@ class WebHandler(SimpleHTTPRequestHandler):
         **トークンは置かない。** 守れる相手が増えないためである —— このPCでコードを実行できる
         相手は、トークンを書いたファイルも読める。`allowed_origins` が「`Origin` ヘッダ無しを
         意図的に許可する」と決めたのと同じ線引きで、その外側は防御対象にしない。おかげで
-        `claude mcp add` はURL1つで済む(2026-08-26判断)。
+        `claude mcp add` はURL1つで済む。
         """
         if self.headers.get("Origin") is not None:
             self.send_error(403)
