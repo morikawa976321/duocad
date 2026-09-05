@@ -1,8 +1,4 @@
-"""フィレットの契約。
-
-この3verb(フィレット・面取り・円弧)が要る理由は本人の実物の実測にある: PCケースの脚は5面
-(面取りだけ足りない)・積層プレートは74面(面取りとフィレット)・アロマ拡散器は352面(円弧)・
-PCケースは2835面(フィレット)で、どれも現行のverbだけでは作れなかった。
+"""フィレットの契約。半径によって成功/失敗/「成功だが歪」に分岐する境目が壊れていないか。
 
 期待値の出どころ(20mm立方体・全辺フィレットの実測):
 
@@ -46,7 +42,6 @@ HOLE_FILLET_KINDS = {"plane": 6, "cylinder_full": 1, "torus": 2}
 # 道具（duocadのverbだけで素材を作る。生のOCPで組み立てない）
 # --------------------------------------------------------------------------------------
 def new_box(doc: Document, size: float = CUBE_MM) -> str:
-    """スケッチ（正方形）→ 押し出しで立方体を1つ作り、body_id を返す。"""
     sketch_id = sketch_create(doc, base_plane("XY"))
     from duocad.sketch import add_rectangle
 
@@ -56,7 +51,6 @@ def new_box(doc: Document, size: float = CUBE_MM) -> str:
 
 
 def new_box_with_hole(doc: Document, size: float = CUBE_MM, radius: float = 4.0) -> str:
-    """立方体に貫通穴を1つ開けて body_id を返す（項番3・16で使う）。"""
     body_id = new_box(doc, size)
     sketch_id = sketch_create(doc, base_plane("XY"))
     add_circle(doc, sketch_id, (size / 2, size / 2), radius)
@@ -69,13 +63,11 @@ def body_of(doc: Document, body_id: str) -> Body:
 
 
 def kinds_of(doc: Document, body_id: str) -> dict:
-    """`faces_by_type` から**0でないものだけ**を取り出す（期待値を読みやすくするため）。"""
     described = query.describe_shape(body_of(doc, body_id).shape)
     return {kind: count for kind, count in described["faces_by_type"].items() if count}
 
 
 def edges_of_kind(doc: Document, body_id: str, kind: str) -> list:
-    """`query.describe_edges` で種別の合う辺の添字を返す（辺の選択は問い合わせ層越し）。"""
     return [
         edge["index"]
         for edge in query.describe_edges(body_of(doc, body_id).shape)
@@ -100,7 +92,7 @@ def test_fillet_on_a_box_makes_cylinders_spheres_and_planes():
 
 
 def test_fillet_on_the_vertical_edges_only():
-    """縦4辺だけを丸める。部分円筒が4枚できて面数は 6 + 4 = 10(角の球は出ない)。"""
+    """縦辺だけのフィレットでは角の球ができない(実測: 部分円筒4枚+平面6枚)。"""
     doc = Document()
     body_id = new_box(doc)
     # **端点で選ぶ**（添字の決め打ちにしない）。`describe_edges` が端点を返すのはこのため。
@@ -163,14 +155,9 @@ def test_fillet_on_a_circular_edge_produces_torus():
 # --------------------------------------------------------------------------------------
 # 失敗を黙って通さない（最重要）
 # --------------------------------------------------------------------------------------
-#: 失敗する半径は2つ実測してあるが、どちらも `kernel._blend_edges` の同じ `IsDone()` 判定を
-#: 通るだけなので、低い方1つで足りる。
 @pytest.mark.parametrize("radius", [RADIUS_FAILS_LOW])
 def test_a_failing_fillet_raises_and_leaves_nothing_behind(radius: float):
-    """`IsDone()=False` を**例外**にし、文書もログも変えない。
-
-    素通しすると「操作したのに何も起きていない」がログ上は成功として残る。
-    """
+    """`IsDone()=False` を例外にし、文書もログも変えない。"""
     doc = Document()
     body_id = new_box(doc)
     shape_before = body_of(doc, body_id).shape
@@ -178,9 +165,6 @@ def test_a_failing_fillet_raises_and_leaves_nothing_behind(radius: float):
     log_before = len(doc.log.entries)
     all_edges = [edge["index"] for edge in query.describe_edges(shape_before)]
 
-    # **例外の型まで縛る**。`Exception` で受けると、`IsDone()` を
-    # 一度も見ない実装が引数検査の TypeError で落ちても緑になり、契約が空になる。
-    # 既存の `extrude` 系と同じく ValueError に揃える。
     with pytest.raises(ValueError):
         fillet(doc, all_edges, radius, body_id=body_id)
 
@@ -193,10 +177,8 @@ def test_a_failing_fillet_raises_and_leaves_nothing_behind(radius: float):
 # r=10.5 は「成功するが歪」
 # --------------------------------------------------------------------------------------
 def test_radius_10_5_is_reported_as_done_but_is_actually_broken():
-    """r=10.5 の「成功するが歪」の正体は `BRepCheck.IsValid=False`(実測)。
-
-    duocadは `BRepCheck` が偽の形状を**文書に入れない**。r=10.5 は立方体の半分(10mm)を
-    わずかに超える半径で、フィレット同士が干渉しはじめる領域。
+    """r=10.5は`IsDone()`は真だが`BRepCheck.IsValid=False`(実測) —— 立方体の半辺(10mm)を
+    わずかに超えてフィレット同士が干渉し始める境界値。duocadはこの形状を文書に入れない。
     """
     doc = Document()
     body_id = new_box(doc)
@@ -245,10 +227,7 @@ def test_fillet_is_logged_and_undoable():
 # 由来（provenance）が回収されている
 # --------------------------------------------------------------------------------------
 def test_fillet_records_provenance_through_the_normalizing_adapter():
-    """フィレットは `History()` を持たない(`Modified`/`Generated`/`IsDeleted` だけ)。
-
-    **正規化アダプタ経由**で由来が埋まり、`Operation.provenance` がJSON化できること。
-    """
+    """由来(`Operation.provenance`)が正規化アダプタ経由で埋まり、JSON化できること。"""
     doc = Document()
     body_id = new_box(doc)
     all_edges = [edge["index"] for edge in query.describe_edges(body_of(doc, body_id).shape)]
@@ -265,11 +244,8 @@ def test_fillet_records_provenance_through_the_normalizing_adapter():
 # フィレット後は面の添字がずれる（生の添字を保存してはいけない）
 # --------------------------------------------------------------------------------------
 def test_fillet_shifts_face_indices():
-    """**同じ面を追跡すると添字が変わりうる**ことを実行可能な形で残す。
-
-    実測(20mm立方体の1辺に r=2)で 2→7 / 3→6 / 6→2 と入れ替わった。穴の径変更・穴の追加・
-    ポケット・面取りでは動かなかったので、**散発的に静かに間違う** —— 生の添字を保存しては
-    いけない、の根拠。
+    """同じ面でも添字は形状変更で変わりうる(実測: 20mm立方体の1辺にr=2で2→7/3→6/6→2)。
+    穴の径変更・追加・ポケット・面取りでは動かなかった —— 散発的に静かに間違う。
     """
     doc = Document()
     body_id = new_box(doc)
@@ -313,11 +289,7 @@ def test_fillet_needs_at_least_one_edge():
 # 面取りとフィレットの合成
 # --------------------------------------------------------------------------------------
 def test_chamfer_and_fillet_compose_on_the_same_body():
-    """**同じボディに面取りとフィレットを順にかけられる**こと。
-
-    本命の受入対象(積層プレート)は円錐8とトーラス12を**同時に**持つので、片方だけ動く実装では
-    実物に届かない。
-    """
+    """同じボディに面取りとフィレットを順にかけられること。"""
     from duocad.verbs import chamfer
 
     doc = Document()

@@ -1,14 +1,4 @@
-"""M3契約: 矩形反復(`duocad.verbs.pattern`)。
-
-**反復は1つのverb**として持つ(実装計画書§2「verbの粒度」)。N個の独立した図形へ展開すると
-個数も間隔も後から変えられなくなり、**反復の存在理由そのものが消える**。
-展開は幾何を作るときだけ行う。
-
-M3の意義そのものが `test_editing_one_radius_moves_every_hole` である:
-受入対象の棚取付具とモニタ取付具は、穴の半径セットが **[2.0, 2.5, 5.0, 9.0, 10.0] で
-完全に一致**しており(実測)、M4/M5のネジ穴と座ぐりがこれにあたる。
-**半径を1箇所変えて全部の穴が追随する**のがこの機能の存在理由。
-"""
+"""M3契約: 矩形反復(`duocad.verbs.pattern`)。"""
 from __future__ import annotations
 
 import json
@@ -46,7 +36,6 @@ VOLUME_REL_TOL = 1.0e-9
 
 
 def plate(document: Document) -> None:
-    """40×30の板(厚さ10)を作る。"""
     sketch_id = sketch_create(document, "XY")
     add_rectangle(document, sketch_id, (0.0, 0.0), PLATE_WIDTH, PLATE_HEIGHT)
     extrude(document, [region_ref(sketch_id, regions(document, sketch_id)[0].index)],
@@ -54,7 +43,6 @@ def plate(document: Document) -> None:
 
 
 def hole_pattern(document: Document) -> tuple:
-    """穴1つ＋3×2の反復を持つスケッチを作り、(sketch_id, entity_id, pattern_id) を返す。"""
     sketch_id = sketch_create(document, "XY")
     circle = add_circle(document, sketch_id, FIRST_HOLE, HOLE_RADIUS)
     pattern_id = pattern_rectangular(
@@ -64,13 +52,12 @@ def hole_pattern(document: Document) -> tuple:
 
 
 def drill_all(document: Document, sketch_id: str) -> None:
-    """スケッチの全領域を1回の押し出しで切り取る。"""
     refs = [region_ref(sketch_id, region.index) for region in regions(document, sketch_id)]
     extrude(document, refs, HOLE_DEPTH, mode="cut")
 
 
 def hole_axes(shape) -> list:
-    """穴(全周円筒面)の軸の (x, y) を昇順で返す。全周円筒の重心は軸上にある。"""
+    """全周円筒面の重心は軸上にある(穴の位置として使える理由)。"""
     return sorted(
         (round(face["centroid"][0], 6), round(face["centroid"][1], 6))
         for face in kernel.tessellate(shape)["faces"]
@@ -94,11 +81,7 @@ def test_pattern_multiplies_the_entity_into_nx_times_ny_regions():
 
 
 def test_pattern_is_one_operation_and_is_not_expanded_into_entities():
-    """反復が**1つのverbとして操作ログに1行**で載り、図形はN個に展開されない。
-
-    展開してしまうと、個数も間隔も後から変えられなくなる(＝編集可能性が消える)。
-    スケッチが持つのは元の図形1個と反復1個だけで、6個の円は幾何を作るときの導出物である。
-    """
+    """反復が1つのverbとして操作ログに1行で載り、図形はN個に展開されない。"""
     document = Document()
     sketch_id, circle, pattern_id = hole_pattern(document)
 
@@ -106,8 +89,6 @@ def test_pattern_is_one_operation_and_is_not_expanded_into_entities():
     assert [entity.id for entity in sketch.entities] == [circle], "図形が展開されている"
     assert [pattern.id for pattern in sketch.patterns] == [pattern_id]
     assert sketch.patterns[0].sources == [circle]
-    # 間隔と個数も**名前つきの値への参照**(図形と同じ扱い。ここが素の数値だと
-    # 後から個数・間隔を変えられない = 反復の存在理由が消える)
     pattern_params = sketch.patterns[0].params
     assert set(pattern_params) == {"dx", "dy", "nx", "ny"}
     assert all(isinstance(value, str) for value in pattern_params.values()), pattern_params
@@ -169,8 +150,8 @@ def test_pattern_rejects_counts_that_are_not_positive_integers(dx, dy, nx, ny):
 def test_pattern_rejects_an_empty_or_foreign_entity_list():
     """反復する図形が無い / 別スケッチの図形は失敗する(黙って空の反復を作らない)。
 
-    例外の種類はM0〜M2の流儀に合わせる: 「値がおかしい」は `ValueError`、
-    「そのIDのものが無い」は `KeyError`(`get_sketch` / `entity_params` と同じ)。
+    「値がおかしい」は `ValueError`、「そのIDのものが無い」は `KeyError`
+    (`get_sketch` / `entity_params` と同じ)。
     """
     document = Document()
     first = sketch_create(document, "XY")
@@ -225,11 +206,7 @@ def test_extruding_a_pattern_opens_nx_times_ny_holes():
 
 
 def test_changing_the_spacing_moves_the_holes():
-    """`dx` を後から変更すると、**開けた穴の間隔が追随する**(個数は変わらない)。
-
-    形状はログからの導出物なので、`set_parameter` が再生して作り直す(§3.1)。
-    穴の位置は全周円筒面の重心(=軸)で確かめる。
-    """
+    """`dx` を後から変更すると、開けた穴の間隔が追随する(個数は変わらない)。"""
     document = Document()
     plate(document)
     sketch_id, _, pattern_id = hole_pattern(document)
@@ -253,14 +230,7 @@ def test_changing_the_spacing_moves_the_holes():
 
 
 def test_changing_the_count_changes_the_regions_and_the_next_extrusion():
-    """`nx` を後から変更すると**領域の個数が追随**し、そのあと押し出せば穴の数も追随する。
-
-    **押し出し済みの選択は追随しない**(既知の制限・下のテストが固定する): `extrude` は
-    領域を**添字の集合**として記録する(§3.5)ので、個数が増えても記録済みの選択は増えず、
-    減れば指す先が消えて失敗する。選択が「このスケッチの全領域」のような**述語**で
-    書けるようになるのはM4(§5 `propose_selection(predicate | refs)`)であり、
-    そこまでは「個数を変えたら押し出し直す」が正しい手順である。
-    """
+    """`nx` を後から変更すると領域の個数が追随し、そのあと押し出せば穴の数も追随する。"""
     document = Document()
     plate(document)
     sketch_id, _, pattern_id = hole_pattern(document)
@@ -289,11 +259,10 @@ def test_changing_the_count_changes_the_regions_and_the_next_extrusion():
 
 
 def test_reducing_the_count_below_an_extruded_selection_is_refused():
-    """押し出し済みの領域が反復の縮小で**消える**編集は、黙って通さず文書を元に戻す。
+    """押し出し済みの領域が反復の縮小で消える編集は、黙って通さず文書を元に戻す。
 
-    項番13(「領域が分裂・合体・消失した場合に黙って通さない」)がパラメータ経由で起きる典型。
     6個の穴を開けたあとで `nx` を3から2へ減らすと、記録された押し出しが指していた
-    5番目・6番目の領域が消える。ここを通すと、**開けたはずの穴が黙って減った**モデルが残る。
+    5番目・6番目の領域が消える。開けたはずの穴が黙って減ったモデルを残さない。
     """
     document = Document()
     plate(document)
@@ -315,12 +284,7 @@ def test_reducing_the_count_below_an_extruded_selection_is_refused():
 
 
 def test_editing_one_radius_moves_every_hole():
-    """**穴の半径を1箇所だけ編集すると、反復で作った全部の穴が追随する。**
-
-    M3の存在理由そのもの。実測の裏付け: 棚取付具とモニタ取付具は穴の半径セットが
-    [2.0, 2.5, 5.0, 9.0, 10.0] で完全に一致しており、M4/M5のネジ穴と座ぐりである。
-    反復をN個の図形に展開していたら、ここでN箇所を直すことになる。
-    """
+    """穴の半径を1箇所だけ編集すると、反復で作った全部の穴が追随する。"""
     document = Document()
     plate(document)
     sketch_id, circle, _ = hole_pattern(document)

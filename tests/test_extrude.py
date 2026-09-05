@@ -1,8 +1,7 @@
 """M2契約: 領域の押し出し(`duocad.verbs.extrude`)。
 
 M1の `extrude_face`(既存ソリッドの面を押す)とは別のverbで、こちらは**スケッチの領域**を
-`join`(足す)/`cut`(引く)する。本人が日常的に使う「円を線で分けて片側だけ押し出す」と、
-受入対象である棚取付具の「板と穴」がこのverbで作れることを固定する(実装計画書§8のM2の検証)。
+`join`(足す)/`cut`(引く)する。
 
 検算はすべて**実測または算術で決まる値**:
 
@@ -30,7 +29,7 @@ from duocad.sketch import add_circle, add_line, add_rectangle, sketch_create
 from duocad.verbs import extrude
 from duocad.verbs.extrude_face import extrude_face
 
-#: 棚取付具の板を模した寸法(受入対象の部品と同じ「板＋穴」の構成を最小で作る)
+#: 板＋穴の構成を最小で作るための寸法
 PLATE_WIDTH = 40.0
 PLATE_HEIGHT = 30.0
 PLATE_THICKNESS = 10.0
@@ -54,7 +53,6 @@ LARGER_HALF_AREA = 826.215
 
 
 def split_circle_sketch(document: Document) -> str:
-    """半径20の円を y=5 の線分で割ったスケッチ(領域2個)。"""
     sketch_id = sketch_create(document, "XY")
     add_circle(document, sketch_id, (0.0, 0.0), 20.0)
     add_line(document, sketch_id, (-30.0, 5.0), (30.0, 5.0))
@@ -62,7 +60,6 @@ def split_circle_sketch(document: Document) -> str:
 
 
 def plate_document() -> Document:
-    """40×30の長方形を10mm押し出した板を1つ持つ文書。"""
     document = Document()
     sketch_id = sketch_create(document, "XY")
     add_rectangle(document, sketch_id, (0.0, 0.0), PLATE_WIDTH, PLATE_HEIGHT)
@@ -73,7 +70,6 @@ def plate_document() -> Document:
 
 
 def drill(document: Document) -> None:
-    """板に半径3の穴を1つ開ける(XY平面のスケッチから貫通させる)。"""
     sketch_id = sketch_create(document, "XY")
     add_circle(document, sketch_id, HOLE_CENTER, HOLE_RADIUS)
     hole = regions(document, sketch_id)
@@ -87,8 +83,8 @@ def drill(document: Document) -> None:
 def test_extruding_one_half_of_a_split_circle_gives_area_times_distance():
     """**分割した領域の片方だけ**を10mm押し出すと、体積 = その領域の面積 × 10 になる。
 
-    これがM2の存在理由そのもの(実装計画書§3.3・§8のM2の検証)。領域の片方だけを対象に
-    できていなければ、体積は円全体の押し出し(=1256.637×10)になって落ちる。
+    領域の片方だけを対象にできていなければ、体積は円全体の押し出し(=1256.637×10)に
+    なって落ちる。
     """
     document = Document()
     sketch_id = split_circle_sketch(document)
@@ -104,11 +100,7 @@ def test_extruding_one_half_of_a_split_circle_gives_area_times_distance():
 
 
 def test_join_fuses_into_the_existing_body():
-    """対象ボディがあるときの `join` は、そこへ肉を足す(2つ目のソリッドを作らない)。
-
-    板(z=0..10)の内側に10×10の長方形を置いて15mm押し出す。重なる10mmぶんは増えないので、
-    増分は 10×10×5 = 500 になる。
-    """
+    """対象ボディがあるときの `join` は、そこへ肉を足す(2つ目のソリッドを作らない)。"""
     document = plate_document()
     body = document.active_body()
     sketch_id = sketch_create(document, "XY")
@@ -127,15 +119,13 @@ def test_join_fuses_into_the_existing_body():
 
 
 # --------------------------------------------------------------------------------------
-# `new` — 「対象があっても融合しない」種別(2026-08-26)
+# `new` — 「対象があっても融合しない」種別
 # --------------------------------------------------------------------------------------
 def test_new_makes_a_second_body_instead_of_fusing():
     """`mode="new"` は対象ボディがあっても融合せず、**独立したソリッドを1つ足す**。
 
-    `test_join_fuses_into_the_existing_body` と**同じ入力**を種別だけ変えて打つ。
-    `join` は 1ボディ・+500(重なる10mmは増えない)、`new` は 2ボディ・板はそのままで
-    10×10×15 = 1500 の別ソリッドになる。**この差が出なければ `new` が `join` に
-    落ちている**(既存ボディがいると2つ目の板が作れない元の状態に戻る)。
+    差が出なければ、既存ボディがいると2つ目の板が作れない状態に `new` が `join` へ
+    落ちている。
     """
     document = plate_document()
     plate = document.active_body()
@@ -158,11 +148,7 @@ def test_new_makes_a_second_body_instead_of_fusing():
 
 
 def test_new_refuses_a_body_id():
-    """`new` に行き先を渡したら ValueError。文書にもログにも何も残さない。
-
-    黙って無視すると「そのボディへ足したつもりが別ボディになっていた」が成功として通る
-    —— しかも形は増えるので、画面上は失敗に見えない(`mode` を既定で埋めない理由と同じ)。
-    """
+    """`new` に行き先を渡したら ValueError。文書にもログにも何も残さない。"""
     document = plate_document()
     plate = document.active_body()
     sketch_id = sketch_create(document, "XY")
@@ -220,12 +206,10 @@ def test_new_is_undoable_and_replays():
 
 
 def test_extrude_is_logged_and_undoable():
-    """押し出しが操作ログに1行で載り、undoで戻る(verbの粒度。§2)。
+    """押し出しが操作ログに1行で載り、undoで戻る。
 
-    `selection` と `args["regions"]` は **JSON化できる素のdict**であること(§3.6。
-    `RegionRef` をそのまま入れると `to_json()` で落ちる)。作ったボディのIDを
-    `args["body_id"]` に記録することも固定する — 記録が無いと再生で別のIDになり、
-    保存した選択集合が指す先を失う。
+    `args["regions"]` は `RegionRef` をそのまま入れると `to_json()` で落ちる ——
+    JSON化できる素のdictであること。
     """
     document = Document()
     sketch_id = split_circle_sketch(document)
@@ -256,11 +240,9 @@ def test_extrude_is_logged_and_undoable():
 
 
 def test_undo_restores_the_shape_for_fuse_and_cut():
-    """既存ボディへの `join`(fuse)と `cut` も undo で元の形状に戻る。
-
-    undoの実体は2通りに分かれる — **新しく作ったボディなら取り除く**(上のテスト)、
-    **既存ボディを変えたなら形状を戻す**(こちら)。前者だけを見ていると後者の経路が
-    未検証のまま残る。`extrude_face` が形状の復帰を別に見ているのと同じ。
+    """既存ボディへの `join`(fuse)と `cut` も undo で元の形状に戻る(「作ったものを
+    消す」経路とは別に「形状を戻す」経路があり、こちらはその検証。`extrude_face` の
+    undoと同じ)。
     """
     document = plate_document()
     body_id = document.active_body().id
@@ -293,11 +275,7 @@ def test_undo_restores_the_shape_for_fuse_and_cut():
 # 失敗を黙って通さない(§6予防6・§7)
 # --------------------------------------------------------------------------------------
 def test_extrude_without_an_existing_region_fails_and_changes_nothing():
-    """押し出し対象の領域が存在しない場合は失敗し、**文書が変更されない**。
-
-    領域は図形の配置から計算されるので、添字が指す先が消えていることが普通に起きる
-    (§7「領域はパラメータ編集で変わる」)。ここを黙って通すと空振りが静かに残る。
-    """
+    """押し出し対象の領域が存在しない場合は失敗し、文書が変更されない。"""
     document = plate_document()
     sketch_id = sketch_create(document, "XY")
     add_circle(document, sketch_id, HOLE_CENTER, HOLE_RADIUS)
@@ -352,12 +330,11 @@ def test_cut_without_a_target_body_fails():
 def test_a_plate_with_a_hole_has_only_planes_and_a_full_cylinder():
     """長方形を押し出して板にし、円を `cut` で押し出して穴を開けられる。
 
-    受入対象の `shelf_attachment_GD.step` は **56面 = 平面34 + 全周円筒22(穴)** で、
-    トーラス0・円錐0・spline0(実装計画書§0)。つまりM2のverbだけで届く構成であり、
-    ここではその最小形(平面6 + 全周円筒1 = 7面)を作れることを確かめる。
-    **面の構成と体積はOCPで直接実測した値**(box40×30×10からr=3の円柱を引き、
-    `query.describe_shape` で数えた)。体積が穴の分だけ減ることもここで見る
-    (面の構成だけだと、半径違いの穴でも7面のまま通ってしまう)。
+    受入対象の `shelf_attachment_GD.step` は56面 = 平面34 + 全周円筒22(穴)、トーラス0・
+    円錐0・spline0(実測)。ここではその最小形(平面6 + 全周円筒1 = 7面)を作れることを
+    確かめる。面の構成と体積はOCPで直接実測した値(box40×30×10からr=3の円柱を引き、
+    `query.describe_shape` で数えた)。体積が穴の分だけ減ることも見る(面の構成だけだと、
+    半径違いの穴でも7面のまま通ってしまう)。
     """
     document = plate_document()
     assert math.isclose(
@@ -387,10 +364,10 @@ def test_a_plate_with_a_hole_has_only_planes_and_a_full_cylinder():
 
 
 def test_replay_reproduces_the_split_circle_extrusion():
-    """円＋**線分**のスケッチと片側だけの押し出しが、保存したログから再生できる。
+    """円＋線分のスケッチと片側だけの押し出しが、保存したログから再生できる。
 
-    M2の本筋の経路(円を線で割って片側を押す)を再生まで通す。下の板と穴の再生は
-    長方形と円しか通らないので、`add_line` の再生はこちらでしか検査されない。
+    下の板と穴の再生は長方形と円しか通らないので、`add_line` の再生はこちらでしか
+    検査されない。
     """
     document = Document()
     sketch_id = split_circle_sketch(document)
@@ -409,11 +386,7 @@ def test_replay_reproduces_the_split_circle_extrusion():
 
 
 def test_replay_reproduces_the_plate_with_the_hole():
-    """保存したログを再生すると同じ板と穴になる(形状はログからの導出物。§3.1)。
-
-    スケッチ・図形追加・押し出しの5操作が全部再生できることを一度に見る。
-    再生の経路が通らないと「開くと形が変わる」になるので、M2の締めはここ。
-    """
+    """保存したログを再生すると同じ板と穴になる(形状はログからの導出物)。"""
     document = plate_document()
     drill(document)
     expected_volume = query.volume(document.active_body().shape)

@@ -1,27 +1,8 @@
-"""円形反復 `pattern_circular` の契約。
+"""円形反復 `pattern_circular` の契約。`pattern_rectangular` の兄弟で語彙・規律を揃える
+(数値の場合分けは tests/README.md 参照)。
 
-`pattern_rectangular` の**兄弟**なので、語彙も規律も揃える:
-
-- **反復は1つのverbとして持つ**。N個の独立した図形へ展開すると、個数や角度を後から変えられ
-  なくなり**反復の存在理由そのものが消える**。
-- 数値は**名前つきの値**にして後から編集できるようにする。
-- 元の図形は反復に吸収される(配置の0番目が元の位置)。
-- 失敗は黙って通さない。**失敗時は文書にもログにも変更を残さない**。
-
-矩形反復に無かったぶん:
-
-1. **`Pattern.kind`**(`"rectangular"` | `"circular"`)。`Body.kind` / `Entity.kind` と同じ語彙。
-2. **`rotate_copies` は `params` に入れない**。`params` は「後から `set_parameter` で編集
-   できる**寸法値**」の置き場であり、真偽の切り替えを混ぜると `0.5` を書き込める余地ができる。
-   `Pattern.options`(素のdict)に持つ。
-3. **刻み角の場合分け**(実際に踏みやすい):
-   - 全周(`total_angle == 360`)… 刻みは **`360 / count`**。最後の複製が最初と重ならない。
-   - 全周未満 … **端点を含む**ので刻みは **`total_angle / (count - 1)`**。
-4. **回転させた長方形は4本の線分へ展開する**。`Entity` の長方形は軸平行の
-   `x, y, width, height` しか持てず、回転した矩形をその語彙で表せないため。展開結果は幾何を
-   作るための導出物なので、**元と同じ種別である必要はない**。
-5. **回転中心と図形の中心が一致する場合は拒否する**。すべての複製が元と完全に重なり、
-   「反復したのに何も増えない」が成功として通ってしまうため。
+矩形反復に無かったぶん: `Pattern.kind`(`"rectangular"` | `"circular"`)は `Body.kind` /
+`Entity.kind` と同じ語彙。
 """
 from __future__ import annotations
 
@@ -49,7 +30,6 @@ COUNT = 6
 
 
 def plate(document: Document) -> None:
-    """60×60の板（厚さ10）を作る。"""
     sketch_id = sketch_create(document, "XY")
     add_rectangle(document, sketch_id, (0.0, 0.0), PLATE_SIZE, PLATE_SIZE)
     extrude(
@@ -61,7 +41,6 @@ def plate(document: Document) -> None:
 
 
 def hole_ring(document: Document, count: int = COUNT, total_angle: float = 360.0) -> tuple:
-    """穴1つ＋円形反復を持つスケッチを作り、(sketch_id, entity_id, pattern_id) を返す。"""
     sketch_id = sketch_create(document, "XY")
     circle = add_circle(document, sketch_id, FIRST_HOLE, HOLE_RADIUS)
     pattern_id = pattern_circular(
@@ -71,13 +50,12 @@ def hole_ring(document: Document, count: int = COUNT, total_angle: float = 360.0
 
 
 def drill_all(document: Document, sketch_id: str) -> None:
-    """スケッチの全領域を1回の押し出しで切り取る。"""
     refs = [region_ref(sketch_id, region.index) for region in regions(document, sketch_id)]
     extrude(document, refs, HOLE_DEPTH, mode="cut")
 
 
 def hole_axes(shape) -> list:
-    """穴（全周円筒面）の軸の (x, y) を昇順で返す（`test_pattern.py` と同じ流儀）。"""
+    """全周円筒面の重心は軸上にある（`test_pattern.py` と同じ流儀）。"""
     return sorted(
         (round(face["centroid"][0], 6), round(face["centroid"][1], 6))
         for face in kernel.tessellate(shape)["faces"]
@@ -86,7 +64,6 @@ def hole_axes(shape) -> list:
 
 
 def angles_from_center(points: list) -> list:
-    """中心から見た角度（度・0〜360）を昇順で返す。"""
     return sorted(
         round(math.degrees(math.atan2(y - CENTER[1], x - CENTER[0])) % 360.0, 6)
         for x, y in points
@@ -109,11 +86,7 @@ def test_pattern_multiplies_the_entity_into_count_regions():
 
 
 def test_pattern_is_one_operation_and_is_not_expanded_into_entities():
-    """反復は**操作ログに1行**で載り、図形はN個に展開されない。
-
-    展開してしまうと個数も角度も後から変えられなくなる（＝編集可能性が消える）。
-    スケッチが持つのは元の円1個と反復1個だけで、6個の円は幾何を作るときの導出物。
-    """
+    """反復は操作ログに1行で載り、図形はN個に展開されない。"""
     document = Document()
     sketch_id, entity_id, pattern_id = hole_ring(document)
 
@@ -172,10 +145,8 @@ def test_extruding_a_circular_pattern_opens_count_holes():
 # 幾何の正しさ（刻み角の場合分け）
 # --------------------------------------------------------------------------------------
 def test_a_full_circle_divides_360_by_count():
-    """全周のときの刻みは **360/count**（`360/(count-1)` ではない）。
-
-    6個なら 60度ずつ。**最後の複製が最初と重ならない**ことがこの割り方の要点で、
-    ここを `count-1` で割ると 72度刻みになり、6個目が元の位置へ戻って重なる。
+    """全周のときの刻みは360/count。6個なら60度ずつ(`count-1`で割ると72度になり、
+    6個目が元の位置へ戻って重なる)。
     """
     document = Document()
     plate(document)
@@ -191,10 +162,8 @@ def test_a_full_circle_divides_360_by_count():
 
 
 def test_a_partial_angle_includes_both_ends():
-    """全周未満のときは**端点を含む**ので刻みは `total_angle/(count-1)`。
-
-    180度に3個なら 0度・90度・180度（刻み90度）。全周と同じ `total_angle/count` で
-    割ると 60度刻みになり、指定した180度に最後の複製が届かない。
+    """全周未満のときは端点を含むので刻みは`total_angle/(count-1)`。180度に3個なら
+    0/90/180度(`total_angle/count`で割ると60度刻みになり180度に届かない)。
     """
     document = Document()
     plate(document)
@@ -243,9 +212,7 @@ def test_rotate_copies_false_keeps_the_original_orientation():
 def test_rotate_copies_true_actually_rotates_the_rectangle():
     """`rotate_copies=True`（既定）なら複製は回転する。
 
-    90度回した長方形は**幅と高さが入れ替わる**ので、境界箱で区別できる。面積は不変。
-    **回した長方形は軸平行の `x,y,width,height` で表せない**ので、展開では
-    4本の線分に落とす（モジュールdocstringの「この契約で決めたこと」4）。
+    90度回した長方形は幅と高さが入れ替わるので、境界箱で区別できる。面積は不変。
     """
     document = Document()
     sketch_id = sketch_create(document, "XY")
@@ -297,9 +264,8 @@ def test_changing_the_total_angle_moves_the_copies():
 def test_changing_the_center_moves_the_whole_ring():
     """`center` を変更すると配置全体が移動する（中心も名前つきの値）。
 
-    `Region` は `index` と `area` しか持たない（実装計画書§3.3のとおり）ので、位置は
-    **押し出して開いた穴の軸**で見る（`test_pattern.py` と同じ流儀）。
-    中心を +5mm 動かせば、6つの穴の重心の平均も +5mm 動く。
+    `Region` は `index` と `area` しか持たないので、位置は押し出して開いた穴の軸で見る
+    （`test_pattern.py` と同じ流儀）。中心を+5mm動かせば、6つの穴の重心の平均も+5mm動く。
     """
     document = Document()
     plate(document)
@@ -359,7 +325,6 @@ def test_total_angle_must_be_usable(total_angle):
     """`total_angle` は 0 < angle <= 360。0・負・360超・NaNは ValueError。
 
     360を超える指定は「1周を超えて並べる」意味になり、複製が必ず重なる。
-    どう振る舞うべきか決められないものは**受け取らない**のが黙って壊れない唯一の方法。
     """
     document = Document()
     sketch_id = sketch_create(document, "XY")
@@ -408,11 +373,10 @@ def test_patterning_the_same_entity_twice_is_refused():
 
 
 def test_a_shape_centred_on_the_pivot_is_refused():
-    """**回転中心と図形の中心が一致する場合は拒否する**（項番14で決めた挙動）。
+    """回転中心と図形の中心が一致する場合は拒否する。
 
-    すべての複製が元と完全に重なり、「反復したのに何も増えない」が成功として通ってしまう
-    （領域は1個のまま）。許すか拒否するかはどちらでもよいが、**黙って壊れないこと**が
-    要件なので拒否を選んだ。理由を例外メッセージに書くこと。
+    すべての複製が元と完全に重なり、「反復したのに何も増えない」が成功として通って
+    しまう（領域は1個のまま）。
     """
     document = Document()
     sketch_id = sketch_create(document, "XY")
@@ -427,11 +391,7 @@ def test_a_shape_centred_on_the_pivot_is_refused():
 
 
 def test_reducing_the_count_below_one_is_refused_afterwards_too():
-    """`set_parameter` 経由でも `count` の検査が効く。
-
-    作成時だけ検査していると、同じ値を後から書き込む経路が素通りする
-    （`pattern_rectangular` が `nx`/`ny` で踏んだのと同じ穴。`parameters.is_positive_int`）。
-    """
+    """`set_parameter` 経由でも `count` の検査が効く。"""
     document = Document()
     sketch_id, _, _ = hole_ring(document)
     name = get_sketch(document, sketch_id).patterns[0].params["count"]
@@ -444,10 +404,8 @@ def test_reducing_the_count_below_one_is_refused_afterwards_too():
 def test_changing_the_total_angle_to_an_unusable_value_is_refused():
     """`total_angle` も `set_parameter` 経由で検査する。
 
-    `count` だけを検査していると、**角度のほうから同じ壊れ方を作れる** —
-    0度にすれば全複製が重なり、360超なら1周を超えて重なるのに、例外は出ない。
-    「作成時だけ検査していると後から書き込む経路が素通りする」は `nx`/`ny` で既に
-    踏んだ穴で、角度も同じ扱いにする。
+    `count` だけを検査していると、角度のほうから同じ壊れ方(0度で全複製が重なる/360超で
+    1周を超えて重なる)を作れてしまう。
     """
     document = Document()
     sketch_id, _, _ = hole_ring(document)

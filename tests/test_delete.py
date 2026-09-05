@@ -1,6 +1,4 @@
-"""verb `delete` の契約 —— **消す手段が undo しか無かった状態を終わらせる1本**。
-
-固定するのは5つ:
+"""verb `delete` の契約。固定するのは5つ:
 
 1. **選択の読み方**(`selection.require_deletable`) —— ボディ由来(面/辺/頂点/ボディ)と
    スケッチ図形を**同時に**畳む。片方が0件でも壊れない(既存の `require_*` は
@@ -41,7 +39,7 @@ def _select(session: Session, refs: list) -> None:
 
 
 def _box(session: Session):
-    """スケッチ→長方形→領域押し出しで 20mm の立方体を1つ作る(人の順序そのもの)。"""
+    """Session経由(人の操作順)で20mmの立方体を1つ作る。verbを直接呼ばない。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
     _select(session, [{"sketch": sketch_id, "index": 1}])
@@ -124,11 +122,7 @@ def test_a_proposed_selection_is_not_deletable(session: Session) -> None:
 
 
 def test_a_region_in_the_selection_is_ignored_and_the_rest_is_deleted(session: Session) -> None:
-    """領域が選択に混ざっていても、残りは問題なく消える(領域は黙って無視。2026-09-03)。
-
-    領域は図形の配置から計算されるだけの見た目で、それ自体を消す操作は無い。
-    面(=ボディ)を選んで消せば、領域はその図形が無くなった時点で自然に消える。
-    """
+    """領域が選択に混ざっていても、残りは問題なく消える(領域は黙って無視)。"""
     body, sketch_id = _box(session)
     _select(
         session,
@@ -147,7 +141,7 @@ def test_a_region_in_the_selection_is_ignored_and_the_rest_is_deleted(session: S
 
 
 def test_a_selection_of_only_regions_is_refused(session: Session) -> None:
-    """領域**だけ**を選んでいるときは、削除できる対象が無いので従来どおり拒否する。"""
+    """領域**だけ**を選んでいるときは、削除できる対象が無いので拒否する。"""
     _, sketch_id = _box(session)
     _select(session, [{"sketch": sketch_id, "index": 1}])
     before = _body_ids(session)
@@ -317,11 +311,7 @@ def test_deleting_nothing_is_refused(session: Session) -> None:
 
 
 def test_a_hidden_body_is_refused(session: Session) -> None:
-    """隠したボディは指せない(`fillet` / `move_body` と同じ門番)。
-
-    参照ボディ(`kind="reference"`)は2026-09-03に概念ごと撤去したので
-    ([[duocad-reference-body-removal-decided]])、その拒否は構成すらできなくなった。
-    """
+    """隠したボディは指せない(`fillet` / `move_body` と同じ門番)。"""
     body, _ = _box(session)
     _select(session, [{"body": body.id, "kind": "body", "index": None}])
     session.set_visible(body.id, False)
@@ -451,7 +441,7 @@ def test_the_browser_can_delete_and_an_ai_proposal_is_committed_first(session: S
     """`uses_selection=True` なので、提案のままでもブラウザからの実行は通る。
 
     `previewable=False` との組み合わせ(プレビューせず即実行)がWSの表で捌けることも
-    ここで一緒に見る —— 引数を1つも取らないコマンドが `FEATURE_COMMANDS` に載る初めての例。
+    ここで一緒に見る。
     """
     body, _ = _box(session)
     session.propose_selection([{"body": body.id, "kind": "face", "index": 1}])

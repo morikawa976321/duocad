@@ -187,7 +187,7 @@ def test_two_points_of_one_entity_both_move(session: Session) -> None:
     ウィンドウ選択で線分をまるごと囲えば両端が選ばれるので、これは普通に踏む経路である。
     対象ごとに「自分だけを動かした完全な `params`」を作って順に書き戻す実装だと、
     後の書き込みが前の書き込みを丸ごと打ち消して**最後の点しか動かない**
-    (2026-08-30に実際に踏んだ。`_apply` は図形ごとに1つの計画へ併合してから書く)。
+    (`_apply` は図形ごとに1つの計画へ併合してから書く)。
     """
     sketch_id, entity_id = _line(session)
     _select(session, [
@@ -458,11 +458,8 @@ def test_the_move_survives_save_and_replay(session: Session) -> None:
 
 
 def test_the_selection_resets_after_a_sketch_move(session: Session) -> None:
-    """確定後に選択を空にする(他の形状変更verbと同じ既定の契約。catalog の note 参照)。
-
-    2026-08-30時点では「参照は`entity_id`で名指しするので平行移動では失効せず、少しずつ
-    動かす使い方が主用途」という理由で例外にしていたが、本人が非として却下(2026-08-31)。
-    以後は毎回選び直す(`tests/test_server_selection_reset.py` の RESETTING_VERBS 参照)。
+    """確定後に選択を空にする(他の形状変更verbと同じ既定の契約。
+    `tests/test_server_selection_reset.py` の RESETTING_VERBS 参照)。
     """
     sketch_id, entity_id = _line(session)
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": "x0"}])
@@ -660,7 +657,7 @@ def test_the_body_move_survives_save_and_replay(session: Session) -> None:
 
 
 def test_the_selection_resets_after_a_body_move(session: Session) -> None:
-    """確定後に選択を空にする(他の形状変更verbと同じ既定の契約。本人が非として却下し2026-08-31に変更)。"""
+    """確定後に選択を空にする(他の形状変更verbと同じ既定の契約)。"""
     body, _sketch_id = _box(session)
     _select(session, [{"body": body.id, "kind": "face", "index": 3}])
     session.move_body(1.0, 0.0, 0.0)
@@ -720,7 +717,7 @@ def test_translating_back_is_exact() -> None:
 
 
 # --------------------------------------------------------------------------------------
-# move_body(mode="rotate") —— 2026-09-05に足した回転
+# move_body(mode="rotate")
 # --------------------------------------------------------------------------------------
 #
 # 固定するのは4つ:
@@ -1051,7 +1048,7 @@ def test_an_edge_axis_cannot_be_combined_with_numbers(session: Session) -> None:
 
 
 def test_an_edge_axis_can_be_combined_with_a_center_vertex(session: Session) -> None:
-    """**辺が向きを、頂点が位置を決める組み合わせは意図的に許してある**(2026-09-05 QA第2巡)。
+    """**辺が向きを、頂点が位置を決める組み合わせは意図的に許してある**。
 
     `axis_point` との同時指定は断るのに、こちらは通す —— 辺の向きだけを借りて別の点を
     通す軸にするのは実際に要る操作(「この稜線と平行な軸で、この角を中心に回す」)である。
@@ -1093,7 +1090,7 @@ def test_a_symmetric_body_may_be_rotate_copied_onto_itself(session: Session) -> 
 
 
 def test_an_axis_point_cannot_be_combined_with_a_center_vertex(session: Session) -> None:
-    """どちらも軸の位置を決めるので、片方が黙って無視される形にしない(2026-09-05 QA指摘)。"""
+    """どちらも軸の位置を決めるので、片方が黙って無視される形にしない。"""
     body, _sketch_id = _box(session)
     index = _vertex_at(body, [0.0, 0.0, 0.0])
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
@@ -1370,7 +1367,7 @@ def test_a_replayed_sketch_log_without_a_mode_is_still_a_translation(session: Se
     """**2026-09-05より前に保存した文書**(`mode` キーが無い)は平行移動として読む。
 
     `move_body` 側と対にしてある —— 後方互換は2つの verb が別々に持っているので、
-    片方だけ壊れても気づけるように両方を見る(2026-09-05 QA指摘)。
+    片方だけ壊れても気づけるように両方を見る。
     """
     from duocad.oplog import Operation
     from duocad.verbs.move_sketch import _do_move_sketch_entities

@@ -8,8 +8,7 @@
 円錐は**円い辺**の面取りから生まれる(まっすぐな辺に沿って平らに削るのだから面も平ら)。
 
 `PC_case_feet.step`(PCケースの脚)の実測: 5面 = plane 3 + cylinder_full 1 + cone 1 /
-体積 11538.02 mm^3 / 境界箱 25.0 x 25.0 x 29.0 mm。ここで固定するのは**必要な面種(平面・
-全周円筒・円錐)がverbで作れるようになること**と、**脚が要求している構成が何か**の2つ。
+体積 11538.02 mm^3 / 境界箱 25.0 x 25.0 x 29.0 mm。
 """
 from __future__ import annotations
 
@@ -45,7 +44,6 @@ def new_box(doc: Document, size: float = 20.0) -> str:
 
 
 def new_cylinder(doc: Document, radius: float = 10.0, height: float = 5.0) -> str:
-    """円を押し出して円筒を作る（duocadのverbだけで作れる ＝ 生のOCPを使わない）。"""
     sketch_id = sketch_create(doc, base_plane("XY"))
     add_circle(doc, sketch_id, (0.0, 0.0), radius)
     return extrude(doc, [region_ref(sketch_id, 1)], height, mode="join").args["body_id"]
@@ -118,7 +116,7 @@ def test_chamfer_is_logged_and_undoable():
 
 
 def test_chamfer_records_provenance_through_the_normalizing_adapter():
-    """面取りもフィレットと同じく `History()` を持たない側。由来は正規化アダプタ経由。"""
+    """由来は正規化アダプタ経由で埋まる(フィレットと同じ経路)。"""
     doc = Document()
     body_id = new_cylinder(doc)
     circular = edges_of_kind(doc, body_id, "circle")
