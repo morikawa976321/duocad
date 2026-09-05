@@ -269,50 +269,6 @@ export const HOVER_LIGHTEN = 0.16
 /** ホバー中の基準平面に重ねる板の濃さ。グリッドの線が透けて見える程度に留める。 */
 export const BASE_PLANE_HOVER_OPACITY = 0.14
 
-/**
- * ビューキューブ(常設・26領域)。一辺[画素]と右上の余白[画素]。
- * ビューポート左上には浮くブラウザがある([[duocad-ui-moved-to-fusion-layout]])ので右上は空いている。
- *
- * 初版は120px角だったが小さく読み取りにくかったので **144px** へ広げた(2026-09-03本人指示)。
- * **これはクリックを吸う矩形でもある**(`viewCubeRect` / `insideCubeRect`)ので、広げるほど
- * 右上でモデルを指せる領域が減る。`web/scripts/smoke-files.mjs` の空白クリック候補のように
- * 画面の隅を突く検査があることに注意(落とし穴は [[viewport-resize-silently-changes-what-a-click-grabs]])。
- */
-export const CUBE_SIZE_PX = 144
-export const CUBE_MARGIN_PX = 12
-/** `pointerdown` からこれだけ動いたらドラッグ(それ未満で `pointerup` ならクリック=スナップ)。 */
-export const CUBE_DRAG_THRESHOLD_PX = 4
-/** クリックでスナップするときの視点アニメーション時間[ms](タスク仕様: 300ms前後)。 */
-export const CUBE_SNAP_MS = 300
-/** キューブ用正投影カメラの視錐台半幅。キューブは半幅1の立方体(対角 `sqrt(3)`)なので、
- *  角が切れない程度に広く取る。
- *
- *  **2026-09-04以降、透視のときの距離式( `CUBE_ORTHO_HALF / sin(fov/2)` )の分子としても使う**
- *  ——「見かけの大きさが正投影のいまの見え方とおおむね揃う係数」がこの値そのものなので、
- *  定数を2本持たずに済む。fov→0でこの式はdistance→∞に発散し、正投影の見え方へ連続的に
- *  近づく(あいだで見え方が飛ばない)。 */
-export const CUBE_ORTHO_HALF = 1.8
-/** キューブ用カメラを置く距離(正投影のとき)。正投影なので見かけの大きさには影響しない
- *  (near/farに収まればよい)。透視のときの距離は `updateCubeCamera` が毎フレームfovから導く。 */
-export const CUBE_CAMERA_DISTANCE = 4
-/** キューブ(半幅1の立方体)の外接球の半径。透視のときのnear/farをここから導く
- *  (`updateCubeCamera` の「near に食われる」節)。 */
-export const CUBE_CIRCUMRADIUS = Math.sqrt(3)
-/** 透視のときのnear平面の安全率(1未満)。手前の角(カメラから `distance - CUBE_CIRCUMRADIUS` の
- *  位置)より内側に余裕を残す —— 角がまるごと消える(near に食われる)のを防ぐ。 */
-export const CUBE_NEAR_SAFETY = 0.5
-/** 透視のときのfar平面の余裕率(1超)。奥の角(`distance + CUBE_CIRCUMRADIUS`)より外側に余裕を残す。 */
-export const CUBE_FAR_MARGIN = 1.5
-/** 面セルの日本語ラベル。キーは `"i,j,k"`。Z-up右手系(タスク仕様: 上=+Z/下=-Z/前=-Y/後=+Y/右=+X/左=-X)。 */
-export const CUBE_FACE_LABELS: Readonly<Record<string, string>> = {
-  '1,0,0': '右',
-  '-1,0,0': '左',
-  '0,1,0': '後',
-  '0,-1,0': '前',
-  '0,0,1': '上',
-  '0,0,-1': '下',
-}
-
 /** 色相・彩度はそのままに明度だけ上げる(`HOVER_LIGHTEN` の実体)。 */
 export function lighten(hex: number, amount: number): number {
   const color = new THREE.Color(hex)

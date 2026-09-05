@@ -9,7 +9,7 @@
  * そのまま「その領域をクリックしたときに見る向き」でもある —— 面(`|i|+|j|+|k|=1`)は
  * 軸方向、辺(`=2`)は2軸複合、角(`=3`)は3軸複合の視点になる。
  *
- * 描画(three.js)・入力(Pointer Lock)・第2パスのcanvas合成は `viewport.ts` の仕事。
+ * 描画(three.js)・入力(Pointer Lock)・第2パスのcanvas合成は `viewCubeOverlay.ts` の仕事。
  * ここは形と向きの計算だけを持つ。
  */
 
