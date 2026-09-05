@@ -2,12 +2,6 @@
  * 開発用のデバッグ表示 —— 塊(`?debug=space`)・平滑化前のボクセル(`?voxel=1`)・
  * 面アンカーの節点(`?debug=anchors`)。**既定(`setState(null)`)では子が1つも生まれない。**
  *
- * **旧実験場(`probe_topopt/web/index.html`。2026-09-05に削除)にしか無かった3つを
- * 本体へ移したもの。**
- * 実験場は `design_space.CASES` の合成題材しか描けなかったが、ここは
- * **いま走らせた最適化そのもの**(利用者が置いた条件・利用者のボディ)を描く ——
- * 切り分けの道具が、切り分けたい対象を扱えないことがそもそもの問題だった。
- *
  * 出所と規約は `duocad/optimize_run.py` の `_DebugSink`。
  */
 import * as THREE from 'three'
@@ -119,7 +113,7 @@ export function createOptimizeDebug(deps: OptimizeDebugDeps): OptimizeDebug {
   /**
    * 節点を球で描く。**深度検査を切って最前面**(`depthTest: false`)——
    * 形状の裏側にある節点(拘束面はたいていカメラの反対側)まで見えていないと、
-   * 「見えているつもりで見えていない」になる(probe から引き継いだ罠)。
+   * 「見えているつもりで見えていない」になる。
    */
   function buildDebugNodes(
     points: number[],
@@ -194,7 +188,7 @@ export function createOptimizeDebug(deps: OptimizeDebugDeps): OptimizeDebug {
 
     if (state.anchors !== null) {
       // 球の半径は**格子の要素サイズ**に合わせる(節点の間隔が要素サイズなので、
-      // 0.34要素なら隣とくっつかずに数えられる。probe と同じ比率)。
+      // 0.34要素なら隣とくっつかずに数えられる)。
       // **アンカー自身が持っている格子**を使う(サーバが必ず載せてくる)。
       // 塊や密度場を頼んでいないときでも同じ大きさになる。
       const radius = state.anchors.grid.spacing * 0.34
@@ -206,7 +200,7 @@ export function createOptimizeDebug(deps: OptimizeDebugDeps): OptimizeDebug {
       debugCounts.load = load.count
       // **材質から読み直す**(定数を写さない) —— 写すと、材質側だけ直したときに
       // 検査が古い値で合格し続ける。**両方の OR** にしてあるのは、片方だけ深度検査を
-      // 戻した退化を見逃さないため(2026-09-05 QA指摘。以前は固定側しか見ていなかった)。
+      // 戻した退化を見逃さないため。
       debugCounts.anchorsDepthTest =
         (fixed.material as THREE.Material).depthTest ||
         (load.material as THREE.Material).depthTest

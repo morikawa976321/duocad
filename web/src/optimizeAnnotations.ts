@@ -45,9 +45,9 @@ export function createOptimizeAnnotations(deps: OptimizeAnnotationsDeps): Optimi
    * いま描いている装飾の**中身**(実機検査フック専用)。
    *
    * `optimizeAnnotationCount()`(子オブジェクトの総数)だけでは、拘束記号と荷重矢印を
-   * 取り違えても・矢印が逆向きでも・ラベルが空文字でも数だけは合ってしまい検出できない
-   * (2026-08-31 QA指摘)。ここに種別ごとの中身(拘束は対象の面、荷重は単位ベクトルと
-   * ラベル文字列)を控えておき、`optimizeAnnotations()` で読めるようにする。
+   * 取り違えても・矢印が逆向きでも・ラベルが空文字でも数だけは合ってしまい検出できない。
+   * ここに種別ごとの中身(拘束は対象の面、荷重は単位ベクトルとラベル文字列)を控えておき、
+   * `optimizeAnnotations()` で読めるようにする。
    */
   let optimizeAnnotationInfo: {
     fixtures: FaceRef[]
