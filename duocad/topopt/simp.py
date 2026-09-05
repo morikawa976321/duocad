@@ -69,10 +69,17 @@ def collect_solve_stats() -> Iterator[dict]:
 # (PRESET は片持ち梁の題材、こちらは `optimize` の既定値)。値は歴史的に一致している。
 DEFAULT_VOLFRAC = 0.3
 
-# `rmin` も `rmin_mm` も渡さなかったときのフィルタ半径[要素]。**PRESET の rmin とは別物**
-# (PRESET は片持ち梁の題材、こちらは `optimize` の既定値)。値は歴史的に一致している。
-# 1.5要素という値の根拠(下回るとチェッカーボードが出る)は `check_filter_radius.py` が
+# **数値側の床**[要素]。`rmin_mm` で指定した半径がこれを下回ると `FilterRadiusError`。
+# 1.5要素という値の根拠(下回るとチェッカーボードが出る)は `check_filter_radius.py` [6] が
 # 実測で示す(docs/TOPOPT.md「1.5要素という下限の根拠」)。
+MIN_RMIN = 1.5
+
+# `rmin` も `rmin_mm` も渡さなかったときのフィルタ半径[要素]。**PRESET の rmin とは別物**
+# (PRESET は片持ち梁の題材=回帰基準、こちらは `optimize` の既定値)。
+# **`MIN_RMIN` とも別物**(2026-09-05に分離した)。床は「これより下はフィルタが壊れる」、
+# 既定は「普通に使ったときに出したい形」で、決める根拠が違う —— 1つの定数に兼ねさせると、
+# 既定を動かした瞬間に `rmin_mm` の受理範囲と `optimize_run.resolution_limits` の
+# 解像度要求まで黙って動く。
 DEFAULT_RMIN = 1.5
 
 # 片持ち梁の基準題材。**受入検査3本がこれを回すので、大きさがそのまま検証の1周の長さになる。**
@@ -950,7 +957,8 @@ class FilterRadiusError(ValueError):
 
     **`rmin` が1要素を大きく下回るとフィルタが実質効かなくなり、チェッカーボード
     (市松模様の密度)が出る**(docs/TOPOPT.md「1.5要素という下限の根拠」が隣接要素の密度差の指標で
-    実測している)。1.5要素は安全側に取った下限で、`DEFAULT_RMIN` と同じ値。
+    実測している)。1.5要素は安全側に取った下限で、`MIN_RMIN` の値
+    (**既定値 `DEFAULT_RMIN` とは別物** —— 2026-09-05に分離した)。
 
     **逃げ道を2つとも数字で持つ**(`VolumeTargetError` と同じ形):
     `max_element_size_mm`(この `rmin_mm` を通すには要素サイズをいくつ以下にすればよいか)・
@@ -1009,8 +1017,8 @@ def _resolve_rmin(
 
     `rmin_mm` は要素サイズが要る。格子は立方体要素(`voxelize.Grid`)なので
     `element_volume_mm3 ** (1/3)` が要素の一辺 = 要素サイズ[mm]に厳密に一致する
-    (別の値を測り直す必要はない)。要素サイズから決まる下限(`DEFAULT_RMIN` = 1.5要素)を
-    下回ると `FilterRadiusError`。
+    (別の値を測り直す必要はない)。要素サイズから決まる下限(`MIN_RMIN` = 1.5要素。
+    **既定値 `DEFAULT_RMIN` とは別物**)を下回ると `FilterRadiusError`。
     """
     if rmin_mm is None:
         return DEFAULT_RMIN if rmin is None else float(rmin)
@@ -1021,16 +1029,16 @@ def _resolve_rmin(
         )
     element_size_mm = float(element_volume_mm3) ** (1.0 / 3.0)
     resolved = float(rmin_mm) / element_size_mm
-    if resolved < DEFAULT_RMIN:
-        min_rmin_mm = DEFAULT_RMIN * element_size_mm
-        max_element_size_mm = float(rmin_mm) / DEFAULT_RMIN
+    if resolved < MIN_RMIN:
+        min_rmin_mm = MIN_RMIN * element_size_mm
+        max_element_size_mm = float(rmin_mm) / MIN_RMIN
         elements_long_axis = max(int(nelx), int(nely), int(nelz))
         length_long_axis_mm = element_size_mm * elements_long_axis
         min_elements_long_axis = int(np.ceil(length_long_axis_mm / max_element_size_mm))
         raise FilterRadiusError(
             f"rmin_mm={float(rmin_mm):.6g} はこの解像度(要素サイズ {element_size_mm:.6g}mm、"
             f"最長軸 {elements_long_axis}分割)では表現できない: 換算すると "
-            f"{resolved:.4g}要素で、下限の {DEFAULT_RMIN}要素に "
+            f"{resolved:.4g}要素で、下限の {MIN_RMIN}要素に "
             f"{min_rmin_mm - float(rmin_mm):.6g}mm 足りない。"
             "**逃げ道は2つ**: "
             f"(1) この rmin_mm を通すには要素サイズを {max_element_size_mm:.6g}mm 以下にする"
@@ -1179,9 +1187,10 @@ def optimize(
     - `rmin_mm` + `element_volume_mm3` —— **物理単位(mm)で**指定する。`optimize` は
       格子の寸法を知らないので、要素1つの体積 `element_volume_mm3` を一緒に渡す
       (格子は立方体要素なので、その立方根が要素サイズ[mm]になる)。要素サイズから決まる
-      下限(`DEFAULT_RMIN` = 1.5要素。下回るとチェッカーボードが出る)を下回ると
+      床(`MIN_RMIN` = 1.5要素。下回るとチェッカーボードが出る)を下回ると
       `FilterRadiusError`(逃げ道2つを数字で持つ)。
-    - どちらも渡さなければ `DEFAULT_RMIN`(=1.5要素)。**既定の挙動は1ビットも変わらない。**
+    - どちらも渡さなければ `DEFAULT_RMIN`。**床とは別物** —— 床は「これより下は壊れる」、
+      既定は「普通に使ったときに出したい形」。
     """
     check_volume_target(volfrac, material_mm3)
     check_rmin_target(rmin, rmin_mm)

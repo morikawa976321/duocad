@@ -452,7 +452,7 @@ Session.cancel_optimization()     走っている最適化に降りるよう伝�
 
 **要素サイズの上限＝「これより粗いと間違う」**を2つの要求の min で決める:
 
-- **最小部材幅から** — `rmin_mm / simp.DEFAULT_RMIN`（=1.5要素。`20260904-1557` の下限）
+- **最小部材幅から** — `rmin_mm / simp.MIN_RMIN`（=1.5要素。`20260904-1557` の下限）
 - **条件面から** — `sqrt(CAD面積)`。**利用者に聞かない**。`anchor.empty_face_diagnosis` の
   `suggested_max_spacing_mm` と同じ式で、**近似であって保証ではない**（正方形とみなした
   代表寸法なので、曲面や極端な縦横比の面では過大にも過小にもなる）

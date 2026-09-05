@@ -908,7 +908,7 @@ Session.optimize_conditions() / optimize_resolution(rmin_mm) / run_optimization(
 - **面添字は `kernel.make_compound` でまとめた形の中の添字**で、ボディごとの `face_count` の
   累積だけずれる。`_verify_face_mapping` が面積・法線・**重心**で対応を測り直し、ずれていれば
   `FaceMappingError`（`RuntimeError` 派生 = `except ValueError` に拾われない）。
-- **要素サイズの上限 = min(`rmin_mm` / `simp.DEFAULT_RMIN`, min(sqrt(条件面のCAD面積)))**、
+- **要素サイズの上限 = min(`rmin_mm` / `simp.MIN_RMIN`, min(sqrt(条件面のCAD面積)))**、
   下限は総要素数 `MAX_ELEMENTS` から。範囲外の指定は `OptimizeInputError`。
 - **結果メッシュの頂点は要素添字空間で来る**ので `grid.origin + verts * grid.spacing` で
   ワールド[mm]へ直す。格子の箱から出ていたら `FaceMappingError`。

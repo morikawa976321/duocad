@@ -135,7 +135,7 @@ class OptimizeOptions:
     時間は制約にしない —— 予想時間は `resolution_limits()` の帰結として出るだけである。
     """
 
-    #: 密度フィルタ半径[mm](最小部材幅の入力)。省くと `simp.DEFAULT_RMIN`(1.5要素)。
+    #: 密度フィルタ半径[mm](最小部材幅の入力)。省くと `simp.DEFAULT_RMIN`[要素]。
     rmin_mm: Optional[float] = None
     #: 目標安全率。許容応力は固定(`allowable_stress()`)なので、利用者が動かすのはこちら。
     target_safety_factor: float = DEFAULT_TARGET_SAFETY_FACTOR
@@ -461,7 +461,7 @@ def resolution_limits(doc: "Document", *, rmin_mm: Optional[float] = None) -> di
         {"max_element_size_mm": float,        # min(最小部材幅からの要求, 条件面からの要求)
          "min_element_size_mm": float,        # 総要素数の上限から
          "default_element_size_mm": float,    # 既定 = 上限側(いちばん粗くて安い)
-         "from_rmin_mm": float | None,        # rmin_mm / simp.DEFAULT_RMIN
+         "from_rmin_mm": float | None,        # rmin_mm / simp.MIN_RMIN
          "from_condition_faces_mm": float,    # min(sqrt(条件面のCAD面積))
          "condition_faces": [{...}, ...],
          "bbox_min"/"bbox_max": [x,y,z],      # 条件の外接直方体(余白なし)
@@ -470,7 +470,7 @@ def resolution_limits(doc: "Document", *, rmin_mm: Optional[float] = None) -> di
 
     **上限は2つの要求の min** である:
 
-    - **最小部材幅から** —— `rmin_mm` が `simp.DEFAULT_RMIN`(1.5)要素を下回れないので
+    - **最小部材幅から** —— `rmin_mm` が `simp.MIN_RMIN`(1.5)要素を下回れないので
       `要素サイズ <= rmin_mm / 1.5`(`done/20260904-1557` の契約)。`rmin_mm` を省くと
       この要求は無い(フィルタ半径は要素単位の既定になる)。
     - **条件面から** —— 拘束面・荷重面に格子節点が付く大きさ。**利用者に聞かない**。
@@ -513,7 +513,7 @@ def resolution_limits(doc: "Document", *, rmin_mm: Optional[float] = None) -> di
         value = float(rmin_mm)
         if not math.isfinite(value) or value <= 0.0:
             raise OptimizeInputError(f"rmin_mm は有限の正の値であること(いま {rmin_mm!r})")
-        from_rmin = value / float(simp.DEFAULT_RMIN)
+        from_rmin = value / float(simp.MIN_RMIN)
 
     upper = from_faces if from_rmin is None else min(from_faces, from_rmin)
 

@@ -14,11 +14,12 @@
    (`min_rmin_mm` / `max_element_size_mm` / `min_elements_long_axis` / `shortfall_mm`)が
    手計算した期待値と一致することを見る。
 3. **境界**(ちょうど1.5要素)は通り、そのわずか下は落ちる。
-4. **既定の挙動**(両方省略)が `simp.DEFAULT_RMIN`(=1.5要素)に解決され、`simp.PRESET["rmin"]`
-   と一致すること。
+4. **既定の挙動**(両方省略)が `simp.DEFAULT_RMIN` に解決されること。あわせて
+   `simp.PRESET["rmin"]` が 1.5 のまま(回帰基準の ρ 場が動いていない)ことと、
+   既定値が床 `simp.MIN_RMIN` 以上であることを見る。
 5. **mm指定と要素指定の等価性** — 同じ物理半径を単位だけ変えて指定すると、密度場が一致する。
-6. **検出力(この下限が守っている性質)** — `rmin` を下限より小さくして解くと、隣接要素の
-   密度差(離散ラプラシアンの絶対値平均)がチェッカーボードの指標として跳ね上がり、既定
+6. **検出力(この床が守っている性質)** — `rmin` を床より小さくして解くと、隣接要素の
+   密度差(離散ラプラシアンの絶対値平均)がチェッカーボードの指標として跳ね上がり、床
    (1.5要素)以上では跳ね上がらないことを実測する。「1.5 を assert するだけ」にならないよう、
    その数値自体が何を守っているかをここで示す。
 7. **上位2層への配線** — `anchor.run_pipeline` / `design_space.run_topopt` の両方が
@@ -114,8 +115,8 @@ def check_below_minimum() -> None:
     nelx, nely, nelz = 10, 6, 6
     rmin_mm = 3.0  # → 1.0要素
 
-    expected_min_rmin_mm = simp.DEFAULT_RMIN * element_size_mm
-    expected_max_element_size_mm = rmin_mm / simp.DEFAULT_RMIN
+    expected_min_rmin_mm = simp.MIN_RMIN * element_size_mm
+    expected_max_element_size_mm = rmin_mm / simp.MIN_RMIN
     expected_elements_long_axis = max(nelx, nely, nelz)
     expected_length_mm = element_size_mm * expected_elements_long_axis
     expected_min_elements = int(
@@ -182,15 +183,15 @@ def check_boundary() -> None:
     print("\n[3] 境界(ちょうど1.5要素)")
     element_size_mm = 2.5
     element_volume_mm3 = element_size_mm**3
-    rmin_mm_at = simp.DEFAULT_RMIN * element_size_mm  # ちょうど1.5要素
+    rmin_mm_at = simp.MIN_RMIN * element_size_mm  # ちょうど1.5要素(**床**。既定値ではない)
 
     res = simp.optimize(
         8, 6, 6, rmin_mm=rmin_mm_at, element_volume_mm3=element_volume_mm3, max_iter=1,
     )
     check(
-        "ちょうど1.5要素は例外にならず、実効rminがDEFAULT_RMINに一致する",
-        rel(res.rmin, simp.DEFAULT_RMIN) < 1e-12,
-        f"rmin={res.rmin:.10g} (期待 {simp.DEFAULT_RMIN})",
+        "ちょうど1.5要素(床)は例外にならず、実効rminがMIN_RMINに一致する",
+        rel(res.rmin, simp.MIN_RMIN) < 1e-12,
+        f"rmin={res.rmin:.10g} (期待 {simp.MIN_RMIN})",
     )
 
     rmin_mm_below = rmin_mm_at * 0.999  # わずかに下限を割る
@@ -214,14 +215,24 @@ def check_default_unchanged() -> None:
     print("\n[4] 既定の挙動(rmin/rmin_mmを両方省略)")
     res = simp.optimize(6, 4, 4, max_iter=1)
     check(
-        "省略時の実効rminがDEFAULT_RMIN(=1.5)に一致する",
+        "省略時の実効rminがDEFAULT_RMINに一致する",
         res.rmin == simp.DEFAULT_RMIN,
         f"res.rmin={res.rmin}",
     )
+    # **`PRESET['rmin']` は既定値に追随しない。** `check_absolute_volume.py` [4] の
+    # ρ場のSHA-256がこの値に乗っているので、既定を動かしても回帰基準は 1.5 のまま
+    # でなければならない(2026-09-05に `DEFAULT_RMIN` を 1.5 から動かしたときの担保。
+    # それまでは「DEFAULT_RMIN == PRESET['rmin']」を見ていたが、それは既定を
+    # 動かせない前提の書き方だった)。
     check(
-        "DEFAULT_RMIN が PRESET['rmin'] と一致する(既定を変えていない)",
-        simp.DEFAULT_RMIN == simp.PRESET["rmin"],
-        f"DEFAULT_RMIN={simp.DEFAULT_RMIN} PRESET['rmin']={simp.PRESET['rmin']}",
+        "PRESET['rmin'] が 1.5 のまま(回帰基準の ρ 場が動いていない)",
+        simp.PRESET["rmin"] == 1.5,
+        f"PRESET['rmin']={simp.PRESET['rmin']}",
+    )
+    check(
+        "既定値が床(MIN_RMIN)以上",
+        simp.DEFAULT_RMIN >= simp.MIN_RMIN,
+        f"DEFAULT_RMIN={simp.DEFAULT_RMIN} MIN_RMIN={simp.MIN_RMIN}",
     )
     check(
         "要素体積を渡していなければ rmin_mm は None",
@@ -295,8 +306,9 @@ def check_checkerboard_detection_power() -> None:
     below = simp.optimize(g["nelx"], g["nely"], g["nelz"], rmin=1.0, max_iter=g["max_iter"], volfrac=g["volfrac"])
     rough_below = _checkerboard_roughness(below.rho)
 
-    # **at**: 既定(1.5要素)。
-    at = simp.optimize(g["nelx"], g["nely"], g["nelz"], rmin=simp.DEFAULT_RMIN, max_iter=g["max_iter"], volfrac=g["volfrac"])
+    # **at**: 床(1.5要素)。**既定値ではない**(2026-09-05に既定を床から切り離した ——
+    # この実測が根拠づけているのは床であって既定ではないので、`MIN_RMIN` を使う)。
+    at = simp.optimize(g["nelx"], g["nely"], g["nelz"], rmin=simp.MIN_RMIN, max_iter=g["max_iter"], volfrac=g["volfrac"])
     rough_at = _checkerboard_roughness(at.rho)
 
     # **above**: 2.5要素。単調性(半径を増やすほど滑らかになる)も見ておく。
@@ -306,7 +318,7 @@ def check_checkerboard_detection_power() -> None:
     elapsed = time.perf_counter() - t0
     print(
         f"  rmin=1.0(下限より下): roughness={rough_below:.4f} / "
-        f"rmin=1.5(既定): roughness={rough_at:.4f} / "
+        f"rmin=1.5(床): roughness={rough_at:.4f} / "
         f"rmin=2.5: roughness={rough_above:.4f} ({elapsed:.1f}秒)"
     )
 
@@ -316,7 +328,7 @@ def check_checkerboard_detection_power() -> None:
         f"roughness={rough_below:.4f} > {CHECKERBOARD_ROUGHNESS_THRESHOLD}",
     )
     check(
-        "既定(1.5要素)はしきい値を超えない",
+        "床(1.5要素)はしきい値を超えない",
         rough_at < CHECKERBOARD_ROUGHNESS_THRESHOLD,
         f"roughness={rough_at:.4f} < {CHECKERBOARD_ROUGHNESS_THRESHOLD}",
     )
@@ -335,12 +347,12 @@ def check_checkerboard_detection_power() -> None:
     element_volume_mm3 = element_size_mm**3
     ok = simp.optimize(
         g["nelx"], g["nely"], g["nelz"],
-        rmin_mm=simp.DEFAULT_RMIN * element_size_mm, element_volume_mm3=element_volume_mm3,
+        rmin_mm=simp.MIN_RMIN * element_size_mm, element_volume_mm3=element_volume_mm3,
         max_iter=1,
     )
     check(
         "ガードが通す下限(rmin_mm=1.5要素相当)の実効rminは、しきい値内側の rmin=1.5 と一致する",
-        rel(ok.rmin, simp.DEFAULT_RMIN) < 1e-9,
+        rel(ok.rmin, simp.MIN_RMIN) < 1e-9,
         f"ok.rmin={ok.rmin:.6g}",
     )
     try:
@@ -392,7 +404,7 @@ def check_wiring() -> None:
         f"rmin={out_mm['rmin']:.6g} rmin_mm={out_mm['rmin_mm']:.6g} (指定 rmin_mm={rmin_mm:.6g})",
     )
     check(
-        "rmin/rmin_mm を省略すると DEFAULT_RMIN(=1.5要素)のまま(既定不変)",
+        "rmin/rmin_mm を省略すると DEFAULT_RMIN のまま(上位層が既定を握り潰していない)",
         out["rmin"] == simp.DEFAULT_RMIN,
         f"out['rmin']={out['rmin']}",
     )

@@ -256,9 +256,10 @@ def test_max_element_size_is_the_min_of_the_two_requirements(session: Session) -
     limits = optimize_run.resolution_limits(session.document, rmin_mm=6.0)
     # 条件面からの要求 = min(sqrt(CAD面積)) = sqrt(400) = 20mm
     assert limits["from_condition_faces_mm"] == pytest.approx(20.0, rel=1e-6)
-    # 最小部材幅からの要求 = rmin_mm / simp.DEFAULT_RMIN
-    assert limits["from_rmin_mm"] == pytest.approx(6.0 / simp.DEFAULT_RMIN)
-    assert limits["max_element_size_mm"] == pytest.approx(min(20.0, 6.0 / simp.DEFAULT_RMIN))
+    # 最小部材幅からの要求 = rmin_mm / simp.MIN_RMIN(**床**であって既定値ではない。
+    # 2026-09-05に `DEFAULT_RMIN` から分離した — 既定を上げても解像度の要求は動かない)
+    assert limits["from_rmin_mm"] == pytest.approx(6.0 / simp.MIN_RMIN)
+    assert limits["max_element_size_mm"] == pytest.approx(min(20.0, 6.0 / simp.MIN_RMIN))
     assert limits["default_element_size_mm"] == limits["max_element_size_mm"]
     assert limits["min_element_size_mm"] < limits["max_element_size_mm"]
     assert limits["feasible"] is True
