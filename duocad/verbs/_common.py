@@ -70,7 +70,7 @@ def editable_body(
             raise ValueError(f"no active body to {what} (document is empty)")
         body_id = active.id
     if not doc.is_editable(body_id):  # 存在しないIDは KeyError(document側の契約)
-        # **編集verbがメッシュボディを断る唯一の入口**(2026-09-05)。verbごとに
+        # **編集verbがメッシュボディを断る唯一の入口**。verbごとに
         # `kind` を見て分岐させると、verbが増えるたびに断り漏れが1本ずつできる。
         body = doc.get_body(body_id)
         if body.kind == MESH_KIND:

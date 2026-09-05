@@ -1,12 +1,12 @@
 """verb `move_body` — 選択中の面/辺/頂点が属するボディを動かす(平行移動 / 回転) / 複製する。
 
-**対象は「ボディ」だが、選ぶのは面・辺・頂点のまま**である(2026-08-30本人判断
+**対象は「ボディ」だが、選ぶのは面・辺・頂点のまま**である(本人判断
 [[duocad-move-verb-split-sketch-and-body]])。ShapeRef が既に `body` を持っているので、
 「ボディ選択」という新しい選択の種別は作らない —— 逆引きは `selection.require_bodies`。
 **選択が複数のボディにまたがっていれば全部を同じ量だけ動かす**(1呼び出し = 1オペレーション
 = 1 undo。個々のボディに分解しない)。
 
-**`mode` で並進と回転を切り替える**(`extrude` の join/cut/new と同じ流儀。2026-09-05)。
+**`mode` で並進と回転を切り替える**(`extrude` の join/cut/new と同じ流儀)。
 `mode="translate"`(既定)は dx, dy, dz を、`mode="rotate"` は軸(点+向き、または直線の辺)と
 角度[度]を取る。**同じ呼び出しで両方は効かない** —— 片方のモードの引数をもう片方へ渡すと
 ValueError で、黙って一方だけ適用したり両方適用したりしない。
@@ -24,7 +24,7 @@ ValueError で、黙って一方だけ適用したり両方適用したりしな
 **添字は変わらない**(`kernel.translate_shape` / `kernel.rotate_shape` のdocstring。回転も
 `TopoDS_Shape.Moved` で位置だけを差し替える)が、確定選択は他の形状変更verbと同じ既定どおり
 リセットする(`catalog.py` の `resets_selection=True`)。添字が失効しないことを理由に例外に
-していたが、本人が非として却下した(2026-08-31)。
+していたが、本人が非として却下した。
 
 **OCP / build123d を直接importしない**(幾何は `duocad.kernel` 越し)。
 """
@@ -43,7 +43,7 @@ VERB_MOVE_BODY = "move_body"
 #: 並進 / 回転の切り替え。**宣言はここが正**(`catalog.py` の `mode` の説明と `Session` の
 #: 既定値がこれを写す)。`extrude` の join/cut/new と同じく、モードで明示的に分岐させる ——
 #: 「dx が来たら並進、angle が来たら回転」にすると、両方来たときの挙動が呼び出し側から
-#: 見えない(2026-09-05本人判断)。
+#: 見えない。
 MODE_TRANSLATE = "translate"
 MODE_ROTATE = "rotate"
 MOVE_MODES = (MODE_TRANSLATE, MODE_ROTATE)
@@ -92,8 +92,8 @@ def _shape_ref(doc: Document, ref: Any, *, kind: str, what: str) -> tuple:
     """`{"body": BodyId, "index": int}`(選択の ShapeRef と同じ形)を (Body, 添字) にする。
 
     **`commit_selection` を経由しない**。この verb の確定選択は「動かす対象」の解決に
-    既に使われているので、軸や中心を同じ経路へ載せると対象なのか軸なのか区別が付かなくなる
-    (2026-09-05本人判断)。`pattern_circular` の `entities` と同じく、引数でIDを受ける。
+    既に使われているので、軸や中心を同じ経路へ載せると対象なのか軸なのか区別が付かなくなる。
+    `pattern_circular` の `entities` と同じく、引数でIDを受ける。
 
     `kind` キーは省略できる(付いていれば要求した種別と一致すること) —— `get_selection` が
     返す参照をそのまま貼れることと、手で `{"body":.., "index":..}` と書けることの両立。
@@ -140,7 +140,7 @@ def _vertex_point(doc: Document, ref: Any) -> List[float]:
 def _composite_centroid(bodies: Sequence[Body]) -> List[float]:
     """対象**全部**をひとかたまりと見たときの体積重心。
 
-    **対象ごとに別々の中心を計算しない**(2026-09-05本人判断) —— 複数ボディを個々の重心で
+    **対象ごとに別々の中心を計算しない**(本人判断) —— 複数ボディを個々の重心で
     回すと、1回の呼び出し = 1オペレーションなのに各ボディがばらばらの剛体変換を受け、
     「まとめて回した」と読めない形になる。体積で重み付けするので、小さな部品が大きな部品と
     同じだけ中心を引っ張ることはない。**境界箱の中心は使わない**(`kernel.centroid`)。
@@ -284,7 +284,7 @@ def move_body(
     - `mode="rotate"` … 軸まわりに `angle` 度だけ回す(軸と中心の決め方は `_rotation_args`)。
       **360の倍数は ValueError**(0度と同じ理由)。
 
-      **既知の穴(2026-09-05・QA指摘)**: `copy=True` で、対象が**その軸まわりの回転対称**を
+      **既知の穴**: `copy=True` で、対象が**その軸まわりの回転対称**を
       持つ角度(立方体を自分の中心軸で90度など)を指すと、元と完全に重なる複製ができる。
       `move_sketch_entities` は変換後の `params` が元と一致するかで弾けるが、ソリッドには
       同じだけ安いのに健全な判定が無い —— 境界箱の一致では L字を180度回した「重なって

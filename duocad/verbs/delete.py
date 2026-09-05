@@ -1,8 +1,5 @@
 """verb `delete` — **確定選択のボディとスケッチ図形をまとめて消す**。
 
-duocadには2026-09-03まで「間違えて作った / 要らなくなったものを消す手段」が undo しか
-無かった(直前まで巻き戻す以外に無い)。この verb がその1本目である。
-
 **対象は1つのverbで2種類ある**:
 
 - **ボディ** … 面/辺/頂点/`kind="body"` のどれから指してもよい(`selection.require_deletable`
@@ -48,12 +45,12 @@ undo の仕組みが対象によって別物になる(**ここがこのモジュ
   無い(`selection.SELECTABLE_KINDS`)ので、作っても呼びようが無い。
 - **領域(`region`)は消せない**。領域は描くものではなく図形の配置から毎回計算されるもの
   (`duocad/region.py`)で、永続化された実体が無い。選択に混ざっていたら
-  `require_deletable` が**黙って無視する**(2026-09-03) —— 領域を作っている図形自体を
+  `require_deletable` が**黙って無視する** —— 領域を作っている図形自体を
   消せば領域も自然に消えるので、拒否して選び直させるより無視するほうが安い。
   選択が**領域だけ**なら削除できる対象が無いので、その場合は従来どおり拒否する。
 - **反復(`Pattern`)の元になっている図形を消しても、反復そのものは消さない**。消えた元は
   展開されなくなるだけで、undoで元が戻れば反復も戻る(`duocad/region.py` の
-  `_expanded_entities`)。図形どうしの依存グラフは作らない(本人判断・2026-09-03)。
+  `_expanded_entities`)。図形どうしの依存グラフは作らない(本人判断)。
 - **ボディを消してもスケッチ側は何もしない**。スケッチ平面は作成時点で焼き付けてある
   ([[duocad-sketch-plane-frozen-at-creation]])ので、貼った面のボディが消えても姿勢の計算は
   壊れない。ボディ側のキャッシュは `DocumentView.state_meta()` の生存集合差分が汎用的に
@@ -148,7 +145,7 @@ def delete(
         # 隠したボディ・形の無いボディを弾く(可視性を見るのは `fillet` / `move_body` と
         # 同じ理由 —— 選んだ後・verbを呼ぶ前に人がそのボディを隠す順序が、AIと人が並行して
         # 動くと実際に起きる)。**種別は問わない** —— メッシュボディは編集できないが消せる
-        # (2026-09-05。`_common.deletable_body` のdocstring)。
+        # (`_common.deletable_body` のdocstring)。
         deletable_body(doc, body_id)
     entity_specs = _entity_snapshots(doc, entities)
 

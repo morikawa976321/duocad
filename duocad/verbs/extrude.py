@@ -102,7 +102,7 @@ def _resolve_target(
 
     `body_id` を省略したときのアクティブボディが**編集できない**(参照ボディ)なら、
     「対象が無い」として扱い、join でも最初の板を作れるようにする。
-    **2026-08-27の統合以降、この分岐へ落ちる経路は残っていない** —— `import_step` は
+    **この分岐へ落ちる経路は現在は残っていない** —— `import_step` は
     参照ボディの**後に**編集用ボディを足すので、読み込み直後のアクティブは常に編集可能で、
     参照ボディを作る verb は他に無い。それでも握り潰さずに残してあるのは、アクティブが
     参照ボディである状態を作る verb が将来増えたときに、ここが黙って ValueError を投げる
@@ -140,7 +140,7 @@ def _resolve_target(
     if body.shape is None:
         raise ValueError(f"body {body_id!r} has no shape to extrude")
     if not body.visible:
-        # H・2026-08-20: 領域は選択から取るが、足す/引く**対象ボディ**(既定はアクティブ)は
+        # 領域は選択から取るが、足す/引く**対象ボディ**(既定はアクティブ)は
         # 選択の外から来る。人がこのボディを隠した後にAIが押し出すと、見えなくなった
         # ボディが黙って変わる(`fillet`/`chamfer` と同じ穴。`_common.editable_body` の
         # docstring参照)。ここは `editable_body()` を経由しない専用の解決関数なので、
