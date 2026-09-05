@@ -83,10 +83,8 @@ def test_faces_can_be_selected_by_normal(doc: Document):
 
 
 def test_face_predicates_can_combine_conditions(doc: Document):
-    """`where` は **AND**(全条件を満たすものだけ)。
-
-    ORを持ち込まないのは、論理演算子を足した時点で述語言語のパーサを作り始めることに
-    なるため(`duocad/predicates.py`)。ORが要るときは2回評価して `modify_selection` で足す。
+    """`where` は **AND**(全条件を満たすものだけ)。ORが要るときは2回評価して
+    `modify_selection` で足す(理由は `duocad/predicates.py` のdocstring)。
     """
     upward = {"op": "normal_dot_gt", "axis": "Z", "value": 0.9}
     huge = {"op": "area_gt", "value": BOX_X * BOX_Y * 2}
@@ -95,11 +93,9 @@ def test_face_predicates_can_combine_conditions(doc: Document):
 
 
 def test_kind_is_actually_filters_by_the_classified_kind(doc: Document):
-    """`kind_is` が**分類ラベルで実際に絞れる**こと。
-
-    `validate` と `describe_ops` にopが載っていることだけを見ていると、
-    評価側が `kernel.classify_face` / `classify_edge` と違うラベルを見ていても気づけない。
-    直方体は6面とも平面・12辺とも直線なので、両方向を1本で固定できる。
+    """`kind_is` が**分類ラベルで実際に絞れる**こと(`validate` / `describe_ops` に
+    opが載っていることだけを見ていると、評価側が `kernel.classify_face` /
+    `classify_edge` と違うラベルを見ていても気づけない)。
     """
     shape = doc.bodies[0].shape
     planes = predicates.evaluate(
@@ -148,10 +144,8 @@ def test_edges_can_be_selected_by_direction_and_length(doc: Document):
 
 
 def test_length_conditions_are_strict_comparisons(doc: Document):
-    """`length_gt` / `length_lt` は**厳密な不等号**(境界を含まない)。
-
-    「長さ30の辺を length_gt 30 で選ぶ」が通ってしまうと、寸法をそのまま書いた述語が
-    意図せず余分な辺を拾う。境界を含めたい書き方が要るなら別のopとして足すこと。
+    """`length_gt` / `length_lt` は**厳密な不等号**(境界を含まない) —— 「長さ30の辺を
+    length_gt 30 で選ぶ」が通ると、寸法をそのまま書いた述語が意図せず余分な辺を拾う。
     """
     long_edges = predicates.evaluate(
         doc, {"kind": "edge", "where": [{"op": "length_gt", "value": BOX_X}]}
@@ -244,13 +238,9 @@ def test_the_boundary_excludes_the_rim_of_a_hole():
     """**穴の縁は外周に含めない**(項番17の契約の本体)。
 
     穴無しの直方体だけで検査していると、面の**全ワイヤ**を返す誤実装でも
-    「件数4・長さ30・Z=40」で緑になってしまう。貫通穴を1つ開けた箱の上面は
-    外周4本＋穴の縁1本(円)を持つので、ここで初めて両者が区別できる。
-
-    実用上の意味: 「上面の外周を丸める」つもりの操作が、**黙って穴の縁まで丸める**
-    (穴の縁を丸めるとトーラスになる。`test_fillet.py` 項番3で実測済み)。
-
-    素材は duocadのverbだけで作る(生のOCPで組み立てない。`test_fillet.py` と同じ流儀)。
+    「件数4・長さ30・Z=40」で緑になってしまう。貫通穴を1つ開けた箱の上面で初めて
+    両者が区別できる —— 穴の縁を外周に含めると、「上面の外周を丸める」操作が
+    穴の縁まで丸めてトーラスになる(`test_fillet.py` 項番3で実測済み)。
     """
     document = Document()
     size, hole_radius = 20.0, 4.0
@@ -315,7 +305,6 @@ def test_hidden_bodies_are_not_scanned_by_predicates():
     """不可視Bodyは述語の対象にならない(M3.5「見えないものは選べない」の一貫性)。
 
     ここが漏れると、**画面に出ていない部品がAIの述語経由で黙って変形する**。
-    可視性をアプリ層のチェックボックスにしなかった理由そのもの(`duocad/selection.py`)。
     """
     document = Document()
     document.add_body(Body(id="a", name="a", kind="solid", shape=_box_shape()))

@@ -1,14 +1,11 @@
-"""Body索引キャッシュの剪定(20260827、CODE_SURVEY_ACTIONS 1.1)。
+"""Body索引キャッシュの剪定。
 
 `_geometry_cache` / `_edge_cache` / `_vertex_cache` / `_volume_cache` は `body_id` 索きで、
 文書からBodyが消えても(undoで)エントリが自然には落ちない。同じ文書を開いたまま
 作成・undoを繰り返すと線形に溜まり続けるので、`Session.state_meta()`(WebSocket配信のたびに
-呼ばれる)が生存集合との差分で剪定することを固定する。`sketches_state()` の剪定(同じ形)と
-`tests/test_body_meta_volume_cache.py` の作り(`Session` を直に組んでキャッシュのdictを覗く)に揃える。
+呼ばれる)が生存集合との差分で剪定することを固定する。
 
-**キャッシュの持ち主は `session.view`(`duocad/view.py` の `DocumentView`)**。2026-08-28に
-`Session` から切り出したので覗く先だけを移してある —— 呼ぶ口(`session.state_meta()` /
-`session.geometry()` …)も見る中身も、切り出す前と同じである。
+**キャッシュの持ち主は `session.view`(`duocad/view.py` の `DocumentView`)**。
 
 **`_revision_counter` は剪定しない**。剪定すると版が1へ戻り、同じ `body_id` を知っている
 クライアントが「版が同じ=変わっていない」と判断して前の文書の形を描き続ける
@@ -43,7 +40,7 @@ def _box_session() -> Session:
 
 def _extrude_a_second_body(session: Session) -> str:
     """`mode="new"` でもう1つBodyを作る(undoすると `document.remove_body` で完全に消える経路。
-    `duocad/verbs/extrude.py` の `_undo_extrude`)。作ったBodyのidを返す。
+    `duocad/verbs/extrude.py` の `_undo_extrude`)。
     """
     sketch_id = sketch_create(session.document, "XY")
     add_rectangle(session.document, sketch_id, (0.0, 0.0), 10.0, 10.0)

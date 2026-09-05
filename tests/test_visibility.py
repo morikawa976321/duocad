@@ -18,7 +18,7 @@ from duocad.document import Body
 from duocad.server import Session
 
 #: M3.5のモジュール(import境界の走査対象に入っていることを固定する)。
-#: 可視性は2026-08-26に `verbs/visibility.py` から `selection.py` へ移った(verbではなくなった)。
+#: 可視性はverbではなく `selection.py` 側にある。
 M35_MODULES = ("selection.py",)
 
 #: 押し出し量(mm)。符号は正＝外向き法線方向へ足す。
@@ -41,7 +41,7 @@ def test_m35_modules_are_covered_by_the_import_boundary_scan():
 
 
 # --------------------------------------------------------------------------------------
-# 可視性は undo / redo の対象外(2026-08-26本人決定)
+# 可視性は undo / redo の対象外
 # --------------------------------------------------------------------------------------
 def _box_session() -> Session:
     """30×30×40 の直方体を1つ持つセッション(操作ログは空の状態から始まる)。"""
@@ -53,10 +53,8 @@ def _box_session() -> Session:
 
 
 def test_hiding_a_body_is_not_undoable():
-    """**Ctrl+Z で表示は戻らない**。undoが戻すのは直前の「形を変えた操作」である。
-
-    形を1つも変えない「見るための操作」がundoの1手を消費すると、奥の面を見るために手前を
-    隠して戻すだけで履歴が埋まり、直前の押し出しへ戻るのに何度もCtrl+Zを叩くことになる。
+    """**Ctrl+Z で表示は戻らない**。undoが戻すのは直前の「形を変えた操作」であり、
+    可視性はその対象ではない。
     """
     session = _box_session()
     session.sketch_create("XY")  # 戻る先の本物のverbを1つ積んでおく
@@ -73,8 +71,8 @@ def test_hiding_a_body_is_not_undoable():
 def test_hiding_a_body_does_not_discard_the_redo_stack():
     """隠しただけでredoが消えない。
 
-    `OpLog.append` は**redo可能だった末尾を新しい操作で捨てる**。可視性がverbだった頃は、
-    undoした直後に何かを隠すと「やり直せるはずのもの」が黙って消えていた。
+    `OpLog.append` は**redo可能だった末尾を新しい操作で捨てる**。可視性がverbとして
+    ログに乗ると、隠しただけで「やり直せるはずのもの」が黙って消える。
     """
     session = _box_session()
     session.sketch_create("XY")

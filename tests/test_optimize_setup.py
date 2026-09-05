@@ -377,12 +377,11 @@ def test_a_face_that_changed_is_reported_and_not_used(session: Session) -> None:
 
 
 def test_moving_a_body_does_not_invalidate_its_face_conditions(session: Session) -> None:
-    """**平行移動では条件が外れない**(2026-08-31本人決定)。
+    """**平行移動では条件が外れない**。
 
-    `move_body` は面の添字を変えず、指した面は同じ面のままなので、外れるのは誤検出で
-    ある。以前は指紋の重心を世界座標で照合していたためここが `stale` になり、部品の
-    位置を詰めるたびに条件の付け直しが必要だった。**照合から重心を外したのはこのため**で、
-    面積と法線は平行移動で不変なので、この検査が指紋の持ち方を固定している。
+    `move_body` は面の添字を変えず、指した面は同じ面のままなので、外れるのは誤検出である
+    (指紋の一致判定が重心を見ない理由は `duocad/optimize.py` の
+    `fingerprint_mismatch` のdocstringが正)。
     """
     body = _box(session)
     _select(session, _face_refs(body, [1]))

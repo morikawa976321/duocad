@@ -9,7 +9,7 @@
    最適化はもっともらしく収束する)。だから対応を測り直して確かめる層があり、
    ここではその**検出力**(わざとずらすと落ちる)まで見る。
 2. **入口の断り** —— 条件が足りない/この版で扱えない/メッシュボディを指した、を名指しする。
-3. **メッシュボディ** —— 保持・除外に指定できない(2026-09-05の判断)。ただし
+3. **メッシュボディ** —— 保持・除外に指定できない。ただし
    **過去のログの再生は落とさない**(門は verb の入口だけで、`_apply_bodies` には無い)。
 4. **解像度** —— 上限は「最小部材幅からの要求」と「条件面からの要求」の min。
 5. **座標系** —— 結果メッシュは要素添字空間で来るので、ワールド[mm]へ直す。
@@ -377,7 +377,9 @@ def test_run_optimization_clears_a_stale_cancel_flag(session: Session) -> None:
 # 7. `safety_loop` の穴(`20260904-1556` の契約④が名指ししていた未修正の箇所)
 # --------------------------------------------------------------------------------------
 def test_safety_loop_turns_empty_condition_faces_into_a_named_exception(monkeypatch) -> None:
-    """**修正前は生の `AttributeError`** だった(`run["result"]` が None のまま `.model`)。"""
+    """条件面が空のとき `ConditionFacesEmptyError` になる(`run["result"]` が None のまま
+    `.model` を触ると素の `AttributeError` になる経路がある)。
+    """
     from duocad.topopt import design_space as ds
     from duocad.topopt import safety_loop
 

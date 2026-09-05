@@ -1,4 +1,4 @@
-"""三角形メッシュのボディ(`Body.kind == "mesh"`)の受入検査(20260904-1703)。
+"""三角形メッシュのボディ(`Body.kind == "mesh"`)の受入検査。
 
 **主張は「表示とSTL書き出しだけができて、編集は必ず断られる」**である。だから
 「できること」(§2〜§5)と「断られること」(§6)を同じ重さで固定する —— 断りが緩むと、
@@ -343,7 +343,7 @@ def test_edges_and_vertices_are_not_delivered_for_a_mesh_body():
 # **「名指ししたら断る / 導出した集合からは黙って外す」**が、このタスクの門の一貫した線
 # である(`predicates._target_bodies` のdocstring)。§6 が前半、ここが後半を見る。
 def test_predicates_skip_mesh_bodies_when_no_body_was_named():
-    """**メッシュだけの文書でも述語が落ちない**(2026-09-05のQA指摘。9箇所目の塞ぎ漏れ)。
+    """**メッシュだけの文書でも述語が落ちない**。
 
     走査集合は呼び出し側の主張ではなく導出なので、**黙って外す**(不可視Bodyと同じ扱い)。
     ここで断ると、最適化結果のメッシュが文書に1つあるだけで述語選択が丸ごと使えなくなる。
@@ -423,7 +423,7 @@ def test_a_mesh_only_document_writes_the_triangles_it_has(tmp_path):
 
 
 def test_a_mixed_document_writes_both_into_one_stl(tmp_path):
-    """混在は**両方書く**(2026-09-05決定)。片方を黙って落とさない。"""
+    """混在は**両方書く**。片方を黙って落とさない。"""
     doc, _ = _tetra_doc()
     doc.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
     path = tmp_path / "mixed.stl"

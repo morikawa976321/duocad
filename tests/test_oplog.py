@@ -108,7 +108,7 @@ def test_to_json_stamps_the_current_format_version():
 
 
 def test_from_json_refuses_the_old_format_version_explicitly():
-    """旧形式(version 1)は**読まずに断る**(2026-08-23)。
+    """旧形式(version 1)は**読まずに断る**。
 
     版1の `import_step` は `args={"path": ...}` だけを持ち、形が外部STEPにある。
     今の再生経路はログの `args["step"]` から形を作るので、黙って読み進めると
