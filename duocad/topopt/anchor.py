@@ -939,7 +939,7 @@ def run_pipeline(
     # `_require_nodes` が例外を投げる(その例外自体は消さない・弱めない — 空の面を名指しして
     # 拘束・荷重を掛けたら黙って0にせず落ちる、という既存の安全策)。**そこへ落ちる前に、
     # ここで一度立ち止まってメッセージを返す。** 本人指示で「落とさない・メッセージを出すだけ」
-    # なので、`simp.optimize` は呼ばずに戻り値へ診断を積んで早期returnする(2026-09-05)。
+    # なので、`simp.optimize` は呼ばずに戻り値へ診断を積んで早期returnする。
     empty_condition_faces = table.condition_face_diagnoses(fixed_face, load_face)
     if empty_condition_faces:
         warning = format_condition_face_warning(empty_condition_faces)
