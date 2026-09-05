@@ -187,6 +187,21 @@ export interface VertexMarker extends VertexRef {
   point: number[]
 }
 
+/**
+ * ボディ1つぶんの**ローカル幽霊**(確定前の姿を、届いているメッシュから置く指示)。
+ *
+ * **いまは平行移動しか持たない。** `move_body` が集める引数が dx/dy/dz だけだからで、
+ * 「まだ実装していない口」を先に開けない(使うverbが無い分岐は、正しさを確かめる術が無い)。
+ * **回転を足すときはここに `rotate` を1つ足し、`showBodyGhosts` の中で
+ * `group.position.set(...)` を行列に差し替える**(その2箇所以外は変わらない ——
+ * 幽霊の生成・破棄・消える場面はすべて `bodyGhosts` の側に閉じている)。
+ */
+export interface BodyGhost {
+  bodyId: string
+  /** 平行移動 [dx, dy, dz](mm・世界座標)。 */
+  offset: [number, number, number]
+}
+
 /** 1Bodyぶんの形状の差し替え。`geometry: null` は非表示・削除(メッシュを取り除く)。 */
 export interface BodyGeometryUpdate {
   bodyId: string
@@ -523,8 +538,38 @@ export interface Viewport {
    * 1つでも届いたら(`update`)プレビューは無効になるので、自動的に消える。
    */
   showPreview(bodies: BodyGeometryUpdate[]): void
-  /** プレビューを消して本物のBodyを出し直す。 */
+  /**
+   * プレビューを消して本物のBodyを出し直す。**ボディ側の幽霊は2種類とも消える**
+   * (サーバ投機実行の `showPreview` と、ブラウザだけで置く `showBodyGhosts`)——
+   * どちらも「確定前の姿」であり、消える場面(Esc・本物の到着・Bodyの消滅)が同じ。
+   */
   clearPreview(): void
+  /**
+   * **既にあるボディを変換した姿**を、ブラウザだけで半透明に重ねる(2026-09-05。`move_body`)。
+   *
+   * `showPreview` との違いは3つ:
+   *
+   * 1. **サーバへ何も投げない** —— 位置しか変わらないので、OCCでの再計算が要らない。
+   *    すでに届いているメッシュ(`getGeometry` と同じ生データ)をそのまま使う。
+   * 2. **本物を隠さない** —— 元の位置と移動先の両方が見えることが、このプレビューの
+   *    存在理由そのものである(`duocad/catalog.py` の `move_body` の note)。
+   * 3. **1ボディ = 1 `THREE.Group`** で、変換はグループに掛ける。ボディの中の面を
+   *    個別に動かすverbは無いので、変換の単位はボディでよい。
+   *
+   * 幽霊は**ピックの対象にしない**(まだ存在しない位置は指せない)。まだ形が届いていない
+   * ボディ(非表示など)は黙って落ちる。空配列で消える。
+   */
+  showBodyGhosts(entries: BodyGhost[]): void
+  /** `showBodyGhosts` で置いた幽霊だけを消す(サーバ投機実行のほうは残る)。 */
+  clearBodyGhosts(): void
+  /**
+   * いま出ている幽霊の中身。**実機検査が「値を変えたら幽霊が追随したか」を数値で見る穴**
+   * (`getGeometry` と同じ流儀 —— three.jsのバッファは外から読めない)。
+   */
+  ghostInfo(): {
+    sketch: Array<{ kind: string; params: Record<string, number> }>
+    bodies: BodyGhost[]
+  }
   /**
    * 面の表面上の点の画面座標(コンテナ内のCSSピクセル)。無理なら null。
    *
@@ -2254,7 +2299,54 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
+  /**
+   * body_id -> ローカル幽霊(変換後の姿)。**`previewMeshes` とは別のMapである** ——
+   * あちらはサーバが投機実行した「別の形」で本物を隠す。こちらは「同じ形の別の場所」で、
+   * 本物を隠さない(隠すと移動前と移動後を見比べられない)。
+   */
+  const bodyGhosts = new Map<string, { group: THREE.Group; disposables: Array<{ dispose(): void }> }>()
+  /** いま出しているローカル幽霊の指示そのもの(`ghostInfo` が返す。実機検査用の穴)。 */
+  let bodyGhostInfo: BodyGhost[] = []
+
+  function showBodyGhosts(entries: BodyGhost[]): void {
+    clearBodyGhosts()
+    for (const entry of entries) {
+      // **届いている生メッシュをそのまま使う**(サーバへ投げない)。非表示・未読込の
+      // ボディはここに無いので黙って落ちる —— 見えないものの幽霊を出す意味が無い。
+      const payload = rawGeometry.get(entry.bodyId)
+      if (!payload) continue
+      const group = new THREE.Group()
+      const disposables: Array<{ dispose(): void }> = []
+      for (const face of payload.faces) {
+        if (face.indices.length === 0) continue // 三角形が取れなかった面(`buildBody` と同じ)
+        const geometry = faceGeometry(face)
+        group.add(new THREE.Mesh(geometry, previewMaterial))
+        disposables.push(geometry)
+      }
+      if (group.children.length === 0) continue
+      // **変換はグループに掛ける**(面ごとに座標を書き換えない) —— 回転を足すときも
+      // ここ1行が行列になるだけで済む(`BodyGhost` のdocstring)。
+      group.position.set(entry.offset[0], entry.offset[1], entry.offset[2])
+      root.add(group)
+      bodyGhosts.set(entry.bodyId, { group, disposables })
+      bodyGhostInfo.push({ bodyId: entry.bodyId, offset: [...entry.offset] })
+    }
+  }
+
+  function clearBodyGhosts(): void {
+    bodyGhostInfo = []
+    if (bodyGhosts.size === 0) return
+    for (const entry of bodyGhosts.values()) {
+      root.remove(entry.group)
+      for (const item of entry.disposables) item.dispose()
+    }
+    bodyGhosts.clear()
+  }
+
   function clearPreview(): void {
+    // **ローカル幽霊も一緒に消す**(interfaceの `clearPreview` のdocstring)。ここに
+    // 入れてあるので、`update`/`prune`/`App.svelte` の中断は何も足さずに正しく消える。
+    clearBodyGhosts()
     pickChanged() // 隠していた本物が戻る(`showPreview` の対)
     if (previewMeshes.size === 0) return
     for (const [bodyId, entry] of previewMeshes) {
@@ -3747,6 +3839,8 @@ export function createViewport(container: HTMLElement): Viewport {
   }
   const sketches = new Map<string, SketchScene>()
   let ghost: { objects: THREE.Object3D[]; disposables: Array<{ dispose(): void }> } | null = null
+  /** いま描けているスケッチの幽霊の中身(`ghostInfo` が返す。実機検査用の穴)。 */
+  let sketchGhostInfo: Array<{ kind: string; params: Record<string, number> }> = []
   let activeSketchId: string | null = null
   /**
    * 通常モードで領域を指せるか(`pickRegions`)。**スケッチモード中は関係ない** ——
@@ -3955,6 +4049,7 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function clearGhost(): void {
+    sketchGhostInfo = []
     if (!ghost) return
     for (const object of ghost.objects) sketchRoot.remove(object)
     for (const item of ghost.disposables) item.dispose()
@@ -3976,6 +4071,9 @@ export function createViewport(container: HTMLElement): Viewport {
       sketchRoot.add(built.object)
       objects.push(built.object)
       disposables.push(built.geometry)
+      // **実際に描けたものだけ**を控える(`ghostInfo`)。折れ線化できなかった図形を
+      // 数に入れると、実機検査が「出ている」と判断したまま画面には何も無い状態になる。
+      sketchGhostInfo.push({ kind: entity.kind, params: { ...entity.params } })
     }
     if (objects.length === 0) return
     ghost = { objects, disposables }
@@ -4870,6 +4968,17 @@ export function createViewport(container: HTMLElement): Viewport {
     projectVertex,
     showPreview,
     clearPreview,
+    showBodyGhosts,
+    clearBodyGhosts,
+    ghostInfo() {
+      return {
+        sketch: sketchGhostInfo.map((item) => ({ kind: item.kind, params: { ...item.params } })),
+        bodies: bodyGhostInfo.map((item) => ({
+          bodyId: item.bodyId,
+          offset: [...item.offset] as [number, number, number],
+        })),
+      }
+    },
     project,
     showSketches,
     showSketchGhost,

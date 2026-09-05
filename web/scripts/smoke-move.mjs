@@ -329,6 +329,30 @@ async function main() {
     )
     await typeInto('#sketch-move-dx', 0)
     await typeInto('#sketch-move-dy', 10)
+
+    // ---------------------------------------------------------------- 確定前の幽霊
+    // **`preview: 'local'`(2026-09-05)** —— 選んだ点を含む図形が、dy を打った時点で
+    // 移動先に半透明で出ている(元の図形はその場に残るので、両方が見える)。
+    await waitFor(
+      () => window.__duocad.ghostInfo().sketch.length === 1,
+      '点を動かす前の幽霊が出ない',
+    )
+    const sketchGhost = await page.evaluate(() => window.__duocad.ghostInfo().sketch[0])
+    if (Math.abs(sketchGhost.params.y1 - (before.params.y1 + 10)) > 1e-9) {
+      fail(
+        `幽霊が dy=10 のぶん動いていない: y1 ${before.params.y1} → ${sketchGhost.params.y1}`,
+      )
+    }
+    // **選んだのは点1つ(`point:'x1'`)なので、反対の端点は動かない。** 図形ごと平行移動
+    // する幽霊を描くと、ここで落ちる(コアは選んだ点だけを動かすので、幽霊と結果が食い違う)。
+    if (Math.abs(sketchGhost.params.y0 - before.params.y0) > 1e-9) {
+      fail(
+        `点1つを選んだのに図形ごと動く幽霊になっている: y0 ${before.params.y0} → ` +
+          `${sketchGhost.params.y0}`,
+      )
+    }
+    ok('move_sketch_entities: 確定前に移動先の幽霊が出て、選んだ点だけが dy ぶん動く')
+
     await page.keyboard.press('Enter')
     // **クリックで置いた座標は丸い数字ではない**(画素→(u,v)の逆射影なので 0.0234 のような値)。
     // 判定は絶対値ではなく**移動量**で行う。
@@ -517,6 +541,52 @@ async function main() {
     await typeInto('#move-body-dx', 0)
     await typeInto('#move-body-dy', 0)
     await typeInto('#move-body-dz', 25)
+
+    // ---------------------------------------------------------------- 確定前の幽霊
+    // **`preview: 'local'`(2026-09-05)** —— 届いているメッシュを dx/dy/dz ずらして
+    // 半透明で重ねる。**本物は隠さない**(移動前と移動後が並んで見えることが中身)ので、
+    // 幽霊が出ている間も `getGeometry` の本物は元の位置のままである。
+    await waitFor(
+      (id) => {
+        const ghosts = window.__duocad.ghostInfo().bodies
+        return ghosts.length === 1 && ghosts[0].bodyId === id && ghosts[0].offset[2] === 25
+      },
+      'move_body の幽霊が dz=25 で出ない',
+      [bodyId],
+    )
+    const stillHome = await page.evaluate(
+      (id) => window.__duocad.getGeometry(id).bbox.center[2],
+      bodyId,
+    )
+    if (Math.abs(stillHome - geometryBefore[2]) > 1e-6) {
+      fail(`幽霊を出しただけで本物が動いた: ${geometryBefore[2]} → ${stillHome}`)
+    }
+
+    // **Escで消えて、文書は一切変わらない**(サーバへ何も送っていない)
+    await page.keyboard.press('Escape')
+    await waitFor(
+      () => window.__duocad.ghostInfo().bodies.length === 0,
+      'Escで move_body の幽霊が消えない',
+    )
+    const volumeAfterEscape = await page.evaluate(
+      (id) => window.__duocad.state.bodies.find((item) => item.body_id === id).volume,
+      bodyId,
+    )
+    if (Math.abs(volumeAfterEscape - volumeBefore) > 1e-9) {
+      fail(`Escで中断したのに文書が変わった: ${volumeBefore} → ${volumeAfterEscape}`)
+    }
+    ok('move_body: 確定前に移動先の幽霊が出て、Escで消えて文書は変わらない')
+
+    // 打ち直して今度は確定する(面の選択は Esc では消えない)
+    await page.click('#move-body')
+    await page.click('#move-body-move')
+    await typeInto('#move-body-dx', 0)
+    await typeInto('#move-body-dy', 0)
+    await typeInto('#move-body-dz', 25)
+    await waitFor(
+      () => window.__duocad.ghostInfo().bodies.length === 1,
+      '打ち直した move_body の幽霊が出ない',
+    )
     await page.keyboard.press('Enter')
     await waitFor(
       (id, z) => {

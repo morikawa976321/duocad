@@ -680,8 +680,8 @@ Session.preview(verb, args) -> dict        # 投機的実行（後述）
 ### `Session.preview` — 投機的実行（`duocad/speculative.py`）
 
 `PREVIEWABLE_VERBS` に登録されたverb（`extrude`/`extrude_face`/`fillet`/`chamfer`）だけが
-対象。**反復は対象外** — 変わるのはスケッチの図形でソリッドではないので、応答（形が変わった
-Bodyの一覧）が常に空になるため。
+対象。**反復と移動は対象外** — 変わるのがスケッチの図形か位置だけで、応答（形が変わった
+Bodyの一覧）が常に空になるため。**プレビューが無いという意味ではない**（下の「ローカル方式」）。
 
 1. **形を返す** — 変わった可視Bodyだけ。本物を実行したときの体積と一致する。
 2. **何も残さない** — 操作ログ・カーソル・形状・体積・選択・`applied_count`・テセレーション
@@ -693,6 +693,32 @@ Bodyの一覧）が常に空になるため。
 6. `preview` は**状態を配信しない**（要求した接続にだけ返る）。`_apply` で囲まない —
    囲むと、押し出し中にMCPから届いた**本物の**変更まで「WebSocket経由だから配信不要」と
    誤判定して捨ててしまう。
+
+### ローカル方式のプレビュー（ブラウザだけで描く幽霊）
+
+**サーバへ何も投げない**もう1つのプレビュー。`web/src/commands/*.ts` の
+`CommandDef.preview: 'local'` がこちらで、`App.svelte` の `showLocalGhost` が3経路に振る:
+
+| 経路 | verb | 何を描くか |
+|---|---|---|
+| `ghostEntity`（`entityKinds.ts`） | `add_line`/`add_circle`/`add_rectangle`/`add_arc` | **これから打つ**図形 |
+| `ghostCopies`（`entityKinds.ts`） | `pattern_rectangular`/`pattern_circular`/`move_sketch_entities` | **既にある図形**の反復・平行移動の結果 |
+| `showBodyGhosts`（`viewport.ts`） | `move_body` | **既にあるボディ**を dx/dy/dz ずらした姿 |
+
+不変条件:
+
+1. **文書に一度も入らない** — 投機実行と違い巻き戻しに依存しない（そもそも送らない）ので、
+   Escでも切断でも文書は変わらない。
+2. **本物を隠さない**（ボディ側）— `showPreview` は本物を隠すが `showBodyGhosts` は隠さない。
+   移動前と移動後が並んで見えることが `move_body` のプレビューの中身だからである。
+3. **コアと同じ変換規則** — `entityKinds.ts` の `translate`/`rotate` は
+   `duocad/sketch.py` の `_translate_*`/`_rotate_*` の写しで、円形反復の刻み角の場合分けは
+   `duocad/region.py` の `_expanded_entities` の写し。**ずれると幽霊と確定結果が別の場所に出る**
+   ので、実機smoke（`smoke-features.mjs` / `smoke-move.mjs`）が確定前の幽霊と確定後の
+   `drawn` を数値で突き合わせている。
+4. **宣言と配線がずれない** — `preview: 'local'` と書いただけで経路が無いverbは
+   `tests/test_ui_command_wiring.py::test_every_local_preview_verb_can_actually_draw_a_ghost`
+   が落とす（症状が「無言で何も出ない」なので、実機で触るまで気づかない種類の抜け）。
 
 ### ファイル操作
 

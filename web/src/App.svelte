@@ -29,10 +29,12 @@
     type SelectableKind,
   } from './commands/command'
   import {
+    MOVE_BODY,
     SKETCH_FEATURE_COMMANDS,
     SOLID_FEATURE_COMMANDS,
     needsSketchId,
   } from './commands/features'
+  import { ghostCopies, type GhostSource } from './entityKinds'
   import { IMPORT_STEP, changesDocument } from './commands/files'
   import { OPTIMIZE_MODE_COMMANDS, OPTIMIZE_PRESET_ROLE } from './commands/optimize'
   import OptimizePanel, { type OptimizeNotice } from './OptimizePanel.svelte'
@@ -40,6 +42,7 @@
     DEFAULT_SKETCH_COMMAND_ID,
     SKETCH_COMMANDS,
     SKETCH_CREATE,
+    MOVE_SKETCH_ENTITIES,
     SKETCH_PENDING_COMMANDS,
     ghostEntity,
     runsOutsideSketch,
@@ -70,6 +73,7 @@
     type SelectionState,
     type ServerState,
     type ShapeRef,
+    type SketchEntity,
     type SketchEntityRef,
     type SketchState,
     type VerticesPayload,
@@ -978,6 +982,22 @@
   const selectedBodies = $derived(
     (selection?.items ?? []).filter((item): item is BodyRef => refKind(item) === 'body'),
   )
+  /**
+   * `move_body` の幽霊を出す対象のボディ。**コアの `selection.require_bodies` の写し** ——
+   * 面・辺・頂点・ボディの参照から `body` を逆引きし、最初に現れた順で重複を畳む。
+   *
+   * `selectedBodies`(`kind === 'body'` の参照だけ)とは別物である。あちらは形状最適化の
+   * 役割付けが「ボディを直に指した」ものだけを見るのに対し、こちらは**指し方を問わず
+   * どのボディが動くか**を答える —— コアが同じ規則で動かすので、ここを絞ると
+   * 「面で指したら幽霊が出ないのに実行すると動く」という食い違いになる。
+   */
+  const ghostBodyIds = $derived([
+    ...new Set(
+      (selection?.items ?? [])
+        .filter((item): item is ShapeRef | BodyRef => 'body' in item)
+        .map((item) => item.body),
+    ),
+  ])
   /** 選択中の辺(**辺を出している間だけ**3Dで色が変わる)。 */
   const selectedEdges = $derived(
     (selection?.items ?? []).filter(
@@ -1407,6 +1427,11 @@
    *   最適化を抜けてそのまま面取りする、はどちらも実際に使う経路である。
    */
   function setMode(next: Mode): void {
+    // **確定前の姿を持ち越さない。** モードが変わると下の `{#key mode.kind}` が
+    // `CommandHost` ごと作り直すので、コマンド層からの中断(`onCancelPreview`)は**来ない**
+    // —— ここで消さないと、起動したまま抜けた `move_body` の半透明ボディや、
+    // `extrude` の投機実行の幽霊(本物を隠したまま)が画面に残り続ける。
+    clearPreview()
     const nextSketch = next.kind === 'sketch' ? next.id : null
     const unusable = (selection?.items ?? []).filter((item) => {
       const kind = refKind(item)
@@ -1622,7 +1647,83 @@
   }
 
   /**
-   * 確定前の姿。**スケッチの図形はサーバへ投げない**(`mode === 'local'`)——
+   * ローカル幽霊の**対象になる既存の図形**(`ghostCopies` の `sources`)。
+   *
+   * 対象の取り方がverbで違うのでここで分ける —— 反復は**引数の `entities`**、移動は
+   * **共有選択集合**(`selectedEntities`)から取る。この違いは `entityKinds.ts` には
+   * 持ち込まない(あちらは「その図形をどう変換するか」だけを知っていればよい)。
+   *
+   * 編集中のスケッチに実在するIDだけを返す(消えた図形・他のスケッチの図形は落ちる)。
+   */
+  function ghostSources(verb: string, args: Record<string, unknown>): GhostSource[] {
+    const active = activeSketch
+    if (active === null) return []
+    const byId = new Map(active.entities.map((entity) => [entity.entity_id, entity]))
+    if (verb === MOVE_SKETCH_ENTITIES.id) {
+      // **どの点が選ばれているかまで渡す** —— この verb は「図形1つ全体(辺)」と
+      // 「図形の1点」で結果が違う(全体は形を変えずに動き、1点は線分が伸びる)。
+      // 図形IDだけに畳むと、点を1つ選んだだけで図形ごと動く幽霊になる。
+      const grouped = new Map<string, Array<string | null>>()
+      for (const item of selection?.items ?? []) {
+        if (refKind(item) !== 'sketch_entity') continue
+        const ref = item as SketchEntityRef
+        if (ref.sketch !== sketchId) continue
+        const points = grouped.get(ref.entity)
+        if (points === undefined) grouped.set(ref.entity, [ref.point])
+        else if (!points.includes(ref.point)) points.push(ref.point)
+      }
+      return [...grouped].flatMap(([id, points]) => {
+        const entity = byId.get(id)
+        return entity === undefined ? [] : [{ kind: entity.kind, params: entity.params, points }]
+      })
+    }
+    const ids = Array.isArray(args.entities) ? (args.entities as string[]) : []
+    return ids
+      .map((id) => byId.get(id))
+      .filter((entity): entity is SketchEntity => entity !== undefined)
+      .map((entity) => ({ kind: entity.kind, params: entity.params }))
+  }
+
+  /**
+   * ブラウザだけで描く確定前の姿(`preview: 'local'`)——**3つの経路**。
+   *
+   * 1. **これから打つ図形**(`add_line` 等): `ghostEntity` が生の座標から組み立てる。
+   * 2. **既にある図形の変換後**(`pattern_*` / `move_sketch_entities`): `ghostCopies` が
+   *    今のスケッチ状態(`ghostSources`)を反復・平行移動する。
+   * 3. **既にあるボディの変換後**(`move_body`): 届いているメッシュをずらして重ねる。
+   *    **スケッチの外で走る唯一の経路**なので `sketchId` を要求しない。
+   *
+   * どの経路も**サーバへ何も投げない**。Escで中断しても文書が一切変わらないことを、
+   * 「そもそも送らない」で構造的に成立させる(スケッチの幽霊と同じ契約)。
+   */
+  function showLocalGhost(verb: string, args: Record<string, unknown>): void {
+    const view = viewport
+    if (view === null) return
+    if (verb === MOVE_BODY.id) {
+      const offset = [args.dx, args.dy, args.dz]
+      if (!offset.every((value) => typeof value === 'number' && Number.isFinite(value))) {
+        view.showBodyGhosts([]) // 使えない値で**古い幽霊を残さない**(空配列でも必ず呼ぶ)
+        return
+      }
+      view.showBodyGhosts(
+        // **コアの `selection.require_bodies` と同じ導き方**(面/辺/頂点/ボディから
+        // ボディを逆引きし、重複を畳む)。ここがずれると幽霊と結果が別のボディになる。
+        ghostBodyIds.map((bodyId) => ({ bodyId, offset: offset as [number, number, number] })),
+      )
+      return
+    }
+    if (sketchId === null) return
+    const single = ghostEntity(verb, args)
+    if (single !== null) {
+      view.showSketchGhosts(sketchId, [single])
+      return
+    }
+    // **空配列でも呼ぶ** —— 対象が消えた・値が使えないときに古い幽霊を残さない。
+    view.showSketchGhosts(sketchId, ghostCopies(verb, args, ghostSources(verb, args)))
+  }
+
+  /**
+   * 確定前の姿。**ローカル方式はサーバへ投げない**(`mode === 'local'`)——
    * 形はブラウザ側で分かっており、投機実行にすると中断しても文書に一度は入る。
    */
   function requestPreview(
@@ -1631,7 +1732,7 @@
     mode: 'server' | 'local',
   ): void {
     if (mode === 'local') {
-      if (sketchId !== null) viewport?.showSketchGhost(sketchId, ghostEntity(verb, args))
+      showLocalGhost(verb, args)
       return
     }
     previewId += 1
@@ -1870,6 +1971,10 @@
       // 互換のための穴: 選択のうち最初の面を `{bodyId, faceIndex}` で出す
       selected: firstFace === null ? null : { bodyId: firstFace.body, faceIndex: firstFace.index },
       previewing,
+      // いま出ている幽霊の中身(スケッチの図形 / ずらしたボディ)。**実機検査が
+      // 「値を打ったら幽霊が追随したか」「Escで消えたか」を数値で見るための穴**。
+      // `previewing` はサーバ投機実行の側だけを表すので、ローカル方式はここを見る。
+      ghostInfo: () => viewport?.ghostInfo() ?? { sketch: [], bodies: [] },
       lastApplied,
       messages,
       // **エラーはトーストへ出る**(消える)ので、実機検査が

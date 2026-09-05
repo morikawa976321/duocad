@@ -274,7 +274,10 @@ export const MOVE_SKETCH_ENTITIES: CommandDef = {
   category: 'sketch',
   label: '動かす',
   buttonId: 'sketch-move',
-  preview: 'none',
+  // **ローカル方式**(2026-09-05)。`move_body` と同じ発想で、選んだ図形の今の座標を
+  // dx/dy だけずらした姿を描く。対象は引数に無い(サーバがコアの確定選択から取る)ので、
+  // 幽霊の対象も `App.svelte` が同じ選択集合から導く(`ghostSources`)。
+  preview: 'local',
   args: [
     {
       kind: 'selection',

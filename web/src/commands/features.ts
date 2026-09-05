@@ -185,7 +185,10 @@ export const PATTERN_RECTANGULAR: CommandDef = {
   category: 'feature',
   label: '矩形反復',
   buttonId: 'pattern-rectangular',
-  preview: 'none',
+  // **幽霊はブラウザが描く**(2026-09-05)。変わるのはスケッチの図形でソリッドではないので、
+  // サーバに投機実行させても「形が変わったBody」は1つも返らない(`duocad/catalog.py` の note)。
+  // 増える複製の座標は `entityKinds.ts` の表がコアと同じ規則で出せる。
+  preview: 'local',
   args: [
     { kind: 'entities', name: 'entities', label: '反復する図形', min: 1 },
     {
@@ -264,7 +267,10 @@ export const PATTERN_CIRCULAR: CommandDef = {
   category: 'feature',
   label: '円形反復',
   buttonId: 'pattern-circular',
-  preview: 'none',
+  // 矩形反復と同じローカル方式。**回転中心を置くクリックの前から幽霊が出る**
+  // (`CommandHost` が待っている点をポインタの位置で仮に埋めるので、中心を動かすと
+  //  複製の輪が付いてくる)。
+  preview: 'local',
   args: [
     { kind: 'entities', name: 'entities', label: '反復する図形', min: 1 },
     { kind: 'point', name: 'center', label: '回転中心' },
@@ -321,7 +327,11 @@ export const MOVE_BODY: CommandDef = {
   category: 'feature',
   label: '動かす',
   buttonId: 'move-body',
-  preview: 'none',
+  // **ローカル方式**(2026-09-05)。形は変わらず位置だけが変わるので、届いているメッシュを
+  // dx/dy/dz だけずらして半透明で重ねれば足りる(OCCでの再計算が要らない唯一のverb)。
+  // **元の実体は隠さない** —— 移動前と移動後が並んで見えることがこのプレビューの中身で、
+  // 「重なって見分けが付かない」という以前の懸念は、両者が別の場所に描かれる以上当たらない。
+  preview: 'local',
   args: [
     {
       kind: 'selection',

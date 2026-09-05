@@ -534,3 +534,149 @@ def test_the_immediate_apply_fires_only_on_the_users_own_click():
         "即適用の $effect が選択の印を引き金にしている —— "
         "AIの modify_selection でも走るので、人のクリックの数で判定すること"
     )
+
+
+# --------------------------------------------------------------------------------------
+# プレビュー(2026-09-05)——「`preview` の値を変えたのに幽霊を描く配線が無い」を塞ぐ
+# --------------------------------------------------------------------------------------
+#: ローカル方式(ブラウザだけで幽霊を描く)へ移した4verb。
+#:
+#: **本人の依頼**(2026-09-05「プレビューがつけられる操作には基本的にすべてつけたい」)で
+#: `preview: 'none'` から移したもの。**サーバの `previewable` は増やしていない** ——
+#: どれも変わるのが位置か図形で、投機実行しても「形が変わったBody」が返らない。
+TRANSFORM_PREVIEW_VERBS = {
+    "pattern_rectangular",
+    "pattern_circular",
+    "move_body",
+    "move_sketch_entities",
+}
+
+
+def _ui_command_previews() -> dict[str, str]:
+    """`web/src/commands/*.ts` の `CommandDef` から「ID -> preview」を読む。
+
+    切り出し方は `_ui_command_categories` と同じ(`id` の次から次の `id` の手前まで)。
+    書き忘れた定義は空文字になり、下の検査が名指しで落とす。
+    """
+    found: dict[str, str] = {}
+    for path in sorted(COMMANDS_DIR.glob("*.ts")):
+        text = path.read_text(encoding="utf-8")
+        marks = list(re.finditer(r"^\s*id:\s*'([^']+)'", text, re.M))
+        for index, match in enumerate(marks):
+            end = marks[index + 1].start() if index + 1 < len(marks) else len(text)
+            chunk = text[match.end():end]
+            preview = re.search(r"^\s*preview:\s*'([^']+)'", chunk, re.M)
+            found[match.group(1)] = preview.group(1) if preview else ""
+    return found
+
+
+def _ui_command_consts() -> dict[str, str]:
+    """`export const NAME: CommandDef` から「TSの定数名 -> コマンドID」を読む。
+
+    `App.svelte` が幽霊の分岐を**文字列リテラルではなく `MOVE_BODY.id` で書いている**
+    (綴りの間違いを `tsc` に見てもらうため)ので、静的に配線を辿るにはこの対応が要る。
+    """
+    found: dict[str, str] = {}
+    for path in sorted(COMMANDS_DIR.glob("*.ts")):
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"^export const (\w+): CommandDef", text, re.M):
+            ident = re.search(r"^\s*id:\s*'([^']+)'", text[match.end():], re.M)
+            if ident is not None:
+                found[match.group(1)] = ident.group(1)
+    return found
+
+
+def _local_ghost_routes() -> dict[str, str]:
+    """**ローカル幽霊を実際に描ける verb** を「ID -> どの経路か」で集める。
+
+    経路は3つ(`App.svelte` の `showLocalGhost` のdocstringが正):
+
+    a. `entityKinds.ts` の表の `verb`(これから打つ図形。`ghostEntity`)
+    b. `entityKinds.ts` の `ghostCopies`(既にある図形の反復・平行移動)
+    c. `App.svelte` の `showLocalGhost`(既にあるボディの平行移動)
+
+    **`preview: 'local'` と書くだけでは幽霊は出ない**。宣言と配線がずれると、画面は
+    静かに何も出さないまま型検査もsmokeの既存項目も通る —— そこをここで塞ぐ。
+    """
+    routes: dict[str, str] = {}
+    kinds = (REPO_ROOT / "web" / "src" / "entityKinds.ts").read_text(encoding="utf-8")
+    copies_at = kinds.index("export function ghostCopies(")
+    for verb in re.findall(r"^\s*verb:\s*'([^']+)'", kinds[:copies_at], re.M):
+        routes[verb] = "ghostEntity"
+    for verb in re.findall(r"verb === '([^']+)'", kinds[copies_at:]):
+        routes[verb] = "ghostCopies"
+
+    app = (REPO_ROOT / "web" / "src" / "App.svelte").read_text(encoding="utf-8")
+    start = app.index("function showLocalGhost(")
+    end = app.index("function requestPreview(", start)
+    consts = _ui_command_consts()
+    for name in re.findall(r"\b([A-Z][A-Z0-9_]*)\.id\b", app[start:end]):
+        if name in consts:
+            routes[consts[name]] = "showLocalGhost"
+    return routes
+
+
+def test_ui_preview_modes_are_readable():
+    """先に**走査そのものが効いている**ことを見る(空なら下の検査は常に緑になる)。"""
+    previews = _ui_command_previews()
+    assert previews.get("extrude") == "server", f"preview を読めていない: {previews}"
+    assert previews.get("add_line") == "local", f"preview を読めていない: {previews}"
+    routes = _local_ghost_routes()
+    assert routes.get("add_line") == "ghostEntity", f"幽霊の経路を読めていない: {routes}"
+
+
+def test_the_four_transform_verbs_declare_a_local_preview():
+    """反復2つと移動2つは `preview: 'local'`(2026-09-05に `'none'` から移した)。"""
+    previews = _ui_command_previews()
+    wrong = {
+        verb: previews.get(verb, "<宣言が無い>")
+        for verb in TRANSFORM_PREVIEW_VERBS
+        if previews.get(verb) != "local"
+    }
+    assert not wrong, f"ローカル方式のプレビューになっていない: {wrong}"
+
+
+def test_every_local_preview_verb_can_actually_draw_a_ghost():
+    """**`preview: 'local'` と書いたverbは、幽霊を描く経路を必ず持つ**。
+
+    値だけ変えて配線が空だと、起動しても画面には何も出ないまま `tsc` も既存のsmokeも
+    通ってしまう(**症状が「無言」なので実機で触るまで気づかない**)。
+    """
+    previews = _ui_command_previews()
+    routes = _local_ghost_routes()
+    unwired = sorted(
+        verb for verb, mode in previews.items() if mode == "local" and verb not in routes
+    )
+    assert not unwired, (
+        f"`preview: 'local'` だが幽霊を描く経路が無い: {unwired} "
+        f"(経路がある verb: {sorted(routes)})"
+    )
+
+
+def test_the_transform_verbs_are_not_added_to_speculative_execution():
+    """ローカル方式に移したverbを**コアの投機実行へは足していない**。
+
+    足すと「Escで中断しても文書が一切変わらない」が、`Session.preview` の巻き戻しに
+    依存する話になる。ローカル方式はそもそも送らないので、その依存が要らない。
+    """
+    previewable = set(_catalog().previewable_verbs())
+    leaked = sorted(TRANSFORM_PREVIEW_VERBS & previewable)
+    assert not leaked, f"ローカル方式のverbが `previewable=True` になっている: {leaked}"
+
+
+def test_the_catalog_notes_no_longer_say_these_verbs_have_no_preview():
+    """宣言の `note` が**実装後の実態と食い違ったまま残っていない**。
+
+    `note` はAIが読む唯一の設計判断の置き場なので、「プレビューに載せていない」が
+    残っていると、AIは今も幽霊が出ないものとして人に説明する。
+    """
+    notes = {
+        command.name: (command.note or "")
+        for command in _catalog().COMMANDS
+        if command.name in TRANSFORM_PREVIEW_VERBS
+    }
+    assert set(notes) == TRANSFORM_PREVIEW_VERBS, f"宣言が見つからない: {sorted(notes)}"
+    stale = {name: note for name, note in notes.items() if "プレビューに載せていない" in note}
+    assert not stale, f"note が古い設計判断のまま: {sorted(stale)}"
+    silent = sorted(name for name, note in notes.items() if "プレビュー" not in note)
+    assert not silent, f"note がプレビューの扱いに触れていない: {silent}"
