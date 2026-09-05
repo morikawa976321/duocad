@@ -89,6 +89,7 @@
   import { loadFov, saveFov } from './viewSettings'
   import {
     createViewport,
+    type BodyGhostRotation,
     type BoxSelectEvent,
     type PickEvent,
     type SketchDraw,
@@ -1684,13 +1685,42 @@
       .map((entity) => ({ kind: entity.kind, params: entity.params }))
   }
 
+  /** `[x, y, z]` の有限な数値3つとして読めるなら返す(読めなければ null)。 */
+  function vector3(value: unknown): [number, number, number] | null {
+    if (!Array.isArray(value) || value.length !== 3) return null
+    if (!value.every((item) => typeof item === 'number' && Number.isFinite(item))) return null
+    return [value[0], value[1], value[2]] as [number, number, number]
+  }
+
+  /**
+   * `move_body(mode="rotate")` の引数から、幽霊に掛ける回転を作る(作れなければ null)。
+   *
+   * **軸が数値で来ているときだけ幽霊を出す。** コアは `axis_edge`(辺への参照)や
+   * 「軸の位置を省略 → 対象の合成重心」も受けるが、**そのどちらもブラウザ側では
+   * 正しく解けない** —— 辺の直線はメッシュからは取れず、体積重心にいたっては
+   * 三角形分割の近似からしか出せない。近似で置いた幽霊は「幽霊と確定結果が別の場所に
+   * 出る」という、プレビューとして最悪の壊れ方をする。**出さないほうが正しい**
+   * (2026-09-06。タスク `20260906-0100` の割り切り)。
+   */
+  function bodyGhostRotation(args: Record<string, unknown>): BodyGhostRotation | null {
+    const point = vector3(args.axis_point)
+    const dir = vector3(args.axis_dir)
+    const angle = args.angle
+    if (point === null || dir === null) return null
+    if (typeof angle !== 'number' || !Number.isFinite(angle)) return null
+    // **360の倍数はコアが ValueError にする**(回っていない姿の幽霊を出さない)。
+    if (angle % 360 === 0) return null
+    if (dir.every((value) => value === 0)) return null
+    return { point, dir, angleDeg: angle }
+  }
+
   /**
    * ブラウザだけで描く確定前の姿(`preview: 'local'`)——**3つの経路**。
    *
    * 1. **これから打つ図形**(`add_line` 等): `ghostEntity` が生の座標から組み立てる。
    * 2. **既にある図形の変換後**(`pattern_*` / `move_sketch_entities`): `ghostCopies` が
-   *    今のスケッチ状態(`ghostSources`)を反復・平行移動する。
-   * 3. **既にあるボディの変換後**(`move_body`): 届いているメッシュをずらして重ねる。
+   *    今のスケッチ状態(`ghostSources`)を反復・平行移動・回転する。
+   * 3. **既にあるボディの変換後**(`move_body`): 届いているメッシュをずらして/回して重ねる。
    *    **スケッチの外で走る唯一の経路**なので `sketchId` を要求しない。
    *
    * どの経路も**サーバへ何も投げない**。Escで中断しても文書が一切変わらないことを、
@@ -1700,14 +1730,24 @@
     const view = viewport
     if (view === null) return
     if (verb === MOVE_BODY.id) {
+      // **コアの `selection.require_bodies` と同じ導き方**(面/辺/頂点/ボディから
+      // ボディを逆引きし、重複を畳む)。ここがずれると幽霊と結果が別のボディになる。
+      // **空配列でも必ず呼ぶ** —— 使えない値で古い幽霊を残さない。
+      if (args.mode === 'rotate') {
+        const rotate = bodyGhostRotation(args)
+        view.showBodyGhosts(
+          rotate === null
+            ? []
+            : ghostBodyIds.map((bodyId) => ({ bodyId, offset: [0, 0, 0] as [number, number, number], rotate })),
+        )
+        return
+      }
       const offset = [args.dx, args.dy, args.dz]
       if (!offset.every((value) => typeof value === 'number' && Number.isFinite(value))) {
-        view.showBodyGhosts([]) // 使えない値で**古い幽霊を残さない**(空配列でも必ず呼ぶ)
+        view.showBodyGhosts([])
         return
       }
       view.showBodyGhosts(
-        // **コアの `selection.require_bodies` と同じ導き方**(面/辺/頂点/ボディから
-        // ボディを逆引きし、重複を畳む)。ここがずれると幽霊と結果が別のボディになる。
         ghostBodyIds.map((bodyId) => ({ bodyId, offset: offset as [number, number, number] })),
       )
       return
@@ -1975,6 +2015,13 @@
       // 「値を打ったら幽霊が追随したか」「Escで消えたか」を数値で見るための穴**。
       // `previewing` はサーバ投機実行の側だけを表すので、ローカル方式はここを見る。
       ghostInfo: () => viewport?.ghostInfo() ?? { sketch: [], bodies: [] },
+      // **幽霊を外から1回置く穴**(`setFov` / `frameAll` と同じ「実機検査が叩く手」)。
+      // 移動2verbの `mode="rotate"` は**まだUIが引数を組めない** —— 軸・中心をどう指すかが
+      // 未決で(`duocad/catalog.py` の note)、`CommandDef` に回転の引数が無いため、
+      // ツールバーからは `mode` が飛ばない。それでも幽霊の側は先に実装してあるので、
+      // **正しさを確かめる術**をここに開ける。読むのは `ghostInfo()`。
+      // **製品の分岐からは呼ばない**(`ghostInfo` と同じ規律)。
+      showLocalGhost: (verb: string, args: Record<string, unknown>) => showLocalGhost(verb, args),
       lastApplied,
       messages,
       // **エラーはトーストへ出る**(消える)ので、実機検査が

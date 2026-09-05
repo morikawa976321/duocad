@@ -466,6 +466,69 @@ function entityPointPair(kind: string, point: string): readonly [string, string]
   return entityKindSpec(kind).pointKeys.find(([xKey]) => xKey === point) ?? null
 }
 
+/** 2つの `params` が**完全に同じ**か(コアの `values == current` と同じ厳密比較)。 */
+function sameParams(left: Record<string, number>, right: Record<string, number>): boolean {
+  const keys = Object.keys(left)
+  if (keys.length !== Object.keys(right).length) return false
+  return keys.every((key) => Object.is(left[key], right[key]))
+}
+
+/**
+ * `move_sketch_entities` の **`mode="rotate"`** の幽霊
+ * (`duocad/verbs/move_sketch.py` の `_rotation_args` / `_rotated_params` / `_copy` の写し)。
+ *
+ * **中心は数値の `center` [u, v] を渡されたときだけ描く。** コアは省略時に「対象の代表点の
+ * 平均」(`_center_of_targets`)を使うが、その規則をここへ写すと**規則が2箇所に増える** ——
+ * 種別ごとの代表点(線分は中点・円/弧は中心・長方形は中央・ベジエは制御点の重心)が片方
+ * だけ変わった瞬間、幽霊と確定結果が別の場所に出る。**描かないほうが安全**である。
+ *
+ * **1つでも「まるごと回すと種別が変わる」図形(長方形)が混ざっていたら、1つも描かない。**
+ * コアはその呼び出し**全体**を ValueError にする(`_rotated_params`)ので、他の図形の
+ * 回った姿を出すと「プレビューは回る・確定するとエラー」になる。
+ */
+function rotatedTargets(
+  args: Record<string, unknown>,
+  sources: GhostSource[],
+  wholeEntity: boolean,
+): Array<{ kind: EntityKind; params: Record<string, number> }> {
+  const center = args.center as unknown
+  if (!Array.isArray(center) || center.length !== 2) return []
+  const cx = finiteNumber(center[0])
+  const cy = finiteNumber(center[1])
+  const angleDeg = finiteNumber(args.angle)
+  if (cx === null || cy === null || angleDeg === null) return []
+  // **360の倍数はコアが ValueError にする**(0度と同じで、複製なら元と重なる)。
+  if (angleDeg % 360 === 0) return []
+  const out: Array<{ kind: EntityKind; params: Record<string, number> }> = []
+  for (const source of sources) {
+    const points = source.points ?? [null]
+    // **複製は常に図形まるごと**。動かす側も、図形全体(`null`)が選ばれていれば
+    // まるごと(「辺が勝つ」。コアの `_normalize_targets`)。
+    if (wholeEntity || points.includes(null)) {
+      // **`rotateCopies` は `true`** —— 対象そのものを回すので、「向きを変えず位置だけ回す」
+      // (円形反復の複製のための挙動)ではない。
+      const rotated = entityKindSpec(source.kind).rotate(source.params, cx, cy, angleDeg, true)
+      if (rotated.length !== 1 || rotated[0].kind !== source.kind) return []
+      const params = { ...source.params, ...rotated[0].params }
+      // 複製が元と完全に重なるのもコアは ValueError(円をその中心まわりに回した場合)。
+      if (wholeEntity && sameParams(params, source.params)) return []
+      out.push({ kind: source.kind as EntityKind, params })
+      continue
+    }
+    // 選ばれた点だけを回す(種別は変わらない)。同じ図形の複数の点は**積み上げる**
+    // (コアの `_apply` と同じ。平行移動側と同じ理由)。
+    let params = { ...source.params }
+    for (const point of points) {
+      const pair = entityPointPair(source.kind, point as string)
+      if (pair === null) continue
+      const [x, y] = rotatePoint(params[pair[0]], params[pair[1]], cx, cy, angleDeg)
+      params = { ...params, [pair[0]]: x, [pair[1]]: y }
+    }
+    out.push({ kind: source.kind as EntityKind, params })
+  }
+  return out
+}
+
 /**
  * `ghostCopies` が受け取る「変換の元になる図形」。
  *
@@ -484,7 +547,7 @@ export interface GhostSource {
  * **既にある図形**の、確定前の姿(幽霊)。
  *
  * `ghostEntity` との違いは対象である —— あちらは「これから打つ点」から図形を組み立てる
- * (`add_*`)。こちらは**既にスケッチに居る図形**(`sources`)を反復・平行移動した結果を返す
+ * (`add_*`)。こちらは**既にスケッチに居る図形**(`sources`)を反復・平行移動・回転した姿を返す
  * (`pattern_rectangular` / `pattern_circular` / `move_sketch_entities`)。
  * どちらでもないverbは空配列(スケッチの図形を触らないverbは幽霊を持たない)。
  *
@@ -504,11 +567,12 @@ export function ghostCopies(
 ): Array<{ kind: EntityKind; params: Record<string, number> }> {
   if (sources.length === 0) return []
   if (verb === 'move_sketch_entities') {
+    // **複製は図形まるごと**である(点だけの複製はできない。コアの `_copy`)。
+    const wholeEntity = args.copy === true
+    if (args.mode === 'rotate') return rotatedTargets(args, sources, wholeEntity)
     const dx = finiteNumber(args.dx)
     const dy = finiteNumber(args.dy)
     if (dx === null || dy === null) return []
-    // **複製は図形まるごと**である(点だけの複製はできない。コアの `_copy`)。
-    const wholeEntity = args.copy === true
     return sources.map((source) => {
       const points = source.points ?? [null]
       // **同じ図形に「辺」と「点」が同時に選ばれていたら辺(全体)が勝つ**

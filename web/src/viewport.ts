@@ -188,18 +188,71 @@ export interface VertexMarker extends VertexRef {
 }
 
 /**
+ * ボディの幽霊の**回転**(`move_body` の `mode="rotate"`)。
+ *
+ * **コアが解決した後の数値と同じ形**である(`duocad/verbs/move_body.py` の
+ * `_rotation_args` が `axis_point` / `axis_dir` の数値へ潰し、操作ログにもその数値だけが
+ * 載る)。辺・頂点への参照はここへ持ち込まない —— 幽霊は確定前なのでサーバから解決済みの
+ * 数値を貰えず、**呼び出し側(`App.svelte`)が数値で渡せるときだけ幽霊を出す**契約にしてある
+ * (既定の中心=対象の重心はブラウザ側で正確に出せないので、そのときは幽霊を描かない)。
+ */
+export interface BodyGhostRotation {
+  /** 軸が通る点 [x, y, z](mm・世界座標)。 */
+  point: [number, number, number]
+  /** 軸の向き [x, y, z](正規化前でよい。長さ0は幽霊を描かない)。 */
+  dir: [number, number, number]
+  /** 回転角(度)。**軸の向きに対する右ねじが正**(コアの `move_body` と同じ符号)。 */
+  angleDeg: number
+}
+
+/**
  * ボディ1つぶんの**ローカル幽霊**(確定前の姿を、届いているメッシュから置く指示)。
  *
- * **いまは平行移動しか持たない。** `move_body` が集める引数が dx/dy/dz だけだからで、
- * 「まだ実装していない口」を先に開けない(使うverbが無い分岐は、正しさを確かめる術が無い)。
- * **回転を足すときはここに `rotate` を1つ足し、`showBodyGhosts` の中で
- * `group.position.set(...)` を行列に差し替える**(その2箇所以外は変わらない ——
- * 幽霊の生成・破棄・消える場面はすべて `bodyGhosts` の側に閉じている)。
+ * 平行移動(`offset`)と回転(`rotate`)を持つ。**コア側では排他**(`mode` で切り替える)
+ * なので、回転のときの `offset` は `[0,0,0]` である —— ここで両方を許しているのは、
+ * 変換の合成を1本の行列にまとめる `bodyGhostMatrix` の側で場合分けを持たないためだけで、
+ * 「並進しながら回す `move_body`」という仕様があるわけではない。
  */
 export interface BodyGhost {
   bodyId: string
   /** 平行移動 [dx, dy, dz](mm・世界座標)。 */
   offset: [number, number, number]
+  /** 軸まわりの回転。省略・null なら平行移動だけ。 */
+  rotate?: BodyGhostRotation | null
+}
+
+/** `BodyGhostRotation` として使える値か(有限な数値・長さ0でない軸)。 */
+function usableRotation(rotate: BodyGhostRotation | null | undefined): rotate is BodyGhostRotation {
+  if (!rotate) return false
+  const numbers = [...rotate.point, ...rotate.dir, rotate.angleDeg]
+  if (!numbers.every((value) => typeof value === 'number' && Number.isFinite(value))) return false
+  return rotate.dir.some((value) => value !== 0)
+}
+
+/**
+ * 幽霊のグループに掛ける変換。**「軸が通る点まわりの回転」を平行移動で挟んで作る**
+ * (`T(p) · R(axis, θ) · T(-p)`)—— three.js の `makeRotationAxis` は原点まわりなので、
+ * 軸の位置はこの挟み込みでしか入らない。コア(`gp_Trsf.SetRotation(gp_Ax1(点, 向き), θ)`)と
+ * 同じ変換である。
+ *
+ * **`export` してあるのは検算のため**(`ghostInfo` が返す行列と同じものを外から組める)。
+ */
+export function bodyGhostMatrix(entry: BodyGhost): THREE.Matrix4 {
+  const matrix = new THREE.Matrix4().makeTranslation(
+    entry.offset[0],
+    entry.offset[1],
+    entry.offset[2],
+  )
+  const rotate = entry.rotate
+  if (usableRotation(rotate)) {
+    const axis = new THREE.Vector3(rotate.dir[0], rotate.dir[1], rotate.dir[2]).normalize()
+    const point = new THREE.Vector3(rotate.point[0], rotate.point[1], rotate.point[2])
+    matrix
+      .multiply(new THREE.Matrix4().makeTranslation(point.x, point.y, point.z))
+      .multiply(new THREE.Matrix4().makeRotationAxis(axis, (rotate.angleDeg * Math.PI) / 180))
+      .multiply(new THREE.Matrix4().makeTranslation(-point.x, -point.y, -point.z))
+  }
+  return matrix
 }
 
 /** 1Bodyぶんの形状の差し替え。`geometry: null` は非表示・削除(メッシュを取り除く)。 */
@@ -565,10 +618,14 @@ export interface Viewport {
   /**
    * いま出ている幽霊の中身。**実機検査が「値を変えたら幽霊が追随したか」を数値で見る穴**
    * (`getGeometry` と同じ流儀 —— three.jsのバッファは外から読めない)。
+   *
+   * `matrix` は**そのグループに実際に掛かっている行列**(three.js の列優先16要素)。
+   * 指示(`offset` / `rotate`)だけでは「行列を組む式が正しいか」を外から検算できない
+   * ので、掛かった結果そのものを出す。
    */
   ghostInfo(): {
     sketch: Array<{ kind: string; params: Record<string, number> }>
-    bodies: BodyGhost[]
+    bodies: Array<BodyGhost & { matrix: number[] }>
   }
   /**
    * 面の表面上の点の画面座標(コンテナ内のCSSピクセル)。無理なら null。
@@ -2311,6 +2368,10 @@ export function createViewport(container: HTMLElement): Viewport {
   function showBodyGhosts(entries: BodyGhost[]): void {
     clearBodyGhosts()
     for (const entry of entries) {
+      // **使えない回転は幽霊ごと落とす**(軸の向きが長さ0・値が非有限)。無視して
+      // 平行移動だけ掛けると、元の位置にぴったり重なった幽霊が出て「回っていないのに
+      // 幽霊は出ている」という嘘になる —— 描かないほうが正しい。
+      if (entry.rotate && !usableRotation(entry.rotate)) continue
       // **届いている生メッシュをそのまま使う**(サーバへ投げない)。非表示・未読込の
       // ボディはここに無いので黙って落ちる —— 見えないものの幽霊を出す意味が無い。
       const payload = rawGeometry.get(entry.bodyId)
@@ -2324,12 +2385,25 @@ export function createViewport(container: HTMLElement): Viewport {
         disposables.push(geometry)
       }
       if (group.children.length === 0) continue
-      // **変換はグループに掛ける**(面ごとに座標を書き換えない) —— 回転を足すときも
-      // ここ1行が行列になるだけで済む(`BodyGhost` のdocstring)。
-      group.position.set(entry.offset[0], entry.offset[1], entry.offset[2])
+      // **変換はグループに掛ける**(面ごとに座標を書き換えない)。回転が入っても
+      // 変わるのはここが行列になることだけで、生成・破棄・消える場面は `bodyGhosts` の
+      // 側に閉じたままである(`BodyGhost` のdocstring)。
+      group.matrixAutoUpdate = false // 位置ではなく行列を直に置くので自動再計算を切る
+      group.matrix.copy(bodyGhostMatrix(entry))
+      group.matrixWorldNeedsUpdate = true
       root.add(group)
       bodyGhosts.set(entry.bodyId, { group, disposables })
-      bodyGhostInfo.push({ bodyId: entry.bodyId, offset: [...entry.offset] })
+      bodyGhostInfo.push({
+        bodyId: entry.bodyId,
+        offset: [...entry.offset],
+        rotate: entry.rotate
+          ? {
+              point: [...entry.rotate.point] as [number, number, number],
+              dir: [...entry.rotate.dir] as [number, number, number],
+              angleDeg: entry.rotate.angleDeg,
+            }
+          : null,
+      })
     }
   }
 
@@ -4976,6 +5050,10 @@ export function createViewport(container: HTMLElement): Viewport {
         bodies: bodyGhostInfo.map((item) => ({
           bodyId: item.bodyId,
           offset: [...item.offset] as [number, number, number],
+          rotate: item.rotate ?? null,
+          // **グループに乗っている行列そのもの**を読む(`bodyGhostMatrix` を呼び直さない)
+          // —— 組んだ行列を実際に掛け忘れていても気づけるようにするため。
+          matrix: bodyGhosts.get(item.bodyId)?.group.matrix.toArray() ?? [],
         })),
       }
     },

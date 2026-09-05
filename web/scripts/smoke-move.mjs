@@ -419,6 +419,177 @@ async function main() {
     if (lines.length !== 2) fail(`線分が2本になっていない: ${lines.length}`)
     ok(`copy=true で図形が複製された(図形 ${countBeforeCopy} → ${countBeforeCopy + 1}・元も残っている)`)
 
+    // ================================================================ 6c. 回転の幽霊(スケッチ)
+    //
+    // **`mode="rotate"` の引数はまだUIが組めない**(軸・中心の指し方が未決。
+    // `duocad/catalog.py` の note)ので、`CommandDef` には角度の入力欄が無い。
+    // ここは `__duocad.showLocalGhost`(実機検査用の書き込み穴)から直接叩いて、
+    // **幽霊の側だけ**を確かめる —— 引数の集め方が決まったとき、通る道は同じである。
+    {
+      /** (x,y) を (cx,cy) まわりに90度(u->v が正)回した [x, y]。 */
+      const turn90 = (x, y, cx, cy) => [cx - (y - cy), cy + (x - cx)]
+
+      // ---------------------------------------------------------------- 点だけを回す
+      // **`move_sketch_entities` は選んだ点だけを回す**(図形全体ではない。コアの
+      // `_rotated_params(point="x1")`)。図形ごと回す幽霊を描くと、ここで落ちる。
+      await dragBox([LINE.x1 - 4, moved.params.y1 - 4], [LINE.x1 + 4, moved.params.y1 + 4])
+      await waitFor(() => {
+        const items = (window.__duocad.selection?.items ?? []).filter(
+          (item) => item.entity !== undefined,
+        )
+        return items.length === 1 && items[0].point === 'x1'
+      }, '線分の右端(点x1)だけを選べない(回転の幽霊)')
+      {
+        const line = (await lineEntity()).find(
+          (item) => Math.abs(item.params.y1 - moved.params.y1) < 1e-6,
+        )
+        if (!line) fail('動かした線分が見つからない(点だけの回転)')
+        const pointGhosts = await page.evaluate(() => {
+          window.__duocad.showLocalGhost('move_sketch_entities', {
+            mode: 'rotate',
+            angle: 90,
+            center: [0, 0],
+            copy: false,
+          })
+          return JSON.parse(JSON.stringify(window.__duocad.ghostInfo().sketch))
+        })
+        if (pointGhosts.length !== 1) fail(`点だけの回転の幽霊が1つにならない: ${JSON.stringify(pointGhosts)}`)
+        const [wx1, wy1] = turn90(line.params.x1, line.params.y1, 0, 0)
+        const wantPoint = { x0: line.params.x0, y0: line.params.y0, x1: wx1, y1: wy1 }
+        for (const [key, value] of Object.entries(wantPoint)) {
+          if (Math.abs(pointGhosts[0].params[key] - value) > 1e-6) {
+            fail(
+              `点だけを選んだのに ${key} が合わない: ${pointGhosts[0].params[key]}(期待 ${value})。` +
+                `幽霊 ${JSON.stringify(pointGhosts[0].params)}`,
+            )
+          }
+        }
+        ok('move_sketch_entities(mode=rotate): 選んだ点だけが回る(図形ごと回さない)')
+
+        // **360の倍数はコアが ValueError**(0度と同じ)。幽霊も描かない。
+        const full = await page.evaluate(() => {
+          window.__duocad.showLocalGhost('move_sketch_entities', {
+            mode: 'rotate',
+            angle: 360,
+            center: [0, 0],
+          })
+          return window.__duocad.ghostInfo().sketch.length
+        })
+        if (full !== 0) fail(`360度の回転で幽霊が出た: ${full}件`)
+        ok('move_sketch_entities(mode=rotate): 360度(コアが断る角度)では幽霊を描かない')
+      }
+
+      // ---------------------------------------------------------------- 図形まるごと回す
+      // 線分そのもの(点ではなく辺)を選ぶ。**辺 = 図形まるごと**なので、コアは
+      // `_rotated_params(point=None)` の側を通る。
+      await withoutBrowserPanel(page, async () => {
+        const mid = await planeAt((LINE.x0 + LINE.x1) / 2, moved.params.y0)
+        if (!mid) fail('線分の中ほどが画面の中に無い(回転の幽霊)')
+        await page.mouse.click(mid.x, mid.y)
+      })
+      await waitFor(
+        () =>
+          (window.__duocad.selection?.items ?? []).some(
+            (item) => item.entity !== undefined && item.point === null,
+          ),
+        '回転の幽霊のために線分そのもの(辺)を選べない',
+      )
+      const picked = await page.evaluate(
+        () =>
+          (window.__duocad.selection?.items ?? []).find(
+            (item) => item.entity !== undefined && item.point === null,
+          ).entity,
+      )
+      const source = (await sketchNow()).entities.find((item) => item.entity_id === picked)
+      if (!source || source.kind !== 'line') fail(`選ばれたのが線分ではない: ${JSON.stringify(source)}`)
+
+      // **中心は選んだ線分の始点**にする(その点は動かないので、判定が読みやすい)。
+      const center = [source.params.x0, source.params.y0]
+      const ghosts = await page.evaluate(
+        (uv) => {
+          window.__duocad.showLocalGhost('move_sketch_entities', {
+            mode: 'rotate',
+            angle: 90,
+            center: uv,
+            copy: false,
+          })
+          return JSON.parse(JSON.stringify(window.__duocad.ghostInfo().sketch))
+        },
+        center,
+      )
+      if (ghosts.length !== 1 || ghosts[0].kind !== 'line') {
+        fail(`回転の幽霊が線分1本にならない: ${JSON.stringify(ghosts)}`)
+      }
+      // 90度(u->v の反時計回りが正)。始点は中心なので動かず、終点は (dx,dy) -> (-dy,dx)。
+      const dx = source.params.x1 - center[0]
+      const dy = source.params.y1 - center[1]
+      const want = { x0: center[0], y0: center[1], x1: center[0] - dy, y1: center[1] + dx }
+      for (const [key, value] of Object.entries(want)) {
+        if (Math.abs(ghosts[0].params[key] - value) > 1e-6) {
+          fail(
+            `回転の幽霊の ${key} が合わない: ${ghosts[0].params[key]}(期待 ${value})。` +
+              `幽霊 ${JSON.stringify(ghosts[0].params)}`,
+          )
+        }
+      }
+      ok('move_sketch_entities(mode=rotate): 線分の幽霊が中心まわりに90度回る')
+
+      // **中心を渡さなければ描かない**(コアの既定「対象の代表点の平均」は写していない ——
+      // 規則が2箇所に増えると、片方だけ変わったときに幽霊と確定結果が別の場所へ出る)。
+      const noCenter = await page.evaluate(() => {
+        window.__duocad.showLocalGhost('move_sketch_entities', { mode: 'rotate', angle: 90 })
+        return window.__duocad.ghostInfo().sketch.length
+      })
+      if (noCenter !== 0) fail(`中心を渡していないのに回転の幽霊が出た: ${noCenter}件`)
+      ok('move_sketch_entities(mode=rotate): 中心を渡さなければ幽霊を描かない(重心を近似しない)')
+
+      // ---------------------------------------------------------------- 長方形はまるごと回せない
+      // **コアは呼び出し全体を ValueError にする**(回すと種別が線分4本に変わり、
+      // 「undo = 逆向きに同じ角度」が成り立たなくなるため)。幽霊も同じ落とし方 ——
+      // ここで4本の線分を描くと「プレビューは回る・確定するとエラー」になる。
+      // 長方形をまるごと囲む(**完全包含された図形は `point: null` = 図形まるごと**で
+      // 選択に入る。辺の1本をクリックで指す道もあるが、内側の領域と重なって不安定)。
+      await dragBox([-5, -5], [PLATE.width + 5, PLATE.height + 5])
+      // **選択の正はコア**なので、ドラッグの直後は往復待ちが要る(`waitFor`)。
+      await waitFor(() => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        const ids = new Set(
+          active.entities.filter((item) => item.kind === 'rectangle').map((item) => item.entity_id),
+        )
+        // **領域も一緒に囲まれる**(`onBoxSelect` は領域も拾う)が、幽霊の対象になるのは
+        // スケッチ図形の参照だけ(`ghostSources`)。見るのはその内訳である。
+        const entities = (hook.selection?.items ?? []).filter((item) => item.entity !== undefined)
+        return (
+          entities.length === 1 && ids.has(entities[0].entity) && entities[0].point === null
+        )
+      }, '長方形そのもの(図形まるごと)だけを選べない')
+      const rectGhosts = await page.evaluate(() => {
+        window.__duocad.showLocalGhost('move_sketch_entities', {
+          mode: 'rotate',
+          angle: 30,
+          center: [0, 0],
+          copy: false,
+        })
+        return JSON.parse(JSON.stringify(window.__duocad.ghostInfo().sketch))
+      })
+      if (rectGhosts.length !== 0) {
+        fail(
+          '長方形をまるごと回す幽霊を描いてしまった(コアは ValueError なので描いてはいけない): ' +
+            JSON.stringify(rectGhosts),
+        )
+      }
+      ok('move_sketch_entities(mode=rotate): 長方形をまるごと回す指定では幽霊を1つも描かない')
+
+      // 後片付け —— 幽霊を消し、選択を空へ戻す(以降の節が前提にしている状態)。
+      await page.evaluate(() => window.__duocad.showLocalGhost('move_sketch_entities', {}))
+      await dragBox([LINE.x0 + 6, LINE.y0 - 3], [LINE.x1 - 6, LINE.y1 + 3])
+      await waitFor(
+        () => (window.__duocad.selection?.count ?? -1) === 0,
+        '回転の幽霊の後で選択を空へ戻せない',
+      )
+    }
+
     // ================================================================ 6b. スケッチを直接切り替えると選択が残らない
     //
     // **`exitSketch` を通らずにAからBへ移る道がある**(ビューポートに浮かぶブラウザの
@@ -576,6 +747,128 @@ async function main() {
       fail(`Escで中断したのに文書が変わった: ${volumeBefore} → ${volumeAfterEscape}`)
     }
     ok('move_body: 確定前に移動先の幽霊が出て、Escで消えて文書は変わらない')
+
+    // ---------------------------------------------------------------- 回転の幽霊(ボディ)
+    // **`mode="rotate"` の引数はまだUIが組めない**(軸の指し方が未決。`catalog.py` の note)。
+    // 6c と同じく `__duocad.showLocalGhost` の穴から直接叩いて、幽霊の側だけを確かめる。
+    // 面の選択は Esc では消えないので、ここでは同じボディが対象になる。
+    {
+      // **軸は原点を通さない**(`[10, 0, 0]`)。原点を通す軸だと `T(p)·R·T(-p)` の
+      // 平行移動2項が恒等になり、**軸の位置を落とした実装でも通ってしまう**。
+      const rotated = await page.evaluate(() => {
+        window.__duocad.showLocalGhost('move_body', {
+          mode: 'rotate',
+          angle: 90,
+          axis_point: [10, 0, 0],
+          axis_dir: [0, 0, 1],
+        })
+        return JSON.parse(JSON.stringify(window.__duocad.ghostInfo().bodies))
+      })
+      if (rotated.length !== 1 || rotated[0].bodyId !== bodyId) {
+        fail(`回転の幽霊が出ない: ${JSON.stringify(rotated)}`)
+      }
+      if (!rotated[0].rotate || rotated[0].rotate.angleDeg !== 90) {
+        fail(`幽霊に回転が乗っていない: ${JSON.stringify(rotated[0])}`)
+      }
+      // **グループに実際に掛かっている行列**を検算する(three.jsは列優先の16要素)。
+      // **指示だけを見ても「行列を組む式が正しいか」は分からない**ので、行列そのものを当てる。
+      const m = rotated[0].matrix
+      if (!Array.isArray(m) || m.length !== 16) fail(`幽霊の行列が読めない: ${JSON.stringify(m)}`)
+      const apply = (x, y, z) => [
+        m[0] * x + m[4] * y + m[8] * z + m[12],
+        m[1] * x + m[5] * y + m[9] * z + m[13],
+        m[2] * x + m[6] * y + m[10] * z + m[14],
+      ]
+      const cases = [
+        // 軸上の点は動かない(軸の位置を落とした実装ならここで落ちる)
+        [[10, 0, 0], [10, 0, 0]],
+        // 軸から +X に10離れた点は、+Y に10離れた位置へ回る
+        [[20, 0, 0], [10, 10, 0]],
+        // 軸の向き(Z)には動かない
+        [[10, 0, 7], [10, 0, 7]],
+      ]
+      for (const [from, want] of cases) {
+        const got = apply(from[0], from[1], from[2])
+        if (got.some((value, index) => Math.abs(value - want[index]) > 1e-6)) {
+          fail(
+            `Z軸(x=10を通る)+90度の行列が違う: ${JSON.stringify(from)} → ${JSON.stringify(got)}` +
+              `(期待 ${JSON.stringify(want)})`,
+          )
+        }
+      }
+      ok('move_body(mode=rotate): 幽霊のグループに「軸上の点まわりの+90度」の行列が掛かる')
+
+      // **軸をY・角度を負・向きを非単位ベクトルにした場合**も当てる。Z軸+正の角度だけだと
+      // 「軸の取り違え」「符号の反転」「正規化の忘れ」が3つとも素通りする。
+      // Y軸まわり-90度(右ねじ): 相対 (5,0,0) -> (0,0,5)、相対 (0,0,5) -> (-5,0,0)。
+      const other = await page.evaluate(() => {
+        window.__duocad.showLocalGhost('move_body', {
+          mode: 'rotate',
+          angle: -90,
+          axis_point: [10, 0, 0],
+          axis_dir: [0, 2, 0], // **わざと長さ2**(正規化していなければ回転量が狂う)
+        })
+        return window.__duocad.ghostInfo().bodies[0]?.matrix ?? null
+      })
+      if (!Array.isArray(other) || other.length !== 16) fail('Y軸の回転で幽霊の行列が読めない')
+      const applyOther = (x, y, z) => [
+        other[0] * x + other[4] * y + other[8] * z + other[12],
+        other[1] * x + other[5] * y + other[9] * z + other[13],
+        other[2] * x + other[6] * y + other[10] * z + other[14],
+      ]
+      for (const [from, want] of [
+        [[15, 0, 0], [10, 0, 5]],
+        [[10, 0, 5], [5, 0, 0]],
+        [[10, 3, 0], [10, 3, 0]], // 軸上(Y方向)の点は動かない
+      ]) {
+        const got = applyOther(from[0], from[1], from[2])
+        if (got.some((value, index) => Math.abs(value - want[index]) > 1e-6)) {
+          fail(
+            `Y軸(x=10を通る)-90度の行列が違う: ${JSON.stringify(from)} → ${JSON.stringify(got)}` +
+              `(期待 ${JSON.stringify(want)})`,
+          )
+        }
+      }
+      ok('move_body(mode=rotate): Y軸・負の角度・非単位の向きでも行列が合う(正規化と符号)')
+
+      // **軸を数値で渡さなければ描かない**(辺への参照も「省略時=重心」もブラウザでは
+      // 解けない。近似で置くと幽霊と確定結果が別の場所に出る —— 出さないほうが正しい)。
+      const noAxis = await page.evaluate(() => {
+        window.__duocad.showLocalGhost('move_body', { mode: 'rotate', angle: 90 })
+        return window.__duocad.ghostInfo().bodies.length
+      })
+      if (noAxis !== 0) fail(`軸を渡していないのに回転の幽霊が出た: ${noAxis}件`)
+      ok('move_body(mode=rotate): 軸を数値で渡さなければ幽霊を描かない(重心を近似しない)')
+
+      // **長さ0の軸・360の倍数の角度でも描かない**(向きの無い軸は回転を決められず、
+      // 360度はコアが断る)。**平行移動だけ掛けた幽霊を元の位置に出さない**のが要点。
+      const degenerate = await page.evaluate(() => {
+        const hook = window.__duocad
+        hook.showLocalGhost('move_body', {
+          mode: 'rotate',
+          angle: 90,
+          axis_point: [10, 0, 0],
+          axis_dir: [0, 0, 0],
+        })
+        const zeroAxis = hook.ghostInfo().bodies.length
+        hook.showLocalGhost('move_body', {
+          mode: 'rotate',
+          angle: 360,
+          axis_point: [10, 0, 0],
+          axis_dir: [0, 0, 1],
+        })
+        return { zeroAxis, fullTurn: hook.ghostInfo().bodies.length }
+      })
+      if (degenerate.zeroAxis !== 0) fail(`長さ0の軸で幽霊が出た: ${degenerate.zeroAxis}件`)
+      if (degenerate.fullTurn !== 0) fail(`360度の回転で幽霊が出た: ${degenerate.fullTurn}件`)
+      ok('move_body(mode=rotate): 長さ0の軸・360度では幽霊を描かない')
+
+      await page.evaluate(() => window.__duocad.showLocalGhost('move_body', {}))
+      await waitFor(
+        () => window.__duocad.ghostInfo().bodies.length === 0,
+        '回転の幽霊を消せない',
+      )
+    }
 
     // 打ち直して今度は確定する(面の選択は Esc では消えない)
     await page.click('#move-body')
