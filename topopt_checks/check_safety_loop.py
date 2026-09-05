@@ -265,7 +265,7 @@ def check_infeasible(cond: ds.Conditions, material_min: float, material_max: flo
     )
 
     # 探索の境界そのものが導出できない(material_max が塊の容量を超えて above_capacity)。
-    capacity = material_max / 0.75  # check_entry_point で 75% として作った値から逆算
+    capacity = material_max / 0.70  # check_entry_point で 70% として作った値から逆算
     over_capacity = capacity * 0.999  # 99.9%は罠(0142)なのでその手前、だが容量近傍は above_capacity を踏みやすい
     try:
         sl.solve_for_safety_factor(
