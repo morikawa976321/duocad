@@ -12,7 +12,7 @@ TransferRoots() を呼ぶと、Python例外にはならず**プロセスごと�
 0.2 / 0.05 / 0.01 のどれでも同じサイズのSTLになり、「偏差を小さくすると細かくなる」が成立しない。
 
 **読み込みのverb本体はここに無い** —— `import_step` は `duocad/verbs/import_editable.py` に
-1本だけある(2026-08-27に統合。参照ボディだけを足す経路は消えた)。ここに残すのは
+1本だけある。ここに残すのは
 **読み込み経路が共有する部品**(`read_step_source` / `solid_names`)と書き出しである。
 形の取り込み方(STEP本文を `args["step"]` へ生テキストで持ち、再生が外部ファイルを
 一切読まないこと)の契約は、そのverbのモジュールdocstringが正。
@@ -81,7 +81,7 @@ def export_step(doc: Document, path: PathLike) -> None:
 def export_stl(doc: Document, path: PathLike, deviation: float) -> None:
     """deviation(mm)は**絶対**の線形偏差。対象は export_step と同じ。
 
-    **B-repとメッシュが混ざった文書は、両方を1本のSTLへ書く**(2026-09-05決定)。
+    **B-repとメッシュが混ざった文書は、両方を1本のSTLへ書く**。
     メッシュボディの三角形は**テッセレーションを通さずそのまま**書く —— deviation は
     B-rep側にしか効かない(既に三角形になっているものを測り直す意味が無い)。
 

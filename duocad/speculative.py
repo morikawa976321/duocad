@@ -43,7 +43,7 @@ def speculative(doc: Document) -> Iterator[None]:
 def _snapshot(doc: Document) -> dict:
     """巻き戻しに要るものを控える。"""
     return {
-        # **`mesh` も控える**(2026-09-05)。いまメッシュを差し替えるverbは無いが、控えから
+        # **`mesh` も控える**。いまメッシュを差し替えるverbは無いが、控えから
         # 落ちているフィールドは「戻したはずなのに戻っていない」という形で後から効く。
         "bodies": [
             (body, body.shape, body.visible, body.name, body.kind, body.mesh)

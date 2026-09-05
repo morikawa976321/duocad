@@ -1,4 +1,4 @@
-"""`duocad.server` は**入口**。実体は2026-08-28にクラス境界で分けた:
+"""`duocad.server` は**入口**。実体はクラス境界で分けてある:
 
     `duocad/paths.py`               `REPO_ROOT` / `DEFAULT_WEB_DIST` / `DEFAULT_MODELS_DIR`
     `duocad/session.py`             `Session`(1つの文書を持つサーバ側の状態)＋ `PREVIEWABLE_VERBS`
@@ -28,7 +28,7 @@ import sys
 # 移したあとも同じ名前が同じように引けることが、この入口を残す理由そのものである
 # (`import` で引く側だけでなく、モジュール属性を差し替える検査もここを見る)。
 # 素通しのimport(下の `# noqa: F401`)は使われていないように見えるが**消さない**。
-import asyncio  # noqa: F401  分割前から `duocad.server.asyncio` で引けた
+import asyncio  # noqa: F401
 import json  # noqa: F401
 import os  # noqa: F401
 import threading  # noqa: F401
@@ -78,7 +78,6 @@ from .verbs import (  # noqa: F401
     pattern_circular as pattern_circular_verb,
     pattern_rectangular as pattern_rectangular_verb,
 )
-# `_log_args_for_state` / `_REDACTED_LOG_ARGS` は2026-08-28に `view.py` へ移った(第2段)。
 # **入口から引ける名前は減らさない**ので、出どころだけ変えてここへ再輸出し続ける。
 from .view import (
     DocumentView,
