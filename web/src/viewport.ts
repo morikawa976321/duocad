@@ -42,107 +42,29 @@ import { POLE_Z, upForDirection } from './viewCube'
 import { createOptimizeAnnotations } from './optimizeAnnotations'
 import { createOptimizeDebug } from './optimizeDebug'
 import { createViewCubeOverlay } from './viewCubeOverlay'
+import { createVertexMarkers } from './vertexMarkers'
 import type { BasePlaneName, EdgeGeometry } from './session'
-import type {
-  BodyGeometryUpdate,
-  BodyGhost,
-  BodyGhostRotation,
-  BoxSelectEvent,
-  EdgeRef,
-  FaceGeometry,
-  FaceRef,
-  GeometryPayload,
-  OptimizeDebugAnchors,
-  OptimizeDebugGrid,
-  OptimizeDebugState,
-  OptimizeDebugVoxels,
-  OptimizeLoadVisual,
-  OptimizeVisualState,
-  PickEvent,
-  PickMode,
-  SketchDraw,
-  SketchEntityHit,
-  SketchPlaneRef,
-  VertexMarker,
-  VertexRef,
-  Viewport,
-  ViewportResolution,
-} from './viewportTypes'
-import { bodyGhostMatrix, usableRotation } from './viewportTypes'
 import {
-  AXIS_X_COLOR,
-  AXIS_Y_COLOR,
-  AXIS_Z_COLOR,
-  BACKGROUND_COLOR,
-  BASE_COLOR,
-  BASE_PLANES,
-  BASE_PLANE_AXES,
-  BASE_PLANE_HOVER_OPACITY,
-  BASE_PLANE_PROBES,
-  BOX_SELECT_MIN_PX,
-  CLICK_MOVE_LIMIT_PX,
-  CLICK_TIME_LIMIT_MS,
-  DEPTH_BIAS_LAYER,
-  DEPTH_BIAS_UNIT,
-  EDGE_COLOR,
-  EDGE_PICK_PIXELS,
-  FOV_DEFAULT,
-  FOV_MAX,
-  FOV_MIN,
-  FOV_ORTHO,
-  GRID_ARMED_COLOR,
-  GRID_COLOR,
-  HIGHLIGHT_COLOR,
-  HOME_VIEW_OFFSET,
-  HOVER_LIGHTEN,
-  LAYER,
-  OPTIMIZE_EXCLUDE_COLOR,
-  OPTIMIZE_FIXTURE_COLOR,
-  OPTIMIZE_PRESERVE_COLOR,
-  PICK_EDGE_COLOR,
-  PREVIEW_COLOR,
-  PROPOSED_COLOR,
-  REGION_COLOR,
-  REGION_SELECTED_COLOR,
-  SKETCH_COLOR,
-  SKETCH_FIT_MARGIN,
-  SKETCH_GHOST_COLOR,
-  SKETCH_HANDLE_COLOR,
-  SKETCH_HANDLE_PIXELS,
-  SKETCH_SELECTED_COLOR,
-  VERTEX_PIXELS,
-  WORLD_UP,
-  isSelectableFov,
-  lighten,
-  withDepthBias,
-  type BodyMeshes,
+  bodyGhostMatrix, usableRotation,
+  type BodyGeometryUpdate, type BodyGhost, type BodyGhostRotation, type BoxSelectEvent, type EdgeRef, type FaceGeometry,
+  type FaceRef, type GeometryPayload, type OptimizeDebugAnchors, type OptimizeDebugGrid, type OptimizeDebugState,
+  type OptimizeDebugVoxels, type OptimizeLoadVisual, type OptimizeVisualState, type PickEvent, type PickMode, type SketchDraw,
+  type SketchEntityHit, type SketchPlaneRef, type VertexMarker, type VertexRef, type Viewport, type ViewportResolution,
+} from './viewportTypes'
+import {
+  AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR, BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_AXES, BASE_PLANE_HOVER_OPACITY,
+  BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS, DEPTH_BIAS_LAYER, DEPTH_BIAS_UNIT, EDGE_COLOR,
+  EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, GRID_ARMED_COLOR, GRID_COLOR, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET,
+  HOVER_LIGHTEN, LAYER, OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_EDGE_COLOR, PREVIEW_COLOR,
+  PROPOSED_COLOR, REGION_COLOR, REGION_SELECTED_COLOR, SKETCH_COLOR, SKETCH_FIT_MARGIN, SKETCH_GHOST_COLOR, SKETCH_HANDLE_COLOR,
+  SKETCH_HANDLE_PIXELS, SKETCH_SELECTED_COLOR, WORLD_UP, isSelectableFov, lighten, withDepthBias, type BodyMeshes,
 } from './viewportConstants'
 
 export { bodyGhostMatrix, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, isSelectableFov }
 export type {
-  BodyGeometryUpdate,
-  BodyGhost,
-  BodyGhostRotation,
-  BoxSelectEvent,
-  EdgeRef,
-  FaceGeometry,
-  FaceRef,
-  GeometryPayload,
-  OptimizeDebugAnchors,
-  OptimizeDebugGrid,
-  OptimizeDebugState,
-  OptimizeDebugVoxels,
-  OptimizeLoadVisual,
-  OptimizeVisualState,
-  PickEvent,
-  PickMode,
-  SketchDraw,
-  SketchEntityHit,
-  SketchPlaneRef,
-  VertexMarker,
-  VertexRef,
-  Viewport,
-  ViewportResolution,
+  BodyGeometryUpdate, BodyGhost, BodyGhostRotation, BoxSelectEvent, EdgeRef, FaceGeometry, FaceRef, GeometryPayload,
+  OptimizeDebugAnchors, OptimizeDebugGrid, OptimizeDebugState, OptimizeDebugVoxels, OptimizeLoadVisual, OptimizeVisualState,
+  PickEvent, PickMode, SketchDraw, SketchEntityHit, SketchPlaneRef, VertexMarker, VertexRef, Viewport, ViewportResolution,
 }
 
 export function createViewport(container: HTMLElement): Viewport {
@@ -2014,114 +1936,16 @@ export function createViewport(container: HTMLElement): Viewport {
     return null
   }
 
-  // ------------------------------------------------------------------ 頂点(選択中のものだけ)
-  //
-  // **辺と違い、候補を全部出すことはしない。** 頂点を引数に取るverbが無いので
-  // 「候補を見せて選ばせる」場面が無く、要るのは「AIが選んだ頂点が今どれか」を人が見て
-  // 外せることだけである(`duocad/server.py` の `Session.vertices` と同じ理由)。
-  //
-  // **点(`THREE.Points`)で描き、大きさは画素で固定する**(`sizeAttenuation: false`)。
-  // 世界座標の球にすると、描いた時のカメラ距離で大きさが決まってしまい、**寄れば巨大な玉、
-  // 引けば1画素未満**になる —— 頂点マーカーは選択中の頂点を見る唯一の手段なので、
-  // 27部品を引きで見ているときに消えるのは機能が無いのと同じである。
-  const vertexRoot = new THREE.Group()
-  scene.add(vertexRoot)
-
-  const vertexMaterial = new THREE.PointsMaterial({
-    color: HIGHLIGHT_COLOR,
-    size: VERTEX_PIXELS * 2,
-    sizeAttenuation: false,
-    // 辺と同じく**深度検査をしない**(奥のマーカーも見え、奥のマーカーも指せる)。
-    // 見た目だけ隠すと「見えない頂点が外れる」になる。
-    depthTest: false,
+  const vertexMarkers = createVertexMarkers({
+    size,
+    camera: () => camera,
+    raycaster,
+    worldPerPixel,
+    toScreen,
+    pickChanged,
+    highlightColor,
   })
-  const vertexProposedMaterial = new THREE.PointsMaterial({
-    color: PROPOSED_COLOR,
-    size: VERTEX_PIXELS * 2,
-    sizeAttenuation: false,
-    depthTest: false,
-  })
-
-  /** 今出している頂点マーカー。空なら選択に頂点が入っていない。 */
-  let vertexMeshes: THREE.Points[] = []
-  const vertexDisposables: Array<{ dispose(): void }> = []
-  /** 直前に描いた印(**同じものを渡されたら作り直さない**ため)。 */
-  let vertexKey = ''
-
-  function clearVertices(): void {
-    for (const mesh of vertexMeshes) vertexRoot.remove(mesh)
-    for (const item of vertexDisposables) item.dispose()
-    vertexDisposables.length = 0
-    vertexMeshes = []
-    vertexKey = ''
-  }
-
-  function showVertices(markers: VertexMarker[], origin: 'user' | 'proposed'): void {
-    const key = `${origin}|${markers
-      .map((marker) => `${marker.bodyId}|${marker.vertexIndex}|${marker.point.join(',')}`)
-      .join(';')}`
-    // 呼び出し側(App.svelte)は選択が変わるたびに呼び直すので、毎回作り直すと
-    // ジオメトリを捨てて作り直し続けることになる(`showEdges` と同じ番人)。
-    if (key === vertexKey) return
-    clearVertices()
-    vertexKey = key
-    pickChanged() // 頂点マーカーは面より先に取られるので、増減で「指せるもの」が変わる
-    const material = origin === 'proposed' ? vertexProposedMaterial : vertexMaterial
-    highlightColor.vertex = markers.length === 0 ? null : material.color.getHex()
-    if (markers.length === 0) return
-    for (const marker of markers) {
-      if (marker.point.length < 3) continue
-      // **1マーカー1オブジェクト**(辺が1本1 `THREE.Line` なのと同じ) —— まとめると
-      // 当たった点からコアの添字へ戻れない。数は選択中のものだけなので費用は無視できる。
-      const geometry = new THREE.BufferGeometry()
-      geometry.setAttribute(
-        'position',
-        new THREE.BufferAttribute(new Float32Array(marker.point.slice(0, 3)), 3),
-      )
-      geometry.computeBoundingSphere()
-      const mesh = new THREE.Points(geometry, material)
-      mesh.renderOrder = LAYER.region // 深度を書かないぶん、描く順序で辺より手前に出す
-      mesh.userData.bodyId = marker.bodyId
-      mesh.userData.vertexIndex = marker.vertexIndex
-      mesh.userData.point = marker.point
-      vertexRoot.add(mesh)
-      vertexMeshes.push(mesh)
-      vertexDisposables.push(geometry)
-    }
-  }
-
-  function vertexAt(offsetX: number, offsetY: number): VertexRef | null {
-    if (vertexMeshes.length === 0) return null
-    const { width, height } = size()
-    const ndc = new THREE.Vector2((offsetX / width) * 2 - 1, -(offsetY / height) * 2 + 1)
-    raycaster.setFromCamera(ndc, camera)
-    // 点の当たり判定も**画素で決める**(辺の `edgeAt` と同じ理由 —— 寄るほど掴みにくく
-    // なるのを避ける)。描いている大きさと揃えておく。
-    const previous = raycaster.params.Points?.threshold
-    raycaster.params.Points = { threshold: worldPerPixel() * VERTEX_PIXELS }
-    const hits = raycaster.intersectObjects(vertexMeshes, false)
-    if (previous !== undefined) raycaster.params.Points = { threshold: previous }
-    if (hits.length === 0) return null
-    const bodyId = hits[0].object.userData.bodyId
-    const vertexIndex = hits[0].object.userData.vertexIndex
-    if (typeof bodyId !== 'string' || typeof vertexIndex !== 'number') return null
-    return { bodyId, vertexIndex }
-  }
-
-  function projectVertex(bodyId: string, vertexIndex: number): { x: number; y: number } | null {
-    const mesh = vertexMeshes.find(
-      (candidate) =>
-        candidate.userData.bodyId === bodyId && candidate.userData.vertexIndex === vertexIndex,
-    )
-    if (!mesh) return null
-    const point = mesh.userData.point as number[]
-    const screen = toScreen(new THREE.Vector3(point[0], point[1], point[2]))
-    if (screen === null) return null
-    // **本当にその頂点が取れる画素か**を確かめてから返す(面の `project` と同じ流儀)。
-    const hit = vertexAt(screen.x, screen.y)
-    if (hit === null || hit.bodyId !== bodyId || hit.vertexIndex !== vertexIndex) return null
-    return screen
-  }
+  scene.add(vertexMarkers.object)
 
   // ------------------------------------------------------------------ C: スケッチ
   //
@@ -2872,7 +2696,7 @@ export function createViewport(container: HTMLElement): Viewport {
         const { bodyId, edgeIndex } = line.userData
         if (typeof bodyId === 'string' && typeof edgeIndex === 'number') edges.push({ bodyId, edgeIndex })
       }
-      for (const mesh of vertexMeshes) {
+      for (const mesh of vertexMarkers.meshes()) {
         if (!objectInside(mesh as THREE.Points & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
         const { bodyId, vertexIndex } = mesh.userData
         if (typeof bodyId === 'string' && typeof vertexIndex === 'number') vertices.push({ bodyId, vertexIndex })
@@ -3013,7 +2837,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // 辺・領域より後なのは、頂点が必ず辺の端点に乗っているから —— 先に見ると
     // フィレットを起動している間に辺の端が掴めなくなる。出していない間は
     // `vertexAt` が即 null を返すので、面のピックはそのまま動く。
-    const vertex = vertexAt(offsetX, offsetY)
+    const vertex = vertexMarkers.at(offsetX, offsetY)
     if (vertex !== null) return { ...nothing, vertex }
     // **面と基準平面は、レイ距離が近い方**(通常のオクルージョン。辺のような優先順位は
     // 付けない —— 平面は部品と同じ空間に居るので、手前に見えているものが取れるのが自然)。
@@ -3246,7 +3070,7 @@ export function createViewport(container: HTMLElement): Viewport {
     pickRegions,
     highlightEdges,
     projectEdge,
-    showVertices,
+    showVertices: vertexMarkers.show,
     highlightColors() {
       return { ...highlightColor }
     },
@@ -3268,7 +3092,7 @@ export function createViewport(container: HTMLElement): Viewport {
         color: hoverColorNow(),
       }
     },
-    projectVertex,
+    projectVertex: vertexMarkers.project,
     showPreview,
     clearPreview,
     showBodyGhosts,
@@ -3336,9 +3160,7 @@ export function createViewport(container: HTMLElement): Viewport {
       clearPreview()
       clearGhost()
       clearEdges()
-      clearVertices()
-      vertexMaterial.dispose()
-      vertexProposedMaterial.dispose()
+      vertexMarkers.dispose()
       pickEdgeMaterial.dispose()
       pickEdgeSelectedMaterial.dispose()
       pickEdgeProposedMaterial.dispose()
