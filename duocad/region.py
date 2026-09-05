@@ -85,7 +85,7 @@ def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
     反復に参照されている図形は単独では出さない(格子の (0,0) / 円形の i=0 が元の位置)。
     kernel は名前を知らないので、ここですべて素の数値にする。
 
-    **反復の元が文書に無ければ、その元は展開しない**(2026-09-03)。verb `delete` は
+    **反復の元が文書に無ければ、その元は展開しない**。verb `delete` は
     図形どうしの依存グラフを持たないので、反復の元になっている図形も普通に消せる ——
     ここで `by_id[source_id]` と引くと KeyError になり、**状態を配るたびに落ちる**
     (`DocumentView.sketches_state` が毎回この関数を通る)ので、アプリごと使えなくなる。
@@ -174,8 +174,7 @@ def plane_frame(doc: Document, sketch_id: SketchId) -> dict:
 
     **面に貼ったスケッチでも `body.shape` を見ない**。姿勢はスケッチ作成時に
     `sketch.resolve_plane` が `plane["frame"]` へ焼き付けており、ここはそれを読むだけである
-    (`kernel.face_frame` のdocstring)。ライブの面から引き直していた頃は、スケッチと無関係な
-    フィレット1つで添字の指す先が円錐面へずれ、スケッチが丸ごと描けなくなっていた。
+    (`kernel.face_frame` のdocstring)。
     """
     sketch = get_sketch(doc, sketch_id)
     return kernel.sketch_plane_frame(sketch.plane)
