@@ -1,17 +1,6 @@
-"""選択集合をコアの第一級オブジェクトにする契約。
-
-AIが選択を提案し、人が過不足を直し、AIがそれに verb を適用する —— この一巡は、選択集合が
-**コアにある共有オブジェクト**でなければ原理的に閉じない(選択の正がブラウザ側にあると、
-AIから読めも書けもしない)。満たすべきは **永続 / 双方向(AIが書ける) / 種別を保持 /
-差分編集可能 / 出所を区別(提案か確定か)** の5つ。
-
-- **`origin` は集合単位**。要素単位の `pending: bool` は採らない
-- **遷移**: `propose_selection`→"proposed" / `modify_selection`(人が触る)→"user" /
-  `commit_selection`→"user"。**人が触ること自体が承認**である
-- **`origin="proposed"` のまま verb には渡せない**(`confirmed_items` が ValueError)。
-  AIは `commit_selection()` を明示的に呼べば自分の提案を実行できる —— 禁止ではなく
-  「黙って通さない」
-- **選択の変更は操作ログに積まない**が、**イベントは発火する**
+"""選択集合をコアの第一級オブジェクトにする契約(詳細は tests/README.md
+`duocad/selection.py` 節)。ここが崩れると、AIが提案し人が過不足を直しAIが適用する
+往復のどこかが閉じなくなる(選択の正がブラウザ側に漏れる/提案と確定の区別が消える等)。
 """
 from __future__ import annotations
 
@@ -342,7 +331,7 @@ def test_changing_the_selection_does_not_touch_the_operation_log(doc: Document):
 
 
 def test_set_visible_does_not_land_in_the_log_either(doc: Document):
-    """**可視性もログに載らない**(2026-08-26)。`Body.visible` という文書の状態を変えるが、
+    """**可視性もログに載らない**。`Body.visible` という文書の状態を変えるが、
     形は1つも変えないので undo の1手を使わせない —— 奥を覗くために手前を隠して戻す
     「見るための操作」が編集の履歴を埋めると、直前の押し出しへ戻れなくなる。
 

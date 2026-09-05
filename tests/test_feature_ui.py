@@ -48,7 +48,7 @@ def session() -> Session:
 def _select(session: Session, refs: list) -> None:
     """選択を `refs` で置き換える(人がクリックで選び直すのと同じ入口)。
 
-    **verbの対象集合はここで決まる** —— コマンドの引数には入らない(2026-08-20)。
+    **verbの対象集合はここで決まる** —— コマンドの引数には入らない。
     """
     session.clear_selection()
     session.modify_selection(refs, [])
@@ -217,11 +217,11 @@ def test_small_radius_circle_still_gets_enough_points_from_angular_deflection(
     """小半径の円弧は**線形偏差だけでは粗くなる**——角度偏差が効いて初めて滑らかになる。
 
     小半径ではsagitta(弦と弧の最大乖離)がすぐ`deviation`(既定0.2mm)を下回るため、
-    `GCPnts_QuasiUniformDeflection`(線形偏差のみ、修正前の実装)だと分割点がどんどん
-    減っていく——半径1mmの円は実測6点(六角形)まで落ち込んでいた。この修正で
-    `GCPnts_TangentialDeflection`(線形+角度)に replace した後は、角度偏差
+    線形偏差だけ(`GCPnts_QuasiUniformDeflection`)では分割点がどんどん減っていく——
+    実測で半径1mmの円は6点(六角形)まで落ち込む。現在の実装
+    `GCPnts_TangentialDeflection`(線形+角度)は角度偏差
     `kernel.DEFAULT_ANGULAR_DEFLECTION`(ラジアン)1本で必要点数の下限が決まり、
-    半径に依存しなくなる。
+    半径に依存しない。
 
     下限は**マジックナンバーを埋めない**——満周(2π rad)を角度偏差で割った分割数
     (切り上げ)+ 閉曲線の始点=終点を含めた+1、から導く。この式のまま
@@ -249,8 +249,8 @@ def test_small_radius_circle_still_gets_enough_points_from_angular_deflection(
         )
         counts_by_radius[radius] = count
 
-    # 角度偏差が主導する分割数は**半径に依存しない**(線形偏差だけなら半径が小さいほど
-    # 点数が減っていた——修正前の実測は半径1mmで6点、10mmで17点)。
+    # 角度偏差が主導する分割数は**半径に依存しない**(線形偏差だけだと半径が小さいほど
+    # 点数が減る)。
     assert counts_by_radius[1.0] == counts_by_radius[10.0], (
         "半径によって分割点数が変わっている: 角度偏差ではなく線形偏差が支配的になっている"
         f"疑いがある({counts_by_radius})"
@@ -408,7 +408,7 @@ def test_the_ui_and_the_ai_get_the_same_shape_from_the_same_verb() -> None:
     設計(§2「コアはUIが無くても完全」)であり、ここが分岐した瞬間に
     「画面では丸まったのにAIから見ると丸まっていない」が起きる。
 
-    **両側とも確定選択の辺を取る**(2026-08-20)。どちらも添字を引数で渡す口を持たず、
+    **両側とも確定選択の辺を取る**。どちらも添字を引数で渡す口を持たず、
     違いは選択の入れ方だけ —— 人はクリック(`modify_selection`)、AIは述語や参照である。
     """
     from_ui = Session(None, DEVIATION)

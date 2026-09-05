@@ -411,7 +411,6 @@ def _needs_enter(args: list[tuple[str, str]]) -> bool:
 #: **Enterが要るか**の表(True = Enterで確定 / False = 引数が揃ったクリックで即適用)。
 #:
 #: **即適用は2つ**である: `add_line`(点2つで揃う)・`sketch_create`(貼る先の平面1つで揃う)。
-#: 2026-08-27まで3つだった —— 面1つで揃う複製のコマンドが消えて減った。
 #: verbを足したらここへ1行足すことになる ——
 #: そのとき**Enterが要るかを1回考える**のが狙いで、表そのものが実装の入力になっている
 #: わけではない(判定は `args` からの導出が正)。
@@ -425,9 +424,8 @@ def _needs_enter(args: list[tuple[str, str]]) -> bool:
 #: 同じ送信をするが、判定対象は`CommandDef.args`からの導出であり、`CommandDef`自体が
 #: 無いのでこの表の対象にならない。
 #:
-#: **`import_step` だけは2026-09-05にこの表へ戻った** —— 2026-08-27に左サイドバーへ
-#: 移した3つのうち、これ1つをツールバーの `CommandHost` へ引き上げた(本人決定。
-#: 文書を変えるverbであり、ファイルの出し入れではなくモデリングの1手だから)。
+#: **`import_step` はこの表にある**(他の3つと違い、文書を変えるverbであり、
+#: ファイルの出し入れではなくモデリングの1手のため)。
 #: `web/src/commands/files.ts` の `IMPORT_STEP` がその `CommandDef` である。
 ENTER_REQUIRED = {
     "extrude_face": True,          # 面1つ + 距離(how)
@@ -537,13 +535,12 @@ def test_the_immediate_apply_fires_only_on_the_users_own_click():
 
 
 # --------------------------------------------------------------------------------------
-# プレビュー(2026-09-05)——「`preview` の値を変えたのに幽霊を描く配線が無い」を塞ぐ
+# プレビュー —— 「`preview` の値を変えたのに幽霊を描く配線が無い」を塞ぐ
 # --------------------------------------------------------------------------------------
-#: ローカル方式(ブラウザだけで幽霊を描く)へ移した4verb。
+#: ローカル方式(ブラウザだけで幽霊を描く)で幽霊を出す4verb。
 #:
-#: **本人の依頼**(2026-09-05「プレビューがつけられる操作には基本的にすべてつけたい」)で
-#: `preview: 'none'` から移したもの。**サーバの `previewable` は増やしていない** ——
-#: どれも変わるのが位置か図形で、投機実行しても「形が変わったBody」が返らない。
+#: **サーバの `previewable` は増やしていない** —— どれも変わるのが位置か図形で、
+#: 投機実行しても「形が変わったBody」が返らない。
 TRANSFORM_PREVIEW_VERBS = {
     "pattern_rectangular",
     "pattern_circular",
@@ -626,7 +623,7 @@ def test_ui_preview_modes_are_readable():
 
 
 def test_the_four_transform_verbs_declare_a_local_preview():
-    """反復2つと移動2つは `preview: 'local'`(2026-09-05に `'none'` から移した)。"""
+    """反復2つと移動2つは `preview: 'local'` である。"""
     previews = _ui_command_previews()
     wrong = {
         verb: previews.get(verb, "<宣言が無い>")

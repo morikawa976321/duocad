@@ -11,7 +11,7 @@ UI(パラメータ編集パネル・操作履歴パネル・ファイル操作)�
 
 - **保存/開くが受け取るのはファイル名だけ**。`models_dir` 配下に閉じ、区切り文字・絶対パス・
   `..` は拒否する
-- **保存は「編集中のファイル」1つに閉じている**(2026-08-30)。`save_document()`(引数なし)は
+- **保存は「編集中のファイル」1つに閉じている**。`save_document()`(引数なし)は
   いま編集しているファイルへ上書きし、`save_document(name)` は**新しい名前でのみ**保存する
   (既存名は拒否。`name == 現在名` でも拒否する)。編集中のファイルが無ければ引数なしの保存も拒否
 - 保存は操作ログのJSONを書き、**verbではない**(操作ログが伸びない)
@@ -110,7 +110,7 @@ def test_saving_writes_the_operation_log_and_is_not_a_verb(session: Session, tmp
     **受け取るのはファイル名だけ**(`models_dir` 配下に固定。要件2)。
 
     保存の応答は `{"type":"file"}` の封筒で、**`applied` は付かない**(verbではない)。
-    ただし2026-08-30以降は**その後に状態も配り直す** —— 「いま編集しているファイル」が
+    ただしその後に**状態も配り直す** —— 「いま編集しているファイル」が
     サーバの状態(`state.current_name`)になり、名前を付けて保存すればそれが変わるため。
     """
     _box(session)
@@ -243,7 +243,7 @@ def test_models_dir_is_created_if_missing(session: Session) -> None:
         "model.json.",
         "model.json ",
         " model.json",
-        # 拡張子違いは一覧(*.jsonだけを見る)から二度と開けなくなる(QAのMINOR)。
+        # 拡張子違いは一覧(*.jsonだけを見る)から二度と開けなくなる。
         "model",
         "model.txt",
     ],
@@ -251,10 +251,9 @@ def test_models_dir_is_created_if_missing(session: Session) -> None:
 def test_save_and_open_reject_anything_but_a_bare_filename(session: Session, bad_name: str) -> None:
     """**ファイル名だけを受け取る**(要件2)。区切り文字・絶対パス・`..` は拒否する。
 
-    以前の `Session._resolve` はCWD基準で任意の絶対パスを受けていた —— 保存先が
-    「その日サーバをどこで起動したか」で変わる問題そのものだったので、ここを締める。
-    **ドライブ相対パス・代替データストリーム・予約デバイス名・末尾のドット/空白・
-    拡張子違いも同じ理由で拒否する**(2026-08-23 QA指摘)。
+    絶対パスをそのまま許すと、保存先が「その日サーバをどこで起動したか」で変わってしまう
+    ので、ここを締める。**ドライブ相対パス・代替データストリーム・予約デバイス名・
+    末尾のドット/空白・拡張子違いも同じ理由で拒否する**。
     """
     _box(session)
     with pytest.raises(ValueError):

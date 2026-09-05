@@ -1,17 +1,6 @@
-"""形を変えるverbの確定後に選択を全リセットする統一契約。
-
-**実装の置き場**: 選択集合はコアにあるので、リセットもコア側で行う。`duocad/catalog.py` の
-`Command.resets_selection` が**単一の宣言**で、`Session._reset_selection_if_needed` がそれを
-見て確定後に1箇所で発火する。`Session` はWebSocketとMCPの**どちらも同じインスタンスを叩く**
-唯一の適用パイプラインなので、ここで検証すれば両方をカバーする。
-
-固定する契約:
-
-1. `resets_selection=True` はカタログの中で正確にこの17verbだけである
-2. 形を変えるverbが成功で確定すると、選択は空になる(`items=[]` / `origin="user"`)
-3. 形を変えない操作(可視性・選択操作そのもの)は選択に触らない
-4. undo/redo は「何を戻したか」に関わらず常にリセットする(単純な規則を保つため)
-5. 「手前を隠して奥の面を選ぶ」ワークフロー(可視性切替)で選択は飛ばない
+"""形を変えるverbの確定後に選択を全リセットする契約(詳細は tests/README.md
+「形を変えるverbの確定後は選択を全リセットする」節)。ここが崩れると、フィレット等の
+確定後も壊れた添字を指す選択が残ったまま次のverbへ渡ってしまう。
 
 **失敗したverbが選択を保持すること**は `tests/test_feature_ui.py` が固定しているので、
 ここでは重複して確かめない。
@@ -49,12 +38,10 @@ RESETTING_VERBS = frozenset(
         "set_parameter",
         "undo",
         "redo",
-        # 2026-08-30当初は「entity_idの参照は平行移動で失効しない」を理由に例外にしていたが、
-        # 本人が非として却下(2026-08-31)。他の形状変更verbと同じ既定に揃える。
         "move_sketch_entities",
         "move_body",
-        # 削除(2026-09-03)。**消えた対象を指したままの選択は必ず失効する**ので、
-        # 他の形状変更verbと同じ既定に揃える(消し損ねた分だけ残す、をしない)。
+        # **消えた対象を指したままの選択は必ず失効する**ので、他の形状変更verbと
+        # 同じ既定に揃える(消し損ねた分だけ残す、をしない)。
         "delete",
     }
 )
@@ -209,7 +196,7 @@ def test_undo_of_a_non_shape_verb_still_clears_the_selection(session: Session) -
     """**undo/redoはunconditional**(verbごとの分岐を持たない単純な規則)。
 
     材料は `sketch_create` —— 形を1つも変えないが操作ログには載るverbである
-    (`set_visible` は2026-08-26に操作ログから外れたので、ここの材料にはならない)。
+    (`set_visible` は操作ログに載らないので、ここの材料にはならない)。
     """
     _select(session, [_face(1)])
     session.sketch_create("XY")
