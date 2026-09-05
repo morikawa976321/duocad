@@ -73,17 +73,18 @@ if (panels.length < 2) {
 
 const WIDTH = Number.parseInt(options.width ?? '900', 10)
 const HEIGHT = Number.parseInt(options.height ?? '700', 10)
-/** ラベルの帯と面のすきま(`probe_topopt/screenshots/smooth_compare/` と同じ寸法)。 */
+/** ラベルの帯と面のすきま(`docs/topopt-smooth-compare/` の16枚と同じ寸法)。 */
 const BAND = 34
 const GAP = 6
-// **index.html の既定表示から写した値。片方だけ変えないこと**(比較の土俵が変わる)。
+// **旧実験場(`probe_topopt/web/index.html`。2026-09-05に削除)の既定表示から写した値。
+// 片方だけ変えないこと**(比較の土俵が変わり、`docs/topopt-smooth-compare/` と並べられなくなる)。
 const FOV = 50
 const BG = '#0a0a12'
 const MESH_COLOR = 0x6fa8dc
 
-/** 撮る向き。`smooth_compare/README.md` の「題材と方向」と同じ4つ。 */
+/** 撮る向き。`docs/topopt-smooth-compare/README.md` の「題材と方向」と同じ4つ。 */
 const VIEWS = {
-  iso: { dir: [-0.75, 0.5, 0.6], zoom: 1.0 }, // 3/4俯瞰(probe の既定視点と同じ向き)
+  iso: { dir: [-0.75, 0.5, 0.6], zoom: 1.0 }, // 3/4俯瞰(旧実験場の既定視点と同じ向き)
   side: { dir: [-0.06, -1.0, 0.08], zoom: 1.0 }, // ほぼ真横。輪郭のシルエットが出る
   threeq: { dir: [0.62, 0.66, 0.42], zoom: 1.0 }, // iso の反対側からの3/4
   zoom: { dir: [-0.75, 0.5, 0.6], zoom: 0.62 }, // iso と同じ向きで距離だけ詰めた拡大
@@ -245,7 +246,7 @@ renderer.setSize(${CANVAS_W}, H, false);
 renderer.setScissorTest(true);
 renderer.autoClear = false;
 // **面と面のすきまも同じ色で塗る。** clear() はシザー矩形の中だけを既定色で塗るので、
-// ここを揃えないと 6px の隙間だけ真っ黒になる(smooth_compare と同じ色にする)。
+// ここを揃えないと 6px の隙間だけ真っ黒になる(docs/topopt-smooth-compare と同じ色にする)。
 renderer.setClearColor(new THREE.Color('${BG}'), 1);
 document.body.appendChild(renderer.domElement);
 
@@ -257,7 +258,7 @@ const dirLight = new THREE.DirectionalLight(0xffffff, 0.85);
 dirLight.position.set(2, 3, 1);
 scene.add(dirLight);
 // **カメラ追従の弱い正面光。** 4方向から撮るので、背面側の視点(side)がこれ無しでは
-// 真っ黒になる('smooth_compare/README.md' の「光源」)。全部の面で同一。
+// 真っ黒になる('docs/topopt-smooth-compare/README.md' の「光源」)。全部の面で同一。
 const headLight = new THREE.DirectionalLight(0xffffff, 0.45);
 scene.add(headLight);
 
@@ -285,7 +286,7 @@ window.__load = async () => {
     mesh.visible = false;
     scene.add(mesh);
     meshes.push(mesh);
-    // **位置の名前を頭に付ける**(smooth_compare の 'LEFT  old(shipped)' と同じ形)。
+    // **位置の名前を頭に付ける**(docs/topopt-smooth-compare の 'LEFT  old(shipped)' と同じ形)。
     // 3面までは LEFT / MID / RIGHT、それ以上は番号。ラベルだけだと「どっちが後か」を
     // 画像だけ見て言えない。
     const names = PANELS === 2 ? ['LEFT', 'RIGHT']

@@ -831,7 +831,7 @@ def derive_default(
 ) -> DesignSpace:
     """**導出にこだわりのない呼び出し側の入口。** 既定(`DEFAULT_DERIVATION`)へ委ねる。
 
-    `probe_topopt/server.py` / `perf.py` / `BenchCase.derive_space` はここを通る。案1・案5を名指しで
+    `duocad/optimize_run.py`(製品の経路) / `perf.py` / `BenchCase.derive_space` はここを通る。案1・案5を名指しで
     呼びたい側(比較の実測・受入検査)は `derive` / `derive_from_coarse_run` を直接呼ぶ ——
     **名指しの呼び出しを既定の変更で動かしてはいけない**(比較のベースラインが黙って
     入れ替わる)。

@@ -114,8 +114,9 @@ DEBUG_VOXEL_LIMIT = 150_000
 DEBUG_KINDS = ("space", "anchors", "rho")
 
 #: `?voxel=1` のボクセル表示で「材料がある」と見なす密度の境目。
-#: **probe の `server.py` と同じ 0.5**(`np.flatnonzero(flat > 0.5)`)——
-#: 揃えないと同じ密度場が別の形に見える。
+#: **旧実験場 `probe_topopt/server.py` と同じ 0.5**(`np.flatnonzero(flat > 0.5)`。実験場は
+#: 2026-09-05に削除。履歴は `03bf794`)—— 揃えないと同じ密度場が別の形に見える。
+#: `docs/topopt-smooth-compare/` の16枚と見え方を突き合わせる土俵でもある。
 DEBUG_RHO_THRESHOLD = 0.5
 
 

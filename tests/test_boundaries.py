@@ -21,7 +21,7 @@ DUOCAD_DIR = Path(__file__).resolve().parent.parent / "duocad"
 # 免除はここに名指しした相対パスだけ(DUOCAD_DIRからの相対パス)。**ディレクトリ単位では
 # 免除しない** —— 新しく足したファイルが黙って境界の外へ出るのを防ぐため。
 #
-# `topopt/` は 2026-09-05 に `probe_topopt/` から移設した数値計算のサブシステムで、
+# `topopt/` は 2026-09-05 に `probe_topopt/`(同日に削除。履歴は `03bf794`) から移設した数値計算のサブシステムで、
 # **B-repを直接読む**(voxelize は OCCT の厳密なbboxを、anchor/design_space は検証用の
 # 合成ソリッドを build123d で組む)。`kernel.bounding_box` へ回すと `SetGap` の順序が違って
 # 値が 1e-7mm 動き、`check_voxelize.py` [7](辺長が要素サイズの整数倍の箱は体積が厳密一致)が

@@ -29,8 +29,9 @@ LEFT が隠していたものが見える。
 メッシュ化の設定だけ**で、`docs/TOPOPT.md` の段1〜段3の表と同じ土俵である
 (粗い段も新しい既定で回した場合の数字は同節「端から端まで通した検証」にある)。
 
-**カメラ・光源・画角は3面で完全に一致**している(`compare_shots.mjs` が題材ごとに
-3面すべての頂点から共通の中心とカメラ距離を決める)。
+**カメラ・光源・画角は3面で完全に一致**している(撮った道具が題材ごとに3面すべての
+頂点から共通の中心とカメラ距離を決めた。移設先の `shoot-topopt.mjs` も同じで、
+**1枚のcanvasに `setScissor` で並べて描く**ので面ごとに別の値を持てない)。
 
 ## 題材と方向
 
@@ -38,36 +39,49 @@ LEFT が隠していたものが見える。
 
 | サフィックス | 内容 |
 |---|---|
-| `_iso` | 3/4俯瞰。向き `(-0.75, 0.5, 0.6)` = `probe_topopt/web/index.html` の既定視点と同じ |
+| `_iso` | 3/4俯瞰。向き `(-0.75, 0.5, 0.6)` = 当時の実験場 `probe_topopt/web/index.html` の既定視点と同じ(いまの `shoot-topopt.mjs` の `--views iso` が同じ向きを引き継いでいる) |
 | `_side` | ほぼ真横 `(-0.06, -1.0, 0.08)`(輪郭のシルエットが見える角度。本人が問題に気づいたのが輪郭線だったため) |
 | `_threeq` | 反対側からの3/4 `(0.62, 0.66, 0.42)` |
-| `_zoom` | iso と同じ向きで距離を 0.45倍に詰めた拡大 |
+| `_zoom` | iso と同じ向きで距離を 0.62倍に詰めた拡大 |
 
 各最適化は `derive_default`(案5)・`volfrac=0.3`・`max_iter=40`・長辺40要素。
 
-## 撮り直し方(**今回は道具をコミットしてある**)
+## 撮った道具と、いま撮る道具
 
-1回目は使い捨てスクリプトで撮ったので手順が散文でしか残らず、書き直しが要った
-(`20260904-1650` の契約④)。今回は `probe_topopt/` に置いた:
+**この16枚は 2026-09-05 に、当時の実験場 `probe_topopt/compare_shots.py` /
+`compare_shots.mjs` で撮った**(1回目の `20260904-1650` は使い捨てスクリプトで、手順が
+散文でしか残らなかった。契約④)。
+
+**その実験場は同じ日に削除した**(移してあった画面と撮影が本体に揃ったため)。
+**道具は捨てていない** —— `web/scripts/shoot-topopt.mjs` へ移してある。当時のコマンドは
+`03bf794` までの履歴にあり、いま同じ形の絵を撮るならこちら:
 
 ```powershell
-cd C:\Users\tm976\mf\duocad
-& .\.venv\Scripts\python.exe -m probe_topopt.compare_shots export `
-    --left  "old(shipped):rmin=1.5,sigma=1.0,iters=12" `
-    --mid   "old(no gaussian):rmin=1.5,sigma=0,iters=30" `
-    --right "new:rmin=2.5,sigma=0,iters=30"
-node probe_topopt\compare_shots.mjs
-& .\.venv\Scripts\python.exe -m probe_topopt.compare_shots join
+cd C:\Users\tm976\mf\duocad\web
+node scripts/shoot-topopt.mjs --case tilted `
+  --panel "old(shipped):rmin=1.5,sigma=1.0,iters=12" `
+  --panel "old(no gaussian):rmin=1.5,sigma=0,iters=30" `
+  --panel "new:rmin=2.5,sigma=0,iters=30" `
+  --out <出力先>
 ```
 
-`export` が4題材を面ごとに最適化する段(重い。**4題材×2回の最適化で合計10分前後**。
-`rmin` が同じ面は最適化を1回しか回さない)、
-`compare_shots.mjs` が固定カメラで描画する段、`join` が3面を1枚に並べる段。
-`_data/` は中間ファイル(頂点・面のJSONと面ごとのPNG)で `.gitignore` 対象。
+重い段(題材を面ごとに最適化する)も、描く段も、3面を1枚に並べてラベルを焼く段も
+この1本がやる。**`rmin` が同じ面は最適化を1回しか回さない**のは当時と同じ。
+**ここにある16枚は4題材 × 4方向**なので、`--case` を `bracket` / `plate` / `branching` /
+`tilted` の4回まわす(`--views` を省くと4方向すべてを撮る)。
 
-**光源は index.html の2灯に加えて、カメラ追従の弱い光を1つ足してある** —— index.html は
-視点が1つなので (2,3,1) の1灯で足りるが、ここは4方向から撮るので背面側の視点が
-真っ黒になる。3面で同一なので比較には影響しない。
+**ただし、ここにある16枚をビット単位で撮り直すことはできない。** 案5の粗い段は
+**その時点の `simp.DEFAULT_RMIN`** で回り、撮影当時の 1.5 は 2026-09-05午後に 2.5 へ動いた
+(移設で新たに落ちた制限ではなく、`compare_shots` にもあった同じ制限)。
+**だからこの16枚は画像のまま一次資料として残してある。**
+
+`_data/`(中間ファイル。頂点・面のJSONと面ごとのPNG)は `.gitignore` 対象だったので
+残っていない。
+
+**光源は当時の実験場の画面(`probe_topopt/web/index.html`)の2灯に加えて、カメラ追従の
+弱い光を1つ足してある** —— あの画面は視点が1つなので (2,3,1) の1灯で足りたが、ここは4方向から撮るので
+背面側の視点が真っ黒になる。3面で同一なので比較には影響しない
+(`shoot-topopt.mjs` も同じ構成を引き継いでいる)。
 
 ## 見えること(2026-09-05時点の観測。数値の根拠は `docs/TOPOPT.md` の段1〜段3)
 

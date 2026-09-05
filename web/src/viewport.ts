@@ -787,8 +787,9 @@ const OPTIMIZE_FIXTURE_MARK_COLOR = 0x1c3550
 const OPTIMIZE_LOAD_COLOR = 0xffc857
 /**
  * **開発用のデバッグ表示の色**(`?debug=space` / `?debug=anchors` / `?voxel=1`)。
- * probe(`probe_topopt/web/index.html`)から**そのまま持ってきた値**で、見え方を
- * 揃えてある —— 突き合わせのときに「色が違うから別物に見える」を起こさないため。
+ * 旧実験場(`probe_topopt/web/index.html`。2026-09-05に削除)から**そのまま持ってきた値**で、
+ * 見え方を揃えてある —— 移設の突き合わせで「色が違うから別物に見える」を起こさないため。
+ * `docs/topopt-smooth-compare/` の16枚と同じ見え方を保つ意味でも、勝手に動かさないこと。
  */
 const DEBUG_SPACE_COLOR = 0x39445e
 const DEBUG_RHO_COLOR = 0xbfc7d5
@@ -2863,8 +2864,9 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // ------------------------------------------------------------------ 開発用のデバッグ表示
   //
-  // **probe(`probe_topopt/web/index.html`)にしか無かった3つを本体へ移したもの。**
-  // probe は `design_space.CASES` の合成題材しか描けなかったが、ここは
+  // **旧実験場(`probe_topopt/web/index.html`。2026-09-05に削除)にしか無かった3つを
+  // 本体へ移したもの。**
+  // 実験場は `design_space.CASES` の合成題材しか描けなかったが、ここは
   // **いま走らせた最適化そのもの**(利用者が置いた条件・利用者のボディ)を描く ——
   // 切り分けの道具が、切り分けたい対象を扱えないことがそもそもの問題だった。
   //

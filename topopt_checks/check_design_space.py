@@ -1446,9 +1446,11 @@ def check_default_derivation() -> None:
 
     # --- 13-5 呼び出し側が導出を名指ししていない ----------------------------
     # **ソースを読む検査。** 名指しが1つでも残っていると、次に既定を倒したときにそこだけ
-    # 取り残される。**読むのは本体側の呼び出し側だけ** —— `probe_topopt/server.py` にも
-    # 同じ不変条件があるが、そこを読むと本体の検査が実験場に依存する(2026-09-05の移設で
-    # 依存の向きを probe → 本体の一方向にした)。probe 側は docs/TOPOPT.md の制約が担う。
+    # 取り残される。**読むのは `duocad/topopt/` の中だけ** —— 2026-09-05まで実験場
+    # `probe_topopt/server.py` にも同じ不変条件があったが、そこを読むと本体の検査が実験場に
+    # 依存するので読まないことにしてあった(実験場は同日に削除した)。
+    # **製品の経路 `duocad/optimize_run.py` はここで読んでいない**(既定の入口を通っている
+    # ことは `check_optimize_wiring.py` が実際に走らせて見る)。
     for fname in ("perf.py", "safety_loop.py"):
         text = (_REPO_ROOT / "duocad" / "topopt" / fname).read_text(encoding="utf-8")
         code = "\n".join(

@@ -31,7 +31,8 @@
    たどる＝同じ有向辺が2度現れない)ことと、(b)発散定理の符号付き体積が正であること、の
    2つで確定する。(a)だけだと全体反転を、(b)だけだと一部反転の打ち消し合いを見逃す。
    閾値は無い。1〜8で巻き順を見るのは検査7だけで、それは**STL経路しか通らない**ため、
-   `mr.faces` を直接使う消費者(`probe_topopt/server.py`→three.js描画)が内向きのまま残る事故を
+   `mr.faces` を直接使う消費者(当時は `probe_topopt/server.py`→three.js描画。いまは
+   `duocad/optimize_run.py`→`add_mesh_body`→`web/src/viewport.ts`)が内向きのまま残る事故を
    捕まえられなかった(2026-09-02発見。engine
    `winding-fix-at-export-only-leaks-to-other-consumers`)。
 10. **保持/除外の塗り直し(2026-09-05追加。既定でσ=0になった後もここは生きている)** —
@@ -307,8 +308,9 @@ def check_stl_roundtrip(mr: mesh.MeshResult) -> None:
 # ---------------------------------------------------------------------------
 def check_bounding_box_alignment() -> None:
     """既知の位置に置いた合成密度場で、marching cubesが返す面のバウンディングボックスが
-    「セル中心」規約(`rho[ex]` はセル `ex` の中心の値。`probe_topopt/web/index.html` のボクセル描画も
-    `ex+0.5-nelx/2` でこの規約)どおりの位置にあるかを見る。
+    「セル中心」規約(`rho[ex]` はセル `ex` の中心の値。画面側のボクセル描画 ——
+    `web/src/viewport.ts` の `buildDebugVoxels` —— もこの規約に合わせてある)どおりの
+    位置にあるかを見る。
 
     上の1〜7はどれも並進不変(体積・水密性・分布の形は位置のズレでは変わらない)なので、
     **全軸を一律に半セルずらす**類のバグはこれが無いと素通りする(2026-08-30にQAが発見:

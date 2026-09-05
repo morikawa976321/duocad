@@ -13,7 +13,8 @@
 - `--case <name>` —— `duocad.topopt.design_space.CASES` の合成題材
   (`bracket` / `plate` / `branching` / `tilted`)。アルゴリズムの設定
   (`rmin` / `sigma` / `iters` / `n`)を突き合わせるための土俵で、
-  `probe_topopt/screenshots/smooth_compare/` の16枚はこれである。
+  `docs/topopt-smooth-compare/` の16枚はこれである(撮ったのは旧実験場の
+  `compare_shots.py` / `.mjs`。2026-09-05にこの撮影台へ移して実験場ごと削除した)。
 - `--model <ファイル名>` —— **利用者が実際に作った文書**(`--models-dir` 配下の
   操作ログ)。条件は文書に置いてあるものをそのまま使い、製品が実際に持っている
   つまみ(`rmin_mm` / `element_mm`)だけを面ごとに変える。**`sigma` / `iters` は効かない**
@@ -44,7 +45,8 @@ _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-#: 合成題材の既定。`smooth_compare/` の16枚と同じ土俵(README の「題材と方向」)。
+#: 合成題材の既定。`docs/topopt-smooth-compare/` の16枚と同じ土俵(同ディレクトリの
+#: README の「題材と方向」)。
 DEFAULT_VOLFRAC = 0.3
 DEFAULT_MAX_ITER = 40
 
