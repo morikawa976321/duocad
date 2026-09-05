@@ -80,9 +80,7 @@ for (const [i, j, k] of cells) {
 function dot(a, b) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
-// **本物の直交性**: 26方向すべてで |up・d| がほぼ0であること(2026-09-03 QA指摘で強化。
-// 以前は「(反)平行でなければよい」という非退化だけを見ていたが、実装をGram-Schmidt射影に
-// 変えたので、水平/真上/真下に限らず全方向で厳密な直交を要求できる)。
+// 26方向すべてで |up・d| がほぼ0であること(水平/真上/真下に限らず全方向で厳密な直交を要求する)。
 for (const [i, j, k] of cells) {
   const d = cellDirection(i, j, k)
   const up = upForDirection(d)

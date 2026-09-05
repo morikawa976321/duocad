@@ -215,7 +215,7 @@ assert.deepEqual(
   assert.ok(b.centerU - b.half < 0 && b.centerU + b.half > 100, '一回り分の余白が付いていない')
 }
 
-// **面の中心に載る**(原点対称の半幅をやめた件)。u:0-40 / v:-20-0 の面は中心(20,-10)。
+// **面の中心に載る**。u:0-40 / v:-20-0 の面は中心(20,-10)。
 {
   const b = bs({ uMin: 0, uMax: 40, vMin: -20, vMax: 0 })
   assert.equal(b.centerU, 20)
