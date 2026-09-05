@@ -17,7 +17,7 @@
     stdio(MCP) ┼→ Session(文書・操作ログ) → WebSocket → ブラウザ
     ブラウザ ──┘
 
-**トランスポートは2本ある**(2026-08-26)。`handle()` はどちらも知らない(1メッセージの辞書を
+**トランスポートは2本ある**。`handle()` はどちらも知らない(1メッセージの辞書を
 受け取って返すだけ)ので、増えたのは口だけである:
 
 - **HTTP** —— 静的配信と同じ8766の `/mcp`。**アプリを先に立てて、MCPクライアントが後から
@@ -193,7 +193,7 @@ class DocumentTools:
           つもりで辺Bを黙って丸める。
         - **選択の指紋だけでも足りない**(形状が変わっても選択の中身が同じままのことがある)。
 
-        - **可視性の指紋も要る**(2026-08-26)。`set_visible` は操作ログに載らなくなったので、
+        - **可視性の指紋も要る**。`set_visible` は操作ログに載らなくなったので、
           ログの本数でも選択の指紋でも「AIが考えている間に人がボディを隠した」が動かない。
           抜けると、AIが**人が隠したものを黙って表示に戻す**(逆も同じ)。
 
@@ -435,7 +435,7 @@ class DocumentTools:
         # 「1つだけ要るのに複数」は `invalid_argument` のまま —— AIが打つ次の手は
         # 「選び直す」ではなく「減らす」で、`selection_empty` とは違う(tests/README「F」節)。
         #
-        # **`SelectionKindMismatch` を先に見る**(2026-08-20・本人決定)。`SelectionEmpty` の
+        # **`SelectionKindMismatch` を先に見る**。`SelectionEmpty` の
         # 派生なので、順序を入れ替えると種別違いが `selection_empty` に吸われて7語彙目が
         # 死ぬ。「空でないのに empty と名乗らない」ためにコードを分けたので、ここが要。
         if isinstance(error, selection.SelectionKindMismatch):
@@ -1002,7 +1002,7 @@ class DocumentTools:
     ) -> dict:
         """SVGの図形を**`sketch_id` が指す既存のスケッチへ**取り込む(verb `import_svg`)。
 
-        **新しいスケッチは作らない**(2026-08-28) —— 貼る先は `sketch_id` が指すスケッチの
+        **新しいスケッチは作らない** —— 貼る先は `sketch_id` が指すスケッチの
         平面で決まる。スケッチが無ければ先に `sketch_create` で作ること。
 
         取り込んだ図形はその時点で領域として使えるので、続けて `propose_selection` →
@@ -1400,7 +1400,7 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
     ws_url = f"ws://127.0.0.1:{args.port}"
     page_url = f"http://127.0.0.1:{args.http_port}/"
     mcp_url = f"http://127.0.0.1:{args.http_port}{MCP_HTTP_PATH}"
-    # **HTTPトランスポート用のMCPは別インスタンスにする**(2026-08-26)。stdioと同じ
+    # **HTTPトランスポート用のMCPは別インスタンスにする**。stdioと同じ
     # `McpServer` を共有すると `initialized` や `protocol_version` が混ざる —— 別の
     # トランスポートに繋いだ相手は別のクライアントなので、握手も別に持つのが正しい。
     # 道具は `ToolsOnLoop` で包む(HTTPはワーカースレッドで走るため。下記 `start_http_server`)。
