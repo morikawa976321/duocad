@@ -8,23 +8,23 @@
    * - **`ai_*` はverbではない**。ここから送るのは対話であって、文書の変更は
    *   AIが呼ぶ既存MCPツールの側から**通常のverb配信**として届く(`App.svelte` の
    *   `handleState` がいつもどおり描き直す。このパネルは何も描かない)。
-   * - **鍵を打つ場所がどこにも無い**。ClaudeをAPIキーで使う経路は2026-08-27に廃止したので、
+   * - **鍵を打つ場所がどこにも無い**。ClaudeをAPIキーで使う経路は廃止したので、
    *   キーという概念自体がこの画面にもサーバにも無い(Claudeへ繋ぐ道はMCP経路だけ)。
    * - **プロバイダの選択は `status.providers` で駆動する**。今は1つ(llama-server)しか
    *   無いので選択UIは出ないが、サーバの `AI_PROVIDERS` が増えれば自動で出る。
    * - **会話の時系列(`transcript`)はここが持つ状態ではない** —— **正は親(`App.svelte`)の
-   *   `aiTranscript`**で、ここは`props`として受け取って描くだけ(パネルは何も覚えない、が
-   *   パネルは何も覚えない。`duocad/agent/loop.py`の会話がサーバ側にしか残らない
-   *   ための代わりとして`App.svelte`側に置いてある。`session.ts`の`AiTranscriptEntry`
-   *   docstring参照)。**ここが自前で持つ状態**は、打ちかけの発話(`draft`)・設定フォームの
+   *   `aiTranscript`**で、ここは`props`として受け取って描くだけ(パネルは何も覚えない。
+   *   `duocad/agent/loop.py`の会話がサーバ側にしか残らないための代わりとして
+   *   `App.svelte`側に置いてある。`session.ts`の`AiTranscriptEntry`docstring参照)。
+   *   **ここが自前で持つ状態**は、打ちかけの発話(`draft`)・設定フォームの
    *   開閉と打ちかけ・本体の開閉(`open`。下記)だけで、どれも見た目だけの状態(再読込で消える)。
    * - **ツール呼び出しの表示はverb名をそのまま出す**(操作ログ・MCPツール名と同じ綴り。
    *   タスクファイルの要件)。
    *
-   * **2026-08-28、`BrowserPanel.svelte` と同じ形の開閉カレット(`#ai-collapse`)を付けた**
-   * (本人裁定 [[duocad-show-only-what-is-needed]] 3段目「使うかもしれないし使わないかも
-   * しれないものは…ユーザーが表示・非表示を切り替えられるようにする」)。これで
-   * tier3の常設パネルは全て畳めるようになった(ファイル一覧=ヘッダのトグル、
+   * **`BrowserPanel.svelte` と同じ形の開閉カレット(`#ai-collapse`)を持つ**
+   * (方針 [[duocad-show-only-what-is-needed]] 3段目「使うかもしれないし使わないかも
+   * しれないものは…ユーザーが表示・非表示を切り替えられるようにする」)。
+   * tier3の常設パネルは全て畳める(ファイル一覧=ヘッダのトグル、
    * ブラウザ=カレット、AI設定フォーム=設定ボタン、AI本体=このカレット)。
    * **畳んでも会話が壊れない理由は上の`transcript`の所在そのもの** —— 正が親にある以上、
    * このパネルを畳んで`open`が変わっても`transcript`は影響を受けず、開き直せば続きが見える。
@@ -127,7 +127,7 @@
 
 <section class="ai-panel" class:collapsed={!open}>
   <div class="ai-head">
-    <!-- **BrowserPanel.svelteと同じ形の開閉カレット**(2026-08-28。新しい畳み方を発明しない)。 -->
+    <!-- **BrowserPanel.svelteと同じ形の開閉カレット**(新しい畳み方を発明しない)。 -->
     <button
       id="ai-collapse"
       class="caret"
@@ -318,8 +318,8 @@
     white-space: nowrap;
   }
 
-  /* **幅は残りに合わせる**(以前は 15em 固定)。ラベルを本文と同じ大きさへ戻した分
-     「エンドポイント」の行が 300px のサイドバーからはみ出すので、欄側が譲る。 */
+  /* **幅は残りに合わせる**。「エンドポイント」の行が 300px のサイドバーから
+     はみ出さないよう、欄側が譲る。 */
   .ai-settings input,
   .ai-settings select {
     flex: 1 1 auto;
