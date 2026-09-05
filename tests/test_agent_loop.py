@@ -4,8 +4,7 @@
 返すスタブ)**でループの分岐を決定的に固定し、アダプタの整形はHTTPを差し替えた単体検査で見る
 (llama-serverの実機は `tests/test_agent_llama_server.py` の1本だけ)。
 
-**プロバイダは `openai_compat` の1つだけになった**(2026-08-27) —— ClaudeをAPIキーで叩く
-`anthropic` アダプタとその鍵の読み口を廃止したため。Claudeへ繋ぐ道はMCP経路に残っている
+**プロバイダは `openai_compat` の1つだけである**。Claudeへ繋ぐ道はMCP経路に残っている
 (`tests/test_mcp.py` / `tests/test_mcp_http.py`)。
 
 ## このファイルが固定する5つ
@@ -438,8 +437,8 @@ def test_a_raising_progress_callback_is_logged_with_a_warning_but_does_not_break
 def test_a_failing_tool_returns_the_structured_envelope_and_the_loop_keeps_going():
     """**構造化封筒をそのままモデルへ返して自己修復させる**(MCP経路と同じ語彙)。
 
-    依頼に半径を書いてあるのは、**このテストが見たいのが選択の空**だからである
-    (2026-08-23)。書かないと寸法のガードが先に立って `dimension_not_given` で
+    依頼に半径を書いてあるのは、**このテストが見たいのが選択の空**だからである。
+    書かないと寸法のガードが先に立って `dimension_not_given` で
     止まり、`selection_empty` まで届かない —— ガード自体は下の専用テストが見る。
     """
     surface = tools()
@@ -505,7 +504,7 @@ def test_max_turns_cuts_the_loop_off_with_a_structured_reason():
 
 
 def test_the_total_time_budget_cuts_the_loop_off_before_max_turns():
-    """**総時間の上限は往復数と別に要る**(2026-08-23)。
+    """**総時間の上限は往復数と別に要る**。
 
     `max_tokens` は1リクエスト、`request_timeout` は1リクエストの待ち、`max_turns` は
     回数しか縛らない。人が待つのはその掛け算なので、部分の上限をいくら締めても決まらない
@@ -536,7 +535,7 @@ def test_the_total_time_budget_does_not_fire_on_a_normal_run():
 
 
 # --------------------------------------------------------------------------------------
-# 人が言っていない寸法で形を変えないこと(2026-08-23)
+# 人が言っていない寸法で形を変えないこと
 # --------------------------------------------------------------------------------------
 def test_a_dimension_nobody_asked_for_is_refused_before_the_verb_runs():
     """**規律を文章で頼まず、ここで機械的に止める**。
@@ -668,7 +667,7 @@ def test_a_provider_failure_is_reported_not_raised():
 
 
 def test_a_real_provider_failure_is_not_renamed_to_timeout():
-    """**本物の障害を `timeout` と名乗らせない**(2026-08-23)。
+    """**本物の障害を `timeout` と名乗らせない**。
 
     合計時間の予算は1リクエストの待ちより常に短いので、「予算が縮めたか」だけで
     判定すると接続拒否やHTTP 5xxまで `timeout` になる。読み替えてよいのは
@@ -778,8 +777,8 @@ def test_the_conversation_continues_across_runs_until_reset():
 # --------------------------------------------------------------------------------------
 # 4. 鍵が漏れない(セキュリティ要件)
 #
-# **ClaudeをAPIキーで叩く経路は2026-08-27に廃止した** —— 環境変数も `duocad_secrets.json` も
-# 読まなくなり、`load_api_key` / `api_key_configured` ごと消えている。残っているのは
+# **ClaudeをAPIキーで叩く経路は無い** —— 環境変数も `duocad_secrets.json` も読まない
+# (`load_api_key` / `api_key_configured` ごと存在しない)。残っているのは
 # `openai_compat` が鍵を要求するサーバのために受け取れる `api_key` だけで、**`build_provider`
 # はそれを渡さない**。ここで固定するのはその2点である。
 # --------------------------------------------------------------------------------------

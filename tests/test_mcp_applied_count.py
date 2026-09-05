@@ -2,9 +2,8 @@
 
 同じ `Session` を、AIは `DocumentTools.describe_document()` から、ブラウザは
 `Session.state_meta()` から見る。この2つが返す `applied_count` は**どんな操作順序でも
-常に一致**しなければならない —— 2026-08-28まで、MCP側だけが `len(document.log.entries)`
-を返していたので**undoの直後にずれた**(ログの長さはundoで減り、`Session` の数え上げは
-減らない)。
+常に一致**しなければならない —— ログの長さはundoで減るが `Session` の数え上げは減らないため、
+**片方だけ `len(document.log.entries)` を返す実装だとundoの直後にずれる**。
 
 **揃える先は「undo / redoで動かない」ほうの意味**である。`web/src/App.svelte` の保存済み
 判定が、「undoで保存時点へ戻した文書」と「undoしてから別のverbを打った文書」を見分ける

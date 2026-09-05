@@ -25,7 +25,7 @@ from duocad.agent import AgentLoop, Limits, OpenAICompatProvider
 from duocad.mcp_server import DocumentTools
 from duocad.server import Session
 #: 実物のSTEP(リポジトリ外)。**このcanaryだけが私物モデルに触れる** —— 他のテストは
-#: 他のテストは私物STEPに触らないので、ここがリポジトリ外への唯一の参照。
+#: 私物STEPに触らないので、ここがリポジトリ外への唯一の参照。
 #: llama-serverが立っていて、かつこのファイルがあるときだけ走る(既定は二重skip)。
 PC_CASE_FEET = Path(r"C:\Users\tm976\mf\3d-models\mATX_PC_case_20251122\PC_case_feet.step")
 

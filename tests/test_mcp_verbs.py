@@ -59,12 +59,12 @@ VERB_TOOLS = {
     "chamfer",
     "pattern_rectangular",
     "pattern_circular",
-    # 位置(2026-08-30。スケッチパラメータパネルの後継)
+    # 位置
     "move_sketch_entities",
     "move_body",
-    # 削除(2026-09-03。ボディとスケッチ図形をまとめて消す1本)
+    # 削除(ボディとスケッチ図形をまとめて消す1本)
     "delete",
-    # 形状最適化の条件(2026-08-31。第3のモード。最適化そのものとは接続していない)
+    # 形状最適化の条件(第3のモード。最適化そのものとは接続していない)
     "set_preserve_bodies",
     "set_exclude_bodies",
     "set_fixtures",
@@ -72,7 +72,7 @@ VERB_TOOLS = {
     # ボディ・パラメータ
     "set_parameter",
     # 入出力
-    # メッシュボディ(2026-09-05。表示とSTL書き出しだけ。編集verbは拒否する)
+    # メッシュボディ(表示とSTL書き出しだけ。編集verbは拒否する)
     "add_mesh_body",
     "import_step",
     "import_svg",
@@ -88,7 +88,7 @@ QUERY_TOOLS = {"describe_document", "describe_shape", "measure", "describe_predi
 
 #: 選択(§5「選択(中心)」)。契約の本体は `tests/test_mcp_selection.py`。
 #:
-#: **`set_visible` はここ**(2026-08-26)。可視性は選択機構の一部であり、選択と同じく
+#: **`set_visible` はここ**。可視性は選択機構の一部であり、選択と同じく
 #: 操作ログに載らない —— したがって `VERB_TOOLS`(=ログのverb名と綴りが一致する集合)に
 #: 置くと、下の `LOGGING_TOOLS` の一致検査が「ツールがあるのにverbが無い」で落ちる。
 SELECTION_TOOLS = {
@@ -101,11 +101,6 @@ SELECTION_TOOLS = {
 }
 
 #: 到達表の操作には数えないが、**ログに載るverbと同じ綴りで呼べる**ために要るツール。
-#:
-#: **いまは空である**(2026-08-27)。「STEPを読む」に verb が2つあった間だけ中身があった ——
-#: 編集可能なボディまで作る経路と参照ボディだけの経路で、1つのツールが引数で打ち分ける形に
-#: すると**ログに出るverb名を呼べるツールが存在しない**ことになるため、ツールを2つに割って
-#: いた。verbが `import_step` 1本に統合されて対応が1:1へ戻ったので、ここは空になる。
 #:
 #: **空でも残す。** 下の `LOGGING_TOOLS` の一致検査が「ツール名 == verb名」を両方向で見る
 #: 仕組みそのもので、到達表に無いverbを足したときはここへ書く場所が要る。
@@ -189,13 +184,12 @@ ARGUMENTS: dict = {
     "set_parameter": ({"name", "value"}, {"name", "value"}),
     "add_mesh_body": ({"positions", "indices", "name"}, {"positions", "indices"}),
     # ---- 入出力
-    # STEP読み込みは**1ツール**(2026-08-27に統合)。読んだ時点で編集可能なボディまでできる。
+    # STEP読み込みは**1ツール**。読んだ時点で編集可能なボディまでできる。
     # **`editable` のような引数で経路を打ち分けない** —— 引数で分けると、ログに載るverb名と
     # 呼べるツール名が食い違う(`EXTRA_LOGGING_TOOLS` の理由)。
     "import_step": ({"path"}, {"path"}),
-    # SVG読み込みは**いま開いているスケッチへ足す**(2026-08-28)。貼る先(旧 `base_plane`)は
-    # 引数から消え、代わりに対象スケッチを指す `sketch_id` が必須になった。倍率(`scale`)だけが
-    # 省略できる。
+    # SVG読み込みは**いま開いているスケッチへ足す**。対象スケッチを指す `sketch_id` が必須で、
+    # 倍率(`scale`)だけ省略できる。
     "import_svg": ({"path", "sketch_id", "scale"}, {"path", "sketch_id"}),
     "export_step": ({"path"}, {"path"}),
     "export_stl": ({"path", "deviation"}, {"path"}),
@@ -214,7 +208,7 @@ ERROR_CODES = {
     "invalid_argument",     # 形・型・範囲が不正(ValueError)
     "selection_not_committed",  # 提案のまま verb を呼んだ(A1の門)
     "selection_empty",      # 確定選択が**丸ごと空**(要求した種別以前の問題)
-    "selection_kind_mismatch",  # 空ではないが要求した種別が無い(2026-08-20に分離)
+    "selection_kind_mismatch",  # 空ではないが要求した種別が無い
     "invalid_predicate",    # 述語が不正(有効なopの一覧を必ず添える)
     "internal",             # 上記以外(黙って握りつぶさないための受け皿)
 }
@@ -397,9 +391,8 @@ def test_every_argument_is_typed_and_documented(server: McpServer):
 def test_the_declared_arguments_match_the_published_schema(server: McpServer):
     """**`ARGUMENTS` の表が、実際に配るスキーマと一致する。**
 
-    この表は「引数がひとつ増えればAIから見た呼び方が変わる」ことを固定するために書かれて
-    いたが、**2026-09-05まで一度も読まれていなかった**(どのテストからも参照されていない
-    dictだった)。表だけがあって検査が無い状態は、表を直し忘れた人を止められないので、
+    この表は「引数がひとつ増えればAIから見た呼び方が変わる」ことを固定するために書かれている。
+    表だけがあって検査が無い状態は、表を直し忘れた人を止められないので、
     宣言(`catalog.Command.params`)ではなく**サーバが実際に返す `tools/list` のスキーマ**と
     突き合わせる —— 見たいのは「AIに見えている引数」であって、宣言の中身ではない。
 
@@ -555,7 +548,7 @@ def test_set_visible_reports_the_change_but_not_a_verb_envelope(
     server: McpServer, box_session: Session
 ):
     """M4で決めた `set_visible` の戻り値(`previous` / `changed`)は壊さない。ただし
-    **`verb` / `seq` は載せない**(2026-08-26)。
+    **`verb` / `seq` は載せない**。
 
     可視性は操作ログに載らなくなったので、verbの封筒を配ると「undoで戻る」と読める嘘を
     AIへ渡すことになる。見分けは選択と同じ `change` キー(契約2)。
@@ -663,7 +656,7 @@ def test_a_missing_body_is_reported_as_not_found(server: McpServer):
 
 
 def test_an_unknown_entity_id_shows_the_real_ones(empty_session: Session):
-    """存在しない図形IDは、弾くだけでなく**その場で有効なIDを見せる**(2026-08-22)。
+    """存在しない図形IDは、弾くだけでなく**その場で有効なIDを見せる**。
 
     「そのIDは違う」としか言わないエラーは行き止まりで、次の一手が書いていない。AIは
     IDが分からないとき「尋ねる」ではなく**「推測する」に倒れる**(実測: ローカルLLMが
@@ -1202,8 +1195,8 @@ def test_undo_through_mcp_undoes_the_ui_operation(box_session: Session):
     box = box_session.document.bodies[0]
     server = McpServer(DocumentTools(box_session))
 
-    # 人の操作(アプリ層の経路)。**材料に可視性は使えない** —— `set_visible` は2026-08-26に
-    # 操作ログから外れ、undoの対象ではなくなった(`duocad.selection.set_visible`)。
+    # 人の操作(アプリ層の経路)。**材料に可視性は使えない** —— `set_visible` は操作ログに
+    # 乗らず、undoの対象ではない(`duocad.selection.set_visible`)。
     select_refs(server, [face_ref(box.id, 1)])
     box_session.extrude_face(5.0)
     extruded = call(server, "describe_shape", {"body_id": box.id})["volume"]

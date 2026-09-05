@@ -10,7 +10,7 @@
    (a) `fillet` / `chamfer` / `extrude` は**選択を経由しない対象ボディ解決**(`body_id` の
    既定=アクティブ)を持つので `editable_body(require_visible=True)` を課す(「B」節)、
    なお各テストの依頼文に寸法(10mm・R2)を書いてあるのは、**このファイルが見たいのが
-   楽観ロックだから**である(2026-08-23)。書かないと寸法のガード
+   楽観ロックだから**である。書かないと寸法のガード
    (`AgentLoop._dimensions_nobody_asked_for`)が先に立ち、verbまで届かない。
 
    (b) 選択をまったく経由しないverb(`set_visible` 等)には `AgentLoop.run()` の**楽観ロック**

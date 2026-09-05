@@ -7,8 +7,8 @@
 
 固定する6つ:
 
-1. **`ai_status` に鍵の類は載らない**。**2026-08-27にClaudeのAPIキー経路ごと廃止した**ので、
-   `api_key_configured` という欄自体が無い(Claudeへ繋ぐ道はMCP経路に残っている)。
+1. **`ai_status` に鍵の類は載らない**。`api_key_configured` という欄自体が無い
+   (Claudeへ繋ぐ道はMCP経路に残っている)。
 2. **`ai_send` はモデルへのHTTPリクエストを待たずに返る**(実行は `run_in_executor`)。
    進捗・結果は別イベント(`ai_tool_call` / `ai_result`)で届く。
 3. **AIがツールを呼んで文書を変えると、開いているブラウザの絵が変わる**(通常のverb配信に乗る)。
@@ -145,7 +145,7 @@ async def _drain() -> None:
 # 1. ai_status に鍵の類が載らない
 # --------------------------------------------------------------------------------------
 def test_ai_status_carries_no_key_of_any_kind(box_session: Session):
-    """鍵の欄が**そもそも無い**(2026-08-27にAPIキー経路ごと廃止した)。"""
+    """鍵の欄が**そもそも無い**。"""
 
     async def scenario():
         server = build_server(box_session, asyncio.get_running_loop())
