@@ -4,7 +4,7 @@ MCP経路(`duocad/mcp_server.py`)はMCPクライアントがduocadのプロセ�
 逆向きで、**先にアプリが立っていて、アプリの中からAIを選んで繋ぐ**。両方の道は共存する。
 
 - `providers` … `openai_compat` アダプタ(素のHTTP・非streaming)。**APIキーは持たない**
-  (ClaudeをAPIキーで叩く経路は2026-08-27に廃止。Claudeへ繋ぐ道はMCP経路だけ)
+  (Claudeへ繋ぐ道はMCP経路だけ)
 - `loop`      … プロバイダ非依存の tool-use ループ(打ち切り・進捗・自己修復)
 
 道具の定義はここに書かない —— `DocumentTools.descriptors()` を渡すだけである。

@@ -7,11 +7,11 @@
 `DocumentTools` も `Session` も知らない —— 受け取るのは `descriptors()` が返したツール定義
 そのままである(定義を書き写す場所を作らない)。
 
-**アダプタが1つでもこの層は畳まない**(2026-08-27) —— `Provider` / `build_provider` は
+**アダプタが1つでもこの層は畳まない** —— `Provider` / `build_provider` は
 次のプロバイダの差込口である。
 
-**この層はAPIキーを持たない**(2026-08-27)。ClaudeをAPIキーで叩く経路は廃止した ——
-Claudeを使う道はMCP(サブスク認証のClaude Codeが `/mcp` へ繋ぐ)だけである。
+**この層はAPIキーを持たない**。Claudeを使う道はMCP(サブスク認証のClaude Codeが
+`/mcp` へ繋ぐ)だけである。
 `openai_compat` はキーを要求するサーバのために `api_key` を受けられるが、`build_provider`
 は渡さない(画面から鍵を受け取る経路を作らないため)。外へ出る文字列は `_redact()` を通す。
 
@@ -49,7 +49,7 @@ class ProviderError(RuntimeError):
 
 
 class ProviderTimeout(ProviderError):
-    """**待ち時間切れ**だけを表す(2026-08-23)。
+    """**待ち時間切れ**だけを表す。
 
     接続拒否やHTTP 5xxと**同じ型にしない** —— 呼び出し側(`AgentLoop`)は、自分が
     合計時間の予算で待ちを縮めたときだけ、これを「こちらの都合による打ち切り」と
@@ -165,7 +165,7 @@ def post_json(url: str, payload: dict, headers: dict, timeout: float) -> dict:
             f"HTTP {error.code} from {_origin(url)}: {detail}", status=error.code
         ) from None
     except urllib.error.URLError as error:
-        # **待ち時間切れが `URLError` に包まれて来る経路がある**(2026-08-23)。
+        # **待ち時間切れが `URLError` に包まれて来る経路がある**。
         # 接続の段階で切れると urllib は `URLError(reason=TimeoutError(...))` を投げ、
         # この節が下の `except TimeoutError` より先に捕まえてしまう。包みの中を見て
         # 名前を付け直さないと、こちらの予算による打ち切りが「接続できない」になる。
@@ -392,7 +392,7 @@ class OpenAICompatProvider(Provider):
         try:
             return self._transport(url, payload, headers, timeout)
         except ProviderError as error:
-            # **型をそのまま保って作り直す**(2026-08-23)。秘匿のために新しい例外へ
+            # **型をそのまま保って作り直す**。秘匿のために新しい例外へ
             # 詰め替えるので、`ProviderError(...)` と書くと `ProviderTimeout` が
             # ただの `ProviderError` へ潰れる —— 呼び出し側は待ち時間切れだけを
             # 別扱いするので、ここで型が消えると本物の障害と区別できなくなる。
@@ -433,7 +433,7 @@ def build_provider(
 ) -> Provider:
     """名前からプロバイダを1つ作る(アプリ内UIが選ぶ入口)。
 
-    **ここでAPIキーを読まない**(2026-08-27) —— `api_key` を渡していないので
+    **ここでAPIキーを読まない** —— `api_key` を渡していないので
     `OpenAICompatProvider._api_key` は常に `None` である。`base_url` を任意の外部ホストへ
     向けても、飛ぶのはキーの無いリクエストだけになる。
     """
