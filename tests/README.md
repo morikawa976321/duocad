@@ -228,7 +228,7 @@ tessellate(shape, deviation: float) -> {...}
 
 ```python
 BASE_PLANES = ("XY", "XZ", "YZ")
-ENTITY_KINDS = ("line", "circle", "rectangle", "arc")   # _ENTITY_KIND_TABLE のキーが唯一の正
+ENTITY_KINDS: tuple[str, ...]           # `_ENTITY_KIND_TABLE` のキーから導く（そこが唯一の正）
 
 base_plane(name) -> dict                # {"kind":"base","name":..,"provenance":None}
 face_plane(body_id, face_index) -> dict # {"kind":"face","body":..,"index":..,"provenance":None}
@@ -248,7 +248,11 @@ entity_params(doc, sketch_id, entity_id) -> dict[str, float]   # 解決済みの
   `ValueError`** — 黙って通すとその上の領域検出と押し出しが意味を失ったまま成功する。
 - 座標はスケッチ平面上の2D。`Entity.params` のキーは図形ごとに固定
   （`line: x0,y0,x1,y1` / `circle: cx,cy,radius` / `rectangle: x,y,width,height` /
-  `arc: cx,cy,radius,start_deg,end_deg`。度・**反時計回り**・X軸から）。
+  `arc: cx,cy,radius,start_deg,end_deg`（度・**反時計回り**・X軸から） /
+  `bezier: x0,y0,cx1,cy1,cx2,cy2,x1,y1`（3次ベジエ。始点・制御点2つ・終点））。
+  `bezier` を作るのは `import_svg`（`duocad/svg_import.py`）である。検査は
+  **制御点4つが1点に潰れた場合だけ `ValueError`** —— 始点と終点が一致した閉曲線はSVGに
+  普通にあるので通す（長さ0の辺になると以後 `regions()` が毎回失敗する、が弾く理由）。
 - **数値は図形の座標に焼き込まない**。`add_circle` はスカラーごとに `duocad/parameters.py`
   へ名前つきの値として登録し、`Entity.params` にはその**名前（str）**を入れる。
   `entity_params()` は解決済みの数値を返し続ける — これがM3以降も変わらないアクセサで、
@@ -263,6 +267,9 @@ entity_params(doc, sketch_id, entity_id) -> dict[str, float]   # 解決済みの
   `{"sketch_id":.., "entity_id":.., "kind":.., "params": {...}}`（**作ったIDを記録する** —
   記録が無いと再生で別のIDになり、保存した選択集合が指す先を失う）。
 - 存在しないスケッチIDへの操作は `KeyError`。
+- スケッチの図形を**消す・動かす・回す**のは `delete` と `move_sketch_entities`（対象は
+  どちらも確定選択から取り、引数では受けない）。契約は `tests/test_delete.py` /
+  `tests/test_move_verbs.py` が持つ。
 
 ### 反復（`Sketch.patterns` / `Pattern`）
 
@@ -568,10 +575,9 @@ document・ログのどちらにも変更を残さない。
 `Command.resets_selection` が対象verbの単一の宣言で、`Session._reset_selection_if_needed`が
 確定後に1箇所で発火する。
 
-- 対象: `extrude`/`extrude_face`/`fillet`/`chamfer`/`pattern_rectangular`/
-  `pattern_circular`/`add_line`/`add_circle`/`add_rectangle`/`add_arc`/`import_svg`/
-  `set_parameter`/`undo`/`redo`（undo/redoは「何を戻したか」に関わらず**常に**リセットする
-  単純な規則。`duocad/catalog.py` の `resets_selection=True` が付くverbがこの全量）。
+- 対象は `duocad/catalog.py` で `resets_selection=True` が付いているverbの全量。**顔ぶれを
+  ここへ写さない** —— verbを1つ足した日に古くなり、足す側はこの文書を見に来ない。undo/redoも
+  対象で、「何を戻したか」に関わらず**常に**リセットする単純な規則にしてある。
 - リセットしない: 形を変えない操作（`set_visible`・選択操作そのもの・`commit_selection`・
   保存/書き出し・`describe_*`）と、**失敗したverb**（失敗する半径では理由が画面に出て、
   選択は保持されたまま戻る）。
@@ -756,6 +762,104 @@ Bodyの一覧）が常に空になるため。**プレビューが無いとい�
 - **AIには開けていない**（MCPツール一覧に出ない。WebSocketからは踏める）— 今の文書を丸ごと
   捨ててundoでも戻せない操作なので、捨てる判断は人がする。
 
+## 配りものの解像度と視錐台カリング（`duocad/resolution.py` / `duocad/view.py`）
+
+三角形分割の細かさは**カメラで決まり、文書では決まらない**。
+
+```python
+resolution.view_resolution(world_per_pixel, size_hint=0.0) -> (deviation, angular)
+resolution.coarse_view_resolution(world_per_pixel, size_hint=0.0) -> (deviation, angular)
+resolution.clamp_deviation(deviation, size_hint=0.0) -> float
+resolution.angular_for_deviation(deviation) -> float
+
+kernel.tessellate_selective(shape, fine_faces=None, deviation=.., angular_deflection=..,
+                            coarse_deviation=None, coarse_angular_deflection=None) -> {
+    "face_count", "fine_face_count", "deviation", "coarse_deviation", "closed",
+    "faces": [{"detail": "fine"|"coarse", "indices": [...], ...}],
+}
+Session.set_view_resolution(world_per_pixel, size_hint=0.0, focus=None) -> bool  # 変わったらTrue
+```
+
+### ズーム連動（`test_adaptive_resolution.py`）
+
+- **変換式は2つの言語にある** —— スケッチの円はブラウザ側（`web/src/adaptiveResolution.ts`）、
+  ソリッドと辺はコア側で折る。**定数が片方だけ動くと同じ画面で滑らかさが食い違い、例外も
+  コンソールエラーも出ない**ので、①TSのソースを静的に読む定数の一致検査と②**nodeでTSを実際に
+  評価して**同じ入力に同じ値が出ることの検査、の2本で塞ぐ。走査そのものが効いていること
+  （拾えた定数が0件でないこと）を先に見る —— 見ないと一致検査は常に緑になる。
+- 目標偏差は `world_per_pixel` に**単調**に従う（寄れば細かく、引けば粗く）。角度偏差は線形偏差の
+  平方根に比例し、**ラジアンの範囲を出ない**（度ではない）。既定の偏差は既定の角度偏差へ戻る。
+- 非有限・0以下のカメラ値は**既定の粗さへ落ちる**（偏差0のメッシュを頼まない）。上下限は絶対値と
+  モデル寸法比の両方で効き、**上限が下限を割る小さなモデルでも範囲が反転しない**。
+- 配りもの側は**3経路すべて**（ソリッド・辺・スケッチ領域）がカメラに追随する。カメラが動けば
+  全Bodyの `body_revision` が上がり（上がらないと差分配信が「変わっていない」と判断して古い形が
+  残る）、**先に測ってあったキャッシュを跨いで**効く。同じ値の再送は `False` を返して**何も
+  配らない**（ズーム中の連打で全部を流し直さない）。
+- **画面の設定は文書に漏れない**。`Session.deviation`（STL書き出しが使う土台）はズームで動かない
+  —— 動くと書き出す形の粗さがカメラで変わる。ズーム値が来ていないセッションは既定の粗さで測る。
+
+### 面ごとの選択的高精度化（`test_face_culling.py`）
+
+文書全体で1つの目標精度にすると、大きな組立に深く寄ったとき**画面に出ていない部品まで同じ
+細かさで測り直す**。`focus`（Bodyごとの「細かく測る面の1始まり添字」。`None` は全面）で面単位に
+分ける。
+
+- **粗い側の粗さはズームで動かない**（`coarse_view_resolution`）。動くと画面外のBodyのレシピが
+  毎回変わって版が上がり、**結局全部を配り直す**ことになる。モデルの大きさ（`size_hint`）でだけ
+  変わる。粗い側が細かい側より細かくなることは無く、`size_hint` が無い／引ききった場合は
+  細かい側と同じ値へ倒れる（分ける意味が無いため）。
+- **面は互いの粗さに引きずられない** —— 細かく測った面の三角形は、隣を粗くしても全面を細かく
+  測ったときと同一。これがこの仕掛けの成立条件そのもの。`fine_faces=None` は `tessellate()` と
+  同じ測り方（旧経路を変えていない）。
+- 配りものの `deviation` は**その配りものの中でいちばん細かい値**（1面も細かくしないなら粗い側の
+  値になる。嘘をつかない）。粗い側に細かい値を渡しても細かい側を下回らない。存在しない面添字は
+  無視する（画面の添字は形状変更で古くなりうる）。`closed` は閉じた立体かどうかで、**開いた
+  シェルでは裏向きの面が本当に見える**ため画面側はこの旗でバックフェイス判定を止める。
+- **効き所**: 全面を粗いままにしたBodyは、寄っても引いても版が上がらず、差分配信の `bodies` に
+  現れない（＝線に何も乗らない）。測り直しも起きず、キャッシュしたメッシュがそのまま残る。
+- **辺はBody単位**で倒す（面ごとに分けられないので、細かい面が1つも無ければ粗い側）。
+- `focus` に壊れた値が混ざっても落とすだけで**形は壊れない**（粗く測るだけ）。**文書を差し替えたら
+  どの面が見えていたかは忘れる** —— 面の添字は文書が変われば別のものを指す。
+- **旧クライアント互換**: `focus` を送らなければ全Body全面が細かい側になり、導入前の挙動と一致する。
+
+見た目（隙間・角が見えるか）はpytestでは判定できない —— `web/scripts/` の実機smokeが数値で見る。
+
+### Body索引キャッシュの剪定（`test_body_cache_pruning.py`）
+
+`_geometry_cache` / `_edge_cache` / `_vertex_cache` / `_volume_cache` は `body_id` 索きで、
+文書からBodyが消えても（undoで）エントリが自然には落ちない。**持ち主は `session.view`**
+（`duocad/view.py` の `DocumentView`）。
+
+- **`state_meta()`（WebSocket配信のたびに呼ばれる）が生存集合との差分で剪定する**。同じ文書を
+  開いたまま作成とundoを繰り返しても線形に溜まらない。`sketches_state()` の剪定も同じ形。
+- **`_revision_counter` は剪定しない**。剪定すると版が1へ戻り、同じ `body_id` を知っている
+  クライアントが「版が同じ＝変わっていない」と判断して**前の文書の形を描き続ける**。
+- 生きているBodyのキャッシュは落とさない（剪定しすぎの検知も同じテストが持つ）。
+
+## ブラウザ側にしか対応物が無い純関数（`node` で評価する）
+
+`web/src/viewCube.ts`（`test_view_cube.py`）と `web/src/gridScale.ts`（`test_grid_scale.py`）は
+**Python側の対応物が無い**。2言語を突き合わせる代わりに、pytestは `tests/eval_view_cube.mjs` /
+`tests/eval_grid_scale.mjs` を `node` で走らせ、終了コードだけを見る（ソースの文字列比較では
+なく実行結果で見る。Nodeは `.ts` をそのまま読める）。**`node` が無くてもskipしない** ——
+足場が無いときのskipは無人実行では緑と区別が付かないので、`AssertionError` で落とす。
+
+固定している中身（実体は `.mjs` 側にある）:
+
+- **ビューキューブ**: 領域は27セルから中心を除いた**26**（面6・辺12・角8）で重複が無い。区間は
+  軸ごとに隙間も重なりも無く並び、外側の面が立方体の表面に一致する。方向ベクトルは単位長で
+  セルの符号に一致し、**upベクトルは26方向すべてで方向と厳密に直交する**（Gram-Schmidt射影。
+  真上・真下は厳密に ±Y、水平方向は既定の +Z のまま、斜め方向では +Z から傾く）。
+- **基準グリッド**: 刻みは **1/10/100mm の3段固定**（内容で変わらない）。`mmPerPixel` は透視なら
+  `2*tan(fov/2)*distance/height`、正投影なら視錐台の高さ÷画素（**距離という概念が無い**ので
+  距離で判定すると破綻する）。フェードは1本の規則だけで決まり、閾値の間に本当に中間値がある
+  （**ON/OFFの瞬間切替ではない** —— 点滅の原理的な排除）。段の順序は「粗い段ほど濃い」で、
+  **100mm段にも特例は無い**（引き切れば同じ規則で消える）。NaN・負・無限は「描かない」側か
+  上限へ倒す。
+
+描画そのもの（第2パス描画・Pointer Lockドラッグ・視点アニメーション・格子が実際に組み直るか）は
+pytestでは判定できない —— `web/scripts/` の実機smokeと目視が持つ。
+
 ## `duocad/mcp_server.py` — MCPプロトコルとverb公開の規律
 
 ツール一覧・登録手順・使い方は `MCP.md` が正、AIの確認要否の判定は `MCP.md`「AIはどこまで
@@ -910,6 +1014,131 @@ get_edges -> {"type":"edges", body_id, revision, edges:[...]}
   返る）。常時配ると初回配信に折れ線が丸ごと乗り、差分配信で稼いだ帯域を使い切る。
   `revision` を返すのは、クライアントが「今の形の辺か」を判定できるようにするため。
 
+## `duocad/agent/` — アプリ内AIエージェント（tool-useループ）
+
+MCP経路（`duocad/mcp_server.py`）は**MCPクライアントがduocadのプロセスを所有する**形だが、
+こちらは逆向きで、**先にアプリが立っていて、その中からAIを選んで繋ぐ**。位置づけと使い方は
+readme.md「AI側（アプリ内エージェント・`duocad/agent/`）」と `MCP.md` が正。ここに書くのは
+テストが固定している契約。
+
+```python
+AgentLoop(tools: ToolSurface, provider: Provider, *,
+          system=None, limits=Limits(), progress=None, cancellation=None)
+AgentLoop.run(prompt) -> AgentRun     # 会話は run をまたいで続く
+AgentLoop.reset()                     # 会話を捨てる（文書は触らない）
+AgentRun.to_dict() -> dict            # そのままJSONにしてWSへ流せる形
+Limits(max_turns, max_tokens, request_timeout, max_total_seconds)
+Cancellation().cancel() / .cancelled
+build_provider(kind, ...) -> Provider
+```
+
+`AgentRun.status` の語彙とそれぞれの意味は **`AgentRun` のdocstring（`duocad/agent/loop.py`）が
+正**。既定の打ち切り値も `Limits` のフィールド既定が正で、ここには写さない。
+
+### 決定的な検査で固定する（`test_agent_loop.py`）
+
+実機のLLMには依存させない。**偽プロバイダ（記録済みの応答列を返すスタブ）**でループの分岐を
+決定的に固定し、アダプタの整形はHTTPを差し替えた単体検査で見る。
+
+- **道具の定義を第二の場所に書かない**。プロバイダへ送るツール一覧は
+  `DocumentTools.descriptors()` **そのまま**（顔ぶれは `catalog.tool_names()` と一致）、実行は
+  `.call()`、失敗は `.error_envelope()`。MCP経路と顔ぶれ・挙動・失敗の語彙が同一になる。
+- **システムプロンプトを二重に持たない**。MCPの `initialize` が返す `instructions` と
+  `AgentLoop.system` は `catalog.agent_instructions()` の**同じ1本**。
+- **AIが止まるか進むかの規則は、この文にしかない**（コアは何も止めない ——
+  `commit_selection` は最初からMCPに公開されているので、承認を強制していたのはプロンプトと
+  文書だけだった）。だから文そのものを検査する: 2段の規則が「前置き／第1段／第2段／後書き」に
+  **漏れなく**割れること、第1段が2条件の否定形＋「確認を待たず実行してよい」であること、
+  第2段が肯定形＋「具体的なら適用・曖昧なら止める」の並び順であること、そして
+  **「止まれ」と読める語が第2段の中にしか無いこと**（区間の外を見ていなかったのが前の版の穴で、
+  末尾に1文足すだけで第1段の許可を打ち消せた）。切り出せないときは緑にせず落とす。
+- **打ち切りが効く**。往復数の上限、**合計時間の上限**、中断フラグ、プロバイダの失敗のいずれも
+  理由を構造化して返す（例外を投げない）。合計時間は他の3つと別に要る —— 部分の上限をいくら
+  締めても掛け算は決まらない。予算が尽きていれば**1往復も始めず、ツールを1つも実行しない**。
+- **`timeout` と `provider_error` を混ぜない**。合計時間の予算は1リクエストの待ちより常に短い
+  ので「予算が縮めたか」だけで判定すると接続拒否やHTTP 5xxまで `timeout` になる。読み替えて
+  よいのは待ち時間切れ（`ProviderTimeout`）のときだけ —— 原因がこちらの予算か相手の障害かで
+  直す場所が違う。知らない停止理由は `completed` に化けさせず、生値を `detail` に残す。
+- **ツールの失敗でループが落ちない**。封筒をそのままモデルへ返して自己修復させる。未知のツール名は
+  `not_found`、引数の食い違いは `invalid_argument`（`internal` に落とすとモデルが諦める）、
+  壊れたJSONの引数は**ツールを実行せずに** `invalid_argument`。モデルへ返る本文も自然文ではなく
+  JSONの封筒である。
+- **出力上限で切れたターンのツールは1つも実行しない**。打ち切りの判定がツール呼び出しより先に
+  来る（切れた応答にも `tool_calls` は載るので、`tool_use` に丸めると引数が途中で切れたまま
+  ツールが走る）。それでも**履歴は再送できる形に保つ** —— ツール呼び出しと結果は常に1対1で
+  対応し、中断したターンでも欠けない。
+- **人が言っていない寸法で形を変えない**。寸法を取るverbは、依頼文に量が現れていなければ
+  `dimension_not_given` で**verbが走る前に**止まる。規律を文章で頼まず機械的に止める —— 実測で
+  モデルは `agent_instructions()` の「迷ったら止める側に倒す」を守れず、半径を自分で決めて
+  適用まで行った。ただし**厳密な照合にはしない**（「直径8mm」から `radius: 4` を導くのは正しい）。
+  `body_1` のような**IDの数字を寸法と読まない**。寸法を取らないverbは素通し。
+- **進捗の購読者が例外を投げてもループは落ちない**が、**無音でも消えない** —— WARNINGが1件、
+  例外の型とトレースバックが分かる形で出る。
+- **鍵がどこにも出ない**。`repr`・例外メッセージ・進捗・`to_dict()` のどれにも現れない
+  （HTTPライブラリはヘッダ値を例外文へ載せることがあるので、外へ出る前に伏せる）。加えて
+  **`build_provider` はプロバイダへ鍵を渡さない**（画面から鍵を受け取る経路を作らない）。
+  受け付けるプロバイダ種別は `build_provider`（`duocad/agent/providers.py`）の分岐が正で、
+  そこに無い綴り（廃止したものを含む）は `ValueError`。
+
+### プロバイダアダプタ（`openai_compat`）
+
+- リクエストは `{type:"function", function:{name, parameters}}` で包むだけ。`parameters` は
+  ツール宣言の `inputSchema` そのもの。system は先頭の1メッセージ、`tool_choice` は `"auto"`、
+  `stream` は `False`（非streaming）。
+- **生のメッセージを送り返さず組み直す** —— `reasoning_content` のようなサーバ固有の欄を送り返すと
+  弾くサーバがある。ツール結果は `role:"tool"` で1件ずつ返す。
+- **引数のJSONが壊れていたら推測せず印を付ける**（`parse_error` を立てて `arguments` は空）。
+- 実機のllama-serverで実際に回ることは `test_agent_llama_server.py` の**1本だけ**が見る
+  （8080に居ない／実物のSTEPが無いなら二重skip）。ツール呼び出しのテンプレートが有効でないと
+  モデルは道具を呼べずに本文で「呼びました」と言うので、そこを落とす検査になっている。
+
+### WebSocketへの配線（`ai_*`。`test_agent_ws.py`）
+
+`ai_get_status` / `ai_configure` / `ai_send` / `ai_cancel` を受け、`ai_status` / `ai_tool_call` /
+`ai_result` / `ai_error` を返す（`duocad/net/ws.py`）。**`ai_*` はverbではない** —— 文書を直接は
+変えず、操作ログにも載らず、undoの単位でもないので `COMMANDS` に入れない（除外そのものは
+`test_ui_command_wiring.py` と `test_mcp_verbs.py` が固定する）。
+
+- **`ai_status` に鍵の類は載らない**（欄そのものが無い。鍵の形をした文字列も出ない）。
+- **`ai_send` はモデルへのHTTPを待たずに返る**（実行は実行器スレッド）。進捗と結果は別イベントで
+  届き、`ai_status` の `running` は **true → false** の両方が飛ぶ（画面が中断ボタンの出し入れに
+  使う）。設定は**全接続へ配る**（共有の1会話なので他の画面でも今の設定が見える）。
+- 実行中の2通目・空メッセージ・未知のプロバイダは拒否する。**実行中は設定を変えさせない**
+  （中断フラグを作り直すと中断ボタンが効かなくなる）。拒否したときに内部状態を変えない。
+- **AIがツールを呼んで文書を変えると、開いているブラウザの絵が変わる**（通常のverb配信に乗る）。
+  ただし**出し手のいない変更**として扱い、MCPと同じく `applied` を付けない。
+- **中断できる**。どこまでやったかは `ai_result.tool_calls` に残る。
+- **送り先（`base_url`）は画面から差し替えられる**。許せるのは**いま繋がるプロバイダが鍵を
+  持たないから**であって、`base_url` が安全だからではない —— **鍵を持つプロバイダを足すなら
+  `_ai_configure` に拒否を書き戻すこと**（送り先を画面から選べれば、値をブラウザへ出していなくても
+  外部へ送られるのと同じである）。深層防御として、送り先を内部状態ごと差し替えても実際のHTTPに
+  鍵が乗らないことを、`build_provider` を差し替えずに1回打たせて確かめている。
+- **最後の1接続が切れたらAIの実行を中断する**（他の接続が残っていれば続ける）。誰も見ていないまま
+  文書が変わり続けるのを防ぐ。
+
+### 人とAIが本当に並行して同じ文書を触るとき（`test_agent_concurrency.py`）
+
+「添字は現時点のものであって、形が変われば別の実体を指す」ので、MCP経路（人が頼んで待つ＝実質
+シリアル）では出なかった競合がここでは本当に起きる。`resets_selection` の全リセットが届かない
+経路を2つ埋めてある。
+
+- **選択を経由しない対象ボディ解決**（`fillet`/`chamfer`/`extrude` の `body_id` の既定＝アクティブ）
+  には可視性を課す。確定選択は生きているのに人が対象ボディを隠した、という手順で**静かに成功
+  していた**のが実測。
+- **選択をまったく経由しないverb**（`set_visible` 等）には `AgentLoop.run()` の**楽観ロック**。
+  版は `(操作ログの本数, 選択の指紋)` で、比較は**ツール1件を実行する直前ごと**に行う。
+  - 選択の提案・確定は操作ログに乗らないので、**同じ種別のまま選び直す**入れ替えは本数でも
+    `resets_selection` でも `selection_empty` でも捕まらない。指紋を混ぜたのはこのため。
+  - **1つの応答に束ねられた複数のツール呼び出しの間**も見る（本番経路は呼び出しのたびに
+    イベントループへ制御を返すので、その隙間にも人の操作が挟まりうる）。
+  - 実行しなかった呼び出しは `NotExecuted` の構造化エラーで返し、**モデルに選び直させる**。
+    自分自身が同じ往復で積んだ変更は「よそからの変更」と誤認しない（1件実行するたびに次の
+    基準値を取り直す）。実行しなかった呼び出しは `run.tool_calls` に載らない。
+- **確定選択の種別とverbが要求する種別の食い違いは、モデルに考えさせる前に機械的に返す**。
+  理由には**要求した種別と、いま確定しているものの種別と数の両方**が入る（矛盾した指示で
+  モデルが確認ツールを繰り返し、長時間応答が無くなった実測への予防）。何も選んでいないときは
+  憶測を作らず短いままにする。
+
 ## `duocad/optimize_run.py` — 形状最適化の配線（`test_optimize_backend.py`）
 
 4条件を `duocad.topopt` の `Conditions` へ翻訳し、端から端まで回して結果をメッシュボディとして
@@ -962,10 +1191,6 @@ Session.optimize_conditions() / optimize_resolution(rmin_mm) / run_optimization(
 
 - **領域の取り違え検出**（`RegionRef.provenance`を実際に埋めての再識別）は未着手 —
   `region.py`節「既知の制限」。
-- **スケッチ図形の削除・移動・拘束**を行うverbは無い（`sketch_create`/`add_*`/
-  `set_parameter`のみ）。
-- **頂点を引数に取るverbは無い**（頂点は選択集合の種別としては存在するが、どのverbも
-  消費しない）。
 - **操作ログに実行主体（人かAIか）は永続化されない**（`Operation`のフィールドは
   `seq`/`verb`/`args`/`provenance`のみ）。UI側が「自分がやった操作」に印を付けられるのは
   同じ接続内での応答待ち（`client_op`）の突き合わせによるものであって、ログを読んで
