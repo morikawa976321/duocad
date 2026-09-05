@@ -39,6 +39,8 @@ import {
 } from './gridScale'
 import { createPlaneGrid, type PlaneFrame, type PlaneGrid } from './planeGrid'
 import { POLE_Z, upForDirection } from './viewCube'
+import { createOptimizeAnnotations } from './optimizeAnnotations'
+import { createOptimizeDebug } from './optimizeDebug'
 import { createViewCubeOverlay } from './viewCubeOverlay'
 import type { BasePlaneName, EdgeGeometry } from './session'
 import type {
@@ -80,10 +82,6 @@ import {
   BOX_SELECT_MIN_PX,
   CLICK_MOVE_LIMIT_PX,
   CLICK_TIME_LIMIT_MS,
-  DEBUG_ANCHOR_FIXED_COLOR,
-  DEBUG_ANCHOR_LOAD_COLOR,
-  DEBUG_RHO_COLOR,
-  DEBUG_SPACE_COLOR,
   DEPTH_BIAS_LAYER,
   DEPTH_BIAS_UNIT,
   EDGE_COLOR,
@@ -100,8 +98,6 @@ import {
   LAYER,
   OPTIMIZE_EXCLUDE_COLOR,
   OPTIMIZE_FIXTURE_COLOR,
-  OPTIMIZE_FIXTURE_MARK_COLOR,
-  OPTIMIZE_LOAD_COLOR,
   OPTIMIZE_PRESERVE_COLOR,
   PICK_EDGE_COLOR,
   PREVIEW_COLOR,
@@ -237,33 +233,22 @@ export function createViewport(container: HTMLElement): Viewport {
   // 拘束の固定記号・荷重の矢印+ラベル。**`root` には入れない**(グリッドと同じ理由 ——
   // 外接直方体に混ざると初回フレーミングやnear/far計算を歪める)。**指せない**(装飾)ので
   // ピックの対象にも足さない。`setOptimizeState` が唯一の書き手。
-  const optimizeRoot = new THREE.Group()
-  optimizeRoot.renderOrder = LAYER.optimize
-  scene.add(optimizeRoot)
-  let optimizeDisposables: Array<{ dispose(): void }> = []
+  const annotations = createOptimizeAnnotations({
+    faceMeshes: () => allFaceMeshes,
+    contentDiagonal: () => contentDiagonal,
+  })
+  annotations.object.renderOrder = LAYER.optimize
+  scene.add(annotations.object)
 
   // ------------------------------------------------------------------ 開発用のデバッグ表示
   //
   // 塊(`?debug=space`)・平滑化前のボクセル(`?voxel=1`)・面アンカーの節点
-  // (`?debug=anchors`)。**`root` には入れない**(`optimizeRoot` と同じ理由 ——
-  // 外接直方体に混ざると初回フレーミングやnear/far、グリッドの範囲まで歪む)。
-  // ピックの対象にも足さない。`setOptimizeDebug` が唯一の書き手で、
-  // **既定(`null`)では子が1つも生まれない。**
-  const debugRoot = new THREE.Group()
-  debugRoot.renderOrder = LAYER.debug
-  scene.add(debugRoot)
-  let debugDisposables: Array<{ dispose(): void }> = []
-  let debugCounts: {
-    space: number
-    rho: number
-    fixed: number
-    load: number
-    spaceStride: number
-    rhoStride: number
-    anchorsDepthTest: boolean | null
-  } = { space: 0, rho: 0, fixed: 0, load: 0, spaceStride: 1, rhoStride: 1, anchorsDepthTest: null }
-  /** `?voxel=1` で隠している結果ボディ。**表示だけ**(文書には触れない)。 */
-  let debugHiddenBodyId: string | null = null
+  // (`?debug=anchors`)。**`root` には入れない**(注記と同じ理由 —— 外接直方体に混ざると
+  // 初回フレーミングやnear/far、グリッドの範囲まで歪む)。ピックの対象にも足さない。
+  // `setOptimizeDebug` が唯一の書き手。
+  const optimizeDebug = createOptimizeDebug({ setBodyVisible })
+  optimizeDebug.object.renderOrder = LAYER.debug
+  scene.add(optimizeDebug.object)
 
   // ------------------------------------------------------------------ 平面グリッド(3段固定・無限)
   //
@@ -934,7 +919,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // **作り直したボディに、デバッグ表示の「隠す」を当て直す。** `?voxel=1` は結果ボディを
     // 隠してボクセルを見せる —— ここで当て直さないと、結果が届いた直後の状態配信で
     // ボディが生まれ直し、平滑化メッシュとボクセルが重なって両方読めなくなる。
-    applyDebugHidden()
+    optimizeDebug.applyHidden()
   }
 
   // ------------------------------------------------------------------ プレビュー(幽霊)
@@ -1427,64 +1412,6 @@ export function createViewport(container: HTMLElement): Viewport {
     applyFaceMaterials()
   }
 
-  // ------------------------------------------------------------------ 形状最適化(第3のモード)の装飾
-  /**
-   * いま描いている装飾の**中身**(実機検査フック専用)。
-   *
-   * `optimizeAnnotationCount()`(子オブジェクトの総数)だけでは、拘束記号と荷重矢印を
-   * 取り違えても・矢印が逆向きでも・ラベルが空文字でも数だけは合ってしまい検出できない
-   * (2026-08-31 QA指摘)。ここに種別ごとの中身(拘束は対象の面、荷重は単位ベクトルと
-   * ラベル文字列)を控えておき、`optimizeAnnotations()` で読めるようにする。
-   */
-  let optimizeAnnotationInfo: {
-    fixtures: FaceRef[]
-    loads: Array<{ bodyId: string; faceIndex: number; direction: [number, number, number]; label: string }>
-  } = { fixtures: [], loads: [] }
-
-  /** 拘束記号・荷重矢印+ラベルを全部消す。`setOptimizeState` が最初に呼ぶ。 */
-  function clearOptimizeAnnotations(): void {
-    optimizeRoot.clear()
-    for (const item of optimizeDisposables) item.dispose()
-    optimizeDisposables = []
-    optimizeAnnotationInfo = { fixtures: [], loads: [] }
-  }
-
-  /**
-   * 面の重心と平均法線を、**いま実際に描かれているメッシュ**から測る。
-   *
-   * サーバの配りもの(`FaceRef`)は添字だけで重心・法線を持たない。ここは装飾専用の
-   * 簡易測定であって `duocad/optimize.py` の指紋(面積加重・照合用)とは別物 ——
-   * 頂点の単純平均でよい(タスク仕様「あとから直すのは安い。凝りすぎない」)。
-   */
-  function faceCentroidNormal(
-    bodyId: string,
-    faceIndex: number,
-  ): { center: THREE.Vector3; normal: THREE.Vector3 } | null {
-    const mesh = allFaceMeshes.find(
-      (candidate) => candidate.userData.bodyId === bodyId && candidate.userData.faceIndex === faceIndex,
-    )
-    if (!mesh) return null
-    const position = mesh.geometry.getAttribute('position') as THREE.BufferAttribute
-    const normalAttr = mesh.geometry.getAttribute('normal') as THREE.BufferAttribute
-    if (!position || position.count === 0) return null
-    const center = new THREE.Vector3()
-    const normal = new THREE.Vector3()
-    for (let i = 0; i < position.count; i++) {
-      center.x += position.getX(i)
-      center.y += position.getY(i)
-      center.z += position.getZ(i)
-      if (normalAttr) {
-        normal.x += normalAttr.getX(i)
-        normal.y += normalAttr.getY(i)
-        normal.z += normalAttr.getZ(i)
-      }
-    }
-    center.divideScalar(position.count)
-    if (normal.lengthSq() < 1e-12) normal.set(0, 0, 1)
-    else normal.normalize()
-    return { center, normal }
-  }
-
   /**
    * 貼った面の外接範囲を、スケッチのframe(u,v)で測る(`setBounds` へ渡す枠)。
    *
@@ -1532,43 +1459,16 @@ export function createViewport(container: HTMLElement): Viewport {
     return boundingSquare(uv, { includeOrigin: false })
   }
 
-  /** 荷重の大きさのラベル(canvasテクスチャの札)。**モデルの大きさへ追随**させる
-   *  (`height` は呼び出し側が `contentDiagonal` から決める)。 */
-  function makeMagnitudeLabel(
-    text: string,
-    height: number,
-  ): { sprite: THREE.Sprite; disposables: Array<{ dispose(): void }> } {
-    const canvas = document.createElement('canvas')
-    canvas.width = 256
-    canvas.height = 96
-    const ctx = canvas.getContext('2d')
-    if (ctx) {
-      ctx.fillStyle = 'rgba(16, 22, 30, 0.85)'
-      ctx.fillRect(0, 0, canvas.width, canvas.height)
-      ctx.fillStyle = '#ffc857'
-      ctx.font = 'bold 48px sans-serif'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(text, 12, canvas.height / 2)
-    }
-    const texture = new THREE.CanvasTexture(canvas)
-    const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, depthWrite: false, transparent: true })
-    const sprite = new THREE.Sprite(material)
-    sprite.scale.set(height * (canvas.width / canvas.height), height, 1)
-    return { sprite, disposables: [texture, material] }
-  }
-
   /**
    * 形状最適化(第3のモード)の見た目を作り直す。**`null` は全部消すだけ**
    * (モードを抜けた・そもそも入っていない)。
    *
    * `preserveBodies` / `excludeBodies` は `applyFaceMaterials()` が読む役割の表を差し替える
-   * だけ(ボディの色は選択と同じ経路)。拘束・荷重は**装飾**(`optimizeRoot`)を作り直す ——
-   * 拘束面は固定記号(四角錐)を法線の上に置き、荷重面は矢印(`THREE.ArrowHelper`。長さは
-   * 大きさの対数スケール)+ 大きさのラベルを描く。どちらも**モデルの大きさへ追随**させる
-   * (`contentDiagonal` が0なら文書が空なので何も描けない)。
+   * だけ(ボディの色は選択と同じ経路)。拘束・荷重は**装飾**(`optimizeAnnotations.ts`)を
+   * 作り直す。
    */
   function setOptimizeState(state: OptimizeVisualState | null): void {
-    clearOptimizeAnnotations()
+    annotations.clear()
     bodyRoles = new Map()
     fixtureFaceKeys = new Set()
     if (state === null) {
@@ -1579,225 +1479,7 @@ export function createViewport(container: HTMLElement): Viewport {
     for (const bodyId of state.excludeBodies) bodyRoles.set(bodyId, 'exclude')
     fixtureFaceKeys = new Set(state.fixtures.map((ref) => refKey(ref.bodyId, ref.faceIndex)))
     applyFaceMaterials()
-
-    const scale = Math.max(contentDiagonal, 1e-6)
-    if (scale <= 1e-6) return // 空の文書(装飾できる面が無い)
-
-    // -------------------------------------------------- 拘束の固定記号(四角錐)
-    if (state.fixtures.length > 0) {
-      const markSize = scale * 0.03
-      const markMaterial = new THREE.MeshLambertMaterial({ color: OPTIMIZE_FIXTURE_MARK_COLOR })
-      optimizeDisposables.push(markMaterial)
-      for (const ref of state.fixtures) {
-        const measured = faceCentroidNormal(ref.bodyId, ref.faceIndex)
-        if (!measured) continue
-        // **4角錐**(`radialSegments=4`)。既定は+Y軸を高さの向きに持つので、面へ刺さる向き
-        // (法線の逆)へ回してから、根元が面の少し上に来るよう法線方向へ持ち上げる。
-        const geometry = new THREE.ConeGeometry(markSize * 0.6, markSize, 4)
-        optimizeDisposables.push(geometry)
-        const cone = new THREE.Mesh(geometry, markMaterial)
-        cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), measured.normal.clone().negate())
-        cone.position.copy(measured.center).addScaledVector(measured.normal, markSize * 0.6)
-        optimizeRoot.add(cone)
-        optimizeAnnotationInfo.fixtures.push({ bodyId: ref.bodyId, faceIndex: ref.faceIndex })
-      }
-    }
-
-    // -------------------------------------------------- 荷重の矢印+ラベル
-    if (state.load !== null && state.loads.length > 0) {
-      const { magnitude, direction, vector } = state.load
-      // **長さは大きさの対数スケール**(タスク仕様)。1N未満でも長さが0にならないよう
-      // `Math.max(magnitude, 1)` で下駄を履かせる(見た目専用の式で、正確な力学ではない)。
-      const length = scale * 0.12 * (1 + Math.log10(Math.max(magnitude, 1)) * 0.3)
-      const labelHeight = scale * 0.05
-      const labelText = `${Number(magnitude.toFixed(2))}N`
-      for (const ref of state.loads) {
-        const measured = faceCentroidNormal(ref.bodyId, ref.faceIndex)
-        if (!measured) continue
-        const dir =
-          direction === 'vector' && vector !== null
-            ? new THREE.Vector3(vector[0], vector[1], vector[2]).normalize()
-            : direction === '-normal'
-              ? measured.normal.clone().negate()
-              : measured.normal.clone()
-        const arrow = new THREE.ArrowHelper(dir, measured.center, length, OPTIMIZE_LOAD_COLOR, length * 0.3, length * 0.18)
-        optimizeRoot.add(arrow)
-        optimizeDisposables.push(arrow) // `ArrowHelper.dispose()` が線・矢頭の材質を片付ける
-        const { sprite, disposables } = makeMagnitudeLabel(labelText, labelHeight)
-        sprite.position.copy(measured.center).addScaledVector(dir, length * 1.15)
-        optimizeRoot.add(sprite)
-        optimizeDisposables.push(...disposables)
-        optimizeAnnotationInfo.loads.push({
-          bodyId: ref.bodyId,
-          faceIndex: ref.faceIndex,
-          direction: [dir.x, dir.y, dir.z],
-          label: labelText,
-        })
-      }
-    }
-  }
-
-  // ------------------------------------------------------------------ 開発用のデバッグ表示
-  //
-  // **旧実験場(`probe_topopt/web/index.html`。2026-09-05に削除)にしか無かった3つを
-  // 本体へ移したもの。**
-  // 実験場は `design_space.CASES` の合成題材しか描けなかったが、ここは
-  // **いま走らせた最適化そのもの**(利用者が置いた条件・利用者のボディ)を描く ——
-  // 切り分けの道具が、切り分けたい対象を扱えないことがそもそもの問題だった。
-  //
-  // 出所と規約は `duocad/optimize_run.py` の `_DebugSink`。
-  function clearOptimizeDebug(): void {
-    debugRoot.clear()
-    for (const item of debugDisposables) item.dispose()
-    debugDisposables = []
-    debugCounts = {
-      space: 0,
-      rho: 0,
-      fixed: 0,
-      load: 0,
-      spaceStride: 1,
-      rhoStride: 1,
-      anchorsDepthTest: null,
-    }
-  }
-
-  /**
-   * 要素の通し添字 → 立方体の `InstancedMesh`。
-   *
-   * **セル中心の規約**(`duocad/topopt/mesh.py:169`): 要素 (i,j,k) の中心は
-   * `origin + spacing*(i+0.5, j+0.5, k+0.5)`。**半要素ずらすと形が丸ごと動く**ので、
-   * ここが唯一の変換点である(サーバ側は素の添字しか送らない)。
-   */
-  function buildDebugVoxels(voxels: OptimizeDebugVoxels, material: THREE.Material): THREE.InstancedMesh {
-    const [, ny, nz] = voxels.grid.shape
-    const spacing = voxels.grid.spacing
-    const [ox, oy, oz] = voxels.grid.origin
-    const geometry = new THREE.BoxGeometry(spacing, spacing, spacing)
-    const count = voxels.elements.length
-    const mesh = new THREE.InstancedMesh(geometry, material, Math.max(count, 1))
-    mesh.count = count
-    const dummy = new THREE.Object3D()
-    for (let i = 0; i < count; i += 1) {
-      const flat = voxels.elements[i]
-      const ex = Math.floor(flat / (ny * nz))
-      const rest = flat - ex * ny * nz
-      const ey = Math.floor(rest / nz)
-      const ez = rest - ey * nz
-      dummy.position.set(
-        ox + spacing * (ex + 0.5),
-        oy + spacing * (ey + 0.5),
-        oz + spacing * (ez + 0.5),
-      )
-      dummy.updateMatrix()
-      mesh.setMatrixAt(i, dummy.matrix)
-    }
-    mesh.instanceMatrix.needsUpdate = true
-    // **指せない。** `frustumCulled` は既定のままでよい(`InstancedMesh` は
-    // `computeBoundingSphere()` を自前で持つ)。
-    mesh.computeBoundingSphere()
-    // **`InstancedMesh` 自身も片付ける**(インスタンス行列のGPUバッファを持っている)。
-    debugDisposables.push(geometry, material, mesh)
-    return mesh
-  }
-
-  /**
-   * 節点を球で描く。**深度検査を切って最前面**(`depthTest: false`)——
-   * 形状の裏側にある節点(拘束面はたいていカメラの反対側)まで見えていないと、
-   * 「見えているつもりで見えていない」になる(probe から引き継いだ罠)。
-   */
-  function buildDebugNodes(
-    points: number[],
-    radius: number,
-    color: number,
-  ): THREE.InstancedMesh {
-    const count = Math.floor(points.length / 3)
-    const geometry = new THREE.SphereGeometry(radius, 12, 8)
-    const material = new THREE.MeshLambertMaterial({
-      color,
-      emissive: color,
-      emissiveIntensity: 0.6,
-      depthTest: false,
-      depthWrite: false,
-    })
-    const mesh = new THREE.InstancedMesh(geometry, material, Math.max(count, 1))
-    mesh.count = count
-    mesh.renderOrder = LAYER.debug
-    const dummy = new THREE.Object3D()
-    for (let i = 0; i < count; i += 1) {
-      dummy.position.set(points[3 * i], points[3 * i + 1], points[3 * i + 2])
-      dummy.updateMatrix()
-      mesh.setMatrixAt(i, dummy.matrix)
-    }
-    mesh.instanceMatrix.needsUpdate = true
-    mesh.computeBoundingSphere()
-    debugDisposables.push(geometry, material, mesh)
-    return mesh
-  }
-
-  /** `?voxel=1` で隠している結果ボディの表示を当て直す(`update()` が作り直した後にも要る)。 */
-  function applyDebugHidden(): void {
-    if (debugHiddenBodyId !== null) setBodyVisible(debugHiddenBodyId, false)
-  }
-
-  function setOptimizeDebug(state: OptimizeDebugState | null): void {
-    // 前回隠したボディを戻す(次の状態がまた隠すなら下でもう一度隠す)。
-    if (debugHiddenBodyId !== null) setBodyVisible(debugHiddenBodyId, true)
-    debugHiddenBodyId = null
-    clearOptimizeDebug()
-    if (state === null) return
-
-    if (state.space !== null && state.space.elements.length > 0) {
-      // **半透明で薄く重ねる**(probe の `?debug=space` と同じ)。塊は「答えの周りの箱」
-      // なので、不透明にすると中の形が1つも見えない。
-      const mesh = buildDebugVoxels(
-        state.space,
-        new THREE.MeshLambertMaterial({
-          color: DEBUG_SPACE_COLOR,
-          transparent: true,
-          opacity: 0.28,
-          depthWrite: false,
-        }),
-      )
-      mesh.renderOrder = LAYER.debug
-      debugRoot.add(mesh)
-      debugCounts.space = state.space.elements.length
-      debugCounts.spaceStride = state.space.stride
-    }
-
-    if (state.rho !== null && state.rho.elements.length > 0) {
-      // **平滑化する前のボクセルそのもの**(`?voxel=1`)。不透明で描く ——
-      // marching cubes を通す前の階段が見えることがこの表示の目的である。
-      const mesh = buildDebugVoxels(
-        state.rho,
-        new THREE.MeshLambertMaterial({ color: DEBUG_RHO_COLOR }),
-      )
-      debugRoot.add(mesh)
-      debugCounts.rho = state.rho.elements.length
-      debugCounts.rhoStride = state.rho.stride
-    }
-
-    if (state.anchors !== null) {
-      // 球の半径は**格子の要素サイズ**に合わせる(節点の間隔が要素サイズなので、
-      // 0.34要素なら隣とくっつかずに数えられる。probe と同じ比率)。
-      // **アンカー自身が持っている格子**を使う(サーバが必ず載せてくる)。
-      // 塊や密度場を頼んでいないときでも同じ大きさになる。
-      const radius = state.anchors.grid.spacing * 0.34
-      const fixed = buildDebugNodes(state.anchors.fixed.points, radius, DEBUG_ANCHOR_FIXED_COLOR)
-      const load = buildDebugNodes(state.anchors.load.points, radius, DEBUG_ANCHOR_LOAD_COLOR)
-      debugRoot.add(fixed)
-      debugRoot.add(load)
-      debugCounts.fixed = fixed.count
-      debugCounts.load = load.count
-      // **材質から読み直す**(定数を写さない) —— 写すと、材質側だけ直したときに
-      // 検査が古い値で合格し続ける。**両方の OR** にしてあるのは、片方だけ深度検査を
-      // 戻した退化を見逃さないため(2026-09-05 QA指摘。以前は固定側しか見ていなかった)。
-      debugCounts.anchorsDepthTest =
-        (fixed.material as THREE.Material).depthTest ||
-        (load.material as THREE.Material).depthTest
-    }
-
-    debugHiddenBodyId = state.hiddenBodyId
-    applyDebugHidden()
+    annotations.draw(state)
   }
 
   /**
@@ -3557,10 +3239,8 @@ export function createViewport(container: HTMLElement): Viewport {
     highlight,
     highlightBodies,
     setOptimizeState,
-    setOptimizeDebug,
-    optimizeDebugCounts() {
-      return { ...debugCounts, hiddenBodyId: debugHiddenBodyId }
-    },
+    setOptimizeDebug: optimizeDebug.setState,
+    optimizeDebugCounts: optimizeDebug.counts,
     showEdges,
     showBasePlanes,
     pickRegions,
@@ -3577,18 +3257,8 @@ export function createViewport(container: HTMLElement): Viewport {
       const material = mesh?.material as THREE.MeshLambertMaterial | undefined
       return material?.color ? material.color.getHex() : null
     },
-    optimizeAnnotationCount() {
-      return optimizeRoot.children.length
-    },
-    optimizeAnnotations() {
-      return {
-        fixtures: optimizeAnnotationInfo.fixtures.map((ref) => ({ ...ref })),
-        loads: optimizeAnnotationInfo.loads.map((item) => ({
-          ...item,
-          direction: [...item.direction] as [number, number, number],
-        })),
-      }
-    },
+    optimizeAnnotationCount: annotations.count,
+    optimizeAnnotations: annotations.info,
     hoveredRef() {
       return {
         face: hoverFace,
@@ -3697,8 +3367,8 @@ export function createViewport(container: HTMLElement): Viewport {
       faceMaterialCache.clear()
       previewMaterial.dispose()
       edgeMaterial.dispose()
-      clearOptimizeAnnotations()
-      clearOptimizeDebug()
+      annotations.clear()
+      optimizeDebug.clear()
       renderer.dispose()
       renderer.domElement.remove()
     },
