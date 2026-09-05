@@ -101,6 +101,23 @@ MATERIAL_MIN_RATIO = 1.10  # 保持ソリッドが占める体積(**格子の上
 #: (`20260904-0142` の罠)。
 MATERIAL_MAX_RATIO = 0.55
 
+#: **デバッグ表示(`?debug=space` / `?voxel=1`)で1回に配るボクセルの上限。**
+#:
+#: 表示は `InstancedMesh`(立方体1個 = 12三角形)なので、実物の部品で 5〜12万要素の塊を
+#: そのまま出すと 60〜144万三角形になる。上限を超えたら**軸方向に等間隔で間引く**
+#: (`_debug_voxel_payload` の `stride`) —— 間引いたことは payload の `stride` /
+#: `total` / `shown` に出るので、画面は「全部見えている」と誤解しない。
+#: **間引きは表示だけの話で、計算には1ビットも触れない。**
+DEBUG_VOXEL_LIMIT = 150_000
+
+#: デバッグ配信の種類。`run()` の `debug_kinds` に渡せる値。
+DEBUG_KINDS = ("space", "anchors", "rho")
+
+#: `?voxel=1` のボクセル表示で「材料がある」と見なす密度の境目。
+#: **probe の `server.py` と同じ 0.5**(`np.flatnonzero(flat > 0.5)`)——
+#: 揃えないと同じ密度場が別の形に見える。
+DEBUG_RHO_THRESHOLD = 0.5
+
 
 class OptimizeInputError(ValueError):
     """条件がそろっていない・この版では扱えない(`ValueError` = MCPの `invalid_argument`)。
@@ -697,6 +714,132 @@ def estimate_seconds(
 
 
 # --------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------
+# デバッグ表示の配信(`?debug=space` / `?debug=anchors` / `?voxel=1`)
+#
+# **製品の既定の画面には1ビットも出ない。** 画面がURLパラメータを見て `debug_kinds` を
+# 頼んだときだけ、`run()` がここを通って `debug(event)` を呼ぶ。頼まれなければ配列を
+# 1本も作らない(費用ゼロ)。
+#
+# **デモ題材に固定されていない**(このタスクの完了条件2) —— 材料はすべて
+# **いま走っている最適化そのもの**(利用者の文書の条件から導いた `DesignSpace` と、
+# 実際に解いた密度場)から取る。`design_space.CASES` を参照する経路はここに無い。
+#
+# 座標は**ワールドmm**である(probe は格子添字空間だった)。要素 (i,j,k) の中心は
+# `origin + spacing*(i+0.5, j+0.5, k+0.5)`、その角の節点 (i,j,k) は `origin + spacing*(i,j,k)`
+# ——「セル中心の規約」(`duocad/topopt/mesh.py:169`)そのままで、画面側では足し引きしない
+# (両側で足すと半要素ずれる)。
+# --------------------------------------------------------------------------------------
+def _debug_stride_for(mask, limit: int) -> int:
+    """`mask[::s,::s,::s]` の立っている数が `limit` 以下になる最小の `s`。"""
+    import numpy as np
+
+    if int(np.count_nonzero(mask)) <= limit:
+        return 1
+    longest = max(int(n) for n in mask.shape)
+    for stride in range(2, longest + 1):
+        if int(np.count_nonzero(mask[::stride, ::stride, ::stride])) <= limit:
+            return stride
+    return longest
+
+
+def _debug_voxel_payload(kind: str, stage: str, grid, mask, *, limit: int) -> dict:
+    """立っている要素の**通し添字**(C順 `i*(ny*nz) + j*nz + k`)を配る。
+
+    座標そのものではなく添字を配るのは、150,000要素で座標だと float が45万個になるため
+    (添字なら15万個)。画面は `grid.shape` から `(i,j,k)` へ戻して中心を計算する。
+    """
+    import numpy as np
+
+    mask = np.asarray(mask, dtype=bool)
+    total = int(np.count_nonzero(mask))
+    stride = _debug_stride_for(mask, int(limit))
+    idx = np.argwhere(mask)
+    if stride > 1 and idx.size:
+        idx = idx[(idx % stride == 0).all(axis=1)]
+    _, ny, nz = (int(n) for n in mask.shape)
+    flat = idx[:, 0] * (ny * nz) + idx[:, 1] * nz + idx[:, 2]
+    return {
+        "kind": kind,
+        "stage": stage,
+        "grid": grid.as_dict(),
+        "elements": [int(v) for v in flat.tolist()],
+        "total": total,
+        "shown": int(flat.shape[0]),
+        "stride": int(stride),
+    }
+
+
+def _debug_anchor_payload(stage: str, space) -> Optional[dict]:
+    """拘束面・荷重面に**実際に割り当たった格子節点**のワールド座標。
+
+    出所は導出が持ち帰った `DesignSpace.table`(`_check_anchor_centroids` が距離を測るのと
+    同じ表)。表が無い塊(検査が直接組んだもの)では `None` を返す。
+    """
+    import numpy as np
+
+    table = getattr(space, "table", None)
+    if table is None:
+        return None
+    node_grid = table.node_grid
+    out: dict = {"kind": "anchors", "stage": stage, "grid": space.grid.as_dict()}
+    for key, face_index in (("fixed", space.fixed_face), ("load", space.load_face)):
+        anchor = table.anchors.get(int(face_index))
+        if anchor is None:
+            out[key] = {"face": int(face_index), "count": 0, "points": [], "area_mm2": 0.0}
+            continue
+        points = np.asarray(node_grid.positions_of(anchor.nodes), dtype=float)
+        out[key] = {
+            "face": int(face_index),
+            "count": int(points.shape[0]),
+            "points": [float(v) for v in points.ravel().tolist()],
+            "area_mm2": float(anchor.total_area),
+        }
+    return out
+
+
+class _DebugSink:
+    """`run()` からデバッグ配信を出す口。**頼まれた種類だけ**を作る。
+
+    `kinds` に無い種類は payload を組み立てるところまで行かない —— 配列を作る費用
+    (数十万要素の `argwhere`)を、頼まれてもいないのに払わないため。
+    """
+
+    def __init__(
+        self, sink: Optional[Callable[[dict], None]], kinds: Optional[Any]
+    ) -> None:
+        self._sink = sink
+        self._kinds = frozenset(str(k) for k in (kinds or ())) if sink is not None else frozenset()
+
+    def wants(self, kind: str) -> bool:
+        return self._sink is not None and kind in self._kinds
+
+    def space(self, stage: str, space) -> None:
+        if not self.wants("space"):
+            return
+        self._sink(
+            _debug_voxel_payload("space", stage, space.grid, space.mask, limit=DEBUG_VOXEL_LIMIT)
+        )
+
+    def anchors(self, stage: str, space) -> None:
+        if not self.wants("anchors"):
+            return
+        payload = _debug_anchor_payload(stage, space)
+        if payload is not None:
+            self._sink(payload)
+
+    def rho(self, stage: str, grid, rho) -> None:
+        if not self.wants("rho"):
+            return
+        import numpy as np
+
+        payload = _debug_voxel_payload(
+            "rho", stage, grid, np.asarray(rho) > DEBUG_RHO_THRESHOLD, limit=DEBUG_VOXEL_LIMIT
+        )
+        payload["threshold"] = float(DEBUG_RHO_THRESHOLD)
+        self._sink(payload)
+
+
 # 端から端まで
 # --------------------------------------------------------------------------------------
 def run(
@@ -705,6 +848,8 @@ def run(
     *,
     progress: Optional[Callable[[dict], None]] = None,
     should_cancel: Optional[Callable[[], bool]] = None,
+    debug: Optional[Callable[[dict], None]] = None,
+    debug_kinds: Optional[Any] = None,
 ) -> dict:
     """4条件 → 塊の導出 → 連結性ガード → 最適化 → メッシュ化 → **メッシュボディとして文書へ**。
 
@@ -731,6 +876,13 @@ def run(
     これをWebSocketへそのまま載せられる —— `DesignSpace` や `AnchorTable` のような
     実体をここから外へ出さない(出すと配れる形が壊れ、キャッシュの持ち主も増える)。
 
+    **デバッグ表示**は `debug(event: dict)` + `debug_kinds`(`DEBUG_KINDS` の部分集合)。
+    **頼まれたときだけ**塊(`space`)・面アンカーの節点(`anchors`)・平滑化前の密度場
+    (`rho`)を配る —— 画面の `?debug=space` / `?debug=anchors` / `?voxel=1` の材料である。
+    頼まれなければ配列を1本も作らないので、既定の実行の費用は1ビットも増えない。
+    **戻り値には入れない**(素の値だけという契約を保つのと、結果メッセージが数MBに
+    膨らむのを避けるため)。中身は `_DebugSink` の各メソッド、座標はワールドmm。
+
     **進捗**は `progress(event: dict)`(下記 `_ProgressPump`)。**中断**は
     `should_cancel()` が真を返した時点で `OptimizeCancelled` を投げて降りる ——
     見るのは SIMP の設計反復ごとと、二分探索の候補ごとである(粗い段の中は見ない。
@@ -754,6 +906,7 @@ def run(
     spacing = _resolve_element_size(limits, opts.element_size_mm)
 
     pump = _ProgressPump(progress, should_cancel)
+    dbg = _DebugSink(debug, debug_kinds)
     pump.emit(phase="prepare", message=f"要素サイズ {spacing:.4g} mm で塊を導出する")
 
     derivation_kwargs: dict = {"spacing": spacing}
@@ -776,6 +929,12 @@ def run(
         message=f"塊 {space.element_count} 要素(格子 {space.grid.shape})",
         design_elements=space.element_count,
     )
+    # **早い段でも1度配る。** ここは実行ボタンから数秒で通る点で、`?debug=space` /
+    # `?debug=anchors` を付けた人はここで塊とアンカーを見られる(最適化の数十秒〜数分を
+    # 待たずに「塊が変」と分かる)。**これは案1(bbox)の塊であって本番の案5ではない**ので
+    # `stage="derive"` を付けて区別する —— 案5の実物は下で `stage="final"` として配り直す。
+    dbg.space("derive", space)
+    dbg.anchors("derive", space)
 
     common = {
         "resolution": limits,
@@ -877,6 +1036,13 @@ def run(
         run_progress=pump.on_iteration,
     )
     pump.check()
+
+    # **本番の塊(案5)と、平滑化する前の密度場。** ここが `?debug=space` / `?voxel=1` の正で、
+    # 上の `stage="derive"` は「実行ボタンからすぐ見える速報」でしかない。
+    dbg.space("final", result.space)
+    dbg.anchors("final", result.space)
+    if result.run is not None and result.run.get("result") is not None:
+        dbg.rho("final", result.space.grid, result.run["result"].rho)
 
     surface = result.run["surface"]
     grid = result.space.grid

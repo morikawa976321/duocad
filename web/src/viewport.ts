@@ -104,6 +104,65 @@ export interface OptimizeLoadVisual {
   vector: [number, number, number] | null
 }
 
+/**
+ * **開発用のデバッグ表示**(`web/src/debugFlags.ts` のURLパラメータでだけ出る)。
+ *
+ * 契約の正は `duocad/optimize_run.py` の `_DebugSink`。**製品の既定の画面には出ない** ——
+ * `setOptimizeDebug(null)`(既定)のあいだ、ここのオブジェクトは1つも生まれない。
+ *
+ * 座標は**ワールドmm**。要素 (i,j,k) の中心は `origin + spacing*(i+0.5, j+0.5, k+0.5)`、
+ * その角の節点 (i,j,k) は `origin + spacing*(i,j,k)`(セル中心の規約。
+ * `duocad/topopt/mesh.py:169`)。**サーバ側で足し引きしていない**ので、ここで足す。
+ */
+export interface OptimizeDebugGrid {
+  origin: number[]
+  spacing: number
+  shape: number[]
+}
+
+/** 立方体で描く要素の集合。`elements` はC順の通し添字 `i*(ny*nz) + j*nz + k`。 */
+export interface OptimizeDebugVoxels {
+  grid: OptimizeDebugGrid
+  elements: number[]
+  /** 本当の数(間引く前)。`shown` と違えば `stride` で間引かれている。 */
+  total: number
+  shown: number
+  stride: number
+}
+
+/**
+ * 拘束/荷重に割り当たった格子節点。`points` はワールドmmの平坦な [x,y,z,...]。
+ *
+ * **`grid` を必ず渡すこと。** 球の半径は要素サイズから決めるので、これが無いと
+ * `?debug=anchors` を単独で付けたとき(塊も密度場も来ない)に別の基準で描くことになり、
+ * **同じ節点が題材によって違う大きさで出る**(2026-09-05 QA指摘)。
+ */
+export interface OptimizeDebugAnchors {
+  grid: OptimizeDebugGrid
+  fixed: { face: number; count: number; points: number[] }
+  load: { face: number; count: number; points: number[] }
+}
+
+/**
+ * `setOptimizeDebug` が受け取る**まるごとの状態**(差分ではない)。
+ *
+ * 呼ぶたびに全部作り直す —— 種類ごとに部分更新する口にすると、「塊だけ古い」状態が
+ * 生まれ、切り分けの道具としての信用が消える。
+ */
+export interface OptimizeDebugState {
+  /** 塊(設計空間)。`?debug=space`。 */
+  space: OptimizeDebugVoxels | null
+  /** 平滑化する前の密度場。`?voxel=1`。 */
+  rho: OptimizeDebugVoxels | null
+  /** 面アンカーの節点。`?debug=anchors`。 */
+  anchors: OptimizeDebugAnchors | null
+  /**
+   * ボクセルの代わりに隠すボディ(`?voxel=1` の結果ボディ)。**表示だけ**の話で、
+   * 文書の可視状態には触れない(サーバへは何も送らない)。
+   */
+  hiddenBodyId: string | null
+}
+
 /** `setOptimizeState` が受け取る、形状最適化(第3のモード)の見た目の元。 */
 export interface OptimizeVisualState {
   preserveBodies: string[]
@@ -309,6 +368,32 @@ export interface Viewport {
    * ピックの対象は増やさない(`allFaceMeshes` は変わらない)。
    */
   setOptimizeState(state: OptimizeVisualState | null): void
+  /**
+   * **開発用のデバッグ表示**(塊・平滑化前のボクセル・面アンカーの節点)。
+   * `null`(既定)なら何も描かない —— **フラグを付けない利用者の画面は1画素も変わらない。**
+   *
+   * 描くものは装飾で、**指せない**(`allFaceMeshes` は変わらない)。面アンカーの球は
+   * **深度検査を切って最前面**に描く(形状の裏側の節点も見えないと、
+   * 「見えているつもりで見えていない」になる)。
+   */
+  setOptimizeDebug(state: OptimizeDebugState | null): void
+  /**
+   * デバッグ表示のいまの数え(実機検査用。何も描いていなければ全部0)。
+   *
+   * `anchorsDepthTest` を出しているのは**罠を機械で見張るため** —— 節点は深度検査を
+   * 切って最前面に描く決まりで、これを落とすと「見えているつもりで見えていない」になる。
+   * 目視では気づけないので `false` であることを実機検査が確かめる。
+   */
+  optimizeDebugCounts(): {
+    space: number
+    rho: number
+    fixed: number
+    load: number
+    spaceStride: number
+    rhoStride: number
+    anchorsDepthTest: boolean | null
+    hiddenBodyId: string | null
+  }
   // ------------------------------------------------------------------ D: 辺
   /**
    * 辺の折れ線を出す(`bodyId` に null を渡すと消える)。**出している間だけ辺を指せる**。
@@ -700,6 +785,15 @@ const OPTIMIZE_FIXTURE_COLOR = 0x3f7fc2
 /** 拘束の固定記号(四角錐)と、荷重の矢印・ラベルの色。面の塗りとは別に見分ける。 */
 const OPTIMIZE_FIXTURE_MARK_COLOR = 0x1c3550
 const OPTIMIZE_LOAD_COLOR = 0xffc857
+/**
+ * **開発用のデバッグ表示の色**(`?debug=space` / `?debug=anchors` / `?voxel=1`)。
+ * probe(`probe_topopt/web/index.html`)から**そのまま持ってきた値**で、見え方を
+ * 揃えてある —— 突き合わせのときに「色が違うから別物に見える」を起こさないため。
+ */
+const DEBUG_SPACE_COLOR = 0x39445e
+const DEBUG_RHO_COLOR = 0xbfc7d5
+const DEBUG_ANCHOR_FIXED_COLOR = 0x2ee6a8
+const DEBUG_ANCHOR_LOAD_COLOR = 0xff5c2e
 /** 面の境界線。背景(`BACKGROUND_COLOR`)に埋もれないよう、2026-08-23に`GRID_COLOR`と
     同程度の明るさへ上げた。`PICK_EDGE_COLOR`とは見分けがつく明るさを保つ(下記コメント)。 */
 const EDGE_COLOR = 0x3f4a56
@@ -807,6 +901,8 @@ const LAYER = {
   basePlaneHover: -1,
   solid: 0,
   optimize: 1,
+  /** 開発用のデバッグ表示(既定では何も描かない)。注記より手前、辺より奥。 */
+  debug: 2,
   edge: 10,
   region: 11,
   sketchLine: 12,
@@ -1085,6 +1181,29 @@ export function createViewport(container: HTMLElement): Viewport {
   optimizeRoot.renderOrder = LAYER.optimize
   scene.add(optimizeRoot)
   let optimizeDisposables: Array<{ dispose(): void }> = []
+
+  // ------------------------------------------------------------------ 開発用のデバッグ表示
+  //
+  // 塊(`?debug=space`)・平滑化前のボクセル(`?voxel=1`)・面アンカーの節点
+  // (`?debug=anchors`)。**`root` には入れない**(`optimizeRoot` と同じ理由 ——
+  // 外接直方体に混ざると初回フレーミングやnear/far、グリッドの範囲まで歪む)。
+  // ピックの対象にも足さない。`setOptimizeDebug` が唯一の書き手で、
+  // **既定(`null`)では子が1つも生まれない。**
+  const debugRoot = new THREE.Group()
+  debugRoot.renderOrder = LAYER.debug
+  scene.add(debugRoot)
+  let debugDisposables: Array<{ dispose(): void }> = []
+  let debugCounts: {
+    space: number
+    rho: number
+    fixed: number
+    load: number
+    spaceStride: number
+    rhoStride: number
+    anchorsDepthTest: boolean | null
+  } = { space: 0, rho: 0, fixed: 0, load: 0, spaceStride: 1, rhoStride: 1, anchorsDepthTest: null }
+  /** `?voxel=1` で隠している結果ボディ。**表示だけ**(文書には触れない)。 */
+  let debugHiddenBodyId: string | null = null
 
   // ------------------------------------------------------------------ 平面グリッド(3段固定・無限)
   //
@@ -2099,6 +2218,11 @@ export function createViewport(container: HTMLElement): Viewport {
     if (!framed && frameToContent()) {
       framed = true
     }
+
+    // **作り直したボディに、デバッグ表示の「隠す」を当て直す。** `?voxel=1` は結果ボディを
+    // 隠してボクセルを見せる —— ここで当て直さないと、結果が届いた直後の状態配信で
+    // ボディが生まれ直し、平滑化メッシュとボクセルが重なって両方読めなくなる。
+    applyDebugHidden()
   }
 
   // ------------------------------------------------------------------ プレビュー(幽霊)
@@ -2735,6 +2859,168 @@ export function createViewport(container: HTMLElement): Viewport {
         })
       }
     }
+  }
+
+  // ------------------------------------------------------------------ 開発用のデバッグ表示
+  //
+  // **probe(`probe_topopt/web/index.html`)にしか無かった3つを本体へ移したもの。**
+  // probe は `design_space.CASES` の合成題材しか描けなかったが、ここは
+  // **いま走らせた最適化そのもの**(利用者が置いた条件・利用者のボディ)を描く ——
+  // 切り分けの道具が、切り分けたい対象を扱えないことがそもそもの問題だった。
+  //
+  // 出所と規約は `duocad/optimize_run.py` の `_DebugSink`。
+  function clearOptimizeDebug(): void {
+    debugRoot.clear()
+    for (const item of debugDisposables) item.dispose()
+    debugDisposables = []
+    debugCounts = {
+      space: 0,
+      rho: 0,
+      fixed: 0,
+      load: 0,
+      spaceStride: 1,
+      rhoStride: 1,
+      anchorsDepthTest: null,
+    }
+  }
+
+  /**
+   * 要素の通し添字 → 立方体の `InstancedMesh`。
+   *
+   * **セル中心の規約**(`duocad/topopt/mesh.py:169`): 要素 (i,j,k) の中心は
+   * `origin + spacing*(i+0.5, j+0.5, k+0.5)`。**半要素ずらすと形が丸ごと動く**ので、
+   * ここが唯一の変換点である(サーバ側は素の添字しか送らない)。
+   */
+  function buildDebugVoxels(voxels: OptimizeDebugVoxels, material: THREE.Material): THREE.InstancedMesh {
+    const [, ny, nz] = voxels.grid.shape
+    const spacing = voxels.grid.spacing
+    const [ox, oy, oz] = voxels.grid.origin
+    const geometry = new THREE.BoxGeometry(spacing, spacing, spacing)
+    const count = voxels.elements.length
+    const mesh = new THREE.InstancedMesh(geometry, material, Math.max(count, 1))
+    mesh.count = count
+    const dummy = new THREE.Object3D()
+    for (let i = 0; i < count; i += 1) {
+      const flat = voxels.elements[i]
+      const ex = Math.floor(flat / (ny * nz))
+      const rest = flat - ex * ny * nz
+      const ey = Math.floor(rest / nz)
+      const ez = rest - ey * nz
+      dummy.position.set(
+        ox + spacing * (ex + 0.5),
+        oy + spacing * (ey + 0.5),
+        oz + spacing * (ez + 0.5),
+      )
+      dummy.updateMatrix()
+      mesh.setMatrixAt(i, dummy.matrix)
+    }
+    mesh.instanceMatrix.needsUpdate = true
+    // **指せない。** `frustumCulled` は既定のままでよい(`InstancedMesh` は
+    // `computeBoundingSphere()` を自前で持つ)。
+    mesh.computeBoundingSphere()
+    // **`InstancedMesh` 自身も片付ける**(インスタンス行列のGPUバッファを持っている)。
+    debugDisposables.push(geometry, material, mesh)
+    return mesh
+  }
+
+  /**
+   * 節点を球で描く。**深度検査を切って最前面**(`depthTest: false`)——
+   * 形状の裏側にある節点(拘束面はたいていカメラの反対側)まで見えていないと、
+   * 「見えているつもりで見えていない」になる(probe から引き継いだ罠)。
+   */
+  function buildDebugNodes(
+    points: number[],
+    radius: number,
+    color: number,
+  ): THREE.InstancedMesh {
+    const count = Math.floor(points.length / 3)
+    const geometry = new THREE.SphereGeometry(radius, 12, 8)
+    const material = new THREE.MeshLambertMaterial({
+      color,
+      emissive: color,
+      emissiveIntensity: 0.6,
+      depthTest: false,
+      depthWrite: false,
+    })
+    const mesh = new THREE.InstancedMesh(geometry, material, Math.max(count, 1))
+    mesh.count = count
+    mesh.renderOrder = LAYER.debug
+    const dummy = new THREE.Object3D()
+    for (let i = 0; i < count; i += 1) {
+      dummy.position.set(points[3 * i], points[3 * i + 1], points[3 * i + 2])
+      dummy.updateMatrix()
+      mesh.setMatrixAt(i, dummy.matrix)
+    }
+    mesh.instanceMatrix.needsUpdate = true
+    mesh.computeBoundingSphere()
+    debugDisposables.push(geometry, material, mesh)
+    return mesh
+  }
+
+  /** `?voxel=1` で隠している結果ボディの表示を当て直す(`update()` が作り直した後にも要る)。 */
+  function applyDebugHidden(): void {
+    if (debugHiddenBodyId !== null) setBodyVisible(debugHiddenBodyId, false)
+  }
+
+  function setOptimizeDebug(state: OptimizeDebugState | null): void {
+    // 前回隠したボディを戻す(次の状態がまた隠すなら下でもう一度隠す)。
+    if (debugHiddenBodyId !== null) setBodyVisible(debugHiddenBodyId, true)
+    debugHiddenBodyId = null
+    clearOptimizeDebug()
+    if (state === null) return
+
+    if (state.space !== null && state.space.elements.length > 0) {
+      // **半透明で薄く重ねる**(probe の `?debug=space` と同じ)。塊は「答えの周りの箱」
+      // なので、不透明にすると中の形が1つも見えない。
+      const mesh = buildDebugVoxels(
+        state.space,
+        new THREE.MeshLambertMaterial({
+          color: DEBUG_SPACE_COLOR,
+          transparent: true,
+          opacity: 0.28,
+          depthWrite: false,
+        }),
+      )
+      mesh.renderOrder = LAYER.debug
+      debugRoot.add(mesh)
+      debugCounts.space = state.space.elements.length
+      debugCounts.spaceStride = state.space.stride
+    }
+
+    if (state.rho !== null && state.rho.elements.length > 0) {
+      // **平滑化する前のボクセルそのもの**(`?voxel=1`)。不透明で描く ——
+      // marching cubes を通す前の階段が見えることがこの表示の目的である。
+      const mesh = buildDebugVoxels(
+        state.rho,
+        new THREE.MeshLambertMaterial({ color: DEBUG_RHO_COLOR }),
+      )
+      debugRoot.add(mesh)
+      debugCounts.rho = state.rho.elements.length
+      debugCounts.rhoStride = state.rho.stride
+    }
+
+    if (state.anchors !== null) {
+      // 球の半径は**格子の要素サイズ**に合わせる(節点の間隔が要素サイズなので、
+      // 0.34要素なら隣とくっつかずに数えられる。probe と同じ比率)。
+      // **アンカー自身が持っている格子**を使う(サーバが必ず載せてくる)。
+      // 塊や密度場を頼んでいないときでも同じ大きさになる。
+      const radius = state.anchors.grid.spacing * 0.34
+      const fixed = buildDebugNodes(state.anchors.fixed.points, radius, DEBUG_ANCHOR_FIXED_COLOR)
+      const load = buildDebugNodes(state.anchors.load.points, radius, DEBUG_ANCHOR_LOAD_COLOR)
+      debugRoot.add(fixed)
+      debugRoot.add(load)
+      debugCounts.fixed = fixed.count
+      debugCounts.load = load.count
+      // **材質から読み直す**(定数を写さない) —— 写すと、材質側だけ直したときに
+      // 検査が古い値で合格し続ける。**両方の OR** にしてあるのは、片方だけ深度検査を
+      // 戻した退化を見逃さないため(2026-09-05 QA指摘。以前は固定側しか見ていなかった)。
+      debugCounts.anchorsDepthTest =
+        (fixed.material as THREE.Material).depthTest ||
+        (load.material as THREE.Material).depthTest
+    }
+
+    debugHiddenBodyId = state.hiddenBodyId
+    applyDebugHidden()
   }
 
   /**
@@ -4538,6 +4824,10 @@ export function createViewport(container: HTMLElement): Viewport {
     highlight,
     highlightBodies,
     setOptimizeState,
+    setOptimizeDebug,
+    optimizeDebugCounts() {
+      return { ...debugCounts, hiddenBodyId: debugHiddenBodyId }
+    },
     showEdges,
     showBasePlanes,
     pickRegions,
@@ -4668,6 +4958,7 @@ export function createViewport(container: HTMLElement): Viewport {
       previewMaterial.dispose()
       edgeMaterial.dispose()
       clearOptimizeAnnotations()
+      clearOptimizeDebug()
       renderer.dispose()
       renderer.domElement.remove()
     },

@@ -751,6 +751,54 @@ export interface OptimizeRunOptions {
   rminMm?: number | null
   elementSizeMm?: number | null
   name?: string | null
+  /**
+   * 開発用の可視化を頼む(`'space'` / `'anchors'` / `'rho'`)。**既定は空**で、
+   * 空のときサーバは配列を1本も作らない。頼んだぶんが `onOptimizeDebug` へ届く。
+   * 決めるのは `debugFlags.ts`(URLパラメータ)であって、画面の操作ではない。
+   */
+  debug?: OptimizeDebugKind[]
+}
+
+/** 開発用の可視化の種類(`duocad/optimize_run.py` の `DEBUG_KINDS`)。 */
+export type OptimizeDebugKind = 'space' | 'anchors' | 'rho'
+
+/** 格子(`duocad/topopt/voxelize.py` の `Grid.as_dict`)。要素 (i,j,k) の中心は
+ *  `origin + spacing*(i+0.5, j+0.5, k+0.5)`(セル中心の規約)。 */
+export interface OptimizeDebugGrid {
+  origin: number[]
+  spacing: number
+  shape: number[]
+}
+
+/**
+ * 開発用の可視化1件(`duocad/optimize_run.py` の `_DebugSink`)。**頼んだときしか来ない。**
+ *
+ * `stage` は `'derive'`(実行直後に届く速報。案1=bboxの塊)か `'final'`(本番の案5の塊と
+ * 実際に解いた密度場)。**同じ `kind` が2回届く**ので、後から来たほうで置き換えること。
+ *
+ * `elements` は立っている要素の通し添字(C順 `i*(ny*nz) + j*nz + k`)。
+ * `total` が本当の数、`shown` が配った数、`stride` が間引きの幅(1なら間引いていない)。
+ */
+export interface OptimizeDebugPayload {
+  kind: OptimizeDebugKind
+  stage: 'derive' | 'final'
+  grid: OptimizeDebugGrid
+  /** `kind` が `'space'` / `'rho'` のとき。 */
+  elements?: number[]
+  total?: number
+  shown?: number
+  stride?: number
+  threshold?: number
+  /** `kind` が `'anchors'` のとき。`points` は**ワールドmm**の平坦な [x,y,z,...]。 */
+  fixed?: OptimizeDebugAnchor
+  load?: OptimizeDebugAnchor
+}
+
+export interface OptimizeDebugAnchor {
+  face: number
+  count: number
+  points: number[]
+  area_mm2: number
 }
 
 export type ConnectionStatus = 'connecting' | 'open' | 'closed'
@@ -790,6 +838,8 @@ export interface SessionHooks {
   onOptimizeStatus(running: boolean, cancelling: boolean): void
   /** 進捗1件(反復ごと・候補材料量ごと)。 */
   onOptimizeProgress(event: OptimizeProgress): void
+  /** 開発用の可視化が届いた(頼んだときだけ。`OptimizeDebugPayload`)。 */
+  onOptimizeDebug(payload: OptimizeDebugPayload): void
   /** 走り終わった。**`state` が "done" でなければ文書は変わっていない。** */
   onOptimizeResult(result: OptimizeResultPayload): void
   /**
@@ -1076,6 +1126,8 @@ export function createSession(hooks: SessionHooks): Session {
       hooks.onOptimizeStatus(message.running ?? false, message.cancelling ?? false)
     } else if (message.type === 'optimize_progress') {
       hooks.onOptimizeProgress(message as unknown as OptimizeProgress)
+    } else if (message.type === 'optimize_debug') {
+      hooks.onOptimizeDebug(message as unknown as OptimizeDebugPayload)
     } else if (message.type === 'optimize_result') {
       hooks.onOptimizeResult(message as unknown as OptimizeResultPayload)
     } else if (message.type === 'optimize_error') {
@@ -1189,6 +1241,9 @@ export function createSession(hooks: SessionHooks): Session {
         rmin_mm: options.rminMm ?? null,
         element_size_mm: options.elementSizeMm ?? null,
         name: options.name ?? null,
+        // **空配列は送らない。** 古いサーバは知らないキーを無視するだけだが、
+        // 「頼んでいない」ことが送信の中身からも読めるようにしておく。
+        ...(options.debug && options.debug.length > 0 ? { debug: options.debug } : {}),
       })
     },
     cancelOptimization() {

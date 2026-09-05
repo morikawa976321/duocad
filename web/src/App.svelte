@@ -61,6 +61,7 @@
     type EdgesPayload,
     type FilePayload,
     type OptimizeConditionsReport,
+    type OptimizeDebugPayload,
     type OptimizeProgress,
     type OptimizeResolutionPayload,
     type OptimizeResultPayload,
@@ -74,6 +75,12 @@
     type VerticesPayload,
   } from './session'
   import AiPanel from './AiPanel.svelte'
+  import {
+    anyDebugFlag,
+    debugKindsFor,
+    readDebugFlags,
+    type DebugFlags,
+  } from './debugFlags'
   import SettingsDialog from './SettingsDialog.svelte'
   import { loadFov, saveFov } from './viewSettings'
   import {
@@ -447,6 +454,7 @@
       optimizeCancelling = running && cancelling ? true : running ? optimizeCancelling : false
     },
     onOptimizeProgress: (event) => (optimizeProgress = event),
+    onOptimizeDebug: handleOptimizeDebug,
     onOptimizeResult: handleOptimizeResult,
     onOptimizeError: (message, problems, cancelled) => {
       optimizeProgress = null
@@ -459,6 +467,9 @@
         }
         return
       }
+      // **デバッグ表示は消さない**(2026-09-05 QA指摘への回答)。失敗したときこそ
+      // 「塊が悪いのか最適化が悪いのか」を見たいので、`stage:'derive'` で届いた塊と
+      // 節点は残す。古くなる心配は無い —— 次の実行が `runOptimization()` の先頭で消す。
       optimizeNotice = { kind: 'bad', lines: [message, ...problems] }
       fail(`最適化: ${message}`)
     },
@@ -497,11 +508,88 @@
   function runOptimization(): void {
     optimizeProgress = null
     optimizeNotice = null
+    // **前の実行のデバッグ表示を捨ててから走らせる。** 残すと、新しい条件を解いている
+    // あいだ古い塊が重なって見え、切り分けの道具が切り分けを妨げる。
+    clearOptimizeDebug()
     session.runOptimization({
       rminMm: optimizeRminMm,
       elementSizeMm: optimizeStep?.element_size_mm ?? null,
+      debug: debugKindsFor(debugFlags),
     })
   }
+
+  // ---------------------------------------------------------------- H2: 開発用のデバッグ表示
+  //
+  // **URLパラメータでだけ出る**(`debugFlags.ts`)。フラグが1つも立っていなければ、
+  // ここは `session.runOptimization` に空配列を渡すだけで、サーバも画面も何もしない ——
+  // **製品の既定の画面は1ピクセルも変わらない。**
+  //
+  // probe との違いは「デモ題材に固定されていない」こと(このタスクの完了条件2)。
+  // 材料は**いま走らせた最適化そのもの**から来るので、利用者が置いた任意の条件・
+  // 任意のボディで出る。
+  const debugFlags: DebugFlags = readDebugFlags(
+    typeof location === 'undefined' ? '' : location.search,
+  )
+  let optimizeDebugSpace = $state<OptimizeDebugPayload | null>(null)
+  let optimizeDebugRho = $state<OptimizeDebugPayload | null>(null)
+  let optimizeDebugAnchors = $state<OptimizeDebugPayload | null>(null)
+  /** `?voxel=1` のときだけ入る、隠す結果ボディ。**表示だけ**(文書には触れない)。 */
+  let optimizeDebugHiddenBodyId = $state<string | null>(null)
+
+  function clearOptimizeDebug(): void {
+    optimizeDebugSpace = null
+    optimizeDebugRho = null
+    optimizeDebugAnchors = null
+    optimizeDebugHiddenBodyId = null
+  }
+
+  /**
+   * デバッグ配信が届いた。**同じ `kind` が2回来る**(`stage: 'derive'` の速報 →
+   * `stage: 'final'` の本番)ので、後から来たほうで置き換える。
+   */
+  function handleOptimizeDebug(payload: OptimizeDebugPayload): void {
+    if (payload.kind === 'space') optimizeDebugSpace = payload
+    else if (payload.kind === 'rho') optimizeDebugRho = payload
+    else if (payload.kind === 'anchors') optimizeDebugAnchors = payload
+  }
+
+  /**
+   * デバッグ表示をビューポートへ当てる。**フラグが1つも立っていなければ呼ばない** ——
+   * `setOptimizeDebug(null)` すら送らないので、既定の画面には触れる経路が無い。
+   */
+  $effect(() => {
+    if (!anyDebugFlag(debugFlags)) return
+    // **依存を先に読み切ってから呼ぶ。** `viewport?.setOptimizeDebug({...})` と直接書くと、
+    // 初回に `viewport` がまだ未定義(`onMount` で入る)のとき**オプショナル連鎖が
+    // 引数の評価ごと飛ばす**ので、この効果は依存を1つも登録できず**二度と再実行されない**
+    // —— 症状は「フラグを付けても何も出ない」で、型検査にもコンソールにも出ない。
+    const voxels = (payload: OptimizeDebugPayload | null, want: boolean) =>
+      want && payload?.elements
+        ? {
+            grid: payload.grid,
+            elements: payload.elements,
+            total: payload.total ?? payload.elements.length,
+            shown: payload.shown ?? payload.elements.length,
+            stride: payload.stride ?? 1,
+          }
+        : null
+    const next = {
+      space: voxels(optimizeDebugSpace, debugFlags.space),
+      rho: voxels(optimizeDebugRho, debugFlags.voxel),
+      anchors:
+        debugFlags.anchors && optimizeDebugAnchors?.fixed && optimizeDebugAnchors.load
+          ? {
+              // **格子も渡す**(球の半径が要素サイズから決まる。`?debug=anchors` 単独でも
+              // 同じ大きさになるように。2026-09-05 QA指摘)。
+              grid: optimizeDebugAnchors.grid,
+              fixed: optimizeDebugAnchors.fixed,
+              load: optimizeDebugAnchors.load,
+            }
+          : null,
+      hiddenBodyId: optimizeDebugHiddenBodyId,
+    }
+    viewport?.setOptimizeDebug(next)
+  })
 
   /**
    * 結果を受けた。**`state` で3つに分かれる**(`20260904-1704` の契約①)。
@@ -525,6 +613,14 @@
         ],
       }
       note(`最適化が終わった: ${result.name}`)
+      // **`?voxel=1`: 平滑化メッシュへ差し替えず、ボクセルのまま止める。**
+      // **数十msだけ両方が見える**(密度場はメッシュ化より前に届き、隠す相手の `body_id` が
+      // 分かるのは結果が届いてからなので、その間だけ重なる。2026-09-05 QA指摘)。
+      // 消すには「まだ存在しないボディを先に隠す」口が要るので、過渡として受け入れている。
+      // probe は最初からボクセルしか描いていなかったので「差し替えない」で済んだが、
+      // 本体の結果は**文書に入るメッシュボディ**なので、代わりに**表示だけ隠す**。
+      // 文書は1ビットも変えない(隠すのはビューポートのローカルな見え方だけ)。
+      if (debugFlags.voxel && result.body_id) optimizeDebugHiddenBodyId = result.body_id
       return
     }
     optimizeNotice = {
@@ -1835,6 +1931,42 @@
       optimizeProgress,
       optimizeNotice,
       optimizeAnnotations: () => viewport?.optimizeAnnotations() ?? { fixtures: [], loads: [] },
+      // H2: 開発用のデバッグ表示。**読むだけ**の穴で、フラグを付けていなければ全部0。
+      // 画面にフラグの状態を出さない(出すと「フラグ無しの画面と同じ」を壊す)ので、
+      // 実機検査はここと `location.search` で確かめる。
+      debugFlags,
+      // **サーバから届いた生のまま**(面の添字・担当面積・間引く前の総数)。probe が
+      // 画面の文字で出していた情報(`面アンカー: 固定=面3 20節点 / …`)の移し先で、
+      // ここが無いと「何節点出たか」しか外から読めない。**頂点の配列は外す**(数百KB)。
+      // **`$state.snapshot` を通す。** `$state` は入れ子まで Proxy にするので、
+      // 素のスプレッドだと**入れ子のオブジェクトだけが `{}` になって外へ出る**
+      // (puppeteer の `evaluate` は Proxy をたどらない。2026-09-05実測: `grid` が空だった)。
+      optimizeDebugPayloads: () => {
+        const strip = (payload: OptimizeDebugPayload | null, ...drop: string[]) => {
+          if (payload === null) return null
+          const copy = $state.snapshot(payload) as Record<string, unknown>
+          for (const key of drop) delete copy[key]
+          if (copy.fixed) delete (copy.fixed as Record<string, unknown>).points
+          if (copy.load) delete (copy.load as Record<string, unknown>).points
+          return copy
+        }
+        return {
+          space: strip(optimizeDebugSpace, 'elements'),
+          rho: strip(optimizeDebugRho, 'elements'),
+          anchors: strip(optimizeDebugAnchors),
+        }
+      },
+      optimizeDebugCounts: () =>
+        viewport?.optimizeDebugCounts() ?? {
+          space: 0,
+          rho: 0,
+          fixed: 0,
+          load: 0,
+          spaceStride: 1,
+          rhoStride: 1,
+          anchorsDepthTest: null,
+          hiddenBodyId: null,
+        },
       // C: スケッチ。**実機検査が本物のクリックで描く**ための穴
       sketches,
       activeSketch: sketchId,

@@ -774,11 +774,17 @@ class Session:
         max_evaluations: Any = None,
         name: Any = None,
         progress: Any = None,
+        debug: Any = None,
+        debug_kinds: Any = None,
     ) -> dict:
         """形状最適化を端から端まで走らせ、結果をメッシュボディとして足す。
 
         **重い(数十秒〜数分)。** 呼び出し側はイベントループを塞がないよう別スレッドで
         回すこと(`asyncio.to_thread`)。`progress(event: dict)` はそのスレッドから呼ばれる。
+
+        `debug` / `debug_kinds` は開発用の可視化(画面の `?debug=space` / `?debug=anchors` /
+        `?voxel=1`)の材料をそのまま `optimize_run.run()` へ渡す口。**頼まなければ費用ゼロ**で、
+        結果にも文書にも1ビットも影響しない。
 
         戻り値は `optimize_run.run()` のものに、成功時だけ `"applied"`(変更イベントの封筒)を
         足したもの。**`state != "done"` のときは文書を1ビットも変えていない**。
@@ -797,6 +803,8 @@ class Session:
             options,
             progress=progress,
             should_cancel=self._optimize_cancel.is_set,
+            debug=debug,
+            debug_kinds=debug_kinds,
         )
         if result.get("warning"):
             # 既存の警告の口へ載せる(新しい運び方を作らない)。

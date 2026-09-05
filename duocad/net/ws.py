@@ -504,7 +504,8 @@ class Server:
             # -------------------------------------------------- H: 形状最適化を走らせる
             # **verbではない**(`catalog` の `category="protocol"`) —— 応答は状態配信ではなく
             # 専用のイベント(`optimize_conditions` / `optimize_resolution` /
-            # `optimize_status` / `optimize_progress` / `optimize_result` / `optimize_error`)。
+            # `optimize_status` / `optimize_progress` / `optimize_result` / `optimize_error` /
+            # 頼まれたときだけ `optimize_debug`)。
             # 結果が文書へ入ったことは、`Session` のリスナ経由(`_on_core_change`)で
             # 通常の状態配信として別途届く。
             elif command == "optimize_conditions":
@@ -777,6 +778,14 @@ class Server:
             for key in ("rmin_mm", "element_size_mm", "target_safety_factor", "name")
             if message.get(key) is not None
         }
+        # **開発用の可視化を頼まれたか**(画面の `?debug=space` / `?debug=anchors` /
+        # `?voxel=1`)。頼まれた種類だけを `optimize_debug` イベントで配る。
+        # **既定は空** —— 付けなければサーバは配列を1本も作らず、既定の画面は1画素も変わらない。
+        wanted = message.get("debug")
+        if isinstance(wanted, (list, tuple)):
+            kinds = [str(k) for k in wanted if str(k) in optimize_run.DEBUG_KINDS]
+            if kinds:
+                kwargs["debug_kinds"] = kinds
         self._optimize_running = True
         await self._broadcast({"type": "optimize_status", **self._optimize_status()})
         task = asyncio.get_running_loop().create_task(self._optimize_run(kwargs))
@@ -796,6 +805,8 @@ class Server:
         """
         payload: dict
         try:
+            if "debug_kinds" in kwargs:
+                kwargs["debug"] = self._optimize_debug
             result = await asyncio.to_thread(
                 functools.partial(
                     self.session.run_optimization, progress=self._optimize_progress, **kwargs
@@ -823,6 +834,16 @@ class Server:
         の契約①)。**素の値だけでできている**のでそのまま載せてよい。
         """
         self._emit_event({"type": "optimize_progress", **event})
+
+    def _optimize_debug(self, event: dict) -> None:
+        """開発用の可視化(塊・面アンカーの節点・平滑化前の密度場)。**進捗とは別の口**。
+
+        進捗に混ぜないのは、こちらが数十万要素の配列を積んだ大きなメッセージで、
+        画面のパネル(いま何反復目か)とは寿命も読み手も違うため。**頼んだときしか流れない**
+        (`run_optimization` の `debug` に種類を並べる)。中身の形は
+        `optimize_run._DebugSink` を見ること。
+        """
+        self._emit_event({"type": "optimize_debug", **event})
 
     async def _optimize_cancel(self, connection: Any) -> None:
         """中断の旗を立てる。**実際に降りるのは次に進捗が出た時点**(粗い段の中では止まらない)。

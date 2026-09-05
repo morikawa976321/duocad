@@ -519,3 +519,119 @@ def test_importing_the_session_does_not_pull_in_the_topopt_layer() -> None:
     )
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "[]", out.stdout
+
+
+# --------------------------------------------------------------------------------------
+# 9. 開発用のデバッグ表示(`?debug=space` / `?debug=anchors` / `?voxel=1`。20260905-1700)
+#
+# 端から端まで(本物のSIMPを1回通して塊・節点・密度場が実ブラウザに出る)は
+# `web/scripts/smoke-optimize-debug.mjs`。ここで固定するのは、**外れても例外が出ないまま
+# 静かに間違う**2点である: (a) セル中心の規約(半要素ずれても絵は出る)、
+# (b) 頼んでいない配信が起きない(＝既定の実行に費用が乗らない)。
+# --------------------------------------------------------------------------------------
+def test_debug_voxels_carry_the_cell_centre_convention() -> None:
+    """通し添字はC順(`i*(ny*nz) + j*nz + k`)。**画面はこれを中心へ戻す。**
+
+    ここがずれると、画面のボクセルが半要素ぶん(あるいは丸ごと)動く —— 絵は出るので
+    目視では気づけない(`duocad/topopt/mesh.py:169` のセル中心の規約)。
+    """
+    import numpy as np
+
+    from duocad.topopt import voxelize as vx
+
+    grid = vx.Grid(origin=(1.0, 2.0, 3.0), spacing=0.5, shape=(2, 3, 4))
+    mask = np.zeros(grid.shape, dtype=bool)
+    mask[0, 0, 0] = True
+    mask[1, 2, 3] = True
+    payload = optimize_run._debug_voxel_payload("space", "derive", grid, mask, limit=10_000)
+
+    assert payload["kind"] == "space"
+    assert payload["stage"] == "derive"
+    assert payload["grid"] == {"origin": [1.0, 2.0, 3.0], "spacing": 0.5, "shape": [2, 3, 4]}
+    assert payload["elements"] == [0, 1 * (3 * 4) + 2 * 4 + 3]
+    assert payload["total"] == 2 and payload["shown"] == 2 and payload["stride"] == 1
+
+    # 画面がやる復元(`viewport.ts` の `buildDebugVoxels`)と同じ算術で中心へ戻す。
+    _, ny, nz = grid.shape
+    for flat, want in zip(payload["elements"], [(0, 0, 0), (1, 2, 3)]):
+        ex, rest = divmod(flat, ny * nz)
+        ey, ez = divmod(rest, nz)
+        assert (ex, ey, ez) == want
+        assert grid.center_of(ex, ey, ez).tolist() == pytest.approx(
+            [
+                1.0 + 0.5 * (ex + 0.5),
+                2.0 + 0.5 * (ey + 0.5),
+                3.0 + 0.5 * (ez + 0.5),
+            ]
+        )
+
+
+def test_debug_voxels_thin_out_instead_of_shipping_a_million_cubes() -> None:
+    """上限を超えたら**軸方向に間引く**。間引いたことが payload から読めること。
+
+    立方体1個 = 12三角形なので、実物の部品の塊(5〜12万要素)をそのまま出すと
+    60〜144万三角形になる。**黙って全部送らない**(画面が固まる)、
+    **黙って切り捨てない**(「全部見えている」と誤解する)、の両方を守る。
+    """
+    import numpy as np
+
+    from duocad.topopt import voxelize as vx
+
+    grid = vx.Grid(origin=(0.0, 0.0, 0.0), spacing=1.0, shape=(10, 10, 10))
+    mask = np.ones(grid.shape, dtype=bool)
+    payload = optimize_run._debug_voxel_payload("space", "final", grid, mask, limit=200)
+
+    assert payload["total"] == 1000
+    assert payload["stride"] == 2  # 5*5*5 = 125 <= 200(stride=1 の 1000 は超える)
+    assert payload["shown"] == 125
+    assert len(payload["elements"]) == 125
+    # 間引いても**格子の添字のまま**である(座標を作り直していない)。
+    _, ny, nz = grid.shape
+    for flat in payload["elements"]:
+        ex, rest = divmod(flat, ny * nz)
+        ey, ez = divmod(rest, nz)
+        assert ex % 2 == 0 and ey % 2 == 0 and ez % 2 == 0
+
+
+def test_debug_sink_builds_nothing_unless_asked() -> None:
+    """**頼まれた種類だけ**を作る。頼まれなければ `numpy` の配列を1本も作らない。
+
+    これが崩れると、フラグを付けていない利用者の実行にデバッグ配信の費用が乗る
+    (数十万要素の `argwhere` + JSON 化)。`wants()` が門で、`space()` /
+    `anchors()` / `rho()` はその門を必ず先に通る。
+    """
+    import numpy as np
+
+    from duocad.topopt import voxelize as vx
+
+    grid = vx.Grid(origin=(0.0, 0.0, 0.0), spacing=1.0, shape=(2, 2, 2))
+
+    class _Space:
+        def __init__(self) -> None:
+            self.grid = grid
+            self.mask = np.ones(grid.shape, dtype=bool)
+            self.table = None
+
+    events: list = []
+    # (a) sink が無い → 何も呼ばれない・例外も出ない
+    quiet = optimize_run._DebugSink(None, optimize_run.DEBUG_KINDS)
+    assert not quiet.wants("space")
+    quiet.space("derive", _Space())
+    quiet.rho("final", grid, np.ones(grid.shape))
+
+    # (b) 頼んだ種類だけ通る
+    sink = optimize_run._DebugSink(events.append, ["space"])
+    assert sink.wants("space") and not sink.wants("rho") and not sink.wants("anchors")
+    sink.space("derive", _Space())
+    sink.rho("final", grid, np.ones(grid.shape))
+    sink.anchors("derive", _Space())
+    assert [event["kind"] for event in events] == ["space"]
+
+    # (c) 表が無い塊ではアンカーを配らない(検査が直接組んだ塊。**例外にしない**)
+    events.clear()
+    both = optimize_run._DebugSink(events.append, ["anchors", "rho"])
+    both.anchors("derive", _Space())
+    assert events == []
+    both.rho("final", grid, np.ones(grid.shape))
+    assert [event["kind"] for event in events] == ["rho"]
+    assert events[0]["threshold"] == pytest.approx(optimize_run.DEBUG_RHO_THRESHOLD)
