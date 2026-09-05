@@ -6,7 +6,7 @@ import type { BasePlaneName } from './session'
 /**
  * ワールドの上方向 —— **X=右 / Y=奥 / Z=上の右手系**(Fusion 360・Blender・スライサと
  * 同じ、CADの標準)。カーネル(OCCT/build123d)は元から Z-up で、`_BASE_PLANE_AXES` の
- * "XY" の法線も `(0,0,1)` である。**ずれていたのはビューアだけだった**(2026-08-28に是正)。
+ * "XY" の法線も `(0,0,1)` である。
  *
  * **`(0,0,1)` をこのファイルの他の場所へ直書きしないこと。** up軸の値が2か所以上に散ると
  * 次の改修で必ず片方が取り残される —— 直前まで `camera.up.set(0, 1, 0)` の直書きが2か所
@@ -58,16 +58,14 @@ export const OPTIMIZE_FIXTURE_MARK_COLOR = 0x1c3550
 export const OPTIMIZE_LOAD_COLOR = 0xffc857
 /**
  * **開発用のデバッグ表示の色**(`?debug=space` / `?debug=anchors` / `?voxel=1`)。
- * 旧実験場(`probe_topopt/web/index.html`。2026-09-05に削除)から**そのまま持ってきた値**で、
- * 見え方を揃えてある —— 移設の突き合わせで「色が違うから別物に見える」を起こさないため。
- * `docs/topopt-smooth-compare/` の16枚と同じ見え方を保つ意味でも、勝手に動かさないこと。
+ * `docs/topopt-smooth-compare/` の16枚と同じ見え方を保つので、勝手に動かさないこと。
  */
 export const DEBUG_SPACE_COLOR = 0x39445e
 export const DEBUG_RHO_COLOR = 0xbfc7d5
 export const DEBUG_ANCHOR_FIXED_COLOR = 0x2ee6a8
 export const DEBUG_ANCHOR_LOAD_COLOR = 0xff5c2e
-/** 面の境界線。背景(`BACKGROUND_COLOR`)に埋もれないよう、2026-08-23に`GRID_COLOR`と
-    同程度の明るさへ上げた。`PICK_EDGE_COLOR`とは見分けがつく明るさを保つ(下記コメント)。 */
+/** 面の境界線。背景(`BACKGROUND_COLOR`)に埋もれないよう`GRID_COLOR`と同程度の明るさに
+    してある。`PICK_EDGE_COLOR`とは見分けがつく明るさを保つ(下記コメント)。 */
 export const EDGE_COLOR = 0x3f4a56
 /** 選べる辺。面の境界線(`EDGE_COLOR`)と**見分けがつく明るさ**にする。 */
 export const PICK_EDGE_COLOR = 0xbfd4ea
@@ -86,7 +84,7 @@ export const BACKGROUND_COLOR = 0x161a1f
 /**
  * 平面グリッドの格子線。単位は mm。**刻みは 1/10/100mm の3段固定**(`gridScale.ts` の
  * `TIERS`)で、内容の大きさでも視点でも変わらない —— 変わるのは段ごとの不透明度だけで、
- * 線の太さがそのまま寸法の意味になる(2026-09-03本人決定)。描くのは `planeGrid.ts` の
+ * 線の太さがそのまま寸法の意味になる。描くのは `planeGrid.ts` の
  * 無限グリッドで、範囲という概念を持たない。`root` には入れない(初回フレーミングが
  * グリッドの箱に引っ張られるのを避ける)。
  */
@@ -192,7 +190,7 @@ export const LAYER = {
 export const DEPTH_BIAS_UNIT = 1.0e-4
 
 /**
- * B群の層番号(大きいほどカメラ側)。**`sketchFaceGrid` は別枠**(2026-09-03) ——
+ * B群の層番号(大きいほどカメラ側)。**`sketchFaceGrid` は別枠** ——
  * 任意面のスケッチ平面は貼り付けた面(A群のソリッド。深度書き込みあり)と完全に同一平面で
  * 争うので、床・基準平面グリッド(`planeGrid`。通常は開いた空間に浮いていて争う相手がいない)
  * と同じバイアス経路を使いつつ、層番号だけ分けて併記事項の規約(層は名前付き定数表)に従う。
@@ -215,7 +213,7 @@ export const FOV_MAX = 90
 export const FOV_DEFAULT = 30
 
 /**
- * 完全正投影を表す画角(2026-08-28本人指示で追加)。**「とても小さい画角」ではない**
+ * 完全正投影を表す画角。**「とても小さい画角」ではない**
  * —— これを渡すと `PerspectiveCamera` ではなく `OrthographicCamera` が使われ、
  * パースが完全に消える(同じ長さの辺は奥行きが違っても同じ長さに写る)。
  */
@@ -260,7 +258,7 @@ export const CLICK_MOVE_LIMIT_PX = 6
 export const CLICK_TIME_LIMIT_MS = 500
 
 /**
- * ホバー強調で上げる明度(HSLのL)。**3色目は足さない**(2026-08-27本人決定) ——
+ * ホバー強調で上げる明度(HSLのL)。**3色目は足さない** ——
  * 色相が「誰の選択か」(user=橙 / proposed=水色)、明度が「今カーソルの下にあるか」を
  * 表す2軸にする。未選択にも選択済みにも同じ幅で掛けるので、規則は
  * 「カーソルの下にあるものは明るい」の1行で済む。

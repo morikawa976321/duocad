@@ -14,10 +14,8 @@
  */
 
 /**
- * 端セル(辺・角)の厚み(全体を1とした比率)。面セルは `1 - 2*EDGE_T`。
- *
- * 0.3 は3等分にほぼ等しく、面と辺の主従が付かなかった。**0.25 にして面セルを
- * 一辺の40%から50%へ広げた**(端セルは30%→25%。面:辺 = 2:1)。2026-09-03本人指示。
+ * 端セル(辺・角)の厚み(全体を1とした比率)。面セルは `1 - 2*EDGE_T` で、
+ * 面:辺 の面積比はおよそ 2:1 になる(3等分だと主従が付かない)。
  */
 export const EDGE_T = 0.25
 
@@ -96,8 +94,7 @@ export function cellDirection(i: number, j: number, k: number): [number, number,
  * **世界の+ZをGram-Schmidt射影で `d` に直交化して返す**: `up = normalize(zHat - (zHat・d) d)`。
  * three.js の `camera.lookAt` / `Matrix4.lookAt` が「upヒント」から基底を作るときに内部で
  * 行っている直交化と同一の式なので、**このモジュールが+Zを厳密な直交ベクトルとして返しても
- * lookAt側の見え方(カメラの姿勢)は変わらない** —— 従来「非直交のヒントのままでよい」としていた
- * 判断を撤回し、`upForDirection` の出力そのものを直交ベクトルにする(2026-09-03 QA指摘で修正)。
+ * lookAt側の見え方(カメラの姿勢)は変わらない**。
  *
  * `d` が水平(`z===0`)なら射影は何もせず結果はそのまま `(0,0,1)`(既定+Zの記述と矛盾しない)。
  *
@@ -113,8 +110,8 @@ export function upForDirection(d: readonly [number, number, number]): [number, n
   const uy = -z * d[1]
   const uz = 1 - z * d[2]
   const length = Math.hypot(ux, uy, uz)
-  // `-0` を避ける(`+ 0` はIEEE754で `-0 -> 0` にだけ効き、他の値は変えない) —— 
+  // `-0` を避ける(`+ 0` はIEEE754で `-0 -> 0` にだけ効き、他の値は変えない) ——
   // 水平方向では ux/uy が厳密に0のはずなのに符号だけ `-0` になり、`Object.is` ベースの
-  // 等値検査(`assert.deepEqual` の strict版)で `0` と食い違って見える(2026-09-03実測)。
+  // 等値検査(`assert.deepEqual` の strict版)で `0` と食い違って見える。
   return [ux / length + 0, uy / length + 0, uz / length + 0]
 }
