@@ -10,9 +10,9 @@
  * メインカメラの向きに追従させる**(タスク仕様 —— キューブ側を回転させると、正投影/透視の
  * 切替やupの変更で崩れる回転行列の逆算が要る)。
  *
- * **カメラは本編と同じ「2台持ち」**(2026-09-04 —— 本編のFOVに追従して同じ強さでひずむように
- * なった。`cubePerspective`/`cubeOrthographic` を作り置きし、`cubeActive` がいま使っている方を
- * 指す。1台の可変カメラにしなかったのは本編(`activateCamera`)と同じ理由 —— 投影の種類が
+ * **カメラは本編と同じ「2台持ち」**(`cubePerspective`/`cubeOrthographic` を作り置きし、
+ * `cubeActive` がいま使っている方を指す)。1台の可変カメラにしなかったのは
+ * 本編(`activateCamera`)と同じ理由 —— 投影の種類が
  * 変わるたびに作り直すと、`cubeLight`(カメラの子)の付け替えと`updateProjectionMatrix`の
  * 呼び忘れが両方の経路に散る)。
  */
@@ -26,7 +26,6 @@ import { BASE_COLOR, FOV_DEFAULT, HOME_VIEW_OFFSET, HOVER_LIGHTEN, lighten } fro
  * ビューキューブ(常設・26領域)。一辺[画素]と右上の余白[画素]。
  * ビューポート左上には浮くブラウザがある([[duocad-ui-moved-to-fusion-layout]])ので右上は空いている。
  *
- * 初版は120px角だったが小さく読み取りにくかったので **144px** へ広げた(2026-09-03本人指示)。
  * **これはクリックを吸う矩形でもある**(`viewCubeRect` / `insideCubeRect`)ので、広げるほど
  * 右上でモデルを指せる領域が減る。`web/scripts/smoke-files.mjs` の空白クリック候補のように
  * 画面の隅を突く検査があることに注意(落とし穴は [[viewport-resize-silently-changes-what-a-click-grabs]])。
@@ -40,7 +39,7 @@ export const CUBE_SNAP_MS = 300
 /** キューブ用正投影カメラの視錐台半幅。キューブは半幅1の立方体(対角 `sqrt(3)`)なので、
  *  角が切れない程度に広く取る。
  *
- *  **2026-09-04以降、透視のときの距離式( `CUBE_ORTHO_HALF / sin(fov/2)` )の分子としても使う**
+ *  **透視のときの距離式( `CUBE_ORTHO_HALF / sin(fov/2)` )の分子としても使う**
  *  ——「見かけの大きさが正投影のいまの見え方とおおむね揃う係数」がこの値そのものなので、
  *  定数を2本持たずに済む。fov→0でこの式はdistance→∞に発散し、正投影の見え方へ連続的に
  *  近づく(あいだで見え方が飛ばない)。 */

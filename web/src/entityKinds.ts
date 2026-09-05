@@ -24,7 +24,7 @@ interface EntityKindSpec {
    * この種別を作るverb名(`add_*`)。`ghostEntity` の逆引きに使う。
    *
    * **省略できる** —— `bezier` はこれを作るverbが無い(取り込み `import_svg` だけが作り、
-   * 人もAIもベジエを1本ずつは足せない。2026-08-26本人裁定)。verbが無い種別は
+   * 人もAIもベジエを1本ずつは足せない)。verbが無い種別は
    * 幽霊(確定前の姿)も持たないので、`fromArgs` ではなく表ごと持たない形にしてある。
    */
   verb?: string
@@ -58,8 +58,7 @@ interface EntityKindSpec {
   /** `params` を (u,v) の折れ線へ(円・円弧は分割線で近似)。コアの `Entity.params` のキーを
    *  そのまま読む(`duocad/sketch.py` の `Entity` docstring)。
    *
-   *  **`resolution` は「いまの画面でどれくらい細かく折るか」**(`adaptiveResolution.ts`)。
-   *  以前は分割数が固定(円1周64)で、寄ると多角形の角が見えていた。 */
+   *  **`resolution` は「いまの画面でどれくらい細かく折るか」**(`adaptiveResolution.ts`)。 */
   toPoints(params: Record<string, number>, resolution: ViewResolution): Array<[number, number]>
   /**
    * **動かせる点**の (xキー, yキー)。コアの `EntityKindOps.points`(`duocad/sketch.py`)と

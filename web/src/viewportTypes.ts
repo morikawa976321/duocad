@@ -101,7 +101,7 @@ export interface OptimizeDebugVoxels {
  *
  * **`grid` を必ず渡すこと。** 球の半径は要素サイズから決めるので、これが無いと
  * `?debug=anchors` を単独で付けたとき(塊も密度場も来ない)に別の基準で描くことになり、
- * **同じ節点が題材によって違う大きさで出る**(2026-09-05 QA指摘)。
+ * **同じ節点が題材によって違う大きさで出る**。
  */
 export interface OptimizeDebugAnchors {
   grid: OptimizeDebugGrid
@@ -230,7 +230,7 @@ export interface BodyGeometryUpdate {
 /**
  * クリックが選択集合に対して何をするか。修飾キーから決まる。
  *
- * **2026-08-30に `add` / `remove` を `toggle` の1つへ統一した**(本人明言:
+ * **`add` / `remove` ではなく `toggle` の1つにしてある**(本人明言:
  * 「間違えたらもう一回クリックすればいいので、除外専用の機能は実質無意味」)。
  * Shift も Ctrl(Mac は Meta)も同じ `toggle` で、既存の選択を消さずに
  * 「入っていれば外す・入っていなければ足す」。修飾なしは今までどおり `replace`。
@@ -508,7 +508,7 @@ export interface Viewport {
    * 数で機械的に確かめる(`setOptimizeState` が空にすると0に戻る)。
    *
    * **種別を区別しない粗い数**なので、拘束と荷重の取り違え・向きの逆転・ラベル欠落までは
-   * 検出できない(2026-08-31 QA指摘)。そこまで見るには `optimizeAnnotations()` を使うこと。
+   * 検出できない。そこまで見るには `optimizeAnnotations()` を使うこと。
    */
   optimizeAnnotationCount(): number
   /**
@@ -517,7 +517,7 @@ export interface Viewport {
    * `fixtures` は固定記号を置いた面の参照、`loads` は矢印ごとの単位ベクトルとラベル文字列
    * (`"250N"` のような表示テキストそのもの)。**種別を区別して数える・向きとラベルを
    * 突き合わせる**ところまで実機検査で確かめられるようにするための穴
-   * (`optimizeAnnotationCount()` の粗さを補う。2026-08-31 QA指摘)。
+   * (`optimizeAnnotationCount()` の粗さを補う)。
    */
   optimizeAnnotations(): {
     fixtures: FaceRef[]
@@ -564,7 +564,7 @@ export interface Viewport {
    */
   clearPreview(): void
   /**
-   * **既にあるボディを変換した姿**を、ブラウザだけで半透明に重ねる(2026-09-05。`move_body`)。
+   * **既にあるボディを変換した姿**を、ブラウザだけで半透明に重ねる(`move_body`)。
    *
    * `showPreview` との違いは3つ:
    *
@@ -621,7 +621,7 @@ export interface Viewport {
    */
   showSketchGhost(sketchId: string, entity: { kind: string; params: Record<string, number> } | null): void
   /**
-   * 確定前の図形(スケッチの幽霊)を**複数**描く(2026-09-04。`move_sketch_entities` 用)。
+   * 確定前の図形(スケッチの幽霊)を**複数**描く(`move_sketch_entities` 用)。
    * 空配列で消える。**個々の図形は`buildEntityLine`が失敗しても他は描く**(表に無い種別・
    * 折れ線化できない図形が1つ混ざっていても、残りの幽霊まで消さない)。
    */
@@ -639,7 +639,7 @@ export interface Viewport {
   /**
    * 今あるもの全体が入る視点へ戻す。
    *
-   * **`lookAtSketch` の戻り道ではない**(2026-08-26)。抜けたときの復帰は
+   * **`lookAtSketch` の戻り道ではない**。抜けたときの復帰は
    * `setActiveSketch(null)` が「入る前の視点」へ戻す形で担う。こちらは
    * 「今あるもの全体」という別の視点で、実機検査が図形を画面内へ収めるために呼ぶ。
    */
@@ -647,7 +647,7 @@ export interface Viewport {
   /**
    * 新規文書にしたときに呼ぶ。**カメラは動かさない**(新規は空の文書で、合わせる内容が
    * 無いため`frameAll`を呼ぶ理由が無い)。基準グリッドの縮小だけを許可する
-   * (`frameAll`と同じヒステリシスの「許可」を、姿勢を動かさずに与える。2026-08-30)。
+   * (`frameAll`と同じヒステリシスの「許可」を、姿勢を動かさずに与える)。
    */
   resetGrid(): void
   /**
@@ -684,7 +684,7 @@ export interface Viewport {
    * どれだけ変わったか」は、同じモデル・同じ視点で両方を測って初めて言える ——
    * 版を戻して測り直すのでは、機械が後から回せる証拠にならない
    * (`web/scripts/smoke-face-culling.mjs`)。切ると `focus` を送らなくなるので、
-   * サーバは2026-08-29時点の「文書全体で1つの精度」と同じ振る舞いに戻る。
+   * サーバは面ごとの精度指定を送る前の「文書全体で1つの精度」と同じ振る舞いに戻る。
    */
   setFaceCulling(enabled: boolean): void
   /**
@@ -715,7 +715,7 @@ export interface Viewport {
    * 後者は `OrbitControls` が生成時の up を `_quat` へ焼き込む仕様のせいで**静かに壊れる**
    * 種類の不具合で、画面の見た目からは分からない。
    *
-   * `near`/`far` も返す(2026-08-30)。こちらも実機検査の穴で、文書の状態ではないので
+   * `near`/`far` も返す。こちらも実機検査の穴で、文書の状態ではないので
    * コアへは何も飛ばさない(`App.svelte` の `window.__duocad` と同じ方針)。
    */
   cameraPose(): {
@@ -728,17 +728,16 @@ export interface Viewport {
   /**
    * 基準平面の**ピック範囲**の今の半幅[mm](`gridScale.ts` の `extentFor` が導いた値)。
    * near/farの下限と面外の軸線の長さも同じ値から引く。**描画の範囲ではない** ——
-   * 格子はシェーダーで無限に描く(2026-09-03)。
+   * 格子はシェーダーで無限に描く。
    *
-   * **実機検査フック専用**(2026-08-30) —— 「指せる範囲が大きなモデルに合わせて広がった」
+   * **実機検査フック専用** —— 「指せる範囲が大きなモデルに合わせて広がった」
    * ことは見た目からは何mmかまで分からないので、値そのものを機械で見られるようにする。
    * 文書の状態ではないので、コアへは何も飛ばさない(`cameraPose` と同じ方針)。
    */
   gridScale(): { extent: number }
   /**
-   * グリッドの3段(1/10/100mm)の今の見え方。**実機検査フック専用**(2026-09-03に
-   * `gridScale().step` を置き換えたもの —— 刻みが固定になり `step` は何も語らなくなった
-   * ので、代わりに「いま各段がどれだけ濃いか」と「どの平面を出しているか」を出す)。
+   * グリッドの3段(1/10/100mm)の今の見え方。**実機検査フック専用** —— 刻みは固定なので、
+   * 代わりに「いま各段がどれだけ濃いか」と「どの平面を出しているか」を出す。
    *
    * `planes` は表示中の平面の名前で、基準平面(`XY`/`XZ`/`YZ`)か、任意面へのスケッチ中は
    * `sketch-face`(名前は `desiredGridPlanes` が付ける)。
@@ -747,8 +746,8 @@ export interface Viewport {
    * 任意面でないときは null)。`planeBounds` は `planes` と同じ並びの枠(中心と半径)。
    * `depthBiasLayers` は `planes` と同じ並びの深度バイアス層番号(`DEPTH_BIAS_LAYER`)。
    * 任意面のグリッドが基準平面と別枠(`sketchFaceGrid`)を使っているかを機械で見るための穴
-   * (2026-09-03 QA指摘 —— frameが基準平面と数値的に一致する実ジオメトリの面でも、
-   * 正しく `sketchFaceGrid` になっていることをここで検査する)。
+   * (frameが基準平面と数値的に一致する実ジオメトリの面でも、正しく `sketchFaceGrid` に
+   * なっていることをここで検査する)。
    */
   gridTiers(): {
     mmPerPixel: number
