@@ -94,7 +94,7 @@ const camera = new THREE.PerspectiveCamera(${FOV}, ${WIDTH} / ${HEIGHT}, 0.1, 50
 let current = null;
 function b64(s) { const bin = atob(s); const u8 = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i); return u8.buffer; }
-window.__show = async (name, side, view, dist) => {
+window.__show = async (name, side, view, dist, center) => {
   if (current) { scene.remove(current); current.geometry.dispose(); current.material.dispose(); }
   const res = await fetch('/data/' + name + '_' + side + '.json');
   const p = await res.json();
@@ -104,10 +104,11 @@ window.__show = async (name, side, view, dist) => {
   g.computeVertexNormals();
   current = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: ${MESH_COLOR} }));
   scene.add(current);
-  camera.position.copy(new THREE.Vector3(...view.dir).normalize().multiplyScalar(dist));
+  const c = new THREE.Vector3(...center);
+  camera.position.copy(new THREE.Vector3(...view.dir).normalize().multiplyScalar(dist).add(c));
   camera.near = Math.max(dist / 500, 0.01); camera.far = dist * 20;
   camera.up.set(0, 0, 1);
-  camera.lookAt(0, 0, 0);
+  camera.lookAt(c);
   headLight.position.copy(camera.position);
   camera.updateProjectionMatrix();
   renderer.render(scene, camera);
@@ -139,7 +140,22 @@ function vertsOf (name, side) {
   return new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength))
 }
 
-function distanceFor (name, dir) {
+/** 左右**両方**の外接箱の中心。左右で同じ点を見るので比較の土俵は崩れない。 */
+function centerFor (name) {
+  const lo = [Infinity, Infinity, Infinity]
+  const hi = [-Infinity, -Infinity, -Infinity]
+  for (const side of ['left', 'right']) {
+    const v = vertsOf(name, side)
+    for (let i = 0; i < v.length; i += 3) {
+      for (let a = 0; a < 3; a++) {
+        lo[a] = Math.min(lo[a], v[i + a]); hi[a] = Math.max(hi[a], v[i + a])
+      }
+    }
+  }
+  return [0, 1, 2].map((a) => (lo[a] + hi[a]) / 2)
+}
+
+function distanceFor (name, dir, center) {
   const d = (() => { const n = Math.hypot(...dir); return dir.map((v) => v / n) })()
   // カメラは原点を見る。up=(0,0,1)。視線に平行な up は使わない題材が無いので特別扱いしない。
   const up = [0, 0, 1]
@@ -155,7 +171,7 @@ function distanceFor (name, dir) {
   for (const side of ['left', 'right']) {
     const v = vertsOf(name, side)
     for (let i = 0; i < v.length; i += 3) {
-      const p = [v[i], v[i + 1], v[i + 2]]
+      const p = [v[i] - center[0], v[i + 1] - center[1], v[i + 2] - center[2]]
       const along = p[0] * d[0] + p[1] * d[1] + p[2] * d[2]
       const x = Math.abs(p[0] * r[0] + p[1] * r[1] + p[2] * r[2])
       const y = Math.abs(p[0] * u[0] + p[1] * u[1] + p[2] * u[2])
@@ -166,11 +182,12 @@ function distanceFor (name, dir) {
 }
 
 for (const name of manifest.cases) {
+  const center = centerFor(name)
   for (const [key, view] of Object.entries(VIEWS)) {
-    const dist = distanceFor(name, view.dir) * view.zoom
+    const dist = distanceFor(name, view.dir, center) * view.zoom
     for (const side of ['left', 'right']) {
       const info = await page.evaluate(
-        (n, s, v, r) => window.__show(n, s, v, r), name, side, view, dist)
+        (n, s, v, r, c) => window.__show(n, s, v, r, c), name, side, view, dist, center)
       if (!(info.triangles > 0)) {
         throw new Error(`${name}/${side}/${key}: 三角形が1つもGPUへ行っていない(真っ黒の合格を防ぐ)`)
       }
