@@ -305,6 +305,8 @@ export const MOVE_SKETCH_ENTITIES: CommandDef = {
       placeholder: 'mm',
       // 片方の軸だけ動かすのは普通なので0は弾かない(両方0だけを `build` が断る)。
       reject: () => null,
+      // 空欄はこの軸を動かさない(=0)扱い。両軸とも空欄(=両方0)は`build`が別途弾く。
+      default: 0,
     },
     {
       kind: 'number',
@@ -314,6 +316,7 @@ export const MOVE_SKETCH_ENTITIES: CommandDef = {
       inputId: 'sketch-move-dy',
       placeholder: 'mm',
       reject: () => null,
+      default: 0,
     },
   ],
   build(values) {

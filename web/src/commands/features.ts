@@ -359,6 +359,8 @@ export const MOVE_BODY: CommandDef = {
       inputId: 'move-body-dx',
       placeholder: 'mm',
       reject: finite('X'),
+      // 空欄はこの軸を動かさない(=0)扱い。3軸とも空欄(=全部0)は`build`が別途弾く。
+      default: 0,
     },
     {
       kind: 'number',
@@ -368,6 +370,7 @@ export const MOVE_BODY: CommandDef = {
       inputId: 'move-body-dy',
       placeholder: 'mm',
       reject: finite('Y'),
+      default: 0,
     },
     {
       kind: 'number',
@@ -377,6 +380,7 @@ export const MOVE_BODY: CommandDef = {
       inputId: 'move-body-dz',
       placeholder: 'mm',
       reject: finite('Z'),
+      default: 0,
     },
   ],
   build(values) {

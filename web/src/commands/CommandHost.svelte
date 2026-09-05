@@ -247,7 +247,9 @@
         if (chosen) collected[spec.name] = chosen
       } else {
         const raw = (numberText[spec.name] ?? '').trim()
-        const parsed = raw === '' ? Number.NaN : Number.parseFloat(raw)
+        // 空欄で `default` を持つ引数(move系のdx/dy/dz)は、打っていない軸を0扱いにして
+        // 空欄のまま確定できる(`NumberArgSpec.default`のdocstring参照)。
+        const parsed = raw === '' ? (spec.default ?? Number.NaN) : Number.parseFloat(raw)
         if (Number.isFinite(parsed)) collected[spec.name] = parsed
       }
     }

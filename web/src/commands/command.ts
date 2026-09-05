@@ -152,6 +152,14 @@ export interface NumberArgSpec {
   placeholder: string
   /** 使えない値なら理由を返す(使えるなら null)。 */
   reject(value: number): string | null
+  /**
+   * 空欄のまま確定してよい引数だけが持つ既定値。**opt-in**(個別のverbが明示的に
+   * 付けるフィールドで、汎用の既定値ではない) —— 半径・距離・個数など「空欄=
+   * まだ決めていない」べき引数に付けると、0が有効値でないところへ黙って0が埋まって
+   * 壊れる(`move_body`のdx/dy/dz・`move_sketch_entities`のdx/dyのように「空欄=その軸は
+   * 動かさない」が成立する引数だけに付けること)。
+   */
+  default?: number
 }
 
 /**
