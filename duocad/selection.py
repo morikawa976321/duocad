@@ -3,7 +3,7 @@
 選択は `Document.selection` が持つ(コアの状態)。**保存はしない** —— 保存・再生の対象は
 操作ログだけであり、選択はセッション状態である。
 
-**選択の変更も可視性の変更も操作ログに積まない**(どちらもundoの単位ではない。2026-08-26)。
+**選択の変更も可視性の変更も操作ログに積まない**(どちらもundoの単位ではない)。
 可視性は `Body.visible` という**文書の状態**を変えるが、それでもログには載せない —— 理由は
 `set_visible` の docstring。したがって Ctrl+Z / Ctrl+Y では戻らず、**保存もされない**
 (保存の実体は操作ログのJSONなので、開き直した文書は全ボディが可視で始まる)。ただし
@@ -96,7 +96,7 @@ class SelectionAmbiguous(ValueError):
 #: ShapeRef の kind(§3.5)。領域は RegionRef 側で表す。
 SHAPE_KINDS = ("face", "edge", "vertex")
 
-#: **ソリッドを丸ごと指す種別**(2026-08-31。形状最適化の保持/除外ソリッドのため)。
+#: **ソリッドを丸ごと指す種別**(形状最適化の保持/除外ソリッドのため)。
 #:
 #: 参照の形は `{"body": BodyId, "kind": "body", "index": None, "provenance": None}` で、
 #: **`index` は使わない**(Bodyは他のBodyの部分形状ではないので、数え上げる添字が無い)。
@@ -117,7 +117,7 @@ BODY_BEARING_KINDS = SHAPE_KINDS + (BODY_KIND,)
 REGION_KIND = "region"
 
 #: `confirmed_items(kind=...)` に渡せる名前の全体
-#: スケッチの図形そのものを指す種別(2026-08-30。`move_sketch_entities` の対象)。
+#: スケッチの図形そのものを指す種別(`move_sketch_entities` の対象)。
 #:
 #: 参照の形は `{"sketch": SketchId, "entity": EntityId, "point": str|None, "provenance": None}`。
 #: **`point` が None なら「辺」= 図形1つ全体**、文字列ならその点(`sketch.entity_point_keys` の
@@ -245,7 +245,7 @@ def modify_selection(
     remove_list = list(remove)
     # 全参照を検査してから書き換える(途中で落ちると選択が壊れる)。
     # `bodies`/`counts` を add/remove の両呼び出しで共有し、同じ (body_id, kind) を
-    # この1回の modify_selection の中で2回数えない(2026-09-04)。
+    # この1回の modify_selection の中で2回数えない。
     bodies: dict = {}
     counts: dict = {}
     coerced_add = _coerce_refs(doc, add_list, bodies=bodies, counts=counts)
@@ -396,7 +396,7 @@ def require_sketch_entities(doc: Document) -> List[dict]:
 def require_bodies(doc: Document) -> List[BodyId]:
     """確定選択の**面・辺・頂点が属するBody**を、最初に現れた順で重複なく返す(`move_body` 用)。
 
-    **「ボディ選択」という新しい概念は作らない**(2026-08-30本人判断) —— ShapeRef が既に
+    **「ボディ選択」という新しい概念は作らない** —— ShapeRef が既に
     `body` を持つので、そこから逆引きすれば足りる。同じBodyの面と辺が両方選ばれていれば
     1つに畳む(同じボディを2回動かさない)。
 
@@ -406,7 +406,7 @@ def require_bodies(doc: Document) -> List[BodyId]:
     """
     ordered: List[BodyId] = []
     for item in confirmed_items(doc):
-        # **`kind="body"` の参照もここへ入る**(2026-08-31)。Bodyを直に指す種別を作った以上、
+        # **`kind="body"` の参照もここへ入る**。Bodyを直に指す種別を作った以上、
         # 逆引きの側がそれを見ないと「ボディを選んだのに move_body が対象を見つけない」
         # という、指し方によって結果が変わる穴が開く。
         if ref_kind(item) not in BODY_BEARING_KINDS:
@@ -444,7 +444,7 @@ def require_deletable(doc: Document) -> DeleteTargets:
     """確定選択を**削除できる対象の内訳**へ畳む(verb `delete` 用)。
 
     - 確定選択が**丸ごと空** → `SelectionEmpty`(`_raise_missing` と同じ形)
-    - **領域は無視する**(2026-09-03本人決定。以前は混ざっていると拒否していた)。
+    - **領域は無視する**。
       領域は描くものではなく図形の配置から計算されるだけの見た目で、それ自体を消す
       操作は無い —— 領域を作っている図形を消せば領域も自然に消える。スケッチで範囲を
       選ぶと境界の図形と一緒に領域も選択へ入りがちで、そのたびに実害の無い拒否を
@@ -564,7 +564,7 @@ def _raise_missing(doc: Document, kind: str) -> NoReturn:
 # 可視性 — 選択機構の一部。**verbではない**(操作ログに積まない)
 # --------------------------------------------------------------------------------------
 def set_visible(doc: Document, body_id: BodyId, visible: bool) -> dict:
-    """Bodyの表示・非表示を切り替える。**undo / redo の対象外**(2026-08-26本人決定)。
+    """Bodyの表示・非表示を切り替える。**undo / redo の対象外**。
 
     可視性は形ではなく「何を指せるか」の定義である。形を1つも変えないものがundoの1手を
     消費すると、**奥の面を見るために手前を隠して戻すという「見るための操作」が編集の履歴を
@@ -637,7 +637,7 @@ _KIND_LABELS = {"face": "面", "edge": "辺", "vertex": "頂点"}
 
 
 def _reject_mesh(body, what: str) -> None:
-    """メッシュボディへの面/辺/頂点の参照を断る。**選択の粒度はボディ単位だけ**(2026-09-05)。
+    """メッシュボディへの面/辺/頂点の参照を断る。**選択の粒度はボディ単位だけ**。
 
     三角形メッシュには面の指紋(選択の安定性の仕組み)が無く、面添字に相当するものも無い ——
     `meshbody.geometry` が「面1枚」として配る添字1は payload の形をそろえるためだけの
@@ -654,7 +654,7 @@ def _reject_mesh(body, what: str) -> None:
 
 
 def select_body(doc: Document, body_id: BodyId) -> dict:
-    """**ソリッドを丸ごと**指す参照を作る(2026-08-31。`BODY_KIND` のdocstring)。
+    """**ソリッドを丸ごと**指す参照を作る(`BODY_KIND` のdocstring)。
 
     不可視Body・存在しないBodyは例外(面・辺・頂点と同じ門番 `_visible_body`)。
     `index` は `None` を明示的に持たせる —— キーごと落とすと、参照を読む側が
@@ -720,8 +720,7 @@ def ref_key(ref: dict) -> tuple:
 
     **等価判定を書き下ろす場所はここ1つだけ**にしてある。`same_ref` を別に書くと
     「重複が残る / 別物を同一視する」が静かに入る(`same_ref` のdocstringと同じ趣旨)。
-    ハッシュ可能なタプルなので、`modify_selection` は集合引きで重複を落とせる
-    (2026-09-04。総当たりのM^2をやめた)。
+    ハッシュ可能なタプルなので、`modify_selection` は集合引きで重複を落とせる。
 
     | 種別 | 鍵 |
     |---|---|
@@ -760,7 +759,7 @@ def same_ref(left: dict, right: dict) -> bool:
     removeでは別物」という非対称が静かに入る。種別が違えば別物。
 
     **判定の実体は `ref_key`** —— 鍵と同値判定を別々に書き下ろすと、集合引きで落ちる重複と
-    この関数が言う重複がずれる(2026-09-04)。
+    この関数が言う重複がずれる。
     """
     return ref_key(left) == ref_key(right)
 
@@ -809,7 +808,7 @@ def _coerce_refs(
     bodies: Optional[dict] = None,
     counts: Optional[dict] = None,
 ) -> List[dict]:
-    """`_coerce_ref` を複数件まとめて処理する版(2026-09-04)。
+    """`_coerce_ref` を複数件まとめて処理する版。
 
     面・辺・頂点への参照は `select_face`/`select_edge`/`select_vertex` を経由すると、
     参照1件ごとに `kernel.face_count`/`edge_count`/`count_subshapes` を呼ぶ。その中の
@@ -823,7 +822,7 @@ def _coerce_refs(
     `select_edge` / `select_vertex` / `_shape_ref` が組み立てるのと同じ形をここでも
     そのまま組み立てているだけなので、数える回数を減らしても結果は等価になる。
 
-    `bodies`/`counts` は**呼び出し元と共有できるように引数で受ける**(2026-09-04)。
+    `bodies`/`counts` は**呼び出し元と共有できるように引数で受ける**。
     `modify_selection` は `add`/`remove` の2回この関数を呼ぶが、同じ文書に対する
     1回の呼び出しの中で同じ `(body_id, kind)` を2回数えないよう、呼び出し元が
     1つの辞書を両方の呼び出しへ渡す。省略時(`None`)は呼び出し1回限りの空辞書を
