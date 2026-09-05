@@ -35,7 +35,7 @@ const VIEWS = {
   iso: { dir: [-0.75, 0.5, 0.6], zoom: 1.0 },
   side: { dir: [-0.06, -1.0, 0.08], zoom: 1.0 },   // ほぼ真横。輪郭のシルエットが出る角度
   threeq: { dir: [0.62, 0.66, 0.42], zoom: 1.0 },  // iso の反対側からの3/4
-  iso_zoom: { dir: [-0.75, 0.5, 0.6], zoom: 0.45 } // iso と同じ向きで距離だけ詰めた拡大
+  iso_zoom: { dir: [-0.75, 0.5, 0.6], zoom: 0.62 } // iso と同じ向きで距離だけ詰めた拡大
 }
 const VIEW_NAMES = { iso: 'iso', side: 'side', threeq: 'threeq', iso_zoom: 'zoom' }
 
@@ -49,6 +49,8 @@ const CHROME = [
 if (!CHROME) throw new Error('Chrome が見つからない(DUOCAD_BROWSER で指定する)')
 
 const manifest = JSON.parse(readFileSync(join(DATA, 'manifest.json'), 'utf8'))
+// 面は2つでも3つでもよい(left / mid / right)。manifest が持っている順に描く。
+const SIDES = ['left', 'mid', 'right'].filter((s) => s in manifest.variants)
 
 // three.js は module 形式なので file:// では import できない(CORS)。最小のHTTPサーバを立てる。
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json' }
@@ -129,9 +131,9 @@ await page.goto(`http://127.0.0.1:${PORT}/page`, { waitUntil: 'load' })
 await page.waitForFunction('window.__ready === true', { timeout: 30000 })
 
 /**
- * 題材ごとに**左右両方の頂点が画面に収まる**カメラ距離を1つ決める(左右で画角がずれた
- * 比較は無価値なので、必ず共通の値を使う)。外接球ではなく**その視線方向での実際の
- * 投影**から決める —— 外接球で決めると細長い題材が画面の3分の1にしか映らず、
+ * 題材ごとに**すべての面の頂点が画面に収まる**カメラ距離を1つ決める(面ごとに画角が
+ * ずれた比較は無価値なので、必ず共通の値を使う)。外接球ではなく**その視線方向での
+ * 実際の投影**から決める —— 外接球で決めると細長い題材が画面の3分の1にしか映らず、
  * 問題にしている1要素幅の筋が見えない。
  */
 function vertsOf (name, side) {
@@ -144,7 +146,7 @@ function vertsOf (name, side) {
 function centerFor (name) {
   const lo = [Infinity, Infinity, Infinity]
   const hi = [-Infinity, -Infinity, -Infinity]
-  for (const side of ['left', 'right']) {
+  for (const side of SIDES) {
     const v = vertsOf(name, side)
     for (let i = 0; i < v.length; i += 3) {
       for (let a = 0; a < 3; a++) {
@@ -168,7 +170,7 @@ function distanceFor (name, dir, center) {
   const tanV = Math.tan(vFov / 2)
   const tanH = tanV * (WIDTH / HEIGHT)
   let dist = 0
-  for (const side of ['left', 'right']) {
+  for (const side of SIDES) {
     const v = vertsOf(name, side)
     for (let i = 0; i < v.length; i += 3) {
       const p = [v[i] - center[0], v[i + 1] - center[1], v[i + 2] - center[2]]
@@ -185,7 +187,7 @@ for (const name of manifest.cases) {
   const center = centerFor(name)
   for (const [key, view] of Object.entries(VIEWS)) {
     const dist = distanceFor(name, view.dir, center) * view.zoom
-    for (const side of ['left', 'right']) {
+    for (const side of SIDES) {
       const info = await page.evaluate(
         (n, s, v, r, c) => window.__show(n, s, v, r, c), name, side, view, dist, center)
       if (!(info.triangles > 0)) {

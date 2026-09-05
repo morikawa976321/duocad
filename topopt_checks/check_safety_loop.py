@@ -171,9 +171,14 @@ def check_entry_point() -> tuple[ds.Conditions, float, float]:
     print("\n[3] 入口が端から端まで動く")
     cond, capacity, _solid = _bracket_capacity()
     material_min = capacity * 0.15
-    material_max = capacity * 0.75
-    # 実測(bracket, この解像度)で 15%-75% の区間はおよそ sf 2200 - 6490 に対応する
-    # (docs/TOPOPT.md「単調性を測る」)。中間の 5500 は境界に寄らない値として選んである。
+    # **2026-09-05に上端を 0.75 → 0.70 へ下げた。** `simp.DEFAULT_RMIN` が 1.5 → 2.5 に
+    # なり、**塊の縁でのフィルタの目減りが増えて到達できる材料量の上限が下がった**
+    # (この解像度では容量の約72%が上限。0.75 は案5の粗い段そのものが
+    # `VolumeTargetError` になる)。0.70 は上の [2] が同じ日に実際に通した点である。
+    # **検査を弱めたのではない** —— 下の4つの assert はどれも探索範囲の広さを見ていない。
+    material_max = capacity * 0.70
+    # 実測(bracket, この解像度, rmin=2.5)で 20%/45%/70% が sf 2938/5714/6228。
+    # 5500 は 20%-45% の内側にあり、探索は境界に張り付かない。
     target = 5500.0
     result = sl.solve_for_safety_factor(
         cond,

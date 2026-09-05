@@ -118,8 +118,17 @@ def padded_case(pad: int) -> dict:
 
 
 def solve(case: dict, **kwargs) -> simp.Result:
+    """この検査の合成題材を1回解く。
+
+    **`rmin` は既定で 1.5 を明示する**(2026-09-05)。この検査のしきい値 —— とくに
+    「容量の98%は落ちるが95%は通る」というガードの位置の校正 —— は rmin=1.5 の
+    目減り量で決めてある。`simp.DEFAULT_RMIN` に追随させると、既定が 2.5 になった
+    時点で到達できる上限が 93.8% まで下がり、**校正した 95% の側も落ちる**。
+    ここで見ているのは体積目標の口とガードの位置であってフィルタ半径ではない。
+    """
     nelx, nely, nelz = case["shape"]
     kwargs.setdefault("max_iter", 12)
+    kwargs.setdefault("rmin", 1.5)
     return simp.optimize(
         nelx,
         nely,
@@ -245,7 +254,14 @@ def check_padding_invariance() -> None:
         f"{small.element_count} → {large.element_count} 要素 "
         f"({large.element_count / small.element_count:.2f}倍)",
     )
-    target = 100000.0  # mm^3
+    # **2026-09-05に 100,000 → 70,000 mm^3 へ下げた。** `simp.DEFAULT_RMIN` が 1.5 → 2.5
+    # になり、**塊の縁でのフィルタの目減りが増えて到達できる材料量の上限が下がった**
+    # (この題材の小さい側は塊 295要素 = 127,464 mm^3 で、上限は約74%。100,000 は 78.5%
+    # なので `VolumeTargetError` になる)。**ここは `ds.run_topopt` の実経路なので
+    # `rmin` を明示せず既定のまま通す** —— 上の `solve()` と違い、この節が見たいのは
+    # 「既定の設定で、塊の大きさに関わらず指定どおりの材料が出るか」だからである。
+    # 容量の端の挙動は [3](OC の退化ガード)が別に見ている。
+    target = 70000.0  # mm^3
     got = {}
     for name, space in (("small", small), ("large", large)):
         out = ds.run_topopt(

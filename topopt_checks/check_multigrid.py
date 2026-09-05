@@ -66,7 +66,13 @@ def _rho_after(dims: tuple[int, int, int], iters: int = 8) -> np.ndarray:
     決めるのは `emin=1e-9` と `penal=3` が作る 10^9 の剛性差のほうで、それは設計が二値へ
     寄ってから出てくる。
     """
-    return simp.optimize(*dims, volfrac=0.3, max_iter=iters, solver="mg").rho
+    # **`rmin` を明示する。** この検査のしきい値([4-1]〜[4-4]、[5])はどれも
+    # rmin=1.5 の密度場で校正してある。既定(`simp.DEFAULT_RMIN`)に追随させると、
+    # 2026-09-05 に既定が 2.5 になった時点で密度場が滑らかになり、Jacobi 側の
+    # 反復数の開き([4-2])が 2.4倍 → 1.94倍 まで縮んで検出力の主張が成立しなくなる。
+    # **ここで見たいのは前処理の性質**であってフィルタ半径ではないので、校正時の
+    # 値を固定する(1.5 は `simp.MIN_RMIN` と同じ値だが、意味は「校正値」である)。
+    return simp.optimize(*dims, volfrac=0.3, rmin=1.5, max_iter=iters, solver="mg").rho
 
 
 def _iterations(model: simp.Model, rho: np.ndarray, **kwargs) -> tuple[int, np.ndarray]:

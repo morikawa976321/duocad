@@ -870,7 +870,8 @@ def run_pipeline(
     どちらの経路でも戻り値に mm^3 の実測が入る。
 
     密度フィルタ半径は `rmin`(要素単位)か `rmin_mm`(mm)のどちらか一方(排他。
-    `simp.optimize` と同じ形)。どちらも渡さなければ `simp.DEFAULT_RMIN`(=1.5要素)。
+    `simp.optimize` と同じ形)。どちらも渡さなければ `simp.DEFAULT_RMIN`
+    (**値は動く。床の `simp.MIN_RMIN`(=1.5要素)とは別物**)。
     **要素サイズはここが格子から決めて `simp.optimize` へ渡す**(体積目標と同じ理由)。
     要素サイズから決まる下限を `rmin_mm` が下回ると `simp.FilterRadiusError`。
 

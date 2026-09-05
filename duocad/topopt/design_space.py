@@ -879,7 +879,7 @@ def run_topopt(
     `simp.DEFAULT_VOLFRAC`。
 
     密度フィルタ半径は `rmin`(要素単位)か `rmin_mm`(mm)のどちらか一方(排他)。
-    どちらも渡さなければ `simp.DEFAULT_RMIN`(=1.5要素、既定の挙動は変わらない)。
+    どちらも渡さなければ `simp.DEFAULT_RMIN`(**値は動く。床の `simp.MIN_RMIN` とは別物**)。
     `anchor.run_pipeline` へそのまま渡す(要素サイズはそちらが格子から決める)。
 
     `keep_model=True` は `anchor.run_pipeline` へそのまま渡る(既定 `False`。数値は

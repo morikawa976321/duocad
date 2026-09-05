@@ -67,25 +67,35 @@ def parse_variant(spec: str) -> dict:
     return out
 
 
-def export(left: dict, right: dict, cases: list[str]) -> None:
+def export(variants: dict[str, dict], cases: list[str]) -> None:
+    """`variants` は `{"left": {...}, "mid": {...}, "right": {...}}`(mid は省略可)。
+
+    **同じ `rmin` と解像度の面が2つ以上あれば最適化は1回しか回さない**(σ や Taubin 反復数
+    だけが違う面は、同じ密度場から2本切るのが正しい)。
+    """
     DATA.mkdir(parents=True, exist_ok=True)
-    manifest: dict = {"cases": cases, "views": VIEWS, "variants": {"left": left, "right": right}}
+    manifest: dict = {"cases": cases, "views": VIEWS, "variants": variants}
     for name in cases:
-        for side, var in (("left", left), ("right", right)):
+        runs: dict = {}
+        for side, var in variants.items():
             t0 = time.perf_counter()
-            space = ds.CASES[name].derive_space(
-                elements_long_axis=int(var["n"]),
-                coarse_volfrac=VOLFRAC,
-                coarse_stl_path=DATA / "_coarse.stl",
-            )
-            out = ds.run_topopt(
-                space,
-                volfrac=VOLFRAC,
-                rmin=var["rmin"],
-                max_iter=MAX_ITER,
-                force=tuple(float(v) for v in ds.CASES[name].force),
-                stl_path=DATA / f"{name}_{side}.stl",
-            )
+            key = (float(var["rmin"] or -1.0), int(var["n"]))
+            if key not in runs:
+                space = ds.CASES[name].derive_space(
+                    elements_long_axis=int(var["n"]),
+                    coarse_volfrac=VOLFRAC,
+                    coarse_stl_path=DATA / "_coarse.stl",
+                )
+                out = ds.run_topopt(
+                    space,
+                    volfrac=VOLFRAC,
+                    rmin=var["rmin"],
+                    max_iter=MAX_ITER,
+                    force=tuple(float(v) for v in ds.CASES[name].force),
+                    stl_path=DATA / f"{name}_{side}.stl",
+                )
+                runs[key] = (space, out)
+            space, out = runs[key]
             rho = out["result"].rho
             elem_mm = float(space.grid.element_volume ** (1.0 / 3.0))
             mr = mesh.build_surface(
@@ -127,20 +137,21 @@ def join(cases: list[str]) -> None:
     from PIL import Image, ImageDraw
 
     manifest = json.loads((DATA / "manifest.json").read_text(encoding="utf-8"))
-    left_label = manifest["variants"]["left"]["label"]
-    right_label = manifest["variants"]["right"]["label"]
+    sides = [s for s in ("left", "mid", "right") if s in manifest["variants"]]
     for name in cases:
         for view in VIEWS:
-            a = Image.open(DATA / f"{name}_{view}_left.png").convert("RGB")
-            b = Image.open(DATA / f"{name}_{view}_right.png").convert("RGB")
-            w, h = a.size
+            imgs = [Image.open(DATA / f"{name}_{view}_{s}.png").convert("RGB") for s in sides]
+            w, h = imgs[0].size
             band = 34
-            canvas = Image.new("RGB", (w * 2 + 6, h + band), (10, 10, 18))
-            canvas.paste(a, (0, band))
-            canvas.paste(b, (w + 6, band))
+            gap = 6
+            canvas = Image.new("RGB", (w * len(imgs) + gap * (len(imgs) - 1), h + band),
+                               (10, 10, 18))
             d = ImageDraw.Draw(canvas)
-            d.text((10, 10), f"LEFT  {left_label}", fill=(230, 230, 240))
-            d.text((w + 16, 10), f"RIGHT  {right_label}", fill=(230, 230, 240))
+            for i, (img, side) in enumerate(zip(imgs, sides)):
+                x = i * (w + gap)
+                canvas.paste(img, (x, band))
+                d.text((x + 10, 10), f"{side.upper()}  {manifest['variants'][side]['label']}",
+                       fill=(230, 230, 240))
             canvas.save(SHOTS / f"{name}_{view}.png")
             print(f"  {name}_{view}.png", flush=True)
 
@@ -149,12 +160,17 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("stage", choices=["export", "join"])
     ap.add_argument("--left", default="before:rmin=1.5,sigma=1.0,iters=12")
-    ap.add_argument("--right", default="after:rmin=2.5,sigma=0,iters=12")
+    ap.add_argument("--mid", default="")
+    ap.add_argument("--right", default="after:rmin=2.5,sigma=0,iters=30")
     ap.add_argument("--cases", default=",".join(CASES))
     args = ap.parse_args()
     cases = [c for c in args.cases.split(",") if c]
+    variants = {"left": parse_variant(args.left)}
+    if args.mid:
+        variants["mid"] = parse_variant(args.mid)
+    variants["right"] = parse_variant(args.right)
     if args.stage == "export":
-        export(parse_variant(args.left), parse_variant(args.right), cases)
+        export(variants, cases)
     else:
         join(cases)
     return 0
