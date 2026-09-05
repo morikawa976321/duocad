@@ -165,6 +165,8 @@ def test_a_failing_fillet_raises_and_leaves_nothing_behind(radius: float):
     log_before = len(doc.log.entries)
     all_edges = [edge["index"] for edge in query.describe_edges(shape_before)]
 
+    # 例外の型まで縛る: `Exception` で受けると、`IsDone()` を一度も見ない実装が
+    # 引数検査の TypeError で落ちても緑になり、この検査が空になる。
     with pytest.raises(ValueError):
         fillet(doc, all_edges, radius, body_id=body_id)
 

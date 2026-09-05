@@ -209,7 +209,8 @@ def test_extrude_is_logged_and_undoable():
     """押し出しが操作ログに1行で載り、undoで戻る。
 
     `args["regions"]` は `RegionRef` をそのまま入れると `to_json()` で落ちる ——
-    JSON化できる素のdictであること。
+    JSON化できる素のdictであること。作ったボディのIDを `args["body_id"]` に記録することも
+    固定する — 記録が無いと再生で別のIDになり、保存した選択集合が指す先を失う。
     """
     document = Document()
     sketch_id = split_circle_sketch(document)

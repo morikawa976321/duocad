@@ -122,7 +122,11 @@ def test_a_proposed_selection_is_not_deletable(session: Session) -> None:
 
 
 def test_a_region_in_the_selection_is_ignored_and_the_rest_is_deleted(session: Session) -> None:
-    """領域が選択に混ざっていても、残りは問題なく消える(領域は黙って無視)。"""
+    """領域が選択に混ざっていても、残りは問題なく消える(領域は黙って無視)。
+
+    領域は図形の配置から計算されるだけの見た目で、それ自体を消す操作は無い ——
+    面(=ボディ)を消せば領域も自然に消える。
+    """
     body, sketch_id = _box(session)
     _select(
         session,
