@@ -167,11 +167,11 @@ export const ADD_ARC: CommandDef = {
 }
 
 /**
- * SVGの図形を**いま開いているスケッチへ**足す(2026-08-28。「新しいスケッチを1枚作って
- * 全部そこへ入れる」形から、CADの「アクティブなスケッチに挿入する」に相当する形へ変えた)。
+ * SVGの図形を**いま開いているスケッチへ**足す(CADの「アクティブなスケッチに挿入する」に
+ * 相当する形)。
  *
  * **引数はパスだけ**。`sketch_id` はここでは付けない(モジュールdocstringの規律どおり
- * `App.svelte` が送信時に足す) —— 貼る先を選ぶ手順(旧「基準平面をクリック」)は消えた。
+ * `App.svelte` が送信時に足す)。
  *
  * **倍率(`scale`)はここに出していない** —— 単位の合わないSVGを直すための逃げ道であって、
  * 普段は要らない。常に出すと「毎回1.0と打つ欄」が1つ増える(`catalog` の `ws=False`)。
@@ -204,9 +204,8 @@ export const IMPORT_SVG: CommandDef = {
  * スケッチを作る —— **「スケッチ」を押して、貼る先をクリックする2手**。
  *
  * 分類は `sketch` だが `sketch_id` を取らず、**まだどのスケッチも開いていない状態で走る
- * 唯一のverb**である(2026-09-03の言い換え。以前は「スケッチモードの外で走る」と書いていたが、
- * モードの入口が上位次元へ上がり、これが走る場所は**スケッチモードの貼る先待ち**
- * (`sketch-pending`)になった。走らせ方は変わっていない —— `sketch_id` を足さずに送る)。反復
+ * 唯一のverb**である —— 走る場所は**スケッチモードの貼る先待ち**(`sketch-pending`)で、
+ * `sketch_id` を足さずに送る。反復
  * (`pattern_*`)が「分類は feature だが `sketch_id` が要る」のちょうど裏返しで、`App.svelte` の
  * 送信経路はその2箇所を `needsSketchId`(features.ts)と下の `runsOutsideSketch` で捌く。
  *
@@ -216,7 +215,7 @@ export const IMPORT_SVG: CommandDef = {
  * **面は送らない**: 面に貼るときの `build` は **`{}`** を返す。面の参照を引数に入れると
  * 「対象集合の指定方法」が再び2つになる(サーバは `require_confirmed(doc, "face",
  * exactly_one=True)` で確定選択から取る)。2枚選んでいれば `SelectionAmbiguous` が返り、
- * トーストで人に見える。**AIの提案のままでも止まらない**(2026-08-23) —— 面に貼る
+ * トーストで人に見える。**AIの提案のままでも止まらない** —— 面に貼る
  * (`base_plane` を送らない)経路は対象集合を確定選択から取るので、サーバが走らせる直前に
  * 自動で確定する(`duocad/server.py` の `_commit_before_verb`)。
  */
@@ -261,7 +260,7 @@ export function runsOutsideSketch(verb: string): boolean {
 }
 
 /**
- * スケッチの点・辺の平行移動 / 複製(2026-08-30。**パラメータパネルの後継**)。
+ * スケッチの点・辺の平行移動 / 複製。
  *
  * 対象はコアの確定選択から取る(3Dで点や辺をクリック / 左ドラッグで囲む)。
  * `sketch_id` を取らない唯一のスケッチverbで、どのスケッチかは**選んだ参照が持っている**
@@ -274,7 +273,7 @@ export const MOVE_SKETCH_ENTITIES: CommandDef = {
   category: 'sketch',
   label: '動かす',
   buttonId: 'sketch-move',
-  // **ローカル方式**(2026-09-05)。`move_body` と同じ発想で、選んだ図形の今の座標を
+  // **ローカル方式**。`move_body` と同じ発想で、選んだ図形の今の座標を
   // dx/dy だけずらした姿を描く。対象は引数に無い(サーバがコアの確定選択から取る)ので、
   // 幽霊の対象も `App.svelte` が同じ選択集合から導く(`ghostSources`)。
   preview: 'local',
@@ -353,18 +352,15 @@ export function runsWithoutSketchId(verb: string): boolean {
  * **これが既定でないと領域をクリックで選べない** —— 描くコマンドが常に点を待っていると、
  * 領域を狙ったクリックが図形の頂点になる。
  *
- * **確定が成功するとここへ戻る**(`CommandHost.svelte` の `commandSucceeded()`。2026-08-31)。
- * 以前は確定してもここへは戻らず、Escを押したときだけ「選ぶ」に移っていた(同じ図形を続けて
- * 描けるほうが速いという判断だった)が、「verbを実行したら中断ボタンを押さなくても実行中
- * 状態が終わってほしい」という要望で、確定成功でも「選ぶ」へ降りるようにした。連続で同じ
- * 図形を描くには、確定のたびにツールバーのボタンを押し直す。
+ * **確定が成功するとここへ戻る**(`CommandHost.svelte` の `commandSucceeded()`)。
+ * 連続で同じ図形を描くには、確定のたびにツールバーのボタンを押し直す。
  */
 export const SELECT_IN_SKETCH: CommandDef = {
   id: 'select_in_sketch',
   category: 'ui',
   label: '選ぶ',
   buttonId: 'sketch-select',
-  // **ボタンは出さない**(2026-09-03本人決定)。領域を直接クリックして選べるので、
+  // **ボタンは出さない**。領域を直接クリックして選べるので、
   // 人間向けのボタンは重複だった。既定コマンド(`DEFAULT_SKETCH_COMMAND_ID`)としての
   // 役割はそのまま——Escや確定後はここへ戻る(`CommandHost` のdocstring参照)。
   hidden: true,
