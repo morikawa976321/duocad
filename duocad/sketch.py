@@ -6,7 +6,7 @@ face_index)` が返す既存ソリッドの**平面状の**面への参照(平�
 
 **verbの戻り値の流儀**: 新しいものを作るverbは新しいIDを返し(`sketch_create` と同じ)、
 既存の形状を変えるverbは `Operation` を返す(`extrude_face` と同じ)。スケッチのverbは前者、
-`extrude` は後者。**`import_svg`(2026-08-28〜)はどちらでもない** —— 新しいスケッチを作らず
+`extrude` は後者。**`import_svg` はどちらでもない** —— 新しいスケッチを作らず
 既存のスケッチへ図形を足すだけなので、戻り値は追加した entity_id のリストである
 (`duocad/verbs/import_svg.py` のdocstring)。
 
@@ -636,7 +636,7 @@ def resolve_plane(doc: Document, plane: Any) -> dict:
         if body is None:
             raise KeyError(f"no such body: {body_id!r}")
         if body.mesh is not None:
-            # **名指しの面参照なので断る**(2026-09-05。断り文は `meshbody.reject` へ一元化)。
+            # **名指しの面参照なので断る**(断り文は `meshbody.reject` へ一元化)。
             from . import meshbody
 
             meshbody.reject(body, "スケッチを貼る面にする")
