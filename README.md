@@ -608,7 +608,7 @@ node scripts/shoot-topopt.mjs --model mounting-plate.json `
 
 **守るべき唯一のルール: canvasはフレームワークの外に置く。** three.jsが所有するコンテナを渡し、
 Svelteは二度と中を触らない。また `viewport.ts` を狭いインタフェースにして
-**three.jsの型を外へ漏らさない**（最もchurnの激しい依存を1ファイルに閉じる）。
+**three.jsの型を外へ漏らさない**（最もchurnの激しい依存を `viewport.ts` とその兄弟モジュールに閉じる）。
 
 | ファイル | 役割 |
 |---|---|
