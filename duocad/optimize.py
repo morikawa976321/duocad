@@ -130,7 +130,7 @@ def face_fingerprint(doc: "Document", body_id: str, index: int) -> dict:
 
     body = doc.get_body(body_id)
     if body.mesh is not None:
-        # **名指しの面参照なので断る**(2026-09-05。`predicates._target_bodies` と同じ線)。
+        # **名指しの面参照なので断る**(`predicates._target_bodies` と同じ線)。
         # 断り文は `meshbody.reject` に一元化してある。
         from . import meshbody  # 遅延import(モジュール docstring)
 
@@ -172,7 +172,7 @@ def fingerprint_mismatch(doc: "Document", condition: dict) -> Optional[str]:
     次の一手が書いていない)。**ここで文書を直さない** —— 条件は操作ログの上に残り、
     形を戻せば(undo)また合うようになる。消してしまうと戻せない。
 
-    **見るのは面積と法線だけで、重心は見ない**(2026-08-31本人決定)。重心は世界座標なので、
+    **見るのは面積と法線だけで、重心は見ない**。重心は世界座標なので、
     面の添字を変えない `move_body`(平行移動)でも不一致になり、位置を詰めるたびに条件が
     付け直しになっていた。面積と法線は平行移動で不変で、かつ照合には添字の一致も要るため、
     本来の狙い(添字が別の面を指すようになった)の検出力はほとんど落ちない。
