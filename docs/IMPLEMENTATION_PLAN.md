@@ -107,7 +107,6 @@ AIが述語 `parallel_to Y` で複数の辺を提案 → 画面に提案色（�
 |---|---|
 | 拘束ソルバ | 図形どうしの関係は現在使っていない。パラメトリック・プリミティブで足りる（§3.4） |
 | ロフト・スイープ・回転 | 実測でspline面の正体がフィレットの副産物と判明しており、不要 |
-| ボディの複製 | 複製する手段が無い（`import_step` は読み込み時にのみ複数ボディを作る） |
 
 ---
 
@@ -169,12 +168,12 @@ Document
 Body
   id      : BodyId
   name    : str
-  kind    : "solid" | "reference"     # reference = 読み込んだSTEP・読み取り専用
+  kind    : "solid" | "mesh"          # 語彙の正は `duocad/document.py` の `Body`
   shape   : TopoDS_Shape              # 導出物
   visible : bool
 ```
 
-**文書はボディのリストとして持つ。** 参照STEPを読み込む時点で複数ボディになる。
+**文書はボディのリストとして持つ。** STEPを読み込む時点で複数ボディになる。
 
 選択が `body_id` を持つことは全verb・問い合わせ層・ピッキング・MCPスキーマに波及するコストであり、
 ここは day 1 に払ってある（§6）。

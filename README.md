@@ -33,7 +33,7 @@ UIとAI操作の両方に共通する設計原則。verbを足す・直すとき
    **対象を指すID・点の座標・貼る先の平面名は、文字列や列挙に見えても target 側であり
    how ではない**（`MCP.md`「AIはどこまで自分でやるか」と揃える。「名前はすべて対象」
    という言い方はしない — 新規ボディへの命名のような**省略できる付帯入力**は target でも
-   how でもない第三分類である。**現行のverbに実例は無い**。無い例を作文せず、規則だけ残す）。
+   how でもない第三分類である）。
    **適用範囲はコマンド行を通るverbに限る**。値の打ち直し
    (`set_parameter`)・可視性の切替(`set_visible`)・選択集合の編集は直接操作であり、
    この型の対象外である。
@@ -84,14 +84,7 @@ cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m duocad.mcp_server --o
 ```
 
 `--open` でブラウザが開く（省略時は開かない）。**ターミナルのstdinが開いている限り生きる**（`Ctrl+C` で終了）。
-立つと stderr にこう出る:
-
-```
-duocad MCP server: stdio / WebSocket ws://127.0.0.1:8765
-  ブラウザで開く: http://127.0.0.1:8766/
-  MCP(HTTP): http://127.0.0.1:8766/mcp
-  bodies=0 (参照ボディを除く)
-```
+**ブラウザで開くURLと待ち受けているポートは、立った時点で stderr に出る。**
 
 ### 1.2 Claude Codeを繋ぐ（登録は要らない）
 
@@ -154,7 +147,7 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
   （2026-09-04に `showModal()` から切り替え）。FOVは見ながら決める設定なので、背後を
   inert にすると「見る」だけが残って「回して確かめる」が死ぬ。`showModal()` がただで
   付けていた Esc と重なり順は自前で持ち直してある（`SettingsDialog.svelte`）。
-- **Enterが要らないコマンド**は `tests/test_ui_command_wiring.py` の `ENTER_REQUIRED` が正（現行は線分・スケッチ）。
+- **Enterが要らないコマンド**は `tests/test_ui_command_wiring.py` の `ENTER_REQUIRED` が正。
 - undo/redoは**キーボードのみ**（Ctrl+Z / Ctrl+Y）。
 - **保存できる先は「いま編集しているファイル」1つだけ**（2026-08-30）。上書きの口は
   ヘッダの保存ボタン（`#file-save`）と **Ctrl+S** で、行き先を選ばせない。ファイルパネルの
@@ -305,7 +298,7 @@ cd C:\Users\tm976\mf\duocad; node web\scripts\acceptance.mjs
 
 MCPとWebSocketを1プロセスで持つサーバを自分で起動し、**人間側はブラウザの本物のクリックとキー、
 AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_parameter` の人間側だけは口が無いので空欄）。結果はJSONでstdout末尾に出る。
-**形状最適化の条件verbはまだ`acceptance.mjs`に無い**（`web/scripts/smoke-optimize-mode.mjs` が個別の実機smokeを持つ。到達表は [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) §0 参照）。
+**形状最適化の条件verbは `web/scripts/smoke-optimize-mode.mjs` が個別の実機smokeで見る**（到達表は [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) §0 参照）。
 
 **❌ が1つでもあれば終了コード1で終わる。** ただし**途中では止めない** ——
 全セクションを最後まで走らせて RESULT_JSON を出し切ってから、`failed[]` を見て終了コードだけを決める。
@@ -314,32 +307,9 @@ AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_par
 
 ## 4. アーキテクチャ
 
-```
-┌── AI（MCPクライアント）──┐        ┌── 人間（アプリ層 / ブラウザ）──┐
-│  述語で引数を作る          │        │  ポインティングで引数を作る      │
-└───────────┬──────────────┘        └──────────────┬─────────────────┘
-            │ stdio(JSON-RPC)                        │ WebSocket
-            │                                        │ コマンド↓ ／ イベント↑
-            └────────────────┬───────────────────────┘
-                             ▼
-        ┌──────────── コア（Python・唯一の真実源）────────────┐
-        │  文書（ボディ・スケッチ）／ 選択集合 ／ 操作ログ ／ undo │
-        │  ── verb層（純関数） f(文書, 選択, 引数) → 新しい文書 ──  │
-        │      問い合わせ : build123d ラッパ（差し替え可能）         │
-        │      操作      : OCP（OCCT）＋ 由来マップ回収            │
-        └────────────────────────────────────────────────────┘
-```
+**層の図と「外してはいけない3つ」の正は [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) §2。**
 
-### 外してはいけない3つ
-
-1. **AIの経路はアプリ層を通らない。** コアはUIが無くても機能的に完全であること。
-   アプリ層にしか無い機能を作った瞬間、AIから使えなくなる。**層分けの唯一かつ最大の存在理由。**
-2. **コマンドは下り、イベントは上り。** AIが選択や可視性を変えるとコアがイベントを発火し、
-   ブラウザが描き直す。**この上り方向が無いと交互操作が成立しない。**
-3. **アプリ層が落ちて失われてよいのは、途中まで入力していたコマンドだけ。**
-   文書・選択・操作ログ・undo履歴はすべてコア側にある。
-
-### 中核の4つの決めごと
+### 中核の決めごと
 
 - **操作ログが唯一の正で、形状はそこから導出されるキャッシュ。** 保存形式はJSON（SQLiteは使わない）。
   開くときはログから再生する。undo・再生・AIの履歴読み・git差分が全部これに乗る。
@@ -355,8 +325,7 @@ AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_par
   冒頭docstringの5ステップ。ここを1本化するには汎用ディスパッチャが要る（未着手）。frontendだけは別に持つ ——
   TS側が持つのは**引数の集め方**（どのクリックを待つか・入力欄のid）で、宣言には無い情報だから。
   名前と分類が一致することは `tests/test_ui_command_wiring.py` が機械で見る。
-- **verb ＝ ①undo1回で消える単位 ②操作ログ1行 ③MCP1呼び出し が一致する単位。**
-  UIの操作手順（面を選ぶ→距離→Enter）は**1つのverbを組み立てる漏斗**であって、3つのverbではない。
+- **verbの粒度の定義は [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) §2「verbの粒度」が正。**
 
 ### ボディの種別 —— B-rep と 三角形メッシュ（2026-09-05）
 
@@ -420,12 +389,12 @@ Session.cancel_optimization()     走っている最適化に降りるよう伝�
 
 **要素サイズの上限＝「これより粗いと間違う」**を2つの要求の min で決める:
 
-- **最小部材幅から** — `rmin_mm / simp.MIN_RMIN`（=1.5要素。`20260904-1557` の下限）
+- **最小部材幅から** — `rmin_mm / simp.MIN_RMIN`（`20260904-1557` の下限）
 - **条件面から** — `sqrt(CAD面積)`。**利用者に聞かない**。`anchor.empty_face_diagnosis` の
   `suggested_max_spacing_mm` と同じ式で、**近似であって保証ではない**（正方形とみなした
   代表寸法なので、曲面や極端な縦横比の面では過大にも過小にもなる）
 
-**要素サイズの下限は暫定の固定値**（総要素数 `MAX_ELEMENTS = 120,000`）。本来はメモリで決まる
+**要素サイズの下限は暫定の固定値**（総要素数 `MAX_ELEMENTS`）。本来はメモリで決まる
 ——`simp.Model` が `_iK`/`_jK` に要素数×576 の int32 を2本常駐で持つので12万要素で約0.55GBあり、
 COOの値配列とCSC化の一時がこれに乗る。**matrix-free（`20260904-1415`）が入るとこの常駐が丸ごと
 消えて下限が桁で動く**ので、いま精密に作っても作り直しになる。**既定は上限側**（＝条件と最小
@@ -437,8 +406,8 @@ COOの値配列とCSC化の一時がこれに乗る。**matrix-free（`20260904-
 `state == "unrepresented_regions"` で戻る（合計で見ると、大きい保持ソリッド1つで小さいほうの
 消失が隠れる）。運び方は `20260904-1556`（空の条件面）と同じで、新しい通知の仕組みは作らない。
 
-**許容応力は 40MPa 固定**（PETG 降伏 50MPa × 3Dプリント低減 0.8。暫定・本人決定）。duocad 側でも
-材料を選ばせない。導出は `optimize_run.allowable_stress()` から引ける。利用者が入れるのは
+**許容応力は固定**（根拠は [docs/TOPOPT.md](docs/TOPOPT.md)「許容応力の導出」が正）。duocad 側でも
+材料を選ばせない。値は `optimize_run.allowable_stress()` から引ける。利用者が入れるのは
 **目標安全率**で、そこから材料量を二分探索する（`safety_loop.solve_for_safety_factor`）。
 
 **この版の制限**:
@@ -619,14 +588,14 @@ node scripts/shoot-topopt.mjs --model mounting-plate.json `
 | `duocad/catalog.py` | **verbの単一宣言**（名前・引数・カテゴリ・プレビュー可否・MCPスキーマ）。下の2つが持つ表はここからの導出 | ✗ | ✗ |
 | `duocad/svg_import.py` | SVG → スケッチの図形（**パーサはbuild123dの推移依存で既に入っている** svgelements） | ✗ | ✗ |
 | `duocad/query.py` | 問い合わせ層のインタフェース | ✗ | **○ここだけ** |
-| `duocad/kernel.py` | OCCTを直接叩く層（1637行。テセレーションもここ） | **○ここだけ** | ✗ |
+| `duocad/kernel.py` | OCCTを直接叩く層（テセレーションもここ） | **○ここだけ** | ✗ |
 | `duocad/session.py` | `Session`（1つの文書を持つサーバ側の状態。verbの呼び出し・選択・保存/開く。**配りものは持たず `view` へ委譲**） | ✗ | ✗ |
 | `duocad/view.py` | `DocumentView`（**配りもの**＝状態配信・版・テセレーション/辺/頂点/体積/スケッチのキャッシュ。文書を変えない） | ✗ | ✗ |
 | `duocad/paths.py` | `REPO_ROOT` と、そこから出る既定の置き場（`web/dist` / `models`） | ✗ | ✗ |
 | `duocad/net/ws.py` | `Server`（WebSocketの配信と `_dispatch`）＋ソケットから踏めるコマンドの表 | ✗ | ✗ |
 | `duocad/net/http.py` | `web/dist` の静的配信と `/mcp`（MCPのHTTPトランスポート） | ✗ | ✗ |
 | `duocad/net/tools_on_loop.py` | `ToolsOnLoop`（別スレッドからの道具呼び出しをイベントループへ限定する覆い） | ✗ | ✗ |
-| `duocad/server.py` | **入口**（上の6つの再輸出。`mcp_server.py` とテストはここから名前を取る） | ✗ | ✗ |
+| `duocad/server.py` | **入口**（再輸出。`mcp_server.py` とテストはここから名前を取る） | ✗ | ✗ |
 | `duocad/mcp_server.py` | MCPサーバ。**アプリ層ではなくコアのもう一人のクライアント** | ✗ | ✗ |
 | `duocad/agent/` | **アプリ内AIエージェント**（プロバイダのアダプタ＋tool-useループ。UIは持たない） | ✗ | ✗ |
 
@@ -685,7 +654,8 @@ AIを選んで繋ぐ**（今あるのは llama-server の1つ）。**MCP経路�
 触る道とアプリ内の道は共存する。どちらも「先にアプリが立っている」という同じ向きに揃っている。
 
 - **道具の定義を第二の場所に書かない** —— `DocumentTools.descriptors()` を渡し、`.call()` で実行し、
-  失敗は `.error_envelope()` の6語彙。MCP経路と顔ぶれ・挙動・失敗の形が同一である
+  失敗は `.error_envelope()` に畳む（**語彙の列挙の正は [MCP.md](MCP.md)「実装のメモ」の1箇所**）。
+  MCP経路と顔ぶれ・挙動・失敗の形が同一である
 - **システムプロンプトも二重に持たない** —— `catalog.agent_instructions()` の1本をMCPの
   `instructions` とエージェントの両方が読む（ツール数も宣言から数える）
 - **暴走は必ず打ち切る** —— `max_turns` / `max_tokens` / 1リクエストのタイムアウト / 外から立てる中断フラグ。
@@ -759,10 +729,7 @@ duocad/
   pyproject.toml         依存はバージョン固定（ローカル専用なので上げなければ壊れない）
 ```
 
-サンプルのSTEPは `C:\Users\tm976\mf\3d-models\` にある
-（`mATX_PC_case_20251122\PC_case_20251122.step`（27部品）／同 `PC_case_feet.step`（5面）／
-`stackable_plate\plate_1by1_24.step`（74面）／`shelf_attachment_GD.step`（56面））。
-**読み取り専用で扱うこと。**
+サンプルのSTEPは `C:\Users\tm976\mf\3d-models\` にある。**読み取り専用で扱うこと。**
 
 ---
 
@@ -788,10 +755,7 @@ duocad/
   `dist` が無くても `mcp_server` は**静的配信だけ諦めて起動する**ので、
   「立ったのに画面が出ない」という形で出る（理由はstderrに1行出ている）。
 - **文書は接続より長生きする。** ブラウザを閉じても消えないので、まっさらから試すときはサーバを立て直す。
-- **読み込んだSTEPはそのまま編集できる。** 参照ボディ（原本）は隠されていて
-  画面からは指せない —— 触れるのは編集用ボディの方である。
-- **duocadには改名のverbが無い**（どの種別のボディにも。2026-09-05時点）。ボディの名前は
-  作るときに決まる（`add_mesh_body(name=...)` / STEP読み込みは `<ファイル名>_N`）。
+- **読み込んだSTEPはそのまま編集できる。**
 
 ### 実測で判明している技術的な地雷（コード側は対処済み。数値を疑うとき用）
 

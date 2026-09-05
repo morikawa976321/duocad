@@ -398,11 +398,11 @@ class DocumentTools:
         return {"count": len(current.items), "origin": current.origin}
 
     def error_envelope(self, tool: str, error: Exception) -> dict:
-        """例外を決定3の6語彙へ畳む。MCPは先に弾かず、落ちたあとに名前を付ける。
+        """例外を決定3の語彙へ畳む。MCPは先に弾かず、落ちたあとに名前を付ける。
 
         **公開API**(`descriptors()` / `call()` と同じ面)。MCPとアプリ内エージェント
         (`duocad/agent/loop.py`)がどちらもこれを通るので、AIが見る失敗の形は経路によらず同じ。
-        エージェント側で6語彙を書き写すと、片方だけ増えたときに気づけない。
+        エージェント側で語彙を書き写すと、片方だけ増えたときに気づけない。
         """
         if isinstance(error, ToolError):
             payload = {
