@@ -1,10 +1,12 @@
 /**
  * ビューポート — three.js をここに閉じ込める(実装計画書 §4.2 予防2)。
  *
- * **three.js の型を外へ漏らさない**。公開するのは下の `Viewport` インタフェースだけで、
- * three.js のオブジェクトは1つも戻り値・引数に出さない。three.js は semver を持たず
- * r番号でほぼ毎月リリースし非推奨APIを定期的に削除するため、**このスタックで最も churn が
- * 激しい依存**である。1ファイルに閉じておけば破壊的変更の影響がここで止まる。
+ * **three.js の型を外へ漏らさない**。公開するのは `viewportTypes.ts` の `Viewport`
+ * インタフェースだけで、three.js のオブジェクトは1つも戻り値・引数に出さない。three.js は
+ * semver を持たず r番号でほぼ毎月リリースし非推奨APIを定期的に削除するため、**このスタックで
+ * 最も churn が激しい依存**である。three.js を触るのはこのファイルとその兄弟モジュール群
+ * (`planeGrid.ts` / `faceCulling.ts` / `viewCubeOverlay.ts` など)だけで、破壊的変更の影響は
+ * Svelte 層へ出ない。
  *
  * **canvas はフレームワークの外**(実装計画書 §4「守るべき唯一のルール」)。Svelte から
  * 受け取るのは空の `HTMLElement` 1つだけで、canvas の生成・破棄・再描画は全部この中で行う。
@@ -22,7 +24,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 // 辺の折れ線の形は `session.ts` の `EdgeGeometry` が正(サーバが配る形そのもの)。
 import { entityHandles, entityPoints } from './entityKinds'
-import { DEFAULT_RESOLUTION, viewResolution, type ViewResolution } from './adaptiveResolution'
+import { DEFAULT_RESOLUTION, viewResolution } from './adaptiveResolution'
 import { sampleFaces, selectFineFaces, type BodySamples } from './faceCulling'
 import {
   BASE_EXTENT,
@@ -38,1158 +40,122 @@ import {
 import { createPlaneGrid, type PlaneFrame, type PlaneGrid } from './planeGrid'
 import { EDGE_T, POLE_Z, cellBox, cellDirection, regionCells, upForDirection } from './viewCube'
 import type { BasePlaneName, EdgeGeometry } from './session'
+import type {
+  BodyGeometryUpdate,
+  BodyGhost,
+  BodyGhostRotation,
+  BoxSelectEvent,
+  EdgeRef,
+  FaceGeometry,
+  FaceRef,
+  GeometryPayload,
+  OptimizeDebugAnchors,
+  OptimizeDebugGrid,
+  OptimizeDebugState,
+  OptimizeDebugVoxels,
+  OptimizeLoadVisual,
+  OptimizeVisualState,
+  PickEvent,
+  PickMode,
+  SketchDraw,
+  SketchEntityHit,
+  SketchPlaneRef,
+  VertexMarker,
+  VertexRef,
+  Viewport,
+  ViewportResolution,
+} from './viewportTypes'
+import { bodyGhostMatrix, usableRotation } from './viewportTypes'
+import {
+  AXIS_X_COLOR,
+  AXIS_Y_COLOR,
+  AXIS_Z_COLOR,
+  BACKGROUND_COLOR,
+  BASE_COLOR,
+  BASE_PLANES,
+  BASE_PLANE_AXES,
+  BASE_PLANE_HOVER_OPACITY,
+  BASE_PLANE_PROBES,
+  BOX_SELECT_MIN_PX,
+  CLICK_MOVE_LIMIT_PX,
+  CLICK_TIME_LIMIT_MS,
+  CUBE_CAMERA_DISTANCE,
+  CUBE_CIRCUMRADIUS,
+  CUBE_DRAG_THRESHOLD_PX,
+  CUBE_FACE_LABELS,
+  CUBE_FAR_MARGIN,
+  CUBE_MARGIN_PX,
+  CUBE_NEAR_SAFETY,
+  CUBE_ORTHO_HALF,
+  CUBE_SIZE_PX,
+  CUBE_SNAP_MS,
+  DEBUG_ANCHOR_FIXED_COLOR,
+  DEBUG_ANCHOR_LOAD_COLOR,
+  DEBUG_RHO_COLOR,
+  DEBUG_SPACE_COLOR,
+  DEPTH_BIAS_LAYER,
+  DEPTH_BIAS_UNIT,
+  EDGE_COLOR,
+  EDGE_PICK_PIXELS,
+  FOV_DEFAULT,
+  FOV_MAX,
+  FOV_MIN,
+  FOV_ORTHO,
+  GRID_ARMED_COLOR,
+  GRID_COLOR,
+  HIGHLIGHT_COLOR,
+  HOME_VIEW_OFFSET,
+  HOVER_LIGHTEN,
+  LAYER,
+  OPTIMIZE_EXCLUDE_COLOR,
+  OPTIMIZE_FIXTURE_COLOR,
+  OPTIMIZE_FIXTURE_MARK_COLOR,
+  OPTIMIZE_LOAD_COLOR,
+  OPTIMIZE_PRESERVE_COLOR,
+  PICK_EDGE_COLOR,
+  PREVIEW_COLOR,
+  PROPOSED_COLOR,
+  REGION_COLOR,
+  REGION_SELECTED_COLOR,
+  SKETCH_COLOR,
+  SKETCH_FIT_MARGIN,
+  SKETCH_GHOST_COLOR,
+  SKETCH_HANDLE_COLOR,
+  SKETCH_HANDLE_PIXELS,
+  SKETCH_SELECTED_COLOR,
+  VERTEX_PIXELS,
+  WORLD_UP,
+  isSelectableFov,
+  lighten,
+  withDepthBias,
+  type BodyMeshes,
+} from './viewportConstants'
 
-/** kernel.tessellate() が返す1面ぶん(サーバのJSONそのまま)。 */
-export interface FaceGeometry {
-  index: number
-  kind: string
-  area: number
-  centroid: number[]
-  normal: number[]
-  positions: number[]
-  indices: number[]
-  /** この面を細かく測ったか粗く測ったか(サーバが付与。古いサーバは無い)。 */
-  detail?: 'fine' | 'coarse'
-}
-
-export interface GeometryPayload {
-  deviation: number
-  face_count: number
-  bbox: { min: number[]; max: number[]; center: number[]; diagonal: number }
-  faces: FaceGeometry[]
-  untriangulated: number[]
-  /** 粗い側の偏差[mm](古いサーバは無い)。 */
-  coarse_deviation?: number
-  /** 細かく測った面の数(古いサーバは無い)。 */
-  fine_face_count?: number
-  /** 閉じた立体か。開いたシェルではバックフェイス判定を使わない(古いサーバは無い)。 */
-  closed?: boolean
-}
-
-/**
- * 「いまの画面はどれくらい細かく描くべきか」。**カメラから導く値であって設定ではない。**
- *
- * `worldPerPixel` と `sizeHint` が**事実**(画面1画素ぶんの世界長さ[mm]と、いま見えている
- * ものの外接対角[mm])で、`deviation` / `angularDeflection` はそこから
- * `adaptiveResolution.ts` の式で導いた**目標精度**である。サーバへ送るのは事実の方だけで
- * (`set_view_resolution`)、同じ式が `duocad/resolution.py` にもある。
- */
-export interface ViewportResolution extends ViewResolution {
-  /** 画面1画素ぶんの世界長さ[mm](注視点の面で測る)。 */
-  worldPerPixel: number
-  /** いま見えているものの外接対角[mm](上下限の丸めにだけ使う)。 */
-  sizeHint: number
-  /** face単位の高精度化の指定。`null` は「全Body全面を細かく」(サーバへ送らない)。
-   *  値は `{body_id: 細かく測る面の添字[] | null}`。 */
-  focus: Record<string, number[] | null> | null
-}
-
-/** 面を一意に指す(1個のBodyの中でしか一意でない `faceIndex` 単独指定はしない)。 */
-export interface FaceRef {
-  bodyId: string
-  faceIndex: number
-}
-
-/** 辺を一意に指す(添字はコアの数え方の1始まり)。 */
-export interface EdgeRef {
-  bodyId: string
-  edgeIndex: number
-}
-
-/** 荷重の大きさ[N]と向き。契約は `duocad/optimize.py` の `state_payload`(`session.ts` の
- *  `OptimizeLoad` と同じ形)。`setOptimizeState` はこれをそのまま受け取る。 */
-export interface OptimizeLoadVisual {
-  magnitude: number
-  direction: 'normal' | '-normal' | 'vector'
-  vector: [number, number, number] | null
-}
-
-/**
- * **開発用のデバッグ表示**(`web/src/debugFlags.ts` のURLパラメータでだけ出る)。
- *
- * 契約の正は `duocad/optimize_run.py` の `_DebugSink`。**製品の既定の画面には出ない** ——
- * `setOptimizeDebug(null)`(既定)のあいだ、ここのオブジェクトは1つも生まれない。
- *
- * 座標は**ワールドmm**。要素 (i,j,k) の中心は `origin + spacing*(i+0.5, j+0.5, k+0.5)`、
- * その角の節点 (i,j,k) は `origin + spacing*(i,j,k)`(セル中心の規約。
- * `duocad/topopt/mesh.py:169`)。**サーバ側で足し引きしていない**ので、ここで足す。
- */
-export interface OptimizeDebugGrid {
-  origin: number[]
-  spacing: number
-  shape: number[]
-}
-
-/** 立方体で描く要素の集合。`elements` はC順の通し添字 `i*(ny*nz) + j*nz + k`。 */
-export interface OptimizeDebugVoxels {
-  grid: OptimizeDebugGrid
-  elements: number[]
-  /** 本当の数(間引く前)。`shown` と違えば `stride` で間引かれている。 */
-  total: number
-  shown: number
-  stride: number
-}
-
-/**
- * 拘束/荷重に割り当たった格子節点。`points` はワールドmmの平坦な [x,y,z,...]。
- *
- * **`grid` を必ず渡すこと。** 球の半径は要素サイズから決めるので、これが無いと
- * `?debug=anchors` を単独で付けたとき(塊も密度場も来ない)に別の基準で描くことになり、
- * **同じ節点が題材によって違う大きさで出る**(2026-09-05 QA指摘)。
- */
-export interface OptimizeDebugAnchors {
-  grid: OptimizeDebugGrid
-  fixed: { face: number; count: number; points: number[] }
-  load: { face: number; count: number; points: number[] }
-}
-
-/**
- * `setOptimizeDebug` が受け取る**まるごとの状態**(差分ではない)。
- *
- * 呼ぶたびに全部作り直す —— 種類ごとに部分更新する口にすると、「塊だけ古い」状態が
- * 生まれ、切り分けの道具としての信用が消える。
- */
-export interface OptimizeDebugState {
-  /** 塊(設計空間)。`?debug=space`。 */
-  space: OptimizeDebugVoxels | null
-  /** 平滑化する前の密度場。`?voxel=1`。 */
-  rho: OptimizeDebugVoxels | null
-  /** 面アンカーの節点。`?debug=anchors`。 */
-  anchors: OptimizeDebugAnchors | null
-  /**
-   * ボクセルの代わりに隠すボディ(`?voxel=1` の結果ボディ)。**表示だけ**の話で、
-   * 文書の可視状態には触れない(サーバへは何も送らない)。
-   */
-  hiddenBodyId: string | null
-}
-
-/** `setOptimizeState` が受け取る、形状最適化(第3のモード)の見た目の元。 */
-export interface OptimizeVisualState {
-  preserveBodies: string[]
-  excludeBodies: string[]
-  fixtures: FaceRef[]
-  loads: FaceRef[]
-  load: OptimizeLoadVisual | null
-}
-
-/** 頂点を一意に指す(添字はコアの数え方の1始まり)。 */
-export interface VertexRef {
-  bodyId: string
-  vertexIndex: number
-}
-
-/**
- * 画面に出す頂点1個。**参照と座標を一緒に渡す** —— 頂点は選択に入っているものしか
- * 描かないので、「どれを描くか」と「どこに描くか」を別の呼び出しに分ける意味が無い。
- */
-export interface VertexMarker extends VertexRef {
-  /** 世界座標 [x, y, z](`kernel.vertex_positions` の `point`)。 */
-  point: number[]
-}
-
-/**
- * ボディの幽霊の**回転**(`move_body` の `mode="rotate"`)。
- *
- * **コアが解決した後の数値と同じ形**である(`duocad/verbs/move_body.py` の
- * `_rotation_args` が `axis_point` / `axis_dir` の数値へ潰し、操作ログにもその数値だけが
- * 載る)。辺・頂点への参照はここへ持ち込まない —— 幽霊は確定前なのでサーバから解決済みの
- * 数値を貰えず、**呼び出し側(`App.svelte`)が数値で渡せるときだけ幽霊を出す**契約にしてある
- * (既定の中心=対象の重心はブラウザ側で正確に出せないので、そのときは幽霊を描かない)。
- */
-export interface BodyGhostRotation {
-  /** 軸が通る点 [x, y, z](mm・世界座標)。 */
-  point: [number, number, number]
-  /** 軸の向き [x, y, z](正規化前でよい。長さ0は幽霊を描かない)。 */
-  dir: [number, number, number]
-  /** 回転角(度)。**軸の向きに対する右ねじが正**(コアの `move_body` と同じ符号)。 */
-  angleDeg: number
-}
-
-/**
- * ボディ1つぶんの**ローカル幽霊**(確定前の姿を、届いているメッシュから置く指示)。
- *
- * 平行移動(`offset`)と回転(`rotate`)を持つ。**コア側では排他**(`mode` で切り替える)
- * なので、回転のときの `offset` は `[0,0,0]` である —— ここで両方を許しているのは、
- * 変換の合成を1本の行列にまとめる `bodyGhostMatrix` の側で場合分けを持たないためだけで、
- * 「並進しながら回す `move_body`」という仕様があるわけではない。
- */
-export interface BodyGhost {
-  bodyId: string
-  /** 平行移動 [dx, dy, dz](mm・世界座標)。 */
-  offset: [number, number, number]
-  /** 軸まわりの回転。省略・null なら平行移動だけ。 */
-  rotate?: BodyGhostRotation | null
-}
-
-/** `BodyGhostRotation` として使える値か(有限な数値・長さ0でない軸)。 */
-function usableRotation(rotate: BodyGhostRotation | null | undefined): rotate is BodyGhostRotation {
-  if (!rotate) return false
-  const numbers = [...rotate.point, ...rotate.dir, rotate.angleDeg]
-  if (!numbers.every((value) => typeof value === 'number' && Number.isFinite(value))) return false
-  return rotate.dir.some((value) => value !== 0)
-}
-
-/**
- * 幽霊のグループに掛ける変換。**「軸が通る点まわりの回転」を平行移動で挟んで作る**
- * (`T(p) · R(axis, θ) · T(-p)`)—— three.js の `makeRotationAxis` は原点まわりなので、
- * 軸の位置はこの挟み込みでしか入らない。コア(`gp_Trsf.SetRotation(gp_Ax1(点, 向き), θ)`)と
- * 同じ変換である。
- *
- * **`export` してあるのは検算のため**(`ghostInfo` が返す行列と同じものを外から組める)。
- */
-export function bodyGhostMatrix(entry: BodyGhost): THREE.Matrix4 {
-  const matrix = new THREE.Matrix4().makeTranslation(
-    entry.offset[0],
-    entry.offset[1],
-    entry.offset[2],
-  )
-  const rotate = entry.rotate
-  if (usableRotation(rotate)) {
-    const axis = new THREE.Vector3(rotate.dir[0], rotate.dir[1], rotate.dir[2]).normalize()
-    const point = new THREE.Vector3(rotate.point[0], rotate.point[1], rotate.point[2])
-    matrix
-      .multiply(new THREE.Matrix4().makeTranslation(point.x, point.y, point.z))
-      .multiply(new THREE.Matrix4().makeRotationAxis(axis, (rotate.angleDeg * Math.PI) / 180))
-      .multiply(new THREE.Matrix4().makeTranslation(-point.x, -point.y, -point.z))
-  }
-  return matrix
-}
-
-/** 1Bodyぶんの形状の差し替え。`geometry: null` は非表示・削除(メッシュを取り除く)。 */
-export interface BodyGeometryUpdate {
-  bodyId: string
-  geometry: GeometryPayload | null
-}
-
-/**
- * クリックが選択集合に対して何をするか。修飾キーから決まる。
- *
- * **2026-08-30に `add` / `remove` を `toggle` の1つへ統一した**(本人明言:
- * 「間違えたらもう一回クリックすればいいので、除外専用の機能は実質無意味」)。
- * Shift も Ctrl(Mac は Meta)も同じ `toggle` で、既存の選択を消さずに
- * 「入っていれば外す・入っていなければ足す」。修飾なしは今までどおり `replace`。
- */
-export type PickMode = 'replace' | 'toggle'
-
-export interface PickEvent {
-  /** 当たった面(Body+添字)。外したら null。**スケッチモード中は常に null**(下記)。 */
-  hit: FaceRef | null
-  /**
-   * 当たった辺。**辺を出しているときだけ** null 以外になる
-   * (`showEdges`)。辺が当たったときは `hit` を見ない —— 辺は面の上に重なっているので、
-   * 両方返すと呼び出し側が毎回優先順位を書くことになる。
-   */
-  edge: EdgeRef | null
-  /**
-   * 当たった頂点。**選択に入っている頂点を出しているときだけ** null 以外になる
-   * (`showVertices`)。辺より後・面より先に見る —— 頂点は必ず辺の端点に乗っているので
-   * 辺より先に見ると、フィレットを起動している間に辺の端が掴めなくなる。逆に面より
-   * 後だと、最小の的である頂点マーカーがその下の面に取られて二度と外せない。
-   */
-  vertex: VertexRef | null
-  /** Shift / Ctrl(Mac は Meta)=トグル / 修飾なし=置き換え。 */
-  mode: PickMode
-  /**
-   * 当たったスケッチの図形(点または辺)。**スケッチモード中だけ** null 以外になる。
-   *
-   * `point` が文字列ならその点(コアの参照が持つ `point` と同じ**xキー**)、`null` なら
-   * 図形1つ全体(= 辺)である。点は辺より**先に**見る —— 点は必ず辺の上に乗っているので、
-   * 後に見ると端点を掴めない(頂点マーカーを辺より先に見るのと同じ理由)。
-   */
-  sketchEntity: SketchEntityHit | null
-  /**
-   * スケッチモード中の、クリックした点のスケッチ平面上の座標。
-   * 平面がカメラの裏なら null。**これが「手で描く」の入力そのもの**。
-   */
-  point: { sketchId: string; u: number; v: number } | null
-  /**
-   * 当たった領域(スケッチ+添字)。
-   *
-   * **スケッチモード中は常に**(そのスケッチの領域だけ。領域は面より手前で拾う)、
-   * **通常モードでは `pickRegions(true)` の間だけ**(全スケッチの領域)非nullになる。
-   * 通常モードの領域は辺と同じ「要求しているコマンドを起動している間だけ指せる」規律で、
-   * 常時指せるとスケッチ平面と重なる面のクリックが領域に取られる。
-   */
-  region: { sketchId: string; index: number } | null
-  /**
-   * 当たった基準平面(XY/XZ/YZ)。**`showBasePlanes(true)` の間だけ** null 以外になる
-   * (辺と同じ「要求しているコマンドを起動している間だけ指せる」規律)。
-   *
-   * 面と平面の両方に当たったときは**レイ距離が近い方**だけが返る(通常のオクルージョン)
-   * ので、`plane` が非nullなら `hit` は null である。
-   */
-  plane: BasePlaneName | null
-}
-
-/** スケッチの図形(点または辺)への当たり。`point` が null なら図形全体。 */
-export interface SketchEntityHit {
-  sketchId: string
-  entityId: string
-  point: string | null
-}
-
-/**
- * 左ドラッグのウィンドウ選択の結果(**矩形に完全包含されたものだけ**)。
- *
- * 種別ごとに配列で返すのは、呼び出し側(`App.svelte`)が参照の形へ翻訳するときに
- * 種別の分岐を1回で済ませるため。**空の配列でも呼ぶ** —— 何も囲まなかったドラッグは
- * 「選択を空にする」であって「何も起きない」ではない(修飾なしのとき)。
- */
-export interface BoxSelectEvent {
-  faces: FaceRef[]
-  edges: EdgeRef[]
-  vertices: VertexRef[]
-  regions: Array<{ sketchId: string; index: number }>
-  sketchEntities: SketchEntityHit[]
-  mode: PickMode
-}
-
-/**
- * スケッチを貼った平面。**基準3面か、既存ソリッドの面か**(session.ts の `PlaneRef` と
- * 同じ語彙。`face` 側は `FaceRef` と同じ形にして、面メッシュの索きをそのまま使えるようにする)。
- * グリッドの表示平面決定(`desiredGridPlanes`)と範囲の見積もり(`faceUvExtent`)が読む。
- */
-export type SketchPlaneRef = { kind: 'base' } | ({ kind: 'face' } & FaceRef)
-
-/** 1枚のスケッチの描画指示(three.js の型は出さない)。 */
-export interface SketchDraw {
-  sketchId: string
-  /** `p = origin + u*uAxis + v*vAxis`(コアが配る枠。session.ts の `SketchFrame`)。 */
-  frame: { origin: number[]; u: number[]; v: number[]; normal: number[] }
-  /** 貼った平面(基準面か、既存ソリッドの面か)。 */
-  plane: SketchPlaneRef
-  /** 反復を展開した描画対象。`params` はコアの `Entity.params` と同じキー。 */
-  entities: Array<{ kind: string; params: Record<string, number> }>
-  regions: Array<{ index: number; positions: number[]; indices: number[] }>
-  /** 選択中の領域の添字(強調して描く)。 */
-  selectedRegions: number[]
-  /**
-   * **反復を展開していない**図形(`entity_id` つき)。点・辺のピックと点の表示に使う。
-   *
-   * `entities`(= コアの `drawn`)と分けてあるのは、あちらが反復を展開した「見えるもの」で
-   * `entity_id` を持たないからである。選択の参照は `entity_id` で指すので、指せるのは
-   * ここに載っている元の図形だけ(反復で増えた複製は指せない —— 複製は導出物であって
-   * 独立した図形ではない)。
-   */
-  handles: Array<{ entityId: string; kind: string; params: Record<string, number> }>
-  /** 選択中の図形(強調して描く)。`point` が null なら図形全体。 */
-  selectedHandles: Array<{ entityId: string; point: string | null }>
-}
-
-export interface Viewport {
-  /**
-   * Bodyの形状をまとめて反映する。**初回(まだ何も描いていない状態)だけ、反映後の
-   * シーン全体にカメラを合わせる**。以後の呼び出しは視点を保ったまま差分だけ描き直す。
-   * 変更のないBodyには触れない — 27部品のうち1つだけ変わった押し出しでは、
-   * 呼び出し側(App.svelte)はその1件だけを渡せばよい。
-   */
-  update(bodies: BodyGeometryUpdate[]): void
-  /**
-   * 直近に `update()` で渡した生の `GeometryPayload` を読む(無ければ null)。
-   *
-   * **実機検査フック専用**。ここに寄せてあるので、形の正は「three.jsが今描いている形」の
-   * 1箇所になる(App.svelte が写しを持つと、コアの状態の第3のコピーになる)。
-   */
-  getGeometry(bodyId: string): GeometryPayload | null
-  /**
-   * `validBodyIds` に無いBodyの描画を取り除く(文書から消えたBodyのメッシュを掃除する)。
-   * `duocad/server.py` の `Session.delta` の契約(「知っているのに `bodies` にも
-   * `unchanged` にも現れないIDは消えた」)に対応する側。**実際に呼べるverbからは
-   * 到達しない**(undoは文書の土台より前へ戻せない)が、呼び出し側(App.svelte)は
-   * 契約どおりに毎回呼ぶ — 到達しない経路のためのコードを書かないと、次にBody削除が
-   * 起きるverbが増えたときに同じ「画面から消えない」不具合が再発する。
-   */
-  prune(validBodyIds: string[]): void
-  /** 面のクリック(当たり・外れとも)を受け取る。 */
-  onPick(listener: (event: PickEvent) => void): void
-  /**
-   * スケッチモード中、ポインタがスケッチ平面のどこを指しているか。
-   * モード外・平面の裏では null が来る。**確定前の線を見せるためだけ**に使う。
-   */
-  onPlaneMove(listener: (point: { u: number; v: number } | null) => void): void
-  /**
-   * 選択中の面を強調する(空配列で解除)。
-   *
-   * **複数選択と出所(origin)に対応している**。`origin` が `"proposed"`(AIの提案)なら
-   * 確定した選択と**明確に違う色**で描く —— これが「交互操作が人間側から見える」唯一の
-   * 場所である(実装計画書§8b)。
-   *
-   * **領域は3Dでは色分けしない**(スケッチ側で強調する)。**辺と頂点は同じ規律に
-   * 揃えてある** —— 辺は `showEdges` で折れ線を渡してある間だけ `highlightEdges` が、
-   * 頂点は `showVertices` が、どちらも user=橙 / proposed=水色で色を変える。
-   */
-  highlight(refs: FaceRef[], origin: 'user' | 'proposed'): void
-  /**
-   * 選択中の**ボディ**を強調する(`highlight` のボディ版。空配列で解除)。
-   *
-   * 形状最適化(第3のモード)で保持/除外ソリッドを決めているあいだだけ非空になる ——
-   * その他のverbはボディを選択できない(`App.svelte` の `wantedKinds`)。**選択は役割色
-   * (`setOptimizeState` の緑/赤)に勝つ**——そのボディの全面がハイライト色になる。
-   */
-  highlightBodies(bodyIds: string[], origin: 'user' | 'proposed'): void
-  /**
-   * 形状最適化(第3のモード)の見た目 —— 保持/除外ソリッドの色、拘束面の色分けと
-   * 固定記号、荷重の矢印+ラベル。**`null` はモードを抜けたとき**(何も描かない・
-   * ソリッドの色も素へ戻す。タスク仕様「モードを抜けているあいだは描かない」)。
-   *
-   * 記号・矢印は**指せない**(装飾)——「見えて、指した先が分かればよい」で、
-   * ピックの対象は増やさない(`allFaceMeshes` は変わらない)。
-   */
-  setOptimizeState(state: OptimizeVisualState | null): void
-  /**
-   * **開発用のデバッグ表示**(塊・平滑化前のボクセル・面アンカーの節点)。
-   * `null`(既定)なら何も描かない —— **フラグを付けない利用者の画面は1画素も変わらない。**
-   *
-   * 描くものは装飾で、**指せない**(`allFaceMeshes` は変わらない)。面アンカーの球は
-   * **深度検査を切って最前面**に描く(形状の裏側の節点も見えないと、
-   * 「見えているつもりで見えていない」になる)。
-   */
-  setOptimizeDebug(state: OptimizeDebugState | null): void
-  /**
-   * デバッグ表示のいまの数え(実機検査用。何も描いていなければ全部0)。
-   *
-   * `anchorsDepthTest` を出しているのは**罠を機械で見張るため** —— 節点は深度検査を
-   * 切って最前面に描く決まりで、これを落とすと「見えているつもりで見えていない」になる。
-   * 目視では気づけないので `false` であることを実機検査が確かめる。
-   */
-  optimizeDebugCounts(): {
-    space: number
-    rho: number
-    fixed: number
-    load: number
-    spaceStride: number
-    rhoStride: number
-    anchorsDepthTest: boolean | null
-    hiddenBodyId: string | null
-  }
-  // ------------------------------------------------------------------ D: 辺
-  /**
-   * 辺の折れ線を出す(`bodyId` に null を渡すと消える)。**出している間だけ辺を指せる**。
-   *
-   * 常時出さないのは2つの理由による。(1)27部品ぶんの辺はサーバから取るだけでも重い
-   * (`Session.edges` のdocstring)。(2)辺は面の手前に重なるので、常時出すと
-   * 面を狙うクリックが辺に取られ、「面を選んで押し出す」が遅くなる。
-   *
-   * **奥の辺も見え、奥の辺も指せる**(深度検査をしない)。three.js の線のレイキャストは
-   * 面による遮蔽を見ないので、**見えているものと指せるものを一致させる**にはこちらへ
-   * 揃えるしかない(見た目だけ隠すと「見えない辺が選ばれる」になる)。手前の辺のほうが
-   * レイに近いので、素直にクリックすれば手前が取れる。
-   */
-  showEdges(bodyId: string | null, edges: EdgeGeometry[]): void
-  // ------------------------------------------------------------------ 基準3平面(スケッチを貼る先)
-  /**
-   * 基準3平面(XY/XZ/YZ)を**指せるようにする**(`false` で指せなくなる)。
-   *
-   * 辺と同じ規律 —— **その対象を要求しているコマンドを起動している間だけ指せる**。
-   * 常時指せると、面を狙うクリックが手前のグリッドに取られる(グリッドは原点を跨いで
-   * ±100mmに広がっているので、ほとんどの視点で部品の手前に1枚は居る)。
-   *
-   * **当たり判定に新しいメッシュは足していない** —— `raycaster.ray.intersectPlane()` を
-   * 3枚ぶん回すだけの解析交差で、描画中のグリッド(`gridRoot`)は判定に一切使わない
-   * (グリッドは3平面の線が1つの `BufferGeometry` に混在しており、どの平面の線かを
-   * 当たった線から復元できない)。出している間はグリッドの色を変えて「今これが指せる」を出す。
-   */
-  showBasePlanes(on: boolean): void
-  // ------------------------------------------------------------------ 通常モードの領域
-  /**
-   * **通常モードで**スケッチの領域を指せるようにする(`false` で指せなくなる)。
-   *
-   * 辺・基準平面と同じ規律 —— **その対象を要求しているコマンド(「領域を押し出す」)を
-   * 起動している間だけ指せる**。常時指せると、スケッチ平面と重なる面(押し出した板の
-   * 底面など)を狙うクリックが、手前に浮いている領域に取られる。
-   *
-   * **新しいジオメトリは足していない** —— 領域のメッシュは既に全スケッチぶんが
-   * `showSketches` で置かれており(`userData.sketchId` を持つ)、ここが変えるのは
-   * `regionAt` が見る対象の範囲だけである。スケッチモード中(`setActiveSketch`)は
-   * このゲートに関係なく、**そのスケッチの領域だけ**が対象になる(描いている最中に
-   * 別のスケッチの領域を掴まない)。
-   */
-  pickRegions(on: boolean): void
-  /** 選択中の辺を強調する(面の `highlight` と同じ規律)。 */
-  highlightEdges(refs: EdgeRef[], origin: 'user' | 'proposed'): void
-  // ------------------------------------------------------------------ 頂点(選択中のものだけ)
-  /**
-   * **選択に入っている頂点だけ**を点(画面上で一定の大きさ)で出す(空配列で消える)。
-   *
-   * 辺の `showEdges` + `highlightEdges` と違って**1つの呼び出し**なのは、頂点では
-   * 「出す」と「選ばれている」が同じことだからである —— 頂点を引数に取るコマンドが無く、
-   * 候補を全部見せて選ばせる場面が存在しない。目的は「AIが選んだ頂点が今どれかを人が見て、
-   * クリックで外せる」ことだけ。
-   *
-   * 色は面・辺と同じ規律(user=橙 / proposed=水色)。**領域の単色方式は採らない** ——
-   * `SelectionPanel` を廃した後、提案と確定の区別を人へ伝える手段は3Dの色だけになる。
-   *
-   * **奥のマーカーも見え、奥のマーカーも指せる**(辺と同じく深度検査をしない)。
-   */
-  showVertices(markers: VertexMarker[], origin: 'user' | 'proposed'): void
-  /**
-   * 今そのハイライトに使っている色(16進)。出していない種別は null。
-   *
-   * **実機検査フック専用**。`SelectionPanel` を廃した後、AIの提案(水色)と確定(橙)の
-   * 区別を人へ伝えるのは**3Dの色だけ**になったので、その色が実際に変わっていることを
-   * 機械で見られるようにする(`getGeometry` と同じ species の穴)。
-   */
-  highlightColors(): { face: number | null; edge: number | null; vertex: number | null }
-  /**
-   * 指した面が**いま実際に塗られている色**(16進。無ければ null)。**実機検査フック専用**
-   * —— 形状最適化(第3のモード)の役割色(緑/赤/青)が本当に切り替わっていることを、
-   * `highlightColors`(選択の色だけを見る)では確かめられないので別に置く。
-   */
-  faceColor(ref: FaceRef): number | null
-  /**
-   * 形状最適化(第3のモード)の装飾(拘束記号+荷重矢印・ラベル)の数。**実機検査フック専用**
-   * —— 「拘束と荷重が見える」を、個々のメッシュの形までは検証せず「何か描かれているか」の
-   * 数で機械的に確かめる(`setOptimizeState` が空にすると0に戻る)。
-   *
-   * **種別を区別しない粗い数**なので、拘束と荷重の取り違え・向きの逆転・ラベル欠落までは
-   * 検出できない(2026-08-31 QA指摘)。そこまで見るには `optimizeAnnotations()` を使うこと。
-   */
-  optimizeAnnotationCount(): number
-  /**
-   * 形状最適化(第3のモード)の装飾の**中身**。**実機検査フック専用**。
-   *
-   * `fixtures` は固定記号を置いた面の参照、`loads` は矢印ごとの単位ベクトルとラベル文字列
-   * (`"250N"` のような表示テキストそのもの)。**種別を区別して数える・向きとラベルを
-   * 突き合わせる**ところまで実機検査で確かめられるようにするための穴
-   * (`optimizeAnnotationCount()` の粗さを補う。2026-08-31 QA指摘)。
-   */
-  optimizeAnnotations(): {
-    fixtures: FaceRef[]
-    loads: Array<{ bodyId: string; faceIndex: number; direction: [number, number, number]; label: string }>
-  }
-  /**
-   * 今ホバーで明るくしているもの(**実機検査フック専用**)。
-   *
-   * ホバーは色を足さず明度だけを上げるので、`highlightColors` では変化を読めない
-   * (橙のままである)。**「クリックすれば取れるもの」と実際にクリックした結果が
-   * 一致していること**を機械で確かめるための穴で、頂点は対象外なので返さない。
-   */
-  hoveredRef(): {
-    face: FaceRef | null
-    edge: EdgeRef | null
-    region: { sketchId: string; index: number } | null
-    plane: BasePlaneName | null
-    /** そのものに**今実際に当たっている**色(16進)。何も指していなければ null。 */
-    color: number | null
-  }
-  /**
-   * 頂点マーカーの画面座標(無理なら null)。**実機検査が本物のクリックで頂点を外す**
-   * ために要る穴で、面の `project` / 辺の `projectEdge` と同じ流儀 ——
-   * 返す前にその画素からのレイが実際にその頂点へ当たることを確かめる。
-   */
-  projectVertex(bodyId: string, vertexIndex: number): { x: number; y: number } | null
-  /**
-   * 辺の上の点の画面座標(無理なら null)。面の `project` の辺版で、
-   * **実機検査が本物のクリックで辺を選ぶ**ために要る穴。
-   * 返す前に**その画素からのレイが実際にこの辺へ当たること**を確かめる。
-   */
-  projectEdge(bodyId: string, edgeIndex: number): { x: number; y: number } | null
-  /**
-   * 確定前の形(プレビュー)を重ねる。**本物のBodyは隠し、幽霊を代わりに描く**。
-   *
-   * 幽霊は**ピックの対象にしない**(まだ存在しない形は指せない)。本物の状態が
-   * 1つでも届いたら(`update`)プレビューは無効になるので、自動的に消える。
-   */
-  showPreview(bodies: BodyGeometryUpdate[]): void
-  /**
-   * プレビューを消して本物のBodyを出し直す。**ボディ側の幽霊は2種類とも消える**
-   * (サーバ投機実行の `showPreview` と、ブラウザだけで置く `showBodyGhosts`)——
-   * どちらも「確定前の姿」であり、消える場面(Esc・本物の到着・Bodyの消滅)が同じ。
-   */
-  clearPreview(): void
-  /**
-   * **既にあるボディを変換した姿**を、ブラウザだけで半透明に重ねる(2026-09-05。`move_body`)。
-   *
-   * `showPreview` との違いは3つ:
-   *
-   * 1. **サーバへ何も投げない** —— 位置しか変わらないので、OCCでの再計算が要らない。
-   *    すでに届いているメッシュ(`getGeometry` と同じ生データ)をそのまま使う。
-   * 2. **本物を隠さない** —— 元の位置と移動先の両方が見えることが、このプレビューの
-   *    存在理由そのものである(`duocad/catalog.py` の `move_body` の note)。
-   * 3. **1ボディ = 1 `THREE.Group`** で、変換はグループに掛ける。ボディの中の面を
-   *    個別に動かすverbは無いので、変換の単位はボディでよい。
-   *
-   * 幽霊は**ピックの対象にしない**(まだ存在しない位置は指せない)。まだ形が届いていない
-   * ボディ(非表示など)は黙って落ちる。空配列で消える。
-   */
-  showBodyGhosts(entries: BodyGhost[]): void
-  /** `showBodyGhosts` で置いた幽霊だけを消す(サーバ投機実行のほうは残る)。 */
-  clearBodyGhosts(): void
-  /**
-   * いま出ている幽霊の中身。**実機検査が「値を変えたら幽霊が追随したか」を数値で見る穴**
-   * (`getGeometry` と同じ流儀 —— three.jsのバッファは外から読めない)。
-   *
-   * `matrix` は**そのグループに実際に掛かっている行列**(three.js の列優先16要素)。
-   * 指示(`offset` / `rotate`)だけでは「行列を組む式が正しいか」を外から検算できない
-   * ので、掛かった結果そのものを出す。
-   */
-  ghostInfo(): {
-    sketch: Array<{ kind: string; params: Record<string, number> }>
-    bodies: Array<BodyGhost & { matrix: number[] }>
-  }
-  /**
-   * 面の表面上の点の画面座標(コンテナ内のCSSピクセル)。無理なら null。
-   *
-   * これは自動テスト(`scripts/smoke.mjs`)が**本物のクリックで面を選ぶ**ために必要な穴で、
-   * 「動くはず」で納品しないための道具。重心ではなく三角形の上の点を返し、
-   * さらに**その画素からのレイが実際にこの面へ当たることを確かめてから**返す
-   * (重心は円環や円筒では面の外にあり、隠れている面もあるため)。**他のBodyに隠れている
-   * 面は、そのBodyを隠さない限り null になる**(それ自体が可視性=選択機構の一部であることの
-   * 検査になる)。
-   */
-  project(bodyId: string, faceIndex: number): { x: number; y: number } | null
-  // ------------------------------------------------------------------ C: スケッチ
-  /**
-   * スケッチを描き直す(渡さなかったスケッチの描画は消える)。**図形は線、領域は面**で
-   * 描く。ソリッドの描画(`update`)とは別のグループに持つので、押し出しで形が変わっても
-   * スケッチは消えない。
-   */
-  showSketches(sketches: SketchDraw[]): void
-  /**
-   * 確定前の図形(スケッチの幽霊)を1つ描く。`entity` が null で消える。
-   * **`showSketchGhosts([entity])` の薄い衣**(単発の呼び出し側を増やさないため)。
-   *
-   * **サーバへ投げない**。図形の形はブラウザ側で分かっており、コアで投機実行すると
-   * 文書に一度は入る(戻すとはいえ)。Escで中断しても文書が変わらないことを、
-   * 「そもそも送らない」で成立させる。
-   */
-  showSketchGhost(sketchId: string, entity: { kind: string; params: Record<string, number> } | null): void
-  /**
-   * 確定前の図形(スケッチの幽霊)を**複数**描く(2026-09-04。`move_sketch_entities` 用)。
-   * 空配列で消える。**個々の図形は`buildEntityLine`が失敗しても他は描く**(表に無い種別・
-   * 折れ線化できない図形が1つ混ざっていても、残りの幽霊まで消さない)。
-   */
-  showSketchGhosts(sketchId: string, entities: Array<{ kind: string; params: Record<string, number> }>): void
-  /**
-   * スケッチモードの対象を決める。`null` でモードを抜ける。
-   *
-   * モード中のクリックは**面ではなく**「領域」または「平面上の点」になる
-   * (`PickEvent.point` / `PickEvent.region`)。描いている最中に奥のソリッドの面を
-   * 掴んでしまうと、線を引くつもりのクリックが選択の置き換えになる。
-   */
-  setActiveSketch(sketchId: string | null): void
-  /** スケッチ平面を正面から見る視点へ移す(無いと描きにくい)。 */
-  lookAtSketch(sketchId: string): void
-  /**
-   * 今あるもの全体が入る視点へ戻す。
-   *
-   * **`lookAtSketch` の戻り道ではない**(2026-08-26)。抜けたときの復帰は
-   * `setActiveSketch(null)` が「入る前の視点」へ戻す形で担う。こちらは
-   * 「今あるもの全体」という別の視点で、実機検査が図形を画面内へ収めるために呼ぶ。
-   */
-  frameAll(): void
-  /**
-   * 新規文書にしたときに呼ぶ。**カメラは動かさない**(新規は空の文書で、合わせる内容が
-   * 無いため`frameAll`を呼ぶ理由が無い)。基準グリッドの縮小だけを許可する
-   * (`frameAll`と同じヒステリシスの「許可」を、姿勢を動かさずに与える。2026-08-30)。
-   */
-  resetGrid(): void
-  /**
-   * 左ドラッグのウィンドウ選択が終わったときに呼ばれる(矩形に**完全包含**されたものだけ)。
-   *
-   * `onPick` と別の入口にしてあるのは、返すものが「1つの当たり」ではなく**集合**だから。
-   * ドラッグの向きは見ない(左右どちらへ引いても同じ判定。本人明言)。
-   */
-  onBoxSelect(listener: (event: BoxSelectEvent) => void): void
-  /**
-   * カメラの画角[度]を変える。**`FOV_ORTHO`(0) は完全正投影**で、そのとき裏では
-   * `OrthographicCamera` へ丸ごと差し替わる(近似ではない)。0以外は
-   * `FOV_MIN`〜`FOV_MAX` に丸め、NaN・∞は無視する。
-   *
-   * **画面の設定であって文書の状態ではない。** コアにも操作ログにも行かず、undoの
-   * 対象にもならない。値の持ち主はブラウザ側(`App.svelte` + `viewSettings.ts`)である。
-   *
-   * **見かけの大きさの補正が入る** —— 注視点の面で画面の縦に収まる世界長さを切り替えの
-   * 前後で保つ(透視なら距離、正投影なら視錐台の大きさで作る)。**正投影への切り替えでも
-   * 同じ**で、変わるのはパースの強さだけである。これをしないと画角の変更がただの
-   * 「ズーム」になり、比べたいものが比べられない。
-   */
-  setFov(deg: number): void
-  // ------------------------------------------------------------------ 可変解像度(ズーム連動)
-  /**
-   * 今の画面が要求している解像度。**実機検査と `App.svelte` の両方が読む**
-   * (前者は「寄ったら本当に細かくなったか」を数値で見るため、後者は送る値のため)。
-   */
-  viewResolution(): ViewportResolution
-  /**
-   * face単位の高精度化(視錐台+バックフェイスカリング)を**切る/入れる**。
-   *
-   * **実機検査のための穴である**(既定は入り)。「導入前後で三角形数と測り直しの時間が
-   * どれだけ変わったか」は、同じモデル・同じ視点で両方を測って初めて言える ——
-   * 版を戻して測り直すのでは、機械が後から回せる証拠にならない
-   * (`web/scripts/smoke-face-culling.mjs`)。切ると `focus` を送らなくなるので、
-   * サーバは2026-08-29時点の「文書全体で1つの精度」と同じ振る舞いに戻る。
-   */
-  setFaceCulling(enabled: boolean): void
-  /**
-   * 解像度が**意味のある幅で**変わったときに呼ばれる(ズーム・画角変更・寸法変更)。
-   *
-   * **落ち着いてから1回だけ呼ぶ。** ホイールを回している間ずっと呼ぶと、27部品ぶんの
-   * 再テセレーションがサーバで連続して走る —— カメラが止まったことを確かめ(減衰が
-   * 収まるまで待つ)、かつ偏差が一定比以上動いたときだけ通す。
-   *
-   * スケッチの折れ線(ブラウザ内で完結する経路)は**この呼び出しと同じ瞬間に**
-   * ここが自分で描き直す。呼び出し側がやるのはサーバへ知らせることだけである。
-   */
-  onResolutionChange(listener: (resolution: ViewportResolution) => void): void
-  /**
-   * スケッチの図形1本ごとの折れ線の点数(`sketch_id` -> 図形順の点数)。
-   *
-   * **実機検査フック専用**。「寄ったら円が滑らかになった」は目でしか分からないので、
-   * 代わりに**分割数そのもの**を機械で見られるようにする(`getGeometry` と同じ species の穴。
-   * ソリッド側は `getGeometry().deviation` と三角形数がその役をする)。
-   */
-  sketchPolylineCounts(): Record<string, number[]>
-  /**
-   * 今のカメラの姿勢(ワールド座標)。**実機検査が視点の向きそのものを見るための穴**で、
-   * 描画にも操作にも使わない。
-   *
-   * ここから確かめたいのは2点: `up` がワールド+Zであること、および**水平ドラッグで
-   * オービットさせても `position.z - target.z` が変わらない**こと(＝回転の極が+Zであること)。
-   * 後者は `OrbitControls` が生成時の up を `_quat` へ焼き込む仕様のせいで**静かに壊れる**
-   * 種類の不具合で、画面の見た目からは分からない。
-   *
-   * `near`/`far` も返す(2026-08-30)。こちらも実機検査の穴で、文書の状態ではないので
-   * コアへは何も飛ばさない(`App.svelte` の `window.__duocad` と同じ方針)。
-   */
-  cameraPose(): {
-    position: [number, number, number]
-    target: [number, number, number]
-    up: [number, number, number]
-    near: number
-    far: number
-  }
-  /**
-   * 基準平面の**ピック範囲**の今の半幅[mm](`gridScale.ts` の `extentFor` が導いた値)。
-   * near/farの下限と面外の軸線の長さも同じ値から引く。**描画の範囲ではない** ——
-   * 格子はシェーダーで無限に描く(2026-09-03)。
-   *
-   * **実機検査フック専用**(2026-08-30) —— 「指せる範囲が大きなモデルに合わせて広がった」
-   * ことは見た目からは何mmかまで分からないので、値そのものを機械で見られるようにする。
-   * 文書の状態ではないので、コアへは何も飛ばさない(`cameraPose` と同じ方針)。
-   */
-  gridScale(): { extent: number }
-  /**
-   * グリッドの3段(1/10/100mm)の今の見え方。**実機検査フック専用**(2026-09-03に
-   * `gridScale().step` を置き換えたもの —— 刻みが固定になり `step` は何も語らなくなった
-   * ので、代わりに「いま各段がどれだけ濃いか」と「どの平面を出しているか」を出す)。
-   *
-   * `planes` は表示中の平面の名前で、基準平面(`XY`/`XZ`/`YZ`)か、任意面へのスケッチ中は
-   * `sketch-face`(名前は `desiredGridPlanes` が付ける)。
-   * `axis` は**面外に線として描いている軸**(無ければ null)。
-   * `sketchFaceExtent` は任意面グリッドの枠の半径[mm](`faceUvBounds`。測れなかった・
-   * 任意面でないときは null)。`planeBounds` は `planes` と同じ並びの枠(中心と半径)。
-   * `depthBiasLayers` は `planes` と同じ並びの深度バイアス層番号(`DEPTH_BIAS_LAYER`)。
-   * 任意面のグリッドが基準平面と別枠(`sketchFaceGrid`)を使っているかを機械で見るための穴
-   * (2026-09-03 QA指摘 —— frameが基準平面と数値的に一致する実ジオメトリの面でも、
-   * 正しく `sketchFaceGrid` になっていることをここで検査する)。
-   */
-  gridTiers(): {
-    mmPerPixel: number
-    tiers: Array<{ step: number; alpha: number }>
-    planes: string[]
-    axis: 'X' | 'Y' | 'Z' | null
-    sketchFaceExtent: number | null
-    depthBiasLayers: number[]
-    planeBounds: Array<UvBounds | null>
-  }
-  /**
-   * ワールド座標の点が画面のどこに写るか(ビューポート左上を原点とする画素)。
-   * カメラの前後のクリップ範囲の外なら null。
-   *
-   * **`project*` の仲間ではない** —— あちらは「その画素が本当にそれを取れる」ことまで
-   * 確かめて返すピック用の穴だが、こちらは投影そのものを問う。**「+Zが画面で上か」は
-   * 遮蔽と無関係に決まる**(真上から見れば下面は隠れて `project` が null を返すが、
-   * 上下関係は変わらない)ので、ピックできるかを条件にすると測りたいものが測れない。
-   */
-  projectPoint(point: readonly [number, number, number]): { x: number; y: number } | null
-  /** スケッチ平面上の (u,v) の画面座標。実機検査が**本物のクリックで描く**ために要る。 */
-  projectSketchPoint(sketchId: string, u: number, v: number): { x: number; y: number } | null
-  /**
-   * 基準平面の上の点の画面座標(無理なら null)。**実機検査が本物のクリックで
-   * 基準平面を指す**ために要る穴で、面の `project` と同じ流儀:
-   * 返す前に**その画素からのレイが実際にその平面へ当たり、かつ手前に面が無いこと**を
-   * 確かめる(部品に隠れている所を返すと、クリックが面に取られる)。
-   *
-   * **`showBasePlanes(true)` の間しか返らない** —— 指せない状態の座標を返しても、
-   * そこをクリックした結果は平面のピックにならないため。
-   */
-  projectBasePlane(name: BasePlaneName): { x: number; y: number } | null
-  /**
-   * 領域の画面座標(実機検査が領域を本物のクリックで選ぶために要る)。
-   *
-   * **今その領域が指せる状態でなければ null** —— 返す前に `regionAt` で当たることを
-   * 確かめるので、通常モードでは `pickRegions(true)` の間しか返らない
-   * (`projectBasePlane` と同じ流儀。指せない状態の座標を返しても、そこをクリックした
-   * 結果は領域のピックにならない)。
-   */
-  projectRegion(sketchId: string, index: number): { x: number; y: number } | null
-  /**
-   * ビューポート右上に常設するビューキューブの矩形(コンテナ内のCSSピクセル、左上原点)。
-   * **実機検査フック専用**(タスク仕様の落とし穴3) —— 寸法が変わると右上アンカーごと
-   * 矩形も動く([[viewport-resize-silently-changes-what-a-click-grabs]] と同型)ので、
-   * 検査が決め打ちの座標を使わずここから読めるようにする。
-   */
-  viewCubeRect(): { x: number; y: number; w: number; h: number }
-  dispose(): void
-}
-
-/**
- * ワールドの上方向 —— **X=右 / Y=奥 / Z=上の右手系**(Fusion 360・Blender・スライサと
- * 同じ、CADの標準)。カーネル(OCCT/build123d)は元から Z-up で、`_BASE_PLANE_AXES` の
- * "XY" の法線も `(0,0,1)` である。**ずれていたのはビューアだけだった**(2026-08-28に是正)。
- *
- * **`(0,0,1)` をこのファイルの他の場所へ直書きしないこと。** up軸の値が2か所以上に散ると
- * 次の改修で必ず片方が取り残される —— 直前まで `camera.up.set(0, 1, 0)` の直書きが2か所
- * あり、**スケッチに1回入って出るだけで Y-up へ戻っていた**。
- */
-const WORLD_UP = new THREE.Vector3(0, 0, 1)
-
-/**
- * **three.js の既定の上方向そのものを、モジュールの読み込み時に差し替える。**
- *
- * `camera.up` を後から書き換える形では効かない箇所が2つあるので、**カメラ・
- * OrbitControls・ライトを1つも `new` する前に**ここで確定させる(いずれも three 0.185.1 の
- * 実物で確認):
- *
- * - `OrbitControls` はコンストラクタで `_quat` に**生成時の `object.up`** を焼き込み、
- *   `update()` で再計算しない。ここが Y のままだと、見た目の上方向は正しいのに
- *   **水平ドラッグの回転軸だけが Y軸まわりのまま静かに残る**。
- * - `HemisphereLight` はコンストラクタで `position` に `DEFAULT_UP` を複写し、
- *   **その position が空(sky)の向きになる**。ここが Y のままだと天地が横倒しになる。
- */
-THREE.Object3D.DEFAULT_UP.copy(WORLD_UP)
-
-const BASE_COLOR = 0x9aa6b2
-const HIGHLIGHT_COLOR = 0xffb454
-/** スケッチの線・確定前の線・領域。ソリッドの色と混ざらない色にする。 */
-const SKETCH_COLOR = 0xe8eef6
-const SKETCH_GHOST_COLOR = 0x7ee081
-//: スケッチの点マーカー(未選択)。線(`SKETCH_COLOR`)より暗くして線を主役に保つ。
-const SKETCH_HANDLE_COLOR = 0x9fb3c8
-//: 選択中のスケッチの点・辺。**選択の色は1つ**(面・辺・領域と同じ `HIGHLIGHT_COLOR`)。
-const SKETCH_SELECTED_COLOR = HIGHLIGHT_COLOR
-const REGION_COLOR = 0x4d7ea8
-const REGION_SELECTED_COLOR = 0xffb454
-/** AIの提案(`origin === "proposed"`)。確定(橙)と**色相で**離す。 */
-const PROPOSED_COLOR = 0x36d1ff
-/** 確定前の形。半透明で「まだ無いもの」に見せる。 */
-const PREVIEW_COLOR = 0x7ee081
-/**
- * 形状最適化(第3のモード)の役割色。**選択が勝つ**(本人決定) —— 選ばれているあいだは
- * `HIGHLIGHT_COLOR` / `PROPOSED_COLOR` になり、役割色は一時的に見えなくなる
- * (`applyFaceMaterials` が実体。役割は `state !== 'plain'` のとき無視する)。
- */
-const OPTIMIZE_PRESERVE_COLOR = 0x3f9b58
-const OPTIMIZE_EXCLUDE_COLOR = 0xc75448
-/** 拘束面(青系に塗る)。 */
-const OPTIMIZE_FIXTURE_COLOR = 0x3f7fc2
-/** 拘束の固定記号(四角錐)と、荷重の矢印・ラベルの色。面の塗りとは別に見分ける。 */
-const OPTIMIZE_FIXTURE_MARK_COLOR = 0x1c3550
-const OPTIMIZE_LOAD_COLOR = 0xffc857
-/**
- * **開発用のデバッグ表示の色**(`?debug=space` / `?debug=anchors` / `?voxel=1`)。
- * 旧実験場(`probe_topopt/web/index.html`。2026-09-05に削除)から**そのまま持ってきた値**で、
- * 見え方を揃えてある —— 移設の突き合わせで「色が違うから別物に見える」を起こさないため。
- * `docs/topopt-smooth-compare/` の16枚と同じ見え方を保つ意味でも、勝手に動かさないこと。
- */
-const DEBUG_SPACE_COLOR = 0x39445e
-const DEBUG_RHO_COLOR = 0xbfc7d5
-const DEBUG_ANCHOR_FIXED_COLOR = 0x2ee6a8
-const DEBUG_ANCHOR_LOAD_COLOR = 0xff5c2e
-/** 面の境界線。背景(`BACKGROUND_COLOR`)に埋もれないよう、2026-08-23に`GRID_COLOR`と
-    同程度の明るさへ上げた。`PICK_EDGE_COLOR`とは見分けがつく明るさを保つ(下記コメント)。 */
-const EDGE_COLOR = 0x3f4a56
-/** 選べる辺。面の境界線(`EDGE_COLOR`)と**見分けがつく明るさ**にする。 */
-const PICK_EDGE_COLOR = 0xbfd4ea
-/** 辺の当たり判定の太さ[画素]。細すぎると掴めず、太すぎると隣の辺が取れる。 */
-const EDGE_PICK_PIXELS = 6
-//: スケッチの点マーカーの当たり半径[画素]。**辺より小さく**しておく
-//: (点は辺の上に乗っているので、同じ太さだと辺を狙えない)。
-const SKETCH_HANDLE_PIXELS = 5
-//: ウィンドウ選択と見なすドラッグの最小距離[画素]。**クリックの上限と同じ値**にして、
-//: 「クリックでもドラッグでもない画素」が生まれないようにする(下の `CLICK_MOVE_LIMIT_PX`)。
-const BOX_SELECT_MIN_PX = 6
-/** 頂点マーカーの半径[画素]。辺の当たり判定(`EDGE_PICK_PIXELS`)より細くする ——
-    太いと、辺を狙うクリックが端点のマーカーに吸われる(頂点は必ず辺の端に乗っている)。 */
-const VERTEX_PIXELS = 4
-const BACKGROUND_COLOR = 0x161a1f
-/**
- * 平面グリッドの格子線。単位は mm。**刻みは 1/10/100mm の3段固定**(`gridScale.ts` の
- * `TIERS`)で、内容の大きさでも視点でも変わらない —— 変わるのは段ごとの不透明度だけで、
- * 線の太さがそのまま寸法の意味になる(2026-09-03本人決定)。描くのは `planeGrid.ts` の
- * 無限グリッドで、範囲という概念を持たない。`root` には入れない(初回フレーミングが
- * グリッドの箱に引っ張られるのを避ける)。
- */
-const GRID_COLOR = 0x3a4450
-/**
- * スケッチのコマンドを起動している間のグリッド。**「今これが指せる」が分かればよく、
- * 見た目は作り込まない**(当たり判定の感触と見た目は後日ユーザーが対話で詰める)。
- */
-const GRID_ARMED_COLOR = 0x7a90ab
-
-/**
- * 基準3平面の解析的な定義(**描いているグリッドとは別物**)。ピック範囲は ±`gridExtent`
- * (可変)。3枚とも原点を通るので three.js の `Plane` の `constant` は 0 でよい。
- *
- * **u/v はコアの `_BASE_PLANE_AXES`(`duocad/kernel.py`)と同じ取り方**にしてある ——
- * スケッチのframeがどの基準平面のものかは、この表との一致で判定する
- * (`basePlaneForFrame`)。法線の符号だけはコアと違う(XZがコアでは -Y)が、
- * 解析交差にも一致判定にも符号は効かないので揃えていない。
- */
-const BASE_PLANES: ReadonlyArray<{
-  name: BasePlaneName
-  normal: readonly [number, number, number]
-  u: readonly [number, number, number]
-  v: readonly [number, number, number]
-}> = [
-  { name: 'XY', normal: [0, 0, 1], u: [1, 0, 0], v: [0, 1, 0] },
-  { name: 'XZ', normal: [0, 1, 0], u: [1, 0, 0], v: [0, 0, 1] },
-  { name: 'YZ', normal: [1, 0, 0], u: [0, 1, 0], v: [0, 0, 1] },
-]
-
-/**
- * `projectBasePlane` が順に試す平面上の点[mm]。
- *
- * **u も v も 0 にしない** —— 3平面は原点と3本の軸で交わっており、どちらかが0の点は
- * 2枚に同時に乗る(例: XY平面上の (60, 0) は世界座標で y=0 なので XZ 平面の上でもある)。
- * そこを返すと、レイ距離が同じ2枚のどちらが取れるかが並び順で決まってしまう。
- *
- * **座標は固定でよい** —— 最大でも85で、`gridExtent` は `BASE_EXTENT`(=100)を
- * 下限に**広がる方向にしか動かない**ので、この点は常に描画範囲の内側にある。
- */
-const BASE_PLANE_PROBES: ReadonlyArray<readonly [number, number]> = [
-  [30, 30], [-30, 30], [30, -30], [-30, -30],
-  [60, 60], [-60, 60], [60, -60], [-60, -60],
-  [15, 45], [-45, 15], [45, -15], [-15, -45],
-  [85, 85], [-85, -85], [10, 10], [-10, -10],
-]
-/** 軸は色で見分ける(X赤 / Y緑 / Z青)。グリッド本体より少し明るく、選択色とは被らない。 */
-const AXIS_X_COLOR = 0xc45c5c
-const AXIS_Y_COLOR = 0x5cad6e
-const AXIS_Z_COLOR = 0x5a8ec4
-
-/**
- * 基準平面ごとの「面内の2軸」と「面外の軸」。**面内の軸は平面グリッドのシェーダーが描き、
- * 面外の軸だけ線ジオメトリで描く**(`planeGrid.ts` は平面の中しか知らないため)。
- *
- * 3平面を同時に出すとき(スケッチの対象待ち)は、同じ世界軸を2枚が二重に描かないよう
- * `desiredGridPlanes` が面内の軸を割り振る —— この表はあくまで「その平面の u/v は
- * どの軸か」を持つだけである。
- */
-const BASE_PLANE_AXES: Record<
-  BasePlaneName,
-  {
-    uColor: number
-    vColor: number
-    /** 面外の軸(その平面に直交する world 軸)。 */
-    outOfPlane: { name: 'X' | 'Y' | 'Z'; dir: readonly [number, number, number]; color: number }
-  }
-> = {
-  XY: { uColor: AXIS_X_COLOR, vColor: AXIS_Y_COLOR, outOfPlane: { name: 'Z', dir: [0, 0, 1], color: AXIS_Z_COLOR } },
-  XZ: { uColor: AXIS_X_COLOR, vColor: AXIS_Z_COLOR, outOfPlane: { name: 'Y', dir: [0, 1, 0], color: AXIS_Y_COLOR } },
-  YZ: { uColor: AXIS_Y_COLOR, vColor: AXIS_Z_COLOR, outOfPlane: { name: 'X', dir: [1, 0, 0], color: AXIS_X_COLOR } },
-}
-
-/**
- * **描く順序の層番号(1箇所にまとめる)。** 生の数値をコード中に書かない
- * (engine `duocad-depth-overlay-rule` の併記事項)。
- *
- * 負の3つは装飾(B群。深度検査あり・深度書き込み無し)、0以上は既存の階段
- * (A群＝ピック対象は `depthTest: false` なので、順序がそのまま前後関係になる)。
- */
-const LAYER = {
-  planeGrid: -3,
-  gridAxisLine: -2,
-  basePlaneHover: -1,
-  solid: 0,
-  optimize: 1,
-  /** 開発用のデバッグ表示(既定では何も描かない)。注記より手前、辺より奥。 */
-  debug: 2,
-  edge: 10,
-  region: 11,
-  sketchLine: 12,
-  sketchPoint: 13,
-} as const
-
-/**
- * **B群の深度バイアスの単位量**(クリップ空間。`gl_Position.z -= 層番号 * これ * w`)。
- * 法線方向にジオメトリを動かして逃がすことは禁止 —— 描画のズレをレイ検査へ持ち込まない
- * (engine `duocad-depth-overlay-rule`)。
- *
- * 1e-4 は「共平面の面より確実に手前」かつ「1mm程度の段差なら順序が入れ替わらない」
- * 大きさとして選んだ(near=0.1・far=数千mmの視錐台での実測レンジ)。
- */
-const DEPTH_BIAS_UNIT = 1.0e-4
-
-/**
- * B群の層番号(大きいほどカメラ側)。**`sketchFaceGrid` は別枠**(2026-09-03) ——
- * 任意面のスケッチ平面は貼り付けた面(A群のソリッド。深度書き込みあり)と完全に同一平面で
- * 争うので、床・基準平面グリッド(`planeGrid`。通常は開いた空間に浮いていて争う相手がいない)
- * と同じバイアス経路を使いつつ、層番号だけ分けて併記事項の規約(層は名前付き定数表)に従う。
- */
-const DEPTH_BIAS_LAYER = { planeGrid: 1, gridAxisLine: 2, basePlaneHover: 3, sketchFaceGrid: 4 } as const
-
-/**
- * カメラの画角[度]の下限・上限・既定。**UIとlocalStorage(`viewSettings.ts`)も
- * ここを import する** —— 範囲の正を2か所に書かない。
- *
- * 90を超えると端の歪みが強すぎて形の判断に使えない。**下限が30なのは、そこから下に
- * 欲しいのが「弱いパース」ではなく正投影そのものだから** —— 画角を絞って正投影を
- * 真似ると距離補正でカメラが際限なく遠ざかり(30度で既に注視点距離が3.7倍)、深度の
- * 精度を捨てるわりに平行投影にはならない(手前と奥の見かけの比は**画角ではなく距離で
- * 決まる**ので、画角をいくら絞っても1にならない)。そこで**1〜29は選べる値に無く**、
- * 0(`FOV_ORTHO`)は近似ではなく本物の `OrthographicCamera` へ切り替える。
- */
-export const FOV_MIN = 30
-export const FOV_MAX = 90
-export const FOV_DEFAULT = 30
-
-/**
- * 完全正投影を表す画角(2026-08-28本人指示で追加)。**「とても小さい画角」ではない**
- * —— これを渡すと `PerspectiveCamera` ではなく `OrthographicCamera` が使われ、
- * パースが完全に消える(同じ長さの辺は奥行きが違っても同じ長さに写る)。
- */
-export const FOV_ORTHO = 0
-
-/**
- * 選べる画角か。**0ちょうど、または30〜90**の2択で、あいだの1〜29は無い。
- * UI(`SettingsDialog.svelte`)とlocalStorage(`viewSettings.ts`)はこれを呼ぶ ——
- * 「選べる値」の正をこの1か所に閉じるため。
- */
-export function isSelectableFov(value: number): boolean {
-  return Number.isFinite(value) && (value === FOV_ORTHO || (value >= FOV_MIN && value <= FOV_MAX))
-}
-
-/**
- * `lookAtSketch` が図形の外接半径に掛ける余白。
- * **45度で従来の `radius * 3` と一致させるための余白**(`1.243/tan(22.5°) ≈ 3.00`)。
- */
-const SKETCH_FIT_MARGIN = 1.243
-
-/**
- * 既定の視点の向き(front-top-right)。**距離に掛けて注視点へ足す**ためのベクトルで、
- * **長さは1ではなく 1.5362**(= `hypot(1, 1, 0.6)`)。初期視点と `frameToContent` の
- * 2か所が使う。
- *
- * **掛けた値がそのまま注視点距離になるわけではない** —— `frameToContent` は
- * `fitDistance` の 1.5362倍の位置にカメラを置くので、収まるぎりぎりより一回り引いた絵に
- * なる。**この余白は既定の見え方そのもの**なので直さない(直すと全画角で見かけが1.54倍に
- * なる)。ただし正投影は視錐台で大きさを作るため、この係数を掛けないと透視と揃わない
- * (`frameToContent`)。
- *
- * **X と Y に等量、上方向(Z)は控えめ** —— Y-up 時代の `(d, 0.6d, d)` の構図をそのまま
- * Z-up へ移したもので、注視点からの距離は以前と変わらない(距離を決めるのは `fitDistance`
- * であり、こちらは向きだけを持つ)。**Y が負**なのは duocad では Y=奥 だからで、`+Y` から
- * 見ると背面になる —— Fusion / SolidWorks の既定アイソメと同じ
- * front(−Y) / top(+Z) / right(+X) の側から見る。
- */
-const HOME_VIEW_OFFSET = new THREE.Vector3(1, -1, 0.6)
-
-/** クリックとドラッグ(視点回転)の境目。これ以上動いたら選択ではなく回転とみなす。 */
-const CLICK_MOVE_LIMIT_PX = 6
-const CLICK_TIME_LIMIT_MS = 500
-
-/**
- * ホバー強調で上げる明度(HSLのL)。**3色目は足さない**(2026-08-27本人決定) ——
- * 色相が「誰の選択か」(user=橙 / proposed=水色)、明度が「今カーソルの下にあるか」を
- * 表す2軸にする。未選択にも選択済みにも同じ幅で掛けるので、規則は
- * 「カーソルの下にあるものは明るい」の1行で済む。
- */
-const HOVER_LIGHTEN = 0.16
-/** ホバー中の基準平面に重ねる板の濃さ。グリッドの線が透けて見える程度に留める。 */
-const BASE_PLANE_HOVER_OPACITY = 0.14
-
-/**
- * ビューキューブ(常設・26領域)。一辺[画素]と右上の余白[画素]。
- * ビューポート左上には浮くブラウザがある([[duocad-ui-moved-to-fusion-layout]])ので右上は空いている。
- *
- * 初版は120px角だったが小さく読み取りにくかったので **144px** へ広げた(2026-09-03本人指示)。
- * **これはクリックを吸う矩形でもある**(`viewCubeRect` / `insideCubeRect`)ので、広げるほど
- * 右上でモデルを指せる領域が減る。`web/scripts/smoke-files.mjs` の空白クリック候補のように
- * 画面の隅を突く検査があることに注意(落とし穴は [[viewport-resize-silently-changes-what-a-click-grabs]])。
- */
-const CUBE_SIZE_PX = 144
-const CUBE_MARGIN_PX = 12
-/** `pointerdown` からこれだけ動いたらドラッグ(それ未満で `pointerup` ならクリック=スナップ)。 */
-const CUBE_DRAG_THRESHOLD_PX = 4
-/** クリックでスナップするときの視点アニメーション時間[ms](タスク仕様: 300ms前後)。 */
-const CUBE_SNAP_MS = 300
-/** キューブ用正投影カメラの視錐台半幅。キューブは半幅1の立方体(対角 `sqrt(3)`)なので、
- *  角が切れない程度に広く取る。
- *
- *  **2026-09-04以降、透視のときの距離式( `CUBE_ORTHO_HALF / sin(fov/2)` )の分子としても使う**
- *  ——「見かけの大きさが正投影のいまの見え方とおおむね揃う係数」がこの値そのものなので、
- *  定数を2本持たずに済む。fov→0でこの式はdistance→∞に発散し、正投影の見え方へ連続的に
- *  近づく(あいだで見え方が飛ばない)。 */
-const CUBE_ORTHO_HALF = 1.8
-/** キューブ用カメラを置く距離(正投影のとき)。正投影なので見かけの大きさには影響しない
- *  (near/farに収まればよい)。透視のときの距離は `updateCubeCamera` が毎フレームfovから導く。 */
-const CUBE_CAMERA_DISTANCE = 4
-/** キューブ(半幅1の立方体)の外接球の半径。透視のときのnear/farをここから導く
- *  (`updateCubeCamera` の「near に食われる」節)。 */
-const CUBE_CIRCUMRADIUS = Math.sqrt(3)
-/** 透視のときのnear平面の安全率(1未満)。手前の角(カメラから `distance - CUBE_CIRCUMRADIUS` の
- *  位置)より内側に余裕を残す —— 角がまるごと消える(near に食われる)のを防ぐ。 */
-const CUBE_NEAR_SAFETY = 0.5
-/** 透視のときのfar平面の余裕率(1超)。奥の角(`distance + CUBE_CIRCUMRADIUS`)より外側に余裕を残す。 */
-const CUBE_FAR_MARGIN = 1.5
-/** 面セルの日本語ラベル。キーは `"i,j,k"`。Z-up右手系(タスク仕様: 上=+Z/下=-Z/前=-Y/後=+Y/右=+X/左=-X)。 */
-const CUBE_FACE_LABELS: Readonly<Record<string, string>> = {
-  '1,0,0': '右',
-  '-1,0,0': '左',
-  '0,1,0': '後',
-  '0,-1,0': '前',
-  '0,0,1': '上',
-  '0,0,-1': '下',
-}
-
-/** 色相・彩度はそのままに明度だけ上げる(`HOVER_LIGHTEN` の実体)。 */
-function lighten(hex: number, amount: number): number {
-  const color = new THREE.Color(hex)
-  const hsl = { h: 0, s: 0, l: 0 }
-  color.getHSL(hsl)
-  color.setHSL(hsl.h, hsl.s, Math.min(1, hsl.l + amount))
-  return color.getHex()
-}
-
-/** 1個のBodyが画面に持つメッシュ(面ごとの三角形メッシュ+境界線)。 */
-interface BodyMeshes {
-  /** ピック判定の対象(面の三角形メッシュだけ)。 */
-  faceMeshes: THREE.Mesh[]
-  /** `root` に足した全オブジェクト(面メッシュ+境界線)。clearBodyで**これを**取り除く
-   * (面メッシュだけを外すと境界線(LineSegments)がシーンに残り続け、dispose済みの
-   * ジオメトリを参照するゴースト線としてメモリリークする)。 */
-  sceneObjects: THREE.Object3D[]
-  disposables: Array<{ dispose(): void }>
-}
-
-/**
- * B群(装飾。ピック対象でない)の深度バイアスを材質へ仕込む —— クリップ空間で
- * `gl_Position.z -= 層番号 * 単位量 * w` だけカメラ側へ寄せる
- * (engine `duocad-depth-overlay-rule`)。**ジオメトリは1mmも動かさない**ので、
- * 描画のズレがレイ検査(`basePlaneAt` の解析交差・面のピック)へ漏れない。
- *
- * `customProgramCacheKey` を層ごとに変える —— 変えないと、同じ材質種で層の違う
- * プログラムが1つに共有されて**後から作った方のバイアスが効かない**。
- *
- * `#include <project_vertex>` が無い材質へ掛けたら例外にする(黙って素通しにしない)。
- */
-function withDepthBias<T extends THREE.Material>(material: T, layer: number): T {
-  const bias = (layer * DEPTH_BIAS_UNIT).toFixed(8)
-  material.onBeforeCompile = (shader) => {
-    const marker = '#include <project_vertex>'
-    if (!shader.vertexShader.includes(marker)) {
-      throw new Error(`深度バイアスを掛けられない材質(project_vertexが無い): ${material.type}`)
-    }
-    shader.vertexShader = shader.vertexShader.replace(
-      marker,
-      `${marker}
-	gl_Position.z -= ${bias} * gl_Position.w;`,
-    )
-  }
-  material.customProgramCacheKey = () => `duocad-depth-bias-${bias}`
-  return material
+export { bodyGhostMatrix, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, isSelectableFov }
+export type {
+  BodyGeometryUpdate,
+  BodyGhost,
+  BodyGhostRotation,
+  BoxSelectEvent,
+  EdgeRef,
+  FaceGeometry,
+  FaceRef,
+  GeometryPayload,
+  OptimizeDebugAnchors,
+  OptimizeDebugGrid,
+  OptimizeDebugState,
+  OptimizeDebugVoxels,
+  OptimizeLoadVisual,
+  OptimizeVisualState,
+  PickEvent,
+  PickMode,
+  SketchDraw,
+  SketchEntityHit,
+  SketchPlaneRef,
+  VertexMarker,
+  VertexRef,
+  Viewport,
+  ViewportResolution,
 }
 
 export function createViewport(container: HTMLElement): Viewport {
