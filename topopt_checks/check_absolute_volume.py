@@ -546,6 +546,12 @@ def check_unchanged_defaults() -> None:
             nely,
             nelz,
             volfrac=0.35,
+            # **`rmin` を明示する。** 省くと `simp.DEFAULT_RMIN` に追随してしまい、
+            # 既定値を動かした瞬間にこの指紋(SHA-256)が別物になる。基準値は 1.5 で
+            # 採ってあるので、その 1.5 をここで固定する(値は採取時と同じ。2026-09-05に
+            # 既定が 1.5 から動いたので明示に切り替えた。プリセット側は `simp.PRESET`
+            # が元々明示しているので同じ問題が無い)。
+            rmin=1.5,
             max_iter=12,
             change_tol=0.0,
             void_mask=void,
