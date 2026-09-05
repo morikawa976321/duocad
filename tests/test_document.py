@@ -16,9 +16,7 @@ def test_document_units_cannot_be_reassigned():
 def test_body_kind_must_be_solid():
     """Bodyのkindは"solid"以外を受け付けない(ValueError)。
 
-    参照ボディ(`kind="reference"`)は2026-09-03に概念ごと撤去した
-    ([[duocad-reference-body-removal-decided]])ので、"reference"も他の未知の値と
-    同じく拒否される。
+    参照ボディ(`kind="reference"`)は撤去された概念なので、他の未知の値と同じく拒否される。
     """
     with pytest.raises(ValueError):
         Body(id="b1", name="x", kind="mesh")
@@ -102,10 +100,10 @@ def test_solid_body_is_editable():
 
 
 def test_unknown_id_message_lists_the_valid_ids():
-    """存在しないIDのエラー文は、**有効なIDをその場に並べる**(2026-08-22)。
+    """存在しないIDのエラー文は、**有効なIDをその場に並べる**。
 
-    行き止まりのエラー(「そのIDは違う」だけ)はAIを推測へ倒す。実測でローカルLLMが
-    存在しない図形IDを捏造したのを受けて、ID系のエラー文をここへ一本化した。
+    行き止まりのエラー(「そのIDは違う」だけ)は、呼び出し元のAIを存在しない図形IDの
+    捏造へ倒しかねない。
     """
     message = unknown_id_message("entity", "c1", ["entity-aaa", "entity-bbb"])
     assert "'c1'" in message

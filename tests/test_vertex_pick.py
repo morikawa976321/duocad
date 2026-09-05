@@ -235,7 +235,7 @@ def test_the_automatic_commit_reaches_every_client(session: Session) -> None:
     状態そのものになる。
 
     とくに `preview` で落ちやすい —— あれは「状態を配らない」コマンドなので、確定の配信を
-    後続のverbの `_push` に相乗りさせると preview だけが漏れる(2026-08-23 QA指摘)。
+    後続のverbの `_push` に相乗りさせると preview だけが漏れる。
     プレビューして Esc で降りると、その食い違いが**そのまま残る**。
     """
     body, _ = _box(session)

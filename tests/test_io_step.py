@@ -155,10 +155,8 @@ def test_export_raises_a_dedicated_error_when_all_candidates_are_hidden(tmp_path
 def test_export_after_import_step_exports_both_solids(tmp_path):
     """`import_step` 直後は作った編集用ボディが両方とも書き出される。
 
-    2026-09-03に参照ボディ(`kind="reference"`・不可視の読み込み原本)の概念を撤去した
-    ([[duocad-reference-body-removal-decided]])ので、`import_step` はもうソリッドごとに
-    1つのボディしか作らない。「編集用だけが書き出され、対になる参照が可視フィルタで
-    落ちる」という以前の検査対象は無くなった。
+    `import_step` はソリッドごとに1つのボディしか作らない(不可視の参照ボディは無い)ので、
+    作った全ボディがそのまま書き出し対象になる。
     """
     doc = Document()
     source = _two_solid_step(tmp_path)

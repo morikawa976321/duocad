@@ -2,9 +2,8 @@
 
 `_coerce_ref` を参照1件ごとに呼ぶと、`kernel.face_count`/`edge_count` の中の
 `_face_map`/`_edge_map` が `TopExp.MapShapes_s` で形状全体を毎回走査し直す。同じボディの
-同じ形状を選択件数ぶん何度も指す一括選択(ドラッグ選択)では、この全走査が繰り返される
-(2026-09-04)。`_coerce_refs` は `(body_id, kind)` の組ごとに数え上げを1回だけ行い、
-結果を使い回す。
+同じ形状を選択件数ぶん何度も指す一括選択(ドラッグ選択)では、この全走査が繰り返される。
+`_coerce_refs` は `(body_id, kind)` の組ごとに数え上げを1回だけ行い、結果を使い回す。
 
 **既存の複数ボディfixture(`test_selection.py` の `two_bodies`・`test_selection_ref_key.py`
 の `many_bodies`)は全て同一寸法の箱**で、面数(6)・辺数(12)・頂点数(8)がボディ間で
@@ -13,14 +12,10 @@
 `body_id` を落としても既存の回帰は全緑のまま通った)。ここでは意図的に面数・辺数が異なる
 形状(箱6面12辺 / 円柱3面)を混ぜ、そのクラスの回帰を検出できるようにする。
 
-**`bodies`/`counts` を `modify_selection` の `add`/`remove` 間で共有する(2026-09-04、
-QA指摘)**: `modify_selection` 内部では `_coerce_refs` が add 用・remove 用の2回呼ばれる。
-最初の実装は呼び出しごとに新しい辞書を作っていたため、`add` と `remove` に同じボディの
-面/辺参照が混ざると1回の `modify_selection` 呼び出しの中で最大2回数えていた ——
-完了条件1「1回の `modify_selection`/`propose_selection` で、同じボディの面数・辺数を
-2回以上数えない」の文言に対する実質的なギャップだった(括弧内の受入例が `add` のみの
-経路だったため既存テストでは見えていなかった)。`_coerce_refs` に `bodies`/`counts` を
-外から渡せる引数を足し、`modify_selection` がその2回の呼び出しへ同じ辞書を渡す形で埋めた。
+**`bodies`/`counts` は `modify_selection` の `add`/`remove` 呼び出し間で共有する**:
+`modify_selection` 内部では `_coerce_refs` が `add` 用・`remove` 用の2回呼ばれるが、
+`add` と `remove` に同じボディの面/辺参照が混ざっても、1回の `modify_selection` 呼び出しの
+中で同じ `(body_id, kind)` を2回数えてはいけない。
 """
 from __future__ import annotations
 
@@ -119,13 +114,9 @@ def test_separate_modify_selection_calls_each_recount(
 def test_add_and_remove_in_the_same_call_share_the_count_cache(
     two_shapes: Document, monkeypatch: pytest.MonkeyPatch
 ):
-    """完了条件1「1回の `modify_selection`/`propose_selection` で、同じボディの
-    面数・辺数を2回以上数えない」の `add`+`remove` 同時指定版(2026-09-04、QA指摘)。
-
-    `modify_selection(add=, remove=)` の内部では `_coerce_refs` が `add` 用・
-    `remove` 用の2回呼ばれるが、**この1回の `modify_selection` 呼び出しの中**では
-    同じ `(body_id, kind)` を2回数えてはいけない —— `bodies`/`counts` を2回の
-    `_coerce_refs` 呼び出しで共有することで満たす。"""
+    """`add` と `remove` を同時に指定しても、この1回の `modify_selection` 呼び出しの
+    中では同じ `(body_id, kind)` を2回数えない(`bodies`/`counts` を2回の
+    `_coerce_refs` 呼び出しで共有する)。"""
     face_calls = _count_kernel_calls(monkeypatch, "face_count")
     add_refs = [{"body": "box", "kind": "face", "index": i + 1} for i in range(6)]
     remove_refs = [{"body": "box", "kind": "face", "index": 1}]
@@ -147,7 +138,7 @@ def test_the_cache_does_not_confuse_a_smaller_bodys_count_with_a_larger_bodys(
     先に円柱(3面)の面を1件処理させてから、箱(6面)の6番目の面を同じ
     `modify_selection` 呼び出しに混ぜる。キャッシュ鍵が `kind` だけ(`body_id` を
     見ない)だと、箱の検査に円柱の面数3が使い回され、`face index out of range:
-    6 (1..3)` と**誤って**弾かれる —— 2026-09-04の変異検査で実際に再現した回帰。
+    6 (1..3)` と**誤って**弾かれる(変異検査で実際に再現した回帰)。
     """
     refs = [
         {"body": "cyl", "kind": "face", "index": 1},

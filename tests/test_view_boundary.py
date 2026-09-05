@@ -1,4 +1,4 @@
-"""`Session` と `DocumentView` の継ぎ目そのもの(2026-08-28、CODE_SURVEY_ACTIONS 3.1 第2段)。
+"""`Session` と `DocumentView` の継ぎ目そのもの。
 
 配りもの(状態配信・版・キャッシュ)を `duocad/view.py` へ切り出したときに**新しく生まれた
 壊れ方**だけをここで固定する。中身の正しさ(何を配るか・いつ剪定するか)は

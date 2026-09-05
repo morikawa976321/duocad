@@ -12,12 +12,10 @@ import json
 import pytest
 
 # 立体の面にスケッチを貼るテストのために、テスト側から直接ソリッドを作る
-# (境界検査は `duocad/` 配下だけを対象にしており、テストは対象外。M1の
-# かつて test_extrude_face.py が BRepPrimAPI_MakeBox を使っていたのと同じ)。
+# (境界検査は `duocad/` 配下だけを対象にしており、テストは対象外)。
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
 
-# 境界検査の実体はM0のテストが持つ。M2の新規ファイルにも同じ検査が効いていることを
-# 見るために、そこから直接借りる(検査ロジックを写経すると片方だけ腐る)。
+# 境界検査の実体は test_boundaries.py から直接借りる(写経すると片方だけ腐る)。
 from test_boundaries import DUOCAD_DIR, _imported_module_roots, _source_files
 
 from duocad import kernel
@@ -89,27 +87,19 @@ def test_base_planes_are_the_three_reference_planes():
 
 
 def test_entity_kind_is_validated():
-    """図形の種別は決められたものだけ。知らない種別を黙って受け取らない(§6予防6)。
-
-    円弧(`arc`)は有効な種別 — 理由は `tests/test_arc.py` のモジュールdocstring
-    (実物のアロマ拡散器が部分円筒6面を持ち、代用では作れない)。このテストが見ているのは
-    「登録されていない種別を拒否すること」であって、特定の綴りではない。
-    """
+    """図形の種別は登録されたものだけを受け付ける。未知の種別は黙って通さない(§6予防6)。"""
     assert Entity(id="e1", kind="circle").params == {}
     assert Entity(id="e2", kind="arc").params == {}, "円弧は2026-08-11から有効な種別"
     # 必須フィールドの包含で見る(補助フィールドの追加まで禁じない)
     assert {"id", "kind", "params"} <= {f.name for f in dataclasses.fields(Entity)}
     with pytest.raises(ValueError):
-        Entity(id="e3", kind="spline")  # スプラインは今も範囲外
+        Entity(id="e3", kind="spline")
 
 
 def test_m2_modules_are_covered_by_the_import_boundary_scan():
-    """M2の新規ファイルにもOCP/build123dのimport境界が効いていること。
-
-    `_source_files()` は再帰的に走査するので新規ファイルは自動的に対象になるが、
-    **対象に入っていること自体**は誰も固定していない(M0の
-    `test_boundary_scan_covers_every_source_file` はM0の6ファイルだけを見る)。
-    M2で `duocad/verbs/` にもう1つverbが増えるので、ここで固定する。
+    """`duocad/verbs/` に足したモジュールも import 境界検査の対象に入り、
+    OCP/build123dを直接importしていないこと。**対象に入っていること自体**は
+    走査が再帰的というだけでは固定されない(新規ファイルの取りこぼしに気づけない)。
     """
     scanned = {rel for rel, _ in _source_files()}
     assert set(M2_MODULES) <= scanned, f"走査から漏れている: {sorted(set(M2_MODULES) - scanned)}"
