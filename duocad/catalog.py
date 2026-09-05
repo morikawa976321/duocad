@@ -813,8 +813,7 @@ COMMANDS: tuple[Command, ...] = (
         ws="none",
         note=(
             "**メッシュボディは編集verbを拒否する**(2026-09-04本人決定)。"
-            "三角形1枚を1面とするシェルとしてOCCTへ入れると面数が数万になり、"
-            "`kernel.face_count` は2,835面で既に律速である。理由は `duocad/meshbody.py` のdocstring"
+            "理由は `duocad/meshbody.py` のdocstring"
         ),
     ),
     Command(

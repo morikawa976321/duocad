@@ -33,7 +33,7 @@
  * `CommandHost` を作り直す(`App.svelte`)ため再現できない(受け入れた損失) ——
  * 選択(コア側の共有状態)は再入場をまたいで生き残るが、距離・種別の入力(CommandHost
  * ローカルの状態)は失われる。そのため`regionsStillExist`(b)の分岐は**通常のUI操作では
- * 到達できない**ことが構造的に確定しており(領域を変えうる全14verbが例外なく
+ * 到達できない**ことが構造的に確定しており(領域を変えうる全 `resets_selection` verbが例外なく
  * `resets_selection=True` を持つため。過不足の固定は
  * `tests/test_server_selection_reset.py::test_resets_selection_is_declared_on_exactly_these_verbs`)、
  * ロジック自体の正しさは `window.__duocad.regionsStillExist` を直接呼んで検算する
@@ -606,7 +606,7 @@ async function main() {
 
     // **(b) regionsStillExist のロジックを合成データで直接検査する。**
     //
-    // なぜ通常のUI操作では到達できないか: 領域を変えうる全14verb(`add_line` 等の作図・
+    // なぜ通常のUI操作では到達できないか: 領域を変えうる全 `resets_selection` verb(`add_line` 等の作図・
     // `set_parameter`・`pattern_rectangular`/`pattern_circular`・`undo`/`redo`)は
     // `duocad/catalog.py` で例外なく `resets_selection=True` を持つ
     // (`tests/test_server_selection_reset.py::test_resets_selection_is_declared_on_exactly_these_verbs`

@@ -16,7 +16,7 @@
 
 **サブモジュールをここで import しない。** `import duocad` は verb 登録のために
 `duocad/__init__.py` から連鎖するので、ここで scipy / skimage / build123d を引き込むと
-pytest 807件が毎回それを払うことになる。呼ぶ側が
+pytest 全体が毎回それを払うことになる。呼ぶ側が
 `from duocad.topopt import design_space` のように名指しする。
 """
 from pathlib import Path

@@ -4,14 +4,7 @@
 両者が同じ選択集合を交互に触れるようにしたモデリングツール。**
 差別化はUIでも機能数でもなく **交互操作**（AIが集合を提案 → 人が過不足を直す → AIが操作を適用）にある。
 
-**状態:** 24操作。うち23操作が人間（UI）とAI（MCP）の両側から使える（`set_parameter` だけは2026-08-30に人間側の口を捨て、AI専用にした）。このREADMEは開発を再開するときの入口である。
-
-| | |
-|---|---|
-| ブランチ / コミット | `main`（最新は `git log -1`） |
-| テスト | **886 passed / 2 skipped**（skipの2本は実機が揃うときだけ走る。**赤は1本も無い**） |
-| 実行環境 | Python 3.11（`.venv`）／ Node（`web/node_modules` 導入済み）／ `web/dist` ビルド済み |
-| 単位 | mm 固定 |
+このREADMEは開発を再開するときの入口である。単位は mm 固定。
 
 ### 文書の地図（このREADMEは入口。詳細は下記が正）
 
@@ -19,7 +12,7 @@
 |---|---|---|
 | [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | **設計の現行の正**。何を作るか・到達表・残タスク | 仕様を確かめるとき |
 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | **なぜこう作るか**（§2 分業の原則が企画の主張） | 判断の背景を辿るとき |
-| [MCP.md](MCP.md) | **MCPツール一覧の正**（36個）と登録手順 | AI側から触るとき |
+| [MCP.md](MCP.md) | **MCPツール一覧の正**と登録手順 | AI側から触るとき |
 | [tests/README.md](tests/README.md) | テストが定義するAPI契約 | コアの挙動を疑うとき |
 | [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化の実測の記録**(費用の表・余白比率・案5の比較・応力・面アンカー・変異検査) | 数字の根拠を辿るとき |
 
@@ -46,11 +39,10 @@ UIとAI操作の両方に共通する設計原則。verbを足す・直すとき
    この型の対象外である。
 3. **省けるクリックは徹底的に省く。** Enterが要るのは次のいずれかに当てはまる操作だけで、
    どちらでもなければ最後のクリックで即適用される（実装は `web/src/commands/command.ts`
-   の `needsEnter`、表は `tests/test_ui_command_wiring.py` の `ENTER_REQUIRED`）:
+   の `needsEnter`、正は `tests/test_ui_command_wiring.py` の `ENTER_REQUIRED`）:
    - (1) **対象を複数選べる**（辺を何本でも・図形を何個でも）
    - (2) **howの入力がある**（数値・選択肢・パス）
 
-   現行で即適用になるのは **`add_line`・`sketch_create`** の2つ。
 4. **エラーはすべてトーストで見せる**（`web/src/Toast.svelte`）。**いったんエラーのみ**を
    寄せてあり、情報（読み込んだ部品数・書き出したパス等）は`note()`が内部状態として
    保持するだけで画面には出さない（`window.__duocad.messages` で読める）。
@@ -83,7 +75,7 @@ AIに頼む日も同じもので立てる。**先にアプリを立てて、Clau
 
 - **アプリ内AIパネル**（画面右サイドバー）—— ローカルの llama-server（キー不要）。
   APIキーでのClaude利用はできない（Claudeを使う道は下のMCP経路）
-- **Claude Code**（MCPの30ツール）—— **サブスク認証のまま使えるのはこちらだけ**。繋ぎ方は1.2
+- **Claude Code**（MCP）—— **サブスク認証のまま使えるのはこちらだけ**。繋ぎ方は1.2
 
 ### 1.1 立てる
 
@@ -132,7 +124,7 @@ duocad以外のディレクトリからも使いたい日だけ、手でuserス�
 claude mcp add --scope user --transport http duocad http://127.0.0.1:8766/mcp
 ```
 
-**既定にはしない** —— 30ツールが無関係なプロジェクトにも出てくるため。
+**既定にはしない** —— duocad の MCP が無関係なプロジェクトにも出てくるため。
 
 ### 1.3 frontendを直しながら見る（Vite dev server）
 
@@ -145,19 +137,6 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 画面は既定の `ws://127.0.0.1:8765` へ落ちて繋がる（Pythonサーバは立てておくこと）。
 このときだけは `web/dist` の作り直しが要らない（Viteが `web/src` を直に配る）。
 型検査は `npm run check`（`tsc --noEmit` ＋ `svelte-check`）。**`.svelte` の中も見る**。
-
-### ポートまとめ
-
-| ポート | 何 | 誰が使う |
-|---|---|---|
-| 8765 | WebSocket（コマンド下り／イベント上り） | `duocad.mcp_server` |
-| 8766 | 静的配信（**ブラウザで開くのはこちら**）＋ `/mcp`（**Claude Codeが繋ぐのはこちら**） | 同上 |
-| 5173 | Vite dev server | `npm run dev` |
-| 8775/8776・8785/8786・8795/8796 | `smoke` / `smoke-features` / `smoke-files` | **各スクリプトが自分で立てる** |
-| 8805/8806・8815/8816 | `smoke-toast` / `smoke-regions` | 同上 |
-| 8865/8866・8885/8886 | `smoke-mcp` / `acceptance` | 同上 |
-| 8975/8976・8985/8986 | `smoke-move` / `smoke-mesh-body` | 同上 |
-| 8905/8906 | `smoke-optimize` | 同上 |
 
 ---
 
@@ -175,7 +154,7 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
   （2026-09-04に `showModal()` から切り替え）。FOVは見ながら決める設定なので、背後を
   inert にすると「見る」だけが残って「回して確かめる」が死ぬ。`showModal()` がただで
   付けていた Esc と重なり順は自前で持ち直してある（`SettingsDialog.svelte`）。
-- **Enterが要らないコマンドは2つ（線分・スケッチ）**。
+- **Enterが要らないコマンド**は `tests/test_ui_command_wiring.py` の `ENTER_REQUIRED` が正（現行は線分・スケッチ）。
 - undo/redoは**キーボードのみ**（Ctrl+Z / Ctrl+Y）。
 - **保存できる先は「いま編集しているファイル」1つだけ**（2026-08-30）。上書きの口は
   ヘッダの保存ボタン（`#file-save`）と **Ctrl+S** で、行き先を選ばせない。ファイルパネルの
@@ -190,8 +169,7 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 - **選択パネルは無い**。選択を直す手段は3Dクリックに一本化してある。
 - **保存ファイルは自己完結している**。読み込んだSTEPは本文がそのまま操作ログへ
   取り込まれるので、元のSTEPを移動・改名・削除しても、別PCへ持っていっても開ける
-  （Fusionの「挿入」と同じで、元STEPを後から更新しても追随はしない）。代償はファイルサイズで、
-  4.6MBのSTEPを読むと `model.json` は約4.8MBになる（開くのに約1.6秒）。
+  （Fusionの「挿入」と同じで、元STEPを後から更新しても追随はしない）。代償はファイルサイズが大きくなる。
 - **形を変える操作（押し出し・丸め・面取り・反復・図形追加・パラメータ変更）の確定後、
   undo/redoの後は選択が常に空になる**。添字は形状変更で壊れるので、後継を
   当てにいくのではなく選び直させる。可視性の切替（手前を隠す）では選択は飛ばない。
@@ -200,7 +178,7 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 
 ## 3. 自動検査の走らせ方
 
-### pytest（コア・MCPの契約 886 passed / 2 skipped）
+### pytest（コア・MCPの契約）
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
@@ -208,11 +186,9 @@ cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
 
 サーバもブラウザも要らない。実STEPを読む重いテストは含まない。
 
-**件数は `pytest -q` の最終行をそのまま写す**（`886 passed / 2 skipped` の形）。「合計何件」という書き方をしない —— passed だけの数なのか skip を足した数なのかが読み手に分からず、**このREADMEでは実際に3回続けて食い違った**（`readme.md` の件数は冒頭の状態表・この見出し・§5の文書地図の3箇所にある）。
+### 形状最適化の受入検査
 
-### 形状最適化の受入検査(12本・536件。通しで約215秒)
-
-**pytest には入れていない。** 通しで約200秒あり、`tests/` へ入れると `pytest -q` が毎回
+**pytest には入れていない。** `tests/` へ入れると `pytest -q` が毎回
 それだけ重くなる。マーカーで既定から外す案も採らない —— duocad に CI が無いので、既定から
 外した瞬間に誰も回さなくなる(`pytest -q` が緑で返るため、無人の runner は「緑だ」と
 報告して先へ進む)。**強制力は、タスクに書く「受入検査がすべて緑」の一文と runner が担う。**
@@ -220,53 +196,49 @@ cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
 ```powershell
 cd C:\Users\tm976\mf\duocad
 
-# SIMP側の数値の正しさ。約6秒
+# SIMP側の数値の正しさ
 & .\.venv\Scripts\python.exe topopt_checks\check_simp.py
 
-# メッシュ化側の正しさ。SIMPを1回回すので約13〜30秒(機械の状態による)
+# メッシュ化側の正しさ（SIMPを1回回す）
 & .\.venv\Scripts\python.exe topopt_checks\check_mesh.py
 
-# ボクセル化側の正しさ。SIMPを回さないので約8秒
+# ボクセル化側の正しさ（SIMPを回さない）
 & .\.venv\Scripts\python.exe topopt_checks\check_voxelize.py
 
-# 面アンカー側の正しさ。端から端まで1回通すので約37〜49秒(うち約27秒が検査[5]の円筒面)
+# 面アンカー側の正しさ（端から端まで1回通す）
 & .\.venv\Scripts\python.exe topopt_checks\check_anchor.py
 
-# 塊(設計空間)。分離 + 案1 + 連結性ガード + 案5 + 4題材の通し + 既定の導出 + 空の条件面。約19秒
+# 塊(設計空間)。分離 + 案1 + 連結性ガード + 案5 + 4題材の通し + 既定の導出 + 空の条件面
 & .\.venv\Scripts\python.exe topopt_checks\check_design_space.py
 
-# 体積目標を絶対量(mm^3)で指定する口。プリセットを再現するので約16秒
+# 体積目標を絶対量(mm^3)で指定する口
 & .\.venv\Scripts\python.exe topopt_checks\check_absolute_volume.py
 
-# von Mises応力・実単位換算・代表応力・最小安全率。約8秒
+# von Mises応力・実単位換算・代表応力・最小安全率
 & .\.venv\Scripts\python.exe topopt_checks\check_stress.py
 
-# 幾何マルチグリッド前処理(階層・対称正定値性・検出力・格子非依存性・答えの一致)。約21秒
+# 幾何マルチグリッド前処理
 & .\.venv\Scripts\python.exe topopt_checks\check_multigrid.py
 
-# CPU並列化(行ブロック並列matvecの正しさ・退避経路・スレッド数を振ってもビット一致)。約15秒
+# CPU並列化
 & .\.venv\Scripts\python.exe topopt_checks\check_parallel.py
 
-# 安全率の外側ループ(配線・単調性のスポット確認・入口・達成不能の例外・収束・引数検証)。約39〜48秒
+# 安全率の外側ループ
 & .\.venv\Scripts\python.exe topopt_checks\check_safety_loop.py
 
-# 密度フィルタ半径をmmで指定する口(排他・下限・境界・既定不変・単位の等価性・検出力・配線)。約10秒
+# 密度フィルタ半径をmmで指定する口
 & .\.venv\Scripts\python.exe topopt_checks\check_filter_radius.py
 
-# duocad本体への配線(4条件 -> 塊 -> 最適化 -> メッシュボディ。位置・進捗・中断・事後検出)。約16秒
+# duocad本体への配線(4条件 -> 塊 -> 最適化 -> メッシュボディ)
 & .\.venv\Scripts\python.exe topopt_checks\check_optimize_wiring.py
 ```
 
-**どれも最後の行が `OK:` で、終了コードが 0 なら合格。** 12本すべてで合計 **536件**
-(24 / 21 / 48 / 59 / 124 / 44 / 40 / 46 / 41 / 30 / 31 / 28。`check_mesh.py` が
-2026-09-05のガウシアン平滑化+塗り直しの検査で15→21に増えた)。**項目数を減らさないこと。**
-秒数は熱状態で 1.2〜1.7倍振れる(engine `benchmark-seconds-swing-with-thermal-state`)ので、
-所要は目安である。何を守っている検査かは [docs/TOPOPT.md](docs/TOPOPT.md)
-「受入検査が見ているもの」に書いてある。
+**どれも最後の行が `OK:` で、終了コードが 0 なら合格。** 何を守っている検査かは
+[docs/TOPOPT.md](docs/TOPOPT.md)「受入検査が見ているもの」に書いてある。
 
 ### 実ブラウザのsmoke（本物のクリックとキー入力）
 
-**サーバを立てる手順は要らない**。**12本とも自分で `duocad.mcp_server` を立てて、
+**サーバを立てる手順は要らない**。**各スクリプトが自分で `duocad.mcp_server` を立てて、
 終わったら止める**ので、コマンドは1本ずつ叩くだけでよい。**毎回まっさらな文書で始まる**。
 
 ブラウザは**Chromeを先に見る**（無ければEdge。`DUOCAD_BROWSER` で明示すればそれが最優先）。
@@ -313,23 +285,22 @@ node scripts/smoke-mesh-body.mjs
 
 # ⑫ 形状最適化を画面から走らせる(条件を置く→2枚なら断られる→解像度の目盛り→実行→
 #    進捗→中断→表現できない保持の通知→走り切って結果のメッシュが出る→STL→メッシュのピック)
-#    **本物のSIMPを1回通す。通しで約1分**(既定で4,225要素・実行そのものが46〜52秒。
-#    中断と「表現できていない」は SIMP を回さずに戻るので速い)
+#    **本物のSIMPを1回通す**(中断と「表現できていない」は SIMP を回さずに戻る)
 node scripts/smoke-optimize.mjs
 ```
 
 既に立てているサーバへ繋ぎたいときだけ `--url http://127.0.0.1:8766/` を渡す
 （その場合スクリプトはサーバを立てず、止めもしない）。
 
-### 一括受入チェック（20操作 × 人間/AI ＋ 交互操作）
+### 一括受入チェック（人間/AI ＋ 交互操作）
 
 ```powershell
 cd C:\Users\tm976\mf\duocad; node web\scripts\acceptance.mjs
 ```
 
 MCPとWebSocketを1プロセスで持つサーバを自分で起動し、**人間側はブラウザの本物のクリックとキー、
-AI側は本物のJSON-RPC**で20操作を叩く（`set_parameter` の人間側だけは口が無いので空欄）。結果はJSONでstdout末尾に出る。数分。
-**形状最適化の4操作(合計24)はまだ`acceptance.mjs`に無い**（`web/scripts/smoke-optimize-mode.mjs` が個別の実機smokeを持つ。到達表は §0 参照）。
+AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_parameter` の人間側だけは口が無いので空欄）。結果はJSONでstdout末尾に出る。
+**形状最適化の条件verbはまだ`acceptance.mjs`に無い**（`web/scripts/smoke-optimize-mode.mjs` が個別の実機smokeを持つ。到達表は [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) §0 参照）。
 
 **❌ が1つでもあれば終了コード1で終わる。** ただし**途中では止めない** ——
 全セクションを最後まで走らせて RESULT_JSON を出し切ってから、`failed[]` を見て終了コードだけを決める。
@@ -393,15 +364,7 @@ AI側は本物のJSON-RPC**で20操作を叩く（`set_parameter` の人間側�
 | `"solid"` | `Body.shape`（`TopoDS_Shape`） | 全部 |
 | `"mesh"` | `Body.mesh`（`Mesh` = 頂点＋三角形。不変） | **表示 / STL書き出し / 削除 / 表示の切り替えだけ** |
 
-**メッシュボディに編集verbを効かせない**（2026-09-04本人決定。理由の本文は
-`duocad/meshbody.py` のモジュールdocstring）:
-
-1. marching cubes の出力は**デモの粗い解像度でも6,000三角形**、実用解像度なら数万。
-   三角形1枚を1面とするシェルとしてOCCTへ入れると**面数が数万**になる。
-2. **`kernel.face_count` は2,835面で既に律速**（2026-09-04実測。ドラッグ一括選択1回で51.1ms、
-   `TopExp.MapShapes_s` を参照1件ごとにやり直す）。数万面では操作のたびに秒単位で待つ。
-3. **三角形の辺にフィレットを掛けるのは幾何的に無意味**。まともなB-repにするには
-   面の再構成（平面・曲面フィッティング）が要り、それは別の仕事。
+**メッシュボディに編集verbを効かせない**（2026-09-04本人決定。理由は `duocad/meshbody.py` のモジュールdocstring）。
 
 断りは1箇所（`meshbody.reject`）に文言を持ち、**必ず「次に何ができるか」を書く**。
 断りが入る門は2つだけ: `verbs/_common.editable_body`（面・辺を取るverb全部）と
@@ -605,7 +568,7 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 
 | ファイル | 役割 |
 |---|---|
-| `web/src/App.svelte` | 画面全体の組み立て・選択の規則・キー処理（1021行） |
+| `web/src/App.svelte` | 画面全体の組み立て・選択の規則・キー処理 |
 | `web/src/viewport.ts` | three.js の囲い（load / onPick / highlight / project …） |
 | `web/src/session.ts` | WebSocketクライアント。**WSのURLはサーバが `/duocad-config.json` で教える**（ポートを推測しない） |
 | `web/src/commands/CommandHost.svelte` | **コマンド層の骨格**（起動→引数収集→プレビュー→Enter/Esc、**および即適用の発火**）。verbごとに作り直さない |
@@ -616,7 +579,7 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 | `web/src/SettingsDialog.svelte` | **設定ダイアログ**。native `<dialog>`（非モーダル、`show()`）。**一度決めたら触らない設定だけ**（いまは正投影のチェックボックス1つ。画角は正投影/透視30度の2値で、スライダーは無い）。ビューポートを覆わず暗くもしない |
 | `web/src/viewSettings.ts` | **画面設定のlocalStorage**。入れてよいのはクライアント側だけの設定で、**文書の状態は入れない**。読み書きとも例外を投げない |
 
-### AI側（MCP・36ツール）
+### AI側（MCP）
 
 **ツールの一覧は [MCP.md](MCP.md) が正**（ここに写すと、増減のたびに2箇所を直すことになる）。
 機械の正は `tests/test_mcp_verbs.py` の `EXPECTED_TOOLS` で、**顔ぶれを一致で固定**している。
@@ -710,7 +673,7 @@ duocad/
                          net/ はアプリ層との接点（ws.py=WebSocket／http.py=静的配信と/mcp／
                          tools_on_loop.py）。server.py はその入口で、再輸出と起動の番人だけ
                          agent/ はアプリ内AIエージェント（プロバイダ＋ループ・UIなし）
-  tests/                 886 passed / 2 skipped。README.md はモジュール単位のAPI契約リファレンス
+  tests/                 pytest。README.md はモジュール単位のAPI契約リファレンス
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
     scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。共有部品は

@@ -3,24 +3,24 @@
 **AIが文書を操作するための口。** ブラウザとMCPは同じ `Session` を叩く対等な
 クライアントで、MCPが変えた内容は開いている画面へ即座に届く。
 
-公開ツールは**36個**。面・辺・領域などの**形は引数で受けず、確定した選択から取る**
+公開ツールの一覧は下表。面・辺・領域などの**形は引数で受けず、確定した選択から取る**
 （数値・名前・パスだけが引数）。提案の選択はそのまま verb に渡せない — 先に
 `commit_selection` が要る。**この1手はAI自身が踏んでよい**（どこまで自分でやるかは
 下記「AIはどこまで自分でやるか」）。
 
-## 公開ツール（36）
+## 公開ツール
 
 | 群 | ツール |
 |---|---|
-| 問い合わせ(3) | `describe_document` / `describe_shape` / `measure` |
-| 述語の自己記述(1) | `describe_predicates` |
-| 選択(5) | `get_selection` / `propose_selection` / `modify_selection` / `commit_selection` / `clear_selection` |
-| スケッチ(7) | `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` / `import_svg` / `move_sketch_entities` |
-| フィーチャ(8) | `extrude` / `extrude_face` / `fillet` / `chamfer` / `pattern_rectangular` / `pattern_circular` / `move_body` / `delete` |
-| ボディ・パラメータ(2) | `set_visible` / `set_parameter` |
-| 形状最適化(4) | `set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` — 保持/除外ソリッド・拘束面・荷重面の条件を置く(集合代入。最適化の実行はまだ無い) |
-| 入出力(4) | `import_step` / `export_step` / `export_stl` / `add_mesh_body` — 最後の1つは**計算で作った三角形メッシュ**をボディとして足す(表示とSTL書き出しだけ。編集verbは断られる) |
-| 履歴(2) | `undo` / `redo` |
+| 問い合わせ | `describe_document` / `describe_shape` / `measure` |
+| 述語の自己記述 | `describe_predicates` |
+| 選択 | `get_selection` / `propose_selection` / `modify_selection` / `commit_selection` / `clear_selection` |
+| スケッチ | `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` / `import_svg` / `move_sketch_entities` |
+| フィーチャ | `extrude` / `extrude_face` / `fillet` / `chamfer` / `pattern_rectangular` / `pattern_circular` / `move_body` / `delete` |
+| ボディ・パラメータ | `set_visible` / `set_parameter` |
+| 形状最適化 | `set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` — 保持/除外ソリッド・拘束面・荷重面の条件を置く(集合代入。最適化の実行はまだ無い) |
+| 入出力 | `import_step` / `export_step` / `export_stl` / `add_mesh_body` — 最後の1つは**計算で作った三角形メッシュ**をボディとして足す(表示とSTL書き出しだけ。編集verbは断られる) |
+| 履歴 | `undo` / `redo` |
 
 **呼び方の型**（例）:
 
@@ -134,7 +134,7 @@ bindで落ちる）。
 ## トランスポートは2本
 
 `handle()` はトランスポートを知らない（1メッセージの辞書を受け取って返すだけ）ので、
-**同じ36ツールがどちらの口からも同じ顔で出る**。契約は `tests/test_mcp_http.py` が固定する。
+**同じツール集合がどちらの口からも同じ顔で出る**。契約は `tests/test_mcp_http.py` が固定する。
 
 | | 誰が使う | プロセスの所有者 |
 |---|---|---|
@@ -178,7 +178,7 @@ duocadを立て直してもClaude Code側の操作は要らない。起動時の
 
 duocad以外のディレクトリからも使う日だけ、userスコープへ手で登録する
 （`claude mcp add --scope user --transport http duocad http://127.0.0.1:8766/mcp`）。
-36ツールが無関係なプロジェクトにも出るので既定にはしない。
+無関係なプロジェクトにも出るので既定にはしない。
 
 ## Claude Desktop への登録
 

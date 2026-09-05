@@ -34,7 +34,7 @@ duocad は面を **(body_id, 1始まりの面添字)** で持ち、`duocad.topop
 
 **OCP / build123d を直接importしない**(幾何は `kernel` / `query` 越し)。
 `duocad.topopt` は**関数の中で**importする —— `duocad/__init__.py` から連鎖する層に
-scipy / skimage を引き込むと、pytest 852件が毎回その費用を払う
+scipy / skimage を引き込むと、pytest 全体が毎回その費用を払う
 (`done/20260904-1600` の契約②)。
 """
 from __future__ import annotations

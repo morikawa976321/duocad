@@ -571,7 +571,7 @@ document・ログのどちらにも変更を残さない。
 - 対象: `extrude`/`extrude_face`/`fillet`/`chamfer`/`pattern_rectangular`/
   `pattern_circular`/`add_line`/`add_circle`/`add_rectangle`/`add_arc`/`import_svg`/
   `set_parameter`/`undo`/`redo`（undo/redoは「何を戻したか」に関わらず**常に**リセットする
-  単純な規則。`duocad/catalog.py` の `resets_selection=True` が付く14verbがこの全量）。
+  単純な規則。`duocad/catalog.py` の `resets_selection=True` が付くverbがこの全量）。
 - リセットしない: 形を変えない操作（`set_visible`・選択操作そのもの・`commit_selection`・
   保存/書き出し・`describe_*`）と、**失敗したverb**（失敗する半径では理由が画面に出て、
   選択は保持されたまま戻る）。
@@ -821,7 +821,7 @@ Python層の `contextlib.redirect_stdout` では止まらない（C++が実fdへ
 
 ### 顔ぶれの上限は1箇所
 
-公開ツールの一覧（20操作/30ツール、詳細は`MCP.md`・`readme.md`が正）の上限を主張する契約は
+公開ツールの顔ぶれを主張する契約は
 `tests/test_mcp_verbs.py` の `EXPECTED_TOOLS` の**一致検査**（部分集合ではない）だけに置く
 — 同じ主張を複数箇所（別のテストファイル・実機smokeスクリプト）に置くと、増減のたびに
 片方の更新を忘れて必ず食い違う。

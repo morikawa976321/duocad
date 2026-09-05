@@ -144,7 +144,7 @@ def test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish(
     実在しなくなるが、**その前に `set_parameter` の `resets_selection=True` が
     選択そのものを空にする**ので、`App.svelte` 側が「選んだ領域がまだ実在するか」を
     確かめる分岐(`regionsStillExist`)へたどり着く前に選択が失われる。
-    `RESETTING_VERBS` の全14verbがこの性質を持つため(直上のテストが過不足なく固定)、
+    `RESETTING_VERBS` の全verbがこの性質を持つため(直上のテストが過不足なく固定)、
     現行のverbカタログでは `regionsStillExist` のfalse分岐は構造的に到達不能であり、
     その分岐自体の正しさは `window.__duocad.regionsStillExist` 経由の直接呼び出しで
     検査する(smoke-regions.mjs参照。ここはコア側の契約=(a)の実証に専念する)。
