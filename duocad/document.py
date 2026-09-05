@@ -1,9 +1,7 @@
 """文書とボディのデータモデル。
 
 - `Document.units` は "mm" 固定で変更できない(セッターを持たないプロパティ)。
-- `Body.kind` は "solid"(B-rep・編集対象)と "mesh"(三角形メッシュ・**表示とSTL書き出しだけ**)。
-  読み込んだSTEPの参照ボディ(`kind="reference"`)は2026-09-03に概念ごと撤去した
-  ([[duocad-reference-body-removal-decided]])。
+- `Body.kind` は "solid"(B-rep・編集対象)と "mesh"(三角形メッシュ・**表示とSTL書き出しだけ**)の2種。
 - **形の持ち方はkindごとに1本だけ**: "solid" は `shape`(TopoDS_Shape)、"mesh" は `mesh`(`Mesh`)。
   両方を同時に持つBodyは作れない(`__post_init__` が弾く)。**混ぜられるようにすると、
   `body.shape is None` で分岐している既存の経路が「どちらの意味か」を判定できなくなる。**

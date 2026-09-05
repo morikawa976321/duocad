@@ -239,7 +239,7 @@ def _target_bodies(doc: Document, body_id, where: Sequence[dict]) -> list:
     """走査対象のBody列。不可視は除外。明示指定の契約は `_visible_body` と同じ。
 
     **メッシュボディの扱いは「名指ししたら断る / 導出した集合からは黙って外す」**
-    (2026-09-05。このタスクの他の門と同じ線)。
+    (他の述語の門と同じ線で揃える)。
 
     - `body` を**明示された**ら断る(`meshbody.reject`) —— 「このボディの辺を選べ」は、
       面も辺も持たない形に対する誤った要求であり、`selection.select_edge(mesh, 3)` と
