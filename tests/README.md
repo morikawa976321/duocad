@@ -267,8 +267,8 @@ entity_params(doc, sketch_id, entity_id) -> dict[str, float]   # 解決済みの
   `{"sketch_id":.., "entity_id":.., "kind":.., "params": {...}}`（**作ったIDを記録する** —
   記録が無いと再生で別のIDになり、保存した選択集合が指す先を失う）。
 - 存在しないスケッチIDへの操作は `KeyError`。
-- スケッチの図形を**消す・動かす・回す**のは `delete` と `move_sketch_entities`（対象は
-  どちらも確定選択から取り、引数では受けない）。契約は `tests/test_delete.py` /
+- スケッチの図形を**消す・動かす・回す**のは `delete` と `move_sketch_entities`（**操作の対象**は
+  どちらも確定選択から取り、引数では受けない。移動量・回転角などの変換パラメータは引数）。契約は `tests/test_delete.py` /
   `tests/test_move_verbs.py` が持つ。
 
 ### 反復（`Sketch.patterns` / `Pattern`）
