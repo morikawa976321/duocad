@@ -80,7 +80,7 @@ class Session:
     ) -> None:
         self.document = Document()
         self.deviation = float(deviation)
-        #: 保存/開く/一覧の唯一の置き場(2026-08-22)。既定は `DEFAULT_MODELS_DIR`
+        #: 保存/開く/一覧の唯一の置き場。既定は `DEFAULT_MODELS_DIR`
         #: (リポジトリ直下の `models/`)。テストが実フォルダを汚さないよう差し替えられる。
         self.models_dir: Path = (
             DEFAULT_MODELS_DIR if models_dir is None else Path(models_dir)
@@ -89,12 +89,8 @@ class Session:
         #: 共有する**(吸い出す口は `take_warnings()` だけ。2つの持ち主を作らない)。
         self.warnings: list[str] = []
         #: **いま編集しているファイルの名前**(`models_dir` 配下のファイル名だけ。無ければ `None`)。
-        #: 2026-08-30に足した。それまで「どのファイルを触っているか」を知っているのは
-        #: ブラウザだけで、サーバは受け取った名前を解決して書くだけだったため、
-        #: **編集中でないファイルを上書きできる**穴が構造として残っていた
-        #: (誤クリック1回で無関係なモデルが今の文書に置き換わり、操作ログが唯一の正である
-        #: 以上、失ったものは復旧できない)。ここに現在名を持たせて `save_document` の契約を
-        #: 2つに割ることで、その穴を**どのUIからも**塞ぐ(下記 `save_document`)。
+        #: これを持たせることで `save_document` の契約を2つに割り、「編集中でないファイルを
+        #: 上書きできる」穴を**どのUIからも**塞いでいる(契約の詳細は下記 `save_document`)。
         #:
         #: **書き換えるのは3箇所だけ**: `save_document(name)` の成功・`open_document` の成功・
         #: `_replace_document`(開く/新規の共通部分。引数で必ず決めさせる)。
@@ -202,7 +198,7 @@ class Session:
 
     # ---------------------------------------------------------------- 配りもの(`DocumentView` への委譲)
     #
-    # 状態・版・キャッシュの実体は `duocad/view.py` にある(2026-08-28に切り出した)。ここに
+    # 状態・版・キャッシュの実体は `duocad/view.py` にある。ここに
     # 残すのは**1行の委譲だけ**で、呼び出し側(`net/ws.py` の `_push`、`mcp_server.py`、
     # テスト)が `session.state_meta()` の形で引き続き引けるようにするためのものである。
     #
@@ -283,7 +279,7 @@ class Session:
         """そのBodyの版(`DocumentView.body_revision`)。"""
         return self.view.body_revision(body_id)
 
-    # ---------------------------------------------------------------- 選択の全リセット(2026-08-20)
+    # ---------------------------------------------------------------- 選択の全リセット
     def _reset_selection_if_needed(self, verb: str) -> None:
         """形を変えるverbの確定後、選択を全リセットする(統一契約)。
 
@@ -908,9 +904,8 @@ class Session:
     def import_step(self, path: Any) -> dict:
         """STEPを読み、**編集可能なボディまで作る**(verb `import_step`)。
 
-        **STEPの読み込みはこれ1本**(2026-08-27に統合) —— ソリッドごとに編集用ボディを作る
-        1回のverbで、何部品あってもログ1行・undo1回である。参照ボディ(隠した読み込みの
-        原本)は2026-09-03に概念ごと撤去した([[duocad-reference-body-removal-decided]])。
+        **STEPの読み込みはこれ1本** —— ソリッドごとに編集用ボディを作る
+        1回のverbで、何部品あってもログ1行・undo1回である。
         **メソッド名・WSのコマンド名・ログのverb名を同じ綴りにしてある**(1コマンドを引数で
         2つのverbに打ち分けると、コマンド名と積まれるverbが食い違う)。
         """
@@ -920,7 +915,7 @@ class Session:
     def import_svg(self, sketch_id: str, path: Any, scale: Any = None) -> dict:
         """SVGの図形を**いま開いているスケッチ(`sketch_id`)へ**取り込む(verb `import_svg`)。
 
-        **貼る先は引数で選ばない**(2026-08-28) —— スケッチのverbなので、貼る先は
+        **貼る先は引数で選ばない** —— スケッチのverbなので、貼る先は
         `sketch_id` が指すスケッチの平面で決まる(`add_line` と同じ形)。基準平面や面を
         指す経路は無い。スケッチの外から使いたければ、先に `sketch_create` で作ってから
         このverbを呼ぶ。
@@ -1012,7 +1007,7 @@ class Session:
         self.models_dir.mkdir(parents=True, exist_ok=True)
         root = self.models_dir.resolve()
         resolved = (root / text).resolve()
-        # **正の判定はここ**(2026-08-23 QA指摘)。文字列検査をすり抜けるものが
+        # **正の判定はここ**。文字列検査をすり抜けるものが
         # あっても、シンボリックリンク越しの脱出も含めて最終的にここで止まる。
         if not resolved.is_relative_to(root):
             raise ValueError(f"models/の外を指している: {text!r} -> {resolved}")
@@ -1021,7 +1016,7 @@ class Session:
     def save_document(self, name: Any = None) -> dict:
         """操作ログをJSONで書き出す。**verbではない**(文書を変えないのでログに載らない)。
 
-        **契約は2つに割れている**(2026-08-30。engine
+        **契約は2つに割れている**(engine
         `2026-08-30-duocad-save-becomes-a-header-button`):
 
         - `save_document()`(引数なし) … **いま編集しているファイルへ上書き**する。
