@@ -129,6 +129,16 @@ def _rotate_point(x: float, y: float, cx: float, cy: float, angle_deg: float) ->
     return (cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
 
 
+def rotate_point(x: float, y: float, cx: float, cy: float, angle_deg: float) -> Tuple[float, float]:
+    """`_rotate_point` の公開名。**2D回転の式はこの1本しかない**ことを保つための入口である。
+
+    `move_sketch_entities`(点を1つだけ回す経路)が使う —— 種別の表(`EntityKindOps.rotate`)は
+    「図形1つを回す」単位なので、点1つを回すにはこちらが要る。**別に式を書き起こさない**
+    (符号や度/ラジアンの取り違えが、円形反復と移動で食い違う形で出る)。
+    """
+    return _rotate_point(x, y, cx, cy, angle_deg)
+
+
 def _rectangle_as_rotated_lines(params: Dict[str, float], cx: float, cy: float, angle_deg: float) -> List[dict]:
     """軸平行の長方形を、4隅を回した4本の線分へ落とす(長方形の語彙は回転を表せないため)。"""
     x = params["x"]

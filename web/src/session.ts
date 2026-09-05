@@ -377,27 +377,41 @@ export type Applied =
   | (AppliedVerbBase & { verb: 'fillet'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'chamfer'; body_id: string; changed_bodies: string[] })
   /**
-   * スケッチの点・辺の平行移動 / 複製。**ソリッドは追従しない**ので `changed_bodies` は無い
-   * (本人が許容済み。`duocad/verbs/move_sketch.py`)。`created` は `copy=true` のときだけ
-   * 中身が入る(移動なら空配列)。
+   * スケッチの点・辺の移動(平行移動 / 回転) / 複製。**ソリッドは追従しない**ので
+   * `changed_bodies` は無い(本人が許容済み。`duocad/verbs/move_sketch.py`)。
+   * `created` は `copy=true` のときだけ中身が入る(移動なら空配列)。
+   *
+   * **`mode` で使うフィールドが変わる。** `'translate'` なら `dx`/`dy` が入って
+   * `angle`/`center` が `null`、`'rotate'` ならその逆である —— キーの顔ぶれ自体は
+   * モードによらず同じ(封筒の形が値で変わると、読む側が両方の形を知る必要が出る)。
    */
   | (AppliedVerbBase & {
       verb: 'move_sketch_entities'
-      dx: number
-      dy: number
+      mode: string
+      dx: number | null
+      dy: number | null
+      angle: number | null
+      center: number[] | null
       copy: boolean
       created: string[]
       sketch_ids: string[]
     })
   /**
-   * ボディの平行移動 / 複製。`changed_bodies` には動いたボディと複製で増えたボディの
-   * 両方が載る(片方を落とすと、もう片方が古い位置のまま画面に残る)。
+   * ボディの移動(平行移動 / 回転) / 複製。`changed_bodies` には動いたボディと複製で
+   * 増えたボディの両方が載る(片方を落とすと、もう片方が古い位置のまま画面に残る)。
+   *
+   * `mode` の読み方は `move_sketch_entities` と同じ。`axis_point` / `axis_dir` は
+   * **解決後の数値**で、辺を指して回した場合もその辺から取った点と向きが入る。
    */
   | (AppliedVerbBase & {
       verb: 'move_body'
-      dx: number
-      dy: number
-      dz: number
+      mode: string
+      dx: number | null
+      dy: number | null
+      dz: number | null
+      angle: number | null
+      axis_point: number[] | null
+      axis_dir: number[] | null
       copy: boolean
       created: string[]
       changed_bodies: string[]

@@ -55,7 +55,7 @@ from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
 from OCP.TopTools import TopTools_IndexedMapOfShape, TopTools_ListOfShape
 from OCP.TColgp import TColgp_Array1OfPnt
-from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
+from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
 #: describe_shape の faces_by_type が持つキー(この順序が正。query.py が初期化に使う)
 FACE_KINDS = (
@@ -217,6 +217,26 @@ def volume(shape: "TopoDS_Shape") -> float:
     props = GProp_GProps()
     BRepGProp.VolumeProperties_s(shape, props)
     return props.Mass()
+
+
+def centroid(shape: "TopoDS_Shape") -> List[float]:
+    """形状の**体積重心**(mm)。`volume` と同じ `VolumeProperties_s` の既定積分を使う。
+
+    `move_body` の回転の既定の中心がこれである。**境界箱の中心ではない** —— 境界箱は
+    軸の向きに依存して動くので、同じボディを別の軸で回すと中心が変わってしまう
+    (2026-09-05本人判断)。重心は形だけで決まる。
+
+    体積が0の形状(面だけのシェル等)は ValueError —— `Mass()` が0だと `CentreOfMass()` は
+    意味の無い点を返すので、黙って原点近くを中心に回さない。
+    """
+    if shape is None or shape.IsNull():
+        raise ValueError("cannot compute the centroid of an empty shape")
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape, props)
+    if not props.Mass() > 0.0:
+        raise ValueError("cannot compute the centroid of a zero-volume shape")
+    point = props.CentreOfMass()
+    return [float(point.X()), float(point.Y()), float(point.Z())]
 
 
 def classify_face(face: Any) -> str:
@@ -412,12 +432,95 @@ def translate_shape(
     """
     trsf = gp_Trsf()
     trsf.SetTranslation(gp_Vec(float(dx), float(dy), float(dz)))
+    return _transformed(shape, trsf, copy=copy, what="平行移動")
+
+
+def rotate_shape(
+    shape: "TopoDS_Shape",
+    axis_point: Sequence[float],
+    axis_dir: Sequence[float],
+    angle_deg: float,
+    *,
+    copy: bool = False,
+) -> "TopoDS_Shape":
+    """形状を軸(`axis_point` を通り `axis_dir` を向く直線)まわりに回した形状を返す。
+
+    `translate_shape` の姉妹で、**変わるのは `gp_Trsf` の作り方だけ**である
+    (`SetTranslation` -> `SetRotation`)。したがって次の2つも平行移動と同じ:
+
+    - **面・辺・頂点の添字は変わらない**(`copy=False` は `TopoDS_Shape.Moved` で位置だけを
+      差し替え、下層の形状を共有する)。`move_body` が回転の後も選択をリセットしなくてよい
+      根拠はここにある。
+    - `copy=True` は `BRepBuilderAPI_Transform(..., Copy=True)` で**独立した形状**を作る。
+
+    **角度は度**(`gp_Trsf.SetRotation` はラジアンなのでここで変換する)。符号は軸の向きに
+    対する**右ねじ**(Z軸まわり正の角度は、上から見て反時計回り)で、スケッチ側の
+    `sketch._rotate_point`(u->v が正)と同じ向きである。
+
+    **逆回転は元へ戻る**。`cos(-a) == cos(a)` と `sin(-a) == -sin(a)` は浮動小数でも厳密なので
+    `R(-a)` は `R(a)` の転置そのもので、積は丸め誤差(相対1e-16程度)を除いて単位行列になる
+    —— 幾何の許容差(mmの1e-9未満)より桁違いに小さい。`move_body` の undo が形状の
+    スナップショットを控えず「逆向きに同じ角度」で済むのはこのためである。
+
+    軸方向が零ベクトル・非有限なら ValueError(`gp_Dir` は零ベクトルで例外を投げるが、
+    そこまで持って行かずに手前で断る)。
+    """
+    point = [float(value) for value in axis_point]
+    direction = [float(value) for value in axis_dir]
+    if len(point) != 3 or len(direction) != 3:
+        raise ValueError(
+            f"axis_point / axis_dir must have 3 numbers, got {axis_point!r} / {axis_dir!r}"
+        )
+    if not all(math.isfinite(value) for value in point + direction):
+        raise ValueError(
+            f"axis_point / axis_dir must be finite, got {axis_point!r} / {axis_dir!r}"
+        )
+    if not math.sqrt(sum(value * value for value in direction)) > 0.0:
+        raise ValueError("axis_dir must not be the zero vector (軸の向きが決まらない)")
+    if not math.isfinite(float(angle_deg)):
+        raise ValueError(f"angle must be a finite number of degrees, got {angle_deg!r}")
+
+    trsf = gp_Trsf()
+    trsf.SetRotation(
+        gp_Ax1(gp_Pnt(*point), gp_Dir(*direction)), math.radians(float(angle_deg))
+    )
+    return _transformed(shape, trsf, copy=copy, what="回転")
+
+
+def _transformed(
+    shape: "TopoDS_Shape", trsf: "gp_Trsf", *, copy: bool, what: str
+) -> "TopoDS_Shape":
+    """剛体変換を1つ掛けた形状(`translate_shape` / `rotate_shape` の共通の尻尾)。"""
     if copy:
         builder = BRepBuilderAPI_Transform(shape, trsf, True)
         if not builder.IsDone():
-            raise ValueError("形状の平行移動(複製)に失敗した")
+            raise ValueError(f"形状の{what}(複製)に失敗した")
         return builder.Shape()
     return shape.Moved(TopLoc_Location(trsf))
+
+
+def edge_axis(shape: "TopoDS_Shape", edge_index: int) -> tuple:
+    """**まっすぐな辺**を回転軸 `([x, y, z], [dx, dy, dz])` にする(点は辺の上、向きは単位長)。
+
+    添字は `edge_count` / `edge_of` と同じ1始まりの体系 —— つまり**辺の選択の識別子そのもの**
+    で、`move_body(mode="rotate", axis_edge=...)` はこれを使って「この辺を軸に回す」を表す。
+
+    まっすぐでない辺(円・spline)は ValueError。円い辺を軸と読んで中心線を勝手に作ると、
+    人が指した辺と回る軸が食い違う(例外の出ない事故になる)。
+    """
+    edge = edge_of(shape, edge_index)
+    if classify_edge(edge) != "line":
+        raise ValueError(
+            f"edge {int(edge_index)} is not a straight line "
+            f"(kind={classify_edge(edge)!r}): 回転軸に使えるのはまっすぐな辺だけ"
+        )
+    line = BRepAdaptor_Curve(edge).Line()
+    point = line.Location()
+    direction = line.Direction()
+    return (
+        [float(point.X()), float(point.Y()), float(point.Z())],
+        [float(direction.X()), float(direction.Y()), float(direction.Z())],
+    )
 
 
 def face_count(shape: "TopoDS_Shape") -> int:

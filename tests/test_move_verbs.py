@@ -717,3 +717,737 @@ def test_translating_back_is_exact() -> None:
     there = kernel.translate_shape(shape, 1.3, -2.7, 3.9)
     back = kernel.translate_shape(there, -1.3, 2.7, -3.9)
     assert kernel.bounding_box(back)["center"] == pytest.approx(before, abs=1e-12)
+
+
+# --------------------------------------------------------------------------------------
+# move_body(mode="rotate") —— 2026-09-05に足した回転
+# --------------------------------------------------------------------------------------
+#
+# 固定するのは4つ:
+#
+# - 軸の指し方が**辺でも数値でも同じ結果**になること(辺は「点+向き」に潰されるだけ)
+# - 回転中心を省いたら**対象の重心**を通る軸になること(境界箱の中心ではない)
+# - 複数対象は**1つの合成重心**まわりに回ること(対象ごとにばらばらの中心を作らない)
+# - **並進と回転が排他**であること(片方のモードにもう片方の引数を渡すと必ず落ちる)
+def _bbox(body) -> dict:
+    return kernel.bounding_box(body.shape)
+
+
+def _vertical_edge_at(body, u: float, v: float) -> int:
+    """(u, v) に立っている**まっすぐな縦の辺**の1始まりの添字。無ければ AssertionError。"""
+    for edge in query.describe_edges(body.shape):
+        if edge["kind"] != "line":
+            continue
+        start, end = edge["start"], edge["end"]
+        if start[2] == end[2]:
+            continue  # 水平な辺
+        if (start[0], start[1]) == pytest.approx((u, v)) and (end[0], end[1]) == pytest.approx((u, v)):
+            return edge["index"]
+    raise AssertionError(f"({u}, {v}) に縦の辺が無い")
+
+
+def _vertex_at(body, point) -> int:
+    """指定座標の頂点の1始まりの添字。無ければ AssertionError。"""
+    for vertex in kernel.vertex_positions(body.shape):
+        if vertex["point"] == pytest.approx(list(point)):
+            return vertex["index"]
+    raise AssertionError(f"{point} に頂点が無い")
+
+
+def test_rotating_a_body_about_a_numeric_axis(session: Session) -> None:
+    """原点まわりに90度。20mm角の箱(0..20)は x が負側へ回り込む。"""
+    body, _sketch_id = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    session.move_body(mode="rotate", axis_point=[0.0, 0.0, 0.0], axis_dir=[0.0, 0.0, 1.0], angle=90.0)
+
+    box = _bbox(session.document.get_body(body.id))
+    assert box["min"][:2] == pytest.approx([-SIDE, 0.0], abs=1e-6)
+    assert box["max"][:2] == pytest.approx([0.0, SIDE], abs=1e-6)
+    assert box["min"][2] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_an_edge_axis_and_the_same_axis_in_numbers_agree(session: Session) -> None:
+    """**辺で指す道と数値で指す道は同じ変換**(辺は「軸上の点+向き」に潰されるだけ)。"""
+    body, _sketch_id = _box(session)
+    index = _vertical_edge_at(body, 0.0, 0.0)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    session.move_body(
+        mode="rotate", axis_edge={"body": body.id, "index": index}, angle=90.0
+    )
+    by_edge = _bbox(session.document.get_body(body.id))
+
+    other = Session(None, DEVIATION)
+    twin, _ = _box(other)
+    _select(other, [{"body": twin.id, "kind": "face", "index": 1}])
+    other.move_body(
+        mode="rotate", axis_point=[0.0, 0.0, 0.0], axis_dir=[0.0, 0.0, 1.0], angle=90.0
+    )
+    by_numbers = _bbox(other.document.get_body(twin.id))
+
+    assert by_edge["min"] == pytest.approx(by_numbers["min"], abs=1e-9)
+    assert by_edge["max"] == pytest.approx(by_numbers["max"], abs=1e-9)
+    # **ログに残るのは数値**(参照を残すと、undoのとき辺が既に回った後にいる)
+    args = session.document.log.entries[-1].args
+    assert args["axis_point"] == pytest.approx([0.0, 0.0, 0.0], abs=1e-9)
+    assert args["axis_dir"] == pytest.approx([0.0, 0.0, 1.0], abs=1e-9)
+    assert "axis_edge" not in args
+
+
+def test_a_curved_edge_cannot_be_an_axis(session: Session) -> None:
+    """円い辺を軸に読み替えない(人が指した辺と回る軸が食い違うのは例外の出ない事故)。"""
+    body, sketch_id = _box(session)
+    session.add_circle(sketch_id, [50.0, 50.0], 5.0)
+    _select(session, [{"sketch": sketch_id, "index": 2}])
+    session.extrude(5.0, mode="new")
+    cylinder = session.document.bodies[-1]
+    circular = next(
+        edge["index"] for edge in query.describe_edges(cylinder.shape) if edge["kind"] == "circle"
+    )
+
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    with pytest.raises(ValueError) as error:
+        session.move_body(
+            mode="rotate", axis_edge={"body": cylinder.id, "index": circular}, angle=45.0
+        )
+    assert "not a straight line" in str(error.value)
+
+
+def test_the_default_centre_is_the_centroid_not_the_origin(session: Session) -> None:
+    """**中心を省くと対象の重心を軸が通る**(45度回しても重心が動かない)。
+
+    45度にしてあるのは、90度だと正方形断面が自分自身に写って「原点まわりに回した」場合と
+    見分けが付かないためである。原点まわりに回した場合(下の対照)は重心が動く。
+    """
+    body, _sketch_id = _box(session)
+    before = kernel.centroid(body.shape)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    session.move_body(mode="rotate", axis_dir=[0.0, 0.0, 1.0], angle=45.0)
+
+    after = kernel.centroid(session.document.get_body(body.id).shape)
+    assert after == pytest.approx(before, abs=1e-6)
+    # ログに残った軸は重心を通っている(境界箱の中心ではない、が言えるのは対称でない形だが、
+    # ここでは「原点ではない」ことと「重心と一致する」ことを見る)
+    args = session.document.log.entries[-1].args
+    assert args["axis_point"][:2] == pytest.approx(before[:2], abs=1e-9)
+
+
+def test_an_explicit_axis_point_moves_the_body(session: Session) -> None:
+    """対照実験 —— 同じ45度でも軸を原点に置けば重心は動く(既定が効いていることの裏)。"""
+    body, _sketch_id = _box(session)
+    before = kernel.centroid(body.shape)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    session.move_body(
+        mode="rotate", axis_point=[0.0, 0.0, 0.0], axis_dir=[0.0, 0.0, 1.0], angle=45.0
+    )
+    after = kernel.centroid(session.document.get_body(body.id).shape)
+    assert after != pytest.approx(before, abs=1e-3)
+
+
+def test_a_center_vertex_moves_the_axis_to_that_vertex(session: Session) -> None:
+    """頂点を中心に指すと、軸の向きはそのままにその点を通る。"""
+    body, _sketch_id = _box(session)
+    index = _vertex_at(body, [0.0, 0.0, 0.0])
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    session.move_body(
+        mode="rotate",
+        axis_dir=[0.0, 0.0, 1.0],
+        center_vertex={"body": body.id, "index": index},
+        angle=90.0,
+    )
+
+    box = _bbox(session.document.get_body(body.id))
+    assert box["min"][:2] == pytest.approx([-SIDE, 0.0], abs=1e-6)
+    assert box["max"][:2] == pytest.approx([0.0, SIDE], abs=1e-6)
+
+
+def test_rotating_keeps_the_volume_and_the_face_indices(session: Session) -> None:
+    """**添字は回転でも変わらない**(`TopoDS_Shape.Moved` は下層の形状を共有する)。"""
+    body, _sketch_id = _box(session)
+    volume = query.volume(body.shape)
+    faces = kernel.face_count(body.shape)
+    normals = {face["index"]: face["normal"] for face in query.describe_faces(body.shape)}
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    session.move_body(mode="rotate", axis_dir=[0.0, 0.0, 1.0], angle=90.0)
+
+    rotated = session.document.get_body(body.id)
+    assert query.volume(rotated.shape) == pytest.approx(volume)
+    assert kernel.face_count(rotated.shape) == faces
+    after = {face["index"]: face["normal"] for face in query.describe_faces(rotated.shape)}
+    assert after.keys() == normals.keys()
+    # **同じ添字が同じ面を指し続ける**: Z向きの面は法線が変わらず、横向きの面は
+    # 90度きっかり回った先の法線になっている(添字が振り直されたら両方が崩れる)
+    for index, normal in normals.items():
+        expected = [-normal[1], normal[0], normal[2]]  # Zまわりに+90度
+        assert after[index] == pytest.approx(expected, abs=1e-9), f"面{index}"
+    assert any(abs(normal[2]) < 0.5 for normal in normals.values()), "横向きの面が1枚も無い"
+
+
+def test_two_bodies_rotate_about_one_composite_centre(session: Session) -> None:
+    """複数対象の中心は**1つ**(対象ごとに個別の重心で回さない)。
+
+    体積の等しい2つの箱を左右に並べて180度回すと、**入れ替わる**のが合成重心まわりに
+    回った証拠である。個々の重心で回していたら、どちらもその場に留まる。
+    """
+    first, sketch_id = _box(session)
+    session.add_rectangle(sketch_id, [40.0, 0.0], SIDE, SIDE)
+    _select(session, [{"sketch": sketch_id, "index": 2}])
+    session.extrude(SIDE, mode="new")
+    second = session.document.bodies[-1]
+    before = (kernel.centroid(first.shape), kernel.centroid(second.shape))
+
+    _select(session, [
+        {"body": first.id, "kind": "face", "index": 1},
+        {"body": second.id, "kind": "face", "index": 2},
+    ])
+    session.move_body(mode="rotate", axis_dir=[0.0, 0.0, 1.0], angle=180.0)
+
+    after_first = kernel.centroid(session.document.get_body(first.id).shape)
+    after_second = kernel.centroid(session.document.get_body(second.id).shape)
+    assert after_first[:2] == pytest.approx(before[1][:2], abs=1e-6)
+    assert after_second[:2] == pytest.approx(before[0][:2], abs=1e-6)
+    # **1呼び出し = 1オペレーション**(ボディごとに分解しない)
+    entry = session.document.log.entries[-1]
+    assert entry.verb == "move_body" and len(entry.args["bodies"]) == 2
+
+
+def test_copying_a_body_by_rotation_keeps_the_original(session: Session) -> None:
+    body, _sketch_id = _box(session)
+    before = _bbox(body)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    applied = session.move_body(
+        mode="rotate",
+        axis_point=[0.0, 0.0, 0.0],
+        axis_dir=[0.0, 0.0, 1.0],
+        angle=90.0,
+        copy=True,
+    )
+
+    (new_id,) = applied["created"]
+    assert len(session.document.bodies) == 2
+    assert _bbox(session.document.get_body(body.id))["min"] == pytest.approx(before["min"])
+    copied = session.document.get_body(new_id)
+    assert _bbox(copied)["min"][:2] == pytest.approx([-SIDE, 0.0], abs=1e-6)
+    # 複製は**独立した形状**(片方をフィレットしても、もう片方は変わらない)
+    assert not copied.shape.IsPartner(body.shape)
+    assert set(applied["changed_bodies"]) == {body.id, new_id}
+
+
+def test_undo_puts_a_rotated_body_back(session: Session) -> None:
+    """逆角度の回転で戻る(スナップショットを控えなくてよい理由が回転にも当てはまる)。"""
+    body, _sketch_id = _box(session)
+    before = _bbox(body)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    session.move_body(
+        mode="rotate", axis_point=[3.0, -2.0, 0.0], axis_dir=[1.0, 2.0, 3.0], angle=37.5
+    )
+    session.undo()
+
+    after = _bbox(session.document.get_body(body.id))
+    assert after["min"] == pytest.approx(before["min"], abs=1e-9)
+    assert after["max"] == pytest.approx(before["max"], abs=1e-9)
+
+
+def test_undo_removes_a_rotated_copy(session: Session) -> None:
+    body, _sketch_id = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    (new_id,) = session.move_body(
+        mode="rotate", axis_dir=[0.0, 0.0, 1.0], angle=90.0, copy=True
+    )["created"]
+    session.undo()
+    assert [b.id for b in session.document.bodies] == [body.id]
+    assert new_id not in {b.id for b in session.document.bodies}
+
+
+def test_a_rotation_survives_save_and_replay(session: Session) -> None:
+    """**ログが唯一の正**。軸が数値で載っているので、再生でも同じ形になる。"""
+    body, _sketch_id = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    index = _vertical_edge_at(body, 0.0, 0.0)
+    session.move_body(mode="rotate", axis_edge={"body": body.id, "index": index}, angle=30.0)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    session.move_body(mode="rotate", axis_dir=[0.0, 1.0, 0.0], angle=20.0, copy=True)
+    expected = [(b.id, kernel.centroid(b.shape)) for b in session.document.bodies]
+
+    replayed = Document()
+    replayed.log = OpLog.from_json(session.document.log.to_json())
+    replayed.log.replay(replayed)
+
+    assert [b.id for b in replayed.bodies] == [body_id for body_id, _ in expected]
+    for (_body_id, center), rebuilt in zip(expected, replayed.bodies):
+        assert kernel.centroid(rebuilt.shape) == pytest.approx(center, abs=1e-9)
+
+
+def test_a_replayed_log_without_a_mode_is_still_a_translation(session: Session) -> None:
+    """**2026-09-05より前に保存した文書**(`mode` キーが無い)は平行移動として読む。"""
+    from duocad.oplog import Operation
+    from duocad.verbs.move_body import _do_move_body
+
+    body, _sketch_id = _box(session)
+    before = _bbox(body)["min"]
+    _do_move_body(
+        session.document,
+        Operation(
+            seq=99,
+            verb="move_body",
+            args={"bodies": [body.id], "dx": 4.0, "dy": 0.0, "dz": 0.0, "copy": False},
+        ),
+    )
+    assert _bbox(session.document.get_body(body.id))["min"][0] == pytest.approx(before[0] + 4.0)
+
+
+def test_the_selection_resets_after_a_body_rotation(session: Session) -> None:
+    body, _sketch_id = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 3}])
+    session.move_body(mode="rotate", axis_dir=[0.0, 0.0, 1.0], angle=15.0)
+    assert session.get_selection()["items"] == []
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"mode": "rotate", "angle": 90.0}, id="軸が無い"),
+        pytest.param(
+            {"mode": "rotate", "axis_dir": [0.0, 0.0, 1.0]}, id="角度が無い"
+        ),
+        pytest.param(
+            {"mode": "rotate", "axis_dir": [0.0, 0.0, 0.0], "angle": 90.0}, id="零ベクトルの軸"
+        ),
+        pytest.param(
+            {"mode": "rotate", "axis_dir": [0.0, 0.0, 1.0], "angle": 360.0}, id="360度"
+        ),
+        pytest.param(
+            {"mode": "rotate", "axis_dir": [0.0, 0.0, 1.0], "angle": 0.0}, id="0度"
+        ),
+        pytest.param(
+            {"mode": "rotate", "axis_dir": [0.0, 0.0, 1.0], "angle": 90.0, "dx": 1.0},
+            id="回転に並進を混ぜる",
+        ),
+        pytest.param({"mode": "translate", "dx": 1.0, "dy": 0.0, "dz": 0.0, "angle": 90.0},
+                     id="並進に角度を混ぜる"),
+        pytest.param({"mode": "translate"}, id="並進なのに量が無い"),
+        pytest.param({"mode": "spin", "angle": 90.0}, id="知らないmode"),
+    ],
+)
+def test_a_half_specified_rotation_is_refused(session: Session, kwargs: dict) -> None:
+    """**黙って片方だけ効くことは無い。** 足りない/混ざった引数は全部 ValueError。"""
+    body, _sketch_id = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    with pytest.raises(ValueError):
+        session.move_body(**kwargs)
+
+
+def test_an_edge_axis_cannot_be_combined_with_numbers(session: Session) -> None:
+    """どちらが勝つかを暗黙にしない(辺は位置も向きも決めてしまう)。"""
+    body, _sketch_id = _box(session)
+    index = _vertical_edge_at(body, 0.0, 0.0)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    with pytest.raises(ValueError):
+        session.move_body(
+            mode="rotate",
+            axis_edge={"body": body.id, "index": index},
+            axis_dir=[0.0, 0.0, 1.0],
+            angle=90.0,
+        )
+
+
+def test_an_edge_axis_can_be_combined_with_a_center_vertex(session: Session) -> None:
+    """**辺が向きを、頂点が位置を決める組み合わせは意図的に許してある**(2026-09-05 QA第2巡)。
+
+    `axis_point` との同時指定は断るのに、こちらは通す —— 辺の向きだけを借りて別の点を
+    通す軸にするのは実際に要る操作(「この稜線と平行な軸で、この角を中心に回す」)である。
+    `_rotation_args` の拒否条件を広げすぎるとここが黙って塞がるので、明示的に固定する。
+    """
+    body, _sketch_id = _box(session)
+    edge = _vertical_edge_at(body, 0.0, 0.0)          # (0,0) に立つ縦の辺 = Z方向
+    vertex = _vertex_at(body, [SIDE, SIDE, 0.0])      # 対角の角
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    session.move_body(
+        mode="rotate",
+        axis_edge={"body": body.id, "index": edge},
+        center_vertex={"body": body.id, "index": vertex},
+        angle=90.0,
+    )
+
+    args = session.document.log.entries[-1].args
+    assert args["axis_dir"] == pytest.approx([0.0, 0.0, 1.0], abs=1e-9), "辺の向きが使われていない"
+    assert args["axis_point"] == pytest.approx([SIDE, SIDE, 0.0], abs=1e-9), "頂点の位置が使われていない"
+    # (20,20) まわりに+90度: (0..20, 0..20) -> (20..40, 0..20)
+    box = _bbox(session.document.get_body(body.id))
+    assert box["min"][:2] == pytest.approx([SIDE, 0.0], abs=1e-6)
+    assert box["max"][:2] == pytest.approx([2 * SIDE, SIDE], abs=1e-6)
+
+
+def test_a_symmetric_body_may_be_rotate_copied_onto_itself(session: Session) -> None:
+    """**ボディ側は「元と重なる複製」を断らない**(既知の穴。`move_body` のdocstring)。
+
+    スケッチ側(`test_a_copy_that_lands_on_its_source_is_refused`)は `params` の一致で
+    弾けるが、ソリッドには同じだけ安くて健全な判定が無い。**将来うっかり境界箱の一致などの
+    不健全な判定を入れると、L字を180度回した「重なっていない」場合まで断ってしまう** ——
+    その事故を検知するために、いまの挙動(通す)をそのまま固定しておく。
+    """
+    body, _sketch_id = _box(session)   # 20mm角の立方体 = Zまわりに90度対称
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    applied = session.move_body(mode="rotate", axis_dir=[0.0, 0.0, 1.0], angle=90.0, copy=True)
+    assert len(applied["created"]) == 1
+    assert len(session.document.bodies) == 2
+
+
+def test_an_axis_point_cannot_be_combined_with_a_center_vertex(session: Session) -> None:
+    """どちらも軸の位置を決めるので、片方が黙って無視される形にしない(2026-09-05 QA指摘)。"""
+    body, _sketch_id = _box(session)
+    index = _vertex_at(body, [0.0, 0.0, 0.0])
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    with pytest.raises(ValueError):
+        session.move_body(
+            mode="rotate",
+            axis_dir=[0.0, 0.0, 1.0],
+            axis_point=[5.0, 5.0, 0.0],
+            center_vertex={"body": body.id, "index": index},
+            angle=90.0,
+        )
+
+
+def test_redo_puts_a_rotation_back(session: Session) -> None:
+    """undo -> redo で回った状態へ戻る(`_do_*` と `_undo_*` が同じ変換を通る)。"""
+    body, _sketch_id = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    session.move_body(
+        mode="rotate", axis_point=[0.0, 0.0, 0.0], axis_dir=[0.0, 0.0, 1.0], angle=90.0
+    )
+    rotated = _bbox(session.document.get_body(body.id))
+    session.undo()
+    session.redo()
+
+    again = _bbox(session.document.get_body(body.id))
+    assert again["min"] == pytest.approx(rotated["min"], abs=1e-9)
+    assert again["max"] == pytest.approx(rotated["max"], abs=1e-9)
+
+
+def test_redo_puts_a_rotated_copy_back(session: Session) -> None:
+    """`copy=True` の redo は「作ったIDで作り直す」経路を通る(undoは消すだけなので非対称)。"""
+    body, _sketch_id = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    (new_id,) = session.move_body(
+        mode="rotate", axis_point=[0.0, 0.0, 0.0], axis_dir=[0.0, 0.0, 1.0], angle=90.0, copy=True
+    )["created"]
+    made = _bbox(session.document.get_body(new_id))
+    session.undo()
+    session.redo()
+
+    again = session.document.get_body(new_id)  # **同じID**で戻る(ログが持っているため)
+    assert _bbox(again)["min"] == pytest.approx(made["min"], abs=1e-9)
+    assert _bbox(again)["max"] == pytest.approx(made["max"], abs=1e-9)
+    assert len(session.document.bodies) == 2
+
+
+def test_an_axis_edge_index_out_of_range_is_refused(session: Session) -> None:
+    body, _sketch_id = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    with pytest.raises(ValueError):
+        session.move_body(
+            mode="rotate", axis_edge={"body": body.id, "index": 9999}, angle=90.0
+        )
+
+
+def test_an_axis_edge_on_a_missing_body_is_not_found(session: Session) -> None:
+    body, _sketch_id = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    with pytest.raises(KeyError):
+        session.move_body(
+            mode="rotate", axis_edge={"body": "body-nope", "index": 1}, angle=90.0
+        )
+
+
+# --------------------------------------------------------------------------------------
+# move_sketch_entities(mode="rotate")
+# --------------------------------------------------------------------------------------
+def test_rotating_a_line_about_a_given_centre(session: Session) -> None:
+    """(0,0)-(10,0) を原点まわりに90度回すと (0,0)-(0,10)(u->v が正)。"""
+    sketch_id, entity_id = _line(session)
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    session.move_sketch_entities(mode="rotate", angle=90.0, center=[0.0, 0.0])
+
+    moved = _params(session, sketch_id, entity_id)
+    assert (moved["x0"], moved["y0"]) == pytest.approx((0.0, 0.0), abs=1e-9)
+    assert (moved["x1"], moved["y1"]) == pytest.approx((0.0, 10.0), abs=1e-9)
+
+
+def test_the_sketch_rotation_turns_the_same_way_as_pattern_circular(session: Session) -> None:
+    """**符号の向きが `pattern_circular` の `total_angle` と同じ**であることを直接見る。"""
+    sketch_id, entity_id = _line(session)
+    params = _params(session, sketch_id, entity_id)
+    expected = sketch.rotate_point(params["x1"], params["y1"], 0.0, 0.0, 30.0)
+
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    session.move_sketch_entities(mode="rotate", angle=30.0, center=[0.0, 0.0])
+    moved = _params(session, sketch_id, entity_id)
+    assert (moved["x1"], moved["y1"]) == pytest.approx(expected, abs=1e-12)
+
+
+def test_rotating_one_point_moves_only_that_point(session: Session) -> None:
+    sketch_id, entity_id = _line(session)
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": "x1"}])
+    session.move_sketch_entities(mode="rotate", angle=90.0, center=[0.0, 0.0])
+
+    moved = _params(session, sketch_id, entity_id)
+    assert (moved["x0"], moved["y0"]) == pytest.approx((0.0, 0.0))
+    assert (moved["x1"], moved["y1"]) == pytest.approx((0.0, 10.0), abs=1e-9)
+
+
+def test_the_default_sketch_centre_is_the_average_of_the_targets(session: Session) -> None:
+    """中心を省くと**対象の代表点の平均**まわりに回る(線分は中点)。"""
+    sketch_id, entity_id = _line(session)
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    session.move_sketch_entities(mode="rotate", angle=90.0)
+
+    moved = _params(session, sketch_id, entity_id)
+    # 中点 (5,0) まわりに90度 -> (5,-5)-(5,5)
+    assert (moved["x0"], moved["y0"]) == pytest.approx((5.0, -5.0), abs=1e-9)
+    assert (moved["x1"], moved["y1"]) == pytest.approx((5.0, 5.0), abs=1e-9)
+    assert session.document.log.entries[-1].args["center"] == pytest.approx([5.0, 0.0])
+
+
+def test_a_centre_entity_names_an_existing_point(session: Session) -> None:
+    """既存の点を中心に指せる(円の中心を指して、その円のまわりに線を回す)。"""
+    sketch_id, entity_id = _line(session)
+    circle_id = session.add_circle(sketch_id, [0.0, 0.0], 2.0)["entity_id"]
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    session.move_sketch_entities(
+        mode="rotate",
+        angle=90.0,
+        center_entity={"sketch": sketch_id, "entity": circle_id},
+    )
+
+    moved = _params(session, sketch_id, entity_id)
+    assert (moved["x1"], moved["y1"]) == pytest.approx((0.0, 10.0), abs=1e-9)
+    # **ログには数値が入る**(中心に使った図形が後で動いてもundoは同じ点を使う)
+    assert session.document.log.entries[-1].args["center"] == pytest.approx([0.0, 0.0])
+    assert "center_entity" not in session.document.log.entries[-1].args
+
+
+def test_rotating_an_arc_turns_its_angles_too(session: Session) -> None:
+    """円弧は中心が回るだけでなく、開始角・終了角も同じだけ回る(向きが変わる)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    entity_id = session.add_arc(sketch_id, [10.0, 0.0], 5.0, 0.0, 90.0)["entity_id"]
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    session.move_sketch_entities(mode="rotate", angle=90.0, center=[0.0, 0.0])
+
+    moved = _params(session, sketch_id, entity_id)
+    assert (moved["cx"], moved["cy"]) == pytest.approx((0.0, 10.0), abs=1e-9)
+    assert moved["start_deg"] == pytest.approx(90.0)
+    assert moved["end_deg"] == pytest.approx(180.0)
+    assert moved["radius"] == pytest.approx(5.0)
+
+
+def test_a_whole_rectangle_cannot_be_rotated(session: Session) -> None:
+    """**種別が変わる回転は断る。** 黙って線分4本に化けさせない(モジュールdocstring)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    entity_id = session.add_rectangle(sketch_id, [0.0, 0.0], 10.0, 4.0)["entity_id"]
+    before = _params(session, sketch_id, entity_id)
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    with pytest.raises(ValueError):
+        session.move_sketch_entities(mode="rotate", angle=45.0, center=[0.0, 0.0])
+    # **文書にもログにも何も残らない**
+    assert _params(session, sketch_id, entity_id) == before
+    assert session.document.log.entries[-1].verb != "move_sketch_entities"
+
+
+def test_a_rectangle_corner_can_still_be_rotated(session: Session) -> None:
+    """長方形の1点(左下)を回すのは今までどおりできる(位置が動くだけ)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    entity_id = session.add_rectangle(sketch_id, [10.0, 0.0], 4.0, 2.0)["entity_id"]
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": "x"}])
+    session.move_sketch_entities(mode="rotate", angle=90.0, center=[0.0, 0.0])
+
+    moved = _params(session, sketch_id, entity_id)
+    assert (moved["x"], moved["y"]) == pytest.approx((0.0, 10.0), abs=1e-9)
+    assert (moved["width"], moved["height"]) == pytest.approx((4.0, 2.0))
+
+
+def test_rotating_two_entities_uses_one_centre(session: Session) -> None:
+    """2つの円を180度回すと**入れ替わる**(平均が中心だから)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    first = session.add_circle(sketch_id, [0.0, 0.0], 2.0)["entity_id"]
+    second = session.add_circle(sketch_id, [10.0, 0.0], 2.0)["entity_id"]
+    _select(session, [
+        {"sketch": sketch_id, "entity": first, "point": None},
+        {"sketch": sketch_id, "entity": second, "point": None},
+    ])
+    session.move_sketch_entities(mode="rotate", angle=180.0)
+
+    assert _params(session, sketch_id, first)["cx"] == pytest.approx(10.0, abs=1e-9)
+    assert _params(session, sketch_id, second)["cx"] == pytest.approx(0.0, abs=1e-9)
+    entry = session.document.log.entries[-1]
+    assert entry.verb == "move_sketch_entities" and len(entry.args["targets"]) == 2
+
+
+def test_copying_a_sketch_entity_by_rotation(session: Session) -> None:
+    sketch_id, entity_id = _line(session)
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    applied = session.move_sketch_entities(
+        mode="rotate", angle=90.0, center=[0.0, 0.0], copy=True
+    )
+
+    (new_id,) = applied["created"]
+    assert _params(session, sketch_id, entity_id) == {
+        "x0": 0.0, "y0": 0.0, "x1": 10.0, "y1": 0.0
+    }  # 元はそのまま
+    copied = _params(session, sketch_id, new_id)
+    assert (copied["x1"], copied["y1"]) == pytest.approx((0.0, 10.0), abs=1e-9)
+
+
+def test_a_copy_that_lands_on_its_source_is_refused(session: Session) -> None:
+    """円をその中心まわりに回した複製は元と完全に重なる(領域検出が同じ辺を2本見る)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    entity_id = session.add_circle(sketch_id, [3.0, 4.0], 2.0)["entity_id"]
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    with pytest.raises(ValueError):
+        session.move_sketch_entities(
+            mode="rotate", angle=90.0, center=[3.0, 4.0], copy=True
+        )
+    assert len(sketch.get_sketch(session.document, sketch_id).entities) == 1
+
+
+def test_undo_restores_a_rotated_sketch_entity(session: Session) -> None:
+    sketch_id, entity_id = _line(session)
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    session.move_sketch_entities(mode="rotate", angle=37.0, center=[2.0, -1.0])
+    session.undo()
+
+    restored = _params(session, sketch_id, entity_id)
+    assert (restored["x0"], restored["y0"]) == pytest.approx((0.0, 0.0), abs=1e-9)
+    assert (restored["x1"], restored["y1"]) == pytest.approx((10.0, 0.0), abs=1e-9)
+
+
+def test_a_sketch_rotation_survives_save_and_replay(session: Session) -> None:
+    sketch_id, entity_id = _line(session)
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    session.move_sketch_entities(mode="rotate", angle=25.0, center=[1.0, 2.0])
+    expected = _params(session, sketch_id, entity_id)
+
+    replayed = Document()
+    replayed.log = OpLog.from_json(session.document.log.to_json())
+    replayed.log.replay(replayed)
+    assert sketch.entity_params(replayed, sketch_id, entity_id) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"mode": "rotate"}, id="角度が無い"),
+        pytest.param({"mode": "rotate", "angle": 360.0}, id="360度"),
+        pytest.param({"mode": "rotate", "angle": 0.0}, id="0度"),
+        pytest.param({"mode": "rotate", "angle": 90.0, "dx": 1.0}, id="回転に並進を混ぜる"),
+        pytest.param(
+            {"mode": "rotate", "angle": 90.0, "center": [0.0, 0.0],
+             "center_entity": {"sketch": "s", "entity": "e"}},
+            id="中心を2通りで指す",
+        ),
+        pytest.param({"mode": "translate", "dx": 1.0, "dy": 0.0, "angle": 90.0},
+                     id="並進に角度を混ぜる"),
+        pytest.param({"mode": "translate"}, id="並進なのに量が無い"),
+        pytest.param({"mode": "spin", "angle": 90.0}, id="知らないmode"),
+    ],
+)
+def test_a_half_specified_sketch_rotation_is_refused(session: Session, kwargs: dict) -> None:
+    sketch_id, entity_id = _line(session)
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    with pytest.raises(ValueError):
+        session.move_sketch_entities(**kwargs)
+
+
+def test_redo_puts_a_sketch_rotation_back(session: Session) -> None:
+    sketch_id, entity_id = _line(session)
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    session.move_sketch_entities(mode="rotate", angle=90.0, center=[0.0, 0.0])
+    rotated = _params(session, sketch_id, entity_id)
+    session.undo()
+    session.redo()
+    assert _params(session, sketch_id, entity_id) == pytest.approx(rotated)
+
+
+def test_a_replayed_sketch_log_without_a_mode_is_still_a_translation(session: Session) -> None:
+    """**2026-09-05より前に保存した文書**(`mode` キーが無い)は平行移動として読む。
+
+    `move_body` 側と対にしてある —— 後方互換は2つの verb が別々に持っているので、
+    片方だけ壊れても気づけるように両方を見る(2026-09-05 QA指摘)。
+    """
+    from duocad.oplog import Operation
+    from duocad.verbs.move_sketch import _do_move_sketch_entities
+
+    sketch_id, entity_id = _line(session)
+    _do_move_sketch_entities(
+        session.document,
+        Operation(
+            seq=99,
+            verb="move_sketch_entities",
+            args={
+                "targets": [{"sketch": sketch_id, "entity": entity_id, "point": None}],
+                "dx": 2.0,
+                "dy": 3.0,
+                "copy": False,
+            },
+        ),
+    )
+    assert _params(session, sketch_id, entity_id) == {
+        "x0": 2.0, "y0": 3.0, "x1": 12.0, "y1": 3.0
+    }
+
+
+def test_the_selection_resets_after_a_sketch_rotation(session: Session) -> None:
+    sketch_id, entity_id = _line(session)
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    session.move_sketch_entities(mode="rotate", angle=15.0, center=[0.0, 0.0])
+    assert session.get_selection()["items"] == []
+
+
+# --------------------------------------------------------------------------------------
+# kernel の回転そのもの
+# --------------------------------------------------------------------------------------
+def test_rotating_a_shape_does_not_touch_the_original() -> None:
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+    shape = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
+    before = kernel.bounding_box(shape)["center"]
+    rotated = kernel.rotate_shape(shape, [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 90.0)
+
+    assert kernel.bounding_box(shape)["center"] == pytest.approx(before)
+    assert kernel.bounding_box(rotated)["center"] == pytest.approx(
+        [-before[1], before[0], before[2]], abs=1e-6
+    )
+
+
+def test_rotating_back_returns_to_the_start() -> None:
+    """逆角度で戻る(`move_body` の undo がスナップショットを控えない根拠)。"""
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+    shape = BRepPrimAPI_MakeBox(10.0, 20.0, 30.0).Shape()
+    before = kernel.bounding_box(shape)
+    there = kernel.rotate_shape(shape, [1.0, 2.0, 3.0], [1.0, 1.0, 1.0], 41.7)
+    back = kernel.rotate_shape(there, [1.0, 2.0, 3.0], [1.0, 1.0, 1.0], -41.7)
+    assert kernel.bounding_box(back)["min"] == pytest.approx(before["min"], abs=1e-9)
+    assert kernel.bounding_box(back)["max"] == pytest.approx(before["max"], abs=1e-9)
+
+
+def test_a_degenerate_axis_is_refused() -> None:
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+    shape = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
+    with pytest.raises(ValueError):
+        kernel.rotate_shape(shape, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 30.0)
+    with pytest.raises(ValueError):
+        kernel.rotate_shape(shape, [0.0, 0.0], [0.0, 0.0, 1.0], 30.0)
+
+
+def test_the_centroid_is_the_volume_centre_not_the_bounding_box_centre() -> None:
+    """**L字**では重心と境界箱の中心が違う(既定の回転中心が重心であることの土台)。"""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+    tall = BRepPrimAPI_MakeBox(2.0, 2.0, 20.0).Shape()
+    arm = kernel.translate_shape(BRepPrimAPI_MakeBox(20.0, 2.0, 2.0).Shape(), 0.0, 0.0, 0.0)
+    shape = BRepAlgoAPI_Fuse(tall, arm).Shape()
+
+    centroid = kernel.centroid(shape)
+    box_centre = kernel.bounding_box(shape)["center"]
+    assert centroid != pytest.approx(box_centre, abs=1e-3)

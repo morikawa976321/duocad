@@ -824,21 +824,64 @@ class DocumentTools:
         )
         return self._apply_logged(before, applied, pattern_id=applied["pattern_id"])
 
-    def move_sketch_entities(self, dx: float, dy: float, copy: bool = False) -> dict:
-        """**確定選択のスケッチの点・辺**を動かす / 複製する(選択から取るのは `Session`)。"""
+    def move_sketch_entities(
+        self,
+        dx: Optional[float] = None,
+        dy: Optional[float] = None,
+        copy: bool = False,
+        mode: str = "translate",
+        angle: Optional[float] = None,
+        center: Any = None,
+        center_entity: Any = None,
+    ) -> dict:
+        """**確定選択のスケッチの点・辺**を動かす / 複製する(選択から取るのは `Session`)。
+
+        **数値へ潰さずそのまま渡す** —— `mode="rotate"` では dx/dy が省かれるので、
+        ここで `float(None)` にすると「モードが取らない引数を断る」検査より先に落ちる。
+        """
         before = self._revision_snapshot()
         applied = self.session.move_sketch_entities(
-            float(dx), float(dy), copy=bool(copy)
+            dx,
+            dy,
+            copy=bool(copy),
+            mode=str(mode),
+            angle=angle,
+            center=center,
+            center_entity=center_entity,
         )
         return self._apply_logged(
             before, applied, copy=applied["copy"], created=applied["created"]
         )
 
-    def move_body(self, dx: float, dy: float, dz: float, copy: bool = False) -> dict:
-        """**確定選択の面/辺/頂点が属するボディ**を動かす / 複製する(逆引きは `Session`)。"""
+    def move_body(
+        self,
+        dx: Optional[float] = None,
+        dy: Optional[float] = None,
+        dz: Optional[float] = None,
+        copy: bool = False,
+        mode: str = "translate",
+        angle: Optional[float] = None,
+        axis_edge: Any = None,
+        axis_point: Any = None,
+        axis_dir: Any = None,
+        center_vertex: Any = None,
+    ) -> dict:
+        """**確定選択の面/辺/頂点が属するボディ**を動かす / 複製する(逆引きは `Session`)。
+
+        **数値へ潰さずそのまま渡す**(`move_sketch_entities` と同じ理由)。
+        """
         before = self._revision_snapshot()
         applied = self.session.move_body(
-            float(dx), float(dy), float(dz), copy=bool(copy)
+            dx,
+            dy,
+            dz,
+            copy=bool(copy),
+            mode=str(mode),
+            angle=angle,
+            axis_edge=axis_edge,
+            axis_point=axis_point,
+            axis_dir=axis_dir,
+            center_vertex=center_vertex,
         )
         return self._apply_logged(
             before, applied, copy=applied["copy"], created=applied["created"]

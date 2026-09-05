@@ -639,45 +639,102 @@ class Session:
         )
         return self._after_logged_verb({"pattern_id": pattern_id})
 
-    def move_sketch_entities(self, dx: float, dy: float, copy: bool = False) -> dict:
-        """**確定選択のスケッチの点・辺**を (dx, dy) だけ動かす(`copy=True` は複製)。
+    def move_sketch_entities(
+        self,
+        dx: Optional[float] = None,
+        dy: Optional[float] = None,
+        copy: bool = False,
+        mode: str = "translate",
+        angle: Optional[float] = None,
+        center: Any = None,
+        center_entity: Any = None,
+    ) -> dict:
+        """**確定選択のスケッチの点・辺**を動かす(`copy=True` は複製)。
 
         対象は引数ではなく選択から取る(`selection.require_sketch_entities`)——
         パラメータパネルを廃止して直接選択へ移した後の、位置の打ち直しの唯一の口である。
         **ソリッドは追従しない**(verb側のdocstring。本人が許容済み)ので `changed_bodies` は空。
+
+        `mode="translate"` は (dx, dy)、`mode="rotate"` は `angle`[度] と中心を取る
+        (検査と既定はverb側)。**戻り値のキーはモードによらず同じ** —— 使わない側は `None`
+        にする(`web/src/session.ts` の `Applied` が形の変わる封筒を読めないため)。
         """
         targets = selection.require_sketch_entities(self.document)
         sketch_ids = sorted({str(item["sketch"]) for item in targets})
         operation = move_sketch_entities_verb(
-            self.document, targets, float(dx), float(dy), copy=bool(copy)
+            self.document,
+            targets,
+            dx,
+            dy,
+            copy=bool(copy),
+            mode=str(mode),
+            angle=angle,
+            center=center,
+            center_entity=center_entity,
         )
+        args = operation.args
         return self._after_logged_verb({
-            "dx": operation.args["dx"],
-            "dy": operation.args["dy"],
-            "copy": operation.args["copy"],
-            "created": list(operation.args["created"]),
+            "mode": args["mode"],
+            "dx": args.get("dx"),
+            "dy": args.get("dy"),
+            "angle": args.get("angle"),
+            "center": args.get("center"),
+            "copy": args["copy"],
+            "created": list(args["created"]),
             "sketch_ids": sketch_ids,
         })
 
-    def move_body(self, dx: float, dy: float, dz: float, copy: bool = False) -> dict:
-        """**確定選択の面/辺/頂点が属するボディ**を (dx, dy, dz) だけ動かす(`copy=True` は複製)。
+    def move_body(
+        self,
+        dx: Optional[float] = None,
+        dy: Optional[float] = None,
+        dz: Optional[float] = None,
+        copy: bool = False,
+        mode: str = "translate",
+        angle: Optional[float] = None,
+        axis_edge: Any = None,
+        axis_point: Any = None,
+        axis_dir: Any = None,
+        center_vertex: Any = None,
+    ) -> dict:
+        """**確定選択の面/辺/頂点が属するボディ**を動かす(`copy=True` は複製)。
 
         複数のボディにまたがる選択なら全部を同じ量だけ動かす(1呼び出し = 1 undo)。
         `changed_bodies` には動いたボディと、複製で増えたボディの両方を載せる ——
         画面はここを見て形を取り直すので、どちらかを落とすと片方が古い位置のまま残る。
+
+        `mode="translate"` は (dx, dy, dz)、`mode="rotate"` は軸と `angle`[度] を取る
+        (検査と既定はverb側)。**戻り値のキーはモードによらず同じ**で、使わない側は `None`。
+        `axis_point` / `axis_dir` は**解決後の数値**(辺で指しても数値で返る)。
         """
         body_ids = selection.require_bodies(self.document)
         operation = move_body_verb(
-            self.document, body_ids, float(dx), float(dy), float(dz), copy=bool(copy)
+            self.document,
+            body_ids,
+            dx,
+            dy,
+            dz,
+            copy=bool(copy),
+            mode=str(mode),
+            angle=angle,
+            axis_edge=axis_edge,
+            axis_point=axis_point,
+            axis_dir=axis_dir,
+            center_vertex=center_vertex,
         )
-        created = list(operation.args["created"])
+        args = operation.args
+        created = list(args["created"])
         return self._after_logged_verb({
-            "dx": operation.args["dx"],
-            "dy": operation.args["dy"],
-            "dz": operation.args["dz"],
-            "copy": operation.args["copy"],
+            "mode": args["mode"],
+            "dx": args.get("dx"),
+            "dy": args.get("dy"),
+            "dz": args.get("dz"),
+            "angle": args.get("angle"),
+            "axis_point": args.get("axis_point"),
+            "axis_dir": args.get("axis_dir"),
+            "copy": args["copy"],
             "created": created,
-            "changed_bodies": list(operation.args["bodies"]) + created,
+            "changed_bodies": list(args["bodies"]) + created,
         })
 
     def delete(self) -> dict:

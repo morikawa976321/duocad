@@ -152,9 +152,21 @@ ARGUMENTS: dict = {
     "extrude": ({"distance", "mode", "body_id"}, {"distance"}),
     "extrude_face": ({"distance"}, {"distance"}),
     "fillet": ({"radius"}, {"radius"}),
-    # 位置の平行移動。**対象は選択から取る**ので引数は移動量と copy だけ
-    "move_sketch_entities": ({"dx", "dy", "copy"}, {"dx", "dy"}),
-    "move_body": ({"dx", "dy", "dz", "copy"}, {"dx", "dy", "dz"}),
+    # 位置と向きの変更。**対象は選択から取る**ので、引数は量・軸・中心と copy だけ。
+    # **必須が1つも無い**のは `mode` で必要な引数が変わるからで(translate は dx/dy(/dz)、
+    # rotate は angle と軸)、JSON Schema では条件付き必須を書けない —— 実体側が
+    # 「モードが取らない引数は ValueError」で両方向を塞ぐ(`duocad/verbs/move_*.py`)。
+    "move_sketch_entities": (
+        {"dx", "dy", "copy", "mode", "angle", "center", "center_entity"},
+        set(),
+    ),
+    "move_body": (
+        {
+            "dx", "dy", "dz", "copy", "mode", "angle",
+            "axis_edge", "axis_point", "axis_dir", "center_vertex",
+        },
+        set(),
+    ),
     # 削除。**対象は選択から取り、howが無い**ので引数は1つも無い
     "delete": (set(), set()),
     # 形状最適化の条件。**対象(ボディ・面)は引数に無い** —— 確定選択そのものを代入する。
@@ -380,6 +392,39 @@ def test_every_argument_is_typed_and_documented(server: McpServer):
             names = [declared] if isinstance(declared, str) else list(declared)
             assert names and set(names) <= known, f"{where} の型が不明: {declared!r}"
             assert (spec.get("description") or "").strip(), f"{where} に説明が無い"
+
+
+def test_the_declared_arguments_match_the_published_schema(server: McpServer):
+    """**`ARGUMENTS` の表が、実際に配るスキーマと一致する。**
+
+    この表は「引数がひとつ増えればAIから見た呼び方が変わる」ことを固定するために書かれて
+    いたが、**2026-09-05まで一度も読まれていなかった**(どのテストからも参照されていない
+    dictだった)。表だけがあって検査が無い状態は、表を直し忘れた人を止められないので、
+    宣言(`catalog.Command.params`)ではなく**サーバが実際に返す `tools/list` のスキーマ**と
+    突き合わせる —— 見たいのは「AIに見えている引数」であって、宣言の中身ではない。
+
+    `required` まで見るのは、**省略できるようにした引数**が黙って増えないようにするため。
+    `move_*` のように `mode` で必須が変わるものは `required` が空になり、そのことが表に
+    書かれていること自体が「実体側で塞いでいる」という主張になる。
+    """
+    published = {
+        tool["name"]: (
+            set((tool["inputSchema"].get("properties") or {})),
+            set(tool["inputSchema"].get("required") or []),
+        )
+        for tool in tool_list(server)
+    }
+    assert set(published) == set(ARGUMENTS), (
+        "ARGUMENTS の顔ぶれが tools/list と食い違う("
+        f"表のみ={sorted(set(ARGUMENTS) - set(published))} / "
+        f"サーバのみ={sorted(set(published) - set(ARGUMENTS))})"
+    )
+    for name, (all_args, required) in ARGUMENTS.items():
+        assert published[name] == (all_args, required), (
+            f"{name} の引数が ARGUMENTS と食い違う: "
+            f"表={sorted(all_args)}/必須{sorted(required)} "
+            f"サーバ={sorted(published[name][0])}/必須{sorted(published[name][1])}"
+        )
 
 
 def test_no_verb_tool_takes_a_shape_argument(server: McpServer):
@@ -852,6 +897,62 @@ def test_sketch_create_without_a_plane_or_a_selection_is_an_error(server: McpSer
 # --------------------------------------------------------------------------------------
 # 6. フィーチャ・パラメータ・ボディ
 # --------------------------------------------------------------------------------------
+def test_move_body_can_rotate_through_mcp(server: McpServer, box_session: Session):
+    """**`mode="rotate"` がMCPの口からコアまで届く**(スキーマに書いてあるだけにしない)。
+
+    ここを見ないと、`DocumentTools` が引数を `float()` で潰していて `dx=None` で落ちる/
+    `mode` を読み飛ばして並進になる、といった層の取りこぼしが誰にも見られない ——
+    AIが回転を使う経路はこの1本だけである(WebSocketには開けていない)。
+    """
+    box = box_session.document.bodies[0]
+    select_refs(server, [face_ref(box.id, 1)])
+    payload = call(
+        server,
+        "move_body",
+        {"mode": "rotate", "axis_point": [0, 0, 0], "axis_dir": [0, 0, 1], "angle": 90},
+    )
+
+    _assert_verb_envelope(payload, "move_body")
+    assert payload["changed_bodies"] == [box.id]
+    box_after = kernel.bounding_box(box.shape)
+    # (0..30, 0..30) がZまわりに+90度 -> (-30..0, 0..30)
+    assert box_after["min"][:2] == pytest.approx([-BOX_X, 0.0], abs=1e-6)
+    assert box_after["max"][:2] == pytest.approx([0.0, BOX_Y], abs=1e-6)
+    assert query.volume(box.shape) == pytest.approx(BOX_X * BOX_Y * BOX_Z, rel=1e-9)
+
+
+def test_move_body_refuses_a_mixed_mode_through_mcp(server: McpServer, box_session: Session):
+    """並進と回転を混ぜたら `invalid_argument`(黙ってどちらかが効くことは無い)。"""
+    box = box_session.document.bodies[0]
+    select_refs(server, [face_ref(box.id, 1)])
+    error = call_error(
+        server,
+        "move_body",
+        {"mode": "rotate", "axis_dir": [0, 0, 1], "angle": 90, "dx": 5},
+    )
+    assert error["code"] == "invalid_argument"
+    assert box_session.document.log.entries == [], "拒否したのに操作が積まれた"
+
+
+def test_move_sketch_entities_can_rotate_through_mcp(empty_session: Session):
+    """スケッチ側の `mode="rotate"` もMCPの口から届く(対象は確定選択)。"""
+    server = McpServer(DocumentTools(empty_session))
+    sketch_id = call(server, "sketch_create", {"base_plane": "XY"})["sketch_id"]
+    entity_id = call(
+        server, "add_line", {"sketch_id": sketch_id, "p0": [0, 0], "p1": [10, 0]}
+    )["entity_id"]
+    select_refs(server, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    payload = call(
+        server, "move_sketch_entities", {"mode": "rotate", "angle": 90, "center": [0, 0]}
+    )
+
+    _assert_verb_envelope(payload, "move_sketch_entities")
+    from duocad import sketch as sketch_module
+
+    moved = sketch_module.entity_params(empty_session.document, sketch_id, entity_id)
+    assert (moved["x1"], moved["y1"]) == pytest.approx((0.0, 10.0), abs=1e-9)
+
+
 def test_chamfer_reaches_the_core_verb(server: McpServer, box_session: Session):
     box = box_session.document.bodies[0]
     faces_before = kernel.face_count(box.shape)

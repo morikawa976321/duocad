@@ -505,20 +505,68 @@ COMMANDS: tuple[Command, ...] = (
         name="move_sketch_entities",
         category="sketch",
         description=(
-            "スケッチの図形の位置を直すときに呼ぶ。確定選択のスケッチの点"
+            "スケッチの図形の位置・向きを直すときに呼ぶ。確定選択のスケッチの点"
             "(線の端点・円/弧の中心・長方形の左下・ベジエの制御点)または辺"
-            "(図形1つ全体)を dx, dy だけ動かす。copy=true なら元を残して複製する。"
-            "対象は選択から取る(引数では受けない)。"
-            "**半径・幅高さ・角度のような寸法は動かせない**(位置の平行移動だけ)。"
+            "(図形1つ全体)を、mode='translate'(既定)なら dx, dy だけ動かし、"
+            "mode='rotate' ならスケッチ平面の法線まわりに angle 度だけ回す。"
+            "copy=true なら元を残して複製する。対象は選択から取る(引数では受けない)。"
+            "**半径・幅高さのような寸法は動かせない**(位置と向きだけ)。"
+            "**長方形はまるごと回せない**(軸平行の幅高さが回転を表せないため)。"
         ),
         params=(
-            Param("dx", "number", "X方向(スケッチ平面のu軸)の移動量(mm)", dimension=True),
-            Param("dy", "number", "Y方向(スケッチ平面のv軸)の移動量(mm)", dimension=True),
+            Param(
+                "dx",
+                "number",
+                "X方向(スケッチ平面のu軸)の移動量(mm)。mode='translate' で必須",
+                required=False,
+                dimension=True,
+            ),
+            Param(
+                "dy",
+                "number",
+                "Y方向(スケッチ平面のv軸)の移動量(mm)。mode='translate' で必須",
+                required=False,
+                dimension=True,
+            ),
             Param(
                 "copy",
                 "boolean",
                 "true=元を残して複製 / false=移動(既定)",
                 required=False,
+            ),
+            Param(
+                "mode",
+                "string",
+                "translate(既定・dx, dy で動かす) / rotate(angle 度だけ回す)",
+                required=False,
+                ws=False,
+            ),
+            Param(
+                "angle",
+                "number",
+                "回転角(度)。mode='rotate' で必須。u軸からv軸へ向かう回り(反時計)が正で、"
+                "pattern_circular の total_angle と同じ向き",
+                required=False,
+                ws=False,
+                dimension=True,
+            ),
+            Param(
+                "center",
+                "array",
+                "回転中心 [u, v]。省略時は対象の代表点(線分は中点・円/弧は中心・"
+                "長方形は中央・点を選んでいるならその点)の平均",
+                required=False,
+                ws=False,
+            ),
+            Param(
+                "center_entity",
+                "object",
+                "回転中心を既存の点で指す "
+                '{"sketch": sketch_id, "entity": entity_id, "point": "x0"}。'
+                "point を省くとその図形の最初の点(線は始点・円/弧は中心・長方形は左下)。"
+                "center とは同時に渡せない",
+                required=False,
+                ws=False,
             ),
         ),
         uses_selection=True,
@@ -527,27 +575,99 @@ COMMANDS: tuple[Command, ...] = (
         note=(
             "**押し出し済みのソリッドは追従しない**(本人が許容済み)。"
             "画面のプレビューは**ブラウザだけで描く**(2026-09-05) —— 選んだ図形の今の座標を"
-            " dx, dy だけずらした姿を半透明で重ねるだけで、確定するまでコアには何も届かない"
+            " dx, dy だけずらした姿を半透明で重ねるだけで、確定するまでコアには何も届かない。"
+            "**回転の引数はWSに開けていない**(`ws=False`) —— 表(`ws=table`)は載せた引数を"
+            "全部必須にする規律なので、省略できる回転の引数を載せると並進のUIが送れなくなる。"
+            "画面から回すには引数の集め方(中心の指し方)と幽霊の追随が要るので、"
+            "`extrude` の「modeはWSでだけ必須」には**揃えず**、いまはMCPからだけ回せる"
         ),
     ),
     Command(
         name="move_body",
         category="feature",
         description=(
-            "ボディの位置を直すときに呼ぶ。確定選択の面/辺/頂点が**属するボディ**を"
-            " dx, dy, dz だけ動かす(複数のボディにまたがる選択なら全部を同じ量だけ動かす)。"
+            "ボディの位置・向きを直すときに呼ぶ。確定選択の面/辺/頂点が**属するボディ**を、"
+            "mode='translate'(既定)なら dx, dy, dz だけ動かし、mode='rotate' なら軸まわりに"
+            " angle 度だけ回す(複数のボディにまたがる選択なら全部を同じだけ動かす/回す)。"
             "copy=true なら元を残して複製する。対象は選択から取る(引数では受けない) ——"
             "ボディを指すのに面を1枚選べばよい。"
         ),
         params=(
-            Param("dx", "number", "X方向の移動量(mm)", dimension=True),
-            Param("dy", "number", "Y方向の移動量(mm)", dimension=True),
-            Param("dz", "number", "Z方向の移動量(mm)", dimension=True),
+            Param(
+                "dx",
+                "number",
+                "X方向の移動量(mm)。mode='translate' で必須",
+                required=False,
+                dimension=True,
+            ),
+            Param(
+                "dy",
+                "number",
+                "Y方向の移動量(mm)。mode='translate' で必須",
+                required=False,
+                dimension=True,
+            ),
+            Param(
+                "dz",
+                "number",
+                "Z方向の移動量(mm)。mode='translate' で必須",
+                required=False,
+                dimension=True,
+            ),
             Param(
                 "copy",
                 "boolean",
                 "true=元を残して複製 / false=移動(既定)",
                 required=False,
+            ),
+            Param(
+                "mode",
+                "string",
+                "translate(既定・dx, dy, dz で動かす) / rotate(軸まわりに angle 度だけ回す)",
+                required=False,
+                ws=False,
+            ),
+            Param(
+                "angle",
+                "number",
+                "回転角(度)。mode='rotate' で必須。軸の向きに対して右ねじが正",
+                required=False,
+                ws=False,
+                dimension=True,
+            ),
+            Param(
+                "axis_edge",
+                "object",
+                "回転軸にする**まっすぐな辺**への参照 "
+                '{"body": body_id, "index": 辺の1始まりの添字}。'
+                "get_selection が返す辺の参照をそのまま渡せる。"
+                "axis_point / axis_dir とは同時に渡せない",
+                required=False,
+                ws=False,
+            ),
+            Param(
+                "axis_point",
+                "array",
+                "軸が通る点 [x, y, z](axis_dir と組で使う)。省略時は対象の重心",
+                required=False,
+                ws=False,
+            ),
+            Param(
+                "axis_dir",
+                "array",
+                "軸の向き [x, y, z](axis_edge を使わないときに必須)",
+                required=False,
+                ws=False,
+            ),
+            Param(
+                "center_vertex",
+                "object",
+                "回転中心にする頂点への参照 "
+                '{"body": body_id, "index": 頂点の1始まりの添字}。'
+                "軸の向きはそのままに、軸がこの点を通るようにする。"
+                "axis_point とは同時に渡せない(どちらも軸の位置を決めるため)",
+                required=False,
+                ws=False,
             ),
         ),
         uses_selection=True,
@@ -559,7 +679,11 @@ COMMANDS: tuple[Command, ...] = (
             "画面のプレビューは**ブラウザだけで描く**(2026-09-05に実装) —— 既に届いている"
             "メッシュを dx, dy, dz だけずらして半透明で重ねる。**元の本体は消さない**ので、"
             "移動前と移動後が並んで見える(以前ここには「重なって見分けが付かない」と"
-            "書いてあったが、移動量が0でない限り両者は別の場所に描かれる)"
+            "書いてあったが、移動量が0でない限り両者は別の場所に描かれる)。"
+            "**回転の引数はWSに開けていない**(`ws=False`。理由は move_sketch_entities の note)"
+            " —— 幽霊が並進しか描けないので、画面から回すと確定するまで何も見えない。"
+            "**プレビューの回転対応は別タスク**(`web/src/viewport.ts` の BodyGhost に"
+            "回転を1つ足し、`showBodyGhosts` の position.set を行列にする)"
         ),
     ),
     # ---------------------------------------------------------------- 削除
