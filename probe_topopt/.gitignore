@@ -2,3 +2,8 @@
 # **これが probe が自分で書く唯一の成果物**である —— 最適化のコードと受入検査は
 # 2026-09-05 に `duocad/topopt/` へ移り、そちらの出力は `duocad/topopt/.gitignore` が持つ。
 output/server_conditions_demo.stl
+
+# 比較スクリーンショットの中間ファイル(`compare_shots.py export` が書く頂点・面のJSONと
+# 片側ずつのPNG、そのときのスクラッチSTL)。**成果物は左右を並べた
+# `screenshots/smooth_compare/<題材>_<方向>.png` のほう**で、そちらは追跡する。
+screenshots/smooth_compare/_data/
