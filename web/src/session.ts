@@ -34,7 +34,7 @@ export interface ShapeRef {
 }
 
 /**
- * ソリッドを丸ごと指す参照(2026-08-31。形状最適化の保持/除外ソリッド)。
+ * ソリッドを丸ごと指す参照(形状最適化の保持/除外ソリッド)。
  *
  * **添字を持たない** —— Bodyは他のBodyの部分形状ではないので数え上げる添字が無く、
  * コアは `index: null` を明示的に載せてくる(キーごと落とすと「まだ埋めていない」と
@@ -86,9 +86,9 @@ export type SelectionRef = ShapeRef | BodyRef | RegionRef | SketchEntityRef
  * **origin は集合単位**。`"proposed"` はAIが提案した状態で、そのままではverbに渡せない
  * (コアが `SelectionNotCommitted` で止める)。`"user"` になる道は2つ ——
  * 人がクリックで触る(`modify_selection`)か、**人が対象集合を食うコマンドを実行する**
- * (2026-08-23。サーバが走らせる直前に確定する。`duocad/server.py` の `_commit_before_verb`)。
+ * (サーバが走らせる直前に確定する。`duocad/server.py` の `_commit_before_verb`)。
  *
- * **画面から `commitSelection` を呼ぶ道は無い**(同日「承認する」ボタンごと廃止した)。
+ * **画面から `commitSelection` を呼ぶ道は無い**(「承認する」ボタンごと廃止した)。
  * 提案と確定を人へ伝えるのは**3Dのハイライト色だけ**なので、この値は必ず配信で追随する。
  */
 export interface SelectionState {
@@ -334,7 +334,7 @@ export interface DocumentInfo {
  * ここにも1メンバー足す**(`duocad/catalog.py` は応答の「形」までは持たないので、この対応は
  * 手で保つしかない)。**手で保つが、放置はされない** —— `tests/test_applied_type_sync.py` が
  * このunionをソースとして読み、catalogのverb名と、実際にverbを走らせた戻り値のキーの
- * 両方に突き合わせる(2026-08-28。それまでに `import_svg` が1つ欠けていた)。
+ * 両方に突き合わせる(この検査を入れる前は `import_svg` が1つ欠けていた)。
  */
 
 /**
@@ -461,8 +461,7 @@ export type Applied =
   /** C: 図形追加verbが返す新しい図形のID(4つとも同じ形)。 */
   | (AppliedVerbBase & { verb: 'add_line' | 'add_circle' | 'add_rectangle' | 'add_arc'; entity_id: string })
   /**
-   * SVGから取り込んだ図形。**スケッチのverb**(2026-08-28に `import_svg` はファイル操作から
-   * スケッチへ移り、貼る先の `sketch_id` を必須で取るようになった)。
+   * SVGから取り込んだ図形。**スケッチのverb**(貼る先の `sketch_id` を必須で取る)。
    *
    * `entity_ids` は**この1回が足した分だけ**で、貼った先のスケッチに元からあった図形は
    * 含まない(undoもこの分だけを戻す)。`source_name` は読んだファイル名、`entity_count` は
@@ -485,8 +484,8 @@ export type Applied =
   /** 選択の変更イベント。verbではない(操作ログに載らない)。 */
   | (AppliedChangeBase & { change: 'selection'; selection: SelectionState })
   /**
-   * 可視性の変更イベント。**verbではない**(操作ログに載らず、Ctrl+Z / Ctrl+Y で戻らない。
-   * 2026-08-26)。効果そのものは配信される `state.bodies[].visible` に載る。
+   * 可視性の変更イベント。**verbではない**(操作ログに載らず、Ctrl+Z / Ctrl+Y で戻らない)。
+   * 効果そのものは配信される `state.bodies[].visible` に載る。
    */
   | (AppliedChangeBase & {
       change: 'visibility'
@@ -590,12 +589,12 @@ export interface VerticesPayload {
 /**
  * 繋げるプロバイダの綴り(`duocad/server.py` の `AI_PROVIDERS` が正)。
  *
- * **2026-08-27に `'anthropic'` が消えて1つになった** —— ClaudeをAPIキーで叩く経路の廃止。
+ * **ClaudeをAPIキーで叩く経路は廃止し、`'anthropic'` は無い**。
  * 型を潰さず union のまま残してあるのは、次のプロバイダの差込口だからである。
  */
 export type AiProviderKind = 'openai_compat'
 
-/** 画面に出してよい設定の全部。**鍵の類は載らない**(2026-08-27にAPIキー経路ごと廃止)。 */
+/** 画面に出してよい設定の全部。**鍵の類は載らない**(APIキー経路は廃止済み)。 */
 export interface AiStatus {
   provider: AiProviderKind
   model: string | null
@@ -881,7 +880,7 @@ export interface Session {
   /**
    * AIの提案を中身を変えずに承認する。
    *
-   * **今は画面から呼んでいない**(2026-08-23に「承認する」ボタンを廃止し、verbの実行を
+   * **今は画面から呼んでいない**(「承認する」ボタンを廃止し、verbの実行を
    * 承認とみなすようサーバ側で自動化した)。口はコアの3つの選択操作の1つとして残る
    * (`duocad/selection.py` のモジュールdocstring)。
    */
@@ -1000,7 +999,7 @@ export function createSession(hooks: SessionHooks): Session {
   /**
    * 1本送る。**繋がっていなければ送らずに、その場でトーストへ回す**。
    *
-   * 2026-08-27にヘッダの常設ステータスを外したので、**繋がっていないことに人間が
+   * ヘッダの常設ステータスは無いので、**繋がっていないことに人間が
    * 気づく機会は「操作したのに送れなかった」この瞬間**になった。ここは画面からの操作が
    * 必ず通る1本道なので、各パネルに同じ判定を書き写さずに済む。
    *
