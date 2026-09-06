@@ -17,17 +17,20 @@
  *   5. 領域をホバーしたまま**ポインタを動かさずに**コマンドを解除 → 強調が消える
  *      (指せるものが変わったことを、ポインタの動き以外の経路で知れているか)
  *
- * 6〜8は同じスケッチの図形・点への強調と、**そこへ吸い付いて点を置く**スナップ
+ * 6〜10は同じスケッチの図形・点への強調と、**そこへ吸い付いて点を置く**スナップ
  * (`20260906-1420` タスク)。強調とスナップは同じ当たり判定(`sketchEntityAt`)の
  * 結果を色に使うか座標に使うかの違いでしかないので、続けて確かめる:
  *
  *   6. 矩形の辺をホバー → 図形が返り同じ画素のクリックで選ばれる(点=null)。
  *      頂点マーカーをホバー → **点だけ**が返り(線ではない)、クリックで点だけが選ばれる。
  *      スケッチの強調もビューポートの外で消える
- *   7. 既存の頂点の上で線分の始点を数画素ずらして置く → `sketches` の params が
- *      その頂点と完全一致(目視ではなく数値で見る)
- *   8. 既存の円の上で線分の始点をずらして置く → 中心からの距離が半径ちょうどになる
- *   9. **傾いた長方形**の辺の上で線分の始点をずらして置く → その傾いた辺の上に乗る
+ *   7. **何にも当たっていない場所**(`20260906-1452`タスクの1mmグリッドスナップ)に
+ *      線分を2点置く(わざと格子から外した画素を狙う) →
+ *      4つの座標(x0,y0,x1,y1)がすべて整数になり、幽霊も同じ座標に乗る
+ *   8. 既存の頂点の上で線分の始点を数画素ずらして置く → `sketches` の params が
+ *      その頂点と完全一致(目視ではなく数値で見る。1mm丸めが点スナップを上書きしていないこと)
+ *   9. 既存の円の上で線分の始点をずらして置く → 中心からの距離が半径ちょうどになる
+ *   10. **傾いた長方形**の辺の上で線分の始点をずらして置く → その傾いた辺の上に乗る
  *      (`rectangle.snap()` が `angle` を見ているか。軸平行前提のままだと、例外も出さずに
  *      別の場所へ落ちる)
  *
@@ -83,7 +86,7 @@ async function main() {
     // 同じスケッチへの追加なので押し出し済みのBodyには影響しない —— 6以降の
     // スケッチ図形ホバー・スナップの検査が使う円。
     await mcp.callTool('add_circle', { sketch_id: sketch.sketch_id, center: [60, 10], radius: 10 })
-    // 検証9が使う**傾いた長方形**。他の図形の輪郭から十分離す(近すぎるとスナップの
+    // 検証10が使う**傾いた長方形**。他の図形の輪郭から十分離す(近すぎるとスナップの
     // 当たり判定が先に別の図形を拾う。engine `sketch-point-snap-tolerance-breaks-nearby-fixtures`)。
     const TILTED = { corner: [85, 0], width: 24, height: 10, angle: 35 }
     await mcp.callTool('add_rectangle', { sketch_id: sketch.sketch_id, ...TILTED })
@@ -440,7 +443,61 @@ async function main() {
     }
     ok('スケッチの図形・点も、ビューポートの外へ出ると強調が消える')
 
-    // ---------------------------------------------------------------- 7. スナップ: 点に完全一致
+    // ---------------------------------------------------------------- 7. 1mmグリッドスナップ
+    //
+    // 何にも当たっていない場所を2点。**円(x:50-70)と傾いた長方形(x:79.26-104.66)の間の
+    // 隙間**(x:70-79.26。どのyでも他の図形・8〜10が引く線分のどれとも重ならない)を使う。
+    // **わざと格子から外した画素を狙う**(ちょうど交点を叩くと丸めの有無を区別できない)。
+    await page.click('#sketch-line')
+    await withoutBrowserPanel(page, async () => {
+      const start = await sketchScreenPoint(73.4, 5.35)
+      if (!start) fail('グリッドスナップ検査: 始点用の空き地が画面上で指せない')
+      // **クリックする前に、幽霊(hoverPoint)が同じ丸めを見せているかを確かめる**
+      // (確定結果だけ丸めて幽霊がずれると、ゴムひもの端が飛んで見える)。
+      await page.mouse.move(start.x, start.y)
+      await settle(page)
+      // **スプレッドで写す**(Svelte 5 proxy対策。`activeSketchEntities` と同じ理由)。
+      const ghost = await page.evaluate(() => {
+        const point = window.__duocad.hoverPoint
+        return point ? [...point] : null
+      })
+      if (!ghost || ghost[0] !== 73 || ghost[1] !== 5) {
+        fail(`何にも当たっていない幽霊が1mmへ丸まっていない: ${JSON.stringify(ghost)}`)
+      }
+      ok(`幽霊も1mmグリッドへ丸まっている(狙い (73.4, 5.35) → 幽霊 (${ghost[0]}, ${ghost[1]}))`)
+      await page.mouse.click(start.x, start.y)
+      const end = await sketchScreenPoint(75.6, 27.8)
+      if (!end) fail('グリッドスナップ検査: 終点用の空き地が画面上で指せない')
+      await page.mouse.click(end.x, end.y)
+    })
+    await page.waitForFunction(
+      (before) => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return (active?.entities.length ?? 0) === before + 1
+      },
+      { timeout, polling: 50 },
+      entitiesBeforeDrawing.length,
+    )
+    const snappedToGrid = await page.evaluate(() => {
+      const hook = window.__duocad
+      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      return { ...active.entities.filter((item) => item.kind === 'line').at(-1).params }
+    })
+    for (const key of ['x0', 'y0', 'x1', 'y1']) {
+      if (!Number.isInteger(snappedToGrid[key])) {
+        fail(
+          `何にも当たっていない場所へ置いたのに整数mmにならない: ` +
+            `${key}=${snappedToGrid[key]} (${JSON.stringify(snappedToGrid)})`,
+        )
+      }
+    }
+    ok(
+      `**何にも当たっていない場所は1mmグリッドへ丸められる**` +
+        `(始点 (${snappedToGrid.x0}, ${snappedToGrid.y0})・終点 (${snappedToGrid.x1}, ${snappedToGrid.y1}))`,
+    )
+
+    // ---------------------------------------------------------------- 8. スナップ: 点に完全一致
     //
     // **クリック(`addPoint`)がスナップを通っていることを、目視ではなく `sketches` の
     // params を読んで確かめる**(タスク完了条件)。わざと数画素ずらして押す ——
@@ -460,7 +517,7 @@ async function main() {
       (before) => {
         const hook = window.__duocad
         const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return (active?.entities.length ?? 0) === before + 1
+        return (active?.entities.length ?? 0) === before + 2
       },
       { timeout, polling: 50 },
       entitiesBeforeDrawing.length,
@@ -482,7 +539,7 @@ async function main() {
         `(数画素ずらして押しても (${rectangle.params.x}, ${rectangle.params.y}) になった)`,
     )
 
-    // ---------------------------------------------------------------- 8. スナップ: 円の半径ちょうど
+    // ---------------------------------------------------------------- 9. スナップ: 円の半径ちょうど
     await page.click('#sketch-line')
     await withoutBrowserPanel(page, async () => {
       const boundary = { u: circle.params.cx + circle.params.radius, v: circle.params.cy }
@@ -490,7 +547,7 @@ async function main() {
       if (!anchor) fail('スナップ検査: 円周上の点が画面上で指せない')
       // **斜めにずらす**(カメラの向きに関わらず、円の接線と厳密には重ならない方向にする)。
       await page.mouse.click(anchor.x + 3, anchor.y + 3)
-      // 検証7が置いた点(45,15)とは別の隙間の点にする(2本の線分の的が重ならないように)。
+      // 検証8が置いた点(45,15)とは別の隙間の点にする(2本の線分の的が重ならないように)。
       const far = await sketchScreenPoint(45, 25)
       if (!far) fail('スナップ検査: 終点用の逃げ場所が画面上で指せない')
       await page.mouse.click(far.x, far.y)
@@ -499,7 +556,7 @@ async function main() {
       (before) => {
         const hook = window.__duocad
         const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return (active?.entities.length ?? 0) === before + 2
+        return (active?.entities.length ?? 0) === before + 3
       },
       { timeout, polling: 50 },
       entitiesBeforeDrawing.length,
@@ -524,7 +581,7 @@ async function main() {
         `(実測距離 ${distFromCenter})`,
     )
 
-    // ---------------------------------------------------------------- 9. スナップ: 傾いた辺の上
+    // ---------------------------------------------------------------- 10. スナップ: 傾いた辺の上
     //
     // 4隅は**この検査が自前の三角関数で出す**(製品の `rectangleCorners` を借りない ——
     // 借りると同じ間違いを両側で共有して素通りする)。軸平行前提のままの `snap()` なら
@@ -553,7 +610,7 @@ async function main() {
       (before) => {
         const hook = window.__duocad
         const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return (active?.entities.length ?? 0) === before + 3
+        return (active?.entities.length ?? 0) === before + 4
       },
       { timeout, polling: 50 },
       entitiesBeforeDrawing.length,

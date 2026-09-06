@@ -1897,23 +1897,33 @@
   }
 
   /**
-   * カーソルの生の (u,v) を、当たっているスケッチの図形へ落とす(スナップ)。
+   * カーソルの生の (u,v) を、当たっているスケッチの図形か1mmグリッドへ落とす(スナップ)。
    *
    * **クリック(`onSketchPick` の `addPoint`)と幽霊(`hoverPoint`)は必ずこの関数を
    * 通すこと**(20260906タスクの不変条件) —— 片方だけ直すと、吸い付いて見える位置と
-   * 確定結果がずれる、いちばん困る形の不具合になる。当たっている図形が無ければ
-   * (`hit === null`)生の座標をそのまま返す。
+   * 確定結果がずれる、いちばん困る形の不具合になる。段は3つ、上から順に当たった時点で
+   * 確定する: (1) 点マーカー (2) 図形の線 (3) どちらにも当たっていなければ1mmグリッド。
    *
    * **`viewport.viewResolution()` を渡す** —— 当たり判定(`sketchEntityAt`)が拾う
    * `handleLines` はこの解像度で折れているので、bezierのように折れ線近似でスナップする
    * 種別は、ここがずれると「当たった線」と「落ちる座標」が別になる。
    */
   function snappedPlanePoint(u: number, v: number, hit: SketchEntityHit | null): Point2 {
-    if (hit === null) return [u, v]
+    if (hit === null) return snappedToGrid1mm(u, v)
     const sketch = sketches.find((item) => item.sketch_id === hit.sketchId)
     const entity = sketch?.entities.find((item) => item.entity_id === hit.entityId)
-    if (!entity) return [u, v]
+    if (!entity) return snappedToGrid1mm(u, v)
     return snapToSketchEntity(entity, hit.point, u, v, viewport?.viewResolution())
+  }
+
+  /**
+   * 何にも当たっていないときの最後の段。点を待っている(`host.wantsPoint()`)ときだけ
+   * (u,v) をそれぞれ1mmへ丸める —— 選択のクリック等では丸めない。
+   *
+   * 層をまたぐ契約: 丸めの刻み(1mm)は `gridScale.ts` の `TIERS` の最小段と一致させること。
+   */
+  function snappedToGrid1mm(u: number, v: number): Point2 {
+    return host?.wantsPoint() ? [Math.round(u), Math.round(v)] : [u, v]
   }
 
   /**
