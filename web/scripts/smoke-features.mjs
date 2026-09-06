@@ -788,11 +788,10 @@ async function main() {
     }
     ok(`円形反復: 幽霊と確定結果の中心が一致(最大差 ${circWorst.toExponential(1)} mm)`)
 
-    // ---------------------------------------------------------------- 種別が変わる複製
-    // **長方形の円形反復だけは、複製の種別が変わる**(軸平行の `x,y,width,height` は回転を
-    // 表せないので、コアは4本の線分へ落とす。`duocad/sketch.py` の `_rotate_rectangle`)。
-    // 幽霊も同じ落とし方をしないと、**プレビューは長方形のまま・確定すると線分**という
-    // 食い違いになる —— TSとコアがずれうる箇所の中でいちばん危ないのがここなので、
+    // ---------------------------------------------------------------- 回った長方形の複製
+    // **長方形の複製は `params.angle` で向きを持つ**(`duocad/kernel.py` の
+    // `rectangle_corners` と `web/src/entityKinds.ts` の `rectangleCorners` が同じ4隅を
+    // 張る規則)。この2つがずれると**プレビューと確定結果が別の向きで出る**ので、
     // 円だけでなくこの経路も実機で突き合わせる。
     await pressUndo(page) // 円形反復を戻す(drawn は円1個へ)
     await waitFor(
@@ -829,48 +828,56 @@ async function main() {
     await clickPlane(0, 0) // 回転中心(長方形の中心と重ならない)
     await typeInto('#pattern-count', 4)
     await typeInto('#pattern-angle', 360)
-    // 増える分は3複製 × 4本 = 12本。**長方形1個ぶんの幽霊が4本に化けている**ことが要点。
+    // 増える分は3複製。**どれも長方形のまま**(種別が変わらない)ことが要点。
     await waitFor(
       () => {
         const ghosts = window.__duocad.ghostInfo().sketch
-        return ghosts.length === 12 && ghosts.every((item) => item.kind === 'line')
+        return ghosts.length === 3 && ghosts.every((item) => item.kind === 'rectangle')
       },
-      '長方形の円形反復の幽霊が「線分12本」にならない',
+      '長方形の円形反復の幽霊が「長方形3つ」にならない',
     )
-    const rectGhostLines = await page.evaluate(() =>
-      window.__duocad
-        .ghostInfo()
-        .sketch.map((item) => [item.params.x0, item.params.y0, item.params.x1, item.params.y1]),
+    const rectKeys = ['x', 'y', 'width', 'height', 'angle']
+    const rectGhosts = await page.evaluate(
+      (keys) =>
+        window.__duocad
+          .ghostInfo()
+          .sketch.map((item) => keys.map((key) => item.params[key] ?? 0)),
+      rectKeys,
     )
     await page.keyboard.press('Enter')
     await waitFor(
       () => {
         const hook = window.__duocad
         const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-        return Boolean(active && active.drawn.filter((item) => item.kind === 'line').length === 16)
+        return Boolean(
+          active && active.drawn.filter((item) => item.kind === 'rectangle').length === 4,
+        )
       },
-      '長方形の円形反復が「線分16本」(4複製×4辺)にならない',
+      '長方形の円形反復が「長方形4つ」(元+3複製)にならない',
     )
-    const realLines = await page.evaluate(() => {
-      const hook = window.__duocad
-      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-      return active.drawn
-        .filter((item) => item.kind === 'line')
-        .map((item) => [item.params.x0, item.params.y0, item.params.x1, item.params.y1])
-    })
-    const orphan = rectGhostLines.find(
-      (ghostLine) =>
-        !realLines.some((line) =>
-          line.every((value, index) => Math.abs(value - ghostLine[index]) < 1e-9),
+    const realRects = await page.evaluate(
+      (keys) => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return active.drawn
+          .filter((item) => item.kind === 'rectangle')
+          .map((item) => keys.map((key) => item.params[key] ?? 0))
+      },
+      rectKeys,
+    )
+    const orphan = rectGhosts.find(
+      (ghost) =>
+        !realRects.some((rect) =>
+          rect.every((value, index) => Math.abs(value - ghost[index]) < 1e-9),
         ),
     )
     if (orphan) {
       fail(
-        `幽霊の線分が確定結果に無い: ${JSON.stringify(orphan)} / ` +
-          `結果 ${JSON.stringify(realLines)}`,
+        `幽霊の長方形が確定結果に無い: ${JSON.stringify(orphan)} / ` +
+          `結果 ${JSON.stringify(realRects)}`,
       )
     }
-    ok('円形反復: 長方形の複製が幽霊でも確定結果でも線分4本へ化け、12本すべて一致した')
+    ok('円形反復: 長方形の複製が幽霊でも確定結果でも長方形のままで、3つとも一致した')
 
     // ================================================================ 検証5: 新規ボディ
     // **`new` は既存ボディへ融合しない種別**。板が既にいるこの文書でも、`new` なら

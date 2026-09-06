@@ -25,14 +25,6 @@
   複製の単位は常に図形1つである(本人明言「copyはentity単体が対象」)。複製は
   **反復(`Pattern`)には入らない** —— 反復の元を複製しても、複製は素の図形になる。
 
-**長方形をまるごと回すことはできない**(`mode="rotate"` で `point=None` の長方形は
-ValueError)。軸平行の `x, y, width, height` は回転を表せないので、回すと種別が4本の線分へ
-変わる —— `pattern_circular` は**複製を展開するときだけ**その落とし方をしている
-(`sketch._rectangle_as_rotated_lines`)のに対し、こちらは**既にある図形そのもの**を
-書き換える verb なので、種別が変わると「undo = 逆向きに同じ角度」が成り立たなくなり、
-戻すときに元の図形IDと名前つき寸法(`d3` 等)を復元できない。**黙って線分に化けさせない**。
-長方形の1点(左下)だけを回すのは今までどおりできる(位置が動くだけで種別は変わらない)。
-
 **同じ図形に「辺」と「点」が同時に選ばれていたら辺(全体)が勝つ**。両方を素直に適用すると
 その点だけ2回動いて図形が歪む —— 選び方の違いで形が壊れるのは、この verb が
 「形を変えない平行移動」であるという約束と食い違う。
@@ -124,10 +116,16 @@ def _write_params(doc: Document, entity: Entity, values: Dict[str, float]) -> No
     **名前つきの値なら文書のパラメータ表を書き換える**(`d3` を 12.0 にする)ので、その名前を
     `set_parameter` で後から打ち直す道は残る。素の数値のまま持っている図形(取り込んだベジエ)は
     `Entity.params` の側を直接書き換える。
+
+    **その図形がまだ持っていないキーは、名前つきの値として新しく登録する** —— `angle` を
+    持たない時代のログから再生した長方形をまるごと回すとここへ来る。登録はこの操作の
+    再生でも同じ順序で起きるので、`d<n>` の割り当ては再生しても変わらない。
     """
     for key, value in values.items():
-        ref = entity.params[key]
-        if isinstance(ref, str):
+        ref = entity.params.get(key)
+        if ref is None:
+            entity.params[key] = parameters.register_value(doc, float(value))
+        elif isinstance(ref, str):
             doc.parameters[ref] = float(value)
         else:
             entity.params[key] = float(value)
@@ -258,22 +256,11 @@ def _rotated_params(
     - `point is None` … 図形まるごと。種別の表の `rotate(..., rotate_copies=True)` を使う
       —— **`True` でなければならない**。`False` は「複製の向きを変えず位置だけ回す」ための
       円形反復用の挙動で、こちらは対象そのものを回すからである。
-    - `point` あり … その点だけを `sketch.rotate_point` で回す(種別は変わらない)。
-
-    種別が変わる結果(長方形まるごと -> 線分4本)は **ValueError** にする。理由は
-    モジュールdocstring(undoが「逆向きに同じ角度」で成り立たなくなる)。
+    - `point` あり … その点だけを `sketch.rotate_point` で回す。
     """
     if point is None:
-        results = entity_kind_ops(kind).rotate(current, cx, cy, angle_deg, True)
-        kinds = [str(item["kind"]) for item in results]
-        if len(results) != 1 or kinds[0] != kind:
-            raise ValueError(
-                f"move_sketch_entities: {kind} はまるごと回せない"
-                f"(回すと種別が {kinds} に変わる)。"
-                "点を1つだけ選んで回すか、線分で描き直してから回すこと"
-            )
         result = dict(current)
-        result.update(results[0]["params"])
+        result.update(entity_kind_ops(kind).rotate(current, cx, cy, angle_deg, True))
         return result
     x_key, y_key = entity_point_pair(kind, str(point))
     new_x, new_y = rotate_point(current[x_key], current[y_key], cx, cy, angle_deg)

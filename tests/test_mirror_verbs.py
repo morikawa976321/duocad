@@ -5,8 +5,8 @@
 - **どちらも常に複製を作る**(move側と違い in-place反転の口は無い)
 - スケッチ: 対象は確定選択の図形そのもの(点単位は扱わない)。軸は既存の線分1本への参照で、
   対象の確定選択とは別引数(共有選択集合には混ぜない)
-- スケッチ: 長方形は軸が水平・垂直(辺と平行/垂直)なら鏡映できるが、斜めの軸では種別を
-  保てず ValueError(黙って線分4本に化けさせない)
+- スケッチ: 長方形は**どんな軸でも長方形1つのまま**鏡映できる(`params` の `angle` が
+  向きを持つ)。検算は4隅の集合で行い、`angle` の値そのものは期待値にしない
 - ソリッド: 対象は選択中の面/辺/頂点が属するボディ。鏡映面は base_plane(XY/XZ/YZ)か
   plane_face(既存の平面な面)のどちらか一方(両方/どちらも無しは ValueError)
 - ソリッド: 非平面の面を plane_face に渡すと ValueError
@@ -20,6 +20,7 @@ import math
 import pytest
 
 from duocad import kernel, query, selection, sketch
+from duocad.oplog import verb_handler
 from duocad.server import Session
 
 SIDE = 20.0
@@ -37,6 +38,24 @@ def _select(session: Session, refs: list) -> None:
 
 def _params(session: Session, sketch_id: str, entity_id: str) -> dict:
     return sketch.entity_params(session.document, sketch_id, entity_id)
+
+
+def _corner_set(params: dict) -> list:
+    """4隅を「順序に依らない集合」として比べられる形へ。
+
+    **`angle` と基準の角の組は一意ではない**(同じ4隅を張る取り方が複数ある)ので、
+    鏡映の検算は隅の集合だけで行う。
+    """
+    return sorted((round(u, 9), round(v, 9)) for u, v in kernel.rectangle_corners(params))
+
+
+def _mirrored_corner_set(params: dict, ax, ay, ux, uy) -> list:
+    """元の4隅を1点ずつ軸へ映した集合(期待値の作り方)。"""
+    mirrored = []
+    for u, v in kernel.rectangle_corners(params):
+        t = (u - ax) * ux + (v - ay) * uy
+        mirrored.append((round(2.0 * (ax + t * ux) - u, 9), round(2.0 * (ay + t * uy) - v, 9)))
+    return sorted(mirrored)
 
 
 def _box(session: Session):
@@ -168,35 +187,74 @@ def test_mirroring_a_bezier_twice_returns_to_the_original(session: Session) -> N
     assert _params(session, sketch_id, twice_id) == pytest.approx(original)
 
 
-def test_mirroring_a_rectangle_across_an_axis_parallel_to_its_edge_keeps_its_kind(
-    session: Session,
-) -> None:
-    """軸が長方形の辺と平行(水平)なら軸平行のまま鏡映できる。"""
+@pytest.mark.parametrize(
+    "axis_p1, angle",
+    [
+        ([1.0, 0.0], 0.0),    # 軸が水平(辺と平行)
+        ([0.0, 1.0], 0.0),    # 軸が垂直(辺と直交)
+        ([1.0, 1.0], 0.0),    # 斜めの軸 —— 以前はここで ValueError になっていた
+        ([2.0, 1.0], 33.0),   # 斜めの軸 × 元から傾いた長方形
+    ],
+)
+def test_mirroring_a_rectangle_stays_one_rectangle(session, axis_p1, angle) -> None:
+    """**どんな軸でも長方形1つのまま**鏡映でき、4隅が元の4隅を映した集合と一致する。
+
+    落ちたら、`_mirror_rectangle` が張る4隅が「元の隅を1点ずつ映したもの」からずれている。
+    """
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    axis_id = session.add_line(sketch_id, [0.0, 0.0], [1.0, 0.0])["entity_id"]
-    entity_id = session.add_rectangle(sketch_id, [1.0, 1.0], 4.0, 2.0)["entity_id"]
+    axis_id = session.add_line(sketch_id, [0.0, 0.0], axis_p1)["entity_id"]
+    entity_id = session.add_rectangle(sketch_id, [1.0, 1.0], 4.0, 2.0, angle)["entity_id"]
+    original = _params(session, sketch_id, entity_id)
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
 
     applied = session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})
 
-    mirrored = _params(session, sketch_id, applied["created"][0])
-    assert mirrored == pytest.approx({"x": 1.0, "y": -3.0, "width": 4.0, "height": 2.0})
+    assert len(applied["created"]) == 1
+    created = sketch.get_entity(
+        sketch.get_sketch(session.document, sketch_id), applied["created"][0]
+    )
+    assert created.kind == "rectangle"
+    mirrored = _params(session, sketch_id, created.id)
+    assert (mirrored["width"], mirrored["height"]) == pytest.approx((4.0, 2.0))
+    length = math.hypot(axis_p1[0], axis_p1[1])
+    assert _corner_set(mirrored) == pytest.approx(
+        _mirrored_corner_set(original, 0.0, 0.0, axis_p1[0] / length, axis_p1[1] / length),
+        abs=1e-9,
+    )
+    assert _params(session, sketch_id, entity_id) == pytest.approx(original), "元は動かない"
 
 
-def test_mirroring_a_rectangle_across_a_diagonal_axis_is_refused(session: Session) -> None:
-    """軸が斜め(長方形の辺と平行でも垂直でもない)だと種別を保てず ValueError。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    axis_id = session.add_line(sketch_id, [0.0, 0.0], [1.0, 1.0])["entity_id"]
-    entity_id = session.add_rectangle(sketch_id, [1.0, 1.0], 4.0, 2.0)["entity_id"]
+def test_a_rectangle_from_a_log_without_angle_still_refuses_a_self_overlapping_copy(
+    session: Session,
+) -> None:
+    """`angle` を持たない時代のログから再生した長方形も、元と重なる複製は断る。
+
+    落ちたら、`_mirrored_plan` の重なり検査がキーの数の違いだけで不一致と判定している
+    (旧文書の長方形は `params` が4個で、鏡映後は5個になる)。重なった複製を作ると
+    領域検出が同じ辺を2本見る。
+    """
+    document = session.document
+    sketch_id = sketch.sketch_create(document, "XY")
+    entity_id = "entity-legacy-mirror"
+    operation = document.log.append(
+        "add_rectangle",
+        {
+            "sketch_id": sketch_id,
+            "entity_id": entity_id,
+            "kind": "rectangle",
+            "params": {"x": 0.0, "y": 0.0, "width": 10.0, "height": 4.0},
+        },
+    )
+    verb_handler("add_rectangle").do(document, operation)
+    # 長方形の水平な中心線を軸にすると、鏡映しても元とぴったり重なる。
+    axis_id = session.add_line(sketch_id, [-5.0, 2.0], [15.0, 2.0])["entity_id"]
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
 
-    before = len(session.document.log.entries)
     with pytest.raises(ValueError) as error:
         session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})
-    assert "鏡映できない" in str(error.value)
-    # 失敗したら文書にもログにも何も残らない
-    assert len(session.document.log.entries) == before
-    assert len(sketch.get_sketch(session.document, sketch_id).entities) == 2
+
+    assert "元と完全に重なる" in str(error.value)
+    assert len(sketch.get_sketch(document, sketch_id).entities) == 2
 
 
 def test_the_axis_must_be_a_line_entity(session: Session) -> None:

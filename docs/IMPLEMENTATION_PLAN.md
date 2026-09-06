@@ -75,7 +75,7 @@ AIが述語 `parallel_to Y` で複数の辺を提案 → 画面に提案色（�
 | `sketch_create` | 平面（基準3面）または既存ソリッドの平面状の面 |
 | `add_line` | sketch, p0, p1 |
 | `add_circle` | sketch, center, radius |
-| `add_rectangle` | sketch, corner, width, height |
+| `add_rectangle` | sketch, corner, width, height, angle（省略で0） |
 | `add_arc` | sketch, center, radius, start_deg, end_deg |
 | `pattern_rectangular` | sketch, entities, dx, dy, nx, ny |
 | `pattern_circular` | sketch, entities, center, count, total_angle |
@@ -214,7 +214,7 @@ Region  : { index, area }             # 図形の配置から計算される閉�
 | | 中身 | 採否 |
 |---|---|---|
 | 拘束ソルバ | 図形**どうし**の関係を解く（この線とあの線は平行） | **持たない** |
-| パラメトリック・プリミティブ | 各図形が**自分の数値**を持つ（長方形 at (x,y) 幅w 高さh） | **これで足りる** |
+| パラメトリック・プリミティブ | 各図形が**自分の数値**を持つ（長方形 at (x,y) 幅w 高さh 傾きa） | **これで足りる** |
 
 「数値を打って描く／あとで値を編集する」という実際の運用は、後者だけで完全にカバーできる。
 **day 1の予防**: 打った数値を図形の座標に焼き込まず、**名前つきの値として別に持つ**。

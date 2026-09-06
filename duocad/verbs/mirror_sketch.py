@@ -14,10 +14,6 @@
 `{"axis_p0", "axis_dir"}` だけを載せる(軸に使った線分が対象に混ざっている場合、複製後に
 参照を引き直すと別の線分になるため)。
 
-種別が変わる結果(長方形が軸に対して斜めで、鏡映すると軸平行を保てない場合)は
-`move_sketch_entities` の回転と同じ方針(モジュールdocstring参照) —— 黙って線分4本に
-化けさせず ValueError。軸が水平・垂直(長方形の辺と平行/垂直)なら型は保たれるので許容。
-
 **OCP / build123d を直接importしない**(幾何は `duocad.sketch` の表越し)。
 """
 from __future__ import annotations
@@ -97,16 +93,12 @@ def _mirrored_plan(
         sketch = get_sketch(doc, sketch_id)
         entity = get_entity(sketch, entity_id)
         current = _resolved_params(doc, entity)
-        results = entity_kind_ops(entity.kind).mirror(current, ax, ay, ux, uy)
-        if len(results) != 1 or str(results[0]["kind"]) != entity.kind:
-            kinds = [str(item["kind"]) for item in results]
-            raise ValueError(
-                f"mirror_sketch_entities: {entity.kind} はこの軸では鏡映できない"
-                f"(種別が {kinds} に変わる)。軸を水平・垂直(その図形の辺と平行/垂直)に"
-                "するか、線分で描き直してから鏡映すること"
-            )
-        values = dict(results[0]["params"])
-        if values == current:
+        values = dict(current)
+        values.update(entity_kind_ops(entity.kind).mirror(current, ax, ay, ux, uy))
+        # **元が持っているキーだけで比べる** —— `angle` を持たない時代のログから再生した
+        # 長方形は `values` のほうがキーが1つ多く、素の辞書比較では常に不一致になる
+        # (= 元と完全に重なる複製を見逃す)。
+        if all(values[key] == current[key] for key in current):
             # 対象が軸の上に乗っている(鏡映しても動かない)。**元と重なる複製は作らない**
             # (`move_sketch_entities._copy` と同じ理由 —— 領域検出が同じ辺を2本見る)。
             raise ValueError(
@@ -152,9 +144,8 @@ def mirror_sketch_entities(doc: Document, targets: Sequence[dict], axis: Any) ->
 
     軸自身が対象の選択に混ざっていてもよい —— **軸に使った図形自身は対象から黙って外す**
     (直線は軸まわりに常に自分自身へ映るので、鏡映しても「元と完全に重なる複製」にしか
-    ならない。断らずに、軸以外の対象だけを鏡映する)。長方形が軸に対して斜めだと種別を
-    保てず ValueError(軸が水平・垂直=長方形の辺と平行/垂直なら通る)。失敗したときは
-    文書にもログにも何も残さない。
+    ならない。断らずに、軸以外の対象だけを鏡映する)。失敗したときは文書にもログにも
+    何も残さない。
     """
     normalized = _normalize_targets(doc, targets)
     axis_sketch, axis_entity, ax, ay, ux, uy = _axis_line(doc, axis)

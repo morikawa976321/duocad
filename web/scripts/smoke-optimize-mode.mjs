@@ -477,12 +477,16 @@ async function main() {
     await frameAll(page)
     await new Promise((resolve) => setTimeout(resolve, 200))
     // **`d#`は登録順の連番**(`duocad/parameters.py`)なので、Cの作成前後の差集合が
-    // Cの角(x, y)・幅・高さの4パラメータ(この順)になる。ハードコードしない —— 直前の
-    // 検査がパラメータをいくつ使うかに依存させないため。
+    // Cの角(x, y)・幅・高さ・傾きの5パラメータ(この順。`duocad/sketch.py` の
+    // `add_rectangle`)になる。ハードコードしない —— 直前の検査がパラメータを
+    // いくつ使うかに依存させないため。
     const paramsAfterC = await page.evaluate(() => Object.keys(window.__duocad.parameters))
     const newParamNames = paramsAfterC.filter((name) => !paramsBeforeC.includes(name))
-    if (newParamNames.length !== 4) {
-      fail(`ボディCの新規パラメータが4個ではない(角x/y・幅・高さのはず): ${JSON.stringify(newParamNames)}`)
+    if (newParamNames.length !== 5) {
+      fail(
+        'ボディCの新規パラメータが5個ではない(角x/y・幅・高さ・傾きのはず): ' +
+          JSON.stringify(newParamNames),
+      )
     }
     const [, , widthParam, heightParam] = newParamNames
     const faceC = await pickAnyFace(bodyC)

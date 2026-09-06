@@ -40,10 +40,7 @@ interface EntityKindSpec {
    */
   translate(params: Record<string, number>, dx: number, dy: number): Record<string, number>
   /**
-   * `params` を (cx,cy) まわりに `angleDeg` 度(反時計回り)回した姿。
-   *
-   * **同じ種別に閉じない**ので戻り値は配列である —— 軸平行の `x,y,width,height` は
-   * 回転を表せないので、長方形の `rotateCopies=true` は4本の線分になる
+   * `params` を (cx,cy) まわりに `angleDeg` 度(反時計回り)回した姿。**種別は変わらない**
    * (コアの `duocad/sketch.py` の `EntityKindOps.rotate` と同じ)。
    *
    * `rotateCopies=false` は**向きを変えずに位置だけ**回す(中心を回して平行移動する)。
@@ -54,7 +51,7 @@ interface EntityKindSpec {
     cy: number,
     angleDeg: number,
     rotateCopies: boolean,
-  ): Array<{ kind: EntityKind; params: Record<string, number> }>
+  ): Record<string, number>
   /** `params` を (u,v) の折れ線へ(円・円弧は分割線で近似)。コアの `Entity.params` のキーを
    *  そのまま読む(`duocad/sketch.py` の `Entity` docstring)。
    *
@@ -65,8 +62,8 @@ interface EntityKindSpec {
    * 同じ並びでなければならない —— 参照が持つ `point` はこの**xキー**そのものである。
    *
    * 寸法(半径・幅高さ・角度)は入れない。点を動かしても形は変わらないが、寸法を動かすと
-   * 形が変わる(寸法の編集は今回のスコープ外)。長方形は左下の1点だけで、残り3隅は
-   * `width`/`height` からの導出値なので独立に動かせない。
+   * 形が変わる(寸法の編集は今回のスコープ外)。長方形は基準の角1つだけで、残り3隅は
+   * `width`/`height`/`angle` からの導出値なので独立に動かせない。
    */
   pointKeys: ReadonlyArray<readonly [string, string]>
   /**
@@ -240,28 +237,32 @@ function translateBezier(params: Record<string, number>, dx: number, dy: number)
   )
 }
 
-/** 軸平行の長方形を、4隅を回した4本の線分へ落とす(長方形の語彙は回転を表せない)。 */
-function rectangleAsRotatedLines(
-  params: Record<string, number>,
-  cx: number,
-  cy: number,
-  angleDeg: number,
-): Array<{ kind: EntityKind; params: Record<string, number> }> {
+/**
+ * 長方形の傾き(度・反時計)。**キーが無ければ 0** —— `angle` を持たない時代に保存された
+ * 操作ログを再生した図形は `params` にこのキーを持たない(コアの `kernel.rectangle_angle`)。
+ */
+function rectangleAngle(params: Record<string, number>): number {
+  return params.angle ?? 0
+}
+
+/**
+ * 長方形の4隅を、基準の角 `(x, y)` から反時計回りに返す。
+ *
+ * **コアの `duocad/kernel.py` の `rectangle_corners` と同じ規則でなければならない** ——
+ * ここがずれると、幽霊(確定前の姿)と確定した形が別の場所に出る。
+ */
+function rectangleCorners(params: Record<string, number>): Array<[number, number]> {
   const { x, y, width, height } = params
-  const corners: Array<[number, number]> = [
-    [x, y],
-    [x + width, y],
-    [x + width, y + height],
-    [x, y + height],
+  const radians = (rectangleAngle(params) * Math.PI) / 180
+  const cosA = Math.cos(radians)
+  const sinA = Math.sin(radians)
+  const offsets: Array<[number, number]> = [
+    [0, 0],
+    [width, 0],
+    [width, height],
+    [0, height],
   ]
-  const rotated = corners.map(([px, py]) => rotatePoint(px, py, cx, cy, angleDeg))
-  return rotated.map((corner, index) => {
-    const next = rotated[(index + 1) % 4]
-    return {
-      kind: 'line' as EntityKind,
-      params: { x0: corner[0], y0: corner[1], x1: next[0], y1: next[1] },
-    }
-  })
+  return offsets.map(([ox, oy]) => [x + ox * cosA - oy * sinA, y + ox * sinA + oy * cosA])
 }
 
 const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
@@ -273,12 +274,12 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
       if (rotateCopies) {
         const [x0, y0] = rotatePoint(params.x0, params.y0, cx, cy, angleDeg)
         const [x1, y1] = rotatePoint(params.x1, params.y1, cx, cy, angleDeg)
-        return [{ kind: 'line', params: { x0, y0, x1, y1 } }]
+        return { x0, y0, x1, y1 }
       }
       const mx = (params.x0 + params.x1) / 2
       const my = (params.y0 + params.y1) / 2
       const [nmx, nmy] = rotatePoint(mx, my, cx, cy, angleDeg)
-      return [{ kind: 'line', params: translateLine(params, nmx - mx, nmy - my) }]
+      return translateLine(params, nmx - mx, nmy - my)
     },
     fromArgs(args) {
       const p0 = args.p0 as [number, number]
@@ -302,7 +303,7 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
     rotate(params, cx, cy, angleDeg) {
       // **円は `rotateCopies` を見ない**(向きの無い図形。コアの `_rotate_circle` と同じ)。
       const [nx, ny] = rotatePoint(params.cx, params.cy, cx, cy, angleDeg)
-      return [{ kind: 'circle', params: { cx: nx, cy: ny, radius: params.radius } }]
+      return { cx: nx, cy: ny, radius: params.radius }
     },
     fromArgs(args) {
       const center = args.center as [number, number]
@@ -326,36 +327,32 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
     verb: 'add_rectangle',
     translate: (params, dx, dy) => translateAtCenter(params, 'x', 'y', dx, dy),
     rotate(params, cx, cy, angleDeg, rotateCopies) {
-      if (rotateCopies) return rectangleAsRotatedLines(params, cx, cy, angleDeg)
-      const ecx = params.x + params.width / 2
-      const ecy = params.y + params.height / 2
+      if (rotateCopies) {
+        const [nx, ny] = rotatePoint(params.x, params.y, cx, cy, angleDeg)
+        return { ...params, x: nx, y: ny, angle: rectangleAngle(params) + angleDeg }
+      }
+      const corners = rectangleCorners(params)
+      const ecx = (corners[0][0] + corners[2][0]) / 2
+      const ecy = (corners[0][1] + corners[2][1]) / 2
       const [ncx, ncy] = rotatePoint(ecx, ecy, cx, cy, angleDeg)
-      return [
-        { kind: 'rectangle', params: translateAtCenter(params, 'x', 'y', ncx - ecx, ncy - ecy) },
-      ]
+      return translateAtCenter(params, 'x', 'y', ncx - ecx, ncy - ecy)
     },
     fromArgs(args) {
       const corner = args.corner as [number, number]
-      return { x: corner[0], y: corner[1], width: args.width as number, height: args.height as number }
+      return {
+        x: corner[0],
+        y: corner[1],
+        width: args.width as number,
+        height: args.height as number,
+        angle: (args.angle as number | undefined) ?? 0,
+      }
     },
     toPoints(params) {
-      const { x, y, width, height } = params
-      return [
-        [x, y],
-        [x + width, y],
-        [x + width, y + height],
-        [x, y + height],
-        [x, y],
-      ]
+      const corners = rectangleCorners(params)
+      return [...corners, corners[0]]
     },
     snap(params, u, v) {
-      const { x, y, width, height } = params
-      const corners: Array<[number, number]> = [
-        [x, y],
-        [x + width, y],
-        [x + width, y + height],
-        [x, y + height],
-      ]
+      const corners = rectangleCorners(params)
       let best: [number, number] = corners[0]
       let bestDistSq = Infinity
       for (let index = 0; index < 4; index += 1) {
@@ -380,12 +377,7 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
       // **向きを回すときだけ開始/終了角も回す**(コアの `_rotate_arc`)。
       const start = rotateCopies ? params.start_deg + angleDeg : params.start_deg
       const end = rotateCopies ? params.end_deg + angleDeg : params.end_deg
-      return [
-        {
-          kind: 'arc',
-          params: { cx: nx, cy: ny, radius: params.radius, start_deg: start, end_deg: end },
-        },
-      ]
+      return { cx: nx, cy: ny, radius: params.radius, start_deg: start, end_deg: end }
     },
     fromArgs(args) {
       const center = args.center as [number, number]
@@ -419,22 +411,17 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
     translate: translateBezier,
     rotate(params, cx, cy, angleDeg, rotateCopies) {
       // **ベジエはアフィン不変**なので、制御点を回すだけで曲線が厳密に回る
-      // (長方形のように種別が崩れない唯一の曲線。コアの `_rotate_bezier`)。
+      // (コアの `_rotate_bezier`)。
       if (rotateCopies) {
-        return [
-          {
-            kind: 'bezier',
-            params: bezierParams(
-              bezierControlPoints(params).map(([px, py]) => rotatePoint(px, py, cx, cy, angleDeg)),
-            ),
-          },
-        ]
+        return bezierParams(
+          bezierControlPoints(params).map(([px, py]) => rotatePoint(px, py, cx, cy, angleDeg)),
+        )
       }
       const points = bezierControlPoints(params)
       const mx = points.reduce((sum, point) => sum + point[0], 0) / 4
       const my = points.reduce((sum, point) => sum + point[1], 0) / 4
       const [nmx, nmy] = rotatePoint(mx, my, cx, cy, angleDeg)
-      return [{ kind: 'bezier', params: translateBezier(params, nmx - mx, nmy - my) }]
+      return translateBezier(params, nmx - mx, nmy - my)
     },
     toPoints(params, resolution) {
       return bezierPoints(
@@ -644,10 +631,6 @@ function sameParams(left: Record<string, number>, right: Record<string, number>)
  * 平均」(`_center_of_targets`)を使うが、その規則をここへ写すと**規則が2箇所に増える** ——
  * 種別ごとの代表点(線分は中点・円/弧は中心・長方形は中央・ベジエは制御点の重心)が片方
  * だけ変わった瞬間、幽霊と確定結果が別の場所に出る。**描かないほうが安全**である。
- *
- * **1つでも「まるごと回すと種別が変わる」図形(長方形)が混ざっていたら、1つも描かない。**
- * コアはその呼び出し**全体**を ValueError にする(`_rotated_params`)ので、他の図形の
- * 回った姿を出すと「プレビューは回る・確定するとエラー」になる。
  */
 function rotatedTargets(
   args: Record<string, unknown>,
@@ -671,8 +654,7 @@ function rotatedTargets(
       // **`rotateCopies` は `true`** —— 対象そのものを回すので、「向きを変えず位置だけ回す」
       // (円形反復の複製のための挙動)ではない。
       const rotated = entityKindSpec(source.kind).rotate(source.params, cx, cy, angleDeg, true)
-      if (rotated.length !== 1 || rotated[0].kind !== source.kind) return []
-      const params = { ...source.params, ...rotated[0].params }
+      const params = { ...source.params, ...rotated }
       // 複製が元と完全に重なるのもコアは ValueError(円をその中心まわりに回した場合)。
       if (wholeEntity && sameParams(params, source.params)) return []
       out.push({ kind: source.kind as EntityKind, params })
@@ -796,7 +778,10 @@ export function ghostCopies(
     for (const source of sources) {
       const spec = entityKindSpec(source.kind)
       for (let i = 1; i < count; i += 1) {
-        out.push(...spec.rotate(source.params, cx, cy, i * step, true))
+        out.push({
+          kind: source.kind as EntityKind,
+          params: spec.rotate(source.params, cx, cy, i * step, true),
+        })
       }
     }
     return out

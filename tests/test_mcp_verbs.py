@@ -140,7 +140,7 @@ ARGUMENTS: dict = {
         {"sketch_id", "center", "radius"},
     ),
     "add_rectangle": (
-        {"sketch_id", "corner", "width", "height"},
+        {"sketch_id", "corner", "width", "height", "angle"},
         {"sketch_id", "corner", "width", "height"},
     ),
     "add_arc": (

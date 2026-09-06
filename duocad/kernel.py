@@ -1410,17 +1410,39 @@ def _edges_bezier(ax3: "gp_Ax3", params: dict) -> List[Any]:
     return [maker.Edge()]
 
 
-def _edges_rectangle(ax3: "gp_Ax3", params: dict) -> List[Any]:
+def rectangle_angle(params: dict) -> float:
+    """長方形の傾き(度・反時計回り)。**`angle` キーが無ければ 0**。
+
+    `angle` を持たない時代に保存された操作ログの `add_rectangle` はこのキーを書いていない
+    (`FORMAT_VERSION` は上げていない)。**再生時に埋めてはいけない** —— `register_value` は
+    その時点で空いている最小の `d<n>` を振るので、キーを1つ増やすと以後のパラメータ名が
+    ずれ、古いログの `set_parameter` が別の値を指す。
+    """
+    return float(params.get("angle", 0.0))
+
+
+def rectangle_corners(params: dict) -> List[Tuple[float, float]]:
+    """長方形の4隅を、基準の角 `(x, y)` から反時計回りに返す。
+
+    基準の角から `angle` 度だけ回した局所軸に沿って `width`(第1軸)と `height`(第2軸)を
+    測る。**`web/src/entityKinds.ts` の rectangle の `toPoints` / `snap` と同じ規則で
+    なければならない** —— ここがずれると、ブラウザの幽霊と確定した形が別の場所に出る。
+    """
     x = float(params["x"])
     y = float(params["y"])
     width = float(params["width"])
     height = float(params["height"])
-    corners = [
-        _to_pnt(ax3, x, y),
-        _to_pnt(ax3, x + width, y),
-        _to_pnt(ax3, x + width, y + height),
-        _to_pnt(ax3, x, y + height),
+    radians = math.radians(rectangle_angle(params))
+    cos_a = math.cos(radians)
+    sin_a = math.sin(radians)
+    return [
+        (x + ox * cos_a - oy * sin_a, y + ox * sin_a + oy * cos_a)
+        for ox, oy in ((0.0, 0.0), (width, 0.0), (width, height), (0.0, height))
     ]
+
+
+def _edges_rectangle(ax3: "gp_Ax3", params: dict) -> List[Any]:
+    corners = [_to_pnt(ax3, u, v) for u, v in rectangle_corners(params)]
     edges = []
     for index in range(4):
         maker = BRepBuilderAPI_MakeEdge(corners[index], corners[(index + 1) % 4])
@@ -1458,8 +1480,10 @@ def _bbox_bezier(params: dict) -> Tuple[float, float, float, float]:
 
 
 def _bbox_rectangle(params: dict) -> Tuple[float, float, float, float]:
-    x, y = float(params["x"]), float(params["y"])
-    return (x, x + float(params["width"]), y, y + float(params["height"]))
+    corners = rectangle_corners(params)
+    us = [u for u, _ in corners]
+    vs = [v for _, v in corners]
+    return (min(us), max(us), min(vs), max(vs))
 
 
 @dataclass(frozen=True)

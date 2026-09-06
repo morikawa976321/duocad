@@ -134,12 +134,12 @@ def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
                 }
                 for i in range(count):
                     angle = i * step
-                    # `rotate` は種別横断で `[{"kind":.., "params":..}, ...]` を返す
-                    # (長方形の rotate_copies=True は4本の線分になり種別が変わるため。
-                    # `duocad.sketch.EntityKindOps.rotate` のdocstring)。
-                    entities.extend(
-                        entity_kind_ops(entity.kind).rotate(base, cx, cy, angle, rotate_copies)
-                    )
+                    entities.append({
+                        "kind": entity.kind,
+                        "params": entity_kind_ops(entity.kind).rotate(
+                            base, cx, cy, angle, rotate_copies
+                        ),
+                    })
             continue
 
         dx = parameters.resolve(doc, pattern.params["dx"])

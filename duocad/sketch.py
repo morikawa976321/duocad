@@ -139,92 +139,69 @@ def rotate_point(x: float, y: float, cx: float, cy: float, angle_deg: float) -> 
     return _rotate_point(x, y, cx, cy, angle_deg)
 
 
-def _rectangle_as_rotated_lines(params: Dict[str, float], cx: float, cy: float, angle_deg: float) -> List[dict]:
-    """軸平行の長方形を、4隅を回した4本の線分へ落とす(長方形の語彙は回転を表せないため)。"""
-    x = params["x"]
-    y = params["y"]
-    width = params["width"]
-    height = params["height"]
-    corners = [
-        (x, y),
-        (x + width, y),
-        (x + width, y + height),
-        (x, y + height),
-    ]
-    rotated = [_rotate_point(px, py, cx, cy, angle_deg) for px, py in corners]
-    lines: List[dict] = []
-    for index in range(4):
-        x0, y0 = rotated[index]
-        x1, y1 = rotated[(index + 1) % 4]
-        lines.append({"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}})
-    return lines
-
-
 def _rotate_line(
     params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
-) -> List[dict]:
+) -> Dict[str, float]:
     if rotate_copies:
         x0, y0 = _rotate_point(params["x0"], params["y0"], cx, cy, angle_deg)
         x1, y1 = _rotate_point(params["x1"], params["y1"], cx, cy, angle_deg)
-        return [{"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}}]
+        return {"x0": x0, "y0": y0, "x1": x1, "y1": y1}
     mx = (params["x0"] + params["x1"]) / 2.0
     my = (params["y0"] + params["y1"]) / 2.0
     nmx, nmy = _rotate_point(mx, my, cx, cy, angle_deg)
-    return [{"kind": "line", "params": _translate_line(params, nmx - mx, nmy - my)}]
+    return _translate_line(params, nmx - mx, nmy - my)
 
 
 def _rotate_circle(
     params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
-) -> List[dict]:
+) -> Dict[str, float]:
     nx, ny = _rotate_point(params["cx"], params["cy"], cx, cy, angle_deg)
-    return [{"kind": "circle", "params": {"cx": nx, "cy": ny, "radius": params["radius"]}}]
+    return {"cx": nx, "cy": ny, "radius": params["radius"]}
 
 
 def _rotate_arc(
     params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
-) -> List[dict]:
+) -> Dict[str, float]:
     nx, ny = _rotate_point(params["cx"], params["cy"], cx, cy, angle_deg)
     start_deg = params["start_deg"]
     end_deg = params["end_deg"]
     if rotate_copies:
         start_deg = start_deg + angle_deg
         end_deg = end_deg + angle_deg
-    return [
-        {
-            "kind": "arc",
-            "params": {"cx": nx, "cy": ny, "radius": params["radius"], "start_deg": start_deg, "end_deg": end_deg},
-        }
-    ]
+    return {
+        "cx": nx,
+        "cy": ny,
+        "radius": params["radius"],
+        "start_deg": start_deg,
+        "end_deg": end_deg,
+    }
 
 
 def _rotate_rectangle(
     params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
-) -> List[dict]:
+) -> Dict[str, float]:
     if rotate_copies:
-        # 長方形の `x, y, width, height` は軸平行しか表せないので、回転した複製は
-        # 種別が変わる(4本の線分になる) — `rotate` の戻り値を種別横断の
-        # `[{"kind":.., "params":..}, ...]` にしてあるのはこの1ケースのため。
-        return _rectangle_as_rotated_lines(params, cx, cy, angle_deg)
-    ecx = params["x"] + params["width"] / 2.0
-    ecy = params["y"] + params["height"] / 2.0
+        nx, ny = _rotate_point(params["x"], params["y"], cx, cy, angle_deg)
+        turned = dict(params)
+        turned["x"] = nx
+        turned["y"] = ny
+        turned["angle"] = kernel.rectangle_angle(params) + angle_deg
+        return turned
+    ecx, ecy = _center_rectangle(params)
     ncx, ncy = _rotate_point(ecx, ecy, cx, cy, angle_deg)
-    return [{"kind": "rectangle", "params": _translate_rectangle(params, ncx - ecx, ncy - ecy)}]
+    return _translate_rectangle(params, ncx - ecx, ncy - ecy)
 
 
 def _rotate_bezier(
     params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
-) -> List[dict]:
-    """**ベジエはアフィン不変**なので、制御点を回すだけで曲線が厳密に回る。
-
-    長方形(`_rotate_rectangle`)のように種別が崩れて線分4本に化けることが無い唯一の曲線で、
-    戻り値は常に1要素のまま。
-    """
+) -> Dict[str, float]:
+    """**ベジエはアフィン不変**なので、制御点を回すだけで曲線が厳密に回る。"""
     if rotate_copies:
         rotated = [_rotate_point(px, py, cx, cy, angle_deg) for px, py in _bezier_points(params)]
-        return [{"kind": "bezier", "params": _bezier_params(rotated)}]
+        return _bezier_params(rotated)
     mx, my = _center_bezier(params)
     nmx, nmy = _rotate_point(mx, my, cx, cy, angle_deg)
-    return [{"kind": "bezier", "params": _translate_bezier(params, nmx - mx, nmy - my)}]
+    return _translate_bezier(params, nmx - mx, nmy - my)
 
 
 def _mirror_point(
@@ -242,22 +219,22 @@ def _mirror_point(
 
 def _mirror_line(
     params: Dict[str, float], ax: float, ay: float, ux: float, uy: float
-) -> List[dict]:
+) -> Dict[str, float]:
     x0, y0 = _mirror_point(params["x0"], params["y0"], ax, ay, ux, uy)
     x1, y1 = _mirror_point(params["x1"], params["y1"], ax, ay, ux, uy)
-    return [{"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}}]
+    return {"x0": x0, "y0": y0, "x1": x1, "y1": y1}
 
 
 def _mirror_circle(
     params: Dict[str, float], ax: float, ay: float, ux: float, uy: float
-) -> List[dict]:
+) -> Dict[str, float]:
     cx, cy = _mirror_point(params["cx"], params["cy"], ax, ay, ux, uy)
-    return [{"kind": "circle", "params": {"cx": cx, "cy": cy, "radius": params["radius"]}}]
+    return {"cx": cx, "cy": cy, "radius": params["radius"]}
 
 
 def _mirror_arc(
     params: Dict[str, float], ax: float, ay: float, ux: float, uy: float
-) -> List[dict]:
+) -> Dict[str, float]:
     """円弧の鏡映。**鏡映は向きを反転する**ので、始点・終点を入れ替えてから角度を映す
     (`new_end - new_start == end_deg - start_deg` を保つ。CCWの掃引量をそのまま保存する)。
     """
@@ -265,65 +242,41 @@ def _mirror_arc(
     axis_angle_deg = math.degrees(math.atan2(uy, ux))
     start_deg = 2.0 * axis_angle_deg - params["end_deg"]
     end_deg = 2.0 * axis_angle_deg - params["start_deg"]
-    return [
-        {
-            "kind": "arc",
-            "params": {"cx": cx, "cy": cy, "radius": params["radius"], "start_deg": start_deg, "end_deg": end_deg},
-        }
-    ]
-
-
-def _rectangle_as_mirrored_lines(
-    params: Dict[str, float], ax: float, ay: float, ux: float, uy: float
-) -> List[dict]:
-    """軸平行を保てない長方形の鏡映を、4隅を映した4本の線分へ落とす
-    (`_rectangle_as_rotated_lines` の鏡映版)。"""
-    x = params["x"]
-    y = params["y"]
-    width = params["width"]
-    height = params["height"]
-    corners = [
-        (x, y),
-        (x + width, y),
-        (x + width, y + height),
-        (x, y + height),
-    ]
-    mirrored = [_mirror_point(px, py, ax, ay, ux, uy) for px, py in corners]
-    lines: List[dict] = []
-    for index in range(4):
-        x0, y0 = mirrored[index]
-        x1, y1 = mirrored[(index + 1) % 4]
-        lines.append({"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}})
-    return lines
-
-
-#: 軸が水平・垂直から外れているかを見る許容(単位方向ベクトルの成分)。
-_MIRROR_AXIS_ALIGNED_EPS = 1.0e-9
+    return {
+        "cx": cx,
+        "cy": cy,
+        "radius": params["radius"],
+        "start_deg": start_deg,
+        "end_deg": end_deg,
+    }
 
 
 def _mirror_rectangle(
     params: Dict[str, float], ax: float, ay: float, ux: float, uy: float
-) -> List[dict]:
-    """長方形の鏡映。軸が水平・垂直(長方形の辺と平行/垂直)なら軸平行のまま鏡映できるので
-    中心を映すだけで済むが、斜めの軸では軸平行を保てず4本の線分になる
-    (`_rotate_rectangle` と同じ「種別が変わりうる」設計。呼び出し側の
-    `mirror_sketch_entities` が種別の変化を検査して ValueError にする)。
+) -> Dict[str, float]:
+    """長方形の鏡映。軸の角度を φ とすると向きは `2φ - angle` になる。
+
+    **新しい基準の角は、元の「height 側の隣の角」の鏡像**である。鏡映は向きを裏返すので、
+    元の基準の角をそのまま基準にすると `width`/`height` が負の側へ伸びる形になり、
+    正の幅高さで同じ4隅を張れない。
     """
-    if abs(ux) < _MIRROR_AXIS_ALIGNED_EPS or abs(uy) < _MIRROR_AXIS_ALIGNED_EPS:
-        ecx = params["x"] + params["width"] / 2.0
-        ecy = params["y"] + params["height"] / 2.0
-        ncx, ncy = _mirror_point(ecx, ecy, ax, ay, ux, uy)
-        return [{"kind": "rectangle", "params": _translate_rectangle(params, ncx - ecx, ncy - ecy)}]
-    return _rectangle_as_mirrored_lines(params, ax, ay, ux, uy)
+    corners = kernel.rectangle_corners(params)
+    bx, by = _mirror_point(corners[3][0], corners[3][1], ax, ay, ux, uy)
+    axis_angle_deg = math.degrees(math.atan2(uy, ux))
+    mirrored = dict(params)
+    mirrored["x"] = bx
+    mirrored["y"] = by
+    mirrored["angle"] = 2.0 * axis_angle_deg - kernel.rectangle_angle(params)
+    return mirrored
 
 
 def _mirror_bezier(
     params: Dict[str, float], ax: float, ay: float, ux: float, uy: float
-) -> List[dict]:
+) -> Dict[str, float]:
     """**ベジエはアフィン不変**なので、制御点を鏡映するだけで曲線が厳密に鏡映される
     (`_rotate_bezier` と同じ理由)。"""
     mirrored = [_mirror_point(px, py, ax, ay, ux, uy) for px, py in _bezier_points(params)]
-    return [{"kind": "bezier", "params": _bezier_params(mirrored)}]
+    return _bezier_params(mirrored)
 
 
 def _center_line(params: Dict[str, float]) -> Tuple[float, float]:
@@ -339,7 +292,11 @@ def _center_arc(params: Dict[str, float]) -> Tuple[float, float]:
 
 
 def _center_rectangle(params: Dict[str, float]) -> Tuple[float, float]:
-    return (params["x"] + params["width"] / 2.0, params["y"] + params["height"] / 2.0)
+    corners = kernel.rectangle_corners(params)
+    return (
+        (corners[0][0] + corners[2][0]) / 2.0,
+        (corners[0][1] + corners[2][1]) / 2.0,
+    )
 
 
 def _center_bezier(params: Dict[str, float]) -> Tuple[float, float]:
@@ -377,23 +334,21 @@ def _bezier_params(points: List[Tuple[float, float]]) -> Dict[str, float]:
 class EntityKindOps:
     """図形1種別ぶんの純幾何演算(OCPなし)。**表の1行 = その種別の全処理**。
 
-    `rotate` は同じ種別に閉じない(長方形の `rotate_copies=True` は4本の線分になる)ので、
-    戻り値は常に `[{"kind":.., "params":..}, ...]` の**リスト**にしてある(他の種別は1要素)。
+    **`translate` / `rotate` / `mirror` はどれも同じ種別に閉じる** —— 戻すのはその種別の
+    `params` 1つで、種別は呼び出し側が持っているものから変わらない。
 
     `points` は**動かせる点**の (xキー, yキー) の組(`move_sketch_entities` の「点」の定義)。
     寸法(半径・幅高さ・角度)は点ではないので入れない —— 点を動かしても形は変わらず、
-    寸法を動かすと形が変わる(寸法の編集は今回スコープ外)。長方形は左下の1点だけで、
-    残り3隅は `width`/`height` から**導出される値**なので独立に動かせない。
+    寸法を動かすと形が変わる(寸法の編集は今回スコープ外)。長方形は基準の角1つだけで、
+    残り3隅は `width`/`height`/`angle` から**導出される値**なので独立に動かせない。
     """
 
     validate: Callable[[Dict[str, float]], None]
     translate: Callable[[Dict[str, float], float, float], Dict[str, float]]
-    rotate: Callable[[Dict[str, float], float, float, float, bool], List[dict]]
+    rotate: Callable[[Dict[str, float], float, float, float, bool], Dict[str, float]]
     center_2d: Callable[[Dict[str, float]], Tuple[float, float]]
-    #: 軸(点+単位方向)に対する鏡映。**`rotate` と同じ理由で `List[dict]` を返す**
-    #: (長方形が斜めの軸では軸平行を保てず4本の線分になる。`mirror_sketch_entities` が
-    #: 種別の変化を検査する)。
-    mirror: Callable[[Dict[str, float], float, float, float, float], List[dict]]
+    #: 軸(点+単位方向)に対する鏡映。
+    mirror: Callable[[Dict[str, float], float, float, float, float], Dict[str, float]]
     #: 動かせる点の (xキー, yキー)。**xキーがその点の名前**(選択の参照が持つ値)。
     points: Tuple[Tuple[str, str], ...] = ()
 
@@ -535,7 +490,7 @@ class Entity:
 
         line      : x0, y0, x1, y1
         circle    : cx, cy, radius
-        rectangle : x, y, width, height
+        rectangle : x, y, width, height, angle           (度・反時計回り。基準の角 (x,y) まわり)
         arc       : cx, cy, radius, start_deg, end_deg   (度・反時計回り・X軸から。0度をまたいでよい)
         bezier    : x0, y0, cx1, cy1, cx2, cy2, x1, y1   (始点・制御点1・制御点2・終点)
 
@@ -656,14 +611,25 @@ def add_circle(
 
 
 def add_rectangle(
-    doc: Document, sketch_id: SketchId, corner: Any, width: float, height: float
+    doc: Document,
+    sketch_id: SketchId,
+    corner: Any,
+    width: float,
+    height: float,
+    angle: float = 0.0,
 ) -> EntityId:
-    """`corner` を左下とする幅 `width`・高さ `height` の長方形を足して EntityId を返す。"""
+    """`corner` を基準の角とする幅 `width`・高さ `height` の長方形を足して EntityId を返す。
+
+    `angle`(度・反時計回り)は基準の角まわりの傾き。**`angle` は params の最後に置くこと**
+    —— `_add_entity` はこの順に `register_value` を呼ぶので、順序を変えると同じログを
+    再生したときに `d<n>` の割り当てが変わる。
+    """
     params = {
         "x": float(corner[0]),
         "y": float(corner[1]),
         "width": float(width),
         "height": float(height),
+        "angle": float(angle),
     }
     return _add_entity(doc, sketch_id, "rectangle", params, VERB_ADD_RECTANGLE)
 

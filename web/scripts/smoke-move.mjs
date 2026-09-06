@@ -546,10 +546,10 @@ async function main() {
       if (noCenter !== 0) fail(`中心を渡していないのに回転の幽霊が出た: ${noCenter}件`)
       ok('move_sketch_entities(mode=rotate): 中心を渡さなければ幽霊を描かない(重心を近似しない)')
 
-      // ---------------------------------------------------------------- 長方形はまるごと回せない
-      // **コアは呼び出し全体を ValueError にする**(回すと種別が線分4本に変わり、
-      // 「undo = 逆向きに同じ角度」が成り立たなくなるため)。幽霊も同じ落とし方 ——
-      // ここで4本の線分を描くと「プレビューは回る・確定するとエラー」になる。
+      // ---------------------------------------------------------------- 長方形をまるごと回す
+      // 長方形は `params.angle` で向きを持つので、まるごと回しても**長方形1つのまま**である。
+      // 幽霊の4隅を、元の4隅を三角関数で回した点と直接突き合わせる(TS側の
+      // `rectangleCorners` がコアの `kernel.rectangle_corners` と同じ規則かを見る)。
       // 長方形をまるごと囲む(**完全包含された図形は `point: null` = 図形まるごと**で
       // 選択に入る。辺の1本をクリックで指す道もあるが、内側の領域と重なって不安定)。
       await dragBox([-5, -5], [PLATE.width + 5, PLATE.height + 5])
@@ -567,6 +567,13 @@ async function main() {
           entities.length === 1 && ids.has(entities[0].entity) && entities[0].point === null
         )
       }, '長方形そのもの(図形まるごと)だけを選べない')
+      // **元の姿はコアが持っている値を読む**(`PLATE` の名目値ではない ——
+      // 板はマウスで置いたので、角の座標は画素の丸めぶんだけ 0 からずれている)。
+      const rectSource = await page.evaluate(() => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return { ...active.entities.find((item) => item.kind === 'rectangle').params }
+      })
       const rectGhosts = await page.evaluate(() => {
         window.__duocad.showLocalGhost('move_sketch_entities', {
           mode: 'rotate',
@@ -574,15 +581,59 @@ async function main() {
           center: [0, 0],
           copy: false,
         })
-        return JSON.parse(JSON.stringify(window.__duocad.ghostInfo().sketch))
+        return window.__duocad.ghostInfo().sketch.map((item) => ({
+          kind: item.kind,
+          params: { ...item.params },
+        }))
       })
-      if (rectGhosts.length !== 0) {
+      if (rectGhosts.length !== 1 || rectGhosts[0].kind !== 'rectangle') {
         fail(
-          '長方形をまるごと回す幽霊を描いてしまった(コアは ValueError なので描いてはいけない): ' +
-            JSON.stringify(rectGhosts),
+          '長方形をまるごと回した幽霊が「長方形1つ」にならない: ' + JSON.stringify(rectGhosts),
         )
       }
-      ok('move_sketch_entities(mode=rotate): 長方形をまるごと回す指定では幽霊を1つも描かない')
+      // **4隅はこの検査が自前の三角関数で出す**(製品の `rectangleCorners` を借りると、
+      // 同じ間違いを両側で共有して素通りする)。`angle` の値そのものは期待値にしない ——
+      // 同じ4隅を張る `angle` と基準の角の組は複数ある。
+      const radians = (30 * Math.PI) / 180
+      const sourceRad = ((rectSource.angle ?? 0) * Math.PI) / 180
+      const wantCorners = [
+        [0, 0],
+        [rectSource.width, 0],
+        [rectSource.width, rectSource.height],
+        [0, rectSource.height],
+      ]
+        .map(([ou, ov]) => [
+          rectSource.x + ou * Math.cos(sourceRad) - ov * Math.sin(sourceRad),
+          rectSource.y + ou * Math.sin(sourceRad) + ov * Math.cos(sourceRad),
+        ])
+        .map(([u, v]) => [
+          u * Math.cos(radians) - v * Math.sin(radians),
+          u * Math.sin(radians) + v * Math.cos(radians),
+        ])
+      const ghostRad = ((rectGhosts[0].params.angle ?? 0) * Math.PI) / 180
+      const got = [
+        [0, 0],
+        [rectGhosts[0].params.width, 0],
+        [rectGhosts[0].params.width, rectGhosts[0].params.height],
+        [0, rectGhosts[0].params.height],
+      ].map(([ou, ov]) => [
+        rectGhosts[0].params.x + ou * Math.cos(ghostRad) - ov * Math.sin(ghostRad),
+        rectGhosts[0].params.y + ou * Math.sin(ghostRad) + ov * Math.cos(ghostRad),
+      ])
+      const offCorner = wantCorners.find(
+        (corner) =>
+          !got.some(
+            (point) =>
+              Math.abs(point[0] - corner[0]) < 1e-6 && Math.abs(point[1] - corner[1]) < 1e-6,
+          ),
+      )
+      if (offCorner) {
+        fail(
+          `回した長方形の幽霊の隅が合わない: 期待 ${JSON.stringify(offCorner)} / ` +
+            `幽霊 ${JSON.stringify(got)}`,
+        )
+      }
+      ok('move_sketch_entities(mode=rotate): 長方形をまるごと回した幽霊が長方形のまま4隅も合う')
 
       // 後片付け —— 幽霊を消し、選択を空へ戻す(以降の節が前提にしている状態)。
       await page.evaluate(() => window.__duocad.showLocalGhost('move_sketch_entities', {}))

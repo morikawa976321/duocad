@@ -23,7 +23,7 @@ import pytest
 
 from duocad import kernel, parameters, query, selection, sketch
 from duocad.document import Document
-from duocad.oplog import OpLog
+from duocad.oplog import OpLog, verb_handler
 from duocad.server import Server, Session
 from duocad.verbs import move_body as move_body_verb
 from duocad.verbs import move_sketch_entities as move_sketch_entities_verb
@@ -1238,21 +1238,83 @@ def test_rotating_an_arc_turns_its_angles_too(session: Session) -> None:
     assert moved["radius"] == pytest.approx(5.0)
 
 
-def test_a_whole_rectangle_cannot_be_rotated(session: Session) -> None:
-    """**種別が変わる回転は断る。** 黙って線分4本に化けさせない(モジュールdocstring)。"""
+def test_a_whole_rectangle_can_be_rotated(session: Session) -> None:
+    """長方形をまるごと回すと**長方形のまま**で、4隅が元の4隅を回した集合と一致する。
+
+    落ちたら、回転が長方形の4隅の張り方を壊しているか、種別が変わっている。
+    """
     sketch_id = session.sketch_create("XY")["sketch_id"]
     entity_id = session.add_rectangle(sketch_id, [0.0, 0.0], 10.0, 4.0)["entity_id"]
     before = _params(session, sketch_id, entity_id)
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
-    with pytest.raises(ValueError):
-        session.move_sketch_entities(mode="rotate", angle=45.0, center=[0.0, 0.0])
-    # **文書にもログにも何も残らない**
-    assert _params(session, sketch_id, entity_id) == before
-    assert session.document.log.entries[-1].verb != "move_sketch_entities"
+
+    session.move_sketch_entities(mode="rotate", angle=45.0, center=[0.0, 0.0])
+
+    entity = sketch.get_entity(sketch.get_sketch(session.document, sketch_id), entity_id)
+    assert entity.kind == "rectangle", "回しても種別は変わらない"
+    after = _params(session, sketch_id, entity_id)
+    assert (after["width"], after["height"]) == pytest.approx((10.0, 4.0))
+    expected = sorted(
+        tuple(round(value, 9) for value in sketch.rotate_point(u, v, 0.0, 0.0, 45.0))
+        for u, v in kernel.rectangle_corners(before)
+    )
+    actual = sorted(
+        (round(u, 9), round(v, 9)) for u, v in kernel.rectangle_corners(after)
+    )
+    assert actual == pytest.approx(expected, abs=1e-9)
+
+
+def test_rotating_a_rectangle_from_a_log_without_angle(session: Session) -> None:
+    """`angle` を持たない時代のログから再生した長方形も、まるごと回せる。
+
+    落ちたら、旧文書の長方形(`params` が4個)へ `angle` を書き戻す道が無い ——
+    **再生時に埋めてはいけない**(`d<n>` の割り当てがずれて旧ログの `set_parameter` が
+    別の値を指す)ので、書き戻す側で登録する必要がある。
+    """
+    document = session.document
+    sketch_id = sketch.sketch_create(document, "XY")
+    entity_id = "entity-legacy-rect"
+    operation = document.log.append(
+        "add_rectangle",
+        {
+            "sketch_id": sketch_id,
+            "entity_id": entity_id,
+            "kind": "rectangle",
+            "params": {"x": 0.0, "y": 0.0, "width": 10.0, "height": 4.0},
+        },
+    )
+    verb_handler("add_rectangle").do(document, operation)
+    entity = sketch.get_entity(sketch.get_sketch(document, sketch_id), entity_id)
+    assert list(entity.params) == ["x", "y", "width", "height"], "旧ログに angle は無い"
+
+    move_sketch_entities_verb(
+        document,
+        [{"sketch": sketch_id, "entity": entity_id, "point": None}],
+        mode="rotate",
+        angle=30.0,
+        center=[0.0, 0.0],
+    )
+
+    after = sketch.entity_params(document, sketch_id, entity_id)
+    assert after["angle"] == pytest.approx(30.0)
+    assert isinstance(entity.params["angle"], str), "書き足した angle も名前つきの値であること"
+
+
+def test_rotating_a_whole_rectangle_is_undoable(session: Session) -> None:
+    """回転の undo は「逆向きに同じ角度」で元の `params` へ戻る(名前つき寸法も同じ)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    entity_id = session.add_rectangle(sketch_id, [2.0, 3.0], 10.0, 4.0, 15.0)["entity_id"]
+    before = _params(session, sketch_id, entity_id)
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    session.move_sketch_entities(mode="rotate", angle=37.0, center=[1.0, 1.0])
+
+    session.undo()
+
+    assert _params(session, sketch_id, entity_id) == pytest.approx(before)
 
 
 def test_a_rectangle_corner_can_still_be_rotated(session: Session) -> None:
-    """長方形の1点(左下)を回すのは今までどおりできる(位置が動くだけ)。"""
+    """長方形の基準の角だけを回すと、位置だけが動く(向きは変わらない)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     entity_id = session.add_rectangle(sketch_id, [10.0, 0.0], 4.0, 2.0)["entity_id"]
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": "x"}])

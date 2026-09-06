@@ -195,7 +195,7 @@ def test_line_circle_and_rectangle_are_kept_in_the_sketch():
         "cx": 20.0, "cy": 15.0, "radius": 3.0,
     }
     assert entity_params(document, sketch_id, rectangle) == {
-        "x": 0.0, "y": 0.0, "width": 40.0, "height": 30.0,
+        "x": 0.0, "y": 0.0, "width": 40.0, "height": 30.0, "angle": 0.0,
     }
 
 
@@ -247,7 +247,7 @@ def test_sketch_and_entities_are_logged_and_undoable():
         "sketch_id": sketch_id,
         "entity_id": rectangle_id,
         "kind": "rectangle",
-        "params": {"x": 0.0, "y": 0.0, "width": 40.0, "height": 30.0},
+        "params": {"x": 0.0, "y": 0.0, "width": 40.0, "height": 30.0, "angle": 0.0},
     }
     json.loads(document.log.to_json())  # 保存形式はJSON(§3.6)
 

@@ -237,7 +237,7 @@ get_sketch(doc, sketch_id) -> Sketch    # 無ければ KeyError
 sketch_create(doc, plane) -> SketchId
 add_line(doc, sketch_id, p0, p1) -> EntityId
 add_circle(doc, sketch_id, center, radius) -> EntityId
-add_rectangle(doc, sketch_id, corner, width, height) -> EntityId
+add_rectangle(doc, sketch_id, corner, width, height, angle=0.0) -> EntityId
 add_arc(doc, sketch_id, center, radius, start_deg, end_deg) -> EntityId
 entity_params(doc, sketch_id, entity_id) -> dict[str, float]   # 解決済みの数値
 ```
@@ -247,7 +247,8 @@ entity_params(doc, sketch_id, entity_id) -> dict[str, float]   # 解決済みの
 - `plane` は `"XY"|"XZ"|"YZ"` か `face_plane(...)`。**平面でない面（円筒面など）は
   `ValueError`** — 黙って通すとその上の領域検出と押し出しが意味を失ったまま成功する。
 - 座標はスケッチ平面上の2D。`Entity.params` のキーは図形ごとに固定
-  （`line: x0,y0,x1,y1` / `circle: cx,cy,radius` / `rectangle: x,y,width,height` /
+  （`line: x0,y0,x1,y1` / `circle: cx,cy,radius` /
+  `rectangle: x,y,width,height,angle`（`angle` は度・**反時計回り**・基準の角 `(x,y)` まわり） /
   `arc: cx,cy,radius,start_deg,end_deg`（度・**反時計回り**・X軸から） /
   `bezier: x0,y0,cx1,cy1,cx2,cy2,x1,y1`（3次ベジエ。始点・制御点2つ・終点））。
   `bezier` を作るのは `import_svg`（`duocad/svg_import.py`）である。検査は
@@ -281,9 +282,7 @@ Pattern(kind: str = "rectangular")   # "rectangular" | "circular"
   — 展開すると個数も間隔も後から変えられなくなる。スケッチが持つのは `Pattern` 1個で、
   複製された図形は**幾何を作るときの導出物**（`region._expanded_entities`）。
 - **1つの図形を2つの反復で使い回すことはできない**（`ValueError`）。
-- 回転した長方形は展開時に4本の線分へ落とす（`Entity` の長方形は軸平行の
-  `x,y,width,height` しか持てないため。展開結果は幾何を作るための導出物なので元と同じ
-  種別である必要はない）。
+- 回転した長方形は**長方形のまま**展開される（`angle` が向きを持つ）。
 
 ## `duocad/region.py`
 

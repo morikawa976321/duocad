@@ -391,9 +391,17 @@ COMMANDS: tuple[Command, ...] = (
         description="スケッチに長方形を足すときに呼ぶ。",
         params=(
             Param("sketch_id", "string", "対象スケッチのID"),
-            Param("corner", "array", "左下コーナー [u, v]"),
+            Param("corner", "array", "基準コーナー [u, v]"),
             Param("width", "number", "幅(mm)", dimension=True),
             Param("height", "number", "高さ(mm)", dimension=True),
+            Param(
+                "angle",
+                "number",
+                "傾き(度・反時計。省略で0)",
+                required=False,
+                ws=False,
+                dimension=True,
+            ),
         ),
         session="add_rectangle",
         resets_selection=True,
@@ -506,12 +514,11 @@ COMMANDS: tuple[Command, ...] = (
         category="sketch",
         description=(
             "スケッチの図形の位置・向きを直すときに呼ぶ。確定選択のスケッチの点"
-            "(線の端点・円/弧の中心・長方形の左下・ベジエの制御点)または辺"
+            "(線の端点・円/弧の中心・長方形の基準の角・ベジエの制御点)または辺"
             "(図形1つ全体)を、mode='translate'(既定)なら dx, dy だけ動かし、"
             "mode='rotate' ならスケッチ平面の法線まわりに angle 度だけ回す。"
             "copy=true なら元を残して複製する。対象は選択から取る(引数では受けない)。"
             "**半径・幅高さのような寸法は動かせない**(位置と向きだけ)。"
-            "**長方形はまるごと回せない**(軸平行の幅高さが回転を表せないため)。"
         ),
         params=(
             Param(
@@ -560,7 +567,7 @@ COMMANDS: tuple[Command, ...] = (
                 "object",
                 "回転中心を既存の点で指す "
                 '{"sketch": sketch_id, "entity": entity_id, "point": "x0"}。'
-                "point を省くとその図形の最初の点(線は始点・円/弧は中心・長方形は左下)。"
+                "point を省くとその図形の最初の点(線は始点・円/弧は中心・長方形は基準の角)。"
                 "center とは同時に渡せない",
                 required=False,
             ),
@@ -579,9 +586,6 @@ COMMANDS: tuple[Command, ...] = (
             "配られた `params` から [u, v] へ解決してから渡す。**省略時の既定**"
             "(対象の代表点の平均)だけは規則がコアにしか無く、画面側へ写すと片方だけ"
             "変わったときに幽霊と確定結果が別の場所へ出るため、描かないほうを選んである。"
-            "**長方形をまるごと回す指定が混ざったら幽霊は1つも出さない** —— コアが"
-            "呼び出し全体を ValueError にするので、他の図形だけ回った姿を出すと"
-            "「プレビューは回る・確定するとエラー」になる。"
             "**回転の引数はWSにも開いている**(2026-09-06。`ws=\"special\"`) —— 表(`ws=table`)は"
             "載せた引数を全部必須にする規律なので、`mode` で要る引数が入れ替わり中心も省略できる"
             "このverbは表に置けない。`_dispatch` が個別に捌き、**省略された引数は None のまま**"
@@ -710,8 +714,6 @@ COMMANDS: tuple[Command, ...] = (
         description=(
             "確定選択のスケッチ図形を、既存の線分1本(axis)を軸に鏡映複製するときに呼ぶ。"
             "常に複製する(in-place反転は無い)。対象は選択から取る(引数では受けない)。"
-            "**長方形はこの軸では鏡映できないことがある**(軸が水平・垂直=長方形の辺と"
-            "平行/垂直でないと種別を保てない)。"
         ),
         params=(
             Param(

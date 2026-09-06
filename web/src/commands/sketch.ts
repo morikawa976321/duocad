@@ -135,9 +135,8 @@ export const ADD_CIRCLE: CommandDef = {
 }
 
 /**
- * 長方形。**角度の欄は無い** —— `add_rectangle` は軸平行(`x`/`y`/`width`/`height`)で、
- * コアもブラウザも回転した長方形を表現できない(`entityKinds.ts` の `rotate` は長方形を
- * 4本の線分に落とす)。
+ * 長方形。**角度の欄は無い** —— マウスで置く長方形は軸平行に限る(`add_rectangle` の
+ * `angle` は省略され、コアの既定 0 が効く)。
  */
 export const ADD_RECTANGLE: CommandDef = {
   id: 'add_rectangle',

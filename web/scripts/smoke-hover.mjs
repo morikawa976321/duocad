@@ -27,6 +27,9 @@
  *   7. 既存の頂点の上で線分の始点を数画素ずらして置く → `sketches` の params が
  *      その頂点と完全一致(目視ではなく数値で見る)
  *   8. 既存の円の上で線分の始点をずらして置く → 中心からの距離が半径ちょうどになる
+ *   9. **傾いた長方形**の辺の上で線分の始点をずらして置く → その傾いた辺の上に乗る
+ *      (`rectangle.snap()` が `angle` を見ているか。軸平行前提のままだと、例外も出さずに
+ *      別の場所へ落ちる)
  *
  * サーバはこのスクリプトが空の文書で起動し、板はMCP経由で作る。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
@@ -80,6 +83,10 @@ async function main() {
     // 同じスケッチへの追加なので押し出し済みのBodyには影響しない —— 6以降の
     // スケッチ図形ホバー・スナップの検査が使う円。
     await mcp.callTool('add_circle', { sketch_id: sketch.sketch_id, center: [60, 10], radius: 10 })
+    // 検証9が使う**傾いた長方形**。他の図形の輪郭から十分離す(近すぎるとスナップの
+    // 当たり判定が先に別の図形を拾う。engine `sketch-point-snap-tolerance-breaks-nearby-fixtures`)。
+    const TILTED = { corner: [85, 0], width: 24, height: 10, angle: 35 }
+    await mcp.callTool('add_rectangle', { sketch_id: sketch.sketch_id, ...TILTED })
 
     browser = await launchBrowser(executablePath)
     const page = await browser.newPage()
@@ -515,6 +522,64 @@ async function main() {
     ok(
       `**円の上でクリックした始点が、中心から半径ちょうど(${circle.params.radius})の位置になった**` +
         `(実測距離 ${distFromCenter})`,
+    )
+
+    // ---------------------------------------------------------------- 9. スナップ: 傾いた辺の上
+    //
+    // 4隅は**この検査が自前の三角関数で出す**(製品の `rectangleCorners` を借りない ——
+    // 借りると同じ間違いを両側で共有して素通りする)。軸平行前提のままの `snap()` なら
+    // 落ちる先は外接箱の辺になるので、傾いた辺からミリ単位で外れる。
+    const tiltRad = (TILTED.angle * Math.PI) / 180
+    const tiltCorner = (ou, ov) => [
+      TILTED.corner[0] + ou * Math.cos(tiltRad) - ov * Math.sin(tiltRad),
+      TILTED.corner[1] + ou * Math.sin(tiltRad) + ov * Math.cos(tiltRad),
+    ]
+    const edgeStart = tiltCorner(0, 0)
+    const edgeEnd = tiltCorner(TILTED.width, 0)
+    await page.click('#sketch-line')
+    await withoutBrowserPanel(page, async () => {
+      // **辺の中ほど**を狙う(隅に寄せると点マーカーの側が先に取られる)。
+      const anchor = await sketchScreenPoint(
+        (edgeStart[0] + edgeEnd[0]) / 2,
+        (edgeStart[1] + edgeEnd[1]) / 2,
+      )
+      if (!anchor) fail('スナップ検査: 傾いた長方形の辺の中点が画面上で指せない')
+      await page.mouse.click(anchor.x + 3, anchor.y - 3)
+      const far = await sketchScreenPoint(95, 35)
+      if (!far) fail('スナップ検査: 傾いた長方形用の逃げ場所が画面上で指せない')
+      await page.mouse.click(far.x, far.y)
+    })
+    await page.waitForFunction(
+      (before) => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return (active?.entities.length ?? 0) === before + 3
+      },
+      { timeout, polling: 50 },
+      entitiesBeforeDrawing.length,
+    )
+    const snappedToTilted = await page.evaluate(() => {
+      const hook = window.__duocad
+      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      return { ...active.entities.filter((item) => item.kind === 'line').at(-1).params }
+    })
+    const edgeDu = edgeEnd[0] - edgeStart[0]
+    const edgeDv = edgeEnd[1] - edgeStart[1]
+    const edgeLen = Math.hypot(edgeDu, edgeDv)
+    const offU = snappedToTilted.x0 - edgeStart[0]
+    const offV = snappedToTilted.y0 - edgeStart[1]
+    const offEdge = Math.abs(offU * edgeDv - offV * edgeDu) / edgeLen
+    const along = (offU * edgeDu + offV * edgeDv) / edgeLen
+    if (offEdge > 1e-6 || along < 0 || along > edgeLen) {
+      fail(
+        `傾いた長方形の辺に乗らない: 置いた (${snappedToTilted.x0}, ${snappedToTilted.y0}) / ` +
+          `辺 ${JSON.stringify(edgeStart)}->${JSON.stringify(edgeEnd)} ` +
+          `(辺からの距離 ${offEdge}mm・辺に沿う位置 ${along}mm)`,
+      )
+    }
+    ok(
+      `**傾いた長方形(${TILTED.angle}度)の辺の上でクリックした始点が、その傾いた辺に乗った**` +
+        `(辺からの距離 ${offEdge.toExponential(1)}mm)`,
     )
 
     if (consoleErrors.length > 0) fail(`ブラウザにエラーが出た: ${consoleErrors.join(' / ')}`)

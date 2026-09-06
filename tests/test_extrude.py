@@ -99,6 +99,28 @@ def test_extruding_one_half_of_a_split_circle_gives_area_times_distance():
     assert math.isclose(query.volume(body.shape), target.area * 10.0, rel_tol=AREA_REL_TOL)
 
 
+def test_a_tilted_rectangle_gives_a_region_and_extrudes():
+    """**実測**: 傾いた長方形からも領域が1つ出て、面積×距離ぶんの体積に押し出せる。
+
+    落ちたら、`kernel.rectangle_corners` が張る辺か `_bbox_rectangle`(領域を割る補助面の
+    大きさ)のどちらかが `angle` を見落としている。
+    """
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    add_rectangle(document, sketch_id, (5.0, -7.0), PLATE_WIDTH, PLATE_HEIGHT, angle=31.0)
+
+    found = regions(document, sketch_id)
+    assert len(found) == 1, "傾いていても長方形1つのスケッチの領域は1個"
+    assert math.isclose(found[0].area, PLATE_WIDTH * PLATE_HEIGHT, rel_tol=AREA_REL_TOL)
+
+    extrude(document, [region_ref(sketch_id, found[0].index)], PLATE_THICKNESS, mode="join")
+
+    body = document.active_body()
+    assert body is not None
+    assert math.isclose(query.volume(body.shape), PLATE_VOLUME, rel_tol=VOLUME_REL_TOL)
+    assert BRepCheck_Analyzer(body.shape).IsValid() is True
+
+
 def test_join_fuses_into_the_existing_body():
     """対象ボディがあるときの `join` は、そこへ肉を足す(2つ目のソリッドを作らない)。"""
     document = plate_document()

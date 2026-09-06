@@ -14,8 +14,14 @@ from duocad import kernel, query
 from duocad.document import Document
 from duocad.oplog import OpLog
 from duocad.parameters import parameter_of, set_parameter
-from duocad.region import region_ref, regions
-from duocad.sketch import add_circle, add_rectangle, get_sketch, sketch_create
+from duocad.region import _expanded_entities, region_ref, regions
+from duocad.sketch import (
+    add_circle,
+    add_rectangle,
+    get_sketch,
+    rotate_point,
+    sketch_create,
+)
 from duocad.verbs import extrude, pattern_circular
 
 PLATE_SIZE = 60.0
@@ -209,10 +215,22 @@ def test_rotate_copies_false_keeps_the_original_orientation():
         assert math.isclose(region.area, 8.0 * 4.0, rel_tol=1e-6)
 
 
+def _corner_set(params: dict) -> list:
+    """4隅を「順序に依らない集合」として比べられる形へ(丸めてソートするだけ)。
+
+    **角度の値そのものは期待値にしない** —— 同じ4隅を張る `angle` と基準の角の組は
+    複数あり(90度ごとにどの隅を基準に取るかの自由度がある)、実装が選んだ組を固定すると
+    形が正しくても落ちるテストになる。
+    """
+    return sorted(
+        (round(u, 9), round(v, 9)) for u, v in kernel.rectangle_corners(params)
+    )
+
+
 def test_rotate_copies_true_actually_rotates_the_rectangle():
     """`rotate_copies=True`（既定）なら複製は回転する。
 
-    90度回した長方形は幅と高さが入れ替わるので、境界箱で区別できる。面積は不変。
+    面積が変わっていたら、4隅の張り方が壊れている。
     """
     document = Document()
     sketch_id = sketch_create(document, "XY")
@@ -225,6 +243,34 @@ def test_rotate_copies_true_actually_rotates_the_rectangle():
     assert len(found) == 4
     for region in found:
         assert math.isclose(region.area, 8.0 * 4.0, rel_tol=1e-6), "回転で面積が変わってはいけない"
+
+
+def test_rotated_copies_of_a_rectangle_are_all_rectangles():
+    """回した複製が**すべて長方形**(参照元と同じ構成)で、4隅が元の4隅を回した集合と一致する。
+
+    落ちたら、円形反復の展開が長方形を別の種別へ落としているか、複製の向きが
+    ずれている。
+    """
+    document = Document()
+    sketch_id = sketch_create(document, "XY")
+    source = add_rectangle(document, sketch_id, (36.0, 28.0), 8.0, 4.0, angle=20.0)
+    pattern_circular(
+        document, sketch_id, [source], CENTER, 4, total_angle=360.0, rotate_copies=True
+    )
+
+    expanded = _expanded_entities(document, sketch_id)
+    assert [item["kind"] for item in expanded] == ["rectangle"] * 4
+
+    base = expanded[0]["params"]
+    for index, item in enumerate(expanded):
+        turned = [
+            (round(u, 9), round(v, 9))
+            for u, v in (
+                rotate_point(cu, cv, CENTER[0], CENTER[1], index * 90.0)
+                for cu, cv in kernel.rectangle_corners(base)
+            )
+        ]
+        assert _corner_set(item["params"]) == pytest.approx(sorted(turned), abs=1e-9)
 
 
 # --------------------------------------------------------------------------------------

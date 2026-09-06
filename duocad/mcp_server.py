@@ -739,10 +739,12 @@ class DocumentTools:
         applied = self.session.add_circle(str(sketch_id), center, float(radius))
         return self._apply_logged(before, applied, entity_id=applied["entity_id"])
 
-    def add_rectangle(self, sketch_id: str, corner: list, width: float, height: float) -> dict:
+    def add_rectangle(
+        self, sketch_id: str, corner: list, width: float, height: float, angle: float = 0.0
+    ) -> dict:
         before = self._revision_snapshot()
         applied = self.session.add_rectangle(
-            str(sketch_id), corner, float(width), float(height)
+            str(sketch_id), corner, float(width), float(height), float(angle)
         )
         return self._apply_logged(before, applied, entity_id=applied["entity_id"])
 

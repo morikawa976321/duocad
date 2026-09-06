@@ -534,8 +534,17 @@ class Session:
         entity_id = sketch.add_circle(self.document, sketch_id, center, radius)
         return self._after_logged_verb({"entity_id": entity_id})
 
-    def add_rectangle(self, sketch_id: str, corner: Any, width: float, height: float) -> dict:
-        entity_id = sketch.add_rectangle(self.document, sketch_id, corner, width, height)
+    def add_rectangle(
+        self,
+        sketch_id: str,
+        corner: Any,
+        width: float,
+        height: float,
+        angle: float = 0.0,
+    ) -> dict:
+        entity_id = sketch.add_rectangle(
+            self.document, sketch_id, corner, width, height, angle
+        )
         return self._after_logged_verb({"entity_id": entity_id})
 
     def add_arc(

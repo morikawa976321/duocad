@@ -104,7 +104,7 @@ def test_every_entity_kind_holds_references_not_numbers():
 
     for entity_id, expected in (
         (line, {"x0": 0.0, "y0": 0.0, "x1": 40.0, "y1": 0.0}),
-        (rectangle, {"x": 1.0, "y": 2.0, "width": 40.0, "height": 30.0}),
+        (rectangle, {"x": 1.0, "y": 2.0, "width": 40.0, "height": 30.0, "angle": 0.0}),
     ):
         entity = next(e for e in get_sketch(document, sketch_id).entities if e.id == entity_id)
         assert all(isinstance(value, str) for value in entity.params.values()), entity.params
