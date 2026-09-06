@@ -98,6 +98,7 @@
     type SelectionArgSpec,
     type TextArgSpec,
   } from './command'
+  import { evaluateExpression, isPlainNumber } from '../expression'
   import type { SelectionRef, SelectionState } from '../session'
 
   let {
@@ -279,8 +280,12 @@
         const raw = (numberText[spec.name] ?? '').trim()
         // 空欄で `default` を持つ引数(move系のdx/dy/dz)は、打っていない軸を0扱いにして
         // 空欄のまま確定できる(`NumberArgSpec.default`のdocstring参照)。
-        const parsed = raw === '' ? (spec.default ?? Number.NaN) : Number.parseFloat(raw)
-        if (Number.isFinite(parsed)) collected[spec.name] = parsed
+        if (raw === '') {
+          if (spec.default !== undefined) collected[spec.name] = spec.default
+          continue
+        }
+        const evaluated = evaluateExpression(raw)
+        if (evaluated.ok) collected[spec.name] = evaluated.value
       }
     }
     return collected
@@ -324,15 +329,6 @@
   /** Enter・ボタン押し直しで確定できるか(`ready` か、幽霊が出ているか)。 */
   const canCommit = $derived(commitSource !== null && overflow === '')
 
-  /** 画面に出す1行(何を待っているか)。**無起動では空文字**(プレースホルダ文を新設しない)。 */
-  const prompt = $derived.by(() => {
-    if (command === null) return ''
-    if (missing !== null) return promptFor(missing, values)
-    if (overflow !== '') return overflow
-    if (built && !built.ok) return built.reason
-    return 'Enterで確定 / Escで中断'
-  })
-
   /**
    * いま**要る**引数だけ(`when` が偽のものを落とす)。入力欄・ボタンの描画はこれを通す ——
    * 出したままにすると、並進を選んでいるのに角度の欄が並び、打っても送られない。
@@ -343,6 +339,47 @@
   const choiceArgs = $derived(liveArgs.filter((spec) => spec.kind === 'choice') as ChoiceArgSpec[])
   const textArgs = $derived(liveArgs.filter((spec) => spec.kind === 'text') as TextArgSpec[])
   const pickArgs = $derived(liveArgs.filter((spec) => spec.kind === 'pick') as PickArgSpec[])
+
+  /**
+   * 打ってあるのに読めない式の理由(無ければ null)。
+   *
+   * **読めない式は `values` に載らない**ので、案内行はそのままだと「まだ打っていない」と
+   * 同じ文言になる。生の文字列をここで見て、打ち間違いと未入力を区別する。
+   */
+  const expressionError = $derived.by<string | null>(() => {
+    for (const spec of numberArgs) {
+      const raw = (numberText[spec.name] ?? '').trim()
+      if (raw === '') continue
+      const evaluated = evaluateExpression(raw)
+      if (!evaluated.ok) return `${spec.label}: ${evaluated.reason}`
+    }
+    return null
+  })
+
+  /**
+   * 式を打った欄の評価結果(素の数値しか打っていなければ空)。**式は打った文字列を見ても
+   * いくつになるか分からない**ので、確定する前に読める場所がここ以外に無い。
+   */
+  const expressionEcho = $derived.by(() => {
+    const shown: string[] = []
+    for (const spec of numberArgs) {
+      const raw = (numberText[spec.name] ?? '').trim()
+      if (raw === '' || isPlainNumber(raw)) continue
+      const evaluated = evaluateExpression(raw)
+      if (evaluated.ok) shown.push(`${spec.label} = ${round4(evaluated.value)}${spec.unit}`)
+    }
+    return shown.join(' / ')
+  })
+
+  /** 画面に出す1行(何を待っているか)。**無起動では空文字**(プレースホルダ文を新設しない)。 */
+  const prompt = $derived.by(() => {
+    if (command === null) return ''
+    if (expressionError !== null) return expressionError
+    if (missing !== null) return promptFor(missing, values)
+    if (overflow !== '') return overflow
+    if (built && !built.ok) return built.reason
+    return expressionEcho === '' ? 'Enterで確定 / Escで中断' : `${expressionEcho} ・ Enterで確定`
+  })
 
   /**
    * **いま直接ピックを待っている引数**(待っていなければ null)。
@@ -780,6 +817,11 @@
    * 引けなければ `spec.live` に作らせる(`add_line` の長さ・角度のように `p0`/`p1` へ
    * 畳まれて名前で引けない寸法)。どちらも数値でなければ従来のプレースホルダ。
    */
+  /** 式の評価結果を見せる桁(小数4桁まで。末尾の0は落ちる)。 */
+  function round4(value: number): string {
+    return String(Math.round(value * 1e4) / 1e4)
+  }
+
   function placeholderFor(spec: NumberArgSpec): string {
     if (spec.fromPoints !== true || (numberText[spec.name] ?? '') !== '') return spec.placeholder
     const named = ghostBuilt?.args[spec.name]

@@ -41,6 +41,7 @@
    * 同じ値へ書き出し直す・同じファイルを読み直すことが多く、毎回打ち直させると手間になる
    * ——「新規保存」が消すのは1回きりの新しい名前だからで、性質が違う。
    */
+  import { evaluateExpression } from './expression'
   import type { DocumentInfo } from './session'
 
   let {
@@ -151,14 +152,16 @@
    * 黙って既定値で出すと粗いままプリンタへ送られる(`commands/files.ts`の`EXPORT_STL`
    * docstring参照)。
    */
-  const deviationProblem = $derived(
-    Number.parseFloat(deviationText.trim()) > 0 ? null : '偏差は0より大きい値',
-  )
+  const deviation = $derived(evaluateExpression(deviationText))
+  const deviationProblem = $derived.by(() => {
+    if (deviation.ok) return deviation.value > 0 ? null : '偏差は0より大きい値'
+    return deviationText.trim() === '' ? '偏差は0より大きい値' : deviation.reason
+  })
   const exportStlProblem = $derived(exportStlPathProblem ?? deviationProblem)
 
   function submitExportStl(): void {
-    if (exportStlProblem !== null) return
-    onExportStl(exportStlPath.trim(), Number.parseFloat(deviationText.trim()))
+    if (exportStlProblem !== null || !deviation.ok) return
+    onExportStl(exportStlPath.trim(), deviation.value)
   }
 
   /** Enterで、その行のボタンと同じことをする(`#file-name-input`と同じ規律)。 */

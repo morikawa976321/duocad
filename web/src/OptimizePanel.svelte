@@ -130,9 +130,9 @@
     最小部材幅
     <input
       id="optimize-rmin"
-      type="number"
-      min="0"
-      step="0.1"
+      type="text"
+      inputmode="decimal"
+      autocomplete="off"
       value={rminText}
       disabled={running}
       placeholder="mm"

@@ -36,6 +36,7 @@
     needsSketchId,
   } from './commands/features'
   import { entityHandles, ghostCopies, snapToSketchEntity, type GhostSource } from './entityKinds'
+  import { expressionValue } from './expression'
   import { IMPORT_STEP, changesDocument } from './commands/files'
   import { OPTIMIZE_MODE_COMMANDS, OPTIMIZE_PRESET_ROLE } from './commands/optimize'
   import OptimizePanel, { type OptimizeNotice } from './OptimizePanel.svelte'
@@ -499,8 +500,8 @@
 
   /** 入力欄の文字列を、サーバへ渡せる数へ(空・数でない・0以下は「指定なし」)。 */
   const optimizeRminMm = $derived.by(() => {
-    const value = Number.parseFloat(optimizeRminText)
-    return Number.isFinite(value) && value > 0 ? value : null
+    const value = expressionValue(optimizeRminText)
+    return value !== null && value > 0 ? value : null
   })
 
   /** いま選ばれている段。目盛りが縮んだときのために毎回丸め直す。 */
