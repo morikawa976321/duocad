@@ -703,7 +703,11 @@
     // 文書から消えたBody(サーバの契約: 知っているのに state.bodies に無いID)があれば
     // ビューポートからも取り除く。
     viewport?.prune(next.bodies.map((body) => body.body_id))
-    if (changed.length > 0) previewing = false // 本物が届いたら幽霊は消えている(viewport.update)
+    // **これはサーバ投機実行のプレビュー(`showPreview`)だけの話**である。本物が届くと
+    // `viewport.update()` がそれを落とすので、待っている印もここで降ろす。
+    // **ローカル幽霊(`showBodyGhosts`)はここに含めない** —— あちらは同じ `update()` の中で
+    // 届いた形から組み直されて出続ける(`viewportTypes.ts` の `update` の項)。
+    if (changed.length > 0) previewing = false
 
     drawHighlight()
     // スケッチも「コアが持ち、ここは描き直すだけ」(可視性・選択と同じ形)。

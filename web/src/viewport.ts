@@ -906,7 +906,13 @@ export function createViewport(container: HTMLElement): Viewport {
    * 本物を隠さない(隠すと移動前と移動後を見比べられない)。
    */
   const bodyGhosts = new Map<string, { group: THREE.Group; disposables: Array<{ dispose(): void }> }>()
-  /** いま出しているローカル幽霊の指示そのもの(`ghostInfo` が返す。実機検査用の穴)。 */
+  /**
+   * いま出しているローカル幽霊の指示そのもの。`ghostInfo` が返す(実機検査が読む)ほかに、
+   * **`update()` が「届いた形で組み直す」ための入力でもある** —— 検査用のデータではないので、
+   * 消したり形を変えたりすると製品の挙動が変わる。
+   *
+   * **差し替え(`bodyGhostInfo = []`)で空にすること**(`clearBodyGhosts` の契約)。
+   */
   let bodyGhostInfo: BodyGhost[] = []
 
   function showBodyGhosts(entries: BodyGhost[]): void {
@@ -952,6 +958,10 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function clearBodyGhosts(): void {
+    // **必ず新しい配列へ差し替える**(`splice` / `length = 0` で中身を空にしない)。
+    // `update()` は消す前に `bodyGhostInfo` の参照を掴んで、消した後にそれで組み直す ——
+    // 中身を空にする実装へ変えると掴んだ側も空になり、**型検査にも実行時エラーにも出ないまま**
+    // 「無関係な再配信で幽霊が消えたまま戻らない」が再発する。
     bodyGhostInfo = []
     if (bodyGhosts.size === 0) return
     for (const entry of bodyGhosts.values()) {
