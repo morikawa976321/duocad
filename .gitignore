@@ -14,3 +14,7 @@ dist/
 
 # モデルファイル（リポジトリ直下の models/ だけ）
 /models/
+
+# Claude Code のローカル設定(この端末だけの許可リスト)。`.claude/` ごとは無視しない ——
+# 共有したいフック・エージェント定義を後から置けるようにする。
+/.claude/settings.local.json
