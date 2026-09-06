@@ -150,14 +150,16 @@ export function createOptimizeAnnotations(deps: OptimizeAnnotationsDeps): Optimi
     }
 
     // -------------------------------------------------- 荷重の矢印+ラベル
-    if (state.load !== null && state.loads.length > 0) {
-      const { magnitude, direction, vector } = state.load
-      // **長さは大きさの対数スケール**(タスク仕様)。1N未満でも長さが0にならないよう
-      // `Math.max(magnitude, 1)` で下駄を履かせる(見た目専用の式で、正確な力学ではない)。
-      const length = scale * 0.12 * (1 + Math.log10(Math.max(magnitude, 1)) * 0.3)
+    if (state.loads.length > 0) {
       const labelHeight = scale * 0.05
-      const labelText = `${Number(magnitude.toFixed(2))}N`
+      // **大きさと向きは面ごとに引く。** ループの外で1本取り出して使い回すと、
+      // 面ごとに違う荷重を置いても全部同じ矢印になり、画面が嘘をつく。
       for (const ref of state.loads) {
+        const { magnitude, direction, vector } = ref
+        // **長さは大きさの対数スケール**(タスク仕様)。1N未満でも長さが0にならないよう
+        // `Math.max(magnitude, 1)` で下駄を履かせる(見た目専用の式で、正確な力学ではない)。
+        const length = scale * 0.12 * (1 + Math.log10(Math.max(magnitude, 1)) * 0.3)
+        const labelText = `${Number(magnitude.toFixed(2))}N`
         const measured = faceCentroidNormal(ref.bodyId, ref.faceIndex)
         if (!measured) continue
         const dir =

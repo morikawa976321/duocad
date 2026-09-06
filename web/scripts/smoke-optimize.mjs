@@ -12,7 +12,8 @@
  *
  *   1. **パネルが最適化モードのあいだだけ出る**。条件が足りないうちは実行が押せず、
  *      **足りない理由が画面に文で出ている**(コンソールではなく)。
- *   2. **拘束面・荷重面が2枚あると実行前に断られる**(この版の1枚制限。`problems` の文)。
+ *   2. **荷重は面ごとに大きさ・向きを持てる**(面Aへ200Nの下向き、面Bへ50Nの法線)。
+ *      **2枚目を置いても1枚目は消えない**(上書き代入)。`clear_loads` で1枚だけ外せる。
  *   3. **最小部材幅を打つと解像度の目盛りが作り直される**。**添字0が既定でいちばん粗く**、
  *      右へ動かすほど要素数と予想時間が増える(＝細かい方向にだけ動く目盛り)。
  *   4. **走らせると進捗が画面に出て、中断できる。** 中断したとき文書は1ビットも
@@ -200,44 +201,80 @@ async function main() {
     )
     ok(`[2] 拘束面1枚(A の面 ${fixtureFace})`)
 
-    // ---------------------------------------------------------------- 2枚置いて断られる
-    console.log('\n[3] 荷重面を2枚置くと、実行前に「1枚だけ」と断られる(この版の制限)')
-    await page.click('#set-loads')
+    // ---------------------------------------------------------------- 面ごとに違う荷重を置く
+    console.log('\n[3] 荷重は面ごとに大きさ・向きを持つ(2枚目を置いても1枚目は消えない)')
     const loadFaceA = await pickAnyFace(bodyB)
     const loadFaceB = await pickAnyFace(bodyB, [loadFaceA])
-    await clickFace(bodyB, loadFaceA)
-    await clickFace(bodyB, loadFaceB)
-    await typeInto('#load-magnitude', 200)
-    await page.click('#load-direction-down')
-    await page.keyboard.press('Enter')
-    await waitFor(
-      () => (window.__duocad.state.optimize.loads ?? []).length === 2,
-      '荷重面が2枚にならない',
-    )
-    await waitFor(
-      () => (window.__duocad.optimizeConditions?.problems ?? []).some((p) => p.includes('1枚')),
-      '荷重面が2枚あることを断っていない',
-    )
-    if ((await disabled('#optimize-run')) !== true) fail('荷重面が2枚あるのに実行ボタンが押せる')
-    const twoFaceProblem = await text('#optimize-conditions')
-    ok(`[3] 実行前に断られている(「${twoFaceProblem.slice(0, 40)}…」)・実行ボタンは押せない`)
 
-    // ---------------------------------------------------------------- 1枚に絞る
     await page.click('#set-loads')
-    await clickFace(bodyB, loadFaceB) // トグルで外す
+    await clickFace(bodyB, loadFaceA)
     await typeInto('#load-magnitude', 200)
     await page.click('#load-direction-down')
     await page.keyboard.press('Enter')
     await waitFor(
       () => (window.__duocad.state.optimize.loads ?? []).length === 1,
-      '荷重面が1枚にならない',
+      '1枚目の荷重面が載らない',
     )
+
+    // **2枚目を置くときに1枚目が選択状態で現れてはならない**(`OPTIMIZE_PRESET_ROLE` に
+    // `set_loads` を載せていない理由。載っていると、ここでEnterを押した瞬間に
+    // 1枚目の200Nも50Nへ黙って書き換わる)。
+    await page.click('#set-loads')
+    const preselected = await page.evaluate(
+      () => (window.__duocad.selection?.items ?? []).length,
+    )
+    if (preselected !== 0) {
+      fail(`荷重verbの起動時に ${preselected} 個が選択されている(既存の荷重を巻き込んで上書きする)`)
+    }
+    await clickFace(bodyB, loadFaceB)
+    await typeInto('#load-magnitude', 50)
+    await page.click('#load-direction-normal')
+    await page.keyboard.press('Enter')
+    await waitFor(
+      () => (window.__duocad.state.optimize.loads ?? []).length === 2,
+      '2枚目の荷重面が載らない(1枚目を置き換えてしまった可能性)',
+    )
+
+    const specs = await page.evaluate(() =>
+      JSON.parse(JSON.stringify(window.__duocad.state.optimize.load_specs)),
+    )
+    const byIndex = Object.fromEntries((specs ?? []).map((item) => [item.index, item]))
+    if (byIndex[loadFaceA]?.magnitude !== 200 || byIndex[loadFaceA]?.direction !== 'vector') {
+      fail(`1枚目の荷重が200Nの下向きのまま残っていない: ${JSON.stringify(specs)}`)
+    }
+    if (byIndex[loadFaceB]?.magnitude !== 50 || byIndex[loadFaceB]?.direction !== 'normal') {
+      fail(`2枚目の荷重が50Nの法線向きになっていない: ${JSON.stringify(specs)}`)
+    }
     await waitFor(
       () => window.__duocad.optimizeConditions?.ready === true,
-      '1枚に絞っても条件がそろわない',
+      '荷重が2枚あると条件がそろわない(2枚は正当な入力である)',
     )
     if ((await disabled('#optimize-run')) !== false) fail('条件がそろったのに実行ボタンが押せない')
-    ok('[3] 1枚に絞ると条件がそろい、実行ボタンが押せるようになった')
+    ok('[3] 面ごとに違う荷重が共存し(200N下向き / 50N法線)、実行ボタンが押せる')
+
+    // 矢印とラベルも面ごとに違うこと(1本を使い回すと、ここでラベルが同じ文字列になる)
+    const loadArrows = await page.evaluate(() => window.__duocad.optimizeAnnotations().loads)
+    const labels = new Set(loadArrows.map((item) => item.label))
+    if (labels.size !== 2) {
+      fail(`荷重の装飾のラベルが面ごとに違わない: ${JSON.stringify(loadArrows)}`)
+    }
+    ok(`[3] 装飾も面ごとに違う(${[...labels].join(' / ')})`)
+
+    // ---------------------------------------------------------------- 1枚だけ外す
+    await page.click('#clear-loads')
+    await clickFace(bodyB, loadFaceB)
+    await page.keyboard.press('Enter')
+    await waitFor(
+      () => (window.__duocad.state.optimize.loads ?? []).length === 1,
+      'clear_loads で1枚だけ外れない',
+    )
+    const remaining = await page.evaluate(() =>
+      JSON.parse(JSON.stringify(window.__duocad.state.optimize.load_specs)),
+    )
+    if (remaining.length !== 1 || remaining[0].magnitude !== 200) {
+      fail(`外す面を選んだのに残った荷重が違う: ${JSON.stringify(remaining)}`)
+    }
+    ok('[3] clear_loads で選んだ1枚だけ外れ、残った面の200Nはそのまま')
 
     // ================================================================== 4. 解像度の目盛り
     console.log('\n[4] 最小部材幅 → 解像度の目盛り(添字0が既定=いちばん粗い。右へだけ動く)')

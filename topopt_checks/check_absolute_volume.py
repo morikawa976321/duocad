@@ -484,8 +484,8 @@ def check_unreachable() -> None:
         mask=None,
         grid=None,
         conditions=types.SimpleNamespace(keep=None),
-        fixed_face=0,
-        load_face=1,
+        fixed_faces=0,
+        load_faces=1,
     )
     try:
         ds.run_topopt(dummy, volfrac=0.3, material_mm3=100.0, stl_path=STL_TMP)

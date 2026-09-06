@@ -208,8 +208,14 @@ export interface OptimizeState {
    */
   fixtures: ShapeRef[]
   loads: ShapeRef[]
-  /** 荷重の大きさと向き。**1文書に1種類**(v1の制限)。荷重面が0枚なら `null`。 */
-  load: OptimizeLoad | null
+  /**
+   * 荷重の大きさ[N]と向きを**面ごとに**持つ並び。荷重面が0枚なら空。
+   *
+   * **`loads` とは長さが違いうる**ので `(body, index)` で突き合わせること —— `loads` には
+   * 「いま指せる面」しか載らないが、こちらは文書が持つ how なので、荷重面のボディを隠しても
+   * 残る(隠しただけで打ち直しになるのを避けるため)。
+   */
+  load_specs: OptimizeLoadSpec[]
   /**
    * **いま使えない割り当て**。上の4つの配列に載らなかったものが、全部理由つきでここに出る
    * (指紋が合わなくなった面・消えたボディ・非表示のボディ)。
@@ -223,8 +229,10 @@ export interface OptimizeState {
   revision: number
 }
 
-/** 荷重の大きさ[N]と向き。`direction === 'vector'` のときだけ `vector` が入る。 */
-export interface OptimizeLoad {
+/** 面1枚ぶんの荷重(大きさ[N]と向き)。`direction === 'vector'` のときだけ `vector` が入る。 */
+export interface OptimizeLoadSpec {
+  body: string
+  index: number
   magnitude: number
   direction: 'normal' | '-normal' | 'vector'
   vector: [number, number, number] | null
@@ -469,14 +477,19 @@ export type Applied =
   /**
    * 荷重。`direction_vector` は**単位化済み**(打った値と長さが違うことがある)で、
    * `direction` が `'normal'` / `'-normal'` のときは `null`。
+   *
+   * `face_count` は**確定後の荷重面の総数**、`applied_count` はこの操作で焼いた枚数
+   * (`set_loads` は上書き代入なので、選択外の荷重面は触られず総数に残る)。
    */
   | (AppliedVerbBase & {
       verb: 'set_loads'
       face_count: number
+      applied_count: number
       magnitude: number
       direction: string
       direction_vector: number[] | null
     })
+  | (AppliedVerbBase & { verb: 'clear_loads'; face_count: number })
   | (AppliedVerbBase & { verb: 'pattern_rectangular'; pattern_id: string })
   | (AppliedVerbBase & { verb: 'pattern_circular'; pattern_id: string })
   | (AppliedVerbBase & {

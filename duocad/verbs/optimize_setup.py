@@ -4,19 +4,32 @@
 **最適化そのものとは接続しない**(実行verbは無い)。ここが作るのは「条件を表現でき、
 保存でき、状態として配れる」ところまでである。
 
-**4つとも「集合代入」**である。「1つ足す」ではなく「この役割の集合を、いま確定している
-選択集合そのもので置き換える」。操作の流れがその裏返しになっている ——
+**保持/除外/拘束の3つは「集合代入」**である。「1つ足す」ではなく「この役割の集合を、いま
+確定している選択集合そのもので置き換える」。操作の流れがその裏返しになっている ——
 verbを起動すると**既にその役割が付いている対象が選択状態で現れ**、クリックで付け外しし、
-決定で確定する。したがって**解除専用のverbは無い**(verbの中で全部外して決定すれば消える)。
-**確定選択が空でもよい**のはこのためで、空の集合を代入する = その役割を全部外す、である。
+決定で確定する。**確定選択が空でもよい**のはこのためで、空の集合を代入する = その役割を
+全部外す、である。
+
+**荷重だけは集合代入ではない(`set_loads` は上書き代入)**。大きさ[N]と向きを**面ごとに**
+持つので、集合代入にすると「面Bの20Nを直すつもりで開いて決定した瞬間、面Aの50Nも同じ値に
+上書きされる」という、例外も警告も出ない事故が構造的に避けられない。したがって荷重では:
+
+- `set_loads` は**選択した面だけ**に大きさと向きを焼き、選択に入っていない荷重面は触らない。
+- 起動時のプリセレクトを**しない**(画面側の規律。`web/src/App.svelte`)。触っていない面が
+  選択に入りようがなくなるので、上の事故が起きる経路そのものが消える。
+- 空の選択で確定しても何も外れないので、**`clear_loads`(解除専用verb)を置く**。
+  3つの集合代入verbには解除専用verbは無い —— 荷重だけの例外であり、
+  「上書き代入にした以上、外す手段が別に要る」という代償である。
 
 **排他は先勝ち**。保持に付いているボディを除外へ回そうとしたら失敗する(逆も同じ。面は
 拘束と荷重で同じ規則)。**衝突したものを名指しして** `optimize.RoleConflict` を投げる ——
 移したいときは「元の役割のverbで外す → 新しい役割のverbで付ける」の2手になる。これは
 意図した仕様であって、ここで自動的に奪い取らない。
 
-**v1の制限: 1文書につき荷重は1種類**(集合代入なので、選ばれた面すべてが同じ大きさ[N]と
-向きを共有する)。複数の荷重ケースが要ると分かった時点で拡張する。
+**荷重は「同時にかかる1つの荷重系」である。** 面ごとに違う大きさ・向きを持てるが、
+最適化はそれらを**足し合わせた1つの荷重**として解く(`optimize_run.build_conditions`)。
+「あるときは面A、別のときは面B」という**別シナリオ(複数荷重ケース)は表現できない** ——
+それを合成すると、どちらの単独荷重にも耐えない形が出る。要ると分かった時点で拡張する。
 
 **メッシュボディは4つとも受け付けない**。保持/除外はここが `meshbody.reject` で
 断り、拘束/荷重は `optimize.face_fingerprint` が断る。ボディや面を**名指しして**
@@ -47,6 +60,7 @@ VERB_SET_PRESERVE_BODIES = "set_preserve_bodies"
 VERB_SET_EXCLUDE_BODIES = "set_exclude_bodies"
 VERB_SET_FIXTURES = "set_fixtures"
 VERB_SET_LOADS = "set_loads"
+VERB_CLEAR_LOADS = "clear_loads"
 
 #: verb名 -> `OptimizeSetup` のどの役割を置き換えるか。
 _BODY_VERB_ROLE = {
@@ -145,59 +159,96 @@ def set_loads(
     magnitude: Any,
     direction: Any,
 ) -> Operation:
-    """**荷重面**の集合を置き換え、大きさ[N]と向きを1組だけ持たせる。
+    """**選んだ面だけ**に大きさ[N]と向きを焼く(上書き代入。選択外の荷重面は触らない)。
 
     向きは `"normal"` / `"-normal"` / `[x, y, z]`(世界座標)。棚受けのように面法線ではなく
     世界の -Z 方向へ受ける荷重があるので、面法線だけでは足りない。
+
+    **面を1枚も選ばずに確定するのは失敗にする。** 上書き代入なので空の選択は「何も起きない」
+    であり、集合代入だった頃の「空で確定 = 全部外す」を期待した人が黙って何も外れないまま
+    次へ進む。外すのは `clear_loads` である。
     """
-    conditions = _conditions(doc, face_refs)
-    value = optimize.normalize_magnitude(magnitude)
-    mode, vector = optimize.normalize_direction(direction)
-    setup = doc.optimize
+    refs = list(face_refs)
+    if not refs:
+        raise ValueError(
+            "荷重をかける面が1枚も選ばれていない"
+            "(荷重を外すには clear_loads を使うこと。set_loads は選んだ面にだけ焼く)"
+        )
+    conditions = [
+        optimize.load_condition(doc, ref, magnitude, direction)
+        for ref in _face_refs(refs)
+    ]
     # **入れ子のdictにしない**(`previous: {...}` にしない)。状態配信は操作ログの引数を
     # そのまま配るので、面の指紋のような**量のあるもの**は伏せられる形(リスト)で
     # 平らに置く必要がある(`duocad/view.py` の `_REDACTED_LOG_ARGS`)。
-    previous_faces = [dict(item) for item in setup.loads]
-    previous_magnitude = setup.load_magnitude
-    previous_direction = setup.load_direction
-    previous_vector = None if setup.load_vector is None else list(setup.load_vector)
-    _apply_faces(doc, "loads", conditions)
-    setup.load_magnitude = value
-    setup.load_direction = mode
-    setup.load_vector = None if vector is None else list(vector)
+    previous_faces = [dict(item) for item in doc.optimize.loads]
+    merged = _merge_loads(previous_faces, conditions)
+    _apply_faces(doc, "loads", merged)
     return doc.log.append(
-        VERB_SET_LOADS,
-        {
-            "faces": conditions,
-            "magnitude": value,
-            "direction": mode,
-            "vector": None if vector is None else list(vector),
-            "previous_faces": previous_faces,
-            "previous_magnitude": previous_magnitude,
-            "previous_direction": previous_direction,
-            "previous_vector": previous_vector,
-        },
+        VERB_SET_LOADS, {"faces": merged, "previous_faces": previous_faces}
     )
 
 
-def _conditions(doc: Document, face_refs: Sequence[dict]) -> List[dict]:
-    """面の ShapeRef を FaceCondition(指紋つき)へ均す。**重複は畳む**。
+def clear_loads(doc: Document, face_refs: Sequence[dict]) -> Operation:
+    """**荷重を外す**。選んだ面を荷重面から落とす(**空の選択なら全部外す**)。
 
-    `kind` が面でない参照は ValueError —— 黙って捨てると、辺を選んだまま拘束を確定した
-    人に「0枚に置き換わった」だけが返る。
+    `set_loads` を上書き代入にした代償として置いてある解除専用verb(モジュール docstring)。
+    荷重が付いていない面を指しても失敗しない —— 「外す」は結果を言っているので、
+    既に外れている面を指したときに例外を出すと、複数選択で1枚だけ外れていたら全部落ちる。
     """
-    conditions: List[dict] = []
+    previous_faces = [dict(item) for item in doc.optimize.loads]
+    refs = list(face_refs)
+    if refs:
+        dropped = {optimize.face_key(ref) for ref in _face_refs(refs)}
+        remaining = [
+            item for item in previous_faces if optimize.face_key(item) not in dropped
+        ]
+    else:
+        remaining = []
+    _apply_faces(doc, "loads", remaining)
+    return doc.log.append(
+        VERB_CLEAR_LOADS, {"faces": remaining, "previous_faces": previous_faces}
+    )
+
+
+def _merge_loads(previous: Sequence[dict], incoming: Sequence[dict]) -> List[dict]:
+    """上書き代入。**選択に入っている面だけ**を新しい値で置き換え、並びは既存を先に保つ。
+
+    同じ面を2度指すことはない(`_face_refs` が重複を畳む)ので、突き合わせは面の鍵だけでよい。
+    """
+    replacing = {optimize.face_key(item): item for item in incoming}
+    merged: List[dict] = []
+    for item in previous:
+        key = optimize.face_key(item)
+        merged.append(dict(replacing.pop(key)) if key in replacing else dict(item))
+    for item in incoming:
+        if optimize.face_key(item) in replacing:
+            merged.append(dict(item))
+    return merged
+
+
+def _face_refs(face_refs: Sequence[dict]) -> List[dict]:
+    """面の ShapeRef の並びを検査して**重複を畳む**(順序は保つ)。
+
+    `kind` が面でない参照は ValueError —— 黙って捨てると、辺を選んだまま確定した人に
+    「0枚だった」だけが返る。
+    """
+    picked: List[dict] = []
     seen: set = set()
     for ref in face_refs:
         if not isinstance(ref, dict) or ref.get("kind") != "face":
             raise ValueError(f"face reference required, got {ref!r}")
-        condition = optimize.face_condition(doc, ref)
-        key = optimize.face_key(condition)
+        key = optimize.face_key(ref)
         if key in seen:
             continue
         seen.add(key)
-        conditions.append(condition)
-    return conditions
+        picked.append(ref)
+    return picked
+
+
+def _conditions(doc: Document, face_refs: Sequence[dict]) -> List[dict]:
+    """面の ShapeRef を FaceCondition(指紋つき)へ均す。**重複は畳む**。"""
+    return [optimize.face_condition(doc, ref) for ref in _face_refs(face_refs)]
 
 
 def _apply_faces(doc: Document, role: str, conditions: Sequence[dict]) -> None:
@@ -269,26 +320,40 @@ def _undo_fixtures(document: Document, operation: Operation) -> None:
 
 def _do_loads(document: Document, operation: Operation) -> None:
     args = operation.args
-    setup = document.optimize
-    _apply_faces(document, "loads", list(args.get("faces") or []))
-    setup.load_magnitude = float(args["magnitude"])
-    setup.load_direction = str(args["direction"])
-    vector: Optional[list] = args.get("vector")
-    setup.load_vector = None if vector is None else [float(item) for item in vector]
+    _apply_faces(document, "loads", _loads_from_args(args, "faces", ""))
 
 
 def _undo_loads(document: Document, operation: Operation) -> None:
-    args = operation.args
     setup = document.optimize
-    setup.loads = [dict(item) for item in args.get("previous_faces") or []]
-    setup.load_magnitude = float(args.get("previous_magnitude") or 0.0)
-    setup.load_direction = str(args.get("previous_direction") or "vector")
-    vector = args.get("previous_vector")
-    setup.load_vector = None if vector is None else [float(item) for item in vector]
+    setup.loads = _loads_from_args(operation.args, "previous_faces", "previous_")
     setup.touch()
+
+
+def _loads_from_args(args: dict, faces_key: str, prefix: str) -> List[dict]:
+    """操作ログの引数 → LoadCondition の並び。**古い形のログもここで受ける**。
+
+    2026-09-06までの `set_loads` は、大きさ[N]と向きを面ではなく**引数の直下**に1組だけ
+    持っていた(1文書に1荷重だった頃の形)。過去に受け付けたログの再生を、あとから足した
+    型で落として文書が開けなくなる、という壊し方をしない —— 古い形は「全ての面が同じ
+    大きさ・向きを持つ」という**新しい形の特別な場合**なので、ここで焼き直せる。
+    """
+    faces = [dict(item) for item in args.get(faces_key) or []]
+    magnitude = args.get(f"{prefix}magnitude")
+    if magnitude is None:
+        return faces
+    direction = str(args.get(f"{prefix}direction") or "vector")
+    vector: Optional[list] = args.get(f"{prefix}vector")
+    for face in faces:
+        face["magnitude"] = float(magnitude)
+        face["direction"] = direction
+        face["vector"] = None if vector is None else [float(item) for item in vector]
+    return faces
 
 
 register_verb(VERB_SET_PRESERVE_BODIES, do=_do_bodies, undo=_undo_bodies)
 register_verb(VERB_SET_EXCLUDE_BODIES, do=_do_bodies, undo=_undo_bodies)
 register_verb(VERB_SET_FIXTURES, do=_do_fixtures, undo=_undo_fixtures)
 register_verb(VERB_SET_LOADS, do=_do_loads, undo=_undo_loads)
+# **`clear_loads` は `set_loads` と同じ do/undo を使う** —— どちらも操作ログには
+# 「確定後の荷重集合そのもの」を書くので、再生も取り消しも集合の代入で足りる。
+register_verb(VERB_CLEAR_LOADS, do=_do_loads, undo=_undo_loads)

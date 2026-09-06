@@ -197,8 +197,11 @@ def conditions_report(doc: "Document") -> dict:
 
         {"ready": bool, "problems": [str, ...],
          "preserve_bodies": [BodyId,...], "exclude_bodies": [BodyId,...],
-         "fixtures": [FaceCondition,...], "loads": [FaceCondition,...],
-         "load": {"magnitude": float, "direction": str, "vector": [x,y,z]|None} | None}
+         "fixtures": [FaceCondition,...], "loads": [LoadCondition,...],
+         "load_total_n": float}   # 荷重の大きさの総和[N](合力ではない)
+
+    `loads` の要素は **LoadCondition**(`optimize.load_condition`)なので、大きさ[N]と向きは
+    面ごとに入っている。
 
     **`state_payload()` の `stale` とは別の点検**である。あちらは「いま画面で指せるか」で、
     こちらは「いま最適化に渡せるか」——非表示のボディは指せないが、形はあるので渡せる。
@@ -211,12 +214,16 @@ def conditions_report(doc: "Document") -> dict:
             "保持ソリッドが1つも無い。塊(設計空間)は保持ソリッドと条件面から起こすので、"
             "残したい部分を set_preserve_bodies で指定すること"
         )
-    if len(setup.fixtures) != 1:
-        problems.append(_single_face_message("拘束面", len(setup.fixtures)))
-    if len(setup.loads) != 1:
-        problems.append(_single_face_message("荷重面", len(setup.loads)))
-    if setup.loads and not (setup.load_magnitude > 0.0):
-        problems.append("荷重の大きさ[N]が入っていない(set_loads の magnitude)")
+    if not setup.fixtures:
+        problems.append("拘束面が1枚も無い")
+    if not setup.loads:
+        problems.append("荷重面が1枚も無い")
+    for condition in setup.loads:
+        if not (float(condition.get("magnitude") or 0.0) > 0.0):
+            problems.append(
+                f"荷重面 {condition['body']} の面 #{int(condition['index'])} に"
+                "大きさ[N]が入っていない(set_loads の magnitude)"
+            )
 
     for role in ("preserve_bodies", "exclude_bodies"):
         for body_id in getattr(setup, role):
@@ -232,27 +239,10 @@ def conditions_report(doc: "Document") -> dict:
         "exclude_bodies": list(setup.exclude_bodies),
         "fixtures": [dict(item) for item in setup.fixtures],
         "loads": [dict(item) for item in setup.loads],
-        "load": (
-            {
-                "magnitude": setup.load_magnitude,
-                "direction": setup.load_direction,
-                "vector": None if setup.load_vector is None else list(setup.load_vector),
-            }
-            if setup.loads
-            else None
+        "load_total_n": sum(
+            float(item.get("magnitude") or 0.0) for item in setup.loads
         ),
     }
-
-
-def _single_face_message(label: str, count: int) -> str:
-    """**v1の制限**を名指しする文。`Conditions.fixed_face` / `load_face` が int 1つだからである。"""
-    if count == 0:
-        return f"{label}が1枚も無い"
-    return (
-        f"{label}が {count} 枚ある。この版が扱えるのは1枚だけである"
-        "(`duocad.topopt.design_space.Conditions` の `fixed_face` / `load_face` が"
-        "面添字を1つしか持たない)。1枚に絞ってから実行すること"
-    )
 
 
 def _body_problem(doc: "Document", role: str, body_id: str) -> List[str]:
@@ -298,11 +288,13 @@ class ConditionBundle:
     conditions: Any  # duocad.topopt.design_space.Conditions
     anchor_body_ids: List[str]
     face_offsets: Dict[str, int]
-    fixed_face: int
-    load_face: int
+    fixed_faces: tuple
+    load_faces: tuple
     keep_body_ids: List[str]
     exclude_body_ids: List[str]
-    force: tuple
+    #: 荷重面と**同じ並び**の力ベクトル[N](向き × 大きさ)。`load_faces[i]` に `forces[i]`。
+    forces: tuple
+    #: 荷重の総量 = `sum(|forces[i]|)`。**合力(ベクトル和)ではない**(理由は下記)。
     load_n: float
 
 
@@ -311,13 +303,19 @@ def build_conditions(doc: "Document") -> ConditionBundle:
 
     - 保持ソリッド → `keep`(1つならその形、複数なら `kernel.make_compound`)
     - 除外ソリッド → `obstacle`(空なら `None`)
-    - 拘束面 / 荷重面 → `anchor_shape` の面添字(`fixed_face` / `load_face`)
-    - 荷重の大きさ[N] → `load_n`、向き → `force`(**単位ベクトル**。大きさは持たせない)
+    - 拘束面 / 荷重面 → `anchor_shape` の面添字(`fixed_faces` / `load_faces`)
+    - 荷重 → `forces`(面ごとの**実単位[N]の力ベクトル**)と `load_n`(その大きさの総和)
 
-    `force` を単位ベクトルにするのは、`simp` 側が**無次元の合力1.0**で回り続ける契約だから
-    である(`done/20260904-0143` の契約)。実単位[N]は `load_n` だけが持ち、応力の換算
-    (`stress.UnitScale.for_model`)がそれを読む。
+    **`load_n` は合力(ベクトル和の大きさ)ではなく、面ごとの大きさの総和である。** 荷重が
+    1つ、または全部同じ向きなら両者は一致するが、向きの違う荷重が混ざると一致しない ——
+    打ち消し合う組(面Aへ下向き50N・面Bへ上向き50N)では合力が0になり、**応力を実単位へ
+    戻す割り算が壊れる**。総和なら打ち消しに影響されない。`stress.load_magnitude_total`
+    が解いた側で同じ量を測っており、**2つの定義が食い違うと応力が黙って定数倍ずれる**。
+
+    `simp` は無次元(荷重の総量1.0)で回り続ける契約(`done/20260904-0143`)。実単位[N]は
+    `load_n` だけが持ち、`stress.UnitScale.for_model` がそれを読む。
     """
+    from . import optimize
     from .topopt import design_space as ds
 
     report = conditions_report(doc)
@@ -327,43 +325,52 @@ def build_conditions(doc: "Document") -> ConditionBundle:
     setup = doc.optimize
     keep_ids = list(setup.preserve_bodies)
     exclude_ids = list(setup.exclude_bodies)
-    fixture = dict(setup.fixtures[0])
-    load = dict(setup.loads[0])
+    fixtures = [dict(item) for item in setup.fixtures]
+    loads = [dict(item) for item in setup.loads]
 
     # 面アンカーの対象は「条件面を持っているボディ」だけ。**文書の並び順**で固定する
     # (集合の反復順に頼ると、同じ文書でも面添字が変わりうる)。
     anchor_ids: List[str] = []
-    wanted = {fixture["body"], load["body"]}
+    wanted = {item["body"] for item in fixtures} | {item["body"] for item in loads}
     for body in doc.bodies:
         if body.id in wanted:
             anchor_ids.append(body.id)
 
     anchor_shape, offsets = _compound_with_offsets(doc, anchor_ids)
-    _verify_face_mapping(doc, anchor_shape, offsets, [fixture, load])
+    _verify_face_mapping(doc, anchor_shape, offsets, fixtures + loads)
 
     keep_shape, _ = _compound_with_offsets(doc, keep_ids)
     obstacle_shape = None
     if exclude_ids:
         obstacle_shape, _ = _compound_with_offsets(doc, exclude_ids)
 
+    fixed_faces = tuple(
+        offsets[item["body"]] + int(item["index"]) for item in fixtures
+    )
+    load_faces = tuple(offsets[item["body"]] + int(item["index"]) for item in loads)
+    forces = tuple(tuple(optimize.load_force(item)) for item in loads)
+    load_n = sum(math.sqrt(sum(c * c for c in vector)) for vector in forces)
+    if not load_n > 0.0:
+        raise OptimizeInputError("荷重の大きさが全部0で、実単位との対応が決まらない")
+
     conditions = ds.Conditions(
         keep=keep_shape,
-        fixed_face=offsets[fixture["body"]] + int(fixture["index"]),
-        load_face=offsets[load["body"]] + int(load["index"]),
+        fixed_faces=fixed_faces,
+        load_faces=load_faces,
         obstacle=obstacle_shape,
         anchor_shape=anchor_shape,
-        load_n=float(setup.load_magnitude),
+        load_n=float(load_n),
     )
     return ConditionBundle(
         conditions=conditions,
         anchor_body_ids=anchor_ids,
         face_offsets=offsets,
-        fixed_face=conditions.fixed_face,
-        load_face=conditions.load_face,
+        fixed_faces=conditions.fixed_faces,
+        load_faces=conditions.load_faces,
         keep_body_ids=keep_ids,
         exclude_body_ids=exclude_ids,
-        force=_load_direction(doc, load),
-        load_n=float(setup.load_magnitude),
+        forces=forces,
+        load_n=float(load_n),
     )
 
 
@@ -444,30 +451,6 @@ def _close_seq(left, right) -> bool:
 
 def _fmt(values) -> str:
     return "[" + ", ".join(f"{float(v):.4g}" for v in values) + "]"
-
-
-def _load_direction(doc: "Document", load: dict) -> tuple:
-    """荷重の向きを**世界座標の単位ベクトル**にする(`simp` の無次元合力の向き)。
-
-    `"normal"` / `"-normal"` は**その面の外向き法線**で、面の指紋に焼き込んである値を使う
-    (面が1枚だけなので面ごとに変わる話は起きない。複数面を許すときに考え直すこと)。
-    """
-    setup = doc.optimize
-    mode = setup.load_direction
-    if mode == "vector":
-        if not setup.load_vector:
-            raise OptimizeInputError("荷重の向きベクトルが入っていない")
-        vector = [float(v) for v in setup.load_vector]
-    elif mode == "normal":
-        vector = [float(v) for v in load["normal"]]
-    elif mode == "-normal":
-        vector = [-float(v) for v in load["normal"]]
-    else:
-        raise OptimizeInputError(f"未知の荷重の向き {mode!r}")
-    length = math.sqrt(sum(v * v for v in vector))
-    if not length > 0.0:
-        raise OptimizeInputError("荷重の向きが零ベクトルになっている")
-    return tuple(v / length for v in vector)
 
 
 # --------------------------------------------------------------------------------------
@@ -784,18 +767,23 @@ def _debug_anchor_payload(stage: str, space) -> Optional[dict]:
         return None
     node_grid = table.node_grid
     out: dict = {"kind": "anchors", "stage": stage, "grid": space.grid.as_dict()}
-    for key, face_index in (("fixed", space.fixed_face), ("load", space.load_face)):
-        anchor = table.anchors.get(int(face_index))
-        if anchor is None:
-            out[key] = {"face": int(face_index), "count": 0, "points": [], "area_mm2": 0.0}
-            continue
-        points = np.asarray(node_grid.positions_of(anchor.nodes), dtype=float)
-        out[key] = {
-            "face": int(face_index),
-            "count": int(points.shape[0]),
-            "points": [float(v) for v in points.ravel().tolist()],
-            "area_mm2": float(anchor.total_area),
-        }
+    for key, faces in (("fixed", space.fixed_faces), ("load", space.load_faces)):
+        entries = []
+        for face_index in faces:
+            anchor = table.anchors.get(int(face_index))
+            if anchor is None:
+                entries.append(
+                    {"face": int(face_index), "count": 0, "points": [], "area_mm2": 0.0}
+                )
+                continue
+            points = np.asarray(node_grid.positions_of(anchor.nodes), dtype=float)
+            entries.append({
+                "face": int(face_index),
+                "count": int(points.shape[0]),
+                "points": [float(v) for v in points.ravel().tolist()],
+                "area_mm2": float(anchor.total_area),
+            })
+        out[key] = entries
     return out
 
 
@@ -1031,7 +1019,7 @@ def run(
             if opts.max_evaluations is None
             else opts.max_evaluations
         ),
-        force=bundle.force,
+        forces=bundle.forces,
         derivation_kwargs=derivation_kwargs,
         progress=pump.on_search_step,
         run_progress=pump.on_iteration,
@@ -1103,22 +1091,28 @@ def _check_anchor_centroids(doc: "Document", space) -> dict:
     setup = doc.optimize
     limit = ANCHOR_CENTROID_LIMIT_ELEMENTS * float(space.grid.spacing)
     out: dict = {"limit_mm": limit}
-    for key, face_index, condition in (
-        ("fixed", space.fixed_face, setup.fixtures[0]),
-        ("load", space.load_face, setup.loads[0]),
+    # **面ごとに測る。合計や平均で見てはならない** —— 1枚だけ取り違えても、他が合っていれば
+    # 平均は許容に収まる。面が増えるほど取り違えは起きやすくなるので、ここは緩めない。
+    for key, faces, conditions in (
+        ("fixed", space.fixed_faces, setup.fixtures),
+        ("load", space.load_faces, setup.loads),
     ):
-        anchor = table[int(face_index)]
-        centroid = np.asarray(anchor.centroid(table.node_grid), dtype=float)
-        center = np.asarray(condition["center"], dtype=float)
-        distance = float(np.linalg.norm(centroid - center))
-        out[f"{key}_mm"] = distance
-        if not distance <= limit:
-            raise FaceMappingError(
-                f"{key} の面アンカーが選んだ面から離れている"
-                f"(節点の重心 {np.round(centroid, 3).tolist()} /"
-                f" 面の重心 {np.round(center, 3).tolist()} / 距離 {distance:.3f}mm >"
-                f" 許容 {limit:.3f}mm)。面添字の対応が壊れている可能性がある"
-            )
+        distances = []
+        for face_index, condition in zip(faces, conditions):
+            anchor = table[int(face_index)]
+            centroid = np.asarray(anchor.centroid(table.node_grid), dtype=float)
+            center = np.asarray(condition["center"], dtype=float)
+            distance = float(np.linalg.norm(centroid - center))
+            distances.append(distance)
+            if not distance <= limit:
+                raise FaceMappingError(
+                    f"{key} の面アンカーが選んだ面から離れている"
+                    f"(面添字 {int(face_index)} / 節点の重心 {np.round(centroid, 3).tolist()} /"
+                    f" 面の重心 {np.round(center, 3).tolist()} / 距離 {distance:.3f}mm >"
+                    f" 許容 {limit:.3f}mm)。面添字の対応が壊れている可能性がある"
+                )
+        out[f"{key}_mm"] = max(distances) if distances else 0.0
+        out[f"{key}_mm_each"] = distances
     return out
 
 
@@ -1132,7 +1126,7 @@ def _empty_condition_faces(space) -> List[dict]:
     table = getattr(space, "table", None)
     if table is None:
         return list(space.stats.get("empty_condition_faces_warning") or [])
-    return list(table.condition_face_diagnoses(space.fixed_face, space.load_face))
+    return list(table.condition_face_diagnoses(space.fixed_faces, space.load_faces))
 
 
 def _resolve_element_size(limits: dict, requested: Optional[float]) -> float:

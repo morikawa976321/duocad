@@ -22,6 +22,7 @@ from . import (
     catalog,
     io_step,
     kernel,
+    optimize,
     optimize_run,
     parameters,
     query,
@@ -48,6 +49,7 @@ from .verbs import (
     move_sketch_entities as move_sketch_entities_verb,
     pattern_circular as pattern_circular_verb,
     pattern_rectangular as pattern_rectangular_verb,
+    clear_loads as clear_loads_verb,
     set_exclude_bodies as set_exclude_bodies_verb,
     set_fixtures as set_fixtures_verb,
     set_loads as set_loads_verb,
@@ -834,15 +836,27 @@ class Session:
         return self._after_logged_verb({"face_count": len(operation.args["faces"])})
 
     def set_loads(self, magnitude: Any, direction: Any) -> dict:
-        """**確定選択の面**を荷重面の集合にし、大きさ[N]と向きを持たせる(集合代入)。"""
+        """**確定選択の面だけ**に大きさ[N]と向きを焼く(上書き代入。選択外の荷重面は残る)。
+
+        `face_count` は**確定後の荷重面の総数**であって、この操作で焼いた枚数ではない
+        (画面は「いま何枚に荷重が付いているか」を出すのでこちらが要る)。
+        """
         faces = selection.require_committed_faces(self.document)
         operation = set_loads_verb(self.document, faces, magnitude, direction)
+        mode, vector = optimize.normalize_direction(direction)
         return self._after_logged_verb({
             "face_count": len(operation.args["faces"]),
-            "magnitude": operation.args["magnitude"],
-            "direction": operation.args["direction"],
-            "direction_vector": operation.args["vector"],
+            "applied_count": len(faces),
+            "magnitude": optimize.normalize_magnitude(magnitude),
+            "direction": mode,
+            "direction_vector": None if vector is None else list(vector),
         })
+
+    def clear_loads(self) -> dict:
+        """**確定選択の面**を荷重から外す(選択が空なら全部外す)。"""
+        faces = selection.require_committed_faces(self.document)
+        operation = clear_loads_verb(self.document, faces)
+        return self._after_logged_verb({"face_count": len(operation.args["faces"])})
 
     # ---------------------------------------------------------------- 形状最適化を走らせる
     # 条件を置く4 verb の**続き**(`duocad/optimize_run.py`)。ここにあるのは委譲と、

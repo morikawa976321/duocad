@@ -112,13 +112,16 @@ def test_conditions_report_is_ready_once_all_four_are_set(session: Session) -> N
     report = optimize_run.conditions_report(session.document)
     assert report["ready"] is True
     assert report["problems"] == []
-    assert report["load"]["magnitude"] == 500.0
-    assert report["load"]["vector"] == [0.0, 0.0, -1.0]
+    assert report["load_total_n"] == 500.0
+    assert report["loads"][0]["vector"] == [0.0, 0.0, -1.0]
 
 
-def test_two_fixture_faces_are_refused_with_the_reason(session: Session) -> None:
-    """**v1は1枚だけ。** `Conditions.fixed_face` が面添字を1つしか持たないからである。"""
-    left, right, fixed, _load = _setup_four_conditions(session)
+def test_two_fixture_faces_are_accepted(session: Session) -> None:
+    """拘束面は**何枚でもよい**(拘束する自由度の和集合を取るだけで、力学的な曖昧さが無い)。
+
+    落ちるなら `Conditions.fixed_faces` から下のどこかが1枚しか受けていない。
+    """
+    left, right, fixed, load = _setup_four_conditions(session)
     other = _face_with_normal(left, 1.0, 0.0, 0.0)
     _select(
         session,
@@ -131,10 +134,10 @@ def test_two_fixture_faces_are_refused_with_the_reason(session: Session) -> None
     session.clear_selection()
 
     report = optimize_run.conditions_report(session.document)
-    assert report["ready"] is False
-    assert any("拘束面が 2 枚ある" in problem for problem in report["problems"])
-    with pytest.raises(optimize_run.OptimizeInputError, match="拘束面が 2 枚ある"):
-        optimize_run.build_conditions(session.document)
+    assert report["ready"] is True, report["problems"]
+    bundle = optimize_run.build_conditions(session.document)
+    assert len(bundle.fixed_faces) == 2
+    assert bundle.conditions.fixed_faces == bundle.fixed_faces
 
 
 def test_stale_condition_face_blocks_the_run(session: Session) -> None:
@@ -194,10 +197,72 @@ def test_face_indices_shift_by_the_face_count_of_earlier_bodies(session: Session
     assert bundle.anchor_body_ids == [left.id, right.id]
     assert bundle.face_offsets[left.id] == 0
     assert bundle.face_offsets[right.id] == kernel.face_count(left.shape)
-    assert bundle.fixed_face == fixed
-    assert bundle.load_face == kernel.face_count(left.shape) + load
+    assert bundle.fixed_faces == (fixed,)
+    assert bundle.load_faces == (kernel.face_count(left.shape) + load,)
     assert bundle.conditions.load_n == 500.0
-    assert bundle.force == pytest.approx((0.0, 0.0, -1.0))
+    # **面ごとの力ベクトルは実単位[N]**(向き × 大きさ)。単位ベクトルではない。
+    assert bundle.forces[0] == pytest.approx((0.0, 0.0, -500.0))
+
+
+def test_two_loads_with_different_directions_become_two_force_vectors(
+    session: Session,
+) -> None:
+    """面ごとに違う向き・大きさが、**面ごとの力ベクトル[N]**として翻訳される。
+
+    落ちるなら、どこかが1本の向きを全ての荷重面へ使い回している。
+    """
+    left, right, _fixed, load = _setup_four_conditions(session)
+    other = _face_with_normal(right, 1.0, 0.0, 0.0)
+    _select(session, [{"body": right.id, "kind": "face", "index": other}])
+    session.set_loads(20.0, "normal")
+    session.clear_selection()
+
+    bundle = optimize_run.build_conditions(session.document)
+    assert len(bundle.load_faces) == 2 and len(bundle.forces) == 2
+    assert bundle.forces[0] == pytest.approx((0.0, 0.0, -500.0))
+    assert bundle.forces[1] == pytest.approx((20.0, 0.0, 0.0))
+    # **総和であって合力ではない**(合力なら sqrt(500^2 + 20^2) = 500.4)
+    assert bundle.conditions.load_n == pytest.approx(520.0)
+
+
+def test_opposing_loads_still_have_a_usable_scale(session: Session) -> None:
+    """**打ち消し合う荷重で `load_n` が0にならない。**
+
+    合力(ベクトル和)で測っていると、ここが 0 になって応力の実単位換算が壊れる
+    (`stress.UnitScale.for_model` が割り算の分母に使う)。大きさの総和なら0にならない。
+    """
+    left, right, _fixed, load = _setup_four_conditions(session, magnitude=50.0)
+    other = _face_with_normal(right, 1.0, 0.0, 0.0)
+    _select(session, [{"body": right.id, "kind": "face", "index": other}])
+    session.set_loads(50.0, [0.0, 0.0, 1.0])
+    session.clear_selection()
+
+    bundle = optimize_run.build_conditions(session.document)
+    resultant = sum(vector[2] for vector in bundle.forces)
+    assert resultant == pytest.approx(0.0), "この配置は合力が0でなければ意味が無い"
+    assert bundle.conditions.load_n == pytest.approx(100.0)
+
+
+def test_the_load_scale_agrees_between_the_two_layers() -> None:
+    """`build_conditions` の `load_n` と `stress` 側の測り方が**同じ量**である。
+
+    片方が合力、もう片方が総和になっていると、荷重が1本のあいだは一致するので誰も
+    気づかないまま、向きが混ざった日に応力が定数倍ずれる。
+    """
+    import numpy as np
+    from types import SimpleNamespace
+
+    from duocad.topopt import stress
+
+    # 平行な2節点(荷重1本ぶん): 総和と合力は一致する
+    parallel = SimpleNamespace(f=np.array([0.0, 0.0, -0.4, 0.0, 0.0, -0.6]))
+    assert stress.load_magnitude_total(parallel) == pytest.approx(1.0)
+    assert stress.load_resultant(parallel) == pytest.approx(1.0)
+
+    # 打ち消し合う2節点: 合力は0だが総和は1
+    opposing = SimpleNamespace(f=np.array([0.0, 0.0, 0.5, 0.0, 0.0, -0.5]))
+    assert stress.load_resultant(opposing) == pytest.approx(0.0)
+    assert stress.load_magnitude_total(opposing) == pytest.approx(1.0)
 
 
 def test_a_wrong_offset_is_caught_instead_of_silently_loading_another_face(

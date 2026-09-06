@@ -433,8 +433,8 @@ def check_wiring() -> None:
         mask=None,
         grid=None,
         conditions=types.SimpleNamespace(keep=None),
-        fixed_face=0,
-        load_face=1,
+        fixed_faces=0,
+        load_faces=1,
     )
     try:
         ds.run_topopt(dummy, rmin=1.5, rmin_mm=3.0, stl_path=STL_TMP)

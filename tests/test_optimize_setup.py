@@ -296,8 +296,10 @@ def test_a_load_direction_can_be_a_world_vector(session: Session) -> None:
 
     assert applied["direction"] == "vector"
     assert applied["direction_vector"] == [0.0, 0.0, -1.0], "向きを単位化していない"
-    load = _optimize(session)["load"]
-    assert load == {"magnitude": 250.0, "direction": "vector", "vector": [0.0, 0.0, -1.0]}
+    specs = _optimize(session)["load_specs"]
+    assert [
+        (item["magnitude"], item["direction"], item["vector"]) for item in specs
+    ] == [(250.0, "vector", [0.0, 0.0, -1.0])]
 
 
 def test_a_load_direction_can_follow_the_face_normal(session: Session) -> None:
@@ -305,11 +307,10 @@ def test_a_load_direction_can_follow_the_face_normal(session: Session) -> None:
     body = _box(session)
     _select(session, _face_refs(body, [1]))
     session.set_loads(10.0, "-normal")
-    assert _optimize(session)["load"] == {
-        "magnitude": 10.0,
-        "direction": "-normal",
-        "vector": None,
-    }
+    specs = _optimize(session)["load_specs"]
+    assert [(item["magnitude"], item["direction"], item["vector"]) for item in specs] == [
+        (10.0, "-normal", None)
+    ]
 
 
 @pytest.mark.parametrize(
@@ -520,14 +521,14 @@ def test_the_setup_survives_a_real_save_and_open(tmp_path) -> None:
     _select(made, _face_refs(body, [3]))
     made.set_loads(120.0, [1.0, 0.0, 0.0])
     before = _optimize(made)
-    assert len(before["fixtures"]) == 2 and before["load"]["magnitude"] == 120.0
+    assert len(before["fixtures"]) == 2 and before["load_specs"][0]["magnitude"] == 120.0
 
     made.save_document("optimized.json")
     made.new_document()
     # **差し替えでキャッシュごと落ちていること**(ここが緑でないと、次の open が
     # 前の文書の割り当てを配っていても気づけない)
     empty = _optimize(made)
-    assert empty["preserve_bodies"] == [] and empty["fixtures"] == [] and empty["load"] is None
+    assert empty["preserve_bodies"] == [] and empty["fixtures"] == [] and empty["load_specs"] == []
 
     made.open_document("optimized.json")
     after = _optimize(made)
@@ -535,10 +536,11 @@ def test_the_setup_survives_a_real_save_and_open(tmp_path) -> None:
 
 
 def test_clearing_every_role_survives_a_real_save_and_open(tmp_path) -> None:
-    """**空の代入も操作ログの1手**なので、保存・再オープンで「空のまま」戻る。
+    """**外す操作も操作ログの1手**なので、保存・再オープンで「空のまま」戻る。
 
-    ここが落ちるなら、外した役割が開き直すたびに復活していることになる
-    (解除専用のverbが無い以上、「空を代入した」がログに残らなければ外せない)。
+    ここが落ちるなら、外した役割が開き直すたびに復活していることになる。
+    ボディ・拘束は集合代入なので「空を代入した」が外し方、荷重だけは上書き代入なので
+    `clear_loads` が外し方である(`duocad/verbs/optimize_setup.py`)。
     """
     made = Session(None, DEVIATION, models_dir=tmp_path / "models")
     body = _box(made)
@@ -549,13 +551,13 @@ def test_clearing_every_role_survives_a_real_save_and_open(tmp_path) -> None:
     _select(made, _face_refs(body, [2]))
     made.set_loads(30.0, "normal")
 
-    # 4つとも空にする(**解除専用のverbは無い** —— 空の選択で確定するのが外し方)
+    # 4つとも空にする(ボディ・拘束は空の選択で確定、荷重は `clear_loads`)
     made.clear_selection()
     made.set_preserve_bodies()
     made.set_exclude_bodies()
     made.set_fixtures()
-    made.set_loads(30.0, "normal")
-    assert _optimize(made)["fixtures"] == []
+    made.clear_loads()
+    assert _optimize(made)["fixtures"] == [] and _optimize(made)["load_specs"] == []
 
     made.save_document("cleared.json")
     made.new_document()
@@ -638,7 +640,7 @@ def test_a_new_verb_after_undo_drops_the_redo_tail(session: Session) -> None:
 
 
 def test_undoing_a_load_restores_the_previous_how(session: Session) -> None:
-    """荷重は集合だけでなく**大きさ・向きも**直前へ戻る。"""
+    """荷重は集合だけでなく**面ごとの大きさ・向きも**直前へ戻る。"""
     body = _box(session)
     _select(session, _face_refs(body, [1]))
     session.set_loads(100.0, [0.0, 0.0, -1.0])
@@ -646,15 +648,14 @@ def test_undoing_a_load_restores_the_previous_how(session: Session) -> None:
     session.set_loads(300.0, "normal")
     session.undo()
 
-    assert _optimize(session)["load"] == {
-        "magnitude": 100.0,
-        "direction": "vector",
-        "vector": [0.0, 0.0, -1.0],
-    }
+    specs = _optimize(session)["load_specs"]
+    assert [(item["index"], item["magnitude"], item["direction"]) for item in specs] == [
+        (1, 100.0, "vector")
+    ]
 
 
 def test_the_load_how_survives_hiding_the_body(session: Session) -> None:
-    """**`load` は文書が持つ how** で、面が一時的に使えなくなっても消えない。
+    """**`load_specs` は文書が持つ how** で、面が一時的に使えなくなっても消えない。
 
     隠しただけで大きさと向きが画面から消えると、表示に戻したときに打ち直しになる。
     「いま荷重がかかる面」は `loads` の側が持つ。
@@ -666,7 +667,7 @@ def test_the_load_how_survives_hiding_the_body(session: Session) -> None:
 
     state = _optimize(session)
     assert state["loads"] == []
-    assert state["load"]["magnitude"] == 400.0
+    assert [item["magnitude"] for item in state["load_specs"]] == [400.0]
 
 
 def test_undoing_the_first_assignment_leaves_no_load(session: Session) -> None:
@@ -675,8 +676,118 @@ def test_undoing_the_first_assignment_leaves_no_load(session: Session) -> None:
     _select(session, _face_refs(body, [1]))
     session.set_loads(100.0, "normal")
     session.undo()
-    assert _optimize(session)["load"] is None
+    assert _optimize(session)["load_specs"] == []
     assert _optimize(session)["loads"] == []
+
+
+def _specs(session: Session) -> list:
+    """`(面添字, 大きさ, 向き)` の並び(荷重の how を面ごとに読む)。"""
+    return [
+        (item["index"], item["magnitude"], item["direction"])
+        for item in _optimize(session)["load_specs"]
+    ]
+
+
+def test_a_second_load_does_not_overwrite_the_first(session: Session) -> None:
+    """**上書き代入**: 選択に入っていない荷重面は触られない。
+
+    ここが落ちると「面Bの荷重を置いたら面Aの荷重が消えた/同じ値になった」になる。
+    集合代入に戻すと必ず落ちる検査である。
+    """
+    body = _box(session)
+    _select(session, _face_refs(body, [1]))
+    session.set_loads(50.0, [0.0, 0.0, -1.0])
+    _select(session, _face_refs(body, [2]))
+    session.set_loads(20.0, "normal")
+
+    assert _specs(session) == [(1, 50.0, "vector"), (2, 20.0, "normal")]
+
+
+def test_reassigning_a_face_replaces_only_that_face(session: Session) -> None:
+    """同じ面をもう一度指すと、**その面だけ**新しい値になる(並びも動かない)。"""
+    body = _box(session)
+    _select(session, _face_refs(body, [1]))
+    session.set_loads(50.0, [0.0, 0.0, -1.0])
+    _select(session, _face_refs(body, [2]))
+    session.set_loads(20.0, "normal")
+    _select(session, _face_refs(body, [1]))
+    session.set_loads(70.0, "normal")
+
+    assert _specs(session) == [(1, 70.0, "normal"), (2, 20.0, "normal")]
+
+
+def test_setting_a_load_with_no_face_selected_is_refused(session: Session) -> None:
+    """**0枚での確定は失敗**(「空で確定 = 全部外れる」と取り違えさせない)。
+
+    上書き代入なので0枚は本来なにも起きない。黙って通すと、外したつもりの人が
+    外れていないまま実行まで進む。
+    """
+    _box(session)
+    session.clear_selection()
+    with pytest.raises(ValueError, match="1枚も選ばれていない"):
+        session.set_loads(50.0, "normal")
+
+
+def test_clear_loads_drops_only_the_selected_faces(session: Session) -> None:
+    """`clear_loads` は選んだ面だけ外す。空の選択なら全部外す。"""
+    body = _box(session)
+    _select(session, _face_refs(body, [1]))
+    session.set_loads(50.0, "normal")
+    _select(session, _face_refs(body, [2]))
+    session.set_loads(20.0, "normal")
+
+    _select(session, _face_refs(body, [1]))
+    session.clear_loads()
+    assert _specs(session) == [(2, 20.0, "normal")]
+
+    session.clear_selection()
+    session.clear_loads()
+    assert _specs(session) == []
+
+
+def test_clearing_a_face_that_has_no_load_is_not_an_error(session: Session) -> None:
+    """外れている面を混ぜても落ちない(**「外す」は結果を言っている**)。
+
+    ここで例外を出すと、複数選択のうち1枚だけ既に外れていたときに全部落ちる。
+    """
+    body = _box(session)
+    _select(session, _face_refs(body, [1]))
+    session.set_loads(50.0, "normal")
+    _select(session, _face_refs(body, [1, 2]))
+    session.clear_loads()
+    assert _specs(session) == []
+
+
+def test_an_old_log_with_one_shared_how_still_replays(session: Session) -> None:
+    """**2026-09-06までの操作ログ**(大きさ・向きが引数の直下に1組)が再生できる。
+
+    過去に受け付けたログを、あとから足した型で落として文書が開けなくする、という壊し方を
+    しない。古い形は「全ての面が同じ大きさ・向きを持つ」新しい形の特別な場合である。
+    """
+    from duocad.oplog import Operation
+    from duocad.verbs import optimize_setup
+
+    body = _box(session)
+    faces = [optimize.face_condition(session.document, ref) for ref in _face_refs(body, [1, 2])]
+    old = Operation(
+        seq=1,
+        verb="set_loads",
+        args={
+            "faces": faces,
+            "magnitude": 42.0,
+            "direction": "-normal",
+            "vector": None,
+            "previous_faces": [],
+            "previous_magnitude": 0.0,
+            "previous_direction": "vector",
+            "previous_vector": None,
+        },
+    )
+    optimize_setup._do_loads(session.document, old)
+
+    assert _specs(session) == [(1, 42.0, "-normal"), (2, 42.0, "-normal")]
+    optimize_setup._undo_loads(session.document, old)
+    assert _specs(session) == []
 
 
 # --------------------------------------------------------------------------------------
@@ -728,9 +839,9 @@ _ROUTES = {
         {"magnitude": 50.0, "direction": [0.0, 1.0, 0.0]},
         lambda state, body: (
             _indices(state["loads"]),
-            state["load"]["magnitude"],
-            state["load"]["direction"],
-            state["load"]["vector"],
+            [item["magnitude"] for item in state["load_specs"]],
+            [item["direction"] for item in state["load_specs"]],
+            [item["vector"] for item in state["load_specs"]],
         ),
     ),
 }
@@ -770,7 +881,12 @@ def test_the_websocket_and_mcp_paths_both_run_the_verb(verb: str) -> None:
     assert over_ws == over_mcp, {"WS": over_ws, "MCP": over_mcp}
     assert over_ws, "対象を1つも割り当てていない(確定選択から取れていない)"
     if verb == "set_loads":
-        assert over_ws == ([1, 2], 50.0, "vector", [0.0, 1.0, 0.0]), over_ws
+        assert over_ws == (
+            [1, 2],
+            [50.0, 50.0],
+            ["vector", "vector"],
+            [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+        ), over_ws
 
 
 def test_the_mcp_schema_takes_only_the_how(session: Session) -> None:

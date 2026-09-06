@@ -292,20 +292,21 @@ class AnchorTable:
             "absorbed_by_faces": sorted(absorbed_by),
         }
 
-    def condition_face_diagnoses(self, fixed_face: int, load_face: int) -> list[dict]:
+    def condition_face_diagnoses(self, fixed_faces: Any, load_faces: Any) -> list[dict]:
         """拘束面・荷重面のうち `empty_faces()` に入っているものだけの診断(側の別つき)。
 
-        `run_pipeline` の入口で使う。**両方とも空でなければ空リスト** —— 通常経路の
+        `run_pipeline` の入口で使う。**1枚も空でなければ空リスト** —— 通常経路の
         戻り値には影響しない(新しい通知の仕組みではなく、既存の `empty_faces()` を
-        機械可読な形に整えるだけの薄い層)。
+        機械可読な形に整えるだけの薄い層)。面は `int` 1つでも並びでも受ける。
         """
         empty = set(self.empty_faces())
         out: list[dict] = []
-        for side, face in (("fixed", fixed_face), ("load", load_face)):
-            if int(face) in empty:
-                d = self.empty_face_diagnosis(face)
-                d["side"] = side
-                out.append(d)
+        for side, faces in (("fixed", fixed_faces), ("load", load_faces)):
+            for face in _face_list(faces):
+                if int(face) in empty:
+                    d = self.empty_face_diagnosis(face)
+                    d["side"] = side
+                    out.append(d)
         return out
 
     def __getitem__(self, face_index: int) -> FaceAnchor:
@@ -822,6 +823,53 @@ def format_condition_face_warning(diagnoses: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 # 端から端まで(ソリッド → 格子 → 面アンカー → SIMP → marching cubes → STL)
 # ---------------------------------------------------------------------------
+def _face_list(value: Any) -> list:
+    """`int` 1つでも面の並びでも受けて、面添字のリストにする。
+
+    **既存の呼び出し(デモ・検査・`perf.py`)が `int` を渡し続けられるようにするため**の入口。
+    ここで均さないと「面が1枚の場合」の分岐が呼び出し側に散らばる。
+    """
+    if isinstance(value, (int, np.integer)):
+        return [int(value)]
+    return [int(item) for item in value]
+
+
+def _assemble_load(
+    table: "AnchorTable",
+    load_faces: Sequence[int],
+    force: Sequence[float],
+    forces: Optional[Sequence[Sequence[float]]],
+) -> tuple:
+    """荷重面 → **無次元の荷重ベクトル**と、その実単位の総量。
+
+    `forces` を渡すと面ごとに違う力ベクトル[N]を足し込み、`force` だけなら全ての荷重面が
+    1本の向きを共有する(面積比で配るのは `load_vector` の役目で、そこは変えていない)。
+
+    **無次元化の分母は「面ごとの大きさの総和」であって合力ではない。** 向きの違う荷重が
+    打ち消し合うと合力(ベクトル和)は0になりうるが、総和は0にならない。`stress` 側は
+    `load_magnitude_total` が解いたベクトルから同じ量を測っており、**2つの定義が食い違うと
+    応力が黙って定数倍ずれる**。荷重が1本のとき(または全部同じ向きのとき)は
+    `load_vector` が全節点へ平行なベクトルを配るので、総和と合力は厳密に一致する ——
+    それが「1荷重の数値は1ビットも動かない」の根拠である。
+    """
+    if forces is None:
+        vector = table.load_vector(load_faces, force)
+        return vector, float(np.linalg.norm(np.asarray(force, dtype=float).reshape(3)))
+
+    vector = np.zeros(table.node_grid.ndof)
+    total = 0.0
+    for face, one in zip(load_faces, forces):
+        magnitude = float(np.linalg.norm(np.asarray(one, dtype=float).reshape(3)))
+        if not magnitude > 0.0:
+            raise ValueError(f"面 {int(face)} の荷重が零ベクトルで、向きが決まらない")
+        table.load_vector([int(face)], one, out=vector)
+        total += magnitude
+    if not total > 0.0:
+        raise ValueError("荷重の総量が0で、無次元化できない")
+    vector /= total
+    return vector, total
+
+
 def run_pipeline(
     shape: Any = None,
     *,
@@ -835,8 +883,9 @@ def run_pipeline(
     radius_ratio: float = DEFAULT_RADIUS_RATIO,
     keep_anchor_material: bool = True,
     keep_layers: int = 1,
-    fixed_face: Optional[int] = None,
-    load_face: Optional[int] = None,
+    fixed_faces: Any = None,
+    load_faces: Any = None,
+    forces: Optional[Sequence[Sequence[float]]] = None,
     design_mask: Any = None,
     design_grid: Optional[vx.Grid] = None,
     keep: Any = None,
@@ -850,8 +899,15 @@ def run_pipeline(
     """ソリッドを端から端まで1回通す。戻り値は各段の実測と成果物。
 
     `shape` を省略すると `demo_bracket()` を使い、面も `demo_faces()` が決める。
-    **自分の形を渡すときは `fixed_face` / `load_face` も渡すこと** ——
+    **自分の形を渡すときは `fixed_faces` / `load_faces` も渡すこと** ——
     面添字は形ごとに違うので、デモの選び方を他の形へ当てると別の面を掴む。
+    どちらも `int` 1つでも面の並びでも受ける。
+
+    荷重の向きは `force`(荷重面すべてで共有する1本)か `forces`(`load_faces` と**同じ並び**の
+    面ごとの力ベクトル[N])のどちらか一方。`forces` を渡すと荷重ベクトルは面ごとに
+    足し込まれ、**その総量(大きさの総和)で割って無次元化してから** `simp` へ渡る ——
+    `simp` が荷重の総量1.0で回り続ける契約は変えない。実単位[N]は
+    `stress.UnitScale`(`load_n`)だけが持つ。
 
     `keep_anchor_material=True`(既定)のとき、固定面・荷重面のアンカー節点に接する要素を
     保持領域(ρ=1)に固定する。**これを切ると最適化は荷重直下の材料を溶かす。**
@@ -887,7 +943,7 @@ def run_pipeline(
     `"result"` キー)に実際に解いた `Model` が入るので、`stress.py` の後処理が拘束・荷重を
     手で組み直さずに済む。既定 `False` では入らない(数値は1ビットも変わらない)。
 
-    `fixed_face` / `load_face` が要素サイズより小さくて格子節点が1つも付かないと
+    `fixed_faces` / `load_faces` が要素サイズより小さくて格子節点が1つも付かないと
     (`AnchorTable.empty_faces()`)、**例外にはせず**戻り値の `"empty_condition_faces"`
     (`AnchorTable.condition_face_diagnoses` の結果。空でなければ1件以上)に診断を積んで
     早期returnする(当面の措置。本当の解決は保留 — docs/TOPOPT.md「面が小さすぎて空になる」参照)。
@@ -900,11 +956,11 @@ def run_pipeline(
 
     simp.check_volume_target(volfrac, material_mm3)
     simp.check_rmin_target(rmin, rmin_mm)
-    if (fixed_face is None) != (load_face is None):
-        raise ValueError("fixed_face と load_face は両方渡すか、両方省略すること")
-    if shape is not None and fixed_face is None:
+    if (fixed_faces is None) != (load_faces is None):
+        raise ValueError("fixed_faces と load_faces は両方渡すか、両方省略すること")
+    if shape is not None and fixed_faces is None:
         raise ValueError(
-            "自分の形を渡すときは fixed_face / load_face も渡すこと"
+            "自分の形を渡すときは fixed_faces / load_faces も渡すこと"
             "(面添字は形ごとに違うので、デモの選び方は使えない)"
         )
     if (design_mask is None) != (design_grid is None):
@@ -929,18 +985,25 @@ def run_pipeline(
 
     t0 = time.perf_counter()
     soup = model.soup
-    if fixed_face is None:
-        fixed_face, load_face = demo_faces(soup)
+    if fixed_faces is None:
+        fixed_faces, load_faces = demo_faces(soup)
+    fixed_faces = _face_list(fixed_faces)
+    load_faces = _face_list(load_faces)
+    if forces is not None and len(forces) != len(load_faces):
+        raise ValueError(
+            f"forces は荷重面と同じ数だけ渡すこと(荷重面 {len(load_faces)} 枚 / "
+            f"force {len(forces)} 本)。並びも同じ順であること"
+        )
     table = build_anchors(soup, model.grid, radius_ratio=radius_ratio)
     timings["anchor"] = time.perf_counter() - t0
 
-    # **実行経路の入口。** `fixed_face` / `load_face` が要素サイズより小さくて節点が1つも
+    # **実行経路の入口。** 拘束面・荷重面が要素サイズより小さくて節点が1つも
     # 付かないと(`table.empty_faces()`)、この先 `table.fixed_dofs` / `table.load_vector` の
     # `_require_nodes` が例外を投げる(その例外自体は消さない・弱めない — 空の面を名指しして
     # 拘束・荷重を掛けたら黙って0にせず落ちる、という既存の安全策)。**そこへ落ちる前に、
     # ここで一度立ち止まってメッセージを返す。** 本人指示で「落とさない・メッセージを出すだけ」
     # なので、`simp.optimize` は呼ばずに戻り値へ診断を積んで早期returnする。
-    empty_condition_faces = table.condition_face_diagnoses(fixed_face, load_face)
+    empty_condition_faces = table.condition_face_diagnoses(fixed_faces, load_faces)
     if empty_condition_faces:
         warning = format_condition_face_warning(empty_condition_faces)
         print(f"[anchor.run_pipeline] 警告: {warning}", file=sys.stderr)
@@ -952,19 +1015,19 @@ def run_pipeline(
             "void": None,
             "surface": None,
             "stl": None,
-            "fixed_face": fixed_face,
-            "load_face": load_face,
+            "fixed_faces": fixed_faces,
+            "load_faces": load_faces,
             "timings": timings,
             "empty_condition_faces": empty_condition_faces,
             "warning": warning,
         }
 
     nx, ny, nz = model.grid.shape
-    fixed_dofs = table.fixed_dofs(fixed_face)
-    load = table.load_vector(load_face, force)
+    fixed_dofs = table.fixed_dofs(fixed_faces)
+    load, load_total = _assemble_load(table, load_faces, force, forces)
     solid = model.keep.copy()
     if keep_anchor_material:
-        near = table.element_mask([fixed_face, load_face], layers=keep_layers)
+        near = table.element_mask(list(fixed_faces) + list(load_faces), layers=keep_layers)
         solid |= near & model.design
     void = ~model.design | model.obstacle
 
@@ -1018,8 +1081,9 @@ def run_pipeline(
         "void": void,
         "surface": surface,
         "stl": str(out),
-        "fixed_face": fixed_face,
-        "load_face": load_face,
+        "fixed_faces": fixed_faces,
+        "load_faces": load_faces,
+        "load_total": load_total,
         "timings": timings,
         "empty_condition_faces": [],
         "design_elements": design_elements,
@@ -1070,7 +1134,7 @@ def _cli() -> int:
 
     out = run_pipeline(elements_long_axis=args.n, max_iter=args.max_iter)
     t = out["timings"]
-    print(f"面      : 固定={out['fixed_face']} 荷重={out['load_face']}")
+    print(f"面      : 固定={out['fixed_faces']} 荷重={out['load_faces']}")
     print(f"格子    : {out['model'].grid.shape} 設計要素={out['design_elements']}")
     print(f"体積    : {out['achieved_volume']:.3f} 要素 (目標 {out['target_volume']:.3f}) / "
           f"設計空間内の平均密度 {out['achieved_volfrac']:.4f}")

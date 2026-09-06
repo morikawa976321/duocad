@@ -233,8 +233,8 @@ def assert_load_path(
 def assert_faces_connected(
     design: np.ndarray,
     table: an.AnchorTable,
-    fixed_face: int,
-    load_face: int,
+    fixed_faces: Sequence[int] | int,
+    load_faces: Sequence[int] | int,
     *,
     layers: int = 1,
 ) -> dict:
@@ -245,34 +245,66 @@ def assert_faces_connected(
     「要素サイズより小さい面にアンカーが付かない」という別の穴(engine
     `face-to-node-anchoring-loses-faces-smaller-than-the-cell`)で、ここで落とすと
     `empty_faces()` を見る既存の口より手前で別の例外に化けて原因が分かりにくくなる。
+
+    **拘束面・荷重面をそれぞれ和集合として見る**(拘束のどれか1枚と荷重のどれか1枚が
+    塊の中でつながっていれば通る)。**全部つながっていることは要求しない** ——
+    要求すると、意図して片持ちの一部だけを別成分に置いた配置が落ちる。ただし
+    「つながっていない拘束面は効かない」ので、これは検出漏れの側に倒した判断である。
     """
-    empty = [int(f) for f in (fixed_face, load_face) if int(f) in table.empty_faces()]
+    faces = [int(f) for f in _as_faces(fixed_faces)] + [
+        int(f) for f in _as_faces(load_faces)
+    ]
+    empty = [f for f in faces if f in table.empty_faces()]
     if empty:
         return {"skipped": "empty_anchor_faces", "empty_faces": empty}
-    fixed = table.element_mask([int(fixed_face)], layers=layers)
-    load = table.element_mask([int(load_face)], layers=layers)
+    fixed = table.element_mask([int(f) for f in _as_faces(fixed_faces)], layers=layers)
+    load = table.element_mask([int(f) for f in _as_faces(load_faces)], layers=layers)
     return assert_load_path(design, fixed, load)
+
+
+def _as_faces(value: Sequence[int] | int) -> tuple:
+    """`int` 1つでも並びでも受けて、面添字のタプルにする。
+
+    **既存の呼び出し(デモ・検査)が `int` を渡し続けられるようにするため**の入口で、
+    ここで均しておかないと「面が1枚の場合」の分岐が呼び出し側に散らばる。
+    """
+    if isinstance(value, (int, np.integer)):
+        return (int(value),)
+    return tuple(int(item) for item in value)
 
 
 @dataclass(frozen=True)
 class Conditions:
     """利用者が入れる4条件。**設計空間ソリッドは無い。**
 
-    `fixed_face` / `load_face` は `anchor_shape`(省略時は `keep`)の三角形群での面添字。
-    面添字は渡した形の面の並びで決まるので、面を選ぶのに使った形をそのまま渡すこと。
+    `fixed_faces` / `load_faces` は `anchor_shape`(省略時は `keep`)の三角形群での面添字で、
+    **どちらも何枚でもよい**(`int` 1つも受ける)。面添字は渡した形の面の並びで決まるので、
+    面を選ぶのに使った形をそのまま渡すこと。
 
-    `load_n` は荷重の**実際の大きさ**[N]。最適化そのもの(`simp.optimize` / `run_topopt` の
-    `force`)は向きだけを持つ無次元(合力の大きさは1.0)で回り続ける ——
-    `load_n` はここでは使われず、`stress.UnitScale.for_model(..., load_n=conditions.load_n)`
-    が応力を実単位[MPa]へ換算するときにだけ参照する(`safety_loop.py`)。
+    `load_n` は荷重の**実際の大きさ**[N]。荷重が複数のときは**その大きさの総和**であって
+    合力(ベクトル和)ではない —— 向きの違う荷重が打ち消し合うと合力は0になりうるが、
+    総和なら0にならない(`optimize_run.build_conditions` / `stress.load_magnitude_total`)。
+    最適化そのもの(`simp.optimize` / `run_topopt` の `force` / `forces`)は無次元
+    (荷重の総量が1.0)で回り続ける —— `load_n` はここでは使われず、
+    `stress.UnitScale.for_model(..., load_n=conditions.load_n)` が応力を実単位[MPa]へ
+    換算するときにだけ参照する(`safety_loop.py`)。
     """
 
     keep: Any
-    fixed_face: int
-    load_face: int
+    fixed_faces: Any
+    load_faces: Any
     obstacle: Any = None
     anchor_shape: Any = None
     load_n: float = 1.0
+
+    def __post_init__(self) -> None:
+        # `int` 1つも面の並びも受けてタプルへ均す(`frozen=True` なので `object.__setattr__`)。
+        object.__setattr__(self, "fixed_faces", _as_faces(self.fixed_faces))
+        object.__setattr__(self, "load_faces", _as_faces(self.load_faces))
+        if not self.fixed_faces:
+            raise ValueError("拘束面が1枚も無い")
+        if not self.load_faces:
+            raise ValueError("荷重面が1枚も無い")
 
     @property
     def anchor(self) -> Any:
@@ -308,12 +340,12 @@ class DesignSpace:
         return int(np.count_nonzero(self.mask))
 
     @property
-    def fixed_face(self) -> int:
-        return int(self.conditions.fixed_face)
+    def fixed_faces(self) -> tuple:
+        return self.conditions.fixed_faces
 
     @property
-    def load_face(self) -> int:
-        return int(self.conditions.load_face)
+    def load_faces(self) -> tuple:
+        return self.conditions.load_faces
 
 
 # ---------------------------------------------------------------------------
@@ -420,7 +452,9 @@ def derive(
         )
     )
 
-    points = condition_points(keep_soup, soup, (conditions.fixed_face, conditions.load_face))
+    points = condition_points(
+        keep_soup, soup, tuple(conditions.fixed_faces) + tuple(conditions.load_faces)
+    )
     cloud_lo = points.min(axis=0)
     cloud_hi = points.max(axis=0)
     longest = float(np.max(cloud_hi - cloud_lo))
@@ -526,7 +560,7 @@ def derive(
     # 節点集合**になる —— 同じものを見ているつもりで違うものを見ることになる。
     table = an.build_anchors(soup, grid)
     connectivity = assert_faces_connected(
-        design, table, conditions.fixed_face, conditions.load_face
+        design, table, conditions.fixed_faces, conditions.load_faces
     )
 
     stats = {
@@ -721,9 +755,10 @@ def derive_from_coarse_run(
     # **4条件の要素は無条件で入れる。** 粗い段で削れた・膨張が届かなかった、のどちらでも
     # 条件の要素が塊から落ちてはならない(落ちると拘束も荷重も伝わらない)。
     conditions_mask = np.asarray(fine.model.keep, dtype=bool).copy()
-    empty = [f for f in (fine.fixed_face, fine.load_face) if f in table.empty_faces()]
+    condition_faces = tuple(fine.fixed_faces) + tuple(fine.load_faces)
+    empty = [f for f in condition_faces if f in table.empty_faces()]
     if not empty:
-        conditions_mask |= table.element_mask([fine.fixed_face, fine.load_face], layers=1)
+        conditions_mask |= table.element_mask(list(condition_faces), layers=1)
     # 除外は `fine.mask`(= 箱 − 除外)を掛けることで引く。条件の要素であっても除外の中には
     # 置かない —— 除外を跨ぐ塊を許すと、案1で `DesignSpaceTooSmallError` になる配置が
     # 案5だけ黙って通ることになる。
@@ -753,7 +788,7 @@ def derive_from_coarse_run(
             getattr(exc, "outside", {}),
         ) from exc
 
-    connectivity = assert_faces_connected(mask, table, fine.fixed_face, fine.load_face)
+    connectivity = assert_faces_connected(mask, table, fine.fixed_faces, fine.load_faces)
 
     stats = dict(fine.stats)
     stats.update(
@@ -862,6 +897,7 @@ def run_topopt(
     rmin_mm: Optional[float] = None,
     max_iter: int = 60,
     force: Sequence[float] = (0.0, 0.0, -1.0),
+    forces: Optional[Sequence[Sequence[float]]] = None,
     stl_path: Optional[str | Path] = None,
     progress: Any = None,
     solver: Optional[str] = None,
@@ -885,6 +921,10 @@ def run_topopt(
     `keep_model=True` は `anchor.run_pipeline` へそのまま渡る(既定 `False`。数値は
     1ビットも変わらない)。
 
+    荷重の向きは `force`(全ての荷重面で共有する1本)か `forces`(荷重面と**同じ並び**の
+    面ごとの力ベクトル[N])のどちらか一方。どちらも `anchor.run_pipeline` の同名の引数へ
+    そのまま渡る(意味の正はそちら)。
+
     拘束面・荷重面が要素サイズより小さくて格子節点が1つも付かないと
     (`anchor.AnchorTable.empty_faces()`)、**例外にはせず**戻り値の
     `"empty_condition_faces"` に診断が積まれて早期returnする(`anchor.run_pipeline` の契約
@@ -900,14 +940,15 @@ def run_topopt(
         keep=space.conditions.keep,
         # 除外は塊から引き切ってある(モジュール docstring の設計判断)。
         obstacle=None,
-        fixed_face=space.fixed_face,
-        load_face=space.load_face,
+        fixed_faces=space.fixed_faces,
+        load_faces=space.load_faces,
         volfrac=volfrac,
         material_mm3=material_mm3,
         rmin=rmin,
         rmin_mm=rmin_mm,
         max_iter=max_iter,
         force=force,
+        forces=forces,
         stl_path=out,
         progress=progress,
         solver=solver,
@@ -959,7 +1000,7 @@ def demo_conditions(angle_deg: float = 0.0) -> Conditions:
     soup = vx.triangles_from_shape(vx._unwrap(keep), deviation=0.2)
     fixed = _rotated_face(soup, angle_deg, normal=(-1, 0, 0), point=(-33, 0, 0))
     load = _rotated_face(soup, angle_deg, normal=(0, 0, 1), point=(26, 0, 18))
-    return Conditions(keep=keep, fixed_face=fixed, load_face=load, obstacle=obstacle)
+    return Conditions(keep=keep, fixed_faces=fixed, load_faces=load, obstacle=obstacle)
 
 
 def severed_conditions(angle_deg: float = 0.0, *, thickness: float = 10.0) -> Conditions:
@@ -979,8 +1020,8 @@ def severed_conditions(angle_deg: float = 0.0, *, thickness: float = 10.0) -> Co
     wall = Rot(0, 0, float(angle_deg)) * (Pos(0, 0, 0) * Box(float(thickness), 200, 200))
     return Conditions(
         keep=base.keep,
-        fixed_face=base.fixed_face,
-        load_face=base.load_face,
+        fixed_faces=base.fixed_faces,
+        load_faces=base.load_faces,
         obstacle=wall,
         anchor_shape=base.anchor_shape,
     )
@@ -1010,7 +1051,7 @@ def plate_conditions(angle_deg: float = 0.0) -> Conditions:
     soup = vx.triangles_from_shape(vx._unwrap(keep), deviation=0.2)
     fixed = _rotated_face(soup, angle_deg, normal=(-1, 0, 0), point=(-90, 0, 0))
     load = _rotated_face(soup, angle_deg, normal=(0, 0, 1), point=(85, 0, 6))
-    return Conditions(keep=keep, fixed_face=fixed, load_face=load, obstacle=None)
+    return Conditions(keep=keep, fixed_faces=fixed, load_faces=load, obstacle=None)
 
 
 def branching_conditions(angle_deg: float = 0.0) -> Conditions:
@@ -1037,7 +1078,7 @@ def branching_conditions(angle_deg: float = 0.0) -> Conditions:
     # **U 字面は重心で名指しできない**(切り欠きの形で重心が動く)ので、法線方向の位置で選ぶ。
     fixed = _face_on_plane(soup, angle_deg, normal=(-1, 0, 0), offset=44.0)
     load = _rotated_face(soup, angle_deg, normal=(0, 0, 1), point=(34, 12, 9))
-    return Conditions(keep=keep, fixed_face=fixed, load_face=load, obstacle=None)
+    return Conditions(keep=keep, fixed_faces=fixed, load_faces=load, obstacle=None)
 
 
 def tilted_conditions(angle_deg: float = 30.0, *, radius: float = 26.0) -> Conditions:
@@ -1065,7 +1106,7 @@ def tilted_conditions(angle_deg: float = 30.0, *, radius: float = 26.0) -> Condi
     soup = vx.triangles_from_shape(vx._unwrap(keep), deviation=0.2)
     fixed = _rotated_face(soup, angle_deg, normal=(-1, 0, 0), point=(-37, 0, 0))
     load = _rotated_face(soup, angle_deg, normal=(0, 0, 1), point=(30, 0, 19))
-    return Conditions(keep=keep, fixed_face=fixed, load_face=load, obstacle=obstacle)
+    return Conditions(keep=keep, fixed_faces=fixed, load_faces=load, obstacle=obstacle)
 
 
 @dataclass(frozen=True)

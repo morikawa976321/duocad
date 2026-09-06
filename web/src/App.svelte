@@ -2171,8 +2171,23 @@
       preserveBodies: optimize.preserve_bodies.map((item) => item.body),
       excludeBodies: optimize.exclude_bodies.map((item) => item.body),
       fixtures: optimize.fixtures.map((item) => ({ bodyId: item.body, faceIndex: item.index })),
-      loads: optimize.loads.map((item) => ({ bodyId: item.body, faceIndex: item.index })),
-      load: optimize.load,
+      // **面ごとの how を突き合わせて渡す。** `loads`(いま指せる面)と `load_specs`
+      // (文書が持つ how)は長さが違いうるので `(body, index)` で引く —— 荷重面のボディを
+      // 隠すと前者からだけ消える。突き合わない面は描かない(描く向きも大きさも無いため)。
+      loads: optimize.loads.flatMap((item) => {
+        const spec = optimize.load_specs.find(
+          (one) => one.body === item.body && one.index === item.index,
+        )
+        return spec === undefined
+          ? []
+          : [{
+              bodyId: item.body,
+              faceIndex: item.index,
+              magnitude: spec.magnitude,
+              direction: spec.direction,
+              vector: spec.vector,
+            }]
+      }),
     })
   })
 

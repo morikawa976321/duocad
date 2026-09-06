@@ -90,10 +90,10 @@ def _model_for_spmv(space: ds.DesignSpace, force) -> tuple[simp.Model, np.ndarra
     if table is None:
         raise ValueError("space.table が無い(導出を通っていない DesignSpace)")
     nx, ny, nz = space.grid.shape
-    fixed_dofs = table.fixed_dofs(space.fixed_face)
-    load = table.load_vector(space.load_face, force)
+    fixed_dofs = table.fixed_dofs(space.fixed_faces)
+    load = table.load_vector(space.load_faces, force)
     model = simp.Model(nx, ny, nz, fixed_dofs=fixed_dofs, load=load)
-    near = table.element_mask([space.fixed_face, space.load_face], layers=1)
+    near = table.element_mask(list(space.fixed_faces) + list(space.load_faces), layers=1)
     solid = space.model.keep | (near & space.mask)
     void = ~space.mask
     rho = np.full((nx, ny, nz), VOLFRAC)
@@ -170,7 +170,8 @@ def measure_case(
 
     table = space.table
     empty = sorted(int(f) for f in table.empty_faces()) if table is not None else []
-    condition_empty = [f for f in empty if f in (space.fixed_face, space.load_face)]
+    condition_faces = tuple(space.fixed_faces) + tuple(space.load_faces)
+    condition_empty = [f for f in empty if f in condition_faces]
     if condition_empty:
         # **空の面のまま回すと、条件が消えた別の問題を測ることになる**(しかも最適化は
         # もっともらしく収束する)。基準線としては無価値なので、ここで落とす。
@@ -178,8 +179,8 @@ def measure_case(
             f"{name} n={resolution}: 条件面のアンカーが空 {condition_empty}"
             "(要素サイズより小さい面には節点が付かない)"
         )
-    fixed_dofs = int(table.fixed_dofs(space.fixed_face).size)
-    load_nodes = int(table[space.load_face].node_count)
+    fixed_dofs = int(table.fixed_dofs(space.fixed_faces).size)
+    load_nodes = sum(int(table[f].node_count) for f in space.load_faces)
 
     stl = _HERE / "output" / f"perf_{name}_n{int(resolution)}.stl"
     t0 = time.perf_counter()

@@ -316,11 +316,12 @@ async function main() {
     // `state` はSvelte 5 runesのリアクティブProxyで、Proxyのまま`page.evaluate`の戻り値に
     // 使うと、CDP越しの構造化複製がプロパティを1つも運ばず`{}`になる(実測)。文字列化して
     // からNode側で読めば中身が正しく渡る。
-    const loadState = await page.evaluate(() =>
-      JSON.parse(JSON.stringify(window.__duocad.state.optimize.load)),
+    const loadSpecs = await page.evaluate(() =>
+      JSON.parse(JSON.stringify(window.__duocad.state.optimize.load_specs)),
     )
+    const loadState = (loadSpecs ?? []).find((item) => item.body === bodyA && item.index === faceA_load)
     if (!loadState || loadState.magnitude !== 250 || loadState.direction !== 'normal') {
-      fail(`load(大きさ・向き)が期待どおりでない: ${JSON.stringify(loadState)}`)
+      fail(`load_specs(面ごとの大きさ・向き)が期待どおりでない: ${JSON.stringify(loadSpecs)}`)
     }
     ok(`[5] 荷重面を確定した(magnitude=250N, direction=normal): ${JSON.stringify(loadState)}`)
 

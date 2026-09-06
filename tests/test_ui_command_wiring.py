@@ -461,7 +461,8 @@ ENTER_REQUIRED = {
     "set_preserve_bodies": True,   # ボディは何個でも(0個もよい=解除)
     "set_exclude_bodies": True,    # 同上
     "set_fixtures": True,          # 面は何個でも(0個もよい=解除)
-    "set_loads": True,             # 面は何個でも + 向き(choice) + 大きさ(number)
+    "set_loads": True,             # 面は1枚以上 + 向き(choice) + 大きさ(number)
+    "clear_loads": True,           # 面は何個でも(0個もよい=全部外す)
 }
 
 

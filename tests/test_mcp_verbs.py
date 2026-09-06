@@ -73,6 +73,7 @@ VERB_TOOLS = {
     "set_exclude_bodies",
     "set_fixtures",
     "set_loads",
+    "clear_loads",
     # ボディ・パラメータ
     "set_parameter",
     # 入出力
@@ -175,10 +176,13 @@ ARGUMENTS: dict = {
     "delete": (set(), set()),
     # 形状最適化の条件。**対象(ボディ・面)は引数に無い** —— 確定選択そのものを代入する。
     # howを持つのは `set_loads` だけで、大きさ[N]と向き(面法線 / 世界ベクトル)。
+    # `clear_loads` は荷重だけの解除専用verb(`set_loads` が上書き代入なので空の選択に
+    # 「外す」の意味が無い)。
     "set_preserve_bodies": (set(), set()),
     "set_exclude_bodies": (set(), set()),
     "set_fixtures": (set(), set()),
     "set_loads": ({"magnitude", "direction"}, {"magnitude", "direction"}),
+    "clear_loads": (set(), set()),
     "chamfer": ({"distance"}, {"distance"}),
     "pattern_rectangular": (
         {"sketch_id", "entities", "dx", "dy", "nx", "ny"},

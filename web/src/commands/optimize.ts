@@ -106,11 +106,19 @@ export const SET_FIXTURES: CommandDef = {
   },
 }
 
-/** **荷重面**を決める。面(空でもよい)+ 向き + 大きさ[N]。 */
+/**
+ * **荷重を置く**。選んだ面(1枚以上)+ 向き + 大きさ[N]。
+ *
+ * **上書き代入**である —— 選んだ面にだけ焼き、選択に入っていない荷重面は触らない。
+ * 大きさと向きが面ごとに違ってよいので、集合代入にすると「面Bを直すつもりで決定した瞬間に
+ * 面Aの値も上書きされる」事故が構造的に避けられない(`duocad/verbs/optimize_setup.py`)。
+ * **`min: 1` はその一部**: 0枚で決定できると「空で確定 = 全部外れる」を期待した人が、
+ * 何も起きないまま次へ進む。外すのは `CLEAR_LOADS`。
+ */
 export const SET_LOADS: CommandDef = {
   id: 'set_loads',
   category: 'feature',
-  label: '荷重面を決める',
+  label: '荷重を置く',
   buttonId: 'set-loads',
   preview: 'none',
   args: [
@@ -119,7 +127,7 @@ export const SET_LOADS: CommandDef = {
       name: 'faces',
       label: '力がかかる面',
       shapeKind: 'face',
-      min: 0,
+      min: 1,
       max: null,
     },
     {
@@ -151,21 +159,58 @@ export const SET_LOADS: CommandDef = {
   },
 }
 
+/** **荷重を外す**。選んだ面を荷重から落とす(空で決定すれば全部外れる)。howは無い。 */
+export const CLEAR_LOADS: CommandDef = {
+  id: 'clear_loads',
+  category: 'feature',
+  label: '荷重を外す',
+  buttonId: 'clear-loads',
+  preview: 'none',
+  args: [
+    {
+      kind: 'selection',
+      name: 'faces',
+      label: '荷重を外す面',
+      shapeKind: 'face',
+      min: 0,
+      max: null,
+    },
+  ],
+  build() {
+    return { ok: true, args: {} }
+  },
+}
+
 /**
  * 最適化モードのツールバー一覧。**状態機械は増やさない**(`App.svelte` のコメントが原則)。
- * ソリッドを触るぶん2つ(粒度=ボディ)+ 面を触るぶん2つ(粒度=面)。
+ * ソリッドを触るぶん2つ(粒度=ボディ)+ 面を触るぶん3つ(粒度=面)。
+ *
+ * **荷重だけ「置く」と「外す」の2つある。** 他の3つは集合代入なので空で確定すれば外れるが、
+ * 荷重は上書き代入(面ごとに大きさ・向きを持つため)で、空の選択に「外す」の意味が無い。
+ * 5つ目ではあるが**新しい状態機械ではない** —— 選ぶ→決定という既存の流れそのままである。
  */
 export const OPTIMIZE_MODE_COMMANDS: CommandDef[] = [
   SET_PRESERVE_BODIES,
   SET_EXCLUDE_BODIES,
   SET_FIXTURES,
   SET_LOADS,
+  CLEAR_LOADS,
 ]
 
-/** verb名 -> `state.optimize` のどの配列を起動時のプリセレクトに使うか(`App.svelte` が読む)。 */
-export const OPTIMIZE_PRESET_ROLE: Record<string, 'preserve_bodies' | 'exclude_bodies' | 'fixtures' | 'loads'> = {
+/**
+ * verb名 -> `state.optimize` のどの配列を起動時のプリセレクトに使うか(`App.svelte` が読む)。
+ *
+ * **`set_loads` はここに載せない(意図的)。** 載せると起動時に既存の荷重面が全部選択状態で
+ * 現れ、面Bの値を直すつもりで決定した人が面Aの値まで上書きしてしまう —— 例外も警告も出ない。
+ * 荷重は上書き代入なので、**選んだ面にしか書かない**ことが唯一の安全策であり、そのためには
+ * 「何も選ばれていない状態から始める」必要がある。いま何に荷重が付いているかは
+ * 3Dビューの矢印とラベル(`optimizeAnnotations.ts`)が常時描いているので、
+ * プリセレクトが情報源である必要はない。
+ *
+ * `clear_loads` も同じ理由で載せない —— 全部選択された状態で決定すると全部外れる。
+ */
+export const OPTIMIZE_PRESET_ROLE: Record<string, 'preserve_bodies' | 'exclude_bodies' | 'fixtures'> = {
   set_preserve_bodies: 'preserve_bodies',
   set_exclude_bodies: 'exclude_bodies',
   set_fixtures: 'fixtures',
-  set_loads: 'loads',
 }

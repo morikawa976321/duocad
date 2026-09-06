@@ -78,9 +78,32 @@ def von_mises(tensor: np.ndarray) -> np.ndarray:
 
 
 def load_resultant(model: simp.Model) -> float:
-    """荷重ベクトルの合力の大きさ(無次元)。換算則の分母になる。"""
+    """荷重ベクトルの**合力**(ベクトル和)の大きさ(無次元)。
+
+    **換算則の分母には使わない**(`load_magnitude_total` を使う)。自己釣り合いの荷重系で
+    0になるので、実荷重[N]との対応が決まらないからである。診断・検査のために残してある。
+    """
     f = model.f.reshape(-1, 3)
     return float(np.linalg.norm(f.sum(axis=0)))
+
+
+def load_magnitude_total(model: simp.Model) -> float:
+    """荷重ベクトルの**総量**(節点力の大きさの総和・無次元)。**換算則の分母はこれ**。
+
+    合力(`load_resultant`)ではなく総和を取るのは、向きの違う荷重が同じ系に載りうるため。
+    打ち消し合う組(面Aへ下向き50N・面Bへ上向き50N)では合力が0になり、それで割ると
+    応力の実単位換算が壊れる —— 総和なら0にならない。
+
+    **荷重が1つ(または全部同じ向き)のときは合力と厳密に一致する。** `anchor.load_vector` は
+    `重み × 力ベクトル` を配るので全節点の力が平行になり、`Σ|f_i| = |Σf_i|` が成り立つ。
+    したがってこの定義への切り替えで既存の1荷重の数値は1ビットも動かない
+    (`check_stress.py` がこの一致を数字で押さえている)。
+
+    上流の `anchor._assemble_load` が**同じ量で割って**無次元化しているので、通常経路の
+    戻り値は 1.0 である。**2つの定義が食い違うと応力が黙って定数倍ずれる。**
+    """
+    f = model.f.reshape(-1, 3)
+    return float(np.linalg.norm(f, axis=1).sum())
 
 
 @dataclass(frozen=True)
@@ -122,14 +145,18 @@ class UnitScale:
         """解いた `Model` から無次元側(総荷重・E)を読んで換算則を作る。
 
         **こちらを既定の作り方にすること。** `solved_load` を手で書くと、荷重ベクトルの
-        合力が 1.0 でない系(`anchor.load_vector` に `force` を渡した場合など)で応力が
-        黙って定数倍ずれる。合力が 0 の系(自己釣り合いの荷重)はここでは扱えないので落とす。
+        総量が 1.0 でない系(`anchor.load_vector` に `force` を渡した場合など)で応力が
+        黙って定数倍ずれる。
+
+        読むのは `load_magnitude_total`(節点力の大きさの総和)であって合力ではない ——
+        **自己釣り合いの荷重系(向きの違う荷重が打ち消し合う)もここを通る**。
+        荷重が1本のときは両者が一致するので、既存の数値は動かない。
         """
-        resultant = load_resultant(model)
+        resultant = load_magnitude_total(model)
         if not resultant > 0.0:
             raise ValueError(
-                "荷重ベクトルの合力が 0 で、実荷重[N]との対応が決まらない"
-                "(自己釣り合いの荷重系。`UnitScale` を直接作って solved_load を明示すること)"
+                "荷重ベクトルが全て0で、実荷重[N]との対応が決まらない"
+                "(荷重が1つも入っていない系。`UnitScale` を直接作って solved_load を明示すること)"
             )
         return cls(
             element_mm=float(element_mm),

@@ -62,9 +62,14 @@ export interface EdgeRef {
   edgeIndex: number
 }
 
-/** 荷重の大きさ[N]と向き。契約は `duocad/optimize.py` の `state_payload`(`session.ts` の
- *  `OptimizeLoad` と同じ形)。`setOptimizeState` はこれをそのまま受け取る。 */
-export interface OptimizeLoadVisual {
+/**
+ * 荷重のかかる面1枚と、**その面の**大きさ[N]・向き。契約は `duocad/optimize.py` の
+ * `state_payload`(`loads` と `load_specs` を `(body, index)` で突き合わせたもの)。
+ *
+ * **大きさ・向きは面ごとに違ってよい** —— 面Aへ50Nの鉛直下向き、面Bへ20Nの法線方向、が
+ * 同じ配列に並ぶ。1本の値を全ての面へ使い回してはならない。
+ */
+export interface OptimizeLoadVisual extends FaceRef {
   magnitude: number
   direction: 'normal' | '-normal' | 'vector'
   vector: [number, number, number] | null
@@ -134,8 +139,7 @@ export interface OptimizeVisualState {
   preserveBodies: string[]
   excludeBodies: string[]
   fixtures: FaceRef[]
-  loads: FaceRef[]
-  load: OptimizeLoadVisual | null
+  loads: OptimizeLoadVisual[]
 }
 
 /** 頂点を一意に指す(添字はコアの数え方の1始まり)。 */

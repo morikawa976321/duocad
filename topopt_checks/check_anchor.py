@@ -728,9 +728,9 @@ def check_end_to_end() -> None:
 
     check(
         "面アンカーで固定面と荷重面を名指しできた",
-        out["fixed_face"] != out["load_face"],
-        f"固定=面{out['fixed_face']} 荷重=面{out['load_face']} "
-        f"(荷重面の節点 {out['table'][out['load_face']].node_count})",
+        set(out["fixed_faces"]).isdisjoint(out["load_faces"]),
+        f"固定=面{out['fixed_faces']} 荷重=面{out['load_faces']} "
+        f"(荷重面の節点 {out['table'][out['load_faces'][0]].node_count})",
     )
     vol_rel = abs(out["achieved_volume"] - out["target_volume"]) / out["target_volume"]
     check(
@@ -761,7 +761,7 @@ def check_end_to_end() -> None:
         f"外の最大密度 {result.rho[~model.design].max():.3e}",
     )
     keep_near = out["table"].element_mask(
-        [out["fixed_face"], out["load_face"]], layers=1
+        list(out["fixed_faces"]) + list(out["load_faces"]), layers=1
     ) & model.design
     check(
         "荷重・拘束の近傍が非設計領域(ρ=1)に固定されている",
@@ -789,7 +789,7 @@ def check_end_to_end() -> None:
 
     # 荷重が実際に系へ入っていること(拘束DOFへ全部落ちていたら simp が例外にするが、
     # ここでも合計で確かめる)。
-    load = out["table"].load_vector(out["load_face"], (0.0, 0.0, -1.0))
+    load = out["table"].load_vector(out["load_faces"], (0.0, 0.0, -1.0))
     check(
         "荷重ベクトルの合計が指定値(パイプライン内でも保存されている)",
         abs(float(load[2::3].sum()) + 1.0) < 1e-12,

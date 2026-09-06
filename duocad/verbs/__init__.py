@@ -18,6 +18,7 @@ from .mirror_sketch import mirror_sketch_entities  # noqa: F401
 from .move_body import move_body  # noqa: F401
 from .move_sketch import move_sketch_entities  # noqa: F401
 from .optimize_setup import (  # noqa: F401
+    clear_loads,
     set_exclude_bodies,
     set_fixtures,
     set_loads,
@@ -34,6 +35,7 @@ __all__ = [
     "fillet",
     "import_step",
     "import_svg",
+    "clear_loads",
     "mirror_body",
     "mirror_sketch_entities",
     "move_body",

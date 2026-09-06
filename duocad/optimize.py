@@ -4,7 +4,8 @@ verbの本体は `duocad/verbs/optimize_setup.py`、状態を配る口は
 `DocumentView.state_meta()` である。ここに置くのは3つ:
 
 1. **`OptimizeSetup`** … 1文書が1つ持つ条件の入れ物(`Document.optimize`)。
-   保持/除外ソリッド・拘束面・荷重面と、荷重の大きさ・向き。
+   保持/除外ソリッド・拘束面・荷重面。**荷重の大きさ[N]と向きは面ごとに持つ**
+   (面Aは鉛直下向き50N・面Bは法線20N、が同じ文書で共存できる)。
 2. **面の指紋** … 面の参照は添字だけでは足りない(`duocad/selection.py` のとおり
    **添字は現時点のものであって、形が変われば別の実体を指す**)。重心・法線・面積を
    一緒に控えておき、配るときに照合する。**壊れないようにするのではなく、壊れたと
@@ -93,21 +94,19 @@ class OptimizeSetup:
     書き換えると保存・再オープンで復元されない状態が生まれる。書き込む口は
     `duocad/verbs/optimize_setup.py` の4つのverbだけである。
 
-    `fixtures` / `loads` の要素は **FaceCondition**(下記 `face_condition`)で、
-    `{"body", "index", "area", "normal", "center"}` を持つ。
+    `fixtures` の要素は **FaceCondition**(下記 `face_condition`)で、
+    `{"body", "index", "area", "normal", "center"}` を持つ。`loads` の要素は
+    そこへ `{"magnitude", "direction", "vector"}` を足した **LoadCondition**
+    (下記 `load_condition`)で、**大きさと向きは面ごとに違ってよい**。
     """
 
     #: 保持ソリッド / 除外ソリッド(`body_id` の並び。`body-{uuid}` は安定なのでそのまま)
     preserve_bodies: List[str] = field(default_factory=list)
     exclude_bodies: List[str] = field(default_factory=list)
-    #: 拘束面 / 荷重面(FaceCondition の並び)
+    #: 拘束面(FaceCondition の並び)
     fixtures: List[dict] = field(default_factory=list)
+    #: 荷重面(LoadCondition の並び。大きさ[N]・向きを面ごとに持つ)
     loads: List[dict] = field(default_factory=list)
-    #: 荷重の大きさ[N]。**v1は1文書に1種類**なので、`loads` の全面がこれを共有する。
-    load_magnitude: float = 0.0
-    #: 荷重の向き(`DIRECTION_MODES`)と、`"vector"` のときの単位ベクトル。
-    load_direction: str = "vector"
-    load_vector: Optional[List[float]] = None
     #: **配りものの増分維持のための版**。中身を変えたら必ず `touch()` で1つ上げる
     #: (上げ忘れると、画面が古い割り当てを描き続ける)。
     revision: int = 0
@@ -158,6 +157,51 @@ def face_condition(doc: "Document", ref: dict) -> dict:
         "normal": list(measured["normal"]),
         "center": list(measured["center"]),
     }
+
+
+def load_condition(doc: "Document", ref: dict, magnitude: Any, direction: Any) -> dict:
+    """面の ShapeRef + 大きさ + 向き から **LoadCondition** を作る。
+
+    `FaceCondition` に `{"magnitude": float, "direction": str, "vector": [x,y,z]|None}` を
+    足したもの。**大きさと向きを面ごとに持つ**のがこの型の存在理由で、荷重の合成
+    (`optimize_run.build_conditions`)は面ごとの力ベクトルを足し合わせる。
+
+    `direction` が `"normal"` / `"-normal"` のとき `vector` は `None` —— 実際の向きは
+    **その面の指紋に焼き込んだ法線**から起こす(面ごとに違ってよい)。
+    """
+    condition = face_condition(doc, ref)
+    mode, vector = normalize_direction(direction)
+    condition["magnitude"] = normalize_magnitude(magnitude)
+    condition["direction"] = mode
+    condition["vector"] = None if vector is None else list(vector)
+    return condition
+
+
+def load_force(condition: dict) -> List[float]:
+    """LoadCondition → **世界座標の力ベクトル[N]**(向き × 大きさ)。
+
+    `"normal"` / `"-normal"` は指紋に焼き込んだ**その面の**外向き法線から起こす。
+    面ごとに向きが違ってよいのは、まさにここが面ごとに引くからである。
+    """
+    mode = condition["direction"]
+    if mode == "vector":
+        vector = condition.get("vector")
+        if not vector:
+            raise ValueError("荷重の向きベクトルが入っていない")
+        unit = [float(v) for v in vector]
+    elif mode == "normal":
+        unit = [float(v) for v in condition["normal"]]
+    elif mode == "-normal":
+        unit = [-float(v) for v in condition["normal"]]
+    else:
+        raise ValueError(f"未知の荷重の向き {mode!r}")
+    # **面法線は単位ベクトルとは限らない**(`query.face_fingerprint` が測った値をそのまま
+    # 焼いてある)。ここで単位化しないと、大きさ[N]が法線の長さぶん黙ってずれる。
+    length = math.sqrt(sum(component * component for component in unit))
+    if not length > 0.0:
+        raise ValueError("荷重の向きが零ベクトルになっている")
+    magnitude = float(condition["magnitude"])
+    return [component / length * magnitude for component in unit]
 
 
 def face_key(item: dict) -> tuple:
@@ -357,9 +401,10 @@ def state_payload(
           "exclude_bodies":  [BodyRef, ...],
           "fixtures":        [FaceRef, ...],   # {"body","kind":"face","index":int,"provenance":null}
           "loads":           [FaceRef, ...],
-          "load": {"magnitude": float,                     # [N]
-                   "direction": "normal"|"-normal"|"vector",
-                   "vector": [x,y,z] | null} | null,   # 荷重面を1枚も置いていなければ null
+          "load_specs": [{"body": BodyId, "index": int,     # 面ごとの大きさ[N]と向き
+                          "magnitude": float,
+                          "direction": "normal"|"-normal"|"vector",
+                          "vector": [x,y,z] | null}, ...],  # 荷重面が0枚なら空
           "stale": [{"role": "preserve_bodies"|"exclude_bodies"|"fixtures"|"loads",
                      "body": BodyId, "index": int|null,
                      "code": STALE_CODES のどれか, "reason": str}, ...],
@@ -372,9 +417,10 @@ def state_payload(
     `modify_selection` へ渡すと例外になる。選択機構の「見えないものは指せない」)。
     載らなかったものは全部 `stale` に理由つきで出るので、**黙って消える経路は無い**。
 
-    **`load` は文書が持つ how であって「いま荷重がかかっているか」ではない。** 荷重面の
-    ボディを隠すと `loads` は空になるが `load` は残る —— 隠しただけで大きさと向きが画面から
-    消えると、表示に戻したときに打ち直しになるからである。かかる面は `loads` を見ること。
+    **`load_specs` は文書が持つ how であって「いま荷重がかかっているか」ではない。** 荷重面の
+    ボディを隠すと `loads` は空になるが `load_specs` は残る —— 隠しただけで大きさと向きが
+    画面から消えると、表示に戻したときに打ち直しになるからである。かかる面は `loads` を見ること。
+    **`load_specs` と `loads` は長さが違いうる**ので、画面は `(body, index)` で突き合わせること。
 
     **`stale` は「割り当てが消えた」ではない。** 文書からは何も消えていない(操作ログが正)
     ので、形を戻せば・表示に戻せば次の配信でまた載る。画面がトーストに出すかどうかは
@@ -439,18 +485,19 @@ def state_payload(
         "exclude_bodies": live["exclude_bodies"],
         "fixtures": live["fixtures"],
         "loads": live["loads"],
-        "load": (
+        # **`live["loads"]` ではなく文書の側を見る** —— 荷重面のボディを隠しただけで
+        # 大きさと向きが画面から消えると、表示に戻したときに打ち直しになる。
+        # 「実際に荷重がかかる面」は `loads` が持つ(こちらは how だけ)。
+        "load_specs": [
             {
-                "magnitude": setup.load_magnitude,
-                "direction": setup.load_direction,
-                "vector": None if setup.load_vector is None else list(setup.load_vector),
+                "body": condition["body"],
+                "index": int(condition["index"]),
+                "magnitude": float(condition["magnitude"]),
+                "direction": condition["direction"],
+                "vector": None if condition.get("vector") is None else list(condition["vector"]),
             }
-            # **`live["loads"]` ではなく文書の側を見る** —— 荷重面のボディを隠しただけで
-            # 大きさと向きが画面から消えると、表示に戻したときに打ち直しになる。
-            # 「実際に荷重がかかる面」は `loads` が持つ(こちらは how だけ)。
-            if setup.loads
-            else None
-        ),
+            for condition in setup.loads
+        ],
         "stale": stale,
         "revision": setup.revision,
     }

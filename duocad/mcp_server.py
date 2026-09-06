@@ -947,10 +947,12 @@ class DocumentTools:
         return self._apply_logged(before, applied, face_count=applied["face_count"])
 
     def set_loads(self, magnitude: float, direction: Any) -> dict:
-        """**確定選択の面**を荷重面の集合にし、大きさ[N]と向きを持たせる。
+        """**確定選択の面だけ**に大きさ[N]と向きを焼く(上書き代入。選択外の荷重面は残る)。
 
         向きは `"normal"` / `"-normal"` / `[x, y, z]`。**ベクトルは単位化して控える**ので、
         返る `direction_vector` は打った値と長さが違うことがある(向きだけを使う)。
+
+        `face_count` は**確定後の荷重面の総数**、`applied_count` はこの呼び出しで焼いた枚数。
         """
         before = self._revision_snapshot()
         applied = self.session.set_loads(magnitude, direction)
@@ -958,10 +960,17 @@ class DocumentTools:
             before,
             applied,
             face_count=applied["face_count"],
+            applied_count=applied["applied_count"],
             magnitude=applied["magnitude"],
             direction=applied["direction"],
             direction_vector=applied["direction_vector"],
         )
+
+    def clear_loads(self) -> dict:
+        """**確定選択の面**を荷重から外す(選択が空なら全部外す)。"""
+        before = self._revision_snapshot()
+        applied = self.session.clear_loads()
+        return self._apply_logged(before, applied, face_count=applied["face_count"])
 
     # ------------------------------------------------------------------ ボディ・パラメータ
     def set_parameter(self, name: str, value: float) -> dict:

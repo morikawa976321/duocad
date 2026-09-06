@@ -604,6 +604,15 @@ def _run_set_loads(session: Session, tmp_path: Path) -> dict:
     return session.set_loads(250.0, [0.0, 0.0, -1.0])
 
 
+@_runner("clear_loads")
+def _run_clear_loads(session: Session, tmp_path: Path) -> dict:
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    session.set_loads(250.0, [0.0, 0.0, -1.0])
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    return session.clear_loads()
+
+
 @_runner("import_step")
 def _run_import_step(session: Session, tmp_path: Path) -> dict:
     return session.import_step(str(_step_file(tmp_path)))

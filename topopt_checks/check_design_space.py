@@ -391,8 +391,8 @@ def check_material_leaves_the_input_solid() -> None:
         design_grid=grid,
         max_iter=MAX_ITER,
         volfrac=VOLFRAC,
-        fixed_face=fixed_face,
-        load_face=load_face,
+        fixed_faces=fixed_face,
+        load_faces=load_face,
         stl_path=OUTPUT_DIR / "design_space_box.stl",
     )
     seconds_new = time.perf_counter() - t0
@@ -426,8 +426,8 @@ def check_material_leaves_the_input_solid() -> None:
         design_grid=grid,
         max_iter=MAX_ITER,
         volfrac=VOLFRAC,
-        fixed_face=fixed_face,
-        load_face=load_face,
+        fixed_faces=fixed_face,
+        load_faces=load_face,
         # 既定の出力先は `output/bracket.stl` で、**check_anchor.py の成果物を上書きしてしまう**。
         stl_path=OUTPUT_DIR / "design_space_bracket.stl",
     )
@@ -482,14 +482,16 @@ def check_case1_end_to_end() -> None:
     # 根拠を「渡さなかった」という自己申告に置かない。
     field_names = {f.name for f in dataclasses.fields(ds.Conditions)}
     check(
-        "条件は5つだけ(設計空間ソリッドを受け取る口が無い。load_n は荷重の実際の大きさ[N])",
-        field_names == {"keep", "fixed_face", "load_face", "obstacle", "anchor_shape", "load_n"},
+        "条件は5つだけ(設計空間ソリッドを受け取る口が無い。load_n は荷重の実際の大きさ[N])"
+        "。**面が複数になっても口の数は増えない** —— この検査が守っているのは"
+        "「塊を外から渡させない」ことであって、面の枚数ではない",
+        field_names == {"keep", "fixed_faces", "load_faces", "obstacle", "anchor_shape", "load_n"},
         f"{sorted(field_names)}",
     )
     print(
         f"  格子 {space.grid.shape} spacing={space.grid.spacing:.3f}mm / "
         f"塊 {space.element_count} 要素 / 余白 {space.margin:.2f}mm(比率 {space.margin_ratio}) / "
-        f"面 固定={space.fixed_face} 荷重={space.load_face}",
+        f"面 固定={space.fixed_faces} 荷重={space.load_faces}",
         flush=True,
     )
 
@@ -568,8 +570,8 @@ def check_case1_keep_inside() -> None:
     eater = Pos(-30, 0, 0) * Box(10, 30, 30)  # 固定側パッドを丸ごと覆う除外
     greedy = ds.Conditions(
         keep=_cond.keep,
-        fixed_face=_cond.fixed_face,
-        load_face=_cond.load_face,
+        fixed_faces=_cond.fixed_faces,
+        load_faces=_cond.load_faces,
         obstacle=eater,
     )
     raised = None
@@ -598,14 +600,14 @@ def check_case1_anchors_not_empty() -> None:
     _cond, space = case1_space()
     table = an.build_anchors(space.soup, space.grid)
     empty = table.empty_faces()
-    bad = [f for f in (space.fixed_face, space.load_face) if f in empty]
+    bad = [f for f in tuple(space.fixed_faces) + tuple(space.load_faces) if f in empty]
     check(
         "拘束面・荷重面が empty_faces() に入っていない",
         not bad,
         f"空になった条件面 {bad} / 空の面は全体で {len(empty)} 面",
     )
-    n_fixed = table[space.fixed_face].node_count
-    n_load = table[space.load_face].node_count
+    n_fixed = sum(table[f].node_count for f in space.fixed_faces)
+    n_load = sum(table[f].node_count for f in space.load_faces)
     check(
         "両面とも節点が付いている",
         n_fixed > 0 and n_load > 0,
@@ -613,8 +615,8 @@ def check_case1_anchors_not_empty() -> None:
     )
     check(
         "拘束面から固定自由度が引ける(SIMP に渡せる)",
-        table.fixed_dofs(space.fixed_face).size >= 3,
-        f"{table.fixed_dofs(space.fixed_face).size} 自由度",
+        table.fixed_dofs(space.fixed_faces).size >= 3,
+        f"{table.fixed_dofs(space.fixed_faces).size} 自由度",
     )
     RESULTS["case1_fixed_nodes"] = int(n_fixed)
     RESULTS["case1_load_nodes"] = int(n_load)
@@ -642,8 +644,8 @@ def check_case1_anchors_not_empty() -> None:
         far_space = ds.derive(
             ds.Conditions(
                 keep=_cond.keep,
-                fixed_face=far_fixed[0],
-                load_face=far_load[0],
+                fixed_faces=far_fixed[0],
+                load_faces=far_load[0],
                 obstacle=_cond.obstacle,
                 anchor_shape=anchor_shape,
             ),
@@ -658,9 +660,9 @@ def check_case1_anchors_not_empty() -> None:
         far_table = an.build_anchors(far_space.soup, far_space.grid)
         check(
             "離れた条件面にもアンカーが張れている",
-            far_space.fixed_face not in far_table.empty_faces()
-            and far_table[far_space.fixed_face].node_count > 0,
-            f"{far_table[far_space.fixed_face].node_count} 節点",
+            far_space.fixed_faces[0] not in far_table.empty_faces()
+            and far_table[far_space.fixed_faces[0]].node_count > 0,
+            f"{far_table[far_space.fixed_faces[0]].node_count} 節点",
         )
 
 
@@ -694,8 +696,8 @@ def check_case1_obstacle() -> None:
     far = Pos(300, 0, 0) * Box(20, 20, 20)
     cond_far = ds.Conditions(
         keep=cond.keep,
-        fixed_face=cond.fixed_face,
-        load_face=cond.load_face,
+        fixed_faces=cond.fixed_faces,
+        load_faces=cond.load_faces,
         obstacle=cond.obstacle + far,
     )
     space_far = ds.derive(cond_far, elements_long_axis=CASE1_LONG_AXIS)
@@ -758,7 +760,7 @@ def check_case1_margin_is_load_bearing() -> None:
             verdicts.append((ratio, f"ValueError({str(e)[:30]})"))
             continue
         table = an.build_anchors(sp.soup, sp.grid)
-        empty = [f for f in (sp.fixed_face, sp.load_face) if f in table.empty_faces()]
+        empty = [f for f in tuple(sp.fixed_faces) + tuple(sp.load_faces) if f in table.empty_faces()]
         verdicts.append((ratio, "アンカーが空" if empty else "OK"))
     for ratio, verdict in verdicts:
         print(f"      余白比率 {ratio:+.2f} → {verdict}")
@@ -1076,7 +1078,7 @@ def check_case5_coarse_run() -> None:
         f"保持 {int(np.asarray(space.model.keep).sum())} 要素",
     )
     table = space.table if space.table is not None else an.build_anchors(space.soup, space.grid)
-    anchors = table.element_mask([space.fixed_face, space.load_face], layers=1)
+    anchors = table.element_mask(list(space.fixed_faces) + list(space.load_faces), layers=1)
     check(
         "拘束・荷重のアンカー要素が1つも塊から落ちていない",
         int(np.count_nonzero(anchors & ~space.mask)) == 0 and int(anchors.sum()) > 0,
@@ -1088,7 +1090,7 @@ def check_case5_coarse_run() -> None:
     bare = _case5(dilate_mm=0.0)
     bare_anchors = (
         (bare.table or an.build_anchors(bare.soup, bare.grid))
-        .element_mask([bare.fixed_face, bare.load_face], layers=1)
+        .element_mask(list(bare.fixed_faces) + list(bare.load_faces), layers=1)
     )
     check(
         "検出力: 膨張0でも条件の要素は塊に入る(粗い段の材料が届かない要素が実際にある)",
@@ -1234,7 +1236,7 @@ def check_four_benchmark_cases() -> None:
         )
         # 拘束アンカーの要素が、塊の上半分で何個の塊に分かれているか(= 支持が何箇所か)。
         # `branching` の U 字面は下の帯で繋がっているので、**上半分に限って**数える。
-        fixed_elements = table.element_mask([space.fixed_face], layers=1) & space.mask
+        fixed_elements = table.element_mask(list(space.fixed_faces), layers=1) & space.mask
         z_centers = space.grid.centers_1d(2)
         upper = np.zeros(space.grid.shape, dtype=bool)
         upper[:, :, z_centers > 0.5 * (z_centers.min() + z_centers.max())] = True
@@ -1248,8 +1250,8 @@ def check_four_benchmark_cases() -> None:
             "grid": list(space.grid.shape),
             "derivation": str(space.stats.get("derivation", "bbox")),
             "design_elements": space.element_count,
-            "fixed_dofs": int(table.fixed_dofs(space.fixed_face).size),
-            "load_nodes": int(table[space.load_face].node_count),
+            "fixed_dofs": int(table.fixed_dofs(space.fixed_faces).size),
+            "load_nodes": sum(int(table[f].node_count) for f in space.load_faces),
             "support_clusters": int(support_clusters),
             "obstacle_removed": int(space.stats.get("obstacle_elements_removed", 0)),
             "components": conn.get("components") if isinstance(conn, dict) else None,
@@ -1257,7 +1259,7 @@ def check_four_benchmark_cases() -> None:
             "compliance": float(out["compliance_last"]),
             "free_material": free_material,
             "empty_condition_faces": [
-                f for f in empty if f in (space.fixed_face, space.load_face)
+                f for f in empty if f in tuple(space.fixed_faces) + tuple(space.load_faces)
             ],
             "stl_bytes": stl.stat().st_size if stl.exists() else 0,
         }
@@ -1514,8 +1516,8 @@ def check_empty_condition_face_warning() -> None:
     out = an.run_pipeline(
         shape=tiny,
         elements_long_axis=8,
-        fixed_face=big_face,
-        load_face=empty_face,
+        fixed_faces=big_face,
+        load_faces=empty_face,
         max_iter=2,
         stl_path=scratch_stl,
     )
@@ -1553,8 +1555,8 @@ def check_empty_condition_face_warning() -> None:
     out_fixed = an.run_pipeline(
         shape=tiny,
         elements_long_axis=8,
-        fixed_face=empty_face,
-        load_face=big_face,
+        fixed_faces=empty_face,
+        load_faces=big_face,
         max_iter=2,
         stl_path=scratch_stl,
     )
@@ -1567,7 +1569,7 @@ def check_empty_condition_face_warning() -> None:
     )
 
     # --- 14-3: design_space.run_topopt からも同じ警告が返り、stats にも載る ---
-    cond = ds.Conditions(keep=tiny, fixed_face=big_face, load_face=empty_face, obstacle=None)
+    cond = ds.Conditions(keep=tiny, fixed_faces=big_face, load_faces=empty_face, obstacle=None)
     space = ds.derive(cond, elements_long_axis=8, margin_ratio=0.1)
     check(
         "足場: derive() の connectivity も空の条件面をスキップと報告する(前提の確認)",
@@ -1590,8 +1592,8 @@ def check_empty_condition_face_warning() -> None:
     normal_out = an.run_pipeline(
         shape=tiny,
         elements_long_axis=8,
-        fixed_face=big[0],
-        load_face=big[1],
+        fixed_faces=big[0],
+        load_faces=big[1],
         max_iter=2,
         stl_path=scratch_stl,
     )
@@ -1604,14 +1606,14 @@ def check_empty_condition_face_warning() -> None:
 
     # --- 14-5: 変異検査 — 診断を外すと元の _require_nodes 例外に戻る(検出力) --
     original = an.AnchorTable.condition_face_diagnoses
-    an.AnchorTable.condition_face_diagnoses = lambda self, fixed_face, load_face: []
+    an.AnchorTable.condition_face_diagnoses = lambda self, fixed_faces, load_faces: []
     raised = ""
     try:
         an.run_pipeline(
             shape=tiny,
             elements_long_axis=8,
-            fixed_face=big_face,
-            load_face=empty_face,
+            fixed_faces=big_face,
+            load_faces=empty_face,
             max_iter=2,
             stl_path=scratch_stl,
         )
