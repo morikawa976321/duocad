@@ -39,7 +39,7 @@ TAIL_WINDOW = 10
 SYMMETRY_DIRECT: dict = {"nelx": 12, "nely": 6, "nelz": 6, "max_iter": 20}
 
 # `check_anchor.py` [7] 端から端まで。合成ブラケットの長辺の要素数。
-# **粗くしすぎると面アンカーが空になる面が増えて検査の意味が変わる**(docs/TOPOPT.md「面が空になる面数」)。
+# **粗くしすぎると面アンカーが空になる面が増えて検査の意味が変わる**(docs/TOPOPT.md「粗くしたときに空になる面(面アンカー)」)。
 ANCHOR_END_TO_END: dict = {"elements_long_axis": 16, "max_iter": 40}
 # **反復数を 24 まで落とすと終盤10反復の変動が 2.12% になり、[7] の1%を割る**(実測)。
 
