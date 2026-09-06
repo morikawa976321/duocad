@@ -197,7 +197,8 @@ def test_the_documented_error_vocabulary_matches_the_source(path: Path, heading:
     documented = _enumeration_after(_section(path, heading), anchor)
     codes = _error_codes_from_source()
     assert documented == codes, (
-        f"{path.name} の失敗語彙が `error_envelope` と食い違う(意図した変更なら文書を更新): "
+        f"{path.relative_to(REPO_ROOT).as_posix()} の失敗語彙が `error_envelope` と食い違う"
+        "(意図した変更なら文書を更新): "
         f"文書に無い={sorted(codes - documented)} / 実装に無い={sorted(documented - codes)}"
     )
 
