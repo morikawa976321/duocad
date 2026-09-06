@@ -16,7 +16,8 @@
    `can_redo` を必ず返す。自然文だけを返さない。**`changed_bodies` は `Session.body_revision`
    の前後差分**で導くこと(verbごとに数え上げると、新しいverbを足すたびに数え漏れる)。
 4. **構造化された失敗** — 失敗はJSONで返す(`{"error": {"code","message","tool","exception"}}`)。
-   例外のテキストをそのまま投げない。コードは6語彙に固定する。
+   例外のテキストをそのまま投げない。コードは7語彙に固定する
+   (顔ぶれは `MCP.md`「実装のメモ」が正。一致は `tests/test_doc_code_agreement.py` が見る)。
 """
 from __future__ import annotations
 

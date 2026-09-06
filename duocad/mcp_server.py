@@ -484,7 +484,7 @@ class DocumentTools:
     #    **`changed_bodies` は `Session.body_revision` の呼び出し前後の差**から導くこと。
     #    verbごとに「これはbodyを変える」と数え上げると、verbが増えたときに静かに漏れる。
     # 3. **失敗も封筒に入れて返す。** `{"error": {"code","message","tool","exception", ...}}`
-    #    を `json.dumps` した本文 + `isError: true`。コードは6語彙
+    #    を `json.dumps` した本文 + `isError: true`。コードは7語彙
     #    (`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
     #    `selection_kind_mismatch` / `invalid_predicate` / `internal`)。**例外のテキストを
     #    素で返さない。** **`FileNotFoundError` を忘れない** —— パスの間違いは AI が直せる
