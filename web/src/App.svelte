@@ -35,7 +35,7 @@
     SOLID_FEATURE_COMMANDS,
     needsSketchId,
   } from './commands/features'
-  import { entityHandles, ghostCopies, type GhostSource } from './entityKinds'
+  import { entityHandles, ghostCopies, snapToSketchEntity, type GhostSource } from './entityKinds'
   import { IMPORT_STEP, changesDocument } from './commands/files'
   import { OPTIMIZE_MODE_COMMANDS, OPTIMIZE_PRESET_ROLE } from './commands/optimize'
   import OptimizePanel, { type OptimizeNotice } from './OptimizePanel.svelte'
@@ -94,6 +94,7 @@
     type BoxSelectEvent,
     type PickEvent,
     type SketchDraw,
+    type SketchEntityHit,
     type VertexMarker,
     type Viewport,
   } from './viewport'
@@ -1581,7 +1582,10 @@
    */
   function onSketchPick(event: PickEvent): void {
     if (event.point && host?.wantsPoint()) {
-      if (host.addPoint(event.point.u, event.point.v)) return
+      // **当たっている図形へ落としてから渡す**(`snappedPlanePoint`)。幽霊(`hoverPoint`)も
+      // 同じ関数を通るので、吸い付いて見える位置と確定結果はずれない。
+      const [u, v] = snappedPlanePoint(event.point.u, event.point.v, event.sketchEntity)
+      if (host.addPoint(u, v)) return
     }
     // **コマンドがスケッチの点を直接待っているとき**(回転中心)。3Dの辺・頂点と同じ規律で、
     // 下の共有選択への翻訳より**前**に置く —— 中心に使う点が選択へ入ると、それ自体が
@@ -1889,6 +1893,22 @@
   }
 
   /**
+   * カーソルの生の (u,v) を、当たっているスケッチの図形へ落とす(スナップ)。
+   *
+   * **クリック(`onSketchPick` の `addPoint`)と幽霊(`hoverPoint`)は必ずこの関数を
+   * 通すこと**(20260906タスクの不変条件) —— 片方だけ直すと、吸い付いて見える位置と
+   * 確定結果がずれる、いちばん困る形の不具合になる。当たっている図形が無ければ
+   * (`hit === null`)生の座標をそのまま返す。
+   */
+  function snappedPlanePoint(u: number, v: number, hit: SketchEntityHit | null): Point2 {
+    if (hit === null) return [u, v]
+    const sketch = sketches.find((item) => item.sketch_id === hit.sketchId)
+    const entity = sketch?.entities.find((item) => item.entity_id === hit.entityId)
+    if (!entity) return [u, v]
+    return snapToSketchEntity(entity, hit.point, u, v)
+  }
+
+  /**
    * ブラウザだけで描く確定前の姿(`preview: 'local'`)——**3つの経路**。
    *
    * 1. **これから打つ図形**(`add_line` 等): `ghostEntity` が生の座標から組み立てる。
@@ -2046,8 +2066,8 @@
     viewport.setFov(fov)
     viewport.onPick(onPick)
     viewport.onBoxSelect(onBoxSelect)
-    viewport.onPlaneMove((point) => {
-      hoverPoint = point === null ? null : [point.u, point.v]
+    viewport.onPlaneMove((point, hit) => {
+      hoverPoint = point === null ? null : snappedPlanePoint(point.u, point.v, hit)
     })
     // 可変解像度 —— ズームで見え方が変わったらサーバへ知らせ、ソリッド・辺・領域を
     // その粗さで測り直させる。**スケッチの折れ線はビューポート側が自分で折り直す**

@@ -572,6 +572,18 @@ export function createViewport(container: HTMLElement): Viewport {
           ?.regionMeshes.find((mesh) => mesh.userData.regionIndex === region.index),
       )
     }
+    const sketchEntity = hoverSketchEntity
+    if (sketchEntity !== null) {
+      const entry = sketches.get(sketchEntity.sketchId)
+      if (sketchEntity.point !== null) {
+        return pick(
+          entry?.handleMeshes.find(
+            (mesh) => mesh.userData.entityId === sketchEntity.entityId && mesh.userData.point === sketchEntity.point,
+          ),
+        )
+      }
+      return pick(entry?.handleLines.find((line) => line.userData.entityId === sketchEntity.entityId))
+    }
     if (hoverPlane !== null) return pick(basePlaneHoverMeshes.get(hoverPlane))
     return null
   }
@@ -648,13 +660,16 @@ export function createViewport(container: HTMLElement): Viewport {
   const previewMeshes = new Map<string, { objects: THREE.Object3D[]; disposables: Array<{ dispose(): void }> }>()
   let pickListener: ((event: PickEvent) => void) | null = null
   let boxSelectListener: ((event: BoxSelectEvent) => void) | null = null
-  let planeMoveListener: ((point: { u: number; v: number } | null) => void) | null = null
+  let planeMoveListener:
+    | ((point: { u: number; v: number } | null, sketchEntity: SketchEntityHit | null) => void)
+    | null = null
 
   // ---------------------------------------------------------------- ホバー強調
   //
   // **「そのままクリックしたら取れるもの」を1つだけ明るくする**。
-  // 対象は面・辺・領域・基準平面で、**頂点は出さない** —— 選択に入っている頂点しか
-  // マーカーが無く、「クリックすれば選択されるもの」を出せる状態にない。
+  // 対象は面・辺・領域・基準平面・スケッチの図形/点で、**頂点は出さない** ——
+  // 選択に入っている頂点しかマーカーが無く、「クリックすれば選択されるもの」を出せる
+  // 状態にない(スケッチの点マーカーは常に描かれているので、頂点と違って対象にできる)。
   //
   // 当たり判定は `resolveHit` **1つだけ**をクリックと共有する。優先順位を2箇所に
   // 書くとプレビューが嘘をつき、この機能の存在意義が消える。
@@ -666,10 +681,12 @@ export function createViewport(container: HTMLElement): Viewport {
   let hoverEdge: EdgeRef | null = null
   let hoverPlane: BasePlaneName | null = null
   let hoverRegion: { sketchId: string; index: number } | null = null
+  let hoverSketchEntity: SketchEntityHit | null = null
   // 「変わったときだけ材質を書き換える」ための印(毎フレーム全メッシュを走査しない)。
   let hoverFaceKey = ''
   let hoverEdgeKey = ''
   let hoverRegionKey = ''
+  let hoverSketchKey = ''
   /**
    * 直近にホバーを解決したときの「ポインタ位置+視点+`pickGeneration`」。**同じなら
    * 当たるものも同じ**なので、レイキャストごと省く(止まって眺めている間は毎フレーム
@@ -701,9 +718,11 @@ export function createViewport(container: HTMLElement): Viewport {
     hoverFace = null
     hoverEdge = null
     hoverRegion = null
+    hoverSketchEntity = null
     hoverFaceKey = ''
     hoverEdgeKey = ''
     hoverRegionKey = ''
+    hoverSketchKey = ''
     hoverPlane = null
     pickChanged()
     // **材質まで戻す**。参照と印を捨てるだけだと、作り直していない対象に付けた明るい材質が
@@ -712,6 +731,7 @@ export function createViewport(container: HTMLElement): Viewport {
     applyEdgeMaterials()
     applyRegionMaterials()
     applyBasePlaneHover()
+    applySketchHoverMaterials()
   }
   let framed = false
   let alive = true
@@ -1950,22 +1970,42 @@ export function createViewport(container: HTMLElement): Viewport {
 
   const sketchMaterial = new THREE.LineBasicMaterial({ color: SKETCH_COLOR })
   const sketchGhostMaterial = new THREE.LineBasicMaterial({ color: SKETCH_GHOST_COLOR })
-  // 選択中の図形の線。**線の材質を作り分けるだけ**で、形の作り方は未選択と同じ
-  // (`buildEntityLine` に材質を渡す形になっているのはこのため)。
-  const sketchSelectedMaterial = new THREE.LineBasicMaterial({ color: SKETCH_SELECTED_COLOR })
-  // 点マーカー。**深度を書かない**(`vertexMaterial` と同じ) —— 線の上に必ず出す。
-  const sketchHandleMaterial = new THREE.PointsMaterial({
-    color: SKETCH_HANDLE_COLOR,
-    size: SKETCH_HANDLE_PIXELS * 2,
-    sizeAttenuation: false,
-    depthTest: false,
-  })
-  const sketchHandleSelectedMaterial = new THREE.PointsMaterial({
-    color: SKETCH_SELECTED_COLOR,
-    size: SKETCH_HANDLE_PIXELS * 2,
-    sizeAttenuation: false,
-    depthTest: false,
-  })
+
+  /**
+   * スケッチの線・点の材質は **(選択状態 × ホバー)** をキーにした遅延生成のキャッシュから取る
+   * (`faceMaterialFor` と同じ形)。**反復を展開した `entities` 側の描画は通らない** ——
+   * あちらは `sketchMaterial` を直接使う(ピック対象外なので選択もホバーも起きない)。
+   */
+  type SketchMaterialState = 'plain' | 'selected'
+  // `plain` の非ホバーは既存の `sketchMaterial` を種として使う(2つの独立インスタンスに
+  // 分裂させない)。
+  const sketchLineMaterialCache = new Map<string, THREE.LineBasicMaterial>([['plain:0', sketchMaterial]])
+  function sketchLineMaterialFor(state: SketchMaterialState, hovered: boolean): THREE.LineBasicMaterial {
+    const key = `${state}:${hovered ? 1 : 0}`
+    const cached = sketchLineMaterialCache.get(key)
+    if (cached) return cached
+    const base = state === 'selected' ? SKETCH_SELECTED_COLOR : SKETCH_COLOR
+    const material = new THREE.LineBasicMaterial({ color: hovered ? lighten(base, HOVER_LIGHTEN) : base })
+    sketchLineMaterialCache.set(key, material)
+    return material
+  }
+
+  const sketchHandleMaterialCache = new Map<string, THREE.PointsMaterial>()
+  function sketchHandleMaterialFor(state: SketchMaterialState, hovered: boolean): THREE.PointsMaterial {
+    const key = `${state}:${hovered ? 1 : 0}`
+    const cached = sketchHandleMaterialCache.get(key)
+    if (cached) return cached
+    const base = state === 'selected' ? SKETCH_SELECTED_COLOR : SKETCH_HANDLE_COLOR
+    // **深度を書かない**(`vertexMaterial` と同じ) —— 線の上に必ず出す。
+    const material = new THREE.PointsMaterial({
+      color: hovered ? lighten(base, HOVER_LIGHTEN) : base,
+      size: SKETCH_HANDLE_PIXELS * 2,
+      sizeAttenuation: false,
+      depthTest: false,
+    })
+    sketchHandleMaterialCache.set(key, material)
+    return material
+  }
   const regionMaterial = new THREE.MeshBasicMaterial({
     color: REGION_COLOR,
     side: THREE.DoubleSide,
@@ -2138,11 +2178,15 @@ export function createViewport(container: HTMLElement): Viewport {
         const built = buildEntityLine(
           entry.frame,
           handle,
-          selected ? sketchSelectedMaterial : sketchMaterial,
+          sketchLineMaterialFor(selected ? 'selected' : 'plain', false),
         )
         if (built) {
           built.object.renderOrder = LAYER.sketchLine
           built.object.userData.entityId = handle.entityId
+          // ホバーとの組み合わせを後から決められるように、選択かどうかを印として残す
+          // (`applySketchHoverMaterials` が材質から読み戻すと、ホバー色が付いた瞬間に
+          // 選択が分からなくなる。領域の `userData.selected` と同じ理由)。
+          built.object.userData.selected = selected
           sketchRoot.add(built.object)
           objects.push(built.object)
           disposables.push(built.geometry)
@@ -2160,11 +2204,12 @@ export function createViewport(container: HTMLElement): Viewport {
           const picked = selected || pickedPoints.has(`${handle.entityId}|${point.key}`)
           const mesh = new THREE.Points(
             geometry,
-            picked ? sketchHandleSelectedMaterial : sketchHandleMaterial,
+            sketchHandleMaterialFor(picked ? 'selected' : 'plain', false),
           )
           mesh.renderOrder = LAYER.sketchPoint // 深度を書かないので、描く順序で線より手前に出す
           mesh.userData.entityId = handle.entityId
           mesh.userData.point = point.key
+          mesh.userData.selected = picked
           sketchRoot.add(mesh)
           objects.push(mesh)
           handleMeshes.push(mesh)
@@ -2206,6 +2251,40 @@ export function createViewport(container: HTMLElement): Viewport {
           : isHovered
             ? regionHoverMaterial
             : regionMaterial
+      }
+    }
+  }
+
+  /**
+   * スケッチの線・点の材質を決める。**選択とホバーの両方を見る唯一の場所**
+   * (面・辺・領域と同じ規律)。作り直さず、`handleLines`/`handleMeshes` を歩いて
+   * `.material` を差し替えるだけにする(面・辺と同じ)。
+   *
+   * 点は必ず辺の上に乗っているので、**点がホバーされているときは線を光らせない**
+   * (`hoverSketchEntity.point === null` を線側の条件に入れて排他にする)。
+   */
+  function applySketchHoverMaterials(): void {
+    for (const [sketchId, entry] of sketches) {
+      for (const line of entry.handleLines) {
+        const entityId = line.userData.entityId as string
+        const selected = line.userData.selected === true
+        const hovered =
+          hoverSketchEntity !== null &&
+          hoverSketchEntity.sketchId === sketchId &&
+          hoverSketchEntity.entityId === entityId &&
+          hoverSketchEntity.point === null
+        line.material = sketchLineMaterialFor(selected ? 'selected' : 'plain', hovered)
+      }
+      for (const mesh of entry.handleMeshes) {
+        const entityId = mesh.userData.entityId as string
+        const point = mesh.userData.point as string
+        const selected = mesh.userData.selected === true
+        const hovered =
+          hoverSketchEntity !== null &&
+          hoverSketchEntity.sketchId === sketchId &&
+          hoverSketchEntity.entityId === entityId &&
+          hoverSketchEntity.point === point
+        mesh.material = sketchHandleMaterialFor(selected ? 'selected' : 'plain', hovered)
       }
     }
   }
@@ -2900,7 +2979,17 @@ export function createViewport(container: HTMLElement): Viewport {
       showBand(event.offsetX, event.offsetY)
     }
     if (planeMoveListener === null) return
-    planeMoveListener(activeSketchId === null ? null : planePointAt(event.offsetX, event.offsetY))
+    if (activeSketchId === null) {
+      planeMoveListener(null, null)
+      return
+    }
+    // **`sketchEntityAt` は `resolveHit` と同じ関数**(クリックの `PickEvent.sketchEntity` と
+    // 同一)。同じ画素で呼ぶことで、幽霊のスナップ先とクリック確定時のスナップ先が
+    // 同じ入力を通る(App.svelte の不変条件)。
+    planeMoveListener(
+      planePointAt(event.offsetX, event.offsetY),
+      sketchEntityAt(event.offsetX, event.offsetY),
+    )
   }
 
   /** ポインタがcanvasから出た。**強調を残さない**(戻ってくるまで指せるものは無い)。 */
@@ -2975,6 +3064,14 @@ export function createViewport(container: HTMLElement): Viewport {
       hoverRegionKey = nextRegionKey
       hoverRegion = region
       applyRegionMaterials()
+    }
+    const sketchEntity = next?.sketchEntity ?? null
+    const nextSketchKey =
+      sketchEntity === null ? '' : `${sketchEntity.sketchId}|${sketchEntity.entityId}|${sketchEntity.point ?? ''}`
+    if (nextSketchKey !== hoverSketchKey) {
+      hoverSketchKey = nextSketchKey
+      hoverSketchEntity = sketchEntity
+      applySketchHoverMaterials()
     }
     if (plane !== hoverPlane) {
       hoverPlane = plane
@@ -3097,6 +3194,7 @@ export function createViewport(container: HTMLElement): Viewport {
         edge: hoverEdge,
         region: hoverRegion,
         plane: hoverPlane,
+        sketchEntity: hoverSketchEntity,
         color: hoverColorNow(),
       }
     },
@@ -3177,11 +3275,11 @@ export function createViewport(container: HTMLElement): Viewport {
       pickEdgeProposedHoverMaterial.dispose()
       for (const sketchId of [...sketches.keys()]) clearSketch(sketchId)
       bandElement.remove()
-      sketchMaterial.dispose()
       sketchGhostMaterial.dispose()
-      sketchSelectedMaterial.dispose()
-      sketchHandleMaterial.dispose()
-      sketchHandleSelectedMaterial.dispose()
+      for (const material of sketchLineMaterialCache.values()) material.dispose()
+      sketchLineMaterialCache.clear()
+      for (const material of sketchHandleMaterialCache.values()) material.dispose()
+      sketchHandleMaterialCache.clear()
       regionMaterial.dispose()
       regionSelectedMaterial.dispose()
       regionHoverMaterial.dispose()

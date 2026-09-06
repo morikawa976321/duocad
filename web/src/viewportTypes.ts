@@ -374,8 +374,14 @@ export interface Viewport {
   /**
    * スケッチモード中、ポインタがスケッチ平面のどこを指しているか。
    * モード外・平面の裏では null が来る。**確定前の線を見せるためだけ**に使う。
+   *
+   * 第2引数は**同じ画素**の `sketchEntityAt` の結果(クリックの `PickEvent.sketchEntity`
+   * と同じ関数)。呼び出し側(App.svelte)はこれを使って点を図形へスナップしてから
+   * 幽霊に渡す — クリック側の `addPoint` も同じスナップ関数を通るので、両者はずれない。
    */
-  onPlaneMove(listener: (point: { u: number; v: number } | null) => void): void
+  onPlaneMove(
+    listener: (point: { u: number; v: number } | null, sketchEntity: SketchEntityHit | null) => void,
+  ): void
   /**
    * 選択中の面を強調する(空配列で解除)。
    *
@@ -548,6 +554,8 @@ export interface Viewport {
     edge: EdgeRef | null
     region: { sketchId: string; index: number } | null
     plane: BasePlaneName | null
+    /** 当たったスケッチの図形(点または辺)。スケッチモード中だけ null 以外。 */
+    sketchEntity: SketchEntityHit | null
     /** そのものに**今実際に当たっている**色(16進)。何も指していなければ null。 */
     color: number | null
   }

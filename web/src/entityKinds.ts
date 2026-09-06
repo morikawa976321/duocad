@@ -69,6 +69,15 @@ interface EntityKindSpec {
    * `width`/`height` からの導出値なので独立に動かせない。
    */
   pointKeys: ReadonlyArray<readonly [string, string]>
+  /**
+   * 与えた (u,v) をこの図形の輪郭へ落とす(スナップ)。
+   *
+   * **拘束ではない** —— duocadは拘束ソルバを持たない(`duocad/parameters.py` 冒頭)ので、
+   * ここが返すのは「たまたま同じ座標」であり、図形を後から動かしても付いていかない。
+   * `snapToSketchEntity` から**クリック(addPoint)と幽霊(hoverPoint)の両方**が呼ぶ
+   * (どちらかだけ直すと、吸い付いて見える位置と確定結果がずれる)。
+   */
+  snap(params: Record<string, number>, u: number, v: number): [number, number]
 }
 
 /**
@@ -132,6 +141,55 @@ function rotatePoint(
   const dx = x - cx
   const dy = y - cy
   return [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos]
+}
+
+/** 点 (u,v) を線分 (u0,v0)-(u1,v1) へ射影し、両端でクランプする。 */
+function projectToSegment(
+  u: number,
+  v: number,
+  u0: number,
+  v0: number,
+  u1: number,
+  v1: number,
+): [number, number] {
+  const dx = u1 - u0
+  const dy = v1 - v0
+  const lengthSq = dx * dx + dy * dy
+  if (lengthSq === 0) return [u0, v0]
+  const t = Math.min(1, Math.max(0, ((u - u0) * dx + (v - v0) * dy) / lengthSq))
+  return [u0 + t * dx, v0 + t * dy]
+}
+
+/** 点 (u,v) に最も近い線分を折れ線から選び、そこへ射影する(bezierのスナップ近似)。 */
+function projectToPolyline(u: number, v: number, points: Array<[number, number]>): [number, number] {
+  let best: [number, number] = points[0]
+  let bestDistSq = Infinity
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const [u0, v0] = points[index]
+    const [u1, v1] = points[index + 1]
+    const candidate = projectToSegment(u, v, u0, v0, u1, v1)
+    const distSq = (candidate[0] - u) ** 2 + (candidate[1] - v) ** 2
+    if (distSq < bestDistSq) {
+      bestDistSq = distSq
+      best = candidate
+    }
+  }
+  return best
+}
+
+/**
+ * 角度(度)を弧 `[startDeg, endDeg]`(反時計回り。`endDeg <= startDeg` は0度またぎ)へクランプする。
+ * 弧の外なら**円周上で近いほうの端**へ寄せる(`arcPoints`/`toPoints` と同じ0度またぎの扱い)。
+ */
+function clampAngleToArc(angle: number, startDeg: number, endDeg: number): number {
+  const end = endDeg <= startDeg ? endDeg + 360 : endDeg
+  let normalized = angle
+  while (normalized < startDeg) normalized += 360
+  while (normalized >= startDeg + 360) normalized -= 360
+  if (normalized <= end) return normalized
+  const distToEnd = normalized - end
+  const distToStartWrap = startDeg + 360 - normalized
+  return distToEnd <= distToStartWrap ? end : startDeg
 }
 
 /** ベジエの制御点(**始点・制御点1・制御点2・終点の順**。コアの `BEZIER_KEYS` と同じ)。 */
@@ -228,6 +286,9 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
         [params.x1, params.y1],
       ]
     },
+    snap(params, u, v) {
+      return projectToSegment(u, v, params.x0, params.y0, params.x1, params.y1)
+    },
   },
   circle: {
     pointKeys: [['cx', 'cy']],
@@ -245,6 +306,14 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
     toPoints(params, resolution) {
       // 反時計回り・0度をまたいでよい(`add_arc` の契約と揃える。円は0〜360固定)。
       return arcPoints(params.cx, params.cy, params.radius, 0, 360, resolution)
+    },
+    snap(params, u, v) {
+      const dx = u - params.cx
+      const dy = v - params.cy
+      const dist = Math.hypot(dx, dy)
+      if (dist === 0) return [params.cx + params.radius, params.cy]
+      const scale = params.radius / dist
+      return [params.cx + dx * scale, params.cy + dy * scale]
     },
   },
   rectangle: {
@@ -273,6 +342,28 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
         [x, y + height],
         [x, y],
       ]
+    },
+    snap(params, u, v) {
+      const { x, y, width, height } = params
+      const corners: Array<[number, number]> = [
+        [x, y],
+        [x + width, y],
+        [x + width, y + height],
+        [x, y + height],
+      ]
+      let best: [number, number] = corners[0]
+      let bestDistSq = Infinity
+      for (let index = 0; index < 4; index += 1) {
+        const [u0, v0] = corners[index]
+        const [u1, v1] = corners[(index + 1) % 4]
+        const candidate = projectToSegment(u, v, u0, v0, u1, v1)
+        const distSq = (candidate[0] - u) ** 2 + (candidate[1] - v) ** 2
+        if (distSq < bestDistSq) {
+          bestDistSq = distSq
+          best = candidate
+        }
+      }
+      return best
     },
   },
   arc: {
@@ -307,6 +398,14 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
       if (end <= params.start_deg) end += 360
       return arcPoints(params.cx, params.cy, params.radius, params.start_deg, end, resolution)
     },
+    snap(params, u, v) {
+      const dx = u - params.cx
+      const dy = v - params.cy
+      const angle = (Math.atan2(dy, dx) * 180) / Math.PI
+      const clamped = clampAngleToArc(angle, params.start_deg, params.end_deg)
+      const rad = (clamped * Math.PI) / 180
+      return [params.cx + params.radius * Math.cos(rad), params.cy + params.radius * Math.sin(rad)]
+    },
   },
   bezier: {
     pointKeys: [['x0', 'y0'], ['cx1', 'cy1'], ['cx2', 'cy2'], ['x1', 'y1']],
@@ -339,6 +438,20 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
         params.cx2, params.cy2,
         params.x1, params.y1,
         resolution,
+      )
+    },
+    snap(params, u, v) {
+      // 折れ線の最近傍の線分へ射影する(当たり判定 `sketchEntityAt` と同じ近似)。
+      return projectToPolyline(
+        u,
+        v,
+        bezierPoints(
+          params.x0, params.y0,
+          params.cx1, params.cy1,
+          params.cx2, params.cy2,
+          params.x1, params.y1,
+          DEFAULT_RESOLUTION,
+        ),
       )
     },
   },
@@ -389,6 +502,37 @@ export function entityPoints(
   resolution: ViewResolution = DEFAULT_RESOLUTION,
 ): Array<[number, number]> {
   return entityKindSpec(kind).toPoints(params, resolution)
+}
+
+/** 与えた (u,v) をこの図形の輪郭へ落とす(`EntityKindSpec.snap` 参照)。表に無い種別は例外。 */
+export function snapToEntity(
+  kind: string,
+  params: Record<string, number>,
+  u: number,
+  v: number,
+): [number, number] {
+  return entityKindSpec(kind).snap(params, u, v)
+}
+
+/**
+ * スケッチの当たり判定(`SketchEntityHit`)が拾った図形へ (u,v) を落とす。
+ *
+ * **クリック(`addPoint`)と幽霊(`hoverPoint`)は必ずこの関数を通すこと**(App.svelte
+ * 20260906のタスク不変条件) —— 片方だけ直すと、吸い付いて見える位置と確定結果がずれる。
+ * 点マーカーに当たっているとき(`point !== null`)は射影せず、`entityHandles` が持つ
+ * その点の (u,v) をそのまま返す。
+ */
+export function snapToSketchEntity(
+  entity: { kind: string; params: Record<string, number> },
+  point: string | null,
+  u: number,
+  v: number,
+): [number, number] {
+  if (point !== null) {
+    const handle = entityHandles(entity.kind, entity.params).find((item) => item.key === point)
+    if (handle) return [handle.u, handle.v]
+  }
+  return snapToEntity(entity.kind, entity.params, u, v)
 }
 
 /**

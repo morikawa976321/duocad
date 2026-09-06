@@ -17,6 +17,17 @@
  *   5. 領域をホバーしたまま**ポインタを動かさずに**コマンドを解除 → 強調が消える
  *      (指せるものが変わったことを、ポインタの動き以外の経路で知れているか)
  *
+ * 6〜8は同じスケッチの図形・点への強調と、**そこへ吸い付いて点を置く**スナップ
+ * (`20260906-1420` タスク)。強調とスナップは同じ当たり判定(`sketchEntityAt`)の
+ * 結果を色に使うか座標に使うかの違いでしかないので、続けて確かめる:
+ *
+ *   6. 矩形の辺をホバー → 図形が返り同じ画素のクリックで選ばれる(点=null)。
+ *      頂点マーカーをホバー → **点だけ**が返り(線ではない)、クリックで点だけが選ばれる。
+ *      スケッチの強調もビューポートの外で消える
+ *   7. 既存の頂点の上で線分の始点を数画素ずらして置く → `sketches` の params が
+ *      その頂点と完全一致(目視ではなく数値で見る)
+ *   8. 既存の円の上で線分の始点をずらして置く → 中心からの距離が半径ちょうどになる
+ *
  * サーバはこのスクリプトが空の文書で起動し、板はMCP経由で作る。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
  */
@@ -65,6 +76,10 @@ async function main() {
     await mcp.callTool('extrude', { distance: 20, mode: 'join' })
     const bodyId = (await mcp.callTool('describe_document')).bodies[0].body_id
     ok(`板を作った: ${bodyId}`)
+    // **押し出しの後に足す**(先に足すと `index:1` の領域選択が矩形と食い違う)。
+    // 同じスケッチへの追加なので押し出し済みのBodyには影響しない —— 6以降の
+    // スケッチ図形ホバー・スナップの検査が使う円。
+    await mcp.callTool('add_circle', { sketch_id: sketch.sketch_id, center: [60, 10], radius: 10 })
 
     browser = await launchBrowser(executablePath)
     const page = await browser.newPage()
@@ -267,6 +282,240 @@ async function main() {
       }
       ok('**ポインタを動かさずにコマンドを解除しても、取れなくなった領域の強調は消える**')
     })
+
+    // ---------------------------------------------------------------- 6. スケッチの図形・点
+    //
+    // (1)の対象を面・辺・領域・基準平面からスケッチの図形・点へ広げた分。板を作ったスケッチ
+    // (矩形1つ)へ戻り、円を1つ追加した状態で確かめる。部品を隠すのは基準平面グリッドと
+    // 同じ理由(面と平面はレイ距離で競うので、部品が見えている限りスケッチ平面を覆う)。
+    await page.click('#parts-hide-all')
+    await page.waitForFunction(() => window.__duocad.parts.every((item) => !item.visible), {
+      timeout,
+      polling: 50,
+    })
+    // **検証4の辺選択を捨てる**。持ち越すと、隠したBodyの辺を指したまま
+    // `modify_selection` の remove へ入り、サーバが「見えないものは指せない」で
+    // 拒否する(スケッチの選択が新しく足されるはずが黙って弾かれる)。空の場所を
+    // クリックして解除する(通常モードの素クリック=選択解除)。
+    await withoutBrowserPanel(page, async () => {
+      const box = await viewportBox()
+      await page.mouse.click(box.left + 20, box.top + box.height - 20)
+    })
+    await page.waitForFunction(() => (window.__duocad.selection?.items ?? []).length === 0, {
+      timeout,
+      polling: 50,
+    })
+    // このドキュメントにスケッチは1つしか無い(冒頭でMCPが作った板のスケッチ)。
+    await page.click('#browser-sketches button.sketch-name')
+    await page.waitForFunction(
+      (id) => window.__duocad.activeSketch === id,
+      { timeout, polling: 50 },
+      sketch.sketch_id,
+    )
+    // **カメラの再フレーム(`lookAtSketch`)が数フレーム遅れて反映される**(実測)。
+    // `activeSketch` が変わった直後に射影すると、まだ前のモードの視点のままで
+    // 図形が画面の外に出ていることがある。
+    await settle(page)
+    ok('板を作ったスケッチへ入り直した(部品は隠した。円も1つ足してある)')
+
+    /**
+     * 今のアクティブスケッチの図形一覧(`entity_id`/`kind`/`params`)。
+     *
+     * **`params` はスプレッドで写す**(`{ ...item.params }`) —— Svelte 5の`$state`は
+     * 入れ子までProxyにするので、そのまま返すとpuppeteerのCDPシリアライズで
+     * 入れ子のオブジェクトだけ `{}` に落ちる(engine
+     * `puppeteer-evaluate-drops-nested-svelte5-proxy-fields`。`acceptance.mjs` の
+     * `target.params` と同じ手当て)。
+     */
+    async function activeSketchEntities() {
+      return page.evaluate(() => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return (active?.entities ?? []).map((item) => ({
+          entityId: item.entity_id,
+          kind: item.kind,
+          params: { ...item.params },
+        }))
+      })
+    }
+
+    /**
+     * スケッチ平面の (u,v) の画面座標(ページ絶対)。無ければ null。
+     * **`withoutBrowserPanel` の中でだけ呼ぶこと** —— 覆われた画素は逃げ場が無い
+     * (`browser.mjs` の `withoutBrowserPanel` docstring参照)。
+     */
+    async function sketchScreenPoint(u, v) {
+      return page.evaluate(
+        (uu, vv) => {
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectSketchPoint(uu, vv)
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        },
+        u,
+        v,
+      )
+    }
+
+    const entitiesBeforeDrawing = await activeSketchEntities()
+    const rectangle = entitiesBeforeDrawing.find((item) => item.kind === 'rectangle')
+    const circle = entitiesBeforeDrawing.find((item) => item.kind === 'circle')
+    if (!rectangle || !circle) {
+      fail(`スケッチに矩形・円が揃っていない: ${JSON.stringify(entitiesBeforeDrawing)}`)
+    }
+
+    // ------------------------------------------------- 6a. 図形の線: 予告と結果の一致
+    await withoutBrowserPanel(page, async () => {
+      const mid = { u: rectangle.params.x + rectangle.params.width / 2, v: rectangle.params.y }
+      const at = await sketchScreenPoint(mid.u, mid.v)
+      if (!at) fail(`矩形の辺の中点が画面上で指せない: ${JSON.stringify(mid)}`)
+      await page.mouse.move(at.x, at.y)
+      await settle(page)
+      const hovered = await page.evaluate(() => window.__duocad.hoveredRef())
+      if (hovered.sketchEntity === null) {
+        fail(`矩形の辺をホバーしたのに強調されない: ${JSON.stringify(hovered)}`)
+      }
+      if (hovered.sketchEntity.entityId !== rectangle.entityId || hovered.sketchEntity.point !== null) {
+        fail(`ホバーしたスケッチの図形が違う: ${JSON.stringify(hovered.sketchEntity)}`)
+      }
+      if (hovered.region !== null) {
+        fail(`図形の上なのに領域まで強調された(図形が領域より手前のはず): ${JSON.stringify(hovered)}`)
+      }
+      ok('矩形の辺をホバー: hoveredRef().sketchEntity が同じ図形を返す(点=null)')
+
+      await page.mouse.click(at.x, at.y)
+      await page.waitForFunction(
+        (id) =>
+          (window.__duocad.selection?.items ?? []).some(
+            (item) => item.entity === id && item.point === null,
+          ),
+        { timeout, polling: 50 },
+        rectangle.entityId,
+      )
+      ok('**同じ画素をクリックしたら、予告どおり矩形の図形が選ばれた**')
+    })
+
+    // ------------------------------------------------- 6b. 点マーカー: 点だけが光る
+    await withoutBrowserPanel(page, async () => {
+      const at = await sketchScreenPoint(rectangle.params.x, rectangle.params.y)
+      if (!at) fail('矩形の頂点マーカーが画面上で指せない')
+      await page.mouse.move(at.x, at.y)
+      await settle(page)
+      const hovered = await page.evaluate(() => window.__duocad.hoveredRef())
+      if (hovered.sketchEntity === null || hovered.sketchEntity.point === null) {
+        fail(`頂点マーカーをホバーしたのに点として返らない: ${JSON.stringify(hovered)}`)
+      }
+      if (hovered.sketchEntity.entityId !== rectangle.entityId) {
+        fail(`ホバーした点の図形が違う: ${JSON.stringify(hovered.sketchEntity)}`)
+      }
+      ok(
+        `矩形の頂点マーカーをホバー: hoveredRef().sketchEntity が点付きで返る` +
+          `(point=${hovered.sketchEntity.point}。線ではなく点)`,
+      )
+
+      await page.mouse.click(at.x, at.y)
+      await page.waitForFunction(
+        (id) =>
+          (window.__duocad.selection?.items ?? []).some(
+            (item) => item.entity === id && item.point !== null,
+          ),
+        { timeout, polling: 50 },
+        rectangle.entityId,
+      )
+      ok('**同じ画素をクリックしたら、予告どおり点だけが選ばれた(図形全体ではない)**')
+    })
+
+    // ------------------------------------------------- 6c. ビューポートの外へ出たら消える
+    await page.mouse.move(8, 8)
+    await settle(page)
+    const afterLeaveSketch = await page.evaluate(() => window.__duocad.hoveredRef())
+    if (afterLeaveSketch.sketchEntity !== null) {
+      fail(`ビューポートを出たのにスケッチの強調が残った: ${JSON.stringify(afterLeaveSketch)}`)
+    }
+    ok('スケッチの図形・点も、ビューポートの外へ出ると強調が消える')
+
+    // ---------------------------------------------------------------- 7. スナップ: 点に完全一致
+    //
+    // **クリック(`addPoint`)がスナップを通っていることを、目視ではなく `sketches` の
+    // params を読んで確かめる**(タスク完了条件)。わざと数画素ずらして押す ——
+    // 生の座標のままなら頂点の値とは一致しないはずで、一致すればスナップが効いた証拠になる。
+    await page.click('#sketch-line')
+    await withoutBrowserPanel(page, async () => {
+      const anchor = await sketchScreenPoint(rectangle.params.x, rectangle.params.y)
+      if (!anchor) fail('スナップ検査: 矩形の頂点が画面上で指せない')
+      await page.mouse.click(anchor.x + 2, anchor.y + 2)
+      // **矩形と円の間の隙間**(x=45)。`frameAll`/`lookAtSketch` が写す範囲の外に
+      // 出ないよう、既存図形の外接矩形の中に収める。
+      const far = await sketchScreenPoint(45, 15)
+      if (!far) fail('スナップ検査: 終点用の逃げ場所が画面上で指せない')
+      await page.mouse.click(far.x, far.y)
+    })
+    await page.waitForFunction(
+      (before) => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return (active?.entities.length ?? 0) === before + 1
+      },
+      { timeout, polling: 50 },
+      entitiesBeforeDrawing.length,
+    )
+    const snappedToPoint = await page.evaluate(() => {
+      const hook = window.__duocad
+      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      // **スプレッドで写す**(Svelte 5 proxy対策。`activeSketchEntities` と同じ理由)。
+      return { ...active.entities.filter((item) => item.kind === 'line').at(-1).params }
+    })
+    if (snappedToPoint.x0 !== rectangle.params.x || snappedToPoint.y0 !== rectangle.params.y) {
+      fail(
+        `点の上に置いたのに座標が完全一致しない: 置いた (${snappedToPoint.x0}, ${snappedToPoint.y0}) / ` +
+          `頂点 (${rectangle.params.x}, ${rectangle.params.y})`,
+      )
+    }
+    ok(
+      '**点の上でクリックした始点が、その点と完全に一致した**' +
+        `(数画素ずらして押しても (${rectangle.params.x}, ${rectangle.params.y}) になった)`,
+    )
+
+    // ---------------------------------------------------------------- 8. スナップ: 円の半径ちょうど
+    await page.click('#sketch-line')
+    await withoutBrowserPanel(page, async () => {
+      const boundary = { u: circle.params.cx + circle.params.radius, v: circle.params.cy }
+      const anchor = await sketchScreenPoint(boundary.u, boundary.v)
+      if (!anchor) fail('スナップ検査: 円周上の点が画面上で指せない')
+      // **斜めにずらす**(カメラの向きに関わらず、円の接線と厳密には重ならない方向にする)。
+      await page.mouse.click(anchor.x + 3, anchor.y + 3)
+      // 検証7が置いた点(45,15)とは別の隙間の点にする(2本の線分の的が重ならないように)。
+      const far = await sketchScreenPoint(45, 25)
+      if (!far) fail('スナップ検査: 終点用の逃げ場所が画面上で指せない')
+      await page.mouse.click(far.x, far.y)
+    })
+    await page.waitForFunction(
+      (before) => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return (active?.entities.length ?? 0) === before + 2
+      },
+      { timeout, polling: 50 },
+      entitiesBeforeDrawing.length,
+    )
+    const snappedToCircle = await page.evaluate(() => {
+      const hook = window.__duocad
+      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      // **スプレッドで写す**(Svelte 5 proxy対策。`activeSketchEntities` と同じ理由)。
+      return { ...active.entities.filter((item) => item.kind === 'line').at(-1).params }
+    })
+    const distFromCenter = Math.hypot(
+      snappedToCircle.x0 - circle.params.cx,
+      snappedToCircle.y0 - circle.params.cy,
+    )
+    if (Math.abs(distFromCenter - circle.params.radius) > 1e-6) {
+      fail(
+        `円の上に置いたのに半径ちょうどにならない: 距離 ${distFromCenter} / 半径 ${circle.params.radius}`,
+      )
+    }
+    ok(
+      `**円の上でクリックした始点が、中心から半径ちょうど(${circle.params.radius})の位置になった**` +
+        `(実測距離 ${distFromCenter})`,
+    )
 
     if (consoleErrors.length > 0) fail(`ブラウザにエラーが出た: ${consoleErrors.join(' / ')}`)
     ok('コンソールにエラーなし')
