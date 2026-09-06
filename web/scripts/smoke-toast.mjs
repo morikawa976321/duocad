@@ -13,9 +13,8 @@
  *   4. **手動close** — ×で1枚だけ消える
  *   5. **自動消滅** — 放っておけば消える
  *
- * ついでに、**AIパネルの開閉カレット**（`#ai-collapse`。2026-08-28新設）も1本だけここで見る
- * ——トーストとは無関係だが、アプリを実際に起動している検査が既にあるのでそこへ同居させた
- * （`20260827-2320-duocad-right-sidebar-panels` の完了条件C4）。
+ * ついでに、**AIパネルの開閉カレット**（`#ai-collapse`）も1本だけここで見る
+ * ——トーストとは無関係だが、アプリを実際に起動している検査が既にあるのでそこへ同居させた。
  *
  *   web> node scripts/smoke-toast.mjs
  *
@@ -95,8 +94,8 @@ async function main() {
       }
     }
 
-    // **入力欄idはボタンidで決まる**(2026-08-27にFilesPanelへ移設。`#file-path`の
-    // 時間貸しではなく、STEP読み込み/STEP書き出しがそれぞれ専用の欄を持つ)。
+    // **入力欄idはボタンidで決まる**(`#file-path`の時間貸しではなく、
+    // STEP読み込み/STEP書き出しがそれぞれ専用の欄を持つ)。
     const INPUT_FOR_BUTTON = {
       'file-export-step': 'file-export-step-path',
       'file-import-step': 'file-import-path',
@@ -105,9 +104,9 @@ async function main() {
     /** 対応する欄へパスを打ち、ボタンを押して確定する(入力欄は毎回消してから打つ)。 */
     const run = async (buttonId, path) => {
       const inputId = INPUT_FOR_BUTTON[buttonId]
-      // **STEP読み込みだけはツールバーのコマンド**(2026-09-05に `FilesPanel` から戻った)。
-      // 起動して初めてパス欄がDOMに出るので、無ければ先にボタンを押して起こす。
-      // 書き出しは左サイドバーの常設の欄なので、この分岐は素通りする。
+      // **STEP読み込みだけはツールバーのコマンド**。起動して初めてパス欄がDOMに出るので、
+      // 無ければ先にボタンを押して起こす。書き出しは左サイドバーの常設の欄なので、
+      // この分岐は素通りする。
       if ((await page.$(`#${inputId}`)) === null) await page.click(`#${buttonId}`)
       await page.click(`#${inputId}`)
       await page.keyboard.down('Control')
@@ -124,14 +123,13 @@ async function main() {
     ok('起動直後: `#toasts` はあるが札は0枚(「今は0件」を素直に書ける)')
 
     // -------------------------------------------------------------- AIパネルの開閉カレット
-    // **2026-08-28新設**(`20260827-2320-duocad-right-sidebar-panels`)。tier3の常設パネルの
-    // うちAIだけが畳めなかったのを、BrowserPanel.svelteと同じ形のカレットで揃えた。
-    // トーストの検査とは無関係だが、アプリを起動している実機検査1本で足りる要件なので
-    // ここに同居させる。
+    // tier3の常設パネルのうちAIだけが畳めなかったのを、BrowserPanel.svelteと同じ形の
+    // カレットで揃えた。トーストの検査とは無関係だが、アプリを起動している実機検査1本で
+    // 足りる要件なのでここに同居させる。
     //
-    // **2026-08-28 QA差し戻し2で範囲を広げた**: 当初は`#ai-transcript`と`aria-expanded`
-    // しか見ておらず、transcriptだけ消えて`.ai-input`/`.ai-settings`/`.hint`が残るような
-    // 部分的な壊れ方(B2)や、220px固定が解除されない壊れ方(B3)を検出できなかった。
+    // **`#ai-transcript`と`aria-expanded`だけでなく、`.ai-input`/`.ai-settings`/`.hint`の
+    // 残存や220px固定の解除まで見る** —— 部分的な壊れ方(transcriptだけ消えて他が残る、
+    // 固定幅が解除されない)を見落とさないため。
     // **`.hint`は`.ai-panel`の中に絞る**(実測で踏んだ穴): `SettingsDialog.svelte`の
     // `<p class="hint dim">`が同名クラスを持ち、native `<dialog>`は非表示でも要素自体は
     // DOMに残るため、絞らずに`page.$('.hint')`だけで見ると常にこちらへ先に当たって

@@ -3,8 +3,8 @@
  *
  *   node scripts/smoke-move.mjs [--port 8975] [--http-port 8976]
  *
- * 2026-08-30に右サイドバーの `SketchPanel.svelte`(数値入力欄・モード表示・「正面から見る」・
- * 「抜ける」)を廃止し、位置の打ち直しを**3Dの直接選択 + move verb**へ置き換えた。
+ * 右サイドバーの `SketchPanel.svelte`(数値入力欄・モード表示・「正面から見る」・
+ * 「抜ける」)は廃止済みで、位置の打ち直しは**3Dの直接選択 + move verb**に置き換わっている。
  * この置き換えが本当に成立していることを、pytestでは判定できない部分について見る:
  *
  *   1. **マウスの割り当て**: 右ドラッグ=カメラ回転 / 中ドラッグ=パン / 左ドラッグ=ウィンドウ選択
@@ -331,7 +331,7 @@ async function main() {
     await typeInto('#sketch-move-dy', 10)
 
     // ---------------------------------------------------------------- 確定前の幽霊
-    // **`preview: 'local'`(2026-09-05)** —— 選んだ点を含む図形が、dy を打った時点で
+    // **`preview: 'local'`** —— 選んだ点を含む図形が、dy を打った時点で
     // 移動先に半透明で出ている(元の図形はその場に残るので、両方が見える)。
     await waitFor(
       () => window.__duocad.ghostInfo().sketch.length === 1,
@@ -375,7 +375,7 @@ async function main() {
         `${moved.params.y1.toFixed(3)}・y0 は不変)`,
     )
 
-    // **選択は空になる**(他の形状変更verbと同じ既定の契約。2026-08-31に本人が非として却下し変更)
+    // **選択は空になる**(他の形状変更verbと同じ既定の契約)
     const afterMoveSelection = await page.evaluate(() =>
       JSON.parse(JSON.stringify(window.__duocad.selection)),
     )
@@ -714,7 +714,7 @@ async function main() {
     await typeInto('#move-body-dz', 25)
 
     // ---------------------------------------------------------------- 確定前の幽霊
-    // **`preview: 'local'`(2026-09-05)** —— 届いているメッシュを dx/dy/dz ずらして
+    // **`preview: 'local'`** —— 届いているメッシュを dx/dy/dz ずらして
     // 半透明で重ねる。**本物は隠さない**(移動前と移動後が並んで見えることが中身)ので、
     // 幽霊が出ている間も `getGeometry` の本物は元の位置のままである。
     await waitFor(
@@ -911,12 +911,11 @@ async function main() {
     // `MOVE_BODY` の選択引数は面/辺/頂点の3種を食う(コアの `require_bodies` が
     // `ShapeRef.body` から逆引きする)。**画面側の配線が本当に届いているか**を見る ——
     // `CommandHost` が主たる種別しか要求しないと、辺のピックが開かないまま
-    // 「サーバは受け付けるのに画面から選べない」穴になる(2026-08-30に実際そうなっていた)。
-    // move_body は確定のたびに選択を空にする(2026-08-31〜)ので、選択は既に空。
+    // 「サーバは受け付けるのに画面から選べない」穴になる(実際そうなっていたことがある)。
+    // move_body は確定のたびに選択を空にするので、選択は既に空。
     // そのまま move-body を起動すれば辺のピックが開くはずである。
-    // **移動直後は1フレーム挟む**(`projectEdge` 等はレンダー済みの射影行列を読むため。
-    // 以前はここにCtrl+クリックの往復があり副次的にフレームを進めていたが、
-    // その往復自体は無くなったので明示的に呼ぶ)。
+    // **移動直後は1フレーム挟む**(`projectEdge` 等はレンダー済みの射影行列を読むため、
+    // 明示的に呼ぶ)。
     await frameAll(page)
     await page.evaluate(() => document.activeElement?.blur?.())
     await page.keyboard.press('Escape')
@@ -925,7 +924,7 @@ async function main() {
       () => window.__duocad.wantsEdges === true,
       'move_body を起動しても辺を要求しない(kinds の配線が届いていない)',
     )
-    // **`wantsEdges` が真になっても、辺の実データはまだ無い**(2026-09-03に原因を特定)。
+    // **`wantsEdges` が真になっても、辺の実データはまだ無い**。
     // あれは `CommandHost` の同期的な `$effect` で即座に立つが、辺そのものは版が違えば
     // `showEdges(null, [])` で空にしてからWS往復で取り直す(`App.svelte`)。その窓では
     // `projectEdge` が `edgeBodyId !== bodyId` の早期returnで**全indexに対しnull**を返し、

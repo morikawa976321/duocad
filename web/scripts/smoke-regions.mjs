@@ -22,12 +22,10 @@
  *      押し出しても文書が変わらない。あわせて `regionsStillExist`(b)のロジックも
  *      合成データで直接検算する
  *
- * **2026-08-27: 検証6をQA差し戻しで再構成した**(ParametersPanel廃止 → SketchPanel
- * 統合)。一度は「先に値を打ち直して領域を消し、消えた添字がそもそも選べないこと」だけを
- * 見る形に簡略化したが、それだと選ぶものが最初から無いため `resets_selection` も
- * `regionsStillExist` もどちらも実行されない「骨抜き」の検査になっていた(QA指摘)。
- * 今の形は**添字3を先に選んでから**縮める順序に戻し、選択が1件→0件になる瞬間を
- * 直接観測する((a)。`tests/test_server_selection_reset.py` に同じ筋のpytestを追加した)。
+ * 検証6は**添字3を先に選んでから**縮める順序で、選択が1件→0件になる瞬間を
+ * 直接観測する((a)。`tests/test_server_selection_reset.py` に同じ筋のpytestがある)。
+ * 先に値を打ち直して領域を消すだけの形だと、選ぶものが最初から無いため
+ * `resets_selection` も `regionsStillExist` も実行されない「骨抜き」の検査になる。
  * ただし「引数(距離・種別)まで揃えた状態のままその場でパラメータを差し替える」という
  * 元の順序は、非アクティブな `discSketch` への再入場が `{#key sketchId === null}` で
  * `CommandHost` を作り直す(`App.svelte`)ため再現できない(受け入れた損失) ——
@@ -84,9 +82,8 @@ async function main() {
   console.log(`smoke-regions: ${executablePath}`)
 
   const server = attachUrl === null ? await startServer({ wsPort, httpPort }) : null
-  // **MCPの口**(2026-08-30)。数値の打ち直し(`set_parameter`)は人間側のUIを持たなく
-  // なったので、その1手だけを同じプロセスのMCP側から打つ。`--attach` で外のサーバへ
-  // 繋いだときは子プロセスを持たないので `null` になり、使う直前に落とす(黙って飛ばさない)。
+  // **MCPの口**(`set_parameter` の1手だけをMCP側から打つ。詳細は `smoke-files.mjs` 参照)。
+  // `--attach` で外のサーバへ繋いだときは子プロセスを持たないので `null` になる。
   const mcp = server === null ? null : new McpClient(server.child, { timeout })
   const url = server?.url ?? attachUrl
   console.log(`  server : ${url}${server === null ? ' (既に立っているサーバへ接続)' : ''}`)
@@ -453,7 +450,7 @@ async function main() {
     // 板は**その領域から押し出したもの**なので、領域(z=0)の真上に厚み10の板が載っている。
     // 初回のソリッド到着でカメラは +x/+y/+z 側へ自動フレームされる(`viewport.update`)ので、
     // 領域の点へ向かうレイは必ず板の上面を通る ——「板に隠れている領域」を押す状況になる。
-    // **確定成功でコマンドは無起動へ戻る**(2026-09-01 1cf190d `commandSucceeded()`)ので、
+    // **確定成功でコマンドは無起動へ戻る**(`commandSucceeded()`)ので、
     // 検証4のEnterで既に降りている。ここで改めて起動し直す(:377/:533と同じ形)。
     await page.click('#extrude-regions')
     await waitFor(() => window.__duocad.wantsRegions === true, '「領域を押し出す」で領域を要求しない')
@@ -498,12 +495,11 @@ async function main() {
     ok('**外すと面に戻る**: 同じ場所が、要求中は領域・外すと面になった(=そこで競合していた)')
 
     // ============================================== 検証6: 消えた領域は押し出せない
-    // タスク文の「既存の防具(`regionsStillExist`)が通常モードでも効くこと」の対。
+    // 「既存の防具(`regionsStillExist`)が通常モードでも効くこと」の対。
     //
-    // **2026-08-27: QA差し戻しを受けて再構成。** 一度は「先に消してから選べないことを
-    // 見る」形に単純化したが、それだと `resets_selection`(コア)も `regionsStillExist`
-    // (`App.svelte`)もどちらも実行されない(選ぶものが最初から無いので防具の出番が無い、
-    // という「骨抜き」の指摘)。ここでは両方を実地で踏む形に戻す:
+    // 先に消してから選べないことを見るだけの形だと、`resets_selection`(コア)も
+    // `regionsStillExist`(`App.svelte`)もどちらも実行されない(選ぶものが最初から
+    // 無いので防具の出番が無い「骨抜き」の検査になる)。ここでは両方を実地で踏む:
     //
     //   (a) `resets_selection` —— **先に添字3を選んでから**縮める。選択が
     //       1件→0件になることを直接確認し、コアが実際に選択を空にしたことを見る
@@ -562,7 +558,7 @@ async function main() {
       'discSketchへ再入場できない',
       discSketch,
     )
-    // **径の打ち直しはAI(MCP)の口だけになった**(2026-08-30に数値入力欄を廃止)。
+    // **径の打ち直しはAI(MCP)の口だけである**。
     // ここで見たいのは「選んだ領域が消える形の変更で `resets_selection` が効くか」で、
     // それは**どの経路から打っても同じコアの契約**である(MCPもWSも `Session` を通る)。
     const radiusName = await page.evaluate((id) => {
@@ -614,9 +610,7 @@ async function main() {
     // 必ず同時に空になる。`CommandHost` は生きた `selection` を見て確定を許すかどうかを
     // 決めるので、選択が空になった時点で `runCommand` 自体が呼ばれなくなり、
     // その内側にある `regionsStillExist` のfalse分岐へ**構造的に到達できない**
-    // (直上の(a)がまさにこれを実証している)。これは今回の統合で新たに生まれた制約では
-    // なく、統合前から成立していた事実(このファイルの旧版docstringが変異検査で
-    // 既に指摘していた「(b)の枝には到達しない」)。
+    // (直上の(a)がまさにこれを実証している)。
     //
     // そこでロジック自体の正しさ(実在しない添字はfalse・実在する添字はtrueと判定するか)
     // を、本物の関数 `App.svelte` の `regionsStillExist` を直接呼んで検算する
@@ -664,8 +658,8 @@ async function main() {
     // その欄が受ける(`CommandHost.onKeydown` は INPUT を除く)ので、外さないと
     // 「押したのに何も起きなかった」を検査したことにならない。選ぶものが無いので
     // そもそも引数は揃わない(=消えた領域を押し出す道が無い)。
-    // **押す先はヘッダの中の押しても何も起きない字**(2026-08-27にアプリ名 `header strong` を
-    // 消したので、常にあるファイル名の札へ移した)。ボタンを押すとその操作が始まってしまう。
+    // **押す先はヘッダの中の押しても何も起きない字**(常にあるファイル名の札)。
+    // ボタンを押すとその操作が始まってしまう。
     await page.click('#current-file')
     await page.keyboard.press('Enter')
     await settle()

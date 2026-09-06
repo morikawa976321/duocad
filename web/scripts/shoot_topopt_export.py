@@ -13,8 +13,7 @@
 - `--case <name>` —— `duocad.topopt.design_space.CASES` の合成題材
   (`bracket` / `plate` / `branching` / `tilted`)。アルゴリズムの設定
   (`rmin` / `sigma` / `iters` / `n`)を突き合わせるための土俵で、
-  `docs/topopt-smooth-compare/` の16枚はこれである(撮ったのは旧実験場の
-  `compare_shots.py` / `.mjs`。2026-09-05にこの撮影台へ移して実験場ごと削除した)。
+  `docs/topopt-smooth-compare/` の16枚はこれである。
 - `--model <ファイル名>` —— **利用者が実際に作った文書**(`--models-dir` 配下の
   操作ログ)。条件は文書に置いてあるものをそのまま使い、製品が実際に持っている
   つまみ(`rmin_mm` / `element_mm`)だけを面ごとに変える。**`sigma` / `iters` は効かない**

@@ -8,12 +8,11 @@
  *
  *   A. **遠端(far)**: 小さな部品で初回フレーミングを消費させた後、大きなSTEPを開くと、
  *      farが小さな部品の対角で固定されたままモデルの端が切り落とされる
- *      (2026-08-30に実測。500×366×142mm・対角約640mmのSTEPで再現)。
+ *      (実測。500×366×142mm・対角約640mmのSTEPで再現)。
  *   B. **近端(near)**: 大きな形で初回フレーミングを消費させた後、内容が小さくなって
  *      カメラが外へ出ると、nearが大きな形の対角で固定されたままになる
  *      (`frameToContent()` が near/far を「最初に届いた形の大きさ」で決め、`framed`
- *      フラグにより初回しか走らないため。この鏡像はQAが「検査していないのに検査したと
- *      report している」と指摘した箇所で、2026-08-30に検査Bを追加した)。
+ *      フラグにより初回しか走らないため)。
  *
  * どちらも `__duocad.cameraPose()` の `near`/`far` を読み、**文書全体の外接球**が
  * `[near, far]` の内側に完全に収まっていることを数値で確かめる。「モデルの端が消える」は
@@ -76,7 +75,6 @@ function sphereOf(min, max) {
 // ====================================================================== A. 遠端(far)
 /**
  * 小さな板→大きなSTEPの順で、farが追い越されないことを見る。
- * (このロジック自体はQA指摘の対象外。**変更していない** — 手を触れたのは近端側のみ)。
  */
 async function checkFarSideRegression(executablePath) {
   console.log(`\n[A] 遠端(far): 小さな板 → 大きなSTEP(${stepPath})`)
@@ -168,7 +166,7 @@ async function checkFarSideRegression(executablePath) {
 
     // **近端はこの姿勢では検査できない**(カメラは外接球の内側にいる=nearEdge<0が
     // ほぼ確実。ここで「奥にある」と無条件に言うと、検査していないのに検査したと
-    // 報告することになる —— 2026-08-30のQA指摘。近端は checkNearSideRegression が見る)。
+    // 報告することになる。近端は checkNearSideRegression が見る)。
     const nearEdge = distance - radius
     if (nearEdge > 0) {
       if (!(near <= nearEdge)) {
@@ -320,7 +318,7 @@ async function checkNearSideRegression(executablePath) {
     // 本物のホイールでカメラを注視点(=極小立方体と同じ中心)へ寄せる。
     // **ホイールはカーソル位置で発火する。** マウスを動かさないままだと
     // `page.mouse.wheel()` は既定位置(左上)へ飛ばし、`.viewport` の外に出て
-    // OrbitControlsのリスナーに1件も届かない(2026-08-30に実測: 400回ズームしても
+    // OrbitControlsのリスナーに1件も届かない(実測: 400回ズームしても
     // 距離が1mmも動かなかった)。他の実機smoke(`smoke-resolution.mjs` 等)と同じく、
     // 先にビューポート中央へカーソルを置く。
     const center = await page.evaluate(() => {
@@ -374,8 +372,8 @@ async function checkNearSideRegression(executablePath) {
         `near=${near.toFixed(5)}mm far=${far.toFixed(1)}mm`,
     )
 
-    // **この検査が空振りでないことの確認**。nearEdge<=0だと以前の遠端側と同じ理由で
-    // 検査が対象外になり、何も見ないまま緑になる(QAが指摘した欠陥そのもの)。
+    // **この検査が空振りでないことの確認**。nearEdge<=0だと遠端側と同じ理由で
+    // 検査が対象外になり、何も見ないまま緑になる。
     if (!(nearEdge > 0)) {
       fail(
         `想定した姿勢(外接球の外側)を作れていない: 近端=${nearEdge.toFixed(3)}mm ` +

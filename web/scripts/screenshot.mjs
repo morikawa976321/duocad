@@ -53,9 +53,8 @@ async function main() {
       await page.type(selector, String(value), { delay: 20 })
     }
 
-    // **STEP読み込みはツールバーのコマンド**(2026-09-05に `FilesPanel` から戻った)。
-    // 起動して初めてパス欄が現れるので**押す→打つ→Enter**の順になる
-    // (`commands/files.ts` の `IMPORT_STEP`)。
+    // **STEP読み込みはツールバーのコマンド**(起動して初めてパス欄が現れる。
+    // 詳細は `smoke-files.mjs` 参照)。
     await page.click('#file-import-step')
     await typeInto('#file-import-path', PC_CASE_STEP)
     await page.keyboard.press('Enter')

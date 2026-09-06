@@ -99,7 +99,7 @@ export async function withoutBrowserPanel(page, run) {
 }
 
 /**
- * undo / redo。**2026-08-23に画面のボタン(`#undo`/`#redo`)を削除した**ので、
+ * undo / redo。画面にボタン(`#undo`/`#redo`)は無いので、
  * `App.svelte` の `onWindowKeydown` が拾うのと同じキー(Ctrl+Z / Ctrl+Y)を送る。
  *
  * **先にフォーカスを外す**。数値入力(INPUT/TEXTAREA)にフォーカスが残っていると、
@@ -129,7 +129,7 @@ export async function pressRedo(page) {
 }
 
 /**
- * 視点をシーン全体へ戻す。**2026-08-23に画面のボタン(`#view-fit`)を削除した**ので、
+ * 視点をシーン全体へ戻す。画面にボタン(`#view-fit`)は無いので、
  * 実機検査だけが使う穴(`window.__duocad.frameAll`)を直接呼ぶ。
  */
 export async function frameAll(page) {

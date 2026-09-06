@@ -8,7 +8,6 @@
  *   2. **保存 → 再読込 → 開く → 同じ形**(操作ログから再生される)。上書きは
  *      **ヘッダの保存ボタン(`#file-save`)と Ctrl+S だけ**で、行き先は常に
  *      「いま編集しているファイル」——**編集中でないファイルは1バイトも書き換わらない**
- *      (2026-08-30。一覧の行にあった「上書き」ボタンは撤去した)
  *   3. STEPを読み込む(その時点で編集可能なボディができる)
  *   4. STEP/STL を書き出し、**STEPは読み戻して体積が一致**(読み戻しは pytest 側)
  *   5. undo/redoでやり直せる件数と有効な操作数が実際に動く
@@ -50,12 +49,12 @@ async function main() {
   console.log(`  workdir: ${workdir}`)
 
   // **`modelsDir: workdir`** —— 保存/開くは `duocad/models/` 配下のファイル名だけを
-  // 受け取るようになった(2026-08-22)。渡さないとリポジトリ直下の実 `models/` を
-  // 検査が書き換えてしまうので、既存の使い捨てworkdirをそのまま流用する
-  // (STEP/STL書き出しの `join(workdir, ...)` と同じディレクトリで、実在確認が楽になる)。
+  // 受け取る。渡さないとリポジトリ直下の実 `models/` を検査が書き換えてしまうので、
+  // 既存の使い捨てworkdirをそのまま流用する(STEP/STL書き出しの `join(workdir, ...)` と
+  // 同じディレクトリで、実在確認が楽になる)。
   const server = attachUrl === null ? await startServer({ wsPort, httpPort, modelsDir: workdir }) : null
-  // **MCPの口**(2026-08-30)。数値の打ち直し(`set_parameter`)は人間側のUIを持たなく
-  // なったので、その1手だけを同じプロセスのMCP側から打つ。`--attach` で外のサーバへ
+  // **MCPの口**。数値の打ち直し(`set_parameter`)は人間側のUIを持たないので、
+  // その1手だけを同じプロセスのMCP側から打つ。`--attach` で外のサーバへ
   // 繋いだときは子プロセスを持たないので `null` になり、使う直前に落とす(黙って飛ばさない)。
   const mcp = server === null ? null : new McpClient(server.child, { timeout })
   const url = server?.url ?? attachUrl
@@ -142,7 +141,7 @@ async function main() {
     /**
      * **何も無い所を素でクリックして全部外す**(`App.svelte` の `onPick`)。
      *
-     * 2026-08-23に選択パネルを廃したので、人が「全解除」する手段はこれ1つになった。
+     * 人が「全解除」する手段はこれ1つである。
      * どの画素が空いているかは視点と部品の形で変わるので、四隅を順に試して
      * **実際に0件になった時点で成功**とする(取れた画素を決め打ちしない)。
      */
@@ -151,7 +150,7 @@ async function main() {
         const box = document.querySelector('.viewport').getBoundingClientRect()
         return { left: box.left, top: box.top, width: box.width, height: box.height }
       })
-      // **ビューキューブの矩形を候補から外す**(2026-09-03)。キューブは右上のクリックを吸うので
+      // **ビューキューブの矩形を候補から外す**。キューブは右上のクリックを吸うので
       // `[0.97, 0.03]` がそのまま矩形の内側に入る。矩形は右上アンカーで**ビューポートの寸法が
       // 変わると動く**ので、座標を書き換えるのではなく毎回 `viewCubeRect()` に聞いて弾く
       // (座標を決め打ちで動かすと [[viewport-resize-silently-changes-what-a-click-grabs]] を踏む)。
@@ -221,13 +220,7 @@ async function main() {
       await page.mouse.click(at.x, at.y)
     }
 
-    /**
-     * スケッチの図形を**3Dのクリックで選ぶ**(2026-08-30。旧「図形一覧のボタン」の後継)。
-     *
-     * 図形の**最初の点**(円・円弧は中心、線分・ベジエは始点、長方形は左下)を狙う ——
-     * 点は必ずその図形の上にあり、当たり判定も点が最優先なので確実に掴める。
-     * 反復の `entities` 引数はこの選択から導かれる(`App.svelte` の `selectedEntities`)。
-     */
+    /** スケッチの図形を**その最初の点**のクリックで選ぶ(他の実機検査と同じ道具)。 */
     async function clickEntityHandle(entityId) {
       return withoutBrowserPanel(page, async () => {
         const at = await page.evaluate((id) => {
@@ -354,9 +347,8 @@ async function main() {
       const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
       return active.entities[0].entity_id
     })
-    // **反復の対象は3Dのクリックで選ぶ**(2026-08-30)。図形一覧のボタン(旧
-    // `#entity-<id>`)はSketchPanelごと廃止し、スケッチの図形そのものが選択の一種
-    // (`sketch_entity`)になった —— 反復の `entities` 引数はその選択から導かれる。
+    // **反復の対象は3Dのクリックで選ぶ**。スケッチの図形そのものが選択の一種
+    // (`sketch_entity`)である —— 反復の `entities` 引数はその選択から導かれる。
     await clickEntityHandle(entityId)
     await page.click('#pattern-rectangular')
     await typeInto('#pattern-dx', HOLE.dx)
@@ -402,7 +394,7 @@ async function main() {
       '穴のスケッチへ再入場できない',
       holeSketchId,
     )
-    // **径の打ち直しはAI(MCP)の口だけになった**(2026-08-30に数値入力欄を廃止)。
+    // **径の打ち直しはAI(MCP)の口だけである**。
     // 見たいのは「1箇所直すと反復した穴が全部追随する」で、それはverbの性質であって
     // 入力欄の性質ではないので、同じ文書へMCPから打ち込んで確かめる。
     const radiusName = await page.evaluate((id) => {
@@ -459,19 +451,15 @@ async function main() {
     ok(`redoで戻った(有効件数 ${redone.log})`)
 
     // ================================================================ 検証2: 保存と再現
-    // 2026-08-22: 保存/開くは `duocad/models/` 配下の**ファイル名の一覧**へ変わった
-    // (engine `duocad-save-location-fixed-folder`)。パスを打つ `#file-path` は
-    // もう save/open には無い —— `FilesPanel.svelte` の新規保存欄(`#file-name-input`
-    // + `#file-save-new`)と、一覧の行(`.files-row[data-name] .files-open`)を使う。
-    // **2026-08-27にSTEP/STLの入出力も同じパネルへ移設**され、共用だった `#file-path` は
-    // 廃止(`#file-import-path` / `#file-export-step-path` /
-    // `#file-export-stl-path` の3つに分かれた)。
-    // **2026-09-05にSTEP読み込みだけがツールバーへ戻った** —— `#file-import-path` は
-    // このパネルには無く、`#file-import-step` を押して起動したときだけDOMに出る
-    // (`commands/files.ts` の `IMPORT_STEP`)。書き出しの2つはここに残る。
-    // **2026-08-30に一覧の行から `.files-overwrite` を撤去**した —— 上書きの口は
-    // ヘッダの保存ボタン(`#file-save`)と Ctrl+S だけになり、行き先は常に
-    // 「いま編集しているファイル」1つに固定された(検証2bを参照)。
+    // 保存/開くは `duocad/models/` 配下の**ファイル名の一覧**である
+    // (engine `duocad-save-location-fixed-folder`)。新規保存は `FilesPanel.svelte` の
+    // `#file-name-input` + `#file-save-new`、開くのは一覧の行
+    // (`.files-row[data-name] .files-open`)。
+    // STEP読み込みはツールバーの `#file-import-step`(起動して初めて `#file-import-path` が
+    // DOMに出る。`commands/files.ts` の `IMPORT_STEP`)。STEP/STL書き出しは
+    // `#file-export-step-path` / `#file-export-stl-path` としてこのパネルに残る。
+    // 上書きの口はヘッダの保存ボタン(`#file-save`)と Ctrl+S だけで、行き先は常に
+    // 「いま編集しているファイル」1つに固定されている(検証2bを参照)。
     const documentName = 'model.json'
     const documentPath = join(workdir, documentName) // startServer に modelsDir=workdir を渡してある
     await typeInto('#file-name-input', documentName)
@@ -515,10 +503,8 @@ async function main() {
       polling: 100,
     })
 
-    // **再読込しても編集中のファイル名が戻る**(2026-08-30)。名前を持っているのはサーバ
-    // (`state.current_name`)で、画面はその写しを出すだけ —— ブラウザ側だけが持っていた頃は、
-    // 文書はサーバに残るのに名前だけ失われ、**ヘッダが「(無題)」なのに保存だけは通る**という
-    // 説明のつかない画面になっていた。
+    // **再読込しても編集中のファイル名が戻る**。名前を持っているのはサーバ
+    // (`state.current_name`)で、画面はその写しを出すだけである。
     await waitFor(
       (expected) => window.__duocad.currentDocumentName === expected,
       '再読込するとヘッダから編集中のファイル名が消える',
@@ -530,7 +516,7 @@ async function main() {
 
     // **開く前に形を変えておく**。サーバは長寿命で、再読込しても文書はそのまま残る ——
     // 保存した形と同じままで「開く」を押すと、**開くのが失敗しても体積が一致してしまい
-    // 検査が素通りする**(2026-08-14に実際に踏んだ: open_document が例外で落ちていたのに
+    // 検査が素通りする**(実際に踏んだ: open_document が例外で落ちていたのに
     // このチェックが緑だった)。undoで形を変えてから開き、戻ることを見る。
     await pressUndo(page)
     await waitFor(
@@ -579,11 +565,11 @@ async function main() {
     ok('開いた直後のヘッダが「保存済み」になった')
 
     // ================================================================ 検証2b: 編集中のファイルへ上書き
-    // **一覧の行の「上書き」は2026-08-30に撤去した**(engine
-    // `2026-08-30-duocad-save-becomes-a-header-button`)—— A を編集中に B の行を押せば
-    // 確認も無く B が今の文書で潰れ、操作ログが唯一の正である以上それは復旧できなかった。
-    // 上書きの口は**ヘッダの保存ボタン(`#file-save`)と Ctrl+S だけ**になり、行き先は常に
-    // 「いま編集しているファイル」1つに固定されている。ここで見るのは3つ:
+    // **一覧の行に「上書き」ボタンは無い**(engine `duocad-save-becomes-a-header-button`)
+    // —— A を編集中に B の行から上書きできると、確認も無く B が今の文書で潰れ、
+    // 操作ログが唯一の正である以上それは復旧できない。上書きの口は**ヘッダの保存ボタン
+    // (`#file-save`)と Ctrl+S だけ**で、行き先は常に「いま編集しているファイル」1つに
+    // 固定されている。ここで見るのは3つ:
     //   (a) ヘッダの保存ボタンで、編集中のファイルへ書ける
     //   (b) Ctrl+S が同じ操作(ブラウザの保存ダイアログは出ない)
     //   (c) **編集中でないファイルは1バイトも書き換わらない**(このタスクの存在理由)
@@ -736,7 +722,7 @@ async function main() {
     await expectSaveState('未保存', '「新規」の直後')
     ok('「新規」の直後のヘッダが「未保存」へ戻った')
 
-    // ---- 編集中のファイルが無いときの保存ボタン(2026-08-30本人決定)
+    // ---- 編集中のファイルが無いときの保存ボタン
     // **`disabled` にしない** —— なぜ押せないかを言わないまま死ぬ札になり、新規の文書では
     // 必ず通る道だから。押したら**ファイルパネルを開いて名前欄へフォーカスを置く**
     // (「保存したい」への答えは「名前を付けろ」で、その場所まで連れて行く)。
@@ -793,9 +779,8 @@ async function main() {
       window.__duocad.parts.map((body) => body.body_id),
     )
     const partsBefore = idsBefore.length
-    // **STEP読み込みはツールバーのコマンド**(2026-09-05に `FilesPanel` から戻った)。
-    // 起動して初めてパス欄が現れるので**押す→打つ→Enter**の順になる
-    // (`commands/files.ts` の `IMPORT_STEP`)。
+    // **STEP読み込みはツールバーのコマンド**。起動して初めてパス欄が現れるので
+    // **押す→打つ→Enter**の順になる(`commands/files.ts` の `IMPORT_STEP`)。
     await page.click('#file-import-step')
     await typeInto('#file-import-path', stepPath)
     await page.keyboard.press('Enter')
@@ -867,8 +852,8 @@ async function main() {
 
     // ================================================================ 検証5: 表示中のみ書き出し
     // **いまの状態を使い回す**(元の板 = 非表示、読み込んだボディ = 可視の1個だけ)。
-    // 「表示中(visible)のBodyだけを書き出し、対象を選ぶ引数は無い」契約を実地で踏む
-    // (2026-08-27 export-visible-only)。除外1件は「元の板」だけになるはず。
+    // 「表示中(visible)のBodyだけを書き出し、対象を選ぶ引数は無い」契約を実地で踏む。
+    // 除外1件は「元の板」だけになるはず。
     const hiddenPlateId = idsBefore[0]
     const visibleOnlyStepPath = join(workdir, 'visible-only.step')
     await typeInto('#file-export-step-path', visibleOnlyStepPath)
@@ -921,10 +906,9 @@ async function main() {
         `トースト: "${visibleOnlyMessage}"`,
     )
 
-    // ---------------------------------------------------------- 即適用(2026-08-22)
+    // ---------------------------------------------------------- 即適用
     // Enterの要らないコマンド(`command.ts` の `needsEnter` が false)の骨格を固定する。
-    // 材料は**面に貼る `sketch_create`**(対象は貼る先1つ・howの入力なし)。2026-08-27まで
-    // ここは「編集用に複製」で見ていたが、そのコマンドが消えたので同じ配線を踏む方へ移した。
+    // 材料は**面に貼る `sketch_create`**(対象は貼る先1つ・howの入力なし)。
     //   (a) 面が選ばれた状態で**起動しても発火しない**
     //   (b) **起動した後の面クリック**で発火する(Enterを押さない)
     //   (c) 起動 → Esc のあとは発火しない
@@ -938,7 +922,7 @@ async function main() {
     const sketchesBefore = (await look()).sketches
     // **数えるものが数値で来ることを先に確かめる。** ここが `undefined` に化けると
     // 下の3つの比較が `undefined !== undefined` で全部素通りし、**検査が黙って死ぬ**
-    // (2026-08-27に実際に踏んだ: `look()` が返すのは件数であって配列ではない)。
+    // (実際に踏んだ: `look()` が返すのは件数であって配列ではない)。
     if (typeof sketchesBefore !== 'number') {
       fail(`スケッチの件数が数値で来ない(検査が黙って死ぬ): ${JSON.stringify(sketchesBefore)}`)
     }
@@ -989,7 +973,7 @@ async function main() {
     await page.click('#sketch-exit')
     await waitFor(() => window.__duocad.activeSketch === null, 'スケッチから抜けられない')
 
-    // ---------------------------------------------------------- (d) 同一平面の同着(2026-08-28)
+    // ---------------------------------------------------------- (d) 同一平面の同着
     // **基準平面に描いて押し出した面は、その基準平面とぴったり重なる。** `resolveHit` は
     // 面と基準平面を「レイ距離が近い方」で決めるので、この重なりでは2つの距離が同着になり、
     // 素の `<` では**勝敗が浮動小数の最後の桁で決まる**。実際、`fitDistance` を数学的に
@@ -1002,7 +986,7 @@ async function main() {
     // 見かけの大きさは保たれる(`viewport.ts` の `setFov`)ので、同じ面を指し続けられる。
     // **面の画素は毎回測り直す** —— カメラが動くと同じ面でも画素が変わる。
     //
-    // **実測(2026-08-28)**: 同着に決着を付けない実装で、この6通りのうち**51度と55度**が
+    // **実測**: 同着に決着を付けない実装で、この6通りのうち**51度と55度**が
     // XZ基準平面を取った(45/47/49/53度は面。同じ実装で上の(b)も平面を取っている ——
     // (b)も画角45なのに(d)の45度は面で、**同じ画角でもクリックごとに転ぶ**)。決着を
     // 付けた後は6通りとも面である。**ここは丸めの当たり外れなので、通ったからといって
@@ -1059,10 +1043,9 @@ async function main() {
 
     // **画面に出たエラーを見落とさない**。サーバのエラーはトーストへ出るだけで、
     // ブラウザのコンソールには出ない —— ここを見ないと「失敗しているのに緑」が起きる
-    // (2026-08-14に open_document で実際に起きた)。
-    // 2026-08-22にエラーの表示先がステータスバーからトーストへ移った。**札は8秒で消える**ので
-    // 最後に一度だけ見るこの検査は控え(`errors`)を見る —— 画面のDOMを見ると、
-    // 途中で出て消えたエラーを取りこぼして緑になる(通知欄より弱くなる)。
+    // (open_document で実際に起きた)。
+    // **札は8秒で消える**ので最後に一度だけ見るこの検査は控え(`errors`)を見る —— 画面のDOMを
+    // 見ると、途中で出て消えたエラーを取りこぼして緑になる(通知欄より弱くなる)。
     const screen = await look()
     // **控えが配列で来ることを先に確かめる。** ここが `undefined` や object に化けると
     // 下の `length > 0` が永久に偽になり、**この検査が赤くならないまま死ぬ**

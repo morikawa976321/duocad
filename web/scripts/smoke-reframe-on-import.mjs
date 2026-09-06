@@ -9,8 +9,8 @@
  *
  *   A. **`import_step` での再フレーミング**(完了条件1): 先に小さな部品で初回フレーミングを
  *      消費させておいてから大きなSTEPを読むと、旧コードは視点を一切動かさず、大きなモデルの
- *      端が画面外に出る(2026-08-30に本人が実測: 対角約640mmのSTEPで再現し、
- *      `window.__duocad.frameAll()` で復帰した。それまで画面には視点を戻す手段が無い)。
+ *      端が画面外に出る(実測: 対角約640mmのSTEPで再現し、
+ *      `window.__duocad.frameAll()` で復帰した)。
  *      `applied.verb === 'import_step'` の応答ハンドラに `viewport?.frameAll()` を足して直した
  *      (`web/src/App.svelte`)。
  *
@@ -31,7 +31,7 @@
  * どちらも `window.__duocad.projectPoint(world)` で外接箱の8頂点を画面座標に投影し、
  * 全頂点がビューポートの矩形内にあるかを数値で確かめる。**`projectFace` は使わない** ——
  * 最初にピックできた三角形の重心を返すので、視点や画角を変えると同じ面でも数十px跳ぶ
- * (engine [[projected-face-point-jumps-between-triangles]]、2026-08-28に acceptance の
+ * (engine [[projected-face-point-jumps-between-triangles]]。acceptance の
  * FOV検査を実際にこれで直している)。
  *
  * サーバはこのスクリプトが空の文書で起動し、板・STEP・立方体ともMCP経由で作る。
@@ -157,9 +157,8 @@ async function checkImportReframes(executablePath) {
       await page.keyboard.press('Backspace')
       await page.type(selector, String(value), { delay: 15 })
     }
-    // **STEP読み込みはツールバーのコマンド**(2026-09-05に `FilesPanel` から戻った)。
-    // 起動して初めてパス欄が現れるので**押す→打つ→Enter**の順になる
-    // (`commands/files.ts` の `IMPORT_STEP`)。
+    // **STEP読み込みはツールバーのコマンド**(起動して初めてパス欄が現れる。
+    // 詳細は `smoke-files.mjs` 参照)。
     await page.click('#file-import-step')
     await typeInto('#file-import-path', stepPath)
     await page.keyboard.press('Enter')

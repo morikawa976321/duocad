@@ -7,8 +7,7 @@
  *          --panel "new:rmin=2.5,sigma=0,iters=30"
  *
  * **1本のコマンドで終わる。** 重い段(面ごとに最適化を回す)も、描く段も、並べてラベルを
- * 焼く段も、ここが全部やる —— 使うたびに手順書を読み返す道具は使われなくなる
- * (本人・2026-09-05「使用時のコストが軽いこと」が要求)。
+ * 焼く段も、ここが全部やる —— 使うたびに手順書を読み返す道具は使われなくなる。
  *
  * ## 引数
  *
@@ -76,15 +75,15 @@ const HEIGHT = Number.parseInt(options.height ?? '700', 10)
 /** ラベルの帯と面のすきま(`docs/topopt-smooth-compare/` の16枚と同じ寸法)。 */
 const BAND = 34
 const GAP = 6
-// **旧実験場(`probe_topopt/web/index.html`。2026-09-05に削除)の既定表示から写した値。
-// 片方だけ変えないこと**(比較の土俵が変わり、`docs/topopt-smooth-compare/` と並べられなくなる)。
+// **この既定値は `docs/topopt-smooth-compare/` の16枚と同じ表示になるよう揃えてある。
+// 片方だけ変えないこと**(比較の土俵が変わり、並べられなくなる)。
 const FOV = 50
 const BG = '#0a0a12'
 const MESH_COLOR = 0x6fa8dc
 
 /** 撮る向き。`docs/topopt-smooth-compare/README.md` の「題材と方向」と同じ4つ。 */
 const VIEWS = {
-  iso: { dir: [-0.75, 0.5, 0.6], zoom: 1.0 }, // 3/4俯瞰(旧実験場の既定視点と同じ向き)
+  iso: { dir: [-0.75, 0.5, 0.6], zoom: 1.0 }, // 3/4俯瞰
   side: { dir: [-0.06, -1.0, 0.08], zoom: 1.0 }, // ほぼ真横。輪郭のシルエットが出る
   threeq: { dir: [0.62, 0.66, 0.42], zoom: 1.0 }, // iso の反対側からの3/4
   zoom: { dir: [-0.75, 0.5, 0.6], zoom: 0.62 }, // iso と同じ向きで距離だけ詰めた拡大

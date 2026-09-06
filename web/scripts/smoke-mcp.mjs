@@ -65,17 +65,15 @@ async function main() {
     ok(`MCP接続: protocol ${info.protocolVersion} / ${info.serverInfo.name} ${info.serverInfo.version}`)
 
     const tools = (await mcp.send('tools/list')).result.tools.map((tool) => tool.name)
-    // **【2026-08-12 F2で退役】** ここは `tools.length !== 3` で「3つだけ」を固定していたが、
-    // F（F1+F2）が実装計画書§0の到達表のAI列を埋めてツールは28個になった。顔ぶれの上限を
-    // 決める契約は `tests/test_mcp_verbs.py` にひとつだけ置く（同じ上限を複数箇所に書くと、
-    // 片方の更新を忘れた瞬間に必ず食い違う——pytest側でも同じ穴を踏んでいる）。
+    // ツールの顔ぶれの上限を決める契約は `tests/test_mcp_verbs.py` にひとつだけ置く
+    // (同じ上限を複数箇所に書くと、片方の更新を忘れた瞬間に必ず食い違う)。
     // ここに残すのは **M4の3つが名前を変えずに生き残っていること** の回帰ガードである。
     const m4Tools = ['describe_document', 'set_visible', 'describe_shape']
     const missing = m4Tools.filter((name) => !tools.includes(name))
     if (missing.length) fail(`M4のツールが消えている: ${missing.join(', ')}`)
     ok(`tools/list: ${tools.length}個（M4の3つを含む）`)
 
-    // ツール名 == ログのverb名。**STEP読み込みのツールは1つだけ**(2026-08-27に統合)。
+    // ツール名 == ログのverb名。**STEP読み込みのツールは1つだけ**。
     const imported = await mcp.callTool('import_step', { path: stepPath })
     if (imported.verb !== 'import_step') {
       fail(`import_step の verb が一致しない: ${imported.verb}`)
@@ -221,10 +219,10 @@ async function main() {
     // 引数が揃うと即座に適用される。その引き金は**人がこの画面で指したこと**でなければ
     // ならない —— 選択集合はAIも `modify_selection` で書き換えられるので、「面が1つ選ばれた」
     // だけで発火させると、**人が何も触っていないのに文書が変わる**。ここはその境目を実機で
-    // 固定する(2026-08-22のQA指摘)。
+    // 固定する。
     //
-    // 材料は**面に貼る `sketch_create`**である(2026-08-27に「編集用に複製」が消えたため
-    // 差し替えた)。踏む配線は同じ1本 —— `CommandHost` の `appliesOnSelection` が構え、
+    // 材料は**面に貼る `sketch_create`**である。踏む配線は同じ1本 ——
+    // `CommandHost` の `appliesOnSelection` が構え、
     // `App.svelte` が「自分が出した」と確かめた選択変更の数(`selfSelections`)が増えたときだけ
     // `commit()` する `$effect` である。
     //
@@ -385,13 +383,13 @@ async function main() {
 
     // ------------------------------------------------- 検証4: 同じ操作ログ / 可視性は履歴の外
     // **AIが積んだ操作を、人間がブラウザのCtrl+Zで取り消せる**(同じ操作ログを共有している)。
-    // 材料に可視性を使わない —— `set_visible` は操作ログに載らないので(2026-08-26)、
+    // 材料に可視性を使わない —— `set_visible` は操作ログに載らないので、
     // **同じCtrl+Zを押しても隠れたまま**である。戻ってしまうと、奥を覗くために手前を隠した
     // だけで直前の編集へ戻れなくなる。1回のCtrl+Zで両方を見る。
     //
     // 積む操作は **`import_step`**。いま表示中は対象の1部品だけなので、AIに書き出させた
     // STEPをそのまま読み直せば軽い1操作になる。**読み込みは何部品でもログ1行・undo1回**
-    // という粒度(2026-08-27の統合の中核)を、実機のCtrl+Z 1回で裏取りする形でもある。
+    // という粒度を、実機のCtrl+Z 1回で裏取りする形でもある。
     const lastHidden = others[others.length - 1]
     const roundTripStep = join(tmpdir(), `duocad-smoke-mcp-${process.pid}.step`)
     await mcp.callTool('export_step', { path: roundTripStep })
@@ -467,8 +465,8 @@ async function main() {
       { timeout, polling: 50 },
       proposedCount,
     )
-    // **提案は確定選択と違う色で出る。** 2026-08-23に選択パネルを廃したので、提案(水色)と
-    // 確定(橙)の区別を人へ伝えるのは**3Dのハイライト色だけ**になった —— その色そのものを
+    // **提案は確定選択と違う色で出る。** 提案(水色)と確定(橙)の区別を人へ伝えるのは
+    // **3Dのハイライト色だけ**である —— その色そのものを
     // 読んで確かめる(`viewport.highlightColors`)。辺が3Dに出るのは辺を要求している
     // コマンドを起動している間だけなので、人がやるとおり先にフィレットを起動する。
     await page.click('#fillet')
@@ -488,7 +486,7 @@ async function main() {
     ok(`AIが述語で辺 ${proposedCount} 本を提案 → ブラウザに**提案の色(水色)で**出た`)
 
     // ---------------------------------------------------------------- 人が1本外す
-    // **Ctrl+クリックで外す**(選択パネルの「外す」ボタンの代わり。2026-08-23)。
+    // **Ctrl+クリックで外す**(選択パネルの「外す」ボタンの代わり)。
     // 裏に回っている辺は指せないので、提案のうち実際に指せる1本を順に試す。
     const proposedIndices = proposed.selection.items
       .filter((item) => item.body === target.body_id)

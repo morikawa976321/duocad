@@ -3,14 +3,14 @@
  *
  *   node scripts/smoke-vertex.mjs [--port 8965] [--http-port 8966]
  *
- * 2026-08-23に `SelectionPanel.svelte`(一覧・「外す」・「全解除」・「承認する」)を削除した。
+ * `SelectionPanel.svelte`(一覧・「外す」・「全解除」・「承認する」)は無い。
  * その代替が本当に機能することを、**本物のMCPと本物のブラウザ**で見る:
  *
  *   1. AIが頂点を提案 → **選択に入っている頂点だけ**が3Dにマーカーで出る(提案の色=水色)。
  *      頂点は3Dで指せない唯一の種別だったので、**ここが消えると人は頂点を外せなくなる**
  *   2. **本物のCtrl+クリックで1つ外せる**(origin が proposed → user・AI側も同じ集合を読む)
  *   3. AIが面を提案 → **人がツールバーから押し出すだけでverbが走る**
- *      (旧「承認する」ボタンの代替。`duocad/server.py` の `_commit_before_verb`)
+ *      (`duocad/server.py` の `_commit_before_verb`)
  *
  * サーバはこのスクリプトが空の文書で起動し、板はMCP経由で作る。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。

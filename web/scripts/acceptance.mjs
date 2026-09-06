@@ -69,9 +69,7 @@ const VERBS = [
 /**
  * **人間側の口を持たない操作**(= AI/MCPからしか踏めない)。
  *
- * 2026-08-30に本人が右サイドバーの数値入力欄(`SketchPanel.svelte`)を廃止し、位置の
- * 打ち直しを直接選択 + `move_sketch_entities` / `move_body` へ置き換えた。**寸法**
- * (半径・幅高さ・角度)の打ち直し口は今回作らないと決めた(スコープ外)ので、
+ * **寸法**(半径・幅高さ・角度)の打ち直し口は人間側には作らないと決めている(スコープ外)ので、
  * `set_parameter` は人間側の手が無い —— 到達表の「人間」列は**空欄**が正である。
  *
  * **ここに足すのは「作らないと決めた」ときだけ**にすること。実装漏れをここへ入れると、
@@ -92,8 +90,8 @@ function record(side, verb, ok, note) {
  * **このスクリプトは落ちても止めない設計**(冒頭のdocstring「各操作は独立して試し、
  * 落ちても止めずに ❌ と理由を残す」)なので、合否は走り終わってから1回だけ判定する。
  * **判定をここに置かないと、❌ が並んでいても終了コードが0のまま**になり、
- * 呼び出し側(人・cron・drain)からは全部通ったのと区別が付かない —— 2026-08-28まで
- * 実際にそうなっていた。**出力は1行も減らさず、終了コードだけを変える。**
+ * 呼び出し側(人・cron・drain)からは全部通ったのと区別が付かない。
+ * **出力は1行も減らさず、終了コードだけを変える。**
  */
 function failedLabels(collected) {
   const failed = []
@@ -130,8 +128,7 @@ async function main() {
 
   console.log(`acceptance: ws=${wsPort} http=${httpPort} workdir=${workdir}`)
   // **`modelsDir: workdir`** —— 渡さないとリポジトリ直下の実 `models/` を受入が触る
-  // (`server.mjs` の `startServer` 参照)。使い捨てdirは既に作ってあるのに、
-  // ここだけ渡し忘れていた(2026-08-28に発見。他の実機検査5本は元から渡している)。
+  // (`server.mjs` の `startServer` 参照)。他の実機検査も同様に渡している。
   const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
   // 受入は落ちても最後まで走る作りなので、混入行は**記録して続ける**。
   const mcp = new McpClient(server.child, {
@@ -196,7 +193,7 @@ async function main() {
             redoCount: hook.redoCount,
             messages: hook.messages,
             // 走行中に出たエラーの控え(`App.svelte` の `errorLog`)。**トーストは8秒で消える**ので、
-            // 記録に残すのは画面のDOMではなくこちら(2026-08-22にエラーの表示先が移った)。
+            // 記録に残すのは画面のDOMではなくこちら。
             errors: hook.errors,
             lastFile: hook.lastFile,
           })
@@ -221,7 +218,7 @@ async function main() {
     }
 
     /**
-     * スケッチの図形を**3Dのクリックで選ぶ**(2026-08-30。旧「図形一覧のボタン」の後継)。
+     * スケッチの図形を**3Dのクリックで選ぶ**(他の実機検査と同じ道具)。
      *
      * 図形の**最初の点**(円・円弧は中心、線分・ベジエは始点、長方形は左下)を狙う ——
      * 点はその図形の上にあり、当たり判定も点が最優先なので確実に掴める。
@@ -363,23 +360,22 @@ async function main() {
     // **描いたものに視点を合わせてから続ける**。空のスケッチに入った直後のカメラは
     // 何も無い場面に合わせてあるので、原点から離れた点は画面の外になる(実測で踏んだ)。
     //
-    // **矩形(u[0,60]・v[0,40])の外へ逃がす場所を、横(u<0/u>60)から下(v<0)へ変えた**
-    // (2026-08-26、ファイル一覧が左サイドバーへ戻ってビューポートが240px狭まったため)。
-    // 横方向は実測でu=70やu=-20が軒並み画面の外になった一方、縦方向(v)は
-    // ウィンドウの幅を削っても変わらないFOVで決まるので、矩形の下端(v=0)からv=-10までの
-    // 帯は今も見える(実測)。**この帯の中に置くのは、矩形と交差させないため** ——
-    // `duocad/region.py` の領域計算は `BRepAlgoAPI_Splitter` で面をスケッチの辺すべてで
-    // 割るので、閉じていない線分・円弧でも矩形の内側を横切らせると分割線になり、
-    // 実際に「join produced an invalid shape」で押し出しが壊れることを実測で確認した。
-    // 矩形の外に完全に離してあれば、線分・円弧は閉じていないので新しい領域を作らず、
-    // 円だけが独立した小さな領域になる(以前の u=70/-20 配置と同じ理屈)。
+    // 追加する図形は矩形(u[0,60]・v[0,40])の**下(v<0)へ逃がす**。横方向(u<0/u>60)は
+    // 実測でu=70やu=-20が軒並み画面の外になる一方、縦方向(v)はウィンドウ幅を削っても
+    // 変わらないFOVで決まるので、矩形の下端(v=0)からv=-10までの帯は今も見える(実測)。
+    // **この帯の中に置くのは、矩形と交差させないため** —— `duocad/region.py` の
+    // 領域計算は `BRepAlgoAPI_Splitter` で面をスケッチの辺すべてで割るので、閉じていない
+    // 線分・円弧でも矩形の内側を横切らせると分割線になり、実際に「join produced an
+    // invalid shape」で押し出しが壊れることを実測で確認した。矩形の外に完全に離して
+    // あれば、線分・円弧は閉じていないので新しい領域を作らず、円だけが独立した
+    // 小さな領域になる。
     await page.click('#sketch-look')
 
     await attempt('human', 'add_line', async () => {
       await page.click('#sketch-line')
       await clickPlane(5, -8)
       await clickPlane(25, -8)
-      // **Enterは押さない**(2026-08-22)。線分は対象が点2つ・howの入力が無いので
+      // **Enterは押さない**。線分は対象が点2つ・howの入力が無いので
       // 2点目のクリックで即適用される(`command.ts` の `needsEnter`)。
       await waitFor(
         () => {
@@ -548,12 +544,10 @@ async function main() {
 
     await attempt('human', 'extrude_face', async () => {
       const before = (await look()).parts[0].volume
-      // **押す面は法線で名指しする**(手前=−Y の壁)。以前は「平面のうち最初に射影できた
-      // もの」だったが、それだと**どの面を押したかが視点で変わる** —— 2026-08-28に視点を
-      // Z-up の front-top-right へ変えたとき、それまで当たっていた +Y の壁が裏向きになり、
-      // 別の壁(40×10)が選ばれて後続の形が丸ごと変わった(AI側の `fillet` が、できあがった
-      // 形の都合で OCCT に IsDone=false で断られるところまで波及した)。**受入の筋書きは
-      // カメラの向きに依存させない。**
+      // **押す面は法線で名指しする**(手前=−Y の壁)。**面を「平面のうち最初に射影できた
+      // もの」で選ぶと、どの面を押したかが視点で変わってしまう** —— カメラの向きが
+      // 変わるだけで別の壁が選ばれ、後続の形や `fillet` の成否まで変わりうる。
+      // **受入の筋書きはカメラの向きに依存させない。**
       const face = await page.evaluate((id) => {
         const rect = document.querySelector('.viewport').getBoundingClientRect()
         const geometry = window.__duocad.getGeometry(id)
@@ -575,8 +569,7 @@ async function main() {
         bodyId,
         face.index,
       )
-      // **通常モードの既定は無起動なので、ここで明示的に「押し出す」を起動する**
-      // (2026-08-28。以前は`extrude_face`が最初から構えたままで、この1手が要らなかった)。
+      // **通常モードの既定は無起動なので、ここで明示的に「押し出す」を起動する**。
       // 面は選択済みのまま(起動は選択を触らない)なので、#distanceだけがここで出る。
       await page.click('#extrude')
       await waitFor(() => document.querySelector('#distance') !== null, '#extrudeを押しても#distanceが出ない')
@@ -663,9 +656,8 @@ async function main() {
       return `辺 ${picked} を選び、長さ1で面取りした(面 ${before} → ${(await look()).parts[0].faces})`
     })
 
-    // **`set_parameter` は人間側の口を持たない**(2026-08-30本人決定。上の `AI_ONLY`)。
-    // 寸法の打ち直し欄(旧 `SketchPanel.svelte`)を廃止し、位置の直しは下の2つの move へ
-    // 移した。ここで代わりに動かすのがその後継である。
+    // `set_parameter` は人間側の口を持たない(上の `AI_ONLY`)。位置の打ち直しは
+    // 下の2つの move で代替する。
     await attempt('human', 'move_sketch_entities', async () => {
       // 長方形はもうスケッチモードの外にいるので、「再開」(BrowserPanelの名前クリック)で
       // そのスケッチへ戻ってから、図形の点を掴んで動かす —— 人間が実際にやる手順そのもの。
@@ -675,7 +667,7 @@ async function main() {
         '長方形のスケッチへ再入場できない',
         humanSketchId,
       )
-      // **正面から見る**。再入場の視点は「入る前」に戻る作り(2026-08-26)なので、
+      // **正面から見る**。再入場の視点は「入る前」に戻る作りなので、
       // 図形が画面の外に居ることがある —— 点を1画素で狙う操作には寄せ直しが要る。
       await page.click('#sketch-look')
       await new Promise((resolve) => setTimeout(resolve, 500))
@@ -827,8 +819,7 @@ async function main() {
     const humanStl = join(workdir, 'human.stl')
 
     await attempt('human', 'export_step', async () => {
-      // **左サイドバーのファイルパネル**(2026-08-27にツールバーから移設)。欄へ打って
-      // Enter(その行のボタンと同じ)。
+      // **左サイドバーのファイルパネル**。欄へ打ってEnter(その行のボタンと同じ)。
       await typeInto('#file-export-step-path', humanStep)
       await page.keyboard.press('Enter')
       await waitFor(() => window.__duocad.lastFile?.action === 'export_step', '応答が返らない')
@@ -849,8 +840,7 @@ async function main() {
       // **読んだ時点で編集できることまで見る。** `parts` は `kind === "solid"` だけを
       // 並べるので、ここが増えていれば編集用ボディができている。
       const before = (await look()).parts.length
-      // **押す→打つ→Enter**(2026-09-05にツールバーのコマンドへ戻った。
-      // `commands/files.ts` の `IMPORT_STEP`)。起動して初めてパス欄が現れる。
+      // **押す→打つ→Enter**(`commands/files.ts` の `IMPORT_STEP`)。起動して初めてパス欄が現れる。
       await page.click('#file-import-step')
       await typeInto('#file-import-path', humanStep)
       await page.keyboard.press('Enter')
@@ -992,9 +982,8 @@ async function main() {
       // **`measure` で長さを確かめてから一番長い円い辺を選ぶ**(`ai/extrude` と同じ、
       // 提案を確定前に検算する経路)。**先頭を黙って使わない** —— 直前の `fillet` が
       // 作る角の小さな円弧(長さ1.57mm = 半径1の四半円)も述語では同じ「円い辺」なので、
-      // 添字の順で取ると**長さ1の面取りが入る余地のない辺**を掴む。2026-08-28に視点を
-      // Z-up へ変えて形が少し変わった際、実際にそこへ落ちて OCCT に
-      // 「no suitable edges」で断られた(それまでは偶然通っていた)。
+      // 添字の順で取ると**長さ1の面取りが入る余地のない辺**を掴むことがある
+      // (OCCT に「no suitable edges」で断られる)。
       const candidates = []
       for (const ref of mine) {
         await mcp.callTool('propose_selection', { refs: [ref] })
@@ -1083,7 +1072,7 @@ async function main() {
 
     await attempt('ai', 'import_step', async () => {
       // **STEP読み込みのツールは1つだけ**(ツール名 == ログのverb名)。読んだ時点で
-      // 編集可能なボディができる(参照ボディの概念は2026-09-03に撤去済み)。
+      // 編集可能なボディができる。
       const result = await mcp.callTool('import_step', { path: aiStep })
       if (!Array.isArray(result.body_ids) || result.body_ids.length === 0) {
         throw new Error(`編集可能なボディが返らない: ${JSON.stringify(result.body_ids)}`)
@@ -1112,7 +1101,7 @@ async function main() {
       if (proposedItems.length === 0) throw new Error('述語で辺が1本も選べない')
 
       // 2. **ブラウザに「提案」として出る**(確定選択と**違う色**で3Dに出る。
-      //    2026-08-23に選択パネルを廃したので、区別を伝えるのはこの色だけになった)
+      //    区別を伝えるのはこの色だけである)
       await page.waitForFunction(
         (count) => {
           const selection = window.__duocad.selection
@@ -1199,8 +1188,8 @@ async function main() {
 
     // ================================================================ 設定: 画角(FOV)
     //
-    // **2026-08-28にFOVをUIから可変にした**ので、受入に数手だけ足す(実機検査のファイルは
-    // 増やさない)。同日に**完全正投影(0度)**を足したので、見るのは3点:
+    // **FOVはUIから可変**であり、**完全正投影(0度)**もあるので、受入に数手だけ足す
+    // (実機検査のファイルは増やさない)。見るのは3点:
     //
     //   1. **どの画角でも `frameAll` が図形を画面に収める**(0でも30でも90でもシーンが
     //      消えない —— near/far のクリップに当たらない)
@@ -1212,10 +1201,9 @@ async function main() {
     //      通らない検査にしてある)と、**正投影でも寄り引きと `frameAll` が噛み合うこと**
     //      (下の(5))
     //
-    // **ダイアログは各手の前に閉じる。** 2026-09-04に非モーダル(`show()`)へ変えたので
-    // 開いたままでもビューポートのクリックは効く(それ以前は `showModal()` が背後を
-    // inert にするので全部死んでいた)。それでも閉じるのは、**ダイアログの矩形が
-    // 覆っている画素だけは今も取れない**からで、この節が触る点を場合分けしないため。
+    // **ダイアログは各手の前に閉じる。** 非モーダル(`show()`)なので開いたままでも
+    // ビューポートのクリックは効くが、**ダイアログの矩形が覆っている画素だけは今も
+    // 取れない**ので、この節が触る点を場合分けしないために閉じる。
     console.log('\n--- 設定: 画角(FOV。距離補正と frameAll) ---')
 
     /** 設定ダイアログの開閉(DOMに反映されるまで待つ)。 */
@@ -1232,10 +1220,9 @@ async function main() {
 
     /**
      * 画角を `value` にする。**UIを経由せず内部API(`window.__duocad.setFov`)を直呼び**
-     * する(2026-09-04本人決定でUIが正投影/透視30度の2値になったため、30〜90の連続値は
-     * もうUIから到達できない —— ここで検査しているのはビューポートの責務(距離補正・
-     * `frameAll`・正投影の性質)であってUIの責務ではないので、経路をAPIへ移すだけで
-     * 検査の中身は変えない)。`window.__duocad.fov` が変わるまで待つのは今と同じ。
+     * する(UIは正投影/透視30度の2値なので、30〜90の連続値はUIから到達できない ——
+     * ここで検査しているのはビューポートの責務(距離補正・`frameAll`・正投影の性質)で
+     * あってUIの責務ではないので、経路をAPIへ移すだけで検査の中身は変えない)。
      */
     async function setFovTo(value) {
       await page.evaluate((deg) => window.__duocad.setFov(deg), value)
@@ -1263,9 +1250,9 @@ async function main() {
      *
      * **前後のずらしだけは固定しない。** こちらを世界座標で固定すると、カメラが遠ざかる
      * 実装(画角を絞って正投影を真似る等)では前後の差が距離に対して相対的に消え、比が1へ
-     * 近づく —— 検査の検出力がカメラの遠さで薄まる。2026-08-28、画角1度の偽物で実測して
-     * 比 1.0127(しきい値1.01のすぐ外)しか出ず、もう一声絞られたら通ってしまうことが
-     * 分かったので、**常に今の距離から作る**(本物の透視なら距離によらず約1.86)。
+     * 近づく —— 検査の検出力がカメラの遠さで薄まる。画角1度の偽物で実測すると
+     * 比 1.0127(しきい値1.01のすぐ外)しか出ず、もう一声絞られたら通ってしまう。
+     * よって**常に今の距離から作る**(本物の透視なら距離によらず約1.86)。
      */
     async function depthProbe(scale = null) {
       return await page.evaluate((given) => {
@@ -1326,7 +1313,7 @@ async function main() {
             // 最初にクリックが通る画素」を返す実装で、代表点ではなく**たまたま条件を
             // 満たした三角形の重心**を返す。視点・画角を変えると勝ち残る三角形が入れ替わり、
             // 同じ面でも画面座標が数十px跳ぶ(engine
-            // `projected-face-point-jumps-between-triangles`。2026-08-28実測: 中心から
+            // `projected-face-point-jumps-between-triangles`。実測: 中心から
             // 211pxの面で27.3px対3.5pxの差)。ここは「視点・画角の違いを比べる」検査なので、
             // 固定した世界座標(面の重心)をそのまま射影する`projectPoint`を使う
             // (`projectFace`が要るのは「本当にそこを押せるか」を見る手だけ)。
@@ -1467,7 +1454,7 @@ async function main() {
       // いないこと**を見る。45→60の拡大率は tan(30°)/tan(22.5°) ≒ 1.394 なので、
       // 補正が無ければ中心から r の点は 0.394r 動く。
       //
-      // **しきい値は実測から作った(2026-08-28再校正)。** 測定点を`projectFace`(最初に
+      // **しきい値は実測から作った。** 測定点を`projectFace`(最初に
       // ピックできた三角形の重心。視点で数十px跳ぶ)から`projectPoint(face.centroid)`
       // (固定した世界座標)へ差し替えた際、旧しきい値(6px / 0.25r)は跳びを吸収するための
       // 値のまま残っていて、跳びの無い新しい測り方には桁で緩かった(実測0.68px/3.38pxに対し
@@ -1618,12 +1605,12 @@ async function main() {
         )
       }
 
-      // (6) **ビューキューブがFOVに追従してひずむこと**(2026-09-04 —— 専用の正投影カメラを
-      //     やめ、本編と同じ画角で描くようにしたタスクの完了条件1・6)。カメラの**向きは
+      // (6) **ビューキューブがFOVに追従してひずむこと**(専用の正投影カメラをやめ、
+      //     本編と同じ画角で描く作りになっている)。カメラの**向きは
       //     動かさず**(`frameAll`は最初の1回だけ)、FOVだけを変えてキューブ矩形の画素を
       //     比べる —— 画角を変えている最中の実運用と同じ操作列にすることで、
       //     `setFov`から明示的に通知しなくても毎フレームの`updateCubeCamera`が追随する
-      //     (完了条件6)ことも一緒に確かめる。
+      //     ことも一緒に確かめる。
       //
       //     **制御群(同一FOV同士の差分)を挟む** —— スクリーンショットのPNGエンコードや
       //     アンチエイリアスの揺らぎだけを「変わった」と誤検出しないため、30度↔90度の差分が
@@ -1649,7 +1636,7 @@ async function main() {
 
       const cubeControlDiff = pngByteDiff(cubeAt45a, cubeAt45b)
       const cubeFovDiff = pngByteDiff(cubeAt30, cubeAt90)
-      // しきい値は実測から作った(2026-09-04)。同一FOV制御群の差分は実測0バイト
+      // しきい値は実測から作った。同一FOV制御群の差分は実測0バイト
       // (決定論的な描画・エンコード)なので、1バイトでも大きければ検出できるはずだが、
       // 将来の非決定要素(タイムスタンプ入りメタデータ等)の混入に備えて8倍の余裕を見る。
       if (!(cubeFovDiff > 200 && cubeFovDiff > cubeControlDiff * 8)) {
@@ -1666,8 +1653,7 @@ async function main() {
       // (7) **2値のUIそのもの。** `#settings-fov`(スライダー)は要素ごと消えている。
       //     `#settings-ortho` を入れると `fov===0`、外すと常に `FOV_DEFAULT`(30) に戻る
       //     ——「戻る角度を覚える仕組み」を消した設計なので、内部APIで選べない値(70)を
-      //     入れてあっても戻り先は変わらない(2026-09-04本人決定「覚え直す仕掛けを
-      //     再発明しない」)。
+      //     入れてあっても戻り先は変わらない。
       await setFovTo(70)
       await setSettingsOpen(true)
       const sliderGone = await page.$('#settings-fov')
@@ -1724,8 +1710,8 @@ async function main() {
 
     // ================================================================ 座標系: Z-up 右手系
     //
-    // **2026-08-28にビューポートを Z-up(X=右 / Y=奥 / Z=上)へ直した**ので、受入に数手
-    // 足す(実機検査のファイルは増やさない)。カーネルは元から Z-up で、**ずれていたのは
+    // **ビューポートは Z-up(X=右 / Y=奥 / Z=上)である**ので、受入に数手足す
+    // (実機検査のファイルは増やさない)。カーネルは元から Z-up で、**ずれていたのは
     // ビューアだけ**だった。見るのは4点:
     //
     //   1. `camera.up` がワールド+Z、かつ初期視点が front-top-right
@@ -1858,8 +1844,7 @@ async function main() {
       const midY = rect.top + rect.height / 2
       const centerX = rect.left + rect.width / 2
       const swing = Math.min(220, rect.width / 3)
-      // **右ボタンで回す**(2026-08-30にマウスの割り当てを変えた —— 左ドラッグは
-      // ウィンドウ選択、中ドラッグはパン、回転は右になった。本人決定)。
+      // **右ボタンで回す**(左ドラッグはウィンドウ選択、中ドラッグはパン、回転は右)。
       await page.mouse.move(centerX - swing, midY)
       await page.mouse.down({ button: 'right' })
       for (let i = 1; i <= 10; i += 1) {
