@@ -117,6 +117,12 @@ assert.ok(reason('asin(2)').includes('値が数にならない'))
 assert.ok(reason('tan(90)').includes('値が数にならない'), 'Math.tan は 1.6e16 という有限のでたらめを返す')
 assert.ok(reason('10^400').includes('値が数にならない'))
 
+// **深い入れ子で投げてはならない**。括弧だけが再帰するので、貼り付けた式が
+// `RangeError` を投げると、これを呼ぶ `$derived` ごと画面が落ちる。
+assert.equal(reason('('.repeat(5000) + '1' + ')'.repeat(5000)), '式が深すぎる')
+// 左結合の並びは反復なので、長さでは枯れない。
+assert.equal(value(Array(5000).fill('1').join('+')), 5000)
+
 // **継承した名前が関数として引けてはならない**(表を `Map` で持つ理由)。
 for (const name of ['toString', 'constructor', 'hasOwnProperty', 'valueOf']) {
   assert.ok(!evaluateExpression(`${name}(1)`).ok, `継承名が関数として通った: ${name}`)

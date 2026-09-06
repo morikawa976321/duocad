@@ -267,6 +267,9 @@ export function evaluateExpression(text: string): ExpressionResult {
     return { ok: true, value }
   } catch (error) {
     if (error instanceof ExpressionError) return { ok: false, reason: error.message }
+    // **括弧の入れ子だけが再帰する**。深く貼り付けられると `RangeError` になり、投げたままだと
+    // これを呼ぶ `$derived` ごと画面が落ちる。
+    if (error instanceof RangeError) return { ok: false, reason: '式が深すぎる' }
     throw error
   }
 }

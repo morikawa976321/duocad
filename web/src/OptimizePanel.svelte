@@ -47,6 +47,7 @@
    * **`position: absolute` でフローの外**に置くので、`.viewport` の寸法＝カメラのアスペクトに
    * 触らない(styles.css の不変条件)。
    */
+  import { evaluateExpression } from './expression'
   import type {
     OptimizeConditionsReport,
     OptimizeProgress,
@@ -81,6 +82,17 @@
     onRun: () => void
     onCancel: () => void
   } = $props()
+
+  /**
+   * 打ったのに使えない値の理由(空欄は「指定なし」なので理由を出さない)。
+   * **打った値が黙って「指定なし」に化けない**ようにする分だけを見せる。
+   */
+  const rminProblem = $derived.by(() => {
+    if (rminText.trim() === '') return null
+    const evaluated = evaluateExpression(rminText)
+    if (!evaluated.ok) return evaluated.reason
+    return evaluated.value > 0 ? null : '最小部材幅は0より大きい値'
+  })
 
   const steps = $derived(resolution?.steps ?? [])
   /** 実際に効いている段の位置。**目盛りが縮んだときのために毎回丸め直す**
@@ -140,6 +152,9 @@
     />
     <span class="unit">mm</span>
   </label>
+  {#if rminProblem !== null}
+    <p id="optimize-rmin-note" class="hint bad">{rminProblem}</p>
+  {/if}
 
   <!-- **目盛りは細かくする方向にだけ動く**(左端＝既定＝いちばん粗くて安い)。
        段が1つも無い＝「間違わない解像度」が作れない状態なので、スライダーごと出さずに
