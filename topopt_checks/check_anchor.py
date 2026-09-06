@@ -48,8 +48,7 @@ from pathlib import Path
 
 import numpy as np
 
-# Windowsの既定コンソール(cp932)で記号1つ落ちるだけで検査が1件も走らず異常終了するのを防ぐ
-# (check_simp.py で2026-08-29に踏んだのと同じ対策)。
+# Windowsの既定コンソール(cp932)で記号1つ落ちるだけで検査が1件も走らず異常終了するのを防ぐ。
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
@@ -683,7 +682,7 @@ def check_edge_rule() -> None:
         raised[:90] if raised else "例外が出なかった(黙って拘束なしになっている)",
     )
 
-    # **混ぜたときが本番**(2026-08-31に本人決定で「1つでも空なら落とす」へ変更)。合計で
+    # **混ぜたときが本番**。合計で
     # 見ていると、大きい面と一緒に指した空の面だけが黙って落ちる —— 2面を固定したつもりで
     # 1面しか効いていない系が、例外も通知も無いまま最適化へ入る。
     big = next(f for f in table_t.face_indices() if f not in empty)

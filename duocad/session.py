@@ -1017,7 +1017,7 @@ class Session:
         """操作ログをJSONで書き出す。**verbではない**(文書を変えないのでログに載らない)。
 
         **契約は2つに割れている**(engine
-        `2026-08-30-duocad-save-becomes-a-header-button`):
+        `duocad-save-becomes-a-header-button`):
 
         - `save_document()`(引数なし) … **いま編集しているファイルへ上書き**する。
           編集中のファイルが無ければ拒否する

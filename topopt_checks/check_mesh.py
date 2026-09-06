@@ -59,8 +59,7 @@ import time
 
 import numpy as np
 
-# Windowsの既定コンソール(cp932)で記号1つ落ちるだけで検査が1件も走らず異常終了する
-# (check_simp.py で2026-08-29に踏んだのと同じ対策)。
+# Windowsの既定コンソール(cp932)で記号1つ落ちるだけで検査が1件も走らず異常終了する。
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(errors="replace")  # type: ignore[union-attr]

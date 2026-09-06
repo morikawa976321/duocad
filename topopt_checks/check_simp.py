@@ -29,7 +29,7 @@ import numpy as np
 
 # **Windowsの既定コンソール(cp932)で落ちないようにする。** 検査の本文は日本語なので
 # cp932でも出せるが、記号(em dash等)が1つ混ざるだけで `UnicodeEncodeError` になり、
-# **検査が1件も走らないまま異常終了する**(2026-08-29に実際に踏んだ)。
+# **検査が1件も走らないまま異常終了する**。
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(errors="replace")  # type: ignore[union-attr]

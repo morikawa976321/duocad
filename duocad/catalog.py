@@ -1375,7 +1375,7 @@ def agent_instructions() -> str:
     verbを足した日に古くなる。
 
     **どこまで自分でやるかもここに書く**(engine
-    `2026-08-22-duocad-ui-interaction-principles`)。規則は2段:
+    `duocad-ui-interaction-principles`)。規則は2段:
 
     - **確認を待たず適用してよい操作** … 対象を何個でも取る引数が無く、how(寸法・選択肢・
       パス)の入力も無いもの。人に聞くことが残っていないので、提案で止める意味が無い。
