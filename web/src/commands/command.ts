@@ -43,6 +43,13 @@ const KIND_COUNTERS: Record<SelectableKind, string> = {
   sketch_entity: '個',
 }
 
+/** 直接ピック(`PickArgSpec`)で人に出す「どこを触るか」の1行。**問い方を1箇所に集める。** */
+const PICK_TARGET_HINTS: Record<PickTarget, string> = {
+  edge: '3Dビューの辺',
+  vertex: '3Dビューの頂点',
+  sketchPoint: 'スケッチの点(線の端点・円/弧の中心など)',
+}
+
 // --------------------------------------------------------------------------------------
 // 参照(ShapeRef / RegionRef)の道具 — コアの `duocad/selection.py` と同じ判定を持つ
 // --------------------------------------------------------------------------------------
@@ -116,16 +123,42 @@ export function sketchEntityRef(
 // 引数の仕様
 // --------------------------------------------------------------------------------------
 /**
+ * どの種別の引数も持つ共通部分。**`when` を1箇所に置くためにある。**
+ *
+ * `when` を種別ごとに書き足す形にすると、書いた種別だけがモード依存になり、
+ * 後から足した種別が黙って「常に必須」の側に残る —— `argSatisfied` は
+ * `ArgSpec` 全体に対して1つの規則で答える必要がある。
+ */
+interface ArgSpecCommon {
+  name: string
+  label: string
+  /**
+   * **その引数が、いま集まっている値の下で要るか**(省略 = 常に要る)。
+   *
+   * `move_body` / `move_sketch_entities` の `mode` のように、**選んだ値によって後続の
+   * 引数が入れ替わる**コマンドのためにある(並進なら dx/dy/dz、回転なら角度と軸)。
+   * 偽を返した引数は `argSatisfied` が「対象外なので揃っている」とみなし、
+   * `CommandHost` は入力欄自体を出さない。
+   *
+   * **verbを分けるのではなくここで分ける**(本人判断) —— `id` を割ると verb 名と
+   * コマンドIDの一致(`catalog.Command.name` の契約)が崩れ、送信経路の分岐が増える。
+   *
+   * **`values` は「いま集まっている値」であって確定値ではない。** まだ打っていない
+   * 引数は入っていないので、`values.mode === 'rotate'` のような**肯定形**で書くこと ——
+   * `!== 'translate'` と書くと、モードを選ぶ前から回転側の引数を要求し始める。
+   */
+  when?: (values: ArgValues) => boolean
+}
+
+/**
  * 選択から取る引数。**まず共有選択集合を見て、足りないときだけ人に問う**。
  *
  * `max` が `null` なら何本でも(フィレットの辺集合)。`max` があるときは
  * 選択の先頭から `max` 個だけを使う(余分を勝手に捨てるのではなく、`max` を超えた分は
  * 引数に入らないことを画面に出す)。
  */
-export interface SelectionArgSpec {
+export interface SelectionArgSpec extends ArgSpecCommon {
   kind: 'selection'
-  name: string
-  label: string
   /** 主たる種別(件数の数え方と問いの文言はこれで決まる)。 */
   shapeKind: SelectableKind
   /**
@@ -142,10 +175,8 @@ export interface SelectionArgSpec {
 }
 
 /** 打ち込む数値の引数(距離・半径・個数)。 */
-export interface NumberArgSpec {
+export interface NumberArgSpec extends ArgSpecCommon {
   kind: 'number'
-  name: string
-  label: string
   unit: string
   /** 入力欄の `id`(実機検査がここを叩く)。 */
   inputId: string
@@ -169,10 +200,8 @@ export interface NumberArgSpec {
  * その場の1クリックであり、集合に残らない(線を引くための始点が選択集合に溜まると、
  * 次のコマンドが拾ってしまう)。
  */
-export interface PointArgSpec {
+export interface PointArgSpec extends ArgSpecCommon {
   kind: 'point'
-  name: string
-  label: string
 }
 
 /**
@@ -182,10 +211,8 @@ export interface PointArgSpec {
  * しかも形が増えるので失敗に見えない —— 数値引数に既定を入れないのと同じ理由で、
  * ここも人が1回選ぶまで引数が揃わない扱いにする(サーバ側も `mode` を必須にしてある)。
  */
-export interface ChoiceArgSpec {
+export interface ChoiceArgSpec extends ArgSpecCommon {
   kind: 'choice'
-  name: string
-  label: string
   options: Array<{ value: string; label: string; buttonId: string }>
 }
 
@@ -196,10 +223,8 @@ export interface ChoiceArgSpec {
  * **スケッチの図形はそこに入らない**(コアの `SELECTABLE_KINDS`)。値はスケッチパネルで
  * 選んだ図形のIDで、`CommandHost` へは `entities` プロパティで渡る。
  */
-export interface EntitiesArgSpec {
+export interface EntitiesArgSpec extends ArgSpecCommon {
   kind: 'entities'
-  name: string
-  label: string
   min: number
 }
 
@@ -210,10 +235,8 @@ export interface EntitiesArgSpec {
  * (実在するか・書けるか)にしか無い —— ここで拡張子やドライブ文字を検査し始めると、
  * **サーバと2箇所で別々のパス解釈を持つ**ことになる。
  */
-export interface TextArgSpec {
+export interface TextArgSpec extends ArgSpecCommon {
   kind: 'text'
-  name: string
-  label: string
   /** 入力欄の `id`(実機検査がここを叩く)。 */
   inputId: string
   placeholder: string
@@ -231,10 +254,8 @@ export interface TextArgSpec {
  * `build` が送るのは基準平面のときの `{base_plane}` だけで、**面は送らない**
  * (`extrude_face` と同じ流儀。面はサーバがコアの確定選択から取る)。
  */
-export interface PlaneArgSpec {
+export interface PlaneArgSpec extends ArgSpecCommon {
   kind: 'plane'
-  name: string
-  label: string
 }
 
 /**
@@ -248,6 +269,59 @@ export function isPlaneArgValue(value: unknown): value is PlaneArgValue {
   return value === 'XY' || value === 'XZ' || value === 'YZ' || value === 'face'
 }
 
+/**
+ * `PickArgSpec` が指させるもの。**3Dの辺・3Dの頂点・スケッチ図形の1点**の3つ。
+ *
+ * ピックイベント(`viewportTypes.PickEvent`)が既に運んでいる `edge` / `vertex` /
+ * `sketchEntity` にそのまま対応する —— 新しい当たり判定を作らずに済むのがこの3つを
+ * 選んだ理由で、増やすときは**ピックイベントに既にある種別**から選ぶこと。
+ */
+export type PickTarget = 'edge' | 'vertex' | 'sketchPoint'
+
+/**
+ * **図形を1つ直接ピックして集める引数**(共有選択集合を経由しない)。
+ *
+ * `SelectionArgSpec` と別物にしてある理由は、**同じ集合に入れると意味が混ざる**から
+ * である —— `move_body` の回転軸に使う辺を共有選択へ入れると、コアの
+ * `selection.require_bodies` がその辺のボディまで「動かす対象」に数えてしまう
+ * (コア側が `commit_selection` を介さない参照で軸を受けているのはこのため)。
+ * `PointArgSpec`(スケッチ平面の自由クリック)とも別物で、こちらは**既にある実体**を指す。
+ *
+ * 値は参照1つ(`SelectionRef`)。種別ごとの形は:
+ *
+ * | `target` | 値 | 拾う元 |
+ * |---|---|---|
+ * | `edge` | `{body, kind:'edge', index}` | `PickEvent.edge`(3Dビュー) |
+ * | `vertex` | `{body, kind:'vertex', index}` | `PickEvent.vertex`(3Dビュー) |
+ * | `sketchPoint` | `{sketch, entity, point}` | `PickEvent.sketchEntity`(スケッチ平面) |
+ *
+ * **値は参照のまま送る**(座標へ潰さない) —— コアは辺の直線・頂点・図形の点を
+ * B-repや `params` から厳密に解決できるが、ブラウザが持っているのは配られた折れ線と
+ * 数値だけである。参照で送れば解決はコアの1箇所にとどまり、まっすぐでない辺のような
+ * 拒否もコアの既存の規則がそのまま効く。**幽霊(確定前のプレビュー)に要る数値は
+ * `App.svelte` が別に解決する** —— そちらは近似ではなく、配られた折れ線・頂点座標・
+ * `params` という**コアが出した数値そのもの**から作る。
+ */
+export interface PickArgSpec extends ArgSpecCommon {
+  kind: 'pick'
+  /** 何を1つ指させるか。 */
+  target: PickTarget
+  /** 「指す」ボタンの `id`(実機検査がここを叩く)。指した中身は `<id>-value` に出る。 */
+  buttonId: string
+  /**
+   * **省略してよい引数**(既定はコア側にある)。`true` なら空のままでも引数は揃う。
+   *
+   * 空欄に既定値を置く `NumberArgSpec.default` と違い、**ここは値を作らない** ——
+   * 回転中心の既定(対象の重心 / 代表点の平均)はコアにしか無い規則で、画面側へ写すと
+   * 規則が2箇所になり、片方だけ変わったときに幽霊と確定結果が別の場所に出る。
+   * **省略されたら引数ごと送らない**のが正しい(`build` がそう書くこと)。
+   *
+   * 省略できる引数は `firstMissingArg` が指さないので、**人がそこを指したいと言う手**が
+   * 別に要る —— `CommandHost` の「指す」ボタン(`armedPick`)がそれである。
+   */
+  optional?: boolean
+}
+
 export type ArgSpec =
   | SelectionArgSpec
   | NumberArgSpec
@@ -256,15 +330,27 @@ export type ArgSpec =
   | EntitiesArgSpec
   | TextArgSpec
   | PlaneArgSpec
+  | PickArgSpec
 
 /** スケッチ平面上の点 [u, v](mm)。**定義は `session.ts`**(コアと同じ形)。ここは通すだけ。 */
 export type { Point2 }
 
 /**
  * 集まった引数の値。選択は参照の配列、数値は数、点は [u,v]、選択肢は文字列、図形はID列、
- * スケッチを貼る先は文字列(`PlaneArgValue`)。
+ * スケッチを貼る先は文字列(`PlaneArgValue`)、直接ピックは**参照1つ**。
  */
-export type ArgValues = Record<string, SelectionRef[] | number | Point2 | string | string[]>
+export type ArgValues = Record<
+  string,
+  SelectionRef[] | SelectionRef | number | Point2 | string | string[]
+>
+
+/** 直接ピックの値として読めるなら返す(読めなければ null)。 */
+export function pickedRefOf(value: unknown): SelectionRef | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  const ref = value as Record<string, unknown>
+  if (typeof ref.sketch === 'string') return typeof ref.entity === 'string' ? (value as SelectionRef) : null
+  return typeof ref.body === 'string' && typeof ref.index === 'number' ? (value as SelectionRef) : null
+}
 
 /** `build` の結果。作れないときは理由を返す(黙って何も送らない、をしない)。 */
 export type BuildResult =
@@ -395,9 +481,14 @@ export function itemsForArg(spec: SelectionArgSpec, selection: SelectionState | 
  * 「どれを押すか」を勝手に決めることになる(コア側の `require_confirmed(exactly_one=True)` は
  * 2枚以上を拒否する)。`CommandHost` はこれが空でない間 Enter を受け付けない。
  */
-export function overflowNote(command: CommandDef, selection: SelectionState | null): string {
+export function overflowNote(
+  command: CommandDef,
+  selection: SelectionState | null,
+  values: ArgValues,
+): string {
   for (const spec of command.args) {
     if (spec.kind !== 'selection' || spec.max === null) continue
+    if (!argApplies(spec, values)) continue
     const kinds = argKinds(spec)
     const total = (selection?.items ?? []).filter((item) => kinds.includes(refKind(item))).length
     if (total > spec.max) {
@@ -408,8 +499,27 @@ export function overflowNote(command: CommandDef, selection: SelectionState | nu
   return ''
 }
 
-/** その引数が揃っているか。 */
+/**
+ * **その引数は、いま集まっている値の下で要るか**(`when` が無ければ常に要る)。
+ *
+ * 判定を1箇所に置いてある —— `argSatisfied` / `overflowNote` / 入力欄の描画が
+ * それぞれ `spec.when?.(values)` を書くと、`when` を持たない種別を足したときに
+ * どれか1つだけが `undefined` を偽と読む、という食い違いが静かに入る。
+ */
+export function argApplies(spec: ArgSpec, values: ArgValues): boolean {
+  return spec.when === undefined || spec.when(values)
+}
+
+/** その引数が揃っているか。**対象外(`when` が偽)の引数は揃っているとみなす。** */
 export function argSatisfied(spec: ArgSpec, values: ArgValues): boolean {
+  // **対象外は「揃っている」側へ倒す**。`firstMissingArg` は最初の未充足を返すので、
+  // 対象外を未充足のままにすると、モードを選んだ瞬間に**使わない側の引数**で
+  // 収集が止まる(並進を選んだのに角度を聞かれる)。
+  if (!argApplies(spec, values)) return true
+  if (spec.kind === 'pick') {
+    if (spec.optional === true) return true
+    return pickedRefOf(values[spec.name]) !== null
+  }
   if (spec.kind === 'selection') {
     return ((values[spec.name] ?? []) as SelectionRef[]).length >= spec.min
   }
@@ -508,6 +618,9 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
   if (spec.kind === 'point') {
     return `${spec.label}をクリック(スケッチ平面の上)`
   }
+  if (spec.kind === 'pick') {
+    return `${spec.label}をクリック(${PICK_TARGET_HINTS[spec.target]})`
+  }
   if (spec.kind === 'choice') {
     return `${spec.label}を選ぶ(${spec.options.map((option) => option.label).join(' / ')})`
   }
@@ -528,4 +641,21 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
     return spec.reject(value) ?? ''
   }
   return `${spec.label}を打つ(${spec.unit})`
+}
+
+/**
+ * 指した参照を人に見せる1行(まだ指していなければ空文字)。
+ *
+ * **`refKey` を出さない** —— 鍵は `Set`/`Map` の引き当てのための文字列で、人が読む形では
+ * ない(`sketch_entity:<uuid>:<uuid>:px1` になる)。ここは種別と番号だけを短く出す。
+ */
+export function pickedLabel(value: unknown): string {
+  const ref = pickedRefOf(value)
+  if (ref === null) return ''
+  if (refKind(ref) === 'sketch_entity') {
+    const item = ref as SketchEntityRef
+    return item.point === null ? '図形の最初の点' : `点 ${item.point}`
+  }
+  const item = ref as ShapeRef
+  return `${item.kind === 'edge' ? '辺' : '頂点'} ${item.index}`
 }

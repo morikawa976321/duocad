@@ -1346,6 +1346,7 @@ async function main() {
     )
     await page.click('#sketch-move')
     await page.click('#sketch-move-move')
+    await page.click('#sketch-move-translate')
     await typeInto('#sketch-move-dx', 4)
     await typeInto('#sketch-move-dy', 0)
     await page.keyboard.press('Enter')

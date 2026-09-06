@@ -539,7 +539,6 @@ COMMANDS: tuple[Command, ...] = (
                 "string",
                 "translate(既定・dx, dy で動かす) / rotate(angle 度だけ回す)",
                 required=False,
-                ws=False,
             ),
             Param(
                 "angle",
@@ -547,7 +546,6 @@ COMMANDS: tuple[Command, ...] = (
                 "回転角(度)。mode='rotate' で必須。u軸からv軸へ向かう回り(反時計)が正で、"
                 "pattern_circular の total_angle と同じ向き",
                 required=False,
-                ws=False,
                 dimension=True,
             ),
             Param(
@@ -556,7 +554,6 @@ COMMANDS: tuple[Command, ...] = (
                 "回転中心 [u, v]。省略時は対象の代表点(線分は中点・円/弧は中心・"
                 "長方形は中央・点を選んでいるならその点)の平均",
                 required=False,
-                ws=False,
             ),
             Param(
                 "center_entity",
@@ -566,28 +563,33 @@ COMMANDS: tuple[Command, ...] = (
                 "point を省くとその図形の最初の点(線は始点・円/弧は中心・長方形は左下)。"
                 "center とは同時に渡せない",
                 required=False,
-                ws=False,
             ),
         ),
         uses_selection=True,
         session="move_sketch_entities",
+        ws="special",
         resets_selection=True,
         note=(
             "**押し出し済みのソリッドは追従しない**(本人が許容済み)。"
             "画面のプレビューは**ブラウザだけで描く**(2026-09-05) —— 選んだ図形の今の座標を"
             " dx, dy だけずらした姿を半透明で重ねるだけで、確定するまでコアには何も届かない。"
             "**幽霊は回転にも追随する**(2026-09-06。`web/src/entityKinds.ts` の `ghostCopies`)"
-            " —— ただし**中心を数値 `center` で渡したときだけ**描く。省略時の既定"
-            "(対象の代表点の平均)は規則がコアにしか無く、画面側へ写すと片方だけ変わったときに"
-            "幽霊と確定結果が別の場所へ出るため、描かないほうを選んである。"
+            " —— ただし**中心が決まっているときだけ**描く。数値の `center` はそのまま、"
+            "画面でピックした `center_entity` は `App.svelte` の `resolvePicksForGhost` が"
+            "配られた `params` から [u, v] へ解決してから渡す。**省略時の既定**"
+            "(対象の代表点の平均)だけは規則がコアにしか無く、画面側へ写すと片方だけ"
+            "変わったときに幽霊と確定結果が別の場所へ出るため、描かないほうを選んである。"
             "**長方形をまるごと回す指定が混ざったら幽霊は1つも出さない** —— コアが"
             "呼び出し全体を ValueError にするので、他の図形だけ回った姿を出すと"
             "「プレビューは回る・確定するとエラー」になる。"
-            "**回転の引数はまだWSに開けていない**(`ws=False`) —— 表(`ws=table`)は載せた引数を"
-            "全部必須にする規律なので、省略できる回転の引数を載せると並進のUIが送れなくなる。"
-            "開けるには `ws=\"special\"` へ移すのと同時に、**画面での中心の指し方**"
-            "(既存の点にスナップするのか、`pattern_circular` と同じ自由クリックか)を"
-            "決める必要がある —— **未決**(2026-09-06。本人判断待ち)。いまはMCPからだけ回せる"
+            "**回転の引数はWSにも開いている**(2026-09-06。`ws=\"special\"`) —— 表(`ws=table`)は"
+            "載せた引数を全部必須にする規律なので、`mode` で要る引数が入れ替わり中心も省略できる"
+            "このverbは表に置けない。`_dispatch` が個別に捌き、**省略された引数は None のまま**"
+            "verbへ渡す(既定で埋めると、モード違いの引数が黙って効く)。"
+            "画面は「並進 / 回転」のボタンでモードを選ばせ、回転中心は**スケッチの点を"
+            "直接クリック**して `center_entity` の参照で送る(`web/src/commands/command.ts` の"
+            "`PickArgSpec`) —— 共有選択集合には入れない。中心を指さなければ引数ごと送らないので、"
+            "既定(対象の代表点の平均)はコアが決めたままである"
         ),
     ),
     Command(
@@ -633,14 +635,12 @@ COMMANDS: tuple[Command, ...] = (
                 "string",
                 "translate(既定・dx, dy, dz で動かす) / rotate(軸まわりに angle 度だけ回す)",
                 required=False,
-                ws=False,
             ),
             Param(
                 "angle",
                 "number",
                 "回転角(度)。mode='rotate' で必須。軸の向きに対して右ねじが正",
                 required=False,
-                ws=False,
                 dimension=True,
             ),
             Param(
@@ -651,21 +651,18 @@ COMMANDS: tuple[Command, ...] = (
                 "get_selection が返す辺の参照をそのまま渡せる。"
                 "axis_point / axis_dir とは同時に渡せない",
                 required=False,
-                ws=False,
             ),
             Param(
                 "axis_point",
                 "array",
                 "軸が通る点 [x, y, z](axis_dir と組で使う)。省略時は対象の重心",
                 required=False,
-                ws=False,
             ),
             Param(
                 "axis_dir",
                 "array",
                 "軸の向き [x, y, z](axis_edge を使わないときに必須)",
                 required=False,
-                ws=False,
             ),
             Param(
                 "center_vertex",
@@ -675,11 +672,11 @@ COMMANDS: tuple[Command, ...] = (
                 "軸の向きはそのままに、軸がこの点を通るようにする。"
                 "axis_point とは同時に渡せない(どちらも軸の位置を決めるため)",
                 required=False,
-                ws=False,
             ),
         ),
         uses_selection=True,
         session="move_body",
+        ws="special",
         resets_selection=True,
         note=(
             "**投機実行(`previewable`)には載せない** —— 動かす前後で形は同じなので、"
@@ -689,15 +686,22 @@ COMMANDS: tuple[Command, ...] = (
             "移動前と移動後が並んで見える(以前ここには「重なって見分けが付かない」と"
             "書いてあったが、移動量が0でない限り両者は別の場所に描かれる)。"
             "**幽霊は回転にも追随する**(2026-09-06。`viewport.BodyGhost.rotate` と"
-            "`bodyGhostMatrix`)—— ただし**軸を数値(`axis_point` + `axis_dir`)で渡した"
-            "ときだけ**描く。`axis_edge`(辺への参照)と「軸の位置を省略 → 対象の合成重心」は"
-            "**ブラウザ側では解けない**(辺の直線はメッシュから取れず、体積重心は三角形分割の"
-            "近似からしか出ない)ので、近似で置かずに描かない側を選んである。"
-            "**回転の引数はまだWSに開けていない**(`ws=False`。理由は move_sketch_entities の"
-            "note と同じ)—— 加えて**画面での軸の指し方が未決**(2026-09-06。本人判断待ち):"
-            "軸の辺を共有選択集合に載せると、コアの `require_bodies` がその辺のボディまで"
-            "「動かす対象」に数えてしまう(だからコア側は `commit_selection` を介さない"
-            "参照で受けている)ので、UIには**対象とは別に図形を指す口**が新たに要る"
+            "`bodyGhostMatrix`)—— ただし**軸が決まっているときだけ**描く。数値の"
+            "`axis_point` + `axis_dir` はそのまま、画面でピックした `axis_edge` /"
+            "`center_vertex` は `App.svelte` の `resolvePicksForGhost` が**配られた辺の"
+            "折れ線と頂点座標**(コアが出した数値そのもの)から解決してから渡す。"
+            "**「軸の位置を省略 → 対象の合成重心」だけはブラウザ側では解けない**"
+            "(体積重心は三角形分割の近似からしか出ない)ので、近似で置かずに描かない。"
+            "曲線の辺も同じで、まっすぐでなければ幽霊を出さずコアの拒否を人に見せる。"
+            "**回転の引数はWSにも開いている**(2026-09-06。`ws=\"special\"`。表に置けない理由は"
+            " move_sketch_entities の note と同じ)。画面は回転軸を**3Dビューで辺をクリック**して"
+            "`axis_edge` の参照で送り、中心は任意で頂点をクリックして `center_vertex` で送る ——"
+            "**共有選択集合には入れない別チャンネル**(`web/src/commands/command.ts` の"
+            "`PickArgSpec`)である。載せてしまうと `require_bodies` が軸の辺のボディまで"
+            "「動かす対象」に数え、軸に使った部品まで一緒に回る(だからコア側も"
+            "`commit_selection` を介さない参照で受けている)。"
+            "**参照のまま送る**のは、辺が乗る直線を厳密に出せるのがコアだけだからで、"
+            "まっすぐでない辺の拒否も `kernel.edge_axis` の既存の規則がそのまま効く"
         ),
     ),
     # ---------------------------------------------------------------- 削除

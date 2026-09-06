@@ -708,8 +708,8 @@ Bodyの一覧）が常に空になるため。**プレビューが無いとい�
 | 経路 | verb | 何を描くか |
 |---|---|---|
 | `ghostEntity`（`entityKinds.ts`） | `add_line`/`add_circle`/`add_rectangle`/`add_arc` | **これから打つ**図形 |
-| `ghostCopies`（`entityKinds.ts`） | `pattern_rectangular`/`pattern_circular`/`move_sketch_entities` | **既にある図形**の反復・平行移動の結果 |
-| `showBodyGhosts`（`viewport.ts`） | `move_body` | **既にあるボディ**を dx/dy/dz ずらした姿 |
+| `ghostCopies`（`entityKinds.ts`） | `pattern_rectangular`/`pattern_circular`/`move_sketch_entities` | **既にある図形**の反復・平行移動・回転の結果 |
+| `showBodyGhosts`（`viewport.ts`） | `move_body` | **既にあるボディ**を dx/dy/dz ずらした / 軸まわりに回した姿 |
 
 不変条件:
 
@@ -717,12 +717,17 @@ Bodyの一覧）が常に空になるため。**プレビューが無いとい�
    Escでも切断でも文書は変わらない。
 2. **本物を隠さない**（ボディ側）— `showPreview` は本物を隠すが `showBodyGhosts` は隠さない。
    移動前と移動後が並んで見えることが `move_body` のプレビューの中身だからである。
-3. **コアと同じ変換規則** — `entityKinds.ts` の `translate`/`rotate` は
+3. **解決済みの数値でしか描かない** — 回転の中心・軸を省略したときのコアの既定
+   （スケッチ=対象の代表点の平均 / ソリッド=体積重心）は**ブラウザ側へ写していない**。
+   画面で軸・中心を指す口（`command.ts` の `PickArgSpec`）は参照をサーバへ送り、
+   幽霊に要る数値は `App.svelte` の `resolvePicksForGhost` が**配られた折れ線・頂点座標・
+   `params` から解決してから** `showLocalGhost` へ渡す。指されなければ幽霊を描かない。
+4. **コアと同じ変換規則** — `entityKinds.ts` の `translate`/`rotate` は
    `duocad/sketch.py` の `_translate_*`/`_rotate_*` の写しで、円形反復の刻み角の場合分けは
    `duocad/region.py` の `_expanded_entities` の写し。**ずれると幽霊と確定結果が別の場所に出る**
    ので、実機smoke（`smoke-features.mjs` / `smoke-move.mjs`）が確定前の幽霊と確定後の
    `drawn` を数値で突き合わせている。
-4. **宣言と配線がずれない** — `preview: 'local'` と書いただけで経路が無いverbは
+5. **宣言と配線がずれない** — `preview: 'local'` と書いただけで経路が無いverbは
    `tests/test_ui_command_wiring.py::test_every_local_preview_verb_can_actually_draw_a_ghost`
    が落とす（症状が「無言で何も出ない」なので、実機で触るまで気づかない種類の抜け）。
 

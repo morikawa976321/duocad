@@ -25,6 +25,7 @@
     sameRef,
     sketchEntityRef,
     type CommandCategory,
+    type PickTarget,
     type Point2,
     type SelectableKind,
   } from './commands/command'
@@ -34,7 +35,7 @@
     SOLID_FEATURE_COMMANDS,
     needsSketchId,
   } from './commands/features'
-  import { ghostCopies, type GhostSource } from './entityKinds'
+  import { entityHandles, ghostCopies, type GhostSource } from './entityKinds'
   import { IMPORT_STEP, changesDocument } from './commands/files'
   import { OPTIMIZE_MODE_COMMANDS, OPTIMIZE_PRESET_ROLE } from './commands/optimize'
   import OptimizePanel, { type OptimizeNotice } from './OptimizePanel.svelte'
@@ -218,6 +219,8 @@
     wantsPlane(): boolean
     setBasePlane(name: BasePlaneName): boolean
     useSelectedFaceAsPlane(): boolean
+    wantsPick(): PickTarget | null
+    setPick(ref: SelectionRef): boolean
     restoreLastInputs(): void
     commandSucceeded(): void
   } | null>(null)
@@ -249,6 +252,11 @@
    * 辺と同じ規律で、要求している間だけビューポートで指せるようにする。
    */
   let wantedPlane = $state(false)
+  /**
+   * 起動中のコマンドが**図形の直接ピックを待っている**種別(`CommandHost` が知らせる)。
+   * 辺・基準平面と同じ規律で、待っている間だけ**その種別を指せるようにする**。
+   */
+  let wantedPick = $state<PickTarget | null>(null)
   /** 取り寄せた辺(body_id -> その版の折れ線)。**版が変われば捨てる**。 */
   let edges = $state<Record<string, EdgesPayload>>({})
   /** 取り寄せ中のもの(`${body_id}:${revision}`)。同じ要求を何度も投げないため。 */
@@ -1019,6 +1027,21 @@
       const point = known.vertices.find((candidate) => candidate.index === item.index)?.point
       if (point) markers.push({ bodyId: item.body, vertexIndex: item.index, point })
     }
+    // **頂点を直接ピックさせている間だけ候補を全部出す**(`vertexCandidateBody`)。
+    // 選ばれた頂点しか出ていない既定のままだと、回転中心に使う頂点を**指せる的が画面に
+    // 1つも無い**(頂点を選択へ足すコマンドが無いので、そもそも出しようがない)。
+    // **辺の折れ線と同じ規律** —— 要求しているコマンドを起動している間だけに限る。
+    if (vertexCandidateBody !== null) {
+      const body = model?.bodies.find((item) => item.body_id === vertexCandidateBody)
+      const known = vertices[vertexCandidateBody]
+      if (body && body.visible && known?.revision === body.revision) {
+        const shown = new Set(markers.map((marker) => marker.vertexIndex))
+        for (const item of known.vertices) {
+          if (shown.has(item.index)) continue
+          markers.push({ bodyId: vertexCandidateBody, vertexIndex: item.index, point: item.point })
+        }
+      }
+    }
     return markers
   })
 
@@ -1086,8 +1109,38 @@
     return active !== null && visible.has(active) ? active : null
   })
 
-  /** 今のコマンドが辺を要求しているか(スケッチモード中は辺を出さない)。 */
-  const wantsEdges = $derived(sketchId === null && wantedKinds.includes('edge'))
+  /**
+   * **回転中心の頂点を指させている間**、候補を出すボディ(出さないなら null)。
+   *
+   * 対象は辺と同じ1つ(`edgeTargetBody`) —— 全ボディの頂点を出すと、27部品の文書では
+   * 数千個の的が画面を覆う。**軸に使う辺と同じボディの頂点**が指せれば足りる。
+   */
+  const vertexCandidateBody = $derived(
+    sketchId === null && wantedPick === 'vertex' ? edgeTargetBody : null,
+  )
+
+  /** 候補として出す頂点の座標を取りに行く(選択に入った頂点と同じ形の要求)。 */
+  $effect(() => {
+    const target = vertexCandidateBody
+    if (target === null) return
+    const body = model?.bodies.find((item) => item.body_id === target)
+    if (!body || !body.visible) return
+    if (vertices[target]?.revision === body.revision) return
+    const key = `${target}:${body.revision}`
+    if (verticesAsked.has(key)) return
+    verticesAsked.add(key)
+    session.getVertices(target)
+  })
+
+  /**
+   * 今のコマンドが辺を要求しているか(スケッチモード中は辺を出さない)。
+   *
+   * **直接ピック(回転軸)も同じ口を通す** —— 選択から取る引数が辺を食わないコマンドでも、
+   * 辺を指させるなら折れ線を配ってもらう必要がある。
+   */
+  const wantsEdges = $derived(
+    sketchId === null && (wantedKinds.includes('edge') || wantedPick === 'edge'),
+  )
 
   $effect(() => {
     if (!wantsEdges || edgeTargetBody === null) {
@@ -1141,6 +1194,17 @@
     // 先に読んでから渡す(上の基準平面と同じ理由。`?.` の短絡で依存を失わない)。
     const on = wantsRegions
     viewport?.pickRegions(on)
+  })
+
+  /**
+   * **回転中心の頂点を待っている間だけ、頂点を辺より先に取る**(`viewport.preferVertices`)。
+   *
+   * `move_body` は対象を面/辺/頂点で指すので**辺が常に出ている** —— 既定の順序
+   * (辺が先)のままだと、角の頂点を狙ったクリックが必ず辺に取られて中心を指せない。
+   */
+  $effect(() => {
+    const on = wantedPick === 'vertex'
+    viewport?.preferVertices(on)
   })
 
   function modifySelection(add: SelectionRef[], remove: SelectionRef[]): void {
@@ -1304,6 +1368,24 @@
         return
       }
       // 何も無い所をクリックしたら、通常どおり選択解除だけして待ち続ける(下へ落とす)
+    }
+    // **コマンドが辺・頂点を直接待っているとき**(回転軸・回転中心)。`wantsPlane` と
+    // 同じ位置・同じ順序 —— 下の辺・頂点の分岐より**前**に置く。ここを後にすると、
+    // 指した辺が共有選択へ入り、コアの `require_bodies` がそのボディまで
+    // 「動かす対象」に数える(= 軸に使った部品まで一緒に回る)。
+    //
+    // **待っているものが当たらなかったクリックは素通りさせる**(`wantsPlane` と同じ)——
+    // 対象を選び直す・何もない所で解除する、が構えている間もできる。
+    if (host !== null) {
+      const wants = host.wantsPick()
+      if (wants === 'edge' && event.edge !== null) {
+        host.setPick({ body: event.edge.bodyId, kind: 'edge', index: event.edge.edgeIndex })
+        return
+      }
+      if (wants === 'vertex' && event.vertex !== null) {
+        host.setPick({ body: event.vertex.bodyId, kind: 'vertex', index: event.vertex.vertexIndex })
+        return
+      }
     }
     // **辺が当たったら辺**。フィレット・面取りを起動している間だけ来る。
     if (event.edge !== null) {
@@ -1500,6 +1582,13 @@
   function onSketchPick(event: PickEvent): void {
     if (event.point && host?.wantsPoint()) {
       if (host.addPoint(event.point.u, event.point.v)) return
+    }
+    // **コマンドがスケッチの点を直接待っているとき**(回転中心)。3Dの辺・頂点と同じ規律で、
+    // 下の共有選択への翻訳より**前**に置く —— 中心に使う点が選択へ入ると、それ自体が
+    // 「動かす対象」になって一緒に回る。
+    if (event.sketchEntity && host?.wantsPick() === 'sketchPoint') {
+      const hit = event.sketchEntity
+      if (host.setPick(sketchEntityRef(hit.sketchId, hit.entityId, hit.point))) return
     }
     // **図形は領域より先**(点・辺は領域の縁に乗っているので、領域が勝つと端点を掴めない)。
     // 描くコマンドが起動している間は上の `addPoint` が先に食うので、ここへは来ない。
@@ -1705,6 +1794,101 @@
   }
 
   /**
+   * 直接ピックで指した**参照を、幽霊が要る数値へ解決する**(`showLocalGhost` へ渡す前)。
+   *
+   * **`showLocalGhost` に参照を渡さない**のが要点である(2026-09-06。前提タスク
+   * `20260906-0100` の不変条件①) —— あちらは「解決済みの数値でしか描かない」層で、
+   * 参照の解決をあちらへ入れると、省略時の既定(重心・代表点の平均)を写す誘惑が同じ場所に
+   * 生まれる。ここは**コアが配った数値そのもの**(辺の折れ線・頂点の座標・図形の `params`)
+   * だけを読み、読めなければ**その引数を落とす** —— 落ちた引数の分だけ幽霊が出なくなる。
+   *
+   * サーバへ送るのは参照のままである(`build`)。**解決の正はコア**で、ここは画面の写し。
+   */
+  function resolvePicksForGhost(
+    verb: string,
+    args: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (args.mode !== 'rotate') return args
+    if (verb === MOVE_BODY.id) {
+      const { axis_edge: axisRef, center_vertex: centerRef, ...rest } = args
+      const axis = pickedEdgeAxis(axisRef)
+      if (axis === null) return rest // まっすぐな辺が読めない = 幽霊を出さない
+      const center = centerRef === undefined ? null : pickedVertexPoint(centerRef)
+      // **中心を指したのに読めないときも落とす** —— 軸だけで描くと、確定結果とは
+      // 別の位置に幽霊が出る(コアは指された頂点へ軸を寄せる)。
+      if (centerRef !== undefined && center === null) return rest
+      return { ...rest, axis_point: center ?? axis.point, axis_dir: axis.dir }
+    }
+    if (verb === MOVE_SKETCH_ENTITIES.id) {
+      const { center_entity: centerRef, ...rest } = args
+      if (centerRef === undefined) return rest // 省略 = 既定の中心。幽霊は出さない
+      const center = pickedSketchPoint(centerRef)
+      return center === null ? rest : { ...rest, center }
+    }
+    return args
+  }
+
+  /** 指した辺の「軸が通る点」と「向き」(読めなければ null)。 */
+  function pickedEdgeAxis(
+    value: unknown,
+  ): { point: [number, number, number]; dir: [number, number, number] } | null {
+    const ref = value as { body?: unknown; index?: unknown } | undefined
+    if (!ref || typeof ref.body !== 'string' || typeof ref.index !== 'number') return null
+    const body = model?.bodies.find((item) => item.body_id === ref.body)
+    const known = edges[ref.body]
+    // **版が合っている折れ線しか使わない**(辺の描画と同じ規律 §7)。
+    if (!body || known?.revision !== body.revision) return null
+    const edge = known.edges.find((item) => item.index === ref.index)
+    // **まっすぐな辺だけ**(コアの `kernel.edge_axis` が円・splineを断るのと同じ線)。
+    // `kind` はコアの `classify_edge` がそのまま載せたものなので、判定を写していない。
+    if (!edge || edge.kind !== 'line' || edge.points.length < 6) return null
+    const points = edge.points
+    const start: [number, number, number] = [points[0], points[1], points[2]]
+    const end = points.slice(points.length - 3)
+    // **始点→終点**が `kernel.edge_axis` の向きと一致する(どちらも同じ
+    // `BRepAdaptor_Curve` の媒介変数の順に並ぶ。2026-09-06に立方体・穴あき・フィレット・
+    // 合体・L字の直線辺83本で実測)。ここが逆になると幽霊だけが逆回りに見える。
+    const dir: [number, number, number] = [
+      end[0] - start[0],
+      end[1] - start[1],
+      end[2] - start[2],
+    ]
+    return dir.every((value) => value === 0) ? null : { point: start, dir }
+  }
+
+  /** 指した頂点の座標(読めなければ null)。 */
+  function pickedVertexPoint(value: unknown): [number, number, number] | null {
+    const ref = value as { body?: unknown; index?: unknown } | undefined
+    if (!ref || typeof ref.body !== 'string' || typeof ref.index !== 'number') return null
+    const body = model?.bodies.find((item) => item.body_id === ref.body)
+    const known = vertices[ref.body]
+    if (!body || known?.revision !== body.revision) return null
+    const found = known.vertices.find((item) => item.index === ref.index)?.point
+    return found === undefined ? null : [found[0], found[1], found[2]]
+  }
+
+  /**
+   * 指したスケッチの点の座標 [u, v](読めなければ null)。
+   *
+   * **`point` が null なら、その種別の最初の点**(線の始点・円/弧の中心・長方形の左下・
+   * ベジエの始点)。コアの `move_sketch._point_of` と同じ規則で、並びの正は
+   * `entityKinds.ts` の表 1つである(`entityHandles` がその順に返す)。
+   */
+  function pickedSketchPoint(value: unknown): Point2 | null {
+    const ref = value as { sketch?: unknown; entity?: unknown; point?: unknown } | undefined
+    if (!ref || typeof ref.sketch !== 'string' || typeof ref.entity !== 'string') return null
+    const sketch = sketches.find((item) => item.sketch_id === ref.sketch)
+    const entity = sketch?.entities.find((item) => item.entity_id === ref.entity)
+    if (!entity) return null
+    const handles = entityHandles(entity.kind, entity.params)
+    const handle =
+      ref.point === null || ref.point === undefined
+        ? handles[0]
+        : handles.find((item) => item.key === ref.point)
+    return handle === undefined ? null : [handle.u, handle.v]
+  }
+
+  /**
    * ブラウザだけで描く確定前の姿(`preview: 'local'`)——**3つの経路**。
    *
    * 1. **これから打つ図形**(`add_line` 等): `ghostEntity` が生の座標から組み立てる。
@@ -1762,7 +1946,9 @@
     mode: 'server' | 'local',
   ): void {
     if (mode === 'local') {
-      showLocalGhost(verb, args)
+      // **参照を数値へ解決してから渡す**(`resolvePicksForGhost`)。`showLocalGhost` は
+      // 解決済みの数値しか読まない層のままにしておく。
+      showLocalGhost(verb, resolvePicksForGhost(verb, args))
       return
     }
     previewId += 1
@@ -2138,6 +2324,10 @@
       edges: edgeTargetBody === null ? null : (edges[edgeTargetBody] ?? null),
       edgeTargetBody,
       wantsEdges,
+      // **直接ピックの待ち受け**(回転軸・回転中心)。実機検査が「回転を選ぶと軸の辺を
+      // 待つ」「指したら待ち受けが降りる」を外から読むための穴。
+      wantedPick,
+      vertexCandidateBody,
       selectedEntities,
       projectEdge: (bodyId: string, edgeIndex: number) =>
         viewport?.projectEdge(bodyId, edgeIndex) ?? null,
@@ -2352,6 +2542,7 @@
         onStart={onCommandStart}
         onWants={(kinds) => (wantedKinds = kinds)}
         onWantsPlane={(wants) => (wantedPlane = wants)}
+        onWantsPick={(target) => (wantedPick = target)}
       />
     {/key}
   </section>

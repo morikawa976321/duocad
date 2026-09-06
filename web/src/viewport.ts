@@ -2403,6 +2403,15 @@ export function createViewport(container: HTMLElement): Viewport {
     pickChanged() // ゲートの開閉で「指せるもの」が変わる(止まったままでも解決し直す)
   }
 
+  /** **頂点を辺より先に見るか**(`preferVertices`)。既定は辺が先(`resolveHit` の順序)。 */
+  let vertexPickWanted = false
+
+  function preferVertices(on: boolean): void {
+    if (vertexPickWanted === on) return
+    vertexPickWanted = on
+    pickChanged() // ゲートの開閉で「指せるもの」が変わる(`pickRegions` と同じ)
+  }
+
   /**
    * 今クリックで当たってよい領域メッシュ。
    *
@@ -2813,6 +2822,15 @@ export function createViewport(container: HTMLElement): Viewport {
         point: plane === null ? null : { sketchId: activeSketchId, ...plane },
       }
     }
+    // **頂点を直接ピックさせている間だけ、頂点が辺より先**(`preferVertices`)。
+    // **既定の順序のままでは角の頂点は絶対に取れない** —— 頂点は必ず辺の端点に乗って
+    // いるので、辺を出しているコマンド(`move_body` は対象を面/辺/頂点で指すので常に
+    // 出ている)では下の `edgeAt` が必ず先に当たる。ゲートを閉じている間は既定の順序で、
+    // フィレット中に辺の端を掴めることは変わらない。
+    if (vertexPickWanted) {
+      const wanted = vertexMarkers.at(offsetX, offsetY)
+      if (wanted !== null) return { ...nothing, vertex: wanted }
+    }
     // **辺を出しているときは辺が先**。辺は面の上に重なっているので、面より後に見ると
     // 必ず面が勝つ。出していないときは `edgeAt` が即 null を返すので、面のピックは
     // そのまま動く。**この順序は変えない**(基準平面を足しても辺→面の優先順位は同じ)。
@@ -3057,6 +3075,7 @@ export function createViewport(container: HTMLElement): Viewport {
     showEdges,
     showBasePlanes,
     pickRegions,
+    preferVertices,
     highlightEdges,
     projectEdge,
     showVertices: vertexMarkers.show,

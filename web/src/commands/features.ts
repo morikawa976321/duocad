@@ -20,7 +20,8 @@
  * 持っており、幽霊のためにブラウザへ二重実装すると「画面の予想と実際が違う」という最悪の
  * 食い違いを自作することになる。
  */
-import type { ArgValues, CommandDef, Point2 } from './command'
+import { pickedRefOf, type ArgValues, type CommandDef, type Point2 } from './command'
+import { MOVE_MODE_OPTIONS, isRotateMode, isTranslateMode, rejectAngle } from './moveMode'
 import type { SelectionRef } from '../session'
 
 /** 0以下を弾く(寸法として使えない)。**既定値を入れない**のがここの流儀。 */
@@ -315,12 +316,20 @@ export const PATTERN_CIRCULAR: CommandDef = {
  * 図形を対象にするのでここには入らない**(下の `SKETCH_FEATURE_COMMANDS`)。
  */
 /**
- * ボディの平行移動 / 複製。**面でも辺でも頂点でもボディを指せる** ——
+ * ボディの平行移動 / 回転 / 複製。**面でも辺でも頂点でもボディを指せる** ——
  * コアの `selection.require_bodies` が `ShapeRef.body` から逆引きするので、
  * この引数は3種を全部食う(`kinds`)。複数のボディにまたがる選択なら全部が同じ量だけ動く。
  *
  * **複製するかどうかは人に選ばせる**(既定を置かない) —— 押し出しの `mode` と同じ理由で、
- * 「複製するつもりで動かした」は元に戻すまで気づきにくい。
+ * 「複製するつもりで動かした」は元に戻すまで気づきにくい。**並進か回転かも同じ**。
+ *
+ * **回転軸は別チャンネルで指す**(`kind: 'pick'`)。共有選択集合へ入れると、コアの
+ * `require_bodies` が軸に使った辺のボディまで「動かす対象」に数える —— 軸に使った部品まで
+ * 一緒に回る、という形で出る。中心は省略できて、既定はコアが決める(対象の合成重心)。
+ *
+ * **軸のピックは角度より前に置いてある。** `args` の並びがそのまま `firstMissingArg` の
+ * 順序、つまり「次に何を問うか」なので、回転を選んだ瞬間に辺が指せる ——
+ * 逆順にすると、数値を打ってから3Dを触りに戻る動線になる。
  */
 export const MOVE_BODY: CommandDef = {
   id: 'move_body',
@@ -351,6 +360,15 @@ export const MOVE_BODY: CommandDef = {
       ],
     },
     {
+      kind: 'choice',
+      name: 'mode',
+      label: '種別',
+      options: MOVE_MODE_OPTIONS.map((option) => ({
+        ...option,
+        buttonId: `move-body-${option.value}`,
+      })),
+    },
+    {
       kind: 'number',
       name: 'dx',
       label: 'X',
@@ -360,6 +378,7 @@ export const MOVE_BODY: CommandDef = {
       reject: finite('X'),
       // 空欄はこの軸を動かさない(=0)扱い。3軸とも空欄(=全部0)は`build`が別途弾く。
       default: 0,
+      when: isTranslateMode,
     },
     {
       kind: 'number',
@@ -370,6 +389,7 @@ export const MOVE_BODY: CommandDef = {
       placeholder: 'mm',
       reject: finite('Y'),
       default: 0,
+      when: isTranslateMode,
     },
     {
       kind: 'number',
@@ -380,11 +400,65 @@ export const MOVE_BODY: CommandDef = {
       placeholder: 'mm',
       reject: finite('Z'),
       default: 0,
+      when: isTranslateMode,
+    },
+    {
+      kind: 'pick',
+      name: 'axis_edge',
+      label: '回転軸にする辺',
+      target: 'edge',
+      buttonId: 'move-body-axis',
+      when: isRotateMode,
+    },
+    {
+      kind: 'pick',
+      name: 'center_vertex',
+      label: '回転中心の頂点',
+      target: 'vertex',
+      buttonId: 'move-body-center',
+      // 省略時の中心は**コアが決める**(`axis_edge` だけなら辺が乗る直線そのもの)。
+      optional: true,
+      when: isRotateMode,
+    },
+    {
+      kind: 'number',
+      name: 'angle',
+      label: '角度',
+      unit: '度',
+      inputId: 'move-body-angle',
+      placeholder: '度',
+      // **既定値を置かない**(dx/dy/dz と違い「空欄=回さない」が成立しない ——
+      // 0度はコアが断る値であって、無指定の代わりにはならない)。
+      reject: rejectAngle,
+      when: isRotateMode,
     },
   ],
   build(values) {
     const empty = missingSelection(values, 'target', 'ボディ(面/辺/頂点)')
     if (empty !== null) return { ok: false, reason: empty }
+    const copy = values.copy === 'copy'
+    if (values.mode === 'rotate') {
+      const angle = values.angle
+      if (typeof angle !== 'number') return { ok: false, reason: '角度が数値でない' }
+      const reason = rejectAngle(angle)
+      if (reason !== null) return { ok: false, reason }
+      // **軸は参照のまま送る。** 辺が乗る直線を厳密に出せるのはコアだけで(ブラウザが
+      // 持っているのは配られた折れ線)、まっすぐでない辺の拒否もコア側の規則が効く。
+      const axis = pickedRefOf(values.axis_edge)
+      if (axis === null) return { ok: false, reason: '回転軸にする辺が指されていない' }
+      const center = pickedRefOf(values.center_vertex)
+      // **指していない中心は引数ごと送らない**(既定=対象の合成重心はコアが決める)。
+      return {
+        ok: true,
+        args: {
+          mode: 'rotate',
+          angle,
+          axis_edge: axis,
+          ...(center === null ? {} : { center_vertex: center }),
+          copy,
+        },
+      }
+    }
     const dx = values.dx
     const dy = values.dy
     const dz = values.dz
@@ -394,7 +468,9 @@ export const MOVE_BODY: CommandDef = {
     // **0,0,0 はコアも弾く**(移動なら何も起きず、複製なら元と完全に重なる)。
     // ここで先に断るのは、理由を人の近くで出すため。
     if (dx === 0 && dy === 0 && dz === 0) return { ok: false, reason: '移動量が全部0' }
-    return { ok: true, args: { dx, dy, dz, copy: values.copy === 'copy' } }
+    // **`mode` を明示的に載せる** —— コア側の既定も `translate` だが、モードを人に
+    // 選ばせた結果を送らないと、画面の「並進」ボタンが何も意味しないことになる。
+    return { ok: true, args: { mode: 'translate', dx, dy, dz, copy } }
   },
 }
 

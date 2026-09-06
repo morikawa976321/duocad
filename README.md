@@ -628,7 +628,7 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 | `web/src/viewport.ts` | three.js の囲い（load / onPick / highlight / project …） |
 | `web/src/session.ts` | WebSocketクライアント。**WSのURLはサーバが `/duocad-config.json` で教える**（ポートを推測しない） |
 | `web/src/commands/CommandHost.svelte` | **コマンド層の骨格**（起動→引数収集→プレビュー→Enter/Esc、**および即適用の発火**）。verbごとに作り直さない |
-| `web/src/commands/{command,sketch,features,files}.ts` | 各コマンドの引数の集め方の定義だけ（**Enter要否はここから導出**＝`needsEnter`） |
+| `web/src/commands/{command,sketch,features,files,moveMode}.ts` | 各コマンドの引数の集め方の定義だけ（**Enter要否はここから導出**＝`needsEnter`）。`command.ts` に共通の枠組み（`ArgSpec` の種別・`when` によるモード依存の必須判定） |
 | `web/src/{Browser,Files,Sketch,Parameters}Panel.svelte` | 各パネル（コアが持つものを描き直すだけ）。**選択パネルは無い**（選択を直すのは3Dクリックだけ） |
 | `web/src/Toast.svelte` | **エラーの札**。`showToast(message)` の1本だけを公開し、出すのは `App.svelte` の `fail()` から |
 | `web/src/AiPanel.svelte` | **AIパネル**。プロバイダ選択・対話・ツール呼び出しの進捗・中断。文書は描かない。**`#ai-collapse`(`BrowserPanel.svelte`と同じ形)で畳める** |

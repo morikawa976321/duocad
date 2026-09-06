@@ -15,6 +15,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import math
 
 import pytest
@@ -22,7 +24,7 @@ import pytest
 from duocad import kernel, parameters, query, selection, sketch
 from duocad.document import Document
 from duocad.oplog import OpLog
-from duocad.server import Session
+from duocad.server import Server, Session
 from duocad.verbs import move_body as move_body_verb
 from duocad.verbs import move_sketch_entities as move_sketch_entities_verb
 
@@ -1448,3 +1450,170 @@ def test_the_centroid_is_the_volume_centre_not_the_bounding_box_centre() -> None
     centroid = kernel.centroid(shape)
     box_centre = kernel.bounding_box(shape)["center"]
     assert centroid != pytest.approx(box_centre, abs=1e-3)
+
+
+# --------------------------------------------------------------------------------------
+# WebSocketの口 —— **画面から回転を踏めるようになった**(2026-09-06)
+# --------------------------------------------------------------------------------------
+#
+# 移動の2つは表(`SKETCH_COMMANDS` / `FEATURE_COMMANDS`)に載らず `_dispatch` が個別に捌く
+# (`catalog` の `ws="special"`)。表は「載せた引数は全部必須」なので、`mode` で要る引数が
+# 入れ替わり中心も省略できるこの2つは置けない。**個別分岐は静かに壊れる** ——
+# 表と違って導出の突き合わせが効かず、引数を1つ書き忘れても `unknown command` にすらならず、
+# 「省略した扱い」で通ってしまう。ここがその受け皿になる。
+class _FakeConnection:
+    """`Server` が使うのは `send` だけ(`test_feature_ui.py` と同じ harness)。"""
+
+    def __init__(self) -> None:
+        self.payloads: list = []
+
+
+    async def send(self, raw: str) -> None:
+        self.payloads.append(json.loads(raw))
+
+
+def _browser(session: Session, command: dict) -> dict:
+    """1コマンドをWebSocketの口へ流し、最後に届いた封筒を返す。"""
+
+    async def scenario():
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        client = _FakeConnection()
+        server.clients.add(client)
+        await server._push(client, applied=None, only=client)
+        client.payloads.clear()
+        await server._dispatch(client, json.dumps(command))
+        return client.payloads[-1]
+
+    return asyncio.run(scenario())
+
+
+def test_the_browser_rotates_a_body_around_a_picked_edge(session: Session) -> None:
+    """**辺への参照をそのまま送れる**(画面が指した辺 = `axis_edge`)。
+
+    画面は辺を座標へ潰さずに送る —— 辺が乗る直線を厳密に出せるのはコアだけである
+    (`kernel.edge_axis`)。応答には**解決後の数値**が載り、undo と再生はそちらを使う。
+    """
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    before = _center(body)
+
+    answer = _browser(
+        session,
+        {
+            "cmd": "move_body",
+            "mode": "rotate",
+            "angle": 90.0,
+            "axis_edge": {"body": body.id, "kind": "edge", "index": 1},
+            "copy": False,
+        },
+    )
+
+    assert answer["type"] == "state", answer
+    applied = answer["applied"]
+    assert applied["verb"] == "move_body"
+    assert applied["mode"] == "rotate"
+    # **参照ではなく数値**が返る(`Session.move_body` の契約)。
+    point, direction = kernel.edge_axis(body.shape, 1)
+    assert applied["axis_point"] == pytest.approx(point)
+    assert applied["axis_dir"] == pytest.approx(direction)
+    assert _center(session.document.get_body(body.id)) != pytest.approx(before, abs=1e-6)
+
+
+def test_the_browser_can_move_the_axis_onto_a_picked_vertex(session: Session) -> None:
+    """`center_vertex` を添えると**軸の位置だけ**がその頂点へ寄る(向きは辺のまま)。"""
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    vertex = kernel.vertex_positions(body.shape)[2]
+
+    answer = _browser(
+        session,
+        {
+            "cmd": "move_body",
+            "mode": "rotate",
+            "angle": 90.0,
+            "axis_edge": {"body": body.id, "kind": "edge", "index": 1},
+            "center_vertex": {"body": body.id, "kind": "vertex", "index": vertex["index"]},
+        },
+    )
+
+    applied = answer["applied"]
+    _point, direction = kernel.edge_axis(body.shape, 1)
+    assert applied["axis_point"] == pytest.approx(list(vertex["point"]))
+    assert applied["axis_dir"] == pytest.approx(direction)
+
+
+def test_the_browser_still_translates_a_body_without_a_mode(session: Session) -> None:
+    """**`mode` を省いた古い形の呼び出しは並進のまま**(保存済みの経路を壊さない)。"""
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    before = _center(body)
+
+    answer = _browser(session, {"cmd": "move_body", "dx": 5.0, "dy": 0.0, "dz": 0.0})
+
+    assert answer["applied"]["mode"] == "translate"
+    after = _center(session.document.get_body(body.id))
+    assert after[0] == pytest.approx(before[0] + 5.0, abs=1e-6)
+
+
+def test_the_browser_cannot_mix_the_two_modes(session: Session) -> None:
+    """回転に並進の引数を添えたら**エラーで返る**(黙って片方だけ効かない)。
+
+    `_dispatch` が省略された引数を既定値で埋めていると、`dx=0` が「渡された」ことになって
+    ここが通ってしまう —— **`None` のまま渡している**ことの検査でもある。
+    """
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+
+    answer = _browser(
+        session,
+        {
+            "cmd": "move_body",
+            "mode": "rotate",
+            "angle": 90.0,
+            "axis_edge": {"body": body.id, "kind": "edge", "index": 1},
+            "dx": 5.0,
+        },
+    )
+
+    assert answer["type"] == "error", answer
+
+
+def test_the_browser_rotates_sketch_entities_around_a_picked_point(session: Session) -> None:
+    """スケッチ側は**図形の点への参照**(`center_entity`)で中心を指す。"""
+    sketch_id, entity_id = _line(session)
+    anchor = session.add_circle(sketch_id, [10.0, 0.0], 2.0)["entity_id"]
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+
+    answer = _browser(
+        session,
+        {
+            "cmd": "move_sketch_entities",
+            "mode": "rotate",
+            "angle": 90.0,
+            "center_entity": {"sketch": sketch_id, "entity": anchor, "point": "cx"},
+        },
+    )
+
+    assert answer["type"] == "state", answer
+    assert answer["applied"]["center"] == pytest.approx([10.0, 0.0])
+    moved = _params(session, sketch_id, entity_id)
+    # 中心 (10,0) まわりに90度(u->v が反時計正): (0,0) -> (10,-10) / (10,0) -> (10,0)
+    assert [moved["x0"], moved["y0"]] == pytest.approx([10.0, -10.0], abs=1e-9)
+    assert [moved["x1"], moved["y1"]] == pytest.approx([10.0, 0.0], abs=1e-9)
+
+
+def test_the_browser_may_omit_the_sketch_rotation_centre(session: Session) -> None:
+    """中心を送らなければ**コアの既定**(対象の代表点の平均)になる。
+
+    画面は指されなかった中心を**引数ごと送らない**ので、既定の規則がコアの1箇所に
+    とどまる(ブラウザ側に写すと、片方だけ変わったときに幽霊と結果が別の場所へ出る)。
+    """
+    sketch_id, entity_id = _line(session)
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+
+    answer = _browser(
+        session, {"cmd": "move_sketch_entities", "mode": "rotate", "angle": 90.0}
+    )
+
+    assert answer["applied"]["center"] == pytest.approx([5.0, 0.0])  # 線分の中点

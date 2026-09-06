@@ -65,6 +65,25 @@ async function main() {
       }
     }
 
+    /**
+     * **状態配信が落ち着くまで待つ。**
+     *
+     * カメラを動かすと可変解像度が180ms後に `set_view_resolution` を送り、サーバは粗さを
+     * 版の鍵に入れているので**形が同じでも配信し直す**。その配信で `viewport.update()` が
+     * 表示中の幽霊を消すが、幽霊は**引数が変わらない限り描き直されない**
+     * (`CommandHost` の `previewedKey`)ので、消えたまま戻らない。8bが辺で踏んだのと
+     * 同じ機序で、幽霊を見る節の前は静めてから打つ。
+     */
+    async function settle() {
+      let epoch = -1
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const now = await page.evaluate(() => window.__duocad.stateEpoch)
+        if (now === epoch) return
+        epoch = now
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      }
+    }
+
     async function typeInto(selector, value) {
       await page.click(selector)
       await page.keyboard.down('Control')
@@ -327,6 +346,8 @@ async function main() {
       () => document.querySelector('#sketch-move-move')?.classList.contains('on'),
       { timeout, polling: 50 },
     )
+    // **並進 / 回転も人が選ぶ**(既定を置かない。`ChoiceArgSpec` の流儀)。
+    await page.click('#sketch-move-translate')
     await typeInto('#sketch-move-dx', 0)
     await typeInto('#sketch-move-dy', 10)
 
@@ -403,6 +424,7 @@ async function main() {
     const countBeforeCopy = (await sketchNow()).entities.length
     await page.click('#sketch-move')
     await page.click('#sketch-move-copy')
+    await page.click('#sketch-move-translate')
     await typeInto('#sketch-move-dx', 0)
     await typeInto('#sketch-move-dy', -20)
     await page.keyboard.press('Enter')
@@ -590,6 +612,162 @@ async function main() {
       )
     }
 
+    // ================================================================ 6d. 回転をUIから起動する(スケッチ)
+    //
+    // **6c との違いは入口である。** あちらは `showLocalGhost` の穴から幽霊の層だけを叩く。
+    // ここは**ツールバーのボタンと3Dのクリックだけ**で回す —— 種別(並進/回転)を選び、
+    // 中心を既存の点でピックし、角度を打って Enter する。
+    {
+      await withoutBrowserPanel(page, async () => {
+        const mid = await planeAt((LINE.x0 + LINE.x1) / 2, moved.params.y0)
+        if (!mid) fail('線分の中ほどが画面の中に無い(UIからの回転)')
+        await page.mouse.click(mid.x, mid.y)
+      })
+      await waitFor(
+        () =>
+          (window.__duocad.selection?.items ?? []).some(
+            (item) => item.entity !== undefined && item.point === null,
+          ),
+        'UIからの回転のために線分そのものを選べない',
+      )
+      const targetId = await page.evaluate(
+        () =>
+          window.__duocad.selection.items.find(
+            (item) => item.entity !== undefined && item.point === null,
+          ).entity,
+      )
+      const before = (await sketchNow()).entities.find((item) => item.entity_id === targetId)
+      if (!before) fail('回転させる線分が見つからない')
+
+      await page.click('#sketch-move')
+      await page.click('#sketch-move-move')
+      await page.click('#sketch-move-rotate')
+      // **mode で要る引数が入れ替わる**(`ArgSpec.when`)。並進の欄は消え、角度と中心が出る。
+      const fields = await page.evaluate(() => ({
+        dx: Boolean(document.querySelector('#sketch-move-dx')),
+        dy: Boolean(document.querySelector('#sketch-move-dy')),
+        angle: Boolean(document.querySelector('#sketch-move-angle')),
+        center: Boolean(document.querySelector('#sketch-move-center')),
+      }))
+      if (fields.dx || fields.dy) {
+        fail(`回転を選んでも X/Y の欄が残っている(mode依存の引数が効いていない): ${JSON.stringify(fields)}`)
+      }
+      if (!fields.angle || !fields.center) fail(`回転の入力が出ない: ${JSON.stringify(fields)}`)
+      ok('move_sketch_entities: 回転を選ぶと X/Y の欄が消え、角度と中心の口が開く')
+
+      await typeInto('#sketch-move-angle', 90)
+      // **中心を指す前は幽霊を描かない。** 省略時の中心(対象の代表点の平均)はコアにしか
+      // 無い規則で、画面側へ写すと片方だけ変わったときに幽霊と確定結果が別の場所に出る。
+      // **確定できる状態になるまで待つ** —— 幽霊は引数が揃ってから組まれるので、
+      // 打った直後に読むと「まだ組んでいないだけ」を「描かない」と読み違える。
+      await waitFor(
+        () => (document.querySelector('#command-prompt')?.textContent ?? '').includes('Enter'),
+        '角度を打っても確定できる状態にならない(中心が必須になっている)',
+      )
+      const noCentreGhosts = await page.evaluate(() => window.__duocad.ghostInfo().sketch.length)
+      if (noCentreGhosts !== 0) {
+        fail(`中心を指す前に幽霊が出た(既定の中心を画面側へ写している): ${noCentreGhosts}件`)
+      }
+      ok('move_sketch_entities: 中心を指す前は幽霊を描かない(既定の中心を写していない)')
+
+      await page.click('#sketch-move-center')
+      await waitFor(
+        () => window.__duocad.wantedPick === 'sketchPoint',
+        '「指す」を押しても中心のピックが開かない',
+      )
+      // **線分の始点そのもの**を中心にする(その点は動かないので判定が読みやすい)。
+      await clickEntityHandle(targetId)
+      await waitFor(
+        () => window.__duocad.wantedPick === null,
+        '点を指しても中心のピックが閉じない',
+      )
+      const shown = await page.evaluate(
+        () => document.querySelector('#sketch-move-center-value')?.textContent?.trim() ?? '',
+      )
+      if (shown !== '点 x0') fail(`指した中心が画面に出ていない: ${JSON.stringify(shown)}`)
+      // **中心に指した点は共有選択集合へ入らない**(入ると、その点自身が動く対象になる)。
+      const selectedEntities = await page.evaluate(
+        () => (window.__duocad.selection?.items ?? []).filter((item) => item.entity !== undefined).length,
+      )
+      if (selectedEntities !== 1) {
+        fail(`中心のピックが共有選択を変えた(対象が ${selectedEntities} 件になっている)`)
+      }
+      ok('move_sketch_entities: 中心の点をピックしても共有選択は変わらない(別チャンネル)')
+
+      // **幽霊は指した中心に追随する**(参照ではなく解決した数値で描かれている)。
+      await waitFor(
+        () => window.__duocad.ghostInfo().sketch.length === 1,
+        '中心を指しても幽霊が出ない',
+      )
+      const ghost = await page.evaluate(() =>
+        JSON.parse(JSON.stringify(window.__duocad.ghostInfo().sketch[0])),
+      )
+      const cx = before.params.x0
+      const cy = before.params.y0
+      const want = {
+        x0: cx,
+        y0: cy,
+        x1: cx - (before.params.y1 - cy),
+        y1: cy + (before.params.x1 - cx),
+      }
+      for (const [key, value] of Object.entries(want)) {
+        if (Math.abs(ghost.params[key] - value) > 1e-6) {
+          fail(
+            `UIから指した中心の幽霊の ${key} が合わない: ${ghost.params[key]}(期待 ${value})。` +
+              `幽霊 ${JSON.stringify(ghost.params)}`,
+          )
+        }
+      }
+      ok('move_sketch_entities: ピックした点を中心に幽霊が90度回る')
+
+      await page.keyboard.press('Enter')
+      await waitFor(
+        (id, x1, y1) => {
+          const hook = window.__duocad
+          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          const entity = active?.entities.find((item) => item.entity_id === id)
+          return Boolean(
+            entity &&
+              Math.abs(entity.params.x1 - x1) < 1e-6 &&
+              Math.abs(entity.params.y1 - y1) < 1e-6,
+          )
+        },
+        'UIから回した線分が幽霊と同じ位置へ来ない',
+        [targetId, want.x1, want.y1],
+      )
+      const after = (await sketchNow()).entities.find((item) => item.entity_id === targetId)
+      if (Math.abs(after.params.x0 - cx) > 1e-6 || Math.abs(after.params.y0 - cy) > 1e-6) {
+        fail(`中心に指した始点が動いた: ${JSON.stringify(after.params)}`)
+      }
+      ok('move_sketch_entities: ツールバーと3Dクリックだけで回転を確定できた(幽霊と一致)')
+
+      // 後片付け —— **回す前へ戻す**(以降の節は元の座標で図形をクリックする)。
+      // undo が効くこと自体、UIから送った回転が普通のverbとして操作ログに載っている証拠である。
+      await waitFor(
+        () => (window.__duocad.selection?.count ?? -1) === 0,
+        'UIからの回転の後に選択が空にならない',
+      )
+      await page.evaluate(() => document.activeElement?.blur?.())
+      await page.keyboard.down('Control')
+      await page.keyboard.press('KeyZ')
+      await page.keyboard.up('Control')
+      await waitFor(
+        (id, x1, y1) => {
+          const hook = window.__duocad
+          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          const entity = active?.entities.find((item) => item.entity_id === id)
+          return Boolean(
+            entity &&
+              Math.abs(entity.params.x1 - x1) < 1e-9 &&
+              Math.abs(entity.params.y1 - y1) < 1e-9,
+          )
+        },
+        'UIから回した線分を undo で戻せない',
+        [targetId, before.params.x1, before.params.y1],
+      )
+      ok('move_sketch_entities: UIから回した結果を undo で元の座標へ戻せる')
+    }
+
     // ================================================================ 6b. スケッチを直接切り替えると選択が残らない
     //
     // **`exitSketch` を通らずにAからBへ移る道がある**(ビューポートに浮かぶブラウザの
@@ -707,8 +885,10 @@ async function main() {
     )
     const geometryBefore = await page.evaluate((id) => window.__duocad.getGeometry(id).bbox.center, bodyId)
 
+    await settle() // 幽霊を見る前に配信を静める(上の `settle` のdocstring)
     await page.click('#move-body')
     await page.click('#move-body-move')
+    await page.click('#move-body-translate')
     await typeInto('#move-body-dx', 0)
     await typeInto('#move-body-dy', 0)
     await typeInto('#move-body-dz', 25)
@@ -873,6 +1053,7 @@ async function main() {
     // 打ち直して今度は確定する(面の選択は Esc では消えない)
     await page.click('#move-body')
     await page.click('#move-body-move')
+    await page.click('#move-body-translate')
     await typeInto('#move-body-dx', 0)
     await typeInto('#move-body-dy', 0)
     await typeInto('#move-body-dz', 25)
@@ -978,6 +1159,7 @@ async function main() {
       bodyId,
     )
     await page.click('#move-body-move')
+    await page.click('#move-body-translate')
     await typeInto('#move-body-dx', 6)
     await typeInto('#move-body-dy', 0)
     await typeInto('#move-body-dz', 0)
@@ -1008,6 +1190,7 @@ async function main() {
     // ================================================================ 9. move_body(複製)
     await page.click('#move-body')
     await page.click('#move-body-copy')
+    await page.click('#move-body-translate')
     await typeInto('#move-body-dx', 80)
     await typeInto('#move-body-dy', 0)
     await typeInto('#move-body-dz', 0)
@@ -1026,6 +1209,258 @@ async function main() {
       fail(`複製の位置がX+80でない: ${JSON.stringify(copyCenter)} / 元 ${JSON.stringify(originalCenter)}`)
     }
     ok(`copy=true でボディが複製された(2個・複製はX+80の位置・元はその場)`)
+
+    // ================================================================ 9b. 回転をUIから起動する(ソリッド)
+    //
+    // **8の回転の節との違いは入口である。** あちらは `showLocalGhost` の穴から幽霊の層だけを
+    // 叩く。ここは**ツールバーのボタンと3Dのクリックだけ**で回す —— 回転を選び、軸にする辺を
+    // 3Dでピックし、角度を打って Enter する。**軸の辺は共有選択集合に入らない**ことも見る
+    // (入ると `require_bodies` がその辺のボディまで「動かす対象」に数える)。
+    {
+      await page.evaluate(() => document.activeElement?.blur?.())
+      await page.keyboard.press('Escape')
+      await frameAll(page)
+      await settle() // 幽霊を見る節なので配信を静めてから始める
+      const faceForRotate = await pickAnyFace(page, bodyId)
+      await clickFace(page, bodyId, faceForRotate)
+      await waitFor(
+        (id) =>
+          (window.__duocad.selection?.items ?? []).some(
+            (item) => item.body === id && item.kind === 'face',
+          ),
+        '回転のために面を選べない',
+        [bodyId],
+      )
+
+      await page.click('#move-body')
+      await page.click('#move-body-move')
+      await page.click('#move-body-rotate')
+      const fields = await page.evaluate(() => ({
+        dx: Boolean(document.querySelector('#move-body-dx')),
+        angle: Boolean(document.querySelector('#move-body-angle')),
+        axis: Boolean(document.querySelector('#move-body-axis')),
+        centre: Boolean(document.querySelector('#move-body-center')),
+      }))
+      if (fields.dx) fail('回転を選んでも X の欄が残っている(mode依存の引数が効いていない)')
+      if (!fields.angle || !fields.axis || !fields.centre) {
+        fail(`回転の入力が出ない: ${JSON.stringify(fields)}`)
+      }
+      // **軸を先に問う**(`args` の並び = 次に何を問うか)。回転を選んだ瞬間に辺が指せる。
+      await waitFor(
+        () => window.__duocad.wantedPick === 'edge' && window.__duocad.wantsEdges === true,
+        '回転を選んでも軸の辺のピックが開かない',
+      )
+      ok('move_body: 回転を選ぶと X/Y/Z の欄が消え、軸の辺のピックがその場で開く')
+
+      // 指せる辺を1本探して押す(8b と同じ探し方。裏に回っている辺は取れない)。
+      const selectionBefore = await page.evaluate(() => window.__duocad.selection?.count ?? 0)
+      let axisEdge = null
+      for (let attempt = 0; attempt < 2 && axisEdge === null; attempt++) {
+        await waitFor(
+          (id) =>
+            [1, 2, 3, 4, 5, 6, 7, 8].some(
+              (index) => window.__duocad.projectEdge(id, index) !== null,
+            ),
+          '軸に使う辺の実データが届かない',
+          [bodyId],
+        )
+        for (const edgeIndex of [1, 2, 3, 4, 5, 6, 7, 8]) {
+          const at = await page.evaluate(
+            (id, index) => {
+              const rect = document.querySelector('.viewport').getBoundingClientRect()
+              const position = window.__duocad.projectEdge(id, index)
+              return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+            },
+            bodyId,
+            edgeIndex,
+          )
+          if (!at) continue
+          await page.mouse.click(at.x, at.y)
+          try {
+            await page.waitForFunction(
+              (index) =>
+                (document.querySelector('#move-body-axis-value')?.textContent ?? '').trim() ===
+                `辺 ${index}`,
+              { timeout: 3000, polling: 50 },
+              edgeIndex,
+            )
+            axisEdge = edgeIndex
+            break
+          } catch {
+            // その辺は取れなかった(裏に回っている)。次を試す
+          }
+        }
+      }
+      if (axisEdge === null) fail('回転軸にする辺を1本もクリックで指せない')
+      await waitFor(() => window.__duocad.wantedPick === null, '辺を指しても軸のピックが閉じない')
+      // **共有選択は変わっていない**(軸の辺は別チャンネル)。
+      const selectionAfterAxis = await page.evaluate(() => ({
+        count: window.__duocad.selection?.count ?? 0,
+        edges: (window.__duocad.selection?.items ?? []).filter((item) => item.kind === 'edge')
+          .length,
+      }))
+      if (selectionAfterAxis.count !== selectionBefore || selectionAfterAxis.edges !== 0) {
+        fail(
+          `軸に指した辺が共有選択へ入った(${selectionBefore} → ${JSON.stringify(selectionAfterAxis)})。` +
+            'コアの require_bodies がその辺のボディまで動かす対象に数える',
+        )
+      }
+      ok(`move_body: 軸に辺 ${axisEdge} をピックしても共有選択は変わらない(別チャンネル)`)
+
+      // **指した辺の実際の座標**(配られた折れ線)。幽霊の軸がこれと一致すること。
+      const axisLine = await page.evaluate((index) => {
+        const payload = window.__duocad.edges
+        const edge = payload?.edges.find((item) => item.index === index)
+        if (!edge) return null
+        const points = edge.points
+        return {
+          kind: edge.kind,
+          start: points.slice(0, 3),
+          end: points.slice(points.length - 3),
+        }
+      }, axisEdge)
+      if (!axisLine || axisLine.kind !== 'line') {
+        fail(`軸の辺の折れ線が読めない: ${JSON.stringify(axisLine)}`)
+      }
+
+      await settle()
+      await typeInto('#move-body-angle', 90)
+      await waitFor(
+        () => window.__duocad.ghostInfo().bodies.length === 1,
+        'UIから軸を指しても回転の幽霊が出ない',
+      )
+      const ghost = await page.evaluate(() =>
+        JSON.parse(JSON.stringify(window.__duocad.ghostInfo().bodies[0])),
+      )
+      if (!ghost.rotate || ghost.rotate.angleDeg !== 90) {
+        fail(`幽霊に回転が乗っていない: ${JSON.stringify(ghost)}`)
+      }
+      // **参照ではなく数値へ解決してから幽霊へ渡している**ことの検算。
+      for (let axis = 0; axis < 3; axis++) {
+        if (Math.abs(ghost.rotate.point[axis] - axisLine.start[axis]) > 1e-6) {
+          fail(
+            `幽霊の軸の位置が指した辺と違う: ${JSON.stringify(ghost.rotate.point)} / ` +
+              `辺 ${JSON.stringify(axisLine.start)}`,
+          )
+        }
+        const want = axisLine.end[axis] - axisLine.start[axis]
+        if (Math.abs(ghost.rotate.dir[axis] - want) > 1e-6) {
+          fail(`幽霊の軸の向きが指した辺と違う: ${JSON.stringify(ghost.rotate.dir)}`)
+        }
+      }
+      ok('move_body: 幽霊の軸がピックした辺の実座標と一致する(参照を数値へ解決している)')
+
+      // **中心の頂点も指せる**(省略できるので「指す」の1手が要る)。指すと軸の位置だけが動く。
+      await page.click('#move-body-center')
+      await waitFor(
+        () => window.__duocad.wantedPick === 'vertex',
+        '「指す」を押しても中心の頂点のピックが開かない',
+      )
+      // **候補が出ていなければ指しようがない** —— 頂点マーカーは既定では選択に入った分しか
+      // 出ないので、待ち受けている間だけ候補を出す配線がここで効く。
+      await waitFor(
+        () => (window.__duocad.vertexMarkers ?? []).length > 0,
+        '中心を指せるのに頂点マーカーが1つも出ない(指せる的が画面に無い)',
+      )
+      // **指す前に控える。** 指した瞬間に待ち受けが降り、候補のマーカーは消える
+      // (出しているのは「待っている間だけ」という規律そのもの)。
+      const candidates = await page.evaluate(() =>
+        JSON.parse(JSON.stringify(window.__duocad.vertexMarkers)),
+      )
+      let centreVertex = null
+      for (const vertexIndex of [1, 2, 3, 4, 5, 6, 7, 8]) {
+        const at = await page.evaluate(
+          (id, index) => {
+            const rect = document.querySelector('.viewport').getBoundingClientRect()
+            const position = window.__duocad.projectVertex(id, index)
+            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+          },
+          bodyId,
+          vertexIndex,
+        )
+        if (!at) continue
+        await page.mouse.click(at.x, at.y)
+        try {
+          await page.waitForFunction(
+            (index) =>
+              (document.querySelector('#move-body-center-value')?.textContent ?? '').trim() ===
+              `頂点 ${index}`,
+            { timeout: 3000, polling: 50 },
+            vertexIndex,
+          )
+          centreVertex = vertexIndex
+          break
+        } catch {
+          // その頂点は取れなかった(裏に回っている)。次を試す
+        }
+      }
+      if (centreVertex === null) fail('回転中心の頂点を1つもクリックで指せない')
+      const vertexPoint = candidates.find(
+        (marker) => marker.bodyId === bodyId && marker.vertexIndex === centreVertex,
+      )?.point
+      if (!vertexPoint) fail(`指した頂点 ${centreVertex} の座標が控えの中に無い`)
+      const withCentre = await page.evaluate(() =>
+        JSON.parse(JSON.stringify(window.__duocad.ghostInfo().bodies[0])),
+      )
+      for (let axis = 0; axis < 3; axis++) {
+        if (Math.abs(withCentre.rotate.point[axis] - vertexPoint[axis]) > 1e-6) {
+          fail(
+            '中心を指したのに軸の位置が頂点へ寄っていない: ' +
+              `${JSON.stringify(withCentre.rotate.point)} / 頂点 ${JSON.stringify(vertexPoint)}`,
+          )
+        }
+        if (Math.abs(withCentre.rotate.dir[axis] - ghost.rotate.dir[axis]) > 1e-6) {
+          fail(`中心を指したら軸の向きまで変わった: ${JSON.stringify(withCentre.rotate.dir)}`)
+        }
+      }
+      ok(`move_body: 中心に頂点 ${centreVertex} を指すと、軸の向きはそのままに位置だけが寄る`)
+
+      // **外すと既定へ戻る**(指したものを取り消す手がある)。
+      await page.click('#move-body-center-clear')
+      await waitFor(
+        (start) => {
+          const rotate = window.__duocad.ghostInfo().bodies[0]?.rotate
+          return Boolean(rotate) && Math.abs(rotate.point[0] - start[0]) < 1e-6
+        },
+        '中心を外しても軸の位置が辺へ戻らない',
+        [axisLine.start],
+      )
+      ok('move_body: 指した中心を「外す」と、軸の位置が辺そのものへ戻る')
+
+      // ---------------------------------------------------------------- 確定
+      const volumeBeforeRotate = await page.evaluate(
+        (id) => window.__duocad.state.bodies.find((item) => item.body_id === id).volume,
+        bodyId,
+      )
+      const centreBeforeRotate = await page.evaluate(
+        (id) => window.__duocad.getGeometry(id).bbox.center,
+        bodyId,
+      )
+      await page.keyboard.press('Enter')
+      await waitFor(
+        (id, before) => {
+          const geometry = window.__duocad.getGeometry(id)
+          if (!geometry) return false
+          const centre = geometry.bbox.center
+          return (
+            Math.hypot(centre[0] - before[0], centre[1] - before[1], centre[2] - before[2]) > 1.0
+          )
+        },
+        'UIから回してもボディが動かない',
+        [bodyId, centreBeforeRotate],
+      )
+      const volumeAfterRotate = await page.evaluate(
+        (id) => window.__duocad.state.bodies.find((item) => item.body_id === id).volume,
+        bodyId,
+      )
+      if (Math.abs(volumeAfterRotate - volumeBeforeRotate) > 1e-3) {
+        fail(`回転で体積が変わった: ${volumeBeforeRotate} → ${volumeAfterRotate}`)
+      }
+      ok(
+        'move_body: ツールバーと3Dクリックだけで回転を確定できた(体積は ' +
+          `${volumeAfterRotate.toFixed(1)} のまま)`,
+      )
+    }
 
     // ================================================================ 10. 右サイドバーの開閉
     const sidebarBefore = await page.evaluate(() => ({

@@ -12,7 +12,8 @@
  * **`sketch_id` はここでは付けない**。どのスケッチに描くかは「今どのスケッチモードに居るか」
  * であって、コマンドが集める引数ではない —— `App.svelte` が送信時に足す。
  */
-import { isPlaneArgValue, type CommandDef, type Point2 } from './command'
+import { isPlaneArgValue, pickedRefOf, type CommandDef, type Point2 } from './command'
+import { MOVE_MODE_OPTIONS, isRotateMode, isTranslateMode, rejectAngle } from './moveMode'
 
 /**
  * 確定前の姿(幽霊)の組み立ては `../entityKinds` の唯一の表へ寄せてある
@@ -260,13 +261,16 @@ export function runsOutsideSketch(verb: string): boolean {
 }
 
 /**
- * スケッチの点・辺の平行移動 / 複製。
+ * スケッチの点・辺の平行移動 / 回転 / 複製。
  *
  * 対象はコアの確定選択から取る(3Dで点や辺をクリック / 左ドラッグで囲む)。
  * `sketch_id` を取らない唯一のスケッチverbで、どのスケッチかは**選んだ参照が持っている**
  * (下の `runsWithoutSketchId`)。
  *
- * **複製するかどうかは人に選ばせる**(既定を置かない)。`move_body` と同じ理由。
+ * **複製するかどうかも、並進か回転かも人に選ばせる**(既定を置かない)。`move_body` と
+ * 同じ理由。**軸は無い** —— スケッチは2Dなので回転軸は常に平面の法線で、自由度が無い
+ * (コア側の判断。`duocad/verbs/move_sketch.py`)。中心は省略でき、既定はコアが決める
+ * (対象の代表点の平均)。
  */
 export const MOVE_SKETCH_ENTITIES: CommandDef = {
   id: 'move_sketch_entities',
@@ -296,6 +300,15 @@ export const MOVE_SKETCH_ENTITIES: CommandDef = {
       ],
     },
     {
+      kind: 'choice',
+      name: 'mode',
+      label: '種別',
+      options: MOVE_MODE_OPTIONS.map((option) => ({
+        ...option,
+        buttonId: `sketch-move-${option.value}`,
+      })),
+    },
+    {
       kind: 'number',
       name: 'dx',
       label: 'X',
@@ -306,6 +319,7 @@ export const MOVE_SKETCH_ENTITIES: CommandDef = {
       reject: () => null,
       // 空欄はこの軸を動かさない(=0)扱い。両軸とも空欄(=両方0)は`build`が別途弾く。
       default: 0,
+      when: isTranslateMode,
     },
     {
       kind: 'number',
@@ -316,11 +330,48 @@ export const MOVE_SKETCH_ENTITIES: CommandDef = {
       placeholder: 'mm',
       reject: () => null,
       default: 0,
+      when: isTranslateMode,
+    },
+    {
+      kind: 'pick',
+      name: 'center_entity',
+      label: '回転中心の点',
+      target: 'sketchPoint',
+      buttonId: 'sketch-move-center',
+      // 省略時の中心は**コアが決める**(対象の代表点の平均)。
+      optional: true,
+      when: isRotateMode,
+    },
+    {
+      kind: 'number',
+      name: 'angle',
+      label: '角度',
+      unit: '度',
+      inputId: 'sketch-move-angle',
+      placeholder: '度',
+      // 符号は u->v の反時計回りが正(`pattern_circular` の `total_angle` と同じ向き)。
+      reject: rejectAngle,
+      when: isRotateMode,
     },
   ],
   build(values) {
     const targets = (values.target ?? []) as unknown[]
     if (targets.length === 0) return { ok: false, reason: '点も辺も選ばれていない' }
+    const copy = values.copy === 'copy'
+    if (values.mode === 'rotate') {
+      const angle = values.angle
+      if (typeof angle !== 'number') return { ok: false, reason: '角度が数値でない' }
+      const reason = rejectAngle(angle)
+      if (reason !== null) return { ok: false, reason }
+      // **中心は参照のまま送る**(`move_body` の軸と同じ規律)。図形の点の座標を出す
+      // 規則(`point` 省略ならその種別の最初の点)はコアの `_point_of` が正で、
+      // 数値へ潰して送ると同じ規則がもう1つ増える。
+      const center = pickedRefOf(values.center_entity)
+      return {
+        ok: true,
+        args: { mode: 'rotate', angle, ...(center === null ? {} : { center_entity: center }), copy },
+      }
+    }
     const dx = values.dx
     const dy = values.dy
     if (typeof dx !== 'number' || typeof dy !== 'number') {
@@ -328,7 +379,7 @@ export const MOVE_SKETCH_ENTITIES: CommandDef = {
     }
     if (dx === 0 && dy === 0) return { ok: false, reason: '移動量が両方0' }
     // **対象そのものは送らない**(サーバがコアの確定選択から取る)。
-    return { ok: true, args: { dx, dy, copy: values.copy === 'copy' } }
+    return { ok: true, args: { mode: 'translate', dx, dy, copy } }
   },
 }
 

@@ -74,6 +74,7 @@
   import { onMount } from 'svelte'
   import {
     COMMANDS,
+    argApplies,
     argKinds,
     argSatisfied,
     findCommand,
@@ -81,18 +82,22 @@
     itemsForArg,
     needsEnter,
     overflowNote,
+    pickedLabel,
     promptFor,
     refKey,
+    type ArgSpec,
     type ArgValues,
     type ChoiceArgSpec,
     type CommandDef,
     type NumberArgSpec,
+    type PickArgSpec,
+    type PickTarget,
     type Point2,
     type SelectableKind,
     type SelectionArgSpec,
     type TextArgSpec,
   } from './command'
-  import type { SelectionState } from '../session'
+  import type { SelectionRef, SelectionState } from '../session'
 
   let {
     selection,
@@ -110,6 +115,7 @@
     onNote,
     onWants = () => {},
     onWantsPlane = () => {},
+    onWantsPick = () => {},
   }: {
     /** コアの選択集合(state.selection)。 */
     selection: SelectionState | null
@@ -182,6 +188,13 @@
      * 常時指せると、面を狙うクリックが手前のグリッドに取られる。
      */
     onWantsPlane?: (wants: boolean) => void
+    /**
+     * 起動中のコマンドが**図形の直接ピックを待っている**か(待っていなければ `null`)。
+     * `onWants`(辺)・`onWantsPlane`(基準平面)と同じ形の受動的な知らせで、アプリ層は
+     * これを見て**指せるもの**を出す(頂点マーカーは選択に入ったものしか出ていないので、
+     * 中心に使う頂点を指せるようにするにはこの知らせが要る)。
+     */
+    onWantsPick?: (target: PickTarget | null) => void
   } = $props()
 
   /** 打ち終わってからプレビューを投げるまでの待ち[ms]。 */
@@ -222,6 +235,22 @@
    */
   let textValues = $state<Record<string, string>>({})
 
+  /**
+   * 直接ピックで指した参照(引数名 -> 参照1つ)。**共有選択集合には入れない** ——
+   * 回転軸に使う辺を選択へ入れると、コアの `require_bodies` がその辺のボディまで
+   * 「動かす対象」に数える(`PickArgSpec` のdocstring)。
+   */
+  let picks = $state<Record<string, SelectionRef>>({})
+
+  /**
+   * **人が「いまここを指す」と言った省略可能なピック引数**の名前(言っていなければ `null`)。
+   *
+   * 必須のピックは `firstMissingArg` が指すので構える必要が無いが、省略できるピック
+   * (回転中心)は永久に「揃っている」側なので、**指したいと言う手**がここに要る。
+   * `$state` にするのは、テンプレートのボタンが押した結果を待ち受け表示へ反映するため。
+   */
+  let armedPick = $state<string | null>(null)
+
   /** 集まった引数(選択は導出・数値は打った文字列から・点はクリックから)。 */
   const values = $derived.by<ArgValues>(() => {
     const collected: ArgValues = {}
@@ -242,6 +271,9 @@
       } else if (spec.kind === 'plane') {
         const chosen = planes[spec.name]
         if (chosen) collected[spec.name] = chosen
+      } else if (spec.kind === 'pick') {
+        const ref = picks[spec.name]
+        if (ref) collected[spec.name] = ref
       } else {
         const raw = (numberText[spec.name] ?? '').trim()
         // 空欄で `default` を持つ引数(move系のdx/dy/dz)は、打っていない軸を0扱いにして
@@ -257,7 +289,7 @@
   const missing = $derived(command === null ? null : firstMissingArg(command, values))
 
   /** 選ばれすぎ(`max` 超え)の理由。空でない間は確定させない。 */
-  const overflow = $derived(command === null ? '' : overflowNote(command, selection))
+  const overflow = $derived(command === null ? '' : overflowNote(command, selection, values))
 
   /** **無起動では確定できない**(`command === null` を明示的に含める。Enterが素通りしないため)。 */
   const ready = $derived(command !== null && missing === null && overflow === '')
@@ -286,9 +318,32 @@
     return 'Enterで確定 / Escで中断'
   })
 
-  const numberArgs = $derived((command?.args ?? []).filter((spec) => spec.kind === 'number') as NumberArgSpec[])
-  const choiceArgs = $derived((command?.args ?? []).filter((spec) => spec.kind === 'choice') as ChoiceArgSpec[])
-  const textArgs = $derived((command?.args ?? []).filter((spec) => spec.kind === 'text') as TextArgSpec[])
+  /**
+   * いま**要る**引数だけ(`when` が偽のものを落とす)。入力欄・ボタンの描画はこれを通す ——
+   * 出したままにすると、並進を選んでいるのに角度の欄が並び、打っても送られない。
+   */
+  const liveArgs = $derived((command?.args ?? []).filter((spec: ArgSpec) => argApplies(spec, values)))
+
+  const numberArgs = $derived(liveArgs.filter((spec) => spec.kind === 'number') as NumberArgSpec[])
+  const choiceArgs = $derived(liveArgs.filter((spec) => spec.kind === 'choice') as ChoiceArgSpec[])
+  const textArgs = $derived(liveArgs.filter((spec) => spec.kind === 'text') as TextArgSpec[])
+  const pickArgs = $derived(liveArgs.filter((spec) => spec.kind === 'pick') as PickArgSpec[])
+
+  /**
+   * **いま直接ピックを待っている引数**(待っていなければ null)。
+   *
+   * 2つの経路がある: 必須のピックは収集の順番で来る(`missing`)。省略できるピックは
+   * 「指す」ボタンで人が構えたときだけ(`armedPick`)。**構えたほうが勝つ** ——
+   * 中心を指し直したい人が、まだ埋まっていない別の必須引数に邪魔されないため。
+   */
+  const pendingPick = $derived.by<PickArgSpec | null>(() => {
+    if (command === null) return null
+    if (armedPick !== null) {
+      const armed = liveArgs.find((spec) => spec.name === armedPick)
+      if (armed !== undefined && armed.kind === 'pick') return armed
+    }
+    return missing !== null && missing.kind === 'pick' ? missing : null
+  })
 
   /** このコマンドが選択から取る種別をアプリ層へ知らせる(辺のときだけ辺を取りに行く)。
    *  無起動では何も要求しない(`[]`)——面・頂点は常に指せるので、それだけが既定状態に残る。
@@ -307,6 +362,11 @@
   /** 基準平面を要求しているか(辺と同じ規律で、起動している間だけ指せるようにする)。無起動では常にfalse。 */
   $effect(() => {
     onWantsPlane((command?.args ?? []).some((spec) => spec.kind === 'plane'))
+  })
+
+  /** 直接ピックを待っているか(待っている**種別**をそのまま知らせる)。無起動では常に null。 */
+  $effect(() => {
+    onWantsPick(pendingPick?.target ?? null)
   })
 
   // ---------------------------------------------------------------- プレビュー
@@ -423,7 +483,12 @@
       onNote(built.reason)
       return
     }
-    lastInputs = { numbers: { ...numberText }, points: { ...points }, choices: { ...choices } }
+    lastInputs = {
+      numbers: { ...numberText },
+      points: { ...points },
+      choices: { ...choices },
+      picks: { ...picks },
+    }
     onRun(command.id, built.args)
     reset()
     // **ここでは無起動へ戻さない。** `onRun` はサーバへ投げるだけの楽観的な発火で、
@@ -470,6 +535,7 @@
     numbers: Record<string, string>
     points: Record<string, Point2>
     choices: Record<string, string>
+    picks: Record<string, SelectionRef>
   } | null = null
 
   export function restoreLastInputs(): void {
@@ -477,6 +543,9 @@
     numberText = { ...lastInputs.numbers }
     points = { ...lastInputs.points }
     choices = { ...lastInputs.choices }
+    // **指した辺・頂点も戻す**(打った値と同じ理由)。回転軸を指し直すのは
+    // 数値の打ち直しより手数が多く、失敗のたびに指し直しになると使い物にならない。
+    picks = { ...lastInputs.picks }
     focusFirstNumber()
   }
 
@@ -498,6 +567,7 @@
       Object.keys(points).length > 0 ||
       Object.keys(choices).length > 0 ||
       Object.keys(planes).length > 0 ||
+      Object.keys(picks).length > 0 ||
       ready
     reset()
     returnToIdle()
@@ -509,6 +579,8 @@
     points = {}
     choices = {}
     planes = {}
+    picks = {}
+    armedPick = null
     // **即適用の待ち受けも降ろす**。確定・中断のどちらでも「起動している間」は終わりで、
     // 構え直すのは `start()`(ボタンを押す1手)だけにする。
     armedSelections = null
@@ -612,6 +684,32 @@
   }
 
   /**
+   * **直接ピックを待っている種別**(待っていなければ null)。`wantsPoint` / `wantsPlane` と
+   * 同じで、`App.svelte` がクリックの行き先を決めるために見る。
+   */
+  export function wantsPick(): PickTarget | null {
+    return pendingPick?.target ?? null
+  }
+
+  /**
+   * **指した参照を、待っているピック引数へ入れる**(待っていなければ何もせず `false`)。
+   *
+   * 呼び出し側は種別が合っていることを確かめてから呼ぶこと(`wantsPick()` が返した
+   * 種別に対応するピックだけを渡す) —— ここでは参照の形しか見ない。
+   *
+   * `addPoint` / `setBasePlane` と同じく**その場で決まる**入力なので、この1手で引数が
+   * 揃い Enter が要らないコマンドならそのまま適用する。
+   */
+  export function setPick(ref: SelectionRef): boolean {
+    const spec = pendingPick
+    if (command === null || spec === null) return false
+    picks = { ...picks, [spec.name]: ref }
+    armedPick = null // 1回指したら構えを降ろす(続けて指し直すならボタンを押し直す)
+    if (!needsEnter(command) && firstMissingArg(command, values) === null) commit()
+    return true
+  }
+
+  /**
    * **ソリッドの面をクリックした** —— 貼る先を「選択にある面」にする。
    *
    * `setBasePlane` と違い**ここでは適用しない**。面はサーバがコアの確定選択から取るので、
@@ -625,6 +723,18 @@
     if (spec === null || spec.kind !== 'plane') return false
     planes = { ...planes, [spec.name]: 'face' }
     return true
+  }
+
+  /**
+   * 省略できるピックを**外す**(指し直しではなく空へ戻す)。
+   *
+   * 「指したものを取り消す手」が無いと、回転中心を一度指したら最後まで外せない ——
+   * 既定(コアが決める重心・代表点の平均)へ戻す唯一の道がここになる。
+   */
+  function clearPick(name: string): void {
+    const { [name]: _removed, ...rest } = picks
+    picks = rest
+    if (armedPick === name) armedPick = null
   }
 
   function focusFirstNumber(): void {
@@ -718,6 +828,33 @@
             {option.label}
           </button>
         {/each}
+      {/each}
+    </div>
+  {/if}
+
+  {#if pickArgs.length}
+    <!-- 直接ピック(共有選択集合を経由しない別チャンネル)。**必須のぶんは収集の順番で
+         勝手に構える**ので、このボタンは「指し直す」と「省略できるほうを指す」ための1手。 -->
+    <div class="row">
+      {#each pickArgs as spec (spec.name)}
+        <span class="label">{spec.label}{spec.optional === true ? '(任意)' : ''}</span>
+        <button
+          id={spec.buttonId}
+          class:on={pendingPick?.name === spec.name}
+          onclick={(event) => {
+            armedPick = armedPick === spec.name ? null : spec.name
+            // 選択肢ボタンと同じ理由で押した直後にフォーカスを外す(Enterを奪わせない)。
+            ;(event.currentTarget as HTMLElement).blur()
+          }}
+        >
+          {picks[spec.name] ? '指し直す' : '指す'}
+        </button>
+        <span id={`${spec.buttonId}-value`} class="value" class:dim={!picks[spec.name]}>
+          {pickedLabel(picks[spec.name]) || '未指定'}
+        </span>
+        {#if spec.optional === true && picks[spec.name]}
+          <button id={`${spec.buttonId}-clear`} onclick={() => clearPick(spec.name)}>外す</button>
+        {/if}
       {/each}
     </div>
   {/if}

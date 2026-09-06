@@ -398,7 +398,8 @@ def _needs_enter(args: list[tuple[str, str]]) -> bool:
 
     規則は2つ: **対象を複数取りうる**(選択の `max !== 1` / `entities`)か、
     **howの入力がある**(数値・選択肢・文字列)なら Enter が要る。どちらでもなければ即適用。
-    **列挙していない種別は即適用の側**(TS側の既定と同じ。点がそれ)。
+    **列挙していない種別は即適用の側**(TS側の既定と同じ。点と直接ピック(`pick`)がそれ ——
+    どちらも対象を1つだけ指すので、指した時点で「終わり」が機械に分かる)。
     """
     for kind, maximum in args:
         if kind == "selection" and maximum != "1":

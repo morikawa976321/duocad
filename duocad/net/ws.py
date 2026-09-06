@@ -364,6 +364,47 @@ class Server:
                 )
                 applied["client_op"] = message.get("client_op")
                 await self._push(connection, applied=applied)
+            # **移動の2つは表に載らない**(`catalog` の `ws="special"`)。`mode` で要る引数が
+            # 入れ替わり(並進は dx/dy/dz・回転は角度と軸/中心)、しかも回転の中心は
+            # 省略できる —— 表は載せた引数を全部必須にする規律なので置けない
+            # (`catalog.Param.ws`)。**省略された引数は `None` のまま verb へ渡す**:
+            # ここで既定値を埋めると、モードが取らない引数が黙って効く側へ倒れる
+            # (verb側の `_reject_foreign_args` は `None` を「渡していない」と読む)。
+            #
+            # **軸・中心の参照は対象集合ではない。** 動かす対象はいままでどおりコアの確定選択
+            # から取り(`selection.require_bodies` / `require_sketch_entities`)、ここで受ける
+            # `axis_edge` / `center_vertex` / `center_entity` は「どこを軸・中心にするか」を
+            # 指す名前である。同じ集合へ載せると、軸に使った辺のボディまで対象に数えられる
+            # (`duocad/verbs/move_body.py` の `_shape_ref`)。
+            elif command == "move_sketch_entities":
+                applied = self._apply(
+                    self.session.move_sketch_entities,
+                    dx=message.get("dx"),
+                    dy=message.get("dy"),
+                    copy=message.get("copy", False),
+                    mode=message.get("mode", "translate"),
+                    angle=message.get("angle"),
+                    center=message.get("center"),
+                    center_entity=message.get("center_entity"),
+                )
+                applied["client_op"] = message.get("client_op")
+                await self._push(connection, applied=applied)
+            elif command == "move_body":
+                applied = self._apply(
+                    self.session.move_body,
+                    dx=message.get("dx"),
+                    dy=message.get("dy"),
+                    dz=message.get("dz"),
+                    copy=message.get("copy", False),
+                    mode=message.get("mode", "translate"),
+                    angle=message.get("angle"),
+                    axis_edge=message.get("axis_edge"),
+                    axis_point=message.get("axis_point"),
+                    axis_dir=message.get("axis_dir"),
+                    center_vertex=message.get("center_vertex"),
+                )
+                applied["client_op"] = message.get("client_op")
+                await self._push(connection, applied=applied)
             elif command in SKETCH_COMMANDS:
                 method, keys = SKETCH_COMMANDS[command]
                 applied = self._apply(
