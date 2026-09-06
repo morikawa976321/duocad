@@ -14,7 +14,14 @@
  */
 import { isPlaneArgValue, pickedRefOf, type ArgValues, type CommandDef, type Point2 } from './command'
 import { MOVE_MODE_OPTIONS, isRotateMode, isTranslateMode, rejectAngle } from './moveMode'
-import { arcFromPoints, circleFromPoints, lineFromPoints, rectFromPoints } from './sketchGeometry'
+import {
+  arcFromPoints,
+  circleFromPoints,
+  lineAngleDeg,
+  lineFromPoints,
+  lineLength,
+  rectFromPoints,
+} from './sketchGeometry'
 
 /**
  * 確定前の姿(幽霊)の組み立ては `../entityKinds` の唯一の表へ寄せてある
@@ -63,6 +70,12 @@ export const ADD_LINE: CommandDef = {
       placeholder: 'mm',
       reject: positive('長さ'),
       fromPoints: true,
+      // `build` は p0/p1 だけを送るので、長さは名前で引けない(NumberArgSpec.live)。
+      live: (args) => {
+        const p0 = args.p0 as Point2 | undefined
+        const p1 = args.p1 as Point2 | undefined
+        return p0 && p1 ? lineLength(p0, p1) : null
+      },
     },
     {
       kind: 'number',
@@ -74,6 +87,11 @@ export const ADD_LINE: CommandDef = {
       // 0度は正当な向き(X軸方向)なので弾かない。
       reject: () => null,
       fromPoints: true,
+      live: (args) => {
+        const p0 = args.p0 as Point2 | undefined
+        const p1 = args.p1 as Point2 | undefined
+        return p0 && p1 ? lineAngleDeg(p0, p1) : null
+      },
     },
   ],
   build(values) {

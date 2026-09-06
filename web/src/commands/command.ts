@@ -188,11 +188,16 @@ export interface NumberArgSpec extends ArgSpecCommon {
    * **`build` が集まった点から計算する**。この印が付いた数値は how に数えないので
    * (`isHowInput`)、引数を完成させる最後のクリックでそのまま適用される。
    *
-   * **層をまたぐ契約**: `name` は `build` が出す引数のキーと同じでなければならない ——
-   * `CommandHost` が空欄のプレースホルダに「いまマウスが指している値」を出すとき、
-   * その名前で `build` の結果を引く。
+   * **層をまたぐ契約**: `CommandHost` は空欄のプレースホルダに「いまマウスが指している値」を
+   * 出すとき、まず `name` で `build` の結果を引く。引けない寸法は `live` が作る。
    */
   fromPoints?: true
+  /**
+   * 空欄の薄字に出す値を、`build` の結果から作る(名前で引けない寸法だけが持つ)。
+   * `add_line` の長さ・角度のように、`build` が別のキー(`p0`/`p1`)へ畳んで送る寸法で使う。
+   * **表示だけに使う** —— ここが返す値がサーバへ行くことはない。
+   */
+  live?(args: Record<string, unknown>): number | null
   /** 使えない値なら理由を返す(使えるなら null)。 */
   reject(value: number): string | null
   /**

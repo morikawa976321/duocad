@@ -776,13 +776,17 @@
    * 空欄の `fromPoints` 欄に出す薄字 —— **いまマウスが指している値**(無ければ従来の
    * プレースホルダ)。「空欄=マウス追従」の唯一の見える手がかりになる。
    *
-   * 引くのは `spec.name`(`NumberArgSpec.fromPoints` の層をまたぐ契約)。`build` が
-   * その名前で出していない寸法(`add_line` の長さ・角度は `p0`/`p1` へ畳んで送る)は
-   * 従来のプレースホルダのままになる。
+   * まず `spec.name` で `build` の結果を引く(`NumberArgSpec.fromPoints` の層をまたぐ契約)。
+   * 引けなければ `spec.live` に作らせる(`add_line` の長さ・角度のように `p0`/`p1` へ
+   * 畳まれて名前で引けない寸法)。どちらも数値でなければ従来のプレースホルダ。
    */
   function placeholderFor(spec: NumberArgSpec): string {
     if (spec.fromPoints !== true || (numberText[spec.name] ?? '') !== '') return spec.placeholder
-    const live = ghostBuilt?.args[spec.name]
+    const named = ghostBuilt?.args[spec.name]
+    const live =
+      typeof named === 'number' && Number.isFinite(named)
+        ? named
+        : (ghostBuilt !== null ? (spec.live?.(ghostBuilt.args) ?? null) : null)
     return typeof live === 'number' && Number.isFinite(live) ? live.toFixed(2) : spec.placeholder
   }
 

@@ -51,6 +51,21 @@ export function lineFromPoints(
 }
 
 /**
+ * 線分の長さ・角度(表示専用。`add_line` の `NumberArgSpec.live` から呼ぶ)。
+ *
+ * `build` が送るのは `p0`/`p1` だけで `length`/`angle_deg` はそこへ畳まれて消えるため、
+ * 空欄の薄字にマウス追従の値を出すには `p0`/`p1` から作り直す必要がある。角度は
+ * `angleDeg` と同じ規約(度・反時計・[0,360))で正規化する。
+ */
+export function lineLength(p0: Point2, p1: Point2): number {
+  return Math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+}
+
+export function lineAngleDeg(p0: Point2, p1: Point2): number {
+  return angleDeg(p0, p1)
+}
+
+/**
  * 軸平行の長方形。**打った寸法も「引いた向き」へ伸ばす** —— 対角がどちら側にあるかで
  * 符号が決まるので、幅だけ打っても始点の反対側へ回れば向きが反転する。
  *
