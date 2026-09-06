@@ -13,6 +13,6 @@
     "skipLibCheck": true,
     "types": ["vite/client"]
   },
-  "//": "`include` は tsc 用(.svelte は tsc が読めない)。**`.svelte` は svelte-check が見る** — 2026-08-15に追加。`npm run check` が両方を走らせるので、型検査は .ts と .svelte の両方に効く",
+  "//": "`include` は tsc 用(.svelte は tsc が読めない)。**`.svelte` は svelte-check が見る**。`npm run check` が両方を走らせるので、型検査は .ts と .svelte の両方に効く",
   "include": ["src/**/*.ts", "vite.config.ts"]
 }

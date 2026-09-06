@@ -35,7 +35,7 @@ def count_python(src: str) -> tuple[int, int, int]:
 
     docstring は「モジュール/関数/クラスの本体の先頭にある文字列リテラル」だけを数える。
     `print(\"\"\"...\"\"\")` のような通常の三重引用符を含めると、検査スクリプトのように
-    長いリテラルを持つファイルで4.8倍ずれる(2026-09-05実測)。
+    長いリテラルを持つファイルで4.8倍ずれる(実測)。
     """
     lines = src.splitlines()
     blank = sum(1 for line in lines if not line.strip())
