@@ -1899,13 +1899,17 @@
    * 通すこと**(20260906タスクの不変条件) —— 片方だけ直すと、吸い付いて見える位置と
    * 確定結果がずれる、いちばん困る形の不具合になる。当たっている図形が無ければ
    * (`hit === null`)生の座標をそのまま返す。
+   *
+   * **`viewport.viewResolution()` を渡す** —— 当たり判定(`sketchEntityAt`)が拾う
+   * `handleLines` はこの解像度で折れているので、bezierのように折れ線近似でスナップする
+   * 種別は、ここがずれると「当たった線」と「落ちる座標」が別になる。
    */
   function snappedPlanePoint(u: number, v: number, hit: SketchEntityHit | null): Point2 {
     if (hit === null) return [u, v]
     const sketch = sketches.find((item) => item.sketch_id === hit.sketchId)
     const entity = sketch?.entities.find((item) => item.entity_id === hit.entityId)
     if (!entity) return [u, v]
-    return snapToSketchEntity(entity, hit.point, u, v)
+    return snapToSketchEntity(entity, hit.point, u, v, viewport?.viewResolution())
   }
 
   /**

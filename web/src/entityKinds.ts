@@ -76,8 +76,13 @@ interface EntityKindSpec {
    * ここが返すのは「たまたま同じ座標」であり、図形を後から動かしても付いていかない。
    * `snapToSketchEntity` から**クリック(addPoint)と幽霊(hoverPoint)の両方**が呼ぶ
    * (どちらかだけ直すと、吸い付いて見える位置と確定結果がずれる)。
+   *
+   * `resolution` は**当たり判定(`sketchEntityAt`)が使っているのと同じ折れ線の粗さ**を
+   * 渡す(呼び出し側が `viewport.viewResolution()` から読む)。射影が解析式で決まる種別は
+   * 無視してよいが、bezierのように `toPoints` の近似で当たる種別はここがずれると
+   * 「見えている線と落ちる場所が違う」になる。
    */
-  snap(params: Record<string, number>, u: number, v: number): [number, number]
+  snap(params: Record<string, number>, u: number, v: number, resolution: ViewResolution): [number, number]
 }
 
 /**
@@ -440,8 +445,11 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
         resolution,
       )
     },
-    snap(params, u, v) {
+    snap(params, u, v, resolution) {
       // 折れ線の最近傍の線分へ射影する(当たり判定 `sketchEntityAt` と同じ近似)。
+      // **当たり判定の `handleLines` と同じ `resolution` で折る** —— ここが
+      // `DEFAULT_RESOLUTION` 固定だと、既定ズーム以外で「当たった見えている線」と
+      // 「落ちる座標」がずれる(当たり判定は常に `appliedResolution` で描いている)。
       return projectToPolyline(
         u,
         v,
@@ -450,7 +458,7 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
           params.cx1, params.cy1,
           params.cx2, params.cy2,
           params.x1, params.y1,
-          DEFAULT_RESOLUTION,
+          resolution,
         ),
       )
     },
@@ -504,14 +512,21 @@ export function entityPoints(
   return entityKindSpec(kind).toPoints(params, resolution)
 }
 
-/** 与えた (u,v) をこの図形の輪郭へ落とす(`EntityKindSpec.snap` 参照)。表に無い種別は例外。 */
+/**
+ * 与えた (u,v) をこの図形の輪郭へ落とす(`EntityKindSpec.snap` 参照)。表に無い種別は例外。
+ *
+ * `resolution` を省くと**当たり判定と揃わない既定の粗さ**になる(`entityPoints` と同じ
+ * 注意)。呼ぶのは `snapToSketchEntity` 経由で、そちらが `viewport.viewResolution()` から
+ * 今の値を渡す。
+ */
 export function snapToEntity(
   kind: string,
   params: Record<string, number>,
   u: number,
   v: number,
+  resolution: ViewResolution = DEFAULT_RESOLUTION,
 ): [number, number] {
-  return entityKindSpec(kind).snap(params, u, v)
+  return entityKindSpec(kind).snap(params, u, v, resolution)
 }
 
 /**
@@ -521,18 +536,23 @@ export function snapToEntity(
  * 20260906のタスク不変条件) —— 片方だけ直すと、吸い付いて見える位置と確定結果がずれる。
  * 点マーカーに当たっているとき(`point !== null`)は射影せず、`entityHandles` が持つ
  * その点の (u,v) をそのまま返す。
+ *
+ * `resolution` は**当たり判定(`sketchEntityAt`)が使っている折れ線の粗さ**
+ * (`viewport.viewResolution()`)をそのまま渡すこと —— bezierのように `toPoints` の
+ * 近似で当たる種別は、ここがずれると「当たった線」と「落ちる座標」が別になる。
  */
 export function snapToSketchEntity(
   entity: { kind: string; params: Record<string, number> },
   point: string | null,
   u: number,
   v: number,
+  resolution: ViewResolution = DEFAULT_RESOLUTION,
 ): [number, number] {
   if (point !== null) {
     const handle = entityHandles(entity.kind, entity.params).find((item) => item.key === point)
     if (handle) return [handle.u, handle.v]
   }
-  return snapToEntity(entity.kind, entity.params, u, v)
+  return snapToEntity(entity.kind, entity.params, u, v, resolution)
 }
 
 /**
