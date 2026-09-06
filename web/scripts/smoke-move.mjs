@@ -65,25 +65,6 @@ async function main() {
       }
     }
 
-    /**
-     * **状態配信が落ち着くまで待つ。**
-     *
-     * カメラを動かすと可変解像度が180ms後に `set_view_resolution` を送り、サーバは粗さを
-     * 版の鍵に入れているので**形が同じでも配信し直す**。その配信で `viewport.update()` が
-     * 表示中の幽霊を消すが、幽霊は**引数が変わらない限り描き直されない**
-     * (`CommandHost` の `previewedKey`)ので、消えたまま戻らない。8bが辺で踏んだのと
-     * 同じ機序で、幽霊を見る節の前は静めてから打つ。
-     */
-    async function settle() {
-      let epoch = -1
-      for (let attempt = 0; attempt < 40; attempt++) {
-        const now = await page.evaluate(() => window.__duocad.stateEpoch)
-        if (now === epoch) return
-        epoch = now
-        await new Promise((resolve) => setTimeout(resolve, 250))
-      }
-    }
-
     async function typeInto(selector, value) {
       await page.click(selector)
       await page.keyboard.down('Control')
@@ -885,7 +866,6 @@ async function main() {
     )
     const geometryBefore = await page.evaluate((id) => window.__duocad.getGeometry(id).bbox.center, bodyId)
 
-    await settle() // 幽霊を見る前に配信を静める(上の `settle` のdocstring)
     await page.click('#move-body')
     await page.click('#move-body-move')
     await page.click('#move-body-translate')
@@ -911,6 +891,56 @@ async function main() {
     )
     if (Math.abs(stillHome - geometryBefore[2]) > 1e-6) {
       fail(`幽霊を出しただけで本物が動いた: ${geometryBefore[2]} → ${stillHome}`)
+    }
+
+    // ---------------------------------------------------------------- カメラを動かしても消えない
+    // **カメラ移動は形を変えないが、状態配信を起こす。** 可変解像度の `focus` が変わると
+    // サーバは粗さを版の鍵に入れている(`view.body_revision`)ので、**幽霊が乗っている
+    // ボディ自身が測り直されて届く** —— ここで版が上がることを先に確かめてから幽霊を見る
+    // (版が上がらなければ、この検査は見たい配信が起きないまま緑になる)。
+    // 引数も選択も触っていないので `CommandHost` は幽霊を投げ直さない(`previewedKey`)。
+    // 救済は `viewport.update()` 側にあり、届いた形で組み直す。
+    {
+      const revisionBefore = await page.evaluate(
+        (id) => window.__duocad.state.bodies.find((item) => item.body_id === id).revision,
+        bodyId,
+      )
+      const ghostBefore = await page.evaluate(() =>
+        JSON.parse(JSON.stringify(window.__duocad.ghostInfo().bodies)),
+      )
+      if (ghostBefore.length !== 1) {
+        fail(`カメラを動かす前に幽霊が消えている: ${JSON.stringify(ghostBefore)}`)
+      }
+      await drag('right', 140, 60)
+      await waitFor(
+        (id, before) =>
+          window.__duocad.state.bodies.find((item) => item.body_id === id).revision > before,
+        'カメラを動かしても対象ボディが配り直されない(この検査が見たい配信が起きていない)',
+        [bodyId, revisionBefore],
+      )
+      const ghostAfter = await page.evaluate(() =>
+        JSON.parse(JSON.stringify(window.__duocad.ghostInfo().bodies)),
+      )
+      if (ghostAfter.length !== 1) {
+        fail(`カメラを動かしただけで幽霊が消えた: ${JSON.stringify(ghostAfter)}`)
+      }
+      // **同じ姿でなければならない** —— 引数も選択も変わっていないのだから、
+      // 組み直した幽霊は掛かっている行列まで前と同じである。
+      if (JSON.stringify(ghostAfter[0].matrix) !== JSON.stringify(ghostBefore[0].matrix)) {
+        fail(
+          `カメラを動かしたら幽霊の行列が変わった: ${JSON.stringify(ghostBefore[0].matrix)} → ` +
+            JSON.stringify(ghostAfter[0].matrix),
+        )
+      }
+      const revisionAfter = await page.evaluate(
+        (id) => window.__duocad.state.bodies.find((item) => item.body_id === id).revision,
+        bodyId,
+      )
+      ok(
+        `move_body: カメラを動かして対象ボディが測り直されても(版 ${revisionBefore} → ` +
+          `${revisionAfter})幽霊は同じ姿で出続ける`,
+      )
+      await drag('right', -140, -60) // 以後の節は本物のクリックで面・辺を指すので向きを戻す
     }
 
     // **Escで消えて、文書は一切変わらない**(サーバへ何も送っていない)
@@ -1220,7 +1250,6 @@ async function main() {
       await page.evaluate(() => document.activeElement?.blur?.())
       await page.keyboard.press('Escape')
       await frameAll(page)
-      await settle() // 幽霊を見る節なので配信を静めてから始める
       const faceForRotate = await pickAnyFace(page, bodyId)
       await clickFace(page, bodyId, faceForRotate)
       await waitFor(
@@ -1323,7 +1352,6 @@ async function main() {
         fail(`軸の辺の折れ線が読めない: ${JSON.stringify(axisLine)}`)
       }
 
-      await settle()
       await typeInto('#move-body-angle', 90)
       await waitFor(
         () => window.__duocad.ghostInfo().bodies.length === 1,

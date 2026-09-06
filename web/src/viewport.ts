@@ -832,6 +832,9 @@ export function createViewport(container: HTMLElement): Viewport {
 
   function update(entries: BodyGeometryUpdate[]): void {
     if (entries.length === 0) return
+    // **ローカル幽霊の指示だけ控える**(末尾で組み直す。`clearPreview()` は
+    // `bodyGhostInfo` を新しい配列へ差し替えるので、掴んだこちらは巻き添えにならない)。
+    const ghosts = bodyGhostInfo
     // 本物の形が届いた時点で、確定前の予想は用済み(古い幽霊を残さない)。
     clearPreview()
     for (const entry of entries) {
@@ -857,6 +860,16 @@ export function createViewport(container: HTMLElement): Viewport {
     // 隠してボクセルを見せる —— ここで当て直さないと、結果が届いた直後の状態配信で
     // ボディが生まれ直し、平滑化メッシュとボクセルが重なって両方読めなくなる。
     optimizeDebug.applyHidden()
+
+    // **ローカル幽霊は「いま届いている本物をずらした姿」なので、消して終わりにせず
+    // 届いたばかりの形で組み直す。** 上で消すのは正しい(古い形から作ったメッシュを
+    // 残せば嘘の姿になる)が、消すだけだと**形の変わっていない再配信でも落ちたまま
+    // 戻らない** —— カメラを動かすと可変解像度の `focus` が変わり、粗さが
+    // `view.body_revision` の鍵に入っているので**幽霊が乗っているボディ自身が
+    // 測り直されて届く**(2026-09-06実測: 右ドラッグ1回でそのボディの版が 2→3)。
+    // 呼び直す側の `CommandHost` は「引数が変わっていない」と見て再発火しない
+    // (`previewedKey`)ので、引数を打ち直すまで幽霊は戻らなかった。
+    if (ghosts.length > 0) showBodyGhosts(ghosts)
   }
 
   // ------------------------------------------------------------------ プレビュー(幽霊)
