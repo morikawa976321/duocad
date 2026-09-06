@@ -112,6 +112,62 @@ def test_mirroring_an_arc_keeps_its_sweep_and_flips_its_position(session: Sessio
     assert mirrored["end_deg"] - mirrored["start_deg"] == pytest.approx(90.0)
 
 
+def _add_bezier(session: Session, sketch_id: str, params: dict) -> str:
+    """ベジエを直接モデルへ置く(**取り込み専用の種別で、作るverbが無い**。
+    `tests/test_move_verbs.py::test_two_control_points_of_one_bezier_both_move` と同じ手順)。
+    """
+    from duocad import parameters as parameters_mod
+    from duocad.sketch import Entity, get_sketch
+
+    refs = {key: parameters_mod.register_value(session.document, value) for key, value in params.items()}
+    entity_id = f"entity-bezier-{len(get_sketch(session.document, sketch_id).entities)}"
+    get_sketch(session.document, sketch_id).entities.append(
+        Entity(id=entity_id, kind="bezier", params=refs)
+    )
+    return entity_id
+
+
+def test_mirroring_a_bezier_reflects_all_its_control_points(session: Session) -> None:
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    axis_id = session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])["entity_id"]
+    entity_id = _add_bezier(
+        session,
+        sketch_id,
+        {"x0": 0.0, "y0": 1.0, "cx1": 1.0, "cy1": 2.0, "cx2": 3.0, "cy2": 4.0, "x1": 5.0, "y1": 6.0},
+    )
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+
+    applied = session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})
+
+    mirrored = _params(session, sketch_id, applied["created"][0])
+    # 軸は (0,0)-(10,0) = u軸そのものなので、鏡映は全制御点の y を反転するだけ
+    assert mirrored == pytest.approx(
+        {"x0": 0.0, "y0": -1.0, "cx1": 1.0, "cy1": -2.0, "cx2": 3.0, "cy2": -4.0, "x1": 5.0, "y1": -6.0}
+    )
+    # 元は変わっていない(常に複製)
+    assert _params(session, sketch_id, entity_id) == pytest.approx(
+        {"x0": 0.0, "y0": 1.0, "cx1": 1.0, "cy1": 2.0, "cx2": 3.0, "cy2": 4.0, "x1": 5.0, "y1": 6.0}
+    )
+
+
+def test_mirroring_a_bezier_twice_returns_to_the_original(session: Session) -> None:
+    """鏡映は対合(同じ軸に2回かけると元に戻る)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    axis_id = session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])["entity_id"]
+    original = {"x0": 0.0, "y0": 1.0, "cx1": 1.0, "cy1": 2.0, "cx2": 3.0, "cy2": 4.0, "x1": 5.0, "y1": 6.0}
+    entity_id = _add_bezier(session, sketch_id, original)
+
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    once = session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})
+    once_id = once["created"][0]
+
+    _select(session, [{"sketch": sketch_id, "entity": once_id, "point": None}])
+    twice = session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})
+    twice_id = twice["created"][0]
+
+    assert _params(session, sketch_id, twice_id) == pytest.approx(original)
+
+
 def test_mirroring_a_rectangle_across_an_axis_parallel_to_its_edge_keeps_its_kind(
     session: Session,
 ) -> None:
