@@ -417,11 +417,27 @@ export type Applied =
       changed_bodies: string[]
     })
   /**
+   * スケッチ図形の鏡映複製(`mirror_sketch_entities`)。**常に複製を作る**ので `created` は
+   * 必ず中身を持つ。**ソリッドは追従しない**ので `changed_bodies` は無い
+   * (`move_sketch_entities` と同じ)。
+   *
+   * `axis_p0` / `axis_dir` は**解決後の数値**(スケッチ平面の [u, v])で、軸に指した線分の
+   * 参照は載らない —— 軸自身が対象に混ざっていた場合、複製後に参照を引き直すと別の線分に
+   * なるため(`duocad/verbs/mirror_sketch.py`)。
+   */
+  | (AppliedVerbBase & {
+      verb: 'mirror_sketch_entities'
+      axis_p0: number[]
+      axis_dir: number[]
+      created: string[]
+      sketch_ids: string[]
+    })
+  /**
    * ボディの鏡映複製(`mirror_body`)。**常に複製を作る**(move_bodyと違い、動かす経路は
    * 無い)。元は動かないので `changed_bodies` は複製で増えたボディだけ。
    *
-   * `base_plane` はUIからも送れる(`ws="special"`)が、`plane_face` はMCP専用
-   * (`duocad/catalog.py` の note)。
+   * 鏡映面が `base_plane`(XY/XZ/YZ)でも `plane_face`(既存の面)でも、載るのは解決後の
+   * `plane_point` / `plane_normal` だけである。
    */
   | (AppliedVerbBase & {
       verb: 'mirror_body'

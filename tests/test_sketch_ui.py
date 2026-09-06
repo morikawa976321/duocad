@@ -46,12 +46,13 @@ class FakeConnection:
 
 
 def test_only_the_registered_commands_are_reachable() -> None:
-    """表から呼べるのは登録した6つだけ(文字列で任意のメソッドを呼ばせない)。
+    """表から呼べるのは登録した7つだけ(文字列で任意のメソッドを呼ばせない)。
 
     **表に居ないスケッチのverbが2つある**(どちらも宣言側は `ws="special"`)——
     `sketch_create` は `base_plane` が、`move_sketch_entities` は回転の中心
     (`center` / `center_entity`)が**省略できる引数**で、表は「載せた引数は全部必須」
-    だからである。`import_svg` は `sketch_id` を必須で取る形なので表に載る。
+    だからである。`import_svg` は `sketch_id` を、`mirror_sketch_entities` は `axis` を
+    必須で取る形なので表に載る。
     """
     assert set(SKETCH_COMMANDS) == {
         "add_line",
@@ -60,6 +61,7 @@ def test_only_the_registered_commands_are_reachable() -> None:
         "add_arc",
         "set_parameter",
         "import_svg",
+        "mirror_sketch_entities",
     }
 
 

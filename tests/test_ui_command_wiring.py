@@ -455,6 +455,7 @@ ENTER_REQUIRED = {
     "select_in_sketch": False,     # 引数が無い(完成させるクリックが無いので発火もしない)
     "move_sketch_entities": True,  # 点・辺は何個でも + 移動量2つ + 複製の選択
     "move_body": True,             # 面/辺/頂点は何個でも + 移動量3つ + 複製の選択
+    "mirror_sketch_entities": True,  # 図形は何個でも + 軸の線分のピック(howは無い)
     "mirror_body": True,           # 面/辺/頂点は何個でも + 鏡映面(choice)
     "delete": True,                # 対象は何個でも(howは無い。通常/スケッチ両モードで同じ1つ)
     "set_preserve_bodies": True,   # ボディは何個でも(0個もよい=解除)
@@ -693,3 +694,42 @@ def test_the_catalog_notes_no_longer_say_these_verbs_have_no_preview():
     assert not stale, f"note が古い設計判断のまま: {sorted(stale)}"
     silent = sorted(name for name, note in notes.items() if "プレビュー" not in note)
     assert not silent, f"note がプレビューの扱いに触れていない: {silent}"
+
+
+def _app_function_body(name: str) -> str:
+    """`App.svelte` の `function <name>(` から**次のトップレベルの関数まで**を切り出す。"""
+    app = (COMMANDS_DIR.parent / "App.svelte").read_text(encoding="utf-8")
+    start = app.index(f"function {name}(")
+    tail = app[start:]
+    following = re.search(r"\n  (?:function|const|async function) ", tail[10:])
+    return tail[: following.start() + 10] if following else tail
+
+
+@pytest.mark.parametrize("handler", ["onPick", "onSketchPick"])
+def test_the_direct_pick_is_read_before_the_selection_is_edited(handler: str) -> None:
+    """ここが落ちたら、**鏡映軸や回転軸に指したものが対象の選択へ入る**。
+
+    コアの `require_bodies` / `require_sketch_entities` は選択から対象を逆引きするので、
+    基準に使った辺・面・線分が選択に混ざると、その部品まで一緒に回る/複製される。
+    """
+    body = _app_function_body(handler)
+    pick = body.index("wantsPick()")
+    edit = body.index("editSelection(")
+    assert pick < edit, (
+        f"{handler}: 直接ピックの分岐が `editSelection` より後にある"
+        "(指したものが共有選択へ入る)"
+    )
+
+
+@pytest.mark.parametrize("handler", ["onPick", "onSketchPick"])
+def test_a_modified_click_never_goes_to_the_direct_pick(handler: str) -> None:
+    """ここが落ちたら、**基準を待っている間に対象を選び直す手が無くなる**。
+
+    必須のピックは対象が揃った時点で自動的に構えるので、素のクリックを全部ピックが
+    食う。修飾キー(Shift / Ctrl)付きだけは今までどおり選択の編集へ通す。
+    """
+    body = _app_function_body(handler)
+    guard = body[: body.index("wantsPick()")]
+    assert "event.mode === 'replace'" in guard.split("if (")[-1], (
+        f"{handler}: 直接ピックの分岐が修飾キー無しのクリックに限定されていない"
+    )

@@ -440,17 +440,65 @@ export const MOVE_SKETCH_ENTITIES: CommandDef = {
 }
 
 /**
+ * スケッチ図形の鏡映複製。**軸は既存の線分を1本クリックして指す。**
+ *
+ * 対象はコアの確定選択から取り、軸は**共有選択集合を経由しない別チャンネル**
+ * (`PickArgSpec`)で受ける。同じ集合に載せると `require_sketch_entities` が軸の線分まで
+ * 対象に数える —— 軸は自分自身へ映るのでverb側は黙って外すが、画面が数えた対象の件数と
+ * 結果が食い違う。
+ *
+ * **軸の既定は無い**(`optional` を付けていない)ので、対象が揃った時点で軸のピックが
+ * その場で開く。それでも対象を選び直せるのは、**修飾キー付きのクリックがピックへ
+ * 行かない**からである(`App.svelte` の `onSketchPick`)。
+ *
+ * **幽霊は無い**(`preview: 'none'`)。対象は何個でも選べるので確定はEnterである(`needsEnter`)。
+ */
+export const MIRROR_SKETCH_ENTITIES: CommandDef = {
+  id: 'mirror_sketch_entities',
+  category: 'sketch',
+  label: '鏡映複製',
+  buttonId: 'sketch-mirror',
+  preview: 'none',
+  args: [
+    {
+      kind: 'selection',
+      name: 'target',
+      label: '鏡映する図形',
+      shapeKind: 'sketch_entity',
+      min: 1,
+      max: null,
+    },
+    {
+      kind: 'pick',
+      name: 'axis',
+      label: '鏡映軸の線分',
+      target: 'sketchEntity',
+      buttonId: 'sketch-mirror-axis',
+    },
+  ],
+  build(values) {
+    const targets = (values.target ?? []) as unknown[]
+    if (targets.length === 0) return { ok: false, reason: '点も辺も選ばれていない' }
+    // **参照のまま送る**(`move_sketch_entities` の中心と同じ規律)。線分が乗る直線を
+    // 出す規則はコアの `mirror_sketch_entities` が正で、数値へ潰すと規則が2箇所になる。
+    const axis = pickedRefOf(values.axis)
+    if (axis === null) return { ok: false, reason: '鏡映軸の線分が指されていない' }
+    return { ok: true, args: { axis } }
+  },
+}
+
+/**
  * そのverbは**スケッチモードの中で走るのに `sketch_id` を取らない**か。
  *
  * `runsOutsideSketch`(モードの外で走る)のちょうど半分だけ違う位置にいる ——
- * `move_sketch_entities` はモードに入っていることを要求するが、どのスケッチかは
- * 選んだ参照(`{sketch, entity, point}`)が持っているので引数に要らない。
+ * `move_sketch_entities` / `mirror_sketch_entities` はモードに入っていることを要求するが、
+ * どのスケッチかは選んだ参照(`{sketch, entity, point}`)が持っているので引数に要らない。
  *
  * **列挙にしてある**(引数の形から導出しない)ので、スケッチverbを新しく足しても既定は
  * 変わらない —— 足したverbは今までどおり `sketch_id` が付く。
  */
 export function runsWithoutSketchId(verb: string): boolean {
-  return verb === MOVE_SKETCH_ENTITIES.id
+  return verb === MOVE_SKETCH_ENTITIES.id || verb === MIRROR_SKETCH_ENTITIES.id
 }
 
 /**
@@ -484,6 +532,7 @@ export const SKETCH_COMMANDS: CommandDef[] = [
   ADD_RECTANGLE,
   ADD_ARC,
   MOVE_SKETCH_ENTITIES,
+  MIRROR_SKETCH_ENTITIES,
   IMPORT_SVG,
 ]
 export const DEFAULT_SKETCH_COMMAND_ID = SELECT_IN_SKETCH.id

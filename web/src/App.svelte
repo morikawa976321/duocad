@@ -1144,7 +1144,12 @@
    * 辺を指させるなら折れ線を配ってもらう必要がある。
    */
   const wantsEdges = $derived(
-    sketchId === null && (wantedKinds.includes('edge') || wantedPick === 'edge'),
+    sketchId === null &&
+      // **面を1つ指させている間は辺を出さない。** 辺は面より先に拾われるので、出したままだと
+      // 鏡映面を狙ったクリックが辺に取られ、**その辺が対象の選択へ入る**(素のクリックは
+      // 選択を置き換えるので、選び直したつもりのない対象がその場で入れ替わる)。
+      wantedPick !== 'face' &&
+      (wantedKinds.includes('edge') || wantedPick === 'edge'),
   )
 
   $effect(() => {
@@ -1381,7 +1386,11 @@
     //
     // **待っているものが当たらなかったクリックは素通りさせる**(`wantsPlane` と同じ)——
     // 対象を選び直す・何もない所で解除する、が構えている間もできる。
-    if (host !== null) {
+    //
+    // **修飾キー付き(Shift / Ctrl)のクリックはピックへ行かない** —— 待っている間も
+    // 対象を足す・外す手が要る(軸や鏡映面を指す構えは、対象が1つ揃った時点で自動的に
+    // 開くので、素のクリックだけを食うと2つ目の対象が永久に選べない)。
+    if (host !== null && event.mode === 'replace') {
       const wants = host.wantsPick()
       if (wants === 'edge' && event.edge !== null) {
         host.setPick({ body: event.edge.bodyId, kind: 'edge', index: event.edge.edgeIndex })
@@ -1389,6 +1398,10 @@
       }
       if (wants === 'vertex' && event.vertex !== null) {
         host.setPick({ body: event.vertex.bodyId, kind: 'vertex', index: event.vertex.vertexIndex })
+        return
+      }
+      if (wants === 'face' && event.hit !== null) {
+        host.setPick(faceRef(event.hit.bodyId, event.hit.faceIndex))
         return
       }
     }
@@ -1591,12 +1604,21 @@
       const [u, v] = snappedPlanePoint(event.point.u, event.point.v, event.sketchEntity)
       if (host.addPoint(u, v)) return
     }
-    // **コマンドがスケッチの点を直接待っているとき**(回転中心)。3Dの辺・頂点と同じ規律で、
-    // 下の共有選択への翻訳より**前**に置く —— 中心に使う点が選択へ入ると、それ自体が
-    // 「動かす対象」になって一緒に回る。
-    if (event.sketchEntity && host?.wantsPick() === 'sketchPoint') {
+    // **コマンドがスケッチの点・図形を直接待っているとき**(回転中心・鏡映軸)。3Dの辺・
+    // 頂点と同じ規律で、下の共有選択への翻訳より**前**に置く —— 中心や軸に使うものが
+    // 選択へ入ると、それ自体が「動かす/鏡映する対象」になる。
+    // **修飾キー付きがピックへ行かないのも3Dと同じ**(`onPick`)。
+    if (event.sketchEntity && host !== null && event.mode === 'replace') {
       const hit = event.sketchEntity
-      if (host.setPick(sketchEntityRef(hit.sketchId, hit.entityId, hit.point))) return
+      const wants = host.wantsPick()
+      if (wants === 'sketchPoint' && host.setPick(sketchEntityRef(hit.sketchId, hit.entityId, hit.point))) {
+        return
+      }
+      // **軸に要るのは線分そのもの**なので、端点の近くを押しても点を落として図形へ畳む
+      // (`point` を残すと、コアの `mirror_sketch_entities` が軸の参照として読めない)。
+      if (wants === 'sketchEntity' && host.setPick(sketchEntityRef(hit.sketchId, hit.entityId, null))) {
+        return
+      }
     }
     // **図形は領域より先**(点・辺は領域の縁に乗っているので、領域が勝つと端点を掴めない)。
     // 描くコマンドが起動している間は上の `addPoint` が先に食うので、ここへは来ない。

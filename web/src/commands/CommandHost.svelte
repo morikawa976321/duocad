@@ -894,7 +894,7 @@
           {picks[spec.name] ? '指し直す' : '指す'}
         </button>
         <span id={`${spec.buttonId}-value`} class="value" class:dim={!picks[spec.name]}>
-          {pickedLabel(picks[spec.name]) || '未指定'}
+          {pickedLabel(picks[spec.name], spec.target) || '未指定'}
         </span>
         {#if spec.optional === true && picks[spec.name]}
           <button id={`${spec.buttonId}-clear`} onclick={() => clearPick(spec.name)}>外す</button>

@@ -131,11 +131,10 @@ def _ws_document_changing_commands() -> set[str]:
       `{"type":"file"}`、`get_state` / `preview` / `get_edges` / `get_vertices` は
       それぞれ専用のtype)
 
-    **`mirror_sketch_entities` / `add_mesh_body` のように、`ws="none"`(MCP専用)でも
-    実際には操作ログに載る本物のverbが存在する**(前者はUIでの指し方が未決なため、後者は
-    UIから三角形を手で打つ操作が無いため)。このテストは「ブラウザから踏めるものの
-    Applied整合」を見る契約なので、この代理指標はそのまま残す —— MCP専用verbのAppliedとの
-    整合はこのテストの対象範囲外(2026-09-06、`mirror_sketch_entities` 追加時に確認)。
+    **`add_mesh_body` のように、`ws="none"`(MCP専用)でも実際には操作ログに載る本物の
+    verbが残っている**(UIから三角形を手で打つ操作が無いため)。このテストは「ブラウザから
+    踏めるものの Applied整合」を見る契約なので、この代理指標はそのまま残す ——
+    MCP専用verbのAppliedとの整合はこのテストの対象範囲外。
 
     ここまでが `applied` を持つ配信の全部で、**その中が verb 系と `change` 系に割れる**。
     """
@@ -540,6 +539,16 @@ def _run_move_body(session: Session, tmp_path: Path) -> dict:
     body, _ = _box(session)
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     return session.move_body(3.0, 4.0, 5.0)
+
+
+@_runner("mirror_sketch_entities")
+def _run_mirror_sketch_entities(session: Session, tmp_path: Path) -> dict:
+    """軸の線分は**対象に入れない**(入れるとverbが黙って外し、`created` が空になりうる)。"""
+    sketch_id = _sketch(session)
+    axis_id = session.add_line(sketch_id, [0.0, 0.0], [0.0, 10.0])["entity_id"]
+    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
+    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
+    return session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})
 
 
 @_runner("mirror_body")

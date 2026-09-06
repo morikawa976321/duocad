@@ -405,14 +405,15 @@ class Server:
                 )
                 applied["client_op"] = message.get("client_op")
                 await self._push(connection, applied=applied)
-            # **`mirror_body` は `base_plane` だけがWSに開いている**(`catalog` の
-            # `Param.ws`)。`plane_face` はMCP専用 —— 既存の面を鏡映基準に使う経路は
-            # 対象の確定選択と同じ画面操作で衝突しうるため、ここでは読まない
-            # (`plane_face` を省略した呼び出しは、鏡映面が無ければコアが ValueError)。
+            # **`mirror_body` の鏡映面は2つが排他で、どちらも省略できる**ので表に載せない
+            # (`catalog.Param.ws` の規律)。**省略された側は `None` のまま verb へ渡す** ——
+            # ここで既定値を埋めると、指していないほうの鏡映面が黙って効く。
+            # `plane_face` の面は対象集合ではない(どこを鏡に使うかを指す名前である)。
             elif command == "mirror_body":
                 applied = self._apply(
                     self.session.mirror_body,
                     base_plane=message.get("base_plane"),
+                    plane_face=message.get("plane_face"),
                 )
                 applied["client_op"] = message.get("client_op")
                 await self._push(connection, applied=applied)

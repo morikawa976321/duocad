@@ -477,18 +477,21 @@ export const MOVE_BODY: CommandDef = {
 /**
  * ボディの鏡映複製。**常に複製を作る**(move_bodyと違い、動かす/複製の選択肢は無い)。
  *
- * 鏡映面は基準平面(XY/XZ/YZ)の3択だけをUIに通す —— **既存の面を鏡映基準に使う経路
- * (`plane_face`)はMCPからだけ使える**(`duocad/catalog.py` の note)。対象の確定選択
- * (面/辺/頂点)と鏡映基準の面選択を画面上でどう切り替えるかが未決のままなので、この
- * 単発タスクでは無理にピックUIを新設しない(本人判断待ち)。
+ * 鏡映面の指し方は4つ: 基準平面(XY/XZ/YZ)か、**既存の平らな面を1つクリックする**
+ * (`plane_face`)。面は**共有選択集合を経由しない別チャンネル**(`PickArgSpec`)で受ける ——
+ * 同じ集合に載せると `require_bodies` が鏡に使った面のボディまで対象に数え、基準にした
+ * 部品まで一緒に複製される。
+ *
+ * **面のピックが開くのは「面を選ぶ」を押した後だけ**である(`when`)。3択のどれかで
+ * 済む人の画面には面のピックが現れず、選択のクリックが吸われることもない。
  */
 export const MIRROR_BODY: CommandDef = {
   id: 'mirror_body',
   category: 'feature',
   label: '鏡映複製',
   buttonId: 'mirror-body',
-  // **プレビューは無い**(preview: 'none')。move_body と違って形は変わらない移動ではなく、
-  // このタスクのスコープはMCP経由の完成と基準平面UIの疎通までなので幽霊は作っていない。
+  // **幽霊は無い**(`move_body` は持つ)。鏡映面を選んだ時点で複製の位置は一意に決まるので、
+  // 確定してからCtrl+Zで戻す運用にしてある。
   preview: 'none',
   args: [
     {
@@ -508,7 +511,18 @@ export const MIRROR_BODY: CommandDef = {
         { value: 'XY', label: 'XY平面', buttonId: 'mirror-body-xy' },
         { value: 'XZ', label: 'XZ平面', buttonId: 'mirror-body-xz' },
         { value: 'YZ', label: 'YZ平面', buttonId: 'mirror-body-yz' },
+        // **この値はサーバへ行かない**(`base_plane` は XY/XZ/YZ しか受け付けない)。
+        // 下の `plane_face` を出すための印で、`build` が読み替える。
+        { value: 'face', label: '面を選ぶ', buttonId: 'mirror-body-face' },
       ],
+    },
+    {
+      kind: 'pick',
+      name: 'plane_face',
+      label: '鏡映面にする面',
+      target: 'face',
+      buttonId: 'mirror-body-plane-face',
+      when: (values) => values.base_plane === 'face',
     },
   ],
   build(values) {
@@ -516,6 +530,13 @@ export const MIRROR_BODY: CommandDef = {
     if (empty !== null) return { ok: false, reason: empty }
     const basePlane = values.base_plane
     if (typeof basePlane !== 'string') return { ok: false, reason: '鏡映面が選ばれていない' }
+    if (basePlane === 'face') {
+      // **参照のまま送る**(`move_body` の軸と同じ規律)。面が乗る平面を厳密に出せるのは
+      // コアだけで、平らでない面の拒否もコアの既存の規則がそのまま効く。
+      const face = pickedRefOf(values.plane_face)
+      if (face === null) return { ok: false, reason: '鏡映面にする面が指されていない' }
+      return { ok: true, args: { plane_face: face } }
+    }
     return { ok: true, args: { base_plane: basePlane } }
   },
 }

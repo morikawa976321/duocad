@@ -725,13 +725,14 @@ COMMANDS: tuple[Command, ...] = (
         ),
         uses_selection=True,
         session="mirror_sketch_entities",
-        ws="none",
         resets_selection=True,
         note=(
-            "**MCPからだけ使える**(`ws=\"none\"`)。`move_body.axis_edge` と構造が同じ問題"
-            "(対象の確定選択と軸の指し方が同じ画面操作で衝突しうる)を抱えるが、`base_plane` の"
-            "ような選択集合と衝突しない代替が無い(平面2Dには基準\"軸\"の概念が無い) —— "
-            "UIでの指し方は本人判断待ちとして未決のまま残してある(2026-09-06)。"
+            "**WSにも開いている**(2026-09-06。`axis` は必須の引数1つなので表に載る)。"
+            "画面は軸の線分を**スケッチ平面で直接クリック**して `axis` の参照で送る ——"
+            "**共有選択集合には入れない別チャンネル**(`web/src/commands/command.ts` の"
+            "`PickArgSpec`。`move_body.axis_edge` と同じ規律)である。載せてしまうと"
+            "`require_sketch_entities` が軸の線分まで対象に数える(軸は自分自身へ映るので"
+            "verb側は黙って外すが、画面の対象の件数と結果が食い違う)。"
         ),
     ),
     Command(
@@ -757,7 +758,6 @@ COMMANDS: tuple[Command, ...] = (
                 '{"body": body_id, "index": 面の1始まりの添字}。base_plane とは同時に渡せない。'
                 "この面自身が対象ボディに属していてもよい",
                 required=False,
-                ws=False,
             ),
         ),
         uses_selection=True,
@@ -765,13 +765,14 @@ COMMANDS: tuple[Command, ...] = (
         ws="special",
         resets_selection=True,
         note=(
-            "**`base_plane` だけがWSにも開いている**(2026-09-06。`ws=\"special\"`。"
-            "`sketch_create` と同じ座標定義を流用する)。画面は「鏡映面」の3択(XY/XZ/YZ)を"
-            "出すだけで、対象の選択(面/辺/頂点)とは別チャンネルなので衝突しない。"
-            "**`plane_face` はMCPからだけ使える**(`ws=False`、`move_body.axis_edge` と"
-            "同じ理由 —— 既存の面を鏡映基準に使う経路は、対象の確定選択と同じ画面操作で"
-            "衝突しうるため、UIでの指し方は本人判断待ちとして未決のまま残してある"
-            "(2026-09-06)。プレビュー(幽霊)は今回作っていない —— `previewable=False`。"
+            "**どちらの鏡映面もWSに開いている**(2026-09-06。`ws=\"special\"` なのは"
+            "2つが排他で**どちらも省略できる**ため。表は載せた引数を全部必須にする)。"
+            "画面は「鏡映面」の4択で、XY/XZ/YZ は `base_plane`、「面を選ぶ」を押すと"
+            "3Dの面を1つクリックして `plane_face` の参照で送る ——"
+            "**共有選択集合には入れない別チャンネル**(`web/src/commands/command.ts` の"
+            "`PickArgSpec`)である。載せてしまうと `require_bodies` が鏡映面に使った面の"
+            "ボディまで対象に数え、基準にした部品まで一緒に複製される。"
+            "プレビュー(幽霊)は無い —— `previewable=False`。"
         ),
     ),
     # ---------------------------------------------------------------- 削除

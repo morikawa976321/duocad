@@ -47,7 +47,9 @@ const KIND_COUNTERS: Record<SelectableKind, string> = {
 const PICK_TARGET_HINTS: Record<PickTarget, string> = {
   edge: '3Dビューの辺',
   vertex: '3Dビューの頂点',
+  face: '3Dビューの平らな面',
   sketchPoint: 'スケッチの点(線の端点・円/弧の中心など)',
+  sketchEntity: 'スケッチの線分',
 }
 
 // --------------------------------------------------------------------------------------
@@ -287,13 +289,18 @@ export function isPlaneArgValue(value: unknown): value is PlaneArgValue {
 }
 
 /**
- * `PickArgSpec` が指させるもの。**3Dの辺・3Dの頂点・スケッチ図形の1点**の3つ。
+ * `PickArgSpec` が指させるもの。**3Dの辺・頂点・面と、スケッチの点・図形1つ**の5つ。
  *
- * ピックイベント(`viewportTypes.PickEvent`)が既に運んでいる `edge` / `vertex` /
- * `sketchEntity` にそのまま対応する —— 新しい当たり判定を作らずに済むのがこの3つを
+ * ピックイベント(`viewportTypes.PickEvent`)が既に運んでいる `edge` / `vertex` / `hit` /
+ * `sketchEntity` にそのまま対応する —— 新しい当たり判定を作らずに済むのがこの顔ぶれを
  * 選んだ理由で、増やすときは**ピックイベントに既にある種別**から選ぶこと。
+ *
+ * `sketchPoint` と `sketchEntity` は**同じ当たり判定の読み方違い**である:
+ * 前者は当たった点(`point` が文字列)をそのまま使い、後者は図形そのものを使う
+ * (端点の近くを押しても `point` を落として図形1つに畳む。鏡映軸に要るのは線分であって
+ * その端点ではない)。
  */
-export type PickTarget = 'edge' | 'vertex' | 'sketchPoint'
+export type PickTarget = 'edge' | 'vertex' | 'face' | 'sketchPoint' | 'sketchEntity'
 
 /**
  * **図形を1つ直接ピックして集める引数**(共有選択集合を経由しない)。
@@ -310,7 +317,12 @@ export type PickTarget = 'edge' | 'vertex' | 'sketchPoint'
  * |---|---|---|
  * | `edge` | `{body, kind:'edge', index}` | `PickEvent.edge`(3Dビュー) |
  * | `vertex` | `{body, kind:'vertex', index}` | `PickEvent.vertex`(3Dビュー) |
+ * | `face` | `{body, kind:'face', index}` | `PickEvent.hit`(3Dビュー) |
  * | `sketchPoint` | `{sketch, entity, point}` | `PickEvent.sketchEntity`(スケッチ平面) |
+ * | `sketchEntity` | `{sketch, entity, point: null}` | `PickEvent.sketchEntity`(スケッチ平面) |
+ *
+ * **修飾キー(Shift / Ctrl)付きのクリックはここへ来ない** —— 待っている間も対象を
+ * 選び直せる手を残すため、`App.svelte` が修飾キー付きを共有選択の編集へ通す。
  *
  * **値は参照のまま送る**(座標へ潰さない) —— コアは辺の直線・頂点・図形の点を
  * B-repや `params` から厳密に解決できるが、ブラウザが持っているのは配られた折れ線と
@@ -655,7 +667,7 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
     return `${spec.label}をクリック(スケッチ平面の上)`
   }
   if (spec.kind === 'pick') {
-    return `${spec.label}をクリック(${PICK_TARGET_HINTS[spec.target]})`
+    return `${spec.label}をクリック(${PICK_TARGET_HINTS[spec.target]} / Shift・Ctrl+クリックは対象の選び直し)`
   }
   if (spec.kind === 'choice') {
     return `${spec.label}を選ぶ(${spec.options.map((option) => option.label).join(' / ')})`
@@ -684,14 +696,20 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
  *
  * **`refKey` を出さない** —— 鍵は `Set`/`Map` の引き当てのための文字列で、人が読む形では
  * ない(`sketch_entity:<uuid>:<uuid>:px1` になる)。ここは種別と番号だけを短く出す。
+ *
+ * **図形のIDも出さない**(`entity-3f9a...`)。同じ `{sketch, entity, point: null}` でも
+ * `sketchPoint` なら「その図形の最初の点」、`sketchEntity` なら「図形そのもの」を指す
+ * ので、**何を指したかは `target` を見ないと決まらない**。
  */
-export function pickedLabel(value: unknown): string {
+export function pickedLabel(value: unknown, target?: PickTarget): string {
   const ref = pickedRefOf(value)
   if (ref === null) return ''
   if (refKind(ref) === 'sketch_entity') {
+    if (target === 'sketchEntity') return '図形1つ'
     const item = ref as SketchEntityRef
     return item.point === null ? '図形の最初の点' : `点 ${item.point}`
   }
   const item = ref as ShapeRef
-  return `${item.kind === 'edge' ? '辺' : '頂点'} ${item.index}`
+  const kind = item.kind === 'edge' ? '辺' : item.kind === 'face' ? '面' : '頂点'
+  return `${kind} ${item.index}`
 }
