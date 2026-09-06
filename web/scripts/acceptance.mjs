@@ -406,11 +406,12 @@ async function main() {
 
     await attempt('human', 'add_arc', async () => {
       await page.click('#sketch-arc')
-      await clickPlane(50, -5)
-      await typeInto('#sketch-arc-radius', 3)
-      await typeInto('#sketch-arc-start', 0)
-      await typeInto('#sketch-arc-end', 120)
-      await page.keyboard.press('Enter')
+      // 始点 → 終点 → 円弧上の点。**Enterは押さない**(3クリック目で即適用)。
+      // この3点は中心(51,-5)・半径3の**ちょうど半円**で、掃引の向きを決める規則が
+      // 最も破れやすい場合そのもの(`sketchGeometry.ts` の `arcFromPoints`)。
+      await clickPlane(48, -5)
+      await clickPlane(54, -5)
+      await clickPlane(51, -2)
       await waitFor(
         () => {
           const hook = window.__duocad
@@ -419,7 +420,7 @@ async function main() {
         },
         '円弧が置けない',
       )
-      return '中心をクリック → 半径・開始角・終了角を打つ'
+      return '始点・終点・円弧上の点を3クリック(**3点目で即適用**)'
     })
 
     // 反復(スケッチモードのまま)

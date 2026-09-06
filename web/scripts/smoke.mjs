@@ -1219,9 +1219,9 @@ async function main() {
 
     // 線分: 2点をクリックで置く。**円を横切る線**なので領域が2つに割れる(検証3)
     //
-    // **Enterは押さない**。線分は対象が点2つだけでhowの入力が無いので、
-    // `needsEnter` が false になり **2点目のクリックで即適用**される。ここでEnterを
-    // 押さないままこの下の検査が通ることが、実機でのその証拠になる
+    // **Enterは押さない**。線分は長さ・角度の欄を持つが `fromPoints` なので how に
+    // 数えず、`needsEnter` が false になり **2点目のクリックで即適用**される。ここで
+    // Enterを押さないままこの下の検査が通ることが、実機でのその証拠になる
     // (点で揃うコマンドの側。選択で揃う側は `smoke-files.mjs` の(a)(b)(c))。
     await page.click('#sketch-line')
     await clickPlane(-30, 5)
@@ -1235,6 +1235,99 @@ async function main() {
       { timeout, polling: 50 },
     )
     ok('線分を手で描けた(**2点目のクリックで即適用**。Enterを押していない)。**円が線で2つの領域に割れた**')
+
+    // 打鍵だけでも置ける: 始点をクリック → 長さ・角度を打つ → Enter。**終点はクリックしない**
+    // (見えているゴムひもの線がそのまま確定される)。円と交差しない位置へ置き、確かめたら
+    // undo で戻すので、この下の検査は図形2つ・領域2つのまま続く。
+    await page.click('#sketch-line')
+    await clickPlane(-40, -30)
+    await typeInto('#sketch-line-length', 20)
+    await typeInto('#sketch-line-angle', 30)
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(
+      () => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return Boolean(active && active.entities.length === 3 && active.regions.length === 2)
+      },
+      { timeout, polling: 50 },
+    )
+    const keyed = await page.evaluate(() => {
+      const hook = window.__duocad
+      const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+      const line = active.entities.filter((entity) => entity.kind === 'line').at(-1)
+      const p = line.params
+      return {
+        length: Math.hypot(p.x1 - p.x0, p.y1 - p.y0),
+        angle: (Math.atan2(p.y1 - p.y0, p.x1 - p.x0) * 180) / Math.PI,
+      }
+    })
+    if (Math.abs(keyed.length - 20) > 1e-6 || Math.abs(keyed.angle - 30) > 1e-6) {
+      fail(`打った長さ・角度で線が引けていない: 長さ ${keyed.length} / 角度 ${keyed.angle}`)
+    }
+    ok(`線分を打鍵だけで引けた(始点をクリック → 長さ20・角度30を打つ → Enter。実測 ${keyed.length.toFixed(3)}mm / ${keyed.angle.toFixed(3)}度)`)
+    await pressUndo(page)
+    await page.waitForFunction(
+      () => {
+        const hook = window.__duocad
+        const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+        return Boolean(active && active.entities.length === 2)
+      },
+      { timeout, polling: 50 },
+    )
+
+    // クリックだけでも置ける: 長方形2クリック・円2クリック(**Enterは押さない**。寸法は
+    // 2点目が決める)。どちらも確かめたら undo で戻すので、この下の検査は図形2つのまま続く。
+    for (const shape of [
+      { button: '#sketch-rectangle', kind: 'rectangle', at: [[-44, -30], [-36, -26]] },
+      { button: '#sketch-circle', kind: 'circle', at: [[-40, -30], [-36, -30]] },
+    ]) {
+      await page.click(shape.button)
+      for (const [u, v] of shape.at) await clickPlane(u, v)
+      await page.waitForFunction(
+        (expected) => {
+          const hook = window.__duocad
+          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          return Boolean(
+            active && active.entities.length === 3 && active.entities[2].kind === expected,
+          )
+        },
+        { timeout, polling: 50 },
+        shape.kind,
+      )
+      // **`JSON.stringify` を browser 側で通す** —— `hook.sketches` は Svelte の
+      // `$state` プロキシで、素のオブジェクトのまま返すと puppeteer の受け渡しで
+      // `{}` に潰れる(この検査で実測。上の `sketchState()` も同じ形にしてある)。
+      const placed = JSON.parse(
+        await page.evaluate(() => {
+          const hook = window.__duocad
+          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          return JSON.stringify(active.entities[2].params)
+        }),
+      )
+      const measured =
+        shape.kind === 'circle' ? [placed.radius] : [placed.width, placed.height]
+      const expected = shape.kind === 'circle' ? [4] : [8, 4]
+      if (
+        measured.some(
+          (value, index) => !Number.isFinite(value) || Math.abs(value - expected[index]) > 0.05,
+        )
+      ) {
+        fail(`2クリックの${shape.kind}の寸法が点と合わない: ${JSON.stringify(placed)}`)
+      }
+      ok(
+        `${shape.kind}を2クリックで置けた(Enterを押していない。実測 ${measured.map((value) => value.toFixed(3)).join(' × ')}mm)`,
+      )
+      await pressUndo(page)
+      await page.waitForFunction(
+        () => {
+          const hook = window.__duocad
+          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
+          return Boolean(active && active.entities.length === 2)
+        },
+        { timeout, polling: 50 },
+      )
+    }
 
     // -------------------------------------------------------------- 検証4: Escで中断
     // 長方形の引数を途中まで集めてEscを押す。文書が一切変わらないこと。
@@ -1268,11 +1361,11 @@ async function main() {
       { timeout, polling: 50 },
     )
     await page.click('#sketch-arc')
-    await clickPlane(-40, -30)
-    await typeInto('#sketch-arc-radius', 8)
-    await typeInto('#sketch-arc-start', 0)
-    await typeInto('#sketch-arc-end', 120)
-    await page.keyboard.press('Enter')
+    // 始点 → 終点 → 円弧上の点(中心(-40,-30)・半径4の**ちょうど半円**)。**Enterは
+    // 押さない** —— 半径は `fromPoints` なので how に数えず、3点目で即適用される。
+    await clickPlane(-44, -30)
+    await clickPlane(-36, -30)
+    await clickPlane(-40, -26)
     await page.waitForFunction(
       () => {
         const hook = window.__duocad

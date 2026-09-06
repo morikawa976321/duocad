@@ -12,8 +12,9 @@
  * **`sketch_id` はここでは付けない**。どのスケッチに描くかは「今どのスケッチモードに居るか」
  * であって、コマンドが集める引数ではない —— `App.svelte` が送信時に足す。
  */
-import { isPlaneArgValue, pickedRefOf, type CommandDef, type Point2 } from './command'
+import { isPlaneArgValue, pickedRefOf, type ArgValues, type CommandDef, type Point2 } from './command'
 import { MOVE_MODE_OPTIONS, isRotateMode, isTranslateMode, rejectAngle } from './moveMode'
+import { arcFromPoints, circleFromPoints, lineFromPoints, rectFromPoints } from './sketchGeometry'
 
 /**
  * 確定前の姿(幽霊)の組み立ては `../entityKinds` の唯一の表へ寄せてある
@@ -32,6 +33,18 @@ function pathLike(label: string): (value: string) => string | null {
   return (value) => (value.trim() === '' ? `${label}を打つ` : null)
 }
 
+/** 打っていない `fromPoints` の寸法は `undefined`(集めた点から導く合図)。 */
+function typed(values: ArgValues, name: string): number | undefined {
+  const value = values[name]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * 線分。**寸法はFusionの線ツールと同じ「長さ・角度」**(dx/dyではない)。角度は度・
+ * 反時計回り・スケッチ平面のX軸からで、`add_arc` の角度と同じ規約に揃えてある。
+ *
+ * サーバへ送るのは `p0`/`p1` だけ(`add_line` の契約は変えない)。
+ */
 export const ADD_LINE: CommandDef = {
   id: 'add_line',
   category: 'sketch',
@@ -41,12 +54,35 @@ export const ADD_LINE: CommandDef = {
   args: [
     { kind: 'point', name: 'p0', label: '始点' },
     { kind: 'point', name: 'p1', label: '終点' },
+    {
+      kind: 'number',
+      name: 'length',
+      label: '長さ',
+      unit: 'mm',
+      inputId: 'sketch-line-length',
+      placeholder: 'mm',
+      reject: positive('長さ'),
+      fromPoints: true,
+    },
+    {
+      kind: 'number',
+      name: 'angle_deg',
+      label: '角度',
+      unit: '度',
+      inputId: 'sketch-line-angle',
+      placeholder: '度',
+      // 0度は正当な向き(X軸方向)なので弾かない。
+      reject: () => null,
+      fromPoints: true,
+    },
   ],
   build(values) {
     const p0 = values.p0 as Point2 | undefined
     const p1 = values.p1 as Point2 | undefined
     if (!p0 || !p1) return { ok: false, reason: '2点が要る' }
-    return { ok: true, args: { p0, p1 } }
+    const line = lineFromPoints(p0, p1, typed(values, 'length'), typed(values, 'angle_deg'))
+    if (line === null) return { ok: false, reason: '長さは0より大きい値' }
+    return { ok: true, args: { p0: line.p0, p1: line.p1 } }
   },
 }
 
@@ -58,6 +94,7 @@ export const ADD_CIRCLE: CommandDef = {
   preview: 'local',
   args: [
     { kind: 'point', name: 'center', label: '中心' },
+    { kind: 'point', name: 'rim', label: '円周の1点' },
     {
       kind: 'number',
       name: 'radius',
@@ -66,17 +103,24 @@ export const ADD_CIRCLE: CommandDef = {
       inputId: 'sketch-radius',
       placeholder: 'mm',
       reject: positive('半径'),
+      fromPoints: true,
     },
   ],
   build(values) {
     const center = values.center as Point2 | undefined
-    const radius = values.radius
-    if (!center) return { ok: false, reason: '中心が要る' }
-    if (typeof radius !== 'number') return { ok: false, reason: '半径が数値でない' }
-    return { ok: true, args: { center, radius } }
+    const rim = values.rim as Point2 | undefined
+    if (!center || !rim) return { ok: false, reason: '中心と円周の点が要る' }
+    const circle = circleFromPoints(center, rim, typed(values, 'radius'))
+    if (circle === null) return { ok: false, reason: '半径は0より大きい値' }
+    return { ok: true, args: { center: circle.center, radius: circle.radius } }
   },
 }
 
+/**
+ * 長方形。**角度の欄は無い** —— `add_rectangle` は軸平行(`x`/`y`/`width`/`height`)で、
+ * コアもブラウザも回転した長方形を表現できない(`entityKinds.ts` の `rotate` は長方形を
+ * 4本の線分に落とす)。
+ */
 export const ADD_RECTANGLE: CommandDef = {
   id: 'add_rectangle',
   category: 'sketch',
@@ -84,7 +128,8 @@ export const ADD_RECTANGLE: CommandDef = {
   buttonId: 'sketch-rectangle',
   preview: 'local',
   args: [
-    { kind: 'point', name: 'corner', label: '左下' },
+    { kind: 'point', name: 'corner', label: '1つ目の角' },
+    { kind: 'point', name: 'opposite', label: '対角' },
     {
       kind: 'number',
       name: 'width',
@@ -93,6 +138,7 @@ export const ADD_RECTANGLE: CommandDef = {
       inputId: 'sketch-width',
       placeholder: 'mm',
       reject: positive('幅'),
+      fromPoints: true,
     },
     {
       kind: 'number',
@@ -102,20 +148,24 @@ export const ADD_RECTANGLE: CommandDef = {
       inputId: 'sketch-height',
       placeholder: 'mm',
       reject: positive('高さ'),
+      fromPoints: true,
     },
   ],
   build(values) {
     const corner = values.corner as Point2 | undefined
-    const width = values.width
-    const height = values.height
-    if (!corner) return { ok: false, reason: '左下の点が要る' }
-    if (typeof width !== 'number' || typeof height !== 'number') {
-      return { ok: false, reason: '幅と高さが数値でない' }
-    }
-    return { ok: true, args: { corner, width, height } }
+    const opposite = values.opposite as Point2 | undefined
+    if (!corner || !opposite) return { ok: false, reason: '角と対角の2点が要る' }
+    const rect = rectFromPoints(corner, opposite, typed(values, 'width'), typed(values, 'height'))
+    if (rect === null) return { ok: false, reason: '幅と高さは0より大きい値' }
+    return { ok: true, args: { corner: rect.corner, width: rect.width, height: rect.height } }
   },
 }
 
+/**
+ * 円弧。**3点目は「中心」ではなく「円弧上の点」**で、開始角・終了角は始点と終点の
+ * クリックから決まる(角度の欄は持たない)。幾何と掃引の向きは `sketchGeometry.ts` の
+ * `arcFromPoints` が閉じている。
+ */
 export const ADD_ARC: CommandDef = {
   id: 'add_arc',
   category: 'sketch',
@@ -123,7 +173,9 @@ export const ADD_ARC: CommandDef = {
   buttonId: 'sketch-arc',
   preview: 'local',
   args: [
-    { kind: 'point', name: 'center', label: '中心' },
+    { kind: 'point', name: 'p0', label: '始点' },
+    { kind: 'point', name: 'p1', label: '終点' },
+    { kind: 'point', name: 'via', label: '円弧上の点' },
     {
       kind: 'number',
       name: 'radius',
@@ -132,38 +184,25 @@ export const ADD_ARC: CommandDef = {
       inputId: 'sketch-arc-radius',
       placeholder: 'mm',
       reject: positive('半径'),
-    },
-    {
-      kind: 'number',
-      name: 'start_deg',
-      label: '開始角',
-      unit: '度',
-      inputId: 'sketch-arc-start',
-      placeholder: '度',
-      // 0度は正当な開始角なので弾かない(反時計回り・X軸から。`add_arc` の契約)
-      reject: () => null,
-    },
-    {
-      kind: 'number',
-      name: 'end_deg',
-      label: '終了角',
-      unit: '度',
-      inputId: 'sketch-arc-end',
-      placeholder: '度',
-      reject: () => null,
+      fromPoints: true,
     },
   ],
   build(values) {
-    const center = values.center as Point2 | undefined
-    const radius = values.radius
-    const start = values.start_deg
-    const end = values.end_deg
-    if (!center) return { ok: false, reason: '中心が要る' }
-    if (typeof radius !== 'number' || typeof start !== 'number' || typeof end !== 'number') {
-      return { ok: false, reason: '半径と角度が数値でない' }
+    const p0 = values.p0 as Point2 | undefined
+    const p1 = values.p1 as Point2 | undefined
+    const via = values.via as Point2 | undefined
+    if (!p0 || !p1 || !via) return { ok: false, reason: '始点・終点・円弧上の点が要る' }
+    const arc = arcFromPoints(p0, p1, via, typed(values, 'radius'))
+    if (arc === null) return { ok: false, reason: '3点が一直線か、半径が弦の半分より小さい' }
+    return {
+      ok: true,
+      args: {
+        center: arc.center,
+        radius: arc.radius,
+        start_deg: arc.start_deg,
+        end_deg: arc.end_deg,
+      },
     }
-    if (start === end) return { ok: false, reason: '開始角と終了角が同じ' }
-    return { ok: true, args: { center, radius, start_deg: start, end_deg: end } }
   },
 }
 

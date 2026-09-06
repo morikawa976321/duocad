@@ -77,6 +77,7 @@
     argApplies,
     argKinds,
     argSatisfied,
+    commitsGhost,
     findCommand,
     firstMissingArg,
     itemsForArg,
@@ -309,6 +310,20 @@
     return result.ok ? result : null
   })
 
+  /**
+   * **確定に使う引数**。揃っていれば `built`、まだ点を待っていても幽霊が出ている
+   * コマンド(`commitsGhost`)なら**画面に見えているその形**(`ghostBuilt`)。
+   *
+   * **線分で「長さ50・角度30を打ってEnter」が通るのはこの口である** —— 始点だけ置いた
+   * 状態のEnterがゴムひもの線をその場で確定するのは暴発ではなく、意図した挙動である。
+   */
+  const commitSource = $derived(
+    built ?? (command !== null && commitsGhost(command) ? ghostBuilt : null),
+  )
+
+  /** Enter・ボタン押し直しで確定できるか(`ready` か、幽霊が出ているか)。 */
+  const canCommit = $derived(commitSource !== null && overflow === '')
+
   /** 画面に出す1行(何を待っているか)。**無起動では空文字**(プレースホルダ文を新設しない)。 */
   const prompt = $derived.by(() => {
     if (command === null) return ''
@@ -473,14 +488,15 @@
       onNote('直前の操作の応答待ち')
       return
     }
-    // `ready` は `command !== null` を含むが、TSはそれを`command`の型へ持ち越さないので
+    // `canCommit` は `command !== null` を含むが、TSはそれを`command`の型へ持ち越さないので
     // ここでも明示する(無起動でEnterやクリックがすり抜けて呼ばれた場合の防御でもある)。
-    if (command === null || !ready || built === null) {
+    const source = commitSource
+    if (command === null || !canCommit || source === null) {
       onNote(prompt)
       return
     }
-    if (!built.ok) {
-      onNote(built.reason)
+    if (!source.ok) {
+      onNote(source.reason)
       return
     }
     lastInputs = {
@@ -489,7 +505,7 @@
       choices: { ...choices },
       picks: { ...picks },
     }
-    onRun(command.id, built.args)
+    onRun(command.id, source.args)
     reset()
     // **ここでは無起動へ戻さない。** `onRun` はサーバへ投げるだけの楽観的な発火で、
     // 成否はまだ分からない —— OCCTのフィレットのように、半径次第で `IsDone()=False` に
@@ -599,7 +615,7 @@
    */
   function pressActive(): void {
     if (command === null) return // 呼び出し元(テンプレート)は起動中のボタンからしか呼ばない
-    if (ready) {
+    if (canCommit) {
       commit()
       return
     }
@@ -738,12 +754,36 @@
   }
 
   function focusFirstNumber(): void {
-    // 収集の先頭が打ち込む引数(数値・文字列)なら、そこへ入れる
-    // (選択待ち・点待ちのときは3Dを触るのでフォーカスを奪わない)
+    // 収集の先頭が打ち込む引数(数値・文字列)なら、そこへ入れる。
+    // **点を待っている間も空欄の `fromPoints` 欄へ入れる** —— マウスを3Dに残したまま
+    // 寸法を打てる(ビューポートのクリックはフォーカスに関係なく届く。Escは
+    // `svelte:window` が拾うので入力欄にフォーカスがあっても効く)。選択待ちのときは
+    // 奪わない。
     queueMicrotask(() => {
-      if (missing?.kind !== 'number' && missing?.kind !== 'text') return
-      document.getElementById(missing.inputId)?.focus()
+      if (missing?.kind === 'number' || missing?.kind === 'text') {
+        document.getElementById(missing.inputId)?.focus()
+        return
+      }
+      if (missing?.kind !== 'point') return
+      const spec = numberArgs.find(
+        (candidate) => candidate.fromPoints === true && (numberText[candidate.name] ?? '') === '',
+      )
+      if (spec !== undefined) document.getElementById(spec.inputId)?.focus()
     })
+  }
+
+  /**
+   * 空欄の `fromPoints` 欄に出す薄字 —— **いまマウスが指している値**(無ければ従来の
+   * プレースホルダ)。「空欄=マウス追従」の唯一の見える手がかりになる。
+   *
+   * 引くのは `spec.name`(`NumberArgSpec.fromPoints` の層をまたぐ契約)。`build` が
+   * その名前で出していない寸法(`add_line` の長さ・角度は `p0`/`p1` へ畳んで送る)は
+   * 従来のプレースホルダのままになる。
+   */
+  function placeholderFor(spec: NumberArgSpec): string {
+    if (spec.fromPoints !== true || (numberText[spec.name] ?? '') !== '') return spec.placeholder
+    const live = ghostBuilt?.args[spec.name]
+    return typeof live === 'number' && Number.isFinite(live) ? live.toFixed(2) : spec.placeholder
   }
 
   function onKeydown(event: KeyboardEvent): void {
@@ -755,7 +795,7 @@
     // **点だけで引数が揃うコマンド(線分など)はEnterの受け皿が無い**。数値欄に
     // フォーカスが無いときのEnterをここで拾う —— 欄にフォーカスがあるときは
     // `onNumberKeydown` が拾うので二重に確定しない。
-    if (event.key !== 'Enter' || !ready) return
+    if (event.key !== 'Enter' || !canCommit) return
     const target = event.target as HTMLElement | null
     // ボタンも除く —— フォーカスの残ったボタン(undo等)のEnterを奪うと、押したつもりの
     // ボタンではなくコマンドが確定する。
@@ -892,7 +932,7 @@
           type="text"
           inputmode="decimal"
           autocomplete="off"
-          placeholder={spec.placeholder}
+          placeholder={placeholderFor(spec)}
           value={numberText[spec.name] ?? ''}
           oninput={(event) => {
             numberText = { ...numberText, [spec.name]: (event.target as HTMLInputElement).value }

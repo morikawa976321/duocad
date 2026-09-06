@@ -345,9 +345,10 @@ HOW_ARG_KINDS = {"number", "choice", "text"}
 
 
 def _args_of(chunk: str) -> list[tuple[str, str]]:
-    """1つの `CommandDef` の本文から `args: [...]` を読み、`(kind, max)` の並びを返す。
+    """1つの `CommandDef` の本文から `args: [...]` を読み、`(kind, 印)` の並びを返す。
 
-    `max` は選択引数のときだけ意味があり(`'1'` / `'null'` / 数字)、他は空文字。
+    2つ目の枠は種別ごとに意味が違う: 選択引数では `max`(`'1'` / `'null'` / 数字)、
+    数値引数では `fromPoints: true` を持つときだけ `"fromPoints"`。どちらでもなければ空文字。
     `build(...)` の本体を巻き込まないように**角括弧の対応で args だけを切り出す**
     (本体には `values.face` 等が並ぶだけだが、将来の書き足しで `kind:` が現れうる)。
     """
@@ -373,7 +374,12 @@ def _args_of(chunk: str) -> list[tuple[str, str]]:
     for index, match in enumerate(marks):
         tail = region[match.end():marks[index + 1].start() if index + 1 < len(marks) else len(region)]
         maximum = re.search(r"\bmax:\s*(null|\d+)", tail)
-        args.append((match.group(1), maximum.group(1) if maximum else ""))
+        if maximum:
+            args.append((match.group(1), maximum.group(1)))
+        elif re.search(r"\bfromPoints:\s*true", tail):
+            args.append((match.group(1), "fromPoints"))
+        else:
+            args.append((match.group(1), ""))
     return args
 
 
@@ -400,10 +406,13 @@ def _needs_enter(args: list[tuple[str, str]]) -> bool:
     **howの入力がある**(数値・選択肢・文字列)なら Enter が要る。どちらでもなければ即適用。
     **列挙していない種別は即適用の側**(TS側の既定と同じ。点と直接ピック(`pick`)がそれ ——
     どちらも対象を1つだけ指すので、指した時点で「終わり」が機械に分かる)。
+    **`fromPoints` の数値は how に数えない** —— 空欄のままでも点から値が決まる。
     """
-    for kind, maximum in args:
-        if kind == "selection" and maximum != "1":
+    for kind, mark in args:
+        if kind == "selection" and mark != "1":
             return True
+        if kind == "number" and mark == "fromPoints":
+            continue
         if kind == "entities" or kind in HOW_ARG_KINDS:
             return True
     return False
@@ -411,7 +420,8 @@ def _needs_enter(args: list[tuple[str, str]]) -> bool:
 
 #: **Enterが要るか**の表(True = Enterで確定 / False = 引数が揃ったクリックで即適用)。
 #:
-#: **即適用は2つ**である: `add_line`(点2つで揃う)・`sketch_create`(貼る先の平面1つで揃う)。
+#: **即適用は5つ**である: スケッチの描く4verb(寸法欄は持つが `fromPoints` なので how に
+#: 数えない)と `sketch_create`(貼る先の平面1つで揃う)。
 #: verbを足したらここへ1行足すことになる ——
 #: そのとき**Enterが要るかを1回考える**のが狙いで、表そのものが実装の入力になっている
 #: わけではない(判定は `args` からの導出が正)。
@@ -437,11 +447,11 @@ ENTER_REQUIRED = {
     "pattern_circular": True,      # 図形は何個でも + 中心 + 個数と角度
     "import_svg": True,            # パス(howがある → Enterが要る。sketch_idはApp.svelteが足す)
     "import_step": True,           # パス(howがある → Enterが要る。targetは取らない)
-    "add_line": False,             # **点2つだけ。howが無い → 即適用**
+    "add_line": False,             # **点2つ + 長さ・角度(fromPoints。howに数えない) → 即適用**
     "sketch_create": False,        # **貼る先を1つ指すだけ。howが無い → 即適用**
-    "add_circle": True,            # 中心 + 半径
-    "add_rectangle": True,         # 左下 + 幅 + 高さ
-    "add_arc": True,               # 中心 + 半径 + 角度2つ
+    "add_circle": False,           # 中心 + 円周の点 + 半径(fromPoints)
+    "add_rectangle": False,        # 角 + 対角 + 幅・高さ(fromPoints)
+    "add_arc": False,              # 始点 + 終点 + 円弧上の点 + 半径(fromPoints)
     "select_in_sketch": False,     # 引数が無い(完成させるクリックが無いので発火もしない)
     "move_sketch_entities": True,  # 点・辺は何個でも + 移動量2つ + 複製の選択
     "move_body": True,             # 面/辺/頂点は何個でも + 移動量3つ + 複製の選択
@@ -465,15 +475,16 @@ def test_the_command_arguments_are_readable():
     assert args["select_in_sketch"] == [], f"引数の読み取りが壊れている: {args['select_in_sketch']}"
 
 
-def test_only_two_commands_apply_without_enter():
-    """**Enter要否は `args` からの導出**であり、いま即適用になるのは2つだけである
-    (`add_line` / `sketch_create`。`select_in_sketch` は引数が無く、完成させるクリックが
+def test_which_commands_apply_without_enter():
+    """**Enter要否は `args` からの導出**であり、いま即適用になるのはスケッチの描く4verbと
+    `sketch_create` の5つである(`select_in_sketch` は引数が無く、完成させるクリックが
     無いので発火しない側で数に入らない)。
 
     per-commandのフラグを置かない設計(`command.ts` の `needsEnter`)なので、引数の書き方を
     変えると**別のverbのEnter要否が黙って変わる** —— 例えば `extrude_face` の選択引数から
-    `max: 1` を外すと「面を選び終わったと言う手」が要るかどうかが裏返り、`add_circle` から
-    半径を外すと**中心をクリックした瞬間に円ができる**。ここはその変化を名指しで落とす。
+    `max: 1` を外すと「面を選び終わったと言う手」が要るかどうかが裏返り、`add_circle` の
+    半径から `fromPoints` を外すと**寸法を打つまで円が置けなくなる**。
+    ここはその変化を名指しで落とす。
     """
     derived = {name: _needs_enter(args) for name, args in _ui_command_args().items()}
     assert derived == ENTER_REQUIRED, (
@@ -482,7 +493,10 @@ def test_only_two_commands_apply_without_enter():
     )
     immediate = sorted(name for name, value in derived.items() if not value)
     assert immediate == [
+        "add_arc",
+        "add_circle",
         "add_line",
+        "add_rectangle",
         "select_in_sketch",
         "sketch_create",
     ], f"即適用になるコマンドの顔ぶれが変わった: {immediate}"

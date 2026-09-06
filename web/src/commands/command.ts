@@ -181,6 +181,18 @@ export interface NumberArgSpec extends ArgSpecCommon {
   /** 入力欄の `id`(実機検査がここを叩く)。 */
   inputId: string
   placeholder: string
+  /**
+   * **空欄なら集めた点から導く寸法**(スケッチの長さ・幅・高さ・半径)。
+   *
+   * `default` の兄弟だが別物である —— `default` は固定値で空欄を埋め、こちらは値を作らず
+   * **`build` が集まった点から計算する**。この印が付いた数値は how に数えないので
+   * (`isHowInput`)、引数を完成させる最後のクリックでそのまま適用される。
+   *
+   * **層をまたぐ契約**: `name` は `build` が出す引数のキーと同じでなければならない ——
+   * `CommandHost` が空欄のプレースホルダに「いまマウスが指している値」を出すとき、
+   * その名前で `build` の結果を引く。
+   */
+  fromPoints?: true
   /** 使えない値なら理由を返す(使えるなら null)。 */
   reject(value: number): string | null
   /**
@@ -543,6 +555,8 @@ export function argSatisfied(spec: ArgSpec, values: ArgValues): boolean {
     return isPlaneArgValue(values[spec.name])
   }
   const value = values[spec.name]
+  // 点から導ける寸法は**空欄のままで揃っている**(値は `build` が点から作る)。
+  if (value === undefined && spec.fromPoints === true) return true
   return typeof value === 'number' && Number.isFinite(value) && spec.reject(value) === null
 }
 
@@ -568,9 +582,24 @@ function takesManyTargets(spec: ArgSpec): boolean {
  *
  * 数値・選択肢・文字列。打ち終わり / 選び終わりは、対象と同じく機械には分からない。
  * **新しい入力の種別を足すときは、必ずここへ足すこと**(下の既定の説明を読むこと)。
+ *
+ * **`fromPoints` の数値だけは how に数えない** —— 空欄のままでも点から値が決まるので、
+ * 「打ち終わったか」を人が言う必要がない(打ちたい人はEnterで言える)。
  */
 function isHowInput(spec: ArgSpec): boolean {
-  return spec.kind === 'number' || spec.kind === 'choice' || spec.kind === 'text'
+  if (spec.kind === 'number') return spec.fromPoints !== true
+  return spec.kind === 'choice' || spec.kind === 'text'
+}
+
+/**
+ * **見えている幽霊をそのまま確定してよいコマンドか**(`fromPoints` の寸法を持つか)。
+ *
+ * 持っているコマンドは「点をあと1つ待っている」状態でもマウスの位置で形が決まっている
+ * ので、そこでのEnterは**画面に出ている形**を確定する。持たないコマンド
+ * (`sketch_create`)は幽霊が無いので、今までどおり引数が揃うまで確定できない。
+ */
+export function commitsGhost(command: CommandDef): boolean {
+  return command.args.some((spec) => spec.kind === 'number' && spec.fromPoints === true)
 }
 
 /**
@@ -586,7 +615,9 @@ function isHowInput(spec: ArgSpec): boolean {
  * 2. **howの入力がある**(`isHowInput`) … 打ち終わり・選び終わりを機械が決められない。
  *
  * **どちらでもない = 対象が1つに定まり、howが無い**ものだけが即適用になる。現行で
- * ここへ落ちるのは **`add_line`(点2つ)・`sketch_create`(貼る先の平面1つ)**。
+ * ここへ落ちるのは **スケッチの描く4verb**(`add_line`/`add_circle`/`add_rectangle`/
+ * `add_arc`。寸法欄は持つが `fromPoints` なので how に数えない)と
+ * **`sketch_create`**(貼る先の平面1つ)である。
  *
  * **列挙していない種別は「即適用の側」に落ちる(意図した既定)。** 対象を1つだけ指す新しい
  * 種別はここを直さなくても即適用になる。逆に、**新しい how を足すときは `isHowInput` へ

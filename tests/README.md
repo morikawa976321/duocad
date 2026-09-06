@@ -843,10 +843,12 @@ Session.set_view_resolution(world_per_pixel, size_hint=0.0, focus=None) -> bool 
 
 ## ブラウザ側にしか対応物が無い純関数（`node` で評価する）
 
-`web/src/viewCube.ts`（`test_view_cube.py`）と `web/src/gridScale.ts`（`test_grid_scale.py`）は
+`web/src/viewCube.ts`（`test_view_cube.py`）・`web/src/gridScale.ts`（`test_grid_scale.py`）・
+`web/src/commands/sketchGeometry.ts`（`test_sketch_geometry.py`）は
 **Python側の対応物が無い**。2言語を突き合わせる代わりに、pytestは `tests/eval_view_cube.mjs` /
-`tests/eval_grid_scale.mjs` を `node` で走らせ、終了コードだけを見る（ソースの文字列比較では
-なく実行結果で見る。Nodeは `.ts` をそのまま読める）。**`node` が無くてもskipしない** ——
+`tests/eval_grid_scale.mjs` / `tests/eval_sketch_geometry.mjs` を `node` で走らせ、終了コード
+だけを見る（ソースの文字列比較ではなく実行結果で見る。Nodeは `.ts` をそのまま読める）。
+**`node` が無くてもskipしない** ——
 足場が無いときのskipは無人実行では緑と区別が付かないので、`AssertionError` で落とす。
 
 固定している中身（実体は `.mjs` 側にある）:
@@ -861,6 +863,13 @@ Session.set_view_resolution(world_per_pixel, size_hint=0.0, focus=None) -> bool 
   （**ON/OFFの瞬間切替ではない** —— 点滅の原理的な排除）。段の順序は「粗い段ほど濃い」で、
   **100mm段にも特例は無い**（引き切れば同じ規則で消える）。NaN・負・無限は「描かない」側か
   上限へ倒す。
+- **スケッチの寸法**: 打った寸法が優先、空欄は集めた点から導く。長さ0・幅0・半径0は作れない。
+  長方形は**打った寸法も引いた向きへ伸ばす**（対角がどちら側かで符号が決まる）。円弧は
+  始点・終点・**円弧上の点**の3点から中心と角度を出し、常に `start_deg <= end_deg`
+  （コアの `(end_deg - start_deg) % 360` は反時計回りにしか掃かない）。向きは
+  **弧の中点が円弧上の点と同じ側か**で決める —— 優弧/劣弧の大小比較では
+  **ちょうど半円のときに破れる**。半径を打つと中心を弦の法線上へ置き直す
+  （弦の半分より小さい半径は作れない）。
 
 描画そのもの（第2パス描画・Pointer Lockドラッグ・視点アニメーション・格子が実際に組み直るか）は
 pytestでは判定できない —— `web/scripts/` の実機smokeと目視が持つ。
