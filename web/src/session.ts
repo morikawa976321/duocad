@@ -417,6 +417,20 @@ export type Applied =
       changed_bodies: string[]
     })
   /**
+   * ボディの鏡映複製(`mirror_body`)。**常に複製を作る**(move_bodyと違い、動かす経路は
+   * 無い)。元は動かないので `changed_bodies` は複製で増えたボディだけ。
+   *
+   * `base_plane` はUIからも送れる(`ws="special"`)が、`plane_face` はMCP専用
+   * (`duocad/catalog.py` の note)。
+   */
+  | (AppliedVerbBase & {
+      verb: 'mirror_body'
+      plane_point: number[]
+      plane_normal: number[]
+      created: string[]
+      changed_bodies: string[]
+    })
+  /**
    * 削除(ボディ + スケッチ図形。混ざっていても1回・1 undo)。
    *
    * **`changed_bodies` は無い** —— 消えたボディは配りものの `bodies` から丸ごと居なくなる

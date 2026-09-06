@@ -475,6 +475,52 @@ export const MOVE_BODY: CommandDef = {
 }
 
 /**
+ * ボディの鏡映複製。**常に複製を作る**(move_bodyと違い、動かす/複製の選択肢は無い)。
+ *
+ * 鏡映面は基準平面(XY/XZ/YZ)の3択だけをUIに通す —— **既存の面を鏡映基準に使う経路
+ * (`plane_face`)はMCPからだけ使える**(`duocad/catalog.py` の note)。対象の確定選択
+ * (面/辺/頂点)と鏡映基準の面選択を画面上でどう切り替えるかが未決のままなので、この
+ * 単発タスクでは無理にピックUIを新設しない(本人判断待ち)。
+ */
+export const MIRROR_BODY: CommandDef = {
+  id: 'mirror_body',
+  category: 'feature',
+  label: '鏡映複製',
+  buttonId: 'mirror-body',
+  // **プレビューは無い**(preview: 'none')。move_body と違って形は変わらない移動ではなく、
+  // このタスクのスコープはMCP経由の完成と基準平面UIの疎通までなので幽霊は作っていない。
+  preview: 'none',
+  args: [
+    {
+      kind: 'selection',
+      name: 'target',
+      label: '鏡映するボディ(面/辺/頂点で指す)',
+      shapeKind: 'face',
+      kinds: ['face', 'edge', 'vertex'],
+      min: 1,
+      max: null,
+    },
+    {
+      kind: 'choice',
+      name: 'base_plane',
+      label: '鏡映面',
+      options: [
+        { value: 'XY', label: 'XY平面', buttonId: 'mirror-body-xy' },
+        { value: 'XZ', label: 'XZ平面', buttonId: 'mirror-body-xz' },
+        { value: 'YZ', label: 'YZ平面', buttonId: 'mirror-body-yz' },
+      ],
+    },
+  ],
+  build(values) {
+    const empty = missingSelection(values, 'target', 'ボディ(面/辺/頂点)')
+    if (empty !== null) return { ok: false, reason: empty }
+    const basePlane = values.base_plane
+    if (typeof basePlane !== 'string') return { ok: false, reason: '鏡映面が選ばれていない' }
+    return { ok: true, args: { base_plane: basePlane } }
+  },
+}
+
+/**
  * 削除。**通常モードでもスケッチモードでも同じ1つ**である。
  *
  * `CommandDef` を2つに割らないのは、コアの verb が1つだから ——
@@ -526,6 +572,7 @@ export const SOLID_FEATURE_COMMANDS: CommandDef[] = [
   FILLET,
   CHAMFER,
   MOVE_BODY,
+  MIRROR_BODY,
   DELETE_SELECTION,
 ]
 

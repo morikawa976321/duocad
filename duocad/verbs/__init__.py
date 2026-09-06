@@ -13,6 +13,8 @@ from .extrude_face import extrude_face  # noqa: F401
 from .fillet import fillet  # noqa: F401
 from .import_editable import import_step  # noqa: F401
 from .import_svg import import_svg  # noqa: F401
+from .mirror_body import mirror_body  # noqa: F401
+from .mirror_sketch import mirror_sketch_entities  # noqa: F401
 from .move_body import move_body  # noqa: F401
 from .move_sketch import move_sketch_entities  # noqa: F401
 from .optimize_setup import (  # noqa: F401
@@ -32,6 +34,8 @@ __all__ = [
     "fillet",
     "import_step",
     "import_svg",
+    "mirror_body",
+    "mirror_sketch_entities",
     "move_body",
     "move_sketch_entities",
     "set_exclude_bodies",

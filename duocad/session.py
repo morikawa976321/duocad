@@ -42,6 +42,8 @@ from .verbs import (
     fillet as fillet_verb,
     import_step as import_step_verb,
     import_svg as import_svg_verb,
+    mirror_body as mirror_body_verb,
+    mirror_sketch_entities as mirror_sketch_entities_verb,
     move_body as move_body_verb,
     move_sketch_entities as move_sketch_entities_verb,
     pattern_circular as pattern_circular_verb,
@@ -731,6 +733,45 @@ class Session:
             "copy": args["copy"],
             "created": created,
             "changed_bodies": list(args["bodies"]) + created,
+        })
+
+    def mirror_sketch_entities(self, axis: Any) -> dict:
+        """**確定選択のスケッチ図形**を、既存の線分1本(`axis`)を軸に鏡映複製する(常に複製)。
+
+        対象は引数ではなく選択から取る(`selection.require_sketch_entities`)。軸は対象集合
+        とは別引数(`move_body.axis_edge` と同じ理由)。**ソリッドは追従しない**
+        (`move_sketch_entities` と同じ)。
+        """
+        targets = selection.require_sketch_entities(self.document)
+        sketch_ids = sorted({str(item["sketch"]) for item in targets})
+        operation = mirror_sketch_entities_verb(self.document, targets, axis)
+        args = operation.args
+        return self._after_logged_verb({
+            "axis_p0": args["axis_p0"],
+            "axis_dir": args["axis_dir"],
+            "created": list(args["created"]),
+            "sketch_ids": sketch_ids,
+        })
+
+    def mirror_body(self, base_plane: Optional[str] = None, plane_face: Any = None) -> dict:
+        """**確定選択の面/辺/頂点が属するボディ**を、鏡映面に対して鏡映複製する(常に複製)。
+
+        鏡映面は `base_plane`(XY/XZ/YZ)か `plane_face`(既存の平面な面への参照)のどちらか
+        (`duocad/verbs/mirror_body.py` が検査)。対象は引数ではなく選択から取る
+        (`selection.require_bodies`)。**元は動かないので `changed_bodies` は複製だけ**
+        (`move_body` と違い、動いたボディを取り直す必要がない)。
+        """
+        body_ids = selection.require_bodies(self.document)
+        operation = mirror_body_verb(
+            self.document, body_ids, base_plane=base_plane, plane_face=plane_face
+        )
+        args = operation.args
+        created = list(args["created"])
+        return self._after_logged_verb({
+            "plane_point": args["plane_point"],
+            "plane_normal": args["plane_normal"],
+            "created": created,
+            "changed_bodies": created,
         })
 
     def delete(self) -> dict:

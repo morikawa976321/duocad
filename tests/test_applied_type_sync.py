@@ -131,6 +131,12 @@ def _ws_document_changing_commands() -> set[str]:
       `{"type":"file"}`、`get_state` / `preview` / `get_edges` / `get_vertices` は
       それぞれ専用のtype)
 
+    **`mirror_sketch_entities` / `add_mesh_body` のように、`ws="none"`(MCP専用)でも
+    実際には操作ログに載る本物のverbが存在する**(前者はUIでの指し方が未決なため、後者は
+    UIから三角形を手で打つ操作が無いため)。このテストは「ブラウザから踏めるものの
+    Applied整合」を見る契約なので、この代理指標はそのまま残す —— MCP専用verbのAppliedとの
+    整合はこのテストの対象範囲外(2026-09-06、`mirror_sketch_entities` 追加時に確認)。
+
     ここまでが `applied` を持つ配信の全部で、**その中が verb 系と `change` 系に割れる**。
     """
     catalog = _catalog()
@@ -534,6 +540,13 @@ def _run_move_body(session: Session, tmp_path: Path) -> dict:
     body, _ = _box(session)
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     return session.move_body(3.0, 4.0, 5.0)
+
+
+@_runner("mirror_body")
+def _run_mirror_body(session: Session, tmp_path: Path) -> dict:
+    body, _ = _box(session)
+    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
+    return session.mirror_body(base_plane="YZ")
 
 
 @_runner("delete")

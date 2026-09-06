@@ -40,6 +40,8 @@ RESETTING_VERBS = frozenset(
         "redo",
         "move_sketch_entities",
         "move_body",
+        "mirror_sketch_entities",
+        "mirror_body",
         # **消えた対象を指したままの選択は必ず失効する**ので、他の形状変更verbと
         # 同じ既定に揃える(消し損ねた分だけ残す、をしない)。
         "delete",

@@ -227,6 +227,105 @@ def _rotate_bezier(
     return [{"kind": "bezier", "params": _translate_bezier(params, nmx - mx, nmy - my)}]
 
 
+def _mirror_point(
+    x: float, y: float, ax: float, ay: float, ux: float, uy: float
+) -> Tuple[float, float]:
+    """点 (x, y) を、点 (ax, ay) を通り単位方向 (ux, uy) の直線に対して鏡映する。
+
+    `t = dot(Q-A, u)`; `foot = A + t*u`; `mirrored = 2*foot - Q`(モジュールのタスク仕様どおり)。
+    """
+    t = (x - ax) * ux + (y - ay) * uy
+    foot_x = ax + t * ux
+    foot_y = ay + t * uy
+    return (2.0 * foot_x - x, 2.0 * foot_y - y)
+
+
+def _mirror_line(
+    params: Dict[str, float], ax: float, ay: float, ux: float, uy: float
+) -> List[dict]:
+    x0, y0 = _mirror_point(params["x0"], params["y0"], ax, ay, ux, uy)
+    x1, y1 = _mirror_point(params["x1"], params["y1"], ax, ay, ux, uy)
+    return [{"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}}]
+
+
+def _mirror_circle(
+    params: Dict[str, float], ax: float, ay: float, ux: float, uy: float
+) -> List[dict]:
+    cx, cy = _mirror_point(params["cx"], params["cy"], ax, ay, ux, uy)
+    return [{"kind": "circle", "params": {"cx": cx, "cy": cy, "radius": params["radius"]}}]
+
+
+def _mirror_arc(
+    params: Dict[str, float], ax: float, ay: float, ux: float, uy: float
+) -> List[dict]:
+    """円弧の鏡映。**鏡映は向きを反転する**ので、始点・終点を入れ替えてから角度を映す
+    (`new_end - new_start == end_deg - start_deg` を保つ。CCWの掃引量をそのまま保存する)。
+    """
+    cx, cy = _mirror_point(params["cx"], params["cy"], ax, ay, ux, uy)
+    axis_angle_deg = math.degrees(math.atan2(uy, ux))
+    start_deg = 2.0 * axis_angle_deg - params["end_deg"]
+    end_deg = 2.0 * axis_angle_deg - params["start_deg"]
+    return [
+        {
+            "kind": "arc",
+            "params": {"cx": cx, "cy": cy, "radius": params["radius"], "start_deg": start_deg, "end_deg": end_deg},
+        }
+    ]
+
+
+def _rectangle_as_mirrored_lines(
+    params: Dict[str, float], ax: float, ay: float, ux: float, uy: float
+) -> List[dict]:
+    """軸平行を保てない長方形の鏡映を、4隅を映した4本の線分へ落とす
+    (`_rectangle_as_rotated_lines` の鏡映版)。"""
+    x = params["x"]
+    y = params["y"]
+    width = params["width"]
+    height = params["height"]
+    corners = [
+        (x, y),
+        (x + width, y),
+        (x + width, y + height),
+        (x, y + height),
+    ]
+    mirrored = [_mirror_point(px, py, ax, ay, ux, uy) for px, py in corners]
+    lines: List[dict] = []
+    for index in range(4):
+        x0, y0 = mirrored[index]
+        x1, y1 = mirrored[(index + 1) % 4]
+        lines.append({"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}})
+    return lines
+
+
+#: 軸が水平・垂直から外れているかを見る許容(単位方向ベクトルの成分)。
+_MIRROR_AXIS_ALIGNED_EPS = 1.0e-9
+
+
+def _mirror_rectangle(
+    params: Dict[str, float], ax: float, ay: float, ux: float, uy: float
+) -> List[dict]:
+    """長方形の鏡映。軸が水平・垂直(長方形の辺と平行/垂直)なら軸平行のまま鏡映できるので
+    中心を映すだけで済むが、斜めの軸では軸平行を保てず4本の線分になる
+    (`_rotate_rectangle` と同じ「種別が変わりうる」設計。呼び出し側の
+    `mirror_sketch_entities` が種別の変化を検査して ValueError にする)。
+    """
+    if abs(ux) < _MIRROR_AXIS_ALIGNED_EPS or abs(uy) < _MIRROR_AXIS_ALIGNED_EPS:
+        ecx = params["x"] + params["width"] / 2.0
+        ecy = params["y"] + params["height"] / 2.0
+        ncx, ncy = _mirror_point(ecx, ecy, ax, ay, ux, uy)
+        return [{"kind": "rectangle", "params": _translate_rectangle(params, ncx - ecx, ncy - ecy)}]
+    return _rectangle_as_mirrored_lines(params, ax, ay, ux, uy)
+
+
+def _mirror_bezier(
+    params: Dict[str, float], ax: float, ay: float, ux: float, uy: float
+) -> List[dict]:
+    """**ベジエはアフィン不変**なので、制御点を鏡映するだけで曲線が厳密に鏡映される
+    (`_rotate_bezier` と同じ理由)。"""
+    mirrored = [_mirror_point(px, py, ax, ay, ux, uy) for px, py in _bezier_points(params)]
+    return [{"kind": "bezier", "params": _bezier_params(mirrored)}]
+
+
 def _center_line(params: Dict[str, float]) -> Tuple[float, float]:
     return ((params["x0"] + params["x1"]) / 2.0, (params["y0"] + params["y1"]) / 2.0)
 
@@ -291,29 +390,34 @@ class EntityKindOps:
     translate: Callable[[Dict[str, float], float, float], Dict[str, float]]
     rotate: Callable[[Dict[str, float], float, float, float, bool], List[dict]]
     center_2d: Callable[[Dict[str, float]], Tuple[float, float]]
+    #: 軸(点+単位方向)に対する鏡映。**`rotate` と同じ理由で `List[dict]` を返す**
+    #: (長方形が斜めの軸では軸平行を保てず4本の線分になる。`mirror_sketch_entities` が
+    #: 種別の変化を検査する)。
+    mirror: Callable[[Dict[str, float], float, float, float, float], List[dict]]
     #: 動かせる点の (xキー, yキー)。**xキーがその点の名前**(選択の参照が持つ値)。
     points: Tuple[Tuple[str, str], ...] = ()
 
 
 _ENTITY_KIND_TABLE: Dict[str, EntityKindOps] = {
     "line": EntityKindOps(
-        _validate_line, _translate_line, _rotate_line, _center_line,
+        _validate_line, _translate_line, _rotate_line, _center_line, _mirror_line,
         points=(("x0", "y0"), ("x1", "y1")),
     ),
     "circle": EntityKindOps(
-        _validate_circle, _translate_circle, _rotate_circle, _center_circle,
+        _validate_circle, _translate_circle, _rotate_circle, _center_circle, _mirror_circle,
         points=(("cx", "cy"),),
     ),
     "rectangle": EntityKindOps(
         _validate_rectangle, _translate_rectangle, _rotate_rectangle, _center_rectangle,
+        _mirror_rectangle,
         points=(("x", "y"),),
     ),
     "arc": EntityKindOps(
-        _validate_arc, _translate_arc, _rotate_arc, _center_arc,
+        _validate_arc, _translate_arc, _rotate_arc, _center_arc, _mirror_arc,
         points=(("cx", "cy"),),
     ),
     "bezier": EntityKindOps(
-        _validate_bezier, _translate_bezier, _rotate_bezier, _center_bezier,
+        _validate_bezier, _translate_bezier, _rotate_bezier, _center_bezier, _mirror_bezier,
         points=(("x0", "y0"), ("cx1", "cy1"), ("cx2", "cy2"), ("x1", "y1")),
     ),
 }

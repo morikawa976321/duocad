@@ -704,6 +704,74 @@ COMMANDS: tuple[Command, ...] = (
             "まっすぐでない辺の拒否も `kernel.edge_axis` の既存の規則がそのまま効く"
         ),
     ),
+    Command(
+        name="mirror_sketch_entities",
+        category="sketch",
+        description=(
+            "確定選択のスケッチ図形を、既存の線分1本(axis)を軸に鏡映複製するときに呼ぶ。"
+            "常に複製する(in-place反転は無い)。対象は選択から取る(引数では受けない)。"
+            "**長方形はこの軸では鏡映できないことがある**(軸が水平・垂直=長方形の辺と"
+            "平行/垂直でないと種別を保てない)。"
+        ),
+        params=(
+            Param(
+                "axis",
+                "object",
+                "鏡映軸にする既存の線分への参照 "
+                '{"sketch": sketch_id, "entity": entity_id}(kindはlineであること)',
+            ),
+        ),
+        uses_selection=True,
+        session="mirror_sketch_entities",
+        ws="none",
+        resets_selection=True,
+        note=(
+            "**MCPからだけ使える**(`ws=\"none\"`)。`move_body.axis_edge` と構造が同じ問題"
+            "(対象の確定選択と軸の指し方が同じ画面操作で衝突しうる)を抱えるが、`base_plane` の"
+            "ような選択集合と衝突しない代替が無い(平面2Dには基準\"軸\"の概念が無い) —— "
+            "UIでの指し方は本人判断待ちとして未決のまま残してある(2026-09-06)。"
+        ),
+    ),
+    Command(
+        name="mirror_body",
+        category="feature",
+        description=(
+            "確定選択の面/辺/頂点が**属するボディ**を、鏡映面に対して鏡映複製するときに呼ぶ。"
+            "常に複製する(in-place反転は無い。複数のボディにまたがる選択なら全部を同じ"
+            "鏡映面で複製する)。鏡映面は base_plane(XY/XZ/YZ)か plane_face(既存の平面な"
+            "面への参照)のどちらか一方。対象は選択から取る(引数では受けない)。"
+        ),
+        params=(
+            Param(
+                "base_plane",
+                "string",
+                "鏡映面を基準平面で指す XY / XZ / YZ(原点通過)。plane_face とは同時に渡せない",
+                required=False,
+            ),
+            Param(
+                "plane_face",
+                "object",
+                "鏡映面を既存ソリッドの平面な面で指す "
+                '{"body": body_id, "index": 面の1始まりの添字}。base_plane とは同時に渡せない。'
+                "この面自身が対象ボディに属していてもよい",
+                required=False,
+                ws=False,
+            ),
+        ),
+        uses_selection=True,
+        session="mirror_body",
+        ws="special",
+        resets_selection=True,
+        note=(
+            "**`base_plane` だけがWSにも開いている**(2026-09-06。`ws=\"special\"`。"
+            "`sketch_create` と同じ座標定義を流用する)。画面は「鏡映面」の3択(XY/XZ/YZ)を"
+            "出すだけで、対象の選択(面/辺/頂点)とは別チャンネルなので衝突しない。"
+            "**`plane_face` はMCPからだけ使える**(`ws=False`、`move_body.axis_edge` と"
+            "同じ理由 —— 既存の面を鏡映基準に使う経路は、対象の確定選択と同じ画面操作で"
+            "衝突しうるため、UIでの指し方は本人判断待ちとして未決のまま残してある"
+            "(2026-09-06)。プレビュー(幽霊)は今回作っていない —— `previewable=False`。"
+        ),
+    ),
     # ---------------------------------------------------------------- 削除
     Command(
         name="delete",

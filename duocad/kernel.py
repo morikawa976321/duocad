@@ -499,6 +499,33 @@ def _transformed(
     return shape.Moved(TopLoc_Location(trsf))
 
 
+def mirror_shape(
+    shape: "TopoDS_Shape", point: Sequence[float], normal: Sequence[float], *, copy: bool = True
+) -> "TopoDS_Shape":
+    """形状を、点 `point` を通り法線 `normal` の平面に対して鏡映した形状を返す(元は変えない)。
+
+    `translate_shape` / `rotate_shape` の姉妹だが、**鏡映は向きを反転する変換**
+    (行列式が負)である。`mirror_body` は常に複製を作る(in-place反転の口を持たない)ので
+    `copy` の既定は `True` —— `translate_shape`/`rotate_shape` と揃えて残してあるだけで、
+    `copy=False`(`Moved` で位置だけ差し替え)も `gp_Trsf` が向きの反転を保持したまま動くので
+    技術的には壊れない。
+
+    点・法線が3要素でない/非有限、または法線が零ベクトルなら ValueError。
+    """
+    origin = [float(value) for value in point]
+    axis = [float(value) for value in normal]
+    if len(origin) != 3 or len(axis) != 3:
+        raise ValueError(f"point / normal must have 3 numbers, got {point!r} / {normal!r}")
+    if not all(math.isfinite(value) for value in origin + axis):
+        raise ValueError(f"point / normal must be finite, got {point!r} / {normal!r}")
+    if not math.sqrt(sum(value * value for value in axis)) > 0.0:
+        raise ValueError("normal must not be the zero vector (鏡映面の向きが決まらない)")
+
+    trsf = gp_Trsf()
+    trsf.SetMirror(gp_Ax2(gp_Pnt(*origin), gp_Dir(*axis)))
+    return _transformed(shape, trsf, copy=copy, what="鏡映")
+
+
 def edge_axis(shape: "TopoDS_Shape", edge_index: int) -> tuple:
     """**まっすぐな辺**を回転軸 `([x, y, z], [dx, dy, dz])` にする(点は辺の上、向きは単位長)。
 

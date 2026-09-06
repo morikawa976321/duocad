@@ -887,6 +887,24 @@ class DocumentTools:
             before, applied, copy=applied["copy"], created=applied["created"]
         )
 
+    def mirror_sketch_entities(self, axis: Any) -> dict:
+        """**確定選択のスケッチ図形**を、既存の線分1本(`axis`)を軸に鏡映複製する。
+
+        常に複製する(対象・軸の解決は `Session.mirror_sketch_entities`)。
+        """
+        before = self._revision_snapshot()
+        applied = self.session.mirror_sketch_entities(axis)
+        return self._apply_logged(before, applied, created=applied["created"])
+
+    def mirror_body(self, base_plane: Optional[str] = None, plane_face: Any = None) -> dict:
+        """**確定選択の面/辺/頂点が属するボディ**を、鏡映面に対して鏡映複製する。
+
+        常に複製する(逆引き・鏡映面の検査は `Session.mirror_body`)。
+        """
+        before = self._revision_snapshot()
+        applied = self.session.mirror_body(base_plane=base_plane, plane_face=plane_face)
+        return self._apply_logged(before, applied, created=applied["created"])
+
     def delete(self) -> dict:
         """**確定選択のボディとスケッチ図形**をまとめて消す(逆引きと畳み込みは `Session`)。
 
