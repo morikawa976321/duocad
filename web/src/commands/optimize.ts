@@ -214,3 +214,14 @@ export const OPTIMIZE_PRESET_ROLE: Record<string, 'preserve_bodies' | 'exclude_b
   set_exclude_bodies: 'exclude_bodies',
   set_fixtures: 'fixtures',
 }
+
+/**
+ * 起動時に**選択を空にする**verb(`App.svelte` が読む)。
+ *
+ * 上の表に載っていないことと、**選択が空で始まることは別である。** 表から外すだけだと
+ * 「前のverbで選んでいたものがそのまま残る」になり、拘束面を確定した直後に荷重verbを
+ * 起動すると、その拘束面を掴んだまま確定して `RoleConflict` で落ちる(実機検査で観測)。
+ * 荷重は上書き代入なので**選んだ面にしか書かない**ことが唯一の安全策であり、
+ * そのためには「何も選ばれていない状態から始める」ことまで含めて保証する必要がある。
+ */
+export const OPTIMIZE_EMPTY_START_VERBS: ReadonlySet<string> = new Set(['set_loads', 'clear_loads'])

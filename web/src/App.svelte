@@ -38,7 +38,11 @@
   import { entityHandles, ghostCopies, snapToSketchEntity, type GhostSource } from './entityKinds'
   import { expressionValue } from './expression'
   import { IMPORT_STEP, changesDocument } from './commands/files'
-  import { OPTIMIZE_MODE_COMMANDS, OPTIMIZE_PRESET_ROLE } from './commands/optimize'
+  import {
+    OPTIMIZE_EMPTY_START_VERBS,
+    OPTIMIZE_MODE_COMMANDS,
+    OPTIMIZE_PRESET_ROLE,
+  } from './commands/optimize'
   import OptimizePanel, { type OptimizeNotice } from './OptimizePanel.svelte'
   import {
     DEFAULT_SKETCH_COMMAND_ID,
@@ -802,6 +806,12 @@
         if (category === 'sketch' || category === 'feature' || category === 'file') {
           host?.commandSucceeded()
         }
+        // **荷重の2つは確定のたびに選択を空へ戻す**(`OPTIMIZE_EMPTY_START_VERBS`)。
+        // 他のverbは確定後も選択が残ったまま構え続けるが、荷重は上書き代入なので
+        // 残ったままだと**次の確定がその面の大きさ・向きまで書き換える** ——
+        // 面Aへ50Nを置いた直後に面Bを足して確定すると、面Aも同じ値になる。
+        // 起動時に空にするだけでは足りない(同じverbを続けて使う経路がここを通る)。
+        if (OPTIMIZE_EMPTY_START_VERBS.has(applied.verb)) presetSelection([])
       }
       lastApplied = applied
     }
@@ -1337,14 +1347,23 @@
   }
 
   /**
-   * コマンドが起動した(`CommandHost.start`)。**形状最適化の4つだけが意味を持つ** ——
-   * 起動した役割の**既存の割り当て**をそのまま選択状態にして見せる(タスク仕様
-   * 「verb起動 → 既存の割り当てが選択状態で現れる」)。`duocad/optimize.py` の契約どおり
-   * `state.optimize` の該当配列はそのまま `modifySelection` へ渡せる形をしている。
+   * コマンドが起動した(`CommandHost.start`)。**形状最適化のverbだけが意味を持つ。**
+   *
+   * 集合代入の3つは、起動した役割の**既存の割り当て**をそのまま選択状態にして見せる
+   * (タスク仕様「verb起動 → 既存の割り当てが選択状態で現れる」)。`duocad/optimize.py` の
+   * 契約どおり `state.optimize` の該当配列はそのまま `modifySelection` へ渡せる形をしている。
+   * 荷重の2つは**空にする**(`OPTIMIZE_EMPTY_START_VERBS`)。
    */
   function onCommandStart(verb: string): void {
+    if (model === null) return
+    // 荷重の2つは**空から始める**(`OPTIMIZE_EMPTY_START_VERBS` の理由を参照)。
+    // 「何もしない」ではなく「空を代入する」でなければ、前のverbの選択が残る。
+    if (OPTIMIZE_EMPTY_START_VERBS.has(verb)) {
+      presetSelection([])
+      return
+    }
     const role = OPTIMIZE_PRESET_ROLE[verb]
-    if (role === undefined || model === null) return
+    if (role === undefined) return
     presetSelection(model.optimize[role])
   }
 
