@@ -20,9 +20,8 @@ DEVIATION = kernel.DEFAULT_DEVIATION
 def _torus_segment():
     """トリムされたトーラス面だけでできたソリッド(半径100mmの円に沿った1/12周の曲がったバー)。
 
-    `BRepPrimAPI_MakeTorus` の第3引数は掃引角。**面のトリムを見ない bbox はここで化ける** ——
-    実寸 32.06 x 55.00 x 20.00mm に対して `BRepBndLib::Add` は 41.12 x 59.53 x 20.00mm を返す
-    (2026-09-07実測)。箱・円柱・平面ではこの差が出ないので、曲面のトリムを見る題材が要る。
+    `BRepPrimAPI_MakeTorus` の第3引数は掃引角。**箱・円柱・平面では `BRepBndLib` の `Add` と
+    `AddOptimal` が一致してしまう**ので、bbox の取り方を見るにはこの題材が要る。
     """
     return BRepPrimAPI_MakeTorus(100.0, 10.0, math.pi / 6).Shape()
 
