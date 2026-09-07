@@ -3329,8 +3329,7 @@ design_space 17.6 / anchor 50.9 秒。**増分の大半は [12] ではない** �
 
 ### OCCT の bbox はトリムを見ない(2026-09-07)
 
-`BRepBndLib::Add`(= `voxelize._shape_bbox`)は**面のトリムを見ず、下地のサーフェス全体で
-囲む**。トリムされたトーラス面はドーナツ丸ごとで囲まれるので、曲がったバーの一部のような
+`BRepBndLib::Add` は**面のトリムを見ず、下地のサーフェス全体で囲む**。トリムされたトーラス面はドーナツ丸ごとで囲まれるので、曲がったバーの一部のような
 形では bbox が実寸から大きく外れる。実測(`models/hanger_bar_attachment.json` の
 `hanger_bar_attatchment_7`。トーラス6枚+平面2枚・体積 17,034mm^3):
 

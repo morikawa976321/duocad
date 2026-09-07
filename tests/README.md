@@ -212,7 +212,7 @@ read_step(path: str) -> TopoDS_Shape
 read_step_text(text: str) -> TopoDS_Shape        # ログ埋め込み本文からの復元（一時ファイル経由）
 write_step(shape, path: str) -> None
 write_stl(shape, path: str, deviation: float) -> None
-bounding_box(shape) -> {"min","max","center","size","diagonal"}
+bounding_box(shape, *, cache: BoundingBoxCache | None = None) -> {"min","max","center","size","diagonal"}
 tessellate(shape, deviation: float) -> {...}
 ```
 
