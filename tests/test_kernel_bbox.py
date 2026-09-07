@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import ast
 import math
+import pathlib
 
 import pytest
 from build123d import Box, Cone, Cylinder
@@ -84,3 +86,71 @@ def test_the_bounding_box_is_as_tight_as_the_triangulation_for_a_trimmed_torus_s
     """落ちたら: bbox が面のトリムを見なくなっている(トーラス片が実寸より 9.06mm 大きく出る)。"""
     outward = _outward_mm(_torus_segment())
     assert max(outward) <= DEVIATION, f"最大の膨らみ {max(outward):.6f}mm"
+
+
+# --------------------------------------------------------------------------------------
+# 呼び出し側が `cache=` を渡しているか
+# --------------------------------------------------------------------------------------
+#: `cache=` を渡さないと決めた場所。**空にしておくこと** —— ここへ足すのは
+#: 「この呼び出しは毎回測り直してよい」という判断なので、理由を添えて明示的に書く。
+#: 鍵はソースの相対パス、値は理由。
+BOUNDING_BOX_WITHOUT_CACHE: dict[str, str] = {}
+
+
+def _bounding_box_calls() -> list[tuple[str, int, bool]]:
+    """`duocad/` の中の `bounding_box(...)` 呼び出しを `(パス, 行, cacheを渡したか)` で返す。"""
+    root = pathlib.Path(__file__).resolve().parent.parent / "duocad"
+    found: list[tuple[str, int, bool]] = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = (
+                func.attr
+                if isinstance(func, ast.Attribute)
+                else func.id
+                if isinstance(func, ast.Name)
+                else None
+            )
+            if name != "bounding_box":
+                continue
+            passes = any(keyword.arg == "cache" for keyword in node.keywords)
+            found.append((path.name, node.lineno, passes))
+    return found
+
+
+def test_every_bounding_box_call_passes_a_cache() -> None:
+    """落ちたら: `cache=` を渡していない `bounding_box` の呼び出しが増えた。
+
+    **これはソースを読む検査である。** 渡し忘れても**答えは正しいまま**で、変わるのは
+    速さだけ(実測: `resolution_limits` が 0.5ms → 145ms)。だから他のどの検査も緑のまま通る。
+    `AddOptimal` は繰り返しても速くならない(OCCTが結果を持たない)ので、渡し忘れは
+    そのまま利用者の待ち時間になる。
+
+    渡さないと決めた呼び出しは `BOUNDING_BOX_WITHOUT_CACHE` へ理由付きで足す。
+    **`cache=None` と明示的に書いた呼び出しはここを通る** —— この検査が捕まえるのは
+    「決めたこと」ではなく「忘れたこと」である。
+    """
+    missing = [
+        f"{name}:{line}"
+        for name, line, passes in _bounding_box_calls()
+        if not passes and name not in BOUNDING_BOX_WITHOUT_CACHE
+    ]
+    assert not missing, (
+        f"`cache=` を渡していない bounding_box の呼び出し: {missing}。"
+        "文書を持っているなら `cache=document.bbox_cache` を渡すこと。"
+        "毎回測り直してよい理由があるなら `cache=None` と明示するか、"
+        "`BOUNDING_BOX_WITHOUT_CACHE` へ理由付きで足すこと"
+    )
+
+
+def test_the_call_scan_actually_finds_the_calls() -> None:
+    """落ちたら: 上の検査が**何も見ていない**(走査が壊れて空振りしている)。
+
+    ソースを読む検査は、対象を1つも見つけられなくても緑になる。ここが無いと、
+    `bounding_box` を改名した日に上の検査が黙って無効化される。
+    """
+    calls = _bounding_box_calls()
+    assert len(calls) >= 4, f"duocad/ の中に bounding_box の呼び出しが {len(calls)} 件しか無い"
