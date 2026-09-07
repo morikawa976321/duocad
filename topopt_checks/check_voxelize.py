@@ -40,8 +40,6 @@
    反例 / 細かく標本化した参照値との突き合わせ / 三角形の重心から `face_index` で元の面へ戻る。
 10. **トリムされた曲面のソリッドの bbox が実寸を返す** — `_shape_bbox` を三角形分割の箱と
     突き合わせる(三角形の頂点は必ず真の面の上にあるので、実寸の独立した根拠になる)。
-    **トーラス片の膨らみだけは今の実装では許容差に収まらず、既知の未達として扱う**
-    (`check_known_gap`。合否には数えないが、成立するようになったら不合格で知らせる)。
 
 所要は約4秒(SIMPは回さないので check_simp / check_mesh より桁違いに速い)。
 """
@@ -80,7 +78,6 @@ import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理
 from duocad.topopt import voxelize as vx  # noqa: E402
 
 FAILURES: list[str] = []
-KNOWN_GAPS: list[str] = []
 RESULTS: dict[str, object] = {}
 
 # 曖昧と見なす帯(要素サイズに対する比)。三角形分割の既定の弦誤差(2%)より大きく取る。
@@ -92,23 +89,6 @@ def check(name: str, ok: bool, detail: str) -> None:
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
     if not ok:
         FAILURES.append(f"{name}: {detail}")
-
-
-def check_known_gap(name: str, holds: bool, detail: str) -> None:
-    """**成立してほしいが、いまの実装では成立しない**検査(pytest の `xfail(strict=True)` と同じ)。
-
-    期待値の側が正しく実装が追いついていないものだけに使う。**成立するようになったら
-    不合格として報告する** —— 実装が直った瞬間に気づけないと、この節は誰にも読まれないまま
-    嘘の期待値として残る。通常の未達(=バグ)には使わないこと。
-    """
-    if holds:
-        print(f"  [FAIL] {name}(既知の未達が解消した): {detail}", flush=True)
-        FAILURES.append(
-            f"{name}: 既知の未達が解消した。check_known_gap を check へ格上げすること ({detail})"
-        )
-        return
-    print(f"  [KNOWN-GAP] {name}: {detail}", flush=True)
-    KNOWN_GAPS.append(f"{name}: {detail}")
 
 
 def _faces_of(shape) -> list:
@@ -966,7 +946,7 @@ def check_trimmed_curved_bbox() -> None:
             f"膨らみ {slack[name]:.6f}mm (許容 {deviation}mm)",
         )
 
-    check_known_gap(
+    check(
         "トーラス片: bbox の膨らみが三角形分割の弦誤差以内",
         slack["トーラス片"] <= deviation,
         f"膨らみ {slack['トーラス片']:.6f}mm (許容 {deviation}mm)",
@@ -995,10 +975,6 @@ def main() -> int:
     print("\n" + "=" * 72)
     print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))
     print("=" * 72)
-    if KNOWN_GAPS:
-        print(f"既知の未達 {len(KNOWN_GAPS)}件(合否には数えない)")
-        for gap in KNOWN_GAPS:
-            print(f"  - {gap}")
     if FAILURES:
         print(f"NG: {len(FAILURES)}件が不合格")
         for failure in FAILURES:

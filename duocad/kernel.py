@@ -265,26 +265,111 @@ def classify_face(face: Any) -> str:
     return "other"
 
 
-def bounding_box(shape: "TopoDS_Shape") -> dict:
+class _ShapeKey:
+    """`TopoDS_Shape` を dict の鍵にするためのラッパ。
+
+    **素の `TopoDS_Shape` は鍵にならない。** 同じ面を2回取り出すと `hash` は一致するのに
+    `__eq__` が False を返すので、`dict` も `lru_cache` も**ヒット率0%のまま、遅いまま
+    メモリだけ増える**(2026-09-07実測)。動いてはいるので気づかない。
+
+    同一性は `IsSame`(TShape と Location の一致)で見る。`move_body` の
+    `shape.Moved(TopLoc_Location(trsf))` は TShape を共有するが、Location が違うので
+    別扱いになる(実測: 1000mm 動かすと `hash` 不一致・`IsSame` False)。
+
+    **`IsSame` は Orientation(forward/reversed)を見ない。** 向きに依存しない値にしか
+    使ってはいけない。
+    """
+
+    __slots__ = ("shape", "_hash")
+
+    def __init__(self, shape: "TopoDS_Shape") -> None:
+        self.shape = shape
+        self._hash = hash(shape)
+
+    def __hash__(self) -> int:
+        return self._hash
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _ShapeKey) and bool(self.shape.IsSame(other.shape))
+
+
+class BoundingBoxCache:
+    """`bounding_box` の結果を覚える、**1つの文書のあいだだけ生きる**メモ。
+
+    `Document` が1つ持ち(`document.bbox_cache`)、文書を差し替えると `Document` ごと
+    作り直される。モジュールに1つ置くと、長いセッションで別の文書の形状が積み上がる。
+
+    **bbox 専用。** 鍵の同一性(`_ShapeKey`)は Orientation を見ないので、向きに依存する
+    値をここへ載せると静かに壊れる。
+
+    `AddOptimal` は繰り返しても速くならない(OCCTが内部で結果を持たない。実測: 11ボディで
+    `Add` 0.09ms に対し `AddOptimal` 178ms)。**キャッシュ無しでは `AddOptimal` は使えない。**
+    """
+
+    __slots__ = ("_extents",)
+
+    def __init__(self) -> None:
+        self._extents: Dict[_ShapeKey, Tuple[float, float, float, float, float, float]] = {}
+
+    def __len__(self) -> int:
+        return len(self._extents)
+
+    def clear(self) -> None:
+        self._extents.clear()
+
+    def extents(self, shape: "TopoDS_Shape") -> Tuple[float, float, float, float, float, float]:
+        """`(x_min, y_min, z_min, x_max, y_max, z_max)`。無ければ測って覚える。"""
+        key = _ShapeKey(shape)
+        found = self._extents.get(key)
+        if found is None:
+            found = _bounding_box_extents(shape)
+            self._extents[key] = found
+        return found
+
+
+def _bounding_box_extents(
+    shape: "TopoDS_Shape",
+) -> Tuple[float, float, float, float, float, float]:
+    """境界箱を OCCT から取る(`(x_min, y_min, z_min, x_max, y_max, z_max)`)。
+
+    `BRepBndLib.AddOptimal_s(..., useTriangulation=False, useShapeTolerance=False)` を使う。
+    **`Add_s` は面のトリムを見ず、下地のサーフェス全体で囲む** —— トリムされたトーラス面は
+    ドーナツ丸ごとで囲まれるので、曲がったバーの部品では寸法が最大9倍に化ける
+    (実測: `models/hanger_bar_attachment.json` の 26.6mm 角の部品が 241.3mm になる)。
+    箱・円柱・平面では両者が一致するので、**曲面の種類によって壊れ方が変わる**。
+
+    `useTriangulation=False` は、True(既定)だと**既存の三角形分割があればそれを使う**ため
+    (同じ形状でも `tessellate` を呼んだ後だけ違う値になる)。`SetGap(0.0)` を入れても
+    OCCT は内部許容差ぶん(実測 1e-7mm)膨らませた値を返す。
+    """
+    box = Bnd_Box()
+    box.SetGap(0.0)
+    BRepBndLib.AddOptimal_s(shape, box, False, False)
+    if box.IsVoid():
+        raise ValueError("bounding box is void (形状に頂点が無い)")
+    return box.Get()
+
+
+def bounding_box(
+    shape: "TopoDS_Shape", *, cache: Optional[BoundingBoxCache] = None
+) -> dict:
     """形状の境界箱(mm)。**幾何から求める**(三角形分割に依存しない)。
 
     戻り値: {"min":[x,y,z], "max":[x,y,z], "center":[x,y,z], "size":[dx,dy,dz], "diagonal": float}
 
-    `BRepBndLib.Add_s(..., useTriangulation=False)` を使う。True(既定)だと**既存の
-    三角形分割があればそれを使う**ため、テセレーションの粗さで箱の値が変わる
-    (同じ形状でも `tessellate` を呼んだ後だけ違う値になる)。`SetGap(0.0)` を入れても
-    OCCT は内部許容差ぶん(実測 1e-7mm)膨らませた値を返すので、**厳密な寸法の根拠には
-    使わない**。`kernel.tessellate` の戻りにある `bbox` は三角形の節点から作った別物で、
+    `cache` に `document.bbox_cache` を渡すと、同じ形状の測り直しを避ける(測り方の詳細と
+    速さは `_bounding_box_extents` / `BoundingBoxCache`)。**戻り値の dict は毎回作り直す**
+    ので、呼び出し側が書き換えても他の呼び出し側には波及しない。
+
+    `kernel.tessellate` の戻りにある `bbox` は三角形の節点から作った別物で、
     あちらはアプリ層のカメラ合わせ用。
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot compute the bounding box of an empty shape")
-    box = Bnd_Box()
-    box.SetGap(0.0)
-    BRepBndLib.Add_s(shape, box, False)
-    if box.IsVoid():
-        raise ValueError("bounding box is void (形状に頂点が無い)")
-    x_min, y_min, z_min, x_max, y_max, z_max = box.Get()
+    if cache is None:
+        x_min, y_min, z_min, x_max, y_max, z_max = _bounding_box_extents(shape)
+    else:
+        x_min, y_min, z_min, x_max, y_max, z_max = cache.extents(shape)
     lows = [x_min, y_min, z_min]
     highs = [x_max, y_max, z_max]
     return {

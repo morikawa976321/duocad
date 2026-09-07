@@ -602,18 +602,24 @@ def _condition_bbox(doc: "Document") -> tuple:
 
     **除外ソリッドは入れない**(除外は塊から引くものであって、塊を広げる理由にはならない)。
     面だけの bbox を OCCT から直に取るので、三角形分割には依存しない。
+
+    **`doc.bbox_cache` を必ず渡す。** `resolution_limits` は目盛りを引くたびに呼ばれ、
+    `bounding_box` は1形状あたり数十msかかる(`kernel.BoundingBoxCache`)。渡さないと
+    定常状態が 0.5ms から 145ms になる(2026-09-07実測)。条件面は毎回 `face_of` で
+    取り直すが、同じ面は `IsSame` で同一と見なされるので当たる。
     """
     from . import kernel
 
     setup = doc.optimize
+    cache = doc.bbox_cache
     boxes = []
     for body_id in setup.preserve_bodies:
-        boxes.append(kernel.bounding_box(doc.get_body(body_id).shape))
+        boxes.append(kernel.bounding_box(doc.get_body(body_id).shape, cache=cache))
     for role in ("fixtures", "loads"):
         for condition in getattr(setup, role):
             body = doc.get_body(condition["body"])
             face = kernel.face_of(body.shape, int(condition["index"]))
-            boxes.append(kernel.bounding_box(face))
+            boxes.append(kernel.bounding_box(face, cache=cache))
     if not boxes:
         raise OptimizeInputError("条件が1つも無いので外接直方体が取れない")
     lo = [min(box["min"][axis] for box in boxes) for axis in range(3)]

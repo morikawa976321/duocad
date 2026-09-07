@@ -183,6 +183,12 @@ class Document:
         from .optimize import OptimizeSetup
 
         self.optimize = OptimizeSetup()
+        #: bbox のメモ。**この文書と寿命を共にする** —— 文書を差し替えると
+        #: `Session._replace_document` が新しい `Document` を作るので一緒に捨てられる
+        #: (`view.DocumentView.reset()` と同じ規律)。**保存されない**。
+        from .kernel import BoundingBoxCache
+
+        self.bbox_cache = BoundingBoxCache()
 
     @property
     def units(self) -> str:

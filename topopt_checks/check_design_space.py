@@ -799,38 +799,24 @@ def check_case1_margin_is_load_bearing() -> None:
     )
 
     # ---- 格子外ガードの**逆側**: はみ出していない保持を「はみ出した」と言わないこと ----
-    # OCCT の `BRepBndLib::Add`(= `vx._shape_bbox`)は**面のトリムを見ず、下地のサーフェス
-    # 全体で囲む**。トーラス面の部品では実寸の10倍以上に化け、ガードが**嘘の理由で**落とす
+    # ガードが使う bbox(`vx._shape_bbox`)が実寸を返すことを、三角形の節点を基準に見る
+    # (節点は必ず真の面の上にあるので、実寸の独立した根拠になる)。**面のトリムを見ない
+    # bbox だとトーラス面の部品が実寸の10倍以上に化け、ガードが嘘の理由で落とす**
     # (実測: `models/hanger_bar_attachment.json` の 35mm 角の部品が 482.8mm と報告された)。
-    # ここは「その罠が現に存在すること」と「ガードが罠を踏まない口を使っていること」を固定する。
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeTorus
 
     segment = BRepPrimAPI_MakeTorus(100.0, 10.0, math.pi / 6).Shape()
-    loose_lo, loose_hi = vx._shape_bbox(segment)
-    tight_lo, tight_hi = vx._shape_bbox_trimmed(segment)
+    seg_lo, seg_hi = vx._shape_bbox(segment)
     seg_soup = vx.triangles_from_shape(segment, deviation=0.2)
     seg_points = np.asarray(seg_soup.positions, dtype=float).reshape(-1, 3)
     check(
-        "トリムを見ない bbox は実寸より大きい(この罠が現に存在する。無くなったら下の分岐は要らない)",
-        bool(np.any(loose_hi > tight_hi + 1e-6) or np.any(loose_lo < tight_lo - 1e-6)),
-        f"Add {np.round(loose_hi - loose_lo, 1).tolist()} / "
-        f"AddOptimal {np.round(tight_hi - tight_lo, 1).tolist()}",
-    )
-    check(
-        "トリムを見る bbox は三角形分割と一致する(実寸を返している)",
+        "格子外ガードの bbox は三角形分割と一致する(実寸を返している)",
         bool(
-            np.all(np.abs(tight_lo - seg_points.min(axis=0)) < 0.2)
-            and np.all(np.abs(tight_hi - seg_points.max(axis=0)) < 0.2)
+            np.all(np.abs(seg_lo - seg_points.min(axis=0)) < 0.2)
+            and np.all(np.abs(seg_hi - seg_points.max(axis=0)) < 0.2)
         ),
-        f"AddOptimal {np.round(tight_lo, 2).tolist()}..{np.round(tight_hi, 2).tolist()} / "
+        f"bbox {np.round(seg_lo, 2).tolist()}..{np.round(seg_hi, 2).tolist()} / "
         f"三角形 {np.round(seg_points.min(axis=0), 2).tolist()}..{np.round(seg_points.max(axis=0), 2).tolist()}",
-    )
-    # **ソースを読む検査**([13-5] と同じ理由)。上の2つが緑でも、`derive` の呼び先が
-    # `_shape_bbox` へ戻れば誤検知は復活する —— そのとき落ちるのはここだけである。
-    check(
-        "格子外ガードがトリムを見る bbox を呼んでいる(呼び先が戻ると誤検知が復活する)",
-        "_shape_bbox_trimmed(vx._unwrap(conditions.keep))" in inspect.getsource(ds.derive),
-        "derive のソースに `_shape_bbox_trimmed(vx._unwrap(conditions.keep))` がある",
     )
     # **既定値が「壊れない一番小さい値」ではない**ことを記録する。検査2・3は「保持が入るか」
     # しか見ておらず、「答えの居場所が残っているか」は見ていない —— 余白ゼロでも検査は通る。

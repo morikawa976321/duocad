@@ -1102,7 +1102,14 @@ def _unwrap(shape: Any) -> Any:
 
 
 def _shape_bbox(shape: Any) -> tuple[np.ndarray, np.ndarray]:
-    """OCCT の bbox。要素サイズ(=三角形分割の細かさ)を決めるための当たりを付けるのに使う。
+    """OCCT の bbox(`BRepBndLib::AddOptimal`)。**面のトリムを尊重する**。
+
+    格子を起こす当たり(`voxelize`)と、格子外ガード(`design_space.derive`)の両方が使う。
+
+    **`Add` にしてはいけない。** あちらはトリムを見ず下地のサーフェス全体で囲むので、
+    トーラス面の部品が実寸の10倍以上に化け、**はみ出していない保持をはみ出したと言う**
+    (実測: `models/hanger_bar_attachment.json` の 35mm 角の部品が 482.8mm と報告された)。
+    円柱・平面だけの部品では両者がほとんど一致するので、**曲面の種類によって壊れ方が変わる**。
 
     **`useTriangulation=False` で呼ぶ。** `True` にすると、形状に**既に付いている三角形分割**
     があればそれを使うので、同じ形状オブジェクトに2回ボクセル化をかけると
@@ -1110,12 +1117,15 @@ def _shape_bbox(shape: Any) -> tuple[np.ndarray, np.ndarray]:
     そこから決まる要素サイズ・三角形分割の細かさ・格子まで変わってしまう
     (実測: 実物STEPで三角形数が呼ぶたびに 62264 → 62168 → 62138 と動いた。
     `Cylinder(10,30)` でも1回目312枚・2回目以降308枚)。**決定性はここで壊れる**。
+
+    **遅い**(トリム曲線を実際に評価する。実測: 1ボディ 18〜60ms)。OCCT は結果を持たない
+    ので呼ぶたびに同じだけかかる —— 導出1回につき数回で済む場所から呼ぶこと。
     """
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
 
     box = Bnd_Box()
-    BRepBndLib.Add_s(shape, box, False)
+    BRepBndLib.AddOptimal_s(shape, box, False, False)
     # Bnd_Box は形状の公差ぶんの「隙間」を足して返す。その 1e-7 mm が要素サイズに乗ると、
     # 辺長が要素サイズの整数倍の箱で体積が厳密一致しなくなるので隙間を落とす。
     box.SetGap(0.0)
@@ -1124,38 +1134,6 @@ def _shape_bbox(shape: Any) -> tuple[np.ndarray, np.ndarray]:
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
     return np.array([xmin, ymin, zmin]), np.array([xmax, ymax, zmax])
 
-
-
-def _shape_bbox_trimmed(shape: Any) -> tuple[np.ndarray, np.ndarray]:
-    """OCCT の bbox。**面のトリムを尊重する**(`BRepBndLib::AddOptimal`)。
-
-    **`_shape_bbox`(`BRepBndLib::Add`)は下地のサーフェス全体で囲む。** トリムされた
-    トーラス面はドーナツ丸ごと、トリムされた円柱面は無限円柱の輪切り全体で囲まれるので、
-    曲がったバーの一部のような形では**実寸の10倍以上**に化ける(実測: 実寸
-    35.0 x 36.6 x 36.6mm のトーラス6枚の部品が 482.8 x 252.1 x 252.1mm になった。
-    `models/hanger_bar_attachment.json` の `hanger_bar_attatchment_7`)。
-    円柱・平面だけの部品では両者はほとんど一致するので、**曲面の種類によって
-    壊れ方が変わる** —— 気づきにくい。
-
-    こちらは実測で三角形分割の bbox と小数2桁まで一致する。**遅い**(トリム曲線を
-    実際に評価する)ので、要素サイズの当たりを付けるような毎回の用途ではなく、
-    「はみ出しているか」の判定のように**間違えると嘘の結論が出る場所**で使うこと。
-
-    `useTriangulation=False` は `_shape_bbox` と同じ理由(そちらの docstring)。
-    """
-    from OCP.Bnd import Bnd_Box
-    from OCP.BRepBndLib import BRepBndLib
-
-    box = Bnd_Box()
-    BRepBndLib.AddOptimal_s(shape, box, False, False)
-    box.SetGap(0.0)
-    if box.IsVoid():
-        raise ValueError("bounding box is empty (null shape?)")
-    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
-    return (
-        np.array([xmin, ymin, zmin], dtype=float),
-        np.array([xmax, ymax, zmax], dtype=float),
-    )
 
 def _cli() -> int:
     import argparse

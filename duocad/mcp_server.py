@@ -231,7 +231,9 @@ class DocumentTools:
             }
             if include_bbox:
                 entry["bbox"] = (
-                    meshbody.bbox(body.mesh) if is_mesh else kernel.bounding_box(body.shape)
+                    meshbody.bbox(body.mesh)
+                    if is_mesh
+                    else kernel.bounding_box(body.shape, cache=document.bbox_cache)
                 )
             bodies.append(entry)
 
@@ -332,7 +334,9 @@ class DocumentTools:
             "edge_count": described["edge_count"],
             "faces_by_type": described["faces_by_type"],
             "volume": query.volume(body.shape),
-            "bbox": kernel.bounding_box(body.shape),
+            "bbox": kernel.bounding_box(
+                body.shape, cache=self.session.document.bbox_cache
+            ),
         }
 
     def _find_body(self, body_id: str):
