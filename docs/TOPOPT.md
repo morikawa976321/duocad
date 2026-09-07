@@ -3347,11 +3347,30 @@ design_space 17.6 / anchor 50.9 秒。**増分の大半は [12] ではない** �
 **円柱・平面だけの部品では両者はほとんど一致する**(同じ文書の他の3ボディは 18.6 対 17.2mm
 = 弦が円の内側に来るぶんだけ)。**曲面の種類によって壊れ方が変わるので気づきにくい。**
 
-ガードは `_shape_bbox_trimmed`(`AddOptimal`)へ移した。**要素サイズの当たりを付ける
-`_shape_bbox` はそのまま**である —— `AddOptimal` は実測 137ms 対 0.1ms と遅く、そちらは
-外れても粗さが変わるだけで嘘の結論は出ないため。`check_design_space.py` [9] が
-「罠が現に存在すること」「ガードが罠を踏まない口を呼んでいること」の両方を固定している
-(呼び先を戻すと変異検査で1件だけ落ちる)。
+`kernel.bounding_box` と `voxelize._shape_bbox` は**両方とも `AddOptimal`** で取る
+(2026-09-07)。`check_design_space.py` [9] と `check_voxelize.py` [10]、
+`tests/test_kernel_bbox.py` が、どちらの bbox も三角形分割の節点と一致することを固定する。
+
+**`AddOptimal` は繰り返しても速くならない**(OCCTは内部で結果を持たない。実測: 11ボディで
+`Add` 0.09ms 対 `AddOptimal` 178ms = 約2000倍)。そこで繰り返し呼ぶ経路は
+`kernel.BoundingBoxCache` に載せてある —— `Document` が1つ持ち(`document.bbox_cache`)、
+文書を差し替えると `Document` ごと捨てられる。実測(`models/hanger_bar_attachment.json`、
+`optimize_run.resolution_limits` の定常状態の中央値):
+
+| 測り方 | 1回あたり |
+|---|---|
+| `Add`(差し替え前) | 0.56ms |
+| `AddOptimal` + キャッシュ | 0.50ms |
+| `AddOptimal` キャッシュ無し | **145ms** |
+
+**初回のコストは消えない**(キャッシュは1つも減らさない)。実測: 11ボディの
+`describe_document(include_bbox=True)` が初回 190ms・2回目 7.5ms。29%のボディの寸法が
+最大9倍狂っているほうが害が大きい、という判断でこれを受け入れてある(2026-09-07 ユーザー決定)。
+
+**`TopoDS_Shape` は `hash` が一致しても `__eq__` が False を返す**ので、素の `dict` や
+`lru_cache` は**1回も当たらない**(遅いままメモリだけ増え、動いてはいるので気づかない)。
+鍵は `IsSame` で引く(`kernel._ShapeKey`)。**`IsSame` は Orientation を見ない**ため、
+この同一性を bbox 以外へ流用すると静かに壊れる。
 
 ## 実測を撮り直す道具(受入検査ではない)
 
@@ -3473,10 +3492,9 @@ design_space 17.6 / anchor 50.9 秒。**増分の大半は [12] ではない** �
     箱をすべて包み(切り落としが無い)、その外へ弦誤差(0.2mm)より大きくは膨らまないこと。
     題材は箱・円筒に加えて**トリムされたトーラス片**(`BRepPrimAPI_MakeTorus(100, 10, pi/6)`)。
     箱・円柱・平面だけでは `BRepBndLib` の `Add` と `AddOptimal` が一致してしまい、
-    bbox の取り方を変えても検査が1件も動かない。**トーラス片の膨らみ(実測9.063mm)だけは
-    今の `Add` では許容差に収まらないので、`check_known_gap` で「既知の未達」として扱う**
-    —— 合否には数えないが、`AddOptimal_s` へ替えて成立するようになると不合格で知らせる
-    (`tests/test_kernel_bbox.py` の `xfail(strict=True)` が `kernel.bounding_box` 側で同じ役をする)。
+    bbox の取り方を変えても検査が1件も動かない。トーラス片の膨らみは実測 0.011mm
+    (`Add` に戻すと 9.063mm になって落ちる)。`tests/test_kernel_bbox.py` が
+    `kernel.bounding_box` 側で同じ役をする。
 
 `check_anchor.py` が見ているもの(合成ソリッドだけで、私物STEPには依存しない):
 
@@ -3575,14 +3593,19 @@ design_space 17.6 / anchor 50.9 秒。**増分の大半は [12] ではない** �
   定義が無く、既存のボクセル描画(`BoxGeometry(1,1,1)`)も1要素=1単位の規約なので、それに
   合わせた。実寸を変えたいときはこの1点(`spacing`)を差し替えればよい。
 
-- **格子を決めるための bbox は `BRepBndLib.Add_s(shape, box, useTriangulation=False)` で取る。**
+- **格子を決めるための bbox は `BRepBndLib.AddOptimal_s(shape, box, False, False)` で取る**
+  (第3引数が `useTriangulation`、第4引数が `useShapeTolerance`)。`Add_s` にすると
+  面のトリムを見ない(上記「OCCT の bbox はトリムを見ない」)。`useTriangulation` を
   `True` にすると、形状に**既に付いている三角形分割**があればそれを使う。OCCT は
   三角形分割を形状に貼り付けたままにするので、同じ形状オブジェクトに2回ボクセル化をかけると
   「1回目=素の幾何の bbox / 2回目以降=前回の三角形分割の bbox」と値が変わり、
   そこから決まる要素サイズ・分割の細かさ・三角形群まで変わる。2026-08-31に実測で発見:
   実物STEPで三角形数が呼ぶたびに 62,264 → 62,168 → 62,138 と動いた(`Cylinder(10,30)` でも
   1回目312枚・2回目以降308枚)。**BRepMesh 自体は deviation を固定すれば決定的**なので、
-  非決定性の源は分割器ではなく bbox の取り方だった。`False` は実物STEP(231面)で0.003秒。
+  非決定性の源は分割器ではなく bbox の取り方だった。**`AddOptimal` はトリム曲線を実際に
+  評価するので遅い**(実測: `models/` の実物ボディ1つで 18〜60ms)。`voxelize` と
+  `design_space.derive` は1回の導出につき数回しか呼ばないのでそのまま呼んでいる ——
+  繰り返し呼ぶ `kernel.bounding_box` 側だけが `BoundingBoxCache` を通る。
 - **占有判定は偶奇ではなく巻き数で数え、そのうえでレイをずらし、縮退したらずらし幅を
   変えてやり直す。** 3つとも要る。巻き数だけだと円錐の頂点(三角形が数十枚集まる点)を
   レイが貫いたときに守れず、ずらしだけだと共有辺の二重計上で列がまるごと反転し、

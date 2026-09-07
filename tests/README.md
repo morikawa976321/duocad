@@ -219,16 +219,18 @@ tessellate(shape, deviation: float) -> {...}
 - `read_step`/`read_step_text` は上記「実測済みの危険な落とし穴」の安全弁を持つ唯一の場所。
 - `write_stl` の `deviation` は第2引数（絶対mm）として渡し、第3引数 `isRelative` は必ず
   `False`。
-- `bounding_box` は**幾何から**求める（`useTriangulation=False`）。既定の `True` だと
-  既存の三角形分割を使うため、`tessellate` を呼んだ後だけ違う値が返るという再現性の無い
-  挙動になる。`SetGap(0.0)` を入れてもOCCTは内部許容差ぶん（実測1e-7mm）膨らませるので、
-  厳密な寸法の根拠には使わない。
+- `bounding_box` は**幾何から**求める（`BRepBndLib::AddOptimal`・`useTriangulation=False`）。
+  `Add` は面のトリムを見ないので、トリムされた曲面の部品で寸法が最大9倍に化ける。
+  `useTriangulation` を既定の `True` にすると既存の三角形分割を使うため、`tessellate` を
+  呼んだ後だけ違う値が返るという再現性の無い挙動になる。`SetGap(0.0)` を入れてもOCCTは
+  内部許容差ぶん（実測1e-7mm）膨らませるので、厳密な寸法の根拠には使わない。
 - `bounding_box` が返す寸法は `test_kernel_bbox.py` が**三角形分割の節点**（必ず真の面の上に
-  ある）と突き合わせて固定している。どの形でも三角形の頂点を1つも切り落とさず、トリムされた
-  曲面を持たない形（箱・円筒・円錐）では膨らみが `DEFAULT_DEVIATION` 以内。**トリムされた
-  トーラス片だけは `BRepBndLib::Add` が下地のサーフェスで囲むため 9.06mm 膨らみ、
-  `xfail(strict=True)` で留めてある** — トリムを見る取り方（`AddOptimal`）へ替えると
-  XPASS で落ちるので、そのとき marker を外す。
+  ある）と突き合わせて固定している。トリムされたトーラス片を含めどの形でも、三角形の頂点を
+  1つも切り落とさず、膨らみが `DEFAULT_DEVIATION` 以内。
+- `bounding_box(shape, cache=document.bbox_cache)` の同一性と寿命は `test_bbox_cache.py`。
+  `AddOptimal` は1形状 18〜60ms かかり繰り返しても速くならないので、繰り返し呼ぶ経路は
+  キャッシュが当たることに依存している。**`TopoDS_Shape` は hash が一致しても `__eq__` が
+  False** なので素の `dict` では1回も当たらない（`kernel._ShapeKey` が `IsSame` で引く）。
 
 ## `duocad/sketch.py`
 
