@@ -2812,7 +2812,7 @@ LEFT が隠していたものが見える。
 | `duocad/topopt/__init__.py` | パッケージの入口。**サブモジュールを import しない**(`import duocad` の費用に scipy / skimage を足さないため)。`OUTPUT_DIR`(= `duocad/topopt/output/`)だけを公開する |
 | `topopt_checks/check_simp.py` | **受入検査(合否そのもの)**。SIMP側を assert する |
 | `topopt_checks/check_mesh.py` | **受入検査(合否そのもの)**。メッシュ化側(下記10項目。2026-09-05にガウシアン平滑化+塗り直しの検査を追加)を assert する |
-| `topopt_checks/check_voxelize.py` | **受入検査(合否そのもの)**。ボクセル化側(下記9項目)を assert する |
+| `topopt_checks/check_voxelize.py` | **受入検査(合否そのもの)**。ボクセル化側(下記10項目)を assert する |
 | `topopt_checks/check_anchor.py` | **受入検査(合否そのもの)**。面アンカー側(下記8項目)を assert する |
 | `topopt_checks/check_absolute_volume.py` | **受入検査(合否そのもの)**。体積目標を絶対量(mm^3)で指定する口を assert する |
 | `topopt_checks/check_filter_radius.py` | **受入検査(合否そのもの)**。密度フィルタ半径を mm で指定する口を assert する |
@@ -3469,6 +3469,14 @@ design_space 17.6 / anchor 50.9 秒。**増分の大半は [12] ではない** �
 9. **表面までの最短距離(`closest_triangle`)** — stage2 が面へ戻る経路。退化した三角形での
    反例(上記)/ 三角形上を細かく標本化した参照値との突き合わせ(自前 ≤ 参照、差は標本の
    刻み以内)/ 三角形の重心から `face_index` で元の面へ戻れること、の3つ。
+10. **トリムされた曲面のソリッドの bbox が実寸を返す** — `_shape_bbox` の6面が、三角形分割の
+    箱をすべて包み(切り落としが無い)、その外へ弦誤差(0.2mm)より大きくは膨らまないこと。
+    題材は箱・円筒に加えて**トリムされたトーラス片**(`BRepPrimAPI_MakeTorus(100, 10, pi/6)`)。
+    箱・円柱・平面だけでは `BRepBndLib` の `Add` と `AddOptimal` が一致してしまい、
+    bbox の取り方を変えても検査が1件も動かない。**トーラス片の膨らみ(実測9.063mm)だけは
+    今の `Add` では許容差に収まらないので、`check_known_gap` で「既知の未達」として扱う**
+    —— 合否には数えないが、`AddOptimal_s` へ替えて成立するようになると不合格で知らせる
+    (`tests/test_kernel_bbox.py` の `xfail(strict=True)` が `kernel.bounding_box` 側で同じ役をする)。
 
 `check_anchor.py` が見ているもの(合成ソリッドだけで、私物STEPには依存しない):
 
@@ -3601,7 +3609,7 @@ design_space 17.6 / anchor 50.9 秒。**増分の大半は [12] ではない** �
   細かくしたいときは解像度を上げる(所要は要素数に比例するので stage1 側は律速にならない
   —— 効くのは SIMP 側で、engine `simp-cost-scales-with-fourth-power-of-resolution`)。
 
-## 変異検査の記録(2026-08-31〜2026-09-05・9節を1表に畳んだもの)
+## 変異検査の記録(2026-08-31〜2026-09-07・9節を1表に畳んだもの)
 
 **各受入検査を書いた時点で、対象コードに変異(意図的な破壊)を1つずつ当てて、狙った検査が
 実際に落ちることを確かめた記録。** 値打ちは「この検査には中身がある」の証明で、一度確認
@@ -3658,6 +3666,7 @@ design_space 17.6 / anchor 50.9 秒。**増分の大半は [12] ではない** �
 | 〃 | 〃 | M4 OC退化ガードを外す | `check_absolute_volume.py`[3](3件) |
 | 09-05 | `design_space.py` → `check_design_space.py`[14](空の条件面。**組み込み済みで毎回自動実行**) | M1 `condition_face_diagnoses`を常に`[]`に差し替え | 14-5(早期returnを外すと`_require_nodes`の`ValueError`に戻ることを見る) |
 | 〃 | 〃 | M2 `run_topopt`の戻り値から`empty_condition_faces`を差し替え | 14-7(粗い段ガードを外すと`AttributeError`に戻ることを見る) |
+| 09-07 | `kernel.bounding_box`/`voxelize._shape_bbox` → `tests/test_kernel_bbox.py`・`check_voxelize.py`[10] | M1 両方を`BRepBndLib::AddOptimal_s`へ差し替え | **狙った2件だけが落ちる**。`pytest -q`(収集1,039件)は `1 failed, 1036 passed, 2 skipped` で、落ちたのは XPASS(strict) の `test_..._for_a_trimmed_torus_segment` だけ。`check_voxelize.py` も[10]の1件だけ(膨らみ 9.063 → 0.011mm)。**この題材を入れる前は同じ差し替えで pytest が全部緑・受入検査の MEASURED も1つも動かなかった**(同日の実測。差し替えを戻すと `1036 passed, 2 skipped, 1 xfailed`) |
 
 **08-31の生存7個(等価変異と判断した根拠)**: レイのずらしをX軸だけ切る(Y軸だけで縮退は
 外れる)/ `searchsorted`をright→left(交点が三角形bboxの端と厳密一致時のみ差)/ 塗る区間の

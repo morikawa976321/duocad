@@ -36,13 +36,20 @@
    `center_of`)が同じ中心を返すことを照合する — 規約の定義が分裂すると片方だけ壊れる。
 8. **縮退したレイでも壊れない** — 面や辺が列の中心と厳密に一致する姿勢で、レイのずらしを
    切っても体積が厳密に一致する(巻き数で数えていることの確認。偶奇だと5%低く出る)。
+9. **表面までの最短距離(`closest_triangle`)** — stage2 が面へ戻る経路。退化した三角形での
+   反例 / 細かく標本化した参照値との突き合わせ / 三角形の重心から `face_index` で元の面へ戻る。
+10. **トリムされた曲面のソリッドの bbox が実寸を返す** — `_shape_bbox` を三角形分割の箱と
+    突き合わせる(三角形の頂点は必ず真の面の上にあるので、実寸の独立した根拠になる)。
+    **トーラス片の膨らみだけは今の実装では許容差に収まらず、既知の未達として扱う**
+    (`check_known_gap`。合否には数えないが、成立するようになったら不合格で知らせる)。
 
-所要は約2秒(SIMPは回さないので check_simp / check_mesh より桁違いに速い)。
+所要は約4秒(SIMPは回さないので check_simp / check_mesh より桁違いに速い)。
 """
 
 from __future__ import annotations
 
 import json
+import math
 import sys
 import time
 
@@ -62,6 +69,7 @@ from build123d import Box, Cone, Cylinder, Pos, Rotation  # noqa: E402
 from scipy.spatial import cKDTree  # noqa: E402
 from OCP.BRep import BRep_Builder  # noqa: E402
 from OCP.BRepClass3d import BRepClass3d_SolidClassifier  # noqa: E402
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeTorus  # noqa: E402
 from OCP.gp import gp_Pnt  # noqa: E402
 from OCP.TopAbs import TopAbs_FACE, TopAbs_IN, TopAbs_ON  # noqa: E402
 from OCP.TopExp import TopExp_Explorer  # noqa: E402
@@ -72,6 +80,7 @@ import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理
 from duocad.topopt import voxelize as vx  # noqa: E402
 
 FAILURES: list[str] = []
+KNOWN_GAPS: list[str] = []
 RESULTS: dict[str, object] = {}
 
 # 曖昧と見なす帯(要素サイズに対する比)。三角形分割の既定の弦誤差(2%)より大きく取る。
@@ -83,6 +92,23 @@ def check(name: str, ok: bool, detail: str) -> None:
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
     if not ok:
         FAILURES.append(f"{name}: {detail}")
+
+
+def check_known_gap(name: str, holds: bool, detail: str) -> None:
+    """**成立してほしいが、いまの実装では成立しない**検査(pytest の `xfail(strict=True)` と同じ)。
+
+    期待値の側が正しく実装が追いついていないものだけに使う。**成立するようになったら
+    不合格として報告する** —— 実装が直った瞬間に気づけないと、この節は誰にも読まれないまま
+    嘘の期待値として残る。通常の未達(=バグ)には使わないこと。
+    """
+    if holds:
+        print(f"  [FAIL] {name}(既知の未達が解消した): {detail}", flush=True)
+        FAILURES.append(
+            f"{name}: 既知の未達が解消した。check_known_gap を check へ格上げすること ({detail})"
+        )
+        return
+    print(f"  [KNOWN-GAP] {name}: {detail}", flush=True)
+    KNOWN_GAPS.append(f"{name}: {detail}")
 
 
 def _faces_of(shape) -> list:
@@ -884,6 +910,71 @@ def check_closest_triangle() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# 10. トリムされた曲面のソリッドの bbox が実寸を返す
+# ---------------------------------------------------------------------------
+# 三角形分割の弦誤差[mm]。**許容差にも同じ値を使う** —— 三角形分割の箱が真の寸法より
+# 小さく出る量の上界がこれだから(実測の膨らみは箱0.000mm・円筒0.012mm)。
+TRIMMED_BBOX_DEVIATION = 0.2
+
+
+def _torus_segment():
+    """トリムされたトーラス面だけでできたソリッド(半径100mmの円に沿った1/12周の曲がったバー)。
+
+    `BRepPrimAPI_MakeTorus` の第3引数は掃引角。**面のトリムを見ない bbox はここで化ける** ——
+    実寸 32.06 x 55.00 x 20.00mm に対して `BRepBndLib::Add` は 41.12 x 59.53 x 20.00mm を返す
+    (2026-09-07実測)。この検査ファイルの他の題材(箱・円筒・円錐)ではこの差が出ない。
+    """
+    return BRepPrimAPI_MakeTorus(100.0, 10.0, math.pi / 6).Shape()
+
+
+def _bbox_outward_mm(shape, deviation: float) -> np.ndarray:
+    """`_shape_bbox` の6面が三角形分割の箱より**どれだけ外側にあるか**[mm]。負なら内側。
+
+    三角形の頂点は必ず真の面の上にあるので、三角形分割の箱は真の寸法を超えない。
+    正しい bbox はそれを必ず包み(6面とも0以上)、弦が内側へ入るぶん(≤ deviation)より
+    大きくは膨らまない。
+    """
+    solid = vx._unwrap(shape)
+    low, high = vx._shape_bbox(solid)
+    tri_low, tri_high = vx.triangles_from_shape(solid, deviation=deviation).bbox
+    return np.concatenate([tri_low - low, high - tri_high])
+
+
+def check_trimmed_curved_bbox() -> None:
+    print("[10] トリムされた曲面のソリッドの bbox が実寸を返す")
+    deviation = TRIMMED_BBOX_DEVIATION
+    subjects = (
+        (Box(40, 20, 10), "箱"),
+        (Cylinder(10, 30), "円筒"),
+        (_torus_segment(), "トーラス片"),
+    )
+    slack: dict[str, float] = {}
+    for shape, name in subjects:
+        outward = _bbox_outward_mm(shape, deviation)
+        slack[name] = float(outward.max())
+        check(
+            f"{name}: bbox が三角形の頂点を1つも切り落とさない",
+            float(outward.min()) >= -1e-9,
+            f"最も内側の面 {float(outward.min()):+.6f}mm",
+        )
+
+    for name in ("箱", "円筒"):
+        check(
+            f"{name}: bbox の膨らみが三角形分割の弦誤差以内",
+            slack[name] <= deviation,
+            f"膨らみ {slack[name]:.6f}mm (許容 {deviation}mm)",
+        )
+
+    check_known_gap(
+        "トーラス片: bbox の膨らみが三角形分割の弦誤差以内",
+        slack["トーラス片"] <= deviation,
+        f"膨らみ {slack['トーラス片']:.6f}mm (許容 {deviation}mm)",
+    )
+    RESULTS["trimmed_torus_bbox_slack_mm"] = round(slack["トーラス片"], 6)
+    RESULTS["untrimmed_bbox_slack_mm"] = round(max(slack["箱"], slack["円筒"]), 6)
+
+
 def main() -> int:
     print("=" * 72)
     print("check_voxelize.py : B-repソリッド → 規則格子(voxelize.py)の受入検査")
@@ -898,11 +989,16 @@ def main() -> int:
     check_cell_center_convention()
     check_degenerate_rays()
     check_closest_triangle()
+    check_trimmed_curved_bbox()
     RESULTS["total_seconds"] = round(time.perf_counter() - started, 1)
 
     print("\n" + "=" * 72)
     print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))
     print("=" * 72)
+    if KNOWN_GAPS:
+        print(f"既知の未達 {len(KNOWN_GAPS)}件(合否には数えない)")
+        for gap in KNOWN_GAPS:
+            print(f"  - {gap}")
     if FAILURES:
         print(f"NG: {len(FAILURES)}件が不合格")
         for failure in FAILURES:

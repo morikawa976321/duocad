@@ -223,6 +223,12 @@ tessellate(shape, deviation: float) -> {...}
   既存の三角形分割を使うため、`tessellate` を呼んだ後だけ違う値が返るという再現性の無い
   挙動になる。`SetGap(0.0)` を入れてもOCCTは内部許容差ぶん（実測1e-7mm）膨らませるので、
   厳密な寸法の根拠には使わない。
+- `bounding_box` が返す寸法は `test_kernel_bbox.py` が**三角形分割の節点**（必ず真の面の上に
+  ある）と突き合わせて固定している。どの形でも三角形の頂点を1つも切り落とさず、トリムされた
+  曲面を持たない形（箱・円筒・円錐）では膨らみが `DEFAULT_DEVIATION` 以内。**トリムされた
+  トーラス片だけは `BRepBndLib::Add` が下地のサーフェスで囲むため 9.06mm 膨らみ、
+  `xfail(strict=True)` で留めてある** — トリムを見る取り方（`AddOptimal`）へ替えると
+  XPASS で落ちるので、そのとき marker を外す。
 
 ## `duocad/sketch.py`
 
