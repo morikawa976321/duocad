@@ -18,10 +18,10 @@ DEVIATION = kernel.DEFAULT_DEVIATION
 
 
 def _torus_segment():
-    """トリムされたトーラス面だけでできたソリッド(半径100mmの円に沿った1/12周の曲がったバー)。
+    """`BRepPrimAPI_MakeTorus` の第3引数は掃引角。
 
-    `BRepPrimAPI_MakeTorus` の第3引数は掃引角。**箱・円柱・平面では `BRepBndLib` の `Add` と
-    `AddOptimal` が一致してしまう**ので、bbox の取り方を見るにはこの題材が要る。
+    箱・円柱・平面では `BRepBndLib` の `Add` と `AddOptimal` が一致するので、bbox の取り方を
+    見るにはトリムされた曲面の題材が要る。
     """
     return BRepPrimAPI_MakeTorus(100.0, 10.0, math.pi / 6).Shape()
 
@@ -37,11 +37,10 @@ UNTRIMMED = ["box", "cylinder", "cone"]
 
 
 def _triangulation_box(shape, deviation: float) -> tuple[list[float], list[float]]:
-    """三角形の**節点から**作った [min, max]。`kernel.tessellate` の `bbox` は使わない。
+    """三角形の節点から作った [min, max]。節点は必ず真の面の上にあるので真の寸法を超えない。
 
-    節点は必ず真の面の上にあるので、この箱は真の寸法を超えない(弦が内側へ入るぶんだけ
-    小さく出る)。ここで `payload["bbox"]` を使うと、そちらの作り方が変わった日に
-    この検査が黙って循環参照になる。
+    `payload["bbox"]` を使わないのは意図的で、そちらの作り方が変わった日にこの検査が
+    黙って循環参照になるため。
     """
     payload = kernel.tessellate(shape, deviation=deviation)
     lows = [math.inf] * 3
