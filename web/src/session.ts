@@ -851,7 +851,8 @@ export interface OptimizeDebugPayload {
 }
 
 export interface OptimizeDebugAnchor {
-  face: number
+  /** その側の条件面すべて(拘束側なら全拘束面)。点群は**側ごとに1つへまとめてある**。 */
+  faces: number[]
   count: number
   points: number[]
   area_mm2: number

@@ -767,23 +767,27 @@ def _debug_anchor_payload(stage: str, space) -> Optional[dict]:
         return None
     node_grid = table.node_grid
     out: dict = {"kind": "anchors", "stage": stage, "grid": space.grid.as_dict()}
+    # **側ごとに1つの点群へまとめる**(面ごとに分けない)。画面が描くのは「拘束側の節点」と
+    # 「荷重側の節点」の2色で、面の別は色に出ない —— 分けて配ると受け取る側に
+    # 面ごとのループが増えるだけで、見えるものは同じになる。
     for key, faces in (("fixed", space.fixed_faces), ("load", space.load_faces)):
-        entries = []
+        chunks = []
+        area = 0.0
         for face_index in faces:
             anchor = table.anchors.get(int(face_index))
             if anchor is None:
-                entries.append(
-                    {"face": int(face_index), "count": 0, "points": [], "area_mm2": 0.0}
-                )
                 continue
-            points = np.asarray(node_grid.positions_of(anchor.nodes), dtype=float)
-            entries.append({
-                "face": int(face_index),
-                "count": int(points.shape[0]),
-                "points": [float(v) for v in points.ravel().tolist()],
-                "area_mm2": float(anchor.total_area),
-            })
-        out[key] = entries
+            chunks.append(np.asarray(node_grid.positions_of(anchor.nodes), dtype=float))
+            area += float(anchor.total_area)
+        points = (
+            np.concatenate(chunks, axis=0) if chunks else np.zeros((0, 3), dtype=float)
+        )
+        out[key] = {
+            "faces": [int(f) for f in faces],
+            "count": int(points.shape[0]),
+            "points": [float(v) for v in points.ravel().tolist()],
+            "area_mm2": area,
+        }
     return out
 
 

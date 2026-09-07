@@ -203,7 +203,9 @@ model.initial_density(0.3)  # SIMP へ渡す初期密度場(保持=1 / 障害物
 
 ### 端から端まで
 
-`anchor.run_pipeline(shape=soup, design_mask=mask, design_grid=grid, fixed_face=..., load_face=...)`。
+`anchor.run_pipeline(shape=soup, design_mask=mask, design_grid=grid, fixed_faces=..., load_faces=...)`。
+面は `int` 1つでも並びでも受ける。荷重の向きは `force`(全ての荷重面で共有する1本)か
+`forces`(`load_faces` と同じ並びの、面ごとの力ベクトル[N])のどちらか一方。
 `design_mask` と `design_grid` は両方渡すか両方省略する(片方だけは `ValueError`)。渡したときは
 **`shape` は塊ではなく面アンカーの対象**になり、`shape` の省略は許さない。あわせて `keep` /
 `obstacle`(保持ソリッド / 除外ソリッド)をどちらの経路でも渡せるようにした(どちらも同じ格子に
@@ -261,8 +263,9 @@ volfrac 0.3、30反復。
 ```python
 import design_space as ds
 
-cond  = ds.Conditions(keep=保持ソリッド, fixed_face=拘束面の面添字, load_face=荷重面の面添字,
+cond  = ds.Conditions(keep=保持ソリッド, fixed_faces=拘束面の面添字, load_faces=荷重面の面添字,
                       obstacle=除外ソリッド, anchor_shape=None)   # anchor_shape 省略時は keep
+# fixed_faces / load_faces は int 1つでも並びでもよい(内部でタプルへ均す)
 space = ds.derive(cond, margin_ratio=0.25, elements_long_axis=40)  # → DesignSpace
 out   = ds.run_topopt(space, volfrac=0.3, max_iter=60, stl_path=...)  # 端から端まで
 ```
@@ -819,8 +822,8 @@ engine `benchmark-seconds-swing-with-thermal-state`。**行の間で比べる用
 `AnchorTable.node_ids`(`table.fixed_dofs` / `table.load_vector` / `table.element_mask` が
 内部で通る)は `_require_nodes` を呼び、**空の面が1つでも混ざっていたら `ValueError` で落ちる**
 (`20260903-2234` で入った安全策。`check_anchor.py` [6] が「黙って0にせず落ちる」ことを検査で
-固定している)。したがって `anchor.run_pipeline` は `table.fixed_dofs(fixed_face)` /
-`table.load_vector(load_face, force)` の時点で(`simp.optimize` を呼ぶ**前**に)例外を投げる ——
+固定している)。したがって `anchor.run_pipeline` は `table.fixed_dofs(fixed_faces)` /
+`table.load_vector(load_faces, force)` の時点で(`simp.optimize` を呼ぶ**前**に)例外を投げる ——
 `simp` の残差検算まで届く前に、もっと手前で落ちていた。実測(下の合成題材、要素サイズ5mm):
 
 ```
@@ -845,14 +848,16 @@ ValueError: 指定した面に格子節点が1つも付いていない: 面7(pla
   - `absorbed_by_faces` —— 稜線の規則(最も多く面積を配った面が持ち主)でこの面の
     `raw_node_ids`(持ち主を決める前に配った先)を実際に持っていった面。**「別の面を選ぶ」の
     具体名**。標本点が1つも節点の球に入らなかった極端に小さい面では空リストになる。
-- **`AnchorTable.condition_face_diagnoses(fixed_face, load_face) -> list[dict]`** —— 上を
-  `"side"`(`"fixed"`/`"load"`)つきでまとめる。**両方とも空でなければ `[]`**。
+- **`AnchorTable.condition_face_diagnoses(fixed_faces, load_faces) -> list[dict]`** —— 上を
+  `"side"`(`"fixed"`/`"load"`)つきでまとめる。**1枚も空でなければ `[]`**。面は
+  `int` 1つでも並びでも受ける。
 - **`anchor.format_condition_face_warning(diagnoses) -> str`** —— 上を1つの日本語文にする。
 - `anchor.run_pipeline` は `table = build_anchors(...)` の直後、`table.fixed_dofs` /
   `table.load_vector` を呼ぶ**前**にこれを呼ぶ。1件以上あれば `stderr` に印字したうえで
   **`simp.optimize` を呼ばずに早期return**する。戻り値は
-  `{"model", "table", "empty_condition_faces", "warning", "fixed_face", "load_face",
+  `{"model", "table", "empty_condition_faces", "warning", "fixed_faces", "load_faces",
   "timings", "result": None, "solid": None, "void": None, "surface": None, "stl": None}`
+  (最後まで走った戻り値にはこれに加えて `"load_total"`(荷重の大きさの総和[N])が入る)
   (voxelize と面アンカーはこの時点で完了しているので `model` / `table` / `timings` はある)。
   通常どおり最後まで走った戻り値では **`"empty_condition_faces"` は常に `[]`**
   (既存の呼び出し側は無視してよい。新しいキーが1つ増えただけ)。
@@ -1204,10 +1209,10 @@ M·c/I を比べた。測る断面は**根元そのものではなく梁せい1�
 「条件の点群の最長辺 × 比率」なので、②を既定の 0.25 のままにすると長辺 182mm に対して
 余白が 45mm 付き、**厚み 12mm の板が厚さ 100mm の塊になって薄板でなくなる。**
 
-**③で「拘束2箇所・荷重2箇所を、別々の面添字・別々の力の向きで」は入れられなかった。**
-`Conditions` は `fixed_face` / `load_face` を **int で1つずつ**しか持たず、`run_pipeline` は
-力を1本のベクトルでしか受けない。フィールドを増やすと `check_design_space.py` の検査[5]
-(`Conditions` のフィールド集合そのものを assert している。`20260903-2234` の契約)が落ちる。
+**③で「拘束2箇所・荷重2箇所を、別々の面添字・別々の力の向きで」は入れられなかった**
+(この題材を組んだ時点の話。**2026-09-07に解消済み** —— `Conditions.fixed_faces` /
+`load_faces` は何枚でも受け、`run_pipeline(forces=...)` が面ごとの力ベクトルを取る。
+題材そのものは基準線が乗っているので組み直していない)。
 代わりに **1枚の U 字面**(中央に上へ抜ける切り欠きを入れた C 形パッドの x 最小面)で支持を
 2本の脚に分けてある —— 塊の上半分では拘束アンカーの要素が**6近傍で2成分**に分かれることを
 [12-5] が解像度 14/16/18/20/30/44 で確かめている(他の3題材は1成分)。**力の向きを2つにする
@@ -1849,7 +1854,8 @@ result.report               # stress.SafetyReport
 無次元のまま変えていない**。`load_n` は `stress.UnitScale.for_model(..., load_n=conditions.load_n)`
 が応力を実単位[MPa]へ換算するときにだけ参照する。`check_design_space.py` [5] の
 フィールド集合の assert を更新した(5つに増えた: `keep` / `fixed_face` / `load_face` /
-`obstacle` / `anchor_shape` / `load_n`)。
+`obstacle` / `anchor_shape` / `load_n`。**面の2つは2026-09-07に複数形へ改名**して
+`fixed_faces` / `load_faces` になっているが、口の数は6のまま)。
 
 ### `keep_model` を2層に通す
 

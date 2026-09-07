@@ -110,8 +110,9 @@ export interface OptimizeDebugVoxels {
  */
 export interface OptimizeDebugAnchors {
   grid: OptimizeDebugGrid
-  fixed: { face: number; count: number; points: number[] }
-  load: { face: number; count: number; points: number[] }
+  /** 拘束側 / 荷重側の節点を**側ごとに1つへまとめた**点群(面の別は色に出ないため)。 */
+  fixed: { faces: number[]; count: number; points: number[] }
+  load: { faces: number[]; count: number; points: number[] }
 }
 
 /**
