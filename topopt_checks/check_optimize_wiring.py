@@ -284,7 +284,18 @@ def check_load_lands_on_the_chosen_face(session, out) -> None:
         f"{measured['limit_mm']:.3f}mm の {separation / measured['limit_mm']:.1f}倍"
         "(荷重面と拘束面を取り違えたら必ず落ちる)",
     )
-    RESULTS["anchor_check"] = {k: round(v, 4) for k, v in measured.items()}
+    # **面ごとの距離は並びで来る**(`_check_anchor_centroids` の `*_mm_each`)。
+    # 丸めをスカラー前提で書くと `TypeError` で落ちる —— 条件面が複数枚あるのは通常の入力である。
+    RESULTS["anchor_check"] = {
+        key: [round(item, 4) for item in value] if isinstance(value, list) else round(value, 4)
+        for key, value in measured.items()
+    }
+    check(
+        "面ごとの距離が条件面の枚数ぶん出ている(合計や平均で潰していない)",
+        len(measured["fixed_mm_each"]) == len(session.document.optimize.fixtures)
+        and len(measured["load_mm_each"]) == len(session.document.optimize.loads),
+        f"拘束 {measured['fixed_mm_each']} / 荷重 {measured['load_mm_each']}",
+    )
 
 
 def check_progress(events) -> None:

@@ -505,8 +505,14 @@ def derive(
     # **格子の外は voxelize が見ていない。** 保持が格子から出ていると、はみ出しが件数にも
     # 例外にもならないまま黙って消える。ここで先に落とす(B-rep の bbox で見る —— 三角形の
     # 弦は真の面より内側に来るので、soup の bbox だと曲面のぶんだけ甘くなる)。
+    #
+    # **`_shape_bbox` ではなく `_shape_bbox_trimmed` を使う。** 前者はトリムを見ずに下地の
+    # サーフェス全体で囲むので、トーラス面の部品が実寸の10倍以上に化け、**はみ出していない
+    # 保持をはみ出したと言う**(実測: `models/hanger_bar_attachment.json` が
+    # 35mm角の部品を 482.8mm と報告されて導出できなかった)。ここは間違えると嘘の結論を
+    # 出す場所なので、遅くてもトリムを見るほうを使う。
     grid_lo, grid_hi = grid.world_box()
-    k_lo, k_hi = vx._shape_bbox(vx._unwrap(conditions.keep))
+    k_lo, k_hi = vx._shape_bbox_trimmed(vx._unwrap(conditions.keep))
     if np.any(k_lo < grid_lo - 1e-9) or np.any(k_hi > grid_hi + 1e-9):
         raise DesignSpaceTooSmallError(
             f"保持ソリッド {np.round(k_lo, 3).tolist()} .. {np.round(k_hi, 3).tolist()} が"

@@ -1125,6 +1125,38 @@ def _shape_bbox(shape: Any) -> tuple[np.ndarray, np.ndarray]:
     return np.array([xmin, ymin, zmin]), np.array([xmax, ymax, zmax])
 
 
+
+def _shape_bbox_trimmed(shape: Any) -> tuple[np.ndarray, np.ndarray]:
+    """OCCT の bbox。**面のトリムを尊重する**(`BRepBndLib::AddOptimal`)。
+
+    **`_shape_bbox`(`BRepBndLib::Add`)は下地のサーフェス全体で囲む。** トリムされた
+    トーラス面はドーナツ丸ごと、トリムされた円柱面は無限円柱の輪切り全体で囲まれるので、
+    曲がったバーの一部のような形では**実寸の10倍以上**に化ける(実測: 実寸
+    35.0 x 36.6 x 36.6mm のトーラス6枚の部品が 482.8 x 252.1 x 252.1mm になった。
+    `models/hanger_bar_attachment.json` の `hanger_bar_attatchment_7`)。
+    円柱・平面だけの部品では両者はほとんど一致するので、**曲面の種類によって
+    壊れ方が変わる** —— 気づきにくい。
+
+    こちらは実測で三角形分割の bbox と小数2桁まで一致する。**遅い**(トリム曲線を
+    実際に評価する)ので、要素サイズの当たりを付けるような毎回の用途ではなく、
+    「はみ出しているか」の判定のように**間違えると嘘の結論が出る場所**で使うこと。
+
+    `useTriangulation=False` は `_shape_bbox` と同じ理由(そちらの docstring)。
+    """
+    from OCP.Bnd import Bnd_Box
+    from OCP.BRepBndLib import BRepBndLib
+
+    box = Bnd_Box()
+    BRepBndLib.AddOptimal_s(shape, box, False, False)
+    box.SetGap(0.0)
+    if box.IsVoid():
+        raise ValueError("bounding box is empty (null shape?)")
+    xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+    return (
+        np.array([xmin, ymin, zmin], dtype=float),
+        np.array([xmax, ymax, zmax], dtype=float),
+    )
+
 def _cli() -> int:
     import argparse
 
