@@ -17,6 +17,11 @@
 4. **完了条件1-(b)** コンプライアンスが減少し、終盤10反復の変動が1%未満。
 5. **完了条件1-(c)** z方向に対称な荷重・拘束なら密度場もz対称(相対誤差1e-6以内)。
    プリセット(既定のCG解法)と、小格子の直接解法(こちらは1e-9)の両方で見る。
+6. **void 要素を組み立てから外しても系が変わらない** — `Model(active_mask=...)` の不変条件。
+   **自由自由度の集合が全要素で組んだときと完全に一致する**ことを固定する
+   (性能の話ではなく、除去が「未知数を減らす」以上のことをしていない根拠)。
+   併せて COO の添字の並び・K の分解・自由自由度が孤立していないことを見る。
+   **検出力**: `extra_fixed_dofs` を渡さずに void だけ外すと孤立した自由自由度が出る。
 """
 
 from __future__ import annotations
@@ -268,6 +273,108 @@ def check_symmetry_direct() -> None:
     RESULTS["symmetry_direct_rel_err"] = err
 
 
+# ---------------------------------------------------------------------------
+# 6. void 要素の除去
+# ---------------------------------------------------------------------------
+VOID_GRID = (12, 6, 6)
+
+
+def _void_case() -> tuple[np.ndarray, np.ndarray]:
+    """空要素のある題材。**面ごと落として「浮いた節点」を必ず作る**(そこが焦点)。"""
+    nelx, nely, nelz = VOID_GRID
+    void = np.zeros((nelx, nely, nelz), dtype=bool)
+    void[3:8, 1:5, 1:5] = True  # 内部のくり抜き
+    void[:, :, nelz - 1] = True  # 面ごと落とす
+    floating = simp._floating_dofs(nelx, nely, nelz, void)
+    return void, floating
+
+
+def _orphan_free_dofs(model: simp.Model) -> int:
+    """組み立てに載る要素のどれにも接していない自由自由度の数(K_ff の全零行)。"""
+    active = model.edof if model.active is None else model.edof[model.active]
+    touched = np.zeros(model.ndof, dtype=bool)
+    touched[active.ravel()] = True
+    return int(np.count_nonzero(~touched[model.free]))
+
+
+def check_void_assembly() -> None:
+    nelx, nely, nelz = VOID_GRID
+    print(f"\n[6] void 要素の除去 ({nelx}x{nely}x{nelz})")
+    void, floating = _void_case()
+    full = simp.Model(nelx, nely, nelz, extra_fixed_dofs=floating)
+    lean = simp.Model(nelx, nely, nelz, extra_fixed_dofs=floating, active_mask=~void)
+
+    rows = np.kron(full.edof, np.ones((24, 1), dtype=np.int32)).ravel()
+    cols = np.kron(full.edof, np.ones((1, 24), dtype=np.int32)).ravel()
+    mine_rows, mine_cols = simp._coo_index_arrays(full.edof)
+    check(
+        "COO の添字が ke.ravel() の並びと対応している",
+        np.array_equal(rows, mine_rows) and np.array_equal(cols, mine_cols),
+        f"{mine_rows.size} 項 / dtype={mine_rows.dtype}",
+    )
+
+    # **これが本題。** 空要素を組み立てから外しても、解く未知数は1つも減らない。
+    check(
+        "自由自由度の集合が全要素で組んだときと完全に一致する",
+        np.array_equal(full.free, lean.free) and full.ndof == lean.ndof,
+        f"free {full.free.size} 個が一致 / ndof {full.ndof}",
+    )
+    check(
+        "組み立てる要素だけが減っている",
+        lean._iK.size == 576 * int((~void).sum()) < full._iK.size,
+        f"COO 項 {full._iK.size} -> {lean._iK.size} "
+        f"(空 {int(void.sum())}/{void.size} 要素)",
+    )
+    check(
+        "自由自由度が1つも孤立していない(K_ff に全零行が無い)",
+        _orphan_free_dofs(lean) == 0,
+        f"孤立 {_orphan_free_dofs(lean)} 個",
+    )
+    # **検出力**: `extra_fixed_dofs` と `active_mask` は同じ void から作るという契約
+    # (`Model` の docstring)。片方だけ渡すと上の検査が実際に落ちることを見せる。
+    naive = simp.Model(nelx, nely, nelz, active_mask=~void)
+    check(
+        "契約を破ると上の検査が落ちる(extra_fixed_dofs を渡さない)",
+        _orphan_free_dofs(naive) > 0,
+        f"孤立 {_orphan_free_dofs(naive)} 個",
+    )
+
+    rng = np.random.default_rng(0)
+    rho = rng.random((nelx, nely, nelz))
+    rho[void] = 0.0
+    k_full = full.assemble(rho, 3.0)
+    k_lean = lean.assemble(rho, 3.0)
+    k_void = simp.Model(
+        nelx, nely, nelz, extra_fixed_dofs=floating, active_mask=void
+    ).assemble(rho, 3.0)
+    scale = float(abs(k_full).max())
+    split = float(abs(k_full - (k_lean + k_void)).max())
+    check(
+        "K = (active ぶん) + (void ぶん) が機械精度で成り立つ",
+        split < 1e-12 * scale,
+        f"max|差|={split:.3e} / max|K|={scale:.3e}",
+    )
+    gap = float(abs(k_full - k_lean).max()) / scale
+    check(
+        "残る差は emin 媒質の寄与ぶんだけ",
+        gap < 100.0 * full.emin,
+        f"相対 {gap:.3e} (emin={full.emin:.0e})",
+    )
+
+    c_full, _ = full.compliance(rho, 3.0, full.solve(rho, 3.0, solver="direct"))
+    c_lean, _ = lean.compliance(rho, 3.0, lean.solve(rho, 3.0, solver="direct"))
+    rel = abs(c_lean - c_full) / abs(c_full)
+    check(
+        "コンプライアンスの相対差が 1e-3 以内",
+        rel < 1e-3,
+        f"{c_full:.6f} -> {c_lean:.6f} (相対 {rel:.3e})",
+    )
+    RESULTS["void_free_dofs"] = int(lean.free.size)
+    RESULTS["void_coo_terms"] = [int(full._iK.size), int(lean._iK.size)]
+    RESULTS["void_nnz"] = [int(k_full.nnz), int(k_lean.nnz)]
+    RESULTS["void_compliance_rel_diff"] = rel
+
+
 def main() -> int:
     print("=" * 72)
     print("check_simp.py : SIMPトポロジー最適化の受入検査")
@@ -276,6 +383,7 @@ def main() -> int:
     check_global_system()
     check_preset()
     check_symmetry_direct()
+    check_void_assembly()
 
     print("\n" + "=" * 72)
     print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))

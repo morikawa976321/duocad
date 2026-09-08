@@ -586,6 +586,18 @@ def _build_blocked_levels(levels: list, threads: int) -> list | None:
     return built
 
 
+def _coo_index_arrays(edof: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """要素DOF写像 (n,24) → 組み立て用の COO 行・列添字(各要素 576 項)。
+
+    **並びは `ke.ravel()` と対応していなければならない**(層をまたぐ契約) —— 行は各要素の
+    24自由度をそのまま24回並べ、列は各自由度を24回ずつ繰り返す。ずれると K は落ちずに
+    別の行列になる。
+    """
+    rows = np.tile(edof, (1, 24)).ravel()
+    cols = np.repeat(edof, 24, axis=1).ravel()
+    return rows, cols
+
+
 class Model:
     """片持ち梁の格子・DOF・境界条件・荷重。密度に依らない部分をここに持つ。"""
 
@@ -596,6 +608,7 @@ class Model:
     ndof: int
     ke: np.ndarray
     edof: np.ndarray
+    active: np.ndarray | None
     fixed: np.ndarray
     free: np.ndarray
     f: np.ndarray
@@ -611,6 +624,7 @@ class Model:
         fixed_dofs: np.ndarray | None = None,
         load: np.ndarray | None = None,
         extra_fixed_dofs: np.ndarray | None = None,
+        active_mask: np.ndarray | None = None,
     ) -> None:
         """`fixed_dofs` / `load` を渡すと片持ち梁の既定の境界条件を置き換える。
 
@@ -624,6 +638,12 @@ class Model:
         いない浮いた節点」を系から外すのに使う。**置き換えの口(`fixed_dofs`)に混ぜてはいけない**
         —— それだと `void_mask` だけを渡して拘束は既定のままにしたい呼び出しで、
         片持ち梁の拘束が黙って消える。
+
+        `active_mask` は**組み立てに載せる要素**で、True の要素だけで K を組む。
+        **`extra_fixed_dofs` と同じ `void` から作らなければならない**(層をまたぐ契約)
+        —— 組み立てから外した要素にしか接していない自由度が `free` に残ると、K_ff に
+        全零行ができて解が定まらない。`None` なら全要素で組む。`edof` そのものは
+        `compliance` と `stress.py` が全要素で引くので**間引かない**。
         """
         self.nelx = nelx
         self.nely = nely
@@ -678,15 +698,30 @@ class Model:
                 "荷重が自由な自由度に1つも載っていない(全部が拘束DOFに落ちている)。"
                 "固定面と荷重面が同じ節点を共有していないか確認すること"
             )
-        self._iK = np.kron(self.edof, np.ones((24, 1), dtype=np.int32)).ravel()
-        self._jK = np.kron(self.edof, np.ones((1, 24), dtype=np.int32)).ravel()
+        if active_mask is None:
+            self.active = None
+            edof_assembled = self.edof
+        else:
+            arr = np.asarray(active_mask)
+            if arr.shape not in ((self.nele,), (nelx, nely, nelz)):
+                raise ValueError(
+                    f"active_mask の形が {arr.shape}、期待は {(nelx, nely, nelz)}"
+                )
+            self.active = np.flatnonzero(arr.ravel())
+            if self.active.size == 0:
+                raise ValueError("組み立てる要素が1つも無い(active_mask が全部 False)")
+            edof_assembled = self.edof[self.active]
+        self._iK, self._jK = _coo_index_arrays(edof_assembled)
         # マルチグリッドの補間作用素は格子と拘束だけで決まる(密度に依らない)ので、
         # 設計反復のあいだ使い回す。作り直すのは各段の作用素と LU のほうだけ。
         self._mg_transfers: dict[tuple, list] = {}
 
     def assemble(self, rho: np.ndarray, penal: float) -> sp.spmatrix:
         """全体剛性行列 K (ndof,ndof) を返す。SIMP補間 E_e = emin + rho_e**penal * (E - emin)。"""
-        ee = self.emin + rho.ravel() ** penal * (self.E - self.emin)
+        flat = rho.ravel()
+        if self.active is not None:
+            flat = flat[self.active]
+        ee = self.emin + flat**penal * (self.E - self.emin)
         sk = (self.ke.ravel()[None, :] * ee[:, None]).ravel()
         return sp.coo_matrix((sk, (self._iK, self._jK)), shape=(self.ndof, self.ndof)).tocsc()
 
@@ -896,9 +931,9 @@ class Result:
     # 場合はここに換算後の値が入る(volfrac/target_volume と同じ役割分担)。
     rmin: float = float("nan")
     # `optimize(keep_model=True)` のときだけ入る、実際に解いた `Model`。**既定は None** ——
-    # `Model` は `_iK`/`_jK` に要素数×576 の添字配列を2本持つので、要らない呼び出しにまで
-    # 数十MBを持たせない。後処理(`stress.py`)が拘束・荷重を手で組み直さずに済むための口で、
-    # 組み直しを誤ると**落ちずに違う応力**が出る。
+    # `Model` は `_iK`/`_jK` に**組み立てる要素数**×576 の添字配列を2本持つので、要らない
+    # 呼び出しにまで数十MBを持たせない。後処理(`stress.py`)が拘束・荷重を手で組み直さずに
+    # 済むための口で、組み直しを誤ると**落ちずに違う応力**が出る。
     model: "Model | None" = None
 
     @property
@@ -1223,6 +1258,10 @@ def optimize(
     # 残すと K がほぼ特異になって CG が収束しないので、拘束側へ**足して**系から外す。
     # `fixed_dofs` へ代入してはいけない —— それだと `void_mask` だけを渡した呼び出しで
     # 既定の片持ち梁の拘束が消える。
+    # 空要素は剛性行列の組み立てからも外す。**`extra_fixed_dofs` と同じ `void` から作る**
+    # (`Model` の `active_mask` の契約)。未知数は1つも減らない —— 外れる要素にしか接して
+    # いない自由度は、上の `floating` が既に拘束へ回した集合と定義が同一である
+    # (2026-09-07/08 実測・14構成で自由自由度の集合が完全一致)。
     floating = _floating_dofs(nelx, nely, nelz, void) if void.any() else None
     model = Model(
         nelx,
@@ -1234,6 +1273,7 @@ def optimize(
         fixed_dofs=fixed_dofs,
         load=load,
         extra_fixed_dofs=floating,
+        active_mask=~void if void.any() else None,
     )
     rmin_resolved = _resolve_rmin(
         rmin=rmin,
