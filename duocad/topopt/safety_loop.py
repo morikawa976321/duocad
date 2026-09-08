@@ -61,8 +61,8 @@ DEFAULT_ALLOWABLE_MPA = PETG_YIELD_MPA * PRINT_DERATE  # 40.0
 DEFAULT_YOUNGS_MODULUS_MPA = 2000.0
 
 # 二分探索の既定値。根拠は docs/TOPOPT.md「収束条件と回数上限をどう決めたか」。
-DEFAULT_REL_TOL = 0.02  # 材料量の相対幅(区間の [lo, hi] が (hi-lo)/hi <= 2% で収束と見なす)
-DEFAULT_MAX_EVALUATIONS = 15  # 境界2回 + 二分探索の反復上限(2%まで詰めるのに必要な約6回に余裕)
+DEFAULT_REL_TOL = 0.08  # 材料量の相対幅(区間の [lo, hi] が (hi-lo)/hi <= 8% で収束と見なす)
+DEFAULT_MAX_EVALUATIONS = 15  # 境界2回 + 二分探索の反復上限(8%まで詰めるのに必要な約3.6回に余裕)
 DEFAULT_MAX_ITER = 40  # 各段の SIMP 反復数。anchor.run_pipeline の既定と揃えた
 
 
