@@ -530,7 +530,7 @@ MCPで運ぶ形**を決めること。**`add_mesh_body` は `ws="none"` のま�
   代わりに **フラグが無いときの画面は1ピクセルも変わらない**（`smoke-optimize-debug.mjs` の[1]と、
   既存の実機smokeが番人）。
 - **デモ題材に固定されていない。** 材料は**いま走らせた最適化そのもの**から来るので、
-  利用者が置いた任意の条件・任意のボディで出る（実験場は `design_space.CASES` しか描けず、
+  利用者が置いた任意の条件・任意のボディで出る（旧い実験場は合成題材カタログに固定されており、
   **実物の部品で起きた問題を切り分けられなかった**。それが本体へ移した理由である）。
 - **塊は既定では見せない**という決定は変わっていない（engine
   `topopt-design-space-never-shown-to-the-user`）。フラグの下でだけ出る。
@@ -569,7 +569,7 @@ node scripts/shoot-topopt.mjs --model mounting-plate.json `
 - **新しいパッケージは入れていない**（three.js と puppeteer-core は `web/node_modules` から借り、
   ラベルはブラウザのDOMで焼く）。
 
-**再現の限界**: `docs/topopt-smooth-compare/` の16枚は、合成題材(`design_space.CASES`)を
+**再現の限界**: `docs/topopt-smooth-compare/` の16枚は、削除済みの合成題材カタログを
 撮る `--case` モードで撮影したものである。**`--case` は2026-09-09に削除した**
 （形状最適化の検証は今後 `models/*.json` の実物モデルだけで行う判断による）ので、
 あの16枚はこの撮影台では撮り直せない一次資料として画像のまま残してある。

@@ -81,8 +81,8 @@ MIN_RMIN = 1.5
 # 既定を動かした瞬間に `rmin_mm` の受理範囲と `optimize_run.resolution_limits` の
 # 解像度要求まで黙って動く。
 #
-# **1.5要素から2.5要素へ動かしてある。** 床(1.5要素)の上でも `plate` / `tilted` は
-# 1要素幅のフィラメント(チェッカーボード)を出しており、**4題材すべてで消える最小が
+# **1.5要素から2.5要素へ動かしてある。** 床(1.5要素)の上でも薄板・傾けた題材は
+# 1要素幅のフィラメント(チェッカーボード)を出しており、**複数の合成条件すべてで消える最小が
 # 2.5要素**だった(docs/TOPOPT.md「1要素幅のフィラメントを消す既定値を選び直した」の段1)。
 # 代償はコンプライアンスが 1.08〜1.40倍。**これは損ではなく訂正である** ——
 # 1.5要素の値は実在しない部材が担っていた荷重を含んでいた。
@@ -494,7 +494,7 @@ PARALLEL_THREADS: int = _default_thread_count()
 # 毎回払わせない。デーモンスレッドではないが、プロセス終了時に daemon 属性が無くても
 # インタプリタは残ったワーカーを待たずに終了する(標準ライブラリの `atexit` フックが
 # `shutdown(wait=True)` を試みるので、通常のプロセス終了では待つ。使い切りのCLI
-# (`perf.py` / `check_*.py`)ではプロセスごと終わるので問題にならない)。
+# 使い切りのCLI(`check_*.py` 等)ではプロセスごと終わるので問題にならない)。
 _THREAD_POOLS: dict[int, ThreadPoolExecutor] = {}
 
 
@@ -565,7 +565,7 @@ def parallel_matvec(a: sp.spmatrix, x: np.ndarray, threads: int = 1) -> np.ndarr
 
     毎回ブロック分割を作り直すので、同じ `a` に対して繰り返し呼ぶ用途には向かない
     (`Model.solve` / `_vcycle` の内部は `_BlockedMatvec` を密度が変わるたびに1回だけ
-    作って使い回している)。`perf.py` の帯域測定と `check_parallel.py` の検出力用。
+    作って使い回している)。`check_parallel.py` の帯域測定と検出力用。
     """
     return _BlockedMatvec(a, threads)(x)
 

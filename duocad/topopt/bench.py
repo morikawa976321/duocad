@@ -116,7 +116,7 @@ ABSOLUTE_VOLUME: dict = {"spacing": 7.5, "max_iter": 5}
 FILTER_RADIUS_CHECKERBOARD: dict = {"nelx": 20, "nely": 8, "nelz": 8, "max_iter": 20, "volfrac": 0.3}
 
 # `check_safety_loop.py` が使う題材の大きさ。**bracket(`demo_conditions`)だけ使う** ——
-# 単調性そのものの実測(4題材・10点)は `safety_loop.py` の docs/TOPOPT.md節にあり、この検査は
+# 単調性そのものの実測(複数条件・10点)は docs/TOPOPT.md にあり、この検査は
 # 配線が壊れていないこと(回帰)だけを見る。`derive_from_coarse_run` の引数と同じ名前で持つ。
 # `elements_long_axis`(14)/`coarse_elements_long_axis`(12)/`coarse_max_iter`(6)/
 # `dilate_mm`(8.0)は `DESIGN_SPACE_COARSE` と同じ値(同じ題材・同じ帯なので流用できる)。

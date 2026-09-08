@@ -826,7 +826,7 @@ def format_condition_face_warning(diagnoses: list[dict]) -> str:
 def _face_list(value: Any) -> list:
     """`int` 1つでも面の並びでも受けて、面添字のリストにする。
 
-    **既存の呼び出し(デモ・検査・`perf.py`)が `int` を渡し続けられるようにするため**の入口。
+    **既存の呼び出し(デモ・検査)が `int` を渡し続けられるようにするため**の入口。
     ここで均さないと「面が1枚の場合」の分岐が呼び出し側に散らばる。
     """
     if isinstance(value, (int, np.integer)):
@@ -932,12 +932,12 @@ def run_pipeline(
     要素サイズから決まる下限を `rmin_mm` が下回ると `simp.FilterRadiusError`。
 
     `solver` は `simp.optimize` の解法の**上書き**(既定は None = `simp` 側の既定)。
-    **性能の新旧比較のためだけにある口**で、`perf.py --solver cg` が旧い解法(Jacobi 前処理)
+    **性能の新旧比較のためだけにある口**で、受入検査や比較実測が旧い解法(Jacobi 前処理)
     を同じセッションで撮り直すのに使う。None のときは `simp.optimize` へ渡さないので、
     既定の挙動は1ビットも変わらない。
 
-    `threads` も同じ形の上書き(既定 None = `simp.PARALLEL_THREADS`)。**`perf.py --threads`
-    がスレッド数を振ったスケーリング測定に使う**口で、None のときは渡さない。
+    `threads` も同じ形の上書き(既定 None = `simp.PARALLEL_THREADS`)。**スレッド数を
+    振ったスケーリング測定に使う**口で、None のときは渡さない。
 
     `keep_model=True` は `simp.optimize` へそのまま渡る。`result.model`(戻り値 dict の
     `"result"` キー)に実際に解いた `Model` が入るので、`stress.py` の後処理が拘束・荷重を

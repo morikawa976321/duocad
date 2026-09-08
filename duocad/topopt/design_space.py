@@ -856,7 +856,7 @@ def derive_from_coarse_run(
 # 代理指標(壁に接した材料の割合)の 0° の1項目だけ。
 DEFAULT_DERIVATION = "coarse_run"
 
-# 名前 → 導出。名前を受け取る側(`perf.py --derivation` / 受入検査)がここを引く。
+# 名前 → 導出。名前を受け取る側(受入検査の比較実測)がここを引く。
 # **塊を作りたいだけの呼び出し側はこの表を引かない** —— 引くと既定を倒す場所が増える。
 DERIVATIONS = {"bbox": derive, "coarse_run": derive_from_coarse_run}
 
