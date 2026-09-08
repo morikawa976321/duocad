@@ -35,7 +35,8 @@ LEFT が隠していたものが見える。
 
 ## 題材と方向
 
-題材は `design_space.CASES`: `bracket` / `plate` / `branching` / `tilted`。各題材4枚:
+題材は当時 `design_space.CASES` にあった合成題材 `bracket` / `plate` / `branching` /
+`tilted`(2026-09-09に削除。下記「撮った道具と、いま撮る道具」)。各題材4枚:
 
 | サフィックス | 内容 |
 |---|---|
@@ -53,27 +54,15 @@ LEFT が隠していたものが見える。
 散文でしか残らなかった。契約④)。
 
 **その実験場は同じ日に削除した**(移してあった画面と撮影が本体に揃ったため)。
-**道具は捨てていない** —— `web/scripts/shoot-topopt.mjs` へ移してある。当時のコマンドは
-`03bf794` までの履歴にあり、いま同じ形の絵を撮るならこちら:
+道具は `web/scripts/shoot-topopt.mjs` へ移した。当時のコマンドは `03bf794` までの
+履歴にある。
 
-```powershell
-cd C:\Users\tm976\mf\duocad\web
-node scripts/shoot-topopt.mjs --case tilted `
-  --panel "old(shipped):rmin=1.5,sigma=1.0,iters=12" `
-  --panel "old(no gaussian):rmin=1.5,sigma=0,iters=30" `
-  --panel "new:rmin=2.5,sigma=0,iters=30" `
-  --out <出力先>
-```
-
-重い段(題材を面ごとに最適化する)も、描く段も、3面を1枚に並べてラベルを焼く段も
-この1本がやる。**`rmin` が同じ面は最適化を1回しか回さない**のは当時と同じ。
-**ここにある16枚は4題材 × 4方向**なので、`--case` を `bracket` / `plate` / `branching` /
-`tilted` の4回まわす(`--views` を省くと4方向すべてを撮る)。
-
-**ただし、ここにある16枚をビット単位で撮り直すことはできない。** 案5の粗い段は
-**その時点の `simp.DEFAULT_RMIN`** で回り、撮影当時の 1.5 は 2026-09-05午後に 2.5 へ動いた
-(移設で新たに落ちた制限ではなく、`compare_shots` にもあった同じ制限)。
-**だからこの16枚は画像のまま一次資料として残してある。**
+**この合成題材(`--case`)の経路は2026-09-09に削除した** —— 形状最適化の検証は今後
+`models/*.json` の実物モデルだけで行う判断による(`duocad.topopt.design_space.CASES` と
+`plate_conditions` / `branching_conditions` / `tilted_conditions` ごと削除)。
+`shoot-topopt.mjs` はいまも `--model` で実物モデルを同じ手順(重い段・描く段・
+ラベル焼きを1本で)で撮れるが、**この16枚と同じ合成題材を同じ形で撮り直す道具は
+もう無い**。**だからこの16枚は画像のまま一次資料として残してある。**
 
 `_data/`(中間ファイル。頂点・面のJSONと面ごとのPNG)は `.gitignore` 対象だったので
 残っていない。

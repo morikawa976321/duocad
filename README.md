@@ -207,7 +207,7 @@ cd C:\Users\tm976\mf\duocad
 # 面アンカー側の正しさ（端から端まで1回通す）
 & .\.venv\Scripts\python.exe topopt_checks\check_anchor.py
 
-# 塊(設計空間)。分離 + 案1 + 連結性ガード + 案5 + 4題材の通し + 既定の導出 + 空の条件面
+# 塊(設計空間)。分離 + 案1 + 連結性ガード + 案5 + 既定の導出 + 空の条件面
 & .\.venv\Scripts\python.exe topopt_checks\check_design_space.py
 
 # 体積目標を絶対量(mm^3)で指定する口
@@ -551,12 +551,6 @@ MCPで運ぶ形**を決めること。**`add_mesh_body` は `ws="none"` のま�
 ```powershell
 cd C:\Users\tm976\mf\duocad\web
 
-# 合成題材(design_space.CASES)で、アルゴリズムの設定を3つ並べる
-node scripts/shoot-topopt.mjs --case tilted `
-  --panel "old(shipped):rmin=1.5,sigma=1.0,iters=12" `
-  --panel "old(no gaussian):rmin=1.5,sigma=0,iters=30" `
-  --panel "new:rmin=2.5,sigma=0,iters=30"
-
 # 実際の文書(models/ 配下)で、製品のつまみを2つ並べる
 node scripts/shoot-topopt.mjs --model mounting-plate.json `
   --panel "既定:" --panel "細かく:element_mm=2.5" --views iso,side
@@ -575,11 +569,10 @@ node scripts/shoot-topopt.mjs --model mounting-plate.json `
 - **新しいパッケージは入れていない**（three.js と puppeteer-core は `web/node_modules` から借り、
   ラベルはブラウザのDOMで焼く）。
 
-**再現の限界**: `--case` の粗い段（案5）は**その時点の `simp.DEFAULT_RMIN`** で回るので、
-既定を動かしたあとに撮り直すと `docs/topopt-smooth-compare/` の16枚と
-ビット単位では一致しない（撮影当時は 1.5、いまは 2.5）。**これは移設元の `compare_shots.py`
-と同じ制限**であって、この撮影台で新たに落ちたものではない。**だからあの16枚は画像の
-まま残してある**（撮り直しでは復元できない一次資料）。
+**再現の限界**: `docs/topopt-smooth-compare/` の16枚は、合成題材(`design_space.CASES`)を
+撮る `--case` モードで撮影したものである。**`--case` は2026-09-09に削除した**
+（形状最適化の検証は今後 `models/*.json` の実物モデルだけで行う判断による）ので、
+あの16枚はこの撮影台では撮り直せない一次資料として画像のまま残してある。
 
 ### 前提にしないこと
 

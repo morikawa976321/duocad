@@ -64,7 +64,7 @@
     素通しになっている**(粗い段が実際にその量で解かれたことを achieved で見る。後続の
     安全率の外側ループがこの引数を使う)/ 案1(`derive`)が残っていて既定値も動いていない
     (比較のベースラインであり退避経路)/ `derivation="bbox"` で案1へ戻せる / 未知の名前は
-    例外 / **導出にこだわりのない呼び出し側(`perf.py` / `safety_loop.py`)が導出を名指ししていない**
+    例外 / **導出にこだわりのない呼び出し側(`safety_loop.py`)が導出を名指ししていない**
     —— 名指しが1つでも残っていると、次に既定を倒すときにそこだけ取り残される。
 
 [14] の構成(空の条件面のメッセージ。タスク `20260904-1556`):
@@ -1207,161 +1207,6 @@ def check_case5_coarse_run() -> None:
     }
 
 
-# ---------------------------------------------------------------------------
-# 12. 性能の基準線の題材が4つとも端から端まで通る
-# ---------------------------------------------------------------------------
-FOUR = bench.DESIGN_SPACE_FOUR_CASES
-
-
-def check_four_benchmark_cases() -> None:
-    print("\n[12] 性能の基準線の題材(4つ)が端から端まで通る")
-
-    from duocad.topopt import perf
-
-    # --- 12-1 表が4つあり、①は既存の `demo_conditions` のまま ---------------
-    names = list(ds.CASES)
-    check(
-        "12-1 題材が4つ表に載っている",
-        len(names) == 4 and names[0] == "bracket",
-        f"{names}",
-    )
-    check(
-        "12-1 ①は既存の demo_conditions をそのまま指している",
-        ds.CASES["bracket"].conditions is ds.demo_conditions,
-        "足すのであって置き換えではない(既存の検査が demo_conditions に依存している)",
-    )
-
-    # --- 12-2〜12-4 4題材とも導出 → ガード → SIMP → STL ---------------------
-    measured: dict[str, dict] = {}
-    for name in names:
-        case = ds.CASES[name]
-        # **導出を名指ししない**(`derive_space` は既定の入口を通る)。基準線が既定で
-        # 回るのだから、その題材が端から端まで通ることの検査も既定で回す。
-        # 粗い段の大きさは `bench.DESIGN_SPACE_FOUR_CASES` が正。
-        space = case.derive_space(
-            elements_long_axis=FOUR["elements_long_axis"],
-            coarse_elements_long_axis=FOUR["coarse_elements_long_axis"],
-            coarse_max_iter=FOUR["coarse_max_iter"],
-            coarse_volfrac=0.3,
-        )
-        table = space.table
-        empty = sorted(int(f) for f in table.empty_faces())
-        conn = space.stats.get("connectivity")
-        stl = OUTPUT_DIR / f"check_case_{name}.stl"
-        out = ds.run_topopt(
-            space,
-            volfrac=0.3,
-            max_iter=FOUR["max_iter"],
-            force=tuple(float(v) for v in case.force),
-            stl_path=stl,
-        )
-        # 拘束アンカーの要素が、塊の上半分で何個の塊に分かれているか(= 支持が何箇所か)。
-        # `branching` の U 字面は下の帯で繋がっているので、**上半分に限って**数える。
-        fixed_elements = table.element_mask(list(space.fixed_faces), layers=1) & space.mask
-        z_centers = space.grid.centers_1d(2)
-        upper = np.zeros(space.grid.shape, dtype=bool)
-        upper[:, :, z_centers > 0.5 * (z_centers.min() + z_centers.max())] = True
-        _, support_clusters = ds.element_components(fixed_elements & upper)
-
-        rho = np.asarray(out["result"].rho)
-        # **条件のどのソリッドにも入っていない空間に材料が出ている**か。塊が効いていない
-        # (= 保持だけが残った)答えを「通った」と数えないため。
-        free_material = int(np.count_nonzero((rho > 0.5) & ~np.asarray(out["solid"], dtype=bool)))
-        measured[name] = {
-            "grid": list(space.grid.shape),
-            "derivation": str(space.stats.get("derivation", "bbox")),
-            "design_elements": space.element_count,
-            "fixed_dofs": int(table.fixed_dofs(space.fixed_faces).size),
-            "load_nodes": sum(int(table[f].node_count) for f in space.load_faces),
-            "support_clusters": int(support_clusters),
-            "obstacle_removed": int(space.stats.get("obstacle_elements_removed", 0)),
-            "components": conn.get("components") if isinstance(conn, dict) else None,
-            "shared": len(conn.get("shared_labels", [])) if isinstance(conn, dict) else 0,
-            "compliance": float(out["compliance_last"]),
-            "free_material": free_material,
-            "empty_condition_faces": [
-                f for f in empty if f in tuple(space.fixed_faces) + tuple(space.load_faces)
-            ],
-            "stl_bytes": stl.stat().st_size if stl.exists() else 0,
-        }
-        m = measured[name]
-        check(
-            f"12-2 {name}: 連結性ガードを通った",
-            isinstance(conn, dict)
-            and not conn.get("skipped")
-            and int(m["components"] or 0) >= 1
-            and m["shared"] >= 1,
-            f"成分 {m['components']} / 共通ラベル {m['shared']}",
-        )
-        check(
-            f"12-3 {name}: 条件面のアンカーが空でない",
-            not m["empty_condition_faces"] and m["fixed_dofs"] > 0 and m["load_nodes"] > 0,
-            f"拘束DOF {m['fixed_dofs']} / 荷重節点 {m['load_nodes']} / 空の条件面 {m['empty_condition_faces']}",
-        )
-        check(
-            f"12-4 {name}: SIMP → STL まで通り、条件の外に材料が出た",
-            np.isfinite(m["compliance"]) and m["free_material"] > 0 and m["stl_bytes"] > 0,
-            f"C={m['compliance']:.4g} / 条件外の材料 {m['free_material']}要素 / STL {m['stl_bytes']}バイト",
-        )
-
-    RESULTS["four_cases"] = measured
-
-    # --- 12-5 4題材が互いに別物である(似たものを3つ作っていない) -------------
-    # **「4つ通った」だけでは足りない。** 同じ性質の題材を4つ並べても全部通るので、
-    # 覆っている性質が実際に違うことを数字で見る。
-    shapes = {name: tuple(m["grid"]) for name, m in measured.items()}
-    check(
-        "12-5 4題材の格子の形がすべて違う",
-        len(set(shapes.values())) == 4,
-        f"{shapes}",
-    )
-    aspect = {
-        name: max(m["grid"]) / min(m["grid"]) for name, m in measured.items()
-    }
-    others = [v for k, v in aspect.items() if k != "plate"]
-    check(
-        "12-5 薄板だけアスペクト比が突出している",
-        aspect["plate"] >= 2.0 * max(others),
-        f"plate {aspect['plate']:.2f} / 他 {[round(v, 2) for v in others]}",
-    )
-    # **支持が本当に2箇所に分かれているか**を、拘束DOFの多寡ではなく連結成分で見る。
-    # DOFの数は面積が広いだけでも増えるので、「分岐している」の証拠にならない。
-    legs = {name: m["support_clusters"] for name, m in measured.items()}
-    check(
-        "12-5 多点支持の題材だけ拘束アンカーが2つの脚に分かれている",
-        legs["branching"] == 2 and all(v == 1 for k, v in legs.items() if k != "branching"),
-        f"{legs}(塊の上半分での6近傍成分数)",
-    )
-    removed = {name: m["obstacle_removed"] for name, m in measured.items()}
-    check(
-        "12-5 斜め姿勢の題材の除外が塊を一番大きく削っている",
-        removed["tilted"] >= 5 * max(v for k, v in removed.items() if k != "tilted"),
-        f"{removed}(削った要素数)",
-    )
-
-    # --- 12-6 各題材が「何を覆うために居るか」が実測の記録にある ---------------
-    # **この1行が無いと、後で「似ているから減らそう」と言われたときに判断できない。**
-    doc = (_REPO_ROOT / "docs" / "TOPOPT.md").read_text(encoding="utf-8")
-    missing = [name for name, case in ds.CASES.items() if case.covers not in doc]
-    check(
-        "12-6 4題材の「覆う性質」がそのまま docs/TOPOPT.md にある",
-        not missing,
-        f"欠けている題材: {missing}" if missing else "4件とも一致",
-    )
-
-    # --- 12-7 性能測定の題材の大きさが受入検査のそれと分かれている -------------
-    check(
-        "12-7 性能の基準線は2段以上の解像度で測る",
-        len(perf.RESOLUTIONS) >= 2,
-        f"perf.RESOLUTIONS = {perf.RESOLUTIONS}",
-    )
-    check(
-        "12-7 性能測定の解像度は受入検査の解像度より大きい(巻き込まれていない)",
-        min(perf.RESOLUTIONS) > FOUR["elements_long_axis"],
-        f"perf {perf.RESOLUTIONS} > 受入 {FOUR['elements_long_axis']}",
-    )
-
-
 # ===========================================================================
 # 既定の導出(入口を1つにする): タスク 20260904-1416
 # ===========================================================================
@@ -1474,7 +1319,7 @@ def check_default_derivation() -> None:
     # 依存するので読まないことにしてあった(実験場は同日に削除した)。
     # **製品の経路 `duocad/optimize_run.py` はここで読んでいない**(既定の入口を通っている
     # ことは `check_optimize_wiring.py` が実際に走らせて見る)。
-    for fname in ("perf.py", "safety_loop.py"):
+    for fname in ("safety_loop.py",):
         text = (_REPO_ROOT / "duocad" / "topopt" / fname).read_text(encoding="utf-8")
         code = "\n".join(
             line for line in text.splitlines() if not line.lstrip().startswith("#")
@@ -1482,20 +1327,8 @@ def check_default_derivation() -> None:
         check(
             f"13-5 {fname} が導出を名指ししていない",
             "ds.derive(" not in code and "ds.derive_from_coarse_run(" not in code,
-            f"入口 derive_default/derive_space 経由: {'derive_default' in code or 'derive_space' in code}",
+            f"入口 derive_default 経由: {'derive_default' in code}",
         )
-    check(
-        "13-5 題材(BenchCase.derive_space)が既定の入口を通る",
-        ds.CASES["bracket"]
-        .derive_space(
-            elements_long_axis=CASE5["elements_long_axis"],
-            coarse_elements_long_axis=CASE5["coarse_elements_long_axis"],
-            coarse_max_iter=CASE5["coarse_max_iter"],
-        )
-        .stats.get("derivation")
-        == ds.DEFAULT_DERIVATION,
-        "derive_space が DEFAULT_DERIVATION の塊を返す",
-    )
 
     RESULTS["default_derivation"] = {
         "name": ds.DEFAULT_DERIVATION,
@@ -1742,7 +1575,7 @@ def main() -> int:
     print("=" * 72)
     print("check_design_space.py : 塊(設計空間)の受入検査")
     print("  [1]-[4] 分離 / [5]-[9] 案1(外接直方体+余白) / [10] 連結性ガード")
-    print("  [11] 案5(粗く1回回して膨らませる) / [12] 性能の基準線の題材(4つ)")
+    print("  [11] 案5(粗く1回回して膨らませる)")
     print("  [13] 既定の導出(入口が1つ) / [14] 空の条件面のメッセージ")
     print("=" * 72)
     # **1件が例外で落ちても残りを走らせる。** 実装を壊したときに最初の1件で止まると、
@@ -1759,7 +1592,6 @@ def main() -> int:
         check_case1_margin_is_load_bearing,
         check_case1_connectivity,
         check_case5_coarse_run,
-        check_four_benchmark_cases,
         check_default_derivation,
         check_empty_condition_face_warning,
     ):

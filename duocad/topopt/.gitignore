@@ -22,19 +22,9 @@ output/design_space_case1_*.stl
 output/design_space_case5_*.stl
 output/design_space_coarse*.stl
 
-# 性能の基準線(`perf.py`)が書き出すSTLと測定値のJSON。題材 × 解像度ごとに1本増える。
-output/perf_*.stl
-output/perf-*.json
-
-# 4題材の通し検査(`check_design_space.py` [12])が書き出すSTL。合否は検査の出力が持つ。
-output/check_case_*.stl
-
 # CPU並列化の受入検査(`check_parallel.py` [6])が threads の伝播を確かめるために書き出す
 # STL。合否は rho 場の突き合わせが持つ。
 output/_check_parallel_propagation.stl
-
-# CPU並列化のスケーリング測定(`perf.py --threads`)が書き出す JSON。
-output/scaling_*.json
 
 # 安全率の外側ループ(`safety_loop.py`)が二分探索の候補材料量ごとに上書きするSTL。
 # 「最後に評価した候補」が残るだけで採用した材料量とは限らない。

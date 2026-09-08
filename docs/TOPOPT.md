@@ -648,16 +648,17 @@ engine `benchmark-seconds-swing-with-thermal-state`。**行の間で比べる用
 
 **導出にこだわりのない呼び出し側は `design_space.derive_default(conditions, ...)` を通る。**
 当時の実験場の `server.py`(2026-09-05に削除。いまの製品の経路は `duocad/optimize_run.py`) /
-`perf.py` / `BenchCase.derive_space` がそれで、案1・案5を名指しで呼ぶのは
-**比較の実測と受入検査だけ**である。こうしておかないと、既定を倒すたびに呼び出し側を全部
-書き換えることになる(そして1つ書き忘れるとそこだけ取り残される)。
+`perf.py` / `BenchCase.derive_space`(いずれも合成4題材ごと2026-09-09に削除)がそれで、
+案1・案5を名指しで呼ぶのは**比較の実測と受入検査だけ**である。こうしておかないと、
+既定を倒すたびに呼び出し側を全部書き換えることになる(そして1つ書き忘れるとそこだけ
+取り残される)。
 
 - **既定は `DEFAULT_DERIVATION`** の1箇所。`DERIVATIONS` が名前 → 関数の表。
 - **引数は既定の導出へ素通し。** いまは案5なので `coarse_material_mm3` がそのまま届く ——
   **本番で使う材料の量が分かっているなら粗い段にも同じ量を渡すこと**(別の量で解くと
   「別の形の周り」を膨らませた塊になる)。後続の安全率の外側ループがこの引数を使う。
-- **退避経路は `derive_default(..., derivation="bbox")`**。案1の挙動へ戻して比べるための口で、
-  `perf.py --derivation bbox` がこれを使う(`--solver cg` と同じ用途)。
+- **退避経路は `derive_default(..., derivation="bbox")`**。案1の挙動へ戻して比べるための口
+  (2026-09-09に削除した `perf.py --derivation bbox` はこれを使っていた)。
 - 検査は `check_design_space.py` [13]。**呼び出し側が導出を名指ししていないことを
   ソースで見る検査**まで入れてある(名指しが1つ残るとそこだけ取り残されるため)。
 
@@ -1177,20 +1178,18 @@ M·c/I を比べた。測る断面は**根元そのものではなく梁せい1�
 
 ## 性能の基準線 — 検証題材を4つに増やす(2026-09-04)
 
+**この節が定義する `design_space.CASES`(`bracket`/`plate`/`branching`/`tilted`)・`BenchCase`・
+`perf.py` は2026-09-09に削除した** —— 形状最適化の検証を今後 `models/*.json` の実物モデルへ
+一本化する判断による。**以下は削除前の記録として残す**(実測値そのものは有効。再現手段は
+下記「実測を撮り直す道具」)。
+
 **マルチグリッド前処理(`20260904-1414`)と CPU 並列化(`20260904-1415`)が「どれだけ速くしたか」を
 測るための土台。** それまで端から端まで通る題材は `design_space.demo_conditions()` の合成
 ブラケット1つしか無く、**その1つに効いただけなのか一般に効いたのかを区別できなかった。**
 
-道具は **`perf.py`**。`design_space.CASES` の4題材 × 2解像度を回して下の表をそのまま吐く。
+道具は **`perf.py`**(2026-09-09に `design_space.CASES` ごと削除。下記「実測を撮り直す道具」)。
+`design_space.CASES` の4題材 × 2解像度を回して下の表をそのまま吐いていた。
 **手で測って手で表を書かないこと** —— 後続が同じ条件で測り直せないと比較にならない。
-
-```powershell
-# 基準線を取り直す。約5分
-& .\.venv\Scripts\python.exe -m duocad.topopt.perf --json duocad	opopt\output\perf-baseline.json
-
-# 改良後に、同じセッションで撮り直して倍率を併記する
-& .\.venv\Scripts\python.exe -m duocad.topopt.perf --json duocad	opopt\output\perf-after.json --baseline duocad	opopt\output\perf-baseline.json
-```
 
 ### 題材(4つ)と、何を覆うために居るか
 
@@ -1222,7 +1221,7 @@ M·c/I を比べた。測る断面は**根元そのものではなく梁せい1�
 「実測値の記録(時系列)」節の「2026-09-04・性能の基準線(4題材・Jacobi前処理・案1の塊)」
 に移した。** ここに残るのは4題材の定義と、受入検査・既定の導出の検査そのものである。
 
-### 受入検査は別の題材で回す(巻き込まれないようにしてある)
+### 受入検査は別の題材で回す(巻き込まれないようにしてある。2026-09-09に削除した仕組みの記録)
 
 **性能測定と受入検査で同じ大きさを共有しない。** 受入検査は速さが命(7本で 100〜141秒)、
 性能測定は大きさが要る。共有すると、検証を速くするたびに性能の基準線が黙って別物になる。
@@ -1248,7 +1247,10 @@ M·c/I を比べた。測る断面は**根元そのものではなく梁せい1�
   n=44 でも DOF は n=30 の 2.8倍あって伸びの指数は取れているので、既定はそちらにした。
   **最終的な数字が要るときは `--resolutions 30 50` を渡す。**
 
-### 4題材とも端から端まで通ることの検査(`check_design_space.py` [12])
+### 4題材とも端から端まで通ることの検査(`check_design_space.py` [12]。2026-09-09に削除)
+
+**この検査は `design_space.CASES` ごと2026-09-09に削除した**(形状最適化の検証を
+`models/*.json` の実物モデルへ一本化する判断による)。以下は削除前の記録。
 
 **「4つ通った」だけでは足りない。** 同じ性質の題材を4つ並べても全部通るので、
 覆っている性質が実際に違うことまで数字で見る。
@@ -1286,7 +1288,7 @@ plate 384 → 222 / branching 1,920 → 1,423 / tilted 1,884 → 1,500 要素)�
 | 13-2 | **案1(`derive`)が残っている**(案5より大きい塊を返す)/ 案1・案5の**既定値が1つも動いていない**(余白 0.25・長辺40 / 粗い段14要素・20反復・閾値0.3・膨張12mm) |
 | 13-3 | `derivation="bbox"` で**案1へ戻せる**(退避経路)/ 知らない導出名は例外(黙って既定へ落ちない) |
 | 13-4 | **`coarse_material_mm3` が粗い段まで届いている**(既定の volfrac と**はっきり違う量**を渡し、粗い段が実際にその量を出したことで見る)/ 粗い段の体積目標が排他のまま |
-| 13-5 | **`perf.py` / `safety_loop.py` が導出を名指ししていない**(ソースを読む検査。**読むのは `duocad/topopt/` の中だけ** —— 2026-09-05まで `probe_topopt/server.py` にも同じ不変条件があったが、そこを読むと本体の検査が実験場に依存するので読まなかった。実験場は同日に削除した)/ `BenchCase.derive_space` が既定の入口を通る |
+| 13-5 | **`safety_loop.py` が導出を名指ししていない**(ソースを読む検査。**読むのは `duocad/topopt/` の中だけ** —— 2026-09-05まで `probe_topopt/server.py` にも同じ不変条件があったが、そこを読むと本体の検査が実験場に依存するので読まなかった。実験場は同日に削除した)。**2026-09-09までは `perf.py` も一緒に読み、`BenchCase.derive_space` が既定の入口を通ることも見ていたが、`perf.py` / `BenchCase` を合成4題材ごと削除したので現在は無い** |
 
 **13-5 がソースを読む検査なのは、名指しが1つ残るとそこだけ取り残されるから。**
 既定を倒す作業でいちばん起きやすい失敗は「入口を作ったのに呼び出し側の書き換えを1つ
@@ -2800,8 +2802,7 @@ LEFT が隠していたものが見える。
 | ファイル | 役割 |
 |---|---|
 | `duocad/topopt/simp.py` | SIMP本体。要素剛性行列・FEM・密度フィルタ・OC法。numpy + scipy のみ。**`bench.py` を import しない**(単体で持ち出せる状態を保つ) |
-| `duocad/topopt/bench.py` | **受入検査が使う基準題材の大きさを1箇所にまとめたもの**。検証の1周を速くしたくなったらここを直す(片持ち梁そのものは `simp.PRESET`)。縮めなかった場所には「縮めると何が壊れるか」の実測が付いている。**性能測定の題材の大きさはここではなく `perf.py` が持つ**(同じ定数で兼ねると、検証を速くするたびに性能の基準線が黙って別物になる) |
-| `duocad/topopt/perf.py` | **性能の基準線を測る道具(合否は出さない)**。`design_space.CASES` の4題材 × 2解像度を回してこの文書の表をそのまま吐く。`--json` で測定値を残し、`--baseline` で新旧の倍率を併記する。約5分 |
+| `duocad/topopt/bench.py` | **受入検査が使う基準題材の大きさを1箇所にまとめたもの**。検証の1周を速くしたくなったらここを直す(片持ち梁そのものは `simp.PRESET`)。縮めなかった場所には「縮めると何が壊れるか」の実測が付いている |
 | `duocad/topopt/mesh.py` | 浮島除去→パディング→marching cubes→Taubin平滑化→STL書き出し。CLIとしても動く(`python -m duocad.topopt.mesh` でSIMPを回して `duocad/topopt/output/optimized.stl` を作る) |
 | `duocad/topopt/voxelize.py` | **B-repソリッド → 規則格子**(占有マスク・保持/障害物領域)。`duocad.kernel.tessellate` の三角形へ +z のレイを飛ばして巻き数で内外を決める。CLIとしても動く(`python -m duocad.topopt.voxelize --step <path> --n 100`) |
 | `duocad/topopt/anchor.py` | **CADの面 → 格子の節点の対応表(面アンカー)**。担当面積つき。固定/荷重/非設計領域の口と、端から端まで通す `run_pipeline`。CLIとしても動く(`python -m duocad.topopt.anchor --table-only --n 32`) |
@@ -2817,7 +2818,7 @@ LEFT が隠していたものが見える。
 | `topopt_checks/check_absolute_volume.py` | **受入検査(合否そのもの)**。体積目標を絶対量(mm^3)で指定する口を assert する |
 | `topopt_checks/check_filter_radius.py` | **受入検査(合否そのもの)**。密度フィルタ半径を mm で指定する口を assert する |
 | `topopt_checks/check_stress.py` | **受入検査(合否そのもの)**。[0] B行列と局所節点順 + [1] 一様な棒の単軸引張(解析解) + [2] 片持ち梁の曲げの M·c/I への収束(3解像度) + [3] 実単位への換算則 + [4] 代表応力の規則 + [5] 安全率を assert する |
-| `topopt_checks/check_design_space.py` | **受入検査(合否そのもの)**。[1]-[4] 塊と面アンカーの対象ソリッドの分離 + [5]-[9] 案1の導出 + [10] 連結性ガード + [11] 案5 + [12] 性能の基準線の題材(4つ)が端から端まで通ること + [13] 既定の導出 + [14] 空の条件面の通知を assert する |
+| `topopt_checks/check_design_space.py` | **受入検査(合否そのもの)**。[1]-[4] 塊と面アンカーの対象ソリッドの分離 + [5]-[9] 案1の導出 + [10] 連結性ガード + [11] 案5 + [13] 既定の導出 + [14] 空の条件面の通知を assert する(**[12] 性能の基準線の題材(4つ)が端から端まで通ることは2026-09-09に `design_space.CASES` ごと削除**) |
 | `topopt_checks/check_multigrid.py` | **受入検査(合否そのもの)**。幾何マルチグリッド前処理 |
 | `topopt_checks/check_parallel.py` | **受入検査(合否そのもの)**。CPU並列化 |
 | `topopt_checks/check_safety_loop.py` | **受入検査(合否そのもの)**。安全率の外側ループ |
@@ -3373,26 +3374,18 @@ design_space 17.6 / anchor 50.9 秒。**増分の大半は [12] ではない** �
 
 ## 実測を撮り直す道具(受入検査ではない)
 
-**合否を出さない。** 下の表を作り直すための計器で、`readme.md` §3 の受入検査とは別物である。
-どれもリポジトリ直下(`C:\Users\tm976\mf\duocad`)から回す。
+**この節の道具(`perf.py`)は2026-09-09に削除した** —— 合成4題材
+(`design_space.CASES`)を検証題材として使うのをやめ、今後は `models/*.json` の実物モデルだけを
+使う判断による。したがって下の「性能の基準線」「CPU並列化」の各表は、この道具ではもう
+撮り直せない一次資料として数字のまま残っている。
 
-```powershell
-# 性能の基準線(「性能の基準線」節の2つの表を作り直す)。約5分
-& .\.venv\Scripts\python.exe -m duocad.topopt.perf --json duocad\topopt\output\perf-baseline.json
+実物モデルの性能を測りたいときは `web/scripts/shoot-topopt.mjs --model <name>.json`
+(比較スクリーンショットの撮影台。README §3「比較スクリーンショットの撮影台」)か、
+`duocad.optimize_run.build_conditions` から得た `Conditions` を
+`design_space.derive_default` / `run_topopt` へ直に渡す短い script を書くこと。
 
-# 旧い塊の導出(案1)の基準線を**同じセッションで**撮り直す(新旧を比べるとき)。約4分
-& .\.venv\Scripts\python.exe -m duocad.topopt.perf --derivation bbox --json duocad\topopt\output\perf-case1.json
-& .\.venv\Scripts\python.exe -m duocad.topopt.perf --baseline duocad\topopt\output\perf-case1.json --json duocad\topopt\output\perf-case5.json
-
-# CPU並列化のスケーリング曲線(「CPU並列化」節の表を作り直す)。
-# スレッド数ごとに約1〜2分、5点(1/2/4/8/14)で合計約7分
-& .\.venv\Scripts\python.exe -m duocad.topopt.perf --resolutions 44 --threads 1 --json duocad\topopt\output\scaling_t1.json
-& .\.venv\Scripts\python.exe -m duocad.topopt.perf --resolutions 44 --threads 14 --json duocad\topopt\output\scaling_t14.json
-
-# (姿勢依存と案1対案5の実測を回す `design_space.py --measure` / `--compare` は
-#  2026-09-05に削除した。済んだ調査のコードは残さない方針。撮り直すなら
-#  `design_space.derive` / `derive_from_coarse_run` を直に呼ぶ短い script を書く)
-```
+(姿勢依存と案1対案5の実測を回す `design_space.py --measure` / `--compare` は
+2026-09-05に削除した。済んだ調査のコードは残さない方針。)
 
 ## 受入検査が見ているもの
 

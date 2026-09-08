@@ -1,22 +1,18 @@
 /**
  * 形状最適化の**比較スクリーンショットの撮影台**(20260905-1700)。
  *
- *   web> node scripts/shoot-topopt.mjs --case tilted \
- *          --panel "old(shipped):rmin=1.5,sigma=1.0,iters=12" \
- *          --panel "old(no gaussian):rmin=1.5,sigma=0,iters=30" \
- *          --panel "new:rmin=2.5,sigma=0,iters=30"
+ *   web> node scripts/shoot-topopt.mjs --model mounting-plate.json \
+ *          --panel "既定:" --panel "細かく:element_mm=2.5" --views iso,side
  *
  * **1本のコマンドで終わる。** 重い段(面ごとに最適化を回す)も、描く段も、並べてラベルを
  * 焼く段も、ここが全部やる —— 使うたびに手順書を読み返す道具は使われなくなる。
  *
  * ## 引数
  *
- *   --case <name>      合成題材(`design_space.CASES`: bracket / plate / branching / tilted)
  *   --model <name>     **利用者の文書**(`models/` 配下の操作ログ。条件は文書のものを使う)
  *   --models-dir <dir> `--model` の置き場(既定はリポジトリ直下の `models/`)
  *   --panel "<ラベル>:<つまみ>"   **2つ以上**。左から順に並ぶ
- *                      `--case` のつまみ: rmin(要素) / sigma / iters / n(長辺の要素数)
- *                      `--model` のつまみ: rmin_mm / element_mm
+ *                      つまみ: rmin_mm / element_mm
  *   --views iso,side,threeq,zoom   撮る向き(既定は4つ全部)
  *   --dir x,y,z        `--views custom` と併せて任意の向き(`--zoom` で距離を詰める)
  *   --out <dir>        出力先(既定 `screenshots/topopt-compare`)
@@ -61,7 +57,7 @@ const options = parseArgs(argv)
 /** `--panel` は繰り返せる(`parseArgs` は最後の1つしか残さないので自分で拾う)。 */
 const panels = argv.flatMap((item, i) => (item === '--panel' ? [argv[i + 1]] : []))
 
-if (options.help || (!options.case && !options.model)) {
+if (options.help || !options.model) {
   console.log(readFileSync(new URL(import.meta.url)).toString().split('*/')[0])
   process.exit(options.help ? 0 : 1)
 }
@@ -106,7 +102,7 @@ for (const name of wantViews) {
 }
 
 /** 出力の名前になる題材名。`--model` の `.json` はファイル名に混ぜない。 */
-const subject = (options.case ?? options.model).replace(/\.json$/i, '')
+const subject = options.model.replace(/\.json$/i, '')
 const outDir = resolve(REPO_ROOT, options.out ?? join('screenshots', 'topopt-compare'))
 const dataDir = join(outDir, '_data')
 mkdirSync(dataDir, { recursive: true })
@@ -119,7 +115,8 @@ async function runExport() {
     join(HERE, 'shoot_topopt_export.py'),
     '--out',
     dataDir,
-    ...(options.case ? ['--case', options.case] : ['--model', options.model]),
+    '--model',
+    options.model,
     ...(options['models-dir'] ? ['--models-dir', options['models-dir']] : []),
     ...panels.flatMap((spec) => ['--panel', spec]),
   ]
