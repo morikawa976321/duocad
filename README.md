@@ -10,8 +10,7 @@
 
 | 文書 | 何が書いてあるか | 読むとき |
 |---|---|---|
-| [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | **設計の現行の正**。何を作るか・到達表・残タスク | 仕様を確かめるとき |
-| [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | **なぜこう作るか**（§2 分業の原則が企画の主張） | 判断の背景を辿るとき |
+| [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | **企画と設計の現行の正**（なぜ・何を・到達表。「企画の前提」がなぜ） | 仕様を確かめるとき |
 | [MCP.md](MCP.md) | **MCPツール一覧の正**と登録手順 | AI側から触るとき |
 | [tests/README.md](tests/README.md) | テストが定義するAPI契約 | コアの挙動を疑うとき |
 | [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化の実測の記録**(費用の表・余白比率・案5の比較・応力・面アンカー・変異検査) | 数字の根拠を辿るとき |
@@ -725,7 +724,7 @@ duocad/
   .mcp.json              Claude Code向けのMCP登録（projectスコープ。これがあるので登録作業が要らない）
   README.md              ← このファイル（入口）
   MCP.md                 MCPサーバの仕様と登録手順
-  docs/                  IMPLEMENTATION_PLAN(現行の正) / REQUIREMENTS
+  docs/                  IMPLEMENTATION_PLAN(企画と設計の正) / TOPOPT
   duocad/                コア（Python）。verbs/ に1 verb 1モジュール
                          session.py=1つの文書を持つサーバ側の状態／view.py=その配りもの
                          （状態配信・版・キャッシュ。session.py が1つ持つ）
