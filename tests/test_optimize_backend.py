@@ -876,3 +876,44 @@ def test_the_anchor_gate_still_catches_a_face_that_is_far_away(
     monkeypatch.setattr(query, "face_centroid", far)
     with pytest.raises(optimize_run.FaceMappingError, match="離れている"):
         optimize_run._check_anchor_centroids(session.document, space)
+
+
+def test_a_residual_failure_is_classified_as_too_little(monkeypatch) -> None:
+    """**残差検算が通らないのは「材料が少なすぎる」側。** 素通しすると探索ごと落ちる。
+
+    hanger 2.4mm の実測でここを踏んだ(材料 5.42e4mm^3 で自由度が 3,623,730 のうち
+    43,161 しか残らず残差 2.93e-5)。落ちると、それまでの数時間の評価がすべて無駄になる。
+    """
+    from duocad.topopt import safety_loop, simp
+
+    def boom(*args, **kwargs):
+        raise simp.SolveResidualError("K U = F が解けていない(残差 2.930e-05 > 1e-06)")
+
+    monkeypatch.setattr(safety_loop, "_derive_and_run", boom)
+    outcome, payload = safety_loop._evaluate(object(), 54_233.0, derivation_kwargs={})
+    assert outcome == "too_little"
+    assert isinstance(payload, simp.SolveResidualError)
+
+
+def test_a_residual_failure_at_the_bound_still_stops_the_search(monkeypatch) -> None:
+    """**握りつぶしていない。** 本当の拘束不足なら上端で落ち、原因を連鎖したまま上がる。"""
+    from duocad.topopt import design_space as ds
+    from duocad.topopt import safety_loop, simp
+
+    monkeypatch.setattr(ds, "build_reference", lambda conditions, **kw: "参照")
+
+    def boom(*args, **kwargs):
+        raise simp.SolveResidualError("拘束不足(剛体運動が止まっていない)の可能性が高い")
+
+    monkeypatch.setattr(safety_loop, "_derive_and_run", boom)
+    with pytest.raises(safety_loop.SafetyTargetError) as caught:
+        safety_loop.solve_for_safety_factor(
+            object(),
+            target_safety_factor=2.0,
+            material_min_mm3=1.0,
+            material_max_mm3=100.0,
+            derivation_kwargs={},
+        )
+    assert caught.value.side == "invalid_bound"
+    assert caught.value.bound == "material_max_mm3"
+    assert isinstance(caught.value.__cause__, simp.SolveResidualError)

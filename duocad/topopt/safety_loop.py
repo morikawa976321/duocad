@@ -289,18 +289,29 @@ def _evaluate(conditions: ds.Conditions, material_mm3: float, **kwargs: Any) -> 
 
     - `"ok"` —— 通常どおり (space, run, report)。
     - `"too_little"` —— この材料量では塊が細すぎる(接続できない/体積目標が
-      `below_minimum`)。安全率で言えば「目標に届かない」と同じ側として扱う
-      (この材料量とその下は不採用)。
+      `below_minimum`/**残差検算が通らない**)。安全率で言えば「目標に届かない」と
+      同じ側として扱う(この材料量とその下は不採用)。
     - `"too_much"` —— この材料量**そのものを目標に**導出した塊でも、密度フィルタの
       目減りで材料が収まらない(`VolumeTargetError(side="above_capacity")`)。
       安全率は測れていないので、この材料量とその上は判定を保留して引き返す。
+
+    **`SolveResidualError` を `too_little` に落とすのは、拘束不足を握りつぶすためではない。**
+    材料が少ないほど ρ が下限に張り付いて系が悪条件になり、残差が許容(`SOLVE_RESIDUAL_TOL`)を
+    通らなくなる —— hanger 2.4mm の実測で、材料 5.42e4mm^3 のとき自由度が
+    3,623,730 のうち 43,161 しか残らず、残差 2.93e-5 で落ちた(8.70e4mm^3 では通っている)。
+    **本当の拘束不足なら上端の評価が同じ例外で落ち、`SafetyTargetError(side="invalid_bound")`
+    として原因を連鎖したまま上がる**ので、探索の中で握っても検出力は落ちない。
     """
     try:
         space, run, report = _derive_and_run(conditions, material_mm3, **kwargs)
         return "ok", (space, run, report)
     except simp.VolumeTargetError as exc:
         return ("too_much" if exc.side == "above_capacity" else "too_little"), exc
-    except (ds.DesignSpaceDisconnectedError, ds.DesignSpaceTooSmallError) as exc:
+    except (
+        simp.SolveResidualError,
+        ds.DesignSpaceDisconnectedError,
+        ds.DesignSpaceTooSmallError,
+    ) as exc:
         return "too_little", exc
 
 
