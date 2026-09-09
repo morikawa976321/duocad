@@ -365,16 +365,30 @@ def test_element_size_outside_the_bounds_is_refused() -> None:
         optimize_run._resolve_element_size(infeasible, None)
 
 
-def test_estimate_keeps_the_coarse_stage_in_the_total() -> None:
-    """案5の粗い段は**候補ごとの固定費**。落とすと予想時間が実測から系統的にずれる。"""
+def test_estimate_adds_the_reference_run_once_not_per_candidate() -> None:
+    """**参照 run は探索を通して1回。** 候補ごとの固定費として掛けると系統的に上振れし、
+    落とすと下振れする(案5の粗い段は候補ごとだったので、そこを取り違えやすい)。
+    """
     estimate = optimize_run.estimate_seconds(10_000, max_iter=10, evaluations=4)
-    per_run = (
-        optimize_run.COARSE_DERIVE_SECONDS
-        + 10 * 10_000 * optimize_run.SECONDS_PER_ELEMENT_ITERATION
+    per_run = 10 * 10_000 * optimize_run.SECONDS_PER_ELEMENT_ITERATION
+    reference = (
+        optimize_run.REFERENCE_ITERATIONS_FOR_ESTIMATE
+        * 10_000
+        * optimize_run.SECONDS_PER_ELEMENT_ITERATION
     )
     assert estimate["seconds_per_evaluation"] == pytest.approx(per_run)
-    assert estimate["seconds_typical"] == pytest.approx(per_run * 4)
-    assert estimate["seconds_typical"] > 4 * optimize_run.COARSE_DERIVE_SECONDS
+    assert estimate["seconds_reference"] == pytest.approx(reference)
+    assert estimate["seconds_typical"] == pytest.approx(reference + per_run * 4)
+    # 候補を増やしても参照は1回ぶんしか増えない(掛け算の中に入っていない)。
+    more = optimize_run.estimate_seconds(10_000, max_iter=10, evaluations=8)
+    assert more["seconds_typical"] - estimate["seconds_typical"] == pytest.approx(per_run * 4)
+
+
+def test_the_estimate_reference_iterations_match_the_derivation() -> None:
+    """見積り式の写しが `design_space` の実物とずれていないか(層をまたぐ契約)。"""
+    from duocad.topopt import design_space as ds
+
+    assert optimize_run.REFERENCE_ITERATIONS_FOR_ESTIMATE == ds.REFERENCE_MAX_ITER
 
 
 def test_material_bounds_need_room_between_the_keep_and_the_capacity() -> None:
@@ -522,12 +536,18 @@ def test_safety_loop_passes_the_iteration_callback_through(monkeypatch) -> None:
     assert seen["keep_model"] is True  # 応力を測る経路(`20260904-0143` の契約)
 
 
-def test_the_candidate_material_reaches_the_coarse_stage(monkeypatch) -> None:
-    """**粗い段に本番と同じ材料量を渡す**(`20260904-1416` の契約。塞ぐと別の形の周りを膨らませる)。"""
+def test_the_candidate_material_and_the_reference_reach_the_derivation(monkeypatch) -> None:
+    """**導出に本番と同じ材料量と、探索が1回だけ作った参照 ρ を渡す。**
+
+    材料量が届かないと別の量の周りを切り出す(`20260904-1416` の契約)。参照が届かないと
+    `derive_from_reference` が材料量ごとに参照を作り直し、SIMP を1回で済ませるという
+    連続値保持の利点がそのまま消える。
+    """
     from duocad.topopt import design_space as ds
     from duocad.topopt import safety_loop
 
     seen: dict = {}
+    sentinel = object()
 
     def fake_derive_default(conditions, **kwargs):
         seen.update(kwargs)
@@ -547,9 +567,79 @@ def test_the_candidate_material_reaches_the_coarse_stage(monkeypatch) -> None:
             rho_min=0.5,
             percentile=99.5,
             derivation_kwargs={"spacing": 2.0},
+            reference=sentinel,
         )
-    assert seen["coarse_material_mm3"] == 1234.5
+    assert seen["material_mm3"] == 1234.5
+    assert seen["reference"] is sentinel
     assert seen["spacing"] == 2.0
+
+
+def test_the_reference_is_built_once_for_the_whole_search(monkeypatch) -> None:
+    """**参照 ρ は探索の最初に1回だけ作る。** 段ごとに作り直すと案5より遅い形になる。
+
+    併せて、切り出し側の引数名(`k` など)を参照を作る側の名前へ translate している
+    ことを見る —— 素通しにすると `derive` まで流れて `TypeError` になる。
+    """
+    from duocad.topopt import design_space as ds
+    from duocad.topopt import safety_loop
+
+    calls: list[dict] = []
+
+    def fake_build_reference(conditions, **kwargs):
+        calls.append(kwargs)
+        return "参照"
+
+    monkeypatch.setattr(ds, "build_reference", fake_build_reference)
+    got = safety_loop._build_reference(
+        object(),
+        {"spacing": 2.0, "k": 1.5, "reference_max_iter": 7},
+        force=(0.0, 0.0, -1.0),
+        forces=None,
+        solver=None,
+        threads=None,
+        progress=None,
+    )
+    assert got == "参照"
+    assert len(calls) == 1
+    assert calls[0]["spacing"] == 2.0
+    assert calls[0]["max_iter"] == 7  # reference_max_iter → max_iter
+    assert "k" not in calls[0]
+    assert "reference_max_iter" not in calls[0]
+
+
+def test_the_search_builds_one_reference_and_hands_it_to_every_evaluation(monkeypatch) -> None:
+    """**探索1回につき参照1本、それが全段へ届く。**
+
+    `_build_reference` 単体の検査では、`solve_for_safety_factor` が結果を捨てていても
+    (= 段ごとに `derive_from_reference` が自分で作り直しても)通ってしまう。ここは
+    配線そのものを見る —— 落ちたら「遅くなるだけ」なので、実行検査では気づけない。
+    """
+    from duocad.topopt import design_space as ds
+    from duocad.topopt import safety_loop
+
+    built: list = []
+    seen: list = []
+
+    def fake_build_reference(conditions, **kwargs):
+        built.append(kwargs)
+        return "参照"
+
+    def fake_derive_default(conditions, **kwargs):
+        seen.append(kwargs)
+        raise RuntimeError("stop after the derivation")
+
+    monkeypatch.setattr(ds, "build_reference", fake_build_reference)
+    monkeypatch.setattr(ds, "derive_default", fake_derive_default)
+    with pytest.raises(RuntimeError, match="stop after the derivation"):
+        safety_loop.solve_for_safety_factor(
+            object(),
+            target_safety_factor=1.2,
+            material_min_mm3=1.0,
+            material_max_mm3=100.0,
+            derivation_kwargs={"spacing": 2.0},
+        )
+    assert len(built) == 1, "参照は探索の最初に1回だけ"
+    assert seen and all(kw.get("reference") == "参照" for kw in seen)
 
 
 # --------------------------------------------------------------------------------------

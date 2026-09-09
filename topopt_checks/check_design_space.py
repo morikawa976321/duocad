@@ -60,12 +60,15 @@
 
 [13] の構成(既定の導出。タスク `20260904-1416`):
 
-13. **既定が案5で、入口が1つ** — `derive_default` が案5を返す / **`coarse_material_mm3` が
-    素通しになっている**(粗い段が実際にその量で解かれたことを achieved で見る。後続の
-    安全率の外側ループがこの引数を使う)/ 案1(`derive`)が残っていて既定値も動いていない
-    (比較のベースラインであり退避経路)/ `derivation="bbox"` で案1へ戻せる / 未知の名前は
-    例外 / **導出にこだわりのない呼び出し側(`safety_loop.py`)が導出を名指ししていない**
-    —— 名指しが1つでも残っていると、次に既定を倒すときにそこだけ取り残される。
+13. **既定が連続値保持で、入口が1つ** — `derive_default` が連続値保持を返す(参照 run と k と
+    回廊の記録が付く)/ **塊が材料量について単調に増える**(外側の二分探索の前提)/
+    **`material_mm3` と `reference` が素通しに
+    なっている**(後続の安全率の外側ループがこの2つを使う。参照を回し直していないことを
+    秒数の一致で見る)/ **格子の違う参照は例外**(黙って別の場所を切り出さない)/ 案1と案5が
+    残っていて既定値も動いていない(比較のベースラインであり退避経路)/ `derivation="bbox"` /
+    `"coarse_run"` で戻せる / 未知の名前は例外 / **導出にこだわりのない呼び出し側
+    (`safety_loop.py`)が導出を名指ししていない** —— 名指しが1つでも残っていると、次に既定を
+    倒すときにそこだけ取り残される。
 
 [14] の構成(空の条件面のメッセージ。タスク `20260904-1556`):
 
@@ -1221,28 +1224,69 @@ def check_default_derivation() -> None:
         "dilate_mm": CASE5["dilate_mm"],
     }
 
-    # --- 13-1 既定は案5 ----------------------------------------------------
+    # 連続値保持(既定)を回すための引数。**案5の引数(`small`)とは別**にする —— 既定の導出は
+    # 粗い段を持たないので、`coarse_*` を渡すと `TypeError` になる(黙って捨てない契約)。
+    #
+    # **格子はここだけ `DESIGN_SPACE_COARSE` の 14要素より上げる。** 14要素の格子で容量の8%
+    # (参照の既定)を目標にすると密度が低すぎて `simp` が残差検算で落ちる(文面は「拘束不足の
+    # 可能性が高い」になるが、実際は低密度で系が悪条件になっているだけ)。30要素なら参照の
+    # 構造が1成分で出て、k は出発値 1.5 のまま通る。
+    ref_kw = {"elements_long_axis": 30}
+    case1 = ds.derive(cond, **ref_kw)
+    case1_capacity = case1.element_count * float(case1.grid.spacing) ** 3
+    ref_material = 0.15 * case1_capacity
+    reference = ds.build_reference(cond, **ref_kw)
+
+    # --- 13-1 既定は連続値保持 ----------------------------------------------
     check(
-        "13-1 既定の導出が案5(coarse_run)",
-        ds.DEFAULT_DERIVATION == "coarse_run" and ds.DEFAULT_DERIVATION in ds.DERIVATIONS,
+        "13-1 既定の導出が連続値保持(reference)",
+        ds.DEFAULT_DERIVATION == "reference" and ds.DEFAULT_DERIVATION in ds.DERIVATIONS,
         f"DEFAULT_DERIVATION={ds.DEFAULT_DERIVATION!r} / 選べるのは {sorted(ds.DERIVATIONS)}",
     )
-    default_space = ds.derive_default(cond, **small)
+    default_space = ds.derive_default(
+        cond, material_mm3=ref_material, reference=reference, **ref_kw
+    )
     check(
-        "13-1 入口が返す塊が案5のもの(粗い段の記録が付いている)",
-        default_space.stats.get("derivation") == "coarse_run"
-        and isinstance(default_space.stats.get("coarse"), dict)
-        and default_space.stats["coarse"]["iterations"] >= 1,
+        "13-1 入口が返す塊が連続値保持のもの(参照 run と k の記録が付いている)",
+        default_space.stats.get("derivation") == "reference"
+        and isinstance(default_space.stats.get("reference"), dict)
+        and default_space.stats["reference"]["iterations"] >= 1
+        and default_space.stats["k"] > 1.0,
         f"derivation={default_space.stats.get('derivation')!r} / "
-        f"粗い段 {default_space.stats.get('coarse', {}).get('iterations')} 反復",
+        f"参照 {default_space.stats.get('reference', {}).get('iterations')} 反復 / "
+        f"k={default_space.stats.get('k')}",
+    )
+    # **塊は k*材料量 と回廊の大きいほう。** 端数は1要素まで許す(要素数は整数)。
+    ev = case1.grid.element_volume
+    check(
+        "13-1 塊は k*材料量 と回廊の大きいほう以上",
+        default_space.element_count * ev
+        >= min(ds.K * ref_material, default_space.stats["corridor"] * ev) - ev,
+        f"塊 {default_space.element_count} 要素 / k*材料量 {ds.K * ref_material / ev:.0f} 要素 / "
+        f"回廊 {default_space.stats['corridor']} 要素",
+    )
+    # **塊は材料量について単調でなければならない**(外側の二分探索がそれを前提にしている)。
+    # 材料量ごとに「繋がるまで k を上げる」作りだとここが落ちる —— 繋がった時点で止まるぶん
+    # 塊が上下する(bracket 20要素で 45%→2,927要素 / 50%→2,502要素 の実測がある)。
+    sizes = [
+        ds.derive_default(
+            cond, material_mm3=case1_capacity * frac, reference=reference, **ref_kw
+        ).element_count
+        for frac in (0.20, 0.30, 0.40, 0.50, 0.60)
+    ]
+    check(
+        "13-1 塊が材料量について単調に増える(二分探索が前提にしている)",
+        all(sizes[i] <= sizes[i + 1] for i in range(len(sizes) - 1)),
+        f"材料 20/30/40/50/60% → 塊 {sizes} 要素",
     )
 
     # --- 13-2 案1は残っている(ベースライン兼退避経路) ----------------------
-    case1 = ds.derive(cond, elements_long_axis=CASE5["elements_long_axis"])
     check(
-        "13-2 案1(derive)が残っていて、案5より大きい塊を返す",
-        "coarse" not in case1.stats and case1.element_count > default_space.element_count,
-        f"案1 {case1.element_count} 要素 / 案5 {default_space.element_count} 要素",
+        "13-2 案1(derive)が残っていて、既定より大きい塊を返す",
+        "coarse" not in case1.stats
+        and "reference" not in case1.stats
+        and case1.element_count > default_space.element_count,
+        f"案1 {case1.element_count} 要素 / 既定 {default_space.element_count} 要素",
     )
     sig = inspect.signature(ds.derive)
     defaults = {
@@ -1273,15 +1317,38 @@ def check_default_derivation() -> None:
         },
         f"{case5_defaults}",
     )
+    # **連続値保持の既定値も動かさない**(すべて hanger の実測で決めた値。
+    # `design_space.py` の定数のところに根拠が書いてある)。
+    reference_defaults = {
+        "REFERENCE_MATERIAL_RATIO": ds.REFERENCE_MATERIAL_RATIO,
+        "REFERENCE_MAX_ITER": ds.REFERENCE_MAX_ITER,
+        "K": ds.K,
+    }
+    check(
+        "13-2 連続値保持の既定値が動いていない(参照 容量の8%・10反復 / k 2.0)",
+        reference_defaults
+        == {
+            "REFERENCE_MATERIAL_RATIO": 0.08,
+            "REFERENCE_MAX_ITER": 10,
+            "K": 2.0,
+        },
+        f"{reference_defaults}",
+    )
 
     # --- 13-3 退避経路と未知の名前 ------------------------------------------
-    fallback = ds.derive_default(
-        cond, derivation="bbox", elements_long_axis=CASE5["elements_long_axis"]
-    )
+    fallback = ds.derive_default(cond, derivation="bbox", **ref_kw)
     check(
         "13-3 derivation='bbox' で案1へ戻せる(退避経路)",
         "coarse" not in fallback.stats and fallback.element_count == case1.element_count,
         f"{fallback.element_count} 要素(案1 {case1.element_count} 要素)",
+    )
+    case5_fallback = ds.derive_default(cond, derivation="coarse_run", **small)
+    check(
+        "13-3 derivation='coarse_run' で案5へ戻せる(退避経路)",
+        case5_fallback.stats.get("derivation") == "coarse_run"
+        and isinstance(case5_fallback.stats.get("coarse"), dict),
+        f"{case5_fallback.element_count} 要素 / "
+        f"derivation={case5_fallback.stats.get('derivation')!r}",
     )
     check(
         "13-3 知らない導出名は例外(黙って既定へ落ちない)",
@@ -1289,28 +1356,38 @@ def check_default_derivation() -> None:
         "derivation='nope'",
     )
 
-    # --- 13-4 coarse_material_mm3 が素通しになっている -----------------------
-    # **後続(安全率の外側ループ)がこの引数を使う。** 塞ぐと「本番と同じ材料の量で粗い段を
-    # 解く」ができなくなり、別の形の周りを膨らませた塊になる。
-    coarse_box = ds.derive(cond, elements_long_axis=CASE5["coarse_elements_long_axis"])
-    coarse_capacity = coarse_box.element_count * float(coarse_box.grid.spacing) ** 3
-    # 既定(volfrac 0.3)と**はっきり違う量**にする —— 同じ量だと素通ししていなくても通る。
-    wanted = 0.15 * coarse_capacity
-    passed = ds.derive_default(cond, coarse_material_mm3=wanted, **small)
-    achieved = float(passed.stats["coarse"]["material_mm3"])
+    # --- 13-4 material_mm3 と reference が素通しになっている -----------------
+    # **後続(安全率の外側ループ)がこの2つを使う。** `material_mm3` を塞ぐと別の量ぶんを
+    # 切り出すことになり、`reference` を塞ぐと材料量ごとに参照を作り直して案5より遅くなる。
+    wanted = 0.30 * case1_capacity
+    passed = ds.derive_default(cond, material_mm3=wanted, reference=reference, **ref_kw)
     check(
-        "13-4 coarse_material_mm3 が粗い段まで届いている",
-        abs(achieved - wanted) / wanted < 0.01,
-        f"渡した {wanted:.1f} mm^3 / 粗い段が出した {achieved:.1f} mm^3 "
-        f"(既定の volfrac 0.3 なら {default_space.stats['coarse']['material_mm3']:.1f})",
+        "13-4 material_mm3 が切り出しまで届いている",
+        abs(float(passed.stats["material_mm3"]) - wanted) / wanted < 1e-9
+        and passed.element_count > default_space.element_count,
+        f"渡した {wanted:.1f} mm^3 / 記録 {passed.stats['material_mm3']:.1f} mm^3 / "
+        f"塊 {passed.element_count} 要素(材料 {ref_material:.1f} mm^3 なら "
+        f"{default_space.element_count} 要素)",
     )
     check(
-        "13-4 粗い段の体積目標は排他のまま(両方渡すと例外)",
+        "13-4 reference が届いていて、参照 run を回し直していない",
+        passed.stats["reference"]["seconds"] == reference.stats["seconds"],
+        f"塊の記録 {passed.stats['reference']['seconds']:.3f}秒 / "
+        f"渡した参照 {reference.stats['seconds']:.3f}秒",
+    )
+    check(
+        "13-4 格子の違う参照は黙って使わない(例外)",
         _raises(
-            ds.derive_default, ValueError, cond, coarse_volfrac=0.3, coarse_material_mm3=1.0
+            ds.derive_default,
+            ValueError,
+            cond,
+            material_mm3=wanted,
+            reference=reference,
+            elements_long_axis=CASE5["elements_long_axis"] + 4,
         ),
-        "coarse_volfrac と coarse_material_mm3 の同時指定",
+        "参照と違う elements_long_axis",
     )
+    achieved = float(passed.stats["material_mm3"])
 
     # --- 13-5 呼び出し側が導出を名指ししていない ----------------------------
     # **ソースを読む検査。** 名指しが1つでも残っていると、次に既定を倒したときにそこだけ
@@ -1324,17 +1401,24 @@ def check_default_derivation() -> None:
         code = "\n".join(
             line for line in text.splitlines() if not line.lstrip().startswith("#")
         )
+        # **`ds.build_reference(` は名指しに数えない。** 参照を探索の最初に1回だけ作るのは
+        # 外側ループの仕事で、導出の中からは1回にできない。`_build_reference` は既定が
+        # `"reference"` でなければ `None` を返すので、既定を倒しても取り残されない。
         check(
             f"13-5 {fname} が導出を名指ししていない",
-            "ds.derive(" not in code and "ds.derive_from_coarse_run(" not in code,
+            "ds.derive(" not in code
+            and "ds.derive_from_coarse_run(" not in code
+            and "ds.derive_from_reference(" not in code,
             f"入口 derive_default 経由: {'derive_default' in code}",
         )
 
     RESULTS["default_derivation"] = {
         "name": ds.DEFAULT_DERIVATION,
-        "case5_elements": default_space.element_count,
+        "default_elements": default_space.element_count,
         "case1_elements": case1.element_count,
-        "coarse_material_mm3": achieved,
+        "material_mm3": achieved,
+        "k": round(float(default_space.stats["k"]), 4),
+        "corridor": int(default_space.stats["corridor"]),
     }
 
 
@@ -1481,7 +1565,7 @@ def check_empty_condition_face_warning() -> None:
         raised[:120] if raised else "例外が出なかった(検出力なし — 診断を外しても壊れたことに気づけない)",
     )
 
-    # --- 14-6: derive_from_coarse_run(案5・既定の導出)の粗い段で条件面が空だと
+    # --- 14-6: derive_from_coarse_run(案5)の粗い段で条件面が空だと
     #           AttributeErrorではなく構造化された例外になる(2026-09-05 QA指摘の修正) ---
     # 粗い段(coarse_elements_long_axis)は本番解像度より要素サイズが大きいので、本番では
     # 空でない条件面が粗い段でだけ空になりうる。ここではどちらも同じ8要素/軸にして
@@ -1517,8 +1601,8 @@ def check_empty_condition_face_warning() -> None:
         f"{raised_faces}",
     )
 
-    # 案5が既定の導出(DEFAULT_DERIVATION)なので、derive_default 経由でも同じ例外になることを
-    # 実際に確かめる(実務上ここを通るのは derive_default 経由のほうが多い)。
+    # 案5は退避経路になったが、derive_default(derivation='coarse_run') 経由でも同じ例外に
+    # なることは確かめておく —— 戻したときに診断だけ落ちていては退避にならない。
     default_raised_type = ""
     try:
         ds.derive_default(
@@ -1534,7 +1618,7 @@ def check_empty_condition_face_warning() -> None:
     except Exception as exc:  # noqa: BLE001
         default_raised_type = type(exc).__name__
     check(
-        "14-6 既定の入口(derive_default, DEFAULT_DERIVATION='coarse_run')を通しても同じ例外になる",
+        "14-6 入口(derive_default, derivation='coarse_run')を通しても同じ例外になる",
         default_raised_type == "CoarseRunConditionFacesEmptyError",
         f"{default_raised_type}",
     )

@@ -19,6 +19,18 @@ import scipy.sparse.linalg as spla
 # **拘束不足の系を黙って通さないための関門**であって、精度の要求ではない。
 SOLVE_RESIDUAL_TOL = 1e-6
 
+
+class SolveResidualError(ValueError):
+    """`K U = F` が残差検算(`SOLVE_RESIDUAL_TOL`)を通らなかった。
+
+    **`ValueError` の派生なので、既存の `except ValueError` はそのまま効く。**
+    別の型にしてあるのは、呼び出し側が**この失敗だけ**を他の `ValueError` と区別して
+    扱えるようにするため —— 低密度で系が悪条件になっただけなら材料を増やせば直るが、
+    `VolumeTargetError(side="above_capacity")` は増やすと悪化する(逆向きの手当てが要る)。
+    `design_space.build_reference` の取り直しがこの区別に依存している。
+    """
+
+
 # ---------------------------------------------------------------------------
 # 性能計測の口
 # ---------------------------------------------------------------------------
@@ -860,7 +872,7 @@ class Model:
             rel = float(np.linalg.norm(kf @ u_free - ff)) / denominator
         if finite and rel <= SOLVE_RESIDUAL_TOL:
             return
-        raise ValueError(
+        raise SolveResidualError(
             "K U = F が解けていない"
             f"(残差 ||K u - f|| / ||f|| = {rel:.3e} > {SOLVE_RESIDUAL_TOL:.0e}"
             f"{'' if finite else ' / 解に非有限値がある'}、"

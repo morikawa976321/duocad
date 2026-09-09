@@ -7,12 +7,17 @@
 ここにあるのは「最適化を外から何度か回して材料量を決めるループ」だけ。
 
 塊の扱い(docs/TOPOPT.md「塊が材料量に追従する」参照): **各段で塊を導出し直す(案a)を選んだ**。
-`design_space.derive_default(conditions, coarse_material_mm3=material, ...)` を二分探索の
+`design_space.derive_default(conditions, material_mm3=material, ...)` を二分探索の
 候補材料量そのままで毎回呼ぶ —— 塊と材料量が常に噛み合う。固定して使い回す案(c)と比べて
 安全率・材料量ともに実測でよく一致したが(docs/TOPOPT.md表)、(a) は塊が段ごとに変わるため厳密には
 「材料が増えたから安全率が上がったのか、塊が変わったからなのか」を切り分けられない。
 コスト差は実測で無視できる大きさだったので、切り分けを諦めてでも塊と材料量を噛み合わせる
 (a) を既定にした。
+
+**SIMP を回すのは段ごとだが、塊の元になる ρ は探索を通して1本だけである**(既定の導出が
+連続値保持になったため)。`_build_reference` が上端の評価より前に1回作り、以後の全段が
+その順位から切り出す。段ごとに変わるのは「順位のどこまで取るか」だけになったので、上の
+「塊が変わったのか材料が変わったのか」の切り分けにくさは、以前より小さい。
 """
 
 from __future__ import annotations
@@ -182,18 +187,23 @@ def _derive_and_run(
     rho_min: float,
     percentile: float,
     derivation_kwargs: dict,
+    reference: Any = None,
     stl_path: Optional[Any] = None,
     run_progress: Optional[Callable[[Any, Any], None]] = None,
 ) -> tuple[Any, dict, Any]:
     """1つの材料量について、塊を導出し直してから最適化して安全率まで出す(この段の中核)。
 
     **塊は毎回この材料量で導出し直す(選んだ案a)。** `derive_default` は既定の導出
-    (`design_space.DEFAULT_DERIVATION`、いまは案5)へ委ねるので、既定を案1へ戻すと
-    `coarse_material_mm3` は `TypeError` になる(`derive_default` の契約どおり ——
-    黙って捨てない)。
+    (`design_space.DEFAULT_DERIVATION`、いまは連続値保持)へ委ねるので、既定を案1へ戻すと
+    `material_mm3` は `TypeError` になる(`derive_default` の契約どおり —— 黙って捨てない)。
+
+    **`reference` は探索が最初に1回だけ作った参照 ρ。** これを渡さないと
+    `derive_from_reference` が材料量ごとに参照を作り直し、案5より遅い形になる。
     """
     kwargs = dict(derivation_kwargs)
-    kwargs.setdefault("coarse_material_mm3", material_mm3)
+    kwargs.setdefault("material_mm3", material_mm3)
+    if reference is not None:
+        kwargs.setdefault("reference", reference)
     space = ds.derive_default(conditions, **kwargs)
     run = ds.run_topopt(
         space,
@@ -231,6 +241,47 @@ def _derive_and_run(
         percentile=percentile,
     )
     return space, run, report
+
+
+def _build_reference(
+    conditions: ds.Conditions,
+    derivation_kwargs: dict,
+    *,
+    force: Sequence[float],
+    forces: Optional[Sequence[Sequence[float]]],
+    solver: Optional[str],
+    threads: Optional[int],
+    progress: Optional[Callable[[Any, Any], None]],
+) -> Any:
+    """探索の最初に1回だけ参照 ρ を作る。既定の導出が連続値保持でなければ `None`。
+
+    **`derivation_kwargs` は切り出し側(`derive_from_reference`)の引数で書かれている**ので、
+    参照を作る側(`build_reference`)の名前へ translate してから渡す。素通しにすると
+    `k` などが `derive` まで流れて `TypeError` になる。
+
+    **参照は全段で使い回す。** 材料量ごとに作り直すと「毎回1回余分に回す」形になり、
+    案5に対する利点(SIMP を回すのが探索を通して1回)がそのまま消える。
+    """
+    if derivation_kwargs.get("derivation", ds.DEFAULT_DERIVATION) != "reference":
+        return None
+    kwargs = dict(derivation_kwargs)
+    kwargs.pop("derivation", None)
+    kwargs.pop("k", None)
+    build: dict = {}
+    if "reference_material_ratio" in kwargs:
+        build["material_ratio"] = kwargs.pop("reference_material_ratio")
+    if "reference_max_iter" in kwargs:
+        build["max_iter"] = kwargs.pop("reference_max_iter")
+    return ds.build_reference(
+        conditions,
+        force=force,
+        forces=forces,
+        solver=solver,
+        threads=threads,
+        progress=progress,
+        **build,
+        **kwargs,
+    )
 
 
 def _evaluate(conditions: ds.Conditions, material_mm3: float, **kwargs: Any) -> tuple[str, Any]:
@@ -290,10 +341,12 @@ def solve_for_safety_factor(
     達成不能なときは `SafetyTargetError` —— どちら側にどれだけ足りないかを名指しする
     (クラスdocstring参照)。
 
-    `derivation_kwargs` は `design_space.derive_default` への追加引数
-    (`margin_ratio` / `elements_long_axis` / `coarse_elements_long_axis` /
-    `coarse_max_iter` / `dilate_mm` / `threshold` など)。`coarse_material_mm3` は
-    ここが二分探索の候補材料量で埋めるので**渡さないこと**(渡しても上書きされる)。
+    `derivation_kwargs` は `design_space.derive_default` への追加引数(既定の連続値保持なら
+    `margin_ratio` / `elements_long_axis` / `spacing` / `k` /
+    `reference_material_ratio` / `reference_max_iter`)。`material_mm3` はここが二分探索の
+    候補材料量で埋めるので**渡さないこと**(渡しても上書きされる)。`reference` も同じで、
+    **探索の最初に1回だけ作って全段へ配る** —— 材料量ごとに作り直すと、SIMP を1回で済ませる
+    という連続値保持の利点がそのまま消える。
 
     **STL は候補材料量ごとに書く(= 二分探索の回数ぶん上書きする)。** 既定の書き出し先は
     `output/safety_loop_search.stl`(scratch。`.gitignore` 対象)で、**探索が終わった時点の
@@ -308,7 +361,8 @@ def solve_for_safety_factor(
     長い処理を外から止める手段は `run_progress` の中から例外を投げることで、その例外は
     `_evaluate` の分類(`ValueError` 系)に拾われない型にすること
     (`duocad/optimize_run.py` の `OptimizeCancelled` は `RuntimeError` にしてある)。
-    **粗い段(案5の内部)には進捗が無い**ので、そこだけは1.2〜1.6秒止まらない。
+    **参照 run は本番の格子で回るので数分かかる。** `run_progress` はそこにも渡してあるので、
+    進捗も中断も効く(`SafetyLoopStep` はまだ1つも出ていないので `evaluation` は 0 のまま)。
     """
     if not math.isfinite(target_safety_factor) or target_safety_factor <= 0.0:
         raise ValueError(f"target_safety_factor は有限の正の値であること(受け取った値: {target_safety_factor!r})")
@@ -336,6 +390,17 @@ def solve_for_safety_factor(
         percentile=percentile,
         derivation_kwargs=dict(derivation_kwargs or {}),
         run_progress=run_progress,
+    )
+    # **参照 ρ を1回だけ作る。** 上端の評価より前に置くのは、上端も同じ参照から切り出した塊で
+    # 評価しなければ「材料量を振ったのか塊の作り方を変えたのか」が段の間で揃わないため。
+    eval_kwargs["reference"] = _build_reference(
+        conditions,
+        dict(derivation_kwargs or {}),
+        force=force,
+        forces=forces,
+        solver=solver,
+        threads=threads,
+        progress=run_progress,
     )
 
     history: list[SafetyLoopStep] = []

@@ -51,12 +51,9 @@ def check(name: str, ok: bool, detail: str) -> None:
 
 
 CFG = bench.SAFETY_LOOP
-DERIVATION_KW = dict(
-    elements_long_axis=CFG["elements_long_axis"],
-    coarse_elements_long_axis=CFG["coarse_elements_long_axis"],
-    coarse_max_iter=CFG["coarse_max_iter"],
-    dilate_mm=CFG["dilate_mm"],
-)
+# **既定の導出(連続値保持)の引数だけを渡す。** 案5の `coarse_*` を混ぜると、素通しの契約
+# どおり `derive_from_reference` が `TypeError` で落ちる(黙って捨てない)。
+DERIVATION_KW = dict(elements_long_axis=CFG["elements_long_axis"])
 
 
 def _bracket_capacity() -> tuple[ds.Conditions, float, float]:

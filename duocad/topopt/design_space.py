@@ -2,10 +2,11 @@
 
     .\\.venv\\Scripts\\python.exe -m duocad.topopt.design_space
 
-導出は2つ入っている。**既定は案5**(`derive_from_coarse_run`)、案1(`derive`)は比較の
-ベースラインと退避経路として残してある。**導出にこだわりのない呼び出し側は `derive_default`
-を通ること** —— 既定を次に倒すときに書き換える場所を1箇所に閉じ込めるための入口である。
-両方式の弱点・比較の数字は docs/TOPOPT.md「4条件から塊(設計空間)を導出する」以降の各節。
+導出は3つ入っている。**既定は連続値保持**(`derive_from_reference`)で、案1(`derive`)と
+案5(`derive_from_coarse_run`)は比較のベースラインと退避経路として残してある。
+**導出にこだわりのない呼び出し側は `derive_default` を通ること** —— 既定を次に倒すときに
+書き換える場所を1箇所に閉じ込めるための入口である。各方式の弱点・比較の数字は
+docs/TOPOPT.md「4条件から塊(設計空間)を導出する」以降の各節。
 
 ## 除外ソリッドの扱い(設計判断)
 
@@ -32,8 +33,18 @@ docs/TOPOPT.md「除外ソリッドを `obstacle` に渡さない(設計判断)�
 **一度解いてから決める** —— 案1で粗い塊を作って SIMP を短く回し、出てきた材料を二値化して
 本番の格子へ再サンプルし、mm で膨らませ、4条件の要素を無条件に足す。**姿勢依存がほぼ消える**
 のが利点(壁に接した材料の割合だけは代理指標として負けるが、本命のコンプライアンスは同等以上)。
-既定は案5(入口は `derive_default`)。数字の根拠は docs/TOPOPT.md「4条件から塊を導出する —
-案5」・「既定をどちらにすべきか」。
+数字の根拠は docs/TOPOPT.md「4条件から塊を導出する — 案5」・「既定をどちらにすべきか」。
+
+## 連続値保持(`derive_from_reference`。いまの既定)
+
+案5は**材料量ごとに粗い段を回し直し、ρ を二値化してから膨らませる**。連続値保持は
+**探索を通して1回だけ本番の格子で回し、ρ を二値化せず順位として使い回す**。材料量ごとの
+塊は「順位の上から `k × 材料量` ぶん、ただし回廊(`Reference.corridor`)を下回らない」。
+**回廊は参照ごとに1回だけ求める固定値**で、これが連結性の保証であり、塊が材料量について
+単調であることの根拠でもある(材料量ごとに繋がるまで広げる作りにすると単調性が壊れ、
+外側の二分探索の前提が崩れる)。**案5が絶対距離 12mm で膨らませていたところが、材料量に
+比例する `k` に変わる** —— hanger の実測で、案5は答えの近傍で正解の 93.27% しか覆えず壁に
+接した材料が 14.00%(案1は 5.37%)だったのに対し、連続値保持は被覆 100%・壁 5.37% だった。
 
 ## 格子の外は誰も見ていない
 
@@ -848,17 +859,489 @@ def derive_from_coarse_run(
 
 
 # ---------------------------------------------------------------------------
+# 連続値保持(参照 ρ を1回作り、材料量ごとに順位で切り出す)
+# ---------------------------------------------------------------------------
+# 既定値の根拠はすべて実測(docs/TOPOPT.md「連続値保持の既定値をどう決めたか」)。案5と同じ
+# 扱いで、**「なんとなく」の既定は置いていない。**
+
+# 参照 run の材料量 = 塊の容量 × これ。**探索する材料量より下に置くこと** —— 参照の材料量が
+# 対象より多いと ρ が飽和して(hanger の上端で ρ の中央値 0.74)順位が同点だらけになり、
+# 被覆が 3.95% まで落ちる。対象以下なら 100%。安全帯の実測は volfrac 0.066〜0.105 で、
+# その下寄りを採った。
+REFERENCE_MATERIAL_RATIO = 0.08
+
+# 参照 run の SIMP 反復数。**40反復と被覆が変わらない**(hanger の実測で材料量5点の被覆が
+# 100/100/100/99.98/99.97% 対 100/100/100/100/99.87%)ので、3.5倍速い側を採った。
+REFERENCE_MAX_ITER = 10
+
+# **`REFERENCE_MATERIAL_RATIO` は部品によっては痩せすぎる。** 8% は hanger の答えが容量の
+# 約8%にあったから当たった値で、答えが容量の半分にある部品では参照の構造が出来上がらない
+# (実測: bracket 9,386要素で 8% は solid 578要素が2成分にちぎれ、回廊が案1の 71.2% になった。
+# 12% なら 1成分で回廊 7.9%)。**痩せすぎは回廊の大きさで検出できる**ので、超えたら材料を
+# 増やして参照を取り直す。**下げる側には動かさない** —— 参照は薄いほうが安全側で、
+# 濃い側は崖(材料量が対象より多いと ρ が飽和して被覆が 3.95% まで落ちる)。
+REFERENCE_MAX_CORRIDOR = 0.40
+REFERENCE_RETRY_GROWTH = 1.6
+REFERENCE_MAX_ATTEMPTS = 4
+
+# 設計空間の容量 ÷ 材料量。**被覆だけで決めると 1.5 になるが、それでは密度フィルタが
+# 体積目標に届かない。** hanger の実測では 1.5 で全材料量域の被覆が 99.91〜100%(いまの案5は
+# 答えの近傍で 93.27%)だが、設計空間が絶対要素数で小さいと `simp.VolumeTargetError` を踏む
+# (bracket 3,336要素の実測: 塊 751要素・充填率 67% で届かず、1,001要素・67% なら届く)。
+# **2.0(充填率 50%)は同じ題材の全材料量域で届き、壁に接した材料の割合も案1と完全に一致する。**
+# 1.75(57%)も届いたが、落ちた 67% との隔たりが1段しかないので採らなかった。
+#
+# **これを下回るのは「回廊」に足りないときだけである。** 回廊(`Reference.corridor`)は拘束と
+# 荷重を繋ぐのに要る順位の先頭からの最小本数で、参照ごとに1回だけ求めて全材料量で共有する。
+# 材料量ごとに「繋がるまで k を上げる」設計は**採らなかった** —— 繋がった時点で止めると
+# 塊が材料量に対して単調でなくなり(bracket 20要素の実測で 45%→2,927要素 / 50%→2,502要素)、
+# 二分探索が前提にしている単調性が崩れて安全率が 5522 → 3893 と逆行した。
+K = 2.0
+
+# 参照 run も STL を書く(`run_topopt` の契約)。**受入検査が成果物として当てにしている既定の
+# 出力先(`output/bracket.stl` / `output/design_space_case1.stl`)へ向けない。**
+_REFERENCE_STL_PATH = _HERE / "output" / "design_space_reference.stl"
+
+
+class ReferenceRunConditionFacesEmptyError(ValueError):
+    """連続値保持の**参照 run** で拘束面・荷重面のアンカーが空になった。
+
+    `run_topopt` は `anchor.run_pipeline` の契約どおり例外にせず `empty_condition_faces` を
+    積んだ辞書を返す(`"result"` は `None` のまま)。ここで見ずに `.rho` へ触ると素の
+    `AttributeError` になる。
+
+    **`CoarseRunConditionFacesEmptyError` と別の型にしてある。** あちらの文面は
+    「`coarse_elements_long_axis` を上げろ」だが、参照 run に粗い格子は無い(本番と同じ格子で
+    回る)ので、その助言はここでは効かない。
+    """
+
+    def __init__(self, empty_condition_faces: Sequence[dict]) -> None:
+        diagnoses = list(empty_condition_faces)
+        detail = an.format_condition_face_warning(diagnoses)
+        super().__init__(
+            "連続値保持の参照 run で拘束面・荷重面のアンカーが空になった: "
+            f"{detail} 要素サイズを小さくするか、条件面を選び直すこと"
+            "(参照は本番と同じ格子で回るので、これは本番解像度そのものの問題である)。"
+        )
+        self.empty_condition_faces = diagnoses
+
+
+@dataclass(frozen=True)
+class Reference:
+    """本番の格子で1回だけ回した ρ と、そこから作った要素の並び。
+
+    `base` は参照 run を回した案1の塊。`order` は**塊に入れたい順**に並べた要素の平坦添字で、
+    `base.mask` の中の要素だけが入っている(だから `order[:n]` は必ず塊の中に収まる)。
+
+    `corridor` は**拘束と荷重を繋ぐのに要る `order` の先頭からの最小本数**。材料量がいくら
+    小さくてもここまでは必ず取る —— これが連結性の保証であり、同時に「塊は材料量について
+    単調」を成り立たせる仕掛けでもある(材料量ごとに繋がるまで広げる作りにすると、繋がった
+    時点で止まるぶん塊が上下して単調性が壊れる)。
+
+    `derive_kwargs` は `base` を起こしたときの導出引数(`angular_deflection` を含む)、
+    `conditions` はその元になった4条件。**格子が違えば ρ も順位も別の場所を指す**ので、
+    切り出す側が両方を突き合わせる(`derive_from_reference`)。**条件は同一性(`is`)で見る**
+    —— 形状は OCCT のオブジェクトなので値比較が高くつくうえ、作り直した条件は形が変わって
+    いるかもしれない(参照も作り直すのが正しい)。
+    """
+
+    base: DesignSpace
+    rho: np.ndarray
+    order: np.ndarray
+    material_mm3: float
+    corridor: int = 0
+    conditions: Any = None
+    derive_kwargs: dict = field(default_factory=dict)
+    stats: dict = field(default_factory=dict)
+
+
+def reference_order(
+    rho: np.ndarray, mask: np.ndarray, grid: vx.Grid, *, threshold: float = 0.5
+) -> np.ndarray:
+    """塊に入れたい順に並べた要素の平坦添字。**距離が主キー、ρ が副キー。**
+
+    収束した ρ はほぼ二値なので、ρ だけで並べると `ρ >= threshold` の集合を取り切った先が
+    同点だらけになり、そこから先の順序が任意になる。`ρ >= threshold` からのユークリッド距離を
+    主キーにすると「構造をまず取り、そこから同心に膨らませる」順になる —— hanger の実測で、
+    参照より多い材料量での被覆が 94.14% から 99.88% に上がった(k=1.5)。
+
+    **これは案5の膨張と同じ操作である。** 違うのは膨らませる量で、案5は定数
+    (`COARSE_DILATE_MM`)、こちらは材料量と k から決まる。
+    """
+    values = np.asarray(rho, dtype=float)
+    inside = np.asarray(mask, dtype=bool)
+    if values.shape != inside.shape:
+        raise ValueError(f"rho のかたち {values.shape} が塊 {inside.shape} と違う")
+    solid = (values >= float(threshold)) & inside
+    if solid.any():
+        distance = ndimage.distance_transform_edt(~solid, sampling=float(grid.spacing))
+    else:
+        # 参照 run が二値化できるほど固まらなかったとき。距離が定義できないので ρ だけで
+        # 並べる(同点は多いが、全域が等距離になって順序が壊れるよりはよい)。
+        distance = np.zeros_like(values)
+    index = np.flatnonzero(inside.ravel())
+    return index[np.lexsort((-values.ravel()[index], distance.ravel()[index]))]
+
+
+def _condition_elements(base: DesignSpace, table: an.AnchorTable) -> np.ndarray:
+    """塊へ無条件で入れる要素(保持ソリッド ∪ 拘束・荷重のアンカー)。
+
+    **順位から落ちても条件の要素は塊から落ちてはならない**(落ちると拘束も荷重も伝わらない)。
+    節点が1つも付かなかった条件面があるときはアンカーを足さない —— それは別の穴で、ここで
+    足すと `AnchorTable.empty_faces()` を見る既存の口より手前で挙動が変わる。
+    """
+    mask = np.asarray(base.model.keep, dtype=bool).copy()
+    faces = tuple(base.fixed_faces) + tuple(base.load_faces)
+    if not [f for f in faces if f in table.empty_faces()]:
+        mask |= table.element_mask(list(faces), layers=1)
+    return mask
+
+
+def corridor_length(
+    order: np.ndarray,
+    base: DesignSpace,
+    table: an.AnchorTable,
+    conditions_mask: np.ndarray,
+) -> int:
+    """拘束と荷重を繋ぐのに要る、`order` の先頭からの**最小本数**を二分探索で求める。
+
+    **繋がるかどうかは本数について単調である**(要素を足して繋がりが切れることはない)ので
+    二分探索が使える。全部使い切っても繋がらなければ、それは案1の塊そのものが切れている配置
+    なので、`assert_faces_connected` にそのまま診断付きで落としてもらう。
+
+    計算量は連結成分ラベリング `log2(要素数)` 回。本番解像度(100万要素級)でも数秒で、
+    **参照ごとに1回だけ**払えばよい(材料量ごとには払わない)。
+    """
+    inside = np.asarray(base.mask, dtype=bool)
+    total = int(order.size)
+
+    def mask_for(count: int) -> np.ndarray:
+        picked = np.zeros(inside.size, dtype=bool)
+        picked[order[:count]] = True
+        return (picked.reshape(inside.shape) | conditions_mask) & inside
+
+    def connects(count: int) -> bool:
+        try:
+            assert_faces_connected(mask_for(count), table, base.fixed_faces, base.load_faces)
+            return True
+        except DesignSpaceDisconnectedError:
+            return False
+
+    if not connects(total):
+        # 診断(成分の数・拘束/荷重がどの成分にいるか)を持った例外をそのまま上げる。
+        assert_faces_connected(mask_for(total), table, base.fixed_faces, base.load_faces)
+    if connects(0):
+        return 0
+    lo, hi = 0, total
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if connects(mid):
+            hi = mid
+        else:
+            lo = mid
+    return hi
+
+
+def build_reference(
+    conditions: Conditions,
+    *,
+    material_mm3: Optional[float] = None,
+    material_ratio: float = REFERENCE_MATERIAL_RATIO,
+    max_iter: int = REFERENCE_MAX_ITER,
+    threshold: float = 0.5,
+    max_corridor: float = REFERENCE_MAX_CORRIDOR,
+    retry_growth: float = REFERENCE_RETRY_GROWTH,
+    max_attempts: int = REFERENCE_MAX_ATTEMPTS,
+    angular_deflection: float = vx.DEFAULT_ANGULAR_DEFLECTION,
+    force: Sequence[float] = (0.0, 0.0, -1.0),
+    forces: Optional[Sequence[Sequence[float]]] = None,
+    stl_path: Optional[str | Path] = None,
+    progress: Any = None,
+    solver: Optional[str] = None,
+    threads: Optional[int] = None,
+    **derive_kwargs: Any,
+) -> Reference:
+    """**案1の塊で1回だけ SIMP を回して、連続値の ρ を持ち帰る。**
+
+    材料量は `material_mm3`(絶対量)か `material_ratio`(塊の容量に対する分率)。
+    **既定は分率である** —— 参照は部品ごとに違う大きさの箱で回るので、絶対量の既定は部品の
+    大きさに追随しない(絶対距離で持った `COARSE_DILATE_MM` が hanger で外れたのと同じ失敗)。
+    それでも分率は部品によって痩せすぎるので、**回廊が `max_corridor` を超えたら
+    `retry_growth` 倍して取り直す**(`REFERENCE_MAX_CORRIDOR` のところに実測)。
+    `material_mm3` を明示で渡したときは呼び出し側が量を決めているので取り直さない。
+
+    `derive_kwargs` は `derive`(案1)へ素通し(`margin_ratio` / `elements_long_axis` /
+    `spacing` など)。**`derive_from_reference` へ渡すものと揃えること** —— 揃っていないと
+    格子が変わり、順位が別の場所を指す(切り出す側が突き合わせて落とす)。
+    """
+    started = time.perf_counter()
+    ratio = float(material_ratio)
+    if material_mm3 is None and not 0.0 < ratio < 1.0:
+        raise ValueError(f"material_ratio は 0 < r < 1 であること(いま {material_ratio!r})")
+    if int(max_iter) < 1:
+        raise ValueError(f"max_iter は1以上であること(いま {max_iter!r})")
+    if not 0.0 < float(max_corridor) <= 1.0:
+        raise ValueError(f"max_corridor は 0 < r <= 1 であること(いま {max_corridor!r})")
+    if not float(retry_growth) > 1.0 or not math.isfinite(float(retry_growth)):
+        raise ValueError(f"retry_growth は 1 より大きい有限の値であること(いま {retry_growth!r})")
+    if int(max_attempts) < 1:
+        raise ValueError(f"max_attempts は1以上であること(いま {max_attempts!r})")
+
+    # **`angular_deflection` は名前付きで受けて明示的に渡す。** `derive_from_reference` も
+    # 同じように名前付きで受けるので、`derive_kwargs` の中身が両者で揃う(揃っていないと
+    # 切り出し側の突き合わせが、格子は同じなのに違うと言い張る)。
+    base = derive(conditions, angular_deflection=angular_deflection, **derive_kwargs)
+    capacity = float(base.element_count) * float(base.grid.element_volume)
+    material = capacity * ratio if material_mm3 is None else float(material_mm3)
+    table = base.table if base.table is not None else an.build_anchors(base.soup, base.grid)
+    conditions_mask = _condition_elements(base, table)
+    limit = float(max_corridor) * base.element_count
+    attempts = 0
+    failed: Optional[BaseException] = None
+
+    # **痩せすぎたら材料を増やして取り直す。** 判定は回廊の大きさ(`REFERENCE_MAX_CORRIDOR`)。
+    # `material_mm3` を明示で渡された場合は呼び出し側が量を決めているので取り直さない。
+    while True:
+        attempts += 1
+        last = attempts >= int(max_attempts) or material_mm3 is not None
+        try:
+            out = run_topopt(
+                base,
+                material_mm3=material,
+                max_iter=int(max_iter),
+                force=force,
+                forces=forces,
+                solver=solver,
+                threads=threads,
+                progress=progress,
+                stl_path=_REFERENCE_STL_PATH if stl_path is None else stl_path,
+            )
+        except (simp.VolumeTargetError, simp.SolveResidualError) as exc:
+            # **取り直すのは「材料が少なすぎる」現れだけ。** 体積目標が固定材料に届かない
+            # (`below_minimum`)/ 低密度で系が悪条件になって残差検算が通らない、はどちらも
+            # 増やせば直る。**`above_capacity` は増やすと悪化する**ので即座に上げる
+            # (他の `ValueError` —— 引数不正・拘束不足など —— も同じ理由で握らない)。
+            if last or getattr(exc, "side", None) == "above_capacity":
+                raise
+            failed = exc
+            material *= float(retry_growth)
+            continue
+        # **`run_topopt` は空条件面のとき例外にせず `"result"` を `None` にして返す**
+        # (`anchor.run_pipeline` の契約)。ここで見ないと `.rho` で素の `AttributeError` になる。
+        if out.get("empty_condition_faces"):
+            raise ReferenceRunConditionFacesEmptyError(out["empty_condition_faces"])
+
+        rho = np.asarray(out["result"].rho, dtype=float)
+        order = reference_order(rho, base.mask, base.grid, threshold=threshold)
+        corridor = corridor_length(order, base, table, conditions_mask)
+        if corridor <= limit or last:
+            break
+        failed = None
+        material *= float(retry_growth)
+
+    stats = {
+        "seconds": time.perf_counter() - started,
+        "attempts": attempts,
+        "retried_after": None if failed is None else f"{type(failed).__name__}: {failed}"[:200],
+        "material_mm3": material,
+        "material_ratio": material / capacity if capacity else 0.0,
+        "capacity_mm3": capacity,
+        "base_elements": base.element_count,
+        "max_iter": int(max_iter),
+        "iterations": int(out["iterations"]),
+        "achieved_material_mm3": float(out["achieved_material_mm3"]),
+        "compliance_last": float(out["compliance_last"]),
+        "threshold": float(threshold),
+        "solid_elements": int(
+            np.count_nonzero((rho >= float(threshold)) & np.asarray(base.mask, dtype=bool))
+        ),
+        "corridor": int(corridor),
+        "corridor_ratio": float(corridor) / base.element_count if base.element_count else 0.0,
+        "base_seconds": float(base.stats["seconds"]),
+    }
+    return Reference(
+        base=base,
+        rho=rho,
+        order=order,
+        material_mm3=material,
+        corridor=int(corridor),
+        conditions=conditions,
+        # **`angular_deflection` も入れる。** 名前付きで受けているので `derive_kwargs` には
+        # 入っておらず、入れないと「格子が変わりうる引数なのに突き合わせない」穴が残る。
+        derive_kwargs=dict(derive_kwargs, angular_deflection=float(angular_deflection)),
+        stats=stats,
+    )
+
+
+def derive_from_reference(
+    conditions: Conditions,
+    *,
+    material_mm3: float,
+    reference: Optional[Reference] = None,
+    k: float = K,
+    reference_material_ratio: float = REFERENCE_MATERIAL_RATIO,
+    reference_max_iter: int = REFERENCE_MAX_ITER,
+    angular_deflection: float = vx.DEFAULT_ANGULAR_DEFLECTION,
+    force: Sequence[float] = (0.0, 0.0, -1.0),
+    forces: Optional[Sequence[Sequence[float]]] = None,
+    progress: Any = None,
+    solver: Optional[str] = None,
+    threads: Optional[int] = None,
+    **derive_kwargs: Any,
+) -> DesignSpace:
+    """**連続値保持: 保存した ρ の順位で、この材料量ぶんの塊を切り出す。**
+
+    案1(`derive`)・案5(`derive_from_coarse_run`)と**同じ型・同じ不変条件**の `DesignSpace`
+    を返す。案5との違いは、SIMP を回すのが**材料量ごとに1回ではなく探索を通して1回**だけで
+    あること —— そのぶん参照は粗い格子ではなく本番と同じ格子で回せる。
+
+    手順:
+
+    1. 参照(`reference`)が無ければ作る。**探索から呼ぶときは必ず渡すこと** —— 渡さないと
+       材料量ごとに参照を作り直し、案5より遅い形になる。
+    2. `max(k * material_mm3 / 要素体積, reference.corridor)` 本を順位の先頭から取る。
+    3. 4条件の要素(保持・拘束アンカー・荷重アンカー)を無条件で OR し、案1の塊で AND する。
+
+    **連結性は回廊(`Reference.corridor`)が構造的に保証する。** 回廊は参照ごとに1回だけ
+    二分探索で求めた「拘束と荷重を繋ぐのに要る最小本数」なので、どの材料量でも必ず繋がり、
+    かつ**塊は材料量について単調**になる(単調でないと外側の二分探索の前提が崩れる)。
+    案1の塊全体でも繋がらない配置は `build_reference` の時点で
+    `DesignSpaceDisconnectedError` になる。
+    """
+    started = time.perf_counter()
+    material = float(material_mm3)
+    if not material > 0.0 or not math.isfinite(material):
+        raise ValueError(f"material_mm3 は有限の正の値であること(いま {material_mm3!r})")
+    if not float(k) > 0.0 or not math.isfinite(float(k)):
+        raise ValueError(f"k は有限の正の値であること(いま {k!r})")
+
+    if reference is None:
+        reference = build_reference(
+            conditions,
+            material_ratio=reference_material_ratio,
+            max_iter=reference_max_iter,
+            force=force,
+            forces=forces,
+            progress=progress,
+            solver=solver,
+            threads=threads,
+            angular_deflection=angular_deflection,
+            **derive_kwargs,
+        )
+    else:
+        # **別の格子・別の条件で作った参照は使えない。** ρ も順位も `base.grid` の上でしか
+        # 意味を持たないので、取り違えると例外も出さずに別の場所を選ぶ。**引数と条件で
+        # 突き合わせる**のは、格子を起こし直すと本番解像度ではボクセル化が導出時間の大半を
+        # 占めるため(毎段払うわけにいかない)。
+        wanted = dict(derive_kwargs, angular_deflection=float(angular_deflection))
+        if wanted != dict(reference.derive_kwargs):
+            raise ValueError(
+                f"参照を作ったときの導出引数 {sorted(reference.derive_kwargs.items())} と、"
+                f"いま渡された {sorted(wanted.items())} が違う。"
+                "格子が変わると保存した ρ の順位が別の場所を指すので、参照を作り直すこと"
+            )
+        if reference.conditions is not None and reference.conditions is not conditions:
+            raise ValueError(
+                "参照を作ったときの条件と、いま渡された条件が別のオブジェクトである。"
+                "保存した ρ はその条件の格子・形状の上でしか意味を持たないので、"
+                "参照を作り直すこと(条件を組み直したなら形も変わっている可能性がある)"
+            )
+
+    base = reference.base
+    table = base.table if base.table is not None else an.build_anchors(base.soup, base.grid)
+    conditions_mask = _condition_elements(base, table)
+    inside = np.asarray(base.mask, dtype=bool)
+    element_volume = float(base.grid.element_volume)
+    # **回廊を下回らない。** ここが連結性の保証であり、塊が材料量について単調であることの
+    # 根拠でもある(`Reference.corridor` の docstring)。
+    wanted = int(round(float(k) * material / element_volume))
+    taken = min(max(wanted, int(reference.corridor)), int(reference.order.size))
+    picked = np.zeros(inside.size, dtype=bool)
+    picked[reference.order[:taken]] = True
+    picked = picked.reshape(inside.shape)
+    mask = (picked | conditions_mask) & inside
+
+    if not mask.any():
+        raise DesignSpaceTooSmallError(
+            f"連続値保持の塊が空になった(材料 {material:.6g}mm^3 / k={float(k):.4g})。"
+            "参照 run の材料量か k を見直すこと。",
+            {"reference": -1},
+        )
+    # 回廊が保証しているので通るはずだが、**案1・案5と同じく導出が自分で確かめてから返す**。
+    connectivity = assert_faces_connected(mask, table, base.fixed_faces, base.load_faces)
+
+    try:
+        model = vx.model_from_design_mask(
+            base.grid,
+            mask,
+            anchor_shape=base.soup,
+            keep=conditions.keep,
+            deviation=float(base.stats["deviation"]),
+            angular_deflection=angular_deflection,
+        )
+    except vx.OutsideDesignSpaceError as exc:
+        raise DesignSpaceTooSmallError(
+            f"連続値保持の塊(材料 {material:.6g}mm^3 / k={k:.4g})が保持ソリッドを"
+            f"含みきれていない: {exc} 保持は無条件に塊へ入れているので、これは除外ソリッドが"
+            "保持を食っている配置(案1でも同じ理由で落ちる)。",
+            getattr(exc, "outside", {}),
+        ) from exc
+
+    stats = dict(base.stats)
+    stats.update(
+        {
+            "derivation": "reference",
+            "connectivity": connectivity,
+            "case1_elements": base.element_count,
+            "design_elements": int(np.count_nonzero(mask)),
+            "shrink_vs_case1": (
+                float(np.count_nonzero(mask)) / base.element_count if base.element_count else 0.0
+            ),
+            "keep_elements": int(model.stats["keep_elements"]),
+            "material_mm3": material,
+            "k_requested": float(k),
+            "k": float(np.count_nonzero(mask)) * element_volume / material,
+            "ranked_elements": taken,
+            "corridor": int(reference.corridor),
+            # **回廊が k より効いた**(材料量が小さすぎて、繋ぐのに要る量のほうが多い)。
+            "corridor_bound": bool(int(reference.corridor) > wanted),
+            "condition_only_elements": int(np.count_nonzero(conditions_mask & inside & ~picked)),
+            "case1_seconds": float(base.stats["seconds"]),
+            "reference": dict(reference.stats),
+        }
+    )
+    stats["seconds"] = time.perf_counter() - started
+    return DesignSpace(
+        grid=base.grid,
+        mask=mask,
+        model=model,
+        soup=base.soup,
+        conditions=conditions,
+        bbox_min=base.bbox_min,
+        bbox_max=base.bbox_max,
+        margin=base.margin,
+        margin_ratio=base.margin_ratio,
+        stats=stats,
+        table=table,
+    )
+
+# ---------------------------------------------------------------------------
 # 既定の導出(入口を1つにする)
 # ---------------------------------------------------------------------------
 
-# **既定の導出は案5(`"coarse_run"`)。** 根拠は docs/TOPOPT.md「既定をどちらにすべきか」
-# ——「速い・姿勢依存が消える・コンプライアンスは同等以上」で、負けているのは
-# 代理指標(壁に接した材料の割合)の 0° の1項目だけ。
-DEFAULT_DERIVATION = "coarse_run"
+# **既定の導出は連続値保持(`"reference"`)。** hanger の実測で、案5(粗20)が答えの近傍で
+# 正解の 93.27% しか覆えず、壁に接した材料が案1の 5.37% に対して 14.00% だったのに対し、
+# こちらは同じ材料量で被覆 100%・壁 5.38%・塊は 24% 小さい。案5の膨張が絶対距離(12mm)で
+# 部品の大きさに追随しないのが原因で、k(= 塊の容量 ÷ 材料量)を摘みにすると追随する。
+DEFAULT_DERIVATION = "reference"
 
 # 名前 → 導出。名前を受け取る側(受入検査の比較実測)がここを引く。
 # **塊を作りたいだけの呼び出し側はこの表を引かない** —— 引くと既定を倒す場所が増える。
-DERIVATIONS = {"bbox": derive, "coarse_run": derive_from_coarse_run}
+DERIVATIONS = {
+    "bbox": derive,
+    "coarse_run": derive_from_coarse_run,
+    "reference": derive_from_reference,
+}
 
 
 def derive_default(
@@ -866,19 +1349,19 @@ def derive_default(
 ) -> DesignSpace:
     """**導出にこだわりのない呼び出し側の入口。** 既定(`DEFAULT_DERIVATION`)へ委ねる。
 
-    `duocad/optimize_run.py`(製品の経路)はここを通る。案1・案5を名指しで
-    呼びたい側(比較の実測・受入検査)は `derive` / `derive_from_coarse_run` を直接呼ぶ ——
-    **名指しの呼び出しを既定の変更で動かしてはいけない**(比較のベースラインが黙って
-    入れ替わる)。
+    `duocad/optimize_run.py`(製品の経路)はここを通る。特定の導出を名指しで呼びたい側
+    (比較の実測・受入検査)は `derive` / `derive_from_coarse_run` / `derive_from_reference`
+    を直接呼ぶ —— **名指しの呼び出しを既定の変更で動かしてはいけない**(比較のベースラインが
+    黙って入れ替わる)。
 
     `kwargs` は**そのまま既定の導出へ渡る**(素通し)。したがって受け付ける引数は
-    `DEFAULT_DERIVATION` が指す関数のもので、いまは案5:
-    **`coarse_material_mm3` を塞がないこと** —— 本番で使う材料の量が分かっているなら
-    粗い段にも同じ量を渡す必要があり(`derive_from_coarse_run` の docstring)、
-    ここで受けないと外側のループ(安全率)がその量を渡す手段を失う。
+    `DEFAULT_DERIVATION` が指す関数のもので、いまは連続値保持:
+    **`material_mm3` と `reference` を塞がないこと** —— 塊はその材料量ぶんを順位から切り出す
+    ので量が要り、参照は探索を通して1つを使い回すので外から渡す必要がある。ここで受けないと
+    外側のループ(安全率)がどちらも渡す手段を失う。
 
-    `derivation="bbox"` は**退避経路**。既定を倒したあとに案1の挙動へ戻して比べるための口で、
-    ここで名指しした側は `DEFAULT_DERIVATION` が変わっても動かない。
+    `derivation="bbox"` / `"coarse_run"` は**退避経路**。既定を倒したあとに以前の挙動へ戻して
+    比べるための口で、ここで名指しした側は `DEFAULT_DERIVATION` が変わっても動かない。
     """
     name = DEFAULT_DERIVATION if derivation is None else str(derivation)
     try:

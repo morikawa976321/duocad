@@ -85,9 +85,10 @@ MIN_REGION_ELEMENTS = 8
 #: 熱状態だけで 1.7倍振れる(engine `benchmark-seconds-swing-with-thermal-state`)。
 SECONDS_PER_ELEMENT_ITERATION = 1.8e-4
 
-#: 案5(既定の導出)の粗い段の固定費[秒]。probe の実測 1.2〜1.6秒の中央。
-#: **合計から落とさないこと**(候補材料量ごとに1回ずつ掛かる)。
-COARSE_DERIVE_SECONDS = 1.4
+#: 既定の導出(連続値保持)の参照 run の反復数。**探索を通して1回だけ**掛かる
+#: (案5の粗い段のように候補材料量ごとには掛からない)。値の正は
+#: `design_space.REFERENCE_MAX_ITER` で、ここは見積り式が参照 run を落とさないための写し。
+REFERENCE_ITERATIONS_FOR_ESTIMATE = 10
 
 #: 二分探索が典型的に使う評価回数(上端・下端 + 4回)。上限は
 #: `safety_loop.DEFAULT_MAX_EVALUATIONS`。
@@ -692,9 +693,13 @@ def estimate_seconds(
 ) -> dict:
     """その設定でどれくらい掛かるかの**見当**(桁の見当であって予測ではない)。
 
-    1回の評価 = 粗い段の固定費 + 設計反復 × 格子要素数 × 係数。安全率の外側ループは
-    候補材料量ごとに1回ずつ回すので、それを掛ける。**粗い段を合計から落とさないこと**
-    (`20260904-1416` の契約 —— 案5は粗い段が固定費で乗る)。
+    1回の評価 = 設計反復 × 格子要素数 × 係数。安全率の外側ループは候補材料量ごとに1回ずつ
+    回すので、それを掛ける。**そこへ参照 run を1回だけ足す**(既定の導出は連続値保持で、
+    参照は探索の最初に1回しか回らない)。案5のときは粗い段が**候補ごとの固定費**だったので
+    掛け算の中にあった —— 既定を戻すときはここも一緒に直すこと。
+
+    **候補ごとの塊は案1の箱より小さい**(順位から `k × 材料量` ぶんしか取らない)が、材料量が
+    決まらないと大きさが決まらないので、ここでは箱の要素数で見積もる。**その分だけ上振れする。**
 
     `SECONDS_PER_ELEMENT_ITERATION` の散らばり(1.05e-4〜2.82e-4)と熱状態の 1.7倍を
     考えると、**返るのは 2〜3倍の幅で読む値**である。
@@ -703,14 +708,20 @@ def estimate_seconds(
 
     iters = int(safety_loop.DEFAULT_MAX_ITER if max_iter is None else max_iter)
     evals = int(TYPICAL_EVALUATIONS if evaluations is None else evaluations)
-    one = COARSE_DERIVE_SECONDS + iters * int(element_count) * SECONDS_PER_ELEMENT_ITERATION
+    one = iters * int(element_count) * SECONDS_PER_ELEMENT_ITERATION
+    reference = (
+        REFERENCE_ITERATIONS_FOR_ESTIMATE
+        * int(element_count)
+        * SECONDS_PER_ELEMENT_ITERATION
+    )
     return {
         "element_count": int(element_count),
         "max_iter": iters,
         "evaluations": evals,
         "seconds_per_evaluation": one,
-        "seconds_typical": one * evals,
-        "seconds_worst": one * int(safety_loop.DEFAULT_MAX_EVALUATIONS),
+        "seconds_reference": reference,
+        "seconds_typical": reference + one * evals,
+        "seconds_worst": reference + one * int(safety_loop.DEFAULT_MAX_EVALUATIONS),
         # **予測ではない**。この2つを画面に出すときは幅であることを添えること。
         "accuracy": "order-of-magnitude (x2〜x3)",
     }
@@ -925,12 +936,12 @@ def run(
 
     # **測るための導出を1回だけ先に回す。** 材料量の探索範囲は呼び出し側が決める契約
     # (`20260904-1437`)なので、塊の容量と保持ソリッドが占める体積を実際に測る必要がある。
-    # ここだけ **`derivation="bbox"`(案1)を名指しする** —— 既定の案5は
-    # `coarse_material_mm3` を要求する(= 量を決めるために量が要る)ので測る道具に使えない。
-    # 案1は材料量を受け取らず、しかも**案5の塊を必ず含む**
-    # (案5は `(膨らませた材料 | 条件の要素) & 案1の塊`)ので、容量の上界としてちょうどよい。
-    # 格子は案5の本番段と**同一**である(どちらも同じ `derive(conditions, spacing=...)` から
-    # 起きる)ので、ここで作った面アンカーの表と塊で、条件面と保持/除外の点検までできる。
+    # ここだけ **`derivation="bbox"`(案1)を名指しする** —— 既定の連続値保持は
+    # `material_mm3` を要求する(= 量を決めるために量が要る)ので測る道具に使えない。
+    # 案1は材料量を受け取らず、しかも**既定の塊を必ず含む**(連続値保持は案1の塊から順位で
+    # 切り出す部分集合)ので、容量の上界としてちょうどよい。格子も**同一**である
+    # (どちらも同じ `derive(conditions, spacing=...)` から起きる)ので、ここで作った面
+    # アンカーの表と塊で、条件面と保持/除外の点検までできる。
     # **案1を消すときはここも一緒に直すこと。**
     space = ds.derive_default(
         bundle.conditions, derivation="bbox", **derivation_kwargs
