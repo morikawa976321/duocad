@@ -21,7 +21,10 @@
    **自由自由度の集合が全要素で組んだときと完全に一致する**ことを固定する
    (性能の話ではなく、除去が「未知数を減らす」以上のことをしていない根拠)。
    併せて COO の添字の並び・K の分解・自由自由度が孤立していないことを見る。
-   **検出力**: `extra_fixed_dofs` を渡さずに void だけ外すと孤立した自由自由度が出る。
+   **目的値が解いた系のものであること**(`c = F・U`)もここで見る —— [2] の同じ等式は
+   `void_mask` を渡さない片持ち梁なので、この経路には届かない。
+   **検出力**: `extra_fixed_dofs` を渡さずに void だけ外すと孤立した自由自由度が出る /
+   コンプライアンスを全要素で足すと F・U から外れる。
 """
 
 from __future__ import annotations
@@ -361,13 +364,31 @@ def check_void_assembly() -> None:
         f"相対 {gap:.3e} (emin={full.emin:.0e})",
     )
 
-    c_full, _ = full.compliance(rho, 3.0, full.solve(rho, 3.0, solver="direct"))
-    c_lean, _ = lean.compliance(rho, 3.0, lean.solve(rho, 3.0, solver="direct"))
+    u_full = full.solve(rho, 3.0, solver="direct")
+    u_lean = lean.solve(rho, 3.0, solver="direct")
+    c_full, _ = full.compliance(rho, 3.0, u_full)
+    c_lean, ce_lean = lean.compliance(rho, 3.0, u_lean)
     rel = abs(c_lean - c_full) / abs(c_full)
     check(
         "コンプライアンスの相対差が 1e-3 以内",
         rel < 1e-3,
         f"{c_full:.6f} -> {c_lean:.6f} (相対 {rel:.3e})",
+    )
+    # **目的値は解いた系のものでなければならない。** [2] の同じ等式を void を外した系でも
+    # 見る —— [2] は `void_mask` を渡さない片持ち梁なので、この経路には届かない。
+    fu = float(lean.f @ u_lean)
+    check(
+        "void を外した系でも コンプライアンス = F・U",
+        abs(c_lean - fu) < 1e-8 * abs(fu),
+        f"c={c_lean:.12f} F・U={fu:.12f} (相対 {abs(c_lean - fu) / abs(fu):.3e})",
+    )
+    # **検出力**: 全要素で足すと、解いた系に無い emin 媒質のぶんだけ F・U から外れる。
+    ee_all = lean.emin + rho**3.0 * (lean.E - lean.emin)
+    c_all = float((ee_all * ce_lean).sum())
+    check(
+        "全要素で足すと F・U から外れる(上の検査の検出力)",
+        abs(c_all - fu) > 1e-8 * abs(fu),
+        f"全要素で足すと {c_all:.12f} (相対 {abs(c_all - fu) / abs(fu):.3e})",
     )
     RESULTS["void_free_dofs"] = int(lean.free.size)
     RESULTS["void_coo_terms"] = [int(full._iK.size), int(lean._iK.size)]

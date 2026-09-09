@@ -520,8 +520,8 @@ BASELINES = {
     "passive": {
         "n_iter": 12,
         "stopped_by": "max_iter",
-        "c_first": "0x1.b57e5152d5a6bp+7",
-        "c_last": "0x1.b39bdfab3fdbap+4",
+        "c_first": "0x1.b57e2ed4b77c0p+7",
+        "c_last": "0x1.b39bd89537c4ap+4",
         "vol_sum": "0x1.173333330dd85p+8",
         "rho_sha": "5c7b4ff02b39455b03c0f66d991ee1a5fb4540405e031c2096af7c5c230d6d0a",
     },

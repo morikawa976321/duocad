@@ -874,11 +874,19 @@ class Model:
     def compliance(
         self, rho: np.ndarray, penal: float, u: np.ndarray
     ) -> tuple[float, np.ndarray]:
-        """(コンプライアンス c, 要素ひずみエネルギー ce) を返す。"""
+        """(コンプライアンス c, 要素ひずみエネルギー ce) を返す。
+
+        **`c` は組み立てに載せた要素だけで足す**(層をまたぐ契約) —— `assemble` が
+        `active` だけで K を作るので、`c = F・U` はこの範囲で足したときにだけ成り立つ。
+        全要素で足すと、解いた系に無い emin 媒質のひずみエネルギーが目的値に混ざる。
+        `ce` のほうは感度に使うので**全要素ぶん返す**(`optimize` が `x_phys**(penal-1)`
+        と `live` で空要素を落とす)。
+        """
         ue = u[self.edof]
         ce = np.einsum("ij,jk,ik->i", ue, self.ke, ue).reshape(self.nelx, self.nely, self.nelz)
         ee = self.emin + rho**penal * (self.E - self.emin)
-        c = float((ee * ce).sum())
+        energy = (ee * ce).ravel()
+        c = float(energy.sum() if self.active is None else energy[self.active].sum())
         return c, ce
 
 
