@@ -221,9 +221,7 @@ def check_default_unchanged() -> None:
     )
     # **`PRESET['rmin']` は既定値に追随しない。** `check_absolute_volume.py` [4] の
     # ρ場のSHA-256がこの値に乗っているので、既定を動かしても回帰基準は 1.5 のまま
-    # でなければならない(2026-09-05に `DEFAULT_RMIN` を 1.5 から動かしたときの担保。
-    # それまでは「DEFAULT_RMIN == PRESET['rmin']」を見ていたが、それは既定を
-    # 動かせない前提の書き方だった)。
+    # でなければならない。
     check(
         "PRESET['rmin'] が 1.5 のまま(回帰基準の ρ 場が動いていない)",
         simp.PRESET["rmin"] == 1.5,

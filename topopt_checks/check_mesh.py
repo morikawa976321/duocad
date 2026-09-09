@@ -31,8 +31,8 @@
    たどる＝同じ有向辺が2度現れない)ことと、(b)発散定理の符号付き体積が正であること、の
    2つで確定する。(a)だけだと全体反転を、(b)だけだと一部反転の打ち消し合いを見逃す。
    閾値は無い。1〜8で巻き順を見るのは検査7だけで、それは**STL経路しか通らない**ため、
-   `mr.faces` を直接使う消費者(当時は `probe_topopt/server.py`→three.js描画。いまは
-   `duocad/optimize_run.py`→`add_mesh_body`→`web/src/viewport.ts`)が内向きのまま残る事故を
+   `mr.faces` を直接使う消費者(`duocad/optimize_run.py`→`add_mesh_body`→
+   `web/src/viewport.ts`)が内向きのまま残る事故を
    捕まえられなかった(2026-09-02発見。engine
    `winding-fix-at-export-only-leaks-to-other-consumers`)。
 10. **保持/除外の塗り直し(2026-09-05追加。既定でσ=0になった後もここは生きている)** —

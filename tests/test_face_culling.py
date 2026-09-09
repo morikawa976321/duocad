@@ -85,7 +85,7 @@ def _triangles(payload: dict, index: int) -> int:
 
 
 def test_asking_for_every_face_is_the_same_as_the_plain_tessellation(cylinder_shape) -> None:
-    """`fine_faces=None` は `tessellate()` と同じ測り方(旧経路を変えていない)。"""
+    """`fine_faces=None` は `tessellate()` と同じ測り方。"""
     plain = kernel.tessellate(cylinder_shape, 0.002, 0.05)
     selective = kernel.tessellate_selective(cylinder_shape, None, 0.002, 0.05, 0.4, 0.5)
     assert selective["face_count"] == plain["face_count"]

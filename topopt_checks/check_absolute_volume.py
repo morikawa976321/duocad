@@ -393,9 +393,7 @@ def check_unreachable() -> None:
 
     # **上端ちょうど(容量と等しい指定)は体積の口では弾かない** —— 数学的には達成可能な
     # 指定だから。ただし OC の二分探索は「動かせる要素が全部 ρ=1」で退化して落ちる。
-    # **2026-09-04に取り直した**: 退化そのものが `VolumeTargetError(above_capacity)` に
-    # なった(それまでは `ZeroDivisionError`)。この検査は**どちらの落ち方をするか**を
-    # 固定しておくためにあるので、名前が付いた側へ書き換える。
+    # 退化は `VolumeTargetError(above_capacity)` になる。この検査はその落ち方を固定する。
     try:
         solve(case, material_mm3=capacity, max_iter=1)
         outcome = "落ちない"

@@ -192,10 +192,9 @@ model.initial_density(0.3)  # SIMP へ渡す初期密度場(保持=1 / 障害物
 `keep` / `obstacle` は同じ格子に載せる(内部は `voxelize(..., grid=grid)` と同じ道)。
 **塊からはみ出したら既定で `voxelize.OutsideDesignSpaceError`**。`ValueError` の派生なので既存の
 `except ValueError` はそのまま効く。文面に「どの領域が何要素はみ出したか(領域の総要素数つき)」を
-書き、`e.outside`(`{"keep": n, "obstacle": n}`)で機械からも引ける。旧経路 `voxelize()` は
-`keep & design` で黙って切り詰め、件数は `stats["keep_dropped_outside"]` に残るだけだった。
-**塊を自動で決めるようになるとはみ出しは普通に起こる**ので、新しい入口では既定を例外にした。
-切り詰めてよいと分かっているときだけ `on_outside="clip"` を明示する(結果は旧経路と一致する)。
+書き、`e.outside`(`{"keep": n, "obstacle": n}`)で機械からも引ける。
+塊を自動で決める経路でははみ出しが普通に起こるため、既定は例外である。
+切り詰めてよいときだけ `on_outside="clip"` を明示する(`stats["keep_dropped_outside"]` に件数が残る)。
 
 ### 端から端まで
 
@@ -3116,8 +3115,8 @@ pytest を重くしないため)。題材は離れた2つのパッド(拘束側 
   実験場を消した2026-09-05に消えた(いまの画面は `duocad/optimize_run.py` を通り、撮影は
   `web/scripts/shoot-topopt.mjs` が引数で受ける)。
 - **達成可能区間の端ちょうどは解けない。** 体積の口は「容量と等しい絶対量」を通すが、
-  OC の二分探索が退化する。**2026-09-04以降はその退化が `simp.VolumeTargetError`
-  (`side="above_capacity"`)で落ちる**(それまでは `ZeroDivisionError`)。文面に目標・
+  OC の二分探索が退化する。**その退化は `simp.VolumeTargetError`
+  (`side="above_capacity"`)で落ちる**。文面に目標・
   この反復で到達できる最大・塊の容量・その割合が出る。**区間の内側でも落ちることがある**
   —— 密度フィルタが塊の縁で目減りさせるので、実測では容量の 98% は落ち 95% は通る
   (塊の形で変わるので、この境目を定数として持ち出さないこと)。

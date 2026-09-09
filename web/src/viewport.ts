@@ -126,7 +126,7 @@ export function createViewport(container: HTMLElement): Viewport {
   // 実装する)/ 中=パン / 右=カメラ回転。
   //
   // `OrbitControls` の既定は LEFT=ROTATE / MIDDLE=DOLLY / RIGHT=PAN なので、**3つとも
-  // 変える**(中ボタンは「既定のままパン」ではなくドリーだった)。左を `null` にするのは、
+  // 変える**。左を `null` にするのは、
   // 左ドラッグを丸ごとこちらへ渡すため —— 左に何か割り当てたままだと、矩形を引く間に
   // カメラが動いて「囲ったつもりの範囲」と実際の範囲がずれる。
   controls.mouseButtons = {
@@ -2567,9 +2567,9 @@ export function createViewport(container: HTMLElement): Viewport {
     // WORLD_UPのまま変わらない —— `OrbitControls`は生成時に焼いたZ軸を回転の極として
     // 使い続ける(`WORLD_UP`の説明参照)ので、camera.upをそこから逸らすとキューブの見た目
     // (`cubeActive.up`がcamera.upをそのまま写す)と実際の回転軸がずれ、スケッチ中だけ
-    // ビューキューブの動きがおかしくなっていた。`frame.v`を直接使っていたのが原因
-    // (基準平面のXZ/YZはたまたまv=Zで無害だったが、任意面やXY平面ではvがZからずれる)。
-    // 真上・真下に近い面(cube側の上面図/底面図と同じ閾値)だけ±Yへ差し替わる。
+    // ビューキューブの動きがおかしくなっていた。`frame.v` を直接使うと任意面や XY 平面で
+    // camera.up が回転軸とずれる。真上・真下に近い面(cube側の上面図/底面図と同じ閾値)だけ
+    // ±Yへ差し替わる。
     camera.up.set(...upForDirection([normal.x, normal.y, normal.z]))
     camera.position.copy(center).add(normal.multiplyScalar(distance))
     controls.target.copy(center)

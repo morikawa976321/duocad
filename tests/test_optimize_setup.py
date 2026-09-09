@@ -909,7 +909,7 @@ def test_the_delivered_refs_can_be_fed_straight_back_into_the_selection(
     """**配る参照はそのまま `modify_selection` へ渡せる形**である。
 
     画面はverbを起動したときに、既にその役割が付いている対象をこれでプリセレクトする ——
-    形が違うと画面側にもう1つ変換が生まれる(それが対象集合の二重管理の入口だった)。
+    形が違うと画面側にもう1つ変換が生まれる。
     """
     body = _box(session)
     _select(session, _body_refs(body))

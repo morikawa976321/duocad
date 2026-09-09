@@ -707,7 +707,7 @@ def test_an_unknown_sketch_id_shows_the_real_ones(empty_session: Session):
 
 
 def test_an_unknown_body_id_shows_the_real_ones(box_session: Session):
-    """ボディIDは以前からこの形だった —— 一本化しても崩れていないことを固定する。"""
+    """未知の body_id には有効な ID 一覧を添える。"""
     server = McpServer(DocumentTools(box_session))
     real = box_session.document.bodies[0].id
 
