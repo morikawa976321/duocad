@@ -1387,7 +1387,8 @@ def optimize(
                 f"目標はその {target_volume / capacity:.1%}。"
                 "**塊に対して材料が多すぎる** —— 密度フィルタが塊の縁で目減りさせるぶん、"
                 "要素数で入る量でも ρ を上限まで上げて届かないことがある。"
-                "塊を広げる(案5なら dilate_mm を上げる)か、材料を減らすこと",
+                "塊を広げる(連続値保持なら k を上げる / 案5なら dilate_mm を上げる)か、"
+                "材料を減らすこと",
                 material_mm3=target_volume * ev,
                 min_mm3=float("nan"),
                 max_mm3=capacity * ev,

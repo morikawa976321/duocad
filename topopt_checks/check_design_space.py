@@ -80,10 +80,10 @@
     (回帰確認)/ **変異検査**(空面診断を外すと元の `ValueError` に戻ることを毎回自動で確認。
     docs/TOPOPT.md「変異検査の記録(2026-09-05)」)。
     **14-6/14-7(2026-09-05 QAのfollow-up指摘への対応)**: `derive_from_coarse_run`(案5・
-    既定の導出)の**粗い段**は `run_topopt(coarse, ...)` の戻り値の `"result"` を無条件に
+    退避経路)の**粗い段**は `run_topopt(coarse, ...)` の戻り値の `"result"` を無条件に
     使っていたため、粗い段だけ条件面のアンカーが空になると `AttributeError` になっていた
     (14の早期returnが作った新しい穴)。`CoarseRunConditionFacesEmptyError` を新設して検知し、
-    `derive_default`(既定の入口)経由でも同じ例外になることと、変異検査(ガードを外すと
+    `derive_default(derivation="coarse_run")` 経由でも同じ例外になることと、変異検査(ガードを外すと
     `AttributeError` に戻ること)を見る。
 """
 

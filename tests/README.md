@@ -1195,7 +1195,7 @@ Session.optimize_conditions() / optimize_resolution(rmin_mm) / run_optimization(
 - `duocad/topopt/safety_loop.py` 側で固定しているもの: 本番解像度で条件面が空なら
   `ConditionFacesEmptyError`（**生の `AttributeError` ではない**）／`run_progress` が
   `run_topopt` の `progress` へ素通しされる／`keep_model=True` が渡る／候補材料量が
-  `derive_default(coarse_material_mm3=...)` へ届く。
+  `derive_default(material_mm3=...)` へ届く。
 
 ## 回帰ガード（`test_m2_regressions.py` / `test_m3_regressions.py`）
 

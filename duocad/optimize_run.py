@@ -901,15 +901,17 @@ def run(
 
     **進捗**は `progress(event: dict)`(下記 `_ProgressPump`)。**中断**は
     `should_cancel()` が真を返した時点で `OptimizeCancelled` を投げて降りる ——
-    見るのは SIMP の設計反復ごとと、二分探索の候補ごとである(粗い段の中は見ない。
-    1.2〜1.6秒なので、その粒度で止まる)。
+    見るのは SIMP の設計反復ごとと、二分探索の候補ごとである(進捗を出さない短い
+    処理の途中では止まらない)。
 
     失敗は例外で上がる。**握り潰さないこと** —— `OptimizeInputError`(条件が足りない・
     この版で扱えない)/ `FaceMappingError`(面添字の対応が壊れている。**RuntimeError 派生**)/
     `OptimizeCancelled`(中断)と、下の層からの `design_space.DesignSpaceDisconnectedError`
     (拘束と荷重がつながっていない)/ `DesignSpaceTooSmallError` /
-    `design_space.CoarseRunConditionFacesEmptyError` / `safety_loop.SafetyTargetError`
-    (目標安全率に届かない)/ `safety_loop.ConditionFacesEmptyError` はどれも
+    `design_space.ReferenceRunConditionFacesEmptyError` /
+    `design_space.CoarseRunConditionFacesEmptyError`(退避経路 `coarse_run`) /
+    `safety_loop.SafetyTargetError`(目標安全率に届かない)/
+    `safety_loop.ConditionFacesEmptyError` はどれも
     「利用者が次に何をすればよいか」を文面に持っている。
     """
     from .topopt import design_space as ds
@@ -947,8 +949,8 @@ def run(
     )
     # **早い段でも1度配る。** ここは実行ボタンから数秒で通る点で、`?debug=space` /
     # `?debug=anchors` を付けた人はここで塊とアンカーを見られる(最適化の数十秒〜数分を
-    # 待たずに「塊が変」と分かる)。**これは案1(bbox)の塊であって本番の案5ではない**ので
-    # `stage="derive"` を付けて区別する —— 案5の実物は下で `stage="final"` として配り直す。
+    # 待たずに「塊が変」と分かる)。**これは案1(bbox)の塊であって本番(連続値保持)ではない**ので
+    # `stage="derive"` を付けて区別する —— 本番の塊は下で `stage="final"` として配り直す。
     dbg.space("derive", space)
     dbg.anchors("derive", space)
 
@@ -963,9 +965,10 @@ def run(
         "anchor_check": None,
     }
 
-    # **条件面が本番の解像度で空になっていないか。** `derive_default` は粗い段の空だけを
-    # 例外(`CoarseRunConditionFacesEmptyError`)で落とすので、本番解像度のほうは
-    # 導出が持ち帰った面アンカーの表から自分で見る(`assert_faces_connected` は
+    # **条件面が本番の解像度で空になっていないか。** ここは bbox(案1)で測った表を見る ——
+    # 連続値保持の参照 run はこのあと `safety_loop` が回すので、本番解像度の空は
+    # `ReferenceRunConditionFacesEmptyError` / `ConditionFacesEmptyError` 側で落ちる。
+    # bbox 導出の表から自分で見る(`assert_faces_connected` は
     # 空のときに判定を降りるだけで、上へは伝えない)。運び方は `20260904-1556` と同じ ——
     # 診断を戻り値へ積み、1文の警告を付け、`simp` は呼ばずに早期return。
     empty_faces = _empty_condition_faces(space)
@@ -1053,7 +1056,7 @@ def run(
     )
     pump.check()
 
-    # **本番の塊(案5)と、平滑化する前の密度場。** ここが `?debug=space` / `?voxel=1` の正で、
+    # **本番の塊(連続値保持)と、平滑化する前の密度場。** ここが `?debug=space` / `?voxel=1` の正で、
     # 上の `stage="derive"` は「実行ボタンからすぐ見える速報」でしかない。
     dbg.space("final", result.space)
     dbg.anchors("final", result.space)
@@ -1158,7 +1161,8 @@ def _empty_condition_faces(space) -> List[dict]:
     """本番解像度で拘束面・荷重面のアンカーが空になっていないか(`20260904-1556` と同じ形)。
 
     `DesignSpace.table` は導出が作った**本番の格子の**面アンカーの表である
-    (案5が同じ表を2度作らないために持たせてある)。無ければ空リストを返す ——
+    (同じ格子で参照 run や本番 solve を重ねるとき、表を2度作らないために持たせてある)。
+    無ければ空リストを返す ——
     その場合は `run_topopt` の入口層が同じ診断を出す。
     """
     table = getattr(space, "table", None)

@@ -896,7 +896,7 @@ class Server:
         self._emit_event({"type": "optimize_debug", **event})
 
     async def _optimize_cancel(self, connection: Any) -> None:
-        """中断の旗を立てる。**実際に降りるのは次に進捗が出た時点**(粗い段の中では止まらない)。
+        """中断の旗を立てる。**実際に降りるのは次に進捗が出た時点**(進捗を出さない短い処理の途中では止まらない)。
 
         走っていないときに呼ばれても旗は立てない —— `Session.cancel_optimization` の
         旗を畳むのは `run_optimization` の入口なので実害は無いが、走っていないのに

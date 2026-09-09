@@ -170,7 +170,7 @@ def check_entry_point() -> tuple[ds.Conditions, float, float]:
     material_min = capacity * 0.15
     # **2026-09-05に上端を 0.75 → 0.70 へ下げた。** `simp.DEFAULT_RMIN` が 1.5 → 2.5 に
     # なり、**塊の縁でのフィルタの目減りが増えて到達できる材料量の上限が下がった**
-    # (この解像度では容量の約72%が上限。0.75 は案5の粗い段そのものが
+    # (この解像度では容量の約72%が上限。0.75 はこの解像度で
     # `VolumeTargetError` になる)。0.70 は上の [2] が同じ日に実際に通した点である。
     # **検査を弱めたのではない** —— 下の4つの assert はどれも探索範囲の広さを見ていない。
     material_max = capacity * 0.70

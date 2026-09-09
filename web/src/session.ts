@@ -829,7 +829,7 @@ export interface OptimizeDebugGrid {
 /**
  * 開発用の可視化1件(`duocad/optimize_run.py` の `_DebugSink`)。**頼んだときしか来ない。**
  *
- * `stage` は `'derive'`(実行直後に届く速報。案1=bboxの塊)か `'final'`(本番の案5の塊と
+ * `stage` は `'derive'`(実行直後に届く速報。案1=bboxの塊)か `'final'`(本番の連続値保持の塊と
  * 実際に解いた密度場)。**同じ `kind` が2回届く**ので、後から来たほうで置き換えること。
  *
  * `elements` は立っている要素の通し添字(C順 `i*(ny*nz) + j*nz + k`)。
@@ -991,7 +991,7 @@ export interface Session {
   runOptimization(options: OptimizeRunOptions): void
   /**
    * 中断の旗を立てる。**実際に降りるのは次に進捗が出た時点**で、
-   * 塊を起こす粗い段(1.2〜1.6秒)の中では止まらない(`20260904-1704` の契約③)。
+   * 進捗を出さない短い処理の途中では止まらない(`20260904-1704` の契約③)。
    */
   cancelOptimization(): void
   dispose(): void
