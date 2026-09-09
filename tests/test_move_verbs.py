@@ -17,15 +17,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 
 import pytest
 
-from duocad import kernel, parameters, query, selection, sketch
+from duocad import kernel, query, selection, sketch
 from duocad.document import Document
 from duocad.oplog import OpLog, verb_handler
 from duocad.server import Server, Session
-from duocad.verbs import move_body as move_body_verb
 from duocad.verbs import move_sketch_entities as move_sketch_entities_verb
 
 DEVIATION = 0.2

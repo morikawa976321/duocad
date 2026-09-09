@@ -269,7 +269,6 @@ def check_min_wall_thickness(mr: mesh.MeshResult) -> None:
 # ---------------------------------------------------------------------------
 def check_stl_roundtrip(mr: mesh.MeshResult) -> None:
     print("\n[7] STLの往復(build123d.Mesherで読み戻す)")
-    from pathlib import Path
 
     from build123d import Mesher
 

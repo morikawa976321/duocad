@@ -14,12 +14,10 @@
 """
 from __future__ import annotations
 
-import math
-from pathlib import Path
 
 import pytest
 
-from duocad import kernel, query
+from duocad import query
 from duocad.document import Document
 from duocad.sketch import add_circle, base_plane, sketch_create
 from duocad.verbs import extrude, fillet

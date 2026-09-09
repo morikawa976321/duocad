@@ -437,7 +437,6 @@ def test_extrude_face_adopts_face_merging_when_it_helps():
     由来の射影)はこの形でしか通らない — 受入対象の部品では統合の利得が無く採用されないため、
     そちらのテストだけでは履歴経由の射影が一度も実行されない。
     """
-    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
     document = Document()
     document.add_body(

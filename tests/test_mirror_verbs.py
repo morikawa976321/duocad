@@ -19,7 +19,7 @@ import math
 
 import pytest
 
-from duocad import kernel, query, selection, sketch
+from duocad import kernel, query, sketch
 from duocad.oplog import verb_handler
 from duocad.server import Session
 

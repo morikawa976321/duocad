@@ -29,7 +29,7 @@ import pytest
 
 from duocad import kernel, query
 from duocad.mcp_server import DocumentTools
-from duocad.server import FEATURE_COMMANDS, Server, Session
+from duocad.server import Server, Session
 
 DEVIATION = 0.2
 SIDE = 20.0

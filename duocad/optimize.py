@@ -38,16 +38,6 @@ if TYPE_CHECKING:  # pragma: no cover - 型注釈のためだけ(実行時は読
 FINGERPRINT_RTOL = 1e-6
 FINGERPRINT_ATOL = 1e-9
 
-#: 荷重の向きの表し方。
-#:
-#: - `"normal"`  … その面の**外向き法線**(面ごとに向きが変わる)
-#: - `"-normal"` … その逆向き(面を押し込む向き)
-#: - `"vector"`  … 世界座標の単位ベクトル(`OptimizeSetup.load_vector`)
-#:
-#: **世界軸は `"vector"` で表す**(`-Z` は `[0, 0, -1]`)。軸の名前をもう一つの語彙として
-#: 足すと、同じ向きの綴りが2系統になり、片方だけ直したときに黙って食い違う。
-DIRECTION_MODES = ("normal", "-normal", "vector")
-
 #: 面を食う役割の名前(排他の相手を引くのにも使う)。
 FACE_ROLES = ("fixtures", "loads")
 
@@ -266,6 +256,9 @@ def normalize_direction(value: Any) -> tuple:
 
     受けるのは3つの形: `"normal"` / `"-normal"` / 長さ3の数値の並び。
 
+    **世界軸に名前を足さない**(`-Z` は `[0, 0, -1]` として渡す)。軸の名前をもう一つの語彙に
+    すると、同じ向きの綴りが2系統になり、片方だけ直したときに黙って食い違う。
+
     **ベクトルは単位化して控える。** 大きさ[N]は `magnitude` が持つと決めた以上、向きの
     長さにも意味があると、`magnitude=100` `direction=[0,0,-2]` が 100N なのか 200N なのかを
     読む側が決められない。長さ0・非有限は ValueError。
@@ -379,15 +372,6 @@ class OptimizeStateCache:
         return self._payload
 
 
-#: `stale` の理由コード。**文言ではなくこれで判定させる**(画面がどれをトーストに出すかを
-#: 決めるのに要る)。`"hidden"` は人が部品を隠しただけで日常的に出るので、出さない側である。
-#:
-#: - `"fingerprint"` … 後から形を変えて、添字が別の面を指すようになった(**本来の狙い**)
-#: - `"missing"`     … 対象のボディが文書に無い(undoで作成ごと消えている)
-#: - `"hidden"`      … 対象のボディが非表示。表示に戻せばそのまま使われる
-STALE_CODES = ("fingerprint", "missing", "hidden")
-
-
 def state_payload(
     doc: "Document",
     cache: Optional[OptimizeStateCache] = None,
@@ -407,7 +391,7 @@ def state_payload(
                           "vector": [x,y,z] | null}, ...],  # 荷重面が0枚なら空
           "stale": [{"role": "preserve_bodies"|"exclude_bodies"|"fixtures"|"loads",
                      "body": BodyId, "index": int|null,
-                     "code": STALE_CODES のどれか, "reason": str}, ...],
+                     "code": "fingerprint"|"missing"|"hidden", "reason": str}, ...],
           "revision": int,
         }
 
@@ -423,8 +407,13 @@ def state_payload(
     **`load_specs` と `loads` は長さが違いうる**ので、画面は `(body, index)` で突き合わせること。
 
     **`stale` は「割り当てが消えた」ではない。** 文書からは何も消えていない(操作ログが正)
-    ので、形を戻せば・表示に戻せば次の配信でまた載る。画面がトーストに出すかどうかは
-    `code` で決めること(`STALE_CODES`)——`"hidden"` は人が部品を隠すたびに出る。
+    ので、形を戻せば・表示に戻せば次の配信でまた載る。**画面がトーストに出すかどうかは
+    文言ではなく `code` で決めること**:
+
+    - `"fingerprint"` … 後から形を変えて、添字が別の面を指すようになった(**本来の狙い**)
+    - `"missing"`     … 対象のボディが文書に無い(undoで作成ごと消えている)
+    - `"hidden"`      … 対象のボディが非表示。表示に戻せばそのまま使われる。人が部品を隠す
+      たびに出るので、**出さない側である**
 
     `previewing` の間は作り直さない —— プレビューは文書を投機的に書き換えて必ず元へ戻すので、
     その最中の形で照合すると偽の `stale` が出る(`DocumentView._prune_body_caches` と同じ規律)。

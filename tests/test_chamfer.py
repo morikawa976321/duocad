@@ -12,11 +12,10 @@
 """
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 
-from duocad import kernel, query
+from duocad import query
 from duocad.document import Body, Document
 from duocad.region import region_ref
 from duocad.sketch import add_circle, add_rectangle, base_plane, sketch_create

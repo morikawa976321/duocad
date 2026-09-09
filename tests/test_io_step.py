@@ -24,7 +24,6 @@ from duocad.io_step import (
     export_stl,
 )
 from duocad.oplog import OpLog
-from duocad.query import describe_shape, volume
 from duocad.selection import set_visible
 from duocad.verbs.import_editable import import_step
 

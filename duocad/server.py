@@ -27,7 +27,8 @@ import sys
 # モジュールスコープに持っていて、`duocad.server.<名前>` で引けた。実体を別ファイルへ
 # 移したあとも同じ名前が同じように引けることが、この入口を残す理由そのものである
 # (`import` で引く側だけでなく、モジュール属性を差し替える検査もここを見る)。
-# 素通しのimport(下の `# noqa: F401`)は使われていないように見えるが**消さない**。
+# 素通しのimport(下の `noqa: F401` 注記付き)は使われていないように見えるが**消さない**
+# —— この注記を散文の中で `#` から書くと ruff が指示として読み、以降の行が全部素通しになる。
 import asyncio  # noqa: F401
 import json  # noqa: F401
 import os  # noqa: F401
@@ -43,15 +44,15 @@ from . import catalog, io_step, kernel, parameters, query, region, selection, sk
 from .agent import AgentLoop, Cancellation, ProviderError, build_provider  # noqa: F401
 from .agent.providers import DEFAULT_OPENAI_COMPAT_BASE_URL  # noqa: F401
 from .document import Document  # noqa: F401
-from .net.http import (
+from .net.http import (  # noqa: F401
     MCP_HTTP_MAX_BODY,
     MCP_HTTP_PATH,
     WebHandler,
     mcp_http_hosts,
     start_http_server,
 )
-from .net.tools_on_loop import ToolsOnLoop
-from .net.ws import (
+from .net.tools_on_loop import ToolsOnLoop  # noqa: F401
+from .net.ws import (  # noqa: F401
     AI_PROVIDERS,
     FEATURE_COMMANDS,
     FILE_COMMANDS,
@@ -61,8 +62,8 @@ from .net.ws import (
     _send,  # noqa: F401
 )
 from .oplog import OpLog  # noqa: F401
-from .paths import DEFAULT_MODELS_DIR, DEFAULT_WEB_DIST, REPO_ROOT
-from .session import (
+from .paths import DEFAULT_MODELS_DIR, DEFAULT_WEB_DIST, REPO_ROOT  # noqa: F401
+from .session import (  # noqa: F401
     PREVIEWABLE_VERBS,
     Session,
     _RESERVED_WINDOWS_NAMES,  # noqa: F401
@@ -79,7 +80,7 @@ from .verbs import (  # noqa: F401
     pattern_rectangular as pattern_rectangular_verb,
 )
 # **入口から引ける名前は減らさない**ので、出どころだけ変えてここへ再輸出し続ける。
-from .view import (
+from .view import (  # noqa: F401
     DocumentView,
     _log_args_for_state,  # noqa: F401
     _REDACTED_LOG_ARGS,  # noqa: F401

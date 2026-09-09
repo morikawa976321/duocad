@@ -798,7 +798,7 @@ class Model:
         if solver not in ("mg", "cg", "direct"):
             raise ValueError(f"未知の解法: {solver!r}")
         # **既定を束縛時ではなく呼び出し時に読む。** こうしておくと `simp.MG_DEFAULT` を
-        # 差し替えるだけで V-cycle の形を全経路(anchor → design_space → perf)で
+        # 差し替えるだけで V-cycle の形を全経路(anchor → design_space)で
         # 一斉に変えられる。既定値の当たりを取るのに要る。
         mg = MG_DEFAULT if mg is None else mg
         threads = PARALLEL_THREADS if threads is None else max(1, int(threads))

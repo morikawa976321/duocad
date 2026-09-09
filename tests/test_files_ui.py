@@ -29,13 +29,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 from pathlib import Path
 
 import pytest
 
 from duocad import kernel, query
-from duocad.server import FILE_COMMANDS, Server, Session
+from duocad.server import Server, Session
 
 DEVIATION = 0.2
 SIDE = 20.0

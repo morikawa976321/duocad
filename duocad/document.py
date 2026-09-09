@@ -12,7 +12,7 @@ ID重複の `add_body` は ValueError で落とす(黙って無視すると、�
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 from uuid import uuid4
 

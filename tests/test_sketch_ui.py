@@ -19,13 +19,9 @@ UI(スケッチモード・図形・領域の表示)そのものは **`pytest` �
 """
 from __future__ import annotations
 
-import asyncio
 import json
-import math
-import pytest
 
-from duocad import query
-from duocad.server import SKETCH_COMMANDS, Server, Session
+from duocad.server import SKETCH_COMMANDS
 
 DEVIATION = 0.2
 RADIUS = 20.0

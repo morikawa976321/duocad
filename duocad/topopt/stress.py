@@ -302,7 +302,6 @@ class SafetyReport:
     allowable_mpa: float
     representative_mpa: float
     raw_max_mpa: float
-    dense_max_mpa: float
     max_displacement_mm: float
     scale: UnitScale
     representative: RepresentativeStress
@@ -364,7 +363,6 @@ def evaluate(
         allowable_mpa=float(allowable_mpa),
         representative_mpa=rep.value,
         raw_max_mpa=rep.raw_max,
-        dense_max_mpa=rep.dense_max,
         max_displacement_mm=float(np.abs(displacement).max()) * scale.displacement_factor,
         scale=scale,
         representative=rep,

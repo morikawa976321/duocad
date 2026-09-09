@@ -42,18 +42,6 @@ export function regionCells(): Array<[number, number, number]> {
   return cells
 }
 
-/**
- * `(i,j,k)` が指す領域の種別。`|i|+|j|+|k|` が 1 なら面・2 なら辺・3 なら角。
- * `regionCells()` の外(=中心)を渡すと 0 が返る。
- */
-export function regionKind(i: number, j: number, k: number): 'face' | 'edge' | 'corner' | 'center' {
-  const magnitude = Math.abs(i) + Math.abs(j) + Math.abs(k)
-  if (magnitude === 1) return 'face'
-  if (magnitude === 2) return 'edge'
-  if (magnitude === 3) return 'corner'
-  return 'center'
-}
-
 /** 1軸ぶんの中心座標と長さ(半幅1の立方体上)。`idx` は -1/0/1。 */
 function axisExtent(idx: number): { center: number; size: number } {
   if (idx === 0) return { center: 0, size: 2 * (1 - 2 * EDGE_T) }

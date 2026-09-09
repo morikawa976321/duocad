@@ -20,11 +20,10 @@
 from __future__ import annotations
 
 import math
-from pathlib import Path
 
 import pytest
 
-from duocad import kernel, query
+from duocad import query
 from duocad.document import Body, Document
 from duocad.parameters import set_parameter
 from duocad.region import region_ref, regions

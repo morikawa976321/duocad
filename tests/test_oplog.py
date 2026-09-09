@@ -9,9 +9,7 @@ import json
 
 import pytest
 
-from duocad.document import Document
-from duocad.oplog import Operation, OpLog
-from duocad.query import volume
+from duocad.oplog import OpLog
 
 def test_append_seq_is_monotonically_increasing():
     """append()を複数回呼ぶとseqが1から単調増加する。"""

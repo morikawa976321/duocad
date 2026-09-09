@@ -468,9 +468,8 @@ def solve_for_safety_factor(
         if report_lo.safety_factor >= target_safety_factor:
             best = (material_min_mm3, _space_lo, _run_lo, report_lo)
             return _finish(best, target_safety_factor, allowable_mpa, history, converged=True)
-        lo, sf_lo_known = material_min_mm3, True
-    else:  # "too_little" —— 下端はもとから不採用側なので、そのまま lo として使える。
-        lo, sf_lo_known = material_min_mm3, False
+    # `"too_little"` でも下端はもとから不採用側なので、どちらの outcome でもそのまま lo になる。
+    lo = material_min_mm3
     hi = material_max_mm3
 
     # --- 二分探索本体。---

@@ -16,7 +16,7 @@ import math
 import pytest
 
 from duocad.document import Document
-from duocad.region import region_ref, regions
+from duocad.region import regions
 from duocad.sketch import add_circle, add_line, sketch_create
 
 CIRCLE_RADIUS = 20.0
