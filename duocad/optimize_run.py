@@ -70,8 +70,6 @@ RESULT_NAME = "optimized"
 #:
 #: **塊1要素あたり約 28kB** で、箱の数はほとんど効かない(2.4mm は箱が6倍あっても
 #: 4.4mm の1.3倍しか使っていない)。したがってこの定数から必要メモリは出せない。
-#: **2.4mm はこの `run` では回せない** —— 荷重面がトーラスで `_check_anchor_centroids`
-#: に弾かれる(`done/20260909-0518` の契約④)。上の 2.4mm は塊を直に回した値である。
 MAX_ELEMENTS = 2_000_000
 
 #: 保持/除外ソリッドが「この解像度では表現できていない」と見なす要素数の境目。
@@ -1114,10 +1112,18 @@ def _check_anchor_centroids(doc: "Document", space) -> dict:
 
     面添字の取り違えは例外を出さない。`_verify_face_mapping` は B-rep の側で対応を確かめるが、
     それを通り抜けた場合(まとめ方を将来変えたとき等)、ここが最後に気づける場所である。
-    測るのは `anchor.FaceAnchor.centroid`(節点の担当面積で重み付けした重心)と、条件に
-    焼き込んである面の重心の距離。
+    測るのは `anchor.FaceAnchor.centroid`(節点の担当面積で重み付けした重心)と、
+    **その面の面積重心**(`query.face_centroid`)の距離。
+
+    **条件に焼き込んである `center` を使ってはいけない。** あれは `Face.center()` の既定
+    (`CenterOf.GEOMETRY`)で、曲面では面パッチから離れる —— hanger の荷重面(トーラス)では
+    節点重心から 12.807mm 離れ、許容は要素サイズ比例なので **4.27mm より細かいと必ず落ちて
+    いた**(面積重心なら 0.055mm)。ここは離散化の誤差を測る門なので、比べる相手は
+    「その面の上のどこか」でなければならない。
     """
     import numpy as np
+
+    from . import query
 
     table = getattr(space, "table", None)
     if table is None:
@@ -1135,7 +1141,10 @@ def _check_anchor_centroids(doc: "Document", space) -> dict:
         for face_index, condition in zip(faces, conditions):
             anchor = table[int(face_index)]
             centroid = np.asarray(anchor.centroid(table.node_grid), dtype=float)
-            center = np.asarray(condition["center"], dtype=float)
+            body = doc.get_body(condition["body"])
+            center = np.asarray(
+                query.face_centroid(body.shape, int(condition["index"])), dtype=float
+            )
             distance = float(np.linalg.norm(centroid - center))
             distances.append(distance)
             if not distance <= limit:

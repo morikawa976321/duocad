@@ -17,6 +17,8 @@
 7. **`safety_loop` の穴** —— 本番解像度で条件面が空のとき、生の `AttributeError` ではなく
    `ConditionFacesEmptyError` になる(`20260904-1556` の契約④が名指ししていた未修正の穴)。
 8. **import の費用** —— `import duocad` で scipy / skimage が来ない。
+9. **面アンカーの門** —— 比べる相手は面の**面積重心**であって、条件に焼き込んだ
+   `Face.center()` ではない。取り違えると曲面の条件面で解像度を上げるほど厳しくなる。
 """
 from __future__ import annotations
 
@@ -792,3 +794,85 @@ def test_debug_sink_builds_nothing_unless_asked() -> None:
     both.rho("final", grid, np.ones(grid.shape))
     assert [event["kind"] for event in events] == ["rho"]
     assert events[0]["threshold"] == pytest.approx(optimize_run.DEBUG_RHO_THRESHOLD)
+
+
+# --------------------------------------------------------------------------------------
+# 9. 面アンカーの門が「面の上のどこか」と比べている
+# --------------------------------------------------------------------------------------
+def test_face_centroid_is_the_area_centroid_not_the_geometry_center() -> None:
+    """**曲面では両者が大きく離れる。** 離れないなら片方をもう片方で代用してしまっている。"""
+    from duocad import query
+    from duocad.document import Document
+    from duocad.region import region_ref
+    from duocad.sketch import add_circle, add_rectangle, base_plane, sketch_create
+    from duocad.verbs import extrude, fillet
+
+    doc = Document()
+    sketch = sketch_create(doc, base_plane("XY"))
+    add_rectangle(doc, sketch, (0.0, 0.0), 20.0, 20.0)
+    body_id = extrude(doc, [region_ref(sketch, 1)], 20.0, mode="join").args["body_id"]
+    hole = sketch_create(doc, base_plane("XY"))
+    add_circle(doc, hole, (10.0, 10.0), 4.0)
+    extrude(doc, [region_ref(hole, 1)], 20.0, mode="cut", body_id=body_id)
+    circles = [
+        edge["index"]
+        for edge in query.describe_edges(
+            next(b for b in doc.bodies if b.id == body_id).shape
+        )
+        if edge["kind"] == "circle"
+    ]
+    fillet(doc, circles[:1], 1.5, body_id=body_id)
+    shape = next(b for b in doc.bodies if b.id == body_id).shape
+
+    faces = query.describe_faces(shape)
+    curved = next(f["index"] for f in faces if f["kind"] == "torus")
+    flat = next(f["index"] for f in faces if f["kind"] == "plane")
+
+    def gap(index: int) -> float:
+        centroid = query.face_centroid(shape, index)
+        center = query.face_fingerprint(shape, index)["center"]
+        return math.dist(centroid, center)
+
+    assert gap(flat) == pytest.approx(0.0, abs=1e-6)
+    assert gap(curved) > 1.0
+
+
+def test_the_anchor_gate_does_not_read_the_baked_center(session: Session) -> None:
+    """**門は焼き込んだ `center` を見ない。** 見ていると、曲面の条件面で解像度を上げるほど
+    厳しくなり(焼き込みは `CenterOf.GEOMETRY` で面パッチから離れる)、いつか必ず落ちる。
+    """
+    from duocad.topopt import design_space as ds
+
+    _setup_four_conditions(session)
+    bundle = optimize_run.build_conditions(session.document)
+    space = ds.derive(bundle.conditions, elements_long_axis=12)
+
+    healthy = optimize_run._check_anchor_centroids(session.document, space)
+    assert healthy["load_mm"] <= healthy["limit_mm"]
+
+    # 焼き込みを 1000mm ずらしても判定は動かない(= 読んでいない)。
+    for condition in session.document.optimize.loads:
+        condition["center"] = [v + 1000.0 for v in condition["center"]]
+    after = optimize_run._check_anchor_centroids(session.document, space)
+    assert after["load_mm_each"] == pytest.approx(healthy["load_mm_each"])
+
+
+def test_the_anchor_gate_still_catches_a_face_that_is_far_away(
+    session: Session, monkeypatch
+) -> None:
+    """検出力の確認 —— 面の重心が本当に離れていれば落ちる(門を無力化していない)。"""
+    from duocad import query
+    from duocad.topopt import design_space as ds
+
+    _setup_four_conditions(session)
+    bundle = optimize_run.build_conditions(session.document)
+    space = ds.derive(bundle.conditions, elements_long_axis=12)
+
+    real = query.face_centroid
+
+    def far(shape, face_index):
+        return [v + 500.0 for v in real(shape, face_index)]
+
+    monkeypatch.setattr(query, "face_centroid", far)
+    with pytest.raises(optimize_run.FaceMappingError, match="離れている"):
+        optimize_run._check_anchor_centroids(session.document, space)

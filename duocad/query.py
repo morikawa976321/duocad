@@ -17,7 +17,7 @@ from typing import Any
 
 # `Compound.cast` は TopoDS_Shape の実型を見て正しいラッパ型へ振り分ける classmethod。
 # 基底の `Shape.cast` は抽象メソッドで None を返すため使えない。
-from build123d import Compound, Edge, Face
+from build123d import CenterOf, Compound, Edge, Face
 
 from . import kernel
 
@@ -76,8 +76,34 @@ def describe_edges(shape: Any) -> list:
     return described
 
 
+def face_centroid(shape: Any, face_index: int) -> list:
+    """面1枚の**面積重心**(`CenterOf.MASS`)をワールド座標[mm]で返す。
+
+    **`face_fingerprint` の `center` とは別物である。** あちらは `Face.center()` の既定
+    (`CenterOf.GEOMETRY`)で、曲面では面パッチの上にすら乗らない —— hanger の荷重面
+    (トーラス、面積 2783mm^2)で GEOMETRY は `[0, -212.862, 60]`、MASS は `[0, -200, 60]` と
+    12.9mm 離れる。**面の上に material が乗る場所を知りたい側はこちらを使うこと**
+    (`optimize_run._check_anchor_centroids`)。平面では両者は一致する。
+
+    添字は1始まり(`face_fingerprint` と同じ体系)。範囲外は ValueError。
+    """
+    raw = _unwrap(shape)
+    count = kernel.face_count(raw)
+    index = int(face_index)
+    if not 1 <= index <= count:
+        raise ValueError(f"face index out of range: {index} (1..{count})")
+    point = Face(kernel.face_of(raw, index)).center(CenterOf.MASS)
+    return [float(point.X), float(point.Y), float(point.Z)]
+
+
 def face_fingerprint(shape: Any, face_index: int) -> dict:
-    """面1枚の**指紋**(面積・法線・重心)を返す。`{"index", "area", "normal", "center"}`。
+    """面1枚の**指紋**(面積・法線・`Face.center()`)を返す。
+    `{"index", "area", "normal", "center"}`。
+
+    **`center` は面積重心ではない**(`Face.center()` の既定 = `CenterOf.GEOMETRY`)。
+    照合に使うのは面積と法線だけ(`optimize.fingerprint_mismatch`)なので値そのものは
+    問題にならないが、**「面の上のどこか」として使ってはいけない** —— 曲面では面パッチから
+    離れる。その用途は `face_centroid`。
 
     値の作り方は `describe_faces` の1件と同じで、**面1枚ぶんしか測らない**のが違い ——
     形状最適化の条件は数枚の面を指すだけなので、2835面のボディで全面を測る理由が無い
