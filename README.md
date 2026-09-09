@@ -14,6 +14,7 @@
 | [MCP.md](MCP.md) | **MCPツール一覧の正**と登録手順 | AI側から触るとき |
 | [tests/README.md](tests/README.md) | テストが定義するAPI契約 | コアの挙動を疑うとき |
 | [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化**（実測の記録・設計と画面・受入検査の意味） | 数字の根拠・topopt配線を疑うとき |
+| [docs/TOPOPT_SPEED.md](docs/TOPOPT_SPEED.md) | **安全率探索の時間短縮**（内訳・改善案・探索アルゴリズム） | 外側ループを速くしたいとき |
 
 ---
 
