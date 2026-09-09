@@ -13,15 +13,13 @@
 | [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) | **最初期の実装計画**（なぜ・当初スコープ・到達表。「企画の前提」がなぜ） | 起点を辿るとき |
 | [MCP.md](MCP.md) | **MCPツール一覧の正**と登録手順 | AI側から触るとき |
 | [tests/README.md](tests/README.md) | テストが定義するAPI契約 | コアの挙動を疑うとき |
-| [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化の実測の記録**(費用の表・余白比率・案5の比較・応力・面アンカー・変異検査) | 数字の根拠を辿るとき |
+| [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化**（実測の記録・設計と画面・受入検査の意味） | 数字の根拠・topopt配線を疑うとき |
 
 ---
 
 ## 0. 設計原則
 
-UIとAI操作の両方に共通する設計原則。verbを足す・直すときはここへ立ち返る（本人決定。
-背景は engine `duocad-ui-interaction-principles` / `duocad-errors-shown-via-toast` /
-`duocad-sketch-start-is-two-steps-by-pointing`）。
+UIとAI操作の両方に共通する設計原則。verbを足す・直すときはここへ立ち返る。
 
 1. **viewport上で実物をクリックして選択できるものは、別途ボタンを用意しない。**
    実例はスケッチの貼る先クリック（`CommandHost.svelte`）——基準平面(XY/XZ/YZ)もボタンではなく
@@ -47,11 +45,7 @@ UIとAI操作の両方に共通する設計原則。verbを足す・直すとき
 4. **エラーはすべてトーストで見せる**（`web/src/Toast.svelte`）。**いったんエラーのみ**を
    寄せてあり、情報（読み込んだ部品数・書き出したパス等）は`note()`が内部状態として
    保持するだけで画面には出さない（`window.__duocad.messages` で読める）。
-5. **コメントは、コードに現れない制約だけを書く。** 経緯はgitが、決定の理由はengineが持つ。
-   書いてよいのは**外部の罠・実測事実・層をまたぐ契約・意図的な変則**の4種だけである。
-   「以前は〜だった」「〜から変えた」の語り、次の行が何をするかの言い直し、レビュアーへ向けた
-   設計エッセイ、複数ファイルへ同じ理屈を書く重複、テストが既に固定している事柄の再説明は
-   書かない（tests の docstring は「落ちたとき何を意味するか」の1〜2行だけ）。
+5. **コメントは、コードに現れない制約だけを書く。** 詳細は [CLAUDE.md](CLAUDE.md) §コメント（4種の基準）。
 
 AI側の対応する規則は [MCP.md](MCP.md)「AIはどこまで自分でやるか」が正。
 
@@ -59,10 +53,12 @@ AI側の対応する規則は [MCP.md](MCP.md)「AIはどこまで自分でや�
 
 ## 1. 起動（開発サーバー）
 
+**前提**: 以下のコマンドは **リポジトリ直下** をカレントにして実行する（`cd web` などはそこからの相対パス）。
+
 前提はどちらも導入済みなので、**通常は起動コマンド1本だけでよい**。作り直しが要るときだけ:
 
 ```powershell
-cd C:\Users\tm976\mf\duocad\web; npm install; npm run build
+cd web; npm install; npm run build
 ```
 
 > **`web/dist` を作り直さないとUIの変更は画面に出ない。** Pythonサーバが配信するのは
@@ -81,7 +77,7 @@ AIに頼む日も同じもので立てる。**先にアプリを立てて、Clau
 ### 1.1 立てる
 
 ```powershell
-cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m duocad.mcp_server --open
+.\.venv\Scripts\python.exe -m duocad.mcp_server --open
 ```
 
 `--open` でブラウザが開く（省略時は開かない）。**ターミナルのstdinが開いている限り生きる**（`Ctrl+C` で終了）。
@@ -123,8 +119,8 @@ claude mcp add --scope user --transport http duocad http://127.0.0.1:8766/mcp
 ### 1.3 frontendを直しながら見る（Vite dev server）
 
 ```powershell
-cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m duocad.mcp_server   # コア側(WS 8765)
-cd C:\Users\tm976\mf\duocad\web; npm run dev                                              # 画面(5173)
+.\.venv\Scripts\python.exe -m duocad.mcp_server   # コア側(WS 8765)
+cd web; npm run dev                                 # 画面(5173)
 ```
 
 `http://127.0.0.1:5173/` を開く。devサーバは `/duocad-config.json` を返さないので、
@@ -143,22 +139,19 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 ここに書くのは、コードを読むだけでは分からないことだけ。
 
 - **右サイドバー（`.sidebar`）の幅は常に300px固定**。動くとビューポートの寸法＝カメラの
-  アスペクトが変わり、実機検査の座標決め打ちが黙って別の場所を掴む
-  （[[viewport-resize-silently-changes-what-a-click-grabs]]）。
+  アスペクトが変わり、実機検査の座標決め打ちが黙って別の場所を掴む。
 - 通常モードで右サイドバーに `AiPanel` だけが残り空きの帯になるのは**意図した見た目**。
-- 設定ダイアログは**非モーダル**（`show()`）で、**開いている間もビューポートは触れる**
-  （2026-09-04に `showModal()` から切り替え）。FOVは見ながら決める設定なので、背後を
+- 設定ダイアログは**非モーダル**（`show()`）で、**開いている間もビューポートは触れる**。
+  FOVは見ながら決める設定なので、背後を
   inert にすると「見る」だけが残って「回して確かめる」が死ぬ。`showModal()` がただで
   付けていた Esc と重なり順は自前で持ち直してある（`SettingsDialog.svelte`）。
 - **Enterが要らないコマンド**は `tests/test_ui_command_wiring.py` の `ENTER_REQUIRED` が正。
 - undo/redoは**キーボードのみ**（Ctrl+Z / Ctrl+Y）。
-- **保存できる先は「いま編集しているファイル」1つだけ**（2026-08-30）。上書きの口は
+- **保存できる先は「いま編集しているファイル」1つだけ**。上書きの口は
   ヘッダの保存ボタン（`#file-save`）と **Ctrl+S** で、行き先を選ばせない。ファイルパネルの
   名前欄は「**新しい名前**で保存」専用で、既存の名前を打つとサーバが拒否する
-  （`duocad/session.py` の `save_document`。**現在のファイルと同じ名前でも拒否する** ——
-  例外条項を残すと、後からUIを足したときに黙って穴が開く）。一覧の行にあった「上書き」
-  ボタンは撤去した：A を編集中に B の行を押せば B が今の文書で潰れ、操作ログが唯一の正で
-  ある以上それは復旧できなかった。**いま編集しているファイルはサーバが持ち**
+  （`duocad/session.py` の `save_document`。**現在のファイルと同じ名前でも拒否する**）。
+  **いま編集しているファイルはサーバが持ち**
   （`state.current_name`）、画面はその写しを出す＝リロードしても名前が残る。
 - `#save-state`（保存済み/未保存）の判定は**内容の比較ではなく操作ログの履歴位置**による。
   undoで同じ形へ戻しても「未保存」のまま。可視性の切り替えはファイルに載らないので動かさない。
@@ -179,7 +172,7 @@ cd C:\Users\tm976\mf\duocad\web; npm run dev                                    
 ### pytest（コア・MCPの契約）
 
 ```powershell
-cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
 サーバもブラウザも要らない。実STEPを読む重いテストは含まない。
@@ -192,8 +185,6 @@ cd C:\Users\tm976\mf\duocad; .\.venv\Scripts\python.exe -m pytest -q
 報告して先へ進む)。**強制力は、タスクに書く「受入検査がすべて緑」の一文と runner が担う。**
 
 ```powershell
-cd C:\Users\tm976\mf\duocad
-
 # SIMP側の数値の正しさ
 & .\.venv\Scripts\python.exe topopt_checks\check_simp.py
 
@@ -241,61 +232,24 @@ cd C:\Users\tm976\mf\duocad
 
 ブラウザは**Chromeを先に見る**（無ければEdge。`DUOCAD_BROWSER` で明示すればそれが最優先）。
 
-```powershell
-cd C:\Users\tm976\mf\duocad\web
+**一覧の正は `web/scripts/smoke-*.mjs` のファイル名**（各ファイル先頭のコメントが何を見るかの正）。
+番号付きの固定リストは持たない —— 増減のたびにREADMEが古くなるため。
 
-# ① PCケース（ブラウザの一覧・可視性・奥の面のピック）※スクリプトが自分でSTEPを読み込む
+```powershell
+cd web
+
+# 1本だけ（例）
 node scripts/smoke.mjs
 
-# ② 空から手だけで形を作る（スケッチ→押し出し→穴→フィレット→面取り→反復）
-node scripts/smoke-features.mjs
-
-# ③ パネルとファイル操作（パラメータ追随・保存/開く・STEP/STL・**即適用の3条件**）
-node scripts/smoke-files.mjs
-
-# ④ AIが操作すると人間の画面が変わる（**AIの選択変更では即適用が発火しない**ことも見る）
-node scripts/smoke-mcp.mjs
-
-# ⑤ エラーの見せ方(トーストの積層・数え上げ・クリック素通し・close・自動消滅)
-node scripts/smoke-toast.mjs
-
-# ⑥ 通常モードで領域を指せる(要求中だけ・全スケッチ・面より優先・修飾キー・一巡して形が変わる・消えた領域は押し出せない)
-node scripts/smoke-regions.mjs
-
-# ⑦ 選択パネルを消した後の代替(頂点マーカーのCtrl+クリック・提案のまま人が実行できる)
-node scripts/smoke-vertex.mjs
-
-# ⑧ SVG読み込み(スケッチへ入る→パス→Enter・開いているスケッチへ足す・新しいスケッチは
-#    できない・スケッチモードのまま押し出せる・曲線の側面が割れない・Ctrl+Z 1回)
-node scripts/smoke-svg.mjs
-
-# ⑨ ホバーの予告とクリックの結果が一致する(面・外へ出たら消える・選択済みにも明度・辺が先)
-node scripts/smoke-hover.mjs
-
-# ⑩ 直接選択とmove(右ドラッグ回転・中ドラッグパン・左ドラッグのウィンドウ選択・
-#    Shift/Ctrlのトグル・点/辺の移動と複製・ボディの移動と複製・
-#    モード操作のツールバー移設・右サイドバーの開閉)
-node scripts/smoke-move.mjs
-
-# ⑪ 三角形メッシュのボディ(部品一覧に出る・viewportが三角形を持つ・画面に投影できる・
-#    編集は断られる・表示の切り替え・混在のままSTLへ書ける・消せる)
-node scripts/smoke-mesh-body.mjs
-
-# ⑫ 形状最適化を画面から走らせる(条件を置く→2枚なら断られる→解像度の目盛り→実行→
-#    進捗→中断→表現できない保持の通知→走り切って結果のメッシュが出る→STL→メッシュのピック)
-#    **本物のSIMPを1回通す**(中断と「表現できていない」は SIMP を回さずに戻る)
-node scripts/smoke-optimize.mjs
-
-# ⑬ 開発用のデバッグ表示(`?debug=space` / `?debug=anchors` / `?voxel=1`)が出る。
-#    **フラグ無しの画面には1つも出ない**ことと、**デモ題材ではないボディ**で出ることを見る。
-#    **本物のSIMPを1回通す**(塊も節点も密度場も、走らせなければ1つも生まれない)
-node scripts/smoke-optimize-debug.mjs
-
-# ⑭ 鏡映複製の基準をマウスで指す(スケッチの線分を軸に / ソリッドの面を鏡映面に)。
-#    **基準に指したものが対象の選択へ入らない**ことと、**基準を待っている間も
-#    Shift/Ctrl+クリックで対象を選び直せる**ことを両方向で見る
-node scripts/smoke-mirror.mjs
+# 全部（1本でも❌ならそこで終了コード1）
+Get-ChildItem scripts/smoke-*.mjs | ForEach-Object {
+  node $_.FullName
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 ```
+
+形状最適化まわりは `smoke-optimize.mjs` / `smoke-optimize-mode.mjs` / `smoke-optimize-debug.mjs`。
+STEPを読む smoke は `web/scripts/models.mjs` の `PC_CASE_STEP` が指すパスを使う。
 
 既に立てているサーバへ繋ぎたいときだけ `--url http://127.0.0.1:8766/` を渡す
 （その場合スクリプトはサーバを立てず、止めもしない）。
@@ -303,7 +257,7 @@ node scripts/smoke-mirror.mjs
 ### 一括受入チェック（人間/AI ＋ 交互操作）
 
 ```powershell
-cd C:\Users\tm976\mf\duocad; node web\scripts\acceptance.mjs
+node web\scripts\acceptance.mjs
 ```
 
 MCPとWebSocketを1プロセスで持つサーバを自分で起動し、**人間側はブラウザの本物のクリックとキー、
@@ -320,7 +274,7 @@ AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_par
 **読むとき**（小節ごと）:
 - 中核の決めごと／前提にしないこと／モジュールとimport境界 — 実装タスクでは前提として毎回読む
 - ボディの種別(B-rep/三角形メッシュ) — ボディの種類分岐に触るとき
-- 形状最適化を走らせる — topopt実行フローを変更・確認するとき
+- 形状最適化を走らせる — topopt配線・画面・詳細は [docs/TOPOPT.md](docs/TOPOPT.md)「設計と画面」。README §4 は要点のみ
 - frontend(`web/`) — `web/`配下のコードを変更するとき(ファイルの役割・canvas/three.jsの境界を確認する)
 - AI側(MCP) — MCPツールを追加・変更するとき
 - AI側(アプリ内エージェント) — アプリ内AIエージェントの挙動を変更するとき
@@ -345,7 +299,7 @@ AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_par
   名前と分類が一致することは `tests/test_ui_command_wiring.py` が機械で見る。
 - **verbの粒度の定義は [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) §2「verbの粒度」が起点。**
 
-### ボディの種別 —— B-rep と 三角形メッシュ（2026-09-05）
+### ボディの種別 —— B-rep と 三角形メッシュ
 
 `Body.kind` は2つある。**形の持ち方は種別ごとに1本だけ**で、混ぜたBodyは作れない
 （`Body.__post_init__` が弾く）——「`body.shape is None`」で分岐している既存の経路が
@@ -356,7 +310,7 @@ AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_par
 | `"solid"` | `Body.shape`（`TopoDS_Shape`） | 全部 |
 | `"mesh"` | `Body.mesh`（`Mesh` = 頂点＋三角形。不変） | **表示 / STL書き出し / 削除 / 表示の切り替えだけ** |
 
-**メッシュボディに編集verbを効かせない**（2026-09-04本人決定。理由は `duocad/meshbody.py` のモジュールdocstring）。
+**メッシュボディに編集verbを効かせない**（理由は `duocad/meshbody.py` のモジュールdocstring）。
 
 断りは1箇所（`meshbody.reject`）に文言を持ち、**必ず「次に何ができるか」を書く**。
 断りが入る門は2つだけ: `verbs/_common.editable_body`（面・辺を取るverb全部）と
@@ -366,7 +320,7 @@ AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_par
 
 - **メッシュボディの扱いは「名指ししたら断る / 導出した集合からは黙って外す」。**
   この1本の線で全部の門が決まる —— `select_face`/`edge`/`vertex`・`predicates` の `body` 明示・
-  `optimize.face_fingerprint`・`sketch` の貼る先・**保持/除外ソリッドへの割り当て**（2026-09-05）は
+  `optimize.face_fingerprint`・`sketch` の貼る先・**保持/除外ソリッドへの割り当て**は
   **名指し**なので断り、
   `predicates` の `body` 省略（可視Body全部）と `export_stl` の対象集合は**導出**なので、
   前者は黙って外し後者は含める。判断の根拠は「呼び出し側が何を主張したか」である ——
@@ -391,182 +345,19 @@ AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_par
 `add_mesh_body` は**WebSocketには開けていない**（`catalog` の `ws="none"`）。画面から三角形を
 手で打つ操作は無く、入口はMCPと、形状最適化の結果を入れるコード側だけである。
 
-### 形状最適化を走らせる（2026-09-05）
+### 形状最適化を走らせる
 
 条件を置く4 verb（`set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads`）の
-**続き**が `duocad/optimize_run.py` である。verbは1本も足していない —— 結果を文書へ入れる口は
-既存の `add_mesh_body` だけで、**元のボディは1つも消さず・形も差し替えない**（2026-09-04本人決定。
-最適化は編集ではなく「条件から新しい形を1つ作る」操作）。
+**続き**が `duocad/optimize_run.py` である。結果は既存の `add_mesh_body` だけで文書へ入る
+（元のボディは消さず・形も差し替えない）。
 
-```
-Session.optimize_conditions()     4条件がそろって走らせられるか（足りないものを名指しする）
-Session.optimize_resolution(rmin_mm=...)   要素サイズの上限・下限・既定と予想時間
-Session.run_optimization(...)     端から端まで走らせ、結果をメッシュボディとして足す（重い）
-Session.cancel_optimization()     走っている最適化に降りるよう伝える（旗を立てるだけ）
-```
+**設計・解像度・画面・デバッグ・撮影の詳細は [docs/TOPOPT.md](docs/TOPOPT.md)「設計と画面」が正。**
+README に残すのはアーキテクチャ上の要点だけ:
 
-**要素サイズの上限＝「これより粗いと間違う」**を2つの要求の min で決める:
-
-- **最小部材幅から** — `rmin_mm / simp.MIN_RMIN`（`20260904-1557` の下限）
-- **条件面から** — `sqrt(CAD面積)`。**利用者に聞かない**。`anchor.empty_face_diagnosis` の
-  `suggested_max_spacing_mm` と同じ式で、**近似であって保証ではない**（正方形とみなした
-  代表寸法なので、曲面や極端な縦横比の面では過大にも過小にもなる）
-
-**要素サイズの下限は暫定の固定値**（総要素数 `MAX_ELEMENTS`）で、**メモリの安全域ではない**
-——ピークを決めるのは箱の要素数ではなく**組み立てに載る要素数（塊。空要素は外れる）**であり、
-この定数は箱の数を数えている（実測は `optimize_run.MAX_ELEMENTS` のコメント）。**既定は上限側**
-（＝条件と最小部材幅を満たす、最も粗くて安い設定）で、**時間は制約にしない** ——
-予想時間は帰結として出るだけ。
-
-**保持・除外ソリッドからは上限を厳密に計算できない**（細い通路の表現に必要な要素サイズは
-中心軸変換に近い話で、バウンディングボックスや体積では取りこぼす）。だから**ボクセル化した
-あとに数えて通知する** —— 保持/除外を**1つずつ**格子へ載せ、0要素なら最適化を回さずに
-`state == "unrepresented_regions"` で戻る（合計で見ると、大きい保持ソリッド1つで小さいほうの
-消失が隠れる）。運び方は `20260904-1556`（空の条件面）と同じで、新しい通知の仕組みは作らない。
-
-**許容応力は固定**（根拠は [docs/TOPOPT.md](docs/TOPOPT.md)「許容応力の導出」が正）。duocad 側でも
-材料を選ばせない。値は `optimize_run.allowable_stress()` から引ける。利用者が入れるのは
-**目標安全率**で、そこから材料量を二分探索する（`safety_loop.solve_for_safety_factor`）。
-
-**この版の制限**:
-
-- **荷重は「同時にかかる1つの荷重系」だけ**。拘束面・荷重面は何枚でもよく、荷重の大きさ[N]と
-  向きは**面ごとに違ってよい**（面Aへ鉛直下向き50N、面Bへ法線方向20N、が同時に成立する）。
-  扱えないのは**別シナリオ＝複数荷重ケース**（「あるときは面A、別のときは面B」）で、
-  これは合成すると**どちらの単独荷重にも耐えない形**が出るため、表現できないままにしてある。
-- **保持ソリッドは1つ以上必須**（塊は保持ソリッドと条件面から起こす）。
-- **メッシュボディは保持・除外に指定できない**（下の「名指ししたら断る」の線）。
-
-**面の対応がこの配線でいちばん壊れやすい。** duocad は面を `(body_id, 1始まりの添字)` で持ち、
-`duocad.topopt` は `TriangleSoup` の面添字で持つ。どちらも `kernel._face_map` の数え方なので
-**同じ形状を渡すかぎり一致する**が、条件面が複数のボディに散ると `kernel.make_compound` で
-1つにまとめるため `face_count` の累積ぶんずれる。**ずれても例外は出ない**（荷重が別の面に入り、
-最適化はもっともらしく収束する）ので、網を2枚張ってある:
-
-1. `_verify_face_mapping` — まとめた形の側で測り直した指紋（面積・法線・**重心**）が、ボディ
-   単体で測った指紋と一致するか。**重心を外すと同形の別ボディを取り違えても通る。**
-2. `_check_anchor_centroids` — 実際にできた面アンカーの節点の重心が、条件面の重心の近くにあるか。
-
-同じ性格の門がもう1つある: **結果メッシュの頂点は要素添字空間（`spacing=(1,1,1)`・セル中心規約）
-で返る**ので、`grid.origin + verts * grid.spacing` でワールド[mm]へ直す（`_mesh_to_world`）。
-忘れると原点付近に縮んだメッシュが黙って入るだけなので、`_check_mesh_placement` が毎回見る。
-
-#### 画面から走らせる（`web/src/OptimizePanel.svelte`）
-
-WebSocketには**4つの口**を開けてある（`catalog` の `category="protocol"` ＝ verbではない。
-応答は状態配信ではなく専用のイベント `optimize_conditions` / `optimize_resolution` /
-`optimize_status` / `optimize_progress` / `optimize_result` / `optimize_error`）。
-**MCPには開けていない** —— 数分かかる同期の呼び出しをツールとして出すと、進捗も中断も
-運べないまま呼び出し側がタイムアウトする。AIから走らせたくなったら、まず**進捗と中断を
-MCPで運ぶ形**を決めること。**`add_mesh_body` は `ws="none"` のまま**でよい（画面が三角形を
-作る操作は無く、結果は `run_optimization` がサーバの中で入れる）。
-
-**重い処理は `asyncio.to_thread` で回す。** `_dispatch` の中で待つと、`handle()` が1接続を
-直列に処理する以上、**同じ接続から届く `cancel_optimization` が読めなくなる**（＝止める手段が
-無くなる）。`_ai_start` と同じ形である。
-
-**解像度は「既定＝粗い側の端。細かくする方向にだけ動く目盛り」**（2026-09-04本人了承）。
-両端の性質が違うからで、**粗い側の端は「正しさ」の境界**（割ると条件面から節点が消え、最小
-部材幅が表現できない。しかも silent）、**細かい側の端は「都合」の境界**（遅い・落ちる、それだけ）
-である。目盛りの実体は `resolution_limits()["steps"]`（等比で6段。添字0が上限側＝既定）で、
-**段はサーバが作る** —— 要素数の数え方（余白比率とパッド）を画面が持つと必ずずれる。
-各段に予想時間が付くが、**時間は入力にしない** —— 時間から解像度を逆算すると、利用者が
-知らないうちに最小部材幅と条件面の要求を割り、しかも割ったことは画面から見えない。
-画面には**「2〜3倍の幅で読む値」であることを添えて**出す（係数が 1.05e-4〜2.82e-4 に散り、
-熱状態だけで1.7倍振れる）。
-
-**通知はトーストとパネルの二重に出す。** トースト（`Toast.svelte`）は8秒で消える設計なので、
-「荷重面に格子節点が付かなかった」「保持ソリッドがこの解像度では表現できていない」のような
-**結果が信用できないという意味の文**を流すと見落とす。パネルの `#optimize-notice` は
-**次に走らせるまで残る**（トーストは気づかせる役、パネルは読み返す役）。**中断はエラー扱いに
-しない** —— 人がそう言った結果なので赤い札を出さず、「文書は変わっていない」だけを残す。
-
-**実行中は画面の操作を止める**（2026-09-05の判断）: verbの行（`CommandHost` の `busy`）・
-最小部材幅・解像度・「抜ける」を無効にする。止めないと、走っている最中に条件を編集できて
-**結果と条件が食い違う**（`run_optimization` は入口で読んだ条件のまま最後まで走る）。
-**MCP／アプリ内AIからの編集は止めていない** —— 止めるには全verbの入口に門が要り、範囲を
-広げすぎる。1人が1つのブラウザで開く前提（下の「前提にしないこと」）の内側の割り切りである。
-
-**パネルはビューポート左のブラウザと同じ列（左端・同じ幅）の下端に出す。** 位置の決め手は
-見た目ではなく**画面に新しい帯を取らないこと**である —— `viewport.project()` は
-`clickable(x, y)` で「浮いているパネルに覆われていないか」を見ており、ブラウザの右へ
-幅320pxの帯を足した版では**左のボディの面が1枚も指せなくなった**（2026-09-05実測。
-`smoke-optimize-mode.mjs` が検出）。条件を置くのはこのモードの仕事そのものなので、
-モデルを覆う位置には置けない。`SettingsDialog` がブラウザの右へ出るのは、開いている時間が
-短い一時的なダイアログだからで、出しっぱなしのパネルは同じ扱いにできない。
-
-**結果は積み上がる**（置き換えない）。名前は `optimized` / `optimized-2` / … で、
-何度走らせても前の結果は残る。要らなくなったものは選んで削除する（メッシュボディは
-`delete` だけが通る）。
-
-**メッシュボディのピックはボディ選択へ畳む**（`App.svelte` の `pickedRef`）。viewport は
-メッシュも1枚の面として描くので、素直に翻訳すると `kind:"face"` の参照が飛び、コアの
-`select_face` が断る —— **ドラッグの一括選択は1回でまとめて送るので、画面を囲んだドラッグに
-メッシュが1つ入っているだけで選択が丸ごと落ちる**。畳んでおけば「クリックしても何も
-起きない」も起きず、しかも**編集verbは自然に押せないまま**になる（`move_body` / `fillet` /
-`chamfer` / 領域押し出しはどれも選択の種別にボディを持たないので、ボディ参照では確定に
-到達しない）。**ツールバーは選択で出し分けない** —— コマンドの一覧はモードの持ち物であり、
-選択のたびに作り直すと集めかけの引数が落ちる。「押せるのに断られる」を消しているのは
-**この畳み込み1本**である。スケッチを貼る先だけは畳まずに断る（ボディ参照にしても
-`sketch_create` は面を要求するので、押した結果が変わらないまま理由だけが消える）。
-
-#### 開発用のデバッグ表示（URLパラメータ・2026-09-05）
-
-**答えがおかしいときに「塊が悪いのか最適化が悪いのか」を切り分ける道具。**
-実験場 `probe_topopt/` にしか無かった3つを本体へ移した（`web/src/debugFlags.ts`）。
-**実験場そのものは移し終えた2026-09-05に削除した**（履歴は `03bf794`）。
-
-| 付けるもの | 出るもの |
-|---|---|
-| `?debug=space` | **塊（設計空間）**のボクセルを薄く重ねる |
-| `?debug=anchors` | **拘束/荷重に割り当たった格子節点**を色分けした球で（固定=緑シアン / 荷重=橙赤） |
-| `?voxel=1` | **平滑化する前のボクセル**。結果のメッシュボディは表示だけ隠す |
-
-`?debug=space,anchors` のように**まとめて指定できる**。走らせたときにだけ材料が生まれるので、
-**実行を押すまでは何も出ない**（塊と節点は実行の数秒後、密度場は走り切ったあと）。
-
-- **ビルドで落とさない。** 落とすと利用者の環境で起きた問題を調べられなくなる（本人指示）。
-  代わりに **フラグが無いときの画面は1ピクセルも変わらない**（`smoke-optimize-debug.mjs` の[1]と、
-  既存の実機smokeが番人）。
-- **デモ題材に固定されていない。** 材料は**いま走らせた最適化そのもの**から来るので、
-  利用者が置いた任意の条件・任意のボディで出る（旧い実験場は合成題材カタログに固定されており、
-  **実物の部品で起きた問題を切り分けられなかった**。それが本体へ移した理由である）。
-- **塊は既定では見せない**という決定は変わっていない（engine
-  `topopt-design-space-never-shown-to-the-user`）。フラグの下でだけ出る。
-- **画面にフラグの状態は出さない**（出すとフラグ無しの画面と差ができる）。確かめるのは
-  `location.search` と `window.__duocad.optimizeDebugCounts()`。
-- 実物の部品は要素数が桁で大きくなりうるので、**上限（15万立方体）を超えたら軸方向に間引く**。
-  間引いたことは `optimizeDebugCounts().spaceStride` に出る（黙って切り捨てない）。
-
-配線は `duocad/optimize_run.py` の `_DebugSink` →（`run_optimization` の `debug` で頼んだときだけ）
-`optimize_debug` イベント → `web/src/viewport.ts` の `setOptimizeDebug`。
-**頼まなければサーバは配列を1本も作らない**（既定の実行の費用は1ビットも増えない）。
-
-#### 比較スクリーンショットの撮影台（`web/scripts/shoot-topopt.mjs`・2026-09-05）
-
-**設定を2つ以上並べて撮る。1本のコマンドで終わる**（最適化・描画・ラベル焼きを全部やる。
-サーバも自分で立てて自分で止める）。
-
-```powershell
-cd C:\Users\tm976\mf\duocad\web
-
-# 実際の文書(models/ 配下)で、製品のつまみを2つ並べる
-node scripts/shoot-topopt.mjs --model mounting-plate.json `
-  --panel "既定:" --panel "細かく:element_mm=2.5" --views iso,side
-```
-
-- **題材・視点・出力先はすべて引数**（撮るたびにスクリプトを書き換えない）。
-  `--views iso,side,threeq,zoom` / `--dir x,y,z` / `--out <dir>` / `--width` / `--height`。
-- **カメラ・光源・背景・画角は面をまたいで完全に同一。** 1枚のcanvasに `setScissor` で並べて
-  描くので、面ごとに別の値を持つことが構造としてできない（ずれた比較は無価値）。
-- **同じ設定の面は最適化を1回しか回さない**（σ と Taubin 反復数だけが違う面は、
-  同じ密度場から2本切るのが正しい）。
-- **`--skip-export`** で前回の最適化結果を使い回す（向きだけ撮り直すときに使う。
-  別の題材のデータが入っていたら断る）。
-- 既定の出力先は `screenshots/topopt-compare`（`/screenshots/` は `.gitignore` 対象なので、
-  文書に載せる絵はそれ以外の場所を `--out` で指定すること）。
-- **新しいパッケージは入れていない**（three.js と puppeteer-core は `web/node_modules` から借り、
-  ラベルはブラウザのDOMで焼く）。
+- **MCPには同期の `run_optimization` を開けていない**（進捗・中断を運べない）。画面は WebSocket の
+  protocol 口（`OptimizePanel.svelte` → `optimize_conditions` / `optimize_resolution` / …）
+- **メッシュボディは保持・除外に指定できない**（上「ボディの種別」の名指しの線）
+- **受入検査**は §3 の `topopt_checks/`。**実機smoke**は §3 の `smoke-optimize*.mjs`
 
 ### 前提にしないこと
 
@@ -657,7 +448,7 @@ stdioとHTTP（`/mcp`）の2本**で、`McpServer.handle()` はどちらも知�
 
 ### AI側（アプリ内エージェント・`duocad/agent/`）
 
-**AIから文書を触る道は2本ある**。`duocad/agent/` は**先にアプリが立っていて、アプリの中から
+**AIから文書を触る道は2本ある**（§1 と同じ）。`duocad/agent/` は**先にアプリが立っていて、アプリの中から
 AIを選んで繋ぐ**（今あるのは llama-server の1つ）。**MCP経路は残す** —— Claude Codeから
 触る道とアプリ内の道は共存する。どちらも「先にアプリが立っている」という同じ向きに揃っている。
 
@@ -737,7 +528,7 @@ duocad/
   pyproject.toml         依存はバージョン固定（ローカル専用なので上げなければ壊れない）
 ```
 
-サンプルのSTEPは `C:\Users\tm976\mf\3d-models\` にある。**読み取り専用で扱うこと。**
+サンプルのSTEPは `web/scripts/models.mjs` の `PC_CASE_STEP` が指す場所（リポ外の読み取り専用ディレクトリ）。**読み取り専用で扱うこと。**
 
 ---
 
@@ -757,9 +548,9 @@ duocad/
   の両方の綴りで許可する。**`Origin` ヘッダを送らないクライアント（`smoke*.mjs` などの素のWS）は
   今までどおり繋がる**（意図した許可。理由は `tests/test_ws_origin.py` 冒頭）。
   WebSocketは同一オリジンポリシーの対象外なので、検査が無いと**duocadを立てたまま別のサイトを
-  開いているだけで**、そのページが文書を読み・壊し・`export_step` で任意のパスへ書き・`ai_chat` で
+  開いているだけで**、そのページが文書を読み・壊し・`export_step` で任意のパスへ書き・`ai_send` で
   課金を消費できた。`--http-port` を既定から変えると許可リストもそれに追随する。
-- **`web/dist` を作り直さないとUIの変更が画面に出ない**（`npm run build`）。
+- **`web/dist` を作り直さないとUIの変更が画面に出ない**（§1 参照）。
   `dist` が無くても `mcp_server` は**静的配信だけ諦めて起動する**ので、
   「立ったのに画面が出ない」という形で出る（理由はstderrに1行出ている）。
 - **文書は接続より長生きする。** ブラウザを閉じても消えないので、まっさらから試すときはサーバを立て直す。
@@ -783,4 +574,3 @@ duocad/
 - **面取りは距離1つ（＝45度）しか取れない。** PCケースの脚の円錐は半径方向4mm・軸方向22mmの
   非対称な面取りなので、**面の種類は作れても寸法までは再現できない**。
 - 拘束ソルバは持たない（各図形が自分の数値を持つパラメトリック・プリミティブで足りている）。
-  次に足すなら `python-solvespace`（実測済み・GPLv3+）。
