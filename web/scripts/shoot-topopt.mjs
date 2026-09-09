@@ -68,16 +68,15 @@ if (panels.length < 2) {
 
 const WIDTH = Number.parseInt(options.width ?? '900', 10)
 const HEIGHT = Number.parseInt(options.height ?? '700', 10)
-/** ラベルの帯と面のすきま(`docs/topopt-smooth-compare/` の16枚と同じ寸法)。 */
+/** ラベルの帯と面のすきま。 */
 const BAND = 34
 const GAP = 6
-// **この既定値は `docs/topopt-smooth-compare/` の16枚と同じ表示になるよう揃えてある。
-// 片方だけ変えないこと**(比較の土俵が変わり、並べられなくなる)。
+// **FOV / BG / MESH_COLOR は面をまたいで同一。** 片方だけ変えないこと(比較の土俵が変わる)。
 const FOV = 50
 const BG = '#0a0a12'
 const MESH_COLOR = 0x6fa8dc
 
-/** 撮る向き。`docs/topopt-smooth-compare/README.md` の「題材と方向」と同じ4つ。 */
+/** 撮る向き(iso / side / threeq / zoom)。 */
 const VIEWS = {
   iso: { dir: [-0.75, 0.5, 0.6], zoom: 1.0 }, // 3/4俯瞰
   side: { dir: [-0.06, -1.0, 0.08], zoom: 1.0 }, // ほぼ真横。輪郭のシルエットが出る
@@ -242,7 +241,7 @@ renderer.setSize(${CANVAS_W}, H, false);
 renderer.setScissorTest(true);
 renderer.autoClear = false;
 // **面と面のすきまも同じ色で塗る。** clear() はシザー矩形の中だけを既定色で塗るので、
-// ここを揃えないと 6px の隙間だけ真っ黒になる(docs/topopt-smooth-compare と同じ色にする)。
+// ここを揃えないと 6px の隙間だけ真っ黒になる(BG と揃える)。
 renderer.setClearColor(new THREE.Color('${BG}'), 1);
 document.body.appendChild(renderer.domElement);
 
@@ -254,7 +253,7 @@ const dirLight = new THREE.DirectionalLight(0xffffff, 0.85);
 dirLight.position.set(2, 3, 1);
 scene.add(dirLight);
 // **カメラ追従の弱い正面光。** 4方向から撮るので、背面側の視点(side)がこれ無しでは
-// 真っ黒になる('docs/topopt-smooth-compare/README.md' の「光源」)。全部の面で同一。
+// 真っ黒になる。全部の面で同一。
 const headLight = new THREE.DirectionalLight(0xffffff, 0.45);
 scene.add(headLight);
 
@@ -282,9 +281,8 @@ window.__load = async () => {
     mesh.visible = false;
     scene.add(mesh);
     meshes.push(mesh);
-    // **位置の名前を頭に付ける**(docs/topopt-smooth-compare の 'LEFT  old(shipped)' と同じ形)。
-    // 3面までは LEFT / MID / RIGHT、それ以上は番号。ラベルだけだと「どっちが後か」を
-    // 画像だけ見て言えない。
+    // **位置の名前を頭に付ける**(3面までは LEFT / MID / RIGHT、それ以上は番号)。
+    // ラベルだけだと「どっちが後か」を画像だけ見て言えない。
     const names = PANELS === 2 ? ['LEFT', 'RIGHT']
       : PANELS === 3 ? ['LEFT', 'MID', 'RIGHT']
       : Array.from({ length: PANELS }, (_, k) => '#' + (k + 1));

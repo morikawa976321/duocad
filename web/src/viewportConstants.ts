@@ -58,7 +58,7 @@ export const OPTIMIZE_FIXTURE_MARK_COLOR = 0x1c3550
 export const OPTIMIZE_LOAD_COLOR = 0xffc857
 /**
  * **開発用のデバッグ表示の色**(`?debug=space` / `?debug=anchors` / `?voxel=1`)。
- * `docs/topopt-smooth-compare/` の16枚と同じ見え方を保つので、勝手に動かさないこと。
+ * `shoot-topopt.mjs` と同じ見え方を保つので、勝手に動かさないこと。
  */
 export const DEBUG_SPACE_COLOR = 0x39445e
 export const DEBUG_RHO_COLOR = 0xbfc7d5

@@ -10,7 +10,7 @@
 
 | 文書 | 何が書いてあるか | 読むとき |
 |---|---|---|
-| [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | **企画と設計の現行の正**（なぜ・何を・到達表。「企画の前提」がなぜ） | 仕様を確かめるとき |
+| [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) | **最初期の実装計画**（なぜ・当初スコープ・到達表。「企画の前提」がなぜ） | 起点を辿るとき |
 | [MCP.md](MCP.md) | **MCPツール一覧の正**と登録手順 | AI側から触るとき |
 | [tests/README.md](tests/README.md) | テストが定義するAPI契約 | コアの挙動を疑うとき |
 | [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化の実測の記録**(費用の表・余白比率・案5の比較・応力・面アンカー・変異検査) | 数字の根拠を辿るとき |
@@ -308,7 +308,7 @@ cd C:\Users\tm976\mf\duocad; node web\scripts\acceptance.mjs
 
 MCPとWebSocketを1プロセスで持つサーバを自分で起動し、**人間側はブラウザの本物のクリックとキー、
 AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_parameter` の人間側だけは口が無いので空欄）。結果はJSONでstdout末尾に出る。
-**形状最適化の条件verbは `web/scripts/smoke-optimize-mode.mjs` が個別の実機smokeで見る**（到達表は [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) §0 参照）。
+**形状最適化の条件verbは `web/scripts/smoke-optimize-mode.mjs` が個別の実機smokeで見る**（到達表は [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) §0 参照）。
 
 **❌ が1つでもあれば終了コード1で終わる。** ただし**途中では止めない** ——
 全セクションを最後まで走らせて RESULT_JSON を出し切ってから、`failed[]` を見て終了コードだけを決める。
@@ -325,7 +325,7 @@ AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_par
 - AI側(MCP) — MCPツールを追加・変更するとき
 - AI側(アプリ内エージェント) — アプリ内AIエージェントの挙動を変更するとき
 
-**層の図と「外してはいけない3つ」の正は [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) §2。**
+**層の図と「外してはいけない3つ」は [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) §2 に書いてある（最初期の計画）。**
 
 ### 中核の決めごと
 
@@ -343,7 +343,7 @@ AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_par
   冒頭docstringの5ステップ。ここを1本化するには汎用ディスパッチャが要る（未着手）。frontendだけは別に持つ ——
   TS側が持つのは**引数の集め方**（どのクリックを待つか・入力欄のid）で、宣言には無い情報だから。
   名前と分類が一致することは `tests/test_ui_command_wiring.py` が機械で見る。
-- **verbの粒度の定義は [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) §2「verbの粒度」が正。**
+- **verbの粒度の定義は [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) §2「verbの粒度」が起点。**
 
 ### ボディの種別 —— B-rep と 三角形メッシュ（2026-09-05）
 
@@ -568,11 +568,6 @@ node scripts/shoot-topopt.mjs --model mounting-plate.json `
 - **新しいパッケージは入れていない**（three.js と puppeteer-core は `web/node_modules` から借り、
   ラベルはブラウザのDOMで焼く）。
 
-**再現の限界**: `docs/topopt-smooth-compare/` の16枚は、削除済みの合成題材カタログを
-撮る `--case` モードで撮影したものである。**`--case` は2026-09-09に削除した**
-（形状最適化の検証は今後 `models/*.json` の実物モデルだけで行う判断による）ので、
-あの16枚はこの撮影台では撮り直せない一次資料として画像のまま残してある。
-
 ### 前提にしないこと
 
 - **複数のブラウザ・複数の人が同じ文書を同時に編集すること。**
@@ -724,7 +719,7 @@ duocad/
   .mcp.json              Claude Code向けのMCP登録（projectスコープ。これがあるので登録作業が要らない）
   README.md              ← このファイル（入口）
   MCP.md                 MCPサーバの仕様と登録手順
-  docs/                  IMPLEMENTATION_PLAN(企画と設計の正) / TOPOPT
+  docs/                  INITIAL_PLAN(最初期の計画) / TOPOPT
   duocad/                コア（Python）。verbs/ に1 verb 1モジュール
                          session.py=1つの文書を持つサーバ側の状態／view.py=その配りもの
                          （状態配信・版・キャッシュ。session.py が1つ持つ）

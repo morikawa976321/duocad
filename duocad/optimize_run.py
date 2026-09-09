@@ -123,7 +123,7 @@ DEBUG_KINDS = ("space", "anchors", "rho")
 #: `?voxel=1` のボクセル表示で「材料がある」と見なす密度の境目。
 #: **旧実験場 `probe_topopt/server.py` と同じ 0.5**(`np.flatnonzero(flat > 0.5)`。実験場は
 #: 既に削除済み)—— 揃えないと同じ密度場が別の形に見える。
-#: `docs/topopt-smooth-compare/` の16枚と見え方を突き合わせる土俵でもある。
+#: `shoot-topopt.mjs` とも同じ土俵。
 DEBUG_RHO_THRESHOLD = 0.5
 
 

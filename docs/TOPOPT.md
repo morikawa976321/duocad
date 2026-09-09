@@ -1,6 +1,6 @@
 # 形状最適化(topopt) — 測って分かったこと
 
-**この文書の役割は「測って分かったこと」である。** `docs/IMPLEMENTATION_PLAN.md`(企画と設計の正)に
+**この文書の役割は「測って分かったこと」である。** `docs/INITIAL_PLAN.md`(最初期の計画)に
 続く実測記録として置いてある。
 
 | 何が | どこにあるか |
@@ -2059,21 +2059,16 @@ marching cubes へ渡す場が、保持/除外の塗り直しを除いて同一�
 **出力する形(平滑化後)と評価した形(平滑化前)は厳密には一致しない。** σ=1要素程度なら
 差は小さいはずだが、**測っていないので「小さい」とは言い切らない**。
 
-### 前後の比較スクリーンショット(**2026-09-05に撮り直した**)
+### 前後の比較スクリーンショット(2026-09-05)
 
-`docs/topopt-smooth-compare/` の16枚は、**2026-09-05に
-「旧い既定(`rmin`=1.5要素・σ=1・Taubin 12反復)対 新しい既定(`rmin`=2.5要素・σ=0・
-Taubin 30反復)」で撮り直した**(次節)。撮ったのは当時の実験場の
+2026-09-05に「旧い既定(`rmin`=1.5要素・σ=1・Taubin 12反復)対 新しい既定(`rmin`=2.5要素・σ=0・
+Taubin 30反復)」で比較スクリーンショットを撮った。撮ったのは当時の実験場の
 `probe_topopt/compare_shots.py` / `compare_shots.mjs` で、**同日にこの道具を本体の
 `web/scripts/shoot-topopt.mjs` へ移し、実験場ごと削除した**(履歴は `03bf794`)。
-いま撮るならこの撮影台(1コマンド・題材と視点と出力先は引数・`--model` で実物の文書も
-撮れる。README.md「比較スクリーンショットの撮影台」)。詳細は同ディレクトリの `README.md`。
+比較画像と合成題材 `--case` は2026-09-09に削除した。**いま同じ種類の絵が要るなら**
+`shoot-topopt.mjs --model` で実物の文書を撮る(README.md「比較スクリーンショットの撮影台」)。
 
-**この16枚はビット単位では撮り直せない。** 案5の粗い段は**その時点の
-`simp.DEFAULT_RMIN`** で回るので、撮影当時(1.5)といま(2.5)では土俵が違う ——
-だから画像そのものを一次資料として残してある。
-
-**以下は撮り直す前(ガウシアン平滑化の前後比較)の観測で、画像はもう置き換わっている。**
+**以下は撮り直す前(ガウシアン平滑化の前後比較)の観測で、画像は残っていない。**
 現象そのもの(σ が薄い部材を食う)は次節の段3で数字になっているので、記録として残す。
 
 薄いリブや除外トンネル縁の膜状材料では差が非常に大きかった —— 傾斜面のリブが
@@ -2101,7 +2096,7 @@ uv pip install --python ./.venv/Scripts/python.exe scikit-image
 
 ### 症状と含意
 
-`20260904-1650` の比較画像(当時の `tilted_side.png` の左側)で、除外トンネルの縁に
+`20260904-1650` の比較(傾けた題材・真横。当時撮った画像は削除済み)で、除外トンネルの縁に
 **迷路状の細い筋**が出ていた。幅はほぼ1要素で、構造部材ではなく**チェッカーボード**
 (密度フィルタが防ぐべき数値アーティファクト)である。
 
@@ -2241,10 +2236,10 @@ uv pip install --python ./.venv/Scripts/python.exe scikit-image
 
 ### 画像
 
-`docs/topopt-smooth-compare/` の比較画像(当時は合成4題材 × 4方向。いまは
-`web/scripts/shoot-topopt.mjs --model` で実物モデルも撮れる)。各PNGは**3面**:
-旧既定(σ=1) / 同じ最適化でσ=0 / 新既定(`rmin`=2.5・σ=0)。**MID があるのが要点** ——
-σ=1 が筋を溶かして隠していた。`tilted_side.png` の迷路状1要素幅筋がこのタスクの結論。
+2026-09-05の比較画像(合成4題材 × 4方向)は2026-09-09に削除した。**要点は**各PNGが**3面**
+(旧既定(σ=1) / 同じ最適化でσ=0 / 新既定(`rmin`=2.5・σ=0))で、**MID を挟むと σ=1 が
+1要素幅の筋を溶かして隠していた**こと —— 傾けた題材の真横の迷路状1要素幅筋がこのタスクの
+結論。**いま同じ種類の絵が要るなら** `web/scripts/shoot-topopt.mjs --model` で撮る。
 
 ## ファイル
 
@@ -2261,7 +2256,7 @@ uv pip install --python ./.venv/Scripts/python.exe scikit-image
 | `duocad/topopt/stress.py` | **密度場と変位 → 要素ごとの von Mises 応力・代表応力・最小安全率**(後処理)。無次元 → 実単位の換算則(`UnitScale`)を持つ。**最適化には手を入れない**(応力制約の定式化は採らない。engine `safety-factor-goes-outside-the-optimizer`) |
 | `duocad/topopt/design_space.py` | **4条件(保持ソリッド・除外ソリッド・拘束面・荷重面) → 塊(設計空間)**。案1(`derive`)=条件の点群の外接直方体+余白から除外ソリッドを引く / 案5(`derive_from_coarse_run`)=粗い格子で1回 SIMP を回し、出た材料を膨らませる。**どちらも塊の中で拘束と荷重がひと続きかを6近傍で確かめてから返す**(`DesignSpaceDisconnectedError`)。**既定は案5**(2026-09-04〜。入口は `derive_default`)。CLIとしても動く(`python -m duocad.topopt.design_space` で `demo_conditions(0°)` の塊を導出して stats を出す。表を作る `--measure` / `--compare` は2026-09-05に削除した) |
 | `duocad/topopt/safety_loop.py` | **安全率を入力に、材料量(mm^3)を二分探索する外側ループ**。`solve_for_safety_factor` が入口。目標以上を満たす最小の材料量を探す。塊は案a(候補材料量ごとに `derive_default` を呼び直す)。許容応力の導出(PETG × 低減係数)を持つ。**最適化そのものには手を入れない** |
-| `web/scripts/shoot-topopt.mjs` / `shoot_topopt_export.py` | **受入検査ではない。** 比較画像(`docs/topopt-smooth-compare/` のような3面並べ)を撮る道具。1コマンドで最適化・描画・ラベル焼きまで通し、面数に上限が無く、`--model` で実物の文書も撮れる。**2026-09-05に実験場の `compare_shots.py` / `compare_shots.mjs` から移した**(実験場は同日削除。履歴は `03bf794`)。使い方は README.md「比較スクリーンショットの撮影台」 |
+| `web/scripts/shoot-topopt.mjs` / `shoot_topopt_export.py` | **受入検査ではない。** 設定を2つ以上並べた比較画像を撮る道具。1コマンドで最適化・描画・ラベル焼きまで通し、面数に上限が無く、`--model` で実物の文書も撮れる。**2026-09-05に実験場の `compare_shots.py` / `compare_shots.mjs` から移した**(実験場は同日削除。履歴は `03bf794`)。使い方は README.md「比較スクリーンショットの撮影台」 |
 | `duocad/topopt/__init__.py` | パッケージの入口。**サブモジュールを import しない**(`import duocad` の費用に scipy / skimage を足さないため)。`OUTPUT_DIR`(= `duocad/topopt/output/`)だけを公開する |
 | `topopt_checks/check_simp.py` | **受入検査(合否そのもの)**。SIMP側を assert する |
 | `topopt_checks/check_mesh.py` | **受入検査(合否そのもの)**。メッシュ化側(下記10項目。2026-09-05にガウシアン平滑化+塗り直しの検査を追加)を assert する |
