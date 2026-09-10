@@ -1,0 +1,18 @@
+{
+  "spacing_mm": 2.4,
+  "capacity_mm3": 15307280.752131127,
+  "max_iter": 3,
+  "allowable_mpa": 40.0,
+  "target_safety_factor": 2.0,
+  "cases": [
+    {
+      "case_id": "1",
+      "material_ratio": 0.066,
+      "material_mm3": 1010280.5296406545,
+      "curve": [],
+      "seconds": 6.128096800064668,
+      "error": "TypeError: UnitScale.for_model() missing 1 required keyword-only argument: 'youngs_modulus_mpa'",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\Users\\tm976\\mf\\duocad\\topopt_checks\\plot_simp_safety_convergence.py\", line 120, in _run_job\n    simp_model, scale = _build_stress_context(space, conditions, forces)\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\tm976\\mf\\duocad\\topopt_checks\\plot_simp_safety_convergence.py\", line 98, in _build_stress_context\n    scale = stress.UnitScale.for_model(\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: UnitScale.for_model() missing 1 required keyword-only argument: 'youngs_modulus_mpa'\n"
+    }
+  ]
+}
