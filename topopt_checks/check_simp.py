@@ -34,6 +34,10 @@
    `K_ff λ = K_fs c` を満たすか / 制約が緩いときの答えが制約を足す前の MMA と一致するか
    (m>=2 の双対を L-BFGS-B で解いても、m=1 の二分探索と同じ場所へ着く)/ OC は制約を
    受け取ったら例外になるか / 満たせない下限は `ReactionTargetError` になるか。
+9. **制約が効くこと**(この機能の存在理由) — 荷重から遠い拘束面は、制約が無いと
+   **反力ゼロで捨てられる**(構造最適化は荷重を運ばない材料を置かない)。下限を課すと
+   その面が荷重を受け持つようになり、代わりにコンプライアンスが悪化する。
+   **両方を数字で見る** —— 「制約を入れても何も変わらない」なら制約は配線されていない。
 """
 
 from __future__ import annotations
@@ -635,6 +639,86 @@ def check_reaction_constraint() -> None:
     RESULTS["reaction_gradient_rel_err"] = worst
 
 
+# ---------------------------------------------------------------------------
+# 9. 制約が効くこと(遠い拘束面が捨てられる → 下限で拾われる)
+# ---------------------------------------------------------------------------
+FAR_WALL_GRID = (40, 8, 8)
+
+
+def two_wall_case() -> tuple[np.ndarray, np.ndarray, list]:
+    """両端の壁を固定し、**片方の壁のすぐそば**に荷重を載せた題材。
+
+    遠いほうの壁は構造上いらない —— 制約が無ければ最適化はそこへ材料を1つも置かず、
+    反力もゼロになる。**hanger で保持ソリッドが浮き島になって消えるのと同じ理屈**を、
+    秒で回せる大きさに落としたもの。
+
+    `measure_reaction_constraint.py --far-wall` が ε を振るのにこれを呼ぶ。**実測と回帰検査で
+    題材を分けない** —— 分けると docs/TOPOPT_REACTION.md の表の数字を検査が固定できなくなる。
+    """
+    nelx, nely, nelz = FAR_WALL_GRID
+    ny1, nz1 = nely + 1, nelz + 1
+
+    def plane(i: int) -> np.ndarray:
+        j, k = np.meshgrid(np.arange(ny1), np.arange(nz1), indexing="ij")
+        return (i * ny1 * nz1 + j * nz1 + k).ravel()
+
+    near, far = plane(0), plane(nelx)
+    fixed = np.concatenate(
+        [3 * ids + axis for ids in (near, far) for axis in (0, 1, 2)]
+    )
+    load = np.zeros(3 * (nelx + 1) * ny1 * nz1)
+    pushed = 3 * plane(3) + 1
+    load[pushed] = -1.0 / pushed.size
+    groups = [
+        simp.ReactionGroup(
+            "near", np.concatenate([3 * near, 3 * near + 1, 3 * near + 2])
+        ),
+        simp.ReactionGroup("far", np.concatenate([3 * far, 3 * far + 1, 3 * far + 2])),
+    ]
+    return fixed, load, groups
+
+
+def check_reaction_constraint_bites() -> None:
+    nelx, nely, nelz = FAR_WALL_GRID
+    print(f"\n[9] 制約が効くこと ({nelx}x{nely}x{nelz})")
+    fixed, load, groups = two_wall_case()
+    common = dict(
+        volfrac=0.15,
+        max_iter=40,
+        change_tol=0.0,
+        fixed_dofs=fixed,
+        load=load,
+        reactions=groups,
+        threads=1,
+    )
+    loose = simp.optimize(nelx, nely, nelz, update="mma", **common)
+    share = {item.name: item.fraction for item in loose.reactions}
+    check(
+        "制約が無いと遠い拘束面が反力を1つも受け持たない",
+        share["far"] < 0.01 and share["near"] > 0.9,
+        f"近い側 {share['near']:.4f} / 遠い側 {share['far']:.2e}",
+    )
+
+    tight = simp.optimize(nelx, nely, nelz, update="mma", reaction_min=0.20, **common)
+    kept = {item.name: item.fraction for item in tight.reactions}
+    check(
+        "下限を課すと遠い拘束面も荷重を受け持つ",
+        kept["far"] >= 0.20 * (1.0 - simp.REACTION_TOLERANCE),
+        f"近い側 {kept['near']:.4f} / 遠い側 {kept['far']:.4f}(要求 0.20)",
+    )
+    penalty = tight.history[-1].compliance / loose.history[-1].compliance - 1.0
+    check(
+        "その代償としてコンプライアンスが悪化する(ただ配線されているだけではない)",
+        penalty > 0.0,
+        f"C {loose.history[-1].compliance:.4f} -> {tight.history[-1].compliance:.4f} "
+        f"({penalty:+.1%})",
+    )
+    # **丸めない。** 制約が無いときの値は 1e-11 の桁で、6桁で丸めると 0.0 になって
+    # 「制約が効いた」ことの根拠が消える。
+    RESULTS["far_wall_share"] = [float(share["far"]), float(kept["far"])]
+    RESULTS["far_wall_compliance_penalty"] = round(penalty, 6)
+
+
 def _raises(call) -> bool:
     """呼んで ValueError が出れば True。**検出力の検査でしか使わない。**"""
     try:
@@ -655,6 +739,7 @@ def main() -> int:
     check_void_assembly()
     check_reactions()
     check_reaction_constraint()
+    check_reaction_constraint_bites()
 
     print("\n" + "=" * 72)
     print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))

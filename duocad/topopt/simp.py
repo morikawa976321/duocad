@@ -1380,10 +1380,12 @@ class FilterRadiusError(ValueError):
         self.shortfall_mm = shortfall_mm
 
 
-#: 反力の下限を「満たした」と読む相対の緩み。**MMA は制約の境界へ外側から近づく**ので、
-#: `max_iter` の打ち切りで数%足りないことがある。0 にすると「ほぼ満たしている解」を捨てる
-#: (2026-09-10 に hanger_test で選んだ値。根拠は docs/TOPOPT_REACTION.md)。
-REACTION_TOLERANCE = 0.05
+#: 反力の下限を「満たした」と読む相対の緩み。**実測では1度も要らなかった** ——
+#: 合成題材(遠い壁・ε=0.02〜0.70・40反復)では毎回きっかり境界に乗り、要求に対する
+#: 超過は 4.6e-05〜2.1e-03 だった(docs/TOPOPT_REACTION.md)。0 にしないのは、`max_iter` の
+#: 打ち切りで届き切らなかったときに**30分回した結果ごと捨てる**のを避けるための頭であり、
+#: 実際の割合は `Result.reactions` に残るので呼び出し側が自分で厳しく見てよい。
+REACTION_TOLERANCE = 0.02
 
 
 def _require_reactions(

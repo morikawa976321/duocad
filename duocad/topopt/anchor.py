@@ -1053,7 +1053,11 @@ def run_pipeline(
             "timings": timings,
             "empty_condition_faces": empty_condition_faces,
             "warning": warning,
+            # 早期returnの枝は `simp.optimize` を呼んでいないので、反力も更新則も無い
+            # (キーの有無で分岐させないための空)。
             "reactions": [],
+            "reaction_min": None,
+            "update": None,
         }
 
     nx, ny, nz = model.grid.shape
