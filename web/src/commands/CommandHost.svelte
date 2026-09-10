@@ -937,17 +937,19 @@
 >
   <div class="row">
     <span class="label">コマンド</span>
-    {#each commands.filter((c) => !c.hidden) as candidate (candidate.id)}
-      <button
-        id={candidate.buttonId}
-        class:on={command !== null && candidate.id === command.id}
-        onclick={() => (command !== null && candidate.id === command.id ? pressActive() : start(candidate.id))}
-        disabled={command !== null && candidate.id === command.id && (busy || (!ready && needsEnter(command)))}
-      >
-        {candidate.label}{command !== null && candidate.id === command.id && needsEnter(candidate) ? ' (Enter)' : ''}
-      </button>
-    {/each}
-    <span id="command-prompt" class="value" class:dim={!ready}>{prompt}</span>
+    <div class="command-body">
+      {#each commands.filter((c) => !c.hidden) as candidate (candidate.id)}
+        <button
+          id={candidate.buttonId}
+          class:on={command !== null && candidate.id === command.id}
+          onclick={() => (command !== null && candidate.id === command.id ? pressActive() : start(candidate.id))}
+          disabled={command !== null && candidate.id === command.id && (busy || (!ready && needsEnter(command)))}
+        >
+          {candidate.label}{command !== null && candidate.id === command.id && needsEnter(candidate) ? ' (Enter)' : ''}
+        </button>
+      {/each}
+      <span id="command-prompt" class:dim={!ready}>{prompt}</span>
+    </div>
   </div>
 </section>
 
@@ -1056,31 +1058,6 @@
   .command-host {
     display: flex;
     flex-direction: column;
-  }
-
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    row-gap: 6px;
-    position: relative;
-  }
-
-  :global(.toolbar-overlay) .row:not(:first-child)::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: -2px;
-    height: 1px;
-    background: var(--line);
-  }
-
-  .value {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .dim {

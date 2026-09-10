@@ -141,7 +141,64 @@ header {
   color: var(--dim);
 }
 
-/* verb の引数行。`.toolbar` と同じ全幅・padding・背景 —— in-flow 高さは増やさない。 */
+/* CommandHost / overlay 行。`.mode-row` と同じ gap。 */
+.toolbar .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  row-gap: 6px;
+  position: relative;
+}
+
+/* パネル内の `.value { flex: 1 1 auto }` はツールバー行では効かせない ——
+   プロンプトやピック結果が行の折り返しを壊し、右端の gap が消えて見える。 */
+.toolbar .row .value {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 16em;
+}
+
+.toolbar .row > button,
+.toolbar .command-body > button {
+  flex: 0 0 auto;
+}
+
+/* verb ボタン列。`.mode-row` と同型 —— ボタンとプロンプトを直接並べる。 */
+.toolbar .command-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  row-gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.toolbar #command-prompt {
+  flex: 0 0 auto;
+  margin-left: auto;
+  min-width: 0;
+  max-width: min(40%, 24em);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar-overlay .row:not(:first-child)::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -2px;
+  height: 1px;
+  background: var(--line);
+}
+
+/* verb の引数行。`.toolbar` と同じ全幅・padding・背景 —— in-flow 高さは増やさない。
+   上端 padding は `.toolbar` の下端 padding(8px)と揃える —— コマンド行と直接くっつくと
+   ボタン・入力欄の余白が視覚的に消える(`.toolbar` 側は overlay を開いている間
+   `padding-bottom:0` になるので、ここが唯一の隙間の出どころ)。 */
 .toolbar-overlay {
   position: absolute;
   top: 100%;
@@ -150,7 +207,7 @@ header {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 0 16px 8px;
+  padding: 8px 16px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   box-sizing: border-box;
