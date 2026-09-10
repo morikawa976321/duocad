@@ -148,7 +148,7 @@ export interface UvBounds {
 }
 
 /** 「一回り大きく」の余白(内容の長辺に対する比)。 */
-export const BOUNDS_MARGIN_RATIO = 0.08
+export const BOUNDS_MARGIN_RATIO = 0.5
 
 /** 内容が枠の縁ぴったりに来たときでも必ず余白が付くための下限[mm]。 */
 const BOUNDS_MIN_MARGIN = 1e-6
