@@ -72,7 +72,7 @@
    * **Enterはプレビューを待たない。** プレビューは確認のための表示であって、確定の前提
    * ではない。
    */
-  import { onMount } from 'svelte'
+  import { onDestroy, onMount } from 'svelte'
   import {
     COMMANDS,
     argApplies,
@@ -350,6 +350,13 @@
   const choiceArgs = $derived(liveArgs.filter((spec) => spec.kind === 'choice') as ChoiceArgSpec[])
   const textArgs = $derived(liveArgs.filter((spec) => spec.kind === 'text') as TextArgSpec[])
   const pickArgs = $derived(liveArgs.filter((spec) => spec.kind === 'pick') as PickArgSpec[])
+  /** 引数行を overlay へ出すか —— in-flow の高さを変えない(`styles.css` の `.toolbar-overlay`)。 */
+  const overlayOpen = $derived(
+    choiceArgs.length > 0 ||
+      pickArgs.length > 0 ||
+      textArgs.length > 0 ||
+      commandActive,
+  )
 
   /**
    * 打ってあるのに読めない式の理由(無ければ null)。
@@ -701,6 +708,39 @@
     if (startCommandId !== undefined) start(startCommandId)
   })
 
+  /** verb 引数 overlay の実高さ —— `.app` の `--toolbar-overlay-h` とサイドバー位置に渡す。 */
+  let overlayEl = $state<HTMLDivElement | null>(null)
+  let overlayObserver: ResizeObserver | undefined
+
+  function syncOverlayHeight(el: HTMLDivElement | null): void {
+    const root = document.querySelector('.app')
+    if (!(root instanceof HTMLElement)) return
+    const h = el?.getBoundingClientRect().height ?? 0
+    root.style.setProperty('--toolbar-overlay-h', h > 0 ? `${Math.ceil(h)}px` : '0px')
+    root.classList.toggle('toolbar-overlay-open', h > 0)
+  }
+
+  $effect(() => {
+    overlayObserver?.disconnect()
+    overlayObserver = undefined
+    if (!overlayOpen) {
+      syncOverlayHeight(null)
+      return
+    }
+    const el = overlayEl
+    if (el === null) return
+    const sync = () => syncOverlayHeight(el)
+    sync()
+    overlayObserver = new ResizeObserver(sync)
+    overlayObserver.observe(el)
+    return () => overlayObserver?.disconnect()
+  })
+
+  onDestroy(() => {
+    overlayObserver?.disconnect()
+    syncOverlayHeight(null)
+  })
+
   /**
    * スケッチ平面のクリックを、待っている点引数へ入れる。
    *
@@ -909,7 +949,10 @@
     {/each}
     <span id="command-prompt" class="value" class:dim={!ready}>{prompt}</span>
   </div>
+</section>
 
+{#if overlayOpen}
+  <div class="toolbar-overlay" bind:this={overlayEl}>
   {#if choiceArgs.length}
     <!-- 選択肢。**既定を選んでおかない** — 押されるまで引数は揃わない -->
     <div class="row">
@@ -1006,13 +1049,13 @@
       <button id="command-abort" onclick={abort}>中断 (Esc)</button>
     </div>
   {/if}
-</section>
+  </div>
+{/if}
 
 <style>
   .command-host {
     display: flex;
     flex-direction: column;
-    gap: 4px;
   }
 
   .row {
@@ -1024,12 +1067,7 @@
     position: relative;
   }
 
-  /* コマンド行と、その後に続く引数行(選択肢/パス/数値)との区切り。`:first-child`だけ
-     外すのは、選択肢/パス行が`{#if}`で出たり消えたりしても先頭行は常にコマンド行だから。
-     position:absoluteの疑似要素は通常フローの高さに数えられないので、`.command-host`の
-     gap(4px)の中に線を描いても`.toolbar`ひいてはビューポートの実寸(styles.css冒頭の
-     不変条件)は動かない。border/paddingだと各行の高さがそのままビューポートを押し縮める。 */
-  .row:not(:first-child)::before {
+  :global(.toolbar-overlay) .row:not(:first-child)::before {
     content: '';
     position: absolute;
     left: 0;
@@ -1037,11 +1075,6 @@
     top: -2px;
     height: 1px;
     background: var(--line);
-  }
-
-  .label {
-    flex: 0 0 auto;
-    color: var(--dim);
   }
 
   .value {

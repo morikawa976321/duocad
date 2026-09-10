@@ -138,7 +138,7 @@
      高さは中身なりだが上限を持つ —— 27部品を並べると画面の下まで届いてしまう。 */
   .browser-panel {
     position: absolute;
-    top: 10px;
+    top: calc(10px + var(--toolbar-overlay-h, 0px));
     left: 10px;
     z-index: 5;
     /* 幅は `styles.css` の `:root` が持つ(設定ダイアログの位置がこれを見るため)。 */

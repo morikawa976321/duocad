@@ -74,6 +74,8 @@ export const EDGE_PICK_PIXELS = 6
 //: スケッチの点マーカーの当たり半径[画素]。**辺より小さく**しておく
 //: (点は辺の上に乗っているので、同じ太さだと辺を狙えない)。
 export const SKETCH_HANDLE_PIXELS = 5
+/** スケッチ線の太さ[CSS px]。`planeGrid` の最太段(半幅1.1px)より少し太く、格子と重なっても見える程度。 */
+export const SKETCH_LINE_WIDTH_PX = 1.5
 /** スケッチ点入力待ちの十字(未スナップ)。暗背景で視認できる黄。 */
 export const SKETCH_CURSOR_CROSS_COLOR = '#ffc848'
 /** スケッチ点入力待ちのスナップ強調(線・点・格子)。幽霊線と同系の緑。 */

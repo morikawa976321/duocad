@@ -39,6 +39,7 @@ import {
   type UvBox,
 } from './gridScale'
 import { createPlaneGrid, type PlaneFrame, type PlaneGrid } from './planeGrid'
+import { buildSketchLine, createSketchLineMaterial, type SketchFatLine } from './sketchLine'
 import { POLE_Z, upForDirection } from './viewCube'
 import { createOptimizeAnnotations } from './optimizeAnnotations'
 import { createOptimizeDebug } from './optimizeDebug'
@@ -762,6 +763,7 @@ export function createViewport(container: HTMLElement): Viewport {
     orthographic.left = -orthographic.top * aspect
     orthographic.updateProjectionMatrix()
     // 使っていない側も同時に整えてある(切り替えた瞬間に1フレーム歪むのを防ぐ)。
+    sketchLineResolution.set(width, height)
   }
 
   function clearBody(bodyId: string): void {
@@ -1995,8 +1997,9 @@ export function createViewport(container: HTMLElement): Viewport {
   // **`sketchRoot` の宣言は `root` の隣へ上げてある**(初期化中の `applyGridPlanes()` が
   // 読むため。あちらのコメント参照)。
 
-  const sketchMaterial = new THREE.LineBasicMaterial({ color: SKETCH_COLOR })
-  const sketchGhostMaterial = new THREE.LineBasicMaterial({ color: SKETCH_GHOST_COLOR })
+  const sketchLineResolution = new THREE.Vector2(1, 1)
+  const sketchMaterial = createSketchLineMaterial(SKETCH_COLOR, sketchLineResolution)
+  const sketchGhostMaterial = createSketchLineMaterial(SKETCH_GHOST_COLOR, sketchLineResolution)
 
   /**
    * スケッチの線・点の材質は **(選択状態 × ホバー)** をキーにした遅延生成のキャッシュから取る
@@ -2004,15 +2007,19 @@ export function createViewport(container: HTMLElement): Viewport {
    * あちらは `sketchMaterial` を直接使う(ピック対象外なので選択もホバーも起きない)。
    */
   type SketchMaterialState = 'plain' | 'selected'
+  type SketchLineMaterial = ReturnType<typeof createSketchLineMaterial>
   // `plain` の非ホバーは既存の `sketchMaterial` を種として使う(2つの独立インスタンスに
   // 分裂させない)。
-  const sketchLineMaterialCache = new Map<string, THREE.LineBasicMaterial>([['plain:0', sketchMaterial]])
-  function sketchLineMaterialFor(state: SketchMaterialState, hovered: boolean): THREE.LineBasicMaterial {
+  const sketchLineMaterialCache = new Map<string, SketchLineMaterial>([['plain:0', sketchMaterial]])
+  function sketchLineMaterialFor(state: SketchMaterialState, hovered: boolean): SketchLineMaterial {
     const key = `${state}:${hovered ? 1 : 0}`
     const cached = sketchLineMaterialCache.get(key)
     if (cached) return cached
     const base = state === 'selected' ? SKETCH_SELECTED_COLOR : SKETCH_COLOR
-    const material = new THREE.LineBasicMaterial({ color: hovered ? lighten(base, HOVER_LIGHTEN) : base })
+    const material = createSketchLineMaterial(
+      hovered ? lighten(base, HOVER_LIGHTEN) : base,
+      sketchLineResolution,
+    )
     sketchLineMaterialCache.set(key, material)
     return material
   }
@@ -2082,7 +2089,7 @@ export function createViewport(container: HTMLElement): Viewport {
      */
     handleMeshes: THREE.Points[]
     /** 図形の折れ線(**元の図形だけ**。`userData.entityId` を持つ)。辺のピック対象。 */
-    handleLines: THREE.Line[]
+    handleLines: SketchFatLine[]
     /** 元の図形(`handles`)。スナップ座標の解決に使う。 */
     handles: SketchDraw['handles']
   }
@@ -2109,16 +2116,17 @@ export function createViewport(container: HTMLElement): Viewport {
   function buildEntityLine(
     frame: SketchDraw['frame'],
     entity: { kind: string; params: Record<string, number> },
-    material: THREE.LineBasicMaterial,
-  ): { object: THREE.Object3D; geometry: THREE.BufferGeometry; points: Array<[number, number]> } | null {
+    material: SketchLineMaterial,
+  ): { object: SketchFatLine; geometry: THREE.BufferGeometry; points: Array<[number, number]> } | null {
     // **今の画面の粗さで折る**(`appliedResolution`)。固定分割だった頃は、寄ると
     // 円が多角形に見え、引くと使われない点をGPUへ送っていた。
     const points = entityPoints(entity.kind, entity.params, appliedResolution)
     if (points.length < 2) return null
-    const geometry = new THREE.BufferGeometry().setFromPoints(
-      points.map(([u, v]) => toWorld(frame, u, v)),
-    )
-    return { object: new THREE.Line(geometry, material), geometry, points }
+    const worldPoints = points.map(([u, v]) => toWorld(frame, u, v))
+    const built = buildSketchLine(worldPoints, material)
+    if (!built) return null
+    built.object.userData.polylineWorld = worldPoints
+    return { object: built.object, geometry: built.geometry, points }
   }
 
   function clearSketch(sketchId: string): void {
@@ -2152,7 +2160,7 @@ export function createViewport(container: HTMLElement): Viewport {
       const points: Array<[number, number]> = []
       const polylineCounts: number[] = []
       const handleMeshes: THREE.Points[] = []
-      const handleLines: THREE.Line[] = []
+      const handleLines: SketchFatLine[] = []
       // 選ばれている図形・点の索き(`entityId` -> 選ばれた点のxキーの集合。図形全体は `null`)。
       const pickedWhole = new Set(
         entry.selectedHandles.filter((item) => item.point === null).map((item) => item.entityId),
@@ -2219,7 +2227,7 @@ export function createViewport(container: HTMLElement): Viewport {
           sketchRoot.add(built.object)
           objects.push(built.object)
           disposables.push(built.geometry)
-          handleLines.push(built.object as THREE.Line)
+          handleLines.push(built.object)
         }
         for (const point of entityHandles(handle.kind, handle.params)) {
           if (!Number.isFinite(point.u) || !Number.isFinite(point.v)) continue
@@ -2780,6 +2788,19 @@ export function createViewport(container: HTMLElement): Viewport {
     return point.x >= rect.left && point.x <= rect.right && point.y >= rect.top && point.y <= rect.bottom
   }
 
+  function polylineWorldInside(
+    worldPoints: readonly THREE.Vector3[],
+    rect: ReturnType<typeof boxRect>,
+    width: number,
+    height: number,
+  ): boolean {
+    for (const point of worldPoints) {
+      const screen = projectRaw(point.x, point.y, point.z, width, height)
+      if (screen === null || !inside(rect, screen)) return false
+    }
+    return true
+  }
+
   /**
    * そのジオメトリの**全頂点**が矩形の中にあるか。1つでも外れたらその時点で false。
    *
@@ -2854,7 +2875,8 @@ export function createViewport(container: HTMLElement): Viewport {
       const target = sketches.get(activeSketchId)
       const whole = new Set<string>()
       for (const line of target?.handleLines ?? []) {
-        if (!objectInside(line as THREE.Line & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
+        const worldPoints = line.userData.polylineWorld as readonly THREE.Vector3[] | undefined
+        if (!worldPoints || !polylineWorldInside(worldPoints, rect, width, height)) continue
         const entityId = line.userData.entityId
         if (typeof entityId !== 'string') continue
         whole.add(entityId)
@@ -3355,6 +3377,7 @@ export function createViewport(container: HTMLElement): Viewport {
       pickEdgeProposedHoverMaterial.dispose()
       for (const sketchId of [...sketches.keys()]) clearSketch(sketchId)
       bandElement.remove()
+      sketchMaterial.dispose()
       sketchGhostMaterial.dispose()
       for (const material of sketchLineMaterialCache.values()) material.dispose()
       sketchLineMaterialCache.clear()

@@ -118,7 +118,7 @@
   #settings-dialog {
     position: absolute;
     inset: auto;
-    top: 10px;
+    top: calc(10px + var(--toolbar-overlay-h, 0px));
     left: calc(10px + var(--browser-panel-w) + 10px);
     z-index: 10;
     width: 260px;

@@ -8,7 +8,10 @@
  * **ビューポートのサイズを変えるのは
  * .main > .stage の中の.viewportだけ**が不変条件 — 両サイドバーは内部で
  * スクロールし、各パネルは flex: 0 0 auto で自分の高さを固定する。ビューポートに
- * 浮かせるもの(ブラウザ・トースト)は position:absolute でフローの外に出す。
+ * 浮かせるもの(ブラウザ・トースト・verbの引数行)は position:absolute でフローの外に出す。
+ * verb起動中の引数行(`CommandHost.svelte` の `.toolbar-overlay`)も同型 ——
+ * header/.toolbar と同じ全幅 `--panel` の延長で、左右サイドバーは `--toolbar-overlay-h`
+ * だけ下げる。`.viewport` の寸法＝カメラのアスペクトは変えない。
  *
  * 設定ダイアログ(SettingsDialog.svelte)はこの不変条件の例外ではなく、
  * **そもそも大きさを持たない側**である — native <dialog> の showModal() で
@@ -57,6 +60,8 @@
      「ブラウザの右」に出る位置をここから計算する**ので、共有の変数にしてある ——
      片方だけ動かすと、重なるか妙な隙間が空くかのどちらかになる。 */
   --browser-panel-w: 232px;
+  /* verb の引数行 overlay の高さ(CommandHost が ResizeObserver で更新)。0 のときは無視される。 */
+  --toolbar-overlay-h: 0px;
   --font: "PlemolJP Console", "Consolas", "Cascadia Mono", "Meiryo", monospace;
 
   /* ---- 文字の大きさ。**2段しかない** ----
@@ -109,16 +114,16 @@ header {
 }
 
 .toolbar {
+  position: relative;
+  /* ビューポート(canvas)より上、BrowserPanel(5)より下 —— verbの引数行 overlay 用。 */
+  z-index: 4;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
   padding: 8px 16px;
   flex: 0 0 auto;
 }
 
-/* スケッチモードの札とモード操作。
-   **スケッチモード中だけ1行増える** —— ツールバーの高さが変わるので、
-   画面の座標を覚えて使い回す側は入退室を挟んだら測り直すこと
-   (engine [[duocad-command-toolbar-height-varies-with-armed-state]] と同じ性質)。 */
+/* モードの札と操作。常に1行(in-flow) —— 入退室で行内容は変わるが行数は増えない。 */
 .toolbar .mode-row {
   display: flex;
   align-items: center;
@@ -128,9 +133,42 @@ header {
   margin-bottom: 6px;
 }
 
-.toolbar .mode-row .label {
+/* ツールバー行の見出し列。**header 横並びの `.label`(5.5em)と同じ** ——
+   モード行・コマンド行・overlay 行で縦に揃える。 */
+.toolbar .label {
+  width: 5.5em;
   flex: 0 0 auto;
   color: var(--dim);
+}
+
+/* verb の引数行。`.toolbar` と同じ全幅・padding・背景 —— in-flow 高さは増やさない。 */
+.toolbar-overlay {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 16px 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  box-sizing: border-box;
+}
+
+/* overlay 中は in-flow 下端の padding/border を外す —— コマンド行と overlay の間に
+   隙間と横線(`.toolbar` の border-bottom)が出るのを防ぐ。区切りは overlay 下端だけ。 */
+.app.toolbar-overlay-open .toolbar {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+/* overlay 分だけ左右サイドバーを下げる。`.stage` / `.viewport` の寸法は触らない。 */
+.app.toolbar-overlay-open .data-panel,
+.app.toolbar-overlay-open .sidebar {
+  margin-top: var(--toolbar-overlay-h);
+  height: calc(100% - var(--toolbar-overlay-h));
+  align-self: flex-start;
 }
 
 /* 読み札(`<span class="tag">`)と押せる札(`<button class="tag">`)を同じ見た目にしない ——
