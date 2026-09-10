@@ -17,14 +17,17 @@ import type { VertexMarker, VertexRef } from './viewportTypes'
 
 /** 本編(`viewport.ts`)から借りるもの。 */
 export interface VertexMarkersDeps {
-  /** コンテナのCSSピクセル寸法。 */
-  size(): { width: number; height: number }
-  /** 本編がいま使っているカメラ。**投影の切替で差し替わる**ので毎回読み直す。 */
-  camera(): THREE.PerspectiveCamera | THREE.OrthographicCamera
-  /** 本編と**同じ** Raycaster(`params.Points` を借りて戻すので共有する)。 */
-  raycaster: THREE.Raycaster
-  /** 注視点あたりの mm/画素。当たり半径を画素で決めるのに使う。 */
-  worldPerPixel(): number
+  /**
+   * その画素で取れる点(**当たり半径は画面上のCSS px**)。本編の screen pick をそのまま
+   * 借りる —— カメラと寸法を持つのは本編だけなので、射影をこちら側へ写さない。
+   */
+  pickPointsAt<T>(
+    offsetX: number,
+    offsetY: number,
+    radiusPx: number,
+    meshes: readonly THREE.Points[],
+    readItem: (mesh: THREE.Points) => T | null,
+  ): T | null
   /** 世界座標 → コンテナ内のCSSピクセル(画面外なら null)。 */
   toScreen(point: THREE.Vector3): { x: number; y: number } | null
   /** 「指せるもの」が増減したことを本編へ知らせる。 */
@@ -48,7 +51,7 @@ export interface VertexMarkers {
 }
 
 export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
-  const { size, raycaster, worldPerPixel, toScreen, pickChanged, highlightColor } = deps
+  const { pickPointsAt, toScreen, pickChanged, highlightColor } = deps
 
   const vertexRoot = new THREE.Group()
 
@@ -116,22 +119,12 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
   }
 
   function vertexAt(offsetX: number, offsetY: number): VertexRef | null {
-    const camera = deps.camera()
-    if (vertexMeshes.length === 0) return null
-    const { width, height } = size()
-    const ndc = new THREE.Vector2((offsetX / width) * 2 - 1, -(offsetY / height) * 2 + 1)
-    raycaster.setFromCamera(ndc, camera)
-    // 点の当たり判定も**画素で決める**(辺の `edgeAt` と同じ理由 —— 寄るほど掴みにくく
-    // なるのを避ける)。描いている大きさと揃えておく。
-    const previous = raycaster.params.Points?.threshold
-    raycaster.params.Points = { threshold: worldPerPixel() * VERTEX_PIXELS }
-    const hits = raycaster.intersectObjects(vertexMeshes, false)
-    if (previous !== undefined) raycaster.params.Points = { threshold: previous }
-    if (hits.length === 0) return null
-    const bodyId = hits[0].object.userData.bodyId
-    const vertexIndex = hits[0].object.userData.vertexIndex
-    if (typeof bodyId !== 'string' || typeof vertexIndex !== 'number') return null
-    return { bodyId, vertexIndex }
+    // 当たり半径は**画面上の画素**(辺の `edgeAt` と同じ)。描いている大きさと揃えておく。
+    return pickPointsAt(offsetX, offsetY, VERTEX_PIXELS, vertexMeshes, (mesh) => {
+      const { bodyId, vertexIndex } = mesh.userData
+      if (typeof bodyId !== 'string' || typeof vertexIndex !== 'number') return null
+      return { bodyId, vertexIndex }
+    })
   }
 
   function projectVertex(bodyId: string, vertexIndex: number): { x: number; y: number } | null {

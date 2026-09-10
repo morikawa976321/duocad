@@ -89,7 +89,7 @@ async function main() {
     // **引いても指せる**(当たり判定が画素基準であること)。
     // **見た目の大きさはここでは見ていない** —— マーカーは `sizeAttenuation: false` で
     // 画素固定にしてあるが、それが効いているかは目で見るしかない(当たり判定は
-    // `viewport.ts` の `worldPerPixel` 由来で、描画の大きさとは別の経路)。
+    // `viewport.ts` の `pickPointsAt` が screen 距離で決めており、描画とは別の経路)。
     const viewportBox = await page.evaluate(() => {
       const box = document.querySelector('.viewport').getBoundingClientRect()
       return { x: box.left + box.width / 2, y: box.top + box.height / 2 }

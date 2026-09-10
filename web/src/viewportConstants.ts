@@ -69,9 +69,15 @@ export const DEBUG_ANCHOR_LOAD_COLOR = 0xff5c2e
 export const EDGE_COLOR = 0x3f4a56
 /** 選べる辺。面の境界線(`EDGE_COLOR`)と**見分けがつく明るさ**にする。 */
 export const PICK_EDGE_COLOR = 0xbfd4ea
-/** 辺の当たり判定の太さ[画素]。細すぎると掴めず、太すぎると隣の辺が取れる。 */
+/**
+ * 辺の当たり判定の太さ[CSS px]。細すぎると掴めず、太すぎると隣の辺が取れる。
+ *
+ * **画面上の距離で判定する**(`screenPick.ts` / `viewport.ts` の `pickLinesAt`)ので、
+ * ズーム・画角・投影の切替で掴みやすさが変わらない。この3つの定数は同じ物差しの上にあり、
+ * 大小関係がそのまま優先順位になる(点 < 辺、頂点 < 辺)。
+ */
 export const EDGE_PICK_PIXELS = 6
-//: スケッチの点マーカーの当たり半径[画素]。**辺より小さく**しておく
+//: スケッチの点マーカーの当たり半径[CSS px]。**辺より小さく**しておく
 //: (点は辺の上に乗っているので、同じ太さだと辺を狙えない)。
 export const SKETCH_HANDLE_PIXELS = 5
 /** スケッチ線の太さ[CSS px]。`planeGrid` の最太段(半幅1.1px)より少し太く、格子と重なっても見える程度。 */
@@ -83,7 +89,7 @@ export const SKETCH_CURSOR_SNAP_COLOR = '#5fd97a'
 //: ウィンドウ選択と見なすドラッグの最小距離[画素]。**クリックの上限と同じ値**にして、
 //: 「クリックでもドラッグでもない画素」が生まれないようにする(下の `CLICK_MOVE_LIMIT_PX`)。
 export const BOX_SELECT_MIN_PX = 6
-/** 頂点マーカーの半径[画素]。辺の当たり判定(`EDGE_PICK_PIXELS`)より細くする ——
+/** 頂点マーカーの半径[CSS px]。辺の当たり判定(`EDGE_PICK_PIXELS`)より細くする ——
     太いと、辺を狙うクリックが端点のマーカーに吸われる(頂点は必ず辺の端に乗っている)。 */
 export const VERTEX_PIXELS = 4
 export const BACKGROUND_COLOR = 0x161a1f

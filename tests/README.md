@@ -851,10 +851,11 @@ Session.set_view_resolution(world_per_pixel, size_hint=0.0, focus=None) -> bool 
 ## ブラウザ側にしか対応物が無い純関数（`node` で評価する）
 
 `web/src/viewCube.ts`（`test_view_cube.py`）・`web/src/gridScale.ts`（`test_grid_scale.py`）・
-`web/src/commands/sketchGeometry.ts`（`test_sketch_geometry.py`）は
+`web/src/commands/sketchGeometry.ts`（`test_sketch_geometry.py`）・
+`web/src/screenPick.ts`（`test_screen_pick.py`）は
 **Python側の対応物が無い**。2言語を突き合わせる代わりに、pytestは `tests/eval_view_cube.mjs` /
-`tests/eval_grid_scale.mjs` / `tests/eval_sketch_geometry.mjs` を `node` で走らせ、終了コード
-だけを見る（ソースの文字列比較ではなく実行結果で見る。Nodeは `.ts` をそのまま読める）。
+`tests/eval_grid_scale.mjs` / `tests/eval_sketch_geometry.mjs` / `tests/eval_screen_pick.mjs` を
+`node` で走らせ、終了コードだけを見る（ソースの文字列比較ではなく実行結果で見る。Nodeは `.ts` をそのまま読める）。
 **`node` が無くてもskipしない** ——
 足場が無いときのskipは無人実行では緑と区別が付かないので、`AssertionError` で落とす。
 
@@ -877,6 +878,12 @@ Session.set_view_resolution(world_per_pixel, size_hint=0.0, focus=None) -> bool 
   **弧の中点が円弧上の点と同じ側か**で決める —— 優弧/劣弧の大小比較では
   **ちょうど半円のときに破れる**。半径を打つと中心を弦の法線上へ置き直す
   （弦の半分より小さい半径は作れない）。
+
+- **当たり判定の距離**: 半径は **inclusive**（距離ちょうど `radiusPx` は hit）。垂足が線分の外へ
+  出たら端点までの距離になり、長さ0の線分でも0除算にならない。半径内に複数あれば**距離最小**、
+  同着は**先に渡した候補**が勝つ（呼び出し側が点→線の順で渡す）。`NaN` は黙って最短を横取り
+  しない。**実際に狙った物が取れるか**（射影・優先順位・ズーム後の感触）はここでは判定できない
+  —— `web/scripts/smoke-screen-pick.mjs` が持つ。
 
 描画そのもの（第2パス描画・Pointer Lockドラッグ・視点アニメーション・格子が実際に組み直るか）は
 pytestでは判定できない —— `web/scripts/` の実機smokeと目視が持つ。

@@ -40,6 +40,7 @@ import {
   type UvBox,
 } from './gridScale'
 import { createPlaneGrid, type PlaneFrame, type PlaneGrid } from './planeGrid'
+import { distSqPointSegment, pickNearestWithinRadius, type ScreenPickCandidate } from './screenPick'
 import { buildSketchLine, createSketchLineMaterial, type SketchFatLine } from './sketchLine'
 import { POLE_Z, upForDirection } from './viewCube'
 import { createOptimizeAnnotations } from './optimizeAnnotations'
@@ -1095,7 +1096,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
   /**
    * 注視点の面で画面の縦に収まる世界長さの半分。**2つのカメラを同じ物差しで測るための穴**
-   * で、「見かけの大きさを保つ」処理(`setFov` の切り替え)と当たり判定の太さ
+   * で、「見かけの大きさを保つ」処理(`setFov` の切り替え)と画面1画素ぶんの世界長さ
    * (`worldPerPixel`)がここを通る。
    *
    * 透視は距離×tan(画角/2)、正投影は視錐台の半分の高さ÷`zoom`(ドリーは `zoom` を動かす
@@ -1787,9 +1788,8 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 画面1画素ぶんの世界座標の長さ(当たり判定の太さを画素で決めるため)。
-   * **式は `gridScale.ts` の `mmPerPixel` 1つに寄せてある** —— グリッドの段の判定と
-   * 当たり判定の太さが同じ物差しで動く(ずれると「見えている線が指せない」になる)。
+   * 画面1画素ぶんの世界座標の長さ。**式は `gridScale.ts` の `mmPerPixel` 1つに寄せてある**
+   * —— グリッドの段の判定・可変解像度・視点が止まったかの判定が同じ物差しで動く。
    */
   function worldPerPixel(): number {
     const { height } = size()
@@ -1993,22 +1993,175 @@ export function createViewport(container: HTMLElement): Viewport {
     resolutionListener?.(appliedResolution)
   }
 
-  function edgeAt(offsetX: number, offsetY: number): EdgeRef | null {
-    if (edgeLines.length === 0) return null
+  // ------------------------------------------------ 当たり判定の共有部品(screen pick)
+  //
+  // 当たり半径の定数(`EDGE_PICK_PIXELS` / `SKETCH_HANDLE_PIXELS` / `VERTEX_PIXELS`)は
+  // **画面上の半径[CSS px]**として使う。Raycaster の world threshold
+  // (`worldPerPixel() * 定数`)では、注視点と対象の奥行きが違うだけで実際の screen 半径が
+  // 変わり、斜めから見た線は 3D 垂線距離ぶん楕円状に当たる(`docs/SCREEN_PICK.md`)。
+  //
+  // **`worldPerPixel()` はここから外れた**。残っているのはグリッド・可変解像度・clip 用。
+
+  const pickScratch = new THREE.Vector3()
+
+  /** 折れ線1本ぶんの world 座標の読み口。**配列は作らない**(`polylineScreenDistSq`)。 */
+  interface PickPolyline {
+    count: number
+    at(index: number, out: THREE.Vector3): void
+  }
+
+  /**
+   * 当たり判定専用の射影。**`toScreen` とは別物** —— viewport の矩形でも `clickable()` でも
+   * 切らない(画面の外へ出た端点も、線分までの距離を測るには要る)。落とすのはカメラの裏
+   * (z が clip の外)だけ。
+   *
+   * `width`/`height` を引数で受けるのは `projectRaw` と同じ理由(あちらのコメント) ——
+   * 1回のpickで数千点を射影するので、点ごとに `size()`(DOM読み取り)を呼ばせない。
+   */
+  function projectForPick(
+    world: THREE.Vector3,
+    width: number,
+    height: number,
+  ): { x: number; y: number } | null {
+    return projectRaw(world.x, world.y, world.z, width, height)
+  }
+
+  /**
+   * 折れ線を screen 上で歩き、カーソルまでの距離²[px²]の最小を返す。**射影できた隣り合う
+   * 2点だけ**を線分として見るので、1本も見えなければ null。
+   */
+  function polylineScreenDistSq(
+    offsetX: number,
+    offsetY: number,
+    polyline: PickPolyline,
+    width: number,
+    height: number,
+  ): number | null {
+    let best = Infinity
+    let previousX = 0
+    let previousY = 0
+    let hasPrevious = false
+    for (let at = 0; at < polyline.count; at += 1) {
+      polyline.at(at, pickScratch)
+      const screen = projectForPick(pickScratch, width, height)
+      if (screen === null) {
+        hasPrevious = false
+        continue
+      }
+      if (hasPrevious) {
+        const distSq = distSqPointSegment(offsetX, offsetY, previousX, previousY, screen.x, screen.y)
+        if (distSq < best) best = distSq
+      }
+      previousX = screen.x
+      previousY = screen.y
+      hasPrevious = true
+    }
+    return best === Infinity ? null : best
+  }
+
+  /** 素の `THREE.Line`(ソリッドの辺)の折れ線。position 属性 × `matrixWorld`。 */
+  function bufferPolyline(line: THREE.Line): PickPolyline | null {
+    const position = line.geometry.getAttribute('position')
+    if (!position || position.count < 2) return null
+    line.updateWorldMatrix(true, false)
+    const matrix = line.matrixWorld
+    return {
+      count: position.count,
+      at(index, out) {
+        out.set(position.getX(index), position.getY(index), position.getZ(index)).applyMatrix4(matrix)
+      },
+    }
+  }
+
+  /**
+   * スケッチの図形(`Line2`)の折れ線。**`geometry` からは読めない** ——
+   * `LineGeometry` の `position` 属性は太線を描くための箱テンプレートであって折れ線ではない。
+   * world 座標の点列は `buildEntityLine` が `userData.polylineWorld` へ入れてある
+   * (矩形選択の `collectInBox` も同じものを読む)。
+   */
+  function sketchPolyline(line: SketchFatLine): PickPolyline | null {
+    const points = line.userData.polylineWorld as readonly THREE.Vector3[] | undefined
+    if (!points || points.length < 2) return null
+    return {
+      count: points.length,
+      at(index, out) {
+        out.copy(points[index])
+      },
+    }
+  }
+
+  /**
+   * その画素で取れる点。`readItem` が null を返したものは候補にしない(`userData` の形が
+   * 違うものを黙って拾わない)。
+   */
+  function pickPointsAt<T>(
+    offsetX: number,
+    offsetY: number,
+    radiusPx: number,
+    meshes: readonly THREE.Points[],
+    readItem: (mesh: THREE.Points) => T | null,
+  ): T | null {
+    if (meshes.length === 0) return null
     const { width, height } = size()
-    const ndc = new THREE.Vector2((offsetX / width) * 2 - 1, -(offsetY / height) * 2 + 1)
-    raycaster.setFromCamera(ndc, camera)
-    // 線の当たり判定の太さは**世界座標**で指定する。画素で決めないと、寄れば寄るほど
-    // 掴みにくくなる(20mmの立方体と2835面の筐体で同じ操作感にならない)。
-    const previous = raycaster.params.Line?.threshold
-    raycaster.params.Line = { threshold: worldPerPixel() * EDGE_PICK_PIXELS }
-    const hits = raycaster.intersectObjects(edgeLines, false)
-    if (previous !== undefined) raycaster.params.Line = { threshold: previous }
-    if (hits.length === 0) return null
-    const bodyId = hits[0].object.userData.bodyId
-    const edgeIndex = hits[0].object.userData.edgeIndex
-    if (typeof bodyId !== 'string' || typeof edgeIndex !== 'number') return null
-    return { bodyId, edgeIndex }
+    const candidates: Array<ScreenPickCandidate<T>> = []
+    for (const mesh of meshes) {
+      const item = readItem(mesh)
+      if (item === null) continue
+      const position = mesh.geometry.getAttribute('position')
+      if (!position || position.count === 0) continue
+      mesh.updateWorldMatrix(true, false)
+      let best = Infinity
+      for (let at = 0; at < position.count; at += 1) {
+        pickScratch
+          .set(position.getX(at), position.getY(at), position.getZ(at))
+          .applyMatrix4(mesh.matrixWorld)
+        const screen = projectForPick(pickScratch, width, height)
+        if (screen === null) continue
+        const distSq = (screen.x - offsetX) ** 2 + (screen.y - offsetY) ** 2
+        if (distSq < best) best = distSq
+      }
+      if (best !== Infinity) candidates.push({ item, distSq: best })
+    }
+    return pickNearestWithinRadius(radiusPx, candidates)
+  }
+
+  /** その画素で取れる折れ線。`readItem` / `polylineOf` の約束は `pickPointsAt` と同じ。 */
+  function pickLinesAt<L extends THREE.Object3D, T>(
+    offsetX: number,
+    offsetY: number,
+    radiusPx: number,
+    lines: readonly L[],
+    readItem: (line: L) => T | null,
+    polylineOf: (line: L) => PickPolyline | null,
+  ): T | null {
+    if (lines.length === 0) return null
+    const { width, height } = size()
+    const candidates: Array<ScreenPickCandidate<T>> = []
+    for (const line of lines) {
+      const item = readItem(line)
+      if (item === null) continue
+      const polyline = polylineOf(line)
+      if (polyline === null) continue
+      const distSq = polylineScreenDistSq(offsetX, offsetY, polyline, width, height)
+      if (distSq === null) continue
+      candidates.push({ item, distSq })
+    }
+    return pickNearestWithinRadius(radiusPx, candidates)
+  }
+
+  function edgeAt(offsetX: number, offsetY: number): EdgeRef | null {
+    return pickLinesAt(
+      offsetX,
+      offsetY,
+      EDGE_PICK_PIXELS,
+      edgeLines,
+      (line) => {
+        const { bodyId, edgeIndex } = line.userData
+        if (typeof bodyId !== 'string' || typeof edgeIndex !== 'number') return null
+        return { bodyId, edgeIndex }
+      },
+      bufferPolyline,
+    )
   }
 
   /** 折れ線の道のりの `fraction` の位置(0=始点 1=終点)。 */
@@ -2045,10 +2198,7 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   const vertexMarkers = createVertexMarkers({
-    size,
-    camera: () => camera,
-    raycaster,
-    worldPerPixel,
+    pickPointsAt,
     toScreen,
     pickChanged,
     highlightColor,
@@ -2550,43 +2700,38 @@ export function createViewport(container: HTMLElement): Viewport {
    * その画素で当たるスケッチの図形(**アクティブなスケッチだけ**)。
    *
    * **点が先・辺が後**。点は必ず辺の上に乗っているので、辺を先に見ると端点を掴めない
-   * (頂点マーカーを辺より先に見るのと同じ理由)。当たり判定の太さは画素で決める
-   * (`edgeAt` / `vertexAt` と同じ —— 寄るほど掴みにくくなるのを避ける)。
+   * (頂点マーカーを辺より先に見るのと同じ理由)。当たり半径は画面上の画素で決める
+   * (`edgeAt` / `vertexAt` と同じ `pickPointsAt` / `pickLinesAt`)。
    */
   function sketchEntityAt(offsetX: number, offsetY: number): SketchEntityHit | null {
     if (activeSketchId === null) return null
     const target = sketches.get(activeSketchId)
     if (!target) return null
-    const { width, height } = size()
-    const ndc = new THREE.Vector2((offsetX / width) * 2 - 1, -(offsetY / height) * 2 + 1)
-    raycaster.setFromCamera(ndc, camera)
-
-    if (target.handleMeshes.length > 0) {
-      const previous = raycaster.params.Points?.threshold
-      raycaster.params.Points = { threshold: worldPerPixel() * SKETCH_HANDLE_PIXELS }
-      const hits = raycaster.intersectObjects(target.handleMeshes, false)
-      if (previous !== undefined) raycaster.params.Points = { threshold: previous }
-      if (hits.length > 0) {
-        const { entityId, point } = hits[0].object.userData
-        if (typeof entityId === 'string' && typeof point === 'string') {
-          return { sketchId: activeSketchId, entityId, point }
-        }
-      }
-    }
-
-    if (target.handleLines.length > 0) {
-      const previous = raycaster.params.Line?.threshold
-      raycaster.params.Line = { threshold: worldPerPixel() * EDGE_PICK_PIXELS }
-      const hits = raycaster.intersectObjects(target.handleLines, false)
-      if (previous !== undefined) raycaster.params.Line = { threshold: previous }
-      if (hits.length > 0) {
-        const { entityId } = hits[0].object.userData
-        if (typeof entityId === 'string') {
-          return { sketchId: activeSketchId, entityId, point: null }
-        }
-      }
-    }
-    return null
+    const sketchId = activeSketchId
+    const handle = pickPointsAt(
+      offsetX,
+      offsetY,
+      SKETCH_HANDLE_PIXELS,
+      target.handleMeshes,
+      (mesh): SketchEntityHit | null => {
+        const { entityId, point } = mesh.userData
+        if (typeof entityId !== 'string' || typeof point !== 'string') return null
+        return { sketchId, entityId, point }
+      },
+    )
+    if (handle !== null) return handle
+    return pickLinesAt(
+      offsetX,
+      offsetY,
+      EDGE_PICK_PIXELS,
+      target.handleLines,
+      (line): SketchEntityHit | null => {
+        const entityId = line.userData.entityId
+        if (typeof entityId !== 'string') return null
+        return { sketchId, entityId, point: null }
+      },
+      sketchPolyline,
+    )
   }
 
   function pickRegions(on: boolean): void {
