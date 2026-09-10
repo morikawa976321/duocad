@@ -165,6 +165,11 @@ OC 更新の二分探索（`while (l2-l1)/(l1+l2) > 1e-9`）の**各ステップ
 **効きが小さいもの:** mesh/STL（評価の 0.01%）、`build_anchors`（0.5%）——
 [TOPOPT_SPEED.md](TOPOPT_SPEED.md) の内訳表どおり。
 
+案3 の大きさは実測してある: `hanger_test.json` 2.4mm（322,384要素・`threads=7`）で
+**OC の二分探索は 1反復あたり 7.87〜8.36秒＝1反復の 20〜25%**。
+**MMA の更新則ならこれが 0.93〜1.01秒（3%）になる**（フィルタを掛け直さないため）——
+[TOPOPT_MMA_VS_OC.md](TOPOPT_MMA_VS_OC.md)。
+
 ---
 
 ## 再現手順

@@ -11,6 +11,7 @@
 | **設計と画面**(Sessionの口・解像度・OptimizePanel・デバッグ・撮影) | 本書「設計と画面」 |
 | **安全率探索の時間短縮**(内訳・改善案・Illinois 等) | [TOPOPT_SPEED.md](TOPOPT_SPEED.md) |
 | **SIMP 1反復の秒数内訳**(hanger 2.4mm・塊を小さくしても下がらない理由) | [TOPOPT_SIMP_ITER_BREAKDOWN.md](TOPOPT_SIMP_ITER_BREAKDOWN.md) |
+| **更新則 OC と MMA の比較**(答えが一致するか・費用・調整の余地) | [TOPOPT_MMA_VS_OC.md](TOPOPT_MMA_VS_OC.md) |
 
 **コードは `duocad/topopt/`、受入検査は `topopt_checks/`(`duocad/` の外)にある。**
 2026-09-05 に実験場 `probe_topopt/` から移設し同日削除した(履歴は `03bf794`)。

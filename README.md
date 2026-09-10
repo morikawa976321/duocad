@@ -16,6 +16,8 @@
 | [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化**（実測の記録・設計と画面・受入検査の意味） | 数字の根拠・topopt配線を疑うとき |
 | [docs/TOPOPT_SPEED.md](docs/TOPOPT_SPEED.md) | **安全率探索の時間短縮**（内訳・改善案・探索アルゴリズム） | 外側ループを速くしたいとき |
 | [docs/TOPOPT_SIMP_ITER_BREAKDOWN.md](docs/TOPOPT_SIMP_ITER_BREAKDOWN.md) | **SIMP 1反復の秒数内訳**（hanger 2.4mm 実測・床の理由） | 1反復が重い理由を疑うとき |
+| [docs/TOPOPT_MMA_VS_OC.md](docs/TOPOPT_MMA_VS_OC.md) | **更新則 OC と MMA の比較**（答えの一致・費用・調整の余地） | MMA を既定にしてよいか判断するとき |
+| [docs/SCREEN_PICK.md](docs/SCREEN_PICK.md) | **当たり判定を screen 半径[px]に揃える**実装計画（未実装） | スケッチ/辺/頂点の掴みやすさを直すとき |
 
 ---
 
