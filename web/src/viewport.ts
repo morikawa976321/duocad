@@ -31,6 +31,7 @@ import {
   BASE_EXTENT,
   TIERS,
   boundingSquare,
+  extendUvBoxToPoint,
   extentFor,
   mmPerPixel,
   tierAlphas,
@@ -201,11 +202,26 @@ export function createViewport(container: HTMLElement): Viewport {
   let sketchGridFrame: PlaneFrame | null = null
 
   /**
-   * `sketchGridFrame` が任意面(基準平面でない)のときの描く正方形。
-   * `faceUvBounds` が測れなかった・基準平面のときは `null`。**書き手は
-   * `setGridSketchFrame` だけ**(`sketchGridFrame` と対で更新する)。
+   * `sketchGridFrame` が非nullの間、実際にグリッドへ渡している描く正方形(カーソル追従で
+   * 広がった後の値も含む)。面スケッチで `faceUvBoxOnly` が測れなかったときは `null`
+   * (無制限描画。`updateActiveSketchGridCursor` のnullガード参照)。**書き手は
+   * `setGridSketchFrame` / `desiredGridPlanes`(基準平面スケッチ側)/
+   * `updateActiveSketchGridCursor`(カーソル追従の軽量経路)の3箇所**
+   * (`sketchGridFrame` と対で更新する)。
    */
   let sketchGridBounds: UvBounds | null = null
+
+  /**
+   * `sketchGridFrame` が非nullの間(=スケッチで実際に描画中)の「内容だけ」のUV矩形
+   * (カーソル合成前・`boundingSquare` の余白/丸め前)。**カーソル追従の軽量経路
+   * (`updateActiveSketchGridCursor`)専用のキャッシュ** —— pointermoveのたびに
+   * `contentBoxForGrid`/面メッシュの頂点走査をやり直さないための分離で、書き手は
+   * `desiredGridPlanes`(基準平面スケッチ側)と `refreshGridSketchFrame`(面スケッチ側)の
+   * 「内容が変わったときだけ」通る箇所だけ(タスク仕様のパフォーマンス上の注意)。
+   */
+  let sketchContentUvBox: UvBox | null = null
+  /** `sketchContentUvBox` と対で持つ、`boundingSquare` へ渡す `includeOrigin`。 */
+  let sketchContentIncludeOrigin = false
 
   /**
    * いまのスケッチが**実ジオメトリの面(`plane.kind === 'face'`)へ貼られているか**。
@@ -369,6 +385,20 @@ export function createViewport(container: HTMLElement): Viewport {
     const sketchPlane = sketchGridFrame === null ? null : basePlaneForFrame(sketchGridFrame)
     const name: BasePlaneName = sketchPlane ?? 'XY'
     const axes = BASE_PLANE_AXES[name]
+    // **基準平面スケッチ中(`sketchGridFrame !== null`)だけ、カーソル追従の
+    // キャッシュ(`sketchContentUvBox`)を入れ直す** —— このブランチは内容が変わるたびに
+    // 呼ばれる(`applyGridScale`/`setGridSketchFrame` 経由)ので、ここが
+    // 「内容が変わったときだけ計算する」場所そのもの(タスク仕様のパフォーマンス上の注意)。
+    // 通常表示(`sketchGridFrame === null`)は追従の対象外(完了条件4)なのでキャッシュに触らない。
+    let bounds: UvBounds
+    if (sketchGridFrame !== null) {
+      sketchContentUvBox = contentUvBoxForFrame(baseFrame(name))
+      sketchContentIncludeOrigin = true
+      bounds = boundingSquare(sketchContentUvBox, { includeOrigin: true })
+      sketchGridBounds = bounds
+    } else {
+      bounds = contentBoundsForPlane(baseFrame(name))
+    }
     return {
       planes: [
         {
@@ -376,7 +406,7 @@ export function createViewport(container: HTMLElement): Viewport {
           frame: baseFrame(name),
           uColor: axes.uColor,
           vColor: axes.vColor,
-          bounds: contentBoundsForPlane(baseFrame(name)),
+          bounds,
           depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid,
         },
       ],
@@ -499,6 +529,32 @@ export function createViewport(container: HTMLElement): Viewport {
     sketchGridBounds = bounds
     sketchGridIsFacePlane = isFacePlane
     applyGridPlanes()
+  }
+
+  /**
+   * カーソル追従の軽量経路(`sketchContentUvBox` のdocstring参照)。`applyGridPlanes()` は
+   * 呼ばない —— `sketchGridFrame !== null` のとき `desiredGridPlanes()` は常に単一平面
+   * (`planes.length===1`)を返すので、`planeGrids[0]` だけを直接書き換えれば足りる
+   * (`basePlanesOn` の3平面とは同時に立たない。`App.svelte` の `wantsBasePlanes` が
+   * `sketchId === null` を条件に入れている)。
+   *
+   * **`sketchContentUvBox === null` かつ面スケッチ(`!sketchContentIncludeOrigin`)のときは
+   * 何もしない** —— それは `faceUvBoxOnly` が「面を測れない」を表す契約上のnullで、
+   * `desiredGridPlanes` はこれを `setBounds(null)`(無制限描画。`planeGrid.ts` の
+   * `uBoundsHalf<=0`)として渡している。ここで `boundingSquare(null, ...)` を呼ぶと
+   * `BASE_EXTENT`(100mm)の**有限**な既定へ縮んでしまい、「測れないときは無制限に描いて
+   * 安全側へ倒す」という契約をpointermoveのたびに壊す。基準平面側の
+   * `sketchContentUvBox===null` は「空の文書」を表す別の意味(`boundingSquare` の既定=
+   * `BASE_EXTENT` が正しい)なので対象にしない。
+   */
+  function updateActiveSketchGridCursor(point: { u: number; v: number } | null): void {
+    if (sketchGridFrame === null) return
+    if (!sketchContentIncludeOrigin && sketchContentUvBox === null) return
+    const merged = extendUvBoxToPoint(sketchContentUvBox, point)
+    const bounds = boundingSquare(merged, { includeOrigin: sketchContentIncludeOrigin })
+    sketchGridBounds = bounds
+    gridPlaneBounds = [bounds]
+    planeGrids[0].setBounds(bounds)
   }
 
   /**
@@ -1145,19 +1201,19 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 基準平面のグリッドを描く正方形。**すべてのスケッチとソリッドの外接直方体**を、その平面の
-   * u/v へ射影して求める。
+   * 基準平面グリッドの「内容だけ」のUV矩形(`boundingSquare` の余白/丸め前)。
+   * **すべてのスケッチとソリッドの外接直方体**を、その平面の u/v へ射影して求める。
    *
    * 射影するのは**箱の8隅**である。箱は軸並行なので、どの向きのframeでも8隅の射影の
-   * 最小・最大が射影像の外接矩形になる(面の頂点を全部回す `faceUvBounds` と違い、内容が
+   * 最小・最大が射影像の外接矩形になる(面の頂点を全部回す `faceUvBoxOnly` と違い、内容が
    * 何万頂点あっても8点で済む)。
    *
-   * `includeOrigin: true` —— モデルが原点から遠いとき、原点が枠の外へ出ると
-   * 「原点がどこか読める」というグリッド本来の役割が失われる。
+   * `boundingSquare` を呼ばず生の矩形を返すのは、カーソル追従(`extendUvBoxToPoint`)が
+   * 余白・丸めより**前**に合成する必要があるため(`contentBoundsForPlane` 参照)。
    */
-  function contentBoundsForPlane(frame: PlaneFrame): UvBounds {
+  function contentUvBoxForFrame(frame: PlaneFrame): UvBox | null {
     const box = contentBoxForGrid()
-    if (box.isEmpty()) return boundingSquare(null, { includeOrigin: true })
+    if (box.isEmpty()) return null
     const origin = new THREE.Vector3(...(frame.origin as [number, number, number]))
     const axisU = new THREE.Vector3(...(frame.u as [number, number, number])).normalize()
     const axisV = new THREE.Vector3(...(frame.v as [number, number, number])).normalize()
@@ -1183,7 +1239,18 @@ export function createViewport(container: HTMLElement): Viewport {
               vMax: Math.max(uv.vMax, v),
             }
     }
-    return boundingSquare(uv, { includeOrigin: true })
+    return uv
+  }
+
+  /**
+   * 基準平面のグリッドを描く正方形。`contentUvBoxForFrame` を丸ごと包むだけの薄い覆い
+   * (カーソル追従が要らない呼び出し側 —— 3平面対象待ち・スケッチ外の通常表示 —— 専用)。
+   *
+   * `includeOrigin: true` —— モデルが原点から遠いとき、原点が枠の外へ出ると
+   * 「原点がどこか読める」というグリッド本来の役割が失われる。
+   */
+  function contentBoundsForPlane(frame: PlaneFrame): UvBounds {
+    return boundingSquare(contentUvBoxForFrame(frame), { includeOrigin: true })
   }
 
   /**
@@ -1375,7 +1442,8 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 貼った面の外接範囲を、スケッチのframe(u,v)で測る(`setBounds` へ渡す枠)。
+   * 貼った面の「内容だけ」のUV矩形(`boundingSquare` の余白/丸め前、`setBounds` へ渡す枠の元)を、
+   * スケッチのframe(u,v)で測る。
    *
    * **基準平面の `extentFor` を使い回さない** —— あれの `BASE_EXTENT`(100mm)下限は
    * 「空の文書でもこれより狭くしない」という文書スケールの前提で、実測で40×20mmの面に
@@ -1390,7 +1458,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * 装飾が消えるより、広めに描いて残る方が安全)。**面の実際の輪郭では切らない**
    * (トリム境界のマスクはステンシルが要り費用に見合わない)。
    */
-  function faceUvBounds(bodyId: string, faceIndex: number, frame: PlaneFrame): UvBounds | null {
+  function faceUvBoxOnly(bodyId: string, faceIndex: number, frame: PlaneFrame): UvBox | null {
     const mesh = allFaceMeshes.find(
       (candidate) => candidate.userData.bodyId === bodyId && candidate.userData.faceIndex === faceIndex,
     )
@@ -1418,7 +1486,7 @@ export function createViewport(container: HTMLElement): Viewport {
     }
     if (uv === null) return null
     if (!(uv.uMax - uv.uMin > 0) && !(uv.vMax - uv.vMin > 0)) return null
-    return boundingSquare(uv, { includeOrigin: false })
+    return uv
   }
 
   /**
@@ -2338,10 +2406,17 @@ export function createViewport(container: HTMLElement): Viewport {
     const target = activeSketchId === null ? undefined : sketches.get(activeSketchId)
     const frame = target?.frame ?? null
     const isFacePlane = target !== undefined && target.plane.kind === 'face'
-    const bounds =
-      frame !== null && target !== undefined && target.plane.kind === 'face'
-        ? faceUvBounds(target.plane.bodyId, target.plane.faceIndex, frame)
-        : null
+    let bounds: UvBounds | null = null
+    if (frame !== null && target !== undefined && target.plane.kind === 'face') {
+      // 面スケッチの「内容だけ」のUV矩形をここでキャッシュする(カーソル追従の軽量経路
+      // `updateActiveSketchGridCursor` が読む)。ここは `setActiveSketch`/`showSketches` からしか
+      // 呼ばれない = 「内容が変わったときだけ」通る箇所(タスク仕様のパフォーマンス上の注意)。
+      sketchContentUvBox = faceUvBoxOnly(target.plane.bodyId, target.plane.faceIndex, frame)
+      sketchContentIncludeOrigin = false
+      // `faceUvBoxOnly` が null(測れない)なら bounds も null のまま
+      // (範囲で切らずに描く。`faceUvBoxOnly` のdocstring参照)。
+      bounds = sketchContentUvBox === null ? null : boundingSquare(sketchContentUvBox, { includeOrigin: false })
+    }
     setGridSketchFrame(frame, bounds, isFacePlane)
   }
 
@@ -3081,6 +3156,7 @@ export function createViewport(container: HTMLElement): Viewport {
         planePoint = planePointAt(event.offsetX, event.offsetY)
         sketchHit = sketchEntityAt(event.offsetX, event.offsetY)
         planeMoveListener(planePoint, sketchHit)
+        updateActiveSketchGridCursor(planePoint)
       }
     }
     updateSketchCursor(event.offsetX, event.offsetY, planePoint, sketchHit)
@@ -3091,6 +3167,10 @@ export function createViewport(container: HTMLElement): Viewport {
     hoverAt = null
     orbiting = false
     sketchCursor.update(null, 'free', null)
+    // カーソルがcanvas外に出た=いま追従すべき位置が無い。`sketchCursor` と同じく
+    // 「カーソル無し」(`point: null`)へ戻す —— そのままだと、キャンバスの外へ出ている間
+    // ずっと直前の拡大状態が残る。
+    updateActiveSketchGridCursor(null)
     // **引きかけの矩形は捨てる**(帯だけが残って画面に貼り付くのを防ぐ)。
     hideBand()
     downValid = false

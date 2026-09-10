@@ -16,6 +16,7 @@ import {
   TIERS,
   BOUNDS_MARGIN_RATIO,
   boundingSquare,
+  extendUvBoxToPoint,
   extentFor,
   fadeFromSpacingPx,
   mmPerPixel,
@@ -245,5 +246,53 @@ assert.deepEqual(bs({ uMin: 0, uMax: Number.NaN, vMin: 0, vMax: 1 }), {
 })
 
 assert.ok(BOUNDS_MARGIN_RATIO > 0, '余白の比が正でない')
+
+// ============================================================== extendUvBoxToPoint(カーソル追従)
+// 点が無ければ内容のまま(参照どうしの比較でよい —— 新しいオブジェクトを作らない契約)。
+{
+  const box = { uMin: 0, uMax: 10, vMin: 0, vMax: 10 }
+  assert.equal(extendUvBoxToPoint(box, null), box, '点が無ければ内容の矩形をそのまま返す')
+}
+assert.equal(extendUvBoxToPoint(null, null), null, '内容も点も無ければ null')
+
+// 内容が無く点だけあれば、点だけを含む1点の矩形(面積0)。
+assert.deepEqual(extendUvBoxToPoint(null, { u: 5, v: -3 }), { uMin: 5, uMax: 5, vMin: -3, vMax: -3 })
+
+// 点が内容の内側なら矩形は変わらない(値として同じ)。
+assert.deepEqual(
+  extendUvBoxToPoint({ uMin: 0, uMax: 10, vMin: 0, vMax: 10 }, { u: 5, v: 5 }),
+  { uMin: 0, uMax: 10, vMin: 0, vMax: 10 },
+  '内容の内側の点では矩形が広がらない',
+)
+
+// 点が内容の外側なら、その点を覆うところまで広がる(はみ出た軸だけ)。
+assert.deepEqual(
+  extendUvBoxToPoint({ uMin: 0, uMax: 10, vMin: 0, vMax: 10 }, { u: 50, v: -20 }),
+  { uMin: 0, uMax: 50, vMin: -20, vMax: 10 },
+  '内容の外側の点まで広がっていない',
+)
+
+// boundingSquare と組み合わせて使う実使用形: 内容から離れた点で正方形が広がり、
+// 点が内容へ戻れば(呼び出し側が毎回作り直す前提どおり)元の大きさに戻る。
+{
+  const content = { uMin: -10, uMax: 10, vMin: -10, vMax: 10 }
+  const near = boundingSquare(extendUvBoxToPoint(content, { u: 5, v: 5 }), { includeOrigin: false })
+  const contentOnly = boundingSquare(content, { includeOrigin: false })
+  assert.deepEqual(near, contentOnly, 'カーソルが内容の近くにあれば追従前と同じ矩形')
+
+  const mergedFar = extendUvBoxToPoint(content, { u: 500, v: 5 })
+  const far = boundingSquare(mergedFar, { includeOrigin: false })
+  assert.ok(far.half > contentOnly.half, 'カーソルが遠くへ出たら正方形は広がるはず')
+  assert.ok(
+    far.centerU + far.half >= 500 && far.centerU - far.half <= 500,
+    'カーソル位置を覆っていない',
+  )
+  // 余白(BOUNDS_MARGIN_RATIO)・目盛りスナップ(snapForSpan)は通常どおり効く
+  // (「無視する」のではなく「内容∪カーソル」を新しい内容として扱っているため)。
+  const step = snapForSpan(Math.max(mergedFar.uMax - mergedFar.uMin, mergedFar.vMax - mergedFar.vMin))
+  for (const edge of [far.centerU - far.half, far.centerU + far.half, far.centerV - far.half, far.centerV + far.half]) {
+    assert.equal(Math.round(edge / step) * step, edge, `縁 ${edge} が ${step}mm の倍数に載っていない`)
+  }
+}
 
 console.log('grid scale: all assertions passed')

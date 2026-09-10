@@ -778,8 +778,9 @@ export interface Viewport {
    * `planes` は表示中の平面の名前で、基準平面(`XY`/`XZ`/`YZ`)か、任意面へのスケッチ中は
    * `sketch-face`(名前は `desiredGridPlanes` が付ける)。
    * `axis` は**面外に線として描いている軸**(無ければ null)。
-   * `sketchFaceExtent` は任意面グリッドの枠の半径[mm](`faceUvBounds`。測れなかった・
-   * 任意面でないときは null)。`planeBounds` は `planes` と同じ並びの枠(中心と半径)。
+   * `sketchFaceExtent` は任意面グリッドの枠の半径[mm](`faceUvBoxOnly`。測れなかった・
+   * 任意面でないときは null)。`planeBounds` は `planes` と同じ並びの枠(中心と半径。
+   * カーソル追従で広がった後の値も含む)。
    * `depthBiasLayers` は `planes` と同じ並びの深度バイアス層番号(`DEPTH_BIAS_LAYER`)。
    * 任意面のグリッドが基準平面と別枠(`sketchFaceGrid`)を使っているかを機械で見るための穴
    * (frameが基準平面と数値的に一致する実ジオメトリの面でも、正しく `sketchFaceGrid` に

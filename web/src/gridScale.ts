@@ -176,6 +176,26 @@ export interface UvBox {
 }
 
 /**
+ * 内容のUV矩形へカーソル点を合成する。カーソル追従(グリッドがカーソル位置まで広がる仕様)の
+ * 核となる1関数 —— `boundingSquare` を呼ぶ**前**にここで「内容 ∪ カーソル位置」を作ることで、
+ * 余白(`BOUNDS_MARGIN_RATIO`)も目盛りスナップ(`snapForSpan`)も触らずに済む。
+ *
+ * **状態を持たない**。呼び出し側が「内容だけのUV矩形」と「いまのカーソル位置」を毎回渡して
+ * 作り直す前提で、戻り値をどこにも保持しない —— カーソルが内容の近くへ戻れば、次に渡す点が
+ * 内容の内側に収まり、自然に「内容だけ」の矩形へ戻る。
+ */
+export function extendUvBoxToPoint(box: UvBox | null, point: { u: number; v: number } | null): UvBox | null {
+  if (point === null) return box
+  if (box === null) return { uMin: point.u, uMax: point.u, vMin: point.v, vMax: point.v }
+  return {
+    uMin: Math.min(box.uMin, point.u),
+    uMax: Math.max(box.uMax, point.u),
+    vMin: Math.min(box.vMin, point.v),
+    vMax: Math.max(box.vMax, point.v),
+  }
+}
+
+/**
  * 内容を一回り大きく包む**正方形**を出す。四辺はすべて `snapForSpan` の倍数に載り、
  * かつ辺の長さが等しい(足りない軸は**段の整数個ぶん**ずつ両側へ伸ばす。半端に伸ばすと
  * 縁が倍数から外れる)。
