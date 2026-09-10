@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
+import scipy.optimize as sopt
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
@@ -833,6 +834,31 @@ class Model:
 
         `u0` を渡すなら `rhs` と同じ形 (nrhs, ndof)。**右辺が零ベクトルの本は CG を
         回さず零解を返す** —— 残差の相対判定が 0/0 になるため。
+
+        **右辺が最初から揃っていないとき**(反力の随伴は、まず順問題を解かないと右辺が
+        決まらない)は `prepare` を直に呼んで `PreparedSystem` を使い回すこと。
+        """
+        return self.prepare(
+            rho, penal, solver=solver, mg=mg, threads=threads
+        ).solve(rhs, u0=u0, cg_rtol=cg_rtol)
+
+    def prepare(
+        self,
+        rho: np.ndarray,
+        penal: float,
+        *,
+        solver: str = "mg",
+        mg: MGOptions | None = None,
+        threads: int | None = None,
+    ) -> "PreparedSystem":
+        """K を組み立て、自由DOFへ縮め、前処理を作るところまでをやって返す。
+
+        **返ってきた `PreparedSystem` に右辺を何本でも後から渡せる。** 反力の随伴は
+        順問題の解 `u` から右辺が決まるので、`solve_many` のように右辺を最初に
+        揃えられない —— それでも setup を1回で済ませるための口である。
+
+        **持っているものは大きい**(K_ff と多重格子の各段)。設計反復の中で使い終わったら
+        名前を手放すこと —— 峰メモリを反復の後半まで持ち越すことになる。
         """
         if solver not in ("mg", "cg", "direct"):
             raise ValueError(f"未知の解法: {solver!r}")
@@ -841,13 +867,6 @@ class Model:
         # 一斉に変えられる。既定値の当たりを取るのに要る。
         mg = MG_DEFAULT if mg is None else mg
         threads = PARALLEL_THREADS if threads is None else max(1, int(threads))
-        rhs = np.atleast_2d(np.asarray(rhs, dtype=float))
-        if rhs.shape[1] != self.ndof:
-            raise ValueError(f"右辺の長さが {rhs.shape[1]}、期待は ndof={self.ndof}")
-        if u0 is not None:
-            u0 = np.atleast_2d(np.asarray(u0, dtype=float))
-            if u0.shape != rhs.shape:
-                raise ValueError(f"u0 の形が {u0.shape}、期待は右辺と同じ {rhs.shape}")
         stats = _SOLVE_STATS
         t0 = time.perf_counter()
         kg = self.assemble(rho, penal)
@@ -870,52 +889,14 @@ class Model:
             if threads > 1:
                 a_mv = _BlockedMatvec(kf, threads)
                 a_op = spla.LinearOperator(kf.shape, matvec=a_mv, dtype=float)
-        out = np.zeros((rhs.shape[0], self.ndof))
-        for index in range(rhs.shape[0]):
-            ff = rhs[index][self.free]
-            x0 = np.zeros(self.free.size) if u0 is None else u0[index][self.free].copy()
-            iterations = 0
-            fell_back = False
-            if not np.any(ff):
-                u_free = np.zeros(self.free.size)
-            elif solver == "direct":
-                u_free = spla.spsolve(kf, ff)
-            else:
-                counter = None
-                if stats is not None:
-
-                    def counter(_xk: np.ndarray) -> None:
-                        nonlocal iterations
-                        iterations += 1
-
-                u_free, info = spla.cg(
-                    a_op, ff, x0=x0, M=precond, rtol=cg_rtol, callback=counter
-                )
-                fell_back = info != 0
-                if info != 0:
-                    warnings.warn(
-                        f"CG が収束しませんでした (info={info})。直接解法へフォールバックします。",
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
-                    with warnings.catch_warnings():
-                        # 特異行列の警告はここでは要らない(下の残差検査が本番の判定)。
-                        warnings.simplefilter("ignore")
-                        u_free = spla.spsolve(kf, ff)
-            if stats is not None:
-                stats["solves"] += 1
-                stats["cg_iterations"] += iterations
-                stats["cg_iterations_each"].append(iterations)
-                stats["fallbacks"] += int(fell_back)
-                stats["direct_solves"] += int(solver == "direct")
-            self._verify_solution(kf, ff, u_free)
-            out[index, self.free] = u_free
         if stats is not None:
             stats["assemble_seconds"] += t1 - t0
             stats["slice_seconds"] += t2 - t1
+            # **setup も「解く時間」に数える。** 右辺ごとの CG は `PreparedSystem.solve` が
+            # 足すので、右辺1本のときの `solve_seconds` は割る前と同じ意味(setup + CG)になる。
             stats["solve_seconds"] += time.perf_counter() - t2
             stats["mg_setup_seconds"] += setup_seconds
-        return out
+        return PreparedSystem(self, kf, a_op, precond, solver)
 
     def stiffness_apply(self, rho: np.ndarray, penal: float, vec: np.ndarray) -> np.ndarray:
         """K @ vec を、K を組み立てずに要素ループで計算する (ndof,)。
@@ -971,6 +952,91 @@ class Model:
         energy = (ee * ce).ravel()
         c = float(energy.sum() if self.active is None else energy[self.active].sum())
         return c, ce
+
+
+class PreparedSystem:
+    """1つの ρ に対する K_ff と、その前処理。**右辺を何本でも後から解ける。**
+
+    `Model.prepare` が作る。同じ設計反復のあいだ K は変わらないので、右辺を足すたびの
+    追加費用は CG の反復ぶんだけになる —— 素朴に `Model.solve` を右辺ごとに呼ぶと、
+    多重格子の setup(RAP と最粗格子の LU)が本数ぶん重なる。
+    """
+
+    def __init__(
+        self,
+        model: "Model",
+        kf: sp.spmatrix,
+        a_op: "sp.spmatrix | spla.LinearOperator",
+        precond: "spla.LinearOperator | None",
+        solver: str,
+    ) -> None:
+        self.model = model
+        self.kf = kf
+        self._a_op = a_op
+        self._precond = precond
+        self._solver = solver
+
+    def solve(
+        self, rhs: np.ndarray, *, u0: np.ndarray | None = None, cg_rtol: float = 1e-9
+    ) -> np.ndarray:
+        """`rhs` (nrhs, ndof) を解いて (nrhs, ndof) を返す。拘束DOFの成分はきっかり 0.0。
+
+        **右辺が零ベクトルの本は CG を回さず零解を返す** —— 残差の相対判定が 0/0 に
+        なるため(随伴の右辺は感度が全部消えた配置で 0 になりうる)。
+        """
+        model = self.model
+        rhs = np.atleast_2d(np.asarray(rhs, dtype=float))
+        if rhs.shape[1] != model.ndof:
+            raise ValueError(f"右辺の長さが {rhs.shape[1]}、期待は ndof={model.ndof}")
+        if u0 is not None:
+            u0 = np.atleast_2d(np.asarray(u0, dtype=float))
+            if u0.shape != rhs.shape:
+                raise ValueError(f"u0 の形が {u0.shape}、期待は右辺と同じ {rhs.shape}")
+        stats = _SOLVE_STATS
+        t_start = time.perf_counter()
+        out = np.zeros((rhs.shape[0], model.ndof))
+        for index in range(rhs.shape[0]):
+            ff = rhs[index][model.free]
+            x0 = np.zeros(model.free.size) if u0 is None else u0[index][model.free].copy()
+            iterations = 0
+            fell_back = False
+            if not np.any(ff):
+                u_free = np.zeros(model.free.size)
+            elif self._solver == "direct":
+                u_free = spla.spsolve(self.kf, ff)
+            else:
+                counter = None
+                if stats is not None:
+
+                    def counter(_xk: np.ndarray) -> None:
+                        nonlocal iterations
+                        iterations += 1
+
+                u_free, info = spla.cg(
+                    self._a_op, ff, x0=x0, M=self._precond, rtol=cg_rtol, callback=counter
+                )
+                fell_back = info != 0
+                if info != 0:
+                    warnings.warn(
+                        f"CG が収束しませんでした (info={info})。直接解法へフォールバックします。",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    with warnings.catch_warnings():
+                        # 特異行列の警告はここでは要らない(下の残差検査が本番の判定)。
+                        warnings.simplefilter("ignore")
+                        u_free = spla.spsolve(self.kf, ff)
+            if stats is not None:
+                stats["solves"] += 1
+                stats["cg_iterations"] += iterations
+                stats["cg_iterations_each"].append(iterations)
+                stats["fallbacks"] += int(fell_back)
+                stats["direct_solves"] += int(self._solver == "direct")
+            model._verify_solution(self.kf, ff, u_free)
+            out[index, model.free] = u_free
+        if stats is not None:
+            stats["solve_seconds"] += time.perf_counter() - t_start
+        return out
 
 
 def _as_mask(mask: np.ndarray | None, shape: tuple[int, int, int], label: str) -> np.ndarray:
@@ -1068,6 +1134,62 @@ def _as_reactions(
     return tuple(out)
 
 
+def reaction_sensitivity(
+    model: "Model",
+    system: "PreparedSystem",
+    rho: np.ndarray,
+    penal: float,
+    u: np.ndarray,
+    groups: Sequence[ReactionGroup],
+    vectors: np.ndarray,
+    *,
+    adjoint0: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """反力の**大きさ** `|R_i|` の、物理密度に対する感度 (len(groups), nele) と随伴解を返す。
+
+    **反力は自己随伴ではない。** コンプライアンスが追加の線形解なしで感度を作れるのは
+    「目的が `f^T u` で、随伴の右辺が荷重そのもの」という特殊事情で、反力にはグループ
+    ごとに随伴が1本要る:
+
+        R_i = |v_i|,  v_i = C_i^T (K u - f)      C_i は グループ i の自由度を軸ごとに拾う行列
+        c_i = C_i (v_i / |v_i|)                  この反復で凍結する向き(|.| の勾配)
+        K_ff λ_i = K_fs c_i
+        dR_i/dρ_e = -penal ρ_e^(p-1) (E - emin) · (λ_e^T Ke u_e)
+                    ただし λ は自由DOFに λ_i、固定DOFに -c_i を入れた全長ベクトル
+
+    **「全体の釣り合い Σ R = -F があるからグループ数-1本でよい」は、大きさには効かない。**
+    一定なのは合力**ベクトル**の和であって大きさの和ではないので、最後の1本の勾配を
+    他から作るには各グループの3成分ヤコビアン(3(n-1)本)が要り、n 本より多くなる。
+
+    `adjoint0` は前の反復の随伴解(ウォームスタート)。`system` は**順問題と同じ**
+    `PreparedSystem` を渡すこと —— そうすれば多重格子の setup が反復あたり1回で済む。
+    """
+    ndof = model.ndof
+    selectors = np.zeros((len(groups), ndof))
+    for index, group in enumerate(groups):
+        dofs = np.asarray(group.dofs, dtype=np.int64).ravel()
+        magnitude = float(np.linalg.norm(vectors[index]))
+        if magnitude > 0.0:
+            unit = vectors[index] / magnitude
+            selectors[index, dofs] = unit[dofs % 3]
+        # 大きさが厳密に 0 の点では |.| が微分できない。その本は右辺が零になり、
+        # `PreparedSystem.solve` が零解を返す(= その反復では感度 0)。制約は違反側に
+        # あるので、次の反復で他の変数が動けば向きが決まる。
+    rhs = np.stack(
+        [model.stiffness_apply(rho, penal, selectors[index]) for index in range(len(groups))]
+    )
+    adjoint = system.solve(rhs, u0=adjoint0)
+    # 固定DOF側は -c。`adjoint` は固定DOFがきっかり 0 なので引き算で入る。
+    full = adjoint - selectors
+    edof = model.edof
+    keu = u[edof] @ model.ke
+    coefficient = -penal * np.asarray(rho).ravel() ** (penal - 1.0) * (model.E - model.emin)
+    out = np.empty((len(groups), edof.shape[0]))
+    for index in range(len(groups)):
+        out[index] = coefficient * np.einsum("ij,ij->i", full[index][edof], keu)
+    return out, adjoint
+
+
 def _check_reaction_groups(model: "Model", groups: Sequence[ReactionGroup]) -> None:
     """`ReactionGroup` の契約(`fixed` の部分集合・互いに重ならない)を検算する。"""
     if not groups:
@@ -1132,6 +1254,8 @@ class Result:
     # 最後に解いた密度場での、拘束面グループごとの反力。`optimize(reactions=...)` を
     # 渡さなければ空。**「効いていない取付点」はここが `fraction ≈ 0` で出る。**
     reactions: tuple[Reaction, ...] = ()
+    # 課した反力の下限(荷重の合力に対する割合)。制約を掛けていなければ None。
+    reaction_min: float | None = None
     # `optimize(keep_model=True)` のときだけ入る、実際に解いた `Model`。**既定は None** ——
     # `Model` は `_iK`/`_jK` に**組み立てる要素数**×576 の添字配列を2本持つので、要らない
     # 呼び出しにまで数十MBを持たせない。後処理(`stress.py`)が拘束・荷重を手で組み直さずに
@@ -1195,6 +1319,33 @@ class VolumeTargetError(ValueError):
         self.element_volume_mm3 = element_volume_mm3
 
 
+class ReactionTargetError(ValueError):
+    """反力の下限制約を満たす形が出なかった。
+
+    **満たせない支持配置がある。** 静定な配置では反力の配り方が幾何だけで決まり、
+    構造をどう変えても動かせない(hanger は面ごとに多数の節点を固定するので不静定だが、
+    一般には成り立たない)。そこへ「各取付点が |F| の ε 倍を受け持て」と要求すると、
+    妥協した設計ではなく**失敗**が正しい返事である。
+
+    属性: `required`(要求した割合 ε)/ `reactions`(最後に測った `Reaction` の並び)/
+    `result`(そこまでで出た `Result`。**捨てずに渡す** —— 30分回した結果を見ずに
+    捨てさせないため)。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        required: float,
+        reactions: tuple[Reaction, ...],
+        result: "Result",
+    ) -> None:
+        super().__init__(message)
+        self.required = float(required)
+        self.reactions = reactions
+        self.result = result
+
+
 class FilterRadiusError(ValueError):
     """密度フィルタ半径を mm で指定したが、要素サイズから決まる下限(1.5要素)を下回る。
 
@@ -1227,6 +1378,42 @@ class FilterRadiusError(ValueError):
         self.max_element_size_mm = max_element_size_mm
         self.min_elements_long_axis = min_elements_long_axis
         self.shortfall_mm = shortfall_mm
+
+
+#: 反力の下限を「満たした」と読む相対の緩み。**MMA は制約の境界へ外側から近づく**ので、
+#: `max_iter` の打ち切りで数%足りないことがある。0 にすると「ほぼ満たしている解」を捨てる
+#: (2026-09-10 に hanger_test で選んだ値。根拠は docs/TOPOPT_REACTION.md)。
+REACTION_TOLERANCE = 0.05
+
+
+def _require_reactions(
+    result: "Result",
+    reactions: tuple[Reaction, ...],
+    required: float,
+) -> None:
+    """最後に測った反力が下限を満たしているかを見て、満たしていなければ落とす。
+
+    **満たしていない解を黙って返さない。** 反力の下限は「全ての取付点が実際に荷重を
+    受け持つ」という取付要求で、満たしていない形は保持ソリッドが浮き島になって
+    `mesh.remove_islands` に消える —— そこまで進んでから「なぜか部品が足りない」に
+    なるより、ここで名指しして落ちるほうがよい。
+    """
+    floor = required * (1.0 - REACTION_TOLERANCE)
+    short = [item for item in reactions if not item.fraction >= floor]
+    if not short:
+        return
+    breakdown = "、".join(f"{item.name} {item.fraction:.2%}" for item in reactions)
+    named = "、".join(f"{item.name}({item.fraction:.2%})" for item in short)
+    raise ReactionTargetError(
+        f"反力の下限 {required:.1%} を満たさない取付点が {len(short)}/{len(reactions)} ある: "
+        f"{named}。内訳は {breakdown}(荷重の合力に対する割合)。"
+        "**支持配置によっては満たせない** —— 静定な配置では反力の配り方が幾何だけで決まり、"
+        "構造を変えても動かせない。εを下げる / 材料を増やす / 反復を増やす、"
+        "のどれかを試すこと(そのどれでも動かないなら、その取付点は構造上いらない)",
+        required=required,
+        reactions=reactions,
+        result=result,
+    )
 
 
 def check_rmin_target(rmin: float | None, rmin_mm: float | None) -> None:
@@ -1376,6 +1563,21 @@ def _resolve_volume_target(
 # 同じ感度を受け取る。
 
 
+@dataclass(frozen=True)
+class Constraint:
+    """更新則へ渡す**追加の不等式制約** `g(x) <= 0`。体積制約は含めない(更新則が自分で持つ)。
+
+    **層をまたぐ契約**: `value` は現在点での g、`grad` は**設計変数**に対する感度
+    (密度フィルタを通した後。`dcn`/`dvn` と同じ足並み)。どちらも**1のオーダーへ
+    正規化して渡すこと** —— MMA の凸化の下駄(`MMA_RAA0`)が絶対値なので、桁が題材ごとに
+    変わると近似の効き方が変わる。
+    """
+
+    name: str
+    value: float
+    grad: np.ndarray
+
+
 class _Update:
     """更新則の口。`optimize` が1反復に1回 `step()` を呼ぶ。
 
@@ -1388,6 +1590,9 @@ class _Update:
       「動かしても物理体積が変わらない変数」に対して立ってしまう。
     - 目的(コンプライアンス)と体積の**感度は `optimize` が作って渡す**。更新則が
       フィルタを掛け直すことはない。
+    - `constraints` は**体積以外の追加の不等式制約**(`Constraint`)。受け取れない更新則は
+      **黙って無視せず例外**にすること —— 制約が効かないまま「もっともらしい形」が
+      返るのが最悪である。
     """
 
     def __init__(
@@ -1420,6 +1625,7 @@ class _Update:
         compliance: float,
         dcn: np.ndarray,
         dvn: np.ndarray,
+        constraints: Sequence[Constraint] = (),
     ) -> np.ndarray:
         raise NotImplementedError
 
@@ -1441,7 +1647,16 @@ class _OCUpdate(_Update):
         compliance: float,
         dcn: np.ndarray,
         dvn: np.ndarray,
+        constraints: Sequence[Constraint] = (),
     ) -> np.ndarray:
+        if constraints:
+            raise ValueError(
+                f"OC は制約を1本しか扱えない(体積のほかに {len(constraints)} 本渡された: "
+                f"{[item.name for item in constraints]})。"
+                "乗数がスカラー1つで、二分探索の判定が「体積が目標を超えたか」の1ビット"
+                "だから、制約を増やすと探索する対象が1次元でなくなる。"
+                'update="mma" を使うこと'
+            )
         move, void, solid = self.move, self.void, self.solid
         target_volume = self.target_volume
         l1, l2 = 0.0, 1e9
@@ -1518,6 +1733,12 @@ MMA_RAA0 = 1e-5
 # 60回で区間は 1e9 * 2^-60 ≈ 1e-9 まで縮む(OC の停止条件 1e-9 と同じ桁)。
 MMA_DUAL_MAX = 1e9
 MMA_DUAL_ITERS = 60
+# 制約が2本以上あるときの双対(L-BFGS-B)。上限は Svanberg の人工変数の罰金 c_j にあたり、
+# **部分問題が必ず解けることを保証する**(その反復で満たせない制約があっても双対が発散しない)。
+# 文献の標準値 1000 をそのまま使っている —— 目的も制約も1のオーダーへ正規化してあるので、
+# 「制約1単位の違反は目的 1000 単位ぶん悪い」という重み付けになる。
+MMA_CONSTRAINT_PENALTY = 1000.0
+MMA_DUAL_MAX_ITERS = 200
 
 
 class _MMAUpdate(_Update):
@@ -1540,6 +1761,7 @@ class _MMAUpdate(_Update):
         self._xold1: np.ndarray | None = None
         self._xold2: np.ndarray | None = None
         self._c0: float | None = None
+        self._lam: np.ndarray | None = None
 
     def step(
         self,
@@ -1550,6 +1772,7 @@ class _MMAUpdate(_Update):
         compliance: float,
         dcn: np.ndarray,
         dvn: np.ndarray,
+        constraints: Sequence[Constraint] = (),
     ) -> np.ndarray:
         span = 1.0  # 設計変数の範囲 [0, 1] の幅
         # **目的と制約を1のオーダーへ揃える。** 乗数の二分探索は正規化に対して不変
@@ -1607,6 +1830,43 @@ class _MMAUpdate(_Update):
         # 定数項は「現在点で近似が真値に一致する」ことから決まる。
         r1 = g - float((p1 / ud + q1 / ld).sum())
 
+        if constraints:
+            # **制約が2本以上あると乗数が1次元でなくなる。** 双対は m 次元の凹関数の
+            # 最大化になるので、閉じた形の `x(λ)` を使ったまま L-BFGS-B へ渡す(下)。
+            # 体積1本のときは**下の二分探索をそのまま通す** —— `20260910-1313` が
+            # 測った MMA の数値を、制約を足したあとも再現できるようにしておくため。
+            extra_p = []
+            extra_q = []
+            extra_r = []
+            for item in constraints:
+                dgj = np.asarray(item.grad)
+                pj = ud * ud * (
+                    1.001 * np.maximum(dgj, 0.0) + 0.001 * np.maximum(-dgj, 0.0) + raa
+                )
+                qj = ld * ld * (
+                    0.001 * np.maximum(dgj, 0.0) + 1.001 * np.maximum(-dgj, 0.0) + raa
+                )
+                extra_p.append(pj)
+                extra_q.append(qj)
+                extra_r.append(float(item.value) - float((pj / ud + qj / ld).sum()))
+            xnew = self._dual_step(
+                low=low,
+                upp=upp,
+                alpha=alpha,
+                beta=beta,
+                p0=p0,
+                q0=q0,
+                p_stack=np.stack([p1] + extra_p),
+                q_stack=np.stack([q1] + extra_q),
+                r_vec=np.array([r1] + extra_r),
+            )
+            self._xold2 = self._xold1
+            self._xold1 = x.copy()
+            self._low, self._upp = low, upp
+            xnew[self.void] = 0.0
+            xnew[self.solid] = 1.0
+            return xnew
+
         def _x_of(lam: float) -> np.ndarray:
             """乗数 `lam` を固定したときの部分問題の解(変数ごとに閉じた式)。
 
@@ -1648,6 +1908,65 @@ class _MMAUpdate(_Update):
         xnew[self.solid] = 1.0
         return xnew
 
+    def _dual_step(
+        self,
+        *,
+        low: np.ndarray,
+        upp: np.ndarray,
+        alpha: np.ndarray,
+        beta: np.ndarray,
+        p0: np.ndarray,
+        q0: np.ndarray,
+        p_stack: np.ndarray,
+        q_stack: np.ndarray,
+        r_vec: np.ndarray,
+    ) -> np.ndarray:
+        """制約が m 本(m>=2)の部分問題を、双対の最大化で解く。
+
+        双対関数 `W(λ) = min_x L(x, λ)` は凹で、`x(λ)` は変数ごとに閉じた形で出る
+        (体積1本のときと同じ式)。Danskin より `dW/dλ_j` はその点での近似した制約値
+        そのものなので、勾配つきの箱制約最適化(L-BFGS-B)へそのまま渡せる。
+
+        **λ の上限 `MMA_CONSTRAINT_PENALTY` は人工変数の重み。** Svanberg の定式化は
+        制約ごとに緩和変数 `y_j >= 0` と罰金 `c_j y_j` を持ち、その双対がちょうど
+        `λ_j <= c_j` という箱になる。**部分問題が常に解けることを保証するための装置**で、
+        これが無いと、その反復で満たせない制約があったときに双対が発散する。
+        """
+        def x_of(lam: np.ndarray) -> np.ndarray:
+            sp_ = np.sqrt(p0 + np.tensordot(lam, p_stack, axes=1))
+            sq_ = np.sqrt(q0 + np.tensordot(lam, q_stack, axes=1))
+            return np.clip((low * sp_ + upp * sq_) / (sp_ + sq_), alpha, beta)
+
+        def negative_dual(lam: np.ndarray) -> tuple[float, np.ndarray]:
+            xn = x_of(lam)
+            ud_ = upp - xn
+            ld_ = xn - low
+            value = float(
+                ((p0 + np.tensordot(lam, p_stack, axes=1)) / ud_
+                 + (q0 + np.tensordot(lam, q_stack, axes=1)) / ld_).sum()
+            ) + float(lam @ r_vec)
+            grad = (p_stack / ud_).sum(axis=tuple(range(1, p_stack.ndim))) + (
+                q_stack / ld_
+            ).sum(axis=tuple(range(1, q_stack.ndim))) + r_vec
+            return -value, -grad
+
+        size = r_vec.size
+        start = (
+            self._lam
+            if self._lam is not None and self._lam.size == size
+            else np.zeros(size)
+        )
+        found = sopt.minimize(
+            negative_dual,
+            start,
+            jac=True,
+            method="L-BFGS-B",
+            bounds=[(0.0, MMA_CONSTRAINT_PENALTY)] * size,
+            options={"maxiter": MMA_DUAL_MAX_ITERS, "ftol": 1e-15, "gtol": 1e-10},
+        )
+        self._lam = np.clip(np.asarray(found.x, dtype=float), 0.0, MMA_CONSTRAINT_PENALTY)
+        return x_of(self._lam)
+
 
 #: `optimize(update=...)` で選べる更新則。**未知の名前は既定へ落とさず例外**
 #: (`design_space.DERIVATIONS` と同じ作法)。
@@ -1687,6 +2006,7 @@ def optimize(
     void_mask: np.ndarray | None = None,
     solid_mask: np.ndarray | None = None,
     reactions: Sequence[ReactionGroup] | None = None,
+    reaction_min: float | None = None,
     keep_model: bool = False,
 ) -> Result:
     """SIMPでコンプライアンス最小化を行う。
@@ -1734,6 +2054,19 @@ def optimize(
     `Result.reactions` に載せる。**渡さなければ1つも計算しない**(既定の費用は変わらない)。
     追加費用は反復あたり要素ループ1回ぶんで、線形解は増えない。
 
+    `reaction_min` は**各グループが受け持つ反力の下限**(荷重の合力に対する割合 ε)。
+    渡すと `|R_i| >= ε |F|` を制約に足す —— 構造最適化は定義上、荷重を運ばない材料を
+    置かないので、**これが無いと拘束面が1枚あれば足り、残りの取付点は形から消える**。
+
+    - **「全部を等しくする」は採らない。** 反力はベクトルで、面の向きがばらばらだと
+      釣り合いを満たしたまま大きさを揃えられる保証がなく、実現不可能な制約は
+      「妥協した設計」ではなく失敗を返す。下限だけを課す。
+    - `update="mma"` が要る(体積と合わせて制約が複数本になる)。`reactions` も要る。
+    - **費用はグループ数ぶんの随伴**(`reaction_sensitivity`)。多重格子の setup は
+      反復あたり1回のままで、増えるのは CG の反復ぶんだけ。
+    - 最後まで回しても満たせなければ `ReactionTargetError`(そこまでの `Result` を
+      例外に付けて返す)。
+
     **更新則を選ぶ** —— `update` は `UPDATES` の名前(既定 `DEFAULT_UPDATE` = `"oc"`)。
     知らない名前は既定へ落とさず `ValueError`。差し替わるのは更新則だけで、`Model`・
     密度フィルタ・感度フィルタ・パッシブ要素の扱いは共通(`_Update` の契約)。
@@ -1756,6 +2089,22 @@ def optimize(
         raise ValueError(
             f"element_volume_mm3 は正の値であること(受け取った値: {element_volume_mm3!r})"
         )
+    if reaction_min is not None:
+        if reactions is None:
+            raise ValueError(
+                "reaction_min を渡すときは reactions(反力を取り出す拘束面グループ)も"
+                "渡すこと(何に対する下限かが決まらない)"
+            )
+        if not 0.0 < float(reaction_min) < 1.0:
+            raise ValueError(
+                f"reaction_min は 0 < ε < 1 であること(受け取った値: {reaction_min!r})"
+            )
+        if update != "mma":
+            raise ValueError(
+                f"反力の下限制約は update={update!r} では扱えない —— 体積と合わせて制約が"
+                f" {1 + len(tuple(reactions))} 本になり、OC の乗数1本の二分探索が"
+                '成り立たない。update="mma" を使うこと'
+            )
     try:
         update_cls = UPDATES[update]
     except KeyError:
@@ -1819,6 +2168,11 @@ def optimize(
     if groups:
         _check_reaction_groups(model, groups)
     load_reference = float(np.linalg.norm(load_resultant(model.f)))
+    if reaction_min is not None and not load_reference > 0.0:
+        raise ValueError(
+            "荷重の合力が 0 なので反力の下限を測る基準が無い"
+            "(打ち消し合う荷重だけの系では、反力の総和も 0 になる)"
+        )
 
     def _physical(design: np.ndarray) -> np.ndarray:
         """設計変数 → 物理密度。**パッシブ要素は密度フィルタの後で上書きする。**
@@ -1853,17 +2207,40 @@ def optimize(
     history: list[Iteration] = []
     stopped_by = "max_iter"
     reaction_now: tuple[Reaction, ...] = ()
+    adjoint: np.ndarray | None = None
 
     for it in range(1, max_iter + 1):
         t0 = time.perf_counter()
-        u = model.solve(x_phys, penal, solver=solver, cg_rtol=cg_rtol, u0=u, threads=threads)
+        # **順問題と随伴で K を1回だけ組み、前処理も1回だけ作る**(`Model.prepare`)。
+        # 右辺ごとに `Model.solve` を呼ぶと多重格子の setup が本数ぶん重なる。
+        system = model.prepare(x_phys, penal, solver=solver, threads=threads)
+        u = system.solve(model.f[None, :], u0=u[None, :], cg_rtol=cg_rtol)[0]
         c, ce = model.compliance(x_phys, penal, u)
+        constraints: tuple[Constraint, ...] = ()
         if groups:
-            reaction_now = _as_reactions(
-                groups,
-                reaction_forces(model, x_phys, penal, u, groups),
-                load_reference,
-            )
+            vectors = reaction_forces(model, x_phys, penal, u, groups)
+            reaction_now = _as_reactions(groups, vectors, load_reference)
+            if reaction_min is not None:
+                raw, adjoint = reaction_sensitivity(
+                    model, system, x_phys, penal, u, groups, vectors, adjoint0=adjoint
+                )
+                floor = reaction_min * load_reference
+                # g_i = 1 - |R_i| / (ε|F|) <= 0。**感度は目的と同じくフィルタを通す**
+                # (連鎖律は `_physical` の上書き後の定義と一致する。`live` で刈るのも同じ)。
+                constraints = tuple(
+                    Constraint(
+                        name=group.name,
+                        value=1.0 - reaction.magnitude / floor,
+                        grad=-_filter_conv(
+                            raw[index].reshape(shape) * live / hs, kernel, r
+                        )
+                        / floor,
+                    )
+                    for index, (group, reaction) in enumerate(zip(groups, reaction_now))
+                )
+        # **K_ff と多重格子の各段をここで手放す。** 下のフィルタと更新則は大きい一時配列を
+        # 作るので、峰メモリを反復の後半まで持ち越さない。
+        system = None
         dc = -penal * x_phys ** (penal - 1.0) * (E - emin) * ce
         dv = np.ones_like(x)
         # `live` は「その要素の物理密度が設計変数で動くか」。パッシブ要素の物理密度は
@@ -1880,6 +2257,7 @@ def optimize(
             compliance=c,
             dcn=dcn,
             dvn=dvn,
+            constraints=constraints,
         )
         change = float(np.abs(xnew - x).max())
         x = xnew
@@ -1900,7 +2278,7 @@ def optimize(
             stopped_by = "change_tol"
             break
 
-    return Result(
+    result = Result(
         rho=x_phys,
         history=history,
         nelx=nelx,
@@ -1916,8 +2294,12 @@ def optimize(
         rmin=rmin_resolved,
         update=update,
         reactions=reaction_now,
+        reaction_min=reaction_min,
         model=model if keep_model else None,
     )
+    if reaction_min is not None:
+        _require_reactions(result, reaction_now, reaction_min)
+    return result
 
 
 def run_preset(

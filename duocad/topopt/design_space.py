@@ -1101,6 +1101,8 @@ def run_topopt(
     progress: Any = None,
     solver: Optional[str] = None,
     threads: Optional[int] = None,
+    update: Optional[str] = None,
+    reaction_min: Optional[float] = None,
     keep_model: bool = False,
 ) -> dict:
     """導出した塊を端から端まで回す(塊 → 面アンカー → SIMP → marching cubes → STL)。
@@ -1125,6 +1127,9 @@ def run_topopt(
     そのまま渡る(意味の正はそちら)。
 
     戻り値の `"reactions"` は拘束面1枚ごとの反力(`anchor.run_pipeline` の契約そのまま)。
+    `update`(更新則の上書き)と `reaction_min`(各拘束面が受け持つ反力の下限)も
+    `anchor.run_pipeline` の同名の引数へそのまま渡る(意味の正はそちら)。
+    **どちらも None のままなら経路は1ビットも変わらない。**
 
     拘束面・荷重面が要素サイズより小さくて格子節点が1つも付かないと
     (`anchor.AnchorTable.empty_faces()`)、**例外にはせず**戻り値の
@@ -1154,6 +1159,8 @@ def run_topopt(
         progress=progress,
         solver=solver,
         threads=threads,
+        update=update,
+        reaction_min=reaction_min,
         keep_model=keep_model,
     )
     # `run_pipeline` は保持ソリッドを**自分でもう一度**格子へ載せる。三角形分割の細かさが

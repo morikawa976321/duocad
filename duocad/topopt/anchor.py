@@ -912,6 +912,8 @@ def run_pipeline(
     progress: Any = None,
     solver: Optional[str] = None,
     threads: Optional[int] = None,
+    update: Optional[str] = None,
+    reaction_min: Optional[float] = None,
     keep_model: bool = False,
 ) -> dict:
     """ソリッドを端から端まで1回通す。戻り値は各段の実測と成果物。
@@ -960,6 +962,14 @@ def run_pipeline(
     `keep_model=True` は `simp.optimize` へそのまま渡る。`result.model`(戻り値 dict の
     `"result"` キー)に実際に解いた `Model` が入るので、`stress.py` の後処理が拘束・荷重を
     手で組み直さずに済む。既定 `False` では入らない(数値は1ビットも変わらない)。
+
+    `update` は `simp.optimize` の更新則の**上書き**(既定 None = `simp` 側の既定 `"oc"`)。
+    None のときは `simp.optimize` へ渡さないので、既定の挙動は1ビットも変わらない。
+
+    `reaction_min` を渡すと**各拘束面が受け持つ反力に下限**(荷重の合力に対する割合)を
+    課す。制約が体積と合わせて複数本になるので、**`update` を省略すると `"mma"` へ倒す**
+    (OC は乗数1本の二分探索で、制約を増やせない)。満たせなければ
+    `simp.ReactionTargetError`。**渡さなければ経路は1ビットも変わらない。**
 
     戻り値の `"reactions"` は**拘束面1枚ごとの反力**(`simp.Reaction` を素の値に開いたもの。
     `fraction` は荷重の合力に対する割合)。**荷重を運んでいない取付点はここが 0 になる** ——
@@ -1061,6 +1071,12 @@ def run_pipeline(
         solid |= near & model.design
     void = ~model.design | model.obstacle
 
+    resolved_update = update
+    if reaction_min is not None and resolved_update is None:
+        # 反力の下限は制約が複数本になるので OC では扱えない。**この経路だけ MMA へ倒す**
+        # (`reaction_min` を渡さない呼び出しは既定の更新則のまま)。
+        resolved_update = "mma"
+
     t0 = time.perf_counter()
     result = simp.optimize(
         nx,
@@ -1081,6 +1097,8 @@ def run_pipeline(
         keep_model=keep_model,
         **({} if solver is None else {"solver": solver}),
         **({} if threads is None else {"threads": threads}),
+        **({} if resolved_update is None else {"update": resolved_update}),
+        **({} if reaction_min is None else {"reaction_min": float(reaction_min)}),
     )
     timings["optimize"] = time.perf_counter() - t0
 
@@ -1133,6 +1151,8 @@ def run_pipeline(
             float(result.rho[model.design].mean()) if design_elements else 0.0
         ),
         "reactions": reaction_payload(fixed_faces, result.reactions),
+        "reaction_min": result.reaction_min,
+        "update": result.update,
         "compliance_first": history[0].compliance if history else float("nan"),
         "compliance_last": history[-1].compliance if history else float("nan"),
         "iterations": len(history),

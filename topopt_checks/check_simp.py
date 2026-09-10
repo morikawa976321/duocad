@@ -29,6 +29,11 @@
    `stiffness_apply` が組み立てた K の積と一致するか / `solve_many` が右辺1本のとき
    `solve` と**1ビット同じ**か・複数本でも個別に解いたのと一致するか /
    `ReactionGroup` の契約(拘束の部分集合・重ならない)を破ると落ちるか。
+8. **反力の下限制約** — 随伴で作った `d|R|/dρ` が**中心差分と一致する**か(自己随伴では
+   ないので、ここが合っていなければ最適化は静かに間違った方向へ進む)/ 随伴解が
+   `K_ff λ = K_fs c` を満たすか / 制約が緩いときの答えが制約を足す前の MMA と一致するか
+   (m>=2 の双対を L-BFGS-B で解いても、m=1 の二分探索と同じ場所へ着く)/ OC は制約を
+   受け取ったら例外になるか / 満たせない下限は `ReactionTargetError` になるか。
 """
 
 from __future__ import annotations
@@ -512,6 +517,124 @@ def check_reactions() -> None:
     RESULTS["reaction_fractions"] = [float(v) for v in fractions]
 
 
+# ---------------------------------------------------------------------------
+# 8. 反力の下限制約
+# ---------------------------------------------------------------------------
+CONSTRAINT_GRID = (6, 4, 4)
+
+
+def check_reaction_constraint() -> None:
+    nelx, nely, nelz = CONSTRAINT_GRID
+    print(f"\n[8] 反力の下限制約 ({nelx}x{nely}x{nelz})")
+    penal = 3.0
+    model = simp.Model(nelx, nely, nelz)
+    rng = np.random.default_rng(3)
+    rho = 0.4 + 0.6 * rng.random((nelx, nely, nelz))
+    half = model.fixed.size // 2
+    groups = [
+        simp.ReactionGroup("a", model.fixed[:half]),
+        simp.ReactionGroup("b", model.fixed[half:]),
+    ]
+
+    def magnitudes(field: np.ndarray) -> np.ndarray:
+        u = model.solve(field, penal, solver="direct")
+        return np.linalg.norm(simp.reaction_forces(model, field, penal, u, groups), axis=1)
+
+    u = model.solve(rho, penal, solver="direct")
+    vectors = simp.reaction_forces(model, rho, penal, u, groups)
+    system = model.prepare(rho, penal, solver="direct")
+    grad, adjoint = simp.reaction_sensitivity(
+        model, system, rho, penal, u, groups, vectors
+    )
+
+    # (a) **随伴の検算は中心差分でしかできない。** 反力は自己随伴ではないので、
+    # 符号や随伴の右辺を間違えても最適化は落ちずに別の方向へ進む。
+    step = 1e-6
+    worst = 0.0
+    for _ in range(6):
+        cell = tuple(int(rng.integers(n)) for n in (nelx, nely, nelz))
+        flat = int(np.ravel_multi_index(cell, (nelx, nely, nelz)))
+        up, down = rho.copy(), rho.copy()
+        up[cell] += step
+        down[cell] -= step
+        difference = (magnitudes(up) - magnitudes(down)) / (2.0 * step)
+        relative = np.abs(difference - grad[:, flat]) / np.maximum(
+            np.abs(difference), 1e-9
+        )
+        worst = max(worst, float(relative.max()))
+    check(
+        "反力の感度が中心差分と一致する",
+        worst < 1e-3,
+        f"最大相対差 {worst:.3e}(要素6個 x グループ2個)",
+    )
+
+    # (b) 随伴の方程式そのもの
+    kf = system.kf
+    selector = np.zeros(model.ndof)
+    unit = vectors[0] / np.linalg.norm(vectors[0])
+    selector[groups[0].dofs] = unit[groups[0].dofs % 3]
+    rhs = model.stiffness_apply(rho, penal, selector)[model.free]
+    residual = float(np.linalg.norm(kf @ adjoint[0][model.free] - rhs))
+    check(
+        "随伴解が K_ff λ = K_fs c を満たす",
+        residual < 1e-8 * float(np.linalg.norm(rhs)),
+        f"残差 {residual:.3e} / ||K_fs c|| {float(np.linalg.norm(rhs)):.3e}",
+    )
+
+    # (c) 制約が緩いとき、m>=2 の双対は m=1 の二分探索と同じ場所へ着く
+    common = dict(volfrac=0.3, max_iter=20, change_tol=0.0, update="mma")
+    plain = simp.optimize(20, 8, 8, **common)
+    big = simp.Model(20, 8, 8)
+    edge = big.fixed.size // 2
+    wide = [
+        simp.ReactionGroup("a", big.fixed[:edge]),
+        simp.ReactionGroup("b", big.fixed[edge:]),
+    ]
+    slack = simp.optimize(20, 8, 8, reactions=wide, reaction_min=0.01, **common)
+    gap = float(np.abs(plain.rho - slack.rho).max())
+    check(
+        "効いていない制約を足しても答えが動かない(双対が二分探索を再現する)",
+        gap < 1e-6,
+        f"max|Δρ| = {gap:.3e} / C {plain.history[-1].compliance:.6f} -> "
+        f"{slack.history[-1].compliance:.6f}",
+    )
+
+    # (d) OC は制約を増やせない。**黙って無視せず例外**であること
+    caught_oc = _raises(
+        lambda: simp.optimize(
+            nelx, nely, nelz, max_iter=1, reactions=groups, reaction_min=0.2
+        )
+    )
+    caught_alone = _raises(
+        lambda: simp.optimize(nelx, nely, nelz, max_iter=1, reaction_min=0.2)
+    )
+    check(
+        "OC への反力制約と、グループ無しの下限はどちらも例外",
+        caught_oc and caught_alone,
+        f"OC={caught_oc} / グループ無し={caught_alone}",
+    )
+
+    # (e) 満たせない下限は失敗として返る。**妥協した設計を返さない**
+    failed = None
+    try:
+        simp.optimize(
+            nelx, nely, nelz, volfrac=0.3, max_iter=12, change_tol=0.0, update="mma",
+            reactions=groups,
+            reaction_min=0.9,
+        )
+    except simp.ReactionTargetError as error:
+        failed = error
+    check(
+        "満たせない下限は ReactionTargetError になり、そこまでの Result が付いてくる",
+        failed is not None
+        and isinstance(failed.result, simp.Result)
+        and len(failed.reactions) == 2,
+        "" if failed is None else f"要求 {failed.required:.0%} / "
+        f"実際 {[round(item.fraction, 4) for item in failed.reactions]}",
+    )
+    RESULTS["reaction_gradient_rel_err"] = worst
+
+
 def _raises(call) -> bool:
     """呼んで ValueError が出れば True。**検出力の検査でしか使わない。**"""
     try:
@@ -531,6 +654,7 @@ def main() -> int:
     check_symmetry_direct()
     check_void_assembly()
     check_reactions()
+    check_reaction_constraint()
 
     print("\n" + "=" * 72)
     print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))
