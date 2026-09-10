@@ -98,6 +98,10 @@ MIN_RMIN = 1.5
 # 消す既定値を選び直した」の段1)。代償はコンプライアンスが 1.08〜1.40倍。
 DEFAULT_RMIN = 2.5
 
+# `update` を渡さなかったときの更新則。選べる名前は `UPDATES`(下の方で更新則の実装と一緒に
+# 定義する)。**ここで先に置いてあるのは `Result.update` の既定値に使うため。**
+DEFAULT_UPDATE = "oc"
+
 # 片持ち梁の基準題材。**受入検査3本がこれを回すので、大きさがそのまま検証の1周の長さになる。**
 # 40x16x16(1周およそ11分)から 20x8x8 へ落としてある。**反復数は 60 のまま** ——
 # 30反復まで落とすと終盤10反復の変動が 2.47% になり、`check_simp.py` (b) の1%を割る。
@@ -948,6 +952,11 @@ class Result:
     # 実際に使ったフィルタ半径[要素]。**入力をそのまま写したものではない** —— mm で渡された
     # 場合はここに換算後の値が入る(volfrac/target_volume と同じ役割分担)。
     rmin: float = float("nan")
+    # 実際に使った更新則(`UPDATES` の名前)。**体積目標の意味が更新則で変わる** ——
+    # `"oc"` は等式(届かなければ `VolumeTargetError`)、`"mma"` は上限(届かなくても
+    # 例外にならず軽い解が返る)。受け取った側が `target_volume` との差をどう読むかを
+    # 決めるのに要る。
+    update: str = DEFAULT_UPDATE
     # `optimize(keep_model=True)` のときだけ入る、実際に解いた `Model`。**既定は None** ——
     # `Model` は `_iK`/`_jK` に**組み立てる要素数**×576 の添字配列を2本持つので、要らない
     # 呼び出しにまで数十MBを持たせない。後処理(`stress.py`)が拘束・荷重を手で組み直さずに
@@ -1184,6 +1193,298 @@ def _resolve_volume_target(
     return (target - lo) / n_movable, target
 
 
+# ---------------------------------------------------------------------------
+# 更新則(OC / MMA)
+# ---------------------------------------------------------------------------
+# **差し替えられるのは更新則だけ。** 組み立て・多重格子・CG(`Model`)、密度フィルタ、
+# 感度フィルタ(`dcn`/`dvn`)、パッシブ要素の扱い(`_physical`)は共通で、どの更新則も
+# 同じ感度を受け取る。
+
+
+class _Update:
+    """更新則の口。`optimize` が1反復に1回 `step()` を呼ぶ。
+
+    **層をまたぐ契約**:
+
+    - `step()` が返すのは**設計変数の新しい値だけ**。物理密度への写像(`_physical`)・
+      収束判定・履歴・`Result` の組み立ては `optimize` の仕事で、更新則は触らない。
+    - **パッシブ要素(`void`/`solid`)の設計変数を動かしてはならない。** `_physical` が
+      物理密度を上書きするので、動かしても物理には出ないが、体積制約の勘定が
+      「動かしても物理体積が変わらない変数」に対して立ってしまう。
+    - 目的(コンプライアンス)と体積の**感度は `optimize` が作って渡す**。更新則が
+      フィルタを掛け直すことはない。
+    """
+
+    def __init__(
+        self,
+        *,
+        move: float,
+        target_volume: float,
+        void: np.ndarray,
+        solid: np.ndarray,
+        physical: Callable[[np.ndarray], np.ndarray],
+        n_movable: int,
+        n_solid: int,
+        element_volume_mm3: float | None,
+    ) -> None:
+        self.move = move
+        self.target_volume = target_volume
+        self.void = void
+        self.solid = solid
+        self.physical = physical
+        self.n_movable = n_movable
+        self.n_solid = n_solid
+        self.element_volume_mm3 = element_volume_mm3
+
+    def step(
+        self,
+        *,
+        it: int,
+        x: np.ndarray,
+        x_phys: np.ndarray,
+        compliance: float,
+        dcn: np.ndarray,
+        dvn: np.ndarray,
+    ) -> np.ndarray:
+        raise NotImplementedError
+
+
+class _OCUpdate(_Update):
+    """OC(Optimality Criteria)。ラグランジュ乗数1本の二分探索。
+
+    **制約1本でしか成り立たない。** 乗数が1つのスカラーで、二分探索の判定が
+    「体積が目標を超えたか」の1ビットだから、制約を2本目にすると探索する対象が
+    1次元でなくなる。反力制約のように制約が増える段では `mma` を使う。
+    """
+
+    def step(
+        self,
+        *,
+        it: int,
+        x: np.ndarray,
+        x_phys: np.ndarray,
+        compliance: float,
+        dcn: np.ndarray,
+        dvn: np.ndarray,
+    ) -> np.ndarray:
+        move, void, solid = self.move, self.void, self.solid
+        target_volume = self.target_volume
+        l1, l2 = 0.0, 1e9
+        # **二分探索が退化することがある。** 目標体積がこの反復で到達できる上限
+        # (移動制限 `move` と、密度フィルタが塊の縁で落とすぶん)を超えていると、`l2` が 0 まで
+        # 潰れて `(l2 - l1) / (l1 + l2)` が 0除算になる —— 文面に体積も塊も出ないので、
+        # 原因から一番遠い場所で落ちる。**健全な側の計算は
+        # 1ビットも変えない**: `l1 + l2 > 0.0` は退化していない限りつねに真。
+        while l1 + l2 > 0.0 and (l2 - l1) / (l1 + l2) > 1e-9:
+            lm = 0.5 * (l1 + l2)
+            # `-dcn` は理屈上つねに正だが、`ce` がきっかり0の要素(荷重の届かない孤島)や
+            # 丸めで符号が反転した要素があると sqrt が NaN を返し、**以後の反復が全部
+            # NaN で埋まる**。0で潰しておく(その要素は下限へ寄るだけで済む)。
+            xnew = np.clip(
+                x * np.sqrt(np.maximum(0.0, -dcn) / (dvn * lm)),
+                x - move,
+                x + move,
+            )
+            xnew = np.clip(xnew, 0.0, 1.0)
+            xnew[void] = 0.0
+            xnew[solid] = 1.0
+            xp = self.physical(xnew)
+            if xp.sum() > target_volume:
+                l1 = lm
+            else:
+                l2 = lm
+        if l1 + l2 <= 0.0:
+            ev = (
+                float(self.element_volume_mm3)
+                if self.element_volume_mm3 is not None
+                else float("nan")
+            )
+            n_movable, n_solid = self.n_movable, self.n_solid
+            capacity = float(n_movable + n_solid)
+            reached = float(xp.sum())
+            raise VolumeTargetError(
+                f"体積目標 {target_volume:.6g} 要素に対し、この反復("
+                f"it={it})で到達できる最大が {reached:.6g} 要素しかない: "
+                f"塊の容量は {capacity:.6g} 要素(動かせる {n_movable} + 固定材料 {n_solid})で、"
+                f"目標はその {target_volume / capacity:.1%}。"
+                "**塊に対して材料が多すぎる** —— 密度フィルタが塊の縁で目減りさせるぶん、"
+                "要素数で入る量でも ρ を上限まで上げて届かないことがある。"
+                "塊を広げる(連続値保持なら k を上げる)か、"
+                "材料を減らすこと",
+                material_mm3=target_volume * ev,
+                min_mm3=float("nan"),
+                max_mm3=capacity * ev,
+                shortfall_mm3=(target_volume - reached) * ev,
+                side="above_capacity",
+                element_volume_mm3=ev,
+            )
+        return xnew
+
+
+# MMA(Method of Moving Asymptotes、Svanberg 1987)の定数。**論文の記述から自前で実装した**
+# —— 出回っている Python 実装(`mmapy` / `GCMMA-MMA-Python`)は原典の MATLAB が GPLv3 なので
+# 見ていない(2026-09-10 本人決定。配布方針が未定のうちは GPL を取り込まない)。
+#
+# 値はどれも文献の標準値そのままで、この題材で選び直した数字は1つも無い。
+# 設計変数の範囲は [0, 1] 固定なので「範囲に対する比」はそのまま設計変数の絶対値でもある。
+MMA_ASYMPTOTE_INIT = 0.5  # 最初の2反復の漸近線の半幅[範囲比]。直前2点が無く縮めようがない
+MMA_ASYMPTOTE_SHRINK = 0.7  # 直前2歩で符号が反転した変数(振動)の漸近線を縮める率
+MMA_ASYMPTOTE_GROW = 1.2  # 符号が揃った変数(単調)の漸近線を広げる率
+MMA_ASYMPTOTE_MIN = 0.01  # 漸近線を x に近づけてよい下限[範囲比]。近すぎると歩幅が消える
+MMA_ASYMPTOTE_MAX = 10.0  # 漸近線を x から離してよい上限[範囲比]。遠いと近似がただの線形
+MMA_ALBEFA = 0.1  # 移動限界を漸近線から離す割合。漸近線の極に触ると近似が発散する
+# 近似を**厳密に**凸にするための下駄。感度が 0 の変数でも p/q が正になるので、部分問題の
+# 解の閉じた式(下の `_x_of`)の分母が 0 にならない。目的と制約を1のオーダーへ正規化した
+# 上での 1e-5 なので、感度が正常な変数には効かない。
+MMA_RAA0 = 1e-5
+# 双対変数(体積制約の乗数)を1次元二分探索で決めるときの上界と回数。
+# 上界は OC の `l2 = 1e9` と揃えた(乗数が大きいほど解は移動限界の下端へ寄るので、
+# ここまで振っても届かなければ「この反復で到達できる最小体積」に達している)。
+# 60回で区間は 1e9 * 2^-60 ≈ 1e-9 まで縮む(OC の停止条件 1e-9 と同じ桁)。
+MMA_DUAL_MAX = 1e9
+MMA_DUAL_ITERS = 60
+
+
+class _MMAUpdate(_Update):
+    """MMA(Method of Moving Asymptotes)。
+
+    **OC と違って体積は不等式制約**(`sum(rho) <= target`)で、乗数が 0 に落ちれば
+    目標より軽い解をそのまま返す。OC のように「目標にきっかり乗せる」ことはしないし、
+    目標へ届かないときに `VolumeTargetError` を上げることもない
+    (`optimize` の docstring「更新則を選ぶ」節)。
+
+    **反復をまたいで状態を持つ**(OC は `x` 以外の状態を持たない): 移動漸近線
+    `_low`/`_upp` と直前2点 `_xold1`/`_xold2`。1つの `_MMAUpdate` は1回の
+    `optimize` 呼び出しに属する。
+    """
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self._low: np.ndarray | None = None
+        self._upp: np.ndarray | None = None
+        self._xold1: np.ndarray | None = None
+        self._xold2: np.ndarray | None = None
+        self._c0: float | None = None
+
+    def step(
+        self,
+        *,
+        it: int,
+        x: np.ndarray,
+        x_phys: np.ndarray,
+        compliance: float,
+        dcn: np.ndarray,
+        dvn: np.ndarray,
+    ) -> np.ndarray:
+        span = 1.0  # 設計変数の範囲 [0, 1] の幅
+        # **目的と制約を1のオーダーへ揃える。** 乗数の二分探索は正規化に対して不変
+        # (目的を定数倍すると乗数が同じだけ動くだけ)だが、`MMA_RAA0` の下駄だけは
+        # 絶対値なので、感度の桁が題材ごとに変わると効き方が変わる。基準は初回の
+        # コンプライアンス(以後の反復でも同じ基準を使う —— 反復ごとに取り直すと
+        # 近似の尺度が毎回変わる)。
+        if self._c0 is None:
+            self._c0 = abs(float(compliance)) or 1.0
+        df0 = dcn / self._c0
+        # 体積制約 g(x) = sum(rho_phys) / target - 1 <= 0。感度 `dvn` は OC と同じもの。
+        g = float(x_phys.sum()) / self.target_volume - 1.0
+        dg = dvn / self.target_volume
+
+        if self._xold2 is None or self._low is None or self._upp is None:
+            low = x - MMA_ASYMPTOTE_INIT * span
+            upp = x + MMA_ASYMPTOTE_INIT * span
+        else:
+            # 直前2歩の符号が反転した変数は振動しているので漸近線を寄せて歩幅を殺し、
+            # 揃った変数は伸ばして歩幅を出す。
+            sign = (x - self._xold1) * (self._xold1 - self._xold2)  # type: ignore[operator]
+            gamma = np.where(
+                sign < 0.0,
+                MMA_ASYMPTOTE_SHRINK,
+                np.where(sign > 0.0, MMA_ASYMPTOTE_GROW, 1.0),
+            )
+            low = x - gamma * (self._xold1 - self._low)  # type: ignore[operator]
+            upp = x + gamma * (self._upp - self._xold1)  # type: ignore[operator]
+        low = np.clip(low, x - MMA_ASYMPTOTE_MAX * span, x - MMA_ASYMPTOTE_MIN * span)
+        upp = np.clip(upp, x + MMA_ASYMPTOTE_MIN * span, x + MMA_ASYMPTOTE_MAX * span)
+
+        alpha = np.maximum(
+            np.maximum(0.0, low + MMA_ALBEFA * (x - low)), x - self.move * span
+        )
+        beta = np.minimum(
+            np.minimum(1.0, upp - MMA_ALBEFA * (upp - x)), x + self.move * span
+        )
+        # **パッシブ要素の設計変数を部分問題の中でも凍結する。** 上書きで後から戻すだけだと、
+        # 体積制約の勘定が「動かしても物理体積が変わらない変数」の移動を当てにしてしまう
+        # (`_Update` の契約)。感度 `dvn` 自体はパッシブ要素でも 0 ではない —— フィルタ越しに
+        # 隣の自由要素の物理密度を動かすため —— ので、感度を刈るのでは足りない。
+        passive = self.void | self.solid
+        alpha = np.where(passive, x, alpha)
+        beta = np.where(passive, x, beta)
+
+        ud = upp - x
+        ld = x - low
+        raa = MMA_RAA0 / (upp - low)
+        # 分離可能な凸近似 f(x) ≈ r + Σ p/(U-x) + q/(x-L)。感度の正の側を p、負の側を q へ
+        # 振り、逆側にも 0.001 を残す(片側が厳密に 0 だと近似がその方向へ無限に伸びる)。
+        p0 = ud * ud * (1.001 * np.maximum(df0, 0.0) + 0.001 * np.maximum(-df0, 0.0) + raa)
+        q0 = ld * ld * (0.001 * np.maximum(df0, 0.0) + 1.001 * np.maximum(-df0, 0.0) + raa)
+        p1 = ud * ud * (1.001 * np.maximum(dg, 0.0) + 0.001 * np.maximum(-dg, 0.0) + raa)
+        q1 = ld * ld * (0.001 * np.maximum(dg, 0.0) + 1.001 * np.maximum(-dg, 0.0) + raa)
+        # 定数項は「現在点で近似が真値に一致する」ことから決まる。
+        r1 = g - float((p1 / ud + q1 / ld).sum())
+
+        def _x_of(lam: float) -> np.ndarray:
+            """乗数 `lam` を固定したときの部分問題の解(変数ごとに閉じた式)。
+
+            P/(U-x) + Q/(x-L) を最小にするのは x = (L√P + U√Q)/(√P + √Q)。
+            `MMA_RAA0` のおかげで P も Q も正なので分母は 0 にならない。
+            """
+            sp_ = np.sqrt(p0 + lam * p1)
+            sq_ = np.sqrt(q0 + lam * q1)
+            return np.clip((low * sp_ + upp * sq_) / (sp_ + sq_), alpha, beta)
+
+        def _violation(xn: np.ndarray) -> float:
+            """近似した体積制約の値。正なら目標超過。"""
+            return float((p1 / (upp - xn) + q1 / (xn - low)).sum()) + r1
+
+        # 乗数を上げるほど解は軽くなる(単調)ので1次元の二分探索で足りる。
+        if _violation(_x_of(0.0)) <= 0.0:
+            # **制約が効いていない。** 目標より軽い解をそのまま返す —— これが OC との
+            # いちばん大きな違いで、体積は等式ではなく上限として扱われる。
+            xnew = _x_of(0.0)
+        else:
+            lo, hi = 0.0, MMA_DUAL_MAX
+            for _ in range(MMA_DUAL_ITERS):
+                mid = 0.5 * (lo + hi)
+                if _violation(_x_of(mid)) > 0.0:
+                    lo = mid
+                else:
+                    hi = mid
+            # 上界の側を採る(制約を満たす側)。`hi` が動かないまま抜けたときは、
+            # この反復の移動限界の中に目標を満たす点が無い —— そのときの解は
+            # 「この反復で到達できるいちばん軽い配置」で、例外にはしない。
+            xnew = _x_of(hi)
+
+        self._xold2 = self._xold1
+        self._xold1 = x.copy()
+        self._low, self._upp = low, upp
+        # パッシブ要素は `alpha == beta == x` で凍結済みだが、設計変数の不変条件
+        # (void は 0、solid は 1)はここで名指しで守る。
+        xnew[self.void] = 0.0
+        xnew[self.solid] = 1.0
+        return xnew
+
+
+#: `optimize(update=...)` で選べる更新則。**未知の名前は既定へ落とさず例外**
+#: (`design_space.DERIVATIONS` と同じ作法)。
+UPDATES: dict[str, type[_Update]] = {
+    "oc": _OCUpdate,
+    "mma": _MMAUpdate,
+}
+
+if DEFAULT_UPDATE not in UPDATES:  # 既定名を消したまま気づかない事故を止める
+    raise RuntimeError(f"DEFAULT_UPDATE={DEFAULT_UPDATE!r} が UPDATES に無い")
+
+
 def optimize(
     nelx: int,
     nely: int,
@@ -1201,6 +1502,7 @@ def optimize(
     nu: float = 0.3,
     emin: float = 1e-9,
     move: float = 0.2,
+    update: str = DEFAULT_UPDATE,
     solver: str = "mg",
     cg_rtol: float = 1e-9,
     threads: int | None = None,
@@ -1250,6 +1552,17 @@ def optimize(
       `FilterRadiusError`(逃げ道2つを数字で持つ)。
     - どちらも渡さなければ `DEFAULT_RMIN`。**床とは別物** —— 床は「これより下は壊れる」、
       既定は「普通に使ったときに出したい形」。
+
+    **更新則を選ぶ** —— `update` は `UPDATES` の名前(既定 `DEFAULT_UPDATE` = `"oc"`)。
+    知らない名前は既定へ落とさず `ValueError`。差し替わるのは更新則だけで、`Model`・
+    密度フィルタ・感度フィルタ・パッシブ要素の扱いは共通(`_Update` の契約)。
+
+    - `"oc"` —— ラグランジュ乗数1本の二分探索。**体積は等式**として扱い、目標に乗せる。
+      その反復で目標へ届かないと `VolumeTargetError(side="above_capacity")`。
+      **制約1本でしか成り立たない。**
+    - `"mma"` —— 移動漸近線法。**体積は不等式(上限)**として扱う。目標より軽い解を
+      返すことがあり、届かなくても例外にならない(`Result.target_volume` と
+      `rho.sum()` の差を呼び出し側が自分で見ること)。制約を増やせる。
     """
     check_volume_target(volfrac, material_mm3)
     check_rmin_target(rmin, rmin_mm)
@@ -1262,6 +1575,12 @@ def optimize(
         raise ValueError(
             f"element_volume_mm3 は正の値であること(受け取った値: {element_volume_mm3!r})"
         )
+    try:
+        update_cls = UPDATES[update]
+    except KeyError:
+        raise ValueError(
+            f"未知の更新則 {update!r}(選べるのは {sorted(UPDATES)})"
+        ) from None
     t_total = time.perf_counter()
     shape = (nelx, nely, nelz)
     void = _as_mask(void_mask, shape, "void_mask")
@@ -1330,6 +1649,17 @@ def optimize(
         field[solid] = 1.0
         return field
 
+    updater = update_cls(
+        move=move,
+        target_volume=target_volume,
+        void=void,
+        solid=solid,
+        physical=_physical,
+        n_movable=n_movable,
+        n_solid=int(np.count_nonzero(solid)),
+        element_volume_mm3=element_volume_mm3,
+    )
+
     x = np.full((nelx, nely, nelz), volfrac)
     x[void] = 0.0
     x[solid] = 1.0
@@ -1351,51 +1681,14 @@ def optimize(
         # 近傍が全部パッシブな要素は dvn=0 になりうる。そのままだと 0 除算で NaN が
         # 全反復へ伝播する(その要素はどのみち下の上書きで固定されるので値は使わない)。
         dvn = np.maximum(dvn, 1e-300)
-        l1, l2 = 0.0, 1e9
-        # **二分探索が退化することがある。** 目標体積がこの反復で到達できる上限
-        # (移動制限 `move` と、密度フィルタが塊の縁で落とすぶん)を超えていると、`l2` が 0 まで
-        # 潰れて `(l2 - l1) / (l1 + l2)` が 0除算になる —— 文面に体積も塊も出ないので、
-        # 原因から一番遠い場所で落ちる。**健全な側の計算は
-        # 1ビットも変えない**: `l1 + l2 > 0.0` は退化していない限りつねに真。
-        while l1 + l2 > 0.0 and (l2 - l1) / (l1 + l2) > 1e-9:
-            lm = 0.5 * (l1 + l2)
-            # `-dcn` は理屈上つねに正だが、`ce` がきっかり0の要素(荷重の届かない孤島)や
-            # 丸めで符号が反転した要素があると sqrt が NaN を返し、**以後の反復が全部
-            # NaN で埋まる**。0で潰しておく(その要素は下限へ寄るだけで済む)。
-            xnew = np.clip(
-                x * np.sqrt(np.maximum(0.0, -dcn) / (dvn * lm)),
-                x - move,
-                x + move,
-            )
-            xnew = np.clip(xnew, 0.0, 1.0)
-            xnew[void] = 0.0
-            xnew[solid] = 1.0
-            xp = _physical(xnew)
-            if xp.sum() > target_volume:
-                l1 = lm
-            else:
-                l2 = lm
-        if l1 + l2 <= 0.0:
-            ev = float(element_volume_mm3) if element_volume_mm3 is not None else float("nan")
-            n_solid = int(np.count_nonzero(solid))
-            capacity = float(n_movable + n_solid)
-            reached = float(xp.sum())
-            raise VolumeTargetError(
-                f"体積目標 {target_volume:.6g} 要素に対し、この反復("
-                f"it={it})で到達できる最大が {reached:.6g} 要素しかない: "
-                f"塊の容量は {capacity:.6g} 要素(動かせる {n_movable} + 固定材料 {n_solid})で、"
-                f"目標はその {target_volume / capacity:.1%}。"
-                "**塊に対して材料が多すぎる** —— 密度フィルタが塊の縁で目減りさせるぶん、"
-                "要素数で入る量でも ρ を上限まで上げて届かないことがある。"
-                "塊を広げる(連続値保持なら k を上げる)か、"
-                "材料を減らすこと",
-                material_mm3=target_volume * ev,
-                min_mm3=float("nan"),
-                max_mm3=capacity * ev,
-                shortfall_mm3=(target_volume - reached) * ev,
-                side="above_capacity",
-                element_volume_mm3=ev,
-            )
+        xnew = updater.step(
+            it=it,
+            x=x,
+            x_phys=x_phys,
+            compliance=c,
+            dcn=dcn,
+            dvn=dvn,
+        )
         change = float(np.abs(xnew - x).max())
         x = xnew
         x_phys = _physical(x)
@@ -1428,6 +1721,7 @@ def optimize(
             None if element_volume_mm3 is None else float(element_volume_mm3)
         ),
         rmin=rmin_resolved,
+        update=update,
         model=model if keep_model else None,
     )
 
