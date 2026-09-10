@@ -2,8 +2,8 @@
 
     .\\.venv\\Scripts\\python.exe -m duocad.topopt.design_space
 
-導出は3つ入っている。**既定は連続値保持**(`derive_from_reference`)で、案1(`derive`)と
-案5(`derive_from_coarse_run`)は比較のベースラインと退避経路として残してある。
+導出は2つ入っている。**既定は連続値保持**(`derive_from_reference`)で、案1(`derive`)は
+その土台(参照の箱を起こす)であり、比較のベースライン兼退避経路でもある。
 **導出にこだわりのない呼び出し側は `derive_default` を通ること** —— 既定を次に倒すときに
 書き換える場所を1箇所に閉じ込めるための入口である。各方式の弱点・比較の数字は
 docs/TOPOPT.md「4条件から塊(設計空間)を導出する」以降の各節。
@@ -27,24 +27,14 @@ docs/TOPOPT.md「除外ソリッドを `obstacle` に渡さない(設計判断)�
 **6近傍**(`NEIGHBOURHOOD`。理由はその定数のところ)。実測は docs/TOPOPT.md
 「塊の中で拘束と荷重がひと続きかを検査する」節。
 
-## 案5(粗く1回回して膨らませる。`derive_from_coarse_run`)
-
-案1〜案4は**条件の位置だけ**から塊を決める(どこに材料が要るかを見ていない)。案5だけが
-**一度解いてから決める** —— 案1で粗い塊を作って SIMP を短く回し、出てきた材料を二値化して
-本番の格子へ再サンプルし、mm で膨らませ、4条件の要素を無条件に足す。**姿勢依存がほぼ消える**
-のが利点(壁に接した材料の割合だけは代理指標として負けるが、本命のコンプライアンスは同等以上)。
-数字の根拠は docs/TOPOPT.md「4条件から塊を導出する — 案5」・「既定をどちらにすべきか」。
-
 ## 連続値保持(`derive_from_reference`。いまの既定)
 
-案5は**材料量ごとに粗い段を回し直し、ρ を二値化してから膨らませる**。連続値保持は
-**探索を通して1回だけ本番の格子で回し、ρ を二値化せず順位として使い回す**。材料量ごとの
+案1は**条件の位置だけ**から塊を決める(どこに材料が要るかを見ていない)。連続値保持は
+**探索を通して1回だけ本番の格子で SIMP を回し、ρ を二値化せず順位として使い回す**。材料量ごとの
 塊は「順位の上から `k × 材料量` ぶん、ただし回廊(`Reference.corridor`)を下回らない」。
 **回廊は参照ごとに1回だけ求める固定値**で、これが連結性の保証であり、塊が材料量について
 単調であることの根拠でもある(材料量ごとに繋がるまで広げる作りにすると単調性が壊れ、
-外側の二分探索の前提が崩れる)。**案5が絶対距離 12mm で膨らませていたところが、材料量に
-比例する `k` に変わる** —— hanger の実測で、案5は答えの近傍で正解の 93.27% しか覆えず壁に
-接した材料が 14.00%(案1は 5.37%)だったのに対し、連続値保持は被覆 100%・壁 5.37% だった。
+外側の二分探索の前提が崩れる)。hanger の実測で、被覆 100%・壁に接した材料 5.37%(案1と同値)。
 
 ## 格子の外は誰も見ていない
 
@@ -112,31 +102,6 @@ class DesignSpaceDisconnectedError(ValueError):
         self.components = int(components)
         self.fixed_labels = [int(v) for v in fixed_labels]
         self.load_labels = [int(v) for v in load_labels]
-
-
-class CoarseRunConditionFacesEmptyError(ValueError):
-    """案5(`derive_from_coarse_run`)の**粗い段**で拘束面・荷重面のアンカーが空になった。
-
-    `run_topopt(coarse, ...)` は `anchor.run_pipeline` の契約どおり例外にせず
-    `empty_condition_faces` を積んだ辞書を返す(`"result"` は `None`)。しかし
-    `derive_from_coarse_run` は `DesignSpace` を返す契約の関数で、`run_topopt` のような
-    「早期returnで辞書を返す」形は取れない —— **入口層(`run_topopt`/`anchor.run_pipeline`)の
-    戻り値の形はこの関数のために変えない。** そこでここは同じ診断を例外に載せて落とす。
-    `empty_condition_faces` に `anchor.AnchorTable.condition_face_diagnoses` と同じ形の
-    リストが入る。**このガードが無いと** `coarse_out["result"]` が `None` のまま `.rho` に
-    触れて素の `AttributeError` になる(空の面だとすら分からない)。
-    """
-
-    def __init__(self, empty_condition_faces: Sequence[dict]) -> None:
-        diagnoses = list(empty_condition_faces)
-        detail = an.format_condition_face_warning(diagnoses)
-        message = (
-            "案5(derive_from_coarse_run)の粗い段で拘束面・荷重面のアンカーが空になった: "
-            f"{detail} coarse_elements_long_axis を上げるか、条件面を選び直すこと"
-            "(本番解像度 elements_long_axis では空でなくても、粗い段だけ空になりうる)。"
-        )
-        super().__init__(message)
-        self.empty_condition_faces = diagnoses
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +306,7 @@ class DesignSpace:
     margin_ratio: float
     stats: dict = field(default_factory=dict)
     # 導出の中で作った面アンカーの表(連結性の確認に使ったもの)。**再利用のために持たせてある**
-    # —— 案5や連続値保持は同じ格子でもう一度アンカー要素が要るので、無いと表を2回作る
+    # —— 連続値保持は同じ格子でもう一度アンカー要素が要るので、無いと表を2回作る
     # ことになる(本番解像度では導出時間の大半がこれ)。`None` を許すのは、塊を直接組んだ
     # `DesignSpace` を検査が作れるようにするため。
     table: Any = None
@@ -613,256 +578,10 @@ def derive(
 
 
 # ---------------------------------------------------------------------------
-# 案5(粗く1回回して膨らませる)
-# ---------------------------------------------------------------------------
-# 既定値の根拠はすべて実測(docs/TOPOPT.md「案5の既定値をどう決めたか」)。**「なんとなく」の既定を
-# 置いていない** —— 案1の `margin_ratio` と同じ扱いで、検査ではなく実測が根拠である。
-COARSE_ELEMENTS_LONG_AXIS = 14
-COARSE_MAX_ITER = 20
-COARSE_THRESHOLD = 0.3
-COARSE_DILATE_MM = 12.0
-
-
-def grow_by_mm(mask: np.ndarray, grid: vx.Grid, distance_mm: float) -> np.ndarray:
-    """マスクを距離 `distance_mm`[mm] だけ膨らませる(ユークリッド距離)。
-
-    **膨張は層数ではなく mm で持つ。** 格子は箱に合わせて切り直されるので要素サイズは姿勢と
-    余白ごとに変わり(実測で要素体積 62.99 → 66.43 mm^3)、層数で持つと
-    同じ設定が姿勢ごとに別の物理距離になる。
-    """
-    m = np.asarray(mask, dtype=bool)
-    d = float(distance_mm)
-    if not math.isfinite(d) or d < 0:
-        raise ValueError(f"distance_mm must be a finite number >= 0, got {distance_mm!r}")
-    if d == 0.0 or not m.any():
-        return m.copy()
-    # `distance_transform_edt(~m)` は「m でないセルから最も近い m のセルまでの距離」。
-    dist = ndimage.distance_transform_edt(~m, sampling=float(grid.spacing))
-    return m | (dist <= d + 1e-9)
-
-
-def resample_nearest(mask: np.ndarray, source: vx.Grid, target: vx.Grid) -> np.ndarray:
-    """`source` 格子のマスクを `target` 格子へ最近傍で移す。**対応は物理座標で取る。**
-
-    粗い格子と本番の格子は**原点も要素サイズも違う**(どちらも箱に合わせて切り直されるので、
-    要素数の比にも要素サイズの比にもならない)。軸ごとに本番のセル中心へ最も近い粗いセル中心を
-    探し、**距離が粗い要素の半分を超えたら粗い格子の外**として False にする(端で1列ぶん値を
-    引き伸ばさないため)。
-    """
-    src = np.asarray(mask, dtype=bool)
-    if tuple(src.shape) != tuple(source.shape):
-        raise ValueError(f"mask のかたち {src.shape} が source 格子 {source.shape} と違う")
-    idx: list[np.ndarray] = []
-    valid: list[np.ndarray] = []
-    for axis in range(3):
-        tc = target.centers_1d(axis)
-        sc = source.centers_1d(axis)
-        j = np.clip(np.rint((tc - sc[0]) / float(source.spacing)).astype(int), 0, sc.size - 1)
-        idx.append(j)
-        valid.append(np.abs(tc - sc[j]) <= 0.5 * float(source.spacing) + 1e-9)
-    out = src[np.ix_(idx[0], idx[1], idx[2])]
-    return out & (valid[0][:, None, None] & valid[1][None, :, None] & valid[2][None, None, :])
-
-
-def derive_from_coarse_run(
-    conditions: Conditions,
-    *,
-    margin_ratio: float = DEFAULT_MARGIN_RATIO,
-    elements_long_axis: int = DEFAULT_ELEMENTS_LONG_AXIS,
-    spacing: Optional[float] = None,
-    coarse_elements_long_axis: int = COARSE_ELEMENTS_LONG_AXIS,
-    coarse_max_iter: int = COARSE_MAX_ITER,
-    coarse_volfrac: Optional[float] = None,
-    coarse_material_mm3: Optional[float] = None,
-    threshold: float = COARSE_THRESHOLD,
-    dilate_mm: float = COARSE_DILATE_MM,
-    coarse_stl_path: Optional[str | Path] = None,
-    deviation: Optional[float] = None,
-    deviation_ratio: float = vx.DEFAULT_DEVIATION_RATIO,
-    angular_deflection: float = vx.DEFAULT_ANGULAR_DEFLECTION,
-) -> DesignSpace:
-    """**案5: 粗い格子で1回だけ SIMP を回し、出てきた材料を膨らませたものを塊にする。**
-
-    案1(`derive`)と**同じ型・同じ不変条件**の `DesignSpace` を返すので、`run_topopt(space, ...)`
-    も表示側もそのまま受けられる。案1は条件の位置だけから塊を決める(どこに材料が要るかを見て
-    いない)のに対し、案5は**一度解いてから決める**。
-
-    手順(この順序で組んである):
-
-    1. **案1で粗い塊を作る**(`derive` を粗い解像度で呼ぶ。新しい箱の作り方は発明しない)。
-    2. 粗い塊で SIMP を短く回す(`run_topopt`)。
-    3. ρ を `threshold` で二値化し、本番の格子へ最近傍で再サンプルする
-       (**対応は物理座標で取る** —— 粗い格子と本番の格子は原点も要素サイズも違う)。
-    4. `dilate_mm`[mm] だけ膨らませる。**本番の格子でかける** —— 理由は下の実測コメント。
-    5. **4条件の要素(保持・拘束アンカー・荷重アンカー)を無条件で OR し、除外を引く。**
-       粗い段で削れても膨張で届かなくても、条件の要素は必ず塊に入る。
-    6. 連結性ガード(`assert_faces_connected`。6近傍)を通す。
-
-    `coarse_volfrac` / `coarse_material_mm3` は粗い段の体積目標(排他。どちらも省略すると
-    `simp.DEFAULT_VOLFRAC`)。**本番で使う材料の量が分かっているなら
-    `coarse_material_mm3` に同じ量を渡すこと** —— 塊は「その量の材料がどこへ行きたいか」で
-    決まるべきで、粗い段だけ別の量で解くと別の形の周りを膨らませることになる。
-    **目標を達成可能区間の端に置かないこと**(`volfrac=1.0`/`0.0` 相当は OC の二分探索が
-    退化する。**その退化は `simp.VolumeTargetError`(`side="above_capacity"`)で落ちる**
-    —— 塊の容量と、この反復で到達できる最大が文面に出る)。
-    **区間の内側でも落ちることがある**: 密度フィルタが塊の縁で目減りさせるので、
-    要素数で入る量でも届かない配置がある。**膨張を絞りすぎると踏む**。
-    """
-    started = time.perf_counter()
-    thr = float(threshold)
-    if not 0.0 < thr < 1.0:
-        raise ValueError(f"threshold は 0 < t < 1 であること(いま {threshold!r})")
-    if float(dilate_mm) < 0 or not math.isfinite(float(dilate_mm)):
-        raise ValueError(f"dilate_mm must be a finite number >= 0, got {dilate_mm!r}")
-    if int(coarse_elements_long_axis) < 1:
-        raise ValueError(
-            f"coarse_elements_long_axis must be >= 1, got {coarse_elements_long_axis!r}"
-        )
-    simp.check_volume_target(coarse_volfrac, coarse_material_mm3)
-
-    common = {
-        "margin_ratio": margin_ratio,
-        "deviation": deviation,
-        "deviation_ratio": deviation_ratio,
-        "angular_deflection": angular_deflection,
-    }
-    # 本番の塊(案1の箱)。**案5の塊はこの中にしか作らない** —— 箱は上限であって答えではない。
-    fine = derive(
-        conditions, elements_long_axis=elements_long_axis, spacing=spacing, **common
-    )
-    t_coarse = time.perf_counter()
-    coarse = derive(conditions, elements_long_axis=int(coarse_elements_long_axis), **common)
-    coarse_stl = (
-        Path(coarse_stl_path)
-        if coarse_stl_path is not None
-        else _HERE / "output" / "design_space_coarse.stl"
-    )
-    coarse_out = run_topopt(
-        coarse,
-        volfrac=coarse_volfrac,
-        material_mm3=coarse_material_mm3,
-        max_iter=int(coarse_max_iter),
-        stl_path=coarse_stl,
-    )
-    # **`run_topopt` は拘束面・荷重面のアンカーが空だと例外にせず早期returnする**
-    # (`"result"` が `None` のまま返る)。ここで見ずに `coarse_out["result"].rho` へ触ると
-    # 素の `AttributeError` になる。**入口層(`run_topopt`)の戻り値の形はここのために
-    # 変えない**ので、ここで検知して構造化された例外に変換する(粗い段だけ本番解像度より
-    # 要素サイズが大きく、条件面が粗い段でだけ空になりうる)。
-    if coarse_out.get("empty_condition_faces"):
-        raise CoarseRunConditionFacesEmptyError(coarse_out["empty_condition_faces"])
-    coarse_seconds = time.perf_counter() - t_coarse
-
-    rho = np.asarray(coarse_out["result"].rho, dtype=float)
-    # 二値化に固定要素(ρ=1)を明示的に足す。閾値がどれだけ高くても条件は落とさない。
-    binary = ((rho >= thr) | np.asarray(coarse_out["solid"], dtype=bool)) & coarse.mask
-    # **膨張は本番の格子でかける(再サンプルのあと)。** 粗い格子でかけると膨張の量が粗い
-    # 要素サイズに量子化され、mm の指定が実質2〜3段階しか取れなくなる(実測は docs/TOPOPT.md
-    # 「4条件から塊を導出する — 案5」)。本番の格子でかければ量子は本番の要素サイズまで下がる。
-    resampled = resample_nearest(binary, coarse.grid, fine.grid)
-    grown = grow_by_mm(resampled, fine.grid, dilate_mm)
-
-    table = fine.table if fine.table is not None else an.build_anchors(fine.soup, fine.grid)
-    # **4条件の要素は無条件で入れる。** 粗い段で削れた・膨張が届かなかった、のどちらでも
-    # 条件の要素が塊から落ちてはならない(落ちると拘束も荷重も伝わらない)。
-    conditions_mask = np.asarray(fine.model.keep, dtype=bool).copy()
-    condition_faces = tuple(fine.fixed_faces) + tuple(fine.load_faces)
-    empty = [f for f in condition_faces if f in table.empty_faces()]
-    if not empty:
-        conditions_mask |= table.element_mask(list(condition_faces), layers=1)
-    # 除外は `fine.mask`(= 箱 − 除外)を掛けることで引く。条件の要素であっても除外の中には
-    # 置かない —— 除外を跨ぐ塊を許すと、案1で `DesignSpaceTooSmallError` になる配置が
-    # 案5だけ黙って通ることになる。
-    mask = (grown | conditions_mask) & fine.mask
-    if not mask.any():
-        raise DesignSpaceTooSmallError(
-            f"案5の塊が空になった(閾値 {thr} / 膨張 {float(dilate_mm)}mm)。"
-            "粗い段の反復数か体積目標を見直すこと。",
-            {"coarse": -1},
-        )
-
-    dev = float(fine.stats["deviation"])
-    try:
-        model = vx.model_from_design_mask(
-            fine.grid,
-            mask,
-            anchor_shape=fine.soup,
-            keep=conditions.keep,
-            deviation=dev,
-            angular_deflection=angular_deflection,
-        )
-    except vx.OutsideDesignSpaceError as exc:
-        raise DesignSpaceTooSmallError(
-            f"案5の塊(閾値 {thr} / 膨張 {float(dilate_mm)}mm)が保持ソリッドを含みきれていない: "
-            f"{exc} 案5では保持は無条件に塊へ入れているので、これは除外ソリッドが保持を"
-            "食っている配置(案1でも同じ理由で落ちる)。",
-            getattr(exc, "outside", {}),
-        ) from exc
-
-    connectivity = assert_faces_connected(mask, table, fine.fixed_faces, fine.load_faces)
-
-    stats = dict(fine.stats)
-    stats.update(
-        {
-            "derivation": "coarse_run",
-            "connectivity": connectivity,
-            "case1_elements": fine.element_count,
-            "design_elements": int(np.count_nonzero(mask)),
-            "shrink_vs_case1": (
-                float(np.count_nonzero(mask)) / fine.element_count if fine.element_count else 0.0
-            ),
-            "keep_elements": int(model.stats["keep_elements"]),
-            "coarse": {
-                "seconds": coarse_seconds,
-                "elements_long_axis": int(coarse_elements_long_axis),
-                "grid": list(coarse.grid.shape),
-                "spacing": float(coarse.grid.spacing),
-                "design_elements": coarse.element_count,
-                "max_iter": int(coarse_max_iter),
-                "iterations": int(coarse_out["iterations"]),
-                "volfrac": float(coarse_out["target_volfrac"]),
-                "material_mm3": float(coarse_out["achieved_material_mm3"]),
-                "compliance_last": float(coarse_out["compliance_last"]),
-                "grey_fraction": float(
-                    np.count_nonzero((rho > 0.1) & (rho < 0.9) & ~np.asarray(coarse_out["void"]))
-                )
-                / max(1, int(np.count_nonzero(~np.asarray(coarse_out["void"])))),
-                "binary_elements": int(np.count_nonzero(binary)),
-                "binary_resampled_elements": int(np.count_nonzero(resampled)),
-            },
-            "threshold": thr,
-            "dilate_mm": float(dilate_mm),
-            "dilate_layers_fine": float(dilate_mm) / float(fine.grid.spacing),
-            "resampled_elements": int(np.count_nonzero(resampled)),
-            "grown_elements_fine": int(np.count_nonzero(grown)),
-            "condition_elements": int(np.count_nonzero(conditions_mask & fine.mask)),
-            "condition_only_elements": int(
-                np.count_nonzero(conditions_mask & fine.mask & ~grown)
-            ),
-            "fine_seconds": float(fine.stats["seconds"]),
-        }
-    )
-    stats["seconds"] = time.perf_counter() - started
-    return DesignSpace(
-        grid=fine.grid,
-        mask=mask,
-        model=model,
-        soup=fine.soup,
-        conditions=conditions,
-        bbox_min=fine.bbox_min,
-        bbox_max=fine.bbox_max,
-        margin=fine.margin,
-        margin_ratio=fine.margin_ratio,
-        stats=stats,
-        table=table,
-    )
-
-
-# ---------------------------------------------------------------------------
 # 連続値保持(参照 ρ を1回作り、材料量ごとに順位で切り出す)
 # ---------------------------------------------------------------------------
-# 既定値の根拠はすべて実測(docs/TOPOPT.md「連続値保持の既定値をどう決めたか」)。案5と同じ
-# 扱いで、**「なんとなく」の既定は置いていない。**
+# 既定値の根拠はすべて実測(docs/TOPOPT.md「連続値保持の既定値をどう決めたか」)。案1の
+# `margin_ratio` と同じ扱いで、**「なんとなく」の既定は置いていない。**
 
 # 参照 run の材料量 = 塊の容量 × これ。**探索する材料量より下に置くこと** —— 参照の材料量が
 # 対象より多いと ρ が飽和して(hanger の上端で ρ の中央値 0.74)順位が同点だらけになり、
@@ -885,8 +604,8 @@ REFERENCE_RETRY_GROWTH = 1.6
 REFERENCE_MAX_ATTEMPTS = 4
 
 # 設計空間の容量 ÷ 材料量。**被覆だけで決めると 1.5 になるが、それでは密度フィルタが
-# 体積目標に届かない。** hanger の実測では 1.5 で全材料量域の被覆が 99.91〜100%(いまの案5は
-# 答えの近傍で 93.27%)だが、設計空間が絶対要素数で小さいと `simp.VolumeTargetError` を踏む
+# 体積目標に届かない。** hanger の実測では 1.5 で全材料量域の被覆が 99.91〜100% だが、
+# 設計空間が絶対要素数で小さいと `simp.VolumeTargetError` を踏む
 # (bracket 3,336要素の実測: 塊 751要素・充填率 67% で届かず、1,001要素・67% なら届く)。
 # **2.0(充填率 50%)は同じ題材の全材料量域で届き、壁に接した材料の割合も案1と完全に一致する。**
 # 1.75(57%)も届いたが、落ちた 67% との隔たりが1段しかないので採らなかった。
@@ -910,9 +629,9 @@ class ReferenceRunConditionFacesEmptyError(ValueError):
     積んだ辞書を返す(`"result"` は `None` のまま)。ここで見ずに `.rho` へ触ると素の
     `AttributeError` になる。
 
-    **`CoarseRunConditionFacesEmptyError` と別の型にしてある。** あちらの文面は
-    「`coarse_elements_long_axis` を上げろ」だが、参照 run に粗い格子は無い(本番と同じ格子で
-    回る)ので、その助言はここでは効かない。
+    **文面が名指しする直し方は「要素サイズを小さくする」だけである。** 参照 run は本番と
+    同じ格子で回るので、これは本番解像度そのものの問題であって、参照側だけ細かくして
+    逃げる道は無い。
     """
 
     def __init__(self, empty_condition_faces: Sequence[dict]) -> None:
@@ -965,8 +684,7 @@ def reference_order(
     主キーにすると「構造をまず取り、そこから同心に膨らませる」順になる —— hanger の実測で、
     参照より多い材料量での被覆が 94.14% から 99.88% に上がった(k=1.5)。
 
-    **これは案5の膨張と同じ操作である。** 違うのは膨らませる量で、案5は定数
-    (`COARSE_DILATE_MM`)、こちらは材料量と k から決まる。
+    **膨らませる量は材料量と k から決まる**(定数の絶対距離では部品の大きさに追随しない)。
     """
     values = np.asarray(rho, dtype=float)
     inside = np.asarray(mask, dtype=bool)
@@ -1065,7 +783,7 @@ def build_reference(
 
     材料量は `material_mm3`(絶対量)か `material_ratio`(塊の容量に対する分率)。
     **既定は分率である** —— 参照は部品ごとに違う大きさの箱で回るので、絶対量の既定は部品の
-    大きさに追随しない(絶対距離で持った `COARSE_DILATE_MM` が hanger で外れたのと同じ失敗)。
+    大きさに追随しない(hanger の実測: 絶対距離で持った塊の膨張量は部品が変わると外れる)。
     それでも分率は部品によって痩せすぎるので、**回廊が `max_corridor` を超えたら
     `retry_growth` 倍して取り直す**(`REFERENCE_MAX_CORRIDOR` のところに実測)。
     `material_mm3` を明示で渡したときは呼び出し側が量を決めているので取り直さない。
@@ -1191,14 +909,13 @@ def derive_from_reference(
 ) -> DesignSpace:
     """**連続値保持: 保存した ρ の順位で、この材料量ぶんの塊を切り出す。**
 
-    案1(`derive`)・案5(`derive_from_coarse_run`)と**同じ型・同じ不変条件**の `DesignSpace`
-    を返す。案5との違いは、SIMP を回すのが**材料量ごとに1回ではなく探索を通して1回**だけで
-    あること —— そのぶん参照は粗い格子ではなく本番と同じ格子で回せる。
+    案1(`derive`)と**同じ型・同じ不変条件**の `DesignSpace` を返す。SIMP を回すのは
+    **材料量ごとではなく探索を通して1回**だけで、参照は本番と同じ格子で回る。
 
     手順:
 
     1. 参照(`reference`)が無ければ作る。**探索から呼ぶときは必ず渡すこと** —— 渡さないと
-       材料量ごとに参照を作り直し、案5より遅い形になる。
+       材料量ごとに参照を作り直すことになり、探索の段数ぶん SIMP が増える。
     2. `max(k * material_mm3 / 要素体積, reference.corridor)` 本を順位の先頭から取る。
     3. 4条件の要素(保持・拘束アンカー・荷重アンカー)を無条件で OR し、案1の塊で AND する。
 
@@ -1267,7 +984,7 @@ def derive_from_reference(
             "参照 run の材料量か k を見直すこと。",
             {"reference": -1},
         )
-    # 回廊が保証しているので通るはずだが、**案1・案5と同じく導出が自分で確かめてから返す**。
+    # 回廊が保証しているので通るはずだが、**案1と同じく導出が自分で確かめてから返す**。
     connectivity = assert_faces_connected(mask, table, base.fixed_faces, base.load_faces)
 
     try:
@@ -1329,17 +1046,15 @@ def derive_from_reference(
 # 既定の導出(入口を1つにする)
 # ---------------------------------------------------------------------------
 
-# **既定の導出は連続値保持(`"reference"`)。** hanger の実測で、案5(粗20)が答えの近傍で
-# 正解の 93.27% しか覆えず、壁に接した材料が案1の 5.37% に対して 14.00% だったのに対し、
-# こちらは同じ材料量で被覆 100%・壁 5.38%・塊は 24% 小さい。案5の膨張が絶対距離(12mm)で
-# 部品の大きさに追随しないのが原因で、k(= 塊の容量 ÷ 材料量)を摘みにすると追随する。
+# **既定の導出は連続値保持(`"reference"`)。** hanger の実測で、答えの被覆 100%・壁に
+# 接した材料 5.38%(案1と同値)で、塊は案1より 24% 小さい。塊の広げ方を絶対距離ではなく
+# k(= 塊の容量 ÷ 材料量)で持つので、部品の大きさに追随する。
 DEFAULT_DERIVATION = "reference"
 
 # 名前 → 導出。名前を受け取る側(受入検査の比較実測)がここを引く。
 # **塊を作りたいだけの呼び出し側はこの表を引かない** —— 引くと既定を倒す場所が増える。
 DERIVATIONS = {
     "bbox": derive,
-    "coarse_run": derive_from_coarse_run,
     "reference": derive_from_reference,
 }
 
@@ -1350,8 +1065,7 @@ def derive_default(
     """**導出にこだわりのない呼び出し側の入口。** 既定(`DEFAULT_DERIVATION`)へ委ねる。
 
     `duocad/optimize_run.py`(製品の経路)はここを通る。特定の導出を名指しで呼びたい側
-    (比較の実測・受入検査)は `derive` / `derive_from_coarse_run` / `derive_from_reference`
-    を直接呼ぶ —— **名指しの呼び出しを既定の変更で動かしてはいけない**(比較のベースラインが
+    (比較の実測・受入検査)は `derive` / `derive_from_reference` を直接呼ぶ —— **名指しの呼び出しを既定の変更で動かしてはいけない**(比較のベースラインが
     黙って入れ替わる)。
 
     `kwargs` は**そのまま既定の導出へ渡る**(素通し)。したがって受け付ける引数は
@@ -1360,8 +1074,10 @@ def derive_default(
     ので量が要り、参照は探索を通して1つを使い回すので外から渡す必要がある。ここで受けないと
     外側のループ(安全率)がどちらも渡す手段を失う。
 
-    `derivation="bbox"` / `"coarse_run"` は**退避経路**。既定を倒したあとに以前の挙動へ戻して
+    `derivation="bbox"` は**案1を名指しする口**。既定を倒したあとに以前の挙動へ戻して
     比べるための口で、ここで名指しした側は `DEFAULT_DERIVATION` が変わっても動かない。
+    **製品の経路(`optimize_run.run`)もここを通って塊の容量と保持体積を測る** ——
+    既定の導出は材料量を要求するので、材料量の探索範囲を決める道具には使えない。
     """
     name = DEFAULT_DERIVATION if derivation is None else str(derivation)
     try:
@@ -1536,7 +1252,7 @@ def _rotated_face(
 def _cli() -> int:
     import argparse
 
-    parser = argparse.ArgumentParser(description="4条件から塊(設計空間)を導出する(案1/案5)")
+    parser = argparse.ArgumentParser(description="4条件から塊(設計空間)を導出する")
     parser.add_argument("--margin-ratio", type=float, default=DEFAULT_MARGIN_RATIO)
     parser.add_argument("--elements-long-axis", type=int, default=28)
     args = parser.parse_args()

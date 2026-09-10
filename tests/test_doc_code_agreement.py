@@ -278,7 +278,7 @@ def test_the_documented_param_keys_contain_every_movable_point_key():
 def _current_truth_rows() -> list[tuple[str, list[float], list[tuple[str, str]]]]:
     """「現在の正」表を (項目, 太字に書かれた数値, 参照している (モジュール, 名前)) で返す。
 
-    3列目は `design_space.COARSE_ELEMENTS_LONG_AXIS` / `COARSE_MAX_ITER` のように
+    3列目は `design_space.REFERENCE_MATERIAL_RATIO` / `REFERENCE_MAX_ITER` のように
     **2つ目以降のモジュール名を省く**書き方があるので、行の中で直前のモジュールを引き継ぐ。
     """
     rows = []

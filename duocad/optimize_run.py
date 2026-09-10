@@ -81,7 +81,7 @@ MIN_REGION_ELEMENTS = 8
 SECONDS_PER_ELEMENT_ITERATION = 1.8e-4
 
 #: 既定の導出(連続値保持)の参照 run の反復数。**探索を通して1回だけ**掛かる
-#: (案5の粗い段のように候補材料量ごとには掛からない)。値の正は
+#: (候補材料量ごとには掛からない)。値の正は
 #: `design_space.REFERENCE_MAX_ITER` で、ここは見積り式が参照 run を落とさないための写し。
 REFERENCE_ITERATIONS_FOR_ESTIMATE = 10
 
@@ -688,8 +688,8 @@ def estimate_seconds(
 
     1回の評価 = 設計反復 × 格子要素数 × 係数。安全率の外側ループは候補材料量ごとに1回ずつ
     回すので、それを掛ける。**そこへ参照 run を1回だけ足す**(既定の導出は連続値保持で、
-    参照は探索の最初に1回しか回らない)。案5のときは粗い段が**候補ごとの固定費**だったので
-    掛け算の中にあった —— 既定を戻すときはここも一緒に直すこと。
+    参照は探索の最初に1回しか回らない)。**候補ごとの固定費を持つ導出へ既定を倒すときは、
+    その分を掛け算の中へ入れ直すこと。**
 
     **候補ごとの塊は案1の箱より小さい**(順位から `k × 材料量` ぶんしか取らない)が、材料量が
     決まらないと大きさが決まらないので、ここでは箱の要素数で見積もる。**その分だけ上振れする。**
@@ -909,7 +909,6 @@ def run(
     `OptimizeCancelled`(中断)と、下の層からの `design_space.DesignSpaceDisconnectedError`
     (拘束と荷重がつながっていない)/ `DesignSpaceTooSmallError` /
     `design_space.ReferenceRunConditionFacesEmptyError` /
-    `design_space.CoarseRunConditionFacesEmptyError`(退避経路 `coarse_run`) /
     `safety_loop.SafetyTargetError`(目標安全率に届かない)/
     `safety_loop.ConditionFacesEmptyError` はどれも
     「利用者が次に何をすればよいか」を文面に持っている。

@@ -15,6 +15,7 @@
 | [tests/README.md](tests/README.md) | テストが定義するAPI契約 | コアの挙動を疑うとき |
 | [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化**（実測の記録・設計と画面・受入検査の意味） | 数字の根拠・topopt配線を疑うとき |
 | [docs/TOPOPT_SPEED.md](docs/TOPOPT_SPEED.md) | **安全率探索の時間短縮**（内訳・改善案・探索アルゴリズム） | 外側ループを速くしたいとき |
+| [docs/TOPOPT_SIMP_ITER_BREAKDOWN.md](docs/TOPOPT_SIMP_ITER_BREAKDOWN.md) | **SIMP 1反復の秒数内訳**（hanger 2.4mm 実測・床の理由） | 1反復が重い理由を疑うとき |
 
 ---
 
@@ -198,7 +199,7 @@ cd web; npm run dev                                 # 画面(5173)
 # 面アンカー側の正しさ（端から端まで1回通す）
 & .\.venv\Scripts\python.exe topopt_checks\check_anchor.py
 
-# 塊(設計空間)。分離 + 案1 + 連結性ガード + 案5 + 既定の導出 + 空の条件面
+# 塊(設計空間)。分離 + 案1 + 連結性ガード + 既定の導出 + 空の条件面
 & .\.venv\Scripts\python.exe topopt_checks\check_design_space.py
 
 # 体積目標を絶対量(mm^3)で指定する口

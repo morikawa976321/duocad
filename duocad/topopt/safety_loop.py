@@ -117,8 +117,8 @@ class ConditionFacesEmptyError(ValueError):
 
     **`_evaluate` の分類(`"too_little"` / `"too_much"`)へ落とさない。** 条件面が空なのは
     要素サイズの問題であって材料量の問題ではないので、二分探索を続けても直らない
-    (材料量を振っても格子は変わらない)。`design_space.CoarseRunConditionFacesEmptyError`
-    (粗い段の同じ失敗)と同じ形で、`empty_condition_faces` に
+    (材料量を振っても格子は変わらない)。`design_space.ReferenceRunConditionFacesEmptyError`
+    (参照 run の同じ失敗)と同じ形で、`empty_condition_faces` に
     `anchor.AnchorTable.condition_face_diagnoses` と同じリストを持つ。
     """
 
@@ -198,7 +198,7 @@ def _derive_and_run(
     `material_mm3` は `TypeError` になる(`derive_default` の契約どおり —— 黙って捨てない)。
 
     **`reference` は探索が最初に1回だけ作った参照 ρ。** これを渡さないと
-    `derive_from_reference` が材料量ごとに参照を作り直し、案5より遅い形になる。
+    `derive_from_reference` が材料量ごとに参照を作り直し、探索の段数ぶん SIMP が増える。
     """
     kwargs = dict(derivation_kwargs)
     kwargs.setdefault("material_mm3", material_mm3)
@@ -260,7 +260,7 @@ def _build_reference(
     `k` などが `derive` まで流れて `TypeError` になる。
 
     **参照は全段で使い回す。** 材料量ごとに作り直すと「毎回1回余分に回す」形になり、
-    案5に対する利点(SIMP を回すのが探索を通して1回)がそのまま消える。
+    連続値保持の利点(SIMP を回すのが探索を通して1回)がそのまま消える。
     """
     if derivation_kwargs.get("derivation", ds.DEFAULT_DERIVATION) != "reference":
         return None

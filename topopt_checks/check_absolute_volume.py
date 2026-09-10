@@ -409,9 +409,8 @@ def check_unreachable() -> None:
 
     # --- 区間の内側でも届かないことがある(2026-09-04に足したガード) -----------
     # **要素数で入る量でも、密度フィルタが塊の縁で目減りさせるぶん届かない。**
-    # `20260904-1400` が案5の膨張0で踏んだのがこれで(目標が容量の 92.8% で
-    # `ZeroDivisionError`)、**容量に近い体積目標は名指しで落とす口が要る**というのが
-    # その契約③の宿題だった。ここはその口の受入検査。
+    # 実測で踏んだのは目標が容量の 92.8% のとき(素の `ZeroDivisionError` になった)。
+    # **容量に近い体積目標は名指しで落とす口が要る**。ここはその口の受入検査。
     slab = np.zeros(case["shape"], dtype=bool)
     slab[:, :, case["shape"][2] - 1 :] = True  # 塊の縁を増やす(フィルタの目減りを効かせる)
     slab_movable = int(np.count_nonzero(~slab & ~case["solid_mask"]))
@@ -432,7 +431,7 @@ def check_unreachable() -> None:
     check(
         "その文面に目標・到達できた最大・容量・割合が入っている",
         all(w in inside_text for w in ("体積目標", "到達できる最大", "塊の容量", "%"))
-        and "dilate_mm" in inside_text,
+        and "k を上げる" in inside_text,
         inside_text[:150],
     )
     # **落ちるだけでは足りない**(緩い側に倒れていないこと)。同じ配置の 95% は通る。

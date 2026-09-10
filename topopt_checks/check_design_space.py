@@ -48,25 +48,15 @@
     **変異検査は2つ**: `derive` の呼び出しを外す(10-2 が素通り)/ `assert_load_path` の
     判定を外す(10-2・10-3・10-4 が素通り)。docs/TOPOPT.md「変異検査」に結果がある。
 
-[11] の構成(案5: 粗く1回回して膨らませる。タスク `20260904-1400`):
-
-11. **粗い段の答えから塊を起こす** — 再サンプルが**物理座標**で対応を取る(添字の割り算だと
-    別の答えになることを同じ配置で見せる)/ 膨張が **mm** で効く(要素サイズが違う2つの格子で
-    層数が変わり物理距離が同じ)/ 案1と同じ型の `DesignSpace` が返り `run_topopt` がそのまま
-    通る / 案1より小さい / **4条件の要素が必ず塊に入る**(膨張0でも入る。粗い段から届かない
-    条件の要素が実際にあることも見る)/ 除外が引かれている / 膨張を増やすと塊が単調に増える /
-    連結性ガードを通っている(**閾値0.99・膨張0では案5の塊が切れて落ちる** —— 案1の箱は同じ
-    条件で通るので、案5が自分でガードを通していなければ素通りする)/ 引数の検証。
-
 [13] の構成(既定の導出。タスク `20260904-1416`):
 
 13. **既定が連続値保持で、入口が1つ** — `derive_default` が連続値保持を返す(参照 run と k と
     回廊の記録が付く)/ **塊が材料量について単調に増える**(外側の二分探索の前提)/
     **`material_mm3` と `reference` が素通しに
     なっている**(後続の安全率の外側ループがこの2つを使う。参照を回し直していないことを
-    秒数の一致で見る)/ **格子の違う参照は例外**(黙って別の場所を切り出さない)/ 案1と案5が
-    残っていて既定値も動いていない(比較のベースラインであり退避経路)/ `derivation="bbox"` /
-    `"coarse_run"` で戻せる / 未知の名前は例外 / **導出にこだわりのない呼び出し側
+    秒数の一致で見る)/ **格子の違う参照は例外**(黙って別の場所を切り出さない)/ 案1が
+    残っていて既定値も動いていない(連続値保持の土台であり比較のベースライン)/
+    `derivation="bbox"` で戻せる / 未知の名前は例外 / **導出にこだわりのない呼び出し側
     (`safety_loop.py`)が導出を名指ししていない** —— 名指しが1つでも残っていると、次に既定を
     倒すときにそこだけ取り残される。
 
@@ -79,12 +69,11 @@
     `DesignSpace.stats` にも同じ診断が載ること / **通常経路(空の条件面なし)は影響を受けない**
     (回帰確認)/ **変異検査**(空面診断を外すと元の `ValueError` に戻ることを毎回自動で確認。
     docs/TOPOPT.md「変異検査の記録(2026-09-05)」)。
-    **14-6/14-7(2026-09-05 QAのfollow-up指摘への対応)**: `derive_from_coarse_run`(案5・
-    退避経路)の**粗い段**は `run_topopt(coarse, ...)` の戻り値の `"result"` を無条件に
-    使っていたため、粗い段だけ条件面のアンカーが空になると `AttributeError` になっていた
-    (14の早期returnが作った新しい穴)。`CoarseRunConditionFacesEmptyError` を新設して検知し、
-    `derive_default(derivation="coarse_run")` 経由でも同じ例外になることと、変異検査(ガードを外すと
-    `AttributeError` に戻ること)を見る。
+    **14-6/14-7**: `run_topopt` の早期return(`"result"` が `None`)を受け取る側が
+    `.rho` へ無条件に触ると `AttributeError` になる。既定の導出でその位置に居るのは
+    `build_reference`(参照 run)なので、そこが `ReferenceRunConditionFacesEmptyError` を
+    上げること・`derive_default`(既定)経由でも同じ例外になること・変異検査(ガードを
+    無力化すると `AttributeError` に戻ること)を見る。
 """
 
 from __future__ import annotations
@@ -975,261 +964,17 @@ def check_case1_connectivity() -> None:
 
 
 # ===========================================================================
-# 案5(粗く1回回して膨らませる): タスク 20260904-1400
-# ===========================================================================
-CASE5 = bench.DESIGN_SPACE_COARSE
-
-
-def _case5(**over):
-    """検査の題材で案5を1回導出する。大きさは `bench.DESIGN_SPACE_COARSE` が正。"""
-    kw = {
-        "elements_long_axis": CASE5["elements_long_axis"],
-        "coarse_elements_long_axis": CASE5["coarse_elements_long_axis"],
-        "coarse_max_iter": CASE5["coarse_max_iter"],
-        "dilate_mm": CASE5["dilate_mm"],
-    }
-    kw.update(over)
-    return ds.derive_from_coarse_run(ds.demo_conditions(0.0), **kw)
-
-
-def check_case5_coarse_run() -> None:
-    print("\n[11] 案5: 粗く1回回して膨らませた塊")
-
-    # --- 11-1 再サンプルは物理座標で対応を取る(単体) ----------------------
-    # 原点も要素サイズも違う2つの格子。**添字の割り算だと別の答えになる**配置にしてある。
-    coarse = vx.Grid(origin=(0.0, 0.0, 0.0), spacing=10.0, shape=(4, 1, 1))
-    fine = vx.Grid(origin=(1.0, 0.0, 0.0), spacing=4.0, shape=(8, 1, 1))
-    src = np.zeros(coarse.shape, dtype=bool)
-    src[1, 0, 0] = True  # 中心 x=15mm(範囲 10..20mm)
-    got = ds.resample_nearest(src, coarse, fine)
-    # 本番のセル中心は 3,7,11,15,19,23,27,31mm。最も近い粗い中心(5,15,25,35)が 15 なのは 11/15/19。
-    want = np.zeros(fine.shape, dtype=bool)
-    want[2:5, 0, 0] = True
-    check(
-        "再サンプルが物理座標で対応する(原点も要素サイズも違う格子)",
-        np.array_equal(got, want),
-        f"True の添字 {np.flatnonzero(got[:, 0, 0]).tolist()} (期待 [2, 3, 4])",
-    )
-    # 検出力: 添字の割り算(本番8要素 / 粗い4要素 = 2)だと [2, 3] になる。
-    naive = np.zeros(fine.shape, dtype=bool)
-    naive[(np.arange(8) // 2) == 1, 0, 0] = True
-    check(
-        "検出力: 添字の割り算で済ませた場合と答えが違う(この検査が対応の取り方を見ている)",
-        not np.array_equal(naive, want),
-        f"割り算だと {np.flatnonzero(naive[:, 0, 0]).tolist()}",
-    )
-    # 粗い格子の外に出た本番セルは塊にしない(端で1列ぶん値を引き伸ばさない)。
-    # 粗い格子が覆うのは 0..40mm。本番のセル中心は 32/36/40/44mm なので、44mm の1つだけが
-    # 「最も近い粗い中心(35mm)から要素の半分(5mm)より遠い」= 格子の外になる。
-    outside = vx.Grid(origin=(30.0, 0.0, 0.0), spacing=4.0, shape=(4, 1, 1))
-    src_all = np.ones(coarse.shape, dtype=bool)
-    edge = ds.resample_nearest(src_all, coarse, outside)[:, 0, 0]
-    check(
-        "粗い格子の外へ出た本番セルは塊に入らない(端で値を引き伸ばさない)",
-        edge.tolist() == [True, True, True, False],
-        f"中心 32/36/40/44mm の結果 {edge.tolist()} (粗い格子が覆うのは 0..40mm)",
-    )
-
-    # --- 11-2 膨張は mm(要素サイズが違っても同じ物理距離)------------------
-    g_coarse = vx.Grid(origin=(0.0, 0.0, 0.0), spacing=2.0, shape=(11, 1, 1))
-    g_fine = vx.Grid(origin=(0.0, 0.0, 0.0), spacing=1.0, shape=(22, 1, 1))
-    seed_c = np.zeros(g_coarse.shape, dtype=bool)
-    seed_c[5, 0, 0] = True
-    seed_f = np.zeros(g_fine.shape, dtype=bool)
-    seed_f[11, 0, 0] = True
-    grown_c = ds.grow_by_mm(seed_c, g_coarse, 4.0)
-    grown_f = ds.grow_by_mm(seed_f, g_fine, 4.0)
-    layers_c = int(grown_c.sum() - 1) // 2
-    layers_f = int(grown_f.sum() - 1) // 2
-    check(
-        "膨張は mm で効く(要素 2mm なら 2層 / 要素 1mm なら 4層 = どちらも 4mm)",
-        layers_c == 2 and layers_f == 4,
-        f"要素2mm → {layers_c}層 / 要素1mm → {layers_f}層",
-    )
-    check(
-        "膨張0は1要素も広げない",
-        np.array_equal(ds.grow_by_mm(seed_f, g_fine, 0.0), seed_f),
-        f"{int(ds.grow_by_mm(seed_f, g_fine, 0.0).sum())} 要素(種は1要素)",
-    )
-
-    # --- 11-3 案1と同じ型・同じ不変条件の DesignSpace が返る ---------------
-    space = _case5()
-    st = space.stats
-    check(
-        "案5の入口が DesignSpace を返す(案1と同じ型)",
-        isinstance(space, ds.DesignSpace)
-        and tuple(space.mask.shape) == tuple(space.grid.shape)
-        and st.get("derivation") == "coarse_run",
-        f"塊 {space.element_count} 要素 / 格子 {space.grid.shape} / "
-        f"spacing {space.grid.spacing:.3f}mm / derivation={st.get('derivation')}",
-    )
-    check(
-        "案1と同じ不変条件: model.obstacle が全 False(除外は塊から引き切っている)",
-        not np.asarray(space.model.obstacle).any(),
-        f"obstacle {int(np.asarray(space.model.obstacle).sum())} 要素",
-    )
-
-    # --- 11-4 run_topopt がそのまま通る(表示側を改造せずに受けられる)------
-    stl = OUTPUT_DIR / "check_design_space_case5.stl"
-    if stl.exists():
-        stl.unlink()
-    t0 = time.perf_counter()
-    out = ds.run_topopt(space, max_iter=CASE5["max_iter"], volfrac=VOLFRAC, stl_path=stl)
-    seconds = time.perf_counter() - t0
-    check(
-        "案5の塊がそのまま run_topopt を通る(塊 → 面アンカー → SIMP → STL)",
-        stl.exists() and stl.stat().st_size > 0 and out["iterations"] == CASE5["max_iter"],
-        f"{stl.name} {stl.stat().st_size if stl.exists() else 0} bytes / "
-        f"{out['iterations']}反復 / {seconds:.1f}秒 / C={out['compliance_last']:.4f}",
-    )
-
-    # --- 11-5 案1より小さい(案5の存在理由)-------------------------------
-    check(
-        "案5の塊が案1の塊より小さい",
-        space.element_count < int(st["case1_elements"]),
-        f"案1 {st['case1_elements']} → 案5 {space.element_count} 要素 "
-        f"({st['shrink_vs_case1']:.3f}倍)",
-    )
-
-    # --- 11-6 4条件の要素が必ず塊に入る ------------------------------------
-    keep_outside = int(np.count_nonzero(np.asarray(space.model.keep) & ~space.mask))
-    dropped = int(space.model.stats["keep_dropped_outside"])
-    check(
-        "保持ソリッドの要素が1つも塊から落ちていない",
-        keep_outside == 0 and dropped == 0 and int(np.asarray(space.model.keep).sum()) > 0,
-        f"はみ出し {keep_outside} 要素 / 格子外 {dropped} 要素 / "
-        f"保持 {int(np.asarray(space.model.keep).sum())} 要素",
-    )
-    table = space.table if space.table is not None else an.build_anchors(space.soup, space.grid)
-    anchors = table.element_mask(list(space.fixed_faces) + list(space.load_faces), layers=1)
-    check(
-        "拘束・荷重のアンカー要素が1つも塊から落ちていない",
-        int(np.count_nonzero(anchors & ~space.mask)) == 0 and int(anchors.sum()) > 0,
-        f"はみ出し {int(np.count_nonzero(anchors & ~space.mask))} 要素 / "
-        f"アンカー {int(anchors.sum())} 要素",
-    )
-    # 検出力: 膨張を0にすると、**粗い段の材料からは届かない条件の要素**が出る。それでも
-    # 上のはみ出しが0のままなら、無条件の OR が実際に効いている証拠になる。
-    bare = _case5(dilate_mm=0.0)
-    bare_anchors = (
-        (bare.table or an.build_anchors(bare.soup, bare.grid))
-        .element_mask(list(bare.fixed_faces) + list(bare.load_faces), layers=1)
-    )
-    check(
-        "検出力: 膨張0でも条件の要素は塊に入る(粗い段の材料が届かない要素が実際にある)",
-        int(bare.stats["condition_only_elements"]) > 0
-        and int(np.count_nonzero(np.asarray(bare.model.keep) & ~bare.mask)) == 0
-        and int(np.count_nonzero(bare_anchors & ~bare.mask)) == 0,
-        f"粗い段からは入らなかった条件の要素 {bare.stats['condition_only_elements']} 個 / "
-        f"はみ出し 保持{int(np.count_nonzero(np.asarray(bare.model.keep) & ~bare.mask))}・"
-        f"アンカー{int(np.count_nonzero(bare_anchors & ~bare.mask))}",
-    )
-
-    # --- 11-7 除外ソリッドが引かれている ----------------------------------
-    obs_soup = vx.triangles_from_shape(
-        vx._unwrap(space.conditions.obstacle), deviation=space.stats["deviation"]
-    )
-    obs, _ = vx.occupancy(obs_soup, space.grid)
-    check(
-        "除外ソリッドの領域に案5の塊の要素が1つも無い(独立に計算し直して確認)",
-        int(np.count_nonzero(obs & space.mask)) == 0 and int(obs.sum()) > 0,
-        f"重なり {int(np.count_nonzero(obs & space.mask))} 要素 / 除外 {int(obs.sum())} 要素",
-    )
-
-    # --- 11-8 膨張が効いている(単調性)------------------------------------
-    counts = {0.0: bare.element_count, CASE5["dilate_mm"]: space.element_count}
-    wide = _case5(dilate_mm=CASE5["dilate_mm"] + 4.0)
-    counts[CASE5["dilate_mm"] + 4.0] = wide.element_count
-    ordered = [counts[k] for k in sorted(counts)]
-    check(
-        "膨張の量を増やすと塊が単調に大きくなる(膨張が結果を動かしている)",
-        ordered[0] < ordered[1] < ordered[2] <= int(st["case1_elements"]),
-        f"{{{', '.join(f'{k:g}mm: {counts[k]}' for k in sorted(counts))}}} / "
-        f"案1 {st['case1_elements']}",
-    )
-
-    # --- 11-9 連結性ガードを通っている ------------------------------------
-    report = st.get("connectivity", {})
-    check(
-        "案5の塊でも拘束と荷重が同じ連結成分にいることを確認してから返している",
-        bool(report.get("shared_labels"))
-        and report.get("neighbourhood") == ds.NEIGHBOURHOOD
-        and int(report.get("fixed_elements", 0)) > 0
-        and int(report.get("load_elements", 0)) > 0,
-        f"成分 {report.get('components')} 個 / 共通 {report.get('shared_labels')} / "
-        f"拘束側 {report.get('fixed_elements')} 要素 / 荷重側 {report.get('load_elements')} 要素",
-    )
-    # 検出力: 閾値を上げて粗い段の材料をほぼ全部落とすと、**案1の箱は通るのに案5の塊は切れる**。
-    # 案5がガードを自分で通していなければ、ここは黙って通ってしまう。
-    severed = None
-    try:
-        _case5(threshold=0.99, dilate_mm=0.0)
-    except ds.DesignSpaceDisconnectedError as e:
-        severed = e
-    check(
-        "検出力: 閾値0.99・膨張0で塊が切れると案5も落ちる(案1の箱は同じ条件で通る)",
-        severed is not None and not isinstance(severed, ds.DesignSpaceTooSmallError),
-        f"{type(severed).__name__ if severed else '例外が上がらなかった'}"
-        + (f" / 成分 {severed.components} 個" if severed is not None else ""),
-    )
-
-    # --- 11-10 引数の検証 --------------------------------------------------
-    cond = ds.demo_conditions(0.0)
-    check(
-        "閾値が 0 < t < 1 の外なら例外(0 や 1 を黙って受けない)",
-        _raises(ds.derive_from_coarse_run, ValueError, cond, threshold=0.0)
-        and _raises(ds.derive_from_coarse_run, ValueError, cond, threshold=1.0),
-        "threshold=0.0 / 1.0",
-    )
-    check(
-        "膨張が負なら例外",
-        _raises(ds.derive_from_coarse_run, ValueError, cond, dilate_mm=-1.0),
-        "dilate_mm=-1.0",
-    )
-    check(
-        "粗い段の体積目標は volfrac と material_mm3 の排他(両方渡すと例外)",
-        _raises(
-            ds.derive_from_coarse_run,
-            ValueError,
-            cond,
-            coarse_volfrac=0.3,
-            coarse_material_mm3=1000.0,
-        ),
-        "coarse_volfrac と coarse_material_mm3 を両方渡した",
-    )
-
-    RESULTS["case5"] = {
-        "case1_elements": int(st["case1_elements"]),
-        "design_elements": space.element_count,
-        "shrink_vs_case1": round(float(st["shrink_vs_case1"]), 4),
-        "threshold": st["threshold"],
-        "dilate_mm": st["dilate_mm"],
-        "coarse_seconds": round(float(st["coarse"]["seconds"]), 2),
-        "dilate_elements": {f"{k:g}": counts[k] for k in sorted(counts)},
-    }
-
-
-# ===========================================================================
 # 既定の導出(入口を1つにする): タスク 20260904-1416
 # ===========================================================================
 def check_default_derivation() -> None:
     print("\n[13] 既定の導出(入口が1つ)")
 
     cond = ds.demo_conditions(0.0)
-    small = {
-        "elements_long_axis": CASE5["elements_long_axis"],
-        "coarse_elements_long_axis": CASE5["coarse_elements_long_axis"],
-        "coarse_max_iter": CASE5["coarse_max_iter"],
-        "dilate_mm": CASE5["dilate_mm"],
-    }
 
-    # 連続値保持(既定)を回すための引数。**案5の引数(`small`)とは別**にする —— 既定の導出は
-    # 粗い段を持たないので、`coarse_*` を渡すと `TypeError` になる(黙って捨てない契約)。
-    #
-    # **格子はここだけ `DESIGN_SPACE_COARSE` の 14要素より上げる。** 14要素の格子で容量の8%
-    # (参照の既定)を目標にすると密度が低すぎて `simp` が残差検算で落ちる(文面は「拘束不足の
-    # 可能性が高い」になるが、実際は低密度で系が悪条件になっているだけ)。30要素なら参照の
-    # 構造が1成分で出て、k は出発値 1.5 のまま通る。
+    # 連続値保持(既定)を回すための引数。**格子はここだけ `DESIGN_SPACE_CASE1` の 14要素より
+    # 上げる。** 14要素の格子で容量の8%(参照の既定)を目標にすると密度が低すぎて `simp` が
+    # 残差検算で落ちる(文面は「拘束不足の可能性が高い」になるが、実際は低密度で系が悪条件に
+    # なっているだけ)。30要素なら参照の構造が1成分で出て、k は出発値 1.5 のまま通る。
     ref_kw = {"elements_long_axis": 30}
     case1 = ds.derive(cond, **ref_kw)
     case1_capacity = case1.element_count * float(case1.grid.spacing) ** 3
@@ -1279,11 +1024,10 @@ def check_default_derivation() -> None:
         f"材料 20/30/40/50/60% → 塊 {sizes} 要素",
     )
 
-    # --- 13-2 案1は残っている(ベースライン兼退避経路) ----------------------
+    # --- 13-2 案1は残っている(連続値保持の土台・比較のベースライン) --------
     check(
         "13-2 案1(derive)が残っていて、既定より大きい塊を返す",
-        "coarse" not in case1.stats
-        and "reference" not in case1.stats
+        "reference" not in case1.stats
         and case1.element_count > default_space.element_count,
         f"案1 {case1.element_count} 要素 / 既定 {default_space.element_count} 要素",
     )
@@ -1297,24 +1041,6 @@ def check_default_derivation() -> None:
         defaults == {"margin_ratio": ds.DEFAULT_MARGIN_RATIO, "elements_long_axis": 40}
         and ds.DEFAULT_MARGIN_RATIO == 0.25,
         f"{defaults}",
-    )
-    # **案5の既定値も動かさない**(すべて `20260904-1400` が実測で決めた値)。
-    case5_defaults = {
-        "coarse_elements_long_axis": ds.COARSE_ELEMENTS_LONG_AXIS,
-        "coarse_max_iter": ds.COARSE_MAX_ITER,
-        "threshold": ds.COARSE_THRESHOLD,
-        "dilate_mm": ds.COARSE_DILATE_MM,
-    }
-    check(
-        "13-2 案5の既定値が動いていない(粗い段 14要素・20反復 / 閾値 0.3 / 膨張 12mm)",
-        case5_defaults
-        == {
-            "coarse_elements_long_axis": 14,
-            "coarse_max_iter": 20,
-            "threshold": 0.3,
-            "dilate_mm": 12.0,
-        },
-        f"{case5_defaults}",
     )
     # **連続値保持の既定値も動かさない**(すべて hanger の実測で決めた値。
     # `design_space.py` の定数のところに根拠が書いてある)。
@@ -1334,20 +1060,14 @@ def check_default_derivation() -> None:
         f"{reference_defaults}",
     )
 
-    # --- 13-3 退避経路と未知の名前 ------------------------------------------
+    # --- 13-3 案1を名指しする口と、未知の名前 --------------------------------
+    # **`derivation="bbox"` は `optimize_run.run` が実際に名指しする口**(塊の容量と保持体積を
+    # 測るのに使う。既定の導出は材料量を要求するので、材料量の探索範囲を決める道具にできない)。
     fallback = ds.derive_default(cond, derivation="bbox", **ref_kw)
     check(
-        "13-3 derivation='bbox' で案1へ戻せる(退避経路)",
-        "coarse" not in fallback.stats and fallback.element_count == case1.element_count,
+        "13-3 derivation='bbox' で案1を名指しできる",
+        "reference" not in fallback.stats and fallback.element_count == case1.element_count,
         f"{fallback.element_count} 要素(案1 {case1.element_count} 要素)",
-    )
-    case5_fallback = ds.derive_default(cond, derivation="coarse_run", **small)
-    check(
-        "13-3 derivation='coarse_run' で案5へ戻せる(退避経路)",
-        case5_fallback.stats.get("derivation") == "coarse_run"
-        and isinstance(case5_fallback.stats.get("coarse"), dict),
-        f"{case5_fallback.element_count} 要素 / "
-        f"derivation={case5_fallback.stats.get('derivation')!r}",
     )
     check(
         "13-3 知らない導出名は例外(黙って既定へ落ちない)",
@@ -1357,7 +1077,7 @@ def check_default_derivation() -> None:
 
     # --- 13-4 material_mm3 と reference が素通しになっている -----------------
     # **後続(安全率の外側ループ)がこの2つを使う。** `material_mm3` を塞ぐと別の量ぶんを
-    # 切り出すことになり、`reference` を塞ぐと材料量ごとに参照を作り直して案5より遅くなる。
+    # 切り出すことになり、`reference` を塞ぐと材料量ごとに参照を作り直すことになる。
     wanted = 0.30 * case1_capacity
     passed = ds.derive_default(cond, material_mm3=wanted, reference=reference, **ref_kw)
     check(
@@ -1382,7 +1102,7 @@ def check_default_derivation() -> None:
             cond,
             material_mm3=wanted,
             reference=reference,
-            elements_long_axis=CASE5["elements_long_axis"] + 4,
+            elements_long_axis=ref_kw["elements_long_axis"] + 4,
         ),
         "参照と違う elements_long_axis",
     )
@@ -1402,9 +1122,7 @@ def check_default_derivation() -> None:
         # `"reference"` でなければ `None` を返すので、既定を倒しても取り残されない。
         check(
             f"13-5 {fname} が導出を名指ししていない",
-            "ds.derive(" not in code
-            and "ds.derive_from_coarse_run(" not in code
-            and "ds.derive_from_reference(" not in code,
+            "ds.derive(" not in code and "ds.derive_from_reference(" not in code,
             f"入口 derive_default 経由: {'derive_default' in code}",
         )
 
@@ -1561,23 +1279,42 @@ def check_empty_condition_face_warning() -> None:
         raised[:120] if raised else "例外が出なかった(検出力なし — 診断を外しても壊れたことに気づけない)",
     )
 
-    # --- 14-6: derive_from_coarse_run(案5)の粗い段で条件面が空だと
-    #           AttributeErrorではなく構造化された例外になる(2026-09-05 QA指摘の修正) ---
-    # 粗い段(coarse_elements_long_axis)は本番解像度より要素サイズが大きいので、本番では
-    # 空でない条件面が粗い段でだけ空になりうる。ここではどちらも同じ8要素/軸にして
-    # 確実に踏む(スカッフォールドで確認済み)。
+    # --- 14-6: 参照 run(連続値保持)で条件面が空だと AttributeError ではなく
+    #           構造化された例外になる ---
+    # **`run_topopt` の早期return(`"result"` が `None`)を受ける側は、必ず自分で見てから
+    # `.rho` へ触る。** 既定の導出でその位置に居るのは `build_reference` である
+    # (`derive_from_reference` は参照が無ければここを通る)。参照 run は本番と同じ格子で
+    # 回るので、`cond`(突起の面が荷重)をそのまま渡せば踏む。
+    ref_kw = {"elements_long_axis": 8, "margin_ratio": 0.1}
+
+    # 正常系を先に見る。**空の条件面が無いときにガードが誤爆しないこと**を見ておかないと、
+    # 「常に上げる」実装でも下の例外の検査は緑になる。
+    cond_ok = ds.Conditions(keep=tiny, fixed_faces=big[0], load_faces=big[1], obstacle=None)
+    base_ok = ds.derive(cond_ok, **ref_kw)
+    # **材料量は保持ソリッドを含む総体積である**(`topopt-absolute-volume-includes-the-keep-region`)。
+    # 題材の `tiny` は塊の 46% が保持なので、容量に対する分率で置くと保持を下回って
+    # `VolumeTargetError(below_minimum)` になる。達成可能区間の中で取る。
+    ev = float(base_ok.grid.element_volume)
+    solid_mm3 = (
+        int(np.count_nonzero(np.asarray(base_ok.model.keep, dtype=bool) & base_ok.mask)) * ev
+    )
+    material_ok = solid_mm3 + 0.30 * (base_ok.element_count * ev - solid_mm3)
+    normal_reference = ds.build_reference(
+        cond_ok, material_mm3=material_ok, max_iter=2, stl_path=scratch_stl, **ref_kw
+    )
+    check(
+        "14-6 正常系: 空の条件面が無ければ build_reference は例外にならず参照を返す",
+        normal_reference.rho.size == base_ok.mask.size and normal_reference.order.size > 0,
+        f"ρ {normal_reference.rho.size} 要素 / 順位 {normal_reference.order.size} 本 / "
+        f"回廊 {normal_reference.corridor} 本",
+    )
+
     raised_type = ""
     raised_faces: list = []
     raised_msg = ""
     try:
-        ds.derive_from_coarse_run(
-            cond,
-            elements_long_axis=8,
-            coarse_elements_long_axis=8,
-            coarse_max_iter=2,
-            margin_ratio=0.1,
-        )
-    except ds.CoarseRunConditionFacesEmptyError as exc:
+        ds.build_reference(cond, material_mm3=material_ok, max_iter=2, stl_path=scratch_stl, **ref_kw)
+    except ds.ReferenceRunConditionFacesEmptyError as exc:
         raised_type = type(exc).__name__
         raised_faces = exc.empty_condition_faces
         raised_msg = str(exc)
@@ -1585,8 +1322,8 @@ def check_empty_condition_face_warning() -> None:
         raised_type = type(exc).__name__
         raised_msg = str(exc)
     check(
-        "14-6 derive_from_coarse_run(案5)の粗い段で条件面が空でも AttributeError にならない",
-        raised_type == "CoarseRunConditionFacesEmptyError",
+        "14-6 build_reference(参照 run)で条件面が空でも AttributeError にならない",
+        raised_type == "ReferenceRunConditionFacesEmptyError",
         f"{raised_type}: {raised_msg[:120]}",
     )
     check(
@@ -1596,31 +1333,28 @@ def check_empty_condition_face_warning() -> None:
         and raised_faces[0]["face_index"] == empty_face,
         f"{raised_faces}",
     )
+    check(
+        "14-6 文面が参照 run の直し方(要素サイズ)を名指ししている",
+        "要素サイズ" in raised_msg and f"面{empty_face}" in raised_msg,
+        raised_msg[:150],
+    )
 
-    # 案5は退避経路になったが、derive_default(derivation='coarse_run') 経由でも同じ例外に
-    # なることは確かめておく —— 戻したときに診断だけ落ちていては退避にならない。
+    # **入口(`derive_default` = 既定の導出)を通しても同じ例外になる。** 製品の経路は
+    # 参照を渡さずにここへ入ることがあり、そのとき参照は `derive_from_reference` の中で作られる。
     default_raised_type = ""
     try:
-        ds.derive_default(
-            cond,
-            derivation="coarse_run",
-            elements_long_axis=8,
-            coarse_elements_long_axis=8,
-            coarse_max_iter=2,
-            margin_ratio=0.1,
-        )
-    except ds.CoarseRunConditionFacesEmptyError as exc:
+        ds.derive_default(cond, material_mm3=material_ok, reference_max_iter=2, **ref_kw)
+    except ds.ReferenceRunConditionFacesEmptyError as exc:
         default_raised_type = type(exc).__name__
     except Exception as exc:  # noqa: BLE001
         default_raised_type = type(exc).__name__
     check(
-        "14-6 入口(derive_default, derivation='coarse_run')を通しても同じ例外になる",
-        default_raised_type == "CoarseRunConditionFacesEmptyError",
+        "14-6 入口(derive_default = 既定の導出)を通しても同じ例外になる",
+        default_raised_type == "ReferenceRunConditionFacesEmptyError",
         f"{default_raised_type}",
     )
 
-    # --- 14-7: 変異検査 — derive_from_coarse_run のガードを外すと元の AttributeError に
-    #           戻る(検出力の確認。今回のfollow-up修正そのものの検出力) ---
+    # --- 14-7: 変異検査 — build_reference のガードを外すと元の AttributeError に戻る ---
     original_run_topopt = ds.run_topopt
 
     def _strip_empty_condition_faces(*args, **kwargs):
@@ -1633,19 +1367,13 @@ def check_empty_condition_face_warning() -> None:
     ds.run_topopt = _strip_empty_condition_faces
     raised_type2 = ""
     try:
-        ds.derive_from_coarse_run(
-            cond,
-            elements_long_axis=8,
-            coarse_elements_long_axis=8,
-            coarse_max_iter=2,
-            margin_ratio=0.1,
-        )
+        ds.build_reference(cond, material_mm3=material_ok, max_iter=2, stl_path=scratch_stl, **ref_kw)
     except Exception as exc:  # noqa: BLE001
         raised_type2 = type(exc).__name__
     finally:
         ds.run_topopt = original_run_topopt
     check(
-        "14-7 変異検査: derive_from_coarse_runのガードを外すと元のAttributeErrorに戻る(検出力の確認)",
+        "14-7 変異検査: build_reference のガードを外すと元の AttributeError に戻る(検出力の確認)",
         raised_type2 == "AttributeError",
         f"{raised_type2}(空リストで無力化した場合)",
     )
@@ -1655,7 +1383,6 @@ def main() -> int:
     print("=" * 72)
     print("check_design_space.py : 塊(設計空間)の受入検査")
     print("  [1]-[4] 分離 / [5]-[9] 案1(外接直方体+余白) / [10] 連結性ガード")
-    print("  [11] 案5(粗く1回回して膨らませる)")
     print("  [13] 既定の導出(入口が1つ) / [14] 空の条件面のメッセージ")
     print("=" * 72)
     # **1件が例外で落ちても残りを走らせる。** 実装を壊したときに最初の1件で止まると、
@@ -1671,7 +1398,6 @@ def main() -> int:
         check_case1_obstacle,
         check_case1_margin_is_load_bearing,
         check_case1_connectivity,
-        check_case5_coarse_run,
         check_default_derivation,
         check_empty_condition_face_warning,
     ):
