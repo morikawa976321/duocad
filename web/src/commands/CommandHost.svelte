@@ -28,6 +28,7 @@
    * 見ているだけ・触っていない状態を画面に存在させるための表現である
    * (方針 [[duocad-show-only-what-is-needed]])。`null` の間は引数の収集・プレビュー・Enterの確定を
    * すべて素通りさせ、`#command-abort` も描かない(見えないだけではなくDOMに無い)。
+   * スケッチモードの既定「選ぶ」(`select_in_sketch`)も同じ待機状態で、中断は出さない。
    * `onWants([])` / `onWantsPlane(false)` を送るので、辺・領域・基準平面のピックも止まる —
    * ただし**面・頂点は常に指せる**ので「見ているだけ、選べる」が既定状態になる。
    *
@@ -208,6 +209,13 @@
   // svelte-ignore state_referenced_locally
   let commandId = $state<string | null>(defaultCommandId ?? null)
   const command = $derived<CommandDef | null>(commandId === null ? null : findCommand(commandId, commands))
+
+  /**
+   * verb が実際に走っているか。**無起動(`null`)と、スケッチの既定「選ぶ」は除く** ——
+   * 後者も `command !== null` だが、領域を選ぶだけの待機状態なので中断は要らない。
+   */
+  const idleCommandId = defaultCommandId ?? null
+  const commandActive = $derived(commandId !== null && commandId !== idleCommandId)
 
   /** 数値引数の生の入力(引数名 -> 打った文字列)。確定・中断のたびに空へ戻す。 */
   let numberText = $state<Record<string, string>>({})
@@ -834,6 +842,7 @@
 
   function onKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') {
+      if (!commandActive) return
       event.preventDefault()
       abort()
       return
@@ -967,8 +976,8 @@
     </div>
   {/if}
 
-  {#if command !== null}
-    <!-- **無起動ではこの行ごと出さない**。`#command-abort` はDOMに無いことが
+  {#if commandActive}
+    <!-- **無起動・スケッチの「選ぶ」ではこの行ごと出さない**。`#command-abort` はDOMに無いことが
          完了条件そのものなので、`disabled`/非表示ではなく `{#if}` でDOMから外す。 -->
     <div class="row">
       {#each numberArgs as spec (spec.name)}
