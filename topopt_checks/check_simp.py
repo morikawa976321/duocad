@@ -508,12 +508,15 @@ def check_reactions() -> None:
         nelx, nely, nelz, max_iter=3, change_tol=0.0, reactions=groups
     )
     fractions = [r.fraction for r in result.reactions]
+    # **合計が 1 になることを要求しない。** 一定なのは合力ベクトルの和(上の (d))で、
+    # 大きさの和は三角不等式より |F| 以上にしかならない —— この題材ではたまたま
+    # ほぼ 1 だが、hanger では 3.85 になる(docs/TOPOPT_REACTION.md)。
     check(
         "optimize が反力を Result と履歴の両方に載せる",
         len(result.reactions) == 2
         and all(len(item.reactions) == 2 for item in result.history)
-        and abs(sum(fractions) - 1.0) < 1e-6,
-        f"割合 {['%.4f' % v for v in fractions]}",
+        and sum(fractions) >= 1.0 - 1e-9,
+        f"割合 {['%.4f' % v for v in fractions]}(合計 {sum(fractions):.6f} >= 1)",
     )
     check(
         "reactions を渡さなければ1つも計算しない",
@@ -621,10 +624,19 @@ def check_reaction_constraint() -> None:
             nelx, nely, nelz, max_iter=1, update="mma", reactions=[], reaction_min=0.2
         )
     )
+    # 反復が1回も回らなければ反力は1つも測れていない。**測っていないものを
+    # 「満たした」と読ませない。**
+    caught_zero_iter = _raises(
+        lambda: simp.optimize(
+            nelx, nely, nelz, max_iter=0, update="mma",
+            reactions=groups, reaction_min=0.2,
+        )
+    )
     check(
-        "OC への反力制約、グループ無し、空のグループ列はどれも例外",
-        caught_oc and caught_alone and caught_empty,
-        f"OC={caught_oc} / グループ無し={caught_alone} / 空={caught_empty}",
+        "OC への反力制約、グループ無し、空のグループ列、反復0回はどれも例外",
+        caught_oc and caught_alone and caught_empty and caught_zero_iter,
+        f"OC={caught_oc} / グループ無し={caught_alone} / 空={caught_empty} / "
+        f"反復0={caught_zero_iter}",
     )
 
     # (e) 満たせない下限は失敗として返る。**妥協した設計を返さない**

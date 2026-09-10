@@ -1402,6 +1402,17 @@ def _require_reactions(
     `mesh.remove_islands` に消える —— そこまで進んでから「なぜか部品が足りない」に
     なるより、ここで名指しして落ちるほうがよい。
     """
+    if not reactions:
+        # **1度も測っていないものを「満たした」と読まない。** 反復が1回も回らなければ
+        # (`max_iter=0`・早期break)ここは空で来る。空のまま return すると
+        # `reaction_min` を持ったまま無検証の `Result` が合格として出る。
+        raise ReactionTargetError(
+            f"反力の下限 {required:.1%} を課したのに、反力を1度も測っていない"
+            "(最適化の反復が1回も回っていない)。max_iter を1以上にすること",
+            required=required,
+            reactions=reactions,
+            result=result,
+        )
     floor = required * (1.0 - REACTION_TOLERANCE)
     short = [item for item in reactions if not item.fraction >= floor]
     if not short:
