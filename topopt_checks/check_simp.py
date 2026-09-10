@@ -25,6 +25,10 @@
    `void_mask` を渡さない片持ち梁なので、この経路には届かない。
    **検出力**: `extra_fixed_dofs` を渡さずに void だけ外すと孤立した自由自由度が出る /
    コンプライアンスを全要素で足すと F・U から外れる。
+7. **反力と多重右辺** — `R = (K u - f)|_fixed` が全体の釣り合い(Σ R = -F)を満たすか /
+   `stiffness_apply` が組み立てた K の積と一致するか / `solve_many` が右辺1本のとき
+   `solve` と**1ビット同じ**か・複数本でも個別に解いたのと一致するか /
+   `ReactionGroup` の契約(拘束の部分集合・重ならない)を破ると落ちるか。
 """
 
 from __future__ import annotations
@@ -396,6 +400,127 @@ def check_void_assembly() -> None:
     RESULTS["void_compliance_rel_diff"] = rel
 
 
+# ---------------------------------------------------------------------------
+# 7. 反力と多重右辺
+# ---------------------------------------------------------------------------
+REACTION_GRID = (10, 5, 5)
+
+
+def check_reactions() -> None:
+    nelx, nely, nelz = REACTION_GRID
+    print(f"\n[7] 反力と多重右辺 ({nelx}x{nely}x{nelz})")
+    model = simp.Model(nelx, nely, nelz)
+    rng = np.random.default_rng(7)
+    rho = 0.5 + 0.5 * rng.random((nelx, nely, nelz))
+
+    # (a) K を組み立てずに掛けても同じ行列を掛けている
+    vec = rng.standard_normal(model.ndof)
+    exact = model.assemble(rho, 3.0) @ vec
+    lean = model.stiffness_apply(rho, 3.0, vec)
+    rel = float(np.linalg.norm(lean - exact) / np.linalg.norm(exact))
+    check(
+        "stiffness_apply が組み立てた K の積と一致する",
+        rel < 1e-12,
+        f"相対 {rel:.3e}",
+    )
+
+    # (b) 右辺1本の solve_many は solve と1ビット同じ(既定経路が動いていない根拠)
+    u = model.solve(rho, 3.0, solver="direct")
+    many = model.solve_many(rho, 3.0, model.f[None, :], solver="direct")
+    check(
+        "solve_many(右辺1本) が solve と1ビット同じ",
+        np.array_equal(many[0], u),
+        f"max|差| = {float(np.abs(many[0] - u).max()):.3e}",
+    )
+
+    # (c) 多重右辺は前処理を1回だけ作って解く。答えは個別に解いたのと一致する
+    extra = rng.standard_normal(model.ndof)
+    extra[model.fixed] = 0.0
+    pair = model.solve_many(rho, 3.0, np.stack([model.f, extra]), cg_rtol=1e-12)
+    alone = model.solve_many(rho, 3.0, extra[None, :], cg_rtol=1e-12)[0]
+    rel = float(np.linalg.norm(pair[1] - alone) / np.linalg.norm(alone))
+    with simp.collect_solve_stats() as stats:
+        model.solve_many(rho, 3.0, np.stack([model.f, extra]))
+    check(
+        "多重右辺の解が個別に解いたのと一致する",
+        rel < 1e-8,
+        f"相対 {rel:.3e}",
+    )
+    check(
+        "多重右辺でも多重格子の setup は1回だけ",
+        stats["solves"] == 2 and stats["mg_setup_seconds"] > 0.0,
+        f"solve {stats['solves']} 本 / setup {stats['mg_setup_seconds']:.3f}秒",
+    )
+
+    # (d) 全体の釣り合い。反力の総和は荷重の合力の符号を反転したもの
+    residual = model.stiffness_apply(rho, 3.0, u) - model.f
+    total = np.bincount(model.fixed % 3, weights=residual[model.fixed], minlength=3)
+    load = simp.load_resultant(model.f)
+    err = float(np.linalg.norm(total + load) / np.linalg.norm(load))
+    check(
+        "反力の総和 = -(荷重の合力)",
+        err < 1e-8,
+        f"Σ R = {np.array2string(total, precision=6)} / F = "
+        f"{np.array2string(load, precision=6)} (相対 {err:.3e})",
+    )
+
+    # (e) グループへ割っても総和は変わらない
+    half = model.fixed.size // 2
+    groups = [
+        simp.ReactionGroup("lower", model.fixed[:half]),
+        simp.ReactionGroup("upper", model.fixed[half:]),
+    ]
+    vectors = simp.reaction_forces(model, rho, 3.0, u, groups)
+    err = float(np.linalg.norm(vectors.sum(axis=0) - total) / np.linalg.norm(total))
+    check(
+        "グループごとの反力を足すと全体の反力になる",
+        err < 1e-12,
+        f"2グループの和の相対差 {err:.3e}",
+    )
+
+    # (f) 契約の検出力。拘束されていない自由度・重なるグループは落ちる
+    free_one = simp.ReactionGroup("bad", model.free[:3])
+    caught_free = _raises(lambda: simp._check_reaction_groups(model, [free_one]))
+    overlap = [
+        simp.ReactionGroup("a", model.fixed[:half]),
+        simp.ReactionGroup("b", model.fixed[half - 1 :]),
+    ]
+    caught_overlap = _raises(lambda: simp._check_reaction_groups(model, overlap))
+    check(
+        "契約を破った ReactionGroup は例外になる",
+        caught_free and caught_overlap,
+        f"拘束外={caught_free} / 重なり={caught_overlap}",
+    )
+
+    # (g) optimize から取り出せる(反復ごとと最終)
+    result = simp.optimize(
+        nelx, nely, nelz, max_iter=3, change_tol=0.0, reactions=groups
+    )
+    fractions = [r.fraction for r in result.reactions]
+    check(
+        "optimize が反力を Result と履歴の両方に載せる",
+        len(result.reactions) == 2
+        and all(len(item.reactions) == 2 for item in result.history)
+        and abs(sum(fractions) - 1.0) < 1e-6,
+        f"割合 {['%.4f' % v for v in fractions]}",
+    )
+    check(
+        "reactions を渡さなければ1つも計算しない",
+        simp.optimize(nelx, nely, nelz, max_iter=1).reactions == (),
+        "既定は空",
+    )
+    RESULTS["reaction_fractions"] = [float(v) for v in fractions]
+
+
+def _raises(call) -> bool:
+    """呼んで ValueError が出れば True。**検出力の検査でしか使わない。**"""
+    try:
+        call()
+    except ValueError:
+        return True
+    return False
+
+
 def main() -> int:
     print("=" * 72)
     print("check_simp.py : SIMPトポロジー最適化の受入検査")
@@ -405,6 +530,7 @@ def main() -> int:
     check_preset()
     check_symmetry_direct()
     check_void_assembly()
+    check_reactions()
 
     print("\n" + "=" * 72)
     print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))

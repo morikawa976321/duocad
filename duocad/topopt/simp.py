@@ -6,7 +6,7 @@ import contextlib
 import os
 import time
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -797,6 +797,43 @@ class Model:
         `threads=1` は並列化の前と**同じコード経路**(`blocked=None` のまま `_vcycle` を呼ぶ・
         CG にも生の `kf` を渡す)を通るので、速度も答えも変わらない(退避経路)。
         """
+        return self.solve_many(
+            rho,
+            penal,
+            self.f[None, :],
+            solver=solver,
+            cg_rtol=cg_rtol,
+            u0=None if u0 is None else u0[None, :],
+            mg=mg,
+            threads=threads,
+        )[0]
+
+    def solve_many(
+        self,
+        rho: np.ndarray,
+        penal: float,
+        rhs: np.ndarray,
+        *,
+        solver: str = "mg",
+        cg_rtol: float = 1e-9,
+        u0: np.ndarray | None = None,
+        mg: MGOptions | None = None,
+        threads: int | None = None,
+    ) -> np.ndarray:
+        """**同じ K を複数の右辺で解く。** `rhs` (nrhs, ndof) → 解 (nrhs, ndof)。
+
+        `solve` はこれを右辺1本で呼ぶ薄い包みで、**1本のときの数値も経路も
+        `solve_many` 導入前と同一**である(組み立て → 縮約 → 前処理 → CG の順も同じ)。
+
+        **多重右辺の要点は前処理を作り直さないこと。** `mg_preconditioner` は毎回
+        RAP と最粗格子の LU をやり直す(移送作用素だけがキャッシュ済み)ので、右辺ごとに
+        `solve` を呼ぶと setup が本数ぶん重なる。同じ設計反復では K が同じなので、
+        setup 1回で回せば**追加費用は CG の反復ぶんだけ**になる。反力制約の随伴
+        (拘束面グループごとに1本)がこの口を使う。
+
+        `u0` を渡すなら `rhs` と同じ形 (nrhs, ndof)。**右辺が零ベクトルの本は CG を
+        回さず零解を返す** —— 残差の相対判定が 0/0 になるため。
+        """
         if solver not in ("mg", "cg", "direct"):
             raise ValueError(f"未知の解法: {solver!r}")
         # **既定を束縛時ではなく呼び出し時に読む。** こうしておくと `simp.MG_DEFAULT` を
@@ -804,20 +841,23 @@ class Model:
         # 一斉に変えられる。既定値の当たりを取るのに要る。
         mg = MG_DEFAULT if mg is None else mg
         threads = PARALLEL_THREADS if threads is None else max(1, int(threads))
+        rhs = np.atleast_2d(np.asarray(rhs, dtype=float))
+        if rhs.shape[1] != self.ndof:
+            raise ValueError(f"右辺の長さが {rhs.shape[1]}、期待は ndof={self.ndof}")
+        if u0 is not None:
+            u0 = np.atleast_2d(np.asarray(u0, dtype=float))
+            if u0.shape != rhs.shape:
+                raise ValueError(f"u0 の形が {u0.shape}、期待は右辺と同じ {rhs.shape}")
         stats = _SOLVE_STATS
         t0 = time.perf_counter()
         kg = self.assemble(rho, penal)
         t1 = time.perf_counter()
         kf = kg[self.free, :][:, self.free].tocsc()
-        ff = self.f[self.free]
         t2 = time.perf_counter()
-        x0 = np.zeros(self.free.size) if u0 is None else u0[self.free].copy()
-        iterations = 0
-        fell_back = False
+        precond = None
         setup_seconds = 0.0
-        if solver == "direct":
-            u_free = spla.spsolve(kf, ff)
-        else:
+        a_op: sp.spmatrix | spla.LinearOperator = kf
+        if solver != "direct":
             if solver == "mg":
                 t_setup = time.perf_counter()
                 precond = self.mg_preconditioner(kf, mg, threads=threads)
@@ -825,45 +865,74 @@ class Model:
             else:
                 diag = kf.diagonal()
                 precond = spla.LinearOperator(kf.shape, matvec=lambda v, d=diag: v / d)
-            counter = None
-            if stats is not None:
-
-                def counter(_xk: np.ndarray) -> None:
-                    nonlocal iterations
-                    iterations += 1
-
             # **CG 自身の `A@x` も行ブロックで並列化する**(threads<=1 なら `kf` を生のまま
             # 渡すので `spla.cg` は元のコード経路と同じ:`_BlockedMatvec` を経由しない)。
-            a_op: sp.spmatrix | spla.LinearOperator = kf
             if threads > 1:
                 a_mv = _BlockedMatvec(kf, threads)
                 a_op = spla.LinearOperator(kf.shape, matvec=a_mv, dtype=float)
-            u_free, info = spla.cg(a_op, ff, x0=x0, M=precond, rtol=cg_rtol, callback=counter)
-            fell_back = info != 0
-            if info != 0:
-                warnings.warn(
-                    f"CG が収束しませんでした (info={info})。直接解法へフォールバックします。",
-                    RuntimeWarning,
-                    stacklevel=2,
+        out = np.zeros((rhs.shape[0], self.ndof))
+        for index in range(rhs.shape[0]):
+            ff = rhs[index][self.free]
+            x0 = np.zeros(self.free.size) if u0 is None else u0[index][self.free].copy()
+            iterations = 0
+            fell_back = False
+            if not np.any(ff):
+                u_free = np.zeros(self.free.size)
+            elif solver == "direct":
+                u_free = spla.spsolve(kf, ff)
+            else:
+                counter = None
+                if stats is not None:
+
+                    def counter(_xk: np.ndarray) -> None:
+                        nonlocal iterations
+                        iterations += 1
+
+                u_free, info = spla.cg(
+                    a_op, ff, x0=x0, M=precond, rtol=cg_rtol, callback=counter
                 )
-                with warnings.catch_warnings():
-                    # 特異行列の警告はここでは要らない(下の残差検査が本番の判定)。
-                    warnings.simplefilter("ignore")
-                    u_free = spla.spsolve(kf, ff)
+                fell_back = info != 0
+                if info != 0:
+                    warnings.warn(
+                        f"CG が収束しませんでした (info={info})。直接解法へフォールバックします。",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    with warnings.catch_warnings():
+                        # 特異行列の警告はここでは要らない(下の残差検査が本番の判定)。
+                        warnings.simplefilter("ignore")
+                        u_free = spla.spsolve(kf, ff)
+            if stats is not None:
+                stats["solves"] += 1
+                stats["cg_iterations"] += iterations
+                stats["cg_iterations_each"].append(iterations)
+                stats["fallbacks"] += int(fell_back)
+                stats["direct_solves"] += int(solver == "direct")
+            self._verify_solution(kf, ff, u_free)
+            out[index, self.free] = u_free
         if stats is not None:
-            stats["solves"] += 1
             stats["assemble_seconds"] += t1 - t0
             stats["slice_seconds"] += t2 - t1
             stats["solve_seconds"] += time.perf_counter() - t2
-            stats["cg_iterations"] += iterations
-            stats["cg_iterations_each"].append(iterations)
             stats["mg_setup_seconds"] += setup_seconds
-            stats["fallbacks"] += int(fell_back)
-            stats["direct_solves"] += int(solver == "direct")
-        self._verify_solution(kf, ff, u_free)
-        u = np.zeros(self.ndof)
-        u[self.free] = u_free
-        return u
+        return out
+
+    def stiffness_apply(self, rho: np.ndarray, penal: float, vec: np.ndarray) -> np.ndarray:
+        """K @ vec を、K を組み立てずに要素ループで計算する (ndof,)。
+
+        **`assemble` と同じ要素の範囲**(`active`)で足す —— 範囲が違えば別の行列を掛けた
+        ことになる(層をまたぐ契約)。反力 `R = (K u - f)|_fixed` と、その随伴の右辺
+        `K_fs c` を作るための口で、どちらも K を持っていない場所から呼ばれる。
+        """
+        flat = np.asarray(rho).ravel()
+        edof = self.edof
+        if self.active is not None:
+            flat = flat[self.active]
+            edof = edof[self.active]
+        ee = self.emin + flat**penal * (self.E - self.emin)
+        # `ke` は対称なので `ve @ ke` が要素ごとの `ke @ v_e` になる。
+        contrib = (vec[edof] @ self.ke) * ee[:, None]
+        return np.bincount(edof.ravel(), weights=contrib.ravel(), minlength=self.ndof)
 
     def _verify_solution(self, kf, ff: np.ndarray, u_free: np.ndarray) -> None:
         """`K_ff u = f_f` を残差で検算する。通らなければ拘束不足を名指しして落とす。"""
@@ -927,12 +996,115 @@ def _floating_dofs(nelx: int, nely: int, nelz: int, void: np.ndarray) -> np.ndar
 
 
 @dataclass(frozen=True)
+class ReactionGroup:
+    """反力をまとめて取り出す拘束自由度の集まり(ふつうは CAD の拘束面1枚)。
+
+    **層をまたぐ契約**: `dofs` は `Model.fixed` の部分集合で、グループどうしは
+    重ならないこと。重なると合計が全体の釣り合い(Σ R = -F)を超え、`fraction` が
+    「その取付点が受け持つ割合」を意味しなくなる。`optimize` が両方とも検算する。
+    """
+
+    name: str
+    dofs: np.ndarray
+
+
+@dataclass(frozen=True)
+class Reaction:
+    """1つの拘束面グループが受け持っている反力。
+
+    **単位は `optimize` に渡した荷重と同じ**(`anchor.run_pipeline` 経由なら無次元で、
+    荷重の総量が 1.0)。`fraction` は `magnitude / |全荷重の合力|` なので単位に依らない
+    —— 「この取付点が荷重の何割を受け持っているか」を読むのはこちら。
+    """
+
+    name: str
+    force: tuple[float, float, float]
+    magnitude: float
+    fraction: float
+
+
+def load_resultant(f: np.ndarray) -> np.ndarray:
+    """荷重ベクトル (ndof,) → 合力 (3,)。自由度番号は `3*節点+軸` なので `dof % 3` が軸。"""
+    f = np.asarray(f, dtype=float).ravel()
+    return np.bincount(np.arange(f.size) % 3, weights=f, minlength=3)
+
+
+def reaction_forces(
+    model: "Model",
+    rho: np.ndarray,
+    penal: float,
+    u: np.ndarray,
+    groups: Sequence[ReactionGroup],
+) -> np.ndarray:
+    """拘束面グループごとの反力の合力 (len(groups), 3)。
+
+    `R = (K u - f)|_fixed` —— **いま解いている `K u = f` から直接出る**ので、新しい
+    順問題は要らない。符号は「支持が構造に及ぼす力」で、全グループを足すと荷重の合力の
+    **符号を反転したもの**になる(剛体並進が K の零空間にあることから従う)。
+    """
+    residual = model.stiffness_apply(rho, penal, u) - model.f
+    out = np.zeros((len(groups), 3))
+    for index, group in enumerate(groups):
+        dofs = np.asarray(group.dofs, dtype=np.int64).ravel()
+        out[index] = np.bincount(dofs % 3, weights=residual[dofs], minlength=3)
+    return out
+
+
+def _as_reactions(
+    groups: Sequence[ReactionGroup], vectors: np.ndarray, reference: float
+) -> tuple[Reaction, ...]:
+    """合力ベクトルの並び → `Reaction` の並び。`reference` は荷重の合力の大きさ。"""
+    out = []
+    for group, vector in zip(groups, vectors):
+        magnitude = float(np.linalg.norm(vector))
+        out.append(
+            Reaction(
+                name=group.name,
+                force=(float(vector[0]), float(vector[1]), float(vector[2])),
+                magnitude=magnitude,
+                fraction=magnitude / reference if reference > 0.0 else float("nan"),
+            )
+        )
+    return tuple(out)
+
+
+def _check_reaction_groups(model: "Model", groups: Sequence[ReactionGroup]) -> None:
+    """`ReactionGroup` の契約(`fixed` の部分集合・互いに重ならない)を検算する。"""
+    if not groups:
+        raise ValueError("reactions が空(反力を取り出すグループが1つも無い)")
+    collected = []
+    for group in groups:
+        dofs = np.asarray(group.dofs, dtype=np.int64).ravel()
+        if dofs.size == 0:
+            raise ValueError(f"反力グループ {group.name!r} に自由度が1つも無い")
+        outside = np.setdiff1d(dofs, model.fixed)
+        if outside.size:
+            raise ValueError(
+                f"反力グループ {group.name!r} に拘束されていない自由度が "
+                f"{outside.size} 個ある(例 {int(outside[0])})。"
+                "反力は固定自由度にしか立たないので、拘束面から作った自由度を渡すこと"
+            )
+        collected.append(dofs)
+    allof = np.concatenate(collected)
+    if np.unique(allof).size != allof.size:
+        raise ValueError(
+            "反力グループどうしが自由度を共有している"
+            f"(のべ {allof.size} に対して相異なるのは {np.unique(allof).size})。"
+            "同じ節点を2つの取付点に数えると、受け持ちの割合が全体の釣り合いと合わなくなる"
+        )
+
+
+@dataclass(frozen=True)
 class Iteration:
     it: int
     compliance: float
     volfrac: float
     change: float
     seconds: float
+    # 反力を測っていない(`optimize(reactions=None)`)ときは空。**この反復で解いた
+    # `x_phys` に対する値**であって、`step` の後の設計変数に対する値ではない
+    # (`compliance` と同じ足並み)。
+    reactions: tuple[Reaction, ...] = ()
 
 
 @dataclass
@@ -957,6 +1129,9 @@ class Result:
     # 例外にならず軽い解が返る)。受け取った側が `target_volume` との差をどう読むかを
     # 決めるのに要る。
     update: str = DEFAULT_UPDATE
+    # 最後に解いた密度場での、拘束面グループごとの反力。`optimize(reactions=...)` を
+    # 渡さなければ空。**「効いていない取付点」はここが `fraction ≈ 0` で出る。**
+    reactions: tuple[Reaction, ...] = ()
     # `optimize(keep_model=True)` のときだけ入る、実際に解いた `Model`。**既定は None** ——
     # `Model` は `_iK`/`_jK` に**組み立てる要素数**×576 の添字配列を2本持つので、要らない
     # 呼び出しにまで数十MBを持たせない。後処理(`stress.py`)が拘束・荷重を手で組み直さずに
@@ -1511,6 +1686,7 @@ def optimize(
     load: np.ndarray | None = None,
     void_mask: np.ndarray | None = None,
     solid_mask: np.ndarray | None = None,
+    reactions: Sequence[ReactionGroup] | None = None,
     keep_model: bool = False,
 ) -> Result:
     """SIMPでコンプライアンス最小化を行う。
@@ -1552,6 +1728,11 @@ def optimize(
       `FilterRadiusError`(逃げ道2つを数字で持つ)。
     - どちらも渡さなければ `DEFAULT_RMIN`。**床とは別物** —— 床は「これより下は壊れる」、
       既定は「普通に使ったときに出したい形」。
+
+    `reactions` は**反力を取り出す拘束自由度のグループ**(ふつう CAD の拘束面1枚に1つ)。
+    渡すと各反復で `R = (K u - f)|_fixed` をグループごとに足し、`Iteration.reactions` と
+    `Result.reactions` に載せる。**渡さなければ1つも計算しない**(既定の費用は変わらない)。
+    追加費用は反復あたり要素ループ1回ぶんで、線形解は増えない。
 
     **更新則を選ぶ** —— `update` は `UPDATES` の名前(既定 `DEFAULT_UPDATE` = `"oc"`)。
     知らない名前は既定へ落とさず `ValueError`。差し替わるのは更新則だけで、`Model`・
@@ -1634,6 +1815,10 @@ def optimize(
         n_solid=int(np.count_nonzero(solid)),
     )
     live = movable.astype(float)
+    groups: tuple[ReactionGroup, ...] = () if reactions is None else tuple(reactions)
+    if groups:
+        _check_reaction_groups(model, groups)
+    load_reference = float(np.linalg.norm(load_resultant(model.f)))
 
     def _physical(design: np.ndarray) -> np.ndarray:
         """設計変数 → 物理密度。**パッシブ要素は密度フィルタの後で上書きする。**
@@ -1667,11 +1852,18 @@ def optimize(
     u = np.zeros(model.ndof)
     history: list[Iteration] = []
     stopped_by = "max_iter"
+    reaction_now: tuple[Reaction, ...] = ()
 
     for it in range(1, max_iter + 1):
         t0 = time.perf_counter()
         u = model.solve(x_phys, penal, solver=solver, cg_rtol=cg_rtol, u0=u, threads=threads)
         c, ce = model.compliance(x_phys, penal, u)
+        if groups:
+            reaction_now = _as_reactions(
+                groups,
+                reaction_forces(model, x_phys, penal, u, groups),
+                load_reference,
+            )
         dc = -penal * x_phys ** (penal - 1.0) * (E - emin) * ce
         dv = np.ones_like(x)
         # `live` は「その要素の物理密度が設計変数で動くか」。パッシブ要素の物理密度は
@@ -1699,6 +1891,7 @@ def optimize(
             volfrac=float(x_phys.mean()),
             change=change,
             seconds=seconds,
+            reactions=reaction_now,
         )
         history.append(iteration)
         if callback is not None:
@@ -1722,6 +1915,7 @@ def optimize(
         ),
         rmin=rmin_resolved,
         update=update,
+        reactions=reaction_now,
         model=model if keep_model else None,
     )
 

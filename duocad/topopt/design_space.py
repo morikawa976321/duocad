@@ -1124,6 +1124,8 @@ def run_topopt(
     面ごとの力ベクトル[N])のどちらか一方。どちらも `anchor.run_pipeline` の同名の引数へ
     そのまま渡る(意味の正はそちら)。
 
+    戻り値の `"reactions"` は拘束面1枚ごとの反力(`anchor.run_pipeline` の契約そのまま)。
+
     拘束面・荷重面が要素サイズより小さくて格子節点が1つも付かないと
     (`anchor.AnchorTable.empty_faces()`)、**例外にはせず**戻り値の
     `"empty_condition_faces"` に診断が積まれて早期returnする(`anchor.run_pipeline` の契約

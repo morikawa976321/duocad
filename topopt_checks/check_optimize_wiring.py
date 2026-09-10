@@ -296,6 +296,28 @@ def check_load_lands_on_the_chosen_face(session, out) -> None:
         and len(measured["load_mm_each"]) == len(session.document.optimize.loads),
         f"拘束 {measured['fixed_mm_each']} / 荷重 {measured['load_mm_each']}",
     )
+    # **拘束面ごとの反力が応答に載っている。** 「効いていない取付点」はここが 0 で出る ——
+    # 拘束面が1枚しかないこの題材では、その1枚が荷重の全部を受け持つのが正しい答えである。
+    reactions = out["reactions"]
+    total = sum(item["fraction"] for item in reactions)
+    check(
+        "拘束面ごとの反力が拘束面の枚数ぶん載っている",
+        len(reactions) == len(session.document.optimize.fixtures),
+        f"{[item['name'] for item in reactions]}",
+    )
+    check(
+        "受け持ちの割合の合計が荷重の合力と釣り合っている",
+        abs(total - 1.0) < 1e-3,
+        f"合計 {total:.6f} / 内訳 {[round(item['fraction'], 4) for item in reactions]}",
+    )
+    check(
+        "反力が素の値だけでできている(WebSocket にそのまま載る)",
+        json.loads(json.dumps(reactions)) == reactions,
+        f"{len(reactions)} 件",
+    )
+    RESULTS["reactions"] = [
+        {"face": item["face"], "fraction": round(item["fraction"], 4)} for item in reactions
+    ]
 
 
 def check_progress(events) -> None:

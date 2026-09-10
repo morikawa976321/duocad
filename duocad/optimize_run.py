@@ -885,6 +885,7 @@ def run(
          "material_mm3": float|None, "achieved_material_mm3": float|None,
          "converged": bool|None, "evaluations": int, "history": [...],
          "anchor_check": {"limit_mm","fixed_mm","load_mm"} | None,
+         "reactions": [{"name","face","force","magnitude","fraction"}, ...],
          "triangle_count": int|None, "vertex_count": int|None,
          "seconds": float}
 
@@ -962,6 +963,9 @@ def run(
         "target_safety_factor": float(opts.target_safety_factor),
         # 条件面が空で早期returnしたときは測れない(節点が0個)ので None のまま。
         "anchor_check": None,
+        # **拘束面ごとの反力**(`anchor.run_pipeline` の `"reactions"`)。最適化を回さずに
+        # 戻る枝では空のまま —— 反力は解いた `K u = f` から出るので、解いていなければ無い。
+        "reactions": [],
     }
 
     # **条件面が本番の解像度で空になっていないか。** ここは bbox(案1)で測った表を見る ——
@@ -1091,6 +1095,7 @@ def run(
         converged=bool(result.converged),
         evaluations=int(result.evaluations),
         history=[_step_payload(step) for step in result.history],
+        reactions=list(result.run.get("reactions", [])),
         triangle_count=len(indices) // 3,
         vertex_count=len(positions) // 3,
         seconds=time.perf_counter() - started,

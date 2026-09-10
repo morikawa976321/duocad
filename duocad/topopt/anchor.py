@@ -870,6 +870,24 @@ def _assemble_load(
     return vector, total
 
 
+def reaction_payload(fixed_faces: Sequence[int], reactions: Sequence[Any]) -> list[dict]:
+    """`simp.Reaction` の並び → **素の値だけの dict の並び**(そのまま JSON へ載る)。
+
+    `optimize_run.run` の戻り値は素の値だけという契約なので、`simp` のデータクラスを
+    上の層へ通さない。並びは `fixed_faces` と同じ。
+    """
+    return [
+        {
+            "name": reaction.name,
+            "face": int(face),
+            "force": [float(value) for value in reaction.force],
+            "magnitude": float(reaction.magnitude),
+            "fraction": float(reaction.fraction),
+        }
+        for face, reaction in zip(fixed_faces, reactions)
+    ]
+
+
 def run_pipeline(
     shape: Any = None,
     *,
@@ -942,6 +960,11 @@ def run_pipeline(
     `keep_model=True` は `simp.optimize` へそのまま渡る。`result.model`(戻り値 dict の
     `"result"` キー)に実際に解いた `Model` が入るので、`stress.py` の後処理が拘束・荷重を
     手で組み直さずに済む。既定 `False` では入らない(数値は1ビットも変わらない)。
+
+    戻り値の `"reactions"` は**拘束面1枚ごとの反力**(`simp.Reaction` を素の値に開いたもの。
+    `fraction` は荷重の合力に対する割合)。**荷重を運んでいない取付点はここが 0 になる** ——
+    構造最適化は荷重を運ばない材料を置かないので、そのままだと保持ソリッドが浮き島になって
+    `mesh.remove_islands` に消える。**面の並びは `fixed_faces` と同じ。**
 
     `fixed_faces` / `load_faces` が要素サイズより小さくて格子節点が1つも付かないと
     (`AnchorTable.empty_faces()`)、**例外にはせず**戻り値の `"empty_condition_faces"`
@@ -1020,10 +1043,17 @@ def run_pipeline(
             "timings": timings,
             "empty_condition_faces": empty_condition_faces,
             "warning": warning,
+            "reactions": [],
         }
 
     nx, ny, nz = model.grid.shape
     fixed_dofs = table.fixed_dofs(fixed_faces)
+    # **反力は拘束面1枚を1グループにする。** 面ごとの節点集合は排他(`AnchorTable.node_ids`)
+    # なので、そのまま `ReactionGroup` の「重ならない」契約を満たす。
+    reaction_groups = [
+        simp.ReactionGroup(name=f"fixed_face_{int(face)}", dofs=table.fixed_dofs([int(face)]))
+        for face in fixed_faces
+    ]
     load, load_total = _assemble_load(table, load_faces, force, forces)
     solid = model.keep.copy()
     if keep_anchor_material:
@@ -1046,6 +1076,7 @@ def run_pipeline(
         load=load,
         void_mask=void,
         solid_mask=solid,
+        reactions=reaction_groups,
         callback=progress,
         keep_model=keep_model,
         **({} if solver is None else {"solver": solver}),
@@ -1101,6 +1132,7 @@ def run_pipeline(
         "achieved_volfrac": (
             float(result.rho[model.design].mean()) if design_elements else 0.0
         ),
+        "reactions": reaction_payload(fixed_faces, result.reactions),
         "compliance_first": history[0].compliance if history else float("nan"),
         "compliance_last": history[-1].compliance if history else float("nan"),
         "iterations": len(history),
