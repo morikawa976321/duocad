@@ -118,6 +118,7 @@
     onNote,
     onWants = () => {},
     onWantsPlane = () => {},
+    onWantsPoint = () => {},
     onWantsPick = () => {},
   }: {
     /** コアの選択集合(state.selection)。 */
@@ -191,6 +192,8 @@
      * 常時指せると、面を狙うクリックが手前のグリッドに取られる。
      */
     onWantsPlane?: (wants: boolean) => void
+    /** スケッチ平面上の点を待っているか。`onWantsPlane` と同じ受動的な知らせ。 */
+    onWantsPoint?: (wants: boolean) => void
     /**
      * 起動中のコマンドが**図形の直接ピックを待っている**か(待っていなければ `null`)。
      * `onWants`(辺)・`onWantsPlane`(基準平面)と同じ形の受動的な知らせで、アプリ層は
@@ -422,6 +425,11 @@
   /** 基準平面を要求しているか(辺と同じ規律で、起動している間だけ指せるようにする)。無起動では常にfalse。 */
   $effect(() => {
     onWantsPlane((command?.args ?? []).some((spec) => spec.kind === 'plane'))
+  })
+
+  /** スケッチ平面上の点を待っているか(点入力のカーソル強調と同じ規律)。無起動では常にfalse。 */
+  $effect(() => {
+    onWantsPoint(missing?.kind === 'point')
   })
 
   /** 直接ピックを待っているか(待っている**種別**をそのまま知らせる)。無起動では常に null。 */

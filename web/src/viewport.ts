@@ -23,7 +23,8 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 // 辺の折れ線の形は `session.ts` の `EdgeGeometry` が正(サーバが配る形そのもの)。
-import { entityHandles, entityPoints } from './entityKinds'
+import { entityHandles, entityPoints, snapToSketchEntity } from './entityKinds'
+import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOverlay'
 import { DEFAULT_RESOLUTION, viewResolution } from './adaptiveResolution'
 import { sampleFaces, selectFineFaces, type BodySamples } from './faceCulling'
 import {
@@ -534,6 +535,9 @@ export function createViewport(container: HTMLElement): Viewport {
     controls,
     size,
   })
+
+  const sketchCursor = createSketchCursorOverlay(container)
+  let sketchCursorWanted = false
 
   function applyBasePlaneHover(): void {
     for (const [name, mesh] of basePlaneHoverMeshes) mesh.visible = hoverPlane === name
@@ -2079,6 +2083,8 @@ export function createViewport(container: HTMLElement): Viewport {
     handleMeshes: THREE.Points[]
     /** 図形の折れ線(**元の図形だけ**。`userData.entityId` を持つ)。辺のピック対象。 */
     handleLines: THREE.Line[]
+    /** 元の図形(`handles`)。スナップ座標の解決に使う。 */
+    handles: SketchDraw['handles']
   }
   const sketches = new Map<string, SketchScene>()
   let ghost: { objects: THREE.Object3D[]; disposables: Array<{ dispose(): void }> } | null = null
@@ -2249,6 +2255,7 @@ export function createViewport(container: HTMLElement): Viewport {
         polylineCounts,
         handleMeshes,
         handleLines,
+        handles: entry.handles,
       })
     }
     invalidateHover() // 領域のメッシュを作り直したので印を捨てる
@@ -2618,6 +2625,44 @@ export function createViewport(container: HTMLElement): Viewport {
     return toScreen(toWorld(target.frame, u, v))
   }
 
+  function snappedSketchUv(
+    rawU: number,
+    rawV: number,
+    hit: SketchEntityHit | null,
+    sketch: SketchScene,
+  ): [number, number] {
+    if (hit === null) return [Math.round(rawU), Math.round(rawV)]
+    const handle = sketch.handles.find((item) => item.entityId === hit.entityId)
+    if (!handle) return [Math.round(rawU), Math.round(rawV)]
+    return snapToSketchEntity(handle, hit.point, rawU, rawV, appliedResolution)
+  }
+
+  function updateSketchCursor(
+    offsetX: number,
+    offsetY: number,
+    planePoint: { u: number; v: number } | null,
+    hit: SketchEntityHit | null,
+  ): void {
+    if (!sketchCursorWanted || activeSketchId === null || orbiting || planePoint === null) {
+      sketchCursor.update(null, 'free', null)
+      return
+    }
+    if (cube.inside(offsetX, offsetY)) {
+      sketchCursor.update(null, 'free', null)
+      return
+    }
+    const sketch = sketches.get(activeSketchId)
+    if (!sketch) {
+      sketchCursor.update(null, 'free', null)
+      return
+    }
+    const snap = classifySketchSnap(hit, planePoint.u, planePoint.v)
+    const [su, sv] = snappedSketchUv(planePoint.u, planePoint.v, hit, sketch)
+    const snapAt =
+      snap === 'free' ? null : projectSketchPoint(activeSketchId, su, sv)
+    sketchCursor.update({ x: offsetX, y: offsetY }, snap, snapAt)
+  }
+
   function projectRegion(sketchId: string, index: number): { x: number; y: number } | null {
     const target = sketches.get(sketchId)
     const mesh = target?.regionMeshes.find((candidate) => candidate.userData.regionIndex === index)
@@ -2984,6 +3029,7 @@ export function createViewport(container: HTMLElement): Viewport {
     cube.setHoverAt(overCube ? { x: event.offsetX, y: event.offsetY } : null)
     if (overCube) {
       hoverAt = null
+      updateSketchCursor(event.offsetX, event.offsetY, null, null)
       return
     }
     // **座標を控えるだけ**。当たり判定は `tick` が1フレームに1回だけ回す
@@ -3001,24 +3047,28 @@ export function createViewport(container: HTMLElement): Viewport {
       boxActive = true
       showBand(event.offsetX, event.offsetY)
     }
-    if (planeMoveListener === null) return
-    if (activeSketchId === null) {
-      planeMoveListener(null, null)
-      return
+    let planePoint: { u: number; v: number } | null = null
+    let sketchHit: SketchEntityHit | null = null
+    if (planeMoveListener !== null) {
+      if (activeSketchId === null) {
+        planeMoveListener(null, null)
+      } else {
+        // **`sketchEntityAt` は `resolveHit` と同じ関数**(クリックの `PickEvent.sketchEntity` と
+        // 同一)。同じ画素で呼ぶことで、幽霊のスナップ先とクリック確定時のスナップ先が
+        // 同じ入力を通る(App.svelte の不変条件)。
+        planePoint = planePointAt(event.offsetX, event.offsetY)
+        sketchHit = sketchEntityAt(event.offsetX, event.offsetY)
+        planeMoveListener(planePoint, sketchHit)
+      }
     }
-    // **`sketchEntityAt` は `resolveHit` と同じ関数**(クリックの `PickEvent.sketchEntity` と
-    // 同一)。同じ画素で呼ぶことで、幽霊のスナップ先とクリック確定時のスナップ先が
-    // 同じ入力を通る(App.svelte の不変条件)。
-    planeMoveListener(
-      planePointAt(event.offsetX, event.offsetY),
-      sketchEntityAt(event.offsetX, event.offsetY),
-    )
+    updateSketchCursor(event.offsetX, event.offsetY, planePoint, sketchHit)
   }
 
   /** ポインタがcanvasから出た。**強調を残さない**(戻ってくるまで指せるものは無い)。 */
   function onPointerLeave(): void {
     hoverAt = null
     orbiting = false
+    sketchCursor.update(null, 'free', null)
     // **引きかけの矩形は捨てる**(帯だけが残って画面に貼り付くのを防ぐ)。
     hideBand()
     downValid = false
@@ -3168,6 +3218,12 @@ export function createViewport(container: HTMLElement): Viewport {
     onPlaneMove(listener) {
       planeMoveListener = listener
     },
+    setSketchCursorWanted(wanted) {
+      if (sketchCursorWanted === wanted) return
+      sketchCursorWanted = wanted
+      sketchCursor.setActive(wanted)
+      if (!wanted) sketchCursor.update(null, 'free', null)
+    },
     viewResolution() {
       return { ...appliedResolution }
     },
@@ -3286,6 +3342,7 @@ export function createViewport(container: HTMLElement): Viewport {
       renderer.domElement.removeEventListener('pointerleave', onPointerLeave)
       renderer.domElement.removeEventListener('pointercancel', onPointerLeave)
       cube.dispose()
+      sketchCursor.dispose()
       clearPreview()
       clearGhost()
       clearEdges()

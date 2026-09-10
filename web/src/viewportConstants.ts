@@ -74,6 +74,10 @@ export const EDGE_PICK_PIXELS = 6
 //: スケッチの点マーカーの当たり半径[画素]。**辺より小さく**しておく
 //: (点は辺の上に乗っているので、同じ太さだと辺を狙えない)。
 export const SKETCH_HANDLE_PIXELS = 5
+/** スケッチ点入力待ちの十字(未スナップ)。暗背景で視認できる黄。 */
+export const SKETCH_CURSOR_CROSS_COLOR = '#ffc848'
+/** スケッチ点入力待ちのスナップ強調(線・点・格子)。幽霊線と同系の緑。 */
+export const SKETCH_CURSOR_SNAP_COLOR = '#5fd97a'
 //: ウィンドウ選択と見なすドラッグの最小距離[画素]。**クリックの上限と同じ値**にして、
 //: 「クリックでもドラッグでもない画素」が生まれないようにする(下の `CLICK_MOVE_LIMIT_PX`)。
 export const BOX_SELECT_MIN_PX = 6

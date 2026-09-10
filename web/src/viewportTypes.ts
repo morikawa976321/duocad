@@ -394,6 +394,8 @@ export interface Viewport {
   onPlaneMove(
     listener: (point: { u: number; v: number } | null, sketchEntity: SketchEntityHit | null) => void,
   ): void
+  /** スケッチの点入力待ちのカーソル強調を出すか(`CommandHost` の `onWantsPoint` から)。 */
+  setSketchCursorWanted(wanted: boolean): void
   /**
    * 選択中の面を強調する(空配列で解除)。
    *

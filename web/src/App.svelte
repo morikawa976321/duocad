@@ -2637,6 +2637,7 @@
         onStart={onCommandStart}
         onWants={(kinds) => (wantedKinds = kinds)}
         onWantsPlane={(wants) => (wantedPlane = wants)}
+        onWantsPoint={(wants) => viewport?.setSketchCursorWanted(wants)}
         onWantsPick={(target) => (wantedPick = target)}
       />
     {/key}
