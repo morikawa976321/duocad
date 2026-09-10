@@ -33,7 +33,9 @@
    ないので、ここが合っていなければ最適化は静かに間違った方向へ進む)/ 随伴解が
    `K_ff λ = K_fs c` を満たすか / 制約が緩いときの答えが制約を足す前の MMA と一致するか
    (m>=2 の双対を L-BFGS-B で解いても、m=1 の二分探索と同じ場所へ着く)/ OC は制約を
-   受け取ったら例外になるか / 満たせない下限は `ReactionTargetError` になるか。
+   受け取ったら例外になるか / **グループを渡さない・空で渡すと落ちるか**(空だと制約が
+   1本も立たないまま終端検査も素通りし、無制約の解が「合格」で返る)/
+   満たせない下限は `ReactionTargetError` になるか。
 9. **制約が効くこと**(この機能の存在理由) — 荷重から遠い拘束面は、制約が無いと
    **反力ゼロで捨てられる**(構造最適化は荷重を運ばない材料を置かない)。下限を課すと
    その面が荷重を受け持つようになり、代わりにコンプライアンスが悪化する。
@@ -612,10 +614,17 @@ def check_reaction_constraint() -> None:
     caught_alone = _raises(
         lambda: simp.optimize(nelx, nely, nelz, max_iter=1, reaction_min=0.2)
     )
+    # 空の並びは「渡していない」より危ない —— 制約が1本も立たないまま終端検査も
+    # 素通りするので、**下限を掛けたつもりの解が黙って無制約で返る。**
+    caught_empty = _raises(
+        lambda: simp.optimize(
+            nelx, nely, nelz, max_iter=1, update="mma", reactions=[], reaction_min=0.2
+        )
+    )
     check(
-        "OC への反力制約と、グループ無しの下限はどちらも例外",
-        caught_oc and caught_alone,
-        f"OC={caught_oc} / グループ無し={caught_alone}",
+        "OC への反力制約、グループ無し、空のグループ列はどれも例外",
+        caught_oc and caught_alone and caught_empty,
+        f"OC={caught_oc} / グループ無し={caught_alone} / 空={caught_empty}",
     )
 
     # (e) 満たせない下限は失敗として返る。**妥協した設計を返さない**

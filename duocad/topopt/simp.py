@@ -2094,10 +2094,13 @@ def optimize(
             f"element_volume_mm3 は正の値であること(受け取った値: {element_volume_mm3!r})"
         )
     if reaction_min is not None:
-        if reactions is None:
+        # **空の並びも None と同じに落とす。** 空だと制約が1本も立たず、終端の
+        # `_require_reactions` も「満たさない取付点は0件」で素通りするので、
+        # **下限を頼んだのに何も掛かっていない解が「合格」として返る。**
+        if reactions is None or not tuple(reactions):
             raise ValueError(
-                "reaction_min を渡すときは reactions(反力を取り出す拘束面グループ)も"
-                "渡すこと(何に対する下限かが決まらない)"
+                "reaction_min を渡すときは reactions(反力を取り出す拘束面グループ)を"
+                "1つ以上渡すこと(何に対する下限かが決まらない)"
             )
         if not 0.0 < float(reaction_min) < 1.0:
             raise ValueError(
