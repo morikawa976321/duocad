@@ -19,6 +19,15 @@ import {
 /** 図形の種別。**この表のキーが唯一の正**(新種別は表に1行足すだけでよい)。 */
 export type EntityKind = 'line' | 'circle' | 'rectangle' | 'arc' | 'bezier'
 
+/**
+ * 交点探索用の幾何プリミティブ。直線区間・円・円弧の3種(`EntityKindSpec.intersectables`)。
+ * 角度は度(コアの `Entity.params` と同じ単位)。
+ */
+export type IntersectableCurve =
+  | { kind: 'segment'; a: readonly [number, number]; b: readonly [number, number] }
+  | { kind: 'circle'; center: readonly [number, number]; radius: number }
+  | { kind: 'arc'; center: readonly [number, number]; radius: number; startDeg: number; endDeg: number }
+
 interface EntityKindSpec {
   /**
    * この種別を作るverb名(`add_*`)。`ghostEntity` の逆引きに使う。
@@ -79,12 +88,14 @@ interface EntityKindSpec {
    */
   visualCorners?(params: Record<string, number>): Array<[number, number]>
   /**
-   * **直線区間**(`sketchIntersections` が図形間の交点を探すのに使う)。
+   * **交点探索用の幾何プリミティブ**(直線区間・円・円弧。`sketchIntersections` が
+   * 図形間の交点を探すのに使う。同じ図形の複数区間どうし(長方形の隣り合う辺)は
+   * 交点探索の対象にしない —— それは自分の角で、既に `visualCorners` が持つ)。
    *
-   * 曲線(circle/arc/bezier)は持たない —— 交点は線形代数の交差判定で求めており、
-   * 曲線との交点は数値的な求根が要るため今回のスコープ外(本人指定「線分の交点」)。
+   * ベジエは持たない —— 直線・円・円弧の交差は閉じた式で解けるが、ベジエとの交点は
+   * 数値的な求根が要るため今回のスコープ外。
    */
-  segments?(params: Record<string, number>): Array<readonly [readonly [number, number], readonly [number, number]]>
+  intersectables?(params: Record<string, number>): IntersectableCurve[]
   /**
    * 与えた (u,v) をこの図形の輪郭へ落とす(スナップ)。
    *
@@ -201,16 +212,20 @@ function projectToPolyline(u: number, v: number, points: Array<[number, number]>
 /**
  * 角度(度)を弧 `[startDeg, endDeg]`(反時計回り。`endDeg <= startDeg` は0度またぎ)へクランプする。
  * 弧の外なら**円周上で近いほうの端**へ寄せる(`arcPoints`/`toPoints` と同じ0度またぎの扱い)。
+ *
+ * **`%` で正規化する(反復加算のwhileループにしない)** —— SVG取り込みなどで
+ * `start_deg`/`end_deg` が異常値になった場合、whileループ版は停止しない
+ * (`angleWithinArc` のdocstring参照。同じ理由でこちらも直した)。
  */
 function clampAngleToArc(angle: number, startDeg: number, endDeg: number): number {
-  const end = endDeg <= startDeg ? endDeg + 360 : endDeg
-  let normalized = angle
-  while (normalized < startDeg) normalized += 360
-  while (normalized >= startDeg + 360) normalized -= 360
-  if (normalized <= end) return normalized
-  const distToEnd = normalized - end
-  const distToStartWrap = startDeg + 360 - normalized
-  return distToEnd <= distToStartWrap ? end : startDeg
+  if (!Number.isFinite(startDeg) || !Number.isFinite(endDeg)) return startDeg
+  const span = endDeg <= startDeg ? endDeg + 360 - startDeg : endDeg - startDeg
+  let offset = (angle - startDeg) % 360
+  if (offset < 0) offset += 360
+  if (offset <= span) return startDeg + offset
+  const distToEnd = offset - span
+  const distToStartWrap = 360 - offset
+  return distToEnd <= distToStartWrap ? startDeg + span : startDeg
 }
 
 /** ベジエの制御点(**始点・制御点1・制御点2・終点の順**。コアの `BEZIER_KEYS` と同じ)。 */
@@ -287,7 +302,9 @@ function rectangleCorners(params: Record<string, number>): Array<[number, number
 const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
   line: {
     pointKeys: [['x0', 'y0'], ['x1', 'y1']],
-    segments: (params) => [[[params.x0, params.y0], [params.x1, params.y1]]],
+    intersectables: (params) => [
+      { kind: 'segment', a: [params.x0, params.y0], b: [params.x1, params.y1] },
+    ],
     verb: 'add_line',
     translate: translateLine,
     rotate(params, cx, cy, angleDeg, rotateCopies) {
@@ -318,6 +335,7 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
   },
   circle: {
     pointKeys: [['cx', 'cy']],
+    intersectables: (params) => [{ kind: 'circle', center: [params.cx, params.cy], radius: params.radius }],
     verb: 'add_circle',
     translate: (params, dx, dy) => translateAtCenter(params, 'cx', 'cy', dx, dy),
     rotate(params, cx, cy, angleDeg) {
@@ -345,9 +363,11 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
   rectangle: {
     pointKeys: [['x', 'y']],
     visualCorners: rectangleCorners,
-    segments: (params) => {
+    intersectables: (params) => {
       const corners = rectangleCorners(params)
-      return [0, 1, 2, 3].map((index) => [corners[index], corners[(index + 1) % 4]] as const)
+      return [0, 1, 2, 3].map(
+        (index): IntersectableCurve => ({ kind: 'segment', a: corners[index], b: corners[(index + 1) % 4] }),
+      )
     },
     verb: 'add_rectangle',
     translate: (params, dx, dy) => translateAtCenter(params, 'x', 'y', dx, dy),
@@ -395,6 +415,15 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
   },
   arc: {
     pointKeys: [['cx', 'cy']],
+    intersectables: (params) => [
+      {
+        kind: 'arc',
+        center: [params.cx, params.cy],
+        radius: params.radius,
+        startDeg: params.start_deg,
+        endDeg: params.end_deg,
+      },
+    ],
     verb: 'add_arc',
     translate: (params, dx, dy) => translateAtCenter(params, 'cx', 'cy', dx, dy),
     rotate(params, cx, cy, angleDeg, rotateCopies) {
@@ -541,14 +570,32 @@ export function entityVisualCorners(kind: string, params: Record<string, number>
 }
 
 /**
- * その図形の直線区間(`EntityKindSpec.segments`)を列挙する。持たない種別(円・円弧・
- * ベジエ)は空配列 —— `entityVisualCorners` と同じ理由で例外にしない。
+ * その図形の交点探索用プリミティブ(`EntityKindSpec.intersectables`)を列挙する。
+ * 持たない種別(ベジエ)は空配列 —— `entityVisualCorners` と同じ理由で例外にしない。
  */
-export function entitySegments(
+export function entityIntersectables(kind: string, params: Record<string, number>): IntersectableCurve[] {
+  return entityKindSpec(kind).intersectables?.(params) ?? []
+}
+
+/**
+ * その図形の**直線区間の中点**(`viewport.ts` の当たり判定がカーソル強調(垂直な短い
+ * ティック)に使う)。円・円弧・ベジエは対象外(本人指定「線分の中点」) ——
+ * `intersectables` のうち `kind:'segment'` だけを見れば自然にそうなる。
+ */
+export function entityMidpoints(
   kind: string,
   params: Record<string, number>,
-): Array<readonly [readonly [number, number], readonly [number, number]]> {
-  return entityKindSpec(kind).segments?.(params) ?? []
+): Array<{ u: number; v: number; direction: readonly [number, number] }> {
+  const out: Array<{ u: number; v: number; direction: readonly [number, number] }> = []
+  for (const curve of entityIntersectables(kind, params)) {
+    if (curve.kind !== 'segment') continue
+    const dx = curve.b[0] - curve.a[0]
+    const dy = curve.b[1] - curve.a[1]
+    const length = Math.hypot(dx, dy)
+    if (length === 0) continue
+    out.push({ u: (curve.a[0] + curve.b[0]) / 2, v: (curve.a[1] + curve.b[1]) / 2, direction: [dx / length, dy / length] })
+  }
+  return out
 }
 
 /**
@@ -556,49 +603,135 @@ export function entitySegments(
  * 平行(分母0)は交点なし —— 重なる場合も含めて拾わない(重なりは「交点」ではなく
  * 「一致」で、意味が違う)。
  */
-function segmentIntersection(
+function segmentSegmentIntersection(
   a0: readonly [number, number],
   a1: readonly [number, number],
   b0: readonly [number, number],
   b1: readonly [number, number],
-): [number, number] | null {
+): Array<[number, number]> {
   const dax = a1[0] - a0[0]
   const day = a1[1] - a0[1]
   const dbx = b1[0] - b0[0]
   const dby = b1[1] - b0[1]
   const denom = dax * dby - day * dbx
-  if (denom === 0) return null
+  if (denom === 0) return []
   const dx = b0[0] - a0[0]
   const dy = b0[1] - a0[1]
   const t = (dx * dby - dy * dbx) / denom
   const s = (dx * day - dy * dax) / denom
-  if (t < 0 || t > 1 || s < 0 || s > 1) return null
-  return [a0[0] + t * dax, a0[1] + t * day]
+  if (t < 0 || t > 1 || s < 0 || s > 1) return []
+  return [[a0[0] + t * dax, a0[1] + t * day]]
+}
+
+/** 線分と円の交点(0〜2個)。線分の区間内(端点含む)だけを返す。 */
+function segmentCircleIntersections(
+  a0: readonly [number, number],
+  a1: readonly [number, number],
+  center: readonly [number, number],
+  radius: number,
+): Array<[number, number]> {
+  const dx = a1[0] - a0[0]
+  const dy = a1[1] - a0[1]
+  const fx = a0[0] - center[0]
+  const fy = a0[1] - center[1]
+  const a = dx * dx + dy * dy
+  if (a === 0) return []
+  const b = 2 * (fx * dx + fy * dy)
+  const c = fx * fx + fy * fy - radius * radius
+  const discriminant = b * b - 4 * a * c
+  if (discriminant < 0) return []
+  const sqrtDiscriminant = Math.sqrt(discriminant)
+  const out: Array<[number, number]> = []
+  for (const t of [(-b - sqrtDiscriminant) / (2 * a), (-b + sqrtDiscriminant) / (2 * a)]) {
+    if (t < 0 || t > 1) continue
+    out.push([a0[0] + t * dx, a0[1] + t * dy])
+  }
+  return out
+}
+
+/** 円と円の交点(0〜2個)。同心円(距離0)・互いに届かない/内包する場合は交点なし。 */
+function circleCircleIntersections(
+  c1: readonly [number, number],
+  r1: number,
+  c2: readonly [number, number],
+  r2: number,
+): Array<[number, number]> {
+  const dx = c2[0] - c1[0]
+  const dy = c2[1] - c1[1]
+  const d = Math.hypot(dx, dy)
+  if (d === 0 || d > r1 + r2 || d < Math.abs(r1 - r2)) return []
+  const a = (d * d + r1 * r1 - r2 * r2) / (2 * d)
+  const heightSq = r1 * r1 - a * a
+  const height = heightSq > 0 ? Math.sqrt(heightSq) : 0
+  const mx = c1[0] + (a * dx) / d
+  const my = c1[1] + (a * dy) / d
+  if (height === 0) return [[mx, my]]
+  const ox = -(dy / d) * height
+  const oy = (dx / d) * height
+  return [[mx + ox, my + oy], [mx - ox, my - oy]]
 }
 
 /**
- * スケッチ内の**異なる図形どうし**の直線区間の交点を全部列挙する(`viewport.ts` の
- * `sketchCornerAt` が本物の点・`visualCorners` と同じ優先度で拾うために読む)。
+ * 点が中心から見て弧 `[startDeg,endDeg]`(反時計回り。0度またぎ可)の範囲内にあるか。
+ *
+ * **`%` で正規化する(反復加算のwhileループにしない)** —— `clampAngleToArc` の
+ * whileループ版は、SVG取り込みなどで `start_deg`/`end_deg` が異常値(非常に大きい値・
+ * `Infinity`)になった場合に停止しない(実測: `smoke-svg.mjs` がここでハングした)。
+ * `%` なら入力がどんな大きさでも定数時間で終わり、`Infinity`/`NaN` は比較が全部false
+ * になって自然に「範囲外」に落ちる。
+ */
+function angleWithinArc(point: readonly [number, number], center: readonly [number, number], startDeg: number, endDeg: number): boolean {
+  if (!Number.isFinite(startDeg) || !Number.isFinite(endDeg)) return false
+  const angle = (Math.atan2(point[1] - center[1], point[0] - center[0]) * 180) / Math.PI
+  const span = endDeg <= startDeg ? endDeg + 360 - startDeg : endDeg - startDeg
+  let offset = (angle - startDeg) % 360
+  if (offset < 0) offset += 360
+  return offset <= span
+}
+
+type ArcCurve = Extract<IntersectableCurve, { kind: 'arc' }>
+
+/** 2つの幾何プリミティブ(直線区間・円・円弧)の交点。どちらが先でも同じ結果になる。 */
+function curveIntersections(a: IntersectableCurve, b: IntersectableCurve): Array<[number, number]> {
+  if (a.kind === 'segment' && b.kind === 'segment') return segmentSegmentIntersection(a.a, a.b, b.a, b.b)
+  if (a.kind === 'segment' && b.kind === 'circle') return segmentCircleIntersections(a.a, a.b, b.center, b.radius)
+  if (a.kind === 'circle' && b.kind === 'segment') return segmentCircleIntersections(b.a, b.b, a.center, a.radius)
+  if (a.kind === 'circle' && b.kind === 'circle') return circleCircleIntersections(a.center, a.radius, b.center, b.radius)
+  const arcFilter = (arc: ArcCurve) => (point: [number, number]) => angleWithinArc(point, arc.center, arc.startDeg, arc.endDeg)
+  if (a.kind === 'segment' && b.kind === 'arc') return segmentCircleIntersections(a.a, a.b, b.center, b.radius).filter(arcFilter(b))
+  if (a.kind === 'arc' && b.kind === 'segment') return segmentCircleIntersections(b.a, b.b, a.center, a.radius).filter(arcFilter(a))
+  if (a.kind === 'circle' && b.kind === 'arc') return circleCircleIntersections(a.center, a.radius, b.center, b.radius).filter(arcFilter(b))
+  if (a.kind === 'arc' && b.kind === 'circle') return circleCircleIntersections(a.center, a.radius, b.center, b.radius).filter(arcFilter(a))
+  if (a.kind !== 'arc' || b.kind !== 'arc') return [] // ここへ来るのは常に arc×arc のはず
+  return circleCircleIntersections(a.center, a.radius, b.center, b.radius)
+    .filter(arcFilter(a))
+    .filter(arcFilter(b))
+}
+
+/**
+ * スケッチ内の**異なる図形どうし**の交点を全部列挙する(直線区間・円・円弧の任意の
+ * 組み合わせ。`viewport.ts` の `sketchCornerAt` が本物の点・`visualCorners` と
+ * 同じ優先度で拾うために読む)。
  *
  * 同じ図形どうしのペアは見ない —— 長方形自身の隣り合う辺が作る交点(=自分の角)は
- * 既に `visualCorners` が持つ。曲線(circle/arc/bezier)は `segments` が空なので
- * 自然に対象外になる(本人指定は「線分の交点」)。
+ * 既に `visualCorners` が持つ。ベジエは `intersectables` が空なので自然に対象外になる
+ * (閉じた式で解けない。本人指定は「線分・円・円弧の交点」)。
  */
 export function sketchIntersections(
   handles: ReadonlyArray<{ entityId: string; kind: string; params: Record<string, number> }>,
 ): Array<{ u: number; v: number; entityIds: readonly [string, string] }> {
   const points: Array<{ u: number; v: number; entityIds: readonly [string, string] }> = []
   for (let i = 0; i < handles.length; i += 1) {
-    const segmentsA = entitySegments(handles[i].kind, handles[i].params)
-    if (segmentsA.length === 0) continue
+    const curvesA = entityIntersectables(handles[i].kind, handles[i].params)
+    if (curvesA.length === 0) continue
     for (let j = i + 1; j < handles.length; j += 1) {
-      const segmentsB = entitySegments(handles[j].kind, handles[j].params)
-      if (segmentsB.length === 0) continue
-      for (const segmentA of segmentsA) {
-        for (const segmentB of segmentsB) {
-          const hit = segmentIntersection(segmentA[0], segmentA[1], segmentB[0], segmentB[1])
-          if (hit === null) continue
-          points.push({ u: hit[0], v: hit[1], entityIds: [handles[i].entityId, handles[j].entityId] })
+      const curvesB = entityIntersectables(handles[j].kind, handles[j].params)
+      if (curvesB.length === 0) continue
+      for (const curveA of curvesA) {
+        for (const curveB of curvesB) {
+          for (const hit of curveIntersections(curveA, curveB)) {
+            points.push({ u: hit[0], v: hit[1], entityIds: [handles[i].entityId, handles[j].entityId] })
+          }
         }
       }
     }

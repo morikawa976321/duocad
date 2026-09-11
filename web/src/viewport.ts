@@ -24,7 +24,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 // 辺の折れ線の形は `session.ts` の `EdgeGeometry` が正(サーバが配る形そのもの)。
 import {
-  entityHandles, entityHasIndependentPoints, entityPoints, entityVisualCorners, sketchIntersections,
+  entityHandles, entityHasIndependentPoints, entityMidpoints, entityPoints, entityVisualCorners, sketchIntersections,
   snapToSketchEntity,
 } from './entityKinds'
 import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOverlay'
@@ -2765,13 +2765,47 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
+   * **直線区間の中点**(`entityMidpoints`)を、本物の点と**同じ半径**(`SKETCH_HANDLE_PIXELS`)
+   * だが**1段低い優先度**(点・角・交点より下、辺より上)で拾う。本人指定
+   * 「吸着優先順位は点と線の間」。`snapDirection` はカーソル強調(垂直な短いティック)が
+   * 画面角度を出すのに使う —— 呼び出し側(`sketchEntityAt`)の点パス・角パスの後、
+   * 辺パスの前からだけ呼ぶこと。
+   */
+  function sketchMidpointAt(offsetX: number, offsetY: number, target: SketchScene): SketchEntityHit | null {
+    const sketchId = activeSketchId
+    if (sketchId === null) return null
+    const { width, height } = size()
+    const candidates: Array<ScreenPickCandidate<SketchEntityHit>> = []
+    for (const entry of target.handles) {
+      for (const midpoint of entityMidpoints(entry.kind, entry.params)) {
+        const screen = projectForPick(toWorld(target.frame, midpoint.u, midpoint.v), width, height)
+        if (screen === null) continue
+        const distSq = (screen.x - offsetX) ** 2 + (screen.y - offsetY) ** 2
+        candidates.push({
+          item: {
+            sketchId,
+            entityId: entry.entityId,
+            point: null,
+            snapAt: [midpoint.u, midpoint.v],
+            midpoint: true,
+            snapDirection: midpoint.direction,
+          },
+          distSq,
+        })
+      }
+    }
+    return pickNearestWithinRadius(SKETCH_HANDLE_PIXELS, candidates)
+  }
+
+  /**
    * その画素で当たるスケッチの図形(**アクティブなスケッチだけ**)。
    *
-   * **点が先・角が次・辺が後**。点は必ず辺の上に乗っているので、辺を先に見ると端点を
-   * 掴めない(頂点マーカーを辺より先に見るのと同じ理由)。見た目だけの角(`sketchCornerAt`)
-   * も同じ理由で辺より先 —— 角は必ずどれかの辺の上に乗っているので、辺を先に見ると
-   * 長方形の残り3隅を狙って掴めない。当たり半径は画面上の画素で決める
-   * (`edgeAt` / `vertexAt` と同じ `pickPointsAt` / `pickLinesAt`)。
+   * **点が先・角/交点が次・中点がその次・辺が最後**。点は必ず辺の上に乗っているので、
+   * 辺を先に見ると端点を掴めない(頂点マーカーを辺より先に見るのと同じ理由)。角・交点
+   * (`sketchCornerAt`)も同じ理由で辺より先 —— 角・交点は必ずどれかの辺の上に乗っている。
+   * 中点(`sketchMidpointAt`)は角・交点より1段低い優先度(本人指定「点と線の間」)。
+   * 当たり半径は画面上の画素で決める(`edgeAt` / `vertexAt` と同じ `pickPointsAt` /
+   * `pickLinesAt`)。
    */
   function sketchEntityAt(offsetX: number, offsetY: number): SketchEntityHit | null {
     if (activeSketchId === null) return null
@@ -2792,6 +2826,8 @@ export function createViewport(container: HTMLElement): Viewport {
     if (handle !== null) return handle
     const corner = sketchCornerAt(offsetX, offsetY, target)
     if (corner !== null) return corner
+    const midpoint = sketchMidpointAt(offsetX, offsetY, target)
+    if (midpoint !== null) return midpoint
     return pickLinesAt(
       offsetX,
       offsetY,
@@ -2963,14 +2999,37 @@ export function createViewport(container: HTMLElement): Viewport {
       return
     }
     const [su, sv] = snappedSketchUv(planePoint.u, planePoint.v, hit, sketch)
-    // **角・交点かどうかは `hit.snapAt` の有無で決める**(`sketchCornerAt` だけがこれを
-    // 立てる)。以前は確定後の座標を自分自身への射影と比べていたが、交点は2つの図形に
-    // またがるため、その比較では検出できない(`SketchEntityHit.snapAt` のdocstring参照)。
-    const isCorner = hit !== null && hit.snapAt !== undefined
-    const snap = classifySketchSnap(hit, planePoint.u, planePoint.v, isCorner)
+    // **角・交点かどうかは `hit.snapAt` の有無(中点を除く)で決める**(`sketchCornerAt` だけが
+    // 中点でないほうを立てる)。以前は確定後の座標を自分自身への射影と比べていたが、交点は
+    // 2つの図形にまたがるため、その比較では検出できない(`SketchEntityHit.snapAt` のdocstring)。
+    const isCorner = hit !== null && hit.snapAt !== undefined && !hit.midpoint
+    const isMidpoint = hit !== null && hit.midpoint === true
+    const snap = classifySketchSnap(hit, planePoint.u, planePoint.v, isCorner, isMidpoint)
     const snapScreenAt =
       snap === 'free' ? null : projectSketchPoint(activeSketchId, su, sv)
-    sketchCursor.update({ x: offsetX, y: offsetY }, snap, snapScreenAt)
+    const tickAngleDeg =
+      isMidpoint && hit?.snapDirection ? tickAngleForDirection(sketch, su, sv, hit.snapDirection) : undefined
+    sketchCursor.update({ x: offsetX, y: offsetY }, snap, snapScreenAt, tickAngleDeg)
+  }
+
+  /**
+   * `snapDirection`((u,v)空間の単位ベクトル)を画面上の角度(度)へ変換する。
+   * カーソル強調のティック(`sketchCursorOverlay.ts`)専用 —— 実際に表示する位置
+   * (`snapScreenAt`)とは別に、方向だけを知りたいので `projectForPick` を使う
+   * (`toScreen` はDOM被覆を見るため、方向の補助点がたまたま覆われた画素に落ちると
+   * 角度だけ消えてしまう)。
+   */
+  function tickAngleForDirection(
+    sketch: SketchScene,
+    u: number,
+    v: number,
+    direction: readonly [number, number],
+  ): number | undefined {
+    const { width, height } = size()
+    const p1 = projectForPick(toWorld(sketch.frame, u, v), width, height)
+    const p2 = projectForPick(toWorld(sketch.frame, u + direction[0], v + direction[1]), width, height)
+    if (p1 === null || p2 === null) return undefined
+    return (Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180) / Math.PI
   }
 
   function projectRegion(sketchId: string, index: number): { x: number; y: number } | null {

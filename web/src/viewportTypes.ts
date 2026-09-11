@@ -311,6 +311,16 @@ export interface SketchEntityHit {
    * 揃えておくことで交点と角を呼び出し側で区別しなくてよくなる。
    */
   snapAt?: readonly [number, number]
+  /**
+   * `snapAt` が**線分の中点**であることの印(角・交点とは別の優先度階層 —— 点・角/交点の
+   * 次、辺より上。`viewport.ts` の `sketchMidpointAt` だけが立てる)。
+   *
+   * `snapDirection` とセットで使う: カーソル強調(`sketchCursorOverlay.ts`)がその線分と
+   * 直交する短いティックを描くには、線分の向き(画面上の角度)が要る。
+   */
+  midpoint?: boolean
+  /** `midpoint` が真のときだけ意味を持つ、その線分の向き(単位ベクトル・(u,v)空間)。 */
+  snapDirection?: readonly [number, number]
 }
 
 /**

@@ -77,9 +77,11 @@ export const PICK_EDGE_COLOR = 0xbfd4ea
  * 大小関係がそのまま優先順位になる(点 < 辺、頂点 < 辺)。
  */
 export const EDGE_PICK_PIXELS = 6
-//: スケッチの点マーカーの当たり半径[CSS px]。**辺より小さく**しておく
-//: (点は辺の上に乗っているので、同じ太さだと辺を狙えない)。
-export const SKETCH_HANDLE_PIXELS = 5
+//: スケッチの点マーカー・角・交点・中点(共通)の当たり半径[CSS px]。
+//: 点(と角・交点)は辺より優先度が高い(`sketchEntityAt`が点→角/交点→中点→辺の順で試す)ので、
+//: 辺の当たり半径(EDGE_PICK_PIXELS)より大きくても辺の掴みやすさが壊れるわけではない。
+//: 2026-09-11に本人希望で5→7へ拡大(元は「辺より小さく」だった)。
+export const SKETCH_HANDLE_PIXELS = 7
 /** スケッチ線の太さ[CSS px]。`planeGrid` の最太段(半幅1.1px)より少し太く、格子と重なっても見える程度。 */
 export const SKETCH_LINE_WIDTH_PX = 1.5
 /** スケッチ点入力待ちの十字(未スナップ)。暗背景で視認できる黄。 */

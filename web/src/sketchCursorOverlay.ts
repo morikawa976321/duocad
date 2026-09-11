@@ -7,7 +7,7 @@
 import { SKETCH_CURSOR_CROSS_COLOR, SKETCH_CURSOR_SNAP_COLOR } from './viewportConstants'
 
 /** スナップ状態に応じた見た目の種別。 */
-export type SketchSnapVisual = 'free' | 'line' | 'point' | 'grid'
+export type SketchSnapVisual = 'free' | 'line' | 'midpoint' | 'point' | 'grid'
 
 /** 1mm格子への吸着とみなす距離[mm]。`App.svelte` の `snappedToGrid1mm` と同じ刻み。 */
 export const GRID_SNAP_TOLERANCE_MM = 0.5
@@ -16,17 +16,23 @@ const CROSS_ARM_PX = 8
 const CROSS_STROKE_PX = 1.5
 const SQUARE_HALF_PX = 5
 const SQUARE_STROKE_PX = 1.5
+const TICK_HALF_LENGTH_PX = 8
+const TICK_STROKE_PX = 1.5
 
 export interface SketchCursorOverlay {
   setActive(active: boolean): void
   /**
    * @param pointer 未スナップ時のカーソル位置(コンテナ内CSS px)。`snap === 'free'` だけ使う。
-   * @param snapAt 確定位置の画面座標。吸着時は十字・正方形の両方をここに置く。
+   * @param snapAt 確定位置の画面座標。吸着時は十字・正方形・ティックをここに置く。
+   * @param tickAngleDeg `snap === 'midpoint'` のときだけ使う、線分と直交させるティックの
+   *   画面上の角度(度)。呼び出し側(`viewport.ts`)が画面座標へ射影して求める ——
+   *   このファイルは three.js を知らないので、(u,v) 空間の向きを自分では画面角度にできない。
    */
   update(
     pointer: { x: number; y: number } | null,
     snap: SketchSnapVisual,
     snapAt: { x: number; y: number } | null,
+    tickAngleDeg?: number,
   ): void
   dispose(): void
 }
@@ -34,20 +40,24 @@ export interface SketchCursorOverlay {
 /**
  * 当たり判定の結果から、カーソル強調の種別を決める。
  *
- * 優先順はクリックのスナップ(`snappedPlanePoint`)と同じ: 点 → 線 → 格子 → 自由。
+ * 優先順はクリックのスナップ(`snappedPlanePoint`)と同じ: 点(角・交点を含む) → 中点 →
+ * 線 → 格子 → 自由。
  *
- * `isCorner` は呼び出し側(`viewport.ts`)が渡す —— `hit.snapAt` が立っているか
- * (このファイルは three.js も entityKinds も知らない、SVG描画だけの層に閉じてある)。
- * 長方形の残り3隅や直線どうしの交点のように、独立した点ではないが幾何的には点と
- * 同じ精度で吸い付く場所を、□ではなく×にしてしまわないため。
+ * `isCorner` / `isMidpoint` は呼び出し側(`viewport.ts`)が渡す —— `hit.snapAt` /
+ * `hit.midpoint` が立っているか(このファイルは three.js も entityKinds も知らない、
+ * SVG描画だけの層に閉じてある)。長方形の残り3隅や直線どうしの交点のように、独立した
+ * 点ではないが幾何的には点と同じ精度で吸い付く場所を、□ではなく×にしてしまわないため。
+ * 中点はそれより1段低い優先度の別種別(□でも×でもなく、線分と直交するティック)。
  */
 export function classifySketchSnap(
   hit: { point: string | null } | null,
   rawU: number,
   rawV: number,
   isCorner = false,
+  isMidpoint = false,
 ): SketchSnapVisual {
   if (hit !== null && (hit.point !== null || isCorner)) return 'point'
+  if (hit !== null && isMidpoint) return 'midpoint'
   if (hit !== null) return 'line'
   const du = Math.abs(rawU - Math.round(rawU))
   const dv = Math.abs(rawV - Math.round(rawV))
@@ -74,8 +84,10 @@ export function createSketchCursorOverlay(container: HTMLElement): SketchCursorO
 
   const crossGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g')
   const squareGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+  const tickGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g')
   svg.appendChild(crossGroup)
   svg.appendChild(squareGroup)
+  svg.appendChild(tickGroup)
 
   const crossH = document.createElementNS('http://www.w3.org/2000/svg', 'line')
   const crossV = document.createElementNS('http://www.w3.org/2000/svg', 'line')
@@ -89,6 +101,15 @@ export function createSketchCursorOverlay(container: HTMLElement): SketchCursorO
   square.setAttribute('fill', 'none')
   square.setAttribute('stroke-width', String(SQUARE_STROKE_PX))
   squareGroup.appendChild(square)
+
+  const tick = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+  tick.setAttribute('stroke-width', String(TICK_STROKE_PX))
+  tick.setAttribute('stroke-linecap', 'square')
+  tick.setAttribute('x1', String(-TICK_HALF_LENGTH_PX))
+  tick.setAttribute('y1', '0')
+  tick.setAttribute('x2', String(TICK_HALF_LENGTH_PX))
+  tick.setAttribute('y2', '0')
+  tickGroup.appendChild(tick)
 
   container.appendChild(root)
 
@@ -118,9 +139,16 @@ export function createSketchCursorOverlay(container: HTMLElement): SketchCursorO
     squareGroup.setAttribute('transform', `translate(${x},${y})`)
   }
 
+  /** 線分と直交する短いティック。`angleDeg` は線分そのものの画面角度(直交させて描く)。 */
+  function setTick(x: number, y: number, angleDeg: number, color: string): void {
+    tickGroup.setAttribute('transform', `translate(${x},${y}) rotate(${angleDeg + 90})`)
+    tick.setAttribute('stroke', color)
+  }
+
   function hideMarkers(): void {
     crossGroup.style.display = 'none'
     squareGroup.style.display = 'none'
+    tickGroup.style.display = 'none'
   }
 
   return {
@@ -129,7 +157,7 @@ export function createSketchCursorOverlay(container: HTMLElement): SketchCursorO
       root.style.display = on ? 'block' : 'none'
       if (!on) hideMarkers()
     },
-    update(pointer, snap, snapAt) {
+    update(pointer, snap, snapAt, tickAngleDeg) {
       if (!active) {
         hideMarkers()
         return
@@ -153,6 +181,11 @@ export function createSketchCursorOverlay(container: HTMLElement): SketchCursorO
         case 'line':
           crossGroup.style.display = ''
           setCross(snapAt.x, snapAt.y, true, SKETCH_CURSOR_SNAP_COLOR)
+          break
+        case 'midpoint':
+          if (tickAngleDeg === undefined) break // 呼び出し側の契約違反(角度が無い)。何も描かない
+          tickGroup.style.display = ''
+          setTick(snapAt.x, snapAt.y, tickAngleDeg, SKETCH_CURSOR_SNAP_COLOR)
           break
         case 'point':
           squareGroup.style.display = ''
