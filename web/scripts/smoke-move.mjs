@@ -388,8 +388,16 @@ async function main() {
 
     // ================================================================ 6. move_sketch_entities(複製)
     // 図形全体を選び直す(線の中ほどをクリック = 点ではなく辺)。
+    //
+    // **中点は `moved` の実座標から求める**(`LINE.x0/x1` と動かす前の `y0` を混ぜない) ——
+    // 検証5でy1だけを+10動かした結果、線分は (60,0)-(80,10) のように傾いている。
+    // 傾いた線分の中点は ((x0+x1)/2, (y0+y1)/2) であって、x座標の中点に動かす前のy0を
+    // 組み合わせた点ではない(後者は実際の中点から辺の垂直距離で約4.5mmずれ、
+    // クリックの当たり半径の外に外れて「辺そのものをクリックで選べない」がタイムアウトする)。
     await withoutBrowserPanel(page, async () => {
-      const mid = await planeAt((LINE.x0 + LINE.x1) / 2, moved.params.y0)
+      const midU = (moved.params.x0 + moved.params.x1) / 2
+      const midV = (moved.params.y0 + moved.params.y1) / 2
+      const mid = await planeAt(midU, midV)
       if (!mid) fail('線分の中ほどが画面の中に無い')
       await page.mouse.click(mid.x, mid.y)
     })
@@ -485,8 +493,13 @@ async function main() {
       // ---------------------------------------------------------------- 図形まるごと回す
       // 線分そのもの(点ではなく辺)を選ぶ。**辺 = 図形まるごと**なので、コアは
       // `_rotated_params(point=None)` の側を通る。
+      //
+      // **中点は `moved` の実座標から求める**(検証6と同じ注意 —— 線分は (60,0)-(80,10) と
+      // 傾いたままなので、x座標の中点に動かす前のy0を組み合わせると実際の中点から外れる)。
       await withoutBrowserPanel(page, async () => {
-        const mid = await planeAt((LINE.x0 + LINE.x1) / 2, moved.params.y0)
+        const midU = (moved.params.x0 + moved.params.x1) / 2
+        const midV = (moved.params.y0 + moved.params.y1) / 2
+        const mid = await planeAt(midU, midV)
         if (!mid) fail('線分の中ほどが画面の中に無い(回転の幽霊)')
         await page.mouse.click(mid.x, mid.y)
       })
@@ -651,7 +664,9 @@ async function main() {
     // 中心を既存の点でピックし、角度を打って Enter する。
     {
       await withoutBrowserPanel(page, async () => {
-        const mid = await planeAt((LINE.x0 + LINE.x1) / 2, moved.params.y0)
+        const midU = (moved.params.x0 + moved.params.x1) / 2
+        const midV = (moved.params.y0 + moved.params.y1) / 2
+        const mid = await planeAt(midU, midV)
         if (!mid) fail('線分の中ほどが画面の中に無い(UIからの回転)')
         await page.mouse.click(mid.x, mid.y)
       })
@@ -808,7 +823,9 @@ async function main() {
     const sketchA = await page.evaluate(() => window.__duocad.activeSketch)
     // Aの図形を1つ選んでおく
     await withoutBrowserPanel(page, async () => {
-      const mid = await planeAt((LINE.x0 + LINE.x1) / 2, moved.params.y0)
+      const midU = (moved.params.x0 + moved.params.x1) / 2
+      const midV = (moved.params.y0 + moved.params.y1) / 2
+      const mid = await planeAt(midU, midV)
       if (!mid) fail('線分の中ほどが画面の中に無い')
       await page.mouse.click(mid.x, mid.y)
     })
