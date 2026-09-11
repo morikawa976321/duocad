@@ -35,13 +35,19 @@ export interface SketchCursorOverlay {
  * 当たり判定の結果から、カーソル強調の種別を決める。
  *
  * 優先順はクリックのスナップ(`snappedPlanePoint`)と同じ: 点 → 線 → 格子 → 自由。
+ *
+ * `isCorner` は `entityKinds.ts` の `isEntityCorner` を呼び出し側が渡す(このファイルは
+ * three.js もentityKindsも知らない、SVG描画だけの層に閉じてある) —— 長方形の残り3隅の
+ * ように、独立には動かせないが幾何的には点と同じ精度で吸い付く角を、□ではなく×に
+ * してしまわないため。
  */
 export function classifySketchSnap(
   hit: { point: string | null } | null,
   rawU: number,
   rawV: number,
+  isCorner = false,
 ): SketchSnapVisual {
-  if (hit !== null && hit.point !== null) return 'point'
+  if (hit !== null && (hit.point !== null || isCorner)) return 'point'
   if (hit !== null) return 'line'
   const du = Math.abs(rawU - Math.round(rawU))
   const dv = Math.abs(rawV - Math.round(rawV))

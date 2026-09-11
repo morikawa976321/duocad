@@ -67,6 +67,17 @@ interface EntityKindSpec {
    */
   pointKeys: ReadonlyArray<readonly [string, string]>
   /**
+   * **`pointKeys` にない、見た目だけの角**(カーソルの □/× 表示専用。`isEntityCorner` が読む)。
+   *
+   * 独立に動かせないというだけで、輪郭上の頂点であることに変わりはなく、`snap()` は
+   * 隣接する辺のどちらから来ても同じ座標へ厳密に落ちる(端点へのクランプ)。それを
+   * `pointKeys` と同じ精度なのに×表示にすると、長方形の基準コーナーだけが特別に見える
+   * (残り3隅は `width`/`height`/`angle` の導出値というだけで、幾何的な角であることは同じ)。
+   * 省略した種別(line/circle/arc/bezier)は追加の角を持たない —— 円・円弧は曲線上の
+   * サンプル点を角と誤認すると線上のあちこちで□が出てしまう。
+   */
+  visualCorners?(params: Record<string, number>): Array<[number, number]>
+  /**
    * 与えた (u,v) をこの図形の輪郭へ落とす(スナップ)。
    *
    * **拘束ではない** —— duocadは拘束ソルバを持たない(`duocad/parameters.py` 冒頭)ので、
@@ -324,6 +335,7 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
   },
   rectangle: {
     pointKeys: [['x', 'y']],
+    visualCorners: rectangleCorners,
     verb: 'add_rectangle',
     translate: (params, dx, dy) => translateAtCenter(params, 'x', 'y', dx, dy),
     rotate(params, cx, cy, angleDeg, rotateCopies) {
@@ -540,6 +552,25 @@ export function snapToSketchEntity(
     if (handle) return [handle.u, handle.v]
   }
   return snapToEntity(entity.kind, entity.params, u, v, resolution)
+}
+
+/** 浮動小数の丸め差だけを許す許容差。`visualCorners` はこの関数と同じ算術(三角関数込み)を
+ *  経て `snap()` の結果と比べるので、格子スナップの0.5mmよりずっと狭くてよい。 */
+const VISUAL_CORNER_EPSILON = 1e-6
+
+/**
+ * `(u,v)` がその図形の「見た目だけの角」(`EntityKindSpec.visualCorners`)に一致するか。
+ *
+ * `snapToSketchEntity` が返した**確定後の座標**を渡すこと(生のポインタ座標ではない) ——
+ * 角のごく近くでは隣接する2辺のどちらへ射影しても同じ角へクランプされるので、確定後の
+ * 座標は角の座標と厳密に一致する(丸め差を除く)。`visualCorners` を持たない種別は常に false。
+ */
+export function isEntityCorner(kind: string, params: Record<string, number>, u: number, v: number): boolean {
+  const corners = entityKindSpec(kind).visualCorners
+  if (!corners) return false
+  return corners(params).some(
+    ([cu, cv]) => Math.abs(cu - u) < VISUAL_CORNER_EPSILON && Math.abs(cv - v) < VISUAL_CORNER_EPSILON,
+  )
 }
 
 /**

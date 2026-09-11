@@ -23,7 +23,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 // 辺の折れ線の形は `session.ts` の `EdgeGeometry` が正(サーバが配る形そのもの)。
-import { entityHandles, entityPoints, snapToSketchEntity } from './entityKinds'
+import { entityHandles, entityPoints, isEntityCorner, snapToSketchEntity } from './entityKinds'
 import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOverlay'
 import { DEFAULT_RESOLUTION, viewResolution } from './adaptiveResolution'
 import { sampleFaces, selectFineFaces, type BodySamples } from './faceCulling'
@@ -2892,8 +2892,12 @@ export function createViewport(container: HTMLElement): Viewport {
       sketchCursor.update(null, 'free', null)
       return
     }
-    const snap = classifySketchSnap(hit, planePoint.u, planePoint.v)
     const [su, sv] = snappedSketchUv(planePoint.u, planePoint.v, hit, sketch)
+    // **確定後の座標(su,sv)で角かどうかを見る**(生のポインタ座標ではない) ——
+    // 角の判定はスナップ結果と同じ算術(角へのクランプ)を前提にしている(`isEntityCorner`)。
+    const handle = hit !== null ? sketch.handles.find((item) => item.entityId === hit.entityId) : undefined
+    const isCorner = handle !== undefined && isEntityCorner(handle.kind, handle.params, su, sv)
+    const snap = classifySketchSnap(hit, planePoint.u, planePoint.v, isCorner)
     const snapAt =
       snap === 'free' ? null : projectSketchPoint(activeSketchId, su, sv)
     sketchCursor.update({ x: offsetX, y: offsetY }, snap, snapAt)
