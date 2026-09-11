@@ -36,6 +36,7 @@ from .paths import DEFAULT_MODELS_DIR
 from .speculative import speculative
 from .verbs import (
     add_mesh_body as add_mesh_body_verb,
+    boolean_body as boolean_body_verb,
     chamfer as chamfer_verb,
     delete as delete_verb,
     extrude as extrude_verb,
@@ -611,6 +612,24 @@ class Session:
         changed_body_id = operation.args["body_id"]
         return self._after_logged_verb({
             "body_id": changed_body_id,
+            "changed_bodies": [changed_body_id],
+        })
+
+    def boolean_body(self, target_ref: Any, mode: str) -> dict:
+        """**ターゲット(1つ・面参照)に確定選択のツールボディ群**を作用させる。
+
+        ターゲットは in-place で形だけ置き換え、ツールボディは消える。`target_ref` は
+        確定選択には入れない(`move_body.axis_edge` と同じ規律)。
+        """
+        tool_body_ids = selection.require_bodies(self.document)
+        operation = boolean_body_verb(
+            self.document, target_ref, tool_body_ids, mode=str(mode)
+        )
+        changed_body_id = operation.args["target_body_id"]
+        return self._after_logged_verb({
+            "target_body_id": changed_body_id,
+            "mode": operation.args["mode"],
+            "removed_bodies": list(operation.args["tool_bodies"]),
             "changed_bodies": [changed_body_id],
         })
 

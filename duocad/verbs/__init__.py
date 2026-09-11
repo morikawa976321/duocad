@@ -6,6 +6,7 @@
 幾何は `duocad.kernel` 越しに呼ぶ — **OCP / build123d を直接importしない**。
 """
 from .add_mesh import add_mesh_body  # noqa: F401
+from .boolean_body import boolean_body  # noqa: F401
 from .chamfer import chamfer  # noqa: F401
 from .delete import delete  # noqa: F401
 from .extrude import extrude  # noqa: F401
@@ -28,6 +29,7 @@ from .pattern import pattern_circular, pattern_rectangular  # noqa: F401
 
 __all__ = [
     "add_mesh_body",
+    "boolean_body",
     "chamfer",
     "delete",
     "extrude",

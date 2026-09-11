@@ -58,6 +58,7 @@ VERB_TOOLS = {
     "extrude_face",
     "fillet",
     "chamfer",
+    "boolean_body",
     "pattern_rectangular",
     "pattern_circular",
     # 位置
@@ -152,6 +153,7 @@ ARGUMENTS: dict = {
     "extrude": ({"distance", "mode", "body_id"}, {"distance"}),
     "extrude_face": ({"distance"}, {"distance"}),
     "fillet": ({"radius"}, {"radius"}),
+    "boolean_body": ({"target_ref", "mode"}, {"target_ref", "mode"}),
     # 位置と向きの変更。**対象は選択から取る**ので、引数は量・軸・中心と copy だけ。
     # **必須が1つも無い**のは `mode` で必要な引数が変わるからで(translate は dx/dy(/dz)、
     # rotate は angle と軸)、JSON Schema では条件付き必須を書けない —— 実体側が

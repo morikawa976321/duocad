@@ -800,6 +800,12 @@ class DocumentTools:
         applied = self.session.chamfer(distance)
         return self._apply_logged(before, applied)
 
+    def boolean_body(self, target_ref, mode) -> dict:
+        """**ターゲット(面参照)に確定選択のツールボディ群**を作用させる。"""
+        before = self._revision_snapshot()
+        applied = self.session.boolean_body(target_ref, mode)
+        return self._apply_logged(before, applied)
+
     def pattern_rectangular(
         self, sketch_id: str, entities: list, dx: float, dy: float, nx: int, ny: int
     ) -> dict:

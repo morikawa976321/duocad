@@ -16,7 +16,7 @@
 | 述語の自己記述 | `describe_predicates` |
 | 選択 | `get_selection` / `propose_selection` / `modify_selection` / `commit_selection` / `clear_selection` |
 | スケッチ | `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` / `import_svg` / `move_sketch_entities` / `mirror_sketch_entities` |
-| フィーチャ | `extrude` / `extrude_face` / `fillet` / `chamfer` / `pattern_rectangular` / `pattern_circular` / `move_body` / `mirror_body` / `delete` |
+| フィーチャ | `extrude` / `extrude_face` / `fillet` / `chamfer` / `boolean_body` / `pattern_rectangular` / `pattern_circular` / `move_body` / `mirror_body` / `delete` |
 | ボディ・パラメータ | `set_visible` / `set_parameter` |
 | 形状最適化 | `set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` / `clear_loads` — 保持/除外ソリッド・拘束面・荷重面の条件を置く(ボディと拘束は集合代入。荷重だけは大きさ・向きを面ごとに持つので上書き代入で、外すのは `clear_loads`) |
 | 入出力 | `import_step` / `export_step` / `export_stl` / `add_mesh_body` — 最後の1つは**計算で作った三角形メッシュ**をボディとして足す(表示とSTL書き出しだけ。編集verbは断られる) |

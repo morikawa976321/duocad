@@ -526,6 +526,30 @@ def _run_chamfer(session: Session, tmp_path: Path) -> dict:
     return session.chamfer(RADIUS_THAT_WORKS)
 
 
+@_runner("boolean_body")
+def _run_boolean_body(session: Session, tmp_path: Path) -> dict:
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    from OCP.gp import gp_Pnt
+
+    from duocad.document import Body, new_body_id
+
+    target, _ = _box(session)
+    tool_id = new_body_id()
+    session.document.add_body(
+        Body(
+            id=tool_id,
+            name="tool",
+            kind="solid",
+            shape=BRepPrimAPI_MakeBox(gp_Pnt(15.0, 15.0, 15.0), 5.0, 5.0, 5.0).Shape(),
+        )
+    )
+    _select(session, [{"body": tool_id, "kind": "face", "index": 1}])
+    return session.boolean_body(
+        {"body": target.id, "kind": "face", "index": 1},
+        "union",
+    )
+
+
 @_runner("move_sketch_entities")
 def _run_move_sketch_entities(session: Session, tmp_path: Path) -> dict:
     sketch_id = _sketch(session)

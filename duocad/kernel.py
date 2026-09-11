@@ -23,7 +23,12 @@ from OCP.Bnd import Bnd_Box
 from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepBndLib import BRepBndLib
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
+from OCP.BRepAlgoAPI import (
+    BRepAlgoAPI_Common,
+    BRepAlgoAPI_Cut,
+    BRepAlgoAPI_Fuse,
+    BRepAlgoAPI_Splitter,
+)
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_Copy,
     BRepBuilderAPI_Transform,
@@ -1286,6 +1291,68 @@ def extrude_regions(
                 f"{operation} did not change the shape "
                 f"(volume {volume_before} -> {volume_after})"
             )
+    if not BRepCheck_Analyzer(result).IsValid():
+        raise ValueError(f"{mode} produced an invalid shape (BRepCheck)")
+
+    return {
+        "shape": result,
+        "volume_before": volume_before,
+        "volume_after": volume_after,
+    }
+
+
+def is_solid(shape: Any) -> bool:
+    """形状に SOLID が1個以上含まれるか(`split_solids` と同じ数え方)。"""
+    if shape is None or shape.IsNull():
+        return False
+    shape_map = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_SOLID, shape_map)
+    return shape_map.Extent() > 0
+
+
+def boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) -> dict:
+    """ターゲットとツール群で union/cut/intersect する。
+
+    ツールは先に `BRepAlgoAPI_Fuse` で1つにまとめてからターゲットへ作用する
+    (`extrude_regions` の領域融合と同じ)。intersect は `target ∩ (tool1 ∪ tool2 ∪ ...)`。
+
+    戻り値: {"shape": TopoDS_Shape, "volume_before": float, "volume_after": float}
+    """
+    if target_shape is None or target_shape.IsNull():
+        raise ValueError("boolean_bodies requires a target shape")
+    if not tool_shapes:
+        raise ValueError("boolean_bodies requires at least one tool shape")
+    if mode not in ("union", "cut", "intersect"):
+        raise ValueError(f"unknown boolean mode: {mode!r}")
+
+    combined = tool_shapes[0]
+    for other in tool_shapes[1:]:
+        fused = BRepAlgoAPI_Fuse(combined, other)
+        fused.Build()
+        if not fused.IsDone():
+            raise ValueError("failed to fuse tool shapes")
+        combined = fused.Shape()
+        if combined is None or combined.IsNull():
+            raise ValueError("fusing tool shapes produced an empty shape")
+
+    volume_before = volume(target_shape)
+    if mode == "union":
+        builder = BRepAlgoAPI_Fuse(target_shape, combined)
+    elif mode == "cut":
+        builder = BRepAlgoAPI_Cut(target_shape, combined)
+    else:
+        builder = BRepAlgoAPI_Common(target_shape, combined)
+    builder.Build()
+    if not builder.IsDone():
+        raise ValueError(f"{mode} failed")
+    result = builder.Shape()
+
+    if result is None or result.IsNull():
+        raise ValueError(f"{mode} produced an empty shape")
+
+    volume_after = volume(result)
+    if volume_after <= 0:
+        raise ValueError(f"{mode} left nothing solid (volume={volume_after})")
     if not BRepCheck_Analyzer(result).IsValid():
         raise ValueError(f"{mode} produced an invalid shape (BRepCheck)")
 

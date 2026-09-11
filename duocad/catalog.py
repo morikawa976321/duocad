@@ -508,6 +508,36 @@ COMMANDS: tuple[Command, ...] = (
         resets_selection=True,
     ),
     Command(
+        name="boolean_body",
+        category="feature",
+        description=(
+            "ターゲットボディ(1つ)にツールボディ(1つ以上)を作用させ、結合(union)・"
+            "切り取り(cut)・交差(intersect)するときに呼ぶ。ターゲットは `target_ref` で"
+            "1枚の面から指す(確定選択には入れない)。ツールは確定選択から取る"
+            "(面/辺/頂点で指せばよい)。演算後ターゲットの形だけが残り、ツールボディは消える。"
+            "intersect でツールが複数のとき target ∩ (tool1 ∪ tool2 ∪ ...)。"
+        ),
+        params=(
+            Param(
+                "target_ref",
+                "object",
+                "ターゲットボディを指す面への参照 "
+                '{"body": body_id, "index": 面の1始まりの添字}。'
+                "get_selection が返す面の参照をそのまま渡せる。"
+                "確定選択には入れない",
+            ),
+            Param(
+                "mode",
+                "string",
+                "union(結合) / cut(切り取り) / intersect(交差)",
+            ),
+        ),
+        uses_selection=True,
+        session="boolean_body",
+        previewable=True,
+        resets_selection=True,
+    ),
+    Command(
         name="move_sketch_entities",
         category="sketch",
         description=(

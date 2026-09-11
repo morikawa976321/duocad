@@ -176,6 +176,58 @@ export const CHAMFER: CommandDef = {
 }
 
 /**
+ * ソリッドブーリアン。ターゲットは面1枚を直接ピック(`PickArgSpec`)、ツールは確定選択
+ * (複数)。`mode` で union/cut/intersect を切り替える(`extrude` の mode と同じ構造)。
+ *
+ * **ターゲットのピックはツール選択より前** —— `args` の並びが `firstMissingArg` の順序。
+ * ターゲットを確定選択に入れると `require_bodies` がツール側とロールが混ざる。
+ */
+export const BOOLEAN_BODY: CommandDef = {
+  id: 'boolean_body',
+  category: 'feature',
+  label: 'ブーリアン',
+  buttonId: 'boolean-body',
+  preview: 'server',
+  args: [
+    {
+      kind: 'pick',
+      name: 'target_ref',
+      label: 'ターゲット(面1枚)',
+      target: 'face',
+      buttonId: 'boolean-body-target',
+    },
+    {
+      kind: 'selection',
+      name: 'tools',
+      label: 'ツールボディ(面/辺/頂点で指す)',
+      shapeKind: 'face',
+      kinds: ['face', 'edge', 'vertex'],
+      min: 1,
+      max: null,
+    },
+    {
+      kind: 'choice',
+      name: 'mode',
+      label: '種別',
+      options: [
+        { value: 'union', label: '結合', buttonId: 'boolean-body-union' },
+        { value: 'cut', label: '切り取り', buttonId: 'boolean-body-cut' },
+        { value: 'intersect', label: '交差', buttonId: 'boolean-body-intersect' },
+      ],
+    },
+  ],
+  build(values) {
+    const target = pickedRefOf(values.target_ref)
+    if (target === null) return { ok: false, reason: 'ターゲットボディが指されていない' }
+    const empty = missingSelection(values, 'tools', 'ツールボディ')
+    const mode = values.mode
+    if (empty !== null) return { ok: false, reason: empty }
+    if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
+    return { ok: true, args: { target_ref: target, mode } }
+  },
+}
+
+/**
  * 矩形反復。`nx`/`ny` は**元を含めた個数**(Fusion360と同じ流儀・コアの契約)。
  *
  * `sketch_id` はここでは付けない —— どのスケッチかは「今どのスケッチモードに居るか」で
@@ -592,6 +644,7 @@ export const SOLID_FEATURE_COMMANDS: CommandDef[] = [
   EXTRUDE_REGIONS,
   FILLET,
   CHAMFER,
+  BOOLEAN_BODY,
   MOVE_BODY,
   MIRROR_BODY,
   DELETE_SELECTION,

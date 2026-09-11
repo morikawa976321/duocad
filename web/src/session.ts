@@ -384,6 +384,13 @@ export type Applied =
     })
   | (AppliedVerbBase & { verb: 'fillet'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'chamfer'; body_id: string; changed_bodies: string[] })
+  | (AppliedVerbBase & {
+      verb: 'boolean_body'
+      target_body_id: string
+      mode: string
+      removed_bodies: string[]
+      changed_bodies: string[]
+    })
   /**
    * スケッチの点・辺の移動(平行移動 / 回転) / 複製。**ソリッドは追従しない**ので
    * `changed_bodies` は無い(本人が許容済み。`duocad/verbs/move_sketch.py`)。
