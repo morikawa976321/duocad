@@ -498,6 +498,19 @@ export function entityHandles(
 }
 
 /**
+ * その図形の「見た目だけの角」(`EntityKindSpec.visualCorners`)を列挙する。
+ *
+ * `entityHandles` とは別 —— こちらは `move_sketch_entities` の的にならない座標の並びで、
+ * `viewport.ts` の当たり判定(`sketchEntityAt`)が本物の点と同じ優先度で拾うために読む。
+ * 持たない種別は空配列(`entityHandles` と違い例外にしない —— line/circle/arc/bezierの
+ * ように「追加の角が無い」のは正常系で、呼び出し側が毎回 kind 分岐する必要が無いように
+ * するため)。
+ */
+export function entityVisualCorners(kind: string, params: Record<string, number>): Array<[number, number]> {
+  return entityKindSpec(kind).visualCorners?.(params) ?? []
+}
+
+/**
  * 図形を (u,v) の折れ線にする。表に無い種別は例外(黙って空の折れ線を返さない)。
  *
  * `resolution` を省くと**ズーム連動を入れる前と同じ既定の粗さ**になる。呼ぶのは

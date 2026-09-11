@@ -23,7 +23,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 // 辺の折れ線の形は `session.ts` の `EdgeGeometry` が正(サーバが配る形そのもの)。
-import { entityHandles, entityPoints, isEntityCorner, snapToSketchEntity } from './entityKinds'
+import { entityHandles, entityPoints, entityVisualCorners, isEntityCorner, snapToSketchEntity } from './entityKinds'
 import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOverlay'
 import { DEFAULT_RESOLUTION, viewResolution } from './adaptiveResolution'
 import { sampleFaces, selectFineFaces, type BodySamples } from './faceCulling'
@@ -2705,10 +2705,35 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
+   * **見た目だけの角**(`entityVisualCorners`。長方形の残り3隅など)を、本物の点と
+   * **同じ半径・同じ優先度**で拾う。`point` は常に null —— 独立した参照は持たない
+   * (`pointKeys` の点ではない)ので、当たった結果は「この図形の、たまたま角の位置」
+   * であり、辺のどこかに当たったのと同じ図形全体の扱いになる(`move_sketch_entities`
+   * の的にはならない)。`sketchEntityAt` の点パスと辺パスの間だけから呼ぶこと。
+   */
+  function sketchCornerAt(offsetX: number, offsetY: number, target: SketchScene): SketchEntityHit | null {
+    const sketchId = activeSketchId
+    if (sketchId === null) return null
+    const { width, height } = size()
+    const candidates: Array<ScreenPickCandidate<SketchEntityHit>> = []
+    for (const entry of target.handles) {
+      for (const [u, v] of entityVisualCorners(entry.kind, entry.params)) {
+        const screen = projectForPick(toWorld(target.frame, u, v), width, height)
+        if (screen === null) continue
+        const distSq = (screen.x - offsetX) ** 2 + (screen.y - offsetY) ** 2
+        candidates.push({ item: { sketchId, entityId: entry.entityId, point: null }, distSq })
+      }
+    }
+    return pickNearestWithinRadius(SKETCH_HANDLE_PIXELS, candidates)
+  }
+
+  /**
    * その画素で当たるスケッチの図形(**アクティブなスケッチだけ**)。
    *
-   * **点が先・辺が後**。点は必ず辺の上に乗っているので、辺を先に見ると端点を掴めない
-   * (頂点マーカーを辺より先に見るのと同じ理由)。当たり半径は画面上の画素で決める
+   * **点が先・角が次・辺が後**。点は必ず辺の上に乗っているので、辺を先に見ると端点を
+   * 掴めない(頂点マーカーを辺より先に見るのと同じ理由)。見た目だけの角(`sketchCornerAt`)
+   * も同じ理由で辺より先 —— 角は必ずどれかの辺の上に乗っているので、辺を先に見ると
+   * 長方形の残り3隅を狙って掴めない。当たり半径は画面上の画素で決める
    * (`edgeAt` / `vertexAt` と同じ `pickPointsAt` / `pickLinesAt`)。
    */
   function sketchEntityAt(offsetX: number, offsetY: number): SketchEntityHit | null {
@@ -2728,6 +2753,8 @@ export function createViewport(container: HTMLElement): Viewport {
       },
     )
     if (handle !== null) return handle
+    const corner = sketchCornerAt(offsetX, offsetY, target)
+    if (corner !== null) return corner
     return pickLinesAt(
       offsetX,
       offsetY,
