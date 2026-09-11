@@ -199,6 +199,17 @@ async function main() {
     )
     if (!hill) fail(`丘の領域が見つからない: ${JSON.stringify(after.regions)}`)
 
+    // **取り込み後に正面から見て寄る**(`#sketch-look` = `lookAtSketch`)。スケッチへ
+    // 入った時点(`#sketch-create`直後)ではまだ図形が0個で、その時のフレーミングが
+    // 空スケッチ用の既定倍率のまま残っている —— `lookAtSketch`は入るときの1回しか
+    // 自動では呼ばれず、取り込みで図形が増えても再フレームされない(コンテンツが
+    // 変わるたび呼び直す設計にはなっていない)。既定倍率のままだと丘の領域(直線でも
+    // 円弧でもないベジエ境界)の三角形が画面上で数px以下になり、`projectRegion`の
+    // 「1三角形につき4点試す」サンプリングが実際にクリックできる画素を1つも
+    // 見つけられずに`null`を返し続ける(engine `duocad-region-projection-fails-on-tiny-triangles`)。
+    await page.click('#sketch-look')
+    await new Promise((resolve) => setTimeout(resolve, 400))
+
     // **スケッチモード中の領域クリックは常に指せる**(`wantsRegions` のゲートは通常モード
     // 専用。`App.svelte` の `wantsRegions` docstring)。選んでから押し出しを起動する。
     await withoutBrowserPanel(page, async () => {
