@@ -1106,13 +1106,13 @@ def check_default_derivation() -> None:
         "PICK_RATIO": ds.PICK_RATIO,
     }
     check(
-        "13-2 連続値保持の既定値が動いていない(参照 容量の8%・10反復 / k_mat 2.0 / p 0.6)",
+        "13-2 連続値保持の既定値が動いていない(参照 容量の8%・10反復 / k_mat 2.0 / p 0.08)",
         reference_defaults
         == {
             "REFERENCE_MATERIAL_RATIO": 0.08,
             "REFERENCE_MAX_ITER": 10,
             "K_MATERIAL": 2.0,
-            "PICK_RATIO": 0.6,
+            "PICK_RATIO": 0.08,
         },
         f"{reference_defaults}",
     )
@@ -1135,9 +1135,10 @@ def check_default_derivation() -> None:
     # --- 13-4 material_mm3 と reference が素通しになっている -----------------
     # **後続(安全率の外側ループ)がこの2つを使う。** `material_mm3` を塞ぐと材料の床が別の量で
     # 立つことになり、`reference` を塞ぐと材料量ごとに参照を作り直すことになる。
-    # **材料の床が摘みを超える量を選ぶ**(`k_mat × 材料量 > p × 案1`、つまり材料量が容量の
-    # `p/k_mat` = 30% 超)—— 摘みが効いている範囲では塊は材料量で動かないので、素通しを
-    # 塊の大きさで見ようとすると何を渡しても緑になる。
+    # **材料の床が他の2つを超える量を選ぶ**(`k_mat × 材料量` が `p × 案1` と回廊の両方より
+    # 大きい量。この題材では回廊 2,197本 が摘み 856本 より大きいので、容量の
+    # `回廊/(k_mat × 案1)` = 10.3% 超が条件)—— 摘みか回廊が効いている範囲では塊は材料量で
+    # 動かないので、素通しを塊の大きさで見ようとすると何を渡しても緑になる。
     wanted = 0.45 * case1_capacity
     passed = ds.derive_default(cond, material_mm3=wanted, reference=reference, **ref_kw)
     check(
@@ -1156,11 +1157,13 @@ def check_default_derivation() -> None:
         f"塊の記録 {passed.stats['reference']['seconds']:.3f}秒 / "
         f"渡した参照 {reference.stats['seconds']:.3f}秒",
     )
-    # **同じ本数の塊を作り直さない。** 安全率の探索は材料量を振るが、摘みが効いている段では
-    # 本数が1本も動かない —— そこで `model_from_design_mask` を払い直すのは丸ごと無駄になる。
-    # **並びが意味を持つ**: 控えは直近1件だけなので、同じ本数を続けて要求して見る。
-    first = ds.derive_default(cond, material_mm3=0.15 * case1_capacity, reference=reference, **ref_kw)
-    same = ds.derive_default(cond, material_mm3=0.20 * case1_capacity, reference=reference, **ref_kw)
+    # **同じ本数の塊を作り直さない。** 安全率の探索は材料量を振るが、摘みか回廊が効いている段
+    # では本数が1本も動かない —— そこで `model_from_design_mask` を払い直すのは丸ごと無駄に
+    # なる。**並びが意味を持つ**: 控えは直近1件だけなので、同じ本数を続けて要求して見る。
+    # **5%/8% は材料の床(`k_mat × 材料量`)が回廊 2,197本 に届かない量**で、どちらも回廊で
+    # 同じ本数になる。45% は材料の床が勝つので本数が変わる。
+    first = ds.derive_default(cond, material_mm3=0.05 * case1_capacity, reference=reference, **ref_kw)
+    same = ds.derive_default(cond, material_mm3=0.08 * case1_capacity, reference=reference, **ref_kw)
     bigger = ds.derive_default(cond, material_mm3=0.45 * case1_capacity, reference=reference, **ref_kw)
     check(
         "13-4 本数が同じ材料量では塊を作り直さない(本数が変われば作り直す)",
@@ -1744,10 +1747,15 @@ def check_width_corridor() -> None:
         conditions=cond15,
         derive_kwargs=dict(kw15, angular_deflection=vx.DEFAULT_ANGULAR_DEFLECTION),
     )
+    # **`pick_ratio=1.0` を明示する。** この参照は ρ が全部 0・順位が素の走査順・回廊 0 の
+    # 手組みなので、**切り出す本数を減らすと塊が繋がるかどうかが走査順まかせになる**
+    # (既定の摘みで切ると `DesignSpaceDisconnectedError` になる)。見たいのは
+    # `corridor_width_guaranteed` の値だけなので、箱を丸ごと取って連結性を題材から外す。
     bare_space = ds.derive_from_reference(
         cond15,
         material_mm3=0.20 * base15.element_count * base15.grid.element_volume,
         reference=bare,
+        pick_ratio=1.0,
         **kw15,
     )
     check(
