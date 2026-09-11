@@ -213,6 +213,11 @@ def _derive_and_run(
         forces=forces,
         solver=solver,
         threads=threads,
+        # **導出へ渡した筆の太さを run にも渡す(層をまたぐ契約)。** 渡さないと
+        # `run_topopt` が「塊は rmin=x で導出したのに rmin=既定 で回そうとしている」と
+        # 落とし、`_evaluate` はその `ValueError` を分類しないので探索ごと死ぬ。
+        rmin=derivation_kwargs.get("rmin"),
+        rmin_mm=derivation_kwargs.get("rmin_mm"),
         keep_model=True,
         stl_path=_SEARCH_STL_PATH if stl_path is None else stl_path,
         progress=run_progress,
@@ -257,7 +262,7 @@ def _build_reference(
 
     **`derivation_kwargs` は切り出し側(`derive_from_reference`)の引数で書かれている**ので、
     参照を作る側(`build_reference`)の名前へ translate してから渡す。素通しにすると
-    `k` などが `derive` まで流れて `TypeError` になる。
+    `pick_ratio` などが `derive` まで流れて `TypeError` になる。
 
     **参照は全段で使い回す。** 材料量ごとに作り直すと「毎回1回余分に回す」形になり、
     連続値保持の利点(SIMP を回すのが探索を通して1回)がそのまま消える。
@@ -266,7 +271,10 @@ def _build_reference(
         return None
     kwargs = dict(derivation_kwargs)
     kwargs.pop("derivation", None)
-    kwargs.pop("k", None)
+    # **切り出しのときだけ効く引数は落とす。** `rmin` / `rmin_mm` は落とさない ——
+    # 幅つき回廊はその半径で測るので、参照を作る側が知っていなければならない。
+    for slicing_only in ("pick_ratio", "k_mat"):
+        kwargs.pop(slicing_only, None)
     build: dict = {}
     if "reference_material_ratio" in kwargs:
         build["material_ratio"] = kwargs.pop("reference_material_ratio")
@@ -353,8 +361,10 @@ def solve_for_safety_factor(
     (クラスdocstring参照)。
 
     `derivation_kwargs` は `design_space.derive_default` への追加引数(既定の連続値保持なら
-    `margin_ratio` / `elements_long_axis` / `spacing` / `k` /
-    `reference_material_ratio` / `reference_max_iter`)。`material_mm3` はここが二分探索の
+    `margin_ratio` / `elements_long_axis` / `spacing` / `pick_ratio` / `k_mat` /
+    `rmin` / `rmin_mm` / `reference_material_ratio` / `reference_max_iter`)。
+    **`rmin` / `rmin_mm` はここから塊の導出と `run_topopt` の両方へ配られる** ——
+    片方だけに渡すと塊が保証した半径と実際に回す半径が食い違う。`material_mm3` はここが二分探索の
     候補材料量で埋めるので**渡さないこと**(渡しても上書きされる)。`reference` も同じで、
     **探索の最初に1回だけ作って全段へ配る** —— 材料量ごとに作り直すと、SIMP を1回で済ませる
     という連続値保持の利点がそのまま消える。

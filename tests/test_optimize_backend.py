@@ -576,11 +576,52 @@ def test_the_candidate_material_and_the_reference_reach_the_derivation(monkeypat
     assert seen["spacing"] == 2.0
 
 
+def test_the_filter_radius_reaches_both_the_derivation_and_the_run(monkeypatch) -> None:
+    """**塊の導出と `run_topopt` の両方へ同じ `rmin` を配る。**
+
+    落ちたら、塊が保証した筆の太さと実際に回す太さが食い違い、`run_topopt` の突き合わせが
+    素の `ValueError` を上げる —— `_evaluate` はそれを分類しないので探索ごと死ぬ。
+    """
+    from duocad.topopt import design_space as ds
+    from duocad.topopt import safety_loop
+
+    seen: dict = {}
+
+    def fake_derive_default(conditions, **kwargs):
+        seen["derive"] = kwargs
+        return "塊"
+
+    def fake_run_topopt(space, **kwargs):
+        seen["run"] = kwargs
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(ds, "derive_default", fake_derive_default)
+    monkeypatch.setattr(ds, "run_topopt", fake_run_topopt)
+    with pytest.raises(RuntimeError, match="stop here"):
+        safety_loop._derive_and_run(
+            conditions=object(),
+            material_mm3=1234.5,
+            allowable_mpa=40.0,
+            youngs_modulus_mpa=2000.0,
+            max_iter=1,
+            force=(0.0, 0.0, -1.0),
+            solver=None,
+            threads=None,
+            rho_min=0.5,
+            percentile=99.5,
+            derivation_kwargs={"spacing": 2.0, "rmin_mm": 1.0},
+        )
+    assert seen["derive"]["rmin_mm"] == 1.0
+    assert seen["run"]["rmin_mm"] == 1.0
+    assert seen["run"]["rmin"] is None
+
+
 def test_the_reference_is_built_once_for_the_whole_search(monkeypatch) -> None:
     """**参照 ρ は探索の最初に1回だけ作る。** 段ごとに作り直すと案5より遅い形になる。
 
-    併せて、切り出し側の引数名(`k` など)を参照を作る側の名前へ translate している
-    ことを見る —— 素通しにすると `derive` まで流れて `TypeError` になる。
+    併せて、切り出し側の引数名(`pick_ratio` など)を参照を作る側の名前へ translate している
+    ことを見る —— 素通しにすると `derive` まで流れて `TypeError` になる。**`rmin` は
+    落とさない**: 幅つき回廊はその半径で測るので、参照を作る側が知っていなければならない。
     """
     from duocad.topopt import design_space as ds
     from duocad.topopt import safety_loop
@@ -594,7 +635,13 @@ def test_the_reference_is_built_once_for_the_whole_search(monkeypatch) -> None:
     monkeypatch.setattr(ds, "build_reference", fake_build_reference)
     got = safety_loop._build_reference(
         object(),
-        {"spacing": 2.0, "k": 1.5, "reference_max_iter": 7},
+        {
+            "spacing": 2.0,
+            "pick_ratio": 0.2,
+            "k_mat": 1.5,
+            "rmin": 3.0,
+            "reference_max_iter": 7,
+        },
         force=(0.0, 0.0, -1.0),
         forces=None,
         solver=None,
@@ -605,7 +652,9 @@ def test_the_reference_is_built_once_for_the_whole_search(monkeypatch) -> None:
     assert len(calls) == 1
     assert calls[0]["spacing"] == 2.0
     assert calls[0]["max_iter"] == 7  # reference_max_iter → max_iter
-    assert "k" not in calls[0]
+    assert calls[0]["rmin"] == 3.0
+    assert "pick_ratio" not in calls[0]
+    assert "k_mat" not in calls[0]
     assert "reference_max_iter" not in calls[0]
 
 

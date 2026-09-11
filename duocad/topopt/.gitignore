@@ -33,3 +33,7 @@ output/check_safety_loop_*.stl
 
 # 空の条件面メッセージの受入検査(`check_design_space.py` [14])が使い回すスクラッチSTL。
 output/_check_empty_condition_face.stl
+
+# 幅つき回廊の受入検査(`check_design_space.py` [15])が rmin の突き合わせを実経路で通すために
+# 使い回すスクラッチSTL。
+output/_check_width_corridor.stl

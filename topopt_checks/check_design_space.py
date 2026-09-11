@@ -1000,14 +1000,69 @@ def check_default_derivation() -> None:
         f"参照 {default_space.stats.get('reference', {}).get('iterations')} 反復 / "
         f"k={default_space.stats.get('k')}",
     )
-    # **塊は k*材料量 と回廊の大きいほう。** 端数は1要素まで許す(要素数は整数)。
+    # **予算は3つの床の最大。** 端数は1要素まで許す(要素数は整数)。
     ev = case1.grid.element_volume
+    budget = default_space.stats["budget"]
     check(
-        "13-1 塊は k*材料量 と回廊の大きいほう以上",
-        default_space.element_count * ev
-        >= min(ds.K * ref_material, default_space.stats["corridor"] * ev) - ev,
-        f"塊 {default_space.element_count} 要素 / k*材料量 {ds.K * ref_material / ev:.0f} 要素 / "
-        f"回廊 {default_space.stats['corridor']} 要素",
+        "13-1 塊は摘み・回廊・材料の3つの床の最大以上",
+        default_space.element_count >= max(budget.values()) - 1,
+        f"塊 {default_space.element_count} 要素 / 予算 {budget} / "
+        f"効いたのは {default_space.stats['budget_binding']!r}",
+    )
+    # **摘みは材料量に依存しない**(これが今回の直しの本体)。定数の固定は 13-2 が持つので、
+    # ここは振る舞いで見る —— 材料量を2倍にしても摘みの項が1本も動かないこと。
+    doubled = ds.derive_default(
+        cond, material_mm3=2.0 * ref_material, reference=reference, **ref_kw
+    )
+    check(
+        "13-1 予算の摘みが材料量に依存しない(材料を2倍にしても動かない)",
+        doubled.stats["budget"]["pick"] == budget["pick"]
+        # 端数は1要素まで許す(`round(2x)` と `2*round(x)` は .5 で1ずれる)。
+        and abs(doubled.stats["budget"]["material"] - 2 * budget["material"]) <= 1,
+        f"摘み {budget['pick']} → {doubled.stats['budget']['pick']} / "
+        f"材料 {budget['material']} → {doubled.stats['budget']['material']}",
+    )
+    # **幅つき回廊が本当に配線されているか。** `build_reference` が旧の6近傍へ戻っても
+    # 予算の算術だけを見る検査は全部緑のままなので、ここは実際の参照に対して測り直して照合する。
+    table = reference.base.table
+    cond_mask = ds._condition_elements(reference.base, table)
+    recomputed, diagnosis = ds.width_corridor_length(
+        reference.order, reference.base, table, cond_mask, rmin=reference.rmin
+    )
+    check(
+        "13-1 参照の回廊が幅つき・全条件のもの(6近傍より厳しく、記録と一致する)",
+        int(reference.corridor) == int(recomputed)
+        and bool(diagnosis["width"])
+        and int(reference.corridor) > int(reference.plain_corridor),
+        f"記録 {reference.corridor} / 測り直し {recomputed} / "
+        f"6近傍 {reference.plain_corridor} / 幅で見た={diagnosis['width']}",
+    )
+    # **回廊が実際に予算を決める段を1つ作る。** 摘みが常に勝つ設定だけを見ていると、
+    # 床としての回廊は一度も効かないまま緑になる。
+    # 摘みを 0 にしたうえで、材料の床が回廊を下回る量を**回廊から逆算して**選ぶ
+    # (`k_mat × 材料量 / 要素体積 < 回廊`)。題材の要素数に当てはめた定数を置かない。
+    floor_material = 0.5 * reference.corridor * ev / ds.K_MATERIAL
+    floored = ds.derive_default(
+        cond, material_mm3=floor_material, reference=reference, pick_ratio=0.0, **ref_kw
+    )
+    # **回廊がそのまま塊になる段では、床を1本削ると述語が破れる**(= 床が最小であり、
+    # かつその本数が実際に塊へ届いている)。塊の側で述語を測り直すのは二分探索の結論の
+    # 言い換えにしかならないので、破れる側で見る。
+    check(
+        "13-1 回廊が予算を決める段があり、その床は1本削ると満たせない",
+        floored.stats["budget_binding"] == "corridor"
+        and floored.stats["ranked_elements"] == reference.corridor
+        and _raises(
+            ds.width_corridor_length,
+            ds.DesignSpaceDisconnectedError,
+            reference.order[: reference.corridor - 1],
+            reference.base,
+            table,
+            cond_mask,
+            rmin=reference.rmin,
+        ),
+        f"効いた床 {floored.stats['budget_binding']!r} / 取った本数 "
+        f"{floored.stats['ranked_elements']}(回廊 {reference.corridor})",
     )
     # **塊は材料量について単調でなければならない**(外側の二分探索がそれを前提にしている)。
     # 材料量ごとに「繋がるまで k を上げる」作りだとここが落ちる —— 繋がった時点で止まるぶん
@@ -1047,15 +1102,17 @@ def check_default_derivation() -> None:
     reference_defaults = {
         "REFERENCE_MATERIAL_RATIO": ds.REFERENCE_MATERIAL_RATIO,
         "REFERENCE_MAX_ITER": ds.REFERENCE_MAX_ITER,
-        "K": ds.K,
+        "K_MATERIAL": ds.K_MATERIAL,
+        "PICK_RATIO": ds.PICK_RATIO,
     }
     check(
-        "13-2 連続値保持の既定値が動いていない(参照 容量の8%・10反復 / k 2.0)",
+        "13-2 連続値保持の既定値が動いていない(参照 容量の8%・10反復 / k_mat 2.0 / p 0.6)",
         reference_defaults
         == {
             "REFERENCE_MATERIAL_RATIO": 0.08,
             "REFERENCE_MAX_ITER": 10,
-            "K": 2.0,
+            "K_MATERIAL": 2.0,
+            "PICK_RATIO": 0.6,
         },
         f"{reference_defaults}",
     )
@@ -1076,15 +1133,20 @@ def check_default_derivation() -> None:
     )
 
     # --- 13-4 material_mm3 と reference が素通しになっている -----------------
-    # **後続(安全率の外側ループ)がこの2つを使う。** `material_mm3` を塞ぐと別の量ぶんを
-    # 切り出すことになり、`reference` を塞ぐと材料量ごとに参照を作り直すことになる。
-    wanted = 0.30 * case1_capacity
+    # **後続(安全率の外側ループ)がこの2つを使う。** `material_mm3` を塞ぐと材料の床が別の量で
+    # 立つことになり、`reference` を塞ぐと材料量ごとに参照を作り直すことになる。
+    # **材料の床が摘みを超える量を選ぶ**(`k_mat × 材料量 > p × 案1`、つまり材料量が容量の
+    # `p/k_mat` = 30% 超)—— 摘みが効いている範囲では塊は材料量で動かないので、素通しを
+    # 塊の大きさで見ようとすると何を渡しても緑になる。
+    wanted = 0.45 * case1_capacity
     passed = ds.derive_default(cond, material_mm3=wanted, reference=reference, **ref_kw)
     check(
-        "13-4 material_mm3 が切り出しまで届いている",
+        "13-4 material_mm3 が切り出しまで届いている(材料の床が効く量で見る)",
         abs(float(passed.stats["material_mm3"]) - wanted) / wanted < 1e-9
+        and passed.stats["budget_binding"] == "material"
         and passed.element_count > default_space.element_count,
         f"渡した {wanted:.1f} mm^3 / 記録 {passed.stats['material_mm3']:.1f} mm^3 / "
+        f"効いた床 {passed.stats['budget_binding']!r} / "
         f"塊 {passed.element_count} 要素(材料 {ref_material:.1f} mm^3 なら "
         f"{default_space.element_count} 要素)",
     )
@@ -1093,6 +1155,23 @@ def check_default_derivation() -> None:
         passed.stats["reference"]["seconds"] == reference.stats["seconds"],
         f"塊の記録 {passed.stats['reference']['seconds']:.3f}秒 / "
         f"渡した参照 {reference.stats['seconds']:.3f}秒",
+    )
+    # **同じ本数の塊を作り直さない。** 安全率の探索は材料量を振るが、摘みが効いている段では
+    # 本数が1本も動かない —— そこで `model_from_design_mask` を払い直すのは丸ごと無駄になる。
+    # **並びが意味を持つ**: 控えは直近1件だけなので、同じ本数を続けて要求して見る。
+    first = ds.derive_default(cond, material_mm3=0.15 * case1_capacity, reference=reference, **ref_kw)
+    same = ds.derive_default(cond, material_mm3=0.20 * case1_capacity, reference=reference, **ref_kw)
+    bigger = ds.derive_default(cond, material_mm3=0.45 * case1_capacity, reference=reference, **ref_kw)
+    check(
+        "13-4 本数が同じ材料量では塊を作り直さない(本数が変われば作り直す)",
+        same.stats["ranked_elements"] == first.stats["ranked_elements"]
+        and same.model is first.model
+        and bigger.stats["ranked_elements"] != first.stats["ranked_elements"]
+        and bigger.model is not first.model,
+        f"材料 15%/20% はどちらも {first.stats['ranked_elements']} 本 → "
+        f"使い回し {same.model is first.model} / "
+        f"材料 45% は {bigger.stats['ranked_elements']} 本 → "
+        f"使い回し {bigger.model is first.model}",
     )
     check(
         "13-4 格子の違う参照は黙って使わない(例外)",
@@ -1132,7 +1211,10 @@ def check_default_derivation() -> None:
         "case1_elements": case1.element_count,
         "material_mm3": achieved,
         "k": round(float(default_space.stats["k"]), 4),
+        "budget": dict(default_space.stats["budget"]),
+        "budget_binding": default_space.stats["budget_binding"],
         "corridor": int(default_space.stats["corridor"]),
+        "plain_corridor": int(default_space.stats["plain_corridor"]),
     }
 
 
@@ -1379,11 +1461,349 @@ def check_empty_condition_face_warning() -> None:
     )
 
 
+# ===========================================================================
+# 15. 幅つき・全条件の回廊(タスク 20260911-1811)
+# ===========================================================================
+class _FakeTable:
+    """`width_corridor_length` が触る面アンカー表の口だけを持つ足場。
+
+    導出を経由せずに塊と条件を手で置くための道具(検査[10]の `_two_islands` と同じ方針)。
+    """
+
+    def __init__(self, masks: dict) -> None:
+        self._masks = masks
+
+    def empty_faces(self) -> set:
+        return set()
+
+    def element_mask(self, faces, layers: int = 1) -> np.ndarray:
+        out = None
+        for face in faces:
+            m = self._masks[int(face)]
+            out = m.copy() if out is None else (out | m)
+        return out
+
+
+def _bridged_blocks(*, thick: bool):
+    """左右の塊を**細い橋**(1x1)で繋いだ足場。`thick=True` なら太い橋(5x5)も足す。
+
+    細い橋は 6近傍では立派な道だが、`rmin=2.0` の筆は入らない —— 収縮すると消える。
+    **これがこの節で見たい病理そのもの**(塊は繋がっているのに材料が通らない)。
+    """
+    shape = (28, 11, 11)
+    left = np.zeros(shape, dtype=bool)
+    left[2:10, 3:8, 3:8] = True
+    right = np.zeros(shape, dtype=bool)
+    right[18:26, 3:8, 3:8] = True
+    thin = np.zeros(shape, dtype=bool)
+    thin[10:18, 5:6, 5:6] = True
+    wide = np.zeros(shape, dtype=bool)
+    wide[10:18, 3:8, 3:8] = True
+
+    mask = left | right | thin | (wide if thick else np.zeros(shape, dtype=bool))
+    fixed = np.zeros(shape, dtype=bool)
+    fixed[2, 5, 5] = True
+    load = np.zeros(shape, dtype=bool)
+    load[25, 5, 5] = True
+    keep = np.zeros(shape, dtype=bool)
+    keep[3:5, 4:7, 4:7] = True  # 保持ソリッドは左側(荷重から遠い側)に置く
+
+    # **順位は「細い橋が先・太い橋が後」に並べる。** 6近傍の回廊は細い橋で満たされるので、
+    # 幅つきの回廊がそれより多くの本数を要ることが数で出る。
+    def flat(block):
+        return np.flatnonzero((block & mask).ravel())
+
+    groups = [flat(left), flat(thin), flat(right)] + ([flat(wide & ~thin)] if thick else [])
+    order = np.concatenate(groups)
+    grid = vx.Grid(origin=(0.0, 0.0, 0.0), spacing=1.0, shape=shape)
+    base = ds.DesignSpace(
+        grid=grid,
+        mask=mask,
+        model=_KeepOnly(keep),
+        soup=None,
+        conditions=ds.Conditions(keep=None, fixed_faces=0, load_faces=1),
+        bbox_min=np.zeros(3),
+        bbox_max=np.ones(3),
+        margin=0.0,
+        margin_ratio=0.0,
+    )
+    table = _FakeTable({0: fixed, 1: load})
+    conditions_mask = fixed | load | keep
+    return base, table, order, conditions_mask
+
+
+class _KeepOnly:
+    """`condition_seeds` が見る `VoxelModel` の口(`keep`)だけを持つ足場。"""
+
+    def __init__(self, keep: np.ndarray) -> None:
+        self.keep = keep
+
+
+def check_width_corridor() -> None:
+    print("\n[15] 幅つき・全条件の回廊(筆が通る太さで全部が荷重と繋がる)")
+    rmin = 2.0
+
+    # --- 15-1 正常系: 太い橋があれば満たせる。6近傍より多くの本数が要る ------
+    base, table, order, cond_mask = _bridged_blocks(thick=True)
+    plain = ds.corridor_length(order, base, table, cond_mask)
+    width, diagnosis = ds.width_corridor_length(order, base, table, cond_mask, rmin=rmin)
+    check(
+        "15-1 正常系: 太い橋がある塊では幅つき回廊が求まる(幅で測ったと報告する)",
+        0 < width <= int(order.size) and diagnosis["width"] is True,
+        f"幅つき {width} 本 / 順位 {int(order.size)} 本(6近傍の回廊は {plain} 本)/ "
+        f"診断 {diagnosis}",
+    )
+    check(
+        "15-1 幅つきは 6近傍より多くの本数を要る(同じ順位・同じ塊で比べる)",
+        width > plain > 0,
+        f"幅つき {width} 本 > 6近傍 {plain} 本",
+    )
+    # **最小性**: 1本足りない順位では満たせない(足りる順位ではちょうどその本数を返す)。
+    # 公開の口だけで見るために、順位そのものを切って渡す。
+    check(
+        "15-1 求まる本数は最小(1本削ると満たせない / 足りる順位ではその本数を返す)",
+        ds.width_corridor_length(order[:width], base, table, cond_mask, rmin=rmin)[0] == width
+        and _raises(
+            ds.width_corridor_length,
+            ds.DesignSpaceDisconnectedError,
+            order[: width - 1],
+            base,
+            table,
+            cond_mask,
+            rmin=rmin,
+        ),
+        f"{width} 本ちょうどで満たせ、{width - 1} 本では満たせない",
+    )
+
+    # --- 15-2 細い橋しかない塊は例外。6近傍では通ることを先に見る ------------
+    thin_base, thin_table, thin_order, thin_cond = _bridged_blocks(thick=False)
+    plain_report = ds.assert_faces_connected(
+        thin_base.mask, thin_table, thin_base.fixed_faces, thin_base.load_faces
+    )
+    check(
+        "15-2 足場: 細い橋だけの塊は 6近傍では1成分(検出力の前提)",
+        plain_report["components"] == 1 and plain_report["shared_labels"] == [1],
+        f"成分 {plain_report['components']} / 共通 {plain_report['shared_labels']}",
+    )
+    raised = None
+    try:
+        ds.width_corridor_length(thin_order, thin_base, thin_table, thin_cond, rmin=rmin)
+    except ds.DesignSpaceDisconnectedError as exc:
+        raised = exc
+    except Exception as exc:  # noqa: BLE001 — 想定外の例外型も記録して不合格にする
+        raised = exc
+    check(
+        "15-2 細い橋だけの塊は DesignSpaceDisconnectedError(型が分かれている)",
+        isinstance(raised, ds.DesignSpaceDisconnectedError)
+        and not isinstance(raised, ds.DesignSpaceTooSmallError)
+        and isinstance(raised, ValueError),
+        f"{type(raised).__name__ if raised else '例外が上がらなかった'}",
+    )
+    check(
+        "15-2 構造化診断: 荷重から届かなかった条件を名指ししている",
+        raised is not None
+        and set(getattr(raised, "unreached", [])) == {"fixed_face_0", "keep_1"},
+        f"unreached={getattr(raised, 'unreached', None)}",
+    )
+    check(
+        "15-2 文面が「道ではなく道の太さ」を名指ししている(余白を上げろと誤誘導しない)",
+        raised is not None and "太さ" in str(raised) and "margin_ratio" not in str(raised),
+        str(raised)[:110] if raised else "",
+    )
+
+    # --- 15-3 変異検査: 述語を6近傍だけに戻すと検出できなくなる --------------
+    original_erode = ds._erode
+    ds._erode = lambda mask, rmin: np.asarray(mask, dtype=bool)  # 収縮しない = 6近傍だけ
+    try:
+        mutated = ds.width_corridor_length(
+            thin_order, thin_base, thin_table, thin_cond, rmin=rmin
+        )[0]
+        mutated_raised = None
+    except ds.DesignSpaceDisconnectedError as exc:
+        mutated, mutated_raised = None, exc
+    finally:
+        ds._erode = original_erode
+    check(
+        "15-3 変異検査: 収縮(`_erode`)を恒等に差し替えると細い橋を見逃す(検出力の確認)",
+        mutated_raised is None and mutated is not None,
+        f"{mutated} 本で満たしたことになる"
+        if mutated_raised is None
+        else "収縮を外しても落ちた(この検査は幅を見ていない)",
+    )
+
+    # --- 15-4 解像度そのものが足りないときは別の診断 -------------------------
+    # 塊のどこにも筆が入らない配置。**条件の置き方の問題ではない**ので、文面は要素サイズを指す。
+    flat_shape = (20, 20, 7)
+    flat_mask = np.zeros(flat_shape, dtype=bool)
+    flat_mask[:, :, 2:5] = True  # 3要素厚の板。rmin=2.0 の筆はどこにも入らない
+    flat_fixed = np.zeros(flat_shape, dtype=bool)
+    flat_fixed[1, 1, 3] = True
+    flat_load = np.zeros(flat_shape, dtype=bool)
+    flat_load[18, 18, 3] = True
+    flat_base = ds.DesignSpace(
+        grid=vx.Grid(origin=(0.0, 0.0, 0.0), spacing=1.0, shape=flat_shape),
+        mask=flat_mask,
+        model=_KeepOnly(flat_fixed),
+        soup=None,
+        conditions=ds.Conditions(keep=None, fixed_faces=0, load_faces=1),
+        bbox_min=np.zeros(3),
+        bbox_max=np.ones(3),
+        margin=0.0,
+        margin_ratio=0.0,
+    )
+    flat_length, flat_diagnosis = ds.width_corridor_length(
+        np.flatnonzero(flat_mask.ravel()),
+        flat_base,
+        _FakeTable({0: flat_fixed, 1: flat_load}),
+        flat_fixed | flat_load,
+        rmin=rmin,
+    )
+    # **落とさない。** 収縮が空なのは「ρ が 1 に届くセルが無い」であって「材料が出ない」では
+    # ない(メッシュの閾値は 0.5 で、3要素幅でも ρ=0.829 出る)。幅を外した全条件・6近傍の
+    # 床へ落ちて、保証が取れなかったことを報告する。
+    check(
+        "15-4 どこにも筆が入らない解像度では落とさず、幅を外した床と理由を返す",
+        flat_diagnosis["width"] is False
+        and flat_diagnosis.get("reason") == "rmin_does_not_fit_anywhere"
+        and 0 <= flat_length <= int(flat_mask.sum()),
+        f"床 {flat_length} 本 / 診断 {flat_diagnosis}",
+    )
+    # 同じ板で条件を切り離すと、幅を外した述語でもちゃんと落ちる(床が無力化していない)。
+    split = flat_mask.copy()
+    split[10, :, :] = False
+    split_base = dataclasses.replace(flat_base, mask=split)
+    check(
+        "15-4 幅を外した床でも、条件が別成分に落ちる塊は例外になる",
+        _raises(
+            ds.width_corridor_length,
+            ds.DesignSpaceDisconnectedError,
+            np.flatnonzero(split.ravel()),
+            split_base,
+            _FakeTable({0: flat_fixed, 1: flat_load}),
+            flat_fixed | flat_load,
+            rmin=rmin,
+        ),
+        "3要素厚の板を x=10 で断ち切った",
+    )
+    # **幅を外した側で種を膨張させると、隙間で切れた条件を「届いた」と読む。**
+    # 拘束の種を本体から2要素離して置く: 素の種なら別成分、膨張(rmin=2.0)なら芯に触る。
+    gapped = np.zeros(flat_shape, dtype=bool)
+    gapped[0, 5, 3] = True          # 孤立した1セル(拘束の種)
+    gapped[2:, :, 2:5] = True       # 本体(x=2 以降)。x=1 が空いている
+    gap_fixed = np.zeros(flat_shape, dtype=bool)
+    gap_fixed[0, 5, 3] = True
+    gap_load = np.zeros(flat_shape, dtype=bool)
+    gap_load[18, 18, 3] = True
+    gap_base = dataclasses.replace(flat_base, mask=gapped, model=_KeepOnly(gap_load))
+    check(
+        "15-4 幅を外した床では種を膨張させない(2要素の隙間で切れた条件を見逃さない)",
+        _raises(
+            ds.width_corridor_length,
+            ds.DesignSpaceDisconnectedError,
+            np.flatnonzero(gapped.ravel()),
+            gap_base,
+            _FakeTable({0: gap_fixed, 1: gap_load}),
+            gap_fixed | gap_load,
+            rmin=rmin,
+        ),
+        "拘束の種を本体から2要素離した(膨張を使うと届いたことになる)",
+    )
+
+    # --- 15-6 塊に要素を持たない条件は落とし、落とした名前を持ち帰る ----------
+    # **除外ソリッドが条件面のアンカーを全部削った配置。** 落とすだけで記録しないと、
+    # 「拘束面が1枚だけ塊から消えている」が誰にも要求されないまま無言で通る。
+    base2, table2, order2, cond2 = _bridged_blocks(thick=True)
+    outside = np.zeros(base2.mask.shape, dtype=bool)
+    outside[0, 0, 0] = True  # 塊(x>=2)の外
+    table_dropped = _FakeTable(
+        {0: table2.element_mask([0]) | outside, 1: table2.element_mask([1]), 2: outside}
+    )
+    base_dropped = dataclasses.replace(
+        base2, conditions=ds.Conditions(keep=None, fixed_faces=(0, 2), load_faces=1)
+    )
+    length2, diag2 = ds.width_corridor_length(
+        order2, base_dropped, table_dropped, cond2, rmin=rmin
+    )
+    check(
+        "15-6 塊に要素を持たない条件面は落とし、名前を診断に残す(未到達には数えない)",
+        diag2.get("dropped_seeds") == ["fixed_face_2"] and length2 == width,
+        f"落とした種 {diag2.get('dropped_seeds')} / 本数 {length2}(落とさない側は {width})",
+    )
+
+    # --- 15-7 幅を測っていない参照は「保証あり」を騙らない --------------------
+    # `stats` を持たない参照(手で組んだもの・控えを知らない版の pickle)は既定で False。
+    cond15 = ds.demo_conditions(0.0)
+    kw15 = {"elements_long_axis": CASE1_LONG_AXIS}
+    base15 = ds.derive(cond15, **kw15)
+    bare = ds.Reference(
+        base=base15,
+        rho=np.zeros(base15.mask.shape),
+        order=np.flatnonzero(np.asarray(base15.mask).ravel()),
+        material_mm3=1.0,
+        corridor=0,
+        conditions=cond15,
+        derive_kwargs=dict(kw15, angular_deflection=vx.DEFAULT_ANGULAR_DEFLECTION),
+    )
+    bare_space = ds.derive_from_reference(
+        cond15,
+        material_mm3=0.20 * base15.element_count * base15.grid.element_volume,
+        reference=bare,
+        **kw15,
+    )
+    check(
+        "15-7 stats の無い参照から切り出した塊は corridor_width_guaranteed が False",
+        bare_space.stats["corridor_width_guaranteed"] is False,
+        f"{bare_space.stats['corridor_width_guaranteed']!r}",
+    )
+
+    # --- 15-5 rmin が層をまたぐ契約として記録・検算される --------------------
+    cond = ds.demo_conditions(0.0)
+    scratch_stl = OUTPUT_DIR / "_check_width_corridor.stl"
+    recorded = ds.derive(cond, elements_long_axis=CASE1_LONG_AXIS, rmin=3.0)
+    plain_space = ds.derive(cond, elements_long_axis=CASE1_LONG_AXIS)
+    check(
+        "15-5 rmin を渡した塊は stats に要素単位で記録される(渡さなければ記録しない)",
+        recorded.stats.get("rmin") == 3.0 and "rmin" not in plain_space.stats,
+        f"記録 {recorded.stats.get('rmin')!r} / 渡さない側 {plain_space.stats.get('rmin')!r}",
+    )
+    check(
+        "15-5 違う rmin で回そうとすると run_topopt が落とす",
+        _raises(
+            ds.run_topopt, ValueError, recorded, rmin=2.5, max_iter=1, stl_path=scratch_stl
+        ),
+        "塊は rmin=3.0 / 回そうとしたのは rmin=2.5",
+    )
+    # **mm で来ても同じ半径なら通る**(格子の spacing で割ってから比べている)。
+    same_mm = 3.0 * float(recorded.grid.spacing)
+    ran = ds.run_topopt(recorded, rmin_mm=same_mm, max_iter=1, stl_path=scratch_stl)
+    check(
+        "15-5 同じ半径を mm で渡した呼び出しは通る(spacing で割ってから比べている)",
+        ran.get("result") is not None,
+        f"rmin_mm={same_mm:.4g}(= 3.0要素 × {float(recorded.grid.spacing):.4g}mm)",
+    )
+    check(
+        "15-5 記録の無い塊は何も確かめない(案1を素で導出した既存の呼び出しが動く)",
+        ds.run_topopt(plain_space, rmin=1.9, max_iter=1, stl_path=scratch_stl).get("result")
+        is not None,
+        "rmin を記録していない塊に別の rmin を渡しても通る",
+    )
+
+    RESULTS["width_corridor"] = {
+        "rmin": rmin,
+        "plain": int(plain),
+        "width": int(width),
+        "order": int(order.size),
+        "unreached": list(getattr(raised, "unreached", [])),
+        "flat_plate": {"length": int(flat_length), **flat_diagnosis},
+    }
+
+
 def main() -> int:
     print("=" * 72)
     print("check_design_space.py : 塊(設計空間)の受入検査")
     print("  [1]-[4] 分離 / [5]-[9] 案1(外接直方体+余白) / [10] 連結性ガード")
     print("  [13] 既定の導出(入口が1つ) / [14] 空の条件面のメッセージ")
+    print("  [15] 幅つき・全条件の回廊")
     print("=" * 72)
     # **1件が例外で落ちても残りを走らせる。** 実装を壊したときに最初の1件で止まると、
     # 何がどこまで壊れているかが1周では分からない(`check()` と同じ方針を関数の粒度でも取る)。
@@ -1400,6 +1820,7 @@ def main() -> int:
         check_case1_connectivity,
         check_default_derivation,
         check_empty_condition_face_warning,
+        check_width_corridor,
     ):
         try:
             section()

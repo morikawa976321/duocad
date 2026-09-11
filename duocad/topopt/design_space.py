@@ -30,11 +30,13 @@ docs/TOPOPT.md「除外ソリッドを `obstacle` に渡さない(設計判断)�
 ## 連続値保持(`derive_from_reference`。いまの既定)
 
 案1は**条件の位置だけ**から塊を決める(どこに材料が要るかを見ていない)。連続値保持は
-**探索を通して1回だけ本番の格子で SIMP を回し、ρ を二値化せず順位として使い回す**。材料量ごとの
-塊は「順位の上から `k × 材料量` ぶん、ただし回廊(`Reference.corridor`)を下回らない」。
-**回廊は参照ごとに1回だけ求める固定値**で、これが連結性の保証であり、塊が材料量について
-単調であることの根拠でもある(材料量ごとに繋がるまで広げる作りにすると単調性が壊れ、
-外側の二分探索の前提が崩れる)。hanger の実測で、被覆 100%・壁に接した材料 5.37%(案1と同値)。
+**探索を通して1回だけ本番の格子で SIMP を回し、ρ を二値化せず順位として使い回す**。
+
+**塊の大きさは材料量から切り離してある**(`PICK_RATIO` の節)。材料量ごとの塊は
+`max(摘み `p`×案1の要素数, 回廊, k_mat×材料量)` 本を順位の先頭から取ったもので、
+どの項も材料量について単調なので、外側の二分探索が前提にしている単調性は保たれる。
+**回廊(`Reference.corridor`)は参照ごとに1回だけ求める固定値**で、全ての条件が
+**密度フィルタの筆が通る太さ**で荷重と繋がっていることを保証する(`width_corridor_length`)。
 
 ## 格子の外は誰も見ていない
 
@@ -87,7 +89,10 @@ class DesignSpaceDisconnectedError(ValueError):
     そのまま効く。
 
     `components`(塊の連結成分の数)/ `fixed_labels` / `load_labels` を属性で持つので、
-    呼び出し側は文面を読まずに機械で分岐できる。
+    呼び出し側は文面を読まずに機械で分岐できる。**幅つき判定(`width_corridor_length`)が
+    上げたときは `unreached` に「荷重から届かなかった条件の名前」が入る** —— 面の名前は
+    `anchor.run_pipeline` が反力グループに付けるものと同じ `fixed_face_<面添字>` なので、
+    落ちた条件を反力の内訳とそのまま突き合わせられる。
     """
 
     def __init__(
@@ -97,11 +102,13 @@ class DesignSpaceDisconnectedError(ValueError):
         components: int = 0,
         fixed_labels: Sequence[int] = (),
         load_labels: Sequence[int] = (),
+        unreached: Sequence[str] = (),
     ) -> None:
         super().__init__(message)
         self.components = int(components)
         self.fixed_labels = [int(v) for v in fixed_labels]
         self.load_labels = [int(v) for v in load_labels]
+        self.unreached = [str(v) for v in unreached]
 
 
 # ---------------------------------------------------------------------------
@@ -223,9 +230,11 @@ def assert_faces_connected(
     `empty_faces()` を見る既存の口より手前で別の例外に化けて原因が分かりにくくなる。
 
     **拘束面・荷重面をそれぞれ和集合として見る**(拘束のどれか1枚と荷重のどれか1枚が
-    塊の中でつながっていれば通る)。**全部つながっていることは要求しない** ——
-    要求すると、意図して片持ちの一部だけを別成分に置いた配置が落ちる。ただし
-    「つながっていない拘束面は効かない」ので、これは検出漏れの側に倒した判断である。
+    塊の中でつながっていれば通る)。**ここは全部つながっていることを要求しない** ——
+    要求すると、意図して片持ちの一部だけを別成分に置いた配置が落ちる。
+    **面ごと・保持ごとに名指しで要求するのは `width_corridor_length` のほう**で、
+    連続値保持はそちらを塊の床にしている(和集合で通した「効かない拘束面」が実際に
+    反力 0.0 と保持ソリッドの消失を起こした。2026-09-11 実測)。
     """
     faces = [int(f) for f in _as_faces(fixed_faces)] + [
         int(f) for f in _as_faces(load_faces)
@@ -378,6 +387,8 @@ def derive(
     deviation: Optional[float] = None,
     deviation_ratio: float = vx.DEFAULT_DEVIATION_RATIO,
     angular_deflection: float = vx.DEFAULT_ANGULAR_DEFLECTION,
+    rmin: Optional[float] = None,
+    rmin_mm: Optional[float] = None,
 ) -> DesignSpace:
     """4条件から塊(設計空間)を導出する。**設計空間ソリッドは受け取らない。**
 
@@ -390,9 +401,15 @@ def derive(
     `spacing` を渡すと `elements_long_axis` の代わりに**要素サイズを固定**する(塊の大きさから
     要素数を逆算する)。姿勢や余白を振ったときに「解像度が変わったから結果が変わった」という
     交絡を外すための口 —— 実測はこちらを使う。
+
+    `rmin` / `rmin_mm`(排他)は**案1の塊の形には効かない**。記録するだけで、`run_topopt` が
+    「この塊を作ったときの半径」として突き合わせる(連続値保持の幅つき回廊と同じ口を
+    案1にも開けてある)。渡さなければ記録せず、`run_topopt` は何も確かめない。
     """
     started = time.perf_counter()
     ratio = float(margin_ratio)
+    # 格子を起こす前に引数の形だけ見る(ボクセル化を払ってから落とさない)。
+    simp.check_rmin_target(rmin, rmin_mm)
     if not math.isfinite(ratio):
         raise ValueError(f"margin_ratio must be finite, got {margin_ratio!r}")
     if int(elements_long_axis) < 1:
@@ -561,6 +578,8 @@ def derive(
         "keep_elements": int(model.stats["keep_elements"]),
         "obstacle_occupancy": obstacle_stats,
     }
+    if rmin is not None or rmin_mm is not None:
+        stats["rmin"] = _resolve_rmin_elements(grid, rmin=rmin, rmin_mm=rmin_mm)
     stats["seconds"] = time.perf_counter() - started
     return DesignSpace(
         grid=grid,
@@ -603,19 +622,34 @@ REFERENCE_MAX_CORRIDOR = 0.40
 REFERENCE_RETRY_GROWTH = 1.6
 REFERENCE_MAX_ATTEMPTS = 4
 
-# 設計空間の容量 ÷ 材料量。**被覆だけで決めると 1.5 になるが、それでは密度フィルタが
-# 体積目標に届かない。** hanger の実測では 1.5 で全材料量域の被覆が 99.91〜100% だが、
-# 設計空間が絶対要素数で小さいと `simp.VolumeTargetError` を踏む
-# (bracket 3,336要素の実測: 塊 751要素・充填率 67% で届かず、1,001要素・67% なら届く)。
-# **2.0(充填率 50%)は同じ題材の全材料量域で届き、壁に接した材料の割合も案1と完全に一致する。**
-# 1.75(57%)も届いたが、落ちた 67% との隔たりが1段しかないので採らなかった。
+# 設計空間の容量 ÷ 材料量。**材料が塊の容量に迫る部品のためだけの床である**(塊の大きさ
+# そのものを決めるのは `PICK_RATIO`)。根拠は「塊の充填率が 50% を超えると密度フィルタが
+# 体積目標に届かない」で、下の実測はその上端の崖を測ったものである。
 #
-# **これを下回るのは「回廊」に足りないときだけである。** 回廊(`Reference.corridor`)は拘束と
-# 荷重を繋ぐのに要る順位の先頭からの最小本数で、参照ごとに1回だけ求めて全材料量で共有する。
-# 材料量ごとに「繋がるまで k を上げる」設計は**採らなかった** —— 繋がった時点で止めると
-# 塊が材料量に対して単調でなくなり(bracket 20要素の実測で 45%→2,927要素 / 50%→2,502要素)、
-# 二分探索が前提にしている単調性が崩れて安全率が 5522 → 3893 と逆行した。
-K = 2.0
+# **被覆だけで決めると 1.5 になるが、それでは密度フィルタが体積目標に届かない。** hanger の
+# 実測では 1.5 で全材料量域の被覆が 99.91〜100% だが、設計空間が絶対要素数で小さいと
+# `simp.VolumeTargetError` を踏む(bracket 3,336要素の実測: 塊 751要素・充填率 67% で届かず、
+# 1,001要素・67% なら届く)。**2.0(充填率 50%)は同じ題材の全材料量域で届き、壁に接した材料の
+# 割合も案1と完全に一致する。** 1.75(57%)も届いたが、落ちた 67% との隔たりが1段しかないので
+# 採らなかった。
+K_MATERIAL = 2.0
+
+# 塊の要素数 ÷ 案1の塊の要素数。**材料量から決めると塊が砕ける**(2026-09-11 実測:
+# hanger_bar_attachment 2.412mm・材料が参照の 1/17.3 で、塊 11,166要素が6成分に割れ、
+# 拘束面10 が 81要素の孤島になって反力が厳密に 0.0 / 保持#4 が結果メッシュから消えた)。
+# 費用は塊の大きさにほぼ線形(実測2点 `秒/反復 ≈ 34.8 + 1.14e-4 × 塊の要素数`。
+# 塊 1.0% で 36.1秒 / 塊 100% で 159.8秒)。幅の保証に要るのは同じ題材で案1の 6.6%
+# (`width_corridor_length` の床 72,158本)だけで、残りは余裕のぶんである。
+#
+# **上げすぎると SIMP が解けない(下端の崖)。** 初期の一様密度は `材料量 /(p × 案1の容量)`
+# なので、p が大きいほど ρ が下限に張り付いて系が悪条件になる。同じ題材・材料 70,634.5mm^3
+# の実測: **p=0.08(充填率 5.8%)は 40反復完走、p=0.60(充填率 0.77%)は最初の求解で
+# `simp.SolveResidualError`**(残差 2.701e-06 > 1e-06 / max|u| = 1.427e+06)。
+# **この方向を止める床は予算に入っていない** —— `K_MATERIAL` は「塊が材料に対して小さすぎる」
+# 側の床で、大きすぎる側には何も無い。**`safety_loop._evaluate` はこの `SolveResidualError`
+# を `"too_little"` に分類する**ので、探索は「その材料量では足りない」と読んで上へ逃げ、
+# 例外も警告も出ないまま重い答えへ収束する。表は docs/TOPOPT.md「下端の崖」。
+PICK_RATIO = 0.60
 
 # 参照 run も STL を書く(`run_topopt` の契約)。**受入検査が成果物として当てにしている既定の
 # 出力先(`output/bracket.stl` / `output/design_space_case1.stl`)へ向けない。**
@@ -652,16 +686,25 @@ class Reference:
     `base` は参照 run を回した案1の塊。`order` は**塊に入れたい順**に並べた要素の平坦添字で、
     `base.mask` の中の要素だけが入っている(だから `order[:n]` は必ず塊の中に収まる)。
 
-    `corridor` は**拘束と荷重を繋ぐのに要る `order` の先頭からの最小本数**。材料量がいくら
-    小さくてもここまでは必ず取る —— これが連結性の保証であり、同時に「塊は材料量について
-    単調」を成り立たせる仕掛けでもある(材料量ごとに繋がるまで広げる作りにすると、繋がった
-    時点で止まるぶん塊が上下して単調性が壊れる)。
+    `corridor` は `width_corridor_length` が求めた**全条件が筆の通る太さで荷重と繋がる最小
+    本数**で、材料量がいくら小さくてもここまでは必ず取る。**筆がどこにも入らない解像度では
+    幅を外した 6近傍の値になる** —— どちらかは `stats["corridor_width_guaranteed"]` を見る。`plain_corridor` は 6近傍だけで
+    測った同じ量で、**参照が痩せすぎたかの判定(`REFERENCE_MAX_CORRIDOR`)にしか使わない**
+    —— あの閾値はこの量で測って決めたので、別の量に差し替えると校正が外れる。
+
+    `rmin` は**この参照の `corridor` を求めたときのフィルタ半径[要素]**。層をまたぐ契約で、
+    `run_topopt` が「いま回す rmin」と突き合わせる —— 呼び出し側が後から変えると、幅の保証が
+    黙って別の半径のものになる。
 
     `derive_kwargs` は `base` を起こしたときの導出引数(`angular_deflection` を含む)、
     `conditions` はその元になった4条件。**格子が違えば ρ も順位も別の場所を指す**ので、
     切り出す側が両方を突き合わせる(`derive_from_reference`)。**条件は同一性(`is`)で見る**
     —— 形状は OCCT のオブジェクトなので値比較が高くつくうえ、作り直した条件は形が変わって
     いるかもしれない(参照も作り直すのが正しい)。
+
+    `cache` は `derive_from_reference` が持つ直近1件の控え(本数 → `VoxelModel`)。
+    **1件しか持たない**のは、格子ぶんの `VoxelModel` を2つ抱えると峰メモリがフィルタ・
+    更新則の一時配列と重なるため。
     """
 
     base: DesignSpace
@@ -669,9 +712,28 @@ class Reference:
     order: np.ndarray
     material_mm3: float
     corridor: int = 0
+    plain_corridor: int = 0
+    rmin: float = simp.DEFAULT_RMIN
     conditions: Any = None
     derive_kwargs: dict = field(default_factory=dict)
     stats: dict = field(default_factory=dict)
+    cache: dict = field(default_factory=dict, repr=False, compare=False)
+
+    def __getstate__(self) -> dict:
+        """**控えを pickle に載せない**(格子ぶんの `VoxelModel` が丸ごと書き出される)。"""
+        return dict(self.__dict__, cache={})
+
+    def __setstate__(self, state: dict) -> None:
+        """**`cache` を知らない版で書いた pickle も読めるようにする。**
+
+        `field(default_factory=...)` のフィールドは dataclass がクラス属性を消すので、
+        古い pickle を復元すると `cache` だけ**属性が存在しない**まま残り、次に触った
+        ところで `AttributeError` になる(素の既定値を持つ `rmin` / `plain_corridor` は
+        クラス属性に落ちるので助かる)。読む側は `measure_simp_convergence.py` /
+        `plot_simp_safety_convergence.py`。**`corridor` の意味は版をまたいで変わっている**
+        ので、古い pickle の回廊は 6近傍の値であることに注意。
+        """
+        self.__dict__.update({"cache": {}, **state})
 
 
 def reference_order(
@@ -721,7 +783,12 @@ def corridor_length(
     table: an.AnchorTable,
     conditions_mask: np.ndarray,
 ) -> int:
-    """拘束と荷重を繋ぐのに要る、`order` の先頭からの**最小本数**を二分探索で求める。
+    """拘束と荷重を **6近傍で** 繋ぐのに要る、`order` の先頭からの最小本数を二分探索で求める。
+
+    **これは塊の床ではない。** 床は `width_corridor_length`(全条件・筆の通る太さ)のほうで、
+    こちらは**参照が痩せすぎたかの判定(`REFERENCE_MAX_CORRIDOR`)専用**である ——
+    あの 0.40 という閾値はこの量(6近傍・拘束と荷重だけ)で測って決めたので、別の量に
+    差し替えると校正が黙って外れる。
 
     **繋がるかどうかは本数について単調である**(要素を足して繋がりが切れることはない)ので
     二分探索が使える。全部使い切っても繋がらなければ、それは案1の塊そのものが切れている配置
@@ -760,6 +827,228 @@ def corridor_length(
     return hi
 
 
+# ---------------------------------------------------------------------------
+# 幅つき・全条件の回廊(塊の床)
+# ---------------------------------------------------------------------------
+# **6近傍で繋がっているだけでは材料は通らない。** `simp` の物理密度は
+# `_filter_conv(design, kernel, r) / hs` で、**`hs` は格子全体の 1 を畳んだ重み**(塊の外も
+# 分母に入る)なのに**分子には塊の外が 0 として入る**。だから塊の外に囲まれた細い通路は、
+# 設計変数を 1 にしても物理密度が 1 に届かない。`DEFAULT_RMIN = 2.5`(要素)での実測
+# (メッシュの閾値は 0.5):
+#
+# 角柱の通路が 1/2/3/4/5要素幅のとき ρ の上限は 0.158/0.428/0.829/0.915/1.000 で、
+# **収縮が空でないことは「ρ が 1 に届く」と厳密に同値**(5点で一致。表は docs/TOPOPT.md
+# 「なぜ6近傍では足りないか」)。メッシュの閾値は 0.5 なので**述語は一段きつい** ——
+# 3要素幅でも材料は出る。厳しい側なので保証は割れない。
+#
+# しかも「繋がる最小の本数」を二分探索すると系統的にいちばん細い経路が選ばれるので、
+# 6近傍の回廊は必ずこの穴を踏む(2026-09-11 実測: hanger_bar_attachment 2.412mm で、
+# 6近傍を満たす 40,046本では拘束面10 と保持#4 に材料が届かず、反力が厳密に 0.0 になった)。
+def _resolve_rmin_elements(
+    grid: vx.Grid, *, rmin: Optional[float], rmin_mm: Optional[float]
+) -> float:
+    """フィルタ半径を要素単位へ畳む。**`simp` と同じ関数を通す(層をまたぐ契約)。**
+
+    ここで独自に `rmin_mm / spacing` と書くと、`simp.MIN_RMIN` の床も `FilterRadiusError` の
+    逃げ道の案内も二重になる —— 塊が保証した半径と `optimize` が実際に使う半径は
+    **同じ規則で決まっていなければならない**。
+    """
+    simp.check_rmin_target(rmin, rmin_mm)
+    nelx, nely, nelz = (int(n) for n in grid.shape)
+    return float(
+        simp._resolve_rmin(
+            rmin=rmin,
+            rmin_mm=rmin_mm,
+            element_volume_mm3=float(grid.element_volume),
+            nelx=nelx,
+            nely=nely,
+            nelz=nelz,
+        )
+    )
+
+
+def _erode(mask: np.ndarray, rmin: float) -> np.ndarray:
+    """半径 `rmin`(要素)のユークリッド球で収縮 = **物理密度が 1 に届きうるセル**。
+
+    `generate_binary_structure(3,1)` の反復(L1球)で代用しないこと —— フィルタの台は
+    ユークリッド球なので、L1球で測ると**結論が2倍ずれる**(2026-09-11 実測: L1球半径3では
+    「参照材料の 2.0倍が要る」、ユークリッド 2.5では「1.0倍で足りる」)。
+
+    **塊の外は背景として数える**(`hs` は格子全体の 1 を畳んだ重みなので、塊の外に接した
+    セルは分子だけが欠けて ρ が 1 に届かない)。格子は `voxelize.DEFAULT_PAD` のぶん必ず
+    塊より大きいので、これは「箱の縁は壁」を意味する。
+
+    **`>=` ではなく `>` で切る(意図的に半シェルぶん厳しい)。** `rmin` ちょうどの距離にある
+    背景セルは重み 0 なので物理的には ρ=1 に届くが、距離がちょうど `rmin` になるのは
+    `rmin**2` が3つの平方数の和で表せるときだけで(既定 2.5 では起きない)、厳しい側は
+    「要る幅を多めに見積もる」だけなので保証を割る側には倒れない。
+    """
+    m = np.asarray(mask, dtype=bool)
+    if m.all():
+        # 格子いっぱいの塊。縁では `hs` も同じだけ削れるので ρ=1 に届く。
+        # (`distance_transform_edt` は背景が1つも無い入力に無意味な値を返す ——
+        #  全 True の 5^3 で最小 1.0・最大 7.55。ここで分けないとその値を信じてしまう。)
+        return m.copy()
+    return ndimage.distance_transform_edt(m) > float(rmin)
+
+
+def _dilate(mask: np.ndarray, rmin: float) -> np.ndarray:
+    """半径 `rmin`(要素)のユークリッド球で膨張(台は `_erode` と同じ球)。"""
+    m = np.asarray(mask, dtype=bool)
+    if not m.any():
+        return np.zeros_like(m)
+    return ndimage.distance_transform_edt(~m) <= float(rmin)
+
+
+def condition_seeds(base: DesignSpace, table: an.AnchorTable) -> dict:
+    """幅つき判定が「荷重と繋がっていること」を要求する条件の集まり。
+
+    拘束面1枚ごと・荷重面1枚ごと・**保持ソリッドの連結成分ごと**に1つ。`assert_faces_connected`
+    は拘束面を和集合として見る(どれか1枚が荷重と繋がれば合格)ので、**残りの面が取り残された
+    塊を通してしまう** —— そこで落ちた面は荷重を1つも受け持たず、その面が乗っている保持
+    ソリッドは結果メッシュから消える(2026-09-11 実測)。ここは面ごと・保持ごとに名指しで見る。
+
+    名前は `anchor.run_pipeline` が反力グループに付けるものと同じ `fixed_face_<面添字>`。
+    """
+    inside = np.asarray(base.mask, dtype=bool)
+    seeds: dict = {}
+    for kind, faces in (("fixed", base.fixed_faces), ("load", base.load_faces)):
+        for face in faces:
+            seeds[f"{kind}_face_{int(face)}"] = (
+                table.element_mask([int(face)], layers=1) & inside
+            )
+    labels, count = element_components(np.asarray(base.model.keep, dtype=bool) & inside)
+    for index in range(1, int(count) + 1):
+        seeds[f"keep_{index}"] = labels == index
+    return seeds
+
+
+def width_corridor_length(
+    order: np.ndarray,
+    base: DesignSpace,
+    table: an.AnchorTable,
+    conditions_mask: np.ndarray,
+    *,
+    rmin: float,
+) -> tuple:
+    """**全ての条件が荷重と繋がる、`order` の先頭からの最小本数**と、その判定の診断。
+
+    `(本数, {"width": bool, ...})` を返す。`width` が `True` のときは述語が
+    `erode(塊, rmin)` の上の連結で、条件そのものは1要素厚のアンカーなので収縮で消える ——
+    **条件の種は `dilate(条件, rmin)` と収縮した芯の交わりから取る**(「条件の近くまで筆の
+    通る通路が来ているか」を見ている)。
+
+    **述語は本数について単調**(セルが増える → 収縮した集合も増える → 繋がりは保たれる)なので
+    二分探索が成り立つ。**ここが塊の床になり、`derive_from_reference` が足す他の項は N を
+    上げるだけ**なので、上に何を積んでも保証は壊れない。
+
+    **幅を測れない場では `width=False` で、幅を外した全条件・6近傍の床を返す**(下記)。
+    どちらの述語でも案1の塊をいっぱいまで使って満たせない配置は
+    `DesignSpaceDisconnectedError`(`unreached` に届かなかった条件の名前)。
+    """
+    inside = np.asarray(base.mask, dtype=bool)
+    total = int(order.size)
+
+    def mask_for(count: int) -> np.ndarray:
+        picked = np.zeros(inside.size, dtype=bool)
+        picked[order[:count]] = True
+        return (picked.reshape(inside.shape) | conditions_mask) & inside
+
+    faces = tuple(base.fixed_faces) + tuple(base.load_faces)
+    if [f for f in faces if f in table.empty_faces()]:
+        # **節点が1つも付かなかった条件面があるときは見ない。** `assert_faces_connected` と
+        # 同じ方針 —— それは別の穴(`AnchorTable.empty_faces()`)で、ここで落とすと既存の口より
+        # 手前で別の例外に化ける。
+        return 0, {"width": False, "reason": "empty_anchor_faces", "dropped_seeds": []}
+
+    # **要素を1つも持たない種は落とす。** 除外ソリッドが条件面のアンカーを全部削っている
+    # ケースで、塊の中に居ない条件は「幅が足りない」のではなく「そもそも塊に無い」
+    # (それを見るのは `assert_load_path` の「アンカー要素が塊の中に1つも無い」のほう)。
+    # 落とさないと膨張が空になり、その条件が常に未到達として診断に出て原因を隠す。
+    all_seeds = condition_seeds(base, table)
+    seeds = {n: s for n, s in all_seeds.items() if s.any()}
+    # **落とした名前は必ず持ち帰る。** 落とされた条件は誰も要求しないので、記録しないと
+    # 「拘束面が1枚だけ塊から消えている」配置が無言で通る(`assert_faces_connected` は
+    # 拘束面を和集合で見るので他の枚数で通ってしまう)。
+    dropped = sorted(set(all_seeds) - set(seeds))
+    load_names = [
+        f"load_face_{int(face)}" for face in base.load_faces if f"load_face_{int(face)}" in seeds
+    ]
+    if not load_names:
+        # 荷重のアンカーが塊の中に1つも無い。`assert_faces_connected` の文面のほうが正しい
+        # (`assert_load_path` が必ず上げるので、次の行は防御であって通常は到達しない)。
+        assert_faces_connected(mask_for(total), table, base.fixed_faces, base.load_faces)
+        return 0, {"width": False, "reason": "no_load_anchor_in_space", "dropped_seeds": dropped}
+
+    # **種の膨張は本数に依存しない。二分探索のループの外で1回だけ。** 中で回すと
+    # 条件数 x プローブ数ぶんの距離変換になる(hanger で 8 x 20 = 160回)。
+    grown = {name: _dilate(seed, rmin) for name, seed in seeds.items()}
+
+    full = mask_for(total)
+    # **筆がどこにも入らない解像度では、幅の保証は表現できない。** 部品の厚みが `rmin` に
+    # 対して薄いとき(案1の箱ごと薄いとき)に起きる。**ここで落とさない** —— 収縮は
+    # 「ρ が 1 に届く」の同値条件で、メッシュの閾値 0.5 はもっと緩い(3要素幅で ρ=0.829)
+    # ので、材料が出ないわけではない。幅を外した**全条件・6近傍**の床へ落として、
+    # 保証が取れなかったことを記録する(6近傍だけの `corridor_length` よりは強い)。
+    width = bool(_erode(full, rmin).any())
+
+    def unreached(space: np.ndarray) -> list[str]:
+        core = _erode(space, rmin) if width else np.asarray(space, dtype=bool)
+        if not core.any():
+            return sorted(seeds)
+        labels, _ = element_components(core)
+        # **膨張した種を使ってよいのは収縮した芯の上だけ。** 芯のセルは半径 `rmin` の球ごと
+        # 塊に入っているので、種がその球の中にあれば両者は必ず 6近傍で繋がっている ——
+        # **この論証は収縮に依存している。** 収縮しない側で膨張した種を使うと、種と芯の間が
+        # 1〜`rmin` 要素の隙間で切れていても「届いた」と読んでしまう。
+        reaches = grown if width else seeds
+        near = {
+            name: {int(v) for v in np.unique(labels[reach & core]) if v != 0}
+            for name, reach in reaches.items()
+        }
+        load: set = set()
+        for name in load_names:
+            load |= near[name]
+        return sorted(name for name, found in near.items() if not (found & load))
+
+    missing = unreached(full)
+    if missing:
+        # 6近傍(和集合)ですら切れているなら、そちらの診断のほうが原因に近い(除外ソリッドが
+        # 道を塞いでいる等)。**条件が1枚ずつ取り残されている配置のときにここへ落ちてくる。**
+        report = assert_faces_connected(full, table, base.fixed_faces, base.load_faces)
+        raise DesignSpaceDisconnectedError(
+            "案1の塊を全部使っても、荷重まで届かない条件がある: "
+            f"{', '.join(missing)}"
+            + (
+                f"(密度フィルタの筆 rmin={float(rmin):.4g}要素 が通る太さで見た)。"
+                "細い通路で繋がっているだけなら道の太さが足りず、"
+                "どの成分にも入っていないなら除外ソリッドが道を塞いでいる。"
+                if width
+                else "(6近傍で見た)。"
+            )
+            + (f"(塊に要素を1つも持たない条件: {', '.join(dropped)})" if dropped else "")
+            + "除外ソリッドが条件面のまわりを削っていないか確かめ、条件面を太い部分へ置き"
+            "直すか、要素サイズを小さくして同じ mm がより多くの要素で表せるようにすること。",
+            components=int(report.get("components", 0)),
+            fixed_labels=report.get("fixed_labels", ()),
+            load_labels=report.get("load_labels", ()),
+            unreached=missing,
+        )
+    diagnosis = {"width": width, "dropped_seeds": dropped}
+    if not width:
+        diagnosis["reason"] = "rmin_does_not_fit_anywhere"
+    if not unreached(mask_for(0)):
+        return 0, diagnosis
+    lo, hi = 0, total
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if unreached(mask_for(mid)):
+            lo = mid
+        else:
+            hi = mid
+    return hi, diagnosis
+
+
 def build_reference(
     conditions: Conditions,
     *,
@@ -773,6 +1062,8 @@ def build_reference(
     angular_deflection: float = vx.DEFAULT_ANGULAR_DEFLECTION,
     force: Sequence[float] = (0.0, 0.0, -1.0),
     forces: Optional[Sequence[Sequence[float]]] = None,
+    rmin: Optional[float] = None,
+    rmin_mm: Optional[float] = None,
     stl_path: Optional[str | Path] = None,
     progress: Any = None,
     solver: Optional[str] = None,
@@ -784,9 +1075,13 @@ def build_reference(
     材料量は `material_mm3`(絶対量)か `material_ratio`(塊の容量に対する分率)。
     **既定は分率である** —— 参照は部品ごとに違う大きさの箱で回るので、絶対量の既定は部品の
     大きさに追随しない(hanger の実測: 絶対距離で持った塊の膨張量は部品が変わると外れる)。
-    それでも分率は部品によって痩せすぎるので、**回廊が `max_corridor` を超えたら
+    それでも分率は部品によって痩せすぎるので、**6近傍の回廊が `max_corridor` を超えたら
     `retry_growth` 倍して取り直す**(`REFERENCE_MAX_CORRIDOR` のところに実測)。
     `material_mm3` を明示で渡したときは呼び出し側が量を決めているので取り直さない。
+
+    **`rmin` / `rmin_mm`(排他)は幅つき回廊を測る筆の太さで、参照 run のフィルタ半径でもある。**
+    どちらも省けば `simp.DEFAULT_RMIN`。**後で `run_topopt` へ渡す値と揃えること** ——
+    揃っていなければ `run_topopt` が落とす(`Reference.rmin` の docstring)。
 
     `derive_kwargs` は `derive`(案1)へ素通し(`margin_ratio` / `elements_long_axis` /
     `spacing` など)。**`derive_from_reference` へ渡すものと揃えること** —— 揃っていないと
@@ -808,7 +1103,14 @@ def build_reference(
     # **`angular_deflection` は名前付きで受けて明示的に渡す。** `derive_from_reference` も
     # 同じように名前付きで受けるので、`derive_kwargs` の中身が両者で揃う(揃っていないと
     # 切り出し側の突き合わせが、格子は同じなのに違うと言い張る)。
-    base = derive(conditions, angular_deflection=angular_deflection, **derive_kwargs)
+    base = derive(
+        conditions,
+        angular_deflection=angular_deflection,
+        rmin=rmin,
+        rmin_mm=rmin_mm,
+        **derive_kwargs,
+    )
+    rmin_elements = _resolve_rmin_elements(base.grid, rmin=rmin, rmin_mm=rmin_mm)
     capacity = float(base.element_count) * float(base.grid.element_volume)
     material = capacity * ratio if material_mm3 is None else float(material_mm3)
     table = base.table if base.table is not None else an.build_anchors(base.soup, base.grid)
@@ -832,6 +1134,7 @@ def build_reference(
                 solver=solver,
                 threads=threads,
                 progress=progress,
+                rmin=rmin_elements,
                 stl_path=_REFERENCE_STL_PATH if stl_path is None else stl_path,
             )
         except (simp.VolumeTargetError, simp.SolveResidualError) as exc:
@@ -851,11 +1154,15 @@ def build_reference(
 
         rho = np.asarray(out["result"].rho, dtype=float)
         order = reference_order(rho, base.mask, base.grid, threshold=threshold)
-        corridor = corridor_length(order, base, table, conditions_mask)
-        if corridor <= limit or last:
+        plain_corridor = corridor_length(order, base, table, conditions_mask)
+        if plain_corridor <= limit or last:
             break
         failed = None
         material *= float(retry_growth)
+
+    corridor, corridor_diagnosis = width_corridor_length(
+        order, base, table, conditions_mask, rmin=rmin_elements
+    )
 
     stats = {
         "seconds": time.perf_counter() - started,
@@ -875,6 +1182,14 @@ def build_reference(
         ),
         "corridor": int(corridor),
         "corridor_ratio": float(corridor) / base.element_count if base.element_count else 0.0,
+        "plain_corridor": int(plain_corridor),
+        "plain_corridor_ratio": (
+            float(plain_corridor) / base.element_count if base.element_count else 0.0
+        ),
+        "corridor_width_guaranteed": bool(corridor_diagnosis["width"]),
+        "corridor_diagnosis": dict(corridor_diagnosis),
+        "corridor_dropped_seeds": list(corridor_diagnosis.get("dropped_seeds", ())),
+        "rmin": float(rmin_elements),
         "base_seconds": float(base.stats["seconds"]),
     }
     return Reference(
@@ -883,6 +1198,8 @@ def build_reference(
         order=order,
         material_mm3=material,
         corridor=int(corridor),
+        plain_corridor=int(plain_corridor),
+        rmin=float(rmin_elements),
         conditions=conditions,
         # **`angular_deflection` も入れる。** 名前付きで受けているので `derive_kwargs` には
         # 入っておらず、入れないと「格子が変わりうる引数なのに突き合わせない」穴が残る。
@@ -891,23 +1208,65 @@ def build_reference(
     )
 
 
+def _model_for_mask(
+    reference: Reference,
+    mask: np.ndarray,
+    taken: int,
+    conditions: Conditions,
+    angular_deflection: float,
+) -> vx.VoxelModel:
+    """塊を格子へ載せる。**同じ本数なら作り直さない**(`Reference.cache`)。
+
+    **節約は小さい** —— hanger_bar_attachment 2.412mm・案1 1,096,894要素で
+    `derive_from_reference` 全体が 0.3秒(2026-09-11 実測)。
+    """
+    base = reference.base
+    entry = reference.cache.get("last")
+    if (
+        entry is not None
+        and entry["taken"] == int(taken)
+        and entry["conditions"] is conditions
+        and entry["angular_deflection"] == float(angular_deflection)
+    ):
+        return entry["model"]
+    reference.cache.pop("last", None)
+    model = vx.model_from_design_mask(
+        base.grid,
+        mask,
+        anchor_shape=base.soup,
+        keep=conditions.keep,
+        deviation=float(base.stats["deviation"]),
+        angular_deflection=angular_deflection,
+    )
+    reference.cache["last"] = {
+        "taken": int(taken),
+        "conditions": conditions,
+        "angular_deflection": float(angular_deflection),
+        "model": model,
+    }
+    return model
+
+
 def derive_from_reference(
     conditions: Conditions,
     *,
     material_mm3: float,
     reference: Optional[Reference] = None,
-    k: float = K,
+    pick_ratio: float = PICK_RATIO,
+    k_mat: float = K_MATERIAL,
     reference_material_ratio: float = REFERENCE_MATERIAL_RATIO,
     reference_max_iter: int = REFERENCE_MAX_ITER,
     angular_deflection: float = vx.DEFAULT_ANGULAR_DEFLECTION,
     force: Sequence[float] = (0.0, 0.0, -1.0),
     forces: Optional[Sequence[Sequence[float]]] = None,
+    rmin: Optional[float] = None,
+    rmin_mm: Optional[float] = None,
     progress: Any = None,
     solver: Optional[str] = None,
     threads: Optional[int] = None,
     **derive_kwargs: Any,
 ) -> DesignSpace:
-    """**連続値保持: 保存した ρ の順位で、この材料量ぶんの塊を切り出す。**
+    """**連続値保持: 保存した ρ の順位で塊を切り出す。**
 
     案1(`derive`)と**同じ型・同じ不変条件**の `DesignSpace` を返す。SIMP を回すのは
     **材料量ごとではなく探索を通して1回**だけで、参照は本番と同じ格子で回る。
@@ -916,21 +1275,27 @@ def derive_from_reference(
 
     1. 参照(`reference`)が無ければ作る。**探索から呼ぶときは必ず渡すこと** —— 渡さないと
        材料量ごとに参照を作り直すことになり、探索の段数ぶん SIMP が増える。
-    2. `max(k * material_mm3 / 要素体積, reference.corridor)` 本を順位の先頭から取る。
+    2. 本数 `N = max(pick_ratio × 案1の要素数, reference.corridor, k_mat × 材料量 / 要素体積)`
+       を順位の先頭から取る。
     3. 4条件の要素(保持・拘束アンカー・荷重アンカー)を無条件で OR し、案1の塊で AND する。
 
-    **連結性は回廊(`Reference.corridor`)が構造的に保証する。** 回廊は参照ごとに1回だけ
-    二分探索で求めた「拘束と荷重を繋ぐのに要る最小本数」なので、どの材料量でも必ず繋がり、
-    かつ**塊は材料量について単調**になる(単調でないと外側の二分探索の前提が崩れる)。
-    案1の塊全体でも繋がらない配置は `build_reference` の時点で
+    **保証は回廊(`Reference.corridor`)と単調性から出る。** 回廊は参照ごとに1回だけ二分探索で
+    求めた「全条件が筆の通る太さで荷重と繋がる最小本数」で、他の2項は N を上げるだけなので
+    保証を壊せない。同時に**塊は材料量について単調**になる(単調でないと外側の二分探索の前提が
+    崩れる)。案1の塊全体でも届かない配置は `build_reference` の時点で
     `DesignSpaceDisconnectedError` になる。
+
+    **`rmin` / `rmin_mm` は渡せるが、参照を渡したときは参照のものと一致していなければ例外。**
+    幅の保証はその半径で測ってあるので、後から変えると保証が黙って別の半径のものになる。
     """
     started = time.perf_counter()
     material = float(material_mm3)
     if not material > 0.0 or not math.isfinite(material):
         raise ValueError(f"material_mm3 は有限の正の値であること(いま {material_mm3!r})")
-    if not float(k) > 0.0 or not math.isfinite(float(k)):
-        raise ValueError(f"k は有限の正の値であること(いま {k!r})")
+    if not float(k_mat) > 0.0 or not math.isfinite(float(k_mat)):
+        raise ValueError(f"k_mat は有限の正の値であること(いま {k_mat!r})")
+    if not 0.0 <= float(pick_ratio) <= 1.0:
+        raise ValueError(f"pick_ratio は 0 <= p <= 1 であること(いま {pick_ratio!r})")
 
     if reference is None:
         reference = build_reference(
@@ -939,6 +1304,8 @@ def derive_from_reference(
             max_iter=reference_max_iter,
             force=force,
             forces=forces,
+            rmin=rmin,
+            rmin_mm=rmin_mm,
             progress=progress,
             solver=solver,
             threads=threads,
@@ -965,14 +1332,27 @@ def derive_from_reference(
             )
 
     base = reference.base
+    # **幅の保証はこの半径で測ってある。** 呼び出し側が後から別の半径を指定したら、保証は
+    # その半径のものではない —— 黙って通さない(層をまたぐ契約。`Reference.rmin`)。
+    if rmin is not None or rmin_mm is not None:
+        asked = _resolve_rmin_elements(base.grid, rmin=rmin, rmin_mm=rmin_mm)
+        if abs(asked - float(reference.rmin)) > 1e-9:
+            raise ValueError(
+                f"参照の回廊は rmin={float(reference.rmin):.6g}要素 で測ってあるのに、"
+                f"いま rmin={asked:.6g}要素 を指定した。"
+                "幅の保証は半径ごとに別物なので、その半径で参照を作り直すこと"
+            )
     table = base.table if base.table is not None else an.build_anchors(base.soup, base.grid)
     conditions_mask = _condition_elements(base, table)
     inside = np.asarray(base.mask, dtype=bool)
     element_volume = float(base.grid.element_volume)
-    # **回廊を下回らない。** ここが連結性の保証であり、塊が材料量について単調であることの
-    # 根拠でもある(`Reference.corridor` の docstring)。
-    wanted = int(round(float(k) * material / element_volume))
-    taken = min(max(wanted, int(reference.corridor)), int(reference.order.size))
+    budget = {
+        "pick": int(round(float(pick_ratio) * base.element_count)),
+        "corridor": int(reference.corridor),
+        "material": int(round(float(k_mat) * material / element_volume)),
+    }
+    binding = max(budget, key=lambda name: budget[name])
+    taken = min(budget[binding], int(reference.order.size))
     picked = np.zeros(inside.size, dtype=bool)
     picked[reference.order[:taken]] = True
     picked = picked.reshape(inside.shape)
@@ -980,27 +1360,20 @@ def derive_from_reference(
 
     if not mask.any():
         raise DesignSpaceTooSmallError(
-            f"連続値保持の塊が空になった(材料 {material:.6g}mm^3 / k={float(k):.4g})。"
-            "参照 run の材料量か k を見直すこと。",
+            f"連続値保持の塊が空になった(材料 {material:.6g}mm^3 / p={float(pick_ratio):.4g} / "
+            f"k_mat={float(k_mat):.4g})。参照 run の材料量か摘みを見直すこと。",
             {"reference": -1},
         )
     # 回廊が保証しているので通るはずだが、**案1と同じく導出が自分で確かめてから返す**。
     connectivity = assert_faces_connected(mask, table, base.fixed_faces, base.load_faces)
 
     try:
-        model = vx.model_from_design_mask(
-            base.grid,
-            mask,
-            anchor_shape=base.soup,
-            keep=conditions.keep,
-            deviation=float(base.stats["deviation"]),
-            angular_deflection=angular_deflection,
-        )
+        model = _model_for_mask(reference, mask, taken, conditions, angular_deflection)
     except vx.OutsideDesignSpaceError as exc:
         raise DesignSpaceTooSmallError(
-            f"連続値保持の塊(材料 {material:.6g}mm^3 / k={k:.4g})が保持ソリッドを"
-            f"含みきれていない: {exc} 保持は無条件に塊へ入れているので、これは除外ソリッドが"
-            "保持を食っている配置(案1でも同じ理由で落ちる)。",
+            f"連続値保持の塊(材料 {material:.6g}mm^3 / p={float(pick_ratio):.4g})が保持"
+            f"ソリッドを含みきれていない: {exc} 保持は無条件に塊へ入れているので、これは除外"
+            "ソリッドが保持を食っている配置(案1でも同じ理由で落ちる)。",
             getattr(exc, "outside", {}),
         ) from exc
 
@@ -1016,12 +1389,20 @@ def derive_from_reference(
             ),
             "keep_elements": int(model.stats["keep_elements"]),
             "material_mm3": material,
-            "k_requested": float(k),
+            "pick_ratio": float(pick_ratio),
+            "k_mat_requested": float(k_mat),
             "k": float(np.count_nonzero(mask)) * element_volume / material,
             "ranked_elements": taken,
+            "budget": dict(budget),
+            "budget_binding": binding,
             "corridor": int(reference.corridor),
-            # **回廊が k より効いた**(材料量が小さすぎて、繋ぐのに要る量のほうが多い)。
-            "corridor_bound": bool(int(reference.corridor) > wanted),
+            "plain_corridor": int(reference.plain_corridor),
+            # **既定は False。** 記録の無い参照(手で組んだもの・控えを知らない版の pickle)は
+            # 幅を測っていないので、「保証あり」を騙らせない。
+            "corridor_width_guaranteed": bool(
+                reference.stats.get("corridor_width_guaranteed", False)
+            ),
+            "rmin": float(reference.rmin),
             "condition_only_elements": int(np.count_nonzero(conditions_mask & inside & ~picked)),
             "case1_seconds": float(base.stats["seconds"]),
             "reference": dict(reference.stats),
@@ -1047,8 +1428,8 @@ def derive_from_reference(
 # ---------------------------------------------------------------------------
 
 # **既定の導出は連続値保持(`"reference"`)。** hanger の実測で、答えの被覆 100%・壁に
-# 接した材料 5.38%(案1と同値)で、塊は案1より 24% 小さい。塊の広げ方を絶対距離ではなく
-# k(= 塊の容量 ÷ 材料量)で持つので、部品の大きさに追随する。
+# 接した材料 5.38%(案1と同値)。塊の大きさを絶対距離ではなく案1に対する割合(`PICK_RATIO`)で
+# 持つので、部品の大きさに追随する。
 DEFAULT_DERIVATION = "reference"
 
 # 名前 → 導出。名前を受け取る側(受入検査の比較実測)がここを引く。
@@ -1087,6 +1468,32 @@ def derive_default(
     return fn(conditions, **kwargs)
 
 
+def _assert_rmin_matches_space(
+    space: DesignSpace, *, rmin: Optional[float], rmin_mm: Optional[float]
+) -> None:
+    """**塊を作ったときの筆の太さと、いま回す筆の太さが同じか。**(層をまたぐ契約)
+
+    連続値保持の回廊は「`rmin` の筆が通る太さで全条件が荷重と繋がる」ことを保証しているが、
+    その保証は**測った半径のものでしかない**。呼び出し側が後から `rmin_mm` を変えると、塊は
+    そのままで保証だけが無効になる —— 落ちもせず、拘束面が材料を受け取らない形が黙って出る。
+
+    記録が無い塊(案1を素で導出したもの・検査が直接組んだもの)は何も確かめない。
+    """
+    stats = getattr(space, "stats", None) or {}
+    recorded = stats.get("rmin")
+    if recorded is None:
+        return
+    asked = _resolve_rmin_elements(space.grid, rmin=rmin, rmin_mm=rmin_mm)
+    if abs(asked - float(recorded)) > 1e-9:
+        raise ValueError(
+            f"この塊は rmin={float(recorded):.6g}要素 で導出してあるのに、"
+            f"いま rmin={asked:.6g}要素 で回そうとしている"
+            f"(渡された値: rmin={rmin!r} / rmin_mm={rmin_mm!r})。"
+            "塊の連結性は密度フィルタの半径ごとに別の保証なので、"
+            "同じ半径で回すか、その半径で塊を導出し直すこと"
+        )
+
+
 def run_topopt(
     space: DesignSpace,
     *,
@@ -1118,6 +1525,7 @@ def run_topopt(
     密度フィルタ半径は `rmin`(要素単位)か `rmin_mm`(mm)のどちらか一方(排他)。
     どちらも渡さなければ `simp.DEFAULT_RMIN`(**値は動く。床の `simp.MIN_RMIN` とは別物**)。
     `anchor.run_pipeline` へそのまま渡す(要素サイズはそちらが格子から決める)。
+    **塊が半径を記録していれば、ここで一致を確かめる**(`_assert_rmin_matches_space`)。
 
     `keep_model=True` は `anchor.run_pipeline` へそのまま渡る(既定 `False`。数値は
     1ビットも変わらない)。
@@ -1138,6 +1546,7 @@ def run_topopt(
     (`DesignSpace` は呼び出し元がそのまま持っているので、戻り値を経由しなくても後から
     見える。当面の措置 — docs/TOPOPT.md「面が小さすぎて空になる」参照)。
     """
+    _assert_rmin_matches_space(space, rmin=rmin, rmin_mm=rmin_mm)
     out = Path(stl_path) if stl_path is not None else _HERE / "output" / "design_space_case1.stl"
     result = an.run_pipeline(
         shape=space.soup,
