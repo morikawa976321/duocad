@@ -67,7 +67,8 @@ interface EntityKindSpec {
    */
   pointKeys: ReadonlyArray<readonly [string, string]>
   /**
-   * **`pointKeys` にない、見た目だけの角**(カーソルの □/× 表示専用。`isEntityCorner` が読む)。
+   * **`pointKeys` にない、見た目だけの角**(`viewport.ts` の `sketchCornerAt` が
+   * `entityVisualCorners` 経由で読む。当たり判定・カーソルの □/× 表示の両方に効く)。
    *
    * 独立に動かせないというだけで、輪郭上の頂点であることに変わりはなく、`snap()` は
    * 隣接する辺のどちらから来ても同じ座標へ厳密に落ちる(端点へのクランプ)。それを
@@ -77,6 +78,13 @@ interface EntityKindSpec {
    * サンプル点を角と誤認すると線上のあちこちで□が出てしまう。
    */
   visualCorners?(params: Record<string, number>): Array<[number, number]>
+  /**
+   * **直線区間**(`sketchIntersections` が図形間の交点を探すのに使う)。
+   *
+   * 曲線(circle/arc/bezier)は持たない —— 交点は線形代数の交差判定で求めており、
+   * 曲線との交点は数値的な求根が要るため今回のスコープ外(本人指定「線分の交点」)。
+   */
+  segments?(params: Record<string, number>): Array<readonly [readonly [number, number], readonly [number, number]]>
   /**
    * 与えた (u,v) をこの図形の輪郭へ落とす(スナップ)。
    *
@@ -279,6 +287,7 @@ function rectangleCorners(params: Record<string, number>): Array<[number, number
 const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
   line: {
     pointKeys: [['x0', 'y0'], ['x1', 'y1']],
+    segments: (params) => [[[params.x0, params.y0], [params.x1, params.y1]]],
     verb: 'add_line',
     translate: translateLine,
     rotate(params, cx, cy, angleDeg, rotateCopies) {
@@ -336,6 +345,10 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
   rectangle: {
     pointKeys: [['x', 'y']],
     visualCorners: rectangleCorners,
+    segments: (params) => {
+      const corners = rectangleCorners(params)
+      return [0, 1, 2, 3].map((index) => [corners[index], corners[(index + 1) % 4]] as const)
+    },
     verb: 'add_rectangle',
     translate: (params, dx, dy) => translateAtCenter(params, 'x', 'y', dx, dy),
     rotate(params, cx, cy, angleDeg, rotateCopies) {
@@ -528,6 +541,72 @@ export function entityVisualCorners(kind: string, params: Record<string, number>
 }
 
 /**
+ * その図形の直線区間(`EntityKindSpec.segments`)を列挙する。持たない種別(円・円弧・
+ * ベジエ)は空配列 —— `entityVisualCorners` と同じ理由で例外にしない。
+ */
+export function entitySegments(
+  kind: string,
+  params: Record<string, number>,
+): Array<readonly [readonly [number, number], readonly [number, number]]> {
+  return entityKindSpec(kind).segments?.(params) ?? []
+}
+
+/**
+ * 2線分の交点。**端点を含む区間内**でだけ交わる場合に返す(延長線上の交点は含めない)。
+ * 平行(分母0)は交点なし —— 重なる場合も含めて拾わない(重なりは「交点」ではなく
+ * 「一致」で、意味が違う)。
+ */
+function segmentIntersection(
+  a0: readonly [number, number],
+  a1: readonly [number, number],
+  b0: readonly [number, number],
+  b1: readonly [number, number],
+): [number, number] | null {
+  const dax = a1[0] - a0[0]
+  const day = a1[1] - a0[1]
+  const dbx = b1[0] - b0[0]
+  const dby = b1[1] - b0[1]
+  const denom = dax * dby - day * dbx
+  if (denom === 0) return null
+  const dx = b0[0] - a0[0]
+  const dy = b0[1] - a0[1]
+  const t = (dx * dby - dy * dbx) / denom
+  const s = (dx * day - dy * dax) / denom
+  if (t < 0 || t > 1 || s < 0 || s > 1) return null
+  return [a0[0] + t * dax, a0[1] + t * day]
+}
+
+/**
+ * スケッチ内の**異なる図形どうし**の直線区間の交点を全部列挙する(`viewport.ts` の
+ * `sketchCornerAt` が本物の点・`visualCorners` と同じ優先度で拾うために読む)。
+ *
+ * 同じ図形どうしのペアは見ない —— 長方形自身の隣り合う辺が作る交点(=自分の角)は
+ * 既に `visualCorners` が持つ。曲線(circle/arc/bezier)は `segments` が空なので
+ * 自然に対象外になる(本人指定は「線分の交点」)。
+ */
+export function sketchIntersections(
+  handles: ReadonlyArray<{ entityId: string; kind: string; params: Record<string, number> }>,
+): Array<{ u: number; v: number; entityIds: readonly [string, string] }> {
+  const points: Array<{ u: number; v: number; entityIds: readonly [string, string] }> = []
+  for (let i = 0; i < handles.length; i += 1) {
+    const segmentsA = entitySegments(handles[i].kind, handles[i].params)
+    if (segmentsA.length === 0) continue
+    for (let j = i + 1; j < handles.length; j += 1) {
+      const segmentsB = entitySegments(handles[j].kind, handles[j].params)
+      if (segmentsB.length === 0) continue
+      for (const segmentA of segmentsA) {
+        for (const segmentB of segmentsB) {
+          const hit = segmentIntersection(segmentA[0], segmentA[1], segmentB[0], segmentB[1])
+          if (hit === null) continue
+          points.push({ u: hit[0], v: hit[1], entityIds: [handles[i].entityId, handles[j].entityId] })
+        }
+      }
+    }
+  }
+  return points
+}
+
+/**
  * 図形を (u,v) の折れ線にする。表に無い種別は例外(黙って空の折れ線を返さない)。
  *
  * `resolution` を省くと**ズーム連動を入れる前と同じ既定の粗さ**になる。呼ぶのは
@@ -582,25 +661,6 @@ export function snapToSketchEntity(
     if (handle) return [handle.u, handle.v]
   }
   return snapToEntity(entity.kind, entity.params, u, v, resolution)
-}
-
-/** 浮動小数の丸め差だけを許す許容差。`visualCorners` はこの関数と同じ算術(三角関数込み)を
- *  経て `snap()` の結果と比べるので、格子スナップの0.5mmよりずっと狭くてよい。 */
-const VISUAL_CORNER_EPSILON = 1e-6
-
-/**
- * `(u,v)` がその図形の「見た目だけの角」(`EntityKindSpec.visualCorners`)に一致するか。
- *
- * `snapToSketchEntity` が返した**確定後の座標**を渡すこと(生のポインタ座標ではない) ——
- * 角のごく近くでは隣接する2辺のどちらへ射影しても同じ角へクランプされるので、確定後の
- * 座標は角の座標と厳密に一致する(丸め差を除く)。`visualCorners` を持たない種別は常に false。
- */
-export function isEntityCorner(kind: string, params: Record<string, number>, u: number, v: number): boolean {
-  const corners = entityKindSpec(kind).visualCorners
-  if (!corners) return false
-  return corners(params).some(
-    ([cu, cv]) => Math.abs(cu - u) < VISUAL_CORNER_EPSILON && Math.abs(cv - v) < VISUAL_CORNER_EPSILON,
-  )
 }
 
 /**

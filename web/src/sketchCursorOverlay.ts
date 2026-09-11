@@ -36,10 +36,10 @@ export interface SketchCursorOverlay {
  *
  * 優先順はクリックのスナップ(`snappedPlanePoint`)と同じ: 点 → 線 → 格子 → 自由。
  *
- * `isCorner` は `entityKinds.ts` の `isEntityCorner` を呼び出し側が渡す(このファイルは
- * three.js もentityKindsも知らない、SVG描画だけの層に閉じてある) —— 長方形の残り3隅の
- * ように、独立には動かせないが幾何的には点と同じ精度で吸い付く角を、□ではなく×に
- * してしまわないため。
+ * `isCorner` は呼び出し側(`viewport.ts`)が渡す —— `hit.snapAt` が立っているか
+ * (このファイルは three.js も entityKinds も知らない、SVG描画だけの層に閉じてある)。
+ * 長方形の残り3隅や直線どうしの交点のように、独立した点ではないが幾何的には点と
+ * 同じ精度で吸い付く場所を、□ではなく×にしてしまわないため。
  */
 export function classifySketchSnap(
   hit: { point: string | null } | null,

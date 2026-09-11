@@ -300,6 +300,17 @@ export interface SketchEntityHit {
   sketchId: string
   entityId: string
   point: string | null
+  /**
+   * **見た目だけの角・直線どうしの交点に当たったときだけ**、その厳密な座標。
+   *
+   * これが在るときは `entityKinds.ts` の `snapToSketchEntity`(この図形自身の輪郭への
+   * 射影)を呼ばずに**そのままスナップ結果として使うこと** —— 交点は2つの図形にまたがり、
+   * `entityId` は片方でしかないので、その図形自身へ射影しても交点には戻らない
+   * (連続的な最近傍点になるだけで、めったに交点そのものと一致しない)。角
+   * (`entityVisualCorners`)は今のところ自分自身への射影と一致するが、同じ経路に
+   * 揃えておくことで交点と角を呼び出し側で区別しなくてよくなる。
+   */
+  snapAt?: readonly [number, number]
 }
 
 /**

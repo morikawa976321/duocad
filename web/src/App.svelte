@@ -1944,7 +1944,12 @@
    * **クリック(`onSketchPick` の `addPoint`)と幽霊(`hoverPoint`)は必ずこの関数を
    * 通すこと**(20260906タスクの不変条件) —— 片方だけ直すと、吸い付いて見える位置と
    * 確定結果がずれる、いちばん困る形の不具合になる。段は3つ、上から順に当たった時点で
-   * 確定する: (1) 点マーカー (2) 図形の線 (3) どちらにも当たっていなければ1mmグリッド。
+   * 確定する: (1) 点マーカー・角・交点(`hit.snapAt` があればそのまま) (2) 図形の線
+   * (3) どちらにも当たっていなければ1mmグリッド。
+   *
+   * `hit.snapAt` があるとき自身への射影を呼ばないのは `viewport.ts` の `snappedSketchUv`
+   * と同じ理由(`SketchEntityHit.snapAt` のdocstring参照) —— 交点は2つの図形にまたがり、
+   * 片方の図形自身へ射影しても交点には戻らない。
    *
    * **`viewport.viewResolution()` を渡す** —— 当たり判定(`sketchEntityAt`)が拾う
    * `handleLines` はこの解像度で折れているので、bezierのように折れ線近似でスナップする
@@ -1952,6 +1957,7 @@
    */
   function snappedPlanePoint(u: number, v: number, hit: SketchEntityHit | null): Point2 {
     if (hit === null) return snappedToGrid1mm(u, v)
+    if (hit.snapAt) return [hit.snapAt[0], hit.snapAt[1]]
     const sketch = sketches.find((item) => item.sketch_id === hit.sketchId)
     const entity = sketch?.entities.find((item) => item.entity_id === hit.entityId)
     if (!entity) return snappedToGrid1mm(u, v)

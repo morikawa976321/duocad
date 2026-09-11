@@ -24,7 +24,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 // 辺の折れ線の形は `session.ts` の `EdgeGeometry` が正(サーバが配る形そのもの)。
 import {
-  entityHandles, entityHasIndependentPoints, entityPoints, entityVisualCorners, isEntityCorner, snapToSketchEntity,
+  entityHandles, entityHasIndependentPoints, entityPoints, entityVisualCorners, sketchIntersections,
+  snapToSketchEntity,
 } from './entityKinds'
 import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOverlay'
 import { DEFAULT_RESOLUTION, viewResolution } from './adaptiveResolution'
@@ -2312,6 +2313,11 @@ export function createViewport(container: HTMLElement): Viewport {
     handleLines: SketchFatLine[]
     /** 元の図形(`handles`)。スナップ座標の解決に使う。 */
     handles: SketchDraw['handles']
+    /**
+     * 直線区間(line/rectangleの辺)どうしの交点(`sketchIntersections`。曲線は対象外)。
+     * `sketchCornerAt` が本物の点・`visualCorners` と同じ優先度で拾うために持つ。
+     */
+    intersections: ReturnType<typeof sketchIntersections>
   }
   const sketches = new Map<string, SketchScene>()
   let ghost: { objects: THREE.Object3D[]; disposables: Array<{ dispose(): void }> } | null = null
@@ -2493,6 +2499,7 @@ export function createViewport(container: HTMLElement): Viewport {
         handleMeshes,
         handleLines,
         handles: entry.handles,
+        intersections: sketchIntersections(entry.handles),
       })
     }
     invalidateHover() // 領域のメッシュを作り直したので印を捨てる
@@ -2718,11 +2725,14 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * **見た目だけの角**(`entityVisualCorners`。長方形の残り3隅など)を、本物の点と
-   * **同じ半径・同じ優先度**で拾う。`point` は常に null —— 独立した参照は持たない
-   * (`pointKeys` の点ではない)ので、当たった結果は「この図形の、たまたま角の位置」
-   * であり、辺のどこかに当たったのと同じ図形全体の扱いになる(`move_sketch_entities`
-   * の的にはならない)。`sketchEntityAt` の点パスと辺パスの間だけから呼ぶこと。
+   * **見た目だけの角**(`entityVisualCorners`。長方形の残り3隅など)と**直線どうしの交点**
+   * (`target.intersections`)を、本物の点と**同じ半径・同じ優先度**で拾う。`point` は
+   * 常に null —— 独立した参照は持たない(`pointKeys` の点ではない)ので、当たった結果は
+   * 「この図形の、たまたま角(または交点)の位置」であり、辺のどこかに当たったのと
+   * 同じ図形全体の扱いになる(`move_sketch_entities` の的にはならない)。交点は2つの
+   * 図形にまたがるが、参照は片方(`entityIds[0]`)だけを返す —— どちらも辺として選べば
+   * 同じ位置なので、線が重なったときの「近い方が勝つ」既存の規則と同じ扱いでよい。
+   * `sketchEntityAt` の点パスと辺パスの間だけから呼ぶこと。
    */
   function sketchCornerAt(offsetX: number, offsetY: number, target: SketchScene): SketchEntityHit | null {
     const sketchId = activeSketchId
@@ -2734,8 +2744,22 @@ export function createViewport(container: HTMLElement): Viewport {
         const screen = projectForPick(toWorld(target.frame, u, v), width, height)
         if (screen === null) continue
         const distSq = (screen.x - offsetX) ** 2 + (screen.y - offsetY) ** 2
-        candidates.push({ item: { sketchId, entityId: entry.entityId, point: null }, distSq })
+        candidates.push({ item: { sketchId, entityId: entry.entityId, point: null, snapAt: [u, v] }, distSq })
       }
+    }
+    for (const intersection of target.intersections) {
+      const screen = projectForPick(toWorld(target.frame, intersection.u, intersection.v), width, height)
+      if (screen === null) continue
+      const distSq = (screen.x - offsetX) ** 2 + (screen.y - offsetY) ** 2
+      candidates.push({
+        item: {
+          sketchId,
+          entityId: intersection.entityIds[0],
+          point: null,
+          snapAt: [intersection.u, intersection.v],
+        },
+        distSq,
+      })
     }
     return pickNearestWithinRadius(SKETCH_HANDLE_PIXELS, candidates)
   }
@@ -2901,6 +2925,11 @@ export function createViewport(container: HTMLElement): Viewport {
     return toScreen(toWorld(target.frame, u, v))
   }
 
+  /**
+   * `hit.snapAt` があれば**そのまま返す**(角・交点。`SketchEntityHit.snapAt` のdocstring
+   * 参照) —— `hit.entityId` の図形へ射影すると、交点は連続的な最近傍点になるだけで
+   * めったに交点そのものへ戻らない。無ければ従来どおり図形自身への射影。
+   */
   function snappedSketchUv(
     rawU: number,
     rawV: number,
@@ -2908,6 +2937,7 @@ export function createViewport(container: HTMLElement): Viewport {
     sketch: SketchScene,
   ): [number, number] {
     if (hit === null) return [Math.round(rawU), Math.round(rawV)]
+    if (hit.snapAt) return [hit.snapAt[0], hit.snapAt[1]]
     const handle = sketch.handles.find((item) => item.entityId === hit.entityId)
     if (!handle) return [Math.round(rawU), Math.round(rawV)]
     return snapToSketchEntity(handle, hit.point, rawU, rawV, appliedResolution)
@@ -2933,14 +2963,14 @@ export function createViewport(container: HTMLElement): Viewport {
       return
     }
     const [su, sv] = snappedSketchUv(planePoint.u, planePoint.v, hit, sketch)
-    // **確定後の座標(su,sv)で角かどうかを見る**(生のポインタ座標ではない) ——
-    // 角の判定はスナップ結果と同じ算術(角へのクランプ)を前提にしている(`isEntityCorner`)。
-    const handle = hit !== null ? sketch.handles.find((item) => item.entityId === hit.entityId) : undefined
-    const isCorner = handle !== undefined && isEntityCorner(handle.kind, handle.params, su, sv)
+    // **角・交点かどうかは `hit.snapAt` の有無で決める**(`sketchCornerAt` だけがこれを
+    // 立てる)。以前は確定後の座標を自分自身への射影と比べていたが、交点は2つの図形に
+    // またがるため、その比較では検出できない(`SketchEntityHit.snapAt` のdocstring参照)。
+    const isCorner = hit !== null && hit.snapAt !== undefined
     const snap = classifySketchSnap(hit, planePoint.u, planePoint.v, isCorner)
-    const snapAt =
+    const snapScreenAt =
       snap === 'free' ? null : projectSketchPoint(activeSketchId, su, sv)
-    sketchCursor.update({ x: offsetX, y: offsetY }, snap, snapAt)
+    sketchCursor.update({ x: offsetX, y: offsetY }, snap, snapScreenAt)
   }
 
   function projectRegion(sketchId: string, index: number): { x: number; y: number } | null {
