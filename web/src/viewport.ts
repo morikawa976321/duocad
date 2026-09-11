@@ -23,7 +23,9 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 
 // 辺の折れ線の形は `session.ts` の `EdgeGeometry` が正(サーバが配る形そのもの)。
-import { entityHandles, entityPoints, entityVisualCorners, isEntityCorner, snapToSketchEntity } from './entityKinds'
+import {
+  entityHandles, entityHasIndependentPoints, entityPoints, entityVisualCorners, isEntityCorner, snapToSketchEntity,
+} from './entityKinds'
 import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOverlay'
 import { DEFAULT_RESOLUTION, viewResolution } from './adaptiveResolution'
 import { sampleFaces, selectFineFaces, type BodySamples } from './faceCulling'
@@ -2447,6 +2449,13 @@ export function createViewport(container: HTMLElement): Viewport {
           disposables.push(built.geometry)
           handleLines.push(built.object)
         }
+        // **点が互いに独立して動く種別だけ常時表示する**(entityHasIndependentPoints)。
+        // rectangle/circle/arcは点が1個で、その点だけ動かすのと図形全体を動かすのが
+        // move_sketch_entities内で同じ処理になる(entityHasIndependentPointsのdocstring
+        // 参照) —— 常時出すと「なぜこの1点だけ特別か」という見た目の非対称になるので、
+        // ホバー/選択のときだけ見せる。ピック可能な座標そのものは変えない
+        // (`pickPointsAt` はmesh.visibleを見ない)。
+        const showPointsAtRest = entityHasIndependentPoints(handle.kind)
         for (const point of entityHandles(handle.kind, handle.params)) {
           if (!Number.isFinite(point.u) || !Number.isFinite(point.v)) continue
           const world = toWorld(entry.frame, point.u, point.v)
@@ -2462,9 +2471,11 @@ export function createViewport(container: HTMLElement): Viewport {
             sketchHandleMaterialFor(picked ? 'selected' : 'plain', false),
           )
           mesh.renderOrder = LAYER.sketchPoint // 深度を書かないので、描く順序で線より手前に出す
+          mesh.visible = showPointsAtRest || picked
           mesh.userData.entityId = handle.entityId
           mesh.userData.point = point.key
           mesh.userData.selected = picked
+          mesh.userData.showAtRest = showPointsAtRest
           sketchRoot.add(mesh)
           objects.push(mesh)
           handleMeshes.push(mesh)
@@ -2535,12 +2546,14 @@ export function createViewport(container: HTMLElement): Viewport {
         const entityId = mesh.userData.entityId as string
         const point = mesh.userData.point as string
         const selected = mesh.userData.selected === true
+        const showAtRest = mesh.userData.showAtRest === true
         const hovered =
           hoverSketchEntity !== null &&
           hoverSketchEntity.sketchId === sketchId &&
           hoverSketchEntity.entityId === entityId &&
           hoverSketchEntity.point === point
         mesh.material = sketchHandleMaterialFor(selected ? 'selected' : 'plain', hovered)
+        mesh.visible = showAtRest || selected || hovered
       }
     }
   }

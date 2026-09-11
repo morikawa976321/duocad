@@ -498,6 +498,23 @@ export function entityHandles(
 }
 
 /**
+ * その図形の点(`pointKeys`)は互いに独立して動くか(2個以上あるか)。
+ *
+ * 1個しかない種別(rectangle/circle/arc)は「その点だけ動かす」と「図形全体を動かす」が
+ * `move_sketch_entities` の中で完全に同じ処理になる(`duocad/verbs/move_sketch.py` の
+ * `_moved_params`: `point=None` は `EntityKindOps.translate` を呼び、`point='x'` 等は
+ * その1点の座標を直接動かすだけで、rectangleならどちらも結局 `x,y` を足すだけの同じ式 ——
+ * `duocad/sketch.py` の `_translate_rectangle` 参照)。つまりこれらの種別では点は
+ * 「ドラッグして掴む場所」としては辺のどこを掴むのとも変わらず、常時表示すると
+ * 「なぜこの1点だけ特別に見えるか」という見た目の非対称だけが残る(本人指摘・2026-09-11)。
+ * `viewport.ts` はこれを「常時表示するか、ホバー/選択時だけ見せるか」の判定に使う ——
+ * ピック可能かどうか(`pickPointsAt` が読む座標そのもの)は変えない。
+ */
+export function entityHasIndependentPoints(kind: string): boolean {
+  return entityKindSpec(kind).pointKeys.length > 1
+}
+
+/**
  * その図形の「見た目だけの角」(`EntityKindSpec.visualCorners`)を列挙する。
  *
  * `entityHandles` とは別 —— こちらは `move_sketch_entities` の的にならない座標の並びで、
