@@ -2639,6 +2639,14 @@ export function createViewport(container: HTMLElement): Viewport {
   function setActiveSketch(sketchId: string | null): void {
     const wasActive = activeSketchId !== null
     if (activeSketchId !== sketchId) pickChanged() // モードの出入りで優先順位ごと変わる
+    // **`hoverAt`(画面座標)を捨てる** —— 入る/出る/切り替えのどれでもカメラが飛ぶことがある
+    // (`lookAtSketch` の正対・退出時の視点復元)。飛んだ直後は同じ画面座標が指す3D点が
+    // 別物になるので、そのままカーソル追従(`updateActiveSketchGridCursor` の毎フレーム経路)
+    // に食わせると、切り替え前の位置が新しい平面の外側へ再投影されて縁のグリッドが
+    // 意味なく広がる(実測: 面スケッチへの切替直後、直前のクリック位置が新しい面の外へ
+    // 再投影されて内容だけの範囲より広い値が一瞬出た)。次の実際のポインタ移動まで
+    // 「いま指している場所は無い」も同じ扱いにする(`onPointerLeave` と同じ考え方)。
+    hoverAt = null
     activeSketchId = sketchId
     refreshGridSketchFrame() // 出すグリッドの平面がモードの出入りで変わる
     if (sketchId !== null) {
@@ -3442,6 +3450,13 @@ export function createViewport(container: HTMLElement): Viewport {
     updateResolution(performance.now())
     updateHover()
     cube.updateHover()
+    // **カーソル追従もフレームごとに引き直す**(`onPointerMove` だけに任せない)。
+    // ホイールでズームすると `hoverAt`(画面座標)は動かないが、レイと平面frameの交点
+    // (`planePointAt`)はカメラが動いた分だけ変わる —— `onPointerMove` 経由だけでは
+    // 「カーソルを動かさずホイールで寄せる/引く」だけの操作でグリッドが追従しない
+    // (本人報告2026-09-11)。`planePointAt`/`updateActiveSketchGridCursor` は
+    // どちらもスケッチ非活性なら即 `null`/no-opで返るので、素通りの費用は無視できる。
+    updateActiveSketchGridCursor(hoverAt === null ? null : planePointAt(hoverAt.x, hoverAt.y))
     // グリッドは毎フレームここだけを更新する(段の不透明度とカメラ行列。ジオメトリは無い)。
     updateGridUniforms()
     renderer.render(scene, camera)
