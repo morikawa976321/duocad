@@ -254,6 +254,16 @@
   /** 起動中のコマンドが選択から取る種別(`CommandHost` が知らせる)。 */
   let wantedKinds = $state<SelectableKind[]>([])
   /**
+   * 保持/除外ソリッド・拘束面(`OPTIMIZE_PRESET_ROLE` の3つ)が起動中か。
+   *
+   * **この3つだけ、修飾キー無しのクリックもトグルにする**(2026-09-11本人決定)。
+   * 起動した時点で既存の割り当てが選択状態に現れる集合代入なので、素のクリックが
+   * 「置き換え」だと1枚足すたびにCtrlが要り、他の割り当て済みの面を毎回避けて
+   * クリックする羽目になる。他のverb(フィレットの辺・押し出す面等)は素のクリック=
+   * 置き換えのままでよい —— 起動時に選択が空で始まるので置き換えと足すが一致する。
+   */
+  let toggleOnlyOptimizeSet = $state(false)
+  /**
    * 起動中のコマンドが**基準平面を要求している**か(`CommandHost` が知らせる)。
    * 辺と同じ規律で、要求している間だけビューポートで指せるようにする。
    */
@@ -1355,6 +1365,10 @@
    * 荷重の2つは**空にする**(`OPTIMIZE_EMPTY_START_VERBS`)。
    */
   function onCommandStart(verb: string): void {
+    // **`toggleOnlyOptimizeSet` は起動するverbが変わるたび毎回書き直す**(前のverbの
+    // 値を持ち越さない)。`model === null` の早期returnより前に置く —— 起動そのものは
+    // 文書が無くても起きるので、ここで止めると次のverbが集合代入でも判定が古いまま残る。
+    toggleOnlyOptimizeSet = OPTIMIZE_PRESET_ROLE[verb] !== undefined
     if (model === null) return
     // 荷重の2つは**空から始める**(`OPTIMIZE_EMPTY_START_VERBS` の理由を参照)。
     // 「何もしない」ではなく「空を代入する」でなければ、前のverbの選択が残る。
@@ -1365,6 +1379,18 @@
     const role = OPTIMIZE_PRESET_ROLE[verb]
     if (role === undefined) return
     presetSelection(model.optimize[role])
+  }
+
+  /**
+   * `CommandHost` の `onWants`。**verbが無起動へ戻ったことを知る唯一の経路でもある**
+   * (`onStart` は起動したときしか呼ばれない)。無起動の `command.args` は常に `[]` なので
+   * `kinds` が空になった = 中断/確定成功/モード切替のどれかで降りた、とみなして
+   * `toggleOnlyOptimizeSet` を下ろす —— 下ろさないと、拘束面を確定した直後に
+   * フィレットへ移って辺を素クリックしたときトグルのまま残り、選択が置き換わらない。
+   */
+  function onWantsKinds(kinds: SelectableKind[]): void {
+    wantedKinds = kinds
+    if (kinds.length === 0) toggleOnlyOptimizeSet = false
   }
 
   /**
@@ -1456,15 +1482,21 @@
       else if (event.mode === 'replace') note('面を外した')
       return
     }
+    // **保持/除外ソリッド・拘束面は素クリックもトグル**(`toggleOnlyOptimizeSet`)。
+    // 起動した時点で既存の割り当てが選択状態で現れる集合代入なので、置き換えのままだと
+    // 1枚足すたびに他の割り当て済みの面を全部外してしまう —— Ctrl無しでも足し引きできる
+    // 必要がある。この3つの間だけ `wantedKinds` が `'body'` 単独か `'face'` 単独になる
+    // (`commands/optimize.ts` の宣言)ので、他のverbの面ピック(押し出す面等)には効かない。
+    const pickMode: PickEvent['mode'] = toggleOnlyOptimizeSet ? 'toggle' : event.mode
     // **保持/除外ソリッドのverbが起動している間はボディ粒度**(タスク仕様)。
     // `wantedKinds` に `'body'` が立つのは `commands/optimize.ts` の `SET_PRESERVE_BODIES` /
     // `SET_EXCLUDE_BODIES` だけなので、面が当たってもクリックした面ではなくその
     // ボディ全体を選択へ足す。
     if (wantedKinds.includes('body')) {
-      editSelection({ body: event.hit.bodyId, kind: 'body', index: null }, event.mode)
+      editSelection({ body: event.hit.bodyId, kind: 'body', index: null }, pickMode)
       return
     }
-    editSelection(pickedRef(event.hit.bodyId, event.hit.faceIndex), event.mode)
+    editSelection(pickedRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
   }
 
   // ---------------------------------------------------------------- C: スケッチ
@@ -2641,7 +2673,7 @@
         onCancelPreview={clearPreview}
         onNote={note}
         onStart={onCommandStart}
-        onWants={(kinds) => (wantedKinds = kinds)}
+        onWants={onWantsKinds}
         onWantsPlane={(wants) => (wantedPlane = wants)}
         onWantsPoint={(wants) => viewport?.setSketchCursorWanted(wants)}
         onWantsPick={(target) => (wantedPick = target)}
