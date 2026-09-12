@@ -740,6 +740,51 @@ def check_reaction_constraint_bites() -> None:
     RESULTS["far_wall_compliance_penalty"] = round(penalty, 6)
 
 
+def check_penal_continuation() -> None:
+    print("\n[10] ペナルティ連続化")
+    ramp = [simp.penal_at(it, 3.0, 1.0, 20) for it in (1, 10, 19, 20, 21, 40)]
+    check(
+        "penal_at は start から penal まで線形に上げ、iters 反復目で届いて以降は動かない",
+        ramp[0] == 1.0 and ramp[3] == 3.0 and ramp[4] == 3.0 and ramp[5] == 3.0
+        and 1.0 < ramp[1] < ramp[2] < 3.0,
+        f"it 1/10/19/20/21/40 で {[round(v, 3) for v in ramp]}",
+    )
+    check(
+        "start を渡さなければ penal 固定(既定の経路に連続化が漏れない)",
+        [simp.penal_at(it, 3.0, None, 20) for it in (1, 20, 40)] == [3.0, 3.0, 3.0],
+        "penal_start=None",
+    )
+    # **届く前に反復を使い切ると灰色のまま答えが出る。** 中間密度の残った密度場が `rho` と
+    # して返り、メッシュ側の閾値 0.5 がそれを切り取る —— 例外も警告も出ないまま
+    # 「別の問題の解」が製品を通るので、入口で落とす。
+    check(
+        "penal_iters が max_iter を超えると例外(灰色のまま終わらせない)",
+        _raises(
+            lambda: simp.run_preset(max_iter=10, penal_start=1.0, penal_iters=20)
+        ),
+        "penal_iters=20 / max_iter=10",
+    )
+    plain = simp.run_preset(max_iter=30)
+    cont = simp.run_preset(max_iter=30, penal_start=1.0, penal_iters=10)
+    check(
+        "連続化は答えを変える(配線が死んでいない)",
+        float(np.abs(cont.rho - plain.rho).max()) > 1e-6,
+        f"|Δρ|max {float(np.abs(cont.rho - plain.rho).max()):.4g} / "
+        f"C {plain.history[-1].compliance:.4f} -> {cont.history[-1].compliance:.4f}",
+    )
+    check(
+        "使った日程が Result に残る(渡さなければ None/0)",
+        plain.penal_start is None and plain.penal_iters == 0
+        and cont.penal_start == 1.0 and cont.penal_iters == 10,
+        f"既定 {plain.penal_start!r}/{plain.penal_iters} / "
+        f"連続化 {cont.penal_start!r}/{cont.penal_iters}",
+    )
+    RESULTS["penal_continuation_compliance"] = [
+        round(float(plain.history[-1].compliance), 6),
+        round(float(cont.history[-1].compliance), 6),
+    ]
+
+
 def _raises(call) -> bool:
     """呼んで ValueError が出れば True。**検出力の検査でしか使わない。**"""
     try:
@@ -761,6 +806,7 @@ def main() -> int:
     check_reactions()
     check_reaction_constraint()
     check_reaction_constraint_bites()
+    check_penal_continuation()
 
     print("\n" + "=" * 72)
     print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))

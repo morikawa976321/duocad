@@ -1256,6 +1256,11 @@ class Result:
     reactions: tuple[Reaction, ...] = ()
     # 課した反力の下限(荷重の合力に対する割合)。制約を掛けていなければ None。
     reaction_min: float | None = None
+    # ペナルティ連続化の入口。**`penal_start` が None なら `penal` 固定**(連続化なし)。
+    # `history` のコンプライアンスは、**`penal_iters` 反復目より前は違う目的関数の値**
+    # (灰色が許されるぶん小さく出る)。比較するときはそこから後だけを見ること。
+    penal_start: float | None = None
+    penal_iters: int = 0
     # `optimize(keep_model=True)` のときだけ入る、実際に解いた `Model`。**既定は None** ——
     # `Model` は `_iK`/`_jK` に**組み立てる要素数**×576 の添字配列を2本持つので、要らない
     # 呼び出しにまで数十MBを持たせない。後処理(`stress.py`)が拘束・荷重を手で組み直さずに
@@ -1994,6 +1999,27 @@ if DEFAULT_UPDATE not in UPDATES:  # 既定名を消したまま気づかない�
     raise RuntimeError(f"DEFAULT_UPDATE={DEFAULT_UPDATE!r} が UPDATES に無い")
 
 
+def penal_at(it: int, penal: float, start: float | None, iters: int) -> float:
+    """反復 `it`(1始まり)で使うペナルティ。`start` が None なら `penal` 固定。
+
+    `start` から `penal` まで `iters` 反復かけて線形に上げ、以降は `penal` のまま。
+    **`it == iters` でちょうど `penal` に届く**(`iters=1` なら初回から `penal`)。
+
+    **これは目的関数を反復の途中で変える。** 低い penal の区間のコンプライアンスは
+    `penal` のそれと比べられない(灰色が許されるぶん必ず小さく出る)ので、**収束の比較は
+    両方が `penal` に達したあとの区間で行うこと。**
+
+    **反復をまたぐ状態を持つ更新則(MMA の漸近線・直前2点)とは相性の検証が要る** ——
+    それらは同じ目的関数で測った点を前提にしている。OC は状態を持たないので影響しない。
+    """
+    if start is None:
+        return float(penal)
+    if it >= int(iters):
+        return float(penal)
+    span = max(int(iters) - 1, 1)
+    return float(start) + (float(penal) - float(start)) * (int(it) - 1) / span
+
+
 def optimize(
     nelx: int,
     nely: int,
@@ -2003,6 +2029,8 @@ def optimize(
     material_mm3: float | None = None,
     element_volume_mm3: float | None = None,
     penal: float = 3.0,
+    penal_start: float | None = None,
+    penal_iters: int = 20,
     rmin: float | None = None,
     rmin_mm: float | None = None,
     max_iter: int = 60,
@@ -2123,6 +2151,22 @@ def optimize(
                 f" {1 + len(tuple(reactions))} 本になり、OC の乗数1本の二分探索が"
                 '成り立たない。update="mma" を使うこと'
             )
+    if penal_start is not None:
+        if not 0.0 < float(penal_start) <= float(penal):
+            raise ValueError(
+                f"penal_start は 0 < start <= penal であること"
+                f"(受け取った値: {penal_start!r} / penal={penal!r})"
+            )
+        if int(penal_iters) < 1:
+            raise ValueError(f"penal_iters は1以上であること(いま {penal_iters!r})")
+        # **途中で終わると灰色のまま答えが出る。** penal が目標に届く前に反復を使い切ると、
+        # 中間密度が残った密度場が `rho` として返り、メッシュ側の閾値 0.5 がそれを
+        # 切り取る —— 例外も警告も出ないまま「別の問題の解」が製品を通る。
+        if int(penal_iters) > int(max_iter):
+            raise ValueError(
+                f"penal_iters({penal_iters})が max_iter({max_iter})を超えている —— "
+                f"penal が {penal} へ届く前に終わるので、灰色の残った密度場が返る"
+            )
     try:
         update_cls = UPDATES[update]
     except KeyError:
@@ -2231,16 +2275,17 @@ def optimize(
         t0 = time.perf_counter()
         # **順問題と随伴で K を1回だけ組み、前処理も1回だけ作る**(`Model.prepare`)。
         # 右辺ごとに `Model.solve` を呼ぶと多重格子の setup が本数ぶん重なる。
-        system = model.prepare(x_phys, penal, solver=solver, threads=threads)
+        penal_now = penal_at(it, penal, penal_start, penal_iters)
+        system = model.prepare(x_phys, penal_now, solver=solver, threads=threads)
         u = system.solve(model.f[None, :], u0=u[None, :], cg_rtol=cg_rtol)[0]
-        c, ce = model.compliance(x_phys, penal, u)
+        c, ce = model.compliance(x_phys, penal_now, u)
         constraints: tuple[Constraint, ...] = ()
         if groups:
-            vectors = reaction_forces(model, x_phys, penal, u, groups)
+            vectors = reaction_forces(model, x_phys, penal_now, u, groups)
             reaction_now = _as_reactions(groups, vectors, load_reference)
             if reaction_min is not None:
                 raw, adjoint = reaction_sensitivity(
-                    model, system, x_phys, penal, u, groups, vectors, adjoint0=adjoint
+                    model, system, x_phys, penal_now, u, groups, vectors, adjoint0=adjoint
                 )
                 floor = reaction_min * load_reference
                 # g_i = 1 - |R_i| / (ε|F|) <= 0。**感度は目的と同じくフィルタを通す**
@@ -2259,7 +2304,7 @@ def optimize(
         # **K_ff と多重格子の各段をここで手放す。** 下のフィルタと更新則は大きい一時配列を
         # 作るので、峰メモリを反復の後半まで持ち越さない。
         system = None
-        dc = -penal * x_phys ** (penal - 1.0) * (E - emin) * ce
+        dc = -penal_now * x_phys ** (penal_now - 1.0) * (E - emin) * ce
         dv = np.ones_like(x)
         # `live` は「その要素の物理密度が設計変数で動くか」。パッシブ要素の物理密度は
         # 上書きで定数になっているので、そこへの感度は連鎖律上ちょうど 0 になる。
@@ -2313,6 +2358,8 @@ def optimize(
         update=update,
         reactions=reaction_now,
         reaction_min=reaction_min,
+        penal_start=None if penal_start is None else float(penal_start),
+        penal_iters=0 if penal_start is None else int(penal_iters),
         model=model if keep_model else None,
     )
     if reaction_min is not None:
