@@ -915,6 +915,7 @@ def run_pipeline(
     update: Optional[str] = None,
     reaction_min: Optional[float] = None,
     keep_model: bool = False,
+    dynamic_active: bool = False,
 ) -> dict:
     """ソリッドを端から端まで1回通す。戻り値は各段の実測と成果物。
 
@@ -962,6 +963,10 @@ def run_pipeline(
     `keep_model=True` は `simp.optimize` へそのまま渡る。`result.model`(戻り値 dict の
     `"result"` キー)に実際に解いた `Model` が入るので、`stress.py` の後処理が拘束・荷重を
     手で組み直さずに済む。既定 `False` では入らない(数値は1ビットも変わらない)。
+
+    `dynamic_active=True` は `simp.optimize` へそのまま渡る(ρ が `emin**(1/penal)` を
+    下回った要素を毎反復 組み立てから外す)。**既定 `False` では渡さないので、経路も数値も
+    1ビットも変わらない。** 効く場と限界は docs/TOPOPT_ACTIVE_SET.md。
 
     `update` は `simp.optimize` の更新則の**上書き**(既定 None = `simp` 側の既定 `"oc"`)。
     None のときは `simp.optimize` へ渡さないので、既定の挙動は1ビットも変わらない。
@@ -1099,6 +1104,7 @@ def run_pipeline(
         reactions=reaction_groups,
         callback=progress,
         keep_model=keep_model,
+        **({} if not dynamic_active else {"dynamic_active": True}),
         **({} if solver is None else {"solver": solver}),
         **({} if threads is None else {"threads": threads}),
         **({} if resolved_update is None else {"update": resolved_update}),

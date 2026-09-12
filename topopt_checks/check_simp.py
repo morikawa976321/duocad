@@ -40,6 +40,13 @@
    **反力ゼロで捨てられる**(構造最適化は荷重を運ばない材料を置かない)。下限を課すと
    その面が荷重を受け持つようになり、代わりにコンプライアンスが悪化する。
    **両方を数字で見る** —— 「制約を入れても何も変わらない」なら制約は配線されていない。
+10. **ペナルティ連続化** — `penal_at` の日程 / 灰色のまま終わる経路を入口で塞いでいるか /
+   確かめていない組み合わせ(MMA)で例外になるか / 配線が死んでいないか。
+11. **動的な active set** — 閾値が `emin**(1/penal)` から**導出**されているか / 既定オフで
+   `prepare` が状態を1つも触らないか / 外した領域の自由度が拘束されて解がきっかり 0 か /
+   目的値が動かないか / ρ が戻れば要素も自由度も戻るか / `reset_active` が静的な状態へ
+   戻すか。**検出力**: 閾値を ρ=1e-2 へ上げると捨てる感度が7桁増える(上げてはいけない
+   理由)/ 動的な void から拘束を作り直さないと自由自由度が孤立する。
 """
 
 from __future__ import annotations
@@ -810,6 +817,237 @@ def check_penal_continuation() -> None:
     ]
 
 
+# ---------------------------------------------------------------------------
+# 11. 動的な active set(ρ から毎反復 作り直す)
+# ---------------------------------------------------------------------------
+DYNAMIC_GRID = (20, 8, 8)
+
+
+def _dynamic_case() -> np.ndarray:
+    """死んだ塊(ρ=1e-6)と灰色の塊(ρ=5e-3)を持つ密度場。
+
+    どちらも**内部の節点が自分の塊の要素にしか接していない**大きさにしてある —— そうで
+    ないと外しても拘束される自由度が生まれず、閾値を上げたときの差が出ない。
+    """
+    nelx, nely, nelz = DYNAMIC_GRID
+    rho = np.full((nelx, nely, nelz), 0.5)
+    rho[2:8, 1:7, 1:7] = 1e-6  # 数値的に死んでいる(閾値 1e-3 未満)
+    rho[11:17, 1:7, 1:7] = 5e-3  # 灰色。感度は生きている(閾値を上げると外れる)
+    return rho
+
+
+def check_dynamic_active() -> None:
+    nelx, nely, nelz = DYNAMIC_GRID
+    print(f"\n[11] 動的な active set ({nelx}x{nely}x{nelz})")
+    rho = _dynamic_case()
+    static = simp.Model(nelx, nely, nelz)
+    dynamic = simp.Model(nelx, nely, nelz, dynamic_active=True)
+
+    # (a) 閾値は定数ではなく `emin ** (1/penal)` から出る。
+    thr = dynamic.dead_rho_threshold(3.0)
+    derived = all(
+        abs(
+            simp.Model(4, 4, 4, emin=emin).dead_rho_threshold(penal) ** penal - emin
+        )
+        <= 1e-12 * emin
+        for emin, penal in ((1e-9, 3.0), (1e-9, 2.0), (1e-6, 3.0), (1e-12, 4.0))
+    )
+    check(
+        "閾値は emin**(1/penal)(そこで SIMP 項がちょうど emin と同じ大きさになる)",
+        derived and abs(thr - 1e-3) < 1e-15,
+        f"既定(emin=1e-9/penal=3)で {thr:.6e} / thr**penal == emin が4組で成立",
+    )
+    # **上げてはいけない理由を数字で。** ρ=1e-2 の SIMP 項は emin の1000倍ある。
+    ratio = (1e-2**3.0) / static.emin
+    check(
+        "閾値を ρ=1e-2 へ上げると、外す要素の SIMP 項が emin の1000倍になる",
+        abs(ratio - 1000.0) < 1e-6,
+        f"(1e-2)**3 / emin = {ratio:.1f}",
+    )
+
+    # (b) 既定(オフ)は素通し —— `prepare` を通しても状態が1つも動かない。
+    # **「変更前と1ビット同じ」の凍結指紋を持っているのは `check_absolute_volume.py` [4]**
+    # (`rho_sha` と `c_last` を16進で固定。押さえているのは PRESET と void_mask の経路だけ)。
+    # ここが足すのは `prepare` の非変性と、(f) の「オフの `optimize` は新しい経路へ
+    # 1秒も入らない」の2つである。
+    before = (static.fixed.copy(), static.free.copy(), int(static._iK.size))
+    static.prepare(rho, 3.0, solver="direct")
+    check(
+        "既定オフでは prepare が active/fixed/free/COO 添字を1つも触らない",
+        static.active is None
+        and np.array_equal(static.fixed, before[0])
+        and np.array_equal(static.free, before[1])
+        and static._iK.size == before[2],
+        f"fixed {static.fixed.size} / free {static.free.size} / COO {static._iK.size} 項",
+    )
+
+    # (c) 外した要素にしか接していない自由度が拘束へ回る。
+    u_static = static.solve(rho, 3.0, solver="direct")
+    u_dynamic = dynamic.solve(rho, 3.0, solver="direct")
+    alive = rho >= thr
+    check(
+        "組み立てるのは閾値以上の要素だけ",
+        dynamic.active is not None and dynamic.active.size == int(alive.sum()),
+        f"{int(alive.sum())} / {rho.size} 要素(死んだ塊 {int((~alive).sum())} 要素を外した)",
+    )
+    check(
+        "自由自由度が1つも孤立していない(K_ff に全零行が無い)",
+        _orphan_free_dofs(dynamic) == 0,
+        f"孤立 {_orphan_free_dofs(dynamic)} 個",
+    )
+    added = np.setdiff1d(dynamic.fixed, static.fixed)
+    check(
+        "外した領域の内部の自由度が拘束され、解がきっかり 0 になる",
+        added.size > 0 and float(np.abs(u_dynamic[added]).max()) == 0.0,
+        f"{added.size} 自由度を追加拘束(同じ自由度は静的な系では max|u|="
+        f"{float(np.abs(u_static[added]).max()):.3e} の軟モードだった)",
+    )
+    c_static, ce_static = static.compliance(rho, 3.0, u_static)
+    c_dynamic, _ = dynamic.compliance(rho, 3.0, u_dynamic)
+    rel = abs(c_dynamic - c_static) / abs(c_static)
+    check(
+        "外しても目的値が動かない(相対 1e-6 以内)",
+        rel < 1e-6,
+        f"{c_static:.9f} -> {c_dynamic:.9f}(相対 {rel:.3e})",
+    )
+
+    # (d) 変異検査: 閾値を ρ=1e-2 へ上げると、生きた感度を捨てることになる。
+    # 外した要素の内部節点は拘束されるので ce=0 になり、**その要素の感度が消える。**
+    dc = 3.0 * rho ** 2.0 * (static.E - static.emin) * ce_static
+    total = float(np.abs(dc).sum())
+    share_ok = float(np.abs(dc[rho < 1e-3]).sum()) / total
+    share_raised = float(np.abs(dc[rho < 1e-2]).sum()) / total
+    check(
+        "閾値 emin**(1/penal) が捨てる感度はゼロに等しい",
+        share_ok < 1e-9,
+        f"外す要素の |dc| が全体の {share_ok:.3e}",
+    )
+    check(
+        "閾値を 1e-2 へ上げると捨てる感度が桁で増える(上げてはいけないことの検出力)",
+        share_raised > 1e4 * share_ok,
+        f"1e-2 なら {share_raised:.3e}({share_raised / share_ok:.3g} 倍)",
+    )
+    # **検出力**: 追加拘束を作らずに要素だけ外すと (c) が落ちる —— `_floating_dofs` を
+    # 動的な void から作り直すという契約が効いていることを見せる。
+    naive = simp.Model(nelx, nely, nelz, active_mask=alive)
+    check(
+        "契約を破ると上の検査が落ちる(動的な void から拘束を作り直さない)",
+        _orphan_free_dofs(naive) > 0,
+        f"孤立 {_orphan_free_dofs(naive)} 個",
+    )
+
+    # (e) 反復をまたいでも壊れない(戻れる境界・ウォームスタート・静的な状態への復帰)。
+    grown = rho.copy()
+    grown[2:8, 1:7, 1:7] = 0.4  # 死んだ塊が材料へ戻る
+    dynamic.prepare(grown, 3.0, solver="direct")
+    # `fixed` は `np.union1d` を通るので並びが昇順に揃う(`__init__` が
+    # `extra_fixed_dofs` を受けたときと同じ)。集合として比べる。
+    # 戻るのは要素・自由度・COO 添字の3つで、`active` は全要素を指す索引のまま
+    # (`None` へ戻すのは `reset_active` だけ —— 下の検査が持っている)。
+    check(
+        "ρ が戻れば要素も自由度も COO 添字も戻る(片道ではない)",
+        dynamic.active.size == rho.size
+        and dynamic._iK.size == static._iK.size
+        and np.array_equal(np.unique(dynamic.fixed), np.unique(static.fixed))
+        and np.array_equal(dynamic.free, static.free),
+        f"組み立て {dynamic.active.size} / {rho.size} 要素・fixed {dynamic.fixed.size}・"
+        f"free {dynamic.free.size}・COO {dynamic._iK.size} 項",
+    )
+    dynamic.prepare(rho, 3.0, solver="direct")
+    dynamic.reset_active()
+    check(
+        "reset_active で静的な状態へ戻る(keep_model=True で外へ出す形)",
+        dynamic.active is None
+        and np.array_equal(np.unique(dynamic.fixed), np.unique(static.fixed))
+        and dynamic._iK.size == static._iK.size,
+        f"fixed {dynamic.fixed.size} / COO {dynamic._iK.size} 項",
+    )
+    check(
+        "update='mma' との併用は例外(確かめていない組み合わせを黙って通さない)",
+        _raises(lambda: simp.run_preset(max_iter=5, update="mma", dynamic_active=True)),
+        "dynamic_active=True + update='mma'",
+    )
+    # `keep_model=True` で外へ出た `Model` は静的な状態で、後処理が `solve` を呼べば
+    # そこで渡された ρ から作り直される —— `stress.evaluate` はこの経路を通る。
+    kept = simp.run_preset(max_iter=12, dynamic_active=True, keep_model=True)
+    static_after = kept.model.active is None
+    u_post = kept.model.solve(kept.rho, 3.0, solver="cg")
+    c_post, _ = kept.model.compliance(kept.rho, 3.0, u_post)
+    fu_post = float(kept.model.f @ u_post)
+    check(
+        "keep_model=True は静的な状態で返り、後処理の solve が ρ から作り直す",
+        static_after
+        and kept.model.active is not None
+        and abs(c_post - fu_post) < 1e-8 * abs(fu_post),
+        f"返り値の active=None / 後処理で {kept.model.active.size} 要素・"
+        f"c={c_post:.9f} F・U={fu_post:.9f}",
+    )
+
+    # (f) 端から端まで: 既定の題材で答えが変わらないこと。
+    with simp.collect_solve_stats() as off_stats:
+        plain = simp.run_preset(max_iter=30)
+    with simp.collect_solve_stats() as stats:
+        dyn = simp.run_preset(max_iter=30, dynamic_active=True)
+    check(
+        "既定オフの optimize は新しい経路へ1度も入らない(30反復)",
+        off_stats["active_refresh_seconds"] == 0.0,
+        f"作り直し {off_stats['active_refresh_seconds']:.3f}秒",
+    )
+    c_plain = plain.history[-1].compliance
+    c_dyn = dyn.history[-1].compliance
+    rel_run = abs(c_dyn - c_plain) / abs(c_plain)
+    check(
+        "PRESET 30反復で答えが変わらない(相対 1e-5 以内)",
+        rel_run < 1e-5 and float(np.abs(dyn.rho - plain.rho).max()) < 1e-4,
+        f"C {c_plain:.6f} -> {c_dyn:.6f}(相対 {rel_run:.3e})/ "
+        f"|Δρ|max {float(np.abs(dyn.rho - plain.rho).max()):.3e}",
+    )
+    # **上の比較が空振りでないこと。** 落ちる要素が1つも無ければ「答えが変わらない」は
+    # 何も言っていない —— 実際に組み立てから外れた状態で 30反復を通したことを固定する。
+    dropped_end = int((dyn.rho < thr).sum())
+    check(
+        "その30反復で active set が実際に動いている(比較が空振りでない)",
+        dropped_end > 0.1 * dyn.rho.size and stats["active_refresh_seconds"] > 0.0,
+        f"最終 ρ の {dropped_end} / {dyn.rho.size} 要素が閾値未満 / "
+        f"作り直し {stats['active_refresh_seconds']:.3f}秒",
+    )
+    # **終端だけを見ると「最後の1反復で落ちた」と区別が付かない。** `run_preset` は
+    # 決定的なので 10反復目は同じ軌跡の途中の状態で、そこと終端を比べれば
+    # 「反復のあいだ集合が動きながら 30反復を通した」ことが固定できる。
+    dropped_mid = int((simp.run_preset(max_iter=10, dynamic_active=True).rho < thr).sum())
+    check(
+        "active set は反復の途中で段階的に縮む(終端だけを見ていない)",
+        0 < dropped_mid < dropped_end,
+        f"反復10で {dropped_mid} / 反復30で {dropped_end}(全 {dyn.rho.size} 要素)",
+    )
+    # ペナルティ連続化(`penal_start`)との併用。**閾値は penal を追って動く**
+    # (penal=1 なら emin、penal=3 なら 1e-3)ので、低い penal の区間では何も落ちない。
+    ramp_plain = simp.run_preset(max_iter=30, penal_start=1.0, penal_iters=10)
+    ramp_dyn = simp.run_preset(
+        max_iter=30, penal_start=1.0, penal_iters=10, dynamic_active=True
+    )
+    ramp_rel = abs(
+        ramp_dyn.history[-1].compliance - ramp_plain.history[-1].compliance
+    ) / abs(ramp_plain.history[-1].compliance)
+    check(
+        "ペナルティ連続化と併せても答えが変わらない(閾値が penal を追う)",
+        ramp_rel < 1e-5,
+        f"C {ramp_plain.history[-1].compliance:.6f} -> "
+        f"{ramp_dyn.history[-1].compliance:.6f}(相対 {ramp_rel:.3e})/ "
+        f"閾値 penal=1 で {simp.Model(4, 4, 4).dead_rho_threshold(1.0):.1e}",
+    )
+    RESULTS["dynamic_active_threshold"] = thr
+    RESULTS["dynamic_active_preset_dropped"] = [dropped_end, int(dyn.rho.size)]
+    RESULTS["dynamic_active_preset_dropped_mid"] = dropped_mid
+    RESULTS["dynamic_active_ramp_rel"] = ramp_rel
+    RESULTS["dynamic_active_dropped"] = [int((~alive).sum()), int(rho.size)]
+    RESULTS["dynamic_active_added_fixed"] = int(added.size)
+    RESULTS["dynamic_active_compliance_rel"] = rel
+    RESULTS["dynamic_active_dc_share"] = [share_ok, share_raised]
+    RESULTS["dynamic_active_preset_rel"] = rel_run
+    RESULTS["dynamic_active_refresh_seconds"] = round(stats["active_refresh_seconds"], 4)
+
+
 def _raises(call) -> bool:
     """呼んで ValueError が出れば True。**検出力の検査でしか使わない。**"""
     try:
@@ -832,6 +1070,7 @@ def main() -> int:
     check_reaction_constraint()
     check_reaction_constraint_bites()
     check_penal_continuation()
+    check_dynamic_active()
 
     print("\n" + "=" * 72)
     print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))

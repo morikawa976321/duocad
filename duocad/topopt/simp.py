@@ -56,6 +56,9 @@ def new_solve_stats() -> dict:
         # `solve_seconds` の内数。マルチグリッドは密度が変わるたびに各段の作用素(RAP)と
         # 最粗格子の LU を組み直すので、その費用だけ別に見えるようにしてある。
         "mg_setup_seconds": 0.0,
+        # `dynamic_active=True` のときに active set を作り直した秒数(COO 添字の作り直しが
+        # 主。`prepare` の中で `assemble` より前に払う)。既定経路では常に 0.0。
+        "active_refresh_seconds": 0.0,
         "fallbacks": 0,
         "direct_solves": 0,
     }
@@ -640,6 +643,7 @@ class Model:
         load: np.ndarray | None = None,
         extra_fixed_dofs: np.ndarray | None = None,
         active_mask: np.ndarray | None = None,
+        dynamic_active: bool = False,
     ) -> None:
         """`fixed_dofs` / `load` を渡すと片持ち梁の既定の境界条件を置き換える。
 
@@ -659,6 +663,10 @@ class Model:
         —— 組み立てから外した要素にしか接していない自由度が `free` に残ると、K_ff に
         全零行ができて解が定まらない。`None` なら全要素で組む。`edof` そのものは
         `compliance` と `stress.py` が全要素で引くので**間引かない**。
+
+        `dynamic_active=True` にすると、`prepare` が**渡された ρ から active set を毎回
+        作り直す**(`active_mask` はその上限として残る)。**既定は False で、そのときの
+        挙動は追加前と1ビットも変わらない。** 詳しくは `_refresh_active`。
         """
         self.nelx = nelx
         self.nely = nely
@@ -726,10 +734,109 @@ class Model:
             if self.active.size == 0:
                 raise ValueError("組み立てる要素が1つも無い(active_mask が全部 False)")
             edof_assembled = self.edof[self.active]
+        # 静的な状態(`active_mask` と `fixed_dofs`+`extra_fixed_dofs` そのもの)を控える。
+        # `dynamic_active` が毎反復これを土台に作り直し、`reset_active` がここへ戻す。
+        self._base_active = self.active
+        self._base_fixed = self.fixed
+        self.dynamic_active = bool(dynamic_active)
         self._iK, self._jK = _coo_index_arrays(edof_assembled)
         # マルチグリッドの補間作用素は格子と拘束だけで決まる(密度に依らない)ので、
         # 設計反復のあいだ使い回す。作り直すのは各段の作用素と LU のほうだけ。
         self._mg_transfers: dict[tuple, list] = {}
+
+    def dead_rho_threshold(self, penal: float) -> float:
+        """`dynamic_active` が組み立てから外す ρ の上限 = `emin ** (1/penal)`。
+
+        `E_e = emin + ρ^penal (E - emin)` なので、この ρ でちょうど SIMP 項が `emin` と
+        同じ大きさになる。**下回る要素の剛性寄与は `emin` と同じ桁**で、外しても K は
+        O(emin) しか動かず、その要素自身の感度も同じ桁 —— **すでに数値的に死んでいる
+        ものだけを外す**ことになる。既定(`emin=1e-9` / `penal=3`)では ρ < 1e-3。
+
+        **これより上げてはならない。** ρ=1e-2 の要素は SIMP 項が `emin` の1000倍あって
+        感度が生きており、外すと「まだ収束していない状態で位相を確定させる」ことになる。
+        上げるなら、外した要素が戻れる/戻れない境目(docs/TOPOPT_ACTIVE_SET.md)を
+        一緒に見直すこと。
+        """
+        return float(self.emin) ** (1.0 / float(penal))
+
+    def reset_active(self) -> None:
+        """動的な active set を捨て、`__init__` が作った静的な状態へ戻す。
+
+        **`keep_model=True` で外へ出す `Model` はこの状態で返す**(層をまたぐ契約) ——
+        最後の反復の ρ で作った active を持ったまま返すと、後処理(`stress.py`)が
+        「どの ρ で作られたか分からない」拘束集合を引くことになる。`prepare` は渡された
+        ρ から毎回作り直すので、静的な状態から始めても後処理の数値は変わらない。
+        """
+        self._apply_active(self._base_active, self._base_fixed)
+
+    def _refresh_active(self, rho: np.ndarray, penal: float) -> None:
+        """ρ から active set を作り直す(`dynamic_active=True` のときだけ `prepare` が呼ぶ)。
+
+        `dead_rho_threshold` を下回る要素を、静的な `active_mask` の空要素と**同じ扱い**で
+        組み立てから外し、外れた要素にしか接していない自由度を拘束へ回す
+        (`_floating_dofs`。`extra_fixed_dofs` と同じ `void` から作るという `__init__` の
+        契約を、動的な void で満たし直す)。
+        """
+        threshold = self.dead_rho_threshold(penal)
+        alive = np.asarray(rho).ravel() >= threshold
+        if self._base_active is not None:
+            base = np.zeros(self.nele, dtype=bool)
+            base[self._base_active] = True
+            alive &= base
+        active = np.flatnonzero(alive)
+        if active.size == 0:
+            raise ValueError(
+                f"ρ が閾値 {threshold:.3e}(emin**(1/penal))を超える要素が1つも無い"
+                "(組み立てる要素が残らない)"
+            )
+        current = self.active
+        if active.size == (self.nele if current is None else current.size) and (
+            current is None or np.array_equal(active, current)
+        ):
+            return
+        floating = _floating_dofs(
+            self.nelx, self.nely, self.nelz, ~alive.reshape(self.nelx, self.nely, self.nelz)
+        )
+        fixed, free = self._split_dofs(floating)
+        # **荷重が全部 fixed 側へ落ちると、解は零で残差検算も通る**(`ff` が零ベクトルの本は
+        # CG を回さず零解を返す契約)。コンプライアンス 0 の「解けた」が返るので、
+        # 静的な口(`__init__`)と同じ文面でここでも落とす。
+        if not np.any(self.f[free] != 0.0):
+            raise ValueError(
+                "ρ から作り直した active set で、荷重が自由な自由度に1つも載らなくなった"
+                f"(閾値 {threshold:.3e} / 組み立てる要素 {active.size} / {self.nele})。"
+                "荷重面の要素が保持(solid)に入っているか確認すること"
+            )
+        self._apply_active(active, fixed, free=free)
+
+    def _split_dofs(self, extra: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """静的な拘束 + `extra` を fixed に、残りを free にした昇順の2本を返す。
+
+        **`np.union1d` / `np.setdiff1d` を使わない。** どちらも 3.6M 自由度を並べ替えるので
+        合わせて **8.0秒/反復** かかる(2026-09-12 実測。`hanger_bar_attachment` 2.4mm・
+        ndof 3,623,730 で union1d 1.66秒 + setdiff1d 6.32秒)。真偽マスクなら O(ndof) で
+        済み、同じ2本(昇順・重複なし)が出る。
+        """
+        mask = np.zeros(self.ndof, dtype=bool)
+        mask[self._base_fixed] = True
+        if extra.size:
+            mask[extra] = True
+        return np.flatnonzero(mask), np.flatnonzero(~mask)
+
+    def _apply_active(
+        self, active: np.ndarray | None, fixed: np.ndarray, *, free: np.ndarray | None = None
+    ) -> None:
+        self.active = active
+        self.fixed = fixed
+        self.free = self._split_dofs(np.empty(0, dtype=np.int64))[1] if free is None else free
+        # **古い添字を先に手放してから作る。** 658,136要素では `_iK`/`_jK` が 1.5GB ずつ
+        # あり、新旧を同時に持つと峰が 3GB 増える(2026-09-12 実測の規模)。
+        self._iK = self._jK = np.empty(0, dtype=self.edof.dtype)
+        self._iK, self._jK = _coo_index_arrays(
+            self.edof if active is None else self.edof[active]
+        )
+        # 移送作用素は `free` から作られている(`build_mg_transfers`)ので、作り直す。
+        self._mg_transfers.clear()
 
     def assemble(self, rho: np.ndarray, penal: float) -> sp.spmatrix:
         """全体剛性行列 K (ndof,ndof) を返す。SIMP補間 E_e = emin + rho_e**penal * (E - emin)。"""
@@ -859,6 +966,11 @@ class Model:
 
         **持っているものは大きい**(K_ff と多重格子の各段)。設計反復の中で使い終わったら
         名前を手放すこと —— 峰メモリを反復の後半まで持ち越すことになる。
+
+        **`dynamic_active=True` なら、ここで `active`/`fixed`/`free` が渡された ρ から
+        作り直される**(`_refresh_active`)。返した `PreparedSystem` を使い終わる前に
+        別の ρ で `prepare` を呼ぶと `model.free` が変わり、先の `PreparedSystem` の
+        `kf` と噛み合わなくなる —— 1つの ρ につき1つを使い切ること。
         """
         if solver not in ("mg", "cg", "direct"):
             raise ValueError(f"未知の解法: {solver!r}")
@@ -868,6 +980,11 @@ class Model:
         mg = MG_DEFAULT if mg is None else mg
         threads = PARALLEL_THREADS if threads is None else max(1, int(threads))
         stats = _SOLVE_STATS
+        if self.dynamic_active:
+            t_active = time.perf_counter()
+            self._refresh_active(rho, penal)
+            if stats is not None:
+                stats["active_refresh_seconds"] += time.perf_counter() - t_active
         t0 = time.perf_counter()
         kg = self.assemble(rho, penal)
         t1 = time.perf_counter()
@@ -2059,6 +2176,7 @@ def optimize(
     reactions: Sequence[ReactionGroup] | None = None,
     reaction_min: float | None = None,
     keep_model: bool = False,
+    dynamic_active: bool = False,
 ) -> Result:
     """SIMPでコンプライアンス最小化を行う。
 
@@ -2088,6 +2206,12 @@ def optimize(
     `keep_model=True` にすると `Result.model` に**実際に解いた `Model`** が入る
     (既定は入らない)。応力の後処理(`stress.py`)が拘束・荷重・浮いた節点の扱いを
     手で組み直さずに済ませるための口で、**数値は1ビットも変わらない**。
+    `dynamic_active` と併せて使うときは `Model.reset_active` で静的な状態へ戻して返す。
+
+    `dynamic_active=True` にすると、`Model.prepare` が**毎反復 ρ から active set を
+    作り直す** —— `emin**(1/penal)` を下回った要素を `void_mask` と同じ扱いで組み立てと
+    自由度から外す(`Model.dead_rho_threshold`)。**既定は False で、そのときの数値は
+    1ビットも変わらない。** 効く場・効かない場・限界は docs/TOPOPT_ACTIVE_SET.md。
 
     フィルタ半径も2通りで渡せる。**`rmin` と `rmin_mm` は排他**(両方渡すと例外):
 
@@ -2186,6 +2310,17 @@ def optimize(
                 "(初回のコンプライアンス)・移動漸近線・直前2点を反復をまたいで持つので、"
                 "目的関数が反復ごとに変わる前提になっていない。update='oc' を使うこと"
             )
+    if dynamic_active and update == "mma":
+        # MMA が要るのは実質 `reaction_min` の経路で、そこは随伴も直前の解を
+        # ウォームスタートに使う(`reaction_sensitivity(adjoint0=)`)。順問題の `u0` は
+        # `free` が変わっても正しく縮むことを確かめてあるが、**随伴と MMA の反復をまたぐ
+        # 状態は確かめていない。黙って通さない。**
+        raise ValueError(
+            "dynamic_active は update='mma' では確かめていない —— MMA は感度の正規化"
+            "(初回のコンプライアンス)・移動漸近線・直前2点を反復をまたいで持つので、"
+            "組み立てる要素が反復ごとに変わる前提になっていない。update='oc' を使うこと"
+            "(反力の下限制約 reaction_min は MMA を要求するので、併用もできない)"
+        )
     try:
         update_cls = UPDATES[update]
     except KeyError:
@@ -2222,6 +2357,7 @@ def optimize(
         load=load,
         extra_fixed_dofs=floating,
         active_mask=~void if void.any() else None,
+        dynamic_active=dynamic_active,
     )
     rmin_resolved = _resolve_rmin(
         rmin=rmin,
@@ -2365,6 +2501,8 @@ def optimize(
             stopped_by = "change_tol"
             break
 
+    if dynamic_active and keep_model:
+        model.reset_active()
     result = Result(
         rho=x_phys,
         history=history,

@@ -656,6 +656,9 @@ K_MATERIAL = 2.0
 # 側の床で、大きすぎる側には何も無い。**`safety_loop._evaluate` はこの `SolveResidualError`
 # を `"too_little"` に分類する**ので、探索は「その材料量では足りない」と読んで上へ逃げ、
 # 例外も警告も出ないまま重い答えへ収束する。表は docs/TOPOPT.md「下端の崖」。
+# **`simp.optimize(dynamic_active=True)` では埋まらない**(2026-09-12 実測)—— 崖は反復1に
+# あり、そこの ρ は一様な初期値(= 充填率)なので閾値 `emin**(1/penal)` を下回らない。
+# docs/TOPOPT_ACTIVE_SET.md。
 PICK_RATIO = 0.08
 
 # 参照 run も STL を書く(`run_topopt` の契約)。**受入検査が成果物として当てにしている既定の
@@ -1518,6 +1521,7 @@ def run_topopt(
     update: Optional[str] = None,
     reaction_min: Optional[float] = None,
     keep_model: bool = False,
+    dynamic_active: bool = False,
 ) -> dict:
     """導出した塊を端から端まで回す(塊 → 面アンカー → SIMP → marching cubes → STL)。
 
@@ -1535,7 +1539,9 @@ def run_topopt(
     **塊が半径を記録していれば、ここで一致を確かめる**(`_assert_rmin_matches_space`)。
 
     `keep_model=True` は `anchor.run_pipeline` へそのまま渡る(既定 `False`。数値は
-    1ビットも変わらない)。
+    1ビットも変わらない)。`dynamic_active=True` も同じくそのまま渡る(既定 `False`。
+    ρ が `emin**(1/penal)` を下回った要素を毎反復 組み立てから外す。
+    docs/TOPOPT_ACTIVE_SET.md)。
 
     荷重の向きは `force`(全ての荷重面で共有する1本)か `forces`(荷重面と**同じ並び**の
     面ごとの力ベクトル[N])のどちらか一方。どちらも `anchor.run_pipeline` の同名の引数へ
@@ -1578,6 +1584,7 @@ def run_topopt(
         update=update,
         reaction_min=reaction_min,
         keep_model=keep_model,
+        dynamic_active=dynamic_active,
     )
     # `run_pipeline` は保持ソリッドを**自分でもう一度**格子へ載せる。三角形分割の細かさが
     # `derive` と食い違うと、ここで通した塊が向こうでは通らない(逆もある)。揃えてあることを
