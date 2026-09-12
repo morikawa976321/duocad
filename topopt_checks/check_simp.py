@@ -764,6 +764,31 @@ def check_penal_continuation() -> None:
         ),
         "penal_iters=20 / max_iter=10",
     )
+    check(
+        "penal_iters=1 は初回から penal(境界で壊れない)",
+        simp.penal_at(1, 3.0, 1.0, 1) == 3.0,
+        f"{simp.penal_at(1, 3.0, 1.0, 1)}",
+    )
+    # **MMA は反復をまたぐ状態が同じ目的関数の点であることを前提にしている。** 確かめて
+    # いない組み合わせなので入口で落とす(通すと `_c0` が低い penal のコンプライアンスで
+    # 固定され、感度の正規化が桁で狂う)。
+    check(
+        "連続化と update='mma' の併用は例外(確かめていない組み合わせを黙って通さない)",
+        _raises(
+            lambda: simp.run_preset(
+                max_iter=30, update="mma", penal_start=1.0, penal_iters=10
+            )
+        ),
+        "update='mma' + penal_start=1.0",
+    )
+    # **連続化の途中で `change_tol` に降りない。** `change_tol` を 1.0 にすれば初回から
+    # 必ず下回るので、守りが無ければ1反復で止まる。
+    early = simp.run_preset(max_iter=30, change_tol=1.0, penal_start=1.0, penal_iters=10)
+    check(
+        "連続化が終わるまで change_tol で降りない(灰色のまま返さない)",
+        len(early.history) >= 10 and early.history[9].compliance > 0.0,
+        f"{len(early.history)}反復で {early.stopped_by}(連続化は10反復目に終わる)",
+    )
     plain = simp.run_preset(max_iter=30)
     cont = simp.run_preset(max_iter=30, penal_start=1.0, penal_iters=10)
     check(

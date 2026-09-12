@@ -2167,6 +2167,17 @@ def optimize(
                 f"penal_iters({penal_iters})が max_iter({max_iter})を超えている —— "
                 f"penal が {penal} へ届く前に終わるので、灰色の残った密度場が返る"
             )
+        # **MMA は反復をまたぐ状態が「同じ目的関数で測った点」であることを前提にしている。**
+        # `_c0`(感度の正規化)は初回のコンプライアンスで固定されるので、連続化すると
+        # 低い penal の値が基準になる(実測 PRESET: penal=1 の初回 39.6 対 penal=3 の 440.3
+        # で11倍)。漸近線と直前2点も別の目的関数上の点になる。**確かめていない組み合わせを
+        # 黙って通さない。**
+        if update == "mma":
+            raise ValueError(
+                "ペナルティ連続化は update='mma' では確かめていない —— MMA は感度の正規化"
+                "(初回のコンプライアンス)・移動漸近線・直前2点を反復をまたいで持つので、"
+                "目的関数が反復ごとに変わる前提になっていない。update='oc' を使うこと"
+            )
     try:
         update_cls = UPDATES[update]
     except KeyError:
@@ -2268,6 +2279,7 @@ def optimize(
     u = np.zeros(model.ndof)
     history: list[Iteration] = []
     stopped_by = "max_iter"
+    ramp_until = 0 if penal_start is None else int(penal_iters)
     reaction_now: tuple[Reaction, ...] = ()
     adjoint: np.ndarray | None = None
 
@@ -2337,7 +2349,11 @@ def optimize(
         history.append(iteration)
         if callback is not None:
             callback(iteration, x_phys.copy())
-        if change < change_tol:
+        # **連続化の途中では収束と読まない。** penal が目標へ届く前に `change_tol` で
+        # 降りると、中間密度の残った密度場が `rho` として返る(`penal_iters > max_iter` を
+        # 塞いでもこちらの経路が残る)。そもそも目的関数がまだ動いているので、そこでの
+        # 「変化が小さい」は解けたことを意味しない。
+        if change < change_tol and it >= ramp_until:
             stopped_by = "change_tol"
             break
 
