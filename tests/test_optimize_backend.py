@@ -966,3 +966,112 @@ def test_a_residual_failure_at_the_bound_still_stops_the_search(monkeypatch) -> 
     assert caught.value.side == "invalid_bound"
     assert caught.value.bound == "material_max_mm3"
     assert isinstance(caught.value.__cause__, simp.SolveResidualError)
+
+
+# --------------------------------------------------------------------------------------
+# 10. 探索器(Regula Falsi + Illinois)—— SIMP を回さずにループの規律だけを見る
+# --------------------------------------------------------------------------------------
+CURVE = lambda m: 6026.0 * (m / 246337.0) ** 0.75  # noqa: E731  bracket 実測に近い凹な形
+BRACKET = dict(material_min_mm3=52786.0, material_max_mm3=246337.0)
+
+
+def _fake_search(monkeypatch, *, too_little_below=0.0, too_much_between=None):
+    """`_derive_and_run` を安全率の式(`CURVE`)に差し替える(SIMP を回さない)。
+
+    `too_little_below` より軽い材料量は `DesignSpaceDisconnectedError`(→ `"too_little"`)、
+    `too_much_between=(lo, hi)` の帯は `VolumeTargetError(side="above_capacity")`
+    (→ `"too_much"`)にする。**帯は括りの内側に作ること** —— 上端が評価できないと
+    `SafetyTargetError(invalid_bound)` になって探索本体に入らない。
+    """
+    import types
+
+    from duocad.topopt import design_space as ds
+    from duocad.topopt import safety_loop, simp
+
+    monkeypatch.setattr(ds, "build_reference", lambda conditions, **kw: "参照")
+
+    def fake_derive_and_run(conditions, material_mm3, **kwargs):
+        if material_mm3 < too_little_below:
+            raise ds.DesignSpaceDisconnectedError("塊が細すぎる", components=2)
+        if too_much_between is not None and too_much_between[0] < material_mm3 < too_much_between[1]:
+            raise simp.VolumeTargetError(
+                "フィルタの目減りで材料が収まらない",
+                material_mm3=material_mm3,
+                min_mm3=0.0,
+                max_mm3=too_much_between[0],
+                shortfall_mm3=material_mm3 - too_much_between[0],
+                side="above_capacity",
+                element_volume_mm3=1.0,
+            )
+        space = types.SimpleNamespace(element_count=1000)
+        run = {"achieved_material_mm3": material_mm3}
+        report = types.SimpleNamespace(safety_factor=CURVE(material_mm3))
+        return space, run, report
+
+    monkeypatch.setattr(safety_loop, "_derive_and_run", fake_derive_and_run)
+    return safety_loop
+
+
+def test_the_searcher_keeps_the_contract_and_does_not_evaluate_more_than_bisection(
+    monkeypatch,
+) -> None:
+    """**返すものの契約は探索器に依らない**(目標以上・括りの中・二分より悪くない)。
+
+    落ちたら、補間が二分より悪い答え(重い材料量・目標割れ)を返している。
+    """
+    safety_loop = _fake_search(monkeypatch)
+    results = {}
+    for searcher in safety_loop.SEARCHERS:
+        results[searcher] = safety_loop.solve_for_safety_factor(
+            object(), target_safety_factor=3500.0, derivation_kwargs={}, searcher=searcher, **BRACKET
+        )
+    for searcher, result in results.items():
+        assert result.safety_factor >= 3500.0, searcher
+        assert BRACKET["material_min_mm3"] <= result.material_mm3 <= BRACKET["material_max_mm3"]
+        assert result.converged, searcher
+        assert result.evaluations == len(result.history), searcher
+    assert results["illinois"].evaluations <= results["bisection"].evaluations
+    # 「悪化しない」は材料量の側で見る —— どちらも幅 rel_tol の括りで止まるので答えはその幅だけ
+    # 離れうるが、それを超えて重ければ補間が悪い答えを返している。
+    assert results["illinois"].material_mm3 <= results["bisection"].material_mm3 * (
+        1.0 + safety_loop.DEFAULT_REL_TOL
+    )
+    # 補間が実際に使われている(全部フォールバックでも上の assert は通ってしまう)。
+    assert any(step.proposed_by == "illinois" for step in results["illinois"].history)
+    assert all(
+        step.proposed_by in ("bound", "bisection") for step in results["bisection"].history
+    )
+
+
+@pytest.mark.parametrize(
+    "outcome,kwargs",
+    [
+        # **括りの内側で踏ませる。** 下端だけが `too_little` だと、括りに入るときの経路しか
+        # 見ないままループ本体の分岐が素通しになる。
+        ("too_little", {"too_little_below": 130000.0}),
+        ("too_much", {"too_much_between": (120000.0, 240000.0)}),
+    ],
+)
+def test_the_searcher_falls_back_to_bisection_right_after_an_unmeasured_evaluation(
+    monkeypatch, outcome, kwargs
+) -> None:
+    """**安全率が測れなかった直後は補間しない。** 古い端点の安全率で補間すると提案が括りの外へ飛ぶ。
+
+    落ちたら `too_little` / `too_much` の直後に割線法が走っている。
+    """
+    safety_loop = _fake_search(monkeypatch, **kwargs)
+    result = safety_loop.solve_for_safety_factor(
+        object(), target_safety_factor=3500.0, derivation_kwargs={}, **BRACKET
+    )
+    assert any(
+        step.outcome == outcome and step.proposed_by != "bound" for step in result.history
+    ), f"ループの中で {outcome} を踏む前提: {[(s.outcome, s.proposed_by) for s in result.history]}"
+    for previous, step in zip(result.history, result.history[1:]):
+        if previous.outcome != "ok":
+            assert step.proposed_by == "bisection", step
+            assert step.fallback_reason == safety_loop.FALLBACK_UNMEASURED_ENDPOINT, step
+    assert result.safety_factor >= 3500.0
+    # 括りは壊れていない —— 採用した材料量より軽い評価はどれも目標を満たしていない。
+    for step in result.history:
+        if step.material_mm3 < result.material_mm3 and step.outcome == "ok":
+            assert step.safety_factor < 3500.0, step

@@ -19,7 +19,13 @@
 4. **達成不能なら例外**(どちら側にどれだけ足りないか名指し) —
    `material_max_mm3` まで使っても届かない場合 / 探索の境界そのものが導出できない場合。
 5. **下端で既に目標を満たすときは探索しない**(2回の評価で終わる)。
-6. **引数の検証**(target/material_min/material_max/rel_tol/max_evaluations)。
+6. **引数の検証**(target/material_min/material_max/rel_tol/max_evaluations/searcher)。
+7. **候補材料量の決め方**(Regula Falsi + Illinois・クリップ・フォールバック4条件) —— SIMP を
+   回さない純粋な関数として見る。
+8. **探索器の比較**(補間 対 二分) — bracket 題材で評価回数・採用材料量・安全率。
+   **受入は「悪化しないこと」**(完全一致はボクセル量子化で要求しない)。
+   **見るのは目標 `ENTRY_TARGET` の1点だけ**で、「どの目標でも補間の方が評価回数が少ない」
+   という主張ではない(実測では目標4,500で1回増える。docs/TOPOPT_SPEED.md「実装済み A」)。
 """
 
 from __future__ import annotations
@@ -54,6 +60,11 @@ CFG = bench.SAFETY_LOOP
 # **既定の導出(連続値保持)の引数だけを渡す。** 案5の `coarse_*` を混ぜると、素通しの契約
 # どおり `derive_from_reference` が `TypeError` で落ちる(黙って捨てない)。
 DERIVATION_KW = dict(elements_long_axis=CFG["elements_long_axis"])
+
+# 実測(bracket, この解像度, 2026-09-12)で容量の 20%/45%/70% が sf 3,656.9/5,386.9/6,026.3、
+# 括りの下端(15%)が 1,832.6。**5,500 は下端と上端の内側**なので探索本体に入り、
+# かつ端に張り付かない。
+ENTRY_TARGET = 5500.0
 
 
 def _bracket_capacity() -> tuple[ds.Conditions, float, float]:
@@ -164,7 +175,7 @@ def check_monotonic_spotcheck() -> None:
     )
 
 
-def check_entry_point() -> tuple[ds.Conditions, float, float]:
+def check_entry_point() -> tuple[ds.Conditions, float, float, "sl.SafetyLoopResult"]:
     print("\n[3] 入口が端から端まで動く")
     cond, capacity, _solid = _bracket_capacity()
     material_min = capacity * 0.15
@@ -174,9 +185,7 @@ def check_entry_point() -> tuple[ds.Conditions, float, float]:
     # `VolumeTargetError` になる)。0.70 は上の [2] が同じ日に実際に通した点である。
     # **検査を弱めたのではない** —— 下の4つの assert はどれも探索範囲の広さを見ていない。
     material_max = capacity * 0.70
-    # 実測(bracket, この解像度, rmin=2.5)で 20%/45%/70% が sf 2938/5714/6228。
-    # 5500 は 20%-45% の内側にあり、探索は境界に張り付かない。
-    target = 5500.0
+    target = ENTRY_TARGET
     result = sl.solve_for_safety_factor(
         cond,
         target_safety_factor=target,
@@ -232,7 +241,7 @@ def check_entry_point() -> tuple[ds.Conditions, float, float]:
         lower_report.safety_factor < target,
         f"material={lower:.0f} -> sf={lower_report.safety_factor:.4f} < {target}",
     )
-    return cond, material_min, material_max
+    return cond, material_min, material_max, result
 
 
 def check_infeasible(cond: ds.Conditions, material_min: float, material_max: float) -> None:
@@ -323,6 +332,7 @@ def check_argument_validation(cond: ds.Conditions) -> None:
         ("rel_tol が範囲外(0)", {"rel_tol": 0.0}),
         ("rel_tol が範囲外(1以上)", {"rel_tol": 1.0}),
         ("max_evaluations が2未満", {"max_evaluations": 1}),
+        ("searcher が SEARCHERS に無い名前", {"searcher": "brent"}),
     ):
         kwargs = dict(base)
         kwargs.update(overrides)
@@ -336,6 +346,135 @@ def check_argument_validation(cond: ds.Conditions) -> None:
         check(f"{label} なら ValueError", raised == "ValueError", raised)
 
 
+def _propose(lo: float, hi: float, f_lo, f_hi, *, side=None, streak: int = 0, evaluated=()):
+    return sl._propose_material(
+        lo=lo,
+        hi=hi,
+        f_lo=f_lo,
+        f_hi=f_hi,
+        stagnant_side=side,
+        stagnant_streak=streak,
+        evaluated=list(evaluated),
+    )
+
+
+def check_proposal_rules() -> None:
+    print("\n[7] 候補材料量の決め方(補間・クリップ・フォールバック4条件)")
+    # 括り [0, 100]、下端が目標より 3 低く上端が 1 高い -> 割線は 75。
+    plain = _propose(0.0, 100.0, -3.0, 1.0)
+    check(
+        "Regula Falsi が安全率の大きさで位置を決める",
+        plain.proposed_by == "illinois" and abs(plain.material_mm3 - 75.0) < 1e-9 and not plain.clipped,
+        f"{plain}",
+    )
+    high = _propose(0.0, 100.0, -99.0, 1.0)
+    low = _propose(0.0, 100.0, -1.0, 99.0)
+    check(
+        "クリップは括りの 15%/85% で止め、当たったことを残す",
+        (abs(high.material_mm3 - 85.0) < 1e-9 and high.clipped)
+        and (abs(low.material_mm3 - 15.0) < 1e-9 and low.clipped),
+        f"上側={high.material_mm3} 下側={low.material_mm3}",
+    )
+    damped = _propose(0.0, 100.0, -3.0, 1.0, side="lo", streak=2)
+    once = _propose(0.0, 100.0, -3.0, 1.0, side="lo", streak=1)
+    check(
+        "Illinois は据え置かれた端点の f を半分にして提案をそちらへ寄せる",
+        abs(once.material_mm3 - 75.0) < 1e-9 and abs(damped.material_mm3 - 60.0) < 1e-9,
+        f"据え置き1回={once.material_mm3} / 2回={damped.material_mm3}",
+    )
+    for label, proposal, reason in (
+        (
+            "端点の安全率が測れていない(too_little/too_much の直後)",
+            _propose(0.0, 100.0, None, 1.0),
+            sl.FALLBACK_UNMEASURED_ENDPOINT,
+        ),
+        (
+            "分母 sf_hi - sf_lo が極小",
+            _propose(0.0, 100.0, -1e-18, 0.0),
+            sl.FALLBACK_DEGENERATE_SLOPE,
+        ),
+        (
+            "提案が括りの端と実質同じ",
+            _propose(1.0, 1.0 + 1e-12, -3.0, 1.0),
+            sl.FALLBACK_AT_BRACKET_EDGE,
+        ),
+        (
+            "履歴と同じ材料量(振動)",
+            _propose(0.0, 100.0, -3.0, 1.0, evaluated=(75.0,)),
+            sl.FALLBACK_ALREADY_EVALUATED,
+        ),
+    ):
+        check(
+            f"フォールバック: {label}",
+            proposal.proposed_by == "bisection" and proposal.fallback_reason == reason,
+            f"{proposal.proposed_by} / {proposal.fallback_reason}",
+        )
+    # 上端の安全率が目標の数千倍(= 案Aが動機にしている形)でも括りの外へ出ない。
+    extreme = _propose(100.0, 200.0, -1.9, 5527.0)
+    check(
+        "提案は必ず括りの内側",
+        100.0 < extreme.material_mm3 < 200.0 and 0.0 < plain.material_mm3 < 100.0,
+        f"{extreme.material_mm3:.4f}",
+    )
+
+
+def check_searcher_comparison(
+    cond: ds.Conditions,
+    material_min: float,
+    material_max: float,
+    illinois: "sl.SafetyLoopResult",
+) -> None:
+    print("\n[8] 探索器の比較(補間 対 二分。bracket 題材)")
+    baseline = sl.solve_for_safety_factor(
+        cond,
+        target_safety_factor=ENTRY_TARGET,
+        material_min_mm3=material_min,
+        material_max_mm3=material_max,
+        max_iter=CFG["max_iter"],
+        derivation_kwargs=dict(DERIVATION_KW),
+        searcher="bisection",
+    )
+    fallbacks = [s.fallback_reason for s in illinois.history if s.fallback_reason]
+    print(
+        f"    二分     : 評価{baseline.evaluations}回 / 材料{baseline.material_mm3:.0f}mm^3 / sf={baseline.safety_factor:.2f}\n"
+        f"    Illinois : 評価{illinois.evaluations}回 / 材料{illinois.material_mm3:.0f}mm^3 / sf={illinois.safety_factor:.2f}\n"
+        f"    補間{sum(1 for s in illinois.history if s.proposed_by == 'illinois')}回 / "
+        f"クリップ{sum(1 for s in illinois.history if s.clipped)}回 / フォールバック{fallbacks}"
+    )
+    # **この1点についての回帰検査である。** 目標を変えると補間が1回多く踏むことがある
+    # (実測は docs/TOPOPT_SPEED.md「実装済み A」の表。目標4,500で 7 → 8)。
+    check(
+        "評価回数が二分より増えない(目標 ENTRY_TARGET の1点)",
+        illinois.evaluations <= baseline.evaluations,
+        f"{illinois.evaluations} <= {baseline.evaluations}",
+    )
+    # **完全一致は要求しない**(ボクセル量子化)。どちらも真の最小を含む幅 rel_tol の括りで
+    # 止まるので、2つの答えはその幅だけ離れうる —— それを超えて重ければ悪化である。
+    check(
+        "採用材料量が二分より悪化しない(rel_tol の幅まで)",
+        illinois.material_mm3 <= baseline.material_mm3 * (1.0 + sl.DEFAULT_REL_TOL),
+        f"{illinois.material_mm3:.0f} <= {baseline.material_mm3:.0f} x {1.0 + sl.DEFAULT_REL_TOL}",
+    )
+    check(
+        "どちらの探索器も目標安全率以上を返す",
+        illinois.safety_factor >= ENTRY_TARGET and baseline.safety_factor >= ENTRY_TARGET,
+        f"補間={illinois.safety_factor:.2f} / 二分={baseline.safety_factor:.2f}",
+    )
+    # **フォールバックしっぱなしなら補間の利得は出ない。** 既定で1回も補間が使われなければ
+    # 配線が切れている(全部二分に落ちても上の3つは通ってしまう)。
+    check(
+        "既定(illinois)では補間が実際に使われている",
+        any(step.proposed_by == "illinois" for step in illinois.history),
+        f"{[step.proposed_by for step in illinois.history]}",
+    )
+    check(
+        "searcher='bisection' は補間を1回も使わない",
+        all(step.proposed_by in ("bound", "bisection") for step in baseline.history)
+        and not any(step.clipped for step in baseline.history),
+        f"{[step.proposed_by for step in baseline.history]}",
+    )
+
+
 def main() -> int:
     print("=" * 72)
     print("check_safety_loop.py : 安全率の外側ループの受入検査")
@@ -343,10 +482,12 @@ def main() -> int:
     check_wiring()
     check_keep_model_wiring()
     check_monotonic_spotcheck()
-    cond, material_min, material_max = check_entry_point()
+    cond, material_min, material_max, entry = check_entry_point()
     check_infeasible(cond, material_min, material_max)
     check_already_met(cond, material_min, material_max)
     check_argument_validation(cond)
+    check_proposal_rules()
+    check_searcher_comparison(cond, material_min, material_max, entry)
 
     print("\n" + "=" * 72)
     if FAILURES:

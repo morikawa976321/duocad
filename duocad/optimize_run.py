@@ -1275,6 +1275,11 @@ def _step_payload(step) -> dict:
         "safety_factor": None if step.safety_factor is None else float(step.safety_factor),
         "elements": None if step.elements is None else int(step.elements),
         "error": None if step.error is None else str(step.error),
+        # 候補材料量の決まり方(`safety_loop.SafetyLoopStep`)。**補間が効いたか二分へ落ちたかは
+        # ここにしか残らない** —— 実行が終わったあとに探索の軌跡を診断する唯一の手がかり。
+        "proposed_by": None if step.proposed_by is None else str(step.proposed_by),
+        "fallback_reason": None if step.fallback_reason is None else str(step.fallback_reason),
+        "clipped": bool(step.clipped),
     }
 
 

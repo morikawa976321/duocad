@@ -1,4 +1,4 @@
-"""安全率を入力に、材料量(mm^3)を二分探索する外側ループ。
+"""安全率を入力に、材料量(mm^3)を探索する外側ループ。
 
 材料量は「内部表現は絶対量(mm^3)、利用者の入力は安全率」の2層(engine
 `safety-factor-goes-outside-the-optimizer`)。内側の2枚 —— `design_space.py`(絶対量の口)と
@@ -7,7 +7,7 @@
 ここにあるのは「最適化を外から何度か回して材料量を決めるループ」だけ。
 
 塊の扱い(docs/TOPOPT.md「塊が材料量に追従する」参照): **各段で塊を導出し直す(案a)を選んだ**。
-`design_space.derive_default(conditions, material_mm3=material, ...)` を二分探索の
+`design_space.derive_default(conditions, material_mm3=material, ...)` を探索の
 候補材料量そのままで毎回呼ぶ —— 塊と材料量が常に噛み合う。固定して使い回す案(c)と比べて
 安全率・材料量ともに実測でよく一致したが(docs/TOPOPT.md表)、(a) は塊が段ごとに変わるため厳密には
 「材料が増えたから安全率が上がったのか、塊が変わったからなのか」を切り分けられない。
@@ -18,6 +18,12 @@
 連続値保持になったため)。`_build_reference` が上端の評価より前に1回作り、以後の全段が
 その順位から切り出す。段ごとに変わるのは「順位のどこまで取るか」だけになったので、上の
 「塊が変わったのか材料が変わったのか」の切り分けにくさは、以前より小さい。
+
+**候補材料量の決め方は `searcher` で選ぶ**(既定 `"illinois"` = Regula Falsi + Illinois、
+`"bisection"` = 区間の中点)。どちらを選んでも探索の契約は同じ —— 括り `[lo, hi]` を保ち、
+**目標安全率以上を満たす最小の材料量**を返し、`_evaluate` の3分類(`ok` / `too_little` /
+`too_much`)も変わらない。補間に使えるのは `ok` の評価が返した安全率だけで、測れなかった端点は
+必ず二分へ落ちる(設計と実測は docs/TOPOPT_SPEED.md「実装済み A」)。
 """
 
 from __future__ import annotations
@@ -33,7 +39,7 @@ from . import stress
 
 _HERE = Path(__file__).resolve().parent
 
-# 二分探索は候補材料量ごとに `design_space.run_topopt` を呼ぶ(= STLを書く)。**既定の出力先を
+# 探索は候補材料量ごとに `design_space.run_topopt` を呼ぶ(= STLを書く)。**既定の出力先を
 # `design_space.run_topopt` の既定(`output/design_space_case1.stl`)や `anchor.run_pipeline` の
 # 既定(`output/bracket.stl`)へ向けてはいけない** —— どちらも他の受入検査(`check_design_space.py`
 # [5] / `check_anchor.py`)が「その検査自身の標準的な実行の成果物」として当てにしている。
@@ -65,10 +71,32 @@ DEFAULT_ALLOWABLE_MPA = PETG_YIELD_MPA * PRINT_DERATE  # 40.0
 # 名目値(PETG のヤング率はおよそ1.5〜2.1GPa)を既定にしてある。安全率の結果には影響しない。
 DEFAULT_YOUNGS_MODULUS_MPA = 2000.0
 
-# 二分探索の既定値。根拠は docs/TOPOPT.md「収束条件と回数上限をどう決めたか」。
+# 探索の既定値。根拠は docs/TOPOPT.md「収束条件と回数上限をどう決めたか」。
 DEFAULT_REL_TOL = 0.08  # 材料量の相対幅(区間の [lo, hi] が (hi-lo)/hi <= 8% で収束と見なす)
-DEFAULT_MAX_EVALUATIONS = 15  # 境界2回 + 二分探索の反復上限(8%まで詰めるのに必要な約3.6回に余裕)
+DEFAULT_MAX_EVALUATIONS = 15  # 境界2回 + 探索本体の反復上限(8%まで詰めるのに必要な約3.6回に余裕)
 DEFAULT_MAX_ITER = 40  # 各段の SIMP 反復数。anchor.run_pipeline の既定と揃えた
+
+# 候補材料量の決め方。設計と実測は docs/TOPOPT_SPEED.md「実装済み A」。
+SEARCHERS = ("illinois", "bisection")
+DEFAULT_SEARCHER = "illinois"
+
+# 補間の提案を括りの内側へ寄せるクリップ(括りの幅に対する比率)。**比率は経験値で、根拠は無い。**
+# 割線が括りの端へ張り付くのを緩和するために入れてある(bracket 題材の実測では4つの solve で
+# 計6回当たった)。調整の足場は docs/TOPOPT_SPEED.md「実装済み A」の実測表。
+INTERPOLATION_CLIP_LO = 0.15
+INTERPOLATION_CLIP_HI = 0.85
+
+# 補間の分母 `sf_hi - sf_lo` がこの相対幅より小さければ除算が信用できないので二分へ落とす。
+_MIN_SAFETY_SPAN_REL = 1e-9
+# 「同じ材料量」と見なす相対幅。同じ点を2度評価しても学びが無い(SIMP は決定的)。
+_SAME_MATERIAL_REL = 1e-9
+
+#: `SafetyLoopStep.fallback_reason` に入る値。**どの条件で二分へ落ちたかを残す** ——
+#: 発火しっぱなしなら補間の利得は出ないので、これが無いと利得の有無を後から診断できない。
+FALLBACK_UNMEASURED_ENDPOINT = "unmeasured_endpoint"  # 端点の安全率が測れていない(too_little/too_much の直後)
+FALLBACK_DEGENERATE_SLOPE = "degenerate_slope"  # sf_hi - sf_lo が極小(除算が不安定)
+FALLBACK_AT_BRACKET_EDGE = "at_bracket_edge"  # 提案が lo/hi と実質同じ(再評価になる)
+FALLBACK_ALREADY_EVALUATED = "already_evaluated"  # 履歴と同じ材料量(振動)
 
 
 class SafetyTargetError(ValueError):
@@ -116,7 +144,7 @@ class ConditionFacesEmptyError(ValueError):
     「未修正のまま残っている」と名指ししていた穴)。
 
     **`_evaluate` の分類(`"too_little"` / `"too_much"`)へ落とさない。** 条件面が空なのは
-    要素サイズの問題であって材料量の問題ではないので、二分探索を続けても直らない
+    要素サイズの問題であって材料量の問題ではないので、探索を続けても直らない
     (材料量を振っても格子は変わらない)。`design_space.ReferenceRunConditionFacesEmptyError`
     (参照 run の同じ失敗)と同じ形で、`empty_condition_faces` に
     `anchor.AnchorTable.condition_face_diagnoses` と同じリストを持つ。
@@ -137,13 +165,20 @@ class ConditionFacesEmptyError(ValueError):
 
 @dataclass(frozen=True, eq=False)
 class SafetyLoopStep:
-    """二分探索の1回の評価。**成功しなかった評価も残す**(履歴が探索の軌跡そのものになる)。"""
+    """探索の1回の評価。**成功しなかった評価も残す**(履歴が探索の軌跡そのものになる)。
+
+    `proposed_by` / `fallback_reason` / `clipped` は**この候補材料量がどう決まったか**で、
+    呼び出し側が補間の効き(フォールバックの発火・クリップの当たり)を知る唯一の手段である。
+    """
 
     material_mm3: float
     outcome: str  # "ok" / "too_little" / "too_much"
     safety_factor: Optional[float] = None
     elements: Optional[int] = None
     error: Optional[str] = None
+    proposed_by: Optional[str] = None  # "bound"(端点) / "illinois"(補間) / "bisection"(中点)
+    fallback_reason: Optional[str] = None  # 補間から二分へ落ちた理由(FALLBACK_* のいずれか)
+    clipped: bool = False  # 補間の提案がクリップに当たったか
 
 
 @dataclass(frozen=True, eq=False)
@@ -323,6 +358,74 @@ def _evaluate(conditions: ds.Conditions, material_mm3: float, **kwargs: Any) -> 
         return "too_little", exc
 
 
+@dataclass(frozen=True)
+class _Proposal:
+    """次に評価する候補材料量と、その決まり方。"""
+
+    material_mm3: float
+    proposed_by: str
+    fallback_reason: Optional[str] = None
+    clipped: bool = False
+
+
+def _same_material(a: float, b: float) -> bool:
+    return abs(a - b) <= _SAME_MATERIAL_REL * max(abs(a), abs(b), 1.0)
+
+
+def _propose_material(
+    *,
+    lo: float,
+    hi: float,
+    f_lo: Optional[float],
+    f_hi: Optional[float],
+    stagnant_side: Optional[str],
+    stagnant_streak: int,
+    evaluated: Sequence[float],
+) -> _Proposal:
+    """括り `[lo, hi]` の中で次に評価する材料量を決める(Regula Falsi + Illinois)。
+
+    `f_lo` / `f_hi` は端点の **`safety_factor - target`**。契約として **`f_lo < 0 <= f_hi`**
+    (下端は目標未満で括りに入り、上端は目標以上が保証される)。**安全率が測れていない端点は
+    `None`** —— `too_little` / `too_much` は括りだけ更新して安全率を返さないので、古い値を
+    そのまま補間に使うと提案が括りの外へ飛ぶ(docs/TOPOPT_SPEED.md「実装済み A」のフォールバック表)。
+
+    `stagnant_side` / `stagnant_streak` は**直前まで何回続けて据え置かれた端点がどちらか**。
+    Illinois はその端点の `f` を据え置かれた回数だけ半分にして、割線が同じ側に粘るのを崩す。
+
+    フォールバックは常に括りの中点(二分)で、理由を `fallback_reason` に残す。
+    """
+    midpoint = 0.5 * (lo + hi)
+    if f_lo is None or f_hi is None:
+        return _Proposal(midpoint, "bisection", FALLBACK_UNMEASURED_ENDPOINT)
+
+    # 据え置かれた側を k 回目の据え置きで 2^(k-1) 分の1にする(Illinois)。
+    damping = 0.5 ** max(0, stagnant_streak - 1)
+    g_lo = f_lo * damping if stagnant_side == "lo" else f_lo
+    g_hi = f_hi * damping if stagnant_side == "hi" else f_hi
+
+    span = g_hi - g_lo
+    if not math.isfinite(span) or span <= _MIN_SAFETY_SPAN_REL * max(abs(g_lo), abs(g_hi), 1.0):
+        return _Proposal(midpoint, "bisection", FALLBACK_DEGENERATE_SLOPE)
+    material = lo + (hi - lo) * (-g_lo) / span
+    if not math.isfinite(material):
+        return _Proposal(midpoint, "bisection", FALLBACK_DEGENERATE_SLOPE)
+
+    width = hi - lo
+    clipped_material = min(
+        max(material, lo + INTERPOLATION_CLIP_LO * width), lo + INTERPOLATION_CLIP_HI * width
+    )
+    clipped = clipped_material != material
+
+    # **再評価の検出はクリップの後に行う。** クリップは括りの内側 15〜85% へ引き戻すので、
+    # 端に張り付いた提案はここで既に使える点になっている —— 先に判定すると、二分より
+    # `lo` 寄りの良い候補を捨てて中点へ落ちる。
+    if _same_material(clipped_material, lo) or _same_material(clipped_material, hi):
+        return _Proposal(midpoint, "bisection", FALLBACK_AT_BRACKET_EDGE)
+    if any(_same_material(clipped_material, done) for done in evaluated):
+        return _Proposal(midpoint, "bisection", FALLBACK_ALREADY_EVALUATED)
+    return _Proposal(clipped_material, "illinois", None, clipped)
+
+
 def solve_for_safety_factor(
     conditions: ds.Conditions,
     *,
@@ -336,6 +439,7 @@ def solve_for_safety_factor(
     percentile: float = stress.DEFAULT_PERCENTILE,
     rel_tol: float = DEFAULT_REL_TOL,
     max_evaluations: int = DEFAULT_MAX_EVALUATIONS,
+    searcher: str = DEFAULT_SEARCHER,
     force: Sequence[float] = (0.0, 0.0, -1.0),
     forces: Optional[Sequence[Sequence[float]]] = None,
     solver: Optional[str] = None,
@@ -347,7 +451,7 @@ def solve_for_safety_factor(
     """**安全率を入力に取る入口。** 目標安全率を満たす材料量で最適化した結果を返す。
 
     `[material_min_mm3, material_max_mm3]` の中で、**目標安全率以上を満たす最小の材料量**を
-    二分探索する(「ちょうど」ではない。docs/TOPOPT.md「探索の目標」参照)。**単調性
+    探索する(「ちょうど」ではない。docs/TOPOPT.md「探索の目標」参照)。**単調性
     (材料量を増やすと最小安全率が上がる)を前提にする** —— docs/TOPOPT.md「単調性を測る」で
     複数の合成条件について実測して確かめてあるが、**理論的な保証ではない**。任意の `conditions` で
     単調とは限らないので、疑わしい形では `derivation_kwargs` を揃えて自分で数点測ること。
@@ -360,16 +464,23 @@ def solve_for_safety_factor(
     達成不能なときは `SafetyTargetError` —— どちら側にどれだけ足りないかを名指しする
     (クラスdocstring参照)。
 
+    `searcher` は候補材料量の決め方(`SEARCHERS`)。既定の `"illinois"` は括り付きの補間
+    (Regula Falsi + Illinois)で、`"bisection"` は括りの中点。**どちらでも返すものの契約は
+    同じ**(目標以上を満たす最小・3分類・`SafetyTargetError`)なので、切り替えても呼び出し側は
+    変わらない。`"bisection"` は探索器そのものを比べるときの基準線として残してある
+    (実測は docs/TOPOPT_SPEED.md「実装済み A」)。**補間がどう効いたかは
+    `result.history` の `proposed_by` / `fallback_reason` / `clipped` で読む。**
+
     `derivation_kwargs` は `design_space.derive_default` への追加引数(既定の連続値保持なら
     `margin_ratio` / `elements_long_axis` / `spacing` / `pick_ratio` / `k_mat` /
     `rmin` / `rmin_mm` / `reference_material_ratio` / `reference_max_iter`)。
     **`rmin` / `rmin_mm` はここから塊の導出と `run_topopt` の両方へ配られる** ——
-    片方だけに渡すと塊が保証した半径と実際に回す半径が食い違う。`material_mm3` はここが二分探索の
+    片方だけに渡すと塊が保証した半径と実際に回す半径が食い違う。`material_mm3` はここが探索の
     候補材料量で埋めるので**渡さないこと**(渡しても上書きされる)。`reference` も同じで、
     **探索の最初に1回だけ作って全段へ配る** —— 材料量ごとに作り直すと、SIMP を1回で済ませる
     という連続値保持の利点がそのまま消える。
 
-    **STL は候補材料量ごとに書く(= 二分探索の回数ぶん上書きする)。** 既定の書き出し先は
+    **STL は候補材料量ごとに書く(= 評価の回数ぶん上書きする)。** 既定の書き出し先は
     `output/safety_loop_search.stl`(scratch。`.gitignore` 対象)で、**探索が終わった時点の
     中身は最後に評価した候補のもので、採用した材料量(`result.material_mm3`)とは限らない**。
     採用した形の STL が欲しいときは、呼び出し側が `design_space.run_topopt(result.space,
@@ -398,6 +509,8 @@ def solve_for_safety_factor(
         raise ValueError(f"rel_tol は (0, 1) であること(受け取った値: {rel_tol!r})")
     if max_evaluations < 2:
         raise ValueError(f"max_evaluations は2以上であること(受け取った値: {max_evaluations!r})")
+    if searcher not in SEARCHERS:
+        raise ValueError(f"searcher は {SEARCHERS} のいずれかであること(受け取った値: {searcher!r})")
 
     eval_kwargs = dict(
         allowable_mpa=allowable_mpa,
@@ -427,28 +540,34 @@ def solve_for_safety_factor(
     history: list[SafetyLoopStep] = []
     best: Optional[tuple[float, Any, Any, Any]] = None  # (material, space, run, report)
 
-    def record(material: float, outcome: str, payload: Any) -> None:
+    def record(proposal: _Proposal, outcome: str, payload: Any) -> None:
+        common = dict(
+            material_mm3=proposal.material_mm3,
+            proposed_by=proposal.proposed_by,
+            fallback_reason=proposal.fallback_reason,
+            clipped=proposal.clipped,
+        )
         if outcome == "ok":
             _space, _run, report = payload
             step = SafetyLoopStep(
-                material_mm3=material,
                 outcome="ok",
                 safety_factor=report.safety_factor,
                 elements=_space.element_count,
+                **common,
             )
         else:
-            step = SafetyLoopStep(material_mm3=material, outcome=outcome, error=str(payload))
+            step = SafetyLoopStep(outcome=outcome, error=str(payload), **common)
         history.append(step)
         if progress is not None:
             progress(step)
 
-    def evaluate(material: float) -> tuple[str, Any]:
-        outcome, payload = _evaluate(conditions, material, **eval_kwargs)
-        record(material, outcome, payload)
+    def evaluate(proposal: _Proposal) -> tuple[str, Any]:
+        outcome, payload = _evaluate(conditions, proposal.material_mm3, **eval_kwargs)
+        record(proposal, outcome, payload)
         return outcome, payload
 
     # --- 上端を評価する。ここが「材料が足りない」を判定する基準になる。---
-    outcome_hi, payload_hi = evaluate(material_max_mm3)
+    outcome_hi, payload_hi = evaluate(_Proposal(material_max_mm3, "bound"))
     if outcome_hi != "ok":
         raise SafetyTargetError(
             f"material_max_mm3={material_max_mm3:.6g}mm^3 そのものが塊として導出できない"
@@ -474,7 +593,7 @@ def solve_for_safety_factor(
     best = (material_max_mm3, _space_hi, _run_hi, report_hi)
 
     # --- 下端を評価する。既にここで目標を満たしていれば探索は要らない。---
-    outcome_lo, payload_lo = evaluate(material_min_mm3)
+    outcome_lo, payload_lo = evaluate(_Proposal(material_min_mm3, "bound"))
     if outcome_lo == "too_much":
         raise SafetyTargetError(
             f"material_min_mm3={material_min_mm3:.6g}mm^3 そのものが塊として導出できない"
@@ -484,33 +603,74 @@ def solve_for_safety_factor(
             material_mm3=material_min_mm3,
             bound="material_min_mm3",
         ) from (payload_lo if isinstance(payload_lo, BaseException) else None)
+    # 端点の f = 安全率 - 目標。**括りの契約は `f_lo < 0 <= f_hi`** —— 上端はここまでで目標以上が
+    # 確かめてあり、下端は目標未満のときだけ下を通る。**安全率が測れていない端点は `None`** で、
+    # 補間は使わず二分へ落ちる(`_propose_material` の契約)。
+    f_lo: Optional[float] = None
+    f_hi: Optional[float] = report_hi.safety_factor - target_safety_factor
     if outcome_lo == "ok":
         _space_lo, _run_lo, report_lo = payload_lo
         if report_lo.safety_factor >= target_safety_factor:
             best = (material_min_mm3, _space_lo, _run_lo, report_lo)
             return _finish(best, target_safety_factor, allowable_mpa, history, converged=True)
+        f_lo = report_lo.safety_factor - target_safety_factor
     # `"too_little"` でも下端はもとから不採用側なので、どちらの outcome でもそのまま lo になる。
     lo = material_min_mm3
     hi = material_max_mm3
+    stagnant_side: Optional[str] = None
+    stagnant_streak = 0
 
-    # --- 二分探索本体。---
+    def retained(side: Optional[str]) -> None:
+        """据え置かれた端点(Illinois が f を半分にする側)を数える。
+
+        **`too_little` / `too_much` は数え直す(`side=None`)。** 安全率が測れていない更新は
+        「割線が粘っている」証拠にならず、数えたままにすると復帰後の1手が据え置かれていた
+        上端へ強く引かれる —— 探しているのは最小の材料量である。
+        """
+        nonlocal stagnant_side, stagnant_streak
+        if side is None:
+            stagnant_side, stagnant_streak = None, 0
+            return
+        stagnant_streak = stagnant_streak + 1 if stagnant_side == side else 1
+        stagnant_side = side
+
+    # --- 探索本体。---
     while len(history) < max_evaluations:
         if (hi - lo) / hi <= rel_tol:
             break
-        mid = 0.5 * (lo + hi)
-        outcome_mid, payload_mid = evaluate(mid)
+        if searcher == "bisection":
+            proposal = _Proposal(0.5 * (lo + hi), "bisection")
+        else:
+            proposal = _propose_material(
+                lo=lo,
+                hi=hi,
+                f_lo=f_lo,
+                f_hi=f_hi,
+                stagnant_side=stagnant_side,
+                stagnant_streak=stagnant_streak,
+                evaluated=[step.material_mm3 for step in history],
+            )
+        mid = proposal.material_mm3
+        outcome_mid, payload_mid = evaluate(proposal)
         if outcome_mid == "ok":
             _space_mid, _run_mid, report_mid = payload_mid
-            if report_mid.safety_factor >= target_safety_factor:
-                hi = mid
+            f_mid = report_mid.safety_factor - target_safety_factor
+            if f_mid >= 0.0:
+                hi, f_hi = mid, f_mid
+                retained("lo")
                 if mid < best[0]:
                     best = (mid, _space_mid, _run_mid, report_mid)
             else:
-                lo = mid
+                lo, f_lo = mid, f_mid
+                retained("hi")
         elif outcome_mid == "too_little":
-            lo = mid  # 材料不足の一種として扱う(docs/TOPOPT.md「② 依存してはいけないもの」参照)
+            # 材料不足の一種として扱う(docs/TOPOPT.md「② 依存してはいけないもの」参照)。
+            # **安全率は測れていないので `f_lo` は落とす** —— 古い値で補間すると提案が括りの外へ飛ぶ。
+            lo, f_lo = mid, None
+            retained(None)
         else:  # "too_much"
-            hi = mid  # この材料量とその上はこの導出戦略では判定できない
+            hi, f_hi = mid, None  # この材料量とその上はこの導出戦略では判定できない
+            retained(None)
 
     converged = (hi - lo) / hi <= rel_tol
     return _finish(best, target_safety_factor, allowable_mpa, history, converged=converged)

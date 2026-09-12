@@ -1413,7 +1413,9 @@ RAP+splu が並列化されない **Amdahl 分**(スレッドを増やすほど�
 - **RAP・`splu` の並列化は試して効かないことを実測したので触っていない**(上記「有力な手」)。
   `20260904-1414` の契約どおり。
 
-## 安全率を入力に、材料量を二分探索する外側ループ(`safety_loop.py`。2026-09-05)
+## 安全率を入力に、材料量を探索する外側ループ(`safety_loop.py`。2026-09-05)
+
+**候補材料量の決め方は2026-09-12から括り付きの補間(Regula Falsi + Illinois)が既定**(`searcher="illinois"`。`"bisection"` で従来の二分に戻せる)。**探索の契約・停止条件・3分類はこの節のまま変わっていない** —— 変わったのは「次にどの材料量を評価するか」だけである。設計と実測は [TOPOPT_SPEED.md](TOPOPT_SPEED.md)「実装済み A」。
 
 材料量は「**内部表現は絶対量(mm^3)、利用者の入力は安全率**」の2層にする、と2026-09-04に
 決まっている(engine `safety-factor-goes-outside-the-optimizer`)。内側の2枚 ——
@@ -1454,7 +1456,7 @@ result.report               # stress.SafetyReport
 `20260904-1416` で塊の導出の既定が案5(2026-09-09に連続値保持へ再び倒した)になり、既定の塊は
 **材料量に応じて**変わる(案5は `coarse_material_mm3`、連続値保持は参照 ρ の順位で切り出す幅)。
 外側のループは材料量を動かすので、これが直接ぶつかる。タスク本文が
-挙げた3案のうち、**(a)二分探索の各段で塊を導出し直す**を選んだ。
+挙げた3案のうち、**(a)探索の各段で塊を導出し直す**を選んだ。
 
 **選んだ理由**: (a)は塊と材料量が常に噛み合う(塊を固定する(b)/(c)は、探索の反対側の端で
 塊が締め付ける/緩すぎる)。「段ごとに塊が変わるので、安全率の変化が材料のせいか塊のせいか
@@ -1564,7 +1566,10 @@ result.report               # stress.SafetyReport
   止めるので、**返る材料量は真の最小より最大 8% 重くなりうる** —— これは停止条件から出る
   帰結であって、実測ではない。実測で動いたのは評価回数だけで、bracket・目標5,500 では
   **9回 → 7回**、材料量(143,561.920mm^3)と安全率(5529.587)はどちらも同じ値に落ちた
-  (区間が同じ点を通るため。**一般に一致するわけではない**)。
+  (区間が同じ点を通るため。**一般に一致するわけではない**)。**この3つの数字は 2026-09-09 の
+  コードで測ったもので、いまの値ではない** —— 同じ題材・同じ目標の 2026-09-12 の実測は
+  二分・補間とも6回・材料 197,949mm^3・安全率 5,793.47
+  ([TOPOPT_SPEED.md](TOPOPT_SPEED.md)「実装済み A」)。
 - **「これ以上細かくしない理由」は別にある(8% へ緩める根拠ではない)**: この解像度
   (数百〜千要素)では、材料量が数%動くと塊の要素数が数十〜百単位で変わる(上表の
   `elements` 列参照)。数%より細かく詰めても、ボクセルの量子化と密度フィルタの目減りに
@@ -1572,11 +1577,11 @@ result.report               # stress.SafetyReport
   plate の頭打ち領域のように、材料量の幅だけでは収束の質を保証できない場面があることは
   実測で分かっている(上記)ので、**疑わしい題材では `result.history` を見て安全率側の
   変化幅も確認すること**。
-- **`max_evaluations=15`**: 境界2回 + 二分探索。`rel_tol=0.08` まで詰めるのに必要な回数は
+- **`max_evaluations=15`**: 境界2回 + 探索本体。`rel_tol=0.08` まで詰めるのに必要な回数は
   `log2(1/0.08) ≈ 3.6` 回なので、境界込みで6回あれば普通は収束する。実測(上表の
-  bracket、目標5,500)では**7回で収束**した。`too_little`/`too_much` を踏んで区間の詰まりが
+  bracket、目標5,500)では**7回で収束**した(2026-09-09。2026-09-12 は6回)。`too_little`/`too_much` を踏んで区間の詰まりが
   遅くなる場合の余裕として15のままにしてある。
-- **`max_iter=40`**: `anchor.run_pipeline` の既定と揃えた。二分探索は最適化を評価回数ぶん
+- **`max_iter=40`**: `anchor.run_pipeline` の既定と揃えた。探索は最適化を評価回数ぶん
   回すので(`20260904-1414`/`1415` のマルチグリッド・CPU並列化が前提)素直に10倍前後
   掛かるが、**このタスクでは素直に回してよい**とタスク本文にある。粗い段で探索して最後に
   1回だけ本番、という2段構えは組んでいない(`20260904-1400` の案5と同じ機構になるので、
@@ -1584,7 +1589,7 @@ result.report               # stress.SafetyReport
 
 ### STL は候補材料量ごとに書く(scratch)
 
-二分探索は候補材料量ごとに `design_space.run_topopt` を呼ぶ(= STLを書く)。既定の出力先を
+探索は候補材料量ごとに `design_space.run_topopt` を呼ぶ(= STLを書く)。既定の出力先を
 `design_space.run_topopt` の既定(`output/design_space_case1.stl`)や `anchor.run_pipeline` の
 既定(`output/bracket.stl`)へ向けると、**他の受入検査(`check_design_space.py` [5] /
 `check_anchor.py`)がその検査自身の標準実行の成果物として当てにしているファイルを
@@ -2278,7 +2283,7 @@ uv pip install --python ./.venv/Scripts/python.exe scikit-image
 | `duocad/topopt/anchor.py` | **CADの面 → 格子の節点の対応表(面アンカー)**。担当面積つき。固定/荷重/非設計領域の口と、端から端まで通す `run_pipeline`。CLIとしても動く(`python -m duocad.topopt.anchor --table-only --n 32`) |
 | `duocad/topopt/stress.py` | **密度場と変位 → 要素ごとの von Mises 応力・代表応力・最小安全率**(後処理)。無次元 → 実単位の換算則(`UnitScale`)を持つ。**最適化には手を入れない**(応力制約の定式化は採らない。engine `safety-factor-goes-outside-the-optimizer`) |
 | `duocad/topopt/design_space.py` | **4条件(保持ソリッド・除外ソリッド・拘束面・荷重面) → 塊(設計空間)**。案1(`derive`)=条件の点群の外接直方体+余白から除外ソリッドを引く / 連続値保持(`derive_from_reference`)=参照 ρ の順位で切り出す(本数は `PICK_RATIO` / 回廊 / 材料の3つの床の最大)。**どちらも塊の中で拘束と荷重がひと続きかを6近傍で確かめてから返す**(`DesignSpaceDisconnectedError`)。**連続値保持はさらに、全ての拘束面・保持ソリッド・荷重面が密度フィルタの筆(`rmin`)の通る太さで荷重と繋がることを、参照ごとに1回だけ二分探索で保証する**(`width_corridor_length`)。**既定は連続値保持**(2026-09-09〜。入口は `derive_default`)。CLIとしても動く(`python -m duocad.topopt.design_space` で `demo_conditions(0°)` の塊を導出して stats を出す。表を作る `--measure` / `--compare` は2026-09-05に削除した) |
-| `duocad/topopt/safety_loop.py` | **安全率を入力に、材料量(mm^3)を二分探索する外側ループ**。`solve_for_safety_factor` が入口。目標以上を満たす最小の材料量を探す。塊は案a(候補材料量ごとに `derive_default` を呼び直す)。許容応力の導出(PETG × 低減係数)を持つ。**最適化そのものには手を入れない** |
+| `duocad/topopt/safety_loop.py` | **安全率を入力に、材料量(mm^3)を探索する外側ループ**(既定の探索器は括り付きの補間。`searcher` で二分にも戻せる)。`solve_for_safety_factor` が入口。目標以上を満たす最小の材料量を探す。塊は案a(候補材料量ごとに `derive_default` を呼び直す)。許容応力の導出(PETG × 低減係数)を持つ。**最適化そのものには手を入れない** |
 | `web/scripts/shoot-topopt.mjs` / `shoot_topopt_export.py` | **受入検査ではない。** 設定を2つ以上並べた比較画像を撮る道具。1コマンドで最適化・描画・ラベル焼きまで通し、面数に上限が無く、`--model` で実物の文書も撮れる。使い方は本書「比較スクリーンショットの撮影台」 |
 | `duocad/topopt/__init__.py` | パッケージの入口。**サブモジュールを import しない**(`import duocad` の費用に scipy / skimage を足さないため)。`OUTPUT_DIR`(= `duocad/topopt/output/`)だけを公開する |
 | `topopt_checks/check_simp.py` | **受入検査(合否そのもの)**。SIMP側を assert する |
@@ -2918,7 +2923,7 @@ Session.cancel_optimization()     走っている最適化に降りるよう伝�
 
 **許容応力は固定**（根拠は本書「許容応力の導出」）。duocad 側でも材料を選ばせない。値は
 `optimize_run.allowable_stress()` から引ける。利用者が入れるのは**目標安全率**で、
-そこから材料量を二分探索する（`safety_loop.solve_for_safety_factor`）。
+そこから材料量を探索する（`safety_loop.solve_for_safety_factor`）。
 
 **この版の制限**:
 
