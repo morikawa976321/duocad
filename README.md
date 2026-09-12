@@ -19,6 +19,7 @@
 | [docs/TOPOPT_MMA_VS_OC.md](docs/TOPOPT_MMA_VS_OC.md) | **更新則 OC と MMA の比較**（答えの一致・費用・調整の余地） | MMA を既定にしてよいか判断するとき |
 | [docs/TOPOPT_REACTION.md](docs/TOPOPT_REACTION.md) | **反力の内訳と取付点への下限制約**（ε の効き方・代償・効かない場） | 取付点が結果から消えるとき |
 | [docs/SCREEN_PICK.md](docs/SCREEN_PICK.md) | **当たり判定を screen 半径[px]に揃える**設計 | スケッチ/辺/頂点の掴みやすさを直すとき |
+| [docs/knowledge/](docs/knowledge/README.md) | **context-engine から移設した知見ノート**（仕様・実装・設計判断・実測・落とし穴、1事実1ファイル。2026-09-12移設） | 過去の判断・実測値・踏んだ罠を探すとき |
 
 ---
 
