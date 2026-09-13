@@ -875,6 +875,13 @@ class Server:
         (`_on_core_change`)が配るが、`state != "done"` のときは文書が変わらないので
         その配信が起きない —— **`Session.warnings` に積まれた通知**(条件面が空 /
         保持・除外が表現できていない)を運ぶ経路がそこしか無いので、ここで流し切る。
+
+        **成功したら配る前にディスクへ書く**(2026-09-13実測: 数時間がかりの実行が、
+        結果を見る前にサーバプロセスごと消えた)。結果は文書のRAMにしか無いので、
+        ここを抜けたあと画面が0枚でもサーバごと落ちても、書けてさえいれば残る。
+        編集中のファイル名が無い(無題の文書)ときは `save_document()` が拒否するので、
+        名前を作って書く代わりに警告だけ積んで諦める——無題のまま黙って保存すると
+        「知らないファイルが増えている」がその上に乗る。
         """
         payload: dict
         try:
@@ -894,6 +901,11 @@ class Server:
                 # 画面はこの印を見て、通知の色とトーストの有無を変える。
                 "cancelled": isinstance(error, optimize_run.OptimizeCancelled),
             }
+        else:
+            try:
+                self.session.save_document()
+            except ValueError as save_error:
+                self.session.warnings.append(f"最適化結果を自動保存できなかった: {save_error}")
         finally:
             self._optimize_running = False
         await self._broadcast(payload)

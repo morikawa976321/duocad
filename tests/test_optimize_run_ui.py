@@ -214,6 +214,67 @@ def test_second_run_is_refused_while_one_is_running(session: Session) -> None:
     assert "既に走っている" in connection.of_type("optimize_error")[0]["message"]
 
 
+def _run_to_completion(session: Session, message: dict) -> tuple:
+    """`run_optimization` を1本走らせ、バックグラウンドタスクの完了まで待つ。
+
+    `_optimize_start` は待たずに返る(`FakeConnection` 経由の応答だけでは
+    完了後の副作用(自動保存)が終わっているとは限らない)ので、
+    `_pending_optimize_runs` を明示的に `gather` してから戻る。
+    """
+
+    async def scenario() -> tuple:
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        connection = FakeConnection()
+        server.clients.add(connection)
+        await server._dispatch(connection, json.dumps(message))
+        await asyncio.gather(*server._pending_optimize_runs)
+        return server, connection
+
+    return asyncio.run(scenario())
+
+
+def test_a_successful_run_is_saved_to_disk_even_with_no_screen_watching(
+    session: Session, monkeypatch, tmp_path
+) -> None:
+    """2026-09-13実測: 数時間がかりの実行が、結果を見る前にサーバプロセスごと消えた。
+
+    結果は文書のRAMにしか無いので、**成功した瞬間にディスクへ書く**——broadcastを
+    待つ相手(タブ)がいなくても、そのあとサーバが落ちても消えない形にする。
+    """
+    _setup_four_conditions(session)
+    session.models_dir = tmp_path
+    session._current_name = "hanger.json"
+    monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "done"})
+
+    _run_to_completion(session, {"cmd": "run_optimization"})
+
+    assert (tmp_path / "hanger.json").exists()
+    assert not session.warnings
+
+
+def test_a_successful_run_on_an_untitled_document_only_warns(
+    session: Session, monkeypatch, tmp_path
+) -> None:
+    """無題の文書(一度も保存していない)は保存先の名前が無い。
+
+    黙って名前を作って書くと「知らないファイルが増えている」が起きるので、
+    警告を積んで諦める——**新規ボディの成功そのものは変えない**(`optimize_result` は届く)。
+    """
+    _setup_four_conditions(session)
+    session.models_dir = tmp_path
+    assert session._current_name is None
+    monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "done"})
+
+    _, connection = _run_to_completion(session, {"cmd": "run_optimization"})
+
+    assert connection.of_type("optimize_result")[0]["state"] == "done"
+    assert list(tmp_path.iterdir()) == []
+    # `session.warnings` は `_push` の中の `take_warnings()` で配信済みに drain されるので、
+    # 配信された側(`connection`)で確かめる。
+    assert "自動保存できなかった" in connection.of_type("warning")[0]["message"]
+
+
 def test_cancel_does_nothing_when_nothing_is_running(session: Session) -> None:
     """**走っていないのに旗を立てない。** 立てても `run_optimization` の入口が畳むので
     実害は無いが、走っていないのに「中断中」と画面へ出ると、次の実行が中断表示から
