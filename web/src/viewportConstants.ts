@@ -173,6 +173,22 @@ export const BASE_PLANE_AXES: Record<
 }
 
 /**
+ * 常設の原点ギズモ(`originGizmo.ts`)の寸法[mm]。**正の方向だけ**を描く(本人指定
+ * 2026-09-13) —— 軸線・平面とも原点からではなく、それぞれ `GAP` ぶん離れた位置から
+ * 始まる(原点の点・軸線・平面が互いに重ならないための余白)。`PLANE_REACH` を
+ * `AXIS_LENGTH` より短くしてあるのは、軸の先端が平面の角より外へ突き出て見えるようにする
+ * ため(重なった装飾どうしの前後関係を目で追えるようにする)。
+ */
+export const ORIGIN_GIZMO_AXIS_LENGTH_MM = 40
+export const ORIGIN_GIZMO_AXIS_GAP_MM = 4
+export const ORIGIN_GIZMO_PLANE_REACH_MM = 32
+export const ORIGIN_GIZMO_PLANE_GAP_MM = 8
+export const ORIGIN_GIZMO_POINT_RADIUS_MM = 1.4
+export const ORIGIN_GIZMO_PLANE_OPACITY = 0.12
+/** 原点の点・3平面の色(軸のような意味を持たないので中立なグレー)。 */
+export const ORIGIN_GIZMO_NEUTRAL_COLOR = 0xc4c9d0
+
+/**
  * **描く順序の層番号(1箇所にまとめる)。** 生の数値をコード中に書かない
  * (engine `duocad-depth-overlay-rule` の併記事項)。
  *
@@ -183,6 +199,8 @@ export const LAYER = {
   planeGrid: -3,
   gridAxisLine: -2,
   basePlaneHover: -1,
+  /** 常設の原点ギズモ(`originGizmo.ts`)。`gridRoot` には入れない1個のGroupなので層は1つでよい。 */
+  originGizmo: -4,
   solid: 0,
   optimize: 1,
   /** 開発用のデバッグ表示(既定では何も描かない)。注記より手前、辺より奥。 */
@@ -209,7 +227,14 @@ export const DEPTH_BIAS_UNIT = 1.0e-4
  * 争うので、床・基準平面グリッド(`planeGrid`。通常は開いた空間に浮いていて争う相手がいない)
  * と同じバイアス経路を使いつつ、層番号だけ分けて併記事項の規約(層は名前付き定数表)に従う。
  */
-export const DEPTH_BIAS_LAYER = { planeGrid: 1, gridAxisLine: 2, basePlaneHover: 3, sketchFaceGrid: 4 } as const
+export const DEPTH_BIAS_LAYER = {
+  planeGrid: 1,
+  gridAxisLine: 2,
+  basePlaneHover: 3,
+  sketchFaceGrid: 4,
+  /** 常設の原点ギズモ。既定表示のXY床(`planeGrid`)と同じ平面に乗ることがあるので、確実に手前へ。 */
+  originGizmo: 5,
+} as const
 
 /**
  * カメラの画角[度]の下限・上限・既定。**UIとlocalStorage(`viewSettings.ts`)も

@@ -22,21 +22,29 @@
     bodies,
     sketches,
     activeSketchId,
+    originVisible,
     onToggle,
     onShowAll,
     onHideAll,
     onEnterSketch,
+    onToggleOrigin,
   }: {
     /** ユーザーに見せるボディ(常に `kind==="solid"`)。 */
     bodies: BodyMeta[]
     sketches: SketchState[]
     /** 編集中のスケッチ(無ければ null)。行に「編集中」の印を出すのに使う。 */
     activeSketchId: string | null
+    /** 常設の原点ギズモ(原点・3軸・3平面)が出ているか。**文書の状態ではなく画面設定**
+     * (`viewSettings.ts` がlocalStorageへ持つ)なので、ボディと違い可視性はここが持つ
+     * 値をそのまま映すだけでよい。 */
+    originVisible: boolean
     onToggle: (bodyId: string, visible: boolean) => void
     onShowAll: () => void
     onHideAll: () => void
     /** 行のクリックでそのスケッチに入る(再開)。 */
     onEnterSketch: (sketchId: string) => void
+    /** 原点ギズモの表示/非表示(7項目まとめて1つのトグル。本人指定)。 */
+    onToggleOrigin: (visible: boolean) => void
   } = $props()
 
   /** パネル全体の折りたたみ。ビューポートに重なるので、畳めないと形が隠れる。 */
@@ -67,6 +75,22 @@
 
   {#if open}
     <div class="browser-body">
+      <!-- 区分0: 原点(issue #8)。原点・3軸・3平面の7項目を1つのトグルでまとめて出し入れする
+           (本人指定「7つまとめて」) -->
+      <div class="group">
+        <div class="group-head">
+          <span class="group-name">原点</span>
+          <input
+            id="origin-visible-toggle"
+            type="checkbox"
+            class="visible-toggle"
+            checked={originVisible}
+            onchange={(event) => onToggleOrigin((event.target as HTMLInputElement).checked)}
+            title={originVisible ? '原点・軸・平面を隠す' : '原点・軸・平面を表示'}
+          />
+        </div>
+      </div>
+
       <!-- 区分1: モデル(ボディ)。可視性の切り替えはここが持つ -->
       <div class="group">
         <div class="group-head">

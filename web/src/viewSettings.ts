@@ -18,6 +18,8 @@ import { FOV_DEFAULT, isSelectableFov } from './viewport'
 
 /** localStorage の鍵。画面設定は `duocad.view.*` の下に置く。 */
 const FOV_KEY = 'duocad.view.fov'
+/** 常設の原点ギズモ(issue #8)の表示/非表示。7項目まとめて1つの真偽値。 */
+const ORIGIN_VISIBLE_KEY = 'duocad.view.originVisible'
 
 /** 保存されたFOV。無い・壊れている・選べない値・localStorageが使えない → `FOV_DEFAULT`。 */
 export function loadFov(): number {
@@ -38,5 +40,25 @@ export function saveFov(deg: number): void {
     window.localStorage.setItem(FOV_KEY, String(deg))
   } catch {
     // 書けないままでよい(次回は既定の30で起動する)。
+  }
+}
+
+/** 保存された原点ギズモの表示状態。無い・壊れている・localStorageが使えない → 既定(表示)。 */
+export function loadOriginVisible(): boolean {
+  try {
+    const raw = window.localStorage.getItem(ORIGIN_VISIBLE_KEY)
+    if (raw === null) return true
+    return raw === 'true'
+  } catch {
+    return true
+  }
+}
+
+/** 原点ギズモの表示状態を保存する。書けなくても黙って続行する。 */
+export function saveOriginVisible(visible: boolean): void {
+  try {
+    window.localStorage.setItem(ORIGIN_VISIBLE_KEY, String(visible))
+  } catch {
+    // 書けないままでよい(次回も既定の表示で起動する)。
   }
 }

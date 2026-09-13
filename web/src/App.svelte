@@ -92,7 +92,7 @@
     type DebugFlags,
   } from './debugFlags'
   import SettingsDialog from './SettingsDialog.svelte'
-  import { loadFov, saveFov } from './viewSettings'
+  import { loadFov, loadOriginVisible, saveFov, saveOriginVisible } from './viewSettings'
   import {
     createViewport,
     type BodyGhostRotation,
@@ -377,6 +377,17 @@
     if (!Number.isFinite(deg)) return
     fov = deg
     saveFov(deg)
+  }
+
+  /** `fov` と同じ理由で画面設定(文書の状態ではない)。既定値は `loadOriginVisible` 側(表示)。 */
+  const savedOriginVisible = loadOriginVisible()
+  /** 常設の原点ギズモ(原点・3軸・3平面)を出しているか。ブラウザパネルの「原点」トグル
+   * (7項目まとめて1つ、本人指定)が読み書きする。 */
+  let originVisible = $state(savedOriginVisible)
+
+  function applyOriginVisible(visible: boolean): void {
+    originVisible = visible
+    saveOriginVisible(visible)
   }
   /**
    * この画面が出した `client_op` の控え。
@@ -2165,6 +2176,7 @@
     // 初回のエフェクトは `viewport === null` のまま走り終わっており、保存されたFOVが
     // 画面に出ないままになる(Svelte 5 runesの罠)。
     viewport.setFov(fov)
+    viewport.setOriginVisible(originVisible)
     viewport.onPick(onPick)
     viewport.onBoxSelect(onBoxSelect)
     viewport.onPlaneMove((point, hit) => {
@@ -2299,6 +2311,11 @@
   // (`viewport` は `$state` ではないので、代入ではこのエフェクトが再走しない)。
   $effect(() => {
     viewport?.setFov(fov)
+  })
+
+  // 原点ギズモの表示切り替え。**初回の反映は `onMount`**(`fov` と同じ理由)。
+  $effect(() => {
+    viewport?.setOriginVisible(originVisible)
   })
 
   /** 状態配信を受けた回数。**実機検査が往復の完了を知るための穴**(`handleState` が増やす)。 */
@@ -2717,10 +2734,12 @@
         bodies={partBodies}
         {sketches}
         activeSketchId={sketchId}
+        {originVisible}
         onToggle={setVisible}
         onShowAll={showAllParts}
         onHideAll={hideAllParts}
         onEnterSketch={enterSketch}
+        onToggleOrigin={applyOriginVisible}
       />
 
       <!-- 設定ダイアログ。**`.stage` の中に置くのは「ブラウザの右」に出すため**(2026-09-04

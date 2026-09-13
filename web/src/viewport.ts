@@ -42,6 +42,7 @@ import {
   type UvBounds,
   type UvBox,
 } from './gridScale'
+import { createOriginGizmo } from './originGizmo'
 import { createPlaneGrid, type PlaneFrame, type PlaneGrid } from './planeGrid'
 import { distSqPointSegment, pickNearestWithinRadius, type ScreenPickCandidate } from './screenPick'
 import { buildSketchLine, createSketchLineMaterial, type SketchFatLine } from './sketchLine'
@@ -187,6 +188,15 @@ export function createViewport(container: HTMLElement): Viewport {
   // 前後は各オブジェクトの `LAYER.*` が決める。
   gridRoot.renderOrder = -1
   scene.add(gridRoot)
+
+  // ------------------------------------------------------------------ 常設の原点ギズモ(issue #8)
+  //
+  // 原点・軸・平面の7項目を1つのGroupにまとめた装飾(`originGizmo.ts`)。**`gridRoot` には
+  // 入れない** —— あちらは `groupOrder` を -1 に固定しており、中に入れると個々の
+  // `LAYER.originGizmo` が効かなくなる。理由は `root` にも入れない(初回フレーミングを
+  // 歪めない、既存装飾群と同じ規律)。既定は表示。
+  const originGizmo = createOriginGizmo()
+  scene.add(originGizmo.object)
 
   /**
    * 基準平面のピック範囲の半幅[mm]。**描画範囲ではない**(格子は無限) ——
@@ -3658,6 +3668,7 @@ export function createViewport(container: HTMLElement): Viewport {
     optimizeDebugCounts: optimizeDebug.counts,
     showEdges,
     showBasePlanes,
+    setOriginVisible: originGizmo.setVisible,
     pickRegions,
     preferVertices,
     highlightEdges,
@@ -3779,6 +3790,7 @@ export function createViewport(container: HTMLElement): Viewport {
       gridAxisLine?.geometry.dispose()
       gridAxisMaterial.dispose()
       gridRoot.clear()
+      originGizmo.dispose()
       controls.dispose()
       for (const material of faceMaterialCache.values()) material.dispose()
       faceMaterialCache.clear()
