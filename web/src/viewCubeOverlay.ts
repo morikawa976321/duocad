@@ -76,6 +76,11 @@ export interface ViewCubeDeps {
   controls: OrbitControls<THREE.PerspectiveCamera | THREE.OrthographicCamera>
   /** コンテナのCSSピクセル寸法。 */
   size(): { width: number; height: number }
+  /** verb引数overlay(`CommandHost` の `.toolbar-overlay`)がいま覆っている高さ[px]
+   *  (閉じていれば0)。styles.cssの不変条件で`.viewport`自体はこのoverlayでは縮まない
+   *  ——overlayはcanvasの上に重なって覆うだけなので、キューブの矩形をこの分だけ下げないと
+   *  上部バーの下に隠れる(GitHub issue #2)。 */
+  overlayOffset(): number
 }
 
 export interface ViewCubeOverlay {
@@ -105,7 +110,7 @@ export interface ViewCubeOverlay {
 }
 
 export function createViewCubeOverlay(deps: ViewCubeDeps): ViewCubeOverlay {
-  const { renderer, controls, perspective, orthographic, size } = deps
+  const { renderer, controls, perspective, orthographic, size, overlayOffset } = deps
 
   const cubeScene = new THREE.Scene()
   const cubeOrthographic = new THREE.OrthographicCamera(
@@ -187,10 +192,17 @@ export function createViewCubeOverlay(deps: ViewCubeDeps): ViewCubeOverlay {
     if (label !== undefined) buildCubeLabel(i, j, k, label)
   }
 
-  /** ビューポート右上のキューブの矩形(コンテナ内のCSSピクセル、左上原点。`offsetX`/`offsetY` と同じ)。 */
+  /** ビューポート右上のキューブの矩形(コンテナ内のCSSピクセル、左上原点。`offsetX`/`offsetY` と同じ)。
+   *  verb引数overlayが開いている間は、その高さぶんだけ下げる(`overlayOffset`のdocstring参照)
+   *  ——`BrowserPanel`/`SettingsDialog`が`--toolbar-overlay-h`ぶん下がるのと同じ帳尻合わせ。 */
   function viewCubeRect(): { x: number; y: number; w: number; h: number } {
     const { width } = size()
-    return { x: width - CUBE_MARGIN_PX - CUBE_SIZE_PX, y: CUBE_MARGIN_PX, w: CUBE_SIZE_PX, h: CUBE_SIZE_PX }
+    return {
+      x: width - CUBE_MARGIN_PX - CUBE_SIZE_PX,
+      y: CUBE_MARGIN_PX + overlayOffset(),
+      w: CUBE_SIZE_PX,
+      h: CUBE_SIZE_PX,
+    }
   }
 
   /** その画素がキューブの矩形の内側か。 */

@@ -595,6 +595,7 @@ export function createViewport(container: HTMLElement): Viewport {
     orthographic,
     controls,
     size,
+    overlayOffset: toolbarOverlayOffsetPx,
   })
 
   const sketchCursor = createSketchCursorOverlay(container)
@@ -807,6 +808,15 @@ export function createViewport(container: HTMLElement): Viewport {
       width: Math.max(1, container.clientWidth),
       height: Math.max(1, container.clientHeight),
     }
+  }
+
+  /** `CommandHost` が `.app` へ書く `--toolbar-overlay-h` を読み直す(`ViewCubeDeps.overlayOffset`参照)。
+   *  `BrowserPanel`/`SettingsDialog` と同じCSS変数を、canvas側はJSで読むしかない。 */
+  function toolbarOverlayOffsetPx(): number {
+    const app = container.closest('.app')
+    if (!(app instanceof HTMLElement)) return 0
+    const px = parseFloat(getComputedStyle(app).getPropertyValue('--toolbar-overlay-h'))
+    return Number.isFinite(px) ? px : 0
   }
 
   function applySize(): void {
