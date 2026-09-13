@@ -20,7 +20,17 @@
 | [docs/TOPOPT_REACTION.md](docs/TOPOPT_REACTION.md) | **反力の内訳と取付点への下限制約**（ε の効き方・代償・効かない場） | 取付点が結果から消えるとき |
 | [docs/TOPOPT_ACTIVE_SET.md](docs/TOPOPT_ACTIVE_SET.md) | **微小密度の要素を組み立てから外す**（閾値の導出・効く場と効かない場・下端の崖に届かない理由） | 求解が残差で落ちるとき |
 | [docs/SCREEN_PICK.md](docs/SCREEN_PICK.md) | **当たり判定を screen 半径[px]に揃える**設計 | スケッチ/辺/頂点の掴みやすさを直すとき |
-| [docs/knowledge/](docs/knowledge/README.md) | **context-engine から移設した知見ノート**（仕様・実装・設計判断・実測・落とし穴、1事実1ファイル。2026-09-12移設） | 過去の判断・実測値・踏んだ罠を探すとき |
+| [docs/TOPOPT_VOXELIZATION_AND_SOLVER.md](docs/TOPOPT_VOXELIZATION_AND_SOLVER.md) | **ボクセル化・marching cubes・幾何アルゴリズム・ソルバ性能**の実測と罠 | ボクセル化・メッシュ変換、SIMP/マルチグリッドの性能を触るとき |
+| [docs/TOPOPT_SAFETY_MANUFACTURING_AND_TESTING.md](docs/TOPOPT_SAFETY_MANUFACTURING_AND_TESTING.md) | **hanger実測・安全率探索の判断・面アンカーと製造要件・検査設計** | 安全率探索・製造要件・受入検査を設計するとき |
+| [docs/UI_COMMANDS_VERBS.md](docs/UI_COMMANDS_VERBS.md) | **UI・verb設計**（手動/AI分担・verb粒度・状態機械・個別verbの決定理由） | verbを足す、コマンド層やパネル構成を変えるとき |
+| [docs/UI_COMMANDS_VERBS_PITFALLS.md](docs/UI_COMMANDS_VERBS_PITFALLS.md) | **UI・verbの落とし穴**（TS/Python層の同期・UI変更が壊す実機検査） | verbやコマンド層を触った後に検査が原因不明で壊れたとき |
+| [docs/SKETCH_INPUT.md](docs/SKETCH_INPUT.md) | **スケッチ入力**（点入力・スナップ・寸法・図形とパラメータの表現・SVG取り込み） | スケッチ入力や図形パラメータを触るとき |
+| [docs/VIEWPORT_RENDERING.md](docs/VIEWPORT_RENDERING.md) | **ビューポート・レンダリング**（カメラ・グリッド・深度/重ね順・FOV・ビューキューブ・配色） | three.js ビューポートとその実機検査を触るとき |
+| [docs/FRONTEND_STACK.md](docs/FRONTEND_STACK.md) | **フロントエンド基盤の落とし穴**（Svelte 5・WebSocket・SVG・puppeteer） | Svelte/WebSocket/実機検査スクリプトを書く・直すとき |
+| [docs/BUILD123D_OCCT.md](docs/BUILD123D_OCCT.md) | **build123d/OCCT/OCP の実測と罠**（STEP/STL入出力・venv/uv/pytest/MCPの開発環境） | OCCT周りで罠を踏んだとき、入出力や開発環境を触るとき |
+| [docs/SMOKE_TESTING.md](docs/SMOKE_TESTING.md) | **テスト運用**（pytest・実機smokeの設計・フレーク・スイートの増減方針） | smokeを書く・直す・フレークを追うとき |
+| [docs/APP_FEATURES_AND_UI.md](docs/APP_FEATURES_AND_UI.md) | **UI機能・画面設計の方針と viewport/CSS の落とし穴** | UI機能の追加・見た目の方針・パネルのバグ調査のとき |
+| [docs/DOCUMENT_STATE_CACHE_AND_ARCHITECTURE.md](docs/DOCUMENT_STATE_CACHE_AND_ARCHITECTURE.md) | **サーバ状態・キャッシュ・差分配信・verb実行の一貫性・MCP/AI連携・開発運用** | 状態管理や差分配信、MCP/AIループ、開発環境を触るとき |
 
 ---
 
