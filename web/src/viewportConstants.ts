@@ -212,14 +212,21 @@ export const LAYER = {
 } as const
 
 /**
- * **B群の深度バイアスの単位量**(クリップ空間。`gl_Position.z -= 層番号 * これ * w`)。
- * 法線方向にジオメトリを動かして逃がすことは禁止 —— 描画のズレをレイ検査へ持ち込まない
- * (engine `duocad-depth-overlay-rule`)。
+ * **B群の深度バイアスの単位量**(世界空間mm。視線方向へ「層番号 × これ」だけカメラ側へ
+ * 寄せた深度専用コピーを射影し直す。色・UV・ピック判定に使うジオメトリ自体は動かさない
+ * — engine `duocad-depth-overlay-rule`)。
  *
- * 1e-4 は「共平面の面より確実に手前」かつ「1mm程度の段差なら順序が入れ替わらない」
- * 大きさとして選んだ(near=0.1・far=数千mmの視錐台での実測レンジ)。
+ * **クリップ空間の z を直接ずらす方式(`gl_Position.z -= bias * w`)は選ばない** ——
+ * その一定バイアスが表す世界空間の距離は、パースの非線形写像により視線距離の2乗に
+ * 比例して暴れる。near=0.1・far=10000の実スケールでは距離1000mmで約500mm相当まで
+ * 膨らみ、手前にあるべきソリッドをグリッドが追い越して見える。正投影は元々この写像が
+ * 線形なので暴れず、症状は非正投影のときにだけ出る。
+ *
+ * 0.5mmは「共平面の面より確実に手前」かつ「1mm程度の段差なら順序が入れ替わらない」
+ * 大きさとして選んだ(near=0.1・far=数千mmの視錐台での実測レンジ。世界空間の値なので
+ * 正投影・パースのどちらでもこの意味のまま一定)。
  */
-export const DEPTH_BIAS_UNIT = 1.0e-4
+export const DEPTH_BIAS_UNIT = 0.5
 
 /**
  * B群の層番号(大きいほどカメラ側)。**`sketchFaceGrid` は別枠** ——
@@ -327,10 +334,11 @@ export interface BodyMeshes {
 }
 
 /**
- * B群(装飾。ピック対象でない)の深度バイアスを材質へ仕込む —— クリップ空間で
- * `gl_Position.z -= 層番号 * 単位量 * w` だけカメラ側へ寄せる
- * (engine `duocad-depth-overlay-rule`)。**ジオメトリは1mmも動かさない**ので、
- * 描画のズレがレイ検査(`basePlaneAt` の解析交差・面のピック)へ漏れない。
+ * B群(装飾。ピック対象でない)の深度バイアスを材質へ仕込む —— 視点空間(`mvPosition`。
+ * 射影より前)で `層番号 × DEPTH_BIAS_UNIT` mmだけカメラ側へ寄せてから射影し直す
+ * (engine `duocad-depth-overlay-rule`。理由は `DEPTH_BIAS_UNIT` のdocを参照)。
+ * **`transformed`(ローカル座標)自体は動かさない**ので、描画のズレがレイ検査
+ * (`basePlaneAt` の解析交差・面のピック)へ漏れない。
  *
  * `customProgramCacheKey` を層ごとに変える —— 変えないと、同じ材質種で層の違う
  * プログラムが1つに共有されて**後から作った方のバイアスが効かない**。
@@ -347,7 +355,8 @@ export function withDepthBias<T extends THREE.Material>(material: T, layer: numb
     shader.vertexShader = shader.vertexShader.replace(
       marker,
       `${marker}
-	gl_Position.z -= ${bias} * gl_Position.w;`,
+	mvPosition.z += ${bias};
+	gl_Position = projectionMatrix * mvPosition;`,
     )
   }
   material.customProgramCacheKey = () => `duocad-depth-bias-${bias}`

@@ -339,7 +339,7 @@ export function createViewport(container: HTMLElement): Viewport {
     vColor: number | null
     /** 描く正方形(frame上の中心と半径[mm])。`null` は範囲が測れなかったときだけ。 */
     bounds: UvBounds | null
-    /** クリップ空間の深度バイアスの層番号(`DEPTH_BIAS_LAYER`)。 */
+    /** 深度バイアスの層番号(`DEPTH_BIAS_LAYER`)。 */
     depthBiasLayer: number
   }
 

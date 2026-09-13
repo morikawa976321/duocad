@@ -22,10 +22,12 @@
  *
  * ## 深度(engine `duocad-depth-overlay-rule` のB群)
  *
- * **深度検査あり・`depthWrite: false` ＋ クリップ空間の深度バイアス。** 全画面三角形なので
- * `gl_Position` は使えず、交点から自分でクリップ座標を作って `gl_FragDepth` へ書く ——
- * バイアスは規約どおり `z -= BIAS * w` をそのクリップ座標へ掛ける。**ジオメトリは
- * 1mmも動かさない**ので、描画のズレがレイ検査(`basePlaneAt` の解析交差)に漏れない。
+ * **深度検査あり・`depthWrite: false` ＋ 世界空間の深度バイアス。** 全画面三角形なので
+ * `gl_Position` は使えず、交点から自分で `gl_FragDepth` を書く —— `hit` を視線方向へ
+ * `uDepthBias`(mm、単位の意味は `viewportConstants.ts` の `DEPTH_BIAS_UNIT`)だけ
+ * 手前へ寄せた**深度専用のコピー**を射影し直して深度だけ取り出す。**色・UV・範囲判定に
+ * 使う `hit` 自体は1mmも動かさない**ので、描画のズレがレイ検査(`basePlaneAt` の解析交差)
+ * に漏れない。
  *
  * **`renderer.reversedDepthBuffer` とは併用できない** —— あれは深度の向きと範囲の規約を
  * 変えるので、ここの `gl_FragDepth` の式(`z/w * 0.5 + 0.5`)が黙って壊れる。
@@ -175,9 +177,10 @@ void main() {
 
   if (acc.a <= 0.0) discard;
 
-  // 深度: 交点のクリップ座標へ規約どおりのバイアスを掛けて gl_FragDepth へ書く。
-  vec4 clip = uViewProjection * vec4(hit, 1.0);
-  clip.z -= uDepthBias * clip.w;
+  // 深度: hit を視線方向へ uDepthBias[mm] だけ手前に寄せた深度専用コピーを射影する
+  // (色・UV・範囲判定に使った hit 自体はここまで一度も書き換えていない)。
+  vec3 viewDir = normalize(rayDelta);
+  vec4 clip = uViewProjection * vec4(hit - viewDir * uDepthBias, 1.0);
   gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 1.0);
 
   gl_FragColor = acc;
@@ -206,7 +209,7 @@ export interface PlaneGrid {
   setTierAlphas(alphas: readonly [number, number, number]): void
   /** カメラ行列(毎フレーム)。 */
   setCamera(viewProjection: THREE.Matrix4, inverseViewProjection: THREE.Matrix4): void
-  /** 深度バイアス(クリップ空間。層番号 × 単位量)。 */
+  /** 深度バイアス(世界空間mm。層番号 × `DEPTH_BIAS_UNIT`)。 */
   setDepthBias(bias: number): void
   /**
    * 描く正方形(frame上の中心と半径[mm])。`null` で無限。
