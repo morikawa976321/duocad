@@ -404,6 +404,57 @@ def test_a_failed_open_leaves_the_current_document_alone(session: Session) -> No
     assert query.volume(session.document.bodies[-1].shape) == pytest.approx(volume)
 
 
+def test_reopening_the_current_document_is_refused_with_another_tab_connected(
+    session: Session,
+) -> None:
+    """**今の文書と同じ名前を、2接続以上つながっている状態で開こうとしたら拒否する**(issue #16)。
+
+    `open_document` はディスクから読み直して差し替えるので、素通しにすると
+    別タブの未保存の編集が黙って消える。
+    """
+    _box(session)
+    session.save_document("model.json")
+    session.open_document("model.json")  # ディスクから開き直した後の文書を「今の文書」とする
+    body = session.document.bodies[-1]
+    volume = query.volume(body.shape)
+
+    async def script(send):
+        return await send({"cmd": "open_document", "name": "model.json"})
+
+    (answer, clients) = _browser(session, script)
+
+    assert answer["type"] == "error"
+    assert "model.json" in answer["message"] and "別のタブ" in answer["message"]
+    assert session.document.bodies[-1] is body, "拒否されたのに文書が差し替わった"
+    assert query.volume(session.document.bodies[-1].shape) == pytest.approx(volume)
+    assert clients[1].payloads == [], "拒否された開くが他の接続へ配信された"
+
+
+def test_reopening_the_current_document_is_allowed_with_only_one_connection(
+    session: Session,
+) -> None:
+    """**接続が1つだけ(別タブが無い)なら、開き直しは今までどおり通す**。
+
+    「別タブ」が存在しない以上、issue #16の対象外——保存前に戻す手立てとして使われている。
+    """
+    _box(session)
+    session.save_document("model.json")
+    session.open_document("model.json")
+
+    async def scenario():
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        client = FakeConnection()
+        server.clients.add(client)
+        await server._dispatch(client, json.dumps({"cmd": "open_document", "name": "model.json"}))
+        return client.payloads[-1]
+
+    answer = asyncio.run(scenario())
+
+    assert answer["type"] == "state"
+    assert answer["applied"]["action"] == "open"
+
+
 # --------------------------------------------------------------------------------------
 # 新規(空の文書へ差し替える。`open_document` と同じ差し替えの経路)
 # --------------------------------------------------------------------------------------

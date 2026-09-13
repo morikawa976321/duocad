@@ -158,6 +158,15 @@ class Session:
         """
         return self._applied_count
 
+    @property
+    def current_name(self) -> Optional[str]:
+        """いま編集中のファイル名(`models_dir` 配下、無ければ `None`)。`state()["current_name"]` と同じ値。
+
+        `net/ws.py` が「開こうとしている名前は今の文書そのものか」を判定するために読む
+        (`_current_name` を外から直接触らせないための窓)。
+        """
+        return self._current_name
+
     def _emit(self, applied: dict) -> dict:
         """購読者へ変更を知らせて `applied` をそのまま返す(呼び出し側は `return self._emit(...)`)。
 

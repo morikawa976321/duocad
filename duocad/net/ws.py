@@ -521,8 +521,20 @@ class Server:
             # という状態を作らない)。`Session.open_document` が発火したイベントは
             # `_on_core_change` 側でも拾われるが、`_apply` の間は `_dispatching` が
             # 立っているので二重には配らない。
+            #
+            # **今の文書と同じ名前を、2接続以上つながっている状態で開こうとしたら拒否する**。
+            # 単一ブラウザ前提(engine [[duocad-assumes-a-single-browser]])を守る番人で、
+            # `open_document` はディスクから読み直して差し替えるため、素通しにすると
+            # 別タブの未保存の編集が黙って消える。**接続が1つだけ**(別タブが無い)なら
+            # 開き直しは今までどおり通す——保存前に戻す手立てとして使われている。
             elif command == "open_document":
-                applied = self._apply(self.session.open_document, message["name"])
+                name = message["name"]
+                if name == self.session.current_name and len(self.clients) > 1:
+                    raise ValueError(
+                        f"{name} は既に別のタブで開いている"
+                        "(そちらのタブを使うか、閉じてから開き直す)"
+                    )
+                applied = self._apply(self.session.open_document, name)
                 applied["client_op"] = message.get("client_op")
                 await self._push(connection, applied=applied)
             # **新規も文書ごと差し替える**ので開くと同じ扱い(全接続へ配る)。引数は無い。
