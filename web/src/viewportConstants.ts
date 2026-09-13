@@ -192,7 +192,7 @@ export const ORIGIN_GIZMO_NEUTRAL_COLOR = 0xc4c9d0
  * **描く順序の層番号(1箇所にまとめる)。** 生の数値をコード中に書かない
  * (engine `duocad-depth-overlay-rule` の併記事項)。
  *
- * 負の3つは装飾(B群。深度検査あり・深度書き込み無し)、0以上は既存の階段
+ * 負の値は装飾(B群。深度検査あり・深度書き込み無し)、0以上は既存の階段
  * (A群＝ピック対象は `depthTest: false` なので、順序がそのまま前後関係になる)。
  */
 export const LAYER = {
