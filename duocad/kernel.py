@@ -1124,9 +1124,11 @@ def sketch_plane_frame(plane: dict, face: Any = None) -> dict:
 def offset_plane_frame(frame: dict, distance: float) -> dict:
     """`frame` を自身の法線方向へ `distance` だけ平行移動した枠。u/v/normalは不変。
 
-    OCPの `gp_Ax3` を経由しない純粋な数値計算 —— 枠は既に直交系なので平行移動だけなら
-    素の座標で足りる(呼び出し元の `sketch.resolve_plane` は結果を必ず `_ax3_from_frame` で
-    往復検査するので、ここで不正な枠を作っても黙って通ることはない)。
+    OCPの `gp_Ax3` を経由しない純粋な数値計算 —— origin だけを動かし u/v/normal を
+    そのまま引き継ぐので、入力が直交系である限り出力も直交系のままである(平行移動は
+    直交性を壊さない)。**ここで往復検査はしない** —— この結果を後で
+    `kernel.sketch_plane_frame`/`_ax3_from_plane` に通したとき(`_ax3_from_frame` 経由で)
+    初めて検査される、遅延した検査である。
     """
     origin = frame["origin"]
     normal = frame["normal"]

@@ -2629,7 +2629,11 @@
       <div class="mode-row">
         <span class="label">スケッチ</span>
         <span id="sketch-mode" class="tag on">
-          編集中 {activeSketch.plane.kind === 'base' ? activeSketch.plane.name : '面に貼ったスケッチ'}
+          編集中 {activeSketch.plane.kind === 'base'
+            ? activeSketch.plane.name
+            : activeSketch.plane.kind === 'offset'
+              ? `オフセット ${activeSketch.plane.distance}mm`
+              : '面に貼ったスケッチ'}
           ・図形 {activeSketch.entities.length} ・領域 {activeSketch.regions.length}
         </span>
         <button id="sketch-look" onclick={() => sketchId && viewport?.lookAtSketch(sketchId)}>
