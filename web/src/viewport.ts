@@ -542,18 +542,21 @@ export function createViewport(container: HTMLElement): Viewport {
    * (`basePlanesOn` の3平面とは同時に立たない。`App.svelte` の `wantsBasePlanes` が
    * `sketchId === null` を条件に入れている)。
    *
-   * **`sketchContentUvBox === null` かつ面スケッチ(`!sketchContentIncludeOrigin`)のときは
-   * 何もしない** —— それは `faceUvBoxOnly` が「面を測れない」を表す契約上のnullで、
+   * **`sketchContentUvBox === null` のときは、面スケッチか基準平面スケッチかを問わず
+   * 何もしない**。面スケッチでは `faceUvBoxOnly` が「面を測れない」を表す契約上のnullで、
    * `desiredGridPlanes` はこれを `setBounds(null)`(無制限描画。`planeGrid.ts` の
    * `uBoundsHalf<=0`)として渡している。ここで `boundingSquare(null, ...)` を呼ぶと
    * `BASE_EXTENT`(100mm)の**有限**な既定へ縮んでしまい、「測れないときは無制限に描いて
-   * 安全側へ倒す」という契約をpointermoveのたびに壊す。基準平面側の
-   * `sketchContentUvBox===null` は「空の文書」を表す別の意味(`boundingSquare` の既定=
-   * `BASE_EXTENT` が正しい)なので対象にしない。
+   * 安全側へ倒す」という契約をpointermoveのたびに壊す。基準平面スケッチでは
+   * `sketchContentUvBox===null` は「空の文書」を表し、`desiredGridPlanes` が
+   * `boundingSquare(null, { includeOrigin: true })` で既に `BASE_EXTENT` の固定正方形を
+   * `sketchGridBounds` に入れている——**ここで早期returnせず `extendUvBoxToPoint(null, point)`
+   * へ進むと、カーソル1点だけの矩形が作られ、原点とカーソルの両方を含む可変な正方形に
+   * 化けてしまう**(空スケッチなのにグリッドがカーソル位置へ追従して伸縮する見た目)。
    */
   function updateActiveSketchGridCursor(point: { u: number; v: number } | null): void {
     if (sketchGridFrame === null) return
-    if (!sketchContentIncludeOrigin && sketchContentUvBox === null) return
+    if (sketchContentUvBox === null) return
     const merged = extendUvBoxToPoint(sketchContentUvBox, point)
     const bounds = boundingSquare(merged, { includeOrigin: sketchContentIncludeOrigin })
     sketchGridBounds = bounds
