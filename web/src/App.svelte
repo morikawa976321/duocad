@@ -1520,10 +1520,13 @@
       .map((item) => ({
         sketchId: item.sketch_id,
         frame: item.frame as NonNullable<typeof item.frame>,
+        // **`offset` も `base` 扱い**(`SketchPlaneRef` のdocstring参照)。オフセット平面は
+        // 実ジオメトリの面ではない —— 基準が面でも、そこから離れた位置には実物の境界が無い
+        // ので、面の実寸で範囲を絞る `faceUvBoxOnly` の対象にはできない。
         plane:
-          item.plane.kind === 'base'
-            ? { kind: 'base' as const }
-            : { kind: 'face' as const, bodyId: item.plane.body, faceIndex: item.plane.index },
+          item.plane.kind === 'face'
+            ? { kind: 'face' as const, bodyId: item.plane.body, faceIndex: item.plane.index }
+            : { kind: 'base' as const },
         entities: item.drawn,
         regions: item.regions,
         selectedRegions: selectedRegions

@@ -240,9 +240,10 @@ ENTITY_KINDS: tuple[str, ...]           # `_ENTITY_KIND_TABLE` のキーから�
 
 base_plane(name) -> dict                # {"kind":"base","name":..,"provenance":None}
 face_plane(body_id, face_index) -> dict # {"kind":"face","body":..,"index":..,"provenance":None}
+offset_plane(base, distance) -> dict    # {"kind":"offset","base":..,"distance":..,"provenance":None}
 get_sketch(doc, sketch_id) -> Sketch    # 無ければ KeyError
 
-sketch_create(doc, plane) -> SketchId
+sketch_create(doc, plane, *, verb=VERB_SKETCH_CREATE) -> SketchId
 add_line(doc, sketch_id, p0, p1) -> EntityId
 add_circle(doc, sketch_id, center, radius) -> EntityId
 add_rectangle(doc, sketch_id, corner, width, height, angle=0.0) -> EntityId
@@ -252,8 +253,11 @@ entity_params(doc, sketch_id, entity_id) -> dict[str, float]   # 解決済みの
 
 **契約**:
 
-- `plane` は `"XY"|"XZ"|"YZ"` か `face_plane(...)`。**平面でない面（円筒面など）は
-  `ValueError`** — 黙って通すとその上の領域検出と押し出しが意味を失ったまま成功する。
+- `plane` は `"XY"|"XZ"|"YZ"` か `face_plane(...)` か `offset_plane(base, distance)`。
+  **平面でない面（円筒面など）は `ValueError`** — 黙って通すとその上の領域検出と押し出しが
+  意味を失ったまま成功する。`offset_plane` の `base` は `"base"`/`"face"` の PlaneRef のみ
+  （offsetのoffsetは `ValueError`）。`sketch_create` は `verb` キーワード引数でログへ積む
+  verb名を差し替えられる（`sketch_create_offset` が使う。do/undoの実体は共有）。
 - 座標はスケッチ平面上の2D。`Entity.params` のキーは図形ごとに固定
   （`line: x0,y0,x1,y1` / `circle: cx,cy,radius` /
   `rectangle: x,y,width,height,angle`（`angle` は度・**反時計回り**・基準の角 `(x,y)` まわり） /

@@ -360,6 +360,38 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="sketch_create_offset",
+        category="sketch",
+        description=(
+            "オフセット平面に新しいスケッチを作るときに呼ぶ。"
+            "base_plane(XY/XZ/YZ)を渡すか確定選択の平面(ちょうど1枚)を基準にし、"
+            "その法線方向へdistanceだけ離れた平面に貼る。"
+        ),
+        params=(
+            Param(
+                "base_plane",
+                "string",
+                "基準平面名 XY / XZ / YZ。省略時は確定選択の面",
+                required=False,
+            ),
+            Param(
+                "distance",
+                "number",
+                "基準平面からのオフセット距離(mm・法線方向が正)",
+                dimension=True,
+            ),
+        ),
+        uses_selection=True,
+        session="sketch_create_offset",
+        ws="special",
+        note=(
+            "**`sketch_create` とは別verb**(`sketch.sketch_create` のdocstring参照)。"
+            "貼る先(target)は同じ2状態(基準平面名 / 確定選択の面)だが、`distance` という"
+            "howを持つのでEnterが要る —— 同じverb名に足すと `sketch_create` 自体の"
+            "即適用(Enter不要)まで変わってしまうため、名前を分けてある。"
+        ),
+    ),
+    Command(
         name="add_line",
         category="sketch",
         description="スケッチに線分を足すときに呼ぶ(平面上の2点)。",

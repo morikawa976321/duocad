@@ -294,26 +294,69 @@ export const SKETCH_CREATE: CommandDef = {
 }
 
 /**
+ * オフセット平面にスケッチを作る —— 「基準となる平面(or 面)をクリックして、オフセット距離を
+ * 打ってEnter」の3手。
+ *
+ * **`sketch_create` とは別verb**(`duocad/sketch.py` の `sketch_create` docstring参照)。
+ * 貼る先の指し方(`target`)は `SKETCH_CREATE` と全く同じ2状態(基準平面 / 面は選択にある)
+ * だが、`distance` という how を持つので Enter が要る —— 同じverb名に足すと
+ * `sketch_create` 自体の即適用まで変わってしまうため、名前を分けてある
+ * (`tests/test_ui_command_wiring.py` の `ENTER_REQUIRED` はverb名ごとに1つ)。
+ */
+export const SKETCH_CREATE_OFFSET: CommandDef = {
+  id: 'sketch_create_offset',
+  category: 'sketch',
+  label: 'スケッチ(オフセット平面)',
+  buttonId: 'sketch-create-offset',
+  preview: 'none',
+  args: [
+    // **引数名は `target`**(`SKETCH_CREATE` と同じ理由。WSに載る名前は `base_plane`)。
+    { kind: 'plane', name: 'target', label: '基準となる平面' },
+    {
+      kind: 'number',
+      name: 'distance',
+      label: 'オフセット距離',
+      unit: 'mm',
+      inputId: 'sketch-create-offset-distance',
+      placeholder: 'mm',
+      // 0は基準平面と同じ位置になるだけで、禁止する理由が無い(`pattern`のdx/dyと同じ)。
+      reject: () => null,
+    },
+  ],
+  build(values) {
+    const plane = values.target
+    const distance = values.distance
+    if (!isPlaneArgValue(plane)) return { ok: false, reason: '基準となる平面が決まっていない' }
+    if (typeof distance !== 'number') return { ok: false, reason: 'オフセット距離が数値でない' }
+    return {
+      ok: true,
+      args: plane === 'face' ? { distance } : { base_plane: plane, distance },
+    }
+  },
+}
+
+/**
  * スケッチモードの**貼る先待ち**(`sketch-pending`)のツールバー。
  *
- * **1つだけ**である —— この状態でできることは「どこに貼るかを指す」しかない。
- * `App.svelte` が `startCommandId` でこれを起動済みにして入るので、モードに入った次の
- * 1クリック(基準平面 or 面)がそのまま `sketch_create` の確定になる(2手のまま)。
+ * 2つ —— 「そのまま貼る」(`SKETCH_CREATE`)と「オフセット平面に貼る」
+ * (`SKETCH_CREATE_OFFSET`)。`App.svelte` が `startCommandId` でどちらかを起動済みにして
+ * 入るので、モードに入った次のクリック(基準平面 or 面)が最初の1手になる。
  */
-export const SKETCH_PENDING_COMMANDS: CommandDef[] = [SKETCH_CREATE]
+export const SKETCH_PENDING_COMMANDS: CommandDef[] = [SKETCH_CREATE, SKETCH_CREATE_OFFSET]
 
 /**
  * そのverbは**まだどのスケッチも開いていない状態で走る**か(= `sketch_id` を足さずに送るか)。
  *
- * 該当するのは `sketch_create` だけである —— スケッチを作るverbなので、開いていることを
- * 要求すると永久に起動できない。`features.ts` の `needsSketchId` のちょうど裏返しで、
- * **分類だけでは送り方が決まらない2箇所**をこの2つの述語で名指ししている。
+ * 該当するのは `sketch_create` と `sketch_create_offset` の2つである —— どちらもスケッチを
+ * 作るverbなので、開いていることを要求すると永久に起動できない。`features.ts` の
+ * `needsSketchId` のちょうど裏返しで、**分類だけでは送り方が決まらない箇所**をこの述語で
+ * 名指ししている。
  *
  * **列挙にしてある**(「引数に `plane` があるか」等で導出しない)ので、スケッチモードのverbを
  * 新しく足しても既定は変わらない —— 足したverbは今までどおり `sketch_id` が付く。
  */
 export function runsOutsideSketch(verb: string): boolean {
-  return verb === SKETCH_CREATE.id
+  return verb === SKETCH_CREATE.id || verb === SKETCH_CREATE_OFFSET.id
 }
 
 /**

@@ -733,6 +733,20 @@ class DocumentTools:
         )
         return self._apply_logged(before, applied, sketch_id=applied["sketch_id"])
 
+    def sketch_create_offset(
+        self, distance: float, base_plane: Optional[str] = None
+    ) -> dict:
+        """オフセット平面にスケッチを作る。`base_plane` 省略時は**確定選択の面**(ちょうど1枚)
+        を基準に、その法線方向へ `distance` だけ離れた平面に貼る。
+
+        **解決は `Session.sketch_create_offset` が持つ**(`sketch_create` と同じ理由)。
+        """
+        before = self._revision_snapshot()
+        applied = self.session.sketch_create_offset(
+            float(distance), None if base_plane is None else str(base_plane)
+        )
+        return self._apply_logged(before, applied, sketch_id=applied["sketch_id"])
+
     def add_line(self, sketch_id: str, p0: list, p1: list) -> dict:
         before = self._revision_snapshot()
         applied = self.session.add_line(str(sketch_id), p0, p1)

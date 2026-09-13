@@ -45,7 +45,9 @@
   const visibleCount = $derived(bodies.filter((body) => body.visible).length)
 
   function planeLabel(sketch: SketchState): string {
-    return sketch.plane.kind === 'base' ? sketch.plane.name : '面'
+    if (sketch.plane.kind === 'base') return sketch.plane.name
+    if (sketch.plane.kind === 'offset') return `オフセット ${sketch.plane.distance}mm`
+    return '面'
   }
 </script>
 

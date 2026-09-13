@@ -328,6 +328,42 @@ def test_a_sketch_on_a_named_plane_does_not_commit(session: Session) -> None:
     assert session.get_selection()["origin"] == "proposed"
 
 
+def test_an_offset_sketch_on_a_named_plane_does_not_commit(session: Session) -> None:
+    """`sketch_create_offset` も同じ —— `base_plane` 付きなら選択は使わない(`sketch_create`
+    と同じ理由。`Server._dispatch` のガードが2つのverb名を見ているかを固定する)。
+    """
+    body, _ = _box(session)
+    _propose_face(session, body)
+
+    async def script(send):
+        return await send(
+            {"cmd": "sketch_create_offset", "base_plane": "XZ", "distance": 5.0}
+        )
+
+    (answer, _clients) = _browser(session, script)
+
+    assert answer["type"] == "state", answer
+    assert session.get_selection()["origin"] == "proposed"
+
+
+def test_an_offset_sketch_without_a_named_plane_commits_the_selected_face(
+    session: Session,
+) -> None:
+    """`base_plane` を省いたら、`sketch_create` と同じく確定選択の面を読み、その提案は
+    実行そのもので確定する。
+    """
+    body, _ = _box(session)
+    _propose_face(session, body)
+
+    async def script(send):
+        return await send({"cmd": "sketch_create_offset", "distance": 5.0})
+
+    (answer, _clients) = _browser(session, script)
+
+    assert answer["type"] == "state", answer
+    assert session.get_selection()["origin"] == "user"
+
+
 def test_the_declaration_matches_which_verbs_read_the_selection() -> None:
     """`catalog.Command.uses_selection` と、`Session` が実際に確定選択を読むverbが一致する。
 

@@ -429,6 +429,7 @@ def get_entity(sketch: "Sketch", entity_id: EntityId) -> "Entity":
 
 
 VERB_SKETCH_CREATE = "sketch_create"
+VERB_SKETCH_CREATE_OFFSET = "sketch_create_offset"
 VERB_ADD_LINE = "add_line"
 VERB_ADD_CIRCLE = "add_circle"
 VERB_ADD_RECTANGLE = "add_rectangle"
@@ -460,6 +461,27 @@ def face_plane(body_id: BodyId, face_index: int) -> dict:
         "kind": "face",
         "body": body_id,
         "index": int(face_index),
+        "provenance": None,
+    }
+
+
+def offset_plane(base: Any, distance: float) -> dict:
+    """基準平面(base)から法線方向に `distance` だけ離れたオフセット平面への参照。
+
+    `{"kind": "offset", "base": <base|face のPlaneRef>, "distance": float, "provenance": None}`。
+    `base_plane`/`face_plane` と同じく**これは `sketch_create` へ渡す引数の形**で、姿勢は
+    `resolve_plane` が焼き付ける。**`base` は `resolve_plane` にそのまま渡せる形**なら何でもよい
+    (基準平面名の文字列 `"XY"` でも `base_plane(...)`/`face_plane(...)` の dict でもよく、
+    ここでは正規化しない —— 正規化は `resolve_plane` 側の再帰呼び出しが1箇所で行う)。
+
+    **`base` は "base" か "face" だけ**(offsetのoffsetは作れない。`resolve_plane` が弾く)。
+    寸法を積み重ねたいだけなら `distance` を1つの値にまとめれば済み、多段の入れ子は
+    「どの段がどの向きか」を人が覚える負担を増やすだけで得るものが無い。
+    """
+    return {
+        "kind": "offset",
+        "base": base,
+        "distance": float(distance),
         "provenance": None,
     }
 
@@ -568,11 +590,18 @@ def get_sketch(doc: Document, sketch_id: SketchId) -> Sketch:
 # --------------------------------------------------------------------------------------
 # verb
 # --------------------------------------------------------------------------------------
-def sketch_create(doc: Document, plane: Any) -> SketchId:
+def sketch_create(doc: Document, plane: Any, *, verb: str = VERB_SKETCH_CREATE) -> SketchId:
     """スケッチを作って SketchId を返す。
 
     面を指定する場合、その面が**平面でなければ ValueError**(円筒面などに貼らせない ——
     黙って通すと以後の領域検出が意味を失う)。失敗時は `doc.sketches` にもログにも残さない。
+
+    **`verb` はログへ積む名前だけを差し替える**(`_add_entity` が3つのadd_*で共有している
+    のと同じ形)。`sketch_create_offset`(オフセット平面に貼る経路)は貼る先の解決が
+    `offset_plane()` で作った `plane` に変わるだけで、do/undoの実体もこの関数もそのまま
+    共有する —— UI側のEnter要否は verb 名ごとに1つ(`tests/test_ui_command_wiring.py`)なので、
+    `base_plane`/`distance` を同じ `sketch_create` に足すと即適用だった既存の挙動まで
+    Enter必須に変わってしまう。それを避けるための別名である。
     """
     plane_ref = resolve_plane(doc, plane)
     sketch_id = f"sketch-{uuid4().hex[:12]}"
@@ -581,7 +610,7 @@ def sketch_create(doc: Document, plane: Any) -> SketchId:
     # ログは素の参照だけ**(`plane_log_args`)。
     doc.sketches.append(Sketch(id=sketch_id, plane=dict(plane_ref)))
     doc.log.append(
-        VERB_SKETCH_CREATE,
+        verb,
         {"sketch_id": sketch_id, "plane": plane_log_args(plane_ref)},
     )
     return sketch_id
@@ -686,9 +715,11 @@ def entity_params(
 def resolve_plane(doc: Document, plane: Any) -> dict:
     """引数の平面指定を PlaneRef のdictへ正規化する。失敗時は文書を触らない。
 
-    **面参照はここで姿勢まで解決して `frame` に焼き付ける**(`kernel.face_frame`)。
-    これが「面の姿勢をライブに引き直すのをやめる」の唯一の入口であり、解決を2箇所に持つと
-    平面かどうかの検査も焼き付けも片方だけ抜ける。
+    **面参照・offset参照はここで姿勢まで解決して `frame` に焼き付ける**
+    (`kernel.face_frame` / `kernel.offset_plane_frame`)。これが「姿勢をライブに引き直さない」
+    の唯一の入口であり、解決を2箇所に持つと平面かどうかの検査も焼き付けも片方だけ抜ける。
+    offset参照は `base` を再帰的にこの関数で解決してから平行移動するので、base側が面参照
+    であれば面の平面性検査もそのままここを通る。
 
     **`doc` を渡すのは「いまこの瞬間の形状」から解決するため**である。新規作成では
     `sketch_create` が、再生では `_do_sketch_create` が呼ぶので、`rebuild()` はその履歴時点の
@@ -718,6 +749,22 @@ def resolve_plane(doc: Document, plane: Any) -> dict:
             "index": face_index,
             "provenance": plane.get("provenance"),
             "frame": kernel.face_frame(body.shape, face_index),
+        }
+    if isinstance(plane, dict) and plane.get("kind") == "offset":
+        base_ref = resolve_plane(doc, plane["base"])
+        if base_ref.get("kind") == "offset":
+            # **多段のoffsetは作らせない**(`offset_plane` のdocstring参照)。ここで弾かないと
+            # 「基準からの合計距離」が入れ子の深さぶん暗黙に積み上がり、`distance` 1つを見ても
+            # 実際の位置が分からなくなる。
+            raise ValueError("offset plane base must not itself be an offset plane")
+        distance = float(plane["distance"])
+        frame = kernel.offset_plane_frame(kernel.sketch_plane_frame(base_ref), distance)
+        return {
+            "kind": "offset",
+            "base": {key: value for key, value in base_ref.items() if key != "frame"},
+            "distance": distance,
+            "provenance": plane.get("provenance"),
+            "frame": frame,
         }
     raise ValueError(f"invalid sketch plane: {plane!r}")
 
@@ -844,6 +891,9 @@ def _undo_add_entity(document: Document, operation: Operation) -> None:
 
 
 register_verb(VERB_SKETCH_CREATE, do=_do_sketch_create, undo=_undo_sketch_create)
+# `sketch_create_offset` は貼る先の解決が違うだけで、do/undoの実体は `plane["kind"]` を
+# 見ない(`sketch_create` のdocstring参照)。3つのadd_*と同じ「別名・同じ実体」の形。
+register_verb(VERB_SKETCH_CREATE_OFFSET, do=_do_sketch_create, undo=_undo_sketch_create)
 for _verb in (VERB_ADD_LINE, VERB_ADD_CIRCLE, VERB_ADD_RECTANGLE, VERB_ADD_ARC):
     # 3つとも「スケッチへ図形を1つ足す」で、do/undo の実体は args["kind"] で分かれない
     # (追加する図形の種別は args が持つ)。verb名を分けているのは操作ログとMCPの粒度のため。

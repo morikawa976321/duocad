@@ -1121,6 +1121,23 @@ def sketch_plane_frame(plane: dict, face: Any = None) -> dict:
     return _frame_from_ax3(_ax3_from_plane(plane, face=face))
 
 
+def offset_plane_frame(frame: dict, distance: float) -> dict:
+    """`frame` を自身の法線方向へ `distance` だけ平行移動した枠。u/v/normalは不変。
+
+    OCPの `gp_Ax3` を経由しない純粋な数値計算 —— 枠は既に直交系なので平行移動だけなら
+    素の座標で足りる(呼び出し元の `sketch.resolve_plane` は結果を必ず `_ax3_from_frame` で
+    往復検査するので、ここで不正な枠を作っても黙って通ることはない)。
+    """
+    origin = frame["origin"]
+    normal = frame["normal"]
+    return {
+        "origin": [float(origin[i]) + float(normal[i]) * float(distance) for i in range(3)],
+        "u": [float(value) for value in frame["u"]],
+        "v": [float(value) for value in frame["v"]],
+        "normal": [float(value) for value in normal],
+    }
+
+
 def sketch_regions(
     plane: dict, entities: list, face: Any = None
 ) -> List[dict]:
@@ -1366,10 +1383,13 @@ def boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) -> 
 def _ax3_from_plane(plane: dict, face: Any = None) -> "gp_Ax3":
     """PlaneRef から gp_Ax3 を作る。面参照で平面でなければ ValueError。
 
-    **面参照は `plane["frame"]`(作成時に焼き付けた姿勢)が最優先**で、そこに枠がある限り
-    `face` は見ない —— これが「後続の面取り・フィレットがスケッチを動かさない」の実体である
-    (`face_frame` のdocstring)。枠を持たない面参照は `face` から解決する。古い操作ログを
-    再生した文書や、手で組んだ PlaneRef のための後方互換の経路。
+    **`kind` を問わず `plane["frame"]`(作成時に焼き付けた姿勢)が最優先**で、そこに枠がある
+    限り `face` は見ない —— これが「後続の面取り・フィレットがスケッチを動かさない」の実体
+    である(`face_frame` のdocstring)。`face` 参照・`offset` 参照はどちらも
+    `sketch.resolve_plane` が必ず `frame` を焼き付けてから渡すので、ここで両者を区別する
+    必要が無い(新しい `kind` が増えても、frameさえ焼き付けてあればこの関数は無改修で通る)。
+    枠を持たない面参照は `face` から解決する —— 古い操作ログを再生した文書や、手で組んだ
+    PlaneRef のための後方互換の経路。
     """
     kind = plane.get("kind")
     if kind == "base":
@@ -1378,10 +1398,10 @@ def _ax3_from_plane(plane: dict, face: Any = None) -> "gp_Ax3":
             raise ValueError(f"unknown base plane: {name!r}")
         origin, normal, xdir = _BASE_PLANE_AXES[name]
         return gp_Ax3(gp_Pnt(*origin), gp_Dir(*normal), gp_Dir(*xdir))
+    frame = plane.get("frame")
+    if frame is not None:
+        return _ax3_from_frame(frame)
     if kind == "face":
-        frame = plane.get("frame")
-        if frame is not None:
-            return _ax3_from_frame(frame)
         if face is None:
             raise ValueError("face plane requires a TopoDS_Face")
         return _ax3_from_face(face)

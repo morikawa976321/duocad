@@ -49,6 +49,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 VERB_TOOLS = {
     # スケッチ
     "sketch_create",
+    "sketch_create_offset",
     "add_line",
     "add_circle",
     "add_rectangle",
@@ -136,6 +137,7 @@ ARGUMENTS: dict = {
     "clear_selection": (set(), set()),
     # ---- スケッチ
     "sketch_create": ({"base_plane"}, set()),
+    "sketch_create_offset": ({"base_plane", "distance"}, {"distance"}),
     "add_line": ({"sketch_id", "p0", "p1"}, {"sketch_id", "p0", "p1"}),
     "add_circle": (
         {"sketch_id", "center", "radius"},
@@ -899,6 +901,51 @@ def test_sketch_create_can_sit_on_a_selected_face(server: McpServer, box_session
 def test_sketch_create_without_a_plane_or_a_selection_is_an_error(server: McpServer):
     """平面も選択も無ければ**推測しない**(既定でXYに貼ると静かに別の場所に図形が出る)。"""
     error = call_error(server, "sketch_create")
+    assert error["code"] in {"selection_empty", "invalid_argument"}
+
+
+def test_sketch_create_offset_with_a_named_base_plane(
+    server: McpServer, box_session: Session
+):
+    """`base_plane` + `distance` だけで、確定選択が無くても作れる(issue #3)。"""
+    payload = call(server, "sketch_create_offset", {"base_plane": "XY", "distance": 7.5})
+    _assert_verb_envelope(payload, "sketch_create_offset")
+    sketch = box_session.document.sketches[-1]
+    assert sketch.plane["kind"] == "offset"
+    assert sketch.plane["base"] == {"kind": "base", "name": "XY", "provenance": None}
+    assert sketch.plane["distance"] == 7.5
+    assert sketch.plane["frame"]["origin"] == pytest.approx([0.0, 0.0, 7.5])
+
+
+def test_sketch_create_offset_can_sit_on_a_selected_face(
+    server: McpServer, box_session: Session
+):
+    """`base_plane` を省いたら、`sketch_create` と同じく**確定選択の面**を基準にする。"""
+    box = box_session.document.bodies[0]
+    face_index = top_face_index(box.shape)
+    select_refs(server, [face_ref(box.id, face_index)])
+    payload = call(server, "sketch_create_offset", {"distance": 3.0})
+    _assert_verb_envelope(payload, "sketch_create_offset")
+
+    sketch = box_session.document.sketches[-1]
+    assert sketch.plane["kind"] == "offset"
+    assert sketch.plane["distance"] == 3.0
+    assert sketch.plane["base"] == {
+        "kind": "face",
+        "body": box.id,
+        "index": face_index,
+        "provenance": None,
+    }
+    face_frame = kernel.face_frame(box.shape, face_index)
+    assert sketch.plane["frame"]["origin"] == pytest.approx(
+        [face_frame["origin"][i] + face_frame["normal"][i] * 3.0 for i in range(3)]
+    )
+
+
+def test_sketch_create_offset_without_a_plane_or_a_selection_is_an_error(
+    server: McpServer,
+):
+    error = call_error(server, "sketch_create_offset", {"distance": 3.0})
     assert error["code"] in {"selection_empty", "invalid_argument"}
 
 

@@ -449,6 +449,11 @@ def _run_sketch_create(session: Session, tmp_path: Path) -> dict:
     return session.sketch_create("XY")
 
 
+@_runner("sketch_create_offset")
+def _run_sketch_create_offset(session: Session, tmp_path: Path) -> dict:
+    return session.sketch_create_offset(5.0, "XY")
+
+
 @_runner("add_line")
 def _run_add_line(session: Session, tmp_path: Path) -> dict:
     return session.add_line(_sketch(session), [0.0, 0.0], [10.0, 0.0])

@@ -116,10 +116,14 @@ export interface BodyGeometry extends BodyMeta {
 // --------------------------------------------------------------------------------------
 // C: スケッチ — **手動操作が一級の操作モード**になる場所
 // --------------------------------------------------------------------------------------
-/** スケッチを貼る平面(コアの PlaneRef。基準3面か、既存ソリッドの平面状の面)。 */
+/**
+ * スケッチを貼る平面(コアの PlaneRef。基準3面・既存ソリッドの平面状の面・その2つから
+ * オフセットした平面のどれか)。
+ */
 export type PlaneRef =
   | { kind: 'base'; name: BasePlaneName; provenance?: unknown }
   | { kind: 'face'; body: string; index: number; provenance?: unknown }
+  | { kind: 'offset'; base: PlaneRef; distance: number; provenance?: unknown }
 
 export type BasePlaneName = 'XY' | 'XZ' | 'YZ'
 
@@ -506,8 +510,8 @@ export type Applied =
       previous: number
       changed_bodies: string[]
     })
-  /** C: `sketch_create` が返す新しいスケッチのID。 */
-  | (AppliedVerbBase & { verb: 'sketch_create'; sketch_id: string })
+  /** C: `sketch_create` が返す新しいスケッチのID。`sketch_create_offset` も同じ形。 */
+  | (AppliedVerbBase & { verb: 'sketch_create' | 'sketch_create_offset'; sketch_id: string })
   /** C: 図形追加verbが返す新しい図形のID(4つとも同じ形)。 */
   | (AppliedVerbBase & { verb: 'add_line' | 'add_circle' | 'add_rectangle' | 'add_arc'; entity_id: string })
   /**

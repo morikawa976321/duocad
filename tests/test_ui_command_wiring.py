@@ -450,6 +450,7 @@ ENTER_REQUIRED = {
     "import_step": True,           # パス(howがある → Enterが要る。targetは取らない)
     "add_line": False,             # **点2つ + 長さ・角度(fromPoints。howに数えない) → 即適用**
     "sketch_create": False,        # **貼る先を1つ指すだけ。howが無い → 即適用**
+    "sketch_create_offset": True,  # 貼る先1つ + オフセット距離(how)
     "add_circle": False,           # 中心 + 円周の点 + 半径(fromPoints)
     "add_rectangle": False,        # 角 + 対角 + 幅・高さ(fromPoints)
     "add_arc": False,              # 始点 + 終点 + 円弧上の点 + 半径(fromPoints)

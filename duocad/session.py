@@ -529,6 +529,28 @@ class Session:
         sketch_id = sketch.sketch_create(self.document, plane)
         return self._after_logged_verb({"sketch_id": sketch_id})
 
+    def sketch_create_offset(self, distance: float, base_plane: Optional[str] = None) -> dict:
+        """オフセット平面にスケッチを作る。基準は `sketch_create` と同じ
+        `base_plane`(XY/XZ/YZ)省略時は確定選択の面(ちょうど1枚)で、そこから法線方向へ
+        `distance` だけ離れた平面に貼る。
+
+        **解決は `sketch.offset_plane` に投げるだけ**(基準の解決自体は `sketch_create` と
+        同じ2行)。verb名だけ `sketch_create_offset` にする理由は `sketch.sketch_create` の
+        docstring参照(Enter要否がverb名ごとに1つ固定されているため)。
+        """
+        if base_plane is not None:
+            base: Any = str(base_plane)
+        else:
+            face = selection.require_confirmed(
+                self.document, "face", exactly_one=True
+            )[0]
+            base = sketch.face_plane(face["body"], face["index"])
+        plane = sketch.offset_plane(base, distance)
+        sketch_id = sketch.sketch_create(
+            self.document, plane, verb=sketch.VERB_SKETCH_CREATE_OFFSET
+        )
+        return self._after_logged_verb({"sketch_id": sketch_id})
+
     def add_line(self, sketch_id: str, p0: Any, p1: Any) -> dict:
         entity_id = sketch.add_line(self.document, sketch_id, p0, p1)
         return self._after_logged_verb({"entity_id": entity_id})

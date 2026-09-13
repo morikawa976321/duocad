@@ -340,9 +340,14 @@ export interface BoxSelectEvent {
 }
 
 /**
- * スケッチを貼った平面。**基準3面か、既存ソリッドの面か**(session.ts の `PlaneRef` と
- * 同じ語彙。`face` 側は `FaceRef` と同じ形にして、面メッシュの索きをそのまま使えるようにする)。
- * グリッドの表示平面決定(`desiredGridPlanes`)と範囲の見積もり(`faceUvExtent`)が読む。
+ * スケッチを貼った平面。**実ジオメトリの面(`face`)か、それ以外か**(`face` 側は `FaceRef`
+ * と同じ形にして、面メッシュの索きをそのまま使えるようにする)。グリッドの表示平面決定
+ * (`desiredGridPlanes`)と範囲の見積もり(`faceUvExtent`)が読む。
+ *
+ * **`session.ts` の `PlaneRef` とは語彙が違う** —— 向こうは `base`/`face`/`offset` の3種だが、
+ * ここは `face` かどうかの2値しか持たない。`offset` 平面は基準が面でも、そこから離れた
+ * 位置には実ジオメトリの境界が無い(`faceUvBoxOnly` を当てられない)ので `base` 側へ畳む
+ * (`App.svelte` の `sketchDraws` が変換する)。
  */
 export type SketchPlaneRef = { kind: 'base' } | ({ kind: 'face' } & FaceRef)
 

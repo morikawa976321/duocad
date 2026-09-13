@@ -364,6 +364,16 @@ class Server:
                 )
                 applied["client_op"] = message.get("client_op")
                 await self._push(connection, applied=applied)
+            # **オフセット平面版も表に載らない**(`sketch_create` と同じ理由 —— `base_plane` が
+            # 省略できる)。`distance` は必須なので `message["distance"]` をそのまま渡す。
+            elif command == "sketch_create_offset":
+                applied = self._apply(
+                    self.session.sketch_create_offset,
+                    message["distance"],
+                    message.get("base_plane"),
+                )
+                applied["client_op"] = message.get("client_op")
+                await self._push(connection, applied=applied)
             # **移動の2つは表に載らない**(`catalog` の `ws="special"`)。`mode` で要る引数が
             # 入れ替わり(並進は dx/dy/dz・回転は角度と軸/中心)、しかも回転の中心は
             # 省略できる —— 表は載せた引数を全部必須にする規律なので置けない
@@ -622,10 +632,11 @@ class Server:
             return
         # **貼る先が引数で来ていたら選択は読まない** —— そのときは選択が使われない。
         # 使われない集合を承認扱いにすると、「基準平面を指しただけなのにAIの提案が
-        # 確定していた」という静かな変化になる。**スケッチを作るverbは `sketch_create` だけ**
-        # (`import_svg` は `sketch_id` を取る側なので対象集合を確定選択から取らず、
+        # 確定していた」という静かな変化になる。**スケッチを作るverbは `sketch_create` と
+        # `sketch_create_offset` の2つ**(どちらも `base_plane` が来ていれば選択を読まない。
+        # `import_svg` は `sketch_id` を取る側なので対象集合を確定選択から取らず、
         # `SELECTION_CONSUMING_COMMANDS` に入らないためこの関数の対象からも外れる)。
-        if name == "sketch_create" and message.get("base_plane") is not None:
+        if name in ("sketch_create", "sketch_create_offset") and message.get("base_plane") is not None:
             return
         if not selection.get_selection(self.session.document).is_proposed():
             return
