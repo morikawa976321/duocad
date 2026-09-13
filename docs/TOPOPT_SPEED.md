@@ -8,7 +8,7 @@
 | 何が | どこにあるか |
 |---|---|
 | 探索の契約・例外・停止条件 | `duocad/topopt/safety_loop.py` の docstring、[TOPOPT.md](TOPOPT.md)「安全率を入力に、材料量を探索する外側ループ」 |
-| 1回の評価の中身 | `safety_loop._evaluate` → `derive_default` → `run_topopt` → `stress.evaluate` |
+| 1回の評価の中身 | `safety_loop._evaluate` → `derive_from_reference` → `run_topopt` → `stress.evaluate` |
 | **SIMP 1反復の秒数内訳**（塊を小さくしても下がらない理由） | [TOPOPT_SIMP_ITER_BREAKDOWN.md](TOPOPT_SIMP_ITER_BREAKDOWN.md) |
 | 予想時間の式 | `duocad/optimize_run.py` の `estimate_seconds()` |
 | **本書** | 短縮の候補・アルゴリズム改善・実装順 |
@@ -514,6 +514,6 @@ solve を**完全省略**すると代表応力・安全率がずれる |
 |---|---|
 | `duocad/topopt/safety_loop.py` | `solve_for_safety_factor`、探索本体、`_propose_material`、`_evaluate` |
 | `duocad/optimize_run.py` | `run()`、`estimate_seconds()`、`TYPICAL_EVALUATIONS` |
-| `duocad/topopt/design_space.py` | `derive_default`、連続値保持、`build_reference` |
+| `duocad/topopt/design_space.py` | `derive_from_reference`、連続値保持、`build_reference` |
 | `topopt_checks/check_safety_loop.py` | 外側ループの受入検査（[7] 提案規則 / [8] 探索器の比較） |
 | `topopt_checks/measure_safety_search.py` | 探索器の実測（→ `duocad/topopt/output/safety_search.json`） |

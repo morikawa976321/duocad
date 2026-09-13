@@ -1,50 +1,16 @@
-"""4条件(保持ソリッド・除外ソリッド・拘束面・荷重面)から塊(設計空間)を導出する。
+"""保持・除外・拘束・荷重の4条件から、材料を置ける設計空間を作る。
 
-    .\\.venv\\Scripts\\python.exe -m duocad.topopt.design_space
+derive: 条件の外接直方体に余白を加え、除外領域を引いた箱を作る。
+build_reference: 箱の上で予備計算し、要素の順位と接続に必要な範囲を求める。
+derive_from_reference: 順位から候補材料量に対応する範囲を切り出す。
 
-導出は2つ入っている。**既定は連続値保持**(`derive_from_reference`)で、案1(`derive`)は
-その土台(参照の箱を起こす)であり、比較のベースライン兼退避経路でもある。
-**導出にこだわりのない呼び出し側は `derive_default` を通ること** —— 既定を次に倒すときに
-書き換える場所を1箇所に閉じ込めるための入口である。各方式の弱点・比較の数字は
-docs/TOPOPT.md「4条件から塊(設計空間)を導出する」以降の各節。
+切り出す要素数は、箱の一定割合・接続に必要な範囲・材料量の2倍に相当する
+要素数の最大値。接続判定は6近傍で、幅を保証できない場合は stats に記録する。
+これは材料を置ける道の保証であり、最終メッシュの接続を保証するものではない。
 
-## 除外ソリッドの扱い(設計判断)
-
-除外ソリッドは**塊を作る時点で引き切り**、`voxelize.model_from_design_mask` の `obstacle` には
-**渡さない** —— 塊 = 直方体 − 除外 と定義した以上、同じ除外ソリッドを `obstacle` にも渡すと
-**必ず全要素はみ出して `OutsideDesignSpaceError` になる**。**`on_outside="clip"` へ倒す選択も
-しない** —— clip は「塊からはみ出した保持/除外を黙って切る」指定で、「はみ出しは例外」という
-保証をこの経路だけ骨抜きにする。**除外が保持を食っているケース**(塊から引いた結果、保持が塊に
-入らなくなる)は保持のはみ出しとして現れ、`DesignSpaceTooSmallError` になる。理由の全文は
-docs/TOPOPT.md「除外ソリッドを `obstacle` に渡さない(設計判断)」。
-
-## 拘束と荷重がひと続きかを見る(連結性ガード)
-
-塊から除外ソリッドを引いた結果、**拘束面と荷重面が別々の連結成分に落ちる**ことがある。そのまま
-最適化に通しても**多くの場合エラーは出ない**(空要素も剛性の下限 `emin` を持つので残差検算も
-通ってしまう)。利用者は塊を見ないので気づく手段が無い。だから `derive` が**つながりを確認して
-から返す**(`assert_faces_connected` → `DesignSpaceDisconnectedError`)。連結性の定義は
-**6近傍**(`NEIGHBOURHOOD`。理由はその定数のところ)。実測は docs/TOPOPT.md
-「塊の中で拘束と荷重がひと続きかを検査する」節。
-
-## 連続値保持(`derive_from_reference`。いまの既定)
-
-案1は**条件の位置だけ**から塊を決める(どこに材料が要るかを見ていない)。連続値保持は
-**探索を通して1回だけ本番の格子で SIMP を回し、ρ を二値化せず順位として使い回す**。
-
-**塊の大きさは材料量から切り離してある**(`PICK_RATIO` の節)。材料量ごとの塊は
-`max(摘み `p`×案1の要素数, 回廊, k_mat×材料量)` 本を順位の先頭から取ったもので、
-どの項も材料量について単調なので、外側の二分探索が前提にしている単調性は保たれる。
-**回廊(`Reference.corridor`)は参照ごとに1回だけ求める固定値**で、全ての条件が
-**密度フィルタの筆が通る太さ**で荷重と繋がっていることを保証する(`width_corridor_length`)。
-
-## 格子の外は誰も見ていない
-
-`voxelize` のはみ出し判定は**格子の内側しか見ていない** —— 保持ソリッドが格子の外へ出た分は
-`keep_dropped_outside` にも入らず例外にもならない(格子の外にはセル中心が存在しないため)。案1は
-格子を条件の外接直方体から起こすので、余白が負のときにここを踏む。**この経路では格子の外へ出て
-いないことを自分で確かめてから** `model_from_design_mask` を呼ぶ(`DesignSpaceTooSmallError`)。
-"""
+voxelize のはみ出し判定は格子内だけを見るため、保持ソリッドが格子外へ
+出ていないことをここで確認してから model_from_design_mask を呼ぶ。
+設計理由・実測・制限は docs/TOPOPT.md を参照。"""
 
 from __future__ import annotations
 
@@ -1432,51 +1398,6 @@ def derive_from_reference(
         stats=stats,
         table=table,
     )
-
-# ---------------------------------------------------------------------------
-# 既定の導出(入口を1つにする)
-# ---------------------------------------------------------------------------
-
-# **既定の導出は連続値保持(`"reference"`)。** hanger の実測で、答えの被覆 100%・壁に
-# 接した材料 5.38%(案1と同値)。塊の大きさを絶対距離ではなく案1に対する割合(`PICK_RATIO`)で
-# 持つので、部品の大きさに追随する。
-DEFAULT_DERIVATION = "reference"
-
-# 名前 → 導出。名前を受け取る側(受入検査の比較実測)がここを引く。
-# **塊を作りたいだけの呼び出し側はこの表を引かない** —— 引くと既定を倒す場所が増える。
-DERIVATIONS = {
-    "bbox": derive,
-    "reference": derive_from_reference,
-}
-
-
-def derive_default(
-    conditions: Conditions, *, derivation: Optional[str] = None, **kwargs: Any
-) -> DesignSpace:
-    """**導出にこだわりのない呼び出し側の入口。** 既定(`DEFAULT_DERIVATION`)へ委ねる。
-
-    `duocad/optimize_run.py`(製品の経路)はここを通る。特定の導出を名指しで呼びたい側
-    (比較の実測・受入検査)は `derive` / `derive_from_reference` を直接呼ぶ —— **名指しの呼び出しを既定の変更で動かしてはいけない**(比較のベースラインが
-    黙って入れ替わる)。
-
-    `kwargs` は**そのまま既定の導出へ渡る**(素通し)。したがって受け付ける引数は
-    `DEFAULT_DERIVATION` が指す関数のもので、いまは連続値保持:
-    **`material_mm3` と `reference` を塞がないこと** —— 塊はその材料量ぶんを順位から切り出す
-    ので量が要り、参照は探索を通して1つを使い回すので外から渡す必要がある。ここで受けないと
-    外側のループ(安全率)がどちらも渡す手段を失う。
-
-    `derivation="bbox"` は**案1を名指しする口**。既定を倒したあとに以前の挙動へ戻して
-    比べるための口で、ここで名指しした側は `DEFAULT_DERIVATION` が変わっても動かない。
-    **製品の経路(`optimize_run.run`)もここを通って塊の容量と保持体積を測る** ——
-    既定の導出は材料量を要求するので、材料量の探索範囲を決める道具には使えない。
-    """
-    name = DEFAULT_DERIVATION if derivation is None else str(derivation)
-    try:
-        fn = DERIVATIONS[name]
-    except KeyError:
-        raise ValueError(f"未知の導出 {name!r}(選べるのは {sorted(DERIVATIONS)})") from None
-    return fn(conditions, **kwargs)
-
 
 def _assert_rmin_matches_space(
     space: DesignSpace, *, rmin: Optional[float], rmin_mm: Optional[float]

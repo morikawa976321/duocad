@@ -371,10 +371,12 @@ def test_estimate_adds_the_reference_run_once_not_per_candidate() -> None:
     """**参照 run は探索を通して1回。** 候補ごとの固定費として掛けると系統的に上振れし、
     落とすと下振れする(案5の粗い段は候補ごとだったので、そこを取り違えやすい)。
     """
+    from duocad.topopt import design_space as ds
+
     estimate = optimize_run.estimate_seconds(10_000, max_iter=10, evaluations=4)
     per_run = 10 * 10_000 * optimize_run.SECONDS_PER_ELEMENT_ITERATION
     reference = (
-        optimize_run.REFERENCE_ITERATIONS_FOR_ESTIMATE
+        ds.REFERENCE_MAX_ITER
         * 10_000
         * optimize_run.SECONDS_PER_ELEMENT_ITERATION
     )
@@ -384,13 +386,6 @@ def test_estimate_adds_the_reference_run_once_not_per_candidate() -> None:
     # 候補を増やしても参照は1回ぶんしか増えない(掛け算の中に入っていない)。
     more = optimize_run.estimate_seconds(10_000, max_iter=10, evaluations=8)
     assert more["seconds_typical"] - estimate["seconds_typical"] == pytest.approx(per_run * 4)
-
-
-def test_the_estimate_reference_iterations_match_the_derivation() -> None:
-    """見積り式の写しが `design_space` の実物とずれていないか(層をまたぐ契約)。"""
-    from duocad.topopt import design_space as ds
-
-    assert optimize_run.REFERENCE_ITERATIONS_FOR_ESTIMATE == ds.REFERENCE_MAX_ITER
 
 
 def test_material_bounds_need_room_between_the_keep_and_the_capacity() -> None:
@@ -466,7 +461,7 @@ def test_safety_loop_turns_empty_condition_faces_into_a_named_exception(monkeypa
 
     diagnoses = [{"side": "load", "face_index": 7, "cad_area_mm2": 0.5}]
 
-    monkeypatch.setattr(ds, "derive_default", lambda conditions, **kwargs: object())
+    monkeypatch.setattr(ds, "derive_from_reference", lambda conditions, **kwargs: object())
     monkeypatch.setattr(
         ds,
         "run_topopt",
@@ -516,7 +511,7 @@ def test_safety_loop_passes_the_iteration_callback_through(monkeypatch) -> None:
         seen.update(kwargs)
         raise RuntimeError("stop here")
 
-    monkeypatch.setattr(ds, "derive_default", lambda conditions, **kwargs: object())
+    monkeypatch.setattr(ds, "derive_from_reference", lambda conditions, **kwargs: object())
     monkeypatch.setattr(ds, "run_topopt", fake_run_topopt)
     sentinel = object()
     with pytest.raises(RuntimeError, match="stop here"):
@@ -551,11 +546,11 @@ def test_the_candidate_material_and_the_reference_reach_the_derivation(monkeypat
     seen: dict = {}
     sentinel = object()
 
-    def fake_derive_default(conditions, **kwargs):
+    def fake_derive_from_reference(conditions, **kwargs):
         seen.update(kwargs)
         raise RuntimeError("stop here")
 
-    monkeypatch.setattr(ds, "derive_default", fake_derive_default)
+    monkeypatch.setattr(ds, "derive_from_reference", fake_derive_from_reference)
     with pytest.raises(RuntimeError, match="stop here"):
         safety_loop._derive_and_run(
             conditions=object(),
@@ -587,7 +582,7 @@ def test_the_filter_radius_reaches_both_the_derivation_and_the_run(monkeypatch) 
 
     seen: dict = {}
 
-    def fake_derive_default(conditions, **kwargs):
+    def fake_derive_from_reference(conditions, **kwargs):
         seen["derive"] = kwargs
         return "塊"
 
@@ -595,7 +590,7 @@ def test_the_filter_radius_reaches_both_the_derivation_and_the_run(monkeypatch) 
         seen["run"] = kwargs
         raise RuntimeError("stop here")
 
-    monkeypatch.setattr(ds, "derive_default", fake_derive_default)
+    monkeypatch.setattr(ds, "derive_from_reference", fake_derive_from_reference)
     monkeypatch.setattr(ds, "run_topopt", fake_run_topopt)
     with pytest.raises(RuntimeError, match="stop here"):
         safety_loop._derive_and_run(
@@ -675,12 +670,12 @@ def test_the_search_builds_one_reference_and_hands_it_to_every_evaluation(monkey
         built.append(kwargs)
         return "参照"
 
-    def fake_derive_default(conditions, **kwargs):
+    def fake_derive_from_reference(conditions, **kwargs):
         seen.append(kwargs)
         raise RuntimeError("stop after the derivation")
 
     monkeypatch.setattr(ds, "build_reference", fake_build_reference)
-    monkeypatch.setattr(ds, "derive_default", fake_derive_default)
+    monkeypatch.setattr(ds, "derive_from_reference", fake_derive_from_reference)
     with pytest.raises(RuntimeError, match="stop after the derivation"):
         safety_loop.solve_for_safety_factor(
             object(),

@@ -7,6 +7,7 @@
 |---|---|
 | **契約・不変条件**(呼ぶ面の引数、守るべき性質、依存してはいけないもの) | **コードのそば**(`duocad/topopt/*.py` の docstring)。ここには写さない —— 二重になると必ずずれる |
 | **実測の記録**(費用の表・余白比率・案5の比較・代表応力・面アンカー) | **この文書** |
+| **現在の呼び出し経路** | [現在の呼び出し経路](#現在の呼び出し経路) |
 | **走らせ方**(受入検査・所要) | `README.md` §3 |
 | **設計と画面**(Sessionの口・解像度・OptimizePanel・デバッグ・撮影) | 本書「設計と画面」 |
 | **安全率探索の時間短縮**(内訳・改善案・Illinois 等) | [TOPOPT_SPEED.md](TOPOPT_SPEED.md) |
@@ -403,9 +404,7 @@ x 最小面、荷重面=荷重側パッドの上面)。**要素サイズは固�
 同じ不変条件**の `DesignSpace` を返すので、`run_topopt(space, ...)` も表示側もそのまま受けられる。
 **案1は置き換えていない** —— 並べて足してある。**2026-09-04に既定は案5へ倒した**(下記
 「既定をどちらにすべきか」)。**2026-09-09に連続値保持へ再び倒した** —— いまの既定は
-`"reference"` である。導出にこだわりのない呼び出し側が通る入口は
-**`design_space.derive_default(conditions, ...)`** の1つで、案1・案5・連続値保持を名指しで呼ぶのは
-比較の実測と受入検査だけである。
+連続値保持である。現在の配線は「現在の呼び出し経路」を参照。
 
 案1〜案4は**条件の位置だけ**から塊を決める(どこに材料が要るかを一切見ていない)。案5だけが
 **一度解いてから決める**。
@@ -598,7 +597,7 @@ engine `benchmark-seconds-swing-with-thermal-state`。**行の間で比べる用
 
 ### 既定をどちらにすべきか(2026-09-04に**案5へ倒した**。2026-09-09に**連続値保持へ再び倒した**)
 
-**いまの既定は連続値保持**(`design_space.DEFAULT_DERIVATION = "reference"`)。下記は2026-09-04に
+**現在は `design_space.derive_from_reference` を直接呼ぶ**。下記は2026-09-04に
 案5を選んだ判断の記録である。
 
 **当時は案5**(`design_space.DEFAULT_DERIVATION = "coarse_run"`)。2026-09-04本人決定。
@@ -633,29 +632,31 @@ engine `benchmark-seconds-swing-with-thermal-state`。**行の間で比べる用
 (engine `topopt-design-space-never-shown-to-the-user` により、どちらか一方が利用者から
 見えない既定になる —— 2026-09-04は案5、2026-09-09は連続値保持に決まった。)
 
-### 入口を1つにする(`derive_default`)
+### 現在の呼び出し経路
 
-**導出にこだわりのない呼び出し側は `design_space.derive_default(conditions, ...)` を通る。**
-`duocad/optimize_run.py` と `safety_loop.py` がそれで、案1・連続値保持を名指しで呼ぶのは
-**比較の実測と受入検査だけ**である。こうしておかないと、既定を倒すたびに呼び出し側を
-全部書き換えることになる(そして1つ書き忘れるとそこだけ取り残される)。
+方式名による振り分けは使わず、役割の違う関数を直接呼ぶ。
 
-- **既定は `DEFAULT_DERIVATION`** の1箇所。`DERIVATIONS` が名前 → 関数の表。
-- **引数は既定の導出へ素通し。** いまは連続値保持なので `material_mm3` と `reference` がそのまま届く ——
-  **参照 ρ は探索の最初に1回だけ作り、以後の全段で使い回すこと**(材料量ごとに作り直すと探索の段数ぶん SIMP が増える)。
-- **案1を名指しする口は `derive_default(..., derivation="bbox")`**。比較のための口であり、
-  `optimize_run.run` が塊の容量と保持体積を測るのに実際に使っている
-  (`"coarse_run"` は 2026-09-10 に案5ごと削除した)。
-- 検査は `check_design_space.py` [13]。**呼び出し側が導出を名指ししていないことを
-  ソースで見る検査**まで入れてある(名指しが1つ残るとそこだけ取り残されるため)。
+```text
+optimize_run.run
+  ├─ design_space.derive                外接箱・容量・条件を点検
+  ├─ safety_loop.solve_for_safety_factor
+  │    ├─ design_space.build_reference  予備計算を1回だけ実行
+  │    └─ 材料量の候補ごとに
+  │         ├─ design_space.derive_from_reference  候補範囲を切り出す
+  │         ├─ design_space.run_topopt → anchor.run_pipeline
+  │         │    ├─ simp.optimize      密度を更新
+  │         │    └─ mesh.build_surface  メッシュ化・STL出力
+  │         └─ stress.evaluate          密度場の安全率を評価
+  └─ add_mesh_body                      採用したメッシュを文書へ追加
+```
 
-| 検査 | 何を見るか |
-|---|---|
-| 13-1 | `DEFAULT_DERIVATION` が連続値保持で、入口が返す塊に**参照 run と k の記録が付いている** |
-| 13-2 | **案1(`derive`)が残っている**(既定より大きい塊を返す)/ 案1・連続値保持の**既定値が1つも動いていない** |
-| 13-3 | `derivation="bbox"` で**案1を名指しできる**/ 知らない導出名は例外(黙って既定へ落ちない) |
-| 13-4 | **`material_mm3` と `reference` が素通し**(参照 run を回し直していない) |
-| 13-5 | **`safety_loop.py` が導出を名指ししていない**(ソースを読む検査。読むのは `duocad/topopt/` の中だけ) |
+箱を作る `derive` は、予備計算の土台にも使う。`derive_from_reference` は
+共有した参照場から切り出すため、材料量の候補ごとに予備計算をやり直さない。
+候補範囲の要素数は `PICK_RATIO × 箱の要素数`・回廊・材料量の床の最大値。
+見積もりの予備計算回数も、計算側の `REFERENCE_MAX_ITER` を直接参照する。
+
+`check_design_space.py` [13] は、切り出した範囲・3つの床・参照の再利用・
+格子の不一致検出を検査する。方式選択表や呼び出し名そのものを固定する検査はない。
 
 ### 案5でも消えていないもの
 
@@ -896,7 +897,7 @@ ValueError: 指定した面に格子節点が1つも付いていない: 面7(pla
 - **14-6/14-7 は `build_reference`(連続値保持の参照 run)を見る**(2026-09-10に案5から付け替え)。
   正常系で誤爆しないこと / 条件面が空のとき `ReferenceRunConditionFacesEmptyError` になり
   `AttributeError` にならないこと / 例外に構造化された診断が乗り、文面が「要素サイズ」を
-  名指しすること / `derive_default`(既定の導出)経由でも同じ例外になること / **変異検査**:
+  名指しすること / `derive_from_reference` 経由でも同じ例外になること / **変異検査**:
   `run_topopt` の戻り値から `empty_condition_faces` を消すラッパーに差し替えると元の
   `AttributeError` に戻ること。
 
@@ -2282,8 +2283,8 @@ uv pip install --python ./.venv/Scripts/python.exe scikit-image
 | `duocad/topopt/voxelize.py` | **B-repソリッド → 規則格子**(占有マスク・保持/障害物領域)。`duocad.kernel.tessellate` の三角形へ +z のレイを飛ばして巻き数で内外を決める。CLIとしても動く(`python -m duocad.topopt.voxelize --step <path> --n 100`) |
 | `duocad/topopt/anchor.py` | **CADの面 → 格子の節点の対応表(面アンカー)**。担当面積つき。固定/荷重/非設計領域の口と、端から端まで通す `run_pipeline`。CLIとしても動く(`python -m duocad.topopt.anchor --table-only --n 32`) |
 | `duocad/topopt/stress.py` | **密度場と変位 → 要素ごとの von Mises 応力・代表応力・最小安全率**(後処理)。無次元 → 実単位の換算則(`UnitScale`)を持つ。**最適化には手を入れない**(応力制約の定式化は採らない。engine `safety-factor-goes-outside-the-optimizer`) |
-| `duocad/topopt/design_space.py` | **4条件(保持ソリッド・除外ソリッド・拘束面・荷重面) → 塊(設計空間)**。案1(`derive`)=条件の点群の外接直方体+余白から除外ソリッドを引く / 連続値保持(`derive_from_reference`)=参照 ρ の順位で切り出す(本数は `PICK_RATIO` / 回廊 / 材料の3つの床の最大)。**どちらも塊の中で拘束と荷重がひと続きかを6近傍で確かめてから返す**(`DesignSpaceDisconnectedError`)。**連続値保持はさらに、全ての拘束面・保持ソリッド・荷重面が密度フィルタの筆(`rmin`)の通る太さで荷重と繋がることを、参照ごとに1回だけ二分探索で保証する**(`width_corridor_length`)。**既定は連続値保持**(2026-09-09〜。入口は `derive_default`)。CLIとしても動く(`python -m duocad.topopt.design_space` で `demo_conditions(0°)` の塊を導出して stats を出す。表を作る `--measure` / `--compare` は2026-09-05に削除した) |
-| `duocad/topopt/safety_loop.py` | **安全率を入力に、材料量(mm^3)を探索する外側ループ**(既定の探索器は括り付きの補間。`searcher` で二分にも戻せる)。`solve_for_safety_factor` が入口。目標以上を満たす最小の材料量を探す。塊は案a(候補材料量ごとに `derive_default` を呼び直す)。許容応力の導出(PETG × 低減係数)を持つ。**最適化そのものには手を入れない** |
+| `duocad/topopt/design_space.py` | **4条件(保持ソリッド・除外ソリッド・拘束面・荷重面) → 塊(設計空間)**。案1(`derive`)=条件の点群の外接直方体+余白から除外ソリッドを引く / 連続値保持(`derive_from_reference`)=参照 ρ の順位で切り出す(本数は `PICK_RATIO` / 回廊 / 材料の3つの床の最大)。**どちらも塊の中で拘束と荷重がひと続きかを6近傍で確かめてから返す**(`DesignSpaceDisconnectedError`)。**連続値保持はさらに、全ての拘束面・保持ソリッド・荷重面が密度フィルタの筆(`rmin`)の通る太さで荷重と繋がることを、参照ごとに1回だけ二分探索で保証する**(`width_corridor_length`)。**既定は連続値保持**(入口は `derive_from_reference`)。CLIとしても動く(`python -m duocad.topopt.design_space` で `demo_conditions(0°)` の塊を導出して stats を出す。表を作る `--measure` / `--compare` は2026-09-05に削除した) |
+| `duocad/topopt/safety_loop.py` | **安全率を入力に、材料量(mm^3)を探索する外側ループ**(既定の探索器は括り付きの補間。`searcher` で二分にも戻せる)。`solve_for_safety_factor` が入口。目標以上を満たす最小の材料量を探す。塊は案a(候補材料量ごとに `derive_from_reference` を呼ぶ)。許容応力の導出(PETG × 低減係数)を持つ。**最適化そのものには手を入れない** |
 | `web/scripts/shoot-topopt.mjs` / `shoot_topopt_export.py` | **受入検査ではない。** 設定を2つ以上並べた比較画像を撮る道具。1コマンドで最適化・描画・ラベル焼きまで通し、面数に上限が無く、`--model` で実物の文書も撮れる。使い方は本書「比較スクリーンショットの撮影台」 |
 | `duocad/topopt/__init__.py` | パッケージの入口。**サブモジュールを import しない**(`import duocad` の費用に scipy / skimage を足さないため)。`OUTPUT_DIR`(= `duocad/topopt/output/`)だけを公開する |
 | `topopt_checks/check_simp.py` | **受入検査(合否そのもの)**。SIMP側を assert する |

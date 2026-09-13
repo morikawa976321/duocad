@@ -1,42 +1,15 @@
-"""形状最適化を**端から端まで走らせる**配線 —— 4条件 → 塊の導出 → 最適化 → メッシュボディ。
+"""文書の最適化条件を数値計算へ渡し、結果を新しいメッシュボディとして追加する。
 
-`duocad/optimize.py` が「条件を表現し、保存し、配る」ところまでを持つのに対し、ここは
-**その条件を `duocad.topopt` の `Conditions` へ翻訳して回し、結果を新しいメッシュボディとして
-文書へ足す**ところを持つ。verbは1本も足していない —— 結果を文書へ入れる口は既存の
-`add_mesh_body` だけである(`done/20260904-1703` の契約①)。
+optimize.py は条件の保存・配信、ここは条件の点検・実行・進捗・結果の追加を担当する。
+元のボディは変更しない。
 
-**元のボディは1つも消さない・変えない。** 最適化は文書に対する編集ではなく、条件から新しい
-形を1つ作る操作である。保持ソリッドも除外ソリッドも元の部品もそのまま
-残り、結果は `optimized` という名前のメッシュボディとして**足されるだけ**である。
+面は (body_id, 1始まりの面添字) で指定する。複数ボディを compound にまとめると
+面添字がずれるため、_verify_face_mapping が面積・法線・重心を照合する。
 
-## 面の対応(この配線でいちばん壊れやすいところ)
-
-duocad は面を **(body_id, 1始まりの面添字)** で持ち、`duocad.topopt` は
-**`TriangleSoup` の面添字**(= `kernel.tessellate` が返す添字)で持つ。この2つは
-**同じ `kernel._face_map` の数え方**なので、**同じ形状オブジェクトを渡すかぎり一致する**。
-食い違うのは、条件面が複数のボディに散っていて `kernel.make_compound` で1つにまとめたときで、
-このとき面添字は「そのボディまでの `face_count` の累積」だけずれる。
-
-**ずれても例外は出ない。** 荷重が別の面に入り、最適化はもっともらしく収束して、
-出てきた形が間違っているだけになる(`topopt_checks/check_anchor.py` の検査[0]が守っているのと
-同じ失敗)。だから `_verify_face_mapping` が**毎回**、まとめた形の側で測り直した指紋
-(面積・法線・**重心**)を、ボディ単体で測った指紋と突き合わせる。**重心を外してはいけない** ——
-同じ形のボディを2つ並べた文書では面積と法線だけでは区別が付かず、まさに取り違えたい場合を
-取りこぼす。
-
-## 単位と座標系(もう1つの静かな事故)
-
-`duocad.topopt.mesh.build_surface` が返す頂点は **`spacing=(1,1,1)` の要素添字空間**で、
-要素 `ex` の中心が `ex+0.5` に載る規約である(probe の描画がそうなっていた)。
-**ワールド座標[mm]は `grid.origin + verts * grid.spacing`** で、この変換を忘れると
-原点付近に縮んだメッシュが黙って入る。`_mesh_to_world` の1箇所に閉じてあり、
-結果のbboxが格子の箱に収まっていることを毎回確認する(`_check_mesh_placement`)。
-
-**OCP / build123d を直接importしない**(幾何は `kernel` / `query` 越し)。
-`duocad.topopt` は**関数の中で**importする —— `duocad/__init__.py` から連鎖する層に
-scipy / skimage を引き込むと、pytest 全体が毎回その費用を払う
-(`done/20260904-1600` の契約②)。
-"""
+メッシュ頂点は要素添字座標なので、_mesh_to_world で
+grid.origin + verts * grid.spacing によりワールド座標[mm]へ変換する。
+幾何操作は kernel / query 越しに行い、topopt は関数内で遅延 import する。
+設計理由と実測は docs/TOPOPT.md の「設計と画面」「本体への配線」を参照。"""
 from __future__ import annotations
 
 import math
@@ -79,11 +52,6 @@ MIN_REGION_ELEMENTS = 8
 #: 1.05乗〜2.03乗で伸びるので線形では収まらない)。**桁の見当であって予測ではない** ——
 #: 熱状態だけで 1.7倍振れる(engine `benchmark-seconds-swing-with-thermal-state`)。
 SECONDS_PER_ELEMENT_ITERATION = 1.8e-4
-
-#: 既定の導出(連続値保持)の参照 run の反復数。**探索を通して1回だけ**掛かる
-#: (候補材料量ごとには掛からない)。値の正は
-#: `design_space.REFERENCE_MAX_ITER` で、ここは見積り式が参照 run を落とさないための写し。
-REFERENCE_ITERATIONS_FOR_ESTIMATE = 10
 
 #: 二分探索が典型的に使う評価回数(上端・下端 + 4回)。上限は
 #: `safety_loop.DEFAULT_MAX_EVALUATIONS`。
@@ -685,26 +653,19 @@ def estimate_seconds(
     max_iter: Optional[int] = None,
     evaluations: Optional[int] = None,
 ) -> dict:
-    """その設定でどれくらい掛かるかの**見当**(桁の見当であって予測ではない)。
+    """格子要素数と反復数から、予備計算1回と材料量探索の所要時間を見積もる。
 
-    1回の評価 = 設計反復 × 格子要素数 × 係数。安全率の外側ループは候補材料量ごとに1回ずつ
-    回すので、それを掛ける。**そこへ参照 run を1回だけ足す**(既定の導出は連続値保持で、
-    参照は探索の最初に1回しか回らない)。**候補ごとの固定費を持つ導出へ既定を倒すときは、
-    その分を掛け算の中へ入れ直すこと。**
-
-    **候補ごとの塊は案1の箱より小さい**(順位から `k × 材料量` ぶんしか取らない)が、材料量が
-    決まらないと大きさが決まらないので、ここでは箱の要素数で見積もる。**その分だけ上振れする。**
-
-    `SECONDS_PER_ELEMENT_ITERATION` の散らばり(1.05e-4〜2.82e-4)と熱状態の 1.7倍を
-    考えると、**返るのは 2〜3倍の幅で読む値**である。
-    """
+    候補範囲の要素数は割合・回廊・材料量の3条件で決まるため、事前見積もりは
+    その外側の箱の要素数を使う。seconds_reference は探索全体で1回だけ加算する。
+    係数は機械・解像度・熱状態に依存する概算値。根拠は docs/TOPOPT_SPEED.md。"""
+    from .topopt import design_space as ds
     from .topopt import safety_loop
 
     iters = int(safety_loop.DEFAULT_MAX_ITER if max_iter is None else max_iter)
     evals = int(TYPICAL_EVALUATIONS if evaluations is None else evaluations)
     one = iters * int(element_count) * SECONDS_PER_ELEMENT_ITERATION
     reference = (
-        REFERENCE_ITERATIONS_FOR_ESTIMATE
+        ds.REFERENCE_MAX_ITER
         * int(element_count)
         * SECONDS_PER_ELEMENT_ITERATION
     )
@@ -939,9 +900,7 @@ def run(
     # (どちらも同じ `derive(conditions, spacing=...)` から起きる)ので、ここで作った面
     # アンカーの表と塊で、条件面と保持/除外の点検までできる。
     # **案1を消すときはここも一緒に直すこと。**
-    space = ds.derive_default(
-        bundle.conditions, derivation="bbox", **derivation_kwargs
-    )
+    space = ds.derive(bundle.conditions, **derivation_kwargs)
     pump.check()
     pump.emit(
         phase="derive",

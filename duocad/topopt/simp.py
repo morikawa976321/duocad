@@ -2106,7 +2106,6 @@ class _MMAUpdate(_Update):
 
 
 #: `optimize(update=...)` で選べる更新則。**未知の名前は既定へ落とさず例外**
-#: (`design_space.DERIVATIONS` と同じ作法)。
 UPDATES: dict[str, type[_Update]] = {
     "oc": _OCUpdate,
     "mma": _MMAUpdate,

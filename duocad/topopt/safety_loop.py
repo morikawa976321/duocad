@@ -1,30 +1,11 @@
-"""安全率を入力に、材料量(mm^3)を探索する外側ループ。
+"""目標安全率を満たす材料量[mm^3]を探索する。
 
-材料量は「内部表現は絶対量(mm^3)、利用者の入力は安全率」の2層(engine
-`safety-factor-goes-outside-the-optimizer`)。内側の2枚 —— `design_space.py`(絶対量の口)と
-`stress.py`(応力と最小安全率)—— の上に立つ**外側の層**で、最適化そのものには手を入れない。
-**応力制約トポロジー最適化(応力を制約に入れて最軽量を解く型)は採らない**(理由4点は同ノート)。
-ここにあるのは「最適化を外から何度か回して材料量を決めるループ」だけ。
+参照場は最初に1回作り、候補材料量ごとに範囲を切り出して SIMP と応力評価を行う。
+材料量を増やすと安全率が上がることを前提とするが、一般の形状で保証はない。
 
-塊の扱い(docs/TOPOPT.md「塊が材料量に追従する」参照): **各段で塊を導出し直す(案a)を選んだ**。
-`design_space.derive_default(conditions, material_mm3=material, ...)` を探索の
-候補材料量そのままで毎回呼ぶ —— 塊と材料量が常に噛み合う。固定して使い回す案(c)と比べて
-安全率・材料量ともに実測でよく一致したが(docs/TOPOPT.md表)、(a) は塊が段ごとに変わるため厳密には
-「材料が増えたから安全率が上がったのか、塊が変わったからなのか」を切り分けられない。
-コスト差は実測で無視できる大きさだったので、切り分けを諦めてでも塊と材料量を噛み合わせる
-(a) を既定にした。
-
-**SIMP を回すのは段ごとだが、塊の元になる ρ は探索を通して1本だけである**(既定の導出が
-連続値保持になったため)。`_build_reference` が上端の評価より前に1回作り、以後の全段が
-その順位から切り出す。段ごとに変わるのは「順位のどこまで取るか」だけになったので、上の
-「塊が変わったのか材料が変わったのか」の切り分けにくさは、以前より小さい。
-
-**候補材料量の決め方は `searcher` で選ぶ**(既定 `"illinois"` = Regula Falsi + Illinois、
-`"bisection"` = 区間の中点)。どちらを選んでも探索の契約は同じ —— 括り `[lo, hi]` を保ち、
-**目標安全率以上を満たす最小の材料量**を返し、`_evaluate` の3分類(`ok` / `too_little` /
-`too_much`)も変わらない。補間に使えるのは `ok` の評価が返した安全率だけで、測れなかった端点は
-必ず二分へ落ちる(設計と実測は docs/TOPOPT_SPEED.md「実装済み A」)。
-"""
+候補は Illinois 法で提案する。端点の応力を評価できない場合は二分へ戻る。
+探索区間内で目標を満たした最小の候補を返す。converged は材料量の区間幅の判定で、
+内側の形状更新の収束を意味しない。設計と実測は docs/TOPOPT_SPEED.md を参照。"""
 
 from __future__ import annotations
 
@@ -226,20 +207,15 @@ def _derive_and_run(
     stl_path: Optional[Any] = None,
     run_progress: Optional[Callable[[Any, Any], None]] = None,
 ) -> tuple[Any, dict, Any]:
-    """1つの材料量について、塊を導出し直してから最適化して安全率まで出す(この段の中核)。
+    """候補材料量から設計空間を切り出し、最適化結果と安全率を返す。
 
-    **塊は毎回この材料量で導出し直す(選んだ案a)。** `derive_default` は既定の導出
-    (`design_space.DEFAULT_DERIVATION`、いまは連続値保持)へ委ねるので、既定を案1へ戻すと
-    `material_mm3` は `TypeError` になる(`derive_default` の契約どおり —— 黙って捨てない)。
-
-    **`reference` は探索が最初に1回だけ作った参照 ρ。** これを渡さないと
-    `derive_from_reference` が材料量ごとに参照を作り直し、探索の段数ぶん SIMP が増える。
-    """
+    reference は探索全体で共有する。rmin / rmin_mm は導出と最適化へ同じ値を渡す。
+    run の result が空なら ConditionFacesEmptyError として診断を返す。"""
     kwargs = dict(derivation_kwargs)
     kwargs.setdefault("material_mm3", material_mm3)
     if reference is not None:
         kwargs.setdefault("reference", reference)
-    space = ds.derive_default(conditions, **kwargs)
+    space = ds.derive_from_reference(conditions, **kwargs)
     run = ds.run_topopt(
         space,
         material_mm3=material_mm3,
@@ -293,19 +269,11 @@ def _build_reference(
     threads: Optional[int],
     progress: Optional[Callable[[Any, Any], None]],
 ) -> Any:
-    """探索の最初に1回だけ参照 ρ を作る。既定の導出が連続値保持でなければ `None`。
+    """探索全体で共有する参照場を1回作る。
 
-    **`derivation_kwargs` は切り出し側(`derive_from_reference`)の引数で書かれている**ので、
-    参照を作る側(`build_reference`)の名前へ translate してから渡す。素通しにすると
-    `pick_ratio` などが `derive` まで流れて `TypeError` になる。
-
-    **参照は全段で使い回す。** 材料量ごとに作り直すと「毎回1回余分に回す」形になり、
-    連続値保持の利点(SIMP を回すのが探索を通して1回)がそのまま消える。
-    """
-    if derivation_kwargs.get("derivation", ds.DEFAULT_DERIVATION) != "reference":
-        return None
+    切り出し専用の pick_ratio / k_mat を除き、参照計算用の引数名へ変換する。
+    rmin / rmin_mm は接続幅の判定にも使うため、そのまま渡す。"""
     kwargs = dict(derivation_kwargs)
-    kwargs.pop("derivation", None)
     # **切り出しのときだけ効く引数は落とす。** `rmin` / `rmin_mm` は落とさない ——
     # 幅つき回廊はその半径で測るので、参照を作る側が知っていなければならない。
     for slicing_only in ("pick_ratio", "k_mat"):
@@ -448,54 +416,28 @@ def solve_for_safety_factor(
     progress: Optional[Callable[[SafetyLoopStep], None]] = None,
     run_progress: Optional[Callable[[Any, Any], None]] = None,
 ) -> SafetyLoopResult:
-    """**安全率を入力に取る入口。** 目標安全率を満たす材料量で最適化した結果を返す。
+    """探索範囲内で目標安全率を満たした最小の材料量と、その計算結果を返す。
 
-    `[material_min_mm3, material_max_mm3]` の中で、**目標安全率以上を満たす最小の材料量**を
-    探索する(「ちょうど」ではない。docs/TOPOPT.md「探索の目標」参照)。**単調性
-    (材料量を増やすと最小安全率が上がる)を前提にする** —— docs/TOPOPT.md「単調性を測る」で
-    複数の合成条件について実測して確かめてあるが、**理論的な保証ではない**。任意の `conditions` で
-    単調とは限らないので、疑わしい形では `derivation_kwargs` を揃えて自分で数点測ること。
+    材料量[mm^3]に対して安全率が単調に増えることを仮定する。一般の形状では保証が
+    ないため、根拠は docs/TOPOPT.md「単調性を測る」を参照。
+    探索範囲は呼び出し側が決める。下端は保持体積より大きく、上端は塊容量の
+    99.9%未満にする。目標を満たす候補が得られなければ SafetyTargetError。
 
-    材料量の探索範囲は呼び出し側が決める(このprobeは形ごとの「常識的な材料量」を知らない)。
-    `material_min_mm3` は少なくとも保持ソリッドの体積より大きいこと、`material_max_mm3` は
-    塊の容量の99.9%未満にすること(端ちょうどは `simp` の OC 二分探索が退化する。
-    `20260904-0142` の罠)。
+    searcher は illinois または bisection。history の proposed_by / fallback_reason /
+    clipped に提案方法を記録する。converged は材料量の相対区間幅による判定で、
+    内側の SIMP の収束判定とは独立。評価回数上限では未収束でも最良候補を返す。
 
-    達成不能なときは `SafetyTargetError` —— どちら側にどれだけ足りないかを名指しする
-    (クラスdocstring参照)。
+    derivation_kwargs は derive_from_reference の追加引数。rmin / rmin_mm は
+    導出・参照計算・本番計算で共有する。material_mm3 と reference は探索側が
+    設定するため指定しない。参照場は最初に1回だけ作り、全候補で使い回す。
 
-    `searcher` は候補材料量の決め方(`SEARCHERS`)。既定の `"illinois"` は括り付きの補間
-    (Regula Falsi + Illinois)で、`"bisection"` は括りの中点。**どちらでも返すものの契約は
-    同じ**(目標以上を満たす最小・3分類・`SafetyTargetError`)なので、切り替えても呼び出し側は
-    変わらない。`"bisection"` は探索器そのものを比べるときの基準線として残してある
-    (実測は docs/TOPOPT_SPEED.md「実装済み A」)。**補間がどう効いたかは
-    `result.history` の `proposed_by` / `fallback_reason` / `clipped` で読む。**
+    progress は候補ごと、run_progress は参照計算を含む SIMP の反復ごとに呼ぶ。
+    中断には run_progress から OptimizeCancelled のような RuntimeError を投げる。
+    材料不足として分類される ValueError 系の例外は使わない。
 
-    `derivation_kwargs` は `design_space.derive_default` への追加引数(既定の連続値保持なら
-    `margin_ratio` / `elements_long_axis` / `spacing` / `pick_ratio` / `k_mat` /
-    `rmin` / `rmin_mm` / `reference_material_ratio` / `reference_max_iter`)。
-    **`rmin` / `rmin_mm` はここから塊の導出と `run_topopt` の両方へ配られる** ——
-    片方だけに渡すと塊が保証した半径と実際に回す半径が食い違う。`material_mm3` はここが探索の
-    候補材料量で埋めるので**渡さないこと**(渡しても上書きされる)。`reference` も同じで、
-    **探索の最初に1回だけ作って全段へ配る** —— 材料量ごとに作り直すと、SIMP を1回で済ませる
-    という連続値保持の利点がそのまま消える。
-
-    **STL は候補材料量ごとに書く(= 評価の回数ぶん上書きする)。** 既定の書き出し先は
-    `output/safety_loop_search.stl`(scratch。`.gitignore` 対象)で、**探索が終わった時点の
-    中身は最後に評価した候補のもので、採用した材料量(`result.material_mm3`)とは限らない**。
-    採用した形の STL が欲しいときは、呼び出し側が `design_space.run_topopt(result.space,
-    material_mm3=result.material_mm3, ..., stl_path=<自分のパス>)` をもう一度呼ぶこと
-    (`optimize` は決定的なので、同じ入力からは同じ ρ 場が返る)。
-
-    進捗は2段ある。**`progress` は候補材料量ごと**(`SafetyLoopStep`。1回が数十秒〜数分)で、
-    **`run_progress` は SIMP の設計反復ごと**(`callback(Iteration, rho)` をそのまま
-    `design_space.run_topopt` の `progress` へ渡す。既定 `None` = 何も渡さないので挙動は不変)。
-    長い処理を外から止める手段は `run_progress` の中から例外を投げることで、その例外は
-    `_evaluate` の分類(`ValueError` 系)に拾われない型にすること
-    (`duocad/optimize_run.py` の `OptimizeCancelled` は `RuntimeError` にしてある)。
-    **参照 run は本番の格子で回るので数分かかる。** `run_progress` はそこにも渡してあるので、
-    進捗も中断も効く(`SafetyLoopStep` はまだ1つも出ていないので `evaluation` は 0 のまま)。
-    """
+    候補ごとに output/safety_loop_search.stl を上書きする。このファイルは最後に
+    評価した候補であり、採用候補とは限らない。採用した形は result.run["surface"]。
+    戻り値の詳細は SafetyLoopResult、実測と判断理由は docs/TOPOPT_SPEED.md。"""
     if not math.isfinite(target_safety_factor) or target_safety_factor <= 0.0:
         raise ValueError(f"target_safety_factor は有限の正の値であること(受け取った値: {target_safety_factor!r})")
     if not material_min_mm3 > 0.0 or not math.isfinite(material_min_mm3):

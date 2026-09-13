@@ -48,17 +48,11 @@
     **変異検査は2つ**: `derive` の呼び出しを外す(10-2 が素通り)/ `assert_load_path` の
     判定を外す(10-2・10-3・10-4 が素通り)。docs/TOPOPT.md「変異検査」に結果がある。
 
-[13] の構成(既定の導出。タスク `20260904-1416`):
+[13] の構成:
 
-13. **既定が連続値保持で、入口が1つ** — `derive_default` が連続値保持を返す(参照 run と k と
-    回廊の記録が付く)/ **塊が材料量について単調に増える**(外側の二分探索の前提)/
-    **`material_mm3` と `reference` が素通しに
-    なっている**(後続の安全率の外側ループがこの2つを使う。参照を回し直していないことを
-    秒数の一致で見る)/ **格子の違う参照は例外**(黙って別の場所を切り出さない)/ 案1が
-    残っていて既定値も動いていない(連続値保持の土台であり比較のベースライン)/
-    `derivation="bbox"` で戻せる / 未知の名前は例外 / **導出にこだわりのない呼び出し側
-    (`safety_loop.py`)が導出を名指ししていない** —— 名指しが1つでも残っていると、次に既定を
-    倒すときにそこだけ取り残される。
+13. **参照場からの切り出しと再利用** — 3つの床による範囲選択・材料量についての
+    単調性・参照場と同じ範囲のモデルの再利用・格子が異なる参照の拒否を検査する。
+    箱を作る derive の結果と、数値設定の維持も確認する。
 
 [14] の構成(空の条件面のメッセージ。タスク `20260904-1556`):
 
@@ -72,7 +66,7 @@
     **14-6/14-7**: `run_topopt` の早期return(`"result"` が `None`)を受け取る側が
     `.rho` へ無条件に触ると `AttributeError` になる。既定の導出でその位置に居るのは
     `build_reference`(参照 run)なので、そこが `ReferenceRunConditionFacesEmptyError` を
-    上げること・`derive_default`(既定)経由でも同じ例外になること・変異検査(ガードを
+    上げること・`derive_from_reference`(既定)経由でも同じ例外になること・変異検査(ガードを
     無力化すると `AttributeError` に戻ること)を見る。
 """
 
@@ -964,10 +958,10 @@ def check_case1_connectivity() -> None:
 
 
 # ===========================================================================
-# 既定の導出(入口を1つにする): タスク 20260904-1416
+# 参照場からの切り出しと再利用
 # ===========================================================================
-def check_default_derivation() -> None:
-    print("\n[13] 既定の導出(入口が1つ)")
+def check_reference_derivation() -> None:
+    print("\n[13] 参照場からの切り出しと再利用")
 
     cond = ds.demo_conditions(0.0)
 
@@ -981,13 +975,7 @@ def check_default_derivation() -> None:
     ref_material = 0.15 * case1_capacity
     reference = ds.build_reference(cond, **ref_kw)
 
-    # --- 13-1 既定は連続値保持 ----------------------------------------------
-    check(
-        "13-1 既定の導出が連続値保持(reference)",
-        ds.DEFAULT_DERIVATION == "reference" and ds.DEFAULT_DERIVATION in ds.DERIVATIONS,
-        f"DEFAULT_DERIVATION={ds.DEFAULT_DERIVATION!r} / 選べるのは {sorted(ds.DERIVATIONS)}",
-    )
-    default_space = ds.derive_default(
+    default_space = ds.derive_from_reference(
         cond, material_mm3=ref_material, reference=reference, **ref_kw
     )
     check(
@@ -1011,7 +999,7 @@ def check_default_derivation() -> None:
     )
     # **摘みは材料量に依存しない**(これが今回の直しの本体)。定数の固定は 13-2 が持つので、
     # ここは振る舞いで見る —— 材料量を2倍にしても摘みの項が1本も動かないこと。
-    doubled = ds.derive_default(
+    doubled = ds.derive_from_reference(
         cond, material_mm3=2.0 * ref_material, reference=reference, **ref_kw
     )
     check(
@@ -1042,7 +1030,7 @@ def check_default_derivation() -> None:
     # 摘みを 0 にしたうえで、材料の床が回廊を下回る量を**回廊から逆算して**選ぶ
     # (`k_mat × 材料量 / 要素体積 < 回廊`)。題材の要素数に当てはめた定数を置かない。
     floor_material = 0.5 * reference.corridor * ev / ds.K_MATERIAL
-    floored = ds.derive_default(
+    floored = ds.derive_from_reference(
         cond, material_mm3=floor_material, reference=reference, pick_ratio=0.0, **ref_kw
     )
     # **回廊がそのまま塊になる段では、床を1本削ると述語が破れる**(= 床が最小であり、
@@ -1068,7 +1056,7 @@ def check_default_derivation() -> None:
     # 材料量ごとに「繋がるまで k を上げる」作りだとここが落ちる —— 繋がった時点で止まるぶん
     # 塊が上下する(bracket 20要素で 45%→2,927要素 / 50%→2,502要素 の実測がある)。
     sizes = [
-        ds.derive_default(
+        ds.derive_from_reference(
             cond, material_mm3=case1_capacity * frac, reference=reference, **ref_kw
         ).element_count
         for frac in (0.20, 0.30, 0.40, 0.50, 0.60)
@@ -1117,21 +1105,6 @@ def check_default_derivation() -> None:
         f"{reference_defaults}",
     )
 
-    # --- 13-3 案1を名指しする口と、未知の名前 --------------------------------
-    # **`derivation="bbox"` は `optimize_run.run` が実際に名指しする口**(塊の容量と保持体積を
-    # 測るのに使う。既定の導出は材料量を要求するので、材料量の探索範囲を決める道具にできない)。
-    fallback = ds.derive_default(cond, derivation="bbox", **ref_kw)
-    check(
-        "13-3 derivation='bbox' で案1を名指しできる",
-        "reference" not in fallback.stats and fallback.element_count == case1.element_count,
-        f"{fallback.element_count} 要素(案1 {case1.element_count} 要素)",
-    )
-    check(
-        "13-3 知らない導出名は例外(黙って既定へ落ちない)",
-        _raises(ds.derive_default, ValueError, cond, derivation="nope"),
-        "derivation='nope'",
-    )
-
     # --- 13-4 material_mm3 と reference が素通しになっている -----------------
     # **後続(安全率の外側ループ)がこの2つを使う。** `material_mm3` を塞ぐと材料の床が別の量で
     # 立つことになり、`reference` を塞ぐと材料量ごとに参照を作り直すことになる。
@@ -1140,7 +1113,7 @@ def check_default_derivation() -> None:
     # `回廊/(k_mat × 案1)` = 10.3% 超が条件)—— 摘みか回廊が効いている範囲では塊は材料量で
     # 動かないので、素通しを塊の大きさで見ようとすると何を渡しても緑になる。
     wanted = 0.45 * case1_capacity
-    passed = ds.derive_default(cond, material_mm3=wanted, reference=reference, **ref_kw)
+    passed = ds.derive_from_reference(cond, material_mm3=wanted, reference=reference, **ref_kw)
     check(
         "13-4 material_mm3 が切り出しまで届いている(材料の床が効く量で見る)",
         abs(float(passed.stats["material_mm3"]) - wanted) / wanted < 1e-9
@@ -1162,9 +1135,9 @@ def check_default_derivation() -> None:
     # なる。**並びが意味を持つ**: 控えは直近1件だけなので、同じ本数を続けて要求して見る。
     # **5%/8% は材料の床(`k_mat × 材料量`)が回廊 2,197本 に届かない量**で、どちらも回廊で
     # 同じ本数になる。45% は材料の床が勝つので本数が変わる。
-    first = ds.derive_default(cond, material_mm3=0.05 * case1_capacity, reference=reference, **ref_kw)
-    same = ds.derive_default(cond, material_mm3=0.08 * case1_capacity, reference=reference, **ref_kw)
-    bigger = ds.derive_default(cond, material_mm3=0.45 * case1_capacity, reference=reference, **ref_kw)
+    first = ds.derive_from_reference(cond, material_mm3=0.05 * case1_capacity, reference=reference, **ref_kw)
+    same = ds.derive_from_reference(cond, material_mm3=0.08 * case1_capacity, reference=reference, **ref_kw)
+    bigger = ds.derive_from_reference(cond, material_mm3=0.45 * case1_capacity, reference=reference, **ref_kw)
     check(
         "13-4 本数が同じ材料量では塊を作り直さない(本数が変われば作り直す)",
         same.stats["ranked_elements"] == first.stats["ranked_elements"]
@@ -1179,7 +1152,7 @@ def check_default_derivation() -> None:
     check(
         "13-4 格子の違う参照は黙って使わない(例外)",
         _raises(
-            ds.derive_default,
+            ds.derive_from_reference,
             ValueError,
             cond,
             material_mm3=wanted,
@@ -1190,26 +1163,8 @@ def check_default_derivation() -> None:
     )
     achieved = float(passed.stats["material_mm3"])
 
-    # --- 13-5 呼び出し側が導出を名指ししていない ----------------------------
-    # **ソースを読む検査。** 名指しが1つでも残っていると、次に既定を倒したときにそこだけ
-    # 取り残される。**読むのは `duocad/topopt/` の中だけ** —— 製品の経路は
-    # `check_optimize_wiring.py` が実際に走らせて見る。
-    for fname in ("safety_loop.py",):
-        text = (_REPO_ROOT / "duocad" / "topopt" / fname).read_text(encoding="utf-8")
-        code = "\n".join(
-            line for line in text.splitlines() if not line.lstrip().startswith("#")
-        )
-        # **`ds.build_reference(` は名指しに数えない。** 参照を探索の最初に1回だけ作るのは
-        # 外側ループの仕事で、導出の中からは1回にできない。`_build_reference` は既定が
-        # `"reference"` でなければ `None` を返すので、既定を倒しても取り残されない。
-        check(
-            f"13-5 {fname} が導出を名指ししていない",
-            "ds.derive(" not in code and "ds.derive_from_reference(" not in code,
-            f"入口 derive_default 経由: {'derive_default' in code}",
-        )
-
     RESULTS["default_derivation"] = {
-        "name": ds.DEFAULT_DERIVATION,
+        "name": "reference",
         "default_elements": default_space.element_count,
         "case1_elements": case1.element_count,
         "material_mm3": achieved,
@@ -1424,17 +1379,17 @@ def check_empty_condition_face_warning() -> None:
         raised_msg[:150],
     )
 
-    # **入口(`derive_default` = 既定の導出)を通しても同じ例外になる。** 製品の経路は
+    # **入口(`derive_from_reference` = 既定の導出)を通しても同じ例外になる。** 製品の経路は
     # 参照を渡さずにここへ入ることがあり、そのとき参照は `derive_from_reference` の中で作られる。
     default_raised_type = ""
     try:
-        ds.derive_default(cond, material_mm3=material_ok, reference_max_iter=2, **ref_kw)
+        ds.derive_from_reference(cond, material_mm3=material_ok, reference_max_iter=2, **ref_kw)
     except ds.ReferenceRunConditionFacesEmptyError as exc:
         default_raised_type = type(exc).__name__
     except Exception as exc:  # noqa: BLE001
         default_raised_type = type(exc).__name__
     check(
-        "14-6 入口(derive_default = 既定の導出)を通しても同じ例外になる",
+        "14-6 入口(derive_from_reference = 既定の導出)を通しても同じ例外になる",
         default_raised_type == "ReferenceRunConditionFacesEmptyError",
         f"{default_raised_type}",
     )
@@ -1810,7 +1765,7 @@ def main() -> int:
     print("=" * 72)
     print("check_design_space.py : 塊(設計空間)の受入検査")
     print("  [1]-[4] 分離 / [5]-[9] 案1(外接直方体+余白) / [10] 連結性ガード")
-    print("  [13] 既定の導出(入口が1つ) / [14] 空の条件面のメッセージ")
+    print("  [13] 参照場からの切り出しと再利用 / [14] 空の条件面のメッセージ")
     print("  [15] 幅つき・全条件の回廊")
     print("=" * 72)
     # **1件が例外で落ちても残りを走らせる。** 実装を壊したときに最初の1件で止まると、
@@ -1826,7 +1781,7 @@ def main() -> int:
         check_case1_obstacle,
         check_case1_margin_is_load_bearing,
         check_case1_connectivity,
-        check_default_derivation,
+        check_reference_derivation,
         check_empty_condition_face_warning,
         check_width_corridor,
     ):
