@@ -926,12 +926,10 @@ ValueError: 指定した面に格子節点が1つも付いていない: 面7(pla
   で、いままでどおり最後まで解く。
 - **変異検査**: `AnchorTable.condition_face_diagnoses` を「常に `[]` を返す」に差し替えると、
   `anchor.run_pipeline` が元の `_require_nodes` の `ValueError` に戻ることを確認(検出力)。
-- **14-6/14-7 は `build_reference`(連続値保持の参照 run)を見る**(2026-09-10に案5から付け替え)。
-  正常系で誤爆しないこと / 条件面が空のとき `ReferenceRunConditionFacesEmptyError` になり
-  `AttributeError` にならないこと / 例外に構造化された診断が乗り、文面が「要素サイズ」を
-  名指しすること / `derive_from_reference` 経由でも同じ例外になること / **変異検査**:
-  `run_topopt` の戻り値から `empty_condition_faces` を消すラッパーに差し替えると元の
-  `AttributeError` に戻ること。
+- **14-6/14-7(参照 run `build_reference` での空条件面)は 2026-09-16 に旧方式ごと削除した。**
+  固定凸包では探索の前に SIMP を回す段が無く、`run_topopt` の早期 return を受け取るのは
+  `safety_loop._run_once`(`ConditionFacesEmptyError`)だけになった(`tests/test_optimize_backend.py`
+  が見る)。
 
 ### `derive_from_coarse_run`(案5・退避経路)の粗い段も塞ぐ(2026-09-05・QAのfollow-up指摘)
 
@@ -2393,7 +2391,7 @@ uv pip install --python ./.venv/Scripts/python.exe scikit-image
 | `topopt_checks/check_absolute_volume.py` | **受入検査(合否そのもの)**。体積目標を絶対量(mm^3)で指定する口を assert する |
 | `topopt_checks/check_filter_radius.py` | **受入検査(合否そのもの)**。密度フィルタ半径を mm で指定する口を assert する |
 | `topopt_checks/check_stress.py` | **受入検査(合否そのもの)**。[0] B行列と局所節点順 + [1] 一様な棒の単軸引張(解析解) + [2] 片持ち梁の曲げの M·c/I への収束(3解像度) + [3] 実単位への換算則 + [4] 代表応力の規則 + [5] 安全率を assert する |
-| `topopt_checks/check_design_space.py` | **受入検査(合否そのもの)**。[1]-[4] 塊と面アンカーの対象ソリッドの分離 + [5]-[9] 案1の導出 + [10] 連結性ガード + [13] 既定の導出 + [14] 空の条件面の通知を assert する([11] 案5 は 2026-09-10 に削除) |
+| `topopt_checks/check_design_space.py` | **受入検査(合否そのもの)**。[1]-[4] 塊と面アンカーの対象ソリッドの分離 + [5]-[9] 固定凸包の導出(2026-09-16〜) + [10] 条件ごとの連結性 + [11] 実物の基準実行との突き合わせ(`--run <実行フォルダ>` を渡したときだけ) + [14] 空の条件面の通知を assert する([13] 参照場からの切り出し・[15] 幅つき回廊は 2026-09-16 に旧方式ごと削除) |
 | `topopt_checks/check_multigrid.py` | **受入検査(合否そのもの)**。幾何マルチグリッド前処理 |
 | `topopt_checks/check_parallel.py` | **受入検査(合否そのもの)**。CPU並列化 |
 | `topopt_checks/check_safety_loop.py` | **受入検査(合否そのもの)**。安全率の外側ループ |

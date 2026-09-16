@@ -453,6 +453,32 @@ def test_every_ladder_step_reports_the_real_grid(session: Session) -> None:
     assert space.grid.spacing == pytest.approx(limits["steps"][0]["element_size_mm"])
 
 
+def test_a_requested_element_size_off_the_ladder_is_snapped_to_the_real_grid(
+    session: Session, monkeypatch
+) -> None:
+    """梯子の外の要素サイズを渡しても、`derive` が作る格子の要素サイズは要求値以下に揃う。"""
+    from duocad.topopt import safety_loop
+
+    _setup_four_conditions(session)
+    limits = optimize_run.resolution_limits(session.document, rmin_mm=6.0)
+    lo, hi = optimize_run._condition_bbox(session.document)
+    requested = 0.5 * (limits["max_element_size_mm"] + limits["min_element_size_mm"])
+    seen: dict = {}
+
+    def fake_solve(space, **kwargs):
+        seen["space"] = space
+        raise RuntimeError("stop before SIMP")
+
+    monkeypatch.setattr(safety_loop, "solve_for_safety_factor", fake_solve)
+    with pytest.raises(RuntimeError, match="stop before SIMP"):
+        optimize_run.run(
+            session.document,
+            optimize_run.OptimizeOptions(rmin_mm=6.0, element_size_mm=requested),
+        )
+    assert seen["space"].grid.spacing <= requested * (1.0 + 1e-9)
+    assert seen["space"].grid.spacing == pytest.approx(optimize_run._snap_to_grid(lo, hi, requested))
+
+
 def test_build_conditions_lists_the_condition_bodies_and_ignores_unrelated_ones(session: Session) -> None:
     """凸包の点群になるのは保持ボディと条件面のボディだけ。無関係なボディを足しても変わらない。"""
     left, right, _fixed, _load = _setup_four_conditions(session)

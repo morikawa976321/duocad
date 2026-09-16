@@ -966,7 +966,11 @@ def _run(
     opts = options or OptimizeOptions()
     bundle = build_conditions(doc)
     limits = resolution_limits(doc, rmin_mm=opts.rmin_mm)
-    spacing = _resolve_element_size(limits, opts.element_size_mm)
+    # 利用者が梯子の外の値を渡しても、`derive` が実際に作る格子の要素サイズ(要求値以下)に揃える。
+    # 梯子の値は既にその形なので変わらない。
+    spacing = _snap_to_grid(
+        limits["bbox_min"], limits["bbox_max"], _resolve_element_size(limits, opts.element_size_mm)
+    )
 
     from .topopt import trace
     trace.snapshot('resolved-conditions', bundle=bundle, limits=limits, spacing=spacing,
