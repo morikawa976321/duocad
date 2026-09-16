@@ -305,8 +305,7 @@ def body_ref(body_id: str) -> dict:
     """配信用のボディ参照。**`selection.select_body` と同じ形**にしておく。
 
     画面は受け取った参照をそのまま `modify_selection` へ渡してプリセレクトする ——
-    形が違うと、画面側にもう1つ変換が生まれる(engine
-    `duocad-target-set-taken-only-from-selection` が消したのはその形の重複である)。
+    形が違うと、画面側にもう1つ変換が生まれる。
     """
     return {"body": body_id, "kind": "body", "index": None, "provenance": None}
 

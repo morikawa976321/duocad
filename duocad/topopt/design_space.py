@@ -192,8 +192,7 @@ def assert_faces_connected(
 
     `layers=1` は `anchor.run_pipeline` が ρ=1 に固定する範囲(`keep_layers` の既定)と同じ。
     **節点が1つも付かなかった条件面があるときは連結性を見ない** —— それは
-    「要素サイズより小さい面にアンカーが付かない」という別の穴(engine
-    `face-to-node-anchoring-loses-faces-smaller-than-the-cell`)で、ここで落とすと
+    「要素サイズより小さい面にアンカーが付かない」という別の穴で、ここで落とすと
     `empty_faces()` を見る既存の口より手前で別の例外に化けて原因が分かりにくくなる。
 
     **拘束面・荷重面をそれぞれ和集合として見る**(拘束のどれか1枚と荷重のどれか1枚が

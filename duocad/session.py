@@ -1130,8 +1130,7 @@ class Session:
     def save_document(self, name: Any = None) -> dict:
         """操作ログをJSONで書き出す。**verbではない**(文書を変えないのでログに載らない)。
 
-        **契約は2つに割れている**(engine
-        `duocad-save-becomes-a-header-button`):
+        **契約は2つに割れている**:
 
         - `save_document()`(引数なし) … **いま編集しているファイルへ上書き**する。
           編集中のファイルが無ければ拒否する
