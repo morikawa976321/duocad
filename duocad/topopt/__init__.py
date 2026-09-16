@@ -12,6 +12,8 @@
     stress      — von Mises 応力・安全率(後処理)
     material    — 許容応力・ヤング率・印刷低減係数の唯一の定義
     acceptance  — 島除去後・平滑化前の6条件(幾何・CAD・境界条件・FEM)。合否の型
+    binary_search — 二値候補の探索(段階3: 初期合格の発見のみ。削除・追加・置換による
+                    体積削減の巡回は段階4)。候補生成・島処理・frontier・履歴・停止理由
     safety_loop — 安全率を入力に材料量を二分探索する外側ループ
     mesh        — marching cubes + Taubin平滑化 + STL書き出し
     bench       — 受入検査の題材の大きさ
