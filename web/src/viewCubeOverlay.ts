@@ -2,7 +2,7 @@
  * ビューキューブ(常設・26領域)の描画と操作。形と向きの計算は `viewCube.ts` の純関数が持つ。
  *
  * 同一canvasへの**第2パス**(`render`。`viewport.ts` の `tick` が毎フレーム呼ぶ)。**別のDOM要素で
- * 浮かせない**(engine [[duocad-floating-panel-eats-viewport-clicks]] の逆向きの落とし穴 ——
+ * 浮かせない**(逆向きの落とし穴 ——
  * 同じcanvasに描くぶん、`elementFromPoint` は常にcanvasを返すので、メインのポインタ経路
  * (`clickable`)の側でキューブの矩形を明示的に除外する)。
  *
@@ -24,11 +24,11 @@ import { BASE_COLOR, FOV_DEFAULT, HOME_VIEW_OFFSET, HOVER_LIGHTEN, lighten } fro
 
 /**
  * ビューキューブ(常設・26領域)。一辺[画素]と右上の余白[画素]。
- * ビューポート左上には浮くブラウザがある([[duocad-ui-moved-to-fusion-layout]])ので右上は空いている。
+ * ビューポート左上には浮くブラウザがあるので右上は空いている。
  *
  * **これはクリックを吸う矩形でもある**(`viewCubeRect` / `insideCubeRect`)ので、広げるほど
  * 右上でモデルを指せる領域が減る。`web/scripts/smoke-files.mjs` の空白クリック候補のように
- * 画面の隅を突く検査があることに注意(落とし穴は [[viewport-resize-silently-changes-what-a-click-grabs]])。
+ * 画面の隅を突く検査があることに注意。
  */
 export const CUBE_SIZE_PX = 144
 export const CUBE_MARGIN_PX = 12

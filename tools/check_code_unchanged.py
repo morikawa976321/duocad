@@ -11,8 +11,6 @@
 ことが同じ証明になる(`dist/assets/*.js` `*.css` `dist/index.html` が同一で、
 `*.js.map` だけが変わるのが期待される署名)。バンドラは本番ビルドでコメントを落とすので、
 コードを1行でも取り違えて消していればJSのハッシュが動く。
-
-いずれも context-engine [[identical-build-output-proves-comment-only-change]] の実測による。
 """
 
 from __future__ import annotations

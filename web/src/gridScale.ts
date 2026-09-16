@@ -26,7 +26,7 @@ export const FADE_FULL = 6
 
 /**
  * カメラの見え方を投影の種類ごとに表した最小限の形。**FOVは0(完全正投影)〜90で可変**
- * (engine `duocad-fov-adjustable-from-ui`)なので、カメラ距離だけで判定すると正投影で
+ * なので、カメラ距離だけで判定すると正投影で
  * 破綻する —— 正投影には「距離」に相当する量が無い。
  */
 export type CameraProjection =

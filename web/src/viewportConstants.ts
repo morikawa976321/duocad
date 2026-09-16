@@ -190,7 +190,7 @@ export const ORIGIN_GIZMO_NEUTRAL_COLOR = 0xc4c9d0
 
 /**
  * **描く順序の層番号(1箇所にまとめる)。** 生の数値をコード中に書かない
- * (engine `duocad-depth-overlay-rule` の併記事項)。
+ * (併記事項)。
  *
  * 負の値は装飾(B群。深度検査あり・深度書き込み無し)、0以上は既存の階段
  * (A群＝ピック対象は `depthTest: false` なので、順序がそのまま前後関係になる)。
@@ -213,8 +213,7 @@ export const LAYER = {
 
 /**
  * **B群の深度バイアスの単位量**(世界空間mm。視線方向へ「層番号 × これ」だけカメラ側へ
- * 寄せた深度専用コピーを射影し直す。色・UV・ピック判定に使うジオメトリ自体は動かさない
- * — engine `duocad-depth-overlay-rule`)。
+ * 寄せた深度専用コピーを射影し直す。色・UV・ピック判定に使うジオメトリ自体は動かさない)。
  *
  * **クリップ空間の z を直接ずらす方式(`gl_Position.z -= bias * w`)は選ばない** ——
  * その一定バイアスが表す世界空間の距離は、パースの非線形写像により視線距離の2乗に
@@ -336,7 +335,7 @@ export interface BodyMeshes {
 /**
  * B群(装飾。ピック対象でない)の深度バイアスを材質へ仕込む —— 視点空間(`mvPosition`。
  * 射影より前)で `層番号 × DEPTH_BIAS_UNIT` mmだけカメラ側へ寄せてから射影し直す
- * (engine `duocad-depth-overlay-rule`。理由は `DEPTH_BIAS_UNIT` のdocを参照)。
+ * (理由は `DEPTH_BIAS_UNIT` のdocを参照)。
  * **`transformed`(ローカル座標)自体は動かさない**ので、描画のズレがレイ検査
  * (`basePlaneAt` の解析交差・面のピック)へ漏れない。
  *

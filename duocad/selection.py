@@ -454,7 +454,7 @@ def require_deletable(doc: Document) -> DeleteTargets:
       **この場合は黙って何もしない、ではなく拒否する** —— 削除できる対象が実際に
       1つも無いのに verb だけ成功して見えるのは避ける。
     - **ボディ由来と図形が両方あれば両方とも対象**。1回の呼び出しで両方消えることが
-      [[cad-verb-granularity-rule]](1回のundo = 1行のログ = 1回のverb呼び出し)の要件である。
+      (1回のundo = 1行のログ = 1回のverb呼び出し)の要件である。
 
     **名前が `require_` で始まる必要がある** —— `catalog.Command.uses_selection` の宣言と
     実体の一致を `tests/test_vertex_pick.py` が接頭辞で照合しており、別名にすると

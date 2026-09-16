@@ -128,7 +128,7 @@ async function main() {
       return found
     }
 
-    /** 押す直前に射影し直してクリックする(engine `e2e-pixel-cannot-cross-command-switch`)。 */
+    /** 押す直前に射影し直してクリックする。 */
     async function clickFace(bodyId, faceIndex) {
       const at = await page.evaluate(
         (id, index) => {

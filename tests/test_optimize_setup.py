@@ -926,7 +926,7 @@ def test_the_delivered_refs_can_be_fed_straight_back_into_the_selection(
 
 
 def test_the_state_is_not_rebuilt_on_every_broadcast(session: Session) -> None:
-    """**配信のたびに全ボディを走査しない**(engine `duocad-state-meta-recomputes-all-volumes`)。
+    """**配信のたびに全ボディを走査しない**。
 
     照合が要るのは条件が指しているボディだけで、しかもその形が差し替わったときだけ。
     ここが緩むと、面を何枚か指しただけで**全配信に指紋の測り直しの税**がかかる。
@@ -968,8 +968,7 @@ def test_the_state_is_not_rebuilt_on_every_broadcast(session: Session) -> None:
 def test_the_log_broadcast_does_not_carry_every_fingerprint(session: Session) -> None:
     """状態配信は面の指紋の本文を配らない(**保存(`to_json`)は書く**)。
 
-    配ると、面を数十枚指した1操作の指紋が**以後の全配信に乗り続ける**
-    (engine `embedding-into-the-log-also-inflates-the-live-feed` と同じ太り方)。
+    配ると、面を数十枚指した1操作の指紋が**以後の全配信に乗り続ける**。
     """
     body = _box(session)
     _select(session, _face_refs(body, [1, 2, 3]))

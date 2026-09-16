@@ -31,7 +31,7 @@
  * どちらも `window.__duocad.projectPoint(world)` で外接箱の8頂点を画面座標に投影し、
  * 全頂点がビューポートの矩形内にあるかを数値で確かめる。**`projectFace` は使わない** ——
  * 最初にピックできた三角形の重心を返すので、視点や画角を変えると同じ面でも数十px跳ぶ
- * (engine [[projected-face-point-jumps-between-triangles]]。acceptance の
+ * (acceptance の
  * FOV検査を実際にこれで直している)。
  *
  * サーバはこのスクリプトが空の文書で起動し、板・STEP・立方体ともMCP経由で作る。

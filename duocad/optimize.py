@@ -13,7 +13,7 @@ verbの本体は `duocad/verbs/optimize_setup.py`、状態を配る口は
    **照合に使うのは面積と法線だけで、重心は記録するだけ**(理由は `fingerprint_mismatch`)。
 3. **配りもの** … `state_meta()` に載せる形(下記 `state_payload`)と、その**増分維持**。
 
-**配信のたびに全ボディを走査しない**(engine `duocad-state-meta-recomputes-all-volumes`)。
+**配信のたびに全ボディを走査しない**。
 照合が要るのは**条件が指しているボディだけ**で、しかも**その形状が差し替わったときだけ**
 である。条件を1つも置いていない文書ではOCCTを1回も呼ばない。
 

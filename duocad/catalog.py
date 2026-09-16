@@ -881,7 +881,7 @@ COMMANDS: tuple[Command, ...] = (
         session="set_preserve_bodies",
         uses_selection=True,
         note=(
-            "対象は引数で受けない(engine `duocad-target-set-taken-only-from-selection`)。"
+            "対象は引数で受けない。"
             "**howも無い** —— 役割を付けるだけなので数値も選択肢も要らない"
         ),
     ),
@@ -896,7 +896,7 @@ COMMANDS: tuple[Command, ...] = (
         ),
         session="set_exclude_bodies",
         uses_selection=True,
-        note="`set_preserve_bodies` と対。設計空間のverbは作らない(engine `topopt-needs-no-design-space-input`)",
+        note="`set_preserve_bodies` と対。設計空間のverbは作らない",
     ),
     Command(
         name="set_fixtures",
@@ -1207,8 +1207,7 @@ COMMANDS: tuple[Command, ...] = (
             "**AIには開けていない**。保存形式は操作ログのJSONで、AIは describe_document で"
             "同じ内容を読めるので、ファイルとして書き出す必要があるのは人の側だけである。"
             "2026-08-22に引数を `path`(サーバのCWD基準の任意パス)から `name`"
-            "(`models_dir` 配下のファイル名だけ)へ締めた"
-            "(engine `duocad-save-location-fixed-folder`)。"
+            "(`models_dir` 配下のファイル名だけ)へ締めた。"
             "**2026-08-30に `name` を任意引数にし、表(`ws=\"table\"`)から外して "
             "`_dispatch` の個別分岐へ移した** —— 表は載せた引数を全部必須にする規律なので"
             "(`Param.ws` のdocstring)、省略を許すコマンドは表に置けない。"

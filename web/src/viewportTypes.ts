@@ -862,7 +862,7 @@ export interface Viewport {
   /**
    * ビューポート右上に常設するビューキューブの矩形(コンテナ内のCSSピクセル、左上原点)。
    * **実機検査フック専用**(タスク仕様の落とし穴3) —— 寸法が変わると右上アンカーごと
-   * 矩形も動く([[viewport-resize-silently-changes-what-a-click-grabs]] と同型)ので、
+   * 矩形も動くので、
    * 検査が決め打ちの座標を使わずここから読めるようにする。
    */
   viewCubeRect(): { x: number; y: number; w: number; h: number }

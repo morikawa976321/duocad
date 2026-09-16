@@ -20,7 +20,7 @@
  * 白く潰れる(モアレ)ので、そこは局所側が先に0へ落とす。定数(`FADE_MIN`/`FADE_FULL`)は
  * `gridScale.ts` から注入するので、**数値の正はTS側の1箇所**である。
  *
- * ## 深度(engine `duocad-depth-overlay-rule` のB群)
+ * ## 深度(B群)
  *
  * **深度検査あり・`depthWrite: false` ＋ 世界空間の深度バイアス。** 全画面三角形なので
  * `gl_Position` は使えず、交点から自分で `gl_FragDepth` を書く —— `hit` を視線方向へ

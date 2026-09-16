@@ -206,7 +206,7 @@ async function main() {
     // 変わるたび呼び直す設計にはなっていない)。既定倍率のままだと丘の領域(直線でも
     // 円弧でもないベジエ境界)の三角形が画面上で数px以下になり、`projectRegion`の
     // 「1三角形につき4点試す」サンプリングが実際にクリックできる画素を1つも
-    // 見つけられずに`null`を返し続ける(engine `duocad-region-projection-fails-on-tiny-triangles`)。
+    // 見つけられずに`null`を返し続ける。
     await page.click('#sketch-look')
     await new Promise((resolve) => setTimeout(resolve, 400))
 

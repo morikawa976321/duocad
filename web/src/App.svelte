@@ -198,7 +198,7 @@
    * 無い・verbは毎回 `sketch_id` を明示で受ける・MCPのツール一覧はモードによらず固定)、
    * それが人とAIの交互操作を成立させている(人がスケッチAを見ている間にAIがBを触れる)。
    * モード遷移は「1回のundo / 操作ログ1行 / MCP1呼び出し」のどれとも一致しないので
-   * verbではない(engine [[cad-verb-granularity-rule]])—— ここは画面だけの状態である。
+   * verbではない —— ここは画面だけの状態である。
    */
   type Mode =
     | { kind: 'idle' }
@@ -1604,8 +1604,7 @@
     // 平面の枠を要るので1手遅らせられない(`handleState` と同じ理由)。**抜ける側にも呼ぶ**
     // —— 旧 `exitSketch` はここを呼んでおらず、抜けたスケッチの点マーカーが次の状態配信まで
     // 画面に残っていた(選択の掃除が空振りするとWS往復が起きず、その配信も来ない)。
-    // 残ったマーカーは手前に浮くのでクリックを奪いうる([[duocad-sketch-handles-crowd-region-picking]]
-    // と同じ型)。**`smoke-move.mjs` の辺ピックの失敗がこれで直るかは未確認** ——
+    // 残ったマーカーは手前に浮くのでクリックを奪いうる。**`smoke-move.mjs` の辺ピックの失敗がこれで直るかは未確認** ——
     // あの失敗は実測でflake(同じビルドで5回中2回緑)であり、因果は結べていない。
     drawSketches()
     if (next.kind === 'sketch') viewport?.lookAtSketch(next.id)
@@ -1623,7 +1622,7 @@
    *
    * 入った先の `sketch-pending` では `SKETCH_PENDING_COMMANDS` が**起動済みで**現れる
    * (`CommandHost` の `startCommandId`)ので、次の1クリックで貼る先が決まる ——
-   * ボタン→クリックの2手は変わらない([[duocad-sketch-start-is-two-steps-by-pointing]])。
+   * ボタン→クリックの2手は変わらない。
    */
   function startSketchMode(): void {
     setMode({ kind: 'sketch-pending', resume: resumeOf(mode) })
@@ -2142,7 +2141,7 @@
   //
   // `model.bodies` は常に編集用ボディ(`kind="solid"`)だけを持つ。参照ボディ
   // (`kind="reference"`・読み込みの原本を不可視のまま持つ二重管理)は2026-09-03に
-  // 概念ごと撤去した([[duocad-reference-body-removal-decided]])。
+  // 概念ごと撤去した。
   const partBodies = $derived(model?.bodies ?? [])
   /**
    * **面を持たないボディ**(三角形メッシュ)のID。`duocad.document.MESH_KIND` と同じ綴り。
@@ -2592,14 +2591,14 @@
          入口・札・「抜ける」がここに揃い、verbは下の `CommandHost` にだけ並ぶ。
          **常設の表示は増えていない**: 通常モードに出るのは入口ボタン2つで、
          そのうち「スケッチ」は下のverbの行から**移設**したもの、「形状最適化」は
-         元からこの位置にいた([[duocad-idle-default-state]] の「画面に何かを足して
+         元からこの位置にいた(「画面に何かを足して
          既定に据えるのではない」に触れない)。 -->
     {#if mode.kind === 'idle'}
       <div class="mode-row">
         <!-- **行の見出し**(2026-09-05)。下の `CommandHost` の「コマンド」と同じ
              `.label` の列に揃える —— 揃っていなかった間、モードの2つとverbの6つは
              ラベル列の有無だけがずれた**同じ形のボタンの帯**が2本並んでいるように見え、
-             [[duocad-modes-lifted-above-verbs]] で分けた「1つ上の次元」が画面から
+             その「1つ上の次元」が画面から
              読み取れなかった。スケッチ中/形状最適化中の行はすでにモード名を同じ列に
              置いており(下の `{#if}`)、通常モードだけが欠けていた。 -->
         <span class="label">モード</span>

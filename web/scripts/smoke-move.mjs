@@ -1208,7 +1208,7 @@ async function main() {
     // `showEdges(null, [])` で空にしてからWS往復で取り直す(`App.svelte`)。その窓では
     // `projectEdge` が `edgeBodyId !== bodyId` の早期returnで**全indexに対しnull**を返し、
     // 下のループが待たずに8本を撃ち切って「1本も選べない」と誤判定していた。**エラーは
-    // 1件も出ない**ので原因が遠い(engine `move-body-edge-pick-fails-on-clean-main`)。
+    // 1件も出ない**ので原因が遠い。
     //
     // **2周するのは、ループの最中に足元が抜ける経路があるため** —— カメラを動かすと
     // 可変解像度が180ms後に `set_view_resolution` を送り、サーバは粗さを版の鍵に入れて

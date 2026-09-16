@@ -236,8 +236,7 @@ async function main() {
       const plane = await sketchPlane()
       // **`plane.kind==='face'` だけを条件にする**(フィルタで避けない)。
       // 基準平面のグリッド/ピック優先度に取られて `plane.kind==='base'` になった場合だけ
-      // 次の候補へ進む——それは別の既知の落とし穴
-      // ([[duocad-coplanar-base-plane-pick-is-decided-by-the-last-bits]])であって、
+      // 次の候補へ進む——それは別の既知の落とし穴であって、
       // 本タスクの対象外。`plane.kind==='face'` が取れたら必ず検証する。
       if (plane?.kind === 'face') {
         onFaceA = { faceIndex, plane }

@@ -3,8 +3,7 @@
 ソリッドごとに編集用ボディ(`kind="solid"` / 可視)を1つ追加し、そのIDを返す。
 
 **STEPの読み込みはこの1 verbしかない**。参照ボディ(`kind="reference"`・読み込んだ原本を
-不可視のまま持つ二重管理)という概念は撤去済みである
-([[duocad-reference-body-removal-decided]])。
+不可視のまま持つ二重管理)という概念は撤去済みである。
 
 **ログ1行・undo1回・MCP1呼び出しに収める**。何部品あっても1操作である —— 部品ごとに
 verbを発行する形にすると、27部品を読んだ後の Ctrl+Z が最後の1個だけを戻す挙動になる。
@@ -21,7 +20,7 @@ verbを発行する形にすると、27部品を読んだ後の Ctrl+Z が最後
 通る**)ともども `io_step.py` のモジュールdocstringを参照。
 
 **旧保存ファイルの`reference_ids`キーは無視される**(`oplog.OpLog`の契約「未知のキーは
-無視する」)。移行スクリプトは書かない([[duocad-model-files-are-disposable]])。
+無視する」)。移行スクリプトは書かない。
 """
 from __future__ import annotations
 

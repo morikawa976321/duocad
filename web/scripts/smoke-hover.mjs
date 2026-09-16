@@ -87,7 +87,7 @@ async function main() {
     // スケッチ図形ホバー・スナップの検査が使う円。
     await mcp.callTool('add_circle', { sketch_id: sketch.sketch_id, center: [60, 10], radius: 10 })
     // 検証10が使う**傾いた長方形**。他の図形の輪郭から十分離す(近すぎるとスナップの
-    // 当たり判定が先に別の図形を拾う。engine `sketch-point-snap-tolerance-breaks-nearby-fixtures`)。
+    // 当たり判定が先に別の図形を拾う)。
     const TILTED = { corner: [85, 0], width: 24, height: 10, angle: 35 }
     await mcp.callTool('add_rectangle', { sketch_id: sketch.sketch_id, ...TILTED })
 
@@ -152,7 +152,7 @@ async function main() {
         polling: 50,
       })
       // **項目ごとに値を書き写して返す**。選択はSvelte 5のproxyなので、そのまま返すと
-      // 入れ子のフィールドが落ちて `{}` になる(engine `puppeteer-evaluate-drops-nested-svelte5-proxy-fields`)。
+      // 入れ子のフィールドが落ちて `{}` になる。
       const picked = await page.evaluate(() => {
         const item = (window.__duocad.selection?.items ?? [])[0]
         return item ? { kind: item.kind, body: item.body, index: item.index } : null

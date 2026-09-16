@@ -127,7 +127,7 @@ async function main() {
     }
 
     /** その面を**押し直前に射影し直して**クリックする(コマンドが変わるとツールバーの高さが
-     *  動くので、画素は持ち越さない。engine `e2e-pixel-cannot-cross-command-switch`)。 */
+     *  動くので、画素は持ち越さない)。 */
     async function clickFace(bodyId, faceIndex) {
       const at = await page.evaluate(
         (id, index) => {

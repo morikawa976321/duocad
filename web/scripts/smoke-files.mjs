@@ -152,8 +152,7 @@ async function main() {
       })
       // **ビューキューブの矩形を候補から外す**。キューブは右上のクリックを吸うので
       // `[0.97, 0.03]` がそのまま矩形の内側に入る。矩形は右上アンカーで**ビューポートの寸法が
-      // 変わると動く**ので、座標を書き換えるのではなく毎回 `viewCubeRect()` に聞いて弾く
-      // (座標を決め打ちで動かすと [[viewport-resize-silently-changes-what-a-click-grabs]] を踏む)。
+      // 変わると動く**ので、座標を書き換えるのではなく毎回 `viewCubeRect()` に聞いて弾く。
       const cube = await page.evaluate(() => window.__duocad.viewCubeRect?.() ?? null)
       const insideCube = (x, y) =>
         cube !== null && x >= cube.x && x < cube.x + cube.w && y >= cube.y && y < cube.y + cube.h
@@ -451,8 +450,8 @@ async function main() {
     ok(`redoで戻った(有効件数 ${redone.log})`)
 
     // ================================================================ 検証2: 保存と再現
-    // 保存/開くは `duocad/models/` 配下の**ファイル名の一覧**である
-    // (engine `duocad-save-location-fixed-folder`)。新規保存は `FilesPanel.svelte` の
+    // 保存/開くは `duocad/models/` 配下の**ファイル名の一覧**である。
+    // 新規保存は `FilesPanel.svelte` の
     // `#file-name-input` + `#file-save-new`、開くのは一覧の行
     // (`.files-row[data-name] .files-open`)。
     // STEP読み込みはツールバーの `#file-import-step`(起動して初めて `#file-import-path` が
@@ -565,7 +564,7 @@ async function main() {
     ok('開いた直後のヘッダが「保存済み」になった')
 
     // ================================================================ 検証2b: 編集中のファイルへ上書き
-    // **一覧の行に「上書き」ボタンは無い**(engine `duocad-save-becomes-a-header-button`)
+    // **一覧の行に「上書き」ボタンは無い**
     // —— A を編集中に B の行から上書きできると、確認も無く B が今の文書で潰れ、
     // 操作ログが唯一の正である以上それは復旧できない。上書きの口は**ヘッダの保存ボタン
     // (`#file-save`)と Ctrl+S だけ**で、行き先は常に「いま編集しているファイル」1つに

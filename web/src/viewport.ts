@@ -353,8 +353,8 @@ export function createViewport(container: HTMLElement): Viewport {
    * | 基準平面へのスケッチ中 | その平面 + それに直交する軸 |
    * | 任意面へのスケッチ中 | その面のframeのグリッドのみ(直交軸なし。本人指定) |
    *
-   * 対象待ちを3平面のままにするのは、基準平面も**クリックして指す**から
-   * (engine `duocad-sketch-start-is-two-steps-by-pointing`)。ここでXZ/YZを隠すと
+   * 対象待ちを3平面のままにするのは、基準平面も**クリックして指す**から。
+   * ここでXZ/YZを隠すと
    * 指せなくなる。3枚のときは3本の軸が全部どれかの面内に出るので、面外の軸は要らない。
    */
   function desiredGridPlanes(): {
@@ -378,7 +378,7 @@ export function createViewport(container: HTMLElement): Viewport {
       // (`sketchGridIsFacePlane` が `plane.kind` を正として判定するため —— frame一致だけでは
       // 判別できない事情は `sketchGridIsFacePlane` のdocstring参照)。貼り付けた面
       // (A群のソリッド)と完全同一平面になるので、バイアスの層番号は別枠(`sketchFaceGrid`)を使う
-      // ([[duocad-depth-overlay-rule]] B群・タスク指示)。
+      // (B群・タスク指示)。
       return {
         planes: [
           {
@@ -833,7 +833,7 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   function applySize(): void {
-    pickChanged() // 寸法が変わると同じ画素が別のものを指す(engine `viewport-resize-silently-changes-what-a-click-grabs`)
+    pickChanged() // 寸法が変わると同じ画素が別のものを指す
     const { width, height } = size()
     renderer.setSize(width, height, false)
     const aspect = width / height
@@ -1475,7 +1475,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * **基準平面の `extentFor` を使い回さない** —— あれの `BASE_EXTENT`(100mm)下限は
    * 「空の文書でもこれより狭くしない」という文書スケールの前提で、実測で40×20mmの面に
    * 対して100mmを返し、面の何倍もの大きさでグリッドが描かれて背景が線で埋まる破綻を
-   * 起こした(スクリーンショットで発見。engine `extent-for-floor-leaks-document-scale-into-face-scale`)。
+   * 起こした(スクリーンショットで発見)。
    *
    * **原点対称の半幅ではなく実測の min/max を返す** —— 面のframeの原点は
    * 面の中心ではなく**面の隅(OCCTのUVパラメータ化の原点)のことが多く**、対称な枠だと
@@ -1592,9 +1592,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * 当たれるジオメトリが無い)。`planePointAt` と同じ解析交差を3枚ぶん回し、**ピック範囲**
    * の外(|u| か |v| が `gridExtent` 超)は捨て、**レイ距離が最小の1枚**を採る。
    *
-   * **描画が無限になってもピック範囲は無限にしない** —— 無限にすると
-   * engine `duocad-base-planes-lose-to-solids-by-depth` と
-   * `viewport-resize-silently-changes-what-a-click-grabs` が同時に悪化する。
+   * **描画が無限になってもピック範囲は無限にしない**。
    * ホバー板(`rebuildBasePlaneHover`)も同じ `gridExtent` から作る —— ここだけずれると
    * 「板は見えているのに指せない」という遠い壊れ方をする。
    */
@@ -3156,8 +3154,8 @@ export function createViewport(container: HTMLElement): Viewport {
    *  頂点ごとに `size()`(= DOM の `clientWidth`/`clientHeight` 読み取り)を呼ぶと、
    *  矩形選択の実測で射影時間の92%を占めるほど遅い。
    *  ここでモジュール側にキャッシュしないこと —— リサイズで寸法が変わるため、
-   *  キャッシュすると「同じ画素が別のものを指す」落とし穴に直結する
-   *  ([[viewport-resize-silently-changes-what-a-click-grabs]])。呼び出し元が
+   *  キャッシュすると「同じ画素が別のものを指す」落とし穴に直結する。
+   *  呼び出し元が
    *  1回の矩形選択の中でだけ `size()` を読んで使い回す。 */
   function projectRaw(x: number, y: number, z: number, width: number, height: number): { x: number; y: number } | null {
     projectScratch.set(x, y, z).project(camera)

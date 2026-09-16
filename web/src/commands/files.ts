@@ -10,7 +10,7 @@
  * それはファイルの出し入れではなくモデリングの1手だからである。
  *
  * **常設の入力欄にはしない。** 起動して初めてパス欄が出る他のverbと同じ形にすることで、
- * ツールバーに打ち込み欄が居座らない(方針 [[duocad-show-only-what-is-needed]])。
+ * ツールバーに打ち込み欄が居座らない。
  * `commands/sketch.ts` の `IMPORT_SVG` がまったく同じ形をしている。
  */
 import type { CommandDef } from './command'

@@ -26,7 +26,7 @@
    *
    * `commandId` は `string | null` で、**`null` が「どのコマンドも起動していない」を表す**。
    * 見ているだけ・触っていない状態を画面に存在させるための表現である
-   * (方針 [[duocad-show-only-what-is-needed]])。`null` の間は引数の収集・プレビュー・Enterの確定を
+   * `null` の間は引数の収集・プレビュー・Enterの確定を
    * すべて素通りさせ、`#command-abort` も描かない(見えないだけではなくDOMに無い)。
    * スケッチモードの既定「選ぶ」(`select_in_sketch`)も同じ待機状態で、中断は出さない。
    * `onWants([])` / `onWantsPlane(false)` を送るので、辺・領域・基準平面のピックも止まる —

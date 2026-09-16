@@ -3,7 +3,7 @@
  *
  * ズーム連動の可変解像度(`adaptiveResolution.ts`)は目標精度が**文書全体で1つ**だったため、
  * 大きなアセンブリに深く寄ると画面外の部品まで同じ細かさで測り直す(27部品2835面で
- * 三角形118万・往復14.5秒。engine [[one-global-deviation-costs-on-large-assemblies]])。
+ * 三角形118万・往復14.5秒)。
  * **ここで絞った面添字だけが**サーバの `set_view_resolution.focus` に載る ——
  * 送らなければ従来どおり全面が細かい側になる。
  *

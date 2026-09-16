@@ -4,7 +4,7 @@
 
 **このファイルが合否そのものである。** 1件でも落ちればプロセスは非ゼロで終わる。
 検査で使う形状は **build123d でその場生成する合成ソリッドだけ**で、リポジトリ外の
-私物STEPには依存しない(stage1 と同じ理由。engine `duocad-drops-private-step-test-dependency`)。
+私物STEPには依存しない(stage1 と同じ理由)。
 
 検査の構成:
 

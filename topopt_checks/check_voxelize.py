@@ -4,8 +4,7 @@
 
 **このファイルが合否そのものである。** 1件でも落ちればプロセスは非ゼロで終わる。
 検査で使う形状は **build123d でその場生成する合成ソリッドだけ**で、リポジトリ外の
-私物STEPには依存しない(engine `duocad-drops-private-step-test-dependency` —
-私物STEP依存でテスト151件を捨てた実例がある)。実物STEPを1回通した実測は docs/TOPOPT.md にある。
+私物STEPには依存しない(私物STEP依存でテスト151件を捨てた実例がある)。実物STEPを1回通した実測は docs/TOPOPT.md にある。
 
 検査の構成:
 
