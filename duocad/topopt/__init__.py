@@ -5,10 +5,12 @@
 
 層をまたぐ契約:
     simp        — 数値の中心。**`bench` も import しない**(単体で持ち出せる状態を保つ)
+    fem         — 二値FEMの格子・剛性・線形解法(要素剛性・節点番号・行列組立・CG/direct/MG・残差検算)
     voxelize    — B-rep → 格子。`duocad.kernel` 越しに OCP を呼ぶ
     anchor      — CADの面 → 格子の節点
     design_space— 4条件 → 塊(設計空間)の導出と端から端までの実行
     stress      — von Mises 応力・安全率(後処理)
+    material    — 許容応力・ヤング率・印刷低減係数の唯一の定義
     safety_loop — 安全率を入力に材料量を二分探索する外側ループ
     mesh        — marching cubes + Taubin平滑化 + STL書き出し
     bench       — 受入検査の題材の大きさ

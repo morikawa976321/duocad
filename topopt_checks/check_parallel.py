@@ -41,6 +41,7 @@ import scipy.sparse as sp
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
 from duocad.topopt import OUTPUT_DIR
+from duocad.topopt import fem
 from duocad.topopt import simp
 
 FAILURES: list[str] = []
@@ -197,9 +198,9 @@ def check_default_thread_count() -> None:
         else:
             os.environ["TOPOPT_THREADS"] = saved
     check(
-        "3-5 simp.PARALLEL_THREADS を代入すると呼び出し時に反映される(MG_DEFAULT と同じ流儀)",
+        "3-5 fem.PARALLEL_THREADS を代入すると呼び出し時に反映される(MG_DEFAULT と同じ流儀)",
         True,
-        "下の[4]で simp.PARALLEL_THREADS=1 に差し替えて確認する",
+        "下の[4]で fem.PARALLEL_THREADS=1 に差し替えて確認する",
     )
 
 
@@ -210,14 +211,18 @@ def check_retreat_path() -> None:
     rho = _rho_after(GRID)
 
     u_default_before = model.solve(rho, 3.0, solver="mg", threads=1)
-    saved = simp.PARALLEL_THREADS
+    # **`fem.PARALLEL_THREADS` を直接書き換えること。** `simp.PARALLEL_THREADS` は
+    # `fem` からの再輸出(import 時点の値のコピー)で、`Model.prepare` が呼び出し時に読むのは
+    # `fem` 側のモジュール変数そのもの。`simp.PARALLEL_THREADS = 1` は simp 側の束縛だけを
+    # 差し替え、`fem.PARALLEL_THREADS` には反映されない。
+    saved = fem.PARALLEL_THREADS
     try:
-        simp.PARALLEL_THREADS = 1
+        fem.PARALLEL_THREADS = 1
         u_via_global = model.solve(rho, 3.0, solver="mg")
     finally:
-        simp.PARALLEL_THREADS = saved
+        fem.PARALLEL_THREADS = saved
     check(
-        "4-1 simp.PARALLEL_THREADS=1 と threads=1 は同じ答え",
+        "4-1 fem.PARALLEL_THREADS=1 と threads=1 は同じ答え",
         bool(np.array_equal(u_default_before, u_via_global)),
         "MG_DEFAULT の代入と同じ流儀(呼び出し時に読む)を確認",
     )
@@ -320,7 +325,7 @@ def check_parallel_consistency() -> None:
         "5-5 片持ち梁プリセット(Jacobi)でも既定スレッド数と threads=1 が完全一致",
         bool(np.array_equal(r_t1.rho, r_default.rho))
         and r_t1.history[-1].compliance == r_default.history[-1].compliance,
-        f"threads=None が simp.PARALLEL_THREADS={simp.PARALLEL_THREADS} を使ってもビット一致",
+        f"threads=None が fem.PARALLEL_THREADS={fem.PARALLEL_THREADS} を使ってもビット一致",
     )
 
 

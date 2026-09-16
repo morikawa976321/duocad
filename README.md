@@ -201,6 +201,9 @@ cd web; npm run dev                                 # 画面(5173)
 # SIMP側の数値の正しさ
 & .\.venv\Scripts\python.exe topopt_checks\check_simp.py
 
+# 二値FEM（要素剛性・節点番号・行列組立・CG/direct/MG・残差検算)の移設前一致
+& .\.venv\Scripts\python.exe topopt_checks\check_fem.py
+
 # メッシュ化側の正しさ（SIMPを1回回す）
 & .\.venv\Scripts\python.exe topopt_checks\check_mesh.py
 

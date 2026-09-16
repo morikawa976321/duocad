@@ -19,6 +19,12 @@ from . import design_space as ds
 from . import simp
 from . import stress
 from . import trace
+from .material import (
+    DEFAULT_ALLOWABLE_MPA,
+    DEFAULT_YOUNGS_MODULUS_MPA,
+    PETG_YIELD_MPA,
+    PRINT_DERATE,
+)
 
 _HERE = Path(__file__).resolve().parent
 
@@ -30,29 +36,8 @@ _HERE = Path(__file__).resolve().parent
 # (`.gitignore` 対象。「最後に評価した候補」のメッシュが残るだけで、採用した材料量とは限らない)。
 _SEARCH_STL_PATH = _HERE / "output" / "safety_loop_search.stl"
 
-# ---------------------------------------------------------------------------
-# 許容応力(本人決定)。**40 という数字だけをハードコードしない** ——
-# 後で必ず「この40はどこから来た」と聞かれる。
-# ---------------------------------------------------------------------------
-
-# PETG の降伏応力。フィラメントのデータシート級の公称値。実際に使う銘柄の値へ差し替えられる。
-PETG_YIELD_MPA = 50.0
-
-# 3Dプリントを想定した低減係数。**留保**: 積層方向(Z)には楽観的 —— FDM の層間接着は
-# ふつう XY 方向の40〜60%で、0.8 には届かない。さらにトポロジー最適化が出す形は、どの部分が
-# どの向きに荷重を受けるかが最適化の時点では分からないので、造形姿勢が決まるまで一つの
-# スカラーでは異方性を代表できない。**暫定値である。**
-PRINT_DERATE = 0.8
-
-# 許容応力 = 降伏応力 × 低減係数。**安全率(利用者入力)とは二重に効く** ——
-# 0.8 は材料側の低減、安全率は設計側の余裕であり、両方掛かるのは意図どおり
-# (片方に畳み込むと、造形法を変えたときにどちらを動かせばよいか分からなくなる)。
-DEFAULT_ALLOWABLE_MPA = PETG_YIELD_MPA * PRINT_DERATE  # 40.0
-
-# `stress.UnitScale` は正の有限値を要求するが、**安全率は E に依存しない**
-# (`stress.py` の契約。E が効くのは変位だけ)。ここでは表示用の変位を出すためだけの
-# 名目値(PETG のヤング率はおよそ1.5〜2.1GPa)を既定にしてある。安全率の結果には影響しない。
-DEFAULT_YOUNGS_MODULUS_MPA = 2000.0
+# 許容応力・ヤング率・印刷低減係数は `material.py` が唯一の定義を持つ(定数値と根拠のコメントは
+# そちら)。ここでは名前だけ引き継ぐ。
 
 # 探索の既定値。根拠は docs/TOPOPT.md「収束条件と回数上限をどう決めたか」。
 DEFAULT_REL_TOL = 0.08  # 材料量の相対幅(区間の [lo, hi] が (hi-lo)/hi <= 8% で収束と見なす)

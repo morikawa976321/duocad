@@ -19,6 +19,7 @@ from duocad.optimize_run import build_conditions
 from duocad.session import Session
 from duocad.topopt import anchor as an
 from duocad.topopt import design_space as ds
+from duocad.topopt import fem
 from duocad.topopt import simp
 
 MODEL = "hanger_bar_attachment.json"
@@ -100,8 +101,11 @@ def _profile_optimize_loop(
 
     rows: list[dict] = []
     solve_stats = simp.new_solve_stats()
-    prev_stats = simp._SOLVE_STATS
-    simp._SOLVE_STATS = solve_stats
+    # **`fem._SOLVE_STATS` を直接書き換えること**(`simp._SOLVE_STATS` は再輸出していない —
+    # `Model.prepare` が呼び出し時に読むのは `fem` 側のモジュール変数そのものなので、
+    # `simp` 側の名前を張り替えても届かない)。
+    prev_stats = fem._SOLVE_STATS
+    fem._SOLVE_STATS = solve_stats
     try:
         for it in range(1, max_iter + 1):
             t_iter = time.perf_counter()
@@ -164,7 +168,7 @@ def _profile_optimize_loop(
             )
     finally:
         simp._filter_conv = orig_filter
-        simp._SOLVE_STATS = prev_stats
+        fem._SOLVE_STATS = prev_stats
 
     return {
         "iterations": rows,

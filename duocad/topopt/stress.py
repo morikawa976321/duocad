@@ -8,7 +8,7 @@
 `u` が黙って古くなる欄になることと、この後処理が **`optimize` を通っていない ρ 場**
 (受入検査の一様な棒・片持ち梁)でも同じ口で動く必要があるため。費用は60反復に対して1回。
 
-無次元と実単位: `simp` は `E=1.0` / 総荷重 1.0 / 要素サイズ 1 の無次元で解く。
+無次元と実単位: `fem.Model` は `E=1.0` / 総荷重 1.0 / 要素サイズ 1 の無次元で解く。
 換算は後処理側の責任で、`UnitScale` が持つ(docs/TOPOPT.md「応力の実単位への換算則」)。
 """
 
@@ -20,15 +20,15 @@ from dataclasses import dataclass
 import numpy as np
 from . import trace
 
-from . import simp
+from . import fem
 
 # 代表応力の既定の規則。**素の max ではない。** 階段状境界の角にある1要素は離散化の産物で、
 # そこで安全率が決まると解像度を上げるほど安全率が下がり続ける(docs/TOPOPT.md の実測表)。
 DEFAULT_RHO_MIN = 0.5
 DEFAULT_PERCENTILE = 99.5
 
-# 局所節点 l = 4a+2b+c ↔ 単位立方体の頂点 (a,b,c)。**`simp.element_stiffness` の
-# `lam_nodes` と `simp._build_edof` の l のまわし方に一致していること** ——
+# 局所節点 l = 4a+2b+c ↔ 単位立方体の頂点 (a,b,c)。**`fem.element_stiffness` の
+# `lam_nodes` と `fem._build_edof` の l のまわし方に一致していること** ——
 # ここがずれると応力は「もっともらしい別の値」になって落ちない。
 _NODE_SIGNS = np.array(
     [[2 * a - 1, 2 * b - 1, 2 * c - 1] for a in (0, 1) for b in (0, 1) for c in (0, 1)],
@@ -77,7 +77,7 @@ def von_mises(tensor: np.ndarray) -> np.ndarray:
     )
 
 
-def load_resultant(model: simp.Model) -> float:
+def load_resultant(model: fem.Model) -> float:
     """荷重ベクトルの**合力**(ベクトル和)の大きさ(無次元)。
 
     **換算則の分母には使わない**(`load_magnitude_total` を使う)。自己釣り合いの荷重系で
@@ -87,7 +87,7 @@ def load_resultant(model: simp.Model) -> float:
     return float(np.linalg.norm(f.sum(axis=0)))
 
 
-def load_magnitude_total(model: simp.Model) -> float:
+def load_magnitude_total(model: fem.Model) -> float:
     """荷重ベクトルの**総量**(節点力の大きさの総和・無次元)。**換算則の分母はこれ**。
 
     合力(`load_resultant`)ではなく総和を取るのは、向きの違う荷重が同じ系に載りうるため。
@@ -136,7 +136,7 @@ class UnitScale:
     @classmethod
     def for_model(
         cls,
-        model: simp.Model,
+        model: fem.Model,
         *,
         element_mm: float,
         load_n: float,
@@ -199,7 +199,7 @@ class StressField:
         )
 
 
-def element_stress(model: simp.Model, u: np.ndarray) -> StressField:
+def element_stress(model: fem.Model, u: np.ndarray) -> StressField:
     """変位 u から要素中心の応力を出す(無次元)。
 
     **materialの応力**(D は `model.E` そのまま)であって、SIMP の見かけの剛性
@@ -216,7 +216,7 @@ def element_stress(model: simp.Model, u: np.ndarray) -> StressField:
 
 
 def solve_displacement(
-    model: simp.Model,
+    model: fem.Model,
     rho: np.ndarray,
     penal: float = 3.0,
     *,
@@ -330,7 +330,7 @@ def safety_factor(representative_mpa: float, allowable_mpa: float) -> float:
 
 @trace.stage('stress')
 def evaluate(
-    model: simp.Model,
+    model: fem.Model,
     rho: np.ndarray,
     *,
     scale: UnitScale,
