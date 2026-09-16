@@ -35,7 +35,8 @@ COMMANDS_DIR = REPO_ROOT / "web" / "src" / "commands"
 #:
 #: **送信経路の分岐がこれ1つで決まる**(順序依存の暗黙のフォールバックを置かない)。
 #: `select_in_sketch` の `ui` はサーバへ何も送らない道具で、Python側の宣言には無い。
-UI_CATEGORIES = {"sketch", "feature", "file", "solid", "ui"}
+#: `query` は読み取り専用(測定)で、宣言側の `category="query"` と同じ綴り。
+UI_CATEGORIES = {"sketch", "feature", "file", "solid", "ui", "query"}
 
 
 def _catalog():
@@ -347,8 +348,9 @@ HOW_ARG_KINDS = {"number", "choice", "text"}
 def _args_of(chunk: str) -> list[tuple[str, str]]:
     """1つの `CommandDef` の本文から `args: [...]` を読み、`(kind, 印)` の並びを返す。
 
-    2つ目の枠は種別ごとに意味が違う: 選択引数では `max`(`'1'` / `'null'` / 数字)、
-    数値引数では `fromPoints: true` を持つときだけ `"fromPoints"`。どちらでもなければ空文字。
+    2つ目の枠は種別ごとに意味が違う: 選択引数では `min..max`(`'1..1'` / `'1..null'` /
+    `'2..2'`)、数値引数では `fromPoints: true` を持つときだけ `"fromPoints"`。
+    どちらでもなければ空文字。
     `build(...)` の本体を巻き込まないように**角括弧の対応で args だけを切り出す**
     (本体には `values.face` 等が並ぶだけだが、将来の書き足しで `kind:` が現れうる)。
     """
@@ -374,8 +376,9 @@ def _args_of(chunk: str) -> list[tuple[str, str]]:
     for index, match in enumerate(marks):
         tail = region[match.end():marks[index + 1].start() if index + 1 < len(marks) else len(region)]
         maximum = re.search(r"\bmax:\s*(null|\d+)", tail)
+        minimum = re.search(r"\bmin:\s*(\d+)", tail)
         if maximum:
-            args.append((match.group(1), maximum.group(1)))
+            args.append((match.group(1), f"{minimum.group(1) if minimum else '?'}..{maximum.group(1)}"))
         elif re.search(r"\bfromPoints:\s*true", tail):
             args.append((match.group(1), "fromPoints"))
         else:
@@ -402,15 +405,20 @@ def _needs_enter(args: list[tuple[str, str]]) -> bool:
     UIの挙動は静かに変わる。ここが同じ規則を独立に持っていると、下の表との突き合わせで
     「どのverbのEnter要否が変わったか」が名指しで出る。
 
-    規則は2つ: **対象を複数取りうる**(選択の `max !== 1` / `entities`)か、
+    規則は2つ: **対象を複数取りうる**(選択の上限が無い・上限が下限より大きい / `entities`)か、
     **howの入力がある**(数値・選択肢・文字列)なら Enter が要る。どちらでもなければ即適用。
+    **下限＝上限の選択(測定の「ちょうど2つ」)は複数取りうる側に数えない** —— 何個で終わりかが
+    機械に分かる。
     **列挙していない種別は即適用の側**(TS側の既定と同じ。点と直接ピック(`pick`)がそれ ——
     どちらも対象を1つだけ指すので、指した時点で「終わり」が機械に分かる)。
     **`fromPoints` の数値は how に数えない** —— 空欄のままでも点から値が決まる。
     """
     for kind, mark in args:
-        if kind == "selection" and mark != "1":
-            return True
+        if kind == "selection":
+            low, high = mark.split("..")
+            if high == "null" or int(high) > int(low):
+                return True
+            continue
         if kind == "number" and mark == "fromPoints":
             continue
         if kind == "entities" or kind in HOW_ARG_KINDS:
@@ -465,6 +473,7 @@ ENTER_REQUIRED = {
     "set_fixtures": True,          # 面は何個でも(0個もよい=解除)
     "set_loads": True,             # 面は1枚以上 + 向き(choice) + 大きさ(number)
     "clear_loads": True,           # 面は何個でも(0個もよい=全部外す)
+    "measure": False,              # **対象はちょうど2つ(下限＝上限)。howも無い → 即適用**(verbではない)
 }
 
 
@@ -474,7 +483,7 @@ def test_the_command_arguments_are_readable():
     assert len(args) == len(ENTER_REQUIRED), (
         f"UIのコマンドの数が変わった(Enter要否の表を更新すること): {sorted(args)}"
     )
-    assert args["extrude_face"] == [("selection", "1"), ("number", "")], (
+    assert args["extrude_face"] == [("selection", "1..1"), ("number", "")], (
         f"引数の読み取りが壊れている: {args['extrude_face']}"
     )
     assert args["select_in_sketch"] == [], f"引数の読み取りが壊れている: {args['select_in_sketch']}"
@@ -482,8 +491,8 @@ def test_the_command_arguments_are_readable():
 
 def test_which_commands_apply_without_enter():
     """**Enter要否は `args` からの導出**であり、いま即適用になるのはスケッチの描く4verbと
-    `sketch_create` の5つである(`select_in_sketch` は引数が無く、完成させるクリックが
-    無いので発火しない側で数に入らない)。
+    `sketch_create`、それに測定(`measure`。対象がちょうど2つで how が無い)の6つである
+    (`select_in_sketch` は引数が無く、完成させるクリックが無いので発火しない側で数に入らない)。
 
     per-commandのフラグを置かない設計(`command.ts` の `needsEnter`)なので、引数の書き方を
     変えると**別のverbのEnter要否が黙って変わる** —— 例えば `extrude_face` の選択引数から
@@ -502,6 +511,7 @@ def test_which_commands_apply_without_enter():
         "add_circle",
         "add_line",
         "add_rectangle",
+        "measure",
         "select_in_sketch",
         "sketch_create",
     ], f"即適用になるコマンドの顔ぶれが変わった: {immediate}"

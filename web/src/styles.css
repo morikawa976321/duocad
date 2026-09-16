@@ -408,3 +408,22 @@ button:disabled {
   color: var(--dim-2);
   background: color-mix(in oklab, var(--control-bg) 45%, transparent);
 }
+
+/* 測定の読み札(issue #10)。結果があるときだけ `.stage` の上端中央に浮く。
+   `.stage` の position:absolute の子なので `.viewport` の寸法には触らない(冒頭の不変条件)。
+   `pointer-events: none` —— 札の下の面もそのまま指せる。 */
+.measure-readout {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2;
+}

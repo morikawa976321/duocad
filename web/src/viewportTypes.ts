@@ -159,6 +159,16 @@ export interface VertexMarker extends VertexRef {
 }
 
 /**
+ * 画面に出す測定1件(issue #10)—— 測った2点(世界座標)と札の文字。
+ * `from` / `to` はコアの `measure` の `between.from` / `between.to` そのもの(垂線の足を含む)。
+ */
+export interface MeasurementVisual {
+  from: number[]
+  to: number[]
+  label: string
+}
+
+/**
  * ボディの幽霊の**回転**(`move_body` の `mode="rotate"`)。
  *
  * **コアが解決した後の数値と同じ形**である(`duocad/verbs/move_body.py` の
@@ -554,6 +564,15 @@ export interface Viewport {
    * **奥のマーカーも見え、奥のマーカーも指せる**(辺と同じく深度検査をしない)。
    */
   showVertices(markers: VertexMarker[], origin: 'user' | 'proposed'): void
+  // ------------------------------------------------------------------ 測定(issue #10)
+  /**
+   * 測った2点を結ぶ線・両端の点・数値の札を出す(`null` で消す)。**指せない**(装飾。
+   * `allFaceMeshes` は変わらない)。奥にあっても見える(深度検査をしない)—— 点から面へ
+   * 下ろした垂線の足は面の裏やソリッドの内側に落ちうる。
+   */
+  showMeasurement(visual: MeasurementVisual | null): void
+  /** いま出している測定の線(実機検査用。出していなければ null)。 */
+  measurementInfo(): MeasurementVisual | null
   /**
    * 今そのハイライトに使っている色(16進)。出していない種別は null。
    *

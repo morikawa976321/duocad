@@ -120,6 +120,7 @@
     onWantsPlane = () => {},
     onWantsPoint = () => {},
     onWantsPick = () => {},
+    onWantsVertices = () => {},
   }: {
     /** コアの選択集合(state.selection)。 */
     selection: SelectionState | null
@@ -201,6 +202,12 @@
      * 中心に使う頂点を指せるようにするにはこの知らせが要る)。
      */
     onWantsPick?: (target: PickTarget | null) => void
+    /**
+     * 起動中のコマンドが**頂点そのものを対象にする**か(`SelectionArgSpec.pickVertices`。測定)。
+     * `onWantsPick('vertex')` と同じ受動的な知らせで、アプリ層はこれを見て対象ボディの
+     * 頂点を候補として出し、辺より先に取る。
+     */
+    onWantsVertices?: (wants: boolean) => void
   } = $props()
 
   /** 打ち終わってからプレビューを投げるまでの待ち[ms]。 */
@@ -442,6 +449,13 @@
   /** 直接ピックを待っているか(待っている**種別**をそのまま知らせる)。無起動では常に null。 */
   $effect(() => {
     onWantsPick(pendingPick?.target ?? null)
+  })
+
+  /** 頂点そのものを対象にするか(`SelectionArgSpec.pickVertices`)。無起動では常に false。 */
+  $effect(() => {
+    onWantsVertices(
+      (command?.args ?? []).some((spec) => spec.kind === 'selection' && spec.pickVertices === true),
+    )
   })
 
   // ---------------------------------------------------------------- プレビュー
@@ -692,6 +706,13 @@
     armedSelections = selfSelections
     onStart(nextId)
     focusFirstNumber()
+    // **読み取り専用(`query`)だけは、起動した時点で揃っていればその場で走らせる**
+    // (`needsEnter` のdocstring末尾の例外)。verb で同じことをすると「AIが選んだ面のまま
+    // 押し出しを押した」だけで形が変わるが、測るだけなら取り返しのつかないものが無い ——
+    // 2つ選んでから「測定」を押す手が、押し直しの2手にならない。
+    if (command !== null && command.category === 'query' && !needsEnter(command) && missing === null) {
+      commit()
+    }
   }
 
   /**

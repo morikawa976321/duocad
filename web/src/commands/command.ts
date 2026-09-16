@@ -172,6 +172,13 @@ export interface SelectionArgSpec extends ArgSpecCommon {
    * **サーバは通すのに画面だけが「面が選ばれていない」と言う**食い違いが出る。
    */
   kinds?: SelectableKind[]
+  /**
+   * **頂点そのものを対象にする**引数(測定)。起動している間、対象ボディの頂点を候補として
+   * 全部出し、辺より先に取る(`App.svelte` の `vertexCandidateBody` / `viewport.preferVertices`)。
+   * `kinds` に `'vertex'` があるだけでは出さない —— `move_body` / `mirror_body` の頂点は
+   * 「ボディを名指しする手」の1つでしかなく、その候補を描く理由が無い。
+   */
+  pickVertices?: true
   min: number
   max: number | null
 }
@@ -391,6 +398,8 @@ export type BuildResult =
  *
  * - `sketch`  … スケッチのverb(`sketch_id` を足して送る。スケッチモードでなければ送らない)
  * - `feature` … ソリッドのverb(失敗しても打った値を戻して打ち直せるようにする)
+ * - `query`   … 読み取り専用(文書もログも変えない。応答は状態配信ではなく専用の返事 ——
+ *   測定。`App.svelte` の `handleMeasure`)
  * - `ui`      … サーバへ何も送らない道具(スケッチモードの「選ぶ」だけ)
  *
  * **ファイル操作(保存/開く/STEP入出力等)の多くはこの分類を経由しない**(`FilesPanel.svelte`
@@ -400,7 +409,7 @@ export type BuildResult =
  *
  * **`ui` 以外はコアの宣言(`duocad/catalog.py`)の `category` と同じ値**である。
  */
-export type CommandCategory = 'sketch' | 'feature' | 'file' | 'ui'
+export type CommandCategory = 'sketch' | 'feature' | 'file' | 'query' | 'ui'
 
 export interface CommandDef {
   /** verb名。**プレビューと確定で同じものをサーバへ送る**(食い違うと嘘のプレビューになる)。 */
@@ -497,6 +506,11 @@ export function argKinds(spec: SelectionArgSpec): SelectableKind[] {
   return spec.kinds ?? [spec.shapeKind]
 }
 
+/** 件数の数え方。**複数の種別を食う引数は「つ」**(面/辺/頂点が混ざるので「面」では嘘になる)。 */
+function counterFor(spec: SelectionArgSpec): string {
+  return argKinds(spec).length > 1 ? 'つ' : KIND_COUNTERS[spec.shapeKind]
+}
+
 export function itemsForArg(spec: SelectionArgSpec, selection: SelectionState | null): SelectionRef[] {
   const kinds = argKinds(spec)
   const items = (selection?.items ?? []).filter((item) => kinds.includes(refKind(item)))
@@ -521,7 +535,7 @@ export function overflowNote(
     const kinds = argKinds(spec)
     const total = (selection?.items ?? []).filter((item) => kinds.includes(refKind(item))).length
     if (total > spec.max) {
-      const counter = KIND_COUNTERS[spec.shapeKind]
+      const counter = counterFor(spec)
       return `${spec.label}は${spec.max}${counter}まで(いま${total}${counter}。Ctrl+クリックで外す)`
     }
   }
@@ -585,12 +599,13 @@ export function firstMissingArg(command: CommandDef, values: ArgValues): ArgSpec
 /**
  * その引数は**対象(target)を複数取りうる**か —— `needsEnter` の条件(1)。
  *
- * 選択引数は上限が1でなければ複数取りうる(`max === null` は何本でも)。図形引数
- * (`entities`)は上限そのものが無い。**いつ選び終わったかは機械には分からない**ので、
- * 終わりを人が言う必要がある。
+ * 選択引数は上限が無いか(`max === null` は何本でも)、上限が下限より大きければ複数取りうる。
+ * **下限＝上限(測定の「ちょうど2つ」)は当たらない** —— 何個で終わりかが機械に分かるので、
+ * 終わりを人が言う必要が無い(1つに固定した `max: 1` と同じ理屈)。図形引数(`entities`)は
+ * 上限そのものが無い。**いつ選び終わったかは機械には分からない**ので、終わりを人が言う必要がある。
  */
 function takesManyTargets(spec: ArgSpec): boolean {
-  if (spec.kind === 'selection') return spec.max !== 1
+  if (spec.kind === 'selection') return spec.max === null || spec.max > spec.min
   return spec.kind === 'entities'
 }
 
@@ -646,7 +661,9 @@ export function commitsGhost(command: CommandDef): boolean {
  *
  * **Enterが要らない = Enterが効かない、ではない。** 起動より前から対象が揃っていた場合
  * (AIが選んだ面のまま起動した等)は即適用の発火条件を満たさないので、Enter(またはボタンの
- * 押し直し)が唯一の適用手段として残る。
+ * 押し直し)が唯一の適用手段として残る。**読み取り専用(`category: 'query'`)だけは例外**で、
+ * 起動した時点で揃っていればその場で走る(`CommandHost.start()`)—— 取り返しのつかない
+ * ものが無いので、押し直しの1手を要求する理由が無い。
  */
 export function needsEnter(command: CommandDef): boolean {
   return command.args.some((spec) => takesManyTargets(spec) || isHowInput(spec))
@@ -661,7 +678,7 @@ export function promptFor(spec: ArgSpec, values: ArgValues): string {
   if (spec.kind === 'selection') {
     const have = ((values[spec.name] ?? []) as SelectionRef[]).length
     const need = spec.min - have
-    return `${spec.label}を${need}${KIND_COUNTERS[spec.shapeKind]}選ぶ(クリック / Shift・Ctrl+クリックでトグル / 左ドラッグで囲む)`
+    return `${spec.label}を${need}${counterFor(spec)}選ぶ(クリック / Shift・Ctrl+クリックでトグル / 左ドラッグで囲む)`
   }
   if (spec.kind === 'point') {
     return `${spec.label}をクリック(スケッチ平面の上)`
