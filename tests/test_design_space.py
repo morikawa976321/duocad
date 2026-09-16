@@ -312,6 +312,50 @@ def test_a_condition_left_on_another_island_is_a_failure_not_a_majority_vote() -
     assert "keep_pad" in str(caught.value)
 
 
+@pytest.mark.parametrize("split_names", [
+    ("keep_pad",), ("fixed_face_1",), ("load_face_2",),
+    ("keep_pad", "fixed_face_1", "load_face_2"),
+])
+def test_conditions_spanning_islands_fail_even_with_a_common_component(split_names) -> None:
+    """全条件に共通する島があっても、条件の一部が別の島に残る場合は失敗する。"""
+    shape = (12, 4, 4)
+    design = np.zeros(shape, dtype=bool)
+    design[:8] = True
+    design[10:] = True
+    seeds = {name: _seed(shape, (1, 1, 1)) for name in
+             ("fixed_face_1", "load_face_2", "keep_pad")}
+    for name in split_names:
+        seeds[name][11, 1, 1] = True
+    with pytest.raises(ds.DesignSpaceDisconnectedError) as caught:
+        ds.connect_seeds(design, seeds)
+    assert caught.value.components == 2
+    assert set(caught.value.unreached) == set(split_names)
+    for name in split_names:
+        assert caught.value.seeds[name]["labels"] == [1, 2]
+        assert name in str(caught.value)
+    design[8:10] = True
+    connected, _ = ds.connect_seeds(design, seeds)
+    assert ds.element_components(connected)[1] == 1
+    assert np.array_equal(connected, design)
+
+
+def test_a_compound_keep_body_separated_by_an_obstacle_fails() -> None:
+    """1ボディ内の保持片が除外壁の向こうに孤立したら、CADからの導出でも検出する。"""
+    keep = _box((10, 10, 10), (-15, 0, 0)) + _box((10, 10, 10), (15, 0, 0))
+    conditions = ds.Conditions(
+        keep=keep,
+        fixed_faces=_face(keep, (-1, 0, 0), (-20, 0, 0)),
+        load_faces=_face(keep, (0, 0, 1), (-15, 0, 5)),
+        obstacle=_box((4, 100, 100), (0, 0, 0)),
+        bodies=(ds.condition_body("compound", keep, roles=("keep", "fixed", "load")),),
+    )
+    with pytest.raises(ds.DesignSpaceDisconnectedError) as caught:
+        ds.derive(conditions, spacing=2)
+    assert caught.value.components == 2
+    assert caught.value.unreached == ["keep_compound"]
+    assert caught.value.seeds["keep_compound"]["labels"] == [1, 2]
+
+
 def test_a_condition_with_no_element_inside_the_space_is_named() -> None:
     shape = (6, 4, 4)
     design = np.ones(shape, dtype=bool)

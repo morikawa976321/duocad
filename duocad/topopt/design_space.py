@@ -77,7 +77,7 @@ class DesignSpaceConflictError(ValueError):
 
 
 class DesignSpaceDisconnectedError(ValueError):
-    """塊の中で、全条件(保持ボディ・拘束面・荷重面)を含む連結成分が無い。
+    """塊の中で、全条件(保持ボディ・拘束面・荷重面)の必要領域が単一成分に収まらない。
 
     **`DesignSpaceTooSmallError` とは別の型にしてある。** あちらは「余白を上げろ」と言う文面で、
     分断には効かない直し方を指す —— 分断の直し方は除外ソリッドを削るか条件を置き直すことで、
@@ -148,7 +148,8 @@ def connect_seeds(design: np.ndarray, seeds: dict) -> tuple[np.ndarray, dict]:
       塊の外にあるケース。
     - 全ての種が共有する成分が1つも無ければ同じ例外(`unreached` は、最も多くの条件が
       属する成分に入っていない条件)。**最大成分を選んで成功にしない。**
-    - どの種にも触れない成分だけを落とす。種に触れる成分は(一部の要素しか触れていなくても)残す。
+    - 1つの種でも複数成分にまたがれば同じ例外(`unreached` は分断された条件)。
+      条件の一部だけを残して成功にしない。どの種にも触れない成分だけを落とす。
     """
     mask = np.asarray(design, dtype=bool)
     if not seeds:
@@ -183,6 +184,15 @@ def connect_seeds(design: np.ndarray, seeds: dict) -> tuple[np.ndarray, dict]:
             unreached=missing,
             seeds=per,
         )
+    split = [name for name, p in per.items() if len(p["labels"]) > 1]
+    if split:
+        raise DesignSpaceDisconnectedError(
+            f"条件の必要領域が複数の連結成分に分かれている: {', '.join(split)}。{where}"
+            "除外ソリッドによる分断や、要素サイズによる接続部分の取りこぼしを確認すること。",
+            components=count,
+            unreached=split,
+            seeds=per,
+        )
     label_sets = [set(p["labels"]) for p in per.values()]
     common = set.intersection(*label_sets)
     if not common:
@@ -200,7 +210,7 @@ def connect_seeds(design: np.ndarray, seeds: dict) -> tuple[np.ndarray, dict]:
             unreached=unreached,
             seeds=per,
         )
-    kept = sorted(set().union(*label_sets))
+    kept = sorted(common)
     dropped = [lab for lab in range(1, count + 1) if lab not in kept]
     final = mask & np.isin(labels, kept)
     report = {
