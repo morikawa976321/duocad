@@ -43,6 +43,7 @@ import {
   type UvBox,
 } from './gridScale'
 import { createOriginGizmo } from './originGizmo'
+import { createSectionView } from './sectionView'
 import { createPlaneGrid, type PlaneFrame, type PlaneGrid } from './planeGrid'
 import { distSqPointSegment, pickNearestWithinRadius, type ScreenPickCandidate } from './screenPick'
 import { buildSketchLine, createSketchLineMaterial, type SketchFatLine } from './sketchLine'
@@ -58,6 +59,7 @@ import {
   type FaceRef, type GeometryPayload, type OptimizeDebugAnchors, type OptimizeDebugGrid, type OptimizeDebugState,
   type OptimizeDebugVoxels, type OptimizeLoadVisual, type OptimizeVisualState, type PickEvent, type PickMode, type SketchDraw,
   type SketchEntityHit, type SketchPlaneRef, type VertexMarker, type VertexRef, type Viewport, type ViewportResolution,
+  type SectionInfo, type SectionState,
 } from './viewportTypes'
 import {
   AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR, BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_AXES, BASE_PLANE_HOVER_OPACITY,
@@ -72,11 +74,17 @@ export { bodyGhostMatrix, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, isSelectable
 export type {
   BodyGeometryUpdate, BodyGhost, BodyGhostRotation, BoxSelectEvent, EdgeRef, FaceGeometry, FaceRef, GeometryPayload,
   OptimizeDebugAnchors, OptimizeDebugGrid, OptimizeDebugState, OptimizeDebugVoxels, OptimizeLoadVisual, OptimizeVisualState,
-  PickEvent, PickMode, SketchDraw, SketchEntityHit, SketchPlaneRef, VertexMarker, VertexRef, Viewport, ViewportResolution,
+  PickEvent, PickMode, SectionInfo, SectionState, SketchDraw, SketchEntityHit, SketchPlaneRef, VertexMarker, VertexRef,
+  Viewport, ViewportResolution,
 }
 
 export function createViewport(container: HTMLElement): Viewport {
-  const renderer = new THREE.WebGLRenderer({ antialias: true })
+  // **`stencil: true` は断面の切り口(`sectionView.ts`)のため。** three r163 以降の既定は false で、
+  // 無いとステンシルを使う板が黙って描かれない(例外は出ない)。
+  const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true })
+  // 材質ごとのクリップ平面(断面)を有効にする。`renderer.clippingPlanes`(全材質)は使わない ——
+  // グリッド・スケッチ・ギズモ・キューブまで切れてしまう。
+  renderer.localClippingEnabled = true
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
   renderer.domElement.style.display = 'block'
   renderer.domElement.style.width = '100%'
@@ -197,6 +205,25 @@ export function createViewport(container: HTMLElement): Viewport {
   // 歪めない、既存装飾群と同じ規律)。既定は表示。
   const originGizmo = createOriginGizmo()
   scene.add(originGizmo.object)
+
+  // ------------------------------------------------------------------ 断面表示(issue #6)
+  //
+  // 平面・切り口・ハンドルと、ボディ側の材質へ渡す共有のクリップ平面配列(`sectionView.ts`)。
+  // `root` にも `gridRoot` にも入れない(原点ギズモと同じ理由)。渡す関数はどれも後で
+  // 呼ばれる閉包なので、ここで作っても TDZ にはかからない。
+  const section = createSectionView({
+    rayAt,
+    camera: () => camera,
+    project(point) {
+      const { width, height } = size()
+      return projectRaw(point.x, point.y, point.z, width, height)
+    },
+    onDrag(position) {
+      sectionDragListener?.(position)
+    },
+    pickChanged,
+  })
+  scene.add(section.object)
 
   /**
    * 基準平面のピック範囲の半幅[mm]。**描画範囲ではない**(格子は無限) ——
@@ -704,6 +731,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const material = new THREE.MeshLambertMaterial({
       color: hovered ? lighten(base, HOVER_LIGHTEN) : base,
       side: THREE.DoubleSide,
+      clippingPlanes: section.clipPlanes, // 断面(ON のときだけ1枚入る共有配列)
     })
     faceMaterialCache.set(key, material)
     return material
@@ -715,8 +743,9 @@ export function createViewport(container: HTMLElement): Viewport {
     opacity: 0.55,
     // 半透明どうしが互いを隠して真っ黒な塊にならないようにする(奥行きは書かない)
     depthWrite: false,
+    clippingPlanes: section.clipPlanes,
   })
-  const edgeMaterial = new THREE.LineBasicMaterial({ color: EDGE_COLOR })
+  const edgeMaterial = new THREE.LineBasicMaterial({ color: EDGE_COLOR, clippingPlanes: section.clipPlanes })
 
   const raycaster = new THREE.Raycaster()
   /** body_id -> そのBodyが画面に持つメッシュ。非表示・未読込のBodyはキーごと無い。 */
@@ -739,6 +768,7 @@ export function createViewport(container: HTMLElement): Viewport {
   const previewMeshes = new Map<string, { objects: THREE.Object3D[]; disposables: Array<{ dispose(): void }> }>()
   let pickListener: ((event: PickEvent) => void) | null = null
   let boxSelectListener: ((event: BoxSelectEvent) => void) | null = null
+  let sectionDragListener: ((position: number) => void) | null = null
   let planeMoveListener:
     | ((point: { u: number; v: number } | null, sketchEntity: SketchEntityHit | null) => void)
     | null = null
@@ -854,6 +884,7 @@ export function createViewport(container: HTMLElement): Viewport {
     if (!existing) return
     for (const object of existing.sceneObjects) root.remove(object)
     for (const item of existing.disposables) item.dispose()
+    section.removeBody(bodyId)
     bodies.delete(bodyId)
     rawGeometry.delete(bodyId)
     if (faceSamples.delete(bodyId)) focusGeneration += 1
@@ -884,11 +915,13 @@ export function createViewport(container: HTMLElement): Viewport {
 
   function buildBody(bodyId: string, payload: GeometryPayload): void {
     const faceMeshes: THREE.Mesh[] = []
+    const faceGeometries: THREE.BufferGeometry[] = []
     const sceneObjects: THREE.Object3D[] = []
     const disposables: Array<{ dispose(): void }> = []
     for (const face of payload.faces) {
       if (face.indices.length === 0) continue // 三角形が取れなかった面(サーバが警告を出す)
       const geometry = faceGeometry(face)
+      faceGeometries.push(geometry)
       // **素の材質**で生む(役割・選択・ホバーは `applyFaceMaterials()` が
       // `rebuildPickIndex()`(→ `invalidateHover()`)経由ですぐに塗り直す)。
       const mesh = new THREE.Mesh(geometry, faceMaterialFor('none', 'plain', false))
@@ -907,6 +940,7 @@ export function createViewport(container: HTMLElement): Viewport {
       sceneObjects.push(line)
       disposables.push(edges)
     }
+    section.setBody(bodyId, faceGeometries) // 切り口の偶奇判定用(ON のときだけ結合メッシュを作る)
     bodies.set(bodyId, { faceMeshes, sceneObjects, disposables })
     rawGeometry.set(bodyId, payload)
     faceSamples.set(bodyId, sampleFaces(payload))
@@ -966,6 +1000,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const entry = bodies.get(bodyId)
     if (!entry) return
     for (const object of entry.sceneObjects) object.visible = visible
+    section.setBodyVisible(bodyId, visible) // 隠した本物の切り口も一緒に消す
   }
 
   function showPreview(entries: BodyGeometryUpdate[]): void {
@@ -1539,28 +1574,73 @@ export function createViewport(container: HTMLElement): Viewport {
     annotations.draw(state)
   }
 
+  /** その画素を通るレイ(`raycaster.ray` を今のカメラで作り直して返す。断面のハンドル判定も借りる)。 */
+  function rayAt(offsetX: number, offsetY: number): THREE.Ray {
+    const { width, height } = size()
+    const ndc = new THREE.Vector2((offsetX / width) * 2 - 1, -(offsetY / height) * 2 + 1)
+    raycaster.setFromCamera(ndc, camera)
+    return raycaster.ray
+  }
+
+  function faceRefOf(hit: THREE.Intersection): FaceRef | null {
+    const bodyId = hit.object.userData.bodyId
+    const faceIndex = hit.object.userData.faceIndex
+    if (typeof bodyId !== 'string' || typeof faceIndex !== 'number') return null
+    return { bodyId, faceIndex }
+  }
+
   /**
    * 面のピック。**レイ距離も返す** —— 基準平面と面のどちらが手前かを比べるのに要る
    * (`onPointerUp`)。`pickAt` はこれの薄い覆いで、距離を要らない呼び出し側のためにある。
+   *
+   * **`ref` が null の当たりは断面の切り口** —— 指せないが奥のものを隠す実体なので、
+   * 距離だけ返す(基準平面との勝負に使う)。
+   *
+   * 断面が ON のとき、レイキャストはクリップ平面を見ないので、平面をよぎる位置(`section.cut`)
+   * を境に当たりを捨てる。切られた側からレイが入る場合は、よぎる点が中身かどうかを「同じ
+   * ボディの表面をそれまでに奇数回またいだか」で決める(描画のステンシルの偶奇と同じ規則。
+   * `sectionView.ts`)。
    */
   function faceHitAt(
     offsetX: number,
     offsetY: number,
-  ): { ref: FaceRef; distance: number } | null {
-    const { width, height } = size()
-    const ndc = new THREE.Vector2((offsetX / width) * 2 - 1, -(offsetY / height) * 2 + 1)
-    raycaster.setFromCamera(ndc, camera)
+  ): { ref: FaceRef | null; distance: number } | null {
+    const ray = rayAt(offsetX, offsetY)
     // **隠しているメッシュは指せない**(プレビュー中の本物。three.js の Raycaster は
     // `visible` を見ないので、ここで明示的に外す)。
     const hits = raycaster.intersectObjects(
       allFaceMeshes.filter((mesh) => mesh.visible),
       false,
     )
-    if (hits.length === 0) return null
-    const bodyId = hits[0].object.userData.bodyId
-    const faceIndex = hits[0].object.userData.faceIndex
-    if (typeof bodyId !== 'string' || typeof faceIndex !== 'number') return null
-    return { ref: { bodyId, faceIndex }, distance: hits[0].distance }
+    const cut = section.cut(ray)
+    if (cut === 'cut') return null
+    if (cut === 'kept') {
+      const ref = hits.length === 0 ? null : faceRefOf(hits[0])
+      return ref === null ? null : { ref, distance: hits[0].distance }
+    }
+    if (cut.originKept) {
+      // 残る側から切られた側へ向かうレイ: 平面の手前までしか見えない(切り口は裏から見えない)
+      const first = hits[0]
+      if (!first || first.distance >= cut.t) return null
+      const ref = faceRefOf(first)
+      return ref === null ? null : { ref, distance: first.distance }
+    }
+    const crossings = new Map<string, number>()
+    let first: THREE.Intersection | null = null
+    for (const hit of hits) {
+      if (hit.distance >= cut.t) {
+        first = hit
+        break
+      }
+      const bodyId = hit.object.userData.bodyId
+      if (typeof bodyId === 'string') crossings.set(bodyId, (crossings.get(bodyId) ?? 0) + 1)
+    }
+    for (const count of crossings.values()) {
+      if (count % 2 === 1) return { ref: null, distance: cut.t }
+    }
+    if (first === null) return null
+    const ref = faceRefOf(first)
+    return ref === null ? null : { ref, distance: first.distance }
   }
 
   function pickAt(offsetX: number, offsetY: number): FaceRef | null {
@@ -1693,27 +1773,33 @@ export function createViewport(container: HTMLElement): Viewport {
     // **深度検査をしない**(奥の辺も見え、奥の辺も指せる)。three.js の線のレイキャストは
     // 面による遮蔽を見ないので、見た目だけ隠すと「見えない辺が選ばれる」になる。
     depthTest: false,
+    clippingPlanes: section.clipPlanes, // 断面(以下の辺の材質すべて同じ)
   })
   const pickEdgeSelectedMaterial = new THREE.LineBasicMaterial({
     color: HIGHLIGHT_COLOR,
     depthTest: false,
+    clippingPlanes: section.clipPlanes,
   })
   const pickEdgeProposedMaterial = new THREE.LineBasicMaterial({
     color: PROPOSED_COLOR,
     depthTest: false,
+    clippingPlanes: section.clipPlanes,
   })
   // ホバー中の辺(面と同じで明度を足すだけ)。
   const pickEdgeHoverMaterial = new THREE.LineBasicMaterial({
     color: lighten(PICK_EDGE_COLOR, HOVER_LIGHTEN),
     depthTest: false,
+    clippingPlanes: section.clipPlanes,
   })
   const pickEdgeSelectedHoverMaterial = new THREE.LineBasicMaterial({
     color: lighten(HIGHLIGHT_COLOR, HOVER_LIGHTEN),
     depthTest: false,
+    clippingPlanes: section.clipPlanes,
   })
   const pickEdgeProposedHoverMaterial = new THREE.LineBasicMaterial({
     color: lighten(PROPOSED_COLOR, HOVER_LIGHTEN),
     depthTest: false,
+    clippingPlanes: section.clipPlanes,
   })
 
   /** 今出している辺(**1つのBodyぶんだけ**)。空なら辺モードではない。 */
@@ -1879,6 +1965,8 @@ export function createViewport(container: HTMLElement): Viewport {
 
   function refreshContentDiagonal(): void {
     const box = contentBoxForGrid()
+    // 断面の枠・切り口はボディ(と幽霊)だけの外接箱で決める(スケッチは切らないので入れない)
+    section.setContent(new THREE.Box3().setFromObject(root))
     contentDiagonal = box.isEmpty() ? 0 : box.getSize(new THREE.Vector3()).length()
     // **広げるのは即座、縮めない**(`allowShrink: false`) —— ふつうの編集で内容がしきい値
     // 付近で揺れても、グリッドが縮んで点滅することはない(`applyGridScale` のdocstring)。
@@ -2062,7 +2150,9 @@ export function createViewport(container: HTMLElement): Viewport {
     polyline: PickPolyline,
     width: number,
     height: number,
+    clip: ((point: THREE.Vector3) => number) | null = null,
   ): number | null {
+    if (clip !== null) return clippedPolylineScreenDistSq(offsetX, offsetY, polyline, width, height, clip)
     let best = Infinity
     let previousX = 0
     let previousY = 0
@@ -2080,6 +2170,49 @@ export function createViewport(container: HTMLElement): Viewport {
       }
       previousX = screen.x
       previousY = screen.y
+      hasPrevious = true
+    }
+    return best === Infinity ? null : best
+  }
+
+  const clipScratchPrevious = new THREE.Vector3()
+  const clipScratchA = new THREE.Vector3()
+  const clipScratchB = new THREE.Vector3()
+
+  /**
+   * `polylineScreenDistSq` の断面つき版。`clip`(残る側が正の符号付き距離)で切られた線分は
+   * 落とし、平面をまたぐ線分は交点で切り詰めてから測る —— 端点を1つずつ落とすだけだと、
+   * 切り口のすぐ手前の見えている部分が指せなくなる。
+   */
+  function clippedPolylineScreenDistSq(
+    offsetX: number,
+    offsetY: number,
+    polyline: PickPolyline,
+    width: number,
+    height: number,
+    clip: (point: THREE.Vector3) => number,
+  ): number | null {
+    let best = Infinity
+    let previousDistance = 0
+    let hasPrevious = false
+    for (let at = 0; at < polyline.count; at += 1) {
+      polyline.at(at, pickScratch)
+      const distance = clip(pickScratch)
+      if (hasPrevious && (previousDistance >= 0 || distance >= 0)) {
+        clipScratchA.copy(clipScratchPrevious)
+        clipScratchB.copy(pickScratch)
+        const crossing = previousDistance / (previousDistance - distance)
+        if (previousDistance < 0) clipScratchA.lerpVectors(clipScratchPrevious, pickScratch, crossing)
+        else if (distance < 0) clipScratchB.lerpVectors(clipScratchPrevious, pickScratch, crossing)
+        const a = projectForPick(clipScratchA, width, height)
+        const b = projectForPick(clipScratchB, width, height)
+        if (a !== null && b !== null) {
+          const distSq = distSqPointSegment(offsetX, offsetY, a.x, a.y, b.x, b.y)
+          if (distSq < best) best = distSq
+        }
+      }
+      clipScratchPrevious.copy(pickScratch)
+      previousDistance = distance
       hasPrevious = true
     }
     return best === Infinity ? null : best
@@ -2126,6 +2259,7 @@ export function createViewport(container: HTMLElement): Viewport {
     radiusPx: number,
     meshes: readonly THREE.Points[],
     readItem: (mesh: THREE.Points) => T | null,
+    keep: ((point: THREE.Vector3) => boolean) | null = null,
   ): T | null {
     if (meshes.length === 0) return null
     const { width, height } = size()
@@ -2141,6 +2275,7 @@ export function createViewport(container: HTMLElement): Viewport {
         pickScratch
           .set(position.getX(at), position.getY(at), position.getZ(at))
           .applyMatrix4(mesh.matrixWorld)
+        if (keep !== null && !keep(pickScratch)) continue // 断面で切られた点は指せない
         const screen = projectForPick(pickScratch, width, height)
         if (screen === null) continue
         const distSq = (screen.x - offsetX) ** 2 + (screen.y - offsetY) ** 2
@@ -2159,6 +2294,7 @@ export function createViewport(container: HTMLElement): Viewport {
     lines: readonly L[],
     readItem: (line: L) => T | null,
     polylineOf: (line: L) => PickPolyline | null,
+    clip: ((point: THREE.Vector3) => number) | null = null,
   ): T | null {
     if (lines.length === 0) return null
     const { width, height } = size()
@@ -2168,7 +2304,7 @@ export function createViewport(container: HTMLElement): Viewport {
       if (item === null) continue
       const polyline = polylineOf(line)
       if (polyline === null) continue
-      const distSq = polylineScreenDistSq(offsetX, offsetY, polyline, width, height)
+      const distSq = polylineScreenDistSq(offsetX, offsetY, polyline, width, height, clip)
       if (distSq === null) continue
       candidates.push({ item, distSq })
     }
@@ -2187,6 +2323,7 @@ export function createViewport(container: HTMLElement): Viewport {
         return { bodyId, edgeIndex }
       },
       bufferPolyline,
+      section.signedDistance(), // 断面で切られた部分は指せない
     )
   }
 
@@ -2228,6 +2365,8 @@ export function createViewport(container: HTMLElement): Viewport {
     toScreen,
     pickChanged,
     highlightColor,
+    clipPlanes: section.clipPlanes,
+    sectionKeeps: (point) => section.keeps(point),
   })
   scene.add(vertexMarkers.object)
 
@@ -2963,6 +3102,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // **キューブは同一canvasの第2パスなので `elementFromPoint` だけでは判定できない**
     // ——常にcanvasを返し続けるので、ここで明示的に矩形を除外する(タスク仕様の落とし穴1)。
     if (cube.inside(x, y)) return false
+    if (section.handleAt(x, y)) return false // ハンドルが押下を引き取る画素(`onPointerDown`)
     const rect = container.getBoundingClientRect()
     return document.elementFromPoint(rect.left + x, rect.top + y) === renderer.domElement
   }
@@ -3198,16 +3338,21 @@ export function createViewport(container: HTMLElement): Viewport {
     rect: ReturnType<typeof boxRect>,
     width: number,
     height: number,
+    keep: ((point: THREE.Vector3) => boolean) | null = null,
   ): boolean {
     const position = geometry.getAttribute('position')
     if (!position || position.count === 0) return false
     const world = new THREE.Vector3()
+    // 断面で切られた頂点は数に入れない(残る頂点が1つも無ければ見えていない)
+    let kept = false
     for (let at = 0; at < position.count; at += 1) {
       world.set(position.getX(at), position.getY(at), position.getZ(at)).applyMatrix4(matrix)
+      if (keep !== null && !keep(world)) continue
+      kept = true
       const screen = projectRaw(world.x, world.y, world.z, width, height)
       if (screen === null || !inside(rect, screen)) return false
     }
-    return true
+    return kept
   }
 
   function objectInside(
@@ -3215,9 +3360,10 @@ export function createViewport(container: HTMLElement): Viewport {
     rect: ReturnType<typeof boxRect>,
     width: number,
     height: number,
+    keep: ((point: THREE.Vector3) => boolean) | null = null,
   ): boolean {
     object.updateWorldMatrix(true, false)
-    return geometryInside(object.geometry, object.matrixWorld, rect, width, height)
+    return geometryInside(object.geometry, object.matrixWorld, rect, width, height, keep)
   }
 
   function collectInBox(rect: ReturnType<typeof boxRect>): Omit<BoxSelectEvent, 'mode'> {
@@ -3233,23 +3379,24 @@ export function createViewport(container: HTMLElement): Viewport {
     const { width, height } = size()
 
     if (activeSketchId === null) {
+      const keep = section.keepsFilter() // 断面で切られた部分は囲っても入らない(クリックと同じ)
       // **面は常に指せる**(クリックと同じ)。隠したBodyのメッシュは `visible=false` なので外す。
       for (const [bodyId, entry] of bodies) {
         for (const mesh of entry.faceMeshes) {
           if (!mesh.visible) continue
-          if (!objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
+          if (!objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect, width, height, keep)) continue
           const faceIndex = mesh.userData.faceIndex
           if (typeof faceIndex === 'number') faces.push({ bodyId, faceIndex })
         }
       }
       // 辺・頂点は「出している間だけ」(クリックの `edgeAt` / `vertexAt` と同じゲート)
       for (const line of edgeLines) {
-        if (!objectInside(line as THREE.Line & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
+        if (!objectInside(line as THREE.Line & { geometry: THREE.BufferGeometry }, rect, width, height, keep)) continue
         const { bodyId, edgeIndex } = line.userData
         if (typeof bodyId === 'string' && typeof edgeIndex === 'number') edges.push({ bodyId, edgeIndex })
       }
       for (const mesh of vertexMarkers.meshes()) {
-        if (!objectInside(mesh as THREE.Points & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
+        if (!objectInside(mesh as THREE.Points & { geometry: THREE.BufferGeometry }, rect, width, height, keep)) continue
         const { bodyId, vertexIndex } = mesh.userData
         if (typeof bodyId === 'string' && typeof vertexIndex === 'number') vertices.push({ bodyId, vertexIndex })
       }
@@ -3301,6 +3448,13 @@ export function createViewport(container: HTMLElement): Viewport {
     // **キューブの内側で始まった左ボタン押下は、キューブが引き取る**(モデルのピック・
     // 矩形選択の開始へ漏らさない。タスク仕様の落とし穴1)。
     if (cube.pointerDown(event)) return
+    // **断面のハンドルの上で始まった左ボタン押下は、ハンドルが引き取る**(キューブと同じ規律)。
+    // 押している間は canvas の外へ出ても追う(`setPointerCapture`)。
+    if (section.pointerDown(event.offsetX, event.offsetY)) {
+      renderer.domElement.setPointerCapture(event.pointerId)
+      renderer.domElement.style.cursor = 'grabbing'
+      return
+    }
     downAt = performance.now()
     downX = event.offsetX
     downY = event.offsetY
@@ -3312,6 +3466,14 @@ export function createViewport(container: HTMLElement): Viewport {
     // **ボタンの種類より先に解除する**。右/中ボタンで視点を回して離した場合、ここで
     // 解除しないと次の `pointermove` が来るまでホバーが止まったままになる。
     orbiting = false
+    if (section.dragging()) {
+      section.pointerUp()
+      if (renderer.domElement.hasPointerCapture(event.pointerId)) {
+        renderer.domElement.releasePointerCapture(event.pointerId)
+      }
+      renderer.domElement.style.cursor = section.handleAt(event.offsetX, event.offsetY) ? 'grab' : ''
+      return
+    }
     if (cube.pointerUp(event)) return
     if (event.button !== 0 || !downValid) {
       if (event.button === 0) hideBand()
@@ -3429,6 +3591,20 @@ export function createViewport(container: HTMLElement): Viewport {
       cube.pointerMove(event)
       return
     }
+    if (section.dragging()) {
+      section.pointerMove(event.offsetX, event.offsetY)
+      return
+    }
+    // ハンドルの上では本編のホバー予告を出さない(押せばハンドルが取るので、面が光ると嘘になる)
+    const overHandle = section.handleAt(event.offsetX, event.offsetY)
+    section.setHover(overHandle)
+    renderer.domElement.style.cursor = overHandle ? 'grab' : ''
+    if (overHandle) {
+      hoverAt = null
+      cube.setHoverAt(null)
+      updateSketchCursor(event.offsetX, event.offsetY, null, null)
+      return
+    }
     // ポインタがキューブの矩形の内側にあるあいだは、メインのホバー予告・矩形選択開始の
     // どちらも早期に打ち切る(まだ何も押していない=ホバーのみの場合)。
     const overCube = cube.inside(event.offsetX, event.offsetY)
@@ -3472,9 +3648,14 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /** ポインタがcanvasから出た。**強調を残さない**(戻ってくるまで指せるものは無い)。 */
-  function onPointerLeave(): void {
+  function onPointerLeave(event: PointerEvent): void {
     hoverAt = null
     orbiting = false
+    section.setHover(false)
+    // ハンドルのドラッグは `pointercancel`(OS の横取り)でだけ打ち切る —— `pointerleave` は
+    // `setPointerCapture` 中には来ないし、来ても座標は届き続ける(キューブと同じ規律)。
+    if (event.type === 'pointercancel') section.pointerUp()
+    if (!section.dragging()) renderer.domElement.style.cursor = ''
     sketchCursor.update(null, 'free', null)
     // カーソルがcanvas外に出た=いま追従すべき位置が無い。`sketchCursor` と同じく
     // 「カーソル無し」(`point: null`)へ戻す —— そのままだと、キャンバスの外へ出ている間
@@ -3615,6 +3796,7 @@ export function createViewport(container: HTMLElement): Viewport {
     updateActiveSketchGridCursor(hoverAt === null ? null : planePointAt(hoverAt.x, hoverAt.y))
     // グリッドは毎フレームここだけを更新する(段の不透明度とカメラ行列。ジオメトリは無い)。
     updateGridUniforms()
+    section.update() // ハンドルは画面上で一定の大きさ(毎フレーム倍率を引き直す)
     renderer.render(scene, camera)
     cube.render()
     frameHandle = requestAnimationFrame(tick)
@@ -3669,6 +3851,17 @@ export function createViewport(container: HTMLElement): Viewport {
     showEdges,
     showBasePlanes,
     setOriginVisible: originGizmo.setVisible,
+    setSection: section.setState,
+    onSectionDrag(listener) {
+      sectionDragListener = listener
+    },
+    sectionInfo: section.info,
+    contentCenter() {
+      const box = new THREE.Box3().setFromObject(root)
+      if (box.isEmpty()) return null
+      const center = box.getCenter(new THREE.Vector3())
+      return [center.x, center.y, center.z]
+    },
     pickRegions,
     preferVertices,
     highlightEdges,
@@ -3791,6 +3984,7 @@ export function createViewport(container: HTMLElement): Viewport {
       gridAxisMaterial.dispose()
       gridRoot.clear()
       originGizmo.dispose()
+      section.dispose()
       controls.dispose()
       for (const material of faceMaterialCache.values()) material.dispose()
       faceMaterialCache.clear()

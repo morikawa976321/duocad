@@ -36,7 +36,7 @@
     needsSketchId,
   } from './commands/features'
   import { entityHandles, ghostCopies, snapToSketchEntity, type GhostSource } from './entityKinds'
-  import { expressionValue } from './expression'
+  import { evaluateExpression, expressionValue } from './expression'
   import { IMPORT_STEP, changesDocument } from './commands/files'
   import {
     OPTIMIZE_EMPTY_START_VERBS,
@@ -98,6 +98,7 @@
     type BodyGhostRotation,
     type BoxSelectEvent,
     type PickEvent,
+    type SectionState,
     type SketchDraw,
     type SketchEntityHit,
     type VertexMarker,
@@ -384,6 +385,39 @@
   /** 常設の原点ギズモ(原点・3軸・3平面)を出しているか。ブラウザパネルの「原点」トグル
    * (7項目まとめて1つ、本人指定)が読み書きする。 */
   let originVisible = $state(savedOriginVisible)
+
+  /**
+   * 断面表示(issue #6)。**その場限りの画面状態**(文書にも localStorage にも載せない。
+   * 起動時と文書の差し替えで OFF)。位置は平面の法線軸上の座標[mm]。
+   */
+  let section = $state<SectionState>({ on: false, plane: 'XY', position: 0, inverted: false })
+
+  /** 内容の外接箱の中心の、その平面の法線軸成分(ON にした瞬間・平面を替えた瞬間の位置)。 */
+  function sectionCenter(plane: BasePlaneName): number {
+    const center = viewport?.contentCenter() ?? null
+    if (center === null) return 0
+    return plane === 'XY' ? center[2] : plane === 'XZ' ? center[1] : center[0]
+  }
+  function toggleSection(on: boolean): void {
+    section = on
+      ? { ...section, on: true, position: sectionCenter(section.plane) }
+      : { ...section, on: false }
+  }
+  function setSectionPlane(plane: BasePlaneName): void {
+    section = { ...section, plane, position: sectionCenter(plane) }
+  }
+  function setSectionPosition(text: string): boolean {
+    const evaluated = evaluateExpression(text)
+    if (!evaluated.ok) {
+      fail(`断面の位置: ${evaluated.reason}`)
+      return false
+    }
+    section = { ...section, position: evaluated.value }
+    return true
+  }
+  function setSectionInverted(inverted: boolean): void {
+    section = { ...section, inverted }
+  }
 
   function applyOriginVisible(visible: boolean): void {
     originVisible = visible
@@ -776,6 +810,7 @@
       // どこにも書かれていないので `null`(＝常に未保存)へ戻す。`next` は上で `model` に
       // 入れた今回の状態で、開いた版の `applied_count` / 操作数がもう入っている。
       savedAt = applied.name === null ? null : [next.applied_count, next.log.length]
+      section = { ...section, on: false } // 断面はその場限り(文書が替わったら切らない状態へ)
       // **開いた(`open_document`)ときだけ視点を合わせ直す。** 文書のスケールが不連続に
       // 変わるのは import_step と同じくここだけ(実測: 小さな部品→大きな板を保存し、開き直すと
       // 前の文書の視点のまま端が画面外に出た)。**新規(`new_document`)は空の文書**なので
@@ -2185,6 +2220,10 @@
     // 可変解像度 —— ズームで見え方が変わったらサーバへ知らせ、ソリッド・辺・領域を
     // その粗さで測り直させる。**スケッチの折れ線はビューポート側が自分で折り直す**
     // (ブラウザ内で完結するので往復が要らない)。連打の抑制も向こうが持っている。
+    // 断面のハンドルをドラッグしたら位置だけを書き戻す(状態の正は `section`)
+    viewport.onSectionDrag((position) => {
+      section = { ...section, position }
+    })
     viewport.onResolutionChange(sendViewResolution)
     session.start()
     return () => {
@@ -2318,6 +2357,11 @@
     viewport?.setOriginVisible(originVisible)
   })
 
+  // 断面。初回は OFF なので `onMount` での反映は要らない。
+  $effect(() => {
+    viewport?.setSection({ ...section })
+  })
+
   /** 状態配信を受けた回数。**実機検査が往復の完了を知るための穴**(`handleState` が増やす)。 */
   let stateEpoch = $state(0)
 
@@ -2366,6 +2410,13 @@
       // 文書の状態ではないので、ここを叩いてもコアへは何も飛ばない。
       fov,
       setFov: (deg: number) => applyFov(deg),
+      // 断面(issue #6)。**実機検査が「切られた側は指せない」「ハンドルで動く」を見るための穴**。
+      // `handle` は画面座標なので決め打ちせずここから読む。`setSection` は画面の操作子と同じ
+      // 経路(`toggleSection` 等)を通さず状態を直接置く —— 操作子そのものは本物のクリックで見る。
+      section: () => viewport?.sectionInfo() ?? null,
+      setSection: (next: Partial<SectionState>) => {
+        section = { ...section, ...next }
+      },
       // **視点の向きそのものを見るための穴**(2026-08-28のZ-up化で足した)。カメラの姿勢と
       // 「この世界座標が画面のどこに写るか」を返す。`projectFace` では測れない ——
       // あちらは遮蔽された面に null を返すので、**上面と下面のどちらが画面で上か**のように
@@ -2735,11 +2786,16 @@
         {sketches}
         activeSketchId={sketchId}
         {originVisible}
+        {section}
         onToggle={setVisible}
         onShowAll={showAllParts}
         onHideAll={hideAllParts}
         onEnterSketch={enterSketch}
         onToggleOrigin={applyOriginVisible}
+        onSectionToggle={toggleSection}
+        onSectionPlane={setSectionPlane}
+        onSectionPosition={setSectionPosition}
+        onSectionInvert={setSectionInverted}
       />
 
       <!-- 設定ダイアログ。**`.stage` の中に置くのは「ブラウザの右」に出すため**(2026-09-04

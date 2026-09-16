@@ -376,6 +376,31 @@ export interface SketchDraw {
   selectedHandles: Array<{ entityId: string; point: string | null }>
 }
 
+/**
+ * 断面表示(issue #6)の状態。**App が持ち、viewport は写す**(文書の状態でも画面設定でもない
+ * その場限りの値。起動時と文書の差し替えで OFF)。`position` は平面の法線軸上の座標[mm]
+ * (XY なら Z)。
+ */
+export interface SectionState {
+  on: boolean
+  plane: BasePlaneName
+  position: number
+  inverted: boolean
+}
+
+/** 実機検査フックが読む断面の情報(`Viewport.sectionInfo`)。 */
+export interface SectionInfo extends SectionState {
+  /** 残す側(+1: 法線軸の正側 / -1: 負側)。 */
+  keepSign: 1 | -1
+  /**
+   * ハンドル(矢印)の掴める画素と、法線軸の正方向が画面でどちらを向くか(単位ベクトル)。
+   * OFF・カメラの裏なら null。実機検査はここから読んでドラッグする(決め打ちの座標を使わない)。
+   */
+  handle: { x: number; y: number; dir: { x: number; y: number } } | null
+  /** 切り口の判定メッシュを持つボディの数(OFF では 0)。 */
+  stencilBodies: number
+}
+
 export interface Viewport {
   /**
    * Bodyの形状をまとめて反映する。**初回(まだ何も描いていない状態)だけ、反映後の
@@ -512,6 +537,17 @@ export interface Viewport {
    * (あちらはスケッチの対象待ちだけの一時表示・こちらは常設)。既定は表示(`true`)。
    */
   setOriginVisible(visible: boolean): void
+  /**
+   * 断面表示(issue #6)。状態は App が持ち、ここは写すだけ。ON のあいだボディの面・境界線・
+   * 選べる辺・頂点マーカー・幽霊は平面で切られ、**切られた側は指せない**(`resolveHit` と
+   * `collectInBox` が同じ平面で判定する)。スケッチ・領域・グリッド・原点ギズモ・注記は切らない。
+   */
+  setSection(state: SectionState): void
+  /** ハンドルのドラッグで位置が動いた(App が状態を更新し `setSection` で書き戻す)。 */
+  onSectionDrag(listener: (position: number) => void): void
+  sectionInfo(): SectionInfo
+  /** 表示中のボディ(幽霊を含む)の外接箱の中心。空なら null。断面を入れた瞬間の位置に使う。 */
+  contentCenter(): [number, number, number] | null
   /**
    * **頂点を辺より先に見る**(`false` で既定の順序へ戻す)。
    *

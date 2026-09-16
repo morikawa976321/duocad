@@ -188,6 +188,29 @@ export const ORIGIN_GIZMO_PLANE_OPACITY = 0.12
 /** 原点の点・3平面の色(軸のような意味を持たないので中立なグレー)。 */
 export const ORIGIN_GIZMO_NEUTRAL_COLOR = 0xc4c9d0
 
+// ------------------------------------------------------------------ 断面表示(`sectionView.ts`)
+/** 切り口(フタ)の色。ボディの基本色より暗くして「切った面」と読めるようにする。 */
+export const SECTION_CAP_COLOR = 0x6b7682
+/** 平面の枠線の色(原点ギズモと同じ中立グレー)。 */
+export const SECTION_FRAME_COLOR = ORIGIN_GIZMO_NEUTRAL_COLOR
+/** ハンドル(矢印)の色。ホバー中・ドラッグ中は `HOVER_LIGHTEN` だけ明るくする。 */
+export const SECTION_HANDLE_COLOR = 0xaeb8c4
+/** 枠と切り口が内容の外接箱からはみ出す量(平面内の長い方の辺に対する比)。 */
+export const SECTION_FRAME_MARGIN_RATIO = 0.08
+/** 同・最小のはみ出し[mm](薄い内容でも枠が縁に張り付かない)。 */
+export const SECTION_FRAME_MARGIN_MIN_MM = 2
+/**
+ * ハンドル(矢印)の画面上の寸法[px]。`worldPerPixel` を掛けて毎フレーム世界寸法へ直すので、
+ * ズームしても見かけの大きさは変わらない。`pickRadius` は当たり判定だけの筒の半径。
+ */
+export const SECTION_HANDLE = {
+  shaftLength: 70,
+  shaftRadius: 2,
+  coneLength: 18,
+  coneRadius: 7,
+  pickRadius: 10,
+} as const
+
 /**
  * **描く順序の層番号(1箇所にまとめる)。** 生の数値をコード中に書かない
  * (engine `duocad-depth-overlay-rule` の併記事項)。
@@ -201,14 +224,24 @@ export const LAYER = {
   basePlaneHover: -1,
   /** 常設の原点ギズモ(`originGizmo.ts`)。`gridRoot` には入れない1個のGroupなので層は1つでよい。 */
   originGizmo: -4,
+  /** 断面の平面の枠(`sectionView.ts`)。指せない装飾なのでB群。 */
+  sectionFrame: -5,
   solid: 0,
   optimize: 1,
   /** 開発用のデバッグ表示(既定では何も描かない)。注記より手前、辺より奥。 */
   debug: 2,
+  /**
+   * 断面(`sectionView.ts`)。ステンシルの偶奇を書く判定メッシュ → 切り口の板(C群と同じく
+   * 深度検査あり・書き込みあり)の順で、板がソリッドの後に描かれることが要る。
+   */
+  sectionStencil: 3,
+  sectionCap: 4,
   edge: 10,
   region: 11,
   sketchLine: 12,
   sketchPoint: 13,
+  /** 断面のハンドル(矢印)。ポインタを最優先で引き取るので、描くのも最前。 */
+  sectionHandle: 14,
 } as const
 
 /**
@@ -241,6 +274,8 @@ export const DEPTH_BIAS_LAYER = {
   sketchFaceGrid: 4,
   /** 常設の原点ギズモ。既定表示のXY床(`planeGrid`)と同じ平面に乗ることがあるので、確実に手前へ。 */
   originGizmo: 5,
+  /** 断面の枠。原点を通る断面では床のグリッド・原点ギズモの平面と同じ平面に乗る。 */
+  sectionFrame: 6,
 } as const
 
 /**
