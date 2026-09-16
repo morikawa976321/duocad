@@ -965,6 +965,18 @@ class DocumentTools:
             entities=applied["entities"],
         )
 
+    def delete_sketch(self, sketch_id: str) -> dict:
+        """スケッチを入れ物ごと消す(図形・反復・名前つきの値も)。対象は `sketch_id`(引数)。"""
+        before = self._revision_snapshot()
+        applied = self.session.delete_sketch(str(sketch_id))
+        return self._apply_logged(
+            before,
+            applied,
+            sketch_id=applied["sketch_id"],
+            entities=applied["entities"],
+            patterns=applied["patterns"],
+        )
+
     # ------------------------------------------------------------------ 形状最適化の条件
     #
     # **4つとも集合代入**で、対象は確定選択から取る(引数はhowだけ)。**確定選択が空でも

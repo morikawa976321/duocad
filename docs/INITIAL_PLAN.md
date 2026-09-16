@@ -115,6 +115,7 @@ Fusion360のAPI自体はフィーチャ生成まで含む本格的なもので�
 | `fillet` / `chamfer` | ✅ | **✅** | **✅** |
 | `pattern_rectangular` / `pattern_circular` | ✅ | **✅** | **✅** |
 | `move_sketch_entities` / `move_body` | ✅ | **✅** | **✅** |
+| `delete` / `delete_sketch` | ✅ | **✅** | **✅** |
 | `set_parameter` | ✅ | — | **✅** |
 | `set_visible` / `set_sketch_visible` | ✅ | **✅** | **✅** |
 | `import_step` / `export_step` / `export_stl` | ✅ | **✅** | **✅** |
@@ -155,6 +156,7 @@ AIが述語 `parallel_to Y` で複数の辺を提案 → 画面に提案色（�
 | `pattern_rectangular` | sketch, entities, dx, dy, nx, ny |
 | `pattern_circular` | sketch, entities, center, count, total_angle |
 | `import_svg` | sketch, path — SVGの図形（ベジエのまま）をいま開いているスケッチへ足す |
+| `delete_sketch` | sketch — スケッチを入れ物ごと消す（図形・反復・名前つきの値も。押し出し済みのボディは残る） |
 
 **3Dのverb**
 

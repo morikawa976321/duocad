@@ -68,8 +68,9 @@ VERB_TOOLS = {
     # 鏡映複製(どちらも常に複製する)
     "mirror_sketch_entities",
     "mirror_body",
-    # 削除(ボディとスケッチ図形をまとめて消す1本)
+    # 削除(ボディとスケッチ図形をまとめて消す1本。スケッチの入れ物は sketch_id で指す別の1本)
     "delete",
+    "delete_sketch",
     # 形状最適化の条件(第3のモード。最適化そのものとは接続していない)
     "set_preserve_bodies",
     "set_exclude_bodies",
@@ -179,6 +180,8 @@ ARGUMENTS: dict = {
     "mirror_body": ({"base_plane", "plane_face"}, set()),
     # 削除。**対象は選択から取り、howが無い**ので引数は1つも無い
     "delete": (set(), set()),
+    # スケッチの入れ物は選択集合に無いので `sketch_id` で指す(`import_svg` と同じ形)
+    "delete_sketch": ({"sketch_id"}, {"sketch_id"}),
     # 形状最適化の条件。**対象(ボディ・面)は引数に無い** —— 確定選択そのものを代入する。
     # howを持つのは `set_loads` だけで、大きさ[N]と向き(面法線 / 世界ベクトル)。
     # `clear_loads` は荷重だけの解除専用verb(`set_loads` が上書き代入なので空の選択に

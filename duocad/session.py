@@ -39,6 +39,7 @@ from .verbs import (
     boolean_body as boolean_body_verb,
     chamfer as chamfer_verb,
     delete as delete_verb,
+    delete_sketch as delete_sketch_verb,
     extrude as extrude_verb,
     extrude_face as extrude_face_verb,
     fillet as fillet_verb,
@@ -868,6 +869,20 @@ class Session:
             "sketch_ids": sorted(
                 {str(spec["sketch_id"]) for spec in operation.args["entities"]}
             ),
+        })
+
+    def delete_sketch(self, sketch_id: str) -> dict:
+        """スケッチを入れ物ごと消す(verb `delete_sketch`)。対象は引数の `sketch_id`
+        (入れ物は選択集合の種別に無いので `delete` のように選択からは取れない)。
+
+        そのスケッチの図形・領域を指していた選択はカタログの `resets_selection` で空になる。
+        `changed_bodies` は返さない(形は1つも変わらない。押し出し済みのボディは残る)。
+        """
+        operation = delete_sketch_verb(self.document, str(sketch_id))
+        return self._after_logged_verb({
+            "sketch_id": operation.args["sketch_id"],
+            "entities": [spec["entity_id"] for spec in operation.args["entities"]],
+            "patterns": [spec["pattern_id"] for spec in operation.args["patterns"]],
         })
 
     # ---------------------------------------------------------------- 形状最適化の条件(第3のモード)

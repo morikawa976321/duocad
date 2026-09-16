@@ -603,6 +603,15 @@ def _run_delete(session: Session, tmp_path: Path) -> dict:
     return session.delete()
 
 
+@_runner("delete_sketch")
+def _run_delete_sketch(session: Session, tmp_path: Path) -> dict:
+    """図形と反復を両方持つスケッチで走らせる(`entities` / `patterns` が空のまま緑にならない)。"""
+    _, sketch_id = _box(session)
+    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
+    session.pattern_rectangular(sketch_id, [entity_id], 6.0, 0.0, 2, 1)
+    return session.delete_sketch(sketch_id)
+
+
 @_runner("set_preserve_bodies")
 def _run_set_preserve_bodies(session: Session, tmp_path: Path) -> dict:
     body, _ = _box(session)
@@ -664,6 +673,13 @@ def _run_redo(session: Session, tmp_path: Path) -> dict:
 def _run_set_visible(session: Session, tmp_path: Path) -> dict:
     body, _ = _box(session)
     return session.set_visible(body.id, False)
+
+
+@_runner("set_sketch_visible")
+def _run_set_sketch_visible(session: Session, tmp_path: Path) -> dict:
+    """`change: 'visibility'` の `sketch_id` 側(`body_id` と対で、どちらも欠けうる)。"""
+    _, sketch_id = _box(session)
+    return session.set_sketch_visible(sketch_id, False)
 
 
 @_runner("modify_selection")

@@ -2193,6 +2193,22 @@
     }
   }
 
+  /**
+   * スケッチを入れ物ごと消す(verb `delete_sketch`。ブラウザのスケッチ行の削除ボタンから)。
+   *
+   * **`CommandHost` を通さない** —— 行のクリックが対象の指定そのもので、引数収集の状態機械を
+   * 通す理由が無い(ファイル操作・可視性と同じ線)。verbなので `pendingOp` は立てる(応答は
+   * `client_op` 付きの状態配信で返る)。**編集中のスケッチを消すなら先に抜ける** ——
+   * 抜けずに送っても `handleState` が「スケッチごと消えた」で抜けるが、選択の掃除
+   * (`setMode`)を先に通しておくほうが、消えた図形を指す選択が一瞬も残らない。
+   */
+  function deleteSketch(id: string): void {
+    if (sketchId === id) exitSketch()
+    const op = nextOp()
+    pendingOp = op
+    session.runVerb('delete_sketch', { sketch_id: id }, op)
+  }
+
   onMount(() => {
     viewport = createViewport(container)
     // **ここで1回明示的に呼ぶ**。`viewport` は `$state` ではないただの `let` なので、
@@ -2766,6 +2782,7 @@
         onToggleSketch={setSketchVisible}
         onShowAllSketches={showAllSketches}
         onHideAllSketches={hideAllSketches}
+        onDeleteSketch={deleteSketch}
         onToggleOrigin={applyOriginVisible}
       />
 

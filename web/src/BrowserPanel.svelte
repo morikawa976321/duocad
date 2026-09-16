@@ -30,6 +30,7 @@
     onToggleSketch,
     onShowAllSketches,
     onHideAllSketches,
+    onDeleteSketch,
     onToggleOrigin,
   }: {
     /** ユーザーに見せるボディ(常に `kind==="solid"`)。 */
@@ -50,6 +51,8 @@
     onToggleSketch: (sketchId: string, visible: boolean) => void
     onShowAllSketches: () => void
     onHideAllSketches: () => void
+    /** スケッチを入れ物ごと消す(verb `delete_sketch`。確認は挟まない —— undo 1回で戻る)。 */
+    onDeleteSketch: (sketchId: string) => void
     /** 原点ギズモの表示/非表示(7項目まとめて1つのトグル。本人指定)。 */
     onToggleOrigin: (visible: boolean) => void
   } = $props()
@@ -182,6 +185,15 @@
               {:else}
                 <span class="dim sketch-count">図形{sketch.entities.length}</span>
               {/if}
+              <!-- スケッチを入れ物ごと消す(issue #4)。**確認は挟まない** —— verbなので undo 1回で
+                   戻る(ファイルの削除とは違い、失うものが無い)。 -->
+              <button
+                class="sketch-delete"
+                onclick={() => onDeleteSketch(sketch.sketch_id)}
+                title="このスケッチを削除(図形・反復ごと。Ctrl+Zで戻る)"
+              >
+                ✕
+              </button>
             </li>
           {/each}
         </ul>
@@ -330,6 +342,19 @@
 
   .sketch-row.active {
     background: var(--accent-soft);
+  }
+
+  .sketch-delete {
+    flex: 0 0 auto;
+    padding: 0 4px;
+    border: 1px solid transparent;
+    background: none;
+    color: var(--dim);
+    line-height: 1;
+  }
+
+  .sketch-delete:hover {
+    color: var(--text);
   }
 
   .sketch-name {

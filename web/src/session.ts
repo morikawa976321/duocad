@@ -481,6 +481,13 @@ export type Applied =
       entities: string[]
       sketch_ids: string[]
     })
+  /** スケッチを入れ物ごと消した(`delete_sketch`)。消えた図形・反復のIDを添える。 */
+  | (AppliedVerbBase & {
+      verb: 'delete_sketch'
+      sketch_id: string
+      entities: string[]
+      patterns: string[]
+    })
   /**
    * 形状最適化の条件(集合代入)。**形は1つも変わらない**ので `changed_bodies` は無い ——
    * 役割の色は配信される `state.optimize` から描く。
@@ -545,7 +552,9 @@ export type Applied =
    */
   | (AppliedChangeBase & {
       change: 'visibility'
-      body_id: string
+      /** ボディ(`set_visible`)なら `body_id`、スケッチ(`set_sketch_visible`)なら `sketch_id`。 */
+      body_id?: string
+      sketch_id?: string
       visible: boolean
       previous: boolean
       changed: boolean
