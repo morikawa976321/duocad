@@ -1513,24 +1513,27 @@ RAP+splu が並列化されない **Amdahl 分**(スレッドを増やすほど�
 ### 口
 
 ```python
-import design_space as ds
-import safety_loop as sl
+from duocad.topopt import design_space as ds
+from duocad.topopt import safety_loop as sl
 
 cond = ds.demo_conditions()  # load_n(荷重の実際の大きさ[N])が新設フィールド。既定1.0
+space = ds.derive(cond, elements_long_axis=40)  # 塊は探索の前に1回だけ(2026-09-16〜。既定は本番相当で重い。検証は縮める)
 result = sl.solve_for_safety_factor(
-    cond,
+    space,
     target_safety_factor=2.0,
     material_min_mm3=60000.0,   # 呼び出し側が決める(このprobeは「常識的な材料量」を知らない)
     material_max_mm3=300000.0,
-    derivation_kwargs=dict(elements_long_axis=40),  # 既定は本番相当(重い)。検証は縮めて渡す
+    rmin_mm=None,               # 密度フィルタ半径[mm]。省くと simp.DEFAULT_RMIN(要素)
 )
 result.material_mm3      # 目標以上を満たす最小の材料量[mm^3]
 result.safety_factor      # そこでの最小安全率
 result.converged          # 材料量の相対幅が rel_tol 以内で止まったか
-result.space               # 採用した材料量で導出した DesignSpace
+result.space               # 渡した DesignSpace そのもの(全候補で共有)
 result.run                 # design_space.run_topopt() の戻り値
 result.report               # stress.SafetyReport
 ```
+
+(2026-09-16 までは第1引数が `Conditions` で、候補ごとに `derivation_kwargs` で塊を導出し直していた。)
 
 達成不能なら `SafetyTargetError`(`ValueError` の派生)。属性 `side` が
 `"unreachable_within_max_material"`(`material_max_mm3` まで使っても届かない。`shortfall` に
@@ -2379,8 +2382,8 @@ uv pip install --python ./.venv/Scripts/python.exe scikit-image
 | `duocad/topopt/voxelize.py` | **B-repソリッド → 規則格子**(占有マスク・保持/障害物領域)。`duocad.kernel.tessellate` の三角形へ +z のレイを飛ばして巻き数で内外を決める。CLIとしても動く(`python -m duocad.topopt.voxelize --step <path> --n 100`) |
 | `duocad/topopt/anchor.py` | **CADの面 → 格子の節点の対応表(面アンカー)**。担当面積つき。固定/荷重/非設計領域の口と、端から端まで通す `run_pipeline`。CLIとしても動く(`python -m duocad.topopt.anchor --table-only --n 32`) |
 | `duocad/topopt/stress.py` | **密度場と変位 → 要素ごとの von Mises 応力・代表応力・最小安全率**(後処理)。無次元 → 実単位の換算則(`UnitScale`)を持つ。**最適化には手を入れない**(応力制約の定式化は採らない。「von Mises応力と最小安全率」) |
-| `duocad/topopt/design_space.py` | **4条件(保持ソリッド・除外ソリッド・拘束面・荷重面) → 塊(設計空間)**。案1(`derive`)=条件の点群の外接直方体+余白から除外ソリッドを引く / 連続値保持(`derive_from_reference`)=参照 ρ の順位で切り出す(本数は `PICK_RATIO` / 回廊 / 材料の3つの床の最大)。**どちらも塊の中で拘束と荷重がひと続きかを6近傍で確かめてから返す**(`DesignSpaceDisconnectedError`)。**連続値保持はさらに、全ての拘束面・保持ソリッド・荷重面が密度フィルタの筆(`rmin`)の通る太さで荷重と繋がることを、参照ごとに1回だけ二分探索で保証する**(`width_corridor_length`)。**既定は連続値保持**(入口は `derive_from_reference`)。CLIとしても動く(`python -m duocad.topopt.design_space` で `demo_conditions(0°)` の塊を導出して stats を出す。表を作る `--measure` / `--compare` は2026-09-05に削除した) |
-| `duocad/topopt/safety_loop.py` | **安全率を入力に、材料量(mm^3)を探索する外側ループ**(既定の探索器は括り付きの補間。`searcher` で二分にも戻せる)。`solve_for_safety_factor` が入口。目標以上を満たす最小の材料量を探す。塊は案a(候補材料量ごとに `derive_from_reference` を呼ぶ)。許容応力の導出(PETG × 低減係数)を持つ。**最適化そのものには手を入れない** |
+| `duocad/topopt/design_space.py` | **4条件(保持ソリッド・除外ソリッド・拘束面・荷重面)+ボディの外接箱 → 塊(設計空間)を1実行に1回**(`derive`。2026-09-16〜固定凸包)。保持・条件面のボディの外接箱の頂点の凸包を各支持平面で余白(`DEFAULT_MARGIN_RATIO` × 最長辺)ぶん押し出し、除外ソリッドを引き、保持ボディごと・条件面ごとに6近傍の接続を確かめて条件を含まない成分を落とす(`connect_seeds`。`DesignSpaceDisconnectedError` / `DesignSpaceConflictError` / `DesignSpaceGeometryError`)。塊は読み取り専用でハッシュ付き。材料量は受け取らない。CLIとしても動く(`python -m duocad.topopt.design_space` で `demo_conditions(0°)` の塊を導出して stats を出す) |
+| `duocad/topopt/safety_loop.py` | **安全率を入力に、材料量(mm^3)を探索する外側ループ**(既定の探索器は括り付きの補間。`searcher` で二分にも戻せる)。`solve_for_safety_factor(space, ...)` が入口。目標以上を満たす最小の材料量を探す。塊は呼び出し側が1回導出したものを全候補で共有する(探索の中で導出しない)。許容応力の導出(PETG × 低減係数)を持つ。**最適化そのものには手を入れない** |
 | `web/scripts/shoot-topopt.mjs` / `shoot_topopt_export.py` | **受入検査ではない。** 設定を2つ以上並べた比較画像を撮る道具。1コマンドで最適化・描画・ラベル焼きまで通し、面数に上限が無く、`--model` で実物の文書も撮れる。使い方は本書「比較スクリーンショットの撮影台」 |
 | `duocad/topopt/__init__.py` | パッケージの入口。**サブモジュールを import しない**(`import duocad` の費用に scipy / skimage を足さないため)。`OUTPUT_DIR`(= `duocad/topopt/output/`)だけを公開する |
 | `topopt_checks/check_simp.py` | **受入検査(合否そのもの)**。SIMP側を assert する |

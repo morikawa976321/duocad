@@ -517,7 +517,9 @@ def resolution_limits(doc: "Document", *, rmin_mm: Optional[float] = None) -> di
     # 要求値そのままだと実 spacing が僅かに大きくなり(実測: 要求 4.0mm → 実 4.038mm)、
     # `rmin_mm / 実spacing` が床 `simp.MIN_RMIN` を割って `FilterRadiusError` になる。
     upper = _snap_to_grid(lo, hi, upper)
-    lower = _min_element_size(lo, hi)
+    # 下限も実格子の要素サイズへ揃える(梯子の最後の段 = `min_element_size_mm` を画面が送り返しても
+    # `_resolve_element_size` が「下限より細かい」と断らないため)。分割数は変わらないので要素数も変わらない。
+    lower = _snap_to_grid(lo, hi, _min_element_size(lo, hi))
 
     return {
         "max_element_size_mm": upper,
@@ -562,7 +564,8 @@ def _resolution_steps(lo, hi, upper: float, lower: float) -> List[dict]:
     for index in range(count):
         # 最後の段は等比の丸めを使わず下限そのものに合わせる(端が届かないと、
         # 「いちばん細かい」が選べない目盛りになる)。
-        size = lower if index == count - 1 else upper * (ratio ** index)
+        # 各段も実格子の要素サイズへ揃える(画面に出す値と `derive` が作る格子を一致させる)。
+        size = lower if index == count - 1 else _snap_to_grid(lo, hi, upper * (ratio ** index))
         elements = _element_count(lo, hi, size)
         if elements in seen:
             continue
@@ -657,10 +660,12 @@ def _snap_to_grid(lo, hi, spacing: float) -> float:
 
 
 def _element_count(lo, hi, spacing: float) -> int:
-    """`derive` が起こす格子の要素数(余白 `design_space.DEFAULT_MARGIN_RATIO` と `grid_for_bbox` のパッド1を織り込む)。
+    """`derive(spacing=...)` が実際に起こす格子の要素数。
 
-    **`design_space.DEFAULT_MARGIN_RATIO` と `voxelize.DEFAULT_PAD` をここで再計算している**
-    ——1回の導出も走らせずに数を出すためで、実際の格子は `derive` が作る。
+    **`derive` の規則をここで再計算している**(余白 `design_space.DEFAULT_MARGIN_RATIO`、
+    分割数 `round(外枠の最長辺 / spacing)`、`grid_for_bbox` の `ceil(辺長 / 実spacing) + 2*パッド`)
+    —— 1回の導出も走らせずに数を出すためで、実際の格子は `derive` が作る。要求した要素サイズ
+    そのままではなく**丸めた後の実 spacing** で数えるので、梯子の要素数が実格子と一致する。
     """
     from .topopt import design_space as ds
     from .topopt import voxelize as vx
@@ -668,10 +673,13 @@ def _element_count(lo, hi, spacing: float) -> int:
     extent = [float(hi[a]) - float(lo[a]) for a in range(3)]
     longest = max(extent)
     margin = ds.DEFAULT_MARGIN_RATIO * longest
+    box_long = longest + 2.0 * margin
+    n_long = max(1, int(round(box_long / float(spacing))))
+    real = box_long / n_long
     total = 1
     for axis in range(3):
         length = extent[axis] + 2.0 * margin
-        total *= max(int(math.ceil(length / spacing - 1e-9)), 1) + 2 * vx.DEFAULT_PAD
+        total *= max(int(math.ceil(length / real - 1e-9)), 1) + 2 * vx.DEFAULT_PAD
     return total
 
 

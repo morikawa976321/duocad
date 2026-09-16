@@ -422,6 +422,37 @@ def test_the_element_size_upper_bound_reproduces_itself_on_the_real_grid(session
     assert 6.0 / space.grid.spacing >= simp.MIN_RMIN
 
 
+def test_every_ladder_step_reports_the_real_grid(session: Session) -> None:
+    """**梯子の各段の要素サイズと要素数は、`derive` が実際に起こす格子と一致する。**
+
+    段の値が実格子とずれると、画面の要素数・予想時間が実際より大きく(小さく)出る。
+    """
+    from duocad.topopt import design_space as ds
+    from duocad.topopt import voxelize as vx
+
+    _setup_four_conditions(session)
+    limits = optimize_run.resolution_limits(session.document, rmin_mm=6.0)
+    lo, hi = optimize_run._condition_bbox(session.document)
+    extent = [hi[a] - lo[a] for a in range(3)]
+    margin = ds.DEFAULT_MARGIN_RATIO * max(extent)
+    box_lo = [lo[a] - margin for a in range(3)]
+    box_hi = [hi[a] + margin for a in range(3)]
+    assert len(limits["steps"]) >= 2
+    for step in limits["steps"]:
+        # `derive` と同じ規則で格子だけ起こす(ボクセル化はしない)。
+        n_long = max(1, int(round(max(box_hi[a] - box_lo[a] for a in range(3)) / step["element_size_mm"])))
+        grid = vx.grid_for_bbox(box_lo, box_hi, n_long)
+        assert grid.element_count == step["element_count"], step
+        assert grid.spacing == pytest.approx(step["element_size_mm"]), step
+        assert step["element_count"] <= optimize_run.MAX_ELEMENTS
+    assert limits["steps"][-1]["element_size_mm"] == pytest.approx(limits["min_element_size_mm"])
+    # いちばん粗い段は実際に導出して突き合わせる(格子の規則の写しが本物とずれていないこと)。
+    bundle = optimize_run.build_conditions(session.document)
+    space = ds.derive(bundle.conditions, spacing=limits["steps"][0]["element_size_mm"])
+    assert space.grid.element_count == limits["steps"][0]["element_count"]
+    assert space.grid.spacing == pytest.approx(limits["steps"][0]["element_size_mm"])
+
+
 def test_build_conditions_lists_the_condition_bodies_and_ignores_unrelated_ones(session: Session) -> None:
     """凸包の点群になるのは保持ボディと条件面のボディだけ。無関係なボディを足しても変わらない。"""
     left, right, _fixed, _load = _setup_four_conditions(session)

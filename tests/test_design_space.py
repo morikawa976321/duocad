@@ -303,6 +303,21 @@ def test_an_unrelated_obstacle_far_away_does_not_change_the_space() -> None:
     assert with_far.stats["obstacle_elements_removed"] == 0
 
 
+def test_an_obstacle_straddling_the_grid_edge_removes_only_its_inside_part() -> None:
+    """格子に一部だけ重なる除外は、格子の中にある占有だけを引く(例外にならない)。"""
+    plain = ds.derive(_two_pads_conditions(), elements_long_axis=LONG_AXIS)
+    grid_lo, _grid_hi = plain.grid.world_box()
+    # 格子の -x 端をまたぐ棒(半分は格子の外)。固定側パッド(x -5..5)の手前の塊を削り、パッドには触れない。
+    straddling = _box((20.0, 6.0, 6.0), (float(grid_lo[0]), 0.0, 0.0))
+    cut = ds.derive(_two_pads_conditions(obstacle=straddling), elements_long_axis=LONG_AXIS)
+    assert np.array_equal(cut.grid.as_dict()["origin"], plain.grid.as_dict()["origin"])
+    removed = cut.stats["obstacle_elements_removed"]
+    assert removed > 0
+    assert cut.element_count == plain.element_count - removed
+    assert np.all(cut.mask <= plain.mask)  # 引くだけで、足していない
+    assert cut.stats["obstacle_occupancy"].get("skipped") is None
+
+
 def test_an_obstacle_that_eats_a_keep_body_is_a_named_conflict() -> None:
     eater = _box((14.0, 14.0, 14.0), (0.0, 0.0, 0.0))  # 固定側パッドを丸ごと覆う
     with pytest.raises(ds.DesignSpaceConflictError) as caught:
