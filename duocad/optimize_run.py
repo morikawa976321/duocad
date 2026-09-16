@@ -657,7 +657,7 @@ def _snap_to_grid(lo, hi, spacing: float) -> float:
 
 
 def _element_count(lo, hi, spacing: float) -> int:
-    """`derive` が起こす格子の要素数(余白 0.25 と `grid_for_bbox` のパッド1を織り込む)。
+    """`derive` が起こす格子の要素数(余白 `design_space.DEFAULT_MARGIN_RATIO` と `grid_for_bbox` のパッド1を織り込む)。
 
     **`design_space.DEFAULT_MARGIN_RATIO` と `voxelize.DEFAULT_PAD` をここで再計算している**
     ——1回の導出も走らせずに数を出すためで、実際の格子は `derive` が作る。
