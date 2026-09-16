@@ -1,22 +1,8 @@
-"""OC と MMA を**同じ入力**で回して、答え(形・硬さ・材料量)と費用を並べる実測。
+"""models/*.json の同じ条件で OC と MMA の形・収束・費用を比較する。
 
-    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_mma_vs_oc.py --stage demo30
-    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_mma_vs_oc.py --stage hanger
-    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_mma_vs_oc.py --stage all
-
-`simp.optimize` の `update` は **`run_topopt`/`run_pipeline` へ通っていない**ので、
-`anchor.run_pipeline` が `simp.optimize` へ渡す引数をそのまま横取りし(`_capture_optimize_kwargs`)、
-その同じ引数で `simp.optimize(update="oc")` と `simp.optimize(update="mma")` を直接呼ぶ。
-**両者は1つの process で連続して回すので、格子・境界条件・パッシブ要素は同一物である。**
-
-**`change_tol=0.0` を明示する。** MMA は漸近線が歩幅を殺すので `Iteration.change` が
-OC より早く小さくなり、既定の `change_tol=0.01` では停止条件の差が費用の差に化ける
-(taskbox `20260910-1312` の契約 ③2)。反復数は `max_iter` で揃え、収束は
-コンプライアンス履歴から**事後に**判定する(`_settle_iter`)。
-
-`threads` は段ごとに固定する(既定は下の `STAGES`)。本番経路は `simp.PARALLEL_THREADS`
-で動くが、比較の公平性のため測定側で固定する。
-"""
+--model hanger_test.json --spacing 2.4 --ratios 0.10,0.30 で条件を指定する。
+両方式は同じ格子・境界条件・材料量で実行する。change_tol=0 として反復数を揃え、
+収束はコンプライアンス履歴から事後判定する。"""
 
 from __future__ import annotations
 
@@ -50,35 +36,6 @@ OUTPUT_JSON = OUTPUT_DIR / "mma_vs_oc.json"
 # 入っている最初の反復を収束反復と呼ぶ(`_settle_iter`)。1% と 0.1% の2本を出す。
 SETTLE_TOLS = (0.01, 0.001)
 
-STAGES: dict[str, dict[str, Any]] = {
-    # 小さい2段は煙検査。**threads=1** で回すのは、格子が小さいと並列の当たり外れが
-    # 1反復の秒数に乗って更新則そのものの費用が見えなくなるため。
-    "demo30": {
-        "kind": "demo",
-        "derive": {"elements_long_axis": 30},
-        "ratios": [0.10, 0.20, 0.40],
-        "threads": 1,
-        "max_iter": 100,
-    },
-    "demo44": {
-        "kind": "demo",
-        "derive": {"elements_long_axis": 44},
-        "ratios": [0.10, 0.20, 0.40],
-        "threads": 1,
-        "max_iter": 100,
-    },
-    # 採否の判断はこの段の数字で行う。**threads=7** は本番経路の `simp.PARALLEL_THREADS`
-    # と同じ値(この機械)。
-    "hanger": {
-        "kind": "hanger",
-        "model": "hanger_test.json",
-        "derive": {"spacing": 2.4},
-        "ratios": [0.10, 0.30],
-        "threads": 7,
-        "max_iter": 40,
-    },
-}
-
 UPDATE_NAMES = ("oc", "mma")
 
 
@@ -87,10 +44,6 @@ UPDATE_NAMES = ("oc", "mma")
 # ---------------------------------------------------------------------------
 def _build_space(stage: dict[str, Any]) -> tuple[ds.DesignSpace, Any, Any]:
     """(塊, forces, conditions) を返す。"""
-    if stage["kind"] == "demo":
-        conditions = ds.demo_conditions()
-        space = ds.derive(conditions, **stage["derive"])
-        return space, None, conditions
     from duocad.optimize_run import build_conditions
     from duocad.session import Session
 
@@ -306,13 +259,16 @@ def _apply_mma_consts(pairs: list[str]) -> dict[str, float]:
 
 
 def run_stage(
-    name: str,
+    model: str,
     *,
+    spacing: float = 2.4,
     max_iter: int | None = None,
     threads: int | None = None,
     ratios: list[float] | None = None,
 ) -> dict[str, Any]:
-    stage = dict(STAGES[name])
+    name = f"{Path(model).stem}-{spacing:g}mm"
+    stage = dict(model=model, derive={"spacing": spacing}, ratios=[0.10, 0.30],
+                 threads=simp.PARALLEL_THREADS, max_iter=40)
     if ratios:
         stage["ratios"] = list(ratios)
     n_threads = int(stage["threads"] if threads is None else threads)
@@ -438,7 +394,6 @@ def run_stage(
 
     return {
         "stage": name,
-        "kind": stage["kind"],
         "model": stage.get("model"),
         "derive": dict(stage["derive"]),
         "threads": n_threads,
@@ -462,7 +417,8 @@ def run_stage(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="OC と MMA を同じ入力で比べる実測")
-    parser.add_argument("--stage", default="all", help=f"{sorted(STAGES)} または all")
+    parser.add_argument("--model", required=True, help="models/*.json のファイル名")
+    parser.add_argument("--spacing", type=float, default=2.4)
     parser.add_argument("--max-iter", type=int, default=None)
     parser.add_argument("--threads", type=int, default=None)
     parser.add_argument("--out", default=None, help="書き出し先 JSON(既定は output/mma_vs_oc.json)")
@@ -483,11 +439,6 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     mma_consts = _apply_mma_consts(list(args.mma_const))
 
-    names = list(STAGES) if args.stage == "all" else [s for s in args.stage.split(",")]
-    for name in names:
-        if name not in STAGES:
-            raise SystemExit(f"未知の段 {name!r}(選べるのは {sorted(STAGES)})")
-
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = Path(args.out) if args.out else OUTPUT_JSON
     payload: dict[str, Any] = {}
@@ -504,20 +455,20 @@ def main(argv: list[str] | None = None) -> int:
         "script": "topopt_checks/measure_mma_vs_oc.py",
         "settle_tols": list(SETTLE_TOLS),
     }
-    for name in names:
-        stage_payload = run_stage(
-            name,
-            max_iter=args.max_iter,
-            threads=args.threads,
-            ratios=(
-                [float(v) for v in args.ratios.split(",")] if args.ratios else None
-            ),
-        )
-        stage_payload["mma_consts_overridden"] = mma_consts
-        key = args.tag or name
-        payload["stages"][key] = stage_payload
-        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"書き出し: {out_path}", flush=True)
+    stage_payload = run_stage(
+        args.model,
+        spacing=args.spacing,
+        max_iter=args.max_iter,
+        threads=args.threads,
+        ratios=(
+            [float(v) for v in args.ratios.split(",")] if args.ratios else None
+        ),
+    )
+    stage_payload["mma_consts_overridden"] = mma_consts
+    key = args.tag or stage_payload["stage"]
+    payload["stages"][key] = stage_payload
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"書き出し: {out_path}", flush=True)
     return 0
 
 

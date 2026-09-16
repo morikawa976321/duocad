@@ -83,6 +83,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
+from . import trace
 
 from . import voxelize as vx
 
@@ -888,6 +889,7 @@ def reaction_payload(fixed_faces: Sequence[int], reactions: Sequence[Any]) -> li
     ]
 
 
+@trace.stage('anchor-pipeline')
 def run_pipeline(
     shape: Any = None,
     *,
@@ -1079,6 +1081,9 @@ def run_pipeline(
         near = table.element_mask(list(fixed_faces) + list(load_faces), layers=keep_layers)
         solid |= near & model.design
     void = ~model.design | model.obstacle
+    trace.snapshot('boundary-conditions', grid=model.grid, voxel_model=model, anchors=table,
+                   fixed_dofs=fixed_dofs, load=load, load_total=load_total,
+                   solid=solid, void=void, reaction_groups=reaction_groups)
 
     resolved_update = update
     if reaction_min is not None and resolved_update is None:
@@ -1113,10 +1118,7 @@ def run_pipeline(
     timings["optimize"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    # `solid` / `void` はここで `simp.optimize` へ渡したのと同じマスク(保持ソリッド+
-    # アンカー材料 / 設計空間の外∪除外)。密度場側のガウシアン平滑化(段0)がこれらを
-    # にじませるので、平滑化の後に同じマスクで塗り直す(`mesh.build_surface` の
-    # docstring・`docs/TOPOPT.md`「密度場側のガウシアン平滑化」)。
+    # 保持と除外の条件をメッシュ化にも適用する。
     surface = mesh.build_surface(result.rho, keep_mask=solid, zero_mask=void)
     timings["mesh"] = time.perf_counter() - t0
 

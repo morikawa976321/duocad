@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
+from . import trace
 import scipy.optimize as sopt
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
@@ -1039,8 +1040,12 @@ class Model:
         if finite:
             denominator = float(np.linalg.norm(ff))
             rel = float(np.linalg.norm(kf @ u_free - ff)) / denominator
+        trace.snapshot('linear-residual', finite=finite, relative_residual=rel,
+                       tolerance=SOLVE_RESIDUAL_TOL)
         if finite and rel <= SOLVE_RESIDUAL_TOL:
             return
+        trace.snapshot('linear-failure', rhs_free=ff, displacement_free=u_free,
+                       free=self.free, fixed=self.fixed, active=self.active)
         raise SolveResidualError(
             "K U = F が解けていない"
             f"(残差 ||K u - f|| / ||f|| = {rel:.3e} > {SOLVE_RESIDUAL_TOL:.0e}"
@@ -1123,7 +1128,7 @@ class PreparedSystem:
                 u_free = spla.spsolve(self.kf, ff)
             else:
                 counter = None
-                if stats is not None:
+                if stats is not None or trace.current() is not None:
 
                     def counter(_xk: np.ndarray) -> None:
                         nonlocal iterations
@@ -1149,6 +1154,9 @@ class PreparedSystem:
                 stats["cg_iterations_each"].append(iterations)
                 stats["fallbacks"] += int(fell_back)
                 stats["direct_solves"] += int(self._solver == "direct")
+            trace.snapshot('linear-solve', solver=self._solver, cg_rtol=cg_rtol,
+                           cg_iterations=iterations, fallback=fell_back,
+                           rhs_index=index, seconds=time.perf_counter()-t_start)
             model._verify_solution(self.kf, ff, u_free)
             out[index, model.free] = u_free
         if stats is not None:
@@ -2144,6 +2152,7 @@ def penal_at(it: int, penal: float, start: float | None, iters: int) -> float:
     return float(start) + (float(penal) - float(start)) * (int(it) - 1) / span
 
 
+@trace.stage('simp')
 def optimize(
     nelx: int,
     nely: int,
@@ -2426,8 +2435,13 @@ def optimize(
     reaction_now: tuple[Reaction, ...] = ()
     adjoint: np.ndarray | None = None
 
+    trace.snapshot('simp-initial', model=model, x=x, rho=x_phys, movable=movable,
+                   void=void, solid=solid, kernel=kernel, hs=hs,
+                   rmin_resolved=rmin_resolved, target_volume=target_volume)
+
     for it in range(1, max_iter + 1):
         t0 = time.perf_counter()
+        trace.snapshot('iteration-input', iteration=it, x=x, rho=x_phys)
         # **順問題と随伴で K を1回だけ組み、前処理も1回だけ作る**(`Model.prepare`)。
         # 右辺ごとに `Model.solve` を呼ぶと多重格子の setup が本数ぶん重なる。
         penal_now = penal_at(it, penal, penal_start, penal_iters)
@@ -2468,6 +2482,10 @@ def optimize(
         # 近傍が全部パッシブな要素は dvn=0 になりうる。そのままだと 0 除算で NaN が
         # 全反復へ伝播する(その要素はどのみち下の上書きで固定されるので値は使わない)。
         dvn = np.maximum(dvn, 1e-300)
+        trace.snapshot('iteration-analysis', iteration=it, penal=penal_now, u=u, ce=ce,
+                       compliance=c, dc=dc, dcn=dcn, dvn=dvn, constraints=constraints,
+                       reactions=reaction_now, adjoint=adjoint, active=model.active,
+                       fixed=model.fixed, free=model.free)
         xnew = updater.step(
             it=it,
             x=x,
@@ -2490,6 +2508,7 @@ def optimize(
             reactions=reaction_now,
         )
         history.append(iteration)
+        trace.snapshot('iteration-output', iteration=iteration, x=x, rho=x_phys)
         if callback is not None:
             callback(iteration, x_phys.copy())
         # **連続化の途中では収束と読まない。** penal が目標へ届く前に `change_tol` で

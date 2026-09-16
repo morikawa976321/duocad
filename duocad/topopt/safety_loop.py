@@ -17,6 +17,7 @@ from typing import Any, Callable, Optional, Sequence
 from . import design_space as ds
 from . import simp
 from . import stress
+from . import trace
 
 _HERE = Path(__file__).resolve().parent
 
@@ -295,6 +296,7 @@ def _build_reference(
     )
 
 
+@trace.stage('safety-evaluation')
 def _evaluate(conditions: ds.Conditions, material_mm3: float, **kwargs: Any) -> tuple[str, Any]:
     """材料量1点を評価する。**失敗も分類して返す**(例外を上まで素通しにしない)。
 
@@ -394,6 +396,7 @@ def _propose_material(
     return _Proposal(clipped_material, "illinois", None, clipped)
 
 
+@trace.stage('safety-search')
 def solve_for_safety_factor(
     conditions: ds.Conditions,
     *,

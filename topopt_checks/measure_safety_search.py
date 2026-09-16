@@ -1,16 +1,7 @@
-"""安全率探索の探索器(補間 対 二分)の実測。
+"""models/*.json の同じ条件で二分探索と Illinois 法を比較する。
 
-    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_safety_search.py
-
-題材は `bench.SAFETY_LOOP`(bracket = `demo_conditions`)で、`check_safety_loop.py` の [3] と
-同じ括り(塊の容量の 15%〜70%)。**目標安全率だけを振る** —— 案Aの動機は「上端の安全率が目標を
-大きく上回るとき二分が無駄を踏む」なので、目標を動かすとその比が動く。
-
-**1つのプロセスで両方の探索器を回す。** 参照 ρ は解ごとに作り直されるが `optimize` は決定的
-なので、比べているのは探索器の差だけになる。
-
-結果は `output/safety_search.json`。読み方は docs/TOPOPT_SPEED.md「実装済み A」。
-"""
+--model hanger_test.json --spacing 2.4 --targets 2 3 4
+荷重の大きさ・方向は文書から読み、材料量の探索範囲も製品と同じ規則で決める。"""
 
 from __future__ import annotations
 
@@ -18,6 +9,7 @@ import argparse
 import json
 import sys
 import time
+from pathlib import Path
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -27,27 +19,24 @@ for _stream in (sys.stdout, sys.stderr):
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
 from duocad.topopt import OUTPUT_DIR
-from duocad.topopt import bench
 from duocad.topopt import design_space as ds
 from duocad.topopt import safety_loop as sl
 
-CFG = bench.SAFETY_LOOP
-DERIVATION_KW = dict(elements_long_axis=CFG["elements_long_axis"])
 OUT_PATH = OUTPUT_DIR / "safety_search.json"
 
-#: 目標安全率。**この題材の上端の安全率は約6026**(容量の70%)なので、下から順に
-#: 「目標が上端よりかなり低い」から「ほぼ張り付く」までを並べてある。
-TARGETS = (3500.0, 4500.0, 5500.0, 5900.0)
 
-MATERIAL_MIN_RATIO = 0.15
-MATERIAL_MAX_RATIO = 0.70
+def model_bounds(model: str, spacing: float):
+    from duocad.session import Session
+    from duocad.optimize_run import build_conditions, OptimizeOptions, _material_bounds
 
-
-def _bracket_bounds() -> tuple[ds.Conditions, float, float, float]:
-    cond = ds.demo_conditions()
-    fine = ds.derive(cond, elements_long_axis=CFG["elements_long_axis"])
-    capacity = fine.grid.element_volume * fine.element_count
-    return cond, capacity, capacity * MATERIAL_MIN_RATIO, capacity * MATERIAL_MAX_RATIO
+    session = Session(None, 0.2)
+    session.open_document(model)
+    bundle = build_conditions(session.document)
+    space = ds.derive(bundle.conditions, spacing=spacing)
+    capacity = space.grid.element_volume * space.element_count
+    keep = float(space.model.keep.sum()) * space.grid.element_volume
+    low, high = _material_bounds(OptimizeOptions(), keep_mm3=keep, capacity_mm3=capacity)
+    return bundle, capacity, low, high
 
 
 def run_case(
@@ -57,6 +46,9 @@ def run_case(
     material_min: float,
     material_max: float,
     searcher: str,
+    forces: list,
+    spacing: float,
+    max_iter: int,
 ) -> dict:
     marks: list[float] = []
     started = time.perf_counter()
@@ -77,8 +69,8 @@ def run_case(
         "material_max_mm3": material_max,
         "rel_tol": sl.DEFAULT_REL_TOL,
         "max_evaluations": sl.DEFAULT_MAX_EVALUATIONS,
-        "max_iter": CFG["max_iter"],
-        "elements_long_axis": CFG["elements_long_axis"],
+        "max_iter": max_iter,
+        "spacing_mm": spacing,
         "error": None,
     }
     try:
@@ -87,8 +79,9 @@ def run_case(
             target_safety_factor=target,
             material_min_mm3=material_min,
             material_max_mm3=material_max,
-            max_iter=CFG["max_iter"],
-            derivation_kwargs=dict(DERIVATION_KW),
+            max_iter=max_iter,
+            derivation_kwargs={"spacing": spacing},
+            forces=forces,
             searcher=searcher,
             progress=progress,
         )
@@ -133,16 +126,18 @@ def run_case(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="安全率探索の探索器の実測")
-    parser.add_argument(
-        "--targets", type=float, nargs="*", default=list(TARGETS), help="目標安全率(複数可)"
-    )
+    parser.add_argument("--model", required=True, help="models/*.json のファイル名")
+    parser.add_argument("--spacing", type=float, default=2.4)
+    parser.add_argument("--max-iter", type=int, default=sl.DEFAULT_MAX_ITER)
+    parser.add_argument("--out", type=Path, default=OUT_PATH)
+    parser.add_argument("--targets", type=float, nargs="+", required=True)
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    cond, capacity, material_min, material_max = _bracket_bounds()
+    bundle, capacity, material_min, material_max = model_bounds(args.model, args.spacing)
     print(
-        f"bracket 塊容量 {capacity:.0f}mm^3 / 括り [{material_min:.0f}, {material_max:.0f}]"
-        f" / max_iter={CFG['max_iter']} / elements_long_axis={CFG['elements_long_axis']}",
+        f"{args.model} 塊容量 {capacity:.0f}mm^3 / 括り [{material_min:.0f}, {material_max:.0f}]"
+        f" / max_iter={args.max_iter} / spacing={args.spacing}",
         flush=True,
     )
 
@@ -151,7 +146,10 @@ def main() -> int:
         for searcher in ("bisection", "illinois"):
             print(f"  目標 sf={target} / searcher={searcher}", flush=True)
             case = run_case(
-                cond,
+                bundle.conditions,
+                forces=bundle.forces,
+                spacing=args.spacing,
+                max_iter=args.max_iter,
                 target=target,
                 material_min=material_min,
                 material_max=material_max,
@@ -159,13 +157,15 @@ def main() -> int:
             )
             cases.append(case)
             # **1ケース終わるたびに書き出す。** 途中で落ちてもそこまでが残る。
-            OUT_PATH.write_text(
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(
                 json.dumps(
                     {
-                        "model": "demo_conditions (bracket)",
+                        "model": args.model,
+                        "forces_n": bundle.forces,
                         "capacity_mm3": capacity,
-                        "material_min_ratio": MATERIAL_MIN_RATIO,
-                        "material_max_ratio": MATERIAL_MAX_RATIO,
+                        "material_min_ratio": (material_min / capacity),
+                        "material_max_ratio": (material_max / capacity),
                         "clip": [sl.INTERPOLATION_CLIP_LO, sl.INTERPOLATION_CLIP_HI],
                         "cases": cases,
                     },
@@ -175,7 +175,7 @@ def main() -> int:
                 encoding="utf-8",
             )
 
-    print(f"\n書き出し: {OUT_PATH}", flush=True)
+    print(f"\n書き出し: {args.out}", flush=True)
     print(f"{'目標':>8} {'探索器':>10} {'評価':>4} {'材料[mm^3]':>12} {'安全率':>9} {'上端/目標':>9}")
     for case in cases:
         if case["error"]:

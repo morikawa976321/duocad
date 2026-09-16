@@ -185,7 +185,13 @@ cd web; npm run dev                                 # 画面(5173)
 
 ### 形状最適化の受入検査
 
-**pytest には入れていない。** `tests/` へ入れると `pytest -q` が毎回
+製品の最適化は途中データを自動保存する。[保存範囲・場所・読み方](docs/TOPOPT_RECORDING.md)。
+
+最終形状の水密・単一ソリッドの2条件と、平滑化後の保持・除外ブーリアン処理は
+[最終形状の合格条件](docs/TOPOPT_ACCEPTANCE.md)に従って `topopt_checks/check_final_shape.py` で判定する。
+この判定器自体の小形状による回帰検査は `tests/test_final_shape.py` にある。
+
+**以下の最適化の数値検査は pytest には入れていない。** `tests/` へ入れると `pytest -q` が毎回
 それだけ重くなる。マーカーで既定から外す案も採らない —— duocad に CI が無いので、既定から
 外した瞬間に誰も回さなくなる(`pytest -q` が緑で返るため、無人の runner は「緑だ」と
 報告して先へ進む)。**強制力は、タスクに書く「受入検査がすべて緑」の一文と runner が担う。**

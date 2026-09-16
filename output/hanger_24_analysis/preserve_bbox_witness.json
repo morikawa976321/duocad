@@ -1,0 +1,137 @@
+{
+  "method": "keep CAD minus mesh axis-aligned bounding box. Residual material proves missing preserve volume; this is a lower bound, not the full missing volume.",
+  "mesh_bbox": {
+    "min": [
+      -36.22881757869176,
+      -217.83906064530672,
+      -74.98936485430093
+    ],
+    "max": [
+      36.243133214472294,
+      -0.18150578945386542,
+      78.72399194281172
+    ]
+  },
+  "bodies": [
+    {
+      "body": "body-48c2ba06938d",
+      "name": "hanger_bar_attatchment_7",
+      "keep_volume_mm3": 17034.34668619109,
+      "cad_bbox": {
+        "min": [
+          -17.5000001,
+          -218.2862950596049,
+          41.7137058344648
+        ],
+        "max": [
+          17.5000001,
+          -181.7137049403951,
+          78.2862959536746
+        ],
+        "center": [
+          0.0,
+          -200.0,
+          60.0000008940697
+        ],
+        "size": [
+          35.0000002,
+          36.57259011920979,
+          36.5725901192098
+        ],
+        "diagonal": 62.45085035494268
+      },
+      "residual_solids": 1,
+      "residual_volume_mm3": 23.779528990561076
+    },
+    {
+      "body": "body-5f6ac405de6c",
+      "name": "hanger_bar_attatchment_1",
+      "keep_volume_mm3": 1048.0241862090147,
+      "cad_bbox": {
+        "min": [
+          -36.1000001,
+          -5.0,
+          51.4
+        ],
+        "max": [
+          -18.9,
+          0.0,
+          68.60000009999999
+        ],
+        "center": [
+          -27.50000005,
+          -2.5,
+          60.00000005
+        ],
+        "size": [
+          17.200000100000004,
+          5.0,
+          17.20000009999999
+        ],
+        "diagonal": 24.83304264241496
+      },
+      "residual_solids": 1,
+      "residual_volume_mm3": 35.35551690513519
+    },
+    {
+      "body": "body-7e41dce3a34b",
+      "name": "hanger_bar_attatchment_2",
+      "keep_volume_mm3": 1048.0241862090147,
+      "cad_bbox": {
+        "min": [
+          18.899999899999997,
+          -5.0,
+          51.4
+        ],
+        "max": [
+          36.1,
+          0.0,
+          68.60000009999999
+        ],
+        "center": [
+          27.49999995,
+          -2.5,
+          60.00000005
+        ],
+        "size": [
+          17.200000100000004,
+          5.0,
+          17.20000009999999
+        ],
+        "diagonal": 24.83304264241496
+      },
+      "residual_solids": 1,
+      "residual_volume_mm3": 35.35551690513519
+    },
+    {
+      "body": "body-3ea53d969bc2",
+      "name": "hanger_bar_attatchment_3",
+      "keep_volume_mm3": 1048.0241862090145,
+      "cad_bbox": {
+        "min": [
+          -8.6,
+          -5.0,
+          -68.6
+        ],
+        "max": [
+          8.6,
+          0.0,
+          -51.4
+        ],
+        "center": [
+          0.0,
+          -2.5,
+          -60.0
+        ],
+        "size": [
+          17.2,
+          5.0,
+          17.199999999999996
+        ],
+        "diagonal": 24.83304250388985
+      },
+      "residual_solids": 1,
+      "residual_volume_mm3": 35.35551690513439
+    }
+  ]
+}

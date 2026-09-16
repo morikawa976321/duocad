@@ -517,3 +517,6 @@ solve を**完全省略**すると代表応力・安全率がずれる |
 | `duocad/topopt/design_space.py` | `derive_from_reference`、連続値保持、`build_reference` |
 | `topopt_checks/check_safety_loop.py` | 外側ループの受入検査（[7] 提案規則 / [8] 探索器の比較） |
 | `topopt_checks/measure_safety_search.py` | 探索器の実測（→ `duocad/topopt/output/safety_search.json`） |
+
+比較スクリプトの現在の入力は `--model <models内のJSON名> --spacing <mm> --targets <安全率...>`。
+本書の bracket 比較は過去の実測であり、合成モデルの比較用入口は削除済み。

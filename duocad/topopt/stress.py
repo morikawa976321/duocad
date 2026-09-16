@@ -19,6 +19,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
+from . import trace
 
 from . import simp
 
@@ -328,6 +329,7 @@ def safety_factor(representative_mpa: float, allowable_mpa: float) -> float:
     return float(allowable_mpa) / float(representative_mpa)
 
 
+@trace.stage('stress')
 def evaluate(
     model: simp.Model,
     rho: np.ndarray,
@@ -357,6 +359,7 @@ def evaluate(
         else np.asarray(u, dtype=float).ravel()
     )
     field = element_stress(model, displacement).scaled(scale)
+    trace.snapshot('stress-displacement', displacement=displacement, scale=scale)
     rep = representative_stress(field, density, rho_min=rho_min, percentile=percentile)
     return SafetyReport(
         safety_factor=safety_factor(rep.value, allowable_mpa),

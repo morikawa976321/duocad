@@ -289,20 +289,13 @@ hanger 材料10% では 1反復の中央値の差が 2.8秒しかない —— *
 
 ---
 
-## 再現手順
+## 現在の実行手順
+
+過去の demo30 / demo44 は比較専用設定のため削除した。今後は `models/*.json` を指定する。
 
 ```powershell
-# 煙検査（demo30 は約9分・demo44 は約25分。threads=1）
-.\.venv\Scripts\python.exe topopt_checks\measure_mma_vs_oc.py --stage demo30,demo44
-
-# 判断の根拠（hanger_test 2.4mm・約95分。threads=7）
-.\.venv\Scripts\python.exe topopt_checks\measure_mma_vs_oc.py --stage hanger --merge
-
-# MMA 定数を振る（結果は別のキーへ入る。--ratios で材料量を絞れる）
-.\.venv\Scripts\python.exe topopt_checks\measure_mma_vs_oc.py --stage demo30 --merge `
-  --mma-const MMA_ASYMPTOTE_INIT=1.0 --tag demo30_asym1.0
-
-.\.venv\Scripts\python.exe topopt_checks\measure_mma_vs_oc.py --stage hanger --merge `
+.\.venv\Scripts\python.exe topopt_checks\measure_mma_vs_oc.py --model hanger_test.json --spacing 2.4 --threads 7 --merge
+.\.venv\Scripts\python.exe topopt_checks\measure_mma_vs_oc.py --model hanger_test.json --spacing 2.4 --merge `
   --ratios 0.30 --mma-const MMA_ASYMPTOTE_INIT=1.0 --tag hanger_asym1.0
 ```
 

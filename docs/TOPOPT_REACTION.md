@@ -10,7 +10,7 @@
 | 随伴の式と、なぜ「グループ数−1本」で済まないか | `duocad/topopt/simp.py` の `reaction_sensitivity` docstring |
 | 更新則 OC と MMA の比較(制約を足す前) | [TOPOPT_MMA_VS_OC.md](TOPOPT_MMA_VS_OC.md) |
 | **生データ** | `duocad/topopt/output/reaction_constraint.json`(段ごとに `stages` へ積む) |
-| **計測スクリプト** | `topopt_checks/measure_reaction_constraint.py`(実物モデル / `--far-wall` で合成題材) |
+| **計測スクリプト** | `topopt_checks/measure_reaction_constraint.py`(`--model` で models/*.json を指定) |
 | **回帰検査** | `topopt_checks/check_simp.py` の [7][8][9] |
 | **本書** | 反力の内訳・ε の効き方・代償の実測 |
 
@@ -86,7 +86,7 @@ CG反復の合計は2.88倍。実測3)。
 構造上いらないので、制約が無ければ最適化はそこへ材料を1つも置かない。**hanger で保持
 ソリッドが浮き島になって消えるのと同じ理屈を、秒で回せる大きさに落としたもの。**
 材料は容量の 15%・40反復・`update="mma"`・`threads=1`。生データは JSON の
-`far-wall-40x8x8` 段(`measure_reaction_constraint.py --far-wall` で取り直せる)。
+`far-wall-40x8x8` 段の過去の測定。比較用 `--far-wall` は削除済み。二つの壁のモデルは回帰検査に残す。
 
 | ε | 遠い壁の受け持ち | コンプライアンス | 悪化率 |
 |---|---|---|---|

@@ -1,4 +1,4 @@
-"""文書の最適化条件を数値計算へ渡し、結果を新しいメッシュボディとして追加する。
+"""文書の条件を数値計算へ渡し、平滑化後の保持・除外ブーリアンを適用してCADを追加する。
 
 optimize.py は条件の保存・配信、ここは条件の点検・実行・進捗・結果の追加を担当する。
 元のボディは変更しない。
@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 if TYPE_CHECKING:  # pragma: no cover - 型注釈のためだけ
     from .document import Document
 
-#: 結果のメッシュボディの名前の頭。同じ文書で2回走らせると `optimized-2` になる
+#: 結果ボディの名前の頭。同じ文書で2回走らせると `optimized-2` になる
 #: (改名のverbがどの種別にも無いため。`done/20260904-1703` の契約③)。
 RESULT_NAME = "optimized"
 
@@ -142,7 +142,7 @@ class OptimizeOptions:
     #: 材料量の探索範囲[mm^3]。省くと塊の容量と保持ソリッドの体積から決める(上記の比率)。
     material_min_mm3: Optional[float] = None
     material_max_mm3: Optional[float] = None
-    #: 結果のメッシュボディの名前。省くと `optimized`(既にあれば `optimized-2`, ...)。
+    #: 結果ボディの名前。省くと `optimized`(既にあれば `optimized-2`, ...)。
     name: Optional[str] = None
 
 
@@ -829,7 +829,34 @@ def run(
     debug: Optional[Callable[[dict], None]] = None,
     debug_kinds: Optional[Any] = None,
 ) -> dict:
-    """4条件 → 塊の導出 → 連結性ガード → 最適化 → メッシュ化 → **メッシュボディとして文書へ**。
+    """実製品の最適化を、成功・失敗・中断を含めて実行ごとに記録する。"""
+    from .topopt import trace
+
+    with trace.recording(doc, options or OptimizeOptions()) as recorder:
+        def report(event):
+            recorder.snapshot('progress', event)
+            if progress is not None:
+                progress(dict(event, diagnostic_path=str(recorder.path)))
+
+        result = _run(doc, options, progress=report, should_cancel=should_cancel,
+                      debug=debug, debug_kinds=debug_kinds)
+        result['diagnostic_path'] = str(recorder.path)
+        recorder.snapshot('result', result)
+        recorder.document(doc, 'document_after')
+        recorder.finish(result['state'])
+        return result
+
+
+def _run(
+    doc: "Document",
+    options: Optional[OptimizeOptions] = None,
+    *,
+    progress: Optional[Callable[[dict], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
+    debug: Optional[Callable[[dict], None]] = None,
+    debug_kinds: Optional[Any] = None,
+) -> dict:
+    """入力条件 → 塊の導出 → 最適化 → 平滑化 → 保持・除外ブーリアン → CADとして文書へ。
 
     **元のボディは1つも消さない・変えない。** 足すのは1つだけで、その `body_id` を返す。
 
@@ -884,6 +911,10 @@ def run(
     bundle = build_conditions(doc)
     limits = resolution_limits(doc, rmin_mm=opts.rmin_mm)
     spacing = _resolve_element_size(limits, opts.element_size_mm)
+
+    from .topopt import trace
+    trace.snapshot('resolved-conditions', bundle=bundle, limits=limits, spacing=spacing,
+                   allowable=allowable_stress())
 
     pump = _ProgressPump(progress, should_cancel)
     dbg = _DebugSink(debug, debug_kinds)
@@ -1031,12 +1062,27 @@ def run(
     positions = _mesh_to_world(surface.verts_smooth, grid)
     _check_mesh_placement(positions, grid)
     indices = surface.faces.ravel().tolist()
+    trace.snapshot('selected-result', result=result)
+    import numpy as np
+    from .topopt.finalize import finalize, solid_mesh
+
+    shape = finalize(
+        np.asarray(positions).reshape(-1, 3), surface.faces,
+        [doc.get_body(bid).shape for bid in bundle.keep_body_ids],
+        [doc.get_body(bid).shape for bid in bundle.exclude_body_ids],
+        progress=lambda message: pump.emit(phase="finalize", message=message),
+    )
+    final_vertices, final_faces = solid_mesh(shape)
+    positions = final_vertices.ravel().tolist()
+    indices = final_faces.ravel().tolist()
+    trace.final_mesh(surface.verts_raw, surface.verts_smooth, surface.faces, grid,
+                     final_vertices=final_vertices, final_faces=final_faces)
 
     name = opts.name or _unique_result_name(doc)
-    pump.emit(phase="insert", message=f"三角形 {len(indices) // 3} 枚のボディを足す")
-    from .verbs import add_mesh_body
+    pump.emit(phase="insert", message="保持・除外を反映したCADソリッドを足す")
+    from .verbs import add_solid_body
 
-    body_id = add_mesh_body(doc, positions, indices, name=name)
+    body_id = add_solid_body(doc, shape, name=name)
 
     return dict(
         common,

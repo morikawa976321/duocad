@@ -1,0 +1,44 @@
+{
+  "checks": {
+    "preserve": {
+      "label": "保持部分をすべて含む",
+      "status": "unknown"
+    },
+    "exclude": {
+      "label": "除外部分と体積的な重なりがない",
+      "status": "unknown"
+    },
+    "watertight": {
+      "label": "水密な自己交差のない境界である",
+      "status": "fail"
+    },
+    "single_solid": {
+      "label": "材料領域が単一ソリッドである",
+      "status": "unknown"
+    }
+  },
+  "tolerance_mm": 1e-07,
+  "method": "OCCT CAD vs faceted mesh; finite kernel precision; no sampling or allowed residual volume",
+  "boundary_contact_allowed": true,
+  "mesh": {
+    "triangles": 12048,
+    "vertices": 5968,
+    "boundary_edges": 0,
+    "nonmanifold_edges": 0,
+    "inconsistent_edges": 0,
+    "nonmanifold_vertices": 0,
+    "degenerate_triangles": 0,
+    "duplicate_triangles": 0,
+    "boundary_components": 1,
+    "self_intersections": 18
+  },
+  "status": "fail",
+  "exit_code": 1,
+  "model": "hanger_bar_attachment.json",
+  "model_sha256": "a6613351adf345b6155a9058c0a6a38f87baae7c40fcdd742eb0876e18d8c059",
+  "source": {
+    "path": "C:\\Users\\tm976\\mf\\duocad\\output\\hanger_24_analysis\\optimized.stl",
+    "sha256": "5360af4e3d6905c3146dc80f1bdb574d4e3edd6c446052971bebb16866894b50"
+  },
+  "seconds": 8.304760400002124
+}

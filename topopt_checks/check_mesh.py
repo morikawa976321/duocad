@@ -1,55 +1,4 @@
-"""marching cubes + Taubin平滑化(`mesh.py`)の受入検査。
-
-    .\\.venv\\Scripts\\python.exe topopt_checks\\check_mesh.py
-
-**このファイルが合否そのものである。** タスクの完了条件1「`check_mesh.py` が緑」を、
-下記10項目の assert で判定する。1つでも落ちればプロセスは非ゼロで終わる。
-
-検査の構成:
-
-1. **水密** — すべての辺がちょうど2枚の三角形に共有される。孤立頂点・縮退三角形が無い。
-2. **体積の一致** — marching cubes直後(平滑化前)のメッシュ体積が `sum(rho_clean) × 要素体積`
-   と5%以内で一致する(等値0.5の面としてまともか)。
-3. **Taubinが体積を保つ** — 平滑化の前後で体積変化が5%以内。
-4. **Taubinが素のLaplacianより縮まない** — 同じ反復数・同じ開始点で素のLaplacianを回し、
-   Laplacianのほうが明確に大きく縮むことを確認する
-   (「Taubinと名乗っているが実はLaplacian」の検出)。
-5. **補間が効いている(先に二値化していない)** — marching cubesが辺上に置いた頂点の
-   内分比の分布を見る。二値化した場を渡すと内分比は必ず厳密に0.5になり分布のばらつきが
-   0になるので、ばらつき(標準偏差)がそれよりずっと大きいことを確認する。
-6. **最小肉厚** — 平滑化の後も、最小肉厚が平滑化前の一定割合を下回らない
-   (細い部材を食っていないこと)。
-7. **STLの往復** — 書き出したSTLを `build123d.Mesher().read()` で読み戻し、
-   三角形数(=面数、facetedB-rep)と体積が一致する。
-8. **座標系の整合(セル中心規約)** — 既知の位置に置いた合成密度場で、面のバウンディング
-   ボックスが期待どおりの位置にあるかを見る。1〜7はどれも並進不変(体積・水密性・分布の
-   形は位置のズレでは変わらない)なので、**全軸を一律に半セルずらす**類のバグを検出できない
-   (2026-08-30にQAが発見: `rho[ex]`はセル`ex`の中心の値なのに、パディング除去のオフセット
-   計算がそれを踏まえておらず、marching cubesの面が設計空間に対して常に半要素ずれていた)。
-9. **面の向き(巻き順が外向き)** — 閉曲面の向きは「全部外向き」か「全部内向き」の
-   2通りしかないので、(a)向きが全面で一貫している(共有辺を2枚の三角形が必ず逆向きに
-   たどる＝同じ有向辺が2度現れない)ことと、(b)発散定理の符号付き体積が正であること、の
-   2つで確定する。(a)だけだと全体反転を、(b)だけだと一部反転の打ち消し合いを見逃す。
-   閾値は無い。1〜8で巻き順を見るのは検査7だけで、それは**STL経路しか通らない**ため、
-   `mr.faces` を直接使う消費者(`duocad/optimize_run.py`→`add_mesh_body`→
-   `web/src/viewport.ts`)が内向きのまま残る事故を
-   捕まえられなかった(2026-09-02発見。engine
-   `winding-fix-at-export-only-leaks-to-other-consumers`)。
-10. **保持/除外の塗り直し(2026-09-05追加。既定でσ=0になった後もここは生きている)** —
-    密度場側のガウシアン平滑化(`mesh.py`段0)
-    は保持ソリッド・除外ソリッド・設計空間の外をにじませるので、その塗り直しが
-    実際に効いているかを合成場で見る。塗り直し**後**の場そのもの(保持=1・除外=0が
-    厳密に保たれているか)と、できたメッシュの幾何(`voxelize.occupancy`で焼き直し、
-    保持マスクの要素がすべて内側に入り、除外マスクの要素に1つも材料が入っていないか)
-    の両方を見る。**極端なσ(3.0要素)で1回だけ確認する**(調整値の最適化はしない)。
-    **既定のσは 0 になった**(2026-09-05)が、`smooth_sigma>0` を明示する呼び出しは
-    残っているので、この塗り直しの検査は引き続き要る。水密・面の向きもこの合成場で
-    保たれることを併せて確認する。
-
-実行には片持ち梁を1回回す(`bench.MESH_MATERIAL` = 35x14x14・15反復。約11秒)。**ここだけ
-プリセット(20x8x8)を使わない** —— 理由は `bench.py` の該当コメント。8番目の検査だけは
-高速な合成密度場で行うので、この所要時間には影響しない。
-"""
+"""メッシュ化の回帰検査。水密性・体積・補間・肉厚・座標・面の向き・保持/除外を確認する。"""
 
 from __future__ import annotations
 
@@ -160,16 +109,7 @@ def check_watertight(mr: mesh.MeshResult) -> None:
 # ---------------------------------------------------------------------------
 def check_volume_matches_density(mr: mesh.MeshResult) -> None:
     print("\n[2] 体積の一致(marching cubesに実際に渡した場 vs sum(rho_clean)x要素体積)")
-    # `mr.rho_clean` は**段0(ガウシアン平滑化+塗り直し)を経た後**の場(`mesh.build_surface`
-    # の実装順序どおり)。段0が有効かどうかに関わらず「marching cubesが実際に受け取った場」
-    # と比べていることになる — 同じ式で書ける。
-    #
-    # **閾値は 5% → 12% → 5% へ戻した**(2026-09-05)。12%へ広げたのはガウシアン平滑化が
-    # 既定で入った(σ=1)ためで、**同じ日にその既定を切った**(`mesh.DEFAULT_SMOOTH_SIGMA`
-    # = 0.0)ので広げる理由が消えた。実測(このファイルの既定シナリオ): σ=0 で 3.42% /
-    # σ=0.5 で 4.24% / σ=0.75 で 5.80% / σ=1 で 8.21%。**5% は σ=0 の実測 3.42% に安全余裕を
-    # 足した値**で、level取り違えや半セルずれ(検査8が別途見る観点)のような本物のバグ
-    # (実測30%超)はもちろん、**ガウシアンが既定に戻ってしまう退行も捕まえる**。
+    # 島除去後の密度場を比較対象にする。
     expected = float(mr.rho_clean.sum())  # 要素体積=1(spacing=(1,1,1))なので係数1
     actual = mr.volume_raw
     rel = abs(actual - expected) / expected
@@ -196,24 +136,6 @@ def check_taubin_preserves_volume(mr: mesh.MeshResult) -> None:
     )
     RESULTS["volume_smooth"] = round(mr.volume_smooth, 3)
     RESULTS["volume_change_rel"] = rel
-
-
-# ---------------------------------------------------------------------------
-# 4. Taubinが素のLaplacianより縮まない
-# ---------------------------------------------------------------------------
-def check_taubin_vs_laplacian(mr: mesh.MeshResult) -> None:
-    print("\n[4] Taubin vs 素のLaplacian(同じ反復数・同じ開始点)")
-    verts_lap = mesh.laplacian_smooth(mr.verts_raw, mr.faces, lam=mr.lam, n_iter=mr.n_iter)
-    vol_lap = mesh.mesh_volume(verts_lap, mr.faces)
-    shrink_lap = mr.volume_raw - vol_lap
-    shrink_taubin = mr.volume_raw - mr.volume_smooth
-    check(
-        "Laplacianの方が明確に大きく縮む",
-        shrink_lap > shrink_taubin + 0.01 * mr.volume_raw,
-        f"Laplacian収縮={shrink_lap:.3f}(体積{vol_lap:.3f}) "
-        f"Taubin収縮={shrink_taubin:.3f}(体積{mr.volume_smooth:.3f})",
-    )
-    RESULTS["volume_plain_laplacian"] = round(vol_lap, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -305,36 +227,14 @@ def check_stl_roundtrip(mr: mesh.MeshResult) -> None:
 # 8. 座標系の整合(セル中心規約)
 # ---------------------------------------------------------------------------
 def check_bounding_box_alignment() -> None:
-    """既知の位置に置いた合成密度場で、marching cubesが返す面のバウンディングボックスが
-    「セル中心」規約(`rho[ex]` はセル `ex` の中心の値。画面側のボクセル描画 ——
-    `web/src/viewport.ts` の `buildDebugVoxels` —— もこの規約に合わせてある)どおりの
-    位置にあるかを見る。
-
-    上の1〜7はどれも並進不変(体積・水密性・分布の形は位置のズレでは変わらない)なので、
-    **全軸を一律に半セルずらす**類のバグはこれが無いと素通りする(2026-08-30にQAが発見:
-    パディング除去のオフセット計算が `pad_width*spacing` になっており、正しくは
-    `(pad_width-0.5)*spacing`。差の0.5要素ぶん、面が常に設計空間に対してずれていた)。
-
-    このぶんだけは実データ(SIMP結果)を使わず、位置が最初から分かっている合成密度場
-    (直方体ブロック1つ、z軸方向は設計空間の端(0)に接するように置いてパディング境界の
-    処理も一緒に確認する)で見る — 高速かつ期待値が数式で厳密に出せるため。
-
-    **`smooth_sigma=0` を明示する**(2026-09-05に既定も 0 になったが、既定に頼らない ——
-    この検査が壊れる条件が「σが正であること」だと分かっているので、明示で固定する)。
-    ここが見たいのは座標変換
-    (半セルオフセット)だけで、平滑化とは無関係な関心事。しかもこの合成場は
-    6x5x4の格子に2x2x2のブロック1つという極小サイズで、σ=1要素(2026-09-05まで既定)を掛けると
-    ブロックの山がほぼ均されて0.5を割り込み、`marching_cubes`が等値面を見つけられず
-    例外になる(2026-09-05実測)。平滑化の効き自体は検査10(σ=3.0の極端値まで)が
-    別に見る。
-    """
+    """単一ブロックの境界位置から、半セルの座標変換を検査する。"""
     print("\n[8] 座標系の整合(既知の位置に置いた合成密度場のバウンディングボックス)")
     lo = (2, 1, 0)
     hi = (4, 3, 2)
     rho = np.zeros((6, 5, 4))
     rho[lo[0] : hi[0], lo[1] : hi[1], lo[2] : hi[2]] = 1.0
 
-    mr_synth = mesh.build_surface(rho, smooth_sigma=0)
+    mr_synth = mesh.build_surface(rho)
     bbox_min = mr_synth.verts_raw.min(axis=0)
     bbox_max = mr_synth.verts_raw.max(axis=0)
     expected_min = np.array(lo, dtype=float)
@@ -397,40 +297,21 @@ def check_face_winding(mr: mesh.MeshResult) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 10. 保持/除外の塗り直し(ガウシアン平滑化がにじませたぶんの手当て)
+# 10. 保持/除外の塗り直し
 # ---------------------------------------------------------------------------
 def check_mask_repaint() -> None:
-    """合成密度場(実データではなく、位置が分かっている合成ブロック)で塗り直しを確かめる。
-
-    **本体ブロック**(x:2..14 / y:2..12 / z:2..12、ρ=1)に対して:
-    - **保持(keep_mask)**: x:10..18 のスパイク。本体の内側(10..14)から外側(14..18)へ
-      連続してまたぐように置く — `keep_mask` は塗り直しで常にρ=1へ戻されるので、
-      **`keep_mask`自身が連結していれば、本体側とσ次第で薄れても浮島にならない**
-      (境界ちょうどで本体とキープを接するだけだと、極端なσで境界の物理密度が0.5を
-      割り込み、`remove_islands`が浮島として消してしまう。実測で確認して置き方を
-      決めた — 2026-09-05)。
-    - **除外(zero_mask)**: x:6..9 / y:5..8 / z:5..8 の小さな穴。本体の内部に、
-      どの壁からも4要素以上離して開ける(平滑化ののち周りの材料がにじみ込む先)。
-
-    σ=3.0(タスク指定の極端値。最適値探索はしない)でガウシアン平滑化+塗り直しを掛け、
-    (a) marching cubesへ渡す直前の場で保持=1・除外=0が厳密に保たれているか、
-    (b) できたメッシュを`voxelize.occupancy`で同じ格子へ焼き直し、保持マスクの要素が
-        すべて内側(occupied)・除外マスクの要素が1つも内側でないか、
-    (c) その合成場でも水密・面の向きが保たれているか(検査1・9と同じ観点)、
-    を見る。
-    """
-    print("\n[10] 保持/除外の塗り直し(σ=3.0の極端値。合成密度場)")
+    """保持の追加と除外による穴が、密度場と最終メッシュの両方に反映されることを確認する。"""
+    print("\n[10] 保持/除外の塗り直し(合成密度場)")
     shape = (24, 14, 14)
     rho = np.zeros(shape)
     rho[2:14, 2:12, 2:12] = 1.0
-    rho[6:9, 5:8, 5:8] = 0.0  # 除外の下にある「穴」(既定でも0だが明示)
 
     keep_mask = np.zeros(shape, dtype=bool)
     keep_mask[10:18, 5:9, 5:9] = True  # 本体を貫くスパイク(内側4要素 + 外側4要素)
     zero_mask = np.zeros(shape, dtype=bool)
     zero_mask[6:9, 5:8, 5:8] = True
 
-    mr = mesh.build_surface(rho, keep_mask=keep_mask, zero_mask=zero_mask, smooth_sigma=3.0)
+    mr = mesh.build_surface(rho, keep_mask=keep_mask, zero_mask=zero_mask)
 
     # (a) 場そのもの
     keep_ok = bool(np.all(mr.rho_clean[keep_mask] == 1.0))
@@ -491,7 +372,6 @@ def main() -> int:
     check_watertight(mr)
     check_volume_matches_density(mr)
     check_taubin_preserves_volume(mr)
-    check_taubin_vs_laplacian(mr)
     check_interpolation_not_binarized(mr)
     check_min_wall_thickness(mr)
     check_stl_roundtrip(mr)

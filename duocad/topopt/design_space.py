@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 import numpy as np
+from . import trace
 from scipy import ndimage
 
 from . import anchor as an
@@ -344,6 +345,7 @@ def box_mask(grid: vx.Grid, lo: Sequence[float], hi: Sequence[float]) -> np.ndar
 # ---------------------------------------------------------------------------
 # 導出(本体)
 # ---------------------------------------------------------------------------
+@trace.stage('derive-bbox')
 def derive(
     conditions: Conditions,
     *,
@@ -1025,6 +1027,7 @@ def width_corridor_length(
     return hi, diagnosis
 
 
+@trace.stage('reference')
 def build_reference(
     conditions: Conditions,
     *,
@@ -1223,6 +1226,7 @@ def _model_for_mask(
     return model
 
 
+@trace.stage('derive-candidate')
 def derive_from_reference(
     conditions: Conditions,
     *,
@@ -1425,6 +1429,7 @@ def _assert_rmin_matches_space(
         )
 
 
+@trace.stage('candidate')
 def run_topopt(
     space: DesignSpace,
     *,

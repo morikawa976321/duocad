@@ -1,28 +1,7 @@
-"""反力の下限制約(`simp.optimize(reaction_min=...)`)を実物モデルで振る実測。
+"""models/*.json の条件で反力下限制約の効果と保持領域の生存を測る。
 
-    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_reaction_constraint.py ^
-        --model hanger_test.json --spacing 2.4 --ratio 0.30 --eps none,0.10,0.20 --merge
-
-測るのは2つ:
-
-1. **各拘束面が受け持つ反力の内訳**(`run_topopt` の戻り値の `"reactions"`)。
-   構造最適化は荷重を運ばない材料を置かないので、制約が無いと拘束面の一部が
-   `fraction ≈ 0` になり、そこの保持ソリッドが浮き島になって `mesh.remove_islands` に消える。
-2. **保持ソリッドが結果に残ったか**。判定は2本立てで、
-   (a) 保持ソリッドの各連結成分の要素が、平滑化・島除去のあとの密度場
-   (`MeshResult.rho_clean`)で生きている割合、(b) 保持ソリッドのワールド bbox が
-   結果メッシュの bbox に収まっているか。**(a) が本命**で、(b) はタスクが名指しした
-   粗い判定(bbox は片方の成分が消えても他方が広ければ通ってしまう)。
-
-**hanger では ε の下限を測れない(2026-09-11 実測)。** 粗い格子でも本番の 2.412mm でも、
-制約なしで3枚とも 0.97 以上を受け持つ —— 制約が1度も効かないので、どの ε でも同じ形が出る。
-ε を振るための場は `--far-wall`(合成題材)のほうにある。
-
-    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_reaction_constraint.py ^
-        --far-wall --eps none,0.02,0.05,0.10,0.20,0.35,0.50,0.70 --merge
-
-生データは `duocad/topopt/output/reaction_constraint.json`(`--merge` で段ごとに足す)。
-"""
+--model hanger_test.json --spacing 2.4 --ratio 0.30 --eps none,0.10,0.20
+制約あり/なしの比較では --update mma を指定して更新則を揃える。"""
 
 from __future__ import annotations
 
@@ -165,72 +144,6 @@ def run_case(
     return row
 
 
-def run_far_wall(
-    values: list[float | None], *, max_iter: int, threads: int | None
-) -> dict:
-    """合成題材(遠い壁)で ε を振る。**制約が実際に効く唯一の場**なので代償はここで測る。
-
-    題材は `check_simp.two_wall_case`(回帰検査と同じもの)。**別に組み直さない** ——
-    組み直すと docs/TOPOPT_REACTION.md の表を検査が固定できなくなる。
-    """
-    from check_simp import FAR_WALL_GRID, two_wall_case
-
-    nelx, nely, nelz = FAR_WALL_GRID
-    fixed, load, groups = two_wall_case()
-    common: dict[str, Any] = dict(
-        volfrac=0.15,
-        max_iter=max_iter,
-        change_tol=0.0,
-        fixed_dofs=fixed,
-        load=load,
-        reactions=groups,
-        threads=threads,
-        update="mma",
-    )
-    rows: list[dict[str, Any]] = []
-    baseline = None
-    for eps in values:
-        label = "none" if eps is None else f"{eps:g}"
-        print(f"--- eps={label} 開始", flush=True)
-        started = time.perf_counter()
-        failure = None
-        try:
-            result = simp.optimize(nelx, nely, nelz, reaction_min=eps, **common)
-        except simp.ReactionTargetError as error:
-            # **満たせなかったことも1行として残す。** 例外に付いてくる `Result` から
-            # そこまでの反力とコンプライアンスは読める。
-            failure = {"kind": "ReactionTargetError", "message": str(error)}
-            result = error.result
-        compliance = float(result.history[-1].compliance)
-        if baseline is None:
-            baseline = compliance
-        row = {
-            "eps": eps,
-            "compliance": compliance,
-            "compliance_penalty": compliance / baseline - 1.0,
-            "fractions": {item.name: item.fraction for item in result.reactions},
-            "seconds": float(time.perf_counter() - started),
-            "iterations": len(result.history),
-            "stopped_by": result.stopped_by,
-            "failure": failure,
-        }
-        rows.append(row)
-        share = {name: round(value, 6) for name, value in row["fractions"].items()}
-        print(
-            f"    {row['seconds']:.0f}秒 C={compliance:.6g} "
-            f"({row['compliance_penalty']:+.1%}) 反力={share}",
-            flush=True,
-        )
-    return {
-        "case": "far-wall",
-        "grid": list(FAR_WALL_GRID),
-        "volfrac": 0.15,
-        "threads": threads if threads is not None else simp.PARALLEL_THREADS,
-        "requested_update": "mma",
-        "cases": rows,
-    }
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="hanger_test.json")
@@ -252,26 +165,11 @@ def main() -> int:
     parser.add_argument("--tag", default=None)
     parser.add_argument("--out", default=str(OUTPUT_JSON))
     parser.add_argument("--merge", action="store_true")
-    parser.add_argument(
-        "--far-wall",
-        action="store_true",
-        help="実物モデルではなく合成題材(遠い壁)で振る。**制約が効く唯一の場**",
-    )
     args = parser.parse_args()
 
     values: list[float | None] = [
         None if item.strip() == "none" else float(item) for item in args.eps.split(",")
     ]
-    if args.far_wall:
-        # **既定は1スレッド。** 表の数字(docs/TOPOPT_REACTION.md)を取ったときの条件で、
-        # 40x8x8 は並列にしても速くならない。
-        payload = run_far_wall(
-            values,
-            max_iter=args.max_iter,
-            threads=1 if args.threads is None else args.threads,
-        )
-        return _write(args, args.tag or "far-wall-40x8x8", payload)
-
     space, forces = build_space(args.model, args.spacing)
     tag = args.tag or f"{Path(args.model).stem}-{args.spacing:g}mm-{args.ratio:g}"
     STL_DIR.mkdir(parents=True, exist_ok=True)

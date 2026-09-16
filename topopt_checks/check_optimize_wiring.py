@@ -186,8 +186,8 @@ def check_end_to_end(session, out, before_ids, before_shapes) -> None:
         f"{len(before_ids)} -> {len(bodies)} (増えたのは {[b.name for b in added]})",
     )
     check(
-        "増えたのはメッシュボディ",
-        bool(added) and added[0].kind == "mesh" and added[0].mesh is not None,
+        "増えたのはCADソリッド",
+        bool(added) and added[0].kind == "solid" and added[0].shape is not None,
         f"kind={added[0].kind if added else None} / name={added[0].name if added else None}",
     )
     survived = [body_id for body_id in before_ids if body_id in {b.id for b in bodies}]
@@ -200,7 +200,7 @@ def check_end_to_end(session, out, before_ids, before_shapes) -> None:
     check(
         "三角形が入っている",
         (out["triangle_count"] or 0) > 100
-        and added[0].mesh.triangle_count == out["triangle_count"],
+        and added[0].shape is not None,
         f"{out['triangle_count']} 枚",
     )
     # **画面(`20260904-1705`)はこの戻り値をWebSocketへそのまま載せる。** 実体
@@ -220,7 +220,8 @@ def check_placement(session, left, right, out) -> None:
     from duocad import kernel
 
     body = session.document.get_body(out["body_id"])
-    points = np.asarray(body.mesh.positions, dtype=float).reshape(-1, 3)
+    from duocad.topopt.finalize import solid_mesh
+    points, _ = solid_mesh(body.shape)
     lo, hi = points.min(axis=0), points.max(axis=0)
     grid = out["grid"]
     origin = np.asarray(grid["origin"], dtype=float)

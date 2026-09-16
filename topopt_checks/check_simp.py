@@ -680,8 +680,7 @@ def two_wall_case() -> tuple[np.ndarray, np.ndarray, list]:
     反力もゼロになる。**hanger で保持ソリッドが浮き島になって消えるのと同じ理屈**を、
     秒で回せる大きさに落としたもの。
 
-    `measure_reaction_constraint.py --far-wall` が ε を振るのにこれを呼ぶ。**実測と回帰検査で
-    題材を分けない** —— 分けると docs/TOPOPT_REACTION.md の表の数字を検査が固定できなくなる。
+    反力下限制約が有効なときだけ遠い壁へ荷重経路を作ることを回帰検査する。
     """
     nelx, nely, nelz = FAR_WALL_GRID
     ny1, nz1 = nely + 1, nelz + 1
