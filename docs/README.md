@@ -20,3 +20,4 @@
 | [TOPOPT.md](TOPOPT.md) ほか `TOPOPT_*.md` | 形状最適化（実測・設計と画面・受入検査・速度・更新則・反力・active set） |
 | [CAD_LIBRARY_PITFALLS.md](CAD_LIBRARY_PITFALLS.md) | build123d / OCCT / STEP / `.venv` / MCP サーバの落とし穴（コード側コメントの索引つき） |
 | [TOPOPT_PRE_SMOOTHING_CHECKS.md](TOPOPT_PRE_SMOOTHING_CHECKS.md) | 島除去後・平滑化前の6条件と探索履歴の検査 |
+| [PLAN_BINARY_STRESS_SEARCH.md](PLAN_BINARY_STRESS_SEARCH.md) | 二値モデル・応力制約による探索への移行と、旧コード・文書の削除計画（未実装） |
