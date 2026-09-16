@@ -3,8 +3,9 @@
 合成の箱だけで走る(私物のSTEPや実行フォルダに依存しない)。SIMP は回さない。
 実物(hanger)での再現は `topopt_checks/check_design_space.py --run <実行フォルダ>`。
 
-1. **幾何** —— 1つの箱なら塊は箱を余白ぶん広げた箱そのもの / 離れた2部品では凸包が両者を
-   橋渡しし、外枠より小さい / 平行移動で塊が一緒に動く / 余白は最長辺の比率。
+1. **幾何** —— 1つの箱なら塊は「箱から距離 m 以内」(角の丸い箱) / 離れた2部品では凸包が
+   両者を橋渡しし、外枠より小さい / 平面オフセットの多面体より角が丸いぶん小さい /
+   平行移動で塊が一緒に動く / 余白は最長辺の比率。
 2. **入力** —— `bodies` は必須で、保持ボディが要る / 退化した点群は摂動せずに落とす /
    外接箱は事前の三角形分割に依存しない。
 3. **条件の保持と接続** —— 全条件を個別に見る(一部だけつながる配置は落ちる)/ 条件を含まない
@@ -72,16 +73,24 @@ def _two_pads_conditions(offset=(40.0, 30.0, 0.0), obstacle=None):
 # --------------------------------------------------------------------------------------
 # 1. 幾何
 # --------------------------------------------------------------------------------------
-def test_a_single_box_gives_the_box_grown_by_the_margin() -> None:
-    """箱の凸包は箱そのもの。支持平面を余白ぶん押し出すと、箱を各方向に余白だけ広げた箱になる。"""
+def test_a_single_box_gives_the_box_within_the_margin_distance() -> None:
+    """箱の凸包は箱そのもの。塊は「箱から距離 m 以内」の点(角・稜が丸い箱)で、
+    箱を各方向に m 広げた直方体(平面オフセット)より角のぶん小さい。"""
     space = ds.derive(_one_box_conditions(), elements_long_axis=LONG_AXIS)
     assert space.margin == pytest.approx(ds.DEFAULT_MARGIN_RATIO * 20.0)
-    lo = np.asarray(space.bbox_min) - space.margin
-    hi = np.asarray(space.bbox_max) + space.margin
-    expected = ds.box_mask(space.grid, lo, hi)
+    lo = np.asarray(space.bbox_min)
+    hi = np.asarray(space.bbox_max)
+    centers = space.grid.centers_of(np.argwhere(np.ones(space.grid.shape, dtype=bool)))
+    clamped = np.clip(centers, lo, hi)
+    distance = np.linalg.norm(centers - clamped, axis=1)
+    expected = (distance <= space.margin + 1e-9).reshape(space.grid.shape)
     assert np.array_equal(space.mask, expected)
-    assert space.stats["cells"]["hull"] == space.stats["cells"]["frame"]
+    box_offset = ds.box_mask(space.grid, lo - space.margin, hi + space.margin)
+    assert space.stats["cells"]["offset_polytope"] == int(box_offset.sum())
+    assert space.stats["cells"]["hull"] < space.stats["cells"]["offset_polytope"]
+    assert np.all(space.mask <= box_offset)  # 距離 m 以内 ⊂ 平面オフセット
     assert space.stats["derivation"] == ds.DERIVATION
+    assert space.stats["inflation"] == "minkowski-ball"
     assert space.stats["hull"]["facet_count"] >= 6
 
 
@@ -91,12 +100,18 @@ def test_two_separated_bodies_are_bridged_by_the_hull_but_the_frame_corners_are_
     cells = space.stats["cells"]
     assert cells["hull"] < cells["frame"]
     assert cells["connected"] == space.element_count
-    # 塊の全セル中心は、押し出した支持平面の内側にある(定義の再計算)。
+    # 塊の全セル中心は凸包から距離 m 以内にある(定義の再計算)。平面オフセットは必要条件。
     idx = np.argwhere(space.mask)
     centers = space.grid.centers_of(idx)
     planes = space.hull_planes
-    distance = centers @ planes[:, :3].T + planes[:, 3]
-    assert np.all(distance <= space.margin + 1e-9)
+    signed = centers @ planes[:, :3].T + planes[:, 3]
+    assert np.all(signed <= space.margin + 1e-9)
+    assert np.all(ds.distance_to_hull(centers, planes, space.hull_triangles) <= space.margin + 1e-9)
+    # 塊の外で平面オフセットには入るセルは、凸包から距離 m より遠い(丸めた角・稜)。
+    outside = np.argwhere(~space.mask & ds.offset_hull_mask(space.grid, planes, space.margin))
+    assert outside.shape[0] > 0
+    far = ds.distance_to_hull(space.grid.centers_of(outside), planes, space.hull_triangles)
+    assert np.all(far > space.margin)
     # 外枠の角(x 最大・y 最小)は両部品から遠く、凸包を余白ぶん押し出しても届かない。
     corner = space.grid.centers_of(np.array([[space.grid.shape[0] - 2, 1, space.grid.shape[2] // 2]]))[0]
     assert np.max(corner @ planes[:, :3].T + planes[:, 3]) > space.margin
@@ -172,15 +187,28 @@ def test_a_flat_point_cloud_is_rejected_instead_of_being_perturbed() -> None:
     """厚み0の点群では凸包が起こせない。ランダム摂動で通さず、階数を名指しして落とす。"""
     flat = ds.ConditionBody("sheet", ("fixed",), (0.0, 0.0, 0.0), (10.0, 10.0, 0.0))
     with pytest.raises(ds.DesignSpaceGeometryError, match="平面"):
-        ds.hull_planes(ds.condition_corners([flat]))
+        ds.convex_hull(ds.condition_corners([flat]))
     line = ds.ConditionBody("rod", ("fixed",), (0.0, 0.0, 0.0), (10.0, 0.0, 0.0))
     with pytest.raises(ds.DesignSpaceGeometryError, match="直線"):
-        ds.hull_planes(ds.condition_corners([line]))
+        ds.convex_hull(ds.condition_corners([line]))
     # 有限の厚みがあれば平面状の部品でも通る(0.5mm の板)。
     plate = ds.ConditionBody("plate", ("fixed",), (0.0, 0.0, 0.0), (10.0, 10.0, 0.5))
-    planes, info = ds.hull_planes(ds.condition_corners([plate]))
+    planes, triangles, info = ds.convex_hull(ds.condition_corners([plate]))
     assert planes.shape[1] == 4 and info["facet_count"] >= 6
+    assert triangles.shape[1:] == (3, 3) and triangles.shape[0] == info["facet_count"]
     assert np.allclose(np.linalg.norm(planes[:, :3], axis=1), 1.0)
+
+
+def test_the_distance_to_the_hull_matches_closed_forms() -> None:
+    """凸包(箱)からの距離: 内側 0 / 面の正面は平面距離 / 稜・頂点の外は稜・頂点までの距離。"""
+    planes, triangles, _info = ds.convex_hull(
+        ds.condition_corners([ds.ConditionBody("box", ("fixed",), (0.0, 0.0, 0.0), (10.0, 10.0, 10.0))])
+    )
+    points = np.array(
+        [[5.0, 5.0, 5.0], [12.0, 5.0, 5.0], [12.0, 12.0, 5.0], [12.0, 12.0, 12.0], [-3.0, 5.0, 5.0], [5.0, 5.0, -4.0]]
+    )
+    expected = [0.0, 2.0, np.sqrt(8.0), np.sqrt(12.0), 3.0, 4.0]
+    assert np.allclose(ds.distance_to_hull(points, planes, triangles), expected)
 
 
 def test_the_bounding_box_does_not_depend_on_an_earlier_tessellation() -> None:

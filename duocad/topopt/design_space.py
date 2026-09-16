@@ -1,8 +1,8 @@
 """保持・除外・拘束・荷重の4条件から、材料を置ける設計空間(塊)を1回で作る。
 
-derive: 保持ボディと条件面が属するボディの外接箱の頂点から凸包を作り、凸包の各支持平面を
-全体寸法に比例する余白ぶん外へ押し出した領域を格子に載せ、除外ソリッドの占有を引き、
-条件(保持ボディ・拘束面・荷重面)を1つも含まない連結成分を落とす。
+derive: 保持ボディと条件面が属するボディの外接箱の頂点から凸包を作り、凸包から距離が
+全体寸法に比例する余白 `m` 以内の領域(凸包と半径 `m` の球のミンコフスキー和)を格子に載せ、
+除外ソリッドの占有を引き、条件(保持ボディ・拘束面・荷重面)を1つも含まない連結成分を落とす。
 
 材料量・安全率・参照密度・最適化結果は導出の入力に取らない。1回の最適化実行を通して
 格子・設計マスク・保持マスク・面アンカーの表は同じもの(`DesignSpace`)を使い、
@@ -391,7 +391,8 @@ class DesignSpace:
     同じ格子に載せた `VoxelModel` で、**`model.obstacle` は常に全 False**(除外は塊から
     引き切っているため)。`table` は導出が作った面アンカーの表(条件ごとの接続の確認に使った
     もの)。`hull_planes` は凸包の支持平面 `(n, 4)`(各行 `[a,b,c,d]`、`ax+by+cz+d <= 0` が内側、
-    法線は単位長)、`corners` は凸包を起こした点群。
+    法線は単位長)、`hull_triangles` は凸包の表面の三角形 `(f, 3, 3)`(距離の計算に使ったもの)、
+    `corners` は凸包を起こした点群。
     """
 
     grid: vx.Grid
@@ -404,6 +405,7 @@ class DesignSpace:
     margin: float
     margin_ratio: float
     hull_planes: np.ndarray
+    hull_triangles: np.ndarray
     corners: np.ndarray
     stats: dict = field(default_factory=dict)
     table: Any = None
@@ -448,12 +450,14 @@ def condition_corners(bodies: Sequence[ConditionBody]) -> np.ndarray:
     return np.unique(corners, axis=0)
 
 
-def hull_planes(corners: np.ndarray) -> tuple[np.ndarray, dict]:
-    """点群の凸包の支持平面 `(n, 4)` と診断。
+def convex_hull(corners: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
+    """点群の凸包。`(支持平面 (n, 4), 表面の三角形 (f, 3, 3), 診断)` を返す。
 
-    各行は `[a, b, c, d]` で、`ax + by + cz + d <= 0` が凸包の内側、`(a,b,c)` は単位法線
-    (scipy の `ConvexHull.equations` の契約そのまま)。**点群が平面・直線・1点に潰れていれば
-    `DesignSpaceGeometryError`** —— Qhull の `QJ`(ランダム摂動)で通さない。
+    支持平面の各行は `[a, b, c, d]` で、`ax + by + cz + d <= 0` が凸包の内側、`(a,b,c)` は
+    単位法線(scipy の `ConvexHull.equations` の契約そのまま)。三角形は `ConvexHull.simplices`
+    の頂点座標で、凸包からの距離(`hull_distance_mask`)はこれに対して測る。
+    **点群が平面・直線・1点に潰れていれば `DesignSpaceGeometryError`** —— Qhull の `QJ`
+    (ランダム摂動)で通さない。
     """
     points = np.asarray(corners, dtype=float).reshape(-1, 3)
     if points.shape[0] == 0 or not np.all(np.isfinite(points)):
@@ -469,20 +473,22 @@ def hull_planes(corners: np.ndarray) -> tuple[np.ndarray, dict]:
     except QhullError as exc:
         raise DesignSpaceGeometryError(f"凸包の計算に失敗した: {exc}") from exc
     equations = np.array(hull.equations, dtype=float)
+    triangles = np.array(points[hull.simplices], dtype=float)
     info = {
         "vertex_count": int(len(hull.vertices)),
         "facet_count": int(equations.shape[0]),
         "volume_mm3": float(hull.volume),
         "area_mm2": float(hull.area),
     }
-    return equations, info
+    return equations, triangles, info
 
 
 def offset_hull_mask(grid: vx.Grid, planes: np.ndarray, margin: float) -> np.ndarray:
     """セル中心が、各支持平面を `margin` だけ外へ押し出した半空間の全てに入るセル。
 
-    球で膨らませた丸い領域ではなく**平面のオフセット**(角は角のまま外へ出る)。
-    判定は `n·x + d <= margin`(等号を含む)。
+    **塊の定義ではない。** これは凸包から距離 `margin` 以内の領域(`hull_distance_mask`)を
+    必ず含む多面体で、角・稜のまわりに余分を持つ。距離の判定を全セルで払わないための
+    外側の当たりとして使い、診断にはこの多面体のセル数も残す。判定は `n·x + d <= margin`。
     """
     equations = np.asarray(planes, dtype=float)
     if equations.ndim != 2 or equations.shape[1] != 4:
@@ -494,6 +500,100 @@ def offset_hull_mask(grid: vx.Grid, planes: np.ndarray, margin: float) -> np.nda
     for a, b, c, d in equations:
         inside &= (a * x + b * y + c * z + d) <= float(margin)
     return inside
+
+
+def _closest_points_on_triangle(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
+    """点群 `p (N,3)` それぞれに最も近い三角形 `abc` 上の点 (N,3)(Ericson の領域分け)。"""
+    ab = b - a
+    ac = c - a
+    ap = p - a
+    d1 = ap @ ab
+    d2 = ap @ ac
+    bp = p - b
+    d3 = bp @ ab
+    d4 = bp @ ac
+    cp = p - c
+    d5 = cp @ ab
+    d6 = cp @ ac
+    vc = d1 * d4 - d3 * d2
+    vb = d5 * d2 - d1 * d6
+    va = d3 * d6 - d5 * d4
+    q = np.empty_like(p)
+    done = np.zeros(p.shape[0], dtype=bool)
+
+    def take(mask: np.ndarray, value: np.ndarray) -> None:
+        nonlocal done
+        mask = mask & ~done
+        q[mask] = value if value.ndim == 1 else value
+        done |= mask
+
+    take((d1 <= 0) & (d2 <= 0), a)  # 頂点 A の領域
+    take((d3 >= 0) & (d4 <= d3), b)  # 頂点 B
+    take((d6 >= 0) & (d5 <= d6), c)  # 頂点 C
+    m = (vc <= 0) & (d1 >= 0) & (d3 <= 0) & ~done  # 辺 AB
+    if m.any():
+        v = d1[m] / (d1[m] - d3[m])
+        q[m] = a + v[:, None] * ab
+        done |= m
+    m = (vb <= 0) & (d2 >= 0) & (d6 <= 0) & ~done  # 辺 AC
+    if m.any():
+        w = d2[m] / (d2[m] - d6[m])
+        q[m] = a + w[:, None] * ac
+        done |= m
+    m = (va <= 0) & (d4 - d3 >= 0) & (d5 - d6 >= 0) & ~done  # 辺 BC
+    if m.any():
+        w = (d4[m] - d3[m]) / ((d4[m] - d3[m]) + (d5[m] - d6[m]))
+        q[m] = b + w[:, None] * (c - b)
+        done |= m
+    m = ~done  # 面の内側
+    if m.any():
+        denom = 1.0 / (va[m] + vb[m] + vc[m])
+        v = vb[m] * denom
+        w = vc[m] * denom
+        q[m] = a + ab * v[:, None] + ac * w[:, None]
+    return q
+
+
+def distance_to_hull(points: np.ndarray, planes: np.ndarray, triangles: np.ndarray) -> np.ndarray:
+    """点群 `(N,3)` から凸包までのユークリッド距離(内側は 0)。
+
+    凸包は凸なので、外側の点から凸包への最短距離は**表面の三角形への距離の最小**に一致する
+    (最近点は必ず境界上にある)。内側は支持平面の全てで `n·x + d <= 0` になる点。
+    """
+    pts = np.asarray(points, dtype=float).reshape(-1, 3)
+    eq = np.asarray(planes, dtype=float)
+    signed = pts @ eq[:, :3].T + eq[:, 3]
+    inside = np.all(signed <= 0.0, axis=1)
+    out = np.zeros(pts.shape[0], dtype=float)
+    outside = np.flatnonzero(~inside)
+    if outside.size:
+        q = pts[outside]
+        best = np.full(outside.size, np.inf)
+        for a, b, c in np.asarray(triangles, dtype=float):
+            closest = _closest_points_on_triangle(q, a, b, c)
+            np.minimum(best, np.linalg.norm(q - closest, axis=1), out=best)
+        out[outside] = best
+    return out
+
+
+def hull_distance_mask(
+    grid: vx.Grid, planes: np.ndarray, triangles: np.ndarray, margin: float
+) -> np.ndarray:
+    """セル中心が凸包から距離 `margin` 以内にあるセル(凸包と半径 `margin` の球のミンコフスキー和)。
+
+    面のまわりは支持平面を `margin` 押し出したものと同じで、稜・頂点のまわりは丸くなる
+    (平面のオフセットより小さい)。判定は `距離 <= margin`(等号を含む)。距離は
+    `offset_hull_mask` の多面体に入るセルだけで測る(外は必ず距離 > margin)。
+    """
+    bound = offset_hull_mask(grid, planes, margin)
+    index = np.argwhere(bound)
+    if index.size == 0:
+        return bound
+    distance = distance_to_hull(grid.centers_of(index), planes, triangles)
+    mask = np.zeros(tuple(grid.shape), dtype=bool)
+    keep = distance <= float(margin)
+    mask[index[keep, 0], index[keep, 1], index[keep, 2]] = True
+    return mask
 
 
 def box_mask(grid: vx.Grid, lo: Sequence[float], hi: Sequence[float]) -> np.ndarray:
@@ -522,8 +622,8 @@ def derive(
     """4条件から塊(設計空間)を1回で導出する。**材料量は受け取らない。**
 
     手順: ボディの外接箱の頂点 → 凸包 → 余白 `m = margin_ratio × 点群の外接箱の最長辺` →
-    格子の外枠 = 点群の外接箱を各軸に `m` 広げた箱(`grid_for_bbox`)→ 外枠かつ全支持平面を
-    `m` 押し出した半空間に入るセル → 除外ソリッドの占有を引く → 保持ボディを1つずつ格子に
+    格子の外枠 = 点群の外接箱を各軸に `m` 広げた箱(`grid_for_bbox`)→ 外枠かつ凸包から距離 `m`
+    以内のセル(凸包と球のミンコフスキー和)→ 除外ソリッドの占有を引く → 保持ボディを1つずつ格子に
     載せて除外との衝突・取りこぼしを名指しで数える → 条件ごとの接続を確かめ、条件を含まない
     成分を落とす → 確定マスクで `VoxelModel` を1回組む。
 
@@ -546,7 +646,7 @@ def derive(
     if not longest > 0:
         raise DesignSpaceGeometryError("条件の点群が1点に潰れている(外接箱が起こせない)")
     margin = ratio * longest
-    planes, hull_info = hull_planes(corners)
+    planes, triangles, hull_info = convex_hull(corners)
     box_lo = cloud_lo - margin
     box_hi = cloud_hi + margin
 
@@ -561,7 +661,9 @@ def derive(
     dev = float(deviation) if deviation else max(grid.spacing * deviation_ratio, 1e-6)
 
     frame = box_mask(grid, box_lo, box_hi)
-    candidate = frame & offset_hull_mask(grid, planes, margin)
+    # 平面のオフセット(多面体)は距離 m 以内の領域を含む外側の当たり。塊にするのは距離のほう。
+    polytope = frame & offset_hull_mask(grid, planes, margin)
+    candidate = polytope & hull_distance_mask(grid, planes, triangles, margin)
     if not candidate.any():
         raise DesignSpaceGeometryError("余白付き凸包に入るセル中心が1つも無い(格子が粗すぎる)")
 
@@ -626,6 +728,7 @@ def derive(
     trace.snapshot(
         "derive-masks",
         frame=frame,
+        polytope=polytope,
         hull=candidate,
         obstacle=(np.zeros(tuple(grid.shape), dtype=bool) if obs is None else obs),
         minus_obstacle=design,
@@ -667,12 +770,14 @@ def derive(
         "corners": corners.tolist(),
         "condition_bbox": [cloud_lo.tolist(), cloud_hi.tolist()],
         "condition_longest_edge": longest,
-        "hull": dict(hull_info, planes=planes.tolist()),
+        "hull": dict(hull_info, planes=planes.tolist(), triangles=triangles.tolist()),
+        "inflation": "minkowski-ball",
         "design_bbox": [box_lo.tolist(), box_hi.tolist()],
         "grid": grid.as_dict(),
         "cells": {
             "grid": int(grid.element_count),
             "frame": int(np.count_nonzero(frame)),
+            "offset_polytope": int(np.count_nonzero(polytope)),
             "hull": int(np.count_nonzero(candidate)),
             "minus_obstacle": int(np.count_nonzero(design)),
             "connected": int(np.count_nonzero(final)),
@@ -698,6 +803,7 @@ def derive(
         margin=float(margin),
         margin_ratio=ratio,
         hull_planes=planes,
+        hull_triangles=triangles,
         corners=corners,
         stats=stats,
         table=table,

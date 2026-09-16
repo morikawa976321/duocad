@@ -37,7 +37,7 @@ def main():
     grid = space.grid
     origin, spacing = np.asarray(grid.origin), grid.spacing
     frame = ds.box_mask(grid, np.asarray(space.bbox_min) - space.margin, np.asarray(space.bbox_max) + space.margin)
-    hull = frame & ds.offset_hull_mask(grid, space.hull_planes, space.margin)
+    hull = frame & ds.hull_distance_mask(grid, space.hull_planes, space.hull_triangles, space.margin)
     obstacle = np.zeros(grid.shape, dtype=bool)
     if bundle.conditions.obstacle is not None:
         soup = vx.triangles_from_shape(vx._unwrap(bundle.conditions.obstacle), deviation=space.stats['deviation'])
@@ -45,7 +45,7 @@ def main():
     keep = space.model.keep
     masks = [frame & ~obstacle, hull & ~obstacle, space.mask]
     titles = ['基準：外枠(外接箱+余白) − 除外', '余白付き凸包 − 除外', '製品の塊：条件を含まない成分を除いた確定マスク']
-    subtitles = ['凸包で切る前の直方体', f'凸包の各面を {space.margin:.1f} mm 外側へ押し出した領域', '材料量によらず固定。全候補がこれを使う']
+    subtitles = ['凸包で切る前の直方体', f'凸包から距離 {space.margin:.1f} mm 以内(球とのミンコフスキー和)', '材料量によらず固定。全候補がこれを使う']
     colors = [(131, 148, 164), (68, 128, 180), (33, 155, 139)]
     summary = dict(run=run.name, derivation=space.stats['derivation'], margin_mm=space.margin,
                    spacing_mm=spacing, grid_shape=list(grid.shape), cells=dict(space.stats['cells']),

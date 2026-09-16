@@ -38,8 +38,9 @@
    その板を `bodies` に入れると凸包がそこまで伸びてアンカーが張れる。
 8. **除外ソリッドが引かれている** — 除外の占有を独立に計算し直して重なり0。除外は点群に
    入らない(遠くに足しても外接箱も塊も動かない)。格子と重ならない除外は例外にならない。
-9. **幾何** — 支持平面が単位法線で点群を内側に持つ / 塊の全セル中心が押し出した半空間の中 /
-   余白 = 比率 × 最長辺 / 余白0でも保持は入る / 負の余白は拒否 / 厚み0の点群は摂動せず落とす /
+9. **幾何** — 支持平面が単位法線で点群を内側に持つ / 塊の全セル中心が凸包から距離 m 以内
+   (平面オフセットの多面体はその外側の当たりで、角・稜のぶん塊より大きい)/ 余白 = 比率 × 最長辺 /
+   余白0でも保持は入る / 負の余白は拒否 / 厚み0の点群は摂動せず落とす /
    外接箱は B-rep から取り、事前の三角形分割で変わらない。
 10. **連結性** — 全条件(保持ボディごと・条件面ごと)が個別に共通の成分へ届く。壁で断つと
     `DesignSpaceDisconnectedError`(取り残された条件の名前入り。`DesignSpaceTooSmallError` では
@@ -770,11 +771,31 @@ def check_case1_geometry() -> None:
         f"{planes.shape[0]} 面 / 点群 {space.corners.shape[0]} 点",
     )
     centers = space.grid.centers_of(np.argwhere(space.mask))
-    distance = centers @ planes[:, :3].T + planes[:, 3]
+    signed = centers @ planes[:, :3].T + planes[:, 3]
+    distance = ds.distance_to_hull(centers, planes, space.hull_triangles)
     check(
-        "塊の全セル中心は、支持平面を余白ぶん押し出した半空間の内側にある(定義の再計算)",
-        bool(np.all(distance <= space.margin + 1e-9)),
-        f"最大の超過 {float(distance.max() - space.margin):.3e}mm",
+        "塊の全セル中心は凸包から距離 m 以内にある(定義の再計算。平面オフセットは必要条件)",
+        bool(np.all(distance <= space.margin + 1e-9)) and bool(np.all(signed <= space.margin + 1e-9)),
+        f"最大距離 {float(distance.max()):.4f}mm <= 余白 {space.margin:.4f}mm",
+    )
+    polytope = ds.offset_hull_mask(space.grid, planes, space.margin)
+    # 多面体には入るが距離 m 以内には入らないセル(除外で削ったセル・落とした成分は距離 0 なので混ぜない)。
+    rounded = np.argwhere(
+        polytope & ~ds.hull_distance_mask(space.grid, planes, space.hull_triangles, space.margin)
+    )
+    rounded_distance = (
+        ds.distance_to_hull(space.grid.centers_of(rounded), planes, space.hull_triangles)
+        if rounded.shape[0]
+        else np.zeros(0)
+    )
+    check(
+        "平面オフセットの多面体には入るが塊に入らないセルがあり、どれも凸包から距離 m より遠い(角・稜が丸い)",
+        rounded.shape[0] > 0
+        and bool(np.all(rounded_distance > space.margin))
+        and space.stats["cells"]["hull"] < space.stats["cells"]["offset_polytope"]
+        and space.stats["inflation"] == "minkowski-ball",
+        f"多面体 {space.stats['cells']['offset_polytope']} > 距離 {space.stats['cells']['hull']} セル / "
+        f"丸めたセル {rounded.shape[0]} 個の最小距離 {float(rounded_distance.min()) if rounded.shape[0] else float('nan'):.4f}mm",
     )
     check(
         "余白 = 比率 × 点群の外接箱の最長辺",
@@ -804,11 +825,11 @@ def check_case1_geometry() -> None:
     sheet = ds.ConditionBody("sheet", ("fixed",), (0.0, 0.0, 0.0), (10.0, 10.0, 0.0))
     check(
         "厚み0の点群は DesignSpaceGeometryError(ランダム摂動で通さない)",
-        _raises(ds.hull_planes, ds.DesignSpaceGeometryError, ds.condition_corners([sheet])),
+        _raises(ds.convex_hull, ds.DesignSpaceGeometryError, ds.condition_corners([sheet])),
         "10x10x0 の板",
     )
     plate = ds.ConditionBody("plate", ("fixed",), (0.0, 0.0, 0.0), (10.0, 10.0, 0.5))
-    thin_planes, _info = ds.hull_planes(ds.condition_corners([plate]))
+    thin_planes, _tris, _info = ds.convex_hull(ds.condition_corners([plate]))
     check(
         "有限の厚み(0.5mm)があれば平面状の部品でも凸包が起こせる",
         thin_planes.shape[0] >= 6,
@@ -1025,15 +1046,17 @@ def check_case1_connectivity() -> None:
 # ===========================================================================
 # 11. 実物(hanger)の基準実行との突き合わせ(`--run <実行フォルダ>` を明示したときだけ)
 # ===========================================================================
-# 余白比率 0.20(2026-09-16 本人判断)で取り直した基準値。理由なく更新しない —— セル数が違ったら
-# 格子・箱・境界判定の差を説明すること(docs/TOPOPT.md「固定凸包による設計空間(2026-09-16)」)。
-# 余白 0.25 の予備計測(`analysis/convex_domain_proposal.json`)は 522,424 / 535,254 /
-# 成分 [522,424, 12,830] / 格子 [78, 138, 109] で、0.20 では条件のない孤立成分が凸包の外に出て消える。
+# 余白比率 0.20・距離(ミンコフスキー和)の膨張(どちらも 2026-09-16 本人判断)で取り直した基準値。
+# 理由なく更新しない —— セル数が違ったら格子・箱・境界判定の差を説明すること
+# (docs/TOPOPT.md「固定凸包による設計空間(2026-09-16)」)。
+# 余白 0.25・平面オフセットの予備計測(`analysis/convex_domain_proposal.json`)は 522,424 / 535,254 /
+# 成分 [522,424, 12,830] / 格子 [78, 138, 109]。0.20・平面オフセットでは 389,213(条件のない孤立成分は
+# 凸包の外に出て消える)。距離にすると角・稜が丸くなり 367,390。
 HANGER_EXPECTED = {
     "20260914T133910-1d5adc93ee4d": {
-        "connected": 389_213,
-        "minus_obstacle": 389_213,
-        "component_sizes": [389_213],
+        "connected": 367_390,
+        "minus_obstacle": 367_390,
+        "component_sizes": [367_390],
         "grid_shape": [69, 129, 100],
     }
 }
