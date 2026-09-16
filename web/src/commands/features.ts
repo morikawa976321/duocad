@@ -176,6 +176,40 @@ export const CHAMFER: CommandDef = {
 }
 
 /**
+ * シェル(中空化)。開口にする面を1枚以上選び、壁の厚みを打つ。壁は内側へ削られる
+ * (外形は変わらない)ので厚みは正の数だけ。
+ *
+ * **面はサーバへ送らない**(フィレットの辺と同じ)。どの面を開口にするかはサーバ側の
+ * `Session.shell` が確定選択から取る(`selection.require_faces`)。
+ */
+export const SHELL: CommandDef = {
+  id: 'shell',
+  category: 'feature',
+  label: 'シェル',
+  buttonId: 'shell',
+  preview: 'server',
+  args: [
+    { kind: 'selection', name: 'faces', label: '開口にする面', shapeKind: 'face', min: 1, max: null },
+    {
+      kind: 'number',
+      name: 'thickness',
+      label: '厚み',
+      unit: 'mm',
+      inputId: 'shell-thickness',
+      placeholder: 'mm',
+      reject: positive('厚み'),
+    },
+  ],
+  build(values) {
+    const empty = missingSelection(values, 'faces', '面')
+    const thickness = values.thickness
+    if (empty !== null) return { ok: false, reason: empty }
+    if (typeof thickness !== 'number') return { ok: false, reason: '厚みが数値でない' }
+    return { ok: true, args: { thickness } }
+  },
+}
+
+/**
  * ソリッドブーリアン。ターゲットは面1枚を直接ピック(`PickArgSpec`)、ツールは確定選択
  * (複数)。`mode` で union/cut/intersect を切り替える(`extrude` の mode と同じ構造)。
  *
@@ -644,6 +678,7 @@ export const SOLID_FEATURE_COMMANDS: CommandDef[] = [
   EXTRUDE_REGIONS,
   FILLET,
   CHAMFER,
+  SHELL,
   BOOLEAN_BODY,
   MOVE_BODY,
   MIRROR_BODY,

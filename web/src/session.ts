@@ -388,6 +388,7 @@ export type Applied =
     })
   | (AppliedVerbBase & { verb: 'fillet'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & { verb: 'chamfer'; body_id: string; changed_bodies: string[] })
+  | (AppliedVerbBase & { verb: 'shell'; body_id: string; changed_bodies: string[] })
   | (AppliedVerbBase & {
       verb: 'boolean_body'
       target_body_id: string

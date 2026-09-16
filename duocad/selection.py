@@ -384,6 +384,24 @@ def require_edges(doc: Document) -> tuple[List[int], BodyId]:
     return edges, refs[0]["body"]
 
 
+def require_faces(doc: Document) -> tuple[List[int], BodyId]:
+    """確定選択の面の添字と対象Bodyを**選択順のまま**返す(`shell` 用。1枚以上)。
+
+    複数Bodyにまたがる選択は ValueError(`edge_indices` と同じ拒否 —— verbは1つのBodyしか
+    触れないので、どれのつもりかを黙って決めない)。
+    """
+    refs = confirmed_items(doc, kind="face")
+    if not refs:
+        _raise_missing(doc, "face")
+    bodies = {item["body"] for item in refs}
+    if len(bodies) > 1:
+        raise ValueError(
+            f"face selection spans multiple bodies {sorted(bodies)!r}: "
+            "select faces of one body"
+        )
+    return [int(item["index"]) for item in refs], refs[0]["body"]
+
+
 def require_sketch_entities(doc: Document) -> List[dict]:
     """確定選択のスケッチ図形(点・辺)を**選択順のまま**返す(`move_sketch_entities` 用)。
 

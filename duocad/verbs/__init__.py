@@ -26,6 +26,7 @@ from .optimize_setup import (  # noqa: F401
     set_preserve_bodies,
 )
 from .pattern import pattern_circular, pattern_rectangular  # noqa: F401
+from .shell import shell  # noqa: F401
 
 __all__ = [
     "add_mesh_body",
@@ -48,4 +49,5 @@ __all__ = [
     "set_preserve_bodies",
     "pattern_circular",
     "pattern_rectangular",
+    "shell",
 ]

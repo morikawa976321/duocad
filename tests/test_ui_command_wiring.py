@@ -443,6 +443,7 @@ ENTER_REQUIRED = {
     "extrude": True,               # 領域は何個でも + 距離 + 結合/切り取り
     "fillet": True,                # 辺は何本でも + 半径
     "chamfer": True,               # 辺は何本でも + 距離
+    "shell": True,                 # 面は何枚でも + 厚み
     "boolean_body": True,          # 面ピック + ツールは何個でも + 種別
     "pattern_rectangular": True,   # 図形は何個でも + 個数と間隔
     "pattern_circular": True,      # 図形は何個でも + 中心 + 個数と角度

@@ -5,7 +5,7 @@
  * **空の文書**から始めて、**人が手でやる順序そのもの**を本物のクリックと
  * キー入力で通す:
  *
- *   板を描く → 押し出す → 穴を開ける → 辺を選んで丸める → 面取り → 反復
+ *   板を描く → 押し出す → 穴を開ける → 辺を選んで丸める → 面取り → 反復 → 新規ボディ → シェル
  *
  * 分けてあるのは、`join` の押し出しが「対象が無ければ新しいソリッドを作る」verbだから
  * (27部品が居る文書では既存の部品へ融合してしまい、**最初の板が生まれる**経路が通らない)。
@@ -16,14 +16,15 @@
  * 毎回まっさらな文書で始まるので、下記の「最初の板が生まれる」経路がそのまま通る。
  * 既に立っているものへ繋ぐときだけ `--url` を渡す。
  *
- * 見るのは6つ(MCPとの突合は `tests/test_feature_ui.py` 側にある):
+ * 見るのは7つ(MCPとの突合は `tests/test_feature_ui.py` 側にある):
  *
  *   1. 手だけで板に穴を開けられる(スケッチ → 領域選択 → cut で押し出し)
  *   2. 辺を複数選んでフィレット。**失敗する半径では理由が画面に出て、選択が保持されたまま戻る**
  *   3. 面取りで円錐ができる(`PC_case_feet` と同じ種別の面が手だけで作れる)
  *   4. 矩形反復・円形反復(**全周8個で隣り合う角度が45度**)
  *   5. **新規ボディ**で押し出すと、板がいる文書でも2つ目のボディが生まれる
- *   6. すべてのコマンドで Esc中断 と undo が効く
+ *   6. 新規ボディの面を1枚開口に選んでシェル。**壁が残らない厚みでは理由が画面に出て、選択が保持されたまま戻る**
+ *   7. すべてのコマンドで Esc中断 と undo が効く
  */
 import { existsSync } from 'node:fs'
 import { findBrowser, launchBrowser, withoutBrowserPanel, pressUndo } from './browser.mjs'
@@ -935,6 +936,94 @@ async function main() {
     ok(
       `**新規ボディで押し出した**(ボディ 1 -> 2。新しい方の体積 ${created.volume.toFixed(2)}` +
         ` = 15×15×8、元の板は ${plateAfter.volume} のまま融合していない)`,
+    )
+
+    // ================================================================ 検証6: シェル(中空化)
+    // 検証5で作った独立の箱(15×15×8)の面1枚を本物のクリックで開口に選び、厚み2で中空にする。
+    // 面 6 -> 11(外側5 + 縁1 + 内側5)、体積は減り、操作ログは1行だけ伸びる。
+    // 先に**壁として残せない厚み**を打ち、理由がトーストに出て選択と打った値が残ることを見る
+    // (`MakeThickSolid` は入力をそのまま返して黙って失敗しうる。コアの体積検査が捕まえる)。
+    async function clickFace(bodyId, faceIndex) {
+      const at = await page.evaluate(
+        (id, index) => {
+          const rect = document.querySelector('.viewport').getBoundingClientRect()
+          const position = window.__duocad.projectFace(id, index)
+          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
+        },
+        bodyId,
+        faceIndex,
+      )
+      if (!at) return false
+      await page.mouse.click(at.x, at.y)
+      try {
+        await page.waitForFunction(
+          (id, index) =>
+            (window.__duocad.selection?.items ?? []).some(
+              (item) => item.body === id && item.kind === 'face' && item.index === index,
+            ),
+          { timeout: 5000, polling: 50 },
+          bodyId,
+          faceIndex,
+        )
+        return true
+      } catch {
+        return false // 狙いが外れた(隣の面に取られた等)。呼び出し側が次の面を試す
+      }
+    }
+
+    await page.click('#shell')
+    await waitFor(
+      () => document.querySelector('#shell-thickness') !== null,
+      'シェルを起動しても厚みの欄が出ない',
+    )
+    let shellFace = null
+    for (let index = 1; index <= created.faces; index += 1) {
+      if (await clickFace(created.id, index)) {
+        shellFace = index
+        break
+      }
+    }
+    if (shellFace === null) fail(`新しい箱の面を1枚も指せない: ${JSON.stringify(await look())}`)
+    ok(`シェルを起動し、箱の面 ${shellFace} を本物のクリックで開口に選んだ`)
+
+    const beforeShell = await look()
+    await typeInto('#shell-thickness', 1000)
+    await page.keyboard.press('Enter')
+    await waitFor(
+      () =>
+        Array.from(document.querySelectorAll('#toasts .toast-text')).some((node) =>
+          node.textContent.includes('shell'),
+        ),
+      '壁が残らない厚みなのに理由がトーストに出ない',
+    )
+    const afterShellFailure = await look()
+    if (afterShellFailure.log !== beforeShell.log) fail('シェルが失敗したのに操作ログが伸びた')
+    if (afterShellFailure.selection.count !== 1) {
+      fail(`シェルの失敗で選択が消えた: ${afterShellFailure.selection.count}`)
+    }
+    const keptThickness = await page.$eval('#shell-thickness', (element) => element.value)
+    if (keptThickness !== '1000') fail(`失敗後に打った厚みが戻っていない: "${keptThickness}"`)
+    ok('壁が残らない厚みは理由がトーストに出て、選択1件と打った値がそのまま残った')
+
+    await typeInto('#shell-thickness', 2)
+    await page.keyboard.press('Enter')
+    await waitFor(
+      (id) => (window.__duocad.parts.find((part) => part.body_id === id)?.face_count ?? 0) === 11,
+      'シェルしても箱の面が 11 にならない',
+      created.id,
+    )
+    const afterShell = await look()
+    const hollow = afterShell.bodies.find((body) => body.id === created.id)
+    if (!(hollow.volume < created.volume)) {
+      fail(`中空にしたのに体積が減らない: ${created.volume} -> ${hollow.volume}`)
+    }
+    if (afterShell.log !== beforeShell.log + 1) {
+      fail(`シェルで操作ログが1行だけ伸びていない: ${beforeShell.log} -> ${afterShell.log}`)
+    }
+    if (afterShell.selection.count !== 0) fail('形を変えたのに選択が残っている')
+    ok(
+      `**箱を中空にした**(面 6 -> 11、体積 ${created.volume.toFixed(1)} -> ` +
+        `${hollow.volume.toFixed(1)}、確定で選択は空に戻った)`,
     )
 
     if (consoleErrors.length > 0) {

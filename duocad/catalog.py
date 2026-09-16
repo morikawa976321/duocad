@@ -540,6 +540,26 @@ COMMANDS: tuple[Command, ...] = (
         resets_selection=True,
     ),
     Command(
+        name="shell",
+        category="feature",
+        description=(
+            "確定選択の面(1枚以上・同じボディ)を開口にして、残りを一定の厚みの壁だけにする"
+            "(中空にする)ときに呼ぶ。壁は内側へ削って作るので外形は変わらない。"
+        ),
+        params=(
+            Param(
+                "thickness",
+                "number",
+                "壁の厚み(mm)。0より大きい数値。内側へ削る",
+                dimension=True,
+            ),
+        ),
+        uses_selection=True,
+        session="shell",
+        previewable=True,
+        resets_selection=True,
+    ),
+    Command(
         name="boolean_body",
         category="feature",
         description=(

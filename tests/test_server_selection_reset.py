@@ -25,6 +25,7 @@ RESETTING_VERBS = frozenset(
         "extrude_face",
         "fillet",
         "chamfer",
+        "shell",
         "boolean_body",
         "pattern_rectangular",
         "pattern_circular",
