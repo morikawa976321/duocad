@@ -3904,8 +3904,12 @@ N = max( round(p × 案1の要素数),        # 摘み。PICK_RATIO
 (`check_design_space.py` の `HANGER_EXPECTED`)。0.25 で条件を含まず落としていた 12,830 セルの
 孤立成分は、0.20 では凸包の外に出るので現れない。距離にすると多面体の角・稜のぶん 41,336 セル
 減る。前回の採用密度(0.25 の予備計測で確認した答え)はどの設定でも空間外 0 mm³ で、切っていない。
-画像は `topopt_checks/render_domain_comparison.py <実行フォルダ>`(外枠 − 除外 / 距離 m 以内 −
-除外 / 確定マスク)。
+画像は `topopt_checks/render_domain_comparison.py <実行フォルダ>`(案1 = 外接直方体+余白 − 除外 /
+新案 = 距離 m 以内 − 除外 / 確定マスク)。hanger の基準実行で描いたものを
+[docs/images/design_space_case1_vs_hull_hanger.png](images/design_space_case1_vs_hull_hanger.png) に置いてある
+(余白は現在の既定 0.20 で揃えている。案1 の当時の既定は 0.25):
+
+![案1(外接直方体+余白)と新案(凸包から距離 m 以内)の比較。hanger 基準実行・余白 0.20](images/design_space_case1_vs_hull_hanger.png)
 
 **これは幾何の被覆の確認であって構造性能の確認ではない。** 凸包だから最適解を必ず含むという
 保証は置かない。広い基準空間との構造性能の比較(収束履歴・コンプライアンス・応力・外周付近の

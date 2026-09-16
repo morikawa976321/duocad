@@ -40,7 +40,7 @@
 | 取りこぼした保持セル | 0 | 0 | 0 |
 | 前回の採用密度のうち空間外の積算量 | 0 mm³ | 0 mm³ | 0 mm³ |
 
-根拠：同実行の `analysis/convex_domain_proposal.json`、`analysis/domain_comparison.png`。
+根拠：同実行の `analysis/convex_domain_proposal.json`、`analysis/domain_comparison.png`。実装後の案1と新案(距離・余白 0.20)の比較図は [images/design_space_case1_vs_hull_hanger.png](images/design_space_case1_vs_hull_hanger.png)(`topopt_checks/render_domain_comparison.py` の出力)。
 現行採用候補の74,090セルは再現目標にしない。採用案は意図的にそれより広い。
 
 ## 3. 導出アルゴリズムの確定仕様

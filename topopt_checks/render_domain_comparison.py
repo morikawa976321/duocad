@@ -1,11 +1,14 @@
-"""実行フォルダの入力から製品の固定凸包の塊を導出し、外枠・余白付き凸包・接続後を同じ縮尺で描く。
+"""実行フォルダの入力から製品の固定凸包の塊を導出し、案1(外接直方体+余白)と新案(凸包から距離 m 以内)を
+同じ縮尺で描く。
 
     .\\.venv\\Scripts\\python.exe topopt_checks\\render_domain_comparison.py output\\optimization_runs\\<実行ID>
 
 塊は `optimize_run.build_conditions` → `design_space.derive` そのもの(このスクリプトに導出の複製は
-無い)。3枚の領域は製品の部品で再計算する: 外枠 − 除外 / 余白付き凸包 − 除外 / 条件を含まない
-成分を落とした確定マスク(`DesignSpace.mask`)。要素サイズは実行の `resolved-conditions` から読む。
-出力は `analysis/domain_fixed_hull.png`(既存の解析画像は上書きしない)。
+無い)。3枚の領域は製品の部品で再計算する: 案1 = 外枠(外接直方体+余白)− 除外 / 新案 = 凸包から
+距離 m 以内 − 除外 / 条件を含まない成分を落とした確定マスク(`DesignSpace.mask`)。余白は現在の
+既定で揃える(案1 の当時の 0.25 ではない)。要素サイズは実行の `resolved-conditions` から読む。
+出力の既定は `analysis/domain_fixed_hull.png`(既存の解析画像は上書きしない)。文書用の図は
+`--out docs/images/design_space_case1_vs_hull_hanger.png` で置き換える。
 """
 import argparse
 import itertools
@@ -44,8 +47,8 @@ def main():
         obstacle, _ = vx.occupancy(soup, grid)
     keep = space.model.keep
     masks = [frame & ~obstacle, hull & ~obstacle, space.mask]
-    titles = ['基準：外枠(外接箱+余白) − 除外', '余白付き凸包 − 除外', '製品の塊：条件を含まない成分を除いた確定マスク']
-    subtitles = ['凸包で切る前の直方体', f'凸包から距離 {space.margin:.1f} mm 以内(球とのミンコフスキー和)', '材料量によらず固定。全候補がこれを使う']
+    titles = ['案1：外接直方体 + 余白 − 除外', '新案：凸包から距離 m 以内 − 除外', '製品の塊：条件を含まない成分を除いた確定マスク']
+    subtitles = [f'旧方式の塊(余白 {space.margin:.1f} mm = 現在の比率 {space.margin_ratio:g} で揃えた)', f'凸包と半径 {space.margin:.1f} mm の球のミンコフスキー和', '材料量によらず固定。全候補がこれを使う']
     colors = [(131, 148, 164), (68, 128, 180), (33, 155, 139)]
     summary = dict(run=run.name, derivation=space.stats['derivation'], margin_mm=space.margin,
                    spacing_mm=spacing, grid_shape=list(grid.shape), cells=dict(space.stats['cells']),
