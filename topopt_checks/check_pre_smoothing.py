@@ -8,7 +8,7 @@ import numpy as np
 
 from duocad.session import Session
 from duocad.topopt import mesh, trace, voxelize
-from topopt_checks.pre_smoothing_acceptance import inspect_document
+from duocad.topopt.acceptance import inspect_document
 
 
 def read_run(run):

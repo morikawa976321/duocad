@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from OCP.Bnd import Bnd_Box
+from OCP.BOPAlgo import BOPAlgo_BOP, BOPAlgo_Operation
 from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepBndLib import BRepBndLib
@@ -40,7 +41,7 @@ from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
 from OCP.BRepGProp import BRepGProp, BRepGProp_Face
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
-from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakePrism
 from OCP.BRepTools import BRepTools
 from OCP.GCPnts import GCPnts_AbscissaPoint, GCPnts_TangentialDeflection
 from OCP.Geom import Geom_BezierCurve
@@ -1380,6 +1381,52 @@ def boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) -> 
         "volume_before": volume_before,
         "volume_after": volume_after,
     }
+
+
+def require_valid_solid(shape: "TopoDS_Shape") -> None:
+    """`shape` が非空かつ `BRepCheck_Analyzer` 上妥当でなければ `ValueError`。
+
+    `boxes_common_volume` はこの検査を通す前に体積を計算しない(不正な形状から
+    もっともらしい数値を返さない)。呼び出し側が事前に確認する場合も同じ判定に揃えられる。
+    """
+    if shape is None or shape.IsNull() or not BRepCheck_Analyzer(shape).IsValid():
+        raise ValueError("shape is null or not a valid solid")
+
+
+def boxes_common_volume(
+    shape: "TopoDS_Shape",
+    boxes: Sequence[Tuple[Sequence[float], Sequence[float]]],
+) -> float:
+    """`shape` と、軸整列直方体群(各要素は `(min, max)` の mm 座標)の共通体積の合計。
+
+    `boxes` は**互いに体積を共有しない**ことを呼び出し側が保証する(重なりがあると
+    合計が二重に数えられる)。トポロジー最適化の平滑化前受入検査が、材料マスクを
+    セル中心の内外近似ではなくOCCTの厳密なブーリアンでCADと比較するために使う
+    ——境界に接するセルを、近似では漏らす/拾いすぎる。
+
+    各箱ごとに `BOPAlgo_BOP`(`SetFuzzyValue(0.0)`、あいまい判定を入れない)で
+    `BOPAlgo_COMMON` を取る。エラー・警告・空/不正な結果は例外にする(黙って0を積まない)。
+    """
+    require_valid_solid(shape)
+    overlap = 0.0
+    for lo, hi in boxes:
+        box = BRepPrimAPI_MakeBox(gp_Pnt(*lo), gp_Pnt(*hi)).Shape()
+        operation = BOPAlgo_BOP()
+        operation.AddArgument(shape)
+        operation.AddTool(box)
+        operation.SetOperation(BOPAlgo_Operation.BOPAlgo_COMMON)
+        operation.SetFuzzyValue(0.0)
+        operation.Perform()
+        if operation.HasErrors() or operation.HasWarnings():
+            raise RuntimeError("common-volume boolean did not finish cleanly")
+        result = operation.Shape()
+        if result is None or result.IsNull() or not BRepCheck_Analyzer(result).IsValid():
+            raise RuntimeError("common-volume boolean produced an invalid shape")
+        piece = volume(result)
+        if not math.isfinite(piece) or piece < 0:
+            raise RuntimeError("common volume is not finite/non-negative")
+        overlap += piece
+    return overlap
 
 
 def _ax3_from_plane(plane: dict, face: Any = None) -> "gp_Ax3":

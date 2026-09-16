@@ -192,6 +192,10 @@ cd web; npm run dev                                 # 画面(5173)
 [最終形状の合格条件](docs/TOPOPT_ACCEPTANCE.md)に従って `topopt_checks/check_final_shape.py` で判定する。
 この判定器自体の小形状による回帰検査は `tests/test_final_shape.py` にある。
 
+島除去後・平滑化前の6条件(境界・単一ソリッド・保持/除外・荷重欠落・安全率)は
+[平滑化前の受入検査](docs/TOPOPT_PRE_SMOOTHING_CHECKS.md)に従って `topopt_checks/check_pre_smoothing.py` で判定する。
+検査ロジック本体は `duocad/topopt/acceptance.py` にあり、この判定器自体の回帰検査は `tests/test_pre_smoothing.py` にある。
+
 **以下の最適化の数値検査は pytest には入れていない。** `tests/` へ入れると `pytest -q` が毎回
 それだけ重くなる。マーカーで既定から外す案も採らない —— duocad に CI が無いので、既定から
 外した瞬間に誰も回さなくなる(`pytest -q` が緑で返るため、無人の runner は「緑だ」と

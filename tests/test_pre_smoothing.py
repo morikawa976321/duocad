@@ -7,9 +7,12 @@ import numpy as np
 import pytest
 from build123d import Box, Pos
 
-from duocad.topopt import anchor, voxelize, simp, stress
-from topopt_checks.pre_smoothing_geometry import boundary_check, connectivity_check, region_check
-from topopt_checks.pre_smoothing_acceptance import inspect, condition_check, safety_check, search_diagnostics
+from duocad import kernel
+from duocad.topopt import anchor, voxelize, fem, stress
+from duocad.topopt.acceptance import (
+    active_nodes, boundary_check, condition_check, connectivity_check,
+    inspect, inspect_document, intersection_volume, region_check, safety_check, search_diagnostics,
+)
 
 
 class Table:
@@ -35,7 +38,7 @@ def fixture():
     shape = (4, 2, 2)
     grid = voxelize.Grid((0., 0., 0.), 1., shape)
     table = Table(grid, {1: list(range(9)), 2: list(range(36, 45))})
-    material = np.ones(shape)
+    material = np.ones(shape, dtype=bool)
     keep = Pos(.5, .5, .5) * Box(.4, .4, .4)
     excluded = Pos(4., 1., 1.) * Box(1., 1., 1.)
     return material, grid, table, dict(preserves=[('keep', keep.wrapped)], excludes=[('hole', excluded.wrapped)],
@@ -95,6 +98,29 @@ def test_exact_cad_overlap_including_subcell_region_and_contact():
     assert region_check(m, grid, [], preserve=True)['status'] == 'fail'
 
 
+def test_intersection_volume_matches_with_and_without_bbox_cache():
+    grid = voxelize.Grid((10., 20., 30.), 2., (1, 1, 1))
+    m = np.ones(grid.shape, bool)
+    shape = (Pos(12, 21, 31) * Box(1, 1, 1)).wrapped
+    uncached = intersection_volume(m, grid, shape, cache=None)
+    cache = kernel.BoundingBoxCache()
+    cold = intersection_volume(m, grid, shape, cache=cache)  # このキャッシュには未測定
+    warm = intersection_volume(m, grid, shape, cache=cache)  # 同じキャッシュを読む
+    assert uncached == cold == warm
+    assert len(cache) == 1
+
+
+def test_inspect_result_is_identical_with_and_without_bbox_cache():
+    rho, grid, table, options = fixture()
+    without = inspect(rho, rho, grid, table=table, **options)
+    cache = kernel.BoundingBoxCache()
+    with_cache = inspect(rho, rho, grid, table=table, bbox_cache=cache, **options)
+    assert without['checks']['preserve'] == with_cache['checks']['preserve']
+    assert without['checks']['exclude'] == with_cache['checks']['exclude']
+    assert without['status'] == with_cache['status'] == 'pass'
+    assert len(cache) == 2  # preserve(keep) + exclude(hole) の2CADをこのキャッシュで測った
+
+
 def test_six_checks_pass_and_recompute_safety(monkeypatch):
     rho, grid, table, options = fixture()
     original = rho.copy()
@@ -104,13 +130,12 @@ def test_six_checks_pass_and_recompute_safety(monkeypatch):
         seen.append(density.copy())
         return solve(model, density, *args, **kwargs)
     monkeypatch.setattr(stress, 'solve_displacement', spy)
-    result = inspect(rho * .7, rho, grid, table=table, **options)
+    result = inspect(rho, rho, grid, table=table, **options)
     assert result['status'] == 'pass', result
     assert len(result['checks']) == 6
     assert len(seen) == 1 and np.array_equal(seen[0], np.ones(rho.shape))
     assert np.array_equal(rho, original)
     assert result['volumes']['material_mm3'] == 16
-    assert result['volumes']['density_integral_after_mm3'] == pytest.approx(11.2)
     assert result['search']['status'] == 'unknown'
     assert result['search']['minimum_proven'] is False
     options['target_safety_factor'] = 1e12
@@ -142,7 +167,6 @@ def test_cancelled_loads_are_checked_per_face():
 def test_unused_elements_are_not_weak_material(monkeypatch):
     rho, grid, table, _ = fixture()
     rho[:, 1, 1] = 0
-    from topopt_checks.pre_smoothing_geometry import active_nodes
     live = active_nodes(rho.astype(bool)).ravel()
     table.faces[1] = [n for n in table.faces[1] if live[n]]
     table.faces[2] = [n for n in table.faces[2] if live[n]]
@@ -161,20 +185,18 @@ def test_unused_elements_are_not_weak_material(monkeypatch):
 def test_solver_failure_is_unknown_not_unsafe(monkeypatch):
     rho, grid, table, options = fixture()
     def broken(*args, **kwargs):
-        raise simp.SolveResidualError('test residual failure')
+        raise fem.SolveResidualError('test residual failure')
     monkeypatch.setattr(stress, 'solve_displacement', broken)
     report = inspect(rho, rho, grid, table=table, **options)
     assert report['status'] == 'unknown'
     assert report['checks']['safety']['reason'] == 'evaluation_error'
 
 
-@pytest.mark.parametrize('bad', [np.nan, -1, 1.1])
-def test_invalid_density_rejected(bad):
+@pytest.mark.parametrize('dtype', [float, np.int64])
+def test_inspect_rejects_non_bool_masks(dtype):
     rho, grid, table, options = fixture()
-    clean = rho.copy()
-    clean[0, 0, 0] = bad
     with pytest.raises(ValueError):
-        inspect(clean, rho, grid, table=table, **options)
+        inspect(rho.astype(dtype), rho, grid, table=table, **options)
 
 
 def test_history_does_not_turn_failed_evaluations_into_unsafe_candidates():
@@ -200,7 +222,9 @@ def test_force_scale_and_underconstrained_solid():
     assert result['status'] == 'fail'
 
 
-def test_cli_npz_and_document_without_surface_generation(tmp_path):
+def _beam_document(tmp_path):
+    """4x2x2mm格子を占める1本の梁。-X面を拘束・+X面に荷重(全保持・無除外)。
+    `inspect_document` の入口(CADの拘束・荷重面)を作るための共通fixture。"""
     from duocad.session import Session
     from duocad import query
     session = Session(None, .2, models_dir=tmp_path)
@@ -219,6 +243,36 @@ def test_cli_npz_and_document_without_surface_generation(tmp_path):
         session.modify_selection([{'body': body.id, 'kind': 'face', 'index': face['index']}], [])
         method()
     session.save_document('beam.json')
+    return session.document
+
+
+def test_inspect_document_thresholds_density_and_reports_integral(tmp_path):
+    document = _beam_document(tmp_path)
+    grid = voxelize.Grid((0., 0., 0.), 1., (4, 2, 2))
+    report = inspect_document(document, np.full((4, 2, 2), .7), np.ones((4, 2, 2)), grid,
+                              target_safety_factor=.001, solver='direct')
+    assert report['status'] == 'pass', report
+    assert report['level'] == 0.5
+    assert report['threshold_rule'] == 'rho > level'
+    # 二値領域の体積(bool: 0.7 > 0.5 で全材料)と、密度積算量(SIMP時代の指標)は別々に報告される。
+    assert report['volumes']['material_mm3'] == 16
+    assert report['volumes']['density_integral_before_mm3'] == pytest.approx(16.0)
+    assert report['volumes']['density_integral_after_mm3'] == pytest.approx(11.2)
+
+
+@pytest.mark.parametrize('bad', [np.nan, -1, 1.1])
+def test_inspect_document_rejects_invalid_density(tmp_path, bad):
+    document = _beam_document(tmp_path)
+    grid = voxelize.Grid((0., 0., 0.), 1., (4, 2, 2))
+    clean = np.ones((4, 2, 2))
+    clean[0, 0, 0] = bad
+    with pytest.raises(ValueError):
+        inspect_document(document, clean, np.ones((4, 2, 2)), grid,
+                         target_safety_factor=.001, solver='direct')
+
+
+def test_cli_npz_and_document_without_surface_generation(tmp_path):
+    _beam_document(tmp_path)
     np.savez_compressed(tmp_path / 'fields.npz', rho_clean=np.ones((4, 2, 2)),
                         rho_before=np.ones((4, 2, 2)), origin=[0., 0., 0.], spacing=1.)
     root = Path(__file__).resolve().parents[1]
