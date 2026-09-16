@@ -259,13 +259,18 @@ async function main() {
         sketchId,
       )
 
-    /** 領域を本物のクリックで指す(**射影はクリックの直前にやり直す**)。 */
+    /**
+     * 領域を本物のクリックで指す(**射影はクリックの直前にやり直す**)。浮いているブラウザは
+     * `clickPlane` と同じく畳んでから押す(ブラウザの行が増えると、領域の画素がその下に入る)。
+     */
     async function clickRegion(sketchId, index, modifier = null) {
-      await settleLayout()
-      const at = await regionPixel(index, sketchId)
-      if (!at) fail(`領域 ${sketchId}:${index} に当たる画素が無い`)
-      await clickAt(at, modifier)
-      return at
+      return withoutBrowserPanel(page, async () => {
+        await settleLayout()
+        const at = await regionPixel(index, sketchId)
+        if (!at) fail(`領域 ${sketchId}:${index} に当たる画素が無い`)
+        await clickAt(at, modifier)
+        return at
+      })
     }
 
     /**
