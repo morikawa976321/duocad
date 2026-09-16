@@ -105,6 +105,7 @@ SELECTION_TOOLS = {
     "commit_selection",
     "clear_selection",
     "set_visible",
+    "set_sketch_visible",
 }
 
 #: 到達表の操作には数えないが、**ログに載るverbと同じ綴りで呼べる**ために要るツール。
@@ -198,6 +199,7 @@ ARGUMENTS: dict = {
     ),
     # ---- ボディ・パラメータ
     "set_visible": ({"body_id", "visible"}, {"body_id", "visible"}),
+    "set_sketch_visible": ({"sketch_id", "visible"}, {"sketch_id", "visible"}),
     "set_parameter": ({"name", "value"}, {"name", "value"}),
     "add_mesh_body": ({"positions", "indices", "name"}, {"positions", "indices"}),
     # ---- 入出力

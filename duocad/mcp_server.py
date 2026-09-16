@@ -251,6 +251,7 @@ class DocumentTools:
             sketch_entry: dict[str, Any] = {
                 "sketch_id": sk.id,
                 "plane": dict(sk.plane),
+                "visible": sk.visible,
                 "entities": entities_out,
             }
             if include_regions:
@@ -303,6 +304,24 @@ class DocumentTools:
             "changed": applied["changed"],
             "changed_bodies": self._changed_bodies(revisions),
             "visible_count": sum(1 for body in self.session.document.bodies if body.visible),
+        }
+
+    def set_sketch_visible(self, sketch_id: str, visible: bool) -> dict:
+        """スケッチの可視性を切り替える(`set_visible` のスケッチ版。契約も封筒の形も同じ)。
+
+        形は1つも変わらないので `changed_bodies` は常に空。存在しない `sketch_id` は KeyError。
+        """
+        sketch_id = str(sketch_id)
+        if not isinstance(visible, bool):
+            raise ValueError(f"visible must be a boolean, got {type(visible).__name__}")
+        applied = self.session.set_sketch_visible(sketch_id, visible)
+        return {
+            "change": "visibility",
+            "sketch_id": sketch_id,
+            "visible": applied["visible"],
+            "previous": applied["previous"],
+            "changed": applied["changed"],
+            "changed_bodies": [],
         }
 
     def describe_shape(self, body_id: str) -> dict:

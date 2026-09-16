@@ -233,6 +233,23 @@ COMMANDS: tuple[Command, ...] = (
         note="WSでは `client_op`(どのクライアントの操作か)を添えるので `_dispatch` が個別に捌く",
     ),
     Command(
+        name="set_sketch_visible",
+        category="selection",
+        description=(
+            "スケッチの表示・非表示を切り替える(set_visible のスケッチ版)。隠したスケッチの"
+            "領域・図形は選べず、開いているブラウザにも描かれない。操作ログには載らず undo では"
+            "戻らないので、戻すには visible=true でもう一度呼ぶこと。"
+            "押し出し済みのボディには影響しない(ボディの可視性は set_visible)。"
+        ),
+        params=(
+            Param("sketch_id", "string", "describe_document が返した sketch_id"),
+            Param("visible", "boolean", "true で表示、false で非表示"),
+        ),
+        session="set_sketch_visible",
+        ws="special",
+        note="`set_visible` と同じく WS では `client_op` を添えるので `_dispatch` が個別に捌く",
+    ),
+    Command(
         name="describe_shape",
         category="query",
         description=(

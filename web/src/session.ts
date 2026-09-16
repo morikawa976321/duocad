@@ -182,6 +182,8 @@ export interface SketchPattern {
 export interface SketchState {
   sketch_id: string
   plane: PlaneRef
+  /** 表示/非表示(`BodyMeta.visible` と同じくコアのセッション状態。保存されない)。 */
+  visible: boolean
   /** 平面が壊れている(貼った面が消えた等)ときだけ null。 */
   frame: SketchFrame | null
   /** 反復を展開した**実際に見えるもの**。描画は必ずこちらを使う。 */
@@ -930,6 +932,7 @@ export interface Session {
    */
   runVerb(verb: string, args: Record<string, unknown>, clientOp: number): void
   setVisible(bodyId: string, visible: boolean, clientOp: number): void
+  setSketchVisible(sketchId: string, visible: boolean, clientOp: number): void
   /** 人が直す経路。差分編集で `origin` は `"user"` になる(触ること自体が承認)。 */
   modifySelection(add: SelectionRef[], remove: SelectionRef[], clientOp: number): void
   /**
@@ -1248,6 +1251,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     setVisible(bodyId, visible, clientOp) {
       send({ cmd: 'set_visible', body_id: bodyId, visible, client_op: clientOp })
+    },
+    setSketchVisible(sketchId, visible, clientOp) {
+      send({ cmd: 'set_sketch_visible', sketch_id: sketchId, visible, client_op: clientOp })
     },
     modifySelection(add, remove, clientOp) {
       send({ cmd: 'modify_selection', add, remove, client_op: clientOp })

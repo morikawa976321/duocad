@@ -4,7 +4,7 @@
    * 「ブラウザ」に対応する場所)。
    *
    * **状態はコアが持つ**。ここは `bodies`(コアの `state.bodies` のうち `kind==="solid"`)と
-   * `sketches`(コアの `state.sketches`)を描くだけで、可視性もスケッチも
+   * `sketches`(コアの `state.sketches`)を描くだけで、可視性(ボディもスケッチも)も
    * ローカルには持たない。持っているのは**折りたたみの開閉だけ**で、これは見た目であって
    * モデルの状態ではない。
    *
@@ -27,6 +27,9 @@
     onShowAll,
     onHideAll,
     onEnterSketch,
+    onToggleSketch,
+    onShowAllSketches,
+    onHideAllSketches,
     onToggleOrigin,
   }: {
     /** ユーザーに見せるボディ(常に `kind==="solid"`)。 */
@@ -41,8 +44,12 @@
     onToggle: (bodyId: string, visible: boolean) => void
     onShowAll: () => void
     onHideAll: () => void
-    /** 行のクリックでそのスケッチに入る(再開)。 */
+    /** 行のクリックでそのスケッチに入る(再開)。**隠したスケッチも入れる**(入る側が表示へ戻す)。 */
     onEnterSketch: (sketchId: string) => void
+    /** スケッチの表示/非表示(ボディの `onToggle` と同じ形。コアの `set_sketch_visible`)。 */
+    onToggleSketch: (sketchId: string, visible: boolean) => void
+    onShowAllSketches: () => void
+    onHideAllSketches: () => void
     /** 原点ギズモの表示/非表示(7項目まとめて1つのトグル。本人指定)。 */
     onToggleOrigin: (visible: boolean) => void
   } = $props()
@@ -51,6 +58,7 @@
   let open = $state(true)
 
   const visibleCount = $derived(bodies.filter((body) => body.visible).length)
+  const visibleSketchCount = $derived(sketches.filter((sketch) => sketch.visible).length)
 
   function planeLabel(sketch: SketchState): string {
     if (sketch.plane.kind === 'base') return sketch.plane.name
@@ -123,11 +131,16 @@
         </ul>
       </div>
 
-      <!-- 区分2: スケッチ。名前のクリックでそのスケッチに入る -->
+      <!-- 区分2: スケッチ。名前のクリックでそのスケッチに入る。表示/非表示のトグルは
+           ボディの行と同じ `input.visible-toggle`(issue #7)。 -->
       <div class="group">
         <div class="group-head">
           <span class="group-name">スケッチ</span>
-          <span class="meta dim">{sketches.length}</span>
+          <span class="meta dim">{visibleSketchCount}/{sketches.length} 表示</span>
+        </div>
+        <div class="group-bulk">
+          <button id="sketches-show-all" onclick={onShowAllSketches}>全表示</button>
+          <button id="sketches-hide-all" onclick={onHideAllSketches}>全非表示</button>
         </div>
         <ul class="sketch-list" id="browser-sketches">
           {#if sketches.length === 0}
@@ -137,12 +150,30 @@
             <li
               class="sketch-row"
               class:active={sketch.sketch_id === activeSketchId}
+              class:hidden-row={!sketch.visible}
               data-sketch-id={sketch.sketch_id}
             >
+              <!-- **編集中のスケッチは隠せない**(トグルを無効にする)。描いている最中に
+                   自分の図形が消えると、次のクリックが何を指すか分からなくなる。 -->
+              <input
+                type="checkbox"
+                class="visible-toggle"
+                checked={sketch.visible}
+                disabled={sketch.sketch_id === activeSketchId}
+                onchange={(event) =>
+                  onToggleSketch(sketch.sketch_id, (event.target as HTMLInputElement).checked)}
+                title={sketch.sketch_id === activeSketchId
+                  ? '編集中のスケッチは隠せない'
+                  : sketch.visible
+                    ? 'このスケッチを隠す'
+                    : 'このスケッチを表示'}
+              />
               <button
                 class="sketch-name"
                 onclick={() => onEnterSketch(sketch.sketch_id)}
-                title="クリックでこのスケッチに入る"
+                title={sketch.visible
+                  ? 'クリックでこのスケッチに入る'
+                  : 'クリックで表示に戻してこのスケッチに入る'}
               >
                 スケッチ({planeLabel(sketch)})
               </button>
@@ -269,7 +300,12 @@
     padding: 2px 8px;
   }
 
-  .parts-row.hidden-row {
+  .parts-row.hidden-row,
+  .sketch-row.hidden-row {
+    color: var(--dim);
+  }
+
+  .sketch-row.hidden-row .sketch-name {
     color: var(--dim);
   }
 

@@ -116,7 +116,7 @@ Fusion360のAPI自体はフィーチャ生成まで含む本格的なもので�
 | `pattern_rectangular` / `pattern_circular` | ✅ | **✅** | **✅** |
 | `move_sketch_entities` / `move_body` | ✅ | **✅** | **✅** |
 | `set_parameter` | ✅ | — | **✅** |
-| `set_visible` | ✅ | **✅** | **✅** |
+| `set_visible` / `set_sketch_visible` | ✅ | **✅** | **✅** |
 | `import_step` / `export_step` / `export_stl` | ✅ | **✅** | **✅** |
 | `undo` / `redo` | ✅ | **✅** | **✅** |
 | `set_preserve_bodies` / `set_exclude_bodies`（形状最適化・保持/除外ソリッド） | ✅ | **✅** | **✅** |

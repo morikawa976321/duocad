@@ -351,6 +351,17 @@ class Session:
         changed = selection.set_visible(self.document, body_id, bool(visible))
         return self._emit({"change": "visibility", "client_op": client_op, **changed})
 
+    def set_sketch_visible(
+        self, sketch_id: str, visible: bool, client_op: Optional[int] = None
+    ) -> dict:
+        """ブラウザのスケッチ一覧からの表示・非表示切り替え。`set_visible`(ボディ)と同じ形で、
+        実体は `selection.set_sketch_visible`(verbではない。ログに載らず undo でも戻らない)。
+        イベントは `sketch_id` を持つ `{"change": "visibility", ...}` で、効果は配信される状態の
+        `sketches[].visible` に載る。存在しない `sketch_id` は `KeyError`。
+        """
+        changed = selection.set_sketch_visible(self.document, sketch_id, bool(visible))
+        return self._emit({"change": "visibility", "client_op": client_op, **changed})
+
     # ---------------------------------------------------------------- A1: 共有される選択集合
     #
     # **`set_visible` と同じ上り方向に乗せる**(別系統を新設しない)。

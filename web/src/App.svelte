@@ -1527,7 +1527,10 @@
       (item): item is SketchEntityRef => refKind(item) === 'sketch_entity',
     )
     return sketches
-      .filter((item) => item.frame !== null)
+      // **隠したスケッチは描かない**(コアの `sketches[].visible`。issue #7)。**編集中の
+      // スケッチだけは可視性に関わらず描く** —— 隠したスケッチの行から入る経路は先に
+      // 表示へ戻す(`enterSketch`)が、その往復を待たずに `lookAtSketch` が枠を要るため。
+      .filter((item) => item.frame !== null && (item.visible || item.sketch_id === sketchId))
       .map((item) => ({
         sketchId: item.sketch_id,
         frame: item.frame as NonNullable<typeof item.frame>,
@@ -1638,6 +1641,11 @@
    * 戻り先(`resume`)を持って移るので、抜ければ最適化モードへ戻る。
    */
   function enterSketch(id: string): void {
+    // **隠したスケッチに入るときは先に表示へ戻す**(拒否ではなく表示に戻して入る。本人判断
+    // 2026-09-16)。編集中のスケッチは `sketchDraws()` が可視性に関わらず描くので、
+    // サーバの往復を待たずに入ってよい(抜けた後も表示のまま —— 隠し直しはしない)。
+    const target = sketches.find((item) => item.sketch_id === id)
+    if (target !== undefined && !target.visible) setSketchVisible(id, true)
     setMode({ kind: 'sketch', id, resume: resumeOf(mode) })
   }
 
@@ -2167,6 +2175,22 @@
 
   function hideAllParts(): void {
     for (const body of partBodies) if (body.visible) setVisible(body.body_id, false)
+  }
+
+  /** スケッチの表示/非表示(ボディの `setVisible` と同じ経路。コアの `set_sketch_visible`)。 */
+  function setSketchVisible(id: string, visible: boolean): void {
+    session.setSketchVisible(id, visible, nextOp())
+  }
+
+  function showAllSketches(): void {
+    for (const item of sketches) if (!item.visible) setSketchVisible(item.sketch_id, true)
+  }
+
+  /** 編集中のスケッチは残す(行のトグルが無効なのと同じ線。`BrowserPanel.svelte`)。 */
+  function hideAllSketches(): void {
+    for (const item of sketches) {
+      if (item.visible && item.sketch_id !== sketchId) setSketchVisible(item.sketch_id, false)
+    }
   }
 
   onMount(() => {
@@ -2739,6 +2763,9 @@
         onShowAll={showAllParts}
         onHideAll={hideAllParts}
         onEnterSketch={enterSketch}
+        onToggleSketch={setSketchVisible}
+        onShowAllSketches={showAllSketches}
+        onHideAllSketches={hideAllSketches}
         onToggleOrigin={applyOriginVisible}
       />
 

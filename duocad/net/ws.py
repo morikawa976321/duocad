@@ -325,6 +325,14 @@ class Server:
                     message.get("client_op"),
                 )
                 await self._push(connection, applied=applied)
+            elif command == "set_sketch_visible":
+                applied = self._apply(
+                    self.session.set_sketch_visible,
+                    message["sketch_id"],
+                    bool(message["visible"]),
+                    message.get("client_op"),
+                )
+                await self._push(connection, applied=applied)
             # -------------------------------------------------- B: 選択(人が直す経路)
             # **コアの選択集合をそのまま叩く**(アプリ層に選択状態を持たせない)。
             # 発火したイベント(`{"change":"selection", ...}`)を `applied` として返し、
