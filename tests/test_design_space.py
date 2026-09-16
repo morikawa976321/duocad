@@ -112,7 +112,7 @@ def test_two_separated_bodies_are_bridged_by_the_hull_but_the_frame_corners_are_
     assert outside.shape[0] > 0
     far = ds.distance_to_hull(space.grid.centers_of(outside), planes, space.hull_triangles)
     assert np.all(far > space.margin)
-    # 外枠の角(x 最大・y 最小)は両部品から遠く、凸包を余白ぶん押し出しても届かない。
+    # 外枠の角(x 最大・y 最小)は両部品から遠く、凸包から距離 m 以内に入らない。
     corner = space.grid.centers_of(np.array([[space.grid.shape[0] - 2, 1, space.grid.shape[2] // 2]]))[0]
     assert np.max(corner @ planes[:, :3].T + planes[:, 3]) > space.margin
     # 保持ボディの箱は丸ごと塊に入っている(凸包が箱の頂点から起きている)。
@@ -197,6 +197,40 @@ def test_a_flat_point_cloud_is_rejected_instead_of_being_perturbed() -> None:
     assert planes.shape[1] == 4 and info["facet_count"] >= 6
     assert triangles.shape[1:] == (3, 3) and triangles.shape[0] == info["facet_count"]
     assert np.allclose(np.linalg.norm(planes[:, :3], axis=1), 1.0)
+
+
+def test_the_closest_point_on_a_triangle_covers_all_seven_regions() -> None:
+    """Ericson の領域分け(頂点3・辺3・面1)を1つの三角形で全部踏み、最近点を手計算と突き合わせる。"""
+    a = np.array([0.0, 0.0, 0.0])
+    b = np.array([4.0, 0.0, 0.0])
+    c = np.array([0.0, 4.0, 0.0])
+    points = np.array(
+        [
+            [-1.0, -1.0, 2.0],  # 頂点 A の領域
+            [6.0, -1.0, -2.0],  # 頂点 B
+            [-1.0, 6.0, 1.0],  # 頂点 C
+            [2.0, -3.0, 1.0],  # 辺 AB の正面
+            [-3.0, 2.0, -1.0],  # 辺 AC の正面
+            [4.0, 4.0, 2.0],  # 辺 BC の正面(斜辺の外側)
+            [1.0, 1.0, 5.0],  # 面の内側の真上
+        ]
+    )
+    expected = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+            [0.0, 4.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0],
+            [2.0, 2.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ]
+    )
+    closest = ds._closest_points_on_triangle(points, a, b, c)
+    assert np.allclose(closest, expected)
+    # 三角形の上の点はその点自身が最近点(距離0)。
+    on = np.array([[1.0, 2.0, 0.0], [0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [2.0, 2.0, 0.0]])
+    assert np.allclose(ds._closest_points_on_triangle(on, a, b, c), on)
 
 
 def test_the_distance_to_the_hull_matches_closed_forms() -> None:
