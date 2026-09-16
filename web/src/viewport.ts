@@ -79,11 +79,9 @@ export type {
 }
 
 export function createViewport(container: HTMLElement): Viewport {
-  // **`stencil: true` は断面の切り口(`sectionView.ts`)のため。** three r163 以降の既定は false で、
-  // 無いとステンシルを使う板が黙って描かれない(例外は出ない)。
+  // `stencil` は three r163 以降の既定が false で、無いと断面の切り口が例外も出さずに描かれない
   const renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true })
-  // 材質ごとのクリップ平面(断面)を有効にする。`renderer.clippingPlanes`(全材質)は使わない ——
-  // グリッド・スケッチ・ギズモ・キューブまで切れてしまう。
+  // 断面は材質ごとのクリップ平面で切る(`renderer.clippingPlanes` はグリッド・スケッチ・キューブまで切る)
   renderer.localClippingEnabled = true
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
   renderer.domElement.style.display = 'block'
@@ -208,9 +206,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // ------------------------------------------------------------------ 断面表示(issue #6)
   //
-  // 平面・切り口・ハンドルと、ボディ側の材質へ渡す共有のクリップ平面配列(`sectionView.ts`)。
-  // `root` にも `gridRoot` にも入れない(原点ギズモと同じ理由)。渡す関数はどれも後で
-  // 呼ばれる閉包なので、ここで作っても TDZ にはかからない。
+  // 渡す関数はどれも後で呼ばれる閉包なので、後方で宣言する `size` / `projectRaw` を読んでも TDZ にかからない。
   const section = createSectionView({
     rayAt,
     camera: () => camera,
@@ -731,7 +727,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const material = new THREE.MeshLambertMaterial({
       color: hovered ? lighten(base, HOVER_LIGHTEN) : base,
       side: THREE.DoubleSide,
-      clippingPlanes: section.clipPlanes, // 断面(ON のときだけ1枚入る共有配列)
+      clippingPlanes: section.clipPlanes,
     })
     faceMaterialCache.set(key, material)
     return material
@@ -940,7 +936,7 @@ export function createViewport(container: HTMLElement): Viewport {
       sceneObjects.push(line)
       disposables.push(edges)
     }
-    section.setBody(bodyId, faceGeometries) // 切り口の偶奇判定用(ON のときだけ結合メッシュを作る)
+    section.setBody(bodyId, faceGeometries)
     bodies.set(bodyId, { faceMeshes, sceneObjects, disposables })
     rawGeometry.set(bodyId, payload)
     faceSamples.set(bodyId, sampleFaces(payload))
@@ -1773,7 +1769,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // **深度検査をしない**(奥の辺も見え、奥の辺も指せる)。three.js の線のレイキャストは
     // 面による遮蔽を見ないので、見た目だけ隠すと「見えない辺が選ばれる」になる。
     depthTest: false,
-    clippingPlanes: section.clipPlanes, // 断面(以下の辺の材質すべて同じ)
+    clippingPlanes: section.clipPlanes,
   })
   const pickEdgeSelectedMaterial = new THREE.LineBasicMaterial({
     color: HIGHLIGHT_COLOR,
@@ -2275,7 +2271,7 @@ export function createViewport(container: HTMLElement): Viewport {
         pickScratch
           .set(position.getX(at), position.getY(at), position.getZ(at))
           .applyMatrix4(mesh.matrixWorld)
-        if (keep !== null && !keep(pickScratch)) continue // 断面で切られた点は指せない
+        if (keep !== null && !keep(pickScratch)) continue
         const screen = projectForPick(pickScratch, width, height)
         if (screen === null) continue
         const distSq = (screen.x - offsetX) ** 2 + (screen.y - offsetY) ** 2
@@ -2323,7 +2319,7 @@ export function createViewport(container: HTMLElement): Viewport {
         return { bodyId, edgeIndex }
       },
       bufferPolyline,
-      section.signedDistance(), // 断面で切られた部分は指せない
+      section.signedDistance(),
     )
   }
 
@@ -3379,7 +3375,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const { width, height } = size()
 
     if (activeSketchId === null) {
-      const keep = section.keepsFilter() // 断面で切られた部分は囲っても入らない(クリックと同じ)
+      const keep = section.keepsFilter()
       // **面は常に指せる**(クリックと同じ)。隠したBodyのメッシュは `visible=false` なので外す。
       for (const [bodyId, entry] of bodies) {
         for (const mesh of entry.faceMeshes) {
@@ -3449,7 +3445,6 @@ export function createViewport(container: HTMLElement): Viewport {
     // 矩形選択の開始へ漏らさない。タスク仕様の落とし穴1)。
     if (cube.pointerDown(event)) return
     // **断面のハンドルの上で始まった左ボタン押下は、ハンドルが引き取る**(キューブと同じ規律)。
-    // 押している間は canvas の外へ出ても追う(`setPointerCapture`)。
     if (section.pointerDown(event.offsetX, event.offsetY)) {
       renderer.domElement.setPointerCapture(event.pointerId)
       renderer.domElement.style.cursor = 'grabbing'
@@ -3796,7 +3791,7 @@ export function createViewport(container: HTMLElement): Viewport {
     updateActiveSketchGridCursor(hoverAt === null ? null : planePointAt(hoverAt.x, hoverAt.y))
     // グリッドは毎フレームここだけを更新する(段の不透明度とカメラ行列。ジオメトリは無い)。
     updateGridUniforms()
-    section.update() // ハンドルは画面上で一定の大きさ(毎フレーム倍率を引き直す)
+    section.update()
     renderer.render(scene, camera)
     cube.render()
     frameHandle = requestAnimationFrame(tick)

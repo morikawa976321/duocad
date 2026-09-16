@@ -29,6 +29,10 @@
   `gl_FragDepth` / `fwidth` / `inverse` が使える。組み込み材質と同じ見え方にするにはフラグメント末尾に
   `#include <colorspace_fragment>`（忘れると同じ色コードで暗く出る）。フラグメントの prefix に `projectionMatrix` は無い。
   テンプレートリテラルの GLSL コメントに日本語のバッククォートを書くとリテラルが終端し、`TS1443` という遠いエラーになる。
+- **`WebGLRenderer` の `stencil` は既定が false**（r163 以降）。`stencilWrite` を使う材質は例外も警告も出さずに効かない
+  （断面の切り口で実測: ANGLE/D3D11 で板が描かれず、切り口の画素は奥の面の色のまま）。
+- **`Raycaster` は材質の `clippingPlanes` を見ない。** クリップ平面で見えなくした面にもレイが当たるので、指せるかどうかは
+  平面の式で自前に捨てる（[VIEWPORT.md](VIEWPORT.md)「断面」）。
 - **`createViewport()` は宣言の順序がそのまま初期化の順序。** 初期化中に後方の `const` を読むと TDZ で落ち、
   `window.__duocad.ready` が永久に立たず「画面が出ない」だけになる（`tsc` / `svelte-check` は検出しない）。
   初期化中に読むものを増やす変更は宣言順を確認し、依存の無いもの（`new THREE.Group()`）は前方へ上げる。
@@ -68,6 +72,8 @@
   同じ書き方に揃えると、可視性チェックボックスにフォーカスが残った状態で undo しなくなる。目的が違えば除外集合は
   一致させない —— Enter は誤送信防止なので全 INPUT、Ctrl+Z はテキスト編集中のブラウザ標準 undo を奪わないためなので
   `type` が checkbox/radio でない INPUT と TEXTAREA だけ（`App.svelte` `isTextEditingField`）。
+- **puppeteer の `page.click(selector, { clickCount: 3 })` は入力欄を全選択しない**（puppeteer-core 25・headless Chrome で実測）。
+  キャレットが先頭に置かれるだけで、`21.9` の欄に打った `5+1` が `5+121.9` になった。打ち直すときは Ctrl+A を本物のキーで押す。
 - **同一 canvas の第2パス（`setViewport`/`setScissor`）も浮かせた DOM パネルと同じくクリックを吸うが、
   `elementFromPoint` では見えない**（[VIEWPORT.md](VIEWPORT.md) `clickable`）。
 

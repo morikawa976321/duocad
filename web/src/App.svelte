@@ -2410,13 +2410,8 @@
       // 文書の状態ではないので、ここを叩いてもコアへは何も飛ばない。
       fov,
       setFov: (deg: number) => applyFov(deg),
-      // 断面(issue #6)。**実機検査が「切られた側は指せない」「ハンドルで動く」を見るための穴**。
-      // `handle` は画面座標なので決め打ちせずここから読む。`setSection` は画面の操作子と同じ
-      // 経路(`toggleSection` 等)を通さず状態を直接置く —— 操作子そのものは本物のクリックで見る。
+      // 断面(issue #6)。`handle` は画面座標なので、実機検査は決め打ちせずここから読んでドラッグする。
       section: () => viewport?.sectionInfo() ?? null,
-      setSection: (next: Partial<SectionState>) => {
-        section = { ...section, ...next }
-      },
       // **視点の向きそのものを見るための穴**(2026-08-28のZ-up化で足した)。カメラの姿勢と
       // 「この世界座標が画面のどこに写るか」を返す。`projectFace` では測れない ——
       // あちらは遮蔽された面に null を返すので、**上面と下面のどちらが画面で上か**のように
