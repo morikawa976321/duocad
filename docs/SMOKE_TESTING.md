@@ -89,6 +89,10 @@
   「クリック可能になったこと」を `waitForFunction` で待つ。15分のタイムアウトいっぱいまでハングしてから失敗した実例。
 - **`page.waitForTimeout` は puppeteer-core 25 に無い。** 固定時間待ちは
   `page.evaluate(() => new Promise((r) => setTimeout(r, ms)))`。既存スクリプトは `waitForFunction` と `waitTwoFrames` を優先。
+- **`__duocad` に Svelte の `$state` オブジェクトをそのまま出すと、`page.evaluate` の戻り値では `{}` になる**
+  （2026-09-16、`smoke-measure.mjs` で実測。プロキシは CDP の値の持ち帰りで中身が落ちる）。数値の比較が
+  `Math.abs(undefined - x) > tol` だと NaN で**素通り**するので、二重に気づけない。フック側は
+  `$state.snapshot(...)` で素のオブジェクトにして出し、検査側の数値比較は「どちらも数値であること」を先に見る。
 
 ## 選択・モード
 
