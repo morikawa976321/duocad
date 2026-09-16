@@ -11,6 +11,8 @@
  *   3. STEPを読み込む(その時点で編集可能なボディができる)
  *   4. STEP/STL を書き出し、**STEPは読み戻して体積が一致**(読み戻しは pytest 側)
  *   5. undo/redoでやり直せる件数と有効な操作数が実際に動く
+ *   6. **一覧の行から別名で複製・ディスクから削除**できる(issue #17)。どちらも編集中の文書を
+ *      変えない。複製先が既にあれば拒否(1バイトも変わらない)、編集中のファイルの削除は拒否
  *
  *   web> node scripts/smoke-files.mjs [--workdir <書き込めるディレクトリ>]
  *
@@ -748,6 +750,88 @@ async function main() {
       beforeNew.volume,
     )
     ok('新規にした後も一覧から開き直せた(以降の書き出しの検査は元の形で続く)')
+
+    // ================================================================ 検証2d: 一覧からの複製と削除(issue #17)
+    // **どちらも文書を変えない**(ログ長・編集中のファイル名は動かない)。複製先は行内の欄に
+    // `<元>-copy.json` が先埋めされ Enter で通る。削除は行内の2段階(「削除」→「本当に削除」)。
+    // 拒否はどちらもサーバが言い、トースト1枚になる(`expectedErrors` へ積む)。
+    const logBeforeFiles = (await look()).log
+    const copyName = 'spare-copy.json'
+    const copyPath = join(workdir, copyName)
+    await page.click(`.files-row[data-name="${spareName}"] .files-copy`)
+    await waitFor(() => document.activeElement?.id === 'file-copy-name', '複製の名前欄が出ない(フォーカスが来ない)')
+    const suggested = await page.$eval('#file-copy-name', (el) => el.value)
+    if (suggested !== copyName) fail(`複製先の先埋めが違う: "${suggested}"`)
+    await page.keyboard.press('Enter')
+    await waitFor(
+      (name) => (window.__duocad.documentList ?? []).some((file) => file.name === name),
+      '複製したファイルが一覧に出ない',
+      copyName,
+    )
+    if (!readFileSync(copyPath).equals(readFileSync(sparePath))) fail('複製の中身が元と違う')
+    const afterCopy = await look()
+    if (afterCopy.currentDocumentName !== documentName || afterCopy.log !== logBeforeFiles) {
+      fail(`複製で編集中の文書が動いた: ${JSON.stringify({ name: afterCopy.currentDocumentName, log: afterCopy.log })}`)
+    }
+    ok(`**一覧の行から別名で複製できた**(先埋め "${suggested}" を Enter。中身は同一・編集中の文書は不変)`)
+
+    // ---- 既にある名前への複製は拒否(1バイトも変わらない)
+    const modelBytesBefore = readFileSync(documentPath)
+    const errorsBeforeCopy = (await look()).errors.length
+    await page.click(`.files-row[data-name="${spareName}"] .files-copy`)
+    await waitFor(() => document.activeElement?.id === 'file-copy-name', '複製の名前欄が出ない(2回目)')
+    await typeInto('#file-copy-name', documentName)
+    await page.keyboard.press('Enter')
+    await waitFor(
+      (before) => window.__duocad.errors.length > before,
+      '既にある名前への複製が拒否されない(トーストが出ない)',
+      errorsBeforeCopy,
+    )
+    const copyRefusal = (await look()).errors[0]
+    expectedErrors.push(copyRefusal)
+    if (!copyRefusal.includes(documentName) || !copyRefusal.includes('既にある')) {
+      fail(`複製の拒否文が対象と理由を言わない: ${copyRefusal}`)
+    }
+    await settle()
+    if (!readFileSync(documentPath).equals(modelBytesBefore)) fail('既にあるファイルが複製で書き換わった')
+    ok(`既にある名前への複製は拒否され、そのファイルは1バイトも変わらなかった("${copyRefusal}")`)
+
+    // ---- 削除は行内の2段階
+    await page.click(`.files-row[data-name="${copyName}"] .files-delete`)
+    await page.waitForSelector(`.files-row[data-name="${copyName}"] .files-delete-confirm`, { timeout })
+    if (!existsSync(copyPath)) fail('1段目の「削除」でもう消えている(確認を挟んでいない)')
+    await page.click(`.files-row[data-name="${copyName}"] .files-delete-confirm`)
+    await waitFor(
+      (name) => !(window.__duocad.documentList ?? []).some((file) => file.name === name),
+      '削除したファイルが一覧から消えない',
+      copyName,
+    )
+    if (existsSync(copyPath)) fail('一覧から消えたのにディスクに残っている')
+    const afterDelete = await look()
+    if (afterDelete.currentDocumentName !== documentName || afterDelete.log !== logBeforeFiles) {
+      fail('削除で編集中の文書が動いた')
+    }
+    ok('**一覧の行から削除できた**(行内の2段階。ディスクからも消え、編集中の文書は不変)')
+
+    // ---- 編集中のファイルは削除できない(拒否の文がどうすればできるかを言う)
+    const errorsBeforeDelete = (await look()).errors.length
+    await page.click(`.files-row[data-name="${documentName}"] .files-delete`)
+    await page.waitForSelector(`.files-row[data-name="${documentName}"] .files-delete-confirm`, { timeout })
+    await page.click(`.files-row[data-name="${documentName}"] .files-delete-confirm`)
+    await waitFor(
+      (before) => window.__duocad.errors.length > before,
+      '編集中のファイルの削除が拒否されない(トーストが出ない)',
+      errorsBeforeDelete,
+    )
+    const deleteRefusal = (await look()).errors[0]
+    expectedErrors.push(deleteRefusal)
+    if (!deleteRefusal.includes(documentName) || !deleteRefusal.includes('編集中')) {
+      fail(`削除の拒否文が対象と理由を言わない: ${deleteRefusal}`)
+    }
+    if (!/開く|新規/.test(deleteRefusal)) fail(`削除の拒否文がどうすればできるかを言わない: ${deleteRefusal}`)
+    await settle()
+    if (!existsSync(documentPath)) fail('編集中のファイルが消えた')
+    ok(`**編集中のファイルは削除できない**("${deleteRefusal}")`)
 
     // ================================================================ 検証4: 書き出し
     const stepPath = join(workdir, 'out.step')

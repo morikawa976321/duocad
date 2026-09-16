@@ -891,9 +891,30 @@
     const skippedCount = payload.skipped_hidden?.length ?? 0
     const skipped = skippedCount > 0 ? ` ※非表示の${skippedCount}個は除外` : ''
     note(`${payload.action}: ${payload.path}(${size}${extra}${exported}${skipped})`)
-    // **保存/開いた直後に一覧を取り直す**。上書きで更新日時・サイズ・操作数が変わり、
-    // 新規保存では一覧に新しい行が要る —— 応答をここで待たず、次のWS往復に任せる。
-    if (payload.action === 'save') refreshDocuments()
+    // **保存/複製/削除の直後に一覧を取り直す**。上書きで更新日時・サイズ・操作数が変わり、
+    // 新規保存・複製では一覧に新しい行が要り、削除では行が消える —— 応答をここで待たず、
+    // 次のWS往復に任せる。
+    if (payload.action === 'save' || payload.action === 'copy' || payload.action === 'delete') {
+      refreshDocuments()
+    }
+  }
+
+  /**
+   * 一覧の行から**別名で複製**する / **ディスクから削除**する(issue #17)。どちらも文書を
+   * 変えないファイル操作で、保存と同じく `FilesPanel` から直接送る(`CommandHost` を通さず、
+   * `pendingOp` も立てない)。拒否(複製先が在る・編集中のファイルの削除)はサーバが言い、
+   * `onError` → `fail()` でトースト1枚になる。
+   */
+  function copyDocument(source: string, dest: string): void {
+    const op = nextOp()
+    lastFileOp = op
+    session.runVerb('copy_document', { source, dest }, op)
+  }
+
+  function deleteDocument(name: string): void {
+    const op = nextOp()
+    lastFileOp = op
+    session.runVerb('delete_document', { name }, op)
   }
 
   /** `duocad/models/` の一覧をサーバへ取り直しに行く(`FilesPanel.svelte` が描く)。 */
@@ -2757,6 +2778,8 @@
           onSave={saveDocumentAs}
           onOpen={openDocumentByName}
           onNew={newDocument}
+          onCopy={copyDocument}
+          onDelete={deleteDocument}
           onExportStep={exportStep}
           onExportStl={exportStl}
         />

@@ -24,6 +24,8 @@ UI(パラメータ編集パネル・操作履歴パネル・ファイル操作)�
 - STLは**偏差を指定できる**(細かくすると必ずファイルが大きくなる)
 - `state.parameters` に名前つきの値が出て、`set_parameter` で形が追随する
 - **`list_documents` が `models_dir` の中身(名前/更新日時/サイズ/操作数)を返す**
+- **`copy_document` / `delete_document`** は一覧の行からの複製・削除(issue #17)。どちらも
+  verbではなく文書を変えない。複製先が在れば拒否、編集中のファイルの削除は拒否。AIには開けない
 """
 from __future__ import annotations
 
@@ -523,6 +525,93 @@ def test_new_document_is_not_exposed_to_ai(session: Session) -> None:
 
     assert "new_document" not in catalog.tool_names()
     assert "new_document" in catalog.websocket_command_names()
+
+
+# --------------------------------------------------------------------------------------
+# 複製と削除(issue #17: 一覧の行からファイルを整理する)
+# --------------------------------------------------------------------------------------
+def test_copy_document_duplicates_the_file_and_leaves_the_document_alone(session: Session) -> None:
+    """落ちたら: 複製が元と違う中身になる、または複製で編集中の文書/ファイル名が動く。"""
+    _box(session)
+    session.save_document("a.json")
+    session.new_document()
+    _box(session)
+    session.save_document("mine.json")
+    log_before = len(session.document.log.entries)
+
+    async def script(send):
+        return await send({"cmd": "copy_document", "source": "a.json", "dest": "b.json"})
+
+    (answer, clients) = _browser(session, script)
+
+    assert answer["type"] == "file" and answer["action"] == "copy"
+    assert answer["name"] == "b.json" and answer["source"] == "a.json"
+    assert (session.models_dir / "b.json").read_bytes() == (session.models_dir / "a.json").read_bytes()
+    assert session.state_meta()["current_name"] == "mine.json", "複製で編集中のファイルが動いた"
+    assert len(session.document.log.entries) == log_before, "複製がverbとしてログに載った"
+    assert clients[1].payloads == [], "複製は状態配信ではない(要求した接続にだけ返る)"
+    assert {item["name"] for item in session.list_documents()["files"]} == {"a.json", "b.json", "mine.json"}
+
+
+def test_copy_document_refuses_an_existing_destination_and_bad_names(session: Session) -> None:
+    """落ちたら: 複製で既存ファイルが上書きされる(1バイトでも変わる)、または models/ の外を指せる。"""
+    _box(session)
+    session.save_document("a.json")
+    session.set_parameter(next(iter(session.document.parameters)), 30.0)
+    session.save_document("b.json")
+    untouched = (session.models_dir / "b.json").read_bytes()
+
+    with pytest.raises(ValueError) as refusal:
+        session.copy_document("a.json", "b.json")
+    assert "b.json" in str(refusal.value) and "既にある" in str(refusal.value)
+    assert (session.models_dir / "b.json").read_bytes() == untouched
+
+    with pytest.raises(FileNotFoundError):
+        session.copy_document("nope.json", "c.json")
+    assert not (session.models_dir / "c.json").exists()
+    with pytest.raises(ValueError):
+        session.copy_document("a.json", "../outside.json")
+    with pytest.raises(ValueError):
+        session.copy_document("a.json", "a.json")  # 同じ名前 = 既にある
+
+
+def test_delete_document_removes_the_file_but_never_the_current_one(session: Session) -> None:
+    """落ちたら: 編集中のファイルが消せてしまう(次の保存が無いファイルへ書く)、または
+    削除で編集中の文書が動く。"""
+    _box(session)
+    session.save_document("old.json")
+    session.new_document()
+    _box(session)
+    session.save_document("mine.json")
+    log_before = len(session.document.log.entries)
+
+    with pytest.raises(ValueError) as refusal:
+        session.delete_document("mine.json")
+    assert "mine.json" in str(refusal.value) and "編集中" in str(refusal.value)
+    assert "開く" in str(refusal.value) or "新規" in str(refusal.value), "どうすればできるかを言わない"
+    assert (session.models_dir / "mine.json").exists()
+
+    async def script(send):
+        return await send({"cmd": "delete_document", "name": "old.json"})
+
+    (answer, clients) = _browser(session, script)
+
+    assert answer["type"] == "file" and answer["action"] == "delete" and answer["name"] == "old.json"
+    assert not (session.models_dir / "old.json").exists()
+    assert session.state_meta()["current_name"] == "mine.json"
+    assert len(session.document.log.entries) == log_before
+    assert clients[1].payloads == []
+    with pytest.raises(FileNotFoundError):
+        session.delete_document("old.json")
+
+
+def test_copy_and_delete_are_not_exposed_to_ai(session: Session) -> None:
+    """ファイルの出し入れは人の操作(`save_document` 等と同じ線)。削除は不可逆でもある。"""
+    from duocad import catalog
+
+    for name in ("copy_document", "delete_document"):
+        assert name not in catalog.tool_names()
+        assert name in catalog.websocket_command_names()
 
 
 # --------------------------------------------------------------------------------------

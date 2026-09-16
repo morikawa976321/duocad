@@ -311,6 +311,8 @@ export interface FilePayload {
   path: string
   bytes: number
   name?: string
+  /** 複製元のファイル名(`copy_document` のみ)。 */
+  source?: string
   operations?: number
   deviation?: number
   body_ids?: string[]
@@ -1099,6 +1101,7 @@ export function createSession(hooks: SessionHooks): Session {
       vertices?: VertexGeometry[]
       action?: string
       path?: string
+      source?: string
       bytes?: number
       operations?: number
       deviation?: number
@@ -1161,6 +1164,7 @@ export function createSession(hooks: SessionHooks): Session {
         path: message.path ?? '',
         bytes: message.bytes ?? 0,
         name: message.name,
+        source: message.source,
         operations: message.operations,
         deviation: message.deviation,
         body_ids: message.body_ids,

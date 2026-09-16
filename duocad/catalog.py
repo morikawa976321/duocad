@@ -1286,6 +1286,37 @@ COMMANDS: tuple[Command, ...] = (
             "文書は変えない(`changes_document=False`)"
         ),
     ),
+    Command(
+        name="copy_document",
+        category="file",
+        description="",
+        params=(
+            Param("source", "string", "複製元のファイル名(models/ 配下)"),
+            Param("dest", "string", "複製先のファイル名(models/ 配下。既に在れば拒否)"),
+        ),
+        session="copy_document",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**一覧の行から別名で複製する**(issue #17)。ディスク上のJSONを写すだけで、"
+            "いま編集している文書は変わらない。ファイルの出し入れは人の操作(`mcp=False`)。"
+            "表に載る(`ws=\"table\"`)ので応答は `file` の封筒で要求した接続にだけ返る"
+        ),
+    ),
+    Command(
+        name="delete_document",
+        category="file",
+        description="",
+        params=(Param("name", "string", "削除するファイル名(models/ 配下。編集中のファイルは拒否)"),),
+        session="delete_document",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**一覧の行からディスク上のファイルを削除する**(issue #17)。編集中のファイルは"
+            "拒否(どうすればできるかを言う)。確認は画面側が行内の2段階で聞く。"
+            "不可逆な操作なので人だけ(`mcp=False`)"
+        ),
+    ),
     # ---------------------------------------------------------------- 履歴
     Command(
         name="undo",

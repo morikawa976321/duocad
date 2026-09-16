@@ -1329,6 +1329,51 @@ class Session:
             })
         return {"action": "list", "path": str(self.models_dir), "bytes": 0, "files": files}
 
+    def copy_document(self, source: Any, dest: Any) -> dict:
+        """`models_dir` の `source` を `dest` へ複製する。**verbではない**(文書を変えない)。
+
+        ディスク上のJSONを写すだけで、**いま編集している文書も `current_name` も変わらない**
+        (`open_document` とは別の操作。複製元を開いていなくてもよい)。`dest` が既に在れば
+        拒否する —— 上書きの口は持たない(`save_document(name)` と同じ線。issue #17)。
+        どちらの名前も `_resolve_document_name` を通す(`models_dir` の外は指せない)。
+        """
+        origin = self._resolve_document_name(source)
+        target = self._resolve_document_name(dest)
+        if not origin.exists():
+            raise FileNotFoundError(f"複製元が無い: {origin.name}")
+        if target.exists():
+            raise ValueError(f"{target.name} は既にある(別の名前にする)")
+        # `save_document` と同じく一時ファイル経由で差し替える(途中で落ちても半端な
+        # ファイルが一覧に出ない。`list_documents` は `.writing` を省く)。
+        staging = target.with_name(target.name + ".writing")
+        staging.write_bytes(origin.read_bytes())
+        os.replace(staging, target)
+        return {
+            "action": "copy",
+            "path": str(target),
+            "name": target.name,
+            "source": origin.name,
+            "bytes": target.stat().st_size,
+        }
+
+    def delete_document(self, name: Any) -> dict:
+        """`models_dir` の `name` をディスクから削除する。**verbではない**(文書を変えない)。
+
+        **いま編集しているファイルは拒否する**(拒否の文はどうすればできるかまで言う) ——
+        消した直後の自動保存/上書きが「無いファイルへ書く」になり、消したはずのものが
+        黙って復活する。無ければ FileNotFoundError。確認は挟まない(画面側が行内で聞く。
+        `FilesPanel.svelte`)。`models/.trash` への退避はしない(issue #17)。
+        """
+        target = self._resolve_document_name(name)
+        if target.name == self._current_name:
+            raise ValueError(
+                f"{target.name} は編集中(別のファイルを開くか「新規」にしてから削除する)"
+            )
+        if not target.exists():
+            raise FileNotFoundError(f"削除するファイルが無い: {target.name}")
+        target.unlink()
+        return {"action": "delete", "path": str(target), "name": target.name, "bytes": 0}
+
     def export_step_file(self, path: Any) -> dict:
         """STEPを書き出す。**ログに載らない**(文書を変えないのでverbではない)。
 
