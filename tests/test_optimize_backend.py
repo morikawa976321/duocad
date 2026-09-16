@@ -326,7 +326,14 @@ def test_max_element_size_is_the_min_of_the_two_requirements(session: Session) -
     # 最小部材幅からの要求 = rmin_mm / simp.MIN_RMIN(**床**であって既定値ではない。
     # 2026-09-05に `DEFAULT_RMIN` から分離した — 既定を上げても解像度の要求は動かない)
     assert limits["from_rmin_mm"] == pytest.approx(6.0 / simp.MIN_RMIN)
-    assert limits["max_element_size_mm"] == pytest.approx(min(20.0, 6.0 / simp.MIN_RMIN))
+    # 上限は 2つの要求の min を**実格子の要素サイズへ切り下げた値**(丸めで実 spacing が
+    # 要求を超えると `rmin_mm` の床を割る)。1分割ぶんより大きくは下がらない。
+    wanted = min(20.0, 6.0 / simp.MIN_RMIN)
+    assert 0.9 * wanted < limits["max_element_size_mm"] <= wanted
+    lo, hi = optimize_run._condition_bbox(session.document)
+    assert optimize_run._snap_to_grid(lo, hi, limits["max_element_size_mm"]) == pytest.approx(
+        limits["max_element_size_mm"]
+    )
     assert limits["default_element_size_mm"] == limits["max_element_size_mm"]
     assert limits["min_element_size_mm"] < limits["max_element_size_mm"]
     assert limits["feasible"] is True
@@ -336,7 +343,10 @@ def test_without_rmin_only_the_condition_faces_set_the_upper_bound(session: Sess
     _setup_four_conditions(session)
     limits = optimize_run.resolution_limits(session.document)
     assert limits["from_rmin_mm"] is None
-    assert limits["max_element_size_mm"] == pytest.approx(20.0, rel=1e-6)
+    # 条件面からの要求 20mm を、実格子の要素サイズへ切り下げた値(粗い格子ほど段差が大きい)。
+    lo, hi = optimize_run._condition_bbox(session.document)
+    assert limits["max_element_size_mm"] <= 20.0 * (1.0 + 1e-9)
+    assert limits["max_element_size_mm"] == pytest.approx(optimize_run._snap_to_grid(lo, hi, 20.0))
 
 
 def test_condition_face_requirement_uses_the_same_formula_as_the_probe(
@@ -390,6 +400,82 @@ def test_material_bounds_need_room_between_the_keep_and_the_capacity() -> None:
     assert high == pytest.approx(10_000.0 * optimize_run.MATERIAL_MAX_RATIO)
     with pytest.raises(optimize_run.OptimizeInputError, match="探索範囲が作れない"):
         optimize_run._material_bounds(options, keep_mm3=9_000.0, capacity_mm3=10_000.0)
+
+
+def test_the_element_size_upper_bound_reproduces_itself_on_the_real_grid(session: Session) -> None:
+    """**上限の要素サイズで導出した実格子の spacing は上限以下**で、`rmin_mm` の床を割らない。
+
+    `derive` は分割数を丸めるので、要求値そのままだと実 spacing が僅かに大きくなり
+    (実測: 要求 4.0mm → 実 4.038mm)、`rmin_mm / 実spacing` が `simp.MIN_RMIN` を割って
+    `FilterRadiusError` になる。
+    """
+    from duocad.topopt import design_space as ds
+    from duocad.topopt import simp
+
+    _setup_four_conditions(session)
+    limits = optimize_run.resolution_limits(session.document, rmin_mm=6.0)
+    upper = limits["max_element_size_mm"]
+    assert upper <= 6.0 / simp.MIN_RMIN
+    bundle = optimize_run.build_conditions(session.document)
+    space = ds.derive(bundle.conditions, spacing=upper)
+    assert space.grid.spacing <= upper * (1.0 + 1e-9)
+    assert 6.0 / space.grid.spacing >= simp.MIN_RMIN
+
+
+def test_build_conditions_lists_the_condition_bodies_and_ignores_unrelated_ones(session: Session) -> None:
+    """凸包の点群になるのは保持ボディと条件面のボディだけ。無関係なボディを足しても変わらない。"""
+    left, right, _fixed, _load = _setup_four_conditions(session)
+    before = optimize_run.build_conditions(session.document).conditions.bodies
+    assert [(b.name, b.roles) for b in before] == [
+        (left.id, ("keep", "fixed")),
+        (right.id, ("keep", "load")),
+    ]
+    _box(session, 5.0, 5.0, 5.0, corner=(200.0, 200.0))  # 条件に関係ないボディ
+    after = optimize_run.build_conditions(session.document).conditions.bodies
+    assert [(b.name, b.bbox_min, b.bbox_max) for b in after] == [
+        (b.name, b.bbox_min, b.bbox_max) for b in before
+    ]
+
+
+def test_run_derives_once_and_hands_the_space_and_the_filter_radius_to_the_search(
+    session: Session, monkeypatch
+) -> None:
+    """**塊は探索の前に1回だけ導出し、そのまま探索へ渡す。** `rmin_mm` も一緒に届く。
+
+    デバッグ配信の塊(`space`)は導出直後の1回だけで、探索の後に別の塊を配り直さない。
+    """
+    from duocad.topopt import design_space as ds
+    from duocad.topopt import safety_loop
+
+    _setup_four_conditions(session)
+    seen: dict = {}
+    derived: list = []
+    original_derive = ds.derive
+
+    def spy_derive(conditions, **kwargs):
+        space = original_derive(conditions, **kwargs)
+        derived.append(space)
+        return space
+
+    def fake_solve(space, **kwargs):
+        seen["space"] = space
+        seen.update(kwargs)
+        raise RuntimeError("stop before SIMP")
+
+    monkeypatch.setattr(ds, "derive", spy_derive)
+    monkeypatch.setattr(safety_loop, "solve_for_safety_factor", fake_solve)
+    payloads: list = []
+    with pytest.raises(RuntimeError, match="stop before SIMP"):
+        optimize_run.run(
+            session.document,
+            optimize_run.OptimizeOptions(rmin_mm=6.0),
+            debug=payloads.append,
+            debug_kinds=("space", "anchors", "rho"),
+        )
+    assert len(derived) == 1
+    assert seen["space"] is derived[0]
+    assert seen["rmin_mm"] == 6.0
+    assert [(p["kind"], p["stage"]) for p in payloads] == [("space", "derive"), ("anchors", "derive")]
 
 
 # --------------------------------------------------------------------------------------

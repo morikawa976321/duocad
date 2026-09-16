@@ -1,17 +1,13 @@
 """動的な active set(`simp.optimize(dynamic_active=...)`)の実測。
 
-    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_active_set.py --pick 0.60 --max-iter 3 --tag base060
-    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_active_set.py --pick 0.60 --max-iter 3 --dynamic --tag dyn060
-    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_active_set.py --pick 0.08 --max-iter 40 --tag off008
-    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_active_set.py --pick 0.08 --max-iter 40 --dynamic --tag on008
+    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_active_set.py --max-iter 40 --tag off
+    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_active_set.py --max-iter 40 --dynamic --tag on
     .\\.venv\\Scripts\\python.exe topopt_checks\\measure_active_set.py --merge
 
-題材は `hanger_bar_attachment.json` 2.4mm・材料 70,634.5mm^3(docs/TOPOPT.md「下端の崖」と
-同じ)。塊は `PICK_RATIO`(`--pick`)で振る。**1ケース1ファイル**
+題材は `hanger_bar_attachment.json` 2.4mm・材料 70,634.5mm^3。塊は製品と同じ固定凸包の導出
+(`design_space.derive`)を1回回したもので、材料量や摘みで振らない(2026-09-16 以前の実測は
+参照方式の `PICK_RATIO` で塊を振っていた —— docs/TOPOPT_ACTIVE_SET.md)。**1ケース1ファイル**
 (`output/active_set_<tag>.json`)に書き、`--merge` が `output/active_set.json` へまとめる。
-
-**参照(`Reference`)は `measure_simp_convergence.py` が作った pickle を使い回す。** 無ければ
-先にそちらを1回走らせること —— 参照 run は本番と同じ格子で回るので作り直すと数十分かかる。
 
 結果の読み方は docs/TOPOPT_ACTIVE_SET.md。
 """
@@ -20,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import pickle
 import sys
 import time
 import traceback
@@ -35,6 +30,8 @@ for _stream in (sys.stdout, sys.stderr):
 import _bootstrap  # noqa: F401
 import numpy as np
 
+from duocad.optimize_run import build_conditions
+from duocad.session import Session
 from duocad.topopt import OUTPUT_DIR
 from duocad.topopt import design_space as ds
 from duocad.topopt import simp
@@ -43,7 +40,6 @@ from measure_reaction_constraint import keep_survival
 MODEL_NAME = "hanger_bar_attachment.json"
 SPACING_MM = 2.4
 MATERIAL_MM3 = 70634.5
-REF_PICKLE = OUTPUT_DIR / "simp_convergence_hanger_2.4mm_ref.pkl"
 MERGED = OUTPUT_DIR / "active_set.json"
 
 # ρ の分布を積む区間の境目。**閾値 1e-3(emin=1e-9 / penal=3)を境目に含めてある** ——
@@ -57,31 +53,31 @@ def _sha256(arr: np.ndarray) -> str:
     return hashlib.sha256(np.ascontiguousarray(arr, dtype=np.float64).tobytes()).hexdigest()
 
 
-def run_case(*, pick: float, max_iter: int, dynamic: bool, tag: str, threads: int | None) -> dict:
+def _derive_space() -> tuple[ds.DesignSpace, tuple]:
+    session = Session(None, 0.2)
+    session.open_document(MODEL_NAME)
+    bundle = build_conditions(session.document)
+    return ds.derive(bundle.conditions, spacing=SPACING_MM), bundle.forces
+
+
+def run_case(*, max_iter: int, dynamic: bool, tag: str, threads: int | None) -> dict:
     payload: dict = {
         "tag": tag,
         "model": MODEL_NAME,
         "spacing_mm": SPACING_MM,
-        "pick_ratio": pick,
+        "derivation": ds.DERIVATION,
         "max_iter": max_iter,
         "dynamic_active": bool(dynamic),
         "material_mm3": MATERIAL_MM3,
         "threads": threads,
     }
     started = time.perf_counter()
-    with open(REF_PICKLE, "rb") as handle:
-        conditions, reference, forces = pickle.load(handle)
-    space = ds.derive_from_reference(
-        conditions,
-        material_mm3=MATERIAL_MM3,
-        reference=reference,
-        pick_ratio=pick,
-        threads=1,
-        spacing=SPACING_MM,
-    )
+    space, forces = _derive_space()
     payload["design_elements"] = int(space.element_count)
     payload["grid_shape"] = list(space.grid.shape)
-    print(f"塊 {space.element_count} 要素 / 箱 {space.grid.shape}", flush=True)
+    payload["mask_hash"] = space.mask_hash
+    payload["derive_seconds"] = time.perf_counter() - started
+    print(f"塊 {space.element_count} 要素 / 箱 {space.grid.shape} / {payload['derive_seconds']:.1f}秒", flush=True)
 
     # **反復ごとの ρ 分布は `prepare` を包んで取る。** `callback` は更新のあとに呼ばれるので、
     # 「その反復で実際に組み立てた密度場」はそこからは見えない。
@@ -198,7 +194,6 @@ def merge() -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="動的な active set の実測")
-    parser.add_argument("--pick", type=float, default=None, help="PICK_RATIO")
     parser.add_argument("--max-iter", type=int, default=40)
     parser.add_argument("--dynamic", action="store_true", help="dynamic_active=True で回す")
     parser.add_argument("--tag", default=None, help="出力ファイル名の識別子")
@@ -209,16 +204,9 @@ def main() -> int:
     if args.merge:
         merge()
         return 0
-    if args.pick is None or args.tag is None:
-        parser.error("--pick と --tag は必須(--merge のときを除く)")
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    payload = run_case(
-        pick=args.pick,
-        max_iter=args.max_iter,
-        dynamic=args.dynamic,
-        tag=args.tag,
-        threads=args.threads,
-    )
+    if args.tag is None:
+        parser.error("--tag は必須(--merge のときを除く)")
+    payload = run_case(max_iter=args.max_iter, dynamic=args.dynamic, tag=args.tag, threads=args.threads)
     return 1 if payload.get("error") else 0
 
 

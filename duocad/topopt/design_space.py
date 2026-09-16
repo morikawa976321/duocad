@@ -626,6 +626,7 @@ def derive(
         "derive-masks",
         frame=frame,
         hull=candidate,
+        obstacle=(np.zeros(tuple(grid.shape), dtype=bool) if obs is None else obs),
         minus_obstacle=design,
         connected=connected,
     )

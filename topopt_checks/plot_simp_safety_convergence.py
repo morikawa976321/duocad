@@ -1,7 +1,8 @@
 """SIMP 反復ごとの最小安全率を測って SVG に描く。
 
 既存の `simp_convergence_hanger_2.4mm.json` には compliance しか無いので、
-参照 pickle を使って各ケースを再実行し、反復 callback で `stress.evaluate` する。
+`measure_simp_convergence.py` が保存した固定の塊(pickle)で各ケースを再実行し、
+反復 callback で `stress.evaluate` する。
 
     .\\.venv\\Scripts\\python.exe topopt_checks\\plot_simp_safety_convergence.py
     .\\.venv\\Scripts\\python.exe topopt_checks\\plot_simp_safety_convergence.py --skip-run
@@ -43,7 +44,7 @@ from duocad.topopt import stress
 from duocad.topopt import voxelize as vx
 from topopt_checks.measure_simp_convergence import (
     CASE_RATIOS,
-    REF_PICKLE,
+    SPACE_PICKLE,
     SPACING_MM,
 )
 
@@ -67,7 +68,7 @@ class Job:
     material_ratio: float
     material_mm3: float
     max_iter: int
-    ref_path: str
+    space_path: str
 
 
 def _build_stress_context(space: ds.DesignSpace, conditions: ds.Conditions, forces: tuple):
@@ -110,17 +111,10 @@ def _run_job(job: Job) -> dict[str, Any]:
     started = time.perf_counter()
     curve: list[dict[str, float]] = []
     try:
-        with open(job.ref_path, "rb") as handle:
-            conditions, reference, forces = pickle.load(handle)
-        capacity = float(reference.stats["capacity_mm3"])
-        space = ds.derive_from_reference(
-            conditions,
-            material_mm3=job.material_mm3,
-            reference=reference,
-            threads=1,
-            spacing=SPACING_MM,
-        )
-        simp_model, scale = _build_stress_context(space, conditions, forces)
+        with open(job.space_path, "rb") as handle:
+            space, forces = pickle.load(handle)
+        capacity = float(space.element_count) * float(space.grid.element_volume)
+        simp_model, scale = _build_stress_context(space, space.conditions, forces)
 
         def progress(iteration: simp.Iteration, rho: np.ndarray) -> None:
             report = stress.evaluate(
@@ -174,18 +168,20 @@ def _run_job(job: Job) -> dict[str, Any]:
 
 
 def _collect_curves(max_iter: int, workers: int, case_ids: list[str]) -> dict[str, Any]:
-    if not REF_PICKLE.is_file():
-        raise FileNotFoundError(f"参照 pickle が無い: {REF_PICKLE}")
-    with open(REF_PICKLE, "rb") as handle:
-        _, reference, _ = pickle.load(handle)
-    capacity = float(reference.stats["capacity_mm3"])
+    if not SPACE_PICKLE.is_file():
+        raise FileNotFoundError(
+            f"塊の pickle が無い: {SPACE_PICKLE}(先に measure_simp_convergence.py を走らせること)"
+        )
+    with open(SPACE_PICKLE, "rb") as handle:
+        space, _ = pickle.load(handle)
+    capacity = float(space.element_count) * float(space.grid.element_volume)
     jobs = [
         Job(
             case_id=case_id,
             material_ratio=CASE_RATIOS[case_id],
             material_mm3=capacity * CASE_RATIOS[case_id],
             max_iter=max_iter,
-            ref_path=str(REF_PICKLE),
+            space_path=str(SPACE_PICKLE),
         )
         for case_id in case_ids
     ]

@@ -182,7 +182,7 @@ def _profile_optimize_loop(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--smoke", action="store_true", help="derive のみ・材料6.6%・2反復")
+    parser.add_argument("--smoke", action="store_true", help="材料6.6%・2反復だけ回す")
     parser.add_argument("--threads", type=int, default=None)
     args = parser.parse_args()
 
@@ -194,41 +194,19 @@ def main() -> int:
     conditions = bundle.conditions
     forces = bundle.forces
 
-    base = ds.derive(conditions, spacing=SPACING_MM)
-    capacity = float(base.element_count) * float(base.grid.element_volume)
+    t0 = time.perf_counter()
+    space = ds.derive(conditions, spacing=SPACING_MM)
+    capacity = float(space.element_count) * float(space.grid.element_volume)
     material_mm3 = capacity * SMALLEST_RATIO
 
     print(f"題材={MODEL} spacing={SPACING_MM}mm threads={threads}")
     print(
-        f"箱={base.grid.shape} 箱要素={base.grid.element_count:,} "
-        f"案1塊={base.element_count:,} 容量={capacity:,.0f}mm^3"
+        f"箱={space.grid.shape} 箱要素={space.grid.element_count:,} "
+        f"塊={space.element_count:,}(固定凸包) 容量={capacity:,.0f}mm^3 "
+        f"導出 {time.perf_counter() - t0:.1f}秒"
     )
 
-    reference = None
-    space = base
-    if not args.smoke:
-        print("参照 run を構築中...", flush=True)
-        t0 = time.perf_counter()
-        reference = ds.build_reference(
-            conditions,
-            spacing=SPACING_MM,
-            threads=threads,
-            forces=forces,
-            max_iter=10,
-        )
-        print(f"参照 run: {time.perf_counter() - t0:.1f}秒", flush=True)
-        t0 = time.perf_counter()
-        space = ds.derive_from_reference(
-            conditions,
-            material_mm3=material_mm3,
-            reference=reference,
-            threads=threads,
-        )
-        print(f"derive_from_reference: {time.perf_counter() - t0:.1f}秒", flush=True)
-    else:
-        material_mm3 = capacity * SMALLEST_RATIO
-
-    model = space.model if hasattr(space, "model") else base.model
+    model = space.model
     nx, ny, nz = space.grid.shape
     table = space.table if space.table is not None else an.build_anchors(space.soup, space.grid)
     fixed_dofs = table.fixed_dofs(space.fixed_faces)

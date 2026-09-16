@@ -210,8 +210,11 @@ cd web; npm run dev                                 # 画面(5173)
 # 面アンカー側の正しさ（端から端まで1回通す）
 & .\.venv\Scripts\python.exe topopt_checks\check_anchor.py
 
-# 塊(設計空間)。分離 + 案1 + 連結性ガード + 既定の導出 + 空の条件面
+# 塊(設計空間)。分離 + 固定凸包 + 連結性 + 空の条件面(--run <実行フォルダ> で実物の基準実行も)
 & .\.venv\Scripts\python.exe topopt_checks\check_design_space.py
+
+# 途中記録。製品入口から1回走らせ、導出1回・全候補の塊一致・表面の再現・最終文書/STLの一致
+& .\.venv\Scripts\python.exe topopt_checks\check_trace.py
 
 # 体積目標を絶対量(mm^3)で指定する口
 & .\.venv\Scripts\python.exe topopt_checks\check_absolute_volume.py

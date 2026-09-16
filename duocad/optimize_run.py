@@ -511,9 +511,13 @@ def resolution_limits(doc: "Document", *, rmin_mm: Optional[float] = None) -> di
     upper = from_faces if from_rmin is None else min(from_faces, from_rmin)
 
     lo, hi = _condition_bbox(doc)
-    lower = _min_element_size(lo, hi)
     if not upper > 0.0:
         raise OptimizeInputError("条件面の面積が0で要素サイズの上限を決められない")
+    # **上限は実際の格子の要素サイズに揃える。** `derive` は最長辺を要求値で割った数を丸めるので、
+    # 要求値そのままだと実 spacing が僅かに大きくなり(実測: 要求 4.0mm → 実 4.038mm)、
+    # `rmin_mm / 実spacing` が床 `simp.MIN_RMIN` を割って `FilterRadiusError` になる。
+    upper = _snap_to_grid(lo, hi, upper)
+    lower = _min_element_size(lo, hi)
 
     return {
         "max_element_size_mm": upper,
@@ -626,6 +630,30 @@ def _condition_bbox(doc: "Document") -> tuple:
     lo = [min(box["min"][axis] for box in boxes) for axis in range(3)]
     hi = [max(box["max"][axis] for box in boxes) for axis in range(3)]
     return lo, hi
+
+
+def _box_longest_edge(lo, hi) -> float:
+    """`derive` が格子を起こす外枠(点群の外接箱 + 余白)の最長辺[mm]。"""
+    from .topopt import design_space as ds
+
+    longest = max(float(hi[a]) - float(lo[a]) for a in range(3))
+    return longest * (1.0 + 2.0 * ds.DEFAULT_MARGIN_RATIO)
+
+
+def _snap_to_grid(lo, hi, spacing: float) -> float:
+    """要求した要素サイズ以下で、`derive` の丸め(`round(最長辺 / spacing)`)がそのまま再現する値。
+
+    `derive` は `n = round(最長辺 / spacing)`、実 spacing = `最長辺 / n` なので、要求値より
+    大きくなりうる。1つ多い分割数に倒せば実 spacing は要求値以下になり、しかも
+    `round(最長辺 / 実spacing)` がその分割数に戻る(層をまたぐ契約: `design_space.derive`)。
+    """
+    box_long = _box_longest_edge(lo, hi)
+    if not box_long > 0.0 or not spacing > 0.0:
+        return float(spacing)
+    n = max(1, int(round(box_long / float(spacing))))
+    if box_long / n > float(spacing) * (1.0 + 1e-12):
+        n += 1
+    return box_long / n
 
 
 def _element_count(lo, hi, spacing: float) -> int:

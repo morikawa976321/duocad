@@ -114,7 +114,12 @@ def test_min_member_width_moves_the_coarse_end(session: Session) -> None:
     _setup_four_conditions(session)
     loose = optimize_run.resolution_limits(session.document)
     tight = optimize_run.resolution_limits(session.document, rmin_mm=3.0)
-    assert tight["steps"][0]["element_size_mm"] == pytest.approx(3.0 / 1.5)
+    # `rmin_mm / 1.5` を、実格子の要素サイズへ切り下げた値(`optimize_run._snap_to_grid`)。
+    lo, hi = optimize_run._condition_bbox(session.document)
+    assert tight["steps"][0]["element_size_mm"] <= 3.0 / 1.5
+    assert tight["steps"][0]["element_size_mm"] == pytest.approx(
+        optimize_run._snap_to_grid(lo, hi, 3.0 / 1.5)
+    )
     assert tight["steps"][0]["element_size_mm"] < loose["steps"][0]["element_size_mm"]
     assert tight["steps"][0]["element_count"] > loose["steps"][0]["element_count"]
 
@@ -172,7 +177,11 @@ def test_resolution_command_carries_the_ladder(session: Session) -> None:
     _setup_four_conditions(session)
     connection = _dispatch(session, {"cmd": "optimize_resolution", "rmin_mm": 3.0})
     reply = connection.of_type("optimize_resolution")[0]
-    assert reply["steps"][0]["element_size_mm"] == pytest.approx(3.0 / 1.5)
+    lo, hi = optimize_run._condition_bbox(session.document)
+    assert reply["steps"][0]["element_size_mm"] <= 3.0 / 1.5
+    assert reply["steps"][0]["element_size_mm"] == pytest.approx(
+        optimize_run._snap_to_grid(lo, hi, 3.0 / 1.5)
+    )
     assert reply["feasible"] is True
     assert "error" not in reply
 

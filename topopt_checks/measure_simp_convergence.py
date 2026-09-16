@@ -4,6 +4,8 @@
     .\\.venv\\Scripts\\python.exe topopt_checks\\measure_simp_convergence.py --smoke
     .\\.venv\\Scripts\\python.exe topopt_checks\\measure_simp_convergence.py --workers 4
 
+塊は製品と同じ固定凸包の導出(`design_space.derive`)を1回回したもので、全ケースが同じ塊を
+使う(pickle `SPACE_PICKLE` に保存し、`plot_simp_safety_convergence.py` も読む)。
 各 SIMP は `threads=1`(1コア)。材料量ケースは `ProcessPoolExecutor` で並列。
 """
 
@@ -43,6 +45,8 @@ SPACING_MM = 2.4
 CHANGE_TOL = 0.01
 TAIL_WINDOW = bench.TAIL_WINDOW
 
+# ケース id は過去の出力(docs/TOPOPT.md の表)と揃えてある。"R" は 2026-09-16 以前の参照方式で
+# 参照 run の材料量だった 8% で、いまはただの材料量の1点。
 CASE_RATIOS: dict[str, float] = {
     "R": 0.08,
     "1": 0.066,
@@ -53,7 +57,7 @@ CASE_RATIOS: dict[str, float] = {
 }
 
 OUTPUT_JSON = OUTPUT_DIR / "simp_convergence_hanger_2.4mm.json"
-REF_PICKLE = OUTPUT_DIR / "simp_convergence_hanger_2.4mm_ref.pkl"
+SPACE_PICKLE = OUTPUT_DIR / "simp_convergence_hanger_2.4mm_space.pkl"
 
 
 def _peak_rss_mb() -> float | None:
@@ -147,7 +151,7 @@ class WorkerInput:
     material_ratio: float
     material_mm3: float
     max_iter: int
-    ref_path: str
+    space_path: str
     stl_path: str
     smoke: bool
 
@@ -158,18 +162,11 @@ def _run_case_worker(spec: WorkerInput) -> dict[str, Any]:
     started = time.perf_counter()
     peak_mb: float | None = None
     try:
-        with open(spec.ref_path, "rb") as handle:
-            conditions, reference, forces = pickle.load(handle)
+        with open(spec.space_path, "rb") as handle:
+            space, forces = pickle.load(handle)
         from duocad.topopt import design_space as ds_local
 
         mem0 = _peak_rss_mb()
-        space = ds_local.derive_from_reference(
-            conditions,
-            material_mm3=spec.material_mm3,
-            reference=reference,
-            threads=1,
-            spacing=SPACING_MM,
-        )
         out = ds_local.run_topopt(
             space,
             material_mm3=spec.material_mm3,
@@ -227,20 +224,10 @@ def _choose_workers(requested: int | None, smoke: bool) -> int:
     return max(1, min(len(CASE_RATIOS), by_ram, cpu))
 
 
-def _build_reference(conditions, forces, *, threads: int = 1) -> ds.Reference:
-    derive_kwargs = {"spacing": SPACING_MM}
-    return ds.build_reference(
-        conditions,
-        threads=threads,
-        forces=forces,
-        **derive_kwargs,
-    )
-
-
-def _measure_capacity(conditions) -> tuple[float, ds.DesignSpace]:
-    base = ds.derive(conditions, spacing=SPACING_MM)
-    capacity = float(base.element_count) * float(base.grid.element_volume)
-    return capacity, base
+def _derive_space(conditions) -> tuple[float, ds.DesignSpace]:
+    space = ds.derive(conditions, spacing=SPACING_MM)
+    capacity = float(space.element_count) * float(space.grid.element_volume)
+    return capacity, space
 
 
 def run_measurement(
@@ -248,41 +235,31 @@ def run_measurement(
     smoke: bool = False,
     max_iter: int = 80,
     workers: int | None = None,
-    skip_reference: bool = False,
+    skip_derive: bool = False,
 ) -> dict[str, Any]:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     print(f"題材={MODEL_NAME} spacing={SPACING_MM}mm max_iter={max_iter} smoke={smoke}", flush=True)
 
-    bundle = _load_hanger_bundle()
-    conditions = bundle.conditions
-    forces = bundle.forces
-    capacity, base = _measure_capacity(conditions)
+    if skip_derive and SPACE_PICKLE.is_file():
+        print(f"塊の導出をスキップ: {SPACE_PICKLE}", flush=True)
+        with open(SPACE_PICKLE, "rb") as handle:
+            space, forces = pickle.load(handle)
+        derive_seconds = 0.0
+    else:
+        bundle = _load_hanger_bundle()
+        derive_started = time.perf_counter()
+        _capacity, space = _derive_space(bundle.conditions)
+        forces = bundle.forces
+        derive_seconds = time.perf_counter() - derive_started
+        with open(SPACE_PICKLE, "wb") as handle:
+            pickle.dump((space, forces), handle, protocol=pickle.HIGHEST_PROTOCOL)
+    capacity = float(space.element_count) * float(space.grid.element_volume)
     print(
-        f"案1容量 C={capacity:.3f} mm^3  箱={base.grid.shape}  箱要素={base.grid.element_count}",
+        f"固定凸包の塊 {space.element_count} 要素 容量 C={capacity:.3f} mm^3  箱={space.grid.shape}  "
+        f"箱要素={space.grid.element_count}  導出 {derive_seconds:.1f}秒",
         flush=True,
     )
-
-    if skip_reference and REF_PICKLE.is_file():
-        print(f"参照 run をスキップ: {REF_PICKLE}", flush=True)
-        with open(REF_PICKLE, "rb") as handle:
-            conditions, reference, forces = pickle.load(handle)
-        ref_seconds = 0.0
-        ref_stats = dict(reference.stats)
-    else:
-        ref_started = time.perf_counter()
-        reference = _build_reference(conditions, forces, threads=1)
-        ref_seconds = time.perf_counter() - ref_started
-        ref_stats = dict(reference.stats)
-        print(
-            f"参照 run: {ref_stats.get('iterations')}反復 "
-            f"材料={ref_stats.get('material_mm3'):.3f} mm^3 "
-            f"回廊={reference.corridor} ({ref_stats.get('corridor_ratio', 0):.2%}) "
-            f"{ref_seconds:.1f}秒",
-            flush=True,
-        )
-        with open(REF_PICKLE, "wb") as handle:
-            pickle.dump((conditions, reference, forces), handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     case_ids = ["1"] if smoke else list(CASE_RATIOS)
     worker_count = _choose_workers(workers, smoke)
@@ -294,7 +271,7 @@ def run_measurement(
             material_ratio=CASE_RATIOS[case_id],
             material_mm3=capacity * CASE_RATIOS[case_id],
             max_iter=max_iter,
-            ref_path=str(REF_PICKLE),
+            space_path=str(SPACE_PICKLE),
             stl_path=str(OUTPUT_DIR / f"simp_convergence_hanger_2.4mm_{case_id}.stl"),
             smoke=smoke,
         )
@@ -316,7 +293,6 @@ def run_measurement(
 
     results.sort(key=lambda item: list(CASE_RATIOS).index(item["case_id"]))
 
-    ref_rho = np.asarray(reference.rho, dtype=float)
     for item in results:
         if item.get("error"):
             continue
@@ -330,22 +306,19 @@ def run_measurement(
         "model": MODEL_NAME,
         "spacing_mm": SPACING_MM,
         "capacity_mm3": capacity,
-        "bbox_grid_shape": list(base.grid.shape),
-        "bbox_elements": int(base.grid.element_count),
+        "bbox_grid_shape": list(space.grid.shape),
+        "bbox_elements": int(space.grid.element_count),
         "change_tol": CHANGE_TOL,
         "max_iter": max_iter,
         "threads_per_run": 1,
         "workers": worker_count,
         "smoke": smoke,
-        "reference": {
-            "seconds": ref_seconds,
-            "material_mm3": float(reference.material_mm3),
-            "material_ratio": float(reference.material_mm3 / capacity),
-            "corridor": int(reference.corridor),
-            "corridor_ratio": float(reference.corridor / base.element_count),
-            "iterations": int(ref_stats.get("iterations", 0)),
-            "stats": ref_stats,
-            "rho_sha256": _sha256(ref_rho),
+        "space": {
+            "derivation": ds.DERIVATION,
+            "seconds": derive_seconds,
+            "design_elements": int(space.element_count),
+            "mask_hash": space.mask_hash,
+            "cells": dict(space.stats["cells"]),
         },
         "cases": results,
         "seconds_total": time.perf_counter() - started,
@@ -391,16 +364,16 @@ if __name__ == "__main__":
     parser.add_argument("--max-iter", type=int, default=80)
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument(
-        "--skip-reference",
+        "--skip-derive",
         action="store_true",
-        help="既存の参照 pickle があれば参照 run を省略",
+        help="既存の塊の pickle があれば導出を省略",
     )
     args = parser.parse_args()
     payload = run_measurement(
         smoke=args.smoke,
         max_iter=args.max_iter,
         workers=args.workers,
-        skip_reference=args.skip_reference,
+        skip_derive=args.skip_derive,
     )
     failed = [item for item in payload["cases"] if item.get("error")]
     raise SystemExit(1 if failed else 0)
