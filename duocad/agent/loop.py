@@ -118,7 +118,8 @@ class ToolSurface(Protocol):
 
     **公開APIの4つだけ**に依存する —— 内部(`_build_descriptors` 等)には触らない。
     `current_seq` は `!=` で比較するだけの不透明な値(`DocumentTools.current_seq()` は
-    `(ログの本数, 選択の指紋)` のタプルを返す)。
+    `(ログの本数, 選択の指紋, 可視性の指紋)` のタプルを返す。可視性は操作ログに載らないので
+    指紋を持たないと「AIが考えている間に人がボディを隠した」が版に出ない)。
     """
 
     def descriptors(self) -> list: ...

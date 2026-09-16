@@ -115,6 +115,12 @@ interface EntityKindSpec {
 /**
  * 円弧を折れ線へ。`start` / `end` は**度**(コアの `Entity.params` がそう持っている)、
  * 分割数の計算は**ラジアン**で行う(`adaptiveResolution.ts` の単位に合わせる)。
+ *
+ * **掃引の規約がコアと違う**: ここは `end - start` の符号どおりに描くが、`duocad/kernel.py` は
+ * `(end_deg - start_deg) % 360` で**必ず反時計回り**に掃く(`sketch.add_arc` は角度を正規化せず
+ * そのまま格納する)。`end < start` を送ると幽霊と確定結果が別の弧になるので、角度を作る側
+ * (`commands/sketch.ts` の `arcFromPoints`)は常に `start_deg <= end_deg` を出すこと。
+ * 時計回りの弧は始点と終点を入れ替えれば同じ弧として表せる。
  */
 function arcPoints(
   cx: number,

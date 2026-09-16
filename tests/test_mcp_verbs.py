@@ -286,6 +286,10 @@ def call_error(server: McpServer, name: str, arguments: dict | None = None) -> d
 
     ここで `json.loads` に成功すること自体が契約である —— 例外のテキストをそのまま
     投げていれば(`"KeyError: no such body ..."`)ここで落ちる。
+
+    **未知の引数・必須の欠落・型違いにはこのヘルパを使えない** —— それらは
+    `_check_arguments` がツール本体の前に JSON-RPC のトップレベル `error`(-32602)で
+    弾くので、下の assert で落ちる。`request()` を直接呼んで `response["error"]["code"]` を見る。
     """
     response = request(server, "tools/call", {"name": name, "arguments": arguments or {}})
     assert "error" not in response, f"実行時エラーをプロトコルエラーにしている: {response}"
