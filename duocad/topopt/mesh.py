@@ -101,7 +101,7 @@ def run_marching_cubes(
     `marching_cubes` は添字 `i` をそのまま `i*spacing` の位置とみなして頂点を置くので、
     それを中心規約の座標 `(ex+0.5)*spacing = (i-pad_width+0.5)*spacing` へ戻すには
     `(pad_width-0.5)*spacing` を引けばよい。**`pad_width*spacing` を引くと0.5要素ぶん
-    ずれる**(engine `marching-cubes-cell-center-half-offset`)。
+    ずれる**。
     `level` は引数(等値の太さを決める設計の摘み。定数で埋め込まない)。
 
     **`interpolation_ratios` はオフセットを引く前(marching_cubes直後の生座標)で計算する。**
@@ -116,8 +116,7 @@ def run_marching_cubes(
     入れ替えて**生成側で**規約に合わせ、以後 `faces` を受け取る側は全て外向きを
     前提にしてよいことにする。**書き出し直前で直してはいけない** —— STL書き出しの
     直前でだけ直すと、`faces` を直接ブラウザへ送る経路(`duocad/optimize_run.py` →
-    `add_mesh_body` → `web/src/viewport.ts`)は内向き法線のまま残る(engine
-    `winding-fix-at-export-only-leaks-to-other-consumers`)。`check_mesh.py` の検査9が
+    `add_mesh_body` → `web/src/viewport.ts`)は内向き法線のまま残る。`check_mesh.py` の検査9が
     これを機械で見張る。
     """
     verts, faces, _normals, _values = marching_cubes(rho_padded, level=level, spacing=spacing)
@@ -236,6 +235,12 @@ def min_wall_thickness(
     各頂点について、法線がほぼ逆向き(内積 < `normal_dot_max`)な近傍点との距離の
     最小値を取る — 薄い壁の表と裏はほぼ逆向きの法線で近接しているので、この値が
     壁の厚みの近似になる(3Dプリントの薄肉検出でよく使われる考え方)。
+
+    **返すのは最小値1つで、これだけでは1要素幅の筋(チェッカーボード)の有無を弁別できない** ——
+    階段状メッシュの局所ノイズが逆向き法線の対を作り、1点でも薄い値を出せば最小値がそこへ
+    張り付く(実測: 筋あり 0.0133要素 / 筋なし 0.0797要素で、どちらも「1要素よりはるかに薄い」)。
+    弁別が要るなら `per_vertex_min` の分布の下側の裾(壁厚<1要素の頂点の割合。実測 17.29% 対
+    0.79%)を見る(docs/TOPOPT.md「測った指標」)。平均・中央値では埋もれる。
     """
     if verts.shape[0] < 2:
         return float("inf")

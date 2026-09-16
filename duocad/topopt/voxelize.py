@@ -12,7 +12,7 @@
 - **セル中心規約**: `mask[i, j, k]` は要素 (i, j, k) の**中心**の値であり、頂点の値ではない。
   中心のワールド座標は `origin + spacing * (i + 0.5, j + 0.5, k + 0.5)`。
   `mesh.py` の `rho[ex]` と同じ規約で、`run_marching_cubes` が半セルのオフセットを
-  引いているのはこの規約に戻すため(engine `marching-cubes-cell-center-half-offset`)。
+  引いているのはこの規約に戻すため。
   **新しく格子と実座標を対応づけるコードを書くときは、必ず `Grid.center_of` /
   `Grid.centers_1d` を通すこと。** 添字に `spacing` を直接掛けると半セルずれる。
 - **要素は立方体・ワールド軸に整列**する。SIMPは全要素が同形状であることに依存していて
@@ -78,7 +78,12 @@ RAY_JITTER_SEQUENCE: tuple[tuple[float, float], ...] = tuple(
 DEFAULT_DEVIATION_RATIO = 0.02
 DEFAULT_ANGULAR_DEFLECTION = 0.2
 
-# バウンディングボックスの周囲に取る余白(要素数)。
+# バウンディングボックスの周囲に取る余白(要素数)。**セル数で一定なので、物理量(mm)は要素サイズに
+# 比例して増える。** 長軸基準で解像度を粗くすると、薄い軸ではパッド2セルが実寸を超えて格子が形状を
+# 覆わなくなり、`occupancy` が「格子が形状をまったく覆っていない」というレイ縮退の `ValueError` に
+# なる(格子範囲は形状より大きいのに、という読み取りにくい出方)。実測: 厚み12mm・長さ182mm の板を
+# 長辺12要素で切ると spacing 16.68mm、z のパッド2セル = 約33mm で失敗、14要素(14.3mm)なら通る。
+# 粗い解像度を選ぶときは最も薄い軸のパッドに対する余裕も見る(1点で試して通ったら採る、をしない)。
 DEFAULT_PAD = 1
 
 # **セル中心規約の唯一の定義**。要素 (i,j,k) の値は中心 origin + spacing*(i+CELL_CENTER_OFFSET)
@@ -1128,6 +1133,10 @@ def _shape_bbox(shape: Any) -> tuple[np.ndarray, np.ndarray]:
     BRepBndLib.AddOptimal_s(shape, box, False, False)
     # Bnd_Box は形状の公差ぶんの「隙間」を足して返す。その 1e-7 mm が要素サイズに乗ると、
     # 辺長が要素サイズの整数倍の箱で体積が厳密一致しなくなるので隙間を落とす。
+    # **`SetGap(0.0)` は `Add` の後に呼ぶ。** 前に呼んでも `Add` が隙間を上書きするので効かない
+    # (`kernel.bounding_box` はその順で、1e-7mm 膨らんだ値を返す)。この関数を `kernel` 側へ寄せて
+    # 1本にすると `check_voxelize.py` [7] の厳密一致が落ちる(2026-09-05 に確認)。統合するなら
+    # `kernel` に「隙間を落とした厳密な bbox」を別の口として足すこと。
     box.SetGap(0.0)
     if box.IsVoid():
         raise ValueError("bounding box is empty (null shape?)")

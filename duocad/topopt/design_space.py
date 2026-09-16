@@ -631,6 +631,11 @@ PICK_RATIO = 0.08
 
 # 参照 run も STL を書く(`run_topopt` の契約)。**受入検査が成果物として当てにしている既定の
 # 出力先(`output/bracket.stl` / `output/design_space_case1.stl`)へ向けない。**
+# **このファイルは git 追跡下にある**ので、`check_optimize_wiring.py` / `check_safety_loop.py` を
+# 回すだけで中身が検査題材のものへ黙って差し替わる(2026-09-10 実測: HEAD の 2,419,684バイト
+# (hanger 2.4mm)が 108,084バイト(bracket)になった。検査は失敗しない)。検査を回したあとの
+# `git status` にこれが出ていたら自分の run が書いたものなので戻し、コミットに含めない。
+# 参照を作る検査・スクリプトを新しく書くときは `stl_path=` を必ず渡す。
 _REFERENCE_STL_PATH = _HERE / "output" / "design_space_reference.stl"
 
 

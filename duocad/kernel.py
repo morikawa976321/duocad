@@ -1933,6 +1933,12 @@ def fillet_edges(shape: "TopoDS_Shape", radii: dict) -> dict:
     `IsDone()=False` / r=10.5 成功 / r=30.0 `IsDone()=False`)。失敗は例外にして
     呼び出し側が操作ごと捨てられるようにする。
 
+    **限界値ちょうどの半径は通らず、限界未満では微小な平面が残る**(20mm立方体の上面4辺で
+    r=9.99 は成功して 0.02mm 角の面が残り、r=10.0 は `IsDone()=False`。20×10×20 の長辺2本でも
+    r=4.999 成功 / 5.0 失敗。面取りも距離 4.99 成功 / 5.0 失敗)。**参照している面の面積を厳密に
+    0にする状況はフィレット・面取りでは作れない** —— 回帰題材が要るなら切削(対象面より大きい
+    領域で切り下げる)で作る。
+
     戻り値(`"shape"` 以外はJSON化できる素の値):
         {"shape": <TopoDS_Shape>, "provenance": {...}, "volume_before": float,
          "volume_after": float}
