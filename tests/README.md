@@ -599,6 +599,15 @@ document・ログのどちらにも変更を残さない。
   戻る（イベントも`_suppress_events`で配らないので、クライアントには一切見えない）。
   **確定（Enter）した本物の呼び出しだけが実際にリセットする。**
 
+## `duocad/measure.py` — 測定（verbではない）
+
+`tests/test_measure_between.py`。`measure_selection(session)` が選択の各項目の寸法（従来 MCP の `measure` が
+返していたもの）に加え、**ちょうど2項目のとき**だけ `between` / `between_error` を返す。頂点・直線の辺・平らな面を
+点・直線・平面に還元し、**直線と平面は無限に延ばして**測る。平行なら `distance`（と描画用の `from` / `to`）、
+平行でない線・面どうしは `angle_deg`（0〜90度）。円い辺・曲面・ボディ・スケッチの図形は `between_error` に理由が入る
+（例外にしない —— 各項目の寸法は読めたまま）。MCP の `measure` と WebSocket の `measure` は同じ関数を通り、
+WS の応答は要求した接続にだけ `client_op` 付きで返る。操作ログには載らない。
+
 ## `duocad/predicates.py` — 述語による選択
 
 述語は**構造化JSON**（DSL文字列は採らない — MCPのツールがスキーマを持てるので書式を外した

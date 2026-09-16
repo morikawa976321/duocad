@@ -31,6 +31,7 @@ from . import (
     sketch,
 )
 from .document import Document
+from .measure import measure_selection
 from .oplog import OpLog
 from .paths import DEFAULT_MODELS_DIR
 from .speculative import speculative
@@ -370,6 +371,14 @@ class Session:
     def get_selection(self) -> dict:
         """現在の選択集合を素の値で返す(`Selection.to_dict()`)。発火はしない。"""
         return selection.get_selection(self.document).to_dict()
+
+    def measure(self) -> dict:
+        """いまの選択を測る(`measure.measure_selection`)。verb ではない —— 発火も記録もしない。
+
+        MCP の `measure` と WebSocket の `measure` はどちらもここを通る(画面の「測定」と
+        AI が読む値を同じ計算から出す)。
+        """
+        return measure_selection(self)
 
     def propose_selection(
         self,

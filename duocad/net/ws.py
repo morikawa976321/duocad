@@ -459,6 +459,16 @@ class Server:
             elif command == "get_vertices":
                 result = self.session.vertices(message["body_id"])
                 await _send(connection, {"type": "vertices", **result})
+            # -------------------------------------------------- 測定(verbではない)
+            # **配信しない**(`get_edges` と同じ)。文書は変わらない。`client_op` を返すのは、
+            # 画面がコマンド層の「確定が返ってきた」の突き合わせに使うため(verb なら
+            # 状態配信の `applied.client_op` が担う役)。
+            elif command == "measure":
+                result = self.session.measure()
+                await _send(
+                    connection,
+                    {"type": "measure", "client_op": message.get("client_op"), **result},
+                )
             # -------------------------------------------------- 可変解像度(ズーム連動)
             # **文書は変わらない**が、配る形の粗さが変わるので**全接続へ配り直す**
             # (`get_edges` と違って要求元だけに返す話ではない —— 粗さは

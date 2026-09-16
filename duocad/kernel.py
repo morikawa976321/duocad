@@ -640,6 +640,26 @@ def edge_axis(shape: "TopoDS_Shape", edge_index: int) -> tuple:
     )
 
 
+def face_plane(shape: "TopoDS_Shape", face_index: int) -> tuple:
+    """**平らな面**を「面積重心と外向き単位法線」`([x, y, z], [nx, ny, nz])` にする(測定用)。
+
+    添字は `face_count` / `face_of` と同じ1始まりの体系(= 面の選択の識別子そのもの)。
+    平面でない面(円筒・トーラス・spline)は ValueError —— 曲面に法線を1本あてて平面扱い
+    すると、人が指した面と測る平面が食い違う(例外の出ない事故になる)。
+    重心は `BRepGProp` の面積重心で、平面なら必ず面の上に乗る(`Face.center()` の既定
+    (bbox中心)は傾いた平面では面から外れる —— `query.face_centroid` のdocstring)。
+    """
+    face = face_of(shape, face_index)
+    kind = classify_face(face)
+    if kind != "plane":
+        raise ValueError(
+            f"face {int(face_index)} is not planar (kind={kind!r}): 平面として測れるのは平らな面だけ"
+        )
+    _, centre = _face_props(face)
+    normal = _face_normal(face)
+    return ([float(v) for v in centre], [float(v) for v in normal])
+
+
 def face_count(shape: "TopoDS_Shape") -> int:
     """重複を除いた面の数。**この数え方の1始まりの添字が、選択の識別子そのもの**。"""
     return _face_map(shape).Extent()

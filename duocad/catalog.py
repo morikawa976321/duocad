@@ -256,9 +256,17 @@ COMMANDS: tuple[Command, ...] = (
         category="query",
         description=(
             "いまの選択(提案のままでよい)の長さ・面積・法線などを測るときに呼ぶ。"
-            "verb ではないので commit 前に提案を確かめる往復に使う。"
+            "ちょうど2項目(頂点・直線の辺・平らな面)なら、そのあいだの距離が `between` に"
+            "返る(直線・平面は無限に延ばして測る。平行でない線・面どうしは距離の代わりに"
+            "角度)。verb ではないので commit 前に提案を確かめる往復に使う。"
         ),
-        ws="none",
+        session="measure",
+        ws="special",
+        changes_document=False,
+        note=(
+            "画面の「測定」コマンドの実体。WSは要求した接続へ `{type:'measure', client_op, ...}` を"
+            "返す(状態配信ではない。`get_edges` と同じ扱い)。"
+        ),
     ),
     # ---------------------------------------------------------------- 選択
     Command(
