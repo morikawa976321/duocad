@@ -10,6 +10,7 @@
 
 | 文書 | 何が書いてあるか | 読むとき |
 |---|---|---|
+| [docs/README.md](docs/README.md) | **docs/ の索引**（配下の全文書一覧と要約） | 目的の文書を探すとき |
 | [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) | **最初期の実装計画**（なぜ・当初スコープ・到達表。「企画の前提」がなぜ） | 起点を辿るとき |
 | [MCP.md](MCP.md) | **MCPツール一覧の正**と登録手順 | AI側から触るとき |
 | [tests/README.md](tests/README.md) | テストが定義するAPI契約 | コアの挙動を疑うとき |
