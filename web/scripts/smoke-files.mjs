@@ -5,9 +5,9 @@
  * 本物のクリックとキー入力で通す。見るのは5つ:
  *
  *   1. **穴の径を1箇所編集して、反復で作った全部の穴が追随する**(M3の存在理由)
- *   2. **保存 → 再読込 → 開く → 同じ形**(操作ログから再生される)。上書きは
- *      **ヘッダの保存ボタン(`#file-save`)と Ctrl+S だけ**で、行き先は常に
- *      「いま編集しているファイル」——**編集中でないファイルは1バイトも書き換わらない**
+ *   2. **保存は1操作ごとに自動**(issue #5): 無題の文書は最初の変更で `untitled-<n>.json` が
+ *      付き、名前欄で改名する。複製 → undo → 複製を開く で undo 前の形が戻る(操作ログの
+ *      再生)。**編集中でないファイルは1バイトも書き換わらない**(既にある名前への改名は拒否)
  *   3. STEPを読み込む(その時点で編集可能なボディができる)
  *   4. STEP/STL を書き出し、**STEPは読み戻して体積が一致**(読み戻しは pytest 側)
  *   5. undo/redoでやり直せる件数と有効な操作数が実際に動く
@@ -453,166 +453,145 @@ async function main() {
     ok(`redoで戻った(有効件数 ${redone.log})`)
 
     // ================================================================ 検証2: 保存と再現
-    // 保存/開くは `duocad/models/` 配下の**ファイル名の一覧**である
-    // (engine `duocad-save-location-fixed-folder`)。新規保存は `FilesPanel.svelte` の
-    // `#file-name-input` + `#file-save-new`、開くのは一覧の行
-    // (`.files-row[data-name] .files-open`)。
-    // STEP読み込みはツールバーの `#file-import-step`(起動して初めて `#file-import-path` が
-    // DOMに出る。`commands/files.ts` の `IMPORT_STEP`)。STEP/STL書き出しは
-    // `#file-export-step-path` / `#file-export-stl-path` としてこのパネルに残る。
-    // 上書きの口はヘッダの保存ボタン(`#file-save`)と Ctrl+S だけで、行き先は常に
-    // 「いま編集しているファイル」1つに固定されている(検証2bを参照)。
-    const documentName = 'model.json'
-    const documentPath = join(workdir, documentName) // startServer に modelsDir=workdir を渡してある
-    await typeInto('#file-name-input', documentName)
-    await page.click('#file-save-new')
-    await waitFor(
-      () => window.__duocad.lastFile?.action === 'save',
-      '保存の応答が返らない',
-    )
-    const saved = (await look()).lastFile
-    if (!existsSync(documentPath)) fail(`保存したはずのファイルが無い: ${documentPath}`)
-    ok(`保存した(${saved.path} / ${saved.bytes} B / 操作 ${saved.operations} 件)`)
-
-    // **現在のファイル名が画面に出る**(完了条件4)。ヘッダとパネルの両方が同じ名前を映す。
+    // **保存は1操作ごとに自動で走る**(issue #5、2026-09-16)。名前を付ける前の文書は最初の
+    // 変更で `untitled-<n>.json` が自動で付き、人はパネルの名前欄(`#file-name-input` +
+    // `#file-rename`)で**改名**する。明示の保存ボタンは無く、ヘッダの `#save-state` は
+    // 自動保存が書けなかったときだけ「未保存」を出す(普段は札そのものが無い)。
+    // 保存/開くは `duocad/models/` 配下の**ファイル名の一覧**で、開くのは一覧の行
+    // (`.files-row[data-name] .files-open`)。STEP読み込みはツールバーの `#file-import-step`、
+    // STEP/STL書き出しは `#file-export-step-path` / `#file-export-stl-path`。
+    const untitledName = 'untitled-1.json'
+    const firstName = 'model.json'
+    const firstPath = join(workdir, firstName) // startServer に modelsDir=workdir を渡してある
     await waitFor(
       (expected) => window.__duocad.currentDocumentName === expected,
-      '保存後に現在のファイル名が更新されない',
-      documentName,
+      '最初の変更で無題の文書に名前が自動で付かない',
+      untitledName,
     )
-    const headerName = await page.$eval('#current-file', (el) => el.textContent.trim())
-    if (headerName !== documentName) fail(`ヘッダのファイル名が違う: "${headerName}"`)
-    ok(`現在のファイル名が画面に出た("${headerName}")`)
+    if (!existsSync(join(workdir, untitledName))) fail(`自動で付いた名前のファイルが無い: ${untitledName}`)
+    ok(`**最初の変更で無題の文書が ${untitledName} として自動保存された**`)
 
-    // **保存状態はファイル名とは別の札**(`#save-state`)。名前が「どれを触っているか」で、
-    // こちらは「それがファイルに載っているか」——書けた直後は「保存済み」でなければならない。
-    const expectSaveState = (expected, where) =>
+    // 明示の保存ボタンは無く、「未保存」の札も出ていない
+    if ((await page.$('#file-save')) !== null) fail('明示の保存ボタン(#file-save)が残っている')
+    const expectNoSaveTag = async (where) => {
+      await settle()
+      if ((await page.$('#save-state')) !== null) {
+        fail(`${where}: 自動保存されているのにヘッダに「未保存」の札が出ている`)
+      }
+    }
+    await expectNoSaveTag('起動して図形を作った直後')
+    ok('明示の保存ボタンは無く、「未保存」の札も出ていない')
+
+    // **一覧の操作数が今の文書に追いつくのを待つ**(自動保存が本当に書いたことの証拠。
+    // 一覧は文書が変わるたびに取り直される —— `App.svelte` の `scheduleDocumentRefresh`)。
+    const waitListMatchesDocument = (where, name) =>
       waitFor(
-        (want) => document.querySelector('#save-state')?.textContent.trim() === want,
-        `${where}: ヘッダの保存状態が "${expected}" にならない`,
-        expected,
+        (expected) => {
+          const file = (window.__duocad.documentList ?? []).find((item) => item.name === expected)
+          return Boolean(file && file.operations === window.__duocad.state.log.length)
+        },
+        `${where}: 一覧の操作数が今の文書に追いつかない(自動保存が書いていない)`,
+        name,
       )
-    await expectSaveState('保存済み', '新規保存の直後')
-    ok('保存した直後のヘッダが「保存済み」になった')
+    await waitListMatchesDocument('自動保存の直後', untitledName)
+
+    // ---- 改名: 名前欄に打って Enter(自動で付いた名前のファイルは移る = 残らない)
+    await typeInto('#file-name-input', firstName)
+    await page.keyboard.press('Enter')
+    await waitFor(() => window.__duocad.lastFile?.action === 'rename', '改名の応答が返らない')
+    await waitFor(
+      (expected) => window.__duocad.currentDocumentName === expected,
+      '改名後に現在のファイル名が更新されない',
+      firstName,
+    )
+    if (!existsSync(firstPath)) fail(`改名したはずのファイルが無い: ${firstPath}`)
+    if (existsSync(join(workdir, untitledName))) fail(`改名したのに元の ${untitledName} が残っている`)
+    const headerName = await page.$eval('#current-file', (el) => el.textContent.trim())
+    if (headerName !== firstName) fail(`ヘッダのファイル名が違う: "${headerName}"`)
+    ok(`**名前欄で ${untitledName} → ${firstName} へ改名できた**(ヘッダ "${headerName}"。元の名前のファイルは残らない)`)
 
     const shapeBefore = (await look()).bodies[0]
 
-    // **アプリを再読込してから開く**(タスクEの検証2「再起動 → 開く → 同じ形状」)。
-    // 画面の状態は全部捨てられ、形は操作ログの再生だけから戻ることになる。
+    // **アプリを再読込しても編集中のファイル名が戻る**(名前を持っているのはサーバ)。
     await page.reload({ waitUntil: 'load', timeout })
     await page.waitForFunction(() => Boolean(window.__duocad && window.__duocad.ready), {
       timeout,
       polling: 100,
     })
-
-    // **再読込しても編集中のファイル名が戻る**。名前を持っているのはサーバ
-    // (`state.current_name`)で、画面はその写しを出すだけである。
     await waitFor(
       (expected) => window.__duocad.currentDocumentName === expected,
       '再読込するとヘッダから編集中のファイル名が消える',
-      documentName,
+      firstName,
     )
-    const headerAfterReload = await page.$eval('#current-file', (el) => el.textContent.trim())
-    if (headerAfterReload !== documentName) fail(`再読込後のヘッダが違う: "${headerAfterReload}"`)
-    ok(`**再読込しても編集中のファイル名が残った**("${headerAfterReload}" —— サーバが持っている)`)
+    ok(`**再読込しても編集中のファイル名が残った**("${firstName}" —— サーバが持っている)`)
 
-    // **開く前に形を変えておく**。サーバは長寿命で、再読込しても文書はそのまま残る ——
-    // 保存した形と同じままで「開く」を押すと、**開くのが失敗しても体積が一致してしまい
-    // 検査が素通りする**(実際に踏んだ: open_document が例外で落ちていたのに
-    // このチェックが緑だった)。undoで形を変えてから開き、戻ることを見る。
+    // ---- 開くと形が戻る(操作ログの再生)。**自動保存の下では編集中のファイルが常に今の文書の
+    // 鏡なので、開き直しても違いが出ない**。そこで先に**別名で複製**してから undo し、複製の
+    // 側を開いて元の形が戻ることを見る(複製の中身が「undo前の文書」の証拠になる)。
+    // 再接続で一覧が届くのを先に待つ(`App.svelte` が `onStatus('open')` で取り直す)。
+    const secondName = 'spare.json'
+    const secondPath = join(workdir, secondName)
+    await waitFor(
+      (expected) => (window.__duocad.documentList ?? []).some((file) => file.name === expected),
+      '再接続後にファイル一覧が届かない',
+      firstName,
+    )
+    await page.click(`.files-row[data-name="${firstName}"] .files-copy`)
+    await waitFor(() => document.activeElement?.id === 'file-copy-name', '複製の名前欄が出ない')
+    await typeInto('#file-copy-name', secondName)
+    await page.keyboard.press('Enter')
+    await waitFor(
+      (expected) => (window.__duocad.documentList ?? []).some((file) => file.name === expected),
+      '複製したファイルが一覧に出ない',
+      secondName,
+    )
+    // **undo は自動保存の引き金**: model.json だけが短くなり、spare.json は undo 前のまま。
     await pressUndo(page)
     await waitFor(
       (before) => Math.abs((window.__duocad.parts[0]?.volume ?? 0) - before) > 1e-6,
       'undoしても形が変わらない(開く検査の前提が作れない)',
       shapeBefore.volume,
     )
-    ok('開く前に undo で形を変えた(開いて戻ることを見るため)')
+    await waitListMatchesDocument('undoの直後', firstName)
+    await expectNoSaveTag('undoの直後')
+    ok('**undo も自動保存され**(一覧の操作数が追随)、「未保存」の札は出ない')
 
-    // **再接続で一覧が届く**(`App.svelte` が `onStatus('open')` で `refreshDocuments()` を
-    // 呼ぶ)。一覧に出ていることを先に見てから、クリックで開く —— **確認ダイアログは無い**
-    // (README「省けるクリックは徹底的に省く」)。
-    await waitFor(
-      (expected) => (window.__duocad.documentList ?? []).some((file) => file.name === expected),
-      '再接続後にファイル一覧が届かない',
-      documentName,
-    )
-    ok('再接続後、一覧に保存したファイルが出ている')
-
-    await page.click(`.files-row[data-name="${documentName}"] .files-open`)
+    await page.click(`.files-row[data-name="${secondName}"] .files-open`)
     await waitFor(
       (expectedVolume) => {
         const body = window.__duocad.parts[0]
         return Boolean(body && Math.abs(body.volume - expectedVolume) < 1e-6)
       },
-      '開いても同じ形にならない',
+      '複製を開いても undo 前の形にならない',
       shapeBefore.volume,
     )
     const reopened = (await look()).bodies[0]
     if (reopened.faces !== shapeBefore.faces) {
       fail(`開いた形の面数が違う: ${shapeBefore.faces} -> ${reopened.faces}`)
     }
-    ok(
-      `**保存 → 再読込 → 一覧から開く で同じ形が戻った**(体積 ${reopened.volume.toFixed(4)} / 面 ${reopened.faces}` +
-        ' — 操作ログから再生された。確認ダイアログは挟んでいない)',
-    )
     await waitFor(
       (expected) => window.__duocad.currentDocumentName === expected,
       '開いた後に現在のファイル名が更新されない',
-      documentName,
+      secondName,
     )
-    ok('開いた後も現在のファイル名が画面に出ている')
-    // 開いた直後の文書は**ファイルの中身そのもの**なので「保存済み」から始まる
-    // (再読込で `savedAt` は捨てられているから、これは開いたことで入り直した値である)。
-    await expectSaveState('保存済み', '開いた直後')
-    ok('開いた直後のヘッダが「保存済み」になった')
-
-    // ================================================================ 検証2b: 編集中のファイルへ上書き
-    // **一覧の行に「上書き」ボタンは無い**(engine `duocad-save-becomes-a-header-button`)
-    // —— A を編集中に B の行から上書きできると、確認も無く B が今の文書で潰れ、
-    // 操作ログが唯一の正である以上それは復旧できない。上書きの口は**ヘッダの保存ボタン
-    // (`#file-save`)と Ctrl+S だけ**で、行き先は常に「いま編集しているファイル」1つに
-    // 固定されている。ここで見るのは3つ:
-    //   (a) ヘッダの保存ボタンで、編集中のファイルへ書ける
-    //   (b) Ctrl+S が同じ操作(ブラウザの保存ダイアログは出ない)
-    //   (c) **編集中でないファイルは1バイトも書き換わらない**(このタスクの存在理由)
-    //
-    // 「本当に書き直った」は**一覧の操作数が今の文書に追いついたか**で見る ——
-    // `lastFile.action === 'save'` は直前の新規保存で既に真なので待てない。
-    const waitListMatchesDocument = (where) =>
-      waitFor(
-        (expected) => {
-          const file = (window.__duocad.documentList ?? []).find((item) => item.name === expected)
-          return Boolean(file && file.operations === window.__duocad.state.log.length)
-        },
-        `${where}: 一覧の操作数が今の文書に追いつかない(書き直っていない)`,
-        documentName,
-      )
-    const listedOperations = async () =>
-      (await look()).documentList.find((file) => file.name === documentName)?.operations ?? null
-
-    const beforeOverwrite = (await look()).documentList.find((file) => file.name === documentName)
-    if (!beforeOverwrite) fail('上書き前の一覧に対象ファイルが無い')
-    await pressUndo(page) // 形を変える(上書きが実際に効いたかを見分けるため)
-    await waitFor(
-      (before) => Math.abs((window.__duocad.parts[0]?.volume ?? 0) - before) > 1e-6,
-      'undoしても形が変わらない(上書き検査の前提が作れない)',
-      reopened.volume,
-    )
-    // **開いた後に文書を動かしたので「未保存」へ落ちる**。ここは書き出しではなく編集なので、
-    // ファイルの中身と今の文書が食い違った状態そのものである。
-    await expectSaveState('未保存', '開いた後にundoした直後')
-    ok('開いた文書を編集したらヘッダが「未保存」へ落ちた')
-
-    // ---- (a) ヘッダの保存ボタン
-    await page.click('#file-save')
-    await waitListMatchesDocument('ヘッダの保存ボタン')
-    await expectSaveState('保存済み', 'ヘッダの保存ボタンの直後')
     ok(
-      `**ヘッダの保存ボタン(#file-save)で編集中のファイルへ上書きできた**` +
-        `(操作 ${beforeOverwrite.operations} -> ${await listedOperations()} 件)`,
+      `**複製 → undo → 複製を開く で undo 前の形が戻った**(体積 ${reopened.volume.toFixed(4)} / 面 ${reopened.faces}` +
+        ' — 操作ログから再生された。確認ダイアログは挟んでいない)',
     )
+    await expectNoSaveTag('開いた直後')
 
-    // ---- (b) Ctrl+S
+    // 以降の検査は spare.json を編集中、model.json を編集中でないファイルとして使う。
+    const documentName = secondName
+    const documentPath = secondPath
+    const spareName = firstName
+    const sparePath = firstPath
+
+    // ================================================================ 検証2b: 上書きの口は無い
+    // (a) Ctrl+S はブラウザの「ページを保存」ダイアログを止める(`preventDefault()`)。
+    //     保存そのものは自動で済んでいるので、押しても一覧の操作数は変わらない。
+    // (b) **編集中でないファイルは1バイトも書き換わらない** —— 名前欄は改名であり、
+    //     既にある名前への改名はサーバが拒否する。
+    //
     // **`preventDefault()` が効いていることを直に見る。** puppeteerが合成したキーで
     // ネイティブの「ページを保存」ダイアログが必ず開くとは限らないので、
     // 「先へ進めたから止まっている」では検査にならない —— `window` のバブル段階へ
@@ -626,67 +605,28 @@ async function main() {
         }
       })
     })
-    await pressRedo(page)
-    await waitFor(
-      (before) => Math.abs((window.__duocad.parts[0]?.volume ?? 0) - before) < 1e-6,
-      'redoで形が戻らない(Ctrl+Sの検査の前提が作れない)',
-      reopened.volume,
-    )
-    await expectSaveState('未保存', 'redoで形を戻した直後')
     await page.keyboard.down('Control')
     await page.keyboard.press('KeyS')
     await page.keyboard.up('Control')
-    await waitListMatchesDocument('Ctrl+S')
-    await expectSaveState('保存済み', 'Ctrl+Sの直後')
+    await waitFor(() => window.__ctrlS !== null, 'Ctrl+S のキーイベントが window まで届いていない(検査が空振りしている)')
     const ctrlS = await page.evaluate(() => window.__ctrlS)
-    if (ctrlS === null) fail('Ctrl+S のキーイベントが window まで届いていない(検査が空振りしている)')
     if (!ctrlS.prevented) fail('Ctrl+S を preventDefault() で止めていない(ブラウザの保存ダイアログが開く)')
-    ok(
-      `**Ctrl+Sも同じ上書きになった**(操作 ${await listedOperations()} 件。` +
-        'ブラウザの保存ダイアログは preventDefault() で止まっている)',
-    )
+    await waitListMatchesDocument('Ctrl+Sの直後', documentName)
+    ok('Ctrl+S はブラウザの保存ダイアログを止め、文書とファイルは一致したまま')
 
-    // ---- (c) 編集中でないファイルは1バイトも書き換わらない
-    // もう1枚ファイルを作り、`model.json` へ戻ってから、その名前で「新規保存」を試みる。
-    // **中身の検査はNode側でファイルを読んで行う** —— 拒否されると一覧は取り直されない
-    // (`App.svelte` の `handleFile` は save の応答でしか `refreshDocuments()` を呼ばない)
-    // ので、画面の写しを見比べても「変わっていないように見える」だけになる。
-    const spareName = 'spare.json'
-    const sparePath = join(workdir, spareName)
-    await typeInto('#file-name-input', spareName)
-    await page.click('#file-save-new')
-    await waitFor(
-      (expected) => window.__duocad.currentDocumentName === expected,
-      '新しい名前で保存できない',
-      spareName,
-    )
-    if (!existsSync(sparePath)) fail(`新しい名前で保存したファイルが無い: ${sparePath}`)
     const spareBytes = readFileSync(sparePath)
-
-    // `model.json` を開き直す(= `spare.json` が「編集中ではない」ファイルになる)
-    await page.click(`.files-row[data-name="${documentName}"] .files-open`)
-    await waitFor(
-      (expected) => window.__duocad.currentDocumentName === expected,
-      '一覧から model.json へ戻れない',
-      documentName,
-    )
-    // **今の文書を spare.json の中身と違う長さにする** —— 同じままだと、
-    // 誤って上書きされても中身が変わらず、この検査が何も守らない。
-    await pressUndo(page)
-    await expectSaveState('未保存', '上書き拒否の検査に入る直前')
-
     const errorsBefore = (await look()).errors.length
     await typeInto('#file-name-input', spareName)
-    await page.click('#file-save-new')
+    await page.keyboard.press('Enter')
     await waitFor(
       (before) => window.__duocad.errors.length > before,
-      '編集中でないファイルへの保存が拒否されない(トーストが1枚も出ない)',
+      '既にある名前への改名が拒否されない(トーストが1枚も出ない)',
       errorsBefore,
     )
     const refusal = (await look()).errors[0]
     expectedErrors.push(refusal)
     if (!refusal.includes(spareName)) fail(`拒否のメッセージが対象ファイル名を言わない: ${refusal}`)
-    if (!refusal.includes('開け')) fail(`拒否のメッセージがどうすればできるかを言わない: ${refusal}`)
+    if (!refusal.includes('既にある')) fail(`拒否のメッセージが理由を言わない: ${refusal}`)
     await settle() // 書き込みが起きるなら、この間に必ず落ちている
     if (!readFileSync(sparePath).equals(spareBytes)) {
       fail(`編集中でないファイルが書き換わった: ${sparePath}`)
@@ -695,22 +635,15 @@ async function main() {
     if (headerDuringRefusal !== documentName) {
       fail(`拒否されたのに編集中のファイルが移った: "${headerDuringRefusal}"`)
     }
-    await expectSaveState('未保存', '上書きを拒否された直後')
     ok(
-      `**編集中でない ${spareName} は1バイトも書き換わらなかった**` +
+      `**既にある ${spareName} への改名は拒否され、1バイトも書き換わらなかった**` +
         `(拒否 "${refusal}" / ヘッダは "${headerDuringRefusal}" のまま)`,
     )
 
-    // **この後の検査のために、ファイルと今の文書を揃え直す**(検証2cは
-    // 「新規 → 一覧から開き直して同じ形」を見るので、食い違ったままにできない)。
-    await page.click('#file-save')
-    await waitListMatchesDocument('拒否の後の保存')
-    await expectSaveState('保存済み', '拒否の後に保存し直した直後')
-
     // ================================================================ 検証2c: 新規
-    // 「新規」(`#file-new`)で**空の文書へ戻る**。確認ダイアログは無い(開くと同じ扱い)。
-    // **元の形は一覧から開き直して取り戻す** —— この後の書き出しの検査が今の形を使うので、
-    // ここで空のままにできない。捨てた文書がundoでは戻らないことは pytest 側が固定する。
+    // 「新規」(`#file-new`)で**空の文書へ戻る**。確認ダイアログは無い(開くと同じ扱い。
+    // 編集中の文書は自動保存されていて失うものが無い)。**元の形は一覧から開き直して
+    // 取り戻す** —— この後の書き出しの検査が今の形を使う。
     const beforeNew = (await look()).bodies[0]
     await page.click('#file-new')
     await waitFor(
@@ -719,26 +652,9 @@ async function main() {
     )
     const headerAfterNew = await page.$eval('#current-file', (el) => el.textContent.trim())
     if (headerAfterNew === documentName) fail(`新規にしてもヘッダに前のファイル名が残る: "${headerAfterNew}"`)
-    ok(`**「新規」で空の文書に戻った**(部品0 / ヘッダ "${headerAfterNew}"。確認ダイアログは挟んでいない)`)
-    // 新規の文書は**どこにも書かれていない**ので、名前が無いのと同じ理由で「未保存」。
-    await expectSaveState('未保存', '「新規」の直後')
-    ok('「新規」の直後のヘッダが「未保存」へ戻った')
-
-    // ---- 編集中のファイルが無いときの保存ボタン
-    // **`disabled` にしない** —— なぜ押せないかを言わないまま死ぬ札になり、新規の文書では
-    // 必ず通る道だから。押したら**ファイルパネルを開いて名前欄へフォーカスを置く**
-    // (「保存したい」への答えは「名前を付けろ」で、その場所まで連れて行く)。
-    // **エラーにもしない**(トーストは出ない。出ていたら最後の検査が赤くなる)。
-    await page.click('#data-panel-toggle') // わざと畳んでおく(開き直すことまで見る)
-    await waitFor(() => document.querySelector('.data-panel') === null, 'ファイルパネルを畳めない')
-    const saveDisabled = await page.$eval('#file-save', (el) => el.disabled)
-    if (saveDisabled) fail('編集中のファイルが無いだけで保存ボタンが死んでいる(disabledにしない)')
-    await page.click('#file-save')
-    await waitFor(
-      () => document.activeElement?.id === 'file-name-input',
-      '編集中のファイルが無いのに、保存ボタンが名前欄へ連れて行かない',
-    )
-    ok('**編集中のファイルが無いときの保存ボタンは、ファイルパネルを開いて名前欄へ連れて行った**')
+    // 無題で何も変えていない文書は書くものが無いので「未保存」ではない。
+    await expectNoSaveTag('「新規」の直後')
+    ok(`**「新規」で空の文書に戻った**(部品0 / ヘッダ "${headerAfterNew}"。確認ダイアログも「未保存」の札も無い)`)
 
     await page.click(`.files-row[data-name="${documentName}"] .files-open`)
     await waitFor(
@@ -756,7 +672,7 @@ async function main() {
     // `<元>-copy.json` が先埋めされ Enter で通る。削除は行内の2段階(「削除」→「本当に削除」)。
     // 拒否はどちらもサーバが言い、トースト1枚になる(`expectedErrors` へ積む)。
     const logBeforeFiles = (await look()).log
-    const copyName = 'spare-copy.json'
+    const copyName = spareName.replace(/\.json$/, '-copy.json')
     const copyPath = join(workdir, copyName)
     await page.click(`.files-row[data-name="${spareName}"] .files-copy`)
     await waitFor(() => document.activeElement?.id === 'file-copy-name', '複製の名前欄が出ない(フォーカスが来ない)')

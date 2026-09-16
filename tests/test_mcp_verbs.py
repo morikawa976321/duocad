@@ -1195,6 +1195,8 @@ def test_a_browser_export_does_not_corrupt_the_stdio_channel(tmp_path: Path):
             sys.executable, "-m", "duocad.mcp_server",
             "--port", "18785", "--http-port", "18786",
             "--web-dist", str(REPO_ROOT / "web" / "does-not-exist"),
+            # 実プロセスの自動保存(issue #5)がリポジトリ直下の実 `models/` へ書かないように
+            "--models-dir", str(tmp_path / "models"),
         ],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,

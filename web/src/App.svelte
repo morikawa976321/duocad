@@ -15,7 +15,7 @@
    * 1. **ピック → コアの選択への翻訳**(修飾キーで追加・除去・置き換えを決める)
    * 2. **プレビューの往復**(コマンド層が「何を試すか」を決め、ここが投げて幽霊を描く)
    */
-  import { onMount, tick } from 'svelte'
+  import { onMount } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
   import {
     COMMANDS,
@@ -298,38 +298,26 @@
   /**
    * 直近に保存/開いたファイル名(画面に「今どれを触っているか」を出す)。
    *
-   * **持つのは名前だけ**。名前と保存状態は別の問い(どれを触っているか /
-   * それが書けているか)なので、後者は `savedAt` が持つ。**自動保存はスコープ外**である。
+   * **持つのは名前だけ**。保存状態はサーバが持つ(`state.saved`) —— 1操作ごとに自動保存
+   * される(issue #5、2026-09-16)ので、画面が履歴の位置を数えて「未保存」を導く理由が無い。
    */
   let currentDocumentName = $state<string | null>(null)
   /**
-   * **最後に書けた/読み込んだ時点の文書の位置** `[applied_count, 操作数]`。
-   * `null` は「この画面ではまだ一度もファイルにしていない」(＝常に未保存)。
-   *
-   * **内容は比べない**。比べるのは「あれから文書が動いたか」だけで、それには
-   * `applied_count`(verbを適用した回数。**undo/redoでは動かない**)と操作数
-   * (`log.length`。undoで減りredoで戻る)の2つが要る —— 片方だけでは
-   * 「undoで保存時点へ戻した文書」(操作数は一致・applied_countも不変)と
-   * 「undoしてから別のverbを打った文書」(操作数は一致・applied_countが増える)が
-   * 見分けられず、後者を保存済みと言ってしまう。
-   *
-   * **偽るとしたら「未保存」の側だけ**、という非対称になっている。保存後にverbを打って
-   * からundoで同じ形へ戻した文書は、中身は保存済みと同じでも `applied_count` が増えた
-   * ままなので「未保存」と出る。逆(書けていないのに保存済みと出る)は起こらない ——
-   * `applied_count` が動いていないなら新しいverbは1つも適用されておらず、そのうえで
-   * 操作数まで一致するなら履歴の位置も同じだからである。
-   *
-   * 可視性の切り替えはverbではなくファイルにも載らないので、どちらも動かない
-   * (＝保存済みのまま。これは正しい)。
+   * 今の文書がそのままファイルに載っているか(ヘッダの `#save-state`)。**サーバの写し**
+   * (`Session.saved`)。自動保存が書けなかったときだけ false になる —— 無題で何も変えていない
+   * 文書は true(書くものが無い)で、最初の変更で `untitled-<n>.json` が自動で付く。
    */
-  let savedAt = $state<[number, number] | null>(null)
-  /** 今の文書がそのままファイルに載っているか(ヘッダの `#save-state`)。 */
-  const saved = $derived(
-    savedAt !== null &&
-      model !== null &&
-      model.applied_count === savedAt[0] &&
-      model.log.length === savedAt[1],
-  )
+  const saved = $derived(model?.saved ?? true)
+  /**
+   * 一覧を取り直す予約(`scheduleDocumentRefresh`)。自動保存のたびに一覧の操作数・サイズが
+   * 変わり、無題の文書は最初の変更で新しい行が要る —— ただし `list_documents` は全ファイルの
+   * ログを読むので、配信のたびに素で呼ばず**少し待ってまとめ、パネルを出しているときだけ**
+   * 取りに行く(畳んでいる間は「古い」印だけ立て、開いたときに1回取る)。
+   */
+  let documentRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  let documentListStale = false
+  let lastSeenAppliedCount: number | null = null
+  let lastSeenLogLength: number | null = null
   /**
    * 左サイドバー(ファイル一覧)を出しているか。**見た目だけの状態**で、コアには送らない
    * (モデルの状態ではないので操作ログにも残さない)。
@@ -717,6 +705,18 @@
     // 拾い直さない —— 正は `Session._current_name` 1つで、こちらは配信のたびに映すだけ。
     // これでリロードしても名前が戻る(以前は文書だけサーバに残って名前が失われた)。
     currentDocumentName = next.current_name
+    // **文書が変わったら一覧を取り直す**(自動保存の結果を一覧へ映す。issue #5)。verbと
+    // 開く/新規は `applied_count` を、undo/redo は操作数(`log.length`)を動かす —— 
+    // **`applied_count` は undo/redo で動かない**ので両方を見る。経路(WS/MCP/最適化)を
+    // 問わずここ1箇所で拾える。
+    if (
+      lastSeenAppliedCount !== null &&
+      (next.applied_count !== lastSeenAppliedCount || next.log.length !== lastSeenLogLength)
+    ) {
+      scheduleDocumentRefresh()
+    }
+    lastSeenAppliedCount = next.applied_count
+    lastSeenLogLength = next.log.length
     // **状態が1通届くたびに1つ増える番号**(実機検査のための穴。`__duocad.stateEpoch`)。
     // これが無いと「サーバの往復がまだ終わっていない」と「もう何も変わらない」を
     // 外から区別できず、**要求が出ていく前の画面を『落ち着いた』と読む**検査になる
@@ -772,10 +772,6 @@
       // 否定できない)。**新規は `name` が `null`** で来るので、触っているファイルの表示は
       // 「(無題)」へ戻る —— ただし表示そのものを更新するのは上の `next.current_name` で、
       // ここが見るのは「開いたのか新規にしたのか」の区別だけである。
-      // **開いた直後の文書はファイルの中身そのもの**なので保存済みから始める。新規は
-      // どこにも書かれていないので `null`(＝常に未保存)へ戻す。`next` は上で `model` に
-      // 入れた今回の状態で、開いた版の `applied_count` / 操作数がもう入っている。
-      savedAt = applied.name === null ? null : [next.applied_count, next.log.length]
       // **開いた(`open_document`)ときだけ視点を合わせ直す。** 文書のスケールが不連続に
       // 変わるのは import_step と同じくここだけ(実測: 小さな部品→大きな板を保存し、開き直すと
       // 前の文書の視点のまま端が画面外に出た)。**新規(`new_document`)は空の文書**なので
@@ -870,13 +866,6 @@
     // **ここでファイル名を控えない**(2026-08-30) —— 編集中のファイルはサーバが持ち
     // (`state.current_name`)、保存の直後にはサーバが状態も配り直す(`net/ws.py` の
     // `save_document` 分岐)。応答から拾い直すと真実源が2つになる。
-    // **書けた時点の位置を控える**(ヘッダの `#save-state` が「保存済み」を言う根拠)。
-    // 数えるのは `save` だけ —— `export_step`/`export_stl` は形を別形式で吐くだけで、
-    // 文書(操作ログ)を書いてはいない。操作数はサーバが実際に書いた件数を返してくるので
-    // それを使う(こちらで数え直さない)。
-    if (payload.action === 'save' && model !== null) {
-      savedAt = [model.applied_count, payload.operations ?? model.log.length]
-    }
     // **応答が `file` で返ったなら、その操作の待ちはここで解く**。
     // 「文書を変えるか」の判定はブラウザとサーバで別々に持っているので、片方だけ
     // 直したときに**状態配信を待ち続けて確定が永久に拒否される**経路ができる。
@@ -894,10 +883,29 @@
     // **保存/複製/削除の直後に一覧を取り直す**。上書きで更新日時・サイズ・操作数が変わり、
     // 新規保存・複製では一覧に新しい行が要り、削除では行が消える —— 応答をここで待たず、
     // 次のWS往復に任せる。
-    if (payload.action === 'save' || payload.action === 'copy' || payload.action === 'delete') {
+    if (['save', 'rename', 'copy', 'delete'].includes(payload.action)) refreshDocuments()
+  }
+
+  /** 一覧の取り直しを少し待ってまとめる(理由は `documentRefreshTimer` のdocstring)。 */
+  function scheduleDocumentRefresh(): void {
+    if (!dataPanelOpen) {
+      documentListStale = true
+      return
+    }
+    if (documentRefreshTimer !== null) clearTimeout(documentRefreshTimer)
+    documentRefreshTimer = setTimeout(() => {
+      documentRefreshTimer = null
+      refreshDocuments()
+    }, 300)
+  }
+
+  // パネルを畳んでいる間に文書が変わっていたら、開いたときに1回取り直す。
+  $effect(() => {
+    if (dataPanelOpen && documentListStale) {
+      documentListStale = false
       refreshDocuments()
     }
-  }
+  })
 
   /**
    * 一覧の行から**別名で複製**する / **ディスクから削除**する(issue #17)。どちらも文書を
@@ -923,41 +931,31 @@
   }
 
   /**
-   * **新しい名前で**保存する(「名前を付けて保存」。`FilesPanel` の名前欄だけが呼ぶ)。
+   * **いま編集しているファイルを改名する**(`FilesPanel` の名前欄だけが呼ぶ。issue #5)。
    *
-   * **既存名は送っても通らない** —— サーバが拒否してトースト1枚になる
-   * (`Session.save_document`)。ここで `documentList` を見た実在チェックは**足さない**:
+   * 保存は1操作ごとに自動で走り、無題の文書は最初の変更で `untitled-<n>.json` が付くので、
+   * 人が決めるのは名前だけ。**既存名は送っても通らない** —— サーバが拒否してトースト1枚に
+   * なる(`Session.rename_document`)。ここで `documentList` を見た実在チェックは**足さない**:
    * パス解釈の正を2箇所に持たないという既存の規律(`FilesPanel.nameProblem` のdocstring)。
    *
    * **`pendingOp` は立てない** —— `FilesPanel.svelte` は `CommandHost` の応答待ちの外にいる
    * (一覧からのクリックは「対象を選ぶ」そのもので、引数収集の状態機械を通す理由が無い)。
    */
-  function saveDocumentAs(name: string): void {
+  function renameDocument(name: string): void {
     const op = nextOp()
     lastFileOp = op
-    session.runVerb('save_document', { name }, op)
+    session.runVerb('rename_document', { name }, op)
   }
 
   /**
-   * **編集中のファイルへ上書き保存する**(ヘッダの `#file-save` と Ctrl+S。2026-08-30)。
-   *
-   * 引数を送らない —— 書き込み先を決めるのはサーバ(`Session._current_name`)であって、
-   * 画面が名前を送り返す形だと「表示されている名前」と「実際に開いているファイル」が
-   * ずれた瞬間に別のファイルを潰す。
-   *
-   * **編集中のファイルが無いとき(起動直後・`new` の直後)は押せないボタンにしない。**
-   * 新規の文書では必ず通る道なので、`disabled` にすると**なぜ押せないかを言わないまま
-   * 死んでいる札**になる(本人決定)。代わりにファイルパネルを開いて名前欄へ入れる ——
-   * 「保存したい」に対する答えは「名前を付けろ」であり、その場所まで連れて行く。
+   * **今の文書を手で書き直す**(Ctrl+S)。保存は自動で済んでいるので普段は何も変わらない ——
+   * 残してあるのは、自動保存が書けなかった(`#save-state` が出ている)ときに人が押し直す
+   * ためと、Ctrl+S でブラウザの「ページを保存」を止めるため。引数を送らない(書き込み先を
+   * 決めるのはサーバの `Session._current_name`)。無題で何も変えていない文書は書くものが
+   * 無いので何も送らない。
    */
-  function saveCurrentDocument(): void {
-    if (currentDocumentName === null) {
-      dataPanelOpen = true
-      note('まだファイル名が無い。名前を打って「新規保存」すると、以後はここへ上書きできる')
-      // パネルを開いた直後は入力欄がまだDOMに無い(Svelteの更新は非同期)。
-      void tick().then(() => document.querySelector<HTMLInputElement>('#file-name-input')?.focus())
-      return
-    }
+  function saveNow(): void {
+    if (currentDocumentName === null) return
     const op = nextOp()
     lastFileOp = op
     session.runVerb('save_document', {}, op)
@@ -2138,9 +2136,9 @@
     const isTextEditingField =
       target?.tagName === 'TEXTAREA' ||
       (target?.tagName === 'INPUT' && !['checkbox', 'radio'].includes((target as HTMLInputElement).type))
-    // **Ctrl+S はヘッダの保存ボタン(`#file-save`)と同じ操作**(2026-08-30)。編集中の
-    // ファイルへ上書きし、まだ無ければファイルパネルの名前欄へ連れて行く
-    // (`saveCurrentDocument`)。
+    // **Ctrl+S は今の文書を手で書き直す**(`saveNow`)。保存は自動で済んでいる(issue #5)ので
+    // 普段は何も変わらないが、キーは残す —— 自動保存が書けなかったときの押し直しと、
+    // ブラウザの「ページを保存」を止めるため。
     //
     // **`preventDefault()` はフォーカスがどこにあっても必ず通す** —— 止めないと
     // ブラウザの「ページを保存」ダイアログが開き、こちらの保存が起きたのかどうかが
@@ -2153,7 +2151,7 @@
     // (判定式そのものは undo/redo と同じものを使い、意味の違いだけをここに書く)。
     if (key === 's') {
       event.preventDefault()
-      saveCurrentDocument()
+      saveNow()
       return
     }
     if (isTextEditingField) return
@@ -2592,20 +2590,12 @@
          まだ保存も読み込みもしていない文書には名前が無いので「(無題)」と置く。
          書けているかどうかは隣の `#save-state` が言う。 -->
     <span id="current-file" class="dim">{currentDocumentName ?? '(無題)'}</span>
-    <!-- **今の文書がファイルに載っているか**(`savedAt` 参照)。**目立たせるのは
-         「未保存」の側** —— 人の手が要るのはこちらだけで、保存済みは黙っていてよい。 -->
-    <span id="save-state" class="tag" class:on={!saved}>{saved ? '保存済み' : '未保存'}</span>
-    <!-- **保存は1箇所だけ**(2026-08-30本人決定)。押すと**編集中のファイルへ上書き**する。
-         一覧の行にあった「上書き」ボタンは撤去した —— A を編集中に B の行を押せば B が
-         今の文書で潰れ、操作ログが唯一の正である以上それは復旧できなかった。
-         **`.toolbar` には置かない** —— あちらはverbの行で、保存はverbではない
-         (操作ログに載らず、undoの対象でもない)。ここが `#current-file` /
-         `#save-state` と同じ行なのは、指しているのが同じもの(編集中のファイル)だから。
-         **編集中のファイルが無くても `disabled` にしない** —— 理由は
-         `saveCurrentDocument` のdocstring(押せない札より、名前欄へ連れて行く)。 -->
-    <button id="file-save" class="tag" onclick={saveCurrentDocument} title="編集中のファイルへ上書き保存(Ctrl+S)">
-      保存
-    </button>
+    <!-- **自動保存が書けなかったときだけ出る札**(`state.saved`。issue #5)。保存は1操作ごとに
+         自動で走るので「保存済み」は黙っていてよく、人の手が要る「未保存」だけを出す
+         (Ctrl+S で書き直せる)。**明示の保存ボタンは無い**(2026-09-16本人判断で撤去)。 -->
+    {#if !saved}
+      <span id="save-state" class="tag on" title="自動保存が書けなかった(Ctrl+Sで書き直す)">未保存</span>
+    {/if}
     <!-- **常設の指標はこれで全部**(2026-08-27に本人裁定で4つ外した)。外したものと行き先:
          - **接続状態** → 常時光らせず、**操作したのに送れなかった瞬間**にトーストで言う
            (`session.ts` の `send`)。見ても何もしなくてよい間ずっと視線を取るのをやめた。
@@ -2775,7 +2765,7 @@
         <FilesPanel
           documents={documentList}
           currentName={currentDocumentName}
-          onSave={saveDocumentAs}
+          onRename={renameDocument}
           onOpen={openDocumentByName}
           onNew={newDocument}
           onCopy={copyDocument}

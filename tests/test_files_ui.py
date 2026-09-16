@@ -14,6 +14,9 @@ UI(パラメータ編集パネル・操作履歴パネル・ファイル操作)�
 - **保存は「編集中のファイル」1つに閉じている**。`save_document()`(引数なし)は
   いま編集しているファイルへ上書きし、`save_document(name)` は**新しい名前でのみ**保存する
   (既存名は拒否。`name == 現在名` でも拒否する)。編集中のファイルが無ければ引数なしの保存も拒否
+- **1操作ごとに自動保存される**(issue #5): verb・undo・redo のたびにファイルが今の文書の鏡に
+  なる。無題の文書は最初の変更で `untitled-<n>.json` が付く。書けなければ `state.saved=False` と
+  警告。人が名前を決めるのは `rename_document`(既存名は拒否。無題で空なら空の文書を書く)
 - 保存は操作ログのJSONを書き、**verbではない**(操作ログが伸びない)
 - **開くと形が完全に戻る**(体積・面数・操作ログ・パラメータ)。開いた文書は**全接続へ**配る
 - **開くのに失敗しても今の文書を壊さない**
@@ -178,27 +181,32 @@ def test_saving_over_another_file_is_refused_and_leaves_it_untouched(session: Se
 def test_saving_without_a_name_writes_the_current_file_only(session: Session) -> None:
     """引数なしの `save_document()` は**編集中のファイルへ上書き**する。
 
-    そして `new_document` の直後には編集中のファイルが無いので**拒否される** ——
-    空の文書はどこにも書かれておらず、上書き先が存在しないのがこの操作の意味である。
+    無題の文書は最初の変更で自動保存が `untitled-1.json` を付けるので(issue #5)、
+    `_box` の直後には既に編集中のファイルがある。**無ければ拒否される**のは起動直後と
+    `new_document` の直後だけ(空の文書はどこにも書かれていない)。
     """
-    _box(session)
     with pytest.raises(ValueError) as fresh_start:
         session.save_document()
     assert "編集中のファイルが無い" in str(fresh_start.value)
 
+    _box(session)
+    assert session.current_name == "untitled-1.json"
     session.save_document("mine.json")            # 名前を付けて保存 = 以後の上書き先
     target = session.models_dir / "mine.json"
     operations_before = json.loads(target.read_text(encoding="utf-8"))["operations"]
-    session.undo()                                # 文書を動かす(上書きが効いたことを見るため)
+    session.undo()                                # 文書を動かす(自動保存で mine.json も短くなる)
+    autosaved = json.loads(target.read_text(encoding="utf-8"))["operations"]
+    assert len(autosaved) == len(operations_before) - 1, "undo が自動保存されていない"
 
     answer = session.save_document()
 
     assert Path(answer["path"]) == target and answer["name"] == "mine.json"
     written = json.loads(target.read_text(encoding="utf-8"))["operations"]
     assert len(written) == len(operations_before) - 1, "上書きが効いていない"
-    assert [item["name"] for item in session.list_documents()["files"]] == ["mine.json"], (
-        "引数なしの保存が別のファイルを作った"
-    )
+    assert {item["name"] for item in session.list_documents()["files"]} == {
+        "untitled-1.json",
+        "mine.json",
+    }, "引数なしの保存が別のファイルを作った"
 
     session.new_document()
     with pytest.raises(ValueError):
@@ -206,6 +214,120 @@ def test_saving_without_a_name_writes_the_current_file_only(session: Session) ->
     assert json.loads(target.read_text(encoding="utf-8"))["operations"] == written, (
         "新規の直後の保存が、直前まで編集していたファイルを空の文書で潰した"
     )
+
+
+def test_every_document_change_is_autosaved_and_undo_redo_follow(session: Session) -> None:
+    """落ちたら: verb・undo・redo のどれかがディスクに写らない(ファイルが今の文書の鏡でない)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    assert session.current_name == "untitled-1.json"
+    target = session.models_dir / "untitled-1.json"
+
+    def ops() -> int:
+        return len(json.loads(target.read_text(encoding="utf-8"))["operations"])
+
+    assert ops() == 1 and session.state_meta()["saved"] is True
+    session.add_circle(sketch_id, [0.0, 0.0], 5.0)
+    assert ops() == 2
+    session.undo()
+    assert ops() == 1
+    session.redo()
+    assert ops() == 2
+    session.set_sketch_visible(sketch_id, False)  # 可視性はファイルに載らない(書き直しも起きない)
+    assert ops() == 2 and "visible" not in target.read_text(encoding="utf-8")
+
+
+def test_an_untitled_document_gets_the_next_free_untitled_name(session: Session) -> None:
+    """落ちたら: 既にある `untitled-1.json` を新しい無題の文書が潰す。"""
+    session.models_dir.mkdir(parents=True)
+    (session.models_dir / "untitled-1.json").write_text("{}", encoding="utf-8")
+
+    session.sketch_create("XY")
+
+    assert session.current_name == "untitled-2.json"
+    assert (session.models_dir / "untitled-1.json").read_text(encoding="utf-8") == "{}"
+    session.new_document()
+    assert session.state_meta()["saved"] is True and session.current_name is None
+    session.sketch_create("XZ")
+    assert session.current_name == "untitled-3.json"
+
+
+def test_a_failed_autosave_marks_the_document_unsaved_and_warns(
+    session: Session, monkeypatch
+) -> None:
+    """落ちたら: 書けなかったのに「保存済み」のまま(画面が知らずに閉じられる)、または
+    verb 自体が失敗する(文書の変更は確定しているので巻き戻せない)。"""
+    session.sketch_create("XY")
+
+    def broken(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("duocad.session.os.replace", broken)
+    applied = session.sketch_create("XZ")  # verb は成功する
+
+    assert applied["verb"] == "sketch_create" and len(session.document.sketches) == 2
+    assert session.state_meta()["saved"] is False
+    assert any("自動保存できなかった" in line for line in session.warnings)
+
+    monkeypatch.undo()
+    session.save_document()  # 手で書き直せば戻る(Ctrl+S)
+    assert session.state_meta()["saved"] is True
+
+
+def test_rename_document_moves_the_current_file_and_refuses_existing_names(session: Session) -> None:
+    """落ちたら: 改名で元のファイルが残る / 別のファイルを潰す / 編集中の名前が動かない。"""
+    _box(session)
+    session.save_document("other.json")          # 触られては困る側
+    untouched = (session.models_dir / "other.json").read_bytes()
+    session.new_document()
+    _box(session)
+    assert session.current_name == "untitled-2.json"
+
+    answer = session.rename_document("mine.json")
+
+    assert answer["action"] == "rename" and answer["name"] == "mine.json"
+    assert answer["previous"] == "untitled-2.json"
+    assert session.current_name == "mine.json"
+    assert not (session.models_dir / "untitled-2.json").exists(), "元の名前のファイルが残った"
+    mine = session.models_dir / "mine.json"
+    assert json.loads(mine.read_text(encoding="utf-8"))["operations"]
+
+    with pytest.raises(ValueError) as refusal:
+        session.rename_document("other.json")
+    assert "other.json" in str(refusal.value) and "既にある" in str(refusal.value)
+    assert (session.models_dir / "other.json").read_bytes() == untouched
+    assert session.current_name == "mine.json"
+
+    session.sketch_create("YZ")  # 以後の自動保存は新しい名前へ
+    written = json.loads(mine.read_text(encoding="utf-8"))["operations"]
+    assert len(written) == len(session.document.log.entries)
+
+
+def test_rename_on_an_untitled_empty_document_creates_the_file(session: Session) -> None:
+    """無題で何も変えていない文書(ファイルがまだ無い)を改名すると、その名前で空の文書が書かれる。"""
+    answer = session.rename_document("fresh.json")
+
+    assert answer["action"] == "rename" and answer["previous"] is None
+    assert session.current_name == "fresh.json"
+    assert json.loads((session.models_dir / "fresh.json").read_text(encoding="utf-8"))["operations"] == []
+
+
+def test_rename_is_a_file_envelope_followed_by_a_state_push(session: Session) -> None:
+    """`save_document` と同じ形: `file` の封筒 + 状態の配り直し(現在ファイル名が変わる)。
+    全接続へ届く。AIには開けていない。"""
+    from duocad import catalog
+
+    _box(session)
+
+    async def script(send):
+        return await send({"cmd": "rename_document", "name": "renamed.json"})
+
+    (last, clients) = _browser(session, script)
+
+    assert last["type"] == "state" and last["state"]["current_name"] == "renamed.json"
+    assert last["state"]["saved"] is True
+    assert clients[0].last("file")["action"] == "rename"
+    assert clients[1].last("state")["state"]["current_name"] == "renamed.json"
+    assert "rename_document" not in catalog.tool_names()
 
 
 def test_models_dir_is_created_if_missing(session: Session) -> None:
@@ -550,7 +672,10 @@ def test_copy_document_duplicates_the_file_and_leaves_the_document_alone(session
     assert session.state_meta()["current_name"] == "mine.json", "複製で編集中のファイルが動いた"
     assert len(session.document.log.entries) == log_before, "複製がverbとしてログに載った"
     assert clients[1].payloads == [], "複製は状態配信ではない(要求した接続にだけ返る)"
-    assert {item["name"] for item in session.list_documents()["files"]} == {"a.json", "b.json", "mine.json"}
+    # 無題の文書が最初の変更で自動保存した `untitled-<n>.json` も居る(意図どおり)。
+    assert {item["name"] for item in session.list_documents()["files"]} == {
+        "a.json", "b.json", "mine.json", "untitled-1.json", "untitled-2.json",
+    }
 
 
 def test_copy_document_refuses_an_existing_destination_and_bad_names(session: Session) -> None:
@@ -622,8 +747,10 @@ def test_list_documents_reports_name_mtime_size_and_operation_count(session: Ses
     _box(session)
     log_before = len(session.document.log.entries)
     session.save_document("a.json")
-    session.set_parameter(next(iter(session.document.parameters)), 30.0)
+    session.new_document()  # a.json を編集中から外す(以後の自動保存が a.json へ行かないように)
+    _box(session)
     session.save_document("b.json")
+    session.set_parameter(next(iter(session.document.parameters)), 30.0)  # 自動保存で b.json が伸びる
 
     async def script(send):
         return await send({"cmd": "list_documents"})
@@ -632,7 +759,8 @@ def test_list_documents_reports_name_mtime_size_and_operation_count(session: Ses
 
     assert answer["type"] == "file" and answer["action"] == "list"
     by_name = {item["name"]: item for item in answer["files"]}
-    assert set(by_name) == {"a.json", "b.json"}
+    # 無題の文書が最初の変更で自動保存した `untitled-<n>.json` も一覧に居る(意図どおり)。
+    assert set(by_name) == {"a.json", "b.json", "untitled-1.json", "untitled-2.json"}
     assert by_name["a.json"]["operations"] == log_before
     assert by_name["b.json"]["operations"] == log_before + 1
     assert by_name["a.json"]["size"] == (session.models_dir / "a.json").stat().st_size
@@ -656,7 +784,7 @@ def test_list_documents_creates_the_folder_and_skips_unreadable_files(session: S
     session.save_document("good.json")
 
     (answer, _clients) = _browser(session, script)
-    assert [item["name"] for item in answer["files"]] == ["good.json"]
+    assert [item["name"] for item in answer["files"]] == ["good.json", "untitled-1.json"]
 
 
 def test_stl_export_honours_the_deviation(session: Session, tmp_path: Path) -> None:

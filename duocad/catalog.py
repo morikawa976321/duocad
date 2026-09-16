@@ -1249,7 +1249,31 @@ COMMANDS: tuple[Command, ...] = (
             "`_dispatch` の個別分岐へ移した** —— 表は載せた引数を全部必須にする規律なので"
             "(`Param.ws` のdocstring)、省略を許すコマンドは表に置けない。"
             "契約は `Session.save_document`: 引数なし=編集中のファイルへ上書き / "
-            "`name` あり=**新しい名前でのみ**保存(既存名は拒否)"
+            "`name` あり=**新しい名前でのみ**保存(既存名は拒否)。"
+            "**2026-09-16の自動保存化(issue #5)以後、UIが送るのは引数なし(Ctrl+S)だけ** —— "
+            "名前を付けるのは `rename_document`、無題の初回は `Session.autosave` が `name` を渡す"
+        ),
+    ),
+    Command(
+        name="rename_document",
+        category="file",
+        description="",
+        params=(
+            Param(
+                "name",
+                "string",
+                "いま編集しているファイルの**新しい**名前(models/ 配下に固定。既に在れば拒否)",
+            ),
+        ),
+        session="rename_document",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**編集中のファイルをディスク上で改名する**(issue #5、2026-09-16)。1操作ごとの自動保存が"
+            "無題の文書に `untitled-<n>.json` を付けるので、人が名前を決める口はこれ1つになった"
+            "(パネルの名前欄)。応答は `save_document` と同じく `file` の封筒 + 状態の配り直し"
+            "(現在ファイル名が変わる)なので表から外して `_dispatch` で個別に捌く。人だけの操作"
         ),
     ),
     Command(

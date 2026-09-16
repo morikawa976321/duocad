@@ -102,6 +102,14 @@ class Session:
         #: `_replace_document`(開く/新規の共通部分。引数で必ず決めさせる)。
         self._current_name: Optional[str] = None
         self._applied_count = 0
+        #: **自動保存で書けなかった変更があるか**(issue #5、本人判断 2026-09-16)。文書が
+        #: 変わるたび `_emit` が `autosave()` を走らせるので、通常は常に False。True になるのは
+        #: 書き込みが失敗したとき(ディスク・権限)だけで、`state()["saved"]` が画面へ運ぶ。
+        self._unsaved = False
+        #: 保存の書き込みを直列にする。形状最適化の結果は**ワーカースレッドから**
+        #: `_after_logged_verb` → `_emit` → 自動保存へ来るので、イベントループ側の操作の
+        #: 保存と同じ一時ファイルへ同時に書く経路がある。
+        self._save_lock = threading.Lock()
         #: 配りもの(状態・版・キャッシュ)。**文書を差し替えたら `view.reset()` を呼ぶ**
         #: (`_replace_document`)——古い文書について測ったものを握ったままにしないため。
         self.view = DocumentView(self.document, self.deviation, self.warnings)
@@ -182,6 +190,13 @@ class Session:
         """
         if self._suppress_events:
             return applied
+        # **文書が変わったら、配る前にディスクへ書く**(1操作ごとの自動保存。issue #5)。
+        # verb の応答(`verb` キー。`_after_logged_verb` / `extrude_face` / undo / redo)だけが
+        # 対象で、選択・可視性(`change` キー)はファイルに載らない。ここが WebSocket・MCP・
+        # 形状最適化のどの経路も通る唯一の合流点である。配る前に書くのは、配りもの
+        # (`state.saved` / `current_name`)が保存の結果を含むため。
+        if "verb" in applied:
+            self.autosave()
         for callback in list(self._listeners):
             try:
                 callback(applied)
@@ -236,7 +251,7 @@ class Session:
         return self._with_current_name(self.view.state_meta(**self._view_inputs()))
 
     def _with_current_name(self, state: dict) -> dict:
-        """配りものに**いま編集しているファイル名**を1つ足す(`view` の持ち物ではない)。
+        """配りものに**いま編集しているファイル名**と**保存状態**(`saved`)を足す(`view` の持ち物ではない)。
 
         **`view.state_meta()` へ足さない** —— `DocumentView` が持つのは文書から測れるもの
         (形・版・スケッチ)だけで、どのファイルを開いているかは `Session` の持ち物である。
@@ -248,6 +263,7 @@ class Session:
         (現在ファイルへの上書き)だけは通る、という食い違いが出る。
         """
         state["current_name"] = self._current_name
+        state["saved"] = self.saved
         return state
 
     def delta(self, known_revisions: dict) -> dict:
@@ -1179,6 +1195,10 @@ class Session:
         `..` は `_resolve_document_name` が拒否する。**その検査を先に通す** ——
         「既に在るか」を見るより前にパスの安全性を決着させる(models/ の外を指す名前は、
         存在の有無を問う前に断る)。
+
+        **呼び手は自動保存が主**(issue #5、2026-09-16): 文書が変わるたび `autosave()` が
+        引数なしで呼び、無題なら `untitled-<n>.json` を `name` に渡す。Ctrl+S は引数なしを
+        手で呼ぶだけ(同じ内容を書き直す)。人が名前を決める口は `rename_document`。
         """
         if name is None:
             if self._current_name is None:
@@ -1198,21 +1218,97 @@ class Session:
                     else f"{target.name} は編集中ではない(先に開けば上書きできる)"
                 )
         payload = self.document.log.to_json()
-        # **一時ファイルへ書いてから差し替える**。素の上書きは既存の
-        # 中身を先に切り詰めるので、途中で落ちると**唯一の永続形式である前回の保存が
-        # 半端なJSONで潰れる**(形状は導出物なので、これを失うと復旧の手立てが無い)。
-        # `os.replace` は同じディレクトリ内なら不可分に差し替わる。
-        staging = target.with_name(target.name + ".writing")
-        staging.write_text(payload, encoding="utf-8")
-        os.replace(staging, target)
-        # **書けてから現在ファイルにする**。先に控えると、書き込みが落ちたときに
-        # 「存在しないファイルを編集中」という状態が残り、次の引数なし保存が
-        # 黙って新しいファイルを作る(拒否されるべき経路が通ってしまう)。
-        self._current_name = target.name
+        with self._save_lock:
+            # **一時ファイルへ書いてから差し替える**。素の上書きは既存の
+            # 中身を先に切り詰めるので、途中で落ちると**唯一の永続形式である前回の保存が
+            # 半端なJSONで潰れる**(形状は導出物なので、これを失うと復旧の手立てが無い)。
+            # `os.replace` は同じディレクトリ内なら不可分に差し替わる。
+            staging = target.with_name(target.name + ".writing")
+            staging.write_text(payload, encoding="utf-8")
+            os.replace(staging, target)
+            # **書けてから現在ファイルにする**。先に控えると、書き込みが落ちたときに
+            # 「存在しないファイルを編集中」という状態が残り、次の引数なし保存が
+            # 黙って新しいファイルを作る(拒否されるべき経路が通ってしまう)。
+            self._current_name = target.name
+            self._unsaved = False
         return {
             "action": "save",
             "path": str(target),
             "name": target.name,
+            "bytes": target.stat().st_size,
+            "operations": len(self.document.log.entries),
+        }
+
+    @property
+    def saved(self) -> bool:
+        """今の文書がそのままファイルに載っているか(`state()["saved"]`)。
+
+        **自動保存が書けなかったときだけ False**。無題で何も変えていない文書は True
+        (書くものが無い —— 最初の変更で名前が付いて書かれる)。
+        """
+        return not self._unsaved
+
+    def _unused_untitled_name(self) -> str:
+        """`untitled-1.json` から順に、`models_dir` にまだ無い最初の名前。"""
+        self.models_dir.mkdir(parents=True, exist_ok=True)
+        number = 1
+        while (self.models_dir / f"untitled-{number}.json").exists():
+            number += 1
+        return f"untitled-{number}.json"
+
+    def autosave(self) -> bool:
+        """今の文書をディスクへ書く(**1操作ごとの自動保存**。issue #5、本人判断 2026-09-16)。
+
+        `_emit` が verb の応答のたびに呼ぶ(undo / redo も含む —— ファイルは常に今の文書の
+        鏡で、redo の山は残さない)。**無題の文書は最初の変更で `untitled-<n>.json` の名前を
+        自動で付ける**(以後はそこへ上書き。人が名前を決めるのは `rename_document`)。
+
+        **失敗しても例外にしない** —— 文書の変更は既に確定しており、巻き戻せない。書けな
+        かったことは警告と `saved=False`(画面の「未保存」札)で知らせる。戻り値は書けたか。
+
+        費用は操作ログ全体のJSON化と書き込み(差分ではない)。実測は 4.8MB の文書で 0.02秒
+        なので、debounce も差分保存も入れていない。
+        """
+        try:
+            if self._current_name is None:
+                self.save_document(self._unused_untitled_name())
+            else:
+                self.save_document()
+        except Exception as error:  # noqa: BLE001 - 書けない理由は何であれ画面へ出す
+            self._unsaved = True
+            self.warnings.append(f"自動保存できなかった: {type(error).__name__}: {error}")
+            return False
+        return True
+
+    def rename_document(self, name: Any) -> dict:
+        """いま編集しているファイルの名前を変える(ディスク上で移す)。**verbではない**。
+
+        自動保存が名前を `untitled-<n>.json` で決めるので、人が名前を付ける口はこれになる
+        (ファイルパネルの名前欄。issue #5)。`name` が既に在れば拒否 —— 上書きの口は持たない
+        (`copy_document` と同じ線)。**無題で何も変えていない文書**(ファイルがまだ無い)は、
+        その名前で空の文書を書く(「この文書をこの名前にする」の意味は同じで、書く先が
+        無ければ作るだけ)。
+        """
+        target = self._resolve_document_name(name)
+        if target.exists():
+            raise ValueError(f"{target.name} は既にある(別の名前にする)")
+        if self._current_name is None:
+            return dict(self.save_document(target.name), action="rename", previous=None)
+        with self._save_lock:
+            previous = self._current_name
+            source = self._resolve_document_name(previous)
+            if source.exists():
+                os.replace(source, target)
+            else:
+                # 編集中のファイルが外で消されていた。中身は文書が持っているので書き直す。
+                target.write_text(self.document.log.to_json(), encoding="utf-8")
+            self._current_name = target.name
+            self._unsaved = False
+        return {
+            "action": "rename",
+            "path": str(target),
+            "name": target.name,
+            "previous": previous,
             "bytes": target.stat().st_size,
             "operations": len(self.document.log.entries),
         }
@@ -1258,11 +1354,12 @@ class Session:
         一覧からのクリック1つで別の文書へ移れるのに、空の文書へ移るときだけ確認を挟むと
         挙動が割れる(`web/src/FilesPanel.svelte` の「開くのに確認ダイアログを挟まない」)。
 
-        **`save_document` は呼ばない**(自動保存はスコープ外)。保存していない編集は消える。
+        **捨てる前に保存はしない** —— 名前つきの文書は1操作ごとに自動保存されていて
+        (`autosave`)、失うものが無い。
 
         **編集中のファイルも無くなる**(`current_name=None`)。空の文書はどこにも書かれて
-        いないので、この直後の引数なし `save_document()` は拒否される —— 名前を付けて
-        保存するまで書き込み先が存在しないのは、この操作の意味そのものである。
+        おらず、次に文書を変えた瞬間に自動保存が `untitled-<n>.json` を作る(それまで
+        引数なしの `save_document()` は拒否される)。
         """
         self._replace_document(Document(), current_name=None)
         return self._emit({
@@ -1293,6 +1390,7 @@ class Session:
         """
         self.document = document
         self._current_name = current_name
+        self._unsaved = False  # 開いた/空にした文書に、書けなかった変更は無い
         # キャッシュの破棄は**`view` の1呼び出し**(何を捨てて何を残すかは `DocumentView.reset`
         # が持つ。とくに版の数え上げを消さない理由はそちらのdocstring)。
         self.view.reset(document)

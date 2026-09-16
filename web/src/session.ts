@@ -287,6 +287,11 @@ export interface ServerState {
    */
   current_name: string | null
   /**
+   * 今の文書がそのままファイルに載っているか(`Session.saved`)。**自動保存が書けなかった
+   * ときだけ false**(issue #5)。無題で何も変えていない文書は true(書くものが無い)。
+   */
+  saved: boolean
+  /**
    * 形状最適化の条件(第3のモード)。**verb起動時のプリセレクトと役割の色はここが正**で、
    * ブラウザは自前に溜めない(選択集合と同じ扱い)。
    */
