@@ -1,6 +1,7 @@
 """目標安全率を満たす材料量[mm^3]を探索する。
 
-参照場は最初に1回作り、候補材料量ごとに範囲を切り出して SIMP と応力評価を行う。
+塊(設計空間)は呼び出し側が `design_space.derive` で1回導出して渡し、候補材料量ごとに
+**同じ塊**で SIMP と応力評価を行う(探索の中で導出は呼ばない)。
 材料量を増やすと安全率が上がることを前提とするが、一般の形状で保証はない。
 
 候補は Illinois 法で提案する。端点の応力を評価できない場合は二分へ戻る。
@@ -121,14 +122,11 @@ class ConditionFacesEmptyError(ValueError):
 
     `design_space.run_topopt` は `anchor.run_pipeline` の契約どおり例外にせず
     `empty_condition_faces` を積んだ辞書を返し、`"result"` は `None` のままになる。
-    `_derive_and_run` はそれを見ずに `run["result"].model` へ触っていたので、
-    **生の `AttributeError` が上まで抜けていた**(`20260904-1556` の契約④が
-    「未修正のまま残っている」と名指ししていた穴)。
+    それを見ずに `run["result"].model` へ触ると**生の `AttributeError` が上まで抜ける**。
 
     **`_evaluate` の分類(`"too_little"` / `"too_much"`)へ落とさない。** 条件面が空なのは
     要素サイズの問題であって材料量の問題ではないので、探索を続けても直らない
-    (材料量を振っても格子は変わらない)。`design_space.ReferenceRunConditionFacesEmptyError`
-    (参照 run の同じ失敗)と同じ形で、`empty_condition_faces` に
+    (材料量を振っても格子は変わらない)。`empty_condition_faces` に
     `anchor.AnchorTable.condition_face_diagnoses` と同じリストを持つ。
     """
 
@@ -177,7 +175,7 @@ class SafetyLoopResult:
     converged: bool
     evaluations: int
     history: list = field(default_factory=list)  # list[SafetyLoopStep]
-    space: Any = None  # design_space.DesignSpace(最終採用した材料量で導出した塊)
+    space: Any = None  # design_space.DesignSpace(探索の全候補が使った、呼び出し側が渡した塊)
     run: Optional[dict] = None  # design_space.run_topopt() の戻り値
     report: Any = None  # stress.SafetyReport
 
@@ -190,8 +188,8 @@ class SafetyLoopResult:
         )
 
 
-def _derive_and_run(
-    conditions: ds.Conditions,
+def _run_once(
+    space: Any,
     material_mm3: float,
     *,
     allowable_mpa: float,
@@ -203,20 +201,15 @@ def _derive_and_run(
     threads: Optional[int],
     rho_min: float,
     percentile: float,
-    derivation_kwargs: dict,
-    reference: Any = None,
+    rmin: Optional[float] = None,
+    rmin_mm: Optional[float] = None,
     stl_path: Optional[Any] = None,
     run_progress: Optional[Callable[[Any, Any], None]] = None,
 ) -> tuple[Any, dict, Any]:
-    """候補材料量から設計空間を切り出し、最適化結果と安全率を返す。
+    """渡された塊で候補材料量を1回最適化し、最適化結果と安全率を返す。
 
-    reference は探索全体で共有する。rmin / rmin_mm は導出と最適化へ同じ値を渡す。
-    run の result が空なら ConditionFacesEmptyError として診断を返す。"""
-    kwargs = dict(derivation_kwargs)
-    kwargs.setdefault("material_mm3", material_mm3)
-    if reference is not None:
-        kwargs.setdefault("reference", reference)
-    space = ds.derive_from_reference(conditions, **kwargs)
+    塊は探索全体で共有する(ここで導出は呼ばない)。`rmin` / `rmin_mm` は
+    `run_topopt` へそのまま渡す。run の result が空なら ConditionFacesEmptyError。"""
     run = ds.run_topopt(
         space,
         material_mm3=material_mm3,
@@ -225,11 +218,8 @@ def _derive_and_run(
         forces=forces,
         solver=solver,
         threads=threads,
-        # **導出へ渡した筆の太さを run にも渡す(層をまたぐ契約)。** 渡さないと
-        # `run_topopt` が「塊は rmin=x で導出したのに rmin=既定 で回そうとしている」と
-        # 落とし、`_evaluate` はその `ValueError` を分類しないので探索ごと死ぬ。
-        rmin=derivation_kwargs.get("rmin"),
-        rmin_mm=derivation_kwargs.get("rmin_mm"),
+        rmin=rmin,
+        rmin_mm=rmin_mm,
         keep_model=True,
         stl_path=_SEARCH_STL_PATH if stl_path is None else stl_path,
         progress=run_progress,
@@ -243,7 +233,7 @@ def _derive_and_run(
     scale = stress.UnitScale.for_model(
         result.model,
         element_mm=space.grid.spacing,
-        load_n=conditions.load_n,
+        load_n=space.conditions.load_n,
         youngs_modulus_mpa=youngs_modulus_mpa,
     )
     # 変位解法は "mg" を明示する(simp.optimize の既定と揃える)。stress.evaluate 自体の既定
@@ -260,53 +250,17 @@ def _derive_and_run(
     return space, run, report
 
 
-def _build_reference(
-    conditions: ds.Conditions,
-    derivation_kwargs: dict,
-    *,
-    force: Sequence[float],
-    forces: Optional[Sequence[Sequence[float]]],
-    solver: Optional[str],
-    threads: Optional[int],
-    progress: Optional[Callable[[Any, Any], None]],
-) -> Any:
-    """探索全体で共有する参照場を1回作る。
-
-    切り出し専用の pick_ratio / k_mat を除き、参照計算用の引数名へ変換する。
-    rmin / rmin_mm は接続幅の判定にも使うため、そのまま渡す。"""
-    kwargs = dict(derivation_kwargs)
-    # **切り出しのときだけ効く引数は落とす。** `rmin` / `rmin_mm` は落とさない ——
-    # 幅つき回廊はその半径で測るので、参照を作る側が知っていなければならない。
-    for slicing_only in ("pick_ratio", "k_mat"):
-        kwargs.pop(slicing_only, None)
-    build: dict = {}
-    if "reference_material_ratio" in kwargs:
-        build["material_ratio"] = kwargs.pop("reference_material_ratio")
-    if "reference_max_iter" in kwargs:
-        build["max_iter"] = kwargs.pop("reference_max_iter")
-    return ds.build_reference(
-        conditions,
-        force=force,
-        forces=forces,
-        solver=solver,
-        threads=threads,
-        progress=progress,
-        **build,
-        **kwargs,
-    )
-
-
 @trace.stage('safety-evaluation')
-def _evaluate(conditions: ds.Conditions, material_mm3: float, **kwargs: Any) -> tuple[str, Any]:
+def _evaluate(space: Any, material_mm3: float, **kwargs: Any) -> tuple[str, Any]:
     """材料量1点を評価する。**失敗も分類して返す**(例外を上まで素通しにしない)。
 
     - `"ok"` —— 通常どおり (space, run, report)。
-    - `"too_little"` —— この材料量では塊が細すぎる(接続できない/体積目標が
-      `below_minimum`/**残差検算が通らない**)。安全率で言えば「目標に届かない」と
-      同じ側として扱う(この材料量とその下は不採用)。
-    - `"too_much"` —— この材料量**そのものを目標に**導出した塊でも、密度フィルタの
-      目減りで材料が収まらない(`VolumeTargetError(side="above_capacity")`)。
-      安全率は測れていないので、この材料量とその上は判定を保留して引き返す。
+    - `"too_little"` —— この材料量では材料が少なすぎる(体積目標が `below_minimum` /
+      **残差検算が通らない**)。安全率で言えば「目標に届かない」と同じ側として扱う
+      (この材料量とその下は不採用)。
+    - `"too_much"` —— 固定した塊に、密度フィルタの目減りで材料が収まらない
+      (`VolumeTargetError(side="above_capacity")`)。安全率は測れていないので、
+      この材料量とその上は判定を保留して引き返す。
 
     **`SolveResidualError` を `too_little` に落とすのは、拘束不足を握りつぶすためではない。**
     材料が少ないほど ρ が下限に張り付いて系が悪条件になり、残差が許容(`SOLVE_RESIDUAL_TOL`)を
@@ -316,15 +270,11 @@ def _evaluate(conditions: ds.Conditions, material_mm3: float, **kwargs: Any) -> 
     として原因を連鎖したまま上がる**ので、探索の中で握っても検出力は落ちない。
     """
     try:
-        space, run, report = _derive_and_run(conditions, material_mm3, **kwargs)
+        space, run, report = _run_once(space, material_mm3, **kwargs)
         return "ok", (space, run, report)
     except simp.VolumeTargetError as exc:
         return ("too_much" if exc.side == "above_capacity" else "too_little"), exc
-    except (
-        simp.SolveResidualError,
-        ds.DesignSpaceDisconnectedError,
-        ds.DesignSpaceTooSmallError,
-    ) as exc:
+    except simp.SolveResidualError as exc:
         return "too_little", exc
 
 
@@ -398,7 +348,7 @@ def _propose_material(
 
 @trace.stage('safety-search')
 def solve_for_safety_factor(
-    conditions: ds.Conditions,
+    space: Any,
     *,
     target_safety_factor: float,
     material_min_mm3: float,
@@ -415,11 +365,15 @@ def solve_for_safety_factor(
     forces: Optional[Sequence[Sequence[float]]] = None,
     solver: Optional[str] = None,
     threads: Optional[int] = None,
-    derivation_kwargs: Optional[dict] = None,
+    rmin: Optional[float] = None,
+    rmin_mm: Optional[float] = None,
     progress: Optional[Callable[[SafetyLoopStep], None]] = None,
     run_progress: Optional[Callable[[Any, Any], None]] = None,
 ) -> SafetyLoopResult:
     """探索範囲内で目標安全率を満たした最小の材料量と、その計算結果を返す。
+
+    `space` は `design_space.derive` が返した塊で、**全候補がこの1つを使う**(探索の中で
+    導出は呼ばず、塊も書き換えない。戻り値の `space` は渡したものそのもの)。
 
     材料量[mm^3]に対して安全率が単調に増えることを仮定する。一般の形状では保証が
     ないため、根拠は docs/TOPOPT.md「単調性を測る」を参照。
@@ -430,11 +384,10 @@ def solve_for_safety_factor(
     clipped に提案方法を記録する。converged は材料量の相対区間幅による判定で、
     内側の SIMP の収束判定とは独立。評価回数上限では未収束でも最良候補を返す。
 
-    derivation_kwargs は derive_from_reference の追加引数。rmin / rmin_mm は
-    導出・参照計算・本番計算で共有する。material_mm3 と reference は探索側が
-    設定するため指定しない。参照場は最初に1回だけ作り、全候補で使い回す。
+    rmin / rmin_mm(排他)は密度フィルタの半径で、全候補の `run_topopt` へそのまま渡す。
+    省くと `simp.DEFAULT_RMIN`。
 
-    progress は候補ごと、run_progress は参照計算を含む SIMP の反復ごとに呼ぶ。
+    progress は候補ごと、run_progress は SIMP の反復ごとに呼ぶ。
     中断には run_progress から OptimizeCancelled のような RuntimeError を投げる。
     材料不足として分類される ValueError 系の例外は使わない。
 
@@ -467,19 +420,9 @@ def solve_for_safety_factor(
         threads=threads,
         rho_min=rho_min,
         percentile=percentile,
-        derivation_kwargs=dict(derivation_kwargs or {}),
+        rmin=rmin,
+        rmin_mm=rmin_mm,
         run_progress=run_progress,
-    )
-    # **参照 ρ を1回だけ作る。** 上端の評価より前に置くのは、上端も同じ参照から切り出した塊で
-    # 評価しなければ「材料量を振ったのか塊の作り方を変えたのか」が段の間で揃わないため。
-    eval_kwargs["reference"] = _build_reference(
-        conditions,
-        dict(derivation_kwargs or {}),
-        force=force,
-        forces=forces,
-        solver=solver,
-        threads=threads,
-        progress=run_progress,
     )
 
     history: list[SafetyLoopStep] = []
@@ -507,7 +450,7 @@ def solve_for_safety_factor(
             progress(step)
 
     def evaluate(proposal: _Proposal) -> tuple[str, Any]:
-        outcome, payload = _evaluate(conditions, proposal.material_mm3, **eval_kwargs)
+        outcome, payload = _evaluate(space, proposal.material_mm3, **eval_kwargs)
         record(proposal, outcome, payload)
         return outcome, payload
 
@@ -515,7 +458,7 @@ def solve_for_safety_factor(
     outcome_hi, payload_hi = evaluate(_Proposal(material_max_mm3, "bound"))
     if outcome_hi != "ok":
         raise SafetyTargetError(
-            f"material_max_mm3={material_max_mm3:.6g}mm^3 そのものが塊として導出できない"
+            f"material_max_mm3={material_max_mm3:.6g}mm^3 そのものが評価できない"
             f"({outcome_hi}): {payload_hi}",
             side="invalid_bound",
             target_safety_factor=target_safety_factor,
@@ -541,7 +484,7 @@ def solve_for_safety_factor(
     outcome_lo, payload_lo = evaluate(_Proposal(material_min_mm3, "bound"))
     if outcome_lo == "too_much":
         raise SafetyTargetError(
-            f"material_min_mm3={material_min_mm3:.6g}mm^3 そのものが塊として導出できない"
+            f"material_min_mm3={material_min_mm3:.6g}mm^3 そのものが評価できない"
             f"(too_much): {payload_lo}",
             side="invalid_bound",
             target_safety_factor=target_safety_factor,
@@ -614,7 +557,7 @@ def solve_for_safety_factor(
             lo, f_lo = mid, None
             retained(None)
         else:  # "too_much"
-            hi, f_hi = mid, None  # この材料量とその上はこの導出戦略では判定できない
+            hi, f_hi = mid, None  # この材料量とその上は固定した塊に収まらず判定できない
             retained(None)
 
     converged = (hi - lo) / hi <= rel_tol

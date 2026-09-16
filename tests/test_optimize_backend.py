@@ -367,23 +367,18 @@ def test_element_size_outside_the_bounds_is_refused() -> None:
         optimize_run._resolve_element_size(infeasible, None)
 
 
-def test_estimate_adds_the_reference_run_once_not_per_candidate() -> None:
-    """**参照 run は探索を通して1回。** 候補ごとの固定費として掛けると系統的に上振れし、
-    落とすと下振れする(案5の粗い段は候補ごとだったので、そこを取り違えやすい)。
-    """
-    from duocad.topopt import design_space as ds
+def test_estimate_has_no_reference_run_and_scales_with_the_candidates() -> None:
+    """**塊の導出は SIMP を回さない**ので、費用は候補ごとの評価だけ(固定費の項は無い)。"""
+    from duocad.topopt import safety_loop
 
     estimate = optimize_run.estimate_seconds(10_000, max_iter=10, evaluations=4)
     per_run = 10 * 10_000 * optimize_run.SECONDS_PER_ELEMENT_ITERATION
-    reference = (
-        ds.REFERENCE_MAX_ITER
-        * 10_000
-        * optimize_run.SECONDS_PER_ELEMENT_ITERATION
-    )
     assert estimate["seconds_per_evaluation"] == pytest.approx(per_run)
-    assert estimate["seconds_reference"] == pytest.approx(reference)
-    assert estimate["seconds_typical"] == pytest.approx(reference + per_run * 4)
-    # 候補を増やしても参照は1回ぶんしか増えない(掛け算の中に入っていない)。
+    assert "seconds_reference" not in estimate
+    assert estimate["seconds_typical"] == pytest.approx(per_run * 4)
+    assert estimate["seconds_worst"] == pytest.approx(
+        per_run * safety_loop.DEFAULT_MAX_EVALUATIONS
+    )
     more = optimize_run.estimate_seconds(10_000, max_iter=10, evaluations=8)
     assert more["seconds_typical"] - estimate["seconds_typical"] == pytest.approx(per_run * 4)
 
@@ -450,8 +445,20 @@ def test_run_optimization_clears_a_stale_cancel_flag(session: Session) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 7. `safety_loop` の穴(`20260904-1556` の契約④が名指ししていた未修正の箇所)
+# 7. `safety_loop` の配線 —— 固定した塊が全候補へ届き、空の条件面は名前付きの例外になる
 # --------------------------------------------------------------------------------------
+_RUN_KW = dict(
+    allowable_mpa=40.0,
+    youngs_modulus_mpa=2000.0,
+    max_iter=1,
+    force=(0.0, 0.0, -1.0),
+    solver=None,
+    threads=None,
+    rho_min=0.5,
+    percentile=99.5,
+)
+
+
 def test_safety_loop_turns_empty_condition_faces_into_a_named_exception(monkeypatch) -> None:
     """条件面が空のとき `ConditionFacesEmptyError` になる(`run["result"]` が None のまま
     `.model` を触ると素の `AttributeError` になる経路がある)。
@@ -460,44 +467,18 @@ def test_safety_loop_turns_empty_condition_faces_into_a_named_exception(monkeypa
     from duocad.topopt import safety_loop
 
     diagnoses = [{"side": "load", "face_index": 7, "cad_area_mm2": 0.5}]
-
-    monkeypatch.setattr(ds, "derive_from_reference", lambda conditions, **kwargs: object())
     monkeypatch.setattr(
         ds,
         "run_topopt",
         lambda space, **kwargs: {"result": None, "empty_condition_faces": diagnoses},
     )
     with pytest.raises(safety_loop.ConditionFacesEmptyError) as caught:
-        safety_loop._derive_and_run(
-            conditions=object(),
-            material_mm3=100.0,
-            allowable_mpa=40.0,
-            youngs_modulus_mpa=2000.0,
-            max_iter=1,
-            force=(0.0, 0.0, -1.0),
-            solver=None,
-            threads=None,
-            rho_min=0.5,
-            percentile=99.5,
-            derivation_kwargs={},
-        )
+        safety_loop._run_once(object(), 100.0, **_RUN_KW)
     assert caught.value.empty_condition_faces == diagnoses
     # **`_evaluate` の分類へ落とさない。** 材料量を振っても格子は変わらないので、
     # `"too_little"` として探索を続けると同じ失敗を評価回数ぶん繰り返すだけになる。
     with pytest.raises(safety_loop.ConditionFacesEmptyError):
-        safety_loop._evaluate(
-            object(),
-            100.0,
-            allowable_mpa=40.0,
-            youngs_modulus_mpa=2000.0,
-            max_iter=1,
-            force=(0.0, 0.0, -1.0),
-            solver=None,
-            threads=None,
-            rho_min=0.5,
-            percentile=99.5,
-            derivation_kwargs={},
-        )
+        safety_loop._evaluate(object(), 100.0, **_RUN_KW)
 
 
 def test_safety_loop_passes_the_iteration_callback_through(monkeypatch) -> None:
@@ -511,181 +492,67 @@ def test_safety_loop_passes_the_iteration_callback_through(monkeypatch) -> None:
         seen.update(kwargs)
         raise RuntimeError("stop here")
 
-    monkeypatch.setattr(ds, "derive_from_reference", lambda conditions, **kwargs: object())
     monkeypatch.setattr(ds, "run_topopt", fake_run_topopt)
     sentinel = object()
     with pytest.raises(RuntimeError, match="stop here"):
-        safety_loop._derive_and_run(
-            conditions=object(),
-            material_mm3=100.0,
-            allowable_mpa=40.0,
-            youngs_modulus_mpa=2000.0,
-            max_iter=1,
-            force=(0.0, 0.0, -1.0),
-            solver=None,
-            threads=None,
-            rho_min=0.5,
-            percentile=99.5,
-            derivation_kwargs={},
-            run_progress=sentinel,
-        )
+        safety_loop._run_once(object(), 100.0, run_progress=sentinel, **_RUN_KW)
     assert seen["progress"] is sentinel
     assert seen["keep_model"] is True  # 応力を測る経路(`20260904-0143` の契約)
 
 
-def test_the_candidate_material_and_the_reference_reach_the_derivation(monkeypatch) -> None:
-    """**導出に本番と同じ材料量と、探索が1回だけ作った参照 ρ を渡す。**
+def test_the_space_material_and_filter_radius_reach_the_run(monkeypatch) -> None:
+    """**渡した塊そのもの・本番の材料量・最小部材幅が `run_topopt` に届く。**
 
-    材料量が届かないと別の量の周りを切り出す(`20260904-1416` の契約)。参照が届かないと
-    `derive_from_reference` が材料量ごとに参照を作り直し、SIMP を1回で済ませるという
-    連続値保持の利点がそのまま消える。
+    塊が別物にすり替わると候補ごとに違う空間を最適化する。材料量が届かないと別の量を解く。
+    `rmin_mm` が落ちると `simp.DEFAULT_RMIN`(要素)で回り、画面で入れた最小部材幅が黙って効かない。
     """
     from duocad.topopt import design_space as ds
     from duocad.topopt import safety_loop
 
     seen: dict = {}
-    sentinel = object()
 
-    def fake_derive_from_reference(conditions, **kwargs):
+    def fake_run_topopt(space, **kwargs):
+        seen["space"] = space
         seen.update(kwargs)
         raise RuntimeError("stop here")
 
-    monkeypatch.setattr(ds, "derive_from_reference", fake_derive_from_reference)
-    with pytest.raises(RuntimeError, match="stop here"):
-        safety_loop._derive_and_run(
-            conditions=object(),
-            material_mm3=1234.5,
-            allowable_mpa=40.0,
-            youngs_modulus_mpa=2000.0,
-            max_iter=1,
-            force=(0.0, 0.0, -1.0),
-            solver=None,
-            threads=None,
-            rho_min=0.5,
-            percentile=99.5,
-            derivation_kwargs={"spacing": 2.0},
-            reference=sentinel,
-        )
-    assert seen["material_mm3"] == 1234.5
-    assert seen["reference"] is sentinel
-    assert seen["spacing"] == 2.0
-
-
-def test_the_filter_radius_reaches_both_the_derivation_and_the_run(monkeypatch) -> None:
-    """**塊の導出と `run_topopt` の両方へ同じ `rmin` を配る。**
-
-    落ちたら、塊が保証した筆の太さと実際に回す太さが食い違い、`run_topopt` の突き合わせが
-    素の `ValueError` を上げる —— `_evaluate` はそれを分類しないので探索ごと死ぬ。
-    """
-    from duocad.topopt import design_space as ds
-    from duocad.topopt import safety_loop
-
-    seen: dict = {}
-
-    def fake_derive_from_reference(conditions, **kwargs):
-        seen["derive"] = kwargs
-        return "塊"
-
-    def fake_run_topopt(space, **kwargs):
-        seen["run"] = kwargs
-        raise RuntimeError("stop here")
-
-    monkeypatch.setattr(ds, "derive_from_reference", fake_derive_from_reference)
     monkeypatch.setattr(ds, "run_topopt", fake_run_topopt)
+    space = object()
     with pytest.raises(RuntimeError, match="stop here"):
-        safety_loop._derive_and_run(
-            conditions=object(),
-            material_mm3=1234.5,
-            allowable_mpa=40.0,
-            youngs_modulus_mpa=2000.0,
-            max_iter=1,
-            force=(0.0, 0.0, -1.0),
-            solver=None,
-            threads=None,
-            rho_min=0.5,
-            percentile=99.5,
-            derivation_kwargs={"spacing": 2.0, "rmin_mm": 1.0},
-        )
-    assert seen["derive"]["rmin_mm"] == 1.0
-    assert seen["run"]["rmin_mm"] == 1.0
-    assert seen["run"]["rmin"] is None
+        safety_loop._run_once(space, 1234.5, rmin_mm=1.0, **_RUN_KW)
+    assert seen["space"] is space
+    assert seen["material_mm3"] == 1234.5
+    assert seen["rmin_mm"] == 1.0
+    assert seen["rmin"] is None
 
 
-def test_the_reference_is_built_once_for_the_whole_search(monkeypatch) -> None:
-    """**参照 ρ は探索の最初に1回だけ作る。** 段ごとに作り直すと案5より遅い形になる。
+def test_the_search_hands_the_same_space_to_every_evaluation_and_returns_it(monkeypatch) -> None:
+    """**探索1回につき塊は1つ、それが全段へ届き、戻り値にもそのまま入る。**
 
-    併せて、切り出し側の引数名(`pick_ratio` など)を参照を作る側の名前へ translate している
-    ことを見る —— 素通しにすると `derive` まで流れて `TypeError` になる。**`rmin` は
-    落とさない**: 幅つき回廊はその半径で測るので、参照を作る側が知っていなければならない。
+    段ごとに導出し直す経路が生えると、格子・保持マスク・面対応が候補間で揃わなくなる。
     """
-    from duocad.topopt import design_space as ds
+    import types
+
     from duocad.topopt import safety_loop
 
-    calls: list[dict] = []
-
-    def fake_build_reference(conditions, **kwargs):
-        calls.append(kwargs)
-        return "参照"
-
-    monkeypatch.setattr(ds, "build_reference", fake_build_reference)
-    got = safety_loop._build_reference(
-        object(),
-        {
-            "spacing": 2.0,
-            "pick_ratio": 0.2,
-            "k_mat": 1.5,
-            "rmin": 3.0,
-            "reference_max_iter": 7,
-        },
-        force=(0.0, 0.0, -1.0),
-        forces=None,
-        solver=None,
-        threads=None,
-        progress=None,
-    )
-    assert got == "参照"
-    assert len(calls) == 1
-    assert calls[0]["spacing"] == 2.0
-    assert calls[0]["max_iter"] == 7  # reference_max_iter → max_iter
-    assert calls[0]["rmin"] == 3.0
-    assert "pick_ratio" not in calls[0]
-    assert "k_mat" not in calls[0]
-    assert "reference_max_iter" not in calls[0]
-
-
-def test_the_search_builds_one_reference_and_hands_it_to_every_evaluation(monkeypatch) -> None:
-    """**探索1回につき参照1本、それが全段へ届く。**
-
-    `_build_reference` 単体の検査では、`solve_for_safety_factor` が結果を捨てていても
-    (= 段ごとに `derive_from_reference` が自分で作り直しても)通ってしまう。ここは
-    配線そのものを見る —— 落ちたら「遅くなるだけ」なので、実行検査では気づけない。
-    """
-    from duocad.topopt import design_space as ds
-    from duocad.topopt import safety_loop
-
-    built: list = []
     seen: list = []
+    space = types.SimpleNamespace(element_count=1000)
 
-    def fake_build_reference(conditions, **kwargs):
-        built.append(kwargs)
-        return "参照"
+    def fake_run_once(space_arg, material_mm3, **kwargs):
+        seen.append((space_arg, kwargs.get("rmin_mm")))
+        run = {"achieved_material_mm3": material_mm3}
+        report = types.SimpleNamespace(safety_factor=CURVE(material_mm3))
+        return space_arg, run, report
 
-    def fake_derive_from_reference(conditions, **kwargs):
-        seen.append(kwargs)
-        raise RuntimeError("stop after the derivation")
-
-    monkeypatch.setattr(ds, "build_reference", fake_build_reference)
-    monkeypatch.setattr(ds, "derive_from_reference", fake_derive_from_reference)
-    with pytest.raises(RuntimeError, match="stop after the derivation"):
-        safety_loop.solve_for_safety_factor(
-            object(),
-            target_safety_factor=1.2,
-            material_min_mm3=1.0,
-            material_max_mm3=100.0,
-            derivation_kwargs={"spacing": 2.0},
-        )
-    assert len(built) == 1, "参照は探索の最初に1回だけ"
-    assert seen and all(kw.get("reference") == "参照" for kw in seen)
+    monkeypatch.setattr(safety_loop, "_run_once", fake_run_once)
+    result = safety_loop.solve_for_safety_factor(
+        space, target_safety_factor=3500.0, rmin_mm=2.0, **BRACKET
+    )
+    assert len(seen) >= 3, "境界2回 + 探索本体の少なくとも1回"
+    assert all(item[0] is space for item in seen)
+    assert all(item[1] == 2.0 for item in seen)
+    assert result.space is space
+    assert result.evaluations == len(seen)
 
 
 # --------------------------------------------------------------------------------------
@@ -933,30 +800,39 @@ def test_a_residual_failure_is_classified_as_too_little(monkeypatch) -> None:
     def boom(*args, **kwargs):
         raise simp.SolveResidualError("K U = F が解けていない(残差 2.930e-05 > 1e-06)")
 
-    monkeypatch.setattr(safety_loop, "_derive_and_run", boom)
-    outcome, payload = safety_loop._evaluate(object(), 54_233.0, derivation_kwargs={})
+    monkeypatch.setattr(safety_loop, "_run_once", boom)
+    outcome, payload = safety_loop._evaluate(object(), 54_233.0)
     assert outcome == "too_little"
     assert isinstance(payload, simp.SolveResidualError)
 
 
+def test_a_derivation_failure_is_not_a_material_outcome(monkeypatch) -> None:
+    """**塊の失敗は探索の分類に入らない。** 導出は探索の前に1回だけで、材料量を振っても直らない。"""
+    from duocad.topopt import design_space as ds
+    from duocad.topopt import safety_loop
+
+    def boom(*args, **kwargs):
+        raise ds.DesignSpaceDisconnectedError("全条件を含む成分が無い", components=2)
+
+    monkeypatch.setattr(safety_loop, "_run_once", boom)
+    with pytest.raises(ds.DesignSpaceDisconnectedError):
+        safety_loop._evaluate(object(), 54_233.0)
+
+
 def test_a_residual_failure_at_the_bound_still_stops_the_search(monkeypatch) -> None:
     """**握りつぶしていない。** 本当の拘束不足なら上端で落ち、原因を連鎖したまま上がる。"""
-    from duocad.topopt import design_space as ds
     from duocad.topopt import safety_loop, simp
-
-    monkeypatch.setattr(ds, "build_reference", lambda conditions, **kw: "参照")
 
     def boom(*args, **kwargs):
         raise simp.SolveResidualError("拘束不足(剛体運動が止まっていない)の可能性が高い")
 
-    monkeypatch.setattr(safety_loop, "_derive_and_run", boom)
+    monkeypatch.setattr(safety_loop, "_run_once", boom)
     with pytest.raises(safety_loop.SafetyTargetError) as caught:
         safety_loop.solve_for_safety_factor(
             object(),
             target_safety_factor=2.0,
             material_min_mm3=1.0,
             material_max_mm3=100.0,
-            derivation_kwargs={},
         )
     assert caught.value.side == "invalid_bound"
     assert caught.value.bound == "material_max_mm3"
@@ -971,23 +847,20 @@ BRACKET = dict(material_min_mm3=52786.0, material_max_mm3=246337.0)
 
 
 def _fake_search(monkeypatch, *, too_little_below=0.0, too_much_between=None):
-    """`_derive_and_run` を安全率の式(`CURVE`)に差し替える(SIMP を回さない)。
+    """`_run_once` を安全率の式(`CURVE`)に差し替える(SIMP を回さない)。
 
-    `too_little_below` より軽い材料量は `DesignSpaceDisconnectedError`(→ `"too_little"`)、
+    `too_little_below` より軽い材料量は `SolveResidualError`(→ `"too_little"`)、
     `too_much_between=(lo, hi)` の帯は `VolumeTargetError(side="above_capacity")`
     (→ `"too_much"`)にする。**帯は括りの内側に作ること** —— 上端が評価できないと
     `SafetyTargetError(invalid_bound)` になって探索本体に入らない。
     """
     import types
 
-    from duocad.topopt import design_space as ds
     from duocad.topopt import safety_loop, simp
 
-    monkeypatch.setattr(ds, "build_reference", lambda conditions, **kw: "参照")
-
-    def fake_derive_and_run(conditions, material_mm3, **kwargs):
+    def fake_run_once(space, material_mm3, **kwargs):
         if material_mm3 < too_little_below:
-            raise ds.DesignSpaceDisconnectedError("塊が細すぎる", components=2)
+            raise simp.SolveResidualError("低密度で系が悪条件(残差検算が通らない)")
         if too_much_between is not None and too_much_between[0] < material_mm3 < too_much_between[1]:
             raise simp.VolumeTargetError(
                 "フィルタの目減りで材料が収まらない",
@@ -1003,7 +876,7 @@ def _fake_search(monkeypatch, *, too_little_below=0.0, too_much_between=None):
         report = types.SimpleNamespace(safety_factor=CURVE(material_mm3))
         return space, run, report
 
-    monkeypatch.setattr(safety_loop, "_derive_and_run", fake_derive_and_run)
+    monkeypatch.setattr(safety_loop, "_run_once", fake_run_once)
     return safety_loop
 
 
@@ -1018,7 +891,7 @@ def test_the_searcher_keeps_the_contract_and_does_not_evaluate_more_than_bisecti
     results = {}
     for searcher in safety_loop.SEARCHERS:
         results[searcher] = safety_loop.solve_for_safety_factor(
-            object(), target_safety_factor=3500.0, derivation_kwargs={}, searcher=searcher, **BRACKET
+            object(), target_safety_factor=3500.0, searcher=searcher, **BRACKET
         )
     for searcher, result in results.items():
         assert result.safety_factor >= 3500.0, searcher
@@ -1056,7 +929,7 @@ def test_the_searcher_falls_back_to_bisection_right_after_an_unmeasured_evaluati
     """
     safety_loop = _fake_search(monkeypatch, **kwargs)
     result = safety_loop.solve_for_safety_factor(
-        object(), target_safety_factor=3500.0, derivation_kwargs={}, **BRACKET
+        object(), target_safety_factor=3500.0, **BRACKET
     )
     assert any(
         step.outcome == outcome and step.proposed_by != "bound" for step in result.history
