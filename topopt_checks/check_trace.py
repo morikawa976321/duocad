@@ -1,4 +1,4 @@
-"""製品入口から診断記録を作り、途中表面の再現と最終JSON/STLの一致を検査する。"""
+"""製品入口から診断記録を作り、単一導出・全候補の塊一致・途中表面の再現・最終JSON/STLの一致を検査する。"""
 import json
 from pathlib import Path
 import tempfile
@@ -22,7 +22,23 @@ def verify_archive(path):
     result=records('result')[0]
     evaluations=records('safety-evaluation-output')
     assert len(evaluations)==result['evaluations']
-    assert records('reference-output') and records('derive-bbox-output') and records('boundary-conditions')
+    # **塊の導出は実行を通して1回だけ**で、旧方式(参照 run・候補ごとの切り出し)の段階は出ない。
+    derived=records('derive-output')
+    assert len(derived)==1 and len(records('derive-masks'))==1
+    assert not [e for e in snapshots if e['name'].startswith(('reference','derive-bbox','derive-candidate'))]
+    assert derived[0]['stats']['derivation']==design_space.DERIVATION
+    mask_hash=derived[0]['stats']['mask_hash']
+    assert design_space.mask_digest(derived[0]['mask'])==mask_hash
+    masks=records('derive-masks')[0]
+    assert np.array_equal(masks['connected'],derived[0]['mask'])
+    # **全候補が同じ塊(同じマスク・同じ格子)を使っている。**
+    candidates=records('candidate-input')
+    assert len(candidates)==result['evaluations']
+    for candidate in candidates:
+        assert candidate['space']['stats']['mask_hash']==mask_hash
+        assert np.array_equal(candidate['space']['mask'],derived[0]['mask'])
+        assert candidate['space']['grid']==derived[0]['grid']
+    assert records('boundary-conditions')
     for phase in [e['child'] for e in events if e['kind']=='begin' and e['name']=='simp']:
         counts={name:sum(e['phase']==phase and e['name']==name for e in snapshots)
                 for name in ('iteration-input','iteration-analysis','iteration-output')}
@@ -56,16 +72,14 @@ def verify_archive(path):
     v,f=read_stl(path/'final.stl')
     assert np.array_equal(v[f],final['vertices'][final['faces']])
     assert (path/'source.zip').is_file() and list((path/'cad').glob('*.step'))
-    print('PASS: full product archive, all iteration stages, surface replay, final document/STL equality')
+    print('PASS: full product archive, single derivation shared by every candidate, all iteration stages, surface replay, final document/STL equality')
     print('Archive:',path)
 
 
 def main():
     with tempfile.TemporaryDirectory(prefix='duocad-trace-check-') as temporary:
-        original_reference=design_space._REFERENCE_STL_PATH
         original_search=safety_loop._SEARCH_STL_PATH
         try:
-            design_space._REFERENCE_STL_PATH=Path(temporary)/'reference.stl'
             safety_loop._SEARCH_STL_PATH=Path(temporary)/'search.stl'
             session,left,right,result,events,ids,shapes,_=wiring.run_once()
             wiring.check_end_to_end(session,result,ids,shapes)
@@ -75,7 +89,6 @@ def main():
             assert not wiring.FAILURES, wiring.FAILURES
             verify_archive(result['diagnostic_path'])
         finally:
-            design_space._REFERENCE_STL_PATH=original_reference
             safety_loop._SEARCH_STL_PATH=original_search
 
 

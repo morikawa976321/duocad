@@ -76,12 +76,9 @@ DEFAULT_TARGET_SAFETY_FACTOR = 2.0
 #: 「B-rep 体積 × 倍率」で下端を当てにいくと固定要素の体積を下回って `simp.VolumeTargetError` に
 #: なる。倍率は形状の寸法と要素サイズの比で当たったり外れたりするので、実際に1回載せて数える。
 MATERIAL_MIN_RATIO = 1.10  # 保持ソリッドが占める体積(**格子の上で数えた量**)に対する下端の倍率
-#: 上端 = **案1の塊の容量 × これ**。案1(外接直方体−除外)は材料量を受け取らない導出なので
-#: 「量を決めるために量が要る」堂々巡りが起きず、しかも**既定の塊を必ず含む**(連続値保持は
-#: 案1の塊から参照 ρ の順位で切り出す部分集合)。0.55 なのは、`design_space.K_MATERIAL = 2.0`
-#: の床が立つと塊は `k_mat × 材料量` ぶん欲しがり、**容量の 1/k_mat = 0.5** で箱いっぱいに
-#: なる —— 上端 0.55 はその上に余裕を載せつつ、容量の端(1.0)には触れない
-#: (`20260904-0142` の罠)。
+#: 上端 = **固定した塊(余白付き凸包 − 除外)の容量 × これ**。塊は材料量を受け取らない導出なので
+#: 「量を決めるために量が要る」堂々巡りが起きない。容量の端(1.0)には触れない
+#: (`20260904-0142` の罠)。運用比率であり、固定凸包への移行(2026-09-16)では動かしていない。
 MATERIAL_MAX_RATIO = 0.55
 
 #: **デバッグ表示(`?debug=space` / `?voxel=1`)で1回に配るボクセルの上限。**
@@ -122,7 +119,7 @@ class OptimizeCancelled(RuntimeError):
     """`should_cancel()` が真を返したので途中で降りた。
 
     `RuntimeError` にしてあるのは、`safety_loop._evaluate` の
-    `except (VolumeTargetError, DesignSpaceDisconnectedError, ...)` に**拾われないため**
+    `except (VolumeTargetError, SolveResidualError)` に**拾われないため**
     である(`ValueError` にすると「材料が足りない」と分類されて探索が続く)。
     """
 
@@ -286,6 +283,8 @@ def build_conditions(doc: "Document") -> ConditionBundle:
     - 保持ソリッド → `keep`(1つならその形、複数なら `kernel.make_compound`)
     - 除外ソリッド → `obstacle`(空なら `None`)
     - 拘束面 / 荷重面 → `anchor_shape` の面添字(`fixed_faces` / `load_faces`)
+    - 保持ボディ ∪ 条件面のボディ → `bodies`(ボディごとの役割と B-rep の外接箱。
+      塊の凸包はここから起きる。除外だけのボディは入れない)
     - 荷重 → `forces`(面ごとの**実単位[N]の力ベクトル**)と `load_n`(その大きさの総和)
 
     **`load_n` は合力(ベクトル和の大きさ)ではなく、面ごとの大きさの総和である。** 荷重が
@@ -335,6 +334,16 @@ def build_conditions(doc: "Document") -> ConditionBundle:
     if not load_n > 0.0:
         raise OptimizeInputError("荷重の大きさが全部0で、実単位との対応が決まらない")
 
+    bodies = tuple(
+        ds.ConditionBody(
+            name=body_id,
+            roles=roles,
+            bbox_min=box["min"],
+            bbox_max=box["max"],
+            shape=doc.get_body(body_id).shape,
+        )
+        for body_id, roles, box in _condition_boxes(doc)
+    )
     conditions = ds.Conditions(
         keep=keep_shape,
         fixed_faces=fixed_faces,
@@ -342,6 +351,7 @@ def build_conditions(doc: "Document") -> ConditionBundle:
         obstacle=obstacle_shape,
         anchor_shape=anchor_shape,
         load_n=float(load_n),
+        bodies=bodies,
     )
     return ConditionBundle(
         conditions=conditions,
@@ -501,9 +511,15 @@ def resolution_limits(doc: "Document", *, rmin_mm: Optional[float] = None) -> di
     upper = from_faces if from_rmin is None else min(from_faces, from_rmin)
 
     lo, hi = _condition_bbox(doc)
-    lower = _min_element_size(lo, hi)
     if not upper > 0.0:
         raise OptimizeInputError("条件面の面積が0で要素サイズの上限を決められない")
+    # **上限は実際の格子の要素サイズに揃える。** `derive` は最長辺を要求値で割った数を丸めるので、
+    # 要求値そのままだと実 spacing が僅かに大きくなり(実測: 要求 4.0mm → 実 4.038mm)、
+    # `rmin_mm / 実spacing` が床 `simp.MIN_RMIN` を割って `FilterRadiusError` になる。
+    upper = _snap_to_grid(lo, hi, upper)
+    # 下限も実格子の要素サイズへ揃える(梯子の最後の段 = `min_element_size_mm` を画面が送り返しても
+    # `_resolve_element_size` が「下限より細かい」と断らないため)。分割数は変わらないので要素数も変わらない。
+    lower = _snap_to_grid(lo, hi, _min_element_size(lo, hi))
 
     return {
         "max_element_size_mm": upper,
@@ -548,7 +564,8 @@ def _resolution_steps(lo, hi, upper: float, lower: float) -> List[dict]:
     for index in range(count):
         # 最後の段は等比の丸めを使わず下限そのものに合わせる(端が届かないと、
         # 「いちばん細かい」が選べない目盛りになる)。
-        size = lower if index == count - 1 else upper * (ratio ** index)
+        # 各段も実格子の要素サイズへ揃える(画面に出す値と `derive` が作る格子を一致させる)。
+        size = lower if index == count - 1 else _snap_to_grid(lo, hi, upper * (ratio ** index))
         elements = _element_count(lo, hi, size)
         if elements in seen:
             continue
@@ -579,29 +596,38 @@ def _face_max_spacing_mm(cad_area_mm2: float) -> float:
     return math.sqrt(area) if area > 0.0 else float("nan")
 
 
-def _condition_bbox(doc: "Document") -> tuple:
-    """条件の外接直方体(保持ソリッド ∪ 条件面)。`design_space.condition_points` と同じ集合。
+def _condition_boxes(doc: "Document") -> List[tuple]:
+    """凸包の点群になるボディ(保持ソリッド ∪ 条件面が属するボディ)を文書の並びで返す。
 
+    要素は `(body_id, roles, kernel.bounding_box の戻り)`。`design_space.derive` はこの
+    **ボディ全体**の外接箱の頂点から凸包を起こす(条件面だけの箱ではない)。
     **除外ソリッドは入れない**(除外は塊から引くものであって、塊を広げる理由にはならない)。
-    面だけの bbox を OCCT から直に取るので、三角形分割には依存しない。
 
     **`doc.bbox_cache` を必ず渡す。** `resolution_limits` は目盛りを引くたびに呼ばれ、
     `bounding_box` は1形状あたり数十msかかる(`kernel.BoundingBoxCache`)。渡さないと
-    定常状態が 0.5ms から 145ms になる(2026-09-07実測)。条件面は毎回 `face_of` で
-    取り直すが、同じ面は `IsSame` で同一と見なされるので当たる。
+    定常状態が 0.5ms から 145ms になる(2026-09-07実測)。
     """
     from . import kernel
 
     setup = doc.optimize
-    cache = doc.bbox_cache
-    boxes = []
+    roles_of: Dict[str, List[str]] = {}
     for body_id in setup.preserve_bodies:
-        boxes.append(kernel.bounding_box(doc.get_body(body_id).shape, cache=cache))
-    for role in ("fixtures", "loads"):
+        roles_of.setdefault(body_id, []).append("keep")
+    for role, name in (("fixtures", "fixed"), ("loads", "load")):
         for condition in getattr(setup, role):
-            body = doc.get_body(condition["body"])
-            face = kernel.face_of(body.shape, int(condition["index"]))
-            boxes.append(kernel.bounding_box(face, cache=cache))
+            roles_of.setdefault(condition["body"], []).append(name)
+    out: List[tuple] = []
+    for body in doc.bodies:
+        if body.id not in roles_of:
+            continue
+        box = kernel.bounding_box(body.shape, cache=doc.bbox_cache)
+        out.append((body.id, tuple(dict.fromkeys(roles_of[body.id])), box))
+    return out
+
+
+def _condition_bbox(doc: "Document") -> tuple:
+    """条件の外接直方体(`_condition_boxes` の箱の和)。塊の格子の外枠はこれに余白を足したもの。"""
+    boxes = [box for _body_id, _roles, box in _condition_boxes(doc)]
     if not boxes:
         raise OptimizeInputError("条件が1つも無いので外接直方体が取れない")
     lo = [min(box["min"][axis] for box in boxes) for axis in range(3)]
@@ -609,11 +635,37 @@ def _condition_bbox(doc: "Document") -> tuple:
     return lo, hi
 
 
-def _element_count(lo, hi, spacing: float) -> int:
-    """`derive` が起こす格子の要素数(余白 0.25 と `grid_for_bbox` のパッド1を織り込む)。
+def _box_longest_edge(lo, hi) -> float:
+    """`derive` が格子を起こす外枠(点群の外接箱 + 余白)の最長辺[mm]。"""
+    from .topopt import design_space as ds
 
-    **`design_space.DEFAULT_MARGIN_RATIO` と `voxelize.DEFAULT_PAD` をここで再計算している**
-    ——1回の導出も走らせずに数を出すためで、実際の格子は `derive` が作る。
+    longest = max(float(hi[a]) - float(lo[a]) for a in range(3))
+    return longest * (1.0 + 2.0 * ds.DEFAULT_MARGIN_RATIO)
+
+
+def _snap_to_grid(lo, hi, spacing: float) -> float:
+    """要求した要素サイズ以下で、`derive` の丸め(`round(最長辺 / spacing)`)がそのまま再現する値。
+
+    `derive` は `n = round(最長辺 / spacing)`、実 spacing = `最長辺 / n` なので、要求値より
+    大きくなりうる。1つ多い分割数に倒せば実 spacing は要求値以下になり、しかも
+    `round(最長辺 / 実spacing)` がその分割数に戻る(層をまたぐ契約: `design_space.derive`)。
+    """
+    box_long = _box_longest_edge(lo, hi)
+    if not box_long > 0.0 or not spacing > 0.0:
+        return float(spacing)
+    n = max(1, int(round(box_long / float(spacing))))
+    if box_long / n > float(spacing) * (1.0 + 1e-12):
+        n += 1
+    return box_long / n
+
+
+def _element_count(lo, hi, spacing: float) -> int:
+    """`derive(spacing=...)` が実際に起こす格子の要素数。
+
+    **`derive` の規則をここで再計算している**(余白 `design_space.DEFAULT_MARGIN_RATIO`、
+    分割数 `round(外枠の最長辺 / spacing)`、`grid_for_bbox` の `ceil(辺長 / 実spacing) + 2*パッド`)
+    —— 1回の導出も走らせずに数を出すためで、実際の格子は `derive` が作る。要求した要素サイズ
+    そのままではなく**丸めた後の実 spacing** で数えるので、梯子の要素数が実格子と一致する。
     """
     from .topopt import design_space as ds
     from .topopt import voxelize as vx
@@ -621,10 +673,13 @@ def _element_count(lo, hi, spacing: float) -> int:
     extent = [float(hi[a]) - float(lo[a]) for a in range(3)]
     longest = max(extent)
     margin = ds.DEFAULT_MARGIN_RATIO * longest
+    box_long = longest + 2.0 * margin
+    n_long = max(1, int(round(box_long / float(spacing))))
+    real = box_long / n_long
     total = 1
     for axis in range(3):
         length = extent[axis] + 2.0 * margin
-        total *= max(int(math.ceil(length / spacing - 1e-9)), 1) + 2 * vx.DEFAULT_PAD
+        total *= max(int(math.ceil(length / real - 1e-9)), 1) + 2 * vx.DEFAULT_PAD
     return total
 
 
@@ -659,30 +714,23 @@ def estimate_seconds(
     max_iter: Optional[int] = None,
     evaluations: Optional[int] = None,
 ) -> dict:
-    """格子要素数と反復数から、予備計算1回と材料量探索の所要時間を見積もる。
+    """格子要素数と反復数から材料量探索の所要時間を見積もる。
 
-    候補範囲の要素数は割合・回廊・材料量の3条件で決まるため、事前見積もりは
-    その外側の箱の要素数を使う。seconds_reference は探索全体で1回だけ加算する。
+    塊は探索の前に1回だけ導出する(SIMP は回さない)ので、費用は候補ごとの SIMP だけ。
+    塊は箱より小さいが、事前見積もりは外側の箱の要素数で上振れ側に置く。
     係数は機械・解像度・熱状態に依存する概算値。根拠は docs/TOPOPT_SPEED.md。"""
-    from .topopt import design_space as ds
     from .topopt import safety_loop
 
     iters = int(safety_loop.DEFAULT_MAX_ITER if max_iter is None else max_iter)
     evals = int(TYPICAL_EVALUATIONS if evaluations is None else evaluations)
     one = iters * int(element_count) * SECONDS_PER_ELEMENT_ITERATION
-    reference = (
-        ds.REFERENCE_MAX_ITER
-        * int(element_count)
-        * SECONDS_PER_ELEMENT_ITERATION
-    )
     return {
         "element_count": int(element_count),
         "max_iter": iters,
         "evaluations": evals,
         "seconds_per_evaluation": one,
-        "seconds_reference": reference,
-        "seconds_typical": reference + one * evals,
-        "seconds_worst": reference + one * int(safety_loop.DEFAULT_MAX_EVALUATIONS),
+        "seconds_typical": one * evals,
+        "seconds_worst": one * int(safety_loop.DEFAULT_MAX_EVALUATIONS),
         # **予測ではない**。この2つを画面に出すときは幅であることを添えること。
         "accuracy": "order-of-magnitude (x2〜x3)",
     }
@@ -889,8 +937,10 @@ def _run(
     実体をここから外へ出さない(出すと配れる形が壊れ、キャッシュの持ち主も増える)。
 
     **デバッグ表示**は `debug(event: dict)` + `debug_kinds`(`DEBUG_KINDS` の部分集合)。
-    **頼まれたときだけ**塊(`space`)・面アンカーの節点(`anchors`)・平滑化前の密度場
-    (`rho`)を配る —— 画面の `?debug=space` / `?debug=anchors` / `?voxel=1` の材料である。
+    **頼まれたときだけ**塊(`space`)・面アンカーの節点(`anchors`)を導出直後に1回
+    (`stage="derive"`)、平滑化前の密度場(`rho`)を探索の後に1回(`stage="final"`)配る ——
+    画面の `?debug=space` / `?debug=anchors` / `?voxel=1` の材料である。塊は探索を通して
+    1つなので、最初と最後で違う塊を出すことはない。
     頼まれなければ配列を1本も作らないので、既定の実行の費用は1ビットも増えない。
     **戻り値には入れない**(素の値だけという契約を保つのと、結果メッセージが数MBに
     膨らむのを避けるため)。中身は `_DebugSink` の各メソッド、座標はワールドmm。
@@ -903,8 +953,8 @@ def _run(
     失敗は例外で上がる。**握り潰さないこと** —— `OptimizeInputError`(条件が足りない・
     この版で扱えない)/ `FaceMappingError`(面添字の対応が壊れている。**RuntimeError 派生**)/
     `OptimizeCancelled`(中断)と、下の層からの `design_space.DesignSpaceDisconnectedError`
-    (拘束と荷重がつながっていない)/ `DesignSpaceTooSmallError` /
-    `design_space.ReferenceRunConditionFacesEmptyError` /
+    (全条件を含む連結成分が無い)/ `DesignSpaceTooSmallError` / `DesignSpaceConflictError`
+    (保持と除外が重なっている)/ `DesignSpaceGeometryError`(凸包が起こせない)/
     `safety_loop.SafetyTargetError`(目標安全率に届かない)/
     `safety_loop.ConditionFacesEmptyError` はどれも
     「利用者が次に何をすればよいか」を文面に持っている。
@@ -916,7 +966,11 @@ def _run(
     opts = options or OptimizeOptions()
     bundle = build_conditions(doc)
     limits = resolution_limits(doc, rmin_mm=opts.rmin_mm)
-    spacing = _resolve_element_size(limits, opts.element_size_mm)
+    # 利用者が梯子の外の値を渡しても、`derive` が実際に作る格子の要素サイズ(要求値以下)に揃える。
+    # 梯子の値は既にその形なので変わらない。
+    spacing = _snap_to_grid(
+        limits["bbox_min"], limits["bbox_max"], _resolve_element_size(limits, opts.element_size_mm)
+    )
 
     from .topopt import trace
     trace.snapshot('resolved-conditions', bundle=bundle, limits=limits, spacing=spacing,
@@ -926,28 +980,18 @@ def _run(
     dbg = _DebugSink(debug, debug_kinds)
     pump.emit(phase="prepare", message=f"要素サイズ {spacing:.4g} mm で塊を導出する")
 
-    derivation_kwargs: dict = {"spacing": spacing}
-
-    # **測るための導出を1回だけ先に回す。** 材料量の探索範囲は呼び出し側が決める契約
-    # (`20260904-1437`)なので、塊の容量と保持ソリッドが占める体積を実際に測る必要がある。
-    # ここだけ **`derivation="bbox"`(案1)を名指しする** —— 既定の連続値保持は
-    # `material_mm3` を要求する(= 量を決めるために量が要る)ので測る道具に使えない。
-    # 案1は材料量を受け取らず、しかも**既定の塊を必ず含む**(連続値保持は案1の塊から順位で
-    # 切り出す部分集合)ので、容量の上界としてちょうどよい。格子も**同一**である
-    # (どちらも同じ `derive(conditions, spacing=...)` から起きる)ので、ここで作った面
-    # アンカーの表と塊で、条件面と保持/除外の点検までできる。
-    # **案1を消すときはここも一緒に直すこと。**
-    space = ds.derive(bundle.conditions, **derivation_kwargs)
+    # **塊はここで1回だけ導出し、探索の全候補がこの `space` を使う。** 材料量の探索範囲は
+    # 呼び出し側が決める契約(`20260904-1437`)なので、塊の容量と保持ソリッドが占める体積を
+    # ここで測る。導出は材料量を受け取らないので「量を決めるために量が要る」堂々巡りは無い。
+    space = ds.derive(bundle.conditions, spacing=spacing)
     pump.check()
     pump.emit(
         phase="derive",
         message=f"塊 {space.element_count} 要素(格子 {space.grid.shape})",
         design_elements=space.element_count,
     )
-    # **早い段でも1度配る。** ここは実行ボタンから数秒で通る点で、`?debug=space` /
-    # `?debug=anchors` を付けた人はここで塊とアンカーを見られる(最適化の数十秒〜数分を
-    # 待たずに「塊が変」と分かる)。**これは案1(bbox)の塊であって本番(連続値保持)ではない**ので
-    # `stage="derive"` を付けて区別する —— 本番の塊は下で `stage="final"` として配り直す。
+    # **塊とアンカーはここで1回だけ配る**(`?debug=space` / `?debug=anchors`)。探索の全候補が
+    # 同じ塊を使うので、最後に別の塊を配り直すことはない —— 最後に届くのは密度場 `rho` だけ。
     dbg.space("derive", space)
     dbg.anchors("derive", space)
 
@@ -965,12 +1009,10 @@ def _run(
         "reactions": [],
     }
 
-    # **条件面が本番の解像度で空になっていないか。** ここは bbox(案1)で測った表を見る ——
-    # 連続値保持の参照 run はこのあと `safety_loop` が回すので、本番解像度の空は
-    # `ReferenceRunConditionFacesEmptyError` / `ConditionFacesEmptyError` 側で落ちる。
-    # bbox 導出の表から自分で見る(`assert_faces_connected` は
-    # 空のときに判定を降りるだけで、上へは伝えない)。運び方は `20260904-1556` と同じ ——
-    # 診断を戻り値へ積み、1文の警告を付け、`simp` は呼ばずに早期return。
+    # **条件面が本番の解像度で空になっていないか。** 導出が作った面アンカーの表から自分で見る
+    # (`design_space.connect_conditions` は空のときに判定を降りるだけで、上へは伝えない)。
+    # 運び方は `20260904-1556` と同じ —— 診断を戻り値へ積み、1文の警告を付け、`simp` は
+    # 呼ばずに早期return。
     empty_faces = _empty_condition_faces(space)
     if empty_faces:
         from .topopt import anchor as an
@@ -1037,7 +1079,7 @@ def _run(
     )
 
     result = safety_loop.solve_for_safety_factor(
-        bundle.conditions,
+        space,
         target_safety_factor=float(opts.target_safety_factor),
         material_min_mm3=material_min,
         material_max_mm3=material_max,
@@ -1050,16 +1092,15 @@ def _run(
             else opts.max_evaluations
         ),
         forces=bundle.forces,
-        derivation_kwargs=derivation_kwargs,
+        # **最小部材幅の入力は探索へ明示的に渡す。** 落とすと `run_topopt` が既定の半径
+        # (`simp.DEFAULT_RMIN` 要素)で回り、画面で入れた値が黙って効かなくなる。
+        rmin_mm=opts.rmin_mm,
         progress=pump.on_search_step,
         run_progress=pump.on_iteration,
     )
     pump.check()
 
-    # **本番の塊(連続値保持)と、平滑化する前の密度場。** ここが `?debug=space` / `?voxel=1` の正で、
-    # 上の `stage="derive"` は「実行ボタンからすぐ見える速報」でしかない。
-    dbg.space("final", result.space)
-    dbg.anchors("final", result.space)
+    # 平滑化する前の密度場(`?voxel=1`)。塊は探索の前に配ったものと同じ(`result.space is space`)。
     if result.run is not None and result.run.get("result") is not None:
         dbg.rho("final", result.space.grid, result.run["result"].rho)
 
@@ -1176,10 +1217,8 @@ def _check_anchor_centroids(doc: "Document", space) -> dict:
 def _empty_condition_faces(space) -> List[dict]:
     """本番解像度で拘束面・荷重面のアンカーが空になっていないか(`20260904-1556` と同じ形)。
 
-    `DesignSpace.table` は導出が作った**本番の格子の**面アンカーの表である
-    (同じ格子で参照 run や本番 solve を重ねるとき、表を2度作らないために持たせてある)。
-    無ければ空リストを返す ——
-    その場合は `run_topopt` の入口層が同じ診断を出す。
+    `DesignSpace.table` は導出が作った**本番の格子の**面アンカーの表である。
+    無ければ空リストを返す —— その場合は `run_topopt` の入口層が同じ診断を出す。
     """
     table = getattr(space, "table", None)
     if table is None:

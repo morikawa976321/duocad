@@ -575,8 +575,8 @@
   }
 
   /**
-   * デバッグ配信が届いた。**同じ `kind` が2回来る**(`stage: 'derive'` の速報 →
-   * `stage: 'final'` の本番)ので、後から来たほうで置き換える。
+   * デバッグ配信が届いた。塊と面アンカーは `stage: 'derive'` で1回、密度場は `stage: 'final'` で
+   * 1回届く。同じ `kind` が来たら後から来たほうで置き換える。
    */
   function handleOptimizeDebug(payload: OptimizeDebugPayload): void {
     if (payload.kind === 'space') optimizeDebugSpace = payload

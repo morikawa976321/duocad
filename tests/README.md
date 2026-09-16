@@ -1205,8 +1205,9 @@ Session.optimize_conditions() / optimize_resolution(rmin_mm) / run_optimization(
   importは関数の中）。`scipy` は `duocad/view.py` が既に読んでいるので指標にならない。
 - `duocad/topopt/safety_loop.py` 側で固定しているもの: 本番解像度で条件面が空なら
   `ConditionFacesEmptyError`（**生の `AttributeError` ではない**）／`run_progress` が
-  `run_topopt` の `progress` へ素通しされる／`keep_model=True` が渡る／候補材料量が
-  `derive_from_reference(material_mm3=...)` へ届く。
+  `run_topopt` の `progress` へ素通しされる／`keep_model=True` が渡る／渡した塊そのもの・候補材料量・
+  `rmin_mm` が `run_topopt` へ届く／探索は導出を呼ばず、戻り値の塊は渡したものそのもの。
+  塊の導出そのもの（固定凸包・接続・記録）は `tests/test_design_space.py`。
 
 ## 回帰ガード（`test_m2_regressions.py` / `test_m3_regressions.py`）
 

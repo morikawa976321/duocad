@@ -8,7 +8,7 @@
 | 何が | どこにあるか |
 |---|---|
 | 探索の契約・例外・停止条件 | `duocad/topopt/safety_loop.py` の docstring、[TOPOPT.md](TOPOPT.md)「安全率を入力に、材料量を探索する外側ループ」 |
-| 1回の評価の中身 | `safety_loop._evaluate` → `derive_from_reference` → `run_topopt` → `stress.evaluate` |
+| 1回の評価の中身 | `safety_loop._evaluate` → `run_topopt`(固定した塊) → `stress.evaluate` |
 | **SIMP 1反復の秒数内訳**（塊を小さくしても下がらない理由） | [TOPOPT_SIMP_ITER_BREAKDOWN.md](TOPOPT_SIMP_ITER_BREAKDOWN.md) |
 | 予想時間の式 | `duocad/optimize_run.py` の `estimate_seconds()` |
 | **本書** | 短縮の候補・アルゴリズム改善・実装順 |
@@ -22,21 +22,19 @@
 
 ```
 optimize_run.run()
-  ├─ 事前チェック（案1 bbox 導出・条件面・保持/除外） … 数秒未満
+  ├─ 塊の導出（固定凸包・1回。SIMP は回さない）と点検 … 数秒未満
   ├─ safety_loop
-  │    ├─ 参照 run（1回・10反復）           … 全体の ~4%
-  │    └─ 材料量探索（典型6評価 × 40反復）   … 全体の ~96%
-  └─ メッシュ化 + add_mesh_body              … 数秒未満
+  │    └─ 材料量探索（典型6評価 × 40反復）   … ほぼ全部
+  └─ 平滑化 + ブーリアン + add_solid_body     … 数秒〜
 ```
 
 `estimate_seconds()` のモデル（`optimize_run.py`）:
 
 - 1評価 ≒ `DEFAULT_MAX_ITER`(40) × 格子要素数 × 係数
-- 参照 run ≒ `REFERENCE_MAX_ITER`(10) × 格子要素数 × 係数
-- 典型合計 ≒ 参照 + 6 × 1評価（`TYPICAL_EVALUATIONS = 6`）
+- 典型合計 ≒ 6 × 1評価（`TYPICAL_EVALUATIONS = 6`。2026-09-16 に参照 run の項を削除）
 
-実測。**題材と要素サイズを必ず添えて読むこと** —— 比率（参照 ~4% / 探索 ~96%）は解像度に
-依らないが、**秒数は解像度で1桁変わる**。
+実測（**2026-09-10・旧方式=参照 run あり**。固定凸包では参照 run の行が無くなる）。
+**題材と要素サイズを必ず添えて読むこと** —— **秒数は解像度で1桁変わる**。
 
 `hanger_bar_attachment.json` / **要素サイズ 5.333mm**（98,606要素）:
 
@@ -48,7 +46,7 @@ optimize_run.run()
 
 **本番の作業解像度は 2.4mm であり、そこでは合計が時間単位になる**（2026-09-10 実測）:
 
-| 題材 / 要素サイズ | 箱内要素 | 1反復 | 峰メモリ | 探索1回（参照+8〜10評価） |
+| 題材 / 要素サイズ | 箱内要素 | 1反復 | 峰メモリ | 探索1回（旧方式: 参照+8〜10評価） |
 |---|---|---|---|---|
 | `hanger_test` / **2.4mm**（検証用） | 322,384 | 45.5秒 | 8.3GB | **3〜5時間** |
 | `hanger_bar_attachment` / 2.4mm | 1,096,894 | 159.8秒 | 26.1GB | **8時間級** |
@@ -84,7 +82,7 @@ optimize_run.run()
 
 ### 手順（現状）
 
-1. **参照 run を1回**（連続値保持の ρ。探索全体で使い回す）
+1. **塊を1回導出**（固定凸包。探索全体で使い回す。SIMP は回さない。2026-09-16〜）
 2. **上端 `material_max` を評価** —— 届かなければ `SafetyTargetError`
 3. **下端 `material_min` を評価** —— ここで既に目標を満たせば **探索本体はスキップ**
 4. **探索本体** —— 次の候補材料量の決め方は `searcher`（既定は括り付きの補間。下記「実装済み A」。
@@ -102,7 +100,6 @@ optimize_run.run()
 | `rel_tol` | 0.08 | **技術的根拠は無い**。評価回数を2回減らすために選んだ（9→7回の実測。**2026-09-09 のコードでの値** —— 同じ題材の 2026-09-12 は6回） |
 | `max_evaluations` | 15 | 境界2 + 探索本体。8% までなら典型6回で足りる余裕 |
 | `DEFAULT_MAX_ITER` | 40 | 各評価の SIMP 反復数 |
-| `REFERENCE_MAX_ITER` | 10 | 参照 run のみ |
 
 ### 前提と罠
 
@@ -110,8 +107,8 @@ optimize_run.run()
   （plate の頭打ち、非連結など —— [TOPOPT.md](TOPOPT.md)「単調性を測る」）。
 - 評価後の **`safety_factor` は次候補の決定に使う**（既定の補間。`searcher="bisection"` では
   符号しか見ない）。
-- 塊は材料量で離散化される（連続値保持）。`rel_tol` より細かく詰めても意味が薄い、という
-  議論も [TOPOPT.md](TOPOPT.md) にある。
+- 塊は材料量によらず固定（2026-09-16〜）。「塊が材料量で離散化されるので `rel_tol` より細かく
+  詰めても意味が薄い」という [TOPOPT.md](TOPOPT.md) の議論は旧方式のもの。
 
 ---
 
@@ -317,6 +314,9 @@ Illinois の減衰は同じ端点が**2回続けて**据え置かれてから効
 
 ### B0. 事前境界クランプ（Smart Bounding）
 
+> 2026-09-16: 回廊(`reference.corridor` / `width_corridor_length`)そのものを削除した。以下は旧方式の記録。
+
+
 | 項目 | 内容 |
 |---|---|
 | 案 | 探索ループ前に `material_min` / `material_max` を参照 run の幾何からクランプ |
@@ -409,8 +409,7 @@ solve を**完全省略**すると代表応力・安全率がずれる |
 | 案 | 直前評価の `rho` または `u` を次 SIMP の初期値に |
 | 現状 | 毎回 `x = volfrac` 一様、`u = 0`（`simp.optimize`） |
 | 期待 | **20〜30%** / 評価 の可能性（MG ウォームは +6% 反復程度 —— [TOPOPT.md](TOPOPT.md)） |
-| リスク | **連続値保持（既定）** では全評価が同一 `reference.base.grid` を共有し、塊マスクは材料量増加で
-**単調に拡大**するため親和性が高い。案5（粗 run ごとに格子が変わる）とは状況が異なる |
+| リスク | **固定凸包（2026-09-16〜）** では全評価が同一の格子・同一の塊マスクを使うので親和性が高い。案5（粗 run ごとに格子が変わる）とは状況が異なる |
 | **MMA 移行後** | **この案は MMA だと不完全になる。** OC は `x` 以外の状態を持たないが、
 **MMA は反復をまたいで状態を持つ** —— 移動漸近線 `low`/`upp` と直前2点 `xold1`/`xold2`。
 `x` だけ引き継いで漸近線を初期状態（広い）に戻すと**最初の数反復が悪くスケールされ**、
@@ -431,11 +430,11 @@ solve を**完全省略**すると代表応力・安全率がずれる |
 
 | 案 | 理由 |
 |---|---|
-| 参照 run をさらに短縮 | 全体 **~4%**。10反復は被覆100%で既に最適（[TOPOPT.md](TOPOPT.md) 参照 run 表） |
+| 参照 run をさらに短縮 | **2026-09-16 に参照 run ごと削除**（塊は SIMP を回さず固定凸包で1回導出） |
 | `cg_rtol` 緩和 | **~16%** 程度。[TOPOPT.md](TOPOPT.md) は「誤差の範囲」で未着手 |
 | RAP / `splu` 並列 | **試して効かない**（[TOPOPT.md](TOPOPT.md) CPU並列化） |
 | スレッド数を総コアまで | 半コア付近が最良（[TOPOPT.md](TOPOPT.md) スレッド数） |
-| 塊固定（案c） | 導出 **0.4〜0.5秒/回** しか削れない。低材料で安全率 **4%ずれ** |
+| 塊固定（案c） | **2026-09-16 に固定凸包として採用。** 当時の「導出 0.4〜0.5秒/回 しか削れない・低材料で安全率 4%ずれ」は材料量に追従する塊との比較で、固定凸包の構造性能比較は別工程 |
 | 応力制約付き最適化（1回で解く） | **採らない**。ただし **MMA 移行後は根拠が1つ減る**（下記） |
 
 **応力制約を採らない根拠の現状（2026-09-10 改訂）**: [TOPOPT.md](TOPOPT.md)
@@ -514,7 +513,7 @@ solve を**完全省略**すると代表応力・安全率がずれる |
 |---|---|
 | `duocad/topopt/safety_loop.py` | `solve_for_safety_factor`、探索本体、`_propose_material`、`_evaluate` |
 | `duocad/optimize_run.py` | `run()`、`estimate_seconds()`、`TYPICAL_EVALUATIONS` |
-| `duocad/topopt/design_space.py` | `derive_from_reference`、連続値保持、`build_reference` |
+| `duocad/topopt/design_space.py` | `derive`（固定凸包・1回）、`run_topopt` |
 | `topopt_checks/check_safety_loop.py` | 外側ループの受入検査（[7] 提案規則 / [8] 探索器の比較） |
 | `topopt_checks/measure_safety_search.py` | 探索器の実測（→ `duocad/topopt/output/safety_search.json`） |
 

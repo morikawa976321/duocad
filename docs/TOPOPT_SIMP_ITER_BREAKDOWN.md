@@ -16,7 +16,7 @@
 
 ## 現象
 
-`models/hanger_bar_attachment.json`・要素サイズ **2.4mm**・連続値保持（既定導出）で SIMP を回すと、
+`models/hanger_bar_attachment.json`・要素サイズ **2.4mm** で SIMP を回すと（2026-09-12 の実測。当時の既定導出は連続値保持。2026-09-16 からは固定凸包だが、格子が箱全体なのは同じ）、
 **材料量を下げて塊を小さくしても、1反復あたりの秒数は大きくは下がらない**。
 
 本番経路（`optimize_run.run()` → `safety_loop` → `run_topopt`）は `threads` を渡さないので、
@@ -111,7 +111,7 @@ simp.optimize() の for it in 1..max_iter:
 
 ### 1. 格子サイズは材料量と無関係
 
-連続値保持では、探索中のすべての評価が **同じ `reference.base.grid`**（案1の外接直方体）を使う。
+探索中のすべての評価が **同じ格子**（点群の外接箱+余白の外枠。固定凸包でも同じ）を使う。
 `void_mask` で塊の外を空要素にするだけで、**配列の形状は常に 78×138×109**。
 
 密度フィルタ `_filter_conv` は **常に全箱要素**に畳み込む。塊が 144k 要素でも 1.17M 箱の
@@ -178,10 +178,10 @@ OC 更新の二分探索（`while (l2-l1)/(l1+l2) > 1e-9`）の**各ステップ
 # 材料量スイープ（threads=1・各ケース80反復。数時間〜）
 .\.venv\Scripts\python.exe topopt_checks\measure_simp_convergence.py
 
-# 反復内訳（参照 run 構築あり。threads=1 なら参照だけ約80分）
+# 反復内訳（固定凸包の塊を1回導出。SIMP は候補分だけ）
 .\.venv\Scripts\python.exe topopt_checks\profile_simp_iter_breakdown.py --threads 1
 
-# 案1全塊・2反復だけの煙テスト（threads 既定=7）
+# 2反復だけの煙テスト（threads 既定=7）
 .\.venv\Scripts\python.exe topopt_checks\profile_simp_iter_breakdown.py --smoke
 ```
 
@@ -192,7 +192,7 @@ OC 更新の二分探索（`while (l2-l1)/(l1+l2) > 1e-9`）の**各ステップ
 | ファイル | 内容 |
 |---|---|
 | `duocad/topopt/simp.py` | `optimize` 反復ループ、`Model.solve`、`collect_solve_stats`、`_filter_conv`、`_mg_setup` |
-| `duocad/topopt/design_space.py` | `derive_from_reference`（格子共有）、`run_topopt` |
+| `duocad/topopt/design_space.py` | `derive`（固定凸包・格子は1回）、`run_topopt` |
 | `duocad/topopt/anchor.py` | `void`/`solid` マスクの組み立て → `simp.optimize` |
 | `duocad/optimize_run.py` | `SECONDS_PER_ELEMENT_ITERATION`、メモリ実測コメント（2.4mm 塊 172,310 要素） |
 | `topopt_checks/measure_simp_convergence.py` | hanger 材料量スイープ |

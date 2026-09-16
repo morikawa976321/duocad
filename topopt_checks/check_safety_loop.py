@@ -57,23 +57,34 @@ def check(name: str, ok: bool, detail: str) -> None:
 
 
 CFG = bench.SAFETY_LOOP
-# **既定の導出(連続値保持)の引数だけを渡す。** 案5の `coarse_*` を混ぜると、素通しの契約
-# どおり `derive_from_reference` が `TypeError` で落ちる(黙って捨てない)。
-DERIVATION_KW = dict(elements_long_axis=CFG["elements_long_axis"])
 
-# 実測(bracket, この解像度, 2026-09-12)で容量の 20%/45%/70% が sf 3,656.9/5,386.9/6,026.3、
-# 括りの下端(15%)が 1,832.6。**5,500 は下端と上端の内側**なので探索本体に入り、
-# かつ端に張り付かない。
-ENTRY_TARGET = 5500.0
+# 実測(bracket, この解像度, 固定凸包の塊, 2026-09-16)で容量の 20%/45%/70% が
+# 余白 0.20・距離の膨張(既定)で sf 1,644.92/2,453.62/3,671.88
+# (余白 0.20・平面オフセットでは 281.08/3,019.05/4,587.22、余白 0.25 では 899.95/4,414.88/5,475.18)。
+# **3,500 は下端(20%)と上端(70%)の内側**なので探索本体に入り、かつ端に張り付かない。
+# 余白 0.25 の試行では目標 3,000/3,500/5,000 で補間の評価回数が二分以下(6/7/6 対 7/7/6)、
+# 4,500 では1回多い(7 対 6) —— [8] は目標1点の回帰検査なので、その1点をここで選んである。
+ENTRY_TARGET = 3500.0
+# 探索範囲の下端(容量に対する比率)。**塊が小さくなった距離の膨張では 15% が保持体積の床
+# `MATERIAL_MIN_RATIO` を割り、下端の評価が too_little になって [5](下端で既に目標を満たす)が
+# 成立しなくなった**ので 0.15 → 0.20(2026-09-16)。[2] の最小点と同じ。
+MATERIAL_MIN_FRACTION = 0.20
 
 
-def _bracket_capacity() -> tuple[ds.Conditions, float, float]:
-    """bracket(demo_conditions)の塊(案1)の容量[mm^3]。探索範囲を決めるのに使う。"""
-    cond = ds.demo_conditions()
-    fine = ds.derive(cond, elements_long_axis=CFG["elements_long_axis"])
-    capacity = fine.grid.element_volume * fine.element_count
-    solid = fine.grid.element_volume * int(fine.model.keep.sum())
-    return cond, capacity, solid
+_SPACE: dict = {}
+
+
+def _bracket_capacity() -> tuple[ds.DesignSpace, float, float]:
+    """bracket(demo_conditions)の固定した塊と、その容量・保持体積[mm^3](探索範囲を決めるのに使う)。
+
+    塊は製品経路と同じく**1回だけ導出して全検査で使い回す**。
+    """
+    if "space" not in _SPACE:
+        _SPACE["space"] = ds.derive(ds.demo_conditions(), elements_long_axis=CFG["elements_long_axis"])
+    space = _SPACE["space"]
+    capacity = space.grid.element_volume * space.element_count
+    solid = space.grid.element_volume * int(space.model.keep.sum())
+    return space, capacity, solid
 
 
 def check_wiring() -> None:
@@ -97,8 +108,7 @@ def check_wiring() -> None:
 
 def check_keep_model_wiring() -> None:
     print("\n[1] keep_model が2層に通っている")
-    cond, _capacity, _solid = _bracket_capacity()
-    space = ds.derive(cond, elements_long_axis=CFG["elements_long_axis"])
+    space, _capacity, _solid = _bracket_capacity()
     # **`stl_path` を明示する。** 既定(`output/design_space_case1.stl`)は
     # `check_design_space.py` [5] 自身の成果物なので、そこへ書くとこの検査を走らせるたびに
     # 他の検査の成果物を上書きしてしまう。
@@ -148,13 +158,13 @@ def check_keep_model_wiring() -> None:
 
 def check_monotonic_spotcheck() -> None:
     print("\n[2] 単調性のスポット確認(3点。フルの実測はdocs/TOPOPT.md)")
-    cond, capacity, _solid = _bracket_capacity()
+    space, capacity, _solid = _bracket_capacity()
     fracs = (0.20, 0.45, 0.70)
     safety_factors = []
     for frac in fracs:
         material = capacity * frac
-        space, run, report = sl._derive_and_run(
-            cond,
+        _space, run, report = sl._run_once(
+            space,
             material,
             allowable_mpa=sl.DEFAULT_ALLOWABLE_MPA,
             youngs_modulus_mpa=sl.DEFAULT_YOUNGS_MODULUS_MPA,
@@ -164,7 +174,6 @@ def check_monotonic_spotcheck() -> None:
             threads=None,
             rho_min=0.5,
             percentile=99.5,
-            derivation_kwargs=dict(DERIVATION_KW),
         )
         safety_factors.append(report.safety_factor)
         print(f"    material={material:.0f}mm^3 ({frac:.0%}) -> safety_factor={report.safety_factor:.3f}")
@@ -175,10 +184,10 @@ def check_monotonic_spotcheck() -> None:
     )
 
 
-def check_entry_point() -> tuple[ds.Conditions, float, float, "sl.SafetyLoopResult"]:
+def check_entry_point() -> tuple[ds.DesignSpace, float, float, "sl.SafetyLoopResult"]:
     print("\n[3] 入口が端から端まで動く")
-    cond, capacity, _solid = _bracket_capacity()
-    material_min = capacity * 0.15
+    space, capacity, _solid = _bracket_capacity()
+    material_min = capacity * MATERIAL_MIN_FRACTION
     # **2026-09-05に上端を 0.75 → 0.70 へ下げた。** `simp.DEFAULT_RMIN` が 1.5 → 2.5 に
     # なり、**塊の縁でのフィルタの目減りが増えて到達できる材料量の上限が下がった**
     # (この解像度では容量の約72%が上限。0.75 はこの解像度で
@@ -187,12 +196,16 @@ def check_entry_point() -> tuple[ds.Conditions, float, float, "sl.SafetyLoopResu
     material_max = capacity * 0.70
     target = ENTRY_TARGET
     result = sl.solve_for_safety_factor(
-        cond,
+        space,
         target_safety_factor=target,
         material_min_mm3=material_min,
         material_max_mm3=material_max,
         max_iter=CFG["max_iter"],
-        derivation_kwargs=dict(DERIVATION_KW),
+    )
+    check(
+        "戻り値の塊は渡した塊そのもの(探索の中で導出し直していない)",
+        result.space is space and result.space.mask_hash == space.stats["mask_hash"],
+        f"same object={result.space is space}",
     )
     check(
         "達成した最小安全率が目標以上",
@@ -223,8 +236,8 @@ def check_entry_point() -> tuple[ds.Conditions, float, float, "sl.SafetyLoopResu
     # 「目標以上を満たす最小」であること: 収束幅の外側(区間をもう半分削った側)まで材料を
     # 削ると目標を割ることを確かめる(=最小の側に張り付いていること)。
     lower = result.material_mm3 * (1.0 - 3.0 * sl.DEFAULT_REL_TOL)
-    _space, _run, lower_report = sl._derive_and_run(
-        cond,
+    _space, _run, lower_report = sl._run_once(
+        space,
         lower,
         allowable_mpa=sl.DEFAULT_ALLOWABLE_MPA,
         youngs_modulus_mpa=sl.DEFAULT_YOUNGS_MODULUS_MPA,
@@ -234,27 +247,25 @@ def check_entry_point() -> tuple[ds.Conditions, float, float, "sl.SafetyLoopResu
         threads=None,
         rho_min=0.5,
         percentile=99.5,
-        derivation_kwargs=dict(DERIVATION_KW),
     )
     check(
         "採用した材料量よりさらに削ると目標を割る(=最小の側)",
         lower_report.safety_factor < target,
         f"material={lower:.0f} -> sf={lower_report.safety_factor:.4f} < {target}",
     )
-    return cond, material_min, material_max, result
+    return space, material_min, material_max, result
 
 
-def check_infeasible(cond: ds.Conditions, material_min: float, material_max: float) -> None:
+def check_infeasible(space: ds.DesignSpace, material_min: float, material_max: float) -> None:
     print("\n[4] 達成不能なら例外(どちら側にどれだけ足りないか名指し)")
     try:
         sl.solve_for_safety_factor(
-            cond,
+            space,
             target_safety_factor=1.0e9,
             material_min_mm3=material_min,
             material_max_mm3=material_max,
             max_iter=CFG["max_iter"],
-            derivation_kwargs=dict(DERIVATION_KW),
-        )
+            )
         raised = None
     except sl.SafetyTargetError as exc:
         raised = exc
@@ -275,18 +286,17 @@ def check_infeasible(cond: ds.Conditions, material_min: float, material_max: flo
     over_capacity = capacity * 0.999  # 99.9%は罠(0142)なのでその手前、だが容量近傍は above_capacity を踏みやすい
     try:
         sl.solve_for_safety_factor(
-            cond,
+            space,
             target_safety_factor=5500.0,
             material_min_mm3=material_min,
             material_max_mm3=over_capacity,
             max_iter=CFG["max_iter"],
-            derivation_kwargs=dict(DERIVATION_KW),
-        )
+            )
         raised2 = None
     except sl.SafetyTargetError as exc:
         raised2 = exc
     check(
-        "material_max 自体が導出できない場合は invalid_bound",
+        "material_max 自体が評価できない場合は invalid_bound",
         raised2 is not None and raised2.side == "invalid_bound" and raised2.bound == "material_max_mm3",
         f"{raised2.side if raised2 else '(例外が出なかった)'} / bound={raised2.bound if raised2 else None}",
     )
@@ -297,15 +307,14 @@ def check_infeasible(cond: ds.Conditions, material_min: float, material_max: flo
     )
 
 
-def check_already_met(cond: ds.Conditions, material_min: float, material_max: float) -> None:
+def check_already_met(space: ds.DesignSpace, material_min: float, material_max: float) -> None:
     print("\n[5] 下端で既に目標を満たすときは探索しない")
     result = sl.solve_for_safety_factor(
-        cond,
+        space,
         target_safety_factor=1.0,
         material_min_mm3=material_min,
         material_max_mm3=material_max,
         max_iter=CFG["max_iter"],
-        derivation_kwargs=dict(DERIVATION_KW),
     )
     check(
         "material_min_mm3 がそのまま採用される",
@@ -316,10 +325,10 @@ def check_already_met(cond: ds.Conditions, material_min: float, material_max: fl
     check("収束フラグは True", result.converged, f"{result.converged}")
 
 
-def check_argument_validation(cond: ds.Conditions) -> None:
+def check_argument_validation(space: ds.DesignSpace) -> None:
     print("\n[6] 引数の検証")
     base = dict(
-        conditions=cond,
+        space=space,
         target_safety_factor=5.0,
         material_min_mm3=1000.0,
         material_max_mm3=2000.0,
@@ -419,19 +428,18 @@ def check_proposal_rules() -> None:
 
 
 def check_searcher_comparison(
-    cond: ds.Conditions,
+    space: ds.DesignSpace,
     material_min: float,
     material_max: float,
     illinois: "sl.SafetyLoopResult",
 ) -> None:
     print("\n[8] 探索器の比較(補間 対 二分。bracket 題材)")
     baseline = sl.solve_for_safety_factor(
-        cond,
+        space,
         target_safety_factor=ENTRY_TARGET,
         material_min_mm3=material_min,
         material_max_mm3=material_max,
         max_iter=CFG["max_iter"],
-        derivation_kwargs=dict(DERIVATION_KW),
         searcher="bisection",
     )
     fallbacks = [s.fallback_reason for s in illinois.history if s.fallback_reason]
@@ -482,12 +490,12 @@ def main() -> int:
     check_wiring()
     check_keep_model_wiring()
     check_monotonic_spotcheck()
-    cond, material_min, material_max, entry = check_entry_point()
-    check_infeasible(cond, material_min, material_max)
-    check_already_met(cond, material_min, material_max)
-    check_argument_validation(cond)
+    space, material_min, material_max, entry = check_entry_point()
+    check_infeasible(space, material_min, material_max)
+    check_already_met(space, material_min, material_max)
+    check_argument_validation(space)
     check_proposal_rules()
-    check_searcher_comparison(cond, material_min, material_max, entry)
+    check_searcher_comparison(space, material_min, material_max, entry)
 
     print("\n" + "=" * 72)
     if FAILURES:

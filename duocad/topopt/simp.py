@@ -29,7 +29,7 @@ class SolveResidualError(ValueError):
     別の型にしてあるのは、呼び出し側が**この失敗だけ**を他の `ValueError` と区別して
     扱えるようにするため —— 低密度で系が悪条件になっただけなら材料を増やせば直るが、
     `VolumeTargetError(side="above_capacity")` は増やすと悪化する(逆向きの手当てが要る)。
-    `design_space.build_reference` の取り直しがこの区別に依存している。
+    `safety_loop._evaluate` の分類(`"too_little"`)がこの区別に依存している。
     """
 
 

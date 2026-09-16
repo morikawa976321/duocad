@@ -840,8 +840,9 @@ export interface OptimizeDebugGrid {
 /**
  * 開発用の可視化1件(`duocad/optimize_run.py` の `_DebugSink`)。**頼んだときしか来ない。**
  *
- * `stage` は `'derive'`(実行直後に届く速報。案1=bboxの塊)か `'final'`(本番の連続値保持の塊と
- * 実際に解いた密度場)。**同じ `kind` が2回届く**ので、後から来たほうで置き換えること。
+ * `stage` は `'derive'`(導出直後に届く塊と面アンカー。探索の全候補がこの塊を使うので、塊は
+ * これ1回しか届かない)か `'final'`(探索の後に届く、実際に解いた密度場 `rho`)。
+ * 同じ `kind` が届いたら後から来たほうで置き換えること。
  *
  * `elements` は立っている要素の通し添字(C順 `i*(ny*nz) + j*nz + k`)。
  * `total` が本当の数、`shown` が配った数、`stride` が間引きの幅(1なら間引いていない)。

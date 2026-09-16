@@ -14,6 +14,9 @@
 | 崖そのものの表 | [TOPOPT.md](TOPOPT.md)「`p` を上げると SIMP が解けなくなる(下端の崖)」 |
 
 **環境**: Windows 11 / 14コア(`simp.PARALLEL_THREADS` = 7)/ 31.7GB。
+
+> **旧方式での実測(2026-09-12)。** 以下の塊は参照方式の `PICK_RATIO` で振ったもので、2026-09-16 に固定凸包へ移行してからは `measure_active_set.py` に `--pick` は無く、固定した塊(`design_space.derive` 1回)で回る。数値は取り直していない。
+
 **題材**: `models/hanger_bar_attachment.json`・要素 2.412mm・材料 70,634.5mm^3・`update="oc"`。
 塊は `PICK_RATIO` で振る。**塊は 2026-09-09 に作った参照 pickle
 (`output/simp_convergence_hanger_2.4mm_ref.pkl`)から切り出している** —— 要素数は

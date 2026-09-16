@@ -58,11 +58,11 @@
 
 | 項目 | 現在の既定値 | コード上の場所 | 根拠(下記の節) |
 |---|---|---|---|
-| 塊(設計空間)の余白比率 `margin_ratio` | **0.25** | `design_space.DEFAULT_MARGIN_RATIO` | 「余白比率をどう決めたか(既定 0.25)」 |
-| 連続値保持(既定の導出)の参照 run | 塊の容量に対する分率 **0.08** / **10** 反復 | `design_space.REFERENCE_MATERIAL_RATIO` / `REFERENCE_MAX_ITER` | 「連続値保持の既定値をどう決めたか(参照 容量の8%・10反復 / k 2.0 / 回廊)」 |
-| 連続値保持の摘み `p`(塊 ÷ 案1の塊) | **0.08** | `design_space.PICK_RATIO` | 「塊の導出を材料量から切り離し、幅で保証する(2026-09-11)」 |
-| 連続値保持の k_mat(材料が多いときの床。塊の容量 ÷ 材料量) | **2.0** | `design_space.K_MATERIAL` | 「連続値保持の既定値をどう決めたか(参照 容量の8%・10反復 / k 2.0 / 回廊)」 |
-| 参照が痩せすぎたときの取り直し | 回廊が塊の **0.40** 超で **1.6** 倍・最大 **4** 回 | `design_space.REFERENCE_MAX_CORRIDOR` / `REFERENCE_RETRY_GROWTH` / `REFERENCE_MAX_ATTEMPTS` | 同上 |
+| 塊(設計空間)の余白比率 `margin_ratio` | **0.20** | `design_space.DEFAULT_MARGIN_RATIO` | 「固定凸包による設計空間(2026-09-16)」(2026-09-16 本人判断で 0.25 → 0.20。0.25 の根拠は「余白比率をどう決めたか(既定 0.25)」) |
+| 塊の導出方式 | 固定凸包(保持・条件面のボディの外接箱の頂点の凸包から距離 `m` 以内 = 球とのミンコフスキー和)。材料量によらず1実行に1回 | `design_space.DERIVATION` | 「固定凸包による設計空間(2026-09-16)」 |
+| 材料量探索の収束幅 `rel_tol` / 評価回数の上限 | **0.08** / **15** | `safety_loop.DEFAULT_REL_TOL` / `DEFAULT_MAX_EVALUATIONS` | 「収束条件と回数上限をどう決めたか」 |
+| 候補ごとの SIMP 反復数 | **40** | `safety_loop.DEFAULT_MAX_ITER` | 同上 |
+| 許容応力(PETG の降伏応力 × 造形の低減係数) | **50** MPa × **0.8** | `safety_loop.PETG_YIELD_MPA` / `PRINT_DERATE` | 「許容応力の導出」 |
 | 密度フィルタ半径の既定 `rmin` | **2.5要素** | `simp.DEFAULT_RMIN` | 「1要素幅のフィラメントを消す既定値を選び直した(2026-09-05)」 |
 | 密度フィルタ半径の下限(床) | **1.5要素**(下回ると `simp.FilterRadiusError`) | `simp.MIN_RMIN` | 「1.5要素という下限の根拠」(**既定値 `DEFAULT_RMIN` とは別物**。床は「これより下は壊れる」、既定は「測って選んだ値」) |
 | 代表応力の規則 | ρ >= **0.5** の要素の上位 **99.5%** 点 | `stress.DEFAULT_RHO_MIN` / `DEFAULT_PERCENTILE` | 「代表応力の規則(黙って max にしない)」 |
@@ -254,6 +254,9 @@ volfrac 0.3、30反復。
 
 ## 4条件から塊(設計空間)を導出する — 案1: 外接直方体+余白(2026-09-04)
 
+> **案1の導出は 2026-09-16 に固定凸包へ置き換えた。** 余白比率 `DEFAULT_MARGIN_RATIO` と、点群の外接箱+余白を格子の外枠にする規則はそのまま固定凸包が引き継いでいる。現在の経路は「固定凸包による設計空間(2026-09-16)」。
+
+
 **2026-09-04に案5(下記「4条件から塊を導出する — 案5」)が既定になった。** **2026-09-09に
 連続値保持(下記「連続値保持の既定値をどう決めたか」)へ再び倒した。** この節は置き換えられたあとも、
 (a) `derive()` 自体は案5の内部や連続値保持の参照 run で「本番の塊(案1の箱)」を
@@ -424,6 +427,9 @@ x 最小面、荷重面=荷重側パッドの上面)。**要素サイズは固�
    なく上の実測にある。
 
 ## 4条件から塊を導出する — 案5: 粗く1回回して膨らませる(2026-09-04)
+
+> **旧方式の記録。** 2026-09-16 に設計空間の導出を固定凸包へ移行し、この節が扱う参照 run・順位・回廊・`PICK_RATIO` のコードは削除した。現在の経路は「固定凸包による設計空間(2026-09-16)」。数値は当時の実測として残す。
+
 
 **案5は 2026-09-10 に削除した(コードも受入検査も残っていない)。以下は当時の実測。**
 既定が案1 → 案5 → 連続値保持と動いた経緯の根拠としてこの節を残してある。
@@ -625,7 +631,7 @@ x 最小面、荷重面=荷重側パッドの上面)。**要素サイズは固�
 
 ### 既定をどちらにすべきか(2026-09-04に**案5へ倒した**。2026-09-09に**連続値保持へ再び倒した**)
 
-**現在は `design_space.derive_from_reference` を直接呼ぶ**。下記は2026-09-04に
+**現在は固定凸包(`design_space.derive`)を1回だけ呼ぶ(2026-09-16)**。下記は2026-09-04に
 案5を選んだ判断の記録である。
 
 **当時は案5**(`design_space.DEFAULT_DERIVATION = "coarse_run"`)。2026-09-04本人決定。
@@ -662,15 +668,14 @@ x 最小面、荷重面=荷重側パッドの上面)。**要素サイズは固�
 
 ### 現在の呼び出し経路
 
-方式名による振り分けは使わず、役割の違う関数を直接呼ぶ。
+方式名による振り分けは使わず、役割の違う関数を直接呼ぶ(2026-09-16 に固定凸包へ移行)。
 
 ```text
 optimize_run.run
-  ├─ design_space.derive                外接箱・容量・条件を点検
-  ├─ safety_loop.solve_for_safety_factor
-  │    ├─ design_space.build_reference  予備計算を1回だけ実行
-  │    └─ 材料量の候補ごとに
-  │         ├─ design_space.derive_from_reference  候補範囲を切り出す
+  ├─ design_space.derive                固定凸包の塊を1回導出(格子・設計マスク・保持マスク・面アンカー表)
+  ├─ 条件面・保持/除外の点検              空の条件面 / 表現できていない領域 → 早期return
+  ├─ safety_loop.solve_for_safety_factor(space, ...)
+  │    └─ 材料量の候補ごとに(**同じ space**)
   │         ├─ design_space.run_topopt → anchor.run_pipeline
   │         │    ├─ simp.optimize      密度を更新
   │         │    └─ mesh.build_surface  メッシュ化・STL出力
@@ -679,13 +684,12 @@ optimize_run.run
   └─ add_solid_body                     採用したCADを文書へ追加
 ```
 
-箱を作る `derive` は、予備計算の土台にも使う。`derive_from_reference` は
-共有した参照場から切り出すため、材料量の候補ごとに予備計算をやり直さない。
-候補範囲の要素数は `PICK_RATIO × 箱の要素数`・回廊・材料量の床の最大値。
-見積もりの予備計算回数も、計算側の `REFERENCE_MAX_ITER` を直接参照する。
-
-`check_design_space.py` [13] は、切り出した範囲・3つの床・参照の再利用・
-格子の不一致検出を検査する。方式選択表や呼び出し名そのものを固定する検査はない。
+塊は材料量を受け取らず、探索の中で導出し直さない(戻り値の `space` は渡したものそのもの)。
+材料量の上下限は固定した塊の保持量・容量から決め(`optimize_run._material_bounds`)、
+密度フィルタの半径 `rmin_mm` は `optimize_run` から探索へ明示的に渡る。
+所要時間の見積もり(`estimate_seconds`)に予備計算の項は無い。
+`check_design_space.py` [5]〜[11] が導出を、`check_trace.py` が「導出1回・全候補のマスク一致」を、
+`tests/test_design_space.py` が幾何と接続の単体を見る。詳細は「固定凸包による設計空間(2026-09-16)」。
 
 ### 案5でも消えていないもの
 
@@ -922,12 +926,10 @@ ValueError: 指定した面に格子節点が1つも付いていない: 面7(pla
   で、いままでどおり最後まで解く。
 - **変異検査**: `AnchorTable.condition_face_diagnoses` を「常に `[]` を返す」に差し替えると、
   `anchor.run_pipeline` が元の `_require_nodes` の `ValueError` に戻ることを確認(検出力)。
-- **14-6/14-7 は `build_reference`(連続値保持の参照 run)を見る**(2026-09-10に案5から付け替え)。
-  正常系で誤爆しないこと / 条件面が空のとき `ReferenceRunConditionFacesEmptyError` になり
-  `AttributeError` にならないこと / 例外に構造化された診断が乗り、文面が「要素サイズ」を
-  名指しすること / `derive_from_reference` 経由でも同じ例外になること / **変異検査**:
-  `run_topopt` の戻り値から `empty_condition_faces` を消すラッパーに差し替えると元の
-  `AttributeError` に戻ること。
+- **14-6/14-7(参照 run `build_reference` での空条件面)は 2026-09-16 に旧方式ごと削除した。**
+  固定凸包では探索の前に SIMP を回す段が無く、`run_topopt` の早期 return を受け取るのは
+  `safety_loop._run_once`(`ConditionFacesEmptyError`)だけになった(`tests/test_optimize_backend.py`
+  が見る)。
 
 ### `derive_from_coarse_run`(案5・退避経路)の粗い段も塞ぐ(2026-09-05・QAのfollow-up指摘)
 
@@ -1509,24 +1511,27 @@ RAP+splu が並列化されない **Amdahl 分**(スレッドを増やすほど�
 ### 口
 
 ```python
-import design_space as ds
-import safety_loop as sl
+from duocad.topopt import design_space as ds
+from duocad.topopt import safety_loop as sl
 
 cond = ds.demo_conditions()  # load_n(荷重の実際の大きさ[N])が新設フィールド。既定1.0
+space = ds.derive(cond, elements_long_axis=40)  # 塊は探索の前に1回だけ(2026-09-16〜。既定は本番相当で重い。検証は縮める)
 result = sl.solve_for_safety_factor(
-    cond,
+    space,
     target_safety_factor=2.0,
     material_min_mm3=60000.0,   # 呼び出し側が決める(このprobeは「常識的な材料量」を知らない)
     material_max_mm3=300000.0,
-    derivation_kwargs=dict(elements_long_axis=40),  # 既定は本番相当(重い)。検証は縮めて渡す
+    rmin_mm=None,               # 密度フィルタ半径[mm]。省くと simp.DEFAULT_RMIN(要素)
 )
 result.material_mm3      # 目標以上を満たす最小の材料量[mm^3]
 result.safety_factor      # そこでの最小安全率
 result.converged          # 材料量の相対幅が rel_tol 以内で止まったか
-result.space               # 採用した材料量で導出した DesignSpace
+result.space               # 渡した DesignSpace そのもの(全候補で共有)
 result.run                 # design_space.run_topopt() の戻り値
 result.report               # stress.SafetyReport
 ```
+
+(2026-09-16 までは第1引数が `Conditions` で、候補ごとに `derivation_kwargs` で塊を導出し直していた。)
 
 達成不能なら `SafetyTargetError`(`ValueError` の派生)。属性 `side` が
 `"unreachable_within_max_material"`(`material_max_mm3` まで使っても届かない。`shortfall` に
@@ -1534,6 +1539,9 @@ result.report               # stress.SafetyReport
 導出できない。元の例外を `__cause__` に連鎖)。**文面にどちら側にどれだけ足りないかが出る。**
 
 ### 塊が材料量に追従する問題 —— 案aを選んだ
+
+> **旧方式の記録。** 2026-09-16 に設計空間の導出を固定凸包へ移行し、この節が扱う参照 run・順位・回廊・`PICK_RATIO` のコードは削除した。現在の経路は「固定凸包による設計空間(2026-09-16)」。数値は当時の実測として残す。
+
 
 `20260904-1416` で塊の導出の既定が案5(2026-09-09に連続値保持へ再び倒した)になり、既定の塊は
 **材料量に応じて**変わる(案5は `coarse_material_mm3`、連続値保持は参照 ρ の順位で切り出す幅)。
@@ -2372,8 +2380,8 @@ uv pip install --python ./.venv/Scripts/python.exe scikit-image
 | `duocad/topopt/voxelize.py` | **B-repソリッド → 規則格子**(占有マスク・保持/障害物領域)。`duocad.kernel.tessellate` の三角形へ +z のレイを飛ばして巻き数で内外を決める。CLIとしても動く(`python -m duocad.topopt.voxelize --step <path> --n 100`) |
 | `duocad/topopt/anchor.py` | **CADの面 → 格子の節点の対応表(面アンカー)**。担当面積つき。固定/荷重/非設計領域の口と、端から端まで通す `run_pipeline`。CLIとしても動く(`python -m duocad.topopt.anchor --table-only --n 32`) |
 | `duocad/topopt/stress.py` | **密度場と変位 → 要素ごとの von Mises 応力・代表応力・最小安全率**(後処理)。無次元 → 実単位の換算則(`UnitScale`)を持つ。**最適化には手を入れない**(応力制約の定式化は採らない。「von Mises応力と最小安全率」) |
-| `duocad/topopt/design_space.py` | **4条件(保持ソリッド・除外ソリッド・拘束面・荷重面) → 塊(設計空間)**。案1(`derive`)=条件の点群の外接直方体+余白から除外ソリッドを引く / 連続値保持(`derive_from_reference`)=参照 ρ の順位で切り出す(本数は `PICK_RATIO` / 回廊 / 材料の3つの床の最大)。**どちらも塊の中で拘束と荷重がひと続きかを6近傍で確かめてから返す**(`DesignSpaceDisconnectedError`)。**連続値保持はさらに、全ての拘束面・保持ソリッド・荷重面が密度フィルタの筆(`rmin`)の通る太さで荷重と繋がることを、参照ごとに1回だけ二分探索で保証する**(`width_corridor_length`)。**既定は連続値保持**(入口は `derive_from_reference`)。CLIとしても動く(`python -m duocad.topopt.design_space` で `demo_conditions(0°)` の塊を導出して stats を出す。表を作る `--measure` / `--compare` は2026-09-05に削除した) |
-| `duocad/topopt/safety_loop.py` | **安全率を入力に、材料量(mm^3)を探索する外側ループ**(既定の探索器は括り付きの補間。`searcher` で二分にも戻せる)。`solve_for_safety_factor` が入口。目標以上を満たす最小の材料量を探す。塊は案a(候補材料量ごとに `derive_from_reference` を呼ぶ)。許容応力の導出(PETG × 低減係数)を持つ。**最適化そのものには手を入れない** |
+| `duocad/topopt/design_space.py` | **4条件(保持ソリッド・除外ソリッド・拘束面・荷重面)+ボディの外接箱 → 塊(設計空間)を1実行に1回**(`derive`。2026-09-16〜固定凸包)。保持・条件面のボディの外接箱の頂点の凸包から余白(`DEFAULT_MARGIN_RATIO` × 最長辺)以内の距離にあるセル(球とのミンコフスキー和。`distance_to_hull`)を取り、除外ソリッドを引き、保持ボディごと・条件面ごとに6近傍の接続を確かめて条件を含まない成分を落とす(`connect_seeds`。`DesignSpaceDisconnectedError` / `DesignSpaceConflictError` / `DesignSpaceGeometryError`)。塊は読み取り専用でハッシュ付き。材料量は受け取らない。CLIとしても動く(`python -m duocad.topopt.design_space` で `demo_conditions(0°)` の塊を導出して stats を出す) |
+| `duocad/topopt/safety_loop.py` | **安全率を入力に、材料量(mm^3)を探索する外側ループ**(既定の探索器は括り付きの補間。`searcher` で二分にも戻せる)。`solve_for_safety_factor(space, ...)` が入口。目標以上を満たす最小の材料量を探す。塊は呼び出し側が1回導出したものを全候補で共有する(探索の中で導出しない)。許容応力の導出(PETG × 低減係数)を持つ。**最適化そのものには手を入れない** |
 | `web/scripts/shoot-topopt.mjs` / `shoot_topopt_export.py` | **受入検査ではない。** 設定を2つ以上並べた比較画像を撮る道具。1コマンドで最適化・描画・ラベル焼きまで通し、面数に上限が無く、`--model` で実物の文書も撮れる。使い方は本書「比較スクリーンショットの撮影台」 |
 | `duocad/topopt/__init__.py` | パッケージの入口。**サブモジュールを import しない**(`import duocad` の費用に scipy / skimage を足さないため)。`OUTPUT_DIR`(= `duocad/topopt/output/`)だけを公開する |
 | `topopt_checks/check_simp.py` | **受入検査(合否そのもの)**。SIMP側を assert する |
@@ -2383,7 +2391,7 @@ uv pip install --python ./.venv/Scripts/python.exe scikit-image
 | `topopt_checks/check_absolute_volume.py` | **受入検査(合否そのもの)**。体積目標を絶対量(mm^3)で指定する口を assert する |
 | `topopt_checks/check_filter_radius.py` | **受入検査(合否そのもの)**。密度フィルタ半径を mm で指定する口を assert する |
 | `topopt_checks/check_stress.py` | **受入検査(合否そのもの)**。[0] B行列と局所節点順 + [1] 一様な棒の単軸引張(解析解) + [2] 片持ち梁の曲げの M·c/I への収束(3解像度) + [3] 実単位への換算則 + [4] 代表応力の規則 + [5] 安全率を assert する |
-| `topopt_checks/check_design_space.py` | **受入検査(合否そのもの)**。[1]-[4] 塊と面アンカーの対象ソリッドの分離 + [5]-[9] 案1の導出 + [10] 連結性ガード + [13] 既定の導出 + [14] 空の条件面の通知を assert する([11] 案5 は 2026-09-10 に削除) |
+| `topopt_checks/check_design_space.py` | **受入検査(合否そのもの)**。[1]-[4] 塊と面アンカーの対象ソリッドの分離 + [5]-[9] 固定凸包の導出(2026-09-16〜) + [10] 条件ごとの連結性 + [11] 実物の基準実行との突き合わせ(`--run <実行フォルダ>` を渡したときだけ) + [14] 空の条件面の通知を assert する([13] 参照場からの切り出し・[15] 幅つき回廊は 2026-09-16 に旧方式ごと削除) |
 | `topopt_checks/check_multigrid.py` | **受入検査(合否そのもの)**。幾何マルチグリッド前処理 |
 | `topopt_checks/check_parallel.py` | **受入検査(合否そのもの)**。CPU並列化 |
 | `topopt_checks/check_safety_loop.py` | **受入検査(合否そのもの)**。安全率の外側ループ |
@@ -3489,6 +3497,9 @@ CSC の (列, 行) は全体として昇順なので `列 * ndof + 行` を鍵�
 
 ## 連続値保持の既定値をどう決めたか(参照 容量の8%・10反復 / k 2.0 / 回廊)
 
+> **旧方式の記録。** 2026-09-16 に設計空間の導出を固定凸包へ移行し、この節が扱う参照 run・順位・回廊・`PICK_RATIO` のコードは削除した。現在の経路は「固定凸包による設計空間(2026-09-16)」。数値は当時の実測として残す。
+
+
 **この節の `k` は 2026-09-11 に役割が変わった**(塊の大きさそのものを決める倍率 → 材料が
 塊の容量に迫るときだけ効く床 `K_MATERIAL`。塊の大きさは `PICK_RATIO` が決める。下記
 「塊の導出を材料量から切り離し、幅で保証する(2026-09-11)」)。**下の実測は取り直していない**
@@ -3601,6 +3612,9 @@ CSC の (列, 行) は全体として昇順なので `列 * ndof + 行` を鍵�
 ---
 
 ## 塊の導出を材料量から切り離し、幅で保証する(2026-09-11)
+
+> **旧方式の記録。** 2026-09-16 に設計空間の導出を固定凸包へ移行し、この節が扱う参照 run・順位・回廊・`PICK_RATIO` のコードは削除した。現在の経路は「固定凸包による設計空間(2026-09-16)」。数値は当時の実測として残す。
+
 
 **塊の大きさを材料量から決めるのをやめ、案1に対する割合(`design_space.PICK_RATIO`)で持つ。**
 併せて連結性の保証を「拘束と荷重が6近傍で繋がる」から
@@ -3817,3 +3831,109 @@ N = max( round(p × 案1の要素数),        # 摘み。PICK_RATIO
 ```
 
 安全率探索の比較も荷重の大きさと方向をJSONから読み、材料量の範囲は製品と同じ規則で決める。
+
+## 固定凸包による設計空間(2026-09-16)
+
+**塊(設計空間)は材料量によらず1実行に1回だけ導出する。** 参照 SIMP・順位・回廊による切り出し
+(連続値保持)と、その設定(`PICK_RATIO` / `K_MATERIAL` / `REFERENCE_*`)・参照STL・専用の検査は
+削除した。計画は `docs/PLAN_FIXED_DESIGN_SPACE.md`。
+
+### 導出(`design_space.derive`)
+
+1. 保持ボディと、拘束面・荷重面が属するボディを重複なく集め、**ボディごとの B-rep の外接箱**
+   (`kernel.bounding_box` / `voxelize._shape_bbox`。どちらも `useTriangulation=False`)を取る
+   (`Conditions.bodies`。製品は `optimize_run.build_conditions` が文書から作る)。除外だけの
+   ボディ・無関係なボディ・以前の最適化結果は入れない。
+2. 外接箱の8頂点(重複除去)を `scipy.spatial.ConvexHull` にかけて凸包を起こす。点群の外接箱の
+   最長辺 `L` に対して余白 `m = 0.20 × L`(`DEFAULT_MARGIN_RATIO`。案1の 0.25 から 2026-09-16 本人判断で下げた)。
+3. 格子の外枠は点群の外接箱を各軸に `m` 広げた箱(`grid_for_bbox`。格子原点・spacing・パッド・
+   要素数上限の規則は従来のまま)。セル中心が外枠に入り、かつ**凸包から距離 `m` 以内**
+   (凸包と半径 `m` の球のミンコフスキー和。`distance_to_hull`: 内側は 0、外側は表面の三角形への
+   最短距離)のセルが候補。支持平面を `m` 押し出した多面体 `nᵢ·x + bᵢ <= m` は角・稜のぶん
+   これより大きく、距離の判定を絞る外側の当たりと診断(`cells.offset_polytope`)にだけ使う
+   (計画時は平面オフセットだったが、2026-09-16 本人判断で距離へ変えた)。
+4. 除外ソリッドの占有を引く。保持ボディを**1つずつ**格子に載せ、除外との衝突は
+   `DesignSpaceConflictError`(入力矛盾: セル中心が両方のソリッドの内側にある)、0セルは
+   取りこぼしとして名前付きで記録する(`optimize_run` が `unrepresented_regions` として返す)。
+5. 保持ボディごと・拘束面ごと・荷重面ごとを種にして 6近傍の連結成分を取り、**全条件が共通の
+   成分を持つ**ことを個別に確かめる(`connect_seeds`)。無ければ `DesignSpaceDisconnectedError`
+   (取り残された条件の名前入り。最大成分を選んで成功にしない)。条件を含まない成分だけ落とす。
+6. 確定マスクで `VoxelModel` を1回組み、`DesignSpace` を返す。`mask` は読み取り専用で、
+   `stats["mask_hash"]` に内容ハッシュを持つ。記録には `derive-input` / `derive-output` と
+   段階ごとのマスク `derive-masks`(外枠・凸包・除外・除外後・接続後)が1回だけ出る。
+
+点群の階数不足・非有限値・箱の裏返り・Qhull の失敗は `DesignSpaceGeometryError` / `ValueError`
+で、ランダム摂動や外接直方体への黙った退避は無い。6近傍の接続は「材料を置ける道がある」こと
+であって、部材幅や剛性の保証ではない。
+
+### 探索との接続
+
+`optimize_run._run` → `derive` 1回 → 条件面・保持/除外の点検 →
+`safety_loop.solve_for_safety_factor(space, ...)`(全候補で同じ `space`。戻り値の `space` は
+渡したものそのもの)→ 平滑化 → 保持 union・除外 cut。材料量の上下限は固定した塊の保持量・
+容量から決める(`MATERIAL_MIN_RATIO` / `MATERIAL_MAX_RATIO` は据え置き)。
+
+`rmin_mm` は `optimize_run` から探索へ明示的に渡る。**移行前は探索へ届いておらず、画面で
+最小部材幅を入れても SIMP は常に `simp.DEFAULT_RMIN` 要素で回っていた。** 渡すようにしたことで
+`resolution_limits` の上限が実格子と食い違う穴が出た(要求 4.0mm が分割数の丸めで実 4.038mm に
+なり、`rmin_mm / 実spacing` が床 1.5要素を割って `FilterRadiusError`)ので、上限は**実格子の要素
+サイズへ切り下げる**(`optimize_run._snap_to_grid`)。所要時間の見積もりに予備計算の項は無い。
+
+### 実測: hanger(基準実行 `20260914T133910-1d5adc93ee4d`・要素 2.4mm)
+
+`topopt_checks/check_design_space.py --run <実行フォルダ>` [11] が再現する。
+
+| 項目 | 余白 0.20・距離(現在の既定) | 余白 0.20・平面オフセット | 余白 0.25・平面オフセット(計画時の予備計測) |
+|---|---:|---:|---:|
+| 余白 | 43.6573 mm(最長辺 218.286 mm × 0.20) | 43.6573 mm | 54.5716 mm |
+| 格子 | 69 × 129 × 100、spacing 2.4063056 mm | 同左 | 78 × 138 × 109、spacing 2.4075694 mm |
+| 外枠 | 833,882 セル | 833,882 セル | 1,105,952 セル |
+| 平面オフセットの多面体 | 488,055 セル(外側の当たり) | 488,055 セル(塊) | 678,208 セル(塊) |
+| 凸包から距離 m 以内 | 446,719 セル | — | — |
+| 除外を引いた候補 | 367,390 セル | 389,213 セル | 535,254 セル |
+| 条件のない成分(落とした) | 無し(1成分) | 無し(1成分) | 12,830 セル(1成分) |
+| **最終設計空間** | **367,390 セル** | 389,213 セル | 522,424 セル |
+| 保持のはみ出し / 取りこぼし | 0 / 0(保持 4ボディ、条件面4枚が全部同じ成分) | 0 / 0 | 0 / 0 |
+| 前回の採用密度のうち空間外 | 0 mm³(ρ>0.5 のセルも 0) | 0 mm³ | 0 mm³ |
+| 導出時間(面アンカー表を含む) | 約2秒 | 約1.4秒 | 約1.4秒 |
+
+余白 0.25・平面オフセットでは予備計測(`analysis/convex_domain_proposal.json`)と同じ 522,424 セル・
+同じ成分を再現した(spacing だけ予備計測の 2.4075637 mm と6桁目で違う —— 予備計測は旧導出の
+格子(三角形分割の頂点の外接箱から起こした)をそのまま使い、製品は B-rep の外接箱(曲面のぶん約
+0.5µm 大きい)から外枠を起こすため)。**現在の既定(0.20・距離)の基準値は 367,390 セル**
+(`check_design_space.py` の `HANGER_EXPECTED`)。0.25 で条件を含まず落としていた 12,830 セルの
+孤立成分は、0.20 では凸包の外に出るので現れない。距離にすると多面体の角・稜のぶん 41,336 セル
+減る。前回の採用密度(0.25 の予備計測で確認した答え)はどの設定でも空間外 0 mm³ で、切っていない。
+画像は `topopt_checks/render_domain_comparison.py <実行フォルダ>`(外枠 − 除外 / 距離 m 以内 −
+除外 / 確定マスク)。
+
+**これは幾何の被覆の確認であって構造性能の確認ではない。** 凸包だから最適解を必ず含むという
+保証は置かない。広い基準空間との構造性能の比較(収束履歴・コンプライアンス・応力・外周付近の
+材料)は別工程で、本節には含めない。最終形状の水密・単一ソリッドは引き続き平滑化・ブーリアン後の
+責務である。
+
+### 受入検査の再校正
+
+`check_safety_loop.py` の bracket 題材は塊が変わった(外接直方体 → 余白付き凸包)ので、容量の
+20/45/70% の安全率が 3,656.9/5,386.9/6,026.3 から 余白 0.25 で 899.95/4,414.88/5,475.18、
+余白 0.20・平面オフセットで 281.08/3,019.05/4,587.22、**余白 0.20・距離(現在の既定)で
+1,644.92/2,453.62/3,671.88** に動き、`ENTRY_TARGET` を 5,500 → **3,500** にした(余白 0.25 の
+試行: 目標 3,000/3,500/5,000 で補間の評価回数が二分以下、4,500 では1回多い)。距離の膨張では塊が
+縮んで探索範囲の下端 15% が保持体積の床(`MATERIAL_MIN_RATIO`)を割ったので、検査の下端を
+**20%**(`MATERIAL_MIN_FRACTION`)にした。探索アルゴリズム(Illinois/二分・停止基準)・SIMP 更新則・
+応力評価は変えていない。
+
+### 削除したもの
+
+`Reference` / `ReferenceRunConditionFacesEmptyError` / `build_reference` / `reference_order` /
+`derive_from_reference` / `corridor_length` / `width_corridor_length` / `_model_for_mask` /
+`_condition_elements` / `condition_seeds` / `_erode` / `_dilate` / `condition_points` /
+`assert_load_path` / `assert_faces_connected`(条件ごとの接続確認 `connect_seeds` へ置換)/
+`REFERENCE_MATERIAL_RATIO` / `REFERENCE_MAX_ITER` / `REFERENCE_MAX_CORRIDOR` /
+`REFERENCE_RETRY_GROWTH` / `REFERENCE_MAX_ATTEMPTS` / `PICK_RATIO` / `K_MATERIAL` /
+`_REFERENCE_STL_PATH`(参照STL `output/design_space_reference.stl` も削除)/
+`safety_loop._build_reference` / `derivation_kwargs` / `estimate_seconds` の `seconds_reference` /
+`topopt_checks/explore_convex_domain.py`(検査 [11] へ統合)。計測スクリプト(`measure_active_set.py`
+の `--pick`、`measure_simp_convergence.py` の参照 pickle、`plot_simp_safety_convergence.py`、
+`profile_simp_iter_breakdown.py`)は固定した塊を1回作る経路へ移した。**この文書のそれより前の節に
+ある連続値保持・回廊・`PICK_RATIO` の実測は旧方式での記録**であり、現行の経路ではない。

@@ -1,7 +1,8 @@
 """models/*.json の同じ条件で二分探索と Illinois 法を比較する。
 
 --model hanger_test.json --spacing 2.4 --targets 2 3 4
-荷重の大きさ・方向は文書から読み、材料量の探索範囲も製品と同じ規則で決める。"""
+荷重の大きさ・方向は文書から読み、材料量の探索範囲も製品と同じ規則で決める。
+塊は製品と同じく固定凸包で1回導出し、全ケース・全候補が同じ塊を使う。"""
 
 from __future__ import annotations
 
@@ -36,11 +37,11 @@ def model_bounds(model: str, spacing: float):
     capacity = space.grid.element_volume * space.element_count
     keep = float(space.model.keep.sum()) * space.grid.element_volume
     low, high = _material_bounds(OptimizeOptions(), keep_mm3=keep, capacity_mm3=capacity)
-    return bundle, capacity, low, high
+    return bundle, space, capacity, low, high
 
 
 def run_case(
-    cond: ds.Conditions,
+    space: ds.DesignSpace,
     *,
     target: float,
     material_min: float,
@@ -75,12 +76,11 @@ def run_case(
     }
     try:
         result = sl.solve_for_safety_factor(
-            cond,
+            space,
             target_safety_factor=target,
             material_min_mm3=material_min,
             material_max_mm3=material_max,
             max_iter=max_iter,
-            derivation_kwargs={"spacing": spacing},
             forces=forces,
             searcher=searcher,
             progress=progress,
@@ -134,7 +134,7 @@ def main() -> int:
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    bundle, capacity, material_min, material_max = model_bounds(args.model, args.spacing)
+    bundle, space, capacity, material_min, material_max = model_bounds(args.model, args.spacing)
     print(
         f"{args.model} 塊容量 {capacity:.0f}mm^3 / 括り [{material_min:.0f}, {material_max:.0f}]"
         f" / max_iter={args.max_iter} / spacing={args.spacing}",
@@ -146,7 +146,7 @@ def main() -> int:
         for searcher in ("bisection", "illinois"):
             print(f"  目標 sf={target} / searcher={searcher}", flush=True)
             case = run_case(
-                bundle.conditions,
+                space,
                 forces=bundle.forces,
                 spacing=args.spacing,
                 max_iter=args.max_iter,
@@ -164,6 +164,8 @@ def main() -> int:
                         "model": args.model,
                         "forces_n": bundle.forces,
                         "capacity_mm3": capacity,
+                        "derivation": ds.DERIVATION,
+                        "design_elements": int(space.element_count),
                         "material_min_ratio": (material_min / capacity),
                         "material_max_ratio": (material_max / capacity),
                         "clip": [sl.INTERPOLATION_CLIP_LO, sl.INTERPOLATION_CLIP_HI],
