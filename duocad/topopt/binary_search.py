@@ -57,6 +57,8 @@ class SearchConditions:
     volume_atol: float = 1e-9
     volume_rtol: float = 1e-9
     bbox_cache: Any = None
+    #: `anchor.condition_mapping` の結果(確定表の検証)。None なら未対応付けの表として入口の診断に書く。
+    mapping: Any = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'fixed_faces', tuple(int(f) for f in self.fixed_faces))
@@ -88,8 +90,48 @@ def _body_signature(shape: Any, *, cache: Any) -> dict:
                 volume=round(float(kernel.volume(raw)), 9))
 
 
+def _face_node_ids(table: Any, face: int) -> np.ndarray:
+    """面の節点(空の面は空配列。`AnchorTable.node_ids` は空の面で例外を出すので先に見る)。"""
+    if int(face) in set(int(f) for f in table.empty_faces()):
+        return np.zeros(0, dtype=np.int64)
+    return np.asarray(table.node_ids([int(face)]), dtype=np.int64)
+
+
+def _boundary_signature(conditions: SearchConditions) -> dict:
+    """確定した節点・拘束自由度・節点荷重と対応付け規則(修正A §3.3「評価条件ハッシュに含める」)。
+
+    面添字だけでは、同じ面添字でも別の表(幾何の表と材料に対応付けた確定表)を区別できない。
+    """
+    table = conditions.table
+    faces: dict = {}
+    for face in conditions.fixed_faces:
+        ids = _face_node_ids(table, face)
+        entry = dict(nodes=hashlib.sha256(ids.tobytes()).hexdigest(), count=int(ids.size))
+        if ids.size:
+            dofs = np.asarray(table.fixed_dofs([int(face)]), dtype=np.int64)
+            entry['dofs'] = hashlib.sha256(dofs.tobytes()).hexdigest()
+        faces[f'fixed_{int(face)}'] = entry
+    for face, force in zip(conditions.load_faces, conditions.forces):
+        ids = _face_node_ids(table, face)
+        entry = dict(nodes=hashlib.sha256(ids.tobytes()).hexdigest(), count=int(ids.size))
+        if ids.size:
+            vector = np.asarray(table.load_vector([int(face)], force), dtype=float)
+            nonzero = np.flatnonzero(vector)
+            digest = hashlib.sha256(nonzero.astype(np.int64).tobytes())
+            digest.update(np.round(vector[nonzero], 12).tobytes())
+            entry['load'] = digest.hexdigest()
+        faces[f'load_{int(face)}'] = entry
+    stats = getattr(table, 'stats', None) or {}
+    rule = dict(mapping=stats.get('mapping', 'unknown'), radius_ratio=stats.get('radius_ratio'),
+                sample_ratio=stats.get('sample_ratio'))
+    if isinstance(conditions.mapping, dict):
+        rule['mapping_rule'] = conditions.mapping.get('rule')
+    return dict(faces=faces, rule=rule)
+
+
 def evaluation_identifier(conditions: SearchConditions) -> str:
-    """格子・固定空間の境界条件・物性・応力規則・検査許容差から評価条件の識別子を作る(§4.1)。
+    """格子・固定空間の境界条件(確定した節点・荷重・拘束と対応付け規則)・物性・応力規則・
+    検査許容差から評価条件の識別子を作る(§4.1)。
 
     形状ハッシュ(候補マスクのハッシュ)だけでは、違う入力で出た同じ形の合否を
     再利用してしまう。`visited` はこの識別子とマスクハッシュの組をキーにする。
@@ -99,6 +141,7 @@ def evaluation_identifier(conditions: SearchConditions) -> str:
         fixed_faces=sorted(conditions.fixed_faces),
         load_faces=sorted(conditions.load_faces),
         forces=[list(row) for row in conditions.forces],
+        boundary=_boundary_signature(conditions),
         preserves=[[name, _body_signature(shape, cache=conditions.bbox_cache)]
                    for name, shape in conditions.preserves],
         excludes=[[name, _body_signature(shape, cache=conditions.bbox_cache)]
@@ -111,13 +154,34 @@ def evaluation_identifier(conditions: SearchConditions) -> str:
         volume_atol=float(conditions.volume_atol),
         volume_rtol=float(conditions.volume_rtol),
     )
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def _mask_hash(mask: np.ndarray) -> str:
     """`acceptance.inspect` の `material_sha256` と同じ式(候補どうしの突き合わせに使う)。"""
     array = np.ascontiguousarray(np.asarray(mask, dtype=bool))
     return hashlib.sha256(array.tobytes()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# 入口の必要条件(修正B §4): 確定表の全節点が全設計空間の材料に接するか
+# ---------------------------------------------------------------------------
+def uncovered_condition_nodes(material: np.ndarray, conditions: SearchConditions) -> list:
+    """条件面ごとに、確定表の節点のうち `material` に接しないものを数える。
+
+    候補Mは設計空間Dの部分集合なので、Mに接する節点はDに接する節点の部分集合。Dで接しない
+    固定節点はD内の削除・追加・置換では被覆できない —— 探索前にここで判定する。
+    """
+    live = acceptance.active_nodes(material).ravel()
+    rows = []
+    for side, faces in (('fixed', conditions.fixed_faces), ('load', conditions.load_faces)):
+        for face in faces:
+            ids = _face_node_ids(conditions.table, face)
+            lost = ids[~live[ids]] if ids.size else ids
+            rows.append(dict(condition=f'{side}_face_{int(face)}', side=side, face=int(face),
+                             nodes=int(ids.size), uncovered_nodes=int(lost.size),
+                             uncovered_node_ids=lost[:20].tolist()))
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +341,7 @@ class FeasibleModel:
 class SearchResult:
     """探索1回の戻り値。`status` と `termination` は別欄(§4.6:「形状の合否とは別の欄にする」)。"""
 
-    status: str  # 'feasible' | 'no_feasible_found' | 'input_contradiction' | 'resolution_insufficient'
+    status: str  # 'feasible' | 'no_feasible_found' | 'input_contradiction' | 'resolution_insufficient' | 'boundary_mapping_failed'
     termination: str
     best_feasible: Optional[FeasibleModel]
     history: list
@@ -348,6 +412,20 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
         return SearchResult(status='resolution_insufficient', termination='resolution_insufficient',
                              best_feasible=None, history=[], evaluations=0,
                              conditions_identifier=identifier, diagnostics=dict(empty_faces=starved))
+
+    # 境界条件の対応付け: 確定表の節点が全設計空間の材料に接しないなら、どの候補でも接しない
+    # (修正B §4)。表が材料に対応付けた確定表か、材料を見ない幾何の表かも診断に書く。
+    coverage = uncovered_condition_nodes(design_space_mask, conditions)
+    uncovered = [row for row in coverage if row['uncovered_nodes']]
+    if uncovered:
+        stats = getattr(conditions.table, 'stats', None) or {}
+        return SearchResult(status='boundary_mapping_failed', termination='boundary_mapping_failed',
+                             best_feasible=None, history=[], evaluations=0,
+                             conditions_identifier=identifier,
+                             diagnostics=dict(uncovered_condition_nodes=uncovered,
+                                              table_mapping=stats.get('mapping', 'unknown'),
+                                              mapped=conditions.mapping is not None,
+                                              mapping=conditions.mapping))
 
     # 入力矛盾: 材料は常に設計空間の部分集合(§2)なので、保持との重なりは材料を減らすほど
     # 減るかそのまま。設計空間そのもの(取れる最大の材料)で既に重なりが足りなければ、
@@ -593,7 +671,8 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     """初期合格探索(段階3)に続けて削除・追加・置換で体積を減らす、単一の探索入口(§3、段階4)。
 
     まず `find_initial_feasible` で最初の6条件合格を探し、見つからなければその
-    `SearchResult`(`no_feasible_found` / `input_contradiction` / `resolution_insufficient`)を
+    `SearchResult`(`no_feasible_found` / `input_contradiction` / `resolution_insufficient` /
+    `boundary_mapping_failed`)を
     そのまま返す(改善しようがないので段階4は何もしない)。見つかれば、そこから
     `_reduce_volume` で体積削減を続ける。`max_evaluations` は**両段階を通した1本の予算**
     (§4.1「評価条件の識別子」と同じ思想で、初期探索と削減探索を別予算にしない)。
