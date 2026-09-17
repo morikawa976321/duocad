@@ -587,7 +587,7 @@ hanger の実機記録は `output/hanger_fix_verification/*.json`(`topopt_checks
 参考: 旧ブロック探索(段階4、予算60)は 4,280,158 mm³(83.2%)・安全率146.1 で `evaluation_limit`
 (`output/hanger_fix_verification/review-fixes-spacing-4.8-budget-60.json`)。旧SIMP実装の hanger 2.4mm は
 70,634.5 mm³・最小安全率2.024(実 2.412mm、別の設計空間、材料量の範囲を絞った再開で3.57時間。
-現行文書からは削除済みで `git show 878047d^:docs/TOPOPT.md` に残る)。
+`docs/TOPOPT.md`「2026-09-09・hanger の初回完走と 2.4mm の費用・安全率曲線」)。
 
 ### 11.3 hanger 4.8mm の到達点と、止まった理由(既定・目標安全率2)
 
