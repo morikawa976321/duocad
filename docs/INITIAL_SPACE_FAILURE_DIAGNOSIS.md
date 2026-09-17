@@ -3,6 +3,13 @@
 2026-09-17。調査対象: `8c997e9`。探索本体の変更・大規模探索の再実行はしていない。
 `models/hanger_bar_attachment.json` を使って導出各段階と初期成分選別を再現した。
 
+**修正後の結果(同日、[FIX_BINARY_SEARCH_INITIALIZATION.md](FIX_BINARY_SEARCH_INITIALIZATION.md) §9)**:
+下の測定値は修正前の記録としてそのまま残す。修正後は探索へ渡す表を材料に対応付けた確定表に変え、
+荷重面31は 4.8mm で 123 節点・未被覆 0・対応不能標本 0、初期全材料マスクは実FEMを含む6条件に
+全合格(安全率 164.7)し、候補管理は保持マスク数が容量(48)を超えない。修正後の同じ照合は
+`topopt_checks/diagnose_initial_space.py`(幾何の表と確定表の両方を段階ごとに数える)の出力
+`output/initial_space_diagnosis/stages-after-fix.json`、実機記録は `output/hanger_fix_verification/`。
+
 ## 結論
 
 設計空間導出は正常終了している。新探索が初期マスクを拒否し、直せない状態から

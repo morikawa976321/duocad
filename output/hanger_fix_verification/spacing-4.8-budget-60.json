@@ -1,0 +1,1326 @@
+{
+  "model": "models\\hanger_bar_attachment.json",
+  "model_sha256": "d531c5eda183a552f382be7c46b2b1416508e0c95e87564030e64029f042a5df",
+  "git_head": "913d73e84d23c82d9bc78281b868d68df6279d42",
+  "git_status_short": "M duocad/optimize_run.py\n M duocad/topopt/acceptance.py\n M duocad/topopt/anchor.py\n M duocad/topopt/binary_search.py\n M tests/test_binary_search.py\n M tests/test_optimize_backend.py\n?? tests/test_anchor_mapping.py\n?? topopt_checks/verify_hanger_fix.py",
+  "code_sha256": {
+    "anchor": "5d064f6ce728c55d890a1485441c555083b8236894e5d63cfb604113f15ec3c0",
+    "binary_search": "f3d43a1a8e248e09a60e31b3ce6531212a8dcb894d47f9b2e16d54cab3f0ac66",
+    "acceptance": "06c0da99bb541f8f723840b003eb3f07a1aedc1a8f7b08575e10266a3d9ee47f",
+    "design_space": "645f48c0a980c35dba650669cf1f1f9b625eee849fd824f128cbec6bed2e875f"
+  },
+  "requested_spacing": 4.8,
+  "target_safety_factor": 2.0,
+  "max_evaluations": 60,
+  "derive": {
+    "seconds": 1.0085163000039756,
+    "grid": {
+      "origin": [
+        -85.95022872971944,
+        -266.71856677595474,
+        -119.307182338313
+      ],
+      "spacing": 4.775012704428858,
+      "shape": [
+        36,
+        66,
+        52
+      ]
+    },
+    "cells": 47232,
+    "mask_hash": "d8e33d3cdc7b22b107375e1c4dcdd6c7ba174a45923fe2ee02d115892f1c1949",
+    "expected_cells": 47232,
+    "matches_expected": true,
+    "connectivity_dropped": 0
+  },
+  "geometry_table": {
+    "stats": {
+      "seconds": 0.16111280000768602,
+      "faces": 32,
+      "radius": 4.775012704428858,
+      "radius_ratio": 1.0,
+      "sample_ratio": 0.25,
+      "samples": 166610,
+      "fallback_samples": 0,
+      "contested_assignments": 1164,
+      "anchor_nodes": 783,
+      "node_shape": [
+        37,
+        67,
+        53
+      ],
+      "mapping": "geometry",
+      "allowed_nodes": null,
+      "unmapped_samples": 0
+    },
+    "faces": [
+      {
+        "condition": "fixed_face_10",
+        "nodes": 2,
+        "uncovered_nodes": 0,
+        "assigned_area_mm2": 27.698898725448217,
+        "leak_ratio": 0.5759435050696331,
+        "unmapped_samples": 0
+      },
+      {
+        "condition": "fixed_face_7",
+        "nodes": 2,
+        "uncovered_nodes": 0,
+        "assigned_area_mm2": 27.69893144148631,
+        "leak_ratio": 0.575943004203206,
+        "unmapped_samples": 0
+      },
+      {
+        "condition": "fixed_face_23",
+        "nodes": 2,
+        "uncovered_nodes": 0,
+        "assigned_area_mm2": 29.48793593533486,
+        "leak_ratio": 0.5485542266710834,
+        "unmapped_samples": 0
+      },
+      {
+        "condition": "load_face_31",
+        "nodes": 170,
+        "uncovered_nodes": 49,
+        "assigned_area_mm2": 2359.4143888692915,
+        "leak_ratio": 0.15395325834625162,
+        "unmapped_samples": 0
+      }
+    ]
+  },
+  "search_table": {
+    "seconds": 0.17356970004038885,
+    "stats": {
+      "seconds": 0.1695227000163868,
+      "faces": 32,
+      "radius": 4.775012704428858,
+      "radius_ratio": 1.0,
+      "sample_ratio": 0.25,
+      "samples": 166610,
+      "fallback_samples": 0,
+      "contested_assignments": 1140,
+      "anchor_nodes": 726,
+      "node_shape": [
+        37,
+        67,
+        53
+      ],
+      "mapping": "material",
+      "allowed_nodes": 52615,
+      "unmapped_samples": 0
+    },
+    "faces": [
+      {
+        "condition": "fixed_face_10",
+        "nodes": 2,
+        "uncovered_nodes": 0,
+        "assigned_area_mm2": 27.698898725448217,
+        "leak_ratio": 0.5759435050696331,
+        "unmapped_samples": 0
+      },
+      {
+        "condition": "fixed_face_7",
+        "nodes": 2,
+        "uncovered_nodes": 0,
+        "assigned_area_mm2": 27.69893144148631,
+        "leak_ratio": 0.575943004203206,
+        "unmapped_samples": 0
+      },
+      {
+        "condition": "fixed_face_23",
+        "nodes": 2,
+        "uncovered_nodes": 0,
+        "assigned_area_mm2": 29.48793593533486,
+        "leak_ratio": 0.5485542266710834,
+        "unmapped_samples": 0
+      },
+      {
+        "condition": "load_face_31",
+        "nodes": 123,
+        "uncovered_nodes": 0,
+        "assigned_area_mm2": 2352.1403866505166,
+        "leak_ratio": 0.15656159451009333,
+        "unmapped_samples": 0
+      }
+    ],
+    "mapping": {
+      "status": "pass",
+      "faces": [
+        {
+          "condition": "fixed_face_10",
+          "side": "fixed",
+          "face": 10,
+          "nodes": 2,
+          "cad_area_mm2": 65.3451271946677,
+          "sample_area_mm2": 65.31888806465886,
+          "assigned_area_mm2": 27.698898725448217,
+          "leak_ratio": 0.5759435050696331,
+          "unmapped_samples": 0,
+          "unmapped_area_mm2": 0.0,
+          "unmapped_area_fraction": 0.0,
+          "unmapped_positions": [],
+          "search_radius_mm": 4.775012704428858,
+          "max_mapping_distance_mm": 4.774151013380144,
+          "max_mapping_distance_elements": 0.9998195416217606,
+          "uncovered_nodes": 0,
+          "uncovered_node_ids": [],
+          "node_centroid_mm": [
+            28.65007617657315,
+            -4.092868032367562,
+            59.88592233786802
+          ],
+          "sample_centroid_mm": [
+            27.499999999999975,
+            -2.499999999999993,
+            59.99999999999968
+          ],
+          "cad_centroid_mm": [
+            27.5,
+            -2.5,
+            60.0
+          ],
+          "centroid_shift_mm": 1.9679729402248225,
+          "centroid_shift_elements": 0.4121398333452629,
+          "centroid_limit_mm": 14.325038113286574,
+          "within_search_radius": true,
+          "status": "pass",
+          "reasons": []
+        },
+        {
+          "condition": "fixed_face_7",
+          "side": "fixed",
+          "face": 7,
+          "nodes": 2,
+          "cad_area_mm2": 65.3451271946677,
+          "sample_area_mm2": 65.31888806465886,
+          "assigned_area_mm2": 27.69893144148631,
+          "leak_ratio": 0.575943004203206,
+          "unmapped_samples": 0,
+          "unmapped_area_mm2": 0.0,
+          "unmapped_area_fraction": 0.0,
+          "unmapped_positions": [],
+          "search_radius_mm": 4.775012704428858,
+          "max_mapping_distance_mm": 4.774963700277223,
+          "max_mapping_distance_elements": 0.999989737377748,
+          "uncovered_nodes": 0,
+          "uncovered_node_ids": [],
+          "node_centroid_mm": [
+            -28.65007627657315,
+            -4.092868032367562,
+            59.886010695870354
+          ],
+          "sample_centroid_mm": [
+            -27.49999999999999,
+            -2.499999999999993,
+            59.99999999999968
+          ],
+          "cad_centroid_mm": [
+            -27.5,
+            -2.5,
+            60.0
+          ],
+          "centroid_shift_mm": 1.9679678787853225,
+          "centroid_shift_elements": 0.4121387733607533,
+          "centroid_limit_mm": 14.325038113286574,
+          "within_search_radius": true,
+          "status": "pass",
+          "reasons": []
+        },
+        {
+          "condition": "fixed_face_23",
+          "side": "fixed",
+          "face": 23,
+          "nodes": 2,
+          "cad_area_mm2": 65.3451271946677,
+          "sample_area_mm2": 65.31888806465886,
+          "assigned_area_mm2": 29.48793593533486,
+          "leak_ratio": 0.5485542266710834,
+          "unmapped_samples": 0,
+          "unmapped_area_mm2": 0.0,
+          "unmapped_area_fraction": 0.0,
+          "unmapped_positions": [],
+          "search_radius_mm": 4.775012704428858,
+          "max_mapping_distance_mm": 4.774969400294742,
+          "max_mapping_distance_elements": 0.9999909310955182,
+          "uncovered_nodes": 0,
+          "uncovered_node_ids": [],
+          "node_centroid_mm": [
+            -4.999999703159119e-08,
+            -4.092868032367562,
+            -59.827538753247644
+          ],
+          "sample_centroid_mm": [
+            -2.4836818917180423e-16,
+            -2.4999999999999916,
+            -60.000000000000014
+          ],
+          "cad_centroid_mm": [
+            0.0,
+            -2.5,
+            -60.0
+          ],
+          "centroid_shift_mm": 1.6021770970057962,
+          "centroid_shift_elements": 0.33553357785200566,
+          "centroid_limit_mm": 14.325038113286574,
+          "within_search_radius": true,
+          "status": "pass",
+          "reasons": []
+        },
+        {
+          "condition": "load_face_31",
+          "side": "load",
+          "face": 31,
+          "nodes": 123,
+          "cad_area_mm2": 2783.24337236424,
+          "sample_area_mm2": 2788.7518179638605,
+          "assigned_area_mm2": 2352.1403866505166,
+          "leak_ratio": 0.15656159451009333,
+          "unmapped_samples": 0,
+          "unmapped_area_mm2": 0.0,
+          "unmapped_area_fraction": 0.0,
+          "unmapped_positions": [],
+          "search_radius_mm": 4.775012704428858,
+          "max_mapping_distance_mm": 4.77498598304498,
+          "max_mapping_distance_elements": 0.9999944039135533,
+          "uncovered_nodes": 0,
+          "uncovered_node_ids": [],
+          "node_centroid_mm": [
+            -5.0733279426738574e-05,
+            -199.98356225257766,
+            60.137689063991075
+          ],
+          "sample_centroid_mm": [
+            3.0331810705174356e-16,
+            -199.99999999999943,
+            60.00000089407017
+          ],
+          "cad_centroid_mm": [
+            4.3742555622875886e-14,
+            -200.0,
+            60.0000008940697
+          ],
+          "centroid_shift_mm": 0.13866590875314724,
+          "centroid_shift_elements": 0.029039903626755514,
+          "centroid_limit_mm": 14.325038113286574,
+          "within_search_radius": true,
+          "requested_force_n": [
+            0.0,
+            0.0,
+            -200.0
+          ],
+          "resultant_n": [
+            0.0,
+            0.0,
+            -200.00000000000009
+          ],
+          "resultant_error_n": 8.526512829121202e-14,
+          "moment_origin_mm": [
+            -85.95022872971944,
+            -266.71856677595474,
+            -119.307182338313
+          ],
+          "moment_reference_nmm": [
+            -13343.713355191063,
+            17190.045745943888,
+            0.0
+          ],
+          "moment_nodes_nmm": [
+            -13347.000904675413,
+            17190.035599288,
+            0.0
+          ],
+          "moment_error_nmm": 3.287565142575391,
+          "moment_error_normalized": 0.0034424674300092975,
+          "status": "pass",
+          "reasons": []
+        }
+      ],
+      "rule": {
+        "mapping": "material",
+        "search_radius_mm": 4.775012704428858,
+        "radius_ratio": 1.0,
+        "sample_ratio": 0.25,
+        "weights": "tent 1-d/r, normalised per sample over allowed nodes in the sphere",
+        "unmapped_rule": "a sample with no allowed node inside the sphere is unmapped; never moved to a farther node",
+        "ownership": "node belongs to the face that assigned it the most area; ties to the smaller face index",
+        "centroid_limit_elements": 3.0,
+        "resultant_tolerance": "atol 1e-10*max(1,|F|), rtol 1e-10",
+        "moment_origin": "grid origin"
+      },
+      "table": {
+        "mapping": "material",
+        "allowed_nodes": 52615,
+        "anchor_nodes": 726,
+        "unmapped_samples": 0
+      },
+      "geometry_table_difference": {
+        "fixed_face_10": {
+          "geometry_nodes": 2,
+          "geometry_uncovered_nodes": 0,
+          "mapped_nodes": 2,
+          "only_in_geometry": 0,
+          "only_in_mapped": 0,
+          "geometry_assigned_area_mm2": 27.698898725448217,
+          "mapped_assigned_area_mm2": 27.698898725448217
+        },
+        "fixed_face_7": {
+          "geometry_nodes": 2,
+          "geometry_uncovered_nodes": 0,
+          "mapped_nodes": 2,
+          "only_in_geometry": 0,
+          "only_in_mapped": 0,
+          "geometry_assigned_area_mm2": 27.69893144148631,
+          "mapped_assigned_area_mm2": 27.69893144148631
+        },
+        "fixed_face_23": {
+          "geometry_nodes": 2,
+          "geometry_uncovered_nodes": 0,
+          "mapped_nodes": 2,
+          "only_in_geometry": 0,
+          "only_in_mapped": 0,
+          "geometry_assigned_area_mm2": 29.48793593533486,
+          "mapped_assigned_area_mm2": 29.48793593533486
+        },
+        "load_face_31": {
+          "geometry_nodes": 170,
+          "geometry_uncovered_nodes": 49,
+          "mapped_nodes": 123,
+          "only_in_geometry": 49,
+          "only_in_mapped": 2,
+          "geometry_assigned_area_mm2": 2359.4143888692915,
+          "mapped_assigned_area_mm2": 2352.1403866505166
+        }
+      }
+    }
+  },
+  "anchor_check": {
+    "limit_mm": 14.325038113286574,
+    "table": "material",
+    "fixed_mm": 1.9679729402248207,
+    "fixed_mm_each": [
+      1.9679729402248207,
+      1.967967878785329,
+      1.6021770970057863
+    ],
+    "load_mm": 0.1386659087536803,
+    "load_mm_each": [
+      0.1386659087536803
+    ]
+  },
+  "entry": {
+    "identifier": "daa2168b63edd321c3600cc647fc831b2306eebf9beb8da2329677f7edcada12",
+    "uncovered": [
+      {
+        "condition": "fixed_face_10",
+        "side": "fixed",
+        "face": 10,
+        "nodes": 2,
+        "uncovered_nodes": 0,
+        "uncovered_node_ids": []
+      },
+      {
+        "condition": "fixed_face_7",
+        "side": "fixed",
+        "face": 7,
+        "nodes": 2,
+        "uncovered_nodes": 0,
+        "uncovered_node_ids": []
+      },
+      {
+        "condition": "fixed_face_23",
+        "side": "fixed",
+        "face": 23,
+        "nodes": 2,
+        "uncovered_nodes": 0,
+        "uncovered_node_ids": []
+      },
+      {
+        "condition": "load_face_31",
+        "side": "load",
+        "face": 31,
+        "nodes": 123,
+        "uncovered_nodes": 0,
+        "uncovered_node_ids": []
+      }
+    ],
+    "empty_faces": [
+      6,
+      8,
+      9,
+      12,
+      22,
+      24,
+      27,
+      28
+    ]
+  },
+  "initial_full_material": {
+    "seconds": 12.289717299980111,
+    "islands": {
+      "components": 1,
+      "surviving_components": 1,
+      "removed_islands": []
+    },
+    "survivors": 1,
+    "status": "pass",
+    "checks": {
+      "watertight": "pass",
+      "single_solid": "pass",
+      "preserve": "pass",
+      "exclude": "pass",
+      "conditions": "pass",
+      "safety": "pass"
+    },
+    "safety_factor": 164.74302662885063,
+    "representative_mpa": 0.24280238634996038,
+    "raw_max_mpa": 36.17383990567574,
+    "relative_residual": 9.704861428967524e-10,
+    "max_displacement_mm": 0.11397328757810475,
+    "solver": "cg",
+    "reason": null,
+    "error": null,
+    "material_mm3": 5142329.843036241,
+    "material_sha256": "1e7a10bb7e2a93f4dc0612b087aeb42c96e22290c018226b5685ed490eccefbd",
+    "conditions": {
+      "status": "pass",
+      "faces": [
+        {
+          "condition": "fixed_face_10",
+          "nodes": 2,
+          "lost_nodes": 0,
+          "status": "pass"
+        },
+        {
+          "condition": "fixed_face_7",
+          "nodes": 2,
+          "lost_nodes": 0,
+          "status": "pass"
+        },
+        {
+          "condition": "fixed_face_23",
+          "nodes": 2,
+          "lost_nodes": 0,
+          "status": "pass"
+        },
+        {
+          "condition": "load_face_31",
+          "nodes": 123,
+          "lost_nodes": 0,
+          "status": "pass",
+          "requested_force_n": [
+            0.0,
+            0.0,
+            -200.0
+          ],
+          "lost_force_l1_n": 0.0,
+          "resultant_n": [
+            0.0,
+            0.0,
+            -200.00000000000009
+          ]
+        }
+      ]
+    }
+  },
+  "search": {
+    "status": "feasible",
+    "termination": "evaluation_limit",
+    "evaluations": 60,
+    "inspect_calls": 14,
+    "seconds": 239.48155739996582,
+    "seconds_per_evaluation": 3.9913592899994303,
+    "diagnostics": {
+      "frontier": {
+        "capacity": 48,
+        "peak_retained": 48,
+        "retained": 48,
+        "evictions": 10,
+        "evicted_trials": [
+          0,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "retired": 1
+      },
+      "candidates": {
+        "generated": 113,
+        "duplicates": 54,
+        "limit": 3840,
+        "evaluations": 60,
+        "evaluation_limit": 60
+      },
+      "initial": {
+        "frontier": {
+          "capacity": 48,
+          "peak_retained": 0,
+          "retained": 0,
+          "evictions": 0,
+          "evicted_trials": [],
+          "retired": 0
+        },
+        "candidates": {
+          "generated": 0,
+          "duplicates": 0,
+          "limit": 3840,
+          "evaluations": 1,
+          "evaluation_limit": 60
+        }
+      }
+    },
+    "mask_bytes": 123552,
+    "traced_peak_bytes": 936376958,
+    "traced_peak_in_masks": 7578.808582621083,
+    "history": [
+      {
+        "index": 0,
+        "parent": null,
+        "operation": "initial",
+        "outcome": "ok",
+        "material_mm3": 5142329.843036241,
+        "safety_factor": 164.74302662885063,
+        "checks": {
+          "watertight": "pass",
+          "single_solid": "pass",
+          "preserve": "pass",
+          "exclude": "pass",
+          "conditions": "pass",
+          "safety": "pass"
+        },
+        "note": null
+      },
+      {
+        "index": 1,
+        "parent": 0,
+        "operation": "delete",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "0 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 2,
+        "parent": 0,
+        "operation": "delete",
+        "outcome": "ok",
+        "material_mm3": 4282879.644422418,
+        "safety_factor": 146.10035127402898,
+        "checks": {
+          "watertight": "pass",
+          "single_solid": "pass",
+          "preserve": "pass",
+          "exclude": "pass",
+          "conditions": "pass",
+          "safety": "pass"
+        },
+        "note": null
+      },
+      {
+        "index": 3,
+        "parent": 0,
+        "operation": "delete",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 4,
+        "parent": 0,
+        "operation": "delete",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 5,
+        "parent": 2,
+        "operation": "add",
+        "outcome": "ok",
+        "material_mm3": 4414181.511603603,
+        "safety_factor": 149.68103962362812,
+        "checks": {
+          "watertight": "pass",
+          "single_solid": "pass",
+          "preserve": "pass",
+          "exclude": "pass",
+          "conditions": "pass",
+          "safety": "pass"
+        },
+        "note": null
+      },
+      {
+        "index": 6,
+        "parent": 0,
+        "operation": "delete",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 7,
+        "parent": 3,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 8,
+        "parent": 2,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 9,
+        "parent": 0,
+        "operation": "delete",
+        "outcome": "ok",
+        "material_mm3": 5139607.99670164,
+        "safety_factor": 164.74586043933783,
+        "checks": {
+          "watertight": "pass",
+          "single_solid": "pass",
+          "preserve": "pass",
+          "exclude": "pass",
+          "conditions": "pass",
+          "safety": "pass"
+        },
+        "note": null
+      },
+      {
+        "index": 10,
+        "parent": 4,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 11,
+        "parent": 3,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 12,
+        "parent": 2,
+        "operation": "delete",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 13,
+        "parent": 5,
+        "operation": "add",
+        "outcome": "ok",
+        "material_mm3": 4534813.741153149,
+        "safety_factor": 152.66430501027077,
+        "checks": {
+          "watertight": "pass",
+          "single_solid": "pass",
+          "preserve": "pass",
+          "exclude": "pass",
+          "conditions": "pass",
+          "safety": "pass"
+        },
+        "note": null
+      },
+      {
+        "index": 14,
+        "parent": 0,
+        "operation": "delete",
+        "outcome": "ok",
+        "material_mm3": 5131551.331551218,
+        "safety_factor": 163.99808654328663,
+        "checks": {
+          "watertight": "pass",
+          "single_solid": "pass",
+          "preserve": "pass",
+          "exclude": "pass",
+          "conditions": "pass",
+          "safety": "pass"
+        },
+        "note": null
+      },
+      {
+        "index": 15,
+        "parent": 6,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 16,
+        "parent": 4,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 17,
+        "parent": 7,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 18,
+        "parent": 8,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 19,
+        "parent": 5,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 20,
+        "parent": 0,
+        "operation": "delete",
+        "outcome": "ok",
+        "material_mm3": 5090070.39341189,
+        "safety_factor": 162.12704183085646,
+        "checks": {
+          "watertight": "pass",
+          "single_solid": "pass",
+          "preserve": "pass",
+          "exclude": "pass",
+          "conditions": "pass",
+          "safety": "pass"
+        },
+        "note": null
+      },
+      {
+        "index": 21,
+        "parent": 6,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 22,
+        "parent": 4,
+        "operation": "delete",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 23,
+        "parent": 10,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 24,
+        "parent": 11,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 25,
+        "parent": 7,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "8 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 26,
+        "parent": 12,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 27,
+        "parent": 8,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "3 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 28,
+        "parent": 13,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 29,
+        "parent": 0,
+        "operation": "delete",
+        "outcome": "ok",
+        "material_mm3": 5044778.870404118,
+        "safety_factor": 161.5760536956971,
+        "checks": {
+          "watertight": "pass",
+          "single_solid": "pass",
+          "preserve": "pass",
+          "exclude": "pass",
+          "conditions": "pass",
+          "safety": "pass"
+        },
+        "note": null
+      },
+      {
+        "index": 30,
+        "parent": 14,
+        "operation": "add",
+        "outcome": "ok",
+        "material_mm3": 5141567.726062553,
+        "safety_factor": 164.74440517389831,
+        "checks": {
+          "watertight": "pass",
+          "single_solid": "pass",
+          "preserve": "pass",
+          "exclude": "pass",
+          "conditions": "pass",
+          "safety": "pass"
+        },
+        "note": null
+      },
+      {
+        "index": 31,
+        "parent": 9,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 32,
+        "parent": 6,
+        "operation": "delete",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 33,
+        "parent": 15,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 34,
+        "parent": 16,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 35,
+        "parent": 10,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "17 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 36,
+        "parent": 3,
+        "operation": "delete",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "2 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 37,
+        "parent": 11,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "11 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 38,
+        "parent": 7,
+        "operation": "delete",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 39,
+        "parent": 17,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "12 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 40,
+        "parent": 12,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 41,
+        "parent": 18,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 42,
+        "parent": 19,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 43,
+        "parent": 0,
+        "operation": "delete",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 44,
+        "parent": 20,
+        "operation": "add",
+        "outcome": "ok",
+        "material_mm3": 5123168.044840646,
+        "safety_factor": 163.17928961396075,
+        "checks": {
+          "watertight": "pass",
+          "single_solid": "pass",
+          "preserve": "pass",
+          "exclude": "pass",
+          "conditions": "pass",
+          "safety": "pass"
+        },
+        "note": null
+      },
+      {
+        "index": 45,
+        "parent": 14,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 46,
+        "parent": 9,
+        "operation": "delete",
+        "outcome": "ok",
+        "material_mm3": 4280157.798087817,
+        "safety_factor": 146.1003302173612,
+        "checks": {
+          "watertight": "pass",
+          "single_solid": "pass",
+          "preserve": "pass",
+          "exclude": "pass",
+          "conditions": "pass",
+          "safety": "pass"
+        },
+        "note": null
+      },
+      {
+        "index": 47,
+        "parent": 21,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 48,
+        "parent": 15,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "5 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 49,
+        "parent": 22,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 50,
+        "parent": 16,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "20 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 51,
+        "parent": 10,
+        "operation": "delete",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 52,
+        "parent": 23,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "28 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 53,
+        "parent": 24,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 54,
+        "parent": 25,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 55,
+        "parent": 17,
+        "operation": "delete",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 56,
+        "parent": 12,
+        "operation": "delete",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 57,
+        "parent": 26,
+        "operation": "add",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "1 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      },
+      {
+        "index": 58,
+        "parent": 18,
+        "operation": "replace",
+        "outcome": "no_component",
+        "material_mm3": 0.0,
+        "safety_factor": null,
+        "checks": null,
+        "note": "20 個の連結成分のいずれも固定面・荷重面・保持の全条件を単独で満たさない"
+      }
+    ],
+    "best": {
+      "trial_index": 46,
+      "mask_hash": "ca15fbe30ff42c3478df35409aa95bb90d0a5b449c07fd3c0866ff6168f6123c",
+      "material_mm3": 4280157.798087817,
+      "safety_factor": 146.1003302173612,
+      "cells": 39313,
+      "mask_read_only": true,
+      "recheck": {
+        "status": "pass",
+        "checks": {
+          "watertight": "pass",
+          "single_solid": "pass",
+          "preserve": "pass",
+          "exclude": "pass",
+          "conditions": "pass",
+          "safety": "pass"
+        },
+        "safety_factor": 146.1003302173612,
+        "representative_mpa": 0.27378445990156136,
+        "raw_max_mpa": 43.72594187900707,
+        "relative_residual": 9.584802864343472e-10,
+        "max_displacement_mm": 0.13719045952394465,
+        "solver": "cg",
+        "reason": null,
+        "error": null,
+        "material_mm3": 4280157.798087817,
+        "material_sha256": "ca15fbe30ff42c3478df35409aa95bb90d0a5b449c07fd3c0866ff6168f6123c",
+        "conditions": {
+          "status": "pass",
+          "faces": [
+            {
+              "condition": "fixed_face_10",
+              "nodes": 2,
+              "lost_nodes": 0,
+              "status": "pass"
+            },
+            {
+              "condition": "fixed_face_7",
+              "nodes": 2,
+              "lost_nodes": 0,
+              "status": "pass"
+            },
+            {
+              "condition": "fixed_face_23",
+              "nodes": 2,
+              "lost_nodes": 0,
+              "status": "pass"
+            },
+            {
+              "condition": "load_face_31",
+              "nodes": 123,
+              "lost_nodes": 0,
+              "status": "pass",
+              "requested_force_n": [
+                0.0,
+                0.0,
+                -200.0
+              ],
+              "lost_force_l1_n": 0.0,
+              "resultant_n": [
+                0.0,
+                0.0,
+                -200.00000000000009
+              ]
+            }
+          ]
+        }
+      },
+      "recheck_hash_matches": true
+    }
+  },
+  "invariants": {
+    "derive_calls": 1,
+    "mesh_calls": 0,
+    "identifier_unchanged": true,
+    "result_identifier_matches": true
+  }
+}

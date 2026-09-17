@@ -1,6 +1,8 @@
 # 二値探索の初期条件・候補メモリ管理 修正指示書
 
-作成日: 2026-09-17。状態: **修正指示・未実装**。
+作成日: 2026-09-17。状態: **実装済み(2026-09-17)。実施結果は §9。** hanger 4.8mm・2.4mm とも
+初期全材料マスクが実FEMを含む6条件に全合格し、候補管理は保持マスク数が容量以内で止まる。
+体積削減の完成とは扱わない(§9「未解決事項」)。
 調査基準: `8c997e9`、原因を記録したコミット: `579bf00`。
 根拠: [INITIAL_SPACE_FAILURE_DIAGNOSIS.md](INITIAL_SPACE_FAILURE_DIAGNOSIS.md)。
 本書は [PLAN_BINARY_STRESS_SEARCH.md](PLAN_BINARY_STRESS_SEARCH.md) の実装に対する追加修正指示。
@@ -178,3 +180,59 @@ Dで未被覆の固定節点は、D内での削除・追加・置換では被覆
 提出時には、変更箇所、残した契約、テスト結果、格子別の6条件、荷重・モーメント誤差、
 候補生成数・評価数・保持数・メモリ実測、未解決事項を示す。
 **MemoryErrorが出なくなったことだけをもって、初期条件や探索が完成したとしない。**
+
+## 9. 実施結果(2026-09-17)
+
+### 変更箇所
+
+| 修正 | 場所 | 内容 |
+|---|---|---|
+| A 初期境界条件 | `duocad/topopt/anchor.py` | `build_anchors(..., allowed_nodes=)`: 標本ごとに球内の許可節点だけへ重みを配る(配ってから捨てない)。球内に許可節点が無い標本は対応不能として面ごとに数・面積・座標を残し、遠い節点へ移さない。`active_nodes` をここへ移し `acceptance` が再輸出。`condition_mapping`(面ごとの節点数・対応不能標本・被覆・合力・重心・モーメント・対応距離の検証)、`format_mapping_warning`、`MAPPING_CENTROID_LIMIT_ELEMENTS` |
+| A | `duocad/optimize_run.py` | `_map_boundary_conditions`(導出出力に接する節点への確定表と検証、幾何の表との差、記録 `boundary-mapping`)。`_run` は確定表が不成立なら `state="boundary_mapping_failed"` で探索を始めない。面重心の門・デバッグ表示(`stage="mapping"`)・`_build_search_conditions` は全て確定表を使う(`_build_search_conditions` を直接呼ぶ検査・CLIでも同じ表)。`_search_failure_warning` は評価予算の増加を `evaluation_limit` のときだけ案内する |
+| A | `duocad/topopt/acceptance.py` | `inspect_document`(過去記録の読み取り)も島除去前の材料に対応付けた表で検査し、対応付けが不成立なら条件5を合格にしない |
+| B 入口診断 | `duocad/topopt/binary_search.py` | `uncovered_condition_nodes`。`find_initial_feasible` の入口で `resolution_insufficient` → `boundary_mapping_failed`(候補生成0回・FEM0回、表が確定表か幾何の表かを診断に持つ) → `input_contradiction` の順。評価条件ハッシュに確定した節点・拘束自由度・節点荷重・対応付け規則を含める(`_boundary_signature`)。`SearchConditions.mapping` |
+| C 候補管理 | `duocad/topopt/binary_search.py` | 候補は `(操作, ブロック領域)` の記述(`candidate_descriptors`)で遅延生成し、評価の直前に `_materialize` でだけマスクにする。frontier は親マスクを容量以内で保持し(`_Frontier`)、親を round-robin、各親の中で大きさ降順・削除→追加→置換の巡回。容量超過は最古の親を捨てて記録し、その探索は `frontier_truncated`。評価予算とは別の候補記述の予算(`max_candidates`、既定 64×評価予算、`generation_limit`)。生成中・評価前の中断。初期・削減の両段階が同じ契約。親・最良合格は読み取り専用。除去した島のマスクを保持しない |
+| UI | `web/src/session.ts` / `App.svelte` | `state` に `boundary_mapping_failed`、`boundary_mapping` 欄、デバッグ配信の `stage: 'mapping'`(型と注釈のみ。`web/dist` は未ビルド) |
+| 検査・記録 | `topopt_checks/verify_hanger_fix.py`(新設)、`topopt_checks/diagnose_initial_space.py`(幾何の表と確定表を段階ごとに照合) | 出力は `output/hanger_fix_verification/*.json`、`output/initial_space_diagnosis/stages-after-fix.json` |
+
+### 残した契約(§2)
+
+固定凸包・距離膨張・余白・格子・除外マスク・導出出力(セル数 47,232 / 367,390 とハッシュは修正前と一致)。
+6条件の意味・目標安全率・物性・99.5パーセンタイル。荷重・拘束の対応は確定後に再配分しない
+(足場を削った候補は `acceptance.condition_check` で不合格。`tests/test_binary_search.py::test_removing_the_scaffold_under_a_fixed_anchor_is_infeasible_and_never_renormalised`)。
+未被覆節点への荷重の削減・人工拘束・空セルの弱い剛性・許容差の拡大・旧SIMPへの退避は無い。
+
+### テスト結果
+
+`pytest`(既知の無関係な既存失敗2件 `tests/test_boundaries.py` / `tests/test_mcp_verbs.py` を除外): **1172 passed, 2 skipped**。
+§6 の必須ケースの対応: CAD面の対応・荷重保存・格子依存・対応不能 → `tests/test_anchor_mapping.py`(実CAD・実数値。
+回転した平面の解析解で重心のずれが球の半径以内、格子細分 1.0/0.5/0.25、平行移動と格子位相、相反する2荷重、
+所有権競合で空になった面)。条件固定・入口停止・遅延生成・保持上限・生成中断・探索の継続性・最良候補 →
+`tests/test_binary_search.py`(FEM・CADをスタブに置き換えた候補管理の検査を含む。48³ 格子で評価回数を
+8倍にしても実測メモリのピークが増えない)。製品経路の入口停止 → `tests/test_optimize_backend.py::test_a_load_face_partly_buried_in_an_exclusion_stops_before_any_evaluation`。
+
+### hanger の実測(`models/hanger_bar_attachment.json`、sha256 `d531c5ed…f042a5df`、目標安全率 2.0)
+
+| 項目 | 4.8mm(実 4.7750 mm、36×66×52) | 2.4mm(実 2.4063 mm、69×129×100) |
+|---|---|---|
+| 導出出力 | 47,232 セル(基準値と一致、剪定 0、1.3 秒) | 367,390 セル(基準値と一致、剪定 0、3.5 秒) |
+| 幾何の表(修正前と同じ) | 荷重面31: 170 節点、未被覆 49 | 荷重面31: 938 節点、未被覆 108。拘束面10・7: 14 節点、未被覆 2 |
+| 確定表 | 荷重面31: 123 節点、未被覆 0、対応不能標本 0、こぼれ 15.7%。拘束面: 各 2 節点 | 荷重面31: 830 節点、未被覆 0、対応不能標本 0、こぼれ 2.1%。拘束面10・7: 12、23: 18 |
+| 荷重保存 | 合力誤差 0 N(要求 (0,0,−200))。重心のずれ 0.139 mm = 0.029 要素(半径以内)。モーメント誤差 3.29 N·mm、正規化 0.0034 | 合力誤差 0 N。重心のずれ 0.0039 要素。モーメント誤差 1.41 N·mm、正規化 0.0029 |
+| 初期全材料マスクの6条件(実FEM、CG) | 全合格。安全率 164.7、代表応力 0.243 MPa、素の最大 36.2 MPa、残差 9.7e-10、最大変位 0.114 mm、14.6 秒 | 全合格。安全率 163.1、代表応力 0.245 MPa、素の最大 50.2 MPa、残差 9.7e-10、104.5 秒 |
+| 探索 | 予算 12: 最良 4,282,880 mm³(−16.7%)、安全率 146.1、9.3 秒/評価、保持 11。予算 60: 最良 4,280,158 mm³(−16.8%)、安全率 146.1、`ok` 11 / `no_component` 48、保持 48、除外 10、生成記述 113(重複 54)、4.0 秒/評価 | 予算 4: 最良 4,129,397 mm³(−19.3%)、安全率 136.9、`ok` 2 / `no_component` 2、保持 3、生成記述 3、136.9 秒/評価 |
+| メモリ | 保持マスク 48 × 123,552 byte = 5.9 MB。tracemalloc のピーク 936 MB は FEM(疎行列・CG)のもので候補管理ではない(スタブ評価では容量+作業配列の数枚) | 保持マスク 3 × 890,100 byte。tracemalloc のピーク 7.2 GB は FEM |
+| 不変条件 | 導出 1 回・候補中メッシュ化 0 回・評価条件ハッシュ不変・最良の再検査合格とハッシュ一致 | 同左 |
+
+修正前の 49 / 108 節点は幾何の表の数字であり、修正後も幾何の表には残る(消していない)。探索へ渡すのは確定表で、
+その全節点が材料に接する。
+
+### 未解決事項
+
+- **体積削減の完成ではない。** 4.8mm は予算 60 で `evaluation_limit`、2.4mm は予算 4。どちらも削減の途中。
+- 4.8mm では評価の 8 割が `no_component`(大きいブロックの削除が、節点 2 個しか持たない拘束面の足場を落とす)。
+  frontier の順位付け(計画書 §4.3 の既知の簡略化)は本修正の範囲外のまま。
+- 平滑化以降の後段(メッシュ化・平滑化・最終ブーリアン)の hanger での通しは本修正で確認していない
+  (`verify_hanger_fix.py` は探索までで止め、メッシュ化 0 回を確認する)。
+- 2.4mm の 1 評価 137 秒(CG)は本修正で変えていない。
+- `web/dist` は再ビルドしていない(型と注釈の変更のみ。`npm run build` は次に UI を触るときに)。

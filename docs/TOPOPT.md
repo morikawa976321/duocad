@@ -63,6 +63,8 @@
 | 既定スレッド数 `PARALLEL_THREADS` | **総コアの半分** | `fem.PARALLEL_THREADS`(`_default_thread_count()`) | 「既定スレッド数を総コアの半分にする」 |
 | 削除・追加・置換探索のfrontier容量 `DEFAULT_FRONTIER_CAPACITY` | **48** | `binary_search.DEFAULT_FRONTIER_CAPACITY` | 計画書§4.3 |
 | 追加操作が連続してよい回数の上限 `DEFAULT_MAX_CONSECUTIVE_ADDS` | **2** | `binary_search.DEFAULT_MAX_CONSECUTIVE_ADDS` | 計画書§4.3 |
+| 候補記述の予算の倍率(評価予算に掛ける) `DEFAULT_CANDIDATES_PER_EVALUATION` | **64** | `binary_search.DEFAULT_CANDIDATES_PER_EVALUATION` | 計画書§4.3 追記(2026-09-17 候補管理) |
+| 条件面の節点重心が面の重心から離れてよい上限(要素サイズ比) `MAPPING_CENTROID_LIMIT_ELEMENTS` | **3.0** | `anchor.MAPPING_CENTROID_LIMIT_ELEMENTS` | 「境界条件の確定(2026-09-17)」 |
 | 要素サイズを指定しないときの最長軸の要素数 `DEFAULT_ELEMENTS_LONG_AXIS` | **40** | `design_space.DEFAULT_ELEMENTS_LONG_AXIS` | 塊の導出(`derive`) |
 | ヤング率の既定 `DEFAULT_YOUNGS_MODULUS_MPA` | **2000** MPa | `material.DEFAULT_YOUNGS_MODULUS_MPA` | 応力の実単位換算(`stress.UnitScale`) |
 
@@ -3569,10 +3571,48 @@ N = max( round(p × 案1の要素数),        # 摘み。PICK_RATIO
 
 ### 探索との接続(段階6以降。旧`safety_loop`接続は削除)
 
-`optimize_run._run` → `derive` 1回 → 条件面・保持/除外の点検 →
+`optimize_run._run` → `derive` 1回 → 条件面の空検査(幾何の表)・保持/除外の表現検査 →
+**境界条件の確定**(`_map_boundary_conditions`。下記)→ 面重心の門(確定表)→
 `binary_search.find_best_feasible(space.mask, conditions, max_evaluations=..., is_cancelled=...)`
-(全候補で同じ `space.mask` から出発。材料量[mm³]は探索変数ではなく、bool二値マスクの
-削除・追加・置換だけを動かす)→ 最終確定マスクを平滑化 → 保持 union・除外 cut。
+(入口で確定表の全節点が `space.mask` に接するかを検査してから、全候補で同じ `space.mask` から出発。
+材料量[mm³]は探索変数ではなく、bool二値マスクの削除・追加・置換だけを動かす)→
+最終確定マスクを平滑化 → 保持 union・除外 cut。**この順序が条件確定の順序**であり、確定表は
+探索の検査・島処理・FEM・デバッグ表示(`?debug=anchors`、`stage="mapping"`)の全てが使う。
+
+### 境界条件の確定(2026-09-17)
+
+導出が条件ごとの接続の確認に使う面アンカーの表(`DesignSpace.table`)は**材料の有無を見ない**
+(`anchor.build_anchors` は標本点から半径1要素の球内の節点へ面積を配り、節点が格子内かだけを見る)。
+一方、6条件の「荷重・拘束が有効」と探索の島処理は**全アンカー節点が材料に接する**ことを要求する。
+格子面に乗らない面(hanger の荷重面はトーラス)では、面の外側(除外ソリッド側)の節点にも配られ、
+その節点はどの設計セルにも接しない —— 導出は通り、全材料マスクが `no_component` になる
+(`docs/INITIAL_SPACE_FAILURE_DIAGNOSIS.md`)。候補は設計空間の部分集合なので、設計空間で接しない
+節点はどの候補でも接しない。
+
+直し方は導出ではなく境界条件の側: `optimize_run._map_boundary_conditions` が
+`acceptance.active_nodes(space.mask)`(導出出力に接する節点)を `anchor.build_anchors(...,
+allowed_nodes=...)` に渡し、**標本ごとに球内の許可節点だけへ重みを配った確定表**を作る(配ってから
+捨てるのではない。球内に許可節点が無い標本は対応不能として面・座標付きで残し、遠い節点へ移さない)。
+`anchor.condition_mapping` が面ごとに節点数・対応不能標本・被覆・合力(数値許容差 `atol 1e-10·max(1,|F|)`)・
+重心のずれ(格子近似の許容差: 全標本が対応した面では球の半径以内。門は `MAPPING_CENTROID_LIMIT_ELEMENTS`=3要素、
+面の取り違え級を捕まえる粗い網)・格子原点まわりのモーメント(`c×F` と `Σp×f`)を検証し、不成立なら
+`state="boundary_mapping_failed"` で探索を始めない。確定後は再配分せず、候補の削除で確定節点が材料から
+離れたらその候補が不合格になる(`acceptance.condition_check`)。確定した節点・荷重・拘束と対応付け規則は
+評価条件ハッシュ(`binary_search.evaluation_identifier`)に入る。記録は `boundary-mapping`
+(`docs/TOPOPT_RECORDING.md`)。
+
+実測(hanger、`output/hanger_fix_verification/`。要素サイズの解析解での検証は
+`tests/test_anchor_mapping.py`):
+
+| 要素サイズ | 荷重面31 幾何の表 | 確定表 | 合力誤差 | 重心のずれ | モーメント誤差 | 全材料の6条件 |
+|---|---|---|---|---|---|---|
+| 4.8mm(実 4.7750) | 170 節点、未被覆 49 | 123 節点、未被覆 0、対応不能 0 | 0 N | 0.029 要素 | 3.29 N·mm(正規化 0.0034) | 全合格、安全率 164.7(14.6 秒) |
+| 2.4mm(実 2.4063) | 938 節点、未被覆 108(拘束面10・7も各 14 節点中 2) | 830 節点、未被覆 0、対応不能 0(拘束面10・7は 12 節点、23 は 18) | 0 N | 0.0039 要素 | 1.41 N·mm(正規化 0.0029) | 全合格、安全率 163.1(104.5 秒、素の最大 50.2 MPa) |
+
+拘束面(10・7・23)は要素サイズ 4.8mm では各2節点しか持たない(担当面積 27〜29 mm²、こぼれ 55〜58%)。
+確定表でも同じ2節点で、被覆に問題は無いが、大きいブロックの削除がこの足場を落として候補が
+`no_component` になりやすい(60評価中48件)。2.4mm では 1 評価が約 137 秒(CG。全材料の初回解は
+104 秒)で、予算 4 の探索でも最初の削除で体積が 19% 減った合格候補が出る(安全率 136.9)。
 `MATERIAL_MIN_RATIO` / `MATERIAL_MAX_RATIO`(材料量の上下限)は`safety_loop.py`ごと
 段階6で削除した——現在の探索に材料量の直接指定は無い。
 

@@ -20,5 +20,6 @@
 | [TOPOPT.md](TOPOPT.md) ほか `TOPOPT_*.md` | 形状最適化（実測・設計と画面・受入検査・探索の時間短縮） |
 | [CAD_LIBRARY_PITFALLS.md](CAD_LIBRARY_PITFALLS.md) | build123d / OCCT / STEP / `.venv` / MCP サーバの落とし穴（コード側コメントの索引つき） |
 | [TOPOPT_PRE_SMOOTHING_CHECKS.md](TOPOPT_PRE_SMOOTHING_CHECKS.md) | 島除去後・平滑化前の6条件と探索履歴の検査 |
-| [PLAN_BINARY_STRESS_SEARCH.md](PLAN_BINARY_STRESS_SEARCH.md) | 二値モデル・応力制約による探索への移行と、旧コード・文書の削除（段階1〜6実装済み。段階7のhanger実機検証は失敗、§10参照） |
-| [FIX_BINARY_SEARCH_INITIALIZATION.md](FIX_BINARY_SEARCH_INITIALIZATION.md) | hanger初期探索失敗への修正指示（アンカー対応・入口検査・候補メモリ管理） |
+| [PLAN_BINARY_STRESS_SEARCH.md](PLAN_BINARY_STRESS_SEARCH.md) | 二値モデル・応力制約による探索への移行と、旧コード・文書の削除（段階1〜6実装済み。段階7のhanger実機検証の失敗は§10.2、修正後の状態は§10.5） |
+| [INITIAL_SPACE_FAILURE_DIAGNOSIS.md](INITIAL_SPACE_FAILURE_DIAGNOSIS.md) | hanger初期合格探索失敗の原因（修正前の測定値: アンカー被覆・候補メモリ量） |
+| [FIX_BINARY_SEARCH_INITIALIZATION.md](FIX_BINARY_SEARCH_INITIALIZATION.md) | hanger初期探索失敗への修正指示と実施結果（境界条件の確定・入口検査・候補メモリ管理。§9に実測） |

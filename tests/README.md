@@ -1215,6 +1215,27 @@ Session.optimize_conditions() / optimize_resolution(rmin_mm=None) / run_optimiza
   無い**——最終確定マスクだけが後段(`finalize`)へ渡る
   （`test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize`）。
   塊の導出そのもの（固定凸包・接続・記録）は `tests/test_design_space.py`。
+- **探索へ渡すアンカーは、導出出力に接する節点だけへ対応付け直した確定表**
+  (`_map_boundary_conditions`。`conditions.table.stats["mapping"] == "material"`、導出の幾何の表とは別物)。
+  面ごとの対応・合力・作用位置の検証(`conditions.mapping`)が不成立なら `state="boundary_mapping_failed"`
+  で探索を始めない(`test_a_load_face_partly_buried_in_an_exclusion_stops_before_any_evaluation`)。
+  `_build_search_conditions` を直接呼ぶ検査・CLIでも同じ確定表が付く。デバッグ配信の面アンカーは
+  この確定表から `stage="mapping"` で1回届く。
+
+## `duocad/topopt/anchor.py` の確定表（`test_anchor_mapping.py`）と `binary_search.py`（`test_binary_search.py`）
+
+- `anchor.build_anchors(..., allowed_nodes=...)` は標本ごとに球内の許可節点だけへ重みを配る。球内に
+  許可節点が無い標本は対応不能として数え、遠い節点へ移さない。`anchor.condition_mapping` は面ごとに
+  節点数・対応不能標本・被覆・合力(数値許容差)・重心のずれ(全標本が対応した面では球の半径以内。門は
+  3要素)・モーメントを検証する。平面(解析解)・格子細分・平行移動と格子位相・相反する複数荷重・
+  所有権競合で空になった面を実CADで固定している。
+- `binary_search.find_initial_feasible` の入口: `resolution_insufficient` → `boundary_mapping_failed`
+  (確定表の節点が全設計空間の材料に接しない。候補生成0回・FEM0回) → `input_contradiction` の順。
+- 候補は `(操作, ブロック領域)` の記述で遅延生成し(1候補を要求した時点で1マスクしか作らない)、
+  frontier は親マスクを容量以内で保持して親を round-robin する。評価予算とは別に候補記述の予算があり、
+  重複しか生成しない親でも `generation_limit` / 中断で止まる。容量超過で親を捨てた探索は
+  `frontier_truncated`(`neighbourhood_exhausted` とは言わない)。実格子相当(48³)で評価回数を8倍にしても
+  実測メモリのピークが増えないことをスタブ評価で固定している。最良合格のマスクは読み取り専用。
 
 ## 回帰ガード（`test_m2_regressions.py` / `test_m3_regressions.py`）
 
