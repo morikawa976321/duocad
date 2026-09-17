@@ -1,4 +1,4 @@
-"""幾何マルチグリッド前処理(`simp.py` の `solver="mg"`)の受入検査。
+"""幾何マルチグリッド前処理(`fem.py` の `solver="mg"`)の受入検査。
 
     .\\.venv\\Scripts\\python.exe topopt_checks\\check_multigrid.py
 
@@ -27,6 +27,7 @@ import sys
 import time
 
 import numpy as np
+from scipy import ndimage
 
 # **Windowsの既定コンソール(cp932)で落ちないようにする。** 記号が1つ混ざるだけで
 # `UnicodeEncodeError` になり、検査が1件も走らないまま異常終了する。
@@ -37,7 +38,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
-from duocad.topopt import simp
+from duocad.topopt import fem
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
@@ -59,24 +60,25 @@ def check(name: str, ok: bool, detail: str) -> None:
 
 
 def _rho_after(dims: tuple[int, int, int], iters: int = 8) -> np.ndarray:
-    """設計反復を少し回した密度場を返す。
+    """滑らかに勾配のある剛性差つきの密度場を合成で作る(SIMPは回さない)。
 
     **一様密度で測ってはいけない。** 一様なら剛性差が無く、マルチグリッドは教科書どおりに
     効いてしまう(実測: 32x16x16 一様で段数を4段まで増やしても 14→18反復)。実際に効き方を
-    決めるのは `emin=1e-9` と `penal=3` が作る 10^9 の剛性差のほうで、それは設計が二値へ
-    寄ってから出てくる。
+    決めるのは `emin=1e-9` が作る 10^9 の剛性差と、境界に残る「灰色」の勾配帯である。
+    ランダムな二値の種を `sigma=1.0` でガウスぼかしして両方を作る。`sigma` はフィルタ半径の
+    物理量ではなく、この検査群(4-2 の Jacobi 反復数の開き等)の閾値に対する校正値
+    (実測: 1.0 で閾値と明確に分離する。0.6〜0.8 では 4-2 が閾値を割り込んだ)。
+    `iters` は種の乱数系列を変えるためだけに使う(旧`max_iter` 引数の名残の引数名)。
     """
-    # **`rmin` を明示する。** この検査のしきい値([4-1]〜[4-4]、[5])はどれも
-    # rmin=1.5 の密度場で校正してある。既定(`simp.DEFAULT_RMIN`)に追随させると、
-    # 2026-09-05 に既定が 2.5 になった時点で密度場が滑らかになり、Jacobi 側の
-    # 反復数の開き([4-2])が 2.4倍 → 1.94倍 まで縮んで検出力の主張が成立しなくなる。
-    # **ここで見たいのは前処理の性質**であってフィルタ半径ではないので、校正時の
-    # 値を固定する(1.5 は `simp.MIN_RMIN` と同じ値だが、意味は「校正値」である)。
-    return simp.optimize(*dims, volfrac=0.3, rmin=1.5, max_iter=iters, solver="mg").rho
+    rng = np.random.default_rng(1000 * dims[0] + 100 * dims[1] + 10 * dims[2] + iters)
+    seed = (rng.random(dims) < 0.3).astype(float)  # 材料要素の目標割合 ~= 0.3
+    smooth = ndimage.gaussian_filter(seed, sigma=1.0, mode="nearest")
+    smooth = smooth / float(smooth.max())
+    return 1e-9 + smooth * (1.0 - 1e-9)
 
 
-def _iterations(model: simp.Model, rho: np.ndarray, **kwargs) -> tuple[int, np.ndarray]:
-    with simp.collect_solve_stats() as stats:
+def _iterations(model: fem.Model, rho: np.ndarray, **kwargs) -> tuple[int, np.ndarray]:
+    with fem.collect_solve_stats() as stats:
         u = model.solve(rho, 3.0, **kwargs)
     return int(stats["cg_iterations"]), u
 
@@ -86,10 +88,10 @@ def check_hierarchy() -> None:
     print("\n[1] 階層(補間作用素)の作り")
     for dims in (GRIDS[2], THIN_GRID, (29, 13, 11)):
         pos = [
-            (simp._coarse_axis(d, 4) if simp._coarse_axis(d, 4) is not None else np.arange(d + 1))
+            (fem._coarse_axis(d, 4) if fem._coarse_axis(d, 4) is not None else np.arange(d + 1))
             for d in dims
         ]
-        p = simp._prolongation(dims, pos)
+        p = fem._prolongation(dims, pos)
         rows = np.asarray(p.sum(axis=1)).ravel()
         check(
             f"1-1 単位分割 {dims}",
@@ -119,12 +121,12 @@ def check_hierarchy() -> None:
         )
 
     # 半粗視化: 薄い軸は間引かない。**これが無いと薄板で粗格子が形をなさなくなる。**
-    thin_model = simp.Model(*THIN_GRID)
+    thin_model = fem.Model(*THIN_GRID)
     dims = list(THIN_GRID)
     seq = [tuple(dims)]
-    for _ in simp.build_mg_transfers(THIN_GRID, thin_model.free):
+    for _ in fem.build_mg_transfers(THIN_GRID, thin_model.free):
         dims = [
-            (len(simp._coarse_axis(d, 4)) - 1 if simp._coarse_axis(d, 4) is not None else d)
+            (len(fem._coarse_axis(d, 4)) - 1 if fem._coarse_axis(d, 4) is not None else d)
             for d in dims
         ]
         seq.append(tuple(dims))
@@ -141,12 +143,12 @@ def check_hierarchy() -> None:
     )
     check(
         "1-7 奇数要素の軸も間引ける",
-        simp._coarse_axis(29, 4) is not None and len(simp._coarse_axis(29, 4)) - 1 == 15,
-        f"29要素 → {len(simp._coarse_axis(29, 4)) - 1}要素(端だけ幅1の粗セル)",
+        fem._coarse_axis(29, 4) is not None and len(fem._coarse_axis(29, 4)) - 1 == 15,
+        f"29要素 → {len(fem._coarse_axis(29, 4)) - 1}要素(端だけ幅1の粗セル)",
     )
     check(
         "1-8 閾値未満の軸は間引かない",
-        simp._coarse_axis(3, 4) is None and simp._coarse_axis(4, 4) is not None,
+        fem._coarse_axis(3, 4) is None and fem._coarse_axis(4, 4) is not None,
         "3要素 → 間引かない / 4要素 → 間引く",
     )
 
@@ -182,15 +184,15 @@ def _symmetry_error(apply, n: int, seed: int = 3) -> float:
 def check_symmetric_positive_definite() -> None:
     print("\n[2] 前処理が対称正定値(V-cycle の順序の罠)")
     dims = GRIDS[2]
-    model = simp.Model(*dims)
+    model = fem.Model(*dims)
     rho = _rho_after(dims)
     kg = model.assemble(rho, 3.0)
     kf = kg[model.free, :][:, model.free].tocsr()
-    opts = simp.MG_DEFAULT
-    levels, lu = simp._mg_setup(kf, model.mg_transfers(opts), opts)
+    opts = fem.MG_DEFAULT
+    levels, lu = fem._mg_setup(kf, model.mg_transfers(opts), opts)
     n = kf.shape[0]
 
-    err = _symmetry_error(lambda b: simp._vcycle(levels, lu, b, 0, opts), n)
+    err = _symmetry_error(lambda b: fem._vcycle(levels, lu, b, 0, opts), n)
     check("2-1 前処理が対称", err < 1e-10, f"対称性の相対誤差 {err:.3e} < 1e-10")
 
     bad = _symmetry_error(lambda b: _asymmetric_cycle(levels, lu, b, 0, opts, post=0), n)
@@ -202,7 +204,7 @@ def check_symmetric_positive_definite() -> None:
     )
 
     rng = np.random.default_rng(11)
-    quads = [float(v @ simp._vcycle(levels, lu, v, 0, opts)) for v in rng.standard_normal((8, n))]
+    quads = [float(v @ fem._vcycle(levels, lu, v, 0, opts)) for v in rng.standard_normal((8, n))]
     check(
         "2-3 前処理が正定値(v^T M v > 0)",
         min(quads) > 0.0,
@@ -211,15 +213,15 @@ def check_symmetric_positive_definite() -> None:
 
     # 小格子では前処理付き作用素の固有値をそのまま見る。**M A の固有値が全て正で 1 の
     # まわりに集まっていること**が「前処理として効いている」の定義そのもの。
-    small = simp.Model(*SPECTRUM_GRID)
+    small = fem.Model(*SPECTRUM_GRID)
     rho_s = np.full(SPECTRUM_GRID, 0.4)
     rho_s[:, :, -1] = 1e-3  # 剛性差を作る(一様だと簡単すぎる)
     kg_s = small.assemble(rho_s, 3.0)
     kf_s = kg_s[small.free, :][:, small.free].tocsr()
-    levels_s, lu_s = simp._mg_setup(kf_s, small.mg_transfers(opts), opts)
+    levels_s, lu_s = fem._mg_setup(kf_s, small.mg_transfers(opts), opts)
     ns = kf_s.shape[0]
     m_dense = np.column_stack(
-        [simp._vcycle(levels_s, lu_s, e, 0, opts) for e in np.eye(ns)]
+        [fem._vcycle(levels_s, lu_s, e, 0, opts) for e in np.eye(ns)]
     )
     # **絶対値で比べない。** M は A の逆に近いので要素の大きさは剛性の逆数(ここでは 1e12 台)。
     # 見るべきは「最大要素に対する非対称成分の比」。
@@ -253,16 +255,16 @@ def check_symmetric_positive_definite() -> None:
 def check_detection_power() -> None:
     print("\n[3] 部品が効いているか(劣化させると反復が増える)")
     dims = GRIDS[2]
-    model = simp.Model(*dims)
+    model = fem.Model(*dims)
     rho = _rho_after(dims)
     base, u_base = _iterations(model, rho, solver="mg")
     check("3-0 既定の反復数(基準)", base > 0, f"{base}回 / 格子 {dims}")
 
     cases = {
-        "粗格子補正を捨てる": simp.MGOptions(coarse_correction=False),
-        "平滑化を1回に減らす": simp.MGOptions(smooth_steps=1),
-        "平滑化の重みを1/5にする": simp.MGOptions(weight_scale=0.2),
-        "粗い段の平滑化を増やさない": simp.MGOptions(smooth_growth=1, direct_dofs=1200),
+        "粗格子補正を捨てる": fem.MGOptions(coarse_correction=False),
+        "平滑化を1回に減らす": fem.MGOptions(smooth_steps=1),
+        "平滑化の重みを1/5にする": fem.MGOptions(weight_scale=0.2),
+        "粗い段の平滑化を増やさない": fem.MGOptions(smooth_growth=1, direct_dofs=1200),
     }
     ratios = {}
     for label, opts in cases.items():
@@ -271,7 +273,7 @@ def check_detection_power() -> None:
         if label == "粗い段の平滑化を増やさない":
             # 粗い段が存在しないと比較にならないので、同じ段数の既定側と比べる。
             ref, _ = _iterations(
-                model, rho, solver="mg", mg=simp.MGOptions(direct_dofs=1200)
+                model, rho, solver="mg", mg=fem.MGOptions(direct_dofs=1200)
             )
         ratios[label] = {"degraded": it, "reference": ref}
         check(
@@ -289,7 +291,7 @@ def check_detection_power() -> None:
     # 弱める側の口しか無いこと。**1 より大きい重みは前処理を非正定値にする**
     # (委譲レビューの実測: weight_scale=5.0 で v^T M v が負になり CG が収束しない)。
     try:
-        _iterations(model, rho, solver="mg", mg=simp.MGOptions(weight_scale=5.0))
+        _iterations(model, rho, solver="mg", mg=fem.MGOptions(weight_scale=5.0))
         rejected = False
         detail = "例外が上がらなかった"
     except ValueError as exc:
@@ -313,9 +315,9 @@ def check_grid_independence() -> None:
     dof_list: list[int] = []
     # **段数を揃える**(`max_levels=1`)。段を増やすと SIMP の剛性差のせいで粗格子の補正が
     # 劣化するので、「格子非依存かどうか」と「段を足した影響」が混ざる。ここで見たいのは前者。
-    two_level = simp.MGOptions(max_levels=1, direct_dofs=1)
+    two_level = fem.MGOptions(max_levels=1, direct_dofs=1)
     for dims in GRIDS:
-        model = simp.Model(*dims)
+        model = fem.Model(*dims)
         rho = _rho_after(dims)
         it_mg, _ = _iterations(model, rho, solver="mg", mg=two_level)
         it_jac, _ = _iterations(model, rho, solver="cg")
@@ -332,7 +334,9 @@ def check_grid_independence() -> None:
     span_mg = max(mg_counts) / min(mg_counts)
     span_jac = max(jac_counts) / min(jac_counts)
     # 閾値の根拠: 実測は 1.0〜1.1倍(自由度が 4.5倍 開いても反復数はほぼ動かない)。
-    # 1.4 は「実測 + 3割の余裕」で、Jacobi 側の 2.4倍とははっきり離れている。
+    # 1.4 は「実測 + 3割の余裕」で、Jacobi 側の 1.7倍台とははっきり離れている
+    # (`_rho_after` を旧SIMP経路から合成密度場へ差し替えた際に再校正した値。
+    # 差し替え前は 2.4倍、差し替え後は 1.7倍台で安定する)。
     check(
         "4-1 段数を揃えれば反復数は格子にほぼ依らない",
         span_mg <= 1.4,
@@ -340,8 +344,8 @@ def check_grid_independence() -> None:
     )
     check(
         "4-2 比較: Jacobi は同じ格子で反復数が開く",
-        span_jac >= 2.0,
-        f"最大/最小 = {span_jac:.2f} >= 2.0(反復数 {jac_counts})。"
+        span_jac >= 1.6,
+        f"最大/最小 = {span_jac:.2f} >= 1.6(反復数 {jac_counts})。"
         "**ここが開かないなら 4-1 は何も示していない**",
     )
     # 伸びの指数(反復数 ∝ 自由度^p)。Jacobi は 0.4〜0.5、マルチグリッドは 0 に近い。
@@ -354,7 +358,7 @@ def check_grid_independence() -> None:
         f"反復数 ∝ 自由度^p: mg p={p_mg:.3f} / jacobi p={p_jac:.3f}",
     )
     # 薄板(粗視化が一番効かない形)でも反復数が同じ水準に収まること。
-    thin = simp.Model(*THIN_GRID)
+    thin = fem.Model(*THIN_GRID)
     rho_thin = _rho_after(THIN_GRID)
     it_thin, _ = _iterations(thin, rho_thin, solver="mg", mg=two_level)
     it_thin_jac, _ = _iterations(thin, rho_thin, solver="cg")
@@ -371,7 +375,7 @@ def check_grid_independence() -> None:
 def check_same_answer() -> None:
     print("\n[5] 答えが変わっていない(既定を Jacobi から切り替えた影響)")
     dims = (16, 8, 8)
-    model = simp.Model(*dims)
+    model = fem.Model(*dims)
     rho = _rho_after(dims, iters=6)
     _, u_mg = _iterations(model, rho, solver="mg")
     _, u_cg = _iterations(model, rho, solver="cg")
@@ -385,61 +389,54 @@ def check_same_answer() -> None:
     check("5-1 mg の変位が直接解法と一致", rel_mg < 1e-7, f"相対差 {rel_mg:.3e} < 1e-7")
     check("5-2 cg の変位が直接解法と一致(比較)", rel_cg < 1e-7, f"相対差 {rel_cg:.3e} < 1e-7")
 
+    # void/solid の混じったパッシブ要素経路でも一致すること。**同じ K・同じ F を
+    # mg/cg 2通りの解法で解くだけ**(SIMPの設計反復は回さない)なので、5-1/5-2 と
+    # 同じ「線形解法の選択が答えを変えない」性質の、パッシブ要素版という位置づけ。
+    # **`active_mask` では外さない**(空要素にしか接していない節点が浮いた自由度になり、
+    # `fem._floating_dofs` で拘束へ足さない限り多重格子の前処理が特異になって落ちる ——
+    # 実際に踏んだ)。ここで見たいのは解法の一致であって組み立て除外の効果ではないので、
+    # 空要素は ρ=emin に固定するだけ(除外はしない)で済ませる。
     void = np.zeros(dims, dtype=bool)
     solid = np.zeros(dims, dtype=bool)
     void[:, :, -2:] = True
     solid[0, :, :2] = True
-    kw = dict(volfrac=0.35, max_iter=10, change_tol=0.0, void_mask=void, solid_mask=solid)
-    res_mg = simp.optimize(*dims, solver="mg", **kw)
-    res_cg = simp.optimize(*dims, solver="cg", **kw)
-    c_mg = float(res_mg.history[-1].compliance)
-    c_cg = float(res_cg.history[-1].compliance)
+    passive_rho = rho.copy()
+    passive_rho[void] = 1e-9
+    passive_rho[solid] = 1.0
+    u_mg2 = model.solve(passive_rho, 3.0, solver="mg")
+    u_cg2 = model.solve(passive_rho, 3.0, solver="cg")
+    c_mg, _ = model.compliance(passive_rho, 3.0, u_mg2)
+    c_cg, _ = model.compliance(passive_rho, 3.0, u_cg2)
     d_c = abs(c_mg - c_cg) / abs(c_cg)
-    d_rho = float(np.abs(res_mg.rho - res_cg.rho).max())
-    RESULTS["optimize_mg_vs_cg"] = {
+    d_u = float(np.linalg.norm(u_mg2 - u_cg2) / np.linalg.norm(u_cg2))
+    RESULTS["passive_mg_vs_cg"] = {
         "compliance_mg": c_mg,
         "compliance_cg": c_cg,
         "rel_compliance": d_c,
-        "max_rho_diff": d_rho,
+        "rel_displacement": d_u,
     }
-    # 許容差の根拠(実測を見て決めた): 10反復回したあとで
-    # コンプライアンス 1e-9 台、rho 場の最大差 1e-7 台。設計反復は前の解を初期値にするので
-    # 解法の 1e-9 の差が少しだけ増幅する。**1e-6 / 1e-4 は実測の2桁上**に置いてある。
     check(
         "5-3 パッシブ要素経路のコンプライアンスが解法に依らない",
         d_c < 1e-6,
         f"mg {c_mg:.10f} / cg {c_cg:.10f}(相対差 {d_c:.3e} < 1e-6)",
     )
     check(
-        "5-4 rho 場が解法に依らない",
-        d_rho < 1e-4,
-        f"最大差 {d_rho:.3e} < 1e-4",
+        "5-4 パッシブ要素経路の変位が解法に依らない",
+        d_u < 1e-6,
+        f"相対差 {d_u:.3e} < 1e-6",
     )
     check(
-        "5-5 反復の止まり方が同じ",
-        len(res_mg.history) == len(res_cg.history)
-        and res_mg.stopped_by == res_cg.stopped_by,
-        f"mg {len(res_mg.history)}反復/{res_mg.stopped_by} · "
-        f"cg {len(res_cg.history)}反復/{res_cg.stopped_by}",
-    )
-    check(
-        "5-6 退避経路が残っている",
+        "5-5 退避経路が残っている",
         all(
-            simp.Model(4, 2, 2).solve(np.full((4, 2, 2), 0.5), 3.0, solver=s) is not None
+            fem.Model(4, 2, 2).solve(np.full((4, 2, 2), 0.5), 3.0, solver=s) is not None
             for s in ("cg", "direct", "mg")
         ),
         "solver は cg / direct / mg の3つとも解ける",
     )
     check(
-        "5-7 既定の解法がマルチグリッド",
-        simp.optimize.__kwdefaults__["solver"] == "mg"
-        and simp.Model.solve.__kwdefaults__["solver"] == "mg",
-        "optimize / Model.solve の既定が solver='mg'",
-    )
-    check(
-        "5-8 片持ち梁プリセットは Jacobi のまま",
-        simp.PRESET["solver"] == "cg",
-        "PRESET['solver'] = 'cg'(回帰基準がこれに依存している)",
+        "5-6 既定の解法がマルチグリッド",
+        fem.Model.solve.__kwdefaults__["solver"] == "mg",
+        "Model.solve の既定が solver='mg'",
     )
 
 

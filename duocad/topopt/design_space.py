@@ -20,7 +20,6 @@ import math
 import sys
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Optional, Sequence
 
 import numpy as np
@@ -30,8 +29,6 @@ from scipy.spatial import ConvexHull, QhullError
 from . import anchor as an
 from . import trace
 from . import voxelize as vx
-
-_HERE = Path(__file__).resolve().parent
 
 #: 診断に書く導出方式の名前。記録を読む側(`topopt_checks/`)はこの文字列で新旧を見分ける。
 DERIVATION = "convex-hull-offset"
@@ -86,8 +83,8 @@ class DesignSpaceDisconnectedError(ValueError):
 
     `components` は塊の連結成分の数、`unreached` は取り残された条件の名前、`seeds` は
     条件ごとの `{"elements": 塊の中の要素数, "labels": 所属する成分}`。条件面の名前は
-    `anchor.run_pipeline` が反力グループに付けるものと同じ `fixed_face_<面添字>` /
-    `load_face_<面添字>`、保持ボディは `keep_<ボディ名>`。
+    `connect_conditions` が付ける `fixed_face_<面添字>` / `load_face_<面添字>`、
+    保持ボディは `keep_<ボディ名>`。
     """
 
     def __init__(
@@ -238,8 +235,8 @@ def connect_conditions(
 
     **節点が1つも付かなかった条件面があるときは連結性を見ず、塊もそのまま返す** —— それは
     「要素サイズより小さい面にアンカーが付かない」という別の穴で、`AnchorTable.empty_faces()` を
-    見る既存の口(`optimize_run` の `empty_condition_faces` / `run_topopt` の早期return)が
-    診断を出す。ここで落とすとその手前で別の例外に化けて原因が分かりにくくなる。
+    見る既存の口(`optimize_run._empty_condition_faces`)が診断を出す。ここで落とすと
+    その手前で別の例外に化けて原因が分かりにくくなる。
     """
     fixed = _as_faces(fixed_faces)
     load = _as_faces(load_faces)
@@ -348,10 +345,9 @@ class Conditions:
     `load_n` は荷重の**実際の大きさ**[N]。荷重が複数のときは**その大きさの総和**であって
     合力(ベクトル和)ではない —— 向きの違う荷重が打ち消し合うと合力は0になりうるが、
     総和なら0にならない(`optimize_run.build_conditions` / `stress.load_magnitude_total`)。
-    最適化そのもの(`simp.optimize` / `run_topopt` の `force` / `forces`)は無次元
+    最適化そのもの(`optimize_run.build_conditions` が組み立てる荷重)は無次元
     (荷重の総量が1.0)で回り続ける —— `load_n` はここでは使われず、
-    `stress.UnitScale.for_model(..., load_n=conditions.load_n)` が応力を実単位[MPa]へ
-    換算するときにだけ参照する(`safety_loop.py`)。
+    `stress.UnitScale` が応力を実単位[MPa]へ換算するときにだけ参照する。
     """
 
     keep: Any
@@ -665,9 +661,9 @@ def derive(
     else:
         n_long = max(1, int(round(float(np.max(box_hi - box_lo)) / float(spacing))))
     grid = vx.grid_for_bbox(box_lo, box_hi, n_long)
-    # **保持/除外を格子に載せるときの三角形分割は要素サイズから決める。** `anchor.run_pipeline` は
-    # `model_from_design_mask` を deviation 無しで呼ぶ(= 要素サイズの `DEFAULT_DEVIATION_RATIO` 倍)
-    # ので、ここを揃えておかないとここで通した保持が run_pipeline では通らない。
+    # **保持/除外を格子に載せるときの三角形分割は要素サイズから決める。** この関数の下の方で
+    # `model_from_design_mask` を deviation 無しで呼ぶ(= 要素サイズの `DEFAULT_DEVIATION_RATIO`
+    # 倍)ので、ここを揃えておかないと通した保持がそこで通らない。
     dev = float(deviation) if deviation else max(grid.spacing * deviation_ratio, 1e-6)
 
     frame = box_mask(grid, box_lo, box_hi)
@@ -728,8 +724,8 @@ def derive(
     soup = vx.triangles_from_shape(
         vx._unwrap(conditions.anchor), deviation=dev, angular_deflection=angular_deflection
     )
-    # アンカーの表は `run_pipeline` と同じ作り方(全面・既定の半径)で作る。`faces=` で2面に
-    # 絞ると稜線の規則(節点は最も面積を配った面が持つ)の競争相手が減り、**向こうとは別の
+    # アンカーの表は**全面・既定の半径**で作る。`faces=` で対象の面を絞ると稜線の規則
+    # (節点は最も面積を配った面が持つ)の競争相手が減り、**絞らずに作った表とは別の
     # 節点集合**になる —— 同じものを見ているつもりで違うものを見ることになる。
     table = an.build_anchors(soup, grid)
     connected, connectivity = connect_conditions(
@@ -878,97 +874,6 @@ def _keep_bodies_on_grid(
         else:
             seeds[f"keep_{body.name}"] = raw & design
     return report, seeds, conflicts, unrepresented
-
-
-# ---------------------------------------------------------------------------
-# 端から端まで(塊 → 面アンカー → SIMP → marching cubes → STL)
-# ---------------------------------------------------------------------------
-@trace.stage("candidate")
-def run_topopt(
-    space: DesignSpace,
-    *,
-    volfrac: Optional[float] = None,
-    material_mm3: Optional[float] = None,
-    rmin: Optional[float] = None,
-    rmin_mm: Optional[float] = None,
-    max_iter: int = 60,
-    force: Sequence[float] = (0.0, 0.0, -1.0),
-    forces: Optional[Sequence[Sequence[float]]] = None,
-    stl_path: Optional[str | Path] = None,
-    progress: Any = None,
-    solver: Optional[str] = None,
-    threads: Optional[int] = None,
-    update: Optional[str] = None,
-    reaction_min: Optional[float] = None,
-    keep_model: bool = False,
-    dynamic_active: bool = False,
-) -> dict:
-    """導出した塊を端から端まで回す(塊 → 面アンカー → SIMP → marching cubes → STL)。
-
-    `stl_path` は**必ず渡すか、既定のこの関数の出力先に任せる**。`anchor.run_pipeline` の既定は
-    `output/bracket.stl` で、それは `check_anchor.py` の成果物である。
-
-    体積目標は `volfrac`(分率)か `material_mm3`(材料の総体積[mm^3])のどちらか一方
-    (両方渡すと例外)。**塊を自動で導出する経路では絶対量を使うこと** —— 余白比率や姿勢で
-    塊の大きさが変わると、同じ分率でも材料の量が変わってしまう。どちらも渡さなければ
-    `simp.DEFAULT_VOLFRAC`。
-
-    密度フィルタ半径は `rmin`(要素単位)か `rmin_mm`(mm)のどちらか一方(排他)。
-    どちらも渡さなければ `simp.DEFAULT_RMIN`(**値は動く。床の `simp.MIN_RMIN` とは別物**)。
-    `anchor.run_pipeline` へそのまま渡す(要素サイズはそちらが格子から決める)。
-
-    `keep_model=True` / `dynamic_active=True` / `update` / `reaction_min` / `force` / `forces` /
-    `solver` / `threads` は `anchor.run_pipeline` の同名の引数へそのまま渡る(意味の正はそちら)。
-    **どれも既定のままなら経路は1ビットも変わらない。**
-
-    戻り値の `"reactions"` は拘束面1枚ごとの反力(`anchor.run_pipeline` の契約そのまま)。
-
-    拘束面・荷重面が要素サイズより小さくて格子節点が1つも付かないと
-    (`anchor.AnchorTable.empty_faces()`)、**例外にはせず**戻り値の
-    `"empty_condition_faces"` に診断が積まれて早期returnする(`anchor.run_pipeline` の契約
-    そのまま)。同じ診断を `space.stats["empty_condition_faces_warning"]` にも書く
-    (`DesignSpace` は呼び出し元がそのまま持っているので、戻り値を経由しなくても後から
-    見える。docs/TOPOPT.md「面が小さすぎて空になる」参照)。**塊そのものは書き換えない。**
-    """
-    out = Path(stl_path) if stl_path is not None else _HERE / "output" / "design_space_case1.stl"
-    result = an.run_pipeline(
-        shape=space.soup,
-        design_mask=space.mask,
-        design_grid=space.grid,
-        keep=space.conditions.keep,
-        # 除外は塊から引き切ってある(モジュール docstring の設計判断)。
-        obstacle=None,
-        fixed_faces=space.fixed_faces,
-        load_faces=space.load_faces,
-        volfrac=volfrac,
-        material_mm3=material_mm3,
-        rmin=rmin,
-        rmin_mm=rmin_mm,
-        max_iter=max_iter,
-        force=force,
-        forces=forces,
-        stl_path=out,
-        progress=progress,
-        solver=solver,
-        threads=threads,
-        update=update,
-        reaction_min=reaction_min,
-        keep_model=keep_model,
-        dynamic_active=dynamic_active,
-    )
-    # `run_pipeline` は保持ソリッドを**自分でもう一度**格子へ載せる。三角形分割の細かさが
-    # `derive` と食い違うと、ここで通した塊が向こうでは通らない(逆もある)。揃えてあることを
-    # 数字で確かめる —— 揃っていなければ黙って別のものを最適化していることになる。
-    if not np.array_equal(np.asarray(result["model"].keep), np.asarray(space.model.keep)):
-        raise ValueError(
-            "derive() と run_pipeline() で保持領域の要素が食い違った"
-            f"({int(space.model.keep.sum())} 要素 → {int(result['model'].keep.sum())} 要素)。"
-            "derive() に deviation を明示的に渡していないか確認すること"
-            "(run_pipeline は要素サイズから決め直す)。"
-        )
-    if result.get("empty_condition_faces"):
-        space.stats["empty_condition_faces_warning"] = result["empty_condition_faces"]
-    return result
 
 
 # ---------------------------------------------------------------------------

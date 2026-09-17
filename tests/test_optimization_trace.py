@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pytest
 
-from duocad.topopt import trace, simp, mesh
+from duocad.topopt import trace, fem, mesh
 
 
 @pytest.fixture
@@ -41,24 +41,27 @@ def test_corrupt_array_is_rejected(recordings):
     with pytest.raises(ValueError,match='ハッシュ'): snapshot(rec,'arrays')
 
 
-def test_simp_recording_keeps_numerics_and_density_timing(recordings):
-    kwargs=dict(nelx=6,nely=3,nelz=3,max_iter=3,solver='direct',threads=1,rmin=1.5)
-    expected=simp.optimize(**kwargs)
+def test_repeated_solves_are_recorded_reproducibly(recordings):
+    """`trace.recording()` は録っても数値を変えず(録ることが計算に影響しない)、同じ
+    `@trace.stage`/`trace.snapshot` の複数回の呼び出しをそれぞれ別スナップショットとして残す。
+
+    旧SIMPの設計反復(`simp.optimize`)を追っていた検査の後継。二値探索
+    (`binary_search`/`acceptance`)は候補ごとにトレースを打たない(段階6の契約)ので、
+    代わりに `fem.Model.solve_many` が1回の呼び出しの中で複数右辺を逐次解く経路
+    (`fem.py` の `linear-solve`/`linear-residual` が右辺ごとに1回出る)で同じ性質を見る。
+    """
+    model=fem.Model(6,3,3)
+    rho=np.ones((6,3,3))
+    rhs=np.stack([model.f,model.f,model.f])
+    expected=model.solve_many(rho,3.0,rhs,solver='direct')
     with trace.recording() as rec:
-        actual=simp.optimize(**kwargs)
-    assert np.array_equal(actual.rho,expected.rho)
-    assert [i.compliance for i in actual.history]==[i.compliance for i in expected.history]
-    inputs=sorted(rec.path.glob('*-iteration-input.json'))
-    outputs=sorted(rec.path.glob('*-iteration-output.json'))
-    analyses=sorted(rec.path.glob('*-iteration-analysis.json'))
-    assert len(inputs)==len(outputs)==len(analyses)==3
-    for i in range(2):
-        assert np.array_equal(trace.load_snapshot(outputs[i])['rho'],trace.load_snapshot(inputs[i+1])['rho'])
-    assert np.array_equal(trace.load_snapshot(outputs[-1])['rho'],actual.rho)
-    initial=snapshot(rec,'simp-initial')
-    analysis=trace.load_snapshot(analyses[0])
-    assert np.isclose(initial['model']['f']@analysis['u'],analysis['compliance'])
-    assert len(list(rec.path.glob('*-linear-residual.json')))==3
+        actual=model.solve_many(rho,3.0,rhs,solver='direct')
+    assert np.array_equal(actual,expected)
+    solves=sorted(rec.path.glob('*-linear-solve.json'))
+    residuals=sorted(rec.path.glob('*-linear-residual.json'))
+    assert len(solves)==len(residuals)==3
+    for index,path in enumerate(solves):
+        assert trace.load_snapshot(path)['rhs_index']==index
 
 
 def test_surface_replay_and_all_smoothing_substeps(recordings):

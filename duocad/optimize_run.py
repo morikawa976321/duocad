@@ -268,8 +268,9 @@ def build_conditions(doc: "Document") -> ConditionBundle:
     戻す割り算が壊れる**。総和なら打ち消しに影響されない。`stress.load_magnitude_total`
     が解いた側で同じ量を測っており、**2つの定義が食い違うと応力が黙って定数倍ずれる**。
 
-    `simp` は無次元(荷重の総量1.0)で回り続ける契約(`done/20260904-0143`)。実単位[N]は
-    `load_n` だけが持ち、`stress.UnitScale.for_model` がそれを読む。
+    探索(`binary_search`/`acceptance`)は無次元(荷重の総量1.0)で回り続ける契約
+    (`done/20260904-0143`)。実単位[N]は `load_n` だけが持ち、
+    `stress.UnitScale.for_model` がそれを読む。
     """
     from . import optimize
     from .topopt import design_space as ds
@@ -1189,7 +1190,7 @@ def _empty_condition_faces(space) -> List[dict]:
     """本番解像度で拘束面・荷重面のアンカーが空になっていないか(`20260904-1556` と同じ形)。
 
     `DesignSpace.table` は導出が作った**本番の格子の**面アンカーの表である。
-    無ければ空リストを返す —— その場合は `run_topopt` の入口層が同じ診断を出す。
+    無ければ空リストを返す(`derive()` が `table` を必ず設定する現行経路では通常起きない)。
     """
     table = getattr(space, "table", None)
     if table is None:

@@ -9,11 +9,10 @@
 検査の構成:
 
 0. **節点番号と境界条件の口の契約** — `NodeGrid` の通し番号・自由度番号が
-   `simp._build_edof` と一致する。ここがずれると荷重は別の場所に入り、それでも最適化は
-   「もっともらしく」収束するので、下の1〜7が全部緑でも意味が無い。**最初に置くのはそのため。**
-   あわせて、**`void_mask` だけを渡した `optimize`** が既定の拘束を明示した場合と
-   `rho` ビット単位で一致すること(`Model` を直に組んで `fixed` の包含関係を見るだけでは、
-   置き換えの回帰が素通りする)と、**拘束不足が拘束不足と名指しして落ちる**ことを見る。
+   `fem._build_edof` と一致する。ここがずれると荷重は別の場所に入り、それでも最適化は
+   「もっともらしく」収束するので、下の1〜6が全部緑でも意味が無い。**最初に置くのはそのため。**
+   あわせて、既定の拘束(`fem.Model` の片持ち梁)が非空であることと、
+   **拘束不足が拘束不足と名指しして落ちる**ことを見る。
 1. **総荷重の保存** — 解像度を2倍にしても、節点荷重の合計が指定値と一致する(相対1e-12)。
    面が複数のときも、荷重が斜めのときも見る。あわせて**圧力の合力が `p x cad_area` と
    一致する**(稜線で捨てた面積に依らないこと。担当面積から出していた修正前のコードに
@@ -32,11 +31,9 @@
    「最も多く面積を配った面(同点なら面添字の小さい面)」へ行っている。あわせて、
    その帰結として**要素サイズより小さい面は節点が空になる**こと、そのとき荷重・拘束の
    口が黙って0を返さず落ちることを見る。
-7. **端から端まで** — 合成ブラケットで「ソリッド → ボクセル化 → 面アンカーで固定/荷重 →
-   SIMP → marching cubes → STL」が繋がり、`check_simp.py` と同等の収束指標
-   (目標体積±1%・コンプライアンス減少・終盤10反復の変動1%未満)を満たす。
 
-所要は約2分(大半は7の最適化)。
+`anchor.py` 自体の「ソリッド → 格子 → 面アンカー」の端から端までの通しは
+`topopt_checks/check_optimize_wiring.py`(製品経路の受入検査)が見る。
 """
 
 from __future__ import annotations
@@ -60,10 +57,8 @@ for _stream in (sys.stdout, sys.stderr):
 from build123d import Box, Cylinder, Pos, Rotation  # noqa: E402
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
-from duocad.topopt import OUTPUT_DIR
 from duocad.topopt import anchor as an  # noqa: E402
-from duocad.topopt import bench  # noqa: E402
-from duocad.topopt import simp  # noqa: E402
+from duocad.topopt import fem  # noqa: E402
 from duocad.topopt import voxelize as vx  # noqa: E402
 
 FAILURES: list[str] = []
@@ -76,6 +71,10 @@ HALF_CYLINDER = Cylinder(10, 30) & Pos(10, 0, 0) * Box(20, 30, 40)
 # 検査[5]の曲面。**モジュール定数にしてあるのは `_table` のメモ化を効かせるため**
 # (呼ぶたびに `Cylinder(12, 40)` を作ると別物になり、同じ格子を作り直すことになる)。
 FULL_CYLINDER = Cylinder(12, 40)
+
+# 検査[2] 解像度非依存。**3段の比が4倍であること**が検査の前提
+# (「解像度4倍で誤差が半分以下」を見ている)。
+ANCHOR_CONVERGENCE_RESOLUTIONS = (8, 16, 32)
 
 
 def check(name: str, ok: bool, detail: str) -> None:
@@ -115,10 +114,10 @@ def _tilted_face(soup: vx.TriangleSoup) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 0. 節点番号の契約(simp._build_edof と一致するか)
+# 0. 節点番号の契約(fem._build_edof と一致するか)
 # ---------------------------------------------------------------------------
 def check_node_numbering() -> None:
-    print("[0] 節点番号と境界条件の口の契約(simp._build_edof / Model と一致)")
+    print("[0] 節点番号と境界条件の口の契約(fem._build_edof / Model と一致)")
     grid = vx.Grid(origin=(-3.0, 1.5, 7.25), spacing=0.75, shape=(5, 4, 3))
     ng = an.NodeGrid(grid)
     nelx, nely, nelz = grid.shape
@@ -128,7 +127,7 @@ def check_node_numbering() -> None:
         f"{ng.shape} (要素 {grid.shape})",
     )
 
-    edof = simp._build_edof(nelx, nely, nelz)
+    edof = fem._build_edof(nelx, nely, nelz)
     # `_build_edof` の要素の並びは meshgrid(indexing="ij") の ravel = (i,j,k) のC順。
     ex, ey, ez = np.meshgrid(
         np.arange(nelx), np.arange(nely), np.arange(nelz), indexing="ij"
@@ -143,7 +142,7 @@ def check_node_numbering() -> None:
         theirs = edof[:, 3 * l] // 3
         worst = max(worst, int(np.abs(mine - theirs).max()))
     check(
-        "8隅の節点番号が simp の DOF 写像と一致",
+        "8隅の節点番号が fem の DOF 写像と一致",
         worst == 0,
         f"要素 {elements.shape[0]} 個 x 8隅で最大差 {worst}",
     )
@@ -176,46 +175,21 @@ def check_node_numbering() -> None:
         f"中心-節点={np.round(centre - pos[0], 6).tolist()}",
     )
 
-    # `void_mask` だけを渡したとき、**既定の片持ち梁の拘束が消えないこと**を
-    # **`optimize` を実際に通して**見る。`Model` を直に組んで `fixed` の包含関係だけを
-    # 見ていると、「optimize が拘束を置き換えてしまう」種類の回帰は素通りする
-    # (`optimize` こそが置き換えていた場所なので、そこを通らない検査には意味が無い)。
-    void = np.zeros((6, 4, 4), dtype=bool)
-    void[:, 0, :] = True                      # y の1層を空にして浮いた節点を作る
-    default_fixed = simp.Model(6, 4, 4).fixed
-    opts = dict(max_iter=3, solver="direct", void_mask=void)
-    detail = ""
-    ok = False
-    try:
-        implicit = simp.optimize(6, 4, 4, **opts)
-        explicit = simp.optimize(6, 4, 4, fixed_dofs=default_fixed, **opts)
-        same = bool((implicit.rho == explicit.rho).all())
-        void_empty = float(implicit.rho[void].max()) == 0.0
-        finite = bool(np.isfinite(implicit.history[-1].compliance)) and (
-            implicit.history[-1].compliance > 0
-        )
-        ok = same and void_empty and finite
-        detail = (
-            f"暗黙 vs 既定を明示した場合の rho がビット一致={same} / "
-            f"空領域の最大密度={implicit.rho[void].max():.3e} / "
-            f"C={implicit.history[-1].compliance:.6f}"
-        )
-    except ValueError as exc:
-        # 既定の拘束が消えると拘束不足になり、残差の検算がここで落とす(それも不合格)。
-        detail = f"optimize が例外で落ちた(拘束が消えている疑い): {exc!s:.120}"
+    # `Model(fixed_dofs=None)` の既定は片持ち梁の拘束(`fem.Model.__init__` の契約)。
+    default_fixed = fem.Model(6, 4, 4).fixed
     check(
-        "void_mask だけを渡した optimize が、既定の拘束を明示した場合と厳密に一致する",
-        ok,
-        detail,
+        "fixed_dofs を渡さない既定は非空(片持ち梁の拘束が立っている)",
+        default_fixed.size > 0,
+        f"既定の拘束自由度 {default_fixed.size} 個",
     )
 
     # 拘束不足の系を**黙って解かない**こと。1自由度だけ拘束すると K は特異になるが、
     # 「非空で範囲内」の検査は通ってしまう。実測ではCGが収束しないまま
-    # max|u| = 1.2e16 の有限値が返り、最適化はその値を信じて進んだ末に
-    # OC 更新の ZeroDivisionError で落ちていた(原因から遠い場所で落ちるのが最悪)。
+    # max|u| が有限の大きな値で返っていた(原因から遠い場所で落ちるのが最悪)。
     raised = ""
     try:
-        simp.optimize(6, 4, 4, max_iter=3, fixed_dofs=np.array([0]))
+        singular = fem.Model(6, 4, 4, fixed_dofs=np.array([0]))
+        singular.solve(np.ones((6, 4, 4)), 3.0, solver="direct")
     except ValueError as exc:
         raised = str(exc)
     check(
@@ -310,7 +284,7 @@ def check_load_conservation() -> None:
 # ---------------------------------------------------------------------------
 def check_resolution_convergence() -> None:
     print("[2] 解像度非依存(重心・担当面積が真の面へ収束する)")
-    res = bench.ANCHOR_CONVERGENCE["resolutions"]
+    res = ANCHOR_CONVERGENCE_RESOLUTIONS
     cases = (
         ("傾けた箱の平面", TILTED, _tilted_face, res),
         ("半円柱の曲面", HALF_CYLINDER, lambda s: _face_of(s, "cylinder_partial"), res),
@@ -707,111 +681,6 @@ def check_edge_rule() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# 7. 端から端まで
-# ---------------------------------------------------------------------------
-def check_end_to_end() -> None:
-    print("[7] 端から端まで(ソリッド → 格子 → 面アンカー → SIMP → marching cubes → STL)")
-    out_path = OUTPUT_DIR / "bracket.stl"
-    t0 = time.perf_counter()
-    out = an.run_pipeline(
-        elements_long_axis=bench.ANCHOR_END_TO_END["elements_long_axis"],
-        max_iter=bench.ANCHOR_END_TO_END["max_iter"],
-        volfrac=0.3,
-        stl_path=out_path,
-    )
-    seconds = time.perf_counter() - t0
-    model = out["model"]
-    result = out["result"]
-    history = [it.compliance for it in result.history]
-
-    check(
-        "面アンカーで固定面と荷重面を名指しできた",
-        set(out["fixed_faces"]).isdisjoint(out["load_faces"]),
-        f"固定=面{out['fixed_faces']} 荷重=面{out['load_faces']} "
-        f"(荷重面の節点 {out['table'][out['load_faces'][0]].node_count})",
-    )
-    vol_rel = abs(out["achieved_volume"] - out["target_volume"]) / out["target_volume"]
-    check(
-        "目標体積の±1%以内(check_simp の完了条件1-(a)と同じ基準)",
-        vol_rel < 0.01,
-        f"{out['achieved_volume']:.3f} 要素 / 目標 {out['target_volume']:.3f} (相対 {vol_rel:.3e})",
-    )
-    check(
-        "コンプライアンスが減少した",
-        history[-1] < history[0],
-        f"C {history[0]:.4f} → {history[-1]:.4f} ({len(history)}反復)",
-    )
-    tail = np.array(history[-bench.TAIL_WINDOW :])
-    swing = float((tail.max() - tail.min()) / tail.mean())
-    check(
-        "終盤10反復の変動が1%未満(check_simp の完了条件1-(b)と同じ基準)",
-        swing < 0.01,
-        f"(max-min)/mean = {swing:.4%}",
-    )
-    check(
-        "コンプライアンスが有限で正",
-        bool(np.isfinite(history).all() and (np.array(history) > 0).all()),
-        f"min={min(history):.4f}",
-    )
-    check(
-        "設計空間の外に材料が残っていない",
-        float(result.rho[~model.design].max()) == 0.0,
-        f"外の最大密度 {result.rho[~model.design].max():.3e}",
-    )
-    keep_near = out["table"].element_mask(
-        list(out["fixed_faces"]) + list(out["load_faces"]), layers=1
-    ) & model.design
-    check(
-        "荷重・拘束の近傍が非設計領域(ρ=1)に固定されている",
-        float(result.rho[keep_near].min()) == 1.0,
-        f"近傍 {int(keep_near.sum())} 要素の最小密度 {result.rho[keep_near].min():.6f}",
-    )
-    surface = out["surface"]
-    check(
-        "marching cubes が空でない面を返した",
-        surface.verts_smooth.shape[0] > 0 and surface.faces.shape[0] > 0,
-        f"頂点 {surface.verts_smooth.shape[0]} / 三角形 {surface.faces.shape[0]}",
-    )
-    # バイナリSTL: 80バイトヘッダ + uint32三角形数 + 1三角形50バイト(`mesh.write_stl`)。
-    size = out_path.stat().st_size if out_path.exists() else 0
-    declared = -1
-    if size >= 84:
-        with out_path.open("rb") as fh:
-            fh.seek(80)
-            declared = int(np.frombuffer(fh.read(4), dtype="<u4")[0])
-    check(
-        "STL が書けていて、三角形数もサイズも面と一致する",
-        declared == surface.faces.shape[0] and size == 84 + 50 * declared,
-        f"{out_path.name} {size} バイト / 宣言 {declared} 三角形 / 面 {surface.faces.shape[0]}",
-    )
-
-    # 荷重が実際に系へ入っていること(拘束DOFへ全部落ちていたら simp が例外にするが、
-    # ここでも合計で確かめる)。
-    load = out["table"].load_vector(out["load_faces"], (0.0, 0.0, -1.0))
-    check(
-        "荷重ベクトルの合計が指定値(パイプライン内でも保存されている)",
-        abs(float(load[2::3].sum()) + 1.0) < 1e-12,
-        f"合計 {load[2::3].sum():.15f}",
-    )
-
-    RESULTS["end_to_end"] = {
-        "grid": list(model.grid.shape),
-        "spacing": round(model.grid.spacing, 6),
-        "design_elements": out["design_elements"],
-        "movable_elements": out["free_elements"],
-        "solid_elements": out["solid_elements"],
-        "void_elements": out["void_elements"],
-        "iterations": len(history),
-        "compliance": [round(history[0], 4), round(history[-1], 4)],
-        "tail_swing": round(swing, 6),
-        "volume_rel_err": vol_rel,
-        "timings": {k: round(v, 3) for k, v in out["timings"].items()},
-        "seconds": round(seconds, 1),
-        "stl_bytes": size,
-    }
-
-
 def main() -> int:
     print("=" * 72)
     print("check_anchor.py : CAD の面 → 格子の節点の対応表(anchor.py)の受入検査")
@@ -824,7 +693,6 @@ def main() -> int:
     check_normals()
     check_no_false_concentration()
     check_edge_rule()
-    check_end_to_end()
     RESULTS["total_seconds"] = round(time.perf_counter() - started, 1)
 
     print("\n" + "=" * 72)

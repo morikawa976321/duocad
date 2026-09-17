@@ -60,14 +60,19 @@
 |---|---|---|---|
 | 塊(設計空間)の余白比率 `margin_ratio` | **0.20** | `design_space.DEFAULT_MARGIN_RATIO` | 「固定凸包による設計空間(2026-09-16)」(2026-09-16 本人判断で 0.25 → 0.20。0.25 の根拠は「余白比率をどう決めたか(既定 0.25)」) |
 | 塊の導出方式 | 固定凸包(保持・条件面のボディの外接箱の頂点の凸包から距離 `m` 以内 = 球とのミンコフスキー和)。材料量によらず1実行に1回 | `design_space.DERIVATION` | 「固定凸包による設計空間(2026-09-16)」 |
-| 材料量探索の収束幅 `rel_tol` / 評価回数の上限 | **0.08** / **15** | `safety_loop.DEFAULT_REL_TOL` / `DEFAULT_MAX_EVALUATIONS` | 「収束条件と回数上限をどう決めたか」 |
-| 候補ごとの SIMP 反復数 | **40** | `safety_loop.DEFAULT_MAX_ITER` | 同上 |
-| 許容応力(PETG の降伏応力 × 造形の低減係数) | **50** MPa × **0.8** | `safety_loop.PETG_YIELD_MPA` / `PRINT_DERATE` | 「許容応力の導出」 |
-| 密度フィルタ半径の既定 `rmin` | **2.5要素** | `simp.DEFAULT_RMIN` | 「1要素幅のフィラメントを消す既定値を選び直した(2026-09-05)」 |
-| 密度フィルタ半径の下限(床) | **1.5要素**(下回ると `simp.FilterRadiusError`) | `simp.MIN_RMIN` | 「1.5要素という下限の根拠」(**既定値 `DEFAULT_RMIN` とは別物**。床は「これより下は壊れる」、既定は「測って選んだ値」) |
+| 許容応力(PETG の降伏応力 × 造形の低減係数) | **50** MPa × **0.8** | `material.PETG_YIELD_MPA` / `PRINT_DERATE` | 「許容応力の導出」 |
 | 代表応力の規則 | ρ >= **0.5** の要素の上位 **99.5%** 点 | `stress.DEFAULT_RHO_MIN` / `DEFAULT_PERCENTILE` | 「代表応力の規則(黙って max にしない)」 |
 | メッシュ平滑化(Taubin)の反復数 `DEFAULT_ITERS` | **30** | `mesh.DEFAULT_ITERS` | 同上(**同じ理由で §『密度場側のガウシアン平滑化』の 12 は古い**) |
-| SIMPの既定スレッド数 `PARALLEL_THREADS` | **総コアの半分** | `simp.PARALLEL_THREADS`(`_default_thread_count()`) | 「既定スレッド数を総コアの半分にする」 |
+| 既定スレッド数 `PARALLEL_THREADS` | **総コアの半分** | `fem.PARALLEL_THREADS`(`_default_thread_count()`) | 「既定スレッド数を総コアの半分にする」 |
+| 削除・追加・置換探索のfrontier容量 `DEFAULT_FRONTIER_CAPACITY` | **48** | `binary_search.DEFAULT_FRONTIER_CAPACITY` | 計画書§4.3 |
+| 追加操作が連続してよい回数の上限 `DEFAULT_MAX_CONSECUTIVE_ADDS` | **2** | `binary_search.DEFAULT_MAX_CONSECUTIVE_ADDS` | 計画書§4.3 |
+| 要素サイズを指定しないときの最長軸の要素数 `DEFAULT_ELEMENTS_LONG_AXIS` | **40** | `design_space.DEFAULT_ELEMENTS_LONG_AXIS` | 塊の導出(`derive`) |
+| ヤング率の既定 `DEFAULT_YOUNGS_MODULUS_MPA` | **2000** MPa | `material.DEFAULT_YOUNGS_MODULUS_MPA` | 応力の実単位換算(`stress.UnitScale`) |
+
+**削除した行(2026-09-17、段階6のコード側完了に伴う機械的な同期。docs全体の整理は段階7)**:
+材料量探索の収束幅`rel_tol`/評価回数の上限(`safety_loop.DEFAULT_REL_TOL`/`DEFAULT_MAX_EVALUATIONS`)・
+候補ごとのSIMP反復数(`safety_loop.DEFAULT_MAX_ITER`)・密度フィルタ半径の既定`rmin`/下限(`simp.DEFAULT_RMIN`/`MIN_RMIN`)
+—— いずれも参照先のモジュール(`simp.py`/`safety_loop.py`)ごと削除したため、値そのものが現行アーキテクチャに存在しない。
 
 **現行値が読めない2件はこの表で解消している**(2026-09-06時点):
 

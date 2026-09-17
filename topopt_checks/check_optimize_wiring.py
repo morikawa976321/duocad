@@ -19,13 +19,15 @@
 3. **荷重が選んだ面に入っている** —— 荷重面アンカーの節点の重心が、選んだ面の重心の近くに
    ある。**面添字を取り違えても例外は出ない**(荷重が別の場所に入り、最適化はもっともらしく
    収束する)ので、実際に走らせた結果で突き合わせる。
-4. **進捗** —— 設計反復ごと(`phase="optimize"`)と候補材料量ごと(`phase="search"`)の
-   両方が来る。
+4. **進捗** —— パイプラインの段(`derive`/`search`/`mesh`/`finalize`/`insert` 等)ごとに
+   来る。**評価回数ごとの粒度は無い**(`find_best_feasible` は評価ごとのコールバック引数を
+   持たない)ので、`phase="optimize"`(旧SIMPの設計反復)の段は存在しない。
 5. **中断** —— 進捗の途中で旗を立てると `OptimizeCancelled` になり、**文書は1ビットも
    変わらない**。
 6. **応力を測る経路** —— `keep_model` が通っているので安全率が出る。許容応力は
-   40MPa 固定で、その導出(PETG 50MPa × 0.8)が引ける。
-7. **事後検出** —— この解像度で1要素も掴めない保持ソリッドがあると、`simp` を呼ぶ前に
+   40MPa 固定で、その導出(PETG 50MPa × 0.8)が引ける。**反力は常に空リスト**
+   (二値探索は反力を計算しない契約)。
+7. **事後検出** —— この解像度で1要素も掴めない保持ソリッドがあると、二値探索を呼ぶ前に
    `state == "unrepresented_regions"` で戻り、メッシュボディは足されない。
 8. **条件面からの要求要素サイズ** —— `optimize_run` が使う式が
    `anchor.AnchorTable.empty_face_diagnosis` の `suggested_max_spacing_mm` と同じ値になる
@@ -57,11 +59,14 @@ FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
 
 DEVIATION = 0.2
-# 検証用に縮めた設定。**本番の既定ではない** —— 既定(`max_iter=40` / `max_evaluations=15`)の
-# ままだと1回の実行が数分になる(`20260904-1437` の契約③)。
-CHECK_MAX_ITER = 6
+# 検証用に縮めた設定。**本番の既定ではない** —— 既定(`max_evaluations=1000`)の
+# ままだと1回の実行が長くなる(`20260904-1437` の契約③)。
 CHECK_MAX_EVALUATIONS = 3
-CHECK_RMIN_MM = 6.0  # 要素サイズの上限 = 6 / 1.5 = 4mm
+# **既定(いちばん粗い)解像度を使わない。** この題材(離れた2パッド)は`design_space.derive`が
+# 既定解像度で`voxelize.occupancy`のValueErrorを踏む既知の未解決バグがある
+# (`20260917-0444`の契約④。段階5・このタスクの担当範囲外)。4mmは以前rminが実質作っていた
+# 上限(6/1.5)を引き継いだだけの値で、この題材では安全に通る(14mmまでは実測で成功)。
+CHECK_ELEMENT_SIZE_MM = 4.0
 
 
 def check(name: str, ok: bool, detail: str) -> None:
@@ -140,11 +145,11 @@ def run_once() -> tuple:
     report = session.optimize_conditions()
     if not report["ready"]:
         raise SystemExit(f"条件がそろっていない: {report['problems']}")
-    limits = session.optimize_resolution(rmin_mm=CHECK_RMIN_MM)
+    limits = session.optimize_resolution()
     print(
         f"  要素サイズ: 上限 {limits['max_element_size_mm']:.4g}mm / "
-        f"下限 {limits['min_element_size_mm']:.4g}mm / "
-        f"予想 {limits['estimate']['seconds_typical']:.0f}秒(既定の反復数で)"
+        f"下限 {limits['min_element_size_mm']:.4g}mm(所要時間は事前見積もりが無い"
+        "——計画書§6.2)"
     )
 
     before_ids = [body.id for body in session.document.bodies]
@@ -152,9 +157,8 @@ def run_once() -> tuple:
     events: list[dict] = []
     t0 = time.perf_counter()
     out = session.run_optimization(
-        rmin_mm=CHECK_RMIN_MM,
+        element_size_mm=CHECK_ELEMENT_SIZE_MM,
         target_safety_factor=1.2,
-        max_iter=CHECK_MAX_ITER,
         max_evaluations=CHECK_MAX_EVALUATIONS,
         progress=events.append,
     )
@@ -297,43 +301,35 @@ def check_load_lands_on_the_chosen_face(session, out) -> None:
         and len(measured["load_mm_each"]) == len(session.document.optimize.loads),
         f"拘束 {measured['fixed_mm_each']} / 荷重 {measured['load_mm_each']}",
     )
-    # **拘束面ごとの反力が応答に載っている。** 「効いていない取付点」はここが 0 で出る ——
-    # 拘束面が1枚しかないこの題材では、その1枚が荷重の全部を受け持つのが正しい答えである。
+    # **反力は常に空リスト。** 二値探索(`acceptance.inspect`)は反力を計算しない
+    # ——旧`anchor.run_pipeline`の`reactions`を再利用する経路は無い(段階6の契約③)。
+    # UIもこのフィールドを参照していない。
     reactions = out["reactions"]
-    total = sum(item["fraction"] for item in reactions)
     check(
-        "拘束面ごとの反力が拘束面の枚数ぶん載っている",
-        len(reactions) == len(session.document.optimize.fixtures),
-        f"{[item['name'] for item in reactions]}",
+        "反力は常に空リスト(二値探索は反力を計算しない契約)",
+        reactions == [],
+        f"{reactions!r}",
     )
-    check(
-        "受け持ちの割合の合計が荷重の合力と釣り合っている",
-        abs(total - 1.0) < 1e-3,
-        f"合計 {total:.6f} / 内訳 {[round(item['fraction'], 4) for item in reactions]}",
-    )
-    check(
-        "反力が素の値だけでできている(WebSocket にそのまま載る)",
-        json.loads(json.dumps(reactions)) == reactions,
-        f"{len(reactions)} 件",
-    )
-    RESULTS["reactions"] = [
-        {"face": item["face"], "fraction": round(item["fraction"], 4)} for item in reactions
-    ]
+    RESULTS["reactions"] = reactions
 
 
 def check_progress(events) -> None:
-    print("\n[4] 進捗(設計反復ごと・候補材料量ごとの2段)")
+    print("\n[4] 進捗(パイプラインの段ごと)")
+    # **評価回数ごとの粒度は無い**(段階6の契約③。`find_best_feasible` は評価ごとの
+    # コールバック引数を持たないので、探索を始めてから終わるまでの間 `_ProgressPump.emit`
+    # は1回も呼ばれない)。ここで見るのは「削除・追加・置換の探索を始めた」ことを告げる
+    # `phase="search"` のメッセージが来ることと、設計反復という段そのものが無いこと。
     phases = [event["phase"] for event in events]
-    check("設計反復ごとの進捗が来る", phases.count("optimize") > 0, f"{phases.count('optimize')}件")
-    check("候補材料量ごとの進捗が来る", phases.count("search") > 1, f"{phases.count('search')}件")
-    iterations = [event for event in events if event["phase"] == "optimize"]
+    check("進捗イベントが来る", len(events) > 0, f"{len(events)}件")
     check(
-        "反復の進捗が反復数とコンプライアンスを持つ",
-        bool(iterations)
-        and all(
-            "iteration" in event and "compliance" in event for event in iterations
-        ),
-        f"例: {iterations[0] if iterations else None}",
+        "探索を始めたことを告げる進捗が来る(phase='search')",
+        phases.count("search") >= 1,
+        f"{phases.count('search')}件",
+    )
+    check(
+        "「設計反復ごと」の段は無い(段階4以降にSIMPの反復概念が無い契約)",
+        phases.count("optimize") == 0,
+        f"phase='optimize' が {phases.count('optimize')}件(0であること)",
     )
     RESULTS["progress_phases"] = {name: phases.count(name) for name in sorted(set(phases))}
 
@@ -353,9 +349,8 @@ def check_cancel() -> None:
     t0 = time.perf_counter()
     try:
         session.run_optimization(
-            rmin_mm=CHECK_RMIN_MM,
+            element_size_mm=CHECK_ELEMENT_SIZE_MM,
             target_safety_factor=1.2,
-            max_iter=CHECK_MAX_ITER,
             max_evaluations=CHECK_MAX_EVALUATIONS,
             progress=progress,
         )
@@ -404,9 +399,8 @@ def check_unrepresented_regions() -> None:
     before = len(session.document.bodies)
     t0 = time.perf_counter()
     out = session.run_optimization(
-        rmin_mm=CHECK_RMIN_MM,
+        element_size_mm=CHECK_ELEMENT_SIZE_MM,
         target_safety_factor=1.2,
-        max_iter=CHECK_MAX_ITER,
         max_evaluations=CHECK_MAX_EVALUATIONS,
     )
     seconds = time.perf_counter() - t0

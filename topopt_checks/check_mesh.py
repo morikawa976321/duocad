@@ -7,6 +7,7 @@ import sys
 import time
 
 import numpy as np
+from scipy import ndimage
 
 # Windowsの既定コンソール(cp932)で記号1つ落ちるだけで検査が1件も走らず異常終了する。
 for _stream in (sys.stdout, sys.stderr):
@@ -17,13 +18,15 @@ for _stream in (sys.stdout, sys.stderr):
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
 from duocad.topopt import OUTPUT_DIR
-from duocad.topopt import bench
 from duocad.topopt import mesh
-from duocad.topopt import simp
 from duocad.topopt import voxelize as vx
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
+
+# 準備で使う合成密度場の格子。marching cubes の体積誤差は要素の大きさで決まり、粗すぎると
+# 検査[2](メッシュ体積 = sum(rho) が5%以内)を割る(実測。旧SIMP経路の校正値を踏襲)。
+MESH_MATERIAL_GRID = (35, 14, 14)
 
 
 def check(name: str, ok: bool, detail: str) -> None:
@@ -34,32 +37,40 @@ def check(name: str, ok: bool, detail: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 準備: プリセットのSIMPを1回回し、そこから mesh.build_surface でメッシュを作る
+# 準備: 中間密度(灰色)を含む合成密度場から mesh.build_surface でメッシュを作る
 # ---------------------------------------------------------------------------
-def run_pipeline() -> tuple[simp.Result, mesh.MeshResult]:
-    p = bench.MESH_MATERIAL
+def run_pipeline() -> tuple[np.ndarray, mesh.MeshResult]:
+    """SIMPは回さない。`check_interpolation_not_binarized` は灰色(中間密度)の
+    要素が要ることを前提にしているので、一様密度でも二値でもない合成密度場を作る
+    (`check_stress.py` の `_mixed_density_field` と同じ手法)。"""
+    nelx, nely, nelz = MESH_MATERIAL_GRID
     print(
-        f"[0] 片持ち梁を最適化 "
-        f"({p['nelx']}x{p['nely']}x{p['nelz']} = {p['nelx'] * p['nely'] * p['nelz']}要素, "
-        f"最大{p['max_iter']}反復。**プリセットより細かい** —— 理由は bench.MESH_MATERIAL)"
+        f"[0] 合成密度場を作る ({nelx}x{nely}x{nelz} = {nelx * nely * nelz}要素)"
     )
     t0 = time.perf_counter()
-    result = simp.run_preset(**p)
+    # 二段構え: 大きい sigma でまず「太い塊」を作ってから二値化し(細い突起を作らない
+    # ——痩せた形は Taubin 平滑化で体積が大きく動き、検査[3]を割る。実測)、
+    # 境界だけ薄くぼかし直して灰色の遷移帯を作る(検査[2]の sum(rho)一致・検査[5]の
+    # 補間比の分布に要る)。
+    rng = np.random.default_rng(20261017)
+    seed = rng.random((nelx, nely, nelz))
+    blobby = ndimage.gaussian_filter(seed, sigma=3.0, mode="nearest")
+    binary = (blobby > np.quantile(blobby, 1.0 - 0.35)).astype(float)
+    rho = np.clip(ndimage.gaussian_filter(binary, sigma=0.6, mode="nearest"), 0.0, 1.0)
     elapsed = time.perf_counter() - t0
-    print(f"  SIMP完了: {len(result.history)}反復 / {elapsed:.1f}秒")
 
     t0 = time.perf_counter()
-    mr = mesh.build_surface(result.rho)
+    mr = mesh.build_surface(rho)
     mesh_seconds = time.perf_counter() - t0
     print(
         f"  メッシュ生成完了: 頂点{len(mr.verts_raw)} / 三角形{len(mr.faces)} / "
         f"{mesh_seconds:.2f}秒"
     )
-    RESULTS["simp_seconds"] = round(elapsed, 1)
+    RESULTS["field_seconds"] = round(elapsed, 2)
     RESULTS["mesh_seconds"] = round(mesh_seconds, 2)
     RESULTS["vertices"] = len(mr.verts_raw)
     RESULTS["triangles"] = len(mr.faces)
-    return result, mr
+    return rho, mr
 
 
 # ---------------------------------------------------------------------------

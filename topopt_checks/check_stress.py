@@ -3,7 +3,7 @@
     .\\.venv\\Scripts\\python.exe topopt_checks\\check_stress.py
 
 **このファイルが合否そのものである。** タスク `20260904-0143` の完了条件1〜5を、
-それだけでは通らない下支えの検査(B行列と `simp` の局所節点順が一致しているか)と
+それだけでは通らない下支えの検査(B行列と `fem` の局所節点順が一致しているか)と
 一緒に assert する。どれか1つでも落ちればプロセスは非ゼロで終わる。
 
 検査の構成(上から順に、狭いものから広いものへ):
@@ -18,7 +18,7 @@
    (**応力は E に依存しない**ことも含む)。
 4. **代表値の規則が効いている** — 階段状境界を持つ形(斜めに切った板)で、素の max と
    採用した代表値を両方出す。max は細分するほど跳ね、代表値は動かない。
-   実際の SIMP 出力(中間密度あり)でも同じ規則が効くことを [4b] で見る。
+   中間密度(灰色)を含む合成の密度場でも同じ規則が効くことを [4b] で見る。
 5. **安全率が単調** — 許容応力を2倍にすると安全率がちょうど2倍になる。
 """
 
@@ -29,6 +29,7 @@ import sys
 import time
 
 import numpy as np
+from scipy import ndimage
 
 # **Windowsの既定コンソール(cp932)で落ちないようにする。** 記号が1つ混ざるだけで
 # `UnicodeEncodeError` になり、検査が1件も走らないまま異常終了する。
@@ -39,9 +40,16 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
-from duocad.topopt import bench
-from duocad.topopt import simp
+from duocad.topopt import fem
 from duocad.topopt import stress
+
+# [4] 斜めに切った板。3段とも必要(素の max が細分で単調に増えないことを見る検査なので、
+# 段を減らせない)。12x8x2 までは落とせない(代表値の振れ幅が5%を超える。実測)。
+STRESS_TAPERED_BASE = (16, 8, 2)
+STRESS_TAPERED_MULTS = (1, 2, 3)
+
+# [4b] 剛性差のある密度場を合成する格子。片持ち梁で十分な要素数を確保する。
+STRESS_MIXED_DENSITY_GRID = (20, 10, 10)
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
@@ -62,7 +70,7 @@ def check(name: str, ok: bool, detail: str) -> None:
 
 
 def node_id(i: int, j: int, k: int, nely: int, nelz: int) -> int:
-    """`simp._build_edof` と同じ節点番号の規約。"""
+    """`fem._build_edof` と同じ節点番号の規約。"""
     return i * (nely + 1) * (nelz + 1) + j * (nelz + 1) + k
 
 
@@ -126,13 +134,13 @@ def check_b_matrix() -> None:
         m = float(np.abs(got).max())
         check(f"{label}の応力が0", m < 1e-12, f"max|sigma|={m:.3e}")
 
-    # **格子全体での整合。** `_NODE_SIGNS` の並びが `simp._build_edof` の l のまわし方と
+    # **格子全体での整合。** `_NODE_SIGNS` の並びが `fem._build_edof` の l のまわし方と
     # ずれていると、要素1つの検査は通っても格子では要素ごとに違う値が出る。
     nelx, nely, nelz = 3, 4, 2
     fixed = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8])
     load = np.zeros(3 * (nelx + 1) * (nely + 1) * (nelz + 1))
     load[-3] = 1.0
-    model = simp.Model(nelx, nely, nelz, fixed_dofs=fixed, load=load)
+    model = fem.Model(nelx, nely, nelz, fixed_dofs=fixed, load=load)
     u = np.zeros(model.ndof)
     eps = np.array([0.011, -0.007, 0.003, 0.005, -0.002, 0.009])  # 6成分すべて非零
     for i in range(nelx + 1):
@@ -157,7 +165,7 @@ def check_b_matrix() -> None:
 # ---------------------------------------------------------------------------
 # 1. 一様な棒の単軸引張
 # ---------------------------------------------------------------------------
-def build_bar(nelx: int, nely: int, nelz: int) -> simp.Model:
+def build_bar(nelx: int, nely: int, nelz: int) -> fem.Model:
     """密度1で埋めた直方体を x 方向に引く系。
 
     x=0 / y=0 / z=0 の3面を対称面(その面に垂直な成分だけ拘束)にすると、横方向の
@@ -181,12 +189,12 @@ def build_bar(nelx: int, nely: int, nelz: int) -> simp.Model:
         for k in range(nelz + 1):
             f[3 * node_id(nelx, j, k, nely, nelz) + 0] = weights[j, k]
     f /= f.sum()
-    return simp.Model(
+    return fem.Model(
         nelx, nely, nelz, fixed_dofs=np.unique(np.array(fixed)), load=f
     )
 
 
-def check_uniaxial_bar() -> tuple[simp.Model, np.ndarray, np.ndarray]:
+def check_uniaxial_bar() -> tuple[fem.Model, np.ndarray, np.ndarray]:
     print("\n[1] 一様な棒の単軸引張 (完了条件1・2・5)")
     nelx, nely, nelz = 8, 4, 3
     model = build_bar(nelx, nely, nelz)
@@ -232,7 +240,7 @@ def check_uniaxial_bar() -> tuple[simp.Model, np.ndarray, np.ndarray]:
 # ---------------------------------------------------------------------------
 # 2. 片持ち梁の曲げ
 # ---------------------------------------------------------------------------
-def build_cantilever(nelx: int, nely: int, nelz: int) -> simp.Model:
+def build_cantilever(nelx: int, nely: int, nelz: int) -> fem.Model:
     """x=0 面を全自由度固定し、x=nelx 面へ -y 方向の合力 1 を一様に配る。"""
     ndof = 3 * (nelx + 1) * (nely + 1) * (nelz + 1)
     fixed = []
@@ -246,7 +254,7 @@ def build_cantilever(nelx: int, nely: int, nelz: int) -> simp.Model:
         for k in range(nelz + 1):
             f[3 * node_id(nelx, j, k, nely, nelz) + 1] = -weights[j, k]
     f /= -f.sum()
-    return simp.Model(
+    return fem.Model(
         nelx, nely, nelz, fixed_dofs=np.unique(np.array(fixed)), load=f
     )
 
@@ -336,7 +344,7 @@ def check_cantilever_bending() -> None:
 # ---------------------------------------------------------------------------
 # 3. 無次元と実単位が一貫する
 # ---------------------------------------------------------------------------
-def check_unit_scaling(model: simp.Model, rho: np.ndarray, u: np.ndarray) -> None:
+def check_unit_scaling(model: fem.Model, rho: np.ndarray, u: np.ndarray) -> None:
     print("\n[3] 無次元 → 実単位の換算則 (完了条件2)")
 
     def report(*, e_mpa=E_MPA, load_n=LOAD_N, element_mm=ELEMENT_MM):
@@ -384,13 +392,13 @@ def check_unit_scaling(model: simp.Model, rho: np.ndarray, u: np.ndarray) -> Non
 # ---------------------------------------------------------------------------
 # 4. 代表値の規則が効いている
 # ---------------------------------------------------------------------------
-def build_tapered_plate(mult: int) -> tuple[simp.Model, np.ndarray, float]:
+def build_tapered_plate(mult: int) -> tuple[fem.Model, np.ndarray, float]:
     """斜め(45度)に切った板を x 方向に引く系。**境界が階段になる。**
 
     x > L/3 から上端が45度で下がり、幅が半分になる。細い側の公称応力 F/A が分かって
     いるので、「本当の応力集中」と「階段の角の離散化ノイズ」を数字で分けられる。
     """
-    bx, by, bz = bench.STRESS_TAPERED["base"]
+    bx, by, bz = STRESS_TAPERED_BASE
     nelx, nely, nelz = bx * mult, by * mult, bz * mult
     solid = np.zeros((nelx, nely, nelz), dtype=bool)
     for i in range(nelx):
@@ -416,15 +424,15 @@ def build_tapered_plate(mult: int) -> tuple[simp.Model, np.ndarray, float]:
         for k in range(nelz + 1):
             f[3 * node_id(nelx, j, k, nely, nelz) + 0] = weights[j, k]
     f /= f.sum()
-    # 空要素にしか接していない節点は剛性 emin でしか繋がっていない。`simp.optimize` が
+    # 空要素にしか接していない節点は剛性 emin でしか繋がっていない。`fem.optimize` が
     # 内部でやっているのと同じ処理を、ここでも通す(通さないと K がほぼ特異になる)。
-    model = simp.Model(
+    model = fem.Model(
         nelx,
         nely,
         nelz,
         fixed_dofs=np.unique(np.array(fixed)),
         load=f,
-        extra_fixed_dofs=simp._floating_dofs(nelx, nely, nelz, ~solid),
+        extra_fixed_dofs=fem._floating_dofs(nelx, nely, nelz, ~solid),
     )
     nominal = 1.0 / (narrow * nelz)  # 細い側の公称応力(無次元)
     return model, rho, nominal
@@ -433,7 +441,7 @@ def build_tapered_plate(mult: int) -> tuple[simp.Model, np.ndarray, float]:
 def check_representative_rule() -> None:
     print("\n[4] 代表応力の規則 / 素の max との比較 (完了条件3)")
     rows = []
-    for mult in bench.STRESS_TAPERED["mults"]:
+    for mult in STRESS_TAPERED_MULTS:
         model, rho, nominal = build_tapered_plate(mult)
         t0 = time.perf_counter()
         u = model.solve(rho, 3.0, solver="direct")
@@ -489,28 +497,38 @@ def check_representative_rule() -> None:
     RESULTS["tapered_plate"] = rows
 
 
-def check_representative_on_simp_output() -> None:
-    print("\n[4b] 実際の SIMP 出力(中間密度あり)でも同じ規則が効く")
+def _mixed_density_field(dims: tuple[int, int, int]) -> np.ndarray:
+    """中間密度(灰色)を含む密度場を合成する(SIMPは回さない)。
+
+    ランダムな二値の種をガウスぼかしして、境界に灰色の勾配帯が残る密度場を作る
+    (`check_multigrid.py` の `_rho_after` と同じ手法)。[4b] が見たいのは「中間密度の
+    要素が離散化ノイズで素の max を支配する」ことなので、SIMPで実際に収束させる必要はない
+    —— 灰色帯を持つ密度場でありさえすればよい。
+    """
+    rng = np.random.default_rng(20261017)
+    seed = (rng.random(dims) < 0.35).astype(float)
+    smooth = ndimage.gaussian_filter(seed, sigma=1.0, mode="nearest")
+    smooth = smooth / float(smooth.max())
+    return np.clip(smooth, 1e-9, 1.0)
+
+
+def check_representative_on_mixed_density_field() -> None:
+    print("\n[4b] 中間密度(灰色)を含む密度場(合成)でも同じ規則が効く")
     t0 = time.perf_counter()
-    result = simp.run_preset(**bench.STRESS_SIMP, keep_model=True)
-    check(
-        "keep_model=True で解いた Model が Result から取れる",
-        isinstance(result.model, simp.Model),
-        f"model={type(result.model).__name__} ({time.perf_counter() - t0:.1f}秒)",
-    )
-    assert result.model is not None
+    model = build_cantilever(*STRESS_MIXED_DENSITY_GRID)
+    rho = _mixed_density_field(STRESS_MIXED_DENSITY_GRID)
+    u = model.solve(rho, 3.0, solver="mg")
+    print(f"    解いた: {time.perf_counter() - t0:.1f}秒")
     scale = stress.UnitScale.for_model(
-        result.model, element_mm=ELEMENT_MM, load_n=LOAD_N, youngs_modulus_mpa=E_MPA
+        model, element_mm=ELEMENT_MM, load_n=LOAD_N, youngs_modulus_mpa=E_MPA
     )
-    report = stress.evaluate(
-        result.model, result.rho, scale=scale, allowable_mpa=ALLOWABLE_MPA
-    )
+    report = stress.evaluate(model, rho, scale=scale, allowable_mpa=ALLOWABLE_MPA, u=u)
     rep = report.representative
-    unfiltered = stress.representative_stress(report.field, result.rho, rho_min=0.0)
-    low = int(np.count_nonzero(result.rho < stress.DEFAULT_RHO_MIN))
+    unfiltered = stress.representative_stress(report.field, rho, rho_min=0.0)
+    low = int(np.count_nonzero(rho < stress.DEFAULT_RHO_MIN))
     print(
         f"    素のmax={rep.raw_max:10.4g} MPa  rho>=0.5のmax={rep.dense_max:10.4g} MPa  "
-        f"代表={rep.value:10.4g} MPa  (rho<0.5 の要素 {low} / {result.rho.size})"
+        f"代表={rep.value:10.4g} MPa  (rho<0.5 の要素 {low} / {rho.size})"
     )
     print(
         f"    rho の閾値を外した代表値={unfiltered.value:10.4g} MPa "
@@ -543,7 +561,7 @@ def check_representative_on_simp_output() -> None:
     )
     # 母集団が空になる場合は落とすこと。**0 を返して安全率を無限大にしてはいけない。**
     try:
-        stress.representative_stress(report.field, np.zeros_like(result.rho))
+        stress.representative_stress(report.field, np.zeros_like(rho))
         raised = "(例外が出なかった)"
     except Exception as exc:  # 変異検査で別の例外に化けても検出できるように広く受ける
         raised = f"{type(exc).__name__}: {exc}"
@@ -554,14 +572,18 @@ def check_representative_on_simp_output() -> None:
     )
     # 応力側に非有限が混ざったら落とすこと(nan は比較が常に False なので、
     # 黙って通すと「危険側」の判定にも引っかからないまま安全率が nan になる)。
+    # **母集団(rho>=0.5)に入る要素を汚すこと** —— rho の低い要素は最初から
+    # 母集団の外なので、そこを nan にしても検出力が無い(実際に一度踏んだ)。
+    dense_index = tuple(int(x) for x in np.unravel_index(np.argmax(rho), rho.shape))
+    poisoned_vm = report.field.von_mises.copy()
+    poisoned_vm[dense_index] = np.nan
     poisoned = stress.StressField(
-        von_mises=np.where(np.arange(report.field.von_mises.size).reshape(report.field.von_mises.shape) == 0,
-                           np.nan, report.field.von_mises),
+        von_mises=poisoned_vm,
         tensor=report.field.tensor,
         unit=report.field.unit,
     )
     try:
-        stress.representative_stress(poisoned, result.rho)
+        stress.representative_stress(poisoned, rho)
         raised = "(例外が出なかった)"
     except Exception as exc:  # 変異検査で別の例外に化けても検出できるように広く受ける
         raised = f"{type(exc).__name__}: {exc}"
@@ -570,7 +592,7 @@ def check_representative_on_simp_output() -> None:
         "ValueError" in raised,
         raised[:120],
     )
-    RESULTS["simp_output"] = {
+    RESULTS["mixed_density_output"] = {
         "raw_max_mpa": rep.raw_max,
         "dense_max_mpa": rep.dense_max,
         "representative_mpa": rep.value,
@@ -583,7 +605,7 @@ def check_representative_on_simp_output() -> None:
 # ---------------------------------------------------------------------------
 # 5. 安全率が単調
 # ---------------------------------------------------------------------------
-def check_safety_factor(model: simp.Model, rho: np.ndarray, u: np.ndarray) -> None:
+def check_safety_factor(model: fem.Model, rho: np.ndarray, u: np.ndarray) -> None:
     print("\n[5] 最小安全率 = 許容応力 / 代表応力 (完了条件4)")
     scale = stress.UnitScale.for_model(
         model, element_mm=ELEMENT_MM, load_n=LOAD_N, youngs_modulus_mpa=E_MPA
@@ -644,7 +666,7 @@ def main() -> int:
     check_cantilever_bending()
     check_unit_scaling(model, rho, u)
     check_representative_rule()
-    check_representative_on_simp_output()
+    check_representative_on_mixed_density_field()
     check_safety_factor(model, rho, u)
 
     print("\n" + "=" * 72)

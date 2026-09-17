@@ -40,7 +40,7 @@
 10. **トリムされた曲面のソリッドの bbox が実寸を返す** — `_shape_bbox` を三角形分割の箱と
     突き合わせる(三角形の頂点は必ず真の面の上にあるので、実寸の独立した根拠になる)。
 
-所要は約4秒(SIMPは回さないので check_simp / check_mesh より桁違いに速い)。
+所要は約4秒(SIMPは回さないので check_mesh より桁違いに速い)。
 """
 
 from __future__ import annotations
@@ -460,16 +460,6 @@ def check_keep_and_obstacle() -> None:
         f"設計{model.stats['design_elements']} - 保持{model.stats['keep_elements']} "
         f"- 障害物{model.stats['obstacle_elements']}",
     )
-    rho = model.initial_density(0.3)
-    check(
-        "initial_density: 保持=1・障害物=0・設計空間の外=0",
-        float(rho[model.keep].min()) == 1.0
-        and float(rho[model.obstacle].max()) == 0.0
-        and float(rho[~model.design].max()) == 0.0,
-        f"保持の最小{float(rho[model.keep].min())} / 障害物の最大{float(rho[model.obstacle].max())} / "
-        f"設計空間外の最大{float(rho[~model.design].max())}",
-    )
-
     try:
         vx.voxelize(design, 24, keep=Box(20, 20, 10), obstacle=Box(10, 10, 10))
         check("保持と障害物が重なったら落ちる", False, "例外にならなかった")

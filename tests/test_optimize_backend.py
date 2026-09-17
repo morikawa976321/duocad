@@ -1,7 +1,7 @@
 """形状最適化の**配線**(`duocad/optimize_run.py`)の契約。
 
 ここで固定するのは、**外れても例外が出ないまま静かに間違う**ところと、**入口の断り方**である。
-端から端まで実際に SIMP を回す受入検査は `topopt_checks/check_optimize_wiring.py`
+端から端まで実際に二値探索を回す受入検査は `topopt_checks/check_optimize_wiring.py`
 (約20秒。pytest には入れない —— `topopt_checks/_bootstrap.py` と同じ理由)。
 
 1. **面の対応** —— 条件面が複数のボディに散っていると `kernel.make_compound` で1つにまとめる。
@@ -11,13 +11,12 @@
 2. **入口の断り** —— 条件が足りない/この版で扱えない/メッシュボディを指した、を名指しする。
 3. **メッシュボディ** —— 保持・除外に指定できない。ただし
    **過去のログの再生は落とさない**(門は verb の入口だけで、`_apply_bodies` には無い)。
-4. **解像度** —— 上限は「最小部材幅からの要求」と「条件面からの要求」の min。
+4. **解像度** —— 上限は「条件面からの要求」だけで決まる(密度フィルタ半径は二値探索に
+   無いので上限に効かない。計画書§6.2)。下限は総要素数の上限から。
 5. **座標系** —— 結果メッシュは要素添字空間で来るので、ワールド[mm]へ直す。
 6. **中断** —— 旗が立っていれば文書を1ビットも変えずに降りる。
-7. **`safety_loop` の穴** —— 本番解像度で条件面が空のとき、生の `AttributeError` ではなく
-   `ConditionFacesEmptyError` になる(`20260904-1556` の契約④が名指ししていた未修正の穴)。
-8. **import の費用** —— `import duocad` で scipy / skimage が来ない。
-9. **面アンカーの門** —— 比べる相手は面の**面積重心**であって、条件に焼き込んだ
+7. **import の費用** —— `import duocad` で scipy / skimage が来ない。
+8. **面アンカーの門** —— 比べる相手は面の**面積重心**であって、条件に焼き込んだ
    `Face.center()` ではない。取り違えると曲面の条件面で解像度を上げるほど厳しくなる。
 """
 from __future__ import annotations
@@ -746,117 +745,6 @@ def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
 
 
 # --------------------------------------------------------------------------------------
-# 7. `safety_loop` の配線 —— 固定した塊が全候補へ届き、空の条件面は名前付きの例外になる
-# --------------------------------------------------------------------------------------
-_RUN_KW = dict(
-    allowable_mpa=40.0,
-    youngs_modulus_mpa=2000.0,
-    max_iter=1,
-    force=(0.0, 0.0, -1.0),
-    solver=None,
-    threads=None,
-    rho_min=0.5,
-    percentile=99.5,
-)
-
-
-def test_safety_loop_turns_empty_condition_faces_into_a_named_exception(monkeypatch) -> None:
-    """条件面が空のとき `ConditionFacesEmptyError` になる(`run["result"]` が None のまま
-    `.model` を触ると素の `AttributeError` になる経路がある)。
-    """
-    from duocad.topopt import design_space as ds
-    from duocad.topopt import safety_loop
-
-    diagnoses = [{"side": "load", "face_index": 7, "cad_area_mm2": 0.5}]
-    monkeypatch.setattr(
-        ds,
-        "run_topopt",
-        lambda space, **kwargs: {"result": None, "empty_condition_faces": diagnoses},
-    )
-    with pytest.raises(safety_loop.ConditionFacesEmptyError) as caught:
-        safety_loop._run_once(object(), 100.0, **_RUN_KW)
-    assert caught.value.empty_condition_faces == diagnoses
-    # **`_evaluate` の分類へ落とさない。** 材料量を振っても格子は変わらないので、
-    # `"too_little"` として探索を続けると同じ失敗を評価回数ぶん繰り返すだけになる。
-    with pytest.raises(safety_loop.ConditionFacesEmptyError):
-        safety_loop._evaluate(object(), 100.0, **_RUN_KW)
-
-
-def test_safety_loop_passes_the_iteration_callback_through(monkeypatch) -> None:
-    """**進捗と中断はここを通る。** 素通しが切れると SIMP の反復で止められなくなる。"""
-    from duocad.topopt import design_space as ds
-    from duocad.topopt import safety_loop
-
-    seen: dict = {}
-
-    def fake_run_topopt(space, **kwargs):
-        seen.update(kwargs)
-        raise RuntimeError("stop here")
-
-    monkeypatch.setattr(ds, "run_topopt", fake_run_topopt)
-    sentinel = object()
-    with pytest.raises(RuntimeError, match="stop here"):
-        safety_loop._run_once(object(), 100.0, run_progress=sentinel, **_RUN_KW)
-    assert seen["progress"] is sentinel
-    assert seen["keep_model"] is True  # 応力を測る経路(`20260904-0143` の契約)
-
-
-def test_the_space_material_and_filter_radius_reach_the_run(monkeypatch) -> None:
-    """**渡した塊そのもの・本番の材料量・最小部材幅が `run_topopt` に届く。**
-
-    塊が別物にすり替わると候補ごとに違う空間を最適化する。材料量が届かないと別の量を解く。
-    `rmin_mm` が落ちると `simp.DEFAULT_RMIN`(要素)で回り、画面で入れた最小部材幅が黙って効かない。
-    """
-    from duocad.topopt import design_space as ds
-    from duocad.topopt import safety_loop
-
-    seen: dict = {}
-
-    def fake_run_topopt(space, **kwargs):
-        seen["space"] = space
-        seen.update(kwargs)
-        raise RuntimeError("stop here")
-
-    monkeypatch.setattr(ds, "run_topopt", fake_run_topopt)
-    space = object()
-    with pytest.raises(RuntimeError, match="stop here"):
-        safety_loop._run_once(space, 1234.5, rmin_mm=1.0, **_RUN_KW)
-    assert seen["space"] is space
-    assert seen["material_mm3"] == 1234.5
-    assert seen["rmin_mm"] == 1.0
-    assert seen["rmin"] is None
-
-
-def test_the_search_hands_the_same_space_to_every_evaluation_and_returns_it(monkeypatch) -> None:
-    """**探索1回につき塊は1つ、それが全段へ届き、戻り値にもそのまま入る。**
-
-    段ごとに導出し直す経路が生えると、格子・保持マスク・面対応が候補間で揃わなくなる。
-    """
-    import types
-
-    from duocad.topopt import safety_loop
-
-    seen: list = []
-    space = types.SimpleNamespace(element_count=1000)
-
-    def fake_run_once(space_arg, material_mm3, **kwargs):
-        seen.append((space_arg, kwargs.get("rmin_mm")))
-        run = {"achieved_material_mm3": material_mm3}
-        report = types.SimpleNamespace(safety_factor=CURVE(material_mm3))
-        return space_arg, run, report
-
-    monkeypatch.setattr(safety_loop, "_run_once", fake_run_once)
-    result = safety_loop.solve_for_safety_factor(
-        space, target_safety_factor=3500.0, rmin_mm=2.0, **BRACKET
-    )
-    assert len(seen) >= 3, "境界2回 + 探索本体の少なくとも1回"
-    assert all(item[0] is space for item in seen)
-    assert all(item[1] == 2.0 for item in seen)
-    assert result.space is space
-    assert result.evaluations == len(seen)
-
-
-# --------------------------------------------------------------------------------------
 # 8. 許容応力と import の費用
 # --------------------------------------------------------------------------------------
 def test_allowable_stress_shows_where_the_40mpa_comes_from() -> None:
@@ -1090,157 +978,3 @@ def test_the_anchor_gate_still_catches_a_face_that_is_far_away(
         optimize_run._check_anchor_centroids(session.document, space)
 
 
-def test_a_residual_failure_is_classified_as_too_little(monkeypatch) -> None:
-    """**残差検算が通らないのは「材料が少なすぎる」側。** 素通しすると探索ごと落ちる。
-
-    hanger 2.4mm の実測でここを踏んだ(材料 5.42e4mm^3 で自由度が 3,623,730 のうち
-    43,161 しか残らず残差 2.93e-5)。落ちると、それまでの数時間の評価がすべて無駄になる。
-    """
-    from duocad.topopt import safety_loop, simp
-
-    def boom(*args, **kwargs):
-        raise simp.SolveResidualError("K U = F が解けていない(残差 2.930e-05 > 1e-06)")
-
-    monkeypatch.setattr(safety_loop, "_run_once", boom)
-    outcome, payload = safety_loop._evaluate(object(), 54_233.0)
-    assert outcome == "too_little"
-    assert isinstance(payload, simp.SolveResidualError)
-
-
-def test_a_derivation_failure_is_not_a_material_outcome(monkeypatch) -> None:
-    """**塊の失敗は探索の分類に入らない。** 導出は探索の前に1回だけで、材料量を振っても直らない。"""
-    from duocad.topopt import design_space as ds
-    from duocad.topopt import safety_loop
-
-    def boom(*args, **kwargs):
-        raise ds.DesignSpaceDisconnectedError("全条件を含む成分が無い", components=2)
-
-    monkeypatch.setattr(safety_loop, "_run_once", boom)
-    with pytest.raises(ds.DesignSpaceDisconnectedError):
-        safety_loop._evaluate(object(), 54_233.0)
-
-
-def test_a_residual_failure_at_the_bound_still_stops_the_search(monkeypatch) -> None:
-    """**握りつぶしていない。** 本当の拘束不足なら上端で落ち、原因を連鎖したまま上がる。"""
-    from duocad.topopt import safety_loop, simp
-
-    def boom(*args, **kwargs):
-        raise simp.SolveResidualError("拘束不足(剛体運動が止まっていない)の可能性が高い")
-
-    monkeypatch.setattr(safety_loop, "_run_once", boom)
-    with pytest.raises(safety_loop.SafetyTargetError) as caught:
-        safety_loop.solve_for_safety_factor(
-            object(),
-            target_safety_factor=2.0,
-            material_min_mm3=1.0,
-            material_max_mm3=100.0,
-        )
-    assert caught.value.side == "invalid_bound"
-    assert caught.value.bound == "material_max_mm3"
-    assert isinstance(caught.value.__cause__, simp.SolveResidualError)
-
-
-# --------------------------------------------------------------------------------------
-# 10. 探索器(Regula Falsi + Illinois)—— SIMP を回さずにループの規律だけを見る
-# --------------------------------------------------------------------------------------
-CURVE = lambda m: 6026.0 * (m / 246337.0) ** 0.75  # noqa: E731  bracket 実測に近い凹な形
-BRACKET = dict(material_min_mm3=52786.0, material_max_mm3=246337.0)
-
-
-def _fake_search(monkeypatch, *, too_little_below=0.0, too_much_between=None):
-    """`_run_once` を安全率の式(`CURVE`)に差し替える(SIMP を回さない)。
-
-    `too_little_below` より軽い材料量は `SolveResidualError`(→ `"too_little"`)、
-    `too_much_between=(lo, hi)` の帯は `VolumeTargetError(side="above_capacity")`
-    (→ `"too_much"`)にする。**帯は括りの内側に作ること** —— 上端が評価できないと
-    `SafetyTargetError(invalid_bound)` になって探索本体に入らない。
-    """
-    import types
-
-    from duocad.topopt import safety_loop, simp
-
-    def fake_run_once(space, material_mm3, **kwargs):
-        if material_mm3 < too_little_below:
-            raise simp.SolveResidualError("低密度で系が悪条件(残差検算が通らない)")
-        if too_much_between is not None and too_much_between[0] < material_mm3 < too_much_between[1]:
-            raise simp.VolumeTargetError(
-                "フィルタの目減りで材料が収まらない",
-                material_mm3=material_mm3,
-                min_mm3=0.0,
-                max_mm3=too_much_between[0],
-                shortfall_mm3=material_mm3 - too_much_between[0],
-                side="above_capacity",
-                element_volume_mm3=1.0,
-            )
-        space = types.SimpleNamespace(element_count=1000)
-        run = {"achieved_material_mm3": material_mm3}
-        report = types.SimpleNamespace(safety_factor=CURVE(material_mm3))
-        return space, run, report
-
-    monkeypatch.setattr(safety_loop, "_run_once", fake_run_once)
-    return safety_loop
-
-
-def test_the_searcher_keeps_the_contract_and_does_not_evaluate_more_than_bisection(
-    monkeypatch,
-) -> None:
-    """**返すものの契約は探索器に依らない**(目標以上・括りの中・二分より悪くない)。
-
-    落ちたら、補間が二分より悪い答え(重い材料量・目標割れ)を返している。
-    """
-    safety_loop = _fake_search(monkeypatch)
-    results = {}
-    for searcher in safety_loop.SEARCHERS:
-        results[searcher] = safety_loop.solve_for_safety_factor(
-            object(), target_safety_factor=3500.0, searcher=searcher, **BRACKET
-        )
-    for searcher, result in results.items():
-        assert result.safety_factor >= 3500.0, searcher
-        assert BRACKET["material_min_mm3"] <= result.material_mm3 <= BRACKET["material_max_mm3"]
-        assert result.converged, searcher
-        assert result.evaluations == len(result.history), searcher
-    assert results["illinois"].evaluations <= results["bisection"].evaluations
-    # 「悪化しない」は材料量の側で見る —— どちらも幅 rel_tol の括りで止まるので答えはその幅だけ
-    # 離れうるが、それを超えて重ければ補間が悪い答えを返している。
-    assert results["illinois"].material_mm3 <= results["bisection"].material_mm3 * (
-        1.0 + safety_loop.DEFAULT_REL_TOL
-    )
-    # 補間が実際に使われている(全部フォールバックでも上の assert は通ってしまう)。
-    assert any(step.proposed_by == "illinois" for step in results["illinois"].history)
-    assert all(
-        step.proposed_by in ("bound", "bisection") for step in results["bisection"].history
-    )
-
-
-@pytest.mark.parametrize(
-    "outcome,kwargs",
-    [
-        # **括りの内側で踏ませる。** 下端だけが `too_little` だと、括りに入るときの経路しか
-        # 見ないままループ本体の分岐が素通しになる。
-        ("too_little", {"too_little_below": 130000.0}),
-        ("too_much", {"too_much_between": (120000.0, 240000.0)}),
-    ],
-)
-def test_the_searcher_falls_back_to_bisection_right_after_an_unmeasured_evaluation(
-    monkeypatch, outcome, kwargs
-) -> None:
-    """**安全率が測れなかった直後は補間しない。** 古い端点の安全率で補間すると提案が括りの外へ飛ぶ。
-
-    落ちたら `too_little` / `too_much` の直後に割線法が走っている。
-    """
-    safety_loop = _fake_search(monkeypatch, **kwargs)
-    result = safety_loop.solve_for_safety_factor(
-        object(), target_safety_factor=3500.0, **BRACKET
-    )
-    assert any(
-        step.outcome == outcome and step.proposed_by != "bound" for step in result.history
-    ), f"ループの中で {outcome} を踏む前提: {[(s.outcome, s.proposed_by) for s in result.history]}"
-    for previous, step in zip(result.history, result.history[1:]):
-        if previous.outcome != "ok":
-            assert step.proposed_by == "bisection", step
-            assert step.fallback_reason == safety_loop.FALLBACK_UNMEASURED_ENDPOINT, step
-    assert result.safety_factor >= 3500.0
-    # 括りは壊れていない —— 採用した材料量より軽い評価はどれも目標を満たしていない。
-    for step in result.history:
-        if step.material_mm3 < result.material_mm3 and step.outcome == "ok":
-            assert step.safety_factor < 3500.0, step

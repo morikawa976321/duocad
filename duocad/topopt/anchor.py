@@ -1,7 +1,7 @@
 """CAD の**面**と、格子の**節点**の対応表(面アンカー)。
 
     .\\.venv\\Scripts\\python.exe topopt_checks\\check_anchor.py     # 受入検査
-    .\\.venv\\Scripts\\python.exe -m duocad.topopt.anchor           # 合成ブラケットを端から端まで1回通す
+    .\\.venv\\Scripts\\python.exe -m duocad.topopt.anchor           # 合成ブラケットの面アンカー表を作って要約する
 
 これは `duocad.topopt` の **stage2**。stage1(`voxelize.py`)が作った格子の上に、
 「ボディXの面#42」→「これらの格子節点」の翻訳を載せる。これが無いと固定面・荷重面を
@@ -22,8 +22,8 @@
 - **節点は要素の角**である。要素格子が `(nx, ny, nz)` なら節点格子は `(nx+1, ny+1, nz+1)`。
   節点 (i,j,k) のワールド座標は `origin + spacing * (i, j, k)`(要素**中心**の
   `+0.5` は付かない。付けると半セルずれる。要素中心が要るときは `Grid.centers_of`)。
-- **節点番号は `simp.py` の DOF 写像と同じ**: `n = i*(ny+1)*(nz+1) + j*(nz+1) + k`、
-  自由度は `3n, 3n+1, 3n+2`(`simp._build_edof` と一致。ここがずれると荷重が
+- **節点番号は `fem.py` の DOF 写像と同じ**: `n = i*(ny+1)*(nz+1) + j*(nz+1) + k`、
+  自由度は `3n, 3n+1, 3n+2`(`fem._build_edof` と一致。ここがずれると荷重が
   別の場所に入り、それでも最適化は「もっともらしく」収束する)。
 - **1つの節点は高々1つの面に属する**(後述の稜線規則)。面ごとの節点集合は排他である。
 - **節点は「担当面積」を持つ**。荷重はこの面積比で配る。重み無しの等分は禁止 ——
@@ -69,25 +69,19 @@
 
 最適化は荷重直下の材料を溶かしにいく(そこに材料が無くても計算上は荷重が入るため)。
 実務上の定石どおり、アンカー節点に接する要素を保持領域(ρ=1)へ固定する口を付けてある
-(`element_mask`。既定で有効)。機構は stage1 の保持領域と同じで、`simp.optimize` の
-`solid_mask` へそのまま渡せる。
+(`element_mask`)。`design_space.derive` が固定面・荷重面ごとの接続の種(seed)として使う。
 """
 
 from __future__ import annotations
 
 import math
-import sys
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
-from . import trace
 
 from . import voxelize as vx
-
-_HERE = Path(__file__).resolve().parent
 
 # 標本点の目標間隔(要素サイズ比)。小さいほど分布が滑らかになり、標本点の数は2乗で増える。
 DEFAULT_SAMPLE_RATIO = 0.25
@@ -119,7 +113,7 @@ def _candidate_offsets(radius_ratio: float) -> np.ndarray:
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class NodeGrid:
-    """要素格子 `Grid` の角にある節点の格子。番号は `simp.py` の DOF 写像と同じ。"""
+    """要素格子 `Grid` の角にある節点の格子。番号は `fem.py` の DOF 写像と同じ。"""
 
     grid: vx.Grid
 
@@ -141,7 +135,7 @@ class NodeGrid:
         return np.asarray(self.grid.origin, dtype=float) + self.grid.spacing * idx
 
     def ids_of(self, indices: np.ndarray) -> np.ndarray:
-        """(N,3) の節点添字 → `simp.py` と同じ通し番号 (N,)。"""
+        """(N,3) の節点添字 → `fem.py` と同じ通し番号 (N,)。"""
         idx = np.asarray(indices, dtype=np.int64)
         if idx.ndim != 2 or idx.shape[1] != 3:
             raise ValueError(f"indices must be (N,3), got {idx.shape}")
@@ -296,9 +290,9 @@ class AnchorTable:
     def condition_face_diagnoses(self, fixed_faces: Any, load_faces: Any) -> list[dict]:
         """拘束面・荷重面のうち `empty_faces()` に入っているものだけの診断(側の別つき)。
 
-        `run_pipeline` の入口で使う。**1枚も空でなければ空リスト** —— 通常経路の
-        戻り値には影響しない(新しい通知の仕組みではなく、既存の `empty_faces()` を
-        機械可読な形に整えるだけの薄い層)。面は `int` 1つでも並びでも受ける。
+        `optimize_run._empty_condition_faces` が製品経路の入口で使う。**1枚も空でなければ
+        空リスト** —— 通常経路の戻り値には影響しない(新しい通知の仕組みではなく、既存の
+        `empty_faces()` を機械可読な形に整えるだけの薄い層)。面は `int` 1つでも並びでも受ける。
         """
         empty = set(self.empty_faces())
         out: list[dict] = []
@@ -798,8 +792,8 @@ def demo_faces(soup: vx.TriangleSoup) -> tuple[int, int]:
 def format_condition_face_warning(diagnoses: list[dict]) -> str:
     """`AnchorTable.condition_face_diagnoses` の結果を利用者向けの1メッセージにする。
 
-    `run_pipeline` / `design_space.run_topopt` が空リスト(=空の条件面なし)ならこの関数を
-    呼ばない。呼ぶのは1件以上あるときだけを想定している(空リストを渡すと空文字列)。
+    `optimize_run.run()` が空リスト(=空の条件面なし)ならこの関数を呼ばない。呼ぶのは
+    1件以上あるときだけを想定している(空リストを渡すと空文字列)。
     """
     parts = []
     for d in diagnoses:
@@ -821,9 +815,6 @@ def format_condition_face_warning(diagnoses: list[dict]) -> str:
     return " / ".join(parts)
 
 
-# ---------------------------------------------------------------------------
-# 端から端まで(ソリッド → 格子 → 面アンカー → SIMP → marching cubes → STL)
-# ---------------------------------------------------------------------------
 def _face_list(value: Any) -> list:
     """`int` 1つでも面の並びでも受けて、面添字のリストにする。
 
@@ -835,377 +826,26 @@ def _face_list(value: Any) -> list:
     return [int(item) for item in value]
 
 
-def _assemble_load(
-    table: "AnchorTable",
-    load_faces: Sequence[int],
-    force: Sequence[float],
-    forces: Optional[Sequence[Sequence[float]]],
-) -> tuple:
-    """荷重面 → **無次元の荷重ベクトル**と、その実単位の総量。
-
-    `forces` を渡すと面ごとに違う力ベクトル[N]を足し込み、`force` だけなら全ての荷重面が
-    1本の向きを共有する(面積比で配るのは `load_vector` の役目で、そこは変えていない)。
-
-    **無次元化の分母は「面ごとの大きさの総和」であって合力ではない。** 向きの違う荷重が
-    打ち消し合うと合力(ベクトル和)は0になりうるが、総和は0にならない。`stress` 側は
-    `load_magnitude_total` が解いたベクトルから同じ量を測っており、**2つの定義が食い違うと
-    応力が黙って定数倍ずれる**。荷重が1本のとき(または全部同じ向きのとき)は
-    `load_vector` が全節点へ平行なベクトルを配るので、総和と合力は厳密に一致する ——
-    それが「1荷重の数値は1ビットも動かない」の根拠である。
-    """
-    if forces is None:
-        vector = table.load_vector(load_faces, force)
-        return vector, float(np.linalg.norm(np.asarray(force, dtype=float).reshape(3)))
-
-    vector = np.zeros(table.node_grid.ndof)
-    total = 0.0
-    for face, one in zip(load_faces, forces):
-        magnitude = float(np.linalg.norm(np.asarray(one, dtype=float).reshape(3)))
-        if not magnitude > 0.0:
-            raise ValueError(f"面 {int(face)} の荷重が零ベクトルで、向きが決まらない")
-        table.load_vector([int(face)], one, out=vector)
-        total += magnitude
-    if not total > 0.0:
-        raise ValueError("荷重の総量が0で、無次元化できない")
-    vector /= total
-    return vector, total
-
-
-def reaction_payload(fixed_faces: Sequence[int], reactions: Sequence[Any]) -> list[dict]:
-    """`simp.Reaction` の並び → **素の値だけの dict の並び**(そのまま JSON へ載る)。
-
-    `optimize_run.run` の戻り値は素の値だけという契約なので、`simp` のデータクラスを
-    上の層へ通さない。並びは `fixed_faces` と同じ。
-    """
-    return [
-        {
-            "name": reaction.name,
-            "face": int(face),
-            "force": [float(value) for value in reaction.force],
-            "magnitude": float(reaction.magnitude),
-            "fraction": float(reaction.fraction),
-        }
-        for face, reaction in zip(fixed_faces, reactions)
-    ]
-
-
-@trace.stage('anchor-pipeline')
-def run_pipeline(
-    shape: Any = None,
-    *,
-    elements_long_axis: int = 40,
-    volfrac: Optional[float] = None,
-    material_mm3: Optional[float] = None,
-    rmin: Optional[float] = None,
-    rmin_mm: Optional[float] = None,
-    max_iter: int = 40,
-    force: Sequence[float] = (0.0, 0.0, -1.0),
-    radius_ratio: float = DEFAULT_RADIUS_RATIO,
-    keep_anchor_material: bool = True,
-    keep_layers: int = 1,
-    fixed_faces: Any = None,
-    load_faces: Any = None,
-    forces: Optional[Sequence[Sequence[float]]] = None,
-    design_mask: Any = None,
-    design_grid: Optional[vx.Grid] = None,
-    keep: Any = None,
-    obstacle: Any = None,
-    stl_path: Optional[str | Path] = None,
-    progress: Any = None,
-    solver: Optional[str] = None,
-    threads: Optional[int] = None,
-    update: Optional[str] = None,
-    reaction_min: Optional[float] = None,
-    keep_model: bool = False,
-    dynamic_active: bool = False,
-) -> dict:
-    """ソリッドを端から端まで1回通す。戻り値は各段の実測と成果物。
-
-    `shape` を省略すると `demo_bracket()` を使い、面も `demo_faces()` が決める。
-    **自分の形を渡すときは `fixed_faces` / `load_faces` も渡すこと** ——
-    面添字は形ごとに違うので、デモの選び方を他の形へ当てると別の面を掴む。
-    どちらも `int` 1つでも面の並びでも受ける。
-
-    荷重の向きは `force`(荷重面すべてで共有する1本)か `forces`(`load_faces` と**同じ並び**の
-    面ごとの力ベクトル[N])のどちらか一方。`forces` を渡すと荷重ベクトルは面ごとに
-    足し込まれ、**その総量(大きさの総和)で割って無次元化してから** `simp` へ渡る ——
-    `simp` が荷重の総量1.0で回り続ける契約は変えない。実単位[N]は
-    `stress.UnitScale`(`load_n`)だけが持つ。
-
-    `keep_anchor_material=True`(既定)のとき、固定面・荷重面のアンカー節点に接する要素を
-    保持領域(ρ=1)に固定する。**これを切ると最適化は荷重直下の材料を溶かす。**
-
-    `design_mask` と `design_grid` を両方渡すと、**塊(設計空間)はそのマスクになり、`shape` は
-    面アンカーの対象になる**(`vx.model_from_design_mask` を通る)。この経路では材料は入力
-    ソリッドの外へ出られる。`shape` には面を選ぶのに使った `TriangleSoup` をそのまま渡してよい。
-    塊をどのロジックで決めるかはここでは決めない —— 呼び出し側が渡す。
-
-    `keep` / `obstacle`(保持ソリッド / 除外ソリッド)はどちらの経路でも同じ格子に載る。
-    `design_mask` の経路では**塊からはみ出したら例外**(`vx.OutsideDesignSpaceError`)。
-
-    体積目標は `volfrac`(分率)か `material_mm3`(材料の総体積[mm^3])のどちらか一方。
-    **要素体積はここが格子から決めて `simp.optimize` へ渡す** —— 呼び出し側が
-    `mm^3 → 要素数` の換算を自分で書くと、格子の作り方が変わったときに黙ってずれる。
-    どちらの経路でも戻り値に mm^3 の実測が入る。
-
-    密度フィルタ半径は `rmin`(要素単位)か `rmin_mm`(mm)のどちらか一方(排他。
-    `simp.optimize` と同じ形)。どちらも渡さなければ `simp.DEFAULT_RMIN`
-    (**値は動く。床の `simp.MIN_RMIN`(=1.5要素)とは別物**)。
-    **要素サイズはここが格子から決めて `simp.optimize` へ渡す**(体積目標と同じ理由)。
-    要素サイズから決まる下限を `rmin_mm` が下回ると `simp.FilterRadiusError`。
-
-    `solver` は `simp.optimize` の解法の**上書き**(既定は None = `simp` 側の既定)。
-    **性能の新旧比較のためだけにある口**で、受入検査や比較実測が旧い解法(Jacobi 前処理)
-    を同じセッションで撮り直すのに使う。None のときは `simp.optimize` へ渡さないので、
-    既定の挙動は1ビットも変わらない。
-
-    `threads` も同じ形の上書き(既定 None = `simp.PARALLEL_THREADS`)。**スレッド数を
-    振ったスケーリング測定に使う**口で、None のときは渡さない。
-
-    `keep_model=True` は `simp.optimize` へそのまま渡る。`result.model`(戻り値 dict の
-    `"result"` キー)に実際に解いた `Model` が入るので、`stress.py` の後処理が拘束・荷重を
-    手で組み直さずに済む。既定 `False` では入らない(数値は1ビットも変わらない)。
-
-    `dynamic_active=True` は `simp.optimize` へそのまま渡る(ρ が `emin**(1/penal)` を
-    下回った要素を毎反復 組み立てから外す)。**既定 `False` では渡さないので、経路も数値も
-    1ビットも変わらない。** 効く場と限界は docs/TOPOPT_ACTIVE_SET.md。
-
-    `update` は `simp.optimize` の更新則の**上書き**(既定 None = `simp` 側の既定 `"oc"`)。
-    None のときは `simp.optimize` へ渡さないので、既定の挙動は1ビットも変わらない。
-
-    `reaction_min` を渡すと**各拘束面が受け持つ反力に下限**(荷重の合力に対する割合)を
-    課す。制約が体積と合わせて複数本になるので、**`update` を省略すると `"mma"` へ倒す**
-    (OC は乗数1本の二分探索で、制約を増やせない)。満たせなければ
-    `simp.ReactionTargetError`。**渡さなければ経路は1ビットも変わらない。**
-
-    戻り値の `"reactions"` は**拘束面1枚ごとの反力**(`simp.Reaction` を素の値に開いたもの。
-    `fraction` は荷重の合力に対する割合)。**荷重を運んでいない取付点はここが 0 になる** ——
-    構造最適化は荷重を運ばない材料を置かないので、そのままだと保持ソリッドが浮き島になって
-    `mesh.remove_islands` に消える。**面の並びは `fixed_faces` と同じ。**
-
-    `fixed_faces` / `load_faces` が要素サイズより小さくて格子節点が1つも付かないと
-    (`AnchorTable.empty_faces()`)、**例外にはせず**戻り値の `"empty_condition_faces"`
-    (`AnchorTable.condition_face_diagnoses` の結果。空でなければ1件以上)に診断を積んで
-    早期returnする(当面の措置。本当の解決は保留 — docs/TOPOPT.md「面が小さすぎて空になる」参照)。
-    このとき `"result"` / `"solid"` / `"void"` / `"surface"` / `"stl"` は `None`
-    (`simp.optimize` を呼んでいない)。通常どおり最後まで走った戻り値では
-    `"empty_condition_faces"` は常に `[]`。
-    """
-    from . import mesh
-    from . import simp
-
-    simp.check_volume_target(volfrac, material_mm3)
-    simp.check_rmin_target(rmin, rmin_mm)
-    if (fixed_faces is None) != (load_faces is None):
-        raise ValueError("fixed_faces と load_faces は両方渡すか、両方省略すること")
-    if shape is not None and fixed_faces is None:
-        raise ValueError(
-            "自分の形を渡すときは fixed_faces / load_faces も渡すこと"
-            "(面添字は形ごとに違うので、デモの選び方は使えない)"
-        )
-    if (design_mask is None) != (design_grid is None):
-        raise ValueError("design_mask と design_grid は両方渡すか、両方省略すること")
-    if design_mask is not None and shape is None:
-        raise ValueError(
-            "design_mask を渡すときは面アンカーの対象(shape)も渡すこと"
-            "(塊の面ではなく、拘束・荷重を指定できる面がどこから来るかを明示する)"
-        )
-
-    timings: dict[str, float] = {}
-    t0 = time.perf_counter()
-    if design_mask is not None:
-        model = vx.model_from_design_mask(
-            design_grid, design_mask, anchor_shape=shape, keep=keep, obstacle=obstacle
-        )
-    else:
-        if shape is None:
-            shape = demo_bracket()
-        model = vx.voxelize(shape, elements_long_axis, keep=keep, obstacle=obstacle)
-    timings["voxelize"] = time.perf_counter() - t0
-
-    t0 = time.perf_counter()
-    soup = model.soup
-    if fixed_faces is None:
-        fixed_faces, load_faces = demo_faces(soup)
-    fixed_faces = _face_list(fixed_faces)
-    load_faces = _face_list(load_faces)
-    if forces is not None and len(forces) != len(load_faces):
-        raise ValueError(
-            f"forces は荷重面と同じ数だけ渡すこと(荷重面 {len(load_faces)} 枚 / "
-            f"force {len(forces)} 本)。並びも同じ順であること"
-        )
-    table = build_anchors(soup, model.grid, radius_ratio=radius_ratio)
-    timings["anchor"] = time.perf_counter() - t0
-
-    # **実行経路の入口。** 拘束面・荷重面が要素サイズより小さくて節点が1つも
-    # 付かないと(`table.empty_faces()`)、この先 `table.fixed_dofs` / `table.load_vector` の
-    # `_require_nodes` が例外を投げる(その例外自体は消さない・弱めない — 空の面を名指しして
-    # 拘束・荷重を掛けたら黙って0にせず落ちる、という既存の安全策)。**そこへ落ちる前に、
-    # ここで一度立ち止まってメッセージを返す。** 本人指示で「落とさない・メッセージを出すだけ」
-    # なので、`simp.optimize` は呼ばずに戻り値へ診断を積んで早期returnする。
-    empty_condition_faces = table.condition_face_diagnoses(fixed_faces, load_faces)
-    if empty_condition_faces:
-        warning = format_condition_face_warning(empty_condition_faces)
-        print(f"[anchor.run_pipeline] 警告: {warning}", file=sys.stderr)
-        return {
-            "model": model,
-            "table": table,
-            "result": None,
-            "solid": None,
-            "void": None,
-            "surface": None,
-            "stl": None,
-            "fixed_faces": fixed_faces,
-            "load_faces": load_faces,
-            "timings": timings,
-            "empty_condition_faces": empty_condition_faces,
-            "warning": warning,
-            # 早期returnの枝は `simp.optimize` を呼んでいないので、反力も更新則も無い
-            # (キーの有無で分岐させないための空)。
-            "reactions": [],
-            "reaction_min": None,
-            "update": None,
-        }
-
-    nx, ny, nz = model.grid.shape
-    fixed_dofs = table.fixed_dofs(fixed_faces)
-    # **反力は拘束面1枚を1グループにする。** 面ごとの節点集合は排他(`AnchorTable.node_ids`)
-    # なので、そのまま `ReactionGroup` の「重ならない」契約を満たす。
-    reaction_groups = [
-        simp.ReactionGroup(name=f"fixed_face_{int(face)}", dofs=table.fixed_dofs([int(face)]))
-        for face in fixed_faces
-    ]
-    load, load_total = _assemble_load(table, load_faces, force, forces)
-    solid = model.keep.copy()
-    if keep_anchor_material:
-        near = table.element_mask(list(fixed_faces) + list(load_faces), layers=keep_layers)
-        solid |= near & model.design
-    void = ~model.design | model.obstacle
-    trace.snapshot('boundary-conditions', grid=model.grid, voxel_model=model, anchors=table,
-                   fixed_dofs=fixed_dofs, load=load, load_total=load_total,
-                   solid=solid, void=void, reaction_groups=reaction_groups)
-
-    resolved_update = update
-    if reaction_min is not None and resolved_update is None:
-        # 反力の下限は制約が複数本になるので OC では扱えない。**この経路だけ MMA へ倒す**
-        # (`reaction_min` を渡さない呼び出しは既定の更新則のまま)。
-        resolved_update = "mma"
-
-    t0 = time.perf_counter()
-    result = simp.optimize(
-        nx,
-        ny,
-        nz,
-        volfrac=volfrac,
-        material_mm3=material_mm3,
-        element_volume_mm3=model.grid.element_volume,
-        rmin=rmin,
-        rmin_mm=rmin_mm,
-        max_iter=max_iter,
-        fixed_dofs=fixed_dofs,
-        load=load,
-        void_mask=void,
-        solid_mask=solid,
-        reactions=reaction_groups,
-        callback=progress,
-        keep_model=keep_model,
-        **({} if not dynamic_active else {"dynamic_active": True}),
-        **({} if solver is None else {"solver": solver}),
-        **({} if threads is None else {"threads": threads}),
-        **({} if resolved_update is None else {"update": resolved_update}),
-        **({} if reaction_min is None else {"reaction_min": float(reaction_min)}),
-    )
-    timings["optimize"] = time.perf_counter() - t0
-
-    t0 = time.perf_counter()
-    # 保持と除外の条件をメッシュ化にも適用する。
-    surface = mesh.build_surface(result.rho, keep_mask=solid, zero_mask=void)
-    timings["mesh"] = time.perf_counter() - t0
-
-    out = Path(stl_path) if stl_path is not None else _HERE / "output" / "bracket.stl"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    mesh.write_stl(out, surface.verts_smooth, surface.faces)
-
-    design_elements = int(np.count_nonzero(model.design))
-    movable = ~void & ~solid
-    free_elements = int(np.count_nonzero(movable))
-    # **目標は `optimize` が実際に使った値を引く。** ここで再計算すると、絶対量で渡された
-    # ときに換算をもう一度書くことになり、片方だけ直したときに黙ってずれる。
-    target_volume = result.target_volume
-    element_volume = model.grid.element_volume
-    history = result.history
-    return {
-        "model": model,
-        "table": table,
-        "result": result,
-        "solid": solid,
-        "void": void,
-        "surface": surface,
-        "stl": str(out),
-        "fixed_faces": fixed_faces,
-        "load_faces": load_faces,
-        "load_total": load_total,
-        "timings": timings,
-        "empty_condition_faces": [],
-        "design_elements": design_elements,
-        "free_elements": free_elements,
-        "target_volfrac": result.volfrac,
-        "target_volume": target_volume,
-        "rmin": result.rmin,
-        "rmin_mm": result.rmin_mm,
-        "achieved_volume": float(result.rho.sum()),
-        "element_volume_mm3": element_volume,
-        "target_material_mm3": target_volume * element_volume,
-        "achieved_material_mm3": float(result.rho.sum()) * element_volume,
-        "solid_elements": int(np.count_nonzero(solid)),
-        "void_elements": int(np.count_nonzero(void)),
-        "achieved_volfrac": (
-            float(result.rho[model.design].mean()) if design_elements else 0.0
-        ),
-        "reactions": reaction_payload(fixed_faces, result.reactions),
-        "reaction_min": result.reaction_min,
-        "update": result.update,
-        "compliance_first": history[0].compliance if history else float("nan"),
-        "compliance_last": history[-1].compliance if history else float("nan"),
-        "iterations": len(history),
-    }
-
-
 def _cli() -> int:
     import argparse
 
-    parser = argparse.ArgumentParser(description="面アンカーの要約と、端から端まで1回")
+    parser = argparse.ArgumentParser(description="合成ブラケットの面アンカー表の要約")
     parser.add_argument("--n", type=int, default=40, help="最長軸方向の要素数")
-    parser.add_argument("--table-only", action="store_true", help="対応表だけ作って終わる")
-    parser.add_argument("--max-iter", type=int, default=40)
     args = parser.parse_args()
 
-    if args.table_only:
-        model = vx.voxelize(demo_bracket(), args.n)
-        table = build_anchors(model.soup, model.grid)
-        print(f"grid   : {model.grid.shape} spacing={model.grid.spacing:.6f}")
-        print(f"nodes  : {table.node_grid.shape}")
-        print(f"table  : {table.stats['seconds']:.3f}秒 / {table.stats['faces']}面 / "
-              f"標本点 {table.stats['samples']}")
-        for f in table.face_indices():
-            a = table[f]
-            print(
-                f"  面{f:3d} {a.kind:14s} 節点{a.node_count:5d} "
-                f"担当面積 {a.total_area:10.3f} / CAD {a.cad_area:10.3f} "
-                f"(こぼれ {a.leak_ratio:.1%})"
-            )
-        return 0
-
-    out = run_pipeline(elements_long_axis=args.n, max_iter=args.max_iter)
-    t = out["timings"]
-    print(f"面      : 固定={out['fixed_faces']} 荷重={out['load_faces']}")
-    print(f"格子    : {out['model'].grid.shape} 設計要素={out['design_elements']}")
-    print(f"体積    : {out['achieved_volume']:.3f} 要素 (目標 {out['target_volume']:.3f}) / "
-          f"設計空間内の平均密度 {out['achieved_volfrac']:.4f}")
-    print(f"C       : {out['compliance_first']:.4f} → {out['compliance_last']:.4f}")
-    print(f"秒      : ボクセル化 {t['voxelize']:.2f} / 対応表 {t['anchor']:.2f} / "
-          f"最適化 {t['optimize']:.2f} / メッシュ化 {t['mesh']:.2f}")
-    print(f"STL     : {out['stl']}")
+    model = vx.voxelize(demo_bracket(), args.n)
+    table = build_anchors(model.soup, model.grid)
+    print(f"grid   : {model.grid.shape} spacing={model.grid.spacing:.6f}")
+    print(f"nodes  : {table.node_grid.shape}")
+    print(f"table  : {table.stats['seconds']:.3f}秒 / {table.stats['faces']}面 / "
+          f"標本点 {table.stats['samples']}")
+    for f in table.face_indices():
+        a = table[f]
+        print(
+            f"  面{f:3d} {a.kind:14s} 節点{a.node_count:5d} "
+            f"担当面積 {a.total_area:10.3f} / CAD {a.cad_area:10.3f} "
+            f"(こぼれ {a.leak_ratio:.1%})"
+        )
     return 0
 
 

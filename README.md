@@ -202,19 +202,16 @@ cd web; npm run dev                                 # 画面(5173)
 報告して先へ進む)。**強制力は、タスクに書く「受入検査がすべて緑」の一文と runner が担う。**
 
 ```powershell
-# SIMP側の数値の正しさ
-& .\.venv\Scripts\python.exe topopt_checks\check_simp.py
-
 # 二値FEM（要素剛性・節点番号・行列組立・CG/direct/MG・残差検算)の移設前一致
 & .\.venv\Scripts\python.exe topopt_checks\check_fem.py
 
-# メッシュ化側の正しさ（SIMPを1回回す）
+# メッシュ化側の正しさ（合成密度場。SIMPは回さない）
 & .\.venv\Scripts\python.exe topopt_checks\check_mesh.py
 
 # ボクセル化側の正しさ（SIMPを回さない）
 & .\.venv\Scripts\python.exe topopt_checks\check_voxelize.py
 
-# 面アンカー側の正しさ（端から端まで1回通す）
+# 面アンカー側の正しさ
 & .\.venv\Scripts\python.exe topopt_checks\check_anchor.py
 
 # 塊(設計空間)。分離 + 固定凸包 + 連結性 + 空の条件面(--run <実行フォルダ> で実物の基準実行も)
@@ -222,9 +219,6 @@ cd web; npm run dev                                 # 画面(5173)
 
 # 途中記録。製品入口から1回走らせ、導出1回・全候補の塊一致・表面の再現・最終文書/STLの一致
 & .\.venv\Scripts\python.exe topopt_checks\check_trace.py
-
-# 体積目標を絶対量(mm^3)で指定する口
-& .\.venv\Scripts\python.exe topopt_checks\check_absolute_volume.py
 
 # von Mises応力・実単位換算・代表応力・最小安全率
 & .\.venv\Scripts\python.exe topopt_checks\check_stress.py
@@ -235,13 +229,7 @@ cd web; npm run dev                                 # 画面(5173)
 # CPU並列化
 & .\.venv\Scripts\python.exe topopt_checks\check_parallel.py
 
-# 安全率の外側ループ
-& .\.venv\Scripts\python.exe topopt_checks\check_safety_loop.py
-
-# 密度フィルタ半径をmmで指定する口
-& .\.venv\Scripts\python.exe topopt_checks\check_filter_radius.py
-
-# duocad本体への配線(4条件 -> 塊 -> 最適化 -> メッシュボディ)
+# duocad本体への配線(4条件 -> 塊 -> 二値探索 -> メッシュボディ)
 & .\.venv\Scripts\python.exe topopt_checks\check_optimize_wiring.py
 ```
 

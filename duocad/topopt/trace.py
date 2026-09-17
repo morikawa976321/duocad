@@ -111,8 +111,7 @@ class Recorder:
             return {'$type':type(value).__name__, **{f.name:self._encode(getattr(value,f.name),seen)
                     for f in fields(value) if f.name != 'cache'}}
         if type(value).__name__ == 'Model' and hasattr(value, 'ndof'):
-            names = ('nelx','nely','nelz','ndof','E','nu','emin','fixed','free','f','active',
-                     '_base_active','_base_fixed','dynamic_active','ke')
+            names = ('nelx','nely','nelz','ndof','E','nu','emin','fixed','free','f','active','ke')
             return {'$type':'FEMModel', **{n:self._encode(getattr(value,n),seen) for n in names}}
         if isinstance(value, BaseException):
             return {'$error':type(value).__name__, 'message':str(value),

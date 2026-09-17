@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import argparse
 import struct
 import time
 from dataclasses import dataclass
@@ -22,8 +21,6 @@ import scipy.sparse as sp
 from scipy import ndimage
 from scipy.spatial import cKDTree
 from skimage.measure import marching_cubes
-
-_ROOT = Path(__file__).resolve().parent
 
 # Taubin平滑化の既定値(タスク指定)。level は等値の太さを決める設計の摘みなので
 # 定数で埋め込まず、常に引数として外に出す。
@@ -418,51 +415,3 @@ def build_surface_from_mask(
     )
 
 
-def _cli() -> int:
-    import simp  # ここでのみ要る(SIMPを回して実データを作るのはCLI用途だけ)
-
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--level", type=float, default=DEFAULT_LEVEL)
-    parser.add_argument("--lam", type=float, default=DEFAULT_LAMBDA)
-    parser.add_argument("--mu", type=float, default=DEFAULT_MU)
-    parser.add_argument("--iters", type=int, default=DEFAULT_ITERS)
-    parser.add_argument("--out", default=str(_ROOT / "output" / "optimized.stl"))
-    args = parser.parse_args()
-
-    p = simp.PRESET
-    print(
-        f"SIMP最適化を実行中(プリセット {p['nelx']}x{p['nely']}x{p['nelz']} / "
-        f"{p['max_iter']}反復)..."
-    )
-    t0 = time.perf_counter()
-    result = simp.run_preset()
-    simp_seconds = time.perf_counter() - t0
-    print(f"  完了: {len(result.history)}反復 / {simp_seconds:.1f}秒")
-
-    mr = build_surface(
-        result.rho,
-        level=args.level,
-        lam=args.lam,
-        mu=args.mu,
-        n_iter=args.iters,
-    )
-    write_stl(args.out, mr.verts_smooth, mr.faces)
-    out_path = Path(args.out)
-    size_kb = out_path.stat().st_size / 1024.0
-
-    print(f"  三角形数: {len(mr.faces)}")
-    print(f"  頂点数: {len(mr.verts_smooth)}")
-    print(f"  体積(平滑化前): {mr.volume_raw:.3f}")
-    print(f"  体積(平滑化後): {mr.volume_smooth:.3f} "
-          f"(変化 {100 * (mr.volume_smooth / mr.volume_raw - 1):+.2f}%)")
-    thickness_before = min_wall_thickness(mr.verts_raw, mr.faces)
-    thickness_after = min_wall_thickness(mr.verts_smooth, mr.faces)
-    print(f"  最小肉厚(平滑化前): {thickness_before:.4f}")
-    print(f"  最小肉厚(平滑化後): {thickness_after:.4f}")
-    print(f"  メッシュ処理時間: {mr.seconds:.2f}秒")
-    print(f"  STL: {out_path} ({size_kb:.1f} KB)")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(_cli())

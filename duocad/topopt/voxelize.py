@@ -15,9 +15,9 @@
   引いているのはこの規約に戻すため。
   **新しく格子と実座標を対応づけるコードを書くときは、必ず `Grid.center_of` /
   `Grid.centers_1d` を通すこと。** 添字に `spacing` を直接掛けると半セルずれる。
-- **要素は立方体・ワールド軸に整列**する。SIMPは全要素が同形状であることに依存していて
+- **要素は立方体・ワールド軸に整列**する。`fem.py` は全要素が同形状であることに依存していて
   要素剛性行列 `Ke` を1つ作って使い回すので、非立方体の要素は入れられない。
-- 配列の軸順は `(nx, ny, nz)` で、`simp.py` の `rho` (nelx, nely, nelz) とそのまま合う。
+- 配列の軸順は `(nx, ny, nz)` で、`fem.py` の `rho` (nelx, nely, nelz) とそのまま合う。
 
 ## 占有判定のやり方(なぜこの形か)
 
@@ -841,16 +841,6 @@ class VoxelModel:
     def free(self) -> np.ndarray:
         """最適化が動かしてよい要素(設計空間のうち、保持でも障害物でもないもの)。"""
         return self.design & ~self.keep & ~self.obstacle
-
-    def initial_density(self, volfrac: float) -> np.ndarray:
-        """SIMP の初期密度場。保持=1、障害物=0、それ以外=volfrac、設計空間の外=0。
-
-        stage2 以降が `simp.py` へ渡すための便宜。ここでは形を作るだけで最適化はしない。
-        """
-        rho = np.zeros(self.grid.shape, dtype=float)
-        rho[self.free] = float(volfrac)
-        rho[self.keep] = 1.0
-        return rho
 
 
 def voxelize(
