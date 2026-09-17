@@ -74,9 +74,24 @@ def _safety_summary(report: dict) -> dict:
                 conditions=report["checks"]["conditions"])
 
 
+def _save_masks(path: Path, space, table, best_mask) -> None:
+    """設計空間と採用マスク(ボクセルのまま)、条件面の節点座標を npz に残す(撮影・見比べ用)。"""
+    def nodes(faces):
+        ids = [table.node_ids([int(f)]) for f in faces if int(f) not in set(table.empty_faces())]
+        if not ids:
+            return np.zeros((0, 3))
+        return table.node_grid.positions_of(table.node_grid.indices_of_ids(np.unique(np.concatenate(ids))))
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(path, design=space.mask, best=(np.zeros(0, bool) if best_mask is None else best_mask),
+                        origin=np.asarray(space.grid.origin, dtype=float), spacing=float(space.grid.spacing),
+                        fixed_nodes=nodes(space.fixed_faces), load_nodes=nodes(space.load_faces))
+
+
 def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, skip_search: bool,
            step_exponent: float = binary_search.DEFAULT_STEP_EXPONENT,
-           max_step_ratio: float = binary_search.DEFAULT_MAX_STEP_RATIO) -> dict:
+           max_step_ratio: float = binary_search.DEFAULT_MAX_STEP_RATIO,
+           save_masks: Path | None = None) -> dict:
     session = Session(None, 0.2, models_dir=model.resolve().parent)
     session.open_document(model.name)
     document = session.document
@@ -139,6 +154,8 @@ def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, 
         record["initial_full_material"] = dict(seconds=time.perf_counter() - started, islands=island_diag,
                                                survivors=len(survivors), **_safety_summary(full))
         if skip_search:
+            if save_masks is not None:
+                _save_masks(save_masks, space, table, None)
             record["search"] = dict(skipped=True)
             record["invariants"] = dict(derive_calls=derive_calls["n"], mesh_calls=mesh_calls["n"])
             return record
@@ -158,6 +175,9 @@ def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, 
         seconds = time.perf_counter() - started
         _, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
+        if save_masks is not None:
+            _save_masks(save_masks, space, table,
+                        None if result.best_feasible is None else result.best_feasible.mask)
         identifier_after = binary_search.evaluation_identifier(conditions)
         history = [dict(index=t.index, parent=t.parent, operation=t.operation, outcome=t.outcome,
                         material_mm3=t.material_mm3, safety_factor=t.safety_factor, checks=t.checks, note=t.note)
@@ -194,6 +214,8 @@ def main() -> int:
     parser.add_argument("--step-exponent", type=float, default=binary_search.DEFAULT_STEP_EXPONENT,
                         help="段階4の削減割合の指数 θ(inf で --max-step-ratio の固定割合)")
     parser.add_argument("--max-step-ratio", type=float, default=binary_search.DEFAULT_MAX_STEP_RATIO)
+    parser.add_argument("--save-masks", type=Path, default=None,
+                        help="設計空間・採用マスク・条件面の節点座標を npz に書く(撮影用)")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     for stream in (sys.stdout, sys.stderr):
@@ -202,7 +224,8 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
     record = verify(args.model, args.spacing, args.target, args.max_evaluations, skip_search=args.skip_search,
-                    step_exponent=args.step_exponent, max_step_ratio=args.max_step_ratio)
+                    step_exponent=args.step_exponent, max_step_ratio=args.max_step_ratio,
+                    save_masks=args.save_masks)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(record, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     summary = {k: record.get(k) for k in ("derive", "entry", "invariants")}
