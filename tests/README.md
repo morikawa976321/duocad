@@ -1173,17 +1173,18 @@ build_provider(kind, ...) -> Provider
 
 ## `duocad/optimize_run.py` — 形状最適化の配線（`test_optimize_backend.py`）
 
-4条件を `duocad.topopt` の `Conditions` へ翻訳し、端から端まで回して結果をメッシュボディとして
-足す層。**SIMPを実際に回す検査はここには無い**（`topopt_checks/check_optimize_wiring.py`）。
-pytestが固定しているのは以下:
+4条件を `duocad.topopt` の `Conditions` へ翻訳し、固定した設計空間を1回導出して
+`binary_search.find_best_feasible` へ渡し、確定した最終マスクだけを後段(メッシュ化・
+平滑化・ブーリアン)へ渡す層。**FEMを実際に回す検査はここには無い**
+（`topopt_checks/check_optimize_wiring.py`）。pytestが固定しているのは以下:
 
 ```python
 optimize_run.conditions_report(doc) -> dict     # {"ready", "problems", ...}
 optimize_run.build_conditions(doc) -> ConditionBundle
-optimize_run.resolution_limits(doc, *, rmin_mm=None) -> dict
+optimize_run.resolution_limits(doc) -> dict     # rmin_mmは引数に無い(下記)
 optimize_run.run(doc, options=None, *, progress=None, should_cancel=None) -> dict
 optimize_run.allowable_stress() -> dict
-Session.optimize_conditions() / optimize_resolution(rmin_mm) / run_optimization(**opts) / cancel_optimization()
+Session.optimize_conditions() / optimize_resolution(rmin_mm=None) / run_optimization(**opts) / cancel_optimization()
 ```
 
 - **走らせられる条件は「保持ソリッド1つ以上・拘束面ちょうど1枚・荷重面ちょうど1枚・
@@ -1195,18 +1196,24 @@ Session.optimize_conditions() / optimize_resolution(rmin_mm) / run_optimization(
 - **面添字は `kernel.make_compound` でまとめた形の中の添字**で、ボディごとの `face_count` の
   累積だけずれる。`_verify_face_mapping` が面積・法線・**重心**で対応を測り直し、ずれていれば
   `FaceMappingError`（`RuntimeError` 派生 = `except ValueError` に拾われない）。
-- **要素サイズの上限 = min(`rmin_mm` / `simp.MIN_RMIN`, min(sqrt(条件面のCAD面積)))**、
-  下限は総要素数 `MAX_ELEMENTS` から。範囲外の指定は `OptimizeInputError`。
+- **要素サイズの上限は条件面だけで決まる**（`min(sqrt(条件面のCAD面積))`。密度フィルタ半径は
+  この版に存在しないので上限に効かない——`test_condition_faces_alone_set_the_upper_bound`が
+  `"from_rmin_mm" not in limits`を固定している）。下限は総要素数 `MAX_ELEMENTS` から。
+  範囲外の指定は `OptimizeInputError`。
 - **結果メッシュの頂点は要素添字空間で来る**ので `grid.origin + verts * grid.spacing` で
   ワールド[mm]へ直す。格子の箱から出ていたら `FaceMappingError`。
 - **中断**は `should_cancel()` が真なら `OptimizeCancelled`（`RuntimeError` 派生）。
   `Session.run_optimization` は**入口で旗を畳む**（畳まないと前回の中断が次を即死させる）。
 - **`import duocad.session` で `skimage` と `duocad.topopt` が来ない**（`duocad.topopt` の
   importは関数の中）。`scipy` は `duocad/view.py` が既に読んでいるので指標にならない。
-- `duocad/topopt/safety_loop.py` 側で固定しているもの: 本番解像度で条件面が空なら
-  `ConditionFacesEmptyError`（**生の `AttributeError` ではない**）／`run_progress` が
-  `run_topopt` の `progress` へ素通しされる／`keep_model=True` が渡る／渡した塊そのもの・候補材料量・
-  `rmin_mm` が `run_topopt` へ届く／探索は導出を呼ばず、戻り値の塊は渡したものそのもの。
+- **`rmin_mm` / `max_iter` / `material_min_mm3` / `material_max_mm3`(旧SIMP方式の引数)は
+  この版では扱えない**。`session.run_optimization`にキーワードとして渡すと4つとも
+  `OptimizeInputError`で断る(`TypeError`ではなく意味を説明した文で。
+  `test_run_optimization_rejects_each_old_argument_by_name`が1つずつ固定している)。
+- **`derive`は1回だけ呼ばれ、同じ設計空間マスクが探索(`binary_search.find_best_feasible`)へ
+  渡る**（`test_run_derives_once_and_hands_the_space_to_the_search`）。**候補ごとのメッシュ化は
+  無い**——最終確定マスクだけが後段(`finalize`)へ渡る
+  （`test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize`）。
   塊の導出そのもの（固定凸包・接続・記録）は `tests/test_design_space.py`。
 
 ## 回帰ガード（`test_m2_regressions.py` / `test_m3_regressions.py`）

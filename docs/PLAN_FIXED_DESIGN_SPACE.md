@@ -168,6 +168,7 @@
 
 - `README.md`、`docs/TOPOPT.md`、`TOPOPT_SPEED.md`、`TOPOPT_RECORDING.md` の現在の経路・設定表・実行例を更新。
 - `TOPOPT_ACTIVE_SET.md`、`TOPOPT_SIMP_ITER_BREAKDOWN.md` 等の計測手順から旧CLIを除去。過去の測定値は「旧方式での実測」として区別する。
+  （2026-09-17追記: 両文書は計画書`PLAN_BINARY_STRESS_SEARCH.md`§7の段階7で削除された。価値のある実測は`TOPOPT.md`・`TOPOPT_SPEED.md`へ移した。）
 - `duocad/topopt/output/design_space_reference.stl` など、廃止コードだけが生成・消費するscratchファイルを削除。
 - 元モデル、実行アーカイブ、比較画像、診断JSON、失敗解析に必要なデータは削除しない。
 - アーカイブ内の一度限りの `.py` も棚卸しし、不要な旧導出の実装や再実行コードは削除対象とする。過去のソースを証拠として保存した `source.zip` は実行経路ではなく記録として維持する。
