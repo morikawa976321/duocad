@@ -97,3 +97,22 @@
 - **状態変更の配信を「直後の別コマンドの配信」に相乗りさせない**（`duocad/net/ws.py` の自動 commit）。配信しない種類の
   コマンド（`preview`）が同じ入口を通った瞬間に破れ、例外は出ない。検査は**2接続**で書く（1接続だと要求元には結果が返るので
   緑に見える）。自動で起こした変更に人の操作 ID を載せない。
+
+## ワークツリーでの作業（2026-09-16実測、issue #9）
+
+issue の実装は **main を汚さないようにワークツリー上で行う**（本人指示 2026-09-16、issue #6 断面表示の依頼時）。issue ごとのワークツリー（`.claude/worktrees/issue-9-shell` / `issue-10-measure` 等）を並べて並行して進めるのが作法。
+
+**ジャンクションを張る。** `git worktree add` 直後のワークツリーには gitignore 済みの `.venv` と `web/node_modules` が無く、`npm run check` は依存が解決できず、`web/scripts/server.mjs`（smoke の起点）は「venv の python が無い」で止まる。main のそれらへジャンクションを張る:
+
+```powershell
+New-Item -ItemType Junction -Path <worktree>\.venv -Target C:\Users\tm976\mf\duocad\.venv
+New-Item -ItemType Junction -Path <worktree>\web\node_modules -Target C:\Users\tm976\mf\duocad\web\node_modules
+```
+
+- ジャンクションは gitignore 対象なので `git status` には出ない。
+- pytest は main の `.venv\Scripts\python.exe -m pytest` をワークツリーの cwd で呼べば足りる（`duocad.__file__` はワークツリー側を指す）。
+- smoke が配る画面は `web/dist` なので、ワークツリーで先に `npm run build` を回す。
+
+**素の python スクリプトは main を import する。** `.venv` は `_editable_impl_duocad.pth` で main の checkout を sys.path に入れているため、ワークツリーで scratch のスクリプトを `python script.py` で走らせるとワークツリーではなく main の `duocad` を import する（ワークツリーで足した属性が「無い」と言われ、原因が分かるまで1往復溶かした）。ワークツリーのコードを確実に読ませる経路は `pytest`（pyproject の `pythonpath = ["."]`）、`topopt_checks/*.py`（`_bootstrap` がリポジトリ直下を `sys.path[0]` へ）、`python -m duocad...` / `python -c`（cwd が先頭に入る）の3つ。それ以外は `PYTHONPATH=<worktree>` を明示するか `sys.path.insert(0, ...)` を書く。
+
+**Browser pane の `preview_start` はワークツリーの `.claude/launch.json` を見ない**（起動元リポジトリ直下の launch.json を読み、main の `web/src` を配る）。回避: `web/scripts/server.mjs` の `startServer` は `REPO_ROOT` をスクリプト位置から解くので、ワークツリーのそれを `file:///` で import した使い捨ての puppeteer スクリプトを scratchpad に置き、MCP（HTTP `/mcp`）で素材を作って UI 操作とスクリーンショットを撮る。Browser pane 経由の確認は諦める。
