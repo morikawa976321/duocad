@@ -1,5 +1,5 @@
 """初期合格探索と削除・追加・置換による体積削減(計画書§8 段階3・段階4
-`docs/PLAN_BINARY_STRESS_SEARCH.md`)。
+`docs/PLAN_BINARY_STRESS_SEARCH.md`。入口検査と候補管理は `docs/FIX_BINARY_SEARCH_INITIALIZATION.md`)。
 
 `find_initial_feasible` は設計空間の全材料マスクから出発し、最初に6条件
 (`acceptance.inspect`)へ合格する候補を見つけて `best_feasible` に確定するところまで
@@ -9,6 +9,11 @@
 
 責務の分け方(§5): 候補生成は§4.3の軸整列ブロック、島処理は§4.4、6条件の判定は
 `acceptance.inspect` そのもの(このモジュールは6条件を再実装しない)。
+
+候補の持ち方(修正C): frontier は**親マスク**を容量以内で保持し、子候補は
+`(操作, ブロック領域)` の記述として親から1つずつ遅延生成して評価の直前にだけマスクにする。
+生成した候補を配列のまま溜めない(保持マスク数は `frontier_capacity` + 最良合格 + 作業中の
+数個で、評価回数に比例しない)。両段階が同じ frontier・予算・中断の契約を使う。
 """
 from __future__ import annotations
 
@@ -17,7 +22,7 @@ import json
 from collections import deque
 from dataclasses import dataclass, field
 from itertools import product
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import numpy as np
 from scipy import ndimage
@@ -40,6 +45,10 @@ NEIGHBOURHOOD_STRUCTURE = ndimage.generate_binary_structure(3, 1)
 class SearchConditions:
     """1回の探索を通して固定される評価条件一式。`acceptance.inspect` への引数をそのまま束ねる
     (意味の正はそちら)。`table` は `anchor.AnchorTable` と同じ面/節点インタフェースを持てばよい。
+
+    `table` は**探索用の確定表**(`anchor.build_anchors(..., allowed_nodes=...)` で材料に接する
+    節点だけへ対応付けたもの)であること。`mapping` はその検証結果(`anchor.condition_mapping`)で、
+    無ければ未対応付けの表として入口の診断に書かれる。確定後は探索中に一切再配分しない。
     """
 
     grid: Any
@@ -57,7 +66,6 @@ class SearchConditions:
     volume_atol: float = 1e-9
     volume_rtol: float = 1e-9
     bbox_cache: Any = None
-    #: `anchor.condition_mapping` の結果(確定表の検証)。None なら未対応付けの表として入口の診断に書く。
     mapping: Any = None
 
     def __post_init__(self) -> None:
@@ -220,27 +228,25 @@ def resolve_islands(candidate: np.ndarray, conditions: SearchConditions) -> tupl
 
     **最大成分を選ばない。** 複数の成分が単独で成立すれば、それぞれ別候補として返す
     (呼び出し側が両方評価する)。最後に保持を塗り直して復活させることはしない。
+    除去した島は数値(セル数・体積・条件に触れていたか)だけを残し、マスクは保持しない。
     """
     candidate = np.ascontiguousarray(candidate, dtype=bool)
     labels, count = ndimage.label(candidate, structure=NEIGHBOURHOOD_STRUCTURE)
     survivors, removed = [], []
     for label_id in range(1, count + 1):
         component = np.ascontiguousarray(labels == label_id)
-        (survivors if _holds_all_conditions(component, conditions) else removed).append(component)
-    diagnostics = dict(
-        components=count,
-        surviving_components=len(survivors),
-        removed_islands=[
-            dict(cells=int(comp.sum()), volume_mm3=float(comp.sum()) * conditions.grid.element_volume,
-                 touches_condition=_touches_any_condition(comp, conditions))
-            for comp in removed
-        ],
-    )
+        if _holds_all_conditions(component, conditions):
+            survivors.append(component)
+        else:
+            removed.append(dict(cells=int(component.sum()),
+                                volume_mm3=float(component.sum()) * conditions.grid.element_volume,
+                                touches_condition=_touches_any_condition(component, conditions)))
+    diagnostics = dict(components=count, surviving_components=len(survivors), removed_islands=removed)
     return survivors, diagnostics
 
 
 # ---------------------------------------------------------------------------
-# 候補生成(§4.3 軸整列ブロック)
+# 候補生成(§4.3 軸整列ブロック。修正C §5.1 遅延生成)
 # ---------------------------------------------------------------------------
 def block_sizes(shape: tuple[int, int, int]) -> tuple[int, ...]:
     """セル単位の 1, 2, 4, ... の決定的な系列。設計空間の最長辺を上限にする。"""
@@ -257,41 +263,90 @@ def _block_starts(shape: tuple[int, int, int], size: int):
     return product(*(range(0, n, size) for n in shape))
 
 
+def _block_region(lo: tuple, size: int, shape: tuple) -> tuple:
+    """境界のブロックは配列の端で自然に切り詰まる(スライスが配列を超えない)。"""
+    return tuple(slice(int(l), min(int(l) + size, int(n))) for l, n in zip(lo, shape))
+
+
+def _local_addable(mask: np.ndarray, design_space: np.ndarray, region: tuple) -> np.ndarray:
+    """ブロック内の「設計空間内で既存材料と面で接する空セル」(§4.3 追加)。
+
+    ブロックの周囲1セル(面で接する相手はそこにしか無い)だけを見て膨張させる。全格子の膨張を
+    候補ごとに払わない。
+    """
+    halo = tuple(slice(max(s.start - 1, 0), min(s.stop + 1, n)) for s, n in zip(region, mask.shape))
+    sub = mask[halo]
+    adjacent = ndimage.binary_dilation(sub, structure=NEIGHBOURHOOD_STRUCTURE) & ~sub
+    inner = tuple(slice(s.start - h.start, s.stop - h.start) for s, h in zip(region, halo))
+    return adjacent[inner] & design_space[region]
+
+
+def _op_descriptors(mask: np.ndarray, design_space: np.ndarray, size: int, op: str):
+    """1つの操作・1つのブロック大きさの有効な候補記述 `(op, region, addable)` を順に生成する。
+
+    有効性(削除は材料が要る、追加は接する空セルが要る、置換は両方)はブロックの範囲だけを見て
+    決め、マスクは作らない。`addable` はブロック大の小配列(削除では None)。
+    """
+    for lo in _block_starts(mask.shape, size):
+        region = _block_region(lo, size, mask.shape)
+        if op == 'delete':
+            if mask[region].any():
+                yield ('delete', region, None)
+            continue
+        addable = _local_addable(mask, design_space, region)
+        if not addable.any():
+            continue
+        if op == 'add':
+            yield ('add', region, addable)
+        elif op == 'replace' and mask[region].any():
+            yield ('replace', region, addable)
+
+
+def candidate_descriptors(mask: np.ndarray, design_space: np.ndarray, sizes: tuple[int, ...],
+                          *, allow_add: bool = True) -> Iterator[tuple]:
+    """親 `mask` の子候補の記述を、大きいブロックから、各大きさで削除→追加→置換を1つずつ
+    巡回して生成する(§4.3「削除優先で、各巡回に追加・置換の枠を確保する」、修正C §5.2)。
+
+    操作別の生成器を巡回するので、削除候補が何万あっても追加・置換が後回しにならない。
+    `allow_add=False` なら追加は生成しない(連続追加の上限。置換は体積を増やさないので残す)。
+    """
+    ops = ('delete', 'add', 'replace') if allow_add else ('delete', 'replace')
+    for size in sizes:
+        alive = [_op_descriptors(mask, design_space, size, op) for op in ops]
+        while alive:
+            for generator in list(alive):
+                try:
+                    yield next(generator)
+                except StopIteration:
+                    alive.remove(generator)
+
+
+def _materialize(parent: np.ndarray, design_space: np.ndarray, op: str, region: tuple,
+                 addable: Optional[np.ndarray]) -> np.ndarray:
+    """候補記述から子マスクを作る(親は複製し、in-place で変えない)。評価の直前にだけ呼ぶ。"""
+    child = np.array(parent, dtype=bool, copy=True)
+    if op == 'delete':
+        child[region] = False
+    elif op == 'add':
+        child[region] |= addable
+    elif op == 'replace':
+        child[region] = addable
+    else:
+        raise ValueError(f'未知の操作 {op!r}')
+    return child
+
+
 def repair_candidates(current: np.ndarray, design_space: np.ndarray, size: int):
-    """1つのブロック大きさについて削除・追加・置換の候補を、削除優先で生成する(§4.3)。
+    """1つのブロック大きさについて削除・追加・置換の候補 `(op, mask)` を遅延生成する(§4.3)。
 
     削除はブロックと現在の材料の重なり。追加は「設計空間内の、既存材料と面で接する
     空セル群」(§4.3)に限る —— 材料から離れた場所への新設は生成しない。
-    境界のブロックは配列の端で自然に切り詰まる(スライスが配列を超えない)。
+    マスクは1つ要求されるたびに1つだけ作る(全候補を配列で先に作らない)。
     """
     current = np.asarray(current, dtype=bool)
     design_space = np.asarray(design_space, dtype=bool)
-    adjacent_to_material = ndimage.binary_dilation(current, structure=NEIGHBOURHOOD_STRUCTURE) & ~current
-    deletes, adds, replaces = [], [], []
-    for lo in _block_starts(current.shape, size):
-        hi = tuple(min(l + size, n) for l, n in zip(lo, current.shape))
-        region = tuple(slice(l, h) for l, h in zip(lo, hi))
-        block = np.zeros(current.shape, dtype=bool)
-        block[region] = True
-        removable = block & current
-        addable = block & design_space & adjacent_to_material
-        has_removable, has_addable = removable.any(), addable.any()
-        if has_removable:
-            deletes.append(('delete', current & ~removable))
-        if has_addable:
-            adds.append(('add', current | addable))
-        if has_removable and has_addable:
-            replaces.append(('replace', (current & ~removable) | addable))
-    # 各巡回に追加・置換の枠を確保する: 削除だけで候補を使い切らない(§4.3)。
-    yield from deletes
-    yield from adds
-    yield from replaces
-
-
-def _generate_repairs(current: np.ndarray, design_space: np.ndarray, sizes: tuple[int, ...]):
-    """大きい削除から試し、失敗したら小さい領域も試す(§4.3)。`sizes` は降順で渡すこと。"""
-    for size in sizes:
-        yield from repair_candidates(current, design_space, size)
+    for op, region, addable in candidate_descriptors(current, design_space, (int(size),)):
+        yield op, _materialize(current, design_space, op, region, addable)
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +394,14 @@ class FeasibleModel:
 
 @dataclass
 class SearchResult:
-    """探索1回の戻り値。`status` と `termination` は別欄(§4.6:「形状の合否とは別の欄にする」)。"""
+    """探索1回の戻り値。`status` と `termination` は別欄(§4.6:「形状の合否とは別の欄にする」)。
+
+    `termination` の語彙: `initial_feasible_found` / `neighbourhood_exhausted`(frontier を捨てずに
+    使い切った)/ `frontier_truncated`(容量超過で親を捨てたことがあり、近傍を尽くしたとは言えない)/
+    `evaluation_limit` / `generation_limit`(候補記述の予算)/ `cancelled` /
+    `resolution_insufficient` / `boundary_mapping_failed` / `input_contradiction`。
+    `diagnostics['frontier']` / `['candidates']` に保持数の実測・除外・生成数が入る。
+    """
 
     status: str  # 'feasible' | 'no_feasible_found' | 'input_contradiction' | 'resolution_insufficient' | 'boundary_mapping_failed'
     termination: str
@@ -387,27 +449,187 @@ def _evaluate_survivor(survivor: np.ndarray, before: np.ndarray, conditions: Sea
 
 
 # ---------------------------------------------------------------------------
+# frontier と予算(修正C §5)
+# ---------------------------------------------------------------------------
+# 既定値は小型題材(tests/test_binary_search.py の detour 系フィクスチャ)で決めた1組
+# (docs/PLAN_BINARY_STRESS_SEARCH.md §4.3 追記に採用理由と観測した試行数を記録)。
+DEFAULT_FRONTIER_CAPACITY = 48
+DEFAULT_MAX_CONSECUTIVE_ADDS = 2
+#: 候補記述の予算(生成側)の既定 = この値 × 評価予算。無効・重複候補だけで評価数が増えない
+#: 場合にも生成を止めるための上限で、評価予算とは別に数える(修正C §5.2)。
+DEFAULT_CANDIDATES_PER_EVALUATION = 64
+#: 診断に残す除外した親の試行番号の上限(記録の大きさを抑えるためだけの値)。
+EVICTION_RECORD = 50
+
+
+@dataclass
+class _Node:
+    """frontier に保持する親。`mask` は読み取り専用で、子は必ず複製から作る。"""
+
+    mask: np.ndarray
+    trial_index: int
+    streak: int
+    children: Iterator
+
+
+class _Frontier:
+    """親マスクを `capacity` 以内で保持し、親を巡回して子記述を1つずつ取り出す。
+
+    取り出しは**親の round-robin**(先頭の親から次の子を1つ取り、その親を末尾へ回す)。
+    1つの親の子が何万あっても、他の親(直前に見つけた小さい合格モデルなど)の子が順番を
+    待ち続けない。容量を超えて積むときは**最も古い親(試行番号が最小)**を捨てる —— 積んだ後に
+    まとめて切り詰めるのではなく、その1回の push でだけ保持数が動く。捨てた回数と試行番号は
+    診断に残り、捨てたことがある探索は「近傍を尽くした」と表示しない。
+    """
+
+    def __init__(self, capacity: int) -> None:
+        if int(capacity) < 1:
+            raise ValueError(f'frontier_capacity は1以上であること(いま {capacity!r})')
+        self.capacity = int(capacity)
+        self._nodes: deque = deque()
+        self.peak = 0
+        self.evictions = 0
+        self.evicted_trials: list[int] = []
+        self.retired = 0
+
+    def __len__(self) -> int:
+        return len(self._nodes)
+
+    def push(self, node: _Node) -> None:
+        if len(self._nodes) >= self.capacity:
+            oldest = min(range(len(self._nodes)), key=lambda i: self._nodes[i].trial_index)
+            victim = self._nodes[oldest]
+            del self._nodes[oldest]
+            self.evictions += 1
+            if len(self.evicted_trials) < EVICTION_RECORD:
+                self.evicted_trials.append(int(victim.trial_index))
+        self._nodes.append(node)
+        self.peak = max(self.peak, len(self._nodes))
+
+    def next_descriptor(self) -> Optional[tuple]:
+        """先頭の親の次の子記述 `(node, descriptor)`。尽きた親は退役させる。空なら None。"""
+        while self._nodes:
+            node = self._nodes[0]
+            try:
+                descriptor = next(node.children)
+            except StopIteration:
+                self._nodes.popleft()
+                self.retired += 1
+                continue
+            self._nodes.rotate(-1)
+            return node, descriptor
+        return None
+
+    def summary(self) -> dict:
+        return dict(capacity=self.capacity, peak_retained=self.peak, retained=len(self._nodes),
+                    evictions=self.evictions, evicted_trials=list(self.evicted_trials), retired=self.retired)
+
+
+@dataclass
+class _Budget:
+    """評価予算(生の候補を評価した回数)と生成予算(マスクにした候補記述の数。重複も数える)。"""
+
+    max_evaluations: int
+    max_candidates: int
+    evaluations: int = 0
+    generated: int = 0
+    duplicates: int = 0
+
+    def summary(self) -> dict:
+        return dict(generated=self.generated, duplicates=self.duplicates, limit=self.max_candidates,
+                    evaluations=self.evaluations, evaluation_limit=self.max_evaluations)
+
+
+def _candidate_budget(max_evaluations: int, max_candidates: Optional[int]) -> int:
+    return int(max_candidates) if max_candidates is not None else DEFAULT_CANDIDATES_PER_EVALUATION * int(max_evaluations)
+
+
+def _streak_after(op: str, streak: int) -> int:
+    """`op` を経た後の連続する'add'の回数('delete'・'replace' は0へ戻す。§4.3)。"""
+    return streak + 1 if op == 'add' else 0
+
+
+def _node(mask: np.ndarray, trial_index: int, streak: int, design_space_mask: np.ndarray,
+          sizes: tuple[int, ...], max_consecutive_adds: int) -> _Node:
+    mask.setflags(write=False)
+    return _Node(mask=mask, trial_index=trial_index, streak=streak,
+                 children=candidate_descriptors(mask, design_space_mask, sizes,
+                                                allow_add=streak < max_consecutive_adds))
+
+
+def _pull(frontier: _Frontier, design_space_mask: np.ndarray, budget: _Budget, visited: set,
+          identifier: str, is_cancelled) -> Any:
+    """次の未評価候補 `(mask, op, parent_node)` か、終了理由の文字列。
+
+    生成中・評価前に中断を見る。重複(既に見たマスク)は評価数を増やさず、生成予算だけを消費する。
+    """
+    while True:
+        if is_cancelled is not None and is_cancelled():
+            return 'cancelled'
+        pulled = frontier.next_descriptor()
+        if pulled is None:
+            return 'frontier_truncated' if frontier.evictions else 'neighbourhood_exhausted'
+        if budget.generated >= budget.max_candidates:
+            return 'generation_limit'
+        node, (op, region, addable) = pulled
+        budget.generated += 1
+        child = _materialize(node.mask, design_space_mask, op, region, addable)
+        key = (_mask_hash(child), identifier)
+        if key in visited:
+            budget.duplicates += 1
+            continue
+        visited.add(key)
+        return child, op, node
+
+
+def _diagnostics(frontier: _Frontier, budget: _Budget, **extra: Any) -> dict:
+    return dict(frontier=frontier.summary(), candidates=budget.summary(), **extra)
+
+
+def _no_component_trial(history: list, candidate: np.ndarray, raw_hash: str, parent: Optional[int],
+                        operation: str, conditions: SearchConditions, island_diag: dict) -> Trial:
+    before_mm3 = float(candidate.sum()) * conditions.grid.element_volume
+    trial = Trial(index=len(history), parent=parent, operation=operation, mask_hash=raw_hash,
+                  before_mm3=before_mm3, material_mm3=0.0, removed_islands_mm3=before_mm3,
+                  outcome='no_component',
+                  note=f'{island_diag["components"]} 個の連結成分のいずれも固定面・荷重面・'
+                       '保持の全条件を単独で満たさない')
+    history.append(trial)
+    return trial
+
+
+# ---------------------------------------------------------------------------
 # 初期合格探索(§4.2)
 # ---------------------------------------------------------------------------
 def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchConditions, *,
-                           max_evaluations: int = 200) -> SearchResult:
+                           max_evaluations: int = 200,
+                           frontier_capacity: int = DEFAULT_FRONTIER_CAPACITY,
+                           max_consecutive_adds: int = DEFAULT_MAX_CONSECUTIVE_ADDS,
+                           max_candidates: Optional[int] = None,
+                           is_cancelled=None) -> SearchResult:
     """設計空間の全材料マスクから出発し、最初の6条件合格モデルを探す(§4.2、§8 段階3)。
+
+    入口で探索では直せない状態を確定させ、候補生成もFEMも始めない:
+    `resolution_insufficient`(条件面に節点が無い)、`boundary_mapping_failed`(確定表の節点が
+    全設計空間の材料にすら接しない。修正B)、`input_contradiction`(全設計空間でも保持と重ならない)。
 
     返却は必ず `best_feasible` から行い、`unknown`(計算失敗)や安全率不足で
     最良モデルを失わない(§4.1)。修復も通常の候補生成・評価・履歴・予算の対象で、
-    入れ子の修復手続きは無い —— 幾何不良でも応力不足でも同じ `repair_candidates` を使う
+    入れ子の修復手続きは無い —— 幾何不良でも応力不足でも同じ候補生成を使う
     (§4.2「修復処理を無限に入れ子にしない」)。
 
     `max_evaluations` は生の候補(frontierから1回取り出す単位)の予算。1つの生の候補が
     複数の生存成分・解法再試行を持つ場合、`acceptance.inspect` の呼び出し回数はこれより
-    多くなる(history の行数で見ること)。
+    多くなる(history の行数で見ること)。`max_candidates` は候補記述の予算(既定は
+    `DEFAULT_CANDIDATES_PER_EVALUATION × max_evaluations`)。`is_cancelled` は生成中・評価前に見る。
     """
-    design_space_mask = np.ascontiguousarray(design_space_mask, dtype=bool)
+    design_space_mask = np.array(design_space_mask, dtype=bool, copy=True)
+    design_space_mask.setflags(write=False)
     identifier = evaluation_identifier(conditions)
 
     # 解像度不足: 拘束・荷重面がこの要素サイズで1つも節点を持たない(探索では直せない)。
     starved = sorted((set(conditions.fixed_faces) | set(conditions.load_faces))
-                      & set(conditions.table.empty_faces()))
+                      & set(int(f) for f in conditions.table.empty_faces()))
     if starved:
         return SearchResult(status='resolution_insufficient', termination='resolution_insufficient',
                              best_feasible=None, history=[], evaluations=0,
@@ -440,113 +662,90 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
                              conditions_identifier=identifier,
                              diagnostics=dict(preserve_on_full_design_space=preserve_on_full))
 
+    if is_cancelled is not None and is_cancelled():
+        return SearchResult(status='no_feasible_found', termination='cancelled', best_feasible=None,
+                             history=[], evaluations=0, conditions_identifier=identifier)
+
     sizes = tuple(reversed(block_sizes(design_space_mask.shape)))  # 大きい削除から試す(§4.3)
-    # 「無理な巡回」の候補(生の候補)と「実際に評価した」候補(島除去後)は別の集合にする
-    # ——生の候補が単一成分ならこの2つは同じマスクになるので、同じ集合に入れると
-    # 島除去後の評価そのものが「もう見た」判定で丸ごとスキップされてしまう。
+    budget = _Budget(max_evaluations=int(max_evaluations),
+                     max_candidates=_candidate_budget(max_evaluations, max_candidates))
+    frontier = _Frontier(frontier_capacity)
+    # 「生の候補」と「実際に評価した」候補(島除去後)は別の集合にする —— 生の候補が単一成分なら
+    # この2つは同じマスクになるので、同じ集合に入れると島除去後の評価そのものが
+    # 「もう見た」判定で丸ごとスキップされてしまう。
     visited_candidates: set[tuple[str, str]] = set()
     visited_survivors: set[tuple[str, str]] = set()
     history: list[Trial] = []
-    # frontier は「島除去より前」の生マスクだけを積む。**その候補自身の `before`
-    # (=島除去前)は常にその候補自身であって、生成元(親)の候補ではない** ——
-    # add/replace は親の材料の外へ広がるので、親を`before`に使うと
-    # `acceptance.inspect`の`material⊆before`契約(§2)を破って例外になる。
-    frontier: deque = deque([(design_space_mask, 'initial', None)])
-    evaluations = 0
 
-    while frontier:
-        if evaluations >= max_evaluations:
-            return SearchResult(status='no_feasible_found', termination='evaluation_limit',
-                                 best_feasible=None, history=history, evaluations=evaluations,
-                                 conditions_identifier=identifier)
-        candidate, operation, parent = frontier.popleft()
+    def consider(candidate: np.ndarray, operation: str, parent: Optional[int], streak: int) -> Optional[SearchResult]:
+        """生の候補1つを島除去→評価し、不合格なら親として積む。合格が確定したら結果を返す。
+
+        その候補自身の `before`(=島除去前)は常にその候補自身であって、生成元(親)ではない ——
+        add/replace は親の材料の外へ広がるので、親を `before` に使うと `acceptance.inspect` の
+        `material⊆before` 契約(§2)を破る。
+        """
+        candidate.setflags(write=False)
+        budget.evaluations += 1
         raw_hash = _mask_hash(candidate)
-        raw_key = (raw_hash, identifier)
-        if raw_key in visited_candidates:
-            continue
-        visited_candidates.add(raw_key)
-        evaluations += 1
-        before = candidate  # この候補自身が、これから求める成分の「島除去前」
-
         survivors, island_diag = resolve_islands(candidate, conditions)
         if not survivors:
-            before_mm3 = float(candidate.sum()) * conditions.grid.element_volume
-            trial = Trial(index=len(history), parent=parent, operation=operation, mask_hash=raw_hash,
-                          before_mm3=before_mm3, material_mm3=0.0, removed_islands_mm3=before_mm3,
-                          outcome='no_component',
-                          note=f'{island_diag["components"]} 個の連結成分のいずれも固定面・荷重面・'
-                               '保持の全条件を単独で満たさない')
-            history.append(trial)
-            for op, next_mask in _generate_repairs(candidate, design_space_mask, sizes):
-                frontier.append((next_mask, op, trial.index))
-            continue
-
+            trial = _no_component_trial(history, candidate, raw_hash, parent, operation, conditions, island_diag)
+            frontier.push(_node(candidate, trial.index, streak, design_space_mask, sizes, max_consecutive_adds))
+            return None
         for survivor in survivors:
             survivor_key = (_mask_hash(survivor), identifier)
             if survivor_key in visited_survivors:
                 continue
             visited_survivors.add(survivor_key)
-
-            report, trial = _evaluate_survivor(survivor, before, conditions, parent=parent,
+            report, trial = _evaluate_survivor(survivor, candidate, conditions, parent=parent,
                                                operation=operation, history=history)
-
             if report['status'] != 'pass':
                 if report['status'] != 'unknown':  # 計算失敗を不合格の証拠にしない(§4.5)
-                    for op, next_mask in _generate_repairs(survivor, design_space_mask, sizes):
-                        frontier.append((next_mask, op, trial.index))
+                    frontier.push(_node(survivor, trial.index, streak, design_space_mask, sizes, max_consecutive_adds))
                 continue
-
             # 最良合格モデルをキャッシュなしで再検査する(§3)。ここが失敗したら成功を返さず、
             # 候補と診断を残して探索を続ける(§4.6「最終再検査が失敗したら成功を返さない」)。
-            final_report = acceptance.inspect(survivor, before, conditions.grid, history=list(history),
+            final_report = acceptance.inspect(survivor, candidate, conditions.grid, history=list(history),
                                               converged=True, max_evaluations=max_evaluations,
                                               **conditions.inspect_kwargs(bbox_cache=None))
             if final_report['status'] != 'pass':
                 trial.note = 'キャッシュ無しの最終再検査が不合格/unknownだったため候補から外した'
                 trial.outcome = 'unknown' if final_report['status'] == 'unknown' else 'infeasible'
                 if trial.outcome != 'unknown':  # 計算失敗を不合格の証拠にしない(§4.5)。他は通常どおり修復対象。
-                    for op, next_mask in _generate_repairs(survivor, design_space_mask, sizes):
-                        frontier.append((next_mask, op, trial.index))
+                    frontier.push(_node(survivor, trial.index, streak, design_space_mask, sizes, max_consecutive_adds))
                 continue
-
-            best = FeasibleModel(mask=survivor, before_mask=before, report=final_report,
+            survivor.setflags(write=False)
+            best = FeasibleModel(mask=survivor, before_mask=candidate, report=final_report,
                                  trial_index=trial.index)
             return SearchResult(status='feasible', termination='initial_feasible_found',
-                                best_feasible=best, history=history, evaluations=evaluations,
-                                conditions_identifier=identifier)
+                                best_feasible=best, history=history, evaluations=budget.evaluations,
+                                conditions_identifier=identifier, diagnostics=_diagnostics(frontier, budget))
+        return None
 
-    return SearchResult(status='no_feasible_found', termination='neighbourhood_exhausted',
-                         best_feasible=None, history=history, evaluations=evaluations,
-                         conditions_identifier=identifier)
+    visited_candidates.add((_mask_hash(design_space_mask), identifier))
+    found = consider(design_space_mask, 'initial', None, 0)
+    if found is not None:
+        return found
+    while True:
+        if budget.evaluations >= budget.max_evaluations:
+            termination = 'evaluation_limit'
+            break
+        pulled = _pull(frontier, design_space_mask, budget, visited_candidates, identifier, is_cancelled)
+        if isinstance(pulled, str):
+            termination = pulled
+            break
+        candidate, operation, node = pulled
+        found = consider(candidate, operation, node.trial_index, _streak_after(operation, node.streak))
+        if found is not None:
+            return found
+    return SearchResult(status='no_feasible_found', termination=termination, best_feasible=None,
+                         history=history, evaluations=budget.evaluations, conditions_identifier=identifier,
+                         diagnostics=_diagnostics(frontier, budget))
 
 
 # ---------------------------------------------------------------------------
 # 削除・追加・置換による体積削減(§4.3、§8 段階4)
 # ---------------------------------------------------------------------------
-# 既定値は小型題材(tests/test_binary_search.py の detour 系フィクスチャ)で決めた1組
-# (docs/PLAN_BINARY_STRESS_SEARCH.md §4.3 追記に採用理由と観測した試行数を記録)。
-DEFAULT_FRONTIER_CAPACITY = 48
-DEFAULT_MAX_CONSECUTIVE_ADDS = 2
-
-
-def _push_children(frontier: deque, current: np.ndarray, design_space_mask: np.ndarray,
-                   sizes: tuple[int, ...], parent_trial_index: Optional[int], streak: int,
-                   max_consecutive_adds: int) -> None:
-    """`current` から生成した削除・追加・置換の子候補をfrontierへ積む。
-
-    `streak` は `current` に至るまでの**連続する**'add'操作の回数。'add'の子は
-    streakを+1して積むが、それが上限を超えるなら積まない(§4.3「frontierの…追加の
-    連続回数…を明示的な設定にする」——支えの追加(§4.3項2)は許すが、体積を増やし
-    続けるだけの枝が予算を無限に消費しないようにする)。'delete'・'replace'の子は
-    常にstreakを0へ戻して積む(体積を増やさない操作なので回数を数えない)。
-    """
-    for op, next_mask in _generate_repairs(current, design_space_mask, sizes):
-        next_streak = streak + 1 if op == 'add' else 0
-        if op == 'add' and next_streak > max_consecutive_adds:
-            continue
-        frontier.append((next_mask, op, parent_trial_index, next_streak))
-
-
 def _is_smaller_feasible(candidate_report: dict, current_best: FeasibleModel, *, volume_atol: float) -> bool:
     """新しい合格候補が `best_feasible` を置き換えるべきか(§4.1)。
 
@@ -570,57 +769,54 @@ def _is_smaller_feasible(candidate_report: dict, current_best: FeasibleModel, *,
 
 def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditions: SearchConditions,
                    *, max_evaluations: int, frontier_capacity: int, max_consecutive_adds: int,
-                   is_cancelled) -> SearchResult:
+                   max_candidates: Optional[int] = None, is_cancelled) -> SearchResult:
     """`initial.best_feasible` を出発点に、削除・追加・置換で体積を減らし続ける(§4.3、段階4)。
 
     `initial` は既に `status == 'feasible'` であること(呼び出し側の `find_best_feasible`
     が保証する)。返却は常に `status == 'feasible'`(悪化しても初期合格モデルへ戻せる)。
-    frontierは**評価前の生マスク**を持つ(段階3と同じ設計 —— `max_evaluations` は
-    frontierから取り出した生候補の数で数える)。容量 `frontier_capacity` を超えたら
-    最も古い(＝一番先に生成された)候補から捨てる(`deque(maxlen=...)`、完全に決定的)。
+    frontier・予算・中断は `find_initial_feasible` と同じ契約(`_Frontier` / `_Budget` / `_pull`)。
+    評価予算は両段階を通した1本なので `initial.evaluations` から数え続ける。
 
     **既知の簡略化**: §4.3が求める「幾何合格・応力評価成功・目標達成・体積・安全率の余裕」
-    による優先度付けはしていない(単純なFIFO)。体積昇順のような安価な事前指標だけで
-    優先度を付ける設計を試したところ、'add'系候補が常に'delete'系より低優先度になり
-    frontier容量を増やしても改善が見つからなくなる(FIFOより悪化する)ことを実測したため、
-    今回は見送った(`docs/PLAN_BINARY_STRESS_SEARCH.md` §4.3 追記に detail)。
+    による優先度付けはしていない(親の round-robin と、各親の中の大きいブロック優先・
+    削除→追加→置換の巡回だけ)。
     """
     identifier = initial.conditions_identifier
     history = list(initial.history)
-    evaluations = initial.evaluations
     best = initial.best_feasible
     sizes = tuple(reversed(block_sizes(design_space_mask.shape)))
+    design_space_mask = np.array(design_space_mask, dtype=bool, copy=True)
+    design_space_mask.setflags(write=False)
+    started = initial.diagnostics.get('candidates', {}) if isinstance(initial.diagnostics, dict) else {}
+    budget = _Budget(max_evaluations=int(max_evaluations),
+                     max_candidates=_candidate_budget(max_evaluations, max_candidates),
+                     evaluations=int(initial.evaluations),
+                     generated=int(started.get('generated', 0)), duplicates=int(started.get('duplicates', 0)))
+    frontier = _Frontier(frontier_capacity)
     visited_candidates: set[tuple[str, str]] = set()
     visited_survivors: set[tuple[str, str]] = {(best.mask_hash, identifier)}
-    frontier: deque = deque(maxlen=frontier_capacity)
-    _push_children(frontier, best.mask, design_space_mask, sizes, best.trial_index, 0, max_consecutive_adds)
+    seed = np.array(best.mask, dtype=bool, copy=True)
+    frontier.push(_node(seed, best.trial_index, 0, design_space_mask, sizes, max_consecutive_adds))
 
-    termination = 'neighbourhood_exhausted'
-    while frontier:
-        if is_cancelled is not None and is_cancelled():
-            termination = 'cancelled'
-            break
-        if evaluations >= max_evaluations:
+    while True:
+        if budget.evaluations >= budget.max_evaluations:
             termination = 'evaluation_limit'
             break
-        candidate, operation, parent, streak = frontier.popleft()
-        raw_key = (_mask_hash(candidate), identifier)
-        if raw_key in visited_candidates:
-            continue
-        visited_candidates.add(raw_key)
-        evaluations += 1
-        before = candidate
+        pulled = _pull(frontier, design_space_mask, budget, visited_candidates, identifier, is_cancelled)
+        if isinstance(pulled, str):
+            termination = pulled
+            break
+        candidate, operation, node = pulled
+        streak = _streak_after(operation, node.streak)
+        parent = node.trial_index
+        candidate.setflags(write=False)
+        budget.evaluations += 1
 
-        survivors, _island_diag = resolve_islands(candidate, conditions)
+        survivors, island_diag = resolve_islands(candidate, conditions)
         if not survivors:
-            before_mm3 = float(candidate.sum()) * conditions.grid.element_volume
-            trial = Trial(index=len(history), parent=parent, operation=operation, mask_hash=raw_key[0],
-                          before_mm3=before_mm3, material_mm3=0.0, removed_islands_mm3=before_mm3,
-                          outcome='no_component',
-                          note='いずれの連結成分も固定面・荷重面・保持の全条件を単独で満たさない')
-            history.append(trial)
-            _push_children(frontier, candidate, design_space_mask, sizes, trial.index, streak,
-                          max_consecutive_adds)
+            trial = _no_component_trial(history, candidate, _mask_hash(candidate), parent, operation,
+                                        conditions, island_diag)
+            frontier.push(_node(candidate, trial.index, streak, design_space_mask, sizes, max_consecutive_adds))
             continue
 
         for survivor in survivors:
@@ -629,25 +825,26 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
                 continue
             visited_survivors.add(survivor_key)
 
-            report, trial = _evaluate_survivor(survivor, before, conditions, parent=parent,
+            report, trial = _evaluate_survivor(survivor, candidate, conditions, parent=parent,
                                                operation=operation, history=history)
 
             if report['status'] == 'unknown':
                 continue  # 計算失敗は不合格の証拠にしない(§4.5)。修復候補も積まない。
 
             if report['status'] != 'pass':
-                _push_children(frontier, survivor, design_space_mask, sizes, trial.index, streak,
-                              max_consecutive_adds)
+                frontier.push(_node(survivor, trial.index, streak, design_space_mask, sizes, max_consecutive_adds))
                 continue
 
             if _is_smaller_feasible(report, best, volume_atol=conditions.volume_atol):
                 # 最良合格モデルをキャッシュなしで再検査する(§3)。失敗したら不採用のまま
                 # 従前の best_feasible を保持して探索を続ける(§4.6)。
-                final_report = acceptance.inspect(survivor, before, conditions.grid, history=list(history),
+                final_report = acceptance.inspect(survivor, candidate, conditions.grid, history=list(history),
                                                   converged=True, max_evaluations=max_evaluations,
                                                   **conditions.inspect_kwargs(bbox_cache=None))
                 if final_report['status'] == 'pass':
-                    best = FeasibleModel(mask=survivor, before_mask=before, report=final_report,
+                    checkpoint = np.array(survivor, dtype=bool, copy=True)
+                    checkpoint.setflags(write=False)
+                    best = FeasibleModel(mask=checkpoint, before_mask=candidate, report=final_report,
                                          trial_index=trial.index)
                 else:
                     trial.note = ('キャッシュ無しの最終再検査が不合格/unknownだったため'
@@ -656,39 +853,41 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             # 合格した生存成分は、best_feasibleを更新したか否かに関わらず子候補を生成する
             # —— 一時的な体積増加(add)を経由してから初めて縮む形状があるため
             # (§4.3「支えを作り替える探索の足場として、体積増加もfrontier内では許す」)。
-            _push_children(frontier, survivor, design_space_mask, sizes, trial.index, streak,
-                          max_consecutive_adds)
+            frontier.push(_node(survivor, trial.index, streak, design_space_mask, sizes, max_consecutive_adds))
 
     return SearchResult(status='feasible', termination=termination, best_feasible=best, history=history,
-                         evaluations=evaluations, conditions_identifier=identifier)
+                         evaluations=budget.evaluations, conditions_identifier=identifier,
+                         diagnostics=_diagnostics(frontier, budget, initial=initial.diagnostics))
 
 
 def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditions, *,
                        max_evaluations: int = 1000,
                        frontier_capacity: int = DEFAULT_FRONTIER_CAPACITY,
                        max_consecutive_adds: int = DEFAULT_MAX_CONSECUTIVE_ADDS,
+                       max_candidates: Optional[int] = None,
                        is_cancelled=None) -> SearchResult:
     """初期合格探索(段階3)に続けて削除・追加・置換で体積を減らす、単一の探索入口(§3、段階4)。
 
     まず `find_initial_feasible` で最初の6条件合格を探し、見つからなければその
     `SearchResult`(`no_feasible_found` / `input_contradiction` / `resolution_insufficient` /
-    `boundary_mapping_failed`)を
-    そのまま返す(改善しようがないので段階4は何もしない)。見つかれば、そこから
-    `_reduce_volume` で体積削減を続ける。`max_evaluations` は**両段階を通した1本の予算**
+    `boundary_mapping_failed`)をそのまま返す(改善しようがないので段階4は何もしない)。見つかれば、
+    そこから `_reduce_volume` で体積削減を続ける。`max_evaluations` は**両段階を通した1本の予算**
     (§4.1「評価条件の識別子」と同じ思想で、初期探索と削減探索を別予算にしない)。
+    `frontier_capacity` / `max_consecutive_adds` / `max_candidates` も両段階で同じ値を使う。
 
-    `is_cancelled` は引数無しで呼べる callable。真を返した時点の `best_feasible` を
-    キャッシュ無し再検査済みのまま返す(§4.6「中断時は合格チェックポイントを記録する」)。
-    削減段階の各frontier取り出しの前にだけ確認する —— `find_initial_feasible` 自体は
-    中断に対応していない(段階3の契約のまま、段階4はそこへ手を入れない)。
+    `is_cancelled` は引数無しで呼べる callable。両段階とも生成中・評価前に見る。真を返した
+    時点の `best_feasible` をキャッシュ無し再検査済みのまま返す(§4.6「中断時は合格チェック
+    ポイントを記録する」)。初期合格の前に中断されれば `no_feasible_found` / `cancelled`。
     """
     identifier = evaluation_identifier(conditions)
     if is_cancelled is not None and is_cancelled():
         return SearchResult(status='no_feasible_found', termination='cancelled', best_feasible=None,
                              history=[], evaluations=0, conditions_identifier=identifier)
-    initial = find_initial_feasible(design_space_mask, conditions, max_evaluations=max_evaluations)
+    initial = find_initial_feasible(design_space_mask, conditions, max_evaluations=max_evaluations,
+                                    frontier_capacity=frontier_capacity, max_consecutive_adds=max_consecutive_adds,
+                                    max_candidates=max_candidates, is_cancelled=is_cancelled)
     if initial.status != 'feasible':
         return initial
     return _reduce_volume(initial, design_space_mask, conditions, max_evaluations=max_evaluations,
                           frontier_capacity=frontier_capacity, max_consecutive_adds=max_consecutive_adds,
-                          is_cancelled=is_cancelled)
+                          max_candidates=max_candidates, is_cancelled=is_cancelled)

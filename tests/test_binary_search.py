@@ -480,29 +480,40 @@ def test_cancellation_returns_the_best_feasible_found_before_the_cancel_signal()
     assert calls['n'] >= 4  # 実際に呼ばれて真を返した回で止まった
 
 
-def test_cancellation_after_an_improvement_preserves_the_improved_checkpoint():
+def test_cancellation_after_an_improvement_preserves_the_improved_checkpoint(monkeypatch):
     """中断が体積改善(7.0)の後に来た場合、初期形状(8.0)へ後退せず改善後の状態を保つ(§4.6)。
 
     `test_cancellation_returns_the_best_feasible_found_before_the_cancel_signal` は
     改善が起きる**前**に中断する場合を確認しているので、ここでは改善が既に起きた
-    **後**に中断する場合を別途確認する(呼び出し回数999は実測で7.0発見後に中断される値)。
+    **後**に中断する場合を別途確認する。中断の合図は「キャッシュ無しの最終再検査が7.0で合格した」
+    のを見張る spy が出す(呼び出し回数の実測値に依存させない)。
     """
     conditions, design_space = detour_conditions()
     initial = _seed_search_result(detour_initial_mask(), conditions)
-    calls = {'n': 0}
+    original = acceptance.inspect
+    improved = {'seen': False, 'cancel_calls_after': 0}
+
+    def spy(*args, **kwargs):
+        report = original(*args, **kwargs)
+        if 'history' in kwargs and report['status'] == 'pass' and report['volumes']['material_mm3'] == 7.0:
+            improved['seen'] = True
+        return report
 
     def is_cancelled():
-        calls['n'] += 1
-        return calls['n'] > 999
+        if improved['seen']:
+            improved['cancel_calls_after'] += 1
+        return improved['seen']
 
+    monkeypatch.setattr(acceptance, 'inspect', spy)
     result = bs._reduce_volume(initial, design_space, conditions, max_evaluations=1500,
                                frontier_capacity=bs.DEFAULT_FRONTIER_CAPACITY,
                                max_consecutive_adds=bs.DEFAULT_MAX_CONSECUTIVE_ADDS, is_cancelled=is_cancelled)
+    assert improved['seen'] and improved['cancel_calls_after'] >= 1
     assert result.status == 'feasible'
     assert result.termination == 'cancelled'
     assert result.best_feasible.material_mm3 == 7.0  # 改善後の状態のまま(8.0へ後退していない)
-    recheck = acceptance.inspect(result.best_feasible.mask, result.best_feasible.before_mask,
-                                 conditions.grid, **conditions.inspect_kwargs(bbox_cache=None))
+    recheck = original(result.best_feasible.mask, result.best_feasible.before_mask,
+                       conditions.grid, **conditions.inspect_kwargs(bbox_cache=None))
     assert recheck['status'] == 'pass'
 
 
@@ -614,3 +625,269 @@ def test_computation_failure_is_recorded_as_unknown_and_never_becomes_the_best_f
     # 解法変更の再試行(§4.5)が記録されている(同じマスクハッシュで別の解法)
     retried = [t for t in result.history if t.operation.startswith('solver_retry:')]
     assert retried and retried[0].mask_hash == result.history[0].mask_hash
+
+
+# ---------------------------------------------------------------------------
+# 修正B: 入口の必要条件(docs/FIX_BINARY_SEARCH_INITIALIZATION.md §4)
+# ---------------------------------------------------------------------------
+def test_uncovered_anchor_nodes_stop_at_the_entry_without_generating_or_evaluating(monkeypatch):
+    """確定表の節点が全設計空間の材料に接しないなら、候補生成0回・FEM0回で `boundary_mapping_failed`。
+    APIを直接呼ぶ経路でも同じ判定を通る(製品入口だけの防御にしない)。"""
+    shape = (4, 2, 2)
+    conditions = bar_conditions(shape=shape)
+    design = np.ones(shape, bool)
+    design[3] = False  # 荷重面(x=4平面)の9節点はどの材料セルにも接しない
+    calls = {'inspect': 0, 'materialize': 0}
+
+    def counting_inspect(*args, **kwargs):
+        calls['inspect'] += 1
+        raise AssertionError('入口で止まるべき経路が評価に進んだ')
+
+    original = bs._materialize
+
+    def counting_materialize(*args, **kwargs):
+        calls['materialize'] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(acceptance, 'inspect', counting_inspect)
+    monkeypatch.setattr(bs, '_materialize', counting_materialize)
+    result = bs.find_initial_feasible(design, conditions, max_evaluations=10)
+    assert result.status == 'boundary_mapping_failed'
+    assert result.termination == 'boundary_mapping_failed'
+    assert result.evaluations == 0 and result.history == [] and result.best_feasible is None
+    rows = result.diagnostics['uncovered_condition_nodes']
+    assert [(r['condition'], r['nodes'], r['uncovered_nodes']) for r in rows] == [('load_face_2', 9, 9)]
+    assert result.diagnostics['mapped'] is False  # 元入力(未対応付けの表)か対応付け済みかを区別する
+    assert calls == {'inspect': 0, 'materialize': 0}
+    assert bs.find_best_feasible(design, conditions, max_evaluations=10).status == 'boundary_mapping_failed'
+
+
+def test_the_identifier_depends_on_the_fixed_nodes_not_only_on_the_face_indices():
+    """同じ面添字でも節点集合が違えば別の評価条件(確定した節点・荷重・拘束をハッシュに含める)。"""
+    shape = (4, 2, 2)
+    a = bar_conditions(shape=shape)
+    grid = a.grid
+    ny1, nz1 = shape[1] + 1, shape[2] + 1
+    x_max_node = shape[0] * ny1 * nz1
+    faces = {1: list(range(ny1 * nz1)), 2: list(range(x_max_node, x_max_node + ny1 * nz1 - 1))}  # 荷重面の節点を1つ減らす
+    b = bs.SearchConditions(grid=grid, table=Table(grid, faces), fixed_faces=a.fixed_faces, load_faces=a.load_faces,
+                            forces=a.forces, preserves=a.preserves, excludes=a.excludes,
+                            target_safety_factor=a.target_safety_factor, solver=a.solver)
+    assert bs.evaluation_identifier(a) != bs.evaluation_identifier(b)
+    assert bs.evaluation_identifier(a) == bs.evaluation_identifier(bar_conditions(shape=shape))
+
+
+# ---------------------------------------------------------------------------
+# 条件固定: 確定後は再配分しない(§3.2)
+# ---------------------------------------------------------------------------
+def test_removing_the_scaffold_under_a_fixed_anchor_is_infeasible_and_never_renormalised():
+    """初期合格後に確定アンカーの足場を削ると不合格になり、合力の再正規化で合格へ戻らない。"""
+    shape = (4, 2, 2)
+    conditions = bar_conditions(shape=shape)
+    full = np.ones(shape, bool)
+    stripped = full.copy()
+    stripped[3, 0, 0] = False  # 荷重面の角の節点(x=4,y=0,z=0)が接する唯一の材料セル
+    check, _, _ = acceptance.condition_check(stripped, conditions.table, conditions.fixed_faces,
+                                             conditions.load_faces, conditions.forces)
+    load_row = next(row for row in check['faces'] if row['condition'] == 'load_face_2')
+    assert check['status'] == 'fail' and load_row['lost_nodes'] == 1
+    assert load_row['resultant_n'] == pytest.approx(list(conditions.forces[0]))  # 合力は保存されているのに不合格
+    assert bs.resolve_islands(stripped, conditions)[0] == []  # 島処理でも成立しない
+    report = acceptance.inspect(stripped, full, conditions.grid, **conditions.inspect_kwargs())
+    assert report['status'] == 'fail' and report['checks']['conditions']['status'] == 'fail'
+
+    result = bs.find_best_feasible(full, conditions, max_evaluations=40)
+    assert result.status == 'feasible'
+    live = acceptance.active_nodes(result.best_feasible.mask).ravel()
+    for face in conditions.fixed_faces + conditions.load_faces:
+        assert live[conditions.table.node_ids([face])].all()  # 採用マスクは確定節点を全て支えている
+
+
+# ---------------------------------------------------------------------------
+# 修正C: 遅延生成・保持上限・生成予算・中断・公平性(§5)
+# ---------------------------------------------------------------------------
+def _fake_report(material, status='fail'):
+    """FEM・CADを置き換える小さな報告(候補管理だけを検査するため)。"""
+    material = np.asarray(material, dtype=bool)
+    volume = float(material.sum())
+    return dict(status=status, material_sha256=bs._mask_hash(material),
+                volumes=dict(material_mm3=volume, before_mm3=volume, removed_islands_mm3=0.0),
+                checks=dict(watertight=dict(status='pass'), single_solid=dict(status='pass'),
+                            preserve=dict(status='pass'), exclude=dict(status='pass'),
+                            conditions=dict(status='pass'), safety=dict(status=status, safety_factor=0.5)))
+
+
+def _stub_evaluation(monkeypatch):
+    monkeypatch.setattr(bs, 'resolve_islands',
+                        lambda candidate, conditions: ([np.array(candidate, dtype=bool)],
+                                                       dict(components=1, surviving_components=1, removed_islands=[])))
+    monkeypatch.setattr(acceptance, 'inspect', lambda material, before, grid, **kwargs: _fake_report(material))
+
+
+def test_candidates_are_materialised_one_at_a_time_not_all_up_front(monkeypatch):
+    """1候補を要求した時点で1マスクしか作られていない(generator 型の確認ではなく、作った数を数える)。"""
+    calls = {'n': 0}
+    original = bs._materialize
+
+    def counting(*args, **kwargs):
+        calls['n'] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(bs, '_materialize', counting)
+    current = np.ones((12, 12, 12), bool)
+    current[6:] = False
+    design = np.ones((12, 12, 12), bool)
+    stream = bs.repair_candidates(current, design, 1)
+    kind, mask = next(stream)
+    assert calls['n'] == 1 and kind == 'delete' and mask.sum() == current.sum() - 1
+    for _ in range(4):
+        next(stream)
+    assert calls['n'] == 5
+    possible = sum(1 for _ in bs.candidate_descriptors(current, design, (1,)))
+    assert possible > 800  # 全部先に作れば数百枚になる題材で、5枚しか作っていない
+
+    _stub_evaluation(monkeypatch)
+    calls['n'] = 0
+    conditions = bar_conditions(shape=(12, 12, 12))
+    result = bs.find_initial_feasible(design, conditions, max_evaluations=4)
+    assert result.termination == 'evaluation_limit'
+    generated = result.diagnostics['candidates']['generated']
+    assert calls['n'] == generated
+    assert generated < 40  # 親1つの子候補(数千)を先に作っていない
+
+
+def test_retained_masks_do_not_grow_with_the_evaluation_budget(monkeypatch):
+    """実格子相当の大きさ(48³)で、評価回数を4倍にしてもキューと親マスクの数は上限以内で、
+    実測メモリのピークも上限×マスク大きさの定数倍に収まる(初期・削減の両経路)。"""
+    import tracemalloc
+
+    _stub_evaluation(monkeypatch)
+    shape = (48, 48, 48)
+    conditions = bar_conditions(shape=shape)
+    design = np.ones(shape, bool)
+    mask_bytes = design.nbytes
+    capacity = 6
+    # 親1つが提案できる記述の数(全部先に配列にすると、この枚数のマスクが要る)。
+    eager_masks = sum(1 for _ in bs.candidate_descriptors(design, design, tuple(reversed(bs.block_sizes(shape)))))
+    assert eager_masks > 100_000
+    peaks = {}
+    for budget in (20, 160):
+        tracemalloc.start()
+        result = bs.find_initial_feasible(design, conditions, max_evaluations=budget, frontier_capacity=capacity)
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        peaks[budget] = peak
+        assert result.evaluations == budget
+        frontier = result.diagnostics['frontier']
+        assert frontier['peak_retained'] <= capacity and frontier['retained'] <= capacity
+        # 実測のピークは入口検査(保持CADとの重なり: 材料の直方体列)の定数分が約28枚ぶんで、
+        # 探索は容量+作業配列の数枚しか足さない。全候補を先に作る方式の 1/1000 以下。
+        assert peak <= 64 * mask_bytes, (budget, peak / mask_bytes)
+    assert peaks[160] <= peaks[20] + 2 * mask_bytes  # 評価回数を8倍にしても増えない
+
+    # 削減経路: 合格の種から同じ contract で走る
+    seed_report = _fake_report(design, status='pass')
+    seed = bs.Trial(index=0, parent=None, operation='seed', mask_hash=seed_report['material_sha256'],
+                    before_mm3=float(design.sum()), material_mm3=float(design.sum()), removed_islands_mm3=0.0,
+                    outcome='ok', safety_factor=0.5)
+    initial = bs.SearchResult(status='feasible', termination='seed', history=[seed], evaluations=1,
+                              best_feasible=bs.FeasibleModel(mask=design, before_mask=design, report=seed_report,
+                                                             trial_index=0),
+                              conditions_identifier=bs.evaluation_identifier(conditions))
+    tracemalloc.start()
+    reduced = bs._reduce_volume(initial, design, conditions, max_evaluations=60, frontier_capacity=capacity,
+                                max_consecutive_adds=2, is_cancelled=None)
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert reduced.diagnostics['frontier']['peak_retained'] <= capacity
+    assert peak <= (capacity + 12) * mask_bytes + (1 << 20)
+
+
+def test_generation_budget_and_cancellation_act_on_duplicates_that_never_reach_evaluation(monkeypatch):
+    """無効・重複候補だけで評価数が増えないときも、生成予算と中断が効く(無限に生成し続けない)。"""
+    shape = (6, 2, 2)
+    conditions = bar_conditions(shape=shape, target_safety_factor=1e12)
+    monkeypatch.setattr(bs, '_mask_hash', lambda mask: 'same')  # 全候補が同一に見える → 重複しか生成されない
+    result = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=50, max_candidates=25)
+    assert result.status == 'no_feasible_found' and result.termination == 'generation_limit'
+    assert result.evaluations == 1
+    assert result.diagnostics['candidates'] == dict(generated=25, duplicates=25, limit=25, evaluations=1,
+                                                    evaluation_limit=50)
+
+    calls = {'n': 0}
+
+    def is_cancelled():
+        calls['n'] += 1
+        return calls['n'] > 10
+
+    result = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=50, max_candidates=1000,
+                                      is_cancelled=is_cancelled)
+    assert result.termination == 'cancelled' and result.evaluations == 1
+    assert result.diagnostics['candidates']['generated'] < 1000  # 生成の途中で止まった
+
+
+def test_the_initial_search_checks_cancellation_before_each_generation_and_evaluation():
+    shape = (4, 2, 2)
+    conditions = bar_conditions(shape=shape, target_safety_factor=1e12)
+    calls = {'n': 0}
+
+    def is_cancelled():
+        calls['n'] += 1
+        return calls['n'] > 2
+
+    result = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=50, is_cancelled=is_cancelled)
+    assert result.status == 'no_feasible_found' and result.termination == 'cancelled'
+    assert result.evaluations <= 3 and result.best_feasible is None
+    assert bs.find_best_feasible(np.ones(shape, bool), conditions, max_evaluations=50,
+                                 is_cancelled=lambda: calls['n'] > 2).termination == 'cancelled'
+
+
+def test_operation_generators_are_interleaved_so_adds_and_replaces_are_not_starved():
+    """削除候補が並んでいても、各大きさで削除→追加→置換の順に1つずつ巡回する(削除優先は保つ)。"""
+    current = np.zeros((16, 1, 1), bool)
+    current[:7] = True
+    design = np.ones((16, 1, 1), bool)
+    ops = [op for op, _, _ in itertools.islice(bs.candidate_descriptors(current, design, (2,)), 6)]
+    assert ops[:3] == ['delete', 'add', 'replace']
+    assert ops[3:] == ['delete', 'delete', 'delete']  # 追加・置換が尽きたら削除だけが続く
+    # 連続追加の上限に達した親は追加を生成しないが、置換(体積を増やさない)は残す
+    limited = {op for op, _, _ in bs.candidate_descriptors(current, design, (2,), allow_add=False)}
+    assert limited == {'delete', 'replace'}
+
+
+def test_frontier_eviction_is_recorded_and_never_reported_as_neighbourhood_exhausted():
+    """容量超過で親を捨てた探索は、キューが空になっても「近傍を全て探索した」と言わない。"""
+    conditions, design_space = detour_conditions()
+    tight = bs.find_best_feasible(design_space, conditions, max_evaluations=3000, frontier_capacity=2)
+    assert tight.termination == 'frontier_truncated'
+    assert tight.diagnostics['frontier']['evictions'] > 0
+    assert tight.diagnostics['frontier']['peak_retained'] <= 2
+    wide = bs.find_best_feasible(design_space, conditions, max_evaluations=3000, frontier_capacity=4096)
+    assert wide.termination == 'neighbourhood_exhausted'
+    assert wide.diagnostics['frontier']['evictions'] == 0
+    assert wide.best_feasible.material_mm3 == 7.0
+
+
+def test_the_best_feasible_mask_is_read_only_and_survives_later_generation():
+    """最良合格のマスクは読み取り専用で、後続の候補生成・失敗がその内容とハッシュを変えない。"""
+    conditions, design_space = detour_conditions()
+    result = bs.find_best_feasible(design_space, conditions, max_evaluations=200)
+    best = result.best_feasible
+    assert not best.mask.flags.writeable and not best.before_mask.flags.writeable
+    assert bs._mask_hash(best.mask) == best.mask_hash
+    snapshot = best.mask.copy()
+    later = bs._reduce_volume(result, design_space, conditions, max_evaluations=400,
+                              frontier_capacity=bs.DEFAULT_FRONTIER_CAPACITY,
+                              max_consecutive_adds=bs.DEFAULT_MAX_CONSECUTIVE_ADDS, is_cancelled=None)
+    assert later.best_feasible.material_mm3 <= best.material_mm3
+    assert np.array_equal(best.mask, snapshot) and bs._mask_hash(best.mask) == best.mask_hash
+
+
+def test_resolve_islands_keeps_only_the_numbers_of_removed_islands():
+    shape = (5, 2, 2)
+    conditions = bar_conditions(shape=shape)
+    candidate = np.zeros(shape, bool)
+    candidate[0] = candidate[4] = True
+    survivors, diagnostics = bs.resolve_islands(candidate, conditions)
+    assert survivors == []
+    assert all(set(island) == {'cells', 'volume_mm3', 'touches_condition'} for island in diagnostics['removed_islands'])
