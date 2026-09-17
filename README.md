@@ -15,7 +15,7 @@
 | [MCP.md](MCP.md) | **MCPツール一覧の正**と登録手順 | AI側から触るとき |
 | [tests/README.md](tests/README.md) | テストが定義するAPI契約 | コアの挙動を疑うとき |
 | [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化**（実測の記録・設計と画面・受入検査の意味） | 数字の根拠・topopt配線を疑うとき |
-| [docs/TOPOPT_SPEED.md](docs/TOPOPT_SPEED.md) | **形状探索(削除・追加・置換)の時間短縮**（1回のFEM評価の内訳・候補評価の費用） | 探索を速くしたいとき |
+| [docs/TOPOPT_SPEED.md](docs/TOPOPT_SPEED.md) | **形状探索の時間短縮**（1回のFEM評価の内訳・候補評価の費用） | 探索を速くしたいとき |
 | [docs/SCREEN_PICK.md](docs/SCREEN_PICK.md) | **当たり判定を screen 半径[px]に揃える**設計 | スケッチ/辺/頂点の掴みやすさを直すとき |
 
 ---

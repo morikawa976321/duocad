@@ -12,7 +12,7 @@
 | **現在の呼び出し経路** | [現在の呼び出し経路](#現在の呼び出し経路) |
 | **走らせ方**(受入検査・所要) | `README.md` §3 |
 | **設計と画面**(Sessionの口・解像度・OptimizePanel・デバッグ・撮影) | 本書「設計と画面」 |
-| **形状探索(削除・追加・置換)の時間短縮**(内訳・候補評価の費用) | [TOPOPT_SPEED.md](TOPOPT_SPEED.md) |
+| **形状探索の時間短縮**(内訳・候補評価の費用) | [TOPOPT_SPEED.md](TOPOPT_SPEED.md) |
 
 **コードは `duocad/topopt/`、受入検査は `topopt_checks/`(`duocad/` の外)にある。**
 2026-09-05 に実験場 `probe_topopt/` から移設し同日削除した(履歴は `03bf794`)。
@@ -83,7 +83,7 @@
 
 ## これは何か
 
-**3Dの二値形状探索(削除・追加・置換による体積削減)の実測記録。** 固定した設計空間の中で
+**3Dの二値形状探索(初期合格探索と、ひずみエネルギーの順位で削る体積削減)の実測記録。** 固定した設計空間の中で
 材料あり/なしのboolマスクを操作し、6条件(境界・単一成分・保持/除外・荷重欠落なし・目標安全率)を
 満たす最小体積のモデルを探す(計画は [PLAN_BINARY_STRESS_SEARCH.md](PLAN_BINARY_STRESS_SEARCH.md))。
 計算は `duocad/topopt/`、受入検査は `topopt_checks/`、画面と撮影は `web/` にある。
@@ -679,8 +679,8 @@ x 最小面、荷重面=荷重側パッドの上面)。**要素サイズは固�
 ### 現在の呼び出し経路(2026-09-17。段階5〜6で書き換え)
 
 **この節は2026-09-17に全面的に書き直した。** 密度ベースのSIMP(材料量[mm³]を目標に
-`safety_loop`が何度も最適化を回す構成)は段階6で削除し、bool二値マスクを削除・追加・置換で
-直接動かす探索に置き換えた。
+`safety_loop`が何度も最適化を回す構成)は段階6で削除し、bool二値マスクを直接動かす探索に置き換えた
+(段階3は削除・追加・置換、段階4はひずみエネルギーの順位で削る。計画書§11)。
 
 ```text
 optimize_run.run
@@ -690,15 +690,15 @@ optimize_run.run
        ├─ binary_search.find_best_feasible(space.mask, conditions, max_evaluations=..., is_cancelled=...)
        │    ├─ find_initial_feasible          初めての6条件合格を探す(段階3)
        │    │    └─ 候補ごとに: 幾何検査(境界・単一成分・保持/除外/荷重欠落) → fem.Model.solve → stress.evaluate
-       │    └─ _reduce_volume                 削除・追加・置換で体積を減らす(段階4。初期合格に続けて)
-       │         └─ 各候補: 同じ幾何検査 → fem.Model.solve → stress.evaluate
+       │    └─ _reduce_volume                 エネルギーの低い材料を安全率の余裕に応じて削る(段階4。計画書§11)
+       │         └─ 各候補: 支えを残して選ぶ → 水密の修復 → 島処理 → 6条件(FEM。要素エネルギーも返す)
        ├─ mesh.build_surface_from_mask        最終確定マスク(best_feasible)だけをメッシュ化
        ├─ finalize.finalize                   平滑化後に保持union・除外cut、水密・単一ソリッド検査
        └─ add_solid_body                      採用したCADを文書へ追加
 ```
 
 **候補中はメッシュ化を呼ばない**(計画書§3)——後段へ渡るのは`binary_search.find_best_feasible`が
-返す最終確定マスクだけ。**探索候補は材料量[mm³]ではなくbool二値マスクの操作(削除・追加・置換)**
+返す最終確定マスクだけ。**探索候補は材料量[mm³]ではなくbool二値マスクの操作(段階3の削除・追加・置換、段階4の削減)**
 で、材料量は結果として出る値であって探索変数ではない。`rmin`(密度フィルタ半径)・`MATERIAL_MIN_RATIO`
 /`MATERIAL_MAX_RATIO`(材料量の上下限)・`estimate_seconds`(旧SIMP係数による所要時間見積もり)は
 段階6でコードごと削除した——渡しても意味の翻訳先が無いので`OptimizeInputError`になる(上「設計と画面」)。
@@ -1553,7 +1553,7 @@ RAP+splu が並列化されない **Amdahl 分**(スレッドを増やすほど�
 二分/Illinois補間で探すループ)と、それが使っていた密度フィルタ半径`rmin`の口は、
 段階6でコードごと削除した(計画書§1「SIMP・OC・MMA・連続密度・材料量の二分／Illinois探索は
 削除する」)。現行の探索は下の「塊の導出を材料量から切り離し、幅で保証する」以降が扱う
-bool二値マスクの削除・追加・置換探索(`binary_search.py`)で、材料量を直接の探索変数にしない。
+bool二値マスクの探索(`binary_search.py`)で、材料量を直接の探索変数にしない。
 **この節にあった実測のうち今も参照する価値があるものは移した**: 許容応力の導出(PETG降伏応力
 と造形低減係数)と荷重の実単位[N]化は上「von Mises応力と最小安全率」§「許容応力の導出」
 「荷重を実単位[N]で持つ」へ、反力の荷重釣り合い確認としての使い方は同章「反力は荷重釣り合いの
@@ -2108,7 +2108,7 @@ stress → material → acceptance → binary_search → mesh`。
 | `duocad/topopt/stress.py` | **密度場と変位 → 要素ごとの von Mises 応力・代表応力・最小安全率**(後処理)。無次元 → 実単位の換算則(`UnitScale`)を持つ。**最適化には手を入れない**(応力制約の定式化は採らない。「von Mises応力と最小安全率」) |
 | `duocad/topopt/material.py` | **材料定数**(`PETG_YIELD_MPA` / `PRINT_DERATE` / `DEFAULT_ALLOWABLE_MPA` / `DEFAULT_YOUNGS_MODULUS_MPA`)。段階6で`safety_loop.py`から移設した |
 | `duocad/topopt/acceptance.py` | **島除去後・平滑化前の6条件判定**(境界・単一成分・保持/除外・荷重欠落なし・目標安全率)。`inspect_document` / `inspect` が入口。詳細は [TOPOPT_PRE_SMOOTHING_CHECKS.md](TOPOPT_PRE_SMOOTHING_CHECKS.md) |
-| `duocad/topopt/binary_search.py` | **削除・追加・置換によるbool体積削減探索**。`find_initial_feasible`(初期合格探索)→ `find_best_feasible`(初期合格に続けて体積を減らす、単一の探索入口)。`DEFAULT_FRONTIER_CAPACITY` / `DEFAULT_MAX_CONSECUTIVE_ADDS` を持つ |
+| `duocad/topopt/binary_search.py` | **bool体積削減探索**。`find_initial_feasible`(段階3、削除・追加・置換で初期合格を探す)→ `find_best_feasible`(段階4、ひずみエネルギーの低い材料を安全率の余裕に応じて削る、単一の探索入口)。段階3の `DEFAULT_FRONTIER_CAPACITY` / `DEFAULT_MAX_CONSECUTIVE_ADDS`、段階4の `DEFAULT_STEP_EXPONENT` / `DEFAULT_MAX_STEP_RATIO` / `ENERGY_FILTER_SIZE` を持つ |
 | `duocad/topopt/mesh.py` | 浮島除去→パディング→marching cubes→Taubin平滑化→表面生成。`build_surface` / `build_surface_from_mask`。**CLIは持たない**(段階6でSIMPを回すCLIを削除) |
 | `duocad/topopt/finalize.py` | 最終確定マスクの表面 → 保持union・除外cutのCADブーリアン → 水密・単一ソリッド検査 |
 | `duocad/topopt/trace.py` | 実行ごとの途中記録(`stage` / `snapshot`)。詳細は [TOPOPT_RECORDING.md](TOPOPT_RECORDING.md) |
@@ -2846,7 +2846,7 @@ Session.cancel_optimization()     走っている最適化に降りるよう伝�
 
 **許容応力は固定**（根拠は本書「許容応力の導出」）。duocad 側でも材料を選ばせない。値は
 `optimize_run.allowable_stress()` から引ける。利用者が入れるのは**目標安全率**で、
-削除・追加・置換探索（`binary_search.find_best_feasible`）が6条件(目標安全率を含む)を
+形状探索（`binary_search.find_best_feasible`）が6条件(目標安全率を含む)を
 満たす最小体積のboolマスクを探す。旧版のように材料量[mm³]を探索変数として直接動かす
 層はもう無い。
 
@@ -3022,7 +3022,7 @@ pytest を重くしないため)。題材は離れた2つのパッド(拘束側 
    収束する)ので、実際に走らせた結果で突き合わせる。
 3. **進捗(パイプラインの段ごと)** — **評価回数ごとの粒度は無い**(`find_best_feasible`は
    評価ごとのコールバック引数を持たないので、探索中は進捗が1回も飛ばない)。見るのは
-   「削除・追加・置換の探索を始めた」ことを告げる`phase="search"`のメッセージが来ることと、
+   「形状の探索を始めた」ことを告げる`phase="search"`のメッセージが来ることと、
    SIMP時代にあった「設計反復ごと」の段(`phase="optimize"`)が**もう無い**こと。
 4. **中断** — 進捗の途中で旗を立てると `OptimizeCancelled` になり、文書は1ビットも変わらない。
 5. **応力を測る経路** — 最終確定マスクで解き直して安全率が出る。許容応力40MPaの導出も見る。
@@ -3064,7 +3064,7 @@ pytest を重くしないため)。題材は離れた2つのパッド(拘束側 
   確認ではない(下「固定凸包による設計空間(2026-09-16)」)。
 - **つながり検査(`connect_seeds`)は道の細さを見ない。** 見るのは**拘束↔荷重の道が
   有るか無いか**だけで、幅1要素の糸でつながっている塊も設計空間としては通る(6条件検査の
-  単一成分判定は別途、削除・追加・置換探索の候補ごとに掛かる)。
+  単一成分判定は別途、探索の候補ごとに掛かる)。
 - **既定の(いちばん粗い)解像度が`voxelize.occupancy`のレイキャスト頑健性の既存バグを踏み、
   一部の条件では`ValueError`のまま失敗しうる**(段階5で発見・本人判断待ちのまま持ち越し。
   `check_optimize_wiring.py`は`element_size_mm`を明示して回避している)。
@@ -3575,7 +3575,7 @@ N = max( round(p × 案1の要素数),        # 摘み。PICK_RATIO
 **境界条件の確定**(`_map_boundary_conditions`。下記)→ 面重心の門(確定表)→
 `binary_search.find_best_feasible(space.mask, conditions, max_evaluations=..., is_cancelled=...)`
 (入口で確定表の全節点が `space.mask` に接するかを検査してから、全候補で同じ `space.mask` から出発。
-材料量[mm³]は探索変数ではなく、bool二値マスクの削除・追加・置換だけを動かす)→
+材料量[mm³]は探索変数ではなく、bool二値マスクだけを動かす)→
 最終確定マスクを平滑化 → 保持 union・除外 cut。**この順序が条件確定の順序**であり、確定表は
 探索の検査・島処理・FEM・デバッグ表示(`?debug=anchors`、`stage="mapping"`)の全てが使う。
 
