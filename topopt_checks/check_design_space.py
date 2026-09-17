@@ -550,7 +550,7 @@ def check_case1_anchors_not_empty() -> None:
         f"拘束面 {n_fixed} 節点 / 荷重面 {n_load} 節点",
     )
     check(
-        "拘束面から固定自由度が引ける(SIMP に渡せる)",
+        "拘束面から固定自由度が引ける(fem.py に渡せる)",
         table.fixed_dofs(space.fixed_faces).size >= 3,
         f"{table.fixed_dofs(space.fixed_faces).size} 自由度",
     )

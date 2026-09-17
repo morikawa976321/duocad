@@ -217,10 +217,8 @@ def check_retreat_path() -> None:
     rho = _rho_after(GRID)
 
     u_default_before = model.solve(rho, 3.0, solver="mg", threads=1)
-    # **`fem.PARALLEL_THREADS` を直接書き換えること。** `fem.PARALLEL_THREADS` は
-    # `fem` からの再輸出(import 時点の値のコピー)で、`Model.prepare` が呼び出し時に読むのは
-    # `fem` 側のモジュール変数そのもの。`fem.PARALLEL_THREADS = 1` は simp 側の束縛だけを
-    # 差し替え、`fem.PARALLEL_THREADS` には反映されない。
+    # **`fem.PARALLEL_THREADS` は唯一の実体。** `Model.prepare`/`solve` は呼び出し時に
+    # これを直接読む(`MG_DEFAULT` と同じ流儀)ので、ここを書き換えれば足りる。
     saved = fem.PARALLEL_THREADS
     try:
         fem.PARALLEL_THREADS = 1
