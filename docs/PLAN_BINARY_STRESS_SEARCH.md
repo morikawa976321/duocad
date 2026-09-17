@@ -376,7 +376,9 @@ pytest全体は1206 passed / 2 skipped / **2 failed(後述10.4、本計画と無
 **症状**: `find_initial_feasible`の探索ループ内、`_generate_repairs`→`repair_candidates`が
 候補マスク(`shape=(36, 66, 52)`、1配列あたり約121KiB)を生成する箇所で
 `numpy._core._exceptions._ArrayMemoryError`が発生し、プロセスが異常終了した
-(起動から約8〜9分後。トレースバックは`taskbox/workspace/20260917-0447-binary-search-8-verify-audit/hanger_measurement.log`)。
+(起動から約8〜9分後。実行時のログはtaskboxのworkspace配下に一時保存したが、taskboxの運用規則により
+タスク完了時に削除される使い捨て領域のため、恒久的な記録はこの節の記述と`git log`のコミット
+メッセージ(`6439e16`)が正)。
 
 **根本原因の切り分け(`acceptance.inspect`を1回だけ直接呼ぶ診断で特定)**:
 hangerの設計空間の**全材料マスク**(削除前・最大体積)で6条件のうち「荷重・拘束が有効」
@@ -441,8 +443,9 @@ hangerの設計空間の**全材料マスク**(削除前・最大体積)で6条�
 
 ### 10.3 §9末尾の監査語の一覧(コード・テスト・UI・docs全体)
 
-grep結果全件は`taskbox/workspace/20260917-0447-binary-search-8-verify-audit/audit_grep.txt`。
-要約(語ごとの残存理由):
+全件grepはこのタスクの実行時にtaskboxのworkspace(使い捨て領域。完了時に削除される)へ
+一時保存した。要約(語ごとの残存理由。再現するには本節末尾の監査語をこの文書全体で
+`grep -rniIE`すればよい):
 
 | 監査語 | 残存箇所の種別 | 判定 |
 |---|---|---|
