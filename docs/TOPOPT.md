@@ -2134,17 +2134,13 @@ stress → material → acceptance → binary_search → mesh`。
 | `topopt_checks/_bootstrap.py` | 検査スクリプトからリポジトリ直下を `sys.path` へ足すだけの小物。**これらを pytest に入れない**理由もここに書いてある |
 
 **成果物(`duocad/topopt/output/`)。** 追跡しているのは検査が「その検査自身の標準的な実行の
-成果物」として当てにしている数本だけで、残りは回すたびに差し替わるので
-`duocad/topopt/.gitignore` が外している(1本ずつ理由が書いてある)。
+成果物」として書き出す次の2本だけで、それ以外は `duocad/topopt/.gitignore` が外している
+(回すたびに差し替わる計測・一時ファイル)。
 
 | ファイル | 何を書いたか |
 |---|---|
-| `output/optimized.stl` | 実測値節にある実行で書き出したSTL |
-| `output/bracket.stl` | 面アンカーで境界条件を入れた端から端までの実行で書き出したSTL |
-| `output/design_space_box.stl` | 塊を「一回り大きい箱」にした実行(`check_design_space.py` 検査4)で書き出したSTL |
-| `output/design_space_bracket.stl` | 同じ格子・同じ面で塊=ブラケットにした比較対象の実行で書き出したSTL |
+| `output/optimized.stl` | `check_mesh.py` [7] STLの往復で書き出したSTL |
 | `output/check_design_space_case1.stl` | 案1で端から端まで通した実行(`check_design_space.py` 検査5)で書き出したSTL |
-| `output/check_design_space_case5.stl` | 案5で端から端まで通した実行(`check_design_space.py` 検査11)で書き出したSTL |
 
 `.venv`(Python 3.11.15 / numpy 2.4.6 / scipy 1.17.1 / websockets 17.0.1 /
 **scikit-image 0.26.0**)と、`web/node_modules` にある puppeteer-core・three を使う。
