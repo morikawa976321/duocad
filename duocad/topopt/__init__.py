@@ -1,4 +1,4 @@
-"""duocad.topopt — 形状最適化(二値マスクの削除・追加・置換探索)のコア。
+"""duocad.topopt — 形状最適化(二値マスクの探索と、ひずみエネルギーの順位で削る体積削減)のコア。
 
 **このパッケージから検証側**(`topopt_checks/` / `web/scripts/`)を import しないこと ——
 製品が検査の道具に依存すると、道具を捨てるにも直すにも製品が巻き添えになる。
@@ -11,9 +11,9 @@
     stress      — von Mises 応力・安全率(後処理)
     material    — 許容応力・ヤング率・印刷低減係数の唯一の定義
     acceptance  — 島除去後・平滑化前の6条件(幾何・CAD・境界条件・FEM)。合否の型
-    binary_search — 二値候補の探索。`find_initial_feasible`(段階3)が最初の6条件合格を
-                    見つけ、`find_best_feasible`(段階4)がそこから削除・追加・置換で
-                    体積を減らし続ける。候補生成・島処理・frontier・履歴・停止理由
+    binary_search — 二値候補の探索。`find_initial_feasible`(段階3)が削除・追加・置換で最初の
+                    6条件合格を見つけ、`find_best_feasible`(段階4)がそこからひずみエネルギーの
+                    低い材料を安全率の余裕に応じてまとめて削る。島処理・frontier・履歴・停止理由
     mesh        — marching cubes + Taubin平滑化 + STL書き出し
 
 **サブモジュールをここで import しない。** `import duocad` は verb 登録のために

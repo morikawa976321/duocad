@@ -1,6 +1,7 @@
 import dataclasses
 import hashlib
 import itertools
+import math
 from collections import deque
 
 import numpy as np
@@ -311,12 +312,12 @@ def _seed_search_result(mask, conditions):
 
 
 # ---------------------------------------------------------------------------
-# §8 段階4: 削除・追加・置換による体積削減
+# detour 題材の前提(段階3の追加・置換と、段階4の既知の限界が依存する)
 # ---------------------------------------------------------------------------
 def test_pure_deletion_cannot_improve_on_the_detour_shape():
     """削除だけでは詰まる題材であることの確認(§9)。detour形状はどの削除でも不合格になる
     ——単独ブロック削除も、削除だけを辿るBFS(何手先まで許しても)も改善しない。
-    このテストが崩れたらフィクスチャの前提が壊れているので、以降のテストの結果は無意味。
+    このテストが崩れたらフィクスチャの前提が壊れているので、detour を使う他のテストの結果は無意味。
     """
     conditions, design_space = detour_conditions()
     initial_mask = detour_initial_mask()
@@ -362,195 +363,213 @@ def test_pure_deletion_cannot_improve_on_the_detour_shape():
     assert best_mm3 == 8.0  # 一切改善しない
 
 
-def test_add_and_replace_escape_the_deletion_deadlock_the_pure_deletion_test_hits():
-    """削除だけでは詰まる detour 形状から、追加・置換を使うと実際に体積が減る(§9、段階4の核心)。
+# ---------------------------------------------------------------------------
+# §8 段階4: ひずみエネルギーの順位で削る体積削減(計画書§11)
+# ---------------------------------------------------------------------------
+def appendage_conditions(target_safety_factor=.001):
+    """固定面(x=0)から荷重面(x=10)へ通る 10x2x2 の棒と、荷重経路に乗らない 4x2x2 の付属部分(y=2..3)。"""
+    shape = (10, 4, 2)
+    grid = voxelize.Grid((0., 0., 0.), 1., shape)
+    ny1, nz1 = shape[1] + 1, shape[2] + 1
 
-    真の最小(7セル、直線経路)は全列挙(brute force、2**10=1024通り)でも同じ値になる
-    ことを別テストで確認する。ここでは既定の frontier 設定(§4.3 追記参照)で
-    実際に7.0まで縮むことだけを確認する。
-    """
+    def bar_end(x):
+        return [x * ny1 * nz1 + y * nz1 + z for y in range(3) for z in range(nz1)]
+
+    keep = Pos(5., 2., 1.) * Box(12., 6., 4.)
+    conditions = bs.SearchConditions(
+        grid=grid, table=Table(grid, {1: bar_end(0), 2: bar_end(shape[0])}), fixed_faces=(1,), load_faces=(2,),
+        forces=((0., 0., -1.),), preserves=[('keep', keep.wrapped)], excludes=[],
+        target_safety_factor=target_safety_factor, solver='direct')
+    design = np.zeros(shape, bool)
+    design[:, :2, :] = True
+    appendage = np.zeros(shape, bool)
+    appendage[3:7, 2:, :] = True
+    return conditions, design | appendage, appendage
+
+
+def test_step_ratio_is_zero_at_the_target_grows_with_the_margin_and_is_capped():
+    """削る割合は安全率の余裕で決まる。目標ちょうどで0、余裕が大きいほど大きく、上限で止まる。"""
+    assert bs.step_ratio(2.0, 2.0) == 0.0
+    ratios = [bs.step_ratio(s, 2.0, exponent=0.5, max_ratio=1.0) for s in (2.5, 4.0, 8.0, 32.0)]
+    assert ratios == sorted(ratios) and ratios[1] == pytest.approx(1 - 0.5 ** 0.5)
+    assert bs.step_ratio(164.7, 2.0, exponent=0.5, max_ratio=0.5) == 0.5
+    assert bs.step_ratio(2.1, 2.0, exponent=math.inf, max_ratio=0.1) == 0.1  # 固定割合
+    with pytest.raises(ValueError):
+        bs.step_ratio(0.0, 2.0)
+
+
+def test_the_energy_field_follows_the_cantilever_moment_and_is_zero_outside_material():
+    """落ちたら、削る順位に使う要素エネルギーが検査の変位と食い違っている(層をまたぐ契約)。"""
+    shape = (12, 2, 2)
+    conditions = bar_conditions(shape=shape)
+    full = np.ones(shape, bool)
+    fields = {}
+    report = acceptance.inspect(full, full, conditions.grid, fields=fields, **conditions.inspect_kwargs())
+    energy = fields['element_energy']
+    assert report['status'] == 'pass' and 'element_energy' not in report['checks']['safety']
+    assert np.all(np.diff(energy.sum(axis=(1, 2))) < 0)  # 曲げモーメントの大きい根元ほど大きい
+    order = bs.ranked_cells(full, energy)
+    assert np.unravel_index(order[:8], shape)[0].min() > np.unravel_index(order[-8:], shape)[0].max()
+
     conditions, design_space = detour_conditions()
-    initial = _seed_search_result(detour_initial_mask(), conditions)
-    result = bs._reduce_volume(initial, design_space, conditions, max_evaluations=1500,
-                               frontier_capacity=bs.DEFAULT_FRONTIER_CAPACITY,
-                               max_consecutive_adds=bs.DEFAULT_MAX_CONSECUTIVE_ADDS, is_cancelled=None)
-    assert result.status == 'feasible'
-    assert result.best_feasible.material_mm3 < 8.0
-    assert result.best_feasible.material_mm3 == 7.0
-    # best_feasible はキャッシュ無しの最終再検査を経ている(§3)ので、それ自体が独立に合格する
-    recheck = acceptance.inspect(result.best_feasible.mask, result.best_feasible.before_mask,
-                                 conditions.grid, **conditions.inspect_kwargs(bbox_cache=None))
-    assert recheck['status'] == 'pass'
-    # 少なくとも1回は'add'を経由している(そうでなければ削除だけで着いた矛盾になる)
-    assert any(trial.operation == 'add' for trial in result.history)
+    detour = detour_initial_mask()
+    fields = {}
+    acceptance.inspect(detour, detour, conditions.grid, fields=fields, **conditions.inspect_kwargs())
+    assert np.all(fields['element_energy'][~detour] == 0) and np.all(fields['element_energy'][detour] > 0)
+
+    bar = bar_conditions(shape=shape)
+    broken = np.zeros(shape, bool)
+    broken[0], broken[1, 0, 0], broken[2, 1, 1] = True, True, True  # 辺だけで接する(水密で落ち、FEMへ進まない)
+    fields = {}
+    acceptance.inspect(broken, broken, bar.grid, fields=fields, **bar.inspect_kwargs())
+    assert fields == {}
 
 
-def test_best_feasible_promotion_is_reproducible_from_history():
-    """`best_feasible`の採否は履歴から再現できる(§9「記録から候補と採否を再現できる」)。
+def test_select_removal_never_takes_the_last_material_cell_of_a_condition_node():
+    shape = (4, 2, 2)
+    conditions = bar_conditions(shape=shape)
+    full = np.ones(shape, bool)
+    anchors = bs._anchor_node_ids(conditions)
+    order = np.arange(full.size)
+    picked = bs.select_removal(full, order, full.size, anchors, excluded={5})
+    assert 5 not in picked.tolist() and 0 < picked.size < full.size - 1
+    left = full.copy()
+    left.ravel()[picked] = False
+    assert acceptance.active_nodes(left).ravel()[anchors].all()
 
-    `_is_smaller_feasible`と同じ規則(体積→安全率→マスクハッシュ、`_reduce_volume`が
-    昇格判定に使っているもの)を、履歴上の合格(`outcome=='ok'`)エントリへ記録順
-    (=trial.index順、最初は必ず初期シード)に自前で適用し、最後に残る候補が実際の
-    `best_feasible`と体積・マスクハッシュの両方で一致することを確かめる
-    ——単なる「全'ok'エントリの最小値と一致する」だけでは、'add'で発生する
-    体積が大きい合格候補が紛れても常に真になってしまい検証にならないため、
-    採用規則そのものを記録順に再適用する形にしてある。
-    """
-    conditions, design_space = detour_conditions()
-    initial = _seed_search_result(detour_initial_mask(), conditions)
-    result = bs._reduce_volume(initial, design_space, conditions, max_evaluations=1500,
-                               frontier_capacity=bs.DEFAULT_FRONTIER_CAPACITY,
-                               max_consecutive_adds=bs.DEFAULT_MAX_CONSECUTIVE_ADDS, is_cancelled=None)
-    ok_trials = sorted((t for t in result.history if t.outcome == 'ok'), key=lambda t: t.index)
-    assert ok_trials  # 初期シードの1件は必ずある
-    reconstructed = ok_trials[0]
-    for trial in ok_trials[1:]:
-        if trial.material_mm3 < reconstructed.material_mm3 - conditions.volume_atol:
-            better = True
-        elif trial.material_mm3 <= reconstructed.material_mm3 + conditions.volume_atol:
-            if trial.safety_factor > reconstructed.safety_factor + 1e-9:
-                better = True
-            elif (abs(trial.safety_factor - reconstructed.safety_factor) <= 1e-9
-                  and trial.mask_hash < reconstructed.mask_hash):
-                better = True
-            else:
-                better = False
+
+def test_restore_irregular_brings_back_only_removed_cells_until_the_boundary_is_watertight():
+    parent = np.ones((6, 6, 6), bool)
+    candidate = parent.copy()
+    candidate[1:5, 1:5, 1:5] = False
+    candidate[1, 1, 1] = candidate[2, 2, 2] = True  # 空洞の隅に付いたセルと、それに頂点だけで接する浮いたセル
+    assert acceptance.boundary_check(candidate)['status'] == 'fail'
+    repaired = bs.restore_irregular(candidate, parent)
+    assert acceptance.boundary_check(repaired)['status'] == 'pass'
+    assert np.all(repaired <= parent) and np.all(candidate <= repaired) and repaired.sum() < parent.sum()
+
+
+def test_reduction_strips_the_unloaded_appendage_and_keeps_every_condition_supported():
+    conditions, design, appendage = appendage_conditions()
+    result = bs.find_best_feasible(design, conditions, max_evaluations=200)
+    best = result.best_feasible
+    assert result.status == 'feasible' and result.termination == 'converged'
+    assert not (best.mask & appendage).any()
+    assert best.material_mm3 < design.sum() - appendage.sum()  # 付属部分に加えて棒も削った
+    assert acceptance.active_nodes(best.mask).ravel()[bs._anchor_node_ids(conditions)].all()
+    recheck = acceptance.inspect(best.mask, best.before_mask, conditions.grid, **conditions.inspect_kwargs(bbox_cache=None))
+    assert recheck['status'] == 'pass' and recheck['material_sha256'] == best.mask_hash
+    assert result.diagnostics['reduction']['fem_solves'] < result.evaluations
+
+
+def test_rejected_steps_halve_the_step_accepted_ones_double_it_and_a_single_cell_safety_failure_converges(monkeypatch):
+    """落ちたら、削減割合の後退規則か収束の判定が §11 の規則と違う。"""
+    conditions, design, _ = appendage_conditions()
+    original = acceptance.inspect
+    floor = 0.75 * design.sum()
+
+    def volume_limited(material, before, grid, **kwargs):
+        report = original(material, before, grid, **kwargs)
+        if report['status'] == 'pass' and material.sum() < floor:  # 体積の下限を安全率の不足に見立てる
+            report['checks']['safety']['status'] = report['status'] = 'fail'
+            if kwargs.get('fields') is not None:
+                kwargs['fields'].clear()
+        return report
+
+    monkeypatch.setattr(acceptance, 'inspect', volume_limited)
+    result = bs.find_best_feasible(design, conditions, max_evaluations=400)
+    reduction = result.diagnostics['reduction']
+    steps = reduction['steps']
+    assert result.termination == 'converged' and reduction['stop_reason'] == 'safety_at_single_cell'
+    assert floor <= result.best_feasible.mask.sum() < design.sum()
+    for step, following in zip(steps, steps[1:]):
+        if step['outcome'] == 'accepted':
+            assert following['multiplier'] == min(1.0, 2 * step['multiplier'])
+        elif step['selected_cells'] > 1:
+            assert following['multiplier'] == step['multiplier'] / 2
         else:
-            better = False
-        if better:
-            reconstructed = trial
-    assert reconstructed.material_mm3 == result.best_feasible.material_mm3
-    assert reconstructed.mask_hash == result.best_feasible.mask_hash
+            assert following['multiplier'] == step['multiplier']
+    assert steps[-1]['selected_cells'] == 1 and 'safety' in steps[-1]['failed']
+
+
+def test_a_computation_failure_is_not_accepted_and_does_not_stop_the_reduction(monkeypatch):
+    conditions, design, _ = appendage_conditions()
+    original = acceptance.inspect
+    calls = {'failed': 0}
+
+    def first_solved_candidate_fails(material, before, grid, **kwargs):
+        if kwargs.get('fields') is not None and material.sum() < design.sum() and calls['failed'] < 2:
+            calls['failed'] += 1  # FEMまで進んだ最初の候補と、その解法再試行
+            report = original(material, before, grid, **{**kwargs, 'fields': None})
+            report['checks']['safety'] = dict(status='unknown', reason='evaluation_error', error='stub')
+            report['status'] = 'unknown'
+            return report
+        return original(material, before, grid, **kwargs)
+
+    monkeypatch.setattr(acceptance, 'inspect', first_solved_candidate_fails)
+    result = bs.find_best_feasible(design, conditions, max_evaluations=200)
+    steps = result.diagnostics['reduction']['steps']
+    failed_step = next(step for step in steps if 'safety' in step['failed'])
+    assert calls['failed'] == 2 and failed_step['outcome'] == 'rejected'
+    assert any(trial.operation.startswith('solver_retry') for trial in result.history)
+    assert result.best_feasible.material_mm3 < design.sum() and result.termination == 'converged'
+
+
+def test_deletion_only_reduction_cannot_leave_the_detour_shape_a_known_limit():
+    """段階4は削るだけなので、どの削除でも不合格になる detour 形状からは動けない(既知の限界。
+    追加・置換で抜けるのは段階3の探索だけ)。落ちたら段階4が材料を足している。"""
+    conditions, _ = detour_conditions()
+    initial = _seed_search_result(detour_initial_mask(), conditions)
+    result = bs._reduce_volume(initial, detour_initial_mask(), conditions, max_evaluations=200, is_cancelled=None)
+    assert result.termination == 'converged' and result.best_feasible.material_mm3 == 8.0
+    assert all(np.all(trial_mask <= detour_initial_mask()) for trial_mask in [result.best_feasible.mask])
 
 
 def test_reduction_is_deterministic_for_the_same_input_and_budget():
     """同じ入力・同じ予算なら同じ結果になる(§9)。"""
-    conditions, design_space = detour_conditions()
-    kwargs = dict(max_evaluations=300, frontier_capacity=bs.DEFAULT_FRONTIER_CAPACITY,
-                 max_consecutive_adds=bs.DEFAULT_MAX_CONSECUTIVE_ADDS, is_cancelled=None)
-    first = bs._reduce_volume(_seed_search_result(detour_initial_mask(), conditions), design_space, conditions,
-                              **kwargs)
-    second = bs._reduce_volume(_seed_search_result(detour_initial_mask(), conditions), design_space, conditions,
-                               **kwargs)
-    assert first.evaluations == second.evaluations
-    assert first.termination == second.termination
+    conditions, design, _ = appendage_conditions()
+    first = bs.find_best_feasible(design, conditions, max_evaluations=30)
+    second = bs.find_best_feasible(design, conditions, max_evaluations=30)
+    assert first.evaluations == second.evaluations and first.termination == second.termination
     assert first.best_feasible.mask_hash == second.best_feasible.mask_hash
-    assert first.best_feasible.material_mm3 == second.best_feasible.material_mm3
-    assert len(first.history) == len(second.history)
+    assert first.diagnostics['reduction']['steps'] == second.diagnostics['reduction']['steps']
 
 
 def test_evaluation_budget_exhaustion_keeps_the_best_feasible_found_so_far():
     """予算終了なら、その時点の `best_feasible` をそのまま返す(§4.6)。"""
-    conditions, design_space = detour_conditions()
-    initial = _seed_search_result(detour_initial_mask(), conditions)
-    result = bs._reduce_volume(initial, design_space, conditions, max_evaluations=5,
-                               frontier_capacity=bs.DEFAULT_FRONTIER_CAPACITY,
-                               max_consecutive_adds=bs.DEFAULT_MAX_CONSECUTIVE_ADDS, is_cancelled=None)
-    assert result.status == 'feasible'
-    assert result.termination == 'evaluation_limit'
-    assert result.evaluations == 5
-    assert result.best_feasible is not None
-    assert result.best_feasible.material_mm3 <= 8.0
-
-
-def test_cancellation_returns_the_best_feasible_found_before_the_cancel_signal():
-    """中断すると、その時点までに見つけた合格チェックポイント(§4.6)を保って終了する。
-
-    単に `best_feasible is not None` だけでなく、返ってきた `best_feasible` が
-    実際にキャッシュ無しで再検査しても合格する(=無効化されたマスクを返していない)ことと、
-    体積が初期形状(8.0)以下であること(悪化していない)まで確認する。
-    """
-    conditions, design_space = detour_conditions()
-    initial = _seed_search_result(detour_initial_mask(), conditions)
-    calls = {'n': 0}
-
-    def is_cancelled():
-        calls['n'] += 1
-        return calls['n'] > 3
-
-    result = bs._reduce_volume(initial, design_space, conditions, max_evaluations=1500,
-                               frontier_capacity=bs.DEFAULT_FRONTIER_CAPACITY,
-                               max_consecutive_adds=bs.DEFAULT_MAX_CONSECUTIVE_ADDS, is_cancelled=is_cancelled)
-    assert result.status == 'feasible'
-    assert result.termination == 'cancelled'
-    assert result.best_feasible is not None
-    assert result.best_feasible.material_mm3 <= 8.0
+    conditions, design, _ = appendage_conditions()
+    result = bs.find_best_feasible(design, conditions, max_evaluations=4)
+    assert result.status == 'feasible' and result.termination == 'evaluation_limit' and result.evaluations == 4
+    assert result.best_feasible.material_mm3 <= design.sum()
     recheck = acceptance.inspect(result.best_feasible.mask, result.best_feasible.before_mask,
                                  conditions.grid, **conditions.inspect_kwargs(bbox_cache=None))
     assert recheck['status'] == 'pass'
-    assert calls['n'] >= 4  # 実際に呼ばれて真を返した回で止まった
 
 
 def test_cancellation_after_an_improvement_preserves_the_improved_checkpoint(monkeypatch):
-    """中断が体積改善(7.0)の後に来た場合、初期形状(8.0)へ後退せず改善後の状態を保つ(§4.6)。
+    """中断が体積改善の後に来たら、初期形状へ後退せず改善後の合格形状を返す(§4.6)。"""
+    conditions, design, _ = appendage_conditions()
+    original = bs.ranked_cells
+    ranked = []  # 出発形状と、合格して進んだ形状ごとに1回ずつ呼ばれる
 
-    `test_cancellation_returns_the_best_feasible_found_before_the_cancel_signal` は
-    改善が起きる**前**に中断する場合を確認しているので、ここでは改善が既に起きた
-    **後**に中断する場合を別途確認する。中断の合図は「キャッシュ無しの最終再検査が7.0で合格した」
-    のを見張る spy が出す(呼び出し回数の実測値に依存させない)。
-    """
-    conditions, design_space = detour_conditions()
-    initial = _seed_search_result(detour_initial_mask(), conditions)
-    original = acceptance.inspect
-    improved = {'seen': False, 'cancel_calls_after': 0}
+    def spy(mask, energy):
+        ranked.append(int(mask.sum()))
+        return original(mask, energy)
 
-    def spy(*args, **kwargs):
-        report = original(*args, **kwargs)
-        if 'history' in kwargs and report['status'] == 'pass' and report['volumes']['material_mm3'] == 7.0:
-            improved['seen'] = True
-        return report
-
-    def is_cancelled():
-        if improved['seen']:
-            improved['cancel_calls_after'] += 1
-        return improved['seen']
-
-    monkeypatch.setattr(acceptance, 'inspect', spy)
-    result = bs._reduce_volume(initial, design_space, conditions, max_evaluations=1500,
-                               frontier_capacity=bs.DEFAULT_FRONTIER_CAPACITY,
-                               max_consecutive_adds=bs.DEFAULT_MAX_CONSECUTIVE_ADDS, is_cancelled=is_cancelled)
-    assert improved['seen'] and improved['cancel_calls_after'] >= 1
-    assert result.status == 'feasible'
+    monkeypatch.setattr(bs, 'ranked_cells', spy)
+    result = bs.find_best_feasible(design, conditions, max_evaluations=400, is_cancelled=lambda: len(ranked) >= 2)
     assert result.termination == 'cancelled'
-    assert result.best_feasible.material_mm3 == 7.0  # 改善後の状態のまま(8.0へ後退していない)
-    recheck = original(result.best_feasible.mask, result.best_feasible.before_mask,
-                       conditions.grid, **conditions.inspect_kwargs(bbox_cache=None))
+    assert len(ranked) == 2 and result.best_feasible.mask.sum() == ranked[1] < design.sum()
+    recheck = acceptance.inspect(result.best_feasible.mask, result.best_feasible.before_mask,
+                                 conditions.grid, **conditions.inspect_kwargs(bbox_cache=None))
     assert recheck['status'] == 'pass'
-
-
-def test_failed_final_recheck_keeps_the_previous_best_and_does_not_crash(monkeypatch):
-    """最良候補をキャッシュなしで最終再検査し、失敗したら成功を返さない(§3・§4.6)。
-
-    昇格判定でだけ使う最終再検査(`history=`付き呼び出し)を常に不合格にすり替え、
-    体積が小さい候補が見つかっても `best_feasible` が初期形状のまま(8.0)据え置かれる
-    ——探索そのものは継続し、クラッシュもしない——ことを確認する。
-    """
-    conditions, design_space = detour_conditions()
-    initial = _seed_search_result(detour_initial_mask(), conditions)
-    original = acceptance.inspect
-
-    def spy(*args, **kwargs):
-        if 'history' in kwargs:  # 昇格判定の最終再検査だけを狙い撃つ(§3の呼び出し形)
-            report = dict(original(*args, **kwargs))
-            report['status'] = 'fail'
-            return report
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(acceptance, 'inspect', spy)
-    result = bs._reduce_volume(initial, design_space, conditions, max_evaluations=1500,
-                               frontier_capacity=bs.DEFAULT_FRONTIER_CAPACITY,
-                               max_consecutive_adds=bs.DEFAULT_MAX_CONSECUTIVE_ADDS, is_cancelled=None)
-    assert result.status == 'feasible'
-    assert result.best_feasible.material_mm3 == 8.0  # 昇格が一度も成立しなかった
-    assert result.best_feasible.mask_hash == initial.best_feasible.mask_hash
 
 
 def test_tiny_grid_exhaustive_enumeration_matches_the_search_optimum():
     """微小格子では、許可マスクの全列挙を検査専用の正解として、評価と最良候補の選択を照合する(§9)。
 
     通常探索が常に大域最小を発見するというassertにはしない —— ここでの一致は
-    このフィクスチャの分岐が小さく(設計空間10セル、2**10=1024通り)、
-    十分な予算・frontier容量を与えたときの実測。
+    このフィクスチャの分岐が小さく(設計空間10セル、2**10=1024通り)、既定設定で11評価で届く実測。
     """
     conditions, design_space = detour_conditions()
     free_cells = np.argwhere(design_space)
@@ -571,24 +590,11 @@ def test_tiny_grid_exhaustive_enumeration_matches_the_search_optimum():
                     brute_force_optimum = volume
     assert brute_force_optimum == 7.0
 
-    result = bs.find_best_feasible(design_space, conditions, max_evaluations=3000, frontier_capacity=64,
-                                   max_consecutive_adds=bs.DEFAULT_MAX_CONSECUTIVE_ADDS)
-    assert result.status == 'feasible'
+    result = bs.find_best_feasible(design_space, conditions)
+    assert result.status == 'feasible' and result.termination == 'converged'
     assert result.best_feasible.material_mm3 == brute_force_optimum
+    assert result.evaluations <= 20
 
-
-def test_default_budget_and_frontier_settings_reach_the_optimum_on_this_tiny_fixture():
-    """docs/PLAN_BINARY_STRESS_SEARCH.md §4.3 追記の実測(既定設定・全設計空間からの通し探索で
-    932試行、既定予算1000に収まる)を固定する。`find_best_feasible` を**一切の引数指定なし**
-    (=`find_best_feasible`自身の既定値)で呼び、真の最小(7.0、上のテストでbrute forceにより
-    別途確認済み)へ実際に届くことを確認する。既定値を変えてこの実測が崩れたら、
-    この追記を書き直すこと。
-    """
-    conditions, design_space = detour_conditions()
-    result = bs.find_best_feasible(design_space, conditions)  # 既定: max_evaluations/frontier_capacity/adds
-    assert result.status == 'feasible'
-    assert result.best_feasible.material_mm3 == 7.0
-    assert result.evaluations <= 1000
 
 
 def test_find_best_feasible_propagates_a_non_feasible_stage3_result_unchanged():
@@ -799,22 +805,6 @@ def test_retained_masks_do_not_grow_with_the_evaluation_budget(monkeypatch):
         assert peak <= 64 * mask_bytes, (budget, peak / mask_bytes)
     assert peaks[160] <= peaks[20] + 2 * mask_bytes  # 評価回数を8倍にしても増えない
 
-    # 削減経路: 合格の種から同じ contract で走る
-    seed_report = _fake_report(design, status='pass')
-    seed = bs.Trial(index=0, parent=None, operation='seed', mask_hash=seed_report['material_sha256'],
-                    before_mm3=float(design.sum()), material_mm3=float(design.sum()), removed_islands_mm3=0.0,
-                    outcome='ok', safety_factor=0.5)
-    initial = bs.SearchResult(status='feasible', termination='seed', history=[seed], evaluations=1,
-                              best_feasible=bs.FeasibleModel(mask=design, before_mask=design, report=seed_report,
-                                                             trial_index=0),
-                              conditions_identifier=bs.evaluation_identifier(conditions))
-    tracemalloc.start()
-    reduced = bs._reduce_volume(initial, design, conditions, max_evaluations=60, frontier_capacity=capacity,
-                                max_consecutive_adds=2, is_cancelled=None)
-    _, peak = tracemalloc.get_traced_memory()
-    tracemalloc.stop()
-    assert reduced.diagnostics['frontier']['peak_retained'] <= capacity
-    assert peak <= (capacity + 12) * mask_bytes + (1 << 20)
 
 
 def test_generation_budget_and_cancellation_act_on_duplicates_that_never_reach_evaluation(monkeypatch):
@@ -921,30 +911,29 @@ def test_operation_generators_are_interleaved_so_adds_and_replaces_are_not_starv
     assert limited == {'delete', 'replace'}
 
 
-def test_frontier_eviction_is_recorded_and_never_reported_as_neighbourhood_exhausted():
-    """容量超過で親を捨てた探索は、キューが空になっても「近傍を全て探索した」と言わない。"""
-    conditions, design_space = detour_conditions()
-    tight = bs.find_best_feasible(design_space, conditions, max_evaluations=3000, frontier_capacity=2)
+def test_frontier_eviction_is_recorded_and_never_reported_as_neighbourhood_exhausted(monkeypatch):
+    """容量超過で親を捨てた探索は、キューが空になっても「近傍を全て探索した」と言わない(段階3)。"""
+    _stub_evaluation(monkeypatch)  # 全候補が不合格 → 到達できる部分集合(2**6)を尽くすまで親が積まれる
+    shape = (3, 2, 1)
+    conditions = bar_conditions(shape=shape)
+    tight = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=3000, frontier_capacity=2)
     assert tight.termination == 'frontier_truncated'
     assert tight.diagnostics['frontier']['evictions'] > 0
     assert tight.diagnostics['frontier']['peak_retained'] <= 2
-    wide = bs.find_best_feasible(design_space, conditions, max_evaluations=3000, frontier_capacity=4096)
+    wide = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=3000, frontier_capacity=4096)
     assert wide.termination == 'neighbourhood_exhausted'
     assert wide.diagnostics['frontier']['evictions'] == 0
-    assert wide.best_feasible.material_mm3 == 7.0
 
 
-def test_the_best_feasible_mask_is_read_only_and_survives_later_generation():
-    """最良合格のマスクは読み取り専用で、後続の候補生成・失敗がその内容とハッシュを変えない。"""
-    conditions, design_space = detour_conditions()
-    result = bs.find_best_feasible(design_space, conditions, max_evaluations=200)
+def test_the_best_feasible_mask_is_read_only_and_survives_later_reduction():
+    """最良合格のマスクは読み取り専用で、後続の削減・失敗がその内容とハッシュを変えない。"""
+    conditions, design, _ = appendage_conditions()
+    result = bs.find_best_feasible(design, conditions, max_evaluations=6)
     best = result.best_feasible
     assert not best.mask.flags.writeable and not best.before_mask.flags.writeable
     assert bs._mask_hash(best.mask) == best.mask_hash
     snapshot = best.mask.copy()
-    later = bs._reduce_volume(result, design_space, conditions, max_evaluations=400,
-                              frontier_capacity=bs.DEFAULT_FRONTIER_CAPACITY,
-                              max_consecutive_adds=bs.DEFAULT_MAX_CONSECUTIVE_ADDS, is_cancelled=None)
+    later = bs._reduce_volume(result, design, conditions, max_evaluations=200, is_cancelled=None)
     assert later.best_feasible.material_mm3 <= best.material_mm3
     assert np.array_equal(best.mask, snapshot) and bs._mask_hash(best.mask) == best.mask_hash
 

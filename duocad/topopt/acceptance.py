@@ -67,13 +67,19 @@ def _regular_vertex(pattern):
 REGULAR_VERTEX = np.array([_regular_vertex(p) for p in range(256)])
 
 
-def boundary_check(material):
+def irregular_vertices(material):
+    """格子頂点(節点格子の形)ごとに、境界が局所的に2次元多様体でないか。`boundary_check` の判定そのもの。"""
     material = np.asarray(material, dtype=bool)
     codes = np.zeros(tuple(n + 1 for n in material.shape), dtype=np.uint8)
     for octant in product(range(2), repeat=3):
         slices = tuple(slice(1 - o, n + 1 - o) for o, n in zip(octant, material.shape))
         codes[slices] |= material.astype(np.uint8) << (4 * octant[0] + 2 * octant[1] + octant[2])
-    bad = ~REGULAR_VERTEX[codes]
+    return ~REGULAR_VERTEX[codes], codes
+
+
+def boundary_check(material):
+    material = np.asarray(material, dtype=bool)
+    bad, codes = irregular_vertices(material)
     count = int(bad.sum())
     return dict(status='pass' if material.any() and count == 0 else 'fail',
                 irregular_vertices=count, sample_vertex_indices=np.argwhere(bad)[:20].tolist(),
@@ -193,7 +199,7 @@ def condition_check(material, table, fixed_faces, load_faces, forces):
 # ---------------------------------------------------------------------------
 
 def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_modulus_mpa,
-                 percentile, solver):
+                 percentile, solver, fields=None):
     try:
         live = active_nodes(material).ravel()
         active_dofs = np.repeat(live, 3)
@@ -223,6 +229,10 @@ def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_m
         sf = float(report.safety_factor)
         if not math.isfinite(sf):
             raise RuntimeError('安全率が非有限')
+        if fields is not None:
+            # 同じ変位から取る u_eᵀ k₀ u_e(単位剛性。空セルは節点を共有しても 0 にする)。
+            _, element_energy = model.compliance(density, 3.0, displacement)
+            fields['element_energy'] = np.where(material, element_energy, 0.0)
         return dict(status='pass' if sf >= target else 'fail', safety_factor=sf,
                     target_safety_factor=target, representative_mpa=report.representative_mpa,
                     allowable_mpa=allowable_mpa, youngs_modulus_mpa=youngs_modulus_mpa,
@@ -284,11 +294,13 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
             preserves, excludes, target_safety_factor, allowable_mpa=DEFAULT_ALLOWABLE_MPA,
             youngs_modulus_mpa=DEFAULT_YOUNGS_MODULUS_MPA, percentile=stress.DEFAULT_PERCENTILE,
             solver='cg', history=None, converged=None, max_evaluations=None,
-            volume_atol=1e-9, volume_rtol=1e-9, bbox_cache=None):
+            volume_atol=1e-9, volume_rtol=1e-9, bbox_cache=None, fields=None):
     """6条件の入口。**`material`/`before` は格子と同じ形のboolマスク(材料=True)を直接
     受ける**(計画書§5: 「新規の製品APIはboolマスクを受ける」)。過去記録の密度場からの
     二値化は行わない —— それは読み取りアダプター `inspect_document` に閉じてある。
     `before` は島除去前のboolマスク(除去で材料が増えていないことをここで確認する)。
+    `fields` に dict を渡すと、安全率を計算できたときだけ要素ごとの `u_eᵀ k₀ u_e`(格子と同じ形、
+    材料外は 0)を `fields['element_energy']` に入れる。報告(JSON)には入れない(段階4の削る順位用)。
     """
     for name, value in [('spacing', grid.spacing), ('target', target_safety_factor),
                         ('allowable_mpa', allowable_mpa), ('youngs_modulus_mpa', youngs_modulus_mpa)]:
@@ -314,7 +326,7 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
     if all(checks[key]['status'] == 'pass' for key in ('watertight', 'single_solid', 'conditions')):
         checks['safety'] = safety_check(material, grid, fixed, load, target=target_safety_factor,
                                        allowable_mpa=allowable_mpa, youngs_modulus_mpa=youngs_modulus_mpa,
-                                       percentile=percentile, solver=solver)
+                                       percentile=percentile, solver=solver, fields=fields)
     else:
         checks['safety'] = dict(status='unknown', reason='prerequisites_failed')
     statuses = [check['status'] for check in checks.values()]

@@ -1392,7 +1392,7 @@ COMMANDS: tuple[Command, ...] = (
             Param("target_safety_factor", "number", "目標安全率", required=False),
             Param(
                 "max_evaluations", "number",
-                "削除・追加・置換探索の評価予算。省くと既定(binary_search.find_best_feasibleの既定)",
+                "形状探索(初期合格探索とエネルギー順の削減)の評価予算。省くと既定(binary_search.find_best_feasibleの既定)",
                 required=False,
             ),
             Param("name", "string", "結果のメッシュボディの名前", required=False),

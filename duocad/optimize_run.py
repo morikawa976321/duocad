@@ -117,7 +117,7 @@ class OptimizeOptions:
     target_safety_factor: float = DEFAULT_TARGET_SAFETY_FACTOR
     #: 要素サイズ[mm]。省くと上限側(既定)。
     element_size_mm: Optional[float] = None
-    #: 削除・追加・置換探索の評価予算(`binary_search.find_best_feasible` の
+    #: 形状探索の評価予算(`binary_search.find_best_feasible` の
     #: `max_evaluations`。段階3・段階4を通した1本の予算)。省くとそちらの既定(1000)。
     max_evaluations: Optional[int] = None
     #: 結果ボディの名前。省くと `optimized`(既にあれば `optimized-2`, ...)。
@@ -846,7 +846,7 @@ def _run(
     debug: Optional[Callable[[dict], None]] = None,
     debug_kinds: Optional[Any] = None,
 ) -> dict:
-    """入力条件 → 固定設計空間の導出(1回) → 削除・追加・置換探索 → 最終確定マスクの
+    """入力条件 → 固定設計空間の導出(1回) → 初期合格探索とエネルギー順の削減 → 最終確定マスクの
     メッシュ化 → 保持・除外ブーリアン → CADとして文書へ(計画書§3の単一経路)。
 
     **元のボディは1つも消さない・変えない。** 足すのは1つだけで、その `body_id` を返す。
@@ -896,12 +896,9 @@ def _run(
 
     **進捗**は `progress(event: dict)`(下記 `_ProgressPump`)。**中断**は
     `should_cancel()` が真を返した時点で `OptimizeCancelled` を投げて降りる。
-    `find_best_feasible` 自体の `is_cancelled` 引数にも同じ callable を渡すが、
-    **その内部でも中断を見るのは削除・追加・置換の巡回(段階4)の各取り出し前だけ**
-    (段階4の契約:「初期合格すら見つかっていない段階での中断は、呼び出し前の確認だけが
-    カバーする」)。したがって初期合格探索(段階3)が長引く入力では、中断してもそこが
-    終わるまで降りない —— 進捗を出さない処理の途中で止まらないのは旧実装と同じ性質だが、
-    ここでは区間そのものが長くなりうる既知の非対称である。
+    `find_best_feasible` 自体の `is_cancelled` 引数にも同じ callable を渡す。探索は評価と評価の
+    あいだ(段階3は候補ブロックを1つ調べる前ごと、段階4は削る候補を作る前ごと)で中断を見るが、
+    **FEM評価1回の途中では降りない**(hanger 2.4mm では1回 約100〜137秒)。
 
     失敗は例外で上がる。**握り潰さないこと** —— `OptimizeInputError`(条件が足りない・
     この版で扱えない)/ `FaceMappingError`(面添字の対応が壊れている。**RuntimeError 派生**)/
@@ -1049,14 +1046,11 @@ def _run(
     pump.emit(
         phase="search",
         message=(
-            f"削除・追加・置換の探索を始める(目標安全率 {opts.target_safety_factor:.3g}・"
+            f"形状の探索を始める(初期合格探索 → エネルギー順の削減。目標安全率 {opts.target_safety_factor:.3g}・"
             f"評価予算 {budget_text})"
         ),
     )
-    # **中断の非対称(計画書§8段階4の契約)**: `find_best_feasible` が中断を見るのは
-    # 削除・追加・置換の巡回(段階4)の各取り出し前だけで、初期合格探索(段階3)自体には
-    # 効かない。呼び出し直前にここで確認しておくことが、「初期合格すら見つかっていない」
-    # 段階に入る前の中断をカバーする唯一の場所である。
+    # 探索に入る前の中断はここで拾う(探索の中では評価と評価のあいだでしか見ない)。
     pump.check()
 
     search_result = binary_search.find_best_feasible(

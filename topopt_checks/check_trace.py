@@ -20,8 +20,8 @@ def verify_archive(path):
     assert manifest['status']=='done'
     result=records('result')[0]
     # **塊の導出は実行を通して1回だけ**(`derive`ステージがちょうど1回しか始まらない)。
-    # 二値探索(`find_best_feasible`)は同じ `design_space_mask` の上で削除・追加・置換を
-    # 繰り返すだけで、候補ごとに塊を作り直さない——旧方式(safety_loop の参照run・
+    # 二値探索(`find_best_feasible`)は同じ `design_space_mask` の上で候補を作って検査する
+    # だけで、候補ごとに塊を作り直さない——旧方式(safety_loop の参照run・
     # 候補ごとの切り出し)の段階はもう無い。
     assert sum(1 for e in events if e['kind']=='begin' and e['name']=='derive')==1
     derived=records('derive-output')

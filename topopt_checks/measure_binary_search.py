@@ -1,4 +1,4 @@
-"""models/*.json の同じ条件で二値探索(削除・追加・置換)を実測する。
+"""models/*.json の同じ条件で二値探索(初期合格探索とエネルギー順の削減)を実測する。
 
     .\\.venv\\Scripts\\python.exe topopt_checks\\measure_binary_search.py --model hanger_test.json --spacing 2.4 --targets 2 3 4
 
@@ -6,7 +6,7 @@
 候補評価数・FEM回数(evaluationsに対応する試行数)・最良体積の履歴を書き出す。
 
 旧`measure_safety_search.py`(二分探索 vs Illinois法の比較)の後継。二値探索は連続値の
-材料量を探索しない(候補は削除・追加・置換で生成する)ので、比較する探索器そのものが
+材料量を探索しない(候補は二値マスクの削除・追加・置換と、エネルギー順の削減で作る)ので、比較する探索器そのものが
 無くなっている——ここでは新ループの候補評価数・体積推移だけを実測する。
 
 **未実機検証(2026-09-17)。** このリポジトリに `models/*.json` が無いため実行できておらず、

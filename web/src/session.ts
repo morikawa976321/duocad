@@ -800,7 +800,7 @@ export interface OptimizeResultPayload {
   target_safety_factor: number
   material_mm3: number | null
   evaluations: number
-  /** 探索の終了理由(`neighbourhood_exhausted` / `evaluation_limit` / ...)。 */
+  /** 探索の終了理由(`converged` / `evaluation_limit` / `cancelled` / ...)。 */
   termination: string | null
   element_size_mm: number
   design_elements: number

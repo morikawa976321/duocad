@@ -317,7 +317,7 @@ def check_progress(events) -> None:
     print("\n[4] 進捗(パイプラインの段ごと)")
     # **評価回数ごとの粒度は無い**(段階6の契約③。`find_best_feasible` は評価ごとの
     # コールバック引数を持たないので、探索を始めてから終わるまでの間 `_ProgressPump.emit`
-    # は1回も呼ばれない)。ここで見るのは「削除・追加・置換の探索を始めた」ことを告げる
+    # は1回も呼ばれない)。ここで見るのは「形状の探索を始めた」ことを告げる
     # `phase="search"` のメッセージが来ることと、設計反復という段そのものが無いこと。
     phases = [event["phase"] for event in events]
     check("進捗イベントが来る", len(events) > 0, f"{len(events)}件")

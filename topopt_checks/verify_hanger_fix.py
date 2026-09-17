@@ -74,7 +74,9 @@ def _safety_summary(report: dict) -> dict:
                 conditions=report["checks"]["conditions"])
 
 
-def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, skip_search: bool) -> dict:
+def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, skip_search: bool,
+           step_exponent: float = binary_search.DEFAULT_STEP_EXPONENT,
+           max_step_ratio: float = binary_search.DEFAULT_MAX_STEP_RATIO) -> dict:
     session = Session(None, 0.2, models_dir=model.resolve().parent)
     session.open_document(model.name)
     document = session.document
@@ -84,6 +86,7 @@ def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, 
         code_sha256={name: _sha256(REPO / "duocad" / "topopt" / f"{name}.py")
                      for name in ("anchor", "binary_search", "acceptance", "design_space")},
         requested_spacing=spacing, target_safety_factor=target, max_evaluations=max_evaluations,
+        step_exponent=step_exponent, max_step_ratio=max_step_ratio,
     )
     bundle = optimize_run.build_conditions(document)
 
@@ -150,7 +153,8 @@ def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, 
         tracemalloc.start()
         started = time.perf_counter()
         with patch.object(acceptance, "inspect", counted_inspect):
-            result = binary_search.find_best_feasible(space.mask, conditions, max_evaluations=max_evaluations)
+            result = binary_search.find_best_feasible(space.mask, conditions, max_evaluations=max_evaluations,
+                                                      step_exponent=step_exponent, max_step_ratio=max_step_ratio)
         seconds = time.perf_counter() - started
         _, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
@@ -187,6 +191,9 @@ def main() -> int:
     parser.add_argument("--target", type=float, default=2.0)
     parser.add_argument("--max-evaluations", type=int, default=12)
     parser.add_argument("--skip-search", action="store_true")
+    parser.add_argument("--step-exponent", type=float, default=binary_search.DEFAULT_STEP_EXPONENT,
+                        help="段階4の削減割合の指数 θ(inf で --max-step-ratio の固定割合)")
+    parser.add_argument("--max-step-ratio", type=float, default=binary_search.DEFAULT_MAX_STEP_RATIO)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     for stream in (sys.stdout, sys.stderr):
@@ -194,7 +201,8 @@ def main() -> int:
             stream.reconfigure(errors="replace")  # type: ignore[union-attr]
         except (AttributeError, ValueError):
             pass
-    record = verify(args.model, args.spacing, args.target, args.max_evaluations, skip_search=args.skip_search)
+    record = verify(args.model, args.spacing, args.target, args.max_evaluations, skip_search=args.skip_search,
+                    step_exponent=args.step_exponent, max_step_ratio=args.max_step_ratio)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(record, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     summary = {k: record.get(k) for k in ("derive", "entry", "invariants")}
