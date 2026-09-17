@@ -27,7 +27,7 @@ from skimage.measure import marching_cubes
 DEFAULT_LEVEL = 0.5
 DEFAULT_LAMBDA = 0.5
 DEFAULT_MU = -0.53
-# 30の根拠(docs/TOPOPT.md「メッシュ化(marching cubes + Taubin平滑化)」):
+# 30の根拠(docs/TOPOPT.md「1要素幅のフィラメントを消す既定値を選び直した」の段4):
 # 反復30で k≥1 の残りが 0.765^30 ≈ 0.03%、Taubin による体積変化は
 # −0.003%(12反復の −0.21% より小さい)、最小肉厚は縮まない。
 DEFAULT_ITERS = 30
@@ -240,7 +240,7 @@ def min_wall_thickness(
     階段状メッシュの局所ノイズが逆向き法線の対を作り、1点でも薄い値を出せば最小値がそこへ
     張り付く(実測: 筋あり 0.0133要素 / 筋なし 0.0797要素で、どちらも「1要素よりはるかに薄い」)。
     弁別が要るなら `per_vertex_min` の分布の下側の裾(壁厚<1要素の頂点の割合。実測 17.29% 対
-    0.79%)を見る(docs/TOPOPT.md「メッシュ化(marching cubes + Taubin平滑化)」)。平均・中央値では埋もれる。
+    0.79%)を見る(docs/TOPOPT.md「測った指標」)。平均・中央値では埋もれる。
     """
     if verts.shape[0] < 2:
         return float("inf")
