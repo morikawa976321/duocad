@@ -14,8 +14,8 @@
  *      **足りない理由が画面に文で出ている**(コンソールではなく)。
  *   2. **荷重は面ごとに大きさ・向きを持てる**(面Aへ200Nの下向き、面Bへ50Nの法線)。
  *      **2枚目を置いても1枚目は消えない**(上書き代入)。`clear_loads` で1枚だけ外せる。
- *   3. **最小部材幅を打つと解像度の目盛りが作り直される**。**添字0が既定でいちばん粗く**、
- *      右へ動かすほど要素数と予想時間が増える(＝細かい方向にだけ動く目盛り)。
+ *   3. **解像度の目盛りは条件面から作られる**。**添字0が既定でいちばん粗く**、
+ *      右へ動かすほど要素数が増える(＝細かい方向にだけ動く目盛り。所要時間は付かない)。
  *   4. **走らせると進捗が画面に出て、中断できる。** 中断したとき文書は1ビットも
  *      変わっていない(メッシュボディが増えていない)。
  *   5. **保持ソリッドがこの解像度で表現できていないと、消えない通知が画面に出る**
@@ -47,9 +47,6 @@ const timeout = Number.parseInt(options.timeout ?? '60000', 10)
 /** 最適化1回ぶんの待ち。**既定の60秒では足りない**(実測 約60秒 + 機械の熱状態で1.7倍)。 */
 const runTimeout = Number.parseInt(options['run-timeout'] ?? '420000', 10)
 const workdir = mkdtempSync(path.join(tmpdir(), 'duocad-optimize-run-'))
-
-/** 最小部材幅[mm]。6.0 → 要素サイズの上限 4.0mm(= 6.0 / 1.5)。 */
-const RMIN_MM = 6.0
 
 async function main() {
   const executablePath = findBrowser()
@@ -277,27 +274,19 @@ async function main() {
     ok('[3] clear_loads で選んだ1枚だけ外れ、残った面の200Nはそのまま')
 
     // ================================================================== 4. 解像度の目盛り
-    console.log('\n[4] 最小部材幅 → 解像度の目盛り(添字0が既定=いちばん粗い。右へだけ動く)')
-    await typeInto('#optimize-rmin', RMIN_MM)
+    console.log('\n[4] 解像度の目盛り(添字0が既定=いちばん粗い。右へだけ動く)')
     await waitFor(
-      (rmin) => {
-        const resolution = window.__duocad.optimizeResolution
-        return Boolean(resolution) && Math.abs((resolution.from_rmin_mm ?? -1) - rmin / 1.5) < 1e-9
-      },
-      '最小部材幅を打っても解像度が取り直されない',
-      [RMIN_MM],
+      () => Boolean(window.__duocad.optimizeResolution?.steps?.length),
+      '解像度の目盛りが用意されない',
     )
     const ladder = await page.evaluate(() => {
       const resolution = window.__duocad.optimizeResolution
       return {
         max: resolution.max_element_size_mm,
         min: resolution.min_element_size_mm,
-        steps: resolution.steps.map((s) => [s.element_size_mm, s.element_count, s.seconds_typical]),
+        steps: resolution.steps.map((s) => [s.element_size_mm, s.element_count]),
       }
     })
-    if (Math.abs(ladder.max - RMIN_MM / 1.5) > 1e-9) {
-      fail(`要素サイズの上限が rmin/1.5 でない: ${ladder.max}`)
-    }
     if (ladder.steps.length < 2) fail(`目盛りの段が足りない: ${ladder.steps.length}`)
     if (Math.abs(ladder.steps[0][0] - ladder.max) > 1e-9) {
       fail(`添字0が上限側(いちばん粗い)でない: ${ladder.steps[0][0]} vs ${ladder.max}`)
@@ -305,18 +294,12 @@ async function main() {
     for (let i = 1; i < ladder.steps.length; i += 1) {
       if (!(ladder.steps[i][0] < ladder.steps[i - 1][0])) fail('目盛りが細かい方向へ単調でない')
       if (!(ladder.steps[i][1] > ladder.steps[i - 1][1])) fail('右へ動かしても要素数が増えない')
-      if (!(ladder.steps[i][2] > ladder.steps[i - 1][2])) fail('右へ動かしても予想時間が増えない')
     }
     const sliderMin = await page.evaluate(() => document.querySelector('#optimize-resolution').min)
     if (sliderMin !== '0') fail(`スライダーが粗い側へ動ける(min=${sliderMin})`)
-    const estimateText = await text('#optimize-estimate')
-    if (!estimateText || !estimateText.includes('2〜3倍の幅')) {
-      fail(`予想時間が「幅で読む値」だと画面に書かれていない: ${estimateText}`)
-    }
     ok(
-      `[4] 目盛り ${ladder.steps.length}段 / 上限 ${ladder.max.toFixed(2)}mm(=rmin/1.5)・` +
-        `既定 ${ladder.steps[0][1]}要素 → 最細 ${ladder.steps[ladder.steps.length - 1][1]}要素。` +
-        '予想時間は幅であることが画面に書いてある',
+      `[4] 目盛り ${ladder.steps.length}段 / 上限 ${ladder.max.toFixed(2)}mm・` +
+        `既定 ${ladder.steps[0][1]}要素 → 最細 ${ladder.steps[ladder.steps.length - 1][1]}要素`,
     )
 
     // ================================================================== 5. 走らせて中断する

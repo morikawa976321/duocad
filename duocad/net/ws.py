@@ -846,9 +846,17 @@ class Server:
             )
             return
 
+        # **新しい引数に加えて、旧引数(`rmin_mm`/`max_iter`/`material_min_mm3`/
+        # `material_max_mm3`)も転送する。** ここで黙って落とすと、旧引数を送ってきた
+        # クライアントには何も届かず「無視された」のと区別が付かない —— 転送して
+        # `session.run_optimization` に断らせることで、`OptimizeInputError` が
+        # `optimize_error` イベントとして画面へ返る(計画書§6.2「不支持と分かるエラーにする」)。
         kwargs = {
             key: message[key]
-            for key in ("rmin_mm", "element_size_mm", "target_safety_factor", "name")
+            for key in (
+                "element_size_mm", "target_safety_factor", "max_evaluations", "name",
+                "rmin_mm", "max_iter", "material_min_mm3", "material_max_mm3",
+            )
             if message.get(key) is not None
         }
         # **開発用の可視化を頼まれたか**(画面の `?debug=space` / `?debug=anchors` /

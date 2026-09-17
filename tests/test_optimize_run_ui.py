@@ -92,9 +92,11 @@ def test_steps_start_at_the_coarse_end(session: Session) -> None:
     assert steps[-1]["element_size_mm"] == pytest.approx(limits["min_element_size_mm"])
 
 
-def test_steps_get_finer_costlier_and_slower(session: Session) -> None:
-    """3つとも単調であること。**要素数だけを見ても足りない** —— 予想時間が単調でないと、
-    「右へ動かすと時間を払う」という画面の説明が嘘になる。
+def test_steps_get_finer_and_costlier(session: Session) -> None:
+    """要素サイズ・要素数の両方とも単調であること。**予想時間は付けない**
+
+    (計画書§6.2「所要時間は旧SIMP係数を使わない。初回は不明と表示する」——段階5でこの
+    フィールド自体を廃止した)。
     """
     _setup_four_conditions(session)
     steps = optimize_run.resolution_limits(session.document)["steps"]
@@ -103,25 +105,9 @@ def test_steps_get_finer_costlier_and_slower(session: Session) -> None:
         assert current["index"] == previous["index"] + 1
         assert current["element_size_mm"] < previous["element_size_mm"]
         assert current["element_count"] > previous["element_count"]
-        assert current["seconds_typical"] > previous["seconds_typical"]
         assert current["element_count"] <= optimize_run.MAX_ELEMENTS
-
-
-def test_min_member_width_moves_the_coarse_end(session: Session) -> None:
-    """最小部材幅を打つと**上限側(既定)が動く**。`rmin_mm / 1.5` が条件面の要求より
-    厳しければそちらが勝つ(`20260904-1704` の契約②の min)。
-    """
-    _setup_four_conditions(session)
-    loose = optimize_run.resolution_limits(session.document)
-    tight = optimize_run.resolution_limits(session.document, rmin_mm=3.0)
-    # `rmin_mm / 1.5` を、実格子の要素サイズへ切り下げた値(`optimize_run._snap_to_grid`)。
-    lo, hi = optimize_run._condition_bbox(session.document)
-    assert tight["steps"][0]["element_size_mm"] <= 3.0 / 1.5
-    assert tight["steps"][0]["element_size_mm"] == pytest.approx(
-        optimize_run._snap_to_grid(lo, hi, 3.0 / 1.5)
-    )
-    assert tight["steps"][0]["element_size_mm"] < loose["steps"][0]["element_size_mm"]
-    assert tight["steps"][0]["element_count"] > loose["steps"][0]["element_count"]
+        assert "seconds_typical" not in current
+        assert "seconds_worst" not in current
 
 
 def test_steps_are_plain_values(session: Session) -> None:
@@ -175,13 +161,10 @@ def test_conditions_command_returns_the_problems_verbatim(session: Session) -> N
 
 def test_resolution_command_carries_the_ladder(session: Session) -> None:
     _setup_four_conditions(session)
-    connection = _dispatch(session, {"cmd": "optimize_resolution", "rmin_mm": 3.0})
+    connection = _dispatch(session, {"cmd": "optimize_resolution"})
     reply = connection.of_type("optimize_resolution")[0]
-    lo, hi = optimize_run._condition_bbox(session.document)
-    assert reply["steps"][0]["element_size_mm"] <= 3.0 / 1.5
-    assert reply["steps"][0]["element_size_mm"] == pytest.approx(
-        optimize_run._snap_to_grid(lo, hi, 3.0 / 1.5)
-    )
+    limits = optimize_run.resolution_limits(session.document)
+    assert reply["steps"][0]["element_size_mm"] == pytest.approx(limits["max_element_size_mm"])
     assert reply["feasible"] is True
     assert "error" not in reply
 
@@ -193,6 +176,20 @@ def test_resolution_without_condition_faces_is_not_an_error_toast(session: Sessi
     connection = _dispatch(session, {"cmd": "optimize_resolution"})
     reply = connection.of_type("optimize_resolution")[0]
     assert "拘束面" in reply["error"]
+    assert not connection.of_type("error")
+
+
+def test_resolution_rejects_the_old_rmin_argument_without_a_toast(session: Session) -> None:
+    """**旧引数(`rmin_mm`)が届いたら、黙って無視せず分かるエラーにする**
+
+    (計画書§6.2)。この口は元々「まだ設定の途中」を非トーストで運ぶ経路
+    (`ValueError` → `{"error": ...}`)を持っているので、そこへ乗せる。
+    """
+    _setup_four_conditions(session)
+    connection = _dispatch(session, {"cmd": "optimize_resolution", "rmin_mm": 3.0})
+    reply = connection.of_type("optimize_resolution")[0]
+    assert "rmin_mm" in reply["error"]
+    assert "steps" not in reply
     assert not connection.of_type("error")
 
 
@@ -241,6 +238,28 @@ def _run_to_completion(session: Session, message: dict) -> tuple:
         return server, connection
 
     return asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "kwarg", ["rmin_mm", "max_iter", "material_min_mm3", "material_max_mm3"]
+)
+def test_run_optimization_rejects_the_old_arguments_with_a_named_error(
+    session: Session, kwarg: str
+) -> None:
+    """**旧引数(`rmin_mm`/`max_iter`/`material_min_mm3`/`material_max_mm3`)が届いたら、
+
+    黙って無視せず `optimize_error` として断る**(計画書§6.2)。`net/ws.py` がこれらを
+    転送し(`_optimize_start` のkwargs構築)、`session.run_optimization` が
+    `OptimizeInputError` で断る配線を4つとも確かめる。
+    """
+    _setup_four_conditions(session)
+    server, connection = _run_to_completion(
+        session, {"cmd": "run_optimization", kwarg: 3.0}
+    )
+    reply = connection.of_type("optimize_error")[0]
+    assert kwarg in reply["message"]
+    assert reply.get("cancelled") is not True
+    assert connection.of_type("optimize_result") == []
 
 
 def test_a_successful_run_is_saved_to_disk_even_with_no_screen_watching(

@@ -733,68 +733,61 @@ export interface OptimizeConditionsReport {
 /**
  * 解像度の目盛り1段。**添字0がいちばん粗い**(＝既定)で、進むほど細かい。
  *
- * `seconds_typical` / `seconds_worst` は**予測ではなく2〜3倍の幅で読む値**である
- * (`optimize_run.estimate_seconds` の `accuracy`)。画面はそれを添えて出すこと。
+ * **所要時間は付かない**(計画書§6.2「所要時間は旧SIMP係数を使わない。初回は不明と
+ * 表示する」)——走らせる前は実測が無いので、要素数だけで判断する。
  */
 export interface OptimizeResolutionStep {
   index: number
   element_size_mm: number
   element_count: number
-  seconds_typical: number
-  seconds_worst: number
 }
 
 /**
  * 要素サイズの上限・下限・目盛り(`optimize_run.resolution_limits`)。
  *
- * **`error` が入っていたら他のキーは無い** —— 条件面がまだ1枚も無いなど、
- * 「設定の途中」で見積もれない状態(サーバは赤い札にせずここへ入れて返す)。
+ * **`error` が入っていたら他のキーは無い** —— 条件面がまだ1枚も無い、または旧引数
+ * (`rmin_mm`)が届いたなど、「この版では見積もれない」状態(サーバは赤い札にせず
+ * ここへ入れて返す)。
  */
 export interface OptimizeResolutionPayload {
   error?: string
   max_element_size_mm?: number
   min_element_size_mm?: number
   default_element_size_mm?: number
-  from_rmin_mm?: number | null
   from_condition_faces_mm?: number
   max_elements?: number
   feasible?: boolean
   steps?: OptimizeResolutionStep[]
-  estimate?: {
-    element_count: number
-    max_iter: number
-    evaluations: number
-    seconds_per_evaluation: number
-    seconds_typical: number
-    seconds_worst: number
-    accuracy: string
-  }
 }
 
 /**
  * 進捗1件(`optimize_run.run()` の `progress`)。`phase` ごとにキーが増える
- * (`20260904-1704` の契約①)ので、共通の3つだけを必須にする。
+ * (`20260904-1704` の契約①)ので、共通の2つだけを必須にする。
+ *
+ * **`binary_search.find_best_feasible` は評価ごとのコールバックを持たない**
+ * (`duocad/optimize_run.py` の `_ProgressPump` docstring)ので、`phase: 'search'` の
+ * 進捗は探索を始めるときの1件だけで、終わるまで次は来ない。
  */
 export interface OptimizeProgress {
   phase: string
   message: string
-  evaluation: number
-  iteration?: number
   design_elements?: number
-  material_mm3?: number
-  safety_factor?: number
-  outcome?: string
-  compliance?: number
-  volfrac?: number
-  change?: number
 }
 
 /**
- * 実行の結果。**`state` で3つに分岐する**(`20260904-1704` の契約①)。
+ * 実行の結果。**`state` で分岐する**(`20260904-1704` の契約①、段階5で3値→6値へ拡張)。
+ * `no_feasible_found` / `input_contradiction` / `resolution_insufficient` は
+ * `binary_search.SearchResult.status` をそのまま渡したもの(計画書§8段階4の契約)。
  * **`"done"` 以外では文書は1ビットも変わっていない。**
  */
 export interface OptimizeResultPayload {
-  state: 'done' | 'empty_condition_faces' | 'unrepresented_regions'
+  state:
+    | 'done'
+    | 'empty_condition_faces'
+    | 'unrepresented_regions'
+    | 'no_feasible_found'
+    | 'input_contradiction'
+    | 'resolution_insufficient'
   warning: string | null
   body_id: string | null
   name: string | null
@@ -803,9 +796,9 @@ export interface OptimizeResultPayload {
   safety_factor: number | null
   target_safety_factor: number
   material_mm3: number | null
-  achieved_material_mm3: number | null
-  converged: boolean | null
   evaluations: number
+  /** 探索の終了理由(`neighbourhood_exhausted` / `evaluation_limit` / ...)。 */
+  termination: string | null
   element_size_mm: number
   design_elements: number
   seconds: number
@@ -815,7 +808,6 @@ export interface OptimizeResultPayload {
 
 /** 実行の摘み。**省いたものはコアの既定**(既定＝いちばん粗くて安い設定)。 */
 export interface OptimizeRunOptions {
-  rminMm?: number | null
   elementSizeMm?: number | null
   name?: string | null
   /**
@@ -993,9 +985,9 @@ export interface Session {
   optimizeConditions(): void
   /**
    * 要素サイズの上限・下限・目盛りを聞く(応答は `onOptimizeResolution`)。
-   * **軽い**(条件面のbboxを数枚測るだけ)ので、最小部材幅を打つたびに呼んでよい。
+   * **軽い**(条件面のbboxを数枚測るだけ)ので、条件が変わるたびに呼んでよい。
    */
-  optimizeResolution(rminMm: number | null): void
+  optimizeResolution(): void
   /**
    * 走らせる。**待たずに返る** —— 進捗は `onOptimizeProgress`、結果は `onOptimizeResult`
    * へ届き、結果が文書へ入ったことは通常の状態配信として別途来る。
@@ -1301,13 +1293,12 @@ export function createSession(hooks: SessionHooks): Session {
     optimizeConditions() {
       send({ cmd: 'optimize_conditions' })
     },
-    optimizeResolution(rminMm) {
-      send({ cmd: 'optimize_resolution', rmin_mm: rminMm })
+    optimizeResolution() {
+      send({ cmd: 'optimize_resolution' })
     },
     runOptimization(options) {
       send({
         cmd: 'run_optimization',
-        rmin_mm: options.rminMm ?? null,
         element_size_mm: options.elementSizeMm ?? null,
         name: options.name ?? null,
         // **空配列は送らない。** 古いサーバは知らないキーを無視するだけだが、

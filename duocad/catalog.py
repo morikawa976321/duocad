@@ -1372,23 +1372,15 @@ COMMANDS: tuple[Command, ...] = (
         name="optimize_resolution",
         category="protocol",
         description="",
-        params=(
-            Param(
-                "rmin_mm",
-                "number",
-                "最小部材幅[mm](省略すると要素サイズの上限は条件面だけで決まる)",
-                required=False,
-            ),
-        ),
         session="optimize_resolution",
         ws="special",
         mcp=False,
         changes_document=False,
         note=(
-            "**軽い**(OCCTは条件面のbboxを数枚測るだけ)ので、最小部材幅を打つたびに"
-            "呼んでよい。返る `steps` が**粗い側の端から細かい方向へだけ**動く目盛りで、"
-            "各段に予想時間が付く。**時間は入力にしない**(時間から解像度を逆算すると、"
-            "最小部材幅と条件面の要求を黙って割る)"
+            "**軽い**(OCCTは条件面のbboxを数枚測るだけ)。返る `steps` が**粗い側の端から"
+            "細かい方向へだけ**動く目盛り。**時間は付けない**(計画書§6.2 —— 走らせる前は"
+            "実測が無い)。**引数は無い**(密度フィルタ半径`rmin_mm`は二値探索に無い概念。"
+            "届いたら `{\"error\": ...}` として断る、`OptimizeInputError` 経由)"
         ),
     ),
     Command(
@@ -1396,9 +1388,13 @@ COMMANDS: tuple[Command, ...] = (
         category="protocol",
         description="",
         params=(
-            Param("rmin_mm", "number", "最小部材幅[mm]", required=False),
             Param("element_size_mm", "number", "要素サイズ[mm]。省くと上限側(既定)", required=False),
             Param("target_safety_factor", "number", "目標安全率", required=False),
+            Param(
+                "max_evaluations", "number",
+                "削除・追加・置換探索の評価予算。省くと既定(binary_search.find_best_feasibleの既定)",
+                required=False,
+            ),
             Param("name", "string", "結果のメッシュボディの名前", required=False),
         ),
         session="run_optimization",
@@ -1411,7 +1407,10 @@ COMMANDS: tuple[Command, ...] = (
         note=(
             "**重い**(既定の設定でも数十秒〜数分)。`net/ws.py` が `asyncio.to_thread` で"
             "回し、進捗は `optimize_progress`、結果は `optimize_result` として配る"
-            "(応答は状態配信ではない)。**失敗しても文書は1ビットも変わらない**"
+            "(応答は状態配信ではない)。**失敗しても文書は1ビットも変わらない**。"
+            "旧引数(`rmin_mm`/`max_iter`/`material_min_mm3`/`material_max_mm3`)は"
+            "この版では扱えず、届くと `OptimizeInputError` を伴う `optimize_error` になる"
+            "(計画書§6.2)"
         ),
     ),
     Command(

@@ -43,9 +43,6 @@ const workdir = mkdtempSync(path.join(tmpdir(), 'duocad-optimize-debug-'))
 /** 目で見るための控え(`/screenshots/` は `.gitignore` 対象)。**合否には使わない。** */
 const shotDir = options.shots ?? path.join(path.dirname(workdir), 'duocad-debug-shots')
 
-/** 最小部材幅[mm]。6.0 → 要素サイズの上限 4.0mm(= 6.0 / MIN_RMIN=1.5)。 */
-const RMIN_MM = 6.0
-
 async function main() {
   const executablePath = findBrowser()
   console.log(`smoke-optimize-debug: ${executablePath}`)
@@ -179,20 +176,10 @@ async function main() {
     await page.click('#optimize-enter')
     await waitFor(() => window.__duocad.optimizeMode === true, 'モードに入らない')
     await waitFor(() => window.__duocad.optimizeConditions?.ready === true, '条件がそろわない')
-    // 最小部材幅を打って、いちばん粗い段(既定)で回す。
-    await page.click('#optimize-rmin')
-    await page.keyboard.down('Control')
-    await page.keyboard.press('KeyA')
-    await page.keyboard.up('Control')
-    await page.keyboard.press('Backspace')
-    await page.type('#optimize-rmin', String(RMIN_MM), { delay: 15 })
+    // いちばん粗い段(既定)のまま回す。
     await waitFor(
-      (rmin) => {
-        const resolution = window.__duocad.optimizeResolution
-        return Boolean(resolution?.steps) && Math.abs((resolution.from_rmin_mm ?? -1) - rmin / 1.5) < 1e-9
-      },
-      '解像度の目盛りが取り直されない',
-      [RMIN_MM],
+      () => Boolean(window.__duocad.optimizeResolution?.steps?.length),
+      '解像度の目盛りが用意されない',
     )
 
     const partsBefore = await page.evaluate(() => window.__duocad.parts.length)

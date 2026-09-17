@@ -35,8 +35,11 @@ DEFAULT_MU = -0.53
 # −0.003%(12反復の −0.21% より小さい)、最小肉厚は縮まない。
 DEFAULT_ITERS = 30
 DEFAULT_SPACING = (1.0, 1.0, 1.0)  # [mm]。1要素=1mmという既存の描画規約に合わせた値。
-# **実寸は呼ぶ側が `spacing=` で渡す**(`optimize_run` は格子の実spacingを渡す)ので、
-# ここは素の格子の既定である。
+# **`optimize_run` はここへ実spacingを渡さない**(既定の要素添字空間のまま呼ぶ)。
+# 実寸への変換は呼び出し側の `optimize_run._mesh_to_world`
+# (`grid.origin + verts * grid.spacing`)が一括して行う契約 —— ここで実spacingを渡すと
+# 二重に掛かってメッシュが格子の外へ大きく外れる(`build_surface_from_mask` の
+# docstring・`optimize_run._run` のコメントに同じ注意)。
 DEFAULT_PAD = 1
 def apply_density_masks(
     rho: np.ndarray,
@@ -353,6 +356,53 @@ def build_surface(
     seconds = time.perf_counter() - t0
     return MeshResult(
         rho_clean=rho_clean,
+        verts_raw=verts_raw,
+        faces=faces,
+        verts_smooth=verts_smooth,
+        volume_raw=mesh_volume(verts_raw, faces),
+        volume_smooth=mesh_volume(verts_smooth, faces),
+        seconds=seconds,
+        level=level,
+        spacing=spacing,
+        lam=lam,
+        mu=mu,
+        n_iter=n_iter,
+        interpolation_ratios=interpolation_ratios,
+    )
+
+
+@trace.stage('surface-from-mask')
+def build_surface_from_mask(
+    mask: np.ndarray,
+    *,
+    level: float = DEFAULT_LEVEL,
+    spacing: tuple[float, float, float] = DEFAULT_SPACING,
+    lam: float = DEFAULT_LAMBDA,
+    mu: float = DEFAULT_MU,
+    n_iter: int = DEFAULT_ITERS,
+    pad_width: int = DEFAULT_PAD,
+) -> MeshResult:
+    """確定済みの二値マスクを直接メッシュ化する(計画書§3・§8段階5の唯一の入口)。
+
+    `build_surface` と違い `apply_density_masks`(保持/除外の塗り直し)・`remove_islands`
+    (浮島除去)を**しない**。呼び出し側が渡すマスクは既に `acceptance.inspect` の6条件に
+    合格し、`binary_search.resolve_islands` で単一連結成分に絞られている確定マスクである
+    ——ここでもう一度どちらかを掛けると、探索が確定した形状を検査を経ずに書き換えることになる
+    (計画書§3「候補ごとのメッシュ生成・STL出力は廃止する」と表裏、確定後の1回だけがこの入口)。
+    """
+    t0 = time.perf_counter()
+    rho = np.asarray(mask, dtype=np.float64)
+    padded = pad_field(rho, width=pad_width)
+    trace.snapshot('surface-fields', masked=rho, rho_clean=rho, padded=padded)
+    verts_raw, faces, interpolation_ratios = run_marching_cubes(
+        padded, level=level, spacing=spacing, pad_width=pad_width
+    )
+    trace.snapshot('marching-cubes', vertices=verts_raw, faces=faces,
+                   interpolation_ratios=interpolation_ratios)
+    verts_smooth = taubin_smooth(verts_raw, faces, lam=lam, mu=mu, n_iter=n_iter)
+    seconds = time.perf_counter() - t0
+    return MeshResult(
+        rho_clean=rho,
         verts_raw=verts_raw,
         faces=faces,
         verts_smooth=verts_smooth,

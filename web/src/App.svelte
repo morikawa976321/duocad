@@ -36,7 +36,6 @@
     needsSketchId,
   } from './commands/features'
   import { entityHandles, ghostCopies, snapToSketchEntity, type GhostSource } from './entityKinds'
-  import { expressionValue } from './expression'
   import { IMPORT_STEP, changesDocument } from './commands/files'
   import {
     OPTIMIZE_EMPTY_START_VERBS,
@@ -513,8 +512,6 @@
   // どれも操作ログに載らない(`duocad/catalog.py` の `category="protocol"`)。
   let optimizeConditions = $state<OptimizeConditionsReport | null>(null)
   let optimizeResolution = $state<OptimizeResolutionPayload | null>(null)
-  /** 最小部材幅の入力欄の**生の文字列**。数にできない途中の打鍵を握り潰さない。 */
-  let optimizeRminText = $state('')
   /** 解像度の目盛りの位置。**0が既定(いちばん粗い)**で、増やすほど細かい。 */
   let optimizeStepIndex = $state(0)
   let optimizeRunning = $state(false)
@@ -522,12 +519,6 @@
   let optimizeProgress = $state<OptimizeProgress | null>(null)
   /** **次に走らせるまで消えない通知**(トーストは8秒で消えるので、結果の信用度はこちら)。 */
   let optimizeNotice = $state<OptimizeNotice | null>(null)
-
-  /** 入力欄の文字列を、サーバへ渡せる数へ(空・数でない・0以下は「指定なし」)。 */
-  const optimizeRminMm = $derived.by(() => {
-    const value = expressionValue(optimizeRminText)
-    return value !== null && value > 0 ? value : null
-  })
 
   /** いま選ばれている段。目盛りが縮んだときのために毎回丸め直す。 */
   const optimizeStep = $derived.by(() => {
@@ -543,7 +534,6 @@
     // あいだ古い塊が重なって見え、切り分けの道具が切り分けを妨げる。
     clearOptimizeDebug()
     session.runOptimization({
-      rminMm: optimizeRminMm,
       elementSizeMm: optimizeStep?.element_size_mm ?? null,
       debug: debugKindsFor(debugFlags),
     })
@@ -623,7 +613,8 @@
   })
 
   /**
-   * 結果を受けた。**`state` で3つに分かれる**(`20260904-1704` の契約①)。
+   * 結果を受けた。**`state` で分かれる**(`'done'` と、それ以外の5値。`20260904-1704`
+   * の契約①、段階5で `binary_search.SearchResult.status` の3値ぶん増えた)。
    *
    * **`"done"` 以外は文書が1ビットも変わっていない**ので、そのことを通知に書く ——
    * 「走ったのに何も増えていない」を、利用者が画面から読めるようにするため。
@@ -634,11 +625,13 @@
     optimizeProgress = null
     if (result.state === 'done') {
       const safety = result.safety_factor === null ? '—' : result.safety_factor.toFixed(2)
+      const material = result.material_mm3 === null ? '—' : Math.round(result.material_mm3).toLocaleString()
       optimizeNotice = {
         kind: result.warning ? 'bad' : 'info',
         lines: [
           `結果を「${result.name}」として足した(三角形 ${result.triangle_count} 枚 ・ ` +
-            `安全率 ${safety} ・ ${Math.round(result.seconds)}秒)`,
+            `安全率 ${safety} ・ 体積 ${material}mm^3 ・ 評価 ${result.evaluations}回 ・ ` +
+            `終了理由 ${result.termination ?? '—'} ・ ${Math.round(result.seconds)}秒)`,
           '元のボディは1つも消えていない。結果は表示とSTL書き出しだけができる(編集はできない)',
           ...(result.warning ? [result.warning] : []),
         ],
@@ -654,12 +647,14 @@
       if (debugFlags.voxel && result.body_id) optimizeDebugHiddenBodyId = result.body_id
       return
     }
+    // **`warning` は`state`ごとにサーバが作った具体的な一言**(`optimize_run._search_failure_warning`
+    // / `format_condition_face_warning` / `format_region_warning`)なので、ここで
+    // 汎用の言い直しを重ねない —— 「文書は変わっていない」の1点だけ添える。
     optimizeNotice = {
       kind: 'bad',
       lines: [
         result.warning ?? '結果を作れなかった',
-        '文書は1ビットも変わっていない(結果のボディは足していない)。' +
-          '解像度を1段細かくするか、条件面を大きい面に取り直すこと',
+        '文書は1ビットも変わっていない(結果のボディは足していない)',
       ],
     }
   }
@@ -2265,8 +2260,8 @@
   /**
    * 最適化モードにいる間、**条件の点検と解像度の目盛りを取り直す**。
    *
-   * 引き金は3つ: モードの出入り / 配りものの `state.optimize` が変わった(4 verb を
-   * 打った・undoした・部品を消した) / 最小部材幅を打ち替えた。**どちらも軽い**
+   * 引き金は2つ: モードの出入り / 配りものの `state.optimize` が変わった(4 verb を
+   * 打った・undoした・部品を消した)。**どちらも軽い**
    * (点検は文書を舐めるだけ、解像度は条件面のbboxを数枚測るだけ)ので、
    * 状態が届くたびに聞き直してよい。
    *
@@ -2275,10 +2270,9 @@
    */
   $effect(() => {
     void optimize
-    void optimizeRminMm
     if (!optimizeMode || status !== 'open' || optimizeRunning) return
     session.optimizeConditions()
-    session.optimizeResolution(optimizeRminMm)
+    session.optimizeResolution()
   })
 
   /**
@@ -2755,13 +2749,11 @@
         <OptimizePanel
           conditions={optimizeConditions}
           resolution={optimizeResolution}
-          rminText={optimizeRminText}
           stepIndex={optimizeStepIndex}
           running={optimizeRunning}
           cancelling={optimizeCancelling}
           progress={optimizeProgress}
           notice={optimizeNotice}
-          onRmin={(text) => (optimizeRminText = text)}
           onStep={(index) => (optimizeStepIndex = index)}
           onRun={runOptimization}
           onCancel={() => session.cancelOptimization()}
