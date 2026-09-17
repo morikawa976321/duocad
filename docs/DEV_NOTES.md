@@ -6,6 +6,8 @@
 
 - **数値計算（numpy 2.4.6 / scipy 1.17.1）は `.venv` にしか無い。** 既定の `python`（3.14）には無く、matplotlib は
   どの venv にも無い（図が要るなら標準ライブラリだけで PNG/SVG を書く）。実行は `.\.venv\Scripts\python.exe`。
+- **`.venv` は `uv sync --frozen` で `uv.lock` から作り直せる**（2026-09-18 実測）。依存は `uv add` で `pyproject.toml` と
+  `uv.lock` に入れる。`uv pip install` で手入れしたものは作り直すと消え、そのときは収集エラー（`No module named ...`）で初めて気づく。
 - **同じリポジトリ内でも行末はファイルごとに違う。** `core.autocrlf=true` で git の blob は LF だが、作業ツリーは
   ツールが直接書いたファイル（`web/src/viewport.ts` 等）が LF、checkout を経たファイル（`App.svelte` / `viewCube.ts` 等）が
   CRLF。`git diff` も `git status` も差分を出さないので目視では分からない。踏んだ形:

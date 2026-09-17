@@ -6,6 +6,7 @@
 
 - **main は動作確認済みの完成品。作業は develop で行う**（リポジトリ直下のチェックアウトは develop）。
 - **develop から main へのマージはすべて PR を経由する。** main へ直接コミット・push しない。
+  GitHub のブランチ保護で main は PR 必須（承認数0・管理者にも適用・force push と削除は禁止）なので、直接 push は拒否される。
 - ワークツリーで作業するときも起点と戻し先は develop（手順と落とし穴は [docs/DEV_NOTES.md](docs/DEV_NOTES.md)「ワークツリーでの作業」）。
 
 ## コメント

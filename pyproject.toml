@@ -6,7 +6,11 @@ requires-python = ">=3.11,<3.12"
 dependencies = [
     "build123d==0.11.1",
     "cadquery-ocp-novtk==7.9.3.1.1",
+    # topopt_checks/render_*.py の画像出力。pillow と scikit-image はこの版で topopt のテストが通る(2026-09-18 実測)
+    "pillow==12.3.0",
     "pytest>=8.0",
+    # duocad/topopt/mesh.py の marching_cubes
+    "scikit-image==0.26.0",
     # M1: duocad/server.py の WebSocket。固定版で入れる(ローカル専用ツールなので上げなければ壊れない)
     "websockets==17.0.1",
 ]
