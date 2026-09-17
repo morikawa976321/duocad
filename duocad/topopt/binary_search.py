@@ -565,8 +565,8 @@ class _Budget:
 def _candidate_budget(max_evaluations: int, max_candidates: Optional[int], shape: tuple) -> int:
     """走査予算。既定は評価1回あたり `max(DEFAULT_CANDIDATES_PER_EVALUATION, 格子のセル数)`。
 
-    セル数は最小ブロック(1セル)で格子を1周調べる数。評価1回の前に1周ぶん調べることまでは
-    許し、それを超えて評価へ進まない走査だけを止める。
+    セル数は最小ブロック(1セル)で格子を1周調べる数で、合計が「評価予算 × 1周ぶん」を超えたら止める。
+    製品の中断は `threading.Event.is_set`(実測 約20 ns/回)で、ブロックごとに呼んでも走査(約10 µs/ブロック)の1%未満。
     """
     if max_candidates is not None:
         return int(max_candidates)

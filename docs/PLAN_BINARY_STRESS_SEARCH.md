@@ -115,9 +115,11 @@ round-robin(先頭の親から次の子を1つ取り、その親を末尾へ回�
 `diagnostics['frontier']` に残す —— 捨てたことがある探索はキューが空になっても `frontier_truncated`
 であって `neighbourhood_exhausted` とは言わない。「追加の連続回数」は、あるマスクへ至るまでの
 **連続する**'add'操作の回数を親ごとに持たせ、上限に達した親は'add'の子を生成しない('delete'・
-'replace'はこの回数を毎回0へ戻す)。評価予算(`max_evaluations`)とは別に候補記述の予算
-(`max_candidates`。既定は `DEFAULT_CANDIDATES_PER_EVALUATION`=64 × 評価予算)があり、重複・無効な
-記述だけで評価数が増えないときも `generation_limit` で止まる。中断は生成中・評価前に見る。
+'replace'はこの回数を毎回0へ戻す)。評価予算(`max_evaluations`)とは別に候補ブロックの走査予算
+(`max_candidates`。親から調べたブロックを、有効・無効・重複を問わず1つ1と数える。既定は
+`max(DEFAULT_CANDIDATES_PER_EVALUATION=64, 格子のセル数)` × 評価予算)があり、無効なブロック・重複
+だけで評価数が増えないときも `generation_limit` で止まる。中断と走査予算はブロックを1つ調べる前ごとに見る
+(`_scan_descriptors` は無効なブロックを None として出し、巡回の手番は有効な候補でだけ進むので順序は変わらない)。
 初期合格探索(段階3)と削減探索(段階4)は同じ frontier・予算・中断の契約を使う。
 
 3つの値は次の小型題材で決め、2026-09-17 の候補管理の変更後に再測定して据え置いた:
@@ -144,9 +146,15 @@ round-robin(先頭の親から次の子を1つ取り、その親を末尾へ回�
   (`tests/test_binary_search.py::test_default_budget_and_frontier_settings_reach_the_optimum_on_this_tiny_fixture`)。
   より大きい題材では既定のままでは収束せず`evaluation_limit`で終わる(想定どおり——大域最小の
   保証はしない、§1)。
-- **候補記述の予算の倍率 `DEFAULT_CANDIDATES_PER_EVALUATION`=64**: 上記題材で評価1回あたりの
-  生成記述は約9(重複を含む)、hanger 4.8mm の60評価では 113/60 ≈ 2。64 はどちらにも効かない
-  余裕で、重複しか生成しない病的な親を止めるためだけの上限。
+- **走査予算 `max(64, 格子のセル数)` × 評価予算**: 64 は上記題材で決めた値(評価1回あたりの
+  生成記述は約9、hanger 4.8mm の60評価では 113/60 ≈ 2)。数える対象を「マスクにした記述」から
+  「調べたブロック」へ広げたとき、1セルのブロックで格子を1周調べる数(= セル数)を評価1回あたりの
+  上限に加えた。実測(2026-09-17、36×66×52 = 123,552 セル): 1ブロックの走査は約 10 µs
+  (削除・追加・置換の3操作で 370,656 ブロック 3.6〜3.9 秒)で、格子1周ぶん(123,552 ブロック)は約 1.2 秒。
+  同じ格子の6条件の評価1回は約 15 秒(全材料の初回 14.6 秒)なので、評価1回あたり1周までの走査は評価の
+  1割以下に収まる。hanger 4.8mm の60評価では走査 424,486 ブロックに対してマスクにした記述は 113
+  (`output/hanger_fix_verification/review-fixes-spacing-4.8-budget-60.json`)で、走査を 64 × 評価予算(3,840)で
+  数えていたら最初の数評価で `generation_limit` になっていた。既定の予算(7,413,120)に対しては 5.7%。
 - **既知の簡略化(未実装のまま残した部分)**: 上記104〜105行が求める「frontierの順位は
   幾何合格、応力評価成功、目標達成、体積、安全率の余裕を使う」は実装していない
   (親の round-robin と各親の中の固定順序だけ)。体積昇順のような安価な事前指標だけで
@@ -177,7 +185,7 @@ round-robin(先頭の親から次の子を1つ取り、その親を末尾へ回�
 
 終了理由は少なくとも `neighbourhood_exhausted`(frontier を捨てずに使い切った)、
 `frontier_truncated`(容量超過で親を捨てたことがある。近傍を尽くしたとは言わない)、
-`evaluation_limit`、`generation_limit`(候補記述の予算)、`cancelled`、`no_feasible_found`、
+`evaluation_limit`、`generation_limit`(候補ブロックの走査予算)、`cancelled`、`no_feasible_found`、
 `evaluation_error`、入口の `resolution_insufficient` / `boundary_mapping_failed` /
 `input_contradiction`。形状の合否とは別の欄にする。
 「指定した近傍で改善なし」を大域収束・最小性証明と表示しない。

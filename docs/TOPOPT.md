@@ -63,8 +63,8 @@
 | 既定スレッド数 `PARALLEL_THREADS` | **総コアの半分** | `fem.PARALLEL_THREADS`(`_default_thread_count()`) | 「既定スレッド数を総コアの半分にする」 |
 | 削除・追加・置換探索のfrontier容量 `DEFAULT_FRONTIER_CAPACITY` | **48** | `binary_search.DEFAULT_FRONTIER_CAPACITY` | 計画書§4.3 |
 | 追加操作が連続してよい回数の上限 `DEFAULT_MAX_CONSECUTIVE_ADDS` | **2** | `binary_search.DEFAULT_MAX_CONSECUTIVE_ADDS` | 計画書§4.3 |
-| 候補記述の予算の倍率(評価予算に掛ける) `DEFAULT_CANDIDATES_PER_EVALUATION` | **64** | `binary_search.DEFAULT_CANDIDATES_PER_EVALUATION` | 計画書§4.3 追記(2026-09-17 候補管理) |
-| 条件面の節点重心が面の重心から離れてよい上限(要素サイズ比) `MAPPING_CENTROID_LIMIT_ELEMENTS` | **3.0** | `anchor.MAPPING_CENTROID_LIMIT_ELEMENTS` | 「境界条件の確定(2026-09-17)」 |
+| 候補ブロックの走査予算(評価1回あたり。既定は `max(この値, 格子のセル数)` × 評価予算) `DEFAULT_CANDIDATES_PER_EVALUATION` | **64** | `binary_search.DEFAULT_CANDIDATES_PER_EVALUATION` / `_candidate_budget` | 計画書§4.3 追記 |
+| 条件面の作用位置のずれの許容(CAD面の面積重心から節点重心まで、モーメント誤差は この値×\|F\|) | **対応付けの探索半径**(既定 1.0 要素) | `anchor.position_limit` | 「境界条件の確定(2026-09-17)」 |
 | 要素サイズを指定しないときの最長軸の要素数 `DEFAULT_ELEMENTS_LONG_AXIS` | **40** | `design_space.DEFAULT_ELEMENTS_LONG_AXIS` | 塊の導出(`derive`) |
 | ヤング率の既定 `DEFAULT_YOUNGS_MODULUS_MPA` | **2000** MPa | `material.DEFAULT_YOUNGS_MODULUS_MPA` | 応力の実単位換算(`stress.UnitScale`) |
 
@@ -3594,9 +3594,20 @@ N = max( round(p × 案1の要素数),        # 摘み。PICK_RATIO
 allowed_nodes=...)` に渡し、**標本ごとに球内の許可節点だけへ重みを配った確定表**を作る(配ってから
 捨てるのではない。球内に許可節点が無い標本は対応不能として面・座標付きで残し、遠い節点へ移さない)。
 `anchor.condition_mapping` が面ごとに節点数・対応不能標本・被覆・合力(数値許容差 `atol 1e-10·max(1,|F|)`)・
-重心のずれ(格子近似の許容差: 全標本が対応した面では球の半径以内。門は `MAPPING_CENTROID_LIMIT_ELEMENTS`=3要素、
-面の取り違え級を捕まえる粗い網)・格子原点まわりのモーメント(`c×F` と `Σp×f`)を検証し、不成立なら
-`state="boundary_mapping_failed"` で探索を始めない。確定後は再配分せず、候補の削除で確定節点が材料から
+**作用位置**(CAD面の面積重心から節点の担当面積重心まで ≤ 探索半径 r、荷重面では格子原点まわりのモーメント
+`Σp×f` と CAD面への一様荷重 `c_CAD×F` の差 ≤ r·|F|。`anchor.position_limit`)を検証し、不成立なら
+`state="boundary_mapping_failed"` で探索を始めない。探索の入口(`binary_search.find_initial_feasible`)も
+表を全設計空間で検証し直すので、直接APIで不成立の表を渡しても止まる。
+
+許容を探索半径にしたのは、それが対応規則そのもの(各標本の面積を半径 r 以内の節点へだけ配る)の分解能だから:
+稜線の所有権で面積を失わない限り、節点の重心は標本の重心から凸結合で必ず r 以内に収まる。越えるのは稜線で
+片側の面積を大きく失った・三角形分割がCAD面から離れた・別の面を掴んだのいずれか。1面に1つの荷重ベクトルを
+面積比で配る限り `|ΔM| = |Δc×F| ≤ |Δc|·|F|` なのでモーメントの門は重心の門より緩いが、重心は担当面積から、
+モーメントは `load_vector` の自由度配列から別々に計算しているので、配り方が面積とずれたときはモーメントだけが
+気づく。`optimize_run._check_anchor_centroids`(文書のボディの面から取り直した重心と比べる、面添字の対応の網)も
+同じ許容を使う。hanger 4.8mm での実測(`output/hanger_fix_verification/review-fixes-spacing-4.8-budget-60.json`、
+探索半径 4.775 mm): 拘束面10・7 は 1.968 mm(0.41 要素)、23 は 1.602 mm(0.34 要素)、荷重面31 は 0.139 mm
+(0.029 要素)、モーメント誤差 3.29 N·mm(許容 955 N·mm)。三角形群の重心とCAD面の重心の差は 1e-12 mm 以下。確定後は再配分せず、候補の削除で確定節点が材料から
 離れたらその候補が不合格になる(`acceptance.condition_check`)。確定した節点・荷重・拘束と対応付け規則は
 評価条件ハッシュ(`binary_search.evaluation_identifier`)に入る。記録は `boundary-mapping`
 (`docs/TOPOPT_RECORDING.md`)。

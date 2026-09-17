@@ -187,11 +187,11 @@ Dで未被覆の固定節点は、D内での削除・追加・置換では被覆
 
 | 修正 | 場所 | 内容 |
 |---|---|---|
-| A 初期境界条件 | `duocad/topopt/anchor.py` | `build_anchors(..., allowed_nodes=)`: 標本ごとに球内の許可節点だけへ重みを配る(配ってから捨てない)。球内に許可節点が無い標本は対応不能として面ごとに数・面積・座標を残し、遠い節点へ移さない。`active_nodes` をここへ移し `acceptance` が再輸出。`condition_mapping`(面ごとの節点数・対応不能標本・被覆・合力・重心・モーメント・対応距離の検証)、`format_mapping_warning`、`MAPPING_CENTROID_LIMIT_ELEMENTS` |
+| A 初期境界条件 | `duocad/topopt/anchor.py` | `build_anchors(..., allowed_nodes=)`: 標本ごとに球内の許可節点だけへ重みを配る(配ってから捨てない)。球内に許可節点が無い標本は対応不能として面ごとに数・面積・座標を残し、遠い節点へ移さない。`active_nodes` をここへ移し `acceptance` が再輸出。`condition_mapping`(面ごとの節点数・対応不能標本・被覆・合力・重心・モーメント・対応距離の検証)、`format_mapping_warning`、`MAPPING_CENTROID_LIMIT_ELEMENTS`(§10 で `position_limit` に置き換え) |
 | A | `duocad/optimize_run.py` | `_map_boundary_conditions`(導出出力に接する節点への確定表と検証、幾何の表との差、記録 `boundary-mapping`)。`_run` は確定表が不成立なら `state="boundary_mapping_failed"` で探索を始めない。面重心の門・デバッグ表示(`stage="mapping"`)・`_build_search_conditions` は全て確定表を使う(`_build_search_conditions` を直接呼ぶ検査・CLIでも同じ表)。`_search_failure_warning` は評価予算の増加を `evaluation_limit` のときだけ案内する |
 | A | `duocad/topopt/acceptance.py` | `inspect_document`(過去記録の読み取り)も島除去前の材料に対応付けた表で検査し、対応付けが不成立なら条件5を合格にしない |
 | B 入口診断 | `duocad/topopt/binary_search.py` | `uncovered_condition_nodes`。`find_initial_feasible` の入口で `resolution_insufficient` → `boundary_mapping_failed`(候補生成0回・FEM0回、表が確定表か幾何の表かを診断に持つ) → `input_contradiction` の順。評価条件ハッシュに確定した節点・拘束自由度・節点荷重・対応付け規則を含める(`_boundary_signature`)。`SearchConditions.mapping` |
-| C 候補管理 | `duocad/topopt/binary_search.py` | 候補は `(操作, ブロック領域)` の記述(`candidate_descriptors`)で遅延生成し、評価の直前に `_materialize` でだけマスクにする。frontier は親マスクを容量以内で保持し(`_Frontier`)、親を round-robin、各親の中で大きさ降順・削除→追加→置換の巡回。容量超過は最古の親を捨てて記録し、その探索は `frontier_truncated`。評価予算とは別の候補記述の予算(`max_candidates`、既定 64×評価予算、`generation_limit`)。生成中・評価前の中断。初期・削減の両段階が同じ契約。親・最良合格は読み取り専用。除去した島のマスクを保持しない |
+| C 候補管理 | `duocad/topopt/binary_search.py` | 候補は `(操作, ブロック領域)` の記述(`candidate_descriptors`)で遅延生成し、評価の直前に `_materialize` でだけマスクにする。frontier は親マスクを容量以内で保持し(`_Frontier`)、親を round-robin、各親の中で大きさ降順・削除→追加→置換の巡回。容量超過は最古の親を捨てて記録し、その探索は `frontier_truncated`。評価予算とは別の候補記述の予算(`max_candidates`、既定 64×評価予算、`generation_limit`。§10 で走査予算に置き換え)。生成中・評価前の中断。初期・削減の両段階が同じ契約。親・最良合格は読み取り専用。除去した島のマスクを保持しない |
 | UI | `web/src/session.ts` / `App.svelte` | `state` に `boundary_mapping_failed`、`boundary_mapping` 欄、デバッグ配信の `stage: 'mapping'`(型と注釈のみ。`web/dist` は未ビルド) |
 | 検査・記録 | `topopt_checks/verify_hanger_fix.py`(新設)、`topopt_checks/diagnose_initial_space.py`(幾何の表と確定表を段階ごとに照合) | 出力は `output/hanger_fix_verification/*.json`、`output/initial_space_diagnosis/stages-after-fix.json` |
 
@@ -236,3 +236,22 @@ Dで未被覆の固定節点は、D内での削除・追加・置換では被覆
   (`verify_hanger_fix.py` は探索までで止め、メッシュ化 0 回を確認する)。
 - 2.4mm の 1 評価 137 秒(CG)は本修正で変えていない。
 - `web/dist` は再ビルドしていない(型と注釈の変更のみ。`npm run build` は次に UI を触るときに)。
+
+## 10. レビュー後の修正(2026-09-17)
+
+§9 のレビューで残った3点を閉じた。
+
+| 指摘 | 変更 | 検査 |
+|---|---|---|
+| 直接APIで対応付けの不合格を見逃す(節点が材料上に残れば、対応不能標本があっても進む) | `find_initial_feasible` の入口で、`table` が `AnchorTable` なら `condition_mapping` を全設計空間で検証し直す。渡された `conditions.mapping` と再検証のどちらかが不成立なら `boundary_mapping_failed`(候補生成0回・FEM0回、診断に `entry_mapping`) | `test_anchor_mapping.py::test_the_search_entry_rejects_unmapped_samples_even_when_every_node_is_on_material`、`test_binary_search.py::test_a_failed_mapping_report_stops_the_direct_api_even_when_every_node_is_on_material` |
+| 作用位置の精度判定が未完成(モーメントは記録だけ、基準は標本重心、重心の許容は取り違え検出用の3要素) | 基準をCAD面の面積重心へ。許容は `anchor.position_limit` = 対応付けの探索半径 r(重心のずれ ≤ r、モーメント誤差 ≤ r·\|F\|)で、両方を門にする。`_check_anchor_centroids` も同じ許容。根拠は `docs/TOPOPT.md`「境界条件の確定」 | `test_the_position_gate_measures_from_the_cad_centroid_within_the_search_radius`、`test_the_moment_gate_catches_a_load_vector_that_does_not_follow_the_assigned_areas` |
+| 無効候補を探し飛ばす間は中断・生成予算が効かない | `_scan_descriptors` が無効なブロックも None として1つずつ出し、`_pull` がブロックごとに中断と走査予算を見る。予算は調べたブロック数(既定 `max(64, セル数)` × 評価予算。根拠は計画書 §4.3 追記) | `test_binary_search.py::test_a_long_run_of_invalid_blocks_is_bounded_by_the_scan_budget_and_cancellation`(32³ で最後のブロックだけが有効な親: 予算100なら100ブロック、中断50回目なら50ブロックで止まる) |
+
+新しい検査4件は修正前のコード(d459ebc)ではすべて落ちることを確認した。
+
+hanger 4.8mm・予算60の再実行(`output/hanger_fix_verification/review-fixes-spacing-4.8-budget-60.json`):
+試行の履歴(操作・結果・体積の列)、採用マスクのハッシュ、終了理由 `evaluation_limit`、`ok` 11 / `no_component` 48 は
+§9 の記録と完全に一致した(走査の順序を変えていない)。走査は 424,486 ブロック、マスクにした記述 113(重複 54)。
+作用位置の門は全条件面で合格(重心のずれ 0.029〜0.41 要素、探索半径 = 1 要素。三角形群とCAD面の重心の差は 1e-12 mm 以下)。
+2.4mm(`review-fixes-spacing-2.4-entry.json`、探索は省略): 作用位置の門は全条件面で合格(重心のずれ 0.0039〜0.11 要素、
+荷重面31 のモーメント誤差 1.41 N·mm / 許容 481 N·mm)、初期全材料マスクは6条件全合格(安全率 163.1)。
