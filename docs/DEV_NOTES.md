@@ -100,9 +100,9 @@
 
 ## ワークツリーでの作業（2026-09-16実測、issue #9）
 
-issue の実装は **main を汚さないようにワークツリー上で行う**（本人指示 2026-09-16、issue #6 断面表示の依頼時）。issue ごとのワークツリー（`.claude/worktrees/issue-9-shell` / `issue-10-measure` 等）を並べて並行して進めるのが作法。
+issue の実装は **作業ブランチを汚さないようにワークツリー上で行う**（本人指示 2026-09-16、issue #6 断面表示の依頼時）。issue ごとのワークツリー（`.claude/worktrees/issue-9-shell` / `issue-10-measure` 等）を並べて並行して進めるのが作法。ワークツリーのブランチは **develop から切り、develop へ戻す**（main は動作確認済みの完成品で、develop → main は PR だけ。2026-09-18 本人指示、`CLAUDE.md`「ブランチ」）。以下の「本体」はリポジトリ直下のチェックアウト（develop）を指す。
 
-**ジャンクションを張る。** `git worktree add` 直後のワークツリーには gitignore 済みの `.venv` と `web/node_modules` が無く、`npm run check` は依存が解決できず、`web/scripts/server.mjs`（smoke の起点）は「venv の python が無い」で止まる。main のそれらへジャンクションを張る:
+**ジャンクションを張る。** `git worktree add` 直後のワークツリーには gitignore 済みの `.venv` と `web/node_modules` が無く、`npm run check` は依存が解決できず、`web/scripts/server.mjs`（smoke の起点）は「venv の python が無い」で止まる。本体のそれらへジャンクションを張る:
 
 ```powershell
 New-Item -ItemType Junction -Path <worktree>\.venv -Target C:\Users\tm976\mf\duocad\.venv
@@ -110,9 +110,11 @@ New-Item -ItemType Junction -Path <worktree>\web\node_modules -Target C:\Users\t
 ```
 
 - ジャンクションは gitignore 対象なので `git status` には出ない。
-- pytest は main の `.venv\Scripts\python.exe -m pytest` をワークツリーの cwd で呼べば足りる（`duocad.__file__` はワークツリー側を指す）。
+- pytest は本体の `.venv\Scripts\python.exe -m pytest` をワークツリーの cwd で呼べば足りる（`duocad.__file__` はワークツリー側を指す）。
+
+**ワークツリーを消す前に、ジャンクションを先に外す。** 2026-09-18、`.venv` へのジャンクションを張ったままのワークツリーを削除した処理がジャンクションを辿り、**本体の `.venv` の中身を丸ごと消した**（`uv sync --frozen` で作り直した）。リンクだけを外すのは PowerShell の `[System.IO.Directory]::Delete('<worktree>\.venv', $false)`（同日、本体の `.venv` が残ることを実測）。外してから `git worktree remove` する。再帰削除（`Remove-Item -Recurse`、エクスプローラーでのフォルダ削除など）をジャンクション入りのワークツリーへ向けない。
 - smoke が配る画面は `web/dist` なので、ワークツリーで先に `npm run build` を回す。
 
-**素の python スクリプトは main を import する。** `.venv` は `_editable_impl_duocad.pth` で main の checkout を sys.path に入れているため、ワークツリーで scratch のスクリプトを `python script.py` で走らせるとワークツリーではなく main の `duocad` を import する（ワークツリーで足した属性が「無い」と言われ、原因が分かるまで1往復溶かした）。ワークツリーのコードを確実に読ませる経路は `pytest`（pyproject の `pythonpath = ["."]`）、`topopt_checks/*.py`（`_bootstrap` がリポジトリ直下を `sys.path[0]` へ）、`python -m duocad...` / `python -c`（cwd が先頭に入る）の3つ。それ以外は `PYTHONPATH=<worktree>` を明示するか `sys.path.insert(0, ...)` を書く。
+**素の python スクリプトは本体を import する。** `.venv` は `_editable_impl_duocad.pth` で本体の checkout を sys.path に入れているため、ワークツリーで scratch のスクリプトを `python script.py` で走らせるとワークツリーではなく本体の `duocad` を import する（ワークツリーで足した属性が「無い」と言われ、原因が分かるまで1往復溶かした）。ワークツリーのコードを確実に読ませる経路は `pytest`（pyproject の `pythonpath = ["."]`）、`topopt_checks/*.py`（`_bootstrap` がリポジトリ直下を `sys.path[0]` へ）、`python -m duocad...` / `python -c`（cwd が先頭に入る）の3つ。それ以外は `PYTHONPATH=<worktree>` を明示するか `sys.path.insert(0, ...)` を書く。
 
-**Browser pane の `preview_start` はワークツリーの `.claude/launch.json` を見ない**（起動元リポジトリ直下の launch.json を読み、main の `web/src` を配る）。回避: `web/scripts/server.mjs` の `startServer` は `REPO_ROOT` をスクリプト位置から解くので、ワークツリーのそれを `file:///` で import した使い捨ての puppeteer スクリプトを scratchpad に置き、MCP（HTTP `/mcp`）で素材を作って UI 操作とスクリーンショットを撮る。Browser pane 経由の確認は諦める。
+**Browser pane の `preview_start` はワークツリーの `.claude/launch.json` を見ない**（起動元リポジトリ直下の launch.json を読み、本体の `web/src` を配る）。回避: `web/scripts/server.mjs` の `startServer` は `REPO_ROOT` をスクリプト位置から解くので、ワークツリーのそれを `file:///` で import した使い捨ての puppeteer スクリプトを scratchpad に置き、MCP（HTTP `/mcp`）で素材を作って UI 操作とスクリーンショットを撮る。Browser pane 経由の確認は諦める。
