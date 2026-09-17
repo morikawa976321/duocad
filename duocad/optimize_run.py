@@ -727,15 +727,17 @@ def _debug_voxel_payload(kind: str, stage: str, grid, mask, *, limit: int) -> di
     }
 
 
-def _debug_anchor_payload(stage: str, space) -> Optional[dict]:
+def _debug_anchor_payload(stage: str, space, table=None) -> Optional[dict]:
     """拘束面・荷重面に**実際に割り当たった格子節点**のワールド座標。
 
-    出所は導出が持ち帰った `DesignSpace.table`(`_check_anchor_centroids` が距離を測るのと
-    同じ表)。表が無い塊(検査が直接組んだもの)では `None` を返す。
+    出所は `table`(製品経路では探索が使う確定表。`_check_anchor_centroids` が距離を測るのと
+    同じ表)。省くと導出が持ち帰った `DesignSpace.table`。表が無い塊(検査が直接組んだもの)では
+    `None` を返す。
     """
     import numpy as np
 
-    table = getattr(space, "table", None)
+    if table is None:
+        table = getattr(space, "table", None)
     if table is None:
         return None
     node_grid = table.node_grid
@@ -787,10 +789,10 @@ class _DebugSink:
             _debug_voxel_payload("space", stage, space.grid, space.mask, limit=DEBUG_VOXEL_LIMIT)
         )
 
-    def anchors(self, stage: str, space) -> None:
+    def anchors(self, stage: str, space, table=None) -> None:
         if not self.wants("anchors"):
             return
-        payload = _debug_anchor_payload(stage, space)
+        payload = _debug_anchor_payload(stage, space, table)
         if payload is not None:
             self._sink(payload)
 
@@ -855,11 +857,13 @@ def _run(
     戻り値(`state` で分岐すること。`"done"` 以外では `body_id` は `None`):
 
         {"state": "done" | "empty_condition_faces" | "unrepresented_regions"
+                  | "boundary_mapping_failed"
                   | "no_feasible_found" | "input_contradiction" | "resolution_insufficient",
          "body_id": BodyId | None, "name": str | None,
          "warning": str | None,
          "empty_condition_faces": [診断, ...],     # `20260904-1556` と同じ形
          "unrepresented_regions": [診断, ...],     # 事後検出(下記)
+         "boundary_mapping": {...} | None,        # 確定表の検証(`anchor.condition_mapping`)
          "resolution": resolution_limits() の戻り, "element_size_mm": float,
          "grid": {"origin","spacing","shape"}, "design_elements": int,
          "safety_factor": float|None, "target_safety_factor": float,
@@ -870,19 +874,22 @@ def _run(
          "triangle_count": int|None, "vertex_count": int|None,
          "seconds": float}
 
-    後半3つの `state`(`no_feasible_found` / `input_contradiction` / `resolution_insufficient`)
-    は `binary_search.SearchResult.status` を**そのまま**渡したもの(段階4の契約
-    「製品配線側はこの4値をそのままUI/ログへ渡せばよい」)。
+    後半の `state`(`no_feasible_found` / `input_contradiction` / `resolution_insufficient` /
+    `boundary_mapping_failed`)は `binary_search.SearchResult.status` を**そのまま**渡したもの
+    (段階4の契約「製品配線側はこの値をそのままUI/ログへ渡せばよい」)。`boundary_mapping_failed`
+    は探索の前、確定表の検証(`_map_boundary_conditions`)で不成立になったときにもここから返す
+    (探索の入口検査と同じ語)。
 
     **戻り値は素の値だけでできている**(`json.dumps` がそのまま通る)。画面(`20260904-1705`)は
     これをWebSocketへそのまま載せられる —— `DesignSpace` や `AnchorTable` のような
     実体をここから外へ出さない(出すと配れる形が壊れ、キャッシュの持ち主も増える)。
 
     **デバッグ表示**は `debug(event: dict)` + `debug_kinds`(`DEBUG_KINDS` の部分集合)。
-    **頼まれたときだけ**塊(`space`)・面アンカーの節点(`anchors`)を導出直後に1回
-    (`stage="derive"`)、最終確定マスク(`rho`。値は0/1の二値)を探索の後に1回
-    (`stage="final"`)配る —— 画面の `?debug=space` / `?debug=anchors` / `?voxel=1` の材料
-    である。塊は探索を通して1つなので、最初と最後で違う塊を出すことはない。
+    **頼まれたときだけ**塊(`space`)を導出直後に1回(`stage="derive"`)、面アンカーの節点
+    (`anchors`)を境界条件の確定直後に1回(`stage="mapping"`。探索・FEMが実際に使う確定表の
+    節点であって、導出が接続の確認に使った幾何の表ではない)、最終確定マスク(`rho`。値は0/1の
+    二値)を探索の後に1回(`stage="final"`)配る —— 画面の `?debug=space` / `?debug=anchors` /
+    `?voxel=1` の材料である。塊は探索を通して1つなので、最初と最後で違う塊を出すことはない。
     頼まれなければ配列を1本も作らないので、既定の実行の費用は1ビットも増えない。
     **戻り値には入れない**(素の値だけという契約を保つのと、結果メッセージが数MBに
     膨らむのを避けるため)。中身は `_DebugSink` の各メソッド、座標はワールドmm。
@@ -933,10 +940,9 @@ def _run(
         message=f"塊 {space.element_count} 要素(格子 {space.grid.shape})",
         design_elements=space.element_count,
     )
-    # **塊とアンカーはここで1回だけ配る**(`?debug=space` / `?debug=anchors`)。探索の全候補が
-    # 同じ塊を使うので、最後に別の塊を配り直すことはない —— 最後に届くのは密度場 `rho` だけ。
+    # **塊はここで1回だけ配る**(`?debug=space`)。探索の全候補が同じ塊を使うので、最後に別の塊を
+    # 配り直すことはない —— 最後に届くのは密度場 `rho` だけ。アンカーは確定表ができてから配る。
     dbg.space("derive", space)
-    dbg.anchors("derive", space)
 
     common = {
         "resolution": limits,
@@ -967,6 +973,7 @@ def _run(
             warning=an.format_condition_face_warning(empty_faces),
             empty_condition_faces=empty_faces,
             unrepresented_regions=[],
+            boundary_mapping=None,
             safety_factor=None,
             material_mm3=None,
             evaluations=0,
@@ -975,12 +982,6 @@ def _run(
             vertex_count=None,
             seconds=time.perf_counter() - started,
         )
-
-    # **荷重・拘束が本当に選んだ面に載ったか**を、実際にできたアンカーで測り直す。
-    # `_verify_face_mapping` は「まとめた形の面添字」の対応を見るが、こちらは
-    # 「その面添字で作られた節点集合が、その面のところにあるか」を見る(2枚目の網)。
-    anchor_check = _check_anchor_centroids(doc, space)
-    common["anchor_check"] = anchor_check
 
     # **事後検出。** 保持・除外ソリッドが、この解像度で1つでも表現できていないなら
     # 最適化を回さずに戻る(同じ運び方)。
@@ -994,6 +995,7 @@ def _run(
             warning=format_region_warning(unrepresented),
             empty_condition_faces=[],
             unrepresented_regions=unrepresented,
+            boundary_mapping=None,
             safety_factor=None,
             material_mm3=None,
             evaluations=0,
@@ -1003,9 +1005,43 @@ def _run(
             seconds=time.perf_counter() - started,
         )
 
+    # **境界条件の確定。** 導出出力に接する節点だけへ条件面を対応付け直した確定表を作り、
+    # 面ごとの対応・荷重保存・作用位置を検証する。以後の検査・島処理・FEM・デバッグ表示は
+    # 全てこの表を使う。不成立なら候補生成もFEMも始めない(探索の入口検査と同じ語で返す)。
+    from .topopt import anchor as an
+
+    table, mapping = _map_boundary_conditions(space, bundle)
+    pump.check()
+    if mapping["status"] != "pass":
+        return dict(
+            common,
+            state="boundary_mapping_failed",
+            body_id=None,
+            name=None,
+            warning=an.format_mapping_warning(mapping),
+            empty_condition_faces=[],
+            unrepresented_regions=unrepresented,
+            boundary_mapping=mapping,
+            safety_factor=None,
+            material_mm3=None,
+            evaluations=0,
+            termination="boundary_mapping_failed",
+            triangle_count=None,
+            vertex_count=None,
+            seconds=time.perf_counter() - started,
+        )
+
+    # **荷重・拘束が本当に選んだ面に載ったか**を、確定表の節点で測り直す。
+    # `_verify_face_mapping` は「まとめた形の面添字」の対応を見るが、こちらは
+    # 「その面添字で作られた節点集合が、その面のところにあるか」を見る(2枚目の網)。
+    anchor_check = _check_anchor_centroids(doc, space, table=table)
+    common["anchor_check"] = anchor_check
+    # **アンカーはここで1回だけ配る**(`?debug=anchors`)。探索が使う確定表の節点。
+    dbg.anchors("mapping", space, table=table)
+
     from .topopt import binary_search
 
-    conditions = _build_search_conditions(doc, space, bundle, opts)
+    conditions = _build_search_conditions(doc, space, bundle, opts, table=table, mapping=mapping)
     search_kwargs: Dict[str, Any] = {}
     if opts.max_evaluations is not None:
         search_kwargs["max_evaluations"] = int(opts.max_evaluations)
@@ -1043,7 +1079,7 @@ def _run(
         raise OptimizeCancelled("形状探索を中断した")
 
     if search_result.status != 'feasible':
-        # 段階4の契約「SearchResult.status が 'feasible' 以外なら、この4値をそのまま
+        # 段階4の契約「SearchResult.status が 'feasible' 以外なら、この値をそのまま
         # UI/ログへ渡せばよい」——ここではそれに日本語の一言を添えるだけ。
         return dict(
             common,
@@ -1053,6 +1089,7 @@ def _run(
             warning=_search_failure_warning(search_result),
             empty_condition_faces=[],
             unrepresented_regions=unrepresented,
+            boundary_mapping=mapping,
             safety_factor=None,
             material_mm3=None,
             evaluations=int(search_result.evaluations),
@@ -1112,6 +1149,7 @@ def _run(
         warning=format_region_warning(unrepresented) if unrepresented else None,
         empty_condition_faces=[],
         unrepresented_regions=unrepresented,
+        boundary_mapping=mapping,
         safety_factor=float(best.safety_factor),
         material_mm3=float(best.material_mm3),
         evaluations=int(search_result.evaluations),
@@ -1127,20 +1165,17 @@ def _run(
     )
 
 
-#: アンカーの節点重心が条件面の重心からどこまで離れてよいか(要素サイズの倍数)。
-#: **粗い網である** —— 狙いは「別のボディの面を掴んだ」級の取り違え(このタスクの題材では
-#: 50mm 以上離れる)を実行時にも捕まえることで、隣接面との取り違えは
-#: `_verify_face_mapping` が決定的に落とす。
-ANCHOR_CENTROID_LIMIT_ELEMENTS = 3.0
-
-
-def _check_anchor_centroids(doc: "Document", space) -> dict:
+def _check_anchor_centroids(doc: "Document", space, *, table=None) -> dict:
     """条件面の**節点集合が本当にその面のところにあるか**を測る(実行時の2枚目の網)。
 
     面添字の取り違えは例外を出さない。`_verify_face_mapping` は B-rep の側で対応を確かめるが、
     それを通り抜けた場合(まとめ方を将来変えたとき等)、ここが最後に気づける場所である。
     測るのは `anchor.FaceAnchor.centroid`(節点の担当面積で重み付けした重心)と、
-    **その面の面積重心**(`query.face_centroid`)の距離。
+    **その面の面積重心**(`query.face_centroid`)の距離。許容は要素サイズの
+    `anchor.MAPPING_CENTROID_LIMIT_ELEMENTS` 倍(**粗い網** —— 狙いは「別のボディの面を掴んだ」級の
+    取り違え〈このタスクの題材では 50mm 以上離れる〉を実行時にも捕まえることで、隣接面との
+    取り違えは `_verify_face_mapping` が決定的に落とす)。`table` を渡すとその表(探索用の確定表)を
+    測り、省くと導出の幾何の表(`space.table`)を測る。
 
     **条件に焼き込んである `center` を使ってはいけない。** あれは `Face.center()` の既定
     (`CenterOf.GEOMETRY`)で、曲面では面パッチから離れる —— hanger の荷重面(トーラス)では
@@ -1151,13 +1186,15 @@ def _check_anchor_centroids(doc: "Document", space) -> dict:
     import numpy as np
 
     from . import query
+    from .topopt import anchor as an
 
-    table = getattr(space, "table", None)
+    if table is None:
+        table = getattr(space, "table", None)
     if table is None:
         return {}
     setup = doc.optimize
-    limit = ANCHOR_CENTROID_LIMIT_ELEMENTS * float(space.grid.spacing)
-    out: dict = {"limit_mm": limit}
+    limit = an.MAPPING_CENTROID_LIMIT_ELEMENTS * float(space.grid.spacing)
+    out: dict = {"limit_mm": limit, "table": table.stats.get("mapping", "geometry")}
     # **面ごとに測る。合計や平均で見てはならない** —— 1枚だけ取り違えても、他が合っていれば
     # 平均は許容に収まる。面が増えるほど取り違えは起きやすくなるので、ここは緩めない。
     for key, faces, conditions in (
@@ -1224,10 +1261,60 @@ def _resolve_element_size(limits: dict, requested: Optional[float]) -> float:
     return value
 
 
+def _map_boundary_conditions(space, bundle: ConditionBundle) -> tuple:
+    """導出出力(`space.mask`)に接する節点だけへ条件面を対応付けた**確定表**と、その検証。
+
+    導出が条件ごとの接続の確認に使った幾何の表(`space.table`。材料を見ない)とは別物で、
+    表の `stats["mapping"]`("geometry" / "material")と記録の段階名 `boundary-mapping` で
+    見分ける。検証(`anchor.condition_mapping`)は面ごとの節点数・対応不能標本・被覆・合力・
+    重心・モーメントを持ち、元の幾何の表との差(節点数・被覆されない節点数・節点集合の差)も残す。
+    **確定後は再配分しない** —— 候補の削除で確定節点が材料から離れたら、その候補が不合格になる
+    (`acceptance.condition_check`)。
+    """
+    import numpy as np
+
+    from .topopt import acceptance, trace
+    from .topopt import anchor as an
+
+    allowed = acceptance.active_nodes(space.mask)
+    table = an.build_anchors(space.soup, space.grid, allowed_nodes=allowed)
+    mapping = an.condition_mapping(
+        table, space.fixed_faces, space.load_faces, bundle.forces, material=space.mask
+    )
+    geometry = getattr(space, "table", None)
+    if geometry is not None:
+        live = allowed.ravel()
+        difference: dict = {}
+        for row in mapping["faces"]:
+            face = int(row["face"])
+            before = geometry[face]
+            after = table[face]
+            lost = int((~live[before.node_ids]).sum()) if before.node_count else 0
+            difference[row["condition"]] = {
+                "geometry_nodes": int(before.node_count),
+                "geometry_uncovered_nodes": lost,
+                "mapped_nodes": int(after.node_count),
+                "only_in_geometry": int(np.setdiff1d(before.node_ids, after.node_ids).size),
+                "only_in_mapped": int(np.setdiff1d(after.node_ids, before.node_ids).size),
+                "geometry_assigned_area_mm2": float(before.total_area),
+                "mapped_assigned_area_mm2": float(after.total_area),
+            }
+        mapping["geometry_table_difference"] = difference
+    trace.snapshot(
+        "boundary-mapping",
+        mapping=mapping,
+        table_stats=dict(table.stats),
+        design_mask_hash=space.mask_hash,
+    )
+    return table, mapping
+
+
 def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
-                             opts: OptimizeOptions) -> Any:
+                             opts: OptimizeOptions, *, table=None, mapping=None) -> Any:
     """`DesignSpace` と `ConditionBundle` から `binary_search.SearchConditions` を組み立てる。
 
+    `table` は探索用の確定表(`_map_boundary_conditions`)。省くとここで作る —— 検査・CLIが
+    この関数だけを呼んでも、製品と同じ確定表・同じ入口検査を通る(製品入口だけの防御にしない)。
     `preserves`/`excludes` は `(name, shape)` の対にする —— `acceptance.inspect_document`
     (過去記録を読む読み取りアダプター)が同じ変換をしている(計画書§5)ので、それと
     同じ形にしておく。`bbox_cache=doc.bbox_cache` を渡すのは `_condition_boxes` と同じ理由
@@ -1235,11 +1322,13 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
     """
     from .topopt import binary_search
 
+    if table is None:
+        table, mapping = _map_boundary_conditions(space, bundle)
     preserves = tuple((bid, doc.get_body(bid).shape) for bid in bundle.keep_body_ids)
     excludes = tuple((bid, doc.get_body(bid).shape) for bid in bundle.exclude_body_ids)
     return binary_search.SearchConditions(
         grid=space.grid,
-        table=space.table,
+        table=table,
         fixed_faces=space.fixed_faces,
         load_faces=space.load_faces,
         forces=bundle.forces,
@@ -1247,26 +1336,44 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
         excludes=excludes,
         target_safety_factor=float(opts.target_safety_factor),
         bbox_cache=doc.bbox_cache,
+        mapping=mapping,
     )
 
 
 def _search_failure_warning(search_result: Any) -> str:
-    """`SearchResult.status` が `'feasible'` 以外のときの一言(段階4の契約により4値自体は
+    """`SearchResult.status` が `'feasible'` 以外のときの一言(段階4の契約により値自体は
 
-    そのままUI/ログへ渡す。ここでは日本語の説明を1つ添えるだけ)。
+    そのままUI/ログへ渡す。ここでは日本語の説明を1つ添えるだけ)。**評価予算を増やす案内は
+    予算で終わった(`evaluation_limit`)ときにだけ付ける** —— 境界条件の不整合や近傍の枯渇は
+    予算では直らない。
     """
+    diagnostics = search_result.diagnostics or {}
     if search_result.status == 'input_contradiction':
         return (
             "保持ソリッドが設計空間全体を使っても収まらない(条件が矛盾している)。"
             "保持ソリッド・除外ソリッド・条件面を見直すこと"
         )
     if search_result.status == 'resolution_insufficient':
-        empty = search_result.diagnostics.get('empty_faces', [])
+        empty = diagnostics.get('empty_faces', [])
         return f"この解像度では拘束面・荷重面 {empty} のアンカーが空になる。解像度を上げること"
-    return (
+    if search_result.status == 'boundary_mapping_failed':
+        rows = diagnostics.get('uncovered_condition_nodes', [])
+        names = ", ".join(f"{row['condition']}({row['uncovered_nodes']}/{row['nodes']}節点)" for row in rows)
+        origin = "材料に対応付けた確定表" if diagnostics.get('mapped') else "材料を見ない幾何の表"
+        return (
+            f"拘束面・荷重面の節点が設計空間全体の材料に接していない: {names}(表: {origin})。"
+            "候補の削除・追加・置換では直らない(候補は設計空間の部分集合)ので、"
+            "除外ソリッド・条件面の位置と対応付けを見直すこと"
+        )
+    head = (
         f"6条件に合格するモデルを見つけられなかった({search_result.termination}、"
-        f"評価 {search_result.evaluations}回)。評価予算を増やすか条件を見直すこと"
+        f"評価 {search_result.evaluations}回)。"
     )
+    if search_result.termination == 'evaluation_limit':
+        return head + "評価予算を増やすか条件を見直すこと"
+    if search_result.termination == 'generation_limit':
+        return head + "候補記述の予算(max_candidates)で止まった。条件を見直すか予算を増やすこと"
+    return head + "条件(保持・除外・条件面・目標安全率・解像度)を見直すこと"
 
 
 def _mesh_to_world(verts, grid) -> List[float]:

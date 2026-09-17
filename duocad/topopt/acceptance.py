@@ -22,6 +22,7 @@ from scipy import ndimage
 from duocad import kernel
 
 from . import anchor, fem, stress, voxelize
+from .anchor import active_nodes  # noqa: F401  6条件と探索用の確定表が同じ「材料に接する節点」の定義を使う
 from .material import DEFAULT_ALLOWABLE_MPA, DEFAULT_YOUNGS_MODULUS_MPA
 
 
@@ -83,13 +84,6 @@ def boundary_check(material):
 def connectivity_check(material):
     _, count = ndimage.label(material, structure=ndimage.generate_binary_structure(3, 1))
     return dict(status='pass' if count == 1 else 'fail', components=int(count), neighbourhood=6)
-
-
-def active_nodes(material):
-    nodes = np.zeros(tuple(n + 1 for n in material.shape), dtype=bool)
-    for corner in product(range(2), repeat=3):
-        nodes[tuple(slice(c, c + n) for c, n in zip(corner, material.shape))] |= material
-    return nodes
 
 
 # ---------------------------------------------------------------------------
@@ -357,13 +351,26 @@ def inspect_document(document, rho_clean, rho_before, grid, *, level=0.5, **kwar
     bundle = build_conditions(document)
     soup = voxelize.triangles_from_shape(voxelize._unwrap(bundle.conditions.anchor),
                                          deviation=grid.spacing * voxelize.DEFAULT_DEVIATION_RATIO)
-    table = anchor.build_anchors(soup, grid)
+    # 「元の条件」は材料に対応付けた確定表(`docs/TOPOPT_PRE_SMOOTHING_CHECKS.md`)。過去記録には
+    # 設計空間が無いので、島除去前の材料(候補が使えた材料の上限)に接する節点へ対応付ける。
+    # 対応付けが不成立(対応不能標本など)なら、節点だけを見る条件5を合格にしない。
+    table = anchor.build_anchors(soup, grid, allowed_nodes=anchor.active_nodes(original))
+    mapping = anchor.condition_mapping(table, bundle.conditions.fixed_faces, bundle.conditions.load_faces,
+                                       bundle.forces, material=original)
     setup = document.optimize
     report = inspect(material, original, grid, table=table,
                      fixed_faces=bundle.conditions.fixed_faces, load_faces=bundle.conditions.load_faces,
                      forces=bundle.forces,
                      preserves=[(name, document.get_body(name).shape) for name in setup.preserve_bodies],
                      excludes=[(name, document.get_body(name).shape) for name in setup.exclude_bodies], **kwargs)
+    report['boundary_mapping'] = mapping
+    if mapping['status'] != 'pass':
+        report['checks']['conditions']['status'] = 'fail'
+        report['checks']['conditions']['mapping_reasons'] = {
+            row['condition']: row['reasons'] for row in mapping['faces'] if row['reasons']}
+        statuses = [check['status'] for check in report['checks'].values()]
+        report['status'] = 'fail' if 'fail' in statuses else 'unknown' if 'unknown' in statuses else 'pass'
+        report['exit_code'] = {'pass': 0, 'fail': 1, 'unknown': 2}[report['status']]
     report['level'] = level
     report['threshold_rule'] = 'rho > level'
     report['volumes']['density_integral_before_mm3'] = float(before.sum() * grid.element_volume)

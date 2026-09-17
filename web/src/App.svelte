@@ -565,8 +565,9 @@
   }
 
   /**
-   * デバッグ配信が届いた。塊と面アンカーは `stage: 'derive'` で1回、密度場は `stage: 'final'` で
-   * 1回届く。同じ `kind` が来たら後から来たほうで置き換える。
+   * デバッグ配信が届いた。塊は `stage: 'derive'` で1回、面アンカーは `stage: 'mapping'`(探索が
+   * 使う確定表)で1回、密度場は `stage: 'final'` で1回届く。同じ `kind` が来たら後から来たほうで
+   * 置き換える。
    */
   function handleOptimizeDebug(payload: OptimizeDebugPayload): void {
     if (payload.kind === 'space') optimizeDebugSpace = payload
@@ -613,8 +614,9 @@
   })
 
   /**
-   * 結果を受けた。**`state` で分かれる**(`'done'` と、それ以外の5値。`20260904-1704`
-   * の契約①、段階5で `binary_search.SearchResult.status` の3値ぶん増えた)。
+   * 結果を受けた。**`state` で分かれる**(`'done'` と、それ以外の6値。`20260904-1704`
+   * の契約①、段階5で `binary_search.SearchResult.status` の3値ぶん増え、境界条件の確定で
+   * `boundary_mapping_failed` が増えた)。
    *
    * **`"done"` 以外は文書が1ビットも変わっていない**ので、そのことを通知に書く ——
    * 「走ったのに何も増えていない」を、利用者が画面から読めるようにするため。

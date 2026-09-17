@@ -775,9 +775,11 @@ export interface OptimizeProgress {
 }
 
 /**
- * 実行の結果。**`state` で分岐する**(`20260904-1704` の契約①、段階5で3値→6値へ拡張)。
- * `no_feasible_found` / `input_contradiction` / `resolution_insufficient` は
- * `binary_search.SearchResult.status` をそのまま渡したもの(計画書§8段階4の契約)。
+ * 実行の結果。**`state` で分岐する**(`20260904-1704` の契約①、段階5で3値→6値へ拡張、
+ * 境界条件の確定(2026-09-17)で `boundary_mapping_failed` が増えて7値)。
+ * `no_feasible_found` / `input_contradiction` / `resolution_insufficient` /
+ * `boundary_mapping_failed` は `binary_search.SearchResult.status` をそのまま渡したもの
+ * (計画書§8段階4の契約。`boundary_mapping_failed` は探索の前の確定表の検証からも来る)。
  * **`"done"` 以外では文書は1ビットも変わっていない。**
  */
 export interface OptimizeResultPayload {
@@ -785,6 +787,7 @@ export interface OptimizeResultPayload {
     | 'done'
     | 'empty_condition_faces'
     | 'unrepresented_regions'
+    | 'boundary_mapping_failed'
     | 'no_feasible_found'
     | 'input_contradiction'
     | 'resolution_insufficient'
@@ -804,6 +807,8 @@ export interface OptimizeResultPayload {
   seconds: number
   empty_condition_faces?: Array<Record<string, unknown>>
   unrepresented_regions?: Array<Record<string, unknown>>
+  /** 確定表の検証(`anchor.condition_mapping`)。確定表を作る前に返った状態では `null`。 */
+  boundary_mapping?: Record<string, unknown> | null
 }
 
 /** 実行の摘み。**省いたものはコアの既定**(既定＝いちばん粗くて安い設定)。 */
@@ -832,8 +837,9 @@ export interface OptimizeDebugGrid {
 /**
  * 開発用の可視化1件(`duocad/optimize_run.py` の `_DebugSink`)。**頼んだときしか来ない。**
  *
- * `stage` は `'derive'`(導出直後に届く塊と面アンカー。探索の全候補がこの塊を使うので、塊は
- * これ1回しか届かない)か `'final'`(探索の後に届く、実際に解いた密度場 `rho`)。
+ * `stage` は `'derive'`(導出直後に届く塊。探索の全候補がこの塊を使うので、塊はこれ1回しか
+ * 届かない)、`'mapping'`(境界条件の確定直後に届く面アンカー。探索・FEMが実際に使う確定表の
+ * 節点)、`'final'`(探索の後に届く、実際に解いた密度場 `rho`)。
  * 同じ `kind` が届いたら後から来たほうで置き換えること。
  *
  * `elements` は立っている要素の通し添字(C順 `i*(ny*nz) + j*nz + k`)。
@@ -841,7 +847,7 @@ export interface OptimizeDebugGrid {
  */
 export interface OptimizeDebugPayload {
   kind: OptimizeDebugKind
-  stage: 'derive' | 'final'
+  stage: 'derive' | 'mapping' | 'final'
   grid: OptimizeDebugGrid
   /** `kind` が `'space'` / `'rho'` のとき。 */
   elements?: number[]

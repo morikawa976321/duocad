@@ -70,6 +70,16 @@
 最適化は荷重直下の材料を溶かしにいく(そこに材料が無くても計算上は荷重が入るため)。
 実務上の定石どおり、アンカー節点に接する要素を保持領域(ρ=1)へ固定する口を付けてある
 (`element_mask`)。`design_space.derive` が固定面・荷重面ごとの接続の種(seed)として使う。
+
+## 材料に接する節点だけへ対応付ける(探索用の確定表)
+
+上の表は材料の有無を見ない(幾何の対応表)。探索(`binary_search`)は**全アンカー節点が材料に
+接する**ことを要求するので、設計空間の外にしか無い節点へ配った表をそのまま渡すと、
+全材料マスクでも「荷重・拘束が有効」が落ちる。`build_anchors(..., allowed_nodes=...)` は
+**標本ごとに、球内の節点のうち許可された節点だけへ重みを配る**(配ってから捨てるのではない)。
+球内に許可節点が1つも無い標本は**対応不能**として面ごとに数え、遠い節点へは移さない
+(探す範囲は同じ球 `radius`。`FaceAnchor.unmapped_samples` / `unmapped_positions`)。
+確定表の検証(節点数・対応不能標本・被覆・合力・重心・モーメント)は `condition_mapping`。
 """
 
 from __future__ import annotations
@@ -77,6 +87,7 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass, field
+from itertools import product
 from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
@@ -91,6 +102,27 @@ DEFAULT_RADIUS_RATIO = 1.0
 MAX_SUBDIVISION = 512
 # 1回のベクトル演算で扱う標本点の上限(中間配列を数MBに抑える)。
 SAMPLE_BATCH = 40_000
+#: 対応不能標本の座標を面ごとに何件まで残すか(診断の大きさを抑えるためだけの値)。
+UNMAPPED_SAMPLE_RECORD = 20
+#: 節点集合の面積重み重心が標本点の重心からどこまで離れてよいか(要素サイズの倍数)。
+#: **粗い網である** —— 全標本が対応した面の重心のずれは球の半径(既定1要素)以内に収まる
+#: (各標本の面積は半径内の節点へ配られるので、その重心は標本から半径以内。面の重心は
+#: その面積平均)。3倍は「別の面を掴んだ」級の取り違えを捕まえる値で、稜線の規則で隣の面に
+#: 取られた面積の非対称による1要素前後のずれを落とさない。`optimize_run` の面重心の門と同じ値。
+MAPPING_CENTROID_LIMIT_ELEMENTS = 3.0
+
+
+def active_nodes(material: np.ndarray) -> np.ndarray:
+    """材料セル(bool、要素格子)に角として接する節点のマスク(節点格子 `(nx+1, ny+1, nz+1)`)。
+
+    `acceptance` の6条件「荷重・拘束が有効」と、探索用の確定表(`build_anchors` の
+    `allowed_nodes`)が同じ定義を使う(層をまたぐ契約: ここが変わると両方が同時に変わる)。
+    """
+    material = np.asarray(material, dtype=bool)
+    nodes = np.zeros(tuple(n + 1 for n in material.shape), dtype=bool)
+    for corner in product(range(2), repeat=3):
+        nodes[tuple(slice(c, c + n) for c, n in zip(corner, material.shape))] |= material
+    return nodes
 
 
 def _candidate_offsets(radius_ratio: float) -> np.ndarray:
@@ -189,6 +221,15 @@ class FaceAnchor:
     cad_area: float
     cad_centroid: np.ndarray
     cad_normal: np.ndarray
+    # 標本点(細分した三角形の重心)の面積重み重心。三角形群の面積重心と厳密に一致するので、
+    # 節点集合の重心のずれ(格子近似の誤差)を測る基準になる。
+    sample_centroid: Optional[np.ndarray] = None
+    # `allowed_nodes` 付きで作ったときだけ非零: 球内に許可節点が無かった標本の数・面積・座標。
+    unmapped_samples: int = 0
+    unmapped_area: float = 0.0
+    unmapped_positions: Optional[np.ndarray] = None
+    # 実際に重みが付いた標本→節点の距離の最大(球の半径以下。対応距離の実測)。
+    max_mapping_distance: float = 0.0
 
     @property
     def node_count(self) -> int:
@@ -552,11 +593,18 @@ def build_anchors(
     faces: Optional[Iterable[int]] = None,
     radius_ratio: float = DEFAULT_RADIUS_RATIO,
     sample_ratio: float = DEFAULT_SAMPLE_RATIO,
+    allowed_nodes: Optional[np.ndarray] = None,
 ) -> AnchorTable:
     """面添字 → 節点の対応表を作る。
 
     `faces` を渡すとその面だけを対象にする(既定は全面)。`radius_ratio` は節点を拾う球の
     半径(要素サイズ比)、`sample_ratio` は三角形を細分するときの目標辺長(要素サイズ比)。
+
+    `allowed_nodes`(節点格子と同じ形か平坦な bool)を渡すと、**標本ごとに球内の許可節点だけへ
+    重みを配る**(材料に接する節点だけへ対応付ける探索用の確定表。モジュール docstring)。
+    球内に許可節点が無い標本は対応不能として面ごとに数え、最近傍への退避はしない
+    (`stats["mapping"] == "material"`)。渡さなければ従来どおり材料を見ない幾何の表
+    (`stats["mapping"] == "geometry"`)。
     """
     started = time.perf_counter()
     if not radius_ratio > 0:
@@ -571,6 +619,14 @@ def build_anchors(
     origin = np.asarray(grid.origin, dtype=float)
     n_shape = np.asarray(node_grid.shape, dtype=np.int64)
     ny1, nz1 = int(n_shape[1]), int(n_shape[2])
+    allowed: Optional[np.ndarray] = None
+    if allowed_nodes is not None:
+        allowed = np.asarray(allowed_nodes, dtype=bool).ravel()
+        if allowed.size != node_grid.count:
+            raise ValueError(
+                f"allowed_nodes は節点格子 {node_grid.shape}(節点 {node_grid.count} 個)と"
+                f"同じ大きさであること(いま {allowed.size} 個)"
+            )
 
     a_all, b_all, c_all = soup.triangle_vertices()
     tri_normal = np.cross(b_all - a_all, c_all - a_all)
@@ -598,8 +654,10 @@ def build_anchors(
 
     raw: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     tri_area_of_face: dict[int, float] = {}
+    extras: dict[int, dict] = {}
     fallback_samples = 0
     sample_total = 0
+    unmapped_total = 0
 
     for f in wanted:
         tris = soup.triangles_of_face(f)
@@ -609,32 +667,61 @@ def build_anchors(
             0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1).sum()
         )
         touched: list[np.ndarray] = []
+        sample_area = 0.0
+        sample_moment = np.zeros(3)
+        unmapped_count = 0
+        unmapped_area = 0.0
+        unmapped_pos: list[np.ndarray] = []
+        max_distance = 0.0
         for pts, areas, parents in _iter_samples(a, b, c, target=sample_ratio * h):
             sample_total += pts.shape[0]
+            # 標本の重心は対応の成否によらず全標本で取る(対応後の節点重心と比べる基準)。
+            sample_area += float(areas.sum())
+            sample_moment += (areas[:, None] * pts).sum(axis=0)
             base = np.floor((pts - origin) / h).astype(np.int64)
             cand = base[:, None, :] + offsets[None, :, :]           # (P,C,3)
             valid = np.all((cand >= 0) & (cand < n_shape), axis=2)  # (P,C)
             cand_clipped = np.clip(cand, 0, n_shape - 1)
+            ids = (
+                cand_clipped[:, :, 0] * (ny1 * nz1)
+                + cand_clipped[:, :, 1] * nz1
+                + cand_clipped[:, :, 2]
+            )
+            if allowed is not None:
+                # 許可節点を**重みを計算する前に**選別する。配ってから捨てると標本ごとの
+                # 正規化(単位の分割)が許可外の節点を含めた重みで決まってしまう。
+                valid &= allowed[ids]
             node_pos = origin + h * cand_clipped
             dist = np.linalg.norm(node_pos - pts[:, None, :], axis=2)
             w = np.where(valid, np.maximum(0.0, 1.0 - dist / radius), 0.0)
             wsum = w.sum(axis=1)
             empty = wsum <= 0.0
             if np.any(empty):
-                # 球に節点が1つも入らなかった標本点。最近傍1点へ退避する
-                # (radius >= sqrt(3)/2*spacing なら起こらない)。
-                fallback_samples += int(np.count_nonzero(empty))
-                far = np.where(valid[empty], dist[empty], np.inf)
-                nearest = np.argmin(far, axis=1)
-                w[empty] = 0.0
-                w[np.flatnonzero(empty), nearest] = 1.0
-                wsum = w.sum(axis=1)
+                if allowed is None:
+                    # 球に節点が1つも入らなかった標本点。最近傍1点へ退避する
+                    # (radius >= sqrt(3)/2*spacing なら起こらない)。
+                    fallback_samples += int(np.count_nonzero(empty))
+                    far = np.where(valid[empty], dist[empty], np.inf)
+                    nearest = np.argmin(far, axis=1)
+                    w[empty] = 0.0
+                    w[np.flatnonzero(empty), nearest] = 1.0
+                    wsum = w.sum(axis=1)
+                else:
+                    # 球内に許可節点が無い標本は対応不能。遠い節点へ移さず、面ごとに数えて残す。
+                    unmapped_count += int(np.count_nonzero(empty))
+                    unmapped_area += float(areas[empty].sum())
+                    room = UNMAPPED_SAMPLE_RECORD - len(unmapped_pos)
+                    if room > 0:
+                        unmapped_pos.extend(pts[empty][:room])
+                    keep_rows = ~empty
+                    if not keep_rows.any():
+                        continue
+                    pts, areas, parents = pts[keep_rows], areas[keep_rows], parents[keep_rows]
+                    w, wsum, dist, ids = w[keep_rows], wsum[keep_rows], dist[keep_rows], ids[keep_rows]
             w = w / wsum[:, None]
-            ids = (
-                cand_clipped[:, :, 0] * (ny1 * nz1)
-                + cand_clipped[:, :, 1] * nz1
-                + cand_clipped[:, :, 2]
-            )
+            used = w > 0.0
+            if used.any():
+                max_distance = max(max_distance, float(dist[used].max()))
             contrib = w * areas[:, None]
             flat_ids = ids.ravel()
             flat_contrib = contrib.ravel()
@@ -653,6 +740,16 @@ def build_anchors(
         raw[f] = (hit, acc_area[hit].copy(), acc_normal[hit].copy())
         acc_area[hit] = 0.0
         acc_normal[hit] = 0.0
+        unmapped_total += unmapped_count
+        extras[f] = dict(
+            sample_centroid=(sample_moment / sample_area if sample_area > 0.0 else None),
+            unmapped_samples=unmapped_count,
+            unmapped_area=unmapped_area,
+            unmapped_positions=(
+                np.asarray(unmapped_pos, dtype=float).reshape(-1, 3) if allowed is not None else None
+            ),
+            max_mapping_distance=max_distance,
+        )
 
     # --- 稜線の規則: 最も多く面積を配った面が持ち主。同点は面添字の小さい面。 ---
     owner = np.full(n_nodes, -1, dtype=np.int64)
@@ -690,6 +787,7 @@ def build_anchors(
             cad_area=float(props.get("area", 0.0)),
             cad_centroid=np.asarray(props.get("centroid", (0.0, 0.0, 0.0)), dtype=float),
             cad_normal=np.asarray(props.get("normal", (0.0, 0.0, 0.0)), dtype=float),
+            **extras[f],
         )
         contested += int(np.count_nonzero(~mine))
 
@@ -705,10 +803,187 @@ def build_anchors(
         "anchor_nodes": int(sum(a.node_count for a in anchors.values())),
         "empty_faces": [f for f in sorted(anchors) if anchors[f].node_count == 0],
         "node_shape": list(node_grid.shape),
+        # 幾何の表(材料を見ない)か、材料に接する節点だけへ対応付けた探索用の確定表か。
+        # 記録・ログはこの値で2つの表を見分ける。
+        "mapping": "geometry" if allowed is None else "material",
+        "allowed_nodes": None if allowed is None else int(np.count_nonzero(allowed)),
+        "unmapped_samples": int(unmapped_total),
     }
     return AnchorTable(
         grid=grid, node_grid=node_grid, anchors=anchors, radius=radius, stats=stats
     )
+
+
+# ---------------------------------------------------------------------------
+# 確定表の検証(探索へ渡す前の境界条件の対応付け)
+# ---------------------------------------------------------------------------
+def condition_mapping(
+    table: AnchorTable,
+    fixed_faces: Any,
+    load_faces: Any,
+    forces: Any,
+    *,
+    material: Optional[np.ndarray] = None,
+    centroid_limit_elements: float = MAPPING_CENTROID_LIMIT_ELEMENTS,
+) -> dict:
+    """拘束面・荷重面ごとに、表の対応付けが成立しているかを検証して機械可読な報告にする。
+
+    面ごとに見るもの: 節点数(0なら不成立)、対応不能標本(1つでもあれば不成立)、`material` を
+    渡したときは材料に接しない節点(1つでもあれば不成立)、荷重面の合力(入力ベクトルと
+    数値許容差 `atol 1e-10·max(1,|F|)` / `rtol 1e-10` で一致しなければ不成立)、節点重心と標本重心
+    のずれ(`centroid_limit_elements` 要素を超えれば不成立。球の半径以内かも別に記録する)、
+    格子原点まわりのモーメント(CAD面への一様分布荷重の参照値 `c×F` と節点荷重の `Σ p×f`)。
+
+    合力は担当面積の比で配る限り厳密に保存されるので、合力だけを見て対応付けを採用しない
+    (重心・モーメント・対応距離も残す)。数値は実単位(mm/N)と、要素サイズ・荷重で正規化した
+    値の両方を持つ。戻り値は素の値だけ(JSONにそのまま通る)。
+    """
+    fixed = _face_list(fixed_faces)
+    load = _face_list(load_faces)
+    force_rows = np.asarray(forces, dtype=float)
+    if force_rows.shape != (len(load), 3):
+        raise ValueError(
+            f"荷重ベクトルは荷重面と同じ数の (N,3) であること(荷重面 {len(load)} 枚 / 荷重 {force_rows.shape})"
+        )
+    h = float(table.grid.spacing)
+    radius = float(table.radius)
+    origin = np.asarray(table.grid.origin, dtype=float)
+    live = None if material is None else active_nodes(material).ravel()
+    rows: list[dict] = []
+    for side, faces in (("fixed", fixed), ("load", load)):
+        for index, face in enumerate(faces):
+            anchor = table[face]
+            reasons: list[str] = []
+            row: dict = {
+                "condition": f"{side}_face_{face}",
+                "side": side,
+                "face": int(face),
+                "nodes": int(anchor.node_count),
+                "cad_area_mm2": float(anchor.cad_area),
+                "sample_area_mm2": float(anchor.triangle_area),
+                "assigned_area_mm2": float(anchor.total_area),
+                "leak_ratio": float(anchor.leak_ratio),
+                "unmapped_samples": int(anchor.unmapped_samples),
+                "unmapped_area_mm2": float(anchor.unmapped_area),
+                "unmapped_area_fraction": (
+                    float(anchor.unmapped_area / anchor.triangle_area) if anchor.triangle_area > 0 else 0.0
+                ),
+                "unmapped_positions": (
+                    [] if anchor.unmapped_positions is None else anchor.unmapped_positions.tolist()
+                ),
+                "search_radius_mm": radius,
+                "max_mapping_distance_mm": float(anchor.max_mapping_distance),
+                "max_mapping_distance_elements": float(anchor.max_mapping_distance) / h,
+            }
+            if anchor.node_count == 0:
+                reasons.append("no_nodes")
+            if anchor.unmapped_samples:
+                reasons.append("unmapped_samples")
+            if live is not None and anchor.node_count:
+                lost = anchor.node_ids[~live[anchor.node_ids]]
+                row["uncovered_nodes"] = int(lost.size)
+                row["uncovered_node_ids"] = lost[:UNMAPPED_SAMPLE_RECORD].tolist()
+                if lost.size:
+                    reasons.append("uncovered_nodes")
+            if anchor.node_count and anchor.sample_centroid is not None:
+                node_centroid = np.asarray(anchor.centroid(table.node_grid), dtype=float)
+                reference = np.asarray(anchor.sample_centroid, dtype=float)
+                shift = float(np.linalg.norm(node_centroid - reference))
+                row.update(
+                    node_centroid_mm=node_centroid.tolist(),
+                    sample_centroid_mm=reference.tolist(),
+                    cad_centroid_mm=np.asarray(anchor.cad_centroid, dtype=float).tolist(),
+                    centroid_shift_mm=shift,
+                    centroid_shift_elements=shift / h,
+                    centroid_limit_mm=float(centroid_limit_elements) * h,
+                    within_search_radius=bool(shift <= radius * (1.0 + 1e-9)),
+                )
+                if shift > float(centroid_limit_elements) * h:
+                    reasons.append("centroid_shift")
+                if side == "load":
+                    force = force_rows[index]
+                    vector = table.load_vector([face], force).reshape(-1, 3)
+                    resultant = vector.sum(axis=0)
+                    magnitude = float(np.linalg.norm(force))
+                    resultant_error = float(np.linalg.norm(resultant - force))
+                    positions = table.node_grid.positions_of(anchor.nodes) - origin
+                    moment_nodes = np.cross(positions, vector[anchor.node_ids]).sum(axis=0)
+                    moment_reference = np.cross(reference - origin, force)
+                    moment_error = float(np.linalg.norm(moment_nodes - moment_reference))
+                    row.update(
+                        requested_force_n=force.tolist(),
+                        resultant_n=resultant.tolist(),
+                        resultant_error_n=resultant_error,
+                        moment_origin_mm=origin.tolist(),
+                        moment_reference_nmm=moment_reference.tolist(),
+                        moment_nodes_nmm=moment_nodes.tolist(),
+                        moment_error_nmm=moment_error,
+                        moment_error_normalized=(moment_error / (magnitude * h) if magnitude > 0 else None),
+                    )
+                    if not np.allclose(resultant, force, atol=1e-10 * max(1.0, magnitude), rtol=1e-10):
+                        reasons.append("resultant")
+            row["status"] = "pass" if not reasons else "fail"
+            row["reasons"] = reasons
+            rows.append(row)
+    status = "pass" if rows and all(row["status"] == "pass" for row in rows) else "fail"
+    return {
+        "status": status,
+        "faces": rows,
+        "rule": {
+            "mapping": table.stats.get("mapping", "geometry"),
+            "search_radius_mm": radius,
+            "radius_ratio": float(table.stats.get("radius_ratio", radius / h)),
+            "sample_ratio": table.stats.get("sample_ratio"),
+            "weights": "tent 1-d/r, normalised per sample over allowed nodes in the sphere",
+            "unmapped_rule": "a sample with no allowed node inside the sphere is unmapped; never moved to a farther node",
+            "ownership": "node belongs to the face that assigned it the most area; ties to the smaller face index",
+            "centroid_limit_elements": float(centroid_limit_elements),
+            "resultant_tolerance": "atol 1e-10*max(1,|F|), rtol 1e-10",
+            "moment_origin": "grid origin",
+        },
+        "table": {
+            "mapping": table.stats.get("mapping", "geometry"),
+            "allowed_nodes": table.stats.get("allowed_nodes"),
+            "anchor_nodes": table.stats.get("anchor_nodes"),
+            "unmapped_samples": table.stats.get("unmapped_samples", 0),
+        },
+    }
+
+
+def format_mapping_warning(report: dict) -> str:
+    """`condition_mapping` が不成立の面を利用者向けの1メッセージにする(成立なら空文字列)。
+
+    **評価予算の増加は案内しない** —— 対応付けの不成立は候補の削除・追加・置換では直らない
+    (候補は常に設計空間の部分集合で、設計空間で接しない節点はどの候補でも接しない)。
+    """
+    parts: list[str] = []
+    for row in report.get("faces", []):
+        if row.get("status") == "pass":
+            continue
+        side_ja = "拘束面" if row["side"] == "fixed" else "荷重面"
+        head = f"{side_ja}(面{row['face']})"
+        for reason in row.get("reasons", []):
+            if reason == "no_nodes":
+                parts.append(f"{head}に材料に接する格子節点が1つも付かない(要素サイズに対して面が小さいか、面の近傍に材料を置ける場所が無い)")
+            elif reason == "unmapped_samples":
+                parts.append(
+                    f"{head}の標本 {row['unmapped_samples']} 点(面積 {row['unmapped_area_mm2']:.4g} mm^2、"
+                    f"面の {row['unmapped_area_fraction']:.1%})から半径 {row['search_radius_mm']:.4g} mm 以内に"
+                    "材料を置ける節点が無い。面のその部分が除外ソリッドの中か設計空間の外にある。"
+                    "除外ソリッド・条件面の位置を確認すること(候補の削除・追加・置換では直らない)"
+                )
+            elif reason == "uncovered_nodes":
+                parts.append(f"{head}の節点 {row['uncovered_nodes']} 個が設計空間の材料に接していない(対応付けの契約違反)")
+            elif reason == "centroid_shift":
+                parts.append(
+                    f"{head}の節点重心が面の重心から {row['centroid_shift_mm']:.3f} mm"
+                    f"(許容 {row['centroid_limit_mm']:.3f} mm)離れている。面添字の対応が壊れている可能性がある"
+                )
+            elif reason == "resultant":
+                parts.append(f"{head}の節点荷重の合力 {row['resultant_n']} が入力 {row['requested_force_n']} と一致しない")
+            else:
+                parts.append(f"{head}: {reason}")
+    return " / ".join(parts)
 
 
 def anchors_for(

@@ -496,6 +496,7 @@ def test_run_derives_once_and_hands_the_space_to_the_search(
 
     def fake_find(design_space_mask, conditions, **kwargs):
         seen["mask"] = design_space_mask
+        seen["conditions"] = conditions
         seen.update(kwargs)
         raise RuntimeError("stop before search")
 
@@ -514,7 +515,12 @@ def test_run_derives_once_and_hands_the_space_to_the_search(
         )
     assert len(derived) == 1
     assert seen["mask"] is derived[0].mask
-    assert [(p["kind"], p["stage"]) for p in payloads] == [("space", "derive"), ("anchors", "derive")]
+    # アンカーは導出の幾何の表ではなく、境界条件の確定後の表(探索が使うもの)から配る。
+    assert [(p["kind"], p["stage"]) for p in payloads] == [("space", "derive"), ("anchors", "mapping")]
+    conditions = seen["conditions"]
+    assert conditions.table is not derived[0].table
+    assert conditions.table.stats["mapping"] == "material"
+    assert conditions.mapping["status"] == "pass"
 
 
 # --------------------------------------------------------------------------------------
@@ -656,21 +662,26 @@ def test_search_cancellation_discards_a_found_best_feasible_too(
 def test_search_statuses_other_than_feasible_pass_through_without_touching_the_document(
     session: Session, monkeypatch
 ) -> None:
-    """`SearchResult.status` が `'feasible'` 以外の3値は、そのまま `state` として返る
+    """`SearchResult.status` が `'feasible'` 以外の4値は、そのまま `state` として返る
 
-    (段階4の契約「製品配線側はこの4値をそのままUI/ログへ渡せばよい」)。文書は変わらない。
+    (段階4の契約「製品配線側はこの値をそのままUI/ログへ渡せばよい」)。文書は変わらない。
+    `boundary_mapping_failed` の一言は評価予算の増加を案内しない(候補では直らない)。
     """
     from duocad.topopt import binary_search
 
     _setup_four_conditions(session)
     before = [body.id for body in session.document.bodies]
 
-    for status in ("no_feasible_found", "input_contradiction", "resolution_insufficient"):
+    for status in ("no_feasible_found", "input_contradiction", "resolution_insufficient",
+                   "boundary_mapping_failed"):
         def fake_find(design_space_mask, conditions, status=status, **kwargs):
             return binary_search.SearchResult(
                 status=status, termination=status, best_feasible=None,
                 history=[], evaluations=7, conditions_identifier="test",
-                diagnostics=dict(empty_faces=["fixed_face_0"]),
+                diagnostics=dict(
+                    empty_faces=["fixed_face_0"], mapped=True,
+                    uncovered_condition_nodes=[dict(condition="load_face_1", nodes=10, uncovered_nodes=3)],
+                ),
             )
 
         monkeypatch.setattr(binary_search, "find_best_feasible", fake_find)
@@ -680,6 +691,9 @@ def test_search_statuses_other_than_feasible_pass_through_without_touching_the_d
         assert result["warning"]
         assert result["evaluations"] == 7
         assert [body.id for body in session.document.bodies] == before
+        if status == "boundary_mapping_failed":
+            assert "予算" not in result["warning"]
+            assert "load_face_1" in result["warning"]
 
 
 def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
@@ -978,3 +992,77 @@ def test_the_anchor_gate_still_catches_a_face_that_is_far_away(
         optimize_run._check_anchor_centroids(session.document, space)
 
 
+
+
+# --------------------------------------------------------------------------------------
+# 9. 境界条件の確定(docs/FIX_BINARY_SEARCH_INITIALIZATION.md 修正A・B)
+# --------------------------------------------------------------------------------------
+def test_a_load_face_partly_buried_in_an_exclusion_stops_before_any_evaluation(
+    session: Session, monkeypatch
+) -> None:
+    """荷重面の一部が除外ソリッドの中(半径1要素以内に材料を置ける節点が無い)なら、確定表の
+    検証で `boundary_mapping_failed` になり、探索(候補生成・FEM)は始まらない。文書は変わらない。
+    一言は面と対応不能標本を名指しし、評価予算の増加を案内しない。
+    """
+    import json
+
+    from duocad.topopt import binary_search
+
+    left, right = _two_pads(session)
+    plate = _box(session, 28.0, 40.0, 4.0, corner=(30.0, 0.0))  # 保持しない板(x 30..58)。上面が荷重面
+    wall = _box(session, 20.0, 46.0, 50.0, corner=(40.0, -3.0))
+    _select(session, [{"body": wall.id, "kind": "body"}])
+    session.move_body(0.0, 0.0, -25.0)  # 板の右側(x 40..58)を、要素サイズ 8mm で2セル以上の深さで飲み込む除外
+    session.clear_selection()
+    wall = session.document.get_body(wall.id)
+    fixed = _face_with_normal(left, -1.0, 0.0, 0.0)
+    load = _face_with_normal(plate, 0.0, 0.0, 1.0)
+    _select(session, [{"body": left.id, "kind": "body"}, {"body": right.id, "kind": "body"}])
+    session.set_preserve_bodies()
+    _select(session, [{"body": wall.id, "kind": "body"}])
+    session.set_exclude_bodies()
+    _select(session, [{"body": left.id, "kind": "face", "index": fixed}])
+    session.set_fixtures()
+    _select(session, [{"body": plate.id, "kind": "face", "index": load}])
+    session.set_loads(500.0, [0.0, 0.0, -1.0])
+    session.clear_selection()
+    before = [body.id for body in session.document.bodies]
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("確定表が不成立なのに探索が始まった")
+
+    monkeypatch.setattr(binary_search, "find_best_feasible", fail_if_called)
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert result["state"] == "boundary_mapping_failed"
+    assert result["body_id"] is None and result["evaluations"] == 0
+    assert result["termination"] == "boundary_mapping_failed"
+    mapping = result["boundary_mapping"]
+    load_row = next(row for row in mapping["faces"] if row["side"] == "load")
+    assert load_row["status"] == "fail" and "unmapped_samples" in load_row["reasons"]
+    assert load_row["unmapped_samples"] > 0 and load_row["unmapped_positions"]
+    assert all(x > 40.0 for x, _y, _z in load_row["unmapped_positions"])  # 除外の中の標本だけ
+    assert mapping["table"]["mapping"] == "material"
+    assert "荷重面" in result["warning"] and "予算" not in result["warning"]
+    assert [body.id for body in session.document.bodies] == before
+    json.dumps(result)  # 戻り値は素の値だけ
+
+
+def test_the_search_conditions_carry_the_material_mapped_table_and_its_report(session: Session) -> None:
+    """`_build_search_conditions` を直接呼ぶ検査・CLIでも、製品と同じ確定表と検証結果が付く。"""
+    from duocad.topopt import design_space as ds
+
+    _setup_four_conditions(session)
+    bundle = optimize_run.build_conditions(session.document)
+    space = ds.derive(bundle.conditions, spacing=8.0)
+    conditions = optimize_run._build_search_conditions(
+        session.document, space, bundle, optimize_run.OptimizeOptions()
+    )
+    assert conditions.table is not space.table
+    assert conditions.table.stats["mapping"] == "material"
+    assert space.table.stats["mapping"] == "geometry"
+    assert conditions.mapping["status"] == "pass"
+    assert set(conditions.mapping["geometry_table_difference"]) == {
+        row["condition"] for row in conditions.mapping["faces"]
+    }
+    check = optimize_run._check_anchor_centroids(session.document, space, table=conditions.table)
+    assert check["table"] == "material" and check["load_mm"] <= check["limit_mm"]
