@@ -811,9 +811,9 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
 # ---------------------------------------------------------------------------
 #: 1回に削る割合 r の既定。r = min(DEFAULT_MAX_STEP_RATIO, 1 − (目標安全率 / 現在の安全率)^θ) × 後退倍率。
 #: θ は「安全率が体積に比例するなら、次の形の安全率を現在と目標の間のどこへ置くか」(対数で見た位置。
-#: 0.5 は幾何平均)。hanger での比較と採用理由は計画書 §11。
+#: 0.5 は幾何平均)。上限 0.2 と θ=0.5 は hanger 4.8mm の比較で決めた(計画書 §11)。
 DEFAULT_STEP_EXPONENT = 0.5
-DEFAULT_MAX_STEP_RATIO = 0.5
+DEFAULT_MAX_STEP_RATIO = 0.2
 #: 削る順位に使うエネルギーをならす近傍の一辺(セル)。3 は自身と26近傍の材料平均。
 ENERGY_FILTER_SIZE = 3
 _CORNERS = tuple(product(range(2), repeat=3))

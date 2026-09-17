@@ -37,6 +37,9 @@
 | 削除・追加・置換探索のfrontier容量 `DEFAULT_FRONTIER_CAPACITY` | **48** | `binary_search.DEFAULT_FRONTIER_CAPACITY` | 計画書§4.3 |
 | 追加操作が連続してよい回数の上限 `DEFAULT_MAX_CONSECUTIVE_ADDS` | **2** | `binary_search.DEFAULT_MAX_CONSECUTIVE_ADDS` | 計画書§4.3 |
 | 候補ブロックの走査予算(評価1回あたり。既定は `max(この値, 格子のセル数)` × 評価予算) `DEFAULT_CANDIDATES_PER_EVALUATION` | **64** | `binary_search.DEFAULT_CANDIDATES_PER_EVALUATION` / `_candidate_budget` | 計画書§4.3 追記 |
+| 段階4で1回に削る割合の上限 `DEFAULT_MAX_STEP_RATIO` | **0.2** | `binary_search.DEFAULT_MAX_STEP_RATIO` | 計画書§11.2 |
+| 段階4の削る割合を安全率の余裕で変える指数 θ(r = min(上限, 1 − (目標/安全率)^θ)) `DEFAULT_STEP_EXPONENT` | **0.5** | `binary_search.DEFAULT_STEP_EXPONENT` | 計画書§11.2 |
+| 段階4で要素エネルギーをならす近傍の一辺 `ENERGY_FILTER_SIZE` | **3** セル | `binary_search.ENERGY_FILTER_SIZE` | 計画書§11.1 |
 | 条件面の作用位置のずれの許容(重心・モーメント誤差は探索半径×荷重の大きさまで) | 対応付けの探索半径(既定 **1.0** 要素) | `anchor.DEFAULT_RADIUS_RATIO` | 「境界条件の確定(2026-09-17)」 |
 | 要素サイズを指定しないときの最長軸の要素数 `DEFAULT_ELEMENTS_LONG_AXIS` | **40** | `design_space.DEFAULT_ELEMENTS_LONG_AXIS` | 塊の導出(`derive`) |
 | ヤング率の既定 `DEFAULT_YOUNGS_MODULUS_MPA` | **2000** MPa | `material.DEFAULT_YOUNGS_MODULUS_MPA` | 応力の実単位換算(`stress.UnitScale`) |
