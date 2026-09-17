@@ -104,12 +104,21 @@ MAX_SUBDIVISION = 512
 SAMPLE_BATCH = 40_000
 #: 対応不能標本の座標を面ごとに何件まで残すか(診断の大きさを抑えるためだけの値)。
 UNMAPPED_SAMPLE_RECORD = 20
-#: 節点集合の面積重み重心が標本点の重心からどこまで離れてよいか(要素サイズの倍数)。
-#: **粗い網である** —— 全標本が対応した面の重心のずれは球の半径(既定1要素)以内に収まる
-#: (各標本の面積は半径内の節点へ配られるので、その重心は標本から半径以内。面の重心は
-#: その面積平均)。3倍は「別の面を掴んだ」級の取り違えを捕まえる値で、稜線の規則で隣の面に
-#: 取られた面積の非対称による1要素前後のずれを落とさない。`optimize_run` の面重心の門と同じ値。
-MAPPING_CENTROID_LIMIT_ELEMENTS = 3.0
+#: 作用位置の門(`position_limit`)に足す相対の数値許容差。ちょうど半径の位置を丸め誤差で落とさないためだけの値。
+MAPPING_POSITION_RTOL = 1e-9
+
+
+def position_limit(table: "AnchorTable") -> float:
+    """条件面の作用位置のずれの許容 [mm] = 対応付けの探索半径(`table.radius`)。
+
+    荷重・拘束を置く位置の合格基準で、`condition_mapping`(重心・モーメント)と
+    `optimize_run._check_anchor_centroids` が同じ値を使う(層をまたぐ契約)。
+    半径は「各標本の面積を配ってよい距離」という対応規則そのものなので、稜線の所有権で面積を
+    失わない限り、節点の重心は標本の重心から必ず半径以内に収まる(標本ごとに半径内の節点への
+    凸結合で、面の重心はその面積平均)。越えるのは、稜線で片側の面積を大きく失った・
+    三角形分割がCAD面から離れた・別の面を掴んだ、のいずれか。
+    """
+    return float(table.radius) * (1.0 + MAPPING_POSITION_RTOL)
 
 
 def active_nodes(material: np.ndarray) -> np.ndarray:
@@ -824,19 +833,23 @@ def condition_mapping(
     forces: Any,
     *,
     material: Optional[np.ndarray] = None,
-    centroid_limit_elements: float = MAPPING_CENTROID_LIMIT_ELEMENTS,
 ) -> dict:
     """拘束面・荷重面ごとに、表の対応付けが成立しているかを検証して機械可読な報告にする。
 
     面ごとに見るもの: 節点数(0なら不成立)、対応不能標本(1つでもあれば不成立)、`material` を
     渡したときは材料に接しない節点(1つでもあれば不成立)、荷重面の合力(入力ベクトルと
-    数値許容差 `atol 1e-10·max(1,|F|)` / `rtol 1e-10` で一致しなければ不成立)、節点重心と標本重心
-    のずれ(`centroid_limit_elements` 要素を超えれば不成立。球の半径以内かも別に記録する)、
-    格子原点まわりのモーメント(CAD面への一様分布荷重の参照値 `c×F` と節点荷重の `Σ p×f`)。
+    数値許容差 `atol 1e-10·max(1,|F|)` / `rtol 1e-10` で一致しなければ不成立)、
+    **作用位置**: 節点の担当面積重心とCAD面の面積重心のずれ(`position_limit` を超えれば不成立)、
+    荷重面では格子原点まわりのモーメント(CAD面への一様分布荷重の参照値 `c_CAD×F` と、
+    `load_vector` が実際に作る節点荷重の `Σ p×f` の差が `position_limit·|F|` を超えれば不成立)。
 
-    合力は担当面積の比で配る限り厳密に保存されるので、合力だけを見て対応付けを採用しない
-    (重心・モーメント・対応距離も残す)。数値は実単位(mm/N)と、要素サイズ・荷重で正規化した
-    値の両方を持つ。戻り値は素の値だけ(JSONにそのまま通る)。
+    モーメントの門は、1面に1つの荷重ベクトルを面積比で配る限り `|Δc×F| ≤ |Δc|·|F|` なので
+    重心の門より緩い。それでも門にするのは、重心を担当面積から、モーメントを `load_vector` の
+    自由度配列から別々に計算していて、荷重の配り方が面積とずれたときにこちらだけが気づくため。
+    CAD面の重心が無い表(`face_props` を持たない三角形群)では三角形の面積重心を基準にし、
+    `centroid_reference` に書く。合力は担当面積の比で配る限り厳密に保存されるので、合力だけを見て
+    対応付けを採用しない。数値は実単位(mm/N)と、要素サイズ・荷重で正規化した値の両方を持つ。
+    戻り値は素の値だけ(JSONにそのまま通る)。
     """
     fixed = _face_list(fixed_faces)
     load = _face_list(load_faces)
@@ -847,6 +860,7 @@ def condition_mapping(
         )
     h = float(table.grid.spacing)
     radius = float(table.radius)
+    limit = position_limit(table)
     origin = np.asarray(table.grid.origin, dtype=float)
     live = None if material is None else active_nodes(material).ravel()
     rows: list[dict] = []
@@ -885,20 +899,25 @@ def condition_mapping(
                 row["uncovered_node_ids"] = lost[:UNMAPPED_SAMPLE_RECORD].tolist()
                 if lost.size:
                     reasons.append("uncovered_nodes")
-            if anchor.node_count and anchor.sample_centroid is not None:
+            if anchor.node_count:
                 node_centroid = np.asarray(anchor.centroid(table.node_grid), dtype=float)
-                reference = np.asarray(anchor.sample_centroid, dtype=float)
+                # 節点が付いた面は面積のある標本を必ず持つので、標本の重心は None にならない。
+                sample = np.asarray(anchor.sample_centroid, dtype=float)
+                has_cad = anchor.cad_area > 0.0
+                reference = np.asarray(anchor.cad_centroid, dtype=float) if has_cad else sample
                 shift = float(np.linalg.norm(node_centroid - reference))
                 row.update(
                     node_centroid_mm=node_centroid.tolist(),
-                    sample_centroid_mm=reference.tolist(),
                     cad_centroid_mm=np.asarray(anchor.cad_centroid, dtype=float).tolist(),
+                    sample_centroid_mm=sample.tolist(),
+                    sample_to_cad_shift_mm=float(np.linalg.norm(sample - reference)) if has_cad else None,
+                    centroid_reference="cad" if has_cad else "triangles",
                     centroid_shift_mm=shift,
                     centroid_shift_elements=shift / h,
-                    centroid_limit_mm=float(centroid_limit_elements) * h,
-                    within_search_radius=bool(shift <= radius * (1.0 + 1e-9)),
+                    centroid_limit_mm=limit,
+                    within_search_radius=bool(shift <= limit),
                 )
-                if shift > float(centroid_limit_elements) * h:
+                if not shift <= limit:
                     reasons.append("centroid_shift")
                 if side == "load":
                     force = force_rows[index]
@@ -910,6 +929,7 @@ def condition_mapping(
                     moment_nodes = np.cross(positions, vector[anchor.node_ids]).sum(axis=0)
                     moment_reference = np.cross(reference - origin, force)
                     moment_error = float(np.linalg.norm(moment_nodes - moment_reference))
+                    moment_limit = limit * magnitude
                     row.update(
                         requested_force_n=force.tolist(),
                         resultant_n=resultant.tolist(),
@@ -919,9 +939,12 @@ def condition_mapping(
                         moment_nodes_nmm=moment_nodes.tolist(),
                         moment_error_nmm=moment_error,
                         moment_error_normalized=(moment_error / (magnitude * h) if magnitude > 0 else None),
+                        moment_limit_nmm=moment_limit,
                     )
                     if not np.allclose(resultant, force, atol=1e-10 * max(1.0, magnitude), rtol=1e-10):
                         reasons.append("resultant")
+                    if not moment_error <= moment_limit:
+                        reasons.append("moment")
             row["status"] = "pass" if not reasons else "fail"
             row["reasons"] = reasons
             rows.append(row)
@@ -937,9 +960,11 @@ def condition_mapping(
             "weights": "tent 1-d/r, normalised per sample over allowed nodes in the sphere",
             "unmapped_rule": "a sample with no allowed node inside the sphere is unmapped; never moved to a farther node",
             "ownership": "node belongs to the face that assigned it the most area; ties to the smaller face index",
-            "centroid_limit_elements": float(centroid_limit_elements),
+            "position_limit": "search radius; |node centroid - CAD area centroid| <= r, |moment error| <= r*|F|",
+            "position_limit_mm": limit,
             "resultant_tolerance": "atol 1e-10*max(1,|F|), rtol 1e-10",
             "moment_origin": "grid origin",
+            "moment_reference": "CAD area centroid x requested force",
         },
         "table": {
             "mapping": table.stats.get("mapping", "geometry"),
@@ -977,10 +1002,16 @@ def format_mapping_warning(report: dict) -> str:
             elif reason == "centroid_shift":
                 parts.append(
                     f"{head}の節点重心が面の重心から {row['centroid_shift_mm']:.3f} mm"
-                    f"(許容 {row['centroid_limit_mm']:.3f} mm)離れている。面添字の対応が壊れている可能性がある"
+                    f"(許容 = 対応付けの探索半径 {row['centroid_limit_mm']:.3f} mm)離れている。"
+                    "稜線で隣の面に面積を取られすぎているか、面添字の対応が壊れている可能性がある"
                 )
             elif reason == "resultant":
                 parts.append(f"{head}の節点荷重の合力 {row['resultant_n']} が入力 {row['requested_force_n']} と一致しない")
+            elif reason == "moment":
+                parts.append(
+                    f"{head}の節点荷重のモーメントがCAD面への一様荷重から {row['moment_error_nmm']:.4g} N·mm"
+                    f"(許容 {row['moment_limit_nmm']:.4g} N·mm)ずれている"
+                )
             else:
                 parts.append(f"{head}: {reason}")
     return " / ".join(parts)

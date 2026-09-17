@@ -29,7 +29,7 @@ from scipy import ndimage
 
 from duocad import kernel
 
-from . import acceptance
+from . import acceptance, anchor
 from .material import DEFAULT_ALLOWABLE_MPA, DEFAULT_YOUNGS_MODULUS_MPA
 
 # `acceptance.connectivity_check` と同じ6近傍の定義(§4.4 冒頭)。島処理の合否と
@@ -47,8 +47,9 @@ class SearchConditions:
     (意味の正はそちら)。`table` は `anchor.AnchorTable` と同じ面/節点インタフェースを持てばよい。
 
     `table` は**探索用の確定表**(`anchor.build_anchors(..., allowed_nodes=...)` で材料に接する
-    節点だけへ対応付けたもの)であること。`mapping` はその検証結果(`anchor.condition_mapping`)で、
-    無ければ未対応付けの表として入口の診断に書かれる。確定後は探索中に一切再配分しない。
+    節点だけへ対応付けたもの)であること。`mapping` はその検証結果(`anchor.condition_mapping`)。
+    入口は `table` が `anchor.AnchorTable` なら渡された `mapping` の有無に関わらず検証をやり直し、
+    どちらかが不成立なら探索しない(`find_initial_feasible`)。確定後は探索中に一切再配分しない。
     """
 
     grid: Any
@@ -281,8 +282,9 @@ def _local_addable(mask: np.ndarray, design_space: np.ndarray, region: tuple) ->
     return adjacent[inner] & design_space[region]
 
 
-def _op_descriptors(mask: np.ndarray, design_space: np.ndarray, size: int, op: str):
-    """1つの操作・1つのブロック大きさの有効な候補記述 `(op, region, addable)` を順に生成する。
+def _op_scan(mask: np.ndarray, design_space: np.ndarray, size: int, op: str):
+    """1つの操作・1つのブロック大きさのブロックを1つずつ調べ、有効なら候補記述
+    `(op, region, addable)`、無効なら None を返す(調べたブロックごとに必ず1つ出す)。
 
     有効性(削除は材料が要る、追加は接する空セルが要る、置換は両方)はブロックの範囲だけを見て
     決め、マスクは作らない。`addable` はブロック大の小配列(削除では None)。
@@ -290,16 +292,38 @@ def _op_descriptors(mask: np.ndarray, design_space: np.ndarray, size: int, op: s
     for lo in _block_starts(mask.shape, size):
         region = _block_region(lo, size, mask.shape)
         if op == 'delete':
-            if mask[region].any():
-                yield ('delete', region, None)
+            yield ('delete', region, None) if mask[region].any() else None
             continue
         addable = _local_addable(mask, design_space, region)
         if not addable.any():
-            continue
-        if op == 'add':
+            yield None
+        elif op == 'add':
             yield ('add', region, addable)
-        elif op == 'replace' and mask[region].any():
-            yield ('replace', region, addable)
+        else:
+            yield ('replace', region, addable) if mask[region].any() else None
+
+
+def _scan_descriptors(mask: np.ndarray, design_space: np.ndarray, sizes: tuple[int, ...],
+                      *, allow_add: bool = True) -> Iterator[Optional[tuple]]:
+    """`candidate_descriptors` と同じ順序で、無効なブロックも None として1つずつ出す。
+
+    frontier はこちらを引き、None も走査予算に数えて中断を確認する —— 有効な候補が遠いとき、
+    次の候補を返すまでに何万ブロックも予算・中断の外で調べることがない。
+    巡回の手番は有効な候補を出したときだけ次の操作へ移る(None では移らない)ので、順序は
+    無効なブロックを数えない場合と同じ。
+    """
+    ops = ('delete', 'add', 'replace') if allow_add else ('delete', 'replace')
+    for size in sizes:
+        alive = deque(_op_scan(mask, design_space, size, op) for op in ops)
+        while alive:
+            try:
+                descriptor = next(alive[0])
+            except StopIteration:
+                alive.popleft()
+                continue
+            if descriptor is not None:
+                alive.rotate(-1)
+            yield descriptor
 
 
 def candidate_descriptors(mask: np.ndarray, design_space: np.ndarray, sizes: tuple[int, ...],
@@ -310,15 +334,8 @@ def candidate_descriptors(mask: np.ndarray, design_space: np.ndarray, sizes: tup
     操作別の生成器を巡回するので、削除候補が何万あっても追加・置換が後回しにならない。
     `allow_add=False` なら追加は生成しない(連続追加の上限。置換は体積を増やさないので残す)。
     """
-    ops = ('delete', 'add', 'replace') if allow_add else ('delete', 'replace')
-    for size in sizes:
-        alive = [_op_descriptors(mask, design_space, size, op) for op in ops]
-        while alive:
-            for generator in list(alive):
-                try:
-                    yield next(generator)
-                except StopIteration:
-                    alive.remove(generator)
+    return (descriptor for descriptor in _scan_descriptors(mask, design_space, sizes, allow_add=allow_add)
+            if descriptor is not None)
 
 
 def _materialize(parent: np.ndarray, design_space: np.ndarray, op: str, region: tuple,
@@ -398,7 +415,7 @@ class SearchResult:
 
     `termination` の語彙: `initial_feasible_found` / `neighbourhood_exhausted`(frontier を捨てずに
     使い切った)/ `frontier_truncated`(容量超過で親を捨てたことがあり、近傍を尽くしたとは言えない)/
-    `evaluation_limit` / `generation_limit`(候補記述の予算)/ `cancelled` /
+    `evaluation_limit` / `generation_limit`(候補ブロックの走査予算)/ `cancelled` /
     `resolution_insufficient` / `boundary_mapping_failed` / `input_contradiction`。
     `diagnostics['frontier']` / `['candidates']` に保持数の実測・除外・生成数が入る。
     """
@@ -455,8 +472,9 @@ def _evaluate_survivor(survivor: np.ndarray, before: np.ndarray, conditions: Sea
 # (docs/PLAN_BINARY_STRESS_SEARCH.md §4.3 追記に採用理由と観測した試行数を記録)。
 DEFAULT_FRONTIER_CAPACITY = 48
 DEFAULT_MAX_CONSECUTIVE_ADDS = 2
-#: 候補記述の予算(生成側)の既定 = この値 × 評価予算。無効・重複候補だけで評価数が増えない
-#: 場合にも生成を止めるための上限で、評価予算とは別に数える(修正C §5.2)。
+#: 走査予算の既定の下限(評価1回あたり)。小型題材(格子のセル数がこれより少ない)で決めた値
+#: (docs/PLAN_BINARY_STRESS_SEARCH.md §4.3 追記)。無効・重複候補だけで評価数が増えない場合にも
+#: 走査を止めるための上限で、評価予算とは別に数える(`_candidate_budget`)。
 DEFAULT_CANDIDATES_PER_EVALUATION = 64
 #: 診断に残す除外した親の試行番号の上限(記録の大きさを抑えるためだけの値)。
 EVICTION_RECORD = 50
@@ -507,7 +525,8 @@ class _Frontier:
         self.peak = max(self.peak, len(self._nodes))
 
     def next_descriptor(self) -> Optional[tuple]:
-        """先頭の親の次の子記述 `(node, descriptor)`。尽きた親は退役させる。空なら None。"""
+        """先頭の親でブロックを1つ調べた結果 `(node, descriptor)`。無効なブロックなら descriptor は
+        None で、親は手番を保つ(有効な子を出したときだけ末尾へ回す)。尽きた親は退役させる。空なら None。"""
         while self._nodes:
             node = self._nodes[0]
             try:
@@ -516,7 +535,8 @@ class _Frontier:
                 self._nodes.popleft()
                 self.retired += 1
                 continue
-            self._nodes.rotate(-1)
+            if descriptor is not None:
+                self._nodes.rotate(-1)
             return node, descriptor
         return None
 
@@ -527,21 +547,30 @@ class _Frontier:
 
 @dataclass
 class _Budget:
-    """評価予算(生の候補を評価した回数)と生成予算(マスクにした候補記述の数。重複も数える)。"""
+    """評価予算(生の候補を評価した回数)と走査予算(親から調べた候補ブロックの数。無効なブロック・
+    重複も数える)。`generated` はそのうちマスクにした数、`duplicates` はさらにその中の重複。"""
 
     max_evaluations: int
     max_candidates: int
     evaluations: int = 0
+    scanned: int = 0
     generated: int = 0
     duplicates: int = 0
 
     def summary(self) -> dict:
-        return dict(generated=self.generated, duplicates=self.duplicates, limit=self.max_candidates,
-                    evaluations=self.evaluations, evaluation_limit=self.max_evaluations)
+        return dict(scanned=self.scanned, generated=self.generated, duplicates=self.duplicates,
+                    limit=self.max_candidates, evaluations=self.evaluations, evaluation_limit=self.max_evaluations)
 
 
-def _candidate_budget(max_evaluations: int, max_candidates: Optional[int]) -> int:
-    return int(max_candidates) if max_candidates is not None else DEFAULT_CANDIDATES_PER_EVALUATION * int(max_evaluations)
+def _candidate_budget(max_evaluations: int, max_candidates: Optional[int], shape: tuple) -> int:
+    """走査予算。既定は評価1回あたり `max(DEFAULT_CANDIDATES_PER_EVALUATION, 格子のセル数)`。
+
+    セル数は最小ブロック(1セル)で格子を1周調べる数。評価1回の前に1周ぶん調べることまでは
+    許し、それを超えて評価へ進まない走査だけを止める。
+    """
+    if max_candidates is not None:
+        return int(max_candidates)
+    return max(DEFAULT_CANDIDATES_PER_EVALUATION, int(np.prod(shape))) * int(max_evaluations)
 
 
 def _streak_after(op: str, streak: int) -> int:
@@ -553,25 +582,30 @@ def _node(mask: np.ndarray, trial_index: int, streak: int, design_space_mask: np
           sizes: tuple[int, ...], max_consecutive_adds: int) -> _Node:
     mask.setflags(write=False)
     return _Node(mask=mask, trial_index=trial_index, streak=streak,
-                 children=candidate_descriptors(mask, design_space_mask, sizes,
-                                                allow_add=streak < max_consecutive_adds))
+                 children=_scan_descriptors(mask, design_space_mask, sizes,
+                                            allow_add=streak < max_consecutive_adds))
 
 
 def _pull(frontier: _Frontier, design_space_mask: np.ndarray, budget: _Budget, visited: set,
           identifier: str, is_cancelled) -> Any:
     """次の未評価候補 `(mask, op, parent_node)` か、終了理由の文字列。
 
-    生成中・評価前に中断を見る。重複(既に見たマスク)は評価数を増やさず、生成予算だけを消費する。
+    ブロックを1つ調べる前ごとに中断と走査予算を見る(無効なブロック・重複も予算を使う)。
+    重複(既に見たマスク)は評価数を増やさない。
     """
     while True:
         if is_cancelled is not None and is_cancelled():
             return 'cancelled'
+        if budget.scanned >= budget.max_candidates:
+            return 'generation_limit'
         pulled = frontier.next_descriptor()
         if pulled is None:
             return 'frontier_truncated' if frontier.evictions else 'neighbourhood_exhausted'
-        if budget.generated >= budget.max_candidates:
-            return 'generation_limit'
-        node, (op, region, addable) = pulled
+        budget.scanned += 1
+        node, descriptor = pulled
+        if descriptor is None:
+            continue
+        op, region, addable = descriptor
         budget.generated += 1
         child = _materialize(node.mask, design_space_mask, op, region, addable)
         key = (_mask_hash(child), identifier)
@@ -611,7 +645,9 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
 
     入口で探索では直せない状態を確定させ、候補生成もFEMも始めない:
     `resolution_insufficient`(条件面に節点が無い)、`boundary_mapping_failed`(確定表の節点が
-    全設計空間の材料にすら接しない。修正B)、`input_contradiction`(全設計空間でも保持と重ならない)。
+    全設計空間の材料にすら接しない〈修正B〉か、表の検証 `anchor.condition_mapping` が不成立 ——
+    対応不能標本・作用位置のずれ等。渡された `conditions.mapping` とここでの再検証のどちらでも止まる)、
+    `input_contradiction`(全設計空間でも保持と重ならない)。
 
     返却は必ず `best_feasible` から行い、`unknown`(計算失敗)や安全率不足で
     最良モデルを失わない(§4.1)。修復も通常の候補生成・評価・履歴・予算の対象で、
@@ -620,8 +656,8 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
 
     `max_evaluations` は生の候補(frontierから1回取り出す単位)の予算。1つの生の候補が
     複数の生存成分・解法再試行を持つ場合、`acceptance.inspect` の呼び出し回数はこれより
-    多くなる(history の行数で見ること)。`max_candidates` は候補記述の予算(既定は
-    `DEFAULT_CANDIDATES_PER_EVALUATION × max_evaluations`)。`is_cancelled` は生成中・評価前に見る。
+    多くなる(history の行数で見ること)。`max_candidates` は候補ブロックの走査予算(無効なブロック・
+    重複も数える。既定は `_candidate_budget`)。`is_cancelled` はブロックを1つ調べる前ごとと評価前に見る。
     """
     design_space_mask = np.array(design_space_mask, dtype=bool, copy=True)
     design_space_mask.setflags(write=False)
@@ -635,11 +671,20 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
                              best_feasible=None, history=[], evaluations=0,
                              conditions_identifier=identifier, diagnostics=dict(empty_faces=starved))
 
-    # 境界条件の対応付け: 確定表の節点が全設計空間の材料に接しないなら、どの候補でも接しない
-    # (修正B §4)。表が材料に対応付けた確定表か、材料を見ない幾何の表かも診断に書く。
+    # 境界条件の対応付け: 対応不能標本・作用位置のずれは候補の削除・追加・置換では直らない。
+    # 製品入口の検証結果(`conditions.mapping`)だけを信じず、探索が実際に引く表を全設計空間で
+    # 検証し直す —— 直接APIで不成立の表や検証の無い表を渡されても、ここで止まる。
+    entry_mapping = None
+    if isinstance(conditions.table, anchor.AnchorTable):
+        entry_mapping = anchor.condition_mapping(conditions.table, conditions.fixed_faces, conditions.load_faces,
+                                                 conditions.forces, material=design_space_mask)
+    # 確定表の節点が全設計空間の材料に接しないなら、どの候補でも接しない(修正B §4)。
+    # 同じ面/節点インタフェースだけを持つ表でも見られる、対応付けの必要条件。
     coverage = uncovered_condition_nodes(design_space_mask, conditions)
     uncovered = [row for row in coverage if row['uncovered_nodes']]
-    if uncovered:
+    failed = [report for report in (conditions.mapping, entry_mapping)
+              if isinstance(report, dict) and report.get('status') != 'pass']
+    if uncovered or failed:
         stats = getattr(conditions.table, 'stats', None) or {}
         return SearchResult(status='boundary_mapping_failed', termination='boundary_mapping_failed',
                              best_feasible=None, history=[], evaluations=0,
@@ -647,7 +692,7 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
                              diagnostics=dict(uncovered_condition_nodes=uncovered,
                                               table_mapping=stats.get('mapping', 'unknown'),
                                               mapped=conditions.mapping is not None,
-                                              mapping=conditions.mapping))
+                                              mapping=conditions.mapping, entry_mapping=entry_mapping))
 
     # 入力矛盾: 材料は常に設計空間の部分集合(§2)なので、保持との重なりは材料を減らすほど
     # 減るかそのまま。設計空間そのもの(取れる最大の材料)で既に重なりが足りなければ、
@@ -668,7 +713,7 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
 
     sizes = tuple(reversed(block_sizes(design_space_mask.shape)))  # 大きい削除から試す(§4.3)
     budget = _Budget(max_evaluations=int(max_evaluations),
-                     max_candidates=_candidate_budget(max_evaluations, max_candidates))
+                     max_candidates=_candidate_budget(max_evaluations, max_candidates, design_space_mask.shape))
     frontier = _Frontier(frontier_capacity)
     # 「生の候補」と「実際に評価した」候補(島除去後)は別の集合にする —— 生の候補が単一成分なら
     # この2つは同じマスクになるので、同じ集合に入れると島除去後の評価そのものが
@@ -789,8 +834,8 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     design_space_mask.setflags(write=False)
     started = initial.diagnostics.get('candidates', {}) if isinstance(initial.diagnostics, dict) else {}
     budget = _Budget(max_evaluations=int(max_evaluations),
-                     max_candidates=_candidate_budget(max_evaluations, max_candidates),
-                     evaluations=int(initial.evaluations),
+                     max_candidates=_candidate_budget(max_evaluations, max_candidates, design_space_mask.shape),
+                     evaluations=int(initial.evaluations), scanned=int(started.get('scanned', 0)),
                      generated=int(started.get('generated', 0)), duplicates=int(started.get('duplicates', 0)))
     frontier = _Frontier(frontier_capacity)
     visited_candidates: set[tuple[str, str]] = set()
@@ -875,7 +920,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     (§4.1「評価条件の識別子」と同じ思想で、初期探索と削減探索を別予算にしない)。
     `frontier_capacity` / `max_consecutive_adds` / `max_candidates` も両段階で同じ値を使う。
 
-    `is_cancelled` は引数無しで呼べる callable。両段階とも生成中・評価前に見る。真を返した
+    `is_cancelled` は引数無しで呼べる callable。両段階ともブロックを1つ調べる前ごとと評価前に見る。真を返した
     時点の `best_feasible` をキャッシュ無し再検査済みのまま返す(§4.6「中断時は合格チェック
     ポイントを記録する」)。初期合格の前に中断されれば `no_feasible_found` / `cancelled`。
     """

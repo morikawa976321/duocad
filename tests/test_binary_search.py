@@ -1,3 +1,4 @@
+import dataclasses
 import hashlib
 import itertools
 from collections import deque
@@ -662,6 +663,19 @@ def test_uncovered_anchor_nodes_stop_at_the_entry_without_generating_or_evaluati
     assert bs.find_best_feasible(design, conditions, max_evaluations=10).status == 'boundary_mapping_failed'
 
 
+def test_a_failed_mapping_report_stops_the_direct_api_even_when_every_node_is_on_material(monkeypatch):
+    """全節点が材料に接していても、渡された対応付けの検証が不成立なら候補生成0回・FEM0回で止まる。"""
+    conditions = bar_conditions(shape=(4, 2, 2))
+    failed = dict(status='fail', faces=[dict(condition='load_face_2', status='fail', reasons=['unmapped_samples'])])
+    conditions = dataclasses.replace(conditions, mapping=failed)
+    monkeypatch.setattr(acceptance, 'inspect', lambda *a, **k: pytest.fail('入口で止まるべき経路が評価に進んだ'))
+    monkeypatch.setattr(bs, '_materialize', lambda *a, **k: pytest.fail('入口で止まるべき経路が候補を作った'))
+    result = bs.find_best_feasible(np.ones((4, 2, 2), bool), conditions, max_evaluations=10)
+    assert result.status == 'boundary_mapping_failed' and result.evaluations == 0
+    assert result.diagnostics['uncovered_condition_nodes'] == []
+    assert result.diagnostics['mapping'] is failed
+
+
 def test_the_identifier_depends_on_the_fixed_nodes_not_only_on_the_face_indices():
     """同じ面添字でも節点集合が違えば別の評価条件(確定した節点・荷重・拘束をハッシュに含める)。"""
     shape = (4, 2, 2)
@@ -804,15 +818,18 @@ def test_retained_masks_do_not_grow_with_the_evaluation_budget(monkeypatch):
 
 
 def test_generation_budget_and_cancellation_act_on_duplicates_that_never_reach_evaluation(monkeypatch):
-    """無効・重複候補だけで評価数が増えないときも、生成予算と中断が効く(無限に生成し続けない)。"""
+    """無効・重複候補だけで評価数が増えないときも、走査予算と中断が効く(無限に生成し続けない)。"""
     shape = (6, 2, 2)
     conditions = bar_conditions(shape=shape, target_safety_factor=1e12)
     monkeypatch.setattr(bs, '_mask_hash', lambda mask: 'same')  # 全候補が同一に見える → 重複しか生成されない
     result = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=50, max_candidates=25)
     assert result.status == 'no_feasible_found' and result.termination == 'generation_limit'
     assert result.evaluations == 1
-    assert result.diagnostics['candidates'] == dict(generated=25, duplicates=25, limit=25, evaluations=1,
-                                                    evaluation_limit=50)
+    candidates = result.diagnostics['candidates']
+    assert candidates['scanned'] == 25 and candidates['limit'] == 25
+    assert 0 < candidates['generated'] < 25  # 全材料の親では追加・置換のブロックは無効で、予算だけを使う
+    assert candidates['duplicates'] == candidates['generated']
+    assert (candidates['evaluations'], candidates['evaluation_limit']) == (1, 50)
 
     calls = {'n': 0}
 
@@ -824,6 +841,55 @@ def test_generation_budget_and_cancellation_act_on_duplicates_that_never_reach_e
                                       is_cancelled=is_cancelled)
     assert result.termination == 'cancelled' and result.evaluations == 1
     assert result.diagnostics['candidates']['generated'] < 1000  # 生成の途中で止まった
+
+
+def test_a_long_run_of_invalid_blocks_is_bounded_by_the_scan_budget_and_cancellation(monkeypatch):
+    """次の有効な候補が3万ブロック先にあっても、無効なブロックの走査が予算・中断の外で続かない。
+    落ちたら、1回の候補要求の中で格子を黙って1周しうる。"""
+    shape = (32, 32, 32)
+    design = np.ones(shape, bool)
+    parent = np.zeros(shape, bool)
+    parent[-1, -1, -1] = True  # 削除できるのは走査順で最後のブロックだけ
+    visited_blocks = {'n': 0}
+    original = bs._block_region
+
+    def counting_region(*args, **kwargs):
+        visited_blocks['n'] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(bs, '_block_region', counting_region)
+
+    def pull(max_candidates, is_cancelled=None):
+        frontier = bs._Frontier(4)
+        frontier.push(bs._node(parent.copy(), 0, 0, design, (1,), max_consecutive_adds=0))
+        budget = bs._Budget(max_evaluations=1, max_candidates=max_candidates)
+        return bs._pull(frontier, design, budget, set(), 'id', is_cancelled), budget
+
+    visited_blocks['n'] = 0
+    outcome, budget = pull(100)
+    assert outcome == 'generation_limit'
+    assert budget.scanned == 100 and budget.generated == 0
+    assert visited_blocks['n'] <= 101
+
+    calls = {'n': 0}
+
+    def cancel_after_fifty():
+        calls['n'] += 1
+        return calls['n'] > 50
+
+    visited_blocks['n'] = 0
+    outcome, budget = pull(10 ** 9, cancel_after_fifty)
+    assert outcome == 'cancelled' and budget.scanned == 50 and visited_blocks['n'] <= 51
+
+    outcome, budget = pull(10 ** 9)  # 予算が足りれば、最後のブロックの削除候補に届く
+    assert outcome[1] == 'delete' and not outcome[0].any()
+    assert budget.scanned == parent.size and budget.generated == 1
+
+
+def test_the_default_scan_budget_allows_one_sweep_of_the_grid_per_evaluation():
+    assert bs._candidate_budget(10, None, (40, 50, 60)) == 10 * 40 * 50 * 60
+    assert bs._candidate_budget(10, None, (2, 2, 2)) == 10 * bs.DEFAULT_CANDIDATES_PER_EVALUATION
+    assert bs._candidate_budget(10, 7, (40, 50, 60)) == 7
 
 
 def test_the_initial_search_checks_cancellation_before_each_generation_and_evaluation():

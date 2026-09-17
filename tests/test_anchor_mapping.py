@@ -1,10 +1,13 @@
 """探索用の確定表(材料に接する節点だけへの対応付け。`anchor.build_anchors(allowed_nodes=...)` と
 `anchor.condition_mapping`)。実CADと実数値で見る(`docs/FIX_BINARY_SEARCH_INITIALIZATION.md` §6)。"""
+import dataclasses
+
 import numpy as np
 import pytest
 from build123d import Box, Pos, Rotation
 
-from duocad.topopt import anchor, voxelize
+from duocad.topopt import acceptance, anchor, voxelize
+from duocad.topopt import binary_search as bs
 from duocad.topopt.acceptance import active_nodes as acceptance_active_nodes
 
 
@@ -78,8 +81,9 @@ def test_material_mapping_uses_only_nodes_that_touch_material_and_keeps_the_load
     assert load['max_mapping_distance_mm'] <= table.radius * (1 + 1e-9)
     # 全ての重みが面の下の格子面(材料側)へ移るので、重心は z 方向へ下がる(面内のずれは
     # テント重みが格子位相で偏るぶんで、これも半径以内)。モーメントは節点荷重から独立に計算した
-    # 値で、|Δc × F| と一致し、|Δc|·|F| を超えない。
-    shift = np.asarray(load['node_centroid_mm']) - np.asarray(load['sample_centroid_mm'])
+    # 値で、CAD面の重心からのずれ Δc について |Δc × F| と一致し、|Δc|·|F| を超えない。
+    assert load['centroid_reference'] == 'cad' and load['sample_to_cad_shift_mm'] <= 1e-9
+    shift = np.asarray(load['node_centroid_mm']) - np.asarray(load['cad_centroid_mm'])
     assert shift[2] < 0
     assert load['moment_error_nmm'] == pytest.approx(np.linalg.norm(np.cross(shift, force)), abs=1e-9)
     assert load['moment_error_nmm'] <= load['centroid_shift_mm'] * 100.0 + 1e-9
@@ -193,3 +197,63 @@ def test_allowed_nodes_must_match_the_node_grid():
     soup, grid, design = _setup(_off_plane_box())
     with pytest.raises(ValueError, match='allowed_nodes'):
         anchor.build_anchors(soup, grid, allowed_nodes=np.ones(5, dtype=bool))
+
+
+def test_the_search_entry_rejects_unmapped_samples_even_when_every_node_is_on_material(monkeypatch):
+    """直接APIで検証の無い確定表を渡しても、探索の入口が表を検証し直して止まる(候補生成0回・FEM0回)。
+    面の半分の標本が対応不能でも残った節点は全部材料に接するので、節点の被覆だけでは止まらない題材。"""
+    soup, grid, design = _setup(_off_plane_box())
+    top, bottom = _face_facing(soup, (0, 0, 1)), _face_facing(soup, (0, 0, -1))
+    cut = design.copy()
+    cut[grid.centers_1d(0) > 0.0, :, :] = False
+    table = anchor.build_anchors(soup, grid, allowed_nodes=anchor.active_nodes(cut))
+    conditions = bs.SearchConditions(grid=grid, table=table, fixed_faces=[bottom], load_faces=[top],
+                                     forces=[(0.0, 0.0, -100.0)], preserves=[], excludes=[],
+                                     target_safety_factor=2.0)
+    assert not any(row['uncovered_nodes'] for row in bs.uncovered_condition_nodes(cut, conditions))
+    monkeypatch.setattr(acceptance, 'inspect', lambda *a, **k: pytest.fail('入口で止まるべき経路が評価に進んだ'))
+    monkeypatch.setattr(bs, '_materialize', lambda *a, **k: pytest.fail('入口で止まるべき経路が候補を作った'))
+    result = bs.find_best_feasible(cut, conditions, max_evaluations=10)
+    assert result.status == 'boundary_mapping_failed' and result.evaluations == 0
+    entry = result.diagnostics['entry_mapping']
+    load = next(row for row in entry['faces'] if row['condition'] == f'load_face_{top}')
+    assert entry['status'] == 'fail' and 'unmapped_samples' in load['reasons']
+
+
+def test_the_position_gate_measures_from_the_cad_centroid_within_the_search_radius():
+    """作用位置の基準はCAD面の面積重心。CAD重心が探索半径より離れていれば、標本の重心と節点が
+    揃っていても重心とモーメントの両方で不成立になる。"""
+    soup, grid, design = _setup(_off_plane_box())
+    top, bottom = _face_facing(soup, (0, 0, 1)), _face_facing(soup, (0, 0, -1))
+    table = anchor.build_anchors(soup, grid, allowed_nodes=anchor.active_nodes(design))
+    force = (0.0, 0.0, -100.0)
+    assert anchor.condition_mapping(table, [bottom], [top], [force], material=design)['status'] == 'pass'
+
+    moved = dataclasses.replace(table[top], cad_centroid=table[top].cad_centroid + np.array([2.0 * grid.spacing, 0, 0]))
+    table.anchors[top] = moved
+    report = anchor.condition_mapping(table, [bottom], [top], [force], material=design)
+    load = next(row for row in report['faces'] if row['condition'] == f'load_face_{top}')
+    assert report['status'] == 'fail' and {'centroid_shift', 'moment'} <= set(load['reasons'])
+    assert load['centroid_limit_mm'] == pytest.approx(table.radius) and load['centroid_shift_mm'] > table.radius
+    assert 'resultant' not in load['reasons']
+    assert '探索半径' in anchor.format_mapping_warning(report)
+
+
+def test_the_moment_gate_catches_a_load_vector_that_does_not_follow_the_assigned_areas(monkeypatch):
+    """重心は担当面積から、モーメントは `load_vector` の自由度配列から別々に計算する。合力を保ったまま
+    荷重を面の端の1節点へ寄せると、重心の門は通り、モーメントの門だけが落ちる。"""
+    soup, grid, design = _setup(_off_plane_box())
+    top, bottom = _face_facing(soup, (0, 0, 1)), _face_facing(soup, (0, 0, -1))
+    table = anchor.build_anchors(soup, grid, allowed_nodes=anchor.active_nodes(design))
+    corner = int(table[top].node_ids[np.argmin(table.node_grid.positions_of(table[top].nodes)[:, 0])])
+
+    def lumped(faces, total_force, **kwargs):
+        vector = np.zeros(table.node_grid.ndof)
+        vector[3 * corner:3 * corner + 3] = total_force
+        return vector
+
+    monkeypatch.setattr(table, 'load_vector', lumped)
+    report = anchor.condition_mapping(table, [bottom], [top], [(0.0, 0.0, -100.0)], material=design)
+    load = next(row for row in report['faces'] if row['condition'] == f'load_face_{top}')
+    assert load['reasons'] == ['moment']
+    assert load['moment_error_nmm'] > load['moment_limit_nmm'] == pytest.approx(table.radius * 100.0)

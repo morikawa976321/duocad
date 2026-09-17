@@ -1171,16 +1171,16 @@ def _check_anchor_centroids(doc: "Document", space, *, table=None) -> dict:
     面添字の取り違えは例外を出さない。`_verify_face_mapping` は B-rep の側で対応を確かめるが、
     それを通り抜けた場合(まとめ方を将来変えたとき等)、ここが最後に気づける場所である。
     測るのは `anchor.FaceAnchor.centroid`(節点の担当面積で重み付けした重心)と、
-    **その面の面積重心**(`query.face_centroid`)の距離。許容は要素サイズの
-    `anchor.MAPPING_CENTROID_LIMIT_ELEMENTS` 倍(**粗い網** —— 狙いは「別のボディの面を掴んだ」級の
-    取り違え〈このタスクの題材では 50mm 以上離れる〉を実行時にも捕まえることで、隣接面との
-    取り違えは `_verify_face_mapping` が決定的に落とす)。`table` を渡すとその表(探索用の確定表)を
+    **その面の面積重心**(`query.face_centroid`)の距離。許容は `anchor.position_limit`(対応付けの
+    探索半径)で、`anchor.condition_mapping` の作用位置の門と同じ値。あちらはまとめた形の三角形群が
+    持つ面の重心と比べ、こちらは文書のボディの面から取り直した重心と比べる —— 面添字の対応が
+    壊れていれば、こちらだけが気づく。`table` を渡すとその表(探索用の確定表)を
     測り、省くと導出の幾何の表(`space.table`)を測る。
 
     **条件に焼き込んである `center` を使ってはいけない。** あれは `Face.center()` の既定
     (`CenterOf.GEOMETRY`)で、曲面では面パッチから離れる —— hanger の荷重面(トーラス)では
-    節点重心から 12.807mm 離れ、許容は要素サイズ比例なので **4.27mm より細かいと必ず落ちて
-    いた**(面積重心なら 0.055mm)。ここは離散化の誤差を測る門なので、比べる相手は
+    節点重心から 12.807mm 離れ、許容は要素サイズ比例なので**要素を細かくするといつか必ず落ちる**
+    (面積重心なら 0.055mm)。ここは離散化の誤差を測る門なので、比べる相手は
     「その面の上のどこか」でなければならない。
     """
     import numpy as np
@@ -1193,7 +1193,7 @@ def _check_anchor_centroids(doc: "Document", space, *, table=None) -> dict:
     if table is None:
         return {}
     setup = doc.optimize
-    limit = an.MAPPING_CENTROID_LIMIT_ELEMENTS * float(space.grid.spacing)
+    limit = an.position_limit(table)
     out: dict = {"limit_mm": limit, "table": table.stats.get("mapping", "geometry")}
     # **面ごとに測る。合計や平均で見てはならない** —— 1枚だけ取り違えても、他が合っていれば
     # 平均は許容に収まる。面が増えるほど取り違えは起きやすくなるので、ここは緩めない。
@@ -1372,7 +1372,7 @@ def _search_failure_warning(search_result: Any) -> str:
     if search_result.termination == 'evaluation_limit':
         return head + "評価予算を増やすか条件を見直すこと"
     if search_result.termination == 'generation_limit':
-        return head + "候補記述の予算(max_candidates)で止まった。条件を見直すか予算を増やすこと"
+        return head + "候補ブロックの走査予算(max_candidates。無効なブロックも数える)で止まった。条件を見直すか予算を増やすこと"
     return head + "条件(保持・除外・条件面・目標安全率・解像度)を見直すこと"
 
 
