@@ -917,7 +917,8 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
 
     合格形状は1つだけ持つ。1回の試行: 合格形状を解いた変位の要素エネルギー(近傍でならす)の低い順に
     `k = max(1, ⌊r × 後退倍率 × 材料セル数⌋)` セルを選び(`step_ratio` / `select_removal`)、
-    水密に戻す修復(`restore_irregular`) → 島処理 → 6条件(FEM)。合格すればその形状とエネルギーへ進み、
+    水密に戻す修復(`restore_irregular`。選んだセルが全部戻ったら評価に数えず、それらを以後外す) →
+    島処理 → 6条件(FEM)。合格すればその形状とエネルギーへ進み、
     後退倍率を2倍に戻す(上限1)。不合格・計算失敗なら形状を変えず、k > 1 なら後退倍率を半分にして
     同じ順位から選び直す(再求解しない)。k = 1 の不合格はそのセルを以後の候補から外して次のセルを試し
     (形が変わっても戻さない)、安全率で落ちたらそこで `converged`。外せるセルが尽きても `converged`。
@@ -934,13 +935,16 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     anchor_ids = _anchor_node_ids(conditions)
     element_volume = conditions.grid.element_volume
     steps: list[dict] = []
+    excluded: set[int] = set()
     reduction = dict(step_exponent=float(step_exponent), max_step_ratio=float(max_step_ratio),
-                     filter_size=ENERGY_FILTER_SIZE, fem_solves=0, stop_reason=None, steps=steps)
+                     filter_size=ENERGY_FILTER_SIZE, fem_solves=0, restored_selections=0, excluded_cells=excluded,
+                     stop_reason=None, steps=steps)
 
     def result(termination: str) -> SearchResult:
+        summary = dict(reduction, excluded_cells=len(excluded))
         return SearchResult(status='feasible', termination=termination, best_feasible=best, history=history,
                             evaluations=evaluations, conditions_identifier=identifier,
-                            diagnostics=dict(initial=initial.diagnostics, reduction=reduction))
+                            diagnostics=dict(initial=initial.diagnostics, reduction=summary))
 
     energy = best.energy
     if energy is None:
@@ -954,7 +958,6 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             return result('evaluation_error')
 
     multiplier = 1.0
-    excluded: set[int] = set()
     order = ranked_cells(best.mask, energy)
     while True:
         if evaluations >= max_evaluations:
@@ -972,6 +975,11 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
         candidate = restore_irregular(candidate, best.mask)
         candidate.setflags(write=False)
         removed = int(best.mask.sum() - candidate.sum())
+        if removed == 0:
+            # 水密に戻すと選んだセルが全部戻った: 候補ができていないので評価に数えず、選んだセルを以後外す。
+            excluded.update(removal.tolist())
+            reduction['restored_selections'] += 1
+            continue
         evaluations += 1
         operation = f'remove:{removed}'
         step = dict(requested_cells=requested, selected_cells=int(removal.size), removed_cells=removed,
@@ -980,10 +988,8 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
         steps.append(step)
 
         accepted, failed, trials = None, [], []
-        survivors, island_diag = ([], None) if removed == 0 else resolve_islands(candidate, conditions)
-        if removed == 0:
-            failed.append('watertight')  # 水密に戻すと選んだセルが全部戻った
-        elif not survivors:
+        survivors, island_diag = resolve_islands(candidate, conditions)
+        if not survivors:
             trials.append(_no_component_trial(history, candidate, _mask_hash(candidate), best.trial_index,
                                               operation, conditions, island_diag).index)
             failed.append('no_component')
