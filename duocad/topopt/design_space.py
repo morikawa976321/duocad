@@ -611,6 +611,32 @@ def box_mask(grid: vx.Grid, lo: Sequence[float], hi: Sequence[float]) -> np.ndar
     return inside[0][:, None, None] & inside[1][None, :, None] & inside[2][None, None, :]
 
 
+def frame_box(cloud_lo, cloud_hi, *, margin_ratio: float = DEFAULT_MARGIN_RATIO) -> tuple:
+    """条件の点群の外接箱 → 格子の外枠 `(lo, hi)`。余白は `margin_ratio × 点群の最長辺`。"""
+    lo = np.asarray(cloud_lo, dtype=float)
+    hi = np.asarray(cloud_hi, dtype=float)
+    longest = float(np.max(hi - lo))
+    if not longest > 0:
+        raise DesignSpaceGeometryError("条件の点群が1点に潰れている(外接箱が起こせない)")
+    margin = float(margin_ratio) * longest
+    return lo - margin, hi + margin
+
+
+def grid_for_frame(box_lo, box_hi, *, elements_long_axis: int = DEFAULT_ELEMENTS_LONG_AXIS,
+                   spacing: Optional[float] = None) -> vx.Grid:
+    """外枠 → 格子。`spacing` を渡すと最長辺の分割数を丸めて決める(実 spacing は指定値と一致しない)。
+
+    **格子を起こす規則はここだけにある。** `derive` も解像度の梯子(`optimize_run`)もこれを呼ぶ ——
+    2箇所で同じ式を書くと、画面に出す要素サイズ・要素数と実際の格子が黙ってずれる(層をまたぐ契約)。
+    """
+    if spacing is None:
+        n_long = int(elements_long_axis)
+    else:
+        n_long = max(1, int(round(float(np.max(np.asarray(box_hi, dtype=float) - np.asarray(box_lo, dtype=float)))
+                                  / float(spacing))))
+    return vx.grid_for_bbox(box_lo, box_hi, n_long)
+
+
 # ---------------------------------------------------------------------------
 # 導出(本体)
 # ---------------------------------------------------------------------------
@@ -649,18 +675,12 @@ def derive(
     cloud_lo = corners.min(axis=0)
     cloud_hi = corners.max(axis=0)
     longest = float(np.max(cloud_hi - cloud_lo))
-    if not longest > 0:
-        raise DesignSpaceGeometryError("条件の点群が1点に潰れている(外接箱が起こせない)")
+    box_lo, box_hi = frame_box(cloud_lo, cloud_hi, margin_ratio=ratio)
     margin = ratio * longest
     planes, triangles, hull_info = convex_hull(corners)
-    box_lo = cloud_lo - margin
-    box_hi = cloud_hi + margin
-
-    if spacing is None:
-        n_long = int(elements_long_axis)
-    else:
-        n_long = max(1, int(round(float(np.max(box_hi - box_lo)) / float(spacing))))
-    grid = vx.grid_for_bbox(box_lo, box_hi, n_long)
+    grid = grid_for_frame(box_lo, box_hi, elements_long_axis=elements_long_axis, spacing=spacing)
+    # 実際に使った最長軸の分割数(`grid_for_frame` は外枠の最長辺 / 分割数を要素サイズにする)。
+    n_long = int(round(float(np.max(box_hi - box_lo)) / grid.spacing))
     # **保持/除外を格子に載せるときの三角形分割は要素サイズから決める。** この関数の下の方で
     # `model_from_design_mask` を deviation 無しで呼ぶ(= 要素サイズの `DEFAULT_DEVIATION_RATIO`
     # 倍)ので、ここを揃えておかないと通した保持がそこで通らない。

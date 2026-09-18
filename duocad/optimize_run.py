@@ -601,8 +601,8 @@ def _box_longest_edge(lo, hi) -> float:
     """`derive` が格子を起こす外枠(点群の外接箱 + 余白)の最長辺[mm]。"""
     from .topopt import design_space as ds
 
-    longest = max(float(hi[a]) - float(lo[a]) for a in range(3))
-    return longest * (1.0 + 2.0 * ds.DEFAULT_MARGIN_RATIO)
+    box_lo, box_hi = ds.frame_box(lo, hi)
+    return float(max(box_hi[a] - box_lo[a] for a in range(3)))
 
 
 def _snap_to_grid(lo, hi, spacing: float) -> float:
@@ -624,25 +624,14 @@ def _snap_to_grid(lo, hi, spacing: float) -> float:
 def _element_count(lo, hi, spacing: float) -> int:
     """`derive(spacing=...)` が実際に起こす格子の要素数。
 
-    **`derive` の規則をここで再計算している**(余白 `design_space.DEFAULT_MARGIN_RATIO`、
-    分割数 `round(外枠の最長辺 / spacing)`、`grid_for_bbox` の `ceil(辺長 / 実spacing) + 2*パッド`)
-    —— 1回の導出も走らせずに数を出すためで、実際の格子は `derive` が作る。要求した要素サイズ
-    そのままではなく**丸めた後の実 spacing** で数えるので、梯子の要素数が実格子と一致する。
+    格子そのものを `design_space.grid_for_frame`(`derive` と同じ規則)で1つ起こして数える ——
+    ボクセル化も導出も走らせないので安い。要求した要素サイズではなく**丸めた後の実 spacing** の
+    格子になるので、梯子に出す要素数が実格子と一致する。
     """
     from .topopt import design_space as ds
-    from .topopt import voxelize as vx
 
-    extent = [float(hi[a]) - float(lo[a]) for a in range(3)]
-    longest = max(extent)
-    margin = ds.DEFAULT_MARGIN_RATIO * longest
-    box_long = longest + 2.0 * margin
-    n_long = max(1, int(round(box_long / float(spacing))))
-    real = box_long / n_long
-    total = 1
-    for axis in range(3):
-        length = extent[axis] + 2.0 * margin
-        total *= max(int(math.ceil(length / real - 1e-9)), 1) + 2 * vx.DEFAULT_PAD
-    return total
+    grid = ds.grid_for_frame(*ds.frame_box(lo, hi), spacing=float(spacing))
+    return int(grid.shape[0] * grid.shape[1] * grid.shape[2])
 
 
 def _min_element_size(lo, hi) -> float:
@@ -651,18 +640,16 @@ def _min_element_size(lo, hi) -> float:
     `_element_count` は単調(要素サイズを下げると増える)なので、解析的な当たりから
     上へ詰める(切り上げとパッドがあるので閉じた式にはならない)。
     """
-    extent = [float(hi[a]) - float(lo[a]) for a in range(3)]
-    longest = max(extent)
-    if not longest > 0.0:
-        raise OptimizeInputError("条件の外接直方体が1点に潰れている")
     from .topopt import design_space as ds
 
-    margin = ds.DEFAULT_MARGIN_RATIO * longest
+    if not max(float(hi[a]) - float(lo[a]) for a in range(3)) > 0.0:
+        raise OptimizeInputError("条件の外接直方体が1点に潰れている")
+    box_lo, box_hi = ds.frame_box(lo, hi)
     volume = 1.0
     for axis in range(3):
-        volume *= extent[axis] + 2.0 * margin
-    guess = (volume / MAX_ELEMENTS) ** (1.0 / 3.0) if volume > 0 else longest
-    spacing = max(guess, longest * 1e-6)
+        volume *= float(box_hi[axis] - box_lo[axis])
+    guess = (volume / MAX_ELEMENTS) ** (1.0 / 3.0) if volume > 0 else _box_longest_edge(lo, hi)
+    spacing = max(guess, _box_longest_edge(lo, hi) * 1e-6)
     for _ in range(200):
         if _element_count(lo, hi, spacing) <= MAX_ELEMENTS:
             return spacing
@@ -1351,6 +1338,14 @@ def _search_failure_warning(search_result: Any) -> str:
         empty = diagnostics.get('empty_faces', [])
         return f"この解像度では拘束面・荷重面 {empty} のアンカーが空になる。解像度を上げること"
     if search_result.status == 'boundary_mapping_failed':
+        # 対応付けの検証がある(製品経路は必ずある)なら、落ちた理由をその報告から作る ——
+        # 節点の被覆だけを語ると、対応不能標本・作用位置のずれで落ちたときに面の名前が出ない。
+        from .topopt import anchor as an
+
+        for report in (diagnostics.get('entry_mapping'), diagnostics.get('mapping')):
+            message = an.format_mapping_warning(report) if isinstance(report, dict) else ''
+            if message:
+                return message + "。候補の削除・追加・置換では直らない(候補は設計空間の部分集合)"
         rows = diagnostics.get('uncovered_condition_nodes', [])
         names = ", ".join(f"{row['condition']}({row['uncovered_nodes']}/{row['nodes']}節点)" for row in rows)
         origin = "材料に対応付けた確定表" if diagnostics.get('mapped') else "材料を見ない幾何の表"

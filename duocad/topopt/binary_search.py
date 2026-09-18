@@ -166,12 +166,6 @@ def evaluation_identifier(conditions: SearchConditions) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def _mask_hash(mask: np.ndarray) -> str:
-    """`acceptance.inspect` の `material_sha256` と同じ式(候補どうしの突き合わせに使う)。"""
-    array = np.ascontiguousarray(np.asarray(mask, dtype=bool))
-    return hashlib.sha256(array.tobytes()).hexdigest()
-
-
 # ---------------------------------------------------------------------------
 # 入口の必要条件(修正B §4): 確定表の全節点が全設計空間の材料に接するか
 # ---------------------------------------------------------------------------
@@ -353,19 +347,6 @@ def _materialize(parent: np.ndarray, design_space: np.ndarray, op: str, region: 
     return child
 
 
-def repair_candidates(current: np.ndarray, design_space: np.ndarray, size: int):
-    """1つのブロック大きさについて削除・追加・置換の候補 `(op, mask)` を遅延生成する(§4.3)。
-
-    削除はブロックと現在の材料の重なり。追加は「設計空間内の、既存材料と面で接する
-    空セル群」(§4.3)に限る —— 材料から離れた場所への新設は生成しない。
-    マスクは1つ要求されるたびに1つだけ作る(全候補を配列で先に作らない)。
-    """
-    current = np.asarray(current, dtype=bool)
-    design_space = np.asarray(design_space, dtype=bool)
-    for op, region, addable in candidate_descriptors(current, design_space, (int(size),)):
-        yield op, _materialize(current, design_space, op, region, addable)
-
-
 # ---------------------------------------------------------------------------
 # 探索状態(§4.1)
 # ---------------------------------------------------------------------------
@@ -461,24 +442,22 @@ def _evaluate_survivor(survivor: np.ndarray, before: np.ndarray, conditions: Sea
     FEMまで進んだ検査の回数を `counter['fem_solves']` に足す。
     """
     kwargs = {**conditions.inspect_kwargs(), **(overrides or {})}
-    attempts = [(conditions.solver, operation)]
-    report = trial = None
-    while attempts:
-        solver, label = attempts.pop()
+
+    def evaluate(solver: str, label: str, parent_index: Optional[int]) -> tuple:
         if fields is not None:
             fields.clear()
-        report = acceptance.inspect(survivor, before, conditions.grid, **{**kwargs, 'solver': solver},
-                                    fields=fields)
+        report = acceptance.inspect(survivor, before, conditions.grid, **{**kwargs, 'solver': solver}, fields=fields)
         if counter is not None and report['checks']['safety'].get('reason') != 'prerequisites_failed':
             counter['fem_solves'] += 1
-        trial = _record_trial(history, parent if trial is None else trial.index, label, report)
-        if label != operation:
-            trial.note = f'同じマスク・条件で解法を{conditions.solver}→{solver}に変えて再試行'
+        trial = _record_trial(history, parent_index, label, report)
         history.append(trial)
-        if (label == operation and report['status'] == 'unknown'
-                and report['checks']['safety'].get('reason') == 'evaluation_error'):
-            alternate = 'direct' if conditions.solver != 'direct' else 'cg'
-            attempts.append((alternate, f'solver_retry:{alternate}'))
+        return report, trial
+
+    report, trial = evaluate(conditions.solver, operation, parent)
+    if report['status'] == 'unknown' and report['checks']['safety'].get('reason') == 'evaluation_error':
+        alternate = 'direct' if conditions.solver != 'direct' else 'cg'
+        report, trial = evaluate(alternate, f'solver_retry:{alternate}', trial.index)
+        trial.note = f'同じマスク・条件で解法を{conditions.solver}→{alternate}に変えて再試行'
     return report, trial
 
 
@@ -625,7 +604,7 @@ def _pull(frontier: _Frontier, design_space_mask: np.ndarray, budget: _Budget, v
         op, region, addable = descriptor
         budget.generated += 1
         child = _materialize(node.mask, design_space_mask, op, region, addable)
-        key = (_mask_hash(child), identifier)
+        key = (acceptance.material_sha256(child), identifier)
         if key in visited:
             budget.duplicates += 1
             continue
@@ -748,14 +727,14 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
         """
         candidate.setflags(write=False)
         budget.evaluations += 1
-        raw_hash = _mask_hash(candidate)
+        raw_hash = acceptance.material_sha256(candidate)
         survivors, island_diag = resolve_islands(candidate, conditions)
         if not survivors:
             trial = _no_component_trial(history, candidate, raw_hash, parent, operation, conditions, island_diag)
             frontier.push(_node(candidate, trial.index, streak, design_space_mask, sizes, max_consecutive_adds))
             return None
         for survivor in survivors:
-            survivor_key = (_mask_hash(survivor), identifier)
+            survivor_key = (acceptance.material_sha256(survivor), identifier)
             if survivor_key in visited_survivors:
                 continue
             visited_survivors.add(survivor_key)
@@ -785,7 +764,7 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
                                 conditions_identifier=identifier, diagnostics=_diagnostics(frontier, budget))
         return None
 
-    visited_candidates.add((_mask_hash(design_space_mask), identifier))
+    visited_candidates.add((acceptance.material_sha256(design_space_mask), identifier))
     found = consider(design_space_mask, 'initial', None, 0)
     if found is not None:
         return found
@@ -937,14 +916,14 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     steps: list[dict] = []
     excluded: set[int] = set()
     reduction = dict(step_exponent=float(step_exponent), max_step_ratio=float(max_step_ratio),
-                     filter_size=ENERGY_FILTER_SIZE, fem_solves=0, restored_selections=0, excluded_cells=excluded,
+                     filter_size=ENERGY_FILTER_SIZE, fem_solves=0, restored_selections=0,
                      stop_reason=None, steps=steps)
 
     def result(termination: str) -> SearchResult:
-        summary = dict(reduction, excluded_cells=len(excluded))
         return SearchResult(status='feasible', termination=termination, best_feasible=best, history=history,
                             evaluations=evaluations, conditions_identifier=identifier,
-                            diagnostics=dict(initial=initial.diagnostics, reduction=summary))
+                            diagnostics=dict(initial=initial.diagnostics,
+                                             reduction=dict(reduction, excluded_cells=len(excluded))))
 
     energy = best.energy
     if energy is None:
@@ -990,7 +969,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
         accepted, failed, trials = None, [], []
         survivors, island_diag = resolve_islands(candidate, conditions)
         if not survivors:
-            trials.append(_no_component_trial(history, candidate, _mask_hash(candidate), best.trial_index,
+            trials.append(_no_component_trial(history, candidate, acceptance.material_sha256(candidate), best.trial_index,
                                               operation, conditions, island_diag).index)
             failed.append('no_component')
         for survivor in survivors:

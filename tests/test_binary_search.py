@@ -40,6 +40,14 @@ class Table:
         return sorted(self._empty)
 
 
+def repair_candidates(current, design_space, size):
+    """1つのブロック大きさの候補 `(操作, マスク)`。段階3の生成規則(記述 → マスク)をテストから読む。"""
+    current = np.asarray(current, dtype=bool)
+    design_space = np.asarray(design_space, dtype=bool)
+    for op, region, addable in bs.candidate_descriptors(current, design_space, (int(size),)):
+        yield op, bs._materialize(current, design_space, op, region, addable)
+
+
 def bar_conditions(shape=(4, 2, 2), *, fixed=(1,), load=(2,), empty=(), forces=((0., 0., -1.),),
                     keep_box=None, target_safety_factor=.001, solver='direct'):
     """まっすぐな棒(4x2x2既定)。固定面=x最小平面(節点0..8)、荷重面=x最大平面。
@@ -75,7 +83,7 @@ def test_repair_candidates_delete_only_removes_existing_material_and_add_only_to
     current = np.zeros((4, 1, 1), bool)
     current[0] = current[1] = True  # 材料は先頭2セルだけ
     design_space = np.ones((4, 1, 1), bool)  # 設計空間は全体
-    ops = list(bs.repair_candidates(current, design_space, 1))
+    ops = list(repair_candidates(current, design_space, 1))
     kinds = {kind for kind, _ in ops}
     assert kinds == {'delete', 'add'}  # このブロック大きさでは置換の材料が無い場所もある
     deletes = [mask for kind, mask in ops if kind == 'delete']
@@ -97,7 +105,7 @@ def test_repair_candidates_replace_pairs_a_removal_with_an_addition_in_one_candi
     design_space = np.ones((4, 1, 1), bool)
     # size=4: 唯一のブロックが配列全体を覆うので、削除できる材料と追加できる空きの
     # どちらも同じブロックに入り、置換候補が1つ生成される。
-    ops = list(bs.repair_candidates(current, design_space, 4))
+    ops = list(repair_candidates(current, design_space, 4))
     replaces = [mask for kind, mask in ops if kind == 'replace']
     assert len(replaces) == 1
     replaced = replaces[0]
@@ -325,7 +333,7 @@ def test_pure_deletion_cannot_improve_on_the_detour_shape():
 
     # 単独削除: どのサイズ・位置でも不合格
     for size in sizes:
-        for kind, mask in bs.repair_candidates(initial_mask, design_space, size):
+        for kind, mask in repair_candidates(initial_mask, design_space, size):
             if kind != 'delete':
                 continue
             survivors, _ = bs.resolve_islands(mask, conditions)
@@ -351,12 +359,12 @@ def test_pure_deletion_cannot_improve_on_the_detour_shape():
                 best_mm3 = min(best_mm3, report['volumes']['material_mm3'])
             if report['status'] != 'unknown':
                 for size in sizes:
-                    for kind, mask in bs.repair_candidates(survivor, design_space, size):
+                    for kind, mask in repair_candidates(survivor, design_space, size):
                         if kind == 'delete':
                             frontier.append(mask)
         if not survivors:
             for size in sizes:
-                for kind, mask in bs.repair_candidates(current, design_space, size):
+                for kind, mask in repair_candidates(current, design_space, size):
                     if kind == 'delete':
                         frontier.append(mask)
     assert steps == 256  # 初期形状(8セル)の部分集合を全て尽くした(2**8)
@@ -730,7 +738,7 @@ def _fake_report(material, status='fail'):
     """FEM・CADを置き換える小さな報告(候補管理だけを検査するため)。"""
     material = np.asarray(material, dtype=bool)
     volume = float(material.sum())
-    return dict(status=status, material_sha256=bs._mask_hash(material),
+    return dict(status=status, material_sha256=acceptance.material_sha256(material),
                 volumes=dict(material_mm3=volume, before_mm3=volume, removed_islands_mm3=0.0),
                 checks=dict(watertight=dict(status='pass'), single_solid=dict(status='pass'),
                             preserve=dict(status='pass'), exclude=dict(status='pass'),
@@ -757,7 +765,7 @@ def test_candidates_are_materialised_one_at_a_time_not_all_up_front(monkeypatch)
     current = np.ones((12, 12, 12), bool)
     current[6:] = False
     design = np.ones((12, 12, 12), bool)
-    stream = bs.repair_candidates(current, design, 1)
+    stream = repair_candidates(current, design, 1)
     kind, mask = next(stream)
     assert calls['n'] == 1 and kind == 'delete' and mask.sum() == current.sum() - 1
     for _ in range(4):
@@ -811,7 +819,7 @@ def test_generation_budget_and_cancellation_act_on_duplicates_that_never_reach_e
     """無効・重複候補だけで評価数が増えないときも、走査予算と中断が効く(無限に生成し続けない)。"""
     shape = (6, 2, 2)
     conditions = bar_conditions(shape=shape, target_safety_factor=1e12)
-    monkeypatch.setattr(bs, '_mask_hash', lambda mask: 'same')  # 全候補が同一に見える → 重複しか生成されない
+    monkeypatch.setattr(acceptance, 'material_sha256', lambda mask: 'same')  # 全候補が同一に見える → 重複しか生成されない
     result = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=50, max_candidates=25)
     assert result.status == 'no_feasible_found' and result.termination == 'generation_limit'
     assert result.evaluations == 1
@@ -931,11 +939,11 @@ def test_the_best_feasible_mask_is_read_only_and_survives_later_reduction():
     result = bs.find_best_feasible(design, conditions, max_evaluations=6)
     best = result.best_feasible
     assert not best.mask.flags.writeable and not best.before_mask.flags.writeable
-    assert bs._mask_hash(best.mask) == best.mask_hash
+    assert acceptance.material_sha256(best.mask) == best.mask_hash
     snapshot = best.mask.copy()
     later = bs._reduce_volume(result, design, conditions, max_evaluations=200, is_cancelled=None)
     assert later.best_feasible.material_mm3 <= best.material_mm3
-    assert np.array_equal(best.mask, snapshot) and bs._mask_hash(best.mask) == best.mask_hash
+    assert np.array_equal(best.mask, snapshot) and acceptance.material_sha256(best.mask) == best.mask_hash
 
 
 def test_resolve_islands_keeps_only_the_numbers_of_removed_islands():

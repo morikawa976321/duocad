@@ -77,6 +77,12 @@ def irregular_vertices(material):
     return ~REGULAR_VERTEX[codes], codes
 
 
+def material_sha256(material) -> str:
+    """材料マスクの内容ハッシュ。**候補の突き合わせ(`binary_search`)と `inspect` の報告が同じ式を使う**
+    (層をまたぐ契約 —— 別々に書くと、同じ形が違うハッシュで記録される)。"""
+    return hashlib.sha256(np.ascontiguousarray(np.asarray(material, dtype=bool)).tobytes()).hexdigest()
+
+
 def boundary_check(material):
     material = np.asarray(material, dtype=bool)
     bad, codes = irregular_vertices(material)
@@ -333,7 +339,7 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
     status = 'fail' if 'fail' in statuses else 'unknown' if 'unknown' in statuses else 'pass'
     return dict(schema_version=1, status=status, exit_code={'pass': 0, 'fail': 1, 'unknown': 2}[status],
                 stage='post-island-removal, pre-smoothing',
-                material_sha256=hashlib.sha256(material.tobytes()).hexdigest(),
+                material_sha256=material_sha256(material),
                 grid=grid.as_dict(), checks=checks,
                 volumes=dict(material_mm3=float(material.sum() * grid.element_volume),
                              before_mm3=float(original.sum() * grid.element_volume),
