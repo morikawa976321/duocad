@@ -375,7 +375,8 @@ README に残すのはアーキテクチャ上の要点だけ:
 
 ### モジュールとimport境界
 
-**`duocad/` 配下で `OCP` を import してよいのは `kernel.py` だけ、`build123d` は `query.py` だけ。**
+**`duocad/` 配下で `OCP` を import してよいのはカーネル層の3本(`kernel.py` / `kernel_brep.py` / `mesh_geometry.py`)と `topopt/voxelize.py` だけ、
+`build123d` は `query.py` と `topopt/` の3本だけ。**
 `tests/test_boundaries.py` がソースを再帰的に静的走査して機械的に検査する（動的importも検出）。
 **verbがカーネルを直接叩き始めるのを防ぐ唯一の安全網。**
 
@@ -393,7 +394,9 @@ README に残すのはアーキテクチャ上の要点だけ:
 | `duocad/catalog.py` | **verbの単一宣言**（名前・引数・カテゴリ・プレビュー可否・MCPスキーマ）。下の2つが持つ表はここからの導出 | ✗ | ✗ |
 | `duocad/svg_import.py` | SVG → スケッチの図形（**パーサはbuild123dの推移依存で既に入っている** svgelements） | ✗ | ✗ |
 | `duocad/query.py` | 問い合わせ層のインタフェース | ✗ | **○ここだけ** |
-| `duocad/kernel.py` | OCCTを直接叩く層（テセレーションもここ） | **○ここだけ** | ✗ |
+| `duocad/kernel.py` | OCCTを直接叩く層（テセレーションもここ） | **○** | ✗ |
+| `duocad/kernel_brep.py` | 同じカーネル層。生成CADのBRep保存・ブーリアン・最終ソリッドの幾何検査 | **○** | ✗ |
+| `duocad/mesh_geometry.py` | 同じカーネル層。三角形境界の接続検査と、向き・空洞を保ったCADソリッド化 | **○** | ✗ |
 | `duocad/session.py` | `Session`（1つの文書を持つサーバ側の状態。verbの呼び出し・選択・保存/開く。**配りものは持たず `view` へ委譲**） | ✗ | ✗ |
 | `duocad/view.py` | `DocumentView`（**配りもの**＝状態配信・版・テセレーション/辺/頂点/体積/スケッチのキャッシュ。文書を変えない） | ✗ | ✗ |
 | `duocad/paths.py` | `REPO_ROOT` と、そこから出る既定の置き場（`web/dist` / `models`） | ✗ | ✗ |

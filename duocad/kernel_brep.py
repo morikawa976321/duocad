@@ -4,11 +4,44 @@ import io
 from OCP.BRep import BRep_Builder
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepTools import BRepTools
-from OCP.BOPAlgo import BOPAlgo_CheckerSI
+from OCP.BOPAlgo import BOPAlgo_BOP, BOPAlgo_CheckerSI, BOPAlgo_Operation
 from OCP.TopAbs import TopAbs_SHELL, TopAbs_SOLID
 from OCP.TopoDS import TopoDS_Shape
 
 from .mesh_geometry import subshapes
+
+
+#: `boolean` が受ける操作名 → OCCT の演算。**呼び出し側に OCP の列挙を持たせない**
+#: (層をまたぐ契約 —— ここが `duocad/` でOCPを触ってよい数少ない場所である)。
+BOOLEAN_OPERATIONS = {'fuse': BOPAlgo_Operation.BOPAlgo_FUSE, 'cut': BOPAlgo_Operation.BOPAlgo_CUT}
+
+
+def boolean(shape, tools, operation):
+    """`shape` に `tools` を `operation`('fuse' / 'cut')で適用し、`(結果, 診断)` を返す。
+
+    **警告も診断に入れて返し、ここでは投げない** —— OCCT のブーリアンは警告つきで
+    それらしい形を返すことがあり、採否と記録は呼び出し側の責務。
+    """
+    builder = BOPAlgo_BOP()
+    builder.SetNonDestructive(True)
+    builder.SetFuzzyValue(0.0)      # あいまい判定を入れない(`kernel.common_volume` と同じ)
+    builder.AddArgument(shape)
+    for tool in tools:
+        builder.AddTool(tool)
+    builder.SetOperation(BOOLEAN_OPERATIONS[operation])
+    builder.Perform()
+    errors, warnings = io.BytesIO(), io.BytesIO()
+    builder.DumpErrors(errors)
+    builder.DumpWarnings(warnings)
+    return builder.Shape(), dict(
+        has_errors=builder.HasErrors(), has_warnings=builder.HasWarnings(),
+        errors=errors.getvalue().decode('utf-8', errors='replace'),
+        warnings=warnings.getvalue().decode('utf-8', errors='replace'))
+
+
+def is_valid(shape):
+    """`BRepCheck_Analyzer` が妥当と見るか(None・NULL は False)。"""
+    return shape is not None and not shape.IsNull() and BRepCheck_Analyzer(shape).IsValid()
 
 
 def encode_brep(shape):

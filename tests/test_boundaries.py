@@ -1,4 +1,4 @@
-"""境界と規律 —— 「問い合わせ層をインタフェースにする」「OCPを叩くのはkernel.pyだけ」。
+"""境界と規律 —— 「問い合わせ層をインタフェースにする」「OCPを叩くのはカーネル層だけ」。
 
 verbがOCP/build123dを直接叩き始めるのを防ぐための唯一の安全網。ソースを静的に走査するので
 OCP/build123dの実行環境が無くても走る。
@@ -8,7 +8,7 @@ OCP/build123dの実行環境が無くても走る。
 - `import OCP` / `import OCP.X` / `from OCP import X` / `from OCP.X import Y` に加え、
   **動的import**(`importlib.import_module("OCP.X")` / `__import__("OCP")`)も検出する。
   静的importだけを見ていると、境界を破る最も安直な逃げ道(文字列でのimport)が素通りする。
-- 免除は **パッケージ直下の `kernel.py` / `query.py` だけ**(ファイル名一致ではない)。
+- 免除は **パッケージ直下からの相対パスで名指し**する(ファイル名一致ではない)。
   ファイル名だけで免除すると `duocad/verbs/kernel.py` を作れば境界を無効化できてしまう。
 """
 from __future__ import annotations
@@ -26,7 +26,14 @@ DUOCAD_DIR = Path(__file__).resolve().parent.parent / "duocad"
 # 回すと `SetGap` の順序が違って値が 1e-7mm 動き、`check_voxelize.py` [7](辺長が要素サイズの
 # 整数倍の箱は体積が厳密一致)が落ちるため、名指しの免除にしてある。幾何アクセスを
 # kernel/query 越しにする移行は別タスクとして残っている。
-OCP_ALLOWED = frozenset({"kernel.py", "topopt/voxelize.py"})
+#
+# `kernel_brep.py`(生成CADのBRep保存・ブーリアン・最終ソリッドの幾何検査)と
+# `mesh_geometry.py`(三角形境界の接続検査と、向き・空洞を保ったCADソリッド化)は
+# **カーネル層の一部**であって verb 層ではない —— `kernel.py` が2,300行あるので
+# 役割ごとに分けてあるだけである。この3本の外でOCPを叩いたら落ちる。
+OCP_ALLOWED = frozenset(
+    {"kernel.py", "kernel_brep.py", "mesh_geometry.py", "topopt/voxelize.py"}
+)
 BUILD123D_ALLOWED = frozenset(
     {"query.py", "topopt/voxelize.py", "topopt/anchor.py", "topopt/design_space.py"}
 )
@@ -139,7 +146,7 @@ def test_boundary_scan_detects_every_import_form(tmp_path):
 
 
 def test_boundary_scan_covers_every_source_file():
-    """走査対象がサブパッケージを含む全ソースであること(免除は直下の2ファイルのみ)。
+    """走査対象がサブパッケージを含む全ソースであること(免除は名指しした相対パスのみ)。
 
     走査が0件になっていたら上の境界テストは常に緑で何も検査していないので、
     「実ファイルを1つ以上見ている」ことと「既知の5モジュールを取りこぼしていない」ことを固定する。
@@ -157,7 +164,9 @@ def test_boundary_scan_covers_every_source_file():
 
     # 免除一覧が黙って伸びないように、中身そのものを固定する。**増やすときはここも直す** ——
     # 直すこと自体が「境界を1つ緩めた」という判断の記録になる。
-    assert OCP_ALLOWED == frozenset({"kernel.py", "topopt/voxelize.py"})
+    assert OCP_ALLOWED == frozenset(
+        {"kernel.py", "kernel_brep.py", "mesh_geometry.py", "topopt/voxelize.py"}
+    )
     assert BUILD123D_ALLOWED == frozenset(
         {"query.py", "topopt/voxelize.py", "topopt/anchor.py", "topopt/design_space.py"}
     )
