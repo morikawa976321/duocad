@@ -38,7 +38,11 @@ VERB_IMPORT_STEP = "import_step"
 
 
 def import_step(doc: Document, path: PathLike) -> list[BodyId]:
-    """STEPを読み、ソリッドごとに編集用ボディを作ってIDを返す。"""
+    """STEPを読み、ソリッドごとに編集用ボディを作ってIDを返す。
+
+    **単一ソリッドでも1要素のリストを返す** —— 戻り値の型が入力(部品数)に依存すると、
+    呼び出し側が毎回分岐を書く羽目になる。
+    """
     source_name, text = read_step_source(path)
     shape = kernel.read_step_text(text)  # 壊れていればここで例外、doc/logは無傷
     solids = kernel.split_solids(shape)

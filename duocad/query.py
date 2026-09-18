@@ -176,8 +176,9 @@ def describe_vertices(shape: Any) -> list:
 def edges_of_face(shape: Any, face_index: int) -> list:
     """その面の**外周**を成す辺の添字を昇順で返す。
 
-    返すのは外周(outer wire)の辺だけで、**面に空いた穴の縁は含めない**
-    (穴を対象にする述語が要るようになったら別の `op` として足すこと)。
+    返すのは外周(outer wire)の辺だけで、**面に空いた穴の縁は含めない** —— 外周を
+    丸めたつもりの操作が黙って穴の縁まで変えないため(穴の縁を丸めるとトーラスになる)。
+    穴を対象にする述語が要るようになったら別の `op` として足すこと。
     添字は `describe_edges` の `index` および `fillet(edges=[...])` の添字と一致する。
     """
     raw = _unwrap(shape)

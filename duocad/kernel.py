@@ -179,6 +179,8 @@ def write_stl(shape: "TopoDS_Shape", path: str, deviation: float) -> None:
 
     deviation は**絶対**の線形偏差(mm)。BRepMesh_IncrementalMesh の第3引数 isRelative は
     必ず False にする(True にすると 0.2/0.05/0.01 のどれでも同じメッシュになる)。
+    **build123d の既定の `export_stl` は isRelative=True 側を使っている**ので、そのまま
+    流用すると「deviationを小さくすると細かくなる」という単調性の契約が必ず落ちる。
     既存の三角形分割は BRepTools.Clean_s で捨ててから測り直す — 同じ形状に対して偏差を変えて
     複数回書き出すとき、前回のメッシュが残っていると偏差が効かないことがあるため。
     """
@@ -217,6 +219,11 @@ def volume(shape: "TopoDS_Shape") -> float:
     `BRepGProp.VolumeProperties_s(shape, props)` の**既定の積分**を使う(`Eps` を渡さない)。
     `Eps` 付きの適応積分にすると精度が落ち(Eps=1e-9で相対1.8e-10、Eps=1e-6で相対3.7e-8)、
     STEP往復の体積比較が体積の求め方に依存してしまう。
+
+    STEP書き出し→読み込みを挟んだ体積は**bit-exactではない**(浮動小数点の積分順序に由来する
+    丸め、実測相対誤差 約8e-16)。比較には `math.isclose(rel_tol=1e-6)` を使う —— 実測誤差の
+    約10億倍のマージンで、面の欠落・重複などの実ジオメトリ破損は検出しつつ丸めノイズでは
+    落ちない。面数は往復後も厳密一致(`==`)でよい。
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot compute the volume of an empty shape")
@@ -309,7 +316,8 @@ class BoundingBoxCache:
     値をここへ載せると静かに壊れる。
 
     `AddOptimal` は繰り返しても速くならない(OCCTが内部で結果を持たない。実測: 11ボディで
-    `Add` 0.09ms に対し `AddOptimal` 178ms)。**キャッシュ無しでは `AddOptimal` は使えない。**
+    `Add` 0.09ms に対し `AddOptimal` 178ms、1形状あたりでは18〜60ms)。**キャッシュ無しでは
+    `AddOptimal` は使えない。**
     """
 
     __slots__ = ("_extents",)

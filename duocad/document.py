@@ -159,6 +159,8 @@ class Document:
 
     def __init__(self) -> None:
         self._units = "mm"
+        # 常にリスト(Optionalな単一ボディにしない)。STEPは1回の読み込みで複数ソリッドを
+        # 普通に生むので、「文書=1ボディ」という前提を持ち込まないこと。
         self.bodies: list[Body] = []
         # 型は duocad.sketch.Sketch だが、document.py -> sketch.py の依存を作らないため
         # 注釈は付けない(sketch.py が document.py を import する一方向を保つ)。
