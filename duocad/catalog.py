@@ -1122,6 +1122,21 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="add_solid_body",
+        category="file",
+        description="",
+        ws="none",
+        mcp=False,
+        note=(
+            "**コードからだけ呼ぶverb**(形状最適化が確定した最終CADを文書へ入れる。"
+            "実体は `duocad/verbs/add_solid.py`)。人にもAIにも開けていない —— 引数はB-repの"
+            "本文そのもので手で書くものではなく、CADを持ち込む口は `import_step` である。"
+            "**それでもここに宣言するのは**、操作ログに載るverbとツールの顔ぶれを突き合わせる"
+            "検査(`tests/test_mcp_verbs.py`)が、`mcp=False` かつ `ws=\"none\"` という宣言を"
+            "「ツールを持たないverb」の唯一の出どころとして読むため。宣言を忘れるとそこで落ちる"
+        ),
+    ),
+    Command(
         name="import_step",
         category="file",
         description=(

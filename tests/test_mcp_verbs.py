@@ -28,6 +28,7 @@ import pytest
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad import kernel, query
+from duocad.catalog import COMMANDS
 from duocad.document import Body
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.selection import set_visible
@@ -112,6 +113,11 @@ SELECTION_TOOLS = {
 #: **空でも残す。** 下の `LOGGING_TOOLS` の一致検査が「ツール名 == verb名」を両方向で見る
 #: 仕組みそのもので、到達表に無いverbを足したときはここへ書く場所が要る。
 EXTRA_LOGGING_TOOLS: set = set()
+
+#: 操作ログに載るが、人にもAIにも開けていないverb(コードからだけ呼ぶもの)。
+#: **catalog の宣言から引く** —— ここに名前を写すと catalog と二重管理になり、
+#: 「宣言を忘れた」のか「写し忘れた」のか区別できなくなる。
+NON_TOOL_VERBS = {command.name for command in COMMANDS if not command.mcp and command.ws == "none"}
 
 EXPECTED_TOOLS = VERB_TOOLS | QUERY_TOOLS | SELECTION_TOOLS | EXTRA_LOGGING_TOOLS
 
@@ -373,13 +379,18 @@ def test_tool_names_match_the_verb_names_in_the_operation_log(server: McpServer)
 
     `LOGGING_TOOLS` の側に「ログに載らないツール」(`export_*` / `undo` / `redo`)を
     入れていないことも、この一致が成り立つ条件である。
+
+    **ツールを持たないverb**(コードからだけ呼ぶもの)は `NON_TOOL_VERBS` として
+    **catalog の宣言から引く** —— そういうverbを足すときは catalog に `mcp=False` かつ
+    `ws="none"` で宣言する必要があり、宣言を忘れればここで落ちる。
     """
     from duocad.oplog import registered_verbs
 
     registered = set(registered_verbs())
-    assert registered == LOGGING_TOOLS, {
-        "ツールが無いverb": sorted(registered - LOGGING_TOOLS),
-        "verbが無いツール": sorted(LOGGING_TOOLS - registered),
+    expected = LOGGING_TOOLS | NON_TOOL_VERBS
+    assert registered == expected, {
+        "ツールも catalog の宣言も無いverb": sorted(registered - expected),
+        "verbが無いツール": sorted(expected - registered),
     }
 
 
