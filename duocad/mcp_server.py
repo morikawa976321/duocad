@@ -214,7 +214,12 @@ class DocumentTools:
         include_bbox: bool = False,
         include_regions: bool = False,
     ) -> dict:
-        """ボディ一覧・スケッチ一覧とパラメータ一覧。"""
+        """ボディ一覧・スケッチ一覧とパラメータ一覧。
+
+        各図形は `params`(解決済みの数値)と `parameters`(その数値を持つパラメータ名)の
+        **両方**を返す —— 数値だけでは `set_parameter` の引数が作れず、名前だけでは今の値が
+        分からない。`include_regions` は領域の数え上げに計算コストがあるので任意にする。
+        """
         document = self.session.document
         bodies = []
         for body in document.bodies:
