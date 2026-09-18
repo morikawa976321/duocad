@@ -32,7 +32,6 @@ from duocad.session import Session
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MCP_MD = REPO_ROOT / "MCP.md"
-TESTS_README = REPO_ROOT / "tests" / "README.md"
 ROOT_README = REPO_ROOT / "README.md"
 TOPOPT_MD = REPO_ROOT / "docs" / "TOPOPT.md"
 MCP_SERVER_PY = REPO_ROOT / "duocad" / "mcp_server.py"
@@ -129,7 +128,7 @@ def test_the_mcp_tool_table_matches_the_tools_that_are_actually_published():
 
 
 # --------------------------------------------------------------------------------------
-# 失敗封筒の語彙 —— 正は `error_envelope` の実装。MCP.md と tests/README.md が写している
+# 失敗封筒の語彙 —— 正は `error_envelope` の実装。`MCP.md` が写している
 # --------------------------------------------------------------------------------------
 def _error_codes_from_source() -> set[str]:
     """`duocad/mcp_server.py` が実際に返しうる `code` の語彙をソースから読む。
@@ -182,17 +181,13 @@ def test_the_error_vocabulary_is_readable_from_the_source():
 
 @pytest.mark.parametrize(
     ("path", "heading", "anchor"),
-    [
-        (MCP_MD, "## 実装のメモ", "構造化封筒"),
-        (TESTS_README, "### 失敗も封筒に入れて返す", "「実装のメモ」が正"),
-    ],
+    [(MCP_MD, "## 実装のメモ", "構造化封筒")],
 )
 def test_the_documented_error_vocabulary_matches_the_source(path: Path, heading: str, anchor: str):
     """失敗封筒の語彙の列挙が実装と一致する。
 
-    落ちたら、**AIに配っている失敗コードの一覧が古い**。`MCP.md`「実装のメモ」が正の側で、
-    `tests/README.md` はそこを名指ししたうえで括弧に写している(読み手がその場で引けるように
-    残した列挙)。
+    落ちたら、**AIに配っている失敗コードの一覧が古い**。`MCP.md`「実装のメモ」が唯一の写し先で、
+    正は `error_envelope` の実装である。
     """
     documented = _enumeration_after(_section(path, heading), anchor)
     codes = _error_codes_from_source()
@@ -212,64 +207,11 @@ def test_the_written_vocabulary_counts_match_the_source():
     """
     expected = len(_error_codes_from_source())
     wrong = {}
-    for path in (MCP_MD, TESTS_README, MCP_SERVER_PY, REPO_ROOT / "tests" / "test_mcp_verbs.py"):
+    for path in (MCP_MD, MCP_SERVER_PY, REPO_ROOT / "tests" / "test_mcp_verbs.py"):
         written = {int(n) for n in re.findall(r"(\d+)語彙", path.read_text(encoding="utf-8"))}
         if written - {expected}:
             wrong[path.name] = sorted(written - {expected})
     assert not wrong, f"失敗語彙は {expected} 個だが、そう書いていない箇所がある: {wrong}"
-
-
-# --------------------------------------------------------------------------------------
-# tests/README.md の `Entity.params` のキー表 —— 正は `duocad/sketch.py` の `_ENTITY_KIND_TABLE`
-# --------------------------------------------------------------------------------------
-def _documented_entity_params() -> dict[str, list[str]]:
-    """`tests/README.md` の「`Entity.params` のキーは図形ごとに固定」の箇条から種別→キーを取る。"""
-    section = _section(TESTS_README, "## `duocad/sketch.py`")
-    anchor = "`Entity.params` のキーは図形ごとに固定"
-    assert anchor in section, f"tests/README.md に目印 {anchor!r} が無い(言い回しが変わった)"
-    bullet = section[section.index(anchor):]
-    end = bullet.find("\n- ")
-    return {
-        kind: keys.split(",")
-        for kind, keys in re.findall(r"`([a-z]+): ([a-z0-9_,]+)`", bullet[:end if end > 0 else None])
-    }
-
-
-def test_the_documented_entity_param_table_is_readable():
-    """先に**走査そのものが効いている**ことを見る(0件なら下の検査は常に緑になる)。"""
-    documented = _documented_entity_params()
-    assert len(documented) >= 4, f"tests/README.md のキー表を読めていない: {documented}"
-
-
-def test_the_documented_entity_kinds_match_the_kind_table():
-    """文書が並べている図形種別が `ENTITY_KINDS` と一致する。
-
-    落ちたら、**種別を1つ足した(消した)のに `tests/README.md` が古い**。2026-09-05の監査で
-    実際に `bezier` が抜けていた口である。`tests/test_entity_kind_tables.py` はコード側の
-    3つの表(py/py/ts)だけを突き合わせており、文書は見ていない。
-    """
-    documented = set(_documented_entity_params())
-    assert documented == set(sketch.ENTITY_KINDS), (
-        "tests/README.md の図形種別が `_ENTITY_KIND_TABLE` と食い違う"
-        "(意図した変更なら文書のキー表を更新すること): "
-        f"文書に無い={sorted(set(sketch.ENTITY_KINDS) - documented)} / "
-        f"実装に無い={sorted(documented - set(sketch.ENTITY_KINDS))}"
-    )
-
-
-def test_the_documented_param_keys_contain_every_movable_point_key():
-    """種別ごとのキーの並びに、**動かせる点のキー**が全部載っている。
-
-    落ちたら、点のキーを改名した(足した)のに文書が古い。`move_sketch_entities` の選択参照は
-    xキーで点を名指しするので、ここがずれると文書を読んで組み立てた参照が通らない。
-    """
-    documented = _documented_entity_params()
-    missing = {}
-    for kind, keys in documented.items():
-        declared = {key for pair in sketch.entity_point_keys(kind) for key in pair}
-        if declared - set(keys):
-            missing[kind] = sorted(declared - set(keys))
-    assert not missing, f"tests/README.md のキー表に載っていない点のキーがある: {missing}"
 
 
 # --------------------------------------------------------------------------------------

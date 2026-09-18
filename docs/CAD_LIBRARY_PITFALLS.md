@@ -94,10 +94,11 @@
   pytest / websockets の4件で、numpy 2.4.6 / scipy 1.17.1 は推移依存で既に入っている
   (scikit-image は形状最適化のために手で入れてある。[TOPOPT.md](TOPOPT.md))。
   入っていないもの: trimesh・pyvista・vtk・gmsh・matplotlib・numba・cupy・torch・pyamg・scikit-sparse・meshio。
-- **検査の在庫は `.\.venv\Scripts\python.exe -m pytest -q --collect-only` で数える。** `tests/README.md` は
-  「実装が守っている契約」の文書であって目録ではなく(個々のテスト関数を意図的に列挙しない方針)、
-  節の無いテストファイルもある。在庫は `--collect-only`、契約は `tests/README.md`、
-  なぜその形で書いたかは各モジュールの docstring —— 片方をもう片方の代わりにしない。
+- **検査の在庫は `.\.venv\Scripts\python.exe -m pytest -q --collect-only` で数える。**
+  在庫は `--collect-only`、**契約と「なぜその形か」は各モジュールの docstring** —— 片方を
+  もう片方の代わりにしない。契約を散文でまとめた `tests/README.md` は 2026-09-18 に削除した
+  (中身をコードのそばへ移した。別ファイルに置くと、コードを変える人の視界に入らないまま
+  後追いで同期することになり、実際に実装と食い違う記述が5件たまった)。
 - **`importlib` でファイル1つだけを単体ロードして `@dataclass` を使うなら、`exec_module` より前に
   `sys.modules[spec.name] = module` を入れる。** `from __future__ import annotations` と併用すると
   `dataclasses` が型注釈の解決に `sys.modules[cls.__module__]` を引くため

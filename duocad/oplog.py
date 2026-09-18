@@ -17,7 +17,12 @@ if TYPE_CHECKING:
 
 @dataclass
 class Operation:
-    """1件の操作記録(`provenance` は当面 None でよい空スロット)。"""
+    """1件の操作記録(`provenance` は当面 None でよい空スロット)。
+
+    **実行主体(人かAIか)は持たない。** UI が「自分がやった操作」に印を付けられるのは、同じ接続の
+    応答待ちで `client_op` を突き合わせているからであって、ログを読んで分かることではない
+    (層をまたぐ契約 —— ログに主体を足す設計へ動かすなら `net/ws.py` の配信側も一緒に変わる)。
+    """
 
     seq: int
     verb: str

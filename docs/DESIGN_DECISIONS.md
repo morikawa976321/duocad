@@ -1,7 +1,7 @@
 # duocad — 設計判断と実測（コア・全体）
 
 **読むとき**: verb・データモデル・保存形式・テスト方針・プロジェクトの方向を変えるとき。
-「なぜこの形か」の根拠がここにある。**いまの挙動の正はコードとテスト**（`tests/README.md`）。
+「なぜこの形か」の根拠がここにある。**いまの挙動の正はコードとテスト**（契約は各モジュールの docstring にある）。
 画面まわりは [UI.md](UI.md) / [VIEWPORT.md](VIEWPORT.md)、AI統合は [AI_INTEGRATION.md](AI_INTEGRATION.md)、
 形状最適化は `TOPOPT*.md`。
 

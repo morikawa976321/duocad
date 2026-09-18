@@ -572,7 +572,7 @@
     // 落ちることがある(`lastInputs`/`restoreLastInputs` のdocstring参照)。ここで
     // 無起動にすると、失敗が返ってきて `restoreLastInputs()` が半径を戻しても
     // `command === null` なので入力欄ごと消えたままになり、「失敗したらすぐ近くの値で
-    // 打ち直す」という文書化済みの必須ワークフロー(`tests/README.md`)が壊れる
+    // 打ち直す」という必須ワークフローが壊れる
     // (実機smoke `smoke-features.mjs` で実際に踏んだ)。**無起動へ戻すのは
     // 確定成功が実サーバから返ってきたとき**(`commandSucceeded()`)だけにする。
   }

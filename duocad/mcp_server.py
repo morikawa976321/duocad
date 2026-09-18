@@ -442,7 +442,7 @@ class DocumentTools:
         # 選択由来の拒否は**コアが型で言ってくる**(`duocad/selection.py` の `require_*`)。
         # MCPは名前を付けて、次の一手を決める材料(`required_kind` / `selection`)を足すだけ。
         # 「1つだけ要るのに複数」は `invalid_argument` のまま —— AIが打つ次の手は
-        # 「選び直す」ではなく「減らす」で、`selection_empty` とは違う(tests/README「F」節)。
+        # 「選び直す」ではなく「減らす」で、`selection_empty` とは違う。
         #
         # **`SelectionKindMismatch` を先に見る**。`SelectionEmpty` の
         # 派生なので、順序を入れ替えると種別違いが `selection_empty` に吸われて7語彙目が

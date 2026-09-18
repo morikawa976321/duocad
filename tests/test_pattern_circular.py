@@ -1,5 +1,5 @@
 """円形反復 `pattern_circular` の契約。`pattern_rectangular` の兄弟で語彙・規律を揃える
-(数値の場合分けは tests/README.md 参照)。
+(数値の場合分けは `duocad/verbs/pattern.py` の docstring)。
 
 矩形反復に無かったぶん: `Pattern.kind`(`"rectangular"` | `"circular"`)は `Body.kind` /
 `Entity.kind` と同じ語彙。
