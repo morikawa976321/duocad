@@ -302,6 +302,11 @@ class Session:
 
         呼び出し側は**成功した後にだけ**呼ぶこと — 失敗した verb は操作ログに積まれず
         この関数にも到達しないので、「失敗しても選択は保持される」は自然に満たされる。
+
+        **プレビュー(`preview` → `speculative()`)の中では見かけ上効かない** — ここが呼ばれても
+        `with speculative(doc):` を抜ける時点で選択そのものが巻き戻り対象なので元へ戻る
+        (イベントも `_suppress_events` で配らない)。確定(Enter)した本物の呼び出しだけが
+        実際にリセットする。
         """
         command = catalog.BY_NAME.get(verb)
         if command is not None and command.resets_selection:

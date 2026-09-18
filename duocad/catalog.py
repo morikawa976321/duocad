@@ -117,6 +117,8 @@ class Command:
     #: (kernel.pyの既知の地雷)ので、形を変えるverbの確定後は選択を空にする。
     #: `Session._reset_selection_if_needed` がここを見て1箇所で発火するので、UI経由・MCP経由の
     #: どちらでも同じに効く。**失敗したverb(ログに積まれない)には効かない**。
+    #: **`undo`/`redo` も true**(添字が壊れていない可能性があっても、何を戻した/やり直したかで
+    #: 場合分けしない単純な規則を優先する)。
     resets_selection: bool = False
     #: **対象集合をコアの確定選択から取るか**。`Session` の実体が
     #: `selection.require_confirmed` / `require_edges` を呼ぶverbだけが true。

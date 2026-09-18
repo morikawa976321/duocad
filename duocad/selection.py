@@ -376,6 +376,10 @@ def require_edges(doc: Document) -> tuple[List[int], BodyId]:
 
     順序が効く: verbは `edges` と半径(長さ)を位置で対応させるので、並べ替えると割り当てが
     黙ってずれる。複数Bodyにまたがる選択は `edge_indices` が ValueError。
+
+    **添字とBodyをまとめて1回で返す**のは、呼び出し側が片方だけ渡し忘れる形を構造的に
+    無くすため —— かつて `fillet`/`chamfer` が選択の指すBodyとは違うBodyを丸める実装バグが
+    あった(添字とBodyを別々に取り回していたのが原因)。
     """
     edges = edge_indices(doc)
     if not edges:
@@ -872,7 +876,12 @@ def _coerce_refs(
 
 
 def _visible_body(doc: Document, body_id: BodyId):
-    """存在して可視なBodyを返す。無ければ KeyError、不可視なら ValueError。"""
+    """存在して可視なBodyを返す。無ければ KeyError、不可視なら ValueError。
+
+    **`body` を明示して不可視Bodyを指した場合も0件ではなくエラーにする** —— 「指定したのに
+    一致0件」と「見えないので対象外」はAIから区別が付かない。黙って0件を返すと、
+    存在する面をAIが見失ったと誤読して条件を緩める側へ動く。
+    """
     body = next((b for b in doc.bodies if b.id == body_id), None)
     if body is None:
         raise KeyError(f"no such body: {body_id!r}")
