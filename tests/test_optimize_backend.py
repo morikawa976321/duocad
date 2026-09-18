@@ -997,54 +997,32 @@ def test_the_anchor_gate_still_catches_a_face_that_is_far_away(
 # --------------------------------------------------------------------------------------
 # 9. 境界条件の確定(docs/FIX_BINARY_SEARCH_INITIALIZATION.md 修正A・B)
 # --------------------------------------------------------------------------------------
-def test_a_load_face_partly_buried_in_an_exclusion_stops_before_any_evaluation(
-    session: Session, monkeypatch
-) -> None:
-    """荷重面の一部が除外ソリッドの中(半径1要素以内に材料を置ける節点が無い)なら、確定表の
-    検証で `boundary_mapping_failed` になり、探索(候補生成・FEM)は始まらない。文書は変わらない。
-    一言は面と対応不能標本を名指しし、評価予算の増加を案内しない。
+def test_a_load_face_on_a_body_that_is_not_preserved_is_refused(session: Session) -> None:
+    """**拘束面・荷重面は保持ソリッドの面にしか置けない**(2026-09-18 本人指示)。保持しない
+    ボディの面を指した時点で断る —— 通すと、探索が削れる材料の上に荷重が載り、確定表は
+    半径1要素の球で**そのボディ以外の**材料の節点を拾って荷重を配る。
+
+    確定表そのものが不成立になる経路(`boundary_mapping_failed`)は `tests/test_binary_search.py`
+    と `tests/test_anchor_mapping.py` が下の層で固定している。**製品経路でこの状態を作る
+    題材(保持しない板の上面に荷重)は、この門が入ったことで組めなくなった。**
     """
-    import json
-
-    from duocad.topopt import binary_search
-
     left, right = _two_pads(session)
-    plate = _box(session, 28.0, 40.0, 4.0, corner=(30.0, 0.0))  # 保持しない板(x 30..58)。上面が荷重面
-    wall = _box(session, 20.0, 46.0, 50.0, corner=(40.0, -3.0))
-    _select(session, [{"body": wall.id, "kind": "body"}])
-    session.move_body(0.0, 0.0, -25.0)  # 板の右側(x 40..58)を、要素サイズ 8mm で2セル以上の深さで飲み込む除外
-    session.clear_selection()
-    wall = session.document.get_body(wall.id)
+    plate = _box(session, 28.0, 40.0, 4.0, corner=(30.0, 0.0))  # 保持しない板(x 30..58)
     fixed = _face_with_normal(left, -1.0, 0.0, 0.0)
     load = _face_with_normal(plate, 0.0, 0.0, 1.0)
     _select(session, [{"body": left.id, "kind": "body"}, {"body": right.id, "kind": "body"}])
     session.set_preserve_bodies()
-    _select(session, [{"body": wall.id, "kind": "body"}])
-    session.set_exclude_bodies()
     _select(session, [{"body": left.id, "kind": "face", "index": fixed}])
     session.set_fixtures()
+
     _select(session, [{"body": plate.id, "kind": "face", "index": load}])
-    session.set_loads(500.0, [0.0, 0.0, -1.0])
-    session.clear_selection()
-    before = [body.id for body in session.document.bodies]
-
-    def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("確定表が不成立なのに探索が始まった")
-
-    monkeypatch.setattr(binary_search, "find_best_feasible", fail_if_called)
-    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
-    assert result["state"] == "boundary_mapping_failed"
-    assert result["body_id"] is None and result["evaluations"] == 0
-    assert result["termination"] == "boundary_mapping_failed"
-    mapping = result["boundary_mapping"]
-    load_row = next(row for row in mapping["faces"] if row["side"] == "load")
-    assert load_row["status"] == "fail" and "unmapped_samples" in load_row["reasons"]
-    assert load_row["unmapped_samples"] > 0 and load_row["unmapped_positions"]
-    assert all(x > 40.0 for x, _y, _z in load_row["unmapped_positions"])  # 除外の中の標本だけ
-    assert mapping["table"]["mapping"] == "material"
-    assert "荷重面" in result["warning"] and "予算" not in result["warning"]
-    assert [body.id for body in session.document.bodies] == before
-    json.dumps(result)  # 戻り値は素の値だけ
+    with pytest.raises(ValueError, match="保持ソリッドの面"):
+        session.set_loads(500.0, [0.0, 0.0, -1.0])
+    assert session.document.optimize.loads == [], "断ったのに文書へ残っている"
+    # 保持から外す側も同じ不変条件で守る(条件が載っているボディは保持から外せない)。
+    _select(session, [{"body": right.id, "kind": "body"}])
+    with pytest.raises(ValueError, match="保持ソリッドから外せない"):
+        session.set_preserve_bodies()
 
 
 def test_the_search_conditions_carry_the_material_mapped_table_and_its_report(session: Session) -> None:

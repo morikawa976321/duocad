@@ -26,6 +26,10 @@ verbを起動すると**既にその役割が付いている対象が選択状�
 移したいときは「元の役割のverbで外す → 新しい役割のverbで付ける」の2手になる。これは
 意図した仕様であって、ここで自動的に奪い取らない。
 
+**拘束面・荷重面は保持ソリッドの面に限る**(2026-09-18 本人指示)。保持でないボディの面には
+置けず、条件が載っているボディを保持から外すこともできない(`_require_preserved_bodies` /
+`_require_conditions_stay_on_preserved` に理由がある)。
+
 **荷重は「同時にかかる1つの荷重系」である。** 面ごとに違う大きさ・向きを持てるが、
 最適化はそれらを**足し合わせた1つの荷重**として解く(`optimize_run.build_conditions`)。
 「あるときは面A、別のときは面B」という**別シナリオ(複数荷重ケース)は表現できない** ——
@@ -100,6 +104,8 @@ def _assign_bodies(doc: Document, verb: str, body_ids: Sequence[BodyId]) -> Oper
             from .. import meshbody
 
             meshbody.reject(body, f"{optimize.ROLE_LABEL[role]}に指定する")
+    if role == "preserve_bodies":
+        _require_conditions_stay_on_preserved(doc, wanted)
     previous = list(getattr(doc.optimize, role))
     _apply_bodies(doc, role, wanted)
     return doc.log.append(verb, {"bodies": wanted, "previous": previous})
@@ -140,12 +146,65 @@ def _body_name(doc: Document, body_id: BodyId) -> str:
         return body_id
 
 
+def _require_preserved_bodies(doc: Document, role: str, conditions: Sequence[dict]) -> None:
+    """条件面は**保持ソリッドの面**に限る(2026-09-18 本人指示)。
+
+    保持でないボディの面に置くと、探索がそのボディの材料を削れる。さらに確定表は
+    半径1要素の球で「生きている節点」を拾う(`topopt/anchor.py` の `build_anchors`)ので、
+    元のボディが1要素も取れていなくても**周りの材料の節点**へ荷重が載り、条件が別の材料へ
+    黙って移る(2026-09-18 実測: 54ケース中13件。うち数件は1節点だけに載った)。
+
+    `_apply_faces` ではなくverbの入口に置く理由は `_assign_bodies` のメッシュボディの門と同じ。
+    """
+    preserved = set(doc.optimize.preserve_bodies)
+    outside = [item for item in conditions if item["body"] not in preserved]
+    if not outside:
+        return
+    listed = "、".join(
+        f"{_body_name(doc, item['body'])} の面 #{int(item['index'])}" for item in outside
+    )
+    raise ValueError(
+        f"{listed} は保持ソリッドの面ではない"
+        f"({optimize.ROLE_LABEL[role]}は保持ソリッドの面にしか置けない)。"
+        "先に set_preserve_bodies でそのボディを保持ソリッドにすること"
+    )
+
+
+def _require_conditions_stay_on_preserved(doc: Document, wanted: Sequence[BodyId]) -> None:
+    """保持ソリッドから外そうとしているボディに条件面が残っていたら断る。
+
+    `_require_preserved_bodies` の裏側 —— こちらを置かないと、条件を付けたあとで保持を
+    外すだけで「保持でないボディの条件面」が作れてしまう。**自動で条件を落とさない**のは
+    排他(`RoleConflict`)と同じ理由で、外すなら2手にする。
+    """
+    keeping = {str(body_id) for body_id in wanted}
+    orphans = [
+        (role, item)
+        for role in ("fixtures", "loads")
+        for item in getattr(doc.optimize, role)
+        if item["body"] not in keeping
+    ]
+    if not orphans:
+        return
+    listed = "、".join(
+        f"{_body_name(doc, item['body'])} の面 #{int(item['index'])}"
+        f"({optimize.ROLE_LABEL[role]})"
+        for role, item in orphans
+    )
+    raise ValueError(
+        f"{listed} が残っているので保持ソリッドから外せない"
+        "(条件面は保持ソリッドの面にしか置けない)。"
+        "先に set_fixtures / clear_loads でその条件を外すこと"
+    )
+
+
 # --------------------------------------------------------------------------------------
 # 拘束面 / 荷重面
 # --------------------------------------------------------------------------------------
 def set_fixtures(doc: Document, face_refs: Sequence[dict]) -> Operation:
     """**拘束面**の集合を `face_refs`(面の ShapeRef)そのものに置き換える。howは無い。"""
     conditions = _conditions(doc, face_refs)
+    _require_preserved_bodies(doc, "fixtures", conditions)
     previous = [dict(item) for item in doc.optimize.fixtures]
     _apply_faces(doc, "fixtures", conditions)
     return doc.log.append(
@@ -178,6 +237,7 @@ def set_loads(
         optimize.load_condition(doc, ref, magnitude, direction)
         for ref in _face_refs(refs)
     ]
+    _require_preserved_bodies(doc, "loads", conditions)
     # **入れ子のdictにしない**(`previous: {...}` にしない)。状態配信は操作ログの引数を
     # そのまま配るので、面の指紋のような**量のあるもの**は伏せられる形(リスト)で
     # 平らに置く必要がある(`duocad/view.py` の `_REDACTED_LOG_ARGS`)。

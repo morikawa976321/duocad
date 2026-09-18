@@ -226,6 +226,15 @@ def _face_problem(doc: "Document", role: str, condition: dict) -> List[str]:
     problems = _body_problem(doc, role, condition["body"])
     if problems:
         return problems
+    if condition["body"] not in doc.optimize.preserve_bodies:
+        # **条件面は保持ソリッドの面に限る**(2026-09-18 本人指示)。`verbs/optimize_setup.py` の
+        # 入口でも断っているが、**過去のログを再生した文書**には入りうるので、ここでも通す
+        # (メッシュボディの門と同じ形)。
+        name = doc.get_body(condition["body"]).name
+        return [
+            f"{label}が保持ソリッドでないボディ {name} の面に載っている。"
+            "そのボディを保持ソリッドに指定するか、条件を置き直すこと"
+        ]
     reason = optimize.fingerprint_mismatch(doc, condition)
     if reason is not None:
         return [f"{label}が指す面が今の形と合わない({reason})。条件を置き直すこと"]
