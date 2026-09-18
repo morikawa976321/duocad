@@ -375,6 +375,7 @@ class FeasibleModel:
     `energy` はその検査で解いた変位の要素エネルギー(`acceptance.inspect` の `fields`。段階4の順位用)。
     """
 
+    #: **読み取り専用**(`setflags(write=False)` 済み)。呼び出し側は書き換えず複製すること。
     mask: np.ndarray
     before_mask: np.ndarray
     report: dict
