@@ -4,7 +4,6 @@
 初期全材料マスクが実FEMを含む6条件に全合格し、候補管理は保持マスク数が容量以内で止まる。
 体積削減の完成とは扱わない(§9「未解決事項」)。
 調査基準: `8c997e9`、原因を記録したコミット: `579bf00`。
-根拠: [INITIAL_SPACE_FAILURE_DIAGNOSIS.md](INITIAL_SPACE_FAILURE_DIAGNOSIS.md)。
 本書は [PLAN_BINARY_STRESS_SEARCH.md](PLAN_BINARY_STRESS_SEARCH.md) の実装に対する追加修正指示。
 今回は設計空間の形状を変更する仕事ではなく、後段との境界条件の接続と探索管理を直す。
 
@@ -33,56 +32,33 @@
 
 ## 3. 修正A: 初期アンカーを材料に対応付けてから固定する
 
-### 3.1 配線
+**実装済み。ここに残すのは実装が守っている契約だけ**(指示文としての全文は 2026-09-18 に削った)。
 
 ```text
-既存のdesign_space.derive（形状は変更しない）
+design_space.derive(形状は変更しない)
  → 導出出力に接する節点集合を計算
  → 元のCAD条件面から、その節点集合への荷重・拘束対応を確定
  → 面ごとの対応・荷重保存・作用位置を検証
- → SearchConditionsへ格納し、ハッシュに含めて固定
- → 全空間での前提検査
+ → SearchConditions へ格納し、ハッシュに含めて固定
+ → 全空間での前提検査(§4)
  → 二値探索
 ```
 
-主な変更先は `anchor.py`、`optimize_run._build_search_conditions`、
-`binary_search.SearchConditions` と条件識別子。`design_space` のマスク修復で対処しない。
-導出内部の幾何接続用の表と探索用の確定表を、ログで識別できるようにする。
-探索の検査・島処理・FEM・デバッグ表示は、全て同じ確定表を使う。
-
-### 3.2 対応付けの作り方
-
-- `acceptance.active_nodes(space.mask)` によって、許可材料に接する節点を求める。
-- `anchor.build_anchors` に節点の許可マスクを渡せるようにするか、同じ標本・重み処理を共用する専用入口を作る。
-  既存生成処理をコピーして二重実装にしない。
-- CAD面上の標本点から候補節点を集める際、許可節点を選別してから重みを計算する。
-  許可節点以外への寄与を後から捨てる実装は禁止。
-- 面の取り違え、標本の取りこぼし、所有権競合後の面の消失を検査する。
-  現行の「全面から節点所有者を決める」規則を使うなら、その後の最終表で検証する。
-- 近傍に適切な節点がない標本を、無制限に遠い節点へ移して通さない。
-  支持節点を探す範囲と判定規則を明示し、成立しなければ面・標本位置付きの診断で停止する。
-- 保存する値は、面ID、元CAD面積・重心、標本数、対応不能標本数、節点ID、重み、
-  対応距離、適用荷重。元の表との差も診断に残す。
-
-初期条件の再構成は「島除去で失われた荷重の配り直し」と区別する。
-**確定後は一切再配分しない**。候補の削除で確定節点が材料から離れたら、その候補を不合格にする。
-
-### 3.3 荷重と拘束の検証
-
-- 荷重面ごとに入力ベクトルと節点荷重の合計が一致することを検証する。
-  相反する荷重があるため、全荷重を加算した合力だけの検査では不足。
-- 作用位置の変化も測る。固定した共通原点について、CAD面への分布荷重のモーメントと
-  節点荷重の `Σ(position × force)` を比較する。現行の一定方向の面荷重ではCAD面重心と
-  合力から参照モーメントを計算できる。
-- 合力の保存だけを見て新しい重みを採用しない。モーメント・重心・対応距離の誤差は
-  mm/Nの実単位と、格子サイズ・荷重で正規化した値を記録する。
-- 重み補正が必要なら、局所的な支持節点への分配で合力と作用位置を保つ方法を実装する。
-  数値許容差と格子近似の許容差を区別し、解析解を持つ面・格子細分で根拠を示して固定する。
-  hangerだけを通す目的で閾値を調整しない。対応が成立しなければ成功扱いしない。
-- 拘束は対象面に対応する有効節点だけに適用する。全体の剛体運動を止めるための
-  無関係な節点追加は禁止。必要な剛体拘束の検査は維持する。
+- 直す先は `anchor.py` / `optimize_run._map_boundary_conditions` / `binary_search.SearchConditions`。
+  **`design_space` のマスク修復で対処しない。** 導出内部の幾何用の表と探索用の確定表はログで識別でき、
+  **探索の検査・島処理・FEM・デバッグ表示は全て同じ確定表を使う。**
+- **許可節点を選別してから重みを計算する。** 許可節点以外への寄与を後から捨てる実装は禁止
+  (既存の生成処理をコピーして二重実装にもしない)。
+- **近傍に適切な節点がない標本を、無制限に遠い節点へ移して通さない。** 支持節点を探す範囲と判定規則を
+  明示し、成立しなければ面・標本位置つきの診断で停止する。
+- **確定後は一切再配分しない。** 候補の削除で確定節点が材料から離れたら、その候補を不合格にする
+  (これは「島除去で失われた荷重の配り直し」とは別の話である)。
+- **合力の保存だけを見て新しい重みを採用しない。** 作用位置も門にする —— 固定した共通原点について、
+  CAD面への分布荷重のモーメントと節点荷重の `Σ(position × force)` を比べる。誤差は mm/N の実単位と、
+  格子サイズ・荷重で正規化した値の両方を記録する。**hanger だけを通す目的で閾値を調整しない。**
+- 拘束は対象面に対応する有効節点だけに適用する(全体の剛体運動を止めるための無関係な節点追加は禁止。
+  必要な剛体拘束の検査は維持する)。
 - 評価条件ハッシュに、確定した節点・荷重・拘束と対応付け規則を含める。
-
 ## 4. 修正B: 全空間での必要条件を探索前に検査する
 
 `find_initial_feasible` の入口に、保持CADの重なり検査と同様、
@@ -148,69 +124,35 @@ Dで未被覆の固定節点は、D内での削除・追加・置換では被覆
 実際の巨大確保やMemoryErrorを故意に起こすテストにしない。
 アンカー・荷重のテストは実CADと実数値を使い、全てmockで済ませない。
 
-## 7. hangerでの実機確認手順
-
-1. 同一の `models/hanger_bar_attachment.json` を用い、内容ハッシュ・コード版を記録する。
-   4.8mm要求・2.4mm要求の両方を使い、実spacingと格子を併記する。
-2. 導出出力のハッシュ・セル数を修正前と照合する。現在の基準値は47,232／367,390セル。
-   合わせるために導出ロジックや基準値を書き換えない。
-3. 旧幾何用アンカーと新しい探索用アンカーの診断を分ける。
-   旧表の49／108件を消すことではなく、確定した新表が材料に接し荷重条件を保つことを確認する。
-4. 初期全材料マスクの6条件を、実FEMを含めて検査する。
-   安全率不足など別の不合格が出たら具体値を記録し、6条件合格と報告しない。
-5. 小予算で生成・保持上限・中断を確認してから、4.8mmで合格候補探索と削減を通す。
-6. 2.4mmでも同じ入口検査と実評価を行い、探索の採用マスクで6条件を再検査する。
-   予算不足で未達ならその旨を残し、4.8mmの成功を2.4mmの成功に読み替えない。
-7. 候補中メッシュ化0回、固定空間導出1回、評価条件ハッシュ不変を確認する。
-
-初期モデルの安全率合格は事前には保証しない。初期全材料が不合格でも、探索が正しく合格候補を
-発見できればよい。ただし、この追加指示の不具合修正と、元計画のhanger全体完成は別々に報告する。
-
-## 8. 記録・文書・提出物
-
-- 診断ログをtaskbox等の使い捨て領域だけに置かず、リポジトリの出力領域へ保存する。
-- `diagnose_initial_space.py` を拡張し、導出マスク・元アンカー・探索アンカー・荷重保存を比較できるようにする。
-- `PLAN_BINARY_STRESS_SEARCH.md` §10の失敗原因・現在の状態、`TOPOPT.md` の条件確定順序、
-  `TOPOPT_PRE_SMOOTHING_CHECKS.md` の「元の条件」の定義、`TOPOPT_RECORDING.md` の記録仕様を更新する。
-- `INITIAL_SPACE_FAILURE_DIAGNOSIS.md` の過去の測定値は残し、修正後の結果への参照を付ける。
-- 更新したAPI・CLI・UIの状態型と警告文を揃える。アンカー不整合に対する「予算を増やせ」を除去する。
-- 全面再最適化やメッシュ改良、応力基準変更を一緒に行わない。
-- コミットは可能なら「初期境界条件」「入口診断」「候補管理」「回帰・実機記録・文書」に分ける。
-
-提出時には、変更箇所、残した契約、テスト結果、格子別の6条件、荷重・モーメント誤差、
-候補生成数・評価数・保持数・メモリ実測、未解決事項を示す。
-**MemoryErrorが出なくなったことだけをもって、初期条件や探索が完成したとしない。**
-
 ## 9. 実施結果(2026-09-17)
 
 ### 変更箇所
 
-| 修正 | 場所 | 内容 |
-|---|---|---|
-| A 初期境界条件 | `duocad/topopt/anchor.py` | `build_anchors(..., allowed_nodes=)`: 標本ごとに球内の許可節点だけへ重みを配る(配ってから捨てない)。球内に許可節点が無い標本は対応不能として面ごとに数・面積・座標を残し、遠い節点へ移さない。`active_nodes` をここへ移し `acceptance` が再輸出。`condition_mapping`(面ごとの節点数・対応不能標本・被覆・合力・重心・モーメント・対応距離の検証)、`format_mapping_warning`、`MAPPING_CENTROID_LIMIT_ELEMENTS`(§10 で `position_limit` に置き換え) |
-| A | `duocad/optimize_run.py` | `_map_boundary_conditions`(導出出力に接する節点への確定表と検証、幾何の表との差、記録 `boundary-mapping`)。`_run` は確定表が不成立なら `state="boundary_mapping_failed"` で探索を始めない。面重心の門・デバッグ表示(`stage="mapping"`)・`_build_search_conditions` は全て確定表を使う(`_build_search_conditions` を直接呼ぶ検査・CLIでも同じ表)。`_search_failure_warning` は評価予算の増加を `evaluation_limit` のときだけ案内する |
-| A | `duocad/topopt/acceptance.py` | `inspect_document`(過去記録の読み取り)も島除去前の材料に対応付けた表で検査し、対応付けが不成立なら条件5を合格にしない |
-| B 入口診断 | `duocad/topopt/binary_search.py` | `uncovered_condition_nodes`。`find_initial_feasible` の入口で `resolution_insufficient` → `boundary_mapping_failed`(候補生成0回・FEM0回、表が確定表か幾何の表かを診断に持つ) → `input_contradiction` の順。評価条件ハッシュに確定した節点・拘束自由度・節点荷重・対応付け規則を含める(`_boundary_signature`)。`SearchConditions.mapping` |
-| C 候補管理 | `duocad/topopt/binary_search.py` | 候補は `(操作, ブロック領域)` の記述(`candidate_descriptors`)で遅延生成し、評価の直前に `_materialize` でだけマスクにする。frontier は親マスクを容量以内で保持し(`_Frontier`)、親を round-robin、各親の中で大きさ降順・削除→追加→置換の巡回。容量超過は最古の親を捨てて記録し、その探索は `frontier_truncated`。評価予算とは別の候補記述の予算(`max_candidates`、既定 64×評価予算、`generation_limit`。§10 で走査予算に置き換え)。生成中・評価前の中断。初期・削減の両段階が同じ契約。親・最良合格は読み取り専用。除去した島のマスクを保持しない |
-| UI | `web/src/session.ts` / `App.svelte` | `state` に `boundary_mapping_failed`、`boundary_mapping` 欄、デバッグ配信の `stage: 'mapping'`(型と注釈のみ。`web/dist` は未ビルド) |
-| 検査・記録 | `topopt_checks/verify_hanger_fix.py`(新設)、`topopt_checks/diagnose_initial_space.py`(幾何の表と確定表を段階ごとに照合) | 出力は `output/hanger_fix_verification/*.json`、`output/initial_space_diagnosis/stages-after-fix.json` |
+一覧は 2026-09-18 に削除した(git 履歴と各モジュールの docstring が正)。入った主なものだけ:
+`anchor.build_anchors(..., allowed_nodes=)`(標本ごとに球内の許可節点だけへ重みを配る。球内に許可節点が
+無い標本は対応不能として面ごとに数・面積・座標を残し、遠い節点へ移さない)、`anchor.condition_mapping` /
+`format_mapping_warning`、`optimize_run._map_boundary_conditions`(確定表が不成立なら
+`state="boundary_mapping_failed"` で探索を始めない)、`binary_search.uncovered_condition_nodes` と
+`_boundary_signature`、候補の遅延生成 `candidate_descriptors` / `_materialize` / `_Frontier`、
+記録は `topopt_checks/verify_hanger_fix.py` と `diagnose_initial_space.py`。
 
 ### 残した契約(§2)
 
 固定凸包・距離膨張・余白・格子・除外マスク・導出出力(セル数 47,232 / 367,390 とハッシュは修正前と一致)。
 6条件の意味・目標安全率・物性・99.5パーセンタイル。荷重・拘束の対応は確定後に再配分しない
-(足場を削った候補は `acceptance.condition_check` で不合格。`tests/test_binary_search.py::test_removing_the_scaffold_under_a_fixed_anchor_is_infeasible_and_never_renormalised`)。
+(足場を削った候補は `acceptance.condition_check` で不合格。
+`tests/test_binary_search.py::test_removing_the_scaffold_under_a_fixed_anchor_is_infeasible_and_never_renormalised`)。
 未被覆節点への荷重の削減・人工拘束・空セルの弱い剛性・許容差の拡大・旧SIMPへの退避は無い。
 
 ### テスト結果
 
-`pytest`(既知の無関係な既存失敗2件 `tests/test_boundaries.py` / `tests/test_mcp_verbs.py` を除外): **1172 passed, 2 skipped**。
-§6 の必須ケースの対応: CAD面の対応・荷重保存・格子依存・対応不能 → `tests/test_anchor_mapping.py`(実CAD・実数値。
-回転した平面の解析解で重心のずれが球の半径以内、格子細分 1.0/0.5/0.25、平行移動と格子位相、相反する2荷重、
-所有権競合で空になった面)。条件固定・入口停止・遅延生成・保持上限・生成中断・探索の継続性・最良候補 →
-`tests/test_binary_search.py`(FEM・CADをスタブに置き換えた候補管理の検査を含む。48³ 格子で評価回数を
-8倍にしても実測メモリのピークが増えない)。製品経路の入口停止 → `tests/test_optimize_backend.py::test_a_load_face_partly_buried_in_an_exclusion_stops_before_any_evaluation`。
-
+`pytest`(既知の無関係な既存失敗2件を除外): **1172 passed, 2 skipped**。§6 の必須ケースの対応は
+`tests/test_anchor_mapping.py`(CAD面の対応・荷重保存・格子依存・対応不能。実CAD・実数値で、回転した
+平面の解析解・格子細分 1.0/0.5/0.25・平行移動と格子位相・相反する2荷重・所有権競合で空になった面)と
+`tests/test_binary_search.py`(条件固定・入口停止・遅延生成・保持上限・生成中断・探索の継続性・最良候補。
+FEM と CAD をスタブに置き換えた候補管理の検査を含み、48³ 格子で評価回数を8倍にしても実測メモリの
+ピークが増えないことを見る)、製品経路の入口停止は
+`tests/test_optimize_backend.py::test_a_load_face_partly_buried_in_an_exclusion_stops_before_any_evaluation`。
 ### hanger の実測(`models/hanger_bar_attachment.json`、sha256 `d531c5ed…f042a5df`、目標安全率 2.0)
 
 | 項目 | 4.8mm(実 4.7750 mm、36×66×52) | 2.4mm(実 2.4063 mm、69×129×100) |

@@ -3,7 +3,7 @@
  *
  *   node scripts/smoke-screen-pick.mjs [--port 8993] [--http-port 8994]
  *
- * `docs/SCREEN_PICK.md` の受入条件1(「ズーム・画角変更・正投影切替後も、同じ px 定数で
+ * 受入条件1(「ズーム・画角変更・正投影切替後も、同じ px 定数で
  * 体感が大きく変わらない」)は**pytestでは判定できない** —— 純関数テスト
  * (`tests/eval_screen_pick.mjs`)が固定しているのは距離計算の規則だけで、そこへ渡る
  * screen 座標が視点でどう動くかは本物のカメラでしか出ない。

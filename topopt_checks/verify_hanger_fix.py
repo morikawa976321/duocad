@@ -1,4 +1,4 @@
-"""hanger での実機確認(`docs/FIX_BINARY_SEARCH_INITIALIZATION.md` §7)を1回分記録する。
+"""hanger での実機確認(`docs/FIX_BINARY_SEARCH_INITIALIZATION.md` §9)を1回分記録する。
 
     .\\.venv\\Scripts\\python.exe topopt_checks\\verify_hanger_fix.py --model models\\hanger_bar_attachment.json --spacing 4.8 --max-evaluations 12 --out output\\hanger_fix_verification\\spacing-4.8.json
 
@@ -28,7 +28,7 @@ from duocad.session import Session
 from duocad.topopt import acceptance, anchor, binary_search, design_space, mesh
 
 REPO = Path(__file__).resolve().parents[1]
-#: `docs/INITIAL_SPACE_FAILURE_DIAGNOSIS.md` の基準値。合わせるために導出や基準値を書き換えない。
+#: 導出出力の基準値(`docs/FIX_BINARY_SEARCH_INITIALIZATION.md` §9)。合わせるために導出や基準値を書き換えない。
 EXPECTED_CELLS = {4.8: 47_232, 2.4: 367_390}
 
 

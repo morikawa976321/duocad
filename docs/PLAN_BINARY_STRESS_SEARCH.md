@@ -1,6 +1,6 @@
 # 二値モデル・応力制約による体積削減ループへの移行計画
 
-作成日: 2026-09-17。状態: **段階1〜6(FEM分離・共通検査・初期合格探索・削除追加置換探索・製品配線・旧コード/文書削除)は実装済みで、対応する回帰テスト群は緑。段階7(通し検証・監査)でhangerの実機検証が失敗した(§10.2)原因は同日の `FIX_BINARY_SEARCH_INITIALIZATION.md`(境界条件の確定・入口検査・候補管理)で直し、hanger 4.8mm で初期全材料マスクの6条件合格と体積削減の開始を確認した(§10.5)。全文pytestには本計画と無関係な既存失敗2件も別途ある(§10.4)。体積削減機能の完成とは扱わない。**
+作成日: 2026-09-17。状態: **段階1〜6(FEM分離・共通検査・初期合格探索・削除追加置換探索・製品配線・旧コード/文書削除)は実装済みで、対応する回帰テスト群は緑。段階7(通し検証・監査)でhangerの実機検証が失敗した原因は同日の `FIX_BINARY_SEARCH_INITIALIZATION.md`(境界条件の確定・入口検査・候補管理)で直し、hanger 4.8mm で初期全材料マスクの6条件合格と体積削減の開始を確認した(§10)。全文pytestには本計画と無関係な既存失敗2件も別途ある(§10.4)。体積削減機能の完成とは扱わない。**
 調査基準: `codex/pre-smoothing-checks` の `bd49a9b`。
 前提: 設計空間導出は完了。検査実装は `TOPOPT_PRE_SMOOTHING_CHECKS.md` に記載。
 本書は当初「後継ループの計画」として書いたが、§1〜§9は段階1〜6で実装が完了した現行仕様の記述に相当する(コードと一致することは`tests/test_doc_code_agreement.py`他で確認済み)。§10に段階7の検証結果を追記した。
@@ -214,323 +214,65 @@ round-robin(先頭の親から次の子を1つ取り、その親を末尾へ回�
 現検査の剛体運動・荷重欠落・残差・ボクセル境界のテストを移植し、意味を保持する。
 過去記録の密度→二値変換は読み取りアダプター内に限定し、新規の製品APIはboolマスクを受ける。
 
-## 6. 不要コードの削除一覧
+## 6〜8. 削除一覧・docs整理・実装順序(実行済み)
 
-削除は本体・引数・例外・既定値・呼び出し元・専用テストまで一体で行う。
-別フォルダへの退避、非推奨ラッパー、旧新切替フラグで残さない。履歴はgitを使う。
-
-| 対象 | 作業 |
-|---|---|
-| `simp.py` | FEM・線形ソルバーを抽出後、ファイル自体を削除。連続密度の `optimize`、OC/MMA更新、ペナルティ継続、密度フィルタ、体積目標、反復結果、プリセット実行を削除 |
-| `simp.Model` 周辺 | 要素剛性・節点番号・行列組立・CG/direct/MG・残差検算を残す。`rho**penal`、`emin` による空セル剛性、密度由来の動的active set・そのキャッシュ／閾値を削除。boolの静的active maskは残す |
-| 反力制約 | `ReactionGroup`、反力下限制約・感度・MMA配線を削除。荷重釣り合い確認に使う反力計算だけ再利用する。拘束面そのものや荷重は削除しない |
-| `safety_loop.py` | 材料定数の移動後、ファイルを削除。`solve_for_safety_factor`、Illinois／二分提案、材料量上下限、`too_little/too_much` 分類、旧結果型を除去 |
-| `design_space.py` | 固定空間導出・接続検査は維持。`run_topopt` とSIMP/STLへ直結する実行CLIを削除または新しい明示的CLIへ移す。導出アルゴリズムは変更しない |
-| `anchor.py` | `AnchorTable`・面積配分・荷重組立を残す。`run_pipeline` 内のSIMP・表面生成・保持密度塗り直しと、それだけの引数を削除。条件構築を副作用のない関数へ分離 |
-| `stress.py` | `simp` import・密度閾値による母集団選択・ペナルティ引数を削除。母集団は材料マスク。99.5%規則、実単位、最大応力・変位を維持 |
-| `optimize_run.py` | `_material_bounds`、`MATERIAL_MIN_RATIO/MAX_RATIO`、SIMP反復進捗、材料量補間履歴、旧速度推計式を削除。単一の新探索APIに接続 |
-| `mesh.py` | SIMPプリセットを回すCLIと探索候補ごとの呼び出しを削除。平滑化等の本体は維持。採用マスクに対して再島除去・保持塗り直しが起きない明示的入口を作る |
-| `voxelize.py`、`__init__.py` | SIMP固有の便宜API・説明を点検し、不要分を削除。軸順、格子、CAD占有、マスクモデルは維持 |
-| `bench.py` | 本体から検査設定への依存をなくす。必要なFEM・幾何fixture設定は検査側へ移し、SIMP・OC/MMA・フィルタ専用設定と不要プリセットを削除。最終的に本ファイルを削除 |
-| `trace.py` | 新しい候補・二値マスク・評価結果・終了理由の記録に置換。FEM記録から密度専用属性を除去。損失なし配列保存・例外・出典記録は維持 |
-
-FEMを含む大きなファイルを機械的に丸ごと削除してから書き直さない。
-移設した計算の等価性を確認してから旧定義を消し、同じ計算の二重実装を残さない。
-
-### 6.1 検査・計測・生成物
-
-- 削除: `check_filter_radius.py`、`measure_mma_vs_oc.py`、`measure_reaction_constraint.py`、
-  `measure_simp_convergence.py`、`plot_simp_safety_convergence.py`、`plot_simp_volume_convergence.py`、
-  `profile_simp_iter_breakdown.py`。新方式に名前だけ変えて旧比較機能を残さない。
-- `check_simp.py` はFEM検査だけ `check_fem.py` 等へ移して削除。
-- `check_safety_loop.py` は新ループの独立検査へ置換して旧ファイルを削除。
-- `check_absolute_volume.py` は二値体積・単位換算の必要な検査を移し、連続密度の体積制約検査と旧ファイルを削除。
-- `measure_active_set.py` は密度に基づく動的active比較を削除。静的な材料要素だけのFEM組立検査はFEM検査に統合。
-- `measure_safety_search.py` は二分対Illinois比較を削除。必要な候補評価数・FEM回数・最良体積履歴の計測だけ新ループ用に作り直す。
-- `check_multigrid.py`、`check_parallel.py`、`check_stress.py` は二値の既知形状で検証し、SIMPで題材を作る経路を削除。
-- `check_anchor.py`、`check_design_space.py`、`check_mesh.py`、`check_voxelize.py` は各層の検査を保持し、
-  SIMP終端まで走る部分や連続密度体積との一致を要求する部分を削除・置換。
-- `check_optimize_wiring.py`、`check_trace.py` と `tests/test_optimize_backend.py`、`test_optimize_run_ui.py`、
-  `test_optimization_trace.py`、`test_pre_smoothing.py`、`test_doc_code_agreement.py` を新APIへ移す。
-  中断・元文書不変・CAD保存・記録再現性の検査は失わない。
-- `duocad/topopt/output/` の `simp_*`、`mma_vs_oc.json`、`reaction_constraint.json`、`active_set*.json`、
-  旧 `safety_search.json`、参照／case5専用のSTLなど、廃止コード専用の追跡済み生成物を削除する。
-  残す検査のSTLは生成先を整理し、不要なものは削除。担当外の未コミット生成物は触らない。
-- 保存済み実行を読む `analyze_recorded_stages.py`、`render_recorded_analysis.py` 等は維持可能。
-  新形式と旧形式をschemaで区別し、旧方式を再実行する依存は除去する。
-  過去ログのイベント名・密度値を読むこと自体は、旧最適化ロジックを残す理由にしない。
-
-### 6.2 製品API・UI
-
-- `OptimizeOptions` から `rmin_mm`、`max_iter`、`material_min_mm3/material_max_mm3` を削除。
-  `max_evaluations` は新しい候補評価予算として契約を定義し直す。内部の線形反復上限と混同しない。
-- `session.py`、`catalog.py`、`net/ws.py`、`web/src/session.ts` の引数・型・送受信を同時更新。
-  旧引数が外部から届いたら黙って無視せず、不支持と分かるエラーにする。
-- `OptimizePanel.svelte`、`App.svelte`、`commands/optimize.ts` から密度フィルタ半径と旧進捗を削除。
-  目標安全率、要素サイズ、最良合格体積、評価回数、終了理由を表示する。
-- 解像度の上限から `rmin / MIN_RMIN` を除去。条件面・要素数上限・実格子への丸めは維持して再検証。
-- 所要時間は旧SIMP係数を使わない。初回は不明と表示し、実測FEM評価時間と予算から幅付きで見積もる。
-- `optimizeDebug.ts` の密度表示を二値材料表示へ変更し、設定・イベント名の不要分を削除。
-  条件の注釈表示や設計空間表示は維持する。
-- `smoke-optimize.mjs`、`smoke-optimize-debug.mjs`、`shoot-topopt.mjs`、`shoot_topopt_export.py` を新入力へ更新。
-  rmin比較しか目的がない撮影機能は削除する。
-
-## 7. docs/ の整理
-
-文書を「現行の新仕様」と「再現しない過去の測定」に分け、旧仕様を現在形で残さない。
-廃止文書はアーカイブフォルダへ移さず削除する。価値のある実測・制約だけ関連する現行文書へ短く移す。
-
-| 文書 | 作業 |
-|---|---|
-| `TOPOPT.md` | 現在の全経路を新方式で書き直す。SIMP設定、材料量二分探索、密度閾値、単調性を前提にした成功説明を除去 |
-| `TOPOPT_MMA_VS_OC.md` | 比較対象が消えるので削除 |
-| `TOPOPT_REACTION.md` | 反力下限・MMA制約の文書を削除。荷重釣り合いや拘束の注意だけFEM説明へ移す |
-| `TOPOPT_SIMP_ITER_BREAKDOWN.md` | 削除。線形解法の有用な実測だけ条件付きの過去値として速度文書へ移す |
-| `TOPOPT_ACTIVE_SET.md` | 動的密度閾値比較は削除。静的材料要素の組立・未使用節点処理をFEM説明へ統合し、本ファイルを削除 |
-| `TOPOPT_SPEED.md` | 旧係数・旧実行コマンドを削除。候補数・FEM回数・幾何検査時間・キャッシュ・最終再検査の実測へ更新 |
-| `TOPOPT_RECORDING.md` | 候補マスク、親と操作、島除去、6条件、合格チェックポイント、終了理由、旧記録の読み取り範囲を明記 |
-| `TOPOPT_PRE_SMOOTHING_CHECKS.md` | 製品共通検査への移設、bool API、再評価規則、新CLIを記載。旧NPZ／連続密度は過去記録入力として区別 |
-| `TOPOPT_ACCEPTANCE.md` | 平滑化前6条件と平滑化後の水密・単一ソリッドを分ける。前者合格から後者合格・強度を推論しない |
-| `PLAN_FIXED_DESIGN_SPACE.md` | 完了済みの記録として維持。後段SIMP配線等は本計画で置換された旨を冒頭に記す。固定空間の決定理由は保持 |
-| `DESIGN_DECISIONS.md`、`UI.md` | 旧最適化方式・設定UIの現行説明を置換 |
-| `DEV_NOTES.md`、`QA_LESSONS.md`、`SMOKE_TESTING.md` | 廃止CLI・テスト・ファイルへの参照を修正。一般的な開発知見は残す |
-| `INITIAL_PLAN.md` | 当初計画であることを明記し、現行手順と混同させない。新仕様の重複記載先にしない |
-| `README.md`、`docs/README.md`、`tests/README.md`、`topopt/__init__.py` | 入口・索引・依存関係・テスト一覧を更新し、削除文書のリンクを解消 |
-
-本表以外も `docs/` 全体を検索する。旧語が出ることだけで無関係な説明を消さず、
-実行手順／現行仕様／明示した歴史記録のどれかを判定する。
-**本計画は段階7でこの表を実行済みとして検証した(§10)。** 未実装案を現仕様として残さない
-という方針どおり、§1〜§9はコード・テストと一致する現行仕様の記述であり、
-「採用方針の計画」ではなく「実装済みの記録」として読むこと。
-
-## 8. 実装順序と段階ごとの完了条件
-
-1. **FEM分離**: 二値の棒・梁・空セル領域で現行FEMとの変位・応力・反力の一致を確認。
-   既存経路の単位・軸順・荷重を壊していないことを固定する。
-2. **共通検査とbool契約**: 検査を製品側へ移設し、幾何・CAD・境界条件・FEMの役割を分離。
-   キャッシュの有無で結果が一致し、エラーはunknownとなることを確認。
-3. **初期合格探索**: 小型題材で合格モデルの保存まで完成。未発見・矛盾・解像度不足を区別。
-4. **削除・追加・置換探索**: 最良モデルの保持、決定性、予算、重複回避、中断を実装。
-   削除だけで詰まる題材で、追加／置換による改善が実際に起きることを確認。
-5. **製品配線**: 候補中はメッシュ化を呼ばず、最終確定マスクだけ後段へ渡す。UI/API/ログも更新。
-6. **削除と文書整理**: §6・§7を全て実行。新旧併存を移行完了としない。
-7. **通し検証・監査**: 小型製品試験、hangerの平滑化前6条件、削除漏れ、リンク切れを検証して完了。
-   → **実施したが、hangerでの実機検証は失敗した(§10.2)。体積削減機能の完成と扱わない。**
-
-最終マージは独立したコミット単位でFEM移設、共通検査、探索、製品、削除・文書をレビューできる構成にする。
-作業開始時に最新mainとこのワークツリーの差を確認し、別作業のリベースや未コミット変更を上書きしない。
-
+**2026-09-18 に本文を削除した** —— どれも実行済みの作業計画で、何をどこから消したかは git 履歴が
+持つ。いまも効く契約だけ残す: **旧引数(`rmin_mm` / `max_iter` / `material_min_mm3` /
+`material_max_mm3`)が外部から届いたら黙って無視せず、不支持と分かるエラーにする**(そのために
+`session.py` / `catalog.py` / `net/ws.py` に識別子だけ残っている。削除するとこの契約を満たせない)。
+**§1〜§5 は「採用方針の計画」ではなく「実装済みの現行仕様の記述」として読むこと。**
 ## 9. 検証と完成条件
 
-- 各6条件を単独で破る反例を用意し、合格に化けないことを検証する。
-- 複数保持・複数荷重・相反荷重・複数拘束、格子未満のCAD、境界接触、内部空洞を含む。
-- 孤立成分が条件を持つ例、全材料でも応力不足の例、計算失敗、初期合格未発見を検証する。
+- 各6条件を単独で破る反例を用意し、合格に化けないことを検証する。複数保持・複数荷重・相反荷重・
+  複数拘束、格子未満のCAD、境界接触、内部空洞を含む。孤立成分が条件を持つ例、全材料でも応力不足の例、
+  計算失敗、初期合格未発見も。
 - 安全率再評価が削除・島除去後のマスクを使うことを、マスクハッシュと解への入力で確認する。
-- 最良モデルは合格を維持し体積が増えない。探索用候補の体積増加と混同しない。
-- 合格発見後の全試行失敗、予算終了、中断、最終再検査失敗で返却状態が正しい。
+- 最良モデルは合格を維持し体積が増えない(探索用候補の体積増加と混同しない)。合格発見後の全試行失敗、
+  予算終了、中断、最終再検査失敗で返却状態が正しい。
 - 記録から候補と採否を再現でき、失敗候補を含めFEM回数・時間・体積履歴が追える。
 - 微小格子では許可マスクの全列挙を検査専用の正解として使い、評価・最良候補選択を照合する。
-  通常探索が常に大域最小を発見するというassertにはしない。
-- hangerは保存済みの同一入力、同一物性・目標・要素サイズを基準にする。
-  新ループが返す採用マスクで6条件全合格、最終再検査一致、導出1回、候補中メッシュ化0回を必須とする。
-  初期合格だけで止まって軽量化できない場合は、その事実と終了理由を記載し、体積削減機能の完成と扱わない。
-- 速度の合否閾値は設けず、実時間・候補数・FEM回数・削減体積を報告する。
-- 既存後段の小型製品保存・undo/redo・元ボディ不変・中断を確認する。
-  hangerの後段に残る平滑化問題を、新ループの合格や未解決事項から隠さない。
+  **通常探索が常に大域最小を発見するというassertにはしない。**
+- hangerは保存済みの同一入力・同一物性・目標・要素サイズを基準にする。採用マスクで6条件全合格、
+  最終再検査一致、導出1回、候補中メッシュ化0回を必須とする。**初期合格だけで止まって軽量化できない
+  場合は、その事実と終了理由を記載し、体積削減機能の完成と扱わない。**
+- **速度の合否閾値は設けず**、実時間・候補数・FEM回数・削減体積を報告する。
+- 既存後段の小型製品保存・undo/redo・元ボディ不変・中断を確認する。hangerの後段に残る平滑化問題を、
+  新ループの合格や未解決事項から隠さない。
 
-最後に全実行コード・テスト・UI・docsを検索し、`simp`、`safety_loop`、`run_preset`、
-`_OCUpdate`、`_MMAUpdate`、`penal_at`、`volfrac`、`rmin_mm`、`MIN_RMIN`、`reaction_min`、
-`dynamic_active`、`material_min_mm3`、`material_max_mm3`、`illinois`、旧 `compliance` 進捗を監査する。
-残るものは過去記録の読み取り・明示された歴史説明・本計画の削除一覧に限定し、理由を一覧にする。
-FEM内部の反復法や他機能の二分探索など、同じ単語を持つ必要な処理は削除しない。
+各項目に対応するテストは**テスト自身の docstring が正**(2026-09-18 に §9 ↔ テスト名の対応表を
+削除した —— 名前が変わるたびに腐るため)。**まだ無いもの**: 「複数荷重」「相反荷重」「複数拘束面」を
+**同時に**持つ単一のテスト(単体の反例と、2保持体・単一拘束面・単一荷重面の組み合わせはある)。
+## 10. 段階7: 通し検証・監査(2026-09-17)
 
-成果物は新しい単一経路、再利用FEM、共通6条件検査、更新UI/記録/CLI、整理した文書、
-削除一覧、回帰結果、hangerの採用マスクと検査報告。旧方式を残した暫定状態では完了にしない。
-**「hangerの採用マスクと検査報告」は§10.2のとおり未達**(初期合格にすら到達していない)。
+**hanger での実機検証はいったん失敗し、同日に直した。** 失敗は「全材料マスクでも荷重面31のアンカー
+節点の 10〜32% がどの材料セルにも接しておらず、条件検査が恒常的に不合格になる」もので、そこから
+抜け出せないまま候補が積み上がって `MemoryError` になった(約8〜9分で異常終了)。設計空間の導出は
+正常で、接続性剪定が削除したセルは 4.8mm・2.4mm とも 0 —— **被覆が失われるのは除外マスクを引く段階**
+だった(`margin_ratio` を 0.20→0.80 まで振っても水準は変わらないので、単純な余白不足ではない)。
+ここから2つ:
 
-## 10. 段階7: 通し検証・監査の結果(2026-09-17)
+1. **全材料マスクが条件を落とすなら、削除・追加・置換では原理的に直せない** —— 候補 M は設計空間 D の
+   部分集合なので、M に接する節点も D に接する節点の部分集合である。にもかかわらず当時の
+   `find_initial_feasible` はこれを幾何不良や応力不足と同列に扱い、候補を生成し続けた(§4.2 の設計
+   どおりだが、この失敗モードには効かない)。→ §4 の入口検査。
+2. **小型題材では候補数が少なく顕在化しない。** 段階3・4のテストはどれもこの経路を踏んでいなかった
+   (段階4が「実運用の格子規模での収束を検証していない」と明記していた懸念が実際に的中した)。
+   → §5 の遅延生成と保持上限。
 
-### 10.1 §9完成条件のうち小型題材で確認済みのもの
+直し方・実測・残した契約は [FIX_BINARY_SEARCH_INITIALIZATION.md](FIX_BINARY_SEARCH_INITIALIZATION.md)。
 
-pytest全体は1206 passed / 2 skipped / **2 failed(後述10.4、本計画と無関係な既存不具合)**。
-以下は§9の各項目に対応する既存テスト(段階1〜4で作成済み。本タスクは新規作成せず存在を確認した):
+**修正後(2026-09-17)**: hanger 4.8mm / 2.4mm とも初期全材料マスクが実FEMを含む6条件に全合格
+(安全率 164.7 / 163.1)。§9 が求める「6条件全合格・最終再検査一致・導出1回・候補中メッシュ化0回」は
+両解像度で確認した(2.4mm は初期評価と4評価まで)。**この時点では体積削減の完成とは扱わなかった** ——
+予算60で `evaluation_limit` に当たり、評価の8割が `no_component` だった(拘束面が節点2個で、大きい
+ブロックの削除がその足場を落とす)。段階4をひずみエネルギー順の削減へ置き換えたのが §11 で、
+そこで初めて削減が進むようになった。
 
-| §9の項目 | 確認したテスト |
-|---|---|
-| 6条件を単独で破る反例 | `tests/test_pre_smoothing.py`(`test_regular_boundaries[cavity\|tunnel]`、`test_corner_and_edge_contacts_fail`、`test_local_singularity_is_detected_even_if_globally_connected`、`test_cancelled_loads_are_checked_per_face`、`test_force_scale_and_underconstrained_solid`、`test_solver_failure_is_unknown_not_unsafe` 等) |
-| 内部空洞・境界接触・格子未満のCAD | 同上 `test_regular_boundaries[cavity]`(内部空洞)・`test_corner_and_edge_contacts_fail`(境界接触) |
-| 孤立成分が条件を持つ例 | `tests/test_binary_search.py::test_resolve_islands_rejects_an_isolated_component_that_holds_only_one_condition` / `test_resolve_islands_keeps_the_component_that_alone_satisfies_every_condition` |
-| 全材料でも応力不足 | `tests/test_binary_search.py::test_full_material_still_fails_safety_is_not_laundered_into_a_pass` |
-| 計算失敗・初期合格未発見 | `test_computation_failure_is_recorded_as_unknown_and_never_becomes_the_best_feasible` / `test_no_feasible_found_records_history_and_does_not_return_a_dangling_best` / `test_resolution_insufficient_is_reported_without_running_the_search` / `test_input_contradiction_is_confirmed_when_even_the_full_design_space_cannot_preserve` |
-| 安全率再評価が削除・島除去後マスクを使う(マスクハッシュ一致) | `test_island_is_stripped_before_the_safety_recheck_mask_hash_and_solver_input_agree` |
-| 最良モデルは体積が増えない | `test_reduction_is_deterministic_for_the_same_input_and_budget`、`_is_smaller_feasible` の構造(体積→安全率→マスクハッシュの順で決定的に選ぶ) |
-| 予算終了・中断・最終再検査失敗での返却状態 | `test_evaluation_budget_exhaustion_keeps_the_best_feasible_found_so_far` / `test_cancellation_returns_the_best_feasible_found_before_the_cancel_signal` / `test_cancellation_after_an_improvement_preserves_the_improved_checkpoint` / `test_failed_final_recheck_keeps_the_previous_best_and_does_not_crash` |
-| 削除だけで詰まる題材での追加/置換の実効果 | `test_pure_deletion_cannot_improve_on_the_detour_shape` / `test_add_and_replace_escape_the_deletion_deadlock_the_pure_deletion_test_hits` |
-| 微小格子の全列挙照合 | `test_tiny_grid_exhaustive_enumeration_matches_the_search_optimum` / `test_default_budget_and_frontier_settings_reach_the_optimum_on_this_tiny_fixture` |
-| 既存後段の小型製品保存・undo/redo・元ボディ不変 | `tests/test_finalization.py::test_solid_operation_undo_redo_and_replay`(`add_solid_body`経路は全verb共通の履歴機構) |
-| 中断(製品配線) | `tests/test_optimize_backend.py::test_cancelling_leaves_the_document_untouched` / `test_search_cancellation_leaves_the_document_untouched` / `test_search_cancellation_discards_a_found_best_feasible_too` |
-| 候補評価中メッシュ化0回 | 構造的に保証(`duocad/topopt/binary_search.py`・`acceptance.py`は`mesh`モジュールを一切importしない)。回帰は`tests/test_optimize_backend.py::test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize` |
-
-これらは段階1〜4がそれぞれの完了条件として自ら作成・QA済みのテストであり、本タスクは
-新規作成ではなく**存在と合格を確認した**(監査)。複数保持・複数荷重・相反荷重・複数拘束の
-組み合わせ網羅までは追えていない——`tests/test_optimize_backend.py::_setup_four_conditions`が
-2保持体・単一拘束面・単一荷重面の組み合わせを、`test_pre_smoothing.py`の各fixtureが
-単体条件の反例を提供しているが、「複数荷重」「相反荷重」「複数拘束面」を同時に持つ
-単一のテストは見つからなかった。**本人判断待ち**: この網羅性の不足を段階7の不合格理由に
-含めるかどうか(下記10.2の失敗が優先度としてより重大なため、本タスクでは追加のテストを
-書いていない)。
-
-### 10.2 hangerでの実機検証: 失敗(体積削減機能の完成と扱わない)
-
-**結論: 現状のコードはhangerに対して初期合格すら発見できず、探索が例外(`MemoryError`)で
-異常終了する。§9が求める「6条件全合格・最終再検査一致・導出1回・候補中メッシュ化0回」の
-いずれも確認できていない。**
-
-手順: `models/hanger_bar_attachment.json`(このワークツリーの`models/`は`.gitignore`対象のため
-`C:\Users\tm976\mf\duocad\models\`から複製して使用)、`target_safety_factor=2.0`
-(docs/TOPOPT_PRE_SMOOTHING_CHECKS.mdのCLI例・2026-09-09完走時の実測と同じ値)、
-`topopt_checks/measure_binary_search.py`(段階6が新設・未実機検証のままだったもの)を
-要素サイズ4.8mm(2026-09-09実測表で「通る」と確認済みの解像度。2.4mmは規模が大きすぎて
-本タスクの時間内に実行できないため不採用。§9は要素サイズの固定値を指定していない)・
-`max_evaluations=500`(製品既定1000より小さいが、実時間を踏まえた明示的な予算。§9に
-既定予算を使う指定はない)で実行した。
-
-**症状**: `find_initial_feasible`の探索ループ内、`_generate_repairs`→`repair_candidates`が
-候補マスク(`shape=(36, 66, 52)`、1配列あたり約121KiB)を生成する箇所で
-`numpy._core._exceptions._ArrayMemoryError`が発生し、プロセスが異常終了した
-(起動から約8〜9分後。実行時のログはtaskboxのworkspace配下に一時保存したが、taskboxの運用規則により
-タスク完了時に削除される使い捨て領域のため、恒久的な記録はこの節の記述と`git log`のコミット
-メッセージ(`6439e16`)が正)。
-
-**根本原因の切り分け(`acceptance.inspect`を1回だけ直接呼ぶ診断で特定)**:
-hangerの設計空間の**全材料マスク**(削除前・最大体積)で6条件のうち「荷重・拘束が有効」
-(`checks['conditions']`、面`load_face_31`)が**要素サイズ4.8mm・2.4mmを含む全テスト解像度
-(4.8/4.4/4.0/3.6/3.2/2.8/2.4mm)で恒常的に不合格**だった。`load_face_31`のアンカー総節点数は
-要素サイズが細かくなるほど当然増える(4.8mmで170節点→2.4mmで938節点)。そのうち
-どの材料セルにも接していない節点(`lost_nodes`)は49〜108件(**総節点数に対する割合は
-10.4%〜31.5%とばらつき、単調な傾向は無い**。実測: 4.8mm 28.8% / 4.4mm 31.5% / 4.0mm 20.1% /
-3.6mm 18.4% / 3.2mm 10.4% / 2.8mm 15.9% / 2.4mm 11.5%)。2.4mmでは`fixed_face_10`/
-`fixed_face_7`も新たに2節点ずつ失い始め、悪化する。`margin_ratio`を要素サイズ4.8mm固定のまま
-既定0.20から0.35/0.50/0.80まで振ると`lost_nodes`は49/36/50/40件(総節点数も168〜176の間で
-微動する——`margin_ratio`は格子の外枠自体も広げるため、アンカー総節点数に全く影響しない
-わけではないが、`lost_nodes`の水準は解消しない)——**単純な余白不足ではない**。
-`design_space.derive`は凸包由来の候補マスクを`connect_conditions`で拘束面・荷重面・
-保持シードへの接続性で剪定する(`duocad/topopt/design_space.py`の`derive`内、731行目)。
-当初は接続性剪定による削除を疑ったが、**追跡調査で否定された**。
-4.8mm・2.4mmとも剪定で削除したセルは0で、除外差し引き後マスクと導出出力は完全一致した。
-荷重節点の被覆が失われるのは除外マスクを引く段階。詳細と再現手順は
-[INITIAL_SPACE_FAILURE_DIAGNOSIS.md](INITIAL_SPACE_FAILURE_DIAGNOSIS.md)を参照。
-
-**この2つの事実から言えること**:
-
-1. **全材料マスクが既に「荷重・拘束が有効」条件を落とすなら、削除ベースの修復
-   (`repair_candidates`は既存材料の削除・追加・置換しか行わない)では原理的に解決できない**
-   ——材料を減らしても荷重面のアンカー被覆は改善しない。にもかかわらず
-   `find_initial_feasible`はこれを「幾何不良」や「応力不足」と同列に扱い、
-   `_generate_repairs`で新しい候補を生成し続ける(§4.2「幾何不良でも応力不足でも同じ
-   `repair_candidates`を使う」の設計どおりだが、この失敗モードには効かない)。
-2. **`find_initial_feasible`のfrontier(`deque`)には`_reduce_volume`の
-   `frontier_capacity`(既定48)に相当する上限が無い。** 解決不能な失敗が繰り返されるたびに
-   `_generate_repairs`が生成する候補が際限なく積み上がり、`max_evaluations`(pop数の予算)に
-   到達する前にメモリを使い尽くす。小型テスト題材(格子10セル程度)では候補数が少なく
-   顕在化しないため、段階3・段階4のテストはどれもこの経路を踏んでいない
-   (段階4の後続契約③が「実運用の格子規模での収束を検証していない」と明記していた懸念が
-   実際に的中した)。
-
-**次の一手(2026-09-17、本人判断: `docs/FIX_BINARY_SEARCH_INITIALIZATION.md` の修正A・B・Cを
-そのまま実施)**: 下の (a)〜(c) は同日に実装し、結果は §10.5 と `FIX_BINARY_SEARCH_INITIALIZATION.md`
-§9 に記録した。(a) は設計空間の側ではなく**探索へ渡す境界条件の側**で直した(導出は変えない)。
-
-- (a) 導出出力に接する節点だけへ条件面を対応付け直した確定表を作り、面ごとの対応・荷重保存・
-  作用位置を検証してから固定する(`anchor.build_anchors(allowed_nodes=...)` /
-  `anchor.condition_mapping` / `optimize_run._map_boundary_conditions`)。
-- (b) `find_initial_feasible` の入口で、確定表の全節点が全設計空間の材料に接することを検査し、
-  接しなければ候補生成0回・FEM0回で `boundary_mapping_failed` を返す。
-- (c) 候補を記述として遅延生成し、frontier を親マスクの容量で縛る(初期・削減の両段階)。
-
-**§9が求める報告(速度の合否閾値なし)**: 初期合格に到達しなかったため、候補数・FEM回数・
-削減体積は測定できていない。実時間は約8〜9分(クラッシュまで)。使用した要素サイズは4.8mm
-(design_space.derive後の材料マスク47,232要素、格子箱123,552要素)、目標安全率2.0。
-
-**§9の「hangerの後段に残る平滑化問題を隠さない」について**: 探索が初期合格にすら
-到達しないため、平滑化以降の後段(メッシュ化・平滑化・最終ブーリアン)はhangerに対して
-一度も実行できていない。stage5で発見された既知の別問題(既定解像度が
-`voxelize.occupancy`のレイキャスト頑健性バグを踏む、docs/TOPOPT.md「制限」節に記載)とは
-別の、より手前の段階でのブロッキング要因である。
-
-### 10.3 §9末尾の監査語の一覧(コード・テスト・UI・docs全体)
-
-全件grepはこのタスクの実行時にtaskboxのworkspace(使い捨て領域。完了時に削除される)へ
-一時保存した。要約(語ごとの残存理由。再現するには本節末尾の監査語をこの文書全体で
-`grep -rniIE`すればよい):
-
-| 監査語 | 残存箇所の種別 | 判定 |
-|---|---|---|
-| `simp` | `docs/TOPOPT.md`の日付見出し付き歴史節(2026-08-31〜2026-09-16の実測記録)、`docs/PLAN_BINARY_STRESS_SEARCH.md`/`PLAN_FIXED_DESIGN_SPACE.md`の削除一覧(§5・§6表自体)、`docs/QA_LESSONS.md`の過去のインシデント記録、`tests/test_design_space.py`ほかの「SIMPは回さない/追っていた検査の後継」という否定形の言及、`topopt_checks/analyze_recorded_stages.py`・`render_recorded_analysis.py`の**旧記録読み取り**(過去のtrace JSONに`"name": "simp"`のフェーズが実在するため必要)、`topopt_checks/check_fem.py`の移設前基準値コメント | 許容(過去記録の読み取り・明示された歴史記録・本計画の削除一覧) |
-| `safety_loop` | 上記simpと同様の歴史節・削除一覧・`tests/test_doc_code_agreement.py`のコメント例示 | 許容(同上) |
-| `run_preset` | `PLAN_BINARY_STRESS_SEARCH.md`自身の監査語列挙(この段落)のみ | 許容(自己言及) |
-| `_OCUpdate` / `_MMAUpdate` / `penal_at` | 監査語列挙のみ、または`docs/TOPOPT.md`の歴史節(`simp.penal_at`)1件 | 許容 |
-| `volfrac` | すべて`docs/TOPOPT.md`の日付付き歴史節(2026-09-04実測等)。コード内に`volfrac`引数は現存しない(grep 0件) | 許容(歴史記録) |
-| `rmin_mm` / `material_min_mm3` / `material_max_mm3` | `duocad/session.py`・`net/ws.py`・`catalog.py`・テストに**意図的に残存**——段階5の契約どおり、旧引数名を受け取って`OptimizeInputError`で拒否するための識別子。削除すると「旧引数が届いたら分かるエラーになる」契約(§6.2)を満たせない | 許容(削除禁止・意図的残存) |
-| `MIN_RMIN` | `docs/TOPOPT.md`の歴史節のみ。コードに定数は無い(grep 0件) | 許容(歴史記録) |
-| `reaction_min` | `docs/QA_LESSONS.md`・`TOPOPT.md`の歴史節のみ | 許容(歴史記録) |
-| `dynamic_active` | `docs/TOPOPT.md`の歴史節(段階6直前の削除決定を含む)のみ。コードに機構は無い(段階6で削除確認済み、`20260917-0445`契約) | 許容(歴史記録) |
-| `illinois` | `docs/TOPOPT.md`の歴史節1件のみ | 許容(歴史記録) |
-| 旧`compliance`進捗 | `web/src/session.ts`に`compliance`は0件(段階5で削除確認)。`duocad/topopt/fem.py`の`compliance`メソッドと`check_fem.py`/`check_multigrid.py`の同名テストは**FEM検査で使う現役の計算**であり、監査対象の「SIMP反復ごとの進捗表示」とは別物 | 許容(別概念) |
-
-**本タスクで修正した2件**(監査中に発見した、意図的でない現在時制の誤り):
-
-- `topopt_checks/check_design_space.py`(553行目): 検査ラベル文字列「拘束面から固定自由度が
-  引ける(**SIMPに渡せる**)」→「(**fem.pyに渡せる**)」。`simp.py`は段階6で削除済みのため、
-  このラベルは存在しないモジュールを指していた(検査結果の合否には影響しない、表示文字列のみ)。
-- `topopt_checks/check_parallel.py`(220〜223行目): `fem.PARALLEL_THREADS`の代入について
-  「`fem.PARALLEL_THREADS`は`fem`からの再輸出」という自己言及的で意味の通らない記述と、
-  存在しない`simp`側の束縛への言及が残っていた。`simp.py`が段階6で削除され
-  `PARALLEL_THREADS`は`fem.py`だけが持つ唯一の実体になったため、コメントを現状に合わせて
-  書き直した(段階6以前は`simp.PARALLEL_THREADS`という別束縛があり、そちらを書き換えても
-  `fem.PARALLEL_THREADS`に反映されない罠が実在したが、`simp.py`削除後はその罠自体が消えている)。
-
-### 10.4 pytest全体の結果と、本計画と無関係な既存失敗2件
-
-`pytest -q`: 1206 passed, 2 skipped, **2 failed**。失敗2件は本計画のどのコミットより前
-(`0613907`、2026-09-16、本計画の開始コミット`2223908`より前)から存在し、
-`git stash`でも同じ2件が失敗することを確認した(本タスクの変更は`topopt_checks/`の
-コメント2箇所のみで、いずれもpytest収集対象外):
-
-- `tests/test_boundaries.py::test_only_kernel_module_imports_ocp` — `kernel_brep.py`、
-  `mesh_geometry.py`、`topopt/finalize.py`がOCPを直接importしており、境界検査の
-  免除一覧(`OCP_ALLOWED`)に未登録。
-- `tests/test_mcp_verbs.py::test_tool_names_match_the_verb_names_in_the_operation_log` —
-  `add_solid_body`というverbがoplogに登録されているが、MCPツール名の期待集合
-  (`LOGGING_TOOLS`)に含まれていない。
-
-いずれも「二値モデル・応力制約による体積削減ループ」とは無関係な、別の作業
-(`0613907`「preserve diagnostics, finalize CAD constraints, and document fixed-space plan」)
-由来の既存不具合であり、本計画の削除・実装作業は関与していない。**本タスクでは修正していない**
-(担当外)。**本人判断待ち**: 別タスクとして起票するか、次にこの領域を触るタスクの担当に含めるか。
-
-
-### 10.5 修正後の状態(2026-09-17、`docs/FIX_BINARY_SEARCH_INITIALIZATION.md` 実施後)
-
-修正A(境界条件の確定)・B(入口の必要条件)・C(候補の遅延生成と保持上限)を実施した。
-hanger の実機記録は `output/hanger_fix_verification/*.json`(`topopt_checks/verify_hanger_fix.py`)、
-導出各段階の照合は `output/initial_space_diagnosis/stages-after-fix.json`
-(`topopt_checks/diagnose_initial_space.py`)。数値は `FIX_BINARY_SEARCH_INITIALIZATION.md` §9。
-
-| 項目 | 4.8mm(実 4.7750 mm、36×66×52) | 2.4mm(実 2.4063 mm、69×129×100) |
-|---|---|---|
-| 導出出力 | 47,232 セル(基準値と一致、剪定 0) | 367,390 セル(基準値と一致、剪定 0) |
-| 荷重面31: 幾何の表 → 確定表 | 節点 170(未被覆 49) → 123(未被覆 0、対応不能標本 0、合力誤差 0、重心のずれ 0.029 要素、モーメント誤差 3.29 N·mm = 正規化 0.0034) | 節点 938(未被覆 108) → 830(未被覆 0、対応不能標本 0、合力誤差 0、重心のずれ 0.0039 要素、モーメント誤差 1.41 N·mm = 正規化 0.0029)。拘束面10・7は 14(未被覆 2) → 12 |
-| 初期全材料マスクの6条件(実FEM) | **全合格**。安全率 164.7(目標 2.0)、代表応力 0.243 MPa、素の最大 36.2 MPa、残差 9.7e-10、14.6 秒 | **全合格**。安全率 163.1、代表応力 0.245 MPa、素の最大 50.2 MPa、残差 9.7e-10、104.5 秒 |
-| 探索 | 予算 60: `feasible` / `evaluation_limit`。最良 4,280,158 mm³(初期 5,142,330 から −16.8%)、安全率 146.1、再検査合格・ハッシュ一致。評価 60 のうち `ok` 11 / `no_component` 48。保持 48(容量どおり)、除外 10、生成記述 113(重複 54)、4.0 秒/評価 | 予算 4: `feasible` / `evaluation_limit`。最良 4,129,397 mm³(初期 5,118,936 から −19.3%)、安全率 136.9、再検査合格・ハッシュ一致。`ok` 2 / `no_component` 2。保持 3、生成記述 3、136.9 秒/評価。**予算不足で削減は未達**(4.8mm の結果を 2.4mm の成功に読み替えない) |
-| 不変条件 | 導出 1 回・候補中メッシュ化 0 回・評価条件ハッシュ不変 | 同左 |
-
-§9 が求める「6条件全合格・最終再検査一致・導出1回・候補中メッシュ化0回」は 4.8mm・2.4mm の両方で
-確認した(2.4mm は初期評価と4評価まで)。
-**体積削減の完成とは扱わない**: 予算 60 で `evaluation_limit` であり、`no_component` が評価の8割を
-占める(拘束面は節点2個で、大きいブロックの削除が足場を落とす)。frontier の順位付け(§4.3 の既知の
-簡略化)と、平滑化以降の後段の hanger での通し確認は本修正の範囲外のまま残る。
-
+**本計画と無関係な既存失敗2件**(`0613907`、2026-09-16 以前から存在。本計画の作業は関与していない):
+`tests/test_boundaries.py::test_only_kernel_module_imports_ocp`(`kernel_brep.py` / `mesh_geometry.py` /
+`topopt/finalize.py` が OCP を直接 import していて免除一覧 `OCP_ALLOWED` に未登録)、
+`tests/test_mcp_verbs.py::test_tool_names_match_the_verb_names_in_the_operation_log`(`add_solid_body` が
+`LOGGING_TOOLS` に無い)。**本人判断待ち**のまま。
 ## 11. 段階4の置き換え: ひずみエネルギーの順位で削る(2026-09-18)
 
 §4.3 の削除・追加・置換の frontier 探索は段階3(最初の合格モデルを見つける)だけに残し、段階4
@@ -558,7 +300,7 @@ hanger の実機記録は `output/hanger_fix_verification/*.json`(`topopt_checks
 「1セルずつ外す」「全部戻った選択を評価に数えない」は、hanger 4.8mm(θ=0.5・上限0.5・予算300)の試行の
 39%(299件中116件)が「修復で全部戻った選択」で、評価予算を使いながら m を 0.0078 まで下げていたので入れた。
 
-### 11.2 削減割合の決め方(hanger 4.8mm、`output/stage4_reduction/`)
+### 11.2 削減割合の決め方(hanger 4.8mm)
 
 `topopt_checks/verify_hanger_fix.py --spacing 4.8 --max-evaluations 1000 --step-exponent θ --max-step-ratio r_max`。
 コードは `bad9aca`(作業ツリーの複製から走らせたので JSON の `git_head` は取れていない。
@@ -576,6 +318,8 @@ hanger の実機記録は `output/hanger_fix_verification/*.json`(`topopt_checks
 | 140 | **θ=0.5・上限 0.2(既定)** | 4,030,728 mm³(78.4%) | 140.01 | 18 | 19 | 1 |
 
 全て `converged`(`safety_at_single_cell`)で、最良のキャッシュ無し再検査は合格・ハッシュ一致。
+**計測の生JSON(`output/stage4_reduction/` 7本)は 2026-09-18 に削除した** —— 上の表と §11.3 が
+結論を持っており、生データは git 履歴にある。取り直すなら下のコマンドをそのまま回せばよい。
 
 - **上限が結果を大きく変えた。** 0.5 は序盤の3回で体積を 663k mm³ まで落とすが、同じ体積帯での安全率が低い形に
   なり 76,538 mm³ で止まった。0.1 が 0.2 より大きい体積で止まったので、単調な関係とは読まない(各1回の計測)。
@@ -591,7 +335,7 @@ hanger の実機記録は `output/hanger_fix_verification/*.json`(`topopt_checks
 
 ### 11.3 hanger 4.8mm の到達点と、止まった理由(既定・目標安全率2)
 
-`output/stage4_reduction/target2-theta0.5-cap0.2.json`:
+既定(θ=0.5・上限0.2)の1本:
 
 - 5,142,330 → **53,130 mm³(1.03%)**、安全率 2.224。段階4のFEM 184回・評価 369回(予算1000の手前で `converged`)。
 - 不合格の内訳: `no_component` 184件、安全率 3件。修復で全部戻った選択 80回(評価に数えない)、外したセル 309。

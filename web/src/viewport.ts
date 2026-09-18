@@ -2022,7 +2022,7 @@ export function createViewport(container: HTMLElement): Viewport {
   // 当たり半径の定数(`EDGE_PICK_PIXELS` / `SKETCH_HANDLE_PIXELS` / `VERTEX_PIXELS`)は
   // **画面上の半径[CSS px]**として使う。Raycaster の world threshold
   // (`worldPerPixel() * 定数`)では、注視点と対象の奥行きが違うだけで実際の screen 半径が
-  // 変わり、斜めから見た線は 3D 垂線距離ぶん楕円状に当たる(`docs/SCREEN_PICK.md`)。
+  // 変わり、斜めから見た線は 3D 垂線距離ぶん楕円状に当たる。
   //
   // **`worldPerPixel()` はここから外れた**。残っているのはグリッド・可変解像度・clip 用。
 

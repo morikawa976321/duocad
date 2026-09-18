@@ -1,7 +1,8 @@
 # duocad — 3Dビューポート（カメラ・ピック・グリッド・深度）
 
 **読むとき**: `web/src/viewport.ts` とその兄弟（`planeGrid.ts` / `gridScale.ts` / `viewCube*.ts` /
-`faceCulling.ts` / `screenPick.ts`）を変えるとき。当たり判定の設計は [SCREEN_PICK.md](SCREEN_PICK.md)。
+`faceCulling.ts` / `screenPick.ts`）を変えるとき。当たり判定は screen 半径[px]で揃える
+（正は `web/src/screenPick.ts` と `web/scripts/smoke-screen-pick.mjs`）。
 実装の詳細はコードのコメントが正で、ここは**判断の理由と実測**。
 
 ## 不変条件「見えるもの＝指せるもの」と深度の規約（2026-09-03、本人委任で決定）
