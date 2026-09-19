@@ -632,7 +632,7 @@ def _single_cell_safety_failures(steps):
 
 
 def test_rejected_steps_halve_the_step_accepted_ones_double_it_and_a_single_cell_safety_failure_converges(monkeypatch):
-    """落ちたら、削減割合の後退規則か、`single_cell_patience=1` の収束の判定が §11 の規則と違う。"""
+    """落ちたら、削減割合の後退規則か、`single_cell_patience=1` の収束の判定が変更前(1セルの安全率不合格で止まる)と違う。"""
     conditions, design, _ = appendage_conditions()
     floor = 0.75 * design.sum()
     _fail_safety_when(monkeypatch, lambda material: material.sum() < floor)  # 体積の下限を安全率の不足に見立てる
@@ -664,7 +664,7 @@ def test_a_single_cell_safety_failure_excludes_that_cell_until_patience_consecut
         assert result.termination == 'converged' and reduction['stop_reason'] == 'safety_at_single_cell'
         assert reduction['single_cell_patience'] == patience and reduction['safety_excluded_cells'] == patience - 1
         assert reduction['steps'][-patience:] == _single_cell_safety_failures(reduction['steps'])[-patience:]
-        assert any(step['peel']['picked'] > 1 and step['outcome'] == 'rejected' for step in reduction['steps'])  # k≥2 の不合格は数えない
+        assert any(step['peel']['picked'] > 1 and step['outcome'] == 'rejected' for step in reduction['steps'])
         stage4 = result.history[1:]
         assert len({(trial.parent, trial.mask_hash) for trial in stage4}) == len(stage4)
         finals[patience] = result.best_feasible.mask.sum()

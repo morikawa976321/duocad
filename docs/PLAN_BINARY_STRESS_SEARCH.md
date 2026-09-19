@@ -474,12 +474,11 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 従来から同じ扱いで、数えない)。安全率で外したセルが**採用を挟まず** `single_cell_patience` 個に達したら `safety_at_single_cell` で `converged`。
 採用が起きたら順位を作り直すので外したセルは解除され、数え直す。順位を歩いて1セルも抜けなくなれば従来どおり `no_removable_cell`(どちらで止まったかは `stop_reason` で分かる)。
 `single_cell_patience=1` は変更前と同じ規則で、実測でも §12.3 の A と同じ結果になった(FEM 33・71,421.25 mm³・安全率 2.4329)。
-**有限回で止まる理由**: 採用のたびに材料が1セル以上減る。採用の間は、k ≥ 2 の不合格が後退倍率を半分にして k を有限回で1まで下げ、k = 1 の不合格が順位を1セル縮める
-ので、順位は尽きる(`tests/test_binary_search.py` が、どの候補も外れて採用が起きない題材で `patience=None` が予算切れでなく `no_removable_cell` で止まること・同じ形から同じ候補を2度評価しないことを固定している)。
+**有限回で止まる理由**は `binary_search._reduce_volume` の docstring にある。`tests/test_binary_search.py` が、どの候補も外れて採用が起きない題材で `patience=None` が予算切れでなく `no_removable_cell` で止まること・同じ形から同じ候補を2度評価しないことを固定している。
 `None`(無制限)は数えない指定で、上の理由により順位が尽きるまでで止まる。
 
 **測定**: `.\.venv\Scripts\python.exe topopt_checks\verify_hanger_fix.py --model models\hanger_bar_attachment.json --spacing 4.8 --target 2 --max-evaluations 1000 --no-memory-trace --no-surface-only --single-cell-patience {1,4,16,unlimited} --out output\stage4_stop_rule\patience-{…}-hanger-4.8mm-target2-theta0.5-cap0.2.json`
-(θ=0.5・上限0.2・予算1000・`surface_only=False`。コードは `9629323`〈JSON の `git_head`〉で、その後 `binary_search.py` で変えたのは `DEFAULT_SINGLE_CELL_PATIENCE` の値とそのコメントだけ〈測定は値を明示して回した〉)。
+(θ=0.5・上限0.2・予算1000・`surface_only=False`。コードは `9629323`〈JSON の `git_head`〉で、その後 `binary_search.py` に入ったのは `DEFAULT_SINGLE_CELL_PATIENCE` の値とコメント、docstring の語句、`single_cell_patience` の引数検証〈bool を拒否〉だけで、測定は整数を明示して回したので探索の道筋に影響しない)。
 表の値は `topopt_checks/summarize_stage4.py` が JSON から出す。
 
 | 項目 | 基準(§11.3) | patience=1(§12.3 の A と同結果) | 4 | 16 | 無制限 |
