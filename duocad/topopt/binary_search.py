@@ -1072,7 +1072,8 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     評価は bbox キャッシュ無しで行うが、保持・除外の共通体積は前計算(`region_overlaps`)から引く。
     採用形状はこの関数を出る前に前計算を使わない旧経路で取り直す(`_recheck_regions_without_precompute`)。
     """
-    if single_cell_patience is not None and not (isinstance(single_cell_patience, int) and single_cell_patience >= 1):
+    if single_cell_patience is not None and not (
+            isinstance(single_cell_patience, int) and not isinstance(single_cell_patience, bool) and single_cell_patience >= 1):
         raise ValueError(f'single_cell_patience は 1 以上の整数か None(無制限): {single_cell_patience!r}')
     identifier = initial.conditions_identifier
     history = list(initial.history)

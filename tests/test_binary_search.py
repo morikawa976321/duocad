@@ -592,6 +592,10 @@ def test_a_preserve_lost_by_the_peel_is_a_geometry_rejection_without_fem_and_the
     assert len(geometry_steps) == len(reduction['geometry_rejections'])
     assert reduction['fem_solves'] == len(reduction['steps']) - len(geometry_steps)
     assert reduction['repeated_candidates'] > 0  # 順位が尽きて同じ候補に戻る場面を踏んでいる
+    assert reduction['stop_reason'] == 'no_removable_cell' and reduction['safety_excluded_cells'] == 0
+    strict = bs.find_best_feasible(design, conditions, max_evaluations=300, single_cell_patience=1)  # 幾何の不合格は数えない
+    assert strict.diagnostics['reduction']['stop_reason'] == 'no_removable_cell'
+    assert strict.best_feasible.mask_hash == result.best_feasible.mask_hash
     stage4 = result.history[1:]
     assert len({(trial.parent, trial.mask_hash) for trial in stage4}) == len(stage4)  # 同じ形から同じ候補を2度評価しない
 
@@ -721,7 +725,7 @@ def test_a_single_cell_failure_that_is_not_a_safety_failure_is_not_counted_towar
     assert any(step['peel']['picked'] == 1 and step['outcome'] == 'rejected' for step in reduction['steps'])
 
 
-@pytest.mark.parametrize('patience', [0, -1, 1.5, '2'])
+@pytest.mark.parametrize('patience', [0, -1, 1.5, '2', True, False])
 def test_single_cell_patience_must_be_a_positive_integer_or_none(patience):
     conditions, design, _ = appendage_conditions()
     with pytest.raises(ValueError):
