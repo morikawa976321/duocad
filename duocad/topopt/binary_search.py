@@ -737,7 +737,7 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
     # 設計空間そのものに閉じた空洞がある入力(除外領域が塊に包まれている等)は、空洞のある全材料が
     # 6条件の水密で落ちるので、探索を始めずに矛盾として止める。削って空洞を外へ通す候補は原理上ありうるが、
     # 通路の幅は最小幅の制約と一体の話で扱わない(本人未確認の既定。docs/TOPOPT.md「中空構造を許容しない」)。
-    voids =acceptance.closed_voids(design_space_mask)
+    voids = acceptance.closed_voids(design_space_mask)
     if voids:
         return SearchResult(status='input_contradiction', termination='input_contradiction',
                              best_feasible=None, history=[], evaluations=0,

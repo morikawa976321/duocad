@@ -593,7 +593,7 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 
 **段階3の候補**: 削除は材料の表面(空の6近傍。格子の外を含む)に接するブロックだけにした(`_touches_empty`)。全部材料で周りも全部材料のブロックを空にすると必ず空洞ができ、`watertight` で落ちるので評価を浪費する
 (§4.3 の該当箇所に「2026-09-19 に外した」と書いた)。追加・置換の候補は変えていない(空洞を作りうるが、評価で水密が落ちて結果には残らない)。
-48³ の全材料の親が提案する記述数(全材料には追加・置換の候補が無いので削除だけ)は、全ブロック数の 126,395 から 17,346 になった(`tests/test_binary_search.py` の候補数の下限をそれに合わせた)。
+48³ の全材料の親が提案する記述数(全材料には追加・置換の候補が無いので削除だけ)は、全ブロック数の 126,395 から 17,346 になった(`tests/test_binary_search.py` の「先に全部作らない」テストの下限を 100,000 から 10,000 に下げた。値そのものは固定していない)。
 
 **既定**: `DEFAULT_SURFACE_ONLY = True`。§12.4 は書き換えず、冒頭に変更の1行を足した。`verify_hanger_fix.py --surface-only` の既定は `DEFAULT_SURFACE_ONLY` を読むので追随する
 (`--no-surface-only` で A に戻せる)。`DEFAULT_SINGLE_CELL_PATIENCE`(16)は触っていない。
@@ -601,7 +601,7 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 **再確認**(検査の追加と既定の変更が B の試行列を変えないこと): §12.8 の B-2.4・B-2.0(と §12.3 の B-4.8)と同じ条件を、`--surface-only` を付けず既定 True で回し直した
 (`--single-cell-patience 1` は §12.8 と同じ停止則にするため)。3本は直列に回した。
 `.\.venv\Scripts\python.exe topopt_checkserify_hanger_fix.py --model models\hanger_bar_attachment.json --spacing {2.4|2.0|4.8} --target 2 --max-evaluations 1000 --no-memory-trace --single-cell-patience 1 --out output\stage4_peel\B-hanger-{2.4|2.0|4.8}mm-target2-theta0.5-cap0.2-recheck.json`
-(θ=0.5・上限0.2・予算1000。JSON の `git_head` は 2.4・2.0mm が `4424def`〈この変更の実装コミット〉、4.8mm は `fdfc8e7` に作業ツリーの未コミットのこの変更を載せたもの。3本とも `code_sha256` の `binary_search`・`acceptance` は同じ)。
+(θ=0.5・上限0.2・予算1000。JSON の `git_head` は 2.4・2.0mm が `4424def`〈この変更の実装コミット〉、4.8mm は `fdfc8e7` に作業ツリーの未コミットのこの変更を載せたもの。3本とも `code_sha256` の `binary_search`・`acceptance` は同じ。その後 `acceptance.void_labels` の docstring 1行と `binary_search.py` の空白1つだけが変わった〈docstring を除いた AST が `4424def` と一致〉)。
 表の値は `topopt_checks/summarize_stage4.py` が JSON から出す。
 
 | 項目 | B-2.4(§12.8) | 再確認 2.4 | B-2.0(§12.8) | 再確認 2.0 | B-4.8(§12.3) | 再確認 4.8 |

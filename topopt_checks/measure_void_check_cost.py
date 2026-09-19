@@ -1,6 +1,6 @@
 """設計空間の全材料マスクで、閉じた空洞の検査 1 回の秒を測る(探索・FEM は回さない)。
 
-    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_void_check_cost.py --model models\\hanger_bar_attachment.json --spacing 4.8 2.4 --out output\\stage4_peel\\void-check-cost.json
+    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_void_check_cost.py --model models\\hanger_bar_attachment.json --spacing 4.8 2.4 2.0 --out output\\stage4_peel\\void-check-cost.json
 
 `design_space.derive` までで測れる。空洞の検査(`void_components`)と、それを含む `boundary_check`、
 比較のための頂点の検査(`irregular_vertices`)・単一成分の検査(`connectivity_check`)を、それぞれ `--repeat` 回
