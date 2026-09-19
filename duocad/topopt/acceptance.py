@@ -140,11 +140,127 @@ def intersection_volume(material, grid, shape, *, cache=None):
     return total, overlap
 
 
-def region_check(material, grid, bodies, *, preserve, volume_atol=1e-9, volume_rtol=1e-9, cache=None):
+#: 前計算の切り分け単位(セル数/辺)。塊全体との共通が「空」「全部中」なら1回で終わり、境界にかかる塊
+#: だけを切る。大きいほど塊の数は減るが、1回の切り分けが重くなる(実測は docs/TOPOPT_SPEED.md)。
+TILE_CELLS = 8
+
+
+class _CellOverlaps:
+    """1つのCADソリッドと1つの格子について、セルごとの共通体積 [mm³] を求めて持つ。
+
+    保持するのはソリッドの外接箱と重なる範囲だけ(外は0)。値は `NaN`(未計算)から始まり、材料マスクに
+    現れたセルを含む `TILE_CELLS` 角の塊ごとに、その塊のセルをまとめて求める。材料は設計空間の内側にしか
+    無いので、外接箱に入っていても設計空間に掛からない塊は一度も計算しない。
+    """
+
+    def __init__(self, grid, shape, *, cache=None):
+        self.shape = getattr(shape, 'wrapped', shape)
+        kernel.require_valid_solid(self.shape)
+        self.total = float(kernel.volume(self.shape))
+        if not np.isfinite(self.total) or self.total <= 0:
+            raise ValueError('条件CADに正の体積がない')
+        bounds = kernel.bounding_box(self.shape, cache=cache)
+        self.origin, self.spacing = np.asarray(grid.origin, dtype=float), float(grid.spacing)
+        self.lo = np.maximum(0, np.floor((np.array(bounds['min']) - self.origin) / self.spacing).astype(int))
+        hi = np.minimum(grid.shape, np.ceil((np.array(bounds['max']) - self.origin) / self.spacing).astype(int))
+        self.values = np.full(tuple(np.maximum(hi, self.lo) - self.lo), np.nan)
+
+    def overlap_of(self, material):
+        window = tuple(slice(int(a), int(a) + n) for a, n in zip(self.lo, self.values.shape))
+        wanted = np.asarray(material, dtype=bool)[window]
+        missing = wanted & np.isnan(self.values)
+        if missing.any():
+            padded = np.pad(missing, [(0, -n % TILE_CELLS) for n in missing.shape])
+            tiles = padded.reshape(*(m for n in padded.shape for m in (n // TILE_CELLS, TILE_CELLS))).any(axis=(1, 3, 5))
+            for tile in np.argwhere(tiles):
+                self._resolve(tile * TILE_CELLS)
+        return float(self.values[wanted].sum())
+
+    def _resolve(self, start):
+        stop = np.minimum(start + TILE_CELLS, self.values.shape)
+        counts = stop - start
+        corner = self.origin + self.spacing * (self.lo + start)
+        kind, volumes = kernel.grid_cell_common_volumes(self.shape, corner.tolist(), self.spacing, counts.tolist())
+        window = tuple(slice(int(a), int(b)) for a, b in zip(start, stop))
+        if kind == 'full':
+            self.values[window] = self.spacing ** 3
+            return
+        block = np.zeros(tuple(counts))
+        for cell, volume in volumes.items():
+            block[cell] = volume
+        self.values[window] = block
+
+
+class RegionOverlaps:
+    """保持・除外CADと格子セルの重なり体積を、格子 × ソリッドの組ごとに求めて持つメモ。
+
+    `region_check(..., overlaps=)` に渡すと、候補マスクごとの共通体積が「材料セルの重なり体積の
+    足し算」になる(旧経路 `intersection_volume` は候補ごとに材料を直方体列へ融着してブーリアンを
+    取っていた)。重なり体積は旧経路と同じく、セル中心近似ではなく**セルとソリッドの共通体積
+    そのもの**(境界のセルは部分的な重なりを持つ)。
+
+    **寿命は探索1回**(`binary_search.SearchConditions` が持つ。探索中は格子も条件も固定)。
+    鍵は (ソリッドの同一性〈TShape・Location・Orientation〉, 格子の原点・間隔・形) なので、
+    入力が変われば別の項目になり古い値は読まれない。文書を編集するとソリッドは別物になるので、
+    探索をまたいで持ち越さない。**スレッド間で共有しない**(計算は遅延して書き込む)。
+    メモリは外接箱と格子の共通部分のセル数 × 8 byte(ソリッドごと)。
+
+    前計算を作れない・途中で失敗するソリッドは、そのソリッドだけ旧経路へ戻す(`fallbacks` に理由が残る)。
+    前計算は速さのためだけにあり、旧経路と同じ答えを返せないなら使わない。
+    """
+
+    def __init__(self):
+        self._entries = {}
+        self.fallbacks = {}
+
+    def __len__(self):
+        return len(self._entries)
+
+    @property
+    def nbytes(self):
+        """保持している値の大きさ(byte)。"""
+        return sum(entry.values.nbytes for entry in self._entries.values() if entry is not None)
+
+    def clear(self):
+        self._entries.clear()
+        self.fallbacks.clear()
+
+    def overlap_volume(self, material, grid, shape, *, cache=None):
+        """`intersection_volume` と同じ `(ソリッドの体積, 材料との共通体積)`。"""
+        raw = getattr(shape, 'wrapped', shape)
+        key = (kernel.shape_key(raw), tuple(float(v) for v in grid.origin), float(grid.spacing),
+               tuple(int(n) for n in grid.shape))
+        if key in self._entries:
+            entry = self._entries[key]  # 旧経路へ戻した項目は None
+        else:
+            try:
+                entry = self._entries[key] = _CellOverlaps(grid, raw, cache=cache)
+            except Exception as error:
+                entry = self._give_up(key, error)
+        if entry is not None:
+            try:
+                return entry.total, entry.overlap_of(material)
+            except Exception as error:
+                self._give_up(key, error)
+        return intersection_volume(material, grid, raw, cache=cache)
+
+    def _give_up(self, key, error):
+        self.fallbacks[key] = f'{type(error).__name__}: {error}'
+        self._entries[key] = None
+        return None
+
+
+def region_check(material, grid, bodies, *, preserve, volume_atol=1e-9, volume_rtol=1e-9, cache=None,
+                 overlaps=None):
+    """`overlaps`(`RegionOverlaps`)を渡すと、共通体積を前計算したセルごとの値の足し算で取る。
+    渡さなければ `intersection_volume`(候補ごとのブーリアン)。**戻り値は同じ形・同じ数値許容差**。"""
     rows = []
     for name, shape in bodies:
         try:
-            total, overlap = intersection_volume(material, grid, shape, cache=cache)
+            if overlaps is None:
+                total, overlap = intersection_volume(material, grid, shape, cache=cache)
+            else:
+                total, overlap = overlaps.overlap_volume(material, grid, shape, cache=cache)
             tolerance = max(volume_atol, volume_rtol * total)
             if overlap > total + tolerance:
                 raise RuntimeError('共通体積が条件ソリッドの体積を超えた')
@@ -300,11 +416,13 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
             preserves, excludes, target_safety_factor, allowable_mpa=DEFAULT_ALLOWABLE_MPA,
             youngs_modulus_mpa=DEFAULT_YOUNGS_MODULUS_MPA, percentile=stress.DEFAULT_PERCENTILE,
             solver='cg', history=None, converged=None, max_evaluations=None,
-            volume_atol=1e-9, volume_rtol=1e-9, bbox_cache=None, fields=None):
+            volume_atol=1e-9, volume_rtol=1e-9, bbox_cache=None, region_overlaps=None, fields=None):
     """6条件の入口。**`material`/`before` は格子と同じ形のboolマスク(材料=True)を直接
     受ける**(計画書§5: 「新規の製品APIはboolマスクを受ける」)。過去記録の密度場からの
     二値化は行わない —— それは読み取りアダプター `inspect_document` に閉じてある。
     `before` は島除去前のboolマスク(除去で材料が増えていないことをここで確認する)。
+    `region_overlaps`(`RegionOverlaps`)を渡すと、保持・除外の共通体積を前計算から引く(既定は候補ごとに
+    ブーリアンを取る旧経路。報告の形と数値許容差は同じ)。
     `fields` に dict を渡すと、安全率を計算できたときだけ要素ごとの `u_eᵀ k₀ u_e`(格子と同じ形、
     材料外は 0)を `fields['element_energy']` に入れる。報告(JSON)には入れない(段階4の削る順位用)。
     """
@@ -325,9 +443,9 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
         raise ValueError('島除去後に材料セルが増えている')
     checks = dict(watertight=boundary_check(material), single_solid=connectivity_check(material),
                   preserve=region_check(material, grid, preserves, preserve=True, volume_atol=volume_atol,
-                                        volume_rtol=volume_rtol, cache=bbox_cache),
+                                        volume_rtol=volume_rtol, cache=bbox_cache, overlaps=region_overlaps),
                   exclude=region_check(material, grid, excludes, preserve=False, volume_atol=volume_atol,
-                                       volume_rtol=volume_rtol, cache=bbox_cache))
+                                       volume_rtol=volume_rtol, cache=bbox_cache, overlaps=region_overlaps))
     checks['conditions'], fixed, load = condition_check(material, table, fixed_faces, load_faces, forces)
     if all(checks[key]['status'] == 'pass' for key in ('watertight', 'single_solid', 'conditions')):
         checks['safety'] = safety_check(material, grid, fixed, load, target=target_safety_factor,

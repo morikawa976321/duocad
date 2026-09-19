@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import product
 from typing import Any, Iterator, Optional
 
@@ -68,6 +68,9 @@ class SearchConditions:
     volume_rtol: float = 1e-9
     bbox_cache: Any = None
     mapping: Any = None
+    #: 保持・除外CADと格子セルの重なり体積の前計算(`acceptance.RegionOverlaps`)。探索1回のあいだ格子と
+    #: 条件は固定なので、この探索が1つ持ち、探索が終わったら捨てる。`None` なら候補ごとにブーリアンを取る旧経路。
+    region_overlaps: Any = field(default_factory=acceptance.RegionOverlaps)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'fixed_faces', tuple(int(f) for f in self.fixed_faces))
@@ -79,13 +82,18 @@ class SearchConditions:
     def inspect_kwargs(self, *, bbox_cache: Any = ...) -> dict:
         """`acceptance.inspect` へ展開する引数。`percentile` 未指定はそちら側の既定に委ねる
         (既定値をここへ複製すると、acceptance.py 側が既定を変えたときに黙って食い違う)。
+
+        `bbox_cache` を明示して外す呼び出しは「キャッシュ無しの再検査」(§3)なので、`region_overlaps`
+        の前計算も一緒に外し、保持・除外は候補ごとのブーリアンで取り直す。
         """
         cache = self.bbox_cache if bbox_cache is ... else bbox_cache
+        overlaps = self.region_overlaps if bbox_cache is ... else None
         kwargs = dict(table=self.table, fixed_faces=self.fixed_faces, load_faces=self.load_faces,
                       forces=self.forces, preserves=self.preserves, excludes=self.excludes,
                       target_safety_factor=self.target_safety_factor, allowable_mpa=self.allowable_mpa,
                       youngs_modulus_mpa=self.youngs_modulus_mpa, solver=self.solver,
-                      volume_atol=self.volume_atol, volume_rtol=self.volume_rtol, bbox_cache=cache)
+                      volume_atol=self.volume_atol, volume_rtol=self.volume_rtol, bbox_cache=cache,
+                      region_overlaps=overlaps)
         if self.percentile is not None:
             kwargs['percentile'] = self.percentile
         return kwargs
@@ -204,7 +212,7 @@ def _holds_all_conditions(component: np.ndarray, conditions: SearchConditions) -
             return False
     report = acceptance.region_check(component, conditions.grid, conditions.preserves, preserve=True,
                                       volume_atol=conditions.volume_atol, volume_rtol=conditions.volume_rtol,
-                                      cache=conditions.bbox_cache)
+                                      cache=conditions.bbox_cache, overlaps=conditions.region_overlaps)
     return report['status'] == 'pass'
 
 
@@ -402,7 +410,8 @@ class SearchResult:
     `termination` の語彙: 段階3は `initial_feasible_found` / `neighbourhood_exhausted`(frontier を捨てずに
     使い切った)/ `frontier_truncated`(容量超過で親を捨てたことがあり、近傍を尽くしたとは言えない)/
     `generation_limit`(候補ブロックの走査予算)、段階4は `converged`(1セルずつでも削れなくなった)/
-    `evaluation_error`(出発形状のエネルギーが取れない)、共通で `evaluation_limit` / `cancelled` /
+    `evaluation_error`(出発形状のエネルギーが取れない、または採用形状の保持・除外が前計算なしの再検査で
+    通らず段階3の合格形状へ戻した)、共通で `evaluation_limit` / `cancelled` /
     `resolution_insufficient` / `boundary_mapping_failed` / `input_contradiction`。
     段階3の `diagnostics['frontier']` / `['candidates']` に保持数の実測・除外・生成数、段階4の
     `diagnostics['reduction']` に試行ごとの削減割合・後退倍率・落ちた条件と止まった理由が入る。
@@ -697,7 +706,8 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
     # (除外条件は逆方向〈材料を減らすほど満たしやすくなる〉なので、この判定は使えない。)
     preserve_on_full = acceptance.region_check(design_space_mask, conditions.grid, conditions.preserves,
                                                 preserve=True, volume_atol=conditions.volume_atol,
-                                                volume_rtol=conditions.volume_rtol, cache=conditions.bbox_cache)
+                                                volume_rtol=conditions.volume_rtol, cache=conditions.bbox_cache,
+                                                overlaps=conditions.region_overlaps)
     if preserve_on_full['status'] == 'fail':
         return SearchResult(status='input_contradiction', termination='input_contradiction',
                              best_feasible=None, history=[], evaluations=0,
@@ -889,6 +899,27 @@ def restore_irregular(candidate: np.ndarray, parent: np.ndarray) -> np.ndarray:
         repaired |= restore
 
 
+def _recheck_regions_without_precompute(best: FeasibleModel, seed: FeasibleModel,
+                                        conditions: SearchConditions) -> tuple[FeasibleModel, str]:
+    """段階4が更新した `best` の保持・除外を、前計算(`region_overlaps`)を使わずブーリアンで取り直す(§3)。
+
+    段階4の評価は前計算から引くので、報告済みの合格は「前計算が旧経路と同じ答えを出す」ことに
+    乗っている。採用形状だけは旧経路で確かめ、通れば保持・除外の報告を旧経路の値に差し替えて返す。
+    通らなければ、段階3でキャッシュ無しに再検査済みの `seed` を返す(呼び出し側が `best` との
+    同一性で食い違いを見分ける)。`best` が `seed` のままなら何もしない(検査済み)。
+    """
+    if best is seed:
+        return best, 'not_needed'
+    rows = {}
+    for name, bodies, preserve in (('preserve', conditions.preserves, True), ('exclude', conditions.excludes, False)):
+        rows[name] = acceptance.region_check(best.mask, conditions.grid, bodies, preserve=preserve,
+                                             volume_atol=conditions.volume_atol, volume_rtol=conditions.volume_rtol)
+        if rows[name]['status'] != 'pass':
+            return seed, f'failed:{name}:{rows[name]["status"]}'
+    report = dict(best.report, checks=dict(best.report['checks'], **rows))
+    return replace(best, report=report), 'pass'
+
+
 def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditions: SearchConditions,
                    *, max_evaluations: int, is_cancelled,
                    step_exponent: float = DEFAULT_STEP_EXPONENT,
@@ -905,7 +936,8 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     止まった理由は `diagnostics['reduction']['stop_reason']`、試行ごとの k・r・後退倍率・落ちた条件は `['steps']`。
 
     評価予算は両段階を通した1本なので `initial.evaluations` から数える(削る候補1つが1回)。
-    評価は bbox キャッシュ無しで行うので、合格した報告がそのまま `best_feasible` の報告になる(§3)。
+    評価は bbox キャッシュ無しで行うが、保持・除外の共通体積は前計算(`region_overlaps`)から引く。
+    採用形状はこの関数を出る前に前計算を使わない旧経路で取り直す(`_recheck_regions_without_precompute`)。
     """
     identifier = initial.conditions_identifier
     history = list(initial.history)
@@ -921,7 +953,11 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
                      stop_reason=None, steps=steps)
 
     def result(termination: str) -> SearchResult:
-        return SearchResult(status='feasible', termination=termination, best_feasible=best, history=history,
+        final, verdict = _recheck_regions_without_precompute(best, initial.best_feasible, conditions)
+        reduction['final_region_recheck'] = verdict
+        if verdict.startswith('failed'):
+            termination = 'evaluation_error'
+        return SearchResult(status='feasible', termination=termination, best_feasible=final, history=history,
                             evaluations=evaluations, conditions_identifier=identifier,
                             diagnostics=dict(initial=initial.diagnostics,
                                              reduction=dict(reduction, excluded_cells=len(excluded))))

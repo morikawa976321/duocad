@@ -933,6 +933,76 @@ def test_frontier_eviction_is_recorded_and_never_reported_as_neighbourhood_exhau
     assert wide.diagnostics['frontier']['evictions'] == 0
 
 
+def partial_region_conditions():
+    """`appendage_conditions` と同じ棒だが、保持・除外CADが格子の一部にだけ掛かる(境界のセルが部分的に重なる)。"""
+    conditions, design, appendage = appendage_conditions()
+    keep = Pos(5.3, 1.1, 0.9) * Box(7.4, 1.8, 1.6)
+    hole = Pos(5.2, 3.4, 1.0) * Box(2.3, 0.9, 1.7)
+    return dataclasses.replace(conditions, preserves=[('keep', keep.wrapped)], excludes=[('hole', hole.wrapped)]), design
+
+
+def test_the_search_is_identical_with_and_without_the_region_overlap_precompute():
+    """落ちたら、前計算が旧経路と違う合否を返して探索の道筋を変えている。"""
+    conditions, design = partial_region_conditions()
+    with_precompute = bs.find_best_feasible(design, conditions, max_evaluations=60)
+    without = bs.find_best_feasible(design, dataclasses.replace(conditions, region_overlaps=None), max_evaluations=60)
+    assert with_precompute.best_feasible.mask_hash == without.best_feasible.mask_hash
+    assert (with_precompute.termination, with_precompute.evaluations) == (without.termination, without.evaluations)
+    assert [(t.operation, t.mask_hash, t.outcome, t.checks) for t in with_precompute.history] == [
+        (t.operation, t.mask_hash, t.outcome, t.checks) for t in without.history]
+    for name in ('preserve', 'exclude'):
+        assert with_precompute.best_feasible.report['checks'][name]['status'] == without.best_feasible.report['checks'][name]['status']
+
+
+def test_candidates_use_the_precompute_and_only_the_adopted_shape_is_rechecked_with_the_direct_boolean(monkeypatch):
+    """候補の評価は前計算から引き、ブーリアンで取り直すのは採用形状(段階3の最終再検査と段階4の最終再検査)だけ。"""
+    conditions, design = partial_region_conditions()
+    direct_calls, inspects = [], []
+    original_direct, original_inspect = acceptance.intersection_volume, acceptance.inspect
+    monkeypatch.setattr(acceptance, 'intersection_volume',
+                        lambda *args, **kwargs: direct_calls.append(1) or original_direct(*args, **kwargs))
+    monkeypatch.setattr(acceptance, 'inspect',
+                        lambda *args, **kwargs: inspects.append(1) or original_inspect(*args, **kwargs))
+    result = bs.find_best_feasible(design, conditions, max_evaluations=60)
+    assert result.status == 'feasible' and len(inspects) > 6
+    # 検査1回の保持1本+除外1本 = 2回。最終再検査は段階3で1回、段階4で保持・除外だけを1回。
+    assert len(direct_calls) == 4, (len(direct_calls), len(inspects))
+    assert result.diagnostics['reduction']['final_region_recheck'] in ('pass', 'not_needed')
+    assert conditions.region_overlaps is not None and len(conditions.region_overlaps) == 2
+
+
+def test_inspect_kwargs_drop_the_precompute_together_with_the_bbox_cache():
+    """`bbox_cache` を外した再検査(§3)は、前計算も外して旧経路のブーリアンで取り直す。"""
+    conditions, _ = partial_region_conditions()
+    assert conditions.inspect_kwargs()['region_overlaps'] is conditions.region_overlaps
+    assert conditions.inspect_kwargs(bbox_cache=None)['region_overlaps'] is None
+
+
+def test_the_final_region_recheck_replaces_the_report_rows_and_falls_back_to_the_seed_on_failure(monkeypatch):
+    conditions, design = partial_region_conditions()
+    result = bs.find_best_feasible(design, conditions, max_evaluations=60)
+    best = result.best_feasible
+    seed = dataclasses.replace(best)  # 別のオブジェクト = 段階4が更新した形状
+    assert bs._recheck_regions_without_precompute(best, best, conditions) == (best, 'not_needed')
+    rechecked, verdict = bs._recheck_regions_without_precompute(best, seed, conditions)
+    assert verdict == 'pass' and rechecked.mask is best.mask
+    assert rechecked.report['checks']['preserve']['status'] == best.report['checks']['preserve']['status']
+    assert rechecked.report is not best.report  # 元の報告は書き換えない
+
+    monkeypatch.setattr(acceptance, 'region_check', lambda *a, **k: dict(status='fail', bodies=[], rule='x'))
+    fallback, verdict = bs._recheck_regions_without_precompute(best, seed, conditions)
+    assert fallback is seed and verdict == 'failed:preserve:fail'
+
+
+def test_a_failed_final_region_recheck_ends_the_reduction_on_the_verified_stage3_shape(monkeypatch):
+    conditions, design = partial_region_conditions()
+    initial = bs.find_initial_feasible(design, conditions, max_evaluations=60)
+    monkeypatch.setattr(bs, '_recheck_regions_without_precompute', lambda best, seed, conditions: (seed, 'failed:exclude:fail'))
+    result = bs._reduce_volume(initial, design, conditions, max_evaluations=60, is_cancelled=None)
+    assert result.best_feasible is initial.best_feasible and result.termination == 'evaluation_error'
+    assert result.diagnostics['reduction']['final_region_recheck'] == 'failed:exclude:fail'
+
+
 def test_the_best_feasible_mask_is_read_only_and_survives_later_reduction():
     """最良合格のマスクは読み取り専用で、後続の削減・失敗がその内容とハッシュを変えない。"""
     conditions, design, _ = appendage_conditions()
