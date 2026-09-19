@@ -569,6 +569,7 @@ def test_reduction_strips_the_unloaded_appendage_and_keeps_every_condition_suppo
     assert result.status == 'feasible' and result.termination == 'converged'
     assert not (best.mask & appendage).any()
     assert best.material_mm3 < design.sum() - appendage.sum()  # 付属部分に加えて棒も削った
+    assert result.diagnostics['reduction']['single_cell_patience'] == bs.DEFAULT_SINGLE_CELL_PATIENCE
     assert acceptance.active_nodes(best.mask).ravel()[bs._anchor_node_ids(conditions)].all()
     recheck = acceptance.inspect(best.mask, best.before_mask, conditions.grid, **conditions.inspect_kwargs(bbox_cache=None))
     assert recheck['status'] == 'pass' and recheck['material_sha256'] == best.mask_hash
@@ -632,7 +633,7 @@ def _single_cell_safety_failures(steps):
 
 
 def test_rejected_steps_halve_the_step_accepted_ones_double_it_and_a_single_cell_safety_failure_converges(monkeypatch):
-    """落ちたら、削減割合の後退規則か、`single_cell_patience=1` の収束の判定が変更前(1セルの安全率不合格で止まる)と違う。"""
+    """落ちたら、削減割合の後退規則か、`single_cell_patience=1` で1セルの安全率不合格が即収束になる規則が壊れている。"""
     conditions, design, _ = appendage_conditions()
     floor = 0.75 * design.sum()
     _fail_safety_when(monkeypatch, lambda material: material.sum() < floor)  # 体積の下限を安全率の不足に見立てる
