@@ -879,7 +879,7 @@
     // 直したときに**状態配信を待ち続けて確定が永久に拒否される**経路ができる。
     // 出した番号を控えてあるので、それと一致するときだけ解けばよい(取りすぎない)。
     if (pendingOp !== null && pendingOp === lastFileOp) pendingOp = null
-    const size = `${payload.bytes.toLocaleString()} B`
+    const size = `${(payload.bytes / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 })} KB`
     const extra = payload.operations !== undefined ? ` / 操作 ${payload.operations}件` : ''
     // **export_step/export_stlのみ**body_idsが載る。書き出した個数と、非表示で除外した
     // 個数(0件なら文言を出さない)を並べる —— 「隠したつもりが無いのに減っている」を

@@ -117,7 +117,8 @@
   }
 
   function formatSize(bytes: number): string {
-    return `${bytes.toLocaleString()} B`
+    const kb = bytes / 1024
+    return `${kb.toLocaleString(undefined, { maximumFractionDigits: 1 })} KB`
   }
 
   function formatTime(epochSeconds: number): string {
