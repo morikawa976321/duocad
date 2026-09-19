@@ -118,7 +118,8 @@
 
   function formatSize(bytes: number): string {
     const kb = bytes / 1024
-    return `${kb.toLocaleString(undefined, { maximumFractionDigits: 1 })} KB`
+    const maximumFractionDigits = kb >= 1 ? 0 : 1
+    return `${kb.toLocaleString(undefined, { maximumFractionDigits })} KB`
   }
 
   function formatTime(epochSeconds: number): string {
