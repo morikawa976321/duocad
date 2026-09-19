@@ -29,7 +29,9 @@ def summarize(record: dict) -> dict:
     rejected = [s for s in steps if s["outcome"] == "rejected"]
     peel_seconds = [s["peel"]["seconds"] for s in steps if "peel" in s]
     return dict(
-        surface_only=record.get("surface_only"), git_head=record.get("git_head"),
+        surface_only=record.get("surface_only"), single_cell_patience=reduction.get("single_cell_patience", "n/a"),
+        safety_excluded_cells=reduction.get("safety_excluded_cells"),
+        adopted_after_exclusion=reduction.get("adopted_after_exclusion"), git_head=record.get("git_head"),
         termination=search["termination"], stop_reason=reduction["stop_reason"],
         stage4_fem=reduction["fem_solves"], evaluations=search["evaluations"], stage4_steps=len(steps),
         seconds=search["seconds"], final_mm3=best.get("material_mm3"), final_cells=best.get("cells"),

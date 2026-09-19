@@ -608,22 +608,31 @@ def test_a_candidate_split_into_components_is_reported_as_a_geometry_rejection_w
     assert bs._geometry_rejection(whole, *bs.resolve_islands(whole, conditions), conditions) is None
 
 
-def test_rejected_steps_halve_the_step_accepted_ones_double_it_and_a_single_cell_safety_failure_converges(monkeypatch):
-    """落ちたら、削減割合の後退規則か収束の判定が §11 の規則と違う。"""
-    conditions, design, _ = appendage_conditions()
+def _fail_safety_when(monkeypatch, predicate):
+    """`predicate(material)` が真の合格形状を、安全率の不足で不合格に見立てる(FEMの答えは変えない)。"""
     original = acceptance.inspect
-    floor = 0.75 * design.sum()
 
-    def volume_limited(material, before, grid, **kwargs):
+    def limited(material, before, grid, **kwargs):
         report = original(material, before, grid, **kwargs)
-        if report['status'] == 'pass' and material.sum() < floor:  # 体積の下限を安全率の不足に見立てる
+        if report['status'] == 'pass' and predicate(material):
             report['checks']['safety']['status'] = report['status'] = 'fail'
             if kwargs.get('fields') is not None:
                 kwargs['fields'].clear()
         return report
 
-    monkeypatch.setattr(acceptance, 'inspect', volume_limited)
-    result = bs.find_best_feasible(design, conditions, max_evaluations=400)
+    monkeypatch.setattr(acceptance, 'inspect', limited)
+
+
+def _single_cell_safety_failures(steps):
+    return [step for step in steps if step['peel']['picked'] == 1 and 'safety' in step['failed']]
+
+
+def test_rejected_steps_halve_the_step_accepted_ones_double_it_and_a_single_cell_safety_failure_converges(monkeypatch):
+    """落ちたら、削減割合の後退規則か、`single_cell_patience=1` の収束の判定が §11 の規則と違う。"""
+    conditions, design, _ = appendage_conditions()
+    floor = 0.75 * design.sum()
+    _fail_safety_when(monkeypatch, lambda material: material.sum() < floor)  # 体積の下限を安全率の不足に見立てる
+    result = bs.find_best_feasible(design, conditions, max_evaluations=400, single_cell_patience=1)
     reduction = result.diagnostics['reduction']
     steps = reduction['steps']
     assert result.termination == 'converged' and reduction['stop_reason'] == 'safety_at_single_cell'
@@ -636,6 +645,87 @@ def test_rejected_steps_halve_the_step_accepted_ones_double_it_and_a_single_cell
         else:
             assert following['multiplier'] == step['multiplier']
     assert steps[-1]['peel']['picked'] == 1 and 'safety' in steps[-1]['failed']
+    assert (reduction['single_cell_patience'], reduction['safety_excluded_cells']) == (1, 0)
+
+
+def test_a_single_cell_safety_failure_excludes_that_cell_until_patience_consecutive_failures_converge(monkeypatch):
+    """落ちたら、`single_cell_patience` の数え方(安全率で落ちた1セルを外して次へ進み、指定の数に達したら止まる)が壊れている。"""
+    conditions, design, _ = appendage_conditions()
+    floor = 0.75 * design.sum()
+    _fail_safety_when(monkeypatch, lambda material: material.sum() < floor)  # 下限の手前では、どのセルを削っても不合格
+    finals = {}
+    for patience in (1, 3):
+        result = bs.find_best_feasible(design, conditions, max_evaluations=400, single_cell_patience=patience)
+        reduction = result.diagnostics['reduction']
+        assert result.termination == 'converged' and reduction['stop_reason'] == 'safety_at_single_cell'
+        assert reduction['single_cell_patience'] == patience and reduction['safety_excluded_cells'] == patience - 1
+        tail = reduction['steps'][-patience:]
+        assert tail == _single_cell_safety_failures(reduction['steps'])[-patience:]  # 止まる直前の patience 回は採用を挟まない
+        stage4 = result.history[1:]
+        assert len({(trial.parent, trial.mask_hash) for trial in stage4}) == len(stage4)  # 外したセルを再び試さない
+        finals[patience] = result.best_feasible.mask.sum()
+    assert finals[3] == finals[1]  # 下限の手前では採用が起きないので、形は同じ
+
+
+def test_unlimited_patience_walks_the_whole_ranking_and_stops_because_no_cell_can_be_removed(monkeypatch):
+    """落ちたら、`single_cell_patience=None` が順位の尽きるまで(有限回で)続けて `no_removable_cell` で止まる規則が壊れている。"""
+    conditions, design, _ = appendage_conditions()
+    floor = 0.75 * design.sum()
+    _fail_safety_when(monkeypatch, lambda material: material.sum() < floor)
+    unlimited = bs.find_best_feasible(design, conditions, max_evaluations=10_000, single_cell_patience=None)
+    reduction = unlimited.diagnostics['reduction']
+    assert unlimited.termination == 'converged' and reduction['stop_reason'] == 'no_removable_cell'
+    assert reduction['safety_excluded_cells'] == len(_single_cell_safety_failures(reduction['steps'])) > 0
+    assert unlimited.evaluations < 10_000  # 予算切れではなく、規則で止まった
+    stage4 = unlimited.history[1:]
+    assert len({(trial.parent, trial.mask_hash) for trial in stage4}) == len(stage4)
+    assert unlimited.best_feasible.mask.sum() >= floor
+    patience_one = bs.find_best_feasible(design, conditions, max_evaluations=400, single_cell_patience=1)
+    assert unlimited.best_feasible.mask.sum() <= patience_one.best_feasible.mask.sum()
+
+
+def test_the_streak_is_reset_by_an_adoption_and_a_longer_patience_reaches_a_smaller_shape(monkeypatch):
+    """落ちたら、採用でカウントが戻らない、または外したセルの先へ進めない(patience=1 で止まる形の先に、より軽い合格形状がある題材)。"""
+    conditions, design, _ = appendage_conditions()
+    protected = [(4, 0, 0), (5, 1, 1), (6, 0, 1)]  # 1つでも欠けたら安全率が足りないことにする棒の中ほどの3セル
+    _fail_safety_when(monkeypatch, lambda material: not all(material[cell] for cell in protected))
+    short = bs.find_best_feasible(design, conditions, max_evaluations=400, single_cell_patience=1)
+    long = bs.find_best_feasible(design, conditions, max_evaluations=400, single_cell_patience=2)
+    short_reduction, long_reduction = short.diagnostics['reduction'], long.diagnostics['reduction']
+    assert short_reduction['stop_reason'] == 'safety_at_single_cell'
+    assert long_reduction['stop_reason'] == 'no_removable_cell'  # 2回続けて落ちる前に必ず採用が挟まる
+    assert long.best_feasible.mask.sum() < short.best_feasible.mask.sum()
+    assert all(long.best_feasible.mask[cell] for cell in protected)
+    assert long_reduction['adopted_after_exclusion'] >= 1
+    assert long_reduction['safety_excluded_cells'] > long_reduction['single_cell_patience'] - 1  # 通算では patience を超えて外している
+
+
+def test_a_single_cell_failure_that_is_not_a_safety_failure_is_not_counted_toward_patience(monkeypatch):
+    """落ちたら、計算失敗(`unknown`)が安全率の不合格として数えられ、patience=1 で止まってしまう。"""
+    conditions, design, _ = appendage_conditions()
+    original = acceptance.inspect
+
+    def unsolvable(material, before, grid, **kwargs):
+        if kwargs.get('fields') is not None and material.sum() < design.sum() - 6:
+            report = original(material, before, grid, **{**kwargs, 'fields': None})
+            report['checks']['safety'] = dict(status='unknown', reason='evaluation_error', error='stub')
+            report['status'] = 'unknown'
+            return report
+        return original(material, before, grid, **kwargs)
+
+    monkeypatch.setattr(acceptance, 'inspect', unsolvable)
+    result = bs.find_best_feasible(design, conditions, max_evaluations=400, single_cell_patience=1)
+    reduction = result.diagnostics['reduction']
+    assert result.termination == 'converged' and reduction['stop_reason'] == 'no_removable_cell'
+    assert reduction['safety_excluded_cells'] == 0
+    assert any(step['peel']['picked'] == 1 and step['outcome'] == 'rejected' for step in reduction['steps'])
+
+
+@pytest.mark.parametrize('patience', [0, -1, 1.5, '2'])
+def test_single_cell_patience_must_be_a_positive_integer_or_none(patience):
+    conditions, design, _ = appendage_conditions()
+    with pytest.raises(ValueError):
+        bs.find_best_feasible(design, conditions, max_evaluations=10, single_cell_patience=patience)
 
 
 def test_a_computation_failure_is_not_accepted_and_does_not_stop_the_reduction(monkeypatch):
