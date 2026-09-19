@@ -87,7 +87,8 @@ def void_labels(material):
     """空(材料の補集合)を6近傍で連結成分に分ける `(ラベル配列, 成分数)`。配列は格子より各辺2大きい
     (外側に空の殻を1セル足すので、格子の外へつながる空は必ず1成分になる)。ラベル 1 が格子の外へつながる空。
 
-    多様体条件(`REGULAR_VERTEX`)を満たすマスクでは空にも辺・頂点だけの接触が無いので、6近傍と26近傍の数え方は一致する。
+    多様体条件(`REGULAR_VERTEX`)を満たすマスクでは空にも辺・頂点だけの接触が無いので、6近傍と26近傍の数え方は一致する
+    (満たさないマスクは頂点の検査が別に落とす)。
     """
     empty = np.pad(~np.asarray(material, dtype=bool), 1, constant_values=True)
     return ndimage.label(empty, structure=ndimage.generate_binary_structure(3, 1))

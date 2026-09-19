@@ -598,35 +598,41 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 **既定**: `DEFAULT_SURFACE_ONLY = True`。§12.4 は書き換えず、冒頭に変更の1行を足した。`verify_hanger_fix.py --surface-only` の既定は `DEFAULT_SURFACE_ONLY` を読むので追随する
 (`--no-surface-only` で A に戻せる)。`DEFAULT_SINGLE_CELL_PATIENCE`(16)は触っていない。
 
-**再確認**(検査の追加が B の試行列を変えないこと): §12.3 の B と同じ条件を、`--surface-only` を付けず既定 True で回し直した
-(`--single-cell-patience 1` は §12.3 の B と同じ停止則にするため)。
-`.\.venv\Scripts\python.exe topopt_checkserify_hanger_fix.py --model models\hanger_bar_attachment.json --spacing 4.8 --target 2 --max-evaluations 1000 --no-memory-trace --single-cell-patience 1 --out output\stage4_peel\B-hanger-4.8mm-target2-theta0.5-cap0.2-recheck.json`
+**再確認**(検査の追加と既定の変更が B の試行列を変えないこと): §12.8 の B-2.4・B-2.0(と §12.3 の B-4.8)と同じ条件を、`--surface-only` を付けず既定 True で回し直した
+(`--single-cell-patience 1` は §12.8 と同じ停止則にするため)。3本は直列に回した。
+`.\.venv\Scripts\python.exe topopt_checkserify_hanger_fix.py --model models\hanger_bar_attachment.json --spacing {2.4|2.0|4.8} --target 2 --max-evaluations 1000 --no-memory-trace --single-cell-patience 1 --out output\stage4_peel\B-hanger-{2.4|2.0|4.8}mm-target2-theta0.5-cap0.2-recheck.json`
+(θ=0.5・上限0.2・予算1000。JSON の `git_head` は 2.4・2.0mm が `4424def`〈この変更の実装コミット〉、4.8mm は `fdfc8e7` に作業ツリーの未コミットのこの変更を載せたもの。3本とも `code_sha256` の `binary_search`・`acceptance` は同じ)。
+表の値は `topopt_checks/summarize_stage4.py` が JSON から出す。
 
-| 項目 | §12.3 の B | 再確認 |
-|---|---|---|
-| 段階4のFEM | 45 | 45 |
-| 評価 | 46 | 46 |
-| 最終体積 | 63,256 mm³(63,255.709) | 63,256 mm³(63,255.709) |
-| 最終セル数 | 581 | 581 |
-| 最終の安全率 | 2.012 | 2.012 |
-| 停止理由 | `safety_at_single_cell` | `safety_at_single_cell` |
-| 不合格の内訳 | 安全率4・幾何0 | 安全率4・幾何0 |
-| 探索の所要秒(参考) | 169.9 | 170.3 |
+| 項目 | B-2.4(§12.8) | 再確認 2.4 | B-2.0(§12.8) | 再確認 2.0 | B-4.8(§12.3) | 再確認 4.8 |
+|---|---|---|---|---|---|---|
+| 段階4のFEM | 85 | 85 | 44 | 44 | 45 | 45 |
+| 評価 | 86 | 86 | 45 | 45 | 46 | 46 |
+| 最終体積 mm³ | 38,651(38,650.83) | 38,651(38,650.83) | 39,254(39,253.97) | 39,254(39,253.97) | 63,256(63,255.71) | 63,256(63,255.71) |
+| 最終セル数 | 2,774 | 2,774 | 4,926 | 4,926 | 581 | 581 |
+| 最終の安全率 | 2.460 | 2.460 | 2.346 | 2.346 | 2.012 | 2.012 |
+| 停止理由 | `safety_at_single_cell` | 同左 | 同左 | 同左 | 同左 | 同左 |
+| 不合格(安全率 / 幾何 / `no_component`) | 37 / 0 / 0 | 37 / 0 / 0 | 16 / 0 / 0 | 16 / 0 / 0 | 4 / 0 / 0 | 4 / 0 / 0 |
+| 探索の所要秒(参考値) | 3,360(並走込み) | 2,553 | 4,967(並走込み) | 5,300 | 170 | 170 |
 
-履歴(46行の `material_mm3`・`safety_factor`・`checks`)と `steps` の全項目(`peel.seconds` を除く)が §12.3 の B の JSON と一致した。最終の再検査は合格。
-開始前に確認した限り、他の重い python の並走は無かった(空きメモリ 15.2 GB / 32 GB、CPU 負荷 9%、python は常駐の小さい2本〈5 MB・127 MB〉のみ)。所要秒も §12.3 の B とほぼ同じ(170 秒台)。
-JSON の `code_sha256` は §12.3 の B と `binary_search`・`acceptance` で違う(この変更を含むため)。`anchor`・`design_space` は同じ。
-生 JSON は `output/stage4_peel/B-hanger-4.8mm-target2-theta0.5-cap0.2-recheck.json`。
+3解像度とも、履歴(`search.history` の全行の `material_mm3`・`safety_factor`・`checks`)、`steps` の全項目(`peel.seconds` を除く)、最終マスクのハッシュ(`search.best.mask_hash`)が §12.8・§12.3 の B の JSON と一致した。
+最終の再検査は3本とも合格。**検査の追加と既定の変更は B の試行列を変えない**。B-2.4 は `77e157a`(`fem.py` の自由度集合演算のブール配列化)より前のコードで取った値だが、一致したので `77e157a` が答えを変えていない
+ことの確認にもなった(切り分けの再実行は要らなかった)。
+所要秒は参考値: 2.4mm は §12.8 が他の測定と並走した値(3,360 秒)、こちらは開始前に確認した限り他の重い python の並走が無く(空きメモリ 約15 GB / 32 GB、python は自分の1本と常駐の小さい2本のみ)2,553 秒だった。
+2.0mm は 5,300 秒で §12.8 の 4,967 秒より長い(条件が揃っていないので比較しない。並走の有無は測っていない)。
+生 JSON は `output/stage4_peel/B-hanger-{2.4,2.0,4.8}mm-target2-theta0.5-cap0.2-recheck.json`。
 
-**空洞検査の費用**: `topopt_checks/measure_void_check_cost.py`(`design_space.derive` までで探索は回さない)で、設計空間の全材料マスクに対して5回測った。
-どちらの設計空間にも閉じた空洞は無い(`void_components == 1`)ので、hanger は入口の `input_contradiction` にならない。
+**空洞検査の費用**: `topopt_checks/measure_void_check_cost.py`(`design_space.derive` までで探索は回さない)で、設計空間の全材料マスクに対して5回ずつ測った(ms。最小 / 中央値)。
+どの設計空間にも閉じた空洞は無い(`void_components == 1`)ので、hanger は入口の `input_contradiction` にならない。
 
-| 解像度 | 格子 | 材料セル | 空洞検査 `void_components` 1回(最小 / 中央値) | `boundary_check` 全体(頂点の検査 + 空洞) | 参考: 全材料の6条件(FEM 含む) |
+| 解像度 | 格子(セル数) | 材料セル | 空洞検査 `void_components` 1回 | `boundary_check` 全体(頂点の検査 + 空洞) | 参考: `irregular_vertices` のみ |
 |---|---|---|---|---|---|
-| 4.8mm | 36×66×52(123,552) | 47,232 | 0.61 / 0.65 ms | 2.3 ms | 約22 秒(§12.3) |
-| 2.4mm | 69×129×100(890,100) | 367,390 | 5.6 / 8.2 ms | 15.8 / 29.1 ms(最小 / 中央値) | 未測定 |
+| 4.8mm | 36×66×52(123,552) | 47,232 | 1.0 / 1.7 | 2.3 / 2.3 | 1.3 / 1.3 |
+| 2.4mm | 69×129×100(890,100) | 367,390 | 4.7 / 4.9 | 16.2 / 16.4 | 8.1 / 8.5 |
+| 2.0mm | 82×155×120(1,525,200) | 640,306 | 8.1 / 8.3 | 31.7 / 35.0 | 17.3 / 18.1 |
 
-評価1回(FEM を含む)に対して、4.8mm では 0.65 ms ÷ 約22 秒 = 0.003%。2.4mm は評価1回の秒を測っていないが、§12.8 の B-2.4 の平均は約39秒(3,360秒 ÷ 86評価。並走込みの参考値)で、8.2 ms はその 0.02%。探索の所要秒に影響しない。`irregular_vertices` は 1.2 ms(4.8mm)・8.1 / 11.6 ms(2.4mm。最小 / 中央値)で、空洞検査は頂点の検査と同じ桁。
+空洞検査は頂点の検査より軽く、`boundary_check` 全体でも 2.0mm で約 35 ms。評価1回(FEM を含む)は §12.3 の 4.8mm で約22 秒、§12.8 の B の平均は 2.4mm で約39秒・2.0mm で約110秒(3,360 秒 ÷ 86、4,967 秒 ÷ 45。並走込みの参考値)なので、
+空洞検査は 1 評価の 0.03% 未満(最大でも 2.4mm の 4.9 ms ÷ 約39秒 = 0.013%)で、探索の所要秒に影響しない。同じ測定は1回目(4.8mm で 0.61 / 0.65 ms、2.4mm で 5.6 / 8.2 ms)から数 ms 揺れた(この表は2回目。2.0mm は1回だけ)。
 生 JSON は `output/stage4_peel/void-check-cost.json`。
 
 **やっていないこと**: `single_cell_patience` の既定の再測定(B に 4〜8 を重ねて 2.4mm で測る)と歩幅規則(上限 r_max・弾性)、メッシュ化以降での空洞検査、細い通路で外へつながる袋の禁止。
