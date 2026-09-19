@@ -810,7 +810,9 @@ ENERGY_FILTER_SIZE = 3
 #: `peel` が内部の(空の6近傍を持たない)セルを抜かないか。真は hanger 4.8mm で最終体積が小さいが段階4のFEMが多いので、既定は偽(計画書 §12.4)。
 DEFAULT_SURFACE_ONLY = False
 #: 削ったセルが1つで安全率が落ちたとき、順位から外して次のセルを試すのを何セル続けたら収束とみなすか(`None` は順位が尽きるまで)。
-DEFAULT_SINGLE_CELL_PATIENCE: Optional[int] = 1
+#: 16 は hanger 4.8mm で 1・4・16・無制限を測り、最終体積が最小(16 と無制限は同じ試行列で並び、小さい方を採った)だったから。
+#: 段階4のFEMは 1 の 33 回に対し 999 回(予算切れ)まで増える(計画書 §12.7)。
+DEFAULT_SINGLE_CELL_PATIENCE: Optional[int] = 16
 _CORNERS = tuple(product(range(2), repeat=3))
 
 

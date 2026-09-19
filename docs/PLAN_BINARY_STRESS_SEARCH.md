@@ -392,9 +392,10 @@ round-robin(先頭の親から次の子を1つ取り、その親を末尾へ回�
   `failed=['geometry']` の不合格として数え(後退倍率は安全率の不合格と同じ)、`diagnostics['reduction']['geometry_rejections']`
   に理由(成分数・欠けた条件)を残す。連結性由来なら peel の不変条件の破れなので、テストで0件を固定した。保持の重なり
   (`region_check`)は peel が見ないので、落ちればこの経路で後退する。
-- 安全率で不合格なら m ← m/2。順位から削ったセルが1つで安全率が落ちたら `safety_at_single_cell` で `converged`。
-  計算失敗(`unknown`)は採用せず止めもしない。削ったセルが1つのときの計算失敗・保持の重なりの不合格は、そのセルを**この形状の間だけ**
-  飛ばす(採用で形が変わったら解除)。
+- 安全率で不合格なら m ← m/2。順位から削ったセルが1つのときは、不合格の理由によらずそのセルを**この形状の間だけ**順位から外して
+  次のセルを試す(採用で形が変わったら順位を作り直して解除)。うち安全率で落ちたセルが**採用を挟まず**
+  `single_cell_patience` 個に達したら `safety_at_single_cell` で `converged`(§12.7)。計算失敗(`unknown`)・保持の重なりの不合格は
+  採用せず、数えず、止めもしない。
 - 順位を歩いて1セルも抜けなければ `no_removable_cell` で `converged`(幾何的にもう削れない)。
 - 同じ形から既に不合格と分かっている候補が再び出たとき(順位が尽きて k を減らしても同じ候補になるとき)は、解き直さずに m を半減する
   (`repeated_candidates`)。削ったセルが1つなら順位から外す。
@@ -444,9 +445,11 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 ### 12.5 `diagnostics['reduction']` のキー
 
 `step_exponent` / `max_step_ratio` / `filter_size` / `surface_only` / `fem_solves` / `peel_calls` / `peel_seconds`(合計)/
-`peel_seconds_max` / `repeated_candidates` / `geometry_rejections`(候補ごとに `step`・`components`・`surviving_components`・
-`missing`・`removed_islands`)/ `stop_reason`(`safety_at_single_cell` / `no_removable_cell` / `seed_energy_unavailable`)/
-`final_region_recheck` / `steps`。
+`peel_seconds_max` / `repeated_candidates` / `single_cell_patience`(`None` は無制限)/ `safety_excluded_cells`(削ったセルが1つで
+安全率が落ち、順位から外して続けたセルの数。止まる原因になった最後の1セルは含まない)/ `adopted_after_exclusion`(外したセルが
+1つ以上あった後に、次の採用に至った回数)/ `geometry_rejections`(候補ごとに `step`・`components`・`surviving_components`・
+`missing`・`removed_islands`)/ `stop_reason`(`safety_at_single_cell` / `no_removable_cell` / `seed_energy_unavailable`。予算切れ・中断は
+`None` で、`SearchResult.termination` が `evaluation_limit` / `cancelled`)/ `final_region_recheck` / `steps`。
 
 `steps[]` の1件は `requested_cells` / `peel`(`picked` 順位から削った数・`islands` 島として消えた数・`skipped_support` /
 `skipped_surface` / `skipped_manifold` / `skipped_connectivity`・`already_removed`〈島として先に消えていたセル〉・`global_checks`・
@@ -459,7 +462,51 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 - **FEM は 5.6倍(A)・4.1倍(B)減ったが、最終体積は基準より 34%(A)・19%(B)大きい。** 削れる量を1回の判定で決めるので不合格が減り、
   段階4の試行の大半が採用になった(A は33試行中23、基準は368試行中181)。
 - **A は目標まで 21.6% 余裕を残して止まった**(安全率 2.433)。順位で最も低い削れる1セルを削っただけで安全率が目標を割ったため。
-  B は 2.012 まで進んだ。収束の規則(削ったセルが1つで安全率が落ちたら止まる)は §11 のままで、止まる位置が終盤の1セルに左右される。
-  1セルの判定を次の順位のセルへ広げれば更に削れる可能性があるが、未検証(§11.3 と同じ)。
+  B は 2.012 まで進んだ。この測定の収束の規則(削ったセルが1つで安全率が落ちたら止まる)は、次の §12.7 で「そのセルを外して次のセルを試す」へ変えた。
 - 上限 r_max・θ の再測定は未実施。採用1回あたりの削減セル数が変わった(§12.3 の表)ので、§11.2 の比較の結論をそのまま持ち込めない。
 - 2.4mm・hanger 以外の題材・平滑化以降は未確認(§11.4 のまま)。
+
+### 12.7 収束の規則: 1セルの安全率不合格でそのセルを外して次の順位へ(2026-09-19)
+
+§12.6 が残した論点(A が安全率 2.433 で止まった)を閉じるため、収束の規則だけを変えた。peel・`step_ratio`・後退倍率・6条件・採用の規則は §12.2 のまま。
+
+**規則**: 削ったセルが1つで安全率が落ちたら、そこで止めずにそのセルを**この形状の間だけ**順位から外して次の順位のセルを試す(計算失敗・保持の重なりの不合格は
+従来から同じ扱いで、数えない)。安全率で外したセルが**採用を挟まず** `single_cell_patience` 個に達したら `safety_at_single_cell` で `converged`。
+採用が起きたら順位を作り直すので外したセルは解除され、数え直す。順位を歩いて1セルも抜けなくなれば従来どおり `no_removable_cell`(どちらで止まったかは `stop_reason` で分かる)。
+`single_cell_patience=1` は変更前と同じ規則で、実測でも §12.3 の A と同じ結果になった(FEM 33・71,421.25 mm³・安全率 2.4329)。
+**有限回で止まる理由**: 採用のたびに材料が1セル以上減る。採用の間は、k ≥ 2 の不合格が後退倍率を半分にして k を有限回で1まで下げ、k = 1 の不合格が順位を1セル縮める
+ので、順位は尽きる(`tests/test_binary_search.py` が、どの候補も外れて採用が起きない題材で `patience=None` が予算切れでなく `no_removable_cell` で止まること・同じ形から同じ候補を2度評価しないことを固定している)。
+`None`(無制限)は数えない指定で、上の理由により順位が尽きるまでで止まる。
+
+**測定**: `.\.venv\Scripts\python.exe topopt_checks\verify_hanger_fix.py --model models\hanger_bar_attachment.json --spacing 4.8 --target 2 --max-evaluations 1000 --no-memory-trace --no-surface-only --single-cell-patience {1,4,16,unlimited} --out output\stage4_stop_rule\patience-{…}-hanger-4.8mm-target2-theta0.5-cap0.2.json`
+(θ=0.5・上限0.2・予算1000・`surface_only=False`。コードは `9629323`〈JSON の `git_head`〉で、その後 `binary_search.py` で変えたのは `DEFAULT_SINGLE_CELL_PATIENCE` の値とそのコメントだけ〈測定は値を明示して回した〉)。
+表の値は `topopt_checks/summarize_stage4.py` が JSON から出す。
+
+| 項目 | 基準(§11.3) | patience=1(§12.3 の A と同結果) | 4 | 16 | 無制限 |
+|---|---|---|---|---|---|
+| 段階4のFEM | 184 | **33** | 296 | 999 | 999 |
+| 評価(段階3の1回を含む) | 369 | 34 | 297 | 1,000 | 1,000 |
+| 最終体積 | 53,130 mm³(1.03%) | 71,421 mm³(1.39%) | 64,127 mm³(1.25%) | **51,715 mm³(1.01%)** | **51,715 mm³(1.01%)** |
+| 最終セル数 | 488 | 656 | 589 | 475 | 475 |
+| 最終の安全率(目標2) | 2.224 | 2.433 | 2.378 | 2.016 | 2.016 |
+| 停止理由 | `safety_at_single_cell` | `safety_at_single_cell` | `safety_at_single_cell` | 予算切れ(`termination=evaluation_limit`・`stop_reason` は `None`) | 予算切れ(同左) |
+| 採用回数 / 安全率で不合格 | 181 / 3 | 23 / 10 | 86 / 210 | 198 / 801 | 198 / 801 |
+| 外したセル数(`safety_excluded_cells`) | — | 0 | 137 | 625 | 625 |
+| 外した後に採用へ至った回数(`adopted_after_exclusion`) | — | 0 | 57 | 166 | 166 |
+| 探索の所要秒(段階3を含む) | 1,409(別コード・別条件) | 271 | 1,245 | 3,585 | 3,360 |
+
+- 幾何の不合格は全て0件。全ての最終の再検査は合格・ハッシュ一致で、保持・除外の旧経路での取り直しも合格。peel の合計は 5.3 / 10.6 / 21.4 / 20.6 秒(所要秒の1%未満)。
+- **所要秒は並走条件が揃っていない参考値**(他セッションの hanger 2.0mm 探索2本が全期間並走。1 の後半に 4 が重なり、4・16・無制限は互いに重なって走った〈同時に最大3本〉。§12.3 の A は 140.6 秒だったので、同じ試行列の patience=1 が並走で 271 秒に伸びた)。比較には FEM 回数を使う。
+- **1 の試行列は 4 の先頭33回で、4 と 16 と無制限は 296 回目まで同じ試行列を辿る。** 4 はそこで4回続けて落ちて止まり(2.378)、16 と無制限は続けた。**16 と無制限は 1000 回の予算内で完全に同じ試行列**
+  (連続して安全率で落ちた最長が7回で、16 に達しなかったため。8 以上の指定は、この予算内ならすべて無制限と同じ)。
+- 体積の推移(16。FEM回数→採用済みの最終体積・安全率): 100→69,135・2.382 / 200→66,195・2.394 / 296→64,127・2.378 / 400→62,167・2.374 / 500→59,881・2.301 / 750→55,743・2.097 / 999→51,715・2.016。
+  基準の 53,130 mm³ を下回ったのは FEM 919 回目。FEM 100 回目以降は採用 156 回で 160 セルしか削っておらず(採用1回あたり約1セル)、終盤は不合格が大半を占める(不合格は999試行中801)。
+- 16 は目標の 2 まで 0.8% の安全率を残して予算切れになったので、予算が足りれば更に進む(何回で収束するかは測っていない)。
+
+**`single_cell_patience` の既定**(測る前に決めた基準): ① 最終体積が最も小さいもの。② 差が 1% 以内で並んだら段階4のFEMが少ないもの。③ それでも並んだら小さい patience。
+
+結果: ① 最小は 16 と無制限(51,715 mm³、同一の試行列で差は 0)。② FEM も同数(999)。③ 小さい方の **16**。既定は `binary_search.DEFAULT_SINGLE_CELL_PATIENCE = 16`。
+**食い違った点**(基準どおり決めたうえで書く): この基準は体積を第一にして FEM は同点のときだけ見るので、既定が段階4のFEM 999回・予算1000を使い切る値になった。
+§12.3 で peel が減らした FEM(基準 184 → A 33)を、既定では基準の 5.4 倍・patience=1 の 30 倍へ戻している。最終体積は基準より 2.7%小さい。
+16 が無制限と区別できたのではなく、この予算では同じ試行列だったので、③の規則で小さい方を採っただけである。
+題材は hanger 4.8mm 1つ・各1回(試行は決定的)。2.4mm・他の題材・上限 r_max と θ の再測定は未実施。

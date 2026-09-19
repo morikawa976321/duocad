@@ -50,6 +50,7 @@ SHA-256 は振れない)。**解法・前処理の改良は CG 反復数の差�
 | 段階4の削る割合を安全率の余裕で変える指数 θ(r = min(上限, 1 − (目標/安全率)^θ)) `DEFAULT_STEP_EXPONENT` | **0.5** | `binary_search.DEFAULT_STEP_EXPONENT` | 計画書§11.2 |
 | 段階4で要素エネルギーをならす近傍の一辺 `ENERGY_FILTER_SIZE` | **3** セル | `binary_search.ENERGY_FILTER_SIZE` | 順位の平滑化(自身と26近傍の材料平均で、1セルごとの値のばらつきによる順位の入れ替わりを抑える)。計画書§11.1 |
 | 段階4の peel が内部のセル(空の6近傍を持たない)を抜かないか `DEFAULT_SURFACE_ONLY` | **False** | `binary_search.DEFAULT_SURFACE_ONLY` | 計画書§12.4(True は最終体積が小さいが段階4のFEMが多く、食い違ったので False) |
+| 段階4で、削ったセルが1つで安全率が落ちたとき、順位から外して続けるのを何セルで収束とみなすか `DEFAULT_SINGLE_CELL_PATIENCE`(`None` は順位が尽きるまで) | **16** | `binary_search.DEFAULT_SINGLE_CELL_PATIENCE` | 計画書§12.7(最終体積が最小の 16 と無制限が同じ試行列で並び、小さい方。段階4のFEMは 999 回で予算切れ) |
 | 条件面の作用位置のずれの許容 = 対応付けの探索半径(要素サイズ比。CAD面の面積重心から節点重心まで、モーメント誤差の許容はこの値×荷重の大きさ。`anchor.position_limit`) | **1.0** | `anchor.DEFAULT_RADIUS_RATIO` | 「境界条件の確定(2026-09-17)」 |
 | 要素サイズを指定しないときの最長軸の要素数 `DEFAULT_ELEMENTS_LONG_AXIS` | **40** | `design_space.DEFAULT_ELEMENTS_LONG_AXIS` | 塊の導出(`derive`) |
 | ヤング率の既定 `DEFAULT_YOUNGS_MODULUS_MPA` | **2000** MPa | `material.DEFAULT_YOUNGS_MODULUS_MPA` | 応力の実単位換算(`stress.UnitScale`) |
@@ -1109,7 +1110,7 @@ stress → material → acceptance → binary_search → mesh`。
 | `duocad/topopt/stress.py` | **密度場と変位 → 要素ごとの von Mises 応力・代表応力・最小安全率**(後処理)。無次元 → 実単位の換算則(`UnitScale`)を持つ。**最適化には手を入れない**(応力制約の定式化は採らない。「von Mises応力と最小安全率」) |
 | `duocad/topopt/material.py` | **材料定数**(`PETG_YIELD_MPA` / `PRINT_DERATE` / `DEFAULT_ALLOWABLE_MPA` / `DEFAULT_YOUNGS_MODULUS_MPA`)。段階6で`safety_loop.py`から移設した |
 | `duocad/topopt/acceptance.py` | **島除去後・平滑化前の6条件判定**(境界・単一成分・保持/除外・荷重欠落なし・目標安全率)。`inspect_document` / `inspect` が入口。詳細は [TOPOPT_PRE_SMOOTHING_CHECKS.md](TOPOPT_PRE_SMOOTHING_CHECKS.md) |
-| `duocad/topopt/binary_search.py` | **bool体積削減探索**。`find_initial_feasible`(段階3、削除・追加・置換で初期合格を探す)→ `find_best_feasible`(段階4、ひずみエネルギーの低い材料を安全率の余裕に応じて削る、単一の探索入口)。段階3の `DEFAULT_FRONTIER_CAPACITY` / `DEFAULT_MAX_CONSECUTIVE_ADDS`、段階4の `DEFAULT_STEP_EXPONENT` / `DEFAULT_MAX_STEP_RATIO` / `DEFAULT_SURFACE_ONLY` / `ENERGY_FILTER_SIZE` を持つ |
+| `duocad/topopt/binary_search.py` | **bool体積削減探索**。`find_initial_feasible`(段階3、削除・追加・置換で初期合格を探す)→ `find_best_feasible`(段階4、ひずみエネルギーの低い材料を安全率の余裕に応じて削る、単一の探索入口)。段階3の `DEFAULT_FRONTIER_CAPACITY` / `DEFAULT_MAX_CONSECUTIVE_ADDS`、段階4の `DEFAULT_STEP_EXPONENT` / `DEFAULT_MAX_STEP_RATIO` / `DEFAULT_SURFACE_ONLY` / `DEFAULT_SINGLE_CELL_PATIENCE` / `ENERGY_FILTER_SIZE` を持つ |
 | `duocad/topopt/mesh.py` | 浮島除去→パディング→marching cubes→Taubin平滑化→表面生成。`build_surface` / `build_surface_from_mask`。**CLIは持たない**(段階6でSIMPを回すCLIを削除) |
 | `duocad/topopt/finalize.py` | 最終確定マスクの表面 → 保持union・除外cutのCADブーリアン → 水密・単一ソリッド検査 |
 | `duocad/topopt/trace.py` | 実行ごとの途中記録(`stage` / `snapshot`)。詳細は [TOPOPT_RECORDING.md](TOPOPT_RECORDING.md) |
