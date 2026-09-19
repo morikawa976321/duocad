@@ -593,7 +593,7 @@ def test_a_preserve_lost_by_the_peel_is_a_geometry_rejection_without_fem_and_the
     assert reduction['fem_solves'] == len(reduction['steps']) - len(geometry_steps)
     assert reduction['repeated_candidates'] > 0  # 順位が尽きて同じ候補に戻る場面を踏んでいる
     assert reduction['stop_reason'] == 'no_removable_cell' and reduction['safety_excluded_cells'] == 0
-    strict = bs.find_best_feasible(design, conditions, max_evaluations=300, single_cell_patience=1)  # 幾何の不合格は数えない
+    strict = bs.find_best_feasible(design, conditions, max_evaluations=300, single_cell_patience=1)
     assert strict.diagnostics['reduction']['stop_reason'] == 'no_removable_cell'
     assert strict.best_feasible.mask_hash == result.best_feasible.mask_hash
     stage4 = result.history[1:]
@@ -663,10 +663,10 @@ def test_a_single_cell_safety_failure_excludes_that_cell_until_patience_consecut
         reduction = result.diagnostics['reduction']
         assert result.termination == 'converged' and reduction['stop_reason'] == 'safety_at_single_cell'
         assert reduction['single_cell_patience'] == patience and reduction['safety_excluded_cells'] == patience - 1
-        tail = reduction['steps'][-patience:]
-        assert tail == _single_cell_safety_failures(reduction['steps'])[-patience:]  # 止まる直前の patience 回は採用を挟まない
+        assert reduction['steps'][-patience:] == _single_cell_safety_failures(reduction['steps'])[-patience:]
+        assert any(step['peel']['picked'] > 1 and step['outcome'] == 'rejected' for step in reduction['steps'])  # k≥2 の不合格は数えない
         stage4 = result.history[1:]
-        assert len({(trial.parent, trial.mask_hash) for trial in stage4}) == len(stage4)  # 外したセルを再び試さない
+        assert len({(trial.parent, trial.mask_hash) for trial in stage4}) == len(stage4)
         finals[patience] = result.best_feasible.mask.sum()
     assert finals[3] == finals[1]  # 下限の手前では採用が起きないので、形は同じ
 

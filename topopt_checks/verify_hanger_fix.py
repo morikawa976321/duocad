@@ -213,7 +213,12 @@ def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, 
 
 
 def _patience(text: str) -> int | None:
-    return None if text.lower() in ("unlimited", "none") else int(text)
+    if text.lower() in ("unlimited", "none"):
+        return None
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError("1 以上の整数か unlimited")
+    return value
 
 
 def main() -> int:
