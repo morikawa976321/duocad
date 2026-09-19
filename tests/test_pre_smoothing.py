@@ -10,7 +10,7 @@ from build123d import Box, Pos
 from duocad import kernel
 from duocad.topopt import anchor, voxelize, fem, stress
 from duocad.topopt.acceptance import (
-    active_nodes, boundary_check, condition_check, connectivity_check,
+    active_nodes, boundary_check, closed_voids, condition_check, connectivity_check, void_components,
     inspect, inspect_document, intersection_volume, region_check, safety_check, search_diagnostics,
 )
 
@@ -46,13 +46,55 @@ def fixture():
                                     target_safety_factor=.001, solver='direct')
 
 
-@pytest.mark.parametrize('kind', ['full', 'cavity', 'tunnel'])
+@pytest.mark.parametrize('kind', ['full', 'tunnel'])
 def test_regular_boundaries(kind):
     m = np.ones((5, 5, 5), bool)
-    if kind == 'cavity': m[2, 2, 2] = False
     if kind == 'tunnel': m[:, 2, 2] = False
     assert boundary_check(m)['status'] == 'pass'
+    assert boundary_check(m)['void_components'] == 1  # 貫通穴は外へつながるので空洞ではない
     assert connectivity_check(m)['status'] == 'pass'
+
+
+def test_a_closed_void_fails_watertight_and_is_counted_as_a_second_empty_component():
+    """閉じた空洞は境界の頂点が全て正則でも水密で落ちる(中空構造を許容しない製品制約)。"""
+    m = np.ones((5, 5, 5), bool)
+    m[2, 2, 2] = False
+    report = boundary_check(m)
+    assert (report['status'], report['irregular_vertices'], report['void_components']) == ('fail', 0, 2)
+    assert connectivity_check(m)['status'] == 'pass'  # 材料は1成分のまま。落とすのは水密だけ
+    assert closed_voids(m) == [dict(cells=1, representative_cell=[2, 2, 2])]
+    m[2, 2, 2:] = False  # 空洞を外へつなぐと通る
+    assert boundary_check(m)['status'] == 'pass' and closed_voids(m) == []
+
+
+def test_closed_voids_are_reported_largest_first_with_a_representative_cell():
+    m = np.ones((9, 5, 5), bool)
+    m[1, 2, 2] = False  # 1セル
+    m[4:7, 1:4, 1:4] = False  # 27セル
+    assert void_components(m) == 3
+    assert closed_voids(m) == [dict(cells=27, representative_cell=[4, 1, 1]),
+                               dict(cells=1, representative_cell=[1, 2, 2])]
+    assert closed_voids(m, limit=1) == [dict(cells=27, representative_cell=[4, 1, 1])]
+
+
+def test_a_void_touching_the_grid_boundary_is_not_closed():
+    m = np.ones((4, 4, 4), bool)
+    m[0, 1:3, 1:3] = False  # 格子の面に開いた凹み
+    assert void_components(m) == 1 and boundary_check(m)['status'] == 'pass'
+
+
+def test_a_hollow_material_is_not_solved_and_reports_the_prerequisite_failure():
+    """空洞のあるマスクは6条件の水密で落ち、FEMへ進まない。"""
+    kwargs = fixture()[3]
+    hollow = np.ones((5, 5, 5), bool)
+    hollow[2, 2, 2] = False
+    grid = voxelize.Grid((0., 0., 0.), 1., hollow.shape)
+    table = Table(grid, {1: list(range(36)), 2: list(range(180, 216))})
+    kwargs = dict(kwargs, excludes=[])
+    report = inspect(hollow, hollow, grid, table=table, **kwargs)
+    assert report['checks']['watertight']['status'] == 'fail'
+    assert report['checks']['watertight']['void_components'] == 2
+    assert report['checks']['safety'] == dict(status='unknown', reason='prerequisites_failed')
 
 
 @pytest.mark.parametrize('position', [(1, 1, 1), (1, 1, 0)])

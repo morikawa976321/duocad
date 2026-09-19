@@ -696,6 +696,19 @@ def test_search_statuses_other_than_feasible_pass_through_without_touching_the_d
             assert "load_face_1" in result["warning"]
 
 
+def test_a_closed_void_in_the_design_space_is_explained_with_where_and_what_to_do() -> None:
+    """設計空間の閉じた空洞による入力矛盾は、保持の矛盾ではなく空洞の位置・大きさと直し方を言う。"""
+    from duocad.topopt import binary_search
+
+    result = binary_search.SearchResult(
+        status="input_contradiction", termination="input_contradiction", best_feasible=None, history=[],
+        evaluations=0, conditions_identifier="test",
+        diagnostics=dict(closed_voids=dict(count=2, largest=[dict(cells=12, representative_cell=[3, 4, 5])])))
+    warning = optimize_run._search_failure_warning(result)
+    assert "閉じた空洞が 2 個" in warning and "[3, 4, 5](12セル)" in warning and "除外" in warning
+    assert "保持ソリッド" not in warning
+
+
 def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
     session: Session, monkeypatch
 ) -> None:

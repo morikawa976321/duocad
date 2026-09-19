@@ -1339,6 +1339,14 @@ def _search_failure_warning(search_result: Any) -> str:
     """
     diagnostics = search_result.diagnostics or {}
     if search_result.status == 'input_contradiction':
+        voids = diagnostics.get('closed_voids')
+        if voids:
+            cells = ", ".join(f"{row['representative_cell']}({row['cells']}セル)" for row in voids['largest'])
+            return (
+                f"設計空間に閉じた空洞が {voids['count']} 個ある(格子の添字とセル数: {cells})。"
+                "形状最適化は中空構造を許容しない。除外ソリッドが設計空間(塊)に完全に包まれていないか確認し、"
+                "除外ソリッドを塊の外へつなげるか除外を外すこと"
+            )
         return (
             "保持ソリッドが設計空間全体を使っても収まらない(条件が矛盾している)。"
             "保持ソリッド・除外ソリッド・条件面を見直すこと"

@@ -285,17 +285,35 @@ def _local_addable(mask: np.ndarray, design_space: np.ndarray, region: tuple) ->
     return adjacent[inner] & design_space[region]
 
 
+def _touches_empty(mask: np.ndarray, region: tuple) -> bool:
+    """ブロックが材料の表面に接するか: ブロック内に空セルがあるか、6面のどれかの外側が空(格子の外を含む)か。
+
+    偽なら、ブロックは全て材料で、周りも全て材料(内部のブロック)。空でないブロックを空にすると閉じた空洞になる。
+    """
+    if not mask[region].all():
+        return True
+    for axis, span in enumerate(region):
+        if span.start == 0 or span.stop == mask.shape[axis]:
+            return True
+        for edge in (span.start - 1, span.stop):
+            layer = region[:axis] + (slice(edge, edge + 1),) + region[axis + 1:]
+            if not mask[layer].all():
+                return True
+    return False
+
+
 def _op_scan(mask: np.ndarray, design_space: np.ndarray, size: int, op: str):
     """1つの操作・1つのブロック大きさのブロックを1つずつ調べ、有効なら候補記述
     `(op, region, addable)`、無効なら None を返す(調べたブロックごとに必ず1つ出す)。
 
-    有効性(削除は材料が要る、追加は接する空セルが要る、置換は両方)はブロックの範囲だけを見て
+    有効性(削除は材料が要り、材料の表面に接すること〈内部のブロックを空にすると閉じた空洞ができ、
+    水密の検査で必ず落ちる〉、追加は接する空セルが要る、置換は両方)はブロックの範囲だけを見て
     決め、マスクは作らない。`addable` はブロック大の小配列(削除では None)。
     """
     for lo in _block_starts(mask.shape, size):
         region = _block_region(lo, size, mask.shape)
         if op == 'delete':
-            yield ('delete', region, None) if mask[region].any() else None
+            yield ('delete', region, None) if mask[region].any() and _touches_empty(mask, region) else None
             continue
         addable = _local_addable(mask, design_space, region)
         if not addable.any():
@@ -654,7 +672,8 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
     `resolution_insufficient`(条件面に節点が無い)、`boundary_mapping_failed`(確定表の節点が
     全設計空間の材料にすら接しない〈修正B〉か、表の検証 `anchor.condition_mapping` が不成立 ——
     対応不能標本・作用位置のずれ等。渡された `conditions.mapping` とここでの再検証のどちらでも止まる)、
-    `input_contradiction`(全設計空間でも保持と重ならない)。
+    `input_contradiction`(全設計空間でも保持と重ならない、または設計空間に閉じた空洞がある。
+    後者は `diagnostics['closed_voids']` に空洞の数と大きい順の `cells` / `representative_cell`)。
 
     返却は必ず `best_feasible` から行い、`unknown`(計算失敗)や安全率不足で
     最良モデルを失わない(§4.1)。修復も通常の候補生成・評価・履歴・予算の対象で、
@@ -714,6 +733,17 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
                              best_feasible=None, history=[], evaluations=0,
                              conditions_identifier=identifier,
                              diagnostics=dict(preserve_on_full_design_space=preserve_on_full))
+
+    # 設計空間そのものに閉じた空洞がある入力(除外領域が塊に包まれている等)は、空洞のある全材料が
+    # 6条件の水密で落ちるので、探索を始めずに矛盾として止める。削って空洞を外へ通す候補は原理上ありうるが、
+    # 通路の幅は最小幅の制約と一体の話で扱わない(本人未確認の既定。docs/TOPOPT.md「中空構造を許容しない」)。
+    voids =acceptance.closed_voids(design_space_mask)
+    if voids:
+        return SearchResult(status='input_contradiction', termination='input_contradiction',
+                             best_feasible=None, history=[], evaluations=0,
+                             conditions_identifier=identifier,
+                             diagnostics=dict(closed_voids=dict(
+                                 count=acceptance.void_components(design_space_mask) - 1, largest=voids)))
 
     if is_cancelled is not None and is_cancelled():
         return SearchResult(status='no_feasible_found', termination='cancelled', best_feasible=None,
@@ -807,8 +837,9 @@ DEFAULT_STEP_EXPONENT = 0.5
 DEFAULT_MAX_STEP_RATIO = 0.2
 #: 削る順位に使うエネルギーをならす近傍の一辺(セル)。3 は自身と26近傍の材料平均。
 ENERGY_FILTER_SIZE = 3
-#: `peel` が内部の(空の6近傍を持たない)セルを抜かないか。真は hanger 4.8mm で最終体積が小さいが段階4のFEMが多いので、既定は偽(計画書 §12.4)。
-DEFAULT_SURFACE_ONLY = False
+#: `peel` が内部の(空の6近傍を持たない)セルを抜かないか。中空構造を許容しない製品制約(2026-09-19 本人決定)なので真。
+#: 実測でも hanger の3解像度(4.8・2.4・2.0mm)とも偽より最終体積が小さい(計画書 §12.8・§12.9)。
+DEFAULT_SURFACE_ONLY = True
 #: 削ったセルが1つで安全率が落ちたとき、順位から外して次のセルを試すのを何セル続けたら収束とみなすか(`None` は順位が尽きるまで)。
 #: 16 は hanger 4.8mm で 1・4・16・無制限を測り、最終体積が最小(16 と無制限は同じ試行列で並び、小さい方を採った)だったから。
 #: 段階4のFEMは 1 の 33 回に対し 999 回(予算切れ)まで増える(計画書 §12.7)。
@@ -906,6 +937,8 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
     - 連結: 中心の材料6近傍が窓の中で連結なら通す。そうでなければマスク全体を数え直し、条件節点を支える
       セルが全て同じ1成分にあるときだけ通して、他の成分(島)を一緒に消す。
     - `surface_only`: 空の6近傍(格子の外を含む)を持たないセルは抜かない(内部に空洞を作らない)。
+      抜くセルは空の6近傍を持つので、抜いた後のそのセルは既存の空の成分に属し、島として消える成分も隣接する空につながる。
+      閉じた空洞の無い `mask` からは閉じた空洞の無い候補ができる(`acceptance.boundary_check` の `void_components` が落ちない根拠)。
     """
     started = time.perf_counter()
     mask = np.asarray(mask, dtype=bool)

@@ -1,0 +1,64 @@
+[
+  {
+    "spacing": 4.8,
+    "grid": [
+      36,
+      66,
+      52
+    ],
+    "cells": 123552,
+    "material_cells": 47232,
+    "void_components": 1,
+    "closed_voids": [],
+    "repeat": 5,
+    "seconds": {
+      "void_components": {
+        "min": 0.000610999995842576,
+        "median": 0.0006488999351859093
+      },
+      "boundary_check": {
+        "min": 0.0022755999816581607,
+        "median": 0.0023299999302253127
+      },
+      "irregular_vertices": {
+        "min": 0.001178800011985004,
+        "median": 0.0011817000340670347
+      },
+      "connectivity_check": {
+        "min": 0.0005918999668210745,
+        "median": 0.0005950999911874533
+      }
+    }
+  },
+  {
+    "spacing": 2.4,
+    "grid": [
+      69,
+      129,
+      100
+    ],
+    "cells": 890100,
+    "material_cells": 367390,
+    "void_components": 1,
+    "closed_voids": [],
+    "repeat": 5,
+    "seconds": {
+      "void_components": {
+        "min": 0.005605799960903823,
+        "median": 0.008175999973900616
+      },
+      "boundary_check": {
+        "min": 0.015787200070917606,
+        "median": 0.02909269998781383
+      },
+      "irregular_vertices": {
+        "min": 0.008050000062212348,
+        "median": 0.011610799934715033
+      },
+      "connectivity_check": {
+        "min": 0.004008100018836558,
+        "median": 0.004058500053361058
+      }
+    }
+  }
+]

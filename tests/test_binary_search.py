@@ -226,6 +226,67 @@ def test_input_contradiction_is_confirmed_when_even_the_full_design_space_cannot
     assert result.best_feasible is None
 
 
+def test_a_closed_void_in_the_design_space_stops_the_search_before_any_candidate():
+    """除外領域が塊に完全に包まれた入力(設計空間の内部に空セル)は、探索前に入力矛盾として止まる。"""
+    shape = (5, 5, 5)
+    conditions = bar_conditions(shape=shape)
+    design_space_mask = np.ones(shape, bool)
+    design_space_mask[2, 2, 2] = False
+    design_space_mask[3, 1:3, 3] = False
+    result = bs.find_initial_feasible(design_space_mask, conditions, max_evaluations=10)
+    assert (result.status, result.termination, result.evaluations) == ('input_contradiction', 'input_contradiction', 0)
+    assert result.best_feasible is None and result.history == []
+    voids = result.diagnostics['closed_voids']
+    assert voids['count'] == 2
+    assert voids['largest'] == [dict(cells=2, representative_cell=[3, 1, 3]), dict(cells=1, representative_cell=[2, 2, 2])]
+
+
+def test_a_design_space_open_to_the_outside_is_not_a_closed_void():
+    shape = (5, 5, 5)
+    design_space_mask = np.ones(shape, bool)
+    design_space_mask[:, 2, 2] = False  # 貫通穴
+    result = bs.find_initial_feasible(design_space_mask, bar_conditions(shape=shape), max_evaluations=3)
+    assert result.status != 'input_contradiction' and result.evaluations >= 1
+
+
+def test_delete_candidates_are_only_blocks_touching_the_material_surface():
+    """内部のブロック(全部材料で周りも全部材料)を空にすると閉じた空洞ができるので、削除の候補にしない。"""
+    shape = (8, 8, 8)
+    full = np.ones(shape, bool)
+    seen = set()
+    for size in bs.block_sizes(shape):
+        deletes = [region for op, region, _ in bs.candidate_descriptors(full, full, (size,)) if op == 'delete']
+        for region in deletes:
+            child = bs._materialize(full, full, 'delete', region, None)
+            assert acceptance.void_components(child) == 1, (size, region)
+            seen.add(size)
+        interior = [lo for lo in bs._block_starts(shape, size)
+                    if all(0 < l and l + size < n for l, n in zip(lo, shape))]
+        assert len(deletes) == len(list(bs._block_starts(shape, size))) - len(interior), size
+    assert seen == set(bs.block_sizes(shape))
+
+
+@pytest.mark.parametrize('axis, side', [(a, s) for a in range(3) for s in (0, 1)])
+def test_an_interior_block_becomes_a_delete_candidate_once_a_face_or_its_inside_is_open(axis, side):
+    """内部のブロック(12³ の中央 4³)は、格子の外へ抜ける細い穴が6面のどこかに接するか、ブロックを貫けば候補になる。"""
+    shape = (12, 12, 12)
+    centre = (slice(4, 8),) * 3
+
+    def has_centre_block(mask):
+        return any(op == 'delete' and region == centre for op, region, _ in bs.candidate_descriptors(mask, mask, (4,)))
+
+    mask = np.ones(shape, bool)
+    assert not has_centre_block(mask)
+    index = [5, 5, 5]
+    index[axis] = slice(8, 12) if side else slice(0, 4)  # 中央ブロックの外側から格子の端へ
+    mask[tuple(index)] = False
+    assert has_centre_block(mask)
+    index[axis] = slice(4, 8)  # 穴がブロックの中だけ(外へ通じない)でも、ブロックは空セルを含むので候補
+    inside = np.ones(shape, bool)
+    inside[tuple(index)] = False
+    assert has_centre_block(inside)
+
+
 def test_full_material_still_fails_safety_is_not_laundered_into_a_pass():
     """全材料でも応力不足の例: どの候補を試しても目標安全率に届かない場合、
     「探索し尽くして見つからない」であって「合格に化ける」ではない。"""
@@ -434,10 +495,13 @@ def test_the_energy_field_follows_the_cantilever_moment_and_is_zero_outside_mate
     assert fields == {}
 
 
-def _assert_peel_invariants(mask, conditions):
-    """peel の出力が満たすべき3つ(1成分・不正頂点0・全条件節点に支えあり)を、全体の判定で確かめる。"""
+def _assert_peel_invariants(mask, conditions, *, no_void=False):
+    """peel の出力が満たすべき3つ(1成分・不正頂点0・全条件節点に支えあり)を、全体の判定で確かめる。
+    `no_void` なら閉じた空洞が無いこと(`surface_only` の peel の保証)も見る。"""
     assert acceptance.connectivity_check(mask)['components'] == 1
     assert acceptance.boundary_check(mask)['irregular_vertices'] == 0
+    if no_void:
+        assert acceptance.void_components(mask) == 1
     assert acceptance.active_nodes(mask).ravel()[bs._anchor_node_ids(conditions)].all()
 
 
@@ -454,7 +518,7 @@ def test_peel_output_is_one_component_with_regular_vertices_and_supported_anchor
     conditions = bar_conditions(shape=shape)
     anchors = bs._anchor_node_ids(conditions)
     rng = np.random.default_rng(20260919)
-    peeled_any = 0
+    peeled_any = hollowed = 0
     for _ in range(30):
         mask = np.ones(shape, bool)
         mask.setflags(write=False)
@@ -462,15 +526,17 @@ def test_peel_output_is_one_component_with_regular_vertices_and_supported_anchor
             order = rng.permutation(mask.size)  # 材料でないセルも混ぜる(飛ばされること)
             count = int(rng.integers(1, int(mask.sum())))
             after, stats = bs.peel(mask, order, count, anchors, surface_only=surface_only)
-            _assert_peel_invariants(after, conditions)
+            _assert_peel_invariants(after, conditions, no_void=surface_only)
             assert not (after & ~mask).any()
             assert stats.picked + stats.islands == mask.sum() - after.sum()
             survivors, diagnostics = bs.resolve_islands(after, conditions)
             assert bs._geometry_rejection(after, survivors, diagnostics, conditions) is None
             peeled_any += stats.picked
+            hollowed += acceptance.void_components(after) > 1
             after.setflags(write=False)
             mask = after
     assert peeled_any > 100  # 何も削れないケースだけで合格していない
+    assert (hollowed == 0) == surface_only  # 偽なら空洞ができる題材で、真だけが空洞を作らない
 
 
 def test_a_local_connectivity_pass_implies_the_global_one():
@@ -536,7 +602,7 @@ def test_peel_takes_interior_cells_only_when_surface_only_is_off():
     centre = int(np.ravel_multi_index((2, 2, 2), shape))
     full = np.ones(shape, bool)
     hollow, stats = bs.peel(full, np.array([centre]), 1, anchors, surface_only=False)
-    assert not hollow[2, 2, 2] and stats.picked == 1
+    assert not hollow[2, 2, 2] and stats.picked == 1 and acceptance.void_components(hollow) == 2
     _assert_peel_invariants(hollow, conditions)
     kept, stats = bs.peel(full, np.array([centre]), 1, anchors, surface_only=True)
     assert kept.all() and (stats.picked, stats.skipped_surface) == (0, 1)
@@ -1010,7 +1076,7 @@ def test_candidates_are_materialised_one_at_a_time_not_all_up_front(monkeypatch)
         next(stream)
     assert calls['n'] == 5
     possible = sum(1 for _ in bs.candidate_descriptors(current, design, (1,)))
-    assert possible > 800  # 全部先に作れば数百枚になる題材で、5枚しか作っていない
+    assert possible > 500  # 全部先に作れば数百枚になる題材(表面の削除464+追加144)で、5枚しか作っていない
 
     _stub_evaluation(monkeypatch)
     calls['n'] = 0
@@ -1035,7 +1101,7 @@ def test_retained_masks_do_not_grow_with_the_evaluation_budget(monkeypatch):
     capacity = 6
     # 親1つが提案できる記述の数(全部先に配列にすると、この枚数のマスクが要る)。
     eager_masks = sum(1 for _ in bs.candidate_descriptors(design, design, tuple(reversed(bs.block_sizes(shape)))))
-    assert eager_masks > 100_000
+    assert eager_masks > 10_000
     peaks = {}
     for budget in (20, 160):
         tracemalloc.start()
@@ -1047,7 +1113,7 @@ def test_retained_masks_do_not_grow_with_the_evaluation_budget(monkeypatch):
         frontier = result.diagnostics['frontier']
         assert frontier['peak_retained'] <= capacity and frontier['retained'] <= capacity
         # 実測のピークは入口検査(保持CADとの重なり: 材料の直方体列)の定数分が約28枚ぶんで、
-        # 探索は容量+作業配列の数枚しか足さない。全候補を先に作る方式の 1/1000 以下。
+        # 探索は容量+作業配列の数枚しか足さない。全候補を先に作る方式の 1/200 以下。
         assert peak <= 64 * mask_bytes, (budget, peak / mask_bytes)
     assert peaks[160] <= peaks[20] + 2 * mask_bytes  # 評価回数を8倍にしても増えない
 

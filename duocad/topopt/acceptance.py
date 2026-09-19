@@ -83,14 +83,51 @@ def material_sha256(material) -> str:
     return hashlib.sha256(np.ascontiguousarray(np.asarray(material, dtype=bool)).tobytes()).hexdigest()
 
 
+def void_labels(material):
+    """空(材料の補集合)を6近傍で連結成分に分ける `(ラベル配列, 成分数)`。配列は格子より各辺2大きい
+    (外側に空の殻を1セル足すので、格子の外へつながる空は必ず1成分になる)。ラベル 1 が格子の外へつながる空。
+
+    多様体条件(`REGULAR_VERTEX`)を満たすマスクでは空にも辺・頂点だけの接触が無いので、6近傍と26近傍の数え方は一致する。
+    """
+    empty = np.pad(~np.asarray(material, dtype=bool), 1, constant_values=True)
+    return ndimage.label(empty, structure=ndimage.generate_binary_structure(3, 1))
+
+
+def void_components(material) -> int:
+    """空の連結成分の数(格子の外へつながる空を含む)。1 なら閉じた空洞が無い。"""
+    return int(void_labels(material)[1])
+
+
+def closed_voids(material, *, limit=5):
+    """閉じた空洞(格子の外へつながらない空の成分)を大きい順に最大 `limit` 個。各項目は
+    `cells`(セル数)と `representative_cell`(その成分で平坦添字が最小のセル。格子の添字)。"""
+    labels, count = void_labels(material)
+    if count <= 1:
+        return []
+    sizes = np.bincount(labels.ravel(), minlength=count + 1)
+    rows = []
+    # ラベルは走査順に振られるので、同じ大きさなら平坦添字の小さい成分が先になる。
+    for label in sorted(range(2, count + 1), key=lambda l: (-sizes[l], l))[:limit]:
+        cell = np.array(np.unravel_index(int(np.argmax(labels.ravel() == label)), labels.shape)) - 1
+        rows.append(dict(cells=int(sizes[label]), representative_cell=cell.tolist()))
+    return rows
+
+
 def boundary_check(material):
+    """水密(全頂点の境界が局所的に2次元多様体)かつ殻が1つ(閉じた空洞が無い)。
+
+    閉じた空洞の境界も閉じていて頂点は正則なので、頂点の検査だけでは空洞を通す。空洞を許さないのは
+    製品の制約(`docs/TOPOPT.md`「中空構造を許容しない」)。
+    """
     material = np.asarray(material, dtype=bool)
     bad, codes = irregular_vertices(material)
     count = int(bad.sum())
-    return dict(status='pass' if material.any() and count == 0 else 'fail',
+    voids = void_components(material)
+    return dict(status='pass' if material.any() and count == 0 and voids == 1 else 'fail',
                 irregular_vertices=count, sample_vertex_indices=np.argwhere(bad)[:20].tolist(),
+                void_components=voids,
                 boundary_vertices=int(((codes != 0) & (codes != 255)).sum()),
-                rule='closed cubical boundary; one cycle in every boundary vertex link')
+                rule='closed cubical boundary; one cycle in every boundary vertex link; one shell (no closed void)')
 
 
 def connectivity_check(material):
