@@ -600,7 +600,7 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 
 **再確認**(検査の追加と既定の変更が B の試行列を変えないこと): §12.8 の B-2.4・B-2.0(と §12.3 の B-4.8)と同じ条件を、`--surface-only` を付けず既定 True で回し直した
 (`--single-cell-patience 1` は §12.8 と同じ停止則にするため)。3本は直列に回した。
-`.\.venv\Scripts\python.exe topopt_checkserify_hanger_fix.py --model models\hanger_bar_attachment.json --spacing {2.4|2.0|4.8} --target 2 --max-evaluations 1000 --no-memory-trace --single-cell-patience 1 --out output\stage4_peel\B-hanger-{2.4|2.0|4.8}mm-target2-theta0.5-cap0.2-recheck.json`
+`.\.venv\Scripts\python.exe topopt_checks\verify_hanger_fix.py --model models\hanger_bar_attachment.json --spacing {2.4|2.0|4.8} --target 2 --max-evaluations 1000 --no-memory-trace --single-cell-patience 1 --out output\stage4_peel\B-hanger-{2.4|2.0|4.8}mm-target2-theta0.5-cap0.2-recheck.json`
 (θ=0.5・上限0.2・予算1000。JSON の `git_head` は 2.4・2.0mm が `4424def`〈この変更の実装コミット〉、4.8mm は `fdfc8e7` に作業ツリーの未コミットのこの変更を載せたもの。3本とも `code_sha256` の `binary_search`・`acceptance` は同じ。その後 `acceptance.void_labels` の docstring 1行と `binary_search.py` の空白1つだけが変わった〈docstring を除いた AST が `4424def` と一致〉)。
 表の値は `topopt_checks/summarize_stage4.py` が JSON から出す。
 
@@ -621,6 +621,8 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 所要秒は参考値: 2.4mm は §12.8 が他の測定と並走した値(3,360 秒)、こちらは開始前に確認した限り他の重い python の並走が無く(空きメモリ 約15 GB / 32 GB、python は自分の1本と常駐の小さい2本のみ)2,553 秒だった。
 2.0mm は 5,300 秒で §12.8 の 4,967 秒より長い(条件が揃っていないので比較しない。並走の有無は測っていない)。
 生 JSON は `output/stage4_peel/B-hanger-{2.4,2.0,4.8}mm-target2-theta0.5-cap0.2-recheck.json`。
+
+2.4mm・2.0mm の再確認は前タスクで実施済み(確認 2026-09-19)。
 
 **空洞検査の費用**: `topopt_checks/measure_void_check_cost.py`(`design_space.derive` までで探索は回さない)で、設計空間の全材料マスクに対して5回ずつ測った(ms。最小 / 中央値)。
 どの設計空間にも閉じた空洞は無い(`void_components == 1`)ので、hanger は入口の `input_contradiction` にならない。
