@@ -121,7 +121,9 @@ CADソリッドとのブーリアンを毎回取っていた(`intersection_volum
 **探索の道筋。** hanger 4.8mm・評価予算60(`topopt_checks/verify_hanger_fix.py`)で、前計算あり/なしの採用マスクのハッシュ、
 体積、安全率、履歴の合否は **全部一致した**(採用マスクのハッシュ `10e2f355…`、1,104セル、体積120,196.7mm³、安全率5.398、60件の履歴の操作・合否・チェック結果。
 前計算なしはHEAD `3093f96`、ありは同じ作業ツリー。**既存記録(2026-09-17) `output/hanger_fix_verification/review-fixes-spacing-4.8-budget-60.json`
-(39,313セル・安全率146.1)は現HEADの探索と一致せず、比較の基準にならない。原因は未調査**)。探索の所要時間は 378秒 → 124秒(1評価あたり 6.3 → 2.1秒。
+(39,313セル・安全率146.1)は現HEADの探索と一致せず、比較の基準にならない。その記録の `git_head` は `946d88d` で、
+段階4がまだブロックの削除・追加・置換だった頃のもの(診断に `frontier`/`candidates` があり `reduction` が無い)。
+`174b4be` で段階4をエネルギー順の削減へ置き換えたので、採用形状が違うのは当然である**)。探索の所要時間は 378秒 → 124秒(1評価あたり 6.3 → 2.1秒。
 段階4の最終再検査〈旧経路〉を含む)。
 
 再現: `python topopt_checks/measure_region_overlaps.py --model models/hanger_bar_attachment.json --spacing 2.4 --out <出力先>.json`。
