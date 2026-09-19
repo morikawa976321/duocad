@@ -495,13 +495,11 @@ def test_the_energy_field_follows_the_cantilever_moment_and_is_zero_outside_mate
     assert fields == {}
 
 
-def _assert_peel_invariants(mask, conditions, *, no_void=False):
-    """peel の出力が満たすべき3つ(1成分・不正頂点0・全条件節点に支えあり)を、全体の判定で確かめる。
-    `no_void` なら閉じた空洞が無いこと(`surface_only` の peel の保証)も見る。"""
+def _assert_peel_invariants(mask, conditions):
+    """peel の出力が満たすべき4つ(1成分・不正頂点0・閉じた空洞なし・全条件節点に支えあり)を、全体の判定で確かめる。"""
     assert acceptance.connectivity_check(mask)['components'] == 1
     assert acceptance.boundary_check(mask)['irregular_vertices'] == 0
-    if no_void:
-        assert acceptance.void_components(mask) == 1
+    assert acceptance.void_components(mask) == 1
     assert acceptance.active_nodes(mask).ravel()[bs._anchor_node_ids(conditions)].all()
 
 
@@ -510,33 +508,30 @@ def _random_connected_mask(rng, shape, density=.7):
     return labels == 1 + int(np.argmax(np.bincount(labels.ravel())[1:])) if count else np.zeros(shape, bool)
 
 
-@pytest.mark.parametrize('surface_only', [False, True])
-def test_peel_output_is_one_component_with_regular_vertices_and_supported_anchors(surface_only):
+def test_peel_output_is_one_component_with_regular_vertices_no_void_and_supported_anchors():
     """落ちたら、peel の局所判定が全体の判定(6条件の幾何)とずれている。幾何の検算(島処理・
     `geometry_rejection`)が0件であることも同じケースで固定する。"""
     shape = (6, 5, 4)
     conditions = bar_conditions(shape=shape)
     anchors = bs._anchor_node_ids(conditions)
     rng = np.random.default_rng(20260919)
-    peeled_any = hollowed = 0
+    peeled_any = 0
     for _ in range(30):
         mask = np.ones(shape, bool)
         mask.setflags(write=False)
         for _ in range(4):
             order = rng.permutation(mask.size)  # 材料でないセルも混ぜる(飛ばされること)
             count = int(rng.integers(1, int(mask.sum())))
-            after, stats = bs.peel(mask, order, count, anchors, surface_only=surface_only)
-            _assert_peel_invariants(after, conditions, no_void=surface_only)
+            after, stats = bs.peel(mask, order, count, anchors)
+            _assert_peel_invariants(after, conditions)
             assert not (after & ~mask).any()
             assert stats.picked + stats.islands == mask.sum() - after.sum()
             survivors, diagnostics = bs.resolve_islands(after, conditions)
             assert bs._geometry_rejection(after, survivors, diagnostics, conditions) is None
             peeled_any += stats.picked
-            hollowed += acceptance.void_components(after) > 1
             after.setflags(write=False)
             mask = after
     assert peeled_any > 100  # 何も削れないケースだけで合格していない
-    assert (hollowed == 0) == surface_only  # 偽なら空洞ができる題材で、真だけが空洞を作らない
 
 
 def test_a_local_connectivity_pass_implies_the_global_one():
@@ -573,7 +568,7 @@ def test_peel_cuts_a_ring_once_through_the_global_check_and_refuses_the_second_c
     ring = ring_mask()
     assert acceptance.boundary_check(ring)['status'] == 'pass' and acceptance.connectivity_check(ring)['status'] == 'pass'
     order = np.array([int(np.ravel_multi_index(cell, ring.shape)) for cell in ((3, 6, 0), (3, 0, 0))])
-    after, stats = bs.peel(ring, order, 2, bs._anchor_node_ids(conditions), surface_only=False)
+    after, stats = bs.peel(ring, order, 2, bs._anchor_node_ids(conditions))
     assert (stats.picked, stats.islands, stats.skipped_connectivity, stats.global_checks) == (1, 0, 1, 2)
     assert not after[3, 6, 0] and after[3, 0, 0] and after.sum() == ring.sum() - 1
     _assert_peel_invariants(after, conditions)
@@ -587,24 +582,21 @@ def test_peel_removes_an_unloaded_dead_end_branch_as_an_island_in_one_call():
     stub[3, 2:, :] = True  # 幅1セル・長さ2セルの枝(付属部分の一部)
     mask = (design & ~appendage) | stub
     root_cells = [int(np.ravel_multi_index((3, 2, z), shape)) for z in (0, 1)]
-    after, stats = bs.peel(mask, np.array(root_cells), 8, bs._anchor_node_ids(conditions), surface_only=False)
+    after, stats = bs.peel(mask, np.array(root_cells), 8, bs._anchor_node_ids(conditions))
     assert not (after & stub).any()
     assert (stats.picked, stats.islands) == (2, 2) and stats.global_checks >= 1
     assert after.sum() == mask.sum() - stub.sum()
     _assert_peel_invariants(after, conditions)
 
 
-def test_peel_takes_interior_cells_only_when_surface_only_is_off():
-    """内部のセルは、surface_only が偽なら抜け(内部に空洞ができる)、真なら抜かない。"""
+def test_peel_never_takes_an_interior_cell():
+    """落ちたら、内部のセル(空の6近傍を持たない)が抜けて閉じた空洞ができる(中空構造を許容しない制約の破れ)。"""
     shape = (5, 5, 5)
     conditions = bar_conditions(shape=shape)
     anchors = bs._anchor_node_ids(conditions)
     centre = int(np.ravel_multi_index((2, 2, 2), shape))
     full = np.ones(shape, bool)
-    hollow, stats = bs.peel(full, np.array([centre]), 1, anchors, surface_only=False)
-    assert not hollow[2, 2, 2] and stats.picked == 1 and acceptance.void_components(hollow) == 2
-    _assert_peel_invariants(hollow, conditions)
-    kept, stats = bs.peel(full, np.array([centre]), 1, anchors, surface_only=True)
+    kept, stats = bs.peel(full, np.array([centre]), 1, anchors)
     assert kept.all() and (stats.picked, stats.skipped_surface) == (0, 1)
 
 
@@ -613,7 +605,7 @@ def test_peel_never_takes_the_last_material_cell_of_a_condition_node_and_leaves_
     conditions = bar_conditions(shape=shape)
     full = np.ones(shape, bool)
     full.setflags(write=False)
-    after, stats = bs.peel(full, np.arange(full.size), full.size, bs._anchor_node_ids(conditions), surface_only=False)
+    after, stats = bs.peel(full, np.arange(full.size), full.size, bs._anchor_node_ids(conditions))
     assert full.all() and 0 < stats.picked < full.size - 1
     assert stats.skipped_support > 0
     _assert_peel_invariants(after, conditions)
@@ -624,7 +616,7 @@ def test_peel_refuses_a_cell_whose_removal_leaves_an_irregular_vertex():
     mask = np.zeros((2, 2, 1), bool)
     mask[0, 0] = mask[1, 0] = mask[1, 1] = True
     after, stats = bs.peel(mask, np.array([int(np.ravel_multi_index((1, 0, 0), mask.shape))]), 1,
-                           np.zeros(0, dtype=np.int64), surface_only=False)
+                           np.zeros(0, dtype=np.int64))
     assert np.array_equal(after, mask) and (stats.picked, stats.skipped_manifold) == (0, 1)
 
 

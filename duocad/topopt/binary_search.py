@@ -736,7 +736,7 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
 
     # 設計空間そのものに閉じた空洞がある入力(除外領域が塊に包まれている等)は、空洞のある全材料が
     # 6条件の水密で落ちるので、探索を始めずに矛盾として止める。削って空洞を外へ通す候補は原理上ありうるが、
-    # 通路の幅は最小幅の制約と一体の話で扱わない(本人未確認の既定。docs/TOPOPT.md「中空構造を許容しない」)。
+    # 通路の幅は最小幅の制約と一体の話で扱わない(2026-09-20 本人承認。docs/TOPOPT.md「中空構造を許容しない」)。
     voids = acceptance.closed_voids(design_space_mask)
     if voids:
         return SearchResult(status='input_contradiction', termination='input_contradiction',
@@ -837,9 +837,6 @@ DEFAULT_STEP_EXPONENT = 0.5
 DEFAULT_MAX_STEP_RATIO = 0.2
 #: 削る順位に使うエネルギーをならす近傍の一辺(セル)。3 は自身と26近傍の材料平均。
 ENERGY_FILTER_SIZE = 3
-#: `peel` が内部の(空の6近傍を持たない)セルを抜かないか。中空構造を許容しない製品制約(2026-09-19 本人決定)なので真。
-#: 実測でも hanger の3解像度(4.8・2.4・2.0mm)とも偽より最終体積が小さい(計画書 §12.8・§12.9)。
-DEFAULT_SURFACE_ONLY = True
 #: 削ったセルが1つで安全率が落ちたとき、順位から外して次のセルを試すのを何セル続けたら収束とみなすか(`None` は順位が尽きるまで)。
 #: 16 は hanger 4.8mm で 1・4・16・無制限を測り、最終体積が最小(16 と無制限は同じ試行列で並び、小さい方を採った)だったから。
 #: 段階4のFEMは 1 の 33 回に対し 999 回(予算切れ)まで増える(計画書 §12.7)。
@@ -925,8 +922,7 @@ def _regular_after_removal(window: np.ndarray) -> bool:
     return not bad[_WINDOW_CENTRE_VERTICES].any()
 
 
-def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray, *,
-         surface_only: bool) -> tuple[np.ndarray, PeelStats]:
+def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray) -> tuple[np.ndarray, PeelStats]:
     """`order` を先頭から1回だけ歩き、各セルを**その時点のマスク**で判定して通ったらその場で消す。
 
     `count` 個(島として消えたぶんも数える)消えるか順位が尽きたら止める。`mask` が「1成分・全頂点が
@@ -936,7 +932,7 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
     - 多様体: 抜いた後の8頂点が全て正則(3×3×3 の窓で判定)。
     - 連結: 中心の材料6近傍が窓の中で連結なら通す。そうでなければマスク全体を数え直し、条件節点を支える
       セルが全て同じ1成分にあるときだけ通して、他の成分(島)を一緒に消す。
-    - `surface_only`: 空の6近傍(格子の外を含む)を持たないセルは抜かない(内部に空洞を作らない)。
+    - 表面: 空の6近傍(格子の外を含む)を持たないセルは抜かない(内部に空洞を作らない。中空構造を許容しない製品制約)。
       抜くセルは空の6近傍を持つので、抜いた後のそのセルは既存の空の成分に属し、島として消える成分も隣接する空につながる。
       閉じた空洞の無い `mask` からは閉じた空洞の無い候補ができる(`acceptance.boundary_check` の `void_components` が落ちない根拠)。
     """
@@ -975,7 +971,7 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
                 stats.skipped_support += 1
                 continue
         window = work[i:i + 3, j:j + 3, k:k + 3].copy()
-        if surface_only and all(window[p] for p in _WINDOW_NEIGHBOURS):
+        if all(window[p] for p in _WINDOW_NEIGHBOURS):
             stats.skipped_surface += 1
             continue
         window[1, 1, 1] = False
@@ -1082,7 +1078,6 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
                    *, max_evaluations: int, is_cancelled,
                    step_exponent: float = DEFAULT_STEP_EXPONENT,
                    max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
-                   surface_only: bool = DEFAULT_SURFACE_ONLY,
                    single_cell_patience: Optional[int] = DEFAULT_SINGLE_CELL_PATIENCE) -> SearchResult:
     """`initial.best_feasible` から、ひずみエネルギーの低い材料をまとめて削り続ける(段階4)。
 
@@ -1116,7 +1111,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     anchor_ids = _anchor_node_ids(conditions)
     steps: list[dict] = []
     reduction = dict(step_exponent=float(step_exponent), max_step_ratio=float(max_step_ratio),
-                     filter_size=ENERGY_FILTER_SIZE, surface_only=bool(surface_only), fem_solves=0,
+                     filter_size=ENERGY_FILTER_SIZE, fem_solves=0,
                      peel_calls=0, peel_seconds=0.0, peel_seconds_max=0.0, repeated_candidates=0,
                      single_cell_patience=single_cell_patience, safety_excluded_cells=0, adopted_after_exclusion=0,
                      geometry_rejections=[], stop_reason=None, steps=steps)
@@ -1152,7 +1147,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             return result('cancelled')
         gap_ratio = step_ratio(best.safety_factor, target, exponent=step_exponent, max_ratio=max_step_ratio)
         requested = max(1, int(gap_ratio * multiplier * int(best.mask.sum())))
-        candidate, peeled = peel(best.mask, order, requested, anchor_ids, surface_only=surface_only)
+        candidate, peeled = peel(best.mask, order, requested, anchor_ids)
         reduction['peel_calls'] += 1
         reduction['peel_seconds'] += peeled.seconds
         reduction['peel_seconds_max'] = max(reduction['peel_seconds_max'], peeled.seconds)
@@ -1230,7 +1225,6 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
                        max_candidates: Optional[int] = None,
                        step_exponent: float = DEFAULT_STEP_EXPONENT,
                        max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
-                       surface_only: bool = DEFAULT_SURFACE_ONLY,
                        single_cell_patience: Optional[int] = DEFAULT_SINGLE_CELL_PATIENCE,
                        is_cancelled=None) -> SearchResult:
     """初期合格探索(段階3)に続けて、ひずみエネルギーの低い材料を削って体積を減らす単一の探索入口(§3)。
@@ -1241,7 +1235,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     そこから `_reduce_volume` で体積削減を続ける。`max_evaluations` は**両段階を通した1本の予算**
     (§4.1「評価条件の識別子」と同じ思想で、初期探索と削減探索を別予算にしない)。
     `frontier_capacity` / `max_consecutive_adds` / `max_candidates` は段階3だけ、
-    `step_exponent` / `max_step_ratio` / `surface_only` / `single_cell_patience` は段階4だけが使う(`step_ratio` / `peel` / `_reduce_volume`)。
+    `step_exponent` / `max_step_ratio` / `single_cell_patience` は段階4だけが使う(`step_ratio` / `_reduce_volume`)。
 
     `is_cancelled` は引数無しで呼べる callable。段階3はブロックを1つ調べる前ごとと評価前、段階4は
     削る候補を作る前ごとに見る。真を返した時点の `best_feasible`(キャッシュ無しで検査済み)を返す
@@ -1258,4 +1252,4 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
         return initial
     return _reduce_volume(initial, design_space_mask, conditions, max_evaluations=max_evaluations,
                           is_cancelled=is_cancelled, step_exponent=step_exponent, max_step_ratio=max_step_ratio,
-                          surface_only=surface_only, single_cell_patience=single_cell_patience)
+                          single_cell_patience=single_cell_patience)

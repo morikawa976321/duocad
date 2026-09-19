@@ -91,7 +91,6 @@ def _save_masks(path: Path, space, table, best_mask) -> None:
 def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, skip_search: bool,
            step_exponent: float = binary_search.DEFAULT_STEP_EXPONENT,
            max_step_ratio: float = binary_search.DEFAULT_MAX_STEP_RATIO,
-           surface_only: bool = binary_search.DEFAULT_SURFACE_ONLY,
            single_cell_patience: int | None = binary_search.DEFAULT_SINGLE_CELL_PATIENCE, trace_memory: bool = True,
            save_masks: Path | None = None) -> dict:
     session = Session(None, 0.2, models_dir=model.resolve().parent)
@@ -103,7 +102,7 @@ def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, 
         code_sha256={name: _sha256(REPO / "duocad" / "topopt" / f"{name}.py")
                      for name in ("anchor", "binary_search", "acceptance", "design_space")},
         requested_spacing=spacing, target_safety_factor=target, max_evaluations=max_evaluations,
-        step_exponent=step_exponent, max_step_ratio=max_step_ratio, surface_only=surface_only,
+        step_exponent=step_exponent, max_step_ratio=max_step_ratio,
         single_cell_patience=single_cell_patience,
     )
     bundle = optimize_run.build_conditions(document)
@@ -176,7 +175,6 @@ def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, 
         with patch.object(acceptance, "inspect", counted_inspect):
             result = binary_search.find_best_feasible(space.mask, conditions, max_evaluations=max_evaluations,
                                                       step_exponent=step_exponent, max_step_ratio=max_step_ratio,
-                                                      surface_only=surface_only,
                                                       single_cell_patience=single_cell_patience)
         seconds = time.perf_counter() - started
         peak = 0
@@ -233,8 +231,6 @@ def main() -> int:
     parser.add_argument("--max-step-ratio", type=float, default=binary_search.DEFAULT_MAX_STEP_RATIO)
     parser.add_argument("--no-memory-trace", action="store_true",
                         help="tracemalloc を使わない(numpy の確保を遅くするので、所要秒を測るときに付ける。メモリ実測は0になる)")
-    parser.add_argument("--surface-only", action=argparse.BooleanOptionalAction, default=binary_search.DEFAULT_SURFACE_ONLY,
-                        help="段階4の peel が内部のセル(空の6近傍を持たない)を抜かない(既定は実装の既定と同じ)")
     parser.add_argument("--single-cell-patience", type=_patience, default=binary_search.DEFAULT_SINGLE_CELL_PATIENCE,
                         help="段階4で、削ったセルが1つで安全率が落ちたセルを外して続けるのを何セルで打ち切るか(整数。unlimited は順位が尽きるまで)")
     parser.add_argument("--save-masks", type=Path, default=None,
@@ -248,7 +244,7 @@ def main() -> int:
             pass
     record = verify(args.model, args.spacing, args.target, args.max_evaluations, skip_search=args.skip_search,
                     step_exponent=args.step_exponent, max_step_ratio=args.max_step_ratio,
-                    surface_only=args.surface_only, single_cell_patience=args.single_cell_patience,
+                    single_cell_patience=args.single_cell_patience,
                     trace_memory=not args.no_memory_trace,
                     save_masks=args.save_masks)
     args.out.parent.mkdir(parents=True, exist_ok=True)

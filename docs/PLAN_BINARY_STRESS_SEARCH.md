@@ -587,7 +587,7 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 - 6条件の1番目(報告キー `watertight`、`acceptance.boundary_check`)を「頂点が全て正則、かつ殻が1つ」に広げた。報告に `void_components`(pad 後の空の成分数)を持ち、
   `irregular_vertices == 0 and void_components == 1` で合格。閉じた空洞の境界も閉じていて頂点は正則なので、§2 の1番目は空洞を通していた。7条件には増やしていない(条件の数え方と報告キーは不変)。
 - `find_initial_feasible` の入口で、全設計空間のマスクに閉じた空洞があれば `input_contradiction`。`diagnostics['closed_voids']` に空洞の数と、大きい順の `cells` と `representative_cell`
-  (画面の一言は「除外ソリッドが塊に包まれていないか、塊の外へつなげるか除外を外す」)。**除外領域が塊に完全に包まれている入力をこう扱うのは 2026-09-19 のタスクで置いた既定で、本人未確認。**
+  (画面の一言は「除外ソリッドが塊に包まれていないか、塊の外へつなげるか除外を外す」)。**除外領域が塊に完全に包まれている入力をこう扱うのは 2026-09-19 のタスクで置いた既定で、2026-09-20 に本人承認。**
 - `peel` と `resolve_islands` は変えていない。`surface_only=True` の `peel` は構成上空洞を作らない: 抜くセルは空の6近傍を持つので、抜いた後のそのセルは既存の空の成分に属し、
   島として消える成分も隣接する空につながる。ランダムな題材での不変条件テストに `void_components == 1` を足して固定した(`surface_only=False` では空洞ができることも同じ題材で確かめている)。
 
@@ -638,3 +638,14 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 生 JSON は `output/stage4_peel/void-check-cost.json`。
 
 **やっていないこと**: `single_cell_patience` の既定の再測定(B に 4〜8 を重ねて 2.4mm で測る)と歩幅規則(上限 r_max・弾性)、メッシュ化以降での空洞検査、細い通路で外へつながる袋の禁止。
+
+### 12.10 B 以外の経路を削除(2026-09-20)
+
+本人指示(2026-09-20)で、段階4の peel から内部のセルを抜く経路(A、`surface_only=False`)を削除した。`peel` は常に表面のセル
+(空の6近傍を持つ)しか抜かず、`DEFAULT_SURFACE_ONLY`・`_reduce_volume` / `find_best_feasible` の `surface_only` 引数・
+`diagnostics['reduction']['surface_only']`・`verify_hanger_fix.py --surface-only` / `--no-surface-only` は無くなった。
+`summarize_stage4.py` は古い JSON の `surface_only` を読むだけなので残してある。
+§12.3・§12.8 の A と §12.7 の `--no-surface-only` の測定は `4cd9fdb` 以前のコードでしか再現できない(生 JSON は `output/stage4_peel/` と
+`output/stage4_stop_rule/` に残る)。`topopt_checks/measure_warm_start.py` の peel も表面だけになった(`docs/TOPOPT_SPEED.md` の warm start の
+表は内部も抜けた時点の値)。
+除外領域が塊に完全に包まれている入力を入口で `input_contradiction` にする扱い(§12.9)は 2026-09-20 に本人が承認した。

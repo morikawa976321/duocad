@@ -166,7 +166,7 @@ def main():
         if free_gb() < args.min_free_gb:
             record['aborted'] = '空きメモリ %.2fGB' % free_gb()
             break
-        candidate, _ = binary_search.peel(mask, order, count, anchor_ids, surface_only=False)
+        candidate, _ = binary_search.peel(mask, order, count, anchor_ids)
         removed = int(mask.sum() - candidate.sum())
         if removed == 0:
             continue
@@ -185,7 +185,7 @@ def main():
         if free_gb() < args.min_free_gb:
             record['aborted'] = '空きメモリ %.2fGB (連鎖 %d 回目)' % (free_gb(), index)
             break
-        candidate, _ = binary_search.peel(current, current_order, 1, anchor_ids, surface_only=False)
+        candidate, _ = binary_search.peel(current, current_order, 1, anchor_ids)
         removed = int(current.sum() - candidate.sum())
         if removed == 0:
             break
