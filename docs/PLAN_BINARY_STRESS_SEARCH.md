@@ -402,7 +402,7 @@ round-robin(先頭の親から次の子を1つ取り、その親を末尾へ回�
 ### 12.3 hanger 4.8mm の測定
 
 `.\.venv\Scripts\python.exe topopt_checks\verify_hanger_fix.py --model models\hanger_bar_attachment.json --spacing 4.8 --target 2 --max-evaluations 1000 --no-memory-trace --[no-]surface-only --out output\stage4_peel\{A,B}-hanger-4.8mm-target2-theta0.5-cap0.2.json`
-(θ=0.5・上限0.2・予算1000。コードは `4ba147c`〈JSON の `git_head`〉。A・B は同時に2プロセスで走らせた)。
+(θ=0.5・上限0.2・予算1000。コードは `4ba147c`〈JSON の `git_head`〉で、その後の `binary_search.py` の変更はコメント・docstring だけ〈docstring を除いた AST が一致〉。A・B は同時に2プロセスで走らせた)。
 表の値は `topopt_checks/summarize_stage4.py` が JSON から出す(基準の値も同じ式で出し直して §11.3 と一致を確認した)。
 
 | 項目 | 基準(§11.3。`select_removal` + 修復) | A: `surface_only=False` | B: `surface_only=True` |

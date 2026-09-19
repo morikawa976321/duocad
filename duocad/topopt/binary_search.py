@@ -965,7 +965,9 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
                 continue
             islands = (labels > 0) & (labels != keep)
             island_cells = int(islands.sum())
-            inner[islands] = False  # 島は条件節点に接するセルを持たないので、支え数はそのままでよい
+            # 島は条件節点に接するセルを持たないので、支え数はそのままでよい。島と保持成分は辺・頂点でも接しない
+            # (接していれば、切り離したセルの頂点の正則判定で落ちている)ので、島を消しても頂点は正則のまま。
+            inner[islands] = False
         if corners is not None:
             for n in corners:
                 support_flat[n] -= 1
