@@ -13,6 +13,18 @@ import json
 from pathlib import Path
 
 
+def max_safety_streak(steps: list) -> int:
+    """採用を挟まず、削ったセルが1つで安全率が落ちた試行が続いた最長の回数(`single_cell_patience` がこれ以下なら止まる)。"""
+    longest = streak = 0
+    for step in steps:
+        if step["outcome"] == "accepted":
+            streak = 0
+        elif step["peel"]["picked"] == 1 and "safety" in step["failed"]:
+            streak += 1
+            longest = max(longest, streak)
+    return longest
+
+
 def summarize(record: dict) -> dict:
     search = record["search"]
     reduction = search["diagnostics"]["reduction"]
@@ -31,7 +43,8 @@ def summarize(record: dict) -> dict:
     return dict(
         surface_only=record.get("surface_only"), single_cell_patience=reduction.get("single_cell_patience", "n/a"),
         safety_excluded_cells=reduction.get("safety_excluded_cells"),
-        adopted_after_exclusion=reduction.get("adopted_after_exclusion"), git_head=record.get("git_head"),
+        adopted_after_exclusion=reduction.get("adopted_after_exclusion"),
+        max_safety_streak=max_safety_streak(steps) if "peel" in (steps[0] if steps else {}) else None, git_head=record.get("git_head"),
         termination=search["termination"], stop_reason=reduction["stop_reason"],
         stage4_fem=reduction["fem_solves"], evaluations=search["evaluations"], stage4_steps=len(steps),
         seconds=search["seconds"], final_mm3=best.get("material_mm3"), final_cells=best.get("cells"),

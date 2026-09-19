@@ -446,8 +446,8 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 
 `step_exponent` / `max_step_ratio` / `filter_size` / `surface_only` / `fem_solves` / `peel_calls` / `peel_seconds`(合計)/
 `peel_seconds_max` / `repeated_candidates` / `single_cell_patience`(`None` は無制限)/ `safety_excluded_cells`(削ったセルが1つで
-安全率が落ち、順位から外して続けたセルの数。止まる原因になった最後の1セルは含まない)/ `adopted_after_exclusion`(外したセルが
-1つ以上あった後に、次の採用に至った回数)/ `geometry_rejections`(候補ごとに `step`・`components`・`surviving_components`・
+安全率が落ち、順位から外して続けたセルの数。止まる原因になった最後の1セルは含まない)/ `adopted_after_exclusion`(安全率で外したセルが
+採用を挟まず1つ以上続いた後に、採用に至った回数)/ `geometry_rejections`(候補ごとに `step`・`components`・`surviving_components`・
 `missing`・`removed_islands`)/ `stop_reason`(`safety_at_single_cell` / `no_removable_cell` / `seed_energy_unavailable`。予算切れ・中断は
 `None` で、`SearchResult.termination` が `evaluation_limit` / `cancelled`)/ `final_region_recheck` / `steps`。
 
@@ -498,7 +498,7 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 - 幾何の不合格は全て0件。全ての最終の再検査は合格・ハッシュ一致で、保持・除外の旧経路での取り直しも合格。peel の合計は 5.3 / 10.6 / 21.4 / 20.6 秒(所要秒の1%未満)。
 - **所要秒は並走条件が揃っていない参考値**(他セッションの hanger 2.0mm 探索2本が全期間並走。1 の後半に 4 が重なり、4・16・無制限は互いに重なって走った〈同時に最大3本〉。§12.3 の A は 140.6 秒だったので、同じ試行列の patience=1 が並走で 271 秒に伸びた)。比較には FEM 回数を使う。
 - **1 の試行列は 4 の先頭33回で、4 と 16 と無制限は 296 回目まで同じ試行列を辿る。** 4 はそこで4回続けて落ちて止まり(2.378)、16 と無制限は続けた。**16 と無制限は 1000 回の予算内で完全に同じ試行列**
-  (連続して安全率で落ちた最長が7回で、16 に達しなかったため。8 以上の指定は、この予算内ならすべて無制限と同じ)。
+  (採用を挟まず単セルの安全率で落ちた最長が7回〈`summarize_stage4.py` の `max_safety_streak`〉で、16 に達しなかったため。8 以上の指定は、この予算内ならすべて無制限と同じ)。
 - 体積の推移(16。FEM回数→採用済みの最終体積・安全率): 100→69,135・2.382 / 200→66,195・2.394 / 296→64,127・2.378 / 400→62,167・2.374 / 500→59,881・2.301 / 750→55,743・2.097 / 999→51,715・2.016。
   基準の 53,130 mm³ を下回ったのは FEM 919 回目。FEM 100 回目以降は採用 156 回で 160 セルしか削っておらず(採用1回あたり約1セル)、終盤は不合格が大半を占める(不合格は999試行中801)。
 - 16 は目標の 2 まで 0.8% の安全率を残して予算切れになったので、予算が足りれば更に進む(何回で収束するかは測っていない)。

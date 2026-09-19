@@ -1060,8 +1060,8 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     後退倍率を2倍に戻す(上限1)。不合格・計算失敗なら形状を変えず、順位から削ったセルが2つ以上なら
     後退倍率を半分にして同じ順位から歩き直す(再求解しない)。1つだけなら、そのセルを**この形状の間だけ**
     順位から外して次のセルを試す(採用で形が変わったら順位を作り直すので解除)。安全率で落ちたセルが
-    採用を挟まず `single_cell_patience` 個に達したら `converged`(`stop_reason='safety_at_single_cell'`。
-    `None` は数えない)。計算失敗・保持の重なりの不合格は数えない。順位を歩いて1セルも抜けなければ
+    採用を挟まず `single_cell_patience` 個に達したら `stop_reason='safety_at_single_cell'` で `converged`
+    (`None` は数えない)。計算失敗・保持の重なりの不合格は数えない。順位を歩いて1セルも抜けなければ
     `converged`(`no_removable_cell`)。
     どの経路でも有限回で止まる: 採用のたびに材料が1セル以上減る。採用の間では、k ≥ 2 の不合格は後退倍率を
     半分にして k を(有限回で k=1 まで)下げ、k=1 の不合格は順位を1セル縮めるので、順位は尽きる。
