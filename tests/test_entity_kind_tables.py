@@ -25,13 +25,13 @@ ENTITY_KINDS_TS = REPO_ROOT / "web" / "src" / "entityKinds.ts"
 def _ts_entity_kind_table_keys() -> set[str]:
     """`web/src/entityKinds.ts` の `ENTITY_KIND_TABLE` の**トップレベルキー**をソースから拾う。
 
-    `const ENTITY_KIND_TABLE` の宣言から `export const ENTITY_KINDS` の手前までに区間を
+    `const ENTITY_KIND_TABLE` の宣言から `const VERB_TO_KIND` の手前までに区間を
     絞ってから、2スペース下げの `<name>: {` 行だけを拾う(内側のメソッド定義は名前の後ろが
     `(` なので混ざらない)。
     """
     text = ENTITY_KINDS_TS.read_text(encoding="utf-8")
     start = text.index("const ENTITY_KIND_TABLE")
-    end = text.index("export const ENTITY_KINDS")
+    end = text.index("const VERB_TO_KIND")
     block = text[start:end]
     return set(re.findall(r"^  (\w+): \{$", block, re.M))
 
@@ -82,7 +82,7 @@ def _ts_point_keys() -> dict:
     """
     text = ENTITY_KINDS_TS.read_text(encoding="utf-8")
     start = text.index("const ENTITY_KIND_TABLE")
-    end = text.index("export const ENTITY_KINDS")
+    end = text.index("const VERB_TO_KIND")
     block = text[start:end]
     found: dict = {}
     pattern = "^  (\w+): \{\n    pointKeys: (\[.*\]),$"

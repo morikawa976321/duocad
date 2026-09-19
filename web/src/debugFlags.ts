@@ -31,8 +31,6 @@ export interface DebugFlags {
   voxel: boolean
 }
 
-export const NO_DEBUG_FLAGS: DebugFlags = { space: false, anchors: false, voxel: false }
-
 /**
  * クエリ文字列(`location.search`)からフラグを読む。
  *
