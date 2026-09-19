@@ -591,6 +591,21 @@ def test_a_preserve_lost_by_the_peel_is_a_geometry_rejection_without_fem_and_the
     geometry_steps = [step for step in reduction['steps'] if step['failed'] == ['geometry']]
     assert len(geometry_steps) == len(reduction['geometry_rejections'])
     assert reduction['fem_solves'] == len(reduction['steps']) - len(geometry_steps)
+    assert reduction['repeated_candidates'] > 0  # 順位が尽きて同じ候補に戻る場面を踏んでいる
+    stage4 = result.history[1:]
+    assert len({(trial.parent, trial.mask_hash) for trial in stage4}) == len(stage4)  # 同じ形から同じ候補を2度評価しない
+
+
+def test_a_candidate_split_into_components_is_reported_as_a_geometry_rejection_with_its_reason():
+    """`peel` の不変条件が破れて候補が割れていたときの検算(段階4のループはこれを不合格として数える)。"""
+    conditions = bar_conditions(shape=(5, 2, 2))
+    candidate = np.zeros((5, 2, 2), bool)
+    candidate[0] = candidate[4] = True  # 固定面側と荷重面側に分かれた2成分
+    survivors, diagnostics = bs.resolve_islands(candidate, conditions)
+    rejection = bs._geometry_rejection(candidate, survivors, diagnostics, conditions)
+    assert rejection['components'] == 2 and rejection['surviving_components'] == 0
+    whole = np.ones((5, 2, 2), bool)
+    assert bs._geometry_rejection(whole, *bs.resolve_islands(whole, conditions), conditions) is None
 
 
 def test_rejected_steps_halve_the_step_accepted_ones_double_it_and_a_single_cell_safety_failure_converges(monkeypatch):

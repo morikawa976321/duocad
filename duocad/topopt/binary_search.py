@@ -5,7 +5,7 @@
 (`acceptance.inspect`)へ合格する候補を見つけて `best_feasible` に確定するところまで
 (段階3、「見つける」だけ)。`find_best_feasible` はそこから、合格形状を解いた変位の要素エネルギーが
 低い材料を、安全率の余裕に応じた割合でまとめて削り、6条件に合格するたびに `best_feasible` を
-更新する(段階4、「小さくする」。計画書§11)。前者は後者の第一段としてそのまま使われる。
+更新する(段階4、「小さくする」。計画書§11・§12)。前者は後者の第一段としてそのまま使われる。
 
 責務の分け方(§5): 候補生成は§4.3の軸整列ブロック、島処理は§4.4、6条件の判定は
 `acceptance.inspect` そのもの(このモジュールは6条件を再実装しない)。
@@ -807,7 +807,7 @@ DEFAULT_STEP_EXPONENT = 0.5
 DEFAULT_MAX_STEP_RATIO = 0.2
 #: 削る順位に使うエネルギーをならす近傍の一辺(セル)。3 は自身と26近傍の材料平均。
 ENERGY_FILTER_SIZE = 3
-#: `peel` が内部の(空の6近傍を持たない)セルを抜かないか。既定の決め方と実測は計画書 §12。
+#: `peel` が内部の(空の6近傍を持たない)セルを抜かないか。真は hanger 4.8mm で最終体積が小さいが段階4のFEMが多いので、既定は偽(計画書 §12.4)。
 DEFAULT_SURFACE_ONLY = False
 _CORNERS = tuple(product(range(2), repeat=3))
 
@@ -965,7 +965,7 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
                 continue
             islands = (labels > 0) & (labels != keep)
             island_cells = int(islands.sum())
-            inner[islands] = False
+            inner[islands] = False  # 島は条件節点に接するセルを持たないので、支え数はそのままでよい
         if corners is not None:
             for n in corners:
                 support_flat[n] -= 1
