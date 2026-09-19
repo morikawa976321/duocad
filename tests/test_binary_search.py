@@ -7,6 +7,7 @@ from collections import deque
 import numpy as np
 import pytest
 from build123d import Box, Pos
+from scipy import ndimage
 
 from duocad.topopt import acceptance, anchor, fem, stress, voxelize
 from duocad.topopt import binary_search as bs
@@ -433,28 +434,132 @@ def test_the_energy_field_follows_the_cantilever_moment_and_is_zero_outside_mate
     assert fields == {}
 
 
-def test_select_removal_never_takes_the_last_material_cell_of_a_condition_node():
+def _assert_peel_invariants(mask, conditions):
+    """peel の出力が満たすべき3つ(1成分・不正頂点0・全条件節点に支えあり)を、全体の判定で確かめる。"""
+    assert acceptance.connectivity_check(mask)['components'] == 1
+    assert acceptance.boundary_check(mask)['irregular_vertices'] == 0
+    assert acceptance.active_nodes(mask).ravel()[bs._anchor_node_ids(conditions)].all()
+
+
+def _random_connected_mask(rng, shape, density=.7):
+    labels, count = ndimage.label(rng.random(shape) < density, structure=bs.NEIGHBOURHOOD_STRUCTURE)
+    return labels == 1 + int(np.argmax(np.bincount(labels.ravel())[1:])) if count else np.zeros(shape, bool)
+
+
+@pytest.mark.parametrize('surface_only', [False, True])
+def test_peel_output_is_one_component_with_regular_vertices_and_supported_anchors(surface_only):
+    """落ちたら、peel の局所判定が全体の判定(6条件の幾何)とずれている。幾何の検算(島処理・
+    `geometry_rejection`)が0件であることも同じケースで固定する。"""
+    shape = (6, 5, 4)
+    conditions = bar_conditions(shape=shape)
+    anchors = bs._anchor_node_ids(conditions)
+    rng = np.random.default_rng(20260919)
+    peeled_any = 0
+    for _ in range(30):
+        mask = np.ones(shape, bool)
+        mask.setflags(write=False)
+        for _ in range(4):
+            order = rng.permutation(mask.size)  # 材料でないセルも混ぜる(飛ばされること)
+            count = int(rng.integers(1, int(mask.sum())))
+            after, stats = bs.peel(mask, order, count, anchors, surface_only=surface_only)
+            _assert_peel_invariants(after, conditions)
+            assert not (after & ~mask).any()
+            assert stats.picked + stats.islands == mask.sum() - after.sum()
+            survivors, diagnostics = bs.resolve_islands(after, conditions)
+            assert bs._geometry_rejection(after, survivors, diagnostics, conditions) is None
+            peeled_any += stats.picked
+            after.setflags(write=False)
+            mask = after
+    assert peeled_any > 100  # 何も削れないケースだけで合格していない
+
+
+def test_a_local_connectivity_pass_implies_the_global_one():
+    """落ちたら、局所判定(3×3×3 の窓)が通したセルを抜くとマスク全体が割れる。"""
+    rng = np.random.default_rng(7)
+    verdicts = set()
+    for _ in range(12):
+        mask = _random_connected_mask(rng, (6, 6, 6))
+        padded = np.pad(mask, 1)
+        for i, j, k in np.argwhere(mask):
+            window = padded[i:i + 3, j:j + 3, k:k + 3].copy()
+            window[1, 1, 1] = False
+            local = bs._neighbours_stay_connected(window)
+            rest = mask.copy()
+            rest[i, j, k] = False
+            globally = ndimage.label(rest, structure=bs.NEIGHBOURHOOD_STRUCTURE)[1] == 1 if rest.any() else True
+            if local:
+                assert globally
+            verdicts.add((local, globally))
+    assert {(True, True), (False, True), (False, False)} <= verdicts  # 局所で通らないが全体では通るセルもある
+
+
+def ring_mask():
+    """x-y 平面の一周(7×7 の外周、厚さ1セル)。固定面(x最小)と荷重面(x最大)の節点は全て外周の材料に接する。"""
+    mask = np.zeros((7, 7, 1), bool)
+    mask[[0, 6], :, :] = True
+    mask[:, [0, 6], :] = True
+    return mask
+
+
+def test_peel_cuts_a_ring_once_through_the_global_check_and_refuses_the_second_cut():
+    """1本目の切断はマスク全体を数え直して通り、2本目は条件節点の支えが2成分に分かれるので通らない。"""
+    conditions = bar_conditions(shape=(7, 7, 1))
+    ring = ring_mask()
+    assert acceptance.boundary_check(ring)['status'] == 'pass' and acceptance.connectivity_check(ring)['status'] == 'pass'
+    order = np.array([int(np.ravel_multi_index(cell, ring.shape)) for cell in ((3, 6, 0), (3, 0, 0))])
+    after, stats = bs.peel(ring, order, 2, bs._anchor_node_ids(conditions), surface_only=False)
+    assert (stats.picked, stats.islands, stats.skipped_connectivity, stats.global_checks) == (1, 0, 1, 2)
+    assert not after[3, 6, 0] and after[3, 0, 0] and after.sum() == ring.sum() - 1
+    _assert_peel_invariants(after, conditions)
+
+
+def test_peel_removes_an_unloaded_dead_end_branch_as_an_island_in_one_call():
+    """荷重の通らない袋小路の枝は、根元のセルを抜いた時点で島になり、1回の peel で丸ごと消える(数に入る)。"""
+    conditions, design, appendage = appendage_conditions()
+    shape = design.shape
+    stub = np.zeros(shape, bool)
+    stub[3, 2:, :] = True  # 幅1セル・長さ2セルの枝(付属部分の一部)
+    mask = (design & ~appendage) | stub
+    root_cells = [int(np.ravel_multi_index((3, 2, z), shape)) for z in (0, 1)]
+    after, stats = bs.peel(mask, np.array(root_cells), 8, bs._anchor_node_ids(conditions), surface_only=False)
+    assert not (after & stub).any()
+    assert (stats.picked, stats.islands) == (2, 2) and stats.global_checks >= 1
+    assert after.sum() == mask.sum() - stub.sum()
+    _assert_peel_invariants(after, conditions)
+
+
+def test_peel_takes_interior_cells_only_when_surface_only_is_off():
+    """内部のセルは、surface_only が偽なら抜け(内部に空洞ができる)、真なら抜かない。"""
+    shape = (5, 5, 5)
+    conditions = bar_conditions(shape=shape)
+    anchors = bs._anchor_node_ids(conditions)
+    centre = int(np.ravel_multi_index((2, 2, 2), shape))
+    full = np.ones(shape, bool)
+    hollow, stats = bs.peel(full, np.array([centre]), 1, anchors, surface_only=False)
+    assert not hollow[2, 2, 2] and stats.picked == 1
+    _assert_peel_invariants(hollow, conditions)
+    kept, stats = bs.peel(full, np.array([centre]), 1, anchors, surface_only=True)
+    assert kept.all() and (stats.picked, stats.skipped_surface) == (0, 1)
+
+
+def test_peel_never_takes_the_last_material_cell_of_a_condition_node_and_leaves_its_input_alone():
     shape = (4, 2, 2)
     conditions = bar_conditions(shape=shape)
     full = np.ones(shape, bool)
-    anchors = bs._anchor_node_ids(conditions)
-    order = np.arange(full.size)
-    picked = bs.select_removal(full, order, full.size, anchors, excluded={5})
-    assert 5 not in picked.tolist() and 0 < picked.size < full.size - 1
-    left = full.copy()
-    left.ravel()[picked] = False
-    assert acceptance.active_nodes(left).ravel()[anchors].all()
+    full.setflags(write=False)
+    after, stats = bs.peel(full, np.arange(full.size), full.size, bs._anchor_node_ids(conditions), surface_only=False)
+    assert full.all() and 0 < stats.picked < full.size - 1
+    assert stats.skipped_support > 0
+    _assert_peel_invariants(after, conditions)
 
 
-def test_restore_irregular_brings_back_only_removed_cells_until_the_boundary_is_watertight():
-    parent = np.ones((6, 6, 6), bool)
-    candidate = parent.copy()
-    candidate[1:5, 1:5, 1:5] = False
-    candidate[1, 1, 1] = candidate[2, 2, 2] = True  # 空洞の隅に付いたセルと、それに頂点だけで接する浮いたセル
-    assert acceptance.boundary_check(candidate)['status'] == 'fail'
-    repaired = bs.restore_irregular(candidate, parent)
-    assert acceptance.boundary_check(repaired)['status'] == 'pass'
-    assert np.all(repaired <= parent) and np.all(candidate <= repaired) and repaired.sum() < parent.sum()
+def test_peel_refuses_a_cell_whose_removal_leaves_an_irregular_vertex():
+    """L字の折れ目のセルを抜くと残る2セルが辺だけで接する(頂点の多様体条件を破る)ので、連結性より先に落ちる。"""
+    mask = np.zeros((2, 2, 1), bool)
+    mask[0, 0] = mask[1, 0] = mask[1, 1] = True
+    after, stats = bs.peel(mask, np.array([int(np.ravel_multi_index((1, 0, 0), mask.shape))]), 1,
+                           np.zeros(0, dtype=np.int64), surface_only=False)
+    assert np.array_equal(after, mask) and (stats.picked, stats.skipped_manifold) == (0, 1)
 
 
 def test_reduction_strips_the_unloaded_appendage_and_keeps_every_condition_supported():
@@ -467,7 +572,25 @@ def test_reduction_strips_the_unloaded_appendage_and_keeps_every_condition_suppo
     assert acceptance.active_nodes(best.mask).ravel()[bs._anchor_node_ids(conditions)].all()
     recheck = acceptance.inspect(best.mask, best.before_mask, conditions.grid, **conditions.inspect_kwargs(bbox_cache=None))
     assert recheck['status'] == 'pass' and recheck['material_sha256'] == best.mask_hash
-    assert result.diagnostics['reduction']['fem_solves'] < result.evaluations
+    assert result.diagnostics['reduction']['geometry_rejections'] == []
+    assert not any(trial.outcome == 'no_component' for trial in result.history[1:])
+
+
+def test_a_preserve_lost_by_the_peel_is_a_geometry_rejection_without_fem_and_the_search_still_converges():
+    """`peel` は保持の重なりを見ない。落ちる候補は FEM の前に幾何の不合格として数えられ、
+    k=1 でも落ちるセルはその形状の間だけ飛ばされて、同じ候補を解き直し続けない。"""
+    conditions, design, _ = appendage_conditions()
+    keep_cell = Pos(4.5, 3.5, 0.5) * Box(1., 1., 1.)  # 付属部分の1セル (4, 3, 0)
+    conditions = dataclasses.replace(conditions, preserves=[('keep', keep_cell.wrapped)])
+    result = bs.find_best_feasible(design, conditions, max_evaluations=300)
+    reduction = result.diagnostics['reduction']
+    assert result.termination == 'converged' and reduction['final_region_recheck'] == 'pass'
+    assert result.best_feasible.mask[4, 3, 0]
+    assert reduction['geometry_rejections'] and all(
+        row['missing'] == ['preserve'] and row['components'] == 1 for row in reduction['geometry_rejections'])
+    geometry_steps = [step for step in reduction['steps'] if step['failed'] == ['geometry']]
+    assert len(geometry_steps) == len(reduction['geometry_rejections'])
+    assert reduction['fem_solves'] == len(reduction['steps']) - len(geometry_steps)
 
 
 def test_rejected_steps_halve_the_step_accepted_ones_double_it_and_a_single_cell_safety_failure_converges(monkeypatch):
@@ -493,11 +616,11 @@ def test_rejected_steps_halve_the_step_accepted_ones_double_it_and_a_single_cell
     for step, following in zip(steps, steps[1:]):
         if step['outcome'] == 'accepted':
             assert following['multiplier'] == min(1.0, 2 * step['multiplier'])
-        elif step['selected_cells'] > 1:
+        elif step['peel']['picked'] > 1:
             assert following['multiplier'] == step['multiplier'] / 2
         else:
             assert following['multiplier'] == step['multiplier']
-    assert steps[-1]['selected_cells'] == 1 and 'safety' in steps[-1]['failed']
+    assert steps[-1]['peel']['picked'] == 1 and 'safety' in steps[-1]['failed']
 
 
 def test_a_computation_failure_is_not_accepted_and_does_not_stop_the_reduction(monkeypatch):
@@ -540,7 +663,12 @@ def test_reduction_is_deterministic_for_the_same_input_and_budget():
     second = bs.find_best_feasible(design, conditions, max_evaluations=30)
     assert first.evaluations == second.evaluations and first.termination == second.termination
     assert first.best_feasible.mask_hash == second.best_feasible.mask_hash
-    assert first.diagnostics['reduction']['steps'] == second.diagnostics['reduction']['steps']
+
+    def untimed(result):
+        return [dict(step, peel={k: v for k, v in step['peel'].items() if k != 'seconds'})
+                for step in result.diagnostics['reduction']['steps']]
+
+    assert untimed(first) == untimed(second)
 
 
 def test_evaluation_budget_exhaustion_keeps_the_best_feasible_found_so_far():

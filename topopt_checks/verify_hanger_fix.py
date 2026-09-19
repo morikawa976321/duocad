@@ -91,6 +91,7 @@ def _save_masks(path: Path, space, table, best_mask) -> None:
 def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, skip_search: bool,
            step_exponent: float = binary_search.DEFAULT_STEP_EXPONENT,
            max_step_ratio: float = binary_search.DEFAULT_MAX_STEP_RATIO,
+           surface_only: bool = binary_search.DEFAULT_SURFACE_ONLY, trace_memory: bool = True,
            save_masks: Path | None = None) -> dict:
     session = Session(None, 0.2, models_dir=model.resolve().parent)
     session.open_document(model.name)
@@ -101,7 +102,7 @@ def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, 
         code_sha256={name: _sha256(REPO / "duocad" / "topopt" / f"{name}.py")
                      for name in ("anchor", "binary_search", "acceptance", "design_space")},
         requested_spacing=spacing, target_safety_factor=target, max_evaluations=max_evaluations,
-        step_exponent=step_exponent, max_step_ratio=max_step_ratio,
+        step_exponent=step_exponent, max_step_ratio=max_step_ratio, surface_only=surface_only,
     )
     bundle = optimize_run.build_conditions(document)
 
@@ -167,14 +168,18 @@ def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, 
             inspect_calls["n"] += 1
             return original_inspect(*args, **kwargs)
 
-        tracemalloc.start()
+        if trace_memory:
+            tracemalloc.start()
         started = time.perf_counter()
         with patch.object(acceptance, "inspect", counted_inspect):
             result = binary_search.find_best_feasible(space.mask, conditions, max_evaluations=max_evaluations,
-                                                      step_exponent=step_exponent, max_step_ratio=max_step_ratio)
+                                                      step_exponent=step_exponent, max_step_ratio=max_step_ratio,
+                                                      surface_only=surface_only)
         seconds = time.perf_counter() - started
-        _, peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
+        peak = 0
+        if trace_memory:
+            _, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
         if save_masks is not None:
             _save_masks(save_masks, space, table,
                         None if result.best_feasible is None else result.best_feasible.mask)
@@ -214,6 +219,10 @@ def main() -> int:
     parser.add_argument("--step-exponent", type=float, default=binary_search.DEFAULT_STEP_EXPONENT,
                         help="段階4の削減割合の指数 θ(inf で --max-step-ratio の固定割合)")
     parser.add_argument("--max-step-ratio", type=float, default=binary_search.DEFAULT_MAX_STEP_RATIO)
+    parser.add_argument("--no-memory-trace", action="store_true",
+                        help="tracemalloc を使わない(numpy の確保を遅くするので、所要秒を測るときに付ける。メモリ実測は0になる)")
+    parser.add_argument("--surface-only", action=argparse.BooleanOptionalAction, default=binary_search.DEFAULT_SURFACE_ONLY,
+                        help="段階4の peel が内部のセル(空の6近傍を持たない)を抜かない(既定は実装の既定と同じ)")
     parser.add_argument("--save-masks", type=Path, default=None,
                         help="設計空間・採用マスク・条件面の節点座標を npz に書く(撮影用)")
     parser.add_argument("--out", type=Path, required=True)
@@ -225,6 +234,7 @@ def main() -> int:
             pass
     record = verify(args.model, args.spacing, args.target, args.max_evaluations, skip_search=args.skip_search,
                     step_exponent=args.step_exponent, max_step_ratio=args.max_step_ratio,
+                    surface_only=args.surface_only, trace_memory=not args.no_memory_trace,
                     save_masks=args.save_masks)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(record, ensure_ascii=False, indent=2, default=str), encoding="utf-8")

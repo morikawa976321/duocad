@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections import deque
 from dataclasses import dataclass, field, replace
 from itertools import product
@@ -806,6 +807,8 @@ DEFAULT_STEP_EXPONENT = 0.5
 DEFAULT_MAX_STEP_RATIO = 0.2
 #: 削る順位に使うエネルギーをならす近傍の一辺(セル)。3 は自身と26近傍の材料平均。
 ENERGY_FILTER_SIZE = 3
+#: `peel` が内部の(空の6近傍を持たない)セルを抜かないか。既定の決め方と実測は計画書 §12。
+DEFAULT_SURFACE_ONLY = False
 _CORNERS = tuple(product(range(2), repeat=3))
 
 
@@ -825,7 +828,7 @@ def step_ratio(safety_factor: float, target: float, *, exponent: float = DEFAULT
 def ranked_cells(mask: np.ndarray, energy: np.ndarray) -> np.ndarray:
     """材料セルの平坦添字を、近傍の材料でならしたエネルギーの昇順に並べる(同値は添字順)。
 
-    ならすのは、1セルごとの値で選ぶと点々と抜けて水密(頂点の多様体判定)で落ちやすいため。
+    ならすのは、1セルごとの値のばらつきで順位が入れ替わるのを抑えるため。
     """
     material = np.asarray(mask, dtype=bool)
     total = ndimage.uniform_filter(np.where(material, energy, 0.0), size=ENERGY_FILTER_SIZE, mode='constant')
@@ -840,14 +843,68 @@ def _anchor_node_ids(conditions: SearchConditions) -> np.ndarray:
     return np.unique(np.concatenate(ids)) if ids else np.zeros(0, dtype=np.int64)
 
 
-def select_removal(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray,
-                   excluded: set) -> np.ndarray:
-    """`order` の先頭から最大 `count` セルを選ぶ。`excluded` と、選ぶとある条件節点に接する材料が
-    無くなるセル(その節点の最後の支え)は飛ばす。
+#: 3×3×3 の窓の中心セルから見た6近傍の位置。
+_WINDOW_NEIGHBOURS = ((0, 1, 1), (2, 1, 1), (1, 0, 1), (1, 2, 1), (1, 1, 0), (1, 1, 2))
+#: 窓の中心セルの8頂点(頂点格子の添字)。窓の外周の頂点は窓の外を空と見るので使えない。
+_WINDOW_CENTRE_VERTICES = (slice(1, 3),) * 3
 
-    条件節点が材料から離れた候補は6条件の「荷重・拘束が有効」と島処理で必ず落ちるので、
-    FEMの前に選ばない。
+
+@dataclass
+class PeelStats:
+    """`peel` の実績。`picked` は順位から抜いたセル、`islands` は抜いたことで切り離され一緒に消したセル。
+    `skipped_*` は飛ばした理由ごとの数(支え・表面・多様体・連結性の順に判定し、最初に落ちた理由で数える)。"""
+
+    picked: int = 0
+    islands: int = 0
+    skipped_support: int = 0
+    skipped_surface: int = 0
+    skipped_manifold: int = 0
+    skipped_connectivity: int = 0
+    already_removed: int = 0
+    global_checks: int = 0
+    seconds: float = 0.0
+    #: 順位から抜いたセルの平坦添字(記録には出さない)。
+    picked_cells: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64), repr=False)
+
+    def as_dict(self) -> dict:
+        return {name: getattr(self, name) for name in self.__dataclass_fields__ if name != 'picked_cells'}
+
+
+def _neighbours_stay_connected(window: np.ndarray) -> Optional[bool]:
+    """中心を抜いた 3×3×3 の窓で、中心の材料6近傍が6連結か(材料の6近傍が無ければ None)。
+
+    真なら、抜く前に連結だったマスクは抜いた後も連結(十分条件。偽でも割れるとは限らない)。
     """
+    members = [p for p in _WINDOW_NEIGHBOURS if window[p]]
+    if not members:
+        return None
+    if len(members) == 1:
+        return True
+    labels, _ = ndimage.label(window, structure=NEIGHBOURHOOD_STRUCTURE)
+    return len({int(labels[p]) for p in members}) == 1
+
+
+def _regular_after_removal(window: np.ndarray) -> bool:
+    """中心を抜いた窓で、中心セルの8頂点が全て境界の多様体条件(`acceptance.REGULAR_VERTEX`)を満たすか。"""
+    bad, _ = acceptance.irregular_vertices(window)
+    return not bad[_WINDOW_CENTRE_VERTICES].any()
+
+
+def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray, *,
+         surface_only: bool) -> tuple[np.ndarray, PeelStats]:
+    """`order` を先頭から1回だけ歩き、各セルを**その時点のマスク**で判定して通ったらその場で消す。
+
+    `count` 個(島として消えたぶんも数える)消えるか順位が尽きたら止める。`mask` が「1成分・全頂点が
+    正則・条件節点が全て支えられている」なら、返すマスクも同じ —— 各セルの判定はこの不変条件を保つ:
+
+    - 支え: 条件節点に接する材料の最後の1セルは抜かない。
+    - 多様体: 抜いた後の8頂点が全て正則(3×3×3 の窓で判定)。
+    - 連結: 中心の材料6近傍が窓の中で連結なら通す。そうでなければマスク全体を数え直し、条件節点を支える
+      セルが全て同じ1成分にあるときだけ通して、他の成分(島)を一緒に消す。
+    - `surface_only`: 空の6近傍(格子の外を含む)を持たないセルは抜かない(内部に空洞を作らない)。
+    """
+    started = time.perf_counter()
+    mask = np.asarray(mask, dtype=bool)
     shape = mask.shape
     node_shape = tuple(n + 1 for n in shape)
     support = np.zeros(node_shape, dtype=np.int32)
@@ -861,42 +918,63 @@ def select_removal(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: 
     support_flat, anchor_flat, touches_flat = support.ravel(), is_anchor.ravel(), touches.ravel()
     plane, row = shape[1] * shape[2], shape[2]
     node_plane, node_row = node_shape[1] * node_shape[2], node_shape[2]
+
+    work = np.pad(mask, 1)
+    inner = work[1:-1, 1:-1, 1:-1]
+    stats = PeelStats()
     picked: list[int] = []
     for cell in order.tolist():
-        if len(picked) >= count:
+        if stats.picked + stats.islands >= count:
             break
-        if cell in excluded:
+        i, rest = divmod(cell, plane)
+        j, k = divmod(rest, row)
+        if not work[i + 1, j + 1, k + 1]:
+            stats.already_removed += 1
             continue
+        corners = None
         if touches_flat[cell]:
-            i, rest = divmod(cell, plane)
-            j, k = divmod(rest, row)
             corners = [(i + a) * node_plane + (j + b) * node_row + (k + c) for a, b, c in _CORNERS]
             if any(anchor_flat[n] and support_flat[n] <= 1 for n in corners):
+                stats.skipped_support += 1
                 continue
+        window = work[i:i + 3, j:j + 3, k:k + 3].copy()
+        if surface_only and all(window[p] for p in _WINDOW_NEIGHBOURS):
+            stats.skipped_surface += 1
+            continue
+        window[1, 1, 1] = False
+        if not _regular_after_removal(window):
+            stats.skipped_manifold += 1
+            continue
+        connected = _neighbours_stay_connected(window)
+        if connected is None:
+            stats.skipped_connectivity += 1
+            continue
+        island_cells = 0
+        work[i + 1, j + 1, k + 1] = False
+        if not connected:
+            stats.global_checks += 1
+            labels, _ = ndimage.label(inner, structure=NEIGHBOURHOOD_STRUCTURE)
+            holders = np.unique(labels[touches & inner])
+            if anchor_ids.size:
+                keep = int(holders[0]) if holders.size == 1 else 0
+            else:
+                keep = 1 if labels.max() == 1 else 0
+            if keep == 0:
+                work[i + 1, j + 1, k + 1] = True
+                stats.skipped_connectivity += 1
+                continue
+            islands = (labels > 0) & (labels != keep)
+            island_cells = int(islands.sum())
+            inner[islands] = False
+        if corners is not None:
             for n in corners:
                 support_flat[n] -= 1
+        stats.picked += 1
+        stats.islands += island_cells
         picked.append(cell)
-    return np.asarray(picked, dtype=np.int64)
-
-
-def restore_irregular(candidate: np.ndarray, parent: np.ndarray) -> np.ndarray:
-    """`parent` から削ったセルのうち、境界が多様体でない頂点に接するものを戻し、水密になるまで繰り返す。
-
-    `parent` は水密なので、削ったセルを全部戻せば必ず水密に戻る(戻すのは削ったセルだけ)。
-    """
-    repaired = np.array(candidate, dtype=bool, copy=True)
-    shape = repaired.shape
-    while True:
-        bad, _ = acceptance.irregular_vertices(repaired)
-        if not bad.any():
-            return repaired
-        near = np.zeros(shape, dtype=bool)
-        for corner in _CORNERS:
-            near |= bad[tuple(slice(c, c + n) for c, n in zip(corner, shape))]
-        restore = near & parent & ~repaired
-        if not restore.any():
-            return repaired
-        repaired |= restore
+    stats.picked_cells = np.asarray(picked, dtype=np.int64)
+    stats.seconds = time.perf_counter() - started
+    return np.ascontiguousarray(inner), stats
 
 
 def _recheck_regions_without_precompute(best: FeasibleModel, seed: FeasibleModel,
@@ -920,20 +998,64 @@ def _recheck_regions_without_precompute(best: FeasibleModel, seed: FeasibleModel
     return replace(best, report=report), 'pass'
 
 
+def _missing_conditions(mask: np.ndarray, conditions: SearchConditions) -> list[str]:
+    """`mask` が満たしていない条件(節点が材料から離れた固定面・荷重面と、保持の重なり)の名前。"""
+    live = acceptance.active_nodes(mask).ravel()
+    missing = []
+    for side, faces in (('fixed', conditions.fixed_faces), ('load', conditions.load_faces)):
+        for face in faces:
+            ids = _face_node_ids(conditions.table, face)
+            if ids.size == 0 or not bool(live[ids].all()):
+                missing.append(f'{side}_face_{int(face)}')
+    report = acceptance.region_check(mask, conditions.grid, conditions.preserves, preserve=True,
+                                     volume_atol=conditions.volume_atol, volume_rtol=conditions.volume_rtol,
+                                     cache=conditions.bbox_cache, overlaps=conditions.region_overlaps)
+    if report['status'] != 'pass':
+        missing.append('preserve')
+    return missing
+
+
+def _geometry_rejection(candidate: np.ndarray, survivors: list, island_diag: dict,
+                        conditions: SearchConditions) -> Optional[dict]:
+    """`peel` の候補が「1成分で、その成分が全条件を単独で満たす」ときは None。満たさなければ理由。
+
+    連結性(`components` が1でない)は `peel` の不変条件の破れ。保持の重なりは `peel` が見ないので、
+    ここで落ちうる。
+    """
+    if island_diag['components'] == 1 and len(survivors) == 1:
+        return None
+    return dict(components=island_diag['components'], surviving_components=len(survivors),
+                missing=_missing_conditions(candidate, conditions), removed_islands=island_diag['removed_islands'])
+
+
+def _geometry_rejection_trial(history: list, candidate: np.ndarray, parent: Optional[int], operation: str,
+                              conditions: SearchConditions, rejection: dict) -> Trial:
+    volume = float(candidate.sum()) * conditions.grid.element_volume
+    trial = Trial(index=len(history), parent=parent, operation=operation,
+                  mask_hash=acceptance.material_sha256(candidate), before_mm3=volume, material_mm3=volume,
+                  removed_islands_mm3=0.0, outcome='infeasible', checks=dict(geometry='fail'),
+                  note=f'FEMの前に幾何で不合格(成分 {rejection["components"]}・欠けた条件 {rejection["missing"]})')
+    history.append(trial)
+    return trial
+
+
 def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditions: SearchConditions,
                    *, max_evaluations: int, is_cancelled,
                    step_exponent: float = DEFAULT_STEP_EXPONENT,
-                   max_step_ratio: float = DEFAULT_MAX_STEP_RATIO) -> SearchResult:
+                   max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
+                   surface_only: bool = DEFAULT_SURFACE_ONLY) -> SearchResult:
     """`initial.best_feasible` から、ひずみエネルギーの低い材料をまとめて削り続ける(段階4)。
 
     合格形状は1つだけ持つ。1回の試行: 合格形状を解いた変位の要素エネルギー(近傍でならす)の低い順に
-    `k = max(1, ⌊r × 後退倍率 × 材料セル数⌋)` セルを選び(`step_ratio` / `select_removal`)、
-    水密に戻す修復(`restore_irregular`。選んだセルが全部戻ったら評価に数えず、それらを以後外す) →
-    島処理 → 6条件(FEM)。合格すればその形状とエネルギーへ進み、
-    後退倍率を2倍に戻す(上限1)。不合格・計算失敗なら形状を変えず、k > 1 なら後退倍率を半分にして
-    同じ順位から選び直す(再求解しない)。k = 1 の不合格はそのセルを以後の候補から外して次のセルを試し
-    (形が変わっても戻さない)、安全率で落ちたらそこで `converged`。外せるセルが尽きても `converged`。
-    止まった理由は `diagnostics['reduction']['stop_reason']`、試行ごとの k・r・後退倍率・落ちた条件は `['steps']`。
+    `k = max(1, ⌊r × 後退倍率 × 材料セル数⌋)` セルを、`peel` が局所の不変条件で判定しながら削る
+    (`step_ratio`)。候補は構成上「1成分・全頂点が正則・全条件節点に支えあり」で、島処理
+    (`resolve_islands`)は検算 → 6条件(FEM)。合格すればその形状とエネルギーへ進み、
+    後退倍率を2倍に戻す(上限1)。不合格・計算失敗なら形状を変えず、順位から削ったセルが2つ以上なら
+    後退倍率を半分にして同じ順位から歩き直す(再求解しない)。1つだけなら、安全率で落ちたところで
+    `converged`、それ以外の不合格(計算失敗・保持の重なり)はそのセルを**この形状の間だけ**飛ばして
+    次のセルを試す。順位を歩いて1セルも抜けなければ `converged`(`no_removable_cell`)。
+    止まった理由は `diagnostics['reduction']['stop_reason']`、試行ごとの `peel` の実績・k・r・後退倍率・
+    落ちた条件は `['steps']`、検算で落ちた候補は `['geometry_rejections']`。
 
     評価予算は両段階を通した1本なので `initial.evaluations` から数える(削る候補1つが1回)。
     評価は bbox キャッシュ無しで行うが、保持・除外の共通体積は前計算(`region_overlaps`)から引く。
@@ -945,12 +1067,11 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     evaluations = int(initial.evaluations)
     target = float(conditions.target_safety_factor)
     anchor_ids = _anchor_node_ids(conditions)
-    element_volume = conditions.grid.element_volume
     steps: list[dict] = []
-    excluded: set[int] = set()
     reduction = dict(step_exponent=float(step_exponent), max_step_ratio=float(max_step_ratio),
-                     filter_size=ENERGY_FILTER_SIZE, fem_solves=0, restored_selections=0,
-                     stop_reason=None, steps=steps)
+                     filter_size=ENERGY_FILTER_SIZE, surface_only=bool(surface_only), fem_solves=0,
+                     peel_calls=0, peel_seconds=0.0, peel_seconds_max=0.0, repeated_candidates=0,
+                     geometry_rejections=[], stop_reason=None, steps=steps)
 
     def result(termination: str) -> SearchResult:
         final, verdict = _recheck_regions_without_precompute(best, initial.best_feasible, conditions)
@@ -959,8 +1080,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             termination = 'evaluation_error'
         return SearchResult(status='feasible', termination=termination, best_feasible=final, history=history,
                             evaluations=evaluations, conditions_identifier=identifier,
-                            diagnostics=dict(initial=initial.diagnostics,
-                                             reduction=dict(reduction, excluded_cells=len(excluded))))
+                            diagnostics=dict(initial=initial.diagnostics, reduction=reduction))
 
     energy = best.energy
     if energy is None:
@@ -975,6 +1095,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
 
     multiplier = 1.0
     order = ranked_cells(best.mask, energy)
+    rejected: set[str] = set()
     while True:
         if evaluations >= max_evaluations:
             return result('evaluation_limit')
@@ -982,50 +1103,54 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             return result('cancelled')
         gap_ratio = step_ratio(best.safety_factor, target, exponent=step_exponent, max_ratio=max_step_ratio)
         requested = max(1, int(gap_ratio * multiplier * int(best.mask.sum())))
-        removal = select_removal(best.mask, order, requested, anchor_ids, excluded)
-        if removal.size == 0:
+        candidate, peeled = peel(best.mask, order, requested, anchor_ids, surface_only=surface_only)
+        reduction['peel_calls'] += 1
+        reduction['peel_seconds'] += peeled.seconds
+        reduction['peel_seconds_max'] = max(reduction['peel_seconds_max'], peeled.seconds)
+        if peeled.picked == 0:
             reduction['stop_reason'] = 'no_removable_cell'
             return result('converged')
-        candidate = np.array(best.mask, dtype=bool, copy=True)
-        candidate.ravel()[removal] = False
-        candidate = restore_irregular(candidate, best.mask)
         candidate.setflags(write=False)
-        removed = int(best.mask.sum() - candidate.sum())
-        if removed == 0:
-            # 水密に戻すと選んだセルが全部戻った: 候補ができていないので評価に数えず、選んだセルを以後外す。
-            excluded.update(removal.tolist())
-            reduction['restored_selections'] += 1
+        key = acceptance.material_sha256(candidate)
+        if key in rejected:
+            # 順位が尽きて k を減らしても同じ候補になるとき、不合格が分かっている候補を解き直さない。
+            reduction['repeated_candidates'] += 1
+            if peeled.picked > 1:
+                multiplier /= 2.0
+            else:
+                order = order[~np.isin(order, peeled.picked_cells)]
             continue
+        removed = int(best.mask.sum() - candidate.sum())
         evaluations += 1
         operation = f'remove:{removed}'
-        step = dict(requested_cells=requested, selected_cells=int(removal.size), removed_cells=removed,
+        step = dict(requested_cells=requested, peel=peeled.as_dict(), removed_cells=removed,
                     step_ratio=gap_ratio * multiplier, gap_step_ratio=gap_ratio, multiplier=multiplier,
                     safety_factor_before=best.safety_factor, material_mm3_before=best.material_mm3)
         steps.append(step)
 
-        accepted, failed, trials = None, [], []
+        accepted, failed, safety_failed = None, [], False
         survivors, island_diag = resolve_islands(candidate, conditions)
-        if not survivors:
-            trials.append(_no_component_trial(history, candidate, acceptance.material_sha256(candidate), best.trial_index,
-                                              operation, conditions, island_diag).index)
-            failed.append('no_component')
-        for survivor in survivors:
+        rejection = _geometry_rejection(candidate, survivors, island_diag, conditions)
+        if rejection is not None:
+            reduction['geometry_rejections'].append(dict(step=len(steps) - 1, **rejection))
+            trial = _geometry_rejection_trial(history, candidate, best.trial_index, operation, conditions, rejection)
+            failed.append('geometry')
+        else:
             fields = {}
-            report, trial = _evaluate_survivor(survivor, candidate, conditions, parent=best.trial_index,
+            report, trial = _evaluate_survivor(survivors[0], candidate, conditions, parent=best.trial_index,
                                                operation=operation, history=history, fields=fields,
                                                overrides=dict(bbox_cache=None, history=history),
                                                counter=reduction)
-            trials.append(trial.index)
             if report['status'] == 'pass' and 'element_energy' in fields:
-                if accepted is None or survivor.sum() < accepted[0].sum():
-                    accepted = (survivor, report, trial, fields['element_energy'])
+                accepted = (survivors[0], report, fields['element_energy'])
             else:
                 failed.extend(name for name, check in report['checks'].items() if check.get('status') != 'pass')
-        step.update(trials=trials, outcome='accepted' if accepted is not None else 'rejected',
+                safety_failed = report['checks']['safety'].get('status') == 'fail'
+        step.update(trials=[trial.index], outcome='accepted' if accepted is not None else 'rejected',
                     failed=sorted(set(failed)))
 
         if accepted is not None:
-            survivor, report, trial, energy = accepted
+            survivor, report, energy = accepted
             survivor = np.array(survivor, dtype=bool, copy=True)
             survivor.setflags(write=False)
             best = FeasibleModel(mask=survivor, before_mask=candidate, report=report, trial_index=trial.index,
@@ -1033,13 +1158,15 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             step.update(safety_factor=best.safety_factor, material_mm3=best.material_mm3)
             multiplier = min(1.0, 2.0 * multiplier)
             order = ranked_cells(best.mask, energy)
-        elif removal.size > 1:
+            rejected.clear()
+        elif peeled.picked > 1:
+            rejected.add(key)
             multiplier /= 2.0
+        elif safety_failed:
+            reduction['stop_reason'] = 'safety_at_single_cell'
+            return result('converged')
         else:
-            excluded.update(removal.tolist())
-            if 'safety' in step['failed']:
-                reduction['stop_reason'] = 'safety_at_single_cell'
-                return result('converged')
+            order = order[~np.isin(order, peeled.picked_cells)]
 
 
 def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditions, *,
@@ -1049,6 +1176,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
                        max_candidates: Optional[int] = None,
                        step_exponent: float = DEFAULT_STEP_EXPONENT,
                        max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
+                       surface_only: bool = DEFAULT_SURFACE_ONLY,
                        is_cancelled=None) -> SearchResult:
     """初期合格探索(段階3)に続けて、ひずみエネルギーの低い材料を削って体積を減らす単一の探索入口(§3)。
 
@@ -1058,7 +1186,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     そこから `_reduce_volume` で体積削減を続ける。`max_evaluations` は**両段階を通した1本の予算**
     (§4.1「評価条件の識別子」と同じ思想で、初期探索と削減探索を別予算にしない)。
     `frontier_capacity` / `max_consecutive_adds` / `max_candidates` は段階3だけ、
-    `step_exponent` / `max_step_ratio` は段階4だけが使う(`step_ratio`)。
+    `step_exponent` / `max_step_ratio` / `surface_only` は段階4だけが使う(`step_ratio` / `peel`)。
 
     `is_cancelled` は引数無しで呼べる callable。段階3はブロックを1つ調べる前ごとと評価前、段階4は
     削る候補を作る前ごとに見る。真を返した時点の `best_feasible`(キャッシュ無しで検査済み)を返す
@@ -1074,4 +1202,5 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     if initial.status != 'feasible':
         return initial
     return _reduce_volume(initial, design_space_mask, conditions, max_evaluations=max_evaluations,
-                          is_cancelled=is_cancelled, step_exponent=step_exponent, max_step_ratio=max_step_ratio)
+                          is_cancelled=is_cancelled, step_exponent=step_exponent, max_step_ratio=max_step_ratio,
+                          surface_only=surface_only)
