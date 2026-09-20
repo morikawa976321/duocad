@@ -709,8 +709,7 @@ def test_stage3_block_delete_refuses_a_single_cell_thinning_cut_but_allows_a_thi
 
 
 def test_stage3_block_judgment_matches_a_global_opening_recheck_including_edge_truncated_blocks():
-    """落ちたら、段階3のブロック削除・置換の局所の厚み判定が、全体を数え直した判定とずれている
-    (1セルだけの `peel` の検算では、ブロック大・格子の端で切り詰められた region が通らない)。"""
+    """落ちたら、段階3のブロック削除・置換の局所の厚み判定が、全体を数え直した判定とずれている。"""
     rng = np.random.default_rng(20260921)
     judged = accepted = refused_by_width = truncated = 0
     for _ in range(40):
@@ -777,8 +776,7 @@ def test_min_width_search_starts_from_the_design_space_thickness_opening():
 
 
 def test_a_design_space_that_already_violates_min_width_still_reaches_a_conforming_shape():
-    """6x3x3 の棒から4セルを抜くと、m=2 の立方に入らない材料が残る。規則を満たす部分形状はあるので、
-    違反セルを取り除けずに予算を使い切ったら、入力が違反していると削除自体が拒まれている。"""
+    """落ちたら、違反した設計空間から出発すると違反セルの削除自体が拒まれ、規則適合の候補に届かない。"""
     design = np.ones((6, 3, 3), bool)
     for cell in [(2, 0, 0), (3, 0, 0), (2, 0, 2), (3, 0, 2)]:
         design[cell] = False
@@ -794,8 +792,7 @@ def test_a_design_space_that_already_violates_min_width_still_reaches_a_conformi
 
 
 def test_the_min_width_check_runs_before_any_fem_evaluation(monkeypatch):
-    """大域の最小幅判定は、FEMの結果に依らないので `acceptance.inspect` の前に置く。
-    落ちたら、規則を満たさない候補にFEM(hanger 2.4mm で1回100秒超)を払っている。"""
+    """落ちたら、規則を破る候補にFEM(hanger 2.4mm で1回100秒超)を払っている。"""
     calls = []
     real_inspect = acceptance.inspect
     monkeypatch.setattr(acceptance, 'inspect', lambda *a, **k: calls.append(1) or real_inspect(*a, **k))
@@ -809,7 +806,7 @@ def test_the_min_width_check_runs_before_any_fem_evaluation(monkeypatch):
 
 
 def test_a_candidate_that_fails_the_min_width_check_is_not_returned_and_the_search_goes_on(monkeypatch):
-    """`add` は局所判定しないので、大域判定が合格を返す唯一の門。最初の候補だけ落として、探索が続くことを見る。"""
+    """落ちたら、大域判定に落ちた候補が合格として返る、または探索が止まる(`add` は局所判定しない)。"""
     real = bs._mask_satisfies_min_width
     state = {'first': True}
 
@@ -819,17 +816,15 @@ def test_a_candidate_that_fails_the_min_width_check_is_not_returned_and_the_sear
         return verdict
 
     monkeypatch.setattr(bs, '_mask_satisfies_min_width', first_fails)
-    conditions = bar_conditions(shape=(4, 2, 2))
-    result = bs.find_initial_feasible(np.ones((4, 2, 2), bool), conditions, max_evaluations=40, min_width_cells=2)
+    conditions = bar_conditions(shape=(6, 3, 3))
+    result = bs.find_initial_feasible(np.ones((6, 3, 3), bool), conditions, max_evaluations=40, min_width_cells=2)
     assert result.history[0].outcome == 'infeasible' and result.history[0].checks == dict(min_width='fail')
-    if result.status == 'feasible':
-        assert result.best_feasible.trial_index > 0 and _opening_satisfied(result.best_feasible.mask, 2)
+    assert result.status == 'feasible' and result.best_feasible.trial_index > 0
+    assert _opening_satisfied(result.best_feasible.mask, 2)
 
 
 def test_trimming_the_design_space_can_cut_a_preserved_region_and_is_then_refused_at_entry_with_the_count():
-    """保持ソリッドが m 立方に入らない突起にしか重ならないとき、絞った設計空間では保持が成り立たない。
-    規則を満たす形は絞った空間の部分集合なので、この入口の拒否は「規則を満たす形が存在しない」と同じ。
-    m=1 は同じ入力で合格する。絞ったセル数が `diagnostics['min_width']` に残る。"""
+    """保持が突起にしか重ならないと、絞った空間では保持が成り立たず入口で止まる(規則適合の形が存在しない)。m=1 は合格する。"""
     shape = (10, 4, 4)
     design = np.zeros(shape, bool)
     design[:, :2, :2] = True

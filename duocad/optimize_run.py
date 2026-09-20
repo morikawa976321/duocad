@@ -1273,7 +1273,7 @@ def _resolve_min_width(spacing: float, requested: Optional[float], max_cells: Op
     `None` → 制約なし(m=1)。有限の正の値でなければ `OptimizeInputError`。
     `2 × spacing` を下回れば同じ例外(8等分した評価格子で4セル分が見える最小の幅、案B)。
     `max_cells`(格子の最短の辺のセル数)を渡すと、`max_cells × spacing` を超える値も断る
-    (m 立方が格子に1つも入らない。構造要素の確保量は m³ で、上限が無いと大きな値でメモリを使い果たす)。
+    (m 立方が格子に1つも入らず、空マスク以外は必ず違反になる不可能な値。巨大な値は導出の後に時間とメモリを使い切る)。
     通れば `m = ceil(値 / spacing)` を、実際に保証される幅 `m × spacing` と一緒に返す。
     """
     spacing = float(spacing)

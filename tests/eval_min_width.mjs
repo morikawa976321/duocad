@@ -1,7 +1,4 @@
-/**
- * `web/src/minWidth.ts` の純関数を実際に評価する口(`tests/test_min_width_ui.py` が node で走らせる。
- * `tests/eval_grid_scale.mjs` と同じやり方)。失敗したら非ゼロで終了する。
- */
+/** `web/src/minWidth.ts` の純関数を評価する口(`tests/test_min_width_ui.py` が node で走らせる)。失敗したら非ゼロで終了する。 */
 import assert from 'node:assert/strict'
 import { judgeMinWidth, shownCeilingMm, shownFloorMm, shownGuaranteedMm } from '../web/src/minWidth.ts'
 

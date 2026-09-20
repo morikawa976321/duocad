@@ -1,7 +1,4 @@
-"""最小幅の判定と表示(`web/src/minWidth.ts`)の検査。表示した下限・上限がそのまま入力して通ること。
-
-`tests/test_grid_scale.py` と同じやり方で、node が `tests/eval_min_width.mjs` を走らせる。skipしない。
-"""
+"""最小幅の判定と表示(`web/src/minWidth.ts`)。落ちたら、表示した下限・上限をそのまま入力しても通らない。"""
 from __future__ import annotations
 
 import subprocess
