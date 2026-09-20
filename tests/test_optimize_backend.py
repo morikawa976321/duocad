@@ -365,6 +365,36 @@ def test_element_size_outside_the_bounds_is_refused() -> None:
         optimize_run._resolve_element_size(infeasible, None)
 
 
+def test_min_width_outside_the_bounds_is_refused() -> None:
+    assert optimize_run._resolve_min_width(2.0, None) == {
+        "requested_mm": None, "spacing_mm": 2.0, "cells": 1, "guaranteed_mm": 2.0}
+    assert optimize_run._resolve_min_width(2.0, 4.0) == {
+        "requested_mm": 4.0, "spacing_mm": 2.0, "cells": 2, "guaranteed_mm": 4.0}
+    with pytest.raises(optimize_run.OptimizeInputError, match="下限"):
+        optimize_run._resolve_min_width(2.0, 3.9)
+    with pytest.raises(optimize_run.OptimizeInputError, match="有限の正"):
+        optimize_run._resolve_min_width(2.0, 0.0)
+    with pytest.raises(optimize_run.OptimizeInputError, match="有限の正"):
+        optimize_run._resolve_min_width(2.0, float("nan"))
+
+
+def test_min_width_cells_rounds_up_at_the_ceiling_boundary() -> None:
+    """m = ceil(要求 / spacing) の境界(ちょうど・その少し下・その少し上)。"""
+    spacing = 2.4
+    assert optimize_run._resolve_min_width(spacing, 2 * spacing)["cells"] == 2  # ちょうど下限
+    assert optimize_run._resolve_min_width(spacing, 2 * spacing + 0.01)["cells"] == 3  # 少し上→切り上がる
+    with pytest.raises(optimize_run.OptimizeInputError, match="下限"):
+        optimize_run._resolve_min_width(spacing, 2 * spacing - 0.01)  # 少し下→下限未満で断られる
+
+
+def test_every_ladder_step_carries_its_own_min_width_floor(session: Session) -> None:
+    """段ごとの `min_width_floor_mm` は、その段の要素サイズの2倍(`_resolve_min_width` の floor と同じ式)。"""
+    _setup_four_conditions(session)
+    limits = optimize_run.resolution_limits(session.document)
+    for step in limits["steps"]:
+        assert step["min_width_floor_mm"] == pytest.approx(2.0 * step["element_size_mm"])
+
+
 def test_the_element_size_upper_bound_reproduces_itself_on_the_real_grid(session: Session) -> None:
     """**上限の要素サイズで導出した実格子の spacing は上限以下**(要求値そのままだと
 
@@ -589,6 +619,14 @@ def test_run_optimization_rejects_each_old_argument_by_name(
     """
     with pytest.raises(optimize_run.OptimizeInputError, match=kwarg):
         session.run_optimization(**{kwarg: 1.0})
+
+
+def test_run_optimization_refuses_a_min_width_below_the_floor(session: Session) -> None:
+    _setup_four_conditions(session)
+    limits = optimize_run.resolution_limits(session.document)
+    spacing = limits["default_element_size_mm"]
+    with pytest.raises(optimize_run.OptimizeInputError, match="下限"):
+        session.run_optimization(min_width_mm=spacing)  # 下限は 2×spacing なので、spacing ちょうどは断られる
 
 
 def test_search_cancellation_leaves_the_document_untouched(

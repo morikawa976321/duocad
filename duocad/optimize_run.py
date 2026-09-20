@@ -117,6 +117,8 @@ class OptimizeOptions:
     target_safety_factor: float = DEFAULT_TARGET_SAFETY_FACTOR
     #: 要素サイズ[mm]。省くと上限側(既定)。
     element_size_mm: Optional[float] = None
+    #: 最小幅[mm]。省くと制約なし(m=1)。下限は要素サイズの2倍(`_resolve_min_width`)。
+    min_width_mm: Optional[float] = None
     #: 形状探索の評価予算(`binary_search.find_best_feasible` の
     #: `max_evaluations`。段階3・段階4を通した1本の予算)。省くとそちらの既定(1000)。
     max_evaluations: Optional[int] = None
@@ -549,6 +551,7 @@ def _resolution_steps(lo, hi, upper: float, lower: float) -> List[dict]:
                 "index": len(steps),
                 "element_size_mm": float(size),
                 "element_count": int(elements),
+                "min_width_floor_mm": float(2.0 * size),
             }
         )
     return steps
@@ -861,6 +864,7 @@ def _run(
          "unrepresented_regions": [診断, ...],     # 事後検出(下記)
          "boundary_mapping": {...} | None,        # 確定表の検証(`anchor.condition_mapping`)
          "resolution": resolution_limits() の戻り, "element_size_mm": float,
+         "min_width": {"requested_mm": float|None, "spacing_mm": float, "cells": int, "guaranteed_mm": float},
          "grid": {"origin","spacing","shape"}, "design_elements": int,
          "safety_factor": float|None, "target_safety_factor": float,
          "allowable": allowable_stress() の戻り,
@@ -914,10 +918,11 @@ def _run(
     spacing = _snap_to_grid(
         limits["bbox_min"], limits["bbox_max"], _resolve_element_size(limits, opts.element_size_mm)
     )
+    min_width = _resolve_min_width(spacing, opts.min_width_mm)
 
     from .topopt import trace
     trace.snapshot('resolved-conditions', bundle=bundle, limits=limits, spacing=spacing,
-                   allowable=allowable_stress())
+                   min_width=min_width, allowable=allowable_stress())
 
     pump = _ProgressPump(progress, should_cancel)
     dbg = _DebugSink(debug, debug_kinds)
@@ -940,6 +945,7 @@ def _run(
     common = {
         "resolution": limits,
         "element_size_mm": float(space.grid.spacing),
+        "min_width": min_width,
         "grid": space.grid.as_dict(),
         "design_elements": int(space.element_count),
         "allowable": allowable_stress(),
@@ -1038,6 +1044,7 @@ def _run(
     search_kwargs: Dict[str, Any] = {}
     if opts.max_evaluations is not None:
         search_kwargs["max_evaluations"] = int(opts.max_evaluations)
+    search_kwargs["min_width_cells"] = min_width["cells"]
     budget_text = str(opts.max_evaluations) if opts.max_evaluations is not None else "既定"
     pump.emit(
         phase="search",
@@ -1249,6 +1256,29 @@ def _resolve_element_size(limits: dict, requested: Optional[float]) -> float:
             f"(総要素数が {MAX_ELEMENTS} を超える)"
         )
     return value
+
+
+def _resolve_min_width(spacing: float, requested: Optional[float]) -> dict:
+    """最小幅[mm]の入口検査(`_resolve_element_size` と同じ形)。
+
+    `None` → 制約なし(m=1)。有限の正の値でなければ `OptimizeInputError`。
+    `2 × spacing` を下回れば同じ例外(8等分した評価格子で4セル分が見える最小の幅、案B)。
+    通れば `m = ceil(値 / spacing)` を、実際に保証される幅 `m × spacing` と一緒に返す。
+    """
+    spacing = float(spacing)
+    if requested is None:
+        return {"requested_mm": None, "spacing_mm": spacing, "cells": 1, "guaranteed_mm": spacing}
+    value = float(requested)
+    if not math.isfinite(value) or value <= 0.0:
+        raise OptimizeInputError(f"min_width_mm は有限の正の値であること(いま {requested!r})")
+    floor = 2.0 * spacing
+    if value < floor:
+        raise OptimizeInputError(
+            f"最小幅 {value:.4g} mm は下限 {floor:.4g} mm(要素サイズ {spacing:.4g} mm の2倍)より細い。"
+            "最小幅を上げるか、要素サイズを下げること"
+        )
+    cells = int(math.ceil(value / spacing))
+    return {"requested_mm": value, "spacing_mm": spacing, "cells": cells, "guaranteed_mm": cells * spacing}
 
 
 def _map_boundary_conditions(space, bundle: ConditionBundle) -> tuple:

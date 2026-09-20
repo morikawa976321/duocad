@@ -854,7 +854,7 @@ class Server:
         kwargs = {
             key: message[key]
             for key in (
-                "element_size_mm", "target_safety_factor", "max_evaluations", "name",
+                "element_size_mm", "target_safety_factor", "max_evaluations", "name", "min_width_mm",
                 "rmin_mm", "max_iter", "material_min_mm3", "material_max_mm3",
             )
             if message.get(key) is not None

@@ -950,6 +950,7 @@ class Session:
         *,
         target_safety_factor: Any = optimize_run.DEFAULT_TARGET_SAFETY_FACTOR,
         element_size_mm: Any = None,
+        min_width_mm: Any = None,
         max_evaluations: Any = None,
         name: Any = None,
         progress: Any = None,
@@ -995,6 +996,7 @@ class Session:
         options = optimize_run.OptimizeOptions(
             target_safety_factor=float(target_safety_factor),
             element_size_mm=None if element_size_mm is None else float(element_size_mm),
+            min_width_mm=None if min_width_mm is None else float(min_width_mm),
             max_evaluations=None if max_evaluations is None else int(max_evaluations),
             name=None if name is None else str(name),
         )

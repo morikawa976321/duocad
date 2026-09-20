@@ -620,6 +620,114 @@ def test_peel_refuses_a_cell_whose_removal_leaves_an_irregular_vertex():
     assert np.array_equal(after, mask) and (stats.picked, stats.skipped_manifold) == (0, 1)
 
 
+# ---------------------------------------------------------------------------
+# 最小幅の保証(`min_width_cells`)
+# ---------------------------------------------------------------------------
+def _opening_satisfied(mask: np.ndarray, m: int) -> bool:
+    """`mask` の全材料セルが m 立方の材料だけのブロックのどれかに属するか(peel の局所判定とは
+    独立な、全体を数え直す物差し)。"""
+    if m <= 1:
+        return True
+    opened = ndimage.binary_opening(mask, structure=np.ones((m, m, m), dtype=bool))
+    return not (mask & ~opened).any()
+
+
+def test_peel_refuses_a_removal_that_would_thin_material_below_min_width():
+    """厚さ2セルの塊(2x2x4)の角セルを抜くと、隣接セルが m=2 立方のブロックを失う。
+    `min_width_cells=1`(既定・制約なし)では削れ、`min_width_cells=2` では `skipped_thickness` で断る。"""
+    mask = np.ones((2, 2, 4), bool)
+    anchors = np.zeros(0, dtype=np.int64)
+    corner = int(np.ravel_multi_index((0, 0, 0), mask.shape))
+    after, stats = bs.peel(mask, np.array([corner]), 1, anchors, min_width_cells=1)
+    assert stats.picked == 1 and not after[0, 0, 0]
+
+    after, stats = bs.peel(mask, np.array([corner]), 1, anchors, min_width_cells=2)
+    assert np.array_equal(after, mask)
+    assert (stats.picked, stats.skipped_thickness) == (0, 1)
+
+
+def test_peel_local_thickness_judgment_matches_a_global_opening_recheck():
+    """落ちたら、`peel` の局所の厚み判定が全体を数え直した判定とずれている
+    (`test_a_local_connectivity_pass_implies_the_global_one` と同じ形の検算)。"""
+    rng = np.random.default_rng(20260920)
+    anchors = np.zeros(0, dtype=np.int64)
+    checked = 0
+    thickness_skips = 0
+    for _ in range(25):
+        shape = tuple(int(x) for x in rng.integers(6, 12, size=3))
+        m = int(rng.integers(2, 4))
+        raw = rng.random(shape) < rng.uniform(0.6, 0.95)
+        # 乱数マスクをそのまま使うと m 立方の被覆をまず満たさない。opening は冪等
+        # (opening(opening(x)) == opening(x))なので、これで作ったマスクは前提(規則を満たす入力)を満たす。
+        mask = ndimage.binary_opening(raw, structure=np.ones((m, m, m), dtype=bool))
+        labels, count = ndimage.label(mask, structure=bs.NEIGHBOURHOOD_STRUCTURE)
+        if not count or mask.sum() < 2 * m ** 3:
+            continue
+        mask = labels == 1 + int(np.argmax(np.bincount(labels.ravel())[1:]))
+        assert _opening_satisfied(mask, m)
+        for cell in rng.permutation(mask.size)[:30]:
+            i, j, k = np.unravel_index(int(cell), mask.shape)
+            if not mask[i, j, k]:
+                continue
+            checked += 1
+            _, stats = bs.peel(mask, np.array([cell]), 1, anchors, min_width_cells=m)
+            candidate = mask.copy()
+            candidate[i, j, k] = False
+            truth_ok = _opening_satisfied(candidate, m)
+            if stats.picked == 1:
+                assert truth_ok  # 安全側: 通した削除が規則を破ったことは無い
+            if stats.skipped_thickness == 1:
+                thickness_skips += 1
+                assert not truth_ok  # 厚みで断ったなら、実際に規則を破っている(過剰な足切りでない)
+    assert checked > 100 and thickness_skips > 20  # 何も試せていない・厚みが効いていないケースだけで合格していない
+
+
+def test_stage3_block_delete_refuses_a_single_cell_thinning_cut_but_allows_a_thick_enough_one():
+    """段階3のブロック削除(`_op_scan`/`candidate_descriptors`)にも同じ判定が入っている。
+    厚さ2セルの塊(2x2x4)で、1セル大のブロック削除は m=2 でどれも規則を破る(全16個が消える)が、
+    2セル大のブロック削除(半分を丸ごと削る)は規則を保つ(2個とも残る)。"""
+    mask = np.ones((2, 2, 4), bool)
+    design_space = mask.copy()
+
+    def deletes(size, m):
+        return [region for op, region, _ in bs.candidate_descriptors(mask, design_space, (size,), min_width_cells=m)
+                if op == 'delete']
+
+    assert len(deletes(1, 1)) == 16 and len(deletes(1, 2)) == 0
+    assert len(deletes(2, 1)) == 2 and len(deletes(2, 2)) == 2
+
+
+def test_search_with_min_width_cells_produces_a_shape_that_an_independent_opening_check_accepts():
+    """最終形状が規則を満たすことを、`peel` とは別の測り方(`scipy.ndimage.binary_opening`)で確かめる
+    (局所判定の穴の検出器)。同じ題材・同じ緩い目標安全率で `min_width_cells=1`(既定)は
+    厚み1セルの部材まで削ってしまう(2立方の opening で全材料が落ちる)ことも併せて固定する。"""
+    conditions = bar_conditions(shape=(8, 3, 3), target_safety_factor=.001)
+    design = np.ones((8, 3, 3), bool)
+
+    unconstrained = bs.find_best_feasible(design, conditions, max_evaluations=400, min_width_cells=1)
+    assert unconstrained.status == 'feasible'
+    assert (unconstrained.best_feasible.mask & ~ndimage.binary_opening(
+        unconstrained.best_feasible.mask, structure=np.ones((2, 2, 2), bool))).any()
+
+    result = bs.find_best_feasible(design, conditions, max_evaluations=400, min_width_cells=2)
+    assert result.status == 'feasible'
+    best = result.best_feasible
+    assert _opening_satisfied(best.mask, 2)
+    skipped_thickness = sum(step['peel']['skipped_thickness'] for step in result.diagnostics['reduction']['steps'])
+    assert skipped_thickness > 0  # 制約が実際に効いている(0なら題材が制約を試せていない)
+    assert best.material_mm3 > unconstrained.best_feasible.material_mm3  # 薄くしすぎない分だけ材料が残る
+
+
+def test_find_initial_feasible_never_accepts_a_first_candidate_that_already_violates_min_width():
+    """落ちたら、`'initial'` 候補(`design_space_mask` 自身、差分判定を一度も経ない)が未検査のまま
+    合格として返っている。`(4, 1, 1)` は y・z が1セルなので m=2 をどの候補でも満たせない題材。"""
+    conditions = bar_conditions(shape=(4, 1, 1))
+    design = np.ones((4, 1, 1), bool)
+    result = bs.find_best_feasible(design, conditions, max_evaluations=50, min_width_cells=2)
+    assert result.status == 'no_feasible_found'
+    assert result.best_feasible is None
+
+
 def test_reduction_strips_the_unloaded_appendage_and_keeps_every_condition_supported():
     conditions, design, appendage = appendage_conditions()
     result = bs.find_best_feasible(design, conditions, max_evaluations=200)

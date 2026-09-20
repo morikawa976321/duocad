@@ -514,6 +514,10 @@
   let optimizeResolution = $state<OptimizeResolutionPayload | null>(null)
   /** 解像度の目盛りの位置。**0が既定(いちばん粗い)**で、増やすほど細かい。 */
   let optimizeStepIndex = $state(0)
+  let optimizeMinWidthMm = $state<number | null>(null)
+  /** 直前に「下限割れ」だったか(トーストの立ち上がり検知用、描画には使わない普通の変数でよい)。
+   *  下限割れが続いているあいだ(1文字打つごと等)にトーストを連打しないための状態。 */
+  let optimizeMinWidthWasInvalid = false
   let optimizeRunning = $state(false)
   let optimizeCancelling = $state(false)
   let optimizeProgress = $state<OptimizeProgress | null>(null)
@@ -535,8 +539,40 @@
     clearOptimizeDebug()
     session.runOptimization({
       elementSizeMm: optimizeStep?.element_size_mm ?? null,
+      minWidthMm: optimizeMinWidthMm,
       debug: debugKindsFor(debugFlags),
     })
+  }
+
+  /** 最小幅の入力欄が変わった。**下限割れへ新しく入った瞬間だけ**トーストで知らせる
+   *  (タスク仕様「下回ったら...トーストで値の変更を促す」)。割れたまま1文字ずつ打ち直しても
+   *  連打しない —— 赤い入力欄と実行不能ボタンが「いま無効」を常時示しているので、トーストの
+   *  役目は「気づかせる」の1回だけでよい。 */
+  function handleOptimizeMinWidth(value: number | null): void {
+    optimizeMinWidthMm = value
+    const floor = optimizeStep?.min_width_floor_mm ?? null
+    const invalidNow = value !== null && floor !== null && value < floor
+    if (invalidNow && !optimizeMinWidthWasInvalid) {
+      showToast(`最小幅 ${value}mm は下限 ${floor!.toFixed(2)}mm(選んだ要素サイズの2倍)を下回っている。値を上げること`)
+    }
+    optimizeMinWidthWasInvalid = invalidNow
+  }
+
+  /** 解像度の段を変える。**その時に既に入っている最小幅が新しい下限を割ったら、
+   *  黙って実行可能なまま残さずトーストで知らせる**(タスク仕様「解像度を変えると下限も変わる」)。 */
+  function handleOptimizeStep(index: number): void {
+    optimizeStepIndex = index
+    const steps = optimizeResolution?.steps ?? []
+    const newStep = steps[Math.min(index, Math.max(steps.length - 1, 0))] ?? null
+    const invalidNow =
+      optimizeMinWidthMm !== null && newStep !== null && optimizeMinWidthMm < newStep.min_width_floor_mm
+    if (invalidNow && !optimizeMinWidthWasInvalid) {
+      showToast(
+        `解像度を変えたので最小幅の下限が ${newStep!.min_width_floor_mm.toFixed(2)}mm に変わった。` +
+          `いまの入力 ${optimizeMinWidthMm}mm は下回っている。値を見直すこと`,
+      )
+    }
+    optimizeMinWidthWasInvalid = invalidNow
   }
 
   // ---------------------------------------------------------------- H2: 開発用のデバッグ表示
@@ -2753,11 +2789,13 @@
           conditions={optimizeConditions}
           resolution={optimizeResolution}
           stepIndex={optimizeStepIndex}
+          minWidthMm={optimizeMinWidthMm}
           running={optimizeRunning}
           cancelling={optimizeCancelling}
           progress={optimizeProgress}
           notice={optimizeNotice}
-          onStep={(index) => (optimizeStepIndex = index)}
+          onStep={handleOptimizeStep}
+          onMinWidth={handleOptimizeMinWidth}
           onRun={runOptimization}
           onCancel={() => session.cancelOptimization()}
         />

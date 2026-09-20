@@ -58,22 +58,27 @@
     conditions,
     resolution,
     stepIndex,
+    minWidthMm,
     running,
     cancelling,
     progress,
     notice,
     onStep,
+    onMinWidth,
     onRun,
     onCancel,
   }: {
     conditions: OptimizeConditionsReport | null
     resolution: OptimizeResolutionPayload | null
     stepIndex: number
+    /** 最小幅の入力値[mm]。`null` = 空欄(制約なし)。正の値そのもの(下限割れの判定はここではしない)。 */
+    minWidthMm: number | null
     running: boolean
     cancelling: boolean
     progress: OptimizeProgress | null
     notice: OptimizeNotice | null
     onStep: (index: number) => void
+    onMinWidth: (value: number | null) => void
     onRun: () => void
     onCancel: () => void
   } = $props()
@@ -82,10 +87,23 @@
   /** 実際に効いている段の位置。**目盛りが縮んだときのために毎回丸め直す。** */
   const clamped = $derived(Math.min(stepIndex, Math.max(steps.length - 1, 0)))
   const step = $derived(steps[clamped] ?? null)
+  const minWidthFloorMm = $derived(step?.min_width_floor_mm ?? null)
+  /** 下限を割っているか。`minWidthMm` が空(null)なら常に false(制約なしは常に有効)。 */
+  const minWidthInvalid = $derived(
+    minWidthMm !== null && minWidthFloorMm !== null && minWidthMm < minWidthFloorMm,
+  )
+  /** 入力した値がそのまま保証されるとは限らない(m=ceil(...)で切り上がる)ので、
+   *  実際に保証される幅を計算して添える。サーバーの `_resolve_min_width` と同じ式
+   *  (`m = ceil(値 / 要素サイズ)`、保証幅 `= m × 要素サイズ`)。 */
+  const minWidthGuaranteedMm = $derived(
+    minWidthMm !== null && step !== null && !minWidthInvalid
+      ? Math.ceil(minWidthMm / step.element_size_mm) * step.element_size_mm
+      : null,
+  )
   const problems = $derived(conditions?.problems ?? [])
   /** 走らせられるか。**条件と目盛りの両方がそろって初めて押せる。** */
   const canRun = $derived(
-    !running && conditions !== null && conditions.ready && step !== null,
+    !running && conditions !== null && conditions.ready && step !== null && !minWidthInvalid,
   )
 </script>
 
@@ -147,6 +165,33 @@
       体積の見積もりが確かになる。<strong>払うもの</strong>: 時間とメモリ。
       <strong>左へは動かない</strong> —— 粗くすると条件面から節点が消える(しかも黙って起きる)。
     </p>
+    <label>
+      最小幅[mm]
+      <input
+        id="optimize-min-width"
+        type="number"
+        min="0"
+        step="any"
+        placeholder="指定なし"
+        class:invalid={minWidthInvalid}
+        value={minWidthMm ?? ''}
+        disabled={running}
+        oninput={(event) => {
+          const raw = event.currentTarget.value
+          onMinWidth(raw === '' ? null : Number.parseFloat(raw))
+        }}
+      />
+    </label>
+    {#if minWidthInvalid}
+      <p id="optimize-min-width-note" class="hint bad">
+        最小幅は下限 {minWidthFloorMm?.toFixed(2)}mm(選んだ要素サイズの2倍)を割っている。
+        値を上げるか、解像度を細かくすること
+      </p>
+    {:else if minWidthGuaranteedMm !== null}
+      <p id="optimize-min-width-note" class="hint dim">
+        実際に保証される幅: {minWidthGuaranteedMm.toFixed(2)}mm(m=ceilで切り上がる)
+      </p>
+    {/if}
   {/if}
 
   <div class="row">
@@ -274,5 +319,9 @@
 
   .bad {
     color: oklch(72% 0.14 30);
+  }
+
+  #optimize-min-width.invalid {
+    border-color: oklch(72% 0.14 30);
   }
 </style>

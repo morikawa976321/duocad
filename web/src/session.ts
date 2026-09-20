@@ -740,6 +740,9 @@ export interface OptimizeResolutionStep {
   index: number
   element_size_mm: number
   element_count: number
+  /** この段を選んだときの最小幅の下限[mm](= 要素サイズの2倍)。サーバーが計算する
+   *  (画面は要素数の数え方を持たない、という既存方針と同じ)。 */
+  min_width_floor_mm: number
 }
 
 /**
@@ -803,6 +806,8 @@ export interface OptimizeResultPayload {
   /** 探索の終了理由(`converged` / `evaluation_limit` / `cancelled` / ...)。 */
   termination: string | null
   element_size_mm: number
+  /** 最小幅の解決結果(`optimize_run._resolve_min_width`)。`requested_mm` が `null` なら未指定(制約なし)。 */
+  min_width: { requested_mm: number | null; spacing_mm: number; cells: number; guaranteed_mm: number }
   design_elements: number
   seconds: number
   empty_condition_faces?: Array<Record<string, unknown>>
@@ -814,6 +819,8 @@ export interface OptimizeResultPayload {
 /** 実行の摘み。**省いたものはコアの既定**(既定＝いちばん粗くて安い設定)。 */
 export interface OptimizeRunOptions {
   elementSizeMm?: number | null
+  /** 最小幅[mm]。`null` または省略 = 制約なし。 */
+  minWidthMm?: number | null
   name?: string | null
   /**
    * 開発用の可視化を頼む(`'space'` / `'anchors'` / `'rho'`)。**既定は空**で、
@@ -1306,6 +1313,7 @@ export function createSession(hooks: SessionHooks): Session {
       send({
         cmd: 'run_optimization',
         element_size_mm: options.elementSizeMm ?? null,
+        min_width_mm: options.minWidthMm ?? null,
         name: options.name ?? null,
         // **空配列は送らない。** 古いサーバは知らないキーを無視するだけだが、
         // 「頼んでいない」ことが送信の中身からも読めるようにしておく。

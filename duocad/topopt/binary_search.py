@@ -302,18 +302,26 @@ def _touches_empty(mask: np.ndarray, region: tuple) -> bool:
     return False
 
 
-def _op_scan(mask: np.ndarray, design_space: np.ndarray, size: int, op: str):
+def _op_scan(mask: np.ndarray, design_space: np.ndarray, size: int, op: str, *,
+            min_width_cells: int = 1):
     """1つの操作・1つのブロック大きさのブロックを1つずつ調べ、有効なら候補記述
     `(op, region, addable)`、無効なら None を返す(調べたブロックごとに必ず1つ出す)。
 
     有効性(削除は材料が要り、材料の表面に接すること〈内部のブロックを空にすると閉じた空洞ができ、
     水密の検査で必ず落ちる〉、追加は接する空セルが要る、置換は両方)はブロックの範囲だけを見て
     決め、マスクは作らない。`addable` はブロック大の小配列(削除では None)。
+
+    `min_width_cells`(m)>1 のとき、削除・置換は `_min_width_ok_after_clearing` も通す —— どちらも
+    ブロック内の既存材料を丸ごと空にする操作なので(置換の `addable` は元が空だったセルだけを指し、
+    既存材料とは重ならない)、判定は共通(`peel` の1セル版と同じ関数)。**追加は判定しない**
+    (材料を増やすだけなので、既存セルの被覆を壊さない)。
     """
     for lo in _block_starts(mask.shape, size):
         region = _block_region(lo, size, mask.shape)
         if op == 'delete':
-            yield ('delete', region, None) if mask[region].any() and _touches_empty(mask, region) else None
+            ok = (mask[region].any() and _touches_empty(mask, region)
+                  and _min_width_ok_after_clearing(mask, region, min_width_cells))
+            yield ('delete', region, None) if ok else None
             continue
         addable = _local_addable(mask, design_space, region)
         if not addable.any():
@@ -321,11 +329,12 @@ def _op_scan(mask: np.ndarray, design_space: np.ndarray, size: int, op: str):
         elif op == 'add':
             yield ('add', region, addable)
         else:
-            yield ('replace', region, addable) if mask[region].any() else None
+            ok = mask[region].any() and _min_width_ok_after_clearing(mask, region, min_width_cells)
+            yield ('replace', region, addable) if ok else None
 
 
 def _scan_descriptors(mask: np.ndarray, design_space: np.ndarray, sizes: tuple[int, ...],
-                      *, allow_add: bool = True) -> Iterator[Optional[tuple]]:
+                      *, allow_add: bool = True, min_width_cells: int = 1) -> Iterator[Optional[tuple]]:
     """`candidate_descriptors` と同じ順序で、無効なブロックも None として1つずつ出す。
 
     frontier はこちらを引き、None も走査予算に数えて中断を確認する —— 有効な候補が遠いとき、
@@ -335,7 +344,7 @@ def _scan_descriptors(mask: np.ndarray, design_space: np.ndarray, sizes: tuple[i
     """
     ops = ('delete', 'add', 'replace') if allow_add else ('delete', 'replace')
     for size in sizes:
-        alive = deque(_op_scan(mask, design_space, size, op) for op in ops)
+        alive = deque(_op_scan(mask, design_space, size, op, min_width_cells=min_width_cells) for op in ops)
         while alive:
             try:
                 descriptor = next(alive[0])
@@ -348,14 +357,15 @@ def _scan_descriptors(mask: np.ndarray, design_space: np.ndarray, sizes: tuple[i
 
 
 def candidate_descriptors(mask: np.ndarray, design_space: np.ndarray, sizes: tuple[int, ...],
-                          *, allow_add: bool = True) -> Iterator[tuple]:
+                          *, allow_add: bool = True, min_width_cells: int = 1) -> Iterator[tuple]:
     """親 `mask` の子候補の記述を、大きいブロックから、各大きさで削除→追加→置換を1つずつ
     巡回して生成する(§4.3「削除優先で、各巡回に追加・置換の枠を確保する」、修正C §5.2)。
 
     操作別の生成器を巡回するので、削除候補が何万あっても追加・置換が後回しにならない。
     `allow_add=False` なら追加は生成しない(連続追加の上限。置換は体積を増やさないので残す)。
     """
-    return (descriptor for descriptor in _scan_descriptors(mask, design_space, sizes, allow_add=allow_add)
+    return (descriptor for descriptor in
+            _scan_descriptors(mask, design_space, sizes, allow_add=allow_add, min_width_cells=min_width_cells)
             if descriptor is not None)
 
 
@@ -604,11 +614,12 @@ def _streak_after(op: str, streak: int) -> int:
 
 
 def _node(mask: np.ndarray, trial_index: int, streak: int, design_space_mask: np.ndarray,
-          sizes: tuple[int, ...], max_consecutive_adds: int) -> _Node:
+          sizes: tuple[int, ...], max_consecutive_adds: int, *, min_width_cells: int = 1) -> _Node:
     mask.setflags(write=False)
     return _Node(mask=mask, trial_index=trial_index, streak=streak,
                  children=_scan_descriptors(mask, design_space_mask, sizes,
-                                            allow_add=streak < max_consecutive_adds))
+                                            allow_add=streak < max_consecutive_adds,
+                                            min_width_cells=min_width_cells))
 
 
 def _pull(frontier: _Frontier, design_space_mask: np.ndarray, budget: _Budget, visited: set,
@@ -665,6 +676,7 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
                            frontier_capacity: int = DEFAULT_FRONTIER_CAPACITY,
                            max_consecutive_adds: int = DEFAULT_MAX_CONSECUTIVE_ADDS,
                            max_candidates: Optional[int] = None,
+                           min_width_cells: int = 1,
                            is_cancelled=None) -> SearchResult:
     """設計空間の全材料マスクから出発し、最初の6条件合格モデルを探す(§4.2、§8 段階3)。
 
@@ -773,7 +785,8 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
         survivors, island_diag = resolve_islands(candidate, conditions)
         if not survivors:
             trial = _no_component_trial(history, candidate, raw_hash, parent, operation, conditions, island_diag)
-            frontier.push(_node(candidate, trial.index, streak, design_space_mask, sizes, max_consecutive_adds))
+            frontier.push(_node(candidate, trial.index, streak, design_space_mask, sizes, max_consecutive_adds,
+                                min_width_cells=min_width_cells))
             return None
         for survivor in survivors:
             survivor_key = (acceptance.material_sha256(survivor), identifier)
@@ -784,7 +797,8 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
                                                operation=operation, history=history)
             if report['status'] != 'pass':
                 if report['status'] != 'unknown':  # 計算失敗を不合格の証拠にしない(§4.5)
-                    frontier.push(_node(survivor, trial.index, streak, design_space_mask, sizes, max_consecutive_adds))
+                    frontier.push(_node(survivor, trial.index, streak, design_space_mask, sizes, max_consecutive_adds,
+                                    min_width_cells=min_width_cells))
                 continue
             # 最良合格モデルをキャッシュなしで再検査する(§3)。ここが失敗したら成功を返さず、
             # 候補と診断を残して探索を続ける(§4.6「最終再検査が失敗したら成功を返さない」)。
@@ -796,7 +810,16 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
                 trial.note = 'キャッシュ無しの最終再検査が不合格/unknownだったため候補から外した'
                 trial.outcome = 'unknown' if final_report['status'] == 'unknown' else 'infeasible'
                 if trial.outcome != 'unknown':  # 計算失敗を不合格の証拠にしない(§4.5)。他は通常どおり修復対象。
-                    frontier.push(_node(survivor, trial.index, streak, design_space_mask, sizes, max_consecutive_adds))
+                    frontier.push(_node(survivor, trial.index, streak, design_space_mask, sizes, max_consecutive_adds,
+                                    min_width_cells=min_width_cells))
+                continue
+            # `peel`/`_op_scan` の差分検査は「入力が既に規則を満たす」前提なので、まだその前提の無い
+            # 最初の合格候補(`design_space_mask` 自身を含みうる)をここで一度だけ大域に検査する。
+            if min_width_cells > 1 and not _mask_satisfies_min_width(survivor, min_width_cells):
+                trial.note = '最小幅の不変条件(m立方の材料だけのブロックに全材料セルが属する)を満たさないため候補から外した'
+                trial.outcome = 'infeasible'
+                frontier.push(_node(survivor, trial.index, streak, design_space_mask, sizes, max_consecutive_adds,
+                                    min_width_cells=min_width_cells))
                 continue
             survivor.setflags(write=False)
             best = FeasibleModel(mask=survivor, before_mask=candidate, report=final_report,
@@ -884,13 +907,14 @@ _WINDOW_CENTRE_VERTICES = (slice(1, 3),) * 3
 @dataclass
 class PeelStats:
     """`peel` の実績。`picked` は順位から抜いたセル、`islands` は抜いたことで切り離され一緒に消したセル。
-    `skipped_*` は飛ばした理由ごとの数(支え・表面・多様体・連結性の順に判定し、最初に落ちた理由で数える)。"""
+    `skipped_*` は飛ばした理由ごとの数(支え・表面・多様体・厚み・連結性の順に判定し、最初に落ちた理由で数える)。"""
 
     picked: int = 0
     islands: int = 0
     skipped_support: int = 0
     skipped_surface: int = 0
     skipped_manifold: int = 0
+    skipped_thickness: int = 0
     skipped_connectivity: int = 0
     already_removed: int = 0
     global_checks: int = 0
@@ -922,16 +946,62 @@ def _regular_after_removal(window: np.ndarray) -> bool:
     return not bad[_WINDOW_CENTRE_VERTICES].any()
 
 
-def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray) -> tuple[np.ndarray, PeelStats]:
+def _min_width_ok_after_clearing(mask: np.ndarray, region: tuple, min_width_cells: int) -> bool:
+    """`region` を材料から丸ごと空にしたと仮定して、残る材料セルが全て `min_width_cells`(=m)立方の
+    材料だけのブロックに属するか(`peel`・段階3の delete/replace 共通)。`m<=1` は常に真(制約なし)。
+
+    m 立方はそのセルから距離 m-1 以内にしか広がらないので、`region` から距離 2×(m-1) の
+    材料データだけで判定できる(大域を再計算しない)。
+    """
+    m = int(min_width_cells)
+    if m <= 1:
+        return True
+    reach = m - 1
+    pad = 2 * reach
+    shape = mask.shape
+    lo = tuple(max(int(s.start) - pad, 0) for s in region)
+    hi = tuple(min(int(s.stop) + pad, n) for s, n in zip(region, shape))
+    window = np.array(mask[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]], dtype=bool, copy=True)
+    cleared = tuple(slice(int(s.start) - l, int(s.stop) - l) for s, l in zip(region, lo))
+    window[cleared] = False
+    opened = ndimage.binary_opening(window, structure=np.ones((m, m, m), dtype=bool))
+    zone = tuple(
+        slice(max(int(s.start) - reach - l, 0), min(int(s.stop) + reach - l, h - l))
+        for s, l, h in zip(region, lo, hi)
+    )
+    zone_mask = window[zone]
+    return not (zone_mask & ~opened[zone]).any()
+
+
+def _mask_satisfies_min_width(mask: np.ndarray, min_width_cells: int) -> bool:
+    """`mask` の全材料セルが m 立方の材料だけのブロックのどれかに属するか(大域判定)。
+
+    `_min_width_ok_after_clearing` は「入力が既に規則を満たす」前提の差分検査なので、その前提が
+    まだ無い最初の合格候補(`find_initial_feasible` 内、呼び出し箇所を見よ)にだけ、これで一度掛ける。
+    """
+    if min_width_cells <= 1:
+        return True
+    opened = ndimage.binary_opening(mask, structure=np.ones((int(min_width_cells),) * 3, dtype=bool))
+    return not (np.asarray(mask, dtype=bool) & ~opened).any()
+
+
+def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray, *,
+        min_width_cells: int = 1) -> tuple[np.ndarray, PeelStats]:
     """`order` を先頭から1回だけ歩き、各セルを**その時点のマスク**で判定して通ったらその場で消す。
 
     `count` 個(島として消えたぶんも数える)消えるか順位が尽きたら止める。`mask` が「1成分・全頂点が
-    正則・条件節点が全て支えられている」なら、返すマスクも同じ —— 各セルの判定はこの不変条件を保つ:
+    正則・条件節点が全て支えられている・(`min_width_cells>1` なら)全材料セルが m 立方の材料だけの
+    ブロックに属する」なら、返すマスクも同じ —— 各セルの判定はこの不変条件を保つ:
 
     - 支え: 条件節点に接する材料の最後の1セルは抜かない。
     - 多様体: 抜いた後の8頂点が全て正則(3×3×3 の窓で判定)。
+    - 厚み(`min_width_cells`=m>1 のときだけ): 抜いた後、影響を受けうる材料セル(そのセルから距離
+      m-1 以内)が全て m 立方の材料だけのブロックに属する。判定は多様体の後・連結の前(連結の全体
+      再計算より安いので先に落とす)。
     - 連結: 中心の材料6近傍が窓の中で連結なら通す。そうでなければマスク全体を数え直し、条件節点を支える
-      セルが全て同じ1成分にあるときだけ通して、他の成分(島)を一緒に消す。
+      セルが全て同じ1成分にあるときだけ通して、他の成分(島)を一緒に消す。島は保持成分と辺・頂点でも
+      接しない(下記コメント)ので、両方を跨ぐ m 立方の材料だけのブロックは無く、島の除去は厚みの
+      不変条件を壊さない。
     - 表面: 空の6近傍(格子の外を含む)を持たないセルは抜かない(内部に空洞を作らない。中空構造を許容しない製品制約)。
       抜くセルは空の6近傍を持つので、抜いた後のそのセルは既存の空の成分に属し、島として消える成分も隣接する空につながる。
       閉じた空洞の無い `mask` からは閉じた空洞の無い候補ができる(`acceptance.boundary_check` の `void_components` が落ちない根拠)。
@@ -977,6 +1047,10 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
         window[1, 1, 1] = False
         if not _regular_after_removal(window):
             stats.skipped_manifold += 1
+            continue
+        if not _min_width_ok_after_clearing(
+                inner, (slice(i, i + 1), slice(j, j + 1), slice(k, k + 1)), min_width_cells):
+            stats.skipped_thickness += 1
             continue
         connected = _neighbours_stay_connected(window)
         if connected is None:
@@ -1078,7 +1152,8 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
                    *, max_evaluations: int, is_cancelled,
                    step_exponent: float = DEFAULT_STEP_EXPONENT,
                    max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
-                   single_cell_patience: Optional[int] = DEFAULT_SINGLE_CELL_PATIENCE) -> SearchResult:
+                   single_cell_patience: Optional[int] = DEFAULT_SINGLE_CELL_PATIENCE,
+                   min_width_cells: int = 1) -> SearchResult:
     """`initial.best_feasible` から、ひずみエネルギーの低い材料をまとめて削り続ける(段階4)。
 
     合格形状は1つだけ持つ。1回の試行: 合格形状を解いた変位の要素エネルギー(近傍でならす)の低い順に
@@ -1111,7 +1186,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     anchor_ids = _anchor_node_ids(conditions)
     steps: list[dict] = []
     reduction = dict(step_exponent=float(step_exponent), max_step_ratio=float(max_step_ratio),
-                     filter_size=ENERGY_FILTER_SIZE, fem_solves=0,
+                     filter_size=ENERGY_FILTER_SIZE, fem_solves=0, min_width_cells=int(min_width_cells),
                      peel_calls=0, peel_seconds=0.0, peel_seconds_max=0.0, repeated_candidates=0,
                      single_cell_patience=single_cell_patience, safety_excluded_cells=0, adopted_after_exclusion=0,
                      geometry_rejections=[], stop_reason=None, steps=steps)
@@ -1147,7 +1222,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             return result('cancelled')
         gap_ratio = step_ratio(best.safety_factor, target, exponent=step_exponent, max_ratio=max_step_ratio)
         requested = max(1, int(gap_ratio * multiplier * int(best.mask.sum())))
-        candidate, peeled = peel(best.mask, order, requested, anchor_ids)
+        candidate, peeled = peel(best.mask, order, requested, anchor_ids, min_width_cells=min_width_cells)
         reduction['peel_calls'] += 1
         reduction['peel_seconds'] += peeled.seconds
         reduction['peel_seconds_max'] = max(reduction['peel_seconds_max'], peeled.seconds)
@@ -1226,6 +1301,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
                        step_exponent: float = DEFAULT_STEP_EXPONENT,
                        max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
                        single_cell_patience: Optional[int] = DEFAULT_SINGLE_CELL_PATIENCE,
+                       min_width_cells: int = 1,
                        is_cancelled=None) -> SearchResult:
     """初期合格探索(段階3)に続けて、ひずみエネルギーの低い材料を削って体積を減らす単一の探索入口(§3)。
 
@@ -1236,6 +1312,8 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     (§4.1「評価条件の識別子」と同じ思想で、初期探索と削減探索を別予算にしない)。
     `frontier_capacity` / `max_consecutive_adds` / `max_candidates` は段階3だけ、
     `step_exponent` / `max_step_ratio` / `single_cell_patience` は段階4だけが使う(`step_ratio` / `_reduce_volume`)。
+    `min_width_cells`(m、既定1=制約なし)は両段階が使う —— 削除・置換で材料を薄くする候補を
+    m 立方の材料だけのブロック単位で判定し、通らないものを候補にも合格にもしない(`peel` docstring)。
 
     `is_cancelled` は引数無しで呼べる callable。段階3はブロックを1つ調べる前ごとと評価前、段階4は
     削る候補を作る前ごとに見る。真を返した時点の `best_feasible`(キャッシュ無しで検査済み)を返す
@@ -1247,9 +1325,10 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
                              history=[], evaluations=0, conditions_identifier=identifier)
     initial = find_initial_feasible(design_space_mask, conditions, max_evaluations=max_evaluations,
                                     frontier_capacity=frontier_capacity, max_consecutive_adds=max_consecutive_adds,
-                                    max_candidates=max_candidates, is_cancelled=is_cancelled)
+                                    max_candidates=max_candidates, min_width_cells=min_width_cells,
+                                    is_cancelled=is_cancelled)
     if initial.status != 'feasible':
         return initial
     return _reduce_volume(initial, design_space_mask, conditions, max_evaluations=max_evaluations,
                           is_cancelled=is_cancelled, step_exponent=step_exponent, max_step_ratio=max_step_ratio,
-                          single_cell_patience=single_cell_patience)
+                          single_cell_patience=single_cell_patience, min_width_cells=min_width_cells)
