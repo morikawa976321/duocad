@@ -32,7 +32,9 @@ def lost_coverage(mask: np.ndarray, region: tuple, m: int, exempt: Optional[np.n
     `refill`(`region` と同じ形の真偽配列)を渡すと、空にする代わりに `region` の中をその値にして数える(段階3の置換。足した
     セルが与える被覆を数え、足したセルのうち m 立方に入らないものは `region` の中の `lost` になる)。
 
-    `exempt`(保持ソリッド由来のセル)は被覆を問わない対象外だが、材料であれば他のセルの立方には数える。
+    `exempt`(保持ソリッド由来のセル)は被覆を問わない対象外で、`mask` にあるかどうかに関わらず常に材料として他のセルの立方に数える
+    (`region` を空にしても、その中の `exempt` は材料のまま)。最終形状では保持の実形状が union で戻る(`finalize.py`)ので、
+    探索で削られた保持セルも幅を与える。
     m 立方はそのセルから距離 m-1 以内にしか広がらないので、`region` から距離 2×(m-1) の
     材料データだけで判定できる(大域を再計算しない)。`mask` が既に規則を満たす(`exempt` を除く)ことが前提。
     """
@@ -44,21 +46,23 @@ def lost_coverage(mask: np.ndarray, region: tuple, m: int, exempt: Optional[np.n
     window = np.array(mask[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]], dtype=bool, copy=True)
     window[tuple(slice(int(s.start) - l, int(s.stop) - l) for s, l in zip(region, lo))] = (
         False if refill is None else refill)
-    opened = cube_opening(window, m)
+    fixed = None if exempt is None else exempt[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]]
+    opened = cube_opening(window if fixed is None else window | fixed, m)
     zone = tuple(
         slice(max(int(s.start) - reach - l, 0), min(int(s.stop) + reach - l, h - l))
         for s, l, h in zip(region, lo, hi)
     )
     zone_mask = window[zone]
-    if exempt is not None:
-        zone_mask = zone_mask & ~exempt[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]][zone]
+    if fixed is not None:
+        zone_mask = zone_mask & ~fixed[zone]
     return tuple(z.start + l for z, l in zip(zone, lo)), zone_mask & ~opened[zone]
 
 
 def casualties(mask: np.ndarray, cell: tuple, m: int, exempt: Optional[np.ndarray] = None) -> np.ndarray:
     """`cell` を抜いたとき m 立方の被覆を失う材料セルの添字(n,3)。`exempt` のセルは含めない。
     `cell` と巻き添えを抜いた形は、`exempt` が無ければ `opening(mask − {cell})` に等しい(opening は冪等なので、巻き添えは1回で確定する)。
-    `exempt` があるときは、その未被覆のセルだけが opening との差になる。"""
+    `exempt` があるときは、材料を `mask ∪ exempt` として opening を取り、`exempt` のセルは被覆を問わず残す。
+    `cell` 自身が `exempt` なら材料は変わらないので、巻き添えは無い。"""
     region = tuple(slice(int(c), int(c) + 1) for c in cell)
     origin, lost = lost_coverage(mask, region, m, exempt)
     return np.argwhere(lost) + np.asarray(origin)

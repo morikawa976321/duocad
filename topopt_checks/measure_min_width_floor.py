@@ -91,7 +91,7 @@ def _search_summary(result, best_mask: np.ndarray, keep: np.ndarray, m: int) -> 
         repeated_candidates=int(reduction.get("repeated_candidates", 0)),
         global_min_width_rejections=sum(1 for t in result.history if t.checks == dict(min_width="fail")),
         rule_holds_with_keep_exempt=bool(binary_search._mask_satisfies_min_width(best_mask, m, keep)),
-        rule_violating_cells=int((best_mask & ~min_width.cube_opening(best_mask, m) & ~keep).sum()),
+        rule_violating_cells=int((best_mask & ~keep & ~min_width.cube_opening(best_mask | keep, m)).sum()),
         eroded_core_6connected_parts=int(ndimage.label(core)[1]),
         material_6connected_parts=int(ndimage.label(best_mask)[1]),
     )

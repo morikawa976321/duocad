@@ -73,7 +73,8 @@ class SearchConditions:
     #: 条件は固定なので、この探索が1つ持ち、探索が終わったら捨てる。`None` なら候補ごとにブーリアンを取る旧経路。
     region_overlaps: Any = field(default_factory=acceptance.RegionOverlaps)
     #: 最小幅の規則の**対象から外す**セル(保持ソリッドの占有。設計空間と同じ形の bool 配列、`DesignSpace.keep`)。
-    #: 外すのは「そのセル自身が m 立方に被覆されていなくても違反にしない」だけで、材料としては他のセルの立方に数える。
+    #: 外すのは「そのセル自身が m 立方に被覆されていなくても違反にしない」だけで、材料としては、探索のマスクから削られた
+    #: あとも他のセルの立方に数える(最終形状では保持の実形状が union で戻る)。
     #: `None` は外さない。評価(FEM・6条件)には使わないので `evaluation_identifier` に入れない。
     keep_cells: Any = field(default=None, compare=False, repr=False)
 
@@ -1029,6 +1030,7 @@ def keep_cells_without_room(design_space: np.ndarray, keep: np.ndarray, min_widt
 
 def _mask_satisfies_min_width(mask: np.ndarray, min_width_cells: int, exempt: Optional[np.ndarray] = None) -> bool:
     """`mask` の全材料セル(`exempt` を除く)が m 立方の材料だけのブロックのどれかに属するか(大域判定)。
+    `exempt` は `mask` にあるかどうかに関わらず材料に数える(`min_width.lost_coverage` と同じ扱い)。
 
     段階3の射影(`_materialize`)は親が既に規則を満たす前提の差分計算で、追加は射影しないので、`find_initial_feasible` は
     合格を返す候補ごとにこれで大域に確かめる。
@@ -1036,8 +1038,9 @@ def _mask_satisfies_min_width(mask: np.ndarray, min_width_cells: int, exempt: Op
     if min_width_cells <= 1:
         return True
     mask = np.asarray(mask, dtype=bool)
-    uncovered = mask & ~min_width.cube_opening(mask, int(min_width_cells))
-    return not (uncovered if exempt is None else uncovered & ~exempt).any()
+    if exempt is None:
+        return not (mask & ~min_width.cube_opening(mask, int(min_width_cells))).any()
+    return not (mask & ~exempt & ~min_width.cube_opening(mask | exempt, int(min_width_cells))).any()
 
 
 def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray, *,

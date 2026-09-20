@@ -118,7 +118,7 @@ def run(m: int, budget: int, requested_element_size_mm: float) -> dict:
         keep_cells_in_result=int((best.mask & keep).sum()),
         rule_holds_with_keep_exempt=bool(binary_search._mask_satisfies_min_width(best.mask, m, keep)),
         rule_holds_without_exemption=bool(binary_search._mask_satisfies_min_width(best.mask, m)),
-        non_keep_cells_outside_cubes=int((best.mask & ~min_width_rules.cube_opening(best.mask, m) & ~keep).sum()),
+        non_keep_cells_outside_cubes=int((best.mask & ~keep & ~min_width_rules.cube_opening(best.mask | keep, m)).sum()),
     )
     return out
 

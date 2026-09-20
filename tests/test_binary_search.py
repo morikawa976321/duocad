@@ -881,6 +881,17 @@ def test_stage3_exempt_cells_are_never_taken_along_and_still_count_as_material()
     assert bs._mask_satisfies_min_width(child, 2, exempt)
 
 
+def test_stage3_delete_of_an_exempt_cell_takes_nothing_along():
+    """落ちたら、段階3の削除が保持セルを材料から外した扱いで巻き添えを出している。保持セルの削除は、そのセルだけが空になる。"""
+    bar = np.ones((2, 2, 4), bool)
+    region = (slice(0, 1), slice(0, 1), slice(1, 2))
+    exempt = np.zeros_like(bar)
+    exempt[0, 0, 1] = True
+    child = _stage3_child(bar, bar, 'delete', region, None, exempt=exempt)
+    assert not child[0, 0, 1] and int((bar & ~child).sum()) == 1
+    assert bs._mask_satisfies_min_width(child, 2, exempt)
+
+
 def test_lost_coverage_counts_the_cells_a_replacement_adds_as_coverage():
     """落ちたら、`refill`(置換で足すセル)が被覆に数えられていない: 層を同じ形で入れ直せば何も失わず、空にすれば隣の層を失う。"""
     mask = np.zeros((4, 2, 2), bool)
@@ -1141,7 +1152,7 @@ def test_an_exempt_cell_is_never_taken_as_a_casualty_and_the_invariants_hold_nex
     全材料から `peel` を繰り返し(条件節点なし=島は出ない)、抜けた `exempt` のセルは順位から選んだセル自身だけ。"""
     rng = np.random.default_rng(20260924)
     anchors = np.zeros(0, dtype=np.int64)
-    moves = bites = uncovered_exempt = 0
+    moves = bites = uncovered_exempt = via_removed_keep = 0
     for _ in range(12):
         shape = tuple(int(x) for x in rng.integers(6, 10, size=3))
         m = int(rng.integers(2, 4))
@@ -1156,11 +1167,14 @@ def test_an_exempt_cell_is_never_taken_as_a_casualty_and_the_invariants_hold_nex
             assert len(removed) == stats.picked + stats.casualties
             assert {int(c) for c in np.flatnonzero(exempt.ravel())} & removed <= set(stats.picked_cells.tolist())
             _assert_min_width_invariants(after, m, exempt)
+            assert not (after & ~exempt & ~ndimage.binary_opening(after | exempt, structure=np.ones((m,) * 3, bool))).any()
             moves += stats.picked
             bites += stats.casualties > 0
             uncovered_exempt += int((exempt & after & ~min_width.cube_opening(after, m)).sum())
+            via_removed_keep += int((after & ~exempt & ~min_width.cube_opening(after, m)).sum())
             mask = after
-    assert moves > 100 and bites > 10 and uncovered_exempt > 0  # 巻き添えも、被覆を失った対象外のセルも実際に出ている
+    # 巻き添えも、被覆を失った対象外のセルも、抜かれた対象外のセルの幅に頼るセルも実際に出ている
+    assert moves > 100 and bites > 10 and uncovered_exempt > 0 and via_removed_keep > 0
 
 
 def test_an_exempt_cell_that_loses_its_cube_stays_while_the_others_of_its_layers_go():
@@ -1173,6 +1187,30 @@ def test_an_exempt_cell_that_loses_its_cube_stays_while_the_others_of_its_layers
     gone, stats, after = _bite_of(bar, (0, 0, 1), exempt=exempt)
     assert gone == plain - {(1, 1, 1)} and after[1, 1, 1] and (stats.picked, stats.casualties) == (1, 6)
     _assert_min_width_invariants(after, 2, exempt)
+
+
+def test_an_exempt_cell_missing_from_the_mask_still_counts_as_material_for_the_others():
+    """落ちたら、探索で削られて `mask` に無い保持セルが材料に数えられていない(最終形状では保持の実形状が戻るのに、その幅が判定に入らない)。"""
+    block = np.ones((2, 2, 2), bool)
+    block[0, 0, 0] = False
+    keep = np.zeros_like(block)
+    keep[0, 0, 0] = True
+    assert bs._mask_satisfies_min_width(block, 2, keep)
+    assert not bs._mask_satisfies_min_width(block, 2)
+
+
+def test_peeling_an_exempt_cell_takes_no_coverage_from_the_cells_around_it():
+    """落ちたら、抜いた保持セルが材料でなくなって巻き添えを出している。2x2x4 の棒の (0,0,1) は普通は z=0・z=1 の層の被覆を奪うが、
+    保持セルなら1セルだけが抜け、残りは(抜けた保持セルを材料に数えて)被覆されたまま。"""
+    bar = np.ones((2, 2, 4), bool)
+    region = (slice(0, 1), slice(0, 1), slice(1, 2))
+    keep = np.zeros_like(bar)
+    keep[0, 0, 1] = True
+    assert min_width.lost_coverage(bar, region, 2)[1].any()
+    assert not min_width.lost_coverage(bar, region, 2, keep)[1].any()
+    gone, stats, after = _bite_of(bar, (0, 0, 1), exempt=keep)
+    assert gone == {(0, 0, 1)} and (stats.picked, stats.casualties) == (1, 0)
+    assert bs._mask_satisfies_min_width(after, 2, keep) and not bs._mask_satisfies_min_width(after, 2)
 
 
 def test_the_design_space_opening_keeps_the_keep_cells_and_still_trims_the_others():
@@ -1200,8 +1238,10 @@ def test_the_full_search_keeps_the_keep_cell_and_every_non_keep_cell_stays_in_a_
     result = bs.find_best_feasible(design, conditions, max_evaluations=200, min_width_cells=2)
     mask = result.best_feasible.mask
     assert result.status == 'feasible' and mask[5, 2, 0]
-    uncovered = mask & ~ndimage.binary_opening(mask, structure=np.ones((2, 2, 2), bool))
-    assert uncovered.any() and not (uncovered & ~conditions.keep_cells).any()
+    cube = np.ones((2, 2, 2), bool)
+    assert (mask & ~ndimage.binary_opening(mask, structure=cube)).any()
+    keep = conditions.keep_cells
+    assert not (mask & ~keep & ~ndimage.binary_opening(mask | keep, structure=cube)).any()
 
 
 def test_with_min_width_one_keep_cells_change_neither_the_result_nor_the_cost(monkeypatch):
