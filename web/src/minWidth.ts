@@ -12,7 +12,18 @@ export type MinWidthVerdict =
   | { kind: 'none' }
   | { kind: 'below' }
   | { kind: 'above' }
-  | { kind: 'ok'; guaranteedMm: number }
+  | {
+      kind: 'ok'
+      /** 保証される段の番号 m(サーバーの `ceil(値 / 要素サイズ)` を上限で頭打ちにしたもの)。 */
+      cells: number
+      guaranteedMm: number
+      /** 入力が段のあいだに落ちて次の段へ切り上がったときの、要求に対する増分の割合(0.46 = +46%)。段ちょうどなら `null`。 */
+      roundedUpBy: number | null
+      /** 切り上がった段(`cells`)の丸めない値(押すと段ちょうどの入力になる)。 */
+      stepMm: number
+      /** ひとつ下の段(`cells - 1`)の値。`cells` が下限の段(2)なら `null`。 */
+      lowerStepMm: number | null
+    }
 
 /**
  * 表示の小数桁数。既定は2桁だが、値が 0.01 に近い・下回る小さい部品では、下限と上限が同じ桁で
@@ -47,8 +58,19 @@ export function judgeMinWidth(valueMm: number | null, step: OptimizeResolutionSt
   if (valueMm < step.min_width_floor_mm) return { kind: 'below' }
   if (valueMm > step.min_width_ceiling_mm) return { kind: 'above' }
   // サーバーは `m = ceil(値 / 要素サイズ)` を上限のセル数で頭打ちにする(`_resolve_min_width`)。
-  const guaranteed = Math.min(Math.ceil(valueMm / step.element_size_mm) * step.element_size_mm, step.min_width_ceiling_mm)
-  return { kind: 'ok', guaranteedMm: guaranteed }
+  const steps = step.min_width_steps_mm
+  const cells = Math.min(Math.ceil(valueMm / step.element_size_mm), steps.length + 1)
+  const guaranteed = Math.min(cells * step.element_size_mm, step.min_width_ceiling_mm)
+  // 段ちょうどのボタン値は m × 要素サイズと1ulp違うことがあるので、相対誤差で「段のあいだ」を判定する。
+  const excess = guaranteed / valueMm - 1
+  return {
+    kind: 'ok',
+    cells,
+    guaranteedMm: guaranteed,
+    roundedUpBy: excess > 1e-9 ? excess : null,
+    stepMm: steps[cells - 2],
+    lowerStepMm: cells > 2 ? steps[cells - 3] : null,
+  }
 }
 
 /** 無効な入力に添える説明(パネルの赤字とトーストで同じ文を使う)。 */
@@ -63,4 +85,18 @@ export function minWidthProblem(verdict: MinWidthVerdict, step: OptimizeResoluti
 /** 実際に保証される幅の表示(切り捨て。表示が保証を超えないように)。 */
 export function shownGuaranteedMm(verdict: MinWidthVerdict): string | null {
   return verdict.kind === 'ok' ? roundTo(verdict.guaranteedMm, digitsFor(verdict.guaranteedMm), 'down') : null
+}
+
+/** 段のボタンの表示。入力値ではない(m=2 の段を丸めて打つと、下限割れか m=3 になる。ボタンは丸めない値を入れる)。 */
+export function shownStepMm(valueMm: number): string {
+  return valueMm.toFixed(Math.min(digitsFor(valueMm) + 1, 100)) // toFixed の桁数の上限
+}
+
+/** 段のあいだに落ちた入力への説明(切り上げ先を、実行を押す前に見せる)。段ちょうどなら `null`。 */
+export function roundUpNotice(verdict: MinWidthVerdict, valueMm: number | null): string | null {
+  if (verdict.kind !== 'ok' || verdict.roundedUpBy === null || valueMm === null) return null
+  return (
+    `入力 ${valueMm}mm は段のあいだにあり、m=${verdict.cells} へ切り上がって ` +
+    `${shownGuaranteedMm(verdict)}mm が保証される(要求より ${(verdict.roundedUpBy * 100).toFixed(1)}% 太い部品が出る)`
+  )
 }

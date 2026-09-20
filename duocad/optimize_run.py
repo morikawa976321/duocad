@@ -554,6 +554,7 @@ def _resolution_steps(lo, hi, upper: float, lower: float) -> List[dict]:
                 "element_count": int(elements),
                 "min_width_floor_mm": float(2.0 * size),
                 "min_width_ceiling_mm": float(min(shape) * size),
+                "min_width_steps_mm": min_width_steps_mm(size, min(shape)),
             }
         )
     return steps
@@ -1265,6 +1266,22 @@ def _resolve_element_size(limits: dict, requested: Optional[float]) -> float:
             f"(総要素数が {MAX_ELEMENTS} を超える)"
         )
     return value
+
+
+def min_width_steps_mm(spacing: float, max_cells: int) -> List[float]:
+    """この解像度で保証できる最小幅の段(m = 2..max_cells の `m × spacing`)。
+
+    各値は `_resolve_min_width` に渡すとちょうどその m になる形へ揃える: 浮動小数の丸めで
+    `m × spacing / spacing` が m を超える(0.1×3/0.1 → 4)ときは、値を1ulpずつ下げる。
+    """
+    spacing = float(spacing)
+    steps: List[float] = []
+    for cells in range(2, int(max_cells) + 1):
+        value = cells * spacing
+        while math.ceil(value / spacing) > cells:
+            value = math.nextafter(value, 0.0)
+        steps.append(float(value))
+    return steps
 
 
 def _resolve_min_width(spacing: float, requested: Optional[float], max_cells: Optional[int] = None) -> dict:

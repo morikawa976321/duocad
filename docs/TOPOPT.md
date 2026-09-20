@@ -1548,6 +1548,14 @@ bbox も三角形分割の節点と一致することを固定する。
   (上限は不可能な値だけを断る)。段ごとの下限・上限はサーバーが配る(`resolution_limits()["steps"][i]["min_width_floor_mm" / "min_width_ceiling_mm"]`)。
   画面は下限を切り上げ、上限と保証幅を切り捨てて表示する(表示した値がそのまま通る。`web/src/minWidth.ts`)。
   **上限ちょうどの値は `値 / spacing` の丸めで m が1つ上へ跳ねうる**ので、mm で比べて m を頭打ちにする(`_resolve_min_width`)。
+- **保証できる幅は段になる**: セル単位の制約なので保証できるのは実 spacing の整数倍(m=2,3,…)だけで、段のあいだの入力は次の段へ切り上がる。
+  下限のすぐ上を入れると m が1つ飛び、**要求より最大50%太い部品が黙って出る**(実 spacing 2.4063mm で 4.9mm を入れると 7.2189mm。要求より47%太い)。
+  サーバーが段の値を配り(`resolution_limits()["steps"][i]["min_width_steps_mm"]`。`optimize_run.min_width_steps_mm`)、画面は段のボタン(先頭4つ。全段は入力欄の候補 `datalist` に出る)と、
+  段のあいだの入力への切り上げ先(要求より何%太くなるか)・ひとつ下の段へ下げるボタンを実行前に出す(`OptimizePanel.svelte`、`web/src/minWidth.ts`。
+  実ブラウザの検査は `web/scripts/smoke-optimize-min-width.mjs`)。**段の値は丸めない値をそのまま入力する**: m=2 の段(=下限)は 2桁に丸めると下限割れ、
+  切り上げると m=3 になるので、手で丸めた値を打つと段が飛ぶ(ボタンの表示は丸めるが、押すと丸めない値が入る)。
+  `m × spacing / spacing` は浮動小数の丸めで m を超えることがある(0.1×3/0.1 → 4)ので、`min_width_steps_mm` は値を1ulpずつ下げて、
+  入力するとちょうどその m になる形にしてある(`tests/test_optimize_backend.py`)。
 - **opening の費用**: m 立方の構造要素を直接使うと費用は m³ に比例する(100×60×60 格子・全材料で m=32: 14秒、m=48: 218秒)。
   3軸の直線の erosion → dilation に分けると同じ結果(`tests/test_binary_search.py` が `binary_opening` と一致を見る)が m に比例する
   (m=48: 0.03秒)ので、`_cube_opening` を使う。小さい窓(m=2・3の `peel` 1セル分)では分けた方が約20マイクロ秒遅い(実測)。

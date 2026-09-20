@@ -745,6 +745,9 @@ export interface OptimizeResolutionStep {
   min_width_floor_mm: number
   /** この段を選んだときの最小幅の上限[mm](= 格子の最短の辺のセル数 × 要素サイズ)。これを超える立方は格子に入らない。 */
   min_width_ceiling_mm: number
+  /** この段で保証できる最小幅の段(m = 2, 3, … の `m × 要素サイズ`)。**入力すると、ちょうどその m になる値**
+   *  (`optimize_run.min_width_steps_mm`)。段のあいだの入力は次の段へ切り上がる。 */
+  min_width_steps_mm: number[]
 }
 
 /**

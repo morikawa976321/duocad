@@ -422,6 +422,39 @@ def test_every_ladder_step_carries_its_own_min_width_floor(session: Session) -> 
         assert step["min_width_floor_mm"] == pytest.approx(2.0 * step["element_size_mm"])
 
 
+def test_every_min_width_step_resolves_to_its_own_cell_count_and_the_gap_rounds_up() -> None:
+    """各段の値を入力すると、ちょうどその m になる(段の境界・その少し上・少し下)。落ちたら、画面が
+    示す段を選んでも m が1つ飛ぶ。"""
+    checked = 0
+    for spacing in (0.1, 0.7, 1 / 3, 2.4, 2.387506, 2.4063, 4.9):
+        max_cells = 61
+        steps = optimize_run.min_width_steps_mm(spacing, max_cells)
+        assert len(steps) == max_cells - 1
+        for cells, value in zip(range(2, max_cells + 1), steps):
+            resolved = optimize_run._resolve_min_width(spacing, value, max_cells=max_cells)
+            assert resolved["cells"] == cells, (spacing, cells)
+            assert value == pytest.approx(cells * spacing, rel=1e-12)
+            if cells > 2:
+                below = optimize_run._resolve_min_width(spacing, value * (1 - 1e-6), max_cells=max_cells)
+                assert below["cells"] == cells, (spacing, cells)
+            if cells < max_cells:
+                above = optimize_run._resolve_min_width(spacing, value * (1 + 1e-6), max_cells=max_cells)
+                assert above["cells"] == cells + 1, (spacing, cells)
+            checked += 1
+    assert checked == 7 * 60
+
+
+def test_every_ladder_step_lists_the_achievable_min_widths(session: Session) -> None:
+    """段ごとに、下限(m=2)から上限(格子の最短の辺のセル数)まで `m × 要素サイズ` の段が並ぶ。"""
+    _setup_four_conditions(session)
+    for step in optimize_run.resolution_limits(session.document)["steps"]:
+        values = step["min_width_steps_mm"]
+        assert values[0] == step["min_width_floor_mm"]
+        assert values[-1] == pytest.approx(step["min_width_ceiling_mm"], rel=1e-12)
+        assert values[-1] <= step["min_width_ceiling_mm"]
+        assert len(values) == round(step["min_width_ceiling_mm"] / step["element_size_mm"]) - 1
+
+
 def test_the_element_size_upper_bound_reproduces_itself_on_the_real_grid(session: Session) -> None:
     """**上限の要素サイズで導出した実格子の spacing は上限以下**(要求値そのままだと
 
