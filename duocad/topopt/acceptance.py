@@ -358,8 +358,24 @@ def condition_check(material, table, fixed_faces, load_faces, forces):
 # FEM: 材料マスクを再構築して安全率
 # ---------------------------------------------------------------------------
 
+def _warm_start_vector(u0, ndof):
+    """CG の初期値に使える `u0` と、使えなかった理由(使えたなら `None`)。
+
+    **格子全体の自由度(`ndof = 3×節点数`、節点番号順)で渡す契約。** `PreparedSystem.solve` が
+    `u0[model.free]` で自由な自由度だけを取るので、評価ごとに拘束(`extra_fixed_dofs`)が変わっても
+    同じ格子の変位はそのまま対応する(拘束を抜いた詰めた並びで渡すと `free` の変わる評価で食い違う)。
+    形・型・非有限が合わないものは例外にせず捨てて cold に落とす(数えるのは呼び出し側)。
+    """
+    vector = np.asarray(u0)
+    if vector.shape != (ndof,) or vector.dtype.kind != 'f':
+        return None, 'shape'
+    if not np.isfinite(vector).all():
+        return None, 'non_finite'
+    return vector, None
+
+
 def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_modulus_mpa,
-                 percentile, solver, fields=None):
+                 percentile, solver, fields=None, u0=None):
     try:
         live = active_nodes(material).ravel()
         active_dofs = np.repeat(live, 3)
@@ -377,7 +393,13 @@ def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_m
         model = fem.Model(*material.shape, fixed_dofs=fixed, load=load,
                           extra_fixed_dofs=np.flatnonzero(~active_dofs), active_mask=material)
         density = material.astype(float)
-        displacement = stress.solve_displacement(model, density, solver=solver)
+        warm_start = 'cold'
+        if u0 is not None:
+            u0, rejected = _warm_start_vector(u0, model.ndof)
+            warm_start = 'used' if rejected is None else f'fell_back:{rejected}'
+        if fields is not None:
+            fields['warm_start'] = warm_start
+        displacement = stress.solve_displacement(model, density, solver=solver, u0=u0)
         residual = model.stiffness_apply(density, 3.0, displacement) - model.f
         relative = float(np.linalg.norm(residual[model.free]) / np.linalg.norm(model.f[model.free]))
         if not np.isfinite(displacement).all() or not math.isfinite(relative) or relative > fem.SOLVE_RESIDUAL_TOL:
@@ -393,6 +415,7 @@ def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_m
             # 同じ変位から取る u_eᵀ k₀ u_e(単位剛性。空セルは節点を共有しても 0 にする)。
             _, element_energy = model.compliance(density, 3.0, displacement)
             fields['element_energy'] = np.where(material, element_energy, 0.0)
+            fields['displacement'] = displacement
         return dict(status='pass' if sf >= target else 'fail', safety_factor=sf,
                     target_safety_factor=target, representative_mpa=report.representative_mpa,
                     allowable_mpa=allowable_mpa, youngs_modulus_mpa=youngs_modulus_mpa,
@@ -454,7 +477,7 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
             preserves, excludes, target_safety_factor, allowable_mpa=DEFAULT_ALLOWABLE_MPA,
             youngs_modulus_mpa=DEFAULT_YOUNGS_MODULUS_MPA, percentile=stress.DEFAULT_PERCENTILE,
             solver='cg', history=None, converged=None, max_evaluations=None,
-            volume_atol=1e-9, volume_rtol=1e-9, bbox_cache=None, region_overlaps=None, fields=None):
+            volume_atol=1e-9, volume_rtol=1e-9, bbox_cache=None, region_overlaps=None, fields=None, u0=None):
     """6条件の入口。**`material`/`before` は格子と同じ形のboolマスク(材料=True)を直接
     受ける**(計画書§5: 「新規の製品APIはboolマスクを受ける」)。過去記録の密度場からの
     二値化は行わない —— それは読み取りアダプター `inspect_document` に閉じてある。
@@ -462,7 +485,11 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
     `region_overlaps`(`RegionOverlaps`)を渡すと、保持・除外の共通体積を前計算から引く(既定は候補ごとに
     ブーリアンを取る旧経路。報告の形と数値許容差は同じ)。
     `fields` に dict を渡すと、安全率を計算できたときだけ要素ごとの `u_eᵀ k₀ u_e`(格子と同じ形、
-    材料外は 0)を `fields['element_energy']` に入れる。報告(JSON)には入れない(段階4の削る順位用)。
+    材料外は 0)を `fields['element_energy']` に、解いた変位(ndof,)を `fields['displacement']` に入れる。
+    報告(JSON)には入れない(段階4の削る順位と、次の候補の初期値用)。
+    `u0`(格子全体の自由度 ndof の変位。`_warm_start_vector`)は CG の初期値になる(答えは変わらず反復だけ減る)。
+    `fields['warm_start']` は FEM を解く直前に `cold`(`u0` なし) / `used` / `fell_back:<理由>`(捨てて cold に
+    落とした)を入れる。`u0` の既定は `None`(cold)。
     """
     for name, value in [('spacing', grid.spacing), ('target', target_safety_factor),
                         ('allowable_mpa', allowable_mpa), ('youngs_modulus_mpa', youngs_modulus_mpa)]:
@@ -488,7 +515,7 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
     if all(checks[key]['status'] == 'pass' for key in ('watertight', 'single_solid', 'conditions')):
         checks['safety'] = safety_check(material, grid, fixed, load, target=target_safety_factor,
                                        allowable_mpa=allowable_mpa, youngs_modulus_mpa=youngs_modulus_mpa,
-                                       percentile=percentile, solver=solver, fields=fields)
+                                       percentile=percentile, solver=solver, fields=fields, u0=u0)
     else:
         checks['safety'] = dict(status='unknown', reason='prerequisites_failed')
     statuses = [check['status'] for check in checks.values()]
