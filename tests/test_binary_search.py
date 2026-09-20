@@ -1585,6 +1585,7 @@ def test_the_solved_displacement_is_returned_in_fields_and_used_as_the_cg_start_
     ('shape', lambda u: u[np.flatnonzero(u)]),
     ('shape', lambda u: u.astype(int)),
     ('shape', lambda u: np.stack([u, u])),
+    ('shape', lambda u: [[0.0], [1.0, 2.0]]),
     ('non_finite', lambda u: np.where(np.arange(u.size) == 5, np.nan, u)),
 ])
 def test_a_start_vector_that_does_not_fit_falls_back_to_cold_without_raising(label, make):
@@ -1603,8 +1604,8 @@ def test_a_start_vector_that_does_not_fit_falls_back_to_cold_without_raising(lab
     assert fallen['checks']['safety']['safety_factor'] == cold['checks']['safety']['safety_factor']
 
 
-def test_the_reduction_passes_the_adopted_displacement_on_and_warm_and_cold_adopt_the_same_shape(monkeypatch):
-    """落ちたら、前の形の変位が次の候補へ渡っていない、または初期値のせいで探索の合否・採用形状が変わっている。"""
+def test_the_reduction_passes_the_adopted_displacement_on_and_warm_and_cold_agree_on_this_small_fixture(monkeypatch):
+    """落ちたら、前の形の変位が次の候補へ渡っていない、またはこの小さい題材で初期値が探索の合否・採用形状を変えている(実機の hanger は一致しない)。"""
     conditions, design, _ = appendage_conditions()
     conditions = dataclasses.replace(conditions, solver='cg')
     original = acceptance.inspect
@@ -1615,9 +1616,9 @@ def test_the_reduction_passes_the_adopted_displacement_on_and_warm_and_cold_adop
         return original(material, before, grid, **kwargs)
 
     monkeypatch.setattr(acceptance, 'inspect', spy)
-    warm = bs.find_best_feasible(design, conditions, max_evaluations=200)
+    warm = bs.find_best_feasible(design, conditions, max_evaluations=200, warm_start=True)
     warm_calls, passed[:] = list(passed), []
-    cold = bs.find_best_feasible(design, conditions, max_evaluations=200, warm_start=False)
+    cold = bs.find_best_feasible(design, conditions, max_evaluations=200)
     ndof = conditions.table.node_grid.ndof
     assert any(u0 is not None and u0.shape == (ndof,) for u0 in warm_calls) and all(u0 is None for u0 in passed)
     assert warm.best_feasible.displacement.shape == (ndof,) and cold.best_feasible.displacement is None
@@ -1638,7 +1639,20 @@ def test_a_start_vector_the_evaluation_discards_is_counted_as_a_fallback(monkeyp
     original = acceptance.inspect
     monkeypatch.setattr(acceptance, 'inspect', lambda material, before, grid, **kwargs: original(
         material, before, grid, **{**kwargs, 'u0': None if kwargs.get('u0') is None else kwargs['u0'][:-1]}))
-    result = bs.find_best_feasible(design, conditions, max_evaluations=200)
+    result = bs.find_best_feasible(design, conditions, max_evaluations=200, warm_start=True)
     reduction = result.diagnostics['reduction']
     assert reduction['warm_start_used'] == 0 and reduction['warm_start_fallbacks'] > 0
     assert result.termination == 'converged'
+
+
+def test_the_direct_solver_ignores_the_start_vector_and_it_is_not_counted_as_used():
+    """落ちたら、初期値を使わない直接解法で `warm_start_used` が増え、効果の診断が実態と食い違う。"""
+    conditions = bar_conditions((12, 3, 3), solver='direct')
+    full = np.ones((12, 3, 3), bool)
+    kwargs = conditions.inspect_kwargs(bbox_cache=None)
+    fields: dict = {}
+    acceptance.inspect(full, full, conditions.grid, **kwargs, fields=fields)
+    got: dict = {}
+    acceptance.inspect(full, full, conditions.grid, **kwargs, fields=got, u0=fields['displacement'])
+    assert got['warm_start'] == 'unused:direct'
+

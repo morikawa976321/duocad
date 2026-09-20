@@ -224,7 +224,7 @@ def solve_displacement(
     cg_rtol: float = 1e-9,
     u0: np.ndarray | None = None,
 ) -> np.ndarray:
-    """最終 ρ でもう一度 K U = F を解く。`u0`(ndof,) は CG の初期値(`Model.solve` へそのまま渡す)。"""
+    """最終 ρ でもう一度 K U = F を解く。"""
     return model.solve(
         np.asarray(rho, dtype=float), penal, solver=solver, cg_rtol=cg_rtol, u0=u0
     )

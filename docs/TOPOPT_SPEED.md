@@ -196,9 +196,57 @@ CADソリッドとのブーリアンを毎回取っていた(`intersection_volum
 20%削る場合でも 1e-9 台。CG の収束判定は右辺のノルム基準(`rtol`)なので、初期値を変えても
 到達する精度は同じ。
 
-**まだ通っていない**: `acceptance.inspect` に u0 の口が無い。段階4のループが持つ合格形状の変位を
-`safety_check` → `stress.solve_displacement` → `Model.solve(u0=)` まで通す必要がある。
 秒は他の実行と競合した値(反復数は決定的)。
+
+**段階4へ通した(2026-09-20、`0f1b0f0`)**: `u0` を `acceptance.inspect` → `safety_check` →
+`stress.solve_displacement` → `Model.solve(u0=)` へ通し、解いた変位を `fields['displacement']`
+(`element_energy` と同じ口)で返して `FeasibleModel.displacement` に1本だけ持たせる。
+`find_best_feasible(..., warm_start=...)` で切り替える(**既定は False**。下の実測で cold と採用形状が一致しなかったため)。段階3には配線していない(上の表: ブロック単位の削除では効かない)。
+`u0` は**格子全体の自由度(ndof)で渡す**(`PreparedSystem.solve` が `u0[model.free]` と読むので、
+評価ごとに拘束が変わっても対応する)。形・型・非有限が合わない `u0` は例外にせず cold に落とし、
+落ちた回数は `diagnostics['reduction']['warm_start_fallbacks']`(使えた回数は `warm_start_used`)。
+
+### 段階4に通した探索の実測: 採用形状は cold と一致しなかった(2026-09-20)
+
+`topopt_checks/measure_warm_start_search.py` を `--mode warm` / `--mode cold` で1プロセスずつ直列に1回ずつ回した。
+hanger・要素サイズ要求2.4mm(実 spacing 2.3875mm・格子 69×130×101・設計空間 377,075セル)・目標2.0・
+評価予算20・最小幅は既定(m=1)・`solver='cg'`。
+
+| | warm | cold |
+|---|---|---|
+| 評価回数 / termination | 20 / `evaluation_limit` | 20 / `evaluation_limit` |
+| FEM を解いた回数 | 21 | 21 |
+| CG 反復の合計 | 139,093 | 155,948 |
+| 総秒数(評価あたり) | 1,711(85.6) | 2,209(110.4) |
+| `warm_start_used` / `warm_start_fallbacks` | 19 / **0** | 0 / 0 |
+| 採用要素数 | 5,436 | 5,436 |
+| 採用形状の安全率 | 5.685 | 2.922 |
+| 採用形状の `mask_hash` | `166b00cc…` | `04aad4e7…` |
+
+**`mask_hash` は一致しなかった。** 全20評価の合否は同じ(すべて `ok`)で、削った数(`remove:N`)も同じだが、
+評価0(初期)と評価1のマスクは一致し、**評価2の候補から別のマスク**になった。安全率も評価1で
+141.99670080918696 / 141.99670080707037(相対 1.5e-11)、評価2で 121.0614 / 121.0594(相対 1.7e-5、
+ただし評価2はもう別の形)と分かれ、以後の軌道は別物になった(最終の採用体積は同じ5,436セルで安全率が 5.69 と 2.92)。
+反復数の分かれ方も同じ所から始まる(評価1: 3,211 / 3,223)。
+
+- **測ったこと**: 分岐の起点は評価1(削った75,415セル)の解と、その次の候補の選び方の間にある。
+  評価1の解を warm で求めると変位が1e-11台で cold と違い、それが次の削る順位を変えた、という順序は
+  **確かめていない**(`ranked_cells` の並びを両方で比べていない)。
+- **cold の再現**: 同じ条件を予算4で cold のまま再走すると、評価0〜3のマスクの `mask_hash`・安全率・CG反復数が
+  上の cold と完全に一致した。cold の軌道は実行間で再現する(乱れの原因は warm 側にある)。
+- **反復の合計 0.89 は「効果」ではない。** 軌道が別なので同じ形同士の比較にならない。同じマスクを解いたのは
+  評価1だけで、そこは 3,211 対 3,223 とほぼ同じ。予算20の歩幅は削る量が 75,415 → 1,359セルと大きく(`max_step_ratio`
+  の上限20%に相当する領域)、上の表で効果が無かった領域である。**1セル削りが続く終盤には予算20では届いていない**ので、
+  段階4全体への効果は未測定のまま。
+- **秒は比較に使えない。** 測定中に別セッションの `run_hanger.py`(hanger、予算60)が同時に走っていた
+  (cold の間は確認、warm の間は確認していない)。
+- **メモリ**: 空きメモリは開始時 16.6GB(warm)/14.2GB(cold)、終了時 14.3GB/16.1GB。変位を持ち回るぶん(約22MB)は判別できない。
+
+**含意**: `warm_start=True` は合否を変えなかったが、**採用形状は cold と一致しない**。既定の挙動(答え)を変えないため
+コードの既定はオフにした。既定をオンにするかは本人判断(予算20の実測では、速くなったかを言えない)。
+
+再現: `.\.venv\Scripts\python.exe topopt_checks\measure_warm_start_search.py --mode warm --result <json>`(cold も同様)、
+`--compare <warm.json> <cold.json>` で並べる。1回約30分。空きメモリ12GB未満なら測らずに終わる。
 
 ---
 
@@ -212,5 +260,6 @@ CADソリッドとのブーリアンを毎回取っていた(`intersection_volum
 | `duocad/topopt/acceptance.py` | `RegionOverlaps`(保持・除外の前計算)・`region_check(overlaps=)` |
 | `duocad/kernel.py` | `grid_cell_common_volumes`(平面で切ってセルごとの共通体積)・`box_common_volume` |
 | `topopt_checks/measure_warm_start.py` | 前の形の変位をCGの初期値にしたときの反復数・秒・解の一致 |
+| `topopt_checks/measure_warm_start_search.py` | `warm_start` の有無で探索を1回ずつ回し、反復数・秒・採用形状の一致を並べる |
 | `topopt_checks/measure_region_overlaps.py` | 前計算の秒・メモリと、旧経路との合否・体積の比較 |
 | `topopt_checks/measure_binary_search.py` | 二値探索の評価回数・最良体積の履歴の計測(未実機検証) |

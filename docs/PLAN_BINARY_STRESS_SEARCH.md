@@ -450,7 +450,8 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 `peel_seconds_max` / `repeated_candidates` / `single_cell_patience`(`None` は無制限)/ `safety_excluded_cells`(削ったセルが1つで
 安全率が落ち、順位から外して続けたセルの数。止まる原因になった最後の1セルは含まない)/ `adopted_after_exclusion`(安全率で外したセルが
 採用を挟まず1つ以上続いた後に、採用に至った回数)/ `geometry_rejections`(候補ごとに `step`・`components`・`surviving_components`・
-`missing`・`removed_islands`)/ `stop_reason`(`safety_at_single_cell` / `no_removable_cell` / `seed_energy_unavailable`。予算切れ・中断は
+`missing`・`removed_islands`)/ `warm_start`(前の形の変位を初期値に渡したか)・`warm_start_used` / `warm_start_fallbacks`(初期値を使えた回数・
+形が合わず cold に落ちた回数。docs/TOPOPT_SPEED.md)/ `stop_reason`(`safety_at_single_cell` / `no_removable_cell` / `seed_energy_unavailable`。予算切れ・中断は
 `None` で、`SearchResult.termination` が `evaluation_limit` / `cancelled`)/ `final_region_recheck` / `steps`。
 
 `steps[]` の1件は `requested_cells` / `peel`(`picked` 順位から削った数・`islands` 島として消えた数・`skipped_support` /

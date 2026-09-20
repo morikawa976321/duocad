@@ -1216,7 +1216,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
                    step_exponent: float = DEFAULT_STEP_EXPONENT,
                    max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
                    single_cell_patience: Optional[int] = DEFAULT_SINGLE_CELL_PATIENCE,
-                   min_width_cells: int = 1, warm_start: bool = True) -> SearchResult:
+                   min_width_cells: int = 1, warm_start: bool = False) -> SearchResult:
     """`initial.best_feasible` から、ひずみエネルギーの低い材料をまとめて削り続ける(段階4)。
 
     合格形状は1つだけ持つ。1回の試行: 合格形状を解いた変位の要素エネルギー(近傍でならす)の低い順に
@@ -1238,9 +1238,11 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     評価は bbox キャッシュ無しで行うが、保持・除外の共通体積は前計算(`region_overlaps`)から引く。
     採用形状はこの関数を出る前に前計算を使わない旧経路で取り直す(`_recheck_regions_without_precompute`)。
 
-    `warm_start` なら、直前の合格形状の変位(`FeasibleModel.displacement`)を次の候補の CG の初期値に渡す
-    (答えは変わらず反復だけ減る。1セル削りで 0.01〜0.02 倍、docs/TOPOPT_SPEED.md)。初期値を使えたか捨てたかの
-    回数は `diagnostics['reduction']['warm_start_used']` / `['warm_start_fallbacks']`。
+    `warm_start`(**既定オフ**)なら、直前の合格形状の変位(`FeasibleModel.displacement`)を次の候補の CG の
+    初期値に渡す(1セル削りで反復が 0.01〜0.02 倍)。**同じ形の解は 1e-9 台で cold と一致するが、次に削る順位が
+    変わり、探索の軌道と採用形状の `mask_hash` は cold と一致しないことがある**(hanger 2.4mm・予算20で実測、
+    docs/TOPOPT_SPEED.md。既定を変えない=答えを変えないためオフ)。初期値を使えたか捨てたかの回数は
+    `diagnostics['reduction']['warm_start_used']` / `['warm_start_fallbacks']`。
     """
     if single_cell_patience is not None and not (
             isinstance(single_cell_patience, int) and not isinstance(single_cell_patience, bool) and single_cell_patience >= 1):
@@ -1370,7 +1372,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
                        max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
                        single_cell_patience: Optional[int] = DEFAULT_SINGLE_CELL_PATIENCE,
                        min_width_cells: int = 1,
-                       warm_start: bool = True,
+                       warm_start: bool = False,
                        is_cancelled=None) -> SearchResult:
     """初期合格探索(段階3)に続けて、ひずみエネルギーの低い材料を削って体積を減らす単一の探索入口(§3)。
 
@@ -1381,7 +1383,6 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     (§4.1「評価条件の識別子」と同じ思想で、初期探索と削減探索を別予算にしない)。
     `frontier_capacity` / `max_consecutive_adds` / `max_candidates` は段階3だけ、
     `step_exponent` / `max_step_ratio` / `single_cell_patience` / `warm_start` は段階4だけが使う(`step_ratio` / `_reduce_volume`)。
-    `warm_start=False` は前の形の変位を渡さず毎回 cold で解く(効果と採用形状の一致を測るときの比較用)。
     `min_width_cells`(m、既定1=制約なし)は両段階が使う —— 削除・置換で材料を薄くする候補を
     m 立方の材料だけのブロック単位で判定し、通らないものを候補にも合格にもしない(`peel` docstring)。
     設計空間はまず m 立方の opening で絞る(縁に m 立方の入らない材料が残る設計空間では、局所判定の

@@ -366,7 +366,10 @@ def _warm_start_vector(u0, ndof):
     同じ格子の変位はそのまま対応する(拘束を抜いた詰めた並びで渡すと `free` の変わる評価で食い違う)。
     形・型・非有限が合わないものは例外にせず捨てて cold に落とす(数えるのは呼び出し側)。
     """
-    vector = np.asarray(u0)
+    try:
+        vector = np.asarray(u0)
+    except (TypeError, ValueError):  # 長さのそろわない入れ子リストなど
+        return None, 'shape'
     if vector.shape != (ndof,) or vector.dtype.kind != 'f':
         return None, 'shape'
     if not np.isfinite(vector).all():
@@ -394,7 +397,9 @@ def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_m
                           extra_fixed_dofs=np.flatnonzero(~active_dofs), active_mask=material)
         density = material.astype(float)
         warm_start = 'cold'
-        if u0 is not None:
+        if u0 is not None and solver == 'direct':
+            u0, warm_start = None, 'unused:direct'  # 直接解法は初期値を使わない(`PreparedSystem.solve`)
+        elif u0 is not None:
             u0, rejected = _warm_start_vector(u0, model.ndof)
             warm_start = 'used' if rejected is None else f'fell_back:{rejected}'
         if fields is not None:
@@ -487,9 +492,9 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
     `fields` に dict を渡すと、安全率を計算できたときだけ要素ごとの `u_eᵀ k₀ u_e`(格子と同じ形、
     材料外は 0)を `fields['element_energy']` に、解いた変位(ndof,)を `fields['displacement']` に入れる。
     報告(JSON)には入れない(段階4の削る順位と、次の候補の初期値用)。
-    `u0`(格子全体の自由度 ndof の変位。`_warm_start_vector`)は CG の初期値になる(答えは変わらず反復だけ減る)。
+    `u0`(格子全体の自由度 ndof の変位。`_warm_start_vector`)は CG の初期値になる(同じ形の安全率は 1e-9 台で一致する)。
     `fields['warm_start']` は FEM を解く直前に `cold`(`u0` なし) / `used` / `fell_back:<理由>`(捨てて cold に
-    落とした)を入れる。`u0` の既定は `None`(cold)。
+    落とした) / `unused:direct`(直接解法は初期値を使わない)を入れる。`u0` の既定は `None`(cold)。
     """
     for name, value in [('spacing', grid.spacing), ('target', target_safety_factor),
                         ('allowable_mpa', allowable_mpa), ('youngs_modulus_mpa', youngs_modulus_mpa)]:
