@@ -320,7 +320,7 @@ def _op_scan(mask: np.ndarray, design_space: np.ndarray, size: int, op: str, *,
         region = _block_region(lo, size, mask.shape)
         if op == 'delete':
             ok = (mask[region].any() and _touches_empty(mask, region)
-                  and _min_width_ok_after_clearing(mask, region, min_width_cells))
+                  and (min_width_cells <= 1 or _min_width_ok_after_clearing(mask, region, min_width_cells)))
             yield ('delete', region, None) if ok else None
             continue
         addable = _local_addable(mask, design_space, region)
@@ -329,7 +329,8 @@ def _op_scan(mask: np.ndarray, design_space: np.ndarray, size: int, op: str, *,
         elif op == 'add':
             yield ('add', region, addable)
         else:
-            ok = mask[region].any() and _min_width_ok_after_clearing(mask, region, min_width_cells)
+            ok = mask[region].any() and (min_width_cells <= 1
+                                         or _min_width_ok_after_clearing(mask, region, min_width_cells))
             yield ('replace', region, addable) if ok else None
 
 
@@ -698,6 +699,12 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
     重複も数える。既定は `_candidate_budget`)。`is_cancelled` はブロックを1つ調べる前ごとと評価前に見る。
     """
     design_space_mask = np.array(design_space_mask, dtype=bool, copy=True)
+    if min_width_cells > 1:
+        # 実測(hanger 2.4mm・m=3): 設計空間の縁に m 立方の入らないセルが残る(58/377,075)。局所判定の探索は
+        # その材料を1セルずつしか抜けず、規則を満たす候補にたどり着けない。以後の判定は m 立方の
+        # 材料だけのブロックに属するセルだけを設計空間として扱う(以降の検査もこの空間に対して行う)。
+        design_space_mask = ndimage.binary_opening(
+            design_space_mask, structure=np.ones((int(min_width_cells),) * 3, dtype=bool))
     design_space_mask.setflags(write=False)
     identifier = evaluation_identifier(conditions)
 
@@ -813,8 +820,8 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
                     frontier.push(_node(survivor, trial.index, streak, design_space_mask, sizes, max_consecutive_adds,
                                     min_width_cells=min_width_cells))
                 continue
-            # `peel`/`_op_scan` の差分検査は「入力が既に規則を満たす」前提なので、まだその前提の無い
-            # 最初の合格候補(`design_space_mask` 自身を含みうる)をここで一度だけ大域に検査する。
+            # 差分検査(`peel`/`_op_scan`)は入力が規則を満たすことが前提で、追加(`add`)も判定しないので、
+            # 合格を返す候補は毎回ここで大域に検査する。
             if min_width_cells > 1 and not _mask_satisfies_min_width(survivor, min_width_cells):
                 trial.note = '最小幅の不変条件(m立方の材料だけのブロックに全材料セルが属する)を満たさないため候補から外した'
                 trial.outcome = 'infeasible'
@@ -976,8 +983,8 @@ def _min_width_ok_after_clearing(mask: np.ndarray, region: tuple, min_width_cell
 def _mask_satisfies_min_width(mask: np.ndarray, min_width_cells: int) -> bool:
     """`mask` の全材料セルが m 立方の材料だけのブロックのどれかに属するか(大域判定)。
 
-    `_min_width_ok_after_clearing` は「入力が既に規則を満たす」前提の差分検査なので、その前提が
-    まだ無い最初の合格候補(`find_initial_feasible` 内、呼び出し箇所を見よ)にだけ、これで一度掛ける。
+    `_min_width_ok_after_clearing` は入力が既に規則を満たす前提の差分検査なので、`find_initial_feasible` は
+    合格を返す候補ごとにこれで大域に確かめる。
     """
     if min_width_cells <= 1:
         return True
@@ -1048,7 +1055,7 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
         if not _regular_after_removal(window):
             stats.skipped_manifold += 1
             continue
-        if not _min_width_ok_after_clearing(
+        if min_width_cells > 1 and not _min_width_ok_after_clearing(
                 inner, (slice(i, i + 1), slice(j, j + 1), slice(k, k + 1)), min_width_cells):
             stats.skipped_thickness += 1
             continue
@@ -1314,6 +1321,8 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     `step_exponent` / `max_step_ratio` / `single_cell_patience` は段階4だけが使う(`step_ratio` / `_reduce_volume`)。
     `min_width_cells`(m、既定1=制約なし)は両段階が使う —— 削除・置換で材料を薄くする候補を
     m 立方の材料だけのブロック単位で判定し、通らないものを候補にも合格にもしない(`peel` docstring)。
+    設計空間はまず m 立方の opening で絞る(縁に m 立方の入らない材料が残る設計空間では、局所判定の
+    探索がその材料を抜けず規則を満たす合格に届かない)。入口検査は絞った空間に対して行う。
 
     `is_cancelled` は引数無しで呼べる callable。段階3はブロックを1つ調べる前ごとと評価前、段階4は
     削る候補を作る前ごとに見る。真を返した時点の `best_feasible`(キャッシュ無しで検査済み)を返す

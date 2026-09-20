@@ -381,10 +381,10 @@ def test_min_width_outside_the_bounds_is_refused() -> None:
 def test_min_width_cells_rounds_up_at_the_ceiling_boundary() -> None:
     """m = ceil(要求 / spacing) の境界(ちょうど・その少し下・その少し上)。"""
     spacing = 2.4
-    assert optimize_run._resolve_min_width(spacing, 2 * spacing)["cells"] == 2  # ちょうど下限
-    assert optimize_run._resolve_min_width(spacing, 2 * spacing + 0.01)["cells"] == 3  # 少し上→切り上がる
+    assert optimize_run._resolve_min_width(spacing, 2 * spacing)["cells"] == 2
+    assert optimize_run._resolve_min_width(spacing, 2 * spacing + 0.01)["cells"] == 3
     with pytest.raises(optimize_run.OptimizeInputError, match="下限"):
-        optimize_run._resolve_min_width(spacing, 2 * spacing - 0.01)  # 少し下→下限未満で断られる
+        optimize_run._resolve_min_width(spacing, 2 * spacing - 0.01)
 
 
 def test_every_ladder_step_carries_its_own_min_width_floor(session: Session) -> None:

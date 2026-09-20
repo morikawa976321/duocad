@@ -262,6 +262,15 @@ def test_run_optimization_rejects_the_old_arguments_with_a_named_error(
     assert connection.of_type("optimize_result") == []
 
 
+def test_run_optimization_forwards_min_width_mm_so_a_below_floor_value_is_refused(session: Session) -> None:
+    """`net/ws.py` が `min_width_mm` を落とすと、下限割れの入力が黙って通って走り出す。"""
+    _setup_four_conditions(session)
+    spacing = optimize_run.resolution_limits(session.document)["default_element_size_mm"]
+    _, connection = _run_to_completion(session, {"cmd": "run_optimization", "min_width_mm": spacing})
+    assert "下限" in connection.of_type("optimize_error")[0]["message"]
+    assert connection.of_type("optimize_result") == []
+
+
 def test_a_successful_run_is_saved_to_disk_even_with_no_screen_watching(
     session: Session, monkeypatch, tmp_path
 ) -> None:

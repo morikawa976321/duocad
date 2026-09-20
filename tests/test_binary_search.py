@@ -670,12 +670,14 @@ def test_peel_local_thickness_judgment_matches_a_global_opening_recheck():
             if not mask[i, j, k]:
                 continue
             checked += 1
-            _, stats = bs.peel(mask, np.array([cell]), 1, anchors, min_width_cells=m)
+            after, stats = bs.peel(mask, np.array([cell]), 1, anchors, min_width_cells=m)
             candidate = mask.copy()
             candidate[i, j, k] = False
             truth_ok = _opening_satisfied(candidate, m)
             if stats.picked == 1:
                 assert truth_ok  # 安全側: 通した削除が規則を破ったことは無い
+            if stats.picked + stats.islands:
+                assert _opening_satisfied(after, m)  # 島ごと消えた場合も、返すマスク自身が規則を満たす
             if stats.skipped_thickness == 1:
                 thickness_skips += 1
                 assert not truth_ok  # 厚みで断ったなら、実際に規則を破っている(過剰な足切りでない)
@@ -683,9 +685,7 @@ def test_peel_local_thickness_judgment_matches_a_global_opening_recheck():
 
 
 def test_stage3_block_delete_refuses_a_single_cell_thinning_cut_but_allows_a_thick_enough_one():
-    """段階3のブロック削除(`_op_scan`/`candidate_descriptors`)にも同じ判定が入っている。
-    厚さ2セルの塊(2x2x4)で、1セル大のブロック削除は m=2 でどれも規則を破る(全16個が消える)が、
-    2セル大のブロック削除(半分を丸ごと削る)は規則を保つ(2個とも残る)。"""
+    """厚さ2セルの塊(2x2x4)で、1セルの削除は m=2 でどれも規則を破るが、半分を丸ごと削る2セル大は保つ。"""
     mask = np.ones((2, 2, 4), bool)
     design_space = mask.copy()
 
@@ -698,9 +698,8 @@ def test_stage3_block_delete_refuses_a_single_cell_thinning_cut_but_allows_a_thi
 
 
 def test_search_with_min_width_cells_produces_a_shape_that_an_independent_opening_check_accepts():
-    """最終形状が規則を満たすことを、`peel` とは別の測り方(`scipy.ndimage.binary_opening`)で確かめる
-    (局所判定の穴の検出器)。同じ題材・同じ緩い目標安全率で `min_width_cells=1`(既定)は
-    厚み1セルの部材まで削ってしまう(2立方の opening で全材料が落ちる)ことも併せて固定する。"""
+    """最終形状を `peel` とは別の測り方(`binary_opening`)で確かめる(局所判定の穴の検出器)。
+    同じ題材の m=1 は厚み1セルまで削るので、規則が実際に効いていることの対照になる。"""
     conditions = bar_conditions(shape=(8, 3, 3), target_safety_factor=.001)
     design = np.ones((8, 3, 3), bool)
 
@@ -718,14 +717,29 @@ def test_search_with_min_width_cells_produces_a_shape_that_an_independent_openin
     assert best.material_mm3 > unconstrained.best_feasible.material_mm3  # 薄くしすぎない分だけ材料が残る
 
 
-def test_find_initial_feasible_never_accepts_a_first_candidate_that_already_violates_min_width():
-    """落ちたら、`'initial'` 候補(`design_space_mask` 自身、差分判定を一度も経ない)が未検査のまま
-    合格として返っている。`(4, 1, 1)` は y・z が1セルなので m=2 をどの候補でも満たせない題材。"""
+def test_min_width_search_starts_from_the_design_space_thickness_opening():
+    """2x2の棒の脇に離れた1セル突起が2つ。突起は m=2 の立方に入らず局所判定では1セルずつしか抜けないが、
+    設計空間を opening で絞ってから探索するので、合格形状に突起は入らない。"""
+    shape = (10, 4, 4)
+    design = np.zeros(shape, bool)
+    design[:, :2, :2] = True
+    design[2, 2, 0] = design[7, 2, 0] = True
+    conditions = bar_conditions(shape=shape)
+    nodes = lambda i: [(i * 5 + j) * 5 + k for j in range(3) for k in range(3)]
+    conditions = dataclasses.replace(conditions, table=Table(conditions.grid, {1: nodes(0), 2: nodes(10)}))
+    result = bs.find_best_feasible(design, conditions, max_evaluations=200, min_width_cells=2)
+    assert result.status == 'feasible'
+    assert _opening_satisfied(result.best_feasible.mask, 2)
+    assert not result.best_feasible.mask[2, 2, 0] and not result.best_feasible.mask[7, 2, 0]
+
+
+def test_min_width_with_a_design_space_that_holds_no_m_cube_is_refused_at_entry():
+    """`(4, 1, 1)` は y・z が1セルなので m=2 の立方が1つも入らない。opening で設計空間が空になり、
+    条件節点が材料に接しないので探索を始めずに `boundary_mapping_failed` で止まる。"""
     conditions = bar_conditions(shape=(4, 1, 1))
-    design = np.ones((4, 1, 1), bool)
-    result = bs.find_best_feasible(design, conditions, max_evaluations=50, min_width_cells=2)
-    assert result.status == 'no_feasible_found'
-    assert result.best_feasible is None
+    result = bs.find_best_feasible(np.ones((4, 1, 1), bool), conditions, max_evaluations=50, min_width_cells=2)
+    assert result.status == 'boundary_mapping_failed' and result.best_feasible is None
+    assert result.evaluations == 0
 
 
 def test_reduction_strips_the_unloaded_appendage_and_keeps_every_condition_supported():
