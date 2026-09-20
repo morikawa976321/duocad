@@ -1220,3 +1220,112 @@ def test_the_search_conditions_carry_the_material_mapped_table_and_its_report(se
     }
     check = optimize_run._check_anchor_centroids(session.document, space, table=conditions.table)
     assert check["table"] == "material" and check["load_mm"] <= check["limit_mm"]
+
+
+def test_keep_cells_without_room_warning_says_what_squeezes_them() -> None:
+    """保証が効かない保持セルは黙らず警告になり、周りが除外ソリッドか設計空間の端かで原因が言い分けられる。0個なら何も出ない。"""
+    min_width = {"requested_mm": 5.0, "spacing_mm": 2.4, "cells": 3, "guaranteed_mm": 7.2}
+    none = {"cells": 0, "around_exclude": 0, "around_outside": 0}
+    assert optimize_run._keep_without_room_warning(min_width, none) == ""
+    squeezed = optimize_run._keep_without_room_warning(
+        min_width, {"cells": 48, "around_exclude": 146, "around_outside": 0})
+    assert "48 個" in squeezed and "除外ソリッドに挟まれて" in squeezed and "設計空間の端" not in squeezed
+    edge = optimize_run._keep_without_room_warning(
+        min_width, {"cells": 5, "around_exclude": 0, "around_outside": 20})
+    assert "設計空間の端にあって" in edge and "除外ソリッドに挟まれて" not in edge
+    both = optimize_run._keep_without_room_warning(
+        min_width, {"cells": 5, "around_exclude": 3, "around_outside": 20})
+    assert "除外ソリッドと設計空間の端に挟まれて" in both
+    assert optimize_run._join_warnings("a。", "", "b") == "a。b"
+
+
+def test_the_search_conditions_carry_the_keep_cells_and_the_space_keeps_the_exclusion_occupancy(
+    session: Session,
+) -> None:
+    """探索へ渡る `keep_cells` は塊の保持の占有そのもの(CADから作り直さない)。`obstacle` は格子と同じ形。"""
+    from duocad.topopt import design_space as ds
+
+    _setup_four_conditions(session)
+    bundle = optimize_run.build_conditions(session.document)
+    space = ds.derive(bundle.conditions, spacing=8.0)
+    conditions = optimize_run._build_search_conditions(
+        session.document, space, bundle, optimize_run.OptimizeOptions()
+    )
+    assert conditions.keep_cells is space.keep and space.keep.any()
+    assert space.obstacle.shape == tuple(space.grid.shape) and not space.obstacle.any()
+    assert not space.obstacle.flags.writeable
+
+
+def test_the_result_reports_the_keep_cells_without_room_and_only_when_min_width_is_on(
+    session: Session, monkeypatch
+) -> None:
+    """`min_width_keep_without_room` は戻り値に常にあり、最小幅なしなら全て 0・警告なし。あれば警告に数が出る。"""
+    from duocad.topopt import binary_search, trace
+
+    _setup_four_conditions(session)
+
+    def fake_find(design_space_mask, conditions, **kwargs):
+        return binary_search.SearchResult(
+            status="no_feasible_found", termination="evaluation_limit", best_feasible=None,
+            history=[], evaluations=1, conditions_identifier="test")
+
+    monkeypatch.setattr(binary_search, "find_best_feasible", fake_find)
+    snapshots: list = []
+    real_snapshot = trace.snapshot
+    monkeypatch.setattr(trace, "snapshot", lambda name, **values: (snapshots.append((name, values)),
+                                                                   real_snapshot(name, **values))[1])
+    spacing = optimize_run.resolution_limits(session.document)["steps"][1]["element_size_mm"]
+    plain = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=spacing))
+    assert plain["min_width_keep_without_room"] == dict(cells=0, around_exclude=0, around_outside=0)
+    assert "保持ソリッドのセル" not in plain["warning"]
+    assert "min-width-keep-without-room" not in [name for name, _ in snapshots]
+
+    seen: dict = {}
+    real = binary_search.keep_cells_without_room
+
+    def spy(design_space, keep, m, obstacle=None):
+        seen["row"] = real(design_space, keep, m, obstacle)
+        seen["args"] = (m, keep.shape == design_space.shape, obstacle is not None)
+        return dict(cells=4, around_exclude=9, around_outside=0)
+
+    monkeypatch.setattr(binary_search, "keep_cells_without_room", spy)
+    limited = optimize_run.run(
+        session.document, optimize_run.OptimizeOptions(element_size_mm=spacing, min_width_mm=2.5 * spacing))
+    assert seen["args"] == (3, True, True)
+    assert limited["min_width_keep_without_room"] == dict(cells=4, around_exclude=9, around_outside=0)
+    assert "保持ソリッドのセルが 4 個" in limited["warning"] and "除外ソリッドに挟まれて" in limited["warning"]
+    assert ("min-width-keep-without-room", dict(cells=4, around_exclude=9, around_outside=0)) in snapshots
+
+
+def test_the_keep_cells_without_room_warning_rides_on_every_early_return_too(
+    session: Session, monkeypatch
+) -> None:
+    """探索より前に返る3経路(条件面が空・保持/除外が表現できない・確定表が不成立)でも、警告が落ちない。"""
+    from duocad.topopt import anchor, binary_search
+
+    _setup_four_conditions(session)
+    monkeypatch.setattr(binary_search, "keep_cells_without_room",
+                        lambda *args, **kwargs: dict(cells=4, around_exclude=9, around_outside=0))
+    spacing = optimize_run.resolution_limits(session.document)["steps"][1]["element_size_mm"]
+    options = optimize_run.OptimizeOptions(element_size_mm=spacing, min_width_mm=2.5 * spacing)
+
+    monkeypatch.setattr(optimize_run, "_empty_condition_faces", lambda space: [dict(face=0)])
+    monkeypatch.setattr(anchor, "format_condition_face_warning", lambda faces: "FACES-EMPTY")
+    result = optimize_run.run(session.document, options)
+    assert result["state"] == "empty_condition_faces" and result["warning"].startswith("FACES-EMPTY。")
+    assert "保持ソリッドのセルが 4 個" in result["warning"]
+
+    monkeypatch.setattr(optimize_run, "_empty_condition_faces", lambda space: [])
+    monkeypatch.setattr(optimize_run, "_region_representation", lambda doc, bundle, space: [
+        dict(elements=0, role_label="保持", name="x", element_size_mm=spacing)])
+    result = optimize_run.run(session.document, options)
+    assert result["state"] == "unrepresented_regions" and "保持ソリッドのセルが 4 個" in result["warning"]
+
+    monkeypatch.undo()
+    monkeypatch.setattr(binary_search, "keep_cells_without_room",
+                        lambda *args, **kwargs: dict(cells=4, around_exclude=9, around_outside=0))
+    monkeypatch.setattr(optimize_run, "_map_boundary_conditions", lambda space, bundle: (None, {"status": "fail"}))
+    monkeypatch.setattr(anchor, "format_mapping_warning", lambda report: "MAPPING-FAILED")
+    result = optimize_run.run(session.document, options)
+    assert result["state"] == "boundary_mapping_failed" and result["warning"].startswith("MAPPING-FAILED。")
+    assert "保持ソリッドのセルが 4 個" in result["warning"]

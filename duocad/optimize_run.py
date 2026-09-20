@@ -873,6 +873,7 @@ def _run(
          "boundary_mapping": {...} | None,        # 確定表の検証(`anchor.condition_mapping`)
          "resolution": resolution_limits() の戻り, "element_size_mm": float,
          "min_width": {"requested_mm": float|None, "spacing_mm": float, "cells": int, "guaranteed_mm": float},
+         "min_width_keep_without_room": {"cells": int, "around_exclude": int, "around_outside": int},
          "grid": {"origin","spacing","shape"}, "design_elements": int,
          "safety_factor": float|None, "target_safety_factor": float,
          "allowable": allowable_stress() の戻り,
@@ -881,6 +882,10 @@ def _run(
          "reactions": [{"name","face","force","magnitude","fraction"}, ...],
          "triangle_count": int|None, "vertex_count": int|None,
          "seconds": float}
+
+    `min_width_keep_without_room` は、最小幅の規則の対象外にした保持ソリッドのうち、設計空間のどこにも
+    m 立方が入らず保証が効かないセルの数(`binary_search.keep_cells_without_room`)。0 でなければ `warning` に出る。
+    最小幅が無効(m=1)なら全て 0。
 
     後半の `state`(`no_feasible_found` / `input_contradiction` / `resolution_insufficient` /
     `boundary_mapping_failed`)は `binary_search.SearchResult.status` を**そのまま**渡したもの
@@ -952,10 +957,18 @@ def _run(
     # 配り直すことはない —— 最後に届くのは密度場 `rho` だけ。アンカーは確定表ができてから配る。
     dbg.space("derive", space)
 
+    from .topopt import binary_search
+
+    keep_room = binary_search.keep_cells_without_room(space.mask, space.keep, min_width["cells"], space.obstacle)
+    if min_width["cells"] > 1:
+        trace.snapshot('min-width-keep-without-room', **keep_room)
+    keep_room_warning = _keep_without_room_warning(min_width, keep_room)
+
     common = {
         "resolution": limits,
         "element_size_mm": float(space.grid.spacing),
         "min_width": min_width,
+        "min_width_keep_without_room": keep_room,
         "grid": space.grid.as_dict(),
         "design_elements": int(space.element_count),
         "allowable": allowable_stress(),
@@ -979,7 +992,7 @@ def _run(
             state="empty_condition_faces",
             body_id=None,
             name=None,
-            warning=an.format_condition_face_warning(empty_faces),
+            warning=_join_warnings(an.format_condition_face_warning(empty_faces), keep_room_warning),
             empty_condition_faces=empty_faces,
             unrepresented_regions=[],
             boundary_mapping=None,
@@ -1001,7 +1014,7 @@ def _run(
             state="unrepresented_regions",
             body_id=None,
             name=None,
-            warning=format_region_warning(unrepresented),
+            warning=_join_warnings(format_region_warning(unrepresented), keep_room_warning),
             empty_condition_faces=[],
             unrepresented_regions=unrepresented,
             boundary_mapping=None,
@@ -1027,7 +1040,7 @@ def _run(
             state="boundary_mapping_failed",
             body_id=None,
             name=None,
-            warning=an.format_mapping_warning(mapping),
+            warning=_join_warnings(an.format_mapping_warning(mapping), keep_room_warning),
             empty_condition_faces=[],
             unrepresented_regions=unrepresented,
             boundary_mapping=mapping,
@@ -1047,8 +1060,6 @@ def _run(
     common["anchor_check"] = anchor_check
     # **アンカーはここで1回だけ配る**(`?debug=anchors`)。探索が使う確定表の節点。
     dbg.anchors("mapping", space, table=table)
-
-    from .topopt import binary_search
 
     conditions = _build_search_conditions(doc, space, bundle, opts, table=table, mapping=mapping)
     search_kwargs: Dict[str, Any] = {}
@@ -1093,7 +1104,7 @@ def _run(
             state=search_result.status,
             body_id=None,
             name=None,
-            warning=_search_failure_warning(search_result, min_width),
+            warning=_join_warnings(_search_failure_warning(search_result, min_width), keep_room_warning),
             empty_condition_faces=[],
             unrepresented_regions=unrepresented,
             boundary_mapping=mapping,
@@ -1153,7 +1164,7 @@ def _run(
         state="done",
         body_id=body_id,
         name=name,
-        warning=format_region_warning(unrepresented) if unrepresented else None,
+        warning=_join_warnings(format_region_warning(unrepresented) if unrepresented else "", keep_room_warning) or None,
         empty_condition_faces=[],
         unrepresented_regions=unrepresented,
         boundary_mapping=mapping,
@@ -1396,7 +1407,30 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
         target_safety_factor=float(opts.target_safety_factor),
         bbox_cache=doc.bbox_cache,
         mapping=mapping,
+        keep_cells=space.keep,
     )
+
+
+def _join_warnings(*parts: str) -> str:
+    return "。".join(part.rstrip("。") for part in parts if part)
+
+
+def _keep_without_room_warning(min_width: dict, keep_room: dict) -> str:
+    """最小幅が保証されない保持セルがあるときの一言。周りが除外ソリッドか設計空間の外かで原因を言い分ける。"""
+    cells = int(keep_room["cells"])
+    if not cells:
+        return ""
+    around_exclude, around_outside = int(keep_room["around_exclude"]), int(keep_room["around_outside"])
+    head = (f"最小幅 {float(min_width['guaranteed_mm']):.4g} mm({int(min_width['cells'])}セル)が保証されない"
+            f"保持ソリッドのセルが {cells} 個ある(最小幅の規則の対象外として扱った。書き出す形には保持ソリッドの実形状が戻る)")
+    if around_outside == 0:
+        cause = f"その周りの空きセル {around_exclude} 個はすべて除外ソリッドで、除外ソリッドに挟まれて太れない"
+    elif around_exclude == 0:
+        cause = f"その周りの空きセル {around_outside} 個はすべて設計空間の外(端・凸包の外)で、設計空間の端にあって太れない"
+    else:
+        cause = (f"その周りの空きセルは除外ソリッド {around_exclude} 個・設計空間の外(端・凸包の外) {around_outside} 個で、"
+                 "除外ソリッドと設計空間の端に挟まれて太れない")
+    return f"{head}。{cause}。最小幅を下げるか、除外ソリッドとの間隔を広げること"
 
 
 def _search_failure_warning(search_result: Any, min_width: Optional[dict] = None) -> str:

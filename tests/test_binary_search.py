@@ -796,7 +796,7 @@ def test_the_min_width_check_runs_before_any_fem_evaluation(monkeypatch):
     calls = []
     real_inspect = acceptance.inspect
     monkeypatch.setattr(acceptance, 'inspect', lambda *a, **k: calls.append(1) or real_inspect(*a, **k))
-    monkeypatch.setattr(bs, '_mask_satisfies_min_width', lambda mask, m: False)
+    monkeypatch.setattr(bs, '_mask_satisfies_min_width', lambda mask, m, exempt=None: False)
     conditions = bar_conditions(shape=(4, 2, 2))
     result = bs.find_initial_feasible(np.ones((4, 2, 2), bool), conditions, max_evaluations=6, min_width_cells=2)
     assert result.status == 'no_feasible_found' and result.best_feasible is None
@@ -810,8 +810,8 @@ def test_a_candidate_that_fails_the_min_width_check_is_not_returned_and_the_sear
     real = bs._mask_satisfies_min_width
     state = {'first': True}
 
-    def first_fails(mask, m):
-        verdict = real(mask, m) and not state['first']
+    def first_fails(mask, m, exempt=None):
+        verdict = real(mask, m, exempt) and not state['first']
         state['first'] = False
         return verdict
 
@@ -846,6 +846,171 @@ def test_min_width_with_a_design_space_that_holds_no_m_cube_is_refused_at_entry(
     assert result.status == 'boundary_mapping_failed' and result.best_feasible is None
     assert result.evaluations == 0
     assert result.diagnostics['min_width'] == dict(cells=2, design_cells=4, trimmed_cells=4)
+
+
+# ---------------------------------------------------------------------------
+# 最小幅の規則から保持ソリッド由来のセルを外す(`SearchConditions.keep_cells`)
+# ---------------------------------------------------------------------------
+def _bar_with_protrusion(*, keep_protrusion: bool, second_protrusion: bool = False):
+    """棒の脇の1セルの突起(5,2,0)は m=2 の立方に入らない。`keep_protrusion` でそこだけを保持セルにする。"""
+    shape = (10, 4, 4)
+    design = np.zeros(shape, bool)
+    design[:, :2, :2] = True
+    design[5, 2, 0] = True
+    keep = np.zeros(shape, bool)
+    keep[5, 2, 0] = keep_protrusion
+    if second_protrusion:
+        design[2, 2, 0] = True
+    conditions = bar_conditions(shape=shape, keep_box=Pos(5.5, 2.5, 0.5) * Box(.9, .9, .9))
+    nodes = lambda i: [(i * 5 + j) * 5 + k for j in range(3) for k in range(3)]
+    conditions = dataclasses.replace(conditions, table=Table(conditions.grid, {1: nodes(0), 2: nodes(10)}),
+                                     keep_cells=keep)
+    return design, conditions
+
+
+def test_an_exempt_cell_needs_no_cube_but_still_counts_as_material_for_the_others():
+    """落ちたら、対象外のセルが材料として数えられていない(他のセルの立方を壊す)か、対象外でないセルが見逃されている。"""
+    block = np.ones((2, 2, 2), bool)
+    corner = np.zeros_like(block)
+    corner[0, 0, 0] = True
+    assert bs._mask_satisfies_min_width(block, 2, corner)
+
+    mask = np.zeros((6, 3, 3), bool)
+    mask[:2, :2, :2] = True
+    mask[2, 0, 0] = True
+    protrusion = np.zeros_like(mask)
+    protrusion[2, 0, 0] = True
+    other = np.zeros_like(mask)
+    other[0, 0, 0] = True
+    assert not bs._mask_satisfies_min_width(mask, 2)
+    assert not bs._mask_satisfies_min_width(mask, 2, other)
+    assert bs._mask_satisfies_min_width(mask, 2, protrusion)
+    region = (slice(0, 1), slice(0, 1), slice(0, 1))
+    assert not bs._min_width_ok_after_clearing(mask, region, 2, protrusion)
+    assert not bs._min_width_ok_after_clearing(mask, (slice(1, 2), slice(1, 2), slice(1, 2)), 2, protrusion)
+
+
+def test_the_exempt_local_judgment_matches_a_global_recheck():
+    """落ちたら、`peel` の局所判定が対象外のセルを含む形で、全体を数え直した判定とずれている。"""
+    rng = np.random.default_rng(20260924)
+    anchors = np.zeros(0, dtype=np.int64)
+    checked = thickness_skips = exempt_material = 0
+    for _ in range(25):
+        shape = tuple(int(x) for x in rng.integers(6, 12, size=3))
+        m = int(rng.integers(2, 4))
+        raw = rng.random(shape) < rng.uniform(0.6, 0.95)
+        base = ndimage.binary_opening(raw, structure=np.ones((m, m, m), dtype=bool))
+        labels, count = ndimage.label(base, structure=bs.NEIGHBOURHOOD_STRUCTURE)
+        if not count or base.sum() < 2 * m ** 3:
+            continue
+        base = labels == 1 + int(np.argmax(np.bincount(labels.ravel())[1:]))
+        # 立方に入らないセルを足し、それを対象外にする(対象外にした分だけ、規則を満たす入力になる)。
+        stray = (rng.random(shape) < 0.05) & ~base
+        exempt = stray | ((rng.random(shape) < 0.1) & base)
+        mask = base | stray
+        assert bs._mask_satisfies_min_width(mask, m, exempt)
+        exempt_material += int((exempt & mask).sum())
+        for cell in rng.permutation(mask.size)[:30]:
+            i, j, k = np.unravel_index(int(cell), mask.shape)
+            if not mask[i, j, k]:
+                continue
+            checked += 1
+            after, stats = bs.peel(mask, np.array([cell]), 1, anchors, min_width_cells=m, exempt=exempt)
+            candidate = mask.copy()
+            candidate[i, j, k] = False
+            truth_ok = bs._mask_satisfies_min_width(candidate, m, exempt)
+            if stats.picked == 1:
+                assert truth_ok
+            if stats.picked + stats.islands:
+                assert bs._mask_satisfies_min_width(after, m, exempt)
+            if stats.skipped_thickness == 1:
+                thickness_skips += 1
+                assert not truth_ok
+    assert checked > 100 and thickness_skips > 20 and exempt_material > 50
+
+
+def test_the_design_space_opening_keeps_the_keep_cells_and_still_trims_the_others():
+    """落ちたら、保持ソリッド由来のセルが設計空間から消える(入口で保持の重なりが足りず止まる)、または
+    保持でない薄いセルまで残る。"""
+    design, conditions = _bar_with_protrusion(keep_protrusion=True, second_protrusion=True)
+    result = bs.find_initial_feasible(design, conditions, max_evaluations=60, min_width_cells=2)
+    assert result.status == 'feasible'
+    assert result.diagnostics['min_width'] == dict(cells=2, design_cells=int(design.sum()), trimmed_cells=1)
+    mask = result.best_feasible.mask
+    assert mask[5, 2, 0] and not mask[2, 2, 0]
+    assert bs._mask_satisfies_min_width(mask, 2, conditions.keep_cells) and not _opening_satisfied(mask, 2)
+
+
+def test_without_keep_cells_the_same_design_space_is_trimmed_and_refused_at_entry():
+    """対照: `keep_cells` が無ければ従来どおり保持の突起が落ち、入口で止まる。"""
+    design, conditions = _bar_with_protrusion(keep_protrusion=False)
+    result = bs.find_initial_feasible(design, conditions, max_evaluations=60, min_width_cells=2)
+    assert result.status == 'input_contradiction' and result.evaluations == 0
+
+
+def test_the_full_search_keeps_the_keep_cell_and_every_non_keep_cell_stays_in_a_cube():
+    """落ちたら、段階4まで通した形で保持でないセルが m 立方を外れている(対象外なのは保持セルだけ)。"""
+    design, conditions = _bar_with_protrusion(keep_protrusion=True)
+    result = bs.find_best_feasible(design, conditions, max_evaluations=200, min_width_cells=2)
+    mask = result.best_feasible.mask
+    assert result.status == 'feasible' and mask[5, 2, 0]
+    uncovered = mask & ~ndimage.binary_opening(mask, structure=np.ones((2, 2, 2), bool))
+    assert uncovered.any() and not (uncovered & ~conditions.keep_cells).any()
+
+
+def test_with_min_width_one_keep_cells_change_neither_the_result_nor_the_cost(monkeypatch):
+    """落ちたら、既定(m=1)で最小幅の判定関数が呼ばれている、または `keep_cells` が探索の結果を変えている。"""
+    conditions = bar_conditions(shape=(8, 3, 3), target_safety_factor=.001)
+    design = np.ones((8, 3, 3), bool)
+    plain = bs.find_best_feasible(design, conditions, max_evaluations=200, min_width_cells=1)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('m=1 で最小幅の判定を呼んだ')
+
+    for name in ('_cube_opening', '_min_width_ok_after_clearing', '_mask_satisfies_min_width'):
+        monkeypatch.setattr(bs, name, forbidden)
+    marked = dataclasses.replace(conditions, keep_cells=np.ones((8, 3, 3), bool))
+    with_keep = bs.find_best_feasible(design, marked, max_evaluations=200, min_width_cells=1)
+    assert with_keep.evaluations == plain.evaluations and len(with_keep.history) == len(plain.history)
+    assert np.array_equal(with_keep.best_feasible.mask, plain.best_feasible.mask)
+    assert bs._min_width_exempt(marked, (8, 3, 3), 1) is None
+
+
+def test_a_keep_cells_array_of_the_wrong_shape_is_refused():
+    conditions = dataclasses.replace(bar_conditions(shape=(4, 2, 2)), keep_cells=np.ones((3, 2, 2), bool))
+    with pytest.raises(ValueError, match='keep_cells'):
+        bs.find_initial_feasible(np.ones((4, 2, 2), bool), conditions, min_width_cells=2)
+
+
+def _plate_between_exclusions():
+    """8x8x7 の格子で、z=3 の 4x4 の板だけが設計空間(全て保持)。板のまわり(x,y=1..6・z=2..4)は除外。"""
+    design = np.zeros((8, 8, 7), bool)
+    design[2:6, 2:6, 3] = True
+    obstacle = np.zeros_like(design)
+    obstacle[1:7, 1:7, 2:5] = True
+    obstacle &= ~design
+    return design, design.copy(), obstacle
+
+
+def test_keep_cells_without_room_counts_the_stranded_cells_and_what_surrounds_them():
+    """設計空間の opening(m=2)に入らない保持セルを数え、周りの空きセル(26近傍)が除外か設計空間の外かを言い分ける。"""
+    design, keep, obstacle = _plate_between_exclusions()
+    # 期待値: 板(16セル)の26近傍は 3×6×6 − 16 = 92
+    assert bs.keep_cells_without_room(design, keep, 2, obstacle) == dict(cells=16, around_exclude=92, around_outside=0)
+    assert bs.keep_cells_without_room(design, keep, 2) == dict(cells=16, around_exclude=0, around_outside=92)
+    half = obstacle.copy()
+    half[:, :, 3:] = False  # 除外は z=2 の層(36 セル)だけ
+    assert bs.keep_cells_without_room(design, keep, 2, half) == dict(cells=16, around_exclude=36, around_outside=56)
+    assert bs.keep_cells_without_room(design, keep, 1, obstacle) == dict(cells=0, around_exclude=0, around_outside=0)
+
+
+def test_keep_cells_without_room_ignores_keep_cells_that_a_cube_covers_and_counts_the_grid_edge_as_outside():
+    design = np.zeros((6, 6, 6), bool)
+    design[:3, :3, :3] = True  # 3 立方(m=2 が入る)。格子の隅にある
+    keep = design.copy()
+    assert bs.keep_cells_without_room(design, keep, 2)['cells'] == 0
+    design[4, 4, 4] = keep[4, 4, 4] = True  # 孤立した1セルの保持
+    assert bs.keep_cells_without_room(design, keep, 2) == dict(cells=1, around_exclude=0, around_outside=26)
 
 
 def test_reduction_strips_the_unloaded_appendage_and_keeps_every_condition_supported():

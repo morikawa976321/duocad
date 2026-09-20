@@ -415,6 +415,9 @@ class DesignSpace:
     corners: np.ndarray
     stats: dict = field(default_factory=dict)
     table: Any = None
+    #: 除外ソリッドの格子上の占有。凸包の外や塊から外れた分も含む(`mask` は除外を引き切った後なので、
+    #: 塊の穴が除外由来かを見分けるのに使う)。除外が無い・格子と重ならないときは全 False。読み取り専用。
+    obstacle: Optional[np.ndarray] = None
 
     @property
     def element_count(self) -> int:
@@ -781,6 +784,8 @@ def derive(
     final = np.array(connected, dtype=bool)
     for array in (final, model.design, model.keep, model.obstacle):
         array.setflags(write=False)
+    obstacle_cells = np.zeros(tuple(grid.shape), dtype=bool) if obs is None else np.array(obs, dtype=bool)
+    obstacle_cells.setflags(write=False)
 
     stats = {
         "derivation": DERIVATION,
@@ -833,6 +838,7 @@ def derive(
         corners=corners,
         stats=stats,
         table=table,
+        obstacle=obstacle_cells,
     )
 
 
