@@ -18,12 +18,15 @@ hanger・要素サイズ要求 2.4mm・目標2.0・既定の最小幅(m=1)。**1
 ずらすので、「探索が微小な摂動で別の形へ分かれる」ことが warm 固有かを確かめるのに使う。
 `--summarize REF.json OTHER.json ...` は、各 JSON を REF と並べて秒・CG反復・CPU競合・軌道の分岐点・形の重なりを出す
 (形は JSON と同じ名前の `.npz` があるときだけ)。各実行は測定中の CPU 使用(全体・自プロセス)を10秒ごとに
-記録するので、他のジョブと同時に走った実行は `other_cpu` で見分けられる。
+記録するので、他のジョブと同時に走った実行は `load` の `other_cpu_*` で見分けられる。時間計測では、`--wait-quiet PCT`
+が開始前に「全体のCPUが PCT% 未満で、他に大きな python が無い」状態が続くまで待ち、`--abort-if-busy PCT` が測定中に
+他プロセスのCPUが高い状態が続いたらその実行を捨てて終了コード3で終わる(待ち行列側が再試行する)。
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -55,9 +58,11 @@ class LoadSampler(threading.Thread):
     psutil が無い環境では何も記録せず `summary()` が None を返す。
     """
 
-    def __init__(self, interval: float = 10.0) -> None:
+    def __init__(self, interval: float = 10.0, abort_if_busy: float | None = None, abort_window: int = 6) -> None:
         super().__init__(daemon=True)
         self.interval = interval
+        self.abort_if_busy = abort_if_busy
+        self.abort_window = abort_window
         self.samples: list[tuple[float, float]] = []
         self._stop_event = threading.Event()
         try:
@@ -76,6 +81,12 @@ class LoadSampler(threading.Thread):
         process.cpu_percent(None)
         while not self._stop_event.wait(self.interval):
             self.samples.append((psutil.cpu_percent(None), process.cpu_percent(None) / cpus))
+            if self.abort_if_busy is not None and len(self.samples) >= self.abort_window:
+                other = float(np.mean([max(total - own, 0.0) for total, own in self.samples[-self.abort_window:]]))
+                if other > self.abort_if_busy:
+                    print(f"abort-if-busy: 他のジョブの CPU 使用が直近 {self.abort_window * self.interval:.0f}秒で平均 {other:.1f}% "
+                          f"(上限 {self.abort_if_busy:g}%)。この実行は捨てる(終了コード3)", file=sys.stderr, flush=True)
+                    os._exit(3)
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -91,16 +102,30 @@ class LoadSampler(threading.Thread):
                     other_cpu_mean=float(other.mean()), other_cpu_max=float(other.max()))
 
 
-def wait_quiet(threshold: float, checks: int = 3, interval: float = 20.0, timeout: float = 3 * 3600) -> dict:
-    """全体の CPU 使用が `threshold`% 未満の状態が `checks` 回続くまで待つ(他のジョブと同時に測って秒を汚さないため)。
-    `timeout` を過ぎたら待つのをやめて測る(結果の `timed_out` が真になり、`load` で競合の有無を見られる)。"""
+def busy_python_pids(min_rss: float = 1e9) -> list[int]:
+    """自分以外で、常駐メモリが `min_rss` バイトを超える python(他の探索・測定)の pid。読み込み中でまだ CPU を
+    使っていないジョブは CPU だけでは静かに見えるので、これも見る。"""
+    import psutil
+
+    me = psutil.Process().pid
+    return [p.info["pid"] for p in psutil.process_iter(["pid", "name", "memory_info"])
+            if p.info["pid"] != me and (p.info["name"] or "").lower().startswith("python")
+            and p.info["memory_info"] is not None and p.info["memory_info"].rss > min_rss]
+
+
+def wait_quiet(threshold: float, checks: int = 6, interval: float = 20.0, timeout: float = 3 * 3600) -> dict:
+    """全体の CPU 使用が `threshold`% 未満で、他に大きな python が無い状態が `checks` 回続くまで待つ(他のジョブと
+    同時に測って秒を汚さないため)。`timeout` を過ぎたら待つのをやめて測る(結果の `timed_out` が真になり、
+    `load` で競合の有無を見られる)。"""
     import psutil
 
     started, quiet = time.time(), 0
     while quiet < checks and time.time() - started < timeout:
         usage = psutil.cpu_percent(interval=interval)
-        quiet = quiet + 1 if usage < threshold else 0
-        print(f"wait-quiet: cpu={usage:.1f}% (need <{threshold:g}% x{checks}, have {quiet})", file=sys.stderr, flush=True)
+        heavy = busy_python_pids()
+        quiet = quiet + 1 if usage < threshold and not heavy else 0
+        print(f"wait-quiet: cpu={usage:.1f}% other_python={heavy} (need <{threshold:g}% and none, x{checks}; have {quiet})",
+              file=sys.stderr, flush=True)
     return dict(waited_seconds=time.time() - started, timed_out=quiet < checks, threshold=threshold)
 
 
@@ -121,7 +146,8 @@ def instrumented_solve(original, *, cg_rtol_override: float | None, noise: float
 
 
 def run(mode: str, budget: int, mask_npz: Path | None = None, *, label: str | None = None,
-        cg_rtol: float | None = None, noise: float = 0.0, noise_seed: int = 0) -> dict:
+        cg_rtol: float | None = None, noise: float = 0.0, noise_seed: int = 0,
+        abort_if_busy: float | None = None) -> dict:
     from duocad import optimize_run
     from duocad.server import Session
     from duocad.topopt import binary_search, design_space as ds, fem, trace
@@ -152,7 +178,7 @@ def run(mode: str, budget: int, mask_npz: Path | None = None, *, label: str | No
         opts = optimize_run.OptimizeOptions(target_safety_factor=TARGET_SAFETY_FACTOR, max_evaluations=budget)
         conditions = optimize_run._build_search_conditions(document, space, bundle, opts, table=table, mapping=mapping)
         solve_log: list = []
-        sampler = LoadSampler()
+        sampler = LoadSampler(abort_if_busy=abort_if_busy)
         with fem.collect_solve_stats() as stats, patch.object(
                 fem.PreparedSystem, "solve",
                 instrumented_solve(fem.PreparedSystem.solve, cg_rtol_override=cg_rtol, noise=noise, seed=noise_seed,
@@ -298,6 +324,8 @@ def main() -> int:
     parser.add_argument("--noise-seed", type=int, default=0)
     parser.add_argument("--wait-quiet", type=float, default=None, metavar="PCT",
                         help="全体のCPU使用が PCT%% 未満の状態が続くまで待ってから測る(時間計測用。空きメモリの検査のあとに待つ)")
+    parser.add_argument("--abort-if-busy", type=float, default=None, metavar="PCT",
+                        help="測定中、他プロセスのCPU使用が直近60秒で平均 PCT%% を超えたらこの実行を捨てて終了コード3で終わる")
     parser.add_argument("--compare", nargs=2, type=Path, metavar=("WARM_JSON", "COLD_JSON"))
     parser.add_argument("--summarize", nargs="+", type=Path, metavar="JSON", help="先頭を基準に、残りを並べる")
     parser.add_argument("--mask-npz", type=Path, default=None, help="採用マスクの保存先(省略時は保存しない)")
@@ -321,7 +349,7 @@ def main() -> int:
         return 3
     gate = wait_quiet(args.wait_quiet) if args.wait_quiet else None
     result = run(args.mode, args.budget, args.mask_npz, label=args.label, cg_rtol=args.cg_rtol,
-                 noise=args.noise, noise_seed=args.noise_seed)
+                 noise=args.noise, noise_seed=args.noise_seed, abort_if_busy=args.abort_if_busy)
     result["quiet_gate"] = gate
     text = json.dumps(result, ensure_ascii=False, indent=2, default=float)
     if args.result:
