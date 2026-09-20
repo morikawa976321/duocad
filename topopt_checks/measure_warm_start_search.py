@@ -91,6 +91,19 @@ class LoadSampler(threading.Thread):
                     other_cpu_mean=float(other.mean()), other_cpu_max=float(other.max()))
 
 
+def wait_quiet(threshold: float, checks: int = 3, interval: float = 20.0, timeout: float = 3 * 3600) -> dict:
+    """全体の CPU 使用が `threshold`% 未満の状態が `checks` 回続くまで待つ(他のジョブと同時に測って秒を汚さないため)。
+    `timeout` を過ぎたら待つのをやめて測る(結果の `timed_out` が真になり、`load` で競合の有無を見られる)。"""
+    import psutil
+
+    started, quiet = time.time(), 0
+    while quiet < checks and time.time() - started < timeout:
+        usage = psutil.cpu_percent(interval=interval)
+        quiet = quiet + 1 if usage < threshold else 0
+        print(f"wait-quiet: cpu={usage:.1f}% (need <{threshold:g}% x{checks}, have {quiet})", file=sys.stderr, flush=True)
+    return dict(waited_seconds=time.time() - started, timed_out=quiet < checks, threshold=threshold)
+
+
 def instrumented_solve(original, *, cg_rtol_override: float | None, noise: float, seed: int, stats: dict, log: list):
     """`PreparedSystem.solve` を包んで、solve ごとの [秒, CG反復数] を `log` に積む。`cg_rtol_override` があれば
     収束判定を上書きし、`noise` があれば返った変位の各自由度に相対 `noise` の正規乱数を掛ける(拘束成分は 0 のまま)。"""
@@ -283,6 +296,8 @@ def main() -> int:
     parser.add_argument("--cg-rtol", type=float, default=None, help="全 solve の CG 収束判定を上書きする(対照実験)")
     parser.add_argument("--noise", type=float, default=0.0, help="solve が返す変位の各自由度に掛ける相対ノイズの大きさ(対照実験)")
     parser.add_argument("--noise-seed", type=int, default=0)
+    parser.add_argument("--wait-quiet", type=float, default=None, metavar="PCT",
+                        help="全体のCPU使用が PCT%% 未満の状態が続くまで待ってから測る(時間計測用。空きメモリの検査のあとに待つ)")
     parser.add_argument("--compare", nargs=2, type=Path, metavar=("WARM_JSON", "COLD_JSON"))
     parser.add_argument("--summarize", nargs="+", type=Path, metavar="JSON", help="先頭を基準に、残りを並べる")
     parser.add_argument("--mask-npz", type=Path, default=None, help="採用マスクの保存先(省略時は保存しない)")
@@ -304,8 +319,10 @@ def main() -> int:
     if free < args.min_free_gb:
         print(f"空きメモリ {free:.1f}GB が下限 {args.min_free_gb}GB 未満。測らずに終わる", flush=True)
         return 3
+    gate = wait_quiet(args.wait_quiet) if args.wait_quiet else None
     result = run(args.mode, args.budget, args.mask_npz, label=args.label, cg_rtol=args.cg_rtol,
                  noise=args.noise, noise_seed=args.noise_seed)
+    result["quiet_gate"] = gate
     text = json.dumps(result, ensure_ascii=False, indent=2, default=float)
     if args.result:
         args.result.write_text(text, encoding="utf-8")
