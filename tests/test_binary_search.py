@@ -1550,9 +1550,6 @@ def test_resolve_islands_keeps_only_the_numbers_of_removed_islands():
     assert all(set(island) == {'cells', 'volume_mm3', 'touches_condition'} for island in diagnostics['removed_islands'])
 
 
-# ---------------------------------------------------------------------------
-# warm start: 前の形の変位を CG の初期値にする(同じ形の安全率は一致し、初期値が壊れていれば cold に落ちる)
-# ---------------------------------------------------------------------------
 def _cg_iterations(run):
     with fem.collect_solve_stats() as stats:
         result = run()
