@@ -8,6 +8,10 @@ hanger・要素サイズ要求 2.4mm・目標2.0・既定の最小幅(m=1)。**1
 同じプロセスで2回回して2回目が1回目の残りに乗らないようにする)。**判定はしない**(数字と、採用形状の
 `mask_hash` が一致したかを書き出すだけ)。`trace.DEFAULT_ROOT` を一時フォルダへ向け、`output/` に何も残さない。
 空きメモリが `--min-free-gb` 未満なら測らずに終わる(終了コード3)。
+
+`--mask-npz` を付けると採用マスクを保存する(`mask_hash` だけでは形の差が分からない)。保存した2つを
+`--diff-masks WARM_NPZ COLD_NPZ [--stl-dir DIR]` で並べると、重なり・片方だけのセル・その距離を出し、
+ボクセルのままのSTL(warm / cold / warm_only / cold_only)を書く。
 """
 from __future__ import annotations
 
@@ -26,6 +30,8 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import _bootstrap  # noqa: F401  (topopt_checks の import 経路を通す)
+import numpy as np
+from measure_min_width_floor import voxel_surface
 from measure_warm_start import free_gb
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -34,7 +40,7 @@ REQUESTED_ELEMENT_SIZE_MM = 2.4
 TARGET_SAFETY_FACTOR = 2.0
 
 
-def run(mode: str, budget: int) -> dict:
+def run(mode: str, budget: int, mask_npz: Path | None = None) -> dict:
     from duocad import optimize_run
     from duocad.server import Session
     from duocad.topopt import binary_search, design_space as ds, fem, trace
@@ -92,6 +98,47 @@ def run(mode: str, budget: int) -> dict:
         return out
     out.update(mask_hash=best.mask_hash, accepted_elements=int(best.mask.sum()),
                safety_factor=float(best.safety_factor))
+    if mask_npz is not None:
+        np.savez_compressed(mask_npz, mask=best.mask, origin=np.asarray(space.grid.origin, dtype=float),
+                            spacing=float(space.grid.spacing))
+    return out
+
+
+def compare_masks(warm_npz: Path, cold_npz: Path, stl_dir: Path | None) -> dict:
+    from scipy import ndimage
+    from duocad.topopt import mesh
+
+    warm, cold = np.load(warm_npz), np.load(cold_npz)
+    origin, spacing = np.asarray(warm["origin"], dtype=float), float(warm["spacing"])
+    if not (warm["mask"].shape == cold["mask"].shape and np.allclose(origin, cold["origin"])
+            and spacing == float(cold["spacing"])):
+        raise SystemExit("格子が違う2つのマスクは比べられない")
+    w, c = warm["mask"].astype(bool), cold["mask"].astype(bool)
+    only = {"warm_only": w & ~c, "cold_only": c & ~w}
+    both = int((w & c).sum())
+    out: dict = dict(spacing_mm=spacing, warm_cells=int(w.sum()), cold_cells=int(c.sum()), both=both,
+                     warm_only=int(only["warm_only"].sum()), cold_only=int(only["cold_only"].sum()),
+                     iou=both / int((w | c).sum()))
+    for name, other in (("warm_only", c), ("cold_only", w)):
+        cells = only[name]
+        if not cells.any():
+            continue
+        distance = ndimage.distance_transform_edt(~other)[cells] * spacing
+        labels, count = ndimage.label(cells)
+        index = np.argwhere(cells)
+        out[name + "_detail"] = dict(
+            distance_to_other_mm=dict(mean=float(distance.mean()), max=float(distance.max())),
+            components=int(count),
+            largest_components=[int(n) for n in sorted(np.bincount(labels.ravel())[1:], reverse=True)[:5]],
+            bbox_min_mm=(origin + spacing * index.min(axis=0)).tolist(),
+            bbox_max_mm=(origin + spacing * (index.max(axis=0) + 1)).tolist())
+    if stl_dir is not None:
+        stl_dir.mkdir(parents=True, exist_ok=True)
+        for name, cells in {"warm": w, "cold": c, **only}.items():
+            verts, faces = voxel_surface(cells, origin, spacing)
+            if len(faces):
+                mesh.write_stl(stl_dir / f"{name}.stl", verts, faces)
+                out[name + "_stl_triangles"] = int(len(faces))
     return out
 
 
@@ -120,9 +167,15 @@ def main() -> int:
     parser.add_argument("--min-free-gb", type=float, default=12.0)
     parser.add_argument("--result", type=Path, default=None, help="結果JSONの書き出し先")
     parser.add_argument("--compare", nargs=2, type=Path, metavar=("WARM_JSON", "COLD_JSON"))
+    parser.add_argument("--mask-npz", type=Path, default=None, help="採用マスクの保存先(省略時は保存しない)")
+    parser.add_argument("--diff-masks", nargs=2, type=Path, metavar=("WARM_NPZ", "COLD_NPZ"))
+    parser.add_argument("--stl-dir", type=Path, default=None, help="--diff-masks のSTLの書き出し先")
     args = parser.parse_args()
     if args.compare:
         print(json.dumps(compare(*args.compare), ensure_ascii=False, indent=2), flush=True)
+        return 0
+    if args.diff_masks:
+        print(json.dumps(compare_masks(*args.diff_masks, args.stl_dir), ensure_ascii=False, indent=2), flush=True)
         return 0
     if args.mode is None:
         parser.error("--mode か --compare が要る")
@@ -130,7 +183,7 @@ def main() -> int:
     if free < args.min_free_gb:
         print(f"空きメモリ {free:.1f}GB が下限 {args.min_free_gb}GB 未満。測らずに終わる", flush=True)
         return 3
-    result = run(args.mode, args.budget)
+    result = run(args.mode, args.budget, args.mask_npz)
     text = json.dumps(result, ensure_ascii=False, indent=2, default=float)
     if args.result:
         args.result.write_text(text, encoding="utf-8")

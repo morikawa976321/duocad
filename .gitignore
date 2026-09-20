@@ -24,3 +24,4 @@ dist/
 
 # 測定用のボクセルSTL
 /output/min_width/
+/output/warm_start_shape/
