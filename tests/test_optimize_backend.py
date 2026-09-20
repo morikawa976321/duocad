@@ -851,7 +851,7 @@ def test_a_failure_under_min_width_names_the_constraint_instead_of_only_the_budg
     assert "最小幅" not in plain
     warning = optimize_run._search_failure_warning(limit, min_width)
     assert warning.startswith(plain) and "最小幅 7.2 mm(3セル)の制約が有効" in warning
-    assert "予算を増やしても届かない" in warning
+    assert "幅を失うセルも一緒に抜いた形" in warning and "予算を増やす前に" in warning
 
 
 def test_an_entry_failure_says_the_check_ran_on_the_design_space_trimmed_by_min_width() -> None:

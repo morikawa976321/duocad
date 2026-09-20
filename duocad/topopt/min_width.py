@@ -24,10 +24,13 @@ def cube_opening(mask: np.ndarray, m: int) -> np.ndarray:
     return out
 
 
-def lost_coverage(mask: np.ndarray, region: tuple, m: int,
-                  exempt: Optional[np.ndarray] = None) -> tuple[tuple, np.ndarray]:
+def lost_coverage(mask: np.ndarray, region: tuple, m: int, exempt: Optional[np.ndarray] = None,
+                  refill: Optional[np.ndarray] = None) -> tuple[tuple, np.ndarray]:
     """`region`(スライスの3つ組)を材料から丸ごと空にしたと仮定して、m 立方の被覆を失う材料セル。
     `(origin, lost)`: `lost` は `region` の周り(距離 m-1 以内)の真偽値、`origin` はその (0,0,0) の `mask` での添字。
+
+    `refill`(`region` と同じ形の真偽配列)を渡すと、空にする代わりに `region` の中をその値にして数える(段階3の置換。足した
+    セルが与える被覆を数え、足したセルのうち m 立方に入らないものは `region` の中の `lost` になる)。
 
     `exempt`(保持ソリッド由来のセル)は被覆を問わない対象外だが、材料であれば他のセルの立方には数える。
     m 立方はそのセルから距離 m-1 以内にしか広がらないので、`region` から距離 2×(m-1) の
@@ -39,7 +42,8 @@ def lost_coverage(mask: np.ndarray, region: tuple, m: int,
     lo = tuple(max(int(s.start) - pad, 0) for s in region)
     hi = tuple(min(int(s.stop) + pad, n) for s, n in zip(region, shape))
     window = np.array(mask[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]], dtype=bool, copy=True)
-    window[tuple(slice(int(s.start) - l, int(s.stop) - l) for s, l in zip(region, lo))] = False
+    window[tuple(slice(int(s.start) - l, int(s.stop) - l) for s, l in zip(region, lo))] = (
+        False if refill is None else refill)
     opened = cube_opening(window, m)
     zone = tuple(
         slice(max(int(s.start) - reach - l, 0), min(int(s.stop) + reach - l, h - l))

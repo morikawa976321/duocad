@@ -808,23 +808,28 @@ def test_peel_without_min_width_gives_the_same_masks_and_counts_as_before_the_pr
     assert picked == GOLDEN_PEEL_PICKED and digest.hexdigest() == GOLDEN_PEEL_DIGEST
 
 
-def test_stage3_block_delete_refuses_a_single_cell_thinning_cut_but_allows_a_thick_enough_one():
-    """厚さ2セルの塊(2x2x4)で、1セルの削除は m=2 でどれも規則を破るが、半分を丸ごと削る2セル大は保つ。"""
+def _stage3_child(mask, design_space, op, region, addable, m=2, exempt=None):
+    return bs._materialize(mask, design_space, op, region, addable, min_width_cells=m, exempt=exempt)
+
+
+def test_stage3_delete_of_a_single_cell_takes_the_layer_that_loses_its_cube_instead_of_being_refused():
+    """厚さ2セルの塊(2x2x4)で、1セルの削除は m=2 でも候補に残り、子はその層ごと(z=0 の4セル)を空にした形になる。
+    m=1 の子は1セルだけ。"""
     mask = np.ones((2, 2, 4), bool)
-    design_space = mask.copy()
+    corner = (slice(0, 1), slice(0, 1), slice(0, 1))
+    deletes = [region for op, region, _ in bs.candidate_descriptors(mask, mask, (1,)) if op == 'delete']
+    assert len(deletes) == 16 and corner in deletes
+    assert (~bs._materialize(mask, mask, 'delete', corner, None)).sum() == 1
+    child = _stage3_child(mask, mask, 'delete', corner, None)
+    assert not child[:, :, 0].any() and child[:, :, 1:].all()
+    assert _opening_satisfied(child, 2)
 
-    def deletes(size, m):
-        return [region for op, region, _ in bs.candidate_descriptors(mask, design_space, (size,), min_width_cells=m)
-                if op == 'delete']
 
-    assert len(deletes(1, 1)) == 16 and len(deletes(1, 2)) == 0
-    assert len(deletes(2, 1)) == 2 and len(deletes(2, 2)) == 2
-
-
-def test_stage3_block_judgment_matches_a_global_opening_recheck_including_edge_truncated_blocks():
-    """落ちたら、段階3のブロック削除・置換の局所の厚み判定が、全体を数え直した判定とずれている。"""
+def test_stage3_block_delete_and_replace_children_equal_the_global_opening_of_the_raw_child():
+    """落ちたら、段階3の射影(削除・置換で被覆を失うセルを一緒に空にする)が、全体を数え直した opening とずれている。
+    足した `addable` が m 立方に入らなければそのセルも空になる(置換)。追加は射影しない。"""
     rng = np.random.default_rng(20260921)
-    judged = accepted = refused_by_width = truncated = 0
+    checked = casualties = replace_casualties = addable_cleared = truncated = 0
     for _ in range(40):
         shape = tuple(int(x) for x in rng.integers(4, 10, size=3))
         m = int(rng.integers(2, 5))
@@ -832,24 +837,144 @@ def test_stage3_block_judgment_matches_a_global_opening_recheck_including_edge_t
         mask = ndimage.binary_opening(raw, structure=np.ones((m, m, m), dtype=bool))  # 冪等: 前提を満たす入力
         design_space = np.ones(shape, bool)
         for size in bs.block_sizes(shape):
-            for op in ('delete', 'replace'):
-                plain = list(bs._op_scan(mask, design_space, size, op, min_width_cells=1))
-                guarded = list(bs._op_scan(mask, design_space, size, op, min_width_cells=m))
-                starts = list(bs._block_starts(shape, size))
-                for lo, without, with_width in zip(starts, plain, guarded):
-                    if without is None:
-                        assert with_width is None
-                        continue
-                    region = without[1]
-                    judged += 1
-                    truncated += any(r.stop - r.start < size for r in region)
-                    after = mask.copy()
-                    after[region] = False
-                    truth_ok = _opening_satisfied(after, m)
-                    assert (with_width is not None) == truth_ok
-                    accepted += truth_ok
-                    refused_by_width += not truth_ok
-    assert accepted > 20 and refused_by_width > 20 and truncated > 20  # 3種とも実際に通っている(空振りで合格していない)
+            for op, region, addable in bs.candidate_descriptors(mask, design_space, (size,)):
+                child = _stage3_child(mask, design_space, op, region, addable, m)
+                unprojected = bs._materialize(mask, design_space, op, region, addable)
+                if op == 'add':
+                    assert np.array_equal(child, unprojected)
+                    continue
+                assert np.array_equal(child, min_width.cube_opening(unprojected, m))
+                assert _opening_satisfied(child, m)
+                checked += 1
+                truncated += any(r.stop - r.start < size for r in region)
+                lost = int(unprojected.sum() - child.sum())
+                casualties += lost > 0
+                replace_casualties += op == 'replace' and lost > 0
+                addable_cleared += op == 'replace' and bool((addable & ~child[region]).any())
+    assert checked > 100 and casualties > 30 and truncated > 20  # 巻き添え・端で切り詰まったブロックが実際に出ている
+    assert replace_casualties > 10 and addable_cleared > 3
+
+
+def test_stage3_add_is_not_projected_and_the_global_check_is_what_refuses_it():
+    """落ちたら、追加が射影されている。2セル厚の板の貫通穴に入れた1セルは m=2 の立方に入らないまま子に残り、大域判定が落とす。"""
+    plate = np.ones((6, 6, 2), bool)
+    plate[3, 3, :] = False
+    design_space = np.ones_like(plate)
+    cell = (slice(3, 4), slice(3, 4), slice(0, 1))
+    adds = [addable for op, region, addable in bs.candidate_descriptors(plate, design_space, (1,))
+            if op == 'add' and region == cell]
+    assert len(adds) == 1
+    child = _stage3_child(plate, design_space, 'add', cell, adds[0])
+    assert child[3, 3, 0] and not child[3, 3, 1] and not bs._mask_satisfies_min_width(child, 2)
+
+
+def test_stage3_exempt_cells_are_never_taken_along_and_still_count_as_material():
+    """2x2x4 の棒から (0,0,1) を1セル削ると z=0・z=1 の8セルが被覆を失う。(1,1,1) が対象外なら巻き添えにならず材料のまま残る。"""
+    bar = np.ones((2, 2, 4), bool)
+    exempt = np.zeros_like(bar)
+    exempt[1, 1, 1] = True
+    region = (slice(0, 1), slice(0, 1), slice(1, 2))
+    plain = _stage3_child(bar, bar, 'delete', region, None)
+    assert not plain[:, :, :2].any() and plain[:, :, 2:].all()
+    child = _stage3_child(bar, bar, 'delete', region, None, exempt=exempt)
+    assert child[1, 1, 1] and int((bar & ~child).sum()) == 7
+    assert bs._mask_satisfies_min_width(child, 2, exempt)
+
+
+def test_lost_coverage_counts_the_cells_a_replacement_adds_as_coverage():
+    """落ちたら、`refill`(置換で足すセル)が被覆に数えられていない: 層を同じ形で入れ直せば何も失わず、空にすれば隣の層を失う。"""
+    mask = np.zeros((4, 2, 2), bool)
+    mask[1:3] = True
+    region = (slice(2, 3), slice(0, 2), slice(0, 2))
+    assert min_width.lost_coverage(mask, region, 2)[1].any()
+    assert not min_width.lost_coverage(mask, region, 2, refill=np.ones((1, 2, 2), bool))[1].any()
+    origin, lost = min_width.lost_coverage(mask, region, 2, refill=np.zeros((1, 2, 2), bool))
+    assert {tuple(int(x) for x in c) for c in np.argwhere(lost) + np.asarray(origin)} == {
+        (1, y, z) for y in range(2) for z in range(2)}
+
+
+def test_stage3_children_that_differ_before_the_projection_are_the_same_candidate_after_it():
+    """落ちたら、訪問済みの判定が射影の前のマスクで行われ、別のブロックから同じ子ができたときに二度解く。
+    2セル厚の板では、1セルの上面と下面のブロックは同じ貫通柱になる。"""
+    plate = np.ones((6, 6, 2), bool)
+    design_space = plate.copy()
+    top, bottom = ((slice(3, 4), slice(3, 4), slice(z, z + 1)) for z in (1, 0))
+    raw = [bs._materialize(plate, design_space, 'delete', r, None) for r in (top, bottom)]
+    projected = [_stage3_child(plate, design_space, 'delete', r, None) for r in (top, bottom)]
+    assert not np.array_equal(*raw) and np.array_equal(*projected)
+
+    frontier = bs._Frontier(4)
+    frontier.push(bs._node(plate, 0, 0, design_space, (1,), 2))
+    budget = bs._Budget(max_evaluations=10 ** 6, max_candidates=10 ** 6)
+    visited, children = set(), []
+    while True:
+        pulled = bs._pull(frontier, design_space, budget, visited, 'id', None, min_width_cells=2)
+        if isinstance(pulled, str):
+            break
+        children.append(acceptance.material_sha256(pulled[0]))
+    assert len(children) == len(set(children)) == budget.generated - budget.duplicates and budget.duplicates > 0
+    distinct_raw = {acceptance.material_sha256(bs._materialize(plate, design_space, op, region, addable))
+                    for op, region, addable in bs.candidate_descriptors(plate, design_space, (1,))}
+    assert len(children) < len(distinct_raw)
+
+
+def _plate_with_an_excluded_column():
+    """8x7x2 の板(固定面=x最小・荷重面=x最大)の列 (2,4) が除外領域に掛かる。全材料は除外で不合格。
+    2セル大の整列ブロック [2,4)x[4,6) だけを削ると y=6 に1セル幅の薄皮が残り、m=2 の規則を破る。"""
+    shape = (8, 7, 2)
+    hole = Pos(2.5, 4.5, 1.0) * Box(.8, .8, 1.8)
+    conditions = dataclasses.replace(bar_conditions(shape=shape), excludes=[('hole', hole.wrapped)])
+    return conditions, np.ones(shape, bool)
+
+
+def test_stage3_reaches_an_initial_feasible_shape_through_a_projected_delete_that_a_thickness_filter_cannot_reach():
+    """落ちたら、段階3の削除が被覆を失うセルを一緒に空にしていない。この題材では、除外された列を含む2セル大の整列ブロックの
+    素朴な子は薄皮が残って規則を破る。射影した子は規則を満たし、評価60回以内で初期合格に届く。"""
+    conditions, design = _plate_with_an_excluded_column()
+    block = (slice(2, 4), slice(4, 6), slice(0, 2))
+    naive = bs._materialize(design, design, 'delete', block, None)
+    child = _stage3_child(design, design, 'delete', block, None)
+    assert not _opening_satisfied(naive, 2) and _opening_satisfied(child, 2)
+    assert not child[2:4, 4:7].any() and child.sum() == design.sum() - 12
+
+    result = bs.find_initial_feasible(design, conditions, max_evaluations=60, min_width_cells=2)
+    assert result.status == 'feasible' and result.evaluations <= 60
+    mask = result.best_feasible.mask
+    assert _opening_satisfied(mask, 2) and not mask[2, 4].any()
+
+
+GOLDEN_STAGE3_M1_DIGEST = 'ee6914b03c9f50242ba242ff0755e1663a7108c446f69723d199c704a910369d'
+
+
+def test_stage3_with_min_width_one_gives_the_same_candidates_masks_and_search_as_before_the_projection():
+    """落ちたら、m=1(既定)の段階3の候補の並び・子マスク・評価回数・履歴が、射影を入れる前と変わっている。
+    期待値は変更前のコードで同じ手順を回して得たハッシュ(乱数の親25個の全候補と、除外つきの板の探索3本)。"""
+    rng = np.random.default_rng(20260926)
+    digest = hashlib.sha256()
+    for _ in range(25):
+        shape = tuple(int(x) for x in rng.integers(2, 8, size=3))
+        design = rng.random(shape) < .9
+        mask = design & (rng.random(shape) < .7)
+        for size in bs.block_sizes(shape):
+            for allow_add in (True, False):
+                for op, region, addable in bs.candidate_descriptors(mask, design, (size,), allow_add=allow_add):
+                    child = bs._materialize(mask, design, op, region, addable)
+                    digest.update(repr((op, [(s.start, s.stop) for s in region])).encode())
+                    digest.update(b'' if addable is None else np.ascontiguousarray(addable).tobytes())
+                    digest.update(np.ascontiguousarray(child).tobytes())
+
+    def hole_conditions(shape, cell):
+        hole = Pos(cell[0] + .5, cell[1] + .5, shape[2] / 2) * Box(.8, .8, shape[2] - .2)
+        return dataclasses.replace(bar_conditions(shape=shape), excludes=[('hole', hole.wrapped)])
+
+    for conditions, design, budget in ((*detour_conditions(), 120),
+                                       (hole_conditions((8, 7, 2), (3, 3)), np.ones((8, 7, 2), bool), 1400),
+                                       (hole_conditions((6, 7, 2), (3, 4)), np.ones((6, 7, 2), bool), 120)):
+        result = bs.find_initial_feasible(design, conditions, max_evaluations=budget)
+        digest.update(repr([(t.operation, t.mask_hash, t.outcome, t.parent) for t in result.history]).encode())
+        digest.update(repr((result.status, result.termination, result.evaluations,
+                            result.diagnostics['candidates'])).encode())
+    assert digest.hexdigest() == GOLDEN_STAGE3_M1_DIGEST
 
 
 def test_search_with_min_width_cells_produces_a_shape_that_an_independent_opening_check_accepts():
@@ -889,7 +1014,7 @@ def test_min_width_search_starts_from_the_design_space_thickness_opening():
 
 
 def test_a_design_space_that_already_violates_min_width_still_reaches_a_conforming_shape():
-    """落ちたら、違反した設計空間から出発すると違反セルの削除自体が拒まれ、規則適合の候補に届かない。"""
+    """落ちたら、違反した設計空間を入口の opening で絞らずに出発している(絞らない探索は評価23回、絞ると1回)。"""
     design = np.ones((6, 3, 3), bool)
     for cell in [(2, 0, 0), (3, 0, 0), (2, 0, 2), (3, 0, 2)]:
         design[cell] = False
@@ -999,8 +1124,8 @@ def test_an_exempt_cell_needs_no_cube_but_still_counts_as_material_for_the_other
     assert not bs._mask_satisfies_min_width(mask, 2, other)
     assert bs._mask_satisfies_min_width(mask, 2, protrusion)
     region = (slice(0, 1), slice(0, 1), slice(0, 1))
-    assert not bs._min_width_ok_after_clearing(mask, region, 2, protrusion)
-    assert not bs._min_width_ok_after_clearing(mask, (slice(1, 2), slice(1, 2), slice(1, 2)), 2, protrusion)
+    assert min_width.lost_coverage(mask, region, 2, protrusion)[1].any()
+    assert min_width.lost_coverage(mask, (slice(1, 2), slice(1, 2), slice(1, 2)), 2, protrusion)[1].any()
 
 
 def _assert_min_width_invariants(mask, m, exempt=None):
@@ -1089,8 +1214,7 @@ def test_with_min_width_one_keep_cells_change_neither_the_result_nor_the_cost(mo
         raise AssertionError('m=1 で最小幅の判定を呼んだ')
 
     for owner, name in ((min_width, 'cube_opening'), (min_width, 'lost_coverage'), (min_width, 'casualties'),
-                        (min_width, 'bite_verdict'), (bs, '_min_width_ok_after_clearing'),
-                        (bs, '_mask_satisfies_min_width')):
+                        (min_width, 'bite_verdict'), (bs, '_mask_satisfies_min_width')):
         monkeypatch.setattr(owner, name, forbidden)
     marked = dataclasses.replace(conditions, keep_cells=np.ones((8, 3, 3), bool))
     with_keep = bs.find_best_feasible(design, marked, max_evaluations=200, min_width_cells=1)

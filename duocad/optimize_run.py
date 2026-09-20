@@ -1443,7 +1443,7 @@ def _search_failure_warning(search_result: Any, min_width: Optional[dict] = None
 def _min_width_failure_note(search_result: Any, min_width: Optional[dict]) -> str:
     """最小幅が有効(`cells`>1)なときだけ返す。入口で止まったときは絞った設計空間に対する結果であること、
     初期合格が見つからずに止まったときは予算より先に最小幅を疑うこと(hanger 2.4mm は1回のFEMが100秒超)を添える。
-    合格形状から始まる段階4は `feasible` で返るので、ここへは来ない(段階4は厚みで手を却下しない)。"""
+    合格形状から始まる段階4は `feasible` で返るので、ここへは来ない。"""
     if not min_width or int(min_width.get("cells", 1)) <= 1:
         return ""
     head = f"最小幅 {float(min_width['guaranteed_mm']):.4g} mm({int(min_width['cells'])}セル)の制約が有効"
@@ -1456,7 +1456,7 @@ def _min_width_failure_note(search_result: Any, min_width: Optional[dict]) -> st
             return ""
         return (f"{head}: この検査は、設計空間から立方が入らない {trimmed}/{info['design_cells']} セルを除いた後の"
                 "空間に対して行った。最小幅を下げると通ることがある")
-    return (f"{head}: 初期合格を探す削除・置換は幅を保つものだけが候補になるので、予算を増やしても届かないことがある。"
+    return (f"{head}: 初期合格を探す削除・置換は、抜いた後に幅を失うセルも一緒に抜いた形で評価され、追加は幅を破ると評価の前に捨てられる。"
             "予算を増やす前に、最小幅を下げて同じ題材が通るか確かめること")
 
 
