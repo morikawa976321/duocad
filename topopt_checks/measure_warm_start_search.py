@@ -12,6 +12,13 @@ hanger・要素サイズ要求 2.4mm・目標2.0・既定の最小幅(m=1)。**1
 `--mask-npz` を付けると採用マスクを保存する(`mask_hash` だけでは形の差が分からない)。保存した2つを
 `--diff-masks WARM_NPZ COLD_NPZ [--stl-dir DIR]` で並べると、重なり・片方だけのセル・その距離を出し、
 ボクセルのままのSTL(warm / cold / warm_only / cold_only)を書く。
+
+**対照実験**: `--cg-rtol` は全 solve の CG 収束判定を上書きし、`--noise` は solve が返した変位の各自由度へ
+相対 `noise` の正規乱数(`--noise-seed` で固定)を掛ける。どちらも warm start ではなく cold の解を微小に
+ずらすので、「探索が微小な摂動で別の形へ分かれる」ことが warm 固有かを確かめるのに使う。
+`--summarize REF.json OTHER.json ...` は、各 JSON を REF と並べて秒・CG反復・CPU競合・軌道の分岐点・形の重なりを出す
+(形は JSON と同じ名前の `.npz` があるときだけ)。各実行は測定中の CPU 使用(全体・自プロセス)を10秒ごとに
+記録するので、他のジョブと同時に走った実行は `other_cpu` で見分けられる。
 """
 from __future__ import annotations
 
@@ -19,6 +26,7 @@ import argparse
 import json
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -40,13 +48,75 @@ REQUESTED_ELEMENT_SIZE_MM = 2.4
 TARGET_SAFETY_FACTOR = 2.0
 
 
-def run(mode: str, budget: int, mask_npz: Path | None = None) -> dict:
+class LoadSampler(threading.Thread):
+    """測定中の CPU 使用(全体と自プロセス、どちらも全論理CPUに対する%)を一定間隔で記録する。
+
+    他のジョブと同時に走ると秒が伸びるので、その有無を後から見分けるために取る(`other` = 全体 − 自プロセス)。
+    psutil が無い環境では何も記録せず `summary()` が None を返す。
+    """
+
+    def __init__(self, interval: float = 10.0) -> None:
+        super().__init__(daemon=True)
+        self.interval = interval
+        self.samples: list[tuple[float, float]] = []
+        self._stop_event = threading.Event()
+        try:
+            import psutil
+        except ImportError:
+            self._psutil = None
+        else:
+            self._psutil = psutil
+
+    def run(self) -> None:
+        psutil = self._psutil
+        if psutil is None:
+            return
+        process, cpus = psutil.Process(), psutil.cpu_count()
+        psutil.cpu_percent(None)
+        process.cpu_percent(None)
+        while not self._stop_event.wait(self.interval):
+            self.samples.append((psutil.cpu_percent(None), process.cpu_percent(None) / cpus))
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self.join()
+
+    def summary(self) -> dict | None:
+        if not self.samples:
+            return None
+        total = np.array([s[0] for s in self.samples])
+        own = np.array([s[1] for s in self.samples])
+        other = np.maximum(total - own, 0.0)
+        return dict(samples=len(self.samples), system_cpu_mean=float(total.mean()), own_cpu_mean=float(own.mean()),
+                    other_cpu_mean=float(other.mean()), other_cpu_max=float(other.max()))
+
+
+def instrumented_solve(original, *, cg_rtol_override: float | None, noise: float, seed: int, stats: dict, log: list):
+    """`PreparedSystem.solve` を包んで、solve ごとの [秒, CG反復数] を `log` に積む。`cg_rtol_override` があれば
+    収束判定を上書きし、`noise` があれば返った変位の各自由度に相対 `noise` の正規乱数を掛ける(拘束成分は 0 のまま)。"""
+    rng = np.random.default_rng(seed)
+
+    def solve(self, rhs, *, u0=None, cg_rtol=1e-9):
+        started, before = time.perf_counter(), stats["cg_iterations"]
+        out = original(self, rhs, u0=u0, cg_rtol=cg_rtol if cg_rtol_override is None else cg_rtol_override)
+        if noise:
+            out *= 1.0 + noise * rng.standard_normal(out.shape)
+        log.append([time.perf_counter() - started, int(stats["cg_iterations"] - before)])
+        return out
+
+    return solve
+
+
+def run(mode: str, budget: int, mask_npz: Path | None = None, *, label: str | None = None,
+        cg_rtol: float | None = None, noise: float = 0.0, noise_seed: int = 0) -> dict:
     from duocad import optimize_run
     from duocad.server import Session
     from duocad.topopt import binary_search, design_space as ds, fem, trace
 
-    out: dict = {"mode": mode, "model": str(MODEL), "element_size_requested_mm": REQUESTED_ELEMENT_SIZE_MM,
+    out: dict = {"mode": mode, "label": label or mode, "model": str(MODEL),
+                 "element_size_requested_mm": REQUESTED_ELEMENT_SIZE_MM,
                  "target_safety_factor": TARGET_SAFETY_FACTOR, "max_evaluations": int(budget),
+                 "perturbation": {"cg_rtol": cg_rtol, "noise": noise, "noise_seed": noise_seed},
                  "free_gb_at_start": free_gb()}
     with tempfile.TemporaryDirectory(prefix="topopt-trace-") as trace_root, \
             patch.object(trace, "DEFAULT_ROOT", Path(trace_root)):
@@ -68,12 +138,20 @@ def run(mode: str, budget: int, mask_npz: Path | None = None) -> dict:
             return out
         opts = optimize_run.OptimizeOptions(target_safety_factor=TARGET_SAFETY_FACTOR, max_evaluations=budget)
         conditions = optimize_run._build_search_conditions(document, space, bundle, opts, table=table, mapping=mapping)
-        started = time.perf_counter()
-        with fem.collect_solve_stats() as stats:
+        solve_log: list = []
+        sampler = LoadSampler()
+        with fem.collect_solve_stats() as stats, patch.object(
+                fem.PreparedSystem, "solve",
+                instrumented_solve(fem.PreparedSystem.solve, cg_rtol_override=cg_rtol, noise=noise, seed=noise_seed,
+                                   stats=stats, log=solve_log)):
+            sampler.start()
+            started, cpu_started = time.perf_counter(), time.process_time()
             result = binary_search.find_best_feasible(
                 space.mask, conditions, max_evaluations=budget, min_width_cells=min_width["cells"],
                 warm_start=(mode == "warm"))
-        out["seconds"] = time.perf_counter() - started
+            out["seconds"] = time.perf_counter() - started
+            out["process_cpu_seconds"] = time.process_time() - cpu_started
+            sampler.stop()
     out["free_gb_at_end"] = free_gb()
 
     out.update(search_status=result.status, termination=result.termination, evaluations=int(result.evaluations),
@@ -81,7 +159,9 @@ def run(mode: str, budget: int, mask_npz: Path | None = None) -> dict:
                solves=int(stats["solves"]), cg_iterations_total=int(stats["cg_iterations"]),
                cg_iterations_each=[int(n) for n in stats["cg_iterations_each"]],
                cg_fallbacks=int(stats["fallbacks"]), solve_seconds=float(stats["solve_seconds"]),
-               mg_setup_seconds=float(stats["mg_setup_seconds"]))
+               mg_setup_seconds=float(stats["mg_setup_seconds"]),
+               assemble_seconds=float(stats["assemble_seconds"]), slice_seconds=float(stats["slice_seconds"]),
+               solve_log=solve_log, load=sampler.summary())
     best = result.best_feasible
     reduction = (result.diagnostics or {}).get("reduction") or {}
     out.update(
@@ -160,13 +240,51 @@ def compare(warm_path: Path, cold_path: Path) -> dict:
     )
 
 
+def summarize(reference: Path, others: list[Path]) -> list[dict]:
+    """各結果を REF と並べる。形の重なりは、JSON と同じ名前の `.npz` が両方にあるときだけ出す。"""
+    def load_mask(path: Path):
+        npz = path.with_suffix(".npz")
+        return np.load(npz)["mask"].astype(bool) if npz.exists() else None
+
+    ref = json.loads(reference.read_text(encoding="utf-8"))
+    ref_mask = load_mask(reference)
+    rows = []
+    for path in [reference, *others]:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        pairs = list(zip(data["history"], ref["history"]))
+        mask = load_mask(path)
+        load = data.get("load") or {}
+        rows.append(dict(
+            file=path.name, label=data.get("label"), mode=data["mode"], perturbation=data.get("perturbation"),
+            evaluations=data["evaluations"], seconds=round(data["seconds"], 1),
+            seconds_per_evaluation=round(data["seconds_per_evaluation"], 2),
+            process_cpu_seconds=round(data["process_cpu_seconds"], 1) if "process_cpu_seconds" in data else None,
+            solve_seconds=round(data["solve_seconds"], 1), cg_iterations_total=data["cg_iterations_total"],
+            other_cpu_mean=round(load["other_cpu_mean"], 1) if load else None,
+            other_cpu_max=round(load["other_cpu_max"], 1) if load else None,
+            first_divergence_vs_reference=next((i for i, (a, b) in enumerate(pairs) if a["mask_hash"] != b["mask_hash"]), None),
+            safety_factor_rel_diff_first4=[
+                None if a["safety_factor"] is None or b["safety_factor"] is None
+                else abs(a["safety_factor"] - b["safety_factor"]) / b["safety_factor"] for a, b in pairs[:4]],
+            accepted_elements=data.get("accepted_elements"), final_safety_factor=data.get("safety_factor"),
+            mask_hash8=(data.get("mask_hash") or "")[:8],
+            iou_vs_reference=None if mask is None or ref_mask is None
+            else float((mask & ref_mask).sum() / (mask | ref_mask).sum())))
+    return rows
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--mode", choices=("warm", "cold"))
     parser.add_argument("--budget", type=int, default=20, help="評価予算(既定20)")
     parser.add_argument("--min-free-gb", type=float, default=12.0)
     parser.add_argument("--result", type=Path, default=None, help="結果JSONの書き出し先")
+    parser.add_argument("--label", default=None, help="結果に書く名前(既定は --mode)")
+    parser.add_argument("--cg-rtol", type=float, default=None, help="全 solve の CG 収束判定を上書きする(対照実験)")
+    parser.add_argument("--noise", type=float, default=0.0, help="solve が返す変位の各自由度に掛ける相対ノイズの大きさ(対照実験)")
+    parser.add_argument("--noise-seed", type=int, default=0)
     parser.add_argument("--compare", nargs=2, type=Path, metavar=("WARM_JSON", "COLD_JSON"))
+    parser.add_argument("--summarize", nargs="+", type=Path, metavar="JSON", help="先頭を基準に、残りを並べる")
     parser.add_argument("--mask-npz", type=Path, default=None, help="採用マスクの保存先(省略時は保存しない)")
     parser.add_argument("--diff-masks", nargs=2, type=Path, metavar=("WARM_NPZ", "COLD_NPZ"))
     parser.add_argument("--stl-dir", type=Path, default=None, help="--diff-masks のSTLの書き出し先")
@@ -174,16 +292,20 @@ def main() -> int:
     if args.compare:
         print(json.dumps(compare(*args.compare), ensure_ascii=False, indent=2), flush=True)
         return 0
+    if args.summarize:
+        print(json.dumps(summarize(args.summarize[0], args.summarize[1:]), ensure_ascii=False, indent=2), flush=True)
+        return 0
     if args.diff_masks:
         print(json.dumps(compare_masks(*args.diff_masks, args.stl_dir), ensure_ascii=False, indent=2), flush=True)
         return 0
     if args.mode is None:
-        parser.error("--mode か --compare が要る")
+        parser.error("--mode か --compare か --summarize が要る")
     free = free_gb()
     if free < args.min_free_gb:
         print(f"空きメモリ {free:.1f}GB が下限 {args.min_free_gb}GB 未満。測らずに終わる", flush=True)
         return 3
-    result = run(args.mode, args.budget, args.mask_npz)
+    result = run(args.mode, args.budget, args.mask_npz, label=args.label, cg_rtol=args.cg_rtol,
+                 noise=args.noise, noise_seed=args.noise_seed)
     text = json.dumps(result, ensure_ascii=False, indent=2, default=float)
     if args.result:
         args.result.write_text(text, encoding="utf-8")
