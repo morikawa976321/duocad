@@ -1551,7 +1551,7 @@ def test_resolve_islands_keeps_only_the_numbers_of_removed_islands():
 
 
 # ---------------------------------------------------------------------------
-# warm start: 前の形の変位を CG の初期値にする(答えは変わらず、初期値が壊れていれば cold に落ちる)
+# warm start: 前の形の変位を CG の初期値にする(同じ形の安全率は一致し、初期値が壊れていれば cold に落ちる)
 # ---------------------------------------------------------------------------
 def _cg_iterations(run):
     with fem.collect_solve_stats() as stats:
@@ -1655,4 +1655,22 @@ def test_the_direct_solver_ignores_the_start_vector_and_it_is_not_counted_as_use
     got: dict = {}
     acceptance.inspect(full, full, conditions.grid, **kwargs, fields=got, u0=fields['displacement'])
     assert got['warm_start'] == 'unused:direct'
+
+
+def test_a_start_vector_used_by_a_failed_first_attempt_is_still_counted_when_the_solver_retry_runs(monkeypatch):
+    """落ちたら、解法再試行の前の `fields.clear()` で、1回目に初期値を使った事実が診断から消える。"""
+    conditions, design, _ = appendage_conditions()
+    conditions = dataclasses.replace(conditions, solver='cg')
+    original = stress.solve_displacement
+
+    def fail_when_started(model, rho, penal=3.0, **kwargs):
+        if kwargs.get('u0') is not None:
+            raise RuntimeError('stub')
+        return original(model, rho, penal, **kwargs)
+
+    monkeypatch.setattr(stress, 'solve_displacement', fail_when_started)
+    result = bs.find_best_feasible(design, conditions, max_evaluations=200, warm_start=True)
+    retried = [t for t in result.history if t.operation.startswith('solver_retry')]
+    reduction = result.diagnostics['reduction']
+    assert retried and reduction['warm_start_used'] == len(retried) and reduction['warm_start_fallbacks'] == 0
 

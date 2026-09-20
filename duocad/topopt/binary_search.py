@@ -1238,11 +1238,9 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     評価は bbox キャッシュ無しで行うが、保持・除外の共通体積は前計算(`region_overlaps`)から引く。
     採用形状はこの関数を出る前に前計算を使わない旧経路で取り直す(`_recheck_regions_without_precompute`)。
 
-    `warm_start`(**既定オフ**)なら、直前の合格形状の変位(`FeasibleModel.displacement`)を次の候補の CG の
-    初期値に渡す(1セル削りで反復が 0.01〜0.02 倍)。**同じ形の解は 1e-9 台で cold と一致するが、次に削る順位が
-    変わり、探索の軌道と採用形状の `mask_hash` は cold と一致しないことがある**(hanger 2.4mm・予算20で実測、
-    docs/TOPOPT_SPEED.md。既定を変えない=答えを変えないためオフ)。初期値を使えたか捨てたかの回数は
-    `diagnostics['reduction']['warm_start_used']` / `['warm_start_fallbacks']`。
+    `warm_start` なら、直前の合格形状の変位(`FeasibleModel.displacement`)を次の候補の CG の初期値に渡す。
+    **既定はオフ**: 採用形状の `mask_hash` が cold と一致しないことが実測されている(docs/TOPOPT_SPEED.md)。
+    初期値を使えた回数と捨てた回数は `diagnostics['reduction']['warm_start_used']` / `['warm_start_fallbacks']`。
     """
     if single_cell_patience is not None and not (
             isinstance(single_cell_patience, int) and not isinstance(single_cell_patience, bool) and single_cell_patience >= 1):
