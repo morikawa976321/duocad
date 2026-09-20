@@ -1,11 +1,12 @@
-"""最小幅の下限(m=2)で探索を1回回し、採用マスクを**ボクセルのまま**STLに書き出す(節I I2 の形)。
+"""最小幅 m(既定2=下限)で探索を1回回し、採用マスクを**ボクセルのまま**STLに書き出す(節I I2・節K の形)。
 
-    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_min_width_floor.py --budget 20 --result C:\\tmp\\floor.json
+    .\\.venv\\Scripts\\python.exe topopt_checks\\measure_min_width_floor.py --cells 3 --budget 60 --result C:\\tmp\\m3.json --mask-npz C:\\tmp\\m3.npz
 
-hanger・要素サイズ要求 2.4mm・目標2.0。最小幅は mm の固定値で渡さず、解決した実 spacing の
-2倍(下限そのもの。ガードは `値 < 2×spacing` だけを断る)を渡し、`m == 2` になったことを確かめてから測る。
+hanger・要素サイズ要求 2.4mm(実 spacing 2.387506mm)・目標2.0。最小幅は mm の固定値で渡さず、解決した実 spacing の
+`--cells` 倍(段の値。ガードは `値 < 2×spacing` だけを断る)を渡し、`m == --cells` になったことを確かめてから測る。
 **判定はしない**(採用した形と数字を書き出すだけ)。`trace.DEFAULT_ROOT` を一時フォルダへ向け、
 `output/optimization_runs` に何も残さない。STLは既定で `output/min_width/`(git 管理外)。
+採用マスクの npz は `refine_adopted_mask.py` の入力になる。
 """
 from __future__ import annotations
 
@@ -71,6 +72,31 @@ def voxel_surface(mask: np.ndarray, origin, spacing: float) -> tuple[np.ndarray,
     return verts, faces
 
 
+def _search_summary(result, best_mask: np.ndarray, keep: np.ndarray, m: int) -> dict:
+    """探索の記録から数える数字: 評価の合否・`peel` の実績の合計・同じ候補の解き直しの回避・FEM前の大域検査の却下・
+    規則の成否・侵食した芯の6連結成分数。"""
+    from duocad.topopt import binary_search, min_width
+
+    reduction = (result.diagnostics or {}).get("reduction") or {}
+    peels = [step.get("peel", {}) for step in reduction.get("steps", [])]
+    totals = {name: sum(int(p.get(name, 0)) for p in peels)
+              for name in ("picked", "casualties", "islands", "skipped_support", "skipped_surface", "skipped_manifold",
+                           "skipped_thickness", "skipped_connectivity", "already_removed", "global_checks")}
+    outcomes = [t.outcome for t in result.history]
+    core = ndimage.binary_erosion(np.pad(best_mask, m), structure=np.ones((m,) * 3, dtype=bool))
+    return dict(
+        evaluations_by_outcome={name: outcomes.count(name) for name in sorted(set(outcomes))},
+        peel_totals=totals,
+        peel_seconds=float(reduction.get("peel_seconds", 0.0)),
+        repeated_candidates=int(reduction.get("repeated_candidates", 0)),
+        global_min_width_rejections=sum(1 for t in result.history if t.checks == dict(min_width="fail")),
+        rule_holds_with_keep_exempt=bool(binary_search._mask_satisfies_min_width(best_mask, m, keep)),
+        rule_violating_cells=int((best_mask & ~min_width.cube_opening(best_mask, m) & ~keep).sum()),
+        eroded_core_6connected_parts=int(ndimage.label(core)[1]),
+        material_6connected_parts=int(ndimage.label(best_mask)[1]),
+    )
+
+
 def _opening_removed(material: np.ndarray, size: int) -> dict:
     opened = ndimage.binary_opening(material, structure=np.ones((size,) * 3, dtype=bool))
     total, remaining = int(material.sum()), int(opened.sum())
@@ -78,7 +104,7 @@ def _opening_removed(material: np.ndarray, size: int) -> dict:
             "removed": total - remaining, "removed_fraction": (total - remaining) / total if total else None}
 
 
-def run(budget: int, stl_dir: Path, mask_npz: Path | None) -> dict:
+def run(cells: int, budget: int, stl_dir: Path, mask_npz: Path | None) -> dict:
     from duocad import optimize_run
     from duocad.server import Session
     from duocad.topopt import binary_search, design_space as ds, mesh, trace
@@ -95,11 +121,11 @@ def run(budget: int, stl_dir: Path, mask_npz: Path | None) -> dict:
         spacing = optimize_run._snap_to_grid(
             limits["bbox_min"], limits["bbox_max"],
             optimize_run._resolve_element_size(limits, REQUESTED_ELEMENT_SIZE_MM))
-        min_width_mm = 2.0 * spacing
+        min_width_mm = float(cells) * spacing
         min_width = optimize_run._resolve_min_width(spacing, min_width_mm)
         out.update(actual_spacing_mm=spacing, min_width_request_mm=min_width_mm, min_width=min_width)
-        if min_width["cells"] != 2:
-            out["error"] = f"m が 2 にならなかった(m={min_width['cells']})。測定しない"
+        if min_width["cells"] != cells:
+            out["error"] = f"m が {cells} にならなかった(m={min_width['cells']})。測定しない"
             return out
 
         space = ds.derive(bundle.conditions, spacing=spacing)
@@ -128,17 +154,17 @@ def run(budget: int, stl_dir: Path, mask_npz: Path | None) -> dict:
         material_fraction_of_design_space=float(best.mask.sum() / space.mask.sum()),
         coarse_safety_factor=float(best.safety_factor),
         reduction_stop_reason=reduction.get("stop_reason"),
-        skipped_thickness_total=sum(int(s.get("peel", {}).get("skipped_thickness", 0))
-                                    for s in reduction.get("steps", [])),
         opening_2x2x2=_opening_removed(best.mask, 2),
         opening_3x3x3=_opening_removed(best.mask, 3),
+        opening_4x4x4=_opening_removed(best.mask, 4),
+        **_search_summary(result, best.mask, np.asarray(space.keep, dtype=bool), min_width["cells"]),
     )
     if mask_npz is not None:
         np.savez_compressed(mask_npz, mask=best.mask, origin=np.asarray(space.grid.origin, dtype=float),
                             spacing=float(space.grid.spacing))
     verts, faces = voxel_surface(best.mask, space.grid.origin, space.grid.spacing)
     stl_dir.mkdir(parents=True, exist_ok=True)
-    stl_path = stl_dir / f"floor-m2-{spacing:.6f}mm-voxel.stl"
+    stl_path = stl_dir / f"floor-m{cells}-{spacing:.6f}mm-voxel.stl"
     mesh.write_stl(stl_path, verts, faces)
     out.update(stl_path=str(stl_path), stl_triangles=int(len(faces)), stl_bytes=stl_path.stat().st_size)
     return out
@@ -146,13 +172,14 @@ def run(budget: int, stl_dir: Path, mask_npz: Path | None) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--cells", type=int, default=2, help="最小幅のセル数 m(既定2=下限)")
     parser.add_argument("--budget", type=int, default=20, help="評価予算(既定20)")
     parser.add_argument("--stl-dir", type=Path, default=REPO_ROOT / "output" / "min_width")
     parser.add_argument("--result", type=Path, default=None, help="結果JSONの書き出し先(省略時は標準出力だけ)")
     parser.add_argument("--mask-npz", type=Path, default=None, help="採用マスクの保存先(省略時は保存しない)")
     args = parser.parse_args()
     started = time.perf_counter()
-    result = run(args.budget, args.stl_dir, args.mask_npz)
+    result = run(args.cells, args.budget, args.stl_dir, args.mask_npz)
     result["total_seconds"] = time.perf_counter() - started
     text = json.dumps(result, ensure_ascii=False, indent=2, default=float)
     if args.result:

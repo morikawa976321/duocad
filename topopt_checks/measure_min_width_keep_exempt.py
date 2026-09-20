@@ -34,12 +34,12 @@ TARGET_SAFETY_FACTOR = 2.0
 
 def entry_facts(space, m: int) -> dict:
     """探索の前に決まる事実: m 立方の opening が設計空間から落とすセルと、その中の保持セル。"""
-    from duocad.topopt import binary_search
+    from duocad.topopt import binary_search, min_width as min_width_rules
 
     design, keep = np.asarray(space.mask, dtype=bool), np.asarray(space.keep, dtype=bool)
-    opened = binary_search._cube_opening(design, m)
+    opened = min_width_rules.cube_opening(design, m)
     dropped = design & ~opened
-    keep_alone = binary_search._cube_opening(keep, m)
+    keep_alone = min_width_rules.cube_opening(keep, m)
     room = binary_search.keep_cells_without_room(design, keep, m, space.obstacle)
     stranded = keep & dropped
     ring6 = ndimage.binary_dilation(np.pad(stranded, 1), structure=ndimage.generate_binary_structure(3, 1)) \
@@ -58,7 +58,7 @@ def entry_facts(space, m: int) -> dict:
 def run(m: int, budget: int, requested_element_size_mm: float) -> dict:
     from duocad import optimize_run
     from duocad.server import Session
-    from duocad.topopt import binary_search, design_space as ds, trace
+    from duocad.topopt import binary_search, design_space as ds, min_width as min_width_rules, trace
 
     out: dict = {"model": str(MODEL), "element_size_requested_mm": requested_element_size_mm,
                  "target_safety_factor": TARGET_SAFETY_FACTOR, "max_evaluations": int(budget)}
@@ -113,12 +113,12 @@ def run(m: int, budget: int, requested_element_size_mm: float) -> dict:
         material_fraction_of_design_space=float(best.mask.sum() / space.mask.sum()),
         coarse_safety_factor=float(best.safety_factor),
         reduction_stop_reason=reduction.get("stop_reason"),
-        skipped_thickness_total=sum(int(s.get("peel", {}).get("skipped_thickness", 0)) for s in steps),
+        peel_casualties_total=sum(int(s.get("peel", {}).get("casualties", 0)) for s in steps),
         reduction_steps=len(steps),
         keep_cells_in_result=int((best.mask & keep).sum()),
         rule_holds_with_keep_exempt=bool(binary_search._mask_satisfies_min_width(best.mask, m, keep)),
         rule_holds_without_exemption=bool(binary_search._mask_satisfies_min_width(best.mask, m)),
-        non_keep_cells_outside_cubes=int((best.mask & ~binary_search._cube_opening(best.mask, m) & ~keep).sum()),
+        non_keep_cells_outside_cubes=int((best.mask & ~min_width_rules.cube_opening(best.mask, m) & ~keep).sum()),
     )
     return out
 

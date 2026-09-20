@@ -9,7 +9,7 @@ import pytest
 from build123d import Box, Pos
 from scipy import ndimage
 
-from duocad.topopt import acceptance, anchor, fem, stress, voxelize
+from duocad.topopt import acceptance, anchor, fem, min_width, stress, voxelize
 from duocad.topopt import binary_search as bs
 
 
@@ -639,38 +639,81 @@ def test_cube_opening_equals_scipy_binary_opening():
         shape = tuple(int(x) for x in rng.integers(1, 14, size=3))
         m = int(rng.integers(2, 7))
         mask = rng.random(shape) < rng.uniform(0.5, 0.98)
-        assert np.array_equal(bs._cube_opening(mask, m),
+        assert np.array_equal(min_width.cube_opening(mask, m),
                               ndimage.binary_opening(mask, structure=np.ones((m, m, m), dtype=bool)))
 
 
-def test_peel_refuses_a_removal_that_would_thin_material_below_min_width():
-    """厚さ2セルの塊(2x2x4)の角セルを抜くと、隣接セルが m=2 立方のブロックを失う。
-    `min_width_cells=1`(既定・制約なし)では削れ、`min_width_cells=2` では `skipped_thickness` で断る。"""
+def _bite_of(mask, cell, m=2, anchors=None, exempt=None):
+    """`cell` だけを順位に置いて1手だけ `peel` し、抜けたセルの集合と実績を返す。"""
+    order = np.array([int(np.ravel_multi_index(cell, mask.shape))])
+    after, stats = bs.peel(mask, order, 1, np.zeros(0, dtype=np.int64) if anchors is None else anchors,
+                           min_width_cells=m, exempt=exempt)
+    return {tuple(int(x) for x in c) for c in np.argwhere(mask & ~after)}, stats, after
+
+
+def test_peel_takes_the_cells_that_lose_their_cube_in_the_same_move():
+    """厚さ2セルの塊(2x2x4)の角セルを抜くと、同じ層の3セルが m=2 立方の被覆を失う。m=1 は1セル、
+    m=2 は厚みで却下せず、その4セルを1手(picked 1・casualties 3)で抜く。"""
     mask = np.ones((2, 2, 4), bool)
-    anchors = np.zeros(0, dtype=np.int64)
-    corner = int(np.ravel_multi_index((0, 0, 0), mask.shape))
-    after, stats = bs.peel(mask, np.array([corner]), 1, anchors, min_width_cells=1)
-    assert stats.picked == 1 and not after[0, 0, 0]
+    gone, stats, _ = _bite_of(mask, (0, 0, 0), m=1)
+    assert gone == {(0, 0, 0)} and (stats.picked, stats.casualties) == (1, 0)
+    gone, stats, after = _bite_of(mask, (0, 0, 0), m=2)
+    assert gone == {(x, y, 0) for x in range(2) for y in range(2)}
+    assert (stats.picked, stats.casualties, stats.skipped_thickness) == (1, 3, 0)
+    assert stats.picked + stats.casualties + stats.islands == mask.sum() - after.sum()
+    assert _opening_satisfied(after, 2)
 
-    after, stats = bs.peel(mask, np.array([corner]), 1, anchors, min_width_cells=2)
-    assert np.array_equal(after, mask)
-    assert (stats.picked, stats.skipped_thickness) == (0, 1)
+
+def test_peel_bite_shapes_on_a_plate_a_free_edge_a_bar_and_a_thick_block():
+    """落ちたら、一口(x + 巻き添え)の形が変わっている: 2セル厚の板の上面は貫通柱・自由縁のすぐ内側はリブごと・
+    厚い塊の表面は巻き添え0(m=1 と同じ1セルの手)。"""
+    plate = np.ones((6, 6, 2), bool)
+    gone, stats, after = _bite_of(plate, (3, 3, 1))
+    assert gone == {(3, 3, 0), (3, 3, 1)} and (stats.picked, stats.casualties) == (1, 1)
+    assert not after[3, 3].any()
+    gone, stats, _ = _bite_of(plate, (1, 3, 1))
+    assert gone == {(x, 3, z) for x in (0, 1) for z in (0, 1)} and (stats.picked, stats.casualties) == (1, 3)
+    block = np.ones((6, 6, 6), bool)
+    gone, stats, after = _bite_of(block, (3, 3, 5))
+    assert gone == {(3, 3, 5)} and (stats.picked, stats.casualties) == (1, 0)
+    assert np.array_equal(after, bs.peel(block, np.array([int(np.ravel_multi_index((3, 3, 5), block.shape))]), 1,
+                                         np.zeros(0, dtype=np.int64))[0])
 
 
-def test_peel_local_thickness_judgment_matches_a_global_opening_recheck():
-    """落ちたら、`peel` の局所の厚み判定が全体を数え直した判定とずれている
-    (`test_a_local_connectivity_pass_implies_the_global_one` と同じ形の検算)。"""
+def test_peel_takes_a_whole_cross_section_of_a_2x2_bar_and_leaves_the_split_to_the_connectivity_check():
+    """2x2 の棒の途中の1セルは断面ごと(4セル)が一口になる。棒は割れるので、固定側が無ければ却下(全体の数え直し)、
+    片側に条件節点があれば反対側は島として一緒に消える。"""
+    bar = np.ones((2, 2, 8), bool)
+    gone, stats, after = _bite_of(bar, (0, 0, 4))
+    assert not gone and after.all()
+    assert (stats.global_checks, stats.skipped_connectivity, stats.picked) == (1, 1, 0)
+    fixed_end = np.flatnonzero(np.pad(np.ones((3, 3, 1), bool), ((0, 0), (0, 0), (0, 8))).ravel())
+    gone, stats, after = _bite_of(bar, (0, 0, 4), anchors=fixed_end)
+    assert (stats.picked, stats.casualties, stats.islands) == (1, 3, 12)
+    assert not after[:, :, 4:].any() and after[:, :, :4].all()
+
+
+def test_peel_refuses_a_bite_that_would_take_the_last_support_of_a_condition_node():
+    """巻き添えが条件節点の最後の支えを奪う手は却下する(`skipped_support`)。x 自身は条件節点に接しない位置で固定する。"""
+    bar = np.ones((2, 2, 4), bool)
+    end = np.flatnonzero(np.pad(np.ones((3, 3, 1), bool), ((0, 0), (0, 0), (0, 4))).ravel())  # z=0 の節点
+    gone, stats, after = _bite_of(bar, (0, 0, 1), anchors=end)  # z=0 と z=1 の層が巻き添え。z=0 の節点は支えを失う
+    assert not gone and (stats.picked, stats.skipped_support) == (0, 1)
+    gone, stats, _ = _bite_of(bar, (0, 0, 3), anchors=end)  # 反対の端の層だけが巻き添え
+    assert gone == {(x, y, 3) for x in range(2) for y in range(2)} and stats.skipped_support == 0
+
+
+def test_peel_local_bite_matches_the_opening_of_the_mask_without_the_picked_cell():
+    """落ちたら、`peel` の一口が全体を数え直した `opening(mask − {x})` とずれている。1手で島が出なかったとき、
+    返すマスクは `opening(mask − {x})` に等しい(厚みの不変条件は構成上保たれる)。"""
     rng = np.random.default_rng(20260920)
     anchors = np.zeros(0, dtype=np.int64)
-    checked = 0
-    thickness_skips = 0
+    checked = bites = 0
     for _ in range(25):
         shape = tuple(int(x) for x in rng.integers(6, 12, size=3))
         m = int(rng.integers(2, 4))
         raw = rng.random(shape) < rng.uniform(0.6, 0.95)
-        # 乱数マスクをそのまま使うと m 立方の被覆をまず満たさない。opening は冪等
-        # (opening(opening(x)) == opening(x))なので、これで作ったマスクは前提(規則を満たす入力)を満たす。
-        mask = ndimage.binary_opening(raw, structure=np.ones((m, m, m), dtype=bool))
+        mask = ndimage.binary_opening(raw, structure=np.ones((m, m, m), dtype=bool))  # 冪等: 規則を満たす入力
         labels, count = ndimage.label(mask, structure=bs.NEIGHBOURHOOD_STRUCTURE)
         if not count or mask.sum() < 2 * m ** 3:
             continue
@@ -682,17 +725,87 @@ def test_peel_local_thickness_judgment_matches_a_global_opening_recheck():
                 continue
             checked += 1
             after, stats = bs.peel(mask, np.array([cell]), 1, anchors, min_width_cells=m)
-            candidate = mask.copy()
-            candidate[i, j, k] = False
-            truth_ok = _opening_satisfied(candidate, m)
-            if stats.picked == 1:
-                assert truth_ok  # 安全側: 通した削除が規則を破ったことは無い
-            if stats.picked + stats.islands:
-                assert _opening_satisfied(after, m)  # 島ごと消えた場合も、返すマスク自身が規則を満たす
-            if stats.skipped_thickness == 1:
-                thickness_skips += 1
-                assert not truth_ok  # 厚みで断ったなら、実際に規則を破っている(過剰な足切りでない)
-    assert checked > 100 and thickness_skips > 20  # 何も試せていない・厚みが効いていないケースだけで合格していない
+            assert stats.skipped_thickness == 0 and _opening_satisfied(after, m)
+            if stats.picked == 1 and not stats.islands:
+                without = mask.copy()
+                without[i, j, k] = False
+                assert np.array_equal(after, bs.min_width.cube_opening(without, m))
+                bites += stats.casualties > 0
+    assert checked > 100 and bites > 20  # 何も試せていない・巻き添えが出ないケースだけで合格していない
+
+
+def _peel_box_until_stuck(m, kind, *, exempt_fixed_layer=False):
+    """12x20x16 の直方体(固定面 y=0・荷重面 y=最大の中央)を、固定のエネルギー場で `peel`(2割要求)が止まるまで
+    繰り返し、各ステップの不変条件を全体で数え直す。戻り値は止まったときの材料割合。"""
+    shape = (12, 20, 16)
+    nodes = np.zeros(tuple(n + 1 for n in shape), bool)
+    nodes[:, 0, :] = True
+    nodes[4:8, shape[1], 5:10] = True
+    anchors = np.flatnonzero(nodes.ravel())
+    x, y, z = np.meshgrid(*(np.arange(n, dtype=float) for n in shape), indexing='ij')
+    noise = np.random.default_rng(1).random(shape)
+    energy = (((shape[1] - y) / shape[1]) ** 2 * ((z - 7.5) / 8) ** 2 + 1e-6 * noise) if kind == 'bending' else noise
+    exempt = None
+    if exempt_fixed_layer:
+        exempt = np.zeros(shape, bool)
+        exempt[:, 0, :] = True
+    mask = np.ones(shape, bool)
+    for _ in range(60):
+        after, stats = bs.peel(mask, bs.ranked_cells(mask, energy), max(1, int(.2 * mask.sum())), anchors,
+                               min_width_cells=m, exempt=exempt)
+        assert stats.picked + stats.casualties + stats.islands == mask.sum() - after.sum()
+        if after.sum() == mask.sum():
+            break
+        _assert_min_width_invariants(after, m, exempt)
+        assert acceptance.active_nodes(after).ravel()[anchors].all()
+        mask = after
+    return mask.sum() / mask.size
+
+
+@pytest.mark.parametrize('m', [2, 3])
+@pytest.mark.parametrize('kind', ['bending', 'random'])
+def test_peel_with_min_width_keeps_every_invariant_and_carves_far_below_where_it_used_to_stall(m, kind):
+    """落ちたら、射影つきの `peel` が途中で不変条件を破る、または厚みで手が止まる(1セルずつ却下していた版は
+    同じ題材・同じ手順で m=2 が67〜76%・m=3 が78〜84%で止まった)。"""
+    assert _peel_box_until_stuck(m, kind) < 0.3
+
+
+def test_peel_with_min_width_keeps_every_invariant_when_the_fixed_layer_is_exempt():
+    """`exempt`(固定面の層)があっても、全ステップの不変条件(`exempt` を除く)が保たれ、同じく深く削れる。"""
+    assert _peel_box_until_stuck(2, 'bending', exempt_fixed_layer=True) < 0.3
+
+
+GOLDEN_PEEL_PICKED = 1815
+GOLDEN_PEEL_DIGEST = 'e567d9b0d72be90b5903b2300e86c61fd5189d64e012e8d3e061985a04e2f051'
+
+
+def test_peel_without_min_width_gives_the_same_masks_and_counts_as_before_the_projection():
+    """落ちたら、m=1(既定)の `peel` の戻りマスク・実績・選んだセルが、射影つきを入れる前と変わっている。
+    期待値は変更前のコードで同じ手順を回して得たハッシュ(乱数入力40個・各3回の `peel`・条件節点あり)。"""
+    rng = np.random.default_rng(20260921)
+    digest = hashlib.sha256()
+    picked = 0
+    for _ in range(40):
+        shape = tuple(int(x) for x in rng.integers(4, 9, size=3))
+        mask = _random_connected_mask(rng, shape, .75)
+        if not mask.any():
+            continue
+        nodes = np.zeros(tuple(n + 1 for n in shape), bool)
+        nodes[0] = True
+        nodes[-1, :shape[1] // 2 + 1] = True
+        anchors = np.flatnonzero(nodes.ravel())
+        for _ in range(3):
+            order = rng.permutation(mask.size)
+            count = int(rng.integers(1, max(2, int(mask.sum()))))
+            after, stats = bs.peel(mask, order, count, anchors)
+            assert stats.casualties == 0 and stats.skipped_thickness == 0
+            digest.update(np.ascontiguousarray(after).tobytes())
+            digest.update(repr([int(after.sum()), stats.picked, stats.islands, stats.skipped_support, stats.skipped_surface,
+                                stats.skipped_manifold, stats.skipped_connectivity, stats.already_removed,
+                                stats.global_checks, stats.picked_cells.tolist()]).encode())
+            picked += stats.picked
+            mask = after
+    assert picked == GOLDEN_PEEL_PICKED and digest.hexdigest() == GOLDEN_PEEL_DIGEST
 
 
 def test_stage3_block_delete_refuses_a_single_cell_thinning_cut_but_allows_a_thick_enough_one():
@@ -754,8 +867,8 @@ def test_search_with_min_width_cells_produces_a_shape_that_an_independent_openin
     assert result.status == 'feasible'
     best = result.best_feasible
     assert _opening_satisfied(best.mask, 2)
-    skipped_thickness = sum(step['peel']['skipped_thickness'] for step in result.diagnostics['reduction']['steps'])
-    assert skipped_thickness > 0  # 制約が実際に効いている(0なら題材が制約を試せていない)
+    casualties = sum(step['peel']['casualties'] for step in result.diagnostics['reduction']['steps'])
+    assert casualties > 0  # 制約が実際に効いている(0なら題材が制約を試せていない)
     assert best.material_mm3 > unconstrained.best_feasible.material_mm3  # 薄くしすぎない分だけ材料が残る
 
 
@@ -890,43 +1003,51 @@ def test_an_exempt_cell_needs_no_cube_but_still_counts_as_material_for_the_other
     assert not bs._min_width_ok_after_clearing(mask, (slice(1, 2), slice(1, 2), slice(1, 2)), 2, protrusion)
 
 
-def test_the_exempt_local_judgment_matches_a_global_recheck():
-    """落ちたら、`peel` の局所判定が対象外のセルを含む形で、全体を数え直した判定とずれている。"""
+def _assert_min_width_invariants(mask, m, exempt=None):
+    """`peel` の不変条件(規則(`exempt` を除く)・非正則頂点0・1成分・閉じた空洞0)を、全体を数え直して確かめる。"""
+    assert bs._mask_satisfies_min_width(mask, m, exempt)
+    assert acceptance.boundary_check(mask)['irregular_vertices'] == 0
+    assert acceptance.connectivity_check(mask)['components'] == 1
+    assert acceptance.void_components(mask) == 1
+
+
+def test_an_exempt_cell_is_never_taken_as_a_casualty_and_the_invariants_hold_next_to_it():
+    """落ちたら、`exempt` のセルが巻き添えとして抜かれている、または `exempt` の近くの手が不変条件を壊している。
+    全材料から `peel` を繰り返し(条件節点なし=島は出ない)、抜けた `exempt` のセルは順位から選んだセル自身だけ。"""
     rng = np.random.default_rng(20260924)
     anchors = np.zeros(0, dtype=np.int64)
-    checked = thickness_skips = exempt_material = 0
-    for _ in range(25):
-        shape = tuple(int(x) for x in rng.integers(6, 12, size=3))
+    moves = bites = uncovered_exempt = 0
+    for _ in range(12):
+        shape = tuple(int(x) for x in rng.integers(6, 10, size=3))
         m = int(rng.integers(2, 4))
-        raw = rng.random(shape) < rng.uniform(0.6, 0.95)
-        base = ndimage.binary_opening(raw, structure=np.ones((m, m, m), dtype=bool))
-        labels, count = ndimage.label(base, structure=bs.NEIGHBOURHOOD_STRUCTURE)
-        if not count or base.sum() < 2 * m ** 3:
-            continue
-        base = labels == 1 + int(np.argmax(np.bincount(labels.ravel())[1:]))
-        # 立方に入らないセルを足し、それを対象外にする(対象外にした分だけ、規則を満たす入力になる)。
-        stray = (rng.random(shape) < 0.05) & ~base
-        exempt = stray | ((rng.random(shape) < 0.1) & base)
-        mask = base | stray
-        assert bs._mask_satisfies_min_width(mask, m, exempt)
-        exempt_material += int((exempt & mask).sum())
-        for cell in rng.permutation(mask.size)[:30]:
-            i, j, k = np.unravel_index(int(cell), mask.shape)
-            if not mask[i, j, k]:
-                continue
-            checked += 1
-            after, stats = bs.peel(mask, np.array([cell]), 1, anchors, min_width_cells=m, exempt=exempt)
-            candidate = mask.copy()
-            candidate[i, j, k] = False
-            truth_ok = bs._mask_satisfies_min_width(candidate, m, exempt)
-            if stats.picked == 1:
-                assert truth_ok
-            if stats.picked + stats.islands:
-                assert bs._mask_satisfies_min_width(after, m, exempt)
-            if stats.skipped_thickness == 1:
-                thickness_skips += 1
-                assert not truth_ok
-    assert checked > 100 and thickness_skips > 20 and exempt_material > 50
+        exempt = rng.random(shape) < 0.15
+        mask = np.ones(shape, bool)
+        for _ in range(6):
+            order = rng.permutation(mask.size)
+            after, stats = bs.peel(mask, order, int(rng.integers(1, 1 + int(mask.sum()) // 3)), anchors,
+                                   min_width_cells=m, exempt=exempt)
+            assert stats.skipped_thickness == 0 and stats.islands == 0
+            removed = {int(c) for c in np.flatnonzero(mask & ~after)}
+            assert len(removed) == stats.picked + stats.casualties
+            assert {int(c) for c in np.flatnonzero(exempt.ravel())} & removed <= set(stats.picked_cells.tolist())
+            _assert_min_width_invariants(after, m, exempt)
+            moves += stats.picked
+            bites += stats.casualties > 0
+            uncovered_exempt += int((exempt & after & ~min_width.cube_opening(after, m)).sum())
+            mask = after
+    assert moves > 100 and bites > 10 and uncovered_exempt > 0  # 巻き添えも、被覆を失った対象外のセルも実際に出ている
+
+
+def test_an_exempt_cell_that_loses_its_cube_stays_while_the_others_of_its_layers_go():
+    """2x2x4 の棒から (0,0,1) を抜くと z=0・z=1 の8セルが被覆を失う。(1,1,1) が対象外なら巻き添えにならず、材料のまま残る。"""
+    bar = np.ones((2, 2, 4), bool)
+    exempt = np.zeros_like(bar)
+    exempt[1, 1, 1] = True
+    plain, _, _ = _bite_of(bar, (0, 0, 1))
+    assert plain == {(x, y, z) for x in range(2) for y in range(2) for z in (0, 1)}
+    gone, stats, after = _bite_of(bar, (0, 0, 1), exempt=exempt)
+    assert gone == plain - {(1, 1, 1)} and after[1, 1, 1] and (stats.picked, stats.casualties) == (1, 6)
+    _assert_min_width_invariants(after, 2, exempt)
 
 
 def test_the_design_space_opening_keeps_the_keep_cells_and_still_trims_the_others():
@@ -967,8 +1088,10 @@ def test_with_min_width_one_keep_cells_change_neither_the_result_nor_the_cost(mo
     def forbidden(*args, **kwargs):
         raise AssertionError('m=1 で最小幅の判定を呼んだ')
 
-    for name in ('_cube_opening', '_min_width_ok_after_clearing', '_mask_satisfies_min_width'):
-        monkeypatch.setattr(bs, name, forbidden)
+    for owner, name in ((min_width, 'cube_opening'), (min_width, 'lost_coverage'), (min_width, 'casualties'),
+                        (min_width, 'bite_verdict'), (bs, '_min_width_ok_after_clearing'),
+                        (bs, '_mask_satisfies_min_width')):
+        monkeypatch.setattr(owner, name, forbidden)
     marked = dataclasses.replace(conditions, keep_cells=np.ones((8, 3, 3), bool))
     with_keep = bs.find_best_feasible(design, marked, max_evaluations=200, min_width_cells=1)
     assert with_keep.evaluations == plain.evaluations and len(with_keep.history) == len(plain.history)
@@ -1050,6 +1173,33 @@ def test_a_preserve_lost_by_the_peel_is_a_geometry_rejection_without_fem_and_the
     assert strict.best_feasible.mask_hash == result.best_feasible.mask_hash
     stage4 = result.history[1:]
     assert len({(trial.parent, trial.mask_hash) for trial in stage4}) == len(stage4)  # 同じ形から同じ候補を2度評価しない
+
+
+def test_a_bite_that_two_different_picked_cells_produce_is_not_solved_again_after_it_failed(monkeypatch):
+    """落ちたら、不合格になった一口が、別のセルを選んだ手でもう一度できたときに FEM を解き直している。
+    2セル厚の板では、上面のセルも下面のセルも同じ貫通柱を一口にする(順位の先頭に両方を置く)。"""
+    shape = (6, 6, 2)
+    plate = np.ones(shape, bool)
+    conditions = bar_conditions(shape=shape)
+    top, bottom = (int(np.ravel_multi_index(c, shape)) for c in ((3, 3, 1), (3, 3, 0)))
+    monkeypatch.setattr(bs, 'ranked_cells', lambda mask, energy: np.array(
+        [top, bottom] + [c for c in range(plate.size) if c not in (top, bottom)]))
+    _stub_evaluation(monkeypatch)  # どの候補も安全率で不合格
+    seed = bs.FeasibleModel(mask=plate, before_mask=plate, report=_fake_report(plate, 'pass'), trial_index=0,
+                            energy=np.ones(shape))
+    initial = bs.SearchResult(status='feasible', termination='seed', best_feasible=seed,
+                              history=[bs.Trial(index=0, parent=None, operation='seed', mask_hash=seed.mask_hash,
+                                                before_mm3=72., material_mm3=72., removed_islands_mm3=0.,
+                                                outcome='ok', safety_factor=.5)],
+                              evaluations=1, conditions_identifier=bs.evaluation_identifier(conditions))
+    result = bs._reduce_volume(initial, plate, conditions, max_evaluations=400, is_cancelled=None,
+                               max_step_ratio=.01, single_cell_patience=None, min_width_cells=2)
+    reduction = result.diagnostics['reduction']
+    stage4 = result.history[1:]
+    assert reduction['repeated_candidates'] >= 1
+    assert len({trial.mask_hash for trial in stage4}) == len(stage4)  # 同じ形を2度評価していない
+    assert all(step['peel']['picked'] == 1 for step in reduction['steps'])
+    assert any(step['peel']['casualties'] > 0 for step in reduction['steps'])  # 一口が複数セルの手で起きている
 
 
 def test_a_candidate_split_into_components_is_reported_as_a_geometry_rejection_with_its_reason():

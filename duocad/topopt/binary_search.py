@@ -30,7 +30,7 @@ from scipy import ndimage
 
 from duocad import kernel
 
-from . import acceptance, anchor
+from . import acceptance, anchor, min_width
 from .material import DEFAULT_ALLOWABLE_MPA, DEFAULT_YOUNGS_MODULUS_MPA
 
 # `acceptance.connectivity_check` と同じ6近傍の定義(§4.4 冒頭)。島処理の合否と
@@ -732,7 +732,7 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
     # 実測(hanger 2.4mm・m=3): 設計空間の縁に m 立方の入らないセルが残る(58/377,075)。局所判定の探索は
     # その材料を1セルずつしか抜けず、規則を満たす候補にたどり着けない。以後の判定は m 立方の
     # 材料だけのブロックに属するセルだけを設計空間として扱う(以降の検査もこの空間に対して行う)。
-    opened = _cube_opening(design_space_mask, int(min_width_cells))
+    opened = min_width.cube_opening(design_space_mask, int(min_width_cells))
     exempt = _min_width_exempt(conditions, design_space_mask.shape, min_width_cells)
     if exempt is not None:
         opened |= design_space_mask & exempt
@@ -960,10 +960,14 @@ _WINDOW_CENTRE_VERTICES = (slice(1, 3),) * 3
 
 @dataclass
 class PeelStats:
-    """`peel` の実績。`picked` は順位から抜いたセル、`islands` は抜いたことで切り離され一緒に消したセル。
-    `skipped_*` は飛ばした理由ごとの数(支え・表面・多様体・厚み・連結性の順に判定し、最初に落ちた理由で数える)。"""
+    """`peel` の実績。`picked` は順位から選んで抜いた手の数(一口が複数セルでも1手)、`casualties` は手のたびに
+    一緒に抜いた巻き添え(m=1 では常に0)、`islands` は切り離されて一緒に消したセル。実際に減ったセル数は
+    `picked + casualties + islands`。`skipped_*` は飛ばした理由ごとの数(支え・表面・多様体・連結性の順に判定し、
+    最初に落ちた理由で数える。m>1 の手は巻き添えを含む一口に対して判定する)。
+    `skipped_thickness` は厚みを理由に手を却下しなくなったので常に0。"""
 
     picked: int = 0
+    casualties: int = 0
     islands: int = 0
     skipped_support: int = 0
     skipped_surface: int = 0
@@ -973,7 +977,7 @@ class PeelStats:
     already_removed: int = 0
     global_checks: int = 0
     seconds: float = 0.0
-    #: 順位から抜いたセルの平坦添字(記録には出さない)。
+    #: 順位から選んだセル(手の先頭。巻き添えは含まない)の平坦添字(記録には出さない)。
     picked_cells: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64), repr=False)
 
     def as_dict(self) -> dict:
@@ -1000,17 +1004,6 @@ def _regular_after_removal(window: np.ndarray) -> bool:
     return not bad[_WINDOW_CENTRE_VERTICES].any()
 
 
-def _cube_opening(mask: np.ndarray, m: int) -> np.ndarray:
-    """m 立方の構造要素による opening。立方は3軸の直線の合成なので、軸ごとの1次元の erosion → dilation に分けて
-    `binary_opening` と同じ結果を出す。直接だと費用が m³ に比例し(実測 100×60×60 格子で m=32: 14秒、m=48: 218秒)、
-    分けると m に比例する(m=48: 0.03秒)。"""
-    out = mask
-    for op in (ndimage.binary_erosion, ndimage.binary_dilation):
-        for axis in range(3):
-            out = op(out, structure=np.ones(tuple(m if a == axis else 1 for a in range(3)), dtype=bool))
-    return out
-
-
 def _min_width_exempt(conditions: SearchConditions, shape: tuple, min_width_cells: int) -> Optional[np.ndarray]:
     """最小幅の規則の対象外のセル(`conditions.keep_cells`)。規則が無効(`m<=1`)か指定が無ければ `None`。"""
     if min_width_cells <= 1 or conditions.keep_cells is None:
@@ -1032,7 +1025,7 @@ def keep_cells_without_room(design_space: np.ndarray, keep: np.ndarray, min_widt
     design = np.asarray(design_space, dtype=bool)
     if m <= 1:
         return dict(cells=0, around_exclude=0, around_outside=0)
-    stranded = np.asarray(keep, dtype=bool) & design & ~_cube_opening(design, m)
+    stranded = np.asarray(keep, dtype=bool) & design & ~min_width.cube_opening(design, m)
     cells = int(stranded.sum())
     if not cells:
         return dict(cells=0, around_exclude=0, around_outside=0)
@@ -1044,32 +1037,12 @@ def keep_cells_without_room(design_space: np.ndarray, keep: np.ndarray, min_widt
 def _min_width_ok_after_clearing(mask: np.ndarray, region: tuple, min_width_cells: int,
                                  exempt: Optional[np.ndarray] = None) -> bool:
     """`region` を材料から丸ごと空にしたと仮定して、残る材料セルが全て `min_width_cells`(=m)立方の
-    材料だけのブロックに属するか(`peel`・段階3の delete/replace 共通)。`m<=1` は常に真(制約なし)。
-
-    `exempt`(保持ソリッド由来のセル)は被覆を問わない対象外だが、材料であれば他のセルの立方には数える。
-    m 立方はそのセルから距離 m-1 以内にしか広がらないので、`region` から距離 2×(m-1) の
-    材料データだけで判定できる(大域を再計算しない)。
+    材料だけのブロックに属するか(段階3の delete/replace 用。段階4の `peel` は同じ計算の巻き添えを一緒に抜く)。
+    `m<=1` は常に真(制約なし)。`exempt` の扱いは `min_width.lost_coverage`。
     """
-    m = int(min_width_cells)
-    if m <= 1:
+    if int(min_width_cells) <= 1:
         return True
-    reach = m - 1
-    pad = 2 * reach
-    shape = mask.shape
-    lo = tuple(max(int(s.start) - pad, 0) for s in region)
-    hi = tuple(min(int(s.stop) + pad, n) for s, n in zip(region, shape))
-    window = np.array(mask[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]], dtype=bool, copy=True)
-    cleared = tuple(slice(int(s.start) - l, int(s.stop) - l) for s, l in zip(region, lo))
-    window[cleared] = False
-    opened = _cube_opening(window, m)
-    zone = tuple(
-        slice(max(int(s.start) - reach - l, 0), min(int(s.stop) + reach - l, h - l))
-        for s, l, h in zip(region, lo, hi)
-    )
-    zone_mask = window[zone]
-    if exempt is not None:
-        zone_mask = zone_mask & ~exempt[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]][zone]
-    return not (zone_mask & ~opened[zone]).any()
+    return not min_width.lost_coverage(mask, region, int(min_width_cells), exempt)[1].any()
 
 
 def _mask_satisfies_min_width(mask: np.ndarray, min_width_cells: int, exempt: Optional[np.ndarray] = None) -> bool:
@@ -1081,7 +1054,7 @@ def _mask_satisfies_min_width(mask: np.ndarray, min_width_cells: int, exempt: Op
     if min_width_cells <= 1:
         return True
     mask = np.asarray(mask, dtype=bool)
-    uncovered = mask & ~_cube_opening(mask, int(min_width_cells))
+    uncovered = mask & ~min_width.cube_opening(mask, int(min_width_cells))
     return not (uncovered if exempt is None else uncovered & ~exempt).any()
 
 
@@ -1089,21 +1062,24 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
         min_width_cells: int = 1, exempt: Optional[np.ndarray] = None) -> tuple[np.ndarray, PeelStats]:
     """`order` を先頭から1回だけ歩き、各セルを**その時点のマスク**で判定して通ったらその場で消す。
 
-    `count` 個(島として消えたぶんも数える)消えるか順位が尽きたら止める。`mask` が「1成分・全頂点が
-    正則・条件節点が全て支えられている・(`min_width_cells>1` なら)全材料セルが m 立方の材料だけの
-    ブロックに属する」なら、返すマスクも同じ —— 各セルの判定はこの不変条件を保つ:
+    `count` 個(巻き添え・島として消えたぶんも数える。最後の一口が超えることがある)消えるか順位が尽きたら止める。
+    `mask` が「1成分・全頂点が正則・条件節点が全て支えられている・閉じた空洞が無い・(`min_width_cells>1` なら)全材料セルが
+    m 立方の材料だけのブロックに属する」なら、返すマスクも同じ —— 各手の判定はこの不変条件を保つ。
 
-    - 支え: 条件節点に接する材料の最後の1セルは抜かない。
-    - 多様体: 抜いた後の8頂点が全て正則(3×3×3 の窓で判定)。
-    - 厚み(`min_width_cells`=m>1 のときだけ): 抜いた後、影響を受けうる材料セル(そのセルから距離
-      m-1 以内)が全て m 立方の材料だけのブロックに属する(`exempt` のセルは被覆を問わない)。判定は
-      多様体の後・連結の前(連結の全体再計算より安いので先に落とす)。
-    - 連結: 中心の材料6近傍が窓の中で連結なら通す。そうでなければマスク全体を数え直し、条件節点を支える
+    **最小幅(`min_width_cells`=m>1)**: 手は「セル x + 巻き添え」の一口で、巻き添えは x を抜いた後に m 立方の被覆を失う
+    材料セル(`min_width.casualties`。`exempt` のセルは被覆を問われないので巻き添えにならず、材料としては他のセルの立方に数える)。
+    一口を抜いた形は(`exempt` が無ければ)opening(mask − {x}) に等しく(opening は冪等)、厚みの不変条件は構成上保たれるので、
+    厚みを理由に手を却下しない。
+    巻き添えが無い手は m=1 と同じ1セルの判定。以下は一口全体に対して判定する:
+
+    - 支え: 条件節点に接する材料の最後の1セルは抜かない(巻き添えにそのセルが入る手も却下する)。
+    - 多様体: 抜いた後の、一口に接する頂点が全て正則(1セルは3×3×3 の窓、複数セルは `min_width.bite_verdict`)。
+    - 連結: 一口に接する材料が窓の中で連結なら通す。そうでなければマスク全体を数え直し、条件節点を支える
       セルが全て同じ1成分にあるときだけ通して、他の成分(島)を一緒に消す。島は保持成分と辺・頂点でも
       接しない(下記コメント)ので、両方を跨ぐ m 立方の材料だけのブロックは無く、島の除去は厚みの
       不変条件を壊さない。
-    - 表面: 空の6近傍(格子の外を含む)を持たないセルは抜かない(内部に空洞を作らない。中空構造を許容しない製品制約)。
-      抜くセルは空の6近傍を持つので、抜いた後のそのセルは既存の空の成分に属し、島として消える成分も隣接する空につながる。
+    - 表面: x が空の6近傍(格子の外を含む)を持たなければ抜かない(内部に空洞を作らない。中空構造を許容しない製品制約)。
+      一口の6連結成分もそれぞれ既存の空につながっていること。抜いた後の一口は既存の空の成分に属し、島として消える成分も隣接する空につながる。
       閉じた空洞の無い `mask` からは閉じた空洞の無い候補ができる(`acceptance.boundary_check` の `void_components` が落ちない根拠)。
     """
     started = time.perf_counter()
@@ -1127,7 +1103,7 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
     stats = PeelStats()
     picked: list[int] = []
     for cell in order.tolist():
-        if stats.picked + stats.islands >= count:
+        if stats.picked + stats.casualties + stats.islands >= count:
             break
         i, rest = divmod(cell, plane)
         j, k = divmod(rest, row)
@@ -1144,20 +1120,40 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
         if all(window[p] for p in _WINDOW_NEIGHBOURS):
             stats.skipped_surface += 1
             continue
-        window[1, 1, 1] = False
-        if not _regular_after_removal(window):
-            stats.skipped_manifold += 1
-            continue
-        if min_width_cells > 1 and not _min_width_ok_after_clearing(
-                inner, (slice(i, i + 1), slice(j, j + 1), slice(k, k + 1)), min_width_cells, exempt):
-            stats.skipped_thickness += 1
-            continue
-        connected = _neighbours_stay_connected(window)
-        if connected is None:
-            stats.skipped_connectivity += 1
-            continue
+        bite = None
+        if min_width_cells > 1:
+            extra = min_width.casualties(inner, (i, j, k), min_width_cells, exempt)
+            if len(extra):
+                bite = np.vstack(([[i, j, k]], extra))
+        if bite is None:
+            cleared = (i, j, k)
+            window[1, 1, 1] = False
+            if not _regular_after_removal(window):
+                stats.skipped_manifold += 1
+                continue
+            connected = _neighbours_stay_connected(window)
+            if connected is None:
+                stats.skipped_connectivity += 1
+                continue
+        else:
+            cleared = tuple(bite.T)
+            for ci, cj, ck in extra[touches[extra[:, 0], extra[:, 1], extra[:, 2]]]:
+                corners = (corners or []) + [(ci + a) * node_plane + (cj + b) * node_row + (ck + c)
+                                             for a, b, c in _CORNERS]
+            if corners is not None:
+                dropped: dict = {}
+                for n in corners:
+                    if anchor_flat[n]:
+                        dropped[n] = dropped.get(n, 0) + 1
+                if any(support_flat[n] <= d for n, d in dropped.items()):
+                    stats.skipped_support += 1
+                    continue
+            reason, connected = min_width.bite_verdict(work, bite, NEIGHBOURHOOD_STRUCTURE)
+            if reason is not None:
+                setattr(stats, f'skipped_{reason}', getattr(stats, f'skipped_{reason}') + 1)
+                continue
         island_cells = 0
-        work[i + 1, j + 1, k + 1] = False
+        inner[cleared] = False
         if not connected:
             stats.global_checks += 1
             labels, _ = ndimage.label(inner, structure=NEIGHBOURHOOD_STRUCTURE)
@@ -1167,18 +1163,19 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
             else:
                 keep = 1 if labels.max() == 1 else 0
             if keep == 0:
-                work[i + 1, j + 1, k + 1] = True
+                inner[cleared] = True
                 stats.skipped_connectivity += 1
                 continue
             islands = (labels > 0) & (labels != keep)
             island_cells = int(islands.sum())
             # 島は条件節点に接するセルを持たないので、支え数はそのままでよい。島と保持成分は辺・頂点でも接しない
-            # (接していれば、切り離したセルの頂点の正則判定で落ちている)ので、島を消しても頂点は正則のまま。
+            # (接していれば、切り離した一口の頂点の正則判定で落ちている)ので、島を消しても頂点は正則のまま。
             inner[islands] = False
         if corners is not None:
             for n in corners:
                 support_flat[n] -= 1
         stats.picked += 1
+        stats.casualties += 0 if bite is None else len(bite) - 1
         stats.islands += island_cells
         picked.append(cell)
     stats.picked_cells = np.asarray(picked, dtype=np.int64)
@@ -1271,11 +1268,14 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
 
     合格形状は1つだけ持つ。1回の試行: 合格形状を解いた変位の要素エネルギー(近傍でならす)の低い順に
     `k = max(1, ⌊r × 後退倍率 × 材料セル数⌋)` セルを、`peel` が局所の不変条件で判定しながら削る
-    (`step_ratio`)。候補は構成上「1成分・全頂点が正則・全条件節点に支えあり」で、島処理
+    (`step_ratio`。最小幅 m>1 では手ごとに巻き添えも一緒に抜き、`k` は巻き添えも数える)。候補は構成上
+    「1成分・全頂点が正則・全条件節点に支えあり」で、島処理
     (`resolve_islands`)は検算 → 6条件(FEM)。合格すればその形状とエネルギーへ進み、
-    後退倍率を2倍に戻す(上限1)。不合格・計算失敗なら形状を変えず、順位から削ったセルが2つ以上なら
-    後退倍率を半分にして同じ順位から歩き直す(再求解しない)。1つだけなら、そのセルを**この形状の間だけ**
-    順位から外して次のセルを試す(採用で形が変わったら順位を作り直すので解除)。安全率で落ちたセルが
+    後退倍率を2倍に戻す(上限1)。不合格・計算失敗なら形状を変えず、その形の内容ハッシュを `rejected` に入れる。
+    順位から選んだ手が2つ以上なら後退倍率を半分にして同じ順位から歩き直す(再求解しない)。1つだけなら、
+    その手のセルを**この形状の間だけ**順位から外して次のセルを試す(採用で形が変わったら順位を作り直すので解除)。
+    `rejected` の形がもう一度できたら(順位が尽きて `k` を減らしたとき、別のセルの巻き添えが同じ一口になったとき)
+    FEMを解かずに、同じ手順で次へ進む。安全率で落ちたセルが
     採用を挟まず `single_cell_patience` 個に達したら `stop_reason='safety_at_single_cell'` で `converged`
     (`None` は数えない)。計算失敗・保持の重なりの不合格は数えない。順位を歩いて1セルも抜けなければ
     `converged`(`no_removable_cell`)。
@@ -1352,7 +1352,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
         candidate.setflags(write=False)
         key = acceptance.material_sha256(candidate)
         if key in rejected:
-            # 順位が尽きて k を減らしても同じ候補になるとき、不合格が分かっている候補を解き直さない。
+            # 不合格が分かっている候補を解き直さない(順位が尽きて k を減らしても、別のセルの巻き添えが同じ一口になっても、同じ形になる)。
             reduction['repeated_candidates'] += 1
             if peeled.picked > 1:
                 multiplier /= 2.0
@@ -1400,17 +1400,18 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             rejected.clear()
             reduction['adopted_after_exclusion'] += int(safety_streak > 0)
             safety_streak = 0
-        elif peeled.picked > 1:
-            rejected.add(key)
-            multiplier /= 2.0
         else:
-            if safety_failed:
-                safety_streak += 1
-                if single_cell_patience is not None and safety_streak >= single_cell_patience:
-                    reduction['stop_reason'] = 'safety_at_single_cell'
-                    return result('converged')
-                reduction['safety_excluded_cells'] += 1
-            order = order[~np.isin(order, peeled.picked_cells)]
+            rejected.add(key)
+            if peeled.picked > 1:
+                multiplier /= 2.0
+            else:
+                if safety_failed:
+                    safety_streak += 1
+                    if single_cell_patience is not None and safety_streak >= single_cell_patience:
+                        reduction['stop_reason'] = 'safety_at_single_cell'
+                        return result('converged')
+                    reduction['safety_excluded_cells'] += 1
+                order = order[~np.isin(order, peeled.picked_cells)]
 
 
 def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditions, *,
@@ -1433,8 +1434,9 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     (§4.1「評価条件の識別子」と同じ思想で、初期探索と削減探索を別予算にしない)。
     `frontier_capacity` / `max_consecutive_adds` / `max_candidates` は段階3だけ、
     `step_exponent` / `max_step_ratio` / `single_cell_patience` / `warm_start` は段階4だけが使う(`step_ratio` / `_reduce_volume`)。
-    `min_width_cells`(m、既定1=制約なし)は両段階が使う —— 削除・置換で材料を薄くする候補を
-    m 立方の材料だけのブロック単位で判定し、通らないものを候補にも合格にもしない(`peel` docstring)。
+    `min_width_cells`(m、既定1=制約なし)は両段階が使う —— 段階3は、削除・置換で材料を薄くする候補を
+    m 立方の材料だけのブロック単位で判定し、通らないものを候補にも合格にもしない。段階4は、手のたびに
+    被覆を失うセルを一緒に抜く(`peel` docstring)ので、厚みを理由に手を却下しない。
     設計空間はまず m 立方の opening で絞る(縁に m 立方の入らない材料が残る設計空間では、局所判定の
     探索がその材料を抜けず規則を満たす合格に届かない)。入口検査は絞った空間に対して行う。
     `conditions.keep_cells`(保持ソリッド由来のセル)は規則の対象外で、絞りからも外れる(材料としては数える)。
