@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import _bootstrap  # noqa: F401
+import _record
 
 from duocad import optimize_run
 from duocad.session import Session
@@ -53,8 +54,7 @@ def main():
     rows = []
     for spacing in args.spacing:
         rows.append(measure(session.document, spacing, args.repeat))
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding='utf-8')
+        _record.write(args.out, rows)
         print(json.dumps(rows[-1], ensure_ascii=False), flush=True)
 
 

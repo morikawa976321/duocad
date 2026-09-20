@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import _bootstrap  # noqa: F401
+import _record
 import numpy as np
 
 from duocad.session import Session
@@ -72,8 +73,7 @@ def main(argv=None):
                               fields=str(args.fields.resolve()) if args.fields else None)
     except Exception as error:
         report = dict(status='unknown', exit_code=2, error=f'{type(error).__name__}: {error}')
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
+    _record.write(args.out, report, allow_nan=False)
     print(f"{report['status'].upper()}: {args.out}")
     return report['exit_code']
 

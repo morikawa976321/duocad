@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import statistics
 import sys
 import tempfile
@@ -29,6 +28,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+import _record
 import numpy as np
 
 from duocad import kernel, optimize_run
@@ -176,7 +176,7 @@ def main() -> int:
     args = parser.parse_args()
     trace.DEFAULT_ROOT = Path(tempfile.mkdtemp(prefix="region_overlaps_"))  # 念のため。この計測は実行記録を作らない
     record = measure(args.model, args.spacing, repeats=args.repeats, seed=args.seed)
-    text = json.dumps(record, ensure_ascii=False, indent=2, default=str)
+    text = _record.dumps(record, default=str)
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(text, encoding="utf-8")

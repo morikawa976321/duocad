@@ -24,6 +24,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import _bootstrap  # noqa: F401  (topopt_checks の import 経路を通す)
+import _record
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -82,7 +83,7 @@ def main() -> int:
     data = np.load(args.mask_npz)
     rows = refine(data["mask"].astype(bool), data["origin"], float(data["spacing"]), args.k, args.target, args.model)
     if args.result:
-        args.result.write_text(json.dumps(rows, ensure_ascii=False, indent=1, default=float), encoding="utf-8")
+        _record.write(args.result, rows, default=float)
     return 0
 
 

@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import tempfile
 import time
@@ -24,6 +23,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import _bootstrap  # noqa: F401  (topopt_checks の import 経路を通す)
+import _record
 import numpy as np
 from scipy import ndimage
 
@@ -133,7 +133,7 @@ def main() -> int:
     started = time.perf_counter()
     result = run(args.cells, args.budget, args.element_size)
     result["total_seconds"] = time.perf_counter() - started
-    text = json.dumps(result, ensure_ascii=False, indent=2, default=float)
+    text = _record.dumps(result, default=float)
     if args.result:
         args.result.write_text(text, encoding="utf-8")
     print(text, flush=True)

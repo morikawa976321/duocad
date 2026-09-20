@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 import _bootstrap  # noqa: F401  (topopt_checks の import 経路を通す)
+import _record
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIGS = {'default': dict(max_evaluations=600), 'wide': dict(max_evaluations=6000, frontier_capacity=4096)}
@@ -81,7 +82,7 @@ def main() -> None:
         return
     rows = measure(args.root)
     if args.result:
-        args.result.write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding='utf-8')
+        _record.write(args.result, rows)
     print(f'{len(rows)} 件')
 
 

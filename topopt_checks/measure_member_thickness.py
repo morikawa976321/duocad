@@ -53,6 +53,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import _bootstrap  # noqa: F401
+import _record
 import numpy as np
 from scipy import ndimage
 
@@ -324,8 +325,7 @@ def main() -> int:
 
     print(f"\n合計 {result['total_seconds']:.1f} 秒", flush=True)
     if args.out:
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=float), encoding="utf-8")
+        _record.write(args.out, result, default=float)
         print(f"書き出し: {args.out}")
     else:
         print("MEASURED " + json.dumps(result, ensure_ascii=False, default=float))

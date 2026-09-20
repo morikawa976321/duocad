@@ -41,6 +41,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import _bootstrap  # noqa: F401  (topopt_checks の import 経路を通す)
+import _record
 import numpy as np
 from measure_min_width_floor import voxel_surface
 from measure_warm_start import free_gb
@@ -351,7 +352,7 @@ def main() -> int:
     result = run(args.mode, args.budget, args.mask_npz, label=args.label, cg_rtol=args.cg_rtol,
                  noise=args.noise, noise_seed=args.noise_seed, abort_if_busy=args.abort_if_busy)
     result["quiet_gate"] = gate
-    text = json.dumps(result, ensure_ascii=False, indent=2, default=float)
+    text = _record.dumps(result, default=float)
     if args.result:
         args.result.write_text(text, encoding="utf-8")
     print(text, flush=True)

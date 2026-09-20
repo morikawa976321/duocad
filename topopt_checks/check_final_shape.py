@@ -9,13 +9,13 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 import hashlib
-import json
 from pathlib import Path
 import struct
 import sys
 import time
 
 import _bootstrap  # noqa: F401
+import _record
 import numpy as np
 from OCP.BOPAlgo import BOPAlgo_BOP, BOPAlgo_CheckerSI, BOPAlgo_Operation
 from OCP.BRep import BRep_Builder
@@ -212,8 +212,7 @@ def main(argv=None):
                                      if args.check_constraints or key in ('watertight', 'single_solid')},
                              error=f'{type(error).__name__}: {error}'))
     report['seconds'] = time.perf_counter()-started
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    _record.write(args.out, report)
     for check in report.get('checks', {}).values():
         print(f"{check['status'].upper()}: {check['label']}")
     print(f"{report['status'].upper()}: {args.out}")

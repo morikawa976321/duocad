@@ -44,6 +44,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+import _record
 from duocad.topopt import fem
 from duocad.topopt import stress
 
@@ -373,10 +374,7 @@ def main() -> int:
         from pathlib import Path
 
         out_path = Path(args.out)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(
-            json.dumps(RESULTS, ensure_ascii=False, indent=2, default=float), encoding="utf-8"
-        )
+        _record.write(out_path, RESULTS, default=float)
         print(f"書き出し: {out_path}")
     else:
         print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))

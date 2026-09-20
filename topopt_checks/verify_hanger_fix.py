@@ -21,6 +21,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
+import _record
 import numpy as np
 
 from duocad import optimize_run
@@ -247,8 +248,7 @@ def main() -> int:
                     single_cell_patience=args.single_cell_patience,
                     trace_memory=not args.no_memory_trace,
                     save_masks=args.save_masks)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(record, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    _record.write(args.out, record, default=str)
     summary = {k: record.get(k) for k in ("derive", "entry", "invariants")}
     summary["search_table"] = record.get("search_table", {}).get("faces")
     summary["initial"] = {k: v for k, v in record.get("initial_full_material", {}).items() if k != "conditions"}

@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
+import _record
 import numpy as np
 
 from duocad import optimize_run
@@ -110,8 +111,7 @@ def main():
     rows = []
     for spacing in args.spacing:
         rows.append(diagnose(session.document, spacing))
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding='utf-8')
+        _record.write(args.out, rows)
         row = rows[-1]
         summary = dict(spacing=spacing, cells=row['cells'],
                        geometry=[(f, v['nodes'], v['lost_by_stage']['connected']) for f, v in row['geometry_table']['faces'].items()],

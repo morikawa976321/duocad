@@ -78,6 +78,24 @@
 - 率・行数の門は作らない（本人 2026-09-05「価値あるコメントが増える類のタスクもある」）。門を作ると実測値の1行メモが
   経緯の語りより先に消える。`tools/measure_bloat.py` は報告専用。
 
+## 測定記録（`output/`）の書き方
+
+`topopt_checks/` の記録は **`_record.py` の `dumps` / `write` で書く**（`json.dumps(..., indent=N)` を直接使わない）。
+コンパクト形が600文字に収まる辞書・配列を1行にまとめるので、試行1件が1行になり差分が試行単位で読める。
+
+- **`indent=2` の費用は行数**（2026-09-21 実測）。git 管理下の測定記録22件で **174,841 → 13,343 行（−92.4%）**、
+  5.22 → 3.42 MB（−34.4%）。`json.load` した結果は一致する（空白だけが違う）。PR #20 では output/ の記録が
+  +174,841 行で、コード・文書の実質（+17,202 / −45,513）を差分の 91% で埋めていた。
+- **記録の 98〜99% は `search.diagnostics.reduction.steps` と `search.history` の2配列**。どちらも1試行1レコードなので、
+  レコードを1行にすれば全体が縮む。
+- **まだ外していない重複**（2026-09-21 実測。外せばコンパクト形で −37%）: `steps[].step_ratio` は
+  `gap_step_ratio × multiplier`（記録3,982件すべてで一致）、`safety_factor_before` / `material_mm3_before` は
+  直前の採用 step の値（3,967/3,967 件で一致）、`trials` は常に長さ1でリポジトリ内のどこからも読まれていない、
+  `history[].checks` は `steps[].failed` と同じ情報（history のバイトの 44.7%）。
+- **同じ結果しか持たない実行を別ファイルでコミットしない。** `patience-16` と `patience-unlimited` は秒と記録した
+  パラメータ2個以外まったく同一（差分1,010個のうち1,008個が秒。`PLAN_BINARY_STRESS_SEARCH.md` §12.7 自身が
+  「完全に同じ試行列」と書いている）。`B-*` と `B-*-recheck` の3組も同様。
+
 ## タスクの切り方（無人 runner に渡すとき）
 
 - **verb を1つ足すと `web/src/session.ts` の型宣言（`Applied` union と `ServerState`）も直さないと
