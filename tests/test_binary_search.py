@@ -639,6 +639,40 @@ def _rule_violations(mask: np.ndarray, m: int, exempt=None) -> np.ndarray:
     return bad if exempt is None else bad & ~exempt
 
 
+def core_groups_oracle(mask: np.ndarray, m: int, exempt=None) -> int:
+    """S(m) の物差し(実装とは独立): 芯 = m 立方が全部材料のセル(累積和で数える)の6連結成分を、立方が `exempt` の
+    6連結成分と重なるか6近傍で接するものどうしで結んだときの塊の数。要求は1以下(芯が空なら0)。"""
+    material = mask if exempt is None else mask | exempt
+    if any(n < m for n in mask.shape):
+        return 0
+    fits = min_width._box_sums(material, m) == m ** 3
+    core = np.zeros(mask.shape, bool)
+    core[tuple(slice(0, n) for n in fits.shape)] = fits
+    six = ndimage.generate_binary_structure(3, 1)
+    labels, count = ndimage.label(core, structure=six)
+    parent = list(range(count + 1))
+
+    def find(x):
+        while parent[x] != x:
+            x = parent[x]
+        return x
+
+    if exempt is not None and exempt.any():
+        e_labels, _ = ndimage.label(exempt, structure=six)
+        e_root = {}
+        for i in range(1, count + 1):
+            cover = np.zeros(mask.shape, bool)
+            for c in np.argwhere(labels == i):
+                cover[tuple(slice(a, a + m) for a in c)] = True
+            touching = cover | ndimage.binary_dilation(cover, structure=six)
+            for j in np.unique(e_labels[touching & exempt]):
+                if j in e_root:
+                    parent[find(i)] = find(e_root[j])
+                else:
+                    e_root[j] = i
+    return len({find(i) for i in range(1, count + 1)})
+
+
 def test_cube_opening_equals_scipy_binary_opening():
     """落ちたら、軸ごとに分けた opening が `binary_opening` とずれている(最小幅の全判定がこれを使う)。"""
     rng = np.random.default_rng(20260922)
@@ -1122,7 +1156,8 @@ def test_a_design_space_that_already_violates_min_width_still_reaches_a_conformi
     assert _opening_satisfied(result.best_feasible.mask, 2)
     assert result.diagnostics['min_width'] == dict(cells=2, design_cells=int(design.sum()),
                                                    trimmed_cells=int(design.sum() - ndimage.binary_opening(
-                                                       design, structure=np.ones((2, 2, 2), bool)).sum()))
+                                                       design, structure=np.ones((2, 2, 2), bool)).sum()),
+                                                   design_core_groups=1)
     assert result.diagnostics['min_width']['trimmed_cells'] > 0
 
 
@@ -1170,7 +1205,7 @@ def test_trimming_the_design_space_can_cut_a_preserved_region_and_is_then_refuse
     assert bs.find_best_feasible(design, conditions, max_evaluations=60, min_width_cells=1).status == 'feasible'
     result = bs.find_best_feasible(design, conditions, max_evaluations=60, min_width_cells=2)
     assert result.status == 'input_contradiction' and result.evaluations == 0
-    assert result.diagnostics['min_width'] == dict(cells=2, design_cells=41, trimmed_cells=1)
+    assert result.diagnostics['min_width'] == dict(cells=2, design_cells=41, trimmed_cells=1, design_core_groups=1)
 
 
 def test_min_width_with_a_design_space_that_holds_no_m_cube_is_refused_at_entry():
@@ -1180,7 +1215,7 @@ def test_min_width_with_a_design_space_that_holds_no_m_cube_is_refused_at_entry(
     result = bs.find_best_feasible(np.ones((4, 1, 1), bool), conditions, max_evaluations=50, min_width_cells=2)
     assert result.status == 'boundary_mapping_failed' and result.best_feasible is None
     assert result.evaluations == 0
-    assert result.diagnostics['min_width'] == dict(cells=2, design_cells=4, trimmed_cells=4)
+    assert result.diagnostics['min_width'] == dict(cells=2, design_cells=4, trimmed_cells=4, design_core_groups=0)
 
 
 # ---------------------------------------------------------------------------
@@ -1226,8 +1261,9 @@ def test_an_exempt_cell_needs_no_cube_but_still_counts_as_material_for_the_other
 
 
 def _assert_min_width_invariants(mask, m, exempt=None):
-    """`peel` の不変条件(規則(`exempt` を除く)・非正則頂点0・1成分・閉じた空洞0)を、全体を数え直して確かめる。"""
+    """`peel` の不変条件(規則(`exempt` を除く)・侵食した芯の連結・非正則頂点0・1成分・閉じた空洞0)を、全体を数え直して確かめる。"""
     assert bs._mask_satisfies_min_width(mask, m, exempt)
+    assert core_groups_oracle(mask, m, exempt) <= 1
     assert acceptance.boundary_check(mask)['irregular_vertices'] == 0
     assert acceptance.connectivity_check(mask)['components'] == 1
     assert acceptance.void_components(mask) == 1
@@ -1323,7 +1359,8 @@ def test_the_design_space_opening_keeps_the_keep_cells_and_still_trims_the_other
     design, conditions = _bar_with_protrusion(keep_protrusion=True, second_protrusion=True)
     result = bs.find_initial_feasible(design, conditions, max_evaluations=60, min_width_cells=2)
     assert result.status == 'feasible'
-    assert result.diagnostics['min_width'] == dict(cells=2, design_cells=int(design.sum()), trimmed_cells=1)
+    assert result.diagnostics['min_width'] == dict(cells=2, design_cells=int(design.sum()), trimmed_cells=1,
+                                                   design_core_groups=1)
     mask = result.best_feasible.mask
     assert mask[5, 2, 0] and not mask[2, 2, 0]
     assert bs._mask_satisfies_min_width(mask, 2, conditions.keep_cells) and not _opening_satisfied(mask, 2)

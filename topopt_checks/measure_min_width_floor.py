@@ -81,7 +81,7 @@ def _search_summary(result, best_mask: np.ndarray, keep: np.ndarray, m: int) -> 
     peels = [step.get("peel", {}) for step in reduction.get("steps", [])]
     totals = {name: sum(int(p.get(name, 0)) for p in peels)
               for name in ("picked", "casualties", "islands", "skipped_support", "skipped_surface", "skipped_manifold",
-                           "skipped_thickness", "skipped_connectivity", "already_removed", "global_checks")}
+                           "skipped_thickness", "skipped_connectivity", "skipped_core", "already_removed", "global_checks")}
     outcomes = [t.outcome for t in result.history]
     core = ndimage.binary_erosion(np.pad(best_mask, m), structure=np.ones((m,) * 3, dtype=bool))
     return dict(

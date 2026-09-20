@@ -544,6 +544,7 @@ class _Node:
     trial_index: int
     streak: int
     children: Iterator
+    core_ok: Optional[bool] = None
 
 
 class _Frontier:
@@ -612,10 +613,15 @@ class _Budget:
     scanned: int = 0
     generated: int = 0
     duplicates: int = 0
+    #: 最小幅 m>1 のとき、S(m) を破るとして評価前に捨てた子の数(評価予算は使わない。m=1 は `None`)。
+    core_rejected: Optional[int] = None
 
     def summary(self) -> dict:
-        return dict(scanned=self.scanned, generated=self.generated, duplicates=self.duplicates,
+        rows = dict(scanned=self.scanned, generated=self.generated, duplicates=self.duplicates,
                     limit=self.max_candidates, evaluations=self.evaluations, evaluation_limit=self.max_evaluations)
+        if self.core_rejected is not None:
+            rows['core_rejected'] = self.core_rejected
+        return rows
 
 
 def _candidate_budget(max_evaluations: int, max_candidates: Optional[int], shape: tuple) -> int:
@@ -643,12 +649,14 @@ def _node(mask: np.ndarray, trial_index: int, streak: int, design_space_mask: np
 
 def _pull(frontier: _Frontier, design_space_mask: np.ndarray, budget: _Budget, visited: set,
           identifier: str, is_cancelled, *, min_width_cells: int = 1,
-          exempt: Optional[np.ndarray] = None) -> Any:
+          exempt: Optional[np.ndarray] = None, core: Optional[min_width.CoreConnectivity] = None) -> Any:
     """次の未評価候補 `(mask, op, parent_node)` か、終了理由の文字列。
 
     ブロックを1つ調べる前ごとに中断と走査予算を見る(無効なブロック・重複も予算を使う)。
     重複(既に見たマスク)は評価数を増やさない。重複は射影(`_materialize`)の後の子で判定する —— 別のブロックから
     同じ子ができる(2セル厚の板の上面のセルと下面のセルは同じ貫通柱になる)ので、射影の前では二度解く。
+    `core`(最小幅 m>1)があれば、親が S(m) を満たすのに子が破る候補は評価に回さず捨てる(`budget.core_rejected`。同じ子は重複と同じく1度だけ数える)。
+    親が S(m) を満たさないとき(島の除去で崩れた不合格の親)は、子の判定を合格を返す前の大域検査に任せる。
     """
     while True:
         if is_cancelled is not None and is_cancelled():
@@ -671,6 +679,12 @@ def _pull(frontier: _Frontier, design_space_mask: np.ndarray, budget: _Budget, v
             budget.duplicates += 1
             continue
         visited.add(key)
+        if core is not None:
+            if node.core_ok is None:
+                node.core_ok = core.connected(node.mask)
+            if node.core_ok and not core.child_keeps(node.mask, child, region):
+                budget.core_rejected += 1
+                continue
         return child, op, node
 
 
@@ -745,7 +759,8 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
                                     is_cancelled=is_cancelled)
     result.diagnostics = dict(result.diagnostics or {}, min_width=dict(
         cells=int(min_width_cells), design_cells=int(design_space_mask.sum()),
-        trimmed_cells=int(design_space_mask.sum() - opened.sum())))
+        trimmed_cells=int(design_space_mask.sum() - opened.sum()),
+        design_core_groups=int(min_width.CoreConnectivity(int(min_width_cells), exempt).groups(opened))))
     return result
 
 
@@ -756,6 +771,7 @@ def _find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCond
     design_space_mask.setflags(write=False)
     identifier = evaluation_identifier(conditions)
     exempt = _min_width_exempt(conditions, design_space_mask.shape, min_width_cells)
+    core = min_width.CoreConnectivity(min_width_cells, exempt) if min_width_cells > 1 else None
 
     # 解像度不足: 拘束・荷重面がこの要素サイズで1つも節点を持たない(探索では直せない)。
     starved = sorted((set(conditions.fixed_faces) | set(conditions.load_faces))
@@ -820,6 +836,8 @@ def _find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCond
     sizes = tuple(reversed(block_sizes(design_space_mask.shape)))  # 大きい削除から試す(§4.3)
     budget = _Budget(max_evaluations=int(max_evaluations),
                      max_candidates=_candidate_budget(max_evaluations, max_candidates, design_space_mask.shape))
+    if core is not None:
+        budget.core_rejected = 0
     frontier = _Frontier(frontier_capacity)
     # 「生の候補」と「実際に評価した」候補(島除去後)は別の集合にする —— 生の候補が単一成分なら
     # この2つは同じマスクになるので、同じ集合に入れると島除去後の評価そのものが
@@ -852,7 +870,8 @@ def _find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCond
             # (mask に無い保持セルを挟んだ立方に頼るセルが、島と一緒に被覆を失う)ので、合格を返す候補は毎回大域に検査する。
             # FEMの結果に依らないので、FEMの前に落とす。違反は確定しているので、
             # FEMが計算失敗(`unknown`)になりえた候補も親として積む(不合格の証拠にしない対象は FEM の結果だけ)。
-            if min_width_cells > 1 and not _mask_satisfies_min_width(survivor, min_width_cells, exempt):
+            if core is not None and not (_mask_satisfies_min_width(survivor, min_width_cells, exempt)
+                                         and core.connected(survivor)):
                 trial = _min_width_rejection_trial(history, survivor, candidate, parent, operation, conditions)
                 frontier.push(_node(survivor, trial.index, streak, design_space_mask, sizes, max_consecutive_adds))
                 continue
@@ -892,7 +911,7 @@ def _find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCond
             termination = 'evaluation_limit'
             break
         pulled = _pull(frontier, design_space_mask, budget, visited_candidates, identifier, is_cancelled,
-                       min_width_cells=min_width_cells, exempt=exempt)
+                       min_width_cells=min_width_cells, exempt=exempt, core=core)
         if isinstance(pulled, str):
             termination = pulled
             break
@@ -963,9 +982,10 @@ _WINDOW_CENTRE_VERTICES = (slice(1, 3),) * 3
 class PeelStats:
     """`peel` の実績。`picked` は順位から選んで抜いた手の数(一口が複数セルでも1手)、`casualties` は手のたびに
     一緒に抜いた巻き添え(m=1 では常に0)、`islands` は切り離されて一緒に消したセル。実際に減ったセル数は
-    `picked + casualties + islands`。`skipped_*` は飛ばした理由ごとの数(支え・表面・多様体・連結性の順に判定し、
+    `picked + casualties + islands`。`skipped_*` は飛ばした理由ごとの数(支え・表面・多様体・連結性・芯の連結の順に判定し、
     最初に落ちた理由で数える。m>1 の手は巻き添えを含む一口に対して判定する)。
-    `skipped_thickness` は厚みを理由に手を却下しなくなったので常に0。"""
+    `skipped_thickness` は厚みを理由に手を却下しなくなったので常に0。
+    `skipped_core` は、手を抜くと侵食した芯のつながり(`min_width.CoreConnectivity`)が切れるとして飛ばした数(m=1 は常に0)。"""
 
     picked: int = 0
     casualties: int = 0
@@ -975,6 +995,7 @@ class PeelStats:
     skipped_manifold: int = 0
     skipped_thickness: int = 0
     skipped_connectivity: int = 0
+    skipped_core: int = 0
     already_removed: int = 0
     global_checks: int = 0
     seconds: float = 0.0
@@ -1056,7 +1077,8 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
 
     `count` 個(巻き添え・島として消えたぶんも数える。最後の一口が超えることがある)消えるか順位が尽きたら止める。
     `mask` が「1成分・全頂点が正則・条件節点が全て支えられている・閉じた空洞が無い・(`min_width_cells>1` なら)全材料セルが
-    m 立方の材料だけのブロックに属する」なら、返すマスクも同じ —— 各手の判定はこの不変条件を保つ。
+    m 立方の材料だけのブロックに属し、侵食した芯がつながる(S(m)。`min_width.CoreConnectivity`)」なら、返すマスクも同じ ——
+    各手の判定はこの不変条件を保つ。
 
     **最小幅(`min_width_cells`=m>1)**: 手は「セル x + 巻き添え」の一口で、巻き添えは x を抜いた後に m 立方の被覆を失う
     材料セル(`min_width.casualties`。`exempt` のセルは被覆を問われないので巻き添えにならず、材料としては他のセルの立方に数える)。
@@ -1071,6 +1093,8 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
       接しない(下記コメント)ので、`exempt` が無いか m=2 なら、両方を跨ぐ m 立方の材料だけのブロックは無く、島の除去は厚みの
       不変条件を壊さない。`exempt` を材料に数える m≥3 では mask に無い保持セルを挟んで跨ぎうるので、島を消した形を
       大域で確かめ、崩れる手は却下する(`skipped_connectivity`)。
+    - 芯の連結(m>1): 一口(と島)を抜くと侵食した芯が割れる手は抜かない(`skipped_core`)。R(m) は m 立方の共有1セルの斜めのつなぎ目を許すので、
+      厚みの不変条件(上)を保つだけでは芯は割れうる。判定は一口の周りの窓で言えれば通し、言えなければ大域で数え直す(島を消すときは常に大域)。
     - 表面: x が空の6近傍(格子の外を含む)を持たなければ抜かない(内部に空洞を作らない。中空構造を許容しない製品制約)。
       一口の6連結成分もそれぞれ既存の空につながっていること。抜いた後の一口は既存の空の成分に属し、島として消える成分も隣接する空につながる。
       閉じた空洞の無い `mask` からは閉じた空洞の無い候補ができる(`acceptance.boundary_check` の `void_components` が落ちない根拠)。
@@ -1094,6 +1118,7 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
     work = np.pad(mask, 1)
     inner = work[1:-1, 1:-1, 1:-1]
     stats = PeelStats()
+    core = min_width.CoreConnectivity(min_width_cells, exempt) if min_width_cells > 1 else None
     picked: list[int] = []
     for cell in order.tolist():
         if stats.picked + stats.casualties + stats.islands >= count:
@@ -1171,6 +1196,12 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
             # 島は条件節点に接するセルを持たないので、支え数はそのままでよい。島と保持成分は辺・頂点でも接しない
             # (接していれば、切り離した一口の頂点の正則判定で落ちている)ので、島を消しても頂点は正則のまま。
             inner[islands] = False
+        if core is not None and not core.after_bite(inner, (i, j, k) if bite is None else bite, island_cells):
+            inner[cleared] = True
+            if island_cells:
+                inner[islands] = True
+            stats.skipped_core += 1
+            continue
         if corners is not None:
             for n in corners:
                 support_flat[n] -= 1
@@ -1242,7 +1273,7 @@ def _min_width_rejection_trial(history: list, survivor: np.ndarray, candidate: n
                   material_mm3=float(survivor.sum()) * volume,
                   removed_islands_mm3=float(candidate.sum() - survivor.sum()) * volume,
                   outcome='infeasible', checks=dict(min_width='fail'),
-                  note='FEMの前に最小幅の不変条件(m立方の材料だけのブロックに全材料セルが属する)で不合格')
+                  note='FEMの前に最小幅の不変条件(m立方の材料だけのブロックに全材料セルが属する・侵食した芯がつながる)で不合格')
     history.append(trial)
     return trial
 
