@@ -3,7 +3,7 @@
  *
  * 判定はサーバーの `optimize_run._resolve_min_width` と同じ比較(丸めない値どうし)で行い、
  * 表示だけを丸める。**丸める向きは「表示した値がそのまま通る」側**にする —— 下限は切り上げ、上限は
- * 切り捨て、保証される幅は切り捨て(`toFixed(2)` の四捨五入だと、要素サイズが 2.4501mm のとき
+ * 切り捨て、保証される幅は切り捨て(四捨五入の `toFixed(2)` だと、要素サイズが 2.4501mm のとき
  * 「下限 4.90mm」と表示されたまま 4.90mm が下限割れになる)。
  */
 import type { OptimizeResolutionStep } from './session'
@@ -14,22 +14,31 @@ export type MinWidthVerdict =
   | { kind: 'above' }
   | { kind: 'ok'; guaranteedMm: number }
 
-/** 小数2桁へ丸める。`up` は切り上げ(値以上)、`down` は切り捨て(値以下)。 */
-function roundTo2(value: number, direction: 'up' | 'down'): string {
-  const nearest = Number(value.toFixed(2))
-  if (direction === 'up' && nearest < value) return (nearest + 0.01).toFixed(2)
-  if (direction === 'down' && nearest > value) return (nearest - 0.01).toFixed(2)
-  return nearest.toFixed(2)
+/**
+ * 表示の小数桁数。既定は2桁だが、値が 0.01 に近い・下回る小さい部品では、下限と上限が同じ桁で
+ * 区別できるように有効数字3桁分まで増やす。
+ */
+function digitsFor(value: number): number {
+  return Math.max(2, 2 - Math.floor(Math.log10(value)))
+}
+
+/** `digits` 桁へ丸める。`up` は切り上げ(値以上)、`down` は切り捨て(値以下)。 */
+function roundTo(value: number, digits: number, direction: 'up' | 'down'): string {
+  const nearest = Number(value.toFixed(digits))
+  const unit = 10 ** -digits
+  if (direction === 'up' && nearest < value) return (nearest + unit).toFixed(digits)
+  if (direction === 'down' && nearest > value) return (nearest - unit).toFixed(digits)
+  return nearest.toFixed(digits)
 }
 
 /** 下限の表示。この値を入力すれば下限割れにならない。 */
 export function shownFloorMm(step: OptimizeResolutionStep): string {
-  return roundTo2(step.min_width_floor_mm, 'up')
+  return roundTo(step.min_width_floor_mm, digitsFor(step.min_width_floor_mm), 'up')
 }
 
-/** 上限の表示。この値を入力すれば上限超えにならない。 */
+/** 上限の表示。この値を入力すれば上限超えにならない(桁数は下限に揃える)。 */
 export function shownCeilingMm(step: OptimizeResolutionStep): string {
-  return roundTo2(step.min_width_ceiling_mm, 'down')
+  return roundTo(step.min_width_ceiling_mm, digitsFor(step.min_width_floor_mm), 'down')
 }
 
 /** 入力値(`null` は指定なし)の判定。指定なしは常に有効(制約なし)。 */
@@ -53,5 +62,5 @@ export function minWidthProblem(verdict: MinWidthVerdict, step: OptimizeResoluti
 
 /** 実際に保証される幅の表示(切り捨て。表示が保証を超えないように)。 */
 export function shownGuaranteedMm(verdict: MinWidthVerdict): string | null {
-  return verdict.kind === 'ok' ? roundTo2(verdict.guaranteedMm, 'down') : null
+  return verdict.kind === 'ok' ? roundTo(verdict.guaranteedMm, digitsFor(verdict.guaranteedMm), 'down') : null
 }

@@ -701,7 +701,8 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
     `min_width_cells`(m、既定1=制約なし)>1 のとき、設計空間をまず m 立方の opening で絞り、
     入口検査も絞った空間に対して行う(絞った結果で保持・拘束面が成り立たなければ、上の入口の状態で止まる)。
     以後、削除・置換は `_min_width_ok_after_clearing` を通り、合格を返す候補は毎回FEMの前に
-    `_mask_satisfies_min_width` を通る。絞ったセル数は `diagnostics['min_width']['trimmed_cells']`。
+    `_mask_satisfies_min_width` を通る。絞ったセル数は `diagnostics['min_width']['trimmed_cells']`
+    (`find_best_feasible` が段階4まで進んだ結果では `diagnostics['initial']['min_width']`)。
     """
     design_space_mask = np.array(design_space_mask, dtype=bool, copy=True)
     if min_width_cells <= 1:
@@ -822,7 +823,8 @@ def _find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCond
                 continue
             visited_survivors.add(survivor_key)
             # 差分検査(`peel`/`_op_scan`)は入力が規則を満たすことが前提で、追加(`add`)も判定しないので、
-            # 合格を返す候補は毎回大域に検査する。FEMの結果に依らないので、FEMの前に落とす。
+            # 合格を返す候補は毎回大域に検査する。FEMの結果に依らないので、FEMの前に落とす。違反は確定しているので、
+            # FEMが計算失敗(`unknown`)になりえた候補も親として積む(不合格の証拠にしない対象は FEM の結果だけ)。
             if min_width_cells > 1 and not _mask_satisfies_min_width(survivor, min_width_cells):
                 trial = _min_width_rejection_trial(history, survivor, candidate, parent, operation, conditions)
                 frontier.push(_node(survivor, trial.index, streak, design_space_mask, sizes, max_consecutive_adds,

@@ -21,7 +21,7 @@ assert.equal(shownGuaranteedMm(judgeMinWidth(5, awkward)), '7.35')
 let seed = 20260921
 const random = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296
 for (let i = 0; i < 5000; i++) {
-  const size = 0.3 + random() * 9
+  const size = 10 ** (-3.5 + random() * 5) // 0.0003mm〜30mm(小さい部品では 0.01mm の桁に収まらない)
   const step = stepOf(size, 3 + Math.floor(random() * 60))
   assert.equal(judgeMinWidth(Number(shownFloorMm(step)), step).kind, 'ok', `floor ${JSON.stringify(step)}`)
   assert.equal(judgeMinWidth(Number(shownCeilingMm(step)), step).kind, 'ok', `ceiling ${JSON.stringify(step)}`)
