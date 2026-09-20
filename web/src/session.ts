@@ -743,6 +743,8 @@ export interface OptimizeResolutionStep {
   /** この段を選んだときの最小幅の下限[mm](= 要素サイズの2倍)。サーバーが計算する
    *  (画面は要素数の数え方を持たない、という既存方針と同じ)。 */
   min_width_floor_mm: number
+  /** この段を選んだときの最小幅の上限[mm](= 格子の最短の辺のセル数 × 要素サイズ)。これを超える立方は格子に入らない。 */
+  min_width_ceiling_mm: number
 }
 
 /**

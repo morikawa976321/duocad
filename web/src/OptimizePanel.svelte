@@ -48,6 +48,7 @@
    * **`position: absolute` でフローの外**に置くので、`.viewport` の寸法＝カメラのアスペクトに
    * 触らない(styles.css の不変条件)。
    */
+  import { judgeMinWidth, minWidthProblem, shownGuaranteedMm } from './minWidth'
   import type {
     OptimizeConditionsReport,
     OptimizeProgress,
@@ -87,19 +88,11 @@
   /** 実際に効いている段の位置。**目盛りが縮んだときのために毎回丸め直す。** */
   const clamped = $derived(Math.min(stepIndex, Math.max(steps.length - 1, 0)))
   const step = $derived(steps[clamped] ?? null)
-  const minWidthFloorMm = $derived(step?.min_width_floor_mm ?? null)
-  /** 下限を割っているか。`minWidthMm` が空(null)なら常に false(制約なしは常に有効)。 */
-  const minWidthInvalid = $derived(
-    minWidthMm !== null && minWidthFloorMm !== null && minWidthMm < minWidthFloorMm,
-  )
-  /** 入力した値がそのまま保証されるとは限らない(m=ceil(...)で切り上がる)ので、
-   *  実際に保証される幅を計算して添える。サーバーの `_resolve_min_width` と同じ式
-   *  (`m = ceil(値 / 要素サイズ)`、保証幅 `= m × 要素サイズ`)。 */
-  const minWidthGuaranteedMm = $derived(
-    minWidthMm !== null && step !== null && !minWidthInvalid
-      ? Math.ceil(minWidthMm / step.element_size_mm) * step.element_size_mm
-      : null,
-  )
+  /** 入力した最小幅の判定(下限・上限はサーバーが段ごとに配る。判定と表示は `minWidth.ts`)。 */
+  const minWidthVerdict = $derived(judgeMinWidth(minWidthMm, step))
+  const minWidthInvalid = $derived(minWidthVerdict.kind === 'below' || minWidthVerdict.kind === 'above')
+  const minWidthProblemText = $derived(step === null ? null : minWidthProblem(minWidthVerdict, step))
+  const minWidthGuaranteedText = $derived(shownGuaranteedMm(minWidthVerdict))
   const problems = $derived(conditions?.problems ?? [])
   /** 走らせられるか。**条件と目盛りの両方がそろって初めて押せる。** */
   const canRun = $derived(
@@ -182,14 +175,15 @@
         }}
       />
     </label>
-    {#if minWidthInvalid}
+    {#if minWidthProblemText !== null}
       <p id="optimize-min-width-note" class="hint bad">
-        最小幅は下限 {minWidthFloorMm?.toFixed(2)}mm(選んだ要素サイズの2倍)を割っている。
-        値を上げるか、解像度を細かくすること
+        {minWidthProblemText}。{minWidthVerdict.kind === 'below'
+          ? '値を上げるか、解像度を細かくすること'
+          : '値を下げるか、解像度を粗くすること'}
       </p>
-    {:else if minWidthGuaranteedMm !== null}
+    {:else if minWidthGuaranteedText !== null}
       <p id="optimize-min-width-note" class="hint dim">
-        実際に保証される幅: {minWidthGuaranteedMm.toFixed(2)}mm(m=ceilで切り上がる)
+        実際に保証される幅: {minWidthGuaranteedText}mm(m=ceilで切り上がる。探索する形の幅で、書き出す形は平滑化で変わる)
       </p>
     {/if}
   {/if}

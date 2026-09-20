@@ -632,6 +632,17 @@ def _opening_satisfied(mask: np.ndarray, m: int) -> bool:
     return not (mask & ~opened).any()
 
 
+def test_cube_opening_equals_scipy_binary_opening():
+    """落ちたら、軸ごとに分けた opening が `binary_opening` とずれている(最小幅の全判定がこれを使う)。"""
+    rng = np.random.default_rng(20260922)
+    for _ in range(120):
+        shape = tuple(int(x) for x in rng.integers(1, 14, size=3))
+        m = int(rng.integers(2, 7))
+        mask = rng.random(shape) < rng.uniform(0.5, 0.98)
+        assert np.array_equal(bs._cube_opening(mask, m),
+                              ndimage.binary_opening(mask, structure=np.ones((m, m, m), dtype=bool)))
+
+
 def test_peel_refuses_a_removal_that_would_thin_material_below_min_width():
     """厚さ2セルの塊(2x2x4)の角セルを抜くと、隣接セルが m=2 立方のブロックを失う。
     `min_width_cells=1`(既定・制約なし)では削れ、`min_width_cells=2` では `skipped_thickness` で断る。"""
@@ -697,6 +708,38 @@ def test_stage3_block_delete_refuses_a_single_cell_thinning_cut_but_allows_a_thi
     assert len(deletes(2, 1)) == 2 and len(deletes(2, 2)) == 2
 
 
+def test_stage3_block_judgment_matches_a_global_opening_recheck_including_edge_truncated_blocks():
+    """落ちたら、段階3のブロック削除・置換の局所の厚み判定が、全体を数え直した判定とずれている
+    (1セルだけの `peel` の検算では、ブロック大・格子の端で切り詰められた region が通らない)。"""
+    rng = np.random.default_rng(20260921)
+    judged = accepted = refused_by_width = truncated = 0
+    for _ in range(40):
+        shape = tuple(int(x) for x in rng.integers(4, 10, size=3))
+        m = int(rng.integers(2, 5))
+        raw = rng.random(shape) < rng.uniform(0.6, 0.95)
+        mask = ndimage.binary_opening(raw, structure=np.ones((m, m, m), dtype=bool))  # 冪等: 前提を満たす入力
+        design_space = np.ones(shape, bool)
+        for size in bs.block_sizes(shape):
+            for op in ('delete', 'replace'):
+                plain = list(bs._op_scan(mask, design_space, size, op, min_width_cells=1))
+                guarded = list(bs._op_scan(mask, design_space, size, op, min_width_cells=m))
+                starts = list(bs._block_starts(shape, size))
+                for lo, without, with_width in zip(starts, plain, guarded):
+                    if without is None:
+                        assert with_width is None
+                        continue
+                    region = without[1]
+                    judged += 1
+                    truncated += any(r.stop - r.start < size for r in region)
+                    after = mask.copy()
+                    after[region] = False
+                    truth_ok = _opening_satisfied(after, m)
+                    assert (with_width is not None) == truth_ok
+                    accepted += truth_ok
+                    refused_by_width += not truth_ok
+    assert accepted > 20 and refused_by_width > 20 and truncated > 20  # 3種とも実際に通っている(空振りで合格していない)
+
+
 def test_search_with_min_width_cells_produces_a_shape_that_an_independent_opening_check_accepts():
     """最終形状を `peel` とは別の測り方(`binary_opening`)で確かめる(局所判定の穴の検出器)。
     同じ題材の m=1 は厚み1セルまで削るので、規則が実際に効いていることの対照になる。"""
@@ -733,6 +776,73 @@ def test_min_width_search_starts_from_the_design_space_thickness_opening():
     assert not result.best_feasible.mask[2, 2, 0] and not result.best_feasible.mask[7, 2, 0]
 
 
+def test_a_design_space_that_already_violates_min_width_still_reaches_a_conforming_shape():
+    """6x3x3 の棒から4セルを抜くと、m=2 の立方に入らない材料が残る。規則を満たす部分形状はあるので、
+    違反セルを取り除けずに予算を使い切ったら、入力が違反していると削除自体が拒まれている。"""
+    design = np.ones((6, 3, 3), bool)
+    for cell in [(2, 0, 0), (3, 0, 0), (2, 0, 2), (3, 0, 2)]:
+        design[cell] = False
+    conditions = bar_conditions(shape=design.shape)
+    assert not _opening_satisfied(design, 2)
+    result = bs.find_initial_feasible(design, conditions, max_evaluations=40, min_width_cells=2)
+    assert result.status == 'feasible' and result.evaluations <= 5
+    assert _opening_satisfied(result.best_feasible.mask, 2)
+    assert result.diagnostics['min_width'] == dict(cells=2, design_cells=int(design.sum()),
+                                                   trimmed_cells=int(design.sum() - ndimage.binary_opening(
+                                                       design, structure=np.ones((2, 2, 2), bool)).sum()))
+    assert result.diagnostics['min_width']['trimmed_cells'] > 0
+
+
+def test_the_min_width_check_runs_before_any_fem_evaluation(monkeypatch):
+    """大域の最小幅判定は、FEMの結果に依らないので `acceptance.inspect` の前に置く。
+    落ちたら、規則を満たさない候補にFEM(hanger 2.4mm で1回100秒超)を払っている。"""
+    calls = []
+    real_inspect = acceptance.inspect
+    monkeypatch.setattr(acceptance, 'inspect', lambda *a, **k: calls.append(1) or real_inspect(*a, **k))
+    monkeypatch.setattr(bs, '_mask_satisfies_min_width', lambda mask, m: False)
+    conditions = bar_conditions(shape=(4, 2, 2))
+    result = bs.find_initial_feasible(np.ones((4, 2, 2), bool), conditions, max_evaluations=6, min_width_cells=2)
+    assert result.status == 'no_feasible_found' and result.best_feasible is None
+    assert calls == []
+    assert result.history[0].checks == dict(min_width='fail')
+    assert all(t.checks == dict(min_width='fail') for t in result.history if t.outcome != 'no_component')
+
+
+def test_a_candidate_that_fails_the_min_width_check_is_not_returned_and_the_search_goes_on(monkeypatch):
+    """`add` は局所判定しないので、大域判定が合格を返す唯一の門。最初の候補だけ落として、探索が続くことを見る。"""
+    real = bs._mask_satisfies_min_width
+    state = {'first': True}
+
+    def first_fails(mask, m):
+        verdict = real(mask, m) and not state['first']
+        state['first'] = False
+        return verdict
+
+    monkeypatch.setattr(bs, '_mask_satisfies_min_width', first_fails)
+    conditions = bar_conditions(shape=(4, 2, 2))
+    result = bs.find_initial_feasible(np.ones((4, 2, 2), bool), conditions, max_evaluations=40, min_width_cells=2)
+    assert result.history[0].outcome == 'infeasible' and result.history[0].checks == dict(min_width='fail')
+    if result.status == 'feasible':
+        assert result.best_feasible.trial_index > 0 and _opening_satisfied(result.best_feasible.mask, 2)
+
+
+def test_trimming_the_design_space_can_cut_a_preserved_region_and_is_then_refused_at_entry_with_the_count():
+    """保持ソリッドが m 立方に入らない突起にしか重ならないとき、絞った設計空間では保持が成り立たない。
+    規則を満たす形は絞った空間の部分集合なので、この入口の拒否は「規則を満たす形が存在しない」と同じ。
+    m=1 は同じ入力で合格する。絞ったセル数が `diagnostics['min_width']` に残る。"""
+    shape = (10, 4, 4)
+    design = np.zeros(shape, bool)
+    design[:, :2, :2] = True
+    design[5, 2, 0] = True  # 1セルの突起
+    conditions = bar_conditions(shape=shape, keep_box=Pos(5.5, 2.5, 0.5) * Box(.9, .9, .9))
+    nodes = lambda i: [(i * 5 + j) * 5 + k for j in range(3) for k in range(3)]
+    conditions = dataclasses.replace(conditions, table=Table(conditions.grid, {1: nodes(0), 2: nodes(10)}))
+    assert bs.find_best_feasible(design, conditions, max_evaluations=60, min_width_cells=1).status == 'feasible'
+    result = bs.find_best_feasible(design, conditions, max_evaluations=60, min_width_cells=2)
+    assert result.status == 'input_contradiction' and result.evaluations == 0
+    assert result.diagnostics['min_width'] == dict(cells=2, design_cells=41, trimmed_cells=1)
+
+
 def test_min_width_with_a_design_space_that_holds_no_m_cube_is_refused_at_entry():
     """`(4, 1, 1)` は y・z が1セルなので m=2 の立方が1つも入らない。opening で設計空間が空になり、
     条件節点が材料に接しないので探索を始めずに `boundary_mapping_failed` で止まる。"""
@@ -740,6 +850,7 @@ def test_min_width_with_a_design_space_that_holds_no_m_cube_is_refused_at_entry(
     result = bs.find_best_feasible(np.ones((4, 1, 1), bool), conditions, max_evaluations=50, min_width_cells=2)
     assert result.status == 'boundary_mapping_failed' and result.best_feasible is None
     assert result.evaluations == 0
+    assert result.diagnostics['min_width'] == dict(cells=2, design_cells=4, trimmed_cells=4)
 
 
 def test_reduction_strips_the_unloaded_appendage_and_keeps_every_condition_supported():

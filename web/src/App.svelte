@@ -43,6 +43,7 @@
     OPTIMIZE_PRESET_ROLE,
   } from './commands/optimize'
   import OptimizePanel, { type OptimizeNotice } from './OptimizePanel.svelte'
+  import { judgeMinWidth, minWidthProblem } from './minWidth'
   import {
     DEFAULT_SKETCH_COMMAND_ID,
     SKETCH_COMMANDS,
@@ -550,26 +551,26 @@
    *  役目は「気づかせる」の1回だけでよい。 */
   function handleOptimizeMinWidth(value: number | null): void {
     optimizeMinWidthMm = value
-    const floor = optimizeStep?.min_width_floor_mm ?? null
-    const invalidNow = value !== null && floor !== null && value < floor
+    const verdict = judgeMinWidth(value, optimizeStep)
+    const invalidNow = verdict.kind === 'below' || verdict.kind === 'above'
     if (invalidNow && !optimizeMinWidthWasInvalid) {
-      showToast(`最小幅 ${value}mm は下限 ${floor!.toFixed(2)}mm(選んだ要素サイズの2倍)を下回っている。値を上げること`)
+      showToast(`最小幅 ${value}mm: ${minWidthProblem(verdict, optimizeStep!)}。値を見直すこと`)
     }
     optimizeMinWidthWasInvalid = invalidNow
   }
 
-  /** 解像度の段を変える。**その時に既に入っている最小幅が新しい下限を割ったら、
+  /** 解像度の段を変える。**その時に既に入っている最小幅が新しい下限・上限を外れたら、
    *  黙って実行可能なまま残さずトーストで知らせる**(タスク仕様「解像度を変えると下限も変わる」)。 */
   function handleOptimizeStep(index: number): void {
     optimizeStepIndex = index
     const steps = optimizeResolution?.steps ?? []
     const newStep = steps[Math.min(index, Math.max(steps.length - 1, 0))] ?? null
-    const invalidNow =
-      optimizeMinWidthMm !== null && newStep !== null && optimizeMinWidthMm < newStep.min_width_floor_mm
+    const verdict = judgeMinWidth(optimizeMinWidthMm, newStep)
+    const invalidNow = verdict.kind === 'below' || verdict.kind === 'above'
     if (invalidNow && !optimizeMinWidthWasInvalid) {
       showToast(
-        `解像度を変えたので最小幅の下限が ${newStep!.min_width_floor_mm.toFixed(2)}mm に変わった。` +
-          `いまの入力 ${optimizeMinWidthMm}mm は下回っている。値を見直すこと`,
+        `解像度を変えたので最小幅の範囲が変わった。いまの入力 ${optimizeMinWidthMm}mm: ` +
+          `${minWidthProblem(verdict, newStep!)}。値を見直すこと`,
       )
     }
     optimizeMinWidthWasInvalid = invalidNow

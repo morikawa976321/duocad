@@ -271,6 +271,24 @@ def test_run_optimization_forwards_min_width_mm_so_a_below_floor_value_is_refuse
     assert connection.of_type("optimize_result") == []
 
 
+def test_run_optimization_refuses_a_min_width_beyond_the_grid_at_the_ws_door(session: Session) -> None:
+    """`net/ws.py` 経由でも上限(格子の最短の辺)を越える幅は導出の前に断る。落ちたら、WS直叩きの巨大な値が
+    塊の導出・境界条件の確定の後にメモリを使い切る。"""
+    _setup_four_conditions(session)
+    _, connection = _run_to_completion(session, {"cmd": "run_optimization", "min_width_mm": 1e6})
+    assert "上限" in connection.of_type("optimize_error")[0]["message"]
+    assert connection.of_type("optimize_result") == []
+
+
+def test_run_optimization_passes_a_valid_min_width_mm_through_to_the_session(session: Session, monkeypatch) -> None:
+    """`net/ws.py` が `min_width_mm` を落とす・別の名前で渡すと、指定した幅が黙って無視される。"""
+    _setup_four_conditions(session)
+    seen: dict = {}
+    monkeypatch.setattr(session, "run_optimization", lambda **kwargs: seen.update(kwargs) or {"state": "done"})
+    _run_to_completion(session, {"cmd": "run_optimization", "min_width_mm": 25.5})
+    assert seen["min_width_mm"] == 25.5
+
+
 def test_a_successful_run_is_saved_to_disk_even_with_no_screen_watching(
     session: Session, monkeypatch, tmp_path
 ) -> None:

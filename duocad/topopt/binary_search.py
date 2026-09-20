@@ -697,14 +697,35 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
     複数の生存成分・解法再試行を持つ場合、`acceptance.inspect` の呼び出し回数はこれより
     多くなる(history の行数で見ること)。`max_candidates` は候補ブロックの走査予算(無効なブロック・
     重複も数える。既定は `_candidate_budget`)。`is_cancelled` はブロックを1つ調べる前ごとと評価前に見る。
+
+    `min_width_cells`(m、既定1=制約なし)>1 のとき、設計空間をまず m 立方の opening で絞り、
+    入口検査も絞った空間に対して行う(絞った結果で保持・拘束面が成り立たなければ、上の入口の状態で止まる)。
+    以後、削除・置換は `_min_width_ok_after_clearing` を通り、合格を返す候補は毎回FEMの前に
+    `_mask_satisfies_min_width` を通る。絞ったセル数は `diagnostics['min_width']['trimmed_cells']`。
     """
     design_space_mask = np.array(design_space_mask, dtype=bool, copy=True)
-    if min_width_cells > 1:
-        # 実測(hanger 2.4mm・m=3): 設計空間の縁に m 立方の入らないセルが残る(58/377,075)。局所判定の探索は
-        # その材料を1セルずつしか抜けず、規則を満たす候補にたどり着けない。以後の判定は m 立方の
-        # 材料だけのブロックに属するセルだけを設計空間として扱う(以降の検査もこの空間に対して行う)。
-        design_space_mask = ndimage.binary_opening(
-            design_space_mask, structure=np.ones((int(min_width_cells),) * 3, dtype=bool))
+    if min_width_cells <= 1:
+        return _find_initial_feasible(design_space_mask, conditions, max_evaluations=max_evaluations,
+                                      frontier_capacity=frontier_capacity, max_consecutive_adds=max_consecutive_adds,
+                                      max_candidates=max_candidates, min_width_cells=1, is_cancelled=is_cancelled)
+    # 実測(hanger 2.4mm・m=3): 設計空間の縁に m 立方の入らないセルが残る(58/377,075)。局所判定の探索は
+    # その材料を1セルずつしか抜けず、規則を満たす候補にたどり着けない。以後の判定は m 立方の
+    # 材料だけのブロックに属するセルだけを設計空間として扱う(以降の検査もこの空間に対して行う)。
+    opened = _cube_opening(design_space_mask, int(min_width_cells))
+    result = _find_initial_feasible(opened, conditions, max_evaluations=max_evaluations,
+                                    frontier_capacity=frontier_capacity, max_consecutive_adds=max_consecutive_adds,
+                                    max_candidates=max_candidates, min_width_cells=min_width_cells,
+                                    is_cancelled=is_cancelled)
+    result.diagnostics = dict(result.diagnostics or {}, min_width=dict(
+        cells=int(min_width_cells), design_cells=int(design_space_mask.sum()),
+        trimmed_cells=int(design_space_mask.sum() - opened.sum())))
+    return result
+
+
+def _find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchConditions, *,
+                           max_evaluations: int, frontier_capacity: int, max_consecutive_adds: int,
+                           max_candidates: Optional[int], min_width_cells: int, is_cancelled) -> SearchResult:
+    """`find_initial_feasible` の本体。`design_space_mask` は最小幅で絞った後の空間(読み取り専用にして使う)。"""
     design_space_mask.setflags(write=False)
     identifier = evaluation_identifier(conditions)
 
@@ -800,6 +821,13 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
             if survivor_key in visited_survivors:
                 continue
             visited_survivors.add(survivor_key)
+            # 差分検査(`peel`/`_op_scan`)は入力が規則を満たすことが前提で、追加(`add`)も判定しないので、
+            # 合格を返す候補は毎回大域に検査する。FEMの結果に依らないので、FEMの前に落とす。
+            if min_width_cells > 1 and not _mask_satisfies_min_width(survivor, min_width_cells):
+                trial = _min_width_rejection_trial(history, survivor, candidate, parent, operation, conditions)
+                frontier.push(_node(survivor, trial.index, streak, design_space_mask, sizes, max_consecutive_adds,
+                                    min_width_cells=min_width_cells))
+                continue
             report, trial = _evaluate_survivor(survivor, candidate, conditions, parent=parent,
                                                operation=operation, history=history)
             if report['status'] != 'pass':
@@ -818,14 +846,6 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
                 trial.outcome = 'unknown' if final_report['status'] == 'unknown' else 'infeasible'
                 if trial.outcome != 'unknown':  # 計算失敗を不合格の証拠にしない(§4.5)。他は通常どおり修復対象。
                     frontier.push(_node(survivor, trial.index, streak, design_space_mask, sizes, max_consecutive_adds,
-                                    min_width_cells=min_width_cells))
-                continue
-            # 差分検査(`peel`/`_op_scan`)は入力が規則を満たすことが前提で、追加(`add`)も判定しないので、
-            # 合格を返す候補は毎回ここで大域に検査する。
-            if min_width_cells > 1 and not _mask_satisfies_min_width(survivor, min_width_cells):
-                trial.note = '最小幅の不変条件(m立方の材料だけのブロックに全材料セルが属する)を満たさないため候補から外した'
-                trial.outcome = 'infeasible'
-                frontier.push(_node(survivor, trial.index, streak, design_space_mask, sizes, max_consecutive_adds,
                                     min_width_cells=min_width_cells))
                 continue
             survivor.setflags(write=False)
@@ -953,6 +973,17 @@ def _regular_after_removal(window: np.ndarray) -> bool:
     return not bad[_WINDOW_CENTRE_VERTICES].any()
 
 
+def _cube_opening(mask: np.ndarray, m: int) -> np.ndarray:
+    """m 立方の構造要素による opening。立方は3軸の直線の合成なので、軸ごとの1次元の erosion → dilation に分けて
+    `binary_opening` と同じ結果を出す。直接だと費用が m³ に比例し(実測 100×60×60 格子で m=32: 14秒、m=48: 218秒)、
+    分けると m に比例する(m=48: 0.03秒)。"""
+    out = mask
+    for op in (ndimage.binary_erosion, ndimage.binary_dilation):
+        for axis in range(3):
+            out = op(out, structure=np.ones(tuple(m if a == axis else 1 for a in range(3)), dtype=bool))
+    return out
+
+
 def _min_width_ok_after_clearing(mask: np.ndarray, region: tuple, min_width_cells: int) -> bool:
     """`region` を材料から丸ごと空にしたと仮定して、残る材料セルが全て `min_width_cells`(=m)立方の
     材料だけのブロックに属するか(`peel`・段階3の delete/replace 共通)。`m<=1` は常に真(制約なし)。
@@ -971,7 +1002,7 @@ def _min_width_ok_after_clearing(mask: np.ndarray, region: tuple, min_width_cell
     window = np.array(mask[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]], dtype=bool, copy=True)
     cleared = tuple(slice(int(s.start) - l, int(s.stop) - l) for s, l in zip(region, lo))
     window[cleared] = False
-    opened = ndimage.binary_opening(window, structure=np.ones((m, m, m), dtype=bool))
+    opened = _cube_opening(window, m)
     zone = tuple(
         slice(max(int(s.start) - reach - l, 0), min(int(s.stop) + reach - l, h - l))
         for s, l, h in zip(region, lo, hi)
@@ -988,8 +1019,8 @@ def _mask_satisfies_min_width(mask: np.ndarray, min_width_cells: int) -> bool:
     """
     if min_width_cells <= 1:
         return True
-    opened = ndimage.binary_opening(mask, structure=np.ones((int(min_width_cells),) * 3, dtype=bool))
-    return not (np.asarray(mask, dtype=bool) & ~opened).any()
+    mask = np.asarray(mask, dtype=bool)
+    return not (mask & ~_cube_opening(mask, int(min_width_cells))).any()
 
 
 def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray, *,
@@ -1142,6 +1173,19 @@ def _geometry_rejection(candidate: np.ndarray, survivors: list, island_diag: dic
         return None
     return dict(components=island_diag['components'], surviving_components=len(survivors),
                 missing=_missing_conditions(candidate, conditions), removed_islands=island_diag['removed_islands'])
+
+
+def _min_width_rejection_trial(history: list, survivor: np.ndarray, candidate: np.ndarray, parent: Optional[int],
+                               operation: str, conditions: SearchConditions) -> Trial:
+    volume = conditions.grid.element_volume
+    trial = Trial(index=len(history), parent=parent, operation=operation,
+                  mask_hash=acceptance.material_sha256(survivor), before_mm3=float(candidate.sum()) * volume,
+                  material_mm3=float(survivor.sum()) * volume,
+                  removed_islands_mm3=float(candidate.sum() - survivor.sum()) * volume,
+                  outcome='infeasible', checks=dict(min_width='fail'),
+                  note='FEMの前に最小幅の不変条件(m立方の材料だけのブロックに全材料セルが属する)で不合格')
+    history.append(trial)
+    return trial
 
 
 def _geometry_rejection_trial(history: list, candidate: np.ndarray, parent: Optional[int], operation: str,

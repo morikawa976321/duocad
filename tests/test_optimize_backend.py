@@ -387,6 +387,33 @@ def test_min_width_cells_rounds_up_at_the_ceiling_boundary() -> None:
         optimize_run._resolve_min_width(spacing, 2 * spacing - 0.01)
 
 
+def test_min_width_above_the_grid_is_refused_and_the_ceiling_itself_is_accepted() -> None:
+    """m 立方が格子に入らない幅は、確保量が m³ で増えるので入口で断る。上限ちょうどの値は
+    `値 / spacing` の丸めに依らず通る(画面が出す上限と同じ比較にしてある)。"""
+    with pytest.raises(optimize_run.OptimizeInputError, match="上限"):
+        optimize_run._resolve_min_width(2.4, 5000.0, max_cells=40)
+    with pytest.raises(optimize_run.OptimizeInputError, match="上限"):
+        optimize_run._resolve_min_width(2.4, 40 * 2.4 + 0.01, max_cells=40)
+    checked = rounded_up = 0
+    for spacing in (0.1, 0.7, 1 / 3, 2.4, 2.387506, 4.9):
+        for cells in range(3, 61):
+            resolved = optimize_run._resolve_min_width(spacing, cells * spacing, max_cells=cells)
+            assert resolved["cells"] == cells and resolved["guaranteed_mm"] == cells * spacing
+            checked += 1
+            rounded_up += math.ceil(cells * spacing / spacing) > cells
+    assert checked == 6 * 58 and rounded_up > 0  # 丸めで1つ上へ跳ねる組が実際にあり、それでも通る
+
+
+def test_run_refuses_a_min_width_beyond_the_grid_before_deriving_anything(session: Session, monkeypatch) -> None:
+    """落ちたら、上限が塊の導出・境界条件の確定の後に効いている(巨大な m は導出後にメモリを使い切る)。"""
+    from duocad.topopt import design_space as ds
+
+    _setup_four_conditions(session)
+    monkeypatch.setattr(ds, "derive", lambda *a, **k: pytest.fail("上限の検査より前に導出へ進んだ"))
+    with pytest.raises(optimize_run.OptimizeInputError, match="上限"):
+        optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=9.8, min_width_mm=5000.0))
+
+
 def test_every_ladder_step_carries_its_own_min_width_floor(session: Session) -> None:
     """段ごとの `min_width_floor_mm` は、その段の要素サイズの2倍(`_resolve_min_width` の floor と同じ式)。"""
     _setup_four_conditions(session)
@@ -455,6 +482,7 @@ def test_every_ladder_step_reports_the_real_grid(session: Session) -> None:
     space = ds.derive(bundle.conditions, spacing=mid["element_size_mm"])
     assert space.grid.element_count == mid["element_count"]
     assert space.grid.spacing == pytest.approx(mid["element_size_mm"])
+    assert mid["min_width_ceiling_mm"] == pytest.approx(min(space.grid.shape) * mid["element_size_mm"])
 
 
 def test_a_requested_element_size_off_the_ladder_is_snapped_to_the_real_grid(
@@ -656,6 +684,31 @@ def test_search_cancellation_leaves_the_document_untouched(
     assert session.applied_count == applied
 
 
+def test_the_resolved_min_width_cells_reach_the_search(session: Session, monkeypatch) -> None:
+    """`min_width_mm` → `m = ceil(mm / spacing)` → `find_best_feasible(min_width_cells=m)` の配線。
+    落ちたら、指定した幅が探索に届かず制約なしで走る。"""
+    from duocad.topopt import binary_search
+
+    _setup_four_conditions(session)
+    seen: dict = {}
+
+    def fake_find(design_space_mask, conditions, **kwargs):
+        seen.update(kwargs)
+        return binary_search.SearchResult(
+            status="no_feasible_found", termination="cancelled", best_feasible=None,
+            history=[], evaluations=0, conditions_identifier="test",
+        )
+
+    monkeypatch.setattr(binary_search, "find_best_feasible", fake_find)
+    spacing = optimize_run.resolution_limits(session.document)["steps"][1]["element_size_mm"]
+    with pytest.raises(optimize_run.OptimizeCancelled):
+        optimize_run.run(
+            session.document,
+            optimize_run.OptimizeOptions(element_size_mm=spacing, min_width_mm=2.5 * spacing),
+        )
+    assert seen["min_width_cells"] == 3
+
+
 def test_search_cancellation_discards_a_found_best_feasible_too(
     session: Session, monkeypatch
 ) -> None:
@@ -745,6 +798,45 @@ def test_a_closed_void_in_the_design_space_is_explained_with_where_and_what_to_d
     warning = optimize_run._search_failure_warning(result)
     assert "閉じた空洞が 2 個" in warning and "[3, 4, 5](12セル)" in warning and "除外" in warning
     assert "保持ソリッド" not in warning
+
+
+def _failed_result(status: str, termination: str, **diagnostics):
+    from duocad.topopt import binary_search
+
+    return binary_search.SearchResult(
+        status=status, termination=termination, best_feasible=None, history=[], evaluations=3,
+        conditions_identifier="test", diagnostics=diagnostics)
+
+
+def test_a_failure_under_min_width_names_the_constraint_instead_of_only_the_budget() -> None:
+    """予算で止まったとき、最小幅が有効なら「予算を増やす前に最小幅を疑う」を添える(1回のFEMが100秒超)。
+    最小幅が無い実行の文面は変えない。"""
+    min_width = {"requested_mm": 5.0, "spacing_mm": 2.4, "cells": 3, "guaranteed_mm": 7.2}
+    limit = _failed_result("no_feasible_found", "evaluation_limit")
+    plain = optimize_run._search_failure_warning(limit)
+    assert plain == optimize_run._search_failure_warning(limit, {"cells": 1})
+    assert "最小幅" not in plain
+    warning = optimize_run._search_failure_warning(limit, min_width)
+    assert warning.startswith(plain) and "最小幅 7.2 mm(3セル)の制約が有効" in warning
+    assert "予算を増やしても届かない" in warning
+
+
+def test_an_entry_failure_says_the_check_ran_on_the_design_space_trimmed_by_min_width() -> None:
+    """設計空間を m 立方の opening で絞ると、入口検査は絞った空間に対する結果になる。絞ったセル数を利用者に見せる。
+    何も絞っていない(=最小幅が原因でない)ときと、最小幅と無関係な `resolution_insufficient` には添えない。"""
+    min_width = {"requested_mm": 5.0, "spacing_mm": 2.4, "cells": 3, "guaranteed_mm": 7.2}
+    trimmed = dict(min_width=dict(cells=3, design_cells=1000, trimmed_cells=58))
+    failed = _failed_result("boundary_mapping_failed", "boundary_mapping_failed",
+                            uncovered_condition_nodes=[dict(condition="load_face_1", uncovered_nodes=6, nodes=25)],
+                            **trimmed)
+    assert "58/1000 セルを除いた後の空間" in optimize_run._search_failure_warning(failed, min_width)
+    contradiction = _failed_result("input_contradiction", "input_contradiction", **trimmed)
+    assert "58/1000" in optimize_run._search_failure_warning(contradiction, min_width)
+    untouched = _failed_result("input_contradiction", "input_contradiction",
+                               min_width=dict(cells=3, design_cells=1000, trimmed_cells=0))
+    assert "最小幅" not in optimize_run._search_failure_warning(untouched, min_width)
+    starved = _failed_result("resolution_insufficient", "resolution_insufficient", empty_faces=[1], **trimmed)
+    assert "最小幅" not in optimize_run._search_failure_warning(starved, min_width)
 
 
 def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(

@@ -542,7 +542,8 @@ def _resolution_steps(lo, hi, upper: float, lower: float) -> List[dict]:
         # 「いちばん細かい」が選べない目盛りになる)。
         # 各段も実格子の要素サイズへ揃える(画面に出す値と `derive` が作る格子を一致させる)。
         size = lower if index == count - 1 else _snap_to_grid(lo, hi, upper * (ratio ** index))
-        elements = _element_count(lo, hi, size)
+        shape = _grid_shape(lo, hi, size)
+        elements = shape[0] * shape[1] * shape[2]
         if elements in seen:
             continue
         seen.add(elements)
@@ -552,6 +553,7 @@ def _resolution_steps(lo, hi, upper: float, lower: float) -> List[dict]:
                 "element_size_mm": float(size),
                 "element_count": int(elements),
                 "min_width_floor_mm": float(2.0 * size),
+                "min_width_ceiling_mm": float(min(shape) * size),
             }
         )
     return steps
@@ -633,6 +635,13 @@ def _snap_to_grid(lo, hi, spacing: float) -> float:
     return box_long / n
 
 
+def _grid_shape(lo, hi, spacing: float) -> tuple:
+    """`derive(spacing=...)` が起こす格子のセル数(x, y, z)。`_element_count` と最小幅の上限が共有する。"""
+    from .topopt import design_space as ds
+
+    return tuple(int(n) for n in ds.grid_for_frame(*ds.frame_box(lo, hi), spacing=float(spacing)).shape)
+
+
 def _element_count(lo, hi, spacing: float) -> int:
     """`derive(spacing=...)` が実際に起こす格子の要素数。
 
@@ -640,10 +649,8 @@ def _element_count(lo, hi, spacing: float) -> int:
     ボクセル化も導出も走らせないので安い。要求した要素サイズではなく**丸めた後の実 spacing** の
     格子になるので、梯子に出す要素数が実格子と一致する。
     """
-    from .topopt import design_space as ds
-
-    grid = ds.grid_for_frame(*ds.frame_box(lo, hi), spacing=float(spacing))
-    return int(grid.shape[0] * grid.shape[1] * grid.shape[2])
+    shape = _grid_shape(lo, hi, spacing)
+    return int(shape[0] * shape[1] * shape[2])
 
 
 def _min_element_size(lo, hi) -> float:
@@ -918,7 +925,9 @@ def _run(
     spacing = _snap_to_grid(
         limits["bbox_min"], limits["bbox_max"], _resolve_element_size(limits, opts.element_size_mm)
     )
-    min_width = _resolve_min_width(spacing, opts.min_width_mm)
+    min_width = _resolve_min_width(
+        spacing, opts.min_width_mm, max_cells=min(_grid_shape(limits["bbox_min"], limits["bbox_max"], spacing))
+    )
 
     from .topopt import trace
     trace.snapshot('resolved-conditions', bundle=bundle, limits=limits, spacing=spacing,
@@ -1083,7 +1092,7 @@ def _run(
             state=search_result.status,
             body_id=None,
             name=None,
-            warning=_search_failure_warning(search_result),
+            warning=_search_failure_warning(search_result, min_width),
             empty_condition_faces=[],
             unrepresented_regions=unrepresented,
             boundary_mapping=mapping,
@@ -1258,11 +1267,13 @@ def _resolve_element_size(limits: dict, requested: Optional[float]) -> float:
     return value
 
 
-def _resolve_min_width(spacing: float, requested: Optional[float]) -> dict:
+def _resolve_min_width(spacing: float, requested: Optional[float], max_cells: Optional[int] = None) -> dict:
     """最小幅[mm]の入口検査(`_resolve_element_size` と同じ形)。
 
     `None` → 制約なし(m=1)。有限の正の値でなければ `OptimizeInputError`。
     `2 × spacing` を下回れば同じ例外(8等分した評価格子で4セル分が見える最小の幅、案B)。
+    `max_cells`(格子の最短の辺のセル数)を渡すと、`max_cells × spacing` を超える値も断る
+    (m 立方が格子に1つも入らない。構造要素の確保量は m³ で、上限が無いと大きな値でメモリを使い果たす)。
     通れば `m = ceil(値 / spacing)` を、実際に保証される幅 `m × spacing` と一緒に返す。
     """
     spacing = float(spacing)
@@ -1278,6 +1289,17 @@ def _resolve_min_width(spacing: float, requested: Optional[float]) -> dict:
             "最小幅を上げるか、要素サイズを下げること"
         )
     cells = int(math.ceil(value / spacing))
+    if max_cells is not None:
+        ceiling = max_cells * spacing
+        # 上限そのものの値は `value / spacing` の丸めで max_cells を超えうるので、mm で比べて m を丸める
+        # (画面が出す上限と同じ比較にするため)。
+        if value > ceiling:
+            raise OptimizeInputError(
+                f"最小幅 {value:.4g} mm は上限 {ceiling:.4g} mm(格子の最短の辺 {max_cells} セル × 要素サイズ "
+                f"{spacing:.4g} mm)より太い。この幅の立方は格子に入らないので、どの形も満たせない。"
+                "最小幅を下げるか、要素サイズを上げること"
+            )
+        cells = min(cells, int(max_cells))
     return {"requested_mm": value, "spacing_mm": spacing, "cells": cells, "guaranteed_mm": cells * spacing}
 
 
@@ -1360,7 +1382,33 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
     )
 
 
-def _search_failure_warning(search_result: Any) -> str:
+def _search_failure_warning(search_result: Any, min_width: Optional[dict] = None) -> str:
+    """`SearchResult.status` が `'feasible'` 以外のときの一言。最小幅の制約が有効なら、原因の候補を末尾に添える。"""
+    message = _search_failure_message(search_result)
+    note = _min_width_failure_note(search_result, min_width)
+    return f"{message}。{note}" if note else message
+
+
+def _min_width_failure_note(search_result: Any, min_width: Optional[dict]) -> str:
+    """最小幅が有効(`cells`>1)なときだけ返す。入口で止まったときは絞った設計空間に対する結果であること、
+    予算で止まったときは予算より先に最小幅を疑うこと(hanger 2.4mm は1回のFEMが100秒超)を添える。"""
+    if not min_width or int(min_width.get("cells", 1)) <= 1:
+        return ""
+    head = f"最小幅 {float(min_width['guaranteed_mm']):.4g} mm({int(min_width['cells'])}セル)の制約が有効"
+    if search_result.status == 'resolution_insufficient':
+        return ""
+    if search_result.status in ('input_contradiction', 'boundary_mapping_failed'):
+        info = (search_result.diagnostics or {}).get('min_width') or {}
+        trimmed = int(info.get('trimmed_cells', 0))
+        if not trimmed:
+            return ""
+        return (f"{head}: この検査は、設計空間から立方が入らない {trimmed}/{info['design_cells']} セルを除いた後の"
+                "空間に対して行った。最小幅を下げると通ることがある")
+    return (f"{head}: 削除・置換は幅を保つものだけが候補になるので、予算を増やしても届かないことがある。"
+            "予算を増やす前に、最小幅を下げて同じ題材が通るか確かめること")
+
+
+def _search_failure_message(search_result: Any) -> str:
     """`SearchResult.status` が `'feasible'` 以外のときの一言(段階4の契約により値自体は
 
     そのままUI/ログへ渡す。ここでは日本語の説明を1つ添えるだけ)。**評価予算を増やす案内は
