@@ -371,9 +371,11 @@ def _materialize(parent: np.ndarray, design_space: np.ndarray, op: str, region: 
                  exempt: Optional[np.ndarray] = None) -> np.ndarray:
     """候補記述から子マスクを作る(親は複製し、in-place で変えない)。評価の直前にだけ呼ぶ。
 
-    `min_width_cells`(m)>1 のとき、削除・置換は「射影つき」: ブロックを空にした(置換は `addable` を足した)後に m 立方の
-    被覆を失うセル(`min_width.lost_coverage`。`exempt` は被覆を問われない)も一緒に空にする。子は親が規則を満たすなら
-    ブロックの周りで規則を満たす(足した `addable` が m 立方に入らなければ、そのセルも空にする)。追加は射影しない。
+    `min_width_cells`(m)>1 のとき、どの操作も規則の下で閉じる(子は親が規則を満たすなら、ブロックの周りで規則を満たす)。
+    削除・置換は「射影つき」: ブロックを空にした(置換は `addable` を足した)後に m 立方の被覆を失うセル
+    (`min_width.lost_coverage`。`exempt` は被覆を問われない)も一緒に空にする(足した `addable` が m 立方に入らなければ、
+    そのセルも空にする)。追加は逆に膨らませる: 足したセルのうち m 立方に入らないものを、設計空間に収まる m 立方へ膨らませて
+    足す(`min_width.cover_additions`。足す量は最大 m³−1 セル増える)。
     """
     child = np.array(parent, dtype=bool, copy=True)
     if op == 'delete':
@@ -384,10 +386,13 @@ def _materialize(parent: np.ndarray, design_space: np.ndarray, op: str, region: 
         child[region] = addable
     else:
         raise ValueError(f'未知の操作 {op!r}')
-    if min_width_cells > 1 and op != 'add':
-        origin, lost = min_width.lost_coverage(parent, region, int(min_width_cells), exempt,
-                                               refill=addable if op == 'replace' else None)
-        child[tuple(slice(o, o + n) for o, n in zip(origin, lost.shape))][lost] = False
+    if min_width_cells > 1:
+        if op == 'add':
+            min_width.cover_additions(child, region, design_space, int(min_width_cells), exempt)
+        else:
+            origin, lost = min_width.lost_coverage(parent, region, int(min_width_cells), exempt,
+                                                   refill=addable if op == 'replace' else None)
+            child[tuple(slice(o, o + n) for o, n in zip(origin, lost.shape))][lost] = False
     return child
 
 
@@ -717,8 +722,9 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
     `min_width_cells`(m、既定1=制約なし)>1 のとき、設計空間をまず m 立方の opening で絞り、
     入口検査も絞った空間に対して行う(絞った結果で保持・拘束面が成り立たなければ、上の入口の状態で止まる)。
     **`conditions.keep_cells`(保持ソリッド由来のセル)は絞らずに残す** —— 規則の対象外だが材料には数える。
-    以後、削除・置換の子は被覆を失うセルも空にした形(`_materialize`)になり、追加は射影しないので、合格を返す候補は毎回FEMの前に
-    `_mask_satisfies_min_width` を通る。絞ったセル数は `diagnostics['min_width']['trimmed_cells']`
+    以後、削除・置換の子は被覆を失うセルも空にした形、追加の子は足したセルを m 立方へ膨らませた形(`_materialize`)になり、
+    合格を返す候補は毎回FEMの前に `_mask_satisfies_min_width` を通る(島の除去は規則を保つと限らないため)。
+    絞ったセル数は `diagnostics['min_width']['trimmed_cells']`
     (`find_best_feasible` が段階4まで進んだ結果では `diagnostics['initial']['min_width']`)。
     """
     design_space_mask = np.array(design_space_mask, dtype=bool, copy=True)
@@ -842,8 +848,9 @@ def _find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCond
             if survivor_key in visited_survivors:
                 continue
             visited_survivors.add(survivor_key)
-            # 射影(`peel`・`_materialize`)は入力が規則を満たすことが前提で、追加(`add`)は射影しないので、
-            # 合格を返す候補は毎回大域に検査する。FEMの結果に依らないので、FEMの前に落とす。違反は確定しているので、
+            # 射影(`peel`・`_materialize`)は入力が規則を満たすことが前提で、島の除去(`resolve_islands`)は規則を保つと限らない
+            # (mask に無い保持セルを挟んだ立方に頼るセルが、島と一緒に被覆を失う)ので、合格を返す候補は毎回大域に検査する。
+            # FEMの結果に依らないので、FEMの前に落とす。違反は確定しているので、
             # FEMが計算失敗(`unknown`)になりえた候補も親として積む(不合格の証拠にしない対象は FEM の結果だけ)。
             if min_width_cells > 1 and not _mask_satisfies_min_width(survivor, min_width_cells, exempt):
                 trial = _min_width_rejection_trial(history, survivor, candidate, parent, operation, conditions)
@@ -1032,8 +1039,8 @@ def _mask_satisfies_min_width(mask: np.ndarray, min_width_cells: int, exempt: Op
     """`mask` の全材料セル(`exempt` を除く)が m 立方の材料だけのブロックのどれかに属するか(大域判定)。
     `exempt` は `mask` にあるかどうかに関わらず材料に数える(`min_width.lost_coverage` と同じ扱い)。
 
-    段階3の射影(`_materialize`)は親が既に規則を満たす前提の差分計算で、追加は射影しないので、`find_initial_feasible` は
-    合格を返す候補ごとにこれで大域に確かめる。
+    段階3の子の作り方(`_materialize`)は親が既に規則を満たす前提の差分計算で、島の除去は規則を保つと限らないので、
+    `find_initial_feasible` は合格を返す候補ごとにこれで大域に確かめる。
     """
     if min_width_cells <= 1:
         return True
@@ -1061,8 +1068,9 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
     - 多様体: 抜いた後の、一口に接する頂点が全て正則(1セルは3×3×3 の窓、複数セルは `min_width.bite_verdict`)。
     - 連結: 一口に接する材料が窓の中で連結なら通す。そうでなければマスク全体を数え直し、条件節点を支える
       セルが全て同じ1成分にあるときだけ通して、他の成分(島)を一緒に消す。島は保持成分と辺・頂点でも
-      接しない(下記コメント)ので、両方を跨ぐ m 立方の材料だけのブロックは無く、島の除去は厚みの
-      不変条件を壊さない。
+      接しない(下記コメント)ので、`exempt` が無いか m=2 なら、両方を跨ぐ m 立方の材料だけのブロックは無く、島の除去は厚みの
+      不変条件を壊さない。`exempt` を材料に数える m≥3 では mask に無い保持セルを挟んで跨ぎうるので、島を消した形を
+      大域で確かめ、崩れる手は却下する(`skipped_connectivity`)。
     - 表面: x が空の6近傍(格子の外を含む)を持たなければ抜かない(内部に空洞を作らない。中空構造を許容しない製品制約)。
       一口の6連結成分もそれぞれ既存の空につながっていること。抜いた後の一口は既存の空の成分に属し、島として消える成分も隣接する空につながる。
       閉じた空洞の無い `mask` からは閉じた空洞の無い候補ができる(`acceptance.boundary_check` の `void_components` が落ちない根拠)。
@@ -1153,6 +1161,13 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
                 continue
             islands = (labels > 0) & (labels != keep)
             island_cells = int(islands.sum())
+            # m≥3 では、mask に無い保持セル(材料に数える)を挟んで島と保持成分が同じ m 立方に入りうる(2×2×2 の全セルは互いに
+            # 26近傍なので m=2 では起きない)。その立方に頼るセルは島を消すと被覆を失うので、消した形を大域で確かめて崩れる手は却下する。
+            if exempt is not None and min_width_cells > 2 and not _mask_satisfies_min_width(
+                    inner & ~islands, min_width_cells, exempt):
+                inner[cleared] = True
+                stats.skipped_connectivity += 1
+                continue
             # 島は条件節点に接するセルを持たないので、支え数はそのままでよい。島と保持成分は辺・頂点でも接しない
             # (接していれば、切り離した一口の頂点の正則判定で落ちている)ので、島を消しても頂点は正則のまま。
             inner[islands] = False
@@ -1420,8 +1435,8 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     `frontier_capacity` / `max_consecutive_adds` / `max_candidates` は段階3だけ、
     `step_exponent` / `max_step_ratio` / `single_cell_patience` / `warm_start` は段階4だけが使う(`step_ratio` / `_reduce_volume`)。
     `min_width_cells`(m、既定1=制約なし)は両段階が使う —— 段階3・段階4とも、削除で被覆を失うセルを同じ一手で一緒に抜く
-    (`_materialize`・`peel` docstring)ので、厚みを理由に削除の候補を捨てない(段階3の追加は射影せず、規則を破る追加は評価の前に
-    大域判定で落とす)。設計空間はまず m 立方の opening で絞る(縁に m 立方の入らない材料が残る設計空間から始めると、
+    (`_materialize`・`peel` docstring)ので、厚みを理由に削除の候補を捨てない(段階3の追加は、足したセルを m 立方へ
+    膨らませて足す)。設計空間はまず m 立方の opening で絞る(縁に m 立方の入らない材料が残る設計空間から始めると、
     違反セルの除去に評価を払う)。入口検査は絞った空間に対して行う。
     `conditions.keep_cells`(保持ソリッド由来のセル)は規則の対象外で、絞りからも外れる(材料としては数える)。
 

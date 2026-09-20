@@ -1456,7 +1456,7 @@ def _min_width_failure_note(search_result: Any, min_width: Optional[dict]) -> st
             return ""
         return (f"{head}: この検査は、設計空間から立方が入らない {trimmed}/{info['design_cells']} セルを除いた後の"
                 "空間に対して行った。最小幅を下げると通ることがある")
-    return (f"{head}: 初期合格を探す削除・置換は、抜いた後に幅を失うセルも一緒に抜いた形で評価され、追加は幅を破ると評価の前に捨てられる。"
+    return (f"{head}: 初期合格を探す削除・置換は、抜いた後に幅を失うセルも一緒に抜いた形で、追加は足したセルを最小幅の立方へ膨らませた形で評価される。"
             "予算を増やす前に、最小幅を下げて同じ題材が通るか確かめること")
 
 

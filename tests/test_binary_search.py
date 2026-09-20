@@ -632,6 +632,13 @@ def _opening_satisfied(mask: np.ndarray, m: int) -> bool:
     return not (mask & ~opened).any()
 
 
+def _rule_violations(mask: np.ndarray, m: int, exempt=None) -> np.ndarray:
+    """規則を破るセル(実装とは独立に scipy で数える)。`exempt` は被覆を問わず、`mask` に無くても材料に数える。"""
+    material = mask if exempt is None else mask | exempt
+    bad = mask & ~ndimage.binary_opening(material, structure=np.ones((m, m, m), dtype=bool))
+    return bad if exempt is None else bad & ~exempt
+
+
 def test_cube_opening_equals_scipy_binary_opening():
     """落ちたら、軸ごとに分けた opening が `binary_opening` とずれている(最小幅の全判定がこれを使う)。"""
     rng = np.random.default_rng(20260922)
@@ -827,7 +834,7 @@ def test_stage3_delete_of_a_single_cell_takes_the_layer_that_loses_its_cube_inst
 
 def test_stage3_block_delete_and_replace_children_equal_the_global_opening_of_the_raw_child():
     """落ちたら、段階3の射影(削除・置換で被覆を失うセルを一緒に空にする)が、全体を数え直した opening とずれている。
-    足した `addable` が m 立方に入らなければそのセルも空になる(置換)。追加は射影しない。"""
+    足した `addable` が m 立方に入らなければそのセルも空になる(置換)。追加は膨らませる(下の専用の検査)。"""
     rng = np.random.default_rng(20260921)
     checked = casualties = replace_casualties = addable_cleared = truncated = 0
     for _ in range(40):
@@ -838,11 +845,10 @@ def test_stage3_block_delete_and_replace_children_equal_the_global_opening_of_th
         design_space = np.ones(shape, bool)
         for size in bs.block_sizes(shape):
             for op, region, addable in bs.candidate_descriptors(mask, design_space, (size,)):
+                if op == 'add':
+                    continue
                 child = _stage3_child(mask, design_space, op, region, addable, m)
                 unprojected = bs._materialize(mask, design_space, op, region, addable)
-                if op == 'add':
-                    assert np.array_equal(child, unprojected)
-                    continue
                 assert np.array_equal(child, min_width.cube_opening(unprojected, m))
                 assert _opening_satisfied(child, m)
                 checked += 1
@@ -855,17 +861,97 @@ def test_stage3_block_delete_and_replace_children_equal_the_global_opening_of_th
     assert replace_casualties > 10 and addable_cleared > 3
 
 
-def test_stage3_add_is_not_projected_and_the_global_check_is_what_refuses_it():
-    """落ちたら、追加が射影されている。2セル厚の板の貫通穴に入れた1セルは m=2 の立方に入らないまま子に残り、大域判定が落とす。"""
+def _stage3_add(mask, design_space, cell, m=2, exempt=None):
+    """`cell`(1セルのブロック)への追加候補の子。候補が1つあることも確かめる。"""
+    region = tuple(slice(c, c + 1) for c in cell)
+    adds = [addable for op, r, addable in bs.candidate_descriptors(mask, design_space, (1,))
+            if op == 'add' and r == region]
+    assert len(adds) == 1
+    return _stage3_child(mask, design_space, 'add', region, adds[0], m, exempt)
+
+
+def _plate_with_a_through_hole():
+    """2セル厚の板(6x6x2)の中央に貫通穴(3,3,*)。穴の1セルだけを足すと、そのセルは m=2 の立方に入らない。"""
     plate = np.ones((6, 6, 2), bool)
     plate[3, 3, :] = False
-    design_space = np.ones_like(plate)
-    cell = (slice(3, 4), slice(3, 4), slice(0, 1))
-    adds = [addable for op, region, addable in bs.candidate_descriptors(plate, design_space, (1,))
-            if op == 'add' and region == cell]
-    assert len(adds) == 1
-    child = _stage3_child(plate, design_space, 'add', cell, adds[0])
-    assert child[3, 3, 0] and not child[3, 3, 1] and not bs._mask_satisfies_min_width(child, 2)
+    return plate, np.ones_like(plate)
+
+
+def test_stage3_add_fills_a_cube_around_the_added_cell_instead_of_leaving_it_thin():
+    """落ちたら、追加が閉じていない。2セル厚の板の貫通穴に1セルを足すと、そのセルだけが m=2 の立方に入らず残る(または足さずに消える)。
+    膨らませた子は穴の2セルを両方足す。"""
+    plate, design_space = _plate_with_a_through_hole()
+    child = _stage3_add(plate, design_space, (3, 3, 0))
+    assert child[3, 3, 0] and child[3, 3, 1] and int(child.sum() - plate.sum()) == 2
+    assert _opening_satisfied(child, 2)
+
+
+def test_stage3_add_next_to_a_bar_takes_the_cube_that_adds_the_fewest_cells_and_the_smallest_corner_on_a_tie():
+    """落ちたら、膨らませる立方の選び方が変わっている(足すセルが最少・同数なら最小の角が先)。2x2x4 の棒の脇の1セル (0,2,1) を覆う
+    立方は y=1..2 の側が3セルで済み、z=0..1 と z=1..2 が同数なので z=0..1 を選ぶ。"""
+    design_space = np.ones((2, 4, 4), bool)
+    bar = np.zeros_like(design_space)
+    bar[:, :2, :] = True
+    child = _stage3_add(bar, design_space, (0, 2, 1))
+    assert {tuple(int(x) for x in c) for c in np.argwhere(child & ~bar)} == {
+        (x, 2, z) for x in range(2) for z in range(2)}
+    assert _opening_satisfied(child, 2)
+
+
+def test_stage3_add_that_has_no_cube_inside_the_design_space_is_not_added():
+    """落ちたら、m 立方が設計空間に収まらないセルが足されて、規則を破る子ができる(設計空間を opening で絞ってあれば起きない入力)。"""
+    design_space = np.zeros((2, 4, 4), bool)
+    design_space[:, :2, :] = True
+    design_space[0, 2, 1] = True
+    bar = design_space.copy()
+    bar[0, 2, 1] = False
+    child = _stage3_add(bar, design_space, (0, 2, 1))
+    assert np.array_equal(child, bar)
+
+
+def test_stage3_add_counts_an_exempt_cell_missing_from_the_mask_as_material_and_never_asks_it_for_a_cube():
+    """落ちたら、追加の膨らませ方が保持セルの扱いとずれている。保持セルが mask に無くても材料に数えるので、穴の相方が保持セルなら足すのは1セルだけ。
+    足すセル自身が保持セルなら、立方に入らなくてもそのまま足す。"""
+    plate, design_space = _plate_with_a_through_hole()
+    partner = np.zeros_like(plate)
+    partner[3, 3, 1] = True
+    child = _stage3_add(plate, design_space, (3, 3, 0), exempt=partner)
+    assert child[3, 3, 0] and not child[3, 3, 1] and int(child.sum() - plate.sum()) == 1
+    assert bs._mask_satisfies_min_width(child, 2, partner)
+    added = np.zeros_like(plate)
+    added[3, 3, 0] = True
+    child = _stage3_add(plate, design_space, (3, 3, 0), exempt=added)
+    assert child[3, 3, 0] and not child[3, 3, 1] and bs._mask_satisfies_min_width(child, 2, added)
+
+
+def test_stage3_add_children_are_closed_under_the_rule():
+    """落ちたら、追加の子が規則を破る。規則を満たす親の全ブロックの追加候補で、子は規則(`exempt` を材料に数える)を満たし、
+    親のセルも足したセルも消えていない(設計空間を絞ってあるので、足せないセルは無い)。"""
+    rng = np.random.default_rng(20260922)
+    checked = inflated = 0
+    for _ in range(30):
+        m = int(rng.integers(2, 5))
+        shape = tuple(int(x) for x in rng.integers(m + 3, m + 8, size=3))
+        raw = rng.random(shape) < rng.uniform(0.55, 0.9)
+        exempt = (rng.random(shape) < rng.uniform(0.0, 0.25)) & raw if rng.random() < 0.6 else None
+        design = min_width.cube_opening(raw, m)
+        if exempt is not None:
+            design = design | (raw & exempt)
+        picked = design & (rng.random(shape) < rng.uniform(0.3, 0.8))
+        mask = min_width.cube_opening(picked, m)
+        if exempt is not None:
+            mask = mask | (picked & exempt)
+        assert not _rule_violations(mask, m, exempt).any()
+        for op, region, addable in bs.candidate_descriptors(mask, design, (1, 2, 4)):
+            if op != 'add':
+                continue
+            child = _stage3_child(mask, design, 'add', region, addable, m, exempt)
+            raw_child = bs._materialize(mask, design, 'add', region, addable)
+            assert not _rule_violations(child, m, exempt).any()
+            assert (raw_child <= child).all() and (child <= design).all()
+            checked += 1
+            inflated += int(child.sum() > raw_child.sum())
+    assert checked > 300 and inflated > 100  # 膨らませた追加が実際に出ている
 
 
 def test_stage3_exempt_cells_are_never_taken_along_and_still_count_as_material():
@@ -1167,7 +1253,7 @@ def test_an_exempt_cell_is_never_taken_as_a_casualty_and_the_invariants_hold_nex
             assert len(removed) == stats.picked + stats.casualties
             assert {int(c) for c in np.flatnonzero(exempt.ravel())} & removed <= set(stats.picked_cells.tolist())
             _assert_min_width_invariants(after, m, exempt)
-            assert not (after & ~exempt & ~ndimage.binary_opening(after | exempt, structure=np.ones((m,) * 3, bool))).any()
+            assert not _rule_violations(after, m, exempt).any()
             moves += stats.picked
             bites += stats.casualties > 0
             uncovered_exempt += int((exempt & after & ~min_width.cube_opening(after, m)).sum())
@@ -1197,6 +1283,24 @@ def test_an_exempt_cell_missing_from_the_mask_still_counts_as_material_for_the_o
     keep[0, 0, 0] = True
     assert bs._mask_satisfies_min_width(block, 2, keep)
     assert not bs._mask_satisfies_min_width(block, 2)
+
+
+def test_peel_refuses_an_island_removal_that_takes_the_cube_a_missing_kept_cell_bridged():
+    """落ちたら、島の除去が規則を壊す手を通している。m=3 で、主成分の層(x=2)と島になる層(x=4)は、mask に無い保持セルの層(x=3)を
+    挟んで1つの 3x3x3 の立方に入る。保持セルの通路(mask にある)の途中を抜くと層(x=4)が島になるが、消すと x=2 の層が被覆を失う。"""
+    shape = (7, 4, 3)
+    mask = np.zeros(shape, bool)
+    mask[2, :3, :3] = mask[4, :3, :3] = True
+    exempt = np.zeros(shape, bool)
+    exempt[3, :3, :3] = True
+    for x in (2, 3, 4):
+        mask[x, 3, 0] = exempt[x, 3, 0] = True
+    assert bs._mask_satisfies_min_width(mask, 3, exempt)
+    node_shape = tuple(n + 1 for n in shape)
+    anchors = np.array([np.ravel_multi_index((2, 0, 0), node_shape)], dtype=np.int64)
+    order = np.array([np.ravel_multi_index((3, 3, 0), shape)])
+    after, stats = bs.peel(mask, order, 1, anchors, min_width_cells=3, exempt=exempt)
+    assert np.array_equal(after, mask) and (stats.picked, stats.islands, stats.skipped_connectivity) == (0, 0, 1)
 
 
 def test_peeling_an_exempt_cell_takes_no_coverage_from_the_cells_around_it():
@@ -1254,7 +1358,8 @@ def test_with_min_width_one_keep_cells_change_neither_the_result_nor_the_cost(mo
         raise AssertionError('m=1 で最小幅の判定を呼んだ')
 
     for owner, name in ((min_width, 'cube_opening'), (min_width, 'lost_coverage'), (min_width, 'casualties'),
-                        (min_width, 'bite_verdict'), (bs, '_mask_satisfies_min_width')):
+                        (min_width, 'bite_verdict'), (min_width, 'cover_additions'),
+                        (bs, '_mask_satisfies_min_width')):
         monkeypatch.setattr(owner, name, forbidden)
     marked = dataclasses.replace(conditions, keep_cells=np.ones((8, 3, 3), bool))
     with_keep = bs.find_best_feasible(design, marked, max_evaluations=200, min_width_cells=1)

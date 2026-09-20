@@ -1,7 +1,7 @@
 """最小幅の規則(全材料セルが m×m×m の材料だけのブロックに属する)の局所計算。
 
 `binary_search` の共有状態には触らない部品: m 立方の opening、セルを空にしたとき被覆を失うセル(巻き添え)、
-複数セルの一口を抜いてよいかの幾何判定。判定と巻き添えは同じ窓の opening から出す(食い違わないように)。
+追加したセルを m 立方へ膨らませる操作、複数セルの一口を抜いてよいかの幾何判定。判定と巻き添えは同じ窓の opening から出す(食い違わないように)。
 """
 from __future__ import annotations
 
@@ -66,6 +66,61 @@ def casualties(mask: np.ndarray, cell: tuple, m: int, exempt: Optional[np.ndarra
     region = tuple(slice(int(c), int(c) + 1) for c in cell)
     origin, lost = lost_coverage(mask, region, m, exempt)
     return np.argwhere(lost) + np.asarray(origin)
+
+
+def _box_sums(values: np.ndarray, m: int) -> np.ndarray:
+    """`values` の、各位置を最小の角とする m 立方の総和。配列に収まる位置だけ(形は各軸 n−m+1)。"""
+    total = np.pad(values.astype(np.int32), ((1, 0),) * 3).cumsum(0).cumsum(1).cumsum(2)
+    return (total[m:, m:, m:] - total[:-m, m:, m:] - total[m:, :-m, m:] - total[m:, m:, :-m]
+            + total[:-m, :-m, m:] + total[:-m, m:, :-m] + total[m:, :-m, :-m] - total[:-m, :-m, :-m])
+
+
+def cover_additions(child: np.ndarray, region: tuple, design: np.ndarray, m: int,
+                    exempt: Optional[np.ndarray] = None) -> None:
+    """`child`(親に `region` の追加を足した形)を、`region` の中の材料セルが m 立方に入る形へ**その場で**直す。
+    段階3の追加を、規則の下で閉じた操作にする(親が規則を満たせば子も満たす)。
+
+    `region` の中の材料セル(`exempt` を除く)で m 立方に入らないものごとに、`design`(と既存の材料)に収まる m 立方のうち、
+    足すセルが最も少ないもの(同数なら最小の角が辞書順で先)を足して覆う。`exempt` は `child` に無くても材料に数えるので足さない。
+    m 立方が収まらないセルは足さずに取り除く(設計空間を m 立方の opening で絞ってあれば起きない)。
+    影響は `region` から距離 m-1 以内なので、その窓だけで判定する。`child` が `region` の外で規則を満たす(`exempt` を除く)ことが前提。
+    """
+    reach = m - 1
+    lo = tuple(max(int(s.start) - reach, 0) for s in region)
+    hi = tuple(min(int(s.stop) + reach, n) for s, n in zip(region, child.shape))
+    window = tuple(slice(l, h) for l, h in zip(lo, hi))
+    cells = child[window]  # child の view: 書き込みは child に届く
+    fixed = None if exempt is None else np.asarray(exempt, dtype=bool)[window]
+    material = cells.copy() if fixed is None else cells | fixed
+    block = tuple(slice(int(s.start) - l, int(s.stop) - l) for s, l in zip(region, lo))
+    needy = cells[block] & ~cube_opening(material, m)[block]
+    if fixed is not None:
+        needy &= ~fixed[block]
+    if not needy.any():
+        return
+    volume = m ** 3
+    have = _box_sums(material, m)
+    fits = _box_sums(np.asarray(design, dtype=bool)[window] | material, m) == volume
+    limit = np.array(cells.shape) - m
+    for cell in np.argwhere(needy) + np.array([s.start for s in block]):
+        first, last = np.maximum(cell - reach, 0), np.minimum(cell, limit)  # このセルを含む m 立方の最小の角の範囲
+        if (last >= first).all():
+            span = tuple(slice(a, b + 1) for a, b in zip(first, last))
+            if (have[span] == volume).any():  # 先に足した立方が覆った
+                continue
+            cost = np.where(fits[span], volume - have[span], volume + 1)
+            pick = np.unravel_index(int(cost.argmin()), cost.shape)
+            if cost[pick] <= volume:
+                corner = first + np.array(pick)
+                cube = tuple(slice(a, a + m) for a in corner)
+                cells[cube] |= ~material[cube]
+                material[cube] = True
+                near_first, near_last = np.maximum(corner - reach, 0), np.minimum(corner + reach, limit)
+                have[tuple(slice(a, b + 1) for a, b in zip(near_first, near_last))] = _box_sums(
+                    material[tuple(slice(a, b + m) for a, b in zip(near_first, near_last))], m)
+                continue
+        cells[tuple(cell)] = False  # 収まる m 立方が無いセルは足さない
+        material[tuple(cell)] = False
 
 
 def bite_verdict(padded: np.ndarray, bite: np.ndarray,
