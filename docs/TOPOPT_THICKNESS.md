@@ -1899,8 +1899,8 @@ O5 の荷重の配り直しの比較は、細分に `--load-rule` を足した�
 
 `chain` は 題材 S1〜S3 × 目標 2.0・4.2 の探索(予算 60。60 で止まり安全率が目標の 1.1 倍以上なら `-b120` の名で予算 120 を回し直す)とその採用マスクの細分(k=1〜4)を直列に回し、結果があるジョブは飛ばす。
 1本ずつの実行は `search --subject S1 --cells 2 --target 4.2 --budget 60 --out-dir <出力先>` と `refine --subject S1 --npz <出力先>\S1-m2-t4.2.npz --k 1 2 3 4 --result <出力先>\S1-m2-t4.2-refine.json`。
-**O5 の追加は `chain` に入っていない**。予算 240 は `search --subject S3 --cells 2 --target 4.2 --budget 240 --tag S3-m2-t4.2-b240 --out-dir <出力先>`(ほか `--subject S1 --cells 3` と `--subject S3 --cells 3`。どちらも `--target 4.2`)と、その `.npz` に対する `refine ... --k 1 2 3 4`。
+**O5 の追加は `chain` に入っていない**。予算 240 は `search --subject S3 --cells 2 --target 4.2 --budget 240 --tag S3-m2-t4.2-b240 --out-dir <出力先>`(ほか `--subject S1 --cells 3` と `--subject S3 --cells 3`。どちらも `--target 4.2`)と、その `.npz` に対する `refine --subject <題材> --npz <出力先>\<タグ>.npz --k 1 2 3 4 --result <出力先>\<タグ>-refine.json`(タグは `S3-m2-t4.2-b240` など)。
 配り直しの比較は、6形(O5 の表)の予算 120 または 60 の形の `.npz` に対して `refine --subject <題材> --npz <出力先>\<タグ>.npz --k 2 3 4 --load-rule nearest --result <出力先>\<タグ>-nearest-refine.json`。
-**コードは `737f9de`(m=3 の残りと予算 240 は `e98c431`)**(`duocad/` の製品コードは節N と同じ `fb7d0fb` の内容)で走らせた。O1〜O4 と予算 240 は、測定スクリプトが `737f9de` 以降のどの版でも(`chain` の再走の閾値を除き)同じ出力になる。O5 の `--load-rule nearest` は `610ec17` 以降が要る(最新は `c64ff7f`)。細分は要素数が 10 万以上の k の前に空き物理メモリ 10GB 以上を確かめる(足りなければ 10 分おきに最大 3 回)。
+**コードは `737f9de`(m=3 の残りと予算 240 は `e98c431`)**(`duocad/` の製品コードは節N と同じ `fb7d0fb` の内容)で走らせた。O1〜O4 と予算 240 は、測定スクリプトが `737f9de` 以降のどの版でも(`chain` の再走の閾値を除き)同じ出力になる。O5 の `--load-rule nearest` は `610ec17` 以降が要る(最新は `topopt_checks` の最後のコミット。`git log -1 -- topopt_checks/measure_inner_target_synthetic.py`)。細分は要素数が 10 万以上の k の前に空き物理メモリ 10GB 以上を確かめる(足りなければ 10 分おきに最大 3 回)。
 結果 JSON・採用マスク・STL・実行記録(`chain.log`)・表の生成スクリプトは `output/min_width/inner-target-synthetic-20260921/`(git 管理外): `<題材>-m<m>-t<目標>` の `.json`・`.npz`・`-refine.json`・`-voxel.stl`・`.stdout.log`、
 `summarize.py`(1本ずつの数字)・`gen_tables.py`(この節の表)。
