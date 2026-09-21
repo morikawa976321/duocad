@@ -49,7 +49,7 @@ def main(argv=None):
     parser.add_argument('--allowable-mpa', type=float)
     parser.add_argument('--youngs-modulus-mpa', type=float)
     parser.add_argument('--percentile', type=float)
-    parser.add_argument('--solver', choices=('cg', 'direct', 'mg'), default='cg')
+    parser.add_argument('--solver', choices=('cg', 'direct'), default='cg')
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args(argv)
     try:

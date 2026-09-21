@@ -69,7 +69,7 @@ python topopt_checks/check_pre_smoothing.py --fields fields.npz --document model
 
 `rho_before` は保持・除外の塗り直し後、島除去前の場。両配列は同じ格子上の有限な0〜1の密度。
 `--level`、`--allowable-mpa`、`--youngs-modulus-mpa`、`--percentile` で明示指定もできる。
-`--solver` は `cg`（既定）、`direct`、`mg`。CLIは条件文書から同じ格子上のアンカーを作る。
+`--solver` は `cg`（既定）と `direct`。CLIは条件文書から同じ格子上のアンカーを作る。
 Pythonから密度場(NPZ相当)を渡すなら `duocad.topopt.acceptance.inspect_document` が入口
 (密度→boolの閾値変換と密度積算量の付記をここに閉じる)。既にboolマスクとアンカー表がある
 場合だけ `duocad.topopt.acceptance.inspect` へ直接渡せる(密度・`level`は受け取らない)。

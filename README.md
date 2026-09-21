@@ -196,7 +196,7 @@ cd web; npm run dev                                 # 画面(5173)
 報告して先へ進む)。**強制力は、タスクに書く「受入検査がすべて緑」の一文と runner が担う。**
 
 ```powershell
-# 二値FEM（要素剛性・節点番号・行列組立・CG/direct/MG・残差検算)の移設前一致
+# 二値FEM（要素剛性・節点番号・行列組立・CG/direct・残差検算)の移設前一致
 & .\.venv\Scripts\python.exe topopt_checks\check_fem.py
 
 # メッシュ化側の正しさ（合成密度場。SIMPは回さない）
@@ -216,9 +216,6 @@ cd web; npm run dev                                 # 画面(5173)
 
 # von Mises応力・実単位換算・代表応力・最小安全率
 & .\.venv\Scripts\python.exe topopt_checks\check_stress.py
-
-# 幾何マルチグリッド前処理
-& .\.venv\Scripts\python.exe topopt_checks\check_multigrid.py
 
 # CPU並列化
 & .\.venv\Scripts\python.exe topopt_checks\check_parallel.py

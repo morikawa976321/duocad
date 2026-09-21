@@ -19,6 +19,9 @@ Regula Falsi/Illiniosの提案式・改善案B0〜B7は、いずれも材料量�
 
 ## 1回のFEM評価(assemble + multigrid CG)の内訳
 
+**この節は `solver="mg"` での内訳(SIMP 時代の実測)。mg は 2026-09-21 に削除し、探索は cg で解く**
+(`mg_setup` の段は今は無い。cg での反復数・秒・メモリは下「探索が解く形での cg と mg」)。
+
 探索は候補ごとに1回、固定した格子上でFEM(`fem.py`)を解く。組立・
 multigrid setup・CG/V-cycleの内訳は、SIMP時代に測った下記の実測が**アーキテクチャとして
 今も同じ**(fem.pyの組立・CG・multigridの実装自体は段階6でも変えていない)。
@@ -630,9 +633,11 @@ r0 ≥ 1 の割合は kcurve 41.0%・実探索 82.2%。
 
 ---
 
-## 探索が解く形での cg と mg(2026-09-21、`topopt_checks/measure_mg_vs_cg.py`)
+## 探索が解く形での cg と mg(2026-09-21)
 
-**経緯**: `fem.Model.solve` の既定は `solver="mg"`(2026-09-04 に SIMP の設計反復のために入れた。根拠は
+**この測定を受けて、mg は 2026-09-21 に削除した(本人判断。解法は cg に固定)。** 以下は削除前の記録。
+
+**経緯**: 測定時点の `fem.Model.solve` の既定は `solver="mg"`(2026-09-04 に SIMP の設計反復のために入れた。根拠は
 docs/TOPOPT.md「幾何マルチグリッド前処理」)だが、**探索(`acceptance.inspect`)は `solver='cg'` で解いている**。
 `stress.solve_displacement` が後処理用に `cg` を既定にしていて(2026-09-04)、二値探索(2026-09-17)がその経路の上に
 作られたためで、探索で cg と mg を比べて cg を選んだ記録は無かった。ここで初めて並べた。
@@ -688,14 +693,14 @@ n 層膨らませたもの2つ、採用マスクそのもの。採用マスク�
 
 **測っていないもの**: 探索1本を mg で通したときの合計の秒と採用形状。2.0mm。hanger 以外の題材。並走の無い状態での秒。
 
-再現: `.\.venv\Scripts\python.exe topopt_checks\measure_mg_vs_cg.py --spacing 2.4 --mask-npz <採用マスク.npz> --dilate 6 2 0 --isolate --result <json>`
+再現(**mg のあるコミット `7762007` をチェックアウトして行う。** スクリプトも mg と一緒に削除した): `.\.venv\Scripts\python.exe topopt_checks\measure_mg_vs_cg.py --spacing 2.4 --mask-npz <採用マスク.npz> --dilate 6 2 0 --isolate --result <json>`
 (4.8mm は `--spacing 4.8 --dilate 3 1 0`。解の一致は `--isolate` を外して `--repeat 1`)。2.4mm は約20分、空きメモリ 10GB 未満なら測らずに終わる。
 
 ## 関連コード索引
 
 | ファイル | 内容 |
 |---|---|
-| `duocad/topopt/fem.py` | `Model.solve`・`collect_solve_stats`・組立・`mg_setup`・CG/V-cycle |
+| `duocad/topopt/fem.py` | `Model.solve`・`collect_solve_stats`・組立・CG |
 | `duocad/topopt/binary_search.py` | `find_initial_feasible`・`find_best_feasible`・候補生成 |
 | `duocad/optimize_run.py` | `run()`・`MAX_ELEMENTS` |
 | `duocad/topopt/acceptance.py` | `RegionOverlaps`(保持・除外の前計算)・`region_check(overlaps=)` |
@@ -704,6 +709,5 @@ n 層膨らませたもの2つ、採用マスクそのもの。採用マスク�
 | `topopt_checks/measure_warm_start_kcurve.py` | 削るセル数 k(1〜40)ごとの反復数の比(warm / cold)。親の大きさ・k=1 の連鎖も見る |
 | `topopt_checks/measure_warm_start_residual.py` | 実探索(cold)の段階4の評価ごとの初期残差 r0・副測定の warm の反復数。`--analyze` で分布と「r0 < θ のときだけ warm」の削減率の表を出す |
 | `topopt_checks/probe_warm_start_depletion.py` | 1セル削りの連鎖で、warm の比が除去セルのエネルギー(低エネルギーのセルの在庫)とともに上がることを測る |
-| `topopt_checks/measure_mg_vs_cg.py` | 探索が解く形で cg と mg の反復数・秒・メモリ・解の一致を並べる |
 | `topopt_checks/measure_warm_start_search.py` | `warm_start` の有無で探索を1回ずつ回し、反復数・秒・採用形状の一致を並べる |
 | `topopt_checks/measure_region_overlaps.py` | 前計算の秒・メモリと、旧経路との合否・体積の比較 |

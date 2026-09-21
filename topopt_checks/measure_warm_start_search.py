@@ -199,7 +199,6 @@ def run(mode: str, budget: int, mask_npz: Path | None = None, *, label: str | No
                solves=int(stats["solves"]), cg_iterations_total=int(stats["cg_iterations"]),
                cg_iterations_each=[int(n) for n in stats["cg_iterations_each"]],
                cg_fallbacks=int(stats["fallbacks"]), solve_seconds=float(stats["solve_seconds"]),
-               mg_setup_seconds=float(stats["mg_setup_seconds"]),
                assemble_seconds=float(stats["assemble_seconds"]), slice_seconds=float(stats["slice_seconds"]),
                solve_log=solve_log, load=sampler.summary())
     best = result.best_feasible

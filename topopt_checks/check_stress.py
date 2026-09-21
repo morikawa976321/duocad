@@ -501,8 +501,8 @@ def check_representative_rule() -> None:
 def _mixed_density_field(dims: tuple[int, int, int]) -> np.ndarray:
     """中間密度(灰色)を含む密度場を合成する(SIMPは回さない)。
 
-    ランダムな二値の種をガウスぼかしして、境界に灰色の勾配帯が残る密度場を作る
-    (`check_multigrid.py` の `_rho_after` と同じ手法)。[4b] が見たいのは「中間密度の
+    ランダムな二値の種をガウスぼかしして、境界に灰色の勾配帯が残る密度場を作る。
+    [4b] が見たいのは「中間密度の
     要素が離散化ノイズで素の max を支配する」ことなので、SIMPで実際に収束させる必要はない
     —— 灰色帯を持つ密度場でありさえすればよい。
     """
@@ -518,7 +518,7 @@ def check_representative_on_mixed_density_field() -> None:
     t0 = time.perf_counter()
     model = build_cantilever(*STRESS_MIXED_DENSITY_GRID)
     rho = _mixed_density_field(STRESS_MIXED_DENSITY_GRID)
-    u = model.solve(rho, 3.0, solver="mg")
+    u = model.solve(rho, 3.0)
     print(f"    解いた: {time.perf_counter() - t0:.1f}秒")
     scale = stress.UnitScale.for_model(
         model, element_mm=ELEMENT_MM, load_n=LOAD_N, youngs_modulus_mpa=E_MPA

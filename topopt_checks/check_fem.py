@@ -58,6 +58,9 @@ D01_REF = _C1 * NU_REF  # ポアソン結合項。二軸ひずみでしか姿を
 
 # 移設前の `simp.py`(このタスクの着手基準コミット)で採った基準値。
 # 採取に使った題材の定義は `_make_case` / `_run_case` と1対1。
+# **`beam_void_interior_cg` と `beam_multi_void_cg_threads` の2つは 2026-09-21 に採り直した値**
+# (もとは `solver="mg"` で解いた題材。mg の削除に合わせて cg で解き直した。コンプライアンスは
+# もとの値と 1e-13 台で一致する)。
 BASELINE = {
     "rod_solid_cg": {
         "grid": (16, 4, 4),
@@ -75,19 +78,19 @@ BASELINE = {
         "free_dofs": 1200,
         "fixed_dofs": 75,
     },
-    "beam_void_interior_mg": {
+    "beam_void_interior_cg": {
         "grid": (16, 6, 6),
         "void_blocks": [(6, 10, 2, 4, 2, 4)],
-        "solver": "mg",
+        "solver": "cg",
         "threads": 1,
         "void_cells": 16,
-        "u_sha": "f98711698742fa041b0280f1688018a3d94ad6b66a5d9a80ca8f3ac64f1c3971",
-        "compliance": 16.862912993949756,
-        "cg_iterations": 16,
-        "reaction_sha": "616d1acfd2050c126274ac53ced302708d640e81e0cb9ac8da10f9409d04df55",
-        "von_mises_sha": "95ea62b8baa34f1c19e695db38845ebc50fb8849938c04edf1cfaa10bd45396d",
-        "representative_mpa": 2.5222538558242835,
-        "raw_max_mpa": 2.52477154353815,
+        "u_sha": "60cdacef940645a4ec9cfab41283bfcba6efe969897f3c828b102c8c20611b4e",
+        "compliance": 16.86291299395033,
+        "cg_iterations": 127,
+        "reaction_sha": "a8ae4119ca6058693fb8bad9861b185cfc5bd138afa7439a1d99e35231e7fe59",
+        "von_mises_sha": "804cfb4543d3f9712efb37702930f4fd540998c4718ace56bbc5928f445e4fe3",
+        "representative_mpa": 2.5222538558620244,
+        "raw_max_mpa": 2.524771543521795,
         "free_dofs": 2343,
         "fixed_dofs": 156,
     },
@@ -107,19 +110,19 @@ BASELINE = {
         "free_dofs": 1638,
         "fixed_dofs": 273,
     },
-    "beam_multi_void_mg_threads": {
+    "beam_multi_void_cg_threads": {
         "grid": (20, 8, 8),
         "void_blocks": [(2, 5, 1, 3, 1, 3), (12, 16, 4, 7, 4, 7)],
-        "solver": "mg",
+        "solver": "cg",
         "threads": 4,
         "void_cells": 48,
-        "u_sha": "3df15e5e41e9fc7b81a0294df7be3e4948ea726552b46c8aad635964e201db88",
-        "compliance": 12.242055466859082,
-        "cg_iterations": 23,
-        "reaction_sha": "2550c17608f0448a100937e89a6a5d511b11d817e0402e071bc199d42a75e4f0",
-        "von_mises_sha": "d8a8333256d611e39a233821a93e4da63d9d2e0b23826978584aa650748faa5e",
-        "representative_mpa": 3.4552324738385196,
-        "raw_max_mpa": 4.243306641488558,
+        "u_sha": "8935e887403de950224b0ca5fe1b370fcd74b0c67b8e969dd1f0225b3ee47201",
+        "compliance": 12.242055466859828,
+        "cg_iterations": 271,
+        "reaction_sha": "1e6cdf2ea14eee547cda2eb330f796d2a959ee15b32395bce61bd52c454819da",
+        "von_mises_sha": "32e9f3314678ac96bf159999107e0e109be2b5f084f5b6d1ea9446dbae5ebcc0",
+        "representative_mpa": 3.455232473824888,
+        "raw_max_mpa": 4.243306641522755,
         "free_dofs": 4818,
         "fixed_dofs": 285,
     },
@@ -462,7 +465,7 @@ def check_reactions_and_multi_rhs() -> None:
         f"max|差| = {float(np.abs(many[0] - u).max()):.3e}",
     )
 
-    # (c) 多重右辺は前処理を1回だけ作って解く。答えは個別に解いたのと一致する
+    # (c) 多重右辺は K の組み立てを1回だけして解く。答えは個別に解いたのと一致する
     extra = rng.standard_normal(model.ndof)
     extra[model.fixed] = 0.0
     pair = model.solve_many(rho, 3.0, np.stack([model.f, extra]), cg_rtol=1e-12)
@@ -476,9 +479,9 @@ def check_reactions_and_multi_rhs() -> None:
         f"相対 {rel:.3e}",
     )
     check(
-        "多重右辺でも多重格子の setup は1回だけ",
-        stats["solves"] == 2 and stats["mg_setup_seconds"] > 0.0,
-        f"solve {stats['solves']} 本 / setup {stats['mg_setup_seconds']:.3f}秒",
+        "多重右辺は solve 2本として数えられる",
+        stats["solves"] == 2,
+        f"solve {stats['solves']} 本",
     )
 
     # (d) 全体の釣り合い。反力の総和は荷重の合力の符号を反転したもの
