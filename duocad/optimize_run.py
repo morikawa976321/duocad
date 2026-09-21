@@ -122,7 +122,7 @@ class OptimizeOptions:
     #: 目標安全率。許容応力は固定(`allowable_stress()`)なので、利用者が動かすのはこちら。
     target_safety_factor: float = DEFAULT_TARGET_SAFETY_FACTOR
     #: 探索に渡す目標 = `target_safety_factor` × これ(`SEARCH_TARGET_FACTOR`)。利用者の入力ではなく、
-    #: UI・WebSocket には出さない。1.0 はテストと測定が「係数なし」に固定する口。1.0 未満・非有限は断る。
+    #: UI・WebSocket の入力には出さない。1.0 はテストと測定が「係数なし」に固定する口。1.0 未満・非有限は断る。
     search_target_factor: float = SEARCH_TARGET_FACTOR
     #: 要素サイズ[mm]。省くと上限側(既定)。
     element_size_mm: Optional[float] = None
