@@ -1393,6 +1393,13 @@ def test_a_search_target_factor_below_1_or_not_finite_is_refused_at_the_entrance
         optimize_run._build_search_conditions(session.document, space, bundle, options)
 
 
+def test_a_search_target_that_overflows_is_refused_at_the_entrance(session: Session) -> None:
+    """落ちたら、有限の係数でも 目標 × 係数 が inf になる入力が探索まで通る。"""
+    _setup_four_conditions(session)
+    with pytest.raises(optimize_run.OptimizeInputError, match="有限の数にならない"):
+        optimize_run.run(session.document, optimize_run.OptimizeOptions(search_target_factor=1e308))
+
+
 def test_the_result_reports_the_real_target_the_search_target_and_the_factor(session: Session, monkeypatch) -> None:
     """落ちたら、結果の `target_safety_factor` が探索時の目標に化ける(利用者の目標が画面と報告から消える)、
     または探索時の目標と係数が報告に出ない。探索が受け取る目標は 実際の目標 × 係数。"""

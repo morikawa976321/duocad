@@ -1432,7 +1432,10 @@ def _search_target_safety_factor(opts: OptimizeOptions) -> float:
     if not (math.isfinite(factor) and factor >= 1.0):
         raise OptimizeInputError(
             f"search_target_factor は 1.0 以上の有限の数でなければならない(渡された値: {opts.search_target_factor!r})")
-    return float(opts.target_safety_factor) * factor
+    target, searched = float(opts.target_safety_factor), float(opts.target_safety_factor) * factor
+    if math.isfinite(target) and not math.isfinite(searched):
+        raise OptimizeInputError(f"目標安全率 {target:.4g} × search_target_factor {factor:.4g} が有限の数にならない")
+    return searched
 
 
 def _search_target_warning(min_width: dict, factor: float) -> str:
