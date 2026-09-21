@@ -1669,7 +1669,7 @@ m=3 については試作と製品の一致を確かめていない。
 .\.venv\Scripts\python.exe topopt_checks\refine_adopted_mask.py --mask-npz t30.npz --k 1 2 3 --result t30-refine.json
 ```
 
-目標 4.2 は `--target 4.2`(`t42`)、m=3 は `--cells 3 --target 4.2`(`t42-m3`)、4.8mm は `--element-size 4.8 --cells 2 --target 2.0|4.2` と細分 `--k 1 2 3 4`(`e48-t20`・`e48-t42`)。
+目標 4.2 は `--target 4.2`(`t42`)、m=3 は `--cells 3 --target 4.2`(`t42-m3`)、4.8mm は `--element-size 4.8 --cells 2 --target 2.0`(`e48-t20`)と `--target 4.2`(`e48-t42`)、細分は `--k 1 2 3 4`。
 `--target`・`--element-size` は既定(2.0・2.4)のままなら出力が変わらない(`--budget 1` の探索で、足す前後の結果 JSON が所要時間の項を除いて一致することを確かめた)。
 **コードは `fb7d0fb`(`duocad/` は `11a5512` と同じ)で走らせる。** 1本ずつ直列に、起動前に空き物理メモリ 10GB 以上を確かめる。
 所要: 2.4mm の探索が 1,890〜2,000 秒、細分は k=2 が 180〜210 秒・k=3 が 720〜860 秒(m=3・目標 4.2 の k=3 は 189,891 要素で 721 秒)。4.8mm は探索 185〜220 秒・細分 k=4 まで 250〜290 秒。
