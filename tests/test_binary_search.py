@@ -899,7 +899,7 @@ def test_an_exempt_cell_that_loses_its_cube_stays_while_the_others_of_its_layers
 
 
 def test_an_exempt_cell_missing_from_the_mask_still_counts_as_material_for_the_others():
-    """落ちたら、探索で削られて `mask` に無い保持セルが材料に数えられていない(最終形状では保持の実形状が戻るのに、その幅が判定に入らない)。"""
+    """落ちたら、`mask` に無い `exempt` セルが材料に数えられていない(判定関数の単独の契約。`keep_cells` を与えた探索では保持セルは常に `mask` にある)。"""
     block = np.ones((2, 2, 2), bool)
     block[0, 0, 0] = False
     keep = np.zeros_like(block)
@@ -909,8 +909,8 @@ def test_an_exempt_cell_missing_from_the_mask_still_counts_as_material_for_the_o
 
 
 def test_peel_refuses_an_island_removal_that_takes_the_cube_a_missing_kept_cell_bridged():
-    """落ちたら、島の除去が規則を壊す手を通している。m=3 で、主成分の層(x=2)と島になる層(x=4)は、mask に無い保持セルの層(x=3)を
-    挟んで1つの 3x3x3 の立方に入る。保持セルの通路(mask にある)の途中を抜くと層(x=4)が島になるが、消すと x=2 の層が被覆を失う。"""
+    """落ちたら、島の除去が規則を壊す手を通している。m=3 で、主成分の層(x=2)と島になる層(x=4)は、mask に無い `exempt` の層(x=3)を
+    挟んで1つの 3x3x3 の立方に入る。`exempt` の通路(mask にある)の途中を抜くと層(x=4)が島になるが、消すと x=2 の層が被覆を失う。"""
     shape = (7, 4, 3)
     mask = np.zeros(shape, bool)
     mask[2, :3, :3] = mask[4, :3, :3] = True
@@ -927,8 +927,8 @@ def test_peel_refuses_an_island_removal_that_takes_the_cube_a_missing_kept_cell_
 
 
 def test_peeling_an_exempt_cell_takes_no_coverage_from_the_cells_around_it():
-    """落ちたら、抜いた保持セルが材料でなくなって巻き添えを出している。2x2x4 の棒の (0,0,1) は普通は z=0・z=1 の層の被覆を奪うが、
-    保持セルなら1セルだけが抜け、残りは(抜けた保持セルを材料に数えて)被覆されたまま。"""
+    """落ちたら、抜いた `exempt` セルが材料でなくなって巻き添えを出している(`protected` を渡さない単独の呼び方)。2x2x4 の棒の (0,0,1) は普通は
+    z=0・z=1 の層の被覆を奪うが、`exempt` なら1セルだけが抜け、残りは(抜けた `exempt` を材料に数えて)被覆されたまま。"""
     bar = np.ones((2, 2, 4), bool)
     region = (slice(0, 1), slice(0, 1), slice(1, 2))
     keep = np.zeros_like(bar)

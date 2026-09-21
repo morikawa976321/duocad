@@ -541,7 +541,7 @@ def _find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCond
         return result('no_feasible_found', 'full_material_infeasible')
     for survivor in survivors:
         # `peel` の射影は入力が規則を満たすことが前提で、島の除去(`resolve_islands`)は規則を保つと限らない
-        # (mask に無い保持セルを挟んだ立方に頼るセルが、島と一緒に被覆を失う)。FEMの結果に依らないので、FEMの前に落とす。
+        # (mask に無い `exempt` セルを挟んだ立方に頼るセルが、島と一緒に被覆を失う)。FEMの結果に依らないので、FEMの前に落とす。
         if core is not None and not (_mask_satisfies_min_width(survivor, min_width_cells, exempt)
                                      and core.connected(survivor)):
             trial = _min_width_rejection_trial(history, survivor, design_space_mask, None, 'initial', conditions)
@@ -733,7 +733,7 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
     - 連結: 一口に接する材料が窓の中で連結なら通す。そうでなければマスク全体を数え直し、条件節点を支える
       セルが全て同じ1成分にあるときだけ通して、他の成分(島)を一緒に消す。島は保持成分と辺・頂点でも
       接しない(下記コメント)ので、`exempt` が無いか m=2 なら、両方を跨ぐ m 立方の材料だけのブロックは無く、島の除去は厚みの
-      不変条件を壊さない。`exempt` を材料に数える m≥3 では mask に無い保持セルを挟んで跨ぎうるので、島を消した形を
+      不変条件を壊さない。`exempt` を材料に数える m≥3 では mask に無い `exempt` セルを挟んで跨ぎうるので、島を消した形を
       大域で確かめ、崩れる手は却下する(`skipped_connectivity`)。
     - 芯の連結(m>1): 一口(と島)を抜くと侵食した芯が割れる手は抜かない(`skipped_core`)。R(m) は m 立方の共有1セルの斜めのつなぎ目を許すので、
       厚みの不変条件(上)を保つだけでは芯は割れうる。判定は一口の周りの窓で言えれば通し、言えなければ大域で数え直す(島を消すときは常に大域)。
@@ -837,7 +837,7 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
                 stats.skipped_connectivity += 1
                 continue
             island_cells = int(islands.sum())
-            # m≥3 では、mask に無い保持セル(材料に数える)を挟んで島と保持成分が同じ m 立方に入りうる(2×2×2 の全セルは互いに
+            # m≥3 では、mask に無い `exempt` セル(材料に数える)を挟んで島と保持成分が同じ m 立方に入りうる(2×2×2 の全セルは互いに
             # 26近傍なので m=2 では起きない)。その立方に頼るセルは島を消すと被覆を失うので、消した形を大域で確かめて崩れる手は却下する。
             if exempt is not None and min_width_cells > 2 and not _mask_satisfies_min_width(
                     inner & ~islands, min_width_cells, exempt):

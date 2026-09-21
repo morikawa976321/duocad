@@ -172,11 +172,11 @@ def test_the_search_keeps_every_keep_cell_in_every_evaluated_candidate_and_the_a
     best = result.best_feasible.mask
     assert result.status == 'feasible' and best[keep].all() and len(seen) >= result.evaluations
     assert all(candidate[keep].all() for candidate in seen)
-    assert (best & appendage).any() and (best & appendage).sum() < appendage.sum()  # 付属部分は保持セルの通路だけが残る
+    assert (best & appendage).any() and (best & appendage).sum() < appendage.sum()
     assert acceptance.connectivity_check(best)['components'] == 1
     reduction = result.diagnostics['reduction']
     assert reduction['geometry_rejections'] == [] and reduction['final_region_recheck'] == 'pass'
-    assert sum(step['peel']['skipped_connectivity'] for step in reduction['steps']) > 0  # 保持セルを島にする手が実際に却下された
+    assert sum(step['peel']['skipped_connectivity'] for step in reduction['steps']) > 0
 
 
 def test_without_keep_cells_the_appendage_is_stripped_whole():
@@ -213,5 +213,5 @@ def test_the_search_with_min_width_three_keeps_a_keep_cell_in_a_side_block(monke
     assert (best & block).any()
     _assert_min_width_invariants(best, 3, keep)
     reduction = result.diagnostics['reduction']
-    assert reduction['geometry_rejections'] == []  # `peel` が保持セルを抜く手を作らないので、検算(島処理)で落ちる候補は出ない
+    assert reduction['geometry_rejections'] == []
     assert sum(step['peel']['skipped_connectivity'] for step in reduction['steps']) > 0

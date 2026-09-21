@@ -30,8 +30,8 @@ def lost_coverage(mask: np.ndarray, region: tuple, m: int,
     `(origin, lost)`: `lost` は `region` の周り(距離 m-1 以内)の真偽値、`origin` はその (0,0,0) の `mask` での添字。
 
     `exempt`(保持ソリッド由来のセル)は被覆を問わない対象外で、`mask` にあるかどうかに関わらず常に材料として他のセルの立方に数える
-    (`region` を空にしても、その中の `exempt` は材料のまま)。最終形状では保持の実形状が union で戻る(`finalize.py`)ので、
-    探索で削られた保持セルも幅を与える。
+    (`region` を空にしても、その中の `exempt` は材料のまま)。製品の探索では `exempt` は保持セルで、`mask` に常に入っている
+    (`docs/TOPOPT_PRESERVE.md`)。`mask` の外の `exempt` を数えるのはこの関数を単独で呼ぶときの契約。
     m 立方はそのセルから距離 m-1 以内にしか広がらないので、`region` から距離 2×(m-1) の
     材料データだけで判定できる(大域を再計算しない)。`mask` が既に規則を満たす(`exempt` を除く)ことが前提。
     """
