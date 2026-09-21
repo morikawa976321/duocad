@@ -1425,7 +1425,7 @@ def test_the_result_reports_the_real_target_the_search_target_and_the_factor(ses
     assert result["target_safety_factor"] == 2.0
     assert result["search_target_safety_factor"] == pytest.approx(4.8) and result["search_target_factor"] == 2.4
     assert seen == [result["search_target_safety_factor"]]
-    assert (resolved[0]["target_safety_factor"], resolved[0]["search_target_factor"]) == (2.0, 2.4)  # 実行の記録に残る
+    assert (resolved[0]["target_safety_factor"], resolved[0]["search_target_factor"]) == (2.0, 2.4)
     assert any("目標安全率 2(探索の格子では 4.8 = 2 × 2.4 を満たす形を探す)" in event.get("message", "")
                for event in events)
 
