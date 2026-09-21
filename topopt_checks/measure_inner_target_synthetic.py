@@ -189,7 +189,6 @@ def _code_state() -> dict:
 
 
 def calibrate(args) -> int:
-    """全材料(設計空間の全セル)の安全率を、`SUBJECTS` の力で出す。"""
     rows = {}
     for subject in SUBJECTS:
         conditions = build_conditions(subject, 1, args.target)
@@ -267,7 +266,6 @@ def _available_bytes() -> int:
 
 
 def wait_for_memory(need: int = MEMORY_FREE_MIN_BYTES, tries: int = 3, wait_seconds: int = 600) -> tuple[bool, list[float]]:
-    """空き物理メモリ(GB)が `need` 以上になるまで、最大 `tries` 回(間隔 `wait_seconds`)確かめる。"""
     seen: list[float] = []
     for attempt in range(tries):
         free = _available_bytes()
