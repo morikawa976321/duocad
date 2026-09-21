@@ -804,7 +804,11 @@ export interface OptimizeResultPayload {
   triangle_count: number | null
   vertex_count: number | null
   safety_factor: number | null
+  /** 利用者が指定した実際の目標。 */
   target_safety_factor: number
+  /** 探索に渡した目標(= `target_safety_factor` × `search_target_factor`)。`safety_factor` はこれに対する探索の格子での値。 */
+  search_target_safety_factor: number
+  search_target_factor: number
   material_mm3: number | null
   evaluations: number
   /** 探索の終了理由(`converged` / `evaluation_limit` / `cancelled` / ...)。 */

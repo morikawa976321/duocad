@@ -367,9 +367,10 @@ def check_stress_path(out) -> None:
         f"安全率 {out['safety_factor']:.4f} >= 目標 {out['target_safety_factor']}",
     )
     check(
-        "目標安全率を満たしている",
-        out["safety_factor"] >= out["target_safety_factor"],
-        f"{out['safety_factor']:.4f} >= {out['target_safety_factor']}",
+        "探索時の目標安全率(実際の目標 × 係数)を満たしている",
+        out["safety_factor"] >= out["search_target_safety_factor"],
+        f"{out['safety_factor']:.4f} >= {out['search_target_safety_factor']}"
+        f"(= {out['target_safety_factor']} × {out['search_target_factor']})",
     )
     check(
         "許容応力 40MPa の導出が引ける",

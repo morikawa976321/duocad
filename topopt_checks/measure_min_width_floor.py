@@ -146,7 +146,7 @@ def run(cells: int, budget: int, stl_dir: Path, mask_npz: Path | None,
             out["error"] = f"確定表が不成立: {mapping['status']}"
             return out
         opts = optimize_run.OptimizeOptions(target_safety_factor=target, max_evaluations=budget,
-                                            min_width_mm=min_width_mm)
+                                            min_width_mm=min_width_mm, search_target_factor=1.0)
         conditions = optimize_run._build_search_conditions(document, space, bundle, opts, table=table, mapping=mapping)
         started = time.perf_counter()
         result = binary_search.find_best_feasible(space.mask, conditions, max_evaluations=budget,
@@ -184,7 +184,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--cells", type=int, default=2, help="最小幅のセル数 m(既定2=下限)")
     parser.add_argument("--budget", type=int, default=20, help="評価予算(既定20)")
-    parser.add_argument("--target", type=float, default=TARGET_SAFETY_FACTOR, help="探索に渡す目標安全率(既定2.0)")
+    parser.add_argument("--target", type=float, default=TARGET_SAFETY_FACTOR, help="探索にそのまま渡す目標安全率(製品の係数 2.4 は掛けない。既定2.0)")
     parser.add_argument("--element-size", type=float, default=REQUESTED_ELEMENT_SIZE_MM, help="要素サイズ要求 mm(既定2.4)")
     parser.add_argument("--stl-dir", type=Path, default=REPO_ROOT / "output" / "min_width")
     parser.add_argument("--result", type=Path, default=None, help="結果JSONの書き出し先(省略時は標準出力だけ)")

@@ -40,7 +40,7 @@ def _setup(spacing_request):
     table, mapping = optimize_run._map_boundary_conditions(space, bundle)
     if mapping['status'] != 'pass':
         raise SystemExit(f"確定表が不成立: {mapping['status']}")
-    options = optimize_run.OptimizeOptions(target_safety_factor=2.0)
+    options = optimize_run.OptimizeOptions(target_safety_factor=2.0, search_target_factor=1.0)
     conditions = optimize_run._build_search_conditions(session.document, space, bundle, options,
                                                        table=table, mapping=mapping)
     min_width = optimize_run._resolve_min_width(spacing, None)

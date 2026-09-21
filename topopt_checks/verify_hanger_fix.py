@@ -140,7 +140,8 @@ def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, 
                                       stats={k: v for k, v in table.stats.items() if k != "empty_faces"},
                                       faces=_face_rows(table, space.mask, faces), mapping=_compact_mapping(mapping))
         record["anchor_check"] = optimize_run._check_anchor_centroids(document, space, table=table)
-        opts = optimize_run.OptimizeOptions(target_safety_factor=target, max_evaluations=max_evaluations)
+        opts = optimize_run.OptimizeOptions(target_safety_factor=target, max_evaluations=max_evaluations,
+                                            search_target_factor=1.0)
         conditions = optimize_run._build_search_conditions(document, space, bundle, opts, table=table, mapping=mapping)
         identifier_before = binary_search.evaluation_identifier(conditions)
         record["entry"] = dict(identifier=identifier_before,

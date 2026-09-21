@@ -124,7 +124,7 @@ def main():
     space = design_space.derive(bundle.conditions, spacing=args.spacing)
     record['derive_seconds'] = time.perf_counter() - started
     table, mapping = optimize_run._map_boundary_conditions(space, bundle)
-    options = optimize_run.OptimizeOptions(target_safety_factor=2.0)
+    options = optimize_run.OptimizeOptions(target_safety_factor=2.0, search_target_factor=1.0)
     conditions = optimize_run._build_search_conditions(session.document, space, bundle, options,
                                                        table=table, mapping=mapping)
     record.update(grid_shape=list(space.grid.shape), grid_cells=int(np.prod(space.grid.shape)),

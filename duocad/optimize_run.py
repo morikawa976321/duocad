@@ -59,6 +59,12 @@ RESOLUTION_STEPS = 6
 #: 目標安全率の既定。**利用者が入れる値**で、ここにあるのは画面が最初に出す初期値でしかない。
 DEFAULT_TARGET_SAFETY_FACTOR = 2.0
 
+#: 探索に渡す目標安全率 = 利用者の目標 × この係数(m に依らず1つ)。探索の格子(k=1)は、細い部材の
+#: 曲げ・ねじりを要素中心の応力から見落として安全率を過大に出す。2.4 は最小幅 m≥2 セルの直線部材で
+#: その過大評価が取る上限(m=2 の曲げ 2.36)の切り上げ。m=1 には上限が無い(`_search_target_warning`)。
+#: 根拠と実測・限界は docs/TOPOPT_TARGET_FACTOR.md。
+SEARCH_TARGET_FACTOR = 2.4
+
 #: **デバッグ表示(`?debug=space` / `?voxel=1`)で1回に配るボクセルの上限。**
 #:
 #: 表示は `InstancedMesh`(立方体1個 = 12三角形)なので、実物の部品で 5〜12万要素の塊を
@@ -115,6 +121,9 @@ class OptimizeOptions:
 
     #: 目標安全率。許容応力は固定(`allowable_stress()`)なので、利用者が動かすのはこちら。
     target_safety_factor: float = DEFAULT_TARGET_SAFETY_FACTOR
+    #: 探索に渡す目標 = `target_safety_factor` × これ(`SEARCH_TARGET_FACTOR`)。利用者の入力ではなく、
+    #: UI・WebSocket には出さない。1.0 はテストと測定が「係数なし」に固定する口。1.0 未満・非有限は断る。
+    search_target_factor: float = SEARCH_TARGET_FACTOR
     #: 要素サイズ[mm]。省くと上限側(既定)。
     element_size_mm: Optional[float] = None
     #: 最小幅[mm]。省くと制約なし(m=1)。下限は要素サイズの2倍(`_resolve_min_width`)。
@@ -874,11 +883,16 @@ def _run(
          "min_width_keep_without_room": {"cells": int, "around_exclude": int, "around_outside": int},
          "grid": {"origin","spacing","shape"}, "design_elements": int,
          "safety_factor": float|None, "target_safety_factor": float,
+         "search_target_safety_factor": float, "search_target_factor": float,
          "allowable": allowable_stress() の戻り,
          "material_mm3": float|None, "evaluations": int, "termination": str|None,
          "anchor_check": {"limit_mm","fixed_mm","load_mm"} | None,
          "triangle_count": int|None, "vertex_count": int|None,
          "seconds": float}
+
+    `target_safety_factor` は利用者が指定した実際の目標、`search_target_safety_factor` は探索(と6条件の
+    `safety`)に渡した目標(= 実際の目標 × `search_target_factor`)。**`safety_factor` は探索の格子での値**で、
+    探索時の目標に対する合否であって、実際の目標に対する安全率の実測ではない。
 
     `min_width_keep_without_room` は、最小幅の規則の対象外にした保持ソリッドのうち、設計空間のどこにも
     m 立方が入らず保証が効かないセルの数(`binary_search.keep_cells_without_room`)。0 でなければ `warning` に出る。
@@ -921,6 +935,8 @@ def _run(
 
     started = time.perf_counter()
     opts = options or OptimizeOptions()
+    search_target = _search_target_safety_factor(opts)
+    factor = float(opts.search_target_factor)
     bundle = build_conditions(doc)
     limits = resolution_limits(doc)
     # 利用者が梯子の外の値を渡しても、`derive` が実際に作る格子の要素サイズ(要求値以下)に揃える。
@@ -934,7 +950,9 @@ def _run(
 
     from .topopt import trace
     trace.snapshot('resolved-conditions', bundle=bundle, limits=limits, spacing=spacing,
-                   min_width=min_width, allowable=allowable_stress())
+                   min_width=min_width, allowable=allowable_stress(),
+                   target_safety_factor=float(opts.target_safety_factor),
+                   search_target_safety_factor=search_target, search_target_factor=factor)
 
     pump = _ProgressPump(progress, should_cancel)
     dbg = _DebugSink(debug, debug_kinds)
@@ -970,6 +988,8 @@ def _run(
         "design_elements": int(space.element_count),
         "allowable": allowable_stress(),
         "target_safety_factor": float(opts.target_safety_factor),
+        "search_target_safety_factor": search_target,
+        "search_target_factor": factor,
         # 条件面が空で早期returnしたときは測れない(節点が0個)ので None のまま。
         "anchor_check": None,
     }
@@ -1062,12 +1082,13 @@ def _run(
         search_kwargs["max_evaluations"] = int(opts.max_evaluations)
     search_kwargs["min_width_cells"] = min_width["cells"]
     budget_text = str(opts.max_evaluations) if opts.max_evaluations is not None else "既定"
+    target_text = f"目標安全率 {opts.target_safety_factor:.3g}"
+    if factor != 1.0:
+        target_text += (f"(探索の格子では {search_target:.3g} = {opts.target_safety_factor:.3g} × {factor:.3g} "
+                        "を満たす形を探す)")
     pump.emit(
         phase="search",
-        message=(
-            f"形状の探索を始める(全材料の評価 → エネルギー順の削減。目標安全率 {opts.target_safety_factor:.3g}・"
-            f"評価予算 {budget_text})"
-        ),
+        message=f"形状の探索を始める(全材料の評価 → エネルギー順の削減。{target_text}・評価予算 {budget_text})",
     )
     # 探索に入る前の中断はここで拾う(探索の中では評価と評価のあいだでしか見ない)。
     pump.check()
@@ -1091,6 +1112,7 @@ def _run(
         # 追加しない」—— best_feasible が見つかっていても保存しない(トレースには残した)。
         raise OptimizeCancelled("形状探索を中断した")
 
+    factor_warning = _search_target_warning(min_width, factor)
     if search_result.status != 'feasible':
         # 段階4の契約「SearchResult.status が 'feasible' 以外なら、この値をそのまま
         # UI/ログへ渡せばよい」——ここではそれに日本語の一言を添えるだけ。
@@ -1099,7 +1121,8 @@ def _run(
             state=search_result.status,
             body_id=None,
             name=None,
-            warning=_join_warnings(_search_failure_warning(search_result, min_width), keep_room_warning),
+            warning=_join_warnings(
+                _search_failure_warning(search_result, min_width, factor), keep_room_warning, factor_warning),
             empty_condition_faces=[],
             unrepresented_regions=unrepresented,
             boundary_mapping=mapping,
@@ -1158,7 +1181,8 @@ def _run(
         state="done",
         body_id=body_id,
         name=name,
-        warning=_join_warnings(format_region_warning(unrepresented) if unrepresented else "", keep_room_warning) or None,
+        warning=_join_warnings(
+            format_region_warning(unrepresented) if unrepresented else "", keep_room_warning, factor_warning) or None,
         empty_condition_faces=[],
         unrepresented_regions=unrepresented,
         boundary_mapping=mapping,
@@ -1378,6 +1402,8 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
     (過去記録を読む読み取りアダプター)が同じ変換をしている(計画書§5)ので、それと
     同じ形にしておく。`bbox_cache=doc.bbox_cache` を渡すのは `_condition_boxes` と同じ理由
     (境界箱の再計算を候補評価のたびに払わないため、`kernel.BoundingBoxCache`)。
+    探索の目標は実際の目標 × `opts.search_target_factor`。**係数を掛けるのはここ1か所**で、検査・測定が
+    この関数を通すときも掛かる(測定は `search_target_factor=1.0` で「渡した目標そのまま」に固定する)。
     """
     from .topopt import binary_search
 
@@ -1393,11 +1419,28 @@ def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
         forces=bundle.forces,
         preserves=preserves,
         excludes=excludes,
-        target_safety_factor=float(opts.target_safety_factor),
+        target_safety_factor=_search_target_safety_factor(opts),
         bbox_cache=doc.bbox_cache,
         mapping=mapping,
         keep_cells=space.keep,
     )
+
+
+def _search_target_safety_factor(opts: OptimizeOptions) -> float:
+    """探索(と6条件の `safety`)に渡す目標安全率 = 実際の目標 × `search_target_factor`。係数の不正は入口で断る。"""
+    factor = float(opts.search_target_factor)
+    if not (math.isfinite(factor) and factor >= 1.0):
+        raise OptimizeInputError(
+            f"search_target_factor は 1.0 以上の有限の数でなければならない(渡された値: {opts.search_target_factor!r})")
+    return float(opts.target_safety_factor) * factor
+
+
+def _search_target_warning(min_width: dict, factor: float) -> str:
+    """係数の根拠は「どの部材も2セル以上の厚み」なので、最小幅の指定が無い(m=1)実行では成り立たないと言う。"""
+    if factor <= 1.0 or int(min_width["cells"]) > 1:
+        return ""
+    return (f"最小幅の指定が無いので、探索時の目標に掛けた係数 {factor:.3g} の根拠が成り立たない"
+            "(1セル厚の部材の曲げは要素中心から見えず、過大評価に上限が無い)。最小幅を指定すること")
 
 
 def _join_warnings(*parts: str) -> str:
@@ -1422,9 +1465,10 @@ def _keep_without_room_warning(min_width: dict, keep_room: dict) -> str:
     return f"{head}。{cause}。最小幅を下げるか、除外ソリッドとの間隔を広げること"
 
 
-def _search_failure_warning(search_result: Any, min_width: Optional[dict] = None) -> str:
-    """`SearchResult.status` が `'feasible'` 以外のときの一言。最小幅の制約が有効なら、原因の候補を末尾に添える。"""
-    message = _search_failure_message(search_result)
+def _search_failure_warning(search_result: Any, min_width: Optional[dict] = None, factor: float = 1.0) -> str:
+    """`SearchResult.status` が `'feasible'` 以外のときの一言。最小幅の制約が有効なら、原因の候補を末尾に添える。
+    `factor` は探索の目標に掛けた係数で、安全率の不足を言うときに実際の目標との関係を添える。"""
+    message = _search_failure_message(search_result, factor)
     note = _min_width_failure_note(search_result, min_width)
     return f"{message}。{note}" if note else message
 
@@ -1445,7 +1489,7 @@ def _min_width_failure_note(search_result: Any, min_width: Optional[dict]) -> st
             "空間に対して行った。最小幅を下げると通ることがある")
 
 
-def _search_failure_message(search_result: Any) -> str:
+def _search_failure_message(search_result: Any, factor: float = 1.0) -> str:
     """`SearchResult.status` が `'feasible'` 以外のときの一言(段階4の契約により値自体は
 
     そのままUI/ログへ渡す。ここでは日本語の説明を1つ添えるだけ)。評価予算を増やす案内は付けない ——
@@ -1485,12 +1529,13 @@ def _search_failure_message(search_result: Any) -> str:
             "材料を減らす探索では直らない(候補は設計空間の部分集合)ので、"
             "除外ソリッド・条件面の位置と対応付けを見直すこと"
         )
-    return _full_material_failure_message(search_result)
+    return _full_material_failure_message(search_result, factor)
 
 
-def _full_material_failure_message(search_result: Any) -> str:
+def _full_material_failure_message(search_result: Any, factor: float = 1.0) -> str:
     """設計空間の全材料が合格しなかった(`no_feasible_found`)ときの一言。落ちた検査と数値を
-    `diagnostics['full_material']['attempts']` から出す(形として落ちた成分を優先し、無ければ計算失敗の成分)。"""
+    `diagnostics['full_material']['attempts']` から出す(形として落ちた成分を優先し、無ければ計算失敗の成分)。
+    検査が持つ目標は探索時の目標(= 実際の目標 × `factor`)なので、`factor` が 1 でなければそのことを言う。"""
     full = (search_result.diagnostics or {}).get('full_material') or {}
     attempts = full.get('attempts') or []
     attempt = next((row for row in attempts if row.get('status') == 'fail'), attempts[0] if attempts else {})
@@ -1526,8 +1571,13 @@ def _full_material_failure_message(search_result: Any) -> str:
             elif check.get('safety_factor') is None:
                 reasons.append(str(check.get('message') or check.get('reason')))
             else:
-                reasons.append(f"安全率 {float(check['safety_factor']):.4g} が目標 "
-                               f"{float(check['target_safety_factor']):.4g} に届かない")
+                searched = float(check['target_safety_factor'])
+                if factor == 1.0:
+                    shortfall = f"目標 {searched:.4g} に届かない"
+                else:
+                    shortfall = (f"探索の格子で必要な安全率 {searched:.4g}"
+                                 f"(= 目標 {searched / factor:.4g} × 係数 {factor:.3g})に届かない")
+                reasons.append(f"安全率 {float(check['safety_factor']):.4g} が{shortfall}")
     if search_result.termination == 'evaluation_error':
         head = "設計空間の全材料の応力計算が、解法を変えた再試行の後も失敗した"
     else:

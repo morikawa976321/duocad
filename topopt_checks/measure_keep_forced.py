@@ -252,7 +252,7 @@ def main() -> int:
                     item["origin"] is not None and not np.allclose(space.grid.origin, item["origin"])):
                 raise SystemExit(f"{label}: 格子が違う")
         table, mapping = optimize_run._map_boundary_conditions(space, bundle)
-        opts = optimize_run.OptimizeOptions(target_safety_factor=2.0)
+        opts = optimize_run.OptimizeOptions(target_safety_factor=2.0, search_target_factor=1.0)
         conditions = optimize_run._build_search_conditions(document, space, bundle, opts, table=table, mapping=mapping)
         design = np.asarray(space.mask, dtype=bool)
         keep = np.asarray(space.keep, dtype=bool)

@@ -1355,3 +1355,136 @@ def test_the_keep_cells_without_room_warning_rides_on_every_early_return_too(
     result = optimize_run.run(session.document, options)
     assert result["state"] == "boundary_mapping_failed" and result["warning"].startswith("MAPPING-FAILED。")
     assert "保持ソリッドのセルが 4 個" in result["warning"]
+
+
+# --------------------------------------------------------------------------------------
+# 10. 探索に渡す目標 = 実際の目標 × 係数(docs/TOPOPT_TARGET_FACTOR.md)
+# --------------------------------------------------------------------------------------
+def test_the_search_target_is_the_real_target_times_2_4_unless_the_factor_is_pinned_to_1(session: Session) -> None:
+    """落ちたら、探索と6条件の `safety` が、利用者の目標をそのまま(または別の係数で)使っている。"""
+    from duocad.topopt import design_space as ds
+
+    _setup_four_conditions(session)
+    bundle = optimize_run.build_conditions(session.document)
+    space = ds.derive(bundle.conditions, spacing=8.0)
+
+    def built(**options):
+        return optimize_run._build_search_conditions(
+            session.document, space, bundle, optimize_run.OptimizeOptions(**options)).target_safety_factor
+
+    assert built() == pytest.approx(4.8)
+    assert built(target_safety_factor=3.0) == pytest.approx(7.2)
+    assert built(search_target_factor=1.0) == 2.0
+    assert built(target_safety_factor=3.0, search_target_factor=1.0) == 3.0
+
+
+@pytest.mark.parametrize("factor", [0.999, 0.0, -2.4, math.nan, math.inf, -math.inf])
+def test_a_search_target_factor_below_1_or_not_finite_is_refused_at_the_entrance(session: Session, factor) -> None:
+    """落ちたら、1.0 未満・非有限の係数が探索に入るまで通る(探索を数十分回した後で気づく)。"""
+    from duocad.topopt import design_space as ds
+
+    _setup_four_conditions(session)
+    options = optimize_run.OptimizeOptions(search_target_factor=factor)
+    with pytest.raises(optimize_run.OptimizeInputError, match="search_target_factor"):
+        optimize_run.run(session.document, options)
+    bundle = optimize_run.build_conditions(session.document)
+    space = ds.derive(bundle.conditions, spacing=8.0)
+    with pytest.raises(optimize_run.OptimizeInputError, match="search_target_factor"):
+        optimize_run._build_search_conditions(session.document, space, bundle, options)
+
+
+def test_the_result_reports_the_real_target_the_search_target_and_the_factor(session: Session, monkeypatch) -> None:
+    """落ちたら、結果の `target_safety_factor` が探索時の目標に化ける(利用者の目標が画面と報告から消える)、
+    または探索時の目標と係数が報告に出ない。探索が受け取る目標は 実際の目標 × 係数。"""
+    from duocad.topopt import binary_search, trace
+
+    _setup_four_conditions(session)
+    seen: list = []
+    resolved: list = []
+    real_snapshot = trace.snapshot
+    monkeypatch.setattr(trace, "snapshot", lambda name, **values: (
+        resolved.append(values) if name == "resolved-conditions" else None, real_snapshot(name, **values))[1])
+
+    def fake_find(design_space_mask, conditions, **kwargs):
+        seen.append(conditions.target_safety_factor)
+        return binary_search.SearchResult(
+            status="no_feasible_found", termination="evaluation_limit", best_feasible=None,
+            history=[], evaluations=1, conditions_identifier="test")
+
+    monkeypatch.setattr(binary_search, "find_best_feasible", fake_find)
+    events: list = []
+    result = optimize_run.run(
+        session.document, optimize_run.OptimizeOptions(element_size_mm=8.0), progress=events.append)
+    assert result["target_safety_factor"] == 2.0
+    assert result["search_target_safety_factor"] == pytest.approx(4.8) and result["search_target_factor"] == 2.4
+    assert seen == [result["search_target_safety_factor"]]
+    assert (resolved[0]["target_safety_factor"], resolved[0]["search_target_factor"]) == (2.0, 2.4)  # 実行の記録に残る
+    assert any("目標安全率 2(探索の格子では 4.8 = 2 × 2.4 を満たす形を探す)" in event.get("message", "")
+               for event in events)
+
+    pinned = optimize_run.run(
+        session.document, optimize_run.OptimizeOptions(element_size_mm=8.0, search_target_factor=1.0))
+    assert (pinned["target_safety_factor"], pinned["search_target_safety_factor"], pinned["search_target_factor"]
+            ) == (2.0, 2.0, 1.0)
+    assert seen[-1] == 2.0
+
+
+def test_a_full_material_shortfall_names_the_search_target_and_the_factor_not_a_bare_target() -> None:
+    """落ちたら、全材料が探索時の目標に届かない失敗が「目標 4.8」と出て、利用者が入れた 2 と食い違って見える。
+    係数 1 の文面は変えない。"""
+    failed = _full_material_failure("full_material_infeasible", "fail", dict(
+        safety=dict(status="fail", safety_factor=3.1, target_safety_factor=4.8)))
+    warning = optimize_run._search_failure_warning(failed, None, 2.4)
+    assert "安全率 3.1 が探索の格子で必要な安全率 4.8(= 目標 2 × 係数 2.4)に届かない" in warning
+    assert "が目標 4.8 に" not in warning
+    assert "安全率 3.1 が目標 4.8 に届かない" in optimize_run._search_failure_warning(failed)
+
+
+def test_the_min_width_1_warning_rides_on_a_search_that_ran_and_only_while_the_factor_is_applied(
+    session: Session, monkeypatch
+) -> None:
+    """落ちたら、最小幅なし(m=1)で係数 2.4 の根拠が成り立たないことが黙って通る。m≥2・係数 1 では出さない。"""
+    from duocad.topopt import binary_search
+
+    _setup_four_conditions(session)
+    monkeypatch.setattr(binary_search, "find_best_feasible", lambda mask, conditions, **kwargs: binary_search.SearchResult(
+        status="no_feasible_found", termination="evaluation_limit", best_feasible=None,
+        history=[], evaluations=1, conditions_identifier="test"))
+    spacing = optimize_run.resolution_limits(session.document)["steps"][1]["element_size_mm"]
+
+    def warning(**options) -> str:
+        return optimize_run.run(
+            session.document, optimize_run.OptimizeOptions(element_size_mm=spacing, **options))["warning"]
+
+    m1 = warning()
+    assert "最小幅の指定が無いので、探索時の目標に掛けた係数 2.4 の根拠が成り立たない" in m1 and "最小幅を指定すること" in m1
+    assert "最小幅の指定が無い" not in warning(min_width_mm=2.5 * spacing)
+    assert "最小幅の指定が無い" not in warning(search_target_factor=1.0)
+
+
+def test_a_finished_run_without_min_width_carries_the_factor_warning_and_a_pinned_factor_stays_silent(
+    session: Session, monkeypatch
+) -> None:
+    """落ちたら、`state == "done"` の結果(利用者が一番読む)から m=1 の警告が落ちる。"""
+    import numpy as np
+
+    from duocad.topopt import binary_search
+
+    _setup_four_conditions(session)
+
+    def fake_find(design_space_mask, conditions, **kwargs):
+        mask = np.asarray(design_space_mask, dtype=bool)
+        report = dict(material_sha256="f" * 64,
+                      volumes=dict(material_mm3=float(mask.sum()) * conditions.grid.element_volume),
+                      checks=dict(safety=dict(safety_factor=9.9)))
+        best = binary_search.FeasibleModel(mask=mask, before_mask=mask, report=report, trial_index=0)
+        return binary_search.SearchResult(
+            status="feasible", termination="converged", best_feasible=best,
+            history=[], evaluations=3, conditions_identifier="test")
+
+    monkeypatch.setattr(binary_search, "find_best_feasible", fake_find)
+    done = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
+    assert done["state"] == "done" and "最小幅の指定が無いので" in done["warning"]
+    pinned = optimize_run.run(
+        session.document, optimize_run.OptimizeOptions(element_size_mm=8.0, search_target_factor=1.0))
+    assert pinned["state"] == "done" and pinned["warning"] is None

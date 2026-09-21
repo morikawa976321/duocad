@@ -176,7 +176,8 @@ def run(mode: str, budget: int, mask_npz: Path | None = None, *, label: str | No
         if mapping["status"] != "pass":
             out["error"] = f"確定表が不成立: {mapping['status']}"
             return out
-        opts = optimize_run.OptimizeOptions(target_safety_factor=TARGET_SAFETY_FACTOR, max_evaluations=budget)
+        opts = optimize_run.OptimizeOptions(target_safety_factor=TARGET_SAFETY_FACTOR, max_evaluations=budget,
+                                            search_target_factor=1.0)
         conditions = optimize_run._build_search_conditions(document, space, bundle, opts, table=table, mapping=mapping)
         solve_log: list = []
         sampler = LoadSampler(abort_if_busy=abort_if_busy)

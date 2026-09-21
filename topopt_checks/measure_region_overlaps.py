@@ -70,7 +70,7 @@ def measure(model: Path, spacing: float, *, repeats: int, seed: int) -> dict:
     bundle = optimize_run.build_conditions(document)
     space = design_space.derive(bundle.conditions, spacing=spacing)
     conditions = optimize_run._build_search_conditions(
-        document, space, bundle, optimize_run.OptimizeOptions(target_safety_factor=2.0, max_evaluations=1))
+        document, space, bundle, optimize_run.OptimizeOptions(target_safety_factor=2.0, max_evaluations=1, search_target_factor=1.0))
     grid = space.grid
     groups = (("preserve", conditions.preserves, True), ("exclude", conditions.excludes, False))
     rng = np.random.default_rng(seed)

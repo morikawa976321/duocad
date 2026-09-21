@@ -664,12 +664,16 @@
     optimizeProgress = null
     if (result.state === 'done') {
       const safety = result.safety_factor === null ? '—' : result.safety_factor.toFixed(2)
+      const short = (value: number): string => String(Number(value.toPrecision(3)))
+      const searched =
+        `探索の格子での値。探索時の目標 ${short(result.search_target_safety_factor)} = ` +
+        `目標 ${short(result.target_safety_factor)} × 係数 ${short(result.search_target_factor)}`
       const material = result.material_mm3 === null ? '—' : Math.round(result.material_mm3).toLocaleString()
       optimizeNotice = {
         kind: result.warning ? 'bad' : 'info',
         lines: [
           `結果を「${result.name}」として足した(三角形 ${result.triangle_count} 枚 ・ ` +
-            `安全率 ${safety} ・ 体積 ${material}mm^3 ・ 評価 ${result.evaluations}回 ・ ` +
+            `安全率 ${safety}(${searched}) ・ 体積 ${material}mm^3 ・ 評価 ${result.evaluations}回 ・ ` +
             `終了理由 ${result.termination ?? '—'} ・ ${Math.round(result.seconds)}秒)`,
           '元のボディは1つも消えていない。結果は表示とSTL書き出しだけができる(編集はできない)',
           ...(result.warning ? [result.warning] : []),

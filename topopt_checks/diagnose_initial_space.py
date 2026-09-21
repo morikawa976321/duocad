@@ -60,7 +60,7 @@ def diagnose(document, spacing):
     mapped_faces = _faces_by_stage(table, faces, stages)
     mapped_conditions, _, _ = acceptance.condition_check(
         space.mask, table, space.fixed_faces, space.load_faces, bundle.forces)
-    options = optimize_run.OptimizeOptions(target_safety_factor=2.0)
+    options = optimize_run.OptimizeOptions(target_safety_factor=2.0, search_target_factor=1.0)
     search_conditions = optimize_run._build_search_conditions(document, space, bundle, options,
                                                               table=table, mapping=mapping)
     entry = binary_search.uncovered_condition_nodes(space.mask, search_conditions)

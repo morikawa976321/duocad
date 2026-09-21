@@ -87,7 +87,7 @@ def run(m: int, budget: int, requested_element_size_mm: float) -> dict:
             out["error"] = f"確定表が不成立: {mapping['status']}"
             return out
         opts = optimize_run.OptimizeOptions(target_safety_factor=TARGET_SAFETY_FACTOR, max_evaluations=budget,
-                                            min_width_mm=min_width_mm)
+                                            min_width_mm=min_width_mm, search_target_factor=1.0)
         conditions = optimize_run._build_search_conditions(document, space, bundle, opts, table=table, mapping=mapping)
         started = time.perf_counter()
         result = binary_search.find_best_feasible(space.mask, conditions, max_evaluations=budget,
