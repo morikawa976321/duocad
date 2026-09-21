@@ -2,7 +2,7 @@
 
     .\\.venv\\Scripts\\python.exe topopt_checks\\measure_min_width_floor.py --cells 3 --budget 60 --result C:\\tmp\\m3.json --mask-npz C:\\tmp\\m3.npz
 
-hanger・要素サイズ要求 `--element-size`(既定 2.4mm。実 spacing 2.387506mm)・探索の目標 `--target`(既定2.0)。最小幅は mm の固定値で渡さず、解決した実 spacing の
+hanger・要素サイズ要求(既定 2.4mm。実 spacing 2.387506mm)・目標(既定2.0)。最小幅は mm の固定値で渡さず、解決した実 spacing の
 `--cells` 倍(段の値。ガードは `値 < 2×spacing` だけを断る)を渡し、`m == --cells` になったことを確かめてから測る。
 **判定はしない**(採用した形と数字を書き出すだけ)。`trace.DEFAULT_ROOT` を一時フォルダへ向け、
 `output/optimization_runs` に何も残さない。STLは既定で `output/min_width/`(git 管理外)。
