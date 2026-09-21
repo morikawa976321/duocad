@@ -1577,7 +1577,7 @@ R(m) だけでは、m 立方が斜めにずれて1セルだけ重なるつなぎ
   R(m) だけだった間の記録: 2 立方を (1,1,1) ずつずらして5個つないだ形は R(2) を満たし、つなぎ目の共有が1セルで芯が5成分に割れた(`docs/TOPOPT_THICKNESS.md` 節J3。S(2) は落とす)。(2) 段階3の追加は m 立方へ膨らませるので、
   1セルの追加でも最大 m³−1 セル増え、「小さく足す」ことはできない。
   (3) 最小幅を入れても、採用形状を k×k×k に細分して解き直すと目標安全率を割る
-  (乖離は節K)。細分の解き直しは `topopt_checks/refine_adopted_mask.py`。
+  (乖離は節K)。細分の解き直しは `topopt_checks/refine_adopted_mask.py`。受け方は探索時の目標の係数(「設計と画面」の探索時の目標の段落と `docs/TOPOPT_TARGET_FACTOR.md`)。
 
 ## 設計と画面（`duocad/optimize_run.py`）
 
@@ -1627,6 +1627,12 @@ Session.cancel_optimization()     走っている最適化に降りるよう伝�
 形状探索（`binary_search.find_best_feasible`）が6条件(目標安全率を含む)を
 満たす最小体積のboolマスクを探す。旧版のように材料量[mm³]を探索変数として直接動かす
 層はもう無い。
+
+**探索(と6条件の `safety`)に渡す目標は 実際の目標 × 2.4**（`optimize_run.SEARCH_TARGET_FACTOR`。
+探索の格子は細い部材の曲げ・ねじりの安全率を過大に出すため。結果の `search_target_safety_factor` /
+`search_target_factor`）。結果の `safety_factor` は探索の格子での値で、実際の目標に対する実測ではない。
+最小幅なし(m=1)では係数の根拠が成り立たないので警告が付く。決定・根拠・実測は
+[TOPOPT_TARGET_FACTOR.md](TOPOPT_TARGET_FACTOR.md)。
 
 **この版の制限**:
 
