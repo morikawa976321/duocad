@@ -1847,6 +1847,23 @@ pytest を重くしないため)。題材は離れた2つのパッド(拘束側 
 実行中も予想時間は出さず、利用者が見られるのは完了後の経過秒数(`seconds`)だけである
 (上「設計と画面」)。
 
+## 製品が通らない引数・経路の扱い(2026-09-21 本人判断)
+
+製品(UI → `session.run_optimization` → `optimize_run`)が片方しか通らない引数・経路を洗い、次のとおり決めた。
+
+- **誰も通らない分岐と、製品が使わない別実装は削除した**(`stress.evaluate` の内部で解く経路、
+  `volume_atol` / `volume_rtol`、`mesh.build_surface`、`voxelize.voxelize()`、`fem._floating_dofs`、
+  `on_outside="clip"`、`pressure_vector`、`anchors_for`、結果の `reactions`・`name` など)。
+  受入検査は製品と同じ入口を通す(`check_mesh.py` は `build_surface_from_mask`、格子モデルは
+  `_fixtures.voxel_model`)。
+- **製品の値が正しいことを、値を振って確かめるためのつまみは残す**: `rho_min`・`percentile`・`cg_rtol`・
+  `element_components(neighbourhood=)`・`build_anchors(radius_ratio=, sample_ratio=)`・
+  `derive(elements_long_axis=)`・`step_exponent` / `max_step_ratio` / `single_cell_patience`。
+  製品が渡さないことを理由に削らない(検出力の検査が成り立たなくなる)。
+- **`warm_start` / `u0` の引き回しは残す**(既定は False のまま)。
+- **`acceptance.inspect_document`(旧記録の密度場を読むアダプター)は念のため残す。**
+- `target_safety_factor` / `max_evaluations` の受け口(UI に入力欄が無い)と `catalog.py` の Param 宣言は、いったんそのまま。
+
 ## 制限(承知のうえで残しているもの)
 
 
