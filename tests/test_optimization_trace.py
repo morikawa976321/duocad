@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -146,3 +148,32 @@ def test_real_cad_and_source_archive_are_complete(tmp_path):
     assert hashlib.sha256((rec.path/'source.zip').read_bytes()).hexdigest()==manifest['source_sha256']
     restored=kernel.read_step(str(next((rec.path/'cad').glob('*.step'))))
     assert kernel.volume(restored)==pytest.approx(24.)
+
+
+def test_git_provenance_returns_while_another_thread_blocks_on_piped_stdin():
+    """stdio の MCP サーバ(別スレッドが stdin を readline 待ち)でも記録の git が返る。落ちたら、
+    UI から走らせた実行が冒頭で15秒待って failed になる。"""
+    code = (
+        'import os, sys, threading, time\n'
+        'from duocad.topopt import trace\n'
+        'threading.Thread(target=sys.stdin.buffer.readline, daemon=True).start()\n'
+        'time.sleep(0.3)\n'
+        "print(trace._git('rev-parse','HEAD')['returncode'], flush=True)\n"
+        'os._exit(0)\n'
+    )
+    child = subprocess.Popen([sys.executable,'-c',code], cwd=trace.ROOT,
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    try:
+        try:
+            child.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            pytest.fail('git が返らず、子プロセスが終わらない')
+        assert child.stdout.read().strip(), 'git が結果を返さずに子プロセスが終わった'
+    finally:
+        if sys.platform == 'win32':
+            subprocess.run(['taskkill','/F','/T','/PID',str(child.pid)], capture_output=True)
+        else:
+            child.kill()
+        child.stdin.close()
+        child.stdout.close()
+        child.wait()
