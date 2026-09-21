@@ -1,7 +1,7 @@
 /**
  * 形状最適化の**比較スクリーンショットの撮影台**(20260905-1700)。
  *
- *   web> node scripts/shoot-topopt.mjs --model mounting-plate.json \
+ *   web> node scripts/shoot-topopt.mjs --model hanger_bar_attachment.json \
  *          --panel "既定:" --panel "細かく:element_mm=2.5" --views iso,side
  *
  * **1本のコマンドで終わる。** 重い段(面ごとに最適化を回す)も、描く段も、並べてラベルを

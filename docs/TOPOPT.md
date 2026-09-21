@@ -1785,7 +1785,7 @@ MCPで運ぶ形**を決めること。**`add_mesh_body` は `ws="none"` のま�
 
 ```powershell
 cd web
-node scripts/shoot-topopt.mjs --model mounting-plate.json `
+node scripts/shoot-topopt.mjs --model hanger_bar_attachment.json `
   --panel "既定:" --panel "細かく:element_mm=2.5" --views iso,side
 ```
 
@@ -1863,6 +1863,8 @@ pytest を重くしないため)。題材は離れた2つのパッド(拘束側 
 - **`warm_start` / `u0` の引き回しは残す**(既定は False のまま)。
 - **`acceptance.inspect_document`(旧記録の密度場を読むアダプター)は念のため残す。**
 - `target_safety_factor` / `max_evaluations` の受け口(UI に入力欄が無い)と `catalog.py` の Param 宣言は、いったんそのまま。
+- **`set_loads` の旧ログ形式(2026-09-06 まで。大きさ・向きが引数の直下に1組)の読み込みは削除した。**
+  手元でこの形式を持っていた文書は `models/mounting-plate.json` だけで、もう使わないので文書ごと廃棄した。
 
 ## 制限(承知のうえで残しているもの)
 

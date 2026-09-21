@@ -619,6 +619,6 @@ m=2・2×2×12 は 48→48、m=3・4×4×12 は 192→172。1セル抜くと同�
 (通常の検査 + キャッシュ無しの最終再検査。記録上 `inspect_calls = evaluations + 1`)のが1回になった
 (`inspect_calls = evaluations`。全材料のFEMは 2.4mm で約 135 秒、2.0mm で約 210 秒)。
 
-**測っていないもの**: hanger 以外のモデル(`hanger_test` / `mounting-plate`)で全材料が合格するか。経路2・3が実物の設計空間で
+**測っていないもの**: hanger 以外のモデル(`hanger_test`)で全材料が合格するか。経路2・3が実物の設計空間で
 起きるか。起きた場合は `full_material_infeasible` で止まり、落ちた検査と位置が画面に出る。直すなら段階3の探索ではなく
 `design_space.derive` の側で設計空間を正す。

@@ -790,38 +790,6 @@ def test_clearing_a_face_that_has_no_load_is_not_an_error(session: Session) -> N
     assert _specs(session) == []
 
 
-def test_an_old_log_with_one_shared_how_still_replays(session: Session) -> None:
-    """**2026-09-06までの操作ログ**(大きさ・向きが引数の直下に1組)が再生できる。
-
-    過去に受け付けたログを、あとから足した型で落として文書が開けなくする、という壊し方を
-    しない。古い形は「全ての面が同じ大きさ・向きを持つ」新しい形の特別な場合である。
-    """
-    from duocad.oplog import Operation
-    from duocad.verbs import optimize_setup
-
-    body = _box(session)
-    faces = [optimize.face_condition(session.document, ref) for ref in _face_refs(body, [1, 2])]
-    old = Operation(
-        seq=1,
-        verb="set_loads",
-        args={
-            "faces": faces,
-            "magnitude": 42.0,
-            "direction": "-normal",
-            "vector": None,
-            "previous_faces": [],
-            "previous_magnitude": 0.0,
-            "previous_direction": "vector",
-            "previous_vector": None,
-        },
-    )
-    optimize_setup._do_loads(session.document, old)
-
-    assert _specs(session) == [(1, 42.0, "-normal"), (2, 42.0, "-normal")]
-    optimize_setup._undo_loads(session.document, old)
-    assert _specs(session) == []
-
-
 # --------------------------------------------------------------------------------------
 # 7. 3経路(コア / WebSocket / MCP)と状態の配信
 # --------------------------------------------------------------------------------------

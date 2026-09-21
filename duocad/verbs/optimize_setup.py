@@ -54,7 +54,7 @@ verbを起動すると**既にその役割が付いている対象が選択状�
 """
 from __future__ import annotations
 
-from typing import Any, List, Optional, Sequence
+from typing import Any, List, Sequence
 
 from .. import optimize
 from ..document import BodyId, Document
@@ -379,35 +379,13 @@ def _undo_fixtures(document: Document, operation: Operation) -> None:
 
 
 def _do_loads(document: Document, operation: Operation) -> None:
-    args = operation.args
-    _apply_faces(document, "loads", _loads_from_args(args, "faces", ""))
+    _apply_faces(document, "loads", [dict(item) for item in operation.args.get("faces") or []])
 
 
 def _undo_loads(document: Document, operation: Operation) -> None:
     setup = document.optimize
-    setup.loads = _loads_from_args(operation.args, "previous_faces", "previous_")
+    setup.loads = [dict(item) for item in operation.args.get("previous_faces") or []]
     setup.touch()
-
-
-def _loads_from_args(args: dict, faces_key: str, prefix: str) -> List[dict]:
-    """操作ログの引数 → LoadCondition の並び。**古い形のログもここで受ける**。
-
-    2026-09-06までの `set_loads` は、大きさ[N]と向きを面ではなく**引数の直下**に1組だけ
-    持っていた(1文書に1荷重だった頃の形)。過去に受け付けたログの再生を、あとから足した
-    型で落として文書が開けなくなる、という壊し方をしない —— 古い形は「全ての面が同じ
-    大きさ・向きを持つ」という**新しい形の特別な場合**なので、ここで焼き直せる。
-    """
-    faces = [dict(item) for item in args.get(faces_key) or []]
-    magnitude = args.get(f"{prefix}magnitude")
-    if magnitude is None:
-        return faces
-    direction = str(args.get(f"{prefix}direction") or "vector")
-    vector: Optional[list] = args.get(f"{prefix}vector")
-    for face in faces:
-        face["magnitude"] = float(magnitude)
-        face["direction"] = direction
-        face["vector"] = None if vector is None else [float(item) for item in vector]
-    return faces
 
 
 register_verb(VERB_SET_PRESERVE_BODIES, do=_do_bodies, undo=_undo_bodies)

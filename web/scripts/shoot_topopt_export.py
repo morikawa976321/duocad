@@ -5,7 +5,7 @@
 (`duocad.topopt` / `duocad.optimize_run`)にしか無いからであって、手順を増やすためではない。
 
     python web/scripts/shoot_topopt_export.py --out <データ置き場> \
-        --model mounting-plate.json --panel "既定:" --panel "細かく:element_mm=2.5"
+        --model hanger_bar_attachment.json --panel "既定:" --panel "細かく:element_mm=2.5"
 
 題材は`--model <ファイル名>` —— **利用者が実際に作った文書**(`--models-dir` 配下の
 操作ログ)。条件は文書に置いてあるものをそのまま使い、製品が実際に持っている
