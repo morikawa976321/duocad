@@ -2,7 +2,6 @@ import dataclasses
 import hashlib
 import itertools
 import math
-from collections import deque
 
 import numpy as np
 import pytest
@@ -41,14 +40,6 @@ class Table:
         return sorted(self._empty)
 
 
-def repair_candidates(current, design_space, size):
-    """1つのブロック大きさの候補 `(操作, マスク)`。段階3の生成規則(記述 → マスク)をテストから読む。"""
-    current = np.asarray(current, dtype=bool)
-    design_space = np.asarray(design_space, dtype=bool)
-    for op, region, addable in bs.candidate_descriptors(current, design_space, (int(size),)):
-        yield op, bs._materialize(current, design_space, op, region, addable)
-
-
 def bar_conditions(shape=(4, 2, 2), *, fixed=(1,), load=(2,), empty=(), forces=((0., 0., -1.),),
                     keep_box=None, target_safety_factor=.001, solver='direct'):
     """まっすぐな棒(4x2x2既定)。固定面=x最小平面(節点0..8)、荷重面=x最大平面。
@@ -69,55 +60,6 @@ def bar_conditions(shape=(4, 2, 2), *, fixed=(1,), load=(2,), empty=(), forces=(
         preserves=[('keep', keep_box.wrapped)], excludes=[],
         target_safety_factor=target_safety_factor, solver=solver,
     )
-
-
-# ---------------------------------------------------------------------------
-# §4.3 候補生成: 決定的な系列とブロック演算
-# ---------------------------------------------------------------------------
-def test_block_sizes_are_the_deterministic_1_2_4_series_capped_at_the_longest_edge():
-    assert bs.block_sizes((4, 2, 2)) == (1, 2, 4)
-    assert bs.block_sizes((9, 1, 1)) == (1, 2, 4, 8)
-    assert bs.block_sizes((1, 1, 1)) == (1,)
-
-
-def test_repair_candidates_delete_only_removes_existing_material_and_add_only_touches_the_face():
-    current = np.zeros((4, 1, 1), bool)
-    current[0] = current[1] = True  # 材料は先頭2セルだけ
-    design_space = np.ones((4, 1, 1), bool)  # 設計空間は全体
-    ops = list(repair_candidates(current, design_space, 1))
-    kinds = {kind for kind, _ in ops}
-    assert kinds == {'delete', 'add'}  # このブロック大きさでは置換の材料が無い場所もある
-    deletes = [mask for kind, mask in ops if kind == 'delete']
-    adds = [mask for kind, mask in ops if kind == 'add']
-    # 削除は既存材料からしか削れない(2セルぶんの削除候補しかない)
-    assert len(deletes) == 2
-    for mask in deletes:
-        assert not np.any(mask & ~current)  # 削除は材料を増やさない
-    # 追加は設計空間内で既存材料と面で接するセルにしか起きない(§4.3)。
-    # 現在材料は index0,1 なので、面で接するのは index2 だけ(index3 はまだ接していない)。
-    assert len(adds) == 1
-    added = adds[0]
-    assert np.all(added[:2]) and bool(added[2]) and not bool(added[3])
-    assert not np.array_equal(added, current)
-
-
-def test_repair_candidates_replace_pairs_a_removal_with_an_addition_in_one_candidate():
-    current = np.array([True, True, False, False]).reshape(4, 1, 1)
-    design_space = np.ones((4, 1, 1), bool)
-    # size=4: 唯一のブロックが配列全体を覆うので、削除できる材料と追加できる空きの
-    # どちらも同じブロックに入り、置換候補が1つ生成される。
-    ops = list(repair_candidates(current, design_space, 4))
-    replaces = [mask for kind, mask in ops if kind == 'replace']
-    assert len(replaces) == 1
-    replaced = replaces[0]
-    assert replaced.sum() > 0
-    # 置換候補は削除ブロックと追加ブロックの両方の効果を1候補にまとめている
-    assert not np.array_equal(replaced, current)
-
-
-def test_block_starts_truncate_at_the_array_boundary_without_overlap():
-    starts = list(bs._block_starts((5, 1, 1), 2))
-    assert starts == [(0, 0, 0), (2, 0, 0), (4, 0, 0)]  # 最後のブロックは幅1に切り詰まる
 
 
 # ---------------------------------------------------------------------------
@@ -249,88 +191,35 @@ def test_a_design_space_open_to_the_outside_is_not_a_closed_void():
     assert result.status != 'input_contradiction' and result.evaluations >= 1
 
 
-def test_delete_candidates_are_only_blocks_touching_the_material_surface():
-    """内部のブロック(全部材料で周りも全部材料)を空にすると閉じた空洞ができるので、削除の候補にしない。"""
-    shape = (8, 8, 8)
-    full = np.ones(shape, bool)
-    seen = set()
-    for size in bs.block_sizes(shape):
-        deletes = [region for op, region, _ in bs.candidate_descriptors(full, full, (size,)) if op == 'delete']
-        for region in deletes:
-            child = bs._materialize(full, full, 'delete', region, None)
-            assert acceptance.void_components(child) == 1, (size, region)
-            seen.add(size)
-        interior = [lo for lo in bs._block_starts(shape, size)
-                    if all(0 < l and l + size < n for l, n in zip(lo, shape))]
-        assert len(deletes) == len(list(bs._block_starts(shape, size))) - len(interior), size
-    assert seen == set(bs.block_sizes(shape))
-
-
-@pytest.mark.parametrize('axis, side', [(a, s) for a in range(3) for s in (0, 1)])
-def test_an_interior_block_becomes_a_delete_candidate_once_a_face_or_its_inside_is_open(axis, side):
-    """内部のブロック(12³ の中央 4³)は、格子の外へ抜ける細い穴が6面のどこかに接するか、ブロックを貫けば候補になる。"""
-    shape = (12, 12, 12)
-    centre = (slice(4, 8),) * 3
-
-    def has_centre_block(mask):
-        return any(op == 'delete' and region == centre for op, region, _ in bs.candidate_descriptors(mask, mask, (4,)))
-
-    mask = np.ones(shape, bool)
-    assert not has_centre_block(mask)
-    index = [5, 5, 5]
-    index[axis] = slice(8, 12) if side else slice(0, 4)  # 中央ブロックの外側から格子の端へ
-    mask[tuple(index)] = False
-    assert has_centre_block(mask)
-    index[axis] = slice(4, 8)  # 穴がブロックの中だけ(外へ通じない)でも、ブロックは空セルを含むので候補
-    inside = np.ones(shape, bool)
-    inside[tuple(index)] = False
-    assert has_centre_block(inside)
-
-
-def test_full_material_still_fails_safety_is_not_laundered_into_a_pass():
-    """全材料でも応力不足の例: どの候補を試しても目標安全率に届かない場合、
-    「探索し尽くして見つからない」であって「合格に化ける」ではない。"""
-    shape = (4, 2, 2)
-    conditions = bar_conditions(shape=shape, target_safety_factor=1e12)
-    result = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=25)
-    assert result.status == 'no_feasible_found'
-    assert result.best_feasible is None
-    assert result.termination in ('neighbourhood_exhausted', 'evaluation_limit')
-    assert len(result.history) >= 2  # 初期候補だけで諦めていない(修復候補を実際に試した)
-    assert all(trial.outcome != 'ok' for trial in result.history)
-
-
-def test_no_feasible_found_records_history_and_does_not_return_a_dangling_best():
-    shape = (4, 2, 2)
-    conditions = bar_conditions(shape=shape, target_safety_factor=1e12)
-    result = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=8)
-    assert result.status == 'no_feasible_found'
-    assert result.best_feasible is None
-    assert result.evaluations <= 8
-    assert len(result.history) >= 1
-
-
-def test_add_and_replace_repairs_never_violate_the_before_superset_contract(monkeypatch):
-    """`acceptance.inspect` は `material ⊆ before` を要求する(材料は常に島除去前の部分集合)。
-
-    add/replace は親の材料の外へ広がりうるので、`before` に親候補を使うとここが破れる
-    (frontier の各候補は自分自身を`before`にすること、という §2 の契約の回帰確認)。
-    """
+def test_full_material_that_fails_safety_stops_after_one_evaluation_and_names_the_check(monkeypatch):
+    """落ちたら、全材料が不合格のとき別の形を探しに行っている(FEMを2回以上払う)か、落ちた検査が診断に出ていない。"""
     shape = (4, 2, 2)
     conditions = bar_conditions(shape=shape, target_safety_factor=1e12)
     calls = []
     original = acceptance.inspect
+    monkeypatch.setattr(acceptance, 'inspect', lambda *a, **k: calls.append(1) or original(*a, **k))
+    result = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=25)
+    assert (result.status, result.termination, result.best_feasible) == ('no_feasible_found', 'full_material_infeasible', None)
+    assert result.evaluations == 1 and len(calls) == 1
+    assert [(trial.operation, trial.outcome) for trial in result.history] == [('initial', 'infeasible')]
+    attempt, = result.diagnostics['full_material']['attempts']
+    assert attempt['failed'] == ['safety'] and attempt['trial'] == 0
+    assert attempt['checks']['safety']['safety_factor'] < attempt['checks']['safety']['target_safety_factor'] == 1e12
 
-    def spy(material, before, grid, **kwargs):
-        calls.append((np.asarray(material, dtype=bool).copy(), np.asarray(before, dtype=bool).copy()))
-        return original(material, before, grid, **kwargs)
 
-    monkeypatch.setattr(acceptance, 'inspect', spy)
-    result = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=30)
-    assert result.status == 'no_feasible_found'  # target が非現実的なので、例外を出さず探索し尽くす
-    assert calls  # 実際にadd/replaceを含む多数の候補が評価されたことの確認
-    for material, before in calls:
-        assert not np.any(material & ~before), '材料が島除去前(before)の外へ出ている'
+def test_full_material_is_evaluated_once_without_the_bbox_cache_or_the_region_precompute(monkeypatch):
+    """落ちたら、段階4が戻り先にする合格形状(§3)がキャッシュを通した検査だけで確定しているか、全材料を2回解いている。"""
+    from duocad import kernel
+
+    seen = []
+    original = acceptance.inspect
+    monkeypatch.setattr(acceptance, 'inspect', lambda *a, **k: seen.append(k) or original(*a, **k))
+    conditions, design = partial_region_conditions()
+    conditions = dataclasses.replace(conditions, bbox_cache=kernel.BoundingBoxCache())
+    assert conditions.region_overlaps is not None
+    result = bs.find_initial_feasible(design, conditions)
+    assert result.termination == 'initial_feasible_found' and result.best_feasible.energy is not None
+    assert len(seen) == 1 and seen[0]['bbox_cache'] is None and seen[0]['region_overlaps'] is None
 
 
 def detour_conditions():
@@ -382,55 +271,23 @@ def _seed_search_result(mask, conditions):
 
 
 # ---------------------------------------------------------------------------
-# detour 題材の前提(段階3の追加・置換と、段階4の既知の限界が依存する)
+# detour 題材の前提(段階4の既知の限界が依存する)
 # ---------------------------------------------------------------------------
 def test_pure_deletion_cannot_improve_on_the_detour_shape():
-    """削除だけでは詰まる題材であることの確認(§9)。detour形状はどの削除でも不合格になる
-    ——単独ブロック削除も、削除だけを辿るBFS(何手先まで許しても)も改善しない。
-    このテストが崩れたらフィクスチャの前提が壊れているので、detour を使う他のテストの結果は無意味。
-    """
-    conditions, design_space = detour_conditions()
+    """落ちたら、detour 形状が「削除だけでは詰まる題材」でなくなっている(§9)。detour を使う他のテストの結果は無意味になる。"""
+    conditions, _ = detour_conditions()
     initial_mask = detour_initial_mask()
-    sizes = tuple(reversed(bs.block_sizes(design_space.shape)))
-
-    # 単独削除: どのサイズ・位置でも不合格
-    for size in sizes:
-        for kind, mask in repair_candidates(initial_mask, design_space, size):
-            if kind != 'delete':
-                continue
-            survivors, _ = bs.resolve_islands(mask, conditions)
-            for survivor in survivors:
-                report = acceptance.inspect(survivor, mask, conditions.grid, **conditions.inspect_kwargs())
-                assert report['status'] != 'pass'
-
-    # 削除だけを辿るBFS: 初期形状の部分集合(2**8=256通り)を尽くしても改善しない
-    visited, frontier = set(), deque([initial_mask])
-    best_mm3 = float(initial_mask.sum())
-    steps = 0
-    while frontier:
-        current = frontier.popleft()
-        key = hashlib.sha256(np.ascontiguousarray(current).tobytes()).hexdigest()
-        if key in visited:
-            continue
-        visited.add(key)
-        steps += 1
-        survivors, _ = bs.resolve_islands(current, conditions)
-        for survivor in survivors:
-            report = acceptance.inspect(survivor, current, conditions.grid, **conditions.inspect_kwargs())
+    cells = np.argwhere(initial_mask)
+    passing = []
+    for bits in range(1, 2 ** len(cells)):  # 初期形状(8セル)の空でない部分集合を全て
+        subset = np.zeros_like(initial_mask)
+        chosen = cells[[i for i in range(len(cells)) if bits >> i & 1]]
+        subset[tuple(chosen.T)] = True
+        for survivor in bs.resolve_islands(subset, conditions)[0]:
+            report = acceptance.inspect(survivor, subset, conditions.grid, **conditions.inspect_kwargs())
             if report['status'] == 'pass':
-                best_mm3 = min(best_mm3, report['volumes']['material_mm3'])
-            if report['status'] != 'unknown':
-                for size in sizes:
-                    for kind, mask in repair_candidates(survivor, design_space, size):
-                        if kind == 'delete':
-                            frontier.append(mask)
-        if not survivors:
-            for size in sizes:
-                for kind, mask in repair_candidates(current, design_space, size):
-                    if kind == 'delete':
-                        frontier.append(mask)
-    assert steps == 256  # 初期形状(8セル)の部分集合を全て尽くした(2**8)
-    assert best_mm3 == 8.0  # 一切改善しない
+                passing.append(report['volumes']['material_mm3'])
+    assert passing == [8.0]  # 合格するのは初期形状そのものだけ
 
 
 # ---------------------------------------------------------------------------
@@ -639,13 +496,20 @@ def _rule_violations(mask: np.ndarray, m: int, exempt=None) -> np.ndarray:
     return bad if exempt is None else bad & ~exempt
 
 
+def _box_sums(values: np.ndarray, m: int) -> np.ndarray:
+    """`values` の、各位置を最小の角とする m 立方の総和。配列に収まる位置だけ(形は各軸 n−m+1)。"""
+    total = np.pad(values.astype(np.int32), ((1, 0),) * 3).cumsum(0).cumsum(1).cumsum(2)
+    return (total[m:, m:, m:] - total[:-m, m:, m:] - total[m:, :-m, m:] - total[m:, m:, :-m]
+            + total[:-m, :-m, m:] + total[:-m, m:, :-m] + total[m:, :-m, :-m] - total[:-m, :-m, :-m])
+
+
 def core_groups_oracle(mask: np.ndarray, m: int, exempt=None) -> int:
     """S(m) の物差し(実装とは独立): 芯 = m 立方が全部材料のセル(累積和で数える)の6連結成分を、立方が `exempt` の
     6連結成分と重なるか6近傍で接するものどうしで結んだときの塊の数。要求は1以下(芯が空なら0)。"""
     material = mask if exempt is None else mask | exempt
     if any(n < m for n in mask.shape):
         return 0
-    fits = min_width._box_sums(material, m) == m ** 3
+    fits = _box_sums(material, m) == m ** 3
     core = np.zeros(mask.shape, bool)
     core[tuple(slice(0, n) for n in fits.shape)] = fits
     six = ndimage.generate_binary_structure(3, 1)
@@ -849,265 +713,6 @@ def test_peel_without_min_width_gives_the_same_masks_and_counts_as_before_the_pr
     assert picked == GOLDEN_PEEL_PICKED and digest.hexdigest() == GOLDEN_PEEL_DIGEST
 
 
-def _stage3_child(mask, design_space, op, region, addable, m=2, exempt=None):
-    return bs._materialize(mask, design_space, op, region, addable, min_width_cells=m, exempt=exempt)
-
-
-def test_stage3_delete_of_a_single_cell_takes_the_layer_that_loses_its_cube_instead_of_being_refused():
-    """厚さ2セルの塊(2x2x4)で、1セルの削除は m=2 でも候補に残り、子はその層ごと(z=0 の4セル)を空にした形になる。
-    m=1 の子は1セルだけ。"""
-    mask = np.ones((2, 2, 4), bool)
-    corner = (slice(0, 1), slice(0, 1), slice(0, 1))
-    deletes = [region for op, region, _ in bs.candidate_descriptors(mask, mask, (1,)) if op == 'delete']
-    assert len(deletes) == 16 and corner in deletes
-    assert (~bs._materialize(mask, mask, 'delete', corner, None)).sum() == 1
-    child = _stage3_child(mask, mask, 'delete', corner, None)
-    assert not child[:, :, 0].any() and child[:, :, 1:].all()
-    assert _opening_satisfied(child, 2)
-
-
-def test_stage3_block_delete_and_replace_children_equal_the_global_opening_of_the_raw_child():
-    """落ちたら、段階3の射影(削除・置換で被覆を失うセルを一緒に空にする)が、全体を数え直した opening とずれている。
-    足した `addable` が m 立方に入らなければそのセルも空になる(置換)。追加は膨らませる(下の専用の検査)。"""
-    rng = np.random.default_rng(20260921)
-    checked = casualties = replace_casualties = addable_cleared = truncated = 0
-    for _ in range(40):
-        shape = tuple(int(x) for x in rng.integers(4, 10, size=3))
-        m = int(rng.integers(2, 5))
-        raw = rng.random(shape) < rng.uniform(0.6, 0.95)
-        mask = ndimage.binary_opening(raw, structure=np.ones((m, m, m), dtype=bool))  # 冪等: 前提を満たす入力
-        design_space = np.ones(shape, bool)
-        for size in bs.block_sizes(shape):
-            for op, region, addable in bs.candidate_descriptors(mask, design_space, (size,)):
-                if op == 'add':
-                    continue
-                child = _stage3_child(mask, design_space, op, region, addable, m)
-                unprojected = bs._materialize(mask, design_space, op, region, addable)
-                assert np.array_equal(child, min_width.cube_opening(unprojected, m))
-                assert _opening_satisfied(child, m)
-                checked += 1
-                truncated += any(r.stop - r.start < size for r in region)
-                lost = int(unprojected.sum() - child.sum())
-                casualties += lost > 0
-                replace_casualties += op == 'replace' and lost > 0
-                addable_cleared += op == 'replace' and bool((addable & ~child[region]).any())
-    assert checked > 100 and casualties > 30 and truncated > 20  # 巻き添え・端で切り詰まったブロックが実際に出ている
-    assert replace_casualties > 10 and addable_cleared > 3
-
-
-def _stage3_add(mask, design_space, cell, m=2, exempt=None):
-    """`cell`(1セルのブロック)への追加候補の子。候補が1つあることも確かめる。"""
-    region = tuple(slice(c, c + 1) for c in cell)
-    adds = [addable for op, r, addable in bs.candidate_descriptors(mask, design_space, (1,))
-            if op == 'add' and r == region]
-    assert len(adds) == 1
-    return _stage3_child(mask, design_space, 'add', region, adds[0], m, exempt)
-
-
-def _plate_with_a_through_hole():
-    """2セル厚の板(6x6x2)の中央に貫通穴(3,3,*)。穴の1セルだけを足すと、そのセルは m=2 の立方に入らない。"""
-    plate = np.ones((6, 6, 2), bool)
-    plate[3, 3, :] = False
-    return plate, np.ones_like(plate)
-
-
-def test_stage3_add_fills_a_cube_around_the_added_cell_instead_of_leaving_it_thin():
-    """落ちたら、追加が閉じていない。2セル厚の板の貫通穴に1セルを足すと、そのセルだけが m=2 の立方に入らず残る(または足さずに消える)。
-    膨らませた子は穴の2セルを両方足す。"""
-    plate, design_space = _plate_with_a_through_hole()
-    child = _stage3_add(plate, design_space, (3, 3, 0))
-    assert child[3, 3, 0] and child[3, 3, 1] and int(child.sum() - plate.sum()) == 2
-    assert _opening_satisfied(child, 2)
-
-
-def test_stage3_add_next_to_a_bar_takes_the_cube_that_adds_the_fewest_cells_and_the_smallest_corner_on_a_tie():
-    """落ちたら、膨らませる立方の選び方が変わっている(足すセルが最少・同数なら最小の角が先)。2x2x4 の棒の脇の1セル (0,2,1) を覆う
-    立方は y=1..2 の側が3セルで済み、z=0..1 と z=1..2 が同数なので z=0..1 を選ぶ。"""
-    design_space = np.ones((2, 4, 4), bool)
-    bar = np.zeros_like(design_space)
-    bar[:, :2, :] = True
-    child = _stage3_add(bar, design_space, (0, 2, 1))
-    assert {tuple(int(x) for x in c) for c in np.argwhere(child & ~bar)} == {
-        (x, 2, z) for x in range(2) for z in range(2)}
-    assert _opening_satisfied(child, 2)
-
-
-def test_stage3_add_that_has_no_cube_inside_the_design_space_is_not_added():
-    """落ちたら、m 立方が設計空間に収まらないセルが足されて、規則を破る子ができる(設計空間を opening で絞ってあれば起きない入力)。"""
-    design_space = np.zeros((2, 4, 4), bool)
-    design_space[:, :2, :] = True
-    design_space[0, 2, 1] = True
-    bar = design_space.copy()
-    bar[0, 2, 1] = False
-    child = _stage3_add(bar, design_space, (0, 2, 1))
-    assert np.array_equal(child, bar)
-
-
-def test_stage3_add_counts_an_exempt_cell_missing_from_the_mask_as_material_and_never_asks_it_for_a_cube():
-    """落ちたら、追加の膨らませ方が保持セルの扱いとずれている。保持セルが mask に無くても材料に数えるので、穴の相方が保持セルなら足すのは1セルだけ。
-    足すセル自身が保持セルなら、立方に入らなくてもそのまま足す。"""
-    plate, design_space = _plate_with_a_through_hole()
-    partner = np.zeros_like(plate)
-    partner[3, 3, 1] = True
-    child = _stage3_add(plate, design_space, (3, 3, 0), exempt=partner)
-    assert child[3, 3, 0] and not child[3, 3, 1] and int(child.sum() - plate.sum()) == 1
-    assert bs._mask_satisfies_min_width(child, 2, partner)
-    added = np.zeros_like(plate)
-    added[3, 3, 0] = True
-    child = _stage3_add(plate, design_space, (3, 3, 0), exempt=added)
-    assert child[3, 3, 0] and not child[3, 3, 1] and bs._mask_satisfies_min_width(child, 2, added)
-
-
-def test_stage3_add_children_are_closed_under_the_rule():
-    """落ちたら、追加の子が規則を破る。規則を満たす親の全ブロックの追加候補で、子は規則(`exempt` を材料に数える)を満たし、
-    親のセルも足したセルも消えていない(設計空間を絞ってあるので、足せないセルは無い)。"""
-    rng = np.random.default_rng(20260922)
-    checked = inflated = 0
-    for _ in range(30):
-        m = int(rng.integers(2, 5))
-        shape = tuple(int(x) for x in rng.integers(m + 3, m + 8, size=3))
-        raw = rng.random(shape) < rng.uniform(0.55, 0.9)
-        exempt = (rng.random(shape) < rng.uniform(0.0, 0.25)) & raw if rng.random() < 0.6 else None
-        design = min_width.cube_opening(raw, m)
-        if exempt is not None:
-            design = design | (raw & exempt)
-        picked = design & (rng.random(shape) < rng.uniform(0.3, 0.8))
-        mask = min_width.cube_opening(picked, m)
-        if exempt is not None:
-            mask = mask | (picked & exempt)
-        assert not _rule_violations(mask, m, exempt).any()
-        for op, region, addable in bs.candidate_descriptors(mask, design, (1, 2, 4)):
-            if op != 'add':
-                continue
-            child = _stage3_child(mask, design, 'add', region, addable, m, exempt)
-            raw_child = bs._materialize(mask, design, 'add', region, addable)
-            assert not _rule_violations(child, m, exempt).any()
-            assert (raw_child <= child).all() and (child <= design).all()
-            checked += 1
-            inflated += int(child.sum() > raw_child.sum())
-    assert checked > 300 and inflated > 100  # 膨らませた追加が実際に出ている
-
-
-def test_stage3_exempt_cells_are_never_taken_along_and_still_count_as_material():
-    """2x2x4 の棒から (0,0,1) を1セル削ると z=0・z=1 の8セルが被覆を失う。(1,1,1) が対象外なら巻き添えにならず材料のまま残る。"""
-    bar = np.ones((2, 2, 4), bool)
-    exempt = np.zeros_like(bar)
-    exempt[1, 1, 1] = True
-    region = (slice(0, 1), slice(0, 1), slice(1, 2))
-    plain = _stage3_child(bar, bar, 'delete', region, None)
-    assert not plain[:, :, :2].any() and plain[:, :, 2:].all()
-    child = _stage3_child(bar, bar, 'delete', region, None, exempt=exempt)
-    assert child[1, 1, 1] and int((bar & ~child).sum()) == 7
-    assert bs._mask_satisfies_min_width(child, 2, exempt)
-
-
-def test_stage3_delete_of_an_exempt_cell_takes_nothing_along():
-    """落ちたら、段階3の削除が保持セルを材料から外した扱いで巻き添えを出している。保持セルの削除は、そのセルだけが空になる。"""
-    bar = np.ones((2, 2, 4), bool)
-    region = (slice(0, 1), slice(0, 1), slice(1, 2))
-    exempt = np.zeros_like(bar)
-    exempt[0, 0, 1] = True
-    child = _stage3_child(bar, bar, 'delete', region, None, exempt=exempt)
-    assert not child[0, 0, 1] and int((bar & ~child).sum()) == 1
-    assert bs._mask_satisfies_min_width(child, 2, exempt)
-
-
-def test_lost_coverage_counts_the_cells_a_replacement_adds_as_coverage():
-    """落ちたら、`refill`(置換で足すセル)が被覆に数えられていない: 層を同じ形で入れ直せば何も失わず、空にすれば隣の層を失う。"""
-    mask = np.zeros((4, 2, 2), bool)
-    mask[1:3] = True
-    region = (slice(2, 3), slice(0, 2), slice(0, 2))
-    assert min_width.lost_coverage(mask, region, 2)[1].any()
-    assert not min_width.lost_coverage(mask, region, 2, refill=np.ones((1, 2, 2), bool))[1].any()
-    origin, lost = min_width.lost_coverage(mask, region, 2, refill=np.zeros((1, 2, 2), bool))
-    assert {tuple(int(x) for x in c) for c in np.argwhere(lost) + np.asarray(origin)} == {
-        (1, y, z) for y in range(2) for z in range(2)}
-
-
-def test_stage3_children_that_differ_before_the_projection_are_the_same_candidate_after_it():
-    """落ちたら、訪問済みの判定が射影の前のマスクで行われ、別のブロックから同じ子ができたときに二度解く。
-    2セル厚の板では、1セルの上面と下面のブロックは同じ貫通柱になる。"""
-    plate = np.ones((6, 6, 2), bool)
-    design_space = plate.copy()
-    top, bottom = ((slice(3, 4), slice(3, 4), slice(z, z + 1)) for z in (1, 0))
-    raw = [bs._materialize(plate, design_space, 'delete', r, None) for r in (top, bottom)]
-    projected = [_stage3_child(plate, design_space, 'delete', r, None) for r in (top, bottom)]
-    assert not np.array_equal(*raw) and np.array_equal(*projected)
-
-    frontier = bs._Frontier(4)
-    frontier.push(bs._node(plate, 0, 0, design_space, (1,), 2))
-    budget = bs._Budget(max_evaluations=10 ** 6, max_candidates=10 ** 6)
-    visited, children = set(), []
-    while True:
-        pulled = bs._pull(frontier, design_space, budget, visited, 'id', None, min_width_cells=2)
-        if isinstance(pulled, str):
-            break
-        children.append(acceptance.material_sha256(pulled[0]))
-    assert len(children) == len(set(children)) == budget.generated - budget.duplicates and budget.duplicates > 0
-    distinct_raw = {acceptance.material_sha256(bs._materialize(plate, design_space, op, region, addable))
-                    for op, region, addable in bs.candidate_descriptors(plate, design_space, (1,))}
-    assert len(children) < len(distinct_raw)
-
-
-def _plate_with_an_excluded_column():
-    """8x7x2 の板(固定面=x最小・荷重面=x最大)の列 (2,4) が除外領域に掛かる。全材料は除外で不合格。
-    2セル大の整列ブロック [2,4)x[4,6) だけを削ると y=6 に1セル幅の薄皮が残り、m=2 の規則を破る。"""
-    shape = (8, 7, 2)
-    hole = Pos(2.5, 4.5, 1.0) * Box(.8, .8, 1.8)
-    conditions = dataclasses.replace(bar_conditions(shape=shape), excludes=[('hole', hole.wrapped)])
-    return conditions, np.ones(shape, bool)
-
-
-def test_stage3_reaches_an_initial_feasible_shape_through_a_projected_delete_that_a_thickness_filter_cannot_reach():
-    """落ちたら、段階3の削除が被覆を失うセルを一緒に空にしていない。この題材では、除外された列を含む2セル大の整列ブロックの
-    素朴な子は薄皮が残って規則を破る。射影した子は規則を満たし、評価60回以内で初期合格に届く。"""
-    conditions, design = _plate_with_an_excluded_column()
-    block = (slice(2, 4), slice(4, 6), slice(0, 2))
-    naive = bs._materialize(design, design, 'delete', block, None)
-    child = _stage3_child(design, design, 'delete', block, None)
-    assert not _opening_satisfied(naive, 2) and _opening_satisfied(child, 2)
-    assert not child[2:4, 4:7].any() and child.sum() == design.sum() - 12
-
-    result = bs.find_initial_feasible(design, conditions, max_evaluations=60, min_width_cells=2)
-    assert result.status == 'feasible' and result.evaluations <= 60
-    mask = result.best_feasible.mask
-    assert _opening_satisfied(mask, 2) and not mask[2, 4].any()
-
-
-GOLDEN_STAGE3_M1_DIGEST = 'ee6914b03c9f50242ba242ff0755e1663a7108c446f69723d199c704a910369d'
-
-
-def test_stage3_with_min_width_one_gives_the_same_candidates_masks_and_search_as_before_the_projection():
-    """落ちたら、m=1(既定)の段階3の候補の並び・子マスク・評価回数・履歴が、射影を入れる前と変わっている。
-    期待値は変更前のコードで同じ手順を回して得たハッシュ(乱数の親25個の全候補と、除外つきの板の探索3本)。"""
-    rng = np.random.default_rng(20260926)
-    digest = hashlib.sha256()
-    for _ in range(25):
-        shape = tuple(int(x) for x in rng.integers(2, 8, size=3))
-        design = rng.random(shape) < .9
-        mask = design & (rng.random(shape) < .7)
-        for size in bs.block_sizes(shape):
-            for allow_add in (True, False):
-                for op, region, addable in bs.candidate_descriptors(mask, design, (size,), allow_add=allow_add):
-                    child = bs._materialize(mask, design, op, region, addable)
-                    digest.update(repr((op, [(s.start, s.stop) for s in region])).encode())
-                    digest.update(b'' if addable is None else np.ascontiguousarray(addable).tobytes())
-                    digest.update(np.ascontiguousarray(child).tobytes())
-
-    def hole_conditions(shape, cell):
-        hole = Pos(cell[0] + .5, cell[1] + .5, shape[2] / 2) * Box(.8, .8, shape[2] - .2)
-        return dataclasses.replace(bar_conditions(shape=shape), excludes=[('hole', hole.wrapped)])
-
-    for conditions, design, budget in ((*detour_conditions(), 120),
-                                       (hole_conditions((8, 7, 2), (3, 3)), np.ones((8, 7, 2), bool), 1400),
-                                       (hole_conditions((6, 7, 2), (3, 4)), np.ones((6, 7, 2), bool), 120)):
-        result = bs.find_initial_feasible(design, conditions, max_evaluations=budget)
-        digest.update(repr([(t.operation, t.mask_hash, t.outcome, t.parent) for t in result.history]).encode())
-        digest.update(repr((result.status, result.termination, result.evaluations,
-                            result.diagnostics['candidates'])).encode())
-    assert digest.hexdigest() == GOLDEN_STAGE3_M1_DIGEST
-
-
 def test_search_with_min_width_cells_produces_a_shape_that_an_independent_opening_check_accepts():
     """最終形状を `peel` とは別の測り方(`binary_opening`)で確かめる(局所判定の穴の検出器)。
     同じ題材の m=1 は厚み1セルまで削るので、規則が実際に効いていることの対照になる。"""
@@ -1145,14 +750,14 @@ def test_min_width_search_starts_from_the_design_space_thickness_opening():
 
 
 def test_a_design_space_that_already_violates_min_width_still_reaches_a_conforming_shape():
-    """落ちたら、違反した設計空間を入口の opening で絞らずに出発している(絞らない探索は評価23回、絞ると1回)。"""
+    """落ちたら、違反した設計空間を入口の opening で絞らずに評価している(絞らない全材料は規則を破り、合格に届かない)。"""
     design = np.ones((6, 3, 3), bool)
     for cell in [(2, 0, 0), (3, 0, 0), (2, 0, 2), (3, 0, 2)]:
         design[cell] = False
     conditions = bar_conditions(shape=design.shape)
     assert not _opening_satisfied(design, 2)
     result = bs.find_initial_feasible(design, conditions, max_evaluations=40, min_width_cells=2)
-    assert result.status == 'feasible' and result.evaluations <= 5
+    assert result.status == 'feasible' and result.evaluations == 1
     assert _opening_satisfied(result.best_feasible.mask, 2)
     assert result.diagnostics['min_width'] == dict(cells=2, design_cells=int(design.sum()),
                                                    trimmed_cells=int(design.sum() - ndimage.binary_opening(
@@ -1162,35 +767,17 @@ def test_a_design_space_that_already_violates_min_width_still_reaches_a_conformi
 
 
 def test_the_min_width_check_runs_before_any_fem_evaluation(monkeypatch):
-    """落ちたら、規則を破る候補にFEM(hanger 2.4mm で1回100秒超)を払っている。"""
+    """落ちたら、規則を破る全材料にFEM(hanger 2.4mm で1回100秒超)を払っているか、規則を破る形を合格として返している。"""
     calls = []
     real_inspect = acceptance.inspect
     monkeypatch.setattr(acceptance, 'inspect', lambda *a, **k: calls.append(1) or real_inspect(*a, **k))
     monkeypatch.setattr(bs, '_mask_satisfies_min_width', lambda mask, m, exempt=None: False)
     conditions = bar_conditions(shape=(4, 2, 2))
     result = bs.find_initial_feasible(np.ones((4, 2, 2), bool), conditions, max_evaluations=6, min_width_cells=2)
-    assert result.status == 'no_feasible_found' and result.best_feasible is None
+    assert (result.status, result.termination, result.best_feasible) == ('no_feasible_found', 'full_material_infeasible', None)
     assert calls == []
-    assert result.history[0].checks == dict(min_width='fail')
-    assert all(t.checks == dict(min_width='fail') for t in result.history if t.outcome != 'no_component')
-
-
-def test_a_candidate_that_fails_the_min_width_check_is_not_returned_and_the_search_goes_on(monkeypatch):
-    """落ちたら、大域判定に落ちた候補が合格として返る、または探索が止まる(`add` は局所判定しない)。"""
-    real = bs._mask_satisfies_min_width
-    state = {'first': True}
-
-    def first_fails(mask, m, exempt=None):
-        verdict = real(mask, m, exempt) and not state['first']
-        state['first'] = False
-        return verdict
-
-    monkeypatch.setattr(bs, '_mask_satisfies_min_width', first_fails)
-    conditions = bar_conditions(shape=(6, 3, 3))
-    result = bs.find_initial_feasible(np.ones((6, 3, 3), bool), conditions, max_evaluations=40, min_width_cells=2)
-    assert result.history[0].outcome == 'infeasible' and result.history[0].checks == dict(min_width='fail')
-    assert result.status == 'feasible' and result.best_feasible.trial_index > 0
-    assert _opening_satisfied(result.best_feasible.mask, 2)
+    assert [t.checks for t in result.history] == [dict(min_width='fail')]
+    assert result.diagnostics['full_material']['attempts'][0]['failed'] == ['min_width']
 
 
 def test_trimming_the_design_space_can_cut_a_preserved_region_and_is_then_refused_at_entry_with_the_count():
@@ -1395,8 +982,7 @@ def test_with_min_width_one_keep_cells_change_neither_the_result_nor_the_cost(mo
         raise AssertionError('m=1 で最小幅の判定を呼んだ')
 
     for owner, name in ((min_width, 'cube_opening'), (min_width, 'lost_coverage'), (min_width, 'casualties'),
-                        (min_width, 'bite_verdict'), (min_width, 'cover_additions'),
-                        (bs, '_mask_satisfies_min_width')):
+                        (min_width, 'bite_verdict'), (bs, '_mask_satisfies_min_width')):
         monkeypatch.setattr(owner, name, forbidden)
     marked = dataclasses.replace(conditions, keep_cells=np.ones((8, 3, 3), bool))
     with_keep = bs.find_best_feasible(design, marked, max_evaluations=200, min_width_cells=1)
@@ -1664,8 +1250,8 @@ def test_a_computation_failure_is_not_accepted_and_does_not_stop_the_reduction(m
 
 
 def test_deletion_only_reduction_cannot_leave_the_detour_shape_a_known_limit():
-    """段階4は削るだけなので、どの削除でも不合格になる detour 形状からは動けない(既知の限界。
-    追加・置換で抜けるのは段階3の探索だけ)。落ちたら段階4が材料を足している。"""
+    """段階4は削るだけなので、どの削除でも不合格になる detour 形状からは動けない(既知の限界)。
+    落ちたら段階4が材料を足している。"""
     conditions, _ = detour_conditions()
     initial = _seed_search_result(detour_initial_mask(), conditions)
     result = bs._reduce_volume(initial, detour_initial_mask(), conditions, max_evaluations=200, is_cancelled=None)
@@ -1749,7 +1335,6 @@ def test_tiny_grid_exhaustive_enumeration_matches_the_search_optimum():
     assert result.evaluations <= 20
 
 
-
 def test_find_best_feasible_propagates_a_non_feasible_stage3_result_unchanged():
     """初期合格そのものが見つからなければ、段階4は何もせず段階3の`SearchResult`をそのまま返す。"""
     shape = (4, 2, 2)
@@ -1790,27 +1375,14 @@ def test_computation_failure_is_recorded_as_unknown_and_never_becomes_the_best_f
 # ---------------------------------------------------------------------------
 # 修正B: 入口の必要条件(docs/FIX_BINARY_SEARCH_INITIALIZATION.md §4)
 # ---------------------------------------------------------------------------
-def test_uncovered_anchor_nodes_stop_at_the_entry_without_generating_or_evaluating(monkeypatch):
-    """確定表の節点が全設計空間の材料に接しないなら、候補生成0回・FEM0回で `boundary_mapping_failed`。
+def test_uncovered_anchor_nodes_stop_at_the_entry_without_evaluating(monkeypatch):
+    """確定表の節点が全設計空間の材料に接しないなら、FEM0回で `boundary_mapping_failed`。
     APIを直接呼ぶ経路でも同じ判定を通る(製品入口だけの防御にしない)。"""
     shape = (4, 2, 2)
     conditions = bar_conditions(shape=shape)
     design = np.ones(shape, bool)
     design[3] = False  # 荷重面(x=4平面)の9節点はどの材料セルにも接しない
-    calls = {'inspect': 0, 'materialize': 0}
-
-    def counting_inspect(*args, **kwargs):
-        calls['inspect'] += 1
-        raise AssertionError('入口で止まるべき経路が評価に進んだ')
-
-    original = bs._materialize
-
-    def counting_materialize(*args, **kwargs):
-        calls['materialize'] += 1
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(acceptance, 'inspect', counting_inspect)
-    monkeypatch.setattr(bs, '_materialize', counting_materialize)
+    monkeypatch.setattr(acceptance, 'inspect', lambda *a, **k: pytest.fail('入口で止まるべき経路が評価に進んだ'))
     result = bs.find_initial_feasible(design, conditions, max_evaluations=10)
     assert result.status == 'boundary_mapping_failed'
     assert result.termination == 'boundary_mapping_failed'
@@ -1818,17 +1390,15 @@ def test_uncovered_anchor_nodes_stop_at_the_entry_without_generating_or_evaluati
     rows = result.diagnostics['uncovered_condition_nodes']
     assert [(r['condition'], r['nodes'], r['uncovered_nodes']) for r in rows] == [('load_face_2', 9, 9)]
     assert result.diagnostics['mapped'] is False  # 元入力(未対応付けの表)か対応付け済みかを区別する
-    assert calls == {'inspect': 0, 'materialize': 0}
     assert bs.find_best_feasible(design, conditions, max_evaluations=10).status == 'boundary_mapping_failed'
 
 
 def test_a_failed_mapping_report_stops_the_direct_api_even_when_every_node_is_on_material(monkeypatch):
-    """全節点が材料に接していても、渡された対応付けの検証が不成立なら候補生成0回・FEM0回で止まる。"""
+    """全節点が材料に接していても、渡された対応付けの検証が不成立ならFEM0回で止まる。"""
     conditions = bar_conditions(shape=(4, 2, 2))
     failed = dict(status='fail', faces=[dict(condition='load_face_2', status='fail', reasons=['unmapped_samples'])])
     conditions = dataclasses.replace(conditions, mapping=failed)
     monkeypatch.setattr(acceptance, 'inspect', lambda *a, **k: pytest.fail('入口で止まるべき経路が評価に進んだ'))
-    monkeypatch.setattr(bs, '_materialize', lambda *a, **k: pytest.fail('入口で止まるべき経路が候補を作った'))
     result = bs.find_best_feasible(np.ones((4, 2, 2), bool), conditions, max_evaluations=10)
     assert result.status == 'boundary_mapping_failed' and result.evaluations == 0
     assert result.diagnostics['uncovered_condition_nodes'] == []
@@ -1897,192 +1467,26 @@ def _stub_evaluation(monkeypatch):
     monkeypatch.setattr(acceptance, 'inspect', lambda material, before, grid, **kwargs: _fake_report(material))
 
 
-def test_candidates_are_materialised_one_at_a_time_not_all_up_front(monkeypatch):
-    """1候補を要求した時点で1マスクしか作られていない(generator 型の確認ではなく、作った数を数える)。"""
-    calls = {'n': 0}
-    original = bs._materialize
-
-    def counting(*args, **kwargs):
-        calls['n'] += 1
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(bs, '_materialize', counting)
-    current = np.ones((12, 12, 12), bool)
-    current[6:] = False
-    design = np.ones((12, 12, 12), bool)
-    stream = repair_candidates(current, design, 1)
-    kind, mask = next(stream)
-    assert calls['n'] == 1 and kind == 'delete' and mask.sum() == current.sum() - 1
-    for _ in range(4):
-        next(stream)
-    assert calls['n'] == 5
-    possible = sum(1 for _ in bs.candidate_descriptors(current, design, (1,)))
-    assert possible > 500  # 全部先に作れば数百枚になる題材(表面の削除464+追加144)で、5枚しか作っていない
-
-    _stub_evaluation(monkeypatch)
-    calls['n'] = 0
-    conditions = bar_conditions(shape=(12, 12, 12))
-    result = bs.find_initial_feasible(design, conditions, max_evaluations=4)
-    assert result.termination == 'evaluation_limit'
-    generated = result.diagnostics['candidates']['generated']
-    assert calls['n'] == generated
-    assert generated < 40  # 親1つの子候補(数千)を先に作っていない
-
-
-def test_retained_masks_do_not_grow_with_the_evaluation_budget(monkeypatch):
-    """実格子相当の大きさ(48³)で、評価回数を4倍にしてもキューと親マスクの数は上限以内で、
-    実測メモリのピークも上限×マスク大きさの定数倍に収まる(初期・削減の両経路)。"""
-    import tracemalloc
-
-    _stub_evaluation(monkeypatch)
-    shape = (48, 48, 48)
-    conditions = bar_conditions(shape=shape)
-    design = np.ones(shape, bool)
-    mask_bytes = design.nbytes
-    capacity = 6
-    # 親1つが提案できる記述の数(全部先に配列にすると、この枚数のマスクが要る)。
-    eager_masks = sum(1 for _ in bs.candidate_descriptors(design, design, tuple(reversed(bs.block_sizes(shape)))))
-    assert eager_masks > 10_000
-    peaks = {}
-    for budget in (20, 160):
-        tracemalloc.start()
-        result = bs.find_initial_feasible(design, conditions, max_evaluations=budget, frontier_capacity=capacity)
-        _, peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
-        peaks[budget] = peak
-        assert result.evaluations == budget
-        frontier = result.diagnostics['frontier']
-        assert frontier['peak_retained'] <= capacity and frontier['retained'] <= capacity
-        # 実測のピークは入口検査(保持CADとの重なり: 材料の直方体列)の定数分が約28枚ぶんで、
-        # 探索は容量+作業配列の数枚しか足さない。全候補を先に作る方式の 1/200 以下。
-        assert peak <= 64 * mask_bytes, (budget, peak / mask_bytes)
-    assert peaks[160] <= peaks[20] + 2 * mask_bytes  # 評価回数を8倍にしても増えない
-
-
-
-def test_generation_budget_and_cancellation_act_on_duplicates_that_never_reach_evaluation(monkeypatch):
-    """無効・重複候補だけで評価数が増えないときも、走査予算と中断が効く(無限に生成し続けない)。"""
-    shape = (6, 2, 2)
-    conditions = bar_conditions(shape=shape, target_safety_factor=1e12)
-    monkeypatch.setattr(acceptance, 'material_sha256', lambda mask: 'same')  # 全候補が同一に見える → 重複しか生成されない
-    result = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=50, max_candidates=25)
-    assert result.status == 'no_feasible_found' and result.termination == 'generation_limit'
-    assert result.evaluations == 1
-    candidates = result.diagnostics['candidates']
-    assert candidates['scanned'] == 25 and candidates['limit'] == 25
-    assert 0 < candidates['generated'] < 25  # 全材料の親では追加・置換のブロックは無効で、予算だけを使う
-    assert candidates['duplicates'] == candidates['generated']
-    assert (candidates['evaluations'], candidates['evaluation_limit']) == (1, 50)
-
-    calls = {'n': 0}
-
-    def is_cancelled():
-        calls['n'] += 1
-        return calls['n'] > 10
-
-    result = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=50, max_candidates=1000,
-                                      is_cancelled=is_cancelled)
-    assert result.termination == 'cancelled' and result.evaluations == 1
-    assert result.diagnostics['candidates']['generated'] < 1000  # 生成の途中で止まった
-
-
-def test_a_long_run_of_invalid_blocks_is_bounded_by_the_scan_budget_and_cancellation(monkeypatch):
-    """次の有効な候補が3万ブロック先にあっても、無効なブロックの走査が予算・中断の外で続かない。
-    落ちたら、1回の候補要求の中で格子を黙って1周しうる。"""
-    shape = (32, 32, 32)
-    design = np.ones(shape, bool)
-    parent = np.zeros(shape, bool)
-    parent[-1, -1, -1] = True  # 削除できるのは走査順で最後のブロックだけ
-    visited_blocks = {'n': 0}
-    original = bs._block_region
-
-    def counting_region(*args, **kwargs):
-        visited_blocks['n'] += 1
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(bs, '_block_region', counting_region)
-
-    def pull(max_candidates, is_cancelled=None):
-        frontier = bs._Frontier(4)
-        frontier.push(bs._node(parent.copy(), 0, 0, design, (1,), max_consecutive_adds=0))
-        budget = bs._Budget(max_evaluations=1, max_candidates=max_candidates)
-        return bs._pull(frontier, design, budget, set(), 'id', is_cancelled), budget
-
-    visited_blocks['n'] = 0
-    outcome, budget = pull(100)
-    assert outcome == 'generation_limit'
-    assert budget.scanned == 100 and budget.generated == 0
-    assert visited_blocks['n'] <= 101
-
-    calls = {'n': 0}
-
-    def cancel_after_fifty():
-        calls['n'] += 1
-        return calls['n'] > 50
-
-    visited_blocks['n'] = 0
-    outcome, budget = pull(10 ** 9, cancel_after_fifty)
-    assert outcome == 'cancelled' and budget.scanned == 50 and visited_blocks['n'] <= 51
-
-    outcome, budget = pull(10 ** 9)  # 予算が足りれば、最後のブロックの削除候補に届く
-    assert outcome[1] == 'delete' and not outcome[0].any()
-    assert budget.scanned == parent.size and budget.generated == 1
-
-
-def test_the_default_scan_budget_allows_one_sweep_of_the_grid_per_evaluation():
-    assert bs._candidate_budget(10, None, (40, 50, 60)) == 10 * 40 * 50 * 60
-    assert bs._candidate_budget(10, None, (2, 2, 2)) == 10 * bs.DEFAULT_CANDIDATES_PER_EVALUATION
-    assert bs._candidate_budget(10, 7, (40, 50, 60)) == 7
-
-
-def test_the_initial_search_checks_cancellation_before_each_generation_and_evaluation():
+def test_the_full_material_evaluation_checks_cancellation_before_the_fem(monkeypatch):
+    """落ちたら、中断済みなのに全材料のFEM(hanger 2.4mm で1回100秒超)を始めている。"""
     shape = (4, 2, 2)
-    conditions = bar_conditions(shape=shape, target_safety_factor=1e12)
-    calls = {'n': 0}
-
-    def is_cancelled():
-        calls['n'] += 1
-        return calls['n'] > 2
-
-    result = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=50, is_cancelled=is_cancelled)
-    assert result.status == 'no_feasible_found' and result.termination == 'cancelled'
-    assert result.evaluations <= 3 and result.best_feasible is None
-    assert bs.find_best_feasible(np.ones(shape, bool), conditions, max_evaluations=50,
-                                 is_cancelled=lambda: calls['n'] > 2).termination == 'cancelled'
-
-
-def test_operation_generators_are_interleaved_so_adds_and_replaces_are_not_starved():
-    """削除候補が並んでいても、各大きさで削除→追加→置換の順に1つずつ巡回する(削除優先は保つ)。"""
-    current = np.zeros((16, 1, 1), bool)
-    current[:7] = True
-    design = np.ones((16, 1, 1), bool)
-    ops = [op for op, _, _ in itertools.islice(bs.candidate_descriptors(current, design, (2,)), 6)]
-    assert ops[:3] == ['delete', 'add', 'replace']
-    assert ops[3:] == ['delete', 'delete', 'delete']  # 追加・置換が尽きたら削除だけが続く
-    # 連続追加の上限に達した親は追加を生成しないが、置換(体積を増やさない)は残す
-    limited = {op for op, _, _ in bs.candidate_descriptors(current, design, (2,), allow_add=False)}
-    assert limited == {'delete', 'replace'}
-
-
-def test_frontier_eviction_is_recorded_and_never_reported_as_neighbourhood_exhausted(monkeypatch):
-    """容量超過で親を捨てた探索は、キューが空になっても「近傍を全て探索した」と言わない(段階3)。"""
-    _stub_evaluation(monkeypatch)  # 全候補が不合格 → 到達できる部分集合(2**6)を尽くすまで親が積まれる
-    shape = (3, 2, 1)
     conditions = bar_conditions(shape=shape)
-    tight = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=3000, frontier_capacity=2)
-    assert tight.termination == 'frontier_truncated'
-    assert tight.diagnostics['frontier']['evictions'] > 0
-    assert tight.diagnostics['frontier']['peak_retained'] <= 2
-    wide = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=3000, frontier_capacity=4096)
-    assert wide.termination == 'neighbourhood_exhausted'
-    assert wide.diagnostics['frontier']['evictions'] == 0
+    monkeypatch.setattr(acceptance, 'inspect', lambda *a, **k: pytest.fail('中断済みなのに評価に進んだ'))
+    result = bs.find_initial_feasible(np.ones(shape, bool), conditions, is_cancelled=lambda: True)
+    assert (result.status, result.termination) == ('no_feasible_found', 'cancelled')
+    assert result.evaluations == 0 and result.best_feasible is None
+    assert bs.find_best_feasible(np.ones(shape, bool), conditions, is_cancelled=lambda: True).termination == 'cancelled'
 
 
 def partial_region_conditions():
-    """`appendage_conditions` と同じ棒だが、保持・除外CADが格子の一部にだけ掛かる(境界のセルが部分的に重なる)。"""
+    """`appendage_conditions` と同じ棒だが、保持CADが格子の一部にだけ掛かり(境界のセルが部分的に重なる)、除外CADは
+    設計空間の切り欠きの中にある。除外に掛かるセルは設計空間から抜いておく(製品の `design_space.derive` と同じ。
+    全材料が除外で落ちると段階3は形を探さない)。"""
     conditions, design, appendage = appendage_conditions()
     keep = Pos(5.3, 1.1, 0.9) * Box(7.4, 1.8, 1.6)
     hole = Pos(5.2, 3.4, 1.0) * Box(2.3, 0.9, 1.7)
+    design = design.copy()
+    design[4:7, 2:4, :] = False  # hole の x∈[4.05, 6.35]・y∈[2.95, 3.85] に掛かるセル
     return dataclasses.replace(conditions, preserves=[('keep', keep.wrapped)], excludes=[('hole', hole.wrapped)]), design
 
 
@@ -2100,7 +1504,7 @@ def test_the_search_is_identical_with_and_without_the_region_overlap_precompute(
 
 
 def test_candidates_use_the_precompute_and_only_the_adopted_shape_is_rechecked_with_the_direct_boolean(monkeypatch):
-    """候補の評価は前計算から引き、ブーリアンで取り直すのは採用形状(段階3の最終再検査と段階4の最終再検査)だけ。"""
+    """候補の評価は前計算から引き、ブーリアンで測るのは段階3の全材料の評価と段階4の採用形状の再検査だけ。"""
     conditions, design = partial_region_conditions()
     direct_calls, inspects = [], []
     original_direct, original_inspect = acceptance.intersection_volume, acceptance.inspect
@@ -2109,8 +1513,8 @@ def test_candidates_use_the_precompute_and_only_the_adopted_shape_is_rechecked_w
     monkeypatch.setattr(acceptance, 'inspect',
                         lambda *args, **kwargs: inspects.append(1) or original_inspect(*args, **kwargs))
     result = bs.find_best_feasible(design, conditions, max_evaluations=60)
-    assert result.status == 'feasible' and len(inspects) > 6
-    # 検査1回の保持1本+除外1本 = 2回。最終再検査は段階3で1回、段階4で保持・除外だけを1回。
+    assert result.status == 'feasible' and len(inspects) > 2
+    # 検査1回の保持1本+除外1本 = 2回。段階3の全材料で1回、段階4の最終再検査で保持・除外だけを1回。
     assert len(direct_calls) == 4, (len(direct_calls), len(inspects))
     assert result.diagnostics['reduction']['final_region_recheck'] in ('pass', 'not_needed')
     assert conditions.region_overlaps is not None and len(conditions.region_overlaps) == 2

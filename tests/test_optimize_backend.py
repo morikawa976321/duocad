@@ -841,17 +841,45 @@ def _failed_result(status: str, termination: str, **diagnostics):
         conditions_identifier="test", diagnostics=diagnostics)
 
 
-def test_a_failure_under_min_width_names_the_constraint_instead_of_only_the_budget() -> None:
-    """予算で止まったとき、最小幅が有効なら「予算を増やす前に最小幅を疑う」を添える(1回のFEMが100秒超)。
-    最小幅が無い実行の文面は変えない。"""
+def _full_material_failure(termination: str, status: str, checks: dict, **diagnostics):
+    attempt = dict(trial=0, status=status, failed=list(checks), checks=checks)
+    return _failed_result("no_feasible_found", termination, full_material=dict(
+        islands=dict(components=1, surviving_components=1, removed_islands=[]), attempts=[attempt]), **diagnostics)
+
+
+def test_a_full_material_failure_names_the_failed_check_with_its_numbers_and_never_the_budget() -> None:
+    """落ちたら、全材料が不合格のときに「どの検査が・どんな値で」落ちたかが画面に出ない(予算では直らないのに予算を案内する)。"""
+    safety = _full_material_failure("full_material_infeasible", "fail", dict(
+        safety=dict(status="fail", safety_factor=1.25, target_safety_factor=2.0)))
+    warning = optimize_run._search_failure_warning(safety)
+    assert "全材料でも6条件に合格しない" in warning and "安全率 1.25 が目標 2 に届かない" in warning
+    assert "予算" not in warning
+
+    geometry = _full_material_failure("full_material_infeasible", "fail", dict(
+        watertight=dict(status="fail", irregular_vertices=3, sample_vertex_indices=[[1, 2, 3]], void_components=1),
+        exclude=dict(status="fail", bodies=[dict(body="hole", status="fail"), dict(body="slot", status="pass")]),
+        safety=dict(status="unknown", reason="prerequisites_failed")))
+    warning = optimize_run._search_failure_warning(geometry)
+    assert "非多様体の頂点 3 個" in warning and "[[1, 2, 3]]" in warning
+    assert "除外ソリッドに材料が掛かっている(hole)" in warning and "slot" not in warning
+    assert "安全率" not in warning.split("。")[0]  # 前提の検査が落ちて飛ばしたFEMを、安全率の不足として語らない
+
+    solver = _full_material_failure("evaluation_error", "unknown", dict(
+        safety=dict(status="unknown", reason="evaluation_error", error="RuntimeError: singular")))
+    warning = optimize_run._search_failure_warning(solver)
+    assert "応力計算が、解法を変えた再試行の後も失敗した" in warning and "RuntimeError: singular" in warning
+
+
+def test_a_full_material_failure_under_min_width_says_the_design_space_was_trimmed() -> None:
+    """落ちたら、最小幅で絞った設計空間の全材料が落ちたのに、絞ったことが画面に出ない。最小幅が無い実行の文面は変えない。"""
     min_width = {"requested_mm": 5.0, "spacing_mm": 2.4, "cells": 3, "guaranteed_mm": 7.2}
-    limit = _failed_result("no_feasible_found", "evaluation_limit")
-    plain = optimize_run._search_failure_warning(limit)
-    assert plain == optimize_run._search_failure_warning(limit, {"cells": 1})
-    assert "最小幅" not in plain
-    warning = optimize_run._search_failure_warning(limit, min_width)
-    assert warning.startswith(plain) and "最小幅 7.2 mm(3セル)の制約が有効" in warning
-    assert "幅を失うセルも一緒に抜いた形" in warning and "予算を増やす前に" in warning
+    checks = dict(safety=dict(status="fail", safety_factor=1.25, target_safety_factor=2.0))
+    failed = _full_material_failure("full_material_infeasible", "fail", checks,
+                                    min_width=dict(cells=3, design_cells=1000, trimmed_cells=58))
+    plain = optimize_run._search_failure_warning(failed)
+    assert plain == optimize_run._search_failure_warning(failed, {"cells": 1}) and "最小幅" not in plain
+    warning = optimize_run._search_failure_warning(failed, min_width)
+    assert warning.startswith(plain) and "最小幅 7.2 mm(3セル)の制約が有効" in warning and "58/1000" in warning
 
 
 def test_an_entry_failure_says_the_check_ran_on_the_design_space_trimmed_by_min_width() -> None:
@@ -914,7 +942,7 @@ def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
         )
         best = binary_search.FeasibleModel(mask=mask, before_mask=mask, report=report, trial_index=0)
         return binary_search.SearchResult(
-            status="feasible", termination="neighbourhood_exhausted", best_feasible=best,
+            status="feasible", termination="converged", best_feasible=best,
             history=[], evaluations=3, conditions_identifier="test",
         )
 
@@ -924,7 +952,7 @@ def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
 
     assert result["state"] == "done"
     assert result["body_id"] is not None
-    assert result["termination"] == "neighbourhood_exhausted"
+    assert result["termination"] == "converged"
     assert result["evaluations"] == 3
     assert len(calls) == 1
     # **`spacing` を渡さない(要素添字空間のまま)。** 渡すと `_mesh_to_world` の

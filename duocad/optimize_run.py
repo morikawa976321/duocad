@@ -853,7 +853,7 @@ def _run(
     debug: Optional[Callable[[dict], None]] = None,
     debug_kinds: Optional[Any] = None,
 ) -> dict:
-    """入力条件 → 固定設計空間の導出(1回) → 初期合格探索とエネルギー順の削減 → 最終確定マスクの
+    """入力条件 → 固定設計空間の導出(1回) → 全材料の評価とエネルギー順の削減 → 最終確定マスクの
     メッシュ化 → 保持・除外ブーリアン → CADとして文書へ(計画書§3の単一経路)。
 
     **元のボディは1つも消さない・変えない。** 足すのは1つだけで、その `body_id` を返す。
@@ -1070,7 +1070,7 @@ def _run(
     pump.emit(
         phase="search",
         message=(
-            f"形状の探索を始める(初期合格探索 → エネルギー順の削減。目標安全率 {opts.target_safety_factor:.3g}・"
+            f"形状の探索を始める(全材料の評価 → エネルギー順の削減。目標安全率 {opts.target_safety_factor:.3g}・"
             f"評価予算 {budget_text})"
         ),
     )
@@ -1441,31 +1441,26 @@ def _search_failure_warning(search_result: Any, min_width: Optional[dict] = None
 
 
 def _min_width_failure_note(search_result: Any, min_width: Optional[dict]) -> str:
-    """最小幅が有効(`cells`>1)なときだけ返す。入口で止まったときは絞った設計空間に対する結果であること、
-    初期合格が見つからずに止まったときは予算より先に最小幅を疑うこと(hanger 2.4mm は1回のFEMが100秒超)を添える。
-    合格形状から始まる段階4は `feasible` で返るので、ここへは来ない。"""
+    """最小幅が有効(`cells`>1)で、設計空間が絞られたときだけ返す: 入口検査も全材料の評価も、絞った後の設計空間に
+    対する結果であることを添える。合格形状から始まる段階4は `feasible` で返るので、ここへは来ない。"""
     if not min_width or int(min_width.get("cells", 1)) <= 1:
         return ""
-    head = f"最小幅 {float(min_width['guaranteed_mm']):.4g} mm({int(min_width['cells'])}セル)の制約が有効"
     if search_result.status == 'resolution_insufficient':
         return ""
-    if search_result.status in ('input_contradiction', 'boundary_mapping_failed'):
-        info = (search_result.diagnostics or {}).get('min_width') or {}
-        trimmed = int(info.get('trimmed_cells', 0))
-        if not trimmed:
-            return ""
-        return (f"{head}: この検査は、設計空間から立方が入らない {trimmed}/{info['design_cells']} セルを除いた後の"
-                "空間に対して行った。最小幅を下げると通ることがある")
-    return (f"{head}: 初期合格を探す削除・置換は、抜いた後に幅を失うセルも一緒に抜いた形で、追加は足したセルを最小幅の立方へ膨らませた形で評価される。"
-            "予算を増やす前に、最小幅を下げて同じ題材が通るか確かめること")
+    info = (search_result.diagnostics or {}).get('min_width') or {}
+    trimmed = int(info.get('trimmed_cells', 0))
+    if not trimmed:
+        return ""
+    head = f"最小幅 {float(min_width['guaranteed_mm']):.4g} mm({int(min_width['cells'])}セル)の制約が有効"
+    return (f"{head}: この検査は、設計空間から立方が入らない {trimmed}/{info['design_cells']} セルを除いた後の"
+            "空間に対して行った。最小幅を下げると通ることがある")
 
 
 def _search_failure_message(search_result: Any) -> str:
     """`SearchResult.status` が `'feasible'` 以外のときの一言(段階4の契約により値自体は
 
-    そのままUI/ログへ渡す。ここでは日本語の説明を1つ添えるだけ)。**評価予算を増やす案内は
-    予算で終わった(`evaluation_limit`)ときにだけ付ける** —— 境界条件の不整合や近傍の枯渇は
-    予算では直らない。
+    そのままUI/ログへ渡す。ここでは日本語の説明を1つ添えるだけ)。評価予算を増やす案内は付けない ——
+    `feasible` 以外はどれも全材料かその手前で決まり、予算では直らない。
     """
     diagnostics = search_result.diagnostics or {}
     if search_result.status == 'input_contradiction':
@@ -1492,24 +1487,65 @@ def _search_failure_message(search_result: Any) -> str:
         for report in (diagnostics.get('entry_mapping'), diagnostics.get('mapping')):
             message = an.format_mapping_warning(report) if isinstance(report, dict) else ''
             if message:
-                return message + "。候補の削除・追加・置換では直らない(候補は設計空間の部分集合)"
+                return message + "。材料を減らす探索では直らない(候補は設計空間の部分集合)"
         rows = diagnostics.get('uncovered_condition_nodes', [])
         names = ", ".join(f"{row['condition']}({row['uncovered_nodes']}/{row['nodes']}節点)" for row in rows)
         origin = "材料に対応付けた確定表" if diagnostics.get('mapped') else "材料を見ない幾何の表"
         return (
             f"拘束面・荷重面の節点が設計空間全体の材料に接していない: {names}(表: {origin})。"
-            "候補の削除・追加・置換では直らない(候補は設計空間の部分集合)ので、"
+            "材料を減らす探索では直らない(候補は設計空間の部分集合)ので、"
             "除外ソリッド・条件面の位置と対応付けを見直すこと"
         )
-    head = (
-        f"6条件に合格するモデルを見つけられなかった({search_result.termination}、"
-        f"評価 {search_result.evaluations}回)。"
-    )
-    if search_result.termination == 'evaluation_limit':
-        return head + "評価予算を増やすか条件を見直すこと"
-    if search_result.termination == 'generation_limit':
-        return head + "候補ブロックの走査予算(max_candidates。無効なブロックも数える)で止まった。条件を見直すか予算を増やすこと"
-    return head + "条件(保持・除外・条件面・目標安全率・解像度)を見直すこと"
+    return _full_material_failure_message(search_result)
+
+
+def _full_material_failure_message(search_result: Any) -> str:
+    """設計空間の全材料が合格しなかった(`no_feasible_found`)ときの一言。落ちた検査と数値を
+    `diagnostics['full_material']['attempts']` から出す(形として落ちた成分を優先し、無ければ計算失敗の成分)。"""
+    full = (search_result.diagnostics or {}).get('full_material') or {}
+    attempts = full.get('attempts') or []
+    attempt = next((row for row in attempts if row.get('status') == 'fail'), attempts[0] if attempts else {})
+    checks = attempt.get('checks') or {}
+    reasons = []
+    for name, check in checks.items():
+        if name == 'no_component':
+            components = (full.get('islands') or {}).get('components')
+            reasons.append(f"全条件を単独で満たす連結成分が無い(成分 {components} 個、欠けた条件 {check.get('missing')})")
+        elif name == 'min_width':
+            reasons.append("島を除いた形が最小幅の規則(立方の被覆と芯の連結)を満たさない")
+        elif name == 'watertight':
+            parts = []
+            if check.get('irregular_vertices'):
+                parts.append(f"非多様体の頂点 {check['irregular_vertices']} 個"
+                             f"(格子の頂点の添字の例 {check.get('sample_vertex_indices', [])[:3]})")
+            if check.get('void_components', 1) != 1:
+                parts.append(f"空の成分 {check['void_components']} 個")
+            reasons.append("水密でない(" + "、".join(parts or ["詳細なし"]) + ")")
+        elif name == 'single_solid':
+            reasons.append(f"材料が1つの塊でない(成分 {check.get('components')} 個)")
+        elif name in ('preserve', 'exclude'):
+            bodies = [str(row.get('body')) for row in check.get('bodies', []) if row.get('status') != 'pass']
+            label = "保持ソリッドとの重なりが足りない" if name == 'preserve' else "除外ソリッドに材料が掛かっている"
+            reasons.append(f"{label}({', '.join(bodies)})")
+        elif name == 'conditions':
+            reasons.append("拘束面・荷重面の条件が成り立たない")
+        elif name == 'safety':
+            if check.get('reason') == 'prerequisites_failed':
+                continue
+            if check.get('status') == 'unknown':
+                reasons.append(f"応力計算が失敗した({check.get('error') or check.get('reason')})")
+            elif check.get('safety_factor') is None:
+                reasons.append(str(check.get('message') or check.get('reason')))
+            else:
+                reasons.append(f"安全率 {float(check['safety_factor']):.4g} が目標 "
+                               f"{float(check['target_safety_factor']):.4g} に届かない")
+    if search_result.termination == 'evaluation_error':
+        head = "設計空間の全材料の応力計算が、解法を変えた再試行の後も失敗した"
+    else:
+        head = "設計空間の全材料でも6条件に合格しない"
+    detail = f": {'、'.join(reasons)}" if reasons else ""
+    return (f"{head}{detail}。形状最適化は全材料から材料を減らすだけなので、ここから合格形状は探さない。"
+            "条件(荷重・目標安全率・保持・除外・条件面・解像度)を見直すこと")
 
 
 def _mesh_to_world(verts, grid) -> List[float]:

@@ -212,7 +212,6 @@ def test_the_search_entry_rejects_unmapped_samples_even_when_every_node_is_on_ma
                                      target_safety_factor=2.0)
     assert not any(row['uncovered_nodes'] for row in bs.uncovered_condition_nodes(cut, conditions))
     monkeypatch.setattr(acceptance, 'inspect', lambda *a, **k: pytest.fail('入口で止まるべき経路が評価に進んだ'))
-    monkeypatch.setattr(bs, '_materialize', lambda *a, **k: pytest.fail('入口で止まるべき経路が候補を作った'))
     result = bs.find_best_feasible(cut, conditions, max_evaluations=10)
     assert result.status == 'boundary_mapping_failed' and result.evaluations == 0
     entry = result.diagnostics['entry_mapping']

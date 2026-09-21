@@ -43,9 +43,6 @@ SHA-256 は振れない)。**解法・前処理の改良は CG 反復数の差�
 | 代表応力の規則 | ρ >= **0.5** の要素の上位 **99.5%** 点 | `stress.DEFAULT_RHO_MIN` / `DEFAULT_PERCENTILE` | 「代表応力の規則(黙って max にしない)」 |
 | メッシュ平滑化(Taubin)の反復数 `DEFAULT_ITERS` | **30** | `mesh.DEFAULT_ITERS` | 「平滑化の既定をどう決めたか」 |
 | 既定スレッド数 `PARALLEL_THREADS` | **総コアの半分** | `fem.PARALLEL_THREADS`(`_default_thread_count()`) | 「既定スレッド数を総コアの半分にする」 |
-| 削除・追加・置換探索のfrontier容量 `DEFAULT_FRONTIER_CAPACITY` | **48** | `binary_search.DEFAULT_FRONTIER_CAPACITY` | 計画書§4.3 |
-| 追加操作が連続してよい回数の上限 `DEFAULT_MAX_CONSECUTIVE_ADDS` | **2** | `binary_search.DEFAULT_MAX_CONSECUTIVE_ADDS` | 計画書§4.3 |
-| 候補ブロックの走査予算(評価1回あたり。既定は `max(この値, 格子のセル数)` × 評価予算) `DEFAULT_CANDIDATES_PER_EVALUATION` | **64** | `binary_search.DEFAULT_CANDIDATES_PER_EVALUATION` / `_candidate_budget` | 計画書§4.3 追記 |
 | 段階4で1回に削る割合の上限 `DEFAULT_MAX_STEP_RATIO` | **0.2** | `binary_search.DEFAULT_MAX_STEP_RATIO` | 計画書§11.2 |
 | 段階4の削る割合を安全率の余裕で変える指数 θ(r = min(上限, 1 − (目標/安全率)^θ)) `DEFAULT_STEP_EXPONENT` | **0.5** | `binary_search.DEFAULT_STEP_EXPONENT` | 計画書§11.2 |
 | 段階4で要素エネルギーをならす近傍の一辺 `ENERGY_FILTER_SIZE` | **3** セル | `binary_search.ENERGY_FILTER_SIZE` | 順位の平滑化(自身と26近傍の材料平均で、1セルごとの値のばらつきによる順位の入れ替わりを抑える)。計画書§11.1 |
@@ -278,7 +275,7 @@ volfrac 0.3、30反復。
 
 **この節は2026-09-17に全面的に書き直した。** 密度ベースのSIMP(材料量[mm³]を目標に
 `safety_loop`が何度も最適化を回す構成)は段階6で削除し、bool二値マスクを直接動かす探索に置き換えた
-(段階3は削除・追加・置換、段階4はひずみエネルギーの順位で削る。計画書§11)。
+(段階3は設計空間の全材料の1回の評価、段階4はひずみエネルギーの順位で削る。計画書§4.2・§11・§13)。
 
 ```text
 optimize_run.run
@@ -296,7 +293,7 @@ optimize_run.run
 ```
 
 **候補中はメッシュ化を呼ばない**(計画書§3)——後段へ渡るのは`binary_search.find_best_feasible`が
-返す最終確定マスクだけ。**探索候補は材料量[mm³]ではなくbool二値マスクの操作(段階3の削除・追加・置換、段階4の削減)**
+返す最終確定マスクだけ。**探索候補は材料量[mm³]ではなくbool二値マスクの操作(段階4の削減)**
 で、材料量は結果として出る値であって探索変数ではない。`rmin`(密度フィルタ半径)・`MATERIAL_MIN_RATIO`
 /`MATERIAL_MAX_RATIO`(材料量の上下限)・`estimate_seconds`(旧SIMP係数による所要時間見積もり)は
 段階6でコードごと削除した——渡しても意味の翻訳先が無いので`OptimizeInputError`になる(上「設計と画面」)。
@@ -1109,7 +1106,7 @@ stress → material → acceptance → binary_search → mesh`。
 | `duocad/topopt/stress.py` | **密度場と変位 → 要素ごとの von Mises 応力・代表応力・最小安全率**(後処理)。無次元 → 実単位の換算則(`UnitScale`)を持つ。**最適化には手を入れない**(応力制約の定式化は採らない。「von Mises応力と最小安全率」) |
 | `duocad/topopt/material.py` | **材料定数**(`PETG_YIELD_MPA` / `PRINT_DERATE` / `DEFAULT_ALLOWABLE_MPA` / `DEFAULT_YOUNGS_MODULUS_MPA`)。段階6で`safety_loop.py`から移設した |
 | `duocad/topopt/acceptance.py` | **島除去後・平滑化前の6条件判定**(境界・単一成分・保持/除外・荷重欠落なし・目標安全率)。`inspect_document` / `inspect` が入口。詳細は [TOPOPT_PRE_SMOOTHING_CHECKS.md](TOPOPT_PRE_SMOOTHING_CHECKS.md) |
-| `duocad/topopt/binary_search.py` | **bool体積削減探索**。`find_initial_feasible`(段階3、削除・追加・置換で初期合格を探す)→ `find_best_feasible`(段階4、ひずみエネルギーの低い材料を安全率の余裕に応じて削る、単一の探索入口)。段階3の `DEFAULT_FRONTIER_CAPACITY` / `DEFAULT_MAX_CONSECUTIVE_ADDS`、段階4の `DEFAULT_STEP_EXPONENT` / `DEFAULT_MAX_STEP_RATIO` / `DEFAULT_SURFACE_ONLY` / `DEFAULT_SINGLE_CELL_PATIENCE` / `ENERGY_FILTER_SIZE` を持つ |
+| `duocad/topopt/binary_search.py` | **bool体積削減探索**。`find_initial_feasible`(段階3、入口検査と全材料の1回の評価。不合格なら落ちた検査を返す)→ `find_best_feasible`(段階4、ひずみエネルギーの低い材料を安全率の余裕に応じて削る、単一の探索入口)。段階4の `DEFAULT_STEP_EXPONENT` / `DEFAULT_MAX_STEP_RATIO` / `DEFAULT_SINGLE_CELL_PATIENCE` / `ENERGY_FILTER_SIZE` を持つ |
 | `duocad/topopt/mesh.py` | 浮島除去→パディング→marching cubes→Taubin平滑化→表面生成。`build_surface` / `build_surface_from_mask`。**CLIは持たない**(段階6でSIMPを回すCLIを削除) |
 | `duocad/topopt/finalize.py` | 最終確定マスクの表面 → 保持union・除外cutのCADブーリアン → 水密・単一ソリッド検査 |
 | `duocad/topopt/trace.py` | 実行ごとの途中記録(`stage` / `snapshot`)。詳細は [TOPOPT_RECORDING.md](TOPOPT_RECORDING.md) |
@@ -1511,7 +1508,6 @@ bbox も三角形分割の節点と一致することを固定する。
   - **既知の限界**: 細い通路で外へつながる袋は定義上は空洞ではないので通る。**空の通路の幅の下限は未対応** —— 最小幅の保証
     (下の節)は材料の幅の規則で、空の側を見ない。
     メッシュ化以降(marching cubes の出力・最終CAD)での空洞検査もしていない(マスクに空洞が無ければメッシュにも出ない見込みだが、確認していない)。
-  - 段階3の追加・置換の候補は空洞を作りうるが、評価で水密が落ちるので探索の結果には残らない(評価が無駄になるだけ)。
 
 ### 最小幅の保証(`min_width_mm`。2026-09-20)
 
@@ -1525,7 +1521,7 @@ R(m) だけでは、m 立方が斜めにずれて1セルだけ重なるつなぎ
 `m = ceil(最小幅[mm] / 実spacing)`(要求より細い幅を返さないので切り上げ)、実際に保証される幅は `m × 実spacing`。
 指定なし(既定)は m=1 で、探索の挙動もコストも変わらない(判定の関数を呼ばない)。実行時の選択で、文書に保存する4条件には入れない。
 **保持ソリッド由来のセルは規則の対象から外す**(2026-09-20 本人決定。`SearchConditions.keep_cells` に `DesignSpace.keep` を載せ、
-`min_width.lost_coverage`(段階3の `_materialize` と段階4の `min_width.casualties` の巻き添え)/ `_mask_satisfies_min_width` / 設計空間の opening の4か所が参照する。CADから作り直さず、候補ごとのボクセル化もしない)。
+`min_width.lost_coverage`(段階4の `min_width.casualties` の巻き添え)/ `_mask_satisfies_min_width` / `CoreConnectivity` / 設計空間の opening が参照する。CADから作り直さず、候補ごとのボクセル化もしない)。
 外すのは「そのセル自身が被覆されていなくても違反にしない」だけで、材料としては**常に**数える(探索のマスクにあるかどうかに関わらず、他のセルの m 立方の一部になれる。
 探索で削られて空になった保持セルも数える。2026-09-21 本人決定)。規則は「`mask` の保持でない全セルが、`mask ∪ keep` の材料だけの m 立方のどれかに入る」で、
 保持セルを抜く手は材料が変わらないので巻き添えを出さない。線引きは「保持ソリッドかどうか」の1本で、
@@ -1550,27 +1546,13 @@ R(m) だけでは、m 立方が斜めにずれて1セルだけ重なるつなぎ
   hanger 2.4mm・m=2・予算60(節M)で、窓で通した手は 283,622、大域で数え直した回数は 57,099 で、そのうち 56,836 回(99.5%)が芯を割る手として却下された(1本の実測)。
   **不合格の形は手の数に関わらず内容ハッシュを `rejected` に入れる**: 別のセルの巻き添えが同じ一口になり、同じマスクがもう一度できるため(hanger 2.4mm・m=2 の試作で60評価中6回)。
   m=1 では1手=1セルで同じマスクは再発せず、挙動もコストも変わらない(`min_width` の関数を呼ばない)。
-- **段階3の削除・置換も同じ射影で子を作る**(`binary_search._materialize`。計算は `min_width.lost_coverage`。段階4と同じ「規則 R(m) の下での削除」)。
-  候補の記述(`_op_scan`)は厚みを見ず(空でない・表面に接する・置換は接する空セルがある、だけ)、評価の直前に子マスクを作るときに、
-  ブロックを空にした(置換は `addable` を足した)後に m 立方の被覆を失うセル(`exempt` を除く)も一緒に空にする。
-  置換は足した `addable` が与える被覆を数え(`lost_coverage(..., refill=addable)`)、足したセルのうち m 立方に入らないものも空になる。
-  親が規則を満たすなら、子は(`exempt` が無ければ)`opening(親のブロックを空にした/置換した形)` に等しい。
-  **訪問済みの判定は射影の後の子のハッシュで取る**(別のブロックから同じ子ができる。2セル厚の板の上面と下面の1セルは同じ貫通柱になる)。
-  **追加は逆に膨らませる**(`min_width.cover_additions`。2026-09-21 本人指示で閉じた操作にした): 足したセルのうち m 立方に入らないものごとに、
-  設計空間(と既存の材料)に収まる m 立方のうち足すセルが最も少ないもの(同数なら最小の角が辞書順で先)を足して覆う。`exempt` は mask に無くても材料に数えるので足さず、
-  足したセル自身が `exempt` なら覆わない。1セルの追加でも最大 m³−1 セル増え、立方は追加のブロックの外へ最大 m−1 セルはみ出す。
-  m 立方が設計空間に収まらないセルは足さない(設計空間を opening で絞ってあれば起きない)。これで、親が規則を満たせば子も規則を満たす(削除・置換・追加のどれも)。
-  **S(m) も同じ形で見る**: 親が S(m) を満たすのに子が破る候補は、`_pull` が評価に回さず捨てる(親の周りの窓で言えれば通し、言えなければ子を大域で数え直す。
-  同じ子は重複と同じく1度だけ数え、評価予算は使わない。`diagnostics['candidates']['core_rejected']`)。追加は芯を増やすだけだが、足した立方が残った芯へつながらない
-  (孤立する)子は落とす。親が S(m) を満たさない(島の除去で崩れた不合格の親)ときは子の判定を次の大域判定に任せる。
-  合格を返す候補は今も毎回FEMの前に大域判定(`_mask_satisfies_min_width` と `CoreConnectivity.connected`)を通す: 島の除去(`resolve_islands`)は、m≥3 で mask に無い保持セルを挟んだ立方に頼るセルの被覆を
-  崩しうるため(結果がFEMに依らず、規則を破る候補にFEM(hanger 2.4mm で1回100秒超)を払わないため)。
-  規則を満たさない親の子は、前提が崩れているので規則を満たすとは限らない(ブロックの周りの未被覆セルは直るが、離れた違反は残り、大域判定が落とす)。
-  厚みで候補を捨てなくなった分、削除の候補は増える(評価回数への影響は節L: 題材によって増える場合と減る場合がある)。
+- **段階3は全材料を1回評価するだけ**(2026-09-21。計画書§13 で、ブロックの削除・置換の射影と追加の膨張〈`_materialize` / `min_width.cover_additions`〉、
+  S(m) を破る子を評価前に捨てる処理〈`CoreConnectivity.child_keeps`〉ごと探索を削除した。それらの測定は節L・節M に当時の記録として残る)。
+  評価する成分はFEMの前に大域判定(`_mask_satisfies_min_width` と `CoreConnectivity.connected`)を通す: 島の除去(`resolve_islands`)は、m≥3 で mask に無い保持セルを挟んだ立方に頼るセルの被覆を
+  崩しうるため(結果がFEMに依らず、規則を破る形にFEM(hanger 2.4mm で1回100秒超)を払わないため)。落ちれば `full_material_infeasible`(落ちた検査は `min_width`)。
 - **設計空間の扱い(案2を採った)**: `find_initial_feasible` は最初に設計空間を m 立方の opening で絞り、入口検査もその空間に対して行う。
-  射影は入力が既に規則を満たす前提の差分計算なので、前提は入口で作る。絞らずに違反した設計空間から始めると、違反セルはその周りを削るブロックでしか取り除かれず、
-  除去のたびに評価を払う(合成題材: 6×3×3 の棒から4セルを抜いた設計空間・m=2 は、絞ると評価1回で合格し、絞らない版は評価23回。
-  段階3が厚みで候補を却下していた版は、絞らない版が予算2000でも届かなかった。hanger 2.4mm の設計空間の縁には m=3 で 58/377,075 セルの違反がある)。
+  `peel` の射影は入力が既に規則を満たす前提の差分計算なので、前提は入口で作る。絞らない全材料は規則を破り、段階3の大域判定で落ちる
+  (合成題材: 6×3×3 の棒から4セルを抜いた設計空間・m=2 は、絞ると評価1回で合格する。hanger 2.4mm の設計空間の縁には m=3 で 58/377,075 セルの違反がある)。
   - **選んだ理由**: 規則を満たす形は m 立方の和集合で、その立方は全て設計空間に入る。したがって規則を満たす形は必ず絞った空間の部分集合で、
     **絞ることで失われる解は無い**。絞らずに違反セルを探索で取り除くと、除去の1つ1つが段階3の候補(=評価1回)になり、
     絞れば ms 級の opening 1回で済む。

@@ -1,5 +1,5 @@
 """最小幅の規則 S(m)(侵食した芯の連結。`min_width.CoreConnectivity`)。R(m) は m 立方が斜めに共有1セルで重なる首を許すので、
-その首を塞ぐ規則を `peel`(段階4)と段階3の子・合格の検査が守ることを、実装とは独立な物差し(`core_groups_oracle`)で確かめる。"""
+その首を塞ぐ規則を `peel`(段階4)と段階3の全材料の検査が守ることを、実装とは独立な物差し(`core_groups_oracle`)で確かめる。"""
 import dataclasses
 
 import numpy as np
@@ -133,30 +133,6 @@ def test_peel_refuses_the_moves_that_would_split_the_core_and_every_result_keeps
                 break
             mask = after
     assert refused > 50 and would_split > 5 and proven_yes > 50 and split_seen > 30  # 芯を割る手が実際に出る入力で、両方の経路を試している
-
-
-@pytest.mark.parametrize('m', [2, 3])
-def test_stage3_never_hands_out_a_child_that_splits_the_core_and_drops_it_without_an_evaluation(m):
-    """落ちたら、段階3が芯を割る子を評価に回している、または割る子を数えずに捨てている。
-    亜鈴形(2つの塊を細い首でつなぐ)の首を削る子は、規則 R(m) は満たすが芯が2つに割れる。"""
-    n = 2 * m
-    design = np.zeros((3 * n + 2 * m, n, n), bool)
-    design[:n] = design[-n:] = True
-    design[n:-n, :m, :m] = True
-    assert core_groups_oracle(design, m) == 1
-    frontier = bs._Frontier(48)
-    sizes = tuple(reversed(bs.block_sizes(design.shape)))
-    frontier.push(bs._node(design.copy(), 0, 0, design, sizes, 3))
-    budget = bs._Budget(max_evaluations=10 ** 6, max_candidates=10 ** 6, core_rejected=0)
-    core = min_width.CoreConnectivity(m)
-    visited, children = set(), 0
-    while True:
-        pulled = bs._pull(frontier, design, budget, visited, 'id', None, min_width_cells=m, core=core)
-        if isinstance(pulled, str):
-            break
-        children += 1
-        assert core_groups_oracle(pulled[0], m) <= 1
-    assert children > 0 and budget.core_rejected > 0 and budget.summary()['core_rejected'] == budget.core_rejected
 
 
 @pytest.mark.parametrize('m,kind', [(2, 'bending'), (3, 'random')])

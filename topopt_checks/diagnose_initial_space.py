@@ -6,7 +6,6 @@
 (`DesignSpace.table`。材料を見ない)と、探索へ渡す確定表(`optimize_run._map_boundary_conditions`。
 材料に接する節点だけへ対応付ける)の両方で、条件面ごとの節点数・被覆されない節点数を数える。
 確定表については荷重保存(合力・作用位置・モーメント)の検証も書く。
-候補管理は保持上限の契約(frontier 容量 + 数枚)を数字にして残す(配列は確保しない)。
 """
 import argparse
 import json
@@ -71,12 +70,6 @@ def diagnose(document, spacing):
     geometry_entry = binary_search.uncovered_condition_nodes(space.mask, geometry_conditions_for_search)
     geometry_survivors, _ = binary_search.resolve_islands(space.mask, geometry_conditions_for_search)
 
-    indices = np.argwhere(space.mask)
-    descriptor_counts = {
-        str(size): int(np.unique(indices // size, axis=0).shape[0])
-        for size in binary_search.block_sizes(space.grid.shape)
-    }
-    retained_bound = binary_search.DEFAULT_FRONTIER_CAPACITY + 4
     return dict(
         requested_spacing=spacing, grid=space.grid.as_dict(), cells=space.element_count,
         mask_hash=space.mask_hash,
@@ -91,12 +84,6 @@ def diagnose(document, spacing):
                           entry_uncovered=entry, initial_survivors=len(survivors),
                           island_diagnostics=island_diagnostics,
                           identifier=binary_search.evaluation_identifier(search_conditions)),
-        candidate_management=dict(
-            note='Candidates are descriptors materialised one at a time; retained masks are bounded by the frontier capacity plus a few working arrays. Per-size block counts are the number of descriptors a full-material parent can propose, not arrays allocated.',
-            mask_bytes=int(space.mask.nbytes), frontier_capacity=binary_search.DEFAULT_FRONTIER_CAPACITY,
-            retained_masks_bound=retained_bound, retained_bytes_bound=int(retained_bound * space.mask.nbytes),
-            delete_descriptor_counts=descriptor_counts,
-            eager_payload_bytes_if_all_materialised=int(sum(descriptor_counts.values()) * space.mask.nbytes)),
     )
 
 

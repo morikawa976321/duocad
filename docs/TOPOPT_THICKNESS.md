@@ -1311,6 +1311,10 @@ K2 の m=3 と m=2 再測定は、同じ2本のコマンドを `--cells 3`(m=3)�
 
 ## L. 段階3(初期合格探索)の削除・置換にも射影つき削除を当てる(2026-09-21実測)
 
+**この節が測った段階3の探索(ブロックの削除・追加・置換と frontier)は、同日のうちに削除した**(本人指示。`docs/PLAN_BINARY_STRESS_SEARCH.md` §13)。
+段階3は全材料の1回の評価だけになり、この節の題材(設計空間から除外を引かずに渡した板)は `full_material_infeasible`(`exclude`)で止まる。
+`topopt_checks/measure_stage3_min_width.py` も削除したので、再現は `0a9ddc7` 以前のコードで行う。以下は当時の記録。
+
 段階3の `delete` / `replace` は、厚みを理由に候補から外さず、子マスクを作る `_materialize` が「ブロックを空にする(置換は `addable` を足す)→ 被覆を失うセル
 (`exempt` を除く)も空にする」(`docs/TOPOPT.md`「最小幅の保証」)。追加は射影しない(この節の測定時点。m=1 の候補の並び・子・評価回数は変わらない
 (`tests/test_binary_search.py` の `GOLDEN_STAGE3_M1_DIGEST` は変更前のコードでも同じ値になる))。
@@ -1501,7 +1505,7 @@ hanger 2.4mm(実 spacing 2.387506mm・格子 69×130×101・設計空間 377,075
 判定の置き場と、その根拠は `docs/TOPOPT.md`「最小幅の保証」。差し込み先は次の3か所:
 
 - `peel`(段階4): 支え・表面・多様体・連結の判定を通った後、採用の前に置く(`skipped_core`)。却下したら一口と島を元へ戻す。
-- 段階3の子: `_pull` が、S(m) を満たす親の子で S(m) を破るものを評価前に捨てる(`diagnostics['candidates']['core_rejected']`)。
+- 段階3の子: `_pull` が、S(m) を満たす親の子で S(m) を破るものを評価前に捨てる(`diagnostics['candidates']['core_rejected']`)。**同日、段階3の探索ごと削除した**(`docs/PLAN_BINARY_STRESS_SEARCH.md` §13。下の大域検査は全材料の評価の前に残る)。
 - 合格を返す候補の大域検査: `_mask_satisfies_min_width` の隣で `CoreConnectivity.connected` も見る(FEM の前)。FEM を払わずに落ちた候補は `min_width='fail'` の試行として履歴に残る。
 
 **入口(設計空間そのものの芯が割れている入力)は断らない**: 絞った設計空間の芯の塊の数を `diagnostics['min_width']['design_core_groups']` に記録するだけにした。
