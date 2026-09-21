@@ -286,7 +286,7 @@ warm start を使わず cold の解だけを微小にずらして、同じ分岐
 各自由度に相対 X の正規乱数を掛け(シード固定・拘束成分は 0 のまま)、`--cg-rtol X` は全 solve の CG 収束判定を上書きする。
 条件は上と同じ(hanger・2.4mm・目標2.0・m=1)。基準は上の cold。結果は `output/warm_start_shape/control/`(git 管理外)。
 口: `measure_warm_start_search.py --mode cold --budget 3 --noise 1e-13 --label <名前> --result <json>`(`--cg-rtol 1e-10` も同様。
-`--label` は結果に書く名前、`--summarize <基準.json> <各.json>…` で下の表の形に並べる)。
+`--label` は結果に書く名前、`--summarize <基準.json> <各.json>…` は先頭を基準に残りを並べる)。
 
 **予算3(評価0〜2)** — 評価2までの軌道と、評価2のマスク(24万セル)の差:
 
