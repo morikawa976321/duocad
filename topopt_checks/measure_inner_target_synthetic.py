@@ -9,9 +9,10 @@
 設計空間は 80×20×20 セルの直方体(要素サイズ 1・許容応力 40MPa・単位は N と mm)。x 最小面の中央(y・z とも 5〜15)を固定し、荷重面は題材ごと。
 固定面・荷重面には、その面に接する 4 セル厚(x 方向)の保持ブロックを置く(節点は探索の確定表と同じく保持ブロックに接する)。
 確定表は `tests/test_binary_search.py` の `Table` と同じ面/節点インタフェースの偽物で、荷重の配り方だけ製品の `AnchorTable.load_vector` に揃えて
-節点の担当面積の比にする(k を変えても荷重の合力と分布が同じになる)。`search` は `binary_search.find_best_feasible` をそのまま呼ぶ(差し替えなし)。
+節点の担当面積の比にする(k を変えても荷重の合力は同じ)。`search` は `binary_search.find_best_feasible` をそのまま呼ぶ(差し替えなし)。
 `refine` は採用マスクを形は変えず k×k×k に割り、同じ物理的な面に対して確定表を作り直して `acceptance.inspect` で解き直す。
-**判定はしない**(数字を書き出すだけ)。`chain` は空きメモリを確かめながら全ジョブを直列に回し、結果があるジョブは飛ばす。
+**判定はしない**(数字を書き出すだけ)。`chain` は全ジョブを直列に回し(結果があるジョブは飛ばす)、起動ごとの空きメモリ・HEAD・未コミットの変更を `chain.log` に残す。
+空きメモリの確認(10GB 以上・足りなければ 10 分おきに最大 3 回)をするのは、要素数 10 万以上の細分だけ。
 """
 from __future__ import annotations
 
@@ -83,7 +84,7 @@ class PatchTable:
 
 
 def _patch(shape, x_node: int, y_nodes, z_nodes, k: int):
-    """x=一定の面にある長方形の節点の番号と、担当面積の比(縁は半分・角は 1/4。合計 1)。添字は k=1 の節点単位。"""
+    """x=一定の面にある長方形の節点の(格子, 番号, 節点添字, 担当面積の比)。比は縁が半分・角が 1/4 で合計 1。引数の範囲は k=1 の節点単位。"""
     from duocad.topopt import anchor, voxelize
 
     grid = voxelize.Grid((0.0, 0.0, 0.0), 1.0 / k, tuple(int(n) * k for n in shape))
@@ -95,7 +96,7 @@ def _patch(shape, x_node: int, y_nodes, z_nodes, k: int):
     indices = np.stack([np.full(yy.size, x_node * k), yy.ravel(), zz.ravel()], axis=1)
     ids = anchor.NodeGrid(grid).ids_of(indices)
     weights = np.outer(wy, wz).ravel()
-    return grid, ids, weights / weights.sum()
+    return grid, ids, indices, weights / weights.sum()
 
 
 def block_mask(block, k: int = 1) -> np.ndarray:
@@ -110,20 +111,30 @@ def _block_shape(block):
     return (Pos(*((lo + hi) / 2)) * Box(*(hi - lo))).wrapped
 
 
-def _live_only(ids: np.ndarray, weights: np.ndarray, live: np.ndarray | None):
-    """`live`(材料に接する節点の真偽。節点番号順)があれば、材料に接さない節点を面から外して重みを取り直す
-    (製品の確定表が `allowed_nodes` で材料に接する節点だけに対応付けるのと同じ。合力は変わらない)。"""
+def _live_only(ids: np.ndarray, indices: np.ndarray, weights: np.ndarray, live: np.ndarray | None, rule: str):
+    """`live`(材料に接する節点の真偽。節点番号順)があれば、材料に接さない節点を面から外して重みを配り直す。合力は変わらない。
+
+    製品の確定表(`anchor.build_anchors(allowed_nodes=...)`)も材料に接する節点だけへ対応付けるが、面の標本ごとに球内の許可節点へ配る。
+    ここは同じではない単純化: `renormalize` は残った節点の重みの比のまま合計 1 に取り直し、`nearest` は外れた節点の重みをその面で最も近い残りの節点へ足す。
+    """
     if live is None:
         return ids, weights, 0, 0.0
     keep = live[ids]
     dropped_weight = float(weights[~keep].sum())
+    if rule == "nearest":
+        alive = np.flatnonzero(keep)
+        moved = weights[keep].copy()
+        for i in np.flatnonzero(~keep):
+            moved[np.linalg.norm(indices[alive] - indices[i], axis=1).argmin()] += weights[i]
+        return ids[keep], moved, int((~keep).sum()), dropped_weight
     return ids[keep], weights[keep] / weights[keep].sum(), int((~keep).sum()), dropped_weight
 
 
-def build_conditions(subject: str, k: int, target: float, mask: np.ndarray | None = None):
+def build_conditions(subject: str, k: int, target: float, mask: np.ndarray | None = None, load_rule: str = "renormalize"):
     """題材の探索条件(格子は k 細分後。物理的な面・保持ブロックは k に依らず同じ)。
 
     `mask`(k 細分後の材料)を渡すと、確定表は材料に接する節点だけにする(細分の解き直し用。探索の入口の表は全節点)。
+    `load_rule` は外れた荷重節点の重みの配り直し(`_live_only`)。
     """
     from duocad.topopt import binary_search
     from duocad.topopt.acceptance import active_nodes
@@ -132,11 +143,11 @@ def build_conditions(subject: str, k: int, target: float, mask: np.ndarray | Non
     force = tuple(float(v) for v in spec["force"])
     fixed_y, fixed_z = FIXED_BLOCK[1], FIXED_BLOCK[2]
     load_block = spec["load_block"]
-    grid, fixed_ids, fixed_w = _patch(SHAPE, FIXED_BLOCK[0][0], fixed_y, fixed_z, k)
-    _, load_ids, load_w = _patch(SHAPE, load_block[0][1], load_block[1], load_block[2], k)
+    grid, fixed_ids, fixed_idx, fixed_w = _patch(SHAPE, FIXED_BLOCK[0][0], fixed_y, fixed_z, k)
+    _, load_ids, load_idx, load_w = _patch(SHAPE, load_block[0][1], load_block[1], load_block[2], k)
     live = None if mask is None else active_nodes(mask).ravel()
-    fixed_ids, fixed_w, fixed_dropped, _ = _live_only(fixed_ids, fixed_w, live)
-    load_ids, load_w, load_dropped, load_dropped_weight = _live_only(load_ids, load_w, live)
+    fixed_ids, fixed_w, fixed_dropped, _ = _live_only(fixed_ids, fixed_idx, fixed_w, live, "renormalize")
+    load_ids, load_w, load_dropped, load_dropped_weight = _live_only(load_ids, load_idx, load_w, live, load_rule)
     table = PatchTable(grid, {FIXED_FACE: (fixed_ids, fixed_w), LOAD_FACE: (load_ids, load_w)},
                        dropped=dict(fixed_nodes=fixed_dropped, load_nodes=load_dropped, load_weight=load_dropped_weight))
     keep = block_mask(FIXED_BLOCK, 1) | block_mask(load_block, 1)
@@ -300,7 +311,8 @@ def refine(args) -> int:
                 if not ok:
                     row.update(status="not_measured", reason="空きメモリ不足(10GB 未満のまま 3 回確かめた)")
                 else:
-                    conditions = build_conditions(args.subject, k, TARGET_FOR_PASS, fine)
+                    conditions = build_conditions(args.subject, k, TARGET_FOR_PASS, fine, args.load_rule)
+                    row["load_rule"] = args.load_rule
                     row["load"] = _load_check(conditions)
                     started = time.perf_counter()
                     report = _inspect(fine, conditions)
@@ -353,7 +365,7 @@ def chain(args) -> int:
                          "--out-dir", str(out_dir)], out_dir / f"{tag}.stdout.log")
                 first = json.loads((out_dir / f"{tag}.json").read_text(encoding="utf-8"))
                 unfinished = (first.get("termination") == "evaluation_limit"
-                              and (first.get("coarse_safety_factor") or 0.0) > 1.1 * target)
+                              and (first.get("coarse_safety_factor") or 0.0) >= 1.1 * target)
                 if unfinished:
                     final = f"{tag}-b120"
                     if not (out_dir / f"{final}.json").exists():
@@ -385,6 +397,8 @@ def main() -> int:
     p.add_argument("--npz", required=True)
     p.add_argument("--k", type=int, nargs="+", default=[1, 2, 3, 4])
     p.add_argument("--result", default=None)
+    p.add_argument("--load-rule", choices=["renormalize", "nearest"], default="renormalize",
+                   help="細分で材料に接さない荷重節点の重みの配り直し(既定 renormalize)")
     p.set_defaults(func=refine)
     p = sub.add_parser("chain", help="全ジョブを直列に回す(結果があるジョブは飛ばす)")
     p.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
