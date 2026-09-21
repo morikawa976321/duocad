@@ -1116,7 +1116,6 @@ stress → material → acceptance → binary_search → mesh`。
 | `topopt_checks/check_trace.py` | **受入検査(合否そのもの)**。途中記録(導出1回・全候補の塊一致・表面の再現・最終文書/STLの一致) |
 | `topopt_checks/check_pre_smoothing.py` | **受入検査(合否そのもの)**。島除去後・平滑化前の6条件 |
 | `topopt_checks/check_final_shape.py` | **受入検査(合否そのもの)**。最終形状の水密・単一ソリッド |
-| `topopt_checks/measure_binary_search.py` | 二値探索(`find_best_feasible`)の評価回数・最良体積の履歴を計測する(`measure_safety_search.py`の後継。**2026-09-17時点で未実機検証**——手元の`models/`で1回通してから使うこと) |
 | `topopt_checks/inspect_optimization_run.py` / `analyze_recorded_stages.py` / `analyze_recorded_geometry.py` / `render_recorded_analysis.py` / `render_domain_comparison.py` / `replay_finalization.py` | 保存済み実行を読む分析・可視化・再生ツール(受入検査ではない) |
 | `topopt_checks/_fixtures.py` | 検査・測定・pytest が共有する合成題材(`demo_bracket` / `demo_conditions` / `severed_conditions`)と、1つのソリッドを塊と面の両方に使って製品の部品(`grid_for_bbox` → `occupancy` → `model_from_design_mask`)で格子モデルを組む `voxel_model`。build123d を直接使うので `duocad/` の外にある |
 | `topopt_checks/_bootstrap.py` | 検査スクリプトからリポジトリ直下を `sys.path` へ足すだけの小物。**これらを pytest に入れない**理由もここに書いてある |

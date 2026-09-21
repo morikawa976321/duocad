@@ -9,9 +9,8 @@
 外側ループ)をコードごと削除した。** 材料量の二分探索アルゴリズム比較・単調性の実測・
 Regula Falsi/Illiniosの提案式・改善案B0〜B7は、いずれも材料量を直接の探索変数にする
 アーキテクチャ固有のものだったため、削除した(旧内容は git 履歴に残る)。
-**現在の探索(bool マスクの全材料の評価とエネルギー順の削減)には対応する速度分析がまだ無い**
-——`topopt_checks/measure_binary_search.py`(評価回数・最良体積の履歴を計測する。
-2026-09-17時点で未実機検証)を実測に使ってから、この文書を書き足すこと。
+**現在の探索(bool マスクの全材料の評価とエネルギー順の削減)を通しで測った記録は、下の
+「warm start」の節の `measure_warm_start_search.py`(cold の探索1回の評価数・CG反復・秒)にある。**
 
 以下は削除前から引き継いだ、**探索アルゴリズムに依らず今も有効な事実**(1回のFEM評価の
 費用の内訳)である。
@@ -510,4 +509,3 @@ r0 / √割合の中央値は 314、回帰の指数は 0.517(60手)。
 | `topopt_checks/probe_warm_start_depletion.py` | 1セル削りの連鎖で、warm の比が除去セルのエネルギー(低エネルギーのセルの在庫)とともに上がることを測る |
 | `topopt_checks/measure_warm_start_search.py` | `warm_start` の有無で探索を1回ずつ回し、反復数・秒・採用形状の一致を並べる |
 | `topopt_checks/measure_region_overlaps.py` | 前計算の秒・メモリと、旧経路との合否・体積の比較 |
-| `topopt_checks/measure_binary_search.py` | 二値探索の評価回数・最良体積の履歴の計測(未実機検証) |
