@@ -291,7 +291,8 @@ def check_load_lands_on_the_chosen_face(session, out) -> None:
     # **面ごとの距離は並びで来る**(`_check_anchor_centroids` の `*_mm_each`)。
     # 丸めをスカラー前提で書くと `TypeError` で落ちる —— 条件面が複数枚あるのは通常の入力である。
     RESULTS["anchor_check"] = {
-        key: [round(item, 4) for item in value] if isinstance(value, list) else round(value, 4)
+        key: [round(item, 4) for item in value] if isinstance(value, list)
+        else value if isinstance(value, str) else round(value, 4)
         for key, value in measured.items()
     }
     check(
