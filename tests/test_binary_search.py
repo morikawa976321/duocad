@@ -1039,6 +1039,7 @@ def test_reduction_strips_the_unloaded_appendage_and_keeps_every_condition_suppo
     assert not (best.mask & appendage).any()
     assert best.material_mm3 < design.sum() - appendage.sum()  # 付属部分に加えて棒も削った
     assert result.diagnostics['reduction']['single_cell_patience'] == bs.DEFAULT_SINGLE_CELL_PATIENCE
+    assert result.diagnostics['reduction']['target_tolerance'] == bs.DEFAULT_TARGET_TOLERANCE == .01
     assert acceptance.active_nodes(best.mask).ravel()[bs._anchor_node_ids(conditions)].all()
     recheck = acceptance.inspect(best.mask, best.before_mask, conditions.grid, **conditions.inspect_kwargs(bbox_cache=None))
     assert recheck['status'] == 'pass' and recheck['material_sha256'] == best.mask_hash
@@ -1227,6 +1228,46 @@ def test_single_cell_patience_must_be_a_positive_integer_or_none(patience):
     conditions, design, _ = appendage_conditions()
     with pytest.raises(ValueError):
         bs.find_best_feasible(design, conditions, max_evaluations=10, single_cell_patience=patience)
+
+
+def _full_material_safety_factor():
+    conditions, design, _ = appendage_conditions()
+    return bs.find_initial_feasible(design, conditions).best_feasible.safety_factor
+
+
+def test_the_reduction_stops_at_the_first_adopted_shape_within_the_target_tolerance():
+    """落ちたら、目標の許容内に入った合格形状からさらに候補を評価している、または許容の外で止まっている。"""
+    conditions, design, _ = appendage_conditions(target_safety_factor=_full_material_safety_factor() / 2)
+    limit = conditions.target_safety_factor * 1.25
+    stopped = bs.find_best_feasible(design, conditions, max_evaluations=400, target_tolerance=.25)
+    reduction = stopped.diagnostics['reduction']
+    assert stopped.termination == 'converged' and reduction['stop_reason'] == 'within_target_tolerance'
+    assert reduction['target_tolerance'] == .25
+    assert conditions.target_safety_factor <= stopped.best_feasible.safety_factor <= limit
+    assert all(step['safety_factor_before'] > limit for step in reduction['steps'])
+    assert reduction['steps'][-1]['outcome'] == 'accepted'
+    unlimited = bs.find_best_feasible(design, conditions, max_evaluations=400, target_tolerance=None)
+    assert unlimited.diagnostics['reduction']['stop_reason'] == 'no_removable_cell'
+    assert [trial.mask_hash for trial in unlimited.history[:len(stopped.history)]] == [
+        trial.mask_hash for trial in stopped.history]
+    assert unlimited.best_feasible.mask.sum() < stopped.best_feasible.mask.sum()
+
+
+def test_a_starting_shape_within_the_target_tolerance_converges_without_a_candidate_even_when_the_budget_is_spent():
+    """落ちたら、許容内の出発形状から候補を作っている、または予算切れを許容内の収束より先に報告している。"""
+    conditions, design, _ = appendage_conditions(target_safety_factor=_full_material_safety_factor() / 1.1)
+    result = bs.find_best_feasible(design, conditions, max_evaluations=1, target_tolerance=.25)
+    reduction = result.diagnostics['reduction']
+    assert result.termination == 'converged' and reduction['stop_reason'] == 'within_target_tolerance'
+    assert result.evaluations == 1 and reduction['steps'] == [] and reduction['peel_calls'] == 0
+    assert result.best_feasible.mask.sum() == design.sum()
+
+
+@pytest.mark.parametrize('tolerance', [-.01, float('nan'), float('inf'), '0.01', True])
+def test_target_tolerance_must_be_a_non_negative_finite_number_or_none(tolerance):
+    conditions, design, _ = appendage_conditions()
+    with pytest.raises(ValueError):
+        bs.find_best_feasible(design, conditions, max_evaluations=10, target_tolerance=tolerance)
 
 
 def test_a_computation_failure_is_not_accepted_and_does_not_stop_the_reduction(monkeypatch):

@@ -92,7 +92,8 @@ def _save_masks(path: Path, space, table, best_mask) -> None:
 def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, skip_search: bool,
            step_exponent: float = binary_search.DEFAULT_STEP_EXPONENT,
            max_step_ratio: float = binary_search.DEFAULT_MAX_STEP_RATIO,
-           single_cell_patience: int | None = binary_search.DEFAULT_SINGLE_CELL_PATIENCE, trace_memory: bool = True,
+           single_cell_patience: int | None = binary_search.DEFAULT_SINGLE_CELL_PATIENCE,
+           target_tolerance: float | None = binary_search.DEFAULT_TARGET_TOLERANCE, trace_memory: bool = True,
            save_masks: Path | None = None) -> dict:
     session = Session(None, 0.2, models_dir=model.resolve().parent)
     session.open_document(model.name)
@@ -104,7 +105,7 @@ def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, 
                      for name in ("anchor", "binary_search", "acceptance", "design_space")},
         requested_spacing=spacing, target_safety_factor=target, max_evaluations=max_evaluations,
         step_exponent=step_exponent, max_step_ratio=max_step_ratio,
-        single_cell_patience=single_cell_patience,
+        single_cell_patience=single_cell_patience, target_tolerance=target_tolerance,
     )
     bundle = optimize_run.build_conditions(document)
 
@@ -176,7 +177,8 @@ def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, 
         with patch.object(acceptance, "inspect", counted_inspect):
             result = binary_search.find_best_feasible(space.mask, conditions, max_evaluations=max_evaluations,
                                                       step_exponent=step_exponent, max_step_ratio=max_step_ratio,
-                                                      single_cell_patience=single_cell_patience)
+                                                      single_cell_patience=single_cell_patience,
+                                                      target_tolerance=target_tolerance)
         seconds = time.perf_counter() - started
         peak = 0
         if trace_memory:
@@ -220,6 +222,10 @@ def _patience(text: str) -> int | None:
     return value
 
 
+def _tolerance(text: str) -> float | None:
+    return None if text.lower() in ("off", "none") else float(text)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, required=True)
@@ -234,6 +240,8 @@ def main() -> int:
                         help="tracemalloc を使わない(numpy の確保を遅くするので、所要秒を測るときに付ける。メモリ実測は0になる)")
     parser.add_argument("--single-cell-patience", type=_patience, default=binary_search.DEFAULT_SINGLE_CELL_PATIENCE,
                         help="段階4で、削ったセルが1つで安全率が落ちたセルを外して続けるのを何セルで打ち切るか(整数。unlimited は順位が尽きるまで)")
+    parser.add_argument("--target-tolerance", type=_tolerance, default=binary_search.DEFAULT_TARGET_TOLERANCE,
+                        help="段階4で、合格形状の安全率が 目標×(1+これ) 以下になったら収束とみなす(off は見ない)")
     parser.add_argument("--save-masks", type=Path, default=None,
                         help="設計空間・採用マスク・条件面の節点座標を npz に書く(撮影用)")
     parser.add_argument("--out", type=Path, required=True)
@@ -245,7 +253,7 @@ def main() -> int:
             pass
     record = verify(args.model, args.spacing, args.target, args.max_evaluations, skip_search=args.skip_search,
                     step_exponent=args.step_exponent, max_step_ratio=args.max_step_ratio,
-                    single_cell_patience=args.single_cell_patience,
+                    single_cell_patience=args.single_cell_patience, target_tolerance=args.target_tolerance,
                     trace_memory=not args.no_memory_trace,
                     save_masks=args.save_masks)
     _record.write(args.out, record, default=str)

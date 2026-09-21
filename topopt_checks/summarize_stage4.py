@@ -42,6 +42,7 @@ def summarize(record: dict) -> dict:
     peel_seconds = [s["peel"]["seconds"] for s in steps if "peel" in s]
     return dict(
         surface_only=record.get("surface_only"), single_cell_patience=reduction.get("single_cell_patience", "n/a"),
+        target_tolerance=reduction.get("target_tolerance", "n/a"),
         safety_excluded_cells=reduction.get("safety_excluded_cells"),
         adopted_after_exclusion=reduction.get("adopted_after_exclusion"),
         max_safety_streak=max_safety_streak(steps) if "peel" in (steps[0] if steps else {}) else None, git_head=record.get("git_head"),

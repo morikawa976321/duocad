@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 from dataclasses import dataclass, field, replace
 from itertools import product
@@ -580,6 +581,10 @@ ENERGY_FILTER_SIZE = 3
 #: 16 は hanger 4.8mm で 1・4・16・無制限を測り、最終体積が最小(16 と無制限は同じ試行列で並び、小さい方を採った)だったから。
 #: 段階4のFEMは 1 の 33 回に対し 999 回(予算切れ)まで増える(計画書 §12.7)。
 DEFAULT_SINGLE_CELL_PATIENCE: Optional[int] = 16
+#: 合格形状の安全率が 目標 × (1 + これ) 以下になったら収束とみなす(`None` は見ない)。割合なのは、1回に削る割合 r が
+#: 目標/安全率 だけで決まるから(探索時の目標の係数を掛けても意味が変わらない)。製品経路の 1.87mm の実行では、
+#: 目標の +0.13% に入った後の FEM 81 回で減ったのは 0.27% だった(計画書 §12.12。0.01 は本人判断)。
+DEFAULT_TARGET_TOLERANCE: Optional[float] = 0.01
 _CORNERS = tuple(product(range(2), repeat=3))
 
 
@@ -943,6 +948,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
                    step_exponent: float = DEFAULT_STEP_EXPONENT,
                    max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
                    single_cell_patience: Optional[int] = DEFAULT_SINGLE_CELL_PATIENCE,
+                   target_tolerance: Optional[float] = DEFAULT_TARGET_TOLERANCE,
                    min_width_cells: int = 1, warm_start: bool = False) -> SearchResult:
     """`initial.best_feasible` から、ひずみエネルギーの低い材料をまとめて削り続ける(段階4)。
 
@@ -959,7 +965,8 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     FEMを解かずに、同じ手順で次へ進む。安全率で落ちたセルが
     採用を挟まず `single_cell_patience` 個に達したら `stop_reason='safety_at_single_cell'` で `converged`
     (`None` は数えない)。計算失敗・保持の重なりの不合格は数えない。順位を歩いて1セルも抜けなければ
-    `converged`(`no_removable_cell`)。
+    `converged`(`no_removable_cell`)。合格形状の安全率が `目標 × (1 + target_tolerance)` 以下なら、候補を作らずに
+    `converged`(`within_target_tolerance`。`None` は見ない)。出発形状にも採用のたびにも当てはめ、予算切れ・中断より先に見る。
     どの経路でも有限回で止まる: 採用のたびに材料が1セル以上減る。採用の間では、k ≥ 2 の不合格は後退倍率を
     半分にして k を(有限回で k=1 まで)下げ、k=1 の不合格は順位を1セル縮めるので、順位は尽きる。
     止まった理由は `diagnostics['reduction']['stop_reason']`、試行ごとの `peel` の実績・k・r・後退倍率・
@@ -976,6 +983,10 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     if single_cell_patience is not None and not (
             isinstance(single_cell_patience, int) and not isinstance(single_cell_patience, bool) and single_cell_patience >= 1):
         raise ValueError(f'single_cell_patience は 1 以上の整数か None(無制限): {single_cell_patience!r}')
+    if target_tolerance is not None and not (
+            isinstance(target_tolerance, (int, float)) and not isinstance(target_tolerance, bool)
+            and math.isfinite(target_tolerance) and target_tolerance >= 0):
+        raise ValueError(f'target_tolerance は 0 以上の有限の数か None(見ない): {target_tolerance!r}')
     identifier = initial.conditions_identifier
     history = list(initial.history)
     best = initial.best_feasible
@@ -989,7 +1000,8 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
                      filter_size=ENERGY_FILTER_SIZE, fem_solves=0, min_width_cells=int(min_width_cells),
                      warm_start=bool(warm_start), warm_start_used=0, warm_start_fallbacks=0,
                      peel_calls=0, peel_seconds=0.0, peel_seconds_max=0.0, repeated_candidates=0,
-                     single_cell_patience=single_cell_patience, safety_excluded_cells=0, adopted_after_exclusion=0,
+                     single_cell_patience=single_cell_patience, target_tolerance=target_tolerance,
+                     safety_excluded_cells=0, adopted_after_exclusion=0,
                      geometry_rejections=[], stop_reason=None, steps=steps)
 
     def result(termination: str) -> SearchResult:
@@ -1017,6 +1029,9 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     rejected: set[str] = set()
     safety_streak = 0
     while True:
+        if target_tolerance is not None and best.safety_factor <= target * (1.0 + target_tolerance):
+            reduction['stop_reason'] = 'within_target_tolerance'
+            return result('converged')
         if evaluations >= max_evaluations:
             return result('evaluation_limit')
         if is_cancelled is not None and is_cancelled():
@@ -1101,6 +1116,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
                        step_exponent: float = DEFAULT_STEP_EXPONENT,
                        max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
                        single_cell_patience: Optional[int] = DEFAULT_SINGLE_CELL_PATIENCE,
+                       target_tolerance: Optional[float] = DEFAULT_TARGET_TOLERANCE,
                        min_width_cells: int = 1,
                        warm_start: bool = False,
                        is_cancelled=None) -> SearchResult:
@@ -1111,7 +1127,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     `boundary_mapping_failed`)をそのまま返す(段階4は合格形状からしか始められない)。合格すれば、
     そこから `_reduce_volume` で体積削減を続ける。`max_evaluations` は**両段階を通した1本の予算**
     (全材料の評価が1回、残りが段階4の削る候補)。
-    `step_exponent` / `max_step_ratio` / `single_cell_patience` / `warm_start` は段階4だけが使う(`step_ratio` / `_reduce_volume`)。
+    `step_exponent` / `max_step_ratio` / `single_cell_patience` / `target_tolerance` / `warm_start` は段階4だけが使う(`step_ratio` / `_reduce_volume`)。
     `min_width_cells`(m、既定1=制約なし)は両段階が使う —— 段階3は設計空間を m 立方の opening で絞って規則を満たす
     出発形状を作り(入口検査も絞った空間に対して行う)、段階4は削除で被覆を失うセルを同じ一手で一緒に抜く(`peel` docstring)。
     `conditions.keep_cells`(保持ソリッド由来のセル)は、どちらの段階でも空にならず(段階3は全材料、段階4は `peel` の `protected`)、
@@ -1131,5 +1147,5 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
         return initial
     return _reduce_volume(initial, design_space_mask, conditions, max_evaluations=max_evaluations,
                           is_cancelled=is_cancelled, step_exponent=step_exponent, max_step_ratio=max_step_ratio,
-                          single_cell_patience=single_cell_patience, min_width_cells=min_width_cells,
-                          warm_start=warm_start)
+                          single_cell_patience=single_cell_patience, target_tolerance=target_tolerance,
+                          min_width_cells=min_width_cells, warm_start=warm_start)

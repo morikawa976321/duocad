@@ -310,6 +310,7 @@
   `single_cell_patience` 個に達したら `safety_at_single_cell` で `converged`(§12.7)。計算失敗(`unknown`)・保持の重なりの不合格は
   採用せず、数えず、止めもしない。
 - 順位を歩いて1セルも抜けなければ `no_removable_cell` で `converged`(幾何的にもう削れない)。
+- 合格形状の安全率が `目標 × (1 + target_tolerance)` 以下なら `within_target_tolerance` で `converged`(§12.12)。
 - 同じ形から既に不合格と分かっている候補が再び出たとき(順位が尽きて k を減らしても同じ候補になるとき)は、解き直さずに m を半減する
   (`repeated_candidates`)。削ったセルが1つなら順位から外す。
 
@@ -360,11 +361,11 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 ### 12.5 `diagnostics['reduction']` のキー
 
 `step_exponent` / `max_step_ratio` / `filter_size` / `surface_only` / `fem_solves` / `peel_calls` / `peel_seconds`(合計)/
-`peel_seconds_max` / `repeated_candidates` / `single_cell_patience`(`None` は無制限)/ `safety_excluded_cells`(削ったセルが1つで
+`peel_seconds_max` / `repeated_candidates` / `single_cell_patience`(`None` は無制限)/ `target_tolerance`(`None` は見ない。§12.12)/ `safety_excluded_cells`(削ったセルが1つで
 安全率が落ち、順位から外して続けたセルの数。止まる原因になった最後の1セルは含まない)/ `adopted_after_exclusion`(安全率で外したセルが
 採用を挟まず1つ以上続いた後に、採用に至った回数)/ `geometry_rejections`(候補ごとに `step`・`components`・`surviving_components`・
 `missing`・`removed_islands`)/ `warm_start`(前の形の変位を初期値に渡したか)・`warm_start_used` / `warm_start_fallbacks`(初期値を使えた回数・
-形が合わず cold に落ちた回数。docs/TOPOPT_SPEED.md)/ `stop_reason`(`safety_at_single_cell` / `no_removable_cell` / `seed_energy_unavailable`。予算切れ・中断は
+形が合わず cold に落ちた回数。docs/TOPOPT_SPEED.md)/ `stop_reason`(`safety_at_single_cell` / `no_removable_cell` / `within_target_tolerance` / `seed_energy_unavailable`。予算切れ・中断は
 `None` で、`SearchResult.termination` が `evaluation_limit` / `cancelled`)/ `final_region_recheck` / `steps`。
 
 `steps[]` の1件は `requested_cells` / `peel`(`picked` 順位から削った数・`islands` 島として消えた数・`skipped_support` /
@@ -587,6 +588,52 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 柱だけのマスクに全セルを順位として渡した実測: m=3・3×3×12 は 108→108 セル(`skipped_thickness` 98・`skipped_surface` 10)、
 m=2・2×2×12 は 48→48、m=3・4×4×12 は 192→172。1セル抜くと同じ層の残りのセルが m 立方に属せなくなるため。
 現在の `peel` は、そのセルと被覆を失うセル(巻き添え)を同じ一手で抜く(`docs/TOPOPT.md`「最小幅の保証」)ので、層ごと抜ける。
+
+### 12.12 収束の規則を足す: 安全率が目標の許容内に入ったら止める(2026-09-22)
+
+**規則**: 合格形状の安全率 S が `目標 T × (1 + target_tolerance)` 以下なら、候補を作らずに `converged`
+(`stop_reason='within_target_tolerance'`)。出発形状にも採用のたびにも当てはめ、予算切れ・中断より先に見る。
+既定は `binary_search.DEFAULT_TARGET_TOLERANCE = 0.01`、`None` は見ない(この節より前の測定はすべて `None` に当たる)。
+`single_cell_patience`(§12.7)・`no_removable_cell` はそのまま残る —— 粗い格子では1セルで安全率が許容の幅より大きく動き、
+この規則に掛からずに止まる場面があるため。止まった形状は常に合格形状なので(`S ≥ T`)、早く止めて失うのは体積だけである。
+
+**きっかけ**(本人、2026-09-22): 「形状最適化の収束間際の最後の1セルを詰める段階で時間をたくさん使っているので、終了条件を追加したい」。
+
+**実測**(製品経路の実行記録 `output/optimization_runs/20260921T162804-6af77a720e40/`。コード `5002e14`・要素 1.875mm・最小幅 7.5mm〈m=4〉・
+目標 2.0〈探索時の目標の係数が入る前で、探索の目標も 2.0〉・`max_evaluations` 無指定・CG。収束せず、本人が評価 98 の後に手動で停止した〈`manifest.json` の `status` は `running` のまま〉)。
+値は `topopt_checks/summarize_run_trajectory.py <run> --target 2.0` が出す。評価の番号は 0 が全材料、秒は CG の累計(peel・応力・記録の書き出しを
+含まない。記録全体の経過は 7,477 秒):
+
+- 評価 0〜17: 安全率 6.632 → 2.0025、材料 777,783 → 124,750 セル、CG 1,640 秒。不合格は無い。
+- 評価 18〜98(81回): 合格 28・不合格 53。合格形状の最小は 124,411 セルで、評価 17 から 339 セル(0.27%)。CG 4,266 秒(全体 5,907 秒の 72%)。
+- 目標との差 `S/T − 1` は、評価 8〜15 では採用1回ごとに 0.61〜0.70 倍になった。1回に削る割合が `1 − (T/S)^θ` で、差が小さいほど歩幅も小さいため
+  (`step_ratio`)。評価 11 → 17 では安全率が 4.4% 下がる間にセル数が 5.8% 減った(比 1.3)。
+
+`target_tolerance` の値ごとに、この試行列のどこで止まっていたか:
+
+| `target_tolerance` | 止まる評価 | その安全率 | セル数 | 合格形状の最小(124,411)との差 | CG の累計 | 以降の評価(うち合格) |
+|---|---|---|---|---|---|---|
+| 0.05 | 11 | 2.0954 | 132,379 | +6.40% | 1,350 秒 | 87(34) |
+| 0.03 | 12 | 2.0583 | 129,328 | +3.95% | 1,400 秒 | 86(33) |
+| 0.02 | 13 | 2.0379 | 127,474 | +2.46% | 1,449 秒 | 85(32) |
+| **0.01** | 15 | 2.0171 | 125,518 | +0.89% | 1,545 秒 | 83(30) |
+| 0.005 | 16 | 2.0075 | 124,982 | +0.46% | 1,593 秒 | 82(29) |
+| 0.001 | 18 | 2.0020 | 124,671 | +0.21% | 1,688 秒 | 80(27) |
+| `None` | —(評価 98 でも収束せず、手動で停止) | 2.0000 | 124,411 | 0 | 5,907 秒以上 | — |
+
+0.05 と 0.005 の差は評価5回(CG 243 秒)と体積 5.9 ポイントで、時間の差の大半は 0.001 より先の区間にある。
+
+**値の決め方**: 0.01 は対話セッションのAIが提案し、本人が採った(2026-09-22「1%で実装して」)。上の表から導いた値ではなく、
+表が言えるのは「0.005〜0.02 のどれでも時間はほぼ同じで、体積の差は 2 ポイント以内」まで。
+割合にした理由は、`step_ratio` が T/S だけで決まり、探索時の目標の係数(`docs/TOPOPT_TARGET_FACTOR.md`)を掛けても意味が変わらないこと。
+
+**他の規則を採らなかった理由**(AIの検討): 「直近の体積の減りが小さい」「歩幅が小さい」で止める規則は、安全率が目標から離れたまま
+1セル刻みになる場面でも止めてしまう。§12.7 の patience=16 の記録は FEM 100 回目(安全率 2.382、目標の +19%)以降ほぼ1セルずつの採用だったが、
+そこから体積は 69,135 → 51,715 mm³(25%)減っている。安全率の差で止める規則は、この場面では掛からない。
+
+**限界**: 実測は1題材・1本で、`target_tolerance` を入れたコードでの実行はまだ無い(表は `None` の試行列を後から切った値。
+止まる評価までは同じ試行列になる)。安全率が目標のすぐ上で横ばいのまま体積だけ減る形状では早く止まりすぎる
+(§12.7 の記録では安全率 2.38〜2.37 のまま体積が 10% 減る区間があったが、目標の +19% の位置で、許容には掛からない)。
 
 ## 13. 段階3の探索を削除: 全材料の1回の評価だけにする(2026-09-21)
 
