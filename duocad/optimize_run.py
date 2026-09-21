@@ -1093,8 +1093,17 @@ def _run(
     # 探索に入る前の中断はここで拾う(探索の中では評価と評価のあいだでしか見ない)。
     pump.check()
 
+    def on_evaluation(event: dict) -> None:
+        pump.send(
+            phase="search",
+            message=_evaluation_message(
+                event, design_elements=int(space.element_count), factor=factor,
+                elapsed_seconds=time.perf_counter() - started),
+            **event,
+        )
+
     search_result = binary_search.find_best_feasible(
-        space.mask, conditions, is_cancelled=should_cancel, **search_kwargs
+        space.mask, conditions, is_cancelled=should_cancel, on_evaluation=on_evaluation, **search_kwargs
     )
     trace.snapshot(
         'search-result',
@@ -1721,16 +1730,59 @@ def format_region_warning(diagnoses: List[dict]) -> str:
 # --------------------------------------------------------------------------------------
 # 進捗と中断
 # --------------------------------------------------------------------------------------
+def _format_elapsed(seconds: float) -> str:
+    total = int(seconds)
+    if total < 60:
+        return f"{total}秒"
+    hours, minutes = divmod(total // 60, 60)
+    return f"{hours}時間{minutes}分" if hours else f"{minutes}分"
+
+
+def _format_margin(percent: float) -> str:
+    size = abs(percent)
+    return f"{percent:+.0f}" if size >= 10 else f"{percent:+.1f}" if size >= 1 else f"{percent:+.2f}"
+
+
+_FAILED_CHECK_LABELS = {
+    "safety": "安全率を計算できず", "geometry": "幾何", "preserve": "保持", "exclude": "除外",
+    "watertight": "水密", "single_solid": "単一成分", "conditions": "条件面", "min_width": "最小幅",
+}
+
+
+def _evaluation_message(event: dict, *, design_elements: int, factor: float, elapsed_seconds: float) -> str:
+    """`binary_search` の `on_evaluation` の1件を、パネルの1行にする。
+
+    安全率は探索の格子での値なので、比べる相手も探索時の目標(`event['target_safety_factor']`)である。
+    """
+    target = float(event["target_safety_factor"])
+    safety = float(event["safety_factor"])
+    label = "目標" if factor == 1.0 else "探索の目標"
+    ratio = safety / target
+    gap = f"{ratio:.1f} 倍" if ratio >= 2.0 else f"{_format_margin(100.0 * (ratio - 1.0))}%"
+    best = (f"安全率 {safety:.4g}({label} {target:.3g} の {gap})・"
+            f"材料 {100.0 * event['cells'] / design_elements:.1f}%({event['cells']:,} 要素)・"
+            f"経過 {_format_elapsed(elapsed_seconds)}")
+    if event["outcome"] == "initial":
+        return f"評価 {event['evaluation']}: 全材料は合格。{best}"
+    if event["outcome"] == "accepted":
+        return f"評価 {event['evaluation']}: 採用。{best}"
+    candidate = event.get("candidate_safety_factor")
+    if "safety" in event["failed"] and candidate is not None:
+        reason = f"安全率 {candidate:.5g}"
+    else:
+        reason = "・".join(_FAILED_CHECK_LABELS.get(name, name) for name in event["failed"]) or "計算失敗"
+    return f"評価 {event['evaluation']}: 不合格({reason})。合格形状は{best}"
+
+
 class _ProgressPump:
     """進捗を1つの形に均して配り、そのついでに中断を見る。
 
     **中断を見る場所を進捗と同じにしてある**のは、長い処理の中で呼ばれる点がそこしか
     無いからである(タスク本文「`progress` コールバックから止められる程度」)。
 
-    **`binary_search.find_best_feasible` は評価ごとのコールバックを持たない**(段階4の
-    公開APIに無い、`duocad/topopt/binary_search.py` 参照)。探索を始めてから終わるまでの間、
-    `emit` はここから1回も呼ばれない —— 段階5はこの制約の中で配線しており、評価回数ごとの
-    途中経過を出したいなら段階4側にコールバック引数を足す変更が別途要る(この段階の対象外)。
+    **探索の中の途中経過は `send`(中断を見ない)で配る。** 探索は自分の `is_cancelled` で候補を作る前ごとに
+    中断を見て、合格チェックポイントを持った `SearchResult` を返す。`find_best_feasible` の `on_evaluation` から
+    `emit` を呼ぶと、そこで `OptimizeCancelled` が上がって探索の戻り値(`search-result` の記録)が失われる。
     """
 
     def __init__(
@@ -1747,6 +1799,9 @@ class _ProgressPump:
 
     def emit(self, **event: Any) -> None:
         self.check()
+        self.send(**event)
+
+    def send(self, **event: Any) -> None:
         if self._sink is None:
             return
         payload = {

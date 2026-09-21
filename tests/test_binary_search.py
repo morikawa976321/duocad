@@ -1,6 +1,7 @@
 import dataclasses
 import hashlib
 import itertools
+import json
 import math
 
 import numpy as np
@@ -1261,6 +1262,31 @@ def test_a_starting_shape_within_the_target_tolerance_converges_without_a_candid
     assert result.termination == 'converged' and reduction['stop_reason'] == 'within_target_tolerance'
     assert result.evaluations == 1 and reduction['steps'] == [] and reduction['peel_calls'] == 0
     assert result.best_feasible.mask.sum() == design.sum()
+
+
+def test_on_evaluation_reports_the_start_and_every_counted_candidate_including_the_one_that_stops_the_search(monkeypatch):
+    """落ちたら、途中経過(アプリの進捗の材料)が評価と1対1でない、または採用後の合格形状を映していない。"""
+    conditions, design, _ = appendage_conditions()
+    floor = 0.75 * design.sum()
+    _fail_safety_when(monkeypatch, lambda material: material.sum() < floor)
+    events: list = []
+    result = bs.find_best_feasible(design, conditions, max_evaluations=400, single_cell_patience=1,
+                                   on_evaluation=events.append)
+    assert result.diagnostics['reduction']['stop_reason'] == 'safety_at_single_cell'
+    assert [event['evaluation'] for event in events] == list(range(1, result.evaluations + 1))
+    assert events[0]['outcome'] == 'initial' and events[0]['cells'] == design.sum()
+    assert [event['outcome'] for event in events[1:]] == [
+        step['outcome'] for step in result.diagnostics['reduction']['steps']]
+    assert events[-1]['outcome'] == 'rejected' and events[-1]['failed'] == ['safety']
+    for before, event in zip(events, events[1:]):
+        if event['outcome'] == 'accepted':
+            assert (event['cells'], event['safety_factor']) == (event['candidate_cells'], event['candidate_safety_factor'])
+            assert event['cells'] < before['cells']
+        else:
+            assert (event['cells'], event['safety_factor']) == (before['cells'], before['safety_factor'])
+    assert events[-1]['cells'] == result.best_feasible.mask.sum()
+    assert all(event['target_safety_factor'] == conditions.target_safety_factor for event in events)
+    json.dumps(events)  # 素の値だけ(そのまま WebSocket に載る)
 
 
 @pytest.mark.parametrize('tolerance', [-.01, float('nan'), float('inf'), '0.01', True])

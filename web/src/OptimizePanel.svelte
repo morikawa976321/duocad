@@ -246,15 +246,14 @@
   </div>
 
   <!-- **進捗**。局面(prepare/derive/search/mesh/finalize/insert)ごとに届く
-       (`20260904-1704` の契約①)。**探索が始まると次の局面まで進捗は来ない**
-       (`find_best_feasible` に評価ごとのコールバックが無いため、`session.ts` 参照)。
+       (`20260904-1704` の契約①)。探索の間は評価(FEM 1回)ごとに1件届く。
        走っていないときは行ごと消す —— 前回の最後の1件を残すと、走っているように見える。 -->
   {#if running}
     <p id="optimize-progress" class="hint">
       {progress === null ? '準備中…' : `[${progress.phase}] ${progress.message}`}
       {#if cancelling}
-        <br />中断を伝えた。次に進捗が出た時点で降りる(塊を起こす段・探索の段の中では
-        止まらないことがある)。
+        <br />中断を伝えた。次に進捗が出た時点で降りる(探索中は走っている評価が終わった時点。
+        塊を起こす段の中では止まらないことがある)。
       {/if}
     </p>
   {/if}

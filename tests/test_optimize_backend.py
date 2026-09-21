@@ -783,6 +783,59 @@ def test_search_cancellation_discards_a_found_best_feasible_too(
     assert [body.id for body in session.document.bodies] == before
 
 
+def test_every_evaluation_of_the_search_reaches_the_progress_sink_and_never_raises_the_cancel_there(
+    session: Session, monkeypatch
+) -> None:
+    """落ちたら、探索中の途中経過がパネルへ届いていない、または進捗の口で中断の例外を上げて
+
+    探索の戻り値(合格チェックポイントの記録)を失っている。
+    """
+    from duocad.topopt import binary_search
+
+    _setup_four_conditions(session)
+    cancel = {"now": False}
+
+    def fake_find(design_space_mask, conditions, *, on_evaluation, **kwargs):
+        target = conditions.target_safety_factor
+        on_evaluation(dict(evaluation=1, outcome="initial", failed=[], candidate_safety_factor=target * 3,
+                           candidate_cells=1000, safety_factor=target * 3, cells=1000, target_safety_factor=target))
+        cancel["now"] = True
+        on_evaluation(dict(evaluation=2, outcome="accepted", failed=[], candidate_safety_factor=target * 1.5,
+                           candidate_cells=500, safety_factor=target * 1.5, cells=500, target_safety_factor=target))
+        on_evaluation(dict(evaluation=3, outcome="rejected", failed=["safety"], candidate_safety_factor=target * 0.99,
+                           candidate_cells=400, safety_factor=target * 1.5, cells=500, target_safety_factor=target))
+        on_evaluation(dict(evaluation=4, outcome="rejected", failed=["geometry"], candidate_safety_factor=None,
+                           candidate_cells=450, safety_factor=target * 1.5, cells=500, target_safety_factor=target))
+        return binary_search.SearchResult(
+            status="no_feasible_found", termination="cancelled", best_feasible=None,
+            history=[], evaluations=4, conditions_identifier="test")
+
+    monkeypatch.setattr(binary_search, "find_best_feasible", fake_find)
+    events: list = []
+    with pytest.raises(optimize_run.OptimizeCancelled):
+        optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0),
+                         progress=events.append, should_cancel=lambda: cancel["now"])
+    evaluations = [event for event in events if "evaluation" in event]
+    assert [event["evaluation"] for event in evaluations] == [1, 2, 3, 4]
+    assert all(event["phase"] == "search" for event in evaluations)
+    design = next(event["design_elements"] for event in events if event["phase"] == "derive")
+    messages = [event["message"] for event in evaluations]
+    assert messages[0].startswith("評価 1: 全材料は合格。安全率 14.4(探索の目標 4.8 の 3.0 倍)")
+    assert messages[1].startswith(f"評価 2: 採用。安全率 7.2(探索の目標 4.8 の +50%)・材料 {100 * 500 / design:.1f}%(500 要素)・経過 ")
+    assert messages[2].startswith("評価 3: 不合格(安全率 4.752)。合格形状は安全率 7.2(")
+    assert messages[3].startswith("評価 4: 不合格(幾何)。合格形状は安全率 7.2(")
+
+
+def test_the_margin_to_the_target_never_uses_an_exponent() -> None:
+    assert [optimize_run._format_margin(percent) for percent in (38.2, 1.74, 0.853, 0.0061, 3.1e-7)] == [
+        "+38", "+1.7", "+0.85", "+0.01", "+0.00"]
+
+
+def test_elapsed_time_is_shown_in_the_largest_two_units() -> None:
+    assert [optimize_run._format_elapsed(seconds) for seconds in (0.4, 59.9, 60, 3599, 3600, 5520)] == [
+        "0秒", "59秒", "1分", "59分", "1時間0分", "1時間32分"]
+
+
 def test_search_statuses_other_than_feasible_pass_through_without_touching_the_document(
     session: Session, monkeypatch
 ) -> None:

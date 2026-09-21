@@ -771,14 +771,22 @@ export interface OptimizeResolutionPayload {
  * 進捗1件(`optimize_run.run()` の `progress`)。`phase` ごとにキーが増える
  * (`20260904-1704` の契約①)ので、共通の2つだけを必須にする。
  *
- * **`binary_search.find_best_feasible` は評価ごとのコールバックを持たない**
- * (`duocad/optimize_run.py` の `_ProgressPump` docstring)ので、`phase: 'search'` の
- * 進捗は探索を始めるときの1件だけで、終わるまで次は来ない。
+ * `phase: 'search'` は探索を始めるときの1件に続けて、評価(FEM 1回)ごとに1件来る
+ * (`evaluation` 以下のキーを持つ。`binary_search._reduce_volume` の `on_evaluation`)。
+ * 安全率は探索の格子での値で、比べる相手は `target_safety_factor`(探索時の目標)。
  */
 export interface OptimizeProgress {
   phase: string
   message: string
   design_elements?: number
+  evaluation?: number
+  outcome?: 'initial' | 'accepted' | 'rejected'
+  failed?: string[]
+  candidate_safety_factor?: number | null
+  candidate_cells?: number
+  safety_factor?: number
+  cells?: number
+  target_safety_factor?: number
 }
 
 /**

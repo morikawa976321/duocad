@@ -20,8 +20,8 @@
    ある。**面添字を取り違えても例外は出ない**(荷重が別の場所に入り、最適化はもっともらしく
    収束する)ので、実際に走らせた結果で突き合わせる。
 4. **進捗** —— パイプラインの段(`derive`/`search`/`mesh`/`finalize`/`insert` 等)ごとに
-   来る。**評価回数ごとの粒度は無い**(`find_best_feasible` は評価ごとのコールバック引数を
-   持たない)ので、`phase="optimize"`(旧SIMPの設計反復)の段は存在しない。
+   来る。探索の間は評価(FEM 1回)ごとに `phase="search"` が1件来る(`find_best_feasible` の
+   `on_evaluation`)。`phase="optimize"`(旧SIMPの設計反復)の段は存在しない。
 5. **中断** —— 進捗の途中で旗を立てると `OptimizeCancelled` になり、**文書は1ビットも
    変わらない**。
 6. **応力を測る経路** —— `keep_model` が通っているので安全率が出る。許容応力は
@@ -305,16 +305,18 @@ def check_load_lands_on_the_chosen_face(session, out) -> None:
 
 def check_progress(events) -> None:
     print("\n[4] 進捗(パイプラインの段ごと)")
-    # **評価回数ごとの粒度は無い**(段階6の契約③。`find_best_feasible` は評価ごとの
-    # コールバック引数を持たないので、探索を始めてから終わるまでの間 `_ProgressPump.emit`
-    # は1回も呼ばれない)。ここで見るのは「形状の探索を始めた」ことを告げる
-    # `phase="search"` のメッセージが来ることと、設計反復という段そのものが無いこと。
     phases = [event["phase"] for event in events]
+    evaluations = [event["evaluation"] for event in events if "evaluation" in event]
     check("進捗イベントが来る", len(events) > 0, f"{len(events)}件")
     check(
         "探索を始めたことを告げる進捗が来る(phase='search')",
         phases.count("search") >= 1,
         f"{phases.count('search')}件",
+    )
+    check(
+        "探索の評価ごとに進捗が来る(1 から連番)",
+        len(evaluations) >= 1 and evaluations == list(range(1, len(evaluations) + 1)),
+        f"{len(evaluations)}件。最後: {next((e['message'] for e in reversed(events) if 'evaluation' in e), None)}",
     )
     check(
         "「設計反復ごと」の段は無い(段階4以降にSIMPの反復概念が無い契約)",

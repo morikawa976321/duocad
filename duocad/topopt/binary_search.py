@@ -949,7 +949,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
                    max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
                    single_cell_patience: Optional[int] = DEFAULT_SINGLE_CELL_PATIENCE,
                    target_tolerance: Optional[float] = DEFAULT_TARGET_TOLERANCE,
-                   min_width_cells: int = 1, warm_start: bool = False) -> SearchResult:
+                   min_width_cells: int = 1, warm_start: bool = False, on_evaluation=None) -> SearchResult:
     """`initial.best_feasible` から、ひずみエネルギーの低い材料をまとめて削り続ける(段階4)。
 
     合格形状は1つだけ持つ。1回の試行: 合格形状を解いた変位の要素エネルギー(近傍でならす)の低い順に
@@ -979,6 +979,11 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     `warm_start` なら、直前の合格形状の変位(`FeasibleModel.displacement`)を次の候補の CG の初期値に渡す。
     **既定はオフ**: 採用形状の `mask_hash` が cold と一致しないことが実測されている(docs/TOPOPT_SPEED.md)。
     初期値を使えた回数と捨てた回数は `diagnostics['reduction']['warm_start_used']` / `['warm_start_fallbacks']`。
+
+    `on_evaluation(event: dict)` は出発形状で1回(`outcome='initial'`)、以降は評価に数えた候補ごとに1回、合格形状を更新した後で呼ぶ。
+    `event` は素の値だけ: `evaluation`(通算の評価回数)/ `outcome`(`'initial'` / `'accepted'` / `'rejected'`)/ `failed` /
+    `candidate_safety_factor`(FEMを解かなかった候補は `None`)/ `candidate_cells` / `safety_factor`・`cells`(その時点の合格形状)/
+    `target_safety_factor`。**例外を投げれば探索ごと落ちる**ので、呼び出し側で握ること。
     """
     if single_cell_patience is not None and not (
             isinstance(single_cell_patience, int) and not isinstance(single_cell_patience, bool) and single_cell_patience >= 1):
@@ -1013,6 +1018,15 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
                             evaluations=evaluations, conditions_identifier=identifier,
                             diagnostics=dict(initial=initial.diagnostics, reduction=reduction))
 
+    def notify(outcome: str, failed: list, candidate_safety_factor: Optional[float], candidate_cells: int) -> None:
+        if on_evaluation is not None:
+            on_evaluation(dict(evaluation=evaluations, outcome=outcome, failed=sorted(set(failed)),
+                               candidate_safety_factor=None if candidate_safety_factor is None else float(candidate_safety_factor),
+                               candidate_cells=int(candidate_cells),
+                               safety_factor=float(best.safety_factor), cells=int(best.mask.sum()),
+                               target_safety_factor=target))
+
+    notify('initial', [], float(best.safety_factor), int(best.mask.sum()))
     energy = best.energy
     if energy is None:
         fields: dict = {}
@@ -1097,8 +1111,11 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             rejected.clear()
             reduction['adopted_after_exclusion'] += int(safety_streak > 0)
             safety_streak = 0
+            notify('accepted', failed, best.safety_factor, int(best.mask.sum()))
         else:
             rejected.add(key)
+            notify('rejected', failed, trial.safety_factor,
+                   int((candidate if rejection is not None else survivors[0]).sum()))
             if peeled.picked > 1:
                 multiplier /= 2.0
             else:
@@ -1119,7 +1136,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
                        target_tolerance: Optional[float] = DEFAULT_TARGET_TOLERANCE,
                        min_width_cells: int = 1,
                        warm_start: bool = False,
-                       is_cancelled=None) -> SearchResult:
+                       is_cancelled=None, on_evaluation=None) -> SearchResult:
     """全材料の評価(段階3)に続けて、ひずみエネルギーの低い材料を削って体積を減らす単一の探索入口(§3)。
 
     まず `find_initial_feasible` で設計空間の全材料を評価し、合格しなければその
@@ -1136,6 +1153,8 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     `is_cancelled` は引数無しで呼べる callable。段階3は評価の前、段階4は削る候補を作る前ごとに見る。
     真を返した時点の `best_feasible`(キャッシュ無しで検査済み)を返す
     (§4.6「中断時は合格チェックポイントを記録する」)。初期合格の前に中断されれば `no_feasible_found` / `cancelled`。
+
+    `on_evaluation` は段階4へそのまま渡す(`_reduce_volume` docstring)。全材料が不合格なら1回も呼ばれない。
     """
     identifier = evaluation_identifier(conditions)
     if is_cancelled is not None and is_cancelled():
@@ -1148,4 +1167,4 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     return _reduce_volume(initial, design_space_mask, conditions, max_evaluations=max_evaluations,
                           is_cancelled=is_cancelled, step_exponent=step_exponent, max_step_ratio=max_step_ratio,
                           single_cell_patience=single_cell_patience, target_tolerance=target_tolerance,
-                          min_width_cells=min_width_cells, warm_start=warm_start)
+                          min_width_cells=min_width_cells, warm_start=warm_start, on_evaluation=on_evaluation)
