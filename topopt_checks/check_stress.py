@@ -40,6 +40,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from duocad.topopt import anchor
 from duocad.topopt import fem
 from duocad.topopt import stress
 
@@ -432,7 +433,7 @@ def build_tapered_plate(mult: int) -> tuple[fem.Model, np.ndarray, float]:
         nelz,
         fixed_dofs=np.unique(np.array(fixed)),
         load=f,
-        extra_fixed_dofs=fem._floating_dofs(nelx, nely, nelz, ~solid),
+        extra_fixed_dofs=np.flatnonzero(~np.repeat(anchor.active_nodes(solid).ravel(), 3)),
     )
     nominal = 1.0 / (narrow * nelz)  # 細い側の公称応力(無次元)
     return model, rho, nominal

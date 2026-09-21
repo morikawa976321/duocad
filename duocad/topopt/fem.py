@@ -973,18 +973,6 @@ class PreparedSystem:
         return out
 
 
-def _floating_dofs(nelx: int, nely: int, nelz: int, void: np.ndarray) -> np.ndarray:
-    """空要素にしか接していない節点の自由度番号(系から外すために拘束へ回す)。"""
-    live = ~void
-    active = np.zeros((nelx + 1, nely + 1, nelz + 1), dtype=bool)
-    for a in (0, 1):
-        for b in (0, 1):
-            for c in (0, 1):
-                active[a : a + nelx, b : b + nely, c : c + nelz] |= live
-    idle = np.flatnonzero(~active.ravel())
-    return np.concatenate([3 * idle, 3 * idle + 1, 3 * idle + 2])
-
-
 def load_resultant(f: np.ndarray) -> np.ndarray:
     """荷重ベクトル (ndof,) → 合力 (3,)。自由度番号は `3*節点+軸` なので `dof % 3` が軸。"""
     f = np.asarray(f, dtype=float).ravel()

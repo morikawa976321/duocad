@@ -45,7 +45,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
-from duocad.topopt import fem, stress
+from duocad.topopt import anchor, fem, stress
 
 FAILURES: list[str] = []
 
@@ -234,12 +234,17 @@ def check_global_system() -> None:
 # ---------------------------------------------------------------------------
 # 3. 移設前一致(4題材)
 # ---------------------------------------------------------------------------
+def _floating_dofs(void: np.ndarray) -> np.ndarray:
+    """空要素にしか接していない節点の自由度番号。組み立ては `acceptance.safety_check` と同じ。"""
+    return np.flatnonzero(~np.repeat(anchor.active_nodes(~void).ravel(), 3))
+
+
 def _make_model(nelx: int, nely: int, nelz: int, void_blocks: list[tuple[int, ...]]):
     """棒(全材料)・梁(void_blocksで空洞を開けた形)を二値の `active_mask` で作る。"""
     void = np.zeros((nelx, nely, nelz), dtype=bool)
     for (x0, x1, y0, y1, z0, z1) in void_blocks:
         void[x0:x1, y0:y1, z0:z1] = True
-    extra_fixed = fem._floating_dofs(nelx, nely, nelz, void) if void.any() else None
+    extra_fixed = _floating_dofs(void) if void.any() else None
     model = fem.Model(
         nelx, nely, nelz,
         active_mask=(~void) if void.any() else None,
@@ -320,7 +325,7 @@ def _void_case() -> tuple[np.ndarray, np.ndarray]:
     void = np.zeros((nelx, nely, nelz), dtype=bool)
     void[3:8, 1:5, 1:5] = True  # 内部のくり抜き
     void[:, :, nelz - 1] = True  # 面ごと落とす
-    floating = fem._floating_dofs(nelx, nely, nelz, void)
+    floating = _floating_dofs(void)
     return void, floating
 
 
