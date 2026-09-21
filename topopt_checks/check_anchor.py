@@ -14,9 +14,7 @@
    あわせて、既定の拘束(`fem.Model` の片持ち梁)が非空であることと、
    **拘束不足が拘束不足と名指しして落ちる**ことを見る。
 1. **総荷重の保存** — 解像度を2倍にしても、節点荷重の合計が指定値と一致する(相対1e-12)。
-   面が複数のときも、荷重が斜めのときも見る。あわせて**圧力の合力が `p x cad_area` と
-   一致する**(稜線で捨てた面積に依らないこと。担当面積から出していた修正前のコードに
-   当てると 11.7% / 4.5% ずれて落ちる)。
+   面が複数のときも、荷重が斜めのときも見る。
 2. **解像度非依存** — 同じ面の節点集合の重心と合計担当面積が、解像度を4倍にすると
    真の面の重心・面積へ**半分以下の誤差**まで近づく(平面と曲面の両方)。
 3. **面の取り違えが無い** — 板の上面と側面で節点集合が排他になり、どの節点も自分の面から
@@ -60,6 +58,7 @@ import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理
 from duocad.topopt import anchor as an  # noqa: E402
 from duocad.topopt import fem  # noqa: E402
 from duocad.topopt import voxelize as vx  # noqa: E402
+from _fixtures import voxel_model  # noqa: E402
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
@@ -92,7 +91,7 @@ def _table(shape, n: int, **kw) -> tuple[vx.VoxelModel, an.AnchorTable]:
     同じ格子を何度も組み直していたぶんだけを削っている。"""
     key = (id(shape), n, tuple(sorted(kw.items())))
     if key not in _TABLES:
-        model = vx.voxelize(shape, n)
+        model = voxel_model(shape, n)
         _TABLES[key] = (model, an.build_anchors(model.soup, model.grid, **kw))
     return _TABLES[key]
 
@@ -243,34 +242,6 @@ def check_load_conservation() -> None:
         top = _face_of(model.soup, "plane", normal=(0, 0, 1))
         f = table.load_vector(top, (0.0, 0.0, -1000.0))
         totals.append(float(f[2::3].sum()))
-    # **圧力の合力は「真の面積」から出ていること。** 担当面積は稜線で隣の面に取られたぶん
-    # 数%小さい(実測 10.7%)。`load_vector` は指定した合力を担当面積の**比**で配るので
-    # その差は正規化で消えるが、圧力は `p x 面積` が合力そのものなので**そのまま不足**する
-    # (粗い格子ほど大きく、解像度を上げると黙って合力が増える)。
-    pressure_rows = []
-    for n in (16, 32):
-        model, table = _table(PLATE, n)
-        top = _face_of(model.soup, "plane", normal=(0, 0, 1))
-        a = table[top]
-        p_load = 0.25
-        f = table.pressure_vector(top, p_load)
-        got = np.array([f[0::3].sum(), f[1::3].sum(), f[2::3].sum()])
-        want = -p_load * a.cad_area * (a.cad_normal / np.linalg.norm(a.cad_normal))
-        rel = float(np.abs(got - want).max() / np.abs(want).max())
-        # 担当面積で出していたら何%ずれるか(=修正前の値)。検査が効く幅を示す。
-        gap = 1.0 - a.total_area / a.cad_area
-        pressure_rows.append((n, rel, gap, a.cad_area, a.total_area))
-    for n, rel, gap, cad, assigned in pressure_rows:
-        check(
-            f"n={n:3d} 圧力の合力が p x cad_area と一致(稜線で捨てた面積に依らない)",
-            rel < 1e-12,
-            f"相対誤差 {rel:.3e}(担当面積 {assigned:.3f} で出していたら {gap:.2%} 不足していた。"
-            f"CAD面積 {cad:.3f})",
-        )
-    RESULTS["pressure_resultant"] = [
-        {"n": n, "rel_err": rel, "assigned_area_shortfall": gap} for n, rel, gap, _c, _a in pressure_rows
-    ]
-
     drift = abs(totals[1] - totals[0]) / abs(totals[0])
     check(
         "解像度16と32で総荷重が同じ(相対1e-12以内)",

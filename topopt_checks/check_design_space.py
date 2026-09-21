@@ -16,10 +16,9 @@
 1. **塊がソリッドから来ない** — 渡した bool マスクが要素単位でそのまま `VoxelModel.design`
    になる(かつ呼び出し側の配列と共有していない)。
 2. **面アンカーが塊に依存しない** — 格子と soup を固定したまま塊だけを差し替えても、
-   `anchors_for` が返す面添字の集合・節点の通し番号・担当面積が完全に一致する。
+   `build_anchors` が返す面添字の集合・節点の通し番号・担当面積が完全に一致する。
 3. **はみ出しが例外になる** — 保持ソリッドが塊から出る配置で `OutsideDesignSpaceError` が
-   上がり、メッセージにはみ出し要素数が入る。**同じ配置を `voxelize()` に通すと
-   例外が出ずに黙って切り詰められることを先に確認する**(検出力の確認)。
+   上がり、メッセージにはみ出し要素数が入る。
 
 （旧[4]「塊が入力ソリッドに縛られていない」— 大きい箱の塊にSIMPを回して外に材料が
 できることを見る合成問題 — は、同じ性質を[5]が固定凸包 `derive()` の実経路でより忠実に
@@ -88,6 +87,7 @@ from duocad.topopt import OUTPUT_DIR
 from duocad.topopt import anchor as an
 from duocad.topopt import design_space as ds
 from duocad.topopt import voxelize as vx
+from _fixtures import demo_bracket, demo_conditions, severed_conditions, voxel_model
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
@@ -119,7 +119,7 @@ def box_mask(grid: vx.Grid, lo, hi) -> np.ndarray:
 
 def bracket_grid(margin: float, elements_long_axis: int) -> tuple[vx.Grid, vx.TriangleSoup]:
     """ブラケットの bbox を `margin` mm 広げた格子と、そのブラケットの三角形群。"""
-    bracket = an.demo_bracket()
+    bracket = demo_bracket()
     soup = vx.triangles_from_shape(bracket.wrapped, deviation=0.2)
     lo, hi = soup.bbox
     grid = vx.grid_for_bbox(lo - margin, hi + margin, elements_long_axis)
@@ -214,8 +214,10 @@ def check_anchors_independent_of_design() -> None:
     )
 
     t0 = time.perf_counter()
-    table_a = an.anchors_for(vx.model_from_design_mask(grid, occupied, anchor_shape=soup))
-    table_b = an.anchors_for(vx.model_from_design_mask(grid, bigger, anchor_shape=soup))
+    model_a = vx.model_from_design_mask(grid, occupied, anchor_shape=soup)
+    model_b = vx.model_from_design_mask(grid, bigger, anchor_shape=soup)
+    table_a = an.build_anchors(model_a.soup, model_a.grid)
+    table_b = an.build_anchors(model_b.soup, model_b.grid)
     seconds = time.perf_counter() - t0
 
     check(
@@ -247,37 +249,32 @@ def check_anchors_independent_of_design() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. はみ出しが例外になる(`voxelize()` が素通りすることを先に見る)
+# 3. はみ出しが例外になる
 # ---------------------------------------------------------------------------
 def check_outside_raises() -> None:
     print("\n[3] 保持ソリッドが塊からはみ出したら例外")
     from build123d import Box, Pos
 
-    grid, _soup = bracket_grid(6.0, 24)
-    bracket = an.demo_bracket()
+    grid, soup = bracket_grid(6.0, 24)
+    occupied, _ = vx.occupancy(soup, grid)
     # 箱の上面(z=12)をまたぐ保持ソリッド。下半分は塊の中、上半分は外。
     keep = Pos(0, 0, 14) * Box(10, 10, 8)
-
-    # (a) voxelize() —— 例外は出ず、件数だけが stats に残る。**検出力の確認。**
-    old = vx.voxelize(bracket, 24, keep=keep, grid=grid)
-    dropped_old = int(old.stats["keep_dropped_outside"])
-    # model_from_design_mask には voxelize() が作ったのと同じ塊・同じ soup を渡す。片方だけ
-    # 三角形分割の細かさが違うと、比べているのが「はみ出しの扱い」ではなく「分割の差」になる。
-    occupied, soup = old.design, old.soup
+    keep_raw, _ = vx.occupancy(vx.triangles_from_shape(keep.wrapped, deviation=0.2), grid)
+    dropped_old = int((keep_raw & ~occupied).sum())
     check(
-        "voxelize() は同じ配置を例外にせず黙って切り詰める(検出力の確認)",
-        dropped_old > 0 and int(old.stats["keep_elements"]) > 0,
-        f"はみ出し {dropped_old} 要素を捨て、残り {int(old.stats['keep_elements'])} 要素で正常終了",
+        "題材の保持ソリッドが塊の内と外の両方に要素を持つ(検出力の確認)",
+        dropped_old > 0 and int((keep_raw & occupied).sum()) > 0,
+        f"外 {dropped_old} 要素 / 内 {int((keep_raw & occupied).sum())} 要素",
     )
 
-    # (b) model_from_design_mask —— 既定で例外。メッセージにはみ出し要素数が入る。
+    # (a) model_from_design_mask —— 例外。メッセージにはみ出し要素数が入る。
     raised = None
     try:
         vx.model_from_design_mask(grid, occupied, anchor_shape=soup, keep=keep)
     except vx.OutsideDesignSpaceError as e:
         raised = e
     check(
-        "model_from_design_mask は既定で OutsideDesignSpaceError",
+        "model_from_design_mask は OutsideDesignSpaceError",
         raised is not None,
         "上がった" if raised is not None else "例外が上がらなかった",
     )
@@ -299,23 +296,7 @@ def check_outside_raises() -> None:
         )
         RESULTS["check3_outside_elements"] = dropped_old
 
-    # (c) 明示的に切り詰めを頼めば、voxelize() と同じ結果になる。
-    clipped = vx.model_from_design_mask(
-        grid, occupied, anchor_shape=soup, keep=keep, on_outside="clip"
-    )
-    check(
-        "on_outside='clip' なら voxelize() と同じ切り詰め結果",
-        bool(np.array_equal(clipped.keep, old.keep))
-        and int(clipped.stats["keep_dropped_outside"]) == dropped_old,
-        f"keep {int(clipped.keep.sum())} 要素 / はみ出し {int(clipped.stats['keep_dropped_outside'])}",
-    )
-    check(
-        "clip でも保持は塊の内側に収まる",
-        not bool((clipped.keep & ~clipped.design).any()),
-        f"外に出た保持要素 {int((clipped.keep & ~clipped.design).sum())}",
-    )
-
-    # (d) 除外ソリッドも同じ扱い。**両方はみ出したら両方を文面に出す**(片方だけ直して
+    # (b) 除外ソリッドも同じ扱い。**両方はみ出したら両方を文面に出す**(片方だけ直して
     # もう一度落ちるより、最初に全部見えたほうが直す順を決められる)。
     obstacle = Pos(0, 0, -14) * Box(10, 10, 8)
     both = None
@@ -352,7 +333,7 @@ _CASE1: dict = {}
 def case1_space():
     """導出を1回だけ回して使い回す(検査5〜10が同じものを見る。製品経路と同じ使い方)。"""
     if "space" not in _CASE1:
-        cond = ds.demo_conditions(0.0)
+        cond = demo_conditions(0.0)
         _CASE1["conditions"] = cond
         _CASE1["space"] = ds.derive(cond, elements_long_axis=CASE1_LONG_AXIS)
     return _CASE1["conditions"], _CASE1["space"]
@@ -850,7 +831,7 @@ def check_case1_connectivity() -> None:
     # --- 10-2 除外ソリッドで塞ぐと落ちる ----------------------------------
     raised = None
     try:
-        ds.derive(ds.severed_conditions(0.0), elements_long_axis=CASE1_LONG_AXIS)
+        ds.derive(severed_conditions(0.0), elements_long_axis=CASE1_LONG_AXIS)
     except ds.DesignSpaceDisconnectedError as e:
         raised = e
     check(
@@ -878,7 +859,7 @@ def check_case1_connectivity() -> None:
     check(
         "壁を外すと同じ条件が通る(落とした原因が除外ソリッドの壁であることの裏取り)",
         bool(
-            ds.derive(ds.demo_conditions(0.0), elements_long_axis=CASE1_LONG_AXIS).stats[
+            ds.derive(demo_conditions(0.0), elements_long_axis=CASE1_LONG_AXIS).stats[
                 "connectivity"
             ]["common_labels"]
         ),
@@ -1086,7 +1067,7 @@ def check_empty_condition_face_warning() -> None:
     # `check_anchor.py` [6] と同じ形: 40x24x10 の箱に 0.5x0.5x0.5 の小突起。突起の面は
     # 要素サイズ(elements_long_axis=8 → 5mm 前後)に対して小さすぎて空になる。
     tiny = Box(40, 24, 10) + Pos(0, 0, 5.25) * Box(0.5, 0.5, 0.5)
-    scaffold_model = vx.voxelize(tiny, 8)
+    scaffold_model = voxel_model(tiny, 8)
     scaffold_table = an.build_anchors(scaffold_model.soup, scaffold_model.grid)
     empty = scaffold_table.empty_faces()
     big = [f for f in scaffold_table.face_indices() if f not in empty]

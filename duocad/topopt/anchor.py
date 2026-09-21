@@ -453,55 +453,6 @@ class AnchorTable:
             np.add.at(f, 3 * ids + axis, weights * force[axis])
         return f
 
-    def pressure_vector(
-        self,
-        faces: Iterable[int] | int,
-        pressure: float,
-        *,
-        out: Optional[np.ndarray] = None,
-    ) -> np.ndarray:
-        """圧力 [N/mm^2] を面法線の**逆**向き(面を押す向き)に載せた荷重ベクトル。
-
-        節点力 = `-pressure * (cad_area/担当面積の合計) * 担当面積 * 節点法線`。
-        向きの分布は担当面積の重みのまま(=節点への配り方は変えない)で、
-        **総量だけを「面の真の面積」に合わせ直す**。
-
-        **なぜ担当面積をそのまま使わないか。** 稜線の規則で節点を隣の面に取られたぶん、
-        担当面積の合計は真の面積より数%小さい(実測: 24x24 の面で 10.7%、要素サイズ1.875mm)。
-        `load_vector` は「指定した合力」を担当面積の**比**で配るので、この差は正規化で
-        吸収されて消える。しかし圧力は `p x 面積` が合力そのものなので、**吸収されずに
-        そのまま合力の不足になる**(粗い格子ほど大きく、解像度を上げると黙って合力が増える)。
-        面の真の面積は B-rep から取れている(`FaceAnchor.cad_area`)ので、そこから出す。
-
-        担当面積の**値**も所有の規則も変えていない。変えるのはこの関数が作る合力だけ。
-        平面の面なら合力の大きさは厳密に `pressure * cad_area`(受入検査[1]が相対1e-12で見る)。
-        曲面では `p * ∫n dA` の離散近似になる(それが圧力の意味であって、
-        大きさが `p * cad_area` になるわけではない)。
-        """
-        picked = self._selected(faces)
-        self._require_nodes(picked)
-        f = np.zeros(self.node_grid.ndof) if out is None else out
-        for anchor in picked:
-            assigned = float(anchor.areas.sum())
-            if not assigned > 0.0:
-                raise ValueError(
-                    f"面 {anchor.face_index}: 担当面積の合計が 0 で圧力を配れない"
-                )
-            true_area = float(anchor.cad_area)
-            if not true_area > 0.0:
-                # `face_props` を持たない TriangleSoup(検査が手で組んだもの等)への保険。
-                # 三角形の総面積も真の面積の近似なので、無いよりはよい。
-                true_area = float(anchor.triangle_area)
-            if not true_area > 0.0:
-                raise ValueError(
-                    f"面 {anchor.face_index}: 真の面積が取れないので圧力の合力を決められない"
-                )
-            scale = -float(pressure) * (true_area / assigned)
-            vec = scale * anchor.areas[:, None] * anchor.normals
-            for axis in range(3):
-                np.add.at(f, 3 * anchor.node_ids + axis, vec[:, axis])
-        return f
-
     def element_mask(self, faces: Iterable[int] | int) -> np.ndarray:
         """アンカー節点を角に持つ要素の bool マスク (nx,ny,nz)。非設計領域に固定するのに使う。
 
@@ -1002,23 +953,6 @@ def format_mapping_warning(report: dict) -> str:
     return " / ".join(parts)
 
 
-def anchors_for(
-    model: vx.VoxelModel,
-    *,
-    faces: Optional[Iterable[int]] = None,
-    radius_ratio: float = DEFAULT_RADIUS_RATIO,
-    sample_ratio: float = DEFAULT_SAMPLE_RATIO,
-) -> AnchorTable:
-    """`voxelize()` の戻り値からそのまま対応表を作る(格子と三角形群は既に揃っている)。"""
-    return build_anchors(
-        model.soup,
-        model.grid,
-        faces=faces,
-        radius_ratio=radius_ratio,
-        sample_ratio=sample_ratio,
-    )
-
-
 def faces_matching(
     soup: vx.TriangleSoup,
     *,
@@ -1028,7 +962,7 @@ def faces_matching(
     near_point: Optional[Sequence[float]] = None,
     near_tol: float = 1e-6,
 ) -> list[int]:
-    """面を条件で拾う小さな道具(検査とデモが「あの面」を名指しするために使う)。
+    """面を条件で拾う小さな道具(検査が「あの面」を名指しするために使う)。
 
     実運用では人が画面でクリックした面添字が来るので、この関数は**検査の便宜**でしかない。
     """
@@ -1049,35 +983,6 @@ def faces_matching(
                 continue
         out.append(int(index))
     return out
-
-
-# ---------------------------------------------------------------------------
-# 合成ブラケット(検査とビューアが共有する題材)
-# ---------------------------------------------------------------------------
-def demo_bracket():
-    """設計空間になる合成ソリッド。**私物STEPに依存しない**(受入検査の制約)。
-
-    x方向に伸びた箱の、先端の上に小さな耳(lug)を生やした形。
-    - 固定面: 箱の x が最小の面(面積 24x24)
-    - 荷重面: 耳の上面(面積 8x8)。箱の面とは別の面添字になるので、
-      「小さい面を名指しして荷重を載せる」という stage2 の主眼がそのまま試せる。
-    """
-    from build123d import Box, Pos
-
-    body = Box(60, 24, 24)
-    lug = Pos(26, 0, 15) * Box(8, 8, 6)
-    return body + lug
-
-
-def demo_faces(soup: vx.TriangleSoup) -> tuple[int, int]:
-    """`demo_bracket()` の (固定面, 荷重面) の面添字を、位置から決定的に選ぶ。"""
-    fixed = faces_matching(soup, kind="plane", normal=(-1, 0, 0), near_point=(-30, 0, 0), near_tol=1e-6)
-    load = faces_matching(soup, kind="plane", normal=(0, 0, 1), near_point=(26, 0, 18), near_tol=1e-6)
-    if len(fixed) != 1 or len(load) != 1:
-        raise ValueError(
-            f"デモの面を一意に選べなかった(固定={fixed} 荷重={load})。demo_bracket を変えたら見直すこと"
-        )
-    return fixed[0], load[0]
 
 
 def format_condition_face_warning(diagnoses: list[dict]) -> str:
@@ -1109,36 +1014,9 @@ def format_condition_face_warning(diagnoses: list[dict]) -> str:
 def _face_list(value: Any) -> list:
     """`int` 1つでも面の並びでも受けて、面添字のリストにする。
 
-    **既存の呼び出し(デモ・検査)が `int` を渡し続けられるようにするため**の入口。
+    **既存の呼び出し(検査)が `int` を渡し続けられるようにするため**の入口。
     ここで均さないと「面が1枚の場合」の分岐が呼び出し側に散らばる。
     """
     if isinstance(value, (int, np.integer)):
         return [int(value)]
     return [int(item) for item in value]
-
-
-def _cli() -> int:
-    import argparse
-
-    parser = argparse.ArgumentParser(description="合成ブラケットの面アンカー表の要約")
-    parser.add_argument("--n", type=int, default=40, help="最長軸方向の要素数")
-    args = parser.parse_args()
-
-    model = vx.voxelize(demo_bracket(), args.n)
-    table = build_anchors(model.soup, model.grid)
-    print(f"grid   : {model.grid.shape} spacing={model.grid.spacing:.6f}")
-    print(f"nodes  : {table.node_grid.shape}")
-    print(f"table  : {table.stats['seconds']:.3f}秒 / {table.stats['faces']}面 / "
-          f"標本点 {table.stats['samples']}")
-    for f in table.face_indices():
-        a = table[f]
-        print(
-            f"  面{f:3d} {a.kind:14s} 節点{a.node_count:5d} "
-            f"担当面積 {a.total_area:10.3f} / CAD {a.cad_area:10.3f} "
-            f"(こぼれ {a.leak_ratio:.1%})"
-        )
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(_cli())

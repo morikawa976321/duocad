@@ -79,18 +79,23 @@ SHA-256 は振れない)。**解法・前処理の改良は CG 反復数の差�
 「面アンカー」は stage2 = `anchor.py` が担当する。下記「CADの面 → 格子の節点」)。
 
 ```python
-import voxelize
-from build123d import Box, Cylinder, Pos
+from duocad.topopt import voxelize
+from build123d import Box, Pos
 
-model = voxelize.voxelize(
-    Box(40, 20, 10),                       # 設計空間(TopoDS_Shape / build123d のどちらでも)
-    elements_long_axis=40,                 # 最長軸方向の要素数 → 要素サイズが決まる
-    keep=Pos(18, 0, 0) * Box(12, 20, 10),  # 保持領域(材料を必ず残す)。省略可
-    obstacle=Pos(-10, 0, 0) * Cylinder(4, 20),  # 障害物領域(材料を入れない)。省略可
+shape = Box(40, 20, 10).wrapped
+lo, hi = voxelize._shape_bbox(shape)
+grid = voxelize.grid_for_bbox(lo, hi, 40)   # 最長軸方向の要素数 → 要素サイズが決まる
+soup = voxelize.triangles_from_shape(shape, deviation=grid.spacing * voxelize.DEFAULT_DEVIATION_RATIO)
+design, stats = voxelize.occupancy(soup, grid)
+model = voxelize.model_from_design_mask(
+    grid, design, anchor_shape=soup,
+    keep=Pos(14, 0, 0) * Box(12, 20, 10),   # 保持領域(材料を必ず残す)。省略可。塊からはみ出すと例外
 )
+# 1つのソリッドを塊と面の両方に使うこの組み立ては、検査用に `topopt_checks/_fixtures.py` の
+# `voxel_model()` が持つ。製品は `design_space.derive` が塊を4条件から導出する。
 model.grid          # Grid(origin, spacing, shape) —— 立方体要素・ワールド軸整列
 model.design        # bool (nx,ny,nz)。設計空間の占有
-model.keep          # bool。**設計空間の内側に切り詰め済み**
+model.keep          # bool。設計空間の内側にある(はみ出しは例外)
 model.obstacle      # bool。同上
 model.free          # design & ~keep & ~obstacle(最適化が動かしてよい要素)
 model.soup          # TriangleSoup。三角形ごとに OCCT の面添字(1始まり)を持つ
@@ -153,7 +158,7 @@ model.initial_density(0.3)  # SIMP へ渡す初期密度場(保持=1 / 障害物
 面積・重心・法線(`soup.face_props`)を捨てていない
 (`soup.face_index[t]` / `soup.triangles_of_face(i)`)。`voxelize.closest_triangle(soup, points)`
 が各点の最近傍三角形とその距離を厳密に返すので、`soup.face_index[tri]` で面に戻れる。
-同じ格子に別のソリッドを載せたいときは `voxelize(other, grid=model.grid)`。
+同じ格子に別のソリッドを載せたいときは、その三角形群を `voxelize.occupancy(other_soup, model.grid)` に渡す。
 
 `closest_triangle` は最近傍点を**7候補(3頂点 / 3辺への射影 / 面への射影)の最小値**で求める。
 教科書(Ericson)の領域分けを優先順位つきの上書きで書くと、**退化した三角形(2頂点が重なる)で
@@ -165,21 +170,21 @@ model.initial_density(0.3)  # SIMP へ渡す初期密度場(保持=1 / 障害物
 
 ## 塊(設計空間)と面アンカーの対象ソリッドの分離(2026-09-04)
 
-`voxelize(shape, ...)` は**1つのソリッドに2つの役割を兼ねさせる** —— そのソリッドの占有が
-`VoxelModel.design`(削る前の塊)になり、同じソリッドの三角形が `VoxelModel.soup` になって
-**拘束・荷重に指定できる面はその面だけ**になる。`run_pipeline` は `void = ~design | obstacle` を
+当時の入口 `voxelize(shape, ...)`(2026-09-21 に削除)は**1つのソリッドに2つの役割を兼ねさせていた**
+—— そのソリッドの占有が `VoxelModel.design`(削る前の塊)になり、同じソリッドの三角形が
+`VoxelModel.soup` になって**拘束・荷重に指定できる面はその面だけ**になる。`run_pipeline` は `void = ~design | obstacle` を
 最適化へ渡すので、この経路では**材料は入力ソリッドの外へ一切出られない**(答えは必ず「元の形に
 穴が開いたもの」になる)。duocad 本体では塊は利用者に見せない合成物で、拘束面・荷重面は保持
 ソリッド等の**別のボディ**に付く。この2つを切り離した入口を足したのがここ。
 
 ### 塊はどこから来るか
 
-`voxelize.model_from_design_mask(grid, design, *, anchor_shape, keep=None, obstacle=None, on_outside="raise", ...)`。
+`voxelize.model_from_design_mask(grid, design, *, anchor_shape, keep=None, obstacle=None, ...)`。
 **塊は呼び出し側が渡す bool マスク**(`grid.shape` と同じかたち)で、ソリッドの占有である必要は
 ない。マスクは複製して持つので、呼び出し側があとから書き換えても `VoxelModel` の中身は変わらない。
 かたちが格子と違う場合・全要素 False の場合は `ValueError`(黙って全体を塊にしない)。
-戻り値は既存と同じ `VoxelModel` で、`stats` は `voxelize()` と同じキーに `design_source="mask"` と
-`on_outside` を足したもの。**`occupancy` キーは無い**(塊がソリッド由来でないため)。
+戻り値は `VoxelModel` で、`stats` に `design_source="mask"` が入る。**`occupancy` キーは無い**
+(塊がソリッド由来でないため)。
 
 ### 面アンカーの対象はどこから来るか
 
@@ -187,17 +192,16 @@ model.initial_density(0.3)  # SIMP へ渡す初期密度場(保持=1 / 障害物
 のいずれかを受ける。**面添字は渡したものの面の並びで決まる**ので、面を選ぶのに使った
 `TriangleSoup` があるならそれをそのまま渡すこと(作り直すと面添字が食い違いうる)。
 `build_anchors(soup, grid, ...)` はもともと三角形群と格子を別々に受け取っていて**下位は既に
-分かれていた**。束ねていたのは `voxelize()` と `anchors_for()` の側だけで、
-`anchors_for(model)` は `build_anchors(model.soup, model.grid)` のままでよい。
+分かれていた**。
 
 ### はみ出しは例外
 
-`keep` / `obstacle` は同じ格子に載せる(内部は `voxelize(..., grid=grid)` と同じ道)。
-**塊からはみ出したら既定で `voxelize.OutsideDesignSpaceError`**。`ValueError` の派生なので既存の
+`keep` / `obstacle` は同じ格子に載せる。
+**塊からはみ出したら `voxelize.OutsideDesignSpaceError`**。`ValueError` の派生なので既存の
 `except ValueError` はそのまま効く。文面に「どの領域が何要素はみ出したか(領域の総要素数つき)」を
 書き、`e.outside`(`{"keep": n, "obstacle": n}`)で機械からも引ける。
-塊を自動で決める経路でははみ出しが普通に起こるため、既定は例外である。
-切り詰めてよいときだけ `on_outside="clip"` を明示する(`stats["keep_dropped_outside"]` に件数が残る)。
+塊を自動で決める経路でははみ出しが普通に起こるため、黙って切り詰めない
+(切り詰める口 `on_outside="clip"` は 2026-09-21 に削除した)。
 
 ### 端から端まで
 
@@ -212,7 +216,7 @@ model.initial_density(0.3)  # SIMP へ渡す初期密度場(保持=1 / 障害物
 
 ### 実測(2026-09-04・分離の実証。`check_design_space.py` の検査4)
 
-合成ブラケット(`demo_bracket()`: 60×24×24 の箱 + 8×8×6 の耳。bbox は x -30..30 / y -12..12 /
+合成ブラケット(`topopt_checks/_fixtures.py` の `demo_bracket()`: 60×24×24 の箱 + 8×8×6 の耳。bbox は x -30..30 / y -12..12 /
 z -12..18)の**面はそのまま**にして、**塊だけ**を差し替える。格子は両方とも同じ
 (28, 15, 18) / 要素サイズ 2.769mm。固定=面1(x=-30)、荷重=面10(耳の上面、-z へ 1.0)、
 volfrac 0.3、30反復。
@@ -245,8 +249,7 @@ volfrac 0.3、30反復。
 渡さない。塊 = 外枠 − 除外 と定義した以上その領域には塊の要素が1つも無く、**同じ除外を
 `obstacle` として渡すと必ず全要素はみ出して `OutsideDesignSpaceError` になる**(文面は
 「座標系・単位が違う」と誤誘導するので、なおさら渡さない)。最適化に渡る情報は同じ ——
-`void = ~design | obstacle` なので `~design` 側で同じ要素が落ちる。`on_outside="clip"` へ倒す
-選択もしない(「はみ出しは例外」という保証をこの経路だけ骨抜きにするため)。除外が保持を
+`void = ~design | obstacle` なので `~design` 側で同じ要素が落ちる。除外が保持を
 食っているケースは保持のはみ出しとして現れ、`design_space.DesignSpaceTooSmallError` になる。
 
 ### 格子の外は誰も数えていない
@@ -360,7 +363,7 @@ optimize_run.run
 
 ### 切れている塊をそのまま最適化に通すと何が起きるか(実測 2026-09-04)
 
-題材は `design_space.severed_conditions()` —— `demo_conditions()` の除外ソリッドを、2つのパッドの
+題材は `severed_conditions()`(今は `topopt_checks/_fixtures.py`)—— `demo_conditions()` の除外ソリッドを、2つのパッドの
 間を丸ごと塞ぐ壁(厚さ10mm・塊より大きい断面)に差し替えたもの。**連結性の確認だけを迂回して**
 (`assert_faces_connected` を no-op に差し替え)最後まで回した。格子は長辺22要素、60反復。
 
@@ -880,10 +883,10 @@ V-cycleの移送 `P@e` / `P.T@r`)。実装の前に測った結果: **BLASのス
   保ちたいため。捨てた分は隣の面が受け持っている。
 - 荷重は「その面の節点の担当面積の比」で配るので、捨てた分があっても**指定した総荷重は
   厳密に保存される**(比の正規化で吸収される。実測の相対誤差 2.3e-16)。
-- **圧力(`pressure_vector`)の合力は、捨てた面積から独立している。** `p × 面積` が合力
-  そのものなので、担当面積から出すと捨てたぶんがそのまま不足する(実測: 要素サイズ
-  2.5mm で 11.7%、1.25mm で 4.5%)。**合力は `FaceAnchor.cad_area`(B-repから取った
-  真の面積)から出し、その総量を担当面積の重みで按分する。** 配り方は変えていない。
+- **圧力を載せる口(`pressure_vector`)は 2026-09-21 に削除した**(条件の入力に圧力が無く、製品から
+  呼ばれていなかった)。足し直すときの注意: `p × 面積` が合力そのものなので、担当面積から出すと
+  捨てたぶんがそのまま不足する(実測: 要素サイズ 2.5mm で 11.7%、1.25mm で 4.5%)。合力は
+  `FaceAnchor.cad_area`(B-repから取った真の面積)から出し、その総量を担当面積の重みで按分すること。
 
 重みを割って両方に配る案(節点を共有する)は採らなかった —— 固定面と荷重面が稜線を
 共有していると、同じ節点が「拘束されていて、かつ荷重を受ける」ことになり、
@@ -898,15 +901,12 @@ V-cycleの移送 `P@e` / `P.T@r`)。実装の前に測った結果: **BLASのス
 ### 使い方
 
 ```python
-model = voxelize.voxelize(shape, 32)                      # stage1
+model = voxelize.model_from_design_mask(grid, design, anchor_shape=soup)  # stage1(上の節)
 table = anchor.build_anchors(model.soup, model.grid)      # stage2
 fixed_dofs = table.fixed_dofs(face_a)                     # 面 → 拘束する自由度
 load = table.load_vector(face_b, (0, 0, -1000))           # 面 → 荷重ベクトル(合計は厳密に一致)
 keep = table.element_mask([face_a, face_b])               # 荷重・拘束の近傍(非設計領域)
 ```
-
-`table.pressure_vector(face, p)` は圧力(面法線の逆向き)を載せる口。合力ではなく面の向きの分布で
-決まるので、`load_vector` とは意味が違う。
 
 ### FEM 側の受け口(`fem.Model`)
 
@@ -1092,8 +1092,8 @@ stress → material → acceptance → binary_search → mesh`。
 | ファイル | 役割 |
 |---|---|
 | `duocad/topopt/fem.py` | **FEM本体**(要素剛性行列・全体組立・CG/direct/MG・残差検算・`PARALLEL_THREADS`)。numpy + scipy のみ。荷重釣り合い確認用の `load_resultant` / `reaction_forces` もここ |
-| `duocad/topopt/voxelize.py` | **B-repソリッド → 規則格子**(占有マスク・保持/障害物領域)。`duocad.kernel.tessellate` の三角形へ +z のレイを飛ばして巻き数で内外を決める。CLIとしても動く(`python -m duocad.topopt.voxelize --step <path> --n 100`) |
-| `duocad/topopt/anchor.py` | **CADの面 → 格子の節点の対応表(面アンカー)**。担当面積つき。固定/荷重/非設計領域の口。CLIは面アンカー表の要約だけ(`python -m duocad.topopt.anchor --table-only --n 32`。full-pipeline実行とSIMP呼び出しは段階6で削除) |
+| `duocad/topopt/voxelize.py` | **B-repソリッド → 規則格子**(占有マスク・保持/障害物領域)。`duocad.kernel.tessellate` の三角形へ +z のレイを飛ばして巻き数で内外を決める。**CLIは持たない** |
+| `duocad/topopt/anchor.py` | **CADの面 → 格子の節点の対応表(面アンカー)**。担当面積つき。固定/荷重/非設計領域の口。**CLIは持たない** |
 | `duocad/topopt/design_space.py` | **4条件(保持ソリッド・除外ソリッド・拘束面・荷重面)+ボディの外接箱 → 塊(設計空間)を1実行に1回**(`derive`。2026-09-16〜固定凸包)。保持・条件面のボディの外接箱の頂点の凸包から余白(`DEFAULT_MARGIN_RATIO` × 最長辺)以内の距離にあるセル(球とのミンコフスキー和。`distance_to_hull`)を取り、除外ソリッドを引き、保持ボディごと・条件面ごとに6近傍の接続を確かめて条件を含まない成分を落とす(`connect_seeds`。`DesignSpaceDisconnectedError` / `DesignSpaceConflictError` / `DesignSpaceGeometryError`)。塊は読み取り専用でハッシュ付き。材料量は受け取らない |
 | `duocad/topopt/stress.py` | **密度場と変位 → 要素ごとの von Mises 応力・代表応力・最小安全率**(後処理)。無次元 → 実単位の換算則(`UnitScale`)を持つ。**最適化には手を入れない**(応力制約の定式化は採らない。「von Mises応力と最小安全率」) |
 | `duocad/topopt/material.py` | **材料定数**(`PETG_YIELD_MPA` / `PRINT_DERATE` / `DEFAULT_ALLOWABLE_MPA` / `DEFAULT_YOUNGS_MODULUS_MPA`)。段階6で`safety_loop.py`から移設した |
@@ -1118,6 +1118,7 @@ stress → material → acceptance → binary_search → mesh`。
 | `topopt_checks/check_final_shape.py` | **受入検査(合否そのもの)**。最終形状の水密・単一ソリッド |
 | `topopt_checks/measure_binary_search.py` | 二値探索(`find_best_feasible`)の評価回数・最良体積の履歴を計測する(`measure_safety_search.py`の後継。**2026-09-17時点で未実機検証**——手元の`models/`で1回通してから使うこと) |
 | `topopt_checks/inspect_optimization_run.py` / `analyze_recorded_stages.py` / `analyze_recorded_geometry.py` / `render_recorded_analysis.py` / `render_domain_comparison.py` / `replay_finalization.py` | 保存済み実行を読む分析・可視化・再生ツール(受入検査ではない) |
+| `topopt_checks/_fixtures.py` | 検査・測定・pytest が共有する合成題材(`demo_bracket` / `demo_conditions` / `severed_conditions`)と、1つのソリッドを塊と面の両方に使って製品の部品(`grid_for_bbox` → `occupancy` → `model_from_design_mask`)で格子モデルを組む `voxel_model`。build123d を直接使うので `duocad/` の外にある |
 | `topopt_checks/_bootstrap.py` | 検査スクリプトからリポジトリ直下を `sys.path` へ足すだけの小物。**これらを pytest に入れない**理由もここに書いてある |
 
 **成果物(`duocad/topopt/output/`)。** 追跡しているのは検査が「その検査自身の標準的な実行の
@@ -1854,7 +1855,7 @@ pytest を重くしないため)。題材は離れた2つのパッド(拘束側 
   「クリックした面を固定面にする」UIは入っていない。境界条件UIと非同期ジョブ化は
   「難しいが解決可能」として本タスクの範囲外(2026-08-29のスコープ確定)。
   ただし**面添字を受け取る側の口は全部揃っている**(`fixed_dofs` / `load_vector` /
-  `pressure_vector` / `element_mask`)ので、残るのは verb の配線だけ。
+  `element_mask`)ので、残るのは verb の配線だけ。
 - **要素サイズより小さい面には節点が付かない**(稜線の規則の帰結)。実物STEPを
   要素サイズ 1.54mm で割ると 231面中22面が空になる。`table.empty_faces()` で見える。
   実行経路の入口でメッセージが出るようにしてある(上「拘束面・荷重面のアンカーが空のときに
@@ -1862,8 +1863,7 @@ pytest を重くしないため)。題材は離れた2つのパッド(拘束側 
   いくつ以下にするか)。**多数決の規則を曲げて小さい面にも節点を付ける、という本当の解決は
   まだしていない**(同節「本当の解決は保留する」に理由)。
 - **担当面積は真の面積より数%小さい**(稜線で隣の面に取られたぶんを再正規化しない設計)。
-  `load_vector` の総和は正規化で、`pressure_vector` の合力は `cad_area` から出すことで、
-  どちらもこの差から独立にしてある。**残るのは「担当面積を『面の面積』としてそのまま
+  `load_vector` の総和は正規化でこの差から独立にしてある。**残るのは「担当面積を『面の面積』としてそのまま
   使ったとき数%低く出る」ことだけ**で、面の面積が要るなら `FaceAnchor.cad_area` を使うこと。
 - **固定凸包は「塊が答えを含む」ことを保証しない。** 幾何の被覆の確認であって構造性能の
   確認ではない(下「固定凸包による設計空間(2026-09-16)」)。

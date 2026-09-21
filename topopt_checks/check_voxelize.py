@@ -19,8 +19,7 @@
    ずらした10通りの平均誤差**が、解像度を上げると単調に減ることを見る。1つの解像度の
    1点の誤差では駄目 — 格子と面の当たり方は解像度ごとに当たり外れがあり、実測でも
    円筒の相対誤差は n=16 で 0.4%、n=24 で 3.5% と**増える**(位置をずらして平均すると
-   2.6倍ずつ単調に減る)。ずらす口は `voxelize(..., grid=...)` で、stage2 が同じ格子に
-   別のソリッドを載せるときに使う口と同じもの。
+   2.6倍ずつ単調に減る)。格子は `Grid` を作って渡してずらす。
 3. **貫通穴が埋まらない** — 穴のある板で、穴の内側の要素が1つも占有されない
    (かつ板の実体側は隙間なく埋まる。「全部空」で通らないように両側を見る)。
 4. **壊れた入力で黙って通らない** — 開いたシェル・向きを裏返した面を含むシェル・
@@ -75,6 +74,7 @@ from OCP.TopAbs import TopAbs_SHELL  # noqa: E402
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
 from duocad.topopt import voxelize as vx  # noqa: E402
+from _fixtures import voxel_model  # noqa: E402
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
@@ -163,7 +163,7 @@ def check_against_occt_oracle() -> None:
     total_excluded = 0
     for label, shape, n in cases:
         try:
-            model = vx.voxelize(shape, n)
+            model = voxel_model(shape, n)
         except Exception as exc:  # 落ちたらトレースバックで死なずに1件のFAILとして出す
             check(f"神託と一致: {label}", False, f"voxelize が落ちた: {type(exc).__name__}: {str(exc)[:110]}")
             continue
@@ -232,7 +232,7 @@ SUBCELL_SHIFTS = [
 
 
 def _mean_volume_error(shape, analytic: float, n: int) -> tuple[float, float]:
-    base = vx.voxelize(shape, n)
+    base = voxel_model(shape, n)
     grid = base.grid
     errors = []
     for shift in SUBCELL_SHIFTS:
@@ -241,7 +241,7 @@ def _mean_volume_error(shape, analytic: float, n: int) -> tuple[float, float]:
             spacing=grid.spacing,
             shape=grid.shape,
         )
-        model = vx.voxelize(shape, n, grid=shifted)
+        model = voxel_model(shape, n, grid=shifted)
         errors.append(abs(model.design_volume - analytic) / analytic)
     arr = np.array(errors)
     return float(arr.mean()), float(arr.max())
@@ -289,7 +289,7 @@ def check_through_hole() -> None:
     print("[3] 貫通穴が埋まらない")
     radius = 5.0
     plate = Box(40, 40, 6) - Cylinder(radius, 20)
-    model = vx.voxelize(plate, 40)
+    model = voxel_model(plate, 40)
     grid = model.grid
     h = grid.spacing
     cx = grid.centers_1d(0)[:, None, None]
@@ -330,7 +330,7 @@ def check_broken_input_raises() -> None:
     ]
     for label, broken in cases:
         try:
-            model = vx.voxelize(broken, 12)
+            model = voxel_model(broken, 12)
         except ValueError as exc:
             check(f"壊れた入力で例外: {label}", True, f"ValueError: {str(exc).splitlines()[0][:90]}")
             continue
@@ -364,7 +364,7 @@ def check_broken_input_raises() -> None:
     for sh in shells:
         builder.Add(compound, sh.Reversed() if sh.IsSame(inner) else sh)
     try:
-        broken = vx.voxelize(compound, 20)
+        broken = voxel_model(compound, 20)
         check(
             "壊れた入力で例外: 内部空洞の殻だけを裏返した中空の箱",
             False,
@@ -379,7 +379,7 @@ def check_broken_input_raises() -> None:
         )
     # 健全な中空の箱は通り、空洞が空のままであること(上の検査が「空洞のある形は全部落とす」
     # 実装で緑にならないことの確認)
-    good_hollow = vx.voxelize(hollow, 20)
+    good_hollow = voxel_model(hollow, 20)
     surface = good_hollow.stats["surface"]
     check(
         "健全な中空の箱は通り、空洞が空のまま(殻ごとの符号と入れ子の深さが取れている)",
@@ -416,7 +416,7 @@ def check_broken_input_raises() -> None:
 
     # 健全な入力は通ること(検査4が「常に落ちる」実装で通らないことの確認)
     try:
-        vx.voxelize(box, 12)
+        voxel_model(box, 12)
         check("健全な入力は通る(検査4が常に落ちる実装でないことの確認)", True, "Box(30,20,10) n=12 OK")
     except Exception as exc:
         check("健全な入力は通る(検査4が常に落ちる実装でないことの確認)", False, f"{type(exc).__name__}: {exc}")
@@ -428,28 +428,31 @@ def check_broken_input_raises() -> None:
 def check_keep_and_obstacle() -> None:
     print("[5] 保持/障害物マスクが設計空間の内側に収まる")
     design = Box(40, 20, 10)
-    keep = Pos(18, 0, 0) * Box(12, 20, 10)      # +x 側へ 4mm はみ出す
-    obstacle = Pos(-10, 0, 0) * Cylinder(4, 20)  # 設計空間を貫く円筒
-    model = vx.voxelize(design, 24, keep=keep, obstacle=obstacle)
+    keep = Pos(14, 0, 0) * Box(12, 20, 10)       # +x 端まで(設計空間の内側)
+    obstacle = Pos(-10, 0, 0) * Cylinder(4, 10)  # 設計空間を z に貫く円筒
+    model = voxel_model(design, 24, keep=keep, obstacle=obstacle)
 
     outside_keep = int(np.count_nonzero(model.keep & ~model.design))
     outside_obstacle = int(np.count_nonzero(model.obstacle & ~model.design))
     check(
         "保持領域が設計空間の外に出ていない",
         outside_keep == 0 and model.stats["keep_elements"] > 0,
-        f"保持{model.stats['keep_elements']}要素 / 設計空間の外{outside_keep}要素 / "
-        f"外へはみ出して捨てた分{model.stats['keep_dropped_outside']}要素",
-    )
-    check(
-        "はみ出した分が実際に捨てられている(切り詰めが効いている)",
-        model.stats["keep_dropped_outside"] > 0,
-        f"捨てた要素{model.stats['keep_dropped_outside']}個",
+        f"保持{model.stats['keep_elements']}要素 / 設計空間の外{outside_keep}要素",
     )
     check(
         "障害物領域が設計空間の外に出ていない",
         outside_obstacle == 0 and model.stats["obstacle_elements"] > 0,
-        f"障害物{model.stats['obstacle_elements']}要素 / 設計空間の外{outside_obstacle}要素 / "
-        f"捨てた分{model.stats['obstacle_dropped_outside']}要素",
+        f"障害物{model.stats['obstacle_elements']}要素 / 設計空間の外{outside_obstacle}要素",
+    )
+    raised = None
+    try:
+        voxel_model(design, 24, keep=Pos(18, 0, 0) * Box(12, 20, 10))  # +x 側へ 4mm はみ出す
+    except vx.OutsideDesignSpaceError as exc:
+        raised = exc
+    check(
+        "はみ出した保持を黙って切り詰めず、要素数つきで拒否する",
+        raised is not None and raised.outside.get("keep", 0) > 0,
+        f"outside={getattr(raised, 'outside', None)}",
     )
     free = model.free
     check(
@@ -461,7 +464,7 @@ def check_keep_and_obstacle() -> None:
         f"- 障害物{model.stats['obstacle_elements']}",
     )
     try:
-        vx.voxelize(design, 24, keep=Box(20, 20, 10), obstacle=Box(10, 10, 10))
+        voxel_model(design, 24, keep=Box(20, 20, 10), obstacle=Box(10, 10, 10))
         check("保持と障害物が重なったら落ちる", False, "例外にならなかった")
     except ValueError as exc:
         check("保持と障害物が重なったら落ちる", True, f"ValueError: {str(exc).splitlines()[0][:70]}")
@@ -474,7 +477,7 @@ def check_keep_and_obstacle() -> None:
         ("障害物", {"obstacle": Pos(0, 0, 90) * Box(5, 5, 5)}),
     ):
         try:
-            vx.voxelize(design, 24, **kwargs)
+            voxel_model(design, 24, **kwargs)
             check(f"設計空間の外にある{label}領域を拒否する", False, "例外にならなかった")
         except ValueError as exc:
             message = str(exc).splitlines()[0]
@@ -484,7 +487,7 @@ def check_keep_and_obstacle() -> None:
                 f"ValueError: {message[:110]}",
             )
     RESULTS["keep_elements"] = model.stats["keep_elements"]
-    RESULTS["keep_dropped_outside"] = model.stats["keep_dropped_outside"]
+    RESULTS["keep_outside_rejected"] = None if raised is None else raised.outside.get("keep")
 
 
 # ---------------------------------------------------------------------------
@@ -495,8 +498,8 @@ def check_deterministic() -> None:
     shape = (Box(40, 40, 6) - Cylinder(5, 20)) - Pos(12, 0, 0) * Cylinder(3, 20)
     keep = Pos(-16, 0, 0) * Box(8, 40, 6)
     obstacle = Pos(0, 15, 0) * Box(10, 10, 6)
-    first = vx.voxelize(shape, 36, keep=keep, obstacle=obstacle)
-    second = vx.voxelize(shape, 36, keep=keep, obstacle=obstacle)
+    first = voxel_model(shape, 36, keep=keep, obstacle=obstacle)
+    second = voxel_model(shape, 36, keep=keep, obstacle=obstacle)
     same = (
         first.grid == second.grid
         and np.array_equal(first.design, second.design)
@@ -520,7 +523,7 @@ def check_deterministic() -> None:
     curved = vx._unwrap(Cylinder(10, 30))
     runs = []
     for n in (37, 61, 37, 37):
-        model = vx.voxelize(curved, n)
+        model = voxel_model(curved, n)
         runs.append(
             (
                 n,
@@ -550,7 +553,7 @@ def check_cell_center_convention() -> None:
     #     原点や中心の取り方が半セルずれると必ず崩れる。
     exact = []
     for n in (8, 16, 20, 32, 40, 64):
-        model = vx.voxelize(Box(40, 20, 10), n)
+        model = voxel_model(Box(40, 20, 10), n)
         exact.append((n, model.design_volume))
     worst = max(abs(v - 8000.0) for _n, v in exact)
     check(
@@ -562,7 +565,7 @@ def check_cell_center_convention() -> None:
     # (b) 占有要素の中心が張る範囲が、セル中心規約の期待どおりの位置にある。
     #     期待: 箱 [-20,20] に対して、中心の最小 = -20 + h/2、最大 = 20 - h/2。
     #     半セルずれていれば ±h ずれる(閾値 0.25h でどちらとも明確に区別できる)。
-    model = vx.voxelize(Box(40, 20, 10), 20)
+    model = voxel_model(Box(40, 20, 10), 20)
     h = model.grid.spacing
     idx = np.argwhere(model.design)
     centers = model.grid.centers_of(idx)
@@ -600,7 +603,7 @@ def check_cell_center_convention() -> None:
     worst = None
     for shape, name in ((Cylinder(10, 30), "円筒"), (Cone(10, 0, 20), "円錐"), (Box(40, 20, 10), "箱")):
         for n in (17, 37, 64):
-            model_n = vx.voxelize(shape, n)
+            model_n = voxel_model(shape, n)
             brep_lo, brep_hi = vx._shape_bbox(vx._unwrap(shape))
             grid_lo, grid_hi = model_n.grid.world_box()
             margin = float(

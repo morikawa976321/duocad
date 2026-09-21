@@ -52,7 +52,7 @@ import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理
 from duocad import optimize_run, query
 from duocad.server import Session
 from duocad.topopt import anchor as an
-from duocad.topopt import voxelize as vx
+from _fixtures import voxel_model
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
@@ -429,7 +429,7 @@ def check_face_requirement_formula() -> None:
     # 実際に「節点が付かない面」を作って、probe 側の目安と突き合わせる。題材は
     # `check_anchor.py` の稜線の規則の検査と同じ(0.5mm の突起 ≪ 要素サイズ 5mm)。
     tiny = Box(40, 24, 10) + Pos(0, 0, 5.25) * Box(0.5, 0.5, 0.5)
-    model = vx.voxelize(tiny, 8)
+    model = voxel_model(tiny, 8)
     table = an.build_anchors(model.soup, model.grid)
     empty = table.empty_faces()
     if not empty:

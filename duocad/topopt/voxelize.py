@@ -834,93 +834,6 @@ class VoxelModel:
         return self.design & ~self.keep & ~self.obstacle
 
 
-def voxelize(
-    shape: Any,
-    elements_long_axis: int = 40,
-    *,
-    keep: Any = None,
-    obstacle: Any = None,
-    pad: int = DEFAULT_PAD,
-    grid: Optional[Grid] = None,
-    deviation: Optional[float] = None,
-    deviation_ratio: float = DEFAULT_DEVIATION_RATIO,
-    angular_deflection: float = DEFAULT_ANGULAR_DEFLECTION,
-) -> VoxelModel:
-    """設計空間のソリッドから格子を起こし、保持領域・障害物領域を同じ格子に載せる。
-
-    `shape` / `keep` / `obstacle` は OCCT の `TopoDS_Shape`(build123d のオブジェクトを
-    渡した場合は `.wrapped` を使う)。`keep` と `obstacle` は設計空間の外へはみ出した分を
-    捨て、両者が重なっていれば `ValueError` にする(どちらを優先するかは人が決めることで、
-    黙って片方を勝たせてはいけない)。
-
-    `grid` を渡すとその格子をそのまま使う(stage2 が同じ格子で別のソリッドを載せるための口)。
-    """
-    started = time.perf_counter()
-    solid = _unwrap(shape)
-
-    # 格子は **B-rep の bbox** から起こす。三角形分割の bbox から起こし直してはいけない ——
-    # 弦は真の面より内側に来るので、仕様の「B-repの周囲に1要素分の余白」が満たせなくなる
-    # (要素サイズ 0.89738 に対し余白 0.89605 になっていた)。
-    if grid is None:
-        lo, hi = _shape_bbox(solid)
-        grid = grid_for_bbox(lo, hi, elements_long_axis, pad=pad)
-    dev = float(deviation) if deviation else max(grid.spacing * deviation_ratio, 1e-6)
-
-    soup = triangles_from_shape(solid, deviation=dev, angular_deflection=angular_deflection)
-    report = inspect_soup(soup)
-
-    design, occ_stats = occupancy(soup, grid)
-    stats = {
-        "seconds": 0.0,
-        "deviation": dev,
-        "grid": grid.as_dict(),
-        "surface": report,
-        "occupancy": occ_stats,
-        "design_elements": int(np.count_nonzero(design)),
-        "keep_elements": 0,
-        "obstacle_elements": 0,
-        "keep_dropped_outside": 0,
-        "obstacle_dropped_outside": 0,
-    }
-
-    keep_mask = np.zeros_like(design)
-    obstacle_mask = np.zeros_like(design)
-    if keep is not None:
-        raw, sub = _voxelize_region(
-            keep, grid, deviation=dev, angular=angular_deflection, label="保持"
-        )
-        keep_mask = raw & design
-        stats["keep_dropped_outside"] = int(np.count_nonzero(raw & ~design))
-        stats["keep_surface"] = sub
-    if obstacle is not None:
-        raw, sub = _voxelize_region(
-            obstacle, grid, deviation=dev, angular=angular_deflection, label="障害物"
-        )
-        obstacle_mask = raw & design
-        stats["obstacle_dropped_outside"] = int(np.count_nonzero(raw & ~design))
-        stats["obstacle_surface"] = sub
-
-    overlap = int(np.count_nonzero(keep_mask & obstacle_mask))
-    if overlap:
-        raise ValueError(
-            f"保持領域と障害物領域が {overlap} 要素で重なっている。"
-            "「必ず材料を残す」と「材料を入れない」は同時に満たせないので、"
-            "どちらを優先するかは呼び出し側が決めること(黙って片方を勝たせない)。"
-        )
-
-    stats["keep_elements"] = int(np.count_nonzero(keep_mask))
-    stats["obstacle_elements"] = int(np.count_nonzero(obstacle_mask))
-    stats["seconds"] = time.perf_counter() - started
-    return VoxelModel(
-        grid=grid,
-        design=design,
-        keep=keep_mask,
-        obstacle=obstacle_mask,
-        soup=soup,
-        stats=stats,
-    )
-
-
 class OutsideDesignSpaceError(ValueError):
     """保持/障害物領域が塊(設計空間)からはみ出した。
 
@@ -940,29 +853,23 @@ def model_from_design_mask(
     anchor_shape: Any,
     keep: Any = None,
     obstacle: Any = None,
-    on_outside: str = "raise",
     deviation: Optional[float] = None,
     deviation_ratio: float = DEFAULT_DEVIATION_RATIO,
     angular_deflection: float = DEFAULT_ANGULAR_DEFLECTION,
 ) -> VoxelModel:
     """塊(設計空間)を bool マスクで、面アンカーの対象ソリッドを別に受け取って組み立てる。
 
-    `voxelize()` は1つのソリッドに「削る前の塊」と「拘束・荷重に指定できる面」を兼ねさせる。
-    こちらはその2つを切り離した入口で、塊は `design`(格子と同じ形の bool 配列)から、面は
-    `anchor_shape` から来る。**塊をどのロジックで決めるかはここでは決めない**(呼び出し側の話)。
+    塊は `design`(格子と同じ形の bool 配列)から、面は `anchor_shape` から来る。
+    **塊をどのロジックで決めるかはここでは決めない**(呼び出し側の話)。
 
     `anchor_shape` は OCCT の `TopoDS_Shape` / build123d のオブジェクト / 既に作った
     `TriangleSoup` のいずれか。**面添字は渡したものの面の並びで決まる**ので、面を選ぶのに
     使った `TriangleSoup` があるならそれをそのまま渡すこと(作り直すと面添字が食い違いうる)。
 
-    `keep` / `obstacle` は同じ格子に載せる。**塊からはみ出したら既定で
-    `OutsideDesignSpaceError`**。`on_outside="clip"` を明示したときだけ `voxelize()` と同じに
-    切り詰める。塊を自動で決めるようになるとはみ出しは普通に起こるので、既定は例外にしてある。
+    `keep` / `obstacle` は同じ格子に載せる。**塊からはみ出したら `OutsideDesignSpaceError`**
+    (黙って切り詰めない)。
     """
     started = time.perf_counter()
-    mode = str(on_outside)
-    if mode not in ("raise", "clip"):
-        raise ValueError(f"on_outside must be 'raise' or 'clip', got {on_outside!r}")
 
     mask = np.asarray(design)
     if mask.shape != tuple(grid.shape):
@@ -990,7 +897,6 @@ def model_from_design_mask(
         "deviation": dev,
         "grid": grid.as_dict(),
         "design_source": "mask",
-        "on_outside": mode,
         "surface": report,
         "design_elements": int(np.count_nonzero(design_mask)),
         "keep_elements": 0,
@@ -1011,7 +917,7 @@ def model_from_design_mask(
         stats[f"{name}_dropped_outside"] = int(np.count_nonzero(raw & ~design_mask))
 
     outside = {n: int(stats[f"{n}_dropped_outside"]) for n in raw_of}
-    if mode == "raise" and any(outside.values()):
+    if any(outside.values()):
         labels = {"keep": "保持", "obstacle": "障害物"}
         parts = [
             f"{labels[n]}領域が塊(設計空間)から {c} 要素はみ出している"
@@ -1021,8 +927,7 @@ def model_from_design_mask(
         ]
         raise OutsideDesignSpaceError(
             "。".join(parts)
-            + "。塊が条件を含むだけ大きく取れていないか、座標系・単位が違う。"
-            "切り詰めてよいと分かっているなら on_outside='clip' を渡すこと(黙っては切らない)。",
+            + "。塊が条件を含むだけ大きく取れていないか、座標系・単位が違う。",
             outside,
         )
 
@@ -1090,7 +995,7 @@ def _unwrap(shape: Any) -> Any:
 def _shape_bbox(shape: Any) -> tuple[np.ndarray, np.ndarray]:
     """OCCT の bbox(`BRepBndLib::AddOptimal`)。**面のトリムを尊重する**。
 
-    格子を起こす当たり(`voxelize`)と、格子外ガード(`design_space.derive`)の両方が使う。
+    条件ボディの外接箱と、格子外ガード(`design_space.derive`)が使う。
 
     **`Add` にしてはいけない。** あちらはトリムを見ず下地のサーフェス全体で囲むので、
     トーラス面の部品が実寸の10倍以上に化け、**はみ出していない保持をはみ出したと言う**
@@ -1123,35 +1028,3 @@ def _shape_bbox(shape: Any) -> tuple[np.ndarray, np.ndarray]:
         raise ValueError("bounding box is empty (null shape?)")
     xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
     return np.array([xmin, ymin, zmin]), np.array([xmax, ymax, zmax])
-
-
-def _cli() -> int:
-    import argparse
-
-    parser = argparse.ArgumentParser(description="STEP/合成ソリッドをボクセル化して要約を出す")
-    parser.add_argument("--step", type=str, default=None, help="STEPファイル(省略時は合成の箱)")
-    parser.add_argument("--n", type=int, default=40, help="最長軸方向の要素数")
-    args = parser.parse_args()
-
-    if args.step:
-        from build123d import import_step
-
-        shape = import_step(args.step)
-    else:
-        from build123d import Box
-
-        shape = Box(40, 20, 10)
-
-    model = voxelize(shape, args.n)
-    g = model.grid
-    print(f"grid   : shape={g.shape} spacing={g.spacing:.6f} origin={g.origin}")
-    print(f"design : {model.stats['design_elements']} elements "
-          f"({model.design_volume:.3f} mm^3)")
-    print(f"surface: {model.stats['surface']['triangles']} triangles, "
-          f"volume={model.stats['surface']['signed_volume']:.3f} mm^3")
-    print(f"seconds: {model.stats['seconds']:.3f}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(_cli())

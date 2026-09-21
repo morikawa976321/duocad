@@ -1,6 +1,8 @@
 """探索用の確定表(材料に接する節点だけへの対応付け。`anchor.build_anchors(allowed_nodes=...)` と
 `anchor.condition_mapping`)。実CADと実数値で見る(`docs/FIX_BINARY_SEARCH_INITIALIZATION.md` §6)。"""
 import dataclasses
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -9,6 +11,9 @@ from build123d import Box, Pos, Rotation
 from duocad.topopt import acceptance, anchor, voxelize
 from duocad.topopt import binary_search as bs
 from duocad.topopt.acceptance import active_nodes as acceptance_active_nodes
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'topopt_checks'))
+import _fixtures  # noqa: E402  合成題材(build123d を直接使うので duocad/ の外にある)
 
 
 DEFAULT_PHASE = (0.37, 0.21, 0.44)
@@ -163,8 +168,8 @@ def test_translation_and_grid_phase_do_not_change_the_contract(offset, phase):
 
 def test_a_face_that_vanishes_after_ownership_is_diagnosed_as_no_nodes():
     """所有権競合で空になった面は `no_nodes` として不成立。遠方の節点で穴埋めしない。"""
-    model = voxelize.voxelize(anchor.demo_bracket(), 5)  # 粗い格子: 耳(8x8)の上面は隣の大きい面に取られる
-    fixed, load = anchor.demo_faces(model.soup)
+    model = _fixtures.voxel_model(_fixtures.demo_bracket(), 5)  # 粗い格子: 耳(8x8)の上面は隣の大きい面に取られる
+    fixed, load = _fixtures.demo_faces(model.soup)
     design, _ = voxelize.occupancy(model.soup, model.grid)
     table = anchor.build_anchors(model.soup, model.grid, allowed_nodes=anchor.active_nodes(design))
     assert load in table.empty_faces(), 'フィクスチャの前提(耳の面が空になる粗さ)が崩れている'
