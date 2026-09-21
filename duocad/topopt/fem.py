@@ -412,7 +412,6 @@ class Model:
         *,
         solver: str = "cg",
         cg_rtol: float = 1e-9,
-        u0: np.ndarray | None = None,
         threads: int | None = None,
     ) -> np.ndarray:
         """K U = F を解いて U (ndof,) を返す。拘束DOFの成分はきっかり 0.0。
@@ -437,7 +436,6 @@ class Model:
             self.f[None, :],
             solver=solver,
             cg_rtol=cg_rtol,
-            u0=None if u0 is None else u0[None, :],
             threads=threads,
         )[0]
 
@@ -449,7 +447,6 @@ class Model:
         *,
         solver: str = "cg",
         cg_rtol: float = 1e-9,
-        u0: np.ndarray | None = None,
         threads: int | None = None,
     ) -> np.ndarray:
         """**同じ K を複数の右辺で解く。** `rhs` (nrhs, ndof) → 解 (nrhs, ndof)。
@@ -460,13 +457,12 @@ class Model:
         **多重右辺の要点は K の組み立てと縮約を作り直さないこと。** 右辺ごとに `solve` を呼ぶと
         それが本数ぶん重なる。K が同じなら1回で回せば**追加費用は CG の反復ぶんだけ**になる。
 
-        `u0` を渡すなら `rhs` と同じ形 (nrhs, ndof)。**右辺が零ベクトルの本は CG を
-        回さず零解を返す** —— 残差の相対判定が 0/0 になるため。
+        **右辺が零ベクトルの本は CG を回さず零解を返す** —— 残差の相対判定が 0/0 になるため。
 
         **右辺が最初から揃っていないとき**(反力の随伴は、まず順問題を解かないと右辺が
         決まらない)は `prepare` を直に呼んで `PreparedSystem` を使い回すこと。
         """
-        return self.prepare(rho, penal, solver=solver, threads=threads).solve(rhs, u0=u0, cg_rtol=cg_rtol)
+        return self.prepare(rho, penal, solver=solver, threads=threads).solve(rhs, cg_rtol=cg_rtol)
 
     def prepare(
         self,
@@ -593,9 +589,7 @@ class PreparedSystem:
         self._precond = precond
         self._solver = solver
 
-    def solve(
-        self, rhs: np.ndarray, *, u0: np.ndarray | None = None, cg_rtol: float = 1e-9
-    ) -> np.ndarray:
+    def solve(self, rhs: np.ndarray, *, cg_rtol: float = 1e-9) -> np.ndarray:
         """`rhs` (nrhs, ndof) を解いて (nrhs, ndof) を返す。拘束DOFの成分はきっかり 0.0。
 
         **右辺が零ベクトルの本は CG を回さず零解を返す** —— 残差の相対判定が 0/0 に
@@ -605,16 +599,11 @@ class PreparedSystem:
         rhs = np.atleast_2d(np.asarray(rhs, dtype=float))
         if rhs.shape[1] != model.ndof:
             raise ValueError(f"右辺の長さが {rhs.shape[1]}、期待は ndof={model.ndof}")
-        if u0 is not None:
-            u0 = np.atleast_2d(np.asarray(u0, dtype=float))
-            if u0.shape != rhs.shape:
-                raise ValueError(f"u0 の形が {u0.shape}、期待は右辺と同じ {rhs.shape}")
         stats = _SOLVE_STATS
         t_start = time.perf_counter()
         out = np.zeros((rhs.shape[0], model.ndof))
         for index in range(rhs.shape[0]):
             ff = rhs[index][model.free]
-            x0 = np.zeros(model.free.size) if u0 is None else u0[index][model.free].copy()
             iterations = 0
             fell_back = False
             if not np.any(ff):
@@ -629,9 +618,7 @@ class PreparedSystem:
                         nonlocal iterations
                         iterations += 1
 
-                u_free, info = spla.cg(
-                    self._a_op, ff, x0=x0, M=self._precond, rtol=cg_rtol, callback=counter
-                )
+                u_free, info = spla.cg(self._a_op, ff, M=self._precond, rtol=cg_rtol, callback=counter)
                 fell_back = info != 0
                 if info != 0:
                     warnings.warn(

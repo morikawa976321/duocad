@@ -19,8 +19,7 @@ import numpy as np
 import psutil
 from scipy import ndimage
 
-from measure_warm_start import free_gb, solve_once
-from measure_warm_start_kcurve import _setup, model_for
+from _hanger_setup import _setup, free_gb, model_for, solve_once
 
 
 def solve_measured(model, density, solver):
@@ -33,7 +32,7 @@ def solve_measured(model, density, solver):
 
     sampler = threading.Thread(target=sample, daemon=True)
     sampler.start()
-    displacement, stats = solve_once(model, density, solver, None)
+    displacement, stats = solve_once(model, density, solver)
     stop.set()
     sampler.join()
     return displacement, dict(stats, rss_increase_gb=max(peak[0] - before, 0) / 1e9)

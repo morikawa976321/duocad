@@ -145,7 +145,7 @@ def test_evaluating_a_candidate_that_lacks_a_keep_cell_raises_instead_of_repaint
     assert history == []
 
 
-def _search_with_keep(monkeypatch, m, warm_start, keep_cells):
+def _search_with_keep(monkeypatch, m, keep_cells):
     conditions, design, appendage = appendage_conditions()
     keep = np.zeros(design.shape, bool)
     for cell in keep_cells:
@@ -159,16 +159,15 @@ def _search_with_keep(monkeypatch, m, warm_start, keep_cells):
         return real(material, *args, **kwargs)
 
     monkeypatch.setattr(acceptance, 'inspect', spy)
-    result = bs.find_best_feasible(design, conditions, max_evaluations=300, min_width_cells=m, warm_start=warm_start)
+    result = bs.find_best_feasible(design, conditions, max_evaluations=300, min_width_cells=m)
     return result, keep, seen, appendage
 
 
 @pytest.mark.parametrize('m', [1, 2])
-@pytest.mark.parametrize('warm_start', [False, True])
-def test_the_search_keeps_every_keep_cell_in_every_evaluated_candidate_and_the_adopted_shape(monkeypatch, m, warm_start):
-    """落ちたら、探索のどこかの経路(順位・島の除去・warm start)が保持セルを空にして、その形を評価している。
+def test_the_search_keeps_every_keep_cell_in_every_evaluated_candidate_and_the_adopted_shape(monkeypatch, m):
+    """落ちたら、探索のどこかの経路(順位・島の除去)が保持セルを空にして、その形を評価している。
     保持セルは荷重の通らない付属部分の先端 (4,3,0) と、棒の途中 (5,0,1)。"""
-    result, keep, seen, appendage = _search_with_keep(monkeypatch, m, warm_start, [(4, 3, 0), (5, 0, 1)])
+    result, keep, seen, appendage = _search_with_keep(monkeypatch, m, [(4, 3, 0), (5, 0, 1)])
     best = result.best_feasible.mask
     assert result.status == 'feasible' and best[keep].all() and len(seen) >= result.evaluations
     assert all(candidate[keep].all() for candidate in seen)

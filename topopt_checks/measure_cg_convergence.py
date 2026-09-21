@@ -19,8 +19,7 @@ import scipy.sparse.linalg as spla
 from scipy import ndimage
 
 from duocad.topopt import stress
-from measure_warm_start import PENAL, free_gb
-from measure_warm_start_kcurve import _setup, model_for
+from _hanger_setup import PENAL, _setup, free_gb, model_for
 
 EVERY = 20
 DEEPEST = 12

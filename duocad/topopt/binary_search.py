@@ -289,8 +289,6 @@ class FeasibleModel:
     """`best_feasible`(§4.1)。`report` はキャッシュ無しの検査(§3)の結果。
 
     `energy` はその検査で解いた変位の要素エネルギー(`acceptance.inspect` の `fields`。段階4の順位用)。
-    `displacement` はその変位そのもの(ndof,)で、段階4が次の候補の CG の初期値に使う。**1本だけ持つ**
-    (2.4mm で約22MB。評価のたびに入れ替え、採用形のものだけ残す)。
     """
 
     #: **読み取り専用**(`setflags(write=False)` 済み)。呼び出し側は書き換えず複製すること。
@@ -299,7 +297,6 @@ class FeasibleModel:
     report: dict
     trial_index: int
     energy: Optional[np.ndarray] = field(default=None, repr=False)
-    displacement: Optional[np.ndarray] = field(default=None, repr=False)
 
     @property
     def mask_hash(self) -> str:
@@ -352,16 +349,15 @@ def _record_trial(history: list, parent: Optional[int], operation: str, report: 
 def _evaluate_survivor(survivor: np.ndarray, before: np.ndarray, conditions: SearchConditions,
                        *, parent: Optional[int], operation: str, history: list,
                        fields: Optional[dict] = None, overrides: Optional[dict] = None,
-                       counter: Optional[dict] = None, u0: Optional[np.ndarray] = None) -> tuple[dict, Trial]:
+                       counter: Optional[dict] = None) -> tuple[dict, Trial]:
     """1個の生存成分を検査し、history に記録する(段階3・4共通、§4.5の解法再試行を含む)。
 
     計算失敗(`unknown`、原因`evaluation_error`)は、同じマスク・条件のまま一度だけ
     別解法で再試行する(§4.5「解法変更による再試行は有限の規則にする」)。それでも
     `unknown` ならそのまま返す。
     `conditions.keep_cells` があれば、`survivor` が全保持セルを含むことをここで確かめる(破れたら例外。黙って塗り直さない)。
-    `fields` / `overrides` / `u0` は `acceptance.inspect` へそのまま渡す。`counter` を渡すと、
-    FEMまで進んだ検査の回数を `counter['fem_solves']` に、`u0` を渡した検査が初期値に使えたか捨てたか
-    (`fields['warm_start']`)を `counter['warm_start_used']` / `['warm_start_fallbacks']` に足す。
+    `fields` / `overrides` は `acceptance.inspect` へそのまま渡す。`counter` を渡すと、
+    FEMまで進んだ検査の回数を `counter['fem_solves']` に足す。
     """
     keep = _keep_cells(conditions, survivor.shape)
     if keep is not None and not survivor[keep].all():
@@ -372,13 +368,9 @@ def _evaluate_survivor(survivor: np.ndarray, before: np.ndarray, conditions: Sea
         if fields is not None:
             fields.clear()
         report = acceptance.inspect(survivor, before, conditions.grid, **{**kwargs, 'solver': solver},
-                                    fields=fields, u0=u0)
+                                    fields=fields)
         if counter is not None and report['checks']['safety'].get('reason') != 'prerequisites_failed':
             counter['fem_solves'] += 1
-            if u0 is not None and fields is not None:
-                warm_start = fields.get('warm_start', '')
-                counter['warm_start_used'] += warm_start == 'used'
-                counter['warm_start_fallbacks'] += warm_start.startswith('fell_back')
         trial = _record_trial(history, parent_index, label, report)
         history.append(trial)
         return report, trial
@@ -560,7 +552,7 @@ def _find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCond
             continue
         survivor.setflags(write=False)
         best = FeasibleModel(mask=survivor, before_mask=design_space_mask, report=report, trial_index=trial.index,
-                             energy=fields.get('element_energy'), displacement=fields.get('displacement'))
+                             energy=fields.get('element_energy'))
         return result('feasible', 'initial_feasible_found', best)
     # 計算失敗を不合格の証拠にしない(§4.5): 全ての成分が計算失敗のときだけ、形ではなく計算の失敗として返す。
     only_unknown = all(attempt['status'] == 'unknown' for attempt in attempts)
@@ -949,7 +941,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
                    max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
                    single_cell_patience: Optional[int] = DEFAULT_SINGLE_CELL_PATIENCE,
                    target_tolerance: Optional[float] = DEFAULT_TARGET_TOLERANCE,
-                   min_width_cells: int = 1, warm_start: bool = False, on_evaluation=None) -> SearchResult:
+                   min_width_cells: int = 1, on_evaluation=None) -> SearchResult:
     """`initial.best_feasible` から、ひずみエネルギーの低い材料をまとめて削り続ける(段階4)。
 
     合格形状は1つだけ持つ。1回の試行: 合格形状を解いた変位の要素エネルギー(近傍でならす)の低い順に
@@ -976,10 +968,6 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     評価は bbox キャッシュ無しで行うが、保持・除外の共通体積は前計算(`region_overlaps`)から引く。
     採用形状はこの関数を出る前に前計算を使わない旧経路で取り直す(`_recheck_regions_without_precompute`)。
 
-    `warm_start` なら、直前の合格形状の変位(`FeasibleModel.displacement`)を次の候補の CG の初期値に渡す。
-    **既定はオフ**: 採用形状の `mask_hash` が cold と一致しないことが実測されている(docs/TOPOPT_SPEED.md)。
-    初期値を使えた回数と捨てた回数は `diagnostics['reduction']['warm_start_used']` / `['warm_start_fallbacks']`。
-
     `on_evaluation(event: dict)` は出発形状で1回(`outcome='initial'`)、以降は評価に数えた候補ごとに1回、合格形状を更新した後で呼ぶ。
     `event` は素の値だけ: `evaluation`(通算の評価回数)/ `outcome`(`'initial'` / `'accepted'` / `'rejected'`)/ `failed` /
     `candidate_safety_factor`(FEMを解かなかった候補は `None`)/ `candidate_cells` / `safety_factor`・`cells`(その時点の合格形状)/
@@ -1003,7 +991,6 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     steps: list[dict] = []
     reduction = dict(step_exponent=float(step_exponent), max_step_ratio=float(max_step_ratio),
                      filter_size=ENERGY_FILTER_SIZE, fem_solves=0, min_width_cells=int(min_width_cells),
-                     warm_start=bool(warm_start), warm_start_used=0, warm_start_fallbacks=0,
                      peel_calls=0, peel_seconds=0.0, peel_seconds_max=0.0, repeated_candidates=0,
                      single_cell_patience=single_cell_patience, target_tolerance=target_tolerance,
                      safety_excluded_cells=0, adopted_after_exclusion=0,
@@ -1090,7 +1077,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             report, trial = _evaluate_survivor(survivors[0], candidate, conditions, parent=best.trial_index,
                                                operation=operation, history=history, fields=fields,
                                                overrides=dict(bbox_cache=None, history=history),
-                                               counter=reduction, u0=best.displacement if warm_start else None)
+                                               counter=reduction)
             if report['status'] == 'pass' and 'element_energy' in fields:
                 accepted = (survivors[0], report, fields['element_energy'])
             else:
@@ -1104,7 +1091,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             survivor = np.array(survivor, dtype=bool, copy=True)
             survivor.setflags(write=False)
             best = FeasibleModel(mask=survivor, before_mask=candidate, report=report, trial_index=trial.index,
-                                 energy=energy, displacement=fields.get('displacement') if warm_start else None)
+                                 energy=energy)
             step.update(safety_factor=best.safety_factor, material_mm3=best.material_mm3)
             multiplier = min(1.0, 2.0 * multiplier)
             order = ranked_cells(best.mask, energy)
@@ -1135,7 +1122,6 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
                        single_cell_patience: Optional[int] = DEFAULT_SINGLE_CELL_PATIENCE,
                        target_tolerance: Optional[float] = DEFAULT_TARGET_TOLERANCE,
                        min_width_cells: int = 1,
-                       warm_start: bool = False,
                        is_cancelled=None, on_evaluation=None) -> SearchResult:
     """全材料の評価(段階3)に続けて、ひずみエネルギーの低い材料を削って体積を減らす単一の探索入口(§3)。
 
@@ -1144,7 +1130,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     `boundary_mapping_failed`)をそのまま返す(段階4は合格形状からしか始められない)。合格すれば、
     そこから `_reduce_volume` で体積削減を続ける。`max_evaluations` は**両段階を通した1本の予算**
     (全材料の評価が1回、残りが段階4の削る候補)。
-    `step_exponent` / `max_step_ratio` / `single_cell_patience` / `target_tolerance` / `warm_start` は段階4だけが使う(`step_ratio` / `_reduce_volume`)。
+    `step_exponent` / `max_step_ratio` / `single_cell_patience` / `target_tolerance` は段階4だけが使う(`step_ratio` / `_reduce_volume`)。
     `min_width_cells`(m、既定1=制約なし)は両段階が使う —— 段階3は設計空間を m 立方の opening で絞って規則を満たす
     出発形状を作り(入口検査も絞った空間に対して行う)、段階4は削除で被覆を失うセルを同じ一手で一緒に抜く(`peel` docstring)。
     `conditions.keep_cells`(保持ソリッド由来のセル)は、どちらの段階でも空にならず(段階3は全材料、段階4は `peel` の `protected`)、
@@ -1167,4 +1153,4 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     return _reduce_volume(initial, design_space_mask, conditions, max_evaluations=max_evaluations,
                           is_cancelled=is_cancelled, step_exponent=step_exponent, max_step_ratio=max_step_ratio,
                           single_cell_patience=single_cell_patience, target_tolerance=target_tolerance,
-                          min_width_cells=min_width_cells, warm_start=warm_start, on_evaluation=on_evaluation)
+                          min_width_cells=min_width_cells, on_evaluation=on_evaluation)
