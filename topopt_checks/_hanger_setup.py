@@ -1,7 +1,4 @@
-"""hanger を題材にする測定スクリプトが共有する部品(製品と同じ作り方の条件・形ごとの `fem.Model`・1回の求解の計測)。
-
-`import _bootstrap` を済ませたスクリプトから `from _hanger_setup import ...` で読む。
-"""
+"""`duocad` を import するので、`import _bootstrap` を済ませたスクリプトから読む。"""
 import ctypes
 import time
 from pathlib import Path
