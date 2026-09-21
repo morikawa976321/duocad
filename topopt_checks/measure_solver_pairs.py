@@ -510,8 +510,6 @@ def self_check(args):
     return 0
 
 
-# ----------------------------------------------------------------------------- 解析
-
 def _median(values):
     return float(np.median(values)) if len(values) else None
 
@@ -556,7 +554,7 @@ def table_a(rows):
         lines.append(f"| {name} | {len(group)} | {len(pairs)} | {_fmt(_median(ratios))} | {_fmt(min(ratios) if ratios else None)} | "
                      f"{_fmt(max(ratios) if ratios else None)} | "
                      f"{_fmt(max((r['pair']['rss_increase_gb'] for r in pairs), default=None), '.2f')} | "
-                     f"{_fmt(_median([r['iterations'] for r in pairs]), '.0f')} |")
+                     f"{_fmt(_median([r['iterations'] for r in group]), '.0f')} |")
     return '\n'.join(lines)
 
 
@@ -670,9 +668,10 @@ def analyze(paths):
     groups = {}
     for path in paths:
         header, records = read_records(path)
-        key = (header['label'], header['conditions_target_safety_factor'], header['min_width_cells'])
+        key = (header['label'], tuple(header['grid_shape']), header['conditions_target_safety_factor'],
+               header['min_width_cells'])
         groups.setdefault(key, []).append((path, header, records))
-    for (label, target, cells), members in groups.items():
+    for (label, _grid, target, cells), members in groups.items():
         for path, header, _ in members:
             stop = header.get('runner_stop') or header.get('stop_reason')
             print(f'## {Path(path).name}({label}・目標 {target:g}・m={cells}・格子 {header["grid_shape"]}・'
