@@ -2,7 +2,7 @@
 
     .\\.venv\\Scripts\\python.exe topopt_checks\\measure_min_width_floor.py --cells 3 --budget 60 --result C:\\tmp\\m3.json --mask-npz C:\\tmp\\m3.npz
 
-hanger・要素サイズ要求 2.4mm(実 spacing 2.387506mm)・目標2.0。最小幅は mm の固定値で渡さず、解決した実 spacing の
+hanger・要素サイズ要求 `--element-size`(既定 2.4mm。実 spacing 2.387506mm)・探索の目標 `--target`(既定2.0)。最小幅は mm の固定値で渡さず、解決した実 spacing の
 `--cells` 倍(段の値。ガードは `値 < 2×spacing` だけを断る)を渡し、`m == --cells` になったことを確かめてから測る。
 **判定はしない**(採用した形と数字を書き出すだけ)。`trace.DEFAULT_ROOT` を一時フォルダへ向け、
 `output/optimization_runs` に何も残さない。STLは既定で `output/min_width/`(git 管理外)。
@@ -104,13 +104,14 @@ def _opening_removed(material: np.ndarray, size: int) -> dict:
             "removed": total - remaining, "removed_fraction": (total - remaining) / total if total else None}
 
 
-def run(cells: int, budget: int, stl_dir: Path, mask_npz: Path | None) -> dict:
+def run(cells: int, budget: int, stl_dir: Path, mask_npz: Path | None,
+        target: float = TARGET_SAFETY_FACTOR, element_size: float = REQUESTED_ELEMENT_SIZE_MM) -> dict:
     from duocad import optimize_run
     from duocad.server import Session
     from duocad.topopt import binary_search, design_space as ds, mesh, trace
 
-    out: dict = {"model": str(MODEL), "element_size_requested_mm": REQUESTED_ELEMENT_SIZE_MM,
-                 "target_safety_factor": TARGET_SAFETY_FACTOR, "max_evaluations": int(budget)}
+    out: dict = {"model": str(MODEL), "element_size_requested_mm": element_size,
+                 "target_safety_factor": target, "max_evaluations": int(budget)}
     with tempfile.TemporaryDirectory(prefix="topopt-trace-") as trace_root, \
             patch.object(trace, "DEFAULT_ROOT", Path(trace_root)):
         session = Session(None, 0.2, models_dir=MODEL.resolve().parent)
@@ -120,7 +121,7 @@ def run(cells: int, budget: int, stl_dir: Path, mask_npz: Path | None) -> dict:
         limits = optimize_run.resolution_limits(document)
         spacing = optimize_run._snap_to_grid(
             limits["bbox_min"], limits["bbox_max"],
-            optimize_run._resolve_element_size(limits, REQUESTED_ELEMENT_SIZE_MM))
+            optimize_run._resolve_element_size(limits, element_size))
         min_width_mm = float(cells) * spacing
         min_width = optimize_run._resolve_min_width(spacing, min_width_mm)
         out.update(actual_spacing_mm=spacing, min_width_request_mm=min_width_mm, min_width=min_width)
@@ -135,7 +136,7 @@ def run(cells: int, budget: int, stl_dir: Path, mask_npz: Path | None) -> dict:
         if mapping["status"] != "pass":
             out["error"] = f"確定表が不成立: {mapping['status']}"
             return out
-        opts = optimize_run.OptimizeOptions(target_safety_factor=TARGET_SAFETY_FACTOR, max_evaluations=budget,
+        opts = optimize_run.OptimizeOptions(target_safety_factor=target, max_evaluations=budget,
                                             min_width_mm=min_width_mm)
         conditions = optimize_run._build_search_conditions(document, space, bundle, opts, table=table, mapping=mapping)
         started = time.perf_counter()
@@ -174,12 +175,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--cells", type=int, default=2, help="最小幅のセル数 m(既定2=下限)")
     parser.add_argument("--budget", type=int, default=20, help="評価予算(既定20)")
+    parser.add_argument("--target", type=float, default=TARGET_SAFETY_FACTOR, help="探索に渡す目標安全率(既定2.0)")
+    parser.add_argument("--element-size", type=float, default=REQUESTED_ELEMENT_SIZE_MM, help="要素サイズ要求 mm(既定2.4)")
     parser.add_argument("--stl-dir", type=Path, default=REPO_ROOT / "output" / "min_width")
     parser.add_argument("--result", type=Path, default=None, help="結果JSONの書き出し先(省略時は標準出力だけ)")
     parser.add_argument("--mask-npz", type=Path, default=None, help="採用マスクの保存先(省略時は保存しない)")
     args = parser.parse_args()
     started = time.perf_counter()
-    result = run(args.cells, args.budget, args.stl_dir, args.mask_npz)
+    result = run(args.cells, args.budget, args.stl_dir, args.mask_npz, args.target, args.element_size)
     result["total_seconds"] = time.perf_counter() - started
     text = _record.dumps(result, default=float)
     if args.result:
