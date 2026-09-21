@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -327,12 +328,12 @@ def refine(args) -> int:
 
 
 def _python_processes() -> list[str]:
-    """物理メモリ 300MB 以上の python.exe(自分の子を除く判断は呼び出し側)。"""
+    """物理メモリ 300MB 以上の python.exe(自分と親〈venv の起動用プロセス〉は除く)。他セッションの重い Python が並走していたかの記録用。"""
     text = subprocess.run(["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV", "/NH"], capture_output=True, text=True).stdout
     rows = []
     for line in text.splitlines():
         parts = [p.strip('"') for p in line.split('","')]
-        if len(parts) >= 5 and parts[0].lower().startswith("python"):
+        if len(parts) >= 5 and parts[0].lower().startswith("python") and parts[1] not in (str(os.getpid()), str(os.getppid())):
             kilobytes = int(parts[4].replace(",", "").replace(" K", "").replace("\xa0", "").strip() or 0) if parts[4] else 0
             if kilobytes >= 300 * 1024:
                 rows.append(f"pid {parts[1]}: {kilobytes // 1024}MB")
