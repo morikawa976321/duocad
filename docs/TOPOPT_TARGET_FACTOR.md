@@ -48,7 +48,7 @@
 `duocad/catalog.py`(引数の名前と表示名「目標安全率」。実際の目標)・`web/src/session.ts`(結果の型。2項目を足した)。利用者に見えるのは実際の目標だけで、探索時の目標は上の進行メッセージ・警告・結果の通知にだけ出る。
 
 **測定スクリプトは係数 1.0 で走る。** `topopt_checks/` のうち `optimize_run._build_search_conditions` を通るもの
-(`measure_min_width_floor.py`・`measure_min_width_keep_exempt.py`・`measure_keep_forced.py`・`measure_warm_start*.py`・`measure_region_overlaps.py`・`diagnose_initial_space.py`・`verify_hanger_fix.py`)は
+(`measure_min_width_floor.py`・`measure_min_width_keep_exempt.py`・`measure_keep_forced.py`・`_hanger_setup.py`(`measure_cg_convergence.py`・`measure_direct_vs_cg.py` が使う)・`measure_region_overlaps.py`・`diagnose_initial_space.py`・`verify_hanger_fix.py`)は
 `OptimizeOptions(..., search_target_factor=1.0)` を渡す。**`--target` は従来どおり「探索に渡す目標」そのもの**(節N・O の再現手順の意味が変わらない。係数が二重に掛かることも無い)。
 `measure_inner_target_synthetic.py`・`refine_adopted_mask.py` などは `SearchConditions` を直接作るので係数の影響を受けない。
 

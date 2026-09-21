@@ -364,8 +364,7 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 `peel_seconds_max` / `repeated_candidates` / `single_cell_patience`(`None` は無制限)/ `target_tolerance`(`None` は見ない。§12.12)/ `safety_excluded_cells`(削ったセルが1つで
 安全率が落ち、順位から外して続けたセルの数。止まる原因になった最後の1セルは含まない)/ `adopted_after_exclusion`(安全率で外したセルが
 採用を挟まず1つ以上続いた後に、採用に至った回数)/ `geometry_rejections`(候補ごとに `step`・`components`・`surviving_components`・
-`missing`・`removed_islands`)/ `warm_start`(前の形の変位を初期値に渡したか)・`warm_start_used` / `warm_start_fallbacks`(初期値を使えた回数・
-形が合わず cold に落ちた回数。docs/TOPOPT_SPEED.md)/ `stop_reason`(`safety_at_single_cell` / `no_removable_cell` / `within_target_tolerance` / `seed_energy_unavailable`。予算切れ・中断は
+`missing`・`removed_islands`)/ `stop_reason`(`safety_at_single_cell` / `no_removable_cell` / `within_target_tolerance` / `seed_energy_unavailable`。予算切れ・中断は
 `None` で、`SearchResult.termination` が `evaluation_limit` / `cancelled`)/ `final_region_recheck` / `steps`。
 
 `steps[]` の1件は `requested_cells` / `peel`(`picked` 順位から削った数・`islands` 島として消えた数・`skipped_support` /
@@ -561,7 +560,7 @@ peel 導入前と同じ)を既定にし、両方の値を残す。
 `diagnostics['reduction']['surface_only']`・`verify_hanger_fix.py --surface-only` / `--no-surface-only` は無くなった。
 `summarize_stage4.py` は古い JSON の `surface_only` を読むだけなので残してある。
 §12.3・§12.8 の A と §12.7 の `--no-surface-only` の測定は `4cd9fdb` 以前のコードでしか再現できない(生 JSON は `output/stage4_peel/` と
-`output/stage4_stop_rule/` に残る)。`topopt_checks/measure_warm_start.py` の peel も表面だけになった(`docs/TOPOPT_SPEED.md` の warm start の
+`output/stage4_stop_rule/` に残る)。`topopt_checks/measure_warm_start.py`(削除済み)の peel も表面だけになった(`docs/TOPOPT_SPEED.md` の warm start の
 表は内部も抜けた時点の値)。
 除外領域が塊に完全に包まれている入力を入口で `input_contradiction` にする扱い(§12.9)は 2026-09-20 に本人が承認した。
 

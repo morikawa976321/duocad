@@ -1361,7 +1361,7 @@ bbox も三角形分割の節点と一致することを固定する。
 
 ## 設計上の決定(実測に基づく)
 
-- **線形方程式は CG(Jacobi前処理・前回解でウォームスタート)で解く。** 直接解法は
+- **線形方程式は CG(Jacobi前処理。初期値は常に 0)で解く。** 直接解法は
   40×16×16 で 1回 7.1秒(`spsolve`) / 6.3秒(`splu` + MMD_AT_PLUS_A)かかり、60反復で7分を超える。
   CG は同じ格子で 1.9〜2.1秒/反復。**当時のタスク既定の格子 40×16×16 を落とさずに済んだのは
   このため**(2026-09-04にプリセット自体を 20×8×8 へ縮めたが、この選択は変えていない —— CG が
@@ -1840,7 +1840,7 @@ pytest を重くしないため)。題材は離れた2つのパッド(拘束側 
   `element_components(neighbourhood=)`・`build_anchors(radius_ratio=, sample_ratio=)`・
   `derive(elements_long_axis=)`・`step_exponent` / `max_step_ratio` / `single_cell_patience`。
   製品が渡さないことを理由に削らない(検出力の検査が成り立たなくなる)。
-- **`warm_start` / `u0` の引き回しは残す**(既定は False のまま)。
+- **`warm_start` / `u0` の引き回しは削除した**(2026-09-21 本人判断。実測は [TOPOPT_SPEED.md](TOPOPT_SPEED.md)「前の形の変位をCGの初期値にすると効くか」)。
 - **`acceptance.inspect_document`(旧記録の密度場を読むアダプター)は念のため残す。**
 - **幾何マルチグリッド前処理(`solver="mg"`)は削除し、解法は cg に固定した**(上「線形解法は Jacobi 前処理 CG」)。
 - `target_safety_factor` / `max_evaluations` の受け口(UI に入力欄が無い)と `catalog.py` の Param 宣言は、いったんそのまま。

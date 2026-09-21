@@ -10,7 +10,7 @@
 Regula Falsi/Illiniosの提案式・改善案B0〜B7は、いずれも材料量を直接の探索変数にする
 アーキテクチャ固有のものだったため、削除した(旧内容は git 履歴に残る)。
 **現在の探索(bool マスクの全材料の評価とエネルギー順の削減)を通しで測った記録は、下の
-「warm start」の節の `measure_warm_start_search.py`(cold の探索1回の評価数・CG反復・秒)にある。**
+「warm start」の節の `measure_warm_start_search.py`(cold の探索1回の評価数・CG反復・秒。スクリプトは削除済みで、再現は同節冒頭のコミット)にある。**
 
 以下は削除前から引き継いだ、**探索アルゴリズムに依らず今も有効な事実**(1回のFEM評価の
 費用の内訳)である。
@@ -159,6 +159,11 @@ CADソリッドとのブーリアンを毎回取っていた(`intersection_volum
 ---
 
 ## 前の形の変位をCGの初期値にすると効くか(2026-09-19)
+
+**この測定を受けて、warm start の配線(`find_best_feasible(warm_start=)`・`u0`・`fields['displacement']`)と、この節の測定スクリプト5本
+(`measure_warm_start.py`・`measure_warm_start_kcurve.py`・`measure_warm_start_residual.py`・`measure_warm_start_search.py`・`probe_warm_start_depletion.py`)は
+2026-09-21 の本人判断で削除した(下の「決定」の節)。以下は削除前の記録。再現は削除前のコミット `6998528` をチェックアウトして行う
+(各小節の再現コマンドはそのコミットで動く。`output/warm_start_*` の生データは git 管理外)。** それらのスクリプトが共有していた部品は `topopt_checks/_hanger_setup.py` に移した。
 
 測定時の `peel` は内部のセルも抜けた(`surface_only=False`)。2026-09-20 に内部を抜く経路を削除したが、**この測定の値は変わらない**(旧コードで `surface_only` を True にしても全点が同一。1セルの 0.02 の理由は節「旧測定の1セル 0.02 が今と食い違う理由」)。**下の表と、その下の「効き方を決めるのは割合」という読みは旧 `peel` のもの。** 今の `peel` で測り直した値は末尾の小節「削るセル数 k ごとの効き(2026-09-21)」にあり、1セルの比は(大の親で)0.02 / 0.01 でなく 0.8〜0.9 に変わり、効きは割合では揃わず、親の形で大きく変わる。
 
@@ -701,7 +706,7 @@ n 層膨らませたもの2つ、採用マスクそのもの。採用マスク�
 `cg_rtol`(既定 1e-9)を緩めると反復がどれだけ減り安全率がどれだけずれるか、と、探索の終盤の細い形を直接解法
 (`solver='direct'`。`spsolve`)で解いたときの秒を測った。**製品の設定は変えていない**(探索は `solver='cg'`・`cg_rtol=1e-9`)。
 
-**条件**: hanger・2.4mm(格子 69×130×101)・cold・7スレッド。形は探索と同じ作り方(`measure_warm_start_kcurve.model_for`)。
+**条件**: hanger・2.4mm(格子 69×130×101)・cold・7スレッド。形は探索と同じ作り方(`_hanger_setup.model_for`)。
 探索が出した形は `output/min_width/core-connectivity-20260921/` の `base-m2`・`product-m2`(探索の目標 2.0)と、
 `output/min_width/inner-target-20260921/` の `t30`・`t42`・`t42-m3`(探索の目標 3.0・4.2・4.2 で最小幅 3 セル)。「+n層」は
 `product-m2` を設計空間の中で n 層膨らませた合成の形。コード `188e40f`。結果は `output/cg_rtol_direct-20260921/`(git 管理外)。
@@ -746,6 +751,10 @@ solve の反復数(13,767 / 5,045 / 3,145。scipy の判定は漸化式の残差
 
 秒は組立・縮約を含む `Model.solve` 1回。増分は同じプロセスで続けて解いた常駐量の増分(小さめに出る)。残差検算はどれも通った。
 
+**同じ形を別の日に回し直した値**(2026-09-22、product-m2 のみ): cg 反復 **13,759**(上の表は 13,767)・変位の最大相対差 6.7e-11(上は 6.4e-11)。
+`57175ad`(この表を足したコミット)と削除前の `6998528` の `git archive` でも 13,759 で、`PARALLEL_THREADS=1` でも同じ(秒だけ約 4.6 倍)。
+コードの差ではなく、原因は未確認。cg の反復数を別の測定と突き合わせるときは、同じ日・同じ環境で回した値を使う。
+
 - **探索が出した形(3,108〜7,033 セル)では、直接解法が cg の 0.03〜0.07 倍の秒**(14〜37 倍速い)。メモリの増分は 0.2GB 未満。
 - 膨らませた形では自由度とともに差が縮み、10万自由度で 0.6 倍・増分 1.2GB。
 - `splu(permc_spec='MMD_AT_PLUS_A')` は +2層で分解に 18.1 秒かかり、`spsolve` の既定(COLAMD)の 2.5 秒より遅かった(一時測定。スクリプトには入れていない)。
@@ -789,7 +798,7 @@ solve の秒では 44%(1,126 / 2,549 秒)・36%(2,155 / 6,064 秒)。残りは�
 
 > warm_startの関連コードをすべて削除するタスクを積んでおいて。
 
-`cg_rtol` は 1e-9 のまま。warm start の削除は taskbox の `20260921-2240-topopt-remove-warm-start`。解法の切り替え(下)は未決。
+`cg_rtol` は 1e-9 のまま。warm start の関連コードは 2026-09-22 に削除した(`1d9bcea`。記録は上の warm start の節に残した)。解法の切り替え(下)は未決。
 
 ### 解法の切り替えの判断の材料(判断はしない)
 
@@ -798,8 +807,8 @@ solve の秒では 44%(1,126 / 2,549 秒)・36%(2,155 / 6,064 秒)。残りは�
 - 9万自由度以下(2.4mm の記録では 16,586 セル以下 = 評価14 以降)の solve を直接解法へ替えると、150 評価の記録に当てはめて段階4の秒の約 36%
   (2.4mm。cg の 1,206 秒 → 直接解法で約 50 秒)が消える**見込み**(推定。上の表の direct 秒を記録の評価に当てはめた値で、探索を直接解法で通した測定はしていない)。
   2.0mm の形の直接解法の秒は測っていない(2.0mm の探索が出した形の保存が無い)。評価 150 の打ち切りより先まで探索を回すほど、細い形の評価の割合は増える。
-- 直接解法は初期値を使わないので、直接解法で解く評価では warm start は働かない(`acceptance.safety_check` の `unused:direct`)。
-  warm start が残るのは cg で解く序盤の太い形だけで、そこは抜くセルが多く r0 ≥ 1(warm の反復比 0.97)の区間にあたる。
+- 直接解法は初期値を使わないので、直接解法で解く評価では warm start は働かなかった(削除前の `acceptance.safety_check` は `unused:direct` と記録した)。
+  warm start が働き得たのは cg で解く序盤の太い形だけで、そこは抜くセルが多く r0 ≥ 1(warm の反復比 0.97)の区間にあたる。
 - 序盤の太い形には、削除前の mg が秒で 0.56〜0.65 倍だった(前の節。メモリは +1.9GB)。直接解法が効く細い形とは効く場所が逆。
 - 解法を自由度で切り替える場合に決めること: 切り替える自由度(探索の途中の形の表では 5万自由度で 0.14 倍・+0.35GB、9万で 0.45 倍・+1.0GB、11万で同等・+1.6GB)、
   採用形状が今の記録と一致しなくなること(cg と direct の変位は 1e-10 台で一致するが、探索は 1e-13 の差で分かれる)。
@@ -819,11 +828,7 @@ solve の秒では 44%(1,126 / 2,549 秒)・36%(2,155 / 6,064 秒)。残りは�
 | `duocad/optimize_run.py` | `run()`・`MAX_ELEMENTS` |
 | `duocad/topopt/acceptance.py` | `RegionOverlaps`(保持・除外の前計算)・`region_check(overlaps=)` |
 | `duocad/kernel.py` | `grid_cell_common_volumes`(平面で切ってセルごとの共通体積)・`box_common_volume` |
-| `topopt_checks/measure_warm_start.py` | 前の形の変位をCGの初期値にしたときの反復数・秒・解の一致 |
-| `topopt_checks/measure_warm_start_kcurve.py` | 削るセル数 k(1〜40)ごとの反復数の比(warm / cold)。親の大きさ・k=1 の連鎖も見る |
-| `topopt_checks/measure_warm_start_residual.py` | 実探索(cold)の段階4の評価ごとの初期残差 r0・副測定の warm の反復数。`--analyze` で分布と「r0 < θ のときだけ warm」の削減率の表を出す |
-| `topopt_checks/probe_warm_start_depletion.py` | 1セル削りの連鎖で、warm の比が除去セルのエネルギー(低エネルギーのセルの在庫)とともに上がることを測る |
-| `topopt_checks/measure_warm_start_search.py` | `warm_start` の有無で探索を1回ずつ回し、反復数・秒・採用形状の一致を並べる |
+| `topopt_checks/_hanger_setup.py` | hanger を題材にする測定スクリプトの共有部品(製品と同じ作り方の条件 `_setup`・形ごとの `model_for`・1回の求解の計測 `solve_once`・`free_gb`) |
 | `topopt_checks/measure_cg_convergence.py` | CG を1回深く回し、残差 10^-p ごとの反復数と安全率の誤差を並べる(`cg_rtol` を緩めたときの効き) |
 | `topopt_checks/measure_direct_vs_cg.py` | 探索が出した形で cg と直接解法の秒・メモリ・解の一致を並べる |
 | `topopt_checks/measure_region_overlaps.py` | 前計算の秒・メモリと、旧経路との合否・体積の比較 |
