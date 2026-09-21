@@ -421,9 +421,8 @@ optimize_run.run
 - **保持ソリッドの連結性**(上記のとおり見るべきものではない)。
 - **「道が細すぎる」の判定。** 6近傍でつながってさえいれば通る —— 幅1要素の糸でつながっている
   塊も「つながっている」と判定する。細さの妥当性は最適化の仕事であって、塊の妥当性ではない。
-- **最適化後の材料の連結性。** `mesh.remove_islands` が最大連結成分だけを残す既存の処理があるが、
-  それは出力の後処理で、塊の不備は直せない(上の実測がそのまま示している —— 島が残ったまま
-  STL になる)。
+- **最適化後の材料の連結性。** 探索側の島の処理(`binary_search.resolve_islands`)は候補の後処理で、
+  塊の不備は直せない。
 
 ## 拘束面・荷重面のアンカーが空のときにメッセージを出す(2026-09-05)
 
@@ -1051,25 +1050,20 @@ cube・cylinderともfixed/loadの両条件で pass**(reasons 空)のままだ�
 
 `mesh.py` が持つパイプライン。**この順序で、段を飛ばさない**:
 
-1. **保持/除外の塗り直し**(`apply_density_masks`)—— 場の**コピー**に保持=1・除外/設計空間外=0 を置く。
-   密度場のガウシアン平滑化は 2026-09-14 に実装ごと削除した(下記「平滑化の既定をどう決めたか」)。
-2. **浮島の除去**(`remove_islands`)—— 二値化した場の最大連結成分以外を**連続場のほうで**ゼロに塗る。
-   二値化した配列そのものは後段(marching cubes)へ渡さない。塗り直しで本体から浮いた保持ソリッドは
-   浮島として消える(想定: 保持ソリッドは荷重伝達のため本体と連結している)。
-3. **ゼロの縁を1層足す**(`pad_field` = `np.pad(rho, 1)`)—— 材料が設計空間の端に接していると
+入口は `build_surface_from_mask` だけで、受け取るのは探索が返す最終確定マスク(bool、6条件に合格済み・
+単一連結)。保持/除外の塗り直しも浮島除去もここではしない(2026-09-21 に旧入口 `build_surface` と
+`apply_density_masks` / `remove_islands` を削除した)。
+
+1. **ゼロの縁を1層足す**(`pad_field` = `np.pad(rho, 1)`)—— 材料が設計空間の端に接していると
    そこだけメッシュが開き、水密でない STL になる。
-4. **marching cubes**(`run_marching_cubes`、`skimage.measure.marching_cubes`)——
-   **連続値の場をそのまま渡す。二値化しない。** 二値化すると全ての辺の両端が 0/1 になり、線形補間が
-   必ず中点(0.5)に落ちて半セルずれた階段が戻ってくる。この経路の価値の全ては「補間によって面の
-   位置が要素サイズより細かく決まる」ことにあるので、ここを間違えると marching cubes を使う意味が
-   消える(`check_mesh.py` [5] が機械で見張る)。`level`(等値の太さ)は定数で埋め込まず引数(既定0.5)。
-5. **Taubin平滑化**(`taubin_smooth`)—— **自前実装**(`pyvista` / `vtk` / `pymeshlab` は使わない)。
+2. **marching cubes**(`run_marching_cubes`、`skimage.measure.marching_cubes`)——
+   入力は 0/1 の場なので、辺の内分比は常に 0.5 になり、面は材料セルと空セルの境界面の位置に出る
+   (階段状。`check_mesh.py` [8] が位置を見張る)。`level` は定数で埋め込まず引数(既定0.5)。
+3. **Taubin平滑化**(`taubin_smooth`)—— **自前実装**(`pyvista` / `vtk` / `pymeshlab` は使わない)。
    頂点隣接をscipyの疎行列で1度作り、離散ラプラシアン `L = D^-1 A - I` を λ→μ の2段で適用する
    (λ=0.5・μ=-0.53・30反復が既定、すべて引数)。**`|μ| > λ` が本質的な条件**で、破ると
    通過帯域周波数が負になり形が縮む。
-6. **STL書き出し**(`write_stl`)—— 自前のバイナリSTLライタ(依存追加なし)。
-
-二値マスクから入る口は `build_surface_from_mask`(探索が返す最終確定マスクだけがここを通る)。
+4. **STL書き出し**(`write_stl`)—— 自前のバイナリSTLライタ(依存追加なし)。
 
 ### 平滑化の既定をどう決めたか(2026-09-05実測)
 
@@ -1083,8 +1077,7 @@ Taubin による体積変化は 12反復 −0.21% に対し **30反復 −0.003%
 (30反復でも `f(0.25)^30 = 0.761`)をぼかしで隠していた。しかし密度フィルタ半径を上げると筋そのものが
 消え、σ を上げると薄板で体積乖離が 15% を超えたため、**ぼかしがやっていたのは「見えなくする」で
 あって「滑らかにする」ではなかった**という結論で切った。**ぼかす場合は保持/除外/設計空間外を
-後から塗り直さないと壊れる**(保持は角が丸まり、除外と設計空間の外は隣の材料がにじみ込む)——
-この塗り直しだけが `apply_density_masks` として残っている。
+後から塗り直さないと壊れる**(保持は角が丸まり、除外と設計空間の外は隣の材料がにじみ込む)。
 
 ## ファイル
 
@@ -1106,7 +1099,7 @@ stress → material → acceptance → binary_search → mesh`。
 | `duocad/topopt/material.py` | **材料定数**(`PETG_YIELD_MPA` / `PRINT_DERATE` / `DEFAULT_ALLOWABLE_MPA` / `DEFAULT_YOUNGS_MODULUS_MPA`)。段階6で`safety_loop.py`から移設した |
 | `duocad/topopt/acceptance.py` | **島除去後・平滑化前の6条件判定**(境界・単一成分・保持/除外・荷重欠落なし・目標安全率)。`inspect_document` / `inspect` が入口。詳細は [TOPOPT_PRE_SMOOTHING_CHECKS.md](TOPOPT_PRE_SMOOTHING_CHECKS.md) |
 | `duocad/topopt/binary_search.py` | **bool体積削減探索**。`find_initial_feasible`(段階3、入口検査と全材料の1回の評価。不合格なら落ちた検査を返す)→ `find_best_feasible`(段階4、ひずみエネルギーの低い材料を安全率の余裕に応じて削る、単一の探索入口)。段階4の `DEFAULT_STEP_EXPONENT` / `DEFAULT_MAX_STEP_RATIO` / `DEFAULT_SINGLE_CELL_PATIENCE` / `ENERGY_FILTER_SIZE` を持つ |
-| `duocad/topopt/mesh.py` | 浮島除去→パディング→marching cubes→Taubin平滑化→表面生成。`build_surface` / `build_surface_from_mask`。**CLIは持たない**(段階6でSIMPを回すCLIを削除) |
+| `duocad/topopt/mesh.py` | パディング→marching cubes→Taubin平滑化→表面生成。入口は `build_surface_from_mask`。**CLIは持たない**(段階6でSIMPを回すCLIを削除) |
 | `duocad/topopt/finalize.py` | 最終確定マスクの表面 → 保持union・除外cutのCADブーリアン → 水密・単一ソリッド検査 |
 | `duocad/topopt/trace.py` | 実行ごとの途中記録(`stage` / `snapshot`)。詳細は [TOPOPT_RECORDING.md](TOPOPT_RECORDING.md) |
 | `web/scripts/shoot-topopt.mjs` / `shoot_topopt_export.py` | **受入検査ではない。** 設定を2つ以上並べた比較画像を撮る道具。1コマンドで最適化・描画・ラベル焼きまで通し、面数に上限が無く、`--model` で実物の文書も撮れる。使い方は本書「比較スクリーンショットの撮影台」 |

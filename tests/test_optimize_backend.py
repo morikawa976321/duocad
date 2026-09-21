@@ -905,9 +905,8 @@ def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
 ) -> None:
     """**探索候補の評価中はメッシュ化・STL出力を呼ばない。後段へ渡るのは最終確定マスクだけ**
 
-    (計画書§3)。旧経路(`mesh.build_surface` / `mesh.write_stl`)が呼ばれたら落とし、
-    新しい入口(`mesh.build_surface_from_mask`)がちょうど1回だけ、探索が返した確定マスクで
-    呼ばれることを確かめる。
+    (計画書§3)。`mesh.write_stl` が呼ばれたら落とし、`mesh.build_surface_from_mask` が
+    ちょうど1回だけ、探索が返した確定マスクで呼ばれることを確かめる。
     """
     import numpy as np
 
@@ -917,9 +916,8 @@ def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
     _setup_four_conditions(session)
 
     def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("旧経路(mesh.build_surface/write_stl)が呼ばれた")
+        raise AssertionError("mesh.write_stl が呼ばれた")
 
-    monkeypatch.setattr(topo_mesh, "build_surface", fail_if_called)
     monkeypatch.setattr(topo_mesh, "write_stl", fail_if_called)
 
     calls: list = []

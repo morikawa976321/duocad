@@ -1,11 +1,9 @@
-"""密度場を三角形メッシュへ変換する。
+"""確定済みの二値マスクを三角形メッシュへ変換する。
 
-保持・除外の塗り直し → 最大連結成分の抽出 → 外周パディング → marching cubes
-→ Taubin平滑化の順に処理する。STL書き出しは write_stl を使う。
-入力の密度場は変更しない。保持と除外が重なる場合は保持を優先する。
-面の巻き順は外向きに揃え、描画・書き出し側では反転しない。
+外周パディング → marching cubes → Taubin平滑化の順に処理する。STL書き出しは write_stl を使う。
+入力のマスクは変更しない。面の巻き順は外向きに揃え、描画・書き出し側では反転しない。
 
-応力・安全率は入力の密度場で評価する。島除去・表面平滑化後のメッシュを
+応力・安全率は入力のマスクで評価する。表面平滑化後のメッシュを
 再解析した値ではない。実測と制限は docs/TOPOPT.md を参照。"""
 
 from __future__ import annotations
@@ -18,7 +16,6 @@ from pathlib import Path
 import numpy as np
 from . import trace
 import scipy.sparse as sp
-from scipy import ndimage
 from scipy.spatial import cKDTree
 from skimage.measure import marching_cubes
 
@@ -38,43 +35,6 @@ DEFAULT_SPACING = (1.0, 1.0, 1.0)  # [mm]。1要素=1mmという既存の描画�
 # 二重に掛かってメッシュが格子の外へ大きく外れる(`build_surface_from_mask` の
 # docstring・`optimize_run._run` のコメントに同じ注意)。
 DEFAULT_PAD = 1
-def apply_density_masks(
-    rho: np.ndarray,
-    *,
-    keep_mask: np.ndarray | None = None,
-    zero_mask: np.ndarray | None = None,
-) -> np.ndarray:
-    """入力をコピーし、除外を0、保持を1にする。両マスクが重なる場合は保持が優先。"""
-    field = np.array(rho, dtype=np.float64, copy=True)
-    if zero_mask is not None:
-        field[np.asarray(zero_mask, dtype=bool)] = 0.0
-    if keep_mask is not None:
-        field[np.asarray(keep_mask, dtype=bool)] = 1.0
-    return field
-
-
-# ---------------------------------------------------------------------------
-# 1. 浮島の除去
-# ---------------------------------------------------------------------------
-def remove_islands(rho: np.ndarray, threshold: float = DEFAULT_LEVEL) -> np.ndarray:
-    """二値化(`rho > threshold`)した場の最大連結成分だけを残す。
-
-    **返すのは連続値の場**(二値化した配列そのものではない)。連結成分の判定にだけ
-    二値化を使い、生き残った領域の値はもとの連続値のまま返す。
-    """
-    binary = rho > threshold
-    if not binary.any():
-        return np.zeros_like(rho)
-    labels, n_labels = ndimage.label(binary)
-    if n_labels <= 1:
-        return rho.copy()
-    counts = np.bincount(labels.ravel())
-    counts[0] = 0  # 背景(ラベル0)は連結成分として数えない
-    largest = int(np.argmax(counts))
-    out = np.zeros_like(rho)
-    mask = labels == largest
-    out[mask] = rho[mask]
-    return out
 
 
 def pad_field(rho: np.ndarray, width: int = DEFAULT_PAD) -> np.ndarray:
@@ -323,51 +283,6 @@ class MeshResult:
     interpolation_ratios: np.ndarray
 
 
-@trace.stage('surface')
-def build_surface(
-    rho: np.ndarray,
-    *,
-    level: float = DEFAULT_LEVEL,
-    spacing: tuple[float, float, float] = DEFAULT_SPACING,
-    lam: float = DEFAULT_LAMBDA,
-    mu: float = DEFAULT_MU,
-    n_iter: int = DEFAULT_ITERS,
-    pad_width: int = DEFAULT_PAD,
-    keep_mask: np.ndarray | None = None,
-    zero_mask: np.ndarray | None = None,
-) -> MeshResult:
-    """保持・除外を塗り直し、浮島除去・等値面抽出・Taubin平滑化を行う。
-
-    keep_mask / zero_mask は rho と同じ形の bool 配列。省略したマスクは適用しない。"""
-    t0 = time.perf_counter()
-    masked = apply_density_masks(rho, keep_mask=keep_mask, zero_mask=zero_mask)
-    rho_clean = remove_islands(masked, threshold=level)
-    padded = pad_field(rho_clean, width=pad_width)
-    trace.snapshot('surface-fields', masked=masked, rho_clean=rho_clean, padded=padded)
-    verts_raw, faces, interpolation_ratios = run_marching_cubes(
-        padded, level=level, spacing=spacing, pad_width=pad_width
-    )
-    trace.snapshot('marching-cubes', vertices=verts_raw, faces=faces,
-                   interpolation_ratios=interpolation_ratios)
-    verts_smooth = taubin_smooth(verts_raw, faces, lam=lam, mu=mu, n_iter=n_iter)
-    seconds = time.perf_counter() - t0
-    return MeshResult(
-        rho_clean=rho_clean,
-        verts_raw=verts_raw,
-        faces=faces,
-        verts_smooth=verts_smooth,
-        volume_raw=mesh_volume(verts_raw, faces),
-        volume_smooth=mesh_volume(verts_smooth, faces),
-        seconds=seconds,
-        level=level,
-        spacing=spacing,
-        lam=lam,
-        mu=mu,
-        n_iter=n_iter,
-        interpolation_ratios=interpolation_ratios,
-    )
-
-
 @trace.stage('surface-from-mask')
 def build_surface_from_mask(
     mask: np.ndarray,
@@ -381,8 +296,7 @@ def build_surface_from_mask(
 ) -> MeshResult:
     """確定済みの二値マスクを直接メッシュ化する(計画書§3・§8段階5の唯一の入口)。
 
-    `build_surface` と違い `apply_density_masks`(保持/除外の塗り直し)・`remove_islands`
-    (浮島除去)を**しない**。呼び出し側が渡すマスクは既に `acceptance.inspect` の6条件に
+    保持/除外の塗り直しも浮島除去も**しない**。呼び出し側が渡すマスクは既に `acceptance.inspect` の6条件に
     合格し、`binary_search.resolve_islands` で単一連結成分に絞られている確定マスクである
     ——ここでもう一度どちらかを掛けると、探索が確定した形状を検査を経ずに書き換えることになる
     (計画書§3「候補ごとのメッシュ生成・STL出力は廃止する」と表裏、確定後の1回だけがこの入口)。

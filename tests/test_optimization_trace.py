@@ -65,11 +65,11 @@ def test_repeated_solves_are_recorded_reproducibly(recordings):
 
 
 def test_surface_replay_and_all_smoothing_substeps(recordings):
-    rho=np.zeros((8,8,8));rho[2:6,2:6,2:6]=.8
-    expected=mesh.build_surface(rho,n_iter=3)
+    rho=np.zeros((8,8,8),dtype=bool);rho[2:6,2:6,2:6]=True
+    expected=mesh.build_surface_from_mask(rho,n_iter=3)
     with trace.recording() as rec:
-        actual=mesh.build_surface(rho,n_iter=3)
-    saved=snapshot(rec,'surface-output')
+        actual=mesh.build_surface_from_mask(rho,n_iter=3)
+    saved=snapshot(rec,'surface-from-mask-output')
     assert np.array_equal(expected.verts_smooth,actual.verts_smooth)
     assert np.array_equal(saved['verts_raw'],actual.verts_raw)
     assert len(list(rec.path.glob('*-taubin-lambda.json')))==3

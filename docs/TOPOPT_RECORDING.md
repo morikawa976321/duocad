@@ -74,9 +74,9 @@ Pythonから特定の記録を読む場合：
 
 ```python
 from duocad.topopt.trace import load_snapshot
-record = load_snapshot("output/optimization_runs/<実行ID>/<連番>-surface-input.json")
-from duocad.topopt.mesh import build_surface
-surface = build_surface(**record)
+record = load_snapshot("output/optimization_runs/<実行ID>/<連番>-surface-from-mask-input.json")
+from duocad.topopt.mesh import build_surface_from_mask
+surface = build_surface_from_mask(**record)
 ```
 
 `load_snapshot` は配列のハッシュ・型・形を確認し、辞書とNumPy配列だけを返す。

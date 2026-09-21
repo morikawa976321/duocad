@@ -1120,13 +1120,12 @@ def _run(
     from .topopt import mesh as topo_mesh
 
     pump.emit(phase="mesh", message="確定マスクをメッシュ化する")
-    # **候補評価中には一度も呼ばれない入口。**`build_surface`(旧経路)と違い、島除去・
-    # 保持塗り直しをもう一度掛けない(計画書§3、`mesh.build_surface_from_mask` のdocstring)。
+    # **候補評価中には一度も呼ばれない入口。** 島除去・保持塗り直しをもう一度掛けない
+    # (計画書§3、`mesh.build_surface_from_mask` のdocstring)。
     # **`spacing` は既定(要素添字空間の1.0)のまま渡す。** 実寸への変換は下の
     # `_mesh_to_world`(`grid.origin + verts * grid.spacing`)が一括して行う契約
     # (モジュール docstring)——ここでも実 spacing を渡すと二重に掛かってメッシュが
-    # 格子の外へ大きく外れる(旧 `anchor.run_pipeline` の `mesh.build_surface` 呼び出しも
-    # 同じ理由で spacing を渡していない)。
+    # 格子の外へ大きく外れる。
     surface = topo_mesh.build_surface_from_mask(best.mask)
     positions = _mesh_to_world(surface.verts_smooth, space.grid)
     _check_mesh_placement(positions, space.grid)

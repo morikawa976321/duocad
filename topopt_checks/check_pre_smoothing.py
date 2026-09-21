@@ -8,7 +8,7 @@ import _record
 import numpy as np
 
 from duocad.session import Session
-from duocad.topopt import mesh, trace, voxelize
+from duocad.topopt import trace, voxelize
 from duocad.topopt.acceptance import inspect_document
 
 
@@ -19,8 +19,10 @@ def read_run(run):
     data = trace.load_snapshot(selected[0])['result']
     candidate = data['run']
     surface = candidate['surface']
-    before = mesh.apply_density_masks(candidate['result']['rho'], keep_mask=candidate['solid'],
-                                      zero_mask=candidate['void'])
+    # 旧記録(密度場)の塗り直し: 除外を0、保持を1。重なりは保持が優先。
+    before = np.array(candidate['result']['rho'], dtype=np.float64, copy=True)
+    before[np.asarray(candidate['void'], dtype=bool)] = 0.0
+    before[np.asarray(candidate['solid'], dtype=bool)] = 1.0
     grid = data['space']['grid']
     grid = voxelize.Grid(tuple(grid['origin']), grid['spacing'], tuple(grid['shape']))
     search_inputs = list(run.glob('*-safety-search-input.json'))

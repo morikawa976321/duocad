@@ -122,8 +122,7 @@ def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, 
         raise AssertionError("候補評価中にメッシュ化が呼ばれた")
 
     with patch.object(design_space, "derive", counted_derive), \
-            patch.object(mesh, "build_surface_from_mask", counted_mesh), \
-            patch.object(mesh, "build_surface", counted_mesh):
+            patch.object(mesh, "build_surface_from_mask", counted_mesh):
         started = time.perf_counter()
         space = design_space.derive(bundle.conditions, spacing=spacing)
         record["derive"] = dict(seconds=time.perf_counter() - started, grid=space.grid.as_dict(),
