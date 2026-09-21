@@ -4,6 +4,7 @@
         --out <jsonl> --save-accepted <dir> --head <ハッシュ>
     .\.venv\Scripts\python.exe topopt_checks\measure_solver_pairs.py --analyze <jsonl ...>
     .\.venv\Scripts\python.exe topopt_checks\measure_solver_pairs.py --self-check
+    .\.venv\Scripts\python.exe topopt_checks\measure_solver_pairs.py --spacing 2.4 --shape-quantities <形.npz ...>
 
 探索は cg のまま進める(軌道は製品と同じ)。実行時に `fem.PreparedSystem.solve`・`binary_search._evaluate_survivor`・
 `_geometry_rejection_trial`・`_reduce_volume`・`find_initial_feasible` を包み、評価ごとに1行(JSON Lines)を**評価のたびに**書く。
@@ -39,7 +40,7 @@ import _bootstrap  # noqa: F401
 import numpy as np
 import psutil
 import scipy.sparse.linalg as spla
-from _hanger_setup import _setup, free_gb
+from _hanger_setup import PENAL, _setup, free_gb, model_for
 from scipy.sparse.csgraph import reverse_cuthill_mckee
 
 from duocad.topopt import binary_search, fem, trace
@@ -646,6 +647,21 @@ def analyze_group(title, headers, records_list):
     print(table_c(rows) + '\n')
     print('**表D log(direct 秒)の直線当てはめ**(記述であって規則の提案ではない)\n')
     print(table_d(rows) + '\n')
+    pairs = [r for r in rows if r['measured']]
+    if pairs:
+        print('**対の一覧**(段階4。評価番号は記録の `n`)\n')
+        print(table_pairs(pairs) + '\n')
+
+
+def table_pairs(pairs):
+    lines = ['| n | 材料セル | 自由な自由度 | nnz/自由度 | 充填率 | RCM の Σ帯幅² | cg 秒 | direct 秒 | 比 | direct 増分(GB) |',
+             '|---|---|---|---|---|---|---|---|---|---|']
+    for r in pairs:
+        pair = r['pair']
+        lines.append(f"| {r['record']['n']} | {r['material_cells']:,} | {r['free_dofs']:,} | {r['nnz_per_dof']:.1f} | "
+                     f"{r['fill_ratio']:.3f} | {pair['rcm']['sum_sq_bandwidth']:,} | {r['seconds']:.2f} | {pair['seconds']:.2f} | "
+                     f"{pair['seconds'] / r['seconds']:.2f} | {pair['rss_increase_gb']:.2f} |")
+    return '\n'.join(lines)
 
 
 def analyze(paths):
@@ -672,6 +688,24 @@ def analyze(paths):
     return 0
 
 
+def shape_quantities(args):
+    """既存の形(mask を持つ npz)に、記録と同じ形の量を当てる。探索も直接解法も走らせない。"""
+    subject = build_subject(args)
+    print('| 形 | 材料セル | 自由な自由度 | nnz | nnz/自由度 | 充填率 | RCM 帯幅の最大 | profile | Σ帯幅² | RCM の秒 |\n'
+          '|---|---|---|---|---|---|---|---|---|---|')
+    for path in args.shape_quantities:
+        mask = np.load(path)['mask'].astype(bool)
+        if mask.shape != subject.mask.shape:
+            raise SystemExit(f'格子が違う: モデル {subject.mask.shape} / {path} {mask.shape}')
+        model = model_for(mask, subject.conditions)
+        kf = model.prepare(mask.astype(float), PENAL, solver='direct').kf
+        shape, rcm = shape_measures(model, kf), rcm_measures(kf)
+        print(f"| {Path(path).stem} | {shape['material_cells']:,} | {shape['free_dofs']:,} | {shape['nnz']:,} | "
+              f"{shape['nnz_per_dof']:.1f} | {shape['fill_ratio']:.3f} | {rcm['bandwidth_max']:,} | {rcm['profile']:,} | "
+              f"{rcm['sum_sq_bandwidth']:,} | {rcm['seconds']:.2f} |", flush=True)
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--subject', default='hanger', choices=sorted(SUBJECTS))
@@ -688,9 +722,15 @@ def main():
     parser.add_argument('--head', default='unknown', help='測定に使ったコードの HEAD のハッシュ(記録用。実行したソースは検証しない)')
     parser.add_argument('--analyze', type=Path, nargs='+', metavar='JSONL')
     parser.add_argument('--self-check', action='store_true')
+    parser.add_argument('--shape-quantities', type=Path, nargs='+', metavar='NPZ',
+                        help='既存の形に記録と同じ量(自由度・nnz・充填率・RCM の帯幅)を当てる。--spacing が要る')
     args = parser.parse_args()
     if args.analyze:
         return analyze(args.analyze)
+    if args.shape_quantities:
+        if args.spacing is None:
+            parser.error('--shape-quantities には --spacing が要る')
+        return shape_quantities(args)
     if args.self_check:
         return self_check(args)
     if args.spacing is None or args.out is None:
