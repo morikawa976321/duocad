@@ -85,7 +85,7 @@ class PatchTable:
 
 
 def _patch(shape, x_node: int, y_nodes, z_nodes, k: int):
-    """x=一定の面にある長方形の節点の(格子, 番号, 節点添字, 担当面積の比)。比は縁が半分・角が 1/4 で合計 1。引数の範囲は k=1 の節点単位。"""
+    """重みは製品の `AnchorTable.load_vector` に合わせた節点の担当面積の比(縁 1/2・角 1/4)。範囲は k=1 の節点単位で渡す。"""
     from duocad.topopt import anchor, voxelize
 
     grid = voxelize.Grid((0.0, 0.0, 0.0), 1.0 / k, tuple(int(n) * k for n in shape))
@@ -113,10 +113,8 @@ def _block_shape(block):
 
 
 def _live_only(ids: np.ndarray, indices: np.ndarray, weights: np.ndarray, live: np.ndarray | None, rule: str):
-    """`live`(材料に接する節点の真偽。節点番号順)があれば、材料に接さない節点を面から外して重みを配り直す。合力は変わらない。
-
-    製品の確定表(`anchor.build_anchors(allowed_nodes=...)`)も材料に接する節点だけへ対応付けるが、面の標本ごとに球内の許可節点へ配る。
-    ここは同じではない単純化: `renormalize` は残った節点の重みの比のまま合計 1 に取り直し、`nearest` は外れた節点の重みをその面で最も近い残りの節点へ足す。
+    """製品の確定表(`anchor.build_anchors(allowed_nodes=...)`)も材料に接する節点だけへ対応付けるが、面の標本ごとに球内の許可節点へ配る。
+    ここは同じではない単純化(合力は変わらない): `renormalize` は残った節点の重みの比のまま合計 1 に取り直し、`nearest` は外れた節点の重みをその面で最も近い残りの節点へ足す。
     """
     if live is None:
         return ids, weights, 0, 0.0
@@ -132,11 +130,7 @@ def _live_only(ids: np.ndarray, indices: np.ndarray, weights: np.ndarray, live: 
 
 
 def build_conditions(subject: str, k: int, target: float, mask: np.ndarray | None = None, load_rule: str = "renormalize"):
-    """題材の探索条件(格子は k 細分後。物理的な面・保持ブロックは k に依らず同じ)。
-
-    `mask`(k 細分後の材料)を渡すと、確定表は材料に接する節点だけにする(細分の解き直し用。探索の入口の表は全節点)。
-    `load_rule` は外れた荷重節点の重みの配り直し(`_live_only`)。
-    """
+    """`mask`(k 細分後の材料)を渡すと、確定表は材料に接する節点だけにする。探索の入口の表は面の全節点。"""
     from duocad.topopt import binary_search
     from duocad.topopt.acceptance import active_nodes
 
@@ -164,7 +158,7 @@ def _safety_row(report: dict) -> dict:
 
 
 def _load_check(conditions) -> dict:
-    """荷重ベクトルの合力(N)と節点数。k に依らず力の合力が同じであることを確かめる記録。"""
+    """合力・節点数・モーメントの記録(合力が k に依らず要求した力と一致することの確認)。"""
     vector = conditions.table.load_vector([LOAD_FACE], conditions.forces[0]).reshape(-1, 3)
     return dict(resultant_n=vector.sum(axis=0).tolist(), requested_n=list(conditions.forces[0]),
                 load_nodes=int(len(conditions.table.node_ids([LOAD_FACE]))),
@@ -173,7 +167,7 @@ def _load_check(conditions) -> dict:
 
 
 def _moment(conditions, vector: np.ndarray) -> np.ndarray:
-    """荷重の、固定面の中央まわりのモーメント(N·mm)。ねじり成分(x 軸まわり)が題材で違うことの確認用。"""
+    """固定面の中央まわりのモーメント(N·mm)。x 軸まわりがねじり。"""
     ids = np.flatnonzero(np.abs(vector).sum(axis=1))
     indices = conditions.table.node_grid.indices_of_ids(ids)
     positions = conditions.table.node_grid.positions_of(indices)
