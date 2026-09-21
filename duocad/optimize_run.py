@@ -122,8 +122,6 @@ class OptimizeOptions:
     #: 形状探索の評価予算(`binary_search.find_best_feasible` の
     #: `max_evaluations`。段階3・段階4を通した1本の予算)。省くとそちらの既定(1000)。
     max_evaluations: Optional[int] = None
-    #: 結果ボディの名前。省くと `optimized`(既にあれば `optimized-2`, ...)。
-    name: Optional[str] = None
 
 
 # --------------------------------------------------------------------------------------
@@ -879,7 +877,6 @@ def _run(
          "allowable": allowable_stress() の戻り,
          "material_mm3": float|None, "evaluations": int, "termination": str|None,
          "anchor_check": {"limit_mm","fixed_mm","load_mm"} | None,
-         "reactions": [{"name","face","force","magnitude","fraction"}, ...],
          "triangle_count": int|None, "vertex_count": int|None,
          "seconds": float}
 
@@ -975,8 +972,6 @@ def _run(
         "target_safety_factor": float(opts.target_safety_factor),
         # 条件面が空で早期returnしたときは測れない(節点が0個)ので None のまま。
         "anchor_check": None,
-        # **反力は配線していない**(段階5、下記「done」の返却部のコメント参照)。
-        "reactions": [],
     }
 
     # **条件面が本番の解像度で空になっていないか。** 導出が作った面アンカーの表から自分で見る
@@ -1153,7 +1148,7 @@ def _run(
     trace.final_mesh(surface.verts_raw, surface.verts_smooth, surface.faces, space.grid,
                      final_vertices=final_vertices, final_faces=final_faces)
 
-    name = opts.name or _unique_result_name(doc)
+    name = _unique_result_name(doc)
     pump.emit(phase="insert", message="保持・除外を反映したCADソリッドを足す")
     from .verbs import add_solid_body
 
@@ -1172,11 +1167,6 @@ def _run(
         material_mm3=float(best.material_mm3),
         evaluations=int(search_result.evaluations),
         termination=search_result.termination,
-        # **反力はまだ配線していない。** `acceptance.inspect`(段階2〜4)は拘束面ごとの
-        # 反力を戻り値に持たない —— 旧SIMP経路(`anchor.run_pipeline`)の"reactions"を
-        # 再利用する経路は無い。UIもこのフィールドを表示していない
-        # (`web/src/session.ts` に参照0件、2026-09-17実測)ので、空のまま返す。
-        reactions=[],
         triangle_count=len(indices) // 3,
         vertex_count=len(positions) // 3,
         seconds=time.perf_counter() - started,

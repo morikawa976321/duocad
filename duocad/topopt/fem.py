@@ -645,7 +645,7 @@ class Model:
             edof_assembled = self.edof
         else:
             arr = np.asarray(active_mask)
-            if arr.shape not in ((self.nele,), (nelx, nely, nelz)):
+            if arr.shape != (nelx, nely, nelz):
                 raise ValueError(
                     f"active_mask の形が {arr.shape}、期待は {(nelx, nely, nelz)}"
                 )

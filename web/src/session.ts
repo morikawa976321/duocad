@@ -727,7 +727,6 @@ export interface OptimizeConditionsReport {
   exclude_bodies: string[]
   fixtures: Array<Record<string, unknown>>
   loads: Array<Record<string, unknown>>
-  load: { magnitude: number; direction: string; vector: number[] | null } | null
 }
 
 /**
@@ -826,7 +825,6 @@ export interface OptimizeRunOptions {
   elementSizeMm?: number | null
   /** 最小幅[mm]。`null` または省略 = 制約なし。 */
   minWidthMm?: number | null
-  name?: string | null
   /**
    * 開発用の可視化を頼む(`'space'` / `'anchors'` / `'rho'`)。**既定は空**で、
    * 空のときサーバは配列を1本も作らない。頼んだぶんが `onOptimizeDebug` へ届く。
@@ -1319,7 +1317,6 @@ export function createSession(hooks: SessionHooks): Session {
         cmd: 'run_optimization',
         element_size_mm: options.elementSizeMm ?? null,
         min_width_mm: options.minWidthMm ?? null,
-        name: options.name ?? null,
         // **空配列は送らない。** 古いサーバは知らないキーを無視するだけだが、
         // 「頼んでいない」ことが送信の中身からも読めるようにしておく。
         ...(options.debug && options.debug.length > 0 ? { debug: options.debug } : {}),

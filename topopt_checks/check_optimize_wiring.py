@@ -25,8 +25,7 @@
 5. **中断** —— 進捗の途中で旗を立てると `OptimizeCancelled` になり、**文書は1ビットも
    変わらない**。
 6. **応力を測る経路** —— `keep_model` が通っているので安全率が出る。許容応力は
-   40MPa 固定で、その導出(PETG 50MPa × 0.8)が引ける。**反力は常に空リスト**
-   (二値探索は反力を計算しない契約)。
+   40MPa 固定で、その導出(PETG 50MPa × 0.8)が引ける。
 7. **事後検出** —— この解像度で1要素も掴めない保持ソリッドがあると、二値探索を呼ぶ前に
    `state == "unrepresented_regions"` で戻り、メッシュボディは足されない。
 8. **条件面からの要求要素サイズ** —— `optimize_run` が使う式が
@@ -301,16 +300,6 @@ def check_load_lands_on_the_chosen_face(session, out) -> None:
         and len(measured["load_mm_each"]) == len(session.document.optimize.loads),
         f"拘束 {measured['fixed_mm_each']} / 荷重 {measured['load_mm_each']}",
     )
-    # **反力は常に空リスト。** 二値探索(`acceptance.inspect`)は反力を計算しない
-    # ——旧`anchor.run_pipeline`の`reactions`を再利用する経路は無い(段階6の契約③)。
-    # UIもこのフィールドを参照していない。
-    reactions = out["reactions"]
-    check(
-        "反力は常に空リスト(二値探索は反力を計算しない契約)",
-        reactions == [],
-        f"{reactions!r}",
-    )
-    RESULTS["reactions"] = reactions
 
 
 def check_progress(events) -> None:

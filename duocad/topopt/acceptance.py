@@ -26,6 +26,11 @@ from .anchor import active_nodes  # noqa: F401  6条件と探索用の確定表�
 from .material import DEFAULT_ALLOWABLE_MPA, DEFAULT_YOUNGS_MODULUS_MPA
 
 
+#: 保持・除外の体積判定の許容差 `max(VOLUME_ATOL, VOLUME_RTOL * 条件ソリッドの体積)` [mm^3]。
+VOLUME_ATOL = 1e-9
+VOLUME_RTOL = 1e-9
+
+
 def _positive(value, name):
     if not math.isfinite(value) or value <= 0:
         raise ValueError(f'{name} must be finite and positive')
@@ -288,8 +293,7 @@ class RegionOverlaps:
         return None
 
 
-def region_check(material, grid, bodies, *, preserve, volume_atol=1e-9, volume_rtol=1e-9, cache=None,
-                 overlaps=None):
+def region_check(material, grid, bodies, *, preserve, cache=None, overlaps=None):
     """`overlaps`(`RegionOverlaps`)を渡すと、共通体積を前計算したセルごとの値の足し算で取る。
     渡さなければ `intersection_volume`(候補ごとのブーリアン)。**戻り値は同じ形・同じ数値許容差**。"""
     rows = []
@@ -299,7 +303,7 @@ def region_check(material, grid, bodies, *, preserve, volume_atol=1e-9, volume_r
                 total, overlap = intersection_volume(material, grid, shape, cache=cache)
             else:
                 total, overlap = overlaps.overlap_volume(material, grid, shape, cache=cache)
-            tolerance = max(volume_atol, volume_rtol * total)
+            tolerance = max(VOLUME_ATOL, VOLUME_RTOL * total)
             if overlap > total + tolerance:
                 raise RuntimeError('共通体積が条件ソリッドの体積を超えた')
             measured = overlap if preserve else max(0.0, total - overlap)
@@ -482,7 +486,7 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
             preserves, excludes, target_safety_factor, allowable_mpa=DEFAULT_ALLOWABLE_MPA,
             youngs_modulus_mpa=DEFAULT_YOUNGS_MODULUS_MPA, percentile=stress.DEFAULT_PERCENTILE,
             solver='cg', history=None, converged=None, max_evaluations=None,
-            volume_atol=1e-9, volume_rtol=1e-9, bbox_cache=None, region_overlaps=None, fields=None, u0=None):
+            bbox_cache=None, region_overlaps=None, fields=None, u0=None):
     """6条件の入口。**`material`/`before` は格子と同じ形のboolマスク(材料=True)を直接
     受ける**(計画書§5: 「新規の製品APIはboolマスクを受ける」)。過去記録の密度場からの
     二値化は行わない —— それは読み取りアダプター `inspect_document` に閉じてある。
@@ -501,8 +505,6 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
         _positive(value, name)
     if not np.isfinite(grid.origin).all() or not 0 < percentile <= 100:
         raise ValueError('原点・応力パーセンタイルが不正')
-    if any(not math.isfinite(v) or v < 0 for v in (volume_atol, volume_rtol)):
-        raise ValueError('体積許容差が不正')
     material, original = np.asarray(material), np.asarray(before)
     for field, label in ((material, 'material'), (original, 'before')):
         if field.shape != tuple(grid.shape) or field.dtype != bool:
@@ -512,10 +514,10 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
     if np.any(material & ~original):
         raise ValueError('島除去後に材料セルが増えている')
     checks = dict(watertight=boundary_check(material), single_solid=connectivity_check(material),
-                  preserve=region_check(material, grid, preserves, preserve=True, volume_atol=volume_atol,
-                                        volume_rtol=volume_rtol, cache=bbox_cache, overlaps=region_overlaps),
-                  exclude=region_check(material, grid, excludes, preserve=False, volume_atol=volume_atol,
-                                       volume_rtol=volume_rtol, cache=bbox_cache, overlaps=region_overlaps))
+                  preserve=region_check(material, grid, preserves, preserve=True, cache=bbox_cache,
+                                        overlaps=region_overlaps),
+                  exclude=region_check(material, grid, excludes, preserve=False, cache=bbox_cache,
+                                       overlaps=region_overlaps))
     checks['conditions'], fixed, load = condition_check(material, table, fixed_faces, load_faces, forces)
     if all(checks[key]['status'] == 'pass' for key in ('watertight', 'single_solid', 'conditions')):
         checks['safety'] = safety_check(material, grid, fixed, load, target=target_safety_factor,

@@ -1408,7 +1408,6 @@ COMMANDS: tuple[Command, ...] = (
                 "形状探索(初期合格探索とエネルギー順の削減)の評価予算。省くと既定(binary_search.find_best_feasibleの既定)",
                 required=False,
             ),
-            Param("name", "string", "結果のメッシュボディの名前", required=False),
         ),
         session="run_optimization",
         ws="special",

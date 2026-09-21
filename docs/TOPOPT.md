@@ -321,8 +321,7 @@ optimize_run.run
 ### 何を見て、どこで落とすか
 
 - 対象は **塊 − 除外ソリッド**(`DesignSpace.mask` と同じもの)。
-- 拘束側・荷重側の要素は `AnchorTable.element_mask([face], layers=1)`。`layers=1` は
-  `anchor.run_pipeline` が ρ=1 に固定する範囲(`keep_layers` の既定)と同じ。
+- 拘束側・荷重側の要素は `AnchorTable.element_mask([face])`(アンカー節点を角に持つ要素)。
   **塊からはみ出したアンカー要素は落として数える** —— 道になるのは塊の中の要素だけ。
 - 拘束側が乗っている連結成分の集合と荷重側のそれに**共通のラベルが1つも無ければ**
   `design_space.DesignSpaceDisconnectedError`(`ValueError` の派生)。文面には
@@ -904,7 +903,7 @@ model = voxelize.voxelize(shape, 32)                      # stage1
 table = anchor.build_anchors(model.soup, model.grid)      # stage2
 fixed_dofs = table.fixed_dofs(face_a)                     # 面 → 拘束する自由度
 load = table.load_vector(face_b, (0, 0, -1000))           # 面 → 荷重ベクトル(合計は厳密に一致)
-keep = table.element_mask([face_a, face_b], layers=1)     # 荷重・拘束の近傍(非設計領域)
+keep = table.element_mask([face_a, face_b])               # 荷重・拘束の近傍(非設計領域)
 ```
 
 `table.pressure_vector(face, p)` は圧力(面法線の逆向き)を載せる口。合力ではなく面の向きの分布で

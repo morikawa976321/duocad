@@ -7,8 +7,8 @@ from ..mesh_geometry import topology, make_material
 from . import trace
 
 
-def solid_mesh(shape, deviation=0.2):
-    payload = kernel.tessellate(shape, deviation=deviation)
+def solid_mesh(shape):
+    payload = kernel.tessellate(shape, deviation=0.2)
     if payload['untriangulated']:
         raise ValueError('最終CADに三角形分割できない面がある')
     triangles = np.concatenate([

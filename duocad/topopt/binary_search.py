@@ -59,8 +59,6 @@ class SearchConditions:
     youngs_modulus_mpa: float = DEFAULT_YOUNGS_MODULUS_MPA
     percentile: Optional[float] = None
     solver: str = 'cg'
-    volume_atol: float = 1e-9
-    volume_rtol: float = 1e-9
     bbox_cache: Any = None
     mapping: Any = None
     #: 保持・除外CADと格子セルの重なり体積の前計算(`acceptance.RegionOverlaps`)。探索1回のあいだ格子と
@@ -91,8 +89,7 @@ class SearchConditions:
         kwargs = dict(table=self.table, fixed_faces=self.fixed_faces, load_faces=self.load_faces,
                       forces=self.forces, preserves=self.preserves, excludes=self.excludes,
                       target_safety_factor=self.target_safety_factor, allowable_mpa=self.allowable_mpa,
-                      youngs_modulus_mpa=self.youngs_modulus_mpa, solver=self.solver,
-                      volume_atol=self.volume_atol, volume_rtol=self.volume_rtol, bbox_cache=cache,
+                      youngs_modulus_mpa=self.youngs_modulus_mpa, solver=self.solver, bbox_cache=cache,
                       region_overlaps=overlaps)
         if self.percentile is not None:
             kwargs['percentile'] = self.percentile
@@ -168,8 +165,8 @@ def evaluation_identifier(conditions: SearchConditions) -> str:
         youngs_modulus_mpa=float(conditions.youngs_modulus_mpa),
         percentile=None if conditions.percentile is None else float(conditions.percentile),
         solver=str(conditions.solver),
-        volume_atol=float(conditions.volume_atol),
-        volume_rtol=float(conditions.volume_rtol),
+        volume_atol=acceptance.VOLUME_ATOL,
+        volume_rtol=acceptance.VOLUME_RTOL,
     )
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
@@ -211,7 +208,6 @@ def _holds_all_conditions(component: np.ndarray, conditions: SearchConditions) -
         if ids.size == 0 or not bool(live[ids].all()):
             return False
     report = acceptance.region_check(component, conditions.grid, conditions.preserves, preserve=True,
-                                      volume_atol=conditions.volume_atol, volume_rtol=conditions.volume_rtol,
                                       cache=conditions.bbox_cache, overlaps=conditions.region_overlaps)
     return report['status'] == 'pass'
 
@@ -477,8 +473,7 @@ def _find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCond
     # 減るかそのまま。設計空間そのもの(取れる最大の材料)で既に重なりが足りなければ、どの形でも直らない。
     # (除外条件は逆方向〈材料を減らすほど満たしやすくなる〉なので、この判定は使えない。)
     preserve_on_full = acceptance.region_check(design_space_mask, conditions.grid, conditions.preserves,
-                                                preserve=True, volume_atol=conditions.volume_atol,
-                                                volume_rtol=conditions.volume_rtol, cache=conditions.bbox_cache,
+                                                preserve=True, cache=conditions.bbox_cache,
                                                 overlaps=conditions.region_overlaps)
     if preserve_on_full['status'] == 'fail':
         return SearchResult(status='input_contradiction', termination='input_contradiction',
@@ -846,8 +841,7 @@ def _recheck_regions_without_precompute(best: FeasibleModel, seed: FeasibleModel
         return best, 'not_needed'
     rows = {}
     for name, bodies, preserve in (('preserve', conditions.preserves, True), ('exclude', conditions.excludes, False)):
-        rows[name] = acceptance.region_check(best.mask, conditions.grid, bodies, preserve=preserve,
-                                             volume_atol=conditions.volume_atol, volume_rtol=conditions.volume_rtol)
+        rows[name] = acceptance.region_check(best.mask, conditions.grid, bodies, preserve=preserve)
         if rows[name]['status'] != 'pass':
             return seed, f'failed:{name}:{rows[name]["status"]}'
     report = dict(best.report, checks=dict(best.report['checks'], **rows))
@@ -864,7 +858,6 @@ def _missing_conditions(mask: np.ndarray, conditions: SearchConditions) -> list[
             if ids.size == 0 or not bool(live[ids].all()):
                 missing.append(f'{side}_face_{int(face)}')
     report = acceptance.region_check(mask, conditions.grid, conditions.preserves, preserve=True,
-                                     volume_atol=conditions.volume_atol, volume_rtol=conditions.volume_rtol,
                                      cache=conditions.bbox_cache, overlaps=conditions.region_overlaps)
     if report['status'] != 'pass':
         missing.append('preserve')

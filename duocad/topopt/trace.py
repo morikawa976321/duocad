@@ -243,19 +243,16 @@ def snapshot(name, **values):
         recorder.snapshot(name,values)
 
 
-def final_mesh(raw, smooth, faces, grid, *, final_vertices=None, final_faces=None):
+def final_mesh(raw, smooth, faces, grid, *, final_vertices, final_faces):
     recorder = current()
     if recorder is None:
         return
     raw = np.asarray(raw)*grid.spacing + np.asarray(grid.origin)
     smooth = np.asarray(smooth)*grid.spacing + np.asarray(grid.origin)
-    if final_vertices is not None:
-        recorder.snapshot('pre-boolean-mesh-world',dict(raw_vertices=raw,vertices=smooth,faces=faces,grid=grid))
-        smooth, faces = np.asarray(final_vertices), np.asarray(final_faces)
-        recorder.snapshot('final-mesh-world',dict(vertices=smooth,faces=faces,grid=grid,
-                                                source='boolean CAD tessellation'))
-    else:
-        recorder.snapshot('final-mesh-world',dict(raw_vertices=raw,vertices=smooth,faces=faces,grid=grid))
+    recorder.snapshot('pre-boolean-mesh-world',dict(raw_vertices=raw,vertices=smooth,faces=faces,grid=grid))
+    smooth, faces = np.asarray(final_vertices), np.asarray(final_faces)
+    recorder.snapshot('final-mesh-world',dict(vertices=smooth,faces=faces,grid=grid,
+                                            source='boolean CAD tessellation'))
     def write(stream):
         stream.write(b'solid optimized\n')
         for triangle in smooth[np.asarray(faces)]:

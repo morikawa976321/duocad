@@ -249,7 +249,7 @@ def connect_conditions(
     seeds: dict = {}
     for kind, faces in (("fixed", fixed), ("load", load)):
         for face in faces:
-            seeds[f"{kind}_face_{int(face)}"] = table.element_mask([int(face)], layers=1)
+            seeds[f"{kind}_face_{int(face)}"] = table.element_mask([int(face)])
     for name, mask in keep_seeds.items():
         seeds[str(name)] = mask
     return connect_seeds(design, seeds)

@@ -502,17 +502,12 @@ class AnchorTable:
                 np.add.at(f, 3 * anchor.node_ids + axis, vec[:, axis])
         return f
 
-    def element_mask(
-        self, faces: Iterable[int] | int, layers: int = 1
-    ) -> np.ndarray:
-        """アンカー節点に接する要素の bool マスク (nx,ny,nz)。非設計領域に固定するのに使う。
+    def element_mask(self, faces: Iterable[int] | int) -> np.ndarray:
+        """アンカー節点を角に持つ要素の bool マスク (nx,ny,nz)。非設計領域に固定するのに使う。
 
-        `layers=1` は「その節点を角に持つ要素」。2以上は各軸へその分だけ膨らませる。
         荷重・拘束の近傍を ρ=1 に固定するのが実務上の定石で、これをやらないと最適化が
         荷重直下の材料を溶かして「荷重が宙に浮いた」形が出る。
         """
-        if int(layers) < 1:
-            raise ValueError(f"layers must be >= 1, got {layers!r}")
         nx, ny, nz = self.grid.shape
         mask = np.zeros((nx, ny, nz), dtype=bool)
         idx = self.nodes(faces)
@@ -523,16 +518,6 @@ class AnchorTable:
                     ok = np.all((e >= 0) & (e < np.array([nx, ny, nz])), axis=1)
                     e = e[ok]
                     mask[e[:, 0], e[:, 1], e[:, 2]] = True
-        for _ in range(int(layers) - 1):
-            grown = mask.copy()
-            for axis in range(3):
-                lo = [slice(None)] * 3
-                hi = [slice(None)] * 3
-                lo[axis] = slice(1, None)
-                hi[axis] = slice(None, -1)
-                grown[tuple(lo)] |= mask[tuple(hi)]
-                grown[tuple(hi)] |= mask[tuple(lo)]
-            mask = grown
         return mask
 
 

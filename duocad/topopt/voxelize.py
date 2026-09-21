@@ -543,7 +543,6 @@ def occupancy(
     grid: Grid,
     *,
     jitter: Optional[tuple[float, float]] = None,
-    strict: bool = True,
 ) -> tuple[np.ndarray, dict]:
     """三角形群と格子から占有マスク (nx,ny,nz) の bool 配列を返す。
 
@@ -559,25 +558,20 @@ def occupancy(
     docstring を参照。
 
     戻り値の2つめは診断。`unbalanced_columns` は最後まで巻き数が 0 に戻らなかった列の数で、
-    閉じた表面なら 0 でなければならない(`strict=True` なら 0 でないとき例外)。
+    閉じた表面なら 0 でなければならない(0 でないとき例外)。
     """
     if jitter is not None:
-        return _occupancy_once(soup, grid, jitter, strict)
+        return _occupancy_once(soup, grid, jitter)
 
     last_error: Optional[ValueError] = None
     for attempt, candidate in enumerate(RAY_JITTER_SEQUENCE, start=1):
         try:
-            mask, stats = _occupancy_once(soup, grid, candidate, strict=True)
+            mask, stats = _occupancy_once(soup, grid, candidate)
         except ValueError as exc:
             last_error = exc
             continue
         stats["jitter"] = candidate
         stats["jitter_attempts"] = attempt
-        return mask, stats
-    if not strict:
-        mask, stats = _occupancy_once(soup, grid, RAY_JITTER_SEQUENCE[0], strict=False)
-        stats["jitter"] = RAY_JITTER_SEQUENCE[0]
-        stats["jitter_attempts"] = len(RAY_JITTER_SEQUENCE)
         return mask, stats
     raise ValueError(
         f"レイのずらしを {len(RAY_JITTER_SEQUENCE)} 通り試したがすべて縮退した。"
@@ -589,7 +583,6 @@ def _occupancy_once(
     soup: TriangleSoup,
     grid: Grid,
     jitter: tuple[float, float],
-    strict: bool,
 ) -> tuple[np.ndarray, dict]:
     """`occupancy` の1回ぶん(ずらし幅を固定して1回だけ走査する)。"""
     nx, ny, nz = grid.shape
@@ -662,15 +655,13 @@ def _occupancy_once(
         "unbalanced_columns": 0,
     }
     if not col_chunks:
-        if strict:
-            raise ValueError(
-                "三角形とレイの交点が1つも無い。格子が形状をまったく覆っていない"
-                f"(格子の範囲 {np.round(grid.world_box()[0], 3).tolist()}"
-                f" .. {np.round(grid.world_box()[1], 3).tolist()} /"
-                f" 形状の範囲 {np.round(soup.bbox[0], 3).tolist()}"
-                f" .. {np.round(soup.bbox[1], 3).tolist()})"
-            )
-        return mask, stats
+        raise ValueError(
+            "三角形とレイの交点が1つも無い。格子が形状をまったく覆っていない"
+            f"(格子の範囲 {np.round(grid.world_box()[0], 3).tolist()}"
+            f" .. {np.round(grid.world_box()[1], 3).tolist()} /"
+            f" 形状の範囲 {np.round(soup.bbox[0], 3).tolist()}"
+            f" .. {np.round(soup.bbox[1], 3).tolist()})"
+        )
 
     col = np.concatenate(col_chunks)
     z = np.concatenate(z_chunks)
@@ -701,7 +692,7 @@ def _occupancy_once(
     is_last[:-1] = col[1:] != col[:-1]
     unbalanced = int(np.count_nonzero(winding[is_last] != 0))
     stats["unbalanced_columns"] = unbalanced
-    if unbalanced and strict:
+    if unbalanced:
         raise ValueError(
             f"レイの巻き数が 0 に戻らない列が {unbalanced} 本ある(全 {nx * ny} 列)。"
             "閉じた表面ならこれは 0 でなければならない。考えられる原因は "

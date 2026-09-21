@@ -204,7 +204,7 @@ def check_uniaxial_bar() -> tuple[fem.Model, np.ndarray, np.ndarray]:
         model, element_mm=ELEMENT_MM, load_n=LOAD_N, youngs_modulus_mpa=E_MPA
     )
     report = stress.evaluate(
-        model, rho, scale=scale, allowable_mpa=ALLOWABLE_MPA, u=u, penal=1.0
+        model, rho, scale=scale, allowable_mpa=ALLOWABLE_MPA, u=u
     )
     field = report.field
 
@@ -352,7 +352,7 @@ def check_unit_scaling(model: fem.Model, rho: np.ndarray, u: np.ndarray) -> None
             model, element_mm=element_mm, load_n=load_n, youngs_modulus_mpa=e_mpa
         )
         return stress.evaluate(
-            model, rho, scale=scale, allowable_mpa=ALLOWABLE_MPA, u=u, penal=1.0
+            model, rho, scale=scale, allowable_mpa=ALLOWABLE_MPA, u=u
         )
 
     base = report()
@@ -613,7 +613,7 @@ def check_safety_factor(model: fem.Model, rho: np.ndarray, u: np.ndarray) -> Non
 
     def report(allowable):
         return stress.evaluate(
-            model, rho, scale=scale, allowable_mpa=allowable, u=u, penal=1.0
+            model, rho, scale=scale, allowable_mpa=allowable, u=u
         )
 
     base = report(ALLOWABLE_MPA)
@@ -635,7 +635,7 @@ def check_safety_factor(model: fem.Model, rho: np.ndarray, u: np.ndarray) -> Non
         model, element_mm=ELEMENT_MM, load_n=LOAD_N * 2, youngs_modulus_mpa=E_MPA
     )
     halved = stress.evaluate(
-        model, rho, scale=scale2, allowable_mpa=ALLOWABLE_MPA, u=u, penal=1.0
+        model, rho, scale=scale2, allowable_mpa=ALLOWABLE_MPA, u=u
     )
     rel = abs(halved.safety_factor - 0.5 * base.safety_factor) / (0.5 * base.safety_factor)
     check(
@@ -648,7 +648,7 @@ def check_safety_factor(model: fem.Model, rho: np.ndarray, u: np.ndarray) -> Non
         ("許容応力が負", {"allowable_mpa": -1.0}),
     ):
         try:
-            stress.evaluate(model, rho, scale=scale, u=u, penal=1.0, **kwargs)
+            stress.evaluate(model, rho, scale=scale, u=u, **kwargs)
             raised = "(例外が出なかった)"
         except Exception as exc:
             raised = f"{type(exc).__name__}"

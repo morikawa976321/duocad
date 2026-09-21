@@ -338,28 +338,17 @@ def evaluate(
     *,
     scale: UnitScale,
     allowable_mpa: float,
-    penal: float = 3.0,
-    u: np.ndarray | None = None,
-    solver: str = "cg",
-    cg_rtol: float = 1e-9,
+    u: np.ndarray,
     rho_min: float = DEFAULT_RHO_MIN,
     percentile: float = DEFAULT_PERCENTILE,
 ) -> SafetyReport:
-    """形(密度場)を渡すと最小安全率が返る、この段の入口。
-
-    `u` を渡さなければ最終 ρ で解き直す。外側のループ(安全率 → 材料量の二分探索)は
-    このタスクの範囲外で、ここが返す `safety_factor` を読む側にある。
-    """
+    """形(密度場)とその変位 `u`(`solve_displacement` の解)を渡すと最小安全率が返る、この段の入口。"""
     density = np.asarray(rho, dtype=float)
     if density.shape != (model.nelx, model.nely, model.nelz):
         raise ValueError(
             f"ρ の形が {density.shape}、期待は {(model.nelx, model.nely, model.nelz)}"
         )
-    displacement = (
-        solve_displacement(model, density, penal, solver=solver, cg_rtol=cg_rtol)
-        if u is None
-        else np.asarray(u, dtype=float).ravel()
-    )
+    displacement = np.asarray(u, dtype=float).ravel()
     field = element_stress(model, displacement).scaled(scale)
     trace.snapshot('stress-displacement', displacement=displacement, scale=scale)
     rep = representative_stress(field, density, rho_min=rho_min, percentile=percentile)
