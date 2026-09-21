@@ -10,7 +10,8 @@
 `duocad/` は書き換えない。自由な自由度が `--pair-limit` 以下で空きメモリが `--pair-min-free-gb` 以上のときだけ、同じ `kf`・右辺を
 `spsolve` でも解いて、秒・常駐量の増分・残差・変位の差を対にする(直接解法の解は測ったら捨てる)。
 形から決定的に計算できる量(材料セル数・自由度・nnz・外接箱の充填率、対の評価では RCM の帯幅)も各 solve に書く。
-`--time-limit-min` は探索の開始(段階3の前)からの経過。`--max-evals` は段階4の評価の数(幾何却下・FEM なしを含む)。
+`--time-limit-min` は探索の開始(段階3の前)からの壁時計の経過(対の測定の時間を含む)。`--max-evals` は段階4の評価の数
+(幾何却下・FEM なしを含む)。`--save-accepted` の `accepted_000.npz` は段階3の全材料の形(段階4の出発形)、`accepted_001.npz` 以降が段階4の合格の通し番号。
 `--analyze` は記録から docs 用の表A〜D を markdown で出す(判断はしない)。
 """
 import argparse
@@ -18,6 +19,7 @@ import dataclasses
 import gc
 import inspect
 import json
+import math
 import os
 import sys
 import tempfile
@@ -69,7 +71,6 @@ def _build_hanger(args):
                               product_min_width_cells=int(min_width['cells'])))
 
 
-#: 題材の追加は SUBJECTS へ `名前: args を受けて Subject を返す関数` を足すだけ(探索・記録・解析は Subject しか見ない)。
 SUBJECTS = {'hanger': _build_hanger}
 
 
@@ -246,9 +247,9 @@ def _solve_wrapper(original, state):
             pair = solve_direct_pair(self.kf, ff, out[0, self.model.free], fem.SOLVE_RESIDUAL_TOL)
             if pair['status'] == 'measured':
                 pair['rcm'] = rcm_measures(self.kf)
+            gc.collect()
             pair['overhead_seconds'] = time.perf_counter() - overhead_started
             entry['pair'] = pair
-            gc.collect()
         return out
 
     return solve
@@ -424,7 +425,8 @@ def run(args, subject, out_path, save_dir, cap=None):
     header.update(
         finished=True, cg_rtol=state.cg_rtol, stop_reason=reduction.get('stop_reason'), termination=result.termination,
         runner_stop=state.stop, search_status=result.status, evaluations_total=int(result.evaluations),
-        stage3_evaluations=state.stage3_evaluations, stage4_records=state.evals4,
+        stage3_evaluations=state.stage3_evaluations, stage4_records=state.evals4, records_written=state.n,
+        record_count_matches=(state.n == int(result.evaluations)),
         stage4_steps_in_diagnostics=len(reduction.get('steps') or []),
         search_targets_seen=state.seen_targets, total_seconds=total,
         stage3_seconds=(state.t4 - state.t_search) if state.t4 is not None else None,
@@ -485,6 +487,13 @@ def self_check(args):
         problems.append('採用形状のハッシュが包む前と違う')
     if plain.evaluations != wrapped.evaluations:
         problems.append(f'評価数が違う: {plain.evaluations} / {wrapped.evaluations}')
+    plain_steps = [(e['outcome'] == 'accepted', e['candidate_cells'], e['candidate_safety_factor'])
+                   for e in plain_events if e['outcome'] != 'initial']
+    wrapped_steps = [(r['outcome'] == 'accepted', r['cells'], r['safety_factor']) for r in records if r['stage'] == 4]
+    if len(plain_steps) != len(wrapped_steps) or not all(
+            a[:2] == b[:2] and (a[2] == b[2] or (a[2] is not None and b[2] is not None and math.isclose(a[2], b[2], rel_tol=1e-12)))
+            for a, b in zip(plain_steps, wrapped_steps)):
+        problems.append(f'段階4の評価ごとの(合否・セル数・安全率)が包む前と違う: {plain_steps} / {wrapped_steps}')
     pairs = [s['pair'] for r in records for s in r['solves'] if (s.get('pair') or {}).get('status') == 'measured']
     if not pairs:
         problems.append('対が1つも測れていない')
@@ -550,6 +559,10 @@ def table_a(rows):
     return '\n'.join(lines)
 
 
+def _percent(part, whole):
+    return '–' if whole <= 0 else f'{part / whole * 100:.1f}%'
+
+
 def policy_row(rows, threshold, stage4_seconds):
     cg_total = sum(r['seconds'] for r in rows)
     below = [r for r in rows if r['free_dofs'] <= threshold]
@@ -559,7 +572,7 @@ def policy_row(rows, threshold, stage4_seconds):
         + sum(r['pair']['seconds'] for r in paired)
     slower = [r['pair']['seconds'] - r['seconds'] for r in paired if r['pair']['seconds'] > r['seconds']]
     return (f'| {threshold / 1e4:g}万 | {len(below)} | {len(unpaired)} | {total:.0f} | '
-            f'{total / cg_total * 100:.1f}% | {total / stage4_seconds * 100:.1f}% | {len(slower)} | '
+            f'{_percent(total, cg_total)} | {_percent(total, stage4_seconds)} | {len(slower)} | '
             f"{_fmt(max(slower, default=None), '.1f')} | "
             f"{_fmt(max((r['pair']['rss_increase_gb'] for r in paired), default=None), '.2f')} |")
 
@@ -641,18 +654,21 @@ def analyze(paths):
     groups = {}
     for path in paths:
         header, records = read_records(path)
-        groups.setdefault(header.get('label') or Path(path).stem, []).append((path, header, records))
-    for label, members in groups.items():
-        for path, header, records in members:
+        key = (header['label'], header['conditions_target_safety_factor'], header['min_width_cells'])
+        groups.setdefault(key, []).append((path, header, records))
+    for (label, target, cells), members in groups.items():
+        for path, header, _ in members:
             stop = header.get('runner_stop') or header.get('stop_reason')
-            print(f'## {Path(path).name}({label}・目標 {header["conditions_target_safety_factor"]:g}・m={header["min_width_cells"]}・'
-                  f'格子 {header["grid_shape"]}・設計空間 {header["design_cells"]:,} セル・HEAD {header.get("head")}・'
-                  f'停止 {stop}・段階4 {(header.get("stage4_seconds") or 0) / 60:.1f}分(対の測定を含む)・'
-                  f'ピーク常駐 {header.get("peak_working_set_gb") or 0:.1f}GB)\n')
-            analyze_group(f'{label}', [header], [records])
-    if len(paths) > 1:
+            print(f'## {Path(path).name}({label}・目標 {target:g}・m={cells}・格子 {header["grid_shape"]}・'
+                  f'設計空間 {header["design_cells"]:,} セル・HEAD {header.get("head")}・停止 {stop}・'
+                  f'段階4 {(header.get("stage4_seconds") or 0) / 60:.1f}分(対の測定を含む)・'
+                  f'ピーク常駐 {header.get("peak_working_set_gb") or 0:.1f}GB・'
+                  f'記録数と評価数の一致 {header.get("record_count_matches")})\n')
+        analyze_group(f'{label}・目標 {target:g}・m={cells}', [h for _, h, _ in members], [r for _, _, r in members])
+    if len(groups) > 1:
+        members = [m for group in groups.values() for m in group]
         print('## 全部を合わせた表\n')
-        analyze_group('全測定', [h for m in groups.values() for _, h, _ in m], [r for m in groups.values() for _, _, r in m])
+        analyze_group('全測定', [h for _, h, _ in members], [r for _, _, r in members])
     return 0
 
 
