@@ -4,7 +4,7 @@
 
 hanger・要素サイズ要求(既定 2.4mm。実 spacing 2.387506mm)・目標(既定2.0)。最小幅は mm の固定値で渡さず、解決した実 spacing の
 `--cells` 倍(段の値。ガードは `値 < 2×spacing` だけを断る)を渡し、`m == --cells` になったことを確かめてから測る。
-**判定はしない**(採用した形と数字を書き出すだけ)。`trace.DEFAULT_ROOT` を一時フォルダへ向け、
+`--cells 1` は最小幅の規則なし(`min_width_mm=None`)。**判定はしない**(採用した形と数字を書き出すだけ)。`trace.DEFAULT_ROOT` を一時フォルダへ向け、
 `output/optimization_runs` に何も残さない。STLは既定で `output/min_width/`(git 管理外)。
 採用マスクの npz は `refine_adopted_mask.py` の入力になる。
 """
@@ -83,9 +83,18 @@ def _search_summary(result, best_mask: np.ndarray, keep: np.ndarray, m: int) -> 
               for name in ("picked", "casualties", "islands", "skipped_support", "skipped_surface", "skipped_manifold",
                            "skipped_thickness", "skipped_connectivity", "skipped_core", "already_removed", "global_checks")}
     outcomes = [t.outcome for t in result.history]
+    failed_checks: dict = {}
+    for trial in result.history:
+        if trial.outcome != "ok":
+            for name, status in (trial.checks or {"no_checks": "fail"}).items():
+                if status != "pass":
+                    failed_checks[name] = failed_checks.get(name, 0) + 1
     core = ndimage.binary_erosion(np.pad(best_mask, m), structure=np.ones((m,) * 3, dtype=bool))
     return dict(
         evaluations_by_outcome={name: outcomes.count(name) for name in sorted(set(outcomes))},
+        failed_checks_of_rejected_trials=failed_checks,
+        keep_cells=int(keep.sum()), keep_cells_in_mask=int((best_mask & keep).sum()),
+        mask_or_keep_cells=int((best_mask | keep).sum()),
         peel_totals=totals,
         peel_seconds=float(reduction.get("peel_seconds", 0.0)),
         repeated_candidates=int(reduction.get("repeated_candidates", 0)),
@@ -122,7 +131,7 @@ def run(cells: int, budget: int, stl_dir: Path, mask_npz: Path | None,
         spacing = optimize_run._snap_to_grid(
             limits["bbox_min"], limits["bbox_max"],
             optimize_run._resolve_element_size(limits, element_size))
-        min_width_mm = float(cells) * spacing
+        min_width_mm = None if cells == 1 else float(cells) * spacing
         min_width = optimize_run._resolve_min_width(spacing, min_width_mm)
         out.update(actual_spacing_mm=spacing, min_width_request_mm=min_width_mm, min_width=min_width)
         if min_width["cells"] != cells:

@@ -64,10 +64,10 @@ class SearchConditions:
     #: 保持・除外CADと格子セルの重なり体積の前計算(`acceptance.RegionOverlaps`)。探索1回のあいだ格子と
     #: 条件は固定なので、この探索が1つ持ち、探索が終わったら捨てる。`None` なら候補ごとにブーリアンを取る旧経路。
     region_overlaps: Any = field(default_factory=acceptance.RegionOverlaps)
-    #: 最小幅の規則の**対象から外す**セル(保持ソリッドの占有。設計空間と同じ形の bool 配列、`DesignSpace.keep`)。
-    #: 外すのは「そのセル自身が m 立方に被覆されていなくても違反にしない」だけで、材料としては、探索のマスクから削られた
-    #: あとも他のセルの立方に数える(最終形状では保持の実形状が union で戻る)。
-    #: `None` は外さない。評価(FEM・6条件)には使わないので `evaluation_identifier` に入れない。
+    #: 保持ソリッド由来のセル(設計空間と同じ形の bool 配列、`DesignSpace.keep`。設計空間に含まれること)。
+    #: 探索が作るどの候補でも材料のまま(`keep ⊆ mask`): `peel` は削らず、島の除去は全保持セルを含む成分だけを残す。
+    #: 最小幅の規則は、これらのセル自身が m 立方に被覆されていなくても違反にしない(他のセルの立方には材料として数える)。
+    #: `None` は制約なし。評価(FEM・6条件)の入力ではないので `evaluation_identifier` に入れない。
     keep_cells: Any = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -195,13 +195,26 @@ def uncovered_condition_nodes(material: np.ndarray, conditions: SearchConditions
 # ---------------------------------------------------------------------------
 # 島処理(§4.4)
 # ---------------------------------------------------------------------------
+def _keep_cells(conditions: SearchConditions, shape: tuple) -> Optional[np.ndarray]:
+    """`conditions.keep_cells`(指定が無ければ `None`)。形が格子と違えば例外。"""
+    if conditions.keep_cells is None:
+        return None
+    keep = np.asarray(conditions.keep_cells, dtype=bool)
+    if keep.shape != tuple(shape):
+        raise ValueError(f'keep_cells の形 {keep.shape} が設計空間の形 {tuple(shape)} と違う')
+    return keep
+
+
 def _holds_all_conditions(component: np.ndarray, conditions: SearchConditions) -> bool:
-    """この成分だけを残したとき、全固定面・荷重面の節点と各保持CADの重なりを満たすか。
+    """この成分だけを残したとき、全固定面・荷重面の節点と各保持CADの重なりを満たし、全保持セル(`keep_cells`)を含むか。
 
     FEMより先に効く軽い前提審査(numpy比較 + CAD重なりだけ)。除外条件はここで見ない
     —— 材料は常に設計空間の部分集合なので、成分を絞っても崩れない(§2、find_initial_feasible
     の「入力矛盾」の判定と同じ前提)。
     """
+    keep = _keep_cells(conditions, component.shape)
+    if keep is not None and (keep & ~component).any():
+        return False
     live = acceptance.active_nodes(component).ravel()
     for face in conditions.fixed_faces + conditions.load_faces:
         ids = conditions.table.node_ids([face])
@@ -226,10 +239,12 @@ def resolve_islands(candidate: np.ndarray, conditions: SearchConditions) -> tupl
     """連結成分ごとに条件成立を調べ、単独で成立する成分だけを候補として返す(§4.4)。
 
     **最大成分を選ばない。** 複数の成分が単独で成立すれば、それぞれ別候補として返す
-    (呼び出し側が両方評価する)。最後に保持を塗り直して復活させることはしない。
-    除去した島は数値(セル数・体積・条件に触れていたか)だけを残し、マスクは保持しない。
+    (呼び出し側が両方評価する)。`conditions.keep_cells` があれば、成立の条件に「全保持セルを含む」が加わる
+    (保持セルを島として消さず、最後に塗り直して復活させることもしない)。
+    除去した島は数値(セル数・体積・条件に触れていたか・含む保持セル数)だけを残し、マスクは保持しない。
     """
     candidate = np.ascontiguousarray(candidate, dtype=bool)
+    keep = _keep_cells(conditions, candidate.shape)
     labels, count = ndimage.label(candidate, structure=NEIGHBOURHOOD_STRUCTURE)
     survivors, removed = [], []
     for label_id in range(1, count + 1):
@@ -237,9 +252,12 @@ def resolve_islands(candidate: np.ndarray, conditions: SearchConditions) -> tupl
         if _holds_all_conditions(component, conditions):
             survivors.append(component)
         else:
-            removed.append(dict(cells=int(component.sum()),
-                                volume_mm3=float(component.sum()) * conditions.grid.element_volume,
-                                touches_condition=_touches_any_condition(component, conditions)))
+            island = dict(cells=int(component.sum()),
+                          volume_mm3=float(component.sum()) * conditions.grid.element_volume,
+                          touches_condition=_touches_any_condition(component, conditions))
+            if keep is not None:
+                island['keep_cells'] = int((keep & component).sum())
+            removed.append(island)
     diagnostics = dict(components=count, surviving_components=len(survivors), removed_islands=removed)
     return survivors, diagnostics
 
@@ -339,10 +357,14 @@ def _evaluate_survivor(survivor: np.ndarray, before: np.ndarray, conditions: Sea
     計算失敗(`unknown`、原因`evaluation_error`)は、同じマスク・条件のまま一度だけ
     別解法で再試行する(§4.5「解法変更による再試行は有限の規則にする」)。それでも
     `unknown` ならそのまま返す。
+    `conditions.keep_cells` があれば、`survivor` が全保持セルを含むことをここで確かめる(破れたら例外。黙って塗り直さない)。
     `fields` / `overrides` / `u0` は `acceptance.inspect` へそのまま渡す。`counter` を渡すと、
     FEMまで進んだ検査の回数を `counter['fem_solves']` に、`u0` を渡した検査が初期値に使えたか捨てたか
     (`fields['warm_start']`)を `counter['warm_start_used']` / `['warm_start_fallbacks']` に足す。
     """
+    keep = _keep_cells(conditions, survivor.shape)
+    if keep is not None and not survivor[keep].all():
+        raise RuntimeError(f'評価に回る候補が保持セルを {int((keep & ~survivor).sum())} 個欠いている(探索が保持セルを空にした)')
     kwargs = {**conditions.inspect_kwargs(), **(overrides or {})}
 
     def evaluate(solver: str, label: str, parent_index: Optional[int]) -> tuple:
@@ -375,7 +397,7 @@ def _no_component_trial(history: list, candidate: np.ndarray, raw_hash: str, par
                   before_mm3=before_mm3, material_mm3=0.0, removed_islands_mm3=before_mm3,
                   outcome='no_component',
                   note=f'{island_diag["components"]} 個の連結成分のいずれも固定面・荷重面・'
-                       '保持の全条件を単独で満たさない')
+                       '保持の全条件と全保持セルを単独で満たさない')
     history.append(trial)
     return trial
 
@@ -407,11 +429,17 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
     `min_width_cells`(m、既定1=制約なし)>1 のとき、設計空間をまず m 立方の opening で絞り、
     入口検査も評価も絞った空間に対して行う(絞った結果で保持・拘束面が成り立たなければ、上の入口の状態で止まる)。
     **`conditions.keep_cells`(保持ソリッド由来のセル)は絞らずに残す** —— 規則の対象外だが材料には数える。
+    `keep_cells` が設計空間の外にはみ出していれば `ValueError`(`DesignSpace` は保持を含めて導出する)。
+    島の除去は全保持セルを含む成分だけを残すので、保持セルが別成分に分かれる設計空間は `full_material_infeasible`。
     評価する成分はFEMの前に `_mask_satisfies_min_width` と芯の連結を通す(島の除去は規則を保つと限らないため)。
     絞ったセル数は `diagnostics['min_width']['trimmed_cells']`
     (`find_best_feasible` が段階4まで進んだ結果では `diagnostics['initial']['min_width']`)。
     """
     design_space_mask = np.array(design_space_mask, dtype=bool, copy=True)
+    keep = _keep_cells(conditions, design_space_mask.shape)
+    if keep is not None and (keep & ~design_space_mask).any():
+        raise ValueError(f'keep_cells が設計空間の外にある({int((keep & ~design_space_mask).sum())} セル)。'
+                         '設計空間は保持セルを含む(`DesignSpace.keep` の契約)')
     if min_width_cells <= 1:
         return _find_initial_feasible(design_space_mask, conditions, max_evaluations=max_evaluations,
                                       min_width_cells=1, is_cancelled=is_cancelled)
@@ -599,7 +627,8 @@ class PeelStats:
     `picked + casualties + islands`。`skipped_*` は飛ばした理由ごとの数(支え・表面・多様体・連結性・芯の連結の順に判定し、
     最初に落ちた理由で数える。m>1 の手は巻き添えを含む一口に対して判定する)。
     `skipped_thickness` は厚みを理由に手を却下しなくなったので常に0。
-    `skipped_core` は、手を抜くと侵食した芯のつながり(`min_width.CoreConnectivity`)が切れるとして飛ばした数(m=1 は常に0)。"""
+    `skipped_core` は、手を抜くと侵食した芯のつながり(`min_width.CoreConnectivity`)が切れるとして飛ばした数(m=1 は常に0)。
+    保護セル(`peel` の `protected`)を含む成分を島として切り離す手は `skipped_connectivity` に数える。"""
 
     picked: int = 0
     casualties: int = 0
@@ -642,12 +671,7 @@ def _regular_after_removal(window: np.ndarray) -> bool:
 
 def _min_width_exempt(conditions: SearchConditions, shape: tuple, min_width_cells: int) -> Optional[np.ndarray]:
     """最小幅の規則の対象外のセル(`conditions.keep_cells`)。規則が無効(`m<=1`)か指定が無ければ `None`。"""
-    if min_width_cells <= 1 or conditions.keep_cells is None:
-        return None
-    keep = np.asarray(conditions.keep_cells, dtype=bool)
-    if keep.shape != tuple(shape):
-        raise ValueError(f'keep_cells の形 {keep.shape} が設計空間の形 {tuple(shape)} と違う')
-    return keep
+    return None if min_width_cells <= 1 else _keep_cells(conditions, shape)
 
 
 def keep_cells_without_room(design_space: np.ndarray, keep: np.ndarray, min_width_cells: int,
@@ -686,13 +710,17 @@ def _mask_satisfies_min_width(mask: np.ndarray, min_width_cells: int, exempt: Op
 
 
 def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray, *,
-        min_width_cells: int = 1, exempt: Optional[np.ndarray] = None) -> tuple[np.ndarray, PeelStats]:
+        min_width_cells: int = 1, exempt: Optional[np.ndarray] = None,
+        protected: Optional[np.ndarray] = None) -> tuple[np.ndarray, PeelStats]:
     """`order` を先頭から1回だけ歩き、各セルを**その時点のマスク**で判定して通ったらその場で消す。
 
     `count` 個(巻き添え・島として消えたぶんも数える。最後の一口が超えることがある)消えるか順位が尽きたら止める。
     `mask` が「1成分・全頂点が正則・条件節点が全て支えられている・閉じた空洞が無い・(`min_width_cells>1` なら)全材料セルが
     m 立方の材料だけのブロックに属し、侵食した芯がつながる(S(m)。`min_width.CoreConnectivity`)」なら、返すマスクも同じ ——
     各手の判定はこの不変条件を保つ。
+
+    **保護セル(`protected`。`mask` に含まれること)は決して抜かない**: 順位に並んでいても飛ばし(数えない)、島として切り離す手も却下する
+    (`skipped_connectivity`)。m>1 では巻き添えにも入らないよう、`protected` は `exempt` に含まれること(`ValueError`)。
 
     **最小幅(`min_width_cells`=m>1)**: 手は「セル x + 巻き添え」の一口で、巻き添えは x を抜いた後に m 立方の被覆を失う
     材料セル(`min_width.casualties`。`exempt` のセルは被覆を問われないので巻き添えにならず、材料としては他のセルの立方に数える)。
@@ -716,6 +744,11 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
     started = time.perf_counter()
     mask = np.asarray(mask, dtype=bool)
     shape = mask.shape
+    if protected is not None:
+        protected = np.asarray(protected, dtype=bool)
+        if min_width_cells > 1 and (exempt is None or (protected & ~exempt).any()):
+            raise ValueError('m>1 の peel では protected は exempt に含まれること(巻き添えに入らないため)')
+        order = order[~protected.ravel()[order]]
     node_shape = tuple(n + 1 for n in shape)
     support = np.zeros(node_shape, dtype=np.int32)
     is_anchor = np.zeros(node_shape, dtype=bool)
@@ -799,6 +832,10 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
                 stats.skipped_connectivity += 1
                 continue
             islands = (labels > 0) & (labels != keep)
+            if protected is not None and (islands & protected).any():
+                inner[cleared] = True
+                stats.skipped_connectivity += 1
+                continue
             island_cells = int(islands.sum())
             # m≥3 では、mask に無い保持セル(材料に数える)を挟んで島と保持成分が同じ m 立方に入りうる(2×2×2 の全セルは互いに
             # 26近傍なので m=2 では起きない)。その立方に頼るセルは島を消すと被覆を失うので、消した形を大域で確かめて崩れる手は却下する。
@@ -915,6 +952,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     「1成分・全頂点が正則・全条件節点に支えあり」で、島処理
     (`resolve_islands`)は検算 → 6条件(FEM)。合格すればその形状とエネルギーへ進み、
     後退倍率を2倍に戻す(上限1)。不合格・計算失敗なら形状を変えず、その形の内容ハッシュを `rejected` に入れる。
+    `conditions.keep_cells` は `peel` の `protected` として渡し、どの候補でも材料のまま残す。
     順位から選んだ手が2つ以上なら後退倍率を半分にして同じ順位から歩き直す(再求解しない)。1つだけなら、
     その手のセルを**この形状の間だけ**順位から外して次のセルを試す(採用で形が変わったら順位を作り直すので解除)。
     `rejected` の形がもう一度できたら(順位が尽きて `k` を減らしたとき、別のセルの巻き添えが同じ一口になったとき)
@@ -945,6 +983,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     target = float(conditions.target_safety_factor)
     anchor_ids = _anchor_node_ids(conditions)
     exempt = _min_width_exempt(conditions, best.mask.shape, min_width_cells)
+    protected = _keep_cells(conditions, best.mask.shape)
     steps: list[dict] = []
     reduction = dict(step_exponent=float(step_exponent), max_step_ratio=float(max_step_ratio),
                      filter_size=ENERGY_FILTER_SIZE, fem_solves=0, min_width_cells=int(min_width_cells),
@@ -985,7 +1024,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
         gap_ratio = step_ratio(best.safety_factor, target, exponent=step_exponent, max_ratio=max_step_ratio)
         requested = max(1, int(gap_ratio * multiplier * int(best.mask.sum())))
         candidate, peeled = peel(best.mask, order, requested, anchor_ids, min_width_cells=min_width_cells,
-                                 exempt=exempt)
+                                 exempt=exempt, protected=protected)
         reduction['peel_calls'] += 1
         reduction['peel_seconds'] += peeled.seconds
         reduction['peel_seconds_max'] = max(reduction['peel_seconds_max'], peeled.seconds)
@@ -1075,7 +1114,8 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     `step_exponent` / `max_step_ratio` / `single_cell_patience` / `warm_start` は段階4だけが使う(`step_ratio` / `_reduce_volume`)。
     `min_width_cells`(m、既定1=制約なし)は両段階が使う —— 段階3は設計空間を m 立方の opening で絞って規則を満たす
     出発形状を作り(入口検査も絞った空間に対して行う)、段階4は削除で被覆を失うセルを同じ一手で一緒に抜く(`peel` docstring)。
-    `conditions.keep_cells`(保持ソリッド由来のセル)は規則の対象外で、絞りからも外れる(材料としては数える)。
+    `conditions.keep_cells`(保持ソリッド由来のセル)は、どちらの段階でも空にならず(段階3は全材料、段階4は `peel` の `protected`)、
+    最小幅の規則の対象外で絞りからも外れる(材料としては数える)。
 
     `is_cancelled` は引数無しで呼べる callable。段階3は評価の前、段階4は削る候補を作る前ごとに見る。
     真を返した時点の `best_feasible`(キャッシュ無しで検査済み)を返す

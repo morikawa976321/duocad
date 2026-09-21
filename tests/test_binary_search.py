@@ -972,11 +972,14 @@ def test_the_full_search_keeps_the_keep_cell_and_every_non_keep_cell_stays_in_a_
     assert not (mask & ~keep & ~ndimage.binary_opening(mask | keep, structure=cube)).any()
 
 
-def test_with_min_width_one_keep_cells_change_neither_the_result_nor_the_cost(monkeypatch):
-    """落ちたら、既定(m=1)で最小幅の判定関数が呼ばれている、または `keep_cells` が探索の結果を変えている。"""
+def test_with_min_width_one_keep_cells_only_keep_their_cells_and_call_no_min_width_function(monkeypatch):
+    """落ちたら、既定(m=1)で最小幅の判定関数が呼ばれている、または `keep_cells` が保持セルを残す以外に探索を変えている。"""
     conditions = bar_conditions(shape=(8, 3, 3), target_safety_factor=.001)
     design = np.ones((8, 3, 3), bool)
     plain = bs.find_best_feasible(design, conditions, max_evaluations=200, min_width_cells=1)
+    keep = np.zeros((8, 3, 3), bool)
+    keep[4, 2, 2] = keep[4, 0, 0] = True
+    assert not plain.best_feasible.mask[keep].all()
 
     def forbidden(*args, **kwargs):
         raise AssertionError('m=1 で最小幅の判定を呼んだ')
@@ -984,10 +987,10 @@ def test_with_min_width_one_keep_cells_change_neither_the_result_nor_the_cost(mo
     for owner, name in ((min_width, 'cube_opening'), (min_width, 'lost_coverage'), (min_width, 'casualties'),
                         (min_width, 'bite_verdict'), (bs, '_mask_satisfies_min_width')):
         monkeypatch.setattr(owner, name, forbidden)
-    marked = dataclasses.replace(conditions, keep_cells=np.ones((8, 3, 3), bool))
+    marked = dataclasses.replace(conditions, keep_cells=keep)
     with_keep = bs.find_best_feasible(design, marked, max_evaluations=200, min_width_cells=1)
-    assert with_keep.evaluations == plain.evaluations and len(with_keep.history) == len(plain.history)
-    assert np.array_equal(with_keep.best_feasible.mask, plain.best_feasible.mask)
+    assert with_keep.status == 'feasible' and with_keep.best_feasible.mask[keep].all()
+    assert with_keep.best_feasible.mask.sum() >= plain.best_feasible.mask.sum()
     assert bs._min_width_exempt(marked, (8, 3, 3), 1) is None
 
 
