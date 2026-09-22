@@ -54,7 +54,6 @@ from OCP.STEPControl import (
     STEPControl_StepModelType,
     STEPControl_Writer,
 )
-from OCP.StlAPI import StlAPI_Writer
 from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
@@ -172,34 +171,6 @@ def write_step(shape: "TopoDS_Shape", path: str) -> None:
     if status != IFSelect_ReturnStatus.IFSelect_RetDone:
         _unlink_quietly(filename)
         raise ValueError(f"failed to write STEP: {filename} (Write -> {status})")
-
-
-def write_stl(shape: "TopoDS_Shape", path: str, deviation: float) -> None:
-    """形状をSTLとしてテセレーションして書き出す(バイナリSTL)。
-
-    deviation は**絶対**の線形偏差(mm)。BRepMesh_IncrementalMesh の第3引数 isRelative は
-    必ず False にする(True にすると 0.2/0.05/0.01 のどれでも同じメッシュになる)。
-    **build123d の既定の `export_stl` は isRelative=True 側を使っている**ので、そのまま
-    流用すると「deviationを小さくすると細かくなる」という単調性の契約が必ず落ちる。
-    既存の三角形分割は BRepTools.Clean_s で捨ててから測り直す — 同じ形状に対して偏差を変えて
-    複数回書き出すとき、前回のメッシュが残っていると偏差が効かないことがあるため。
-    """
-    if shape is None or shape.IsNull():
-        raise ValueError("cannot write an empty shape to STL")
-    if not deviation > 0:
-        raise ValueError(f"deviation must be positive (mm), got {deviation!r}")
-
-    filename = os.fspath(path)
-    BRepTools.Clean_s(shape)
-    mesh = BRepMesh_IncrementalMesh(shape, float(deviation), False, 0.5, False)
-    if not mesh.IsDone():
-        raise ValueError(f"meshing failed for deviation={deviation} (BRepMesh_IncrementalMesh)")
-
-    writer = StlAPI_Writer()
-    writer.ASCIIMode = False
-    if not writer.Write(shape, filename):
-        _unlink_quietly(filename)
-        raise ValueError(f"failed to write STL: {filename}")
 
 
 def _unlink_quietly(filename: str) -> None:
@@ -522,7 +493,7 @@ def _is_removed(source: Any, sub: "TopoDS_Shape") -> bool:
 # --------------------------------------------------------------------------------------
 # テセレーション — 面ごとの三角形群
 # --------------------------------------------------------------------------------------
-#: 既定の線形偏差(mm)。write_stl と同じ「絶対」の偏差。
+#: 既定の線形偏差(mm)。「絶対」の偏差(`tessellate` の isRelative=False)。
 DEFAULT_DEVIATION = 0.2
 #: 既定の角度偏差(**ラジアン**。度ではない — OCCTのBRepMesh_IncrementalMesh/GCPnts_TangentialDeflection
 #: の角度偏差パラメータはラジアンで、既定は0.5rad(`IMeshTools_Parameters().Angle`で確認済み)。
@@ -712,8 +683,11 @@ def tessellate(
         raise ValueError(f"angular_deflection must be positive, got {angular_deflection!r}")
 
     # 既存の三角形分割を捨ててから測り直す(前回の粗いメッシュが残っていると偏差が効かない。
-    # write_stl と同じ理由・同じ順序)。
+    # STL書き出しは同じ形状を偏差を変えて何度も測る)。
     BRepTools.Clean_s(shape)
+    # 第3引数 isRelative は必ず False(絶対mm)。True にすると 0.2/0.05/0.01 のどれでも同じ
+    # メッシュになる。**build123d の既定の `export_stl` は True 側**なので、流用すると
+    # 「deviationを小さくすると細かくなる」が落ちる。
     mesh = BRepMesh_IncrementalMesh(shape, float(deviation), False, float(angular_deflection), True)
     if not mesh.IsDone():
         raise ValueError(f"meshing failed for deviation={deviation} (BRepMesh_IncrementalMesh)")

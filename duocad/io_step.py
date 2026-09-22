@@ -81,22 +81,18 @@ def export_step(doc: Document, path: PathLike) -> None:
 def export_stl(doc: Document, path: PathLike, deviation: float) -> None:
     """deviation(mm)は**絶対**の線形偏差。対象は export_step と同じ。
 
+    **B-repは画面と同じ三角形を書く**(`_triangles_of`)。STL専用に測り直す経路
+    (OCCT純正の `StlAPI_Writer`)は持たない —— 別計算にすると、画面で確かめた形と
+    書き出した形の一致が保証されない。
+
     **B-repとメッシュが混ざった文書は、両方を1本のSTLへ書く**。
     メッシュボディの三角形は**テッセレーションを通さずそのまま**書く —— deviation は
     B-rep側にしか効かない(既に三角形になっているものを測り直す意味が無い)。
-
-    **メッシュボディが対象に1つも無いときは、従来どおり `kernel.write_stl` を通す。**
-    自前のライタへ一本化していないのは、B-repだけの文書の書き出しを1ビットも変えないため
-    (OCCTのSTLライタと自前のライタでは、同じ三角形でも浮動小数の丸めが一致する保証が無い)。
     """
     bodies = _bodies_to_export(doc)
-    if not any(b.mesh is not None for b in bodies):
-        shape = _shape_to_export(doc)
-        kernel.write_stl(shape, str(path), deviation)
-        return
     # **メッシュだけの文書でも deviation を検査する** —— この道では誰も使わないが、
     # 「文書に何が入っているか」で引数の検査が緩んだり厳しくなったりすると、
-    # 呼び出し側から見た契約が文書の中身に依存してしまう(`kernel.write_stl` と同じ文言)。
+    # 呼び出し側から見た契約が文書の中身に依存してしまう(`kernel.tessellate` と同じ文言)。
     if not deviation > 0:
         raise ValueError(f"deviation must be positive (mm), got {deviation!r}")
     meshbody.write_stl(str(path), [_triangles_of(b, deviation) for b in bodies])
@@ -105,14 +101,20 @@ def export_stl(doc: Document, path: PathLike, deviation: float) -> None:
 def _triangles_of(body: Body, deviation: float):
     """1Bodyぶんの三角形。メッシュは持っている三角形、B-repはその場でテッセレーションする。
 
-    B-rep側を `kernel.tessellate` で三角形化するのは、`kernel.write_stl` が1つの
-    `TopoDS_Shape` しか受け取らず、メッシュを混ぜる口が無いため。**混在のときだけ通る道**で、
-    B-repだけの文書は `export_stl` の上の分岐で従来の経路へ行く。
+    **B-repは画面の土台と同じ呼び方で測る**(層をまたぐ契約): `DocumentView.geometry` は
+    ズームも注視面の指定も来ていないとき、`kernel.tessellate_selective(shape, None,
+    view_deviation, view_angular_deflection, ...)` で測り、その角度偏差の既定は
+    `kernel.DEFAULT_ANGULAR_DEFLECTION` である。ここで角度偏差を変えると、曲面の三角形だけが
+    画面と食い違う(φ12の穴を偏差0.2mmで測ると、0.5radでは120枚、既定の0.35radでは160枚)。
+    ズーム中の画面の粗さには合わせない —— 書き出しの粗さはカメラで変わらない
+    (`tests/test_adaptive_resolution.py`)。
     """
     if body.mesh is not None:
         return meshbody.triangles(body.mesh)
     return meshbody.triangles(
-        meshbody.from_tessellation(kernel.tessellate(body.shape, deviation))
+        meshbody.from_tessellation(
+            kernel.tessellate(body.shape, deviation, kernel.DEFAULT_ANGULAR_DEFLECTION)
+        )
     )
 
 

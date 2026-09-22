@@ -129,8 +129,10 @@ def geometry(mesh: Mesh) -> dict:
 def write_stl(path, sources: Iterable[Iterable[tuple]]) -> None:
     """バイナリSTLを1本書く。`sources` は**「三角形の並び」の並び**(複数ボディを1本へ連結する)。
 
+    **`export_stl` のSTLはB-repもメッシュもすべてここを通る**(`io_step.export_stl`)。
+
     三角形が1枚も無ければ ValueError で落とし、**ファイルを作らない**(0バイトの成果物を
-    残さない。`kernel.write_stl` と同じ規律)。
+    残さない。`kernel.write_step` と同じ規律)。
     """
     body = bytearray()
     count = 0

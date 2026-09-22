@@ -1481,5 +1481,5 @@ def test_the_mcp_layer_does_not_reimplement_verbs():
         encoding="utf-8"
     )
     for forbidden in ("kernel.fillet_edges", "kernel.chamfer_edges", "kernel.extrude_regions",
-                      "kernel.extrude_face_on_shape", "kernel.write_step", "kernel.write_stl"):
+                      "kernel.extrude_face_on_shape", "kernel.write_step"):
         assert forbidden not in source, f"MCP層が幾何を直接叩いている: {forbidden}"

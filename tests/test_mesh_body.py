@@ -5,8 +5,7 @@
 数万面のシェルをOCCTへ入れる経路が黙って開き、選択1回が秒単位になる
 (理由は `duocad/meshbody.py` のモジュールdocstring)。
 
-**B-repの側を1ビットも変えていないこと**も §7 で見る(B-repだけの文書のSTLは
-従来どおり `kernel.write_stl` を通り、バイト列が一致する)。
+B-repのSTLが画面と同じ三角形になることは `tests/test_stl_export.py` が見る。
 """
 from __future__ import annotations
 
@@ -431,17 +430,6 @@ def test_a_mixed_document_writes_both_into_one_stl(tmp_path):
     assert _stl_triangle_count(path) == 4 + _box_triangle_count()
 
 
-def test_a_b_rep_only_document_still_goes_through_the_occt_writer(tmp_path):
-    """**B-repだけの文書の書き出しを1ビットも変えない。**"""
-    doc = Document()
-    doc.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
-    through_export = tmp_path / "a.stl"
-    io_step.export_stl(doc, through_export, DEVIATION)
-    direct = tmp_path / "b.stl"
-    kernel.write_stl(_box_shape(), str(direct), DEVIATION)
-    assert through_export.read_bytes() == direct.read_bytes()
-
-
 def test_a_hidden_mesh_body_is_left_out_of_the_stl(tmp_path):
     """可視性の規律(「見えないものは書き出さない」)がメッシュにも同じに効く。"""
     doc, body_id = _tetra_doc()
@@ -450,8 +438,10 @@ def test_a_hidden_mesh_body_is_left_out_of_the_stl(tmp_path):
     path = tmp_path / "only-box.stl"
     io_step.export_stl(doc, path, DEVIATION)
     assert io_step.export_skipped_hidden(doc) == [body_id]
+    box_only = Document()
+    box_only.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
     direct = tmp_path / "box.stl"
-    kernel.write_stl(_box_shape(), str(direct), DEVIATION)
+    io_step.export_stl(box_only, direct, DEVIATION)
     assert path.read_bytes() == direct.read_bytes()
 
 
