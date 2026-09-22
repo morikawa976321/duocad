@@ -99,6 +99,45 @@ mesh-world snapshotが無いため `replay_finalization.py` を finalize-input �
 `tests/test_finalization.py` 8件（保持が除外に全部覆われるケースの回帰テストを含む）、
 全体テスト1378 passed / 2 skipped。
 
+## 2026-09-22 inspect_solid を面-面の交差だけでカウントするよう変更（hanger実測）
+
+`duocad/kernel_brep.py` の `inspect_solid` は、`BOPAlgo_CheckerSI` の `checker.DS().Interferences()` を
+種類を問わず `Extent()` でそのまま数えていた。頂点-頂点・頂点-辺・辺-辺・頂点-面のペアは許容差が
+触れているだけで無条件にカウントされる（除外条件なし）一方、面-面のペアだけは実際に交差点・交差線が
+あるかをOCCT自身が確認してから数える（`BOPAlgo_CheckerSI::PostTreat` を読んで確認）。
+両端の形状が `TopAbs_FACE` であるペアだけをカウントするよう変更した（数値のしきい値は導入していない）。
+
+**`_boolean` が拒否した preserve-fuse の結果（`000018-preserve-fuse-rejected.json`、前節）を
+直接 `inspect_solid` に通すと、旧ロジックでは `self_intersections=1`（頂点-辺のペア）だったのが、
+新ロジックでは `self_intersections=0`・`watertight=True`・`single_solid=True` になる**
+（実測: `{'watertight': True, 'single_solid': True, 'solids': 1, 'self_intersections': 0, 'valid': True, 'closed': True}`）。
+`inspect_solid` 単体は狙いどおり動く。
+
+**しかし `topopt_checks/replay_finalization.py output/optimization_runs/20260921T185659-b6799e00457d` の
+再生は、この変更後も従来と同じ場所・同じ2種の警告で不合格のまま**（`preserve-fuse: ブーリアン演算に
+エラーまたは警告がある: {..., 'warnings': 'BOPAlgo_AlertAcquiredSelfIntersection\nBOPAlgo_AlertFaceBuilderUnusedEdges\n'}`）。
+原因は `inspect_solid` ではない。`finalize.py` の `_boolean` は `BOPAlgo_BOP`（fuse演算そのもの）の
+`HasWarnings()` を見て、警告が1件でもあれば`inspect_solid`を呼ぶ前に`ValueError`を投げる
+（`_boolean` の「警告が1件でもあればValueError」という既存判定。`inspect_solid`のCheckerSIとは別の、
+独立したOCCT呼び出し）。`_boolean`が例外を投げた時点で`inspect_solid`は一度も呼ばれないため、
+**`inspect_solid`の判定基準をどう変えても、この経路を通る限りhangerは合格しない**。
+
+この事実は今回初めて判明した（依頼元の背景説明は「頂点-辺のペア1件・面-面のペア0件」という
+`inspect_solid`のCheckerSIの実測を前提にしていたが、実際にhangerを不合格にしているのは
+`_boolean`の別のゲートだった）。`finalize.py`の変更は本タスクの制約外（「モデル・ブーリアン演算の
+処理順は変更しない」「inspect_solidの判定基準だけを変える」）であり、`_boolean`の
+「警告が1件でもあればValueError」を緩めるかどうか（例: 面-面以外の警告は許容する等）は
+このタスクのスコープ外・本人判断が必要。
+
+カウントのロジック自体は `_count_face_interferences(ds, pairs)` として切り出し、
+`tests/test_kernel_brep.py` でスタブの `ds`/ペアを使って検証する（面-面だけを数える・
+頂点/辺を含むペアは数えない・片方だけ面のペアは数えない・混在時に面-面だけを残す、の4ケース）。
+実際の `BOPAlgo_CheckerSI` を
+自己交差のある形状で動かす検査は、再現性のある小さな題材を安定に作るのが難しい（実測: 単純な
+2ソリッドのタッチだけでも `BOPAlgo_CheckerSI` 自体が `HasWarnings()=True` を返して
+`inspect_solid` の前段ガードに阻まれることがある）ため、実データ（上記）での直接確認に留めた。
+`tests/test_finalization.py` 含む全体テスト1382 passed / 2 skipped。
+
 以下は2026-09-14までの仕様。現在は `--check-constraints` を指定した調査時だけ適用する。
 
 | 条件 | 判定方法 |
