@@ -452,18 +452,6 @@ export type Applied =
       sketch_ids: string[]
     })
   /**
-   * 領域のオフセット複製(`offset_sketch_regions`)。**常に複製を作る**ので `created` は
-   * 必ず中身を持つ。**ソリッドは追従しない**ので `changed_bodies` は無い
-   * (`mirror_sketch_entities` と同じ)。正の `distance` は膨張(角は丸くなる)、負は収縮
-   * (角は丸めずそのまま縮む)。
-   */
-  | (AppliedVerbBase & {
-      verb: 'offset_sketch_regions'
-      distance: number
-      created: string[]
-      sketch_ids: string[]
-    })
-  /**
    * ボディの鏡映複製(`mirror_body`)。**常に複製を作る**(move_bodyと違い、動かす経路は
    * 無い)。元は動かないので `changed_bodies` は複製で増えたボディだけ。
    *
