@@ -23,7 +23,8 @@
 | `final.stl` | **採用した最終形状**のワールド座標mm。ASCIIの17桁で座標を保存 |
 | `document_after.json` / `result` の記録 | 結果ボディを含む文書、採用材料量、安全率、探索履歴、ボディID |
 
-現在の製品経路は、平滑化後に保持の和集合・除外の差集合を適用し、水密・単一ソリッド検査後に `done` となる。過去の記録の `done` は、この検査を行った意味ではない。
+現在の製品経路は、平滑化後にメッシュから保持＋除外をまとめてcut→保持ごとに除外とcut→除外済み保持をfuseの順で
+適用し、水密・単一ソリッド検査後に `done` となる。過去の記録の `done` は、この検査を行った意味ではない。
 失敗は `failed`、中断は `cancelled`。条件不足の早期終了も専用の状態を残す。
 プロセス強制終了時は `running` のまま残ることがある。プロセスIDと実際の稼働状態を確認する。
 
@@ -91,8 +92,9 @@ surface = build_surface_from_mask(**record)
 
 最新候補のscratch STLではなく、**採用結果の `final.stl`** を使う。
 
-ブーリアン処理は `finalize` 段階に記録する。`before-boolean`、`preserve-union`、
-`exclude-cut`、`final-solid` はB-rep本文を保存する。警告・エラー時は `*-diagnostics` と、
+ブーリアン処理は `finalize` 段階に記録する。`before-boolean`、`material-cut`(メッシュから保持＋除外を
+まとめて引く)、`preserve-<i>-cut`(保持ボディ`i`ごとに除外との差集合)、`preserve-fuse`(除外済み保持を
+足し戻す)、`final-solid` はB-rep本文を保存する。警告・エラー時は `*-diagnostics` と、
 取得できれば `*-rejected` も保存する。
 新しい記録の `pre-boolean-mesh-world` が平滑化前後の頂点、`final-mesh-world` が
 ブーリアン後CADの三角形分割。両者の面接続は同じとは限らない。

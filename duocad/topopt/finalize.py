@@ -1,4 +1,4 @@
-"""平滑化後の表面に保持の和集合、除外の差集合を適用する。"""
+"""平滑化後の表面に保持・除外のブーリアンを適用する。重複領域は除外が残る。"""
 import numpy as np
 
 from .. import kernel
@@ -26,7 +26,7 @@ def _save_shape(name, shape):
         trace.snapshot(name, brep=text)
 
 
-def _boolean(shape, tools, operation, name, progress):
+def _boolean(shape, tools, operation, name, progress, allow_empty=False):
     if not tools:
         return shape
     if progress:
@@ -37,7 +37,14 @@ def _boolean(shape, tools, operation, name, progress):
         if not result.IsNull():
             _save_shape(name+'-rejected', result)
         raise ValueError(f'{name}: ブーリアン演算にエラーまたは警告がある: {diagnostics}')
-    if not is_valid(result) or not kernel.is_solid(result):
+    if not is_valid(result):
+        raise ValueError(f'{name}: 演算結果が不正')
+    if not kernel.is_solid(result):
+        # 除外が保持を全部覆うcutは、警告もエラーも無いまま0ソリッドの有効な空形状を返す
+        # (実測: BOPAlgo_BOPは had_errors=has_warnings=False, is_valid=True, is_solid=False)。
+        # allow_emptyの呼び出し元(保持ごとのcut)ではこれを「保持の寄与ゼロ」として扱う。
+        if allow_empty:
+            return None
         raise ValueError(f'{name}: 演算結果が空または不正')
     _save_shape(name, result)
     return result
@@ -46,6 +53,7 @@ def _boolean(shape, tools, operation, name, progress):
 @trace.stage('finalize')
 def finalize(vertices, faces, preserve, exclude, progress=None):
     vertices, faces = np.asarray(vertices), np.asarray(faces)
+    preserve, exclude = list(preserve), list(exclude)
     stats, components = topology(vertices, faces)
     if any(stats[k] for k in ('boundary_edges', 'nonmanifold_edges', 'inconsistent_edges',
                               'nonmanifold_vertices', 'degenerate_triangles', 'duplicate_triangles')):
@@ -57,9 +65,16 @@ def finalize(vertices, faces, preserve, exclude, progress=None):
     if shape is None:
         raise ValueError(f'平滑化後の表面をソリッド化できない: {diagnostics}')
     _save_shape('before-boolean', shape)
-    shape = _boolean(shape, preserve, 'fuse', 'preserve-union', progress)
-    # 重複領域では最後に適用する除外が優先する。
-    shape = _boolean(shape, exclude, 'cut', 'exclude-cut', progress)
+    # 保持と除外が同一面(体積の重なりはゼロ)を共有するモデルでは、保持の和集合→除外の差集合の順だと
+    # 2回目のcutが同じ面をもう一度交差計算し、自己交差の警告になる(docs/TOPOPT_ACCEPTANCE.md
+    # 「除外cutの警告の原因」)。保持と除外をまとめて1回のcutで引き、除外済みの保持は別途fuseで足す。
+    shape = _boolean(shape, preserve + exclude, 'cut', 'material-cut', progress)
+    excluded_preserve = [result for result in (
+        _boolean(body, exclude, 'cut', f'preserve-{i}-cut', progress, allow_empty=True)
+        for i, body in enumerate(preserve)
+    ) if result is not None]
+    # 重複領域では除外が優先する: 引いたのは除外済みの保持(除外に全部覆われた分はNoneで除去済み)であり、除外を打ち消さない。
+    shape = _boolean(shape, excluded_preserve, 'fuse', 'preserve-fuse', progress)
     if progress:
         progress('最終CADの水密性・単一ソリッドを検査')
     checks = inspect_solid(shape)

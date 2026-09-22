@@ -58,7 +58,7 @@ def verify_archive(path):
     assert np.array_equal(faces,final['faces'])
     assert inspect_solid(body.shape)['watertight']
     assert inspect_solid(body.shape)['single_solid']
-    assert records('preserve-union') and records('final-solid')
+    assert records('preserve-fuse') and records('final-solid')
     v,f=read_stl(path/'final.stl')
     assert np.array_equal(v[f],final['vertices'][final['faces']])
     assert (path/'source.zip').is_file() and list((path/'cad').glob('*.step'))

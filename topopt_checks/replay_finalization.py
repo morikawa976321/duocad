@@ -15,8 +15,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('run', type=Path)
     args = parser.parse_args()
-    candidates = list(args.run.glob('*-pre-boolean-mesh-world.json'))
-    world = trace.load_snapshot(candidates[-1] if candidates else next(args.run.glob('*-final-mesh-world.json')))
+    candidates = (list(args.run.glob('*-pre-boolean-mesh-world.json'))
+                  or list(args.run.glob('*-final-mesh-world.json')))
+    if candidates:
+        world = trace.load_snapshot(candidates[-1])
+    else:
+        # finalizeが警告/エラーで失敗した実行は trace.final_mesh まで届かず world snapshot が無い
+        # (optimize_run.py は finalize 成功後にしか書かない)。finalize への入力(既にワールド座標の
+        # vertices/faces)を代わりに読む。'grid'・'raw_vertices' は無いので末尾の final_mesh 記録は省く。
+        world = trace.load_snapshot(next(args.run.glob('*-finalize-input.json')))
     session = Session(None, .2, models_dir=args.run)
     session.open_document('input.json')
     doc = session.document
@@ -27,10 +34,11 @@ def main():
                          [doc.get_body(b).shape for b in doc.optimize.exclude_bodies],
                          progress=lambda message: print(message, flush=True))
         vertices, faces = solid_mesh(shape)
-        grid = SimpleNamespace(**world['grid'])
-        trace.final_mesh((world['raw_vertices']-grid.origin)/grid.spacing,
-                         (world['vertices']-grid.origin)/grid.spacing, world['faces'], grid,
-                         final_vertices=vertices, final_faces=faces)
+        if 'grid' in world:
+            grid = SimpleNamespace(**world['grid'])
+            trace.final_mesh((world['raw_vertices']-grid.origin)/grid.spacing,
+                             (world['vertices']-grid.origin)/grid.spacing, world['faces'], grid,
+                             final_vertices=vertices, final_faces=faces)
         body_id = add_solid_body(doc, shape, 'boolean-finalized')
         recorder.document(doc, 'document_after')
         recorder.snapshot('result', dict(state='done', body_id=body_id, source_run=str(args.run)))

@@ -34,6 +34,14 @@ def test_exclusion_wins_overlap():
     assert kernel.volume(result) == pytest.approx(8)
 
 
+def test_preserve_fully_covered_by_exclude_contributes_nothing():
+    v, f = solid_mesh(box((0, 0, 0), (4, 4, 4)))
+    preserve = box((0.5, 0.5, 0.5), (1.5, 1.5, 1.5))
+    exclude = box((0, 0, 0), (2, 2, 2))
+    result = finalize(v, f, [preserve], [exclude])
+    assert kernel.volume(result) == pytest.approx(64-8)
+
+
 def test_cut_cannot_silently_leave_two_solids():
     v, f = solid_mesh(box((0, 0, 0), (3, 2, 2)))
     with pytest.raises(ValueError, match='単一ソリッド'):

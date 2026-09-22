@@ -3,8 +3,8 @@
 現在の合格条件は、`models/hanger_bar_attachment.json` の最終出力の **水密性（自己干渉なし）・単一ソリッド** の2つ。
 保持・除外は既定の合否判定から外し、平滑化後のCADブーリアン演算で反映する。
 
-製品経路は `密度 → 島除去 → 表面生成 → Taubin平滑化 → CAD化 → 保持と和集合 → 除外との差集合 → 水密・単一ソリッド検査 → 文書保存`。
-重複領域は最後に適用する除外が優先する。演算のエラー・警告、空の結果、自己干渉、分断を成功扱いにしない。
+製品経路は `密度 → 島除去 → 表面生成 → Taubin平滑化 → CAD化 → (メッシュ－保持－除外)をまとめてcut → 保持ごとに除外とのcut → 除外済み保持をfuse → 水密・単一ソリッド検査 → 文書保存`。
+重複領域は除外が優先する。演算のエラー・警告、空の結果、自己干渉、分断を成功扱いにしない。
 結果はCADソリッドとしてB-rep本文を操作ログに保存し、再読込・undo/redoは外部ファイルに依存しない。
 表示とSTLはそのCADの三角形近似。安全率は処理前の密度の解析値で、最終CADの再解析値ではない。
 
@@ -18,6 +18,9 @@
 診断記録のCADは `--model-dir output/optimization_runs/<run-id> --model document_after.json` で指定できる。
 `replay_finalization.py` はSIMPを再実行せず、保存済み平滑化後表面を製品と同じ後処理に通し、
 `output/finalization_checks/` に各段階のB-rep、診断、成功時の文書/STLを保存する。
+ただし元の実行が finalize 失敗で mesh-world snapshot を残していない場合は finalize-input から
+読み直すフォールバックになり、その回はgridが無いため成功しても最終STL(`final.stl`)は保存しない
+（文書と各段階のB-repは保存する）。
 
 検証は `tests/test_finalization.py`、`tests/test_final_shape.py`、`tests/test_optimization_trace.py` と
 `topopt_checks/check_trace.py`。後者は小型モデルで製品経路・文書再生・最終STLを確認する。
@@ -72,7 +75,29 @@ OCCT が両者を同一面と見なして許容差を広げる、と読んでい
 小さなモデル（くびれ付きロッドとはまる環、面をまたぐ凹凸メッシュ）では、元の順序は10通り中8通りで警告が出て、
 CellsBuilder は10通りとも警告なし・有効だった。円筒だけのモデルでは元の順序でも警告が出ない。
 
-## 旧4条件の判定仕様と観測記録
+## 2026-09-22 まとめてcut→保持だけ引き算→fuseへの置き換え（hanger実測）
+
+前節の「メッシュから保持と除外を1回で同時に引き、除外で削った保持を後でunion」案を製品経路に採用した
+（`duocad/topopt/finalize.py`）。手順: 1) メッシュから保持＋除外をまとめて1回のcutで引く
+2) 保持ボディそれぞれについて単独で除外とのcutを計算する 3) 1の結果に2の「除外済みの保持」をfuseで足す。
+
+実行 `20260921T185659-b6799e00457d`（探索後の finalize で自己干渉により失敗した run。
+mesh-world snapshotが無いため `replay_finalization.py` を finalize-input からの再生に対応させた）を
+新しい経路で再生すると、material-cut・保持0〜3個それぞれのcutは全て警告なしで通り、最後のfuseだけ
+`BOPAlgo_AlertAcquiredSelfIntersection` 1件・`BOPAlgo_AlertFaceBuilderUnusedEdges` 1件が残る
+（旧経路の9/8/1件から削減。`SolidBuilderUnusedFaces` は0件になった）。
+
+残る1件は保持7・除外11の共有面（くびれ）ではなく別の干渉で、除外11の円筒面とBSpline遷移面（肩、x≈±16.78〜17.27）
+の境目に出る。メッシュの三角形近似で肩の位置が理想円筒からわずかにずれ、fuse時にその境目がAcquiredSelfIntersection
+になると読んでいる（推定。位置の一致は実測、原因の機序は未検証）。「警告が1件でもあればValueError」の判定は
+変えていないため、hangerはこの変更だけでは合格しない（このタスクのスコープ外）。
+
+保持ボディが除外に全部覆われて `P_i - 除外` が空になる場合、fuse前にその保持を除外する
+(`_boolean` の `allow_empty` 分岐。エラー・警告なしで0ソリッドを返すcutを「寄与ゼロ」として扱う。
+旧経路ではこの場合エラーにならなかったため、この分岐が無いと退行する)。
+
+`tests/test_finalization.py` 8件（保持が除外に全部覆われるケースの回帰テストを含む）、
+全体テスト1378 passed / 2 skipped。
 
 以下は2026-09-14までの仕様。現在は `--check-constraints` を指定した調査時だけ適用する。
 
