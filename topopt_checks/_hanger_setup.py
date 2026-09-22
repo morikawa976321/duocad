@@ -30,10 +30,10 @@ def free_gb():
     return status.ullAvailPhys / 1e9
 
 
-def _setup(spacing_request):
+def _setup(spacing_request, model_name=MODEL_NAME):
     """`(space, conditions, min_width)`。探索に渡す目標は実際の目標 2.0 のまま(係数 1.0)。"""
     session = Session(None, 0.2, models_dir=MODELS_DIR)
-    session.open_document(MODEL_NAME)
+    session.open_document(model_name)
     bundle = optimize_run.build_conditions(session.document)
     limits = optimize_run.resolution_limits(session.document)
     spacing = optimize_run._snap_to_grid(limits['bbox_min'], limits['bbox_max'],

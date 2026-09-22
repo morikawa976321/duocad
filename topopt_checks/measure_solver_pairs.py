@@ -18,6 +18,7 @@
 import argparse
 import dataclasses
 import gc
+import hashlib
 import inspect
 import json
 import math
@@ -40,7 +41,7 @@ import _bootstrap  # noqa: F401
 import numpy as np
 import psutil
 import scipy.sparse.linalg as spla
-from _hanger_setup import PENAL, _setup, free_gb, model_for
+from _hanger_setup import MODELS_DIR, PENAL, _setup, free_gb, model_for
 from measure_inner_target_synthetic import SHAPE as SYNTHETIC_SHAPE
 from measure_inner_target_synthetic import SUBJECTS as SYNTHETIC_SUBJECTS
 from measure_inner_target_synthetic import build_conditions as synthetic_build_conditions
@@ -66,13 +67,36 @@ class Subject:
     extra: dict
 
 
+DEFAULT_HANGER_MODEL = 'hanger_bar_attachment.json'
+HANGER_MODEL_STEM = 'hanger_bar_attachment'
+
+
+def _model_tag(model_name):
+    if model_name == DEFAULT_HANGER_MODEL:
+        return ''
+    remainder = model_name.removesuffix('.json')
+    if remainder.startswith(HANGER_MODEL_STEM):
+        remainder = remainder[len(HANGER_MODEL_STEM):]
+    return remainder.lstrip('_')
+
+
+def _hanger_label(spacing, model_name):
+    if model_name == DEFAULT_HANGER_MODEL:
+        return f'hanger-e{spacing:g}'
+    tag = _model_tag(model_name)
+    return f'hanger{tag}-e{spacing:g}'
+
+
 def _build_hanger(args):
-    space, conditions, min_width = _setup(args.spacing)
+    space, conditions, min_width = _setup(args.spacing, model_name=args.model)
     conditions = dataclasses.replace(conditions, target_safety_factor=float(args.target))
-    return Subject(label=f'hanger-e{args.spacing:g}', mask=space.mask, conditions=conditions,
+    model_path = Path(MODELS_DIR) / args.model
+    model_sha1 = hashlib.sha1(model_path.read_bytes()).hexdigest()
+    return Subject(label=_hanger_label(args.spacing, args.model), mask=space.mask, conditions=conditions,
                    spacing=float(space.grid.spacing), origin=np.asarray(space.grid.origin, dtype=float),
                    extra=dict(spacing_requested=args.spacing, actual_spacing_mm=float(space.grid.spacing),
-                              product_min_width_cells=int(min_width['cells'])))
+                              product_min_width_cells=int(min_width['cells']), model_file=args.model,
+                              model_sha1=model_sha1))
 
 
 def _build_synthetic(name):
@@ -478,6 +502,7 @@ def self_check(args):
     """包まない探索と包んだ探索を同じ評価数で回し、cg の反復数の列・採用形状が一致すること、対が測れて解が一致することを確かめる。"""
     cap = 30
     args.subject, args.spacing, args.target, args.cells = 'hanger', 4.8, 2.0, 2
+    args.model = DEFAULT_HANGER_MODEL
     # 4.8mm の太い形(目標 4.8 の探索が止まる 10万自由度前後)は spsolve が 8 分待っても終わらなかった(2026-09-22)ので、小さい形だけ対にする。
     args.pair_limit = 50_000
     subject = build_subject(args)
@@ -854,6 +879,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--subject', default='hanger', choices=sorted(SUBJECTS))
     parser.add_argument('--spacing', type=float, help='要素サイズの要求値[mm](hanger。製品と同じ丸めを通す)')
+    parser.add_argument('--model', default=DEFAULT_HANGER_MODEL,
+                        help='models/ 内のファイル名(hanger)')
     parser.add_argument('--target', type=float, default=4.8, help='探索に渡す目標そのもの(製品の既定は 2.0 × 係数 2.4 = 4.8)')
     parser.add_argument('--cells', type=int, default=2, help='最小幅のセル数 m')
     parser.add_argument('--max-evals', type=int, default=300)
