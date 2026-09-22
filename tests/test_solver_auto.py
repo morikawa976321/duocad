@@ -75,7 +75,8 @@ def test_a_failed_auto_solve_is_retried_with_the_solver_it_did_not_use(monkeypat
 
 
 def test_the_solver_chosen_before_a_failing_solve_survives_in_the_report_and_steers_the_retry(monkeypatch):
-    """落ちたら、解く前に記録した解法が失敗の報告に残らず、再試行が `auto` から見た固定の側(direct)へ行っている。"""
+    """落ちたら、解く前に記録した解法が失敗の報告に残っていない、または再試行が「使った解法の反対側」ではなく
+    方針 `auto` から見た固定の側(direct)へ行っている。"""
     shape = (4, 2, 2)
     conditions = bar_conditions(shape=shape, solver='auto')
     full = np.ones(shape, bool)
