@@ -72,7 +72,8 @@
     conditions: OptimizeConditionsReport | null
     resolution: OptimizeResolutionPayload | null
     stepIndex: number
-    /** 最小幅の入力値[mm]。`null` = 空欄(制約なし)。正の値そのもの(下限割れの判定はここではしない)。 */
+    /** 最小幅の入力値[mm]。`null` = 空欄(サーバーの既定 = 要素サイズの2倍と1mmの大きい方を使う)。
+     *  正の値そのもの(下限割れの判定はここではしない)。 */
     minWidthMm: number | null
     running: boolean
     cancelling: boolean
@@ -171,7 +172,7 @@
         type="number"
         min="0"
         step="any"
-        placeholder="指定なし"
+        placeholder="既定"
         list="optimize-min-width-list"
         class:invalid={minWidthInvalid}
         value={minWidthMm ?? ''}
@@ -182,6 +183,9 @@
         }}
       />
     </label>
+    <p id="optimize-min-width-default-hint" class="hint dim">
+      空欄なら既定(要素サイズの2倍と1mmの大きい方)を使う
+    </p>
     <datalist id="optimize-min-width-list">
       {#each step?.min_width_steps_mm ?? [] as value, index}
         <option {value} label="m={index + 2}"></option>

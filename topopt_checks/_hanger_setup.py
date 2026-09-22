@@ -45,6 +45,8 @@ def _setup(spacing_request, model_name=MODEL_NAME):
     options = optimize_run.OptimizeOptions(target_safety_factor=2.0, search_target_factor=1.0)
     conditions = optimize_run._build_search_conditions(session.document, space, bundle, options,
                                                        table=table, mapping=mapping)
+    # 情報用: `conditions` 自体はこの m を知らない(呼び出し元が `find_best_feasible` へ
+    # `min_width_cells` を別に渡す)。この既定値は「製品の未指定実行が使う m」(2026-09-22)の記録。
     min_width = optimize_run._resolve_min_width(spacing, None)
     return space, conditions, min_width
 

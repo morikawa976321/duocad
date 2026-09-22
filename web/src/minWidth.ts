@@ -52,7 +52,8 @@ export function shownCeilingMm(step: OptimizeResolutionStep): string {
   return roundTo(step.min_width_ceiling_mm, digitsFor(step.min_width_floor_mm), 'down')
 }
 
-/** 入力値(`null` は指定なし)の判定。指定なしは常に有効(制約なし)。 */
+/** 入力値(`null` は指定なし)の判定。指定なしはサーバーが既定(要素サイズの2倍と1mmの大きい方)を
+ *  使うので、クライアントの下限・上限チェックの対象外として常に有効を返す。 */
 export function judgeMinWidth(valueMm: number | null, step: OptimizeResolutionStep | null): MinWidthVerdict {
   if (valueMm === null || step === null) return { kind: 'none' }
   if (valueMm < step.min_width_floor_mm) return { kind: 'below' }

@@ -289,6 +289,40 @@ def test_run_optimization_passes_a_valid_min_width_mm_through_to_the_session(ses
     assert seen["min_width_mm"] == 25.5
 
 
+def test_a_missing_min_width_mm_passes_none_through_to_the_session(session: Session, monkeypatch) -> None:
+    """`min_width_mm` を省いたメッセージは、`net/ws.py` が捨てずに `None` のまま
+    `Session.run_optimization` へ届ける(キー自体を渡さないのと同じ)。既定 `max(2 × spacing, 1.0mm)`
+    への解決は `optimize_run._resolve_min_width` 自身の仕事(`test_optimize_backend.py` で固定)。"""
+    _setup_four_conditions(session)
+    seen: dict = {}
+    monkeypatch.setattr(session, "run_optimization", lambda **kwargs: seen.update(kwargs) or {"state": "done"})
+    _run_to_completion(session, {"cmd": "run_optimization"})
+    assert seen.get("min_width_mm") is None
+
+
+def test_a_missing_min_width_mm_still_reaches_run_at_the_default_cells(session: Session, monkeypatch) -> None:
+    """`min_width_mm` を渡さない実行が、`Session.run_optimization` → `optimize_run.run()` を経て
+    既定の m(≥2)で探索へ届くこと(落ちたら、既定が入口検査だけに留まり、探索は制約なしのまま走る)。"""
+    from duocad.topopt import binary_search
+
+    _setup_four_conditions(session)
+    seen: dict = {}
+
+    def fake_find(design_space_mask, conditions, **kwargs):
+        seen.update(kwargs)
+        return binary_search.SearchResult(
+            status="no_feasible_found", termination="evaluation_limit", best_feasible=None,
+            history=[], evaluations=1, conditions_identifier="test",
+        )
+
+    monkeypatch.setattr(binary_search, "find_best_feasible", fake_find)
+    # 既定(いちばん粗い)解像度はこの題材では面の対応が縮んで別の理由で断られる
+    # (`_verify_face_mapping`。min_width とは無関係)。他の ws テストと同じ段を明示する。
+    spacing = optimize_run.resolution_limits(session.document)["steps"][1]["element_size_mm"]
+    _run_to_completion(session, {"cmd": "run_optimization", "element_size_mm": spacing})
+    assert seen.get("min_width_cells", 1) >= 2
+
+
 def test_a_successful_run_is_saved_to_disk_even_with_no_screen_watching(
     session: Session, monkeypatch, tmp_path
 ) -> None:

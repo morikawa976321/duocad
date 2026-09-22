@@ -367,15 +367,39 @@ def test_element_size_outside_the_bounds_is_refused() -> None:
 
 def test_min_width_outside_the_bounds_is_refused() -> None:
     assert optimize_run._resolve_min_width(2.0, None) == {
-        "requested_mm": None, "spacing_mm": 2.0, "cells": 1, "guaranteed_mm": 2.0}
+        "requested_mm": 4.0, "spacing_mm": 2.0, "cells": 2, "guaranteed_mm": 4.0, "source": "default"}
     assert optimize_run._resolve_min_width(2.0, 4.0) == {
-        "requested_mm": 4.0, "spacing_mm": 2.0, "cells": 2, "guaranteed_mm": 4.0}
+        "requested_mm": 4.0, "spacing_mm": 2.0, "cells": 2, "guaranteed_mm": 4.0, "source": "requested"}
     with pytest.raises(optimize_run.OptimizeInputError, match="下限"):
         optimize_run._resolve_min_width(2.0, 3.9)
     with pytest.raises(optimize_run.OptimizeInputError, match="有限の正"):
         optimize_run._resolve_min_width(2.0, 0.0)
     with pytest.raises(optimize_run.OptimizeInputError, match="有限の正"):
         optimize_run._resolve_min_width(2.0, float("nan"))
+
+
+def test_min_width_none_resolves_to_max_of_twice_spacing_and_1mm() -> None:
+    """既定は `max(2 × spacing, 1.0mm)`。下限(2×spacing)そのものなので、1.0mm が効くのは
+    spacing < 0.5mm のときだけ(spacing 0.4mm → 1.0mm・m=3・保証1.2mm。spacing 0.5mm → 2×spacingのまま・m=2)。"""
+    default_2_4 = optimize_run._resolve_min_width(2.4, None)
+    assert default_2_4["source"] == "default" and default_2_4["requested_mm"] == pytest.approx(4.8)
+    assert default_2_4["cells"] == 2 and default_2_4["guaranteed_mm"] == pytest.approx(4.8)
+
+    default_thin = optimize_run._resolve_min_width(0.4, None)
+    assert default_thin["requested_mm"] == pytest.approx(1.0)
+    assert default_thin["cells"] == 3 and default_thin["guaranteed_mm"] == pytest.approx(1.2)
+
+    boundary = optimize_run._resolve_min_width(0.5, None)
+    assert boundary["requested_mm"] == pytest.approx(1.0) and boundary["cells"] == 2
+
+
+def test_min_width_default_above_the_grid_blames_the_element_size_not_the_input() -> None:
+    """既定が上限(設計空間の最短の辺)を超えたら、利用者は最小幅を入れていないので
+    「最小幅を下げよ」ではなく「要素サイズを下げよ」と言う。明示の値はいままでどおり。"""
+    with pytest.raises(optimize_run.OptimizeInputError, match="要素サイズを下げる"):
+        optimize_run._resolve_min_width(2.4, None, max_cells=1)
+    with pytest.raises(optimize_run.OptimizeInputError, match="最小幅を下げる"):
+        optimize_run._resolve_min_width(2.4, 5000.0, max_cells=40)
 
 
 def test_min_width_cells_rounds_up_at_the_ceiling_boundary() -> None:
@@ -1335,10 +1359,11 @@ def test_the_search_conditions_carry_the_keep_cells_and_the_space_keeps_the_excl
     assert not space.obstacle.flags.writeable
 
 
-def test_the_result_reports_the_keep_cells_without_room_and_only_when_min_width_is_on(
+def test_the_result_reports_the_keep_cells_without_room_and_only_when_the_count_is_nonzero(
     session: Session, monkeypatch
 ) -> None:
-    """`min_width_keep_without_room` は戻り値に常にあり、最小幅なしなら全て 0・警告なし。あれば警告に数が出る。"""
+    """`min_width_keep_without_room` は戻り値に常にあり、`min-width-keep-without-room` の
+    トレース記録も件数に関わらず毎回残る。警告は対象セルが1個以上あるときだけ数が出る。"""
     from duocad.topopt import binary_search, trace
 
     _setup_four_conditions(session)
@@ -1353,17 +1378,18 @@ def test_the_result_reports_the_keep_cells_without_room_and_only_when_min_width_
     real_snapshot = trace.snapshot
     monkeypatch.setattr(trace, "snapshot", lambda name, **values: (snapshots.append((name, values)),
                                                                    real_snapshot(name, **values))[1])
+    monkeypatch.setattr(binary_search, "keep_cells_without_room",
+                        lambda *args, **kwargs: dict(cells=0, around_exclude=0, around_outside=0))
     spacing = optimize_run.resolution_limits(session.document)["steps"][1]["element_size_mm"]
     plain = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=spacing))
+    assert plain["min_width"]["source"] == "default"
     assert plain["min_width_keep_without_room"] == dict(cells=0, around_exclude=0, around_outside=0)
     assert "保持ソリッドのセル" not in plain["warning"]
-    assert "min-width-keep-without-room" not in [name for name, _ in snapshots]
+    assert ("min-width-keep-without-room", dict(cells=0, around_exclude=0, around_outside=0)) in snapshots
 
     seen: dict = {}
-    real = binary_search.keep_cells_without_room
 
     def spy(design_space, keep, m, obstacle=None):
-        seen["row"] = real(design_space, keep, m, obstacle)
         seen["args"] = (m, keep.shape == design_space.shape, obstacle is not None)
         return dict(cells=4, around_exclude=9, around_outside=0)
 
@@ -1500,32 +1526,11 @@ def test_a_full_material_shortfall_names_the_search_target_and_the_factor_not_a_
     assert "安全率 3.1 が目標 4.8 に届かない" in optimize_run._search_failure_warning(failed)
 
 
-def test_the_min_width_1_warning_rides_on_a_search_that_ran_and_only_while_the_factor_is_applied(
+def test_a_finished_run_with_the_default_min_width_and_factor_carries_no_min_width_warning(
     session: Session, monkeypatch
 ) -> None:
-    """落ちたら、最小幅なし(m=1)で係数 2.4 の根拠が成り立たないことが黙って通る。m≥2・係数 1 では出さない。"""
-    from duocad.topopt import binary_search
-
-    _setup_four_conditions(session)
-    monkeypatch.setattr(binary_search, "find_best_feasible", lambda mask, conditions, **kwargs: binary_search.SearchResult(
-        status="no_feasible_found", termination="evaluation_limit", best_feasible=None,
-        history=[], evaluations=1, conditions_identifier="test"))
-    spacing = optimize_run.resolution_limits(session.document)["steps"][1]["element_size_mm"]
-
-    def warning(**options) -> str:
-        return optimize_run.run(
-            session.document, optimize_run.OptimizeOptions(element_size_mm=spacing, **options))["warning"]
-
-    m1 = warning()
-    assert "最小幅の指定が無いので、探索時の目標に掛けた係数 2.4 の根拠が成り立たない" in m1 and "最小幅を指定すること" in m1
-    assert "最小幅の指定が無い" not in warning(min_width_mm=2.5 * spacing)
-    assert "最小幅の指定が無い" not in warning(search_target_factor=1.0)
-
-
-def test_a_finished_run_without_min_width_carries_the_factor_warning_and_a_pinned_factor_stays_silent(
-    session: Session, monkeypatch
-) -> None:
-    """落ちたら、`state == "done"` の結果(利用者が一番読む)から m=1 の警告が落ちる。"""
+    """既定の最小幅(m≥2)では係数2.4の根拠(どの部材も2セル以上の厚み)が常に成り立つので、
+    `state == "done"` の結果に最小幅がらみの警告は付かない。"""
     import numpy as np
 
     from duocad.topopt import binary_search
@@ -1543,8 +1548,52 @@ def test_a_finished_run_without_min_width_carries_the_factor_warning_and_a_pinne
             history=[], evaluations=3, conditions_identifier="test")
 
     monkeypatch.setattr(binary_search, "find_best_feasible", fake_find)
+    monkeypatch.setattr(binary_search, "keep_cells_without_room",
+                        lambda *args, **kwargs: dict(cells=0, around_exclude=0, around_outside=0))
     done = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
-    assert done["state"] == "done" and "最小幅の指定が無いので" in done["warning"]
+    assert done["state"] == "done" and done["warning"] is None
+    assert done["min_width"]["source"] == "default" and done["min_width"]["cells"] >= 2
     pinned = optimize_run.run(
         session.document, optimize_run.OptimizeOptions(element_size_mm=8.0, search_target_factor=1.0))
     assert pinned["state"] == "done" and pinned["warning"] is None
+
+
+def test_the_result_and_resolved_conditions_trace_carry_the_same_min_width_source(
+    session: Session, monkeypatch
+) -> None:
+    """`min_width["source"]` は既定なら `"default"`・明示すれば `"requested"`。結果 dict と
+    `resolved-conditions` トレースに同じ辞書が乗る(落ちたら、画面が既定を採用したと言えない)。"""
+    import numpy as np
+
+    from duocad.topopt import binary_search, trace
+
+    _setup_four_conditions(session)
+
+    def fake_find(design_space_mask, conditions, **kwargs):
+        mask = np.asarray(design_space_mask, dtype=bool)
+        report = dict(material_sha256="f" * 64,
+                      volumes=dict(material_mm3=float(mask.sum()) * conditions.grid.element_volume),
+                      checks=dict(safety=dict(safety_factor=9.9)))
+        best = binary_search.FeasibleModel(mask=mask, before_mask=mask, report=report, trial_index=0)
+        return binary_search.SearchResult(
+            status="feasible", termination="converged", best_feasible=best,
+            history=[], evaluations=3, conditions_identifier="test")
+
+    monkeypatch.setattr(binary_search, "find_best_feasible", fake_find)
+    snapshots: list = []
+    real_snapshot = trace.snapshot
+    monkeypatch.setattr(trace, "snapshot", lambda name, **values: (snapshots.append((name, values)),
+                                                                   real_snapshot(name, **values))[1])
+
+    spacing = optimize_run.resolution_limits(session.document)["steps"][1]["element_size_mm"]
+    default_run = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=spacing))
+    assert default_run["min_width"]["source"] == "default"
+    resolved = next(values for name, values in snapshots if name == "resolved-conditions")
+    assert resolved["min_width"] == default_run["min_width"]
+
+    snapshots.clear()
+    explicit_run = optimize_run.run(
+        session.document, optimize_run.OptimizeOptions(element_size_mm=spacing, min_width_mm=2.5 * spacing))
+    assert explicit_run["min_width"]["source"] == "requested"
+    resolved = next(values for name, values in snapshots if name == "resolved-conditions")
+    assert resolved["min_width"] == explicit_run["min_width"]

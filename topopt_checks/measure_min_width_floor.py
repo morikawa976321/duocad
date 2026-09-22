@@ -4,7 +4,7 @@
 
 hanger・要素サイズ要求(既定 2.4mm。実 spacing 2.387506mm)・目標(既定2.0)。最小幅は mm の固定値で渡さず、解決した実 spacing の
 `--cells` 倍(段の値。ガードは `値 < 2×spacing` だけを断る)を渡し、`m == --cells` になったことを確かめてから測る。
-`--cells 1` は最小幅の規則なし(`min_width_mm=None`)。**判定はしない**(採用した形と数字を書き出すだけ)。`trace.DEFAULT_ROOT` を一時フォルダへ向け、
+**`--cells 1` は測れない**(結果は `error` 入りのJSONで、クラッシュはしない)。**判定はしない**(採用した形と数字を書き出すだけ)。`trace.DEFAULT_ROOT` を一時フォルダへ向け、
 `output/optimization_runs` に何も残さない。STLは既定で `output/min_width/`(git 管理外)。
 採用マスクの npz は `refine_adopted_mask.py` の入力になる。
 """

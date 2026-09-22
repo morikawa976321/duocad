@@ -452,6 +452,18 @@ export type Applied =
       sketch_ids: string[]
     })
   /**
+   * 領域のオフセット複製(`offset_sketch_regions`)。**常に複製を作る**ので `created` は
+   * 必ず中身を持つ。**ソリッドは追従しない**ので `changed_bodies` は無い
+   * (`mirror_sketch_entities` と同じ)。正の `distance` は膨張(角は丸くなる)、負は収縮
+   * (角は丸めずそのまま縮む)。
+   */
+  | (AppliedVerbBase & {
+      verb: 'offset_sketch_regions'
+      distance: number
+      created: string[]
+      sketch_ids: string[]
+    })
+  /**
    * ボディの鏡映複製(`mirror_body`)。**常に複製を作る**(move_bodyと違い、動かす経路は
    * 無い)。元は動かないので `changed_bodies` は複製で増えたボディだけ。
    *
@@ -822,8 +834,16 @@ export interface OptimizeResultPayload {
   /** 探索の終了理由(`converged` / `evaluation_limit` / `cancelled` / ...)。 */
   termination: string | null
   element_size_mm: number
-  /** 最小幅の解決結果(`optimize_run._resolve_min_width`)。`requested_mm` が `null` なら未指定(制約なし)。 */
-  min_width: { requested_mm: number | null; spacing_mm: number; cells: number; guaranteed_mm: number }
+  /** 最小幅の解決結果(`optimize_run._resolve_min_width`)。未指定なら既定
+   *  `max(要素サイズの2倍, 1mm)`(2026-09-22本人決定)を採用し、`source` が `'default'` になる
+   *  (`requested_mm` は既定のときも実際に使った値で、`null` にはならない)。明示すれば `'requested'`。 */
+  min_width: {
+    requested_mm: number
+    spacing_mm: number
+    cells: number
+    guaranteed_mm: number
+    source: 'default' | 'requested'
+  }
   design_elements: number
   seconds: number
   empty_condition_faces?: Array<Record<string, unknown>>
@@ -835,7 +855,7 @@ export interface OptimizeResultPayload {
 /** 実行の摘み。**省いたものはコアの既定**(既定＝いちばん粗くて安い設定)。 */
 export interface OptimizeRunOptions {
   elementSizeMm?: number | null
-  /** 最小幅[mm]。`null` または省略 = 制約なし。 */
+  /** 最小幅[mm]。`null` または省略 = 既定(要素サイズの2倍と1mmの大きい方)をサーバーが使う。 */
   minWidthMm?: number | null
   /**
    * 開発用の可視化を頼む(`'space'` / `'anchors'` / `'rho'`)。**既定は空**で、

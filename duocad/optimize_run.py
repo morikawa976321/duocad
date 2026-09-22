@@ -61,8 +61,8 @@ DEFAULT_TARGET_SAFETY_FACTOR = 2.0
 
 #: 探索に渡す目標安全率 = 利用者の目標 × この係数(m に依らず1つ)。探索の格子(k=1)は、細い部材の
 #: 曲げ・ねじりを要素中心の応力から見落として安全率を過大に出す。2.4 は最小幅 m≥2 セルの直線部材で
-#: その過大評価が取る上限(m=2 の曲げ 2.36)の切り上げ。m=1 には上限が無い(`_search_target_warning`)。
-#: 根拠と実測・限界は docs/TOPOPT_TARGET_FACTOR.md。
+#: その過大評価が取る上限(m=2 の曲げ 2.36)の切り上げ。m=1 には上限が無いが、`_resolve_min_width` の
+#: 既定(2026-09-22決定)により製品の実行は m=1 に到達しない。根拠と実測・限界は docs/TOPOPT_TARGET_FACTOR.md。
 SEARCH_TARGET_FACTOR = 2.4
 
 #: **デバッグ表示(`?debug=space` / `?voxel=1`)で1回に配るボクセルの上限。**
@@ -126,7 +126,8 @@ class OptimizeOptions:
     search_target_factor: float = SEARCH_TARGET_FACTOR
     #: 要素サイズ[mm]。省くと上限側(既定)。
     element_size_mm: Optional[float] = None
-    #: 最小幅[mm]。省くと制約なし(m=1)。下限は要素サイズの2倍(`_resolve_min_width`)。
+    #: 最小幅[mm]。省くと既定 `max(2 × 実spacing, 1.0mm)` を使う(2026-09-22本人決定)。
+    #: 下限は要素サイズの2倍(`_resolve_min_width`)。
     min_width_mm: Optional[float] = None
     #: 形状探索の評価予算(`binary_search.find_best_feasible` の
     #: `max_evaluations`。段階3・段階4を通した1本の予算)。省くとそちらの既定(1000)。
@@ -879,7 +880,8 @@ def _run(
          "unrepresented_regions": [診断, ...],     # 事後検出(下記)
          "boundary_mapping": {...} | None,        # 確定表の検証(`anchor.condition_mapping`)
          "resolution": resolution_limits() の戻り, "element_size_mm": float,
-         "min_width": {"requested_mm": float|None, "spacing_mm": float, "cells": int, "guaranteed_mm": float},
+         "min_width": {"requested_mm": float, "spacing_mm": float, "cells": int, "guaranteed_mm": float,
+                       "source": "default" | "requested"},
          "min_width_keep_without_room": {"cells": int, "around_exclude": int, "around_outside": int},
          "grid": {"origin","spacing","shape"}, "design_elements": int,
          "safety_factor": float|None, "target_safety_factor": float,
@@ -896,7 +898,8 @@ def _run(
 
     `min_width_keep_without_room` は、最小幅の規則の対象外にした保持ソリッドのうち、設計空間のどこにも
     m 立方が入らず保証が効かないセルの数(`binary_search.keep_cells_without_room`)。0 でなければ `warning` に出る。
-    最小幅が無効(m=1)なら全て 0。
+    既定でも m≥2 の制約が掛かる(`_resolve_min_width`)ので、影響が無ければ 0 になるだけで、
+    「最小幅が無効だから 0」という状態はもう無い。
 
     後半の `state`(`no_feasible_found` / `input_contradiction` / `resolution_insufficient` /
     `boundary_mapping_failed`)は `binary_search.SearchResult.status` を**そのまま**渡したもの
@@ -1121,7 +1124,6 @@ def _run(
         # 追加しない」—— best_feasible が見つかっていても保存しない(トレースには残した)。
         raise OptimizeCancelled("形状探索を中断した")
 
-    factor_warning = _search_target_warning(min_width, factor)
     if search_result.status != 'feasible':
         # 段階4の契約「SearchResult.status が 'feasible' 以外なら、この値をそのまま
         # UI/ログへ渡せばよい」——ここではそれに日本語の一言を添えるだけ。
@@ -1131,7 +1133,7 @@ def _run(
             body_id=None,
             name=None,
             warning=_join_warnings(
-                _search_failure_warning(search_result, min_width, factor), keep_room_warning, factor_warning),
+                _search_failure_warning(search_result, min_width, factor), keep_room_warning),
             empty_condition_faces=[],
             unrepresented_regions=unrepresented,
             boundary_mapping=mapping,
@@ -1191,7 +1193,7 @@ def _run(
         body_id=body_id,
         name=name,
         warning=_join_warnings(
-            format_region_warning(unrepresented) if unrepresented else "", keep_room_warning, factor_warning) or None,
+            format_region_warning(unrepresented) if unrepresented else "", keep_room_warning) or None,
         empty_condition_faces=[],
         unrepresented_regions=unrepresented,
         boundary_mapping=mapping,
@@ -1320,16 +1322,20 @@ def min_width_steps_mm(spacing: float, max_cells: int) -> List[float]:
 def _resolve_min_width(spacing: float, requested: Optional[float], max_cells: Optional[int] = None) -> dict:
     """最小幅[mm]の入口検査(`_resolve_element_size` と同じ形)。
 
-    `None` → 制約なし(m=1)。有限の正の値でなければ `OptimizeInputError`。
-    `2 × spacing` を下回れば同じ例外(8等分した評価格子で4セル分が見える最小の幅、案B)。
+    `None` → 既定 `max(2 × spacing, 1.0mm)`(2026-09-22本人決定)。下限(`2 × spacing`。8等分した評価格子で
+    4セル分が見える最小の幅、案B)そのものなので、1.0mm が効くのは `spacing < 0.5mm` のときだけ。
+    有限の正の値でなければ `OptimizeInputError`。`2 × spacing` を下回る明示の値も同じ例外。
     `max_cells`(格子の最短の辺のセル数)を渡すと、`max_cells × spacing` を超える値も断る
     (m 立方が格子に1つも入らず、空マスク以外は必ず違反になる不可能な値。巨大な値は導出の後に時間とメモリを使い切る)。
-    通れば `m = ceil(値 / spacing)` を、実際に保証される幅 `m × spacing` と一緒に返す。
+    通れば `m = ceil(値 / spacing)` を、実際に保証される幅 `m × spacing` と、既定を採用したか(`source`)と
+    一緒に返す。**`requested_mm` は既定のときも実際に使った値**(`None` のままだと呼び出し側が
+    「未指定=制約なし」と読みうる。`web/src/session.ts` の `min_width` 型コメント)。
     """
     spacing = float(spacing)
     if requested is None:
-        return {"requested_mm": None, "spacing_mm": spacing, "cells": 1, "guaranteed_mm": spacing}
-    value = float(requested)
+        value, source = max(2.0 * spacing, 1.0), "default"
+    else:
+        value, source = float(requested), "requested"
     if not math.isfinite(value) or value <= 0.0:
         raise OptimizeInputError(f"min_width_mm は有限の正の値であること(いま {requested!r})")
     floor = 2.0 * spacing
@@ -1344,13 +1350,22 @@ def _resolve_min_width(spacing: float, requested: Optional[float], max_cells: Op
         # 上限そのものの値は `value / spacing` の丸めで max_cells を超えうるので、mm で比べて m を丸める
         # (画面が出す上限と同じ比較にするため)。
         if value > ceiling:
+            if source == "default":
+                # 利用者は最小幅を入れていないので「最小幅を下げよ」ではなく「要素サイズを下げよ」と言う。
+                # 既定値の内訳(2×spacing か 1.0mm か)は spacing に依るので、ここでは断定しない。
+                raise OptimizeInputError(
+                    f"最小幅の指定が無いので既定 {value:.4g} mm(max(要素サイズ {spacing:.4g} mm の2倍, "
+                    f"1.0 mm))を使ったが、設計空間の最短の辺({max_cells}セル × 要素サイズ = {ceiling:.4g} mm)"
+                    "がそれより細い。要素サイズを下げること"
+                )
             raise OptimizeInputError(
                 f"最小幅 {value:.4g} mm は上限 {ceiling:.4g} mm(格子の最短の辺 {max_cells} セル × 要素サイズ "
                 f"{spacing:.4g} mm)より太い。この幅の立方は格子に入らないので、どの形も満たせない。"
                 "最小幅を下げるか、要素サイズを上げること"
             )
         cells = min(cells, int(max_cells))
-    return {"requested_mm": value, "spacing_mm": spacing, "cells": cells, "guaranteed_mm": cells * spacing}
+    return {"requested_mm": value, "spacing_mm": spacing, "cells": cells, "guaranteed_mm": cells * spacing,
+            "source": source}
 
 
 def _map_boundary_conditions(space, bundle: ConditionBundle) -> tuple:
@@ -1445,14 +1460,6 @@ def _search_target_safety_factor(opts: OptimizeOptions) -> float:
     if math.isfinite(target) and not math.isfinite(searched):
         raise OptimizeInputError(f"目標安全率 {target:.4g} × search_target_factor {factor:.4g} が有限の数にならない")
     return searched
-
-
-def _search_target_warning(min_width: dict, factor: float) -> str:
-    """係数の根拠は「どの部材も2セル以上の厚み」なので、最小幅の指定が無い(m=1)実行では成り立たないと言う。"""
-    if factor <= 1.0 or int(min_width["cells"]) > 1:
-        return ""
-    return (f"最小幅の指定が無いので、探索時の目標に掛けた係数 {factor:.3g} の根拠が成り立たない"
-            "(1セル厚の部材の曲げは要素中心から見えず、過大評価に上限が無い)。最小幅を指定すること")
 
 
 def _join_warnings(*parts: str) -> str:

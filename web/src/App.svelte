@@ -669,12 +669,18 @@
         `探索の格子での値。探索時の目標 ${short(result.search_target_safety_factor)} = ` +
         `目標 ${short(result.target_safety_factor)} × 係数 ${short(result.search_target_factor)}`
       const material = result.material_mm3 === null ? '—' : Math.round(result.material_mm3).toLocaleString()
+      // `result.min_width.source` で既定/明示を見分ける(`duocad/optimize_run._resolve_min_width`)。
+      const minWidth =
+        `最小幅 ${short(result.min_width.guaranteed_mm)}mm(` +
+        (result.min_width.source === 'default' ? '既定: 要素サイズの2倍・1mmの大きい方' : '指定') +
+        ')'
       optimizeNotice = {
         kind: result.warning ? 'bad' : 'info',
         lines: [
           `結果を「${result.name}」として足した(三角形 ${result.triangle_count} 枚 ・ ` +
             `安全率 ${safety}(${searched}) ・ 体積 ${material}mm^3 ・ 評価 ${result.evaluations}回 ・ ` +
             `終了理由 ${result.termination ?? '—'} ・ ${Math.round(result.seconds)}秒)`,
+          minWidth,
           '元のボディは1つも消えていない。結果は表示とSTL書き出しだけができる(編集はできない)',
           ...(result.warning ? [result.warning] : []),
         ],
