@@ -59,7 +59,7 @@ class SearchConditions:
     allowable_mpa: float = DEFAULT_ALLOWABLE_MPA
     youngs_modulus_mpa: float = DEFAULT_YOUNGS_MODULUS_MPA
     percentile: Optional[float] = None
-    solver: str = 'cg'
+    solver: str = 'auto'  # 'auto' は fem.choose_solver が候補ごとに cg / direct を選ぶ(6条件の報告に使った解法が出る)
     bbox_cache: Any = None
     mapping: Any = None
     #: 保持・除外CADと格子セルの重なり体積の前計算(`acceptance.RegionOverlaps`)。探索1回のあいだ格子と
@@ -377,9 +377,11 @@ def _evaluate_survivor(survivor: np.ndarray, before: np.ndarray, conditions: Sea
 
     report, trial = evaluate(conditions.solver, operation, parent)
     if report['status'] == 'unknown' and report['checks']['safety'].get('reason') == 'evaluation_error':
-        alternate = 'direct' if conditions.solver != 'direct' else 'cg'
+        # 反対側は方針(`'auto'`)ではなく実際に使った解法から見て決める(`auto` が選んだ解法をもう一度選ばない)。
+        used = report['checks']['safety'].get('solver') or conditions.solver
+        alternate = 'direct' if used != 'direct' else 'cg'
         report, trial = evaluate(alternate, f'solver_retry:{alternate}', trial.index)
-        trial.note = f'同じマスク・条件で解法を{conditions.solver}→{alternate}に変えて再試行'
+        trial.note = f'同じマスク・条件で解法を{used}→{alternate}に変えて再試行'
     return report, trial
 
 

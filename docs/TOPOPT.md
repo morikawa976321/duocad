@@ -726,7 +726,14 @@ M·c/I を比べた。測る断面は**根元そのものではなく梁せい1�
 
 ## 線形解法は Jacobi 前処理 CG(幾何マルチグリッド前処理は 2026-09-21 に削除)
 
-`fem.Model.solve` の解法は `solver="cg"`(Jacobi 前処理 CG。既定)と `"direct"` の2つ。
+`fem.Model.solve` の解法は `solver="cg"`(Jacobi 前処理 CG。既定)・`"direct"`(`spsolve`)・`"auto"` の3つ。
+**`"auto"` は K_ff を縮めてから、自由な自由度 ≤ 50,000 かつ nnz(K_ff)/自由度 ≤ 60 なら `direct`、それ以外は `cg` を選ぶ**
+(`fem.choose_solver`・`AUTO_DIRECT_MAX_DOFS`・`AUTO_DIRECT_MAX_NNZ_PER_DOF`。2026-09-22 本人決定。根拠は docs/TOPOPT_SPEED.md
+「cg と直接解法の使い分け条件の材料」の表E′: hanger と合成の塊の 315 対で、この範囲では direct が cg より遅い評価が 0、
+探索の終盤の細い形では direct が cg の 0.07〜0.20 倍の秒。2つ目の条件は、同じ自由度でも桁違いに重い太い形を外すためにある)。
+**探索と6条件の既定はこの `auto`**(`binary_search.SearchConditions.solver`・`acceptance.inspect`)。実際に使った解法は
+6条件の報告の `safety.solver`(方針は `safety.solver_policy`)と、実行記録の `linear-solve`(`solver` / `solver_policy` / `free_dofs` / `nnz`)に出る。
+`stress.solve_displacement` の既定は `cg` のまま(後処理・測定スクリプトの経路)。
 
 **幾何マルチグリッド前処理(`solver="mg"`、2026-09-04 導入)は 2026-09-21 に削除した(本人判断)。**
 SIMP の設計反復(連続密度・全要素で組む K)では CG 反復/solve が 0.07〜0.20倍、秒/設計反復が 0.53〜0.95倍

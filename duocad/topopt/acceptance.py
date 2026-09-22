@@ -364,6 +364,7 @@ def condition_check(material, table, fixed_faces, load_faces, forces):
 
 def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_modulus_mpa,
                  percentile, solver, fields=None):
+    solve_info = {}
     try:
         live = active_nodes(material).ravel()
         active_dofs = np.repeat(live, 3)
@@ -381,7 +382,7 @@ def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_m
         model = fem.Model(*material.shape, fixed_dofs=fixed, load=load,
                           extra_fixed_dofs=np.flatnonzero(~active_dofs), active_mask=material)
         density = material.astype(float)
-        displacement = stress.solve_displacement(model, density, solver=solver)
+        displacement = stress.solve_displacement(model, density, solver=solver, info=solve_info)
         residual = model.stiffness_apply(density, 3.0, displacement) - model.f
         relative = float(np.linalg.norm(residual[model.free]) / np.linalg.norm(model.f[model.free]))
         if not np.isfinite(displacement).all() or not math.isfinite(relative) or relative > fem.SOLVE_RESIDUAL_TOL:
@@ -402,10 +403,12 @@ def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_m
                     allowable_mpa=allowable_mpa, youngs_modulus_mpa=youngs_modulus_mpa,
                     raw_max_mpa=report.raw_max_mpa, percentile=percentile,
                     max_displacement_mm=report.max_displacement_mm, relative_residual=relative,
-                    residual_tolerance=fem.SOLVE_RESIDUAL_TOL, solver=solver,
+                    residual_tolerance=fem.SOLVE_RESIDUAL_TOL, solver=solve_info.get('solver', solver),
+                    solver_policy=solver,
                     evaluated_material_cells=int(material.sum()), density_rule='binary, active elements only')
     except Exception as error:
-        return dict(status='unknown', reason='evaluation_error', error=f'{type(error).__name__}: {error}')
+        return dict(status='unknown', reason='evaluation_error', error=f'{type(error).__name__}: {error}',
+                    solver=solve_info.get('solver'), solver_policy=solver)
 
 
 # ---------------------------------------------------------------------------
@@ -457,7 +460,7 @@ def search_diagnostics(history=None, *, converged=None, max_evaluations=None, ta
 def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
             preserves, excludes, target_safety_factor, allowable_mpa=DEFAULT_ALLOWABLE_MPA,
             youngs_modulus_mpa=DEFAULT_YOUNGS_MODULUS_MPA, percentile=stress.DEFAULT_PERCENTILE,
-            solver='cg', history=None, converged=None, max_evaluations=None,
+            solver='auto', history=None, converged=None, max_evaluations=None,
             bbox_cache=None, region_overlaps=None, fields=None):
     """6条件の入口。**`material`/`before` は格子と同じ形のboolマスク(材料=True)を直接
     受ける**(計画書§5: 「新規の製品APIはboolマスクを受ける」)。過去記録の密度場からの
@@ -467,6 +470,8 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
     ブーリアンを取る旧経路。報告の形と数値許容差は同じ)。
     `fields` に dict を渡すと、安全率を計算できたときだけ要素ごとの `u_eᵀ k₀ u_e`(格子と同じ形、
     材料外は 0)を `fields['element_energy']` に入れる。報告(JSON)には入れない(段階4の削る順位用)。
+    `solver` は解法の方針(`'auto'` は `fem.choose_solver` が候補ごとに `cg` / `direct` を選ぶ)。報告の
+    `safety.solver` は実際に使った解法、`safety.solver_policy` は渡した方針。
     """
     for name, value in [('spacing', grid.spacing), ('target', target_safety_factor),
                         ('allowable_mpa', allowable_mpa), ('youngs_modulus_mpa', youngs_modulus_mpa)]:

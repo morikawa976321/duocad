@@ -19,6 +19,22 @@ import scipy.sparse.linalg as spla
 # **拘束不足の系を黙って通さないための関門**であって、精度の要求ではない。
 SOLVE_RESIDUAL_TOL = 1e-6
 
+# `solver="auto"` が直接解法(`spsolve`)を選ぶ上限。実測(docs/TOPOPT_SPEED.md「表E′」、hanger と合成の塊の 315 対):
+# 自由な自由度 5 万以下かつ nnz(K_ff)/自由度 60 以下では、探索が出す細い形(nnz/自由度 53〜63)で direct が cg の
+# 0.07〜0.20 倍の秒で、この範囲で direct のほうが遅かった評価は 0。2つ目の条件は太い形を外すためにある ——
+# 同じ自由度でも太い形(nnz/自由度 63〜74)の直接解法は桁違いに重い(自由度 8.7 万の塊で 156 秒・常駐 +5.6GB)。
+AUTO_DIRECT_MAX_DOFS = 50_000
+AUTO_DIRECT_MAX_NNZ_PER_DOF = 60.0
+
+
+def choose_solver(solver: str, free_dofs: int, nnz: int) -> str:
+    """`solver` が `"auto"` なら、縮めた K_ff の大きさ(自由な自由度)と密さ(nnz)から `"direct"` / `"cg"` を選ぶ。
+    それ以外の名前はそのまま返す。"""
+    if solver != "auto":
+        return solver
+    fits = 0 < free_dofs <= AUTO_DIRECT_MAX_DOFS and nnz <= AUTO_DIRECT_MAX_NNZ_PER_DOF * free_dofs
+    return "direct" if fits else "cg"
+
 
 class SolveResidualError(ValueError):
     """`K U = F` が残差検算(`SOLVE_RESIDUAL_TOL`)を通らなかった。
@@ -424,6 +440,8 @@ class Model:
         (実測は docs/TOPOPT.md「CADの面 → 格子の節点」の「SIMP側に足した口」節)。
         剛体運動の完全な検出はしない —— 残差が通らなければ落とす、それだけでよい。
 
+        `solver="auto"` は K_ff を縮めてから `choose_solver` で `direct` / `cg` を選ぶ(選んだ解法は
+        `PreparedSystem.solver` と `linear-solve` の記録に出る)。
         `threads` は CG 反復が使うスレッド数(**行列ベクトル積だけを並列化**。docs/TOPOPT.md「CPU並列化」参照)。
         **既定は `None` → `PARALLEL_THREADS`**(呼び出し時に読む。`PARALLEL_THREADS = 1` を
         代入すれば全経路が直列に戻る)。
@@ -480,7 +498,7 @@ class Model:
 
         **持っているものは大きい**(K_ff)。使い終わったら名前を手放すこと。
         """
-        if solver not in ("cg", "direct"):
+        if solver not in ("cg", "direct", "auto"):
             raise ValueError(f"未知の解法: {solver!r}")
         threads = PARALLEL_THREADS if threads is None else max(1, int(threads))
         stats = _SOLVE_STATS
@@ -489,6 +507,7 @@ class Model:
         t1 = time.perf_counter()
         kf = kg[self.free, :][:, self.free].tocsc()
         t2 = time.perf_counter()
+        policy, solver = solver, choose_solver(solver, kf.shape[0], kf.nnz)
         precond = None
         a_op: sp.spmatrix | spla.LinearOperator = kf
         if solver != "direct":
@@ -505,7 +524,7 @@ class Model:
             # **setup も「解く時間」に数える。** 右辺ごとの CG は `PreparedSystem.solve` が
             # 足すので、右辺1本のときの `solve_seconds` は割る前と同じ意味(setup + CG)になる。
             stats["solve_seconds"] += time.perf_counter() - t2
-        return PreparedSystem(self, kf, a_op, precond, solver)
+        return PreparedSystem(self, kf, a_op, precond, solver, policy)
 
     def stiffness_apply(self, rho: np.ndarray, penal: float, vec: np.ndarray) -> np.ndarray:
         """K @ vec を、K を組み立てずに要素ループで計算する (ndof,)。
@@ -582,12 +601,24 @@ class PreparedSystem:
         a_op: "sp.spmatrix | spla.LinearOperator",
         precond: "spla.LinearOperator | None",
         solver: str,
+        policy: str | None = None,
     ) -> None:
         self.model = model
         self.kf = kf
         self._a_op = a_op
         self._precond = precond
         self._solver = solver
+        self._policy = solver if policy is None else policy
+
+    @property
+    def solver(self) -> str:
+        """実際に使う解法(`"cg"` / `"direct"`。`"auto"` は `Model.prepare` が解決済み)。"""
+        return self._solver
+
+    @property
+    def policy(self) -> str:
+        """`Model.prepare` に渡された解法の名前(`"auto"` を含む)。"""
+        return self._policy
 
     def solve(self, rhs: np.ndarray, *, cg_rtol: float = 1e-9) -> np.ndarray:
         """`rhs` (nrhs, ndof) を解いて (nrhs, ndof) を返す。拘束DOFの成分はきっかり 0.0。
@@ -636,7 +667,8 @@ class PreparedSystem:
                 stats["cg_iterations_each"].append(iterations)
                 stats["fallbacks"] += int(fell_back)
                 stats["direct_solves"] += int(self._solver == "direct")
-            trace.snapshot('linear-solve', solver=self._solver, cg_rtol=cg_rtol,
+            trace.snapshot('linear-solve', solver=self._solver, solver_policy=self._policy,
+                           free_dofs=int(model.free.size), nnz=int(self.kf.nnz), cg_rtol=cg_rtol,
                            cg_iterations=iterations, fallback=fell_back,
                            rhs_index=index, seconds=time.perf_counter()-t_start)
             model._verify_solution(self.kf, ff, u_free)

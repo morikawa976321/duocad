@@ -89,7 +89,7 @@ def _hanger_label(spacing, model_name):
 
 def _build_hanger(args):
     space, conditions, min_width = _setup(args.spacing, model_name=args.model)
-    conditions = dataclasses.replace(conditions, target_safety_factor=float(args.target))
+    conditions = dataclasses.replace(conditions, target_safety_factor=float(args.target), solver=args.solver)
     model_path = Path(MODELS_DIR) / args.model
     model_sha1 = hashlib.sha1(model_path.read_bytes()).hexdigest()
     return Subject(label=_hanger_label(args.spacing, args.model), mask=space.mask, conditions=conditions,
@@ -105,7 +105,7 @@ def _build_synthetic(name):
     (`build_conditions` は渡された値をそのまま `target_safety_factor` に入れるので二重に掛からない)。"""
     def build(args):
         spec = SYNTHETIC_SUBJECTS[name]
-        conditions = synthetic_build_conditions(name, 1, args.target)
+        conditions = dataclasses.replace(synthetic_build_conditions(name, 1, args.target), solver=args.solver)
         mask = np.ones(SYNTHETIC_SHAPE, dtype=bool)
         return Subject(label=f'synthetic-{name}', mask=mask, conditions=conditions, spacing=1.0,
                        origin=np.zeros(3), extra=dict(subject_name=spec['name'], force_n=list(spec['force'])))
@@ -425,8 +425,10 @@ def _header(args, subject, free_at_start):
 
 def run(args, subject, out_path, save_dir, cap=None):
     """探索を1本回して out_path へ書く。`cap` は段階4の評価数の上限を差し替える(`--self-check` 用)。"""
-    if subject.conditions.solver != 'cg':
-        raise SystemExit(f"conditions.solver が {subject.conditions.solver!r}(cg を想定)")
+    if subject.conditions.solver not in ('cg', 'auto'):
+        raise SystemExit(f"conditions.solver が {subject.conditions.solver!r}(cg か auto を想定)")
+    if subject.conditions.solver == 'auto' and args.pair_limit != 0:
+        raise SystemExit('--solver auto では対を測らない(直接解法へ回った評価は cg で解いていない)。--pair-limit 0 にする')
     if Path(fem.__file__).resolve().parents[2] != _bootstrap._REPO_ROOT:
         raise SystemExit(f'読み込んだ duocad が {fem.__file__}(このスクリプトの隣のソースではない。editable install の罠)')
     header = _header(args, subject, free_gb())
@@ -503,6 +505,7 @@ def self_check(args):
     cap = 30
     args.subject, args.spacing, args.target, args.cells = 'hanger', 4.8, 2.0, 2
     args.model = DEFAULT_HANGER_MODEL
+    args.solver = 'cg'
     # 4.8mm の太い形(目標 4.8 の探索が止まる 10万自由度前後)は spsolve が 8 分待っても終わらなかった(2026-09-22)ので、小さい形だけ対にする。
     args.pair_limit = 50_000
     subject = build_subject(args)
@@ -888,6 +891,9 @@ def main():
     parser.add_argument('--min-free-gb', type=float, default=12.0, help='起動時の空きメモリの下限')
     parser.add_argument('--pair-limit', type=int, default=130_000, help='対を測る自由な自由度の上限')
     parser.add_argument('--pair-min-free-gb', type=float, default=8.0, help='対を測る直前の空きメモリの下限')
+    parser.add_argument('--solver', default='cg', choices=('cg', 'auto'),
+                        help='探索の解法。cg = 全評価を cg で解き、対を測る。auto = 製品の既定(fem.choose_solver が cg / direct を選ぶ)で回し、'
+                             '評価ごとに使った解法と秒を記録する(対は測らない。--pair-limit 0 が要る)')
     parser.add_argument('--out', type=Path)
     parser.add_argument('--save-accepted', type=Path, default=None)
     parser.add_argument('--head', default='unknown', help='測定に使ったコードの HEAD のハッシュ(記録用。実行したソースは検証しない)')

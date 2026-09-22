@@ -222,9 +222,14 @@ def solve_displacement(
     *,
     solver: str = "cg",
     cg_rtol: float = 1e-9,
+    info: dict | None = None,
 ) -> np.ndarray:
-    """最終 ρ でもう一度 K U = F を解く。"""
-    return model.solve(np.asarray(rho, dtype=float), penal, solver=solver, cg_rtol=cg_rtol)
+    """最終 ρ でもう一度 K U = F を解く。`info` に dict を渡すと、実際に使った解法(`"auto"` の解決後)を
+    `info['solver']` に入れる —— 解く前に入れるので、解けずに落ちたときも呼び出し側に残る。"""
+    prepared = model.prepare(np.asarray(rho, dtype=float), penal, solver=solver)
+    if info is not None:
+        info["solver"] = prepared.solver
+    return prepared.solve(model.f[None, :], cg_rtol=cg_rtol)[0]
 
 
 @dataclass(frozen=True)
