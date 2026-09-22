@@ -76,8 +76,9 @@ def _build_hanger(args):
 
 
 def _build_synthetic(name):
-    """合成の塊(0538 の S1/S2/S3。80x20x20 = 全設計空間で約10.7万自由度)。探索は全材料から始める(`k=1` の格子・確定表)。
-    目標と m は `--target`・`--cells` でこのタスクが指定する(`build_conditions` は渡された値をそのまま `target_safety_factor` に入れるので二重に掛からない)。"""
+    """合成の塊(`measure_inner_target_synthetic.SUBJECTS` の S1/S2/S3。80x20x20 = 全設計空間で約10.7万自由度)。
+    探索は全材料(`k=1` の格子・確定表)から始める。目標と m は `--target`・`--cells` でこの呼び出し元が指定する
+    (`build_conditions` は渡された値をそのまま `target_safety_factor` に入れるので二重に掛からない)。"""
     def build(args):
         spec = SYNTHETIC_SUBJECTS[name]
         conditions = synthetic_build_conditions(name, 1, args.target)
@@ -89,7 +90,7 @@ def _build_synthetic(name):
 
 SUBJECTS = {'hanger': _build_hanger, 'S1': _build_synthetic('S1'), 'S2': _build_synthetic('S2'),
             'S3': _build_synthetic('S3')}
-#: `--spacing` は hanger の要素サイズの要求値だけに要る(合成題材は要素サイズ 1 の無次元格子。2307 の契約 ①)。
+#: `--spacing` は hanger の要素サイズの要求値だけに要る(合成題材は要素サイズ 1 の無次元格子)。
 SUBJECTS_REQUIRE_SPACING = {'hanger'}
 
 
@@ -680,7 +681,7 @@ def table_pairs(pairs):
     return '\n'.join(lines)
 
 
-#: 規則1・3・4の自由度の閾値 T(指示どおりの6値)。規則2(N)・3(r)・4(φ)・5(B)の第二引数は、
+#: 規則1・3・4の自由度の閾値 T(固定の6値: 2・3・5・7・9・11万)。規則2(N)・3(r)・4(φ)・5(B)の第二引数は、
 #: この母集団で実際に観測された値そのものを候補にする(隣り合う観測値の間はルーティングの分かれ目にならないので、これで総当たりになる)。
 DOF_T_GRID = ((20_000, '2万'), (30_000, '3万'), (50_000, '5万'), (70_000, '7万'), (90_000, '9万'), (110_000, '11万'))
 RULE_NAMES = {1: '規則1: 自由な自由度 ≤ T', 2: '規則2: kf.nnz ≤ N', 3: '規則3: 自由度 ≤ T かつ nnz/自由度 ≤ r',
@@ -716,11 +717,13 @@ def _rule_candidates(rule_id, population):
         return [(f'nnz≤{n:,}', (lambda n=n: lambda r: r['nnz'] <= n)(), _no_cost)
                 for n in _sorted_unique(r['nnz'] for r in population)]
     if rule_id == 3:
-        r_values = _sorted_unique(round(r['nnz_per_dof'], 6) for r in population)
+        # 候補は観測値そのもの(丸めない)。丸めた値を閾値にすると、丸めが切り捨て方向に働いた行は
+        # 自分自身の観測値から作った閾値 `<=` を満たせなくなり、総当たりが観測値を網羅しなくなる。
+        r_values = _sorted_unique(r['nnz_per_dof'] for r in population)
         return [(f'自由度≤{name} かつ nnz/自由度≤{rv:.2f}', (lambda t=t, rv=rv: lambda r: r['free_dofs'] <= t and r['nnz_per_dof'] <= rv)(),
                  _no_cost) for t, name in DOF_T_GRID for rv in r_values]
     if rule_id == 4:
-        phi_values = _sorted_unique(round(r['fill_ratio'], 6) for r in population)
+        phi_values = _sorted_unique(r['fill_ratio'] for r in population)  # 同上(丸めない)
         return [(f'自由度≤{name} かつ 充填率≤{p:.3f}', (lambda t=t, p=p: lambda r: r['free_dofs'] <= t and r['fill_ratio'] <= p)(),
                  _no_cost) for t, name in DOF_T_GRID for p in phi_values]
     if rule_id == 5:
