@@ -378,7 +378,8 @@ def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_m
             for rotation in range(3):
                 rigid[i, 3 + rotation] = np.cross(np.eye(3)[rotation], position)[axis]
         if np.linalg.matrix_rank(rigid) < 6:
-            return dict(status='fail', reason='rigid_body_modes', message='剛体運動を拘束できない')
+            return dict(status='fail', reason='rigid_body_modes', message='剛体運動を拘束できない',
+                        solver=None, solver_policy=solver)
         model = fem.Model(*material.shape, fixed_dofs=fixed, load=load,
                           extra_fixed_dofs=np.flatnonzero(~active_dofs), active_mask=material)
         density = material.astype(float)

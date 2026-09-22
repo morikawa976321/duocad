@@ -72,3 +72,21 @@ def test_a_failed_auto_solve_is_retried_with_the_solver_it_did_not_use(monkeypat
     first = result.history[0]
     retried = [t for t in result.history if t.operation.startswith('solver_retry:')]
     assert retried and retried[0].operation == 'solver_retry:cg' and retried[0].mask_hash == first.mask_hash
+
+
+def test_the_solver_chosen_before_a_failing_solve_survives_in_the_report_and_steers_the_retry(monkeypatch):
+    """落ちたら、解く前に記録した解法が失敗の報告に残らず、再試行が `auto` から見た固定の側(direct)へ行っている。"""
+    shape = (4, 2, 2)
+    conditions = bar_conditions(shape=shape, solver='auto')
+    full = np.ones(shape, bool)
+
+    def solve_fails(self, rhs, **kwargs):
+        raise fem.SolveResidualError('injected failure for the test')
+
+    monkeypatch.setattr(fem.PreparedSystem, 'solve', solve_fails)
+    safety = acceptance.inspect(full, full, conditions.grid, **conditions.inspect_kwargs())['checks']['safety']
+    assert safety['status'] == 'unknown' and safety['solver_policy'] == 'auto' and safety['solver'] in ('cg', 'direct')
+    result = bs.find_initial_feasible(full, conditions, max_evaluations=5)
+    retried = [t for t in result.history if t.operation.startswith('solver_retry:')]
+    other = 'cg' if safety['solver'] == 'direct' else 'direct'
+    assert retried and retried[0].operation == f'solver_retry:{other}'
