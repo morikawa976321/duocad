@@ -398,7 +398,7 @@ def _progress(record):
     pair = next((p for p in pairs if p.get('status') == 'measured'), None)
     first = record['solves'][0] if record['solves'] else {}
     text = f"eval {record['n']:4d} s{record['stage']} {record['operation']:>10} {record['outcome']:>17} " \
-           f"cells {record['cells']} dofs {first.get('free_dofs', '-')} cg {first.get('iterations', '-')}it " \
+           f"cells {record['cells']} dofs {first.get('free_dofs', '-')} {first.get('solver', '-')} {first.get('iterations', '-')}it " \
            f"{first.get('seconds', 0.0):.1f}s"
     if pair is not None:
         text += f" direct {pair['seconds']:.1f}s +{pair['rss_increase_gb']:.2f}GB"
