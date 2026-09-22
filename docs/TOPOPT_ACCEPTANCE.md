@@ -138,6 +138,39 @@ mesh-world snapshotが無いため `replay_finalization.py` を finalize-input �
 `inspect_solid` の前段ガードに阻まれることがある）ため、実データ（上記）での直接確認に留めた。
 `tests/test_finalization.py` 含む全体テスト1382 passed / 2 skipped。
 
+## 2026-09-22 `_boolean` の警告ゲートを、警告だけならinspect_solidで裏を取ってから判断するよう変更（hanger実測）
+
+前節で判明した実際のブロック箇所（`finalize.py` の `_boolean` が `BOPAlgo_BOP` 自身の
+`HasWarnings()` を見て、警告が1件でもあれば `inspect_solid` を呼ぶ前に即 `ValueError` にしていた）
+を修正した。`has_errors` は従来どおり即座に不合格。`has_warnings`（エラーなし）のときだけ、
+その場で `inspect_solid`（面-面の実交差だけを数える、前節の修正済みロジック）に通し、
+`watertight` かつ `single_solid` なら採用、そうでなければ不合格にする。数値のしきい値は
+導入していない。cursor(composer-2.5)によるQAレビューで必須修正の指摘なし
+（`tests/test_finalization.py` 8件パスを含む）。
+
+**実際にBOP自身が出した警告の中身**（`preserve-fuse` を実データで再実行し、
+`BOPAlgo_BOP.GetReport().GetAlerts()` で直接確認。推測ではなく実測）:
+
+| 警告 | 含まれる形状 | 大きさ |
+|---|---|---|
+| `AcquiredSelfIntersection` | 面0・辺2・頂点4 | 0.03mm四方 |
+| `FaceBuilderUnusedEdges` | 面1・辺3・頂点6 | モデルのほぼ全幅（1件目の巻き添えと見ている。未検証） |
+
+`topopt_checks/replay_finalization.py output/optimization_runs/20260921T185659-b6799e00457d` の
+再生で、**`finalize()` 本体は成功する**ようになった
+（`final-solid-checks`: `{'watertight': True, 'single_solid': True, 'solids': 1, 'self_intersections': 0, 'valid': True, 'closed': True}`）。
+狙った修正は効いている。
+
+**ただし `replay_finalization.py` が `finalize()` の直後に呼ぶ `solid_mesh()`（最終形状をSTL用に
+三角形分割する。`optimize_run.py` の製品経路でも `finalize()` の直後に同じ関数を呼ぶため、
+本番経路にも共通する）が新たに失敗する**: `ValueError('最終CADに三角形分割できない面がある')`。
+`kernel.tessellate` で失敗する面を実測したところ、面番号74485（全112,467面中1面）、
+平面（`GeomAbs_Plane`）、面積0.008235mm²、bbox `[-2.3331, -4.592, -61.873, -1.8035, -4.5, -61.1474]`
+（約0.53×0.09×0.73mmの極小平面）で `BRepCheck_Analyzer` 上は有効（`valid=True`）。
+`preserve-3`（bbox `[-9.3086, -5.0, -69.3086, 9.3086, 0.0, -50.6914]`）の範囲内にあり、
+これまで追ってきた `preserve-0`（保持7）・`exclude-0`（除外11）のくびれとは**別の場所**。
+本タスクのスコープ・原因とも未確認・未着手。
+
 以下は2026-09-14までの仕様。現在は `--check-constraints` を指定した調査時だけ適用する。
 
 | 条件 | 判定方法 |

@@ -33,10 +33,10 @@ def _boolean(shape, tools, operation, name, progress, allow_empty=False):
         progress(name)
     result, diagnostics = boolean(shape, tools, operation)
     trace.snapshot(name+'-diagnostics', **diagnostics)
-    if diagnostics['has_errors'] or diagnostics['has_warnings']:
+    if diagnostics['has_errors']:
         if not result.IsNull():
             _save_shape(name+'-rejected', result)
-        raise ValueError(f'{name}: ブーリアン演算にエラーまたは警告がある: {diagnostics}')
+        raise ValueError(f'{name}: ブーリアン演算にエラーがある: {diagnostics}')
     if not is_valid(result):
         raise ValueError(f'{name}: 演算結果が不正')
     if not kernel.is_solid(result):
@@ -46,6 +46,16 @@ def _boolean(shape, tools, operation, name, progress, allow_empty=False):
         if allow_empty:
             return None
         raise ValueError(f'{name}: 演算結果が空または不正')
+    if diagnostics['has_warnings']:
+        # OCCTの警告(has_warnings)は、頂点・辺どうしが許容差内で接しているだけでも無条件に出る
+        # (面が実際に交差・重なっているとは限らない。docs/TOPOPT_ACCEPTANCE.md「除外cutの警告の原因」
+        # 「まとめてcut→保持だけ引き算→fuseへの置き換え」)。警告だけでは棄却せず、inspect_solidの
+        # 面-面判定(面を含まない接触は数えない)で実際に壊れているか確かめてから決める。
+        checks = inspect_solid(result)
+        trace.snapshot(name+'-warning-checks', **checks)
+        if not checks['watertight'] or not checks['single_solid']:
+            _save_shape(name+'-rejected', result)
+            raise ValueError(f'{name}: 警告があり、検査でも水密・単一ソリッドの条件に不合格: {diagnostics}, {checks}')
     _save_shape(name, result)
     return result
 
