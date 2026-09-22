@@ -41,6 +41,9 @@ import numpy as np
 import psutil
 import scipy.sparse.linalg as spla
 from _hanger_setup import PENAL, _setup, free_gb, model_for
+from measure_inner_target_synthetic import SHAPE as SYNTHETIC_SHAPE
+from measure_inner_target_synthetic import SUBJECTS as SYNTHETIC_SUBJECTS
+from measure_inner_target_synthetic import build_conditions as synthetic_build_conditions
 from scipy.sparse.csgraph import reverse_cuthill_mckee
 
 from duocad.topopt import binary_search, fem, trace
@@ -72,7 +75,22 @@ def _build_hanger(args):
                               product_min_width_cells=int(min_width['cells'])))
 
 
-SUBJECTS = {'hanger': _build_hanger}
+def _build_synthetic(name):
+    """合成の塊(0538 の S1/S2/S3。80x20x20 = 全設計空間で約10.7万自由度)。探索は全材料から始める(`k=1` の格子・確定表)。
+    目標と m は `--target`・`--cells` でこのタスクが指定する(`build_conditions` は渡された値をそのまま `target_safety_factor` に入れるので二重に掛からない)。"""
+    def build(args):
+        spec = SYNTHETIC_SUBJECTS[name]
+        conditions = synthetic_build_conditions(name, 1, args.target)
+        mask = np.ones(SYNTHETIC_SHAPE, dtype=bool)
+        return Subject(label=f'synthetic-{name}', mask=mask, conditions=conditions, spacing=1.0,
+                       origin=np.zeros(3), extra=dict(subject_name=spec['name'], force_n=list(spec['force'])))
+    return build
+
+
+SUBJECTS = {'hanger': _build_hanger, 'S1': _build_synthetic('S1'), 'S2': _build_synthetic('S2'),
+            'S3': _build_synthetic('S3')}
+#: `--spacing` は hanger の要素サイズの要求値だけに要る(合成題材は要素サイズ 1 の無次元格子。2307 の契約 ①)。
+SUBJECTS_REQUIRE_SPACING = {'hanger'}
 
 
 def build_subject(args):
@@ -662,6 +680,129 @@ def table_pairs(pairs):
     return '\n'.join(lines)
 
 
+#: 規則1・3・4の自由度の閾値 T(指示どおりの6値)。規則2(N)・3(r)・4(φ)・5(B)の第二引数は、
+#: この母集団で実際に観測された値そのものを候補にする(隣り合う観測値の間はルーティングの分かれ目にならないので、これで総当たりになる)。
+DOF_T_GRID = ((20_000, '2万'), (30_000, '3万'), (50_000, '5万'), (70_000, '7万'), (90_000, '9万'), (110_000, '11万'))
+RULE_NAMES = {1: '規則1: 自由な自由度 ≤ T', 2: '規則2: kf.nnz ≤ N', 3: '規則3: 自由度 ≤ T かつ nnz/自由度 ≤ r',
+              4: '規則4: 自由度 ≤ T かつ 外接箱の充填率 ≤ φ', 5: '規則5: RCM の Σ帯幅² ≤ B(RCM の秒を規則の費用に足す)'}
+
+
+def _population(groups):
+    """表E の母集団: 対の実測(`pair.status=='measured'`)がある全評価を、全 jsonl から集める(題材・格子のキー付き)。"""
+    rows = []
+    for key, members in groups.items():
+        for _, _, records in members:
+            rows += [dict(row, group=key) for row in _rows(records) if row['measured']]
+    return rows
+
+
+def _sorted_unique(values):
+    return sorted(set(values))
+
+
+def _no_cost(_rows):
+    return 0.0
+
+
+def _rcm_cost(rows):
+    return sum(r['pair']['rcm']['seconds'] for r in rows)
+
+
+def _rule_candidates(rule_id, population):
+    """(条件の説明, ルーティング述語, 費用関数)の総当たりの列。費用関数は行の部分集合を受けて規則の追加費用(規則5のみ非0)を返す。"""
+    if rule_id == 1:
+        return [(f'自由度≤{name}({t:,})', (lambda t=t: lambda r: r['free_dofs'] <= t)(), _no_cost) for t, name in DOF_T_GRID]
+    if rule_id == 2:
+        return [(f'nnz≤{n:,}', (lambda n=n: lambda r: r['nnz'] <= n)(), _no_cost)
+                for n in _sorted_unique(r['nnz'] for r in population)]
+    if rule_id == 3:
+        r_values = _sorted_unique(round(r['nnz_per_dof'], 6) for r in population)
+        return [(f'自由度≤{name} かつ nnz/自由度≤{rv:.2f}', (lambda t=t, rv=rv: lambda r: r['free_dofs'] <= t and r['nnz_per_dof'] <= rv)(),
+                 _no_cost) for t, name in DOF_T_GRID for rv in r_values]
+    if rule_id == 4:
+        phi_values = _sorted_unique(round(r['fill_ratio'], 6) for r in population)
+        return [(f'自由度≤{name} かつ 充填率≤{p:.3f}', (lambda t=t, p=p: lambda r: r['free_dofs'] <= t and r['fill_ratio'] <= p)(),
+                 _no_cost) for t, name in DOF_T_GRID for p in phi_values]
+    if rule_id == 5:
+        return [(f'Σ帯幅²≤{b:,}', (lambda b=b: lambda r: r['pair']['rcm']['sum_sq_bandwidth'] <= b)(), _rcm_cost)
+                for b in _sorted_unique(r['pair']['rcm']['sum_sq_bandwidth'] for r in population)]
+    raise ValueError(rule_id)
+
+
+def _policy_metrics(rows, predicate, cost_fn):
+    routed = [r for r in rows if predicate(r)]
+    kept = [r for r in rows if not predicate(r)]
+    cg_total = sum(r['seconds'] for r in rows)
+    policy_total = sum(r['pair']['seconds'] for r in routed) + sum(r['seconds'] for r in kept) + cost_fn(rows)
+    slower = [r for r in routed if r['pair']['seconds'] > r['seconds']]
+    worst = max(slower, key=lambda r: r['pair']['seconds'] - r['seconds']) if slower else None
+    missed = [r for r in kept if r['pair']['seconds'] < r['seconds']]
+    return dict(routed=len(routed), cg_total=cg_total, policy_total=policy_total,
+                ratio=(policy_total / cg_total if cg_total > 0 else None), slower_count=len(slower),
+                max_loss=(worst['pair']['seconds'] - worst['seconds']) if worst else 0.0,
+                max_loss_increase=(worst['pair']['rss_increase_gb'] if worst else None), missed_count=len(missed),
+                missed_seconds=sum(r['seconds'] - r['pair']['seconds'] for r in missed),
+                missed_increase_max=max((r['pair']['rss_increase_gb'] for r in missed), default=None))
+
+
+def _select_best(rule_id, population):
+    """`損の最大が1秒以下`の中で秒の合計が最小の組を選ぶ。1つも無ければ損の最大が最小の組で代える(その旨を表に書く)。"""
+    candidates = _rule_candidates(rule_id, population)
+    scored = [(desc, predicate, cost_fn, _policy_metrics(population, predicate, cost_fn)) for desc, predicate, cost_fn in candidates]
+    qualifying = [i for i, (*_a, m) in enumerate(scored) if m['max_loss'] <= 1.0]
+    if qualifying:
+        best_idx = min(qualifying, key=lambda i: scored[i][3]['policy_total'])
+        return scored, best_idx, True
+    best_idx = min(range(len(scored)), key=lambda i: scored[i][3]['max_loss'])
+    return scored, best_idx, False
+
+
+def _rule_rows_markdown(scored, best_idx):
+    lo, hi = max(0, best_idx - 1), min(len(scored), best_idx + 2)
+    lines = ['| | 条件 | 直接解法へ回る評価数 | 秒の合計 | cg合計比 | 損えた評価数 | 損の最大(秒) | そのときの増分(GB) | '
+             '取りこぼした評価数 | 取りこぼした秒 | 取りこぼし増分の最大(GB) |', '|---|---|---|---|---|---|---|---|---|---|---|']
+    for i in range(lo, hi):
+        desc, _predicate, _cost_fn, m = scored[i]
+        marker = '選定' if i == best_idx else ('前' if i < best_idx else '後')
+        ratio = f"{m['ratio'] * 100:.1f}%" if m['ratio'] is not None else '–'
+        lines.append(f"| {marker} | {desc} | {m['routed']} | {m['policy_total']:.1f}s | {ratio} | {m['slower_count']} | "
+                     f"{_fmt(m['max_loss'], '.2f')} | {_fmt(m['max_loss_increase'], '.2f')} | {m['missed_count']} | "
+                     f"{_fmt(m['missed_seconds'], '.1f')} | {_fmt(m['missed_increase_max'], '.2f')} |")
+    return '\n'.join(lines)
+
+
+def _group_breakdown_markdown(population, predicate, cost_fn):
+    by_group = {}
+    for row in population:
+        by_group.setdefault(row['group'], []).append(row)
+    lines = ['| 題材・目標・m・格子 | 対の数 | 直接解法へ回る数 | cgだけの秒 | 規則下の秒 | cg合計比 |', '|---|---|---|---|---|---|']
+    for (label, grid, target, cells), rows in by_group.items():
+        m = _policy_metrics(rows, predicate, cost_fn)
+        ratio = f"{m['ratio'] * 100:.1f}%" if m['ratio'] is not None else '–'
+        lines.append(f"| {label}・目標{target:g}・m={cells}・{list(grid)} | {len(rows)} | {m['routed']} | "
+                     f"{m['cg_total']:.1f}s | {m['policy_total']:.1f}s | {ratio} |")
+    return '\n'.join(lines)
+
+
+def table_e(groups):
+    """表E: 規則1〜5を候補の総当たりに当てた成績表(採用の決定はしない)。"""
+    population = _population(groups)
+    print('### 表E cg と直接解法の使い分け条件の候補ごとの成績表(判断はしない。母集団は対の実測がある全評価)\n')
+    print(f'母集団: {len(population)} 対(対の実測がある評価。無い測定は規則1〜4でも「対の実測がある」母集団には入らない)\n')
+    if not population:
+        print('対が1つも無いので規則を当てられない。\n')
+        return
+    for rule_id in (1, 2, 3, 4, 5):
+        print(f'**{RULE_NAMES[rule_id]}**\n')
+        scored, best_idx, qualifies = _select_best(rule_id, population)
+        if not qualifies:
+            print('損の最大が1秒以下の組は無かった(下は損の最大が最小の組とその前後)。\n')
+        print(_rule_rows_markdown(scored, best_idx) + '\n')
+        _desc, predicate, cost_fn, _m = scored[best_idx]
+        print('選定した組の題材・格子ごとの内訳:\n')
+        print(_group_breakdown_markdown(population, predicate, cost_fn) + '\n')
+
+
 def analyze(paths):
     sys.stdout.reconfigure(encoding='utf-8')
     print('cg と直接解法の対(`--analyze`。判断はしない)\n')
@@ -684,6 +825,7 @@ def analyze(paths):
         members = [m for group in groups.values() for m in group]
         print('## 全部を合わせた表\n')
         analyze_group('全測定', [h for _, h, _ in members], [r for _, _, r in members])
+    table_e(groups)
     return 0
 
 
@@ -732,8 +874,10 @@ def main():
         return shape_quantities(args)
     if args.self_check:
         return self_check(args)
-    if args.spacing is None or args.out is None:
-        parser.error('--spacing と --out が要る(または --analyze・--self-check)')
+    if args.out is None:
+        parser.error('--out が要る(または --analyze・--self-check・--shape-quantities)')
+    if args.subject in SUBJECTS_REQUIRE_SPACING and args.spacing is None:
+        parser.error(f'--subject {args.subject} には --spacing が要る')
     if args.max_evals > MAX_EVALS_LIMIT:
         parser.error(f'--max-evals は {MAX_EVALS_LIMIT} 以下(探索の評価予算は find_best_feasible の既定 1000 で、段階3を含む)')
     if args.out.exists():
