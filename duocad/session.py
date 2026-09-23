@@ -302,6 +302,11 @@ class Session:
 
         呼び出し側は**成功した後にだけ**呼ぶこと — 失敗した verb は操作ログに積まれず
         この関数にも到達しないので、「失敗しても選択は保持される」は自然に満たされる。
+
+        **プレビュー(`preview` → `speculative()`)の中では見かけ上効かない** — ここが呼ばれても
+        `with speculative(doc):` を抜ける時点で選択そのものが巻き戻り対象なので元へ戻る
+        (イベントも `_suppress_events` で配らない)。確定(Enter)した本物の呼び出しだけが
+        実際にリセットする。
         """
         command = catalog.BY_NAME.get(verb)
         if command is not None and command.resets_selection:
@@ -916,10 +921,19 @@ class Session:
         return optimize_run.conditions_report(self.document)
 
     def optimize_resolution(self, rmin_mm: Any = None) -> dict:
-        """要素サイズの上限・下限・既定と、その設定での予想時間。"""
-        return optimize_run.resolution_limits(
-            self.document, rmin_mm=None if rmin_mm is None else float(rmin_mm)
-        )
+        """要素サイズの上限・下限・既定。
+
+        `rmin_mm`(密度フィルタ半径)は**この版では扱えない**(二値探索は
+        密度フィルタを持たない)。届いたら黙って無視せず `OptimizeInputError` にする
+        (`net/ws.py` の `optimize_resolution` コマンドはこれを `ValueError` として拾い、
+        `{"error": ...}` の非トースト表示へ運ぶ——既存の「設定の途中」表示と同じ経路)。
+        """
+        if rmin_mm is not None:
+            raise optimize_run.OptimizeInputError(
+                "rmin_mm(最小部材幅/密度フィルタ半径)はこの版では扱えない。"
+                "二値探索は密度フィルタを持たないので、要素サイズを直接指定すること"
+            )
+        return optimize_run.resolution_limits(self.document)
 
     def cancel_optimization(self) -> dict:
         """走っている最適化に降りるよう伝える(**旗を立てるだけ**)。
@@ -934,15 +948,17 @@ class Session:
     def run_optimization(
         self,
         *,
-        rmin_mm: Any = None,
         target_safety_factor: Any = optimize_run.DEFAULT_TARGET_SAFETY_FACTOR,
         element_size_mm: Any = None,
-        max_iter: Any = None,
+        min_width_mm: Any = None,
         max_evaluations: Any = None,
-        name: Any = None,
         progress: Any = None,
         debug: Any = None,
         debug_kinds: Any = None,
+        rmin_mm: Any = None,
+        max_iter: Any = None,
+        material_min_mm3: Any = None,
+        material_max_mm3: Any = None,
     ) -> dict:
         """形状最適化を端から端まで走らせ、結果をメッシュボディとして足す。
 
@@ -953,17 +969,34 @@ class Session:
         `?voxel=1`)の材料をそのまま `optimize_run.run()` へ渡す口。**頼まなければ費用ゼロ**で、
         結果にも文書にも1ビットも影響しない。
 
+        `rmin_mm` / `max_iter` / `material_min_mm3` / `material_max_mm3` は**旧SIMP方式の
+        引数で、この版では扱えない**(旧引数が外部から届いたら黙って無視せず、
+        不支持と分かるエラーにする」)。キーワードとして受け続けているのは、届いたときに
+        `TypeError`(引数名を知らない)ではなく`OptimizeInputError`(意味を説明した文)で
+        断るため —— 呼び出し側(`net/ws.py`)が転送さえすれば、ここが一箇所で断る。
+
         戻り値は `optimize_run.run()` のものに、成功時だけ `"applied"`(変更イベントの封筒)を
         足したもの。**`state != "done"` のときは文書を1ビットも変えていない**。
         """
+        unsupported = {
+            "rmin_mm": rmin_mm,
+            "max_iter": max_iter,
+            "material_min_mm3": material_min_mm3,
+            "material_max_mm3": material_max_mm3,
+        }
+        given = sorted(key for key, value in unsupported.items() if value is not None)
+        if given:
+            raise optimize_run.OptimizeInputError(
+                f"{', '.join(given)} はこの版では扱えない(二値探索は密度フィルタ・SIMP反復・"
+                "材料量の直接指定を持たない。目標安全率・要素サイズ・評価予算(max_evaluations)"
+                "を使うこと)"
+            )
         self._optimize_cancel.clear()
         options = optimize_run.OptimizeOptions(
-            rmin_mm=None if rmin_mm is None else float(rmin_mm),
             target_safety_factor=float(target_safety_factor),
             element_size_mm=None if element_size_mm is None else float(element_size_mm),
-            max_iter=None if max_iter is None else int(max_iter),
+            min_width_mm=None if min_width_mm is None else float(min_width_mm),
             max_evaluations=None if max_evaluations is None else int(max_evaluations),
-            name=None if name is None else str(name),
         )
         result = optimize_run.run(
             self.document,
@@ -1322,25 +1355,24 @@ class Session:
             "skipped_hidden": list(skipped),
         }
 
-    def export_stl_file(self, path: Any, deviation: Optional[float] = None) -> dict:
-        """STLを書き出す。`deviation` は絶対の線形偏差[mm](省略時はセッションの値)。
+    def export_stl_file(self, path: Any) -> dict:
+        """STLを書き出す。粗さは `io_step.STL_DEVIATION` 固定で、人にもAIにも選ばせない。
 
-        **偏差を指定できることが要件**(§7: 0.2mm→30.7KB / 0.01mm→170.6KB)。
         対象は**いま表示中のBodyだけ**(引数で選べない)。非表示で除外した件数は
-        `skipped_hidden` として必ず応答に載る(0件でも載る)。
+        `skipped_hidden` として必ず応答に載る(0件でも載る)。応答の `deviation` は
+        **書いた粗さの記録**であって入力ではない。
         """
         target = self._resolve(path)
         if not target.parent.exists():
             raise ValueError(f"書き出し先のディレクトリが無い: {target.parent}")
-        used = float(self.deviation if deviation is None else deviation)
         resolved = io_step.export_body_ids(self.document)
         skipped = io_step.export_skipped_hidden(self.document)
-        io_step.export_stl(self.document, target, used)
+        io_step.export_stl(self.document, target)
         return {
             "action": "export_stl",
             "path": str(target),
             "bytes": target.stat().st_size,
-            "deviation": used,
+            "deviation": io_step.STL_DEVIATION,
             "body_ids": list(resolved),
             "skipped_hidden": list(skipped),
         }

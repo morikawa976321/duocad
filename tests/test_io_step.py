@@ -76,7 +76,7 @@ def test_export_from_empty_document_raises_and_writes_no_file(tmp_path):
     assert not step_path.exists()
 
     with pytest.raises(ValueError):
-        export_stl(doc, stl_path, 0.1)
+        export_stl(doc, stl_path)
     assert not stl_path.exists()
 
 
@@ -114,7 +114,7 @@ def test_export_excludes_a_hidden_solid_from_step_and_stl(tmp_path):
     assert math.isclose(query.volume(solids[0].shape), 20.0 * 10.0 * 5.0, rel_tol=1e-6)
 
     stl_path = tmp_path / "visible_only.stl"
-    export_stl(doc, stl_path, 0.1)
+    export_stl(doc, stl_path)
     assert stl_path.exists() and stl_path.stat().st_size > 0
     # STEP/STLは同じ `_bodies_to_export` を通るので、STEP側の面数(6=単一ボックス)が
     # 非表示除外の効果を代表する。STLはファイルが実際に書けたことだけを確認する。
@@ -143,7 +143,7 @@ def test_export_raises_a_dedicated_error_when_all_candidates_are_hidden(tmp_path
     assert not step_path.exists()
 
     with pytest.raises(ValueError, match="all candidate bodies are hidden"):
-        export_stl(doc, stl_path, 0.1)
+        export_stl(doc, stl_path)
     assert not stl_path.exists()
 
     # 「形が無い」既存の文言とは異なるエラーであることも確認する

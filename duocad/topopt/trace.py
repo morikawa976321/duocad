@@ -46,6 +46,14 @@ def _atomic(path, write):
     temporary.replace(path)
 
 
+def _git(*args):
+    # stdin を継承させない: MCP を stdio で受けるサーバは別スレッドが stdin を readline し続けており、
+    # Windows では継承した git がその読みが返るまで(次の1行が届くまで)返らず15秒で時間切れになる。
+    result = subprocess.run(['git',*args], cwd=ROOT, capture_output=True, stdin=subprocess.DEVNULL, timeout=15)
+    return {'returncode':result.returncode,'stdout':result.stdout.decode('utf-8','replace'),
+            'stderr':result.stderr.decode('utf-8','replace')}
+
+
 class Recorder:
     def __init__(self, root=None):
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')
@@ -111,8 +119,7 @@ class Recorder:
             return {'$type':type(value).__name__, **{f.name:self._encode(getattr(value,f.name),seen)
                     for f in fields(value) if f.name != 'cache'}}
         if type(value).__name__ == 'Model' and hasattr(value, 'ndof'):
-            names = ('nelx','nely','nelz','ndof','E','nu','emin','fixed','free','f','active',
-                     '_base_active','_base_fixed','dynamic_active','ke')
+            names = ('nelx','nely','nelz','ndof','E','nu','emin','fixed','free','f','active','ke')
             return {'$type':'FEMModel', **{n:self._encode(getattr(value,n),seen) for n in names}}
         if isinstance(value, BaseException):
             return {'$error':type(value).__name__, 'message':str(value),
@@ -148,10 +155,6 @@ class Recorder:
 
     def provenance(self):
         versions = {d.metadata['Name']:d.version for d in metadata.distributions() if d.metadata['Name']}
-        def git(*args):
-            result = subprocess.run(['git',*args], cwd=ROOT, capture_output=True, timeout=15)
-            return {'returncode':result.returncode,'stdout':result.stdout.decode('utf-8','replace'),
-                    'stderr':result.stderr.decode('utf-8','replace')}
         runtime = {}
         for name, module in list(sys.modules.items()):
             if name.startswith('duocad.') and module is not None:
@@ -161,8 +164,8 @@ class Recorder:
                       loaded_function_hashes=runtime,
                       platform=platform.platform(), cpu_count=os.cpu_count(), packages=versions,
                       threads={k:os.environ[k] for k in ('OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS') if k in os.environ},
-                      git_head=git('rev-parse','HEAD'), git_diff=git('diff','--','duocad','pyproject.toml'),
-                      git_status=git('status','--short')))
+                      git_head=_git('rev-parse','HEAD'), git_diff=_git('diff','--','duocad','pyproject.toml'),
+                      git_status=_git('status','--short')))
         def write_sources(stream):
             with zipfile.ZipFile(stream,'w',compression=zipfile.ZIP_DEFLATED) as archive:
                 for path in sorted((ROOT/'duocad').rglob('*.py')):
@@ -244,19 +247,16 @@ def snapshot(name, **values):
         recorder.snapshot(name,values)
 
 
-def final_mesh(raw, smooth, faces, grid, *, final_vertices=None, final_faces=None):
+def final_mesh(raw, smooth, faces, grid, *, final_vertices, final_faces):
     recorder = current()
     if recorder is None:
         return
     raw = np.asarray(raw)*grid.spacing + np.asarray(grid.origin)
     smooth = np.asarray(smooth)*grid.spacing + np.asarray(grid.origin)
-    if final_vertices is not None:
-        recorder.snapshot('pre-boolean-mesh-world',dict(raw_vertices=raw,vertices=smooth,faces=faces,grid=grid))
-        smooth, faces = np.asarray(final_vertices), np.asarray(final_faces)
-        recorder.snapshot('final-mesh-world',dict(vertices=smooth,faces=faces,grid=grid,
-                                                source='boolean CAD tessellation'))
-    else:
-        recorder.snapshot('final-mesh-world',dict(raw_vertices=raw,vertices=smooth,faces=faces,grid=grid))
+    recorder.snapshot('pre-boolean-mesh-world',dict(raw_vertices=raw,vertices=smooth,faces=faces,grid=grid))
+    smooth, faces = np.asarray(final_vertices), np.asarray(final_faces)
+    recorder.snapshot('final-mesh-world',dict(vertices=smooth,faces=faces,grid=grid,
+                                            source='boolean CAD tessellation'))
     def write(stream):
         stream.write(b'solid optimized\n')
         for triangle in smooth[np.asarray(faces)]:

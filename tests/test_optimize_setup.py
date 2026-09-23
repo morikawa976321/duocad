@@ -68,6 +68,20 @@ def _body_refs(*bodies) -> list:
     return [{"body": body.id, "kind": "body"} for body in bodies]
 
 
+def _preserve(session: Session, *bodies) -> None:
+    """条件面を置く前に、そのボディを保持ソリッドにする。
+
+    **拘束面・荷重面は保持ソリッドの面にしか置けない**(2026-09-18〜)ので、面を指す前に通す。
+    保持は集合代入なので、既に保持のボディも一緒に入れ直す。
+    """
+    kept = list(session.document.optimize.preserve_bodies)
+    refs = [{"body": body_id, "kind": "body"} for body_id in kept]
+    refs += [ref for ref in _body_refs(*bodies) if ref["body"] not in kept]
+    _select(session, refs)
+    session.set_preserve_bodies()
+    session.clear_selection()
+
+
 def _face_refs(body, indices) -> list:
     return [{"body": body.id, "kind": "face", "index": index} for index in indices]
 
@@ -182,6 +196,7 @@ def test_an_empty_selection_clears_the_role(session: Session) -> None:
 def test_assigning_faces_replaces_the_whole_set(session: Session) -> None:
     """面の側も集合代入(拘束・荷重とも)。"""
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1, 2]))
     session.set_fixtures()
     assert _indices(_optimize(session)["fixtures"]) == [1, 2]
@@ -262,6 +277,7 @@ def test_moving_a_body_between_roles_takes_two_steps(session: Session) -> None:
 def test_a_fixed_face_cannot_be_loaded(session: Session) -> None:
     """面の側も先勝ち。**衝突した面を添字で名指しする**。"""
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1, 2]))
     session.set_fixtures()
 
@@ -291,6 +307,7 @@ def test_the_conflict_is_an_invalid_argument_over_mcp(session: Session) -> None:
 def test_a_load_direction_can_be_a_world_vector(session: Session) -> None:
     """**面法線だけでは足りない**(棚受けは世界の -Z へ受ける)。ベクトルは単位化して控える。"""
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1]))
     applied = session.set_loads(250.0, [0.0, 0.0, -4.0])
 
@@ -305,6 +322,7 @@ def test_a_load_direction_can_be_a_world_vector(session: Session) -> None:
 def test_a_load_direction_can_follow_the_face_normal(session: Session) -> None:
     """面法線とその逆向きも取れる(`vector` は持たない)。"""
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1]))
     session.set_loads(10.0, "-normal")
     specs = _optimize(session)["load_specs"]
@@ -328,6 +346,7 @@ def test_a_bad_load_is_refused_without_touching_the_document(
 ) -> None:
     """**不正なhowは文書にもログにも何も残さない。**"""
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1]))
     before = len(session.document.log.entries)
     with pytest.raises(ValueError):
@@ -342,6 +361,7 @@ def test_a_bad_load_is_refused_without_touching_the_document(
 def test_a_face_condition_carries_a_fingerprint(session: Session) -> None:
     """条件には**添字だけでなく重心・法線・面積**が焼き込まれている(操作ログにも載る)。"""
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1]))
     session.set_fixtures()
 
@@ -361,6 +381,7 @@ def test_a_face_that_changed_is_reported_and_not_used(session: Session) -> None:
     (0,1,0)→(0,0,-1) に変わる(=添字が別の面へ移った。これが指紋の本来の狙い)。
     """
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1]))
     session.set_fixtures()
     assert _optimize(session)["stale"] == []
@@ -385,6 +406,7 @@ def test_moving_a_body_does_not_invalidate_its_face_conditions(session: Session)
     `fingerprint_mismatch` のdocstringが正)。
     """
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1]))
     session.set_fixtures()
 
@@ -402,6 +424,7 @@ def test_a_stale_condition_comes_back_when_the_shape_comes_back(session: Session
     配信のときに落としているだけで、削除していないこと(操作ログが唯一の正)。
     """
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1]))
     session.set_fixtures()
 
@@ -551,12 +574,14 @@ def test_clearing_every_role_survives_a_real_save_and_open(tmp_path) -> None:
     _select(made, _face_refs(body, [2]))
     made.set_loads(30.0, "normal")
 
-    # 4つとも空にする(ボディ・拘束は空の選択で確定、荷重は `clear_loads`)
+    # 4つとも空にする(ボディ・拘束は空の選択で確定、荷重は `clear_loads`)。
+    # **条件面を先に外す** —— 条件面は保持ソリッドの面にしか置けないので、条件が残ったまま
+    # 保持を空にはできない(2026-09-18〜)。
     made.clear_selection()
-    made.set_preserve_bodies()
-    made.set_exclude_bodies()
     made.set_fixtures()
     made.clear_loads()
+    made.set_preserve_bodies()
+    made.set_exclude_bodies()
     assert _optimize(made)["fixtures"] == [] and _optimize(made)["load_specs"] == []
 
     made.save_document("cleared.json")
@@ -642,6 +667,7 @@ def test_a_new_verb_after_undo_drops_the_redo_tail(session: Session) -> None:
 def test_undoing_a_load_restores_the_previous_how(session: Session) -> None:
     """荷重は集合だけでなく**面ごとの大きさ・向きも**直前へ戻る。"""
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1]))
     session.set_loads(100.0, [0.0, 0.0, -1.0])
     _select(session, _face_refs(body, [2]))
@@ -661,6 +687,7 @@ def test_the_load_how_survives_hiding_the_body(session: Session) -> None:
     「いま荷重がかかる面」は `loads` の側が持つ。
     """
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1]))
     session.set_loads(400.0, "normal")
     session.set_visible(body.id, False)
@@ -673,6 +700,7 @@ def test_the_load_how_survives_hiding_the_body(session: Session) -> None:
 def test_undoing_the_first_assignment_leaves_no_load(session: Session) -> None:
     """最初の割り当てをundoすると荷重は**無い**(0Nの荷重が残らない)。"""
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1]))
     session.set_loads(100.0, "normal")
     session.undo()
@@ -695,6 +723,7 @@ def test_a_second_load_does_not_overwrite_the_first(session: Session) -> None:
     集合代入に戻すと必ず落ちる検査である。
     """
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1]))
     session.set_loads(50.0, [0.0, 0.0, -1.0])
     _select(session, _face_refs(body, [2]))
@@ -706,6 +735,7 @@ def test_a_second_load_does_not_overwrite_the_first(session: Session) -> None:
 def test_reassigning_a_face_replaces_only_that_face(session: Session) -> None:
     """同じ面をもう一度指すと、**その面だけ**新しい値になる(並びも動かない)。"""
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1]))
     session.set_loads(50.0, [0.0, 0.0, -1.0])
     _select(session, _face_refs(body, [2]))
@@ -731,6 +761,7 @@ def test_setting_a_load_with_no_face_selected_is_refused(session: Session) -> No
 def test_clear_loads_drops_only_the_selected_faces(session: Session) -> None:
     """`clear_loads` は選んだ面だけ外す。空の選択なら全部外す。"""
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1]))
     session.set_loads(50.0, "normal")
     _select(session, _face_refs(body, [2]))
@@ -751,42 +782,11 @@ def test_clearing_a_face_that_has_no_load_is_not_an_error(session: Session) -> N
     ここで例外を出すと、複数選択のうち1枚だけ既に外れていたときに全部落ちる。
     """
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1]))
     session.set_loads(50.0, "normal")
     _select(session, _face_refs(body, [1, 2]))
     session.clear_loads()
-    assert _specs(session) == []
-
-
-def test_an_old_log_with_one_shared_how_still_replays(session: Session) -> None:
-    """**2026-09-06までの操作ログ**(大きさ・向きが引数の直下に1組)が再生できる。
-
-    過去に受け付けたログを、あとから足した型で落として文書が開けなくする、という壊し方を
-    しない。古い形は「全ての面が同じ大きさ・向きを持つ」新しい形の特別な場合である。
-    """
-    from duocad.oplog import Operation
-    from duocad.verbs import optimize_setup
-
-    body = _box(session)
-    faces = [optimize.face_condition(session.document, ref) for ref in _face_refs(body, [1, 2])]
-    old = Operation(
-        seq=1,
-        verb="set_loads",
-        args={
-            "faces": faces,
-            "magnitude": 42.0,
-            "direction": "-normal",
-            "vector": None,
-            "previous_faces": [],
-            "previous_magnitude": 0.0,
-            "previous_direction": "vector",
-            "previous_vector": None,
-        },
-    )
-    optimize_setup._do_loads(session.document, old)
-
-    assert _specs(session) == [(1, 42.0, "-normal"), (2, 42.0, "-normal")]
-    optimize_setup._undo_loads(session.document, old)
     assert _specs(session) == []
 
 
@@ -860,6 +860,8 @@ def test_the_websocket_and_mcp_paths_both_run_the_verb(verb: str) -> None:
     def run(use_websocket: bool):
         made = Session(None, DEVIATION)
         body = _box(made)
+        if picker == "face":
+            _preserve(made, body)
         _select(
             made,
             _body_refs(body) if picker == "body" else _face_refs(body, [1, 2]),
@@ -933,6 +935,7 @@ def test_the_state_is_not_rebuilt_on_every_broadcast(session: Session) -> None:
     """
     body = _box(session)
     other = _box(session, corner=(50.0, 0.0))
+    _preserve(session, body)
     _select(session, _face_refs(body, [1]))
     session.set_fixtures()
 
@@ -971,6 +974,7 @@ def test_the_log_broadcast_does_not_carry_every_fingerprint(session: Session) ->
     配ると、面を数十枚指した1操作の指紋が**以後の全配信に乗り続ける**。
     """
     body = _box(session)
+    _preserve(session, body)
     _select(session, _face_refs(body, [1, 2, 3]))
     session.set_fixtures()
 

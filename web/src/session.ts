@@ -727,97 +727,124 @@ export interface OptimizeConditionsReport {
   exclude_bodies: string[]
   fixtures: Array<Record<string, unknown>>
   loads: Array<Record<string, unknown>>
-  load: { magnitude: number; direction: string; vector: number[] | null } | null
 }
 
 /**
  * 解像度の目盛り1段。**添字0がいちばん粗い**(＝既定)で、進むほど細かい。
  *
- * `seconds_typical` / `seconds_worst` は**予測ではなく2〜3倍の幅で読む値**である
- * (`optimize_run.estimate_seconds` の `accuracy`)。画面はそれを添えて出すこと。
+ * **所要時間は付かない**(計画書§6.2「所要時間は旧SIMP係数を使わない。初回は不明と
+ * 表示する」)——走らせる前は実測が無いので、要素数だけで判断する。
  */
 export interface OptimizeResolutionStep {
   index: number
   element_size_mm: number
   element_count: number
-  seconds_typical: number
-  seconds_worst: number
+  /** この段を選んだときの最小幅の下限[mm](= 要素サイズの2倍)。サーバーが計算する
+   *  (画面は要素数の数え方を持たない、という既存方針と同じ)。 */
+  min_width_floor_mm: number
+  /** この段を選んだときの最小幅の上限[mm](= 格子の最短の辺のセル数 × 要素サイズ)。これを超える立方は格子に入らない。 */
+  min_width_ceiling_mm: number
+  /** この段で保証できる最小幅の段(m = 2, 3, … の `m × 要素サイズ`)。**入力すると、ちょうどその m になる値**
+   *  (`optimize_run.min_width_steps_mm`)。段のあいだの入力は次の段へ切り上がる。 */
+  min_width_steps_mm: number[]
 }
 
 /**
  * 要素サイズの上限・下限・目盛り(`optimize_run.resolution_limits`)。
  *
- * **`error` が入っていたら他のキーは無い** —— 条件面がまだ1枚も無いなど、
- * 「設定の途中」で見積もれない状態(サーバは赤い札にせずここへ入れて返す)。
+ * **`error` が入っていたら他のキーは無い** —— 条件面がまだ1枚も無い、または旧引数
+ * (`rmin_mm`)が届いたなど、「この版では見積もれない」状態(サーバは赤い札にせず
+ * ここへ入れて返す)。
  */
 export interface OptimizeResolutionPayload {
   error?: string
   max_element_size_mm?: number
   min_element_size_mm?: number
   default_element_size_mm?: number
-  from_rmin_mm?: number | null
   from_condition_faces_mm?: number
   max_elements?: number
   feasible?: boolean
   steps?: OptimizeResolutionStep[]
-  estimate?: {
-    element_count: number
-    max_iter: number
-    evaluations: number
-    seconds_per_evaluation: number
-    seconds_typical: number
-    seconds_worst: number
-    accuracy: string
-  }
 }
 
 /**
  * 進捗1件(`optimize_run.run()` の `progress`)。`phase` ごとにキーが増える
- * (`20260904-1704` の契約①)ので、共通の3つだけを必須にする。
+ * (`20260904-1704` の契約①)ので、共通の2つだけを必須にする。
+ *
+ * `phase: 'search'` は探索を始めるときの1件に続けて、評価(FEM 1回)ごとに1件来る
+ * (`evaluation` 以下のキーを持つ。`binary_search._reduce_volume` の `on_evaluation`)。
+ * 安全率は探索の格子での値で、比べる相手は `target_safety_factor`(探索時の目標)。
  */
 export interface OptimizeProgress {
   phase: string
   message: string
-  evaluation: number
-  iteration?: number
   design_elements?: number
-  material_mm3?: number
+  evaluation?: number
+  outcome?: 'initial' | 'accepted' | 'rejected'
+  failed?: string[]
+  candidate_safety_factor?: number | null
+  candidate_cells?: number
   safety_factor?: number
-  outcome?: string
-  compliance?: number
-  volfrac?: number
-  change?: number
+  cells?: number
+  target_safety_factor?: number
 }
 
 /**
- * 実行の結果。**`state` で3つに分岐する**(`20260904-1704` の契約①)。
+ * 実行の結果。**`state` で分岐する**(`20260904-1704` の契約①、段階5で3値→6値へ拡張、
+ * 境界条件の確定(2026-09-17)で `boundary_mapping_failed` が増えて7値)。
+ * `no_feasible_found` / `input_contradiction` / `resolution_insufficient` /
+ * `boundary_mapping_failed` は `binary_search.SearchResult.status` をそのまま渡したもの
+ * (計画書§8段階4の契約。`boundary_mapping_failed` は探索の前の確定表の検証からも来る)。
  * **`"done"` 以外では文書は1ビットも変わっていない。**
  */
 export interface OptimizeResultPayload {
-  state: 'done' | 'empty_condition_faces' | 'unrepresented_regions'
+  state:
+    | 'done'
+    | 'empty_condition_faces'
+    | 'unrepresented_regions'
+    | 'boundary_mapping_failed'
+    | 'no_feasible_found'
+    | 'input_contradiction'
+    | 'resolution_insufficient'
   warning: string | null
   body_id: string | null
   name: string | null
   triangle_count: number | null
   vertex_count: number | null
   safety_factor: number | null
+  /** 利用者が指定した実際の目標。 */
   target_safety_factor: number
+  /** 探索に渡した目標(= `target_safety_factor` × `search_target_factor`)。`safety_factor` はこれに対する探索の格子での値。 */
+  search_target_safety_factor: number
+  search_target_factor: number
   material_mm3: number | null
-  achieved_material_mm3: number | null
-  converged: boolean | null
   evaluations: number
+  /** 探索の終了理由(`converged` / `evaluation_limit` / `cancelled` / ...)。 */
+  termination: string | null
   element_size_mm: number
+  /** 最小幅の解決結果(`optimize_run._resolve_min_width`)。未指定なら既定
+   *  `max(要素サイズの2倍, 1mm)`(2026-09-22本人決定)を採用し、`source` が `'default'` になる
+   *  (`requested_mm` は既定のときも実際に使った値で、`null` にはならない)。明示すれば `'requested'`。 */
+  min_width: {
+    requested_mm: number
+    spacing_mm: number
+    cells: number
+    guaranteed_mm: number
+    source: 'default' | 'requested'
+  }
   design_elements: number
   seconds: number
   empty_condition_faces?: Array<Record<string, unknown>>
   unrepresented_regions?: Array<Record<string, unknown>>
+  /** 確定表の検証(`anchor.condition_mapping`)。確定表を作る前に返った状態では `null`。 */
+  boundary_mapping?: Record<string, unknown> | null
 }
 
 /** 実行の摘み。**省いたものはコアの既定**(既定＝いちばん粗くて安い設定)。 */
 export interface OptimizeRunOptions {
-  rminMm?: number | null
   elementSizeMm?: number | null
-  name?: string | null
+  /** 最小幅[mm]。`null` または省略 = 既定(要素サイズの2倍と1mmの大きい方)をサーバーが使う。 */
+  minWidthMm?: number | null
   /**
    * 開発用の可視化を頼む(`'space'` / `'anchors'` / `'rho'`)。**既定は空**で、
    * 空のときサーバは配列を1本も作らない。頼んだぶんが `onOptimizeDebug` へ届く。
@@ -840,8 +867,9 @@ export interface OptimizeDebugGrid {
 /**
  * 開発用の可視化1件(`duocad/optimize_run.py` の `_DebugSink`)。**頼んだときしか来ない。**
  *
- * `stage` は `'derive'`(導出直後に届く塊と面アンカー。探索の全候補がこの塊を使うので、塊は
- * これ1回しか届かない)か `'final'`(探索の後に届く、実際に解いた密度場 `rho`)。
+ * `stage` は `'derive'`(導出直後に届く塊。探索の全候補がこの塊を使うので、塊はこれ1回しか
+ * 届かない)、`'mapping'`(境界条件の確定直後に届く面アンカー。探索・FEMが実際に使う確定表の
+ * 節点)、`'final'`(探索の後に届く、実際に解いた密度場 `rho`)。
  * 同じ `kind` が届いたら後から来たほうで置き換えること。
  *
  * `elements` は立っている要素の通し添字(C順 `i*(ny*nz) + j*nz + k`)。
@@ -849,7 +877,7 @@ export interface OptimizeDebugGrid {
  */
 export interface OptimizeDebugPayload {
   kind: OptimizeDebugKind
-  stage: 'derive' | 'final'
+  stage: 'derive' | 'mapping' | 'final'
   grid: OptimizeDebugGrid
   /** `kind` が `'space'` / `'rho'` のとき。 */
   elements?: number[]
@@ -993,9 +1021,9 @@ export interface Session {
   optimizeConditions(): void
   /**
    * 要素サイズの上限・下限・目盛りを聞く(応答は `onOptimizeResolution`)。
-   * **軽い**(条件面のbboxを数枚測るだけ)ので、最小部材幅を打つたびに呼んでよい。
+   * **軽い**(条件面のbboxを数枚測るだけ)ので、条件が変わるたびに呼んでよい。
    */
-  optimizeResolution(rminMm: number | null): void
+  optimizeResolution(): void
   /**
    * 走らせる。**待たずに返る** —— 進捗は `onOptimizeProgress`、結果は `onOptimizeResult`
    * へ届き、結果が文書へ入ったことは通常の状態配信として別途来る。
@@ -1016,10 +1044,9 @@ const RECONNECT_DELAY_MS = 2000
 /**
  * 繋がらないことをトーストで言うまでの連続失敗回数。
  *
- * **試行のたびには出さない**(`App.svelte` の `onStatus` が「繋がっていたのに切れた」落差
- * だけを見るのと同じ規律)。ただし**一度も繋がっていない間は落差が生まれない**ので、
- * それだけをここが1回言う —— サーバより先にタブを開いたとき、黙ったままでは
- * 繋がらない理由が画面のどこにも出ない。
+ * **試行のたびには出さない**。切断は黙って自動再接続し、**開けなかった試行**だけを数える。
+ * 一度も繋がっていない間は3回目、一度繋がったあとの再接続失敗は1回目 —— サーバより先に
+ * タブを開いたとき、黙ったままでは繋がらない理由が画面のどこにも出ない。
  *
  * **数えるのは回数であって時間ではない。** 試行の間隔は `RECONNECT_DELAY_MS` では
  * 決まらない —— 繋がらないソケットが閉じるまでに実測2秒かかり、さらにChromeが同じ
@@ -1027,6 +1054,8 @@ const RECONNECT_DELAY_MS = 2000
  * 失敗を積んだ画面では26秒周期)。時間で切ると、この幅がそのまま無音の幅になる。
  */
 const CONNECT_FAILURE_NOTICE_AT = 3
+/** 一度でも繋がったあと、再接続が開けなかったときは1回目で知らせる(初回接続待ちは3回)。 */
+const RECONNECT_FAILURE_NOTICE_AT = 1
 
 async function resolveWebSocketUrl(): Promise<string> {
   // サーバが `/duocad-config.json` で自分のWebSocketのURLを教える。
@@ -1049,8 +1078,10 @@ export function createSession(hooks: SessionHooks): Session {
   let socket: WebSocket | null = null
   let disposed = false
   let retry: ReturnType<typeof setTimeout> | null = null
-  /** 開く前に閉じた回数。開いたら0へ戻す(`CONNECT_FAILURE_NOTICE_AT`)。 */
+  /** 開く前に閉じた回数。開いたら0へ戻す。 */
   let failures = 0
+  /** このタブで一度でも `open` したか(初回接続待ちと再接続失敗でトーストの出し方を分ける)。 */
+  let everOpened = false
 
   /**
    * 1本送る。**繋がっていなければ送らずに、その場でトーストへ回す**。
@@ -1214,11 +1245,11 @@ export function createSession(hooks: SessionHooks): Session {
     const url = await resolveWebSocketUrl()
     const next = new WebSocket(url)
     socket = next
-    // この接続が一度でも開いたか。**開いてから切れた**のは `App.svelte` の `onStatus` が
-    // 落差として拾うので、ここで数えるのは開く前に閉じたぶんだけでよい。
+    // このソケットが開いたか。開いてから切れたときは `failures` を増やさない(キープアライブ等)。
     let opened = false
     next.onopen = () => {
       opened = true
+      everOpened = true
       failures = 0
       hooks.onStatus('open')
     }
@@ -1232,8 +1263,12 @@ export function createSession(hooks: SessionHooks): Session {
       if (disposed) return
       if (!opened) {
         failures += 1
-        if (failures === CONNECT_FAILURE_NOTICE_AT) {
-          hooks.onError(`サーバへ繋がらない (${url})。自動で繋ぎ直しを続ける`, 'socket')
+        const noticeAt = everOpened ? RECONNECT_FAILURE_NOTICE_AT : CONNECT_FAILURE_NOTICE_AT
+        if (failures === noticeAt) {
+          const message = everOpened
+            ? 'サーバへ再接続できない。自動で繋ぎ直しを続ける'
+            : `サーバへ繋がらない (${url})。自動で繋ぎ直しを続ける`
+          hooks.onError(message, 'socket')
         }
       }
       retry = setTimeout(() => void connect(), RECONNECT_DELAY_MS)
@@ -1301,15 +1336,14 @@ export function createSession(hooks: SessionHooks): Session {
     optimizeConditions() {
       send({ cmd: 'optimize_conditions' })
     },
-    optimizeResolution(rminMm) {
-      send({ cmd: 'optimize_resolution', rmin_mm: rminMm })
+    optimizeResolution() {
+      send({ cmd: 'optimize_resolution' })
     },
     runOptimization(options) {
       send({
         cmd: 'run_optimization',
-        rmin_mm: options.rminMm ?? null,
         element_size_mm: options.elementSizeMm ?? null,
-        name: options.name ?? null,
+        min_width_mm: options.minWidthMm ?? null,
         // **空配列は送らない。** 古いサーバは知らないキーを無視するだけだが、
         // 「頼んでいない」ことが送信の中身からも読めるようにしておく。
         ...(options.debug && options.debug.length > 0 ? { debug: options.debug } : {}),

@@ -31,7 +31,7 @@ RESULT_NAME = "optimized"
 #: (`_region_representation`)で止まる。**通るかどうかは要素サイズに対して単調でない**
 #: (2026-09-09 実測: 4.2mm 止まる / 4.4 通る / 4.6 止まる / 4.8 通る / 5.333 止まる。格子の
 #: 原点と刻みが要素サイズごとに引き直され、薄い部品にセル中心が入るかが偶然で決まる)——
-#: 「N mm 以下なら通る」とは書けない。表は docs/TOPOPT.md「2026-09-09・hanger の初回完走」。
+#: 「N mm 以下なら通る」とは書けない。
 #: **ピークメモリを決めるのは箱の要素数ではなく、組み立てに載る要素数(= 塊。空要素は
 #: `simp.Model(active_mask=...)` で外れる)である。** この機械(34GB)で hanger を回した
 #: ときのピーク増(2026-09-09実測。**3点は経路が違うので併記する**):
@@ -49,37 +49,21 @@ MAX_ELEMENTS = 2_000_000
 #: 暫定値 —— 厳密な下限は中心軸変換に近い話で、事前計算では出せない(タスク本文)。
 MIN_REGION_ELEMENTS = 8
 
-#: 予想時間の係数。**この機械(14スレッド)の実測**(docs/TOPOPT.md「予想時間の係数の作り方」)で、
-#: 「秒 / (格子要素数 × 設計反復)」を取ると 1.05e-4 〜 2.82e-4 に散る(格子要素数の
-#: 1.05乗〜2.03乗で伸びるので線形では収まらない)。**桁の見当であって予測ではない** ——
-#: 熱状態だけで 1.7倍振れる(docs/TOPOPT.md 冒頭)。
-SECONDS_PER_ELEMENT_ITERATION = 1.8e-4
-
-#: 二分探索が典型的に使う評価回数(上端・下端 + 4回)。上限は
-#: `safety_loop.DEFAULT_MAX_EVALUATIONS`。
-TYPICAL_EVALUATIONS = 6
-
 #: 解像度の梯子の段数(既定=いちばん粗い、を含む)。**粗い側の端から細かい方向へだけ**
 #: 動くスライダの目盛りで、画面はこの並びの添字を持つ(`resolution_limits()["steps"]`)。
-#: **時間を入力にしないための形**でもある —— 段ごとに予想時間が付いて回るので、
-#: 「時間から解像度を逆算する」経路が画面に生えない(タスク `20260904-1705` の設計)。
+#: **時間を入力にしないための形**でもある —— 各段は要素サイズ・要素数だけを持ち時間を
+#: 付けない(段階5で所要時間の事前見積もりを廃止した)ので、「時間から解像度を逆算する」
+#: 経路が画面に生えない(タスク `20260904-1705` の設計)。
 RESOLUTION_STEPS = 6
 
 #: 目標安全率の既定。**利用者が入れる値**で、ここにあるのは画面が最初に出す初期値でしかない。
 DEFAULT_TARGET_SAFETY_FACTOR = 2.0
 
-#: 材料量の探索範囲の作り方(`safety_loop.solve_for_safety_factor` は範囲を自分で決めない)。
-#: 下端は保持ソリッドが占める体積より必ず大きく、上端は塊の容量の端に置かない
-#: (端ちょうどは OC の二分探索が退化する。`20260904-0142` の罠)。
-#: 保持の体積は B-rep の値ではなく**格子の上で数えた量**を使う —— ボクセルの体積は真の体積より
-#: 大きく出る(実測: 板厚 10mm のパッド2つ・要素 約7.5mm で 20,000mm^3 が 71,719mm^3 = 3.6倍)ので、
-#: 「B-rep 体積 × 倍率」で下端を当てにいくと固定要素の体積を下回って `simp.VolumeTargetError` に
-#: なる。倍率は形状の寸法と要素サイズの比で当たったり外れたりするので、実際に1回載せて数える。
-MATERIAL_MIN_RATIO = 1.10  # 保持ソリッドが占める体積(**格子の上で数えた量**)に対する下端の倍率
-#: 上端 = **固定した塊(余白付き凸包 − 除外)の容量 × これ**。塊は材料量を受け取らない導出なので
-#: 「量を決めるために量が要る」堂々巡りが起きない。容量の端(1.0)には触れない
-#: (`20260904-0142` の罠)。運用比率であり、固定凸包への移行(2026-09-16)では動かしていない。
-MATERIAL_MAX_RATIO = 0.55
+#: 探索に渡す目標安全率 = 利用者の目標 × この係数(m に依らず1つ)。探索の格子(k=1)は、細い部材の
+#: 曲げ・ねじりを要素中心の応力から見落として安全率を過大に出す。2.4 は最小幅 m≥2 セルの直線部材で
+#: その過大評価が取る上限(m=2 の曲げ 2.36)の切り上げ。m=1 には上限が無いが、`_resolve_min_width` の
+#: 既定(2026-09-22決定)により製品の実行は m=1 に到達しない。根拠と実測・限界は docs/TOPOPT_TARGET_FACTOR.md。
+SEARCH_TARGET_FACTOR = 2.4
 
 #: **デバッグ表示(`?debug=space` / `?voxel=1`)で1回に配るボクセルの上限。**
 #:
@@ -116,37 +100,38 @@ class FaceMappingError(RuntimeError):
 
 
 class OptimizeCancelled(RuntimeError):
-    """`should_cancel()` が真を返したので途中で降りた。
+    """`should_cancel()` が真を返した、または探索が `termination='cancelled'` で戻ったので
+    途中で降りた(計画書§4.6「中断時は...製品文書へ勝手に結果を追加しない」)。
 
-    `RuntimeError` にしてあるのは、`safety_loop._evaluate` の
-    `except (VolumeTargetError, SolveResidualError)` に**拾われないため**
-    である(`ValueError` にすると「材料が足りない」と分類されて探索が続く)。
+    `RuntimeError` にしてあるのは、`acceptance.inspect` 内の例外処理に**拾われないため**
+    である(`ValueError` にすると入力の不備と分類されて探索が続く)。
     """
 
 
 @dataclass
 class OptimizeOptions:
-    """実行の摘み。**既定値は「条件と最小部材幅を満たす、最も粗くて安い設定」**(本人決定)。
+    """実行の摘み。**既定値は「条件を満たす、最も粗くて安い設定」**(本人決定)。
 
     `element_size_mm` を省くと `resolution_limits()` の上限側(いちばん粗い)を採る。
-    時間は制約にしない —— 予想時間は `resolution_limits()` の帰結として出るだけである。
+    時間は制約にしない。**密度フィルタ半径(`rmin_mm`)・SIMP反復数(`max_iter`)・材料量の
+    直接指定(`material_min_mm3`/`material_max_mm3`)は無い**——二値探索は
+    連続密度もSIMP反復も持たないので、渡しても意味の翻訳先が無い。届いたら黙って無視せず
+    `OptimizeInputError` にする(`session.run_optimization` / `resolution_limits` の入口)。
     """
 
-    #: 密度フィルタ半径[mm](最小部材幅の入力)。省くと `simp.DEFAULT_RMIN`[要素]。
-    rmin_mm: Optional[float] = None
     #: 目標安全率。許容応力は固定(`allowable_stress()`)なので、利用者が動かすのはこちら。
     target_safety_factor: float = DEFAULT_TARGET_SAFETY_FACTOR
+    #: 探索に渡す目標 = `target_safety_factor` × これ(`SEARCH_TARGET_FACTOR`)。利用者の入力ではなく、
+    #: UI・WebSocket の入力には出さない。1.0 はテストと測定が「係数なし」に固定する口。1.0 未満・非有限は断る。
+    search_target_factor: float = SEARCH_TARGET_FACTOR
     #: 要素サイズ[mm]。省くと上限側(既定)。
     element_size_mm: Optional[float] = None
-    #: SIMP の設計反復数。省くと `safety_loop.DEFAULT_MAX_ITER`。
-    max_iter: Optional[int] = None
-    #: 二分探索の評価回数の上限。省くと `safety_loop.DEFAULT_MAX_EVALUATIONS`。
+    #: 最小幅[mm]。省くと既定 `max(2 × 実spacing, 1.0mm)` を使う(2026-09-22本人決定)。
+    #: 下限は要素サイズの2倍(`_resolve_min_width`)。
+    min_width_mm: Optional[float] = None
+    #: 形状探索の評価予算(`binary_search.find_best_feasible` の
+    #: `max_evaluations`。段階3・段階4を通した1本の予算)。省くとそちらの既定(1000)。
     max_evaluations: Optional[int] = None
-    #: 材料量の探索範囲[mm^3]。省くと塊の容量と保持ソリッドの体積から決める(上記の比率)。
-    material_min_mm3: Optional[float] = None
-    material_max_mm3: Optional[float] = None
-    #: 結果ボディの名前。省くと `optimized`(既にあれば `optimized-2`, ...)。
-    name: Optional[str] = None
 
 
 # --------------------------------------------------------------------------------------
@@ -155,16 +140,16 @@ class OptimizeOptions:
 def allowable_stress() -> dict:
     """許容応力[MPa]と**その導出**。duocad 側でも材料は選ばせない(暫定)。
 
-    値を持っているのは `duocad.topopt.safety_loop` の1箇所だけで、ここはそれを読んで
+    値を持っているのは `duocad.topopt.material` の1箇所だけで、ここはそれを読んで
     導出を並べ直すだけである(2箇所に書くと片方だけ直る)。
     """
-    from .topopt import safety_loop
+    from .topopt import material
 
     return {
         "material": "PETG",
-        "yield_mpa": float(safety_loop.PETG_YIELD_MPA),
-        "print_derate": float(safety_loop.PRINT_DERATE),
-        "allowable_mpa": float(safety_loop.DEFAULT_ALLOWABLE_MPA),
+        "yield_mpa": float(material.PETG_YIELD_MPA),
+        "print_derate": float(material.PRINT_DERATE),
+        "allowable_mpa": float(material.DEFAULT_ALLOWABLE_MPA),
     }
 
 
@@ -251,6 +236,15 @@ def _face_problem(doc: "Document", role: str, condition: dict) -> List[str]:
     problems = _body_problem(doc, role, condition["body"])
     if problems:
         return problems
+    if condition["body"] not in doc.optimize.preserve_bodies:
+        # **条件面は保持ソリッドの面に限る**(2026-09-18 本人指示)。`verbs/optimize_setup.py` の
+        # 入口でも断っているが、**過去のログを再生した文書**には入りうるので、ここでも通す
+        # (メッシュボディの門と同じ形)。
+        name = doc.get_body(condition["body"]).name
+        return [
+            f"{label}が保持ソリッドでないボディ {name} の面に載っている。"
+            "そのボディを保持ソリッドに指定するか、条件を置き直すこと"
+        ]
     reason = optimize.fingerprint_mismatch(doc, condition)
     if reason is not None:
         return [f"{label}が指す面が今の形と合わない({reason})。条件を置き直すこと"]
@@ -293,8 +287,9 @@ def build_conditions(doc: "Document") -> ConditionBundle:
     戻す割り算が壊れる**。総和なら打ち消しに影響されない。`stress.load_magnitude_total`
     が解いた側で同じ量を測っており、**2つの定義が食い違うと応力が黙って定数倍ずれる**。
 
-    `simp` は無次元(荷重の総量1.0)で回り続ける契約(`done/20260904-0143`)。実単位[N]は
-    `load_n` だけが持ち、`stress.UnitScale.for_model` がそれを読む。
+    探索(`binary_search`/`acceptance`)は無次元(荷重の総量1.0)で回り続ける契約
+    (`done/20260904-0143`)。実単位[N]は `load_n` だけが持ち、
+    `stress.UnitScale.for_model` がそれを読む。
     """
     from . import optimize
     from .topopt import design_space as ds
@@ -448,38 +443,36 @@ def _fmt(values) -> str:
 # --------------------------------------------------------------------------------------
 # 解像度(要素サイズ)をどう決めるか
 # --------------------------------------------------------------------------------------
-def resolution_limits(doc: "Document", *, rmin_mm: Optional[float] = None) -> dict:
+def resolution_limits(doc: "Document") -> dict:
     """要素サイズの**上限**(これより粗いと間違う)と**下限**(これより細かくはできない)。
 
-        {"max_element_size_mm": float,        # min(最小部材幅からの要求, 条件面からの要求)
+        {"max_element_size_mm": float,        # 条件面からの要求
          "min_element_size_mm": float,        # 総要素数の上限から
          "default_element_size_mm": float,    # 既定 = 上限側(いちばん粗くて安い)
-         "from_rmin_mm": float | None,        # rmin_mm / simp.MIN_RMIN
          "from_condition_faces_mm": float,    # min(sqrt(条件面のCAD面積))
          "condition_faces": [{...}, ...],
          "bbox_min"/"bbox_max": [x,y,z],      # 条件の外接直方体(余白なし)
-         "max_elements": int,
-         "estimate": {...}}                   # 既定の設定での予想時間
+         "max_elements": int}
 
-    **上限は2つの要求の min** である:
-
-    - **最小部材幅から** —— `rmin_mm` が `simp.MIN_RMIN`(1.5)要素を下回れないので
-      `要素サイズ <= rmin_mm / 1.5`(`done/20260904-1557` の契約)。`rmin_mm` を省くと
-      この要求は無い(フィルタ半径は要素単位の既定になる)。
-    - **条件面から** —— 拘束面・荷重面に格子節点が付く大きさ。**利用者に聞かない**。
-      `anchor.AnchorTable.empty_face_diagnosis` の `suggested_max_spacing_mm` と
-      **同じ式**(`sqrt(CAD面積)`)を使う。**近似であって保証ではない** ——
-      正方形とみなした代表寸法なので、曲面や極端な縦横比の面では過大にも過小にもなる
-      (`done/20260904-1556` の契約②)。厳密に確かめる手段は「その要素サイズで実際に
-      `empty_faces()` を取り直す」しかない。
+    **上限は条件面からの要求で決まる**(拘束面・荷重面に格子節点が付く大きさ)。
+    **密度フィルタ半径(rmin)は上限に効かない**(解像度の上限からrmin/MIN_RMINを
+    除去」——二値探索は密度フィルタを持たないので、最小部材幅からの要求という概念自体が無い)。
+    **利用者に聞かない**。`anchor.AnchorTable.empty_face_diagnosis` の
+    `suggested_max_spacing_mm` と**同じ式**(`sqrt(CAD面積)`)を使う。**近似であって保証ではない**
+    (`done/20260904-1556` の契約②)—— 正方形とみなした代表寸法なので、曲面や極端な縦横比の面
+    では過大にも過小にもなる。厳密に確かめる手段は「その要素サイズで実際に `empty_faces()` を
+    取り直す」しかない。
 
     **下限は暫定の固定値**(`MAX_ELEMENTS`)。根拠はその定数のところにある。
 
     保持・除外ソリッドからは**上限を厳密に計算できない**(細い通路を取りこぼす)ので、
     ここでは見ない —— ボクセル化したあとに数えて通知する(`run()` の事後検出)。
-    """
-    from .topopt import simp
 
+    **所要時間は見積もらない**(所要時間は旧SIMP係数を使わない。初回は不明と
+    表示し、実測FEM評価時間と予算から幅付きで見積もる」)。走らせる前は1回もFEMを解いていない
+    ので実測が無く、旧SIMP係数を使った桁の見当も出さない —— 実測に基づく見積もりは
+    `run()` の進捗イベント(`_ProgressPump`)側で、実際に評価が進んでから出す。
+    """
     setup = doc.optimize
     faces: List[dict] = []
     for role in ("fixtures", "loads"):
@@ -501,21 +494,13 @@ def resolution_limits(doc: "Document", *, rmin_mm: Optional[float] = None) -> di
         raise OptimizeInputError("拘束面・荷重面が1枚も無いので解像度を決められない")
 
     from_faces = min(item["suggested_max_spacing_mm"] for item in faces)
-    from_rmin: Optional[float] = None
-    if rmin_mm is not None:
-        value = float(rmin_mm)
-        if not math.isfinite(value) or value <= 0.0:
-            raise OptimizeInputError(f"rmin_mm は有限の正の値であること(いま {rmin_mm!r})")
-        from_rmin = value / float(simp.MIN_RMIN)
-
-    upper = from_faces if from_rmin is None else min(from_faces, from_rmin)
+    upper = from_faces
 
     lo, hi = _condition_bbox(doc)
     if not upper > 0.0:
         raise OptimizeInputError("条件面の面積が0で要素サイズの上限を決められない")
     # **上限は実際の格子の要素サイズに揃える。** `derive` は最長辺を要求値で割った数を丸めるので、
-    # 要求値そのままだと実 spacing が僅かに大きくなり(実測: 要求 4.0mm → 実 4.038mm)、
-    # `rmin_mm / 実spacing` が床 `simp.MIN_RMIN` を割って `FilterRadiusError` になる。
+    # 要求値そのままだと実 spacing が僅かに大きくなる(実測: 要求 4.0mm → 実 4.038mm)。
     upper = _snap_to_grid(lo, hi, upper)
     # 下限も実格子の要素サイズへ揃える(梯子の最後の段 = `min_element_size_mm` を画面が送り返しても
     # `_resolve_element_size` が「下限より細かい」と断らないため)。分割数は変わらないので要素数も変わらない。
@@ -527,7 +512,6 @@ def resolution_limits(doc: "Document", *, rmin_mm: Optional[float] = None) -> di
         "default_element_size_mm": upper,
         # **粗い側の端から細かい方向へだけ**動く目盛り(添字0が既定=上限側)。
         "steps": _resolution_steps(lo, hi, upper, lower),
-        "from_rmin_mm": from_rmin,
         "from_condition_faces_mm": from_faces,
         "condition_faces": faces,
         "bbox_min": [float(v) for v in lo],
@@ -536,21 +520,21 @@ def resolution_limits(doc: "Document", *, rmin_mm: Optional[float] = None) -> di
         # **上限側が下限を下回る**(部品に対して条件面が小さすぎる)ときは、要素数の上限に
         # 引っかかって「間違わない解像度」が作れない。画面はここを見て断る。
         "feasible": lower <= upper,
-        "estimate": estimate_seconds(_element_count(lo, hi, upper)),
     }
 
 
 def _resolution_steps(lo, hi, upper: float, lower: float) -> List[dict]:
     """要素サイズの梯子。**添字0が上限側(いちばん粗くて安い=既定)**で、進むほど細かい。
 
-    **粗い側へ動く目盛りを作らない。** 粗い側の端は「正しさ」の境界(割ると条件が消え、
-    最小部材幅が表現できない。しかも silent)であり、細かい側の端は「都合」の境界
+    **粗い側へ動く目盛りを作らない。** 粗い側の端は「正しさ」の境界(割ると条件面から
+    節点が消える。しかも silent)であり、細かい側の端は「都合」の境界
     (遅い・落ちる、それだけ)である —— 性質が違うので、片側だけ開ける
     (タスク `20260904-1705` の設計。本人了承)。
 
     段は上限から下限までの**等比**で刻む(要素数は要素サイズの3乗に反比例するので、
-    等差にすると最後の1段だけで要素数が桁で跳ねる)。**予想時間を段ごとに付ける**ので、
-    画面は往復せずに「細かくすると何秒になるか」を出せる。
+    等差にすると最後の1段だけで要素数が桁で跳ねる)。**予想時間は付けない**
+    (所要時間は旧SIMP係数を使わない。初回は不明と表示する——走らせる前は
+    実測が無いので、要素数だけを見せて時間は語らない)。
 
     上限が下限以下(部品に対して条件面が小さすぎる)のときは**空**を返す ——
     「間違わない解像度」が作れないので、選ばせる目盛りが無い(`feasible` が偽になる)。
@@ -566,18 +550,19 @@ def _resolution_steps(lo, hi, upper: float, lower: float) -> List[dict]:
         # 「いちばん細かい」が選べない目盛りになる)。
         # 各段も実格子の要素サイズへ揃える(画面に出す値と `derive` が作る格子を一致させる)。
         size = lower if index == count - 1 else _snap_to_grid(lo, hi, upper * (ratio ** index))
-        elements = _element_count(lo, hi, size)
+        shape = _grid_shape(lo, hi, size)
+        elements = shape[0] * shape[1] * shape[2]
         if elements in seen:
             continue
         seen.add(elements)
-        estimate = estimate_seconds(elements)
         steps.append(
             {
                 "index": len(steps),
                 "element_size_mm": float(size),
                 "element_count": int(elements),
-                "seconds_typical": float(estimate["seconds_typical"]),
-                "seconds_worst": float(estimate["seconds_worst"]),
+                "min_width_floor_mm": float(2.0 * size),
+                "min_width_ceiling_mm": float(min(shape) * size),
+                "min_width_steps_mm": min_width_steps_mm(size, min(shape)),
             }
         )
     return steps
@@ -639,8 +624,8 @@ def _box_longest_edge(lo, hi) -> float:
     """`derive` が格子を起こす外枠(点群の外接箱 + 余白)の最長辺[mm]。"""
     from .topopt import design_space as ds
 
-    longest = max(float(hi[a]) - float(lo[a]) for a in range(3))
-    return longest * (1.0 + 2.0 * ds.DEFAULT_MARGIN_RATIO)
+    box_lo, box_hi = ds.frame_box(lo, hi)
+    return float(max(box_hi[a] - box_lo[a] for a in range(3)))
 
 
 def _snap_to_grid(lo, hi, spacing: float) -> float:
@@ -659,28 +644,22 @@ def _snap_to_grid(lo, hi, spacing: float) -> float:
     return box_long / n
 
 
+def _grid_shape(lo, hi, spacing: float) -> tuple:
+    """`derive(spacing=...)` が起こす格子のセル数(x, y, z)。`_element_count` と最小幅の上限が共有する。"""
+    from .topopt import design_space as ds
+
+    return tuple(int(n) for n in ds.grid_for_frame(*ds.frame_box(lo, hi), spacing=float(spacing)).shape)
+
+
 def _element_count(lo, hi, spacing: float) -> int:
     """`derive(spacing=...)` が実際に起こす格子の要素数。
 
-    **`derive` の規則をここで再計算している**(余白 `design_space.DEFAULT_MARGIN_RATIO`、
-    分割数 `round(外枠の最長辺 / spacing)`、`grid_for_bbox` の `ceil(辺長 / 実spacing) + 2*パッド`)
-    —— 1回の導出も走らせずに数を出すためで、実際の格子は `derive` が作る。要求した要素サイズ
-    そのままではなく**丸めた後の実 spacing** で数えるので、梯子の要素数が実格子と一致する。
+    格子そのものを `design_space.grid_for_frame`(`derive` と同じ規則)で1つ起こして数える ——
+    ボクセル化も導出も走らせないので安い。要求した要素サイズではなく**丸めた後の実 spacing** の
+    格子になるので、梯子に出す要素数が実格子と一致する。
     """
-    from .topopt import design_space as ds
-    from .topopt import voxelize as vx
-
-    extent = [float(hi[a]) - float(lo[a]) for a in range(3)]
-    longest = max(extent)
-    margin = ds.DEFAULT_MARGIN_RATIO * longest
-    box_long = longest + 2.0 * margin
-    n_long = max(1, int(round(box_long / float(spacing))))
-    real = box_long / n_long
-    total = 1
-    for axis in range(3):
-        length = extent[axis] + 2.0 * margin
-        total *= max(int(math.ceil(length / real - 1e-9)), 1) + 2 * vx.DEFAULT_PAD
-    return total
+    shape = _grid_shape(lo, hi, spacing)
+    return int(shape[0] * shape[1] * shape[2])
 
 
 def _min_element_size(lo, hi) -> float:
@@ -689,51 +668,21 @@ def _min_element_size(lo, hi) -> float:
     `_element_count` は単調(要素サイズを下げると増える)なので、解析的な当たりから
     上へ詰める(切り上げとパッドがあるので閉じた式にはならない)。
     """
-    extent = [float(hi[a]) - float(lo[a]) for a in range(3)]
-    longest = max(extent)
-    if not longest > 0.0:
-        raise OptimizeInputError("条件の外接直方体が1点に潰れている")
     from .topopt import design_space as ds
 
-    margin = ds.DEFAULT_MARGIN_RATIO * longest
+    if not max(float(hi[a]) - float(lo[a]) for a in range(3)) > 0.0:
+        raise OptimizeInputError("条件の外接直方体が1点に潰れている")
+    box_lo, box_hi = ds.frame_box(lo, hi)
     volume = 1.0
     for axis in range(3):
-        volume *= extent[axis] + 2.0 * margin
-    guess = (volume / MAX_ELEMENTS) ** (1.0 / 3.0) if volume > 0 else longest
-    spacing = max(guess, longest * 1e-6)
+        volume *= float(box_hi[axis] - box_lo[axis])
+    guess = (volume / MAX_ELEMENTS) ** (1.0 / 3.0) if volume > 0 else _box_longest_edge(lo, hi)
+    spacing = max(guess, _box_longest_edge(lo, hi) * 1e-6)
     for _ in range(200):
         if _element_count(lo, hi, spacing) <= MAX_ELEMENTS:
             return spacing
         spacing *= 1.05
     return spacing
-
-
-def estimate_seconds(
-    element_count: int,
-    *,
-    max_iter: Optional[int] = None,
-    evaluations: Optional[int] = None,
-) -> dict:
-    """格子要素数と反復数から材料量探索の所要時間を見積もる。
-
-    塊は探索の前に1回だけ導出する(SIMP は回さない)ので、費用は候補ごとの SIMP だけ。
-    塊は箱より小さいが、事前見積もりは外側の箱の要素数で上振れ側に置く。
-    係数は機械・解像度・熱状態に依存する概算値。根拠は docs/TOPOPT_SPEED.md。"""
-    from .topopt import safety_loop
-
-    iters = int(safety_loop.DEFAULT_MAX_ITER if max_iter is None else max_iter)
-    evals = int(TYPICAL_EVALUATIONS if evaluations is None else evaluations)
-    one = iters * int(element_count) * SECONDS_PER_ELEMENT_ITERATION
-    return {
-        "element_count": int(element_count),
-        "max_iter": iters,
-        "evaluations": evals,
-        "seconds_per_evaluation": one,
-        "seconds_typical": one * evals,
-        "seconds_worst": one * int(safety_loop.DEFAULT_MAX_EVALUATIONS),
-        # **予測ではない**。この2つを画面に出すときは幅であることを添えること。
-        "accuracy": "order-of-magnitude (x2〜x3)",
-    }
 
 
 # --------------------------------------------------------------------------------------
@@ -793,15 +742,17 @@ def _debug_voxel_payload(kind: str, stage: str, grid, mask, *, limit: int) -> di
     }
 
 
-def _debug_anchor_payload(stage: str, space) -> Optional[dict]:
+def _debug_anchor_payload(stage: str, space, table=None) -> Optional[dict]:
     """拘束面・荷重面に**実際に割り当たった格子節点**のワールド座標。
 
-    出所は導出が持ち帰った `DesignSpace.table`(`_check_anchor_centroids` が距離を測るのと
-    同じ表)。表が無い塊(検査が直接組んだもの)では `None` を返す。
+    出所は `table`(製品経路では探索が使う確定表。`_check_anchor_centroids` が距離を測るのと
+    同じ表)。省くと導出が持ち帰った `DesignSpace.table`。表が無い塊(検査が直接組んだもの)では
+    `None` を返す。
     """
     import numpy as np
 
-    table = getattr(space, "table", None)
+    if table is None:
+        table = getattr(space, "table", None)
     if table is None:
         return None
     node_grid = table.node_grid
@@ -853,10 +804,10 @@ class _DebugSink:
             _debug_voxel_payload("space", stage, space.grid, space.mask, limit=DEBUG_VOXEL_LIMIT)
         )
 
-    def anchors(self, stage: str, space) -> None:
+    def anchors(self, stage: str, space, table=None) -> None:
         if not self.wants("anchors"):
             return
-        payload = _debug_anchor_payload(stage, space)
+        payload = _debug_anchor_payload(stage, space, table)
         if payload is not None:
             self._sink(payload)
 
@@ -910,71 +861,101 @@ def _run(
     debug: Optional[Callable[[dict], None]] = None,
     debug_kinds: Optional[Any] = None,
 ) -> dict:
-    """入力条件 → 塊の導出 → 最適化 → 平滑化 → 保持・除外ブーリアン → CADとして文書へ。
+    """入力条件 → 固定設計空間の導出(1回) → 全材料の評価とエネルギー順の削減 → 最終確定マスクの
+    メッシュ化 → 保持・除外ブーリアン → CADとして文書へ(計画書§3の単一経路)。
 
     **元のボディは1つも消さない・変えない。** 足すのは1つだけで、その `body_id` を返す。
+    **探索候補の評価中はメッシュ化・STL出力を呼ばない**(計画書§3) —— 後段
+    (`duocad.topopt.mesh.build_surface_from_mask` 以降)へ渡るのは
+    `binary_search.find_best_feasible` が返す最終確定マスク(`best_feasible`)だけである。
 
     戻り値(`state` で分岐すること。`"done"` 以外では `body_id` は `None`):
 
-        {"state": "done" | "empty_condition_faces" | "unrepresented_regions",
+        {"state": "done" | "empty_condition_faces" | "unrepresented_regions"
+                  | "boundary_mapping_failed"
+                  | "no_feasible_found" | "input_contradiction" | "resolution_insufficient",
          "body_id": BodyId | None, "name": str | None,
          "warning": str | None,
          "empty_condition_faces": [診断, ...],     # `20260904-1556` と同じ形
          "unrepresented_regions": [診断, ...],     # 事後検出(下記)
+         "boundary_mapping": {...} | None,        # 確定表の検証(`anchor.condition_mapping`)
          "resolution": resolution_limits() の戻り, "element_size_mm": float,
+         "min_width": {"requested_mm": float, "spacing_mm": float, "cells": int, "guaranteed_mm": float,
+                       "source": "default" | "requested"},
+         "min_width_keep_without_room": {"cells": int, "around_exclude": int, "around_outside": int},
          "grid": {"origin","spacing","shape"}, "design_elements": int,
          "safety_factor": float|None, "target_safety_factor": float,
+         "search_target_safety_factor": float, "search_target_factor": float,
          "allowable": allowable_stress() の戻り,
-         "material_mm3": float|None, "achieved_material_mm3": float|None,
-         "converged": bool|None, "evaluations": int, "history": [...],
+         "material_mm3": float|None, "evaluations": int, "termination": str|None,
          "anchor_check": {"limit_mm","fixed_mm","load_mm"} | None,
-         "reactions": [{"name","face","force","magnitude","fraction"}, ...],
          "triangle_count": int|None, "vertex_count": int|None,
          "seconds": float}
+
+    `target_safety_factor` は利用者が指定した実際の目標、`search_target_safety_factor` は探索(と6条件の
+    `safety`)に渡した目標(= 実際の目標 × `search_target_factor`)。**`safety_factor` は探索の格子での値**で、
+    探索時の目標に対する合否であって、実際の目標に対する安全率の実測ではない。
+
+    `min_width_keep_without_room` は、最小幅の規則の対象外にした保持ソリッドのうち、設計空間のどこにも
+    m 立方が入らず保証が効かないセルの数(`binary_search.keep_cells_without_room`)。0 でなければ `warning` に出る。
+    既定でも m≥2 の制約が掛かる(`_resolve_min_width`)ので、影響が無ければ 0 になるだけで、
+    「最小幅が無効だから 0」という状態はもう無い。
+
+    後半の `state`(`no_feasible_found` / `input_contradiction` / `resolution_insufficient` /
+    `boundary_mapping_failed`)は `binary_search.SearchResult.status` を**そのまま**渡したもの
+    (段階4の契約「製品配線側はこの値をそのままUI/ログへ渡せばよい」)。`boundary_mapping_failed`
+    は探索の前、確定表の検証(`_map_boundary_conditions`)で不成立になったときにもここから返す
+    (探索の入口検査と同じ語)。
 
     **戻り値は素の値だけでできている**(`json.dumps` がそのまま通る)。画面(`20260904-1705`)は
     これをWebSocketへそのまま載せられる —— `DesignSpace` や `AnchorTable` のような
     実体をここから外へ出さない(出すと配れる形が壊れ、キャッシュの持ち主も増える)。
 
     **デバッグ表示**は `debug(event: dict)` + `debug_kinds`(`DEBUG_KINDS` の部分集合)。
-    **頼まれたときだけ**塊(`space`)・面アンカーの節点(`anchors`)を導出直後に1回
-    (`stage="derive"`)、平滑化前の密度場(`rho`)を探索の後に1回(`stage="final"`)配る ——
-    画面の `?debug=space` / `?debug=anchors` / `?voxel=1` の材料である。塊は探索を通して
-    1つなので、最初と最後で違う塊を出すことはない。
+    **頼まれたときだけ**塊(`space`)を導出直後に1回(`stage="derive"`)、面アンカーの節点
+    (`anchors`)を境界条件の確定直後に1回(`stage="mapping"`。探索・FEMが実際に使う確定表の
+    節点であって、導出が接続の確認に使った幾何の表ではない)、最終確定マスク(`rho`。値は0/1の
+    二値)を探索の後に1回(`stage="final"`)配る —— 画面の `?debug=space` / `?debug=anchors` /
+    `?voxel=1` の材料である。塊は探索を通して1つなので、最初と最後で違う塊を出すことはない。
     頼まれなければ配列を1本も作らないので、既定の実行の費用は1ビットも増えない。
     **戻り値には入れない**(素の値だけという契約を保つのと、結果メッセージが数MBに
     膨らむのを避けるため)。中身は `_DebugSink` の各メソッド、座標はワールドmm。
 
     **進捗**は `progress(event: dict)`(下記 `_ProgressPump`)。**中断**は
-    `should_cancel()` が真を返した時点で `OptimizeCancelled` を投げて降りる ——
-    見るのは SIMP の設計反復ごとと、二分探索の候補ごとである(進捗を出さない短い
-    処理の途中では止まらない)。
+    `should_cancel()` が真を返した時点で `OptimizeCancelled` を投げて降りる。
+    `find_best_feasible` 自体の `is_cancelled` 引数にも同じ callable を渡す。探索は評価と評価の
+    あいだ(段階3は候補ブロックを1つ調べる前ごと、段階4は削る候補を作る前ごと)で中断を見るが、
+    **FEM評価1回の途中では降りない**(hanger 2.4mm では1回 約100〜137秒)。
 
     失敗は例外で上がる。**握り潰さないこと** —— `OptimizeInputError`(条件が足りない・
     この版で扱えない)/ `FaceMappingError`(面添字の対応が壊れている。**RuntimeError 派生**)/
     `OptimizeCancelled`(中断)と、下の層からの `design_space.DesignSpaceDisconnectedError`
     (全条件を含む連結成分が無い)/ `DesignSpaceTooSmallError` / `DesignSpaceConflictError`
-    (保持と除外が重なっている)/ `DesignSpaceGeometryError`(凸包が起こせない)/
-    `safety_loop.SafetyTargetError`(目標安全率に届かない)/
-    `safety_loop.ConditionFacesEmptyError` はどれも
+    (保持と除外が重なっている)/ `DesignSpaceGeometryError`(凸包が起こせない)はどれも
     「利用者が次に何をすればよいか」を文面に持っている。
     """
     from .topopt import design_space as ds
-    from .topopt import safety_loop
 
     started = time.perf_counter()
     opts = options or OptimizeOptions()
+    search_target = _search_target_safety_factor(opts)
+    factor = float(opts.search_target_factor)
     bundle = build_conditions(doc)
-    limits = resolution_limits(doc, rmin_mm=opts.rmin_mm)
+    limits = resolution_limits(doc)
     # 利用者が梯子の外の値を渡しても、`derive` が実際に作る格子の要素サイズ(要求値以下)に揃える。
     # 梯子の値は既にその形なので変わらない。
     spacing = _snap_to_grid(
         limits["bbox_min"], limits["bbox_max"], _resolve_element_size(limits, opts.element_size_mm)
     )
+    min_width = _resolve_min_width(
+        spacing, opts.min_width_mm, max_cells=min(_grid_shape(limits["bbox_min"], limits["bbox_max"], spacing))
+    )
 
     from .topopt import trace
     trace.snapshot('resolved-conditions', bundle=bundle, limits=limits, spacing=spacing,
-                   allowable=allowable_stress())
+                   min_width=min_width, allowable=allowable_stress(),
+                   target_safety_factor=float(opts.target_safety_factor),
+                   search_target_safety_factor=search_target, search_target_factor=factor)
 
     pump = _ProgressPump(progress, should_cancel)
     dbg = _DebugSink(debug, debug_kinds)
@@ -990,29 +971,36 @@ def _run(
         message=f"塊 {space.element_count} 要素(格子 {space.grid.shape})",
         design_elements=space.element_count,
     )
-    # **塊とアンカーはここで1回だけ配る**(`?debug=space` / `?debug=anchors`)。探索の全候補が
-    # 同じ塊を使うので、最後に別の塊を配り直すことはない —— 最後に届くのは密度場 `rho` だけ。
+    # **塊はここで1回だけ配る**(`?debug=space`)。探索の全候補が同じ塊を使うので、最後に別の塊を
+    # 配り直すことはない —— 最後に届くのは密度場 `rho` だけ。アンカーは確定表ができてから配る。
     dbg.space("derive", space)
-    dbg.anchors("derive", space)
+
+    from .topopt import binary_search
+
+    keep_room = binary_search.keep_cells_without_room(space.mask, space.keep, min_width["cells"], space.obstacle)
+    if min_width["cells"] > 1:
+        trace.snapshot('min-width-keep-without-room', **keep_room)
+    keep_room_warning = _keep_without_room_warning(min_width, keep_room)
 
     common = {
         "resolution": limits,
         "element_size_mm": float(space.grid.spacing),
+        "min_width": min_width,
+        "min_width_keep_without_room": keep_room,
         "grid": space.grid.as_dict(),
         "design_elements": int(space.element_count),
         "allowable": allowable_stress(),
         "target_safety_factor": float(opts.target_safety_factor),
+        "search_target_safety_factor": search_target,
+        "search_target_factor": factor,
         # 条件面が空で早期returnしたときは測れない(節点が0個)ので None のまま。
         "anchor_check": None,
-        # **拘束面ごとの反力**(`anchor.run_pipeline` の `"reactions"`)。最適化を回さずに
-        # 戻る枝では空のまま —— 反力は解いた `K u = f` から出るので、解いていなければ無い。
-        "reactions": [],
     }
 
     # **条件面が本番の解像度で空になっていないか。** 導出が作った面アンカーの表から自分で見る
     # (`design_space.connect_conditions` は空のときに判定を降りるだけで、上へは伝えない)。
-    # 運び方は `20260904-1556` と同じ —— 診断を戻り値へ積み、1文の警告を付け、`simp` は
-    # 呼ばずに早期return。
+    # 運び方は `20260904-1556` と同じ —— 診断を戻り値へ積み、1文の警告を付け、
+    # 探索(`binary_search.find_best_feasible`)は呼ばずに早期return。
     empty_faces = _empty_condition_faces(space)
     if empty_faces:
         from .topopt import anchor as an
@@ -1022,25 +1010,18 @@ def _run(
             state="empty_condition_faces",
             body_id=None,
             name=None,
-            warning=an.format_condition_face_warning(empty_faces),
+            warning=_join_warnings(an.format_condition_face_warning(empty_faces), keep_room_warning),
             empty_condition_faces=empty_faces,
             unrepresented_regions=[],
+            boundary_mapping=None,
             safety_factor=None,
             material_mm3=None,
-            achieved_material_mm3=None,
-            converged=None,
             evaluations=0,
-            history=[],
+            termination=None,
             triangle_count=None,
             vertex_count=None,
             seconds=time.perf_counter() - started,
         )
-
-    # **荷重・拘束が本当に選んだ面に載ったか**を、実際にできたアンカーで測り直す。
-    # `_verify_face_mapping` は「まとめた形の面添字」の対応を見るが、こちらは
-    # 「その面添字で作られた節点集合が、その面のところにあるか」を見る(2枚目の網)。
-    anchor_check = _check_anchor_centroids(doc, space)
-    common["anchor_check"] = anchor_check
 
     # **事後検出。** 保持・除外ソリッドが、この解像度で1つでも表現できていないなら
     # 最適化を回さずに戻る(同じ運び方)。
@@ -1051,65 +1032,140 @@ def _run(
             state="unrepresented_regions",
             body_id=None,
             name=None,
-            warning=format_region_warning(unrepresented),
+            warning=_join_warnings(format_region_warning(unrepresented), keep_room_warning),
             empty_condition_faces=[],
             unrepresented_regions=unrepresented,
+            boundary_mapping=None,
             safety_factor=None,
             material_mm3=None,
-            achieved_material_mm3=None,
-            converged=None,
             evaluations=0,
-            history=[],
+            termination=None,
             triangle_count=None,
             vertex_count=None,
             seconds=time.perf_counter() - started,
         )
 
-    element_volume = space.grid.element_volume
-    capacity_mm3 = space.element_count * element_volume
-    keep_mm3 = float(space.model.keep.sum()) * element_volume
-    material_min, material_max = _material_bounds(opts, keep_mm3, capacity_mm3)
+    # **境界条件の確定。** 導出出力に接する節点だけへ条件面を対応付け直した確定表を作り、
+    # 面ごとの対応・荷重保存・作用位置を検証する。以後の検査・島処理・FEM・デバッグ表示は
+    # 全てこの表を使う。不成立なら候補生成もFEMも始めない(探索の入口検査と同じ語で返す)。
+    from .topopt import anchor as an
 
+    table, mapping = _map_boundary_conditions(space, bundle)
+    pump.check()
+    if mapping["status"] != "pass":
+        return dict(
+            common,
+            state="boundary_mapping_failed",
+            body_id=None,
+            name=None,
+            warning=_join_warnings(an.format_mapping_warning(mapping), keep_room_warning),
+            empty_condition_faces=[],
+            unrepresented_regions=unrepresented,
+            boundary_mapping=mapping,
+            safety_factor=None,
+            material_mm3=None,
+            evaluations=0,
+            termination="boundary_mapping_failed",
+            triangle_count=None,
+            vertex_count=None,
+            seconds=time.perf_counter() - started,
+        )
+
+    # **荷重・拘束が本当に選んだ面に載ったか**を、確定表の節点で測り直す。
+    # `_verify_face_mapping` は「まとめた形の面添字」の対応を見るが、こちらは
+    # 「その面添字で作られた節点集合が、その面のところにあるか」を見る(2枚目の網)。
+    anchor_check = _check_anchor_centroids(doc, space, table=table)
+    common["anchor_check"] = anchor_check
+    # **アンカーはここで1回だけ配る**(`?debug=anchors`)。探索が使う確定表の節点。
+    dbg.anchors("mapping", space, table=table)
+
+    conditions = _build_search_conditions(doc, space, bundle, opts, table=table, mapping=mapping)
+    search_kwargs: Dict[str, Any] = {}
+    if opts.max_evaluations is not None:
+        search_kwargs["max_evaluations"] = int(opts.max_evaluations)
+    search_kwargs["min_width_cells"] = min_width["cells"]
+    budget_text = str(opts.max_evaluations) if opts.max_evaluations is not None else "既定"
+    target_text = f"目標安全率 {opts.target_safety_factor:.3g}"
+    if factor != 1.0:
+        target_text += (f"(探索の格子では {search_target:.3g} = {opts.target_safety_factor:.3g} × {factor:.3g} "
+                        "を満たす形を探す)")
     pump.emit(
         phase="search",
-        message=(
-            f"材料量 {material_min:.4g}〜{material_max:.4g} mm^3 で"
-            f"安全率 {opts.target_safety_factor:.3g} を満たす最小を探す"
-        ),
+        message=f"形状の探索を始める(全材料の評価 → エネルギー順の削減。{target_text}・評価予算 {budget_text})",
     )
-
-    result = safety_loop.solve_for_safety_factor(
-        space,
-        target_safety_factor=float(opts.target_safety_factor),
-        material_min_mm3=material_min,
-        material_max_mm3=material_max,
-        max_iter=int(
-            safety_loop.DEFAULT_MAX_ITER if opts.max_iter is None else opts.max_iter
-        ),
-        max_evaluations=int(
-            safety_loop.DEFAULT_MAX_EVALUATIONS
-            if opts.max_evaluations is None
-            else opts.max_evaluations
-        ),
-        forces=bundle.forces,
-        # **最小部材幅の入力は探索へ明示的に渡す。** 落とすと `run_topopt` が既定の半径
-        # (`simp.DEFAULT_RMIN` 要素)で回り、画面で入れた値が黙って効かなくなる。
-        rmin_mm=opts.rmin_mm,
-        progress=pump.on_search_step,
-        run_progress=pump.on_iteration,
-    )
+    # 探索に入る前の中断はここで拾う(探索の中では評価と評価のあいだでしか見ない)。
     pump.check()
 
-    # 平滑化する前の密度場(`?voxel=1`)。塊は探索の前に配ったものと同じ(`result.space is space`)。
-    if result.run is not None and result.run.get("result") is not None:
-        dbg.rho("final", result.space.grid, result.run["result"].rho)
+    def on_evaluation(event: dict) -> None:
+        pump.send(
+            phase="search",
+            message=_evaluation_message(
+                event, design_elements=int(space.element_count), factor=factor,
+                elapsed_seconds=time.perf_counter() - started),
+            **event,
+        )
 
-    surface = result.run["surface"]
-    grid = result.space.grid
-    positions = _mesh_to_world(surface.verts_smooth, grid)
-    _check_mesh_placement(positions, grid)
+    search_result = binary_search.find_best_feasible(
+        space.mask, conditions, is_cancelled=should_cancel, on_evaluation=on_evaluation, **search_kwargs
+    )
+    trace.snapshot(
+        'search-result',
+        status=search_result.status,
+        termination=search_result.termination,
+        evaluations=search_result.evaluations,
+        material_mm3=(
+            None if search_result.best_feasible is None
+            else search_result.best_feasible.material_mm3
+        ),
+    )
+
+    if search_result.termination == 'cancelled':
+        # 計画書§4.6「中断時は合格チェックポイントを記録するが、製品文書へ勝手に結果を
+        # 追加しない」—— best_feasible が見つかっていても保存しない(トレースには残した)。
+        raise OptimizeCancelled("形状探索を中断した")
+
+    if search_result.status != 'feasible':
+        # 段階4の契約「SearchResult.status が 'feasible' 以外なら、この値をそのまま
+        # UI/ログへ渡せばよい」——ここではそれに日本語の一言を添えるだけ。
+        return dict(
+            common,
+            state=search_result.status,
+            body_id=None,
+            name=None,
+            warning=_join_warnings(
+                _search_failure_warning(search_result, min_width, factor), keep_room_warning),
+            empty_condition_faces=[],
+            unrepresented_regions=unrepresented,
+            boundary_mapping=mapping,
+            safety_factor=None,
+            material_mm3=None,
+            evaluations=int(search_result.evaluations),
+            termination=search_result.termination,
+            triangle_count=None,
+            vertex_count=None,
+            seconds=time.perf_counter() - started,
+        )
+
+    best = search_result.best_feasible
+    # 最終確定マスク(値は0/1のbool)。`_DebugSink.rho` の閾値0.5はboolに対しても
+    # 形式的に成り立つ(True > 0.5 / False > 0.5)ので、二値専用の配信経路を新設していない。
+    dbg.rho("final", space.grid, best.mask)
+
+    from .topopt import mesh as topo_mesh
+
+    pump.emit(phase="mesh", message="確定マスクをメッシュ化する")
+    # **候補評価中には一度も呼ばれない入口。** 島除去・保持塗り直しをもう一度掛けない
+    # (計画書§3、`mesh.build_surface_from_mask` のdocstring)。
+    # **`spacing` は既定(要素添字空間の1.0)のまま渡す。** 実寸への変換は下の
+    # `_mesh_to_world`(`grid.origin + verts * grid.spacing`)が一括して行う契約
+    # (モジュール docstring)——ここでも実 spacing を渡すと二重に掛かってメッシュが
+    # 格子の外へ大きく外れる。
+    surface = topo_mesh.build_surface_from_mask(best.mask)
+    positions = _mesh_to_world(surface.verts_smooth, space.grid)
+    _check_mesh_placement(positions, space.grid)
     indices = surface.faces.ravel().tolist()
-    trace.snapshot('selected-result', result=result)
+    trace.snapshot('selected-result', status=search_result.status, termination=search_result.termination,
+                   material_mm3=best.material_mm3, safety_factor=best.safety_factor)
     import numpy as np
     from .topopt.finalize import finalize, solid_mesh
 
@@ -1122,70 +1178,70 @@ def _run(
     final_vertices, final_faces = solid_mesh(shape)
     positions = final_vertices.ravel().tolist()
     indices = final_faces.ravel().tolist()
-    trace.final_mesh(surface.verts_raw, surface.verts_smooth, surface.faces, grid,
+    trace.final_mesh(surface.verts_raw, surface.verts_smooth, surface.faces, space.grid,
                      final_vertices=final_vertices, final_faces=final_faces)
 
-    name = opts.name or _unique_result_name(doc)
-    pump.emit(phase="insert", message="保持・除外を反映したCADソリッドを足す")
-    from .verbs import add_solid_body
+    name = _unique_result_name(doc)
+    pump.emit(phase="insert", message="保持・除外を反映した結果をメッシュボディとして足す")
+    from .verbs import add_mesh_body
 
-    body_id = add_solid_body(doc, shape, name=name)
+    # 結果は編集可能ソリッドとして持たない(2026-09-23 本人判断)。文書に入るのは `solid_mesh` が
+    # 合格させた三角形で、画面・STL はそれをそのまま使う(再テセレーションも B-rep の保存も無い)。
+    # ブーリアン後の B-rep 自体は記録の `final-solid` スナップショットにだけ残る(finalize._save_shape)。
+    # 112k 面の B-rep を `add_solid_body` で入れると、操作ログに 128 MB のテキストが載り、開くたびに
+    # BRepCheck が走り、画面は面ごとの Mesh を 22 万個作っていた。
+    body_id = add_mesh_body(doc, positions, indices, name=name)
 
     return dict(
         common,
         state="done",
         body_id=body_id,
         name=name,
-        element_size_mm=float(grid.spacing),
-        grid=grid.as_dict(),
-        design_elements=int(result.space.element_count),
-        warning=format_region_warning(unrepresented) if unrepresented else None,
+        warning=_join_warnings(
+            format_region_warning(unrepresented) if unrepresented else "", keep_room_warning) or None,
         empty_condition_faces=[],
         unrepresented_regions=unrepresented,
-        safety_factor=float(result.safety_factor),
-        material_mm3=float(result.material_mm3),
-        achieved_material_mm3=float(result.achieved_material_mm3),
-        converged=bool(result.converged),
-        evaluations=int(result.evaluations),
-        history=[_step_payload(step) for step in result.history],
-        reactions=list(result.run.get("reactions", [])),
+        boundary_mapping=mapping,
+        safety_factor=float(best.safety_factor),
+        material_mm3=float(best.material_mm3),
+        evaluations=int(search_result.evaluations),
+        termination=search_result.termination,
         triangle_count=len(indices) // 3,
         vertex_count=len(positions) // 3,
         seconds=time.perf_counter() - started,
     )
 
 
-#: アンカーの節点重心が条件面の重心からどこまで離れてよいか(要素サイズの倍数)。
-#: **粗い網である** —— 狙いは「別のボディの面を掴んだ」級の取り違え(このタスクの題材では
-#: 50mm 以上離れる)を実行時にも捕まえることで、隣接面との取り違えは
-#: `_verify_face_mapping` が決定的に落とす。
-ANCHOR_CENTROID_LIMIT_ELEMENTS = 3.0
-
-
-def _check_anchor_centroids(doc: "Document", space) -> dict:
+def _check_anchor_centroids(doc: "Document", space, *, table=None) -> dict:
     """条件面の**節点集合が本当にその面のところにあるか**を測る(実行時の2枚目の網)。
 
     面添字の取り違えは例外を出さない。`_verify_face_mapping` は B-rep の側で対応を確かめるが、
     それを通り抜けた場合(まとめ方を将来変えたとき等)、ここが最後に気づける場所である。
     測るのは `anchor.FaceAnchor.centroid`(節点の担当面積で重み付けした重心)と、
-    **その面の面積重心**(`query.face_centroid`)の距離。
+    **その面の面積重心**(`query.face_centroid`)の距離。許容は `anchor.position_limit`(対応付けの
+    探索半径)で、`anchor.condition_mapping` の作用位置の門と同じ値。あちらはまとめた形の三角形群が
+    持つ面の重心と比べ、こちらは文書のボディの面から取り直した重心と比べる —— 面添字の対応が
+    壊れていれば、こちらだけが気づく。`table` を渡すとその表(探索用の確定表)を
+    測り、省くと導出の幾何の表(`space.table`)を測る。
 
     **条件に焼き込んである `center` を使ってはいけない。** あれは `Face.center()` の既定
     (`CenterOf.GEOMETRY`)で、曲面では面パッチから離れる —— hanger の荷重面(トーラス)では
-    節点重心から 12.807mm 離れ、許容は要素サイズ比例なので **4.27mm より細かいと必ず落ちて
-    いた**(面積重心なら 0.055mm)。ここは離散化の誤差を測る門なので、比べる相手は
+    節点重心から 12.807mm 離れ、許容は要素サイズ比例なので**要素を細かくするといつか必ず落ちる**
+    (面積重心なら 0.055mm)。ここは離散化の誤差を測る門なので、比べる相手は
     「その面の上のどこか」でなければならない。
     """
     import numpy as np
 
     from . import query
+    from .topopt import anchor as an
 
-    table = getattr(space, "table", None)
+    if table is None:
+        table = getattr(space, "table", None)
     if table is None:
         return {}
     setup = doc.optimize
-    limit = ANCHOR_CENTROID_LIMIT_ELEMENTS * float(space.grid.spacing)
-    out: dict = {"limit_mm": limit}
+    limit = an.position_limit(table)
+    out: dict = {"limit_mm": limit, "table": table.stats.get("mapping", "geometry")}
     # **面ごとに測る。合計や平均で見てはならない** —— 1枚だけ取り違えても、他が合っていれば
     # 平均は許容に収まる。面が増えるほど取り違えは起きやすくなるので、ここは緩めない。
     for key, faces, conditions in (
@@ -1218,7 +1274,7 @@ def _empty_condition_faces(space) -> List[dict]:
     """本番解像度で拘束面・荷重面のアンカーが空になっていないか(`20260904-1556` と同じ形)。
 
     `DesignSpace.table` は導出が作った**本番の格子の**面アンカーの表である。
-    無ければ空リストを返す —— その場合は `run_topopt` の入口層が同じ診断を出す。
+    無ければ空リストを返す(`derive()` が `table` を必ず設定する現行経路では通常起きない)。
     """
     table = getattr(space, "table", None)
     if table is None:
@@ -1232,8 +1288,7 @@ def _resolve_element_size(limits: dict, requested: Optional[float]) -> float:
     if not limits["feasible"]:
         raise OptimizeInputError(
             f"要素サイズの上限 {upper:.4g} mm が下限 {lower:.4g} mm を下回っている"
-            f"(総要素数の上限 {MAX_ELEMENTS} に収まらない)。"
-            "条件面をもっと大きい面にするか、最小部材幅(rmin)を大きくすること"
+            f"(総要素数の上限 {MAX_ELEMENTS} に収まらない)。条件面をもっと大きい面に取り直すこと"
         )
     if requested is None:
         return upper
@@ -1243,7 +1298,7 @@ def _resolve_element_size(limits: dict, requested: Optional[float]) -> float:
     if value > upper:
         raise OptimizeInputError(
             f"要素サイズ {value:.4g} mm は上限 {upper:.4g} mm より粗い"
-            "(条件面に格子節点が付かないか、密度フィルタが効かなくなる)"
+            "(条件面に格子節点が付かなくなる)"
         )
     if value < lower:
         raise OptimizeInputError(
@@ -1253,28 +1308,307 @@ def _resolve_element_size(limits: dict, requested: Optional[float]) -> float:
     return value
 
 
-def _material_bounds(
-    opts: OptimizeOptions, keep_mm3: float, capacity_mm3: float
-) -> tuple:
-    """材料量の探索範囲[mm^3]。`solve_for_safety_factor` は範囲を自分で決めない契約である。
+def min_width_steps_mm(spacing: float, max_cells: int) -> List[float]:
+    """この解像度で保証できる最小幅の段(m = 2..max_cells の `m × spacing`)。
 
-    下端は**保持ソリッドが占める体積より必ず大きく**(そこは動かせないので、それ以下を
-    目標にすると `simp` の OC が退化する)、上端は**塊の容量の端に置かない**
-    (`20260904-0142` の罠)。
+    各値は `_resolve_min_width` に渡すとちょうどその m になる形へ揃える: 浮動小数の丸めで
+    `m × spacing / spacing` が m を超える(0.1×3/0.1 → 4)ときは、値を1ulpずつ下げる。
     """
-    low = keep_mm3 * MATERIAL_MIN_RATIO
-    high = capacity_mm3 * MATERIAL_MAX_RATIO
-    if opts.material_min_mm3 is not None:
-        low = float(opts.material_min_mm3)
-    if opts.material_max_mm3 is not None:
-        high = float(opts.material_max_mm3)
-    if not (0.0 < low < high):
+    spacing = float(spacing)
+    steps: List[float] = []
+    for cells in range(2, int(max_cells) + 1):
+        value = cells * spacing
+        while math.ceil(value / spacing) > cells:
+            value = math.nextafter(value, 0.0)
+        steps.append(float(value))
+    return steps
+
+
+def _resolve_min_width(spacing: float, requested: Optional[float], max_cells: Optional[int] = None) -> dict:
+    """最小幅[mm]の入口検査(`_resolve_element_size` と同じ形)。
+
+    `None` → 既定 `max(2 × spacing, 1.0mm)`(2026-09-22本人決定)。下限(`2 × spacing`。8等分した評価格子で
+    4セル分が見える最小の幅、案B)そのものなので、1.0mm が効くのは `spacing < 0.5mm` のときだけ。
+    有限の正の値でなければ `OptimizeInputError`。`2 × spacing` を下回る明示の値も同じ例外。
+    `max_cells`(格子の最短の辺のセル数)を渡すと、`max_cells × spacing` を超える値も断る
+    (m 立方が格子に1つも入らず、空マスク以外は必ず違反になる不可能な値。巨大な値は導出の後に時間とメモリを使い切る)。
+    通れば `m = ceil(値 / spacing)` を、実際に保証される幅 `m × spacing` と、既定を採用したか(`source`)と
+    一緒に返す。**`requested_mm` は既定のときも実際に使った値**(`None` のままだと呼び出し側が
+    「未指定=制約なし」と読みうる。`web/src/session.ts` の `min_width` 型コメント)。
+    """
+    spacing = float(spacing)
+    if requested is None:
+        value, source = max(2.0 * spacing, 1.0), "default"
+    else:
+        value, source = float(requested), "requested"
+    if not math.isfinite(value) or value <= 0.0:
+        raise OptimizeInputError(f"min_width_mm は有限の正の値であること(いま {requested!r})")
+    floor = 2.0 * spacing
+    if value < floor:
         raise OptimizeInputError(
-            f"材料量の探索範囲が作れない(下端 {low:.6g} / 上端 {high:.6g} mm^3。"
-            f"保持ソリッド {keep_mm3:.6g} / 塊の容量 {capacity_mm3:.6g})。"
-            "保持ソリッドが塊のほとんどを占めていると、動かせる材料が残らない"
+            f"最小幅 {value:.4g} mm は下限 {floor:.4g} mm(要素サイズ {spacing:.4g} mm の2倍)より細い。"
+            "最小幅を上げるか、要素サイズを下げること"
         )
-    return low, high
+    cells = int(math.ceil(value / spacing))
+    if max_cells is not None:
+        ceiling = max_cells * spacing
+        # 上限そのものの値は `value / spacing` の丸めで max_cells を超えうるので、mm で比べて m を丸める
+        # (画面が出す上限と同じ比較にするため)。
+        if value > ceiling:
+            if source == "default":
+                # 利用者は最小幅を入れていないので「最小幅を下げよ」ではなく「要素サイズを下げよ」と言う。
+                # 既定値の内訳(2×spacing か 1.0mm か)は spacing に依るので、ここでは断定しない。
+                raise OptimizeInputError(
+                    f"最小幅の指定が無いので既定 {value:.4g} mm(max(要素サイズ {spacing:.4g} mm の2倍, "
+                    f"1.0 mm))を使ったが、設計空間の最短の辺({max_cells}セル × 要素サイズ = {ceiling:.4g} mm)"
+                    "がそれより細い。要素サイズを下げること"
+                )
+            raise OptimizeInputError(
+                f"最小幅 {value:.4g} mm は上限 {ceiling:.4g} mm(格子の最短の辺 {max_cells} セル × 要素サイズ "
+                f"{spacing:.4g} mm)より太い。この幅の立方は格子に入らないので、どの形も満たせない。"
+                "最小幅を下げるか、要素サイズを上げること"
+            )
+        cells = min(cells, int(max_cells))
+    return {"requested_mm": value, "spacing_mm": spacing, "cells": cells, "guaranteed_mm": cells * spacing,
+            "source": source}
+
+
+def _map_boundary_conditions(space, bundle: ConditionBundle) -> tuple:
+    """導出出力(`space.mask`)に接する節点だけへ条件面を対応付けた**確定表**と、その検証。
+
+    導出が条件ごとの接続の確認に使った幾何の表(`space.table`。材料を見ない)とは別物で、
+    表の `stats["mapping"]`("geometry" / "material")と記録の段階名 `boundary-mapping` で
+    見分ける。検証(`anchor.condition_mapping`)は面ごとの節点数・対応不能標本・被覆・合力・
+    重心・モーメントを持ち、元の幾何の表との差(節点数・被覆されない節点数・節点集合の差)も残す。
+    **確定後は再配分しない** —— 候補の削除で確定節点が材料から離れたら、その候補が不合格になる
+    (`acceptance.condition_check`)。
+    """
+    import numpy as np
+
+    from .topopt import acceptance, trace
+    from .topopt import anchor as an
+
+    allowed = acceptance.active_nodes(space.mask)
+    table = an.build_anchors(space.soup, space.grid, allowed_nodes=allowed)
+    mapping = an.condition_mapping(
+        table, space.fixed_faces, space.load_faces, bundle.forces, material=space.mask
+    )
+    geometry = getattr(space, "table", None)
+    if geometry is not None:
+        live = allowed.ravel()
+        difference: dict = {}
+        for row in mapping["faces"]:
+            face = int(row["face"])
+            before = geometry[face]
+            after = table[face]
+            lost = int((~live[before.node_ids]).sum()) if before.node_count else 0
+            difference[row["condition"]] = {
+                "geometry_nodes": int(before.node_count),
+                "geometry_uncovered_nodes": lost,
+                "mapped_nodes": int(after.node_count),
+                "only_in_geometry": int(np.setdiff1d(before.node_ids, after.node_ids).size),
+                "only_in_mapped": int(np.setdiff1d(after.node_ids, before.node_ids).size),
+                "geometry_assigned_area_mm2": float(before.total_area),
+                "mapped_assigned_area_mm2": float(after.total_area),
+            }
+        mapping["geometry_table_difference"] = difference
+    trace.snapshot(
+        "boundary-mapping",
+        mapping=mapping,
+        table_stats=dict(table.stats),
+        design_mask_hash=space.mask_hash,
+    )
+    return table, mapping
+
+
+def _build_search_conditions(doc: "Document", space, bundle: ConditionBundle,
+                             opts: OptimizeOptions, *, table=None, mapping=None) -> Any:
+    """`DesignSpace` と `ConditionBundle` から `binary_search.SearchConditions` を組み立てる。
+
+    `table` は探索用の確定表(`_map_boundary_conditions`)。省くとここで作る —— 検査・CLIが
+    この関数だけを呼んでも、製品と同じ確定表・同じ入口検査を通る(製品入口だけの防御にしない)。
+    `preserves`/`excludes` は `(name, shape)` の対にする —— `acceptance.inspect_document`
+    (過去記録を読む読み取りアダプター)が同じ変換をしている(計画書§5)ので、それと
+    同じ形にしておく。`bbox_cache=doc.bbox_cache` を渡すのは `_condition_boxes` と同じ理由
+    (境界箱の再計算を候補評価のたびに払わないため、`kernel.BoundingBoxCache`)。
+    探索の目標は実際の目標 × `opts.search_target_factor`。**係数を掛けるのはここ1か所**で、検査・測定が
+    この関数を通すときも掛かる(測定は `search_target_factor=1.0` で「渡した目標そのまま」に固定する)。
+    """
+    from .topopt import binary_search
+
+    if table is None:
+        table, mapping = _map_boundary_conditions(space, bundle)
+    preserves = tuple((bid, doc.get_body(bid).shape) for bid in bundle.keep_body_ids)
+    excludes = tuple((bid, doc.get_body(bid).shape) for bid in bundle.exclude_body_ids)
+    return binary_search.SearchConditions(
+        grid=space.grid,
+        table=table,
+        fixed_faces=space.fixed_faces,
+        load_faces=space.load_faces,
+        forces=bundle.forces,
+        preserves=preserves,
+        excludes=excludes,
+        target_safety_factor=_search_target_safety_factor(opts),
+        bbox_cache=doc.bbox_cache,
+        mapping=mapping,
+        keep_cells=space.keep,
+    )
+
+
+def _search_target_safety_factor(opts: OptimizeOptions) -> float:
+    """探索(と6条件の `safety`)に渡す目標安全率 = 実際の目標 × `search_target_factor`。係数の不正は入口で断る。"""
+    factor = float(opts.search_target_factor)
+    if not (math.isfinite(factor) and factor >= 1.0):
+        raise OptimizeInputError(
+            f"search_target_factor は 1.0 以上の有限の数でなければならない(渡された値: {opts.search_target_factor!r})")
+    target, searched = float(opts.target_safety_factor), float(opts.target_safety_factor) * factor
+    if math.isfinite(target) and not math.isfinite(searched):
+        raise OptimizeInputError(f"目標安全率 {target:.4g} × search_target_factor {factor:.4g} が有限の数にならない")
+    return searched
+
+
+def _join_warnings(*parts: str) -> str:
+    return "。".join(part.rstrip("。") for part in parts if part)
+
+
+def _keep_without_room_warning(min_width: dict, keep_room: dict) -> str:
+    """最小幅が保証されない保持セルがあるときの一言。周りが除外ソリッドか設計空間の外かで原因を言い分ける。"""
+    cells = int(keep_room["cells"])
+    if not cells:
+        return ""
+    around_exclude, around_outside = int(keep_room["around_exclude"]), int(keep_room["around_outside"])
+    head = (f"最小幅 {float(min_width['guaranteed_mm']):.4g} mm({int(min_width['cells'])}セル)が保証されない"
+            f"保持ソリッドのセルが {cells} 個ある(最小幅の規則の対象外として扱った。書き出す形には保持ソリッドの実形状が戻る)")
+    if around_outside == 0:
+        cause = f"その周りの空きセル {around_exclude} 個はすべて除外ソリッドで、除外ソリッドに挟まれて太れない"
+    elif around_exclude == 0:
+        cause = f"その周りの空きセル {around_outside} 個はすべて設計空間の外(端・凸包の外)で、設計空間の端にあって太れない"
+    else:
+        cause = (f"その周りの空きセルは除外ソリッド {around_exclude} 個・設計空間の外(端・凸包の外) {around_outside} 個で、"
+                 "除外ソリッドと設計空間の端に挟まれて太れない")
+    return f"{head}。{cause}。最小幅を下げるか、除外ソリッドとの間隔を広げること"
+
+
+def _search_failure_warning(search_result: Any, min_width: Optional[dict] = None, factor: float = 1.0) -> str:
+    """`SearchResult.status` が `'feasible'` 以外のときの一言。最小幅の制約が有効なら、原因の候補を末尾に添える。
+    `factor` は探索の目標に掛けた係数で、安全率の不足を言うときに実際の目標との関係を添える。"""
+    message = _search_failure_message(search_result, factor)
+    note = _min_width_failure_note(search_result, min_width)
+    return f"{message}。{note}" if note else message
+
+
+def _min_width_failure_note(search_result: Any, min_width: Optional[dict]) -> str:
+    """最小幅が有効(`cells`>1)で、設計空間が絞られたときだけ返す: 入口検査も全材料の評価も、絞った後の設計空間に
+    対する結果であることを添える。合格形状から始まる段階4は `feasible` で返るので、ここへは来ない。"""
+    if not min_width or int(min_width.get("cells", 1)) <= 1:
+        return ""
+    if search_result.status == 'resolution_insufficient':
+        return ""
+    info = (search_result.diagnostics or {}).get('min_width') or {}
+    trimmed = int(info.get('trimmed_cells', 0))
+    if not trimmed:
+        return ""
+    head = f"最小幅 {float(min_width['guaranteed_mm']):.4g} mm({int(min_width['cells'])}セル)の制約が有効"
+    return (f"{head}: この検査は、設計空間から立方が入らない {trimmed}/{info['design_cells']} セルを除いた後の"
+            "空間に対して行った。最小幅を下げると通ることがある")
+
+
+def _search_failure_message(search_result: Any, factor: float = 1.0) -> str:
+    """`SearchResult.status` が `'feasible'` 以外のときの一言(段階4の契約により値自体は
+
+    そのままUI/ログへ渡す。ここでは日本語の説明を1つ添えるだけ)。評価予算を増やす案内は付けない ——
+    `feasible` 以外はどれも全材料かその手前で決まり、予算では直らない。
+    """
+    diagnostics = search_result.diagnostics or {}
+    if search_result.status == 'input_contradiction':
+        voids = diagnostics.get('closed_voids')
+        if voids:
+            cells = ", ".join(f"{row['representative_cell']}({row['cells']}セル)" for row in voids['largest'])
+            return (
+                f"設計空間に閉じた空洞が {voids['count']} 個ある(格子の添字とセル数: {cells})。"
+                "形状最適化は中空構造を許容しない。除外ソリッドが設計空間(塊)に完全に包まれていないか確認し、"
+                "除外ソリッドを塊の外へつなげるか除外を外すこと"
+            )
+        return (
+            "保持ソリッドが設計空間全体を使っても収まらない(条件が矛盾している)。"
+            "保持ソリッド・除外ソリッド・条件面を見直すこと"
+        )
+    if search_result.status == 'resolution_insufficient':
+        empty = diagnostics.get('empty_faces', [])
+        return f"この解像度では拘束面・荷重面 {empty} のアンカーが空になる。解像度を上げること"
+    if search_result.status == 'boundary_mapping_failed':
+        # 対応付けの検証がある(製品経路は必ずある)なら、落ちた理由をその報告から作る ——
+        # 節点の被覆だけを語ると、対応不能標本・作用位置のずれで落ちたときに面の名前が出ない。
+        from .topopt import anchor as an
+
+        for report in (diagnostics.get('entry_mapping'), diagnostics.get('mapping')):
+            message = an.format_mapping_warning(report) if isinstance(report, dict) else ''
+            if message:
+                return message + "。材料を減らす探索では直らない(候補は設計空間の部分集合)"
+        rows = diagnostics.get('uncovered_condition_nodes', [])
+        names = ", ".join(f"{row['condition']}({row['uncovered_nodes']}/{row['nodes']}節点)" for row in rows)
+        origin = "材料に対応付けた確定表" if diagnostics.get('mapped') else "材料を見ない幾何の表"
+        return (
+            f"拘束面・荷重面の節点が設計空間全体の材料に接していない: {names}(表: {origin})。"
+            "材料を減らす探索では直らない(候補は設計空間の部分集合)ので、"
+            "除外ソリッド・条件面の位置と対応付けを見直すこと"
+        )
+    return _full_material_failure_message(search_result, factor)
+
+
+def _full_material_failure_message(search_result: Any, factor: float = 1.0) -> str:
+    """設計空間の全材料が合格しなかった(`no_feasible_found`)ときの一言。落ちた検査と数値を
+    `diagnostics['full_material']['attempts']` から出す(形として落ちた成分を優先し、無ければ計算失敗の成分)。
+    検査が持つ目標は探索時の目標(= 実際の目標 × `factor`)なので、`factor` が 1 でなければそのことを言う。"""
+    full = (search_result.diagnostics or {}).get('full_material') or {}
+    attempts = full.get('attempts') or []
+    attempt = next((row for row in attempts if row.get('status') == 'fail'), attempts[0] if attempts else {})
+    checks = attempt.get('checks') or {}
+    reasons = []
+    for name, check in checks.items():
+        if name == 'no_component':
+            components = (full.get('islands') or {}).get('components')
+            reasons.append(f"全条件を単独で満たす連結成分が無い(成分 {components} 個、欠けた条件 {check.get('missing')})")
+        elif name == 'min_width':
+            reasons.append("島を除いた形が最小幅の規則(立方の被覆と芯の連結)を満たさない")
+        elif name == 'watertight':
+            parts = []
+            if check.get('irregular_vertices'):
+                parts.append(f"非多様体の頂点 {check['irregular_vertices']} 個"
+                             f"(格子の頂点の添字の例 {check.get('sample_vertex_indices', [])[:3]})")
+            if check.get('void_components', 1) != 1:
+                parts.append(f"空の成分 {check['void_components']} 個")
+            reasons.append("水密でない(" + "、".join(parts or ["詳細なし"]) + ")")
+        elif name == 'single_solid':
+            reasons.append(f"材料が1つの塊でない(成分 {check.get('components')} 個)")
+        elif name in ('preserve', 'exclude'):
+            bodies = [str(row.get('body')) for row in check.get('bodies', []) if row.get('status') != 'pass']
+            label = "保持ソリッドとの重なりが足りない" if name == 'preserve' else "除外ソリッドに材料が掛かっている"
+            reasons.append(f"{label}({', '.join(bodies)})")
+        elif name == 'conditions':
+            reasons.append("拘束面・荷重面の条件が成り立たない")
+        elif name == 'safety':
+            if check.get('reason') == 'prerequisites_failed':
+                continue
+            if check.get('status') == 'unknown':
+                reasons.append(f"応力計算が失敗した({check.get('error') or check.get('reason')})")
+            elif check.get('safety_factor') is None:
+                reasons.append(str(check.get('message') or check.get('reason')))
+            else:
+                searched = float(check['target_safety_factor'])
+                if factor == 1.0:
+                    shortfall = f"目標 {searched:.4g} に届かない"
+                else:
+                    shortfall = (f"探索の格子で必要な安全率 {searched:.4g}"
+                                 f"(= 目標 {searched / factor:.4g} × 係数 {factor:.3g})に届かない")
+                reasons.append(f"安全率 {float(check['safety_factor']):.4g} が{shortfall}")
+    if search_result.termination == 'evaluation_error':
+        head = "設計空間の全材料の応力計算が、解法を変えた再試行の後も失敗した"
+    else:
+        head = "設計空間の全材料でも6条件に合格しない"
+    detail = f": {'、'.join(reasons)}" if reasons else ""
+    return (f"{head}{detail}。形状最適化は全材料から材料を減らすだけなので、ここから合格形状は探さない。"
+            "条件(荷重・目標安全率・保持・除外・条件面・解像度)を見直すこと")
 
 
 def _mesh_to_world(verts, grid) -> List[float]:
@@ -1316,21 +1650,6 @@ def _unique_result_name(doc: "Document") -> str:
     while f"{RESULT_NAME}-{index}" in taken:
         index += 1
     return f"{RESULT_NAME}-{index}"
-
-
-def _step_payload(step) -> dict:
-    return {
-        "material_mm3": float(step.material_mm3),
-        "outcome": str(step.outcome),
-        "safety_factor": None if step.safety_factor is None else float(step.safety_factor),
-        "elements": None if step.elements is None else int(step.elements),
-        "error": None if step.error is None else str(step.error),
-        # 候補材料量の決まり方(`safety_loop.SafetyLoopStep`)。**補間が効いたか二分へ落ちたかは
-        # ここにしか残らない** —— 実行が終わったあとに探索の軌跡を診断する唯一の手がかり。
-        "proposed_by": None if step.proposed_by is None else str(step.proposed_by),
-        "fallback_reason": None if step.fallback_reason is None else str(step.fallback_reason),
-        "clipped": bool(step.clipped),
-    }
 
 
 # --------------------------------------------------------------------------------------
@@ -1423,11 +1742,59 @@ def format_region_warning(diagnoses: List[dict]) -> str:
 # --------------------------------------------------------------------------------------
 # 進捗と中断
 # --------------------------------------------------------------------------------------
+def _format_elapsed(seconds: float) -> str:
+    total = int(seconds)
+    if total < 60:
+        return f"{total}秒"
+    hours, minutes = divmod(total // 60, 60)
+    return f"{hours}時間{minutes}分" if hours else f"{minutes}分"
+
+
+def _format_margin(percent: float) -> str:
+    size = abs(percent)
+    return f"{percent:+.0f}" if size >= 10 else f"{percent:+.1f}" if size >= 1 else f"{percent:+.2f}"
+
+
+_FAILED_CHECK_LABELS = {
+    "safety": "安全率を計算できず", "geometry": "幾何", "preserve": "保持", "exclude": "除外",
+    "watertight": "水密", "single_solid": "単一成分", "conditions": "条件面", "min_width": "最小幅",
+}
+
+
+def _evaluation_message(event: dict, *, design_elements: int, factor: float, elapsed_seconds: float) -> str:
+    """`binary_search` の `on_evaluation` の1件を、パネルの1行にする。
+
+    安全率は探索の格子での値なので、比べる相手も探索時の目標(`event['target_safety_factor']`)である。
+    """
+    target = float(event["target_safety_factor"])
+    safety = float(event["safety_factor"])
+    label = "目標" if factor == 1.0 else "探索の目標"
+    ratio = safety / target
+    gap = f"{ratio:.1f} 倍" if ratio >= 2.0 else f"{_format_margin(100.0 * (ratio - 1.0))}%"
+    best = (f"安全率 {safety:.4g}({label} {target:.3g} の {gap})・"
+            f"材料 {100.0 * event['cells'] / design_elements:.1f}%({event['cells']:,} 要素)・"
+            f"経過 {_format_elapsed(elapsed_seconds)}")
+    if event["outcome"] == "initial":
+        return f"評価 {event['evaluation']}: 全材料は合格。{best}"
+    if event["outcome"] == "accepted":
+        return f"評価 {event['evaluation']}: 採用。{best}"
+    candidate = event.get("candidate_safety_factor")
+    if "safety" in event["failed"] and candidate is not None:
+        reason = f"安全率 {candidate:.5g}"
+    else:
+        reason = "・".join(_FAILED_CHECK_LABELS.get(name, name) for name in event["failed"]) or "計算失敗"
+    return f"評価 {event['evaluation']}: 不合格({reason})。合格形状は{best}"
+
+
 class _ProgressPump:
     """進捗を1つの形に均して配り、そのついでに中断を見る。
 
     **中断を見る場所を進捗と同じにしてある**のは、長い処理の中で呼ばれる点がそこしか
     無いからである(タスク本文「`progress` コールバックから止められる程度」)。
+
+    **探索の中の途中経過は `send`(中断を見ない)で配る。** 探索は自分の `is_cancelled` で候補を作る前ごとに
+    中断を見て、合格チェックポイントを持った `SearchResult` を返す。`find_best_feasible` の `on_evaluation` から
+    `emit` を呼ぶと、そこで `OptimizeCancelled` が上がって探索の戻り値(`search-result` の記録)が失われる。
     """
 
     def __init__(
@@ -1437,7 +1804,6 @@ class _ProgressPump:
     ) -> None:
         self._sink = sink
         self._should_cancel = should_cancel
-        self._evaluation = 0
 
     def check(self) -> None:
         if self._should_cancel is not None and self._should_cancel():
@@ -1445,41 +1811,14 @@ class _ProgressPump:
 
     def emit(self, **event: Any) -> None:
         self.check()
+        self.send(**event)
+
+    def send(self, **event: Any) -> None:
         if self._sink is None:
             return
         payload = {
             "phase": event.pop("phase"),
             "message": event.pop("message", ""),
-            "evaluation": self._evaluation,
         }
         payload.update(event)
         self._sink(payload)
-
-    def on_iteration(self, iteration, _rho) -> None:
-        """`simp.optimize` の設計反復ごと(`callback(Iteration, rho)`)。"""
-        self.emit(
-            phase="optimize",
-            message=f"設計反復 {iteration.it}",
-            iteration=int(iteration.it),
-            compliance=float(iteration.compliance),
-            volfrac=float(iteration.volfrac),
-            change=float(iteration.change),
-        )
-
-    def on_search_step(self, step) -> None:
-        """`safety_loop` の候補材料量ごと(`progress(SafetyLoopStep)`)。"""
-        self._evaluation += 1
-        self.emit(
-            phase="search",
-            message=(
-                f"材料 {step.material_mm3:.4g} mm^3 → "
-                + (
-                    f"安全率 {step.safety_factor:.3f}"
-                    if step.safety_factor is not None
-                    else str(step.outcome)
-                )
-            ),
-            material_mm3=float(step.material_mm3),
-            outcome=str(step.outcome),
-            safety_factor=None if step.safety_factor is None else float(step.safety_factor),
-        )

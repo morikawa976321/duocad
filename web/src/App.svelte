@@ -36,7 +36,6 @@
     needsSketchId,
   } from './commands/features'
   import { entityHandles, ghostCopies, snapToSketchEntity, type GhostSource } from './entityKinds'
-  import { expressionValue } from './expression'
   import { IMPORT_STEP, changesDocument } from './commands/files'
   import {
     OPTIMIZE_EMPTY_START_VERBS,
@@ -44,6 +43,7 @@
     OPTIMIZE_PRESET_ROLE,
   } from './commands/optimize'
   import OptimizePanel, { type OptimizeNotice } from './OptimizePanel.svelte'
+  import { judgeMinWidth, minWidthProblem } from './minWidth'
   import {
     DEFAULT_SKETCH_COMMAND_ID,
     SKETCH_COMMANDS,
@@ -441,11 +441,9 @@
     },
     onWarning: (message) => fail(`警告 ${message}`),
     onStatus: (next) => {
-      // **繋がっていたのに切れた**のはエラー(操作が届かなくなる)。最初の接続待ちや
-      // 再接続の試行を毎回トーストにしても人間にできることは無いので、落差だけを見る。
-      const wasOpen = status === 'open'
+      // 切断・再接続の試行は黙る(`session.ts` が「開けなかった試行」だけトーストへ回す)。
+      // キープアライブで切れた直後は自動で繋ぎ直すだけで、戻ってきたら開くことが多い。
       status = next
-      if (wasOpen && next !== 'open') fail('サーバとの接続が切れた(自動で繋ぎ直しを試みる)')
       // (再)接続したら今のAI設定を取り直す(サーバは再起動していなくても、
       // 前回の接続が切れている間に別の画面が `ai_configure` した可能性がある)。
       if (next === 'open') session.aiGetStatus()
@@ -513,21 +511,17 @@
   // どれも操作ログに載らない(`duocad/catalog.py` の `category="protocol"`)。
   let optimizeConditions = $state<OptimizeConditionsReport | null>(null)
   let optimizeResolution = $state<OptimizeResolutionPayload | null>(null)
-  /** 最小部材幅の入力欄の**生の文字列**。数にできない途中の打鍵を握り潰さない。 */
-  let optimizeRminText = $state('')
   /** 解像度の目盛りの位置。**0が既定(いちばん粗い)**で、増やすほど細かい。 */
   let optimizeStepIndex = $state(0)
+  let optimizeMinWidthMm = $state<number | null>(null)
+  /** 直前に「下限割れ」だったか(トーストの立ち上がり検知用、描画には使わない普通の変数でよい)。
+   *  下限割れが続いているあいだ(1文字打つごと等)にトーストを連打しないための状態。 */
+  let optimizeMinWidthWasInvalid = false
   let optimizeRunning = $state(false)
   let optimizeCancelling = $state(false)
   let optimizeProgress = $state<OptimizeProgress | null>(null)
   /** **次に走らせるまで消えない通知**(トーストは8秒で消えるので、結果の信用度はこちら)。 */
   let optimizeNotice = $state<OptimizeNotice | null>(null)
-
-  /** 入力欄の文字列を、サーバへ渡せる数へ(空・数でない・0以下は「指定なし」)。 */
-  const optimizeRminMm = $derived.by(() => {
-    const value = expressionValue(optimizeRminText)
-    return value !== null && value > 0 ? value : null
-  })
 
   /** いま選ばれている段。目盛りが縮んだときのために毎回丸め直す。 */
   const optimizeStep = $derived.by(() => {
@@ -543,10 +537,41 @@
     // あいだ古い塊が重なって見え、切り分けの道具が切り分けを妨げる。
     clearOptimizeDebug()
     session.runOptimization({
-      rminMm: optimizeRminMm,
       elementSizeMm: optimizeStep?.element_size_mm ?? null,
+      minWidthMm: optimizeMinWidthMm,
       debug: debugKindsFor(debugFlags),
     })
+  }
+
+  /** 最小幅の入力欄が変わった。**下限割れへ新しく入った瞬間だけ**トーストで知らせる
+   *  (タスク仕様「下回ったら...トーストで値の変更を促す」)。割れたまま1文字ずつ打ち直しても
+   *  連打しない —— 赤い入力欄と実行不能ボタンが「いま無効」を常時示しているので、トーストの
+   *  役目は「気づかせる」の1回だけでよい。 */
+  function handleOptimizeMinWidth(value: number | null): void {
+    optimizeMinWidthMm = value
+    const verdict = judgeMinWidth(value, optimizeStep)
+    const invalidNow = verdict.kind === 'below' || verdict.kind === 'above'
+    if (invalidNow && !optimizeMinWidthWasInvalid) {
+      showToast(`最小幅 ${value}mm: ${minWidthProblem(verdict, optimizeStep!)}。値を見直すこと`)
+    }
+    optimizeMinWidthWasInvalid = invalidNow
+  }
+
+  /** 解像度の段を変える。**その時に既に入っている最小幅が新しい下限・上限を外れたら、
+   *  黙って実行可能なまま残さずトーストで知らせる**(タスク仕様「解像度を変えると下限も変わる」)。 */
+  function handleOptimizeStep(index: number): void {
+    optimizeStepIndex = index
+    const steps = optimizeResolution?.steps ?? []
+    const newStep = steps[Math.min(index, Math.max(steps.length - 1, 0))] ?? null
+    const verdict = judgeMinWidth(optimizeMinWidthMm, newStep)
+    const invalidNow = verdict.kind === 'below' || verdict.kind === 'above'
+    if (invalidNow && !optimizeMinWidthWasInvalid) {
+      showToast(
+        `解像度を変えたので最小幅の範囲が変わった。いまの入力 ${optimizeMinWidthMm}mm: ` +
+          `${minWidthProblem(verdict, newStep!)}。値を見直すこと`,
+      )
+    }
+    optimizeMinWidthWasInvalid = invalidNow
   }
 
   // ---------------------------------------------------------------- H2: 開発用のデバッグ表示
@@ -575,8 +600,9 @@
   }
 
   /**
-   * デバッグ配信が届いた。塊と面アンカーは `stage: 'derive'` で1回、密度場は `stage: 'final'` で
-   * 1回届く。同じ `kind` が来たら後から来たほうで置き換える。
+   * デバッグ配信が届いた。塊は `stage: 'derive'` で1回、面アンカーは `stage: 'mapping'`(探索が
+   * 使う確定表)で1回、密度場は `stage: 'final'` で1回届く。同じ `kind` が来たら後から来たほうで
+   * 置き換える。
    */
   function handleOptimizeDebug(payload: OptimizeDebugPayload): void {
     if (payload.kind === 'space') optimizeDebugSpace = payload
@@ -623,7 +649,9 @@
   })
 
   /**
-   * 結果を受けた。**`state` で3つに分かれる**(`20260904-1704` の契約①)。
+   * 結果を受けた。**`state` で分かれる**(`'done'` と、それ以外の6値。`20260904-1704`
+   * の契約①、段階5で `binary_search.SearchResult.status` の3値ぶん増え、境界条件の確定で
+   * `boundary_mapping_failed` が増えた)。
    *
    * **`"done"` 以外は文書が1ビットも変わっていない**ので、そのことを通知に書く ——
    * 「走ったのに何も増えていない」を、利用者が画面から読めるようにするため。
@@ -634,11 +662,23 @@
     optimizeProgress = null
     if (result.state === 'done') {
       const safety = result.safety_factor === null ? '—' : result.safety_factor.toFixed(2)
+      const short = (value: number): string => String(Number(value.toPrecision(3)))
+      const searched =
+        `探索の格子での値。探索時の目標 ${short(result.search_target_safety_factor)} = ` +
+        `目標 ${short(result.target_safety_factor)} × 係数 ${short(result.search_target_factor)}`
+      const material = result.material_mm3 === null ? '—' : Math.round(result.material_mm3).toLocaleString()
+      // `result.min_width.source` で既定/明示を見分ける(`duocad/optimize_run._resolve_min_width`)。
+      const minWidth =
+        `最小幅 ${short(result.min_width.guaranteed_mm)}mm(` +
+        (result.min_width.source === 'default' ? '既定: 要素サイズの2倍・1mmの大きい方' : '指定') +
+        ')'
       optimizeNotice = {
         kind: result.warning ? 'bad' : 'info',
         lines: [
           `結果を「${result.name}」として足した(三角形 ${result.triangle_count} 枚 ・ ` +
-            `安全率 ${safety} ・ ${Math.round(result.seconds)}秒)`,
+            `安全率 ${safety}(${searched}) ・ 体積 ${material}mm^3 ・ 評価 ${result.evaluations}回 ・ ` +
+            `終了理由 ${result.termination ?? '—'} ・ ${Math.round(result.seconds)}秒)`,
+          minWidth,
           '元のボディは1つも消えていない。結果は表示とSTL書き出しだけができる(編集はできない)',
           ...(result.warning ? [result.warning] : []),
         ],
@@ -654,12 +694,14 @@
       if (debugFlags.voxel && result.body_id) optimizeDebugHiddenBodyId = result.body_id
       return
     }
+    // **`warning` は`state`ごとにサーバが作った具体的な一言**(`optimize_run._search_failure_warning`
+    // / `format_condition_face_warning` / `format_region_warning`)なので、ここで
+    // 汎用の言い直しを重ねない —— 「文書は変わっていない」の1点だけ添える。
     optimizeNotice = {
       kind: 'bad',
       lines: [
         result.warning ?? '結果を作れなかった',
-        '文書は1ビットも変わっていない(結果のボディは足していない)。' +
-          '解像度を1段細かくするか、条件面を大きい面に取り直すこと',
+        '文書は1ビットも変わっていない(結果のボディは足していない)',
       ],
     }
   }
@@ -882,7 +924,8 @@
     // 直したときに**状態配信を待ち続けて確定が永久に拒否される**経路ができる。
     // 出した番号を控えてあるので、それと一致するときだけ解けばよい(取りすぎない)。
     if (pendingOp !== null && pendingOp === lastFileOp) pendingOp = null
-    const size = `${payload.bytes.toLocaleString()} B`
+    const kb = payload.bytes / 1024
+    const size = `${kb.toLocaleString(undefined, { maximumFractionDigits: kb >= 1 ? 0 : 1 })} KB`
     const extra = payload.operations !== undefined ? ` / 操作 ${payload.operations}件` : ''
     // **export_step/export_stlのみ**body_idsが載る。書き出した個数と、非表示で除外した
     // 個数(0件なら文言を出さない)を並べる —— 「隠したつもりが無いのに減っている」を
@@ -975,8 +1018,8 @@
     runFileOp('export_step', { path })
   }
 
-  function exportStl(path: string, deviation: number): void {
-    runFileOp('export_stl', { path, deviation })
+  function exportStl(path: string): void {
+    runFileOp('export_stl', { path })
   }
 
   // ---------------------------------------------------------------- 選択(コアを叩くだけ)
@@ -2265,8 +2308,8 @@
   /**
    * 最適化モードにいる間、**条件の点検と解像度の目盛りを取り直す**。
    *
-   * 引き金は3つ: モードの出入り / 配りものの `state.optimize` が変わった(4 verb を
-   * 打った・undoした・部品を消した) / 最小部材幅を打ち替えた。**どちらも軽い**
+   * 引き金は2つ: モードの出入り / 配りものの `state.optimize` が変わった(4 verb を
+   * 打った・undoした・部品を消した)。**どちらも軽い**
    * (点検は文書を舐めるだけ、解像度は条件面のbboxを数枚測るだけ)ので、
    * 状態が届くたびに聞き直してよい。
    *
@@ -2275,10 +2318,9 @@
    */
   $effect(() => {
     void optimize
-    void optimizeRminMm
     if (!optimizeMode || status !== 'open' || optimizeRunning) return
     session.optimizeConditions()
-    session.optimizeResolution(optimizeRminMm)
+    session.optimizeResolution()
   })
 
   /**
@@ -2547,7 +2589,7 @@
     <!-- **常設の指標はこれで全部**(2026-08-27に本人裁定で4つ外した)。外したものと行き先:
          - **接続状態** → 常時光らせず、**操作したのに送れなかった瞬間**にトーストで言う
            (`session.ts` の `send`)。見ても何もしなくてよい間ずっと視線を取るのをやめた。
-           繋がっていたのが切れたときの通知(`onStatus`)と、再接続の連続失敗の通知は残る。
+           再接続が開けないときの通知(`session.ts` の `onError` / `socket`)だけ残る。
          - **部品数 / 操作数** → 数そのものは人の判断に使わない。何があるかはブラウザ
            (`BrowserPanel.svelte`)を見れば分かり、操作数は保存したファイルの一覧に出る。
          - **プレビュー中の印** → **印が要らない見え方を目指す**方針(本人)。幽霊が
@@ -2755,14 +2797,14 @@
         <OptimizePanel
           conditions={optimizeConditions}
           resolution={optimizeResolution}
-          rminText={optimizeRminText}
           stepIndex={optimizeStepIndex}
+          minWidthMm={optimizeMinWidthMm}
           running={optimizeRunning}
           cancelling={optimizeCancelling}
           progress={optimizeProgress}
           notice={optimizeNotice}
-          onRmin={(text) => (optimizeRminText = text)}
-          onStep={(index) => (optimizeStepIndex = index)}
+          onStep={handleOptimizeStep}
+          onMinWidth={handleOptimizeMinWidth}
           onRun={runOptimization}
           onCancel={() => session.cancelOptimization()}
         />

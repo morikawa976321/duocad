@@ -17,10 +17,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import sys
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Optional, Sequence
 
 import numpy as np
@@ -30,8 +28,6 @@ from scipy.spatial import ConvexHull, QhullError
 from . import anchor as an
 from . import trace
 from . import voxelize as vx
-
-_HERE = Path(__file__).resolve().parent
 
 #: 診断に書く導出方式の名前。記録を読む側(`topopt_checks/`)はこの文字列で新旧を見分ける。
 DERIVATION = "convex-hull-offset"
@@ -86,8 +82,8 @@ class DesignSpaceDisconnectedError(ValueError):
 
     `components` は塊の連結成分の数、`unreached` は取り残された条件の名前、`seeds` は
     条件ごとの `{"elements": 塊の中の要素数, "labels": 所属する成分}`。条件面の名前は
-    `anchor.run_pipeline` が反力グループに付けるものと同じ `fixed_face_<面添字>` /
-    `load_face_<面添字>`、保持ボディは `keep_<ボディ名>`。
+    `connect_conditions` が付ける `fixed_face_<面添字>` / `load_face_<面添字>`、
+    保持ボディは `keep_<ボディ名>`。
     """
 
     def __init__(
@@ -238,8 +234,8 @@ def connect_conditions(
 
     **節点が1つも付かなかった条件面があるときは連結性を見ず、塊もそのまま返す** —— それは
     「要素サイズより小さい面にアンカーが付かない」という別の穴で、`AnchorTable.empty_faces()` を
-    見る既存の口(`optimize_run` の `empty_condition_faces` / `run_topopt` の早期return)が
-    診断を出す。ここで落とすとその手前で別の例外に化けて原因が分かりにくくなる。
+    見る既存の口(`optimize_run._empty_condition_faces`)が診断を出す。ここで落とすと
+    その手前で別の例外に化けて原因が分かりにくくなる。
     """
     fixed = _as_faces(fixed_faces)
     load = _as_faces(load_faces)
@@ -252,7 +248,7 @@ def connect_conditions(
     seeds: dict = {}
     for kind, faces in (("fixed", fixed), ("load", load)):
         for face in faces:
-            seeds[f"{kind}_face_{int(face)}"] = table.element_mask([int(face)], layers=1)
+            seeds[f"{kind}_face_{int(face)}"] = table.element_mask([int(face)])
     for name, mask in keep_seeds.items():
         seeds[str(name)] = mask
     return connect_seeds(design, seeds)
@@ -348,10 +344,9 @@ class Conditions:
     `load_n` は荷重の**実際の大きさ**[N]。荷重が複数のときは**その大きさの総和**であって
     合力(ベクトル和)ではない —— 向きの違う荷重が打ち消し合うと合力は0になりうるが、
     総和なら0にならない(`optimize_run.build_conditions` / `stress.load_magnitude_total`)。
-    最適化そのもの(`simp.optimize` / `run_topopt` の `force` / `forces`)は無次元
+    最適化そのもの(`optimize_run.build_conditions` が組み立てる荷重)は無次元
     (荷重の総量が1.0)で回り続ける —— `load_n` はここでは使われず、
-    `stress.UnitScale.for_model(..., load_n=conditions.load_n)` が応力を実単位[MPa]へ
-    換算するときにだけ参照する(`safety_loop.py`)。
+    `stress.UnitScale` が応力を実単位[MPa]へ換算するときにだけ参照する。
     """
 
     keep: Any
@@ -419,6 +414,9 @@ class DesignSpace:
     corners: np.ndarray
     stats: dict = field(default_factory=dict)
     table: Any = None
+    #: 除外ソリッドの格子上の占有。凸包の外や塊から外れた分も含む(`mask` は除外を引き切った後なので、
+    #: 塊の穴が除外由来かを見分けるのに使う)。除外が無い・格子と重ならないときは全 False。読み取り専用。
+    obstacle: Optional[np.ndarray] = None
 
     @property
     def element_count(self) -> int:
@@ -615,6 +613,32 @@ def box_mask(grid: vx.Grid, lo: Sequence[float], hi: Sequence[float]) -> np.ndar
     return inside[0][:, None, None] & inside[1][None, :, None] & inside[2][None, None, :]
 
 
+def frame_box(cloud_lo, cloud_hi, *, margin_ratio: float = DEFAULT_MARGIN_RATIO) -> tuple:
+    """条件の点群の外接箱 → 格子の外枠 `(lo, hi)`。余白は `margin_ratio × 点群の最長辺`。"""
+    lo = np.asarray(cloud_lo, dtype=float)
+    hi = np.asarray(cloud_hi, dtype=float)
+    longest = float(np.max(hi - lo))
+    if not longest > 0:
+        raise DesignSpaceGeometryError("条件の点群が1点に潰れている(外接箱が起こせない)")
+    margin = float(margin_ratio) * longest
+    return lo - margin, hi + margin
+
+
+def grid_for_frame(box_lo, box_hi, *, elements_long_axis: int = DEFAULT_ELEMENTS_LONG_AXIS,
+                   spacing: Optional[float] = None) -> vx.Grid:
+    """外枠 → 格子。`spacing` を渡すと最長辺の分割数を丸めて決める(実 spacing は指定値と一致しない)。
+
+    **格子を起こす規則はここだけにある。** `derive` も解像度の梯子(`optimize_run`)もこれを呼ぶ ——
+    2箇所で同じ式を書くと、画面に出す要素サイズ・要素数と実際の格子が黙ってずれる(層をまたぐ契約)。
+    """
+    if spacing is None:
+        n_long = int(elements_long_axis)
+    else:
+        n_long = max(1, int(round(float(np.max(np.asarray(box_hi, dtype=float) - np.asarray(box_lo, dtype=float)))
+                                  / float(spacing))))
+    return vx.grid_for_bbox(box_lo, box_hi, n_long)
+
+
 # ---------------------------------------------------------------------------
 # 導出(本体)
 # ---------------------------------------------------------------------------
@@ -653,21 +677,15 @@ def derive(
     cloud_lo = corners.min(axis=0)
     cloud_hi = corners.max(axis=0)
     longest = float(np.max(cloud_hi - cloud_lo))
-    if not longest > 0:
-        raise DesignSpaceGeometryError("条件の点群が1点に潰れている(外接箱が起こせない)")
+    box_lo, box_hi = frame_box(cloud_lo, cloud_hi, margin_ratio=ratio)
     margin = ratio * longest
     planes, triangles, hull_info = convex_hull(corners)
-    box_lo = cloud_lo - margin
-    box_hi = cloud_hi + margin
-
-    if spacing is None:
-        n_long = int(elements_long_axis)
-    else:
-        n_long = max(1, int(round(float(np.max(box_hi - box_lo)) / float(spacing))))
-    grid = vx.grid_for_bbox(box_lo, box_hi, n_long)
-    # **保持/除外を格子に載せるときの三角形分割は要素サイズから決める。** `anchor.run_pipeline` は
-    # `model_from_design_mask` を deviation 無しで呼ぶ(= 要素サイズの `DEFAULT_DEVIATION_RATIO` 倍)
-    # ので、ここを揃えておかないとここで通した保持が run_pipeline では通らない。
+    grid = grid_for_frame(box_lo, box_hi, elements_long_axis=elements_long_axis, spacing=spacing)
+    # 実際に使った最長軸の分割数(`grid_for_frame` は外枠の最長辺 / 分割数を要素サイズにする)。
+    n_long = int(round(float(np.max(box_hi - box_lo)) / grid.spacing))
+    # **保持/除外を格子に載せるときの三角形分割は要素サイズから決める。** この関数の下の方で
+    # `model_from_design_mask` を deviation 無しで呼ぶ(= 要素サイズの `DEFAULT_DEVIATION_RATIO`
+    # 倍)ので、ここを揃えておかないと通した保持がそこで通らない。
     dev = float(deviation) if deviation else max(grid.spacing * deviation_ratio, 1e-6)
 
     frame = box_mask(grid, box_lo, box_hi)
@@ -728,8 +746,8 @@ def derive(
     soup = vx.triangles_from_shape(
         vx._unwrap(conditions.anchor), deviation=dev, angular_deflection=angular_deflection
     )
-    # アンカーの表は `run_pipeline` と同じ作り方(全面・既定の半径)で作る。`faces=` で2面に
-    # 絞ると稜線の規則(節点は最も面積を配った面が持つ)の競争相手が減り、**向こうとは別の
+    # アンカーの表は**全面・既定の半径**で作る。`faces=` で対象の面を絞ると稜線の規則
+    # (節点は最も面積を配った面が持つ)の競争相手が減り、**絞らずに作った表とは別の
     # 節点集合**になる —— 同じものを見ているつもりで違うものを見ることになる。
     table = an.build_anchors(soup, grid)
     connected, connectivity = connect_conditions(
@@ -765,6 +783,8 @@ def derive(
     final = np.array(connected, dtype=bool)
     for array in (final, model.design, model.keep, model.obstacle):
         array.setflags(write=False)
+    obstacle_cells = np.zeros(tuple(grid.shape), dtype=bool) if obs is None else np.array(obs, dtype=bool)
+    obstacle_cells.setflags(write=False)
 
     stats = {
         "derivation": DERIVATION,
@@ -817,6 +837,7 @@ def derive(
         corners=corners,
         stats=stats,
         table=table,
+        obstacle=obstacle_cells,
     )
 
 
@@ -878,204 +899,3 @@ def _keep_bodies_on_grid(
         else:
             seeds[f"keep_{body.name}"] = raw & design
     return report, seeds, conflicts, unrepresented
-
-
-# ---------------------------------------------------------------------------
-# 端から端まで(塊 → 面アンカー → SIMP → marching cubes → STL)
-# ---------------------------------------------------------------------------
-@trace.stage("candidate")
-def run_topopt(
-    space: DesignSpace,
-    *,
-    volfrac: Optional[float] = None,
-    material_mm3: Optional[float] = None,
-    rmin: Optional[float] = None,
-    rmin_mm: Optional[float] = None,
-    max_iter: int = 60,
-    force: Sequence[float] = (0.0, 0.0, -1.0),
-    forces: Optional[Sequence[Sequence[float]]] = None,
-    stl_path: Optional[str | Path] = None,
-    progress: Any = None,
-    solver: Optional[str] = None,
-    threads: Optional[int] = None,
-    update: Optional[str] = None,
-    reaction_min: Optional[float] = None,
-    keep_model: bool = False,
-    dynamic_active: bool = False,
-) -> dict:
-    """導出した塊を端から端まで回す(塊 → 面アンカー → SIMP → marching cubes → STL)。
-
-    `stl_path` は**必ず渡すか、既定のこの関数の出力先に任せる**。`anchor.run_pipeline` の既定は
-    `output/bracket.stl` で、それは `check_anchor.py` の成果物である。
-
-    体積目標は `volfrac`(分率)か `material_mm3`(材料の総体積[mm^3])のどちらか一方
-    (両方渡すと例外)。**塊を自動で導出する経路では絶対量を使うこと** —— 余白比率や姿勢で
-    塊の大きさが変わると、同じ分率でも材料の量が変わってしまう。どちらも渡さなければ
-    `simp.DEFAULT_VOLFRAC`。
-
-    密度フィルタ半径は `rmin`(要素単位)か `rmin_mm`(mm)のどちらか一方(排他)。
-    どちらも渡さなければ `simp.DEFAULT_RMIN`(**値は動く。床の `simp.MIN_RMIN` とは別物**)。
-    `anchor.run_pipeline` へそのまま渡す(要素サイズはそちらが格子から決める)。
-
-    `keep_model=True` / `dynamic_active=True` / `update` / `reaction_min` / `force` / `forces` /
-    `solver` / `threads` は `anchor.run_pipeline` の同名の引数へそのまま渡る(意味の正はそちら)。
-    **どれも既定のままなら経路は1ビットも変わらない。**
-
-    戻り値の `"reactions"` は拘束面1枚ごとの反力(`anchor.run_pipeline` の契約そのまま)。
-
-    拘束面・荷重面が要素サイズより小さくて格子節点が1つも付かないと
-    (`anchor.AnchorTable.empty_faces()`)、**例外にはせず**戻り値の
-    `"empty_condition_faces"` に診断が積まれて早期returnする(`anchor.run_pipeline` の契約
-    そのまま)。同じ診断を `space.stats["empty_condition_faces_warning"]` にも書く
-    (`DesignSpace` は呼び出し元がそのまま持っているので、戻り値を経由しなくても後から
-    見える。docs/TOPOPT.md「面が小さすぎて空になる」参照)。**塊そのものは書き換えない。**
-    """
-    out = Path(stl_path) if stl_path is not None else _HERE / "output" / "design_space_case1.stl"
-    result = an.run_pipeline(
-        shape=space.soup,
-        design_mask=space.mask,
-        design_grid=space.grid,
-        keep=space.conditions.keep,
-        # 除外は塊から引き切ってある(モジュール docstring の設計判断)。
-        obstacle=None,
-        fixed_faces=space.fixed_faces,
-        load_faces=space.load_faces,
-        volfrac=volfrac,
-        material_mm3=material_mm3,
-        rmin=rmin,
-        rmin_mm=rmin_mm,
-        max_iter=max_iter,
-        force=force,
-        forces=forces,
-        stl_path=out,
-        progress=progress,
-        solver=solver,
-        threads=threads,
-        update=update,
-        reaction_min=reaction_min,
-        keep_model=keep_model,
-        dynamic_active=dynamic_active,
-    )
-    # `run_pipeline` は保持ソリッドを**自分でもう一度**格子へ載せる。三角形分割の細かさが
-    # `derive` と食い違うと、ここで通した塊が向こうでは通らない(逆もある)。揃えてあることを
-    # 数字で確かめる —— 揃っていなければ黙って別のものを最適化していることになる。
-    if not np.array_equal(np.asarray(result["model"].keep), np.asarray(space.model.keep)):
-        raise ValueError(
-            "derive() と run_pipeline() で保持領域の要素が食い違った"
-            f"({int(space.model.keep.sum())} 要素 → {int(result['model'].keep.sum())} 要素)。"
-            "derive() に deviation を明示的に渡していないか確認すること"
-            "(run_pipeline は要素サイズから決め直す)。"
-        )
-    if result.get("empty_condition_faces"):
-        space.stats["empty_condition_faces_warning"] = result["empty_condition_faces"]
-    return result
-
-
-# ---------------------------------------------------------------------------
-# 合成の4条件(受入検査と実測が共有する題材。**私物STEPに依存しない**)
-# ---------------------------------------------------------------------------
-def demo_conditions(angle_deg: float = 0.0) -> Conditions:
-    """4条件だけの合成題材。**設計空間ソリッドは作らない。**
-
-    - 保持ソリッド: 固定側パッド(x=-30の板)と荷重側パッド(x=+26,z=15の小箱)の2つ。
-      利用者が「ここは必ず材料を残す」と指定した部分に相当する。両者は離れており、
-      **その間をどう繋ぐかが最適化の答え**になる。
-    - 除外ソリッド: 2つのパッドの間を y 方向に貫く円柱(配線・ボルトの通り道に相当)。
-    - 拘束面: 固定側パッドの x 最小面。荷重面: 荷重側パッドの上面。
-      **どちらも保持ソリッドの面**(利用者が画面でクリックできるのは自分が置いた形の面だけ)。
-
-    `angle_deg` は世界の z 軸まわりの回転。**外接箱は軸整列なので、回すと塊が膨らむ**
-    —— その姿勢依存を測るための口。
-    """
-    from build123d import Box, Cylinder, Pos, Rot
-
-    rot = Rot(0, 0, float(angle_deg))
-    fixed_pad = rot * (Pos(-30, 0, 0) * Box(6, 24, 24))
-    load_pad = rot * (Pos(26, 0, 15) * Box(8, 8, 6))
-    keep = rot * ((Pos(-30, 0, 0) * Box(6, 24, 24)) + (Pos(26, 0, 15) * Box(8, 8, 6)))
-    obstacle = rot * (Pos(0, 0, 0) * Rot(90, 0, 0) * Cylinder(radius=5, height=40))
-
-    soup = vx.triangles_from_shape(vx._unwrap(keep), deviation=0.2)
-    fixed = _rotated_face(soup, angle_deg, normal=(-1, 0, 0), point=(-33, 0, 0))
-    load = _rotated_face(soup, angle_deg, normal=(0, 0, 1), point=(26, 0, 18))
-    bodies = (
-        condition_body("fixed_pad", fixed_pad, roles=("keep", "fixed")),
-        condition_body("load_pad", load_pad, roles=("keep", "load")),
-    )
-    return Conditions(
-        keep=keep, fixed_faces=fixed, load_faces=load, obstacle=obstacle, bodies=bodies
-    )
-
-
-def severed_conditions(angle_deg: float = 0.0, *, thickness: float = 10.0) -> Conditions:
-    """`demo_conditions` の除外ソリッドを、**拘束と荷重の間を丸ごと塞ぐ壁**に差し替えた配置。
-
-    壁は2つのパッドの間(x=0)に立て、y/z 方向は塊よりずっと大きく取る —— 塊の断面を端まで
-    塞がないと、**縁を回り込む道が残って「切れている」配置にならない**(既定の余白比率 0.20 で
-    塊は y -25..25 / z -25..31 程度なので、±100 あれば余白比率を振っても足りる)。
-
-    `thickness` は壁の厚み[mm]。**要素サイズより十分厚くすること** —— 要素中心が壁に入らないと
-    塊が1要素も削れず、塞いだつもりの配置がつながったまま通る。
-    """
-    from build123d import Box, Pos, Rot
-
-    base = demo_conditions(angle_deg)
-    wall = Rot(0, 0, float(angle_deg)) * (Pos(0, 0, 0) * Box(float(thickness), 200, 200))
-    return Conditions(
-        keep=base.keep,
-        fixed_faces=base.fixed_faces,
-        load_faces=base.load_faces,
-        obstacle=wall,
-        anchor_shape=base.anchor_shape,
-        bodies=base.bodies,
-    )
-
-
-def _rotated_face(
-    soup: vx.TriangleSoup, angle_deg: float, *, normal: Sequence[float], point: Sequence[float]
-) -> int:
-    """回す前の法線・重心で指定した面を、回したあとの三角形群から一意に選ぶ。
-
-    面添字が回転で変わらないことに賭けない(OCCT の面の並びは形の作り方に依存するので、
-    「回しても同じ添字のはず」は検査が守っていない仮定になる)。
-    """
-    c, s = math.cos(math.radians(angle_deg)), math.sin(math.radians(angle_deg))
-    rot = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
-    n = rot @ np.asarray(normal, dtype=float)
-    p = rot @ np.asarray(point, dtype=float)
-    hits = an.faces_matching(
-        soup, kind="plane", normal=n, near_point=p, normal_tol=1e-6, near_tol=1e-4
-    )
-    if len(hits) != 1:
-        raise ValueError(
-            f"デモの面を一意に選べなかった(法線={np.round(n, 4).tolist()}"
-            f" 重心={np.round(p, 4).tolist()} → {hits})。demo_conditions を変えたら見直すこと"
-        )
-    return hits[0]
-
-
-def _cli() -> int:
-    import argparse
-
-    parser = argparse.ArgumentParser(description="4条件から塊(設計空間)を導出する")
-    parser.add_argument("--margin-ratio", type=float, default=DEFAULT_MARGIN_RATIO)
-    parser.add_argument("--elements-long-axis", type=int, default=28)
-    args = parser.parse_args()
-
-    for _stream in (sys.stdout, sys.stderr):
-        try:
-            _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
-        except (AttributeError, ValueError):
-            pass
-
-    space = derive(
-        demo_conditions(0.0),
-        margin_ratio=args.margin_ratio,
-        elements_long_axis=args.elements_long_axis,
-    )
-    print(json.dumps(space.stats, ensure_ascii=False, default=float, indent=2))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(_cli())

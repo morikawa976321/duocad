@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from OCP.Bnd import Bnd_Box
+from OCP.BOPAlgo import BOPAlgo_BOP, BOPAlgo_Operation, BOPAlgo_Splitter
 from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepBndLib import BRepBndLib
@@ -39,8 +40,7 @@ from OCP.BRepBuilderAPI import (
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
 from OCP.BRepGProp import BRepGProp, BRepGProp_Face
-from OCP.BRepMesh import BRepMesh_IncrementalMesh
-from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
+from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakePrism
 from OCP.BRepTools import BRepTools
 from OCP.GCPnts import GCPnts_AbscissaPoint, GCPnts_TangentialDeflection
 from OCP.Geom import Geom_BezierCurve
@@ -53,14 +53,15 @@ from OCP.STEPControl import (
     STEPControl_StepModelType,
     STEPControl_Writer,
 )
-from OCP.StlAPI import StlAPI_Writer
 from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
 from OCP.TopTools import TopTools_IndexedMapOfShape, TopTools_ListOfShape
 from OCP.TColgp import TColgp_Array1OfPnt
-from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
+from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
+
+from . import kernel_meshing
 
 #: describe_shape の faces_by_type が持つキー(この順序が正。query.py が初期化に使う)
 FACE_KINDS = (
@@ -173,32 +174,6 @@ def write_step(shape: "TopoDS_Shape", path: str) -> None:
         raise ValueError(f"failed to write STEP: {filename} (Write -> {status})")
 
 
-def write_stl(shape: "TopoDS_Shape", path: str, deviation: float) -> None:
-    """形状をSTLとしてテセレーションして書き出す(バイナリSTL)。
-
-    deviation は**絶対**の線形偏差(mm)。BRepMesh_IncrementalMesh の第3引数 isRelative は
-    必ず False にする(True にすると 0.2/0.05/0.01 のどれでも同じメッシュになる)。
-    既存の三角形分割は BRepTools.Clean_s で捨ててから測り直す — 同じ形状に対して偏差を変えて
-    複数回書き出すとき、前回のメッシュが残っていると偏差が効かないことがあるため。
-    """
-    if shape is None or shape.IsNull():
-        raise ValueError("cannot write an empty shape to STL")
-    if not deviation > 0:
-        raise ValueError(f"deviation must be positive (mm), got {deviation!r}")
-
-    filename = os.fspath(path)
-    BRepTools.Clean_s(shape)
-    mesh = BRepMesh_IncrementalMesh(shape, float(deviation), False, 0.5, False)
-    if not mesh.IsDone():
-        raise ValueError(f"meshing failed for deviation={deviation} (BRepMesh_IncrementalMesh)")
-
-    writer = StlAPI_Writer()
-    writer.ASCIIMode = False
-    if not writer.Write(shape, filename):
-        _unlink_quietly(filename)
-        raise ValueError(f"failed to write STL: {filename}")
-
-
 def _unlink_quietly(filename: str) -> None:
     """書き出し失敗時に半端なファイルを残さない(0バイトの成果物を作らない。§6予防6)。"""
     try:
@@ -216,6 +191,11 @@ def volume(shape: "TopoDS_Shape") -> float:
     `BRepGProp.VolumeProperties_s(shape, props)` の**既定の積分**を使う(`Eps` を渡さない)。
     `Eps` 付きの適応積分にすると精度が落ち(Eps=1e-9で相対1.8e-10、Eps=1e-6で相対3.7e-8)、
     STEP往復の体積比較が体積の求め方に依存してしまう。
+
+    STEP書き出し→読み込みを挟んだ体積は**bit-exactではない**(浮動小数点の積分順序に由来する
+    丸め、実測相対誤差 約8e-16)。比較には `math.isclose(rel_tol=1e-6)` を使う —— 実測誤差の
+    約10億倍のマージンで、面の欠落・重複などの実ジオメトリ破損は検出しつつ丸めノイズでは
+    落ちない。面数は往復後も厳密一致(`==`)でよい。
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot compute the volume of an empty shape")
@@ -298,6 +278,29 @@ class _ShapeKey:
         return isinstance(other, _ShapeKey) and bool(self.shape.IsSame(other.shape))
 
 
+class _OrientedShapeKey(_ShapeKey):
+    """`_ShapeKey` に Orientation の一致を足した鍵。向きに依存する値(体積の符号・ブーリアンの内外)を
+    覚えるキャッシュ用で、`shape_key` が返す。"""
+
+    __slots__ = ("orientation",)
+
+    def __init__(self, shape: "TopoDS_Shape") -> None:
+        super().__init__(shape)
+        self.orientation = shape.Orientation()
+
+    def __eq__(self, other: object) -> bool:
+        return (isinstance(other, _OrientedShapeKey) and self.orientation == other.orientation
+                and bool(self.shape.IsSame(other.shape)))
+
+    __hash__ = _ShapeKey.__hash__
+
+
+def shape_key(shape: "TopoDS_Shape") -> Any:
+    """形状を辞書の鍵にするための値(TShape・Location・Orientation の一致で同一とみなす)。
+    素の `TopoDS_Shape` は鍵にならない(`_ShapeKey` の docstring)。"""
+    return _OrientedShapeKey(shape)
+
+
 class BoundingBoxCache:
     """`bounding_box` の結果を覚える、**1つの文書のあいだだけ生きる**メモ。
 
@@ -308,7 +311,8 @@ class BoundingBoxCache:
     値をここへ載せると静かに壊れる。
 
     `AddOptimal` は繰り返しても速くならない(OCCTが内部で結果を持たない。実測: 11ボディで
-    `Add` 0.09ms に対し `AddOptimal` 178ms)。**キャッシュ無しでは `AddOptimal` は使えない。**
+    `Add` 0.09ms に対し `AddOptimal` 178ms、1形状あたりでは18〜60ms)。**キャッシュ無しでは
+    `AddOptimal` は使えない。**
     """
 
     __slots__ = ("_extents",)
@@ -490,7 +494,7 @@ def _is_removed(source: Any, sub: "TopoDS_Shape") -> bool:
 # --------------------------------------------------------------------------------------
 # テセレーション — 面ごとの三角形群
 # --------------------------------------------------------------------------------------
-#: 既定の線形偏差(mm)。write_stl と同じ「絶対」の偏差。
+#: 既定の線形偏差(mm)。「絶対」の偏差(`tessellate` の isRelative=False)。
 DEFAULT_DEVIATION = 0.2
 #: 既定の角度偏差(**ラジアン**。度ではない — OCCTのBRepMesh_IncrementalMesh/GCPnts_TangentialDeflection
 #: の角度偏差パラメータはラジアンで、既定は0.5rad(`IMeshTools_Parameters().Angle`で確認済み)。
@@ -666,11 +670,17 @@ def tessellate(
           "faces": [{"index": int, "kind": str, "area": float, "centroid": [..],
                      "normal": [..], "positions": [x,y,z, ...], "indices": [i,j,k, ...]}],
           "untriangulated": [int, ...],   # 三角形が取れなかった面の添字(通常は空)
+          "boundary": {...},              # 境界折れ線の交差検査と共有辺再分割の診断(`kernel_meshing.mesh_shape`)
         }
 
     `untriangulated` を戻り値に持たせているのは、**分割に失敗した面を黙って落とさない**ため。
     1面でも欠けると画面上はただ穴が空いて見え、原因の分からない不具合になる。
     全面が失敗した場合だけは形状として成立しないので例外にする。
+
+    面分割の直前に境界折れ線の交差を独自に検査し、交差する辺を再分割してから分割する
+    (`kernel_meshing`)。解消できなかった面は**分割せず** `untriangulated` に入れ、
+    `boundary["unresolved"]` に理由(面・辺・種類)を残す —— 交差した境界を面分割へ渡すと
+    穴や非多様体の三角形になり、`untriangulated` にも現れない(docs/TOPOPT_GAP_CAUSALITY.md)。
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot tessellate an empty shape")
@@ -679,12 +689,12 @@ def tessellate(
     if not angular_deflection > 0:
         raise ValueError(f"angular_deflection must be positive, got {angular_deflection!r}")
 
-    # 既存の三角形分割を捨ててから測り直す(前回の粗いメッシュが残っていると偏差が効かない。
-    # write_stl と同じ理由・同じ順序)。
-    BRepTools.Clean_s(shape)
-    mesh = BRepMesh_IncrementalMesh(shape, float(deviation), False, float(angular_deflection), True)
-    if not mesh.IsDone():
-        raise ValueError(f"meshing failed for deviation={deviation} (BRepMesh_IncrementalMesh)")
+    # 既存の三角形分割は `mesh_shape` が捨ててから測り直す(前回の粗いメッシュが残っていると
+    # 偏差が効かない。STL書き出しは同じ形状を偏差を変えて何度も測る)。偏差は絶対mm
+    # (Relative=False)。True にすると 0.2/0.05/0.01 のどれでも同じメッシュになる。
+    # **build123d の既定の `export_stl` は True 側**なので、流用すると
+    # 「deviationを小さくすると細かくなる」が落ちる。
+    boundary = kernel_meshing.mesh_shape(shape, float(deviation), float(angular_deflection))
 
     shape_map = _face_map(shape)
     faces: List[dict] = []
@@ -707,6 +717,7 @@ def tessellate(
         "bbox": _bounding_box(faces),
         "faces": faces,
         "untriangulated": untriangulated,
+        "boundary": boundary,
     }
 
 
@@ -781,10 +792,14 @@ def tessellate_selective(
         "closed":           閉じた立体か(`_is_closed_shell`。バックフェイス判定の可否)
         faces[i]["detail"]: "fine" | "coarse"
 
-    **2パスで測る**。1回の `BRepMesh_IncrementalMesh` に面ごとの偏差を渡す口がOCCTに無いので、
+    **2パスで測る**。1回の面分割に面ごとの偏差を渡す口がOCCTに無いので、
     粗い面だけを集めたcompound・細かい面だけを集めたcompoundをそれぞれ測り、パスの間で
-    三角形を抜き出す。`BRepTools.Clean_s` を**パスごとに**呼ぶのは、前のパスの三角形が
-    残っていると `BRepMesh_IncrementalMesh` が「もう十分細かい」と判断して測り直さないため。
+    三角形を抜き出す。`BRepTools.Clean_s` を**パスごとに**形状全体へ呼ぶのは、前のパスの三角形が
+    残っているとOCCTが「もう十分細かい」と判断して測り直さないため。
+
+    境界の交差検査・共有辺の再分割(`kernel_meshing`)はパスごとに compound の中で完結する。
+    粗い面と細かい面が共有する辺は2つのパスで別々に離散化されるので、片方のパスで再分割しても
+    もう片方には伝わらない(下記の「隙間」と同じ境目の話。`boundary["passes"]` に両方の診断を残す)。
 
     **分かっている代償(隙間)**: 細かい面と粗い面が**曲線の辺**を共有していると、辺の折れ線が
     パスごとに別々に作られるので、境目に粗い側の偏差ぶんの隙間が開きうる。境目は
@@ -848,6 +863,7 @@ def _tessellate_split(
     coarse = set(range(1, total + 1)) - fine
     described: Dict[int, dict] = {}
     untriangulated: List[int] = []
+    passes: List[dict] = []
 
     for group_indices, dev, angle in (
         (coarse, coarse_deviation, coarse_angular_deflection),
@@ -860,11 +876,9 @@ def _tessellate_split(
         builder.MakeCompound(compound)
         for index in sorted(group_indices):
             builder.Add(compound, shape_map.FindKey(index))
-        # **毎パスで捨ててから測る**(残っていると「十分細かい」と見なされて測り直さない)。
+        # **毎パスで形状全体を捨ててから測る**(残っていると「十分細かい」と見なされて測り直さない)。
         BRepTools.Clean_s(shape)
-        mesh = BRepMesh_IncrementalMesh(compound, float(dev), False, float(angle), True)
-        if not mesh.IsDone():
-            raise ValueError(f"meshing failed for deviation={dev} (BRepMesh_IncrementalMesh)")
+        passes.append(kernel_meshing.mesh_shape(compound, float(dev), float(angle)))
         # **次のパスで Clean_s する前に**抜き出す。
         for index in sorted(group_indices):
             face = TopoDS.Face_s(shape_map.FindKey(index))
@@ -884,6 +898,7 @@ def _tessellate_split(
         "bbox": _bounding_box(faces),
         "faces": faces,
         "untriangulated": sorted(untriangulated),
+        "boundary": kernel_meshing.merge_diagnostics(passes),
     }
 
 
@@ -1380,6 +1395,195 @@ def boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) -> 
         "volume_before": volume_before,
         "volume_after": volume_after,
     }
+
+
+def require_valid_solid(shape: "TopoDS_Shape") -> None:
+    """`shape` が非空かつ `BRepCheck_Analyzer` 上妥当でなければ `ValueError`。
+
+    `boxes_common_volume` はこの検査を通す前に体積を計算しない(不正な形状から
+    もっともらしい数値を返さない)。呼び出し側が事前に確認する場合も同じ判定に揃えられる。
+    """
+    if shape is None or shape.IsNull() or not BRepCheck_Analyzer(shape).IsValid():
+        raise ValueError("shape is null or not a valid solid")
+
+
+def _common_with_box(shape: "TopoDS_Shape", lo: Sequence[float], hi: Sequence[float]):
+    """`shape` と軸整列直方体1つの共通部分と、その体積。`BOPAlgo_BOP`(`SetFuzzyValue(0.0)`、あいまい判定を
+    入れない)で `BOPAlgo_COMMON` を取り、エラー・警告・不正な結果は例外にする(黙って0を積まない)。"""
+    box = BRepPrimAPI_MakeBox(gp_Pnt(*lo), gp_Pnt(*hi)).Shape()
+    operation = BOPAlgo_BOP()
+    operation.AddArgument(shape)
+    operation.AddTool(box)
+    operation.SetOperation(BOPAlgo_Operation.BOPAlgo_COMMON)
+    operation.SetFuzzyValue(0.0)
+    operation.Perform()
+    if operation.HasErrors() or operation.HasWarnings():
+        raise RuntimeError("common-volume boolean did not finish cleanly")
+    result = operation.Shape()
+    if result is None or result.IsNull() or not BRepCheck_Analyzer(result).IsValid():
+        raise RuntimeError("common-volume boolean produced an invalid shape")
+    piece = volume(result)
+    if not math.isfinite(piece) or piece < 0:
+        raise RuntimeError("common volume is not finite/non-negative")
+    return result, piece
+
+
+def box_common_volume(
+    shape: "TopoDS_Shape", lo: Sequence[float], hi: Sequence[float]
+) -> float:
+    """`shape` と軸整列直方体1つ(`(min, max)` の mm 座標)の共通体積。重ならなければ 0.0。
+    取り方とエラーの扱いは `_common_with_box`。**`shape` の妥当性は見ない** —— 何度も呼ぶ側が
+    `require_valid_solid` を1回だけ通しておく。
+    """
+    return _common_with_box(shape, lo, hi)[1]
+
+
+#: `grid_cell_common_volumes` が「塊の中身が全部ソリッド」とみなす、塊の中の体積 / 塊の体積 の下限。
+#: 届かなければ切り分けに進むだけで、値は変わらない。
+_FULL_BLOCK_RATIO = 1.0 - 1e-12
+
+#: 同じ体積を2つの方法で求めた値(破片の合計と、切る前の塊の中の体積。塊の中の体積を切る方法とブーリアンで
+#: 取ったもの)が、この相対差を超えて食い違ったら失敗にする。**実測**(hanger、要素4.8mm、8セル角の塊):
+#: 相対差は最大 1.1e-6(曲面が斜めに切れた大きな円筒の塊)。既定の積分は曲面の破片で 1e-6 ほど
+#: ずれる(適応積分 `Eps=1e-12` との差)ので、これより厳しくすると正しい切り分けを落とす。一方、
+#: 破片を1つ落とせばこの桁より遥かに大きくずれる。
+_SPLIT_VOLUME_RTOL = 1e-5
+
+#: 切り分けた破片は1セルに収まるはずで、セルの体積を(既定の積分の誤差を見込んで)これ以上の割合で超える破片は、
+#: 平面で切れていない。重心でセルを決めているので、切れていない破片は別のセルへ振り分けられてしまう。
+_FULL_CELL_LIMIT = 1.0 + 1e-6
+
+
+def _axis_planes(lo: Sequence[float], hi: Sequence[float], positions, reach: float) -> "TopTools_ListOfShape":
+    """軸に垂直な平面の面。`positions[axis]` がその軸の平面の座標。面は直方体 `[lo, hi]` の中心から
+    `reach` の半幅で広がる(切りたい形状の端まで届く大きさにすること)。"""
+    center = [(lo[a] + hi[a]) / 2.0 for a in range(3)]
+    half = reach
+    planes = TopTools_ListOfShape()
+    for axis in range(3):
+        normal = [0.0, 0.0, 0.0]
+        normal[axis] = 1.0
+        for coordinate in positions[axis]:
+            origin = list(center)
+            origin[axis] = coordinate
+            plane = gp_Pln(gp_Pnt(*origin), gp_Dir(*normal))
+            planes.Append(BRepBuilderAPI_MakeFace(plane, -half, half, -half, half).Face())
+    return planes
+
+
+def _split_by_planes(argument: "TopoDS_Shape", planes: "TopTools_ListOfShape") -> "TopoDS_Shape":
+    splitter = BOPAlgo_Splitter()
+    splitter.AddArgument(argument)
+    splitter.SetTools(planes)
+    splitter.SetFuzzyValue(0.0)
+    splitter.Perform()
+    # 警告は見ない: 曲面を斜めに切ると `BOPAlgo_AlertFaceBuilderUnusedEdges` が出るが、体積は合っている
+    # (実測: 警告の出た塊で破片の合計は切る前の体積に 1.6e-8 で一致)。取りこぼしは呼び出し側の合計の検算が拾う。
+    if splitter.HasErrors():
+        raise RuntimeError("cell split boolean failed")
+    return splitter.Shape()
+
+
+def _solids(shape: "TopoDS_Shape"):
+    explorer = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_SOLID)
+    while explorer.More():
+        yield explorer.Current()
+        explorer.Next()
+
+
+def _mass_and_center(solid: "TopoDS_Shape"):
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties_s(solid, props)
+    mass = props.Mass()
+    if not math.isfinite(mass) or mass < 0:
+        raise RuntimeError("cell piece volume is not finite/non-negative")
+    point = props.CentreOfMass()
+    return mass, (point.X(), point.Y(), point.Z())
+
+
+def grid_cell_common_volumes(
+    shape: "TopoDS_Shape", lo: Sequence[float], spacing: float, counts: Sequence[int]
+) -> Tuple[str, Dict[Tuple[int, int, int], float]]:
+    """`shape` と、`lo` を最小角とする `counts`(x, y, z)個の立方体セル(一辺 `spacing`)の塊との
+    共通体積を、**セルごとに**求める。
+
+    戻り値は `(kind, volumes)`。`kind` は `'empty'`(塊と重ならない。`volumes` は空)/ `'full'`
+    (塊が全部ソリッドの中。全セルが `spacing³`。`volumes` は空)/ `'partial'`(`volumes` に
+    塊内の添字 `(i, j, k)` → 共通体積。重ならないセルは入れない)。
+
+    やり方は「`shape` を平面で切って、破片を重心のあるセルへ振り分ける」。まず塊の6面で切って塊の中の
+    破片を取り(空・全部の判定はここ)、境界にかかる塊だけをセルの境界面で切り分ける。
+    **セルごとにブーリアン(`box_common_volume` をセル数だけ)を取らない**。理由は2つ。
+    (1) セルの面が形状の継ぎ目(円筒のシームなど)のすぐそばに来ると、共通部分が空という誤った答えを
+    **エラーも警告も出さずに**返す(実測: hanger の円板ソリッド〈体積1048mm³〉でセル単位の合計が
+    1030.58mm³、17.4mm³ を落とした)。平面で切る方法は同じ形状で体積を落とさなかった。
+    (2) 曲面との交線をセルごとに計算し直さないので桁違いに速い(実測: 曲面のソリッドの364セルの塊が、
+    セルごとのブーリアンで約30秒、平面で切って約1秒)。
+    **`shape` の妥当性は見ない**(`require_valid_solid` は呼び出し側が1回だけ通す)。
+    """
+    counts = tuple(int(n) for n in counts)
+    lo = tuple(float(v) for v in lo)
+    hi = tuple(lo[a] + counts[a] * spacing for a in range(3))
+    # 面は形状の端まで届く大きさにする。届かないと、切り口の回り込みで塊の外の残り全部が1つの破片に
+    # つながり、その重心が塊の中に落ちることがある(実測: 853×50×695mm の箱を8セル角の塊で切ったとき、
+    # 残りの破片の重心が塊の中に落ちて、体積を2960万mm³ 余計に数えた)。全部届けば、破片は6面で分けた
+    # 27個の直方体領域のどれか1つに収まり(直方体は凸)、重心はその領域の中にある。
+    span = Bnd_Box()
+    BRepBndLib.Add_s(shape, span, False)
+    extent = span.Get()
+    reach = max(abs(extent[a + side] - (lo[a] + hi[a]) / 2.0) for a in range(3) for side in (0, 3))
+    reach += math.dist(lo, hi)
+    inside, inside_volume = [], 0.0
+    for solid in _solids(_split_by_planes(shape, _axis_planes(lo, hi, [(lo[a], hi[a]) for a in range(3)], reach))):
+        mass, center = _mass_and_center(solid)
+        if all(lo[a] < center[a] < hi[a] for a in range(3)):
+            inside.append(solid)
+            inside_volume += mass
+    block = math.prod(counts) * spacing ** 3
+    # 切る方法だけに頼らない: 塊の中の体積をブーリアンでも取り、食い違えば失敗にする。塊の面が継ぎ目の
+    # すぐそばに来ると、切る方法もブーリアンも黙って体積を落とすことがある(実測: 2セル角の塊で、円板の
+    # 体積が切る方法で1.4%、ブーリアンで20%落ちた)が、落とし方が違うので食い違いで見つかる。
+    common = box_common_volume(shape, lo, hi)
+    if abs(common - inside_volume) > _SPLIT_VOLUME_RTOL * max(common, inside_volume) + 1e-12 * block:
+        raise RuntimeError("block volume inside the shape disagrees between cutting and boolean common")
+    if not inside or inside_volume == 0.0:
+        return "empty", {}
+    if inside_volume >= _FULL_BLOCK_RATIO * block:
+        return "full", {}
+    compound, builder = TopoDS_Compound(), BRep_Builder()
+    builder.MakeCompound(compound)
+    for solid in inside:
+        builder.Add(compound, solid)
+    cells = _split_by_planes(compound, _axis_planes(
+        lo, hi, [[lo[a] + m * spacing for m in range(1, counts[a])] for a in range(3)], math.dist(lo, hi)))
+    volumes: Dict[Tuple[int, int, int], float] = {}
+    for solid in _solids(cells):
+        mass, center = _mass_and_center(solid)
+        if mass > _FULL_CELL_LIMIT * spacing ** 3:
+            raise RuntimeError("cell piece is larger than a cell: a cutting plane did not split it")
+        cell = tuple(min(counts[a] - 1, max(0, math.floor((center[a] - lo[a]) / spacing))) for a in range(3))
+        volumes[cell] = volumes.get(cell, 0.0) + mass
+    if abs(sum(volumes.values()) - inside_volume) > _SPLIT_VOLUME_RTOL * inside_volume:
+        raise RuntimeError("cell pieces do not add up to the block's volume inside the shape")
+    return "partial", volumes
+
+
+def boxes_common_volume(
+    shape: "TopoDS_Shape",
+    boxes: Sequence[Tuple[Sequence[float], Sequence[float]]],
+) -> float:
+    """`shape` と、軸整列直方体群(各要素は `(min, max)` の mm 座標)の共通体積の合計。
+
+    `boxes` は**互いに体積を共有しない**ことを呼び出し側が保証する(重なりがあると
+    合計が二重に数えられる)。トポロジー最適化の平滑化前受入検査が、材料マスクを
+    セル中心の内外近似ではなくOCCTの厳密なブーリアンでCADと比較するために使う
+    ——境界に接するセルを、近似では漏らす/拾いすぎる。各箱の取り方は `box_common_volume`。
+    """
+    require_valid_solid(shape)
+    overlap = 0.0
+    for lo, hi in boxes:
+        overlap += box_common_volume(shape, lo, hi)
+    return overlap
 
 
 def _ax3_from_plane(plane: dict, face: Any = None) -> "gp_Ax3":

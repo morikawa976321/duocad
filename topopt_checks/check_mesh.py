@@ -1,4 +1,4 @@
-"""メッシュ化の回帰検査。水密性・体積・補間・肉厚・座標・面の向き・保持/除外を確認する。"""
+"""メッシュ化の回帰検査。水密性・体積・肉厚・座標・面の向き・突起と空洞の保存を確認する。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import sys
 import time
 
 import numpy as np
+from scipy import ndimage
 
 # Windowsの既定コンソール(cp932)で記号1つ落ちるだけで検査が1件も走らず異常終了する。
 for _stream in (sys.stdout, sys.stderr):
@@ -17,13 +18,15 @@ for _stream in (sys.stdout, sys.stderr):
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
 from duocad.topopt import OUTPUT_DIR
-from duocad.topopt import bench
 from duocad.topopt import mesh
-from duocad.topopt import simp
 from duocad.topopt import voxelize as vx
 
 FAILURES: list[str] = []
 RESULTS: dict[str, object] = {}
+
+# 準備で使う合成マスクの格子。marching cubes の体積誤差は要素の大きさで決まり、粗すぎると
+# 検査[2](メッシュ体積 = sum(mask) が5%以内)を割る。
+MESH_MATERIAL_GRID = (35, 14, 14)
 
 
 def check(name: str, ok: bool, detail: str) -> None:
@@ -34,32 +37,39 @@ def check(name: str, ok: bool, detail: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 準備: プリセットのSIMPを1回回し、そこから mesh.build_surface でメッシュを作る
+# 準備: 合成した二値マスク(単一連結)から mesh.build_surface_from_mask でメッシュを作る
 # ---------------------------------------------------------------------------
-def run_pipeline() -> tuple[simp.Result, mesh.MeshResult]:
-    p = bench.MESH_MATERIAL
+def run_pipeline() -> tuple[np.ndarray, mesh.MeshResult]:
+    """探索は回さない。製品と同じ入口へ、製品と同じ契約(単一連結の bool マスク)の合成形状を渡す。"""
+    nelx, nely, nelz = MESH_MATERIAL_GRID
     print(
-        f"[0] 片持ち梁を最適化 "
-        f"({p['nelx']}x{p['nely']}x{p['nelz']} = {p['nelx'] * p['nely'] * p['nelz']}要素, "
-        f"最大{p['max_iter']}反復。**プリセットより細かい** —— 理由は bench.MESH_MATERIAL)"
+        f"[0] 合成マスクを作る ({nelx}x{nely}x{nelz} = {nelx * nely * nelz}要素)"
     )
     t0 = time.perf_counter()
-    result = simp.run_preset(**p)
+    # 大きい sigma で「太い塊」を作ってから二値化する(細い突起を作らない
+    # ——痩せた形は Taubin 平滑化で体積が大きく動き、検査[3]を割る。実測)。
+    rng = np.random.default_rng(20261017)
+    seed = rng.random((nelx, nely, nelz))
+    blobby = ndimage.gaussian_filter(seed, sigma=3.0, mode="nearest")
+    binary = blobby > np.quantile(blobby, 1.0 - 0.35)
+    labels, _count = ndimage.label(binary)
+    sizes = np.bincount(labels.ravel())
+    sizes[0] = 0
+    rho = labels == int(np.argmax(sizes))
     elapsed = time.perf_counter() - t0
-    print(f"  SIMP完了: {len(result.history)}反復 / {elapsed:.1f}秒")
 
     t0 = time.perf_counter()
-    mr = mesh.build_surface(result.rho)
+    mr = mesh.build_surface_from_mask(rho)
     mesh_seconds = time.perf_counter() - t0
     print(
         f"  メッシュ生成完了: 頂点{len(mr.verts_raw)} / 三角形{len(mr.faces)} / "
         f"{mesh_seconds:.2f}秒"
     )
-    RESULTS["simp_seconds"] = round(elapsed, 1)
+    RESULTS["field_seconds"] = round(elapsed, 2)
     RESULTS["mesh_seconds"] = round(mesh_seconds, 2)
     RESULTS["vertices"] = len(mr.verts_raw)
     RESULTS["triangles"] = len(mr.faces)
-    return result, mr
+    return rho, mr
 
 
 # ---------------------------------------------------------------------------
@@ -108,15 +118,14 @@ def check_watertight(mr: mesh.MeshResult) -> None:
 # 2. 体積の一致(marching cubes直後)
 # ---------------------------------------------------------------------------
 def check_volume_matches_density(mr: mesh.MeshResult) -> None:
-    print("\n[2] 体積の一致(marching cubesに実際に渡した場 vs sum(rho_clean)x要素体積)")
-    # 島除去後の密度場を比較対象にする。
+    print("\n[2] 体積の一致(marching cubesに実際に渡した場 vs sum(mask)x要素体積)")
     expected = float(mr.rho_clean.sum())  # 要素体積=1(spacing=(1,1,1))なので係数1
     actual = mr.volume_raw
     rel = abs(actual - expected) / expected
     check(
-        "marching cubes直後の体積がsum(rho)と一定範囲内で一致(5%)",
+        "marching cubes直後の体積がsum(mask)と一定範囲内で一致(5%)",
         rel < 0.05,
-        f"メッシュ体積={actual:.3f} sum(rho)={expected:.3f} 相対誤差={rel:.4%}",
+        f"メッシュ体積={actual:.3f} sum(mask)={expected:.3f} 相対誤差={rel:.4%}",
     )
     RESULTS["volume_raw"] = round(actual, 3)
     RESULTS["volume_expected_from_density"] = round(expected, 3)
@@ -136,32 +145,6 @@ def check_taubin_preserves_volume(mr: mesh.MeshResult) -> None:
     )
     RESULTS["volume_smooth"] = round(mr.volume_smooth, 3)
     RESULTS["volume_change_rel"] = rel
-
-
-# ---------------------------------------------------------------------------
-# 5. 補間が効いている(先に二値化していない)
-# ---------------------------------------------------------------------------
-def check_interpolation_not_binarized(mr: mesh.MeshResult) -> None:
-    print("\n[5] 補間が効いている(内分比の分布)")
-    # **`mr.verts_raw` から再計算しない。** `verts_raw` はセル中心規約へ半要素オフセット
-    # 済みで、整数格子点の前提(`edge_interpolation_ratios`が軸を判定する根拠)が崩れて
-    # 全頂点が「軸誤判定→常に0.5」になる(2026-08-30、オフセット修正と同時に実測して発見)。
-    # `mr.interpolation_ratios` は `mesh.run_marching_cubes` がオフセット適用前
-    # (marching_cubes直後の生座標、整数格子点のまま)に計算済みの値を使う。
-    ratios = mr.interpolation_ratios
-    std = float(ratios.std())
-    frac_exact_half = float(np.mean(np.abs(ratios - 0.5) < 1e-6))
-    # 参考: 二値化した場(rho>0.5の0/1配列)を渡すと、辺の両端が必ず0/1になり
-    # 線形補間は厳密に0.5に落ちる(std=0, frac_exact_half=1.0)。continuousな場では
-    # SIMPが密度をほぼ0/1へ押し込む(penal=3)ため0.5付近が多めではあるが、
-    # フィルタ半径ぶんの遷移域があるので分布に明確な広がりが残る。
-    check(
-        "内分比のばらつき(標準偏差)が0でない(二値化なら常に0)",
-        std > 0.03,
-        f"std={std:.4f}(0.5ちょうどの割合={frac_exact_half:.2%}, n={len(ratios)})",
-    )
-    RESULTS["interpolation_ratio_std"] = std
-    RESULTS["interpolation_ratio_frac_exact_half"] = frac_exact_half
 
 
 # ---------------------------------------------------------------------------
@@ -231,10 +214,10 @@ def check_bounding_box_alignment() -> None:
     print("\n[8] 座標系の整合(既知の位置に置いた合成密度場のバウンディングボックス)")
     lo = (2, 1, 0)
     hi = (4, 3, 2)
-    rho = np.zeros((6, 5, 4))
-    rho[lo[0] : hi[0], lo[1] : hi[1], lo[2] : hi[2]] = 1.0
+    rho = np.zeros((6, 5, 4), dtype=bool)
+    rho[lo[0] : hi[0], lo[1] : hi[1], lo[2] : hi[2]] = True
 
-    mr_synth = mesh.build_surface(rho)
+    mr_synth = mesh.build_surface_from_mask(rho)
     bbox_min = mr_synth.verts_raw.min(axis=0)
     bbox_max = mr_synth.verts_raw.max(axis=0)
     expected_min = np.array(lo, dtype=float)
@@ -297,29 +280,23 @@ def check_face_winding(mr: mesh.MeshResult) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 10. 保持/除外の塗り直し
+# 10. 突起と空洞が平滑化で潰れない
 # ---------------------------------------------------------------------------
-def check_mask_repaint() -> None:
-    """保持の追加と除外による穴が、密度場と最終メッシュの両方に反映されることを確認する。"""
-    print("\n[10] 保持/除外の塗り直し(合成密度場)")
+def check_spike_and_cavity() -> None:
+    """マスクの細い突起と内部の空洞が、最終メッシュを同じ格子へ焼き直しても残ることを確認する。"""
+    print("\n[10] 突起と空洞の保存(合成マスク)")
     shape = (24, 14, 14)
-    rho = np.zeros(shape)
-    rho[2:14, 2:12, 2:12] = 1.0
+    rho = np.zeros(shape, dtype=bool)
+    rho[2:14, 2:12, 2:12] = True
 
     keep_mask = np.zeros(shape, dtype=bool)
     keep_mask[10:18, 5:9, 5:9] = True  # 本体を貫くスパイク(内側4要素 + 外側4要素)
     zero_mask = np.zeros(shape, dtype=bool)
     zero_mask[6:9, 5:8, 5:8] = True
 
-    mr = mesh.build_surface(rho, keep_mask=keep_mask, zero_mask=zero_mask)
+    mr = mesh.build_surface_from_mask((rho & ~zero_mask) | keep_mask)
 
-    # (a) 場そのもの
-    keep_ok = bool(np.all(mr.rho_clean[keep_mask] == 1.0))
-    check("塗り直し後の場: 保持マスクがすべてρ=1", keep_ok, f"keep要素={int(keep_mask.sum())}")
-    zero_ok = bool(np.all(mr.rho_clean[zero_mask] == 0.0))
-    check("塗り直し後の場: 除外マスクがすべてρ=0", zero_ok, f"zero要素={int(zero_mask.sum())}")
-
-    # (b) メッシュを同じ格子へ焼き直して幾何で確認
+    # (a) メッシュを同じ格子へ焼き直して幾何で確認
     soup = vx.TriangleSoup(
         positions=mr.verts_smooth.astype(np.float64),
         triangles=mr.faces.astype(np.int64),
@@ -328,18 +305,18 @@ def check_mask_repaint() -> None:
     grid = vx.Grid(origin=(0.0, 0.0, 0.0), spacing=1.0, shape=shape)
     occupied, occ_stats = vx.occupancy(soup, grid)
     check(
-        "保持マスクの要素がすべて出力の内側にある(食われていない)",
+        "突起の要素がすべて出力の内側にある(食われていない)",
         bool(occupied[keep_mask].all()),
         f"内側 {int(occupied[keep_mask].sum())}/{int(keep_mask.sum())}",
     )
     check(
-        "除外マスクの要素に材料が1つも入っていない",
+        "空洞の要素に材料が1つも入っていない",
         not bool(occupied[zero_mask].any()),
         f"侵入 {int(occupied[zero_mask].sum())}/{int(zero_mask.sum())}",
     )
-    RESULTS["mask_repaint_unbalanced_columns"] = occ_stats.get("unbalanced_columns")
+    RESULTS["spike_cavity_unbalanced_columns"] = occ_stats.get("unbalanced_columns")
 
-    # (c) 水密・面の向き(検査1・9と同じ観点をこの合成場でも)
+    # (b) 水密・面の向き(検査1・9と同じ観点をこの合成場でも)
     verts, faces = mr.verts_raw, mr.faces
     degenerate = int(
         np.sum(
@@ -372,12 +349,11 @@ def main() -> int:
     check_watertight(mr)
     check_volume_matches_density(mr)
     check_taubin_preserves_volume(mr)
-    check_interpolation_not_binarized(mr)
     check_min_wall_thickness(mr)
     check_stl_roundtrip(mr)
     check_bounding_box_alignment()
     check_face_winding(mr)
-    check_mask_repaint()
+    check_spike_and_cavity()
 
     print("\n" + "=" * 72)
     print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))

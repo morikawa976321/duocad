@@ -572,7 +572,7 @@ def test_the_whole_interleaved_lap_runs_through_mcp_alone(server: McpServer, ses
 
     述語で辺を提案 → `get_selection` で読む → `modify_selection` で1本足して1本引く →
     `commit_selection` → `fillet` を適用 → 体積と面数が変わる。
-    A2 が素のPythonで通した一巡(`tests/README.md` の「Aの実装で分かったこと」)を、
+    A2 が素のPythonで通した一巡を、
     **MCPのツールだけで**もう一度通す。ここが通れば §0 の交互操作の条件はAI側から満たせている。
     """
     box = box_of(session)

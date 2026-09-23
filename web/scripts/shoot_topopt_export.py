@@ -5,11 +5,11 @@
 (`duocad.topopt` / `duocad.optimize_run`)にしか無いからであって、手順を増やすためではない。
 
     python web/scripts/shoot_topopt_export.py --out <データ置き場> \
-        --model mounting-plate.json --panel "既定:" --panel "細かく:element_mm=2.5"
+        --model hanger_bar_attachment.json --panel "既定:" --panel "細かく:element_mm=2.5"
 
 題材は`--model <ファイル名>` —— **利用者が実際に作った文書**(`--models-dir` 配下の
 操作ログ)。条件は文書に置いてあるものをそのまま使い、製品が実際に持っている
-つまみ(`rmin_mm` / `element_mm`)だけを面ごとに変える。
+つまみ(`element_mm`)だけを面ごとに変える。
 
 出力は `<out>/panel-<i>.json`(頂点は**mm**)と `<out>/manifest.json`。
 
@@ -35,7 +35,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 def parse_panel(spec: str) -> dict:
-    """`"名前:rmin_mm=1.8,element_mm=2.5"` を dict にする。
+    """`"名前:element_mm=2.5"` を dict にする。
 
     **ラベルに `:` は使えない**(最初の `:` で切る)。値は実数。知らないキーは
     **そのまま持ち回して呼び出し側が断る** —— ここで捨てると、綴りを間違えた設定が
@@ -71,14 +71,14 @@ def export_model(name: str, models_dir: Path, panels: list[dict], out: Path) -> 
     """
     from duocad.server import Session
 
-    known = {"label", "rmin_mm", "element_mm"}
+    known = {"label", "element_mm"}
     written: list[dict] = []
     for index, panel in enumerate(panels):
         unknown = set(panel) - known
         if unknown:
             raise SystemExit(
                 f"--model で使えないつまみ: {', '.join(sorted(unknown))}"
-                "(製品の経路には σ と Taubin 反復数のつまみが無い)"
+                "(製品の経路には二値探索の内部パラメータのつまみが無い)"
             )
         started = time.perf_counter()
         # **面ごとに文書を開き直す。** 前の面が足した結果ボディが次の面の条件に混ざる
@@ -90,10 +90,7 @@ def export_model(name: str, models_dir: Path, panels: list[dict], out: Path) -> 
             raise SystemExit(
                 f"文書 {name!r} は条件がそろっていない:\n  " + "\n  ".join(report["problems"])
             )
-        result = session.run_optimization(
-            rmin_mm=panel.get("rmin_mm"),
-            element_size_mm=panel.get("element_mm"),
-        )
+        result = session.run_optimization(element_size_mm=panel.get("element_mm"))
         if result["state"] != "done":
             raise SystemExit(f"panel-{index} [{panel['label']}]: {result['warning']}")
         body = session.document.get_body(result["body_id"])
@@ -107,7 +104,6 @@ def export_model(name: str, models_dir: Path, panels: list[dict], out: Path) -> 
                 "subject": name,
                 "element_mm": float(result["element_size_mm"]),
                 "grid": [int(v) for v in result["grid"]["shape"]],
-                "rmin_mm": None if panel.get("rmin_mm") is None else float(panel["rmin_mm"]),
                 "safety_factor": result["safety_factor"],
                 "seconds": time.perf_counter() - started,
             },

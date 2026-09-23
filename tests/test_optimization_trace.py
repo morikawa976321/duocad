@@ -1,11 +1,13 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pytest
 
-from duocad.topopt import trace, simp, mesh
+from duocad.topopt import trace, fem, mesh
 
 
 @pytest.fixture
@@ -41,32 +43,35 @@ def test_corrupt_array_is_rejected(recordings):
     with pytest.raises(ValueError,match='ハッシュ'): snapshot(rec,'arrays')
 
 
-def test_simp_recording_keeps_numerics_and_density_timing(recordings):
-    kwargs=dict(nelx=6,nely=3,nelz=3,max_iter=3,solver='direct',threads=1,rmin=1.5)
-    expected=simp.optimize(**kwargs)
+def test_repeated_solves_are_recorded_reproducibly(recordings):
+    """`trace.recording()` は録っても数値を変えず(録ることが計算に影響しない)、同じ
+    `@trace.stage`/`trace.snapshot` の複数回の呼び出しをそれぞれ別スナップショットとして残す。
+
+    旧SIMPの設計反復(`simp.optimize`)を追っていた検査の後継。二値探索
+    (`binary_search`/`acceptance`)は候補ごとにトレースを打たない(段階6の契約)ので、
+    代わりに `fem.Model.solve_many` が1回の呼び出しの中で複数右辺を逐次解く経路
+    (`fem.py` の `linear-solve`/`linear-residual` が右辺ごとに1回出る)で同じ性質を見る。
+    """
+    model=fem.Model(6,3,3)
+    rho=np.ones((6,3,3))
+    rhs=np.stack([model.f,model.f,model.f])
+    expected=model.solve_many(rho,3.0,rhs,solver='direct')
     with trace.recording() as rec:
-        actual=simp.optimize(**kwargs)
-    assert np.array_equal(actual.rho,expected.rho)
-    assert [i.compliance for i in actual.history]==[i.compliance for i in expected.history]
-    inputs=sorted(rec.path.glob('*-iteration-input.json'))
-    outputs=sorted(rec.path.glob('*-iteration-output.json'))
-    analyses=sorted(rec.path.glob('*-iteration-analysis.json'))
-    assert len(inputs)==len(outputs)==len(analyses)==3
-    for i in range(2):
-        assert np.array_equal(trace.load_snapshot(outputs[i])['rho'],trace.load_snapshot(inputs[i+1])['rho'])
-    assert np.array_equal(trace.load_snapshot(outputs[-1])['rho'],actual.rho)
-    initial=snapshot(rec,'simp-initial')
-    analysis=trace.load_snapshot(analyses[0])
-    assert np.isclose(initial['model']['f']@analysis['u'],analysis['compliance'])
-    assert len(list(rec.path.glob('*-linear-residual.json')))==3
+        actual=model.solve_many(rho,3.0,rhs,solver='direct')
+    assert np.array_equal(actual,expected)
+    solves=sorted(rec.path.glob('*-linear-solve.json'))
+    residuals=sorted(rec.path.glob('*-linear-residual.json'))
+    assert len(solves)==len(residuals)==3
+    for index,path in enumerate(solves):
+        assert trace.load_snapshot(path)['rhs_index']==index
 
 
 def test_surface_replay_and_all_smoothing_substeps(recordings):
-    rho=np.zeros((8,8,8));rho[2:6,2:6,2:6]=.8
-    expected=mesh.build_surface(rho,n_iter=3)
+    rho=np.zeros((8,8,8),dtype=bool);rho[2:6,2:6,2:6]=True
+    expected=mesh.build_surface_from_mask(rho,n_iter=3)
     with trace.recording() as rec:
-        actual=mesh.build_surface(rho,n_iter=3)
-    saved=snapshot(rec,'surface-output')
+        actual=mesh.build_surface_from_mask(rho,n_iter=3)
+    saved=snapshot(rec,'surface-from-mask-output')
     assert np.array_equal(expected.verts_smooth,actual.verts_smooth)
     assert np.array_equal(saved['verts_raw'],actual.verts_raw)
     assert len(list(rec.path.glob('*-taubin-lambda.json')))==3
@@ -143,3 +148,32 @@ def test_real_cad_and_source_archive_are_complete(tmp_path):
     assert hashlib.sha256((rec.path/'source.zip').read_bytes()).hexdigest()==manifest['source_sha256']
     restored=kernel.read_step(str(next((rec.path/'cad').glob('*.step'))))
     assert kernel.volume(restored)==pytest.approx(24.)
+
+
+def test_git_provenance_returns_while_another_thread_blocks_on_piped_stdin():
+    """stdio の MCP サーバ(別スレッドが stdin を readline 待ち)でも記録の git が返る。落ちたら、
+    UI から走らせた実行が冒頭で15秒待って failed になる。"""
+    code = (
+        'import os, sys, threading, time\n'
+        'from duocad.topopt import trace\n'
+        'threading.Thread(target=sys.stdin.buffer.readline, daemon=True).start()\n'
+        'time.sleep(0.3)\n'
+        "print(trace._git('rev-parse','HEAD')['returncode'], flush=True)\n"
+        'os._exit(0)\n'
+    )
+    child = subprocess.Popen([sys.executable,'-c',code], cwd=trace.ROOT,
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    try:
+        try:
+            child.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            pytest.fail('git が返らず、子プロセスが終わらない')
+        assert child.stdout.read().strip(), 'git が結果を返さずに子プロセスが終わった'
+    finally:
+        if sys.platform == 'win32':
+            subprocess.run(['taskkill','/F','/T','/PID',str(child.pid)], capture_output=True)
+        else:
+            child.kill()
+        child.stdin.close()
+        child.stdout.close()
+        child.wait()

@@ -8,7 +8,7 @@
  *   1. **積層** — 文言の違うエラーが2件、同時に見えている
  *   2. **同じ文言は積まずに数える** — 同じ失敗を繰り返しても枚数は増えず「N回」が付く
  *      （WSが切れている間は同じ2種類が延々と届くので、素直に積むと画面が埋まる）
- *   3. **クリックを吸わない** — 札の真ん中を指すとcanvasが受ける。閉じるボタンだけが札で受ける
+ *   3. **クリックを吸わない** — 札の真ん中を指すとcanvasが受ける。コピー・閉じるだけが札で受ける
  *      （CADの主対象はcanvas。失敗の直後に出た札が次のクリックを飲むのが最悪の形）
  *   4. **手動close** — ×で1枚だけ消える
  *   5. **自動消滅** — 放っておけば消える
@@ -249,6 +249,12 @@ async function main() {
         const toast = document.querySelector('#toasts .toast')
         const box = toast.getBoundingClientRect()
         const under = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+        const copy = toast.querySelector('.toast-copy')
+        const copyBox = copy.getBoundingClientRect()
+        const onCopy = document.elementFromPoint(
+          copyBox.left + copyBox.width / 2,
+          copyBox.top + copyBox.height / 2,
+        )
         const close = toast.querySelector('.toast-close')
         const closeBox = close.getBoundingClientRect()
         const onClose = document.elementFromPoint(
@@ -258,13 +264,15 @@ async function main() {
         return JSON.stringify({
           underTag: under?.tagName ?? null,
           underInToast: Boolean(under && under.closest('#toasts')),
+          copyIsCopy: onCopy === copy,
           closeIsClose: onClose === close,
         })
       }),
     )
     if (hit.underInToast) fail(`札の真ん中のクリックを札が吸う: ${JSON.stringify(hit)}`)
+    if (!hit.copyIsCopy) fail(`コピーがクリックを受け取れない: ${JSON.stringify(hit)}`)
     if (!hit.closeIsClose) fail(`×がクリックを受け取れない: ${JSON.stringify(hit)}`)
-    ok(`**クリックを吸わない**: 札の中心は下の ${hit.underTag} が受け、×だけが札で受ける`)
+    ok(`**クリックを吸わない**: 札の中心は下の ${hit.underTag} が受け、コピーと×だけが札で受ける`)
 
     // -------------------------------------------------------------- 検証4: 手動close
     await page.click('#toasts .toast .toast-close')

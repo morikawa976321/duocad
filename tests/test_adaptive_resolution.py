@@ -10,8 +10,9 @@
    `test_entity_kind_tables.py` と同じ「TSのソースを静的に読む」やり方で塞ぐ。
 2. **配りもの(`DocumentView`)が目標精度に従う**こと。ソリッド・辺・スケッチ領域の3経路
    すべてで、キャッシュを跨いで効き、版(`body_revision`)が上がって差分配信が届くこと。
-3. **画面の設定が文書に漏れない**こと。`Session.deviation`(STL書き出しが使う土台)は
-   ズームで動かない —— 動くと**書き出す形の粗さがカメラで変わる**。
+3. **画面の設定が文書に漏れない**こと。`Session.deviation`(画面の土台)はズームで動かない。
+   書き出しはこれすら見ない(`io_step.STL_DEVIATION` 固定)ので、**書き出す形の粗さは
+   カメラでも設定でも変わらない**。
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from duocad import kernel, resolution
+from duocad import io_step, kernel, resolution
 from duocad.server import Server, Session
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -354,13 +355,13 @@ def test_the_cached_geometry_is_thrown_away_when_the_camera_changes(cylinder_ses
 
 
 def test_the_camera_never_touches_the_document_baseline(cylinder_session, tmp_path) -> None:
-    """**書き出す形の粗さはカメラで変わらない**(`Session.deviation` は土台のまま)。"""
+    """**書き出す形の粗さはカメラで変わらない**(固定値で書き、土台もズームで動かない)。"""
     session, _, _ = cylinder_session
     session.set_view_resolution(0.002, SIDE)
     assert session.deviation == pytest.approx(DEVIATION)
     assert session.view.deviation == pytest.approx(DEVIATION)
     written = session.export_stl_file(tmp_path / "part.stl")
-    assert written["deviation"] == pytest.approx(DEVIATION)
+    assert written["deviation"] == pytest.approx(io_step.STL_DEVIATION)
     # 文書そのものにも何も残らない(操作ログに載らない = undoの単位ではない)。
     assert [entry.verb for entry in session.document.log.entries].count(
         "set_view_resolution"

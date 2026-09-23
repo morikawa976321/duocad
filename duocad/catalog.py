@@ -117,6 +117,8 @@ class Command:
     #: (kernel.pyの既知の地雷)ので、形を変えるverbの確定後は選択を空にする。
     #: `Session._reset_selection_if_needed` がここを見て1箇所で発火するので、UI経由・MCP経由の
     #: どちらでも同じに効く。**失敗したverb(ログに積まれない)には効かない**。
+    #: **`undo`/`redo` も true**(添字が壊れていない可能性があっても、何を戻した/やり直したかで
+    #: 場合分けしない単純な規則を優先する)。
     resets_selection: bool = False
     #: **対象集合をコアの確定選択から取るか**。`Session` の実体が
     #: `selection.require_confirmed` / `require_edges` を呼ぶverbだけが true。
@@ -1122,20 +1124,31 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="add_solid_body",
+        category="file",
+        description="",
+        ws="none",
+        mcp=False,
+        note=(
+            "**コードからだけ呼ぶverb**(形状最適化が確定した最終CADを文書へ入れる。"
+            "実体は `duocad/verbs/add_solid.py`)。人にもAIにも開けていない —— 引数はB-repの"
+            "本文そのもので手で書くものではなく、CADを持ち込む口は `import_step` である。"
+            "**それでもここに宣言するのは**、操作ログに載るverbとツールの顔ぶれを突き合わせる"
+            "検査(`tests/test_mcp_verbs.py`)が、`mcp=False` かつ `ws=\"none\"` という宣言を"
+            "「ツールを持たないverb」の唯一の出どころとして読むため。宣言を忘れるとそこで落ちる"
+        ),
+    ),
+    Command(
         name="import_step",
         category="file",
         description=(
             "STEPを読み込むときに呼ぶ。**読んだ時点で編集できる** —— "
-            "ソリッドごとに編集可能なボディができ、そのまま押し出し等の対象にできる"
-            "(原本の参照ボディは隠したまま文書に残る)。"
+            "ソリッドごとに編集可能なボディができ、そのまま押し出し等の対象にできる。"
             "何部品あっても1操作(ログ1行・undo1回)。"
         ),
         params=(Param("path", "string", "読み込むSTEPファイルのパス"),),
         session="import_step",
-        note=(
-            "**STEPの読み込みはこの1 verbだけ**(2026-08-27に統合)。"
-            "参照ボディだけを足す経路と、それを後から編集可能にする複製の経路は消えた"
-        ),
+        note="**STEPの読み込みはこの1 verbだけ。** 読んだ形はその場で編集できる形で入る",
     ),
     Command(
         name="export_step",
@@ -1156,19 +1169,10 @@ COMMANDS: tuple[Command, ...] = (
         description=(
             "いま表示中(visible)のボディをSTLへ書き出す。対象を選ぶ引数は無い —— "
             "含めたくないものがあれば、先に set_visible(visible=false) で隠してから呼ぶこと。"
-            "deviation でメッシュ粗さを指定する。文書は変えない。戻り値の "
-            "skipped_hidden で非表示で除外した件数を確認できる。"
+            "メッシュの粗さは固定で選べない(人の画面にも入力欄は無い)。文書は変えない。"
+            "戻り値の skipped_hidden で非表示で除外した件数を確認できる。"
         ),
-        params=(
-            Param("path", "string", "書き出し先パス"),
-            Param(
-                "deviation",
-                "number",
-                "線形偏差(mm・絶対)。省略時はセッション既定",
-                required=False,
-                dimension=True,
-            ),
-        ),
+        params=(Param("path", "string", "書き出し先パス"),),
         session="export_stl_file",
         changes_document=False,
     ),
@@ -1372,23 +1376,15 @@ COMMANDS: tuple[Command, ...] = (
         name="optimize_resolution",
         category="protocol",
         description="",
-        params=(
-            Param(
-                "rmin_mm",
-                "number",
-                "最小部材幅[mm](省略すると要素サイズの上限は条件面だけで決まる)",
-                required=False,
-            ),
-        ),
         session="optimize_resolution",
         ws="special",
         mcp=False,
         changes_document=False,
         note=(
-            "**軽い**(OCCTは条件面のbboxを数枚測るだけ)ので、最小部材幅を打つたびに"
-            "呼んでよい。返る `steps` が**粗い側の端から細かい方向へだけ**動く目盛りで、"
-            "各段に予想時間が付く。**時間は入力にしない**(時間から解像度を逆算すると、"
-            "最小部材幅と条件面の要求を黙って割る)"
+            "**軽い**(OCCTは条件面のbboxを数枚測るだけ)。返る `steps` が**粗い側の端から"
+            "細かい方向へだけ**動く目盛り。**時間は付けない**(走らせる前は"
+            "実測が無い)。**引数は無い**(密度フィルタ半径`rmin_mm`は二値探索に無い概念。"
+            "届いたら `{\"error\": ...}` として断る、`OptimizeInputError` 経由)"
         ),
     ),
     Command(
@@ -1396,10 +1392,13 @@ COMMANDS: tuple[Command, ...] = (
         category="protocol",
         description="",
         params=(
-            Param("rmin_mm", "number", "最小部材幅[mm]", required=False),
             Param("element_size_mm", "number", "要素サイズ[mm]。省くと上限側(既定)", required=False),
             Param("target_safety_factor", "number", "目標安全率", required=False),
-            Param("name", "string", "結果のメッシュボディの名前", required=False),
+            Param(
+                "max_evaluations", "number",
+                "形状探索(初期合格探索とエネルギー順の削減)の評価予算。省くと既定(binary_search.find_best_feasibleの既定)",
+                required=False,
+            ),
         ),
         session="run_optimization",
         ws="special",
@@ -1411,7 +1410,9 @@ COMMANDS: tuple[Command, ...] = (
         note=(
             "**重い**(既定の設定でも数十秒〜数分)。`net/ws.py` が `asyncio.to_thread` で"
             "回し、進捗は `optimize_progress`、結果は `optimize_result` として配る"
-            "(応答は状態配信ではない)。**失敗しても文書は1ビットも変わらない**"
+            "(応答は状態配信ではない)。**失敗しても文書は1ビットも変わらない**。"
+            "旧引数(`rmin_mm`/`max_iter`/`material_min_mm3`/`material_max_mm3`)は"
+            "この版では扱えず、届くと `OptimizeInputError` を伴う `optimize_error` になる"
         ),
     ),
     Command(

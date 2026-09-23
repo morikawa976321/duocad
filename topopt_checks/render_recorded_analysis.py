@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import _bootstrap  # noqa: F401
+import _record
 import numpy as np
 from scipy import ndimage
 from PIL import Image, ImageDraw, ImageFont
@@ -60,7 +61,7 @@ def main():
         seconds=sum(s['seconds'] for s in solves), max_residual=max(residuals),
         cg_iterations_min=min(s['cg_iterations'] for s in solves),
         cg_iterations_max=max(s['cg_iterations'] for s in solves))
-    (out/'numerics.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    _record.write(out / 'numerics.json', report)
     print(json.dumps(dict(iterations=report['selected_iterations'], linear=report['linear'])), flush=True)
     intersections = json.loads((out/'intersections.json').read_text())
     points = []

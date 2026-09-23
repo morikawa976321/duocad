@@ -5,8 +5,7 @@
 数万面のシェルをOCCTへ入れる経路が黙って開き、選択1回が秒単位になる
 (理由は `duocad/meshbody.py` のモジュールdocstring)。
 
-**B-repの側を1ビットも変えていないこと**も §7 で見る(B-repだけの文書のSTLは
-従来どおり `kernel.write_stl` を通り、バイト列が一致する)。
+B-repのSTLが画面と同じ三角形になることは `tests/test_stl_export.py` が見る。
 """
 from __future__ import annotations
 
@@ -71,7 +70,8 @@ def _stl_triangle_count(path) -> int:
 
 
 def _box_triangle_count() -> int:
-    tessellated = kernel.tessellate(_box_shape(), DEVIATION)
+    """書き出しの固定値で測る(平面だけの箱なので粗さで枚数は変わらないが、口を1つに保つ)。"""
+    tessellated = kernel.tessellate(_box_shape(), io_step.STL_DEVIATION)
     return sum(len(face["indices"]) // 3 for face in tessellated["faces"])
 
 
@@ -418,7 +418,7 @@ def test_a_mesh_only_document_writes_the_triangles_it_has(tmp_path):
     """**テッセレーションを通さない** —— 4三角形のメッシュは4三角形のSTLになる。"""
     doc, _ = _tetra_doc()
     path = tmp_path / "mesh.stl"
-    io_step.export_stl(doc, path, DEVIATION)
+    io_step.export_stl(doc, path)
     assert _stl_triangle_count(path) == 4
 
 
@@ -427,19 +427,8 @@ def test_a_mixed_document_writes_both_into_one_stl(tmp_path):
     doc, _ = _tetra_doc()
     doc.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
     path = tmp_path / "mixed.stl"
-    io_step.export_stl(doc, path, DEVIATION)
+    io_step.export_stl(doc, path)
     assert _stl_triangle_count(path) == 4 + _box_triangle_count()
-
-
-def test_a_b_rep_only_document_still_goes_through_the_occt_writer(tmp_path):
-    """**B-repだけの文書の書き出しを1ビットも変えない。**"""
-    doc = Document()
-    doc.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
-    through_export = tmp_path / "a.stl"
-    io_step.export_stl(doc, through_export, DEVIATION)
-    direct = tmp_path / "b.stl"
-    kernel.write_stl(_box_shape(), str(direct), DEVIATION)
-    assert through_export.read_bytes() == direct.read_bytes()
 
 
 def test_a_hidden_mesh_body_is_left_out_of_the_stl(tmp_path):
@@ -448,10 +437,12 @@ def test_a_hidden_mesh_body_is_left_out_of_the_stl(tmp_path):
     doc.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
     selection.set_visible(doc, body_id, False)
     path = tmp_path / "only-box.stl"
-    io_step.export_stl(doc, path, DEVIATION)
+    io_step.export_stl(doc, path)
     assert io_step.export_skipped_hidden(doc) == [body_id]
+    box_only = Document()
+    box_only.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
     direct = tmp_path / "box.stl"
-    kernel.write_stl(_box_shape(), str(direct), DEVIATION)
+    io_step.export_stl(box_only, direct)
     assert path.read_bytes() == direct.read_bytes()
 
 
@@ -462,15 +453,6 @@ def test_step_export_refuses_a_document_that_holds_a_mesh(tmp_path):
     path = tmp_path / "mixed.step"
     with pytest.raises(ValueError, match="cannot export a mesh body to STEP"):
         io_step.export_step(doc, path)
-    assert not path.exists()
-
-
-def test_the_deviation_is_checked_even_when_only_meshes_are_exported(tmp_path):
-    """引数の検査が**文書の中身で緩まない**(B-repだけの経路と同じ文言で断る)。"""
-    doc, _ = _tetra_doc()
-    path = tmp_path / "bad.stl"
-    with pytest.raises(ValueError, match="deviation must be positive"):
-        io_step.export_stl(doc, path, 0.0)
     assert not path.exists()
 
 

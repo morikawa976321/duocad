@@ -28,7 +28,7 @@
    *    (`styles.css` の不変条件: `.main` の中で大きさを持つのは `.viewport` だけ)。
    *    通常のフローに置くと、エラーが出た瞬間にカメラのアスペクトが変わり
    *    **さっき見えていた面がずれる** —— 打ち直しのために選び直す羽目になる。
-   * 2. **クリックを吸わない。** 本体は `pointer-events: none` にし、閉じるボタンだけ受ける。
+   * 2. **クリックを吸わない。** 本体は `pointer-events: none` にし、コピー・閉じるのボタンだけ受ける。
    *    CADの主対象はcanvasなので、失敗の直後に画面へ出た札が次のクリックを飲むのは最悪である
    *    (実機検査も生の座標でcanvasを叩いている)。
    * 3. **同じ文言は積まずに数える。** 再接続の試行のように同じエラーが連発する経路があり、
@@ -41,6 +41,8 @@
     message: string
     /** この札が出ている間に同じ文言が来た回数。2以上のときだけ画面に出す。 */
     count: number
+    /** クリップボードへコピー済み(札が消えるまでチェック表示を維持)。 */
+    copied: boolean
     timer: ReturnType<typeof setTimeout> | null
   }
 
@@ -48,7 +50,7 @@
    * 自動で消えるまで。**エラーは読み切れる長さが要る**ので、よくある3秒より長くしてある
    * (日本語1行を読んで、何をやり直すか決めるまでの時間)。
    */
-  const LIFETIME_MS = 8000
+  const LIFETIME_MS = 15000
   /** 同時に出す上限。溢れたら古い方から捨てる(画面がトーストで埋まる方が有害)。 */
   const MAX_VISIBLE = 5
 
@@ -75,6 +77,16 @@
     items = items.filter((item) => item.id !== id)
   }
 
+  async function copyMessage(item: ToastItem): Promise<void> {
+    if (item.copied) return
+    try {
+      await navigator.clipboard.writeText(item.message)
+      item.copied = true
+    } catch {
+      // 権限・非HTTPS等で失敗しても札の操作は続けられる(無言で戻す)
+    }
+  }
+
   /** エラーを1件、画面へ出す。**これが公開APIの全部**(上のdocstring参照)。 */
   export function showToast(message: string): void {
     const text = message.trim()
@@ -88,7 +100,13 @@
       restart(same) // まだ起きている事象なので寿命を数え直す
       return
     }
-    const created: ToastItem = { id: (lastId += 1), message: text, count: 1, timer: null }
+    const created: ToastItem = {
+      id: (lastId += 1),
+      message: text,
+      count: 1,
+      copied: false,
+      timer: null,
+    }
     const next = [created, ...items]
     // 溢れた分は**予約も取り消してから**捨てる(捨てた札のタイマーが後から起きないように)
     for (const dropped of next.slice(MAX_VISIBLE)) stop(dropped)
@@ -108,9 +126,36 @@
       {#if item.count > 1}
         <span class="toast-count">{item.count}回</span>
       {/if}
-      <button class="toast-close" aria-label="この通知を閉じる" onclick={() => dismiss(item.id)}>
-        ×
-      </button>
+      <div class="toast-actions">
+        <button
+          type="button"
+          class="toast-copy"
+          class:copied={item.copied}
+          aria-label={item.copied ? 'コピーしました' : 'エラー文をコピー'}
+          onclick={() => copyMessage(item)}
+        >
+          {#if item.copied}
+            <svg class="toast-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M3 8.5 L6.5 12 L13 4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          {:else}
+            <svg class="toast-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="5" y="5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.5" />
+              <path d="M3 11V3h8" fill="none" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+          {/if}
+        </button>
+        <button type="button" class="toast-close" aria-label="この通知を閉じる" onclick={() => dismiss(item.id)}>
+          ×
+        </button>
+      </div>
     </div>
   {/each}
 </div>
@@ -161,14 +206,32 @@
     color: var(--dim);
   }
 
-  .toast-close {
+  .toast-actions {
     flex: 0 0 auto;
+    display: flex;
+    align-items: flex-start;
+    gap: 2px;
+    /* 本体が素通しなので、受け取るのはこの中のボタンだけ */
+    pointer-events: auto;
+  }
+
+  .toast-copy,
+  .toast-close {
     padding: 0 6px;
     line-height: 1.2;
     border-color: transparent;
     background: transparent;
     color: var(--dim);
-    /* 本体が素通しなので、受け取るのはこのボタンだけ */
-    pointer-events: auto;
+  }
+
+  .toast-copy.copied {
+    color: var(--accent);
+  }
+
+  .toast-icon {
+    display: block;
+    width: 14px;
+    height: 14px;
+    pointer-events: none;
   }
 </style>

@@ -1,7 +1,7 @@
 /**
  * 形状最適化の**比較スクリーンショットの撮影台**(20260905-1700)。
  *
- *   web> node scripts/shoot-topopt.mjs --model mounting-plate.json \
+ *   web> node scripts/shoot-topopt.mjs --model hanger_bar_attachment.json \
  *          --panel "既定:" --panel "細かく:element_mm=2.5" --views iso,side
  *
  * **1本のコマンドで終わる。** 重い段(面ごとに最適化を回す)も、描く段も、並べてラベルを
@@ -12,7 +12,7 @@
  *   --model <name>     **利用者の文書**(`models/` 配下の操作ログ。条件は文書のものを使う)
  *   --models-dir <dir> `--model` の置き場(既定はリポジトリ直下の `models/`)
  *   --panel "<ラベル>:<つまみ>"   **2つ以上**。左から順に並ぶ
- *                      つまみ: rmin_mm / element_mm
+ *                      つまみ: element_mm
  *   --views iso,side,threeq,zoom   撮る向き(既定は4つ全部)
  *   --dir x,y,z        `--views custom` と併せて任意の向き(`--zoom` で距離を詰める)
  *   --out <dir>        出力先(既定 `screenshots/topopt-compare`)

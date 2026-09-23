@@ -12,7 +12,7 @@
 | `BRepBndLib::Add` は面のトリムを見ない・`AddOptimal` は繰り返しても速くならない・`useTriangulation=True` は前回の三角形分割を見る・`SetGap(0.0)` の効き方は `Add` の前後で変わる | `duocad/kernel.py` `_bounding_box_extents` / `duocad/topopt/voxelize.py` `_shape_bbox` / [TOPOPT.md](TOPOPT.md)「OCCT の bbox はトリムを見ない」 |
 | STEP 読み込みは `ReadFile()` の戻り値を見ずに `TransferRoots()` へ進むとプロセスごと落ちる(0xC0000005)。書き出しは `Transfer()` の戻り値も見る | `duocad/kernel.py` `read_step` / `write_step`、`duocad/io_step.py` |
 | STEP 書き出しは C++ から stdout へ統計を吐く(`redirect_stdout` では止まらない。fd 1 を fd 2 へ振り替える) | `duocad/mcp_server.py` `_claim_stdout` |
-| STL の偏差は `isRelative=False` で渡す(相対だと偏差を1/20にしても1バイトも変わらない) | `duocad/kernel.py` `write_stl` |
+| STL の偏差は `isRelative=False` で渡す(相対だと偏差を1/20にしても1バイトも変わらない) | `duocad/kernel.py` `tessellate` |
 | 角度偏差の単位はラジアン(`DEFAULT_ANGULAR_DEFLECTION = 0.35` ≈ 20°) | `duocad/kernel.py` `DEFAULT_ANGULAR_DEFLECTION` |
 | `gp_Ax3.ZReverse()` は X/Y を据え置く(左手系)。枠を3ベクトルで保存すると反転面で v 軸だけ鏡像になる | `duocad/kernel.py` `_ax3_from_frame` |
 | 曲面から `MakePrism` すると `IsDone()` は真でも `BRepCheck_Analyzer` が偽(または体積が激減) | `duocad/kernel.py` `extrude_face` 系 docstring |
@@ -21,7 +21,7 @@
 | 由来(provenance)の取り出し方は操作ごとに違う(`History()` / `Modified()`、`IsRemoved` / `IsDeleted`) | `duocad/kernel.py` `normalize_provenance` |
 | `Face.center()` の既定は `CenterOf.GEOMETRY` で面積重心ではない(曲面では面パッチの上にすら乗らない) | `duocad/query.py` `face_centroid` / `face_fingerprint` |
 | 生の `TopoDS_Shape` を build123d で包む入口は `Compound.cast`(基底の `Shape.cast` は None を返す)。`faces()` / `edges()` は重複除去済み | `duocad/query.py` 冒頭 |
-| `BRepClass3d_SolidClassifier` は材料内部の孤立点を OUT と誤判定することがある(神託として使うときの作法) | [TOPOPT.md](TOPOPT.md)「2026-08-31・ボクセル化の実測」 |
+| `BRepClass3d_SolidClassifier` は材料内部の孤立点を OUT と誤判定することがある(神託として使うときの作法) | [TOPOPT.md](TOPOPT.md) |
 | 面の添字は形状変更(フィレット)で散発的にずれる / STEP往復の体積は bit-exact でない / undo の再計算で体積の下位ビットが動く | [../README.md](../README.md)「実測で判明している技術的な地雷」、`web/scripts/smoke.mjs` `VOLUME_EPS` |
 
 ## build123d / OCP
@@ -50,10 +50,16 @@
   theta/delta を持つ)・svgpathtools 1.7.2・ocpsvg 0.6.0(SVG ↔ OCCT 形状)・svgwrite 1.4.3。
   `duocad/svg_import.py` はこれを前提に追加依存ゼロで書いてある。
 
+- **OCCT の面分割の内部モデル(`IMeshData_Model`)から取ったハンドルは、モデルより長生きさせるとプロセスごと落ちる**
+  (0xC0000005。モジュール変数に残す・context を先に捨てる、で再現)。寿命規則と解放順は
+  `duocad/kernel_meshing.py` のモジュール docstring と `_Model.close()`。`BRepMesh_Context` は OCP に無いので
+  標準の6部品を `IMeshTools_Context` に自分で組む(同ファイル `mesh_shape`)。OCCT 自身の境界交差検査が
+  5度未満・小面積の交差を捨てる話は [TOPOPT_GAP_CAUSALITY.md](TOPOPT_GAP_CAUSALITY.md)。
+
 ## STEP ファイル
 
 - **Fusion 360 のジェネレーティブデザイン結果を STEP で出すと長さ単位が `SI_UNIT(.CENTI.,.METRE.)`(cm)**
-  になる。同じ設計の入力 STEP は mm なので入力と出力で単位が食い違う(2026-08-24 実測: 入力
+  になる。同じ設計の入力 STEP は mm なので入力と出力で単位が食い違う(実測: 入力
   `shelf_attachment.step` は mm、GD 結果 `shelf_attachment_8.step` は cm。座標を mm と読むと
   11.6×15.5×51.3 に見え、正しくは 60×154×113mm)。**1/10 でもスライサのビルドボリュームに収まるので
   エラーにならず気づきにくい。** 読み込んだ直後に実寸を確かめる。単位宣言は
@@ -94,10 +100,11 @@
   pytest / websockets の4件で、numpy 2.4.6 / scipy 1.17.1 は推移依存で既に入っている
   (scikit-image は形状最適化のために手で入れてある。[TOPOPT.md](TOPOPT.md))。
   入っていないもの: trimesh・pyvista・vtk・gmsh・matplotlib・numba・cupy・torch・pyamg・scikit-sparse・meshio。
-- **検査の在庫は `.\.venv\Scripts\python.exe -m pytest -q --collect-only` で数える。** `tests/README.md` は
-  「実装が守っている契約」の文書であって目録ではなく(個々のテスト関数を意図的に列挙しない方針)、
-  節の無いテストファイルもある。在庫は `--collect-only`、契約は `tests/README.md`、
-  なぜその形で書いたかは各モジュールの docstring —— 片方をもう片方の代わりにしない。
+- **検査の在庫は `.\.venv\Scripts\python.exe -m pytest -q --collect-only` で数える。**
+  在庫は `--collect-only`、**契約と「なぜその形か」は各モジュールの docstring** —— 片方を
+  もう片方の代わりにしない。契約を散文でまとめた `tests/README.md` は削除した
+  (中身をコードのそばへ移した。別ファイルに置くと、コードを変える人の視界に入らないまま
+  後追いで同期することになり、実際に実装と食い違う記述が5件たまった)。
 - **`importlib` でファイル1つだけを単体ロードして `@dataclass` を使うなら、`exec_module` より前に
   `sys.modules[spec.name] = module` を入れる。** `from __future__ import annotations` と併用すると
   `dataclasses` が型注釈の解決に `sys.modules[cls.__module__]` を引くため

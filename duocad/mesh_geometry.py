@@ -16,7 +16,25 @@ from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Compound
 from OCP.gp import gp_Pnt
 
+from .boundary_check import orient2d
+
 TOLERANCE_MM = Precision.Confusion_s()
+
+
+def degenerate_triangles(vertices, faces):
+    """三角形ごとの縮退(面積が厳密に 0)を返す (T,) bool。
+
+    外積の 3 成分はそれぞれ座標軸への射影の orient2d なので、浮動小数点で確定しない組だけ
+    厳密演算へ落とす `orient2d` を 3 回当てる(`np.cross == 0` は丸めで偽の 0 を出しうる)。
+    """
+    tri = np.asarray(vertices, dtype=np.float64)[np.asarray(faces)]
+    zero = np.ones(len(tri), dtype=bool)
+    for drop in range(3):
+        keep = [axis for axis in range(3) if axis != drop]
+        zero &= orient2d(tri[:, 0, keep], tri[:, 1, keep], tri[:, 2, keep]) == 0
+    return zero
+
+
 def subshapes(shape, kind):
     result = []
     explorer = TopExp_Explorer(shape, kind)
@@ -32,9 +50,7 @@ def topology(vertices: np.ndarray, faces: np.ndarray) -> tuple[dict, list[list[i
             or not np.isfinite(vertices).all() or not np.issubdtype(faces.dtype, np.integer)
             or faces.min() < 0 or faces.max() >= len(vertices)):
         raise ValueError('頂点・三角形の配列が不正')
-    tri = vertices[faces]
-    area2 = np.linalg.norm(np.cross(tri[:, 1]-tri[:, 0], tri[:, 2]-tri[:, 0]), axis=1)
-    degenerate = int(np.count_nonzero(area2 == 0))
+    degenerate = int(np.count_nonzero(degenerate_triangles(vertices, faces)))
     duplicates = len(faces) - len(np.unique(np.sort(faces, axis=1), axis=0))
     edges = defaultdict(list)
     links = defaultdict(list)

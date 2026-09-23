@@ -677,6 +677,10 @@ def add_arc(
     しておかないと、円弧だけが「数値を持たない図形」になり `set_parameter` の外側に落ちる。
     `params` のキーは `cx` / `cy` / `radius` / `start_deg` / `end_deg` の5つ。角度は**度**・
     反時計回り・スケッチ平面のX軸から測る。
+
+    **0度をまたいでよい**(例: `start_deg=350, end_deg=10` は20度の円弧)。掃引量は
+    `sweep = (end_deg - start_deg) % 360` で解決される(`kernel` 側の実装)ので、常に
+    `start_deg` から反時計回りに `end_deg` まで進む弧として扱われる。
     """
     params = {
         "cx": float(center[0]),
@@ -788,6 +792,9 @@ def _add_entity(
     瞬間に**唯一の正であるログ**が黙って書き換わる。`Entity.params` の中身は名前つきの値への
     参照であり、ログの `args["params"]` には打った数値をそのまま入れるので、モデルとログでは
     持つ値の形自体が違う。
+
+    **`entity_id` もログの `args` に記録する**(`uuid4` 由来で非決定的なため。記録が無いと
+    再生のたびに別のIDになり、保存した選択集合が指す先を失う)。
     """
     require_valid_params(kind, params)
     sketch = get_sketch(doc, sketch_id)

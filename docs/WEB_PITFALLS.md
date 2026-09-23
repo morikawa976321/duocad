@@ -58,7 +58,7 @@
 
 - **`showModal()` の `::backdrop` は `elementFromPoint` を全画面 `<dialog>` にする**（矩形が重なっていなくても）。
   `clickable()` が全部 false になり 3D ピックが死ぬ。見た目は何も塞がれていない。duocad の設定ダイアログは
-  2026-09-04 に `show()` へ変えて外したが、他で `showModal()` を足せば同じ。
+  `show()` へ変えて外したが、他で `showModal()` を足せば同じ。
 - **native `<dialog>` の「Esc で閉じる」は keydown の既定動作なので、全域ハンドラが Escape に `preventDefault()` を
   掛けていると閉じない**（`CommandHost.svelte` の中断がそれ。モーダルでも守られない）。設定ダイアログは新設時から
   一度も Esc で閉じたことが無かったのに、コメントは「`showModal()` で Esc がただで付く」と書いていた。

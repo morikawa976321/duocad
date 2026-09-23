@@ -12,10 +12,14 @@
 | [AI_INTEGRATION.md](AI_INTEGRATION.md) | アプリ内 AI・MCP・ローカル LLM（方向と未決・実測・「止まる」規律の実装・落とし穴） |
 | [UI.md](UI.md) | 画面と操作の判断（方針・パネル配置・コマンド層・スケッチ入力・見た目） |
 | [VIEWPORT.md](VIEWPORT.md) | 3D ビューポート（深度の規約・カメラ・ピック・グリッド・可変解像度と面カリング・ビューキューブ） |
-| [SCREEN_PICK.md](SCREEN_PICK.md) | 当たり判定を screen 半径[px]に揃える設計 |
 | [SMOKE_TESTING.md](SMOKE_TESTING.md) | 実機検査（puppeteer）の書き方: 座標・待機・選択・fixture・環境 |
 | [WEB_PITFALLS.md](WEB_PITFALLS.md) | three.js / Svelte 5 / DOM / CSS / ブラウザの落とし穴 |
 | [QA_LESSONS.md](QA_LESSONS.md) | 検証設計の教訓（緑を根拠にしない・変異検査の読み方・検査の設計） |
-| [DEV_NOTES.md](DEV_NOTES.md) | 開発環境と運用（venv・行末・一括編集の道具・減量・タスクの切り方） |
-| [TOPOPT.md](TOPOPT.md) ほか `TOPOPT_*.md` | 形状最適化（実測・設計と画面・受入検査・速度・更新則・反力・active set） |
+| [DEV_NOTES.md](DEV_NOTES.md) | 開発環境と運用（venv・行末・一括編集の道具・減量・測定記録の書き方・タスクの切り方） |
+| [TOPOPT.md](TOPOPT.md) ほか `TOPOPT_*.md` | 形状最適化（実測・設計と画面・受入検査・探索の時間短縮） |
 | [CAD_LIBRARY_PITFALLS.md](CAD_LIBRARY_PITFALLS.md) | build123d / OCCT / STEP / `.venv` / MCP サーバの落とし穴（コード側コメントの索引つき） |
+| [TOPOPT_PRE_SMOOTHING_CHECKS.md](TOPOPT_PRE_SMOOTHING_CHECKS.md) | 島除去後・平滑化前の6条件と探索履歴の検査 |
+| [TOPOPT_MESH_BOOLEAN_STUDY.md](TOPOPT_MESH_BOOLEAN_STUDY.md) | メッシュ集合演算による最終処理の試作評価（合否・保存精度・寸法差） |
+| [TOPOPT_GAP_CAUSALITY.md](TOPOPT_GAP_CAUSALITY.md) | 穴口の微細隙間とメッシュ欠損の因果調査（境界交差・最小再現・OCCT内部検査）と、案A（境界交差の検出・共有辺再分割）の設計・実装・実測 |
+| [PLAN_BINARY_STRESS_SEARCH.md](PLAN_BINARY_STRESS_SEARCH.md) | 二値モデル・応力制約による探索の現行仕様（§1〜§5）と、段階7・段階4置き換えの実測（§10〜§12） |
+| [FIX_BINARY_SEARCH_INITIALIZATION.md](FIX_BINARY_SEARCH_INITIALIZATION.md) | hanger初期探索失敗への修正指示と実施結果（境界条件の確定・入口検査・候補メモリ管理。§9に実測） |

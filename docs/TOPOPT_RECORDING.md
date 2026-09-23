@@ -2,8 +2,7 @@
 
 製品の `Session.run_optimization` → `optimize_run.run` では、毎回自動で診断記録を作る。
 画面のデバッグ表示設定によらず保存する。保存のために最適化の設定や計算結果は変更しない。
-実行中の既存Pythonサーバにはコード変更が反映されないため、導入後の初回はバックエンドを再起動する。
-ブラウザの再読み込みだけでは反映されない。
+実行中の既存Pythonサーバにはコード変更が反映されないため、導入後の初回はバックエンドを再起動する(ブラウザの再読み込みでは反映されない)。
 
 ## 保存場所と入口
 
@@ -23,7 +22,8 @@
 | `final.stl` | **採用した最終形状**のワールド座標mm。ASCIIの17桁で座標を保存 |
 | `document_after.json` / `result` の記録 | 結果ボディを含む文書、採用材料量、安全率、探索履歴、ボディID |
 
-現在の製品経路は、平滑化後に保持の和集合・除外の差集合を適用し、水密・単一ソリッド検査後に `done` となる。過去の記録の `done` は、この検査を行った意味ではない。
+現在の製品経路は、finalize段階(後述)のブーリアン処理を経て水密・単一ソリッド検査に通ってから `done` となる。
+過去の記録の `done` は、この検査を行った意味ではない。
 失敗は `failed`、中断は `cancelled`。条件不足の早期終了も専用の状態を残す。
 プロセス強制終了時は `running` のまま残ることがある。プロセスIDと実際の稼働状態を確認する。
 
@@ -33,25 +33,31 @@
 2. **設計空間**（`derive`。1実行に1回）：ボディの外接箱・凸包の平面式・余白・格子・段階ごとのセル数、
    条件ごとの占有と所属成分、最終マスクのハッシュ、設計・保持マスク、CAD表面の三角形、面ID、
    アンカーの節点・面積・法線。段階ごとのマスク（外枠・凸包・除外・除外後・接続後）は `derive-masks`。
-3. **材料量探索**：全候補の引数・成否・応力・安全率。棄却した候補や失敗した候補も残す。全候補が
-   同じ塊を使う（各 `candidate-input` の `space.stats.mask_hash` が `derive-output` と一致する。
-   `check_trace.py` が見る）。
-4. **SIMP全反復**：設計変数x、物理密度ρ、変位u、要素エネルギー、感度dc/dcn/dvn、反力・制約・随伴、active/free/fixed、ペナルティ、収束履歴。
-5. **線形解析**：解法、CG反復数、相対許容値、直接解法への切替、残差検算。解が不正な場合も失敗時の変位・右辺・自由度を残す。
+3. **境界条件の確定**（`boundary-mapping`。2026-09-17〜、1実行に1回）：導出出力に接する節点だけへ
+   条件面を対応付けた確定表の検証（面ごとの節点数・対応不能標本・被覆・合力・重心からのずれ・
+   モーメント誤差とそれぞれの許容・対応距離）と、幾何の表との差分。導出の `derive-output` が持つ
+   アンカーは幾何の表（`mapping="geometry"`）で、探索が使うのは確定表（`mapping="material"`）である。
+4. **形状探索**（`search-result`。2026-09-17〜）：探索全体の結果(状態・終了理由・評価回数・採用材料量)を1回記録する。
+   **個々の候補(操作の種類・中間マスク・各候補の安全率)は現時点ではディスクへ記録しない**
+   （`binary_search.py`は`trace`を呼ばない。全候補が同じ設計空間マスクから出発することは
+   `derive`の1回性で保証される—段階3・4のように候補ごとに塊を切り出し直す設計ではない）。
+   戻り値の `diagnostics` には、段階3の `full_material`（全材料の島処理と、成分ごとの落ちた検査）、段階4の `reduction`（試行ごとの選んだ／削ったセル数・削減割合・
+   後退倍率・落ちた条件・合格後の体積と安全率、FEM回数、止まった理由）が入る。
+5. **線形解析**：解法(方針 `auto` と実際に使った解法)、CG反復数、相対許容値、直接解法への切替、残差検算。解が不正な場合も失敗時の変位・右辺・自由度を残す。
 6. **表面生成**：塗り直し前後の密度、島除去後・パディング後の密度、marching cubesの頂点・面・補間係数。
 7. **平滑化**：Taubinの各反復のλ処理後とμ処理後の全頂点。面接続は同じsurface段階の記録と組み合わせる。
 8. **応力評価**：最終密度で解き直した変位、換算係数、応力テンソル・von Mises・代表応力・安全率。
 9. **採用結果**：選択された計算結果全体、格子座標のraw/smooth、ワールド座標のraw/smooth、製品へ渡した面接続。
 
-`iteration-analysis` の変位・感度・コンプライアンスは、**同じ反復の `iteration-input` の密度**に対応する。
-`iteration-output` は更新後のx/ρであり、次の反復の入力になる。
-更新後密度に更新前の応力を対応付けないこと。
+2026-09-17より前(SIMP時代)の記録には`iteration-input`/`iteration-output`/`iteration-analysis`
+(設計反復ごとの密度・変位・感度・コンプライアンス)の段階がある。現行の経路にはこれらの段階はない
+(候補ごとの評価は1回のFEM解であって、勾配法の反復ではない)。2026-09-16より前の記録にはさらに
+`reference`/`derive-bbox`/`derive-candidate`の段階がある(参照方式。候補ごとに塊を切り出していた)。
+読む側は段階名で新旧を見分ける。
 
-2026-09-16 より前の記録には `reference` / `derive-bbox` / `derive-candidate` の段階がある（参照方式。候補ごとに塊を切り出していた）。読む側は段階名で新旧を見分ける。
-
-巨大な組立済み剛性行列・多重格子キャッシュは保存しない。保存した格子、材料、自由度、荷重、密度と
+巨大な組立済み剛性行列は保存しない。保存した格子、材料、自由度、荷重、密度と
 ソースから再構築できるため。これは任意の途中命令からプロセスを再開するメモリダンプではない。
-SIMPを再計算せずに表面生成を再実行する用途には、必要な入力が保存される。
+探索を再実行せずに表面生成を再実行する用途には、必要な入力が保存される。
 
 ## 読み方
 
@@ -64,9 +70,9 @@ Pythonから特定の記録を読む場合：
 
 ```python
 from duocad.topopt.trace import load_snapshot
-record = load_snapshot("output/optimization_runs/<実行ID>/<連番>-surface-input.json")
-from duocad.topopt.mesh import build_surface
-surface = build_surface(**record)
+record = load_snapshot("output/optimization_runs/<実行ID>/<連番>-surface-from-mask-input.json")
+from duocad.topopt.mesh import build_surface_from_mask
+surface = build_surface_from_mask(**record)
 ```
 
 `load_snapshot` は配列のハッシュ・型・形を確認し、辞書とNumPy配列だけを返す。
@@ -81,13 +87,15 @@ surface = build_surface(**record)
 
 最新候補のscratch STLではなく、**採用結果の `final.stl`** を使う。
 
-ブーリアン処理は `finalize` 段階に記録する。`before-boolean`、`preserve-union`、
-`exclude-cut`、`final-solid` はB-rep本文を保存する。警告・エラー時は `*-diagnostics` と、
+ブーリアン処理は `finalize` 段階に記録する。`before-boolean`、`material-cut`(メッシュから保持＋除外を
+まとめて引く)、`preserve-<i>-cut`(保持ボディ`i`ごとに除外との差集合)、`preserve-fuse`(除外済み保持を
+足し戻す)、`final-solid` はB-rep本文を保存する。警告・エラー時は `*-diagnostics` と、
 取得できれば `*-rejected` も保存する。
 新しい記録の `pre-boolean-mesh-world` が平滑化前後の頂点、`final-mesh-world` が
 ブーリアン後CADの三角形分割。両者の面接続は同じとは限らない。
-正本のCADは `document_after.json` の `add_solid_body` 操作に含まれ、
-`--solid-body <body-id>` で直接検査できる。
+結果は `document_after.json` に `add_mesh_body` 操作(合格した三角形)として入る(2026-09-23 から。
+それ以前の記録は `add_solid_body` で B-rep が入っている)。ブーリアン後の B-rep は `final-solid` スナップショットで、
+`check_final_shape.py --solid-snapshot <NNNNNN-final-solid.json>` で直接検査できる(古い記録は `--solid-body <body-id>`)。
 
 ## 費用と障害
 
@@ -102,9 +110,14 @@ surface = build_surface(**record)
 CAD出力・ソース収集・イベント記録等を含む総追加時間ではない。
 反復時間や総時間には記録の影響が含まれるため、以前の計測値と直接比較しない。
 
-2026-09-14の小型パッドモデルによる製品経路検査では、候補3件・完了した設計反復23回・
-途中失敗1反復を含み、約24.9 MB、スナップショット保存約5.39秒、全体約27秒だった。
-これは実製品2.4mmの容量や時間を予測する値ではない。
+SIMP時代の hanger 2.4mm の実行 `20260914T133910-1d5adc93ee4d` は 6.45 GB で、その 95%(6.15 GB)が
+反復ごとの記録(`iteration-*` / `taubin-*` / `linear-*` / `progress`)の配列だった。現行の二値探索は
+反復ごとの記録を持たないため、同等規模の実行はこれよりはるかに小さくなる想定だが、実測はまだない。
+
+**`output/optimization_runs/` は自動では消えない。** 不要になった実行は手で消す。文書と
+`check_design_space.py --run` が基準に使う `20260914T133910-1d5adc93ee4d` は反復ごとの記録だけを
+削って残してある(削った範囲は実行フォルダの `PRUNED.md`。この実行に反復単位の再生・解析は掛けられない)。
+テストの実行はここへ残らない —— `tests/conftest.py` が `trace.DEFAULT_ROOT` を一時フォルダへ向ける。
 
 ## 検査
 

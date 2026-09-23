@@ -273,9 +273,3 @@ export function evaluateExpression(text: string): ExpressionResult {
     throw error
   }
 }
-
-/** 評価できれば数、できなければ null(理由が要らない呼び出し側のための短い口)。 */
-export function expressionValue(text: string): number | null {
-  const result = evaluateExpression(text)
-  return result.ok ? result.value : null
-}

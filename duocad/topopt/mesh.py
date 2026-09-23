@@ -1,16 +1,13 @@
-"""密度場を三角形メッシュへ変換する。
+"""確定済みの二値マスクを三角形メッシュへ変換する。
 
-保持・除外の塗り直し → 最大連結成分の抽出 → 外周パディング → marching cubes
-→ Taubin平滑化の順に処理する。STL書き出しは write_stl を使う。
-入力の密度場は変更しない。保持と除外が重なる場合は保持を優先する。
-面の巻き順は外向きに揃え、描画・書き出し側では反転しない。
+外周パディング → marching cubes → Taubin平滑化の順に処理する。STL書き出しは write_stl を使う。
+入力のマスクは変更しない。面の巻き順は外向きに揃え、描画・書き出し側では反転しない。
 
-応力・安全率は入力の密度場で評価する。島除去・表面平滑化後のメッシュを
+応力・安全率は入力のマスクで評価する。表面平滑化後のメッシュを
 再解析した値ではない。実測と制限は docs/TOPOPT.md を参照。"""
 
 from __future__ import annotations
 
-import argparse
 import struct
 import time
 from dataclasses import dataclass
@@ -19,11 +16,8 @@ from pathlib import Path
 import numpy as np
 from . import trace
 import scipy.sparse as sp
-from scipy import ndimage
 from scipy.spatial import cKDTree
 from skimage.measure import marching_cubes
-
-_ROOT = Path(__file__).resolve().parent
 
 # Taubin平滑化の既定値(タスク指定)。level は等値の太さを決める設計の摘みなので
 # 定数で埋め込まず、常に引数として外に出す。
@@ -35,46 +29,12 @@ DEFAULT_MU = -0.53
 # −0.003%(12反復の −0.21% より小さい)、最小肉厚は縮まない。
 DEFAULT_ITERS = 30
 DEFAULT_SPACING = (1.0, 1.0, 1.0)  # [mm]。1要素=1mmという既存の描画規約に合わせた値。
-# **実寸は呼ぶ側が `spacing=` で渡す**(`optimize_run` は格子の実spacingを渡す)ので、
-# ここは素の格子の既定である。
+# **`optimize_run` はここへ実spacingを渡さない**(既定の要素添字空間のまま呼ぶ)。
+# 実寸への変換は呼び出し側の `optimize_run._mesh_to_world`
+# (`grid.origin + verts * grid.spacing`)が一括して行う契約 —— ここで実spacingを渡すと
+# 二重に掛かってメッシュが格子の外へ大きく外れる(`build_surface_from_mask` の
+# docstring・`optimize_run._run` のコメントに同じ注意)。
 DEFAULT_PAD = 1
-def apply_density_masks(
-    rho: np.ndarray,
-    *,
-    keep_mask: np.ndarray | None = None,
-    zero_mask: np.ndarray | None = None,
-) -> np.ndarray:
-    """入力をコピーし、除外を0、保持を1にする。両マスクが重なる場合は保持が優先。"""
-    field = np.array(rho, dtype=np.float64, copy=True)
-    if zero_mask is not None:
-        field[np.asarray(zero_mask, dtype=bool)] = 0.0
-    if keep_mask is not None:
-        field[np.asarray(keep_mask, dtype=bool)] = 1.0
-    return field
-
-
-# ---------------------------------------------------------------------------
-# 1. 浮島の除去
-# ---------------------------------------------------------------------------
-def remove_islands(rho: np.ndarray, threshold: float = DEFAULT_LEVEL) -> np.ndarray:
-    """二値化(`rho > threshold`)した場の最大連結成分だけを残す。
-
-    **返すのは連続値の場**(二値化した配列そのものではない)。連結成分の判定にだけ
-    二値化を使い、生き残った領域の値はもとの連続値のまま返す。
-    """
-    binary = rho > threshold
-    if not binary.any():
-        return np.zeros_like(rho)
-    labels, n_labels = ndimage.label(binary)
-    if n_labels <= 1:
-        return rho.copy()
-    counts = np.bincount(labels.ravel())
-    counts[0] = 0  # 背景(ラベル0)は連結成分として数えない
-    largest = int(np.argmax(counts))
-    out = np.zeros_like(rho)
-    mask = labels == largest
-    out[mask] = rho[mask]
-    return out
 
 
 def pad_field(rho: np.ndarray, width: int = DEFAULT_PAD) -> np.ndarray:
@@ -323,9 +283,9 @@ class MeshResult:
     interpolation_ratios: np.ndarray
 
 
-@trace.stage('surface')
-def build_surface(
-    rho: np.ndarray,
+@trace.stage('surface-from-mask')
+def build_surface_from_mask(
+    mask: np.ndarray,
     *,
     level: float = DEFAULT_LEVEL,
     spacing: tuple[float, float, float] = DEFAULT_SPACING,
@@ -333,17 +293,18 @@ def build_surface(
     mu: float = DEFAULT_MU,
     n_iter: int = DEFAULT_ITERS,
     pad_width: int = DEFAULT_PAD,
-    keep_mask: np.ndarray | None = None,
-    zero_mask: np.ndarray | None = None,
 ) -> MeshResult:
-    """保持・除外を塗り直し、浮島除去・等値面抽出・Taubin平滑化を行う。
+    """確定済みの二値マスクを直接メッシュ化する(計画書§3・§8段階5の唯一の入口)。
 
-    keep_mask / zero_mask は rho と同じ形の bool 配列。省略したマスクは適用しない。"""
+    保持/除外の塗り直しも浮島除去も**しない**。呼び出し側が渡すマスクは既に `acceptance.inspect` の6条件に
+    合格し、`binary_search.resolve_islands` で単一連結成分に絞られている確定マスクである
+    ——ここでもう一度どちらかを掛けると、探索が確定した形状を検査を経ずに書き換えることになる
+    (計画書§3「候補ごとのメッシュ生成・STL出力は廃止する」と表裏、確定後の1回だけがこの入口)。
+    """
     t0 = time.perf_counter()
-    masked = apply_density_masks(rho, keep_mask=keep_mask, zero_mask=zero_mask)
-    rho_clean = remove_islands(masked, threshold=level)
-    padded = pad_field(rho_clean, width=pad_width)
-    trace.snapshot('surface-fields', masked=masked, rho_clean=rho_clean, padded=padded)
+    rho = np.asarray(mask, dtype=np.float64)
+    padded = pad_field(rho, width=pad_width)
+    trace.snapshot('surface-fields', masked=rho, rho_clean=rho, padded=padded)
     verts_raw, faces, interpolation_ratios = run_marching_cubes(
         padded, level=level, spacing=spacing, pad_width=pad_width
     )
@@ -352,7 +313,7 @@ def build_surface(
     verts_smooth = taubin_smooth(verts_raw, faces, lam=lam, mu=mu, n_iter=n_iter)
     seconds = time.perf_counter() - t0
     return MeshResult(
-        rho_clean=rho_clean,
+        rho_clean=rho,
         verts_raw=verts_raw,
         faces=faces,
         verts_smooth=verts_smooth,
@@ -368,51 +329,3 @@ def build_surface(
     )
 
 
-def _cli() -> int:
-    import simp  # ここでのみ要る(SIMPを回して実データを作るのはCLI用途だけ)
-
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--level", type=float, default=DEFAULT_LEVEL)
-    parser.add_argument("--lam", type=float, default=DEFAULT_LAMBDA)
-    parser.add_argument("--mu", type=float, default=DEFAULT_MU)
-    parser.add_argument("--iters", type=int, default=DEFAULT_ITERS)
-    parser.add_argument("--out", default=str(_ROOT / "output" / "optimized.stl"))
-    args = parser.parse_args()
-
-    p = simp.PRESET
-    print(
-        f"SIMP最適化を実行中(プリセット {p['nelx']}x{p['nely']}x{p['nelz']} / "
-        f"{p['max_iter']}反復)..."
-    )
-    t0 = time.perf_counter()
-    result = simp.run_preset()
-    simp_seconds = time.perf_counter() - t0
-    print(f"  完了: {len(result.history)}反復 / {simp_seconds:.1f}秒")
-
-    mr = build_surface(
-        result.rho,
-        level=args.level,
-        lam=args.lam,
-        mu=args.mu,
-        n_iter=args.iters,
-    )
-    write_stl(args.out, mr.verts_smooth, mr.faces)
-    out_path = Path(args.out)
-    size_kb = out_path.stat().st_size / 1024.0
-
-    print(f"  三角形数: {len(mr.faces)}")
-    print(f"  頂点数: {len(mr.verts_smooth)}")
-    print(f"  体積(平滑化前): {mr.volume_raw:.3f}")
-    print(f"  体積(平滑化後): {mr.volume_smooth:.3f} "
-          f"(変化 {100 * (mr.volume_smooth / mr.volume_raw - 1):+.2f}%)")
-    thickness_before = min_wall_thickness(mr.verts_raw, mr.faces)
-    thickness_after = min_wall_thickness(mr.verts_smooth, mr.faces)
-    print(f"  最小肉厚(平滑化前): {thickness_before:.4f}")
-    print(f"  最小肉厚(平滑化後): {thickness_after:.4f}")
-    print(f"  メッシュ処理時間: {mr.seconds:.2f}秒")
-    print(f"  STL: {out_path} ({size_kb:.1f} KB)")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(_cli())

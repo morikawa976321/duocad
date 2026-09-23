@@ -1,7 +1,7 @@
 """CAD の**面**と、格子の**節点**の対応表(面アンカー)。
 
     .\\.venv\\Scripts\\python.exe topopt_checks\\check_anchor.py     # 受入検査
-    .\\.venv\\Scripts\\python.exe -m duocad.topopt.anchor           # 合成ブラケットを端から端まで1回通す
+    .\\.venv\\Scripts\\python.exe -m duocad.topopt.anchor           # 合成ブラケットの面アンカー表を作って要約する
 
 これは `duocad.topopt` の **stage2**。stage1(`voxelize.py`)が作った格子の上に、
 「ボディXの面#42」→「これらの格子節点」の翻訳を載せる。これが無いと固定面・荷重面を
@@ -22,8 +22,8 @@
 - **節点は要素の角**である。要素格子が `(nx, ny, nz)` なら節点格子は `(nx+1, ny+1, nz+1)`。
   節点 (i,j,k) のワールド座標は `origin + spacing * (i, j, k)`(要素**中心**の
   `+0.5` は付かない。付けると半セルずれる。要素中心が要るときは `Grid.centers_of`)。
-- **節点番号は `simp.py` の DOF 写像と同じ**: `n = i*(ny+1)*(nz+1) + j*(nz+1) + k`、
-  自由度は `3n, 3n+1, 3n+2`(`simp._build_edof` と一致。ここがずれると荷重が
+- **節点番号は `fem.py` の DOF 写像と同じ**: `n = i*(ny+1)*(nz+1) + j*(nz+1) + k`、
+  自由度は `3n, 3n+1, 3n+2`(`fem._build_edof` と一致。ここがずれると荷重が
   別の場所に入り、それでも最適化は「もっともらしく」収束する)。
 - **1つの節点は高々1つの面に属する**(後述の稜線規則)。面ごとの節点集合は排他である。
 - **節点は「担当面積」を持つ**。荷重はこの面積比で配る。重み無しの等分は禁止 ——
@@ -69,25 +69,30 @@
 
 最適化は荷重直下の材料を溶かしにいく(そこに材料が無くても計算上は荷重が入るため)。
 実務上の定石どおり、アンカー節点に接する要素を保持領域(ρ=1)へ固定する口を付けてある
-(`element_mask`。既定で有効)。機構は stage1 の保持領域と同じで、`simp.optimize` の
-`solid_mask` へそのまま渡せる。
+(`element_mask`)。`design_space.derive` が固定面・荷重面ごとの接続の種(seed)として使う。
+
+## 材料に接する節点だけへ対応付ける(探索用の確定表)
+
+上の表は材料の有無を見ない(幾何の対応表)。探索(`binary_search`)は**全アンカー節点が材料に
+接する**ことを要求するので、設計空間の外にしか無い節点へ配った表をそのまま渡すと、
+全材料マスクでも「荷重・拘束が有効」が落ちる。`build_anchors(..., allowed_nodes=...)` は
+**標本ごとに、球内の節点のうち許可された節点だけへ重みを配る**(配ってから捨てるのではない)。
+球内に許可節点が1つも無い標本は**対応不能**として面ごとに数え、遠い節点へは移さない
+(探す範囲は同じ球 `radius`。`FaceAnchor.unmapped_samples` / `unmapped_positions`)。
+確定表の検証(節点数・対応不能標本・被覆・合力・重心・モーメント)は `condition_mapping`。
 """
 
 from __future__ import annotations
 
 import math
-import sys
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
+from itertools import product
 from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
-from . import trace
 
 from . import voxelize as vx
-
-_HERE = Path(__file__).resolve().parent
 
 # 標本点の目標間隔(要素サイズ比)。小さいほど分布が滑らかになり、標本点の数は2乗で増える。
 DEFAULT_SAMPLE_RATIO = 0.25
@@ -97,6 +102,36 @@ DEFAULT_RADIUS_RATIO = 1.0
 MAX_SUBDIVISION = 512
 # 1回のベクトル演算で扱う標本点の上限(中間配列を数MBに抑える)。
 SAMPLE_BATCH = 40_000
+#: 対応不能標本の座標を面ごとに何件まで残すか(診断の大きさを抑えるためだけの値)。
+UNMAPPED_SAMPLE_RECORD = 20
+#: 作用位置の門(`position_limit`)に足す相対の数値許容差。ちょうど半径の位置を丸め誤差で落とさないためだけの値。
+MAPPING_POSITION_RTOL = 1e-9
+
+
+def position_limit(table: "AnchorTable") -> float:
+    """条件面の作用位置のずれの許容 [mm] = 対応付けの探索半径(`table.radius`)。
+
+    荷重・拘束を置く位置の合格基準で、`condition_mapping`(重心・モーメント)と
+    `optimize_run._check_anchor_centroids` が同じ値を使う(層をまたぐ契約)。
+    半径は「各標本の面積を配ってよい距離」という対応規則そのものなので、稜線の所有権で面積を
+    失わない限り、節点の重心は標本の重心から必ず半径以内に収まる(標本ごとに半径内の節点への
+    凸結合で、面の重心はその面積平均)。越えるのは、稜線で片側の面積を大きく失った・
+    三角形分割がCAD面から離れた・別の面を掴んだ、のいずれか。
+    """
+    return float(table.radius) * (1.0 + MAPPING_POSITION_RTOL)
+
+
+def active_nodes(material: np.ndarray) -> np.ndarray:
+    """材料セル(bool、要素格子)に角として接する節点のマスク(節点格子 `(nx+1, ny+1, nz+1)`)。
+
+    `acceptance` の6条件「荷重・拘束が有効」と、探索用の確定表(`build_anchors` の
+    `allowed_nodes`)が同じ定義を使う(層をまたぐ契約: ここが変わると両方が同時に変わる)。
+    """
+    material = np.asarray(material, dtype=bool)
+    nodes = np.zeros(tuple(n + 1 for n in material.shape), dtype=bool)
+    for corner in product(range(2), repeat=3):
+        nodes[tuple(slice(c, c + n) for c, n in zip(corner, material.shape))] |= material
+    return nodes
 
 
 def _candidate_offsets(radius_ratio: float) -> np.ndarray:
@@ -119,7 +154,7 @@ def _candidate_offsets(radius_ratio: float) -> np.ndarray:
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class NodeGrid:
-    """要素格子 `Grid` の角にある節点の格子。番号は `simp.py` の DOF 写像と同じ。"""
+    """要素格子 `Grid` の角にある節点の格子。番号は `fem.py` の DOF 写像と同じ。"""
 
     grid: vx.Grid
 
@@ -141,7 +176,7 @@ class NodeGrid:
         return np.asarray(self.grid.origin, dtype=float) + self.grid.spacing * idx
 
     def ids_of(self, indices: np.ndarray) -> np.ndarray:
-        """(N,3) の節点添字 → `simp.py` と同じ通し番号 (N,)。"""
+        """(N,3) の節点添字 → `fem.py` と同じ通し番号 (N,)。"""
         idx = np.asarray(indices, dtype=np.int64)
         if idx.ndim != 2 or idx.shape[1] != 3:
             raise ValueError(f"indices must be (N,3), got {idx.shape}")
@@ -195,6 +230,15 @@ class FaceAnchor:
     cad_area: float
     cad_centroid: np.ndarray
     cad_normal: np.ndarray
+    # 標本点(細分した三角形の重心)の面積重み重心。三角形群の面積重心と厳密に一致するので、
+    # 節点集合の重心のずれ(格子近似の誤差)を測る基準になる。
+    sample_centroid: Optional[np.ndarray] = None
+    # `allowed_nodes` 付きで作ったときだけ非零: 球内に許可節点が無かった標本の数・面積・座標。
+    unmapped_samples: int = 0
+    unmapped_area: float = 0.0
+    unmapped_positions: Optional[np.ndarray] = None
+    # 実際に重みが付いた標本→節点の距離の最大(球の半径以下。対応距離の実測)。
+    max_mapping_distance: float = 0.0
 
     @property
     def node_count(self) -> int:
@@ -296,9 +340,9 @@ class AnchorTable:
     def condition_face_diagnoses(self, fixed_faces: Any, load_faces: Any) -> list[dict]:
         """拘束面・荷重面のうち `empty_faces()` に入っているものだけの診断(側の別つき)。
 
-        `run_pipeline` の入口で使う。**1枚も空でなければ空リスト** —— 通常経路の
-        戻り値には影響しない(新しい通知の仕組みではなく、既存の `empty_faces()` を
-        機械可読な形に整えるだけの薄い層)。面は `int` 1つでも並びでも受ける。
+        `optimize_run._empty_condition_faces` が製品経路の入口で使う。**1枚も空でなければ
+        空リスト** —— 通常経路の戻り値には影響しない(新しい通知の仕組みではなく、既存の
+        `empty_faces()` を機械可読な形に整えるだけの薄い層)。面は `int` 1つでも並びでも受ける。
         """
         empty = set(self.empty_faces())
         out: list[dict] = []
@@ -409,66 +453,12 @@ class AnchorTable:
             np.add.at(f, 3 * ids + axis, weights * force[axis])
         return f
 
-    def pressure_vector(
-        self,
-        faces: Iterable[int] | int,
-        pressure: float,
-        *,
-        out: Optional[np.ndarray] = None,
-    ) -> np.ndarray:
-        """圧力 [N/mm^2] を面法線の**逆**向き(面を押す向き)に載せた荷重ベクトル。
+    def element_mask(self, faces: Iterable[int] | int) -> np.ndarray:
+        """アンカー節点を角に持つ要素の bool マスク (nx,ny,nz)。非設計領域に固定するのに使う。
 
-        節点力 = `-pressure * (cad_area/担当面積の合計) * 担当面積 * 節点法線`。
-        向きの分布は担当面積の重みのまま(=節点への配り方は変えない)で、
-        **総量だけを「面の真の面積」に合わせ直す**。
-
-        **なぜ担当面積をそのまま使わないか。** 稜線の規則で節点を隣の面に取られたぶん、
-        担当面積の合計は真の面積より数%小さい(実測: 24x24 の面で 10.7%、要素サイズ1.875mm)。
-        `load_vector` は「指定した合力」を担当面積の**比**で配るので、この差は正規化で
-        吸収されて消える。しかし圧力は `p x 面積` が合力そのものなので、**吸収されずに
-        そのまま合力の不足になる**(粗い格子ほど大きく、解像度を上げると黙って合力が増える)。
-        面の真の面積は B-rep から取れている(`FaceAnchor.cad_area`)ので、そこから出す。
-
-        担当面積の**値**も所有の規則も変えていない。変えるのはこの関数が作る合力だけ。
-        平面の面なら合力の大きさは厳密に `pressure * cad_area`(受入検査[1]が相対1e-12で見る)。
-        曲面では `p * ∫n dA` の離散近似になる(それが圧力の意味であって、
-        大きさが `p * cad_area` になるわけではない)。
-        """
-        picked = self._selected(faces)
-        self._require_nodes(picked)
-        f = np.zeros(self.node_grid.ndof) if out is None else out
-        for anchor in picked:
-            assigned = float(anchor.areas.sum())
-            if not assigned > 0.0:
-                raise ValueError(
-                    f"面 {anchor.face_index}: 担当面積の合計が 0 で圧力を配れない"
-                )
-            true_area = float(anchor.cad_area)
-            if not true_area > 0.0:
-                # `face_props` を持たない TriangleSoup(検査が手で組んだもの等)への保険。
-                # 三角形の総面積も真の面積の近似なので、無いよりはよい。
-                true_area = float(anchor.triangle_area)
-            if not true_area > 0.0:
-                raise ValueError(
-                    f"面 {anchor.face_index}: 真の面積が取れないので圧力の合力を決められない"
-                )
-            scale = -float(pressure) * (true_area / assigned)
-            vec = scale * anchor.areas[:, None] * anchor.normals
-            for axis in range(3):
-                np.add.at(f, 3 * anchor.node_ids + axis, vec[:, axis])
-        return f
-
-    def element_mask(
-        self, faces: Iterable[int] | int, layers: int = 1
-    ) -> np.ndarray:
-        """アンカー節点に接する要素の bool マスク (nx,ny,nz)。非設計領域に固定するのに使う。
-
-        `layers=1` は「その節点を角に持つ要素」。2以上は各軸へその分だけ膨らませる。
         荷重・拘束の近傍を ρ=1 に固定するのが実務上の定石で、これをやらないと最適化が
         荷重直下の材料を溶かして「荷重が宙に浮いた」形が出る。
         """
-        if int(layers) < 1:
-            raise ValueError(f"layers must be >= 1, got {layers!r}")
         nx, ny, nz = self.grid.shape
         mask = np.zeros((nx, ny, nz), dtype=bool)
         idx = self.nodes(faces)
@@ -479,16 +469,6 @@ class AnchorTable:
                     ok = np.all((e >= 0) & (e < np.array([nx, ny, nz])), axis=1)
                     e = e[ok]
                     mask[e[:, 0], e[:, 1], e[:, 2]] = True
-        for _ in range(int(layers) - 1):
-            grown = mask.copy()
-            for axis in range(3):
-                lo = [slice(None)] * 3
-                hi = [slice(None)] * 3
-                lo[axis] = slice(1, None)
-                hi[axis] = slice(None, -1)
-                grown[tuple(lo)] |= mask[tuple(hi)]
-                grown[tuple(hi)] |= mask[tuple(lo)]
-            mask = grown
         return mask
 
 
@@ -558,11 +538,18 @@ def build_anchors(
     faces: Optional[Iterable[int]] = None,
     radius_ratio: float = DEFAULT_RADIUS_RATIO,
     sample_ratio: float = DEFAULT_SAMPLE_RATIO,
+    allowed_nodes: Optional[np.ndarray] = None,
 ) -> AnchorTable:
     """面添字 → 節点の対応表を作る。
 
     `faces` を渡すとその面だけを対象にする(既定は全面)。`radius_ratio` は節点を拾う球の
     半径(要素サイズ比)、`sample_ratio` は三角形を細分するときの目標辺長(要素サイズ比)。
+
+    `allowed_nodes`(節点格子と同じ形か平坦な bool)を渡すと、**標本ごとに球内の許可節点だけへ
+    重みを配る**(材料に接する節点だけへ対応付ける探索用の確定表。モジュール docstring)。
+    球内に許可節点が無い標本は対応不能として面ごとに数え、最近傍への退避はしない
+    (`stats["mapping"] == "material"`)。渡さなければ従来どおり材料を見ない幾何の表
+    (`stats["mapping"] == "geometry"`)。
     """
     started = time.perf_counter()
     if not radius_ratio > 0:
@@ -577,6 +564,14 @@ def build_anchors(
     origin = np.asarray(grid.origin, dtype=float)
     n_shape = np.asarray(node_grid.shape, dtype=np.int64)
     ny1, nz1 = int(n_shape[1]), int(n_shape[2])
+    allowed: Optional[np.ndarray] = None
+    if allowed_nodes is not None:
+        allowed = np.asarray(allowed_nodes, dtype=bool).ravel()
+        if allowed.size != node_grid.count:
+            raise ValueError(
+                f"allowed_nodes は節点格子 {node_grid.shape}(節点 {node_grid.count} 個)と"
+                f"同じ大きさであること(いま {allowed.size} 個)"
+            )
 
     a_all, b_all, c_all = soup.triangle_vertices()
     tri_normal = np.cross(b_all - a_all, c_all - a_all)
@@ -604,8 +599,10 @@ def build_anchors(
 
     raw: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     tri_area_of_face: dict[int, float] = {}
+    extras: dict[int, dict] = {}
     fallback_samples = 0
     sample_total = 0
+    unmapped_total = 0
 
     for f in wanted:
         tris = soup.triangles_of_face(f)
@@ -615,32 +612,61 @@ def build_anchors(
             0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1).sum()
         )
         touched: list[np.ndarray] = []
+        sample_area = 0.0
+        sample_moment = np.zeros(3)
+        unmapped_count = 0
+        unmapped_area = 0.0
+        unmapped_pos: list[np.ndarray] = []
+        max_distance = 0.0
         for pts, areas, parents in _iter_samples(a, b, c, target=sample_ratio * h):
             sample_total += pts.shape[0]
+            # 標本の重心は対応の成否によらず全標本で取る(対応後の節点重心と比べる基準)。
+            sample_area += float(areas.sum())
+            sample_moment += (areas[:, None] * pts).sum(axis=0)
             base = np.floor((pts - origin) / h).astype(np.int64)
             cand = base[:, None, :] + offsets[None, :, :]           # (P,C,3)
             valid = np.all((cand >= 0) & (cand < n_shape), axis=2)  # (P,C)
             cand_clipped = np.clip(cand, 0, n_shape - 1)
+            ids = (
+                cand_clipped[:, :, 0] * (ny1 * nz1)
+                + cand_clipped[:, :, 1] * nz1
+                + cand_clipped[:, :, 2]
+            )
+            if allowed is not None:
+                # 許可節点を**重みを計算する前に**選別する。配ってから捨てると標本ごとの
+                # 正規化(単位の分割)が許可外の節点を含めた重みで決まってしまう。
+                valid &= allowed[ids]
             node_pos = origin + h * cand_clipped
             dist = np.linalg.norm(node_pos - pts[:, None, :], axis=2)
             w = np.where(valid, np.maximum(0.0, 1.0 - dist / radius), 0.0)
             wsum = w.sum(axis=1)
             empty = wsum <= 0.0
             if np.any(empty):
-                # 球に節点が1つも入らなかった標本点。最近傍1点へ退避する
-                # (radius >= sqrt(3)/2*spacing なら起こらない)。
-                fallback_samples += int(np.count_nonzero(empty))
-                far = np.where(valid[empty], dist[empty], np.inf)
-                nearest = np.argmin(far, axis=1)
-                w[empty] = 0.0
-                w[np.flatnonzero(empty), nearest] = 1.0
-                wsum = w.sum(axis=1)
+                if allowed is None:
+                    # 球に節点が1つも入らなかった標本点。最近傍1点へ退避する
+                    # (radius >= sqrt(3)/2*spacing なら起こらない)。
+                    fallback_samples += int(np.count_nonzero(empty))
+                    far = np.where(valid[empty], dist[empty], np.inf)
+                    nearest = np.argmin(far, axis=1)
+                    w[empty] = 0.0
+                    w[np.flatnonzero(empty), nearest] = 1.0
+                    wsum = w.sum(axis=1)
+                else:
+                    # 球内に許可節点が無い標本は対応不能。遠い節点へ移さず、面ごとに数えて残す。
+                    unmapped_count += int(np.count_nonzero(empty))
+                    unmapped_area += float(areas[empty].sum())
+                    room = UNMAPPED_SAMPLE_RECORD - len(unmapped_pos)
+                    if room > 0:
+                        unmapped_pos.extend(pts[empty][:room])
+                    keep_rows = ~empty
+                    if not keep_rows.any():
+                        continue
+                    pts, areas, parents = pts[keep_rows], areas[keep_rows], parents[keep_rows]
+                    w, wsum, dist, ids = w[keep_rows], wsum[keep_rows], dist[keep_rows], ids[keep_rows]
             w = w / wsum[:, None]
-            ids = (
-                cand_clipped[:, :, 0] * (ny1 * nz1)
-                + cand_clipped[:, :, 1] * nz1
-                + cand_clipped[:, :, 2]
-            )
+            used = w > 0.0
+            if used.any():
+                max_distance = max(max_distance, float(dist[used].max()))
             contrib = w * areas[:, None]
             flat_ids = ids.ravel()
             flat_contrib = contrib.ravel()
@@ -659,6 +685,16 @@ def build_anchors(
         raw[f] = (hit, acc_area[hit].copy(), acc_normal[hit].copy())
         acc_area[hit] = 0.0
         acc_normal[hit] = 0.0
+        unmapped_total += unmapped_count
+        extras[f] = dict(
+            sample_centroid=(sample_moment / sample_area if sample_area > 0.0 else None),
+            unmapped_samples=unmapped_count,
+            unmapped_area=unmapped_area,
+            unmapped_positions=(
+                np.asarray(unmapped_pos, dtype=float).reshape(-1, 3) if allowed is not None else None
+            ),
+            max_mapping_distance=max_distance,
+        )
 
     # --- 稜線の規則: 最も多く面積を配った面が持ち主。同点は面添字の小さい面。 ---
     owner = np.full(n_nodes, -1, dtype=np.int64)
@@ -696,6 +732,7 @@ def build_anchors(
             cad_area=float(props.get("area", 0.0)),
             cad_centroid=np.asarray(props.get("centroid", (0.0, 0.0, 0.0)), dtype=float),
             cad_normal=np.asarray(props.get("normal", (0.0, 0.0, 0.0)), dtype=float),
+            **extras[f],
         )
         contested += int(np.count_nonzero(~mine))
 
@@ -711,27 +748,209 @@ def build_anchors(
         "anchor_nodes": int(sum(a.node_count for a in anchors.values())),
         "empty_faces": [f for f in sorted(anchors) if anchors[f].node_count == 0],
         "node_shape": list(node_grid.shape),
+        # 幾何の表(材料を見ない)か、材料に接する節点だけへ対応付けた探索用の確定表か。
+        # 記録・ログはこの値で2つの表を見分ける。
+        "mapping": "geometry" if allowed is None else "material",
+        "allowed_nodes": None if allowed is None else int(np.count_nonzero(allowed)),
+        "unmapped_samples": int(unmapped_total),
     }
     return AnchorTable(
         grid=grid, node_grid=node_grid, anchors=anchors, radius=radius, stats=stats
     )
 
 
-def anchors_for(
-    model: vx.VoxelModel,
+# ---------------------------------------------------------------------------
+# 確定表の検証(探索へ渡す前の境界条件の対応付け)
+# ---------------------------------------------------------------------------
+def condition_mapping(
+    table: AnchorTable,
+    fixed_faces: Any,
+    load_faces: Any,
+    forces: Any,
     *,
-    faces: Optional[Iterable[int]] = None,
-    radius_ratio: float = DEFAULT_RADIUS_RATIO,
-    sample_ratio: float = DEFAULT_SAMPLE_RATIO,
-) -> AnchorTable:
-    """`voxelize()` の戻り値からそのまま対応表を作る(格子と三角形群は既に揃っている)。"""
-    return build_anchors(
-        model.soup,
-        model.grid,
-        faces=faces,
-        radius_ratio=radius_ratio,
-        sample_ratio=sample_ratio,
-    )
+    material: Optional[np.ndarray] = None,
+) -> dict:
+    """拘束面・荷重面ごとに、表の対応付けが成立しているかを検証して機械可読な報告にする。
+
+    面ごとに見るもの: 節点数(0なら不成立)、対応不能標本(1つでもあれば不成立)、`material` を
+    渡したときは材料に接しない節点(1つでもあれば不成立)、荷重面の合力(入力ベクトルと
+    数値許容差 `atol 1e-10·max(1,|F|)` / `rtol 1e-10` で一致しなければ不成立)、
+    **作用位置**: 節点の担当面積重心とCAD面の面積重心のずれ(`position_limit` を超えれば不成立)、
+    荷重面では格子原点まわりのモーメント(CAD面への一様分布荷重の参照値 `c_CAD×F` と、
+    `load_vector` が実際に作る節点荷重の `Σ p×f` の差が `position_limit·|F|` を超えれば不成立)。
+
+    モーメントの門は、1面に1つの荷重ベクトルを面積比で配る限り `|Δc×F| ≤ |Δc|·|F|` なので
+    重心の門より緩い。それでも門にするのは、重心を担当面積から、モーメントを `load_vector` の
+    自由度配列から別々に計算していて、荷重の配り方が面積とずれたときにこちらだけが気づくため。
+    CAD面の重心が無い表(`face_props` を持たない三角形群)では三角形の面積重心を基準にし、
+    `centroid_reference` に書く。合力は担当面積の比で配る限り厳密に保存されるので、合力だけを見て
+    対応付けを採用しない。数値は実単位(mm/N)と、要素サイズ・荷重で正規化した値の両方を持つ。
+    戻り値は素の値だけ(JSONにそのまま通る)。
+    """
+    fixed = _face_list(fixed_faces)
+    load = _face_list(load_faces)
+    force_rows = np.asarray(forces, dtype=float)
+    if force_rows.shape != (len(load), 3):
+        raise ValueError(
+            f"荷重ベクトルは荷重面と同じ数の (N,3) であること(荷重面 {len(load)} 枚 / 荷重 {force_rows.shape})"
+        )
+    h = float(table.grid.spacing)
+    radius = float(table.radius)
+    limit = position_limit(table)
+    origin = np.asarray(table.grid.origin, dtype=float)
+    live = None if material is None else active_nodes(material).ravel()
+    rows: list[dict] = []
+    for side, faces in (("fixed", fixed), ("load", load)):
+        for index, face in enumerate(faces):
+            anchor = table[face]
+            reasons: list[str] = []
+            row: dict = {
+                "condition": f"{side}_face_{face}",
+                "side": side,
+                "face": int(face),
+                "nodes": int(anchor.node_count),
+                "cad_area_mm2": float(anchor.cad_area),
+                "sample_area_mm2": float(anchor.triangle_area),
+                "assigned_area_mm2": float(anchor.total_area),
+                "leak_ratio": float(anchor.leak_ratio),
+                "unmapped_samples": int(anchor.unmapped_samples),
+                "unmapped_area_mm2": float(anchor.unmapped_area),
+                "unmapped_area_fraction": (
+                    float(anchor.unmapped_area / anchor.triangle_area) if anchor.triangle_area > 0 else 0.0
+                ),
+                "unmapped_positions": (
+                    [] if anchor.unmapped_positions is None else anchor.unmapped_positions.tolist()
+                ),
+                "search_radius_mm": radius,
+                "max_mapping_distance_mm": float(anchor.max_mapping_distance),
+                "max_mapping_distance_elements": float(anchor.max_mapping_distance) / h,
+            }
+            if anchor.node_count == 0:
+                reasons.append("no_nodes")
+            if anchor.unmapped_samples:
+                reasons.append("unmapped_samples")
+            if live is not None and anchor.node_count:
+                lost = anchor.node_ids[~live[anchor.node_ids]]
+                row["uncovered_nodes"] = int(lost.size)
+                row["uncovered_node_ids"] = lost[:UNMAPPED_SAMPLE_RECORD].tolist()
+                if lost.size:
+                    reasons.append("uncovered_nodes")
+            if anchor.node_count:
+                node_centroid = np.asarray(anchor.centroid(table.node_grid), dtype=float)
+                # 節点が付いた面は面積のある標本を必ず持つので、標本の重心は None にならない。
+                sample = np.asarray(anchor.sample_centroid, dtype=float)
+                has_cad = anchor.cad_area > 0.0
+                reference = np.asarray(anchor.cad_centroid, dtype=float) if has_cad else sample
+                shift = float(np.linalg.norm(node_centroid - reference))
+                row.update(
+                    node_centroid_mm=node_centroid.tolist(),
+                    cad_centroid_mm=np.asarray(anchor.cad_centroid, dtype=float).tolist(),
+                    sample_centroid_mm=sample.tolist(),
+                    sample_to_cad_shift_mm=float(np.linalg.norm(sample - reference)) if has_cad else None,
+                    centroid_reference="cad" if has_cad else "triangles",
+                    centroid_shift_mm=shift,
+                    centroid_shift_elements=shift / h,
+                    centroid_limit_mm=limit,
+                    within_search_radius=bool(shift <= limit),
+                )
+                if not shift <= limit:
+                    reasons.append("centroid_shift")
+                if side == "load":
+                    force = force_rows[index]
+                    vector = table.load_vector([face], force).reshape(-1, 3)
+                    resultant = vector.sum(axis=0)
+                    magnitude = float(np.linalg.norm(force))
+                    resultant_error = float(np.linalg.norm(resultant - force))
+                    positions = table.node_grid.positions_of(anchor.nodes) - origin
+                    moment_nodes = np.cross(positions, vector[anchor.node_ids]).sum(axis=0)
+                    moment_reference = np.cross(reference - origin, force)
+                    moment_error = float(np.linalg.norm(moment_nodes - moment_reference))
+                    moment_limit = limit * magnitude
+                    row.update(
+                        requested_force_n=force.tolist(),
+                        resultant_n=resultant.tolist(),
+                        resultant_error_n=resultant_error,
+                        moment_origin_mm=origin.tolist(),
+                        moment_reference_nmm=moment_reference.tolist(),
+                        moment_nodes_nmm=moment_nodes.tolist(),
+                        moment_error_nmm=moment_error,
+                        moment_error_normalized=(moment_error / (magnitude * h) if magnitude > 0 else None),
+                        moment_limit_nmm=moment_limit,
+                    )
+                    if not np.allclose(resultant, force, atol=1e-10 * max(1.0, magnitude), rtol=1e-10):
+                        reasons.append("resultant")
+                    if not moment_error <= moment_limit:
+                        reasons.append("moment")
+            row["status"] = "pass" if not reasons else "fail"
+            row["reasons"] = reasons
+            rows.append(row)
+    status = "pass" if rows and all(row["status"] == "pass" for row in rows) else "fail"
+    return {
+        "status": status,
+        "faces": rows,
+        "rule": {
+            "mapping": table.stats.get("mapping", "geometry"),
+            "search_radius_mm": radius,
+            "radius_ratio": float(table.stats.get("radius_ratio", radius / h)),
+            "sample_ratio": table.stats.get("sample_ratio"),
+            "weights": "tent 1-d/r, normalised per sample over allowed nodes in the sphere",
+            "unmapped_rule": "a sample with no allowed node inside the sphere is unmapped; never moved to a farther node",
+            "ownership": "node belongs to the face that assigned it the most area; ties to the smaller face index",
+            "position_limit": "search radius; |node centroid - CAD area centroid| <= r, |moment error| <= r*|F|",
+            "position_limit_mm": limit,
+            "resultant_tolerance": "atol 1e-10*max(1,|F|), rtol 1e-10",
+            "moment_origin": "grid origin",
+            "moment_reference": "CAD area centroid x requested force",
+        },
+        "table": {
+            "mapping": table.stats.get("mapping", "geometry"),
+            "allowed_nodes": table.stats.get("allowed_nodes"),
+            "anchor_nodes": table.stats.get("anchor_nodes"),
+            "unmapped_samples": table.stats.get("unmapped_samples", 0),
+        },
+    }
+
+
+def format_mapping_warning(report: dict) -> str:
+    """`condition_mapping` が不成立の面を利用者向けの1メッセージにする(成立なら空文字列)。
+
+    **評価予算の増加は案内しない** —— 対応付けの不成立は候補の削除・追加・置換では直らない
+    (候補は常に設計空間の部分集合で、設計空間で接しない節点はどの候補でも接しない)。
+    """
+    parts: list[str] = []
+    for row in report.get("faces", []):
+        if row.get("status") == "pass":
+            continue
+        side_ja = "拘束面" if row["side"] == "fixed" else "荷重面"
+        head = f"{side_ja}(面{row['face']})"
+        for reason in row.get("reasons", []):
+            if reason == "no_nodes":
+                parts.append(f"{head}に材料に接する格子節点が1つも付かない(要素サイズに対して面が小さいか、面の近傍に材料を置ける場所が無い)")
+            elif reason == "unmapped_samples":
+                parts.append(
+                    f"{head}の標本 {row['unmapped_samples']} 点(面積 {row['unmapped_area_mm2']:.4g} mm^2、"
+                    f"面の {row['unmapped_area_fraction']:.1%})から半径 {row['search_radius_mm']:.4g} mm 以内に"
+                    "材料を置ける節点が無い。面のその部分が除外ソリッドの中か設計空間の外にある。"
+                    "除外ソリッド・条件面の位置を確認すること(候補の削除・追加・置換では直らない)"
+                )
+            elif reason == "uncovered_nodes":
+                parts.append(f"{head}の節点 {row['uncovered_nodes']} 個が設計空間の材料に接していない(対応付けの契約違反)")
+            elif reason == "centroid_shift":
+                parts.append(
+                    f"{head}の節点重心が面の重心から {row['centroid_shift_mm']:.3f} mm"
+                    f"(許容 = 対応付けの探索半径 {row['centroid_limit_mm']:.3f} mm)離れている。"
+                    "稜線で隣の面に面積を取られすぎているか、面添字の対応が壊れている可能性がある"
+                )
+            elif reason == "resultant":
+                parts.append(f"{head}の節点荷重の合力 {row['resultant_n']} が入力 {row['requested_force_n']} と一致しない")
+            elif reason == "moment":
+                parts.append(
+                    f"{head}の節点荷重のモーメントがCAD面への一様荷重から {row['moment_error_nmm']:.4g} N·mm"
+                    f"(許容 {row['moment_limit_nmm']:.4g} N·mm)ずれている"
+                )
+            else:
+                parts.append(f"{head}: {reason}")
+    return " / ".join(parts)
 
 
 def faces_matching(
@@ -743,7 +962,7 @@ def faces_matching(
     near_point: Optional[Sequence[float]] = None,
     near_tol: float = 1e-6,
 ) -> list[int]:
-    """面を条件で拾う小さな道具(検査とデモが「あの面」を名指しするために使う)。
+    """面を条件で拾う小さな道具(検査が「あの面」を名指しするために使う)。
 
     実運用では人が画面でクリックした面添字が来るので、この関数は**検査の便宜**でしかない。
     """
@@ -766,40 +985,11 @@ def faces_matching(
     return out
 
 
-# ---------------------------------------------------------------------------
-# 合成ブラケット(検査とビューアが共有する題材)
-# ---------------------------------------------------------------------------
-def demo_bracket():
-    """設計空間になる合成ソリッド。**私物STEPに依存しない**(受入検査の制約)。
-
-    x方向に伸びた箱の、先端の上に小さな耳(lug)を生やした形。
-    - 固定面: 箱の x が最小の面(面積 24x24)
-    - 荷重面: 耳の上面(面積 8x8)。箱の面とは別の面添字になるので、
-      「小さい面を名指しして荷重を載せる」という stage2 の主眼がそのまま試せる。
-    """
-    from build123d import Box, Pos
-
-    body = Box(60, 24, 24)
-    lug = Pos(26, 0, 15) * Box(8, 8, 6)
-    return body + lug
-
-
-def demo_faces(soup: vx.TriangleSoup) -> tuple[int, int]:
-    """`demo_bracket()` の (固定面, 荷重面) の面添字を、位置から決定的に選ぶ。"""
-    fixed = faces_matching(soup, kind="plane", normal=(-1, 0, 0), near_point=(-30, 0, 0), near_tol=1e-6)
-    load = faces_matching(soup, kind="plane", normal=(0, 0, 1), near_point=(26, 0, 18), near_tol=1e-6)
-    if len(fixed) != 1 or len(load) != 1:
-        raise ValueError(
-            f"デモの面を一意に選べなかった(固定={fixed} 荷重={load})。demo_bracket を変えたら見直すこと"
-        )
-    return fixed[0], load[0]
-
-
 def format_condition_face_warning(diagnoses: list[dict]) -> str:
     """`AnchorTable.condition_face_diagnoses` の結果を利用者向けの1メッセージにする。
 
-    `run_pipeline` / `design_space.run_topopt` が空リスト(=空の条件面なし)ならこの関数を
-    呼ばない。呼ぶのは1件以上あるときだけを想定している(空リストを渡すと空文字列)。
+    `optimize_run.run()` が空リスト(=空の条件面なし)ならこの関数を呼ばない。呼ぶのは
+    1件以上あるときだけを想定している(空リストを渡すと空文字列)。
     """
     parts = []
     for d in diagnoses:
@@ -821,393 +1011,12 @@ def format_condition_face_warning(diagnoses: list[dict]) -> str:
     return " / ".join(parts)
 
 
-# ---------------------------------------------------------------------------
-# 端から端まで(ソリッド → 格子 → 面アンカー → SIMP → marching cubes → STL)
-# ---------------------------------------------------------------------------
 def _face_list(value: Any) -> list:
     """`int` 1つでも面の並びでも受けて、面添字のリストにする。
 
-    **既存の呼び出し(デモ・検査)が `int` を渡し続けられるようにするため**の入口。
+    **既存の呼び出し(検査)が `int` を渡し続けられるようにするため**の入口。
     ここで均さないと「面が1枚の場合」の分岐が呼び出し側に散らばる。
     """
     if isinstance(value, (int, np.integer)):
         return [int(value)]
     return [int(item) for item in value]
-
-
-def _assemble_load(
-    table: "AnchorTable",
-    load_faces: Sequence[int],
-    force: Sequence[float],
-    forces: Optional[Sequence[Sequence[float]]],
-) -> tuple:
-    """荷重面 → **無次元の荷重ベクトル**と、その実単位の総量。
-
-    `forces` を渡すと面ごとに違う力ベクトル[N]を足し込み、`force` だけなら全ての荷重面が
-    1本の向きを共有する(面積比で配るのは `load_vector` の役目で、そこは変えていない)。
-
-    **無次元化の分母は「面ごとの大きさの総和」であって合力ではない。** 向きの違う荷重が
-    打ち消し合うと合力(ベクトル和)は0になりうるが、総和は0にならない。`stress` 側は
-    `load_magnitude_total` が解いたベクトルから同じ量を測っており、**2つの定義が食い違うと
-    応力が黙って定数倍ずれる**。荷重が1本のとき(または全部同じ向きのとき)は
-    `load_vector` が全節点へ平行なベクトルを配るので、総和と合力は厳密に一致する ——
-    それが「1荷重の数値は1ビットも動かない」の根拠である。
-    """
-    if forces is None:
-        vector = table.load_vector(load_faces, force)
-        return vector, float(np.linalg.norm(np.asarray(force, dtype=float).reshape(3)))
-
-    vector = np.zeros(table.node_grid.ndof)
-    total = 0.0
-    for face, one in zip(load_faces, forces):
-        magnitude = float(np.linalg.norm(np.asarray(one, dtype=float).reshape(3)))
-        if not magnitude > 0.0:
-            raise ValueError(f"面 {int(face)} の荷重が零ベクトルで、向きが決まらない")
-        table.load_vector([int(face)], one, out=vector)
-        total += magnitude
-    if not total > 0.0:
-        raise ValueError("荷重の総量が0で、無次元化できない")
-    vector /= total
-    return vector, total
-
-
-def reaction_payload(fixed_faces: Sequence[int], reactions: Sequence[Any]) -> list[dict]:
-    """`simp.Reaction` の並び → **素の値だけの dict の並び**(そのまま JSON へ載る)。
-
-    `optimize_run.run` の戻り値は素の値だけという契約なので、`simp` のデータクラスを
-    上の層へ通さない。並びは `fixed_faces` と同じ。
-    """
-    return [
-        {
-            "name": reaction.name,
-            "face": int(face),
-            "force": [float(value) for value in reaction.force],
-            "magnitude": float(reaction.magnitude),
-            "fraction": float(reaction.fraction),
-        }
-        for face, reaction in zip(fixed_faces, reactions)
-    ]
-
-
-@trace.stage('anchor-pipeline')
-def run_pipeline(
-    shape: Any = None,
-    *,
-    elements_long_axis: int = 40,
-    volfrac: Optional[float] = None,
-    material_mm3: Optional[float] = None,
-    rmin: Optional[float] = None,
-    rmin_mm: Optional[float] = None,
-    max_iter: int = 40,
-    force: Sequence[float] = (0.0, 0.0, -1.0),
-    radius_ratio: float = DEFAULT_RADIUS_RATIO,
-    keep_anchor_material: bool = True,
-    keep_layers: int = 1,
-    fixed_faces: Any = None,
-    load_faces: Any = None,
-    forces: Optional[Sequence[Sequence[float]]] = None,
-    design_mask: Any = None,
-    design_grid: Optional[vx.Grid] = None,
-    keep: Any = None,
-    obstacle: Any = None,
-    stl_path: Optional[str | Path] = None,
-    progress: Any = None,
-    solver: Optional[str] = None,
-    threads: Optional[int] = None,
-    update: Optional[str] = None,
-    reaction_min: Optional[float] = None,
-    keep_model: bool = False,
-    dynamic_active: bool = False,
-) -> dict:
-    """ソリッドを端から端まで1回通す。戻り値は各段の実測と成果物。
-
-    `shape` を省略すると `demo_bracket()` を使い、面も `demo_faces()` が決める。
-    **自分の形を渡すときは `fixed_faces` / `load_faces` も渡すこと** ——
-    面添字は形ごとに違うので、デモの選び方を他の形へ当てると別の面を掴む。
-    どちらも `int` 1つでも面の並びでも受ける。
-
-    荷重の向きは `force`(荷重面すべてで共有する1本)か `forces`(`load_faces` と**同じ並び**の
-    面ごとの力ベクトル[N])のどちらか一方。`forces` を渡すと荷重ベクトルは面ごとに
-    足し込まれ、**その総量(大きさの総和)で割って無次元化してから** `simp` へ渡る ——
-    `simp` が荷重の総量1.0で回り続ける契約は変えない。実単位[N]は
-    `stress.UnitScale`(`load_n`)だけが持つ。
-
-    `keep_anchor_material=True`(既定)のとき、固定面・荷重面のアンカー節点に接する要素を
-    保持領域(ρ=1)に固定する。**これを切ると最適化は荷重直下の材料を溶かす。**
-
-    `design_mask` と `design_grid` を両方渡すと、**塊(設計空間)はそのマスクになり、`shape` は
-    面アンカーの対象になる**(`vx.model_from_design_mask` を通る)。この経路では材料は入力
-    ソリッドの外へ出られる。`shape` には面を選ぶのに使った `TriangleSoup` をそのまま渡してよい。
-    塊をどのロジックで決めるかはここでは決めない —— 呼び出し側が渡す。
-
-    `keep` / `obstacle`(保持ソリッド / 除外ソリッド)はどちらの経路でも同じ格子に載る。
-    `design_mask` の経路では**塊からはみ出したら例外**(`vx.OutsideDesignSpaceError`)。
-
-    体積目標は `volfrac`(分率)か `material_mm3`(材料の総体積[mm^3])のどちらか一方。
-    **要素体積はここが格子から決めて `simp.optimize` へ渡す** —— 呼び出し側が
-    `mm^3 → 要素数` の換算を自分で書くと、格子の作り方が変わったときに黙ってずれる。
-    どちらの経路でも戻り値に mm^3 の実測が入る。
-
-    密度フィルタ半径は `rmin`(要素単位)か `rmin_mm`(mm)のどちらか一方(排他。
-    `simp.optimize` と同じ形)。どちらも渡さなければ `simp.DEFAULT_RMIN`
-    (**値は動く。床の `simp.MIN_RMIN`(=1.5要素)とは別物**)。
-    **要素サイズはここが格子から決めて `simp.optimize` へ渡す**(体積目標と同じ理由)。
-    要素サイズから決まる下限を `rmin_mm` が下回ると `simp.FilterRadiusError`。
-
-    `solver` は `simp.optimize` の解法の**上書き**(既定は None = `simp` 側の既定)。
-    **性能の新旧比較のためだけにある口**で、受入検査や比較実測が旧い解法(Jacobi 前処理)
-    を同じセッションで撮り直すのに使う。None のときは `simp.optimize` へ渡さないので、
-    既定の挙動は1ビットも変わらない。
-
-    `threads` も同じ形の上書き(既定 None = `simp.PARALLEL_THREADS`)。**スレッド数を
-    振ったスケーリング測定に使う**口で、None のときは渡さない。
-
-    `keep_model=True` は `simp.optimize` へそのまま渡る。`result.model`(戻り値 dict の
-    `"result"` キー)に実際に解いた `Model` が入るので、`stress.py` の後処理が拘束・荷重を
-    手で組み直さずに済む。既定 `False` では入らない(数値は1ビットも変わらない)。
-
-    `dynamic_active=True` は `simp.optimize` へそのまま渡る(ρ が `emin**(1/penal)` を
-    下回った要素を毎反復 組み立てから外す)。**既定 `False` では渡さないので、経路も数値も
-    1ビットも変わらない。** 効く場と限界は docs/TOPOPT_ACTIVE_SET.md。
-
-    `update` は `simp.optimize` の更新則の**上書き**(既定 None = `simp` 側の既定 `"oc"`)。
-    None のときは `simp.optimize` へ渡さないので、既定の挙動は1ビットも変わらない。
-
-    `reaction_min` を渡すと**各拘束面が受け持つ反力に下限**(荷重の合力に対する割合)を
-    課す。制約が体積と合わせて複数本になるので、**`update` を省略すると `"mma"` へ倒す**
-    (OC は乗数1本の二分探索で、制約を増やせない)。満たせなければ
-    `simp.ReactionTargetError`。**渡さなければ経路は1ビットも変わらない。**
-
-    戻り値の `"reactions"` は**拘束面1枚ごとの反力**(`simp.Reaction` を素の値に開いたもの。
-    `fraction` は荷重の合力に対する割合)。**荷重を運んでいない取付点はここが 0 になる** ——
-    構造最適化は荷重を運ばない材料を置かないので、そのままだと保持ソリッドが浮き島になって
-    `mesh.remove_islands` に消える。**面の並びは `fixed_faces` と同じ。**
-
-    `fixed_faces` / `load_faces` が要素サイズより小さくて格子節点が1つも付かないと
-    (`AnchorTable.empty_faces()`)、**例外にはせず**戻り値の `"empty_condition_faces"`
-    (`AnchorTable.condition_face_diagnoses` の結果。空でなければ1件以上)に診断を積んで
-    早期returnする(当面の措置。本当の解決は保留 — docs/TOPOPT.md「面が小さすぎて空になる」参照)。
-    このとき `"result"` / `"solid"` / `"void"` / `"surface"` / `"stl"` は `None`
-    (`simp.optimize` を呼んでいない)。通常どおり最後まで走った戻り値では
-    `"empty_condition_faces"` は常に `[]`。
-    """
-    from . import mesh
-    from . import simp
-
-    simp.check_volume_target(volfrac, material_mm3)
-    simp.check_rmin_target(rmin, rmin_mm)
-    if (fixed_faces is None) != (load_faces is None):
-        raise ValueError("fixed_faces と load_faces は両方渡すか、両方省略すること")
-    if shape is not None and fixed_faces is None:
-        raise ValueError(
-            "自分の形を渡すときは fixed_faces / load_faces も渡すこと"
-            "(面添字は形ごとに違うので、デモの選び方は使えない)"
-        )
-    if (design_mask is None) != (design_grid is None):
-        raise ValueError("design_mask と design_grid は両方渡すか、両方省略すること")
-    if design_mask is not None and shape is None:
-        raise ValueError(
-            "design_mask を渡すときは面アンカーの対象(shape)も渡すこと"
-            "(塊の面ではなく、拘束・荷重を指定できる面がどこから来るかを明示する)"
-        )
-
-    timings: dict[str, float] = {}
-    t0 = time.perf_counter()
-    if design_mask is not None:
-        model = vx.model_from_design_mask(
-            design_grid, design_mask, anchor_shape=shape, keep=keep, obstacle=obstacle
-        )
-    else:
-        if shape is None:
-            shape = demo_bracket()
-        model = vx.voxelize(shape, elements_long_axis, keep=keep, obstacle=obstacle)
-    timings["voxelize"] = time.perf_counter() - t0
-
-    t0 = time.perf_counter()
-    soup = model.soup
-    if fixed_faces is None:
-        fixed_faces, load_faces = demo_faces(soup)
-    fixed_faces = _face_list(fixed_faces)
-    load_faces = _face_list(load_faces)
-    if forces is not None and len(forces) != len(load_faces):
-        raise ValueError(
-            f"forces は荷重面と同じ数だけ渡すこと(荷重面 {len(load_faces)} 枚 / "
-            f"force {len(forces)} 本)。並びも同じ順であること"
-        )
-    table = build_anchors(soup, model.grid, radius_ratio=radius_ratio)
-    timings["anchor"] = time.perf_counter() - t0
-
-    # **実行経路の入口。** 拘束面・荷重面が要素サイズより小さくて節点が1つも
-    # 付かないと(`table.empty_faces()`)、この先 `table.fixed_dofs` / `table.load_vector` の
-    # `_require_nodes` が例外を投げる(その例外自体は消さない・弱めない — 空の面を名指しして
-    # 拘束・荷重を掛けたら黙って0にせず落ちる、という既存の安全策)。**そこへ落ちる前に、
-    # ここで一度立ち止まってメッセージを返す。** 本人指示で「落とさない・メッセージを出すだけ」
-    # なので、`simp.optimize` は呼ばずに戻り値へ診断を積んで早期returnする。
-    empty_condition_faces = table.condition_face_diagnoses(fixed_faces, load_faces)
-    if empty_condition_faces:
-        warning = format_condition_face_warning(empty_condition_faces)
-        print(f"[anchor.run_pipeline] 警告: {warning}", file=sys.stderr)
-        return {
-            "model": model,
-            "table": table,
-            "result": None,
-            "solid": None,
-            "void": None,
-            "surface": None,
-            "stl": None,
-            "fixed_faces": fixed_faces,
-            "load_faces": load_faces,
-            "timings": timings,
-            "empty_condition_faces": empty_condition_faces,
-            "warning": warning,
-            # 早期returnの枝は `simp.optimize` を呼んでいないので、反力も更新則も無い
-            # (キーの有無で分岐させないための空)。
-            "reactions": [],
-            "reaction_min": None,
-            "update": None,
-        }
-
-    nx, ny, nz = model.grid.shape
-    fixed_dofs = table.fixed_dofs(fixed_faces)
-    # **反力は拘束面1枚を1グループにする。** 面ごとの節点集合は排他(`AnchorTable.node_ids`)
-    # なので、そのまま `ReactionGroup` の「重ならない」契約を満たす。
-    reaction_groups = [
-        simp.ReactionGroup(name=f"fixed_face_{int(face)}", dofs=table.fixed_dofs([int(face)]))
-        for face in fixed_faces
-    ]
-    load, load_total = _assemble_load(table, load_faces, force, forces)
-    solid = model.keep.copy()
-    if keep_anchor_material:
-        near = table.element_mask(list(fixed_faces) + list(load_faces), layers=keep_layers)
-        solid |= near & model.design
-    void = ~model.design | model.obstacle
-    trace.snapshot('boundary-conditions', grid=model.grid, voxel_model=model, anchors=table,
-                   fixed_dofs=fixed_dofs, load=load, load_total=load_total,
-                   solid=solid, void=void, reaction_groups=reaction_groups)
-
-    resolved_update = update
-    if reaction_min is not None and resolved_update is None:
-        # 反力の下限は制約が複数本になるので OC では扱えない。**この経路だけ MMA へ倒す**
-        # (`reaction_min` を渡さない呼び出しは既定の更新則のまま)。
-        resolved_update = "mma"
-
-    t0 = time.perf_counter()
-    result = simp.optimize(
-        nx,
-        ny,
-        nz,
-        volfrac=volfrac,
-        material_mm3=material_mm3,
-        element_volume_mm3=model.grid.element_volume,
-        rmin=rmin,
-        rmin_mm=rmin_mm,
-        max_iter=max_iter,
-        fixed_dofs=fixed_dofs,
-        load=load,
-        void_mask=void,
-        solid_mask=solid,
-        reactions=reaction_groups,
-        callback=progress,
-        keep_model=keep_model,
-        **({} if not dynamic_active else {"dynamic_active": True}),
-        **({} if solver is None else {"solver": solver}),
-        **({} if threads is None else {"threads": threads}),
-        **({} if resolved_update is None else {"update": resolved_update}),
-        **({} if reaction_min is None else {"reaction_min": float(reaction_min)}),
-    )
-    timings["optimize"] = time.perf_counter() - t0
-
-    t0 = time.perf_counter()
-    # 保持と除外の条件をメッシュ化にも適用する。
-    surface = mesh.build_surface(result.rho, keep_mask=solid, zero_mask=void)
-    timings["mesh"] = time.perf_counter() - t0
-
-    out = Path(stl_path) if stl_path is not None else _HERE / "output" / "bracket.stl"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    mesh.write_stl(out, surface.verts_smooth, surface.faces)
-
-    design_elements = int(np.count_nonzero(model.design))
-    movable = ~void & ~solid
-    free_elements = int(np.count_nonzero(movable))
-    # **目標は `optimize` が実際に使った値を引く。** ここで再計算すると、絶対量で渡された
-    # ときに換算をもう一度書くことになり、片方だけ直したときに黙ってずれる。
-    target_volume = result.target_volume
-    element_volume = model.grid.element_volume
-    history = result.history
-    return {
-        "model": model,
-        "table": table,
-        "result": result,
-        "solid": solid,
-        "void": void,
-        "surface": surface,
-        "stl": str(out),
-        "fixed_faces": fixed_faces,
-        "load_faces": load_faces,
-        "load_total": load_total,
-        "timings": timings,
-        "empty_condition_faces": [],
-        "design_elements": design_elements,
-        "free_elements": free_elements,
-        "target_volfrac": result.volfrac,
-        "target_volume": target_volume,
-        "rmin": result.rmin,
-        "rmin_mm": result.rmin_mm,
-        "achieved_volume": float(result.rho.sum()),
-        "element_volume_mm3": element_volume,
-        "target_material_mm3": target_volume * element_volume,
-        "achieved_material_mm3": float(result.rho.sum()) * element_volume,
-        "solid_elements": int(np.count_nonzero(solid)),
-        "void_elements": int(np.count_nonzero(void)),
-        "achieved_volfrac": (
-            float(result.rho[model.design].mean()) if design_elements else 0.0
-        ),
-        "reactions": reaction_payload(fixed_faces, result.reactions),
-        "reaction_min": result.reaction_min,
-        "update": result.update,
-        "compliance_first": history[0].compliance if history else float("nan"),
-        "compliance_last": history[-1].compliance if history else float("nan"),
-        "iterations": len(history),
-    }
-
-
-def _cli() -> int:
-    import argparse
-
-    parser = argparse.ArgumentParser(description="面アンカーの要約と、端から端まで1回")
-    parser.add_argument("--n", type=int, default=40, help="最長軸方向の要素数")
-    parser.add_argument("--table-only", action="store_true", help="対応表だけ作って終わる")
-    parser.add_argument("--max-iter", type=int, default=40)
-    args = parser.parse_args()
-
-    if args.table_only:
-        model = vx.voxelize(demo_bracket(), args.n)
-        table = build_anchors(model.soup, model.grid)
-        print(f"grid   : {model.grid.shape} spacing={model.grid.spacing:.6f}")
-        print(f"nodes  : {table.node_grid.shape}")
-        print(f"table  : {table.stats['seconds']:.3f}秒 / {table.stats['faces']}面 / "
-              f"標本点 {table.stats['samples']}")
-        for f in table.face_indices():
-            a = table[f]
-            print(
-                f"  面{f:3d} {a.kind:14s} 節点{a.node_count:5d} "
-                f"担当面積 {a.total_area:10.3f} / CAD {a.cad_area:10.3f} "
-                f"(こぼれ {a.leak_ratio:.1%})"
-            )
-        return 0
-
-    out = run_pipeline(elements_long_axis=args.n, max_iter=args.max_iter)
-    t = out["timings"]
-    print(f"面      : 固定={out['fixed_faces']} 荷重={out['load_faces']}")
-    print(f"格子    : {out['model'].grid.shape} 設計要素={out['design_elements']}")
-    print(f"体積    : {out['achieved_volume']:.3f} 要素 (目標 {out['target_volume']:.3f}) / "
-          f"設計空間内の平均密度 {out['achieved_volfrac']:.4f}")
-    print(f"C       : {out['compliance_first']:.4f} → {out['compliance_last']:.4f}")
-    print(f"秒      : ボクセル化 {t['voxelize']:.2f} / 対応表 {t['anchor']:.2f} / "
-          f"最適化 {t['optimize']:.2f} / メッシュ化 {t['mesh']:.2f}")
-    print(f"STL     : {out['stl']}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(_cli())

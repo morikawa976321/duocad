@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import _bootstrap  # noqa: F401
+import _record
 import numpy as np
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.gp import gp_Pnt
@@ -23,7 +24,7 @@ def main():
     session.open_document('input.json')
     doc = session.document
     def save(name, data):
-        (out/name).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        _record.write(out / name, data)
     preserve = [(bid, doc.get_body(bid).shape) for bid in doc.optimize.preserve_bodies]
     exclude = [(bid, doc.get_body(bid).shape) for bid in doc.optimize.exclude_bodies]
     rows = []

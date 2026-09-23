@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import _bootstrap  # noqa: F401
+import _record
 import numpy as np
 from scipy import ndimage
 
@@ -32,7 +33,7 @@ def main():
     result = raw(records('result')[-1])
     report = dict(run=run.name, result=result, phases=[], surfaces=[], smoothing=[])
     def save():
-        (out / 'stages.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+        _record.write(out / 'stages.json', report)
     for phase, begin in begins.items():
         # 'reference' は 2026-09-16 より前の記録(参照方式)にだけ現れる段階名。過去ログを読むために残す。
         if begin['name'] not in ('derive', 'reference', 'safety-evaluation', 'simp', 'surface', 'stress'):

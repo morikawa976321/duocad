@@ -196,7 +196,7 @@ async function main() {
     // ------------------------------------------------------------ 7. 混在でSTLへ書ける
     await mcp.callTool('sketch_create', { base_plane: 'XY' })
     const stlPath = path.join(outDir, 'mixed.stl')
-    const exported = await mcp.callTool('export_stl', { path: stlPath, deviation: 0.2 })
+    const exported = await mcp.callTool('export_stl', { path: stlPath })
     if (!exported.path) fail(`export_stl の応答にパスが無い: ${JSON.stringify(exported)}`)
     const stl = readFileSync(stlPath)
     const triangles = stl.readUInt32LE(80)

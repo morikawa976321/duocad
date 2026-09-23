@@ -512,9 +512,6 @@ const ENTITY_KIND_TABLE: Record<EntityKind, EntityKindSpec> = {
   },
 }
 
-/** 図形の種別の一覧(唯一の正は上の表)。 */
-export const ENTITY_KINDS: readonly EntityKind[] = Object.keys(ENTITY_KIND_TABLE) as EntityKind[]
-
 // **`verb` を持つ種別だけ**を入れる。持たない種別(`bezier`)を `undefined` キーで
 // 入れると、verbの綴りを間違えた呼び出しがそこへ落ちて幽霊が別の図形として描かれる。
 const VERB_TO_KIND: Record<string, EntityKind> = Object.fromEntries(

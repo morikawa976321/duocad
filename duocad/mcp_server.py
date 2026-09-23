@@ -214,7 +214,12 @@ class DocumentTools:
         include_bbox: bool = False,
         include_regions: bool = False,
     ) -> dict:
-        """ボディ一覧・スケッチ一覧とパラメータ一覧。"""
+        """ボディ一覧・スケッチ一覧とパラメータ一覧。
+
+        各図形は `params`(解決済みの数値)と `parameters`(その数値を持つパラメータ名)の
+        **両方**を返す —— 数値だけでは `set_parameter` の引数が作れず、名前だけでは今の値が
+        分からない。`include_regions` は領域の数え上げに計算コストがあるので任意にする。
+        """
         document = self.session.document
         bodies = []
         for body in document.bodies:
@@ -437,7 +442,7 @@ class DocumentTools:
         # 選択由来の拒否は**コアが型で言ってくる**(`duocad/selection.py` の `require_*`)。
         # MCPは名前を付けて、次の一手を決める材料(`required_kind` / `selection`)を足すだけ。
         # 「1つだけ要るのに複数」は `invalid_argument` のまま —— AIが打つ次の手は
-        # 「選び直す」ではなく「減らす」で、`selection_empty` とは違う(tests/README「F」節)。
+        # 「選び直す」ではなく「減らす」で、`selection_empty` とは違う。
         #
         # **`SelectionKindMismatch` を先に見る**。`SelectionEmpty` の
         # 派生なので、順序を入れ替えると種別違いが `selection_empty` に吸われて7語彙目が
@@ -1104,14 +1109,13 @@ class DocumentTools:
             "skipped_hidden": list(skipped),
         }
 
-    def export_stl(self, path: str, deviation: Optional[float] = None) -> dict:
-        """STLを書き出す(`deviation` 省略時は `Session.deviation`)。対象は export_step と同じ
-        (いま表示中のBodyだけ・引数で選べない)。"""
+    def export_stl(self, path: str) -> dict:
+        """STLを書き出す。粗さは `io_step.STL_DEVIATION` 固定(人の画面にも入力欄は無い)。
+        対象は export_step と同じ(いま表示中のBodyだけ・引数で選べない)。"""
         target = Path(path)
         resolved = io_step.export_body_ids(self.session.document)
         skipped = io_step.export_skipped_hidden(self.session.document)
-        used = float(self.session.deviation if deviation is None else deviation)
-        io_step.export_stl(self.session.document, target, used)
+        io_step.export_stl(self.session.document, target)
         return {
             "path": str(target),
             "bytes": target.stat().st_size,

@@ -13,14 +13,9 @@
 | [docs/README.md](docs/README.md) | **docs/ の索引**（配下の全文書一覧と要約） | 目的の文書を探すとき |
 | [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) | **最初期の実装計画**（なぜ・当初スコープ・到達表。「企画の前提」がなぜ） | 起点を辿るとき |
 | [MCP.md](MCP.md) | **MCPツール一覧の正**と登録手順 | AI側から触るとき |
-| [tests/README.md](tests/README.md) | テストが定義するAPI契約 | コアの挙動を疑うとき |
 | [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化**（実測の記録・設計と画面・受入検査の意味） | 数字の根拠・topopt配線を疑うとき |
-| [docs/TOPOPT_SPEED.md](docs/TOPOPT_SPEED.md) | **安全率探索の時間短縮**（内訳・改善案・探索アルゴリズム） | 外側ループを速くしたいとき |
-| [docs/TOPOPT_SIMP_ITER_BREAKDOWN.md](docs/TOPOPT_SIMP_ITER_BREAKDOWN.md) | **SIMP 1反復の秒数内訳**（hanger 2.4mm 実測・床の理由） | 1反復が重い理由を疑うとき |
-| [docs/TOPOPT_MMA_VS_OC.md](docs/TOPOPT_MMA_VS_OC.md) | **更新則 OC と MMA の比較**（答えの一致・費用・調整の余地） | MMA を既定にしてよいか判断するとき |
-| [docs/TOPOPT_REACTION.md](docs/TOPOPT_REACTION.md) | **反力の内訳と取付点への下限制約**（ε の効き方・代償・効かない場） | 取付点が結果から消えるとき |
-| [docs/TOPOPT_ACTIVE_SET.md](docs/TOPOPT_ACTIVE_SET.md) | **微小密度の要素を組み立てから外す**（閾値の導出・効く場と効かない場・下端の崖に届かない理由） | 求解が残差で落ちるとき |
-| [docs/SCREEN_PICK.md](docs/SCREEN_PICK.md) | **当たり判定を screen 半径[px]に揃える**設計 | スケッチ/辺/頂点の掴みやすさを直すとき |
+| [docs/TOPOPT_SPEED.md](docs/TOPOPT_SPEED.md) | **形状探索の時間短縮**（1回のFEM評価の内訳・候補評価の費用） | 探索を速くしたいとき |
+| [docs/TOPOPT_TARGET_FACTOR.md](docs/TOPOPT_TARGET_FACTOR.md) | **探索に渡す目標安全率 = 実際の目標 × 2.4** の決定・根拠・実測（細分すると目標を割る問題の受け方） | 探索時の目標・報告の「探索の格子での値」を疑うとき |
 
 ---
 
@@ -192,22 +187,26 @@ cd web; npm run dev                                 # 画面(5173)
 [最終形状の合格条件](docs/TOPOPT_ACCEPTANCE.md)に従って `topopt_checks/check_final_shape.py` で判定する。
 この判定器自体の小形状による回帰検査は `tests/test_final_shape.py` にある。
 
+島除去後・平滑化前の6条件(境界・単一ソリッド・保持/除外・荷重欠落・安全率)は
+[平滑化前の受入検査](docs/TOPOPT_PRE_SMOOTHING_CHECKS.md)に従って `topopt_checks/check_pre_smoothing.py` で判定する。
+検査ロジック本体は `duocad/topopt/acceptance.py` にあり、この判定器自体の回帰検査は `tests/test_pre_smoothing.py` にある。
+
 **以下の最適化の数値検査は pytest には入れていない。** `tests/` へ入れると `pytest -q` が毎回
 それだけ重くなる。マーカーで既定から外す案も採らない —— duocad に CI が無いので、既定から
 外した瞬間に誰も回さなくなる(`pytest -q` が緑で返るため、無人の runner は「緑だ」と
 報告して先へ進む)。**強制力は、タスクに書く「受入検査がすべて緑」の一文と runner が担う。**
 
 ```powershell
-# SIMP側の数値の正しさ
-& .\.venv\Scripts\python.exe topopt_checks\check_simp.py
+# 二値FEM（要素剛性・節点番号・行列組立・CG/direct・残差検算)の移設前一致
+& .\.venv\Scripts\python.exe topopt_checks\check_fem.py
 
-# メッシュ化側の正しさ（SIMPを1回回す）
+# メッシュ化側の正しさ（合成密度場。SIMPは回さない）
 & .\.venv\Scripts\python.exe topopt_checks\check_mesh.py
 
 # ボクセル化側の正しさ（SIMPを回さない）
 & .\.venv\Scripts\python.exe topopt_checks\check_voxelize.py
 
-# 面アンカー側の正しさ（端から端まで1回通す）
+# 面アンカー側の正しさ
 & .\.venv\Scripts\python.exe topopt_checks\check_anchor.py
 
 # 塊(設計空間)。分離 + 固定凸包 + 連結性 + 空の条件面(--run <実行フォルダ> で実物の基準実行も)
@@ -216,25 +215,16 @@ cd web; npm run dev                                 # 画面(5173)
 # 途中記録。製品入口から1回走らせ、導出1回・全候補の塊一致・表面の再現・最終文書/STLの一致
 & .\.venv\Scripts\python.exe topopt_checks\check_trace.py
 
-# 体積目標を絶対量(mm^3)で指定する口
-& .\.venv\Scripts\python.exe topopt_checks\check_absolute_volume.py
-
 # von Mises応力・実単位換算・代表応力・最小安全率
 & .\.venv\Scripts\python.exe topopt_checks\check_stress.py
-
-# 幾何マルチグリッド前処理
-& .\.venv\Scripts\python.exe topopt_checks\check_multigrid.py
 
 # CPU並列化
 & .\.venv\Scripts\python.exe topopt_checks\check_parallel.py
 
-# 安全率の外側ループ
-& .\.venv\Scripts\python.exe topopt_checks\check_safety_loop.py
+# 保存済み最終ソリッドの三角形分割: 境界交差の検出・共有辺再分割・接続6項目・自己交差・float32(実モデル。--compare で標準メッシャーと並べる)
+& .\.venv\Scripts\python.exe topopt_checks\check_boundary_meshing.py --brep-json output\finalization_checks\<run>\000021-final-solid.json --out output\gap_causality_20260923\robust_meshing_final.json --compare
 
-# 密度フィルタ半径をmmで指定する口
-& .\.venv\Scripts\python.exe topopt_checks\check_filter_radius.py
-
-# duocad本体への配線(4条件 -> 塊 -> 最適化 -> メッシュボディ)
+# duocad本体への配線(4条件 -> 塊 -> 二値探索 -> メッシュボディ)
 & .\.venv\Scripts\python.exe topopt_checks\check_optimize_wiring.py
 ```
 
@@ -349,9 +339,9 @@ AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_par
   ときと同じ挙動で、わざとそろえてある（黙って読み飛ばすと「囲んだのに入っていないものがある」
   が見えなくなる）。
 - **STLは混在した文書でも1本に両方書く。** メッシュの三角形は**テッセレーションを通さず
-  そのまま**、B-repはその場で `kernel.tessellate` して同じファイルへ。ただし
-  **メッシュが1つも無い文書は従来どおり `kernel.write_stl`（OCCT）を通る** ——
-  B-repだけの書き出しを1ビットも変えないため。**STEPはメッシュを含む文書を断る**
+  そのまま**、B-repはその場で `kernel.tessellate` して同じファイルへ。B-repの三角形は
+  **画面が土台の粗さで配るものとビット単位で同じ**（`io_step._triangles_of`）で、STL専用に
+  測り直す経路（OCCT純正ライタ）は持たない。**STEPはメッシュを含む文書を断る**
   （境界表現の形式に三角形を書く先が無い。ファイルも作らない）。
 - **undo / redo に載る。** メッシュボディの追加は操作ログ1行（verb `add_mesh_body`）で、
   三角形は `args` にそのまま入る。**元になったB-repを args に持たない** —— 持つと、元の
@@ -385,7 +375,8 @@ README に残すのはアーキテクチャ上の要点だけ:
 
 ### モジュールとimport境界
 
-**`duocad/` 配下で `OCP` を import してよいのは `kernel.py` だけ、`build123d` は `query.py` だけ。**
+**`duocad/` 配下で `OCP` を import してよいのはカーネル層の4本(`kernel.py` / `kernel_brep.py` / `kernel_meshing.py` / `mesh_geometry.py`)と `topopt/voxelize.py` だけ、
+`build123d` は `query.py` と `topopt/` の3本だけ。**
 `tests/test_boundaries.py` がソースを再帰的に静的走査して機械的に検査する（動的importも検出）。
 **verbがカーネルを直接叩き始めるのを防ぐ唯一の安全網。**
 
@@ -403,7 +394,12 @@ README に残すのはアーキテクチャ上の要点だけ:
 | `duocad/catalog.py` | **verbの単一宣言**（名前・引数・カテゴリ・プレビュー可否・MCPスキーマ）。下の2つが持つ表はここからの導出 | ✗ | ✗ |
 | `duocad/svg_import.py` | SVG → スケッチの図形（**パーサはbuild123dの推移依存で既に入っている** svgelements） | ✗ | ✗ |
 | `duocad/query.py` | 問い合わせ層のインタフェース | ✗ | **○ここだけ** |
-| `duocad/kernel.py` | OCCTを直接叩く層（テセレーションもここ） | **○ここだけ** | ✗ |
+| `duocad/kernel.py` | OCCTを直接叩く層（テセレーションもここ） | **○** | ✗ |
+| `duocad/kernel_brep.py` | 同じカーネル層。生成CADのBRep保存・ブーリアン・最終ソリッドの幾何検査 | **○** | ✗ |
+| `duocad/mesh_geometry.py` | 同じカーネル層。三角形境界の接続検査と、向き・空洞を保ったCADソリッド化 | **○** | ✗ |
+| `duocad/kernel_meshing.py` | 同じカーネル層。OCCTの面分割を段階制御し、面分割の直前に境界折れ線の交差を検査して共有辺を再分割する(`tessellate` の実体) | **○** | ✗ |
+| `duocad/boundary_check.py` | 境界折れ線(pcurve の離散点列)の交差・接触・重なりの判定。固定εを使わず、確定しない組だけ整数演算 | ✗ | ✗ |
+| `duocad/mesh_intersections.py` | 三角形メッシュの自己交差(正当な共有辺・共有頂点の接触を除く)。最終成果物の検査 | ✗ | ✗ |
 | `duocad/session.py` | `Session`（1つの文書を持つサーバ側の状態。verbの呼び出し・選択・保存/開く。**配りものは持たず `view` へ委譲**） | ✗ | ✗ |
 | `duocad/view.py` | `DocumentView`（**配りもの**＝状態配信・版・テセレーション/辺/頂点/体積/スケッチのキャッシュ。文書を変えない） | ✗ | ✗ |
 | `duocad/paths.py` | `REPO_ROOT` と、そこから出る既定の置き場（`web/dist` / `models`） | ✗ | ✗ |
@@ -574,8 +570,12 @@ duocad/
 
 ### 実測で判明している技術的な地雷（コード側は対処済み。数値を疑うとき用）
 
-- **OCCTのフィレットは例外を投げずに失敗する**（20mm立方体・全辺で r=10.0 は失敗、**r=10.5 は成功**、r=30.0 は失敗。
-  **半径に対して単調ですらない**）→ verbのラッパで毎回 `IsDone()` を確認する。
+- **OCCTのフィレットは例外を投げずに失敗し、しかも「通ったのに壊れている」帯がある**
+  （20mm立方体・全辺。2026-09-18 実測: r=3.0 と r=9.9 は成功、**r=10.0 は `IsDone()=False`**、
+  **r=10.5 と r=11.0 は `IsDone()` が真なのに `BRepCheck` が偽** —— 体積が 4251.51(r=9.9) から
+  9246.46 へ**増えて**おり、削ったはずが増えている。r=30.0 は `IsDone()=False`。
+  **半径に対して単調ですらない**）→ verbのラッパで毎回 **`IsDone()` / 空でない / 体積>0 /
+  `BRepCheck`** の4つとも通す。`IsDone()` だけでは 10.5〜11.0 の帯を素通しする。
 - **面の添字は形状変更で壊れる**（同じ面がフィレットで i=5→9。ただし穴の径変更等では動かない＝**散発的に静かに間違う**）
   → 生の添字を保存・再利用しない。由来スロットを day1 から用意してある。
 - **STEP往復の体積は bit-exact ではない**（相対 約8e-16 の1ULP級）→ 比較は `math.isclose(rel_tol=1e-6)`。

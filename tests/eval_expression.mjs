@@ -5,7 +5,12 @@
  * Node は `.ts` をそのまま読める(型注釈の除去。Node 23.6以降は既定で有効)。
  */
 import assert from 'node:assert/strict'
-import { evaluateExpression, expressionValue, isPlainNumber } from '../web/src/expression.ts'
+import { evaluateExpression, isPlainNumber } from '../web/src/expression.ts'
+
+function expressionValue(text) {
+  const result = evaluateExpression(text)
+  return result.ok ? result.value : null
+}
 
 /** 読めた値。読めなければ理由を添えて落ちる。 */
 function value(text) {

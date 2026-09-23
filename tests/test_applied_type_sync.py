@@ -603,6 +603,12 @@ def _run_delete(session: Session, tmp_path: Path) -> dict:
     return session.delete()
 
 
+def _preserve(session: Session, body) -> None:
+    """条件面は**保持ソリッドの面にしか置けない**(2026-09-18〜)ので、面を指す前に保持にする。"""
+    _select(session, [{"body": body.id, "kind": "body"}])
+    session.set_preserve_bodies()
+
+
 @_runner("set_preserve_bodies")
 def _run_set_preserve_bodies(session: Session, tmp_path: Path) -> dict:
     body, _ = _box(session)
@@ -620,6 +626,7 @@ def _run_set_exclude_bodies(session: Session, tmp_path: Path) -> dict:
 @_runner("set_fixtures")
 def _run_set_fixtures(session: Session, tmp_path: Path) -> dict:
     body, _ = _box(session)
+    _preserve(session, body)
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     return session.set_fixtures()
 
@@ -629,6 +636,7 @@ def _run_set_loads(session: Session, tmp_path: Path) -> dict:
     """**ベクトルの向きで走らせる** —— `direction_vector` が `null` になる `'normal'` で
     走らせると、宣言の配列側(`number[]`)が一度も観測されないまま緑になる。"""
     body, _ = _box(session)
+    _preserve(session, body)
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     return session.set_loads(250.0, [0.0, 0.0, -1.0])
 
@@ -636,6 +644,7 @@ def _run_set_loads(session: Session, tmp_path: Path) -> dict:
 @_runner("clear_loads")
 def _run_clear_loads(session: Session, tmp_path: Path) -> dict:
     body, _ = _box(session)
+    _preserve(session, body)
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     session.set_loads(250.0, [0.0, 0.0, -1.0])
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])

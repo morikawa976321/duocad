@@ -1,17 +1,20 @@
-"""duocad.topopt — 形状最適化(SIMP トポロジー最適化)のコア。
+"""duocad.topopt — 形状最適化(二値マスクの探索と、ひずみエネルギーの順位で削る体積削減)のコア。
 
 **このパッケージから検証側**(`topopt_checks/` / `web/scripts/`)を import しないこと ——
 製品が検査の道具に依存すると、道具を捨てるにも直すにも製品が巻き添えになる。
 
 層をまたぐ契約:
-    simp        — 数値の中心。**`bench` も import しない**(単体で持ち出せる状態を保つ)
+    fem         — 二値FEMの格子・剛性・線形解法(要素剛性・節点番号・行列組立・CG/direct/MG・残差検算)
     voxelize    — B-rep → 格子。`duocad.kernel` 越しに OCP を呼ぶ
     anchor      — CADの面 → 格子の節点
-    design_space— 4条件 → 塊(設計空間)の導出と端から端までの実行
+    design_space— 4条件 → 塊(設計空間)の導出
     stress      — von Mises 応力・安全率(後処理)
-    safety_loop — 安全率を入力に材料量を二分探索する外側ループ
+    material    — 許容応力・ヤング率・印刷低減係数の唯一の定義
+    acceptance  — 島除去後・平滑化前の6条件(幾何・CAD・境界条件・FEM)。合否の型
+    binary_search — 二値候補の探索。`find_initial_feasible`(段階3)が削除・追加・置換で最初の
+                    6条件合格を見つけ、`find_best_feasible`(段階4)がそこからひずみエネルギーの
+                    低い材料を安全率の余裕に応じてまとめて削る。島処理・frontier・履歴・停止理由
     mesh        — marching cubes + Taubin平滑化 + STL書き出し
-    bench       — 受入検査の題材の大きさ
 
 **サブモジュールをここで import しない。** `import duocad` は verb 登録のために
 `duocad/__init__.py` から連鎖するので、ここで scipy / skimage / build123d を引き込むと

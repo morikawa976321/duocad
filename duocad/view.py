@@ -90,8 +90,8 @@ class DocumentView:
         #: いま配っている文書。差し替えは `reset()` だけが行う。
         self.document = document
         #: **文書の粗さの土台**(セッション起動時の `--deviation`)。ビューポートの
-        #: ズーム連動値(下記)が来ていない間だけ使われる。STL書き出しはこちらを見る
-        #: (`Session.export_stl_file`) —— 書き出す形の粗さがカメラで変わってはいけない。
+        #: ズーム連動値(下記)が来ていない間だけ使われる。**画面だけの値**で、STL書き出しは
+        #: 見ない(`io_step.STL_DEVIATION` 固定 —— 書き出す形の粗さはカメラでも設定でも変わらない)。
         self.deviation = float(deviation)
         #: **ズーム連動の目標精度**(`set_view_resolution`)。`(線形偏差[mm], 角度偏差[rad])`。
         #: `None` は「まだ画面から届いていない」で、そのときは `self.deviation` +
@@ -527,6 +527,13 @@ class DocumentView:
         if result["untriangulated"]:
             self.warnings.append(
                 f"三角形分割が取れなかった面({body.name}): {result['untriangulated']}(画面に出ません)"
+            )
+        unresolved = (result.get("boundary") or {}).get("unresolved") or []
+        if unresolved:
+            # 境界折れ線の交差を再分割で解消できなかった面は分割していない(kernel_meshing)。
+            described = [f"{entry['face']}:{','.join(sorted({i['kind'] for i in entry['issues']}))}" for entry in unresolved]
+            self.warnings.append(
+                f"境界の交差を解消できなかった面({body.name}): {described}(画面に出ません)"
             )
         self._geometry_cache[body_id] = (body.shape, recipe, result)
         return result

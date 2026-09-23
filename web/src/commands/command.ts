@@ -435,7 +435,7 @@ export interface CommandDef {
 // コマンドの定義
 // --------------------------------------------------------------------------------------
 /** 面の押し出し。 */
-export const EXTRUDE_FACE: CommandDef = {
+const EXTRUDE_FACE: CommandDef = {
   id: 'extrude_face',
   category: 'feature',
   label: '押し出す',

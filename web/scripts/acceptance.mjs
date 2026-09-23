@@ -832,11 +832,10 @@ async function main() {
 
     await attempt('human', 'export_stl', async () => {
       await typeInto('#file-export-stl-path', humanStl)
-      await typeInto('#file-deviation', 0.05)
       await page.keyboard.press('Enter')
       await waitFor(() => window.__duocad.lastFile?.action === 'export_stl', '応答が返らない')
       const file = (await look()).lastFile
-      return `偏差0.05を打って書き出した(${file.bytes} B)`
+      return `パスを打ってEnter(${file.bytes} B / 偏差 ${file.deviation}mm・固定)`
     })
 
     await attempt('human', 'import_step', async () => {
@@ -1069,8 +1068,8 @@ async function main() {
     })
 
     await attempt('ai', 'export_stl', async () => {
-      const result = await mcp.callTool('export_stl', { path: join(workdir, 'ai.stl'), deviation: 0.05 })
-      return `${result.bytes} B(偏差0.05)`
+      const result = await mcp.callTool('export_stl', { path: join(workdir, 'ai.stl') })
+      return `${result.bytes} B(粗さは固定でAIも選べない)`
     })
 
     await attempt('ai', 'import_step', async () => {

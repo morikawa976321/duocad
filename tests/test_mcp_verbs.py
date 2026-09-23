@@ -28,6 +28,7 @@ import pytest
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad import kernel, query
+from duocad.catalog import COMMANDS
 from duocad.document import Body
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.selection import set_visible
@@ -112,6 +113,11 @@ SELECTION_TOOLS = {
 #: **空でも残す。** 下の `LOGGING_TOOLS` の一致検査が「ツール名 == verb名」を両方向で見る
 #: 仕組みそのもので、到達表に無いverbを足したときはここへ書く場所が要る。
 EXTRA_LOGGING_TOOLS: set = set()
+
+#: 操作ログに載るが、人にもAIにも開けていないverb(コードからだけ呼ぶもの)。
+#: **catalog の宣言から引く** —— ここに名前を写すと catalog と二重管理になり、
+#: 「宣言を忘れた」のか「写し忘れた」のか区別できなくなる。
+NON_TOOL_VERBS = {command.name for command in COMMANDS if not command.mcp and command.ws == "none"}
 
 EXPECTED_TOOLS = VERB_TOOLS | QUERY_TOOLS | SELECTION_TOOLS | EXTRA_LOGGING_TOOLS
 
@@ -209,7 +215,9 @@ ARGUMENTS: dict = {
     # 倍率(`scale`)だけ省略できる。
     "import_svg": ({"path", "sketch_id", "scale"}, {"path", "sketch_id"}),
     "export_step": ({"path"}, {"path"}),
-    "export_stl": ({"path", "deviation"}, {"path"}),
+    # **粗さは選べない**(`io_step.STL_DEVIATION` 固定)。人の画面にも入力欄が無いので、
+    # AIにだけ調整できる引数を残さない。
+    "export_stl": ({"path"}, {"path"}),
     # ---- 履歴
     "undo": (set(), set()),
     "redo": (set(), set()),
@@ -373,13 +381,18 @@ def test_tool_names_match_the_verb_names_in_the_operation_log(server: McpServer)
 
     `LOGGING_TOOLS` の側に「ログに載らないツール」(`export_*` / `undo` / `redo`)を
     入れていないことも、この一致が成り立つ条件である。
+
+    **ツールを持たないverb**(コードからだけ呼ぶもの)は `NON_TOOL_VERBS` として
+    **catalog の宣言から引く** —— そういうverbを足すときは catalog に `mcp=False` かつ
+    `ws="none"` で宣言する必要があり、宣言を忘れればここで落ちる。
     """
     from duocad.oplog import registered_verbs
 
     registered = set(registered_verbs())
-    assert registered == LOGGING_TOOLS, {
-        "ツールが無いverb": sorted(registered - LOGGING_TOOLS),
-        "verbが無いツール": sorted(LOGGING_TOOLS - registered),
+    expected = LOGGING_TOOLS | NON_TOOL_VERBS
+    assert registered == expected, {
+        "ツールも catalog の宣言も無いverb": sorted(registered - expected),
+        "verbが無いツール": sorted(expected - registered),
     }
 
 
@@ -1096,7 +1109,7 @@ def test_export_writes_a_file_and_reports_where(server: McpServer, tmp_path: Pat
     assert payload["bytes"] == step_path.stat().st_size > 0
 
     stl_path = tmp_path / "out.stl"
-    payload = call(server, "export_stl", {"path": str(stl_path), "deviation": 0.1})
+    payload = call(server, "export_stl", {"path": str(stl_path)})
     assert Path(payload["path"]) == stl_path
     assert payload["bytes"] == stl_path.stat().st_size > 0
 
@@ -1122,7 +1135,7 @@ def test_export_reports_skipped_hidden_bodies_and_no_body_ids_argument(
     assert payload["skipped_hidden"] == ["hidden-box"]
 
     stl_path = tmp_path / "visible_only.stl"
-    payload = call(server, "export_stl", {"path": str(stl_path), "deviation": 0.1})
+    payload = call(server, "export_stl", {"path": str(stl_path)})
     assert payload["body_ids"] == ["box"]
     assert payload["skipped_hidden"] == ["hidden-box"]
 
@@ -1470,5 +1483,5 @@ def test_the_mcp_layer_does_not_reimplement_verbs():
         encoding="utf-8"
     )
     for forbidden in ("kernel.fillet_edges", "kernel.chamfer_edges", "kernel.extrude_regions",
-                      "kernel.extrude_face_on_shape", "kernel.write_step", "kernel.write_stl"):
+                      "kernel.extrude_face_on_shape", "kernel.write_step"):
         assert forbidden not in source, f"MCP層が幾何を直接叩いている: {forbidden}"

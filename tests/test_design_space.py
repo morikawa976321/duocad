@@ -15,12 +15,18 @@
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from duocad.topopt import anchor as an
 from duocad.topopt import design_space as ds
 from duocad.topopt import voxelize as vx
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'topopt_checks'))
+import _fixtures  # noqa: E402  合成題材(build123d を直接使うので duocad/ の外にある)
 
 LONG_AXIS = 16  # 合成の箱は 20mm 級なので、余白込みで要素サイズ 2〜3mm になる
 
@@ -385,13 +391,13 @@ def test_corner_touching_islands_are_not_connected() -> None:
 
 def test_an_obstacle_wall_between_the_conditions_fails_with_names() -> None:
     with pytest.raises(ds.DesignSpaceDisconnectedError) as caught:
-        ds.derive(ds.severed_conditions(0.0), elements_long_axis=LONG_AXIS)
+        ds.derive(_fixtures.severed_conditions(0.0), elements_long_axis=LONG_AXIS)
     assert caught.value.components == 2
     assert caught.value.unreached  # 荷重側の面と保持が取り残される
     assert all(name.startswith(("load_face_", "keep_", "fixed_face_")) for name in caught.value.unreached)
     assert not isinstance(caught.value, ds.DesignSpaceTooSmallError)
     # 壁を外せば同じ条件が通る(落ちた原因が壁であることの裏取り)。
-    ok = ds.derive(ds.demo_conditions(0.0), elements_long_axis=LONG_AXIS)
+    ok = ds.derive(_fixtures.demo_conditions(0.0), elements_long_axis=LONG_AXIS)
     assert ok.stats["connectivity"]["components"] >= 1
     assert set(ok.stats["connectivity"]["seeds"]) == {
         f"fixed_face_{ok.fixed_faces[0]}",

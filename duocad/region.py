@@ -7,8 +7,12 @@
 安定**であること(2回評価して同じ順序。選択集合が添字で領域を指す以上、順序が揺れると選択が
 別物を指す)。
 
-**注意**: パラメータを編集すると領域は分裂・合体・消失しうる。押し出していた領域が消える
-壊れ方をするので、黙って通さないこと(`parameters.set_parameter` が担う)。
+**注意**: パラメータを編集すると領域は分裂・合体・消失しうる。押し出していた領域が**消えた**
+場合は再生時に `ValueError` で止まる(`parameters.set_parameter` が担う)。だが面積順が
+入れ替わっただけの場合は、添字は残ったまま**指す領域が別物にすり替わる**ことがあり、これは
+検出できず静かに新しい方へ適用される —— 線を動かすなど正当な編集でも面積順は普通に
+入れ替わるため、一律に失敗へするとパラメータ追随という目的自体を潰す。解くには
+`RegionRef.provenance` を実際に埋める必要があるが、未着手のまま残っている。
 """
 from __future__ import annotations
 
@@ -118,6 +122,8 @@ def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
             count = int(parameters.resolve(doc, pattern.params["count"]))
             total_angle = parameters.resolve(doc, pattern.params["total_angle"])
             rotate_copies = bool(pattern.options.get("rotate_copies", True))
+            # count==1 は複製が無いので刻みを使わない(total_angle/(count-1) の0除算を
+            # 避ける。刻み角の場合分け自体は `pattern_circular` のdocstring参照)。
             if count == 1:
                 step = 0.0
             elif total_angle == 360:

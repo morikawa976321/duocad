@@ -17,7 +17,12 @@ if TYPE_CHECKING:
 
 @dataclass
 class Operation:
-    """1件の操作記録(`provenance` は当面 None でよい空スロット)。"""
+    """1件の操作記録(`provenance` は当面 None でよい空スロット)。
+
+    **実行主体(人かAIか)は持たない。** UI が「自分がやった操作」に印を付けられるのは、同じ接続の
+    応答待ちで `client_op` を突き合わせているからであって、ログを読んで分かることではない
+    (層をまたぐ契約 —— ログに主体を足す設計へ動かすなら `net/ws.py` の配信側も一緒に変わる)。
+    """
 
     seq: int
     verb: str
@@ -69,7 +74,11 @@ def registered_verbs() -> List[str]:
 
 
 class OpLog:
-    """操作ログ。append/undo/redo/to_json/from_json/replay を持つ(seqは1から単調増加)。"""
+    """操作ログ。append/undo/redo/to_json/from_json/replay を持つ(seqは1から単調増加)。
+
+    保存形式はJSON(SQLiteは使わない —— gitで差分が読める・AIが全履歴を読める・
+    1モデル=1ファイルでコピーできる、が理由)。
+    """
 
     #: to_json が出す入れ物のバージョン。**2 = 読み込んだSTEPの本文がログに入っている**。
     #: 版1(外部STEPのパスだけを持つ)で保存されたファイルは実在しないので、移行は実装しない。
@@ -109,7 +118,12 @@ class OpLog:
         return operation
 
     def undo(self, document: "Document") -> Optional[Operation]:
-        """直前の有効な操作を取り消し、documentへ反映する。何も無ければNone。"""
+        """直前の有効な操作を取り消し、documentへ反映する。何も無ければNone。
+
+        **undoハンドラの中でログを再生する実装(`parameters.rebuild` など)は範囲を
+        `seq < operation.seq` に限ること** —— ここはハンドラを呼んでからカーソルを戻すため、
+        全entriesを再生すると取り消す対象の操作まで再適用されてしまう。
+        """
         if self._cursor == 0:
             return None
         operation = self._entries[self._cursor - 1]
@@ -225,7 +239,8 @@ class OpLog:
         """ログを先頭から実行し直し、documentの状態(bodies等)を再構築する。
 
         **自分のエントリは書き換えない**(再生のたびに履歴が増えないこと)。再生したログを
-        その文書のログにするかは呼び出し側の責務。
+        その文書のログにするかは呼び出し側の責務 —— 保存ファイルを開く経路は
+        `doc = Document(); doc.log = OpLog.from_json(data); doc.log.replay(doc)` の形になる。
         """
         for operation in self.entries:  # entriesはコピーなので、再生中の追記事故が起きない
             verb_handler(operation.verb).do(document, operation)
