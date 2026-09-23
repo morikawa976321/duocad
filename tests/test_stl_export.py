@@ -19,6 +19,47 @@ from duocad.mcp_server import DocumentTools
 from duocad.server import Session
 
 
+@pytest.mark.parametrize('existing', [False, True])
+def test_unresolved_face_prevents_partial_stl_export(tmp_path, existing):
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakePolygon, BRepBuilderAPI_MakeFace
+    from duocad.io_step import export_stl
+
+    wire = BRepBuilderAPI_MakePolygon()
+    for point in ((0, 0, 0), (1, 1, 0), (1, 0, 0), (0, 1, 0)):
+        wire.Add(gp_Pnt(*point))
+    wire.Close()
+    broken = BRepBuilderAPI_MakeFace(wire.Wire(), True).Face()
+    shape = kernel.make_compound([broken, BRepPrimAPI_MakeBox(5., 5., 5.).Shape()])
+    session = Session(None, 0.2)
+    session.document.add_body(Body(id='part', name='part', kind='solid', shape=shape))
+    path = tmp_path / 'part.stl'
+    if existing:
+        path.write_bytes(b'existing file')
+    with pytest.raises(ValueError, match='cannot write STL.*分割できない面'):
+        export_stl(session.document, path, 0.2)
+    if existing:
+        assert path.read_bytes() == b'existing file'
+    else:
+        assert not path.exists()
+
+
+@pytest.mark.parametrize('field', ['untriangulated', 'boundary'])
+def test_each_incomplete_tessellation_diagnostic_blocks_export(tmp_path, monkeypatch, field):
+    from duocad.io_step import export_stl
+
+    shape = BRepPrimAPI_MakeBox(5., 5., 5.).Shape()
+    payload = kernel.tessellate(shape, 0.2)
+    payload['untriangulated'] = [1] if field == 'untriangulated' else []
+    payload['boundary']['unresolved'] = [dict(face=1, issues=[])] if field == 'boundary' else []
+    monkeypatch.setattr(kernel, 'tessellate', lambda *args: payload)
+    session = Session(None, 0.2)
+    session.document.add_body(Body(id='part', name='part', kind='solid', shape=shape))
+    path = tmp_path / 'part.stl'
+    with pytest.raises(ValueError, match='cannot write STL'):
+        export_stl(session.document, path, 0.2)
+    assert not path.exists()
+
+
 def _holed_box():
     """曲面(円筒の穴)を持つ形。角度偏差が違うと三角形の枚数が変わる。"""
     box = BRepPrimAPI_MakeBox(40.0, 30.0, 10.0).Shape()

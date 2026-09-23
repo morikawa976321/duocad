@@ -423,7 +423,7 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
         amplified_edges=len(amplified), amplifications=int(sum(amplified.values())),
         amplified_edge_ids=sorted(amplified),
         rounds_log=rounds_log, count_mismatch=count_mismatch,
-        # CAD 頂点を共有するのに pcurve の座標が一致しない終端の組(交差の対象から外した数と最大のずれ)
+        # CAD 頂点を共有するのに pcurve の座標が一致しない終端の組(件数と最大のずれ)
         endpoint=endpoint,
         seconds={k: float(v) for k, v in seconds.items()},
     )

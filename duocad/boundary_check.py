@@ -13,7 +13,8 @@ OCP に依存しない。入力は「面 → wire → 辺の利用箇所(use)」
   同一視しない。(a) 同じ use で隣り合う線分、(b) wire で連続する use の接続端点(OCCT の healer が
   厳密一致させる)、(c) 同じ面の**別の wire** で同じ CAD 頂点に着く use の終端どうし(面の内側に置かれた
   辺が外周の頂点に着く場合など。healer はこれを揃えないので pcurve の評価誤差ぶん、例えば 1e-16 だけ
-  ずれることがある。同じ wire の連続しない use の頂点共有は周期面の seam・u=0/2π の両端なので数えない)。(c) で座標が一致しない組は交差の対象から外し、件数と最大のずれを診断に残す。
+  ずれることがある。同じ wire の連続しない use の頂点共有は周期面の seam・u=0/2π の両端なので数えない)。
+  座標が一致しない組は端点のずれに見合う範囲の接触だけを許し、件数と最大のずれを診断に残す。
   (b) の端点が厳密一致せず CAD 頂点も共有しなければ `open` として報告する(成功にしない)。
 - 面積や角度の小ささを理由に交差を捨てない(OCCT の FaceChecker は捨てる。docs/TOPOPT_GAP_CAUSALITY.md)。
 """
@@ -198,7 +199,7 @@ def check(packed: Packed, faces: Iterable[int] | None = None) -> dict:
     戻り値: `dict(issues=[...], faces_checked, segments, zero_length_segments, endpoint_mismatches, endpoint_gap_max)`。
     各 issue は `dict(kind, face, edges=[edge_a, edge_b], a=dict(use, segment), b=dict(use, segment), point=[x, y] | None)`
     (`segment` は use 内の 0 始まりの線分番号)。`open` の issue は `a`/`b` の代わりに `uses` を持つ。
-    `endpoint_mismatches` は CAD 頂点を共有するのに座標が一致しない終端の組の数(交差の対象から外した数)。
+    `endpoint_mismatches` は CAD 頂点を共有するのに座標が一致しない終端の組の数。
     """
     if faces is None:
         uses = np.arange(packed.use_count)
@@ -266,6 +267,7 @@ def check(packed: Packed, faces: Iterable[int] | None = None) -> dict:
     conn_b = np.maximum(ru, rv)
     conn_shared = np.where(equal, end_u, -1)
     conn_gap = np.where(equal, 0.0, np.linalg.norm(packed.points[end_u] - packed.points[start_v], axis=1))
+    conn_endpoints = np.column_stack((end_u, start_v))
 
     # --- (c) 同じ面で同じ CAD 頂点に着く use の終端どうし
     known = np.flatnonzero((packed.use_vertex[uses] >= 0).any(axis=1) & (n_points >= 2))
@@ -286,10 +288,12 @@ def check(packed: Packed, faces: Iterable[int] | None = None) -> dict:
         conn_a = np.concatenate((conn_a, np.minimum(ends_row[a], ends_row[b])))
         conn_b = np.concatenate((conn_b, np.maximum(ends_row[a], ends_row[b])))
         conn_shared = np.concatenate((conn_shared, np.where(equal_point, ends_point[a], -1)))
+        conn_endpoints = np.concatenate((conn_endpoints, np.column_stack((ends_point[a], ends_point[b]))))
         conn_gap = np.concatenate((conn_gap, np.where(
             equal_point, 0.0, np.linalg.norm(packed.points[ends_point[a]] - packed.points[ends_point[b]], axis=1))))
     valid = (conn_a >= 0) & (conn_a != conn_b)
     conn_a, conn_b, conn_shared, conn_gap = conn_a[valid], conn_b[valid], conn_shared[valid], conn_gap[valid]
+    conn_endpoints = conn_endpoints[valid]
     if len(P) == 0:
         return result
 
@@ -304,14 +308,22 @@ def check(packed: Packed, faces: Iterable[int] | None = None) -> dict:
     conn_keys = conn_a * n_rows + conn_b
     shared_of = {}
     gap_of = {}
-    for key, shared, gap in zip(conn_keys.tolist(), conn_shared.tolist(), conn_gap.tolist()):
+    endpoints_of = {}
+    for key, shared, gap, endpoints in zip(conn_keys.tolist(), conn_shared.tolist(), conn_gap.tolist(), conn_endpoints):
         # 同じ組が (b) と (c) の両方から来たら、座標が一致している側の情報を残す
         if key not in shared_of or shared >= 0:
             shared_of[key] = shared
             gap_of[key] = gap
+            endpoints_of[key] = endpoints
     connected_pair = np.isin(pair_keys, conn_keys) if len(conn_keys) else np.zeros(len(i), dtype=bool)
     legit = adjacent | connected_pair
     mismatched = [key for key, shared in shared_of.items() if shared < 0]
+    for row in np.flatnonzero(connected_pair & ~adjacent):
+        key = int(pair_keys[row])
+        if shared_of[key] < 0:
+            a, b = i[row], j[row]
+            ends = packed.points[endpoints_of[key]]
+            legit[row] = _intersection_near_endpoints(P[a], Q[a], P[b], Q[b], ends)
     result['endpoint_mismatches'] = len(mismatched)
     result['endpoint_gap_max'] = float(max((gap_of[key] for key in mismatched), default=0.0))
 
@@ -368,6 +380,43 @@ def check(packed: Packed, faces: Iterable[int] | None = None) -> dict:
         for row in np.flatnonzero(touch & ~cross & ~collinear):
             issues.append(_issue('touch', packed, seg_use, seg_index, ni[row], nj[row], None))
     return result
+
+
+def _intersection_near_endpoints(p1, p2, p3, p4, endpoints):
+    """共有CAD端点の評価ずれと同じ範囲の接触だけを許す。浅い交差の遠方への増幅は許さない。
+
+    許容域は2端点の外接矩形を最大座標差だけ広げたもの。固定epsilonも点列の移動も使わない。
+    交点の計算をfloatで丸めると端点へ吸着して見逃すため、この少数の組だけ有理数で評価する。
+    """
+    from fractions import Fraction
+
+    def point(p):
+        return tuple(Fraction(float(x)) for x in p)
+
+    def sub(a, b):
+        return (a[0] - b[0], a[1] - b[1])
+
+    def cross(a, b):
+        return a[0] * b[1] - a[1] * b[0]
+
+    a, b, c, d = map(point, (p1, p2, p3, p4))
+    e, f = map(point, endpoints)
+    gap = max(abs(e[k] - f[k]) for k in range(2))
+    low = [min(e[k], f[k]) - gap for k in range(2)]
+    high = [max(e[k], f[k]) + gap for k in range(2)]
+    v, w = sub(b, a), sub(d, c)
+    det = cross(v, w)
+    hits = []
+    if det:
+        t, u = cross(sub(c, a), w) / det, cross(sub(c, a), v) / det
+        if 0 <= t <= 1 and 0 <= u <= 1:
+            hits.append((a[0] + t * v[0], a[1] + t * v[1]))
+    elif cross(sub(c, a), v) == 0:
+        for p in (a, b, c, d):
+            if all(max(min(a[k], b[k]), min(c[k], d[k])) <= p[k]
+                   <= min(max(a[k], b[k]), max(c[k], d[k])) for k in range(2)):
+                hits.append(p)
+    return all(all(low[k] <= p[k] <= high[k] for k in range(2)) for p in hits)
 
 
 def _crossing_point(p1, p2, p3, p4):

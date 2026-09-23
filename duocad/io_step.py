@@ -111,11 +111,13 @@ def _triangles_of(body: Body, deviation: float):
     """
     if body.mesh is not None:
         return meshbody.triangles(body.mesh)
-    return meshbody.triangles(
-        meshbody.from_tessellation(
-            kernel.tessellate(body.shape, deviation, kernel.DEFAULT_ANGULAR_DEFLECTION)
-        )
-    )
+    payload = kernel.tessellate(body.shape, deviation, kernel.DEFAULT_ANGULAR_DEFLECTION)
+    missing = payload.get('untriangulated') or []
+    unresolved = (payload.get('boundary') or {}).get('unresolved') or []
+    if missing or unresolved:
+        raise ValueError(f'cannot write STL: {body.name} に分割できない面がある: '
+                         f'untriangulated={missing[:20]}, unresolved={unresolved[:5]}')
+    return meshbody.triangles(meshbody.from_tessellation(payload))
 
 
 def export_body_ids(doc: Document) -> list[BodyId]:

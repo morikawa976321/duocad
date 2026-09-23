@@ -153,3 +153,26 @@ def test_consecutive_edges_sharing_a_cad_vertex_but_not_a_point_are_connected_no
         use['vertices'] = (k, (k + 1) % 4)
     result = bc.check(bc.pack([gap]))
     assert result['issues'] == [] and result['endpoint_mismatches'] == 1
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('scale', [1.0, 1e-6, 1e6])
+def test_shared_vertex_does_not_hide_an_interior_crossing(reverse, scale):
+    uses = [dict(edge=1, points=np.array([[0, 0], [1, 0]]) * scale,
+                 forward=True, internal=True, vertices=(0, 1)),
+            dict(edge=2, points=np.array([[1, 1e-8], [0, -1e-8]]) * scale,
+                 forward=True, internal=True, vertices=(1, 2))]
+    if reverse:
+        for use in uses:
+            use['points'] = use['points'][::-1]
+            use['vertices'] = use['vertices'][::-1]
+            use['forward'] = False
+    result = bc.check(bc.pack([[[uses[0]], [uses[1]]]]))
+    assert kinds(result) == [('cross', (1, 2))]
+    assert result['issues'][0]['point'] == pytest.approx([0.5 * scale, 0])
+
+
+def test_shared_vertex_does_not_hide_overlap_beyond_the_endpoint_gap():
+    uses = [dict(edge=1, points=[[0, 0], [1, 0]], forward=True, internal=True, vertices=(0, 1)),
+            dict(edge=2, points=[[1 - 1e-8, 0], [0.5, 0]], forward=True, internal=True, vertices=(1, 2))]
+    assert kinds(bc.check(bc.pack([[[uses[0]], [uses[1]]]]))) == [('overlap', (1, 2))]
