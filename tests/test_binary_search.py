@@ -1217,11 +1217,42 @@ def test_a_single_cell_failure_that_is_not_a_safety_failure_is_not_counted_towar
         return original(material, before, grid, **kwargs)
 
     monkeypatch.setattr(acceptance, 'inspect', unsolvable)
-    result = bs.find_best_feasible(design, conditions, max_evaluations=400, single_cell_patience=1)
+    result = bs.find_best_feasible(design, conditions, max_evaluations=400, single_cell_patience=1,
+                                   evaluation_error_patience=None)
     reduction = result.diagnostics['reduction']
     assert result.termination == 'converged' and reduction['stop_reason'] == 'no_removable_cell'
     assert reduction['safety_excluded_cells'] == 0
     assert any(step['peel']['picked'] == 1 and step['outcome'] == 'rejected' for step in reduction['steps'])
+
+
+def test_repeated_unsolvable_candidates_stop_the_reduction_and_keep_the_best_shape(monkeypatch):
+    """落ちたら、安全率が取れない候補が続いても打ち切らず、予算を使い切るまで走っている。"""
+    conditions, design, _ = appendage_conditions()
+    original = acceptance.inspect
+
+    def unsolvable(material, before, grid, **kwargs):
+        if kwargs.get('fields') is not None and material.sum() < design.sum() - 6:
+            report = original(material, before, grid, **{**kwargs, 'fields': None})
+            report['checks']['safety'] = dict(status='unknown', reason='evaluation_error', error='stub')
+            report['status'] = 'unknown'
+            return report
+        return original(material, before, grid, **kwargs)
+
+    monkeypatch.setattr(acceptance, 'inspect', unsolvable)
+    result = bs.find_best_feasible(design, conditions, max_evaluations=400, evaluation_error_patience=2)
+    reduction = result.diagnostics['reduction']
+    assert result.termination == 'evaluation_error'
+    assert reduction['stop_reason'] == 'repeated_evaluation_error'
+    assert reduction['evaluation_errors'] >= 2  # 通算。止める判断は連続回数で見る
+    assert reduction['safety_excluded_cells'] == 0  # 安全率の不合格としては数えない
+    assert result.best_feasible is not None and result.status == 'feasible'
+
+
+@pytest.mark.parametrize('patience', [0, -1, 1.5, '2', True, False])
+def test_evaluation_error_patience_must_be_a_positive_integer_or_none(patience):
+    conditions, design, _ = appendage_conditions()
+    with pytest.raises(ValueError):
+        bs.find_best_feasible(design, conditions, max_evaluations=10, evaluation_error_patience=patience)
 
 
 @pytest.mark.parametrize('patience', [0, -1, 1.5, '2', True, False])

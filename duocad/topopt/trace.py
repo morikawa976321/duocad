@@ -1,7 +1,11 @@
 """実製品の1実行に閉じた診断記録。配列は損失なし・内容ハッシュで重複排除する。
 
 ContextVarは製品の実行器スレッド内だけに設定する。数値関数を単独で呼ぶと記録しない。
-保存失敗は例外として伝え、記録が欠けた実行を成功と表示しない。
+**保存の失敗で計算を止めない**(記録は best effort)。記録は診断のための仕組みであり、解けた形状を
+捨てる権利を持たない —— `arrays/` が実行中に消えて `OSError` が `acceptance.safety_check` の
+`except Exception` に落ち、FEMが解けている候補を20回続けて「安全率を計算できず」で不合格にした
+実績がある(2026-09-24)。失敗は握りつぶさず `write_failures` に数えて manifest と stderr へ出し、
+記録が欠けた実行を無傷に見せない。
 """
 from __future__ import annotations
 
@@ -30,6 +34,10 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ROOT = ROOT / 'output' / 'optimization_runs'
+
+#: 記録の書き込み失敗を stderr へ出す上限。同じ障害は何百回も続くので、全部出すと本当のエラーが埋もれる。
+#: 回数そのものは manifest の `write_failures` が持つ。
+_FAILURE_REPORT_LIMIT = 3
 _current = ContextVar('optimization_trace', default=None)
 
 
@@ -38,6 +46,9 @@ def current():
 
 
 def _atomic(path, write):
+    # 書く直前に親を作る。記録の開始時に1回作るだけでは、実行中にディレクトリが消えたとき
+    # その実行は最後まで回復しない(`arrays/` が消えて全候補の評価が落ちた実績がある)。
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + '.tmp')
     with temporary.open('wb') as stream:
         write(stream)
@@ -62,6 +73,7 @@ class Recorder:
         self.started = time.perf_counter()
         self.write_seconds = 0.
         self.sequence = 0
+        self.write_failures = 0
         self.stack = []
         self.manifest = dict(schema_version=1, run_id=self.path.name, status='running',
                              process_id=os.getpid(),
@@ -76,17 +88,37 @@ class Recorder:
         data = json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False).encode('utf-8')
         _atomic(path, lambda stream: stream.write(data))
 
+    def _failed(self, where, error):
+        """記録の書き込みが落ちたことを数え、最初の数回だけ stderr へ出す。
+
+        **ここから記録を書きに行かない**(`_manifest` を呼ぶと、その `_manifest` が落ちて再入する)。
+        数えた回数は次に成功した `_manifest` が持っていく。
+        """
+        self.write_failures += 1
+        self.manifest['write_failures'] = self.write_failures
+        if self.write_failures <= _FAILURE_REPORT_LIMIT:
+            print(f'[trace] 記録の書き込みに失敗(計算は続ける): {where}: {type(error).__name__}: {error}',
+                  file=sys.stderr, flush=True)
+
     def _manifest(self):
         self.manifest.update(elapsed_seconds=time.perf_counter()-self.started,
                              write_seconds=self.write_seconds, records=self.sequence)
-        self._json(self.path/'manifest.json', self.manifest)
+        try:
+            self._json(self.path/'manifest.json', self.manifest)
+        except OSError as error:
+            self._failed('manifest', error)
 
     def event(self, kind, **values):
         row = dict(kind=kind, elapsed_seconds=time.perf_counter()-self.started,
                    phase=self.stack[-1] if self.stack else None, **values)
-        with (self.path/'events.jsonl').open('a', encoding='utf-8') as stream:
-            stream.write(json.dumps(row, ensure_ascii=False, allow_nan=False)+'\n')
-            stream.flush()
+        try:
+            self.path.mkdir(parents=True, exist_ok=True)
+            with (self.path/'events.jsonl').open('a', encoding='utf-8') as stream:
+                stream.write(json.dumps(row, ensure_ascii=False, allow_nan=False)+'\n')
+                stream.flush()
+        except OSError as error:
+            self._failed(f'event:{kind}', error)
+            return
         self.manifest['last_event'] = row
         self._manifest()
 
@@ -130,7 +162,14 @@ class Recorder:
         started = time.perf_counter()
         self.sequence += 1
         filename = f'{self.sequence:06d}-{name}.json'
-        self._json(self.path/filename, self._encode(value, {}))
+        try:
+            self._json(self.path/filename, self._encode(value, {}))
+        except OSError as error:
+            # **`OSError` だけを飲む**。`_encode` の `TypeError`(object配列など記録できない値)は
+            # こちらの書き方の誤りなので、飲むと永久に気づけない。
+            self.write_seconds += time.perf_counter()-started
+            self._failed(f'snapshot:{name}', error)
+            return None
         self.write_seconds += time.perf_counter()-started
         self.event('snapshot', name=name, file=filename)
         return filename
