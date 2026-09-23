@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pytest
 
-from duocad import kernel, query
+from duocad import io_step, kernel, query
 from duocad.server import Server, Session
 
 DEVIATION = 0.2
@@ -570,39 +570,37 @@ def test_list_documents_creates_the_folder_and_skips_unreadable_files(session: S
     assert [item["name"] for item in answer["files"]] == ["good.json"]
 
 
-def test_stl_export_honours_the_deviation(session: Session, tmp_path: Path) -> None:
-    """**偏差を指定できる**(細かくすればファイルは必ず大きくなる。§7の実測と同じ性質)。
+def test_stl_export_always_uses_the_fixed_deviation(session: Session, tmp_path: Path) -> None:
+    """**粗さは `io_step.STL_DEVIATION` 固定**で、送られた偏差では動かない。
 
-    **曲面を持つ形で測る**。立方体は平面だけなので、偏差をいくら細かくしても三角形は
-    12枚のままでファイルサイズが1バイトも変わらない(立方体で書くと 684B == 684B のまま
-    検査にならない)。STLの近似が効くのは曲面である。
+    落ちたら: 粗さを選ぶ口が復活している(画面の入力欄・プロトコル・MCPのどれか)。
+    **曲面を持つ形で測る**。立方体は平面だけなので、どの粗さで測っても三角形は12枚のまま
+    ファイルサイズが1バイトも変わらず(684B == 684B)、検査にならない。
     """
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 10.0)
     _select(session, [{"sketch": sketch_id, "index": 1}])
     session.extrude(SIDE, mode="join")
-    coarse = tmp_path / "coarse.stl"
-    fine = tmp_path / "fine.stl"
+    shape = session.document.bodies[-1].shape
+    written = tmp_path / "part.stl"
 
     async def script(send):
-        await send({"cmd": "export_stl", "path": str(coarse), "deviation": 0.2})
-        return await send({"cmd": "export_stl", "path": str(fine), "deviation": 0.01})
+        # 偏差を送っても効かない(表に無い引数は `_dispatch` が拾わない)。
+        return await send({"cmd": "export_stl", "path": str(written), "deviation": 0.2})
 
     (answer, _clients) = _browser(session, script)
 
-    assert answer["action"] == "export_stl" and answer["deviation"] == 0.01
-    assert fine.stat().st_size > coarse.stat().st_size
+    assert answer["action"] == "export_stl"
+    assert answer["deviation"] == io_step.STL_DEVIATION
+    fixed = _triangle_count(shape, io_step.STL_DEVIATION)
+    assert fixed > _triangle_count(shape, 0.2), "固定値と0.2mmで三角形数が同じでは検査にならない"
+    assert int.from_bytes(written.read_bytes()[80:84], "little") == fixed
 
 
-def test_export_without_a_deviation_is_refused(session: Session, tmp_path: Path) -> None:
-    """`deviation` は必須。既定で埋めると「粗いまま出した」が黙って通る。"""
-    _box(session)
-
-    async def script(send):
-        return await send({"cmd": "export_stl", "path": str(tmp_path / "x.stl")})
-
-    (answer, _clients) = _browser(session, script)
-    assert answer["type"] == "error"
+def _triangle_count(shape, deviation: float) -> int:
+    """`shape` をその偏差で測ったときの三角形数(角度偏差は書き出しと同じ既定)。"""
+    payload = kernel.tessellate(shape, deviation, kernel.DEFAULT_ANGULAR_DEFLECTION)
+    return sum(len(face["indices"]) // 3 for face in payload["faces"])
 
 
 #--------------------------------------------------------------------------------------

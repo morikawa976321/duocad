@@ -41,7 +41,6 @@
    * 同じ値へ書き出し直す・同じファイルを読み直すことが多く、毎回打ち直させると手間になる
    * ——「新規保存」が消すのは1回きりの新しい名前だからで、性質が違う。
    */
-  import { evaluateExpression } from './expression'
   import type { DocumentInfo } from './session'
 
   let {
@@ -78,8 +77,8 @@
     onNew: () => void
     /** 書き出し先のパスを渡してSTEPへ書き出す(文書は変えない)。 */
     onExportStep: (path: string) => void
-    /** 書き出し先のパスと偏差(mm)を渡してSTLへ書き出す(文書は変えない)。 */
-    onExportStl: (path: string, deviation: number) => void
+    /** 書き出し先のパスを渡してSTLへ書き出す(文書は変えない)。**粗さは固定**で選べない。 */
+    onExportStl: (path: string) => void
   } = $props()
 
   /** 打ちかけの新規保存名。送ったら空に戻す(パネルは打ちかけ以外の状態を覚えない)。 */
@@ -146,24 +145,11 @@
   }
 
   let exportStlPath = $state('')
-  let deviationText = $state('')
-  const exportStlPathProblem = $derived(pathProblem(exportStlPath))
-
-  /**
-   * 偏差(mm)。**既定値を埋めない**。0以下(空欄含む)は無効 —— 用途で桁が変わる値なので、
-   * 黙って既定値で出すと粗いままプリンタへ送られる(`commands/files.ts`の`EXPORT_STL`
-   * docstring参照)。
-   */
-  const deviation = $derived(evaluateExpression(deviationText))
-  const deviationProblem = $derived.by(() => {
-    if (deviation.ok) return deviation.value > 0 ? null : '偏差は0より大きい値'
-    return deviationText.trim() === '' ? '偏差は0より大きい値' : deviation.reason
-  })
-  const exportStlProblem = $derived(exportStlPathProblem ?? deviationProblem)
+  const exportStlProblem = $derived(pathProblem(exportStlPath))
 
   function submitExportStl(): void {
-    if (exportStlProblem !== null || !deviation.ok) return
-    onExportStl(exportStlPath.trim(), deviation.value)
+    if (exportStlProblem !== null) return
+    onExportStl(exportStlPath.trim())
   }
 
   /** Enterで、その行のボタンと同じことをする(`#file-name-input`と同じ規律)。 */
@@ -262,26 +248,12 @@
         oninput={(event) => (exportStlPath = (event.target as HTMLInputElement).value)}
         onkeydown={(event) => onRowEnter(event, submitExportStl)}
       />
-      <input
-        id="file-deviation"
-        class="deviation"
-        type="text"
-        inputmode="decimal"
-        autocomplete="off"
-        placeholder="mm"
-        value={deviationText}
-        oninput={(event) => (deviationText = (event.target as HTMLInputElement).value)}
-        onkeydown={(event) => onRowEnter(event, submitExportStl)}
-      />
       <button id="file-export-stl" onclick={submitExportStl} disabled={exportStlProblem !== null}>
         STL書き出し
       </button>
     </div>
-    {#if exportStlPath !== '' && exportStlPathProblem !== null}
-      <span class="hint">{exportStlPathProblem}</span>
-    {/if}
-    {#if deviationText !== '' && deviationProblem !== null}
-      <span class="hint">{deviationProblem}</span>
+    {#if exportStlPath !== '' && exportStlProblem !== null}
+      <span class="hint">{exportStlProblem}</span>
     {/if}
   </div>
 </section>
@@ -321,10 +293,6 @@
   .new-row input {
     flex: 1 1 auto;
     min-width: 0;
-  }
-
-  .new-row input.deviation {
-    flex: 0 0 48px;
   }
 
   .new-row button {

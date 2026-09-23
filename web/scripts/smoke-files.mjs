@@ -761,15 +761,15 @@ async function main() {
 
     const stlPath = join(workdir, 'out.stl')
     await typeInto('#file-export-stl-path', stlPath)
-    await typeInto('#file-deviation', 0.05)
     await page.click('#file-export-stl')
     await waitFor(
       () => window.__duocad.lastFile?.action === 'export_stl',
       'STL書き出しの応答が返らない',
     )
     const stl = (await look()).lastFile
-    if (stl.deviation !== 0.05) fail(`偏差が渡っていない: ${stl.deviation}`)
-    ok(`STLを書き出した(${statSync(stlPath).size} B / 偏差 ${stl.deviation}mm)`)
+    // 粗さは固定(`io_step.STL_DEVIATION`)。画面に入力欄は無く、応答は書いた粗さの記録。
+    if (stl.deviation !== 0.01) fail(`固定の粗さで書けていない: ${stl.deviation}`)
+    ok(`STLを書き出した(${statSync(stlPath).size} B / 偏差 ${stl.deviation}mm・固定)`)
 
     // ================================================================ 検証3: 読み込み
     // 読み込んだ時点で編集可能なボディができる。
@@ -878,7 +878,6 @@ async function main() {
 
     const visibleOnlyStlPath = join(workdir, 'visible-only.stl')
     await typeInto('#file-export-stl-path', visibleOnlyStlPath)
-    await typeInto('#file-deviation', 0.1)
     await page.click('#file-export-stl')
     await waitFor(
       (expected) => window.__duocad.lastFile?.path === expected,

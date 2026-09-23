@@ -1109,14 +1109,13 @@ class DocumentTools:
             "skipped_hidden": list(skipped),
         }
 
-    def export_stl(self, path: str, deviation: Optional[float] = None) -> dict:
-        """STLを書き出す(`deviation` 省略時は `Session.deviation`)。対象は export_step と同じ
-        (いま表示中のBodyだけ・引数で選べない)。"""
+    def export_stl(self, path: str) -> dict:
+        """STLを書き出す。粗さは `io_step.STL_DEVIATION` 固定(人の画面にも入力欄は無い)。
+        対象は export_step と同じ(いま表示中のBodyだけ・引数で選べない)。"""
         target = Path(path)
         resolved = io_step.export_body_ids(self.session.document)
         skipped = io_step.export_skipped_hidden(self.session.document)
-        used = float(self.session.deviation if deviation is None else deviation)
-        io_step.export_stl(self.session.document, target, used)
+        io_step.export_stl(self.session.document, target)
         return {
             "path": str(target),
             "bytes": target.stat().st_size,

@@ -1169,19 +1169,10 @@ COMMANDS: tuple[Command, ...] = (
         description=(
             "いま表示中(visible)のボディをSTLへ書き出す。対象を選ぶ引数は無い —— "
             "含めたくないものがあれば、先に set_visible(visible=false) で隠してから呼ぶこと。"
-            "deviation でメッシュ粗さを指定する。文書は変えない。戻り値の "
-            "skipped_hidden で非表示で除外した件数を確認できる。"
+            "メッシュの粗さは固定で選べない(人の画面にも入力欄は無い)。文書は変えない。"
+            "戻り値の skipped_hidden で非表示で除外した件数を確認できる。"
         ),
-        params=(
-            Param("path", "string", "書き出し先パス"),
-            Param(
-                "deviation",
-                "number",
-                "線形偏差(mm・絶対)。省略時はセッション既定",
-                required=False,
-                dimension=True,
-            ),
-        ),
+        params=(Param("path", "string", "書き出し先パス"),),
         session="export_stl_file",
         changes_document=False,
     ),

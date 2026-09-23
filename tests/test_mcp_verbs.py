@@ -215,7 +215,9 @@ ARGUMENTS: dict = {
     # 倍率(`scale`)だけ省略できる。
     "import_svg": ({"path", "sketch_id", "scale"}, {"path", "sketch_id"}),
     "export_step": ({"path"}, {"path"}),
-    "export_stl": ({"path", "deviation"}, {"path"}),
+    # **粗さは選べない**(`io_step.STL_DEVIATION` 固定)。人の画面にも入力欄が無いので、
+    # AIにだけ調整できる引数を残さない。
+    "export_stl": ({"path"}, {"path"}),
     # ---- 履歴
     "undo": (set(), set()),
     "redo": (set(), set()),
@@ -1107,7 +1109,7 @@ def test_export_writes_a_file_and_reports_where(server: McpServer, tmp_path: Pat
     assert payload["bytes"] == step_path.stat().st_size > 0
 
     stl_path = tmp_path / "out.stl"
-    payload = call(server, "export_stl", {"path": str(stl_path), "deviation": 0.1})
+    payload = call(server, "export_stl", {"path": str(stl_path)})
     assert Path(payload["path"]) == stl_path
     assert payload["bytes"] == stl_path.stat().st_size > 0
 
@@ -1133,7 +1135,7 @@ def test_export_reports_skipped_hidden_bodies_and_no_body_ids_argument(
     assert payload["skipped_hidden"] == ["hidden-box"]
 
     stl_path = tmp_path / "visible_only.stl"
-    payload = call(server, "export_stl", {"path": str(stl_path), "deviation": 0.1})
+    payload = call(server, "export_stl", {"path": str(stl_path)})
     assert payload["body_ids"] == ["box"]
     assert payload["skipped_hidden"] == ["hidden-box"]
 

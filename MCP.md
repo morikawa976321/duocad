@@ -123,7 +123,7 @@ how には数えない（手動UIでも `PlaneArgSpec` / `point` は how では�
 |---|---|---|
 | `--port` | 8765 | WebSocket |
 | `--http-port` | 8766 | 静的配信（ブラウザで開く）＋ `/mcp`（MCPのHTTPトランスポート） |
-| `--deviation` | 0.2 | テセレーションの線形偏差（mm・絶対） |
+| `--deviation` | 0.2 | **画面の**テセレーションの線形偏差（mm・絶対。ズーム連動値が来るまでの土台で、STL書き出しは見ない＝`io_step.STL_DEVIATION` 固定） |
 | `--web-dist PATH` | `web/dist` | 静的配信するディレクトリ |
 | `--open` | — | 起動時にブラウザを開く（既定は開かない） |
 

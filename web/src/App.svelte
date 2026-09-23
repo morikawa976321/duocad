@@ -1018,8 +1018,8 @@
     runFileOp('export_step', { path })
   }
 
-  function exportStl(path: string, deviation: number): void {
-    runFileOp('export_stl', { path, deviation })
+  function exportStl(path: string): void {
+    runFileOp('export_stl', { path })
   }
 
   // ---------------------------------------------------------------- 選択(コアを叩くだけ)

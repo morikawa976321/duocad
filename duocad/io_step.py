@@ -35,6 +35,14 @@ from .document import Body, BodyId, Document
 
 PathLike = Union[str, Path]
 
+#: STL書き出しの線形偏差[mm]。**固定値**(書き出しのたびに人が選ぶ値ではない)。
+#: 実測(2026-09-24、角度偏差 `kernel.DEFAULT_ANGULAR_DEFLECTION` との組): 円筒の弦のずれは
+#: 半径によらず約0.005mm(OCCTは指定値のおよそ半分に収める)で、FDMの位置決め精度(0.1mm前後)
+#: より2桁小さい。これより細かくしても印刷結果は変わらず三角形だけが増える
+#: (`models/hanger_test.json`: 0.01mm→52,358枚2.6MB0.32秒 / 0.005mm→80,900枚4.1MB /
+#: 0.002mm→185,212枚9.3MB)。測り方と全表は `docs/DESIGN_DECISIONS.md`「STL書き出しの粗さ」。
+STL_DEVIATION = 0.01
+
 
 def read_step_source(path: PathLike) -> tuple[str, str]:
     """STEPファイルを読み、`(source_name, text)` を返す。`source_name` は**ファイル名だけ**。
@@ -78,40 +86,35 @@ def export_step(doc: Document, path: PathLike) -> None:
     kernel.write_step(shape, str(path))
 
 
-def export_stl(doc: Document, path: PathLike, deviation: float) -> None:
-    """deviation(mm)は**絶対**の線形偏差。対象は export_step と同じ。
+def export_stl(doc: Document, path: PathLike) -> None:
+    """粗さは `STL_DEVIATION` 固定(選ばせる引数は無い)。対象は export_step と同じ。
 
     **B-repは画面と同じ三角形を書く**(`_triangles_of`)。STL専用に測り直す経路
     (OCCT純正の `StlAPI_Writer`)は持たない —— 別計算にすると、画面で確かめた形と
     書き出した形の一致が保証されない。
 
     **B-repとメッシュが混ざった文書は、両方を1本のSTLへ書く**。
-    メッシュボディの三角形は**テッセレーションを通さずそのまま**書く —— deviation は
+    メッシュボディの三角形は**テッセレーションを通さずそのまま**書く —— `STL_DEVIATION` は
     B-rep側にしか効かない(既に三角形になっているものを測り直す意味が無い)。
     """
-    bodies = _bodies_to_export(doc)
-    # **メッシュだけの文書でも deviation を検査する** —— この道では誰も使わないが、
-    # 「文書に何が入っているか」で引数の検査が緩んだり厳しくなったりすると、
-    # 呼び出し側から見た契約が文書の中身に依存してしまう(`kernel.tessellate` と同じ文言)。
-    if not deviation > 0:
-        raise ValueError(f"deviation must be positive (mm), got {deviation!r}")
-    meshbody.write_stl(str(path), [_triangles_of(b, deviation) for b in bodies])
+    meshbody.write_stl(str(path), [_triangles_of(b) for b in _bodies_to_export(doc)])
 
 
-def _triangles_of(body: Body, deviation: float):
+def _triangles_of(body: Body):
     """1Bodyぶんの三角形。メッシュは持っている三角形、B-repはその場でテッセレーションする。
 
     **B-repは画面の土台と同じ呼び方で測る**(層をまたぐ契約): `DocumentView.geometry` は
     ズームも注視面の指定も来ていないとき、`kernel.tessellate_selective(shape, None,
     view_deviation, view_angular_deflection, ...)` で測り、その角度偏差の既定は
-    `kernel.DEFAULT_ANGULAR_DEFLECTION` である。ここで角度偏差を変えると、曲面の三角形だけが
-    画面と食い違う(φ12の穴を偏差0.2mmで測ると、0.5radでは120枚、既定の0.35radでは160枚)。
+    `kernel.DEFAULT_ANGULAR_DEFLECTION` である。**線形偏差が `STL_DEVIATION` に固定された後も
+    角度偏差はこの既定のまま**にする: 0.01mmでは半径1.5mmを超える曲面は線形側が支配し、
+    角度偏差が支配する半径1.5mm以下でも弦のずれは0.006mm以下に収まる(2026-09-24実測)。
     ズーム中の画面の粗さには合わせない —— 書き出しの粗さはカメラで変わらない
     (`tests/test_adaptive_resolution.py`)。
     """
     if body.mesh is not None:
         return meshbody.triangles(body.mesh)
-    payload = kernel.tessellate(body.shape, deviation, kernel.DEFAULT_ANGULAR_DEFLECTION)
+    payload = kernel.tessellate(body.shape, STL_DEVIATION, kernel.DEFAULT_ANGULAR_DEFLECTION)
     missing = payload.get('untriangulated') or []
     unresolved = (payload.get('boundary') or {}).get('unresolved') or []
     if missing or unresolved:

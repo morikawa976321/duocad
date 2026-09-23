@@ -1,7 +1,8 @@
-"""STL書き出し(MCPツール `export_stl`)は、画面が土台の粗さで配る三角形とビット単位で同じ。
+"""STL書き出し(MCPツール `export_stl`)は**固定の粗さ**(`io_step.STL_DEVIATION`)で、
+画面と同じ経路で測る —— 同じ粗さを土台に置けば三角形はビット単位で一致する。
 
 落ちたら、書き出したSTLが画面で確かめた形と別の計算になっている(角度偏差・呼ぶ関数・
-Bodyのまとめ方のどれかが画面の経路とずれた)。
+Bodyのまとめ方のどれかが画面の経路とずれた)か、粗さが土台に引きずられている。
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
 
-from duocad import kernel
+from duocad import io_step, kernel
 from duocad.document import Body
 from duocad.mcp_server import DocumentTools
 from duocad.server import Session
@@ -36,7 +37,7 @@ def test_unresolved_face_prevents_partial_stl_export(tmp_path, existing):
     if existing:
         path.write_bytes(b'existing file')
     with pytest.raises(ValueError, match='cannot write STL.*分割できない面'):
-        export_stl(session.document, path, 0.2)
+        export_stl(session.document, path)
     if existing:
         assert path.read_bytes() == b'existing file'
     else:
@@ -56,7 +57,7 @@ def test_each_incomplete_tessellation_diagnostic_blocks_export(tmp_path, monkeyp
     session.document.add_body(Body(id='part', name='part', kind='solid', shape=shape))
     path = tmp_path / 'part.stl'
     with pytest.raises(ValueError, match='cannot write STL'):
-        export_stl(session.document, path, 0.2)
+        export_stl(session.document, path)
     assert not path.exists()
 
 
@@ -88,9 +89,9 @@ def _view_triangles(session: Session, body_id: str) -> np.ndarray:
     return np.concatenate(chunks).astype(np.float32)
 
 
-@pytest.mark.parametrize("deviation", [0.2, 0.05])
-def test_the_stl_holds_exactly_the_triangles_the_view_shows(tmp_path, deviation):
-    session = Session(None, deviation)
+def test_the_stl_holds_exactly_the_triangles_the_view_shows(tmp_path):
+    """**土台を書き出しの固定値に合わせれば**、画面の三角形とSTLはビット単位で同じ。"""
+    session = Session(None, io_step.STL_DEVIATION)
     session.document.add_body(Body(id="part", name="part", kind="solid", shape=_holed_box()))
     view = _view_triangles(session, "part")
 
@@ -100,9 +101,23 @@ def test_the_stl_holds_exactly_the_triangles_the_view_shows(tmp_path, deviation)
     assert np.array_equal(_read_stl(path), view)
 
 
+def test_the_stl_does_not_follow_the_session_baseline(tmp_path):
+    """**粗さは固定**。土台(`--deviation`)を粗くしても、書き出しは固定値のまま細かい。
+
+    落ちたら、書き出しが画面の設定を見に行っている(曲面のある形で三角形数が土台に追随する)。
+    """
+    session = Session(None, 0.2)
+    session.document.add_body(Body(id="part", name="part", kind="solid", shape=_holed_box()))
+
+    path = tmp_path / "part.stl"
+    DocumentTools(session).call("export_stl", {"path": str(path)})
+
+    assert len(_read_stl(path)) > len(_view_triangles(session, "part"))
+
+
 def test_several_b_rep_bodies_are_written_one_by_one_as_the_view_measures_them(tmp_path):
     """画面はBodyごとに測る。書き出しも1つのcompoundへまとめて測り直さない。"""
-    session = Session(None, 0.2)
+    session = Session(None, io_step.STL_DEVIATION)
     session.document.add_body(Body(id="a", name="a", kind="solid", shape=_holed_box()))
     moved = kernel.translate_shape(_holed_box(), 60.0, 0.0, 0.0)
     session.document.add_body(Body(id="b", name="b", kind="solid", shape=moved))
