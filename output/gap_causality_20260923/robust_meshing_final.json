@@ -1,0 +1,32 @@
+{
+  "source": "output/finalization_checks/20260922T075258-e20ae028100d/000021-final-solid.json",
+  "deviation": 0.2,
+  "faces": 112467,
+  "load_seconds": 2.7392159000155516,
+  "robust": {
+    "seconds": 22.521581000008155,
+    "untriangulated": [],
+    "termination": "resolved",
+    "rounds": 7,
+    "amplified_edges": 13,
+    "amplifications": 37,
+    "amplified_edge_ids": [11294, 11963, 12475, 12479, 18117, 18119, 18121, 113075, 113076, 113087, 113088, 113094, 113101],
+    "points": [700426, 700618],
+    "unresolved": [],
+    "reinstated": [],
+    "rounds_log": [
+      {"round": 0, "faces_checked": 112467, "issues": 10, "segments": 356838, "points": 700426, "edges": 13},
+      {"round": 1, "faces_checked": 17, "issues": 5, "segments": 536, "points": 700466, "edges": 8},
+      {"round": 2, "faces_checked": 12, "issues": 3, "segments": 472, "points": 700518, "edges": 6},
+      {"round": 3, "faces_checked": 9, "issues": 2, "segments": 353, "points": 700536, "edges": 4},
+      {"round": 4, "faces_checked": 6, "issues": 1, "segments": 220, "points": 700548, "edges": 2},
+      {"round": 5, "faces_checked": 3, "issues": 1, "segments": 148, "points": 700560, "edges": 2},
+      {"round": 6, "faces_checked": 3, "issues": 1, "segments": 170, "points": 700582, "edges": 2},
+      {"round": 7, "faces_checked": 3, "issues": 0, "segments": 206, "points": 700618}
+    ],
+    "stage_seconds": {"BuildModel": 1.0779267000034451, "DiscretizeEdges": 1.9884462000336498, "HealModel": 0.07550870004342869, "PreProcessModel": 0.05623739998554811, "extract": 5.916421899979468, "check": 0.557531499885954, "amplify": 0.4149653001804836, "final_check": 0.5229751999722794, "DiscretizeFaces": 5.964524600014556, "PostProcessModel": 0.3913472999702208, "verify": 0.1370247000013478}
+  },
+  "checks": {"seconds": 5.35937570000533, "triangles": 136564, "vertices": 68276, "failed": [], "topology": {"triangles": 136564, "vertices": 68276, "boundary_edges": 0, "nonmanifold_edges": 0, "inconsistent_edges": 0, "nonmanifold_vertices": 0, "degenerate_triangles": 0, "duplicate_triangles": 0, "boundary_components": 1}, "float32": {"merged_vertices": 0, "degenerate_triangles": 0}, "self_intersections": {"counts": {"cross": 0, "touch": 0, "coplanar": 0, "fold": 0, "duplicate": 0}, "candidates": 1091753, "pairs": []}},
+  "standard": {"seconds": 11.492822800006252, "untriangulated": [74485], "topology": {"triangles": 136284, "vertices": 68149, "boundary_edges": 38, "nonmanifold_edges": 0, "inconsistent_edges": 0, "nonmanifold_vertices": 37, "degenerate_triangles": 0, "duplicate_triangles": 0, "boundary_components": 1}},
+  "peak_working_set_mb": 2226.122752
+}

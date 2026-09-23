@@ -171,7 +171,7 @@ mesh-world snapshotが無いため `replay_finalization.py` を finalize-input �
 これまで追ってきた `preserve-0`（保持7）・`exclude-0`（除外11）のくびれとは**別の場所**。
 原因・修正方針は次節「三角形分割に失敗する極小面」を参照。
 
-## 2026-09-22 三角形分割に失敗する極小面（原因調査・未修正）
+## 2026-09-22 三角形分割に失敗する極小面（原因調査。2026-09-23 に修正、下記）
 
 前節の面（`_face_map` 1始まりの添字74485。**`duocad/mesh_geometry.subshapes`（`TopExp_Explorer`、0始まり）
 で同じ添字を引くと隣の別の面を指すので注意** — 番号を突き合わせるときは常に `kernel._face_map`
@@ -200,8 +200,10 @@ mesh-world snapshotが無いため `replay_finalization.py` を finalize-input �
 | 同、角度・線形許容差を広げる（1e-3rad/1e-4mm） | `Standard_Failure: Courbes non jointives` で例外 |
 | `ShapeFix_FixSmallFace`（precision 0.001〜0.5mmで掃引） | precision 0.001/0.01ではこの面に触れず。**0.05以上では形状が無効になり、別の面が新たに失敗し始める**（改善ではなく破壊） |
 
-**未修正・方針検討中**。欠けた面自身の境界から三角形を組み立てる案だけでは、
-接続条件を満たしても幾何的な自己交差が残る（以下）。製品コードへの修復は未実装。
+**2026-09-23 修正済み**: 面分割の直前に境界折れ線の交差を独自に検査し、交差する辺を再分割してから分割する
+(`duocad/kernel_meshing.py`。実測と未検証事項は [TOPOPT_GAP_CAUSALITY.md「案Aの実装と実測」](TOPOPT_GAP_CAUSALITY.md#案aの実装と実測2026-09-23))。
+同じ保存済み最終形状で欠落0面・接続6項目0・三角形の自己交差0。以下はそれ以前の検討の記録。
+欠けた面自身の境界から三角形を組み立てる案だけでは、接続条件を満たしても幾何的な自己交差が残る（以下）。
 
 ### 追加調査の引き継ぎ（2026-09-22）
 

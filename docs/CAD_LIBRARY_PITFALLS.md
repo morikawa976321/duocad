@@ -50,6 +50,12 @@
   theta/delta を持つ)・svgpathtools 1.7.2・ocpsvg 0.6.0(SVG ↔ OCCT 形状)・svgwrite 1.4.3。
   `duocad/svg_import.py` はこれを前提に追加依存ゼロで書いてある。
 
+- **OCCT の面分割の内部モデル(`IMeshData_Model`)から取ったハンドルは、モデルより長生きさせるとプロセスごと落ちる**
+  (0xC0000005。モジュール変数に残す・context を先に捨てる、で再現)。寿命規則と解放順は
+  `duocad/kernel_meshing.py` のモジュール docstring と `_Model.close()`。`BRepMesh_Context` は OCP に無いので
+  標準の6部品を `IMeshTools_Context` に自分で組む(同ファイル `mesh_shape`)。OCCT 自身の境界交差検査が
+  5度未満・小面積の交差を捨てる話は [TOPOPT_GAP_CAUSALITY.md](TOPOPT_GAP_CAUSALITY.md)。
+
 ## STEP ファイル
 
 - **Fusion 360 のジェネレーティブデザイン結果を STEP で出すと長さ単位が `SI_UNIT(.CENTI.,.METRE.)`(cm)**

@@ -1,6 +1,6 @@
 # 穴口の微細隙間とメッシュ欠損の因果調査
 
-2026-09-23。製品コード未変更。実験・生データは `output/gap_causality_20260923/`。
+2026-09-23。「再現ファイル」までは製品コードを変更する前の調査で、末尾の「案Aの実装と実測」がその後の修正の記録。実験・生データは `output/gap_causality_20260923/`。
 対象は保存済み最終形状 `20260922T075258-e20ae028100d/000021-final-solid.json`、
 入力は最適化run `20260921T185659-b6799e00457d/input.json`。面番号はkernel._face_mapの1始まり。
 
@@ -151,3 +151,90 @@ ForceFaceDeflectionとDeflectionInteriorを変更した。
 
 最小例のパラメータ比較は `.venv/Scripts/python.exe output/gap_causality_20260923/parameters.py`。
 全形状の比較は末尾に `original` を付ける。形状を変更せず各回Cleanして再メッシュ化する。
+
+## 案Aの実装と実測（2026-09-23）
+
+[PLAN_ROBUST_BOUNDARY_MESHING.md](PLAN_ROBUST_BOUNDARY_MESHING.md) の案Aを製品に入れた。
+OCCT本体は改造していない。形状・フィレット・隙間・booleanの順序も変えていない。
+
+- `duocad/kernel_meshing.py`: `BRepMesh_IncrementalMesh` の一括呼び出しを、標準と同じ6部品を
+  `IMeshTools_Context` に組んだ段階制御に置き換えた（OCP に `BRepMesh_Context` は無い）。
+  `initParameters` の補完（DeflectionInterior・MinSize・AngleInterior）まで揃えたので、
+  交差の無い形状では三角形が一括呼び出しと完全一致する（`tests/test_kernel_meshing.py`）。
+  検査の保証点は PreProcessModel の後・DiscretizeFaces の前。再分割のたびに PreProcessModel をかけ直す
+  （円錐の seam に点を足すのがここで、再分割で2点に戻るため）。面分割後は全 pcurve の点数が検査時と
+  一致することを確かめる。
+- `duocad/boundary_check.py`（OCP非依存）: wire の構造で正当な共有端点を決め、線分の全対を
+  外接矩形の掃引で絞って向き判定で分類する。向き判定は Shewchuk の誤差境界で確定しない組だけ
+  整数演算へ落とす。固定εは使わない。連続する辺の端点が厳密一致しなければ `open` として報告する。
+- 再分割は OCCT の EdgeAmplifier と同じ（`Clear(True)` で端点を保ち、偏差を 1/3、最小サイズは
+  Precision::Confusion、点数は減らさない、3D を作り直して全 pcurve へ `Tessellate2d`）。
+  停止条件は解消・上限12巡・点列の無変化・状態の循環・点数予算。解消できない面は Failure にして
+  分割せず、`tessellate` の `untriangulated` と `boundary["unresolved"]` に残す。
+- `duocad/mesh_intersections.py`（OCP非依存）: 三角形メッシュの自己交差を、正当な共有辺・共有頂点の
+  接触を除いて向き判定だけで検出する。`finalize.solid_mesh` は接続6項目に加えてこれと、float32 に
+  丸めた座標での頂点一致・縮退を検査し、不合格なら例外にする。`meshbody.write_stl` は書く前に
+  float32 の縮退・非有限を検査し、既存ファイルに触れずに止める。
+
+### 実測
+
+保存済み最終形状（112,467面・171,794辺、偏差0.2 mm、角度0.35 rad、InParallel）。
+`topopt_checks/check_boundary_meshing.py --compare`、記録は `output/gap_causality_20260923/robust_meshing_final.json`。
+
+| | 標準の一括メッシャー | 段階制御＋境界交差の修復 |
+|---|---:|---:|
+| 三角形ゼロの面 | 74485 | なし |
+| 境界辺 / 非多様体辺 / 向き不整合 / 非多様体頂点 / 縮退 / 重複 | 38 / 0 / 0 / 37 / 0 / 0 | 0 / 0 / 0 / 0 / 0 / 0 |
+| 三角形の自己交差（貫通/接触/共面/折り返し/重複） | 3 / 2 / 1 / 0 / 0（`meshing_rethink_20260922/mesh_0.2.npz` で計測） | 0 / 0 / 0 / 0 / 0（候補 1,091,753 対） |
+| 三角形 / 頂点 | 136,284 / 68,149 | 136,564 / 68,276 |
+| 境界点 | 700,426 | 700,618 |
+| `tessellate` の秒 | 11.5 | 22.5 |
+
+修復の経過: 初回の全面検査で交差10件（356,838線分、0.56秒）。再分割した辺は13本（延べ37回）で7巡で解消。
+巡ごとの再検査面は 17・12・9・6・3・3・3。段階の秒は BuildModel 1.1・DiscretizeEdges 2.0・HealModel 0.08・
+PreProcessModel 0.06・**内部モデルからの pcurve 点列の取り出し 5.9**・検査 0.56＋最終全面検査 0.52・再分割 0.41・
+DiscretizeFaces 6.0・PostProcessModel 0.39・整合確認 0.14。残りの約5秒は面ごとの三角形の取り出し（従来と同じ）。
+成果物検査（接続6項目・float32・自己交差）は 5.4 秒。スクリプト全体のピーク常駐メモリ 2.2 GB
+（128 MB の JSON 読み込みと標準メッシャーの比較を含む。検査単体の増分は測っていない）。
+負荷のある環境では取り出しが 11 秒まで伸びた（同じ日の別計測）。
+
+最小例と局所形状（`tests/fixtures/gap_*.brep`。`tests/test_kernel_meshing.py` が固定）:
+
+| 形状 | 偏差 | 標準（境界辺/非多様体頂点） | 検出 | 再分割 | 結果 |
+|---|---:|---|---|---|---|
+| 3面ソリッド | 0.2 | 6 / 7 | 平面で辺1・2の交差1 | 1巡・2辺、点34→52 | 接続6項目0、三角形70 |
+| 同 | 0.05 | 6 / 7 | 同 | 2巡・2辺、点34→60 | 0、三角形90 |
+| 同 | 0.01 | 0 / 0 | なし | なし | 一括と一致 |
+| 平面−0.01 mm、r2.6 | 0.2 | 5 / 5 | 1 | 1巡・2辺 | 0 |
+| 平面0、r2.599 | 0.2 | 20 / 28 | 1 | 1巡・3辺 | 0 |
+| 同 | 0.01 | 37 / 37 | 1 | 1巡・2辺 | 0 |
+| 平面0、r2.59（対照） | 0.2 | 0 / 0 | なし | なし | 一括と三角形が一致 |
+
+箱・円柱（seam・2辺wire）・球（極）・円錐（seam）・トーラス・穴あき板・開いた1面では交差を誤報せず、
+三角形が一括メッシャーと一致する。蝶ネクタイ形の自己交差する wire は直線の辺なので再分割で点列が変わらず、
+1巡で `no_change` として止まり、その面だけ分割されずに報告される（他の面は分割する）。
+
+### 分かった落とし穴
+
+- 内部モデルのハンドル（面・辺・pcurve）をモデルより長生きさせると解放時に 0xC0000005 で落ちる
+  （`output/gap_causality_20260923/handle_lifetime.py` で再現。前回の `internal.py` の native 終了もこれが疑わしい）。
+  製品では派生ハンドルを1オブジェクトに閉じ、pcurve→辺→面→モデル→context の順に手放す。
+- OCCT の healer が再分割に使う最小サイズは Precision::Confusion で、context の既定 MinSize（0.1×偏差）
+  ではない。既定のまま再分割すると細分できない。
+- `IMeshData_Face.IsEqual` は状態フラグの比較で、面の同一性ではない。pcurve と wire の対応は
+  `GetFace().GetFace().IsSame` と向きで取る。
+- 純Pythonで面ごとに numpy を呼ぶと 112k 面で 42 秒かかった。全面を1本の配列に詰めて掃引すると 0.56 秒。
+
+### 未検証・注意
+
+- 有限回で必ず収束する保証はない。接する2曲線の最初の弦の角度が曲率比で決まる構図では、両辺を同じ比で
+  細分しても交差が残りうる（解析的な推定で、実測はしていない）。上限12巡は今回7巡で足りた値で、
+  超えた場合は未解決として分割せず報告する。
+- 検査は OCCT の healer が端点を接続した後の点列を前提にする。接続されない wire（CAD で頂点を共有しない）は
+  `open` として分割対象から外れる。INTERNAL の辺は接続の期待から外しただけで、実物では試していない。
+- 三角形の自己交差検査は float32 に丸めた座標でだけ行う（画面もSTLも float32 で消費するため）。
+  float64 側は接続6項目のみ。
+- 球の極では標準の OCCT が縮退三角形を出す（`test_kernel_meshing` の球で標準と一致するが接続検査は0でない）。
+  汎用の `tessellate` は従来どおり通し、厳格な `solid_mesh` は不合格にする。
+- 112k 面の形状では `tessellate` が約11秒遅くなり、画面のズームで再分割する経路も同じだけ遅くなる。
+  取り出し 5.9 秒は pcurve 点ごとの OCP 呼び出しで、この版の OCP に一括取得の口は無い。

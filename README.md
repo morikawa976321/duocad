@@ -221,6 +221,9 @@ cd web; npm run dev                                 # 画面(5173)
 # CPU並列化
 & .\.venv\Scripts\python.exe topopt_checks\check_parallel.py
 
+# 保存済み最終ソリッドの三角形分割: 境界交差の検出・共有辺再分割・接続6項目・自己交差・float32(実モデル。--compare で標準メッシャーと並べる)
+& .\.venv\Scripts\python.exe topopt_checks\check_boundary_meshing.py --brep-json output\finalization_checks\<run>\000021-final-solid.json --out output\gap_causality_20260923\robust_meshing_final.json --compare
+
 # duocad本体への配線(4条件 -> 塊 -> 二値探索 -> メッシュボディ)
 & .\.venv\Scripts\python.exe topopt_checks\check_optimize_wiring.py
 ```
@@ -372,7 +375,7 @@ README に残すのはアーキテクチャ上の要点だけ:
 
 ### モジュールとimport境界
 
-**`duocad/` 配下で `OCP` を import してよいのはカーネル層の3本(`kernel.py` / `kernel_brep.py` / `mesh_geometry.py`)と `topopt/voxelize.py` だけ、
+**`duocad/` 配下で `OCP` を import してよいのはカーネル層の4本(`kernel.py` / `kernel_brep.py` / `kernel_meshing.py` / `mesh_geometry.py`)と `topopt/voxelize.py` だけ、
 `build123d` は `query.py` と `topopt/` の3本だけ。**
 `tests/test_boundaries.py` がソースを再帰的に静的走査して機械的に検査する（動的importも検出）。
 **verbがカーネルを直接叩き始めるのを防ぐ唯一の安全網。**
@@ -394,6 +397,9 @@ README に残すのはアーキテクチャ上の要点だけ:
 | `duocad/kernel.py` | OCCTを直接叩く層（テセレーションもここ） | **○** | ✗ |
 | `duocad/kernel_brep.py` | 同じカーネル層。生成CADのBRep保存・ブーリアン・最終ソリッドの幾何検査 | **○** | ✗ |
 | `duocad/mesh_geometry.py` | 同じカーネル層。三角形境界の接続検査と、向き・空洞を保ったCADソリッド化 | **○** | ✗ |
+| `duocad/kernel_meshing.py` | 同じカーネル層。OCCTの面分割を段階制御し、面分割の直前に境界折れ線の交差を検査して共有辺を再分割する(`tessellate` の実体) | **○** | ✗ |
+| `duocad/boundary_check.py` | 境界折れ線(pcurve の離散点列)の交差・接触・重なりの判定。固定εを使わず、確定しない組だけ整数演算 | ✗ | ✗ |
+| `duocad/mesh_intersections.py` | 三角形メッシュの自己交差(正当な共有辺・共有頂点の接触を除く)。最終成果物の検査 | ✗ | ✗ |
 | `duocad/session.py` | `Session`（1つの文書を持つサーバ側の状態。verbの呼び出し・選択・保存/開く。**配りものは持たず `view` へ委譲**） | ✗ | ✗ |
 | `duocad/view.py` | `DocumentView`（**配りもの**＝状態配信・版・テセレーション/辺/頂点/体積/スケッチのキャッシュ。文書を変えない） | ✗ | ✗ |
 | `duocad/paths.py` | `REPO_ROOT` と、そこから出る既定の置き場（`web/dist` / `models`） | ✗ | ✗ |
