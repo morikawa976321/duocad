@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 import hashlib
+import json
 from pathlib import Path
 import struct
 import sys
@@ -170,6 +171,9 @@ def main(argv=None):
     source.add_argument('--mesh', type=Path, help='ワールド座標[mm]の最終STL。自動修復しない')
     source.add_argument('--mesh-body', help='条件文書内の最終メッシュボディID')
     source.add_argument('--solid-body', help='文書内の最終CADソリッドID（水密・単一ソリッドを直接検査）')
+    source.add_argument('--solid-snapshot', type=Path,
+                        help='記録の final-solid スナップショット（{"brep": ...} の JSON）。結果はメッシュボディで入るので、'
+                             'ブーリアン後の B-rep を直接検査するときはこちら')
     parser.add_argument('--out', type=Path, required=True, help='判定JSONの保存先')
     args = parser.parse_args(argv)
     session = Session(None, 0.2, models_dir=args.model_dir)
@@ -182,15 +186,20 @@ def main(argv=None):
         document = session.document
         preserve = [(bid, document.get_body(bid).shape) for bid in document.optimize.preserve_bodies]
         exclude = [(bid, document.get_body(bid).shape) for bid in document.optimize.exclude_bodies]
-        if args.solid_body:
+        if args.solid_body or args.solid_snapshot:
             if args.check_constraints:
-                raise ValueError('--solid-body は水密・単一ソリッドの検査用です')
-            from duocad.kernel_brep import inspect_solid, encode_brep
-            shape = document.get_body(args.solid_body).shape
+                raise ValueError('--solid-body / --solid-snapshot は水密・単一ソリッドの検査用です')
+            from duocad.kernel_brep import inspect_solid, encode_brep, decode_brep
+            if args.solid_body:
+                shape = document.get_body(args.solid_body).shape
+                source_info = dict(body=args.solid_body)
+            else:
+                shape = decode_brep(json.loads(args.solid_snapshot.read_text(encoding='utf-8'))['brep'])
+                source_info = dict(path=str(args.solid_snapshot.resolve()))
             diagnostics = inspect_solid(shape)
             report = finish(dict(checks={key: dict(label=LABELS[key], status='pass' if diagnostics[key] else 'fail')
                                          for key in ('watertight', 'single_solid')}, solid=diagnostics))
-            source_info = dict(body=args.solid_body, sha256=hashlib.sha256(encode_brep(shape).encode('ascii')).hexdigest())
+            source_info['sha256'] = hashlib.sha256(encode_brep(shape).encode('ascii')).hexdigest()
         elif args.mesh:
             vertices, faces = read_stl(args.mesh)
             source_info = dict(path=str(args.mesh.resolve()), sha256=hashlib.sha256(args.mesh.read_bytes()).hexdigest())
@@ -202,7 +211,7 @@ def main(argv=None):
             vertices, inverse = np.unique(triangles.reshape(-1,3), axis=0, return_inverse=True)
             faces = inverse.reshape(-1,3)
             source_info = dict(body=args.mesh_body, sha256=hashlib.sha256(triangles.tobytes()).hexdigest())
-        if not args.solid_body:
+        if not (args.solid_body or args.solid_snapshot):
             report = evaluate(vertices, faces, preserve, exclude, check_constraints=args.check_constraints,
                               progress=lambda message: print(message, file=sys.stderr, flush=True))
         report.update(model=args.model, model_sha256=hashlib.sha256(model_path.read_bytes()).hexdigest(), source=source_info)

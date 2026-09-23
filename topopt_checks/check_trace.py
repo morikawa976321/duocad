@@ -51,14 +51,18 @@ def verify_archive(path):
     saved=Session(None,.2,models_dir=path)
     saved.open_document('document_after.json')
     body=saved.document.get_body(result['body_id'])
-    from duocad.topopt.finalize import solid_mesh
-    from duocad.kernel_brep import inspect_solid
-    vertices, faces = solid_mesh(body.shape)
-    assert np.allclose(vertices,final['vertices'],rtol=0,atol=1e-12)
+    # 結果は `solid_mesh` が合格させた三角形のメッシュボディ(docs/TOPOPT.md「結果は編集可能ソリッドとして持たない」)。
+    # 文書の三角形と記録の final-mesh-world が一致し、ブーリアン後の B-rep は final-solid スナップショットが持つ。
+    from duocad.kernel_brep import inspect_solid, decode_brep
+    assert body.kind=='mesh' and body.mesh is not None
+    vertices=np.asarray(body.mesh.positions).reshape(-1,3)
+    faces=np.asarray(body.mesh.indices).reshape(-1,3)
+    assert np.array_equal(vertices,final['vertices'])
     assert np.array_equal(faces,final['faces'])
-    assert inspect_solid(body.shape)['watertight']
-    assert inspect_solid(body.shape)['single_solid']
     assert records('preserve-fuse') and records('final-solid')
+    solid=decode_brep(records('final-solid')[0]['brep'])
+    assert inspect_solid(solid)['watertight']
+    assert inspect_solid(solid)['single_solid']
     v,f=read_stl(path/'final.stl')
     assert np.array_equal(v[f],final['vertices'][final['faces']])
     assert (path/'source.zip').is_file() and list((path/'cad').glob('*.step'))

@@ -98,8 +98,9 @@ surface = build_surface_from_mask(**record)
 取得できれば `*-rejected` も保存する。
 新しい記録の `pre-boolean-mesh-world` が平滑化前後の頂点、`final-mesh-world` が
 ブーリアン後CADの三角形分割。両者の面接続は同じとは限らない。
-正本のCADは `document_after.json` の `add_solid_body` 操作に含まれ、
-`--solid-body <body-id>` で直接検査できる。
+結果は `document_after.json` に `add_mesh_body` 操作(合格した三角形)として入る(2026-09-23 から。
+それ以前の記録は `add_solid_body` で B-rep が入っている)。ブーリアン後の B-rep は `final-solid` スナップショットで、
+`check_final_shape.py --solid-snapshot <NNNNNN-final-solid.json>` で直接検査できる(古い記録は `--solid-body <body-id>`)。
 
 ## 費用と障害
 

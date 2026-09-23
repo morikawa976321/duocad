@@ -97,6 +97,14 @@ def test_generated_document_and_two_condition_cli(tmp_path):
     report = json.loads(out.read_text(encoding='utf-8'))
     assert set(report['checks']) == {'watertight', 'single_solid'}
     assert report['solid']['solids'] == 1
+    # 結果がメッシュボディで入るようになってからは、ブーリアン後の B-rep は記録の final-solid で検査する
+    snapshot = tmp_path/'000009-final-solid.json'
+    snapshot.write_text(json.dumps(dict(brep=encode_brep(box((0, 0, 0), (2, 3, 4))))), encoding='utf-8')
+    out2 = tmp_path/'acceptance2.json'
+    assert check.main(['--model-dir', str(recorder.path), '--model', 'document_after.json',
+                       '--solid-snapshot', str(snapshot), '--out', str(out2)]) == 0
+    report2 = json.loads(out2.read_text(encoding='utf-8'))
+    assert report2['status'] == 'pass' and report2['source']['path'] == str(snapshot.resolve())
 
 
 # ---------------------------------------------------------------- 最終メッシュの成果物検査

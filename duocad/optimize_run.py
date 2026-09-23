@@ -1182,10 +1182,15 @@ def _run(
                      final_vertices=final_vertices, final_faces=final_faces)
 
     name = _unique_result_name(doc)
-    pump.emit(phase="insert", message="保持・除外を反映したCADソリッドを足す")
-    from .verbs import add_solid_body
+    pump.emit(phase="insert", message="保持・除外を反映した結果をメッシュボディとして足す")
+    from .verbs import add_mesh_body
 
-    body_id = add_solid_body(doc, shape, name=name)
+    # 結果は編集可能ソリッドとして持たない(2026-09-23 本人判断)。文書に入るのは `solid_mesh` が
+    # 合格させた三角形で、画面・STL はそれをそのまま使う(再テセレーションも B-rep の保存も無い)。
+    # ブーリアン後の B-rep 自体は記録の `final-solid` スナップショットにだけ残る(finalize._save_shape)。
+    # 112k 面の B-rep を `add_solid_body` で入れると、操作ログに 128 MB のテキストが載り、開くたびに
+    # BRepCheck が走り、画面は面ごとの Mesh を 22 万個作っていた(docs/TOPOPT.md「結果の表現」)。
+    body_id = add_mesh_body(doc, positions, indices, name=name)
 
     return dict(
         common,
