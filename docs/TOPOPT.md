@@ -82,8 +82,16 @@ SHA-256 は振れない)。**解法・前処理の改良は CG 反復数の差�
 128 MB の B-rep テキストが載り、開く・再生のたびに BRepCheck が走り、画面は面ごとの Mesh と境界線を 22 万個
 作ってカメラが回らず、カメラが止まるたびに 22〜45 秒の再テセレーションを要求していた。メッシュボディなら
 1 Mesh・再テセレーション無し・STL は合格した三角形そのもの。失うのは結果の STEP 書き出しと面単位の選択・
-問い合わせで、112k 面の B-rep は STEP にしても実用にならない。最終処理そのものをメッシュ集合演算にする案は
-[TOPOPT_MESH_BOOLEAN_STUDY.md](TOPOPT_MESH_BOOLEAN_STUDY.md)(未採用)。
+問い合わせで、112k 面の B-rep は STEP にしても実用にならない。
+
+**最終処理そのものをメッシュ集合演算へ置き換える判断基準**(2026-09-23 本人判断):
+
+> OCCTブーリアンの失敗が頻発するなら最終処理をメッシュに置き換えよう。
+
+置き換え先の案と実測は [TOPOPT_MESH_BOOLEAN_STUDY.md](TOPOPT_MESH_BOOLEAN_STUDY.md)(未採用)。置き換えるときは
+除外の外接近似(内接だと結果が除外 CAD の内側に入る)とメッシュ用の受入検査を先に決める。失敗の頻度を見る場所は
+記録の `material-cut-diagnostics` / `preserve-fuse-diagnostics`(`has_errors` と、`inspect_solid` で裏を取っても
+不合格になった `*-rejected`)。
 
 ## 設計空間をB-repから起こす(voxelize.py)
 
