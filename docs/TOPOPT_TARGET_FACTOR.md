@@ -55,9 +55,9 @@
 `duocad/catalog.py`(引数の名前と表示名「目標安全率」。実際の目標)・`web/src/session.ts`(結果の型。2項目を足した)。利用者に見えるのは実際の目標だけで、探索時の目標は上の進行メッセージ・警告・結果の通知にだけ出る。
 
 **測定スクリプトは係数 1.0 で走る。** `topopt_checks/` のうち `optimize_run._build_search_conditions` を通るもの
-(`measure_min_width_floor.py`・`measure_min_width_keep_exempt.py`・`measure_keep_forced.py`・`_hanger_setup.py`(`measure_cg_convergence.py`・`measure_direct_vs_cg.py` が使う)・`measure_region_overlaps.py`・`diagnose_initial_space.py`・`verify_hanger_fix.py`)は
+(`measure_min_width_floor.py`・`diagnose_initial_space.py`・`verify_hanger_fix.py`。同じ規約で走っていた使い捨ての測定スクリプトは削除済み)は
 `OptimizeOptions(..., search_target_factor=1.0)` を渡す。**`--target` は従来どおり「探索に渡す目標」そのもの**(節N・O の再現手順の意味が変わらない。係数が二重に掛かることも無い)。
-`measure_inner_target_synthetic.py`・`refine_adopted_mask.py` などは `SearchConditions` を直接作るので係数の影響を受けない。
+`refine_adopted_mask.py`(と削除済みの `measure_inner_target_synthetic.py`)などは `SearchConditions` を直接作るので係数の影響を受けない。
 
 ## 2. なぜ 2.4 か
 
@@ -68,7 +68,7 @@
 ### 2.1 直線部材の理論値との比(実測 ÷ 理論値。真値がある)
 
 m セル角の棒(長さ 16m)・m セル厚の板(幅 8m)。端の塊から離れた区間(全長の 30〜70%)の 99.5% 点を、その区間の表面の最大の理論値で割った。
-表の各欄は「k=1 ÷ 理論値 / **倍率(その逆数)** / 最も細かい k での 理論値との比」。測定は `topopt_checks/measure_member_refinement_ratio.py`(§6)。
+表の各欄は「k=1 ÷ 理論値 / **倍率(その逆数)** / 最も細かい k での 理論値との比」。測定は `topopt_checks/measure_member_refinement_ratio.py`(削除済み。§6)。
 
 | 部材・荷重 | m=2 | m=3 | m=4 | m=5 |
 |---|---|---|---|---|
@@ -153,7 +153,7 @@ m セル角の棒(長さ 16m)・m セル厚の板(幅 8m)。端の塊から離�
 - 首(2.42・上昇中)は直線部材より悪い。規則の強化(S(m)。節M)で形として消える前提なら、係数の根拠からは外せる。**2.4 が覆わないもの**: この首の 99.5% 点(2.42)と、最大値の比(首の曲げ 2.83 など)。
 - 記録の丸め: 対話セッションの集約は、空間対角の軸力(m=2)の k=3 を 1.91、首の曲げ(m=3)の最大を 2.02 としたが、生データは 1.905(=1.90)・2.015(=2.01)。
 
-### 4.3 片持ち梁で要素の定式化だけ替えた測定(`measure_element_locking.py`)
+### 4.3 片持ち梁で要素の定式化だけ替えた測定(`measure_element_locking.py`。削除済み)
 
 片持ち梁(長さ:せい:幅 = 16n:n:2n、n=1〜8 層)。`std` は現行の完全積分 trilinear hex、`im` は非適合モード要素(静的縮約)。**評価は要素中心**(`centre`)と**面中心**(`face`。`im` はモードの寄与を含む)。
 
@@ -208,8 +208,8 @@ m セル角の棒(長さ 16m)・m セル厚の板(幅 8m)。端の塊から離�
 .\.venv\Scripts\python.exe topopt_checks\measure_thickness_along_search.py --run output\min_width\projected-peel-20260920\runs\project_m2 --out C:\tmp\thickness_along_search.json
 ```
 
-- `measure_member_refinement_ratio.py` は k=1〜4。**直接解法で k=6 まで回さない**(1本 3〜4GB。6,000 要素以上は CG)。
-- 節N・O の測定(`measure_min_width_floor.py`・`measure_inner_target_synthetic.py`)は `--target` に**探索に渡す目標そのもの**を取る(係数 1.0 で走る。§1.2)。再現手順は `docs/TOPOPT_THICKNESS.md` 節N・O。
+- `measure_member_refinement_ratio.py`(削除済み) は k=1〜4。**直接解法で k=6 まで回さない**(1本 3〜4GB。6,000 要素以上は CG)。
+- 節N・O の測定(`measure_min_width_floor.py`・`measure_inner_target_synthetic.py`〈削除済み〉)は `--target` に**探索に渡す目標そのもの**を取る(係数 1.0 で走る。§1.2)。再現手順は `docs/TOPOPT_THICKNESS.md` 節N・O。
 - 配線の検査: `tests/test_optimize_backend.py` の5本(既定で 実際の目標 × 2.4・係数 1.0 で従来と同じ値・結果 dict の3項目・1.0 未満と非有限の拒否・失敗文言)。
   **m=1 の警告の検査は削除した(2026-09-22)** —— 最小幅の既定が変わり m=1 に到達できなくなったため(§1.2)。
   端から端まで通す `topopt_checks/check_optimize_wiring.py` は「探索時の目標を満たす」を見る。

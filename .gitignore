@@ -15,13 +15,13 @@ dist/
 # モデルファイル（リポジトリ直下の models/ だけ）
 /models/
 
-/output/optimization_runs/
-/output/finalization_checks/
-
 # Claude Code のローカル設定(この端末だけの許可リスト)。`.claude/` ごとは無視しない ——
 # 共有したいフック・エージェント定義を後から置けるようにする。
 /.claude/settings.local.json
 
-# 測定用のボクセルSTL
-/output/min_width/
-/output/warm_start_shape/
+# 測定・実験の出力(リポジトリ直下の output/ だけ。duocad/topopt/output/ の検査成果物は追跡する)。
+# docs は結論と再現コマンドを持ち、生データは持たない —— 生データは再実行で作り直す。
+/output/
+
+# 実機に流した成果物のSTL(リポジトリ直下に落ちるもの)
+/*.stl

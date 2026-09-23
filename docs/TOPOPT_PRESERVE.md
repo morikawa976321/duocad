@@ -17,7 +17,7 @@
 変更前の探索は保持セルを削除候補から外していなかった(`ranked_cells` は全材料セルを並べ、`peel` は保持かどうかを見ない)。
 保持を守るのは合格条件(3)だけで、最終形状では `finalize` が保持の実形状を union し、除外の実形状を cut する。その後に FEM は解き直さない。
 
-`topopt_checks/measure_keep_forced.py`。結果は `output/keep_forced/steps123.json`・`steps45.json`(git 管理外)。
+`topopt_checks/measure_keep_forced.py`(削除済み)。結果は `output/keep_forced/steps123.json`・`steps45.json`(git 管理外)。
 
 **条件**: hanger、実 spacing 2.387506mm、格子 69×130×101、設計空間 377,075 セル、**保持 1,498 セル**
 (保持ボディ4つ: 1,276 + 74 + 74 + 74)、目標 2.0。条件面の確定表は探索と同じ(`_map_boundary_conditions`)。

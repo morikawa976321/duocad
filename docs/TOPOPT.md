@@ -934,7 +934,7 @@ keep = table.element_mask([face_a, face_b])               # 荷重・拘束の�
 接する節点を拾う。したがって拾った節点の一部は、その面を持つボディの材料ではなく、設計空間の
 他の場所(最適化で消えうる一般材料)の節点でありうる。これから入れようとしている変更(節点を
 「その面のボディ由来の材料」に限る)が実機でどれだけ挙動を変えるかを、入れる前に測った
-(`topopt_checks/measure_anchor_node_ownership.py`。2026-09-18 に入った門「拘束面・荷重面は
+(`topopt_checks/measure_anchor_node_ownership.py`(削除済み)。2026-09-18 に入った門「拘束面・荷重面は
 保持ソリッドの面に限る」(`9f25371`)の後の状態)。
 
 **測り方**: 「そのボディ由来」は `optimize_run._region_representation` と同じ式
@@ -980,7 +980,7 @@ keep = table.element_mask([face_a, face_b])               # 荷重・拘束の�
 作用位置のずれ(`centroid_shift_mm`)は2.4mmで0.033〜0.211mm・下限で0.032〜0.185mm(許容
 = `anchor.position_limit` = 探索半径そのもの、2.4mmでは2.387506mm・下限では1.874852mm)。
 
-**合成題材(cube/cylinderボス、前タスク `measure_small_keep_bodies.py` の `build_small_case` を
+**合成題材(cube/cylinderボス、前タスク `measure_small_keep_bodies.py`(削除済み) の `build_small_case` を
 再利用、s=5mm・固定パッド10×10×10mm・z_shift無し・荷重は対象自身の上面)**: 2.4mm(実測
 2.375mm・要素3,056)では hanger と同様に**節点・面積とも100%がそのボディ由来**。**1.2mm(実測
 1.209091mm・要素22,996)で乖離が出た**:
@@ -1041,7 +1041,7 @@ cube・cylinderともfixed/loadの両条件で pass**(reasons 空)のままだ�
 自身がその解像度を要求できないため**測れていない**。合成題材では、制限で節点の6割超を失っても
 `condition_mapping` は pass のままだった(上記)。
 
-再現手順: `.venv\Scripts\python.exe topopt_checks\measure_anchor_node_ownership.py --out <path>`
+再現手順(スクリプトは削除済み): `.venv\Scripts\python.exe topopt_checks\measure_anchor_node_ownership.py --out <path>`
 (実測: 全体で約20秒。`--skip-hanger` / `--skip-synthetic` / `--skip-synthetic-fine` で部分実行可。
 `--out` を渡さなければ標準出力にJSONを書くだけで、`output/` を含めどこにもファイルを残さない)。
 
