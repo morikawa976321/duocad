@@ -12,6 +12,7 @@
 | **形状探索の時間短縮**(内訳・候補評価の費用) | [TOPOPT_SPEED.md](TOPOPT_SPEED.md) |
 | **最小幅保証の実測**(節I〜N) | [TOPOPT_THICKNESS.md](TOPOPT_THICKNESS.md) |
 | **探索目標係数2.4の根拠** | [TOPOPT_TARGET_FACTOR.md](TOPOPT_TARGET_FACTOR.md) |
+| **段階4の打ち切り(issue #22)の判断材料**(終盤の力学の実測・候補規則の後付け試算) | [TOPOPT_STOP_RULE.md](TOPOPT_STOP_RULE.md) |
 
 **コードは `duocad/topopt/`、受入検査は `topopt_checks/`(`duocad/` の外)、画面と撮影は `web/` にある。**
 
