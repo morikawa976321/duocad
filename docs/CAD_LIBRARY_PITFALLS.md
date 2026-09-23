@@ -59,7 +59,7 @@
 ## STEP ファイル
 
 - **Fusion 360 のジェネレーティブデザイン結果を STEP で出すと長さ単位が `SI_UNIT(.CENTI.,.METRE.)`(cm)**
-  になる。同じ設計の入力 STEP は mm なので入力と出力で単位が食い違う(2026-08-24 実測: 入力
+  になる。同じ設計の入力 STEP は mm なので入力と出力で単位が食い違う(実測: 入力
   `shelf_attachment.step` は mm、GD 結果 `shelf_attachment_8.step` は cm。座標を mm と読むと
   11.6×15.5×51.3 に見え、正しくは 60×154×113mm)。**1/10 でもスライサのビルドボリュームに収まるので
   エラーにならず気づきにくい。** 読み込んだ直後に実寸を確かめる。単位宣言は
@@ -102,7 +102,7 @@
   入っていないもの: trimesh・pyvista・vtk・gmsh・matplotlib・numba・cupy・torch・pyamg・scikit-sparse・meshio。
 - **検査の在庫は `.\.venv\Scripts\python.exe -m pytest -q --collect-only` で数える。**
   在庫は `--collect-only`、**契約と「なぜその形か」は各モジュールの docstring** —— 片方を
-  もう片方の代わりにしない。契約を散文でまとめた `tests/README.md` は 2026-09-18 に削除した
+  もう片方の代わりにしない。契約を散文でまとめた `tests/README.md` は削除した
   (中身をコードのそばへ移した。別ファイルに置くと、コードを変える人の視界に入らないまま
   後追いで同期することになり、実際に実装と食い違う記述が5件たまった)。
 - **`importlib` でファイル1つだけを単体ロードして `@dataclass` を使うなら、`exec_module` より前に
