@@ -1248,6 +1248,27 @@ def test_repeated_unsolvable_candidates_stop_the_reduction_and_keep_the_best_sha
     assert result.best_feasible is not None and result.status == 'feasible'
 
 
+def test_a_prerequisite_failure_is_not_counted_as_an_evaluation_error(monkeypatch):
+    """落ちたら、幾何で落ちて安全率まで進まなかった候補(`prerequisites_failed`)まで評価不能として数えている。"""
+    conditions, design, _ = appendage_conditions()
+    original = acceptance.inspect
+
+    def prerequisites_fail(material, before, grid, **kwargs):
+        if kwargs.get('fields') is not None and material.sum() < design.sum() - 6:
+            report = original(material, before, grid, **{**kwargs, 'fields': None})
+            report['checks']['safety'] = dict(status='unknown', reason='prerequisites_failed')
+            report['status'] = 'unknown'
+            return report
+        return original(material, before, grid, **kwargs)
+
+    monkeypatch.setattr(acceptance, 'inspect', prerequisites_fail)
+    result = bs.find_best_feasible(design, conditions, max_evaluations=400, evaluation_error_patience=2)
+    reduction = result.diagnostics['reduction']
+    assert sum(1 for step in reduction['steps'] if step['outcome'] == 'rejected') >= 2  # スタブが効いている
+    assert reduction['evaluation_errors'] == 0
+    assert reduction['stop_reason'] != 'repeated_evaluation_error'
+
+
 @pytest.mark.parametrize('patience', [0, -1, 1.5, '2', True, False])
 def test_evaluation_error_patience_must_be_a_positive_integer_or_none(patience):
     conditions, design, _ = appendage_conditions()

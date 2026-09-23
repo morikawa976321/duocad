@@ -1,11 +1,14 @@
 """実製品の1実行に閉じた診断記録。配列は損失なし・内容ハッシュで重複排除する。
 
 ContextVarは製品の実行器スレッド内だけに設定する。数値関数を単独で呼ぶと記録しない。
-**保存の失敗で計算を止めない**(記録は best effort)。記録は診断のための仕組みであり、解けた形状を
-捨てる権利を持たない —— `arrays/` が実行中に消えて `OSError` が `acceptance.safety_check` の
-`except Exception` に落ち、FEMが解けている候補を20回続けて「安全率を計算できず」で不合格にした
-実績がある(2026-09-24)。失敗は握りつぶさず `write_failures` に数えて manifest と stderr へ出し、
-記録が欠けた実行を無傷に見せない。
+**スナップショットとイベントの保存が失敗しても計算を止めない**(`snapshot` / `event` / `_manifest` は
+best effort)。記録は診断のための仕組みであり、解けた形状を捨てる権利を持たない —— `arrays/` が実行中に
+消えて `OSError` が `acceptance.safety_check` の `except Exception` に落ち、FEMが解けている候補を20回
+続けて「安全率を計算できず」で不合格にした実績がある(2026-09-24)。失敗は握りつぶさず `write_failures`
+に数えて manifest と stderr へ出し、記録が欠けた実行を無傷に見せない。
+**`provenance` / `document` / `final_mesh` の直接の書き出しはこの扱いに入れていない**(探索の候補評価では
+なく、実行の前後で1回ずつ走る経路)。`_encode` の `TypeError` も伝える —— 記録できない値を渡したのは
+こちらの書き方の誤りで、飲むと永久に気づけない。
 """
 from __future__ import annotations
 

@@ -580,9 +580,10 @@ DEFAULT_SINGLE_CELL_PATIENCE: Optional[int] = 16
 #: 目標/安全率 だけで決まるから(探索時の目標の係数を掛けても意味が変わらない)。製品経路の 1.87mm の実行では、
 #: 目標の +0.13% に入った後の FEM 81 回で減ったのは 0.27% だった(計画書 §12.12。0.01 は本人判断)。
 DEFAULT_TARGET_TOLERANCE: Optional[float] = 0.01
-#: 安全率を**計算できない**(`checks['safety']` が `unknown`)候補が何回続いたら段階4を打ち切るか(`None` は見ない)。
-#: 安全率が目標に届かない不合格(`fail`)とは別に数える —— あちらは形状の判定だが、こちらは判定そのものが
-#: 出ていない。**4 は実測で決めていない暫定値**(2026-09-24)。記録の I/O を計算から切り離した後に残る
+#: 安全率の**評価が落ちた**(`checks['safety']` が `unknown` かつ `reason='evaluation_error'`)候補が
+#: 何回続いたら段階4を打ち切るか(`None` は見ない)。安全率が目標に届かない不合格(`fail`)とも、水密・単一成分・
+#: 条件面が先に落ちて安全率まで進まなかった `prerequisites_failed` とも別に数える —— どちらも形状の判定だが、
+#: こちらは判定そのものが出ていない。**4 は実測で決めていない暫定値**(2026-09-24)。記録の I/O を計算から切り離した後に残る
 #: `evaluation_error` はソルバの発散など形状依存なので次の候補を試す価値がある一方、1候補の求解に 35 秒
 #: かかる実測があり、`DEFAULT_SINGLE_CELL_PATIENCE`(16) と同じだけ費やす理由が無い、という判断。
 DEFAULT_EVALUATION_ERROR_PATIENCE: Optional[int] = 4
@@ -966,8 +967,9 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     `rejected` の形がもう一度できたら(順位が尽きて `k` を減らしたとき、別のセルの巻き添えが同じ一口になったとき)
     FEMを解かずに、同じ手順で次へ進む。安全率で落ちたセルが
     採用を挟まず `single_cell_patience` 個に達したら `stop_reason='safety_at_single_cell'` で `converged`
-    (`None` は数えない)。計算失敗・保持の重なりの不合格は数えない。**安全率が取れない候補**(`checks['safety']`
-    が `unknown`)は別に数え、採用を挟まず `evaluation_error_patience` 回続いたら
+    (`None` は数えない)。計算失敗・保持の重なりの不合格は数えない。**評価が落ちた候補**(`checks['safety']` が
+    `unknown` かつ `reason='evaluation_error'`。`prerequisites_failed` は形状の不合格なので入らない)は
+    別に数え、採用を挟まず `evaluation_error_patience` 回続いたら
     `stop_reason='repeated_evaluation_error'` で `evaluation_error`(`None` は数えない。合格形状は返す)。
     順位を歩いて1セルも抜けなければ
     `converged`(`no_removable_cell`)。合格形状の安全率が `目標 × (1 + target_tolerance)` 以下なら、候補を作らずに
@@ -1102,7 +1104,11 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             else:
                 failed.extend(name for name, check in report['checks'].items() if check.get('status') != 'pass')
                 safety_failed = report['checks']['safety'].get('status') == 'fail'
-                safety_unknown = report['checks']['safety'].get('status') == 'unknown'
+                # `unknown` には**評価が落ちた**(`evaluation_error`)のと、水密・単一成分・条件面が先に
+                # 落ちて安全率まで進まなかった(`prerequisites_failed`)のがある。後者は形状の不合格
+                # なので数えない —— 混ぜると、幾何で落ちる候補が続いただけで打ち切ってしまう。
+                safety_unknown = (report['checks']['safety'].get('status') == 'unknown'
+                                  and report['checks']['safety'].get('reason') == 'evaluation_error')
         step.update(trials=[trial.index], outcome='accepted' if accepted is not None else 'rejected',
                     failed=sorted(set(failed)))
 
