@@ -216,3 +216,24 @@ def test_selective_split_path_reports_both_passes():
     assert len(payload['boundary']['passes']) == 2
     assert payload['boundary']['termination'] == 'resolved'
     assert payload['untriangulated'] == []
+
+
+def test_sketch_region_with_a_line_ending_inside_a_circle_meshes_like_the_standard_mesher():
+    """スケッチの線が円の中で終わる領域は、内側の辺が外周の頂点に 2.4e-16 ずれて着く(healer は揃えない)。
+    CAD 頂点の共有で正当な接続と判定し、標準メッシャーと同じ三角形になる(以前は 12 巡回って面が消えた)。"""
+    from duocad import region
+    from duocad.server import Session
+    session = Session(None, 0.2)
+    sketch_id = session.sketch_create('XY')['sketch_id']
+    session.add_line(sketch_id, [0.0, 0.0], [10.0, 0.0])
+    session.add_circle(sketch_id, [10.0, 0.0], 2.0)
+    faces = [item['face'] for item in region._regions_detailed(session.document, sketch_id)]
+    assert faces
+    for face in faces:
+        standard_mesh(face, 0.2)
+        reference = per_face_triangles(face)
+        diagnostics = kernel_meshing.mesh_shape(face, 0.2, 0.35)
+        assert diagnostics['termination'] == 'resolved' and diagnostics['rounds'] == 0
+        assert diagnostics['endpoint']['mismatches'] >= 1
+        assert per_face_triangles(face) == reference
+    assert region.regions_with_geometry(session.document, sketch_id, 0.2)[0]['indices']

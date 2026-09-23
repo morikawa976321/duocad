@@ -119,3 +119,37 @@ def test_orientation_falls_back_to_exact_arithmetic_only_when_uncertain():
 def test_non_finite_coordinates_are_rejected():
     with pytest.raises(ValueError):
         bc.pack([face([(1, [[0, 0], [math.nan, 0]], True)])])
+
+
+def test_internal_edge_meeting_the_outer_wire_at_a_shared_cad_vertex_is_not_a_crossing():
+    """面の内側に置かれた辺(スケッチの線が円の中で終わる領域)は外周の頂点に着くが、healer は
+    その端点を揃えないので pcurve の評価誤差(ここでは 2.4e-16)だけずれる。CAD 頂点を共有していれば
+    交差の対象から外し、ずれを診断に残す。頂点の情報が無ければ交差として報告する。"""
+    theta = np.linspace(0, 2 * np.pi, 17)
+    circle = np.c_[2 + 2 * np.cos(theta), 2 * np.sin(theta)]
+    arc_a, arc_b = circle[:9].copy(), circle[8:].copy()
+    arc_b[-1] = arc_a[0]
+    arc_a[0] = [4.0, 2.4492935982947064e-16]
+    arc_b[-1] = arc_a[0]
+    internal = [[4.0, 0.0], [2.0, 0.0]]
+    def build(with_vertices):
+        outer = [dict(edge=1, points=arc_a, forward=True, vertices=(10, 11) if with_vertices else None),
+                 dict(edge=2, points=arc_b, forward=True, vertices=(11, 10) if with_vertices else None)]
+        inner = [dict(edge=3, points=internal, forward=False, internal=True,
+                      vertices=(10, 12) if with_vertices else None)]
+        return bc.pack([[outer, inner]])
+    with_vertices = bc.check(build(True))
+    assert with_vertices['issues'] == []
+    assert with_vertices['endpoint_mismatches'] == 2
+    assert with_vertices['endpoint_gap_max'] == pytest.approx(2.4492935982947064e-16)
+    without = bc.check(build(False))
+    assert {i['kind'] for i in without['issues']} <= {'cross', 'touch'} and without['issues']
+
+
+def test_consecutive_edges_sharing_a_cad_vertex_but_not_a_point_are_connected_not_open():
+    gap = face([(1, [[0, 0], [1, 0]], True), (2, [[1, 1e-15], [1, 1]], True),
+                (3, [[1, 1], [0, 1]], True), (4, [[0, 1], [0, 0]], True)])
+    for k, use in enumerate(gap[0]):
+        use['vertices'] = (k, (k + 1) % 4)
+    result = bc.check(bc.pack([gap]))
+    assert result['issues'] == [] and result['endpoint_mismatches'] == 1

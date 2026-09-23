@@ -2,9 +2,9 @@
   "source": "output/finalization_checks/20260922T075258-e20ae028100d/000021-final-solid.json",
   "deviation": 0.2,
   "faces": 112467,
-  "load_seconds": 2.7392159000155516,
+  "load_seconds": 2.6487430999986827,
   "robust": {
-    "seconds": 22.521581000008155,
+    "seconds": 22.1118016000255,
     "untriangulated": [],
     "termination": "resolved",
     "rounds": 7,
@@ -15,18 +15,18 @@
     "unresolved": [],
     "reinstated": [],
     "rounds_log": [
-      {"round": 0, "faces_checked": 112467, "issues": 10, "segments": 356838, "points": 700426, "edges": 13},
-      {"round": 1, "faces_checked": 17, "issues": 5, "segments": 536, "points": 700466, "edges": 8},
-      {"round": 2, "faces_checked": 12, "issues": 3, "segments": 472, "points": 700518, "edges": 6},
-      {"round": 3, "faces_checked": 9, "issues": 2, "segments": 353, "points": 700536, "edges": 4},
-      {"round": 4, "faces_checked": 6, "issues": 1, "segments": 220, "points": 700548, "edges": 2},
-      {"round": 5, "faces_checked": 3, "issues": 1, "segments": 148, "points": 700560, "edges": 2},
-      {"round": 6, "faces_checked": 3, "issues": 1, "segments": 170, "points": 700582, "edges": 2},
-      {"round": 7, "faces_checked": 3, "issues": 0, "segments": 206, "points": 700618}
+      {"round": 0, "faces_checked": 112467, "issues": 10, "segments": 356838, "points": 700426, "endpoint_mismatches": 0, "endpoint_gap_max": 0.0, "edges": 13},
+      {"round": 1, "faces_checked": 17, "issues": 5, "segments": 536, "points": 700466, "endpoint_mismatches": 0, "endpoint_gap_max": 0.0, "edges": 8},
+      {"round": 2, "faces_checked": 12, "issues": 3, "segments": 472, "points": 700518, "endpoint_mismatches": 0, "endpoint_gap_max": 0.0, "edges": 6},
+      {"round": 3, "faces_checked": 9, "issues": 2, "segments": 353, "points": 700536, "endpoint_mismatches": 0, "endpoint_gap_max": 0.0, "edges": 4},
+      {"round": 4, "faces_checked": 6, "issues": 1, "segments": 220, "points": 700548, "endpoint_mismatches": 0, "endpoint_gap_max": 0.0, "edges": 2},
+      {"round": 5, "faces_checked": 3, "issues": 1, "segments": 148, "points": 700560, "endpoint_mismatches": 0, "endpoint_gap_max": 0.0, "edges": 2},
+      {"round": 6, "faces_checked": 3, "issues": 1, "segments": 170, "points": 700582, "endpoint_mismatches": 0, "endpoint_gap_max": 0.0, "edges": 2},
+      {"round": 7, "faces_checked": 3, "issues": 0, "segments": 206, "points": 700618, "endpoint_mismatches": 0, "endpoint_gap_max": 0.0}
     ],
-    "stage_seconds": {"BuildModel": 1.0779267000034451, "DiscretizeEdges": 1.9884462000336498, "HealModel": 0.07550870004342869, "PreProcessModel": 0.05623739998554811, "extract": 5.916421899979468, "check": 0.557531499885954, "amplify": 0.4149653001804836, "final_check": 0.5229751999722794, "DiscretizeFaces": 5.964524600014556, "PostProcessModel": 0.3913472999702208, "verify": 0.1370247000013478}
+    "stage_seconds": {"BuildModel": 0.9115816000266932, "DiscretizeEdges": 1.7642747999634594, "HealModel": 0.07496330002322793, "PreProcessModel": 0.05621210002573207, "extract": 6.366842399991583, "check": 0.7877957000164315, "amplify": 0.4252302000531927, "final_check": 0.6559997000149451, "DiscretizeFaces": 5.509066800004803, "PostProcessModel": 0.3706916000228375, "verify": 0.1273969000321813}
   },
-  "checks": {"seconds": 5.35937570000533, "triangles": 136564, "vertices": 68276, "failed": [], "topology": {"triangles": 136564, "vertices": 68276, "boundary_edges": 0, "nonmanifold_edges": 0, "inconsistent_edges": 0, "nonmanifold_vertices": 0, "degenerate_triangles": 0, "duplicate_triangles": 0, "boundary_components": 1}, "float32": {"merged_vertices": 0, "degenerate_triangles": 0}, "self_intersections": {"counts": {"cross": 0, "touch": 0, "coplanar": 0, "fold": 0, "duplicate": 0}, "candidates": 1091753, "pairs": []}},
-  "standard": {"seconds": 11.492822800006252, "untriangulated": [74485], "topology": {"triangles": 136284, "vertices": 68149, "boundary_edges": 38, "nonmanifold_edges": 0, "inconsistent_edges": 0, "nonmanifold_vertices": 37, "degenerate_triangles": 0, "duplicate_triangles": 0, "boundary_components": 1}},
-  "peak_working_set_mb": 2226.122752
+  "checks": {"seconds": 5.082677899976261, "triangles": 136564, "vertices": 68276, "failed": [], "topology": {"triangles": 136564, "vertices": 68276, "boundary_edges": 0, "nonmanifold_edges": 0, "inconsistent_edges": 0, "nonmanifold_vertices": 0, "degenerate_triangles": 0, "duplicate_triangles": 0, "boundary_components": 1}, "float32": {"merged_vertices": 0, "degenerate_triangles": 0}, "self_intersections": {"counts": {"cross": 0, "touch": 0, "coplanar": 0, "fold": 0, "duplicate": 0}, "candidates": 1091753, "pairs": []}},
+  "standard": {"seconds": 11.150450499961153, "untriangulated": [74485], "topology": {"triangles": 136284, "vertices": 68149, "boundary_edges": 38, "nonmanifold_edges": 0, "inconsistent_edges": 0, "nonmanifold_vertices": 37, "degenerate_triangles": 0, "duplicate_triangles": 0, "boundary_components": 1}},
+  "peak_working_set_mb": 2348.314624
 }

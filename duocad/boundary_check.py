@@ -9,9 +9,12 @@ OCP に依存しない。入力は「面 → wire → 辺の利用箇所(use)」
   下回って符号が確定しない組だけ整数演算(float は 2 進有理数なので厳密に整数へ写せる)へ進む。
   固定 ε の近似判定はしない。厳密演算が保証するのは「渡された浮動小数点座標の線分」に対する判定であり、
   元 CAD の厳密性ではない。
-- 正当に端点を共有してよい線分の組は **wire の構造**(同じ use の隣接線分、wire で連続する use の
-  接続端点)で決める。座標が近いだけの点を同一視しない。連続する use の端点が厳密一致しなければ
-  `open` として報告する(成功にしない)。
+- 正当に端点を共有してよい線分の組は **wire の構造と CAD の頂点**で決める。座標が近いだけの点を
+  同一視しない。(a) 同じ use で隣り合う線分、(b) wire で連続する use の接続端点(OCCT の healer が
+  厳密一致させる)、(c) 同じ面の**別の wire** で同じ CAD 頂点に着く use の終端どうし(面の内側に置かれた
+  辺が外周の頂点に着く場合など。healer はこれを揃えないので pcurve の評価誤差ぶん、例えば 1e-16 だけ
+  ずれることがある。同じ wire の連続しない use の頂点共有は周期面の seam・u=0/2π の両端なので数えない)。(c) で座標が一致しない組は交差の対象から外し、件数と最大のずれを診断に残す。
+  (b) の端点が厳密一致せず CAD 頂点も共有しなければ `open` として報告する(成功にしない)。
 - 面積や角度の小ささを理由に交差を捨てない(OCCT の FaceChecker は捨てる。docs/TOPOPT_GAP_CAUSALITY.md)。
 """
 from __future__ import annotations
@@ -39,9 +42,12 @@ class Packed:
     use_forward: (U,) bool。wire の走査で点列を先頭→末尾へ進むなら True(REVERSED なら False)
     use_internal:(U,) bool。INTERNAL の辺(接続の期待から外す)
     use_next   : (U,) int64。同じ wire で次に来る use(巡回。1 辺の wire では自分自身)
+    use_vertex : (U, 2) int64。点列の先頭・末尾に当たる CAD 頂点の識別子(不明なら -1)
+    use_wire   : (U,) int64。面内の wire 番号((c) の判定は別の wire どうしにだけ適用する)
     """
 
-    def __init__(self, points, use_offset, use_face, use_edge, use_forward, use_internal, use_next):
+    def __init__(self, points, use_offset, use_face, use_edge, use_forward, use_internal, use_next, use_vertex,
+                 use_wire):
         self.points = points
         self.use_offset = use_offset
         self.use_face = use_face
@@ -49,18 +55,24 @@ class Packed:
         self.use_forward = use_forward
         self.use_internal = use_internal
         self.use_next = use_next
+        self.use_vertex = use_vertex
+        self.use_wire = use_wire
         if not np.isfinite(points).all():
             raise ValueError('境界の点列に有限でない座標がある')
 
     @classmethod
-    def from_arrays(cls, chunks: Sequence[np.ndarray], use_face, use_edge, use_forward, use_internal, use_next):
+    def from_arrays(cls, chunks: Sequence[np.ndarray], use_face, use_edge, use_forward, use_internal, use_next,
+                    use_vertex=None, use_wire=None):
         counts = np.fromiter((len(c) for c in chunks), dtype=np.int64, count=len(chunks))
         offsets = np.concatenate(([0], np.cumsum(counts)))
         points = np.concatenate(chunks) if len(chunks) else np.zeros((0, 2))
+        vertex = np.full((len(counts), 2), -1, dtype=np.int64) if use_vertex is None \
+            else np.asarray(use_vertex, dtype=np.int64).reshape(-1, 2)
+        wire = np.zeros(len(counts), dtype=np.int64) if use_wire is None else np.asarray(use_wire, dtype=np.int64)
         return cls(np.ascontiguousarray(points, dtype=np.float64).reshape(-1, 2), offsets,
                    np.asarray(use_face, dtype=np.int64), np.asarray(use_edge, dtype=np.int64),
                    np.asarray(use_forward, dtype=bool), np.asarray(use_internal, dtype=bool),
-                   np.asarray(use_next, dtype=np.int64))
+                   np.asarray(use_next, dtype=np.int64), vertex, wire)
 
     @property
     def use_count(self) -> int:
@@ -71,25 +83,29 @@ class Packed:
 
 
 def pack(faces: Iterable[Sequence[Sequence[dict]]], face_ids: Sequence[int] | None = None) -> Packed:
-    """`faces[f][w]` は wire w の use の列。各 use は `dict(edge, points, forward, internal=False)`。
+    """`faces[f][w]` は wire w の use の列。各 use は `dict(edge, points, forward, internal=False, vertices=None)`。
 
-    `points` は (n, 2) に変換できる列。`face_ids` を渡すと面番号にそれを使う(省略時は 0 始まりの位置)。
+    `points` は (n, 2) に変換できる列。`vertices` は点列の先頭・末尾の CAD 頂点の識別子(省略可)。
+    `face_ids` を渡すと面番号にそれを使う(省略時は 0 始まりの位置)。
     """
-    chunks, use_face, use_edge, use_forward, use_internal, use_next = [], [], [], [], [], []
+    chunks, use_face, use_edge, use_forward, use_internal, use_next, use_vertex, use_wire = [], [], [], [], [], [], [], []
     for position, wires in enumerate(faces):
         face = position if face_ids is None else int(face_ids[position])
-        for wire in wires:
+        for wire_index, wire in enumerate(wires):
             first = len(use_face)
             for use in wire:
                 chunks.append(np.ascontiguousarray(use['points'], dtype=np.float64).reshape(-1, 2))
                 use_face.append(face)
+                use_wire.append(wire_index)
                 use_edge.append(int(use['edge']))
                 use_forward.append(bool(use['forward']))
                 use_internal.append(bool(use.get('internal', False)))
                 use_next.append(len(use_face))
+                vertices = use.get('vertices')
+                use_vertex.append((-1, -1) if vertices is None else (int(vertices[0]), int(vertices[1])))
             if len(use_face) > first:
                 use_next[-1] = first
-    return Packed.from_arrays(chunks, use_face, use_edge, use_forward, use_internal, use_next)
+    return Packed.from_arrays(chunks, use_face, use_edge, use_forward, use_internal, use_next, use_vertex, use_wire)
 
 
 # --------------------------------------------------------------------------------------
@@ -159,12 +175,30 @@ def _candidate_pairs(face_of_seg: np.ndarray, lo: np.ndarray, hi: np.ndarray):
     return np.where(swap, j, i), np.where(swap, i, j)
 
 
+def _group_pairs(keys: np.ndarray):
+    """同じ key を持つ要素の全組 (a, b), a<b(要素番号)。"""
+    order = np.argsort(keys, kind='stable')
+    sorted_keys = keys[order]
+    starts = np.flatnonzero(np.concatenate(([True], sorted_keys[1:] != sorted_keys[:-1])))
+    sizes = np.diff(np.concatenate((starts, [len(keys)])))
+    position = np.arange(len(keys)) - np.repeat(starts, sizes)
+    remaining = np.repeat(sizes, sizes) - position - 1
+    total = int(remaining.sum())
+    if total == 0:
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+    first = np.repeat(np.arange(len(keys)), remaining)
+    second = first + 1 + (np.arange(total) - np.repeat(np.cumsum(remaining) - remaining, remaining))
+    a, b = order[first], order[second]
+    return np.minimum(a, b), np.maximum(a, b)
+
+
 def check(packed: Packed, faces: Iterable[int] | None = None) -> dict:
     """面ごとの境界折れ線を検査し、問題の一覧を返す。
 
-    戻り値: `dict(issues=[...], faces_checked=int, segments=int, zero_length_segments=int)`。
+    戻り値: `dict(issues=[...], faces_checked, segments, zero_length_segments, endpoint_mismatches, endpoint_gap_max)`。
     各 issue は `dict(kind, face, edges=[edge_a, edge_b], a=dict(use, segment), b=dict(use, segment), point=[x, y] | None)`
     (`segment` は use 内の 0 始まりの線分番号)。`open` の issue は `a`/`b` の代わりに `uses` を持つ。
+    `endpoint_mismatches` は CAD 頂点を共有するのに座標が一致しない終端の組の数(交差の対象から外した数)。
     """
     if faces is None:
         uses = np.arange(packed.use_count)
@@ -174,8 +208,10 @@ def check(packed: Packed, faces: Iterable[int] | None = None) -> dict:
         uses = np.flatnonzero(np.isin(packed.use_face, wanted))
         face_count = len(wanted)
     issues: list = []
+    result = dict(issues=issues, faces_checked=face_count, segments=0, zero_length_segments=0,
+                  endpoint_mismatches=0, endpoint_gap_max=0.0)
     if len(uses) == 0:
-        return dict(issues=issues, faces_checked=face_count, segments=0, zero_length_segments=0)
+        return result
     offset = packed.use_offset
     n_points = offset[uses + 1] - offset[uses]
 
@@ -187,19 +223,19 @@ def check(packed: Packed, faces: Iterable[int] | None = None) -> dict:
     P_all = packed.points[first]
     Q_all = packed.points[first + 1]
     keep = (P_all != Q_all).any(axis=1)
-    zero_length = int((~keep).sum())
+    result['zero_length_segments'] = int((~keep).sum())
     seg_use, seg_index, P, Q = seg_use[keep], seg_index[keep], P_all[keep], Q_all[keep]
-    rows = np.arange(len(P))
+    result['segments'] = int(len(P))
     # 各 use の(長さ 0 を除いた)最初と最後の線分行
     first_row = np.full(packed.use_count, -1, dtype=np.int64)
     last_row = np.full(packed.use_count, -1, dtype=np.int64)
-    if len(rows):
+    if len(P):
         starts = np.flatnonzero(np.concatenate(([True], seg_use[1:] != seg_use[:-1])))
-        ends = np.concatenate((starts[1:] - 1, [len(rows) - 1]))
+        ends = np.concatenate((starts[1:] - 1, [len(P) - 1]))
         first_row[seg_use[starts]] = starts
         last_row[seg_use[starts]] = ends
 
-    # --- wire で連続する use の接続(端点の厳密一致を要求)
+    # --- (b) wire で連続する use の接続
     u = uses[~packed.use_internal[uses]]
     v = packed.use_next[u]
     u = u[~packed.use_internal[v]]
@@ -213,48 +249,90 @@ def check(packed: Packed, faces: Iterable[int] | None = None) -> dict:
     u, v = u[~short], v[~short]
     end_u = np.where(packed.use_forward[u], offset[u + 1] - 1, offset[u])
     start_v = np.where(packed.use_forward[v], offset[v], offset[v + 1] - 1)
-    connected = (packed.points[end_u] == packed.points[start_v]).all(axis=1)
-    for k in np.flatnonzero(~connected):
+    vertex_end_u = np.where(packed.use_forward[u], packed.use_vertex[u, 1], packed.use_vertex[u, 0])
+    vertex_start_v = np.where(packed.use_forward[v], packed.use_vertex[v, 0], packed.use_vertex[v, 1])
+    equal = (packed.points[end_u] == packed.points[start_v]).all(axis=1)
+    same_vertex = (vertex_end_u >= 0) & (vertex_end_u == vertex_start_v)
+    for k in np.flatnonzero(~equal & ~same_vertex):
         issues.append(dict(kind='open', face=int(packed.use_face[u[k]]), uses=[int(u[k]), int(v[k])],
                            edges=sorted({int(packed.use_edge[u[k]]), int(packed.use_edge[v[k]])}),
                            gap=float(np.linalg.norm(packed.points[end_u[k]] - packed.points[start_v[k]])),
                            point=packed.points[end_u[k]].tolist()))
-    u, v, end_u = u[connected], v[connected], end_u[connected]
+    connected = equal | same_vertex
+    u, v, end_u, start_v, equal = u[connected], v[connected], end_u[connected], start_v[connected], equal[connected]
     ru = np.where(packed.use_forward[u], last_row[u], first_row[u])
     rv = np.where(packed.use_forward[v], first_row[v], last_row[v])
-    valid = (ru >= 0) & (rv >= 0) & (ru != rv)
-    ru, rv, shared = ru[valid], rv[valid], end_u[valid]
-    conn_lo, conn_hi = np.minimum(ru, rv), np.maximum(ru, rv)
+    conn_a = np.minimum(ru, rv)
+    conn_b = np.maximum(ru, rv)
+    conn_shared = np.where(equal, end_u, -1)
+    conn_gap = np.where(equal, 0.0, np.linalg.norm(packed.points[end_u] - packed.points[start_v], axis=1))
+
+    # --- (c) 同じ面で同じ CAD 頂点に着く use の終端どうし
+    known = np.flatnonzero((packed.use_vertex[uses] >= 0).any(axis=1) & (n_points >= 2))
+    if len(known):
+        ends_use = np.concatenate((uses[known], uses[known]))
+        ends_vertex = np.concatenate((packed.use_vertex[uses[known], 0], packed.use_vertex[uses[known], 1]))
+        ends_point = np.concatenate((offset[uses[known]], offset[uses[known] + 1] - 1))
+        ends_row = np.concatenate((first_row[uses[known]], last_row[uses[known]]))
+        valid = (ends_vertex >= 0) & (ends_row >= 0)
+        ends_use, ends_vertex, ends_point, ends_row = ends_use[valid], ends_vertex[valid], ends_point[valid], ends_row[valid]
+        vertex_span = int(ends_vertex.max()) + 1 if len(ends_vertex) else 1
+        a, b = _group_pairs(packed.use_face[ends_use] * vertex_span + ends_vertex)
+        # 同じ wire の中は (b) が扱う。同じ wire で連続しない use が頂点を共有するのは周期面の seam や
+        # u=0/2π の両端で、UV では周期ぶん離れていて接続ではない(閉じた辺の自分自身の両端も同じ)。
+        different_wire = packed.use_wire[ends_use[a]] != packed.use_wire[ends_use[b]]
+        a, b = a[different_wire], b[different_wire]
+        equal_point = (packed.points[ends_point[a]] == packed.points[ends_point[b]]).all(axis=1)
+        conn_a = np.concatenate((conn_a, np.minimum(ends_row[a], ends_row[b])))
+        conn_b = np.concatenate((conn_b, np.maximum(ends_row[a], ends_row[b])))
+        conn_shared = np.concatenate((conn_shared, np.where(equal_point, ends_point[a], -1)))
+        conn_gap = np.concatenate((conn_gap, np.where(
+            equal_point, 0.0, np.linalg.norm(packed.points[ends_point[a]] - packed.points[ends_point[b]], axis=1))))
+    valid = (conn_a >= 0) & (conn_a != conn_b)
+    conn_a, conn_b, conn_shared, conn_gap = conn_a[valid], conn_b[valid], conn_shared[valid], conn_gap[valid]
     if len(P) == 0:
-        return dict(issues=issues, faces_checked=face_count, segments=0, zero_length_segments=zero_length)
+        return result
 
     # --- 候補の組
     lo = np.minimum(P, Q)
     hi = np.maximum(P, Q)
     i, j = _candidate_pairs(packed.use_face[seg_use], lo, hi)
-    # 正当に端点を共有する組: 同じ use で(長さ 0 を除いて)隣り合う線分、接続する終端線分どうし
-    adjacent = (seg_use[i] == seg_use[j]) & (j - i == 1)
     n_rows = len(P) + 1
-    conn_keys = conn_lo * n_rows + conn_hi
+    # 正当に端点を共有する組: (a) 同じ use で(長さ 0 を除いて)隣り合う線分、(b)(c) 接続する終端線分どうし
+    adjacent = (seg_use[i] == seg_use[j]) & (j - i == 1)
     pair_keys = i * n_rows + j
-    connected_pair = np.isin(pair_keys, conn_keys)
+    conn_keys = conn_a * n_rows + conn_b
+    shared_of = {}
+    gap_of = {}
+    for key, shared, gap in zip(conn_keys.tolist(), conn_shared.tolist(), conn_gap.tolist()):
+        # 同じ組が (b) と (c) の両方から来たら、座標が一致している側の情報を残す
+        if key not in shared_of or shared >= 0:
+            shared_of[key] = shared
+            gap_of[key] = gap
+    connected_pair = np.isin(pair_keys, conn_keys) if len(conn_keys) else np.zeros(len(i), dtype=bool)
     legit = adjacent | connected_pair
+    mismatched = [key for key, shared in shared_of.items() if shared < 0]
+    result['endpoint_mismatches'] = len(mismatched)
+    result['endpoint_gap_max'] = float(max((gap_of[key] for key in mismatched), default=0.0))
 
-    # 1) 正当な共有端点の組: 折り返し(共線で同じ側へ戻る)だけを見る
+    # 1) 正当な共有端点の組: 折り返し(共線で同じ側へ戻る)だけを見る(座標が一致する組だけ)
     li, lj = i[legit], j[legit]
     if len(li):
         S = P[lj].copy()
         F1 = P[li].copy()
         F2 = Q[lj].copy()
-        conn_rows = np.flatnonzero(~adjacent[legit])
+        keys = pair_keys[legit]
+        shared_index = np.full(len(li), -2, dtype=np.int64)
+        connected_rows = np.flatnonzero(~adjacent[legit])
+        shared_index[connected_rows] = [shared_of[int(key)] for key in keys[connected_rows]]
+        conn_rows = np.flatnonzero(shared_index >= 0)
         if len(conn_rows):
-            lookup = dict(zip(conn_keys.tolist(), shared.tolist()))
-            shared_index = np.asarray([lookup[int(k)] for k in pair_keys[legit][conn_rows]], dtype=np.int64)
-            S[conn_rows] = packed.points[shared_index]
+            S[conn_rows] = packed.points[shared_index[conn_rows]]
             a_rows, b_rows = li[conn_rows], lj[conn_rows]
             F1[conn_rows] = np.where((P[a_rows] == S[conn_rows]).all(axis=1)[:, None], Q[a_rows], P[a_rows])
             F2[conn_rows] = np.where((P[b_rows] == S[conn_rows]).all(axis=1)[:, None], Q[b_rows], P[b_rows])
-        collinear = np.flatnonzero(orient2d(S, F1, F2) == 0)
+        testable = np.flatnonzero(shared_index != -1)
+        collinear = testable[orient2d(S[testable], F1[testable], F2[testable]) == 0]
         if len(collinear):
             axis = np.where((F1[collinear, 0] != S[collinear, 0]) | (F2[collinear, 0] != S[collinear, 0]), 0, 1)
             d1 = F1[collinear, axis] - S[collinear, axis]
@@ -289,7 +367,7 @@ def check(packed: Packed, faces: Iterable[int] | None = None) -> dict:
                 issues.append(_issue('touch', packed, seg_use, seg_index, a, b, None))
         for row in np.flatnonzero(touch & ~cross & ~collinear):
             issues.append(_issue('touch', packed, seg_use, seg_index, ni[row], nj[row], None))
-    return dict(issues=issues, faces_checked=face_count, segments=int(len(P)), zero_length_segments=zero_length)
+    return result
 
 
 def _crossing_point(p1, p2, p3, p4):

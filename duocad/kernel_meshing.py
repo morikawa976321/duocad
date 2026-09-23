@@ -41,6 +41,7 @@ from OCP.Message import Message_ProgressRange
 from OCP.Precision import Precision
 from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
 from OCP.TopExp import TopExp
+from OCP.TopoDS import TopoDS
 from OCP.TopTools import TopTools_IndexedMapOfShape
 
 from . import boundary_check
@@ -93,11 +94,19 @@ class _Model:
         TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_FACE, self.face_map)
         edge_map = TopTools_IndexedMapOfShape()
         TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE, edge_map)
+        vertex_map = TopTools_IndexedMapOfShape()
+        TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_VERTEX, vertex_map)
         self.faces = [self.model.GetFace(i) for i in range(self.model.FacesNb())]
         self.face_ids = [self.face_map.FindIndex(df.GetFace()) for df in self.faces]
         self.edges = [self.model.GetEdge(i) for i in range(self.model.EdgesNb())]
         self.edge_ids = [edge_map.FindIndex(de.GetEdge()) for de in self.edges]
         self.edge_model_index = {edge_id: i for i, edge_id in enumerate(self.edge_ids)}
+        # 辺の点列はパラメータ増加方向(FORWARD)に並ぶので、先頭・末尾の CAD 頂点も FORWARD で取る
+        edge_vertex = {}
+        for edge_id, de in zip(self.edge_ids, self.edges):
+            forward_edge = TopoDS.Edge_s(de.GetEdge().Oriented(_FORWARD))
+            edge_vertex[edge_id] = (vertex_map.FindIndex(TopExp.FirstVertex_s(forward_edge)),
+                                    vertex_map.FindIndex(TopExp.LastVertex_s(forward_edge)))
         # use ごと: pcurve ハンドル・点列(numpy)・所属
         self.use_pcurve: List = []
         self.use_points: List[np.ndarray] = []
@@ -107,6 +116,7 @@ class _Model:
         self.use_forward: List[bool] = []
         self.use_internal: List[bool] = []
         self.use_next: List[int] = []
+        self.use_vertex: List[tuple] = []
         self.edge_uses: Dict[int, List[int]] = {}
         face_uses: List[List[int]] = []
         forward = _FORWARD
@@ -137,6 +147,7 @@ class _Model:
                     self.use_forward.append(orientation == forward)
                     self.use_internal.append(bool(pcurve.IsInternal()))
                     self.edge_uses.setdefault(edge_id, []).append(use)
+                    self.use_vertex.append(edge_vertex[edge_id])
                     self.use_next.append(use + 1)
                     face_uses[-1].append(use)
                 if len(self.use_pcurve) > first_use:
@@ -148,6 +159,8 @@ class _Model:
         self.use_forward_array = np.asarray(self.use_forward, dtype=bool)
         self.use_internal_array = np.asarray(self.use_internal, dtype=bool)
         self.use_next_array = np.asarray(self.use_next, dtype=np.int64)
+        self.use_vertex_array = np.asarray(self.use_vertex, dtype=np.int64).reshape(-1, 2)
+        self.use_wire_array = np.asarray(self.use_wire, dtype=np.int64)
 
     def pack(self, positions: Optional[List[int]] = None) -> boundary_check.Packed:
         """`boundary_check` の入力を面の位置(モデル内 0 始まり)で選んで作る。面番号は CAD の 1 始まり。"""
@@ -162,7 +175,7 @@ class _Model:
         return boundary_check.Packed.from_arrays(
             [self.use_points[u] for u in uses], self.face_ids_array[self.use_face_position_array[uses]],
             self.use_edge_array[uses], self.use_forward_array[uses], self.use_internal_array[uses],
-            local[self.use_next_array[uses]])
+            local[self.use_next_array[uses]], self.use_vertex_array[uses], self.use_wire_array[uses])
 
     def refresh_edge(self, edge_id: int) -> bool:
         """辺の全 use の点列を内部モデルから読み直す。変化があれば True。"""
@@ -252,6 +265,7 @@ def mesh_shape(shape, deviation: float, angular_deflection: float, *, parallel: 
         rounds: 再分割を行った回数
         termination: 'resolved' | 'max_rounds' | 'no_change' | 'cycle' | 'budget' | 'unfixable'
         unresolved: [{'face': CAD 1始まり, 'issues': [...]}]  面分割へ渡さず(Failure)三角形なしにした面
+        endpoint: {'mismatches': n, 'gap_max': mm}  同じ CAD 頂点に着くのに座標が一致しない終端の組(boundary_check)
         reinstated: [CAD 面番号]  OCCT の healer が SelfIntersectingWire|Failure にしたが独自検査で解消していたので分割対象に戻した面
         amplified_edges: 再分割した辺の数(重複なし), amplifications: 再分割の延べ回数
         rounds_log: 各回の {round, faces_checked, issues, edges, points}
@@ -322,7 +336,11 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
         for issue in result['issues']:
             unresolved.setdefault(issue['face'], []).append(issue)
         rounds_log.append(dict(round=rounds, faces_checked=result['faces_checked'], issues=len(result['issues']),
-                               segments=result['segments'], points=model.points_total()))
+                               segments=result['segments'], points=model.points_total(),
+                               endpoint_mismatches=result['endpoint_mismatches'],
+                               endpoint_gap_max=result['endpoint_gap_max']))
+        if rounds == 0:
+            endpoint = dict(mismatches=result['endpoint_mismatches'], gap_max=result['endpoint_gap_max'])
         if not unresolved:
             break
         edges = boundary_check.fixable_edges(issue for issues in unresolved.values() for issue in issues)
@@ -367,6 +385,7 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
         unresolved = {}
         for issue in result['issues']:
             unresolved.setdefault(issue['face'], []).append(issue)
+        endpoint = dict(mismatches=result['endpoint_mismatches'], gap_max=result['endpoint_gap_max'])
         if unresolved and termination == 'resolved':
             termination = 'reappeared'
 
@@ -404,6 +423,8 @@ def _mesh_with_model(model: _Model, context, parameters, deviation, max_rounds, 
         amplified_edges=len(amplified), amplifications=int(sum(amplified.values())),
         amplified_edge_ids=sorted(amplified),
         rounds_log=rounds_log, count_mismatch=count_mismatch,
+        # CAD 頂点を共有するのに pcurve の座標が一致しない終端の組(交差の対象から外した数と最大のずれ)
+        endpoint=endpoint,
         seconds={k: float(v) for k, v in seconds.items()},
     )
 
