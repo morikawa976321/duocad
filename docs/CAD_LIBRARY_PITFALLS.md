@@ -21,7 +21,7 @@
 | 由来(provenance)の取り出し方は操作ごとに違う(`History()` / `Modified()`、`IsRemoved` / `IsDeleted`) | `duocad/kernel.py` `normalize_provenance` |
 | `Face.center()` の既定は `CenterOf.GEOMETRY` で面積重心ではない(曲面では面パッチの上にすら乗らない) | `duocad/query.py` `face_centroid` / `face_fingerprint` |
 | 生の `TopoDS_Shape` を build123d で包む入口は `Compound.cast`(基底の `Shape.cast` は None を返す)。`faces()` / `edges()` は重複除去済み | `duocad/query.py` 冒頭 |
-| `BRepClass3d_SolidClassifier` は材料内部の孤立点を OUT と誤判定することがある(神託として使うときの作法) | [TOPOPT.md](TOPOPT.md)「2026-08-31・ボクセル化の実測」 |
+| `BRepClass3d_SolidClassifier` は材料内部の孤立点を OUT と誤判定することがある(神託として使うときの作法) | [TOPOPT.md](TOPOPT.md) |
 | 面の添字は形状変更(フィレット)で散発的にずれる / STEP往復の体積は bit-exact でない / undo の再計算で体積の下位ビットが動く | [../README.md](../README.md)「実測で判明している技術的な地雷」、`web/scripts/smoke.mjs` `VOLUME_EPS` |
 
 ## build123d / OCP

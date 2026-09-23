@@ -1382,7 +1382,7 @@ COMMANDS: tuple[Command, ...] = (
         changes_document=False,
         note=(
             "**軽い**(OCCTは条件面のbboxを数枚測るだけ)。返る `steps` が**粗い側の端から"
-            "細かい方向へだけ**動く目盛り。**時間は付けない**(計画書§6.2 —— 走らせる前は"
+            "細かい方向へだけ**動く目盛り。**時間は付けない**(走らせる前は"
             "実測が無い)。**引数は無い**(密度フィルタ半径`rmin_mm`は二値探索に無い概念。"
             "届いたら `{\"error\": ...}` として断る、`OptimizeInputError` 経由)"
         ),
@@ -1413,7 +1413,6 @@ COMMANDS: tuple[Command, ...] = (
             "(応答は状態配信ではない)。**失敗しても文書は1ビットも変わらない**。"
             "旧引数(`rmin_mm`/`max_iter`/`material_min_mm3`/`material_max_mm3`)は"
             "この版では扱えず、届くと `OptimizeInputError` を伴う `optimize_error` になる"
-            "(計画書§6.2)"
         ),
     ),
     Command(

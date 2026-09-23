@@ -923,7 +923,7 @@ class Session:
     def optimize_resolution(self, rmin_mm: Any = None) -> dict:
         """要素サイズの上限・下限・既定。
 
-        `rmin_mm`(密度フィルタ半径)は**この版では扱えない**(計画書§6.2 —— 二値探索は
+        `rmin_mm`(密度フィルタ半径)は**この版では扱えない**(二値探索は
         密度フィルタを持たない)。届いたら黙って無視せず `OptimizeInputError` にする
         (`net/ws.py` の `optimize_resolution` コマンドはこれを `ValueError` として拾い、
         `{"error": ...}` の非トースト表示へ運ぶ——既存の「設定の途中」表示と同じ経路)。
@@ -970,7 +970,7 @@ class Session:
         結果にも文書にも1ビットも影響しない。
 
         `rmin_mm` / `max_iter` / `material_min_mm3` / `material_max_mm3` は**旧SIMP方式の
-        引数で、この版では扱えない**(計画書§6.2「旧引数が外部から届いたら黙って無視せず、
+        引数で、この版では扱えない**(旧引数が外部から届いたら黙って無視せず、
         不支持と分かるエラーにする」)。キーワードとして受け続けているのは、届いたときに
         `TypeError`(引数名を知らない)ではなく`OptimizeInputError`(意味を説明した文)で
         断るため —— 呼び出し側(`net/ws.py`)が転送さえすれば、ここが一箇所で断る。

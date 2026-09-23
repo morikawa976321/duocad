@@ -31,7 +31,7 @@ RESULT_NAME = "optimized"
 #: (`_region_representation`)で止まる。**通るかどうかは要素サイズに対して単調でない**
 #: (2026-09-09 実測: 4.2mm 止まる / 4.4 通る / 4.6 止まる / 4.8 通る / 5.333 止まる。格子の
 #: 原点と刻みが要素サイズごとに引き直され、薄い部品にセル中心が入るかが偶然で決まる)——
-#: 「N mm 以下なら通る」とは書けない。表は docs/TOPOPT.md「2026-09-09・hanger の初回完走」。
+#: 「N mm 以下なら通る」とは書けない。
 #: **ピークメモリを決めるのは箱の要素数ではなく、組み立てに載る要素数(= 塊。空要素は
 #: `simp.Model(active_mask=...)` で外れる)である。** この機械(34GB)で hanger を回した
 #: ときのピーク増(2026-09-09実測。**3点は経路が違うので併記する**):
@@ -114,7 +114,7 @@ class OptimizeOptions:
 
     `element_size_mm` を省くと `resolution_limits()` の上限側(いちばん粗い)を採る。
     時間は制約にしない。**密度フィルタ半径(`rmin_mm`)・SIMP反復数(`max_iter`)・材料量の
-    直接指定(`material_min_mm3`/`material_max_mm3`)は無い**(計画書§6.2)——二値探索は
+    直接指定(`material_min_mm3`/`material_max_mm3`)は無い**——二値探索は
     連続密度もSIMP反復も持たないので、渡しても意味の翻訳先が無い。届いたら黙って無視せず
     `OptimizeInputError` にする(`session.run_optimization` / `resolution_limits` の入口)。
     """
@@ -455,7 +455,7 @@ def resolution_limits(doc: "Document") -> dict:
          "max_elements": int}
 
     **上限は条件面からの要求で決まる**(拘束面・荷重面に格子節点が付く大きさ)。
-    **密度フィルタ半径(rmin)は上限に効かない**(計画書§6.2「解像度の上限からrmin/MIN_RMINを
+    **密度フィルタ半径(rmin)は上限に効かない**(解像度の上限からrmin/MIN_RMINを
     除去」——二値探索は密度フィルタを持たないので、最小部材幅からの要求という概念自体が無い)。
     **利用者に聞かない**。`anchor.AnchorTable.empty_face_diagnosis` の
     `suggested_max_spacing_mm` と**同じ式**(`sqrt(CAD面積)`)を使う。**近似であって保証ではない**
@@ -468,7 +468,7 @@ def resolution_limits(doc: "Document") -> dict:
     保持・除外ソリッドからは**上限を厳密に計算できない**(細い通路を取りこぼす)ので、
     ここでは見ない —— ボクセル化したあとに数えて通知する(`run()` の事後検出)。
 
-    **所要時間は見積もらない**(計画書§6.2「所要時間は旧SIMP係数を使わない。初回は不明と
+    **所要時間は見積もらない**(所要時間は旧SIMP係数を使わない。初回は不明と
     表示し、実測FEM評価時間と予算から幅付きで見積もる」)。走らせる前は1回もFEMを解いていない
     ので実測が無く、旧SIMP係数を使った桁の見当も出さない —— 実測に基づく見積もりは
     `run()` の進捗イベント(`_ProgressPump`)側で、実際に評価が進んでから出す。
@@ -533,7 +533,7 @@ def _resolution_steps(lo, hi, upper: float, lower: float) -> List[dict]:
 
     段は上限から下限までの**等比**で刻む(要素数は要素サイズの3乗に反比例するので、
     等差にすると最後の1段だけで要素数が桁で跳ねる)。**予想時間は付けない**
-    (計画書§6.2「所要時間は旧SIMP係数を使わない。初回は不明と表示する」——走らせる前は
+    (所要時間は旧SIMP係数を使わない。初回は不明と表示する——走らせる前は
     実測が無いので、要素数だけを見せて時間は語らない)。
 
     上限が下限以下(部品に対して条件面が小さすぎる)のときは**空**を返す ——
@@ -1189,7 +1189,7 @@ def _run(
     # 合格させた三角形で、画面・STL はそれをそのまま使う(再テセレーションも B-rep の保存も無い)。
     # ブーリアン後の B-rep 自体は記録の `final-solid` スナップショットにだけ残る(finalize._save_shape)。
     # 112k 面の B-rep を `add_solid_body` で入れると、操作ログに 128 MB のテキストが載り、開くたびに
-    # BRepCheck が走り、画面は面ごとの Mesh を 22 万個作っていた(docs/TOPOPT.md「結果の表現」)。
+    # BRepCheck が走り、画面は面ごとの Mesh を 22 万個作っていた。
     body_id = add_mesh_body(doc, positions, indices, name=name)
 
     return dict(

@@ -850,7 +850,7 @@ class Server:
         # `material_max_mm3`)も転送する。** ここで黙って落とすと、旧引数を送ってきた
         # クライアントには何も届かず「無視された」のと区別が付かない —— 転送して
         # `session.run_optimization` に断らせることで、`OptimizeInputError` が
-        # `optimize_error` イベントとして画面へ返る(計画書§6.2「不支持と分かるエラーにする」)。
+        # `optimize_error` イベントとして画面へ返る(不支持と分かるエラーにする)。
         kwargs = {
             key: message[key]
             for key in (
