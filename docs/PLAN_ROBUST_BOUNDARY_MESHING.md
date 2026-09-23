@@ -228,7 +228,7 @@ STLはfloat32に丸めた実際の座標について再検証する。これは�
 
 リポジトリ内の相対パス：
 
-- `output/gap_causality_20260923/minimal_solid_1.brep`：最小入力。別環境へ渡すときはこれを同梱する。
+- `tests/fixtures/gap_minimal_solid.brep`：最小入力（`output/gap_causality_20260923/minimal_solid_1.brep` と同じもの。`output/` は git 管理外なので、追跡しているこちらを使う）。
 - 同ディレクトリの`minimal_validity.json`、`minimal_stats.json`、`diagnosis.json`：比較基準。
 - `reproduce.py`、`split_minimal.py`：局所形状生成。元runへの依存があるので確認する。
 - `parameters.py`：形状を変えない設定比較。製品修復実装ではない。
