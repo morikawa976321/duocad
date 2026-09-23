@@ -668,13 +668,13 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 面の材質は **(役割 × 選択状態 × ホバー)** をキーにした遅延生成のキャッシュから取る。
+   * 面の材質は **(役割 × 選択状態 × ホバー × 陰影)** をキーにした遅延生成のキャッシュから取る。
    *
    * 役割は形状最適化(第3のモード)の保持/除外/拘束で、素の面(`'none'`)を含めて4種。
-   * 選択状態は3種(未選択 `'plain'` / 確定 `'user'` / AI提案 `'proposed'`)、ホバーは2種。
-   * 組み合わせは最大24だが、**使った組だけ**をこの中で作る(全部を手で書き下さない) ——
-   * 役割が無かった頃の6個(base/highlight/proposed × 通常/ホバー)から3倍に増える軸を、
-   * 静的な定数ではなく関数1つに閉じるための形。
+   * 選択状態は3種(未選択 `'plain'` / 確定 `'user'` / AI提案 `'proposed'`)、ホバーは2種、
+   * 陰影は2種(平滑 / メッシュボディのフラット)。組み合わせは最大48だが、**使った組だけ**を
+   * この中で作る(全部を手で書き下さない) —— 役割が無かった頃の6個(base/highlight/proposed
+   * × 通常/ホバー)から増える軸を、静的な定数ではなく関数1つに閉じるための形。
    *
    * **選択は役割に勝つ**。`state !== 'plain'` のときは役割を見ない ——
    * 保持ソリッド(緑)を選ぶとハイライト色になり、緑は一時的に見えなくなる。
@@ -694,9 +694,10 @@ export function createViewport(container: HTMLElement): Viewport {
     role: OptimizeFaceRole,
     state: FaceMaterialState,
     hovered: boolean,
+    flat = false,
   ): THREE.MeshLambertMaterial {
     const effectiveRole: OptimizeFaceRole = state === 'plain' ? role : 'none'
-    const key = `${effectiveRole}:${state}:${hovered ? 1 : 0}`
+    const key = `${effectiveRole}:${state}:${hovered ? 1 : 0}:${flat ? 1 : 0}`
     const cached = faceMaterialCache.get(key)
     if (cached) return cached
     const base =
@@ -704,6 +705,7 @@ export function createViewport(container: HTMLElement): Viewport {
     const material = new THREE.MeshLambertMaterial({
       color: hovered ? lighten(base, HOVER_LIGHTEN) : base,
       side: THREE.DoubleSide,
+      flatShading: flat,
     })
     faceMaterialCache.set(key, material)
     return material
@@ -889,11 +891,17 @@ export function createViewport(container: HTMLElement): Viewport {
     for (const face of payload.faces) {
       if (face.indices.length === 0) continue // 三角形が取れなかった面(サーバが警告を出す)
       const geometry = faceGeometry(face)
+      // メッシュボディは**面1つ・`kind: "mesh"`** で届く(`duocad/meshbody.py` の
+      // `tessellate`。B-repの面種別にこの値は無い)。三角形がそのまま形なので、
+      // 頂点法線を平均すると元のメッシュに無い滑らかさが出る。
+      const flat = face.kind === 'mesh'
       // **素の材質**で生む(役割・選択・ホバーは `applyFaceMaterials()` が
       // `rebuildPickIndex()`(→ `invalidateHover()`)経由ですぐに塗り直す)。
-      const mesh = new THREE.Mesh(geometry, faceMaterialFor('none', 'plain', false))
+      const mesh = new THREE.Mesh(geometry, faceMaterialFor('none', 'plain', false, flat))
       mesh.userData.bodyId = bodyId
       mesh.userData.faceIndex = face.index
+      // 塗り直す側(`applyFaceMaterials`)は `GeometryPayload` を見ないので、ここで印を残す。
+      mesh.userData.flatShaded = flat
       root.add(mesh)
       faceMeshes.push(mesh)
       sceneObjects.push(mesh)
@@ -901,11 +909,15 @@ export function createViewport(container: HTMLElement): Viewport {
 
       // 面の境界線。装飾ではなく「どこが1つの面か」を見せるためで、
       // これが無いと隣り合う同色の面を狙い分けられず、狙いにくさの計測が意味を失う。
-      const edges = new THREE.EdgesGeometry(geometry, 20)
-      const line = new THREE.LineSegments(edges, edgeMaterial)
-      root.add(line)
-      sceneObjects.push(line)
-      disposables.push(edges)
+      // **メッシュボディには出さない** —— 面が1つしか無いので狙い分けの役に立たず、
+      // 三角形の稜線がそのまま線になって形が潰れる。
+      if (!flat) {
+        const edges = new THREE.EdgesGeometry(geometry, 20)
+        const line = new THREE.LineSegments(edges, edgeMaterial)
+        root.add(line)
+        sceneObjects.push(line)
+        disposables.push(edges)
+      }
     }
     bodies.set(bodyId, { faceMeshes, sceneObjects, disposables })
     rawGeometry.set(bodyId, payload)
@@ -1447,7 +1459,7 @@ export function createViewport(container: HTMLElement): Viewport {
         : (bodyRoles.get(bodyId) ?? 'none')
       const isHovered =
         hoverFace !== null && hoverFace.bodyId === bodyId && hoverFace.faceIndex === faceIndex
-      mesh.material = faceMaterialFor(role, state, isHovered)
+      mesh.material = faceMaterialFor(role, state, isHovered, mesh.userData.flatShaded === true)
     }
   }
 
