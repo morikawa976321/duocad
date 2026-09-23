@@ -528,6 +528,13 @@ class DocumentView:
             self.warnings.append(
                 f"三角形分割が取れなかった面({body.name}): {result['untriangulated']}(画面に出ません)"
             )
+        unresolved = (result.get("boundary") or {}).get("unresolved") or []
+        if unresolved:
+            # 境界折れ線の交差を再分割で解消できなかった面は分割していない(kernel_meshing)。
+            described = [f"{entry['face']}:{','.join(sorted({i['kind'] for i in entry['issues']}))}" for entry in unresolved]
+            self.warnings.append(
+                f"境界の交差を解消できなかった面({body.name}): {described}(画面に出ません)"
+            )
         self._geometry_cache[body_id] = (body.shape, recipe, result)
         return result
 

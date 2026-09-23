@@ -40,7 +40,6 @@ from OCP.BRepBuilderAPI import (
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
 from OCP.BRepGProp import BRepGProp, BRepGProp_Face
-from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakePrism
 from OCP.BRepTools import BRepTools
 from OCP.GCPnts import GCPnts_AbscissaPoint, GCPnts_TangentialDeflection
@@ -61,6 +60,8 @@ from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
 from OCP.TopTools import TopTools_IndexedMapOfShape, TopTools_ListOfShape
 from OCP.TColgp import TColgp_Array1OfPnt
 from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
+
+from . import kernel_meshing
 
 #: describe_shape の faces_by_type が持つキー(この順序が正。query.py が初期化に使う)
 FACE_KINDS = (
@@ -669,11 +670,17 @@ def tessellate(
           "faces": [{"index": int, "kind": str, "area": float, "centroid": [..],
                      "normal": [..], "positions": [x,y,z, ...], "indices": [i,j,k, ...]}],
           "untriangulated": [int, ...],   # 三角形が取れなかった面の添字(通常は空)
+          "boundary": {...},              # 境界折れ線の交差検査と共有辺再分割の診断(`kernel_meshing.mesh_shape`)
         }
 
     `untriangulated` を戻り値に持たせているのは、**分割に失敗した面を黙って落とさない**ため。
     1面でも欠けると画面上はただ穴が空いて見え、原因の分からない不具合になる。
     全面が失敗した場合だけは形状として成立しないので例外にする。
+
+    面分割の直前に境界折れ線の交差を独自に検査し、交差する辺を再分割してから分割する
+    (`kernel_meshing`)。解消できなかった面は**分割せず** `untriangulated` に入れ、
+    `boundary["unresolved"]` に理由(面・辺・種類)を残す —— 交差した境界を面分割へ渡すと
+    穴や非多様体の三角形になり、`untriangulated` にも現れない(docs/TOPOPT_GAP_CAUSALITY.md)。
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot tessellate an empty shape")
@@ -682,15 +689,12 @@ def tessellate(
     if not angular_deflection > 0:
         raise ValueError(f"angular_deflection must be positive, got {angular_deflection!r}")
 
-    # 既存の三角形分割を捨ててから測り直す(前回の粗いメッシュが残っていると偏差が効かない。
-    # STL書き出しは同じ形状を偏差を変えて何度も測る)。
-    BRepTools.Clean_s(shape)
-    # 第3引数 isRelative は必ず False(絶対mm)。True にすると 0.2/0.05/0.01 のどれでも同じ
-    # メッシュになる。**build123d の既定の `export_stl` は True 側**なので、流用すると
+    # 既存の三角形分割は `mesh_shape` が捨ててから測り直す(前回の粗いメッシュが残っていると
+    # 偏差が効かない。STL書き出しは同じ形状を偏差を変えて何度も測る)。偏差は絶対mm
+    # (Relative=False)。True にすると 0.2/0.05/0.01 のどれでも同じメッシュになる。
+    # **build123d の既定の `export_stl` は True 側**なので、流用すると
     # 「deviationを小さくすると細かくなる」が落ちる。
-    mesh = BRepMesh_IncrementalMesh(shape, float(deviation), False, float(angular_deflection), True)
-    if not mesh.IsDone():
-        raise ValueError(f"meshing failed for deviation={deviation} (BRepMesh_IncrementalMesh)")
+    boundary = kernel_meshing.mesh_shape(shape, float(deviation), float(angular_deflection))
 
     shape_map = _face_map(shape)
     faces: List[dict] = []
@@ -713,6 +717,7 @@ def tessellate(
         "bbox": _bounding_box(faces),
         "faces": faces,
         "untriangulated": untriangulated,
+        "boundary": boundary,
     }
 
 
@@ -787,10 +792,14 @@ def tessellate_selective(
         "closed":           閉じた立体か(`_is_closed_shell`。バックフェイス判定の可否)
         faces[i]["detail"]: "fine" | "coarse"
 
-    **2パスで測る**。1回の `BRepMesh_IncrementalMesh` に面ごとの偏差を渡す口がOCCTに無いので、
+    **2パスで測る**。1回の面分割に面ごとの偏差を渡す口がOCCTに無いので、
     粗い面だけを集めたcompound・細かい面だけを集めたcompoundをそれぞれ測り、パスの間で
-    三角形を抜き出す。`BRepTools.Clean_s` を**パスごとに**呼ぶのは、前のパスの三角形が
-    残っていると `BRepMesh_IncrementalMesh` が「もう十分細かい」と判断して測り直さないため。
+    三角形を抜き出す。`BRepTools.Clean_s` を**パスごとに**形状全体へ呼ぶのは、前のパスの三角形が
+    残っているとOCCTが「もう十分細かい」と判断して測り直さないため。
+
+    境界の交差検査・共有辺の再分割(`kernel_meshing`)はパスごとに compound の中で完結する。
+    粗い面と細かい面が共有する辺は2つのパスで別々に離散化されるので、片方のパスで再分割しても
+    もう片方には伝わらない(下記の「隙間」と同じ境目の話。`boundary["passes"]` に両方の診断を残す)。
 
     **分かっている代償(隙間)**: 細かい面と粗い面が**曲線の辺**を共有していると、辺の折れ線が
     パスごとに別々に作られるので、境目に粗い側の偏差ぶんの隙間が開きうる。境目は
@@ -854,6 +863,7 @@ def _tessellate_split(
     coarse = set(range(1, total + 1)) - fine
     described: Dict[int, dict] = {}
     untriangulated: List[int] = []
+    passes: List[dict] = []
 
     for group_indices, dev, angle in (
         (coarse, coarse_deviation, coarse_angular_deflection),
@@ -866,11 +876,9 @@ def _tessellate_split(
         builder.MakeCompound(compound)
         for index in sorted(group_indices):
             builder.Add(compound, shape_map.FindKey(index))
-        # **毎パスで捨ててから測る**(残っていると「十分細かい」と見なされて測り直さない)。
+        # **毎パスで形状全体を捨ててから測る**(残っていると「十分細かい」と見なされて測り直さない)。
         BRepTools.Clean_s(shape)
-        mesh = BRepMesh_IncrementalMesh(compound, float(dev), False, float(angle), True)
-        if not mesh.IsDone():
-            raise ValueError(f"meshing failed for deviation={dev} (BRepMesh_IncrementalMesh)")
+        passes.append(kernel_meshing.mesh_shape(compound, float(dev), float(angle)))
         # **次のパスで Clean_s する前に**抜き出す。
         for index in sorted(group_indices):
             face = TopoDS.Face_s(shape_map.FindKey(index))
@@ -890,6 +898,7 @@ def _tessellate_split(
         "bbox": _bounding_box(faces),
         "faces": faces,
         "untriangulated": sorted(untriangulated),
+        "boundary": kernel_meshing.merge_diagnostics(passes),
     }
 
 

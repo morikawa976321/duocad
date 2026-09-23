@@ -20,6 +20,7 @@ verbが無い。メッシュの名前は `add_mesh_body(name=...)` で作ると�
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import struct
@@ -110,6 +111,8 @@ def geometry(mesh: Mesh) -> dict:
         "face_count": 1,
         "closed": False,
         "untriangulated": [],
+        # 境界検査はB-repの三角形分割にしか無い(メッシュボディは持っている三角形をそのまま配る)
+        "boundary": None,
         "bbox": box,
         "faces": [
             {
@@ -133,8 +136,14 @@ def write_stl(path, sources: Iterable[Iterable[tuple]]) -> None:
 
     三角形が1枚も無ければ ValueError で落とし、**ファイルを作らない**(0バイトの成果物を
     残さない。`kernel.write_step` と同じ規律)。
+
+    **書く前に、float32 に丸めた実際の座標を検証する**(`validate_float32`)。STL は float32 なので、
+    float64 では正常な三角形が丸めで潰れる(2頂点が同じ値になる・共線になる)ことがある。
+    不正なら理由つきの ValueError で止め、**既存の出力ファイルには触らない**(検証は open の前)。
+    頂点を動かしたり三角形を捨てたりして通すことはしない。
     """
     body = bytearray()
+    rounded = []
     count = 0
     for source in sources:
         for (ax, ay, az), (bx, by, bz), (cx, cy, cz) in source:
@@ -147,12 +156,15 @@ def write_stl(path, sources: Iterable[Iterable[tuple]]) -> None:
             else:
                 # 退化三角形(面積0)。法線を作れないのでゼロを書く(STLの規約で許される)。
                 nx = ny = nz = 0.0
-            body += struct.pack(
-                "<12fH", nx, ny, nz, ax, ay, az, bx, by, bz, cx, cy, cz, 0
-            )
+            record = struct.pack("<12fH", nx, ny, nz, ax, ay, az, bx, by, bz, cx, cy, cz, 0)
+            body += record
+            rounded.append(struct.unpack_from("<9f", record, 12))
             count += 1
     if count == 0:
         raise ValueError("cannot write an empty mesh to STL")
+    problems = validate_float32(rounded)
+    if problems:
+        raise ValueError("cannot write STL: float32 に丸めた三角形が不正 " + json.dumps(problems, ensure_ascii=False))
     filename = os.fspath(path)
     try:
         with open(filename, "wb") as handle:
@@ -162,6 +174,31 @@ def write_stl(path, sources: Iterable[Iterable[tuple]]) -> None:
     except OSError:
         _unlink_quietly(filename)
         raise
+
+
+def validate_float32(rounded: list) -> dict:
+    """float32 に丸めた三角形(9値の並び)の不正を数える。空の辞書なら合格。
+
+    有限でない値・縮退(面積が厳密に0。座標が一致する頂点を含む)を数え、最初の数枚の番号を添える。
+    縮退の判定は `mesh_geometry.degenerate_triangles` と同じ厳密な向き判定(固定εを使わない)。
+    """
+    import numpy as np
+
+    from .boundary_check import orient2d  # 素の numpy 実装。OCCT は使わない
+
+    tri = np.asarray(rounded, dtype=np.float64).reshape(-1, 3, 3)
+    problems = {}
+    finite = np.isfinite(tri).all(axis=(1, 2))
+    if not finite.all():
+        problems["non_finite"] = dict(count=int((~finite).sum()), first=np.flatnonzero(~finite)[:10].tolist())
+    zero = np.ones(len(tri), dtype=bool)
+    for drop in range(3):
+        keep = [axis for axis in range(3) if axis != drop]
+        zero &= orient2d(tri[:, 0, keep], tri[:, 1, keep], tri[:, 2, keep]) == 0
+    zero &= finite
+    if zero.any():
+        problems["degenerate"] = dict(count=int(zero.sum()), first=np.flatnonzero(zero)[:10].tolist())
+    return problems
 
 
 def _unlink_quietly(filename: str) -> None:

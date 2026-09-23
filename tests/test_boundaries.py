@@ -27,12 +27,13 @@ DUOCAD_DIR = Path(__file__).resolve().parent.parent / "duocad"
 # 整数倍の箱は体積が厳密一致)が落ちるため、名指しの免除にしてある。幾何アクセスを
 # kernel/query 越しにする移行は別タスクとして残っている。
 #
-# `kernel_brep.py`(生成CADのBRep保存・ブーリアン・最終ソリッドの幾何検査)と
+# `kernel_brep.py`(生成CADのBRep保存・ブーリアン・最終ソリッドの幾何検査)・
+# `kernel_meshing.py`(OCCTの面分割の段階制御と境界交差の再分割)・
 # `mesh_geometry.py`(三角形境界の接続検査と、向き・空洞を保ったCADソリッド化)は
 # **カーネル層の一部**であって verb 層ではない —— `kernel.py` が2,300行あるので
-# 役割ごとに分けてあるだけである。この3本の外でOCPを叩いたら落ちる。
+# 役割ごとに分けてあるだけである。この4本の外でOCPを叩いたら落ちる。
 OCP_ALLOWED = frozenset(
-    {"kernel.py", "kernel_brep.py", "mesh_geometry.py", "topopt/voxelize.py"}
+    {"kernel.py", "kernel_brep.py", "kernel_meshing.py", "mesh_geometry.py", "topopt/voxelize.py"}
 )
 BUILD123D_ALLOWED = frozenset(
     {"query.py", "topopt/voxelize.py", "topopt/anchor.py", "topopt/design_space.py"}
@@ -165,7 +166,7 @@ def test_boundary_scan_covers_every_source_file():
     # 免除一覧が黙って伸びないように、中身そのものを固定する。**増やすときはここも直す** ——
     # 直すこと自体が「境界を1つ緩めた」という判断の記録になる。
     assert OCP_ALLOWED == frozenset(
-        {"kernel.py", "kernel_brep.py", "mesh_geometry.py", "topopt/voxelize.py"}
+        {"kernel.py", "kernel_brep.py", "kernel_meshing.py", "mesh_geometry.py", "topopt/voxelize.py"}
     )
     assert BUILD123D_ALLOWED == frozenset(
         {"query.py", "topopt/voxelize.py", "topopt/anchor.py", "topopt/design_space.py"}

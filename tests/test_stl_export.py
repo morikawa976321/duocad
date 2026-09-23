@@ -71,3 +71,26 @@ def test_several_b_rep_bodies_are_written_one_by_one_as_the_view_measures_them(t
     DocumentTools(session).call("export_stl", {"path": str(path)})
 
     assert np.array_equal(_read_stl(path), view)
+
+
+def test_stl_export_refuses_a_triangle_that_collapses_in_float32(tmp_path):
+    """float64 では面積のある三角形でも float32 に丸めると2頂点が同じ値になる(1000 付近の刻みは約6e-5)。
+    書き出しを理由つきで止め、既存のファイルには触らない。頂点を動かして通すことはしない。"""
+    from duocad.document import make_mesh
+    session = Session(None, 0.2)
+    mesh = make_mesh([1000.0, 0.0, 0.0, 1000.00001, 0.0, 0.0, 1000.0, 1.0, 0.0], [0, 1, 2])
+    session.document.add_body(Body(id="m", name="m", kind="mesh", mesh=mesh))
+    path = tmp_path / "m.stl"
+    path.write_bytes(b"previous")
+    with pytest.raises(ValueError, match="float32"):
+        DocumentTools(session).call("export_stl", {"path": str(path)})
+    assert path.read_bytes() == b"previous"
+
+
+def test_stl_export_reads_back_float32_that_passes_the_same_validation(tmp_path):
+    session = Session(None, 0.2)
+    session.document.add_body(Body(id="part", name="part", kind="solid", shape=_holed_box()))
+    path = tmp_path / "part.stl"
+    DocumentTools(session).call("export_stl", {"path": str(path)})
+    from duocad.meshbody import validate_float32
+    assert validate_float32(_read_stl(path).reshape(-1, 9).tolist()) == {}

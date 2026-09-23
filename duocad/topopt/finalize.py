@@ -3,20 +3,65 @@ import numpy as np
 
 from .. import kernel
 from ..kernel_brep import boolean, encode_brep, inspect_solid, is_valid
-from ..mesh_geometry import topology, make_material
+from ..mesh_geometry import topology, make_material, degenerate_triangles
+from ..mesh_intersections import triangle_intersections
 from . import trace
 
 
 def solid_mesh(shape):
+    """最終CADを偏差0.2 mmで三角形分割し、成果物として合格した (vertices, faces) を返す。
+
+    画面とSTLは同じ `kernel.tessellate` を同じ偏差で呼ぶので、ここで合格したものがそのまま配られる。
+    合格条件は `final_mesh_checks`。不合格は例外(黙って穴の空いたメッシュを返さない)。
+    """
     payload = kernel.tessellate(shape, deviation=0.2)
-    if payload['untriangulated']:
-        raise ValueError('最終CADに三角形分割できない面がある')
+    boundary = payload['boundary']
+    if payload['untriangulated'] or boundary['unresolved']:
+        raise ValueError(
+            f"最終CADに三角形分割できない面がある: untriangulated={payload['untriangulated'][:20]}, "
+            f"boundary={boundary['termination']}, unresolved={boundary['unresolved'][:5]}")
     triangles = np.concatenate([
         np.asarray(face['positions']).reshape(-1, 3)[np.asarray(face['indices']).reshape(-1, 3)]
         for face in payload['faces']
     ])
     vertices, inverse = np.unique(triangles.reshape(-1, 3), axis=0, return_inverse=True)
-    return vertices, inverse.reshape(-1, 3)
+    faces = inverse.reshape(-1, 3)
+    checks = final_mesh_checks(vertices, faces)
+    trace.snapshot('final-mesh-checks', boundary=dict(termination=boundary['termination'], rounds=boundary['rounds'],
+                                                     amplified_edges=boundary['amplified_edges'],
+                                                     reinstated=boundary['reinstated']), **checks)
+    if checks['failed']:
+        raise ValueError(f"最終CADの三角形分割が成果物の条件に不合格: {checks['failed']}")
+    return vertices, faces
+
+
+def final_mesh_checks(vertices, faces):
+    """最終メッシュの合否。戻り値は JSON 化できる辞書で、`failed` に不合格の項目名を並べる。
+
+    - 接続6項目(`topology`)は float64 の頂点で見る(現行の契約)。
+    - **float32 に丸めた座標**でも見る: STL(`meshbody.write_stl`)も画面(three.js の Float32Array)も
+      float32 で消費するので、成果物の自己交差・縮退・頂点の一致は丸めた座標について判定する。
+      float64 で正常でも丸めで別の頂点が同じ座標になったり三角形が潰れたりしうる。
+    - 自己交差(`mesh_intersections`)は正当な共有辺・共有頂点の接触を除いた幾何的な貫通・接触。
+      重い検査なので消費される float32 側だけで 1 回行う。
+    """
+    stats, _ = topology(vertices, faces)
+    failed = [key for key in ('boundary_edges', 'nonmanifold_edges', 'inconsistent_edges',
+                              'nonmanifold_vertices', 'degenerate_triangles', 'duplicate_triangles') if stats[key]]
+    rounded = np.asarray(vertices, dtype=np.float64).astype(np.float32).astype(np.float64)
+    merged = int(len(rounded) - len(np.unique(rounded, axis=0)))
+    degenerate = int(degenerate_triangles(rounded, faces).sum())
+    if merged:
+        failed.append('float32_merged_vertices')
+    if degenerate:
+        failed.append('float32_degenerate_triangles')
+    intersections = triangle_intersections(rounded, faces)
+    if intersections['pairs']:
+        failed.append('self_intersections')
+    return dict(failed=failed, topology=stats,
+                float32=dict(merged_vertices=merged, degenerate_triangles=degenerate),
+                self_intersections=dict(counts=intersections['counts'], candidates=intersections['candidates'],
+                                        pairs=intersections['pairs'][:50]))
 
 
 def _save_shape(name, shape):
