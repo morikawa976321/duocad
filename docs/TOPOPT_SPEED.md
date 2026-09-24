@@ -226,7 +226,8 @@ nnz・充填率・帯幅)の帯に集まった。自由度だけの規則は、h
 `fem.Model.prepare` が K_ff を縮めた直後に呼ぶ `solver="auto"` として追加し、探索
 (`binary_search.SearchConditions.solver`)と6条件(`acceptance.inspect`)の既定を `auto` にした。
 実際に使った解法は6条件の報告の `safety.solver`(方針は`safety.solver_policy`)と実行記録の
-`linear-solve` に出る。計算失敗の再試行は、方針ではなく実際に使った解法の反対側へ替える。`cg_rtol`・
+`linear-solve` に出る。計算失敗しても解法を替えて再試行しない(CG が収束しなければ `PreparedSystem.solve` が
+その場で直接解法まで解いているので、替えても同じ分解の繰り返しになる。issue #37)。`cg_rtol`・
 残差検算(`SOLVE_RESIDUAL_TOL`)・`stress.solve_displacement` の既定(`cg`)は変えていない。
 
 **根拠(315対への当てはめ)**: この規則で直接解法へ回る277対のうち、directのほうが遅かった評価は0、

@@ -1124,8 +1124,8 @@ def test_a_computation_failure_is_not_accepted_and_does_not_stop_the_reduction(m
     conditions, design, _ = appendage_conditions()
     failed = []
 
-    def first_solved_candidate(material):  # FEMまで進んだ最初の候補と、その解法再試行の2回
-        if material.sum() < design.sum() and len(failed) < 2:
+    def first_solved_candidate(material):  # FEMまで進んだ最初の候補
+        if material.sum() < design.sum() and len(failed) < 1:
             failed.append(1)
             return True
         return False
@@ -1134,8 +1134,7 @@ def test_a_computation_failure_is_not_accepted_and_does_not_stop_the_reduction(m
     result = bs.find_best_feasible(design, conditions, max_evaluations=200)
     steps = result.diagnostics['reduction']['steps']
     failed_step = next(step for step in steps if 'safety' in step['failed'])
-    assert len(failed) == 2 and failed_step['outcome'] == 'rejected'
-    assert any(trial.operation.startswith('solver_retry') for trial in result.history)
+    assert len(failed) == 1 and failed_step['outcome'] == 'rejected'
     assert result.best_feasible.material_mm3 < design.sum() and result.termination == 'converged'
 
 
@@ -1225,9 +1224,7 @@ def test_computation_failure_is_recorded_as_unknown_and_never_becomes_the_best_f
     assert result.best_feasible is None
     outcomes = {trial.outcome for trial in result.history}
     assert outcomes == {'unknown'}
-    # 解法変更の再試行(§4.5)が記録されている(同じマスクハッシュで別の解法)
-    retried = [t for t in result.history if t.operation.startswith('solver_retry:')]
-    assert retried and retried[0].mask_hash == result.history[0].mask_hash
+    assert len(result.history) == 1
 
 
 # ---------------------------------------------------------------------------

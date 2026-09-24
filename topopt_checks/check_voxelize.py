@@ -699,35 +699,33 @@ def check_cell_center_convention() -> None:
 # 8. 縮退したレイ(面や辺が列の中心と厳密に一致する場合)で壊れない
 # ---------------------------------------------------------------------------
 def check_degenerate_rays() -> None:
-    print("[8] 縮退したレイでも壊れない(巻き数で数えていることの確認)")
+    print("[8] 縮退したレイでも壊れない(辺に乗った交点は縮退として検知し、ずらしを変える)")
     # 40x40 の上面は2枚の三角形に割れ、その対角線 y=x が列の中心 (±1,±1),(±3,±3),... を
-    # **厳密に**通る。すると1本のレイが2枚の三角形の共有辺に当たり、同じ z に交点が2つ出る。
-    # 偶奇で数えるとその列の内外が反転する(実測15200 mm^3 / 正解16000 mm^3)。
-    # 巻き数なら「入る/出る」の符号が相殺して正しいまま。既定のジッタも同じ縮退を外すが、
-    # 二重の守りのどちらか片方が消えても検出できるようにジッタを切って確かめる。
+    # **厳密に**通る。すると1本のレイが2枚の三角形の共有辺に当たる。偶奇で数えるとその列の
+    # 内外が反転し(実測15200 mm^3 / 正解16000 mm^3)、巻き数でも「両方に数える」と空洞のある形で
+    # 空洞が材料になる(`tests/test_voxelize_occupancy.py`)。辺に乗った交点は縮退として検知し、
+    # 既定のずらしの列でやり直す。ずらしを切ると検知で落ちることも見る(検知が空振りでない確認)。
     soup = vx.triangles_from_shape(vx._unwrap(Box(40, 40, 10)), deviation=0.04)
     grid = vx.grid_for_bbox(*soup.bbox, 20)
     jittered, stats_j = vx.occupancy(soup, grid)
-    plain, stats_p = vx.occupancy(soup, grid, jitter=(0.0, 0.0))
     exact = 40.0 * 40.0 * 10.0
     check(
-        "レイのずらしを切っても体積が厳密に一致する",
-        plain.sum() * grid.element_volume == exact,
-        f"ずらし無し={plain.sum() * grid.element_volume:.1f} / "
+        "既定のずらしで体積が厳密に一致する",
+        jittered.sum() * grid.element_volume == exact,
         f"ずらし有り={jittered.sum() * grid.element_volume:.1f} / 正解{exact:.1f} mm^3",
     )
-    check(
-        "その姿勢で実際に縮退が起きている(検査が空振りでないことの確認)",
-        stats_p["crossings"] > stats_j["crossings"],
-        f"交点数 ずらし無し{stats_p['crossings']} > ずらし有り{stats_j['crossings']} "
-        "(差が共有辺の二重計上)",
-    )
+    try:
+        vx.occupancy(soup, grid, jitter=(0.0, 0.0))
+        detected, detail = False, "ずらし無しで例外にならなかった(共有辺の交点を検知していない)"
+    except ValueError as exc:
+        detected, detail = True, f"ずらし無しは ValueError: {str(exc)[:50]}"
+    check("ずらしを切ると、共有辺を通るレイを縮退として検知する", detected, detail)
     check(
         "巻き数が0に戻らない列が無い",
-        stats_p["unbalanced_columns"] == 0 and stats_j["unbalanced_columns"] == 0,
-        f"ずらし無し{stats_p['unbalanced_columns']}本 / ずらし有り{stats_j['unbalanced_columns']}本",
+        stats_j["unbalanced_columns"] == 0,
+        f"ずらし有り{stats_j['unbalanced_columns']}本",
     )
-    RESULTS["degenerate_extra_crossings"] = stats_p["crossings"] - stats_j["crossings"]
+    RESULTS["degenerate_edge_ray_detected"] = detected
 
     # 巻き数だけでは守れない縮退もある: 円錐の頂点は三角形が数十枚集まる点で、レイが
     # そこを厳密に貫くと「出る」ばかりが数十回数えられ、巻き数が0に戻らない。ここは

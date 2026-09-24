@@ -329,7 +329,9 @@ def evaluate(
         allowable_mpa=float(allowable_mpa),
         representative_mpa=rep.value,
         raw_max_mpa=rep.raw_max,
-        max_displacement_mm=float(np.abs(displacement).max()) * scale.displacement_factor,
+        # 節点変位の大きさ |(ux, uy, uz)| の最大(成分の最大は斜めの荷重で最大 √3 倍小さく出る)。
+        max_displacement_mm=float(np.linalg.norm(displacement.reshape(-1, 3), axis=1).max())
+        * scale.displacement_factor,
         scale=scale,
         representative=rep,
         field=field,

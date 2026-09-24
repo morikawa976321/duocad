@@ -347,11 +347,11 @@ def _evaluate_survivor(survivor: np.ndarray, before: np.ndarray, conditions: Sea
                        *, parent: Optional[int], operation: str, history: list,
                        fields: Optional[dict] = None, overrides: Optional[dict] = None,
                        counter: Optional[dict] = None) -> tuple[dict, Trial]:
-    """1個の生存成分を検査し、history に記録する(段階3・4共通、§4.5の解法再試行を含む)。
+    """1個の生存成分を検査し、history に記録する(段階3・4共通)。
 
-    計算失敗(`unknown`、原因`evaluation_error`)は、同じマスク・条件のまま一度だけ
-    別解法で再試行する(§4.5「解法変更による再試行は有限の規則にする」)。それでも
-    `unknown` ならそのまま返す。
+    計算失敗(`unknown`、原因`evaluation_error`)は**解法を変えて再試行しない**。CG は収束すれば
+    残差検算(`fem.SOLVE_RESIDUAL_TOL`)を通る精度まで詰めてあり、収束しなければ `PreparedSystem.solve`
+    がその場で直接解法まで解いている —— 解法を替えた再試行は同じ分解の繰り返しにしかならない。
     `conditions.keep_cells` があれば、`survivor` が全保持セルを含むことをここで確かめる(破れたら例外。黙って塗り直さない)。
     `fields` / `overrides` は `acceptance.inspect` へそのまま渡す。`counter` を渡すと、
     FEMまで進んだ検査の回数を `counter['fem_solves']` に足す。
@@ -359,26 +359,14 @@ def _evaluate_survivor(survivor: np.ndarray, before: np.ndarray, conditions: Sea
     keep = _keep_cells(conditions, survivor.shape)
     if keep is not None and not survivor[keep].all():
         raise RuntimeError(f'評価に回る候補が保持セルを {int((keep & ~survivor).sum())} 個欠いている(探索が保持セルを空にした)')
-    kwargs = {**conditions.inspect_kwargs(), **(overrides or {})}
-
-    def evaluate(solver: str, label: str, parent_index: Optional[int]) -> tuple:
-        if fields is not None:
-            fields.clear()
-        report = acceptance.inspect(survivor, before, conditions.grid, **{**kwargs, 'solver': solver},
-                                    fields=fields)
-        if counter is not None and report['checks']['safety'].get('reason') != 'prerequisites_failed':
-            counter['fem_solves'] += 1
-        trial = _record_trial(history, parent_index, label, report)
-        history.append(trial)
-        return report, trial
-
-    report, trial = evaluate(conditions.solver, operation, parent)
-    if report['status'] == 'unknown' and report['checks']['safety'].get('reason') == 'evaluation_error':
-        # 反対側は方針(`'auto'`)ではなく実際に使った解法から見て決める(`auto` が選んだ解法をもう一度選ばない)。
-        used = report['checks']['safety'].get('solver') or conditions.solver
-        alternate = 'direct' if used != 'direct' else 'cg'
-        report, trial = evaluate(alternate, f'solver_retry:{alternate}', trial.index)
-        trial.note = f'同じマスク・条件で解法を{used}→{alternate}に変えて再試行'
+    if fields is not None:
+        fields.clear()
+    report = acceptance.inspect(survivor, before, conditions.grid,
+                                **{**conditions.inspect_kwargs(), **(overrides or {})}, fields=fields)
+    if counter is not None and report['checks']['safety'].get('reason') != 'prerequisites_failed':
+        counter['fem_solves'] += 1
+    trial = _record_trial(history, parent, operation, report)
+    history.append(trial)
     return report, trial
 
 
@@ -412,7 +400,7 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
 
     全材料が合格しなければ、候補を作らず `no_feasible_found` を返す(§4.2)。`termination` は、島を除いて条件を
     単独で満たす成分が無い・最小幅の規則を満たさない・6条件のどれかが不合格なら `full_material_infeasible`、
-    FEMの計算失敗(解法を変えた再試行の後も)だけなら `evaluation_error`。落ちた検査は
+    FEMの計算失敗だけなら `evaluation_error`。落ちた検査は
     `diagnostics['full_material']`(`islands` と、成分ごとの `attempts`: `trial` / `status` / `failed` / `checks`)。
     評価は bbox キャッシュも保持・除外の前計算も使わない(§3。段階4が戻り先にする合格形状なので)。
 

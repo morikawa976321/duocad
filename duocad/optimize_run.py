@@ -1605,7 +1605,7 @@ def _full_material_failure_message(search_result: Any, factor: float = 1.0) -> s
                                  f"(= 目標 {searched / factor:.4g} × 係数 {factor:.3g})に届かない")
                 reasons.append(f"安全率 {float(check['safety_factor']):.4g} が{shortfall}")
     if search_result.termination == 'evaluation_error':
-        head = "設計空間の全材料の応力計算が、解法を変えた再試行の後も失敗した"
+        head = "設計空間の全材料の応力計算が失敗した"
     else:
         head = "設計空間の全材料でも6条件に合格しない"
     detail = f": {'、'.join(reasons)}" if reasons else ""
@@ -1685,16 +1685,14 @@ def _region_representation(doc: "Document", bundle: ConditionBundle, space) -> L
         for body_id in body_ids:
             body = doc.get_body(body_id)
             soup = vx.triangles_from_shape(body.shape, deviation=deviation)
-            reason = None
-            try:
-                mask, _stats = vx.occupancy(soup, space.grid)
-            except ValueError as error:
-                # **格子の列(セル中心を通る +z のレイ)が1本もその形状を貫かない**と
-                # `occupancy` は縮退として落ちる。この配線ではそれは異常ではなく
-                # 「この解像度ではこの形状を表現できていない」そのもの(実測: 要素サイズ
-                # 4mm の格子に 1mm 角の保持ソリッドを置くと必ずこれになる)。0要素として扱う。
-                mask = np.zeros(space.grid.shape, dtype=bool)
-                reason = str(error)
+            # **格子の列(セル中心を通る +z のレイ)が1本もその形状を貫かない**のは異常ではなく
+            # 「この解像度ではこの形状を表現できていない」そのもの(実測: 要素サイズ 4mm の格子に
+            # 1mm 角の保持ソリッドを置くと必ずこれになる)。0要素として扱う。
+            mask, occupancy_stats = vx.occupancy(soup, space.grid, allow_empty=True)
+            reason = (
+                "格子の列(セル中心を通る +z のレイ)が1本もこの形状を貫かない"
+                if occupancy_stats.get("empty") else None
+            )
             elements = int(np.count_nonzero(mask))
             inside = int(np.count_nonzero(mask & design))
             # **除外は塊から引かれている**ので `inside` は 0 が正しい。表現できているかを
