@@ -140,6 +140,56 @@ def test_the_array_directory_is_recreated_when_it_disappears_mid_run(recordings)
     assert rec.write_failures == 0
 
 
+def _grid_and_triangle():
+    from duocad.topopt.voxelize import Grid
+    return (Grid(origin=(0.,0.,0.), spacing=2., shape=(1,1,1)),
+            np.array([[0.,0.,0.],[1.,0.,0.],[0.,1.,0.]]), np.array([[0,1,2]]))
+
+
+def test_the_final_stl_is_written_with_its_hash_in_the_manifest(recordings):
+    """落ちたら、最終メッシュの記録(final.stl とその内容ハッシュ)が残っていない。"""
+    import hashlib
+    grid, vertices, faces = _grid_and_triangle()
+    with trace.recording() as rec:
+        trace.final_mesh(vertices,vertices,faces,grid,final_vertices=vertices,final_faces=faces)
+    manifest=json.loads((rec.path/'manifest.json').read_text(encoding='utf-8'))
+    assert hashlib.sha256((rec.path/'final.stl').read_bytes()).hexdigest()==manifest['final_stl_sha256']
+    assert rec.write_failures == 0
+
+
+def test_the_final_stl_write_failure_does_not_lose_the_solved_shape(recordings,monkeypatch):
+    """落ちたら、探索が終わった後の final.stl の書き込み失敗が最適化全体を巻き込んで落としている。"""
+    grid, vertices, faces = _grid_and_triangle()
+    real=trace._atomic
+    def fail(path,write):
+        if path.name=='final.stl': raise OSError('disk full')
+        return real(path,write)
+    with trace.recording() as rec:
+        monkeypatch.setattr(trace,'_atomic',fail)
+        trace.final_mesh(vertices,vertices,faces,grid,final_vertices=vertices,final_faces=faces)
+    manifest=json.loads((rec.path/'manifest.json').read_text(encoding='utf-8'))
+    assert 'final_stl_sha256' not in manifest
+    assert manifest['write_failures'] == rec.write_failures == 1
+    assert manifest['status'] == 'complete'
+
+
+def test_a_failed_input_json_does_not_stop_the_run_from_starting(recordings,monkeypatch):
+    """落ちたら、記録の開始時の書き込み失敗だけで実行が始まらない(方針が snapshot と食い違っている)。"""
+    from duocad.session import Session
+    session=Session(None,.2)
+    real=trace._atomic
+    def fail(path,write):
+        if path.name=='input.json': raise OSError('disk full')
+        return real(path,write)
+    monkeypatch.setattr(trace,'_atomic',fail)
+    with trace.recording(session.document) as rec:
+        trace.snapshot('after-start',value=1)
+    manifest=json.loads((rec.path/'manifest.json').read_text(encoding='utf-8'))
+    assert 'input_sha256' not in manifest
+    assert manifest['write_failures'] == 1 and manifest['status'] == 'complete'
+    assert snapshot(rec,'after-start')['value'] == 1
+
+
 def test_product_input_error_is_archived(recordings):
     from duocad.session import Session
     from duocad import optimize_run

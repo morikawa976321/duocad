@@ -1,14 +1,12 @@
 """実製品の1実行に閉じた診断記録。配列は損失なし・内容ハッシュで重複排除する。
 
 ContextVarは製品の実行器スレッド内だけに設定する。数値関数を単独で呼ぶと記録しない。
-**スナップショットとイベントの保存が失敗しても計算を止めない**(`snapshot` / `event` / `_manifest` は
+**記録の書き込みが失敗しても計算を止めない**(`snapshot` / `event` / `_manifest` / `save` のすべてが
 best effort)。記録は診断のための仕組みであり、解けた形状を捨てる権利を持たない —— `arrays/` が実行中に
 消えて `OSError` が `acceptance.safety_check` の `except Exception` に落ち、FEMが解けている候補を20回
 続けて「安全率を計算できず」で不合格にした実績がある(2026-09-24)。失敗は握りつぶさず `write_failures`
-に数えて manifest と stderr へ出し、記録が欠けた実行を無傷に見せない。
-**`provenance` / `document` / `final_mesh` の直接の書き出しはこの扱いに入れていない**(探索の候補評価では
-なく、実行の前後で1回ずつ走る経路)。`_encode` の `TypeError` も伝える —— 記録できない値を渡したのは
-こちらの書き方の誤りで、飲むと永久に気づけない。
+に数えて manifest と stderr へ出し、記録が欠けた実行を無傷に見せない。`_encode` の `TypeError` は
+伝える —— 記録できない値を渡したのはこちらの書き方の誤りで、飲むと永久に気づけない。
 """
 from __future__ import annotations
 
@@ -177,6 +175,20 @@ class Recorder:
         self.event('snapshot', name=name, file=filename)
         return filename
 
+    def save(self, name, write, *, digest):
+        """記録用のファイルを1つ書き、書いた後に読み返した内容のハッシュを manifest の `digest` へ入れる。
+
+        `snapshot` と同じく best effort。手元のバイト列ではなく読み返して数えるので、
+        **manifest にハッシュがある = そのファイルが最後まで書けている**。
+        """
+        try:
+            _atomic(self.path/name, write)
+            self.manifest[digest] = hashlib.sha256((self.path/name).read_bytes()).hexdigest()
+        except OSError as error:
+            self._failed(f'save:{name}', error)
+            return False
+        return True
+
     @contextmanager
     def phase(self, name, inputs):
         self.sequence += 1
@@ -214,13 +226,11 @@ class Recorder:
                     archive.write(path,path.relative_to(ROOT).as_posix())
                 for name in ('pyproject.toml','uv.lock'):
                     if (ROOT/name).exists(): archive.write(ROOT/name,name)
-        _atomic(self.path/'source.zip',write_sources)
-        self.manifest['source_sha256'] = hashlib.sha256((self.path/'source.zip').read_bytes()).hexdigest()
+        self.save('source.zip',write_sources,digest='source_sha256')
 
     def document(self, doc, name):
         data = doc.log.to_json().encode('utf-8')
-        _atomic(self.path/f'{name}.json',lambda stream:stream.write(data))
-        self.manifest[name+'_sha256'] = hashlib.sha256(data).hexdigest()
+        self.save(f'{name}.json',lambda stream:stream.write(data),digest=name+'_sha256')
         self.snapshot(name+'-state', dict(parameters=doc.parameters, optimize=doc.optimize,
                       bodies=[dict(id=b.id,name=b.name,kind=b.kind) for b in doc.bodies]))
 
@@ -306,8 +316,7 @@ def final_mesh(raw, smooth, faces, grid, *, final_vertices, final_faces):
             text += ''.join('vertex '+' '.join(format(float(v),'.17g') for v in point)+'\n' for point in triangle)
             stream.write((text+'endloop\nendfacet\n').encode('ascii'))
         stream.write(b'endsolid optimized\n')
-    _atomic(recorder.path/'final.stl',write)
-    recorder.manifest['final_stl_sha256'] = hashlib.sha256((recorder.path/'final.stl').read_bytes()).hexdigest()
+    recorder.save('final.stl',write,digest='final_stl_sha256')
 
 
 def load_snapshot(path):
