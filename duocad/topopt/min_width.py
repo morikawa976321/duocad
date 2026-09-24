@@ -321,7 +321,9 @@ class CoreConnectivity:
                 self.stats['window_true' if verdict else 'window_false'] += 1
                 self.stats['max_margin'] = max(self.stats['max_margin'], margin)
                 return verdict
-            if (lo == 0).all() and (hi == np.asarray(shape)).all():
+            # 窓が格子の 1/8 を超えたら、これ以上広げるより大域で数えるほうが安い(小さい格子では大域が 1 ms 未満。
+            # 合成題材 52×36×36 で窓を広げ続けると peel が 36 → 47 秒に増えた実測)。
+            if (lo == 0).all() and (hi == np.asarray(shape)).all() or 8 * int(np.prod(hi - lo)) >= int(np.prod(shape)):
                 self.stats['global_count'] += 1
                 return self.connected(inner)
             margin *= 2
