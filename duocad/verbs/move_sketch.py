@@ -454,7 +454,7 @@ def move_sketch_entities(
       元と完全に重なる図形ができて領域検出が壊れる)。
     - `mode="rotate"` … スケッチ平面の法線まわりに `angle` 度だけ回す(中心の決め方は
       `_rotation_args`)。**360の倍数は ValueError**(0度と同じ理由)。
-      **長方形をまるごと回すのは ValueError**(モジュールdocstring)。
+      長方形をまるごと回すと `angle` も同じだけ回り、長方形のまま残る。
     - **モードが取らない引数を渡すと ValueError**(黙って片方だけ効くことは無い)。
     - 数値が非有限なら ValueError。動かした結果が使えない図形(長さ0の線分など)になっても
       ValueError で、**文書にもログにも何も残さない**。

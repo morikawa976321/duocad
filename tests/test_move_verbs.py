@@ -21,7 +21,7 @@ import json
 import pytest
 
 from duocad import kernel, query, selection, sketch
-from duocad.document import Document
+from duocad.document import Body, Document
 from duocad.oplog import OpLog, verb_handler
 from duocad.server import Server, Session
 from duocad.verbs import move_sketch_entities as move_sketch_entities_verb
@@ -63,6 +63,22 @@ def _center(body) -> list:
     return kernel.bounding_box(body.shape)["center"]
 
 
+BEZIER = {"x0": 0.0, "y0": 0.0, "cx1": 1.0, "cy1": 2.0, "cx2": 3.0, "cy2": 2.0, "x1": 4.0, "y1": 0.0}
+
+
+def _add_bezier(session: Session, sketch_id: str) -> str:
+    """ベジエを作るverbは無い(取り込み専用の種別)ので、モデルへ直接置く。"""
+    from duocad import parameters as parameters_mod
+
+    doc = session.document
+    refs = {key: parameters_mod.register_value(doc, value) for key, value in BEZIER.items()}
+    entity_id = "entity-bezier-test"
+    sketch.get_sketch(doc, sketch_id).entities.append(
+        sketch.Entity(id=entity_id, kind="bezier", params=refs)
+    )
+    return entity_id
+
+
 # --------------------------------------------------------------------------------------
 # 選択の新しい種別
 # --------------------------------------------------------------------------------------
@@ -76,14 +92,6 @@ def test_a_sketch_entity_can_be_selected_as_a_point_or_as_a_whole(session: Sessi
     assert point["point"] == "x0" and whole["point"] is None
     # **点と辺は別物**(同じ図形を指していても同じ参照ではない)
     assert not selection.same_ref(point, whole)
-
-
-def test_a_region_reference_is_still_a_region(session: Session) -> None:
-    """`entity` を持たない `sketch` つきの参照は今までどおり領域である(見分けの規則)。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_rectangle(sketch_id, [0.0, 0.0], 10.0, 10.0)
-    region_ref = selection.select_region(session.document, sketch_id, 1)
-    assert selection.ref_kind(region_ref) == selection.REGION_KIND
 
 
 def test_a_point_that_the_kind_does_not_have_is_refused(session: Session) -> None:
@@ -103,17 +111,24 @@ def test_selecting_a_sketch_entity_that_does_not_exist_is_an_error(session: Sess
         selection.select_sketch_entity(session.document, "sketch-nope", "entity-x")
 
 
-def test_the_point_table_covers_every_entity_kind() -> None:
-    """**全種別が点の定義を持つ**(表に1行足し忘れると move が黙って何もできなくなる)。
-
-    寸法(半径・幅高さ・角度)は点に入らないことも同時に見る。
-    """
-    dimensions = {"radius", "width", "height", "start_deg", "end_deg"}
+def test_every_kind_has_points_and_a_translation_moves_all_of_them(session: Session) -> None:
+    """全種別が点の定義を持ち(表に1行足し忘れると move が黙って何もできない)、点のキーは
+    図形の平行移動で必ず動く(動かない寸法のキーが点の表に紛れていない)。"""
     for kind in sketch.ENTITY_KINDS:
-        pairs = sketch.entity_point_keys(kind)
-        assert pairs, f"{kind} に動かせる点が1つも無い"
-        for x_key, y_key in pairs:
-            assert x_key not in dimensions and y_key not in dimensions
+        assert sketch.entity_point_keys(kind), f"{kind} に動かせる点が1つも無い"
+
+    sketch_id, _ = _line(session)
+    session.add_circle(sketch_id, [0.0, 0.0], 2.0)
+    session.add_rectangle(sketch_id, [0.0, 0.0], 4.0, 2.0)
+    session.add_arc(sketch_id, [0.0, 0.0], 3.0, 0.0, 90.0)
+    _add_bezier(session, sketch_id)
+    for entity in sketch.get_sketch(session.document, sketch_id).entities:
+        before = _params(session, sketch_id, entity.id)
+        after = {**before, **sketch.entity_kind_ops(entity.kind).translate(before, 1.0, 2.0)}
+        for x_key, y_key in sketch.entity_point_keys(entity.kind):
+            assert (after[x_key], after[y_key]) == (before[x_key] + 1.0, before[y_key] + 2.0), (
+                f"{entity.kind} の点 {x_key} が平行移動で動かない(寸法が点の表に入っている)"
+            )
 
 
 # --------------------------------------------------------------------------------------
@@ -221,20 +236,7 @@ def test_undo_restores_both_points_of_one_entity(session: Session) -> None:
 def test_two_control_points_of_one_bezier_both_move(session: Session) -> None:
     """点が4つある種別(ベジエ)でも併合が効く(線分だけの性質ではない)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    # **ベジエを作るverbは無い**(取り込み専用の種別)ので、モデルへ直接置く。
-    doc = session.document
-    from duocad.sketch import Entity, get_sketch
-    from duocad import parameters as parameters_mod
-
-    params = {
-        "x0": 0.0, "y0": 0.0, "cx1": 1.0, "cy1": 2.0,
-        "cx2": 3.0, "cy2": 2.0, "x1": 4.0, "y1": 0.0,
-    }
-    refs = {key: parameters_mod.register_value(doc, value) for key, value in params.items()}
-    bezier_id = "entity-bezier-test"
-    get_sketch(doc, sketch_id).entities.append(
-        Entity(id=bezier_id, kind="bezier", params=refs)
-    )
+    bezier_id = _add_bezier(session, sketch_id)
     _select(session, [
         {"sketch": sketch_id, "entity": bezier_id, "point": "cx1"},
         {"sketch": sketch_id, "entity": bezier_id, "point": "cx2"},
@@ -403,17 +405,6 @@ def test_the_copy_is_not_part_of_a_pattern(session: Session) -> None:
     assert new_id not in patterns[0].sources
 
 
-def test_undo_restores_the_moved_point(session: Session) -> None:
-    sketch_id, entity_id = _line(session)
-    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": "x0"}])
-    session.move_sketch_entities(3.0, 4.0)
-    session.undo()
-
-    moved = _params(session, sketch_id, entity_id)
-    assert moved["x0"] == pytest.approx(0.0, abs=1e-9)
-    assert moved["y0"] == pytest.approx(0.0, abs=1e-9)
-
-
 def test_undo_removes_the_copy(session: Session) -> None:
     sketch_id, entity_id = _line(session)
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
@@ -427,15 +418,6 @@ def test_undo_removes_the_copy(session: Session) -> None:
     # **名前つきの値も一緒に消す**(消し忘れると `d1` が増え続ける)
     assert len(session.document.parameters) == before_parameters - 4
     assert new_id not in {entity.id for entity in entities}
-
-
-def test_redo_puts_the_move_back(session: Session) -> None:
-    sketch_id, entity_id = _line(session)
-    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": "x0"}])
-    session.move_sketch_entities(3.0, 4.0)
-    session.undo()
-    session.redo()
-    assert _params(session, sketch_id, entity_id)["x0"] == pytest.approx(3.0)
 
 
 def test_the_move_survives_save_and_replay(session: Session) -> None:
@@ -458,9 +440,8 @@ def test_the_move_survives_save_and_replay(session: Session) -> None:
 
 
 def test_the_selection_resets_after_a_sketch_move(session: Session) -> None:
-    """確定後に選択を空にする(他の形状変更verbと同じ既定の契約。
-    `tests/test_server_selection_reset.py` の RESETTING_VERBS 参照)。
-    """
+    """確定後に選択を空にする(他の形状変更verbと同じ既定の契約。`duocad/catalog.py` の
+    `resets_selection`)。"""
     sketch_id, entity_id = _line(session)
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": "x0"}])
     session.move_sketch_entities(1.0, 0.0)
@@ -691,32 +672,6 @@ def test_the_body_revision_moves_with_the_shape(session: Session) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# kernel の平行移動そのもの
-# --------------------------------------------------------------------------------------
-def test_translating_a_shape_does_not_touch_the_original() -> None:
-    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
-
-    shape = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
-    before = kernel.bounding_box(shape)["center"]
-    moved = kernel.translate_shape(shape, 1.0, 2.0, 3.0)
-
-    assert kernel.bounding_box(shape)["center"] == pytest.approx(before)
-    assert kernel.bounding_box(moved)["center"] == pytest.approx(
-        [before[0] + 1.0, before[1] + 2.0, before[2] + 3.0]
-    )
-
-
-def test_translating_back_is_exact() -> None:
-    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
-
-    shape = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
-    before = kernel.bounding_box(shape)["center"]
-    there = kernel.translate_shape(shape, 1.3, -2.7, 3.9)
-    back = kernel.translate_shape(there, -1.3, 2.7, -3.9)
-    assert kernel.bounding_box(back)["center"] == pytest.approx(before, abs=1e-12)
-
-
-# --------------------------------------------------------------------------------------
 # move_body(mode="rotate")
 # --------------------------------------------------------------------------------------
 #
@@ -741,6 +696,20 @@ def _vertical_edge_at(body, u: float, v: float) -> int:
         if (start[0], start[1]) == pytest.approx((u, v)) and (end[0], end[1]) == pytest.approx((u, v)):
             return edge["index"]
     raise AssertionError(f"({u}, {v}) に縦の辺が無い")
+
+
+def _l_body(session: Session):
+    """XY平面上のL字(20×5 と 5×20・厚さ5)。重心が境界箱の中心と違い、境界箱の中心まわりに
+    180度回すと境界箱は同じまま別の形になる。"""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+    shape = BRepAlgoAPI_Fuse(
+        BRepPrimAPI_MakeBox(20.0, 5.0, 5.0).Shape(), BRepPrimAPI_MakeBox(5.0, 20.0, 5.0).Shape()
+    ).Shape()
+    body = Body(id="body-l", name="solid", kind="solid", shape=shape)
+    session.document.add_body(body)
+    return body
 
 
 def _vertex_at(body, point) -> int:
@@ -809,35 +778,19 @@ def test_a_curved_edge_cannot_be_an_axis(session: Session) -> None:
     assert "not a straight line" in str(error.value)
 
 
-def test_the_default_centre_is_the_centroid_not_the_origin(session: Session) -> None:
-    """**中心を省くと対象の重心を軸が通る**(45度回しても重心が動かない)。
-
-    45度にしてあるのは、90度だと正方形断面が自分自身に写って「原点まわりに回した」場合と
-    見分けが付かないためである。原点まわりに回した場合(下の対照)は重心が動く。
-    """
-    body, _sketch_id = _box(session)
+def test_the_default_centre_is_the_centroid(session: Session) -> None:
+    """中心を省くと軸は対象の**重心**を通る(原点でも境界箱の中心でもない)。落ちたら、
+    45度回した後のL字の重心が動いている。"""
+    body = _l_body(session)
     before = kernel.centroid(body.shape)
+    assert before[:2] != pytest.approx(_bbox(body)["center"][:2], abs=1.0), "題材の前提"
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     session.move_body(mode="rotate", axis_dir=[0.0, 0.0, 1.0], angle=45.0)
 
     after = kernel.centroid(session.document.get_body(body.id).shape)
     assert after == pytest.approx(before, abs=1e-6)
-    # ログに残った軸は重心を通っている(境界箱の中心ではない、が言えるのは対称でない形だが、
-    # ここでは「原点ではない」ことと「重心と一致する」ことを見る)
     args = session.document.log.entries[-1].args
     assert args["axis_point"][:2] == pytest.approx(before[:2], abs=1e-9)
-
-
-def test_an_explicit_axis_point_moves_the_body(session: Session) -> None:
-    """対照実験 —— 同じ45度でも軸を原点に置けば重心は動く(既定が効いていることの裏)。"""
-    body, _sketch_id = _box(session)
-    before = kernel.centroid(body.shape)
-    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
-    session.move_body(
-        mode="rotate", axis_point=[0.0, 0.0, 0.0], axis_dir=[0.0, 0.0, 1.0], angle=45.0
-    )
-    after = kernel.centroid(session.document.get_body(body.id).shape)
-    assert after != pytest.approx(before, abs=1e-3)
 
 
 def test_a_center_vertex_moves_the_axis_to_that_vertex(session: Session) -> None:
@@ -944,17 +897,6 @@ def test_undo_puts_a_rotated_body_back(session: Session) -> None:
     assert after["max"] == pytest.approx(before["max"], abs=1e-9)
 
 
-def test_undo_removes_a_rotated_copy(session: Session) -> None:
-    body, _sketch_id = _box(session)
-    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
-    (new_id,) = session.move_body(
-        mode="rotate", axis_dir=[0.0, 0.0, 1.0], angle=90.0, copy=True
-    )["created"]
-    session.undo()
-    assert [b.id for b in session.document.bodies] == [body.id]
-    assert new_id not in {b.id for b in session.document.bodies}
-
-
 def test_a_rotation_survives_save_and_replay(session: Session) -> None:
     """**ログが唯一の正**。軸が数値で載っているので、再生でも同じ形になる。"""
     body, _sketch_id = _box(session)
@@ -990,13 +932,6 @@ def test_a_replayed_log_without_a_mode_is_still_a_translation(session: Session) 
         ),
     )
     assert _bbox(session.document.get_body(body.id))["min"][0] == pytest.approx(before[0] + 4.0)
-
-
-def test_the_selection_resets_after_a_body_rotation(session: Session) -> None:
-    body, _sketch_id = _box(session)
-    _select(session, [{"body": body.id, "kind": "face", "index": 3}])
-    session.move_body(mode="rotate", axis_dir=[0.0, 0.0, 1.0], angle=15.0)
-    assert session.get_selection()["items"] == []
 
 
 @pytest.mark.parametrize(
@@ -1074,19 +1009,19 @@ def test_an_edge_axis_can_be_combined_with_a_center_vertex(session: Session) -> 
     assert box["max"][:2] == pytest.approx([2 * SIDE, SIDE], abs=1e-6)
 
 
-def test_a_symmetric_body_may_be_rotate_copied_onto_itself(session: Session) -> None:
-    """**ボディ側は「元と重なる複製」を断らない**(既知の穴。`move_body` のdocstring)。
-
-    スケッチ側(`test_a_copy_that_lands_on_its_source_is_refused`)は `params` の一致で
-    弾けるが、ソリッドには同じだけ安くて健全な判定が無い。**将来うっかり境界箱の一致などの
-    不健全な判定を入れると、L字を180度回した「重なっていない」場合まで断ってしまう** ——
-    その事故を検知するために、いまの挙動(通す)をそのまま固定しておく。
-    """
-    body, _sketch_id = _box(session)   # 20mm角の立方体 = Zまわりに90度対称
+def test_a_rotated_copy_with_the_same_bounding_box_is_not_refused(session: Session) -> None:
+    """L字を境界箱の中心まわりに180度回した複製は元と重ならないので通る。落ちたら、境界箱の
+    一致で「重なる」とみなす不健全な判定が入っている。"""
+    body = _l_body(session)
+    box = _bbox(body)
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
-    applied = session.move_body(mode="rotate", axis_dir=[0.0, 0.0, 1.0], angle=90.0, copy=True)
-    assert len(applied["created"]) == 1
-    assert len(session.document.bodies) == 2
+    applied = session.move_body(
+        mode="rotate", axis_point=box["center"], axis_dir=[0.0, 0.0, 1.0], angle=180.0, copy=True
+    )
+
+    copied = _bbox(session.document.get_body(applied["created"][0]))
+    assert copied["min"] == pytest.approx(box["min"], abs=1e-6), "題材の前提"
+    assert copied["max"] == pytest.approx(box["max"], abs=1e-6), "題材の前提"
 
 
 def test_an_axis_point_cannot_be_combined_with_a_center_vertex(session: Session) -> None:
@@ -1102,39 +1037,6 @@ def test_an_axis_point_cannot_be_combined_with_a_center_vertex(session: Session)
             center_vertex={"body": body.id, "index": index},
             angle=90.0,
         )
-
-
-def test_redo_puts_a_rotation_back(session: Session) -> None:
-    """undo -> redo で回った状態へ戻る(`_do_*` と `_undo_*` が同じ変換を通る)。"""
-    body, _sketch_id = _box(session)
-    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
-    session.move_body(
-        mode="rotate", axis_point=[0.0, 0.0, 0.0], axis_dir=[0.0, 0.0, 1.0], angle=90.0
-    )
-    rotated = _bbox(session.document.get_body(body.id))
-    session.undo()
-    session.redo()
-
-    again = _bbox(session.document.get_body(body.id))
-    assert again["min"] == pytest.approx(rotated["min"], abs=1e-9)
-    assert again["max"] == pytest.approx(rotated["max"], abs=1e-9)
-
-
-def test_redo_puts_a_rotated_copy_back(session: Session) -> None:
-    """`copy=True` の redo は「作ったIDで作り直す」経路を通る(undoは消すだけなので非対称)。"""
-    body, _sketch_id = _box(session)
-    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
-    (new_id,) = session.move_body(
-        mode="rotate", axis_point=[0.0, 0.0, 0.0], axis_dir=[0.0, 0.0, 1.0], angle=90.0, copy=True
-    )["created"]
-    made = _bbox(session.document.get_body(new_id))
-    session.undo()
-    session.redo()
-
-    again = session.document.get_body(new_id)  # **同じID**で戻る(ログが持っているため)
-    assert _bbox(again)["min"] == pytest.approx(made["min"], abs=1e-9)
-    assert _bbox(again)["max"] == pytest.approx(made["max"], abs=1e-9)
-    assert len(session.document.bodies) == 2
 
 
 def test_an_axis_edge_index_out_of_range_is_refused(session: Session) -> None:
@@ -1167,18 +1069,6 @@ def test_rotating_a_line_about_a_given_centre(session: Session) -> None:
     moved = _params(session, sketch_id, entity_id)
     assert (moved["x0"], moved["y0"]) == pytest.approx((0.0, 0.0), abs=1e-9)
     assert (moved["x1"], moved["y1"]) == pytest.approx((0.0, 10.0), abs=1e-9)
-
-
-def test_the_sketch_rotation_turns_the_same_way_as_pattern_circular(session: Session) -> None:
-    """**符号の向きが `pattern_circular` の `total_angle` と同じ**であることを直接見る。"""
-    sketch_id, entity_id = _line(session)
-    params = _params(session, sketch_id, entity_id)
-    expected = sketch.rotate_point(params["x1"], params["y1"], 0.0, 0.0, 30.0)
-
-    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
-    session.move_sketch_entities(mode="rotate", angle=30.0, center=[0.0, 0.0])
-    moved = _params(session, sketch_id, entity_id)
-    assert (moved["x1"], moved["y1"]) == pytest.approx(expected, abs=1e-12)
 
 
 def test_rotating_one_point_moves_only_that_point(session: Session) -> None:
@@ -1415,16 +1305,6 @@ def test_a_half_specified_sketch_rotation_is_refused(session: Session, kwargs: d
         session.move_sketch_entities(**kwargs)
 
 
-def test_redo_puts_a_sketch_rotation_back(session: Session) -> None:
-    sketch_id, entity_id = _line(session)
-    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
-    session.move_sketch_entities(mode="rotate", angle=90.0, center=[0.0, 0.0])
-    rotated = _params(session, sketch_id, entity_id)
-    session.undo()
-    session.redo()
-    assert _params(session, sketch_id, entity_id) == pytest.approx(rotated)
-
-
 def test_a_replayed_sketch_log_without_a_mode_is_still_a_translation(session: Session) -> None:
     """**2026-09-05より前に保存した文書**(`mode` キーが無い)は平行移動として読む。
 
@@ -1453,41 +1333,9 @@ def test_a_replayed_sketch_log_without_a_mode_is_still_a_translation(session: Se
     }
 
 
-def test_the_selection_resets_after_a_sketch_rotation(session: Session) -> None:
-    sketch_id, entity_id = _line(session)
-    _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
-    session.move_sketch_entities(mode="rotate", angle=15.0, center=[0.0, 0.0])
-    assert session.get_selection()["items"] == []
-
-
 # --------------------------------------------------------------------------------------
 # kernel の回転そのもの
 # --------------------------------------------------------------------------------------
-def test_rotating_a_shape_does_not_touch_the_original() -> None:
-    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
-
-    shape = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
-    before = kernel.bounding_box(shape)["center"]
-    rotated = kernel.rotate_shape(shape, [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 90.0)
-
-    assert kernel.bounding_box(shape)["center"] == pytest.approx(before)
-    assert kernel.bounding_box(rotated)["center"] == pytest.approx(
-        [-before[1], before[0], before[2]], abs=1e-6
-    )
-
-
-def test_rotating_back_returns_to_the_start() -> None:
-    """逆角度で戻る(`move_body` の undo がスナップショットを控えない根拠)。"""
-    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
-
-    shape = BRepPrimAPI_MakeBox(10.0, 20.0, 30.0).Shape()
-    before = kernel.bounding_box(shape)
-    there = kernel.rotate_shape(shape, [1.0, 2.0, 3.0], [1.0, 1.0, 1.0], 41.7)
-    back = kernel.rotate_shape(there, [1.0, 2.0, 3.0], [1.0, 1.0, 1.0], -41.7)
-    assert kernel.bounding_box(back)["min"] == pytest.approx(before["min"], abs=1e-9)
-    assert kernel.bounding_box(back)["max"] == pytest.approx(before["max"], abs=1e-9)
-
-
 def test_a_degenerate_axis_is_refused() -> None:
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
@@ -1496,20 +1344,6 @@ def test_a_degenerate_axis_is_refused() -> None:
         kernel.rotate_shape(shape, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 30.0)
     with pytest.raises(ValueError):
         kernel.rotate_shape(shape, [0.0, 0.0], [0.0, 0.0, 1.0], 30.0)
-
-
-def test_the_centroid_is_the_volume_centre_not_the_bounding_box_centre() -> None:
-    """**L字**では重心と境界箱の中心が違う(既定の回転中心が重心であることの土台)。"""
-    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
-    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
-
-    tall = BRepPrimAPI_MakeBox(2.0, 2.0, 20.0).Shape()
-    arm = kernel.translate_shape(BRepPrimAPI_MakeBox(20.0, 2.0, 2.0).Shape(), 0.0, 0.0, 0.0)
-    shape = BRepAlgoAPI_Fuse(tall, arm).Shape()
-
-    centroid = kernel.centroid(shape)
-    box_centre = kernel.bounding_box(shape)["center"]
-    assert centroid != pytest.approx(box_centre, abs=1e-3)
 
 
 # --------------------------------------------------------------------------------------

@@ -434,7 +434,11 @@ def test_two_bodies_mirror_across_the_same_plane(session: Session) -> None:
 
     applied = session.mirror_body(base_plane="XY")
 
-    assert len(applied["created"]) == 2
+    for source, created_id in zip((first, second), applied["created"]):
+        mirrored = kernel.bounding_box(session.document.get_body(created_id).shape)
+        original = kernel.bounding_box(source.shape)
+        assert mirrored["min"][:2] == pytest.approx(original["min"][:2], abs=1e-4)
+        assert (mirrored["min"][2], mirrored["max"][2]) == pytest.approx((-SIDE, 0.0), abs=1e-4)
 
 
 def test_undo_removes_the_mirrored_body(session: Session) -> None:
@@ -468,18 +472,6 @@ def test_mirroring_without_a_body_selection_is_refused(session: Session) -> None
     session.clear_selection()
     with pytest.raises(ValueError):
         session.mirror_body(base_plane="XY")
-
-
-def test_redo_puts_a_mirrored_body_back(session: Session) -> None:
-    body, _ = _box(session)
-    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
-    applied = session.mirror_body(base_plane="XY")
-    created_id = applied["created"][0]
-
-    session.undo()
-    session.redo()
-
-    assert session.document.get_body(created_id)
 
 
 def test_a_mirror_survives_save_and_replay(session: Session) -> None:

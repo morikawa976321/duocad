@@ -6,9 +6,6 @@
     円筒の円い縁を面取り(距離1mm)     -> IsDone=True / plane 2 + cylinder_full 1 + cone 1 / 面4
 
 円錐は**円い辺**の面取りから生まれる(まっすぐな辺に沿って平らに削るのだから面も平ら)。
-
-`PC_case_feet.step`(PCケースの脚)の実測: 5面 = plane 3 + cylinder_full 1 + cone 1 /
-体積 11538.02 mm^3 / 境界箱 25.0 x 25.0 x 29.0 mm。
 """
 from __future__ import annotations
 
@@ -21,8 +18,6 @@ from duocad.region import region_ref
 from duocad.sketch import add_circle, add_rectangle, base_plane, sketch_create
 from duocad.verbs import chamfer, extrude
 
-#: PCケースの脚の実測
-FEET_KINDS = {"plane": 3, "cylinder_full": 1, "cone": 1}
 #: 円筒の円い縁を1つ面取りしたときの実測
 CYLINDER_CHAMFER_KINDS = {"plane": 2, "cylinder_full": 1, "cone": 1}
 

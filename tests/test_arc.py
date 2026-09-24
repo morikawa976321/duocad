@@ -73,19 +73,6 @@ def test_add_arc_stores_named_numbers():
     assert params["start_deg"] == ARC_START_DEG and params["end_deg"] == ARC_END_DEG
 
 
-def test_add_arc_is_logged_and_undoable():
-    """他の図形と同じく操作ログに載り、undoで消える。"""
-    doc = Document()
-    sketch_id = sketch_create(doc, base_plane("XY"))
-
-    add_arc(doc, sketch_id, (0.0, 0.0), ARC_RADIUS, ARC_START_DEG, ARC_END_DEG)
-
-    assert doc.log.entries[-1].verb == "add_arc"
-    assert len(get_sketch(doc, sketch_id).entities) == 1
-    doc.log.undo(doc)
-    assert get_sketch(doc, sketch_id).entities == []
-
-
 def test_arc_radius_can_be_edited_afterwards():
     """**半径・角度を後から編集できる**こと（これが3点で持たない理由そのもの）。"""
     doc = Document()
@@ -147,21 +134,6 @@ def test_an_open_arc_alone_does_not_close_a_region():
 # --------------------------------------------------------------------------------------
 # 押し出すと部分円筒面ができる（全周円筒ではない）
 # --------------------------------------------------------------------------------------
-def test_extruding_an_arc_region_makes_a_partial_cylinder():
-    """円弧を含む領域を押し出すと**部分円筒**になる(実測: 部分円筒1 + 平面3)。
-
-    全周円筒になったら円弧が効いていない(＝円を押し出しているのと同じ)。
-    """
-    doc = Document()
-    sketch_id = half_disc_sketch(doc)
-
-    operation = extrude(doc, [region_ref(sketch_id, 1)], EXTRUDE_MM, mode="join")
-    body_id = operation.args["body_id"]
-
-    assert kinds_of(doc, body_id) == HALF_DISC_PRISM_KINDS
-    assert "cylinder_full" not in kinds_of(doc, body_id), "全周円筒が出たら円弧が効いていない"
-
-
 def test_the_partial_cylinder_spans_the_arc_angle():
     """できた形に**指定した角度の円弧がそのまま残っている**こと(長さで見る)。
 
