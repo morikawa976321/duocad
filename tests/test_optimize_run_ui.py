@@ -135,7 +135,8 @@ def test_second_run_is_refused_while_one_is_running(session: Session) -> None:
         return connection
 
     connection = asyncio.run(scenario())
-    assert "既に走っている" in connection.of_type("optimize_error")[0]["message"]
+    [error] = connection.of_type("optimize_error")
+    assert "既に走っている" in error["message"] and error["already_running"] is True
 
 
 def _run_to_completion(session: Session, message: dict) -> tuple:

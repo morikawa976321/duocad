@@ -1,6 +1,6 @@
 /** `web/src/minWidth.ts` の純関数を評価する口(`tests/test_ts_evaluators.py` が node で走らせる)。失敗したら非ゼロで終了する。 */
 import assert from 'node:assert/strict'
-import { judgeMinWidth, roundUpNotice, shownCeilingMm, shownFloorMm, shownGuaranteedMm, shownStepMm } from '../web/src/minWidth.ts'
+import { judgeMinWidth, roundUpNotice, shownCeilingMm, shownFloorMm, shownGuaranteedMm, shownMinWidthMm, shownStepMm } from '../web/src/minWidth.ts'
 
 const stepOf = (size, cells) => ({
   index: 0, element_size_mm: size, element_count: 1, min_width_floor_mm: 2 * size, min_width_ceiling_mm: cells * size,
@@ -44,6 +44,10 @@ for (const exact of [2 * 2.4063, 3 * 2.4063, 17 * 2.4063, ...grid.min_width_step
 }
 
 assert.doesNotThrow(() => shownStepMm(2e-98)) // toFixed は100桁まで
+
+// 実行後の通知の保証値も切り捨てる(四捨五入だと 4.9998mm が「5」になり、実行前のパネルの 4.99mm と食い違う)。
+assert.equal(shownMinWidthMm(4.9998), '4.99')
+assert.equal(shownMinWidthMm(7.2189), '7.21')
 
 // 表示した下限・上限は、どんな要素サイズ・セル数でもそのまま入力して通る(判定と表示が食い違わない)。
 let seed = 20260921

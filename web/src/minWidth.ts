@@ -83,9 +83,14 @@ export function minWidthProblem(verdict: MinWidthVerdict, step: OptimizeResoluti
   return null
 }
 
-/** 実際に保証される幅の表示(切り捨て。表示が保証を超えないように)。 */
+/** 保証される幅[mm]の表示(切り捨て。表示が保証を超えないように)。実行後の通知もこれを使う。 */
+export function shownMinWidthMm(valueMm: number): string {
+  return roundTo(valueMm, digitsFor(valueMm), 'down')
+}
+
+/** 実際に保証される幅の表示(`shownMinWidthMm`)。 */
 export function shownGuaranteedMm(verdict: MinWidthVerdict): string | null {
-  return verdict.kind === 'ok' ? roundTo(verdict.guaranteedMm, digitsFor(verdict.guaranteedMm), 'down') : null
+  return verdict.kind === 'ok' ? shownMinWidthMm(verdict.guaranteedMm) : null
 }
 
 /** 段のボタンの表示。入力値ではない(m=2 の段を丸めて打つと、下限割れか m=3 になる。ボタンは丸めない値を入れる)。 */

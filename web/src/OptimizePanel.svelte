@@ -98,12 +98,38 @@
   const minWidthLowerStep = $derived(minWidthVerdict.kind === 'ok' ? minWidthVerdict.lowerStepMm : null)
   const minWidthCells = $derived(minWidthVerdict.kind === 'ok' ? minWidthVerdict.cells : null)
   const minWidthUpperStep = $derived(minWidthVerdict.kind === 'ok' ? minWidthVerdict.stepMm : null)
+  /**
+   * 最小幅の欄に**打っている文字列そのもの**。数値(`minWidthMm`)から欄へは書き戻さない —— 書き戻すと
+   * 「1.」→「1.0」と打つ途中で欄が「1」に化け、続けて打った「5」で「15」になる(Blink の
+   * `type=number` は打ちかけの「1.」を空文字として返す)。欄を書き換えるのは、値が外から変わった
+   * とき(段のボタン・文書の切り替え)だけ。
+   */
+  let minWidthText = $state('')
+  /** 欄から最後に送った値。`minWidthMm` がこれと違えば外から変わったので欄を書き直す。 */
+  let minWidthSent: number | null | undefined = undefined
+  $effect.pre(() => {
+    const value = minWidthMm
+    if (value === minWidthSent) return
+    minWidthSent = value
+    minWidthText = value === null ? '' : String(value)
+  })
+  /** 欄の文字列が数として読めない(空欄は読める = 既定)。 */
+  const minWidthUnreadable = $derived(minWidthText.trim() !== '' && !Number.isFinite(Number(minWidthText)))
+
+  function typeMinWidth(raw: string): void {
+    minWidthText = raw
+    const parsed = raw.trim() === '' ? null : Number(raw)
+    const value = parsed !== null && Number.isFinite(parsed) ? parsed : null
+    minWidthSent = value
+    onMinWidth(value)
+  }
+
   /** 段のボタンに並べる先頭の数(全段はサーバーが配る。残りは入力欄に打つか、切り上げ先の表示から辿る)。 */
   const STEP_BUTTONS = 4
   const problems = $derived(conditions?.problems ?? [])
   /** 走らせられるか。**条件と目盛りの両方がそろって初めて押せる。** */
   const canRun = $derived(
-    !running && conditions !== null && conditions.ready && step !== null && !minWidthInvalid,
+    !running && conditions !== null && conditions.ready && step !== null && !minWidthInvalid && !minWidthUnreadable,
   )
 </script>
 
@@ -132,11 +158,13 @@
   <!-- **目盛りは細かくする方向にだけ動く**(左端＝既定＝いちばん粗くて安い)。
        段が1つも無い＝「間違わない解像度」が作れない状態なので、スライダーごと出さずに
        理由を出す。 -->
-  {#if resolution?.error}
+  {#if resolution === null}
+    <p id="optimize-resolution-note" class="hint dim">解像度を確認している…</p>
+  {:else if resolution.error}
     <p id="optimize-resolution-note" class="hint bad">{resolution.error}</p>
   {:else if steps.length === 0}
     <p id="optimize-resolution-note" class="hint bad">
-      この部品と条件面では、間違わない解像度が総要素数の上限({resolution?.max_elements ?? '—'})に
+      この部品と条件面では、間違わない解像度が総要素数の上限({resolution.max_elements ?? '—'})に
       収まらない。条件面をもっと大きい面に取り直すこと
     </p>
   {:else}
@@ -167,20 +195,18 @@
     </p>
     <label>
       最小幅[mm]
+      <!-- **`type="number"` にしない**(上の `minWidthText`)。数字の鍵盤は `inputmode` で出す。 -->
       <input
         id="optimize-min-width"
-        type="number"
-        min="0"
-        step="any"
+        type="text"
+        inputmode="decimal"
+        autocomplete="off"
         placeholder="既定"
         list="optimize-min-width-list"
-        class:invalid={minWidthInvalid}
-        value={minWidthMm ?? ''}
+        class:invalid={minWidthInvalid || minWidthUnreadable}
+        value={minWidthText}
         disabled={running}
-        oninput={(event) => {
-          const raw = event.currentTarget.value
-          onMinWidth(raw === '' ? null : Number.parseFloat(raw))
-        }}
+        oninput={(event) => typeMinWidth(event.currentTarget.value)}
       />
     </label>
     <p id="optimize-min-width-default-hint" class="hint dim">
@@ -207,7 +233,9 @@
         上限 {shownCeilingMm(step)}mm
       </p>
     {/if}
-    {#if minWidthProblemText !== null}
+    {#if minWidthUnreadable}
+      <p id="optimize-min-width-note" class="hint bad">最小幅「{minWidthText}」が数として読めない</p>
+    {:else if minWidthProblemText !== null}
       <p id="optimize-min-width-note" class="hint bad">
         {minWidthProblemText}。{minWidthVerdict.kind === 'below'
           ? '値を上げるか、解像度を細かくすること'

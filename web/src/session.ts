@@ -942,8 +942,9 @@ export interface SessionHooks {
   /**
    * 走らせられなかった / 途中で落ちた / **中断した**。`problems` は条件が
    * 足りないときだけ入る。**`cancelled` は失敗ではない** —— 人が中断を押した結果である。
+   * `alreadyRunning` は「別の実行が走っているので断った」で、走っている実行の表示は変えない。
    */
-  onOptimizeError(message: string, problems: string[], cancelled: boolean): void
+  onOptimizeError(message: string, problems: string[], cancelled: boolean, alreadyRunning: boolean): void
 }
 
 export interface Session {
@@ -1147,6 +1148,7 @@ export function createSession(hooks: SessionHooks): Session {
       // ここへ書き写すと同じ宣言が2箇所になる)。分岐に要るキーだけをここに置く。
       cancelling?: boolean
       cancelled?: boolean
+      already_running?: boolean
       problems?: string[]
     }
     try {
@@ -1235,6 +1237,7 @@ export function createSession(hooks: SessionHooks): Session {
         message.message ?? '(理由なし)',
         message.problems ?? [],
         message.cancelled ?? false,
+        message.already_running ?? false,
       )
     }
   }

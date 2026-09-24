@@ -215,6 +215,13 @@ export const OPTIMIZE_PRESET_ROLE: Record<string, 'preserve_bodies' | 'exclude_b
   set_fixtures: 'fixtures',
 }
 
+/** 上の3つの役割の呼び名(画面の通知に使う。`duocad/optimize.py` の `ROLE_LABEL` と同じ語)。 */
+export const OPTIMIZE_ROLE_LABEL: Record<'preserve_bodies' | 'exclude_bodies' | 'fixtures', string> = {
+  preserve_bodies: '保持ソリッド',
+  exclude_bodies: '除外ソリッド',
+  fixtures: '拘束面',
+}
+
 /**
  * 起動時に**選択を空にする**verb(`App.svelte` が読む)。
  *

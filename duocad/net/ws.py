@@ -832,7 +832,12 @@ class Server:
         if self.session.optimizing:
             await _send(
                 connection,
-                {"type": "optimize_error", "message": "最適化が既に走っている(中断してから)"},
+                {
+                    "type": "optimize_error",
+                    "message": "最適化が既に走っている(中断してから)",
+                    # 画面はこの印を見て、走っている実行の進捗・通知を消さない。
+                    "already_running": True,
+                },
             )
             return
         report = self.session.optimize_conditions()
