@@ -129,15 +129,20 @@ def _apply_bodies(doc: Document, role: str, wanted: Sequence[BodyId]) -> None:
     ]
     if conflicts:
         listed = "、".join(f"{item['name']}({item['body']})" for item in conflicts)
-        raise optimize.RoleConflict(
-            f"{listed} は既に{optimize.ROLE_LABEL[other]}に割り当てられている"
-            f"({optimize.ROLE_LABEL[role]}にはできない)。"
-            f"先に{optimize.ROLE_LABEL[other]}のverbで外してから割り当て直すこと",
-            role,
-            conflicts,
-        )
+        raise _role_conflict(listed, role, other, conflicts)
     setattr(setup, role, list(wanted))
     setup.touch()
+
+
+def _role_conflict(listed: str, role: str, other: str, conflicts: List[dict]) -> "optimize.RoleConflict":
+    """`listed` が既に反対の役割 `other` にあるので `role` にできない、という例外。"""
+    return optimize.RoleConflict(
+        f"{listed} は既に{optimize.ROLE_LABEL[other]}に割り当てられている"
+        f"({optimize.ROLE_LABEL[role]}にはできない)。"
+        f"先に{optimize.ROLE_LABEL[other]}のverbで外してから割り当て直すこと",
+        role,
+        conflicts,
+    )
 
 
 def _body_name(doc: Document, body_id: BodyId) -> str:
@@ -329,13 +334,7 @@ def _apply_faces(doc: Document, role: str, conditions: Sequence[dict]) -> None:
     ]
     if conflicts:
         listed = "、".join(f"{item['body']} の面 #{item['index']}" for item in conflicts)
-        raise optimize.RoleConflict(
-            f"{listed} は既に{optimize.ROLE_LABEL[other]}に割り当てられている"
-            f"({optimize.ROLE_LABEL[role]}にはできない)。"
-            f"先に{optimize.ROLE_LABEL[other]}のverbで外してから割り当て直すこと",
-            role,
-            conflicts,
-        )
+        raise _role_conflict(listed, role, other, conflicts)
     setattr(setup, role, [dict(item) for item in conditions])
     setup.touch()
 

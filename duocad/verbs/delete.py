@@ -198,7 +198,7 @@ def _do_delete(document: Document, operation: Operation) -> None:
 
     **スナップショットは毎回取り直す** —— `parameters.rebuild()` はログを頭から再生して
     **新しい `Body` オブジェクト**を作るので、初回に控えたものは同じ seq でも別の実体になる。
-    `fillet._do_fillet` が同じ理由で `remember` を do の側にも書いている。
+    `_common.reapply_shape` が同じ理由で `remember` を do の側にも書いている。
     """
     args = operation.args
     body_ids = [str(body_id) for body_id in args["bodies"]]

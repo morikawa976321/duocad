@@ -25,7 +25,7 @@ from typing import Optional, Sequence, Union
 from .. import kernel
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
-from ._common import editable_body, normalize_values, recall, remember
+from ._common import editable_body, normalize_values, reapply_shape, remember, undo_shape
 
 VERB_FILLET = "fillet"
 
@@ -62,16 +62,7 @@ def _do_fillet(document: Document, operation: Operation) -> None:
     values, _ = normalize_values(edge_list, args["radius"], label="radius")
     body = editable_body(document, args["body_id"], what="fillet", require_visible=True)
     result = kernel.fillet_edges(body.shape, dict(zip(edge_list, values)))
-    previous_shape = body.shape
-    body.shape = result["shape"]
-    if operation.provenance is None:
-        operation.provenance = result["provenance"]
-    remember(document, body.id, operation.seq, previous_shape)
+    reapply_shape(document, body, result, operation)
 
 
-def _undo_fillet(document: Document, operation: Operation) -> None:
-    body_id = operation.args["body_id"]
-    document.get_body(body_id).shape = recall(document, body_id, operation.seq)
-
-
-register_verb(VERB_FILLET, do=_do_fillet, undo=_undo_fillet)
+register_verb(VERB_FILLET, do=_do_fillet, undo=undo_shape)

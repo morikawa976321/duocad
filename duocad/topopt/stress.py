@@ -28,24 +28,6 @@ from . import fem
 DEFAULT_RHO_MIN = 0.5
 DEFAULT_PERCENTILE = 99.5
 
-# 局所節点 l = 4a+2b+c ↔ 単位立方体の頂点 (a,b,c)。**`fem.element_stiffness` の
-# `lam_nodes` と `fem._build_edof` の l のまわし方に一致していること** ——
-# ここがずれると応力は「もっともらしい別の値」になって落ちない。
-_NODE_SIGNS = np.array(
-    [[2 * a - 1, 2 * b - 1, 2 * c - 1] for a in (0, 1) for b in (0, 1) for c in (0, 1)],
-    dtype=float,
-)
-
-
-def elasticity_matrix(E: float = 1.0, nu: float = 0.3) -> np.ndarray:
-    """弾性行列 D (6,6)。順は [xx, yy, zz, xy, yz, zx] で、せん断は工学ひずみ。"""
-    d = np.zeros((6, 6))
-    c1 = E / ((1.0 + nu) * (1.0 - 2.0 * nu))
-    d[:3, :3] = c1 * (nu * np.ones((3, 3)) + (1.0 - 2.0 * nu) * np.eye(3))
-    d[3:, 3:] = c1 * (1.0 - 2.0 * nu) / 2.0 * np.eye(3)
-    return d
-
-
 def strain_displacement_center(element_size: float = 1.0) -> np.ndarray:
     """要素**中心**(xi=eta=zeta=0)での B 行列 (6,24)。
 
@@ -53,20 +35,7 @@ def strain_displacement_center(element_size: float = 1.0) -> np.ndarray:
     出隅・入隅が要素内でも尖り、拾いたくない離散化のスパイクを1段増やすことになる。
     trilinear hex では中心が最も精度の良い点でもある(検査2で梁理論と 0.2〜0.9% で一致)。
     """
-    b = np.zeros((6, 24))
-    grad = 0.25 * _NODE_SIGNS / float(element_size)
-    for l in range(8):
-        bx, by, bz = grad[l]
-        b[0, 3 * l + 0] = bx
-        b[1, 3 * l + 1] = by
-        b[2, 3 * l + 2] = bz
-        b[3, 3 * l + 0] = by
-        b[3, 3 * l + 1] = bx
-        b[4, 3 * l + 1] = bz
-        b[4, 3 * l + 2] = by
-        b[5, 3 * l + 0] = bz
-        b[5, 3 * l + 2] = bx
-    return b
+    return fem.strain_displacement(0.25 * fem.NODE_SIGNS / float(element_size))
 
 
 def von_mises(tensor: np.ndarray) -> np.ndarray:
@@ -211,7 +180,7 @@ def element_stress(model: fem.Model, u: np.ndarray) -> StressField:
     vec = np.asarray(u, dtype=float).ravel()
     if vec.size != model.ndof:
         raise ValueError(f"変位の長さが {vec.size}、期待は ndof={model.ndof}")
-    db = elasticity_matrix(model.E, model.nu) @ strain_displacement_center()
+    db = fem.elasticity_matrix(model.E, model.nu) @ strain_displacement_center()
     tensor = (vec[model.edof] @ db.T).reshape(model.nelx, model.nely, model.nelz, 6)
     return StressField(tensor=tensor, von_mises=von_mises(tensor), unit="1")
 

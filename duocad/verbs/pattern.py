@@ -271,8 +271,8 @@ def _do_pattern_circular(document: Document, operation: Operation) -> None:
     )
 
 
-def _undo_pattern_circular(document: Document, operation: Operation) -> None:
-    """undo: 反復を取り除く(元の図形は残る)。パラメータも文書から消す。"""
+def _undo_pattern(document: Document, operation: Operation) -> None:
+    """undo(矩形・円形の両方): 反復を取り除く(元の図形は残る)。そのパラメータも文書から消す。"""
     args = operation.args
     sketch = get_sketch(document, args["sketch_id"])
     pattern_id = args["pattern_id"]
@@ -288,7 +288,7 @@ def _undo_pattern_circular(document: Document, operation: Operation) -> None:
 register_verb(
     VERB_PATTERN_CIRCULAR,
     do=_do_pattern_circular,
-    undo=_undo_pattern_circular,
+    undo=_undo_pattern,
 )
 
 
@@ -310,22 +310,8 @@ def _do_pattern_rectangular(document: Document, operation: Operation) -> None:
     )
 
 
-def _undo_pattern_rectangular(document: Document, operation: Operation) -> None:
-    """undo: パターンを取り除く(元の図形は残る)。その4つのパラメータも文書から消す。"""
-    args = operation.args
-    sketch = get_sketch(document, args["sketch_id"])
-    pattern_id = args["pattern_id"]
-    remaining = []
-    for pattern in sketch.patterns:
-        if pattern.id == pattern_id:
-            parameters.release_param_refs(document, pattern.params)
-        else:
-            remaining.append(pattern)
-    sketch.patterns = remaining
-
-
 register_verb(
     VERB_PATTERN_RECTANGULAR,
     do=_do_pattern_rectangular,
-    undo=_undo_pattern_rectangular,
+    undo=_undo_pattern,
 )

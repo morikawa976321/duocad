@@ -13,7 +13,7 @@ from typing import Optional, Sequence, Union
 from .. import kernel
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
-from ._common import editable_body, normalize_values, recall, remember
+from ._common import editable_body, normalize_values, reapply_shape, remember, undo_shape
 
 VERB_CHAMFER = "chamfer"
 
@@ -50,16 +50,7 @@ def _do_chamfer(document: Document, operation: Operation) -> None:
     values, _ = normalize_values(edge_list, args["distance"], label="distance")
     body = editable_body(document, args["body_id"], what="chamfer", require_visible=True)
     result = kernel.chamfer_edges(body.shape, dict(zip(edge_list, values)))
-    previous_shape = body.shape
-    body.shape = result["shape"]
-    if operation.provenance is None:
-        operation.provenance = result["provenance"]
-    remember(document, body.id, operation.seq, previous_shape)
+    reapply_shape(document, body, result, operation)
 
 
-def _undo_chamfer(document: Document, operation: Operation) -> None:
-    body_id = operation.args["body_id"]
-    document.get_body(body_id).shape = recall(document, body_id, operation.seq)
-
-
-register_verb(VERB_CHAMFER, do=_do_chamfer, undo=_undo_chamfer)
+register_verb(VERB_CHAMFER, do=_do_chamfer, undo=undo_shape)

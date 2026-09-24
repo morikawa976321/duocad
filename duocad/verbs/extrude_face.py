@@ -16,7 +16,7 @@ from typing import Optional
 from .. import kernel
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
-from ._common import editable_body, recall, remember
+from ._common import editable_body, reapply_shape, remember, undo_shape
 
 VERB_EXTRUDE_FACE = "extrude_face"
 
@@ -47,23 +47,11 @@ def extrude_face(
 
 
 def _do_extrude_face(document: Document, operation: Operation) -> None:
-    """redo / replay: 記録された添字と距離で押し出し直す。**ログには触らない**(二重記録になる)。
-
-    `provenance` は初回適用で入っているのが正なので、空のときだけ埋める。
-    """
+    """redo / replay: 記録された添字と距離で押し出し直す。**ログには触らない**(二重記録になる)。"""
     args = operation.args
     body = editable_body(document, args["body_id"], what="extrude", require_visible=True)
     result = kernel.extrude_face_on_shape(body.shape, args["face_index"], args["distance"])
-    previous_shape = body.shape
-    body.shape = result["shape"]
-    if operation.provenance is None:
-        operation.provenance = result["provenance"]
-    remember(document, body.id, operation.seq, previous_shape)
+    reapply_shape(document, body, result, operation)
 
 
-def _undo_extrude_face(document: Document, operation: Operation) -> None:
-    body_id = operation.args["body_id"]
-    document.get_body(body_id).shape = recall(document, body_id, operation.seq)
-
-
-register_verb(VERB_EXTRUDE_FACE, do=_do_extrude_face, undo=_undo_extrude_face)
+register_verb(VERB_EXTRUDE_FACE, do=_do_extrude_face, undo=undo_shape)
