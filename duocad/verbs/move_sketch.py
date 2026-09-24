@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import math
 from typing import Any, Callable, Dict, List, Optional, Sequence
-from uuid import uuid4
 
 from .. import parameters
 from ..document import Document
@@ -50,6 +49,7 @@ from ..sketch import (
     entity_point_keys,
     get_entity,
     get_sketch,
+    new_entity_id,
     require_valid_params,
     rotate_point,
 )
@@ -103,11 +103,6 @@ def _normalize_targets(doc: Document, targets: Sequence[dict]) -> List[dict]:
     ]
 
 
-def _resolved_params(doc: Document, entity: Entity) -> Dict[str, float]:
-    """図形の `params` を解決済みの数値で返す(`Entity.params` は名前つきの値への参照)。"""
-    return {key: parameters.resolve(doc, ref) for key, ref in entity.params.items()}
-
-
 def _write_params(doc: Document, entity: Entity, values: Dict[str, float]) -> None:
     """解決済みの数値を図形へ書き戻す。
 
@@ -144,7 +139,7 @@ def _point_of(doc: Document, sketch_id: str, entity_id: str, point: Any) -> tupl
     の並びが唯一の正である(`sketch.entity_point_keys`)。
     """
     entity = get_entity(get_sketch(doc, sketch_id), entity_id)
-    values = _resolved_params(doc, entity)
+    values = parameters.resolve_all(doc, entity.params)
     if point is None:
         pairs = entity_point_keys(entity.kind)
         if not pairs:
@@ -165,7 +160,7 @@ def _center_of_targets(doc: Document, targets: Sequence[dict]) -> tuple:
     points = []
     for item in targets:
         entity = get_entity(get_sketch(doc, item["sketch"]), item["entity"])
-        values = _resolved_params(doc, entity)
+        values = parameters.resolve_all(doc, entity.params)
         if item["point"] is None:
             points.append(entity_kind_ops(entity.kind).center_2d(values))
         else:
@@ -338,7 +333,7 @@ def _apply(doc: Document, targets: Sequence[dict], transform: Callable) -> None:
         if key not in merged:
             sketch = get_sketch(doc, item["sketch"])
             entity = get_entity(sketch, item["entity"])
-            merged[key] = [entity, _resolved_params(doc, entity)]
+            merged[key] = [entity, parameters.resolve_all(doc, entity.params)]
             order.append(key)
         entry = merged[key]
         entry[1] = transform(entry[0].kind, entry[1], item["point"])
@@ -378,7 +373,7 @@ def _copy(
         if any(existing.id == new_id for existing in sketch.entities):
             raise ValueError(f"entity id already exists: {new_id!r}")
         entity = get_entity(sketch, entity_id)
-        current = _resolved_params(doc, entity)
+        current = parameters.resolve_all(doc, entity.params)
         values = transform(entity.kind, current, None)
         if values == current:
             raise ValueError(
@@ -388,9 +383,7 @@ def _copy(
         require_valid_params(entity.kind, values)
         prepared.append((sketch, new_id, entity.kind, values))
     for sketch, new_id, kind, values in prepared:
-        refs = {
-            key: parameters.register_value(doc, value) for key, value in values.items()
-        }
+        refs = parameters.register_all(doc, values)
         sketch.entities.append(Entity(id=new_id, kind=kind, params=refs))
         created.append(new_id)
     return created
@@ -483,7 +476,7 @@ def move_sketch_entities(
     transform = _params_transform(args)
 
     if copy:
-        new_ids = [f"entity-{uuid4().hex[:12]}" for _ in _entities_to_copy(normalized)]
+        new_ids = [new_entity_id() for _ in _entities_to_copy(normalized)]
         created = _copy(doc, normalized, transform, new_ids)
     else:
         created = []

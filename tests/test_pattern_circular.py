@@ -348,7 +348,7 @@ def test_pattern_survives_save_load_and_replay():
 # --------------------------------------------------------------------------------------
 # 失敗を黙って通さない
 # --------------------------------------------------------------------------------------
-#: 0 / 負 / 非整数の3分岐は `test_pattern.py` が網羅済み(`_is_positive_int` は共有)。
+#: 0 / 負 / 非整数の3分岐は `test_pattern.py` が網羅済み(`parameters.is_positive_int` は共有)。
 #: ここは呼び出し口の配線確認なので境界の 0 だけ通す。
 @pytest.mark.parametrize("count", [0])
 def test_count_must_be_a_positive_integer(count):

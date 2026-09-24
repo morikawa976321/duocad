@@ -101,10 +101,7 @@ def _entity_snapshots(doc: Document, entities: Sequence[dict]) -> List[dict]:
                 "kind": entity.kind,
                 # 図形の並びの位置。undoで**元の位置へ差し戻す**ために要る。
                 "index": sketch.entities.index(entity),
-                "params": {
-                    key: parameters.resolve(doc, value)
-                    for key, value in entity.params.items()
-                },
+                "params": parameters.resolve_all(doc, entity.params),
                 "named": [
                     key for key, value in entity.params.items() if isinstance(value, str)
                 ],

@@ -89,7 +89,8 @@ def set_exclude_bodies(doc: Document, body_ids: Sequence[BodyId]) -> Operation:
 def _assign_bodies(doc: Document, verb: str, body_ids: Sequence[BodyId]) -> Operation:
     """ボディの役割を集合代入する(**失敗したら文書にもログにも何も残さない**)。"""
     role = _BODY_VERB_ROLE[verb]
-    wanted = _unique([str(body_id) for body_id in body_ids])
+    # 順序を保ったまま重複を落とす(選択順は画面の一覧の並びでもある)
+    wanted = list(dict.fromkeys(str(body_id) for body_id in body_ids))
     for body_id in wanted:
         body = doc.get_body(body_id)  # 存在しないIDは KeyError(黙って残さない)
         if body.mesh is not None:
@@ -180,7 +181,7 @@ def _require_conditions_stay_on_preserved(doc: Document, wanted: Sequence[BodyId
     keeping = {str(body_id) for body_id in wanted}
     orphans = [
         (role, item)
-        for role in ("fixtures", "loads")
+        for role in optimize.FACE_ROLES
         for item in getattr(doc.optimize, role)
         if item["body"] not in keeping
     ]
@@ -337,18 +338,6 @@ def _apply_faces(doc: Document, role: str, conditions: Sequence[dict]) -> None:
         )
     setattr(setup, role, [dict(item) for item in conditions])
     setup.touch()
-
-
-def _unique(values: Sequence[str]) -> List[str]:
-    """順序を保ったまま重複を落とす(選択順は画面の一覧の並びでもある)。"""
-    seen: set = set()
-    ordered: List[str] = []
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        ordered.append(value)
-    return ordered
 
 
 # --------------------------------------------------------------------------------------

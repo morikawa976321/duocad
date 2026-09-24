@@ -11,6 +11,7 @@ import numpy as np
 from scipy import ndimage
 
 from . import acceptance
+from .acceptance import NEIGHBOURHOOD_STRUCTURE
 
 
 def cube_opening(mask: np.ndarray, m: int) -> np.ndarray:
@@ -97,9 +98,6 @@ def bite_verdict(padded: np.ndarray, bite: np.ndarray,
     return None, len(np.unique(rest[neighbours])) == 1
 
 
-_SIX = ndimage.generate_binary_structure(3, 1)
-
-
 def core_cells(material: np.ndarray, m: int) -> np.ndarray:
     """芯 K: セル c を最小の角とする m 立方が全部材料のセル(立方が配列に収まらない c は含めない)。"""
     core = np.asarray(material, dtype=bool)
@@ -146,12 +144,12 @@ class CoreConnectivity:
         self._links: list[tuple[tuple, np.ndarray]] = []
         if self.exempt is None or not self.exempt.any():
             return
-        labels, count = ndimage.label(self.exempt, structure=_SIX)
+        labels, count = ndimage.label(self.exempt, structure=NEIGHBOURHOOD_STRUCTURE)
         for j, box in enumerate(ndimage.find_objects(labels), start=1):
             lo = tuple(max(s.start - self.m, 0) for s in box)  # E_j の外周1セル + 立方が下へ伸びる m-1
             crop = tuple(slice(l, s.stop + 1) for l, s in zip(lo, box))
             component = labels[crop] == j
-            reach = component | ndimage.binary_dilation(component, structure=_SIX)
+            reach = component | ndimage.binary_dilation(component, structure=NEIGHBOURHOOD_STRUCTURE)
             self._links.append((lo, _spread_down(reach, self.m)))
 
     def _material(self, mask: np.ndarray) -> np.ndarray:
@@ -174,7 +172,7 @@ class CoreConnectivity:
     def groups(self, mask: np.ndarray) -> int:
         """K の6連結成分を E で結んでまとめたときの塊の数(K が空なら 0)。S(m) を満たすのは 1 以下。"""
         core = core_cells(self._material(mask), self.m)
-        labels, count = ndimage.label(core, structure=_SIX)
+        labels, count = ndimage.label(core, structure=NEIGHBOURHOOD_STRUCTURE)
         if count <= 1:
             return count
         parent = list(range(count + 1))
@@ -222,7 +220,7 @@ class CoreConnectivity:
         gained = core_after & ~core_before
         if not lost.any() and not gained.any():
             return True
-        labels, count = ndimage.label(core_after, structure=_SIX)
+        labels, count = ndimage.label(core_after, structure=NEIGHBOURHOOD_STRUCTURE)
         parent = list(range(count + 1))
 
         def find(x: int) -> int:
@@ -231,7 +229,7 @@ class CoreConnectivity:
                 x = parent[x]
             return x
 
-        need = {int(v) for v in np.unique(labels[ndimage.binary_dilation(lost, structure=_SIX) & core_after])}
+        need = {int(v) for v in np.unique(labels[ndimage.binary_dilation(lost, structure=NEIGHBOURHOOD_STRUCTURE) & core_after])}
         for link in self._linked(lo, tuple(int(b - a) for a, b in zip(lo, hi))):
             hit = [int(v) for v in np.unique(labels[link & core_after])]
             for other in hit[1:]:

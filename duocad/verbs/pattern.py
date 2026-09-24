@@ -32,11 +32,6 @@ VERB_PATTERN_RECTANGULAR = "pattern_rectangular"
 VERB_PATTERN_CIRCULAR = "pattern_circular"
 
 
-#: 個数の検査は `set_parameter` からも使うので parameters 側に置いてある
-#: (作成時だけ検査していると、後から書き込む経路が素通りする)
-_is_positive_int = parameters.is_positive_int
-
-
 def _install_pattern(
     document: Document,
     sketch_id: str,
@@ -72,7 +67,7 @@ def pattern_rectangular(
     ny: int,
 ) -> str:
     """図形群を nx × ny の矩形状に反復し、PatternId を返す。"""
-    if not _is_positive_int(nx) or not _is_positive_int(ny):
+    if not parameters.is_positive_int(nx) or not parameters.is_positive_int(ny):
         raise ValueError(
             f"nx/ny must be integers >= 1, got nx={nx!r}, ny={ny!r}"
         )
@@ -183,7 +178,7 @@ def pattern_circular(
 
     同じ `Pattern` を使い、`kind="circular"` で区別する。
     """
-    if not _is_positive_int(count):
+    if not parameters.is_positive_int(count):
         raise ValueError(f"count must be an integer >= 1, got {count!r}")
     count_i = int(count)
     angle = float(total_angle)
@@ -224,10 +219,7 @@ def pattern_circular(
 
     for entity_id in entity_ids:
         entity = by_id[entity_id]
-        resolved = {
-            key: parameters.resolve(doc, ref)
-            for key, ref in entity.params.items()
-        }
+        resolved = parameters.resolve_all(doc, entity.params)
         ecx, ecy = entity_kind_ops(entity.kind).center_2d(resolved)
         if abs(ecx - cx) <= 1e-9 and abs(ecy - cy) <= 1e-9:
             raise ValueError(

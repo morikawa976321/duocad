@@ -170,6 +170,8 @@ def conditions_report(doc: "Document") -> dict:
     **`state_payload()` の `stale` とは別の点検**である。あちらは「いま画面で指せるか」で、
     こちらは「いま最適化に渡せるか」——非表示のボディは指せないが、形はあるので渡せる。
     """
+    from . import optimize
+
     setup = doc.optimize
     problems: List[str] = []
 
@@ -189,10 +191,10 @@ def conditions_report(doc: "Document") -> dict:
                 "大きさ[N]が入っていない(set_loads の magnitude)"
             )
 
-    for role in ("preserve_bodies", "exclude_bodies"):
+    for role in optimize.BODY_ROLES:
         for body_id in getattr(setup, role):
             problems.extend(_body_problem(doc, role, body_id))
-    for role in ("fixtures", "loads"):
+    for role in optimize.FACE_ROLES:
         for condition in getattr(setup, role):
             problems.extend(_face_problem(doc, role, condition))
 
@@ -473,9 +475,11 @@ def resolution_limits(doc: "Document") -> dict:
     ので実測が無く、旧SIMP係数を使った桁の見当も出さない —— 実測に基づく見積もりは
     `run()` の進捗イベント(`_ProgressPump`)側で、実際に評価が進んでから出す。
     """
+    from . import optimize
+
     setup = doc.optimize
     faces: List[dict] = []
-    for role in ("fixtures", "loads"):
+    for role in optimize.FACE_ROLES:
         for condition in getattr(setup, role):
             problems = _face_problem(doc, role, condition)
             if problems:
@@ -1163,7 +1167,6 @@ def _run(
     surface = topo_mesh.build_surface_from_mask(best.mask)
     positions = _mesh_to_world(surface.verts_smooth, space.grid)
     _check_mesh_placement(positions, space.grid)
-    indices = surface.faces.ravel().tolist()
     trace.snapshot('selected-result', status=search_result.status, termination=search_result.termination,
                    material_mm3=best.material_mm3, safety_factor=best.safety_factor)
     import numpy as np

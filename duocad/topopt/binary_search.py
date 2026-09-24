@@ -26,12 +26,8 @@ from scipy import ndimage
 from duocad import kernel
 
 from . import acceptance, anchor, min_width
+from .acceptance import NEIGHBOURHOOD_STRUCTURE
 from .material import DEFAULT_ALLOWABLE_MPA, DEFAULT_YOUNGS_MODULUS_MPA
-
-# `acceptance.connectivity_check` と同じ6近傍の定義(§4.4 冒頭)。島処理の合否と
-# 最終の`connectivity_check`が別の近傍で数えると、ここで生かした成分が向こうで
-# 複数成分に見えることがある —— 定義は1箇所(この値)に揃える。
-NEIGHBOURHOOD_STRUCTURE = ndimage.generate_binary_structure(3, 1)
 
 
 # ---------------------------------------------------------------------------

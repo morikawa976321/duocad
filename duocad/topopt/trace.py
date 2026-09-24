@@ -83,7 +83,7 @@ class Recorder:
                              started_utc=datetime.now(timezone.utc).isoformat(),
                              array_format='lossless numpy NPZ; allow_pickle=False',
                              coordinate_rule='world_mm = grid.origin + grid.spacing * mesh_vertices; cell center i+0.5',
-                             omitted=['assembled stiffness matrices and multigrid caches (rebuild from model inputs)',
+                             omitted=['assembled stiffness matrices (rebuild from model inputs)',
                                       'native CAD objects in stage snapshots (exact per-body STEP and input.json saved separately)'])
         self._manifest()
 

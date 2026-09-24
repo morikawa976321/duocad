@@ -34,11 +34,10 @@ SketchPanelの図形一覧が埋まる。`parameters.resolve` は素の数値を
 from __future__ import annotations
 
 from typing import List
-from uuid import uuid4
 
 from ..document import Document
 from ..oplog import Operation, register_verb
-from ..sketch import Entity, EntityId, SketchId, get_sketch, require_valid_params
+from ..sketch import Entity, EntityId, SketchId, get_sketch, new_entity_id, require_valid_params
 from ..svg_import import PathLike, read_svg_entities
 
 VERB_IMPORT_SVG = "import_svg"
@@ -66,7 +65,7 @@ def import_svg(
 
     entities = [
         {
-            "entity_id": f"entity-{uuid4().hex[:12]}",
+            "entity_id": new_entity_id(),
             "kind": shape["kind"],
             "params": dict(shape["params"]),
         }
