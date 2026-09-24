@@ -130,7 +130,7 @@ def test_second_run_is_refused_while_one_is_running(session: Session) -> None:
         server.bind_loop(asyncio.get_running_loop())
         connection = FakeConnection()
         server.clients.add(connection)
-        server._optimize_running = True  # 走っている最中の状態を作る(探索は回さない)
+        session.begin_optimization()  # 走っている最中の状態を作る(探索は回さない)
         await server._dispatch(connection, json.dumps({"cmd": "run_optimization"}))
         return connection
 
@@ -291,7 +291,7 @@ def test_cancel_sets_the_flag_while_running(session: Session) -> None:
         server.bind_loop(asyncio.get_running_loop())
         connection = FakeConnection()
         server.clients.add(connection)
-        server._optimize_running = True
+        session.begin_optimization()
         await server._dispatch(connection, json.dumps({"cmd": "cancel_optimization"}))
         return connection
 
@@ -299,3 +299,93 @@ def test_cancel_sets_the_flag_while_running(session: Session) -> None:
     status = connection.of_type("optimize_status")[0]
     assert status["cancelling"] is True
     assert session._optimize_cancel.is_set() is True
+
+
+# --------------------------------------------------------------------------------------
+# 5. 実行の始まりと終わり(中断の旗・自動保存・再接続した画面)
+# --------------------------------------------------------------------------------------
+def test_a_cancel_sent_right_after_the_start_is_not_lost(session: Session, monkeypatch) -> None:
+    """落ちたら、実行をワーカースレッドへ投げてから走り出すまでに届いた中断が、走り出した実行に消されて
+    結果が足される(issue #35)。"""
+    four_conditions(session)
+    seen: dict = {}
+
+    def fake_run(doc, options, *, should_cancel, **kwargs):
+        seen["cancelled"] = should_cancel()
+        raise optimize_run.OptimizeCancelled("中断した")
+
+    monkeypatch.setattr(optimize_run, "run", fake_run)
+
+    async def scenario() -> FakeConnection:
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        connection = FakeConnection()
+        server.clients.add(connection)
+        await server._dispatch(connection, json.dumps({"cmd": "run_optimization"}))
+        await server._dispatch(connection, json.dumps({"cmd": "cancel_optimization"}))
+        await asyncio.gather(*server._pending_optimize_runs)
+        return connection
+
+    connection = asyncio.run(scenario())
+    assert seen["cancelled"] is True
+    assert connection.of_type("optimize_status")[1]["cancelling"] is True
+    assert connection.of_type("optimize_error")[0]["cancelled"] is True
+    assert connection.of_type("optimize_status")[-1] == {"type": "optimize_status", "running": False}
+
+
+def test_a_run_that_added_nothing_does_not_overwrite_the_file(session: Session, monkeypatch, tmp_path) -> None:
+    """落ちたら、形が見つからず結果を足さなかった実行でも、編集中のファイルを未保存の編集で上書きする(issue #36)。"""
+    four_conditions(session)
+    session.models_dir = tmp_path
+    session._current_name = "hanger.json"
+    monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "no_feasible_found"})
+    _, connection = _run_to_completion(session, {"cmd": "run_optimization"})
+    assert connection.of_type("optimize_result")[0]["state"] == "no_feasible_found"
+    assert not (tmp_path / "hanger.json").exists()
+
+
+def test_a_failed_autosave_still_delivers_the_result_and_the_end_of_the_run(session: Session, monkeypatch) -> None:
+    """落ちたら、自動保存の `OSError`(Windows で別のプログラムがファイルを開いている等)が `_optimize_run` の外へ漏れ、
+    結果も終了の `optimize_status` も配られず画面が実行中のまま固まる(issue #30)。"""
+    four_conditions(session)
+    session._current_name = "hanger.json"
+    monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "done"})
+
+    def locked(*args, **kwargs):
+        raise PermissionError("別のプログラムが開いている")
+
+    monkeypatch.setattr(session, "save_document", locked)
+    _, connection = _run_to_completion(session, {"cmd": "run_optimization"})
+    assert connection.of_type("optimize_result")[0]["state"] == "done"
+    assert connection.of_type("optimize_status")[-1]["running"] is False
+    assert "PermissionError" in connection.of_type("warning")[0]["message"]
+    assert not session.optimizing
+
+
+class _ClosingConnection(FakeConnection):
+    """接続した直後に閉じる(`handle()` の最初の配信だけを見る)。"""
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+@pytest.mark.parametrize("running", [True, False])
+def test_a_new_connection_is_told_whether_an_optimization_is_running(session: Session, running: bool) -> None:
+    """落ちたら、再読み込み・再接続した画面が実行中だと知らず、中断できない/終わった後も実行中のまま固まる(issue #27)。"""
+
+    async def scenario() -> _ClosingConnection:
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        if running:
+            session.begin_optimization()
+            session.cancel_optimization()
+        connection = _ClosingConnection()
+        await server.handle(connection)
+        return connection
+
+    connection = asyncio.run(scenario())
+    [status] = connection.of_type("optimize_status")
+    assert status["running"] is running and status.get("cancelling", False) is running
