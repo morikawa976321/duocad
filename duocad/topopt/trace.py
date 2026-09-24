@@ -1,14 +1,14 @@
 """実製品の1実行に閉じた診断記録。配列は損失なし・内容ハッシュで重複排除する。
 
 ContextVarは製品の実行器スレッド内だけに設定する。数値関数を単独で呼ぶと記録しない。
-**スナップショットとイベントの保存が失敗しても計算を止めない**(`snapshot` / `event` / `_manifest` は
-best effort)。記録は診断のための仕組みであり、解けた形状を捨てる権利を持たない —— `arrays/` が実行中に
-消えて `OSError` が `acceptance.safety_check` の `except Exception` に落ち、FEMが解けている候補を20回
-続けて「安全率を計算できず」で不合格にした実績がある(2026-09-24)。失敗は握りつぶさず `write_failures`
-に数えて manifest と stderr へ出し、記録が欠けた実行を無傷に見せない。
-**`provenance` / `document` / `final_mesh` の直接の書き出しはこの扱いに入れていない**(探索の候補評価では
-なく、実行の前後で1回ずつ走る経路)。`_encode` の `TypeError` も伝える —— 記録できない値を渡したのは
-こちらの書き方の誤りで、飲むと永久に気づけない。
+**記録の書き出しが失敗しても計算を止めない**(フォルダの作成・スナップショット・イベント・manifest・
+`provenance` の source.zip と git・`document` の JSON・入力ボディの STEP・`final_mesh` の final.stl の
+すべてが best effort)。記録は診断のための仕組みであり、解けた形状を捨てる権利を持たない —— `arrays/` が
+実行中に消えて `OSError` が `acceptance.safety_check` の `except Exception` に落ち、FEMが解けている候補を
+20回続けて「安全率を計算できず」で不合格にした実績がある(2026-09-24)。失敗は握りつぶさず
+`write_failures` に数えて manifest と stderr へ出し、記録が欠けた実行を無傷に見せない。
+`_encode` の `TypeError` は伝える —— 記録できない値を渡したのはこちらの書き方の誤りで、飲むと永久に
+気づけない。
 """
 from __future__ import annotations
 
@@ -63,7 +63,11 @@ def _atomic(path, write):
 def _git(*args):
     # stdin を継承させない: MCP を stdio で受けるサーバは別スレッドが stdin を readline し続けており、
     # Windows では継承した git がその読みが返るまで(次の1行が届くまで)返らず15秒で時間切れになる。
-    result = subprocess.run(['git',*args], cwd=ROOT, capture_output=True, stdin=subprocess.DEVNULL, timeout=15)
+    # git が無い(`FileNotFoundError`)・時間切れ(`TimeoutExpired` は `OSError` ではない)は記録に残して続ける。
+    try:
+        result = subprocess.run(['git',*args], cwd=ROOT, capture_output=True, stdin=subprocess.DEVNULL, timeout=15)
+    except (OSError, subprocess.SubprocessError) as error:
+        return {'returncode':None,'error':f'{type(error).__name__}: {error}'}
     return {'returncode':result.returncode,'stdout':result.stdout.decode('utf-8','replace'),
             'stderr':result.stderr.decode('utf-8','replace')}
 
@@ -72,7 +76,6 @@ class Recorder:
     def __init__(self, root=None):
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')
         self.path = Path(root or DEFAULT_ROOT) / f'{stamp}-{uuid4().hex[:12]}'
-        (self.path / 'arrays').mkdir(parents=True)
         self.started = time.perf_counter()
         self.write_seconds = 0.
         self.sequence = 0
@@ -85,6 +88,10 @@ class Recorder:
                              coordinate_rule='world_mm = grid.origin + grid.spacing * mesh_vertices; cell center i+0.5',
                              omitted=['assembled stiffness matrices (rebuild from model inputs)',
                                       'native CAD objects in stage snapshots (exact per-body STEP and input.json saved separately)'])
+        try:
+            (self.path / 'arrays').mkdir(parents=True)
+        except OSError as error:
+            self._failed('run folder', error)
         self._manifest()
 
     def _json(self, path, value):
@@ -214,13 +221,20 @@ class Recorder:
                     archive.write(path,path.relative_to(ROOT).as_posix())
                 for name in ('pyproject.toml','uv.lock'):
                     if (ROOT/name).exists(): archive.write(ROOT/name,name)
-        _atomic(self.path/'source.zip',write_sources)
-        self.manifest['source_sha256'] = hashlib.sha256((self.path/'source.zip').read_bytes()).hexdigest()
+        try:
+            _atomic(self.path/'source.zip',write_sources)
+            self.manifest['source_sha256'] = hashlib.sha256((self.path/'source.zip').read_bytes()).hexdigest()
+        except OSError as error:
+            self._failed('provenance:source.zip', error)
 
     def document(self, doc, name):
         data = doc.log.to_json().encode('utf-8')
-        _atomic(self.path/f'{name}.json',lambda stream:stream.write(data))
-        self.manifest[name+'_sha256'] = hashlib.sha256(data).hexdigest()
+        try:
+            _atomic(self.path/f'{name}.json',lambda stream:stream.write(data))
+        except OSError as error:
+            self._failed(f'document:{name}.json', error)
+        else:
+            self.manifest[name+'_sha256'] = hashlib.sha256(data).hexdigest()
         self.snapshot(name+'-state', dict(parameters=doc.parameters, optimize=doc.optimize,
                       bodies=[dict(id=b.id,name=b.name,kind=b.kind) for b in doc.bodies]))
 
@@ -237,17 +251,7 @@ def recording(doc=None, options=None, root=None):
         recorder.provenance()
         if doc is not None:
             recorder.document(doc,'input')
-            from .. import kernel
-            cad = recorder.path/'cad'
-            cad.mkdir()
-            for body in doc.bodies:
-                if body.shape is not None:
-                    target = cad/f'{body.id}.step'
-                    if target.resolve().parent != cad.resolve():
-                        raise ValueError('CAD保存先のボディIDが不正')
-                    temporary = target.with_suffix('.step.tmp')
-                    kernel.write_step(body.shape,str(temporary))
-                    temporary.replace(target)
+            _write_input_cad(recorder, doc)
         recorder.snapshot('requested-options', options)
         yield recorder
     except BaseException as error:
@@ -263,6 +267,30 @@ def recording(doc=None, options=None, root=None):
             recorder.finish('complete')
     finally:
         _current.reset(token)
+
+
+def _write_input_cad(recorder, doc):
+    """入力ボディを1つずつ STEP で残す。**書けなかったボディは数えて飛ばす**(形の種類によって OCCT の
+    書き出しが投げる例外は `OSError` に限らないので、ボディ単位で全部受ける)。"""
+    from .. import kernel
+    cad = recorder.path/'cad'
+    try:
+        cad.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        recorder._failed('cad', error)
+        return
+    for body in doc.bodies:
+        if body.shape is None:
+            continue
+        target = cad/f'{body.id}.step'
+        try:
+            if target.resolve().parent != cad.resolve():
+                raise ValueError('CAD保存先のボディIDが不正')
+            temporary = target.with_suffix('.step.tmp')
+            kernel.write_step(body.shape,str(temporary))
+            temporary.replace(target)
+        except Exception as error:  # noqa: BLE001 - 記録の欠けとして数える
+            recorder._failed(f'cad:{body.id}', error)
 
 
 def stage(name):
@@ -306,8 +334,11 @@ def final_mesh(raw, smooth, faces, grid, *, final_vertices, final_faces):
             text += ''.join('vertex '+' '.join(format(float(v),'.17g') for v in point)+'\n' for point in triangle)
             stream.write((text+'endloop\nendfacet\n').encode('ascii'))
         stream.write(b'endsolid optimized\n')
-    _atomic(recorder.path/'final.stl',write)
-    recorder.manifest['final_stl_sha256'] = hashlib.sha256((recorder.path/'final.stl').read_bytes()).hexdigest()
+    try:
+        _atomic(recorder.path/'final.stl',write)
+        recorder.manifest['final_stl_sha256'] = hashlib.sha256((recorder.path/'final.stl').read_bytes()).hexdigest()
+    except OSError as error:
+        recorder._failed('final_mesh:final.stl', error)
 
 
 def load_snapshot(path):

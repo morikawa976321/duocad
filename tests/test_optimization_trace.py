@@ -143,6 +143,75 @@ def test_product_input_error_is_archived(recordings):
     assert json.loads((run/'manifest.json').read_text(encoding='utf-8'))['status']=='failed'
 
 
+def test_an_unwritable_run_folder_does_not_stop_the_run(tmp_path, monkeypatch):
+    """落ちたら、記録のフォルダが作れない(権限・ディスク)だけで最適化が始まらない。"""
+    monkeypatch.setattr(trace.Recorder, 'provenance', lambda self: None)
+    blocker = tmp_path/'not-a-directory'
+    blocker.write_text('')
+    with trace.recording(root=blocker) as rec:
+        trace.snapshot('value', a=np.ones(2))
+    assert rec.write_failures >= 2
+
+
+def test_git_that_is_missing_or_hangs_is_recorded_instead_of_raised(monkeypatch):
+    """落ちたら、git が無い・15秒で返らないだけで最適化が始まらない(`TimeoutExpired` は `OSError` ではない)。"""
+    for error in (FileNotFoundError('git'), subprocess.TimeoutExpired(['git'], 15)):
+        def run(*args, **kwargs):
+            raise error
+        monkeypatch.setattr(trace.subprocess, 'run', run)
+        result = trace._git('rev-parse', 'HEAD')
+        assert result['returncode'] is None and type(error).__name__ in result['error']
+
+
+def test_failed_provenance_document_and_cad_writes_are_counted_and_the_run_goes_on(tmp_path, monkeypatch):
+    """落ちたら、記録の開始時の source.zip・入力JSON・STEP の書き出し失敗で実行ごと止まる。"""
+    from duocad import kernel
+    from duocad.session import Session
+    s=Session(None,.2)
+    sketch=s.sketch_create('XY')['sketch_id']
+    s.add_rectangle(sketch,[0.,0.],2.,3.)
+    s.modify_selection([{'sketch':sketch,'index':1}],[])
+    s.extrude(4.,mode='new')
+    real_atomic = trace._atomic
+
+    def atomic(path, write):
+        if path.suffix in ('.zip', '.json') and path.name != 'manifest.json' and '-' not in path.name:
+            raise OSError('disk full')
+        return real_atomic(path, write)
+
+    def write_step(*args):
+        raise RuntimeError('STEP を書けない形')
+
+    monkeypatch.setattr(trace, '_atomic', atomic)
+    monkeypatch.setattr(kernel, 'write_step', write_step)
+    with trace.recording(s.document, root=tmp_path) as rec:
+        pass
+    manifest = json.loads((rec.path/'manifest.json').read_text(encoding='utf-8'))
+    assert manifest['status'] == 'complete'
+    assert manifest['write_failures'] == rec.write_failures == 3
+    assert 'source_sha256' not in manifest and 'input_sha256' not in manifest
+
+
+def test_a_failed_final_stl_does_not_throw_away_the_result(recordings, monkeypatch):
+    """落ちたら、探索が終わって形ができた後の final.stl の書き出し失敗で最適化全体が落ちる(#24)。"""
+    from duocad.topopt import voxelize as vx
+    grid = vx.Grid(origin=(0., 0., 0.), spacing=1., shape=(2, 2, 2))
+    vertices = np.array([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]])
+    faces = np.array([[0, 1, 2]])
+    with trace.recording() as rec:
+        real_atomic = trace._atomic
+
+        def atomic(path, write):
+            if path.name == 'final.stl':
+                raise OSError('locked')
+            return real_atomic(path, write)
+
+        monkeypatch.setattr(trace, '_atomic', atomic)
+        trace.final_mesh(vertices, vertices, faces, grid, final_vertices=vertices, final_faces=faces)
+    assert rec.write_failures == 1
+    assert 'final_stl_sha256' not in rec.manifest
+
+
 def test_real_cad_and_source_archive_are_complete(tmp_path):
     import hashlib
     import zipfile
