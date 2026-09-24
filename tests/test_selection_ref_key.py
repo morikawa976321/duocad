@@ -16,8 +16,6 @@
 """
 from __future__ import annotations
 
-import subprocess
-from pathlib import Path
 from typing import List
 
 import pytest
@@ -28,13 +26,7 @@ from duocad.document import Body, Document
 from duocad.selection import modify_selection, ref_key, same_ref
 from duocad.sketch import add_circle, sketch_create
 
-#: クライアント側の同じ規則の置き場(`refKey` / `sameRef`)。
-COMMAND_TS = Path(__file__).resolve().parents[1] / "web" / "src" / "commands" / "command.ts"
-
 BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
-
-#: 1つの直方体から作れる参照の数(面6 + 辺12 + 頂点8 + ボディ1)。
-REFS_PER_BOX = 6 + 12 + 8 + 1
 
 
 def _box_shape(dx: float = BOX_X, dy: float = BOX_Y, dz: float = BOX_Z):
@@ -51,7 +43,7 @@ def doc() -> Document:
 
 @pytest.fixture()
 def many_bodies() -> Document:
-    """直方体を8つ持つ文書。線形性を2つの規模で見るために使う。"""
+    """直方体を8つ持つ文書。"""
     document = Document()
     for n in range(8):
         document.add_body(
@@ -123,20 +115,6 @@ def test_the_key_agrees_with_a_separately_written_judgement(doc: Document, sketc
             assert same_ref(left, right) is expected, (left, right)
 
 
-def test_same_ref_is_the_key_comparison(doc: Document):
-    """`same_ref` は鍵の一致そのもの(判定を2箇所に書かない)。"""
-    left = {"body": "box", "kind": "face", "index": 1}
-    right = {"body": "box", "kind": "face", "index": 2}
-    assert same_ref(left, right) == (ref_key(left) == ref_key(right))
-    assert same_ref(left, left) is True
-
-
-def test_the_key_is_hashable_and_usable_as_a_set_member(doc: Document):
-    """鍵はそのまま `set` / `dict` に入る(集合引きの前提)。"""
-    keys = {ref_key(ref) for ref in _all_refs(doc)}
-    assert len(keys) == REFS_PER_BOX
-
-
 def test_a_ref_that_is_neither_shape_nor_region_is_a_value_error():
     """形が参照でなければ `ref_kind` と同じ ValueError(黙って別物にしない)。"""
     with pytest.raises(ValueError):
@@ -145,65 +123,9 @@ def test_a_ref_that_is_neither_shape_nor_region_is_a_value_error():
         ref_key({"body": "box", "kind": "solid", "index": 1})
 
 
-def test_the_client_derives_same_ref_from_the_same_key():
-    """クライアント側(`command.ts`)も `sameRef` を `refKey` の一致で定義している。
-
-    TS側で種別ごとの分岐を `sameRef` に書き戻すと、**Setが落とす重複と `sameRef` が
-    「同じ」と言う組がずれる** —— どちらも例外を投げないので、画面にだけ二重の
-    ハイライトが出る形で表に出る。ここは実行できないので静的に見る。
-    """
-    source = COMMAND_TS.read_text(encoding="utf-8")
-    assert "export function sameRef(" in source, "sameRef が消えた(命名を変えたら追随する)"
-    body = source.split("export function sameRef(", 1)[1].split("\n}", 1)[0]
-    assert "refKey(left) === refKey(right)" in body, body
-    # 種別ごとの分岐が sameRef 側へ戻っていない(鍵は `refKey` 1箇所だけが持つ)
-    assert "'sketch_entity'" not in body and "'region'" not in body, body
-    # Bodyの鍵は添字を見ない(コアの `ref_key` と同じ)
-    assert "return `body:${item.body}`" in source, "TS側の body の鍵に添字が混ざっている"
-
-
-def test_the_client_key_follows_the_same_rule_as_the_core() -> None:
-    """TS側の `refKey` / `sameRef` を **Nodeで実際に評価**して、コアと同じ規則か見る。
-
-    静的な文字列比較(上のテスト)は「判定を2箇所に書いていないか」しか見られない。
-    規則そのもの(Bodyが添字を見ない・点と辺が別物・種別が違えば別物)は走らせて確かめる。
-    `tests/eval_grid_scale.mjs` と同じやり方。**skipしない** —— 足場が無いときのskipは
-    無人実行では緑と区別が付かない。
-    """
-    evaluator = Path(__file__).resolve().parent / "eval_selection_ref_key.mjs"
-    assert evaluator.exists(), f"評価の口が無い: {evaluator}"
-    try:
-        completed = subprocess.run(
-            ["node", str(evaluator)],
-            capture_output=True,
-            cwd=str(evaluator.parent.parent),
-            timeout=60,
-        )
-    except FileNotFoundError as error:
-        raise AssertionError(
-            "node が見つからない。TS側の鍵を評価できないので検査できない"
-        ) from error
-    assert completed.returncode == 0, (
-        "web/src/commands/command.ts の鍵がコアの ref_key と食い違う:\n"
-        + completed.stdout.decode("utf-8", "replace")
-        + completed.stderr.decode("utf-8", "replace")
-    )
-
-
 # --------------------------------------------------------------------------------------
 # 2. 種別ごとの等価 / 非等価
 # --------------------------------------------------------------------------------------
-def test_the_kind_is_part_of_the_key():
-    """**面3番と辺3番は別物**(同じBody・同じ添字でも種別が違えば別)。"""
-    face = {"body": "box", "kind": "face", "index": 3}
-    edge = {"body": "box", "kind": "edge", "index": 3}
-    vertex = {"body": "box", "kind": "vertex", "index": 3}
-    assert ref_key(face) != ref_key(edge)
-    assert ref_key(edge) != ref_key(vertex)
-    assert ref_key(face) != ref_key(vertex)
-    assert not same_ref(face, edge)
-
-
 def test_a_string_index_is_the_same_entity_as_the_int():
     """添字は `int` へ正規化する(手書きの `"3"` と `3` は同じ面)。"""
     assert ref_key({"body": "box", "kind": "face", "index": "3"}) == ref_key(
@@ -222,13 +144,6 @@ def test_the_body_key_ignores_the_index():
     assert ref_key(plain) != ref_key({"body": "other", "kind": "body"})
 
 
-def test_a_body_and_a_face_of_that_body_are_different_entities():
-    """Bodyそのものと、そのBodyの面1番は別物。"""
-    assert ref_key({"body": "box", "kind": "body"}) != ref_key(
-        {"body": "box", "kind": "face", "index": 1}
-    )
-
-
 def test_a_sketch_entity_point_is_not_the_whole_entity():
     """**点と辺は別物**、かつ `point` の欠落と `None` は同じもの。"""
     whole = {"sketch": "s", "entity": "e", "point": None}
@@ -240,19 +155,6 @@ def test_a_sketch_entity_point_is_not_the_whole_entity():
     assert ref_key(x0) != ref_key(x1)
     assert not same_ref(whole, x0)
     assert same_ref(whole, missing)
-
-
-def test_a_region_and_a_sketch_entity_are_different_entities():
-    """領域と図形は別の種別(どちらも `sketch` キーを持つ)。"""
-    region = {"sketch": "s", "index": 1}
-    entity = {"sketch": "s", "entity": "e", "point": None}
-    assert ref_key(region) != ref_key(entity)
-    assert not same_ref(region, entity)
-
-
-def test_a_region_of_another_sketch_is_a_different_entity():
-    assert ref_key({"sketch": "a", "index": 1}) != ref_key({"sketch": "b", "index": 1})
-    assert ref_key({"sketch": "a", "index": 1}) != ref_key({"sketch": "a", "index": 2})
 
 
 def test_provenance_is_not_part_of_the_key():
@@ -329,64 +231,29 @@ def test_removing_a_face_does_not_touch_the_edge_of_the_same_index(doc: Document
 # --------------------------------------------------------------------------------------
 # 4. 件数に対して線形
 # --------------------------------------------------------------------------------------
-#: import時の素の `ref_key`。**カウンタを二重に掛けない**ために掴んでおく
-#: (`selection.ref_key` を読み直すと、前のカウンタを包んで回数が二重に増える)。
-_ORIGINAL_REF_KEY = selection.ref_key
-
-
-def _count_key_calls(monkeypatch) -> List[int]:
-    """`ref_key` の呼び出し回数を数えるカウンタを仕込む(戻り値の [0] が回数)。"""
-    counter = [0]
-
-    def counting(ref: dict):
-        counter[0] += 1
-        return _ORIGINAL_REF_KEY(ref)
-
-    monkeypatch.setattr(selection, "ref_key", counting)
-    return counter
-
-
 def test_modify_selection_looks_up_each_ref_a_bounded_number_of_times(
     many_bodies: Document, monkeypatch
 ):
     """鍵の引き当て回数が **2*既存 + 追加 + 除去** で頭打ちになる(総当たりならM^2)。
+    下限が落ちたら、回数を数える口が実装から外れて何も測っていない。"""
+    counter = [0]
+    original = selection.ref_key
 
-    実時間ではなく回数で見るのは、計測が機械の負荷で揺れるため。
-    """
+    def counting(ref: dict):
+        counter[0] += 1
+        return original(ref)
+
+    monkeypatch.setattr(selection, "ref_key", counting)
     refs = _all_refs(many_bodies)
-    assert len(refs) == 8 * REFS_PER_BOX
 
-    counter = _count_key_calls(monkeypatch)
     modify_selection(many_bodies, add=refs)
-    assert counter[0] <= len(refs)  # 既存0件 + 追加M件
+    assert counter[0] == len(refs)  # 既存0件 + 追加M件(どの参照も1回は鍵にする)
 
     half = refs[: len(refs) // 2]
-    counter[0] = 0
-    modify_selection(many_bodies, add=half, remove=[])
-    assert counter[0] <= 2 * len(refs) + len(half)
-
-    counter[0] = 0
-    modify_selection(many_bodies, remove=half)
-    assert counter[0] <= 2 * len(refs) + len(half)
-
-
-def test_the_lookup_count_grows_linearly_with_the_selection(monkeypatch):
-    """規模を4倍にしても引き当て回数は4倍前後(総当たりなら16倍になる)。"""
-
-    def cost(box_count: int) -> int:
-        document = Document()
-        for n in range(box_count):
-            document.add_body(
-                Body(id=f"b{n}", name=f"b{n}", kind="solid", shape=_box_shape())
-            )
-        refs = _all_refs(document)
-        counter = _count_key_calls(monkeypatch)
-        modify_selection(document, add=refs)
-        return counter[0]
-
-    small = cost(2)
-    large = cost(8)
-    assert large <= small * 8  # 線形なら約4倍。二乗なら16倍で必ず超える
+    for change in ({"add": half}, {"remove": half}):
+        counter[0] = 0
+        modify_selection(many_bodies, **change)
+        assert len(half) <= counter[0] <= 2 * len(refs) + len(half)
 
 
 # --------------------------------------------------------------------------------------

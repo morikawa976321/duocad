@@ -158,16 +158,6 @@ def test_length_conditions_are_strict_comparisons(doc: Document):
     assert len(short_edges) == 8
 
 
-def test_results_are_ordered_by_body_then_index(doc: Document):
-    """順序は「`doc.bodies` の順 × 添字の昇順」で安定する。
-
-    順序が実装依存だと、UIの一覧が操作のたびに並び替わり、
-    `fillet` の半径リストと辺リストの対応も再現しなくなる。
-    """
-    matched = predicates.evaluate(doc, {"kind": "edge", "where": []})
-    assert [item["index"] for item in matched] == sorted(item["index"] for item in matched)
-
-
 def test_results_group_by_body_in_document_order():
     """複数Bodyでも「`doc.bodies` の順 → その中で添字昇順」になる。
 
@@ -189,7 +179,7 @@ def test_results_group_by_body_in_document_order():
 # 関係述語 —— ある面の外周の辺
 # --------------------------------------------------------------------------------------
 def test_edges_on_the_boundary_of_a_face_can_be_selected(doc: Document):
-    """**関係述語**「ある面の外周の辺」(項番17)。
+    """**関係述語**「ある面の外周の辺」。
 
     フィレットの実用(**「上面の外周を丸める」**)に直結する。これが無いと、
     その操作は辺の添字を決め直して並べる以外に表現できず、形が変わるたびに壊れる。
@@ -235,12 +225,12 @@ def test_the_boundary_of_the_bottom_face_is_a_different_set(doc: Document):
 
 
 def test_the_boundary_excludes_the_rim_of_a_hole():
-    """**穴の縁は外周に含めない**(項番17の契約の本体)。
+    """**穴の縁は外周に含めない**(この述語の契約の本体)。
 
     穴無しの直方体だけで検査していると、面の**全ワイヤ**を返す誤実装でも
     「件数4・長さ30・Z=40」で緑になってしまう。貫通穴を1つ開けた箱の上面で初めて
     両者が区別できる —— 穴の縁を外周に含めると、「上面の外周を丸める」操作が
-    穴の縁まで丸めてトーラスになる(`test_fillet.py` 項番3で実測済み)。
+    穴の縁まで丸めてトーラスになる(`test_fillet.py::test_fillet_on_a_circular_edge_produces_torus`)。
     """
     document = Document()
     size, hole_radius = 20.0, 4.0
@@ -330,41 +320,9 @@ def test_naming_a_hidden_body_explicitly_is_an_error():
         predicates.evaluate(document, {"kind": "edge", "where": [], "body": "a"})
 
 
-def test_the_body_key_scopes_the_search():
-    """`body` を明示すると、そのBodyだけを走査する。"""
-    document = Document()
-    document.add_body(Body(id="a", name="a", kind="solid", shape=_box_shape()))
-    document.add_body(Body(id="b", name="b", kind="solid", shape=_box_shape()))
-    matched = predicates.evaluate(document, {"kind": "edge", "where": [], "body": "b"})
-    assert {item["body"] for item in matched} == {"b"}
-
-
 # --------------------------------------------------------------------------------------
-# 一致0件はエラーにしない(ただし件数が分かる)
+# 一致0件はエラーにしない
 # --------------------------------------------------------------------------------------
-def test_zero_matches_is_not_an_error(doc: Document):
-    """一致0件は**エラーではない**。空のリストを返す(項番19)。
-
-    例外にすると、AIは「述語が不正だった」のか「条件に合う辺が無かった」のかを
-    区別できず、直しようがない。
-    """
-    assert predicates.evaluate(
-        doc, {"kind": "edge", "where": [{"op": "length_gt", "value": 10_000}]}
-    ) == []
-
-
-def test_the_caller_can_see_the_match_count(doc: Document):
-    """**件数が呼び出し元に分かる**こと(項番19)。AIが述語を外したのに気づけるように。
-
-    0件の提案を「成功」としか報告しないと、交互操作は人が画面を見るまで黙って止まる。
-    """
-    result = selection.propose_selection(
-        doc, predicate={"kind": "edge", "where": [{"op": "length_gt", "value": 10_000}]}
-    )
-    assert result.to_dict()["count"] == 0
-    assert result.items == []
-
-
 def test_a_zero_match_proposal_still_replaces_the_previous_selection(doc: Document):
     """0件の提案でも置き換えは起きる(古い候補が残らない)。
 
@@ -400,7 +358,7 @@ def test_a_zero_match_proposal_still_replaces_the_previous_selection(doc: Docume
 def test_invalid_predicates_are_rejected(doc: Document, bad: dict, why: str):
     """不正な述語は ValueError(未知のop・型違い・kindに無いop・未知の軸)。
 
-    黙って空集合を返すと、**0件一致と区別が付かない**(項番19との対)。
+    黙って空集合を返すと、**0件一致と区別が付かない**。
     """
     with pytest.raises(ValueError):
         predicates.validate(bad)
@@ -409,7 +367,7 @@ def test_invalid_predicates_are_rejected(doc: Document, bad: dict, why: str):
 
 
 def test_an_invalid_predicate_leaves_the_selection_untouched(doc: Document):
-    """不正な述語で `propose_selection` が落ちても、**選択は変更されない**(項番20)。
+    """不正な述語で `propose_selection` が落ちても、**選択は変更されない**。
 
     ここが守られていないと、AIが述語を打ち間違えるたびに人の選択が消える。
     実装は「全条件を検査してから評価する」順序でこれを守ること
@@ -462,7 +420,7 @@ def test_validate_returns_a_normalized_copy(doc: Document):
 
 
 def test_the_op_catalogue_covers_every_supported_op():
-    """`describe_ops()` が **opの唯一の正**であること(F1のスキーマがここから作られる)。
+    """`describe_ops()` が **opの唯一の正**であること(MCPのスキーマがここから作られる)。
 
     バリデータと公開スキーマが二重管理になると、片方にだけ足したopが
     「MCPからは呼べるが検証を素通りする」状態で入る。

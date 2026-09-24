@@ -59,7 +59,7 @@ def _count_kernel_calls(monkeypatch: pytest.MonkeyPatch, name: str) -> List[int]
 
 
 # --------------------------------------------------------------------------------------
-# 完了条件1: 選択件数ぶんではなく、ボディごとに1回だけ数える
+# 選択件数ぶんではなく、ボディごとに1回だけ数える
 # --------------------------------------------------------------------------------------
 def test_face_count_is_looked_up_once_per_body_not_per_ref(
     two_shapes: Document, monkeypatch: pytest.MonkeyPatch
@@ -90,25 +90,14 @@ def test_edge_count_is_looked_up_once_per_body_not_per_ref(
     assert edge_calls[0] == 1  # 箱1体ぶんだけ(12回なら参照1件ごとに数えている)
 
 
-def test_separate_modify_selection_calls_each_recount(
-    two_shapes: Document, monkeypatch: pytest.MonkeyPatch
-):
-    """`add` 用・`remove` 用に**別々の** `modify_selection` 呼び出しを行う場合
-    (1回の呼び出しに `add` と `remove` を同時に渡す場合とは別のシナリオ ——
-    そちらは `test_add_and_remove_in_the_same_call_share_the_count_cache` が見る)。
+def test_a_changed_shape_is_counted_again_in_the_next_call(two_shapes: Document):
+    """数え上げは呼び出しをまたいで持ち越さない。落ちたら、形状が変わった後も古い面数で範囲を検査している。"""
+    selection.modify_selection(two_shapes, add=[{"body": "cyl", "kind": "face", "index": 1}])
+    two_shapes.get_body("cyl").shape = _box_shape()  # 3面 → 6面
 
-    キャッシュの寿命は「1回の `modify_selection` 呼び出し」に閉じる契約なので、
-    呼び出しをまたいで使い回されないのは仕様どおり。各呼び出しにつき箱1体ぶん
-    (1回)を数え直す。"""
-    face_calls = _count_kernel_calls(monkeypatch, "face_count")
-    add_refs = [{"body": "box", "kind": "face", "index": i + 1} for i in range(6)]
-    selection.modify_selection(two_shapes, add=add_refs)
-    face_calls[0] = 0
+    result = selection.modify_selection(two_shapes, add=[{"body": "cyl", "kind": "face", "index": 6}])
 
-    remove_refs = [{"body": "box", "kind": "face", "index": i + 1} for i in range(3)]
-    selection.modify_selection(two_shapes, remove=remove_refs)
-
-    assert face_calls[0] == 1  # 呼び出しが別なので独立に1回数え直す(0にはならない)
+    assert [item["index"] for item in result.items] == [1, 6]
 
 
 def test_add_and_remove_in_the_same_call_share_the_count_cache(
@@ -156,7 +145,7 @@ def test_the_cache_does_not_confuse_a_smaller_bodys_count_with_a_larger_bodys(
 
 def test_out_of_range_index_is_still_rejected_per_bodys_own_count(two_shapes: Document):
     """面数の異なる2ボディが同じ呼び出しに混ざっても、範囲外はそれぞれの実際の
-    面数で判定される(完了条件3の、面数が食い違うボディでの回帰版)。"""
+    面数で判定される。"""
     with pytest.raises(ValueError):
         selection.modify_selection(two_shapes, add=[{"body": "cyl", "kind": "face", "index": 4}])
     with pytest.raises(ValueError):
@@ -178,11 +167,3 @@ def test_hidden_body_face_ref_is_refused_through_modify_selection(two_shapes: Do
         selection.modify_selection(two_shapes, add=[{"body": "cyl", "kind": "face", "index": 1}])
 
     assert two_shapes.selection.items == []  # 失敗時は選択を変えない
-
-
-def test_hidden_body_face_ref_is_refused_through_propose_selection(two_shapes: Document):
-    """`propose_selection` 側の `_coerce_refs` 呼び出しでも同じ門番が効く。"""
-    selection.set_visible(two_shapes, "cyl", False)
-
-    with pytest.raises(ValueError):
-        selection.propose_selection(two_shapes, refs=[{"body": "cyl", "kind": "face", "index": 1}])

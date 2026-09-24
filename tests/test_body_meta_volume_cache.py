@@ -59,7 +59,7 @@ def test_state_meta_volume_updates_when_the_shape_changes():
 
 def test_state_meta_does_not_recompute_volume_for_an_unchanged_shape(monkeypatch):
     """2回目以降の `state_meta()` では、形状が変わっていないBodyの `query.volume` が
-    呼ばれない(時間ではなく呼び出し回数で見るので、マシン負荷に振れない)。
+    呼ばれない。最後の1回が落ちたら、回数を数える口が実装から外れて何も測っていない。
     """
     session = _box_session()
     session.state_meta()  # 初回配信でキャッシュを埋める
@@ -76,3 +76,7 @@ def test_state_meta_does_not_recompute_volume_for_an_unchanged_shape(monkeypatch
     session.state_meta()
 
     assert calls == [], "形状が変わっていないのに query.volume が呼ばれた"
+
+    session.document.get_body("box").shape = BRepPrimAPI_MakeBox(BOX_X, BOX_Y, 2 * BOX_Z).Shape()
+    session.state_meta()
+    assert len(calls) == 1

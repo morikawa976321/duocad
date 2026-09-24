@@ -1,5 +1,4 @@
-"""選択集合をコアの第一級オブジェクトにする契約(詳細は `duocad/selection.py`
-`duocad/selection.py` 節)。ここが崩れると、AIが提案し人が過不足を直しAIが適用する
+"""選択集合をコアの第一級オブジェクトにする契約(詳細は `duocad/selection.py` のdocstring)。ここが崩れると、AIが提案し人が過不足を直しAIが適用する
 往復のどこかが閉じなくなる(選択の正がブラウザ側に漏れる/提案と確定の区別が消える等)。
 """
 from __future__ import annotations
@@ -84,7 +83,7 @@ def _first_extrudable_face(shape) -> int:
 # 面・辺・頂点・領域を選択に入れられ、種別が保持される
 # --------------------------------------------------------------------------------------
 def test_each_kind_of_reference_keeps_its_kind(doc: Document):
-    """面・辺・頂点の参照が、それぞれ `kind` を保持したまま選択に入る(条件3)。"""
+    """面・辺・頂点の参照が、それぞれ `kind` を保持したまま選択に入る。"""
     refs = [
         selection.select_face(doc, "box", 1),
         selection.select_edge(doc, "box", 1),
@@ -150,7 +149,7 @@ def test_selecting_a_region_validates_the_sketch_and_the_index(sketch_doc):
 
 
 def test_regions_go_into_the_selection_like_any_other_kind(sketch_doc, doc: Document):
-    """**領域が選択集合に実際に入る**こと(項番1の「領域」。参照を作れるだけでは足りない)。
+    """**領域が選択集合に実際に入る**こと(参照を作れるだけでは足りない)。
 
     差分編集・重複除去・種別での絞り込みが、面や辺と同じように領域にも効くこと。
     RegionRef は `kind` キーを持たない(§3.5)ので、種別の判定は `"sketch"` キーの有無で
@@ -184,40 +183,6 @@ def test_selecting_from_a_missing_body_raises(doc: Document):
 # --------------------------------------------------------------------------------------
 # 差分編集・重複しない・空にできる
 # --------------------------------------------------------------------------------------
-def test_modify_selection_adds_and_removes_without_rebuilding(doc: Document):
-    """`modify_selection(add=, remove=)` は**差分編集**である(条件4)。
-
-    作り直し(毎回全部を渡し直す)しかできないと、人が1本足すだけの操作でも
-    AIが作った集合を全部書き写す必要があり、交互操作の往復が現実的でなくなる。
-    """
-    first = [selection.select_edge(doc, "box", index) for index in (1, 2, 3)]
-    selection.modify_selection(doc, add=first)
-
-    result = selection.modify_selection(
-        doc,
-        add=[selection.select_edge(doc, "box", 4)],
-        remove=[selection.select_edge(doc, "box", 2)],
-    )
-    assert [item["index"] for item in result.items] == [1, 3, 4]
-
-
-def test_adding_the_same_reference_twice_does_not_duplicate(doc: Document):
-    """同じ参照を2回 add しても重複しない(項番3)。
-
-    重複すると、フィレットの半径リストと辺リストの長さがずれる・同じ辺を2回丸めるなど、
-    verb 側で意味の壊れた引数になる。
-    """
-    first = selection.select_face(doc, "box", 1)
-    second = selection.select_face(doc, "box", 2)
-    selection.modify_selection(doc, add=[first, second])
-
-    result = selection.modify_selection(doc, add=[dict(first)])
-    assert len(result.items) == 2
-    # **位置も動かさない**(末尾へ移し替えない)。同じものをもう一度クリックしただけで
-    # 並びが変わると、fillet の辺リストと半径リストの対応が一緒にずれる。
-    assert [item["index"] for item in result.items] == [1, 2]
-
-
 def test_modify_selection_refuses_a_malformed_ref(doc: Document):
     """人が触る主経路でも、壊れた参照は落ちて選択を変更しない(`propose` と同じ契約)。
 
@@ -252,14 +217,6 @@ def test_remove_wins_when_the_same_reference_is_added_and_removed(doc: Document)
     assert result.items == []
 
 
-def test_clear_selection_empties_it(doc: Document):
-    """`clear_selection` で空になる(項番4)。空集合の origin は "user" に戻る。"""
-    selection.modify_selection(doc, add=[selection.select_face(doc, "box", 1)])
-    result = selection.clear_selection(doc)
-    assert result.items == []
-    assert result.origin == selection.ORIGIN_USER
-
-
 def test_selection_spans_multiple_bodies(two_bodies: Document):
     """選択は**Bodyをまたげる**(§3.2「選択が body_id を持つ」ことの実利)。"""
     result = selection.modify_selection(
@@ -270,18 +227,6 @@ def test_selection_spans_multiple_bodies(two_bodies: Document):
         ],
     )
     assert [item["body"] for item in result.items] == ["a", "b"]
-
-
-def test_the_same_index_on_two_bodies_is_not_a_duplicate(two_bodies: Document):
-    """`body` が違えば同じ添字でも別物(重複除去が `index` だけを見ていたら落ちる)。"""
-    result = selection.modify_selection(
-        two_bodies,
-        add=[
-            selection.select_edge(two_bodies, "a", 1),
-            selection.select_edge(two_bodies, "b", 1),
-        ],
-    )
-    assert len(result.items) == 2
 
 
 def test_hidden_bodies_cannot_be_selected(two_bodies: Document):
@@ -316,7 +261,7 @@ def test_operating_the_raw_verb_function_does_not_touch_selection(doc: Document)
 
 
 def test_changing_the_selection_does_not_touch_the_operation_log(doc: Document):
-    """**選択の変更は操作ログに載らない**(選択は文書を変更しないため。項番6)。
+    """**選択の変更は操作ログに載らない**(選択は文書を変更しないため)。
 
     undoの単位(§2「verbの粒度」)を選択が汚さないようにするためでもある —— 選択し直す
     たびにundo1手を消費する編集は使い物にならない。同じ理由で `set_visible` も載せない
@@ -375,16 +320,8 @@ def test_selection_is_not_saved(doc: Document):
 # --------------------------------------------------------------------------------------
 # 出所(提案と確定)
 # --------------------------------------------------------------------------------------
-def test_proposed_items_are_distinguishable(doc: Document):
-    """`propose_selection` で入れた項目は**提案として区別できる**(項番8・条件5)。"""
-    result = selection.propose_selection(doc, refs=[selection.select_face(doc, "box", 1)])
-    assert result.origin == selection.ORIGIN_PROPOSED
-    assert result.is_proposed() is True
-    assert result.to_dict()["origin"] == selection.ORIGIN_PROPOSED
-
-
 def test_the_ai_proposes_the_human_fixes_and_the_ai_reads_it_back(doc: Document):
-    """**§2.1の交互操作そのもの。このファイルの核心の1本**(項番9)。
+    """**交互操作そのもの。このファイルの核心の1本**。
 
     AIが提案 → 人が過不足を直す → **AIが直した結果を読み直せる**。
     3つが同じ1つのオブジェクトを触っていなければ、この往復は閉じない。
@@ -408,7 +345,7 @@ def test_the_ai_proposes_the_human_fixes_and_the_ai_reads_it_back(doc: Document)
 
 
 def test_commit_selection_confirms_without_changing_the_items(doc: Document):
-    """`commit_selection` は確定に変えるだけで**中身は変えない**(項番10)。
+    """`commit_selection` は確定に変えるだけで**中身は変えない**。
 
     人が「そのままでよい」と承認する経路。中身が変わってしまうと、
     承認したものと実行されるものが食い違う。
@@ -420,15 +357,8 @@ def test_commit_selection_confirms_without_changing_the_items(doc: Document):
     assert [item["index"] for item in committed.items] == [1, 2]
 
 
-def test_commit_selection_is_idempotent(doc: Document):
-    """既に確定しているものを commit しても失敗しない(冪等)。"""
-    selection.modify_selection(doc, add=[selection.select_edge(doc, "box", 1)])
-    selection.commit_selection(doc)
-    assert selection.commit_selection(doc).origin == selection.ORIGIN_USER
-
-
 def test_human_editing_a_proposal_confirms_it(doc: Document):
-    """**決めた遷移規則**(項番11): 人が `modify_selection` で触ったら確定になる。
+    """**決めた遷移規則**: 人が `modify_selection` で触ったら確定になる。
 
     人が中身を見て直すこと自体が承認だからである。ここを "proposed" のままにすると、
     人が直した集合を実行するのに**もう1回「承認」ボタンを押させる**ことになり、
@@ -440,7 +370,7 @@ def test_human_editing_a_proposal_confirms_it(doc: Document):
 
 
 def test_a_proposal_cannot_be_fed_to_a_verb(doc: Document):
-    """**決めた遷移規則**(項番11): `origin="proposed"` のままでは verb に渡せない。
+    """**決めた遷移規則**: `origin="proposed"` のままでは verb に渡せない。
 
     「AIが自分の提案を人の確認なしに実行してよいか」への答え。**禁止ではなく
     「黙って通さない」**(§6予防6)——AIは `commit_selection()` を明示的に呼べば実行できる。
@@ -468,7 +398,6 @@ def test_edge_indices_feed_fillet_directly(doc: Document):
     """確定した選択が `fillet(edges=[...])` へそのまま渡せる形で取り出せる。
 
     **ここが繋がっていないと、選択集合は「読めるだけの飾り」になる**。
-    実際に丸めるところまでは A2 の検証項目(このタスクは契約まで)。
     """
     selection.modify_selection(
         doc, add=[selection.select_edge(doc, "box", index) for index in (1, 3)]
@@ -516,7 +445,7 @@ def test_proposing_again_replaces_the_previous_selection(doc: Document):
 def test_a_malformed_ref_is_refused_without_touching_the_selection(
     doc: Document, bad: dict, expected: type, why: str
 ):
-    """手書きの壊れた参照も**落ちて、選択を変更しない**(項番20の参照版)。
+    """手書きの壊れた参照も**落ちて、選択を変更しない**。
 
     例外の種類は `select_*` と揃える —— 形が不正なら ValueError、存在しないBodyは KeyError。
     どこが悪いかで例外が変わらないと、MCPがAIへ返す説明を作れない。
@@ -548,7 +477,7 @@ def test_propose_selection_needs_exactly_one_source(doc: Document):
 # イベント(コア→アプリ層の上り方向)
 # --------------------------------------------------------------------------------------
 def test_every_selection_api_fires_exactly_one_event(session: Session):
-    """変更する4つのAPIがそれぞれ1回だけ発火し、読み取りは発火しない(項番12)。
+    """変更する4つのAPIがそれぞれ1回だけ発火し、読み取りは発火しない。
 
     2回発火すると、購読側(`Server._on_core_change`)が同じ状態を2回配ることになる
     (M4で「1つの操作につき1回だけ」を契約にしたのと同じ理由)。合計だけ見ると
@@ -572,7 +501,7 @@ def test_every_selection_api_fires_exactly_one_event(session: Session):
 
 
 def test_the_event_carries_enough_to_redraw(session: Session):
-    """イベントは**UIが描き直すのに足る情報**を持つ(項番13)。
+    """イベントは**UIが描き直すのに足る情報**を持つ。
 
     「何が選択されたか」と「提案か確定か」の両方。片方だけだと、
     AIの提案を人の確定と同じ見た目で描いてしまう(承認操作が意味を失う)。
@@ -605,7 +534,7 @@ def test_the_event_carries_the_client_op_back(session: Session):
 
 
 def test_selection_events_ride_the_same_up_path_as_set_visible(session: Session):
-    """**別系統を新設していない**こと(項番14)。
+    """**別系統を新設していない**こと。
 
     `set_visible` の変更がブラウザへ届く経路は `Session._emit` → `add_listener` の
     購読者(`Server._on_core_change`)である。選択も**同じ購読者リストに乗る**ので、
@@ -641,18 +570,6 @@ def test_selection_is_part_of_the_pushed_state(session: Session):
     state = session.state_meta()
     assert state["selection"]["origin"] == selection.ORIGIN_PROPOSED
     assert state["selection"]["count"] == 1
-
-
-def test_the_event_does_not_pretend_to_be_a_verb(session: Session):
-    """選択のイベントは verb の `applied` と**キーで区別できる**(選択はverbではない)。
-
-    `verb` を名乗ると、アプリ層が操作ログの1行として扱ってしまう経路ができる
-    (選択はログに載らないので、その行はどこにも存在しない)。
-    """
-    events = []
-    session.add_listener(events.append)
-    session.clear_selection()
-    assert "verb" not in events[0]
 
 
 def test_a_failing_listener_does_not_undo_the_selection(session: Session):

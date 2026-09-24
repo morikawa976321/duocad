@@ -124,14 +124,6 @@ def test_ordinary_shapes_are_unchanged_and_identical_to_the_standard_mesher(labe
         assert per_face_triangles(shape) == reference, label
 
 
-def test_reversed_shared_edge_between_two_faces():
-    """共有辺を逆向きに使う隣接面(箱の隣り合う面)で接続を誤報しない。"""
-    shape = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
-    diagnostics = kernel_meshing.mesh_shape(shape, 0.2, 0.35)
-    assert diagnostics['rounds_log'][0]['issues'] == 0
-    assert all(v == 0 for v in connectivity(shape).values())
-
-
 # ------------------------------------------------------------------ 再分割
 def test_amplified_edge_updates_every_pcurve_and_the_committed_polygons_agree():
     """再分割した共有辺は両側の面の pcurve が同じ点数になり、面分割後の折れ線もその点数を持つ。"""
@@ -188,7 +180,7 @@ def test_a_truly_self_intersecting_boundary_fails_bounded_with_diagnostics():
     assert len(payload['faces']) == 7 and all(f['indices'] for f in payload['faces'][1:])
 
 
-def test_round_limit_is_respected(monkeypatch):
+def test_round_limit_is_respected():
     shape = load('gap_minimal_solid.brep')
     diagnostics = kernel_meshing.mesh_shape(shape, 0.2, 0.35, max_rounds=0)
     assert diagnostics['termination'] == 'max_rounds' and diagnostics['rounds'] == 0

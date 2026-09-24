@@ -1,15 +1,6 @@
-"""Body索引キャッシュの剪定。
+"""`Session.state_meta()` が、消えたBodyの `body_id` 索きキャッシュ(`session.view`)を生存集合で剪定すること。
 
-`_geometry_cache` / `_edge_cache` / `_vertex_cache` / `_volume_cache` は `body_id` 索きで、
-文書からBodyが消えても(undoで)エントリが自然には落ちない。同じ文書を開いたまま
-作成・undoを繰り返すと線形に溜まり続けるので、`Session.state_meta()`(WebSocket配信のたびに
-呼ばれる)が生存集合との差分で剪定することを固定する。
-
-**キャッシュの持ち主は `session.view`(`duocad/view.py` の `DocumentView`)**。
-
-**`_revision_counter` は剪定しない**。剪定すると版が1へ戻り、同じ `body_id` を知っている
-クライアントが「版が同じ=変わっていない」と判断して前の文書の形を描き続ける
-(`DocumentView.reset` のコメントと同じ理由)。
+落ちたら、作成・undoを繰り返すたびにキャッシュが溜まる。版 `_revision_counter` は剪定しない(理由は `DocumentView._prune_body_caches` の docstring)。
 """
 from __future__ import annotations
 
@@ -25,7 +16,6 @@ BOX_X, BOX_Y, BOX_Z = 20.0, 20.0, 20.0
 
 
 def _box_session() -> Session:
-    """`tests/test_body_meta_volume_cache.py` と同じ作り(base bodyを1つ直に足すだけ)。"""
     session = Session(None, 0.2)
     session.document.add_body(
         Body(
@@ -78,7 +68,6 @@ def test_undo_prunes_the_gone_bodys_entry_from_all_four_caches_but_not_the_revis
     assert created_id not in session.view._edge_cache
     assert created_id not in session.view._vertex_cache
     assert created_id not in session.view._volume_cache
-    # A2: _revision_counter は剪定しない(剪定しすぎの検知)。
     assert created_id in session.view._revision_counter
 
 
