@@ -428,6 +428,7 @@ class DocumentView:
             payload = dict(payload)
         payload["sketch_id"] = item.id
         payload["plane"] = item.plane
+        payload["visible"] = item.visible
         # 図形そのものは軽いのでキャッシュしない(打ち直しの反映が1手遅れるのを避ける)。
         # **ここも try で包む** —— 上の `drawn` だけを守っても、同じパラメータ解決を
         # するこちらが素通りすると `state_meta()` ごと落ち、以後の配信が全部止まる。

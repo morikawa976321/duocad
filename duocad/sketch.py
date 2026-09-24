@@ -571,6 +571,10 @@ class Sketch:
     plane: dict
     entities: List[Entity] = field(default_factory=list)
     patterns: List["Pattern"] = field(default_factory=list)
+    #: 表示/非表示。`Body.visible` と同じ扱い —— 選択機構の一部で、**操作ログに載らず
+    #: 保存もされず undo でも戻らない**(切り替えは `duocad.selection.set_sketch_visible`)。
+    #: 開き直した文書は全スケッチが可視で始まる。
+    visible: bool = True
 
 
 def get_sketch(doc: Document, sketch_id: SketchId) -> Sketch:

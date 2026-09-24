@@ -609,14 +609,40 @@ def set_visible(doc: Document, body_id: BodyId, visible: bool) -> dict:
     }
 
 
+def set_sketch_visible(doc: Document, sketch_id: str, visible: bool) -> dict:
+    """スケッチの表示・非表示を切り替える。**`set_visible`(ボディ)と同じ契約** ——
+    undo / redo の対象外で、ログに載らないので保存もされない。
+
+    隠したスケッチの領域・図形は指せない(`select_region` / `select_sketch_entity`)。
+    押し出し済みのボディには何もしない(ボディの可視性は別に持つ)。
+    存在しない sketch_id は KeyError(文書は何も変わらない)。
+    """
+    from .sketch import get_sketch
+
+    target = get_sketch(doc, sketch_id)
+    previous = target.visible
+    target.visible = bool(visible)
+    return {
+        "sketch_id": sketch_id,
+        "visible": target.visible,
+        "previous": previous,
+        "changed": previous != target.visible,
+    }
+
+
 def visibility_fingerprint(doc: Document) -> str:
     """可視性の「指紋」。**楽観ロック(`DocumentTools.current_seq`)のために要る。**
 
     可視性がログに載らなくなった以上、`len(doc.log.entries)` では「AIが考えている間に人が
     ボディを隠した」を検出できない。見逃すと、AIが**人が隠したものを黙って表示に戻す**
     (逆も同じ)。`fingerprint`(選択)と同じ役目を可視性について果たす。
+
+    スケッチの可視性も同じ理由で混ぜる(IDの接頭辞 `body-` / `sketch-` が違うので1つの
+    列で足りる)。
     """
-    return json.dumps(sorted(body.id for body in doc.bodies if not body.visible))
+    hidden = [body.id for body in doc.bodies if not body.visible]
+    hidden.extend(item.id for item in doc.sketches if not item.visible)
+    return json.dumps(sorted(hidden))
 
 
 # --------------------------------------------------------------------------------------
@@ -700,9 +726,8 @@ def select_region(doc: Document, sketch_id: str, region_index: int) -> dict:
     存在しない `sketch_id` は KeyError、範囲外の添字は ValueError。
     """
     from . import region as region_mod
-    from .sketch import get_sketch
 
-    get_sketch(doc, sketch_id)  # 存在しなければ KeyError
+    _visible_sketch(doc, sketch_id)  # 存在しなければ KeyError、隠れていれば ValueError
     count = len(region_mod.regions(doc, sketch_id))
     value = int(region_index)
     if not 1 <= value <= count:
@@ -723,9 +748,9 @@ def select_sketch_entity(
     他の図形を足しても、平行移動しても、指す先が変わらない(面・辺・頂点の添字とは
     そこが違う —— `duocad-selection-resets-on-shape-change` の根拠が当たらない)。
     """
-    from .sketch import entity_point_pair, get_entity, get_sketch
+    from .sketch import entity_point_pair, get_entity
 
-    sketch = get_sketch(doc, sketch_id)  # 無ければ KeyError
+    sketch = _visible_sketch(doc, sketch_id)  # 無ければ KeyError、隠れていれば ValueError
     entity = get_entity(sketch, entity_id)  # 無ければ KeyError
     if point is not None:
         entity_point_pair(entity.kind, str(point))  # その種別に無い点なら ValueError
@@ -891,6 +916,16 @@ def _coerce_refs(
         else:
             out.append(_coerce_ref(doc, ref))
     return out
+
+
+def _visible_sketch(doc: Document, sketch_id: str):
+    """存在して可視なスケッチを返す。無ければ KeyError、不可視なら ValueError(`_visible_body` と同じ線)。"""
+    from .sketch import get_sketch
+
+    target = get_sketch(doc, sketch_id)
+    if not target.visible:
+        raise ValueError(f"sketch {sketch_id!r} is hidden: 見えないものは指せない")
+    return target
 
 
 def _visible_body(doc: Document, body_id: BodyId):

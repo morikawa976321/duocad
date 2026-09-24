@@ -182,6 +182,8 @@ export interface SketchPattern {
 export interface SketchState {
   sketch_id: string
   plane: PlaneRef
+  /** 表示/非表示(`BodyMeta.visible` と同じくコアのセッション状態。保存されない)。 */
+  visible: boolean
   /** 平面が壊れている(貼った面が消えた等)ときだけ null。 */
   frame: SketchFrame | null
   /** 反復を展開した**実際に見えるもの**。描画は必ずこちらを使う。 */
@@ -285,6 +287,11 @@ export interface ServerState {
    */
   current_name: string | null
   /**
+   * 今の文書がそのままファイルに載っているか(`Session.saved`)。**自動保存が書けなかった
+   * ときだけ false**(issue #5)。無題で何も変えていない文書は true(書くものが無い)。
+   */
+  saved: boolean
+  /**
    * 形状最適化の条件(第3のモード)。**verb起動時のプリセレクトと役割の色はここが正**で、
    * ブラウザは自前に溜めない(選択集合と同じ扱い)。
    */
@@ -309,6 +316,8 @@ export interface FilePayload {
   path: string
   bytes: number
   name?: string
+  /** 複製元のファイル名(`copy_document` のみ)。 */
+  source?: string
   operations?: number
   deviation?: number
   body_ids?: string[]
@@ -480,6 +489,13 @@ export type Applied =
       entities: string[]
       sketch_ids: string[]
     })
+  /** スケッチを入れ物ごと消した(`delete_sketch`)。消えた図形・反復のIDを添える。 */
+  | (AppliedVerbBase & {
+      verb: 'delete_sketch'
+      sketch_id: string
+      entities: string[]
+      patterns: string[]
+    })
   /**
    * 形状最適化の条件(集合代入)。**形は1つも変わらない**ので `changed_bodies` は無い ——
    * 役割の色は配信される `state.optimize` から描く。
@@ -544,7 +560,9 @@ export type Applied =
    */
   | (AppliedChangeBase & {
       change: 'visibility'
-      body_id: string
+      /** ボディ(`set_visible`)なら `body_id`、スケッチ(`set_sketch_visible`)なら `sketch_id`。 */
+      body_id?: string
+      sketch_id?: string
       visible: boolean
       previous: boolean
       changed: boolean
@@ -989,6 +1007,7 @@ export interface Session {
    */
   runVerb(verb: string, args: Record<string, unknown>, clientOp: number): void
   setVisible(bodyId: string, visible: boolean, clientOp: number): void
+  setSketchVisible(sketchId: string, visible: boolean, clientOp: number): void
   /** 人が直す経路。差分編集で `origin` は `"user"` になる(触ること自体が承認)。 */
   modifySelection(add: SelectionRef[], remove: SelectionRef[], clientOp: number): void
   /**
@@ -1149,6 +1168,7 @@ export function createSession(hooks: SessionHooks): Session {
       vertices?: VertexGeometry[]
       action?: string
       path?: string
+      source?: string
       bytes?: number
       operations?: number
       deviation?: number
@@ -1228,6 +1248,7 @@ export function createSession(hooks: SessionHooks): Session {
         path: message.path ?? '',
         bytes: message.bytes ?? 0,
         name: message.name,
+        source: message.source,
         operations: message.operations,
         deviation: message.deviation,
         body_ids: message.body_ids,
@@ -1332,6 +1353,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     setVisible(bodyId, visible, clientOp) {
       send({ cmd: 'set_visible', body_id: bodyId, visible, client_op: clientOp })
+    },
+    setSketchVisible(sketchId, visible, clientOp) {
+      send({ cmd: 'set_sketch_visible', sketch_id: sketchId, visible, client_op: clientOp })
     },
     modifySelection(add, remove, clientOp) {
       send({ cmd: 'modify_selection', add, remove, client_op: clientOp })

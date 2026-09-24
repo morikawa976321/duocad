@@ -14,18 +14,25 @@
    * ファイルを書いているのはサーバ側のPythonなので、ブラウザがファイルハンドルを持っても
    * 噛み合わない。
    *
-   * **このパネルから上書きはできない**。A を編集中に B の行を
-   * 押せば、確認も無く B が今の文書で潰れた —— 操作ログが唯一の正である以上、
-   * 失ったものは復旧できない。**上書きの口はヘッダの保存ボタン(`#file-save`)と Ctrl+S
-   * だけ**で、行き先は常に「いま編集しているファイル」1つに固定されている
-   * (`duocad/session.py` の `save_document`)。
-   * したがって**このパネルの `onSave` は「新しい名前で保存」だけを意味する**。
+   * **保存は1操作ごとに自動で走る**(issue #5、本人判断 2026-09-16)。このパネルに保存ボタンは
+   * 無く、名前欄は**いま編集しているファイルの改名**(`rename_document`)である —— 無題の
+   * 文書は最初の変更で `untitled-<n>.json` が自動で付くので、人が決めるのは名前だけでよい。
+   * 別名で複製したければ一覧の行の「複製」(下記)。**上書きの口はどこにも無い**: A を
+   * 編集中に B の名前へ改名しようとすればサーバが拒否する(操作ログが唯一の正である以上、
+   * 潰したファイルは復旧できない)。
    *
    * **開くのに確認ダイアログを挟まない**。**「新規」も同じ**(`onNew`) —— 一覧の
    * クリック1つで別の文書へ移れるのに、空の文書へ移るときだけ確認を挟むと挙動が割れる。
-   * どちらも保存していない編集を捨てる点は同じである。**捨てる側に確認を挟まないのは、
-   * 消えるのが「まだどこにも書いていない編集」だからで、書いてあるファイルを潰す操作
-   * (上の上書き)とは別の話である** —— 後者は確認ではなく**経路ごと**塞いだ。
+   * 名前つきの文書は自動保存されていて失うものが無く、無題の文書も最初の変更で名前が付く。
+   *
+   * **一覧の行からは、開く・別名で複製・削除ができる**(issue #17)。複製と削除はディスク上の
+   * ファイルの整理であって、いま編集している文書は変わらない(`open_document` とは別の操作)。
+   * 複製先の名前は行内の欄に `<元の名前>-copy.json` を先埋めして Enter で確定する(打ち直せる。
+   * 既にあればサーバが拒否する)。**削除は行内の2段階**(「削除」→ 同じ行が「本当に削除」に
+   * 変わる。モーダルは出さない) —— 「開くのに確認を挟まない」の根拠は「消えるのは未保存の
+   * 編集だから」であり、ディスクの保存済みファイルには当たらない(本人判断 2026-09-16)。
+   * 編集中のファイルの削除ボタンは**押せなくしない** —— 押せばサーバが理由つきで断る
+   * (押せない札より理由を言う)。
    *
    * **一覧の下に置くのは書き出しの2つだけ**(STEP書き出し・STL書き出し)。どちらも
    * 保存/開くと同じ形で `App.svelte` が `session.runVerb(...)` を直接呼ぶ
@@ -39,8 +46,9 @@
    *
    * **送信後もパス欄は消さない**(ファイル名欄=`draftName`とは逆の規律)。STEP/STLのパスは
    * 同じ値へ書き出し直す・同じファイルを読み直すことが多く、毎回打ち直させると手間になる
-   * ——「新規保存」が消すのは1回きりの新しい名前だからで、性質が違う。
+   * ——「名前を変える」が消すのは1回きりの新しい名前だからで、性質が違う。
    */
+  import { tick } from 'svelte'
   import { pathLike } from './commands/command'
   import type { DocumentInfo } from './session'
 
@@ -48,9 +56,11 @@
     documents,
     currentName,
     locked,
-    onSave,
+    onRename,
     onOpen,
     onNew,
+    onCopy,
+    onDelete,
     onExportStep,
     onExportStl,
   }: {
@@ -69,27 +79,31 @@
     /**
      * **文書を差し替える口(開く・新規)を止める**(形状最適化の実行中)。走っている最適化は
      * 開始時の文書へ結果を足すので、差し替えると結果が別の文書へ入る(サーバも断る)。
-     * 保存・書き出しは文書を変えないので止めない。
+     * 改名・書き出しは文書を変えないので止めない。
      */
     locked: boolean
     /**
-     * **新しい名前で**保存する(「名前を付けて保存」)。
+     * **いま編集しているファイルを改名する**(名前欄。無題なら「名前を付ける」)。
      *
-     * **既存のファイル名を渡してもサーバが拒否する** —— 上書きの口はこのパネルには無い
-     * (ヘッダの `#file-save` と Ctrl+S だけ。冒頭のdocstring参照)。
+     * **既存のファイル名を渡してもサーバが拒否する** —— 上書きの口はどこにも無い
+     * (冒頭のdocstring参照)。
      */
-    onSave: (name: string) => void
+    onRename: (name: string) => void
     /** ファイル名を渡して開く。 */
     onOpen: (name: string) => void
     /** 空の文書にする(引数なし。ファイルはまだ1つも決まっていない)。 */
     onNew: () => void
+    /** `source` を `dest` へ別名で複製する(ディスクのJSONを写すだけ。文書は変わらない)。 */
+    onCopy: (source: string, dest: string) => void
+    /** ディスクから削除する(編集中のファイルはサーバが拒否する)。 */
+    onDelete: (name: string) => void
     /** 書き出し先のパスを渡してSTEPへ書き出す(文書は変えない)。 */
     onExportStep: (path: string) => void
     /** 書き出し先のパスを渡してSTLへ書き出す(文書は変えない)。**粗さは固定**で選べない。 */
     onExportStl: (path: string) => void
   } = $props()
 
-  /** 打ちかけの新規保存名。送ったら空に戻す(パネルは打ちかけ以外の状態を覚えない)。 */
+  /** 打ちかけの新しい名前(改名)。送ったら空に戻す(パネルは打ちかけ以外の状態を覚えない)。 */
   let draftName = $state('')
 
   /**
@@ -100,8 +114,8 @@
    * (サーバと2箇所で別々のパス解釈を持たない)。
    *
    * **既存名かどうかもここでは見ない**。`documents` は手元にあるが、
-   * それは `list_documents` を最後に呼んだ時点の写しでしかなく、「保存できるか」の正は
-   * サーバ側の `save_document` にある。打った名前が既にあればサーバが拒否し、
+   * それは `list_documents` を最後に呼んだ時点の写しでしかなく、「その名前にできるか」の正は
+   * サーバ側の `rename_document` にある。打った名前が既にあればサーバが拒否し、
    * `onError` -> `fail()` でトースト1枚になる —— **新しい通知経路を作らない**。
    */
   function nameProblem(text: string): string | null {
@@ -119,7 +133,7 @@
 
   function submitDraft(): void {
     if (draftProblem !== null) return
-    onSave(draftName.trim())
+    onRename(draftName.trim())
     draftName = ''
   }
 
@@ -134,6 +148,64 @@
   }
 
   const sorted = $derived([...documents].sort((a, b) => b.mtime - a.mtime))
+
+  // ---------------------------------------------------------------- 複製・削除(行内)
+  /** 複製の名前を打っている元の行(無ければ null)。削除の確認中の行と同時には立たない。 */
+  let copyingFrom = $state<string | null>(null)
+  let copyName = $state('')
+  /** 「本当に削除」を出している行(無ければ null)。 */
+  let deletingName = $state<string | null>(null)
+
+  /**
+   * 複製先の先埋め: `<元の名前>-copy.json`。既にあれば `-copy2` `-copy3` …
+   * (手元の一覧で見るだけ。**存在の正はサーバ**で、打ち直して衝突すれば拒否される)。
+   */
+  function suggestCopyName(source: string): string {
+    const stem = source.toLowerCase().endsWith('.json') ? source.slice(0, -5) : source
+    const taken = new Set(documents.map((file) => file.name))
+    let candidate = `${stem}-copy.json`
+    for (let n = 2; taken.has(candidate); n += 1) candidate = `${stem}-copy${n}.json`
+    return candidate
+  }
+
+  function startCopy(source: string): void {
+    deletingName = null
+    copyingFrom = source
+    copyName = suggestCopyName(source)
+    // 欄はこの後のDOM更新で現れる(Svelteの更新は非同期)。
+    void tick().then(() => {
+      const field = document.querySelector<HTMLInputElement>('#file-copy-name')
+      field?.focus()
+      field?.select()
+    })
+  }
+
+  const copyProblem = $derived(nameProblem(copyName))
+
+  function submitCopy(): void {
+    if (copyingFrom === null || copyProblem !== null) return
+    onCopy(copyingFrom, copyName.trim())
+    copyingFrom = null
+    copyName = ''
+  }
+
+  function cancelRowActions(): void {
+    copyingFrom = null
+    copyName = ''
+    deletingName = null
+  }
+
+  function startDelete(name: string): void {
+    copyingFrom = null
+    copyName = ''
+    deletingName = name
+  }
+
+  function confirmDelete(): void {
+    if (deletingName === null) return
+    onDelete(deletingName)
+    deletingName = null
+  }
 
   // ---------------------------------------------------------------- STEP/STL(入出力)
   /**
@@ -186,18 +258,20 @@
     </button>
   </div>
 
+  <!-- 名前欄 = **いま編集しているファイルの改名**(冒頭のdocstring)。無題なら「名前を付ける」。
+       置き場所の欄は空のまま、いまの名前を薄く見せる。 -->
   <div class="new-row">
     <input
       id="file-name-input"
       type="text"
       autocomplete="off"
-      placeholder="model.json"
+      placeholder={currentName ?? 'model.json'}
       value={draftName}
       oninput={(event) => (draftName = (event.target as HTMLInputElement).value)}
       onkeydown={(event) => onRowEnter(event, submitDraft)}
     />
-    <button id="file-save-new" onclick={submitDraft} disabled={draftProblem !== null}>
-      新規保存
+    <button id="file-rename" onclick={submitDraft} disabled={draftProblem !== null}>
+      {currentName === null ? '名前を付ける' : '名前を変える'}
     </button>
   </div>
   {#if draftName !== '' && draftProblem !== null}
@@ -222,10 +296,49 @@
         <span class="meta dim" title={formatTime(file.mtime)}>
           {file.operations ?? '?'}件 / {formatSize(file.size)}
         </span>
-        <!-- **行に「上書き」ボタンは無い**(冒頭のdocstring)。
-             上書きの口はヘッダの `#file-save` と Ctrl+S だけで、行き先は
-             「いま編集しているファイル」に固定されている。 -->
+        <!-- **行に「上書き」ボタンは無い**(冒頭のdocstring)。上書きの口はどこにも無く、
+             保存は自動で走る。 -->
+        {#if deletingName === file.name}
+          <!-- 削除の2段目。同じ行の中で聞く(モーダルは出さない。冒頭のdocstring)。 -->
+          <button class="files-delete-confirm" onclick={confirmDelete} title="ディスクから消す(戻せない)">
+            本当に削除
+          </button>
+          <button class="files-row-cancel" onclick={cancelRowActions}>やめる</button>
+        {:else}
+          <button class="files-copy row-action" onclick={() => startCopy(file.name)} title="別名で複製">
+            複製
+          </button>
+          <button class="files-delete row-action" onclick={() => startDelete(file.name)} title="ディスクから削除">
+            削除
+          </button>
+        {/if}
       </div>
+      {#if copyingFrom === file.name}
+        <!-- 複製先の名前。先埋めしてあるので Enter だけで通る(打ち直してもよい)。 -->
+        <div class="new-row copy-row" data-copy-of={file.name}>
+          <input
+            id="file-copy-name"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            value={copyName}
+            oninput={(event) => (copyName = (event.target as HTMLInputElement).value)}
+            onkeydown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                cancelRowActions()
+                return
+              }
+              onRowEnter(event, submitCopy)
+            }}
+          />
+          <button id="file-copy-confirm" onclick={submitCopy} disabled={copyProblem !== null}>複製</button>
+          <button class="files-row-cancel" onclick={cancelRowActions}>やめる</button>
+        </div>
+        {#if copyName !== '' && copyProblem !== null}
+          <span class="hint">{copyProblem}</span>
+        {/if}
+      {/if}
     {/each}
   </div>
 
@@ -357,6 +470,33 @@
   .files-open:hover {
     background: var(--control-bg);
     border-color: transparent;
+  }
+
+  /* 行内の操作子(複製・削除・やめる)。面は持たず、大きさは添え物(`--fs-meta`)に揃える。 */
+  .row-action,
+  .files-row-cancel,
+  .files-delete-confirm {
+    flex: 0 0 auto;
+    padding: 1px 4px;
+    font-size: var(--fs-meta);
+    background: none;
+    color: var(--dim);
+    border: 1px solid transparent;
+  }
+
+  .row-action:hover,
+  .files-row-cancel:hover {
+    color: var(--text);
+  }
+
+  /* 2段目の「本当に削除」だけは目立たせる(戻せない操作なので)。 */
+  .files-delete-confirm {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .copy-row {
+    padding-left: 12px;
   }
 
   .meta {

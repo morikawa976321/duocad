@@ -112,6 +112,8 @@ FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 #: - **`save_document` も表から外れている** —— `name` が任意引数になり、
 #:   「表に載る引数は全部必須」の規律に合わなくなったため(`catalog.Param.ws` 参照)。
 #:   応答は `file` の封筒 + 状態の配り直し(現在ファイル名が変わるため)。
+#: - **`rename_document` も表から外れている** —— 応答が `save_document` と同じ
+#:   「`file` の封筒 + 状態の配り直し」で、表の「封筒だけ」に合わないため。
 FILE_COMMANDS: dict = catalog.file_table()
 
 #: **対象集合をコアの確定選択から取るコマンド**(`catalog.Command.uses_selection`)。
@@ -326,6 +328,14 @@ class Server:
                     message.get("client_op"),
                 )
                 await self._push(connection, applied=applied)
+            elif command == "set_sketch_visible":
+                applied = self._apply(
+                    self.session.set_sketch_visible,
+                    message["sketch_id"],
+                    bool(message["visible"]),
+                    message.get("client_op"),
+                )
+                await self._push(connection, applied=applied)
             # -------------------------------------------------- B: 選択(人が直す経路)
             # **コアの選択集合をそのまま叩く**(アプリ層に選択状態を持たせない)。
             # 発火したイベント(`{"change":"selection", ...}`)を `applied` として返し、
@@ -526,6 +536,11 @@ class Server:
                 applied = self._apply(
                     self.session.save_document, *(() if name is None else (name,))
                 )
+                await _send(connection, {"type": "file", **applied})
+                await self._push(connection, applied=None)
+            # **改名も現在ファイル名を変える**ので、保存と同じ「封筒 + 状態の配り直し」。
+            elif command == "rename_document":
+                applied = self._apply(self.session.rename_document, message["name"])
                 await _send(connection, {"type": "file", **applied})
                 await self._push(connection, applied=None)
             # **開くは文書ごと差し替える**ので全接続へ配る(自分だけ新しい文書を見ている、
@@ -909,15 +924,12 @@ class Server:
         その配信が起きない —— **`Session.warnings` に積まれた通知**(条件面が空 /
         保持・除外が表現できていない)を運ぶ経路がそこしか無いので、ここで流し切る。
 
-        **結果を足したら(`state == "done"`)配る前にディスクへ書く**(2026-09-13実測: 数時間がかりの
-        実行が、結果を見る前にサーバプロセスごと消えた)。結果は文書のRAMにしか無いので、
-        ここを抜けたあと画面が0枚でもサーバごと落ちても、書けてさえいれば残る。**結果を足さなかった
-        実行では書かない** —— 書く理由が無く、利用者がまだ保存していない編集でファイルを上書きする。
-        編集中のファイル名が無い(無題の文書)ときは `save_document()` が拒否するので、
-        名前を作って書く代わりに警告だけ積んで諦める——無題のまま黙って保存すると
-        「知らないファイルが増えている」がその上に乗る。**保存の失敗は種類を問わず警告に積む** ——
-        Windows では別のプログラムがファイルを開いているだけで `os.replace` が `PermissionError` になり、
-        ここから例外が漏れると結果も終了の `optimize_status` も配られず画面が実行中のまま固まる。
+        **成功したら配る前にディスクへ書く**(2026-09-13実測: 数時間がかりの実行が、
+        結果を見る前にサーバプロセスごと消えた)。結果は文書のRAMにしか無いので、
+        ここを抜けたあと画面が0枚でもサーバごと落ちても、書けてさえいれば残る。
+        結果を入れる verb の応答で `Session._emit` が自動保存するが、ここでも `autosave()`
+        を呼ぶ(結果を入れずに終わる経路でも、書き残しが無いことをこの1行で保証する)。
+        無題の文書は `untitled-<n>.json` の名前が自動で付く(issue #5)。
         """
         payload: dict
         try:
@@ -939,13 +951,10 @@ class Server:
                     "cancelled": isinstance(error, optimize_run.OptimizeCancelled),
                 }
             else:
+                # **結果を足した実行だけ書く**(足さなかった実行は文書が変わっておらず、
+                # 1操作ごとの自動保存が既に書いてある。issue #36)。
                 if result.get("state") == "done":
-                    try:
-                        self.session.save_document()
-                    except Exception as save_error:  # noqa: BLE001 - 結果の配信を止めない
-                        self.session.warnings.append(
-                            f"最適化結果を自動保存できなかった: {type(save_error).__name__}: {save_error}"
-                        )
+                    self.session.autosave()
         finally:
             self.session.end_optimization()
         try:
