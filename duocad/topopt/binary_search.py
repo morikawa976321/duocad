@@ -318,7 +318,8 @@ class SearchResult:
     `termination` の語彙: 段階3は `initial_feasible_found` / `full_material_infeasible`(全材料が形として不合格)/
     `resolution_insufficient` / `boundary_mapping_failed` / `input_contradiction`、段階4は `converged`
     (1セルずつでも削れなくなった)/ `evaluation_limit`、共通で `cancelled` / `evaluation_error`(段階3: 全材料のFEMが
-    計算失敗。段階4: 出発形状のエネルギーが取れない、または採用形状の保持・除外が前計算なしの再検査で通らず
+    計算失敗。段階4: 出発形状のエネルギーが取れない、候補の安全率が続けて取れない
+    (`stop_reason='repeated_evaluation_error'`)、または採用形状の保持・除外が前計算なしの再検査で通らず
     段階3の合格形状へ戻した)。
     段階3の `diagnostics['full_material']` に全材料の島処理と落ちた検査、段階4の
     `diagnostics['reduction']` に試行ごとの削減割合・後退倍率・落ちた条件と止まった理由が入る。
@@ -579,6 +580,13 @@ DEFAULT_SINGLE_CELL_PATIENCE: Optional[int] = 16
 #: 目標/安全率 だけで決まるから(探索時の目標の係数を掛けても意味が変わらない)。製品経路の 1.87mm の実行では、
 #: 目標の +0.13% に入った後の FEM 81 回で減ったのは 0.27% だった(計画書 §12.12。0.01 は本人判断)。
 DEFAULT_TARGET_TOLERANCE: Optional[float] = 0.01
+#: 安全率の**評価が落ちた**(`checks['safety']` が `unknown` かつ `reason='evaluation_error'`)候補が
+#: 何回続いたら段階4を打ち切るか(`None` は見ない)。安全率が目標に届かない不合格(`fail`)とも、水密・単一成分・
+#: 条件面が先に落ちて安全率まで進まなかった `prerequisites_failed` とも別に数える —— どちらも形状の判定だが、
+#: こちらは判定そのものが出ていない。**4 は実測で決めていない暫定値**(2026-09-24)。記録の I/O を計算から切り離した後に残る
+#: `evaluation_error` はソルバの発散など形状依存なので次の候補を試す価値がある一方、1候補の求解に 35 秒
+#: かかる実測があり、`DEFAULT_SINGLE_CELL_PATIENCE`(16) と同じだけ費やす理由が無い、という判断。
+DEFAULT_EVALUATION_ERROR_PATIENCE: Optional[int] = 4
 _CORNERS = tuple(product(range(2), repeat=3))
 
 
@@ -943,6 +951,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
                    max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
                    single_cell_patience: Optional[int] = DEFAULT_SINGLE_CELL_PATIENCE,
                    target_tolerance: Optional[float] = DEFAULT_TARGET_TOLERANCE,
+                   evaluation_error_patience: Optional[int] = DEFAULT_EVALUATION_ERROR_PATIENCE,
                    min_width_cells: int = 1, on_evaluation=None) -> SearchResult:
     """`initial.best_feasible` から、ひずみエネルギーの低い材料をまとめて削り続ける(段階4)。
 
@@ -958,7 +967,11 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     `rejected` の形がもう一度できたら(順位が尽きて `k` を減らしたとき、別のセルの巻き添えが同じ一口になったとき)
     FEMを解かずに、同じ手順で次へ進む。安全率で落ちたセルが
     採用を挟まず `single_cell_patience` 個に達したら `stop_reason='safety_at_single_cell'` で `converged`
-    (`None` は数えない)。計算失敗・保持の重なりの不合格は数えない。順位を歩いて1セルも抜けなければ
+    (`None` は数えない)。計算失敗・保持の重なりの不合格は数えない。**評価が落ちた候補**(`checks['safety']` が
+    `unknown` かつ `reason='evaluation_error'`。`prerequisites_failed` は形状の不合格なので入らない)は
+    別に数え、採用を挟まず `evaluation_error_patience` 回続いたら
+    `stop_reason='repeated_evaluation_error'` で `evaluation_error`(`None` は数えない。合格形状は返す)。
+    順位を歩いて1セルも抜けなければ
     `converged`(`no_removable_cell`)。合格形状の安全率が `目標 × (1 + target_tolerance)` 以下なら、候補を作らずに
     `converged`(`within_target_tolerance`。`None` は見ない)。出発形状にも採用のたびにも当てはめ、予算切れ・中断より先に見る。
     どの経路でも有限回で止まる: 採用のたびに材料が1セル以上減る。採用の間では、k ≥ 2 の不合格は後退倍率を
@@ -982,6 +995,10 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             isinstance(target_tolerance, (int, float)) and not isinstance(target_tolerance, bool)
             and math.isfinite(target_tolerance) and target_tolerance >= 0):
         raise ValueError(f'target_tolerance は 0 以上の有限の数か None(見ない): {target_tolerance!r}')
+    if evaluation_error_patience is not None and not (
+            isinstance(evaluation_error_patience, int) and not isinstance(evaluation_error_patience, bool)
+            and evaluation_error_patience >= 1):
+        raise ValueError(f'evaluation_error_patience は 1 以上の整数か None(数えない): {evaluation_error_patience!r}')
     identifier = initial.conditions_identifier
     history = list(initial.history)
     best = initial.best_feasible
@@ -995,6 +1012,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
                      filter_size=ENERGY_FILTER_SIZE, fem_solves=0, min_width_cells=int(min_width_cells),
                      peel_calls=0, peel_seconds=0.0, peel_seconds_max=0.0, repeated_candidates=0,
                      single_cell_patience=single_cell_patience, target_tolerance=target_tolerance,
+                     evaluation_error_patience=evaluation_error_patience, evaluation_errors=0,
                      safety_excluded_cells=0, adopted_after_exclusion=0,
                      geometry_rejections=[], stop_reason=None, steps=steps)
 
@@ -1031,6 +1049,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     order = ranked_cells(best.mask, energy)
     rejected: set[str] = set()
     safety_streak = 0
+    error_streak = 0
     while True:
         if target_tolerance is not None and best.safety_factor <= target * (1.0 + target_tolerance):
             reduction['stop_reason'] = 'within_target_tolerance'
@@ -1067,7 +1086,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
                     safety_factor_before=best.safety_factor, material_mm3_before=best.material_mm3)
         steps.append(step)
 
-        accepted, failed, safety_failed = None, [], False
+        accepted, failed, safety_failed, safety_unknown = None, [], False, False
         survivors, island_diag = resolve_islands(candidate, conditions)
         rejection = _geometry_rejection(candidate, survivors, island_diag, conditions)
         if rejection is not None:
@@ -1085,6 +1104,11 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             else:
                 failed.extend(name for name, check in report['checks'].items() if check.get('status') != 'pass')
                 safety_failed = report['checks']['safety'].get('status') == 'fail'
+                # `unknown` には**評価が落ちた**(`evaluation_error`)のと、水密・単一成分・条件面が先に
+                # 落ちて安全率まで進まなかった(`prerequisites_failed`)のがある。後者は形状の不合格
+                # なので数えない —— 混ぜると、幾何で落ちる候補が続いただけで打ち切ってしまう。
+                safety_unknown = (report['checks']['safety'].get('status') == 'unknown'
+                                  and report['checks']['safety'].get('reason') == 'evaluation_error')
         step.update(trials=[trial.index], outcome='accepted' if accepted is not None else 'rejected',
                     failed=sorted(set(failed)))
 
@@ -1100,11 +1124,23 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             rejected.clear()
             reduction['adopted_after_exclusion'] += int(safety_streak > 0)
             safety_streak = 0
+            error_streak = 0
             notify('accepted', failed, best.safety_factor, int(best.mask.sum()))
         else:
             rejected.add(key)
             notify('rejected', failed, trial.safety_factor,
                    int((candidate if rejection is not None else survivors[0]).sum()))
+            if safety_unknown:
+                # 安全率が**出ていない**(形状が不合格なのではなく判定が取れていない)ので、順位から
+                # セルを外しても `single_cell_patience` は減らない。打ち切りを別に持たないと、
+                # 原因が直るまで予算を使い切るまで走り続ける(1候補の求解が35秒でも約24時間)。
+                reduction['evaluation_errors'] += 1
+                error_streak += 1
+                if evaluation_error_patience is not None and error_streak >= evaluation_error_patience:
+                    reduction['stop_reason'] = 'repeated_evaluation_error'
+                    return result('evaluation_error')
+            else:
+                error_streak = 0
             if peeled.picked > 1:
                 multiplier /= 2.0
             else:
@@ -1123,6 +1159,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
                        max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
                        single_cell_patience: Optional[int] = DEFAULT_SINGLE_CELL_PATIENCE,
                        target_tolerance: Optional[float] = DEFAULT_TARGET_TOLERANCE,
+                       evaluation_error_patience: Optional[int] = DEFAULT_EVALUATION_ERROR_PATIENCE,
                        min_width_cells: int = 1,
                        is_cancelled=None, on_evaluation=None) -> SearchResult:
     """全材料の評価(段階3)に続けて、ひずみエネルギーの低い材料を削って体積を減らす単一の探索入口(§3)。
@@ -1132,7 +1169,8 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     `boundary_mapping_failed`)をそのまま返す(段階4は合格形状からしか始められない)。合格すれば、
     そこから `_reduce_volume` で体積削減を続ける。`max_evaluations` は**両段階を通した1本の予算**
     (全材料の評価が1回、残りが段階4の削る候補)。
-    `step_exponent` / `max_step_ratio` / `single_cell_patience` / `target_tolerance` は段階4だけが使う(`step_ratio` / `_reduce_volume`)。
+    `step_exponent` / `max_step_ratio` / `single_cell_patience` / `target_tolerance` / `evaluation_error_patience`
+    は段階4だけが使う(`step_ratio` / `_reduce_volume`)。
     `min_width_cells`(m、既定1=制約なし)は両段階が使う —— 段階3は設計空間を m 立方の opening で絞って規則を満たす
     出発形状を作り(入口検査も絞った空間に対して行う)、段階4は削除で被覆を失うセルを同じ一手で一緒に抜く(`peel` docstring)。
     `conditions.keep_cells`(保持ソリッド由来のセル)は、どちらの段階でも空にならず(段階3は全材料、段階4は `peel` の `protected`)、
@@ -1155,4 +1193,5 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
     return _reduce_volume(initial, design_space_mask, conditions, max_evaluations=max_evaluations,
                           is_cancelled=is_cancelled, step_exponent=step_exponent, max_step_ratio=max_step_ratio,
                           single_cell_patience=single_cell_patience, target_tolerance=target_tolerance,
+                          evaluation_error_patience=evaluation_error_patience,
                           min_width_cells=min_width_cells, on_evaluation=on_evaluation)

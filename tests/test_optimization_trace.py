@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -111,13 +112,32 @@ def test_concurrent_runs_are_isolated(recordings):
     assert [x[1] for x in results]==[0,1]
 
 
-def test_save_failure_is_not_silently_ignored(recordings,monkeypatch):
-    with pytest.raises(OSError,match='disk full'):
-        with trace.recording() as rec:
-            def fail(*args): raise OSError('disk full')
-            monkeypatch.setattr(trace,'_atomic',fail)
-            rec.snapshot('important',np.ones(3))
+def test_save_failure_does_not_stop_the_run_and_is_counted(recordings,monkeypatch):
+    """落ちたら、記録の保存失敗が計算まで巻き込んで止めている、または黙って消えて数に残っていない。"""
+    with trace.recording() as rec:
+        def fail(*args): raise OSError('disk full')
+        monkeypatch.setattr(trace,'_atomic',fail)
+        assert rec.snapshot('important',np.ones(3)) is None
     assert trace.current() is None
+    assert rec.write_failures >= 1
+    assert rec.manifest['write_failures'] == rec.write_failures
+
+
+def test_a_non_io_encoding_error_still_propagates(recordings):
+    """落ちたら、記録できない値(object配列)を渡した書き方の誤りまで握りつぶしている。"""
+    with pytest.raises(TypeError):
+        with trace.recording() as rec:
+            rec.snapshot('bad',dict(a=np.array([object()],dtype=object)))
+
+
+def test_the_array_directory_is_recreated_when_it_disappears_mid_run(recordings):
+    """落ちたら、実行中に arrays/ が消えたあと記録が回復せず、その実行の残り全部が落ちる。"""
+    with trace.recording() as rec:
+        rec.snapshot('first',dict(a=np.ones(3)))
+        shutil.rmtree(rec.path/'arrays')
+        rec.snapshot('second',dict(a=np.arange(5.)))
+    assert np.array_equal(snapshot(rec,'second')['a'],np.arange(5.))
+    assert rec.write_failures == 0
 
 
 def test_product_input_error_is_archived(recordings):
