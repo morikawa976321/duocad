@@ -1131,7 +1131,9 @@ def _single_cell_safety_failures(steps):
 
 
 def test_rejected_steps_halve_the_step_accepted_ones_double_it_and_a_single_cell_safety_failure_converges(monkeypatch):
-    """落ちたら、削減割合の後退規則か、`single_cell_patience=1` で1セルの安全率不合格が即収束になる規則が壊れている。"""
+    """落ちたら、削減割合の後退規則か、`single_cell_patience=1` で1セルの安全率不合格が即収束になる規則が壊れている。
+
+    `rejected` に当たった候補は評価に数えずに倍率を半分にするので、記録された評価の間では 2 の冪で何段か落ちうる。"""
     conditions, design, _ = appendage_conditions()
     floor = 0.75 * design.sum()
     _fail_safety_when(monkeypatch, lambda material: material.sum() < floor)  # 体積の下限を安全率の不足に見立てる
@@ -1140,13 +1142,19 @@ def test_rejected_steps_halve_the_step_accepted_ones_double_it_and_a_single_cell
     steps = reduction['steps']
     assert result.termination == 'converged' and reduction['stop_reason'] == 'safety_at_single_cell'
     assert floor <= result.best_feasible.mask.sum() < design.sum()
+
+    def halvings(before, after):
+        ratio = before / after
+        assert ratio >= 1 and math.log2(ratio) == int(math.log2(ratio)), (before, after)
+        return int(math.log2(ratio))
+
     for step, following in zip(steps, steps[1:]):
         if step['outcome'] == 'accepted':
-            assert following['multiplier'] == min(1.0, 2 * step['multiplier'])
+            assert halvings(min(1.0, 2 * step['multiplier']), following['multiplier']) >= 0
         elif step['peel']['picked'] > 1:
-            assert following['multiplier'] == step['multiplier'] / 2
+            assert halvings(step['multiplier'], following['multiplier']) >= 1
         else:
-            assert following['multiplier'] == step['multiplier']
+            assert halvings(step['multiplier'], following['multiplier']) >= 0
     assert steps[-1]['peel']['picked'] == 1 and 'safety' in steps[-1]['failed']
     assert (reduction['single_cell_patience'], reduction['safety_excluded_cells']) == (1, 0)
 
@@ -1200,7 +1208,101 @@ def test_the_streak_is_reset_by_an_adoption_and_a_longer_patience_reaches_a_smal
     assert long.best_feasible.mask.sum() < short.best_feasible.mask.sum()
     assert all(long.best_feasible.mask[cell] for cell in protected)
     assert long_reduction['adopted_after_exclusion'] >= 1
-    assert long_reduction['safety_excluded_cells'] > long_reduction['single_cell_patience'] - 1  # 通算では patience を超えて外している
+    assert long_reduction['safety_excluded_cells'] == long_reduction['poison_cells'] >= 1  # 外したセルは採用をまたいで保ち、二度数えない
+
+
+def test_a_cell_that_failed_safety_stays_excluded_across_adoptions_and_is_counted_once(monkeypatch):
+    """落ちたら、安全率で落ちた1セルが採用のたびに順位へ戻り、同じセルを何度も解き直している(issue #22 の終盤の無駄)。"""
+    conditions, design, _ = appendage_conditions()
+    protected = [(4, 0, 0), (5, 1, 1), (6, 0, 1)]  # 1つでも欠けたら安全率が足りないことにする棒の中ほどの3セル
+    _fail_safety_when(monkeypatch, lambda material: not all(material[cell] for cell in protected))
+    result = bs.find_best_feasible(design, conditions, max_evaluations=400, single_cell_patience=None)
+    reduction = result.diagnostics['reduction']
+    assert reduction['stop_reason'] == 'no_removable_cell'
+    assert reduction['adopted_after_exclusion'] >= 1  # 外した後に採用が挟まっている
+    assert 1 <= reduction['safety_excluded_cells'] == reduction['poison_cells'] <= len(protected)  # 各セルを一度だけ外す
+    assert reduction['poison_released'] == 0  # 見立ての不合格は候補の安全率が目標以上のままなので不足分が取れず、戻さない
+    assert all(result.best_feasible.mask[cell] for cell in protected)
+    stage4 = result.history[1:]
+    assert len({trial.mask_hash for trial in stage4}) == len(stage4)  # 採用をまたいでも同じ形を2度評価しない
+
+
+def _plate_search(monkeypatch, order, verdict, *, max_evaluations, max_step_ratio=.042):
+    """6x6x2 の板を、固定した順位 `order`(材料に残るセルだけ)と、候補への見立て `verdict(material)`(不合格なら
+    その安全率、合格なら None)で削る。合格の安全率は 10 から合格のたびに 0.2 上がる。FEM・CAD は呼ばない。"""
+    shape = (6, 6, 2)
+    plate = np.ones(shape, bool)
+    conditions = bar_conditions(shape=shape)
+    passes = []
+
+    def inspect(material, before, grid, **kwargs):
+        material = np.asarray(material, dtype=bool)
+        failed_sf = verdict(material)
+        status = 'pass' if failed_sf is None else 'fail'
+        rep = _fake_report(material, status)
+        if status == 'pass':
+            passes.append(1)
+            rep['checks']['safety']['safety_factor'] = 10.0 + 0.2 * len(passes)
+            if kwargs.get('fields') is not None:
+                kwargs['fields']['element_energy'] = np.ones(shape)
+        else:
+            rep['checks']['safety']['safety_factor'] = failed_sf
+        return rep
+
+    monkeypatch.setattr(bs, 'ranked_cells',
+                        lambda mask, energy: np.array([c for c in order if mask.ravel()[c]], dtype=np.int64))
+    monkeypatch.setattr(bs, 'resolve_islands',
+                        lambda candidate, conditions: ([np.array(candidate, dtype=bool)],
+                                                       dict(components=1, surviving_components=1, removed_islands=[])))
+    monkeypatch.setattr(acceptance, 'inspect', inspect)
+    seed_report = _fake_report(plate, 'pass')
+    seed_report['checks']['safety']['safety_factor'] = 10.0
+    seed = bs.FeasibleModel(mask=plate, before_mask=plate, report=seed_report, trial_index=0, energy=np.ones(shape))
+    initial = bs.SearchResult(status='feasible', termination='seed', best_feasible=seed,
+                              history=[bs.Trial(index=0, parent=None, operation='seed', mask_hash=seed.mask_hash,
+                                                before_mm3=72., material_mm3=72., removed_islands_mm3=0.,
+                                                outcome='ok', safety_factor=10.)],
+                              evaluations=1, conditions_identifier=bs.evaluation_identifier(conditions))
+    return bs._reduce_volume(initial, plate, conditions, max_evaluations=max_evaluations, is_cancelled=None,
+                             max_step_ratio=max_step_ratio, single_cell_patience=None, target_tolerance=None)
+
+
+def test_a_rejected_bite_that_returns_after_an_adoption_is_not_solved_again(monkeypatch):
+    """落ちたら、採用で `rejected` を空にしていて、採用の前に落ちた形と同じ形をもう一度 FEM に掛けている。
+
+    順位 [P, Q, a, b, …]。P と Q の両方を欠く候補だけ落ちる。要求 3 の {P,Q,a} が落ち、要求 1 の {P} が採用された後、
+    倍率が戻って要求 2 の {Q,a} を抜くと、落ちた形 板−{P,Q,a} がそのまま戻る(max_step_ratio=.042 は 72 セルで 3、71 セルで 2)。"""
+    shape = (6, 6, 2)
+    cells = dict(P=(3, 3, 1), Q=(1, 1, 1), a=(3, 1, 1), b=(1, 3, 1))
+    flat = {name: int(np.ravel_multi_index(c, shape)) for name, c in cells.items()}
+    order = list(flat.values()) + [c for c in range(72) if c not in flat.values()]
+    target = float(bar_conditions(shape=shape).target_safety_factor)
+    result = _plate_search(monkeypatch, order,
+                           lambda m: None if (m[cells['P']] or m[cells['Q']]) else target - 0.1, max_evaluations=6)
+    reduction = result.diagnostics['reduction']
+    stage4 = result.history[1:]
+    assert reduction['repeated_candidates'] >= 1
+    assert len({trial.mask_hash for trial in stage4}) == len(stage4)  # 採用をまたいで同じ形を2度評価しない
+    assert [trial.outcome for trial in stage4[:2]] != ['ok', 'ok'] and any(trial.outcome == 'ok' for trial in stage4)
+
+
+def test_a_poison_cell_returns_to_the_ranking_once_the_safety_factor_rose_by_its_shortfall(monkeypatch):
+    """落ちたら、外したセルを戻す条件(合格形状の安全率が不足分以上に上がった)が効いていないか、戻したのに数えていない。
+
+    P を欠く候補は 目標 − 0.1 で落ちる。合格するたびに安全率が 0.2 上がる見立てなので、P は次の採用で順位へ戻り、
+    もう一度単独で解かれて再び外される。"""
+    shape = (6, 6, 2)
+    cells = dict(P=(3, 3, 1), a=(3, 1, 1), b=(1, 3, 1))
+    flat = {name: int(np.ravel_multi_index(c, shape)) for name, c in cells.items()}
+    order = list(flat.values()) + [c for c in range(72) if c not in flat.values()]
+    target = float(bar_conditions(shape=shape).target_safety_factor)
+    result = _plate_search(monkeypatch, order, lambda m: None if m[cells['P']] else target - 0.1, max_evaluations=8)
+    reduction = result.diagnostics['reduction']
+    assert reduction['poison_released'] >= 1
+    assert reduction['safety_excluded_cells'] >= 2 and reduction['poison_cells'] <= 1  # P を外し、戻し、また外した(最後が戻した直後なら 0)
+    singles = _single_cell_safety_failures(reduction['steps'])
+    assert len(singles) >= 2 and all(step['removed_cells'] == 1 for step in singles)
+    assert result.best_feasible.mask[cells['P']]
 
 
 def test_a_single_cell_failure_that_is_not_a_safety_failure_is_not_counted_toward_patience(monkeypatch):

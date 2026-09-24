@@ -44,7 +44,7 @@ CG反復数の差で主張し、秒は補助にすること。**並列化は秒�
 | 段階4で1回に削る割合の上限 `DEFAULT_MAX_STEP_RATIO` | **0.2** | `binary_search.DEFAULT_MAX_STEP_RATIO` | 計画書§11.2 |
 | 段階4の削る割合を安全率の余裕で変える指数 θ(r = min(上限, 1 − (目標/安全率)^θ)) `DEFAULT_STEP_EXPONENT` | **0.5** | `binary_search.DEFAULT_STEP_EXPONENT` | 計画書§11.2 |
 | 段階4で要素エネルギーをならす近傍の一辺 `ENERGY_FILTER_SIZE` | **3** セル | `binary_search.ENERGY_FILTER_SIZE` | 順位の平滑化(自身と26近傍の材料平均で、1セルごとの値のばらつきによる順位の入れ替わりを抑える)。計画書§11.1 |
-| 段階4で、削ったセルが1つで安全率が落ちたとき、順位から外して続けるのを何セルで収束とみなすか `DEFAULT_SINGLE_CELL_PATIENCE`(`None` は順位が尽きるまで) | **16** | `binary_search.DEFAULT_SINGLE_CELL_PATIENCE` | 計画書§12.7(最終体積が最小の 16 と無制限が同じ試行列で並び、小さい方。段階4のFEMは 999 回で予算切れ) |
+| 段階4で、削ったセルが1つで安全率が落ちたとき、順位から外して続けるのを採用を挟まず何セルで収束とみなすか `DEFAULT_SINGLE_CELL_PATIENCE`(`None` は順位が尽きるまで。外したセルは採用をまたいで保つ) | **8** | `binary_search.DEFAULT_SINGLE_CELL_PATIENCE` | 計画書§12.13(本人判断 2026-09-24。実測で決めていない。16 は外したセルを採用で戻す旧規則で測った値 §12.7) |
 | 段階4で、合格形状の安全率が 目標×(1+これ) 以下になったら収束とみなす許容 `DEFAULT_TARGET_TOLERANCE`(`None` は見ない) | **0.01** | `binary_search.DEFAULT_TARGET_TOLERANCE` | 計画書§12.12(本人判断 2026-09-22。製品経路 1.875mm の記録では、目標の +0.13% に入った後の評価 81 回で減ったのは 0.27%) |
 | 条件面の作用位置のずれの許容 = 対応付けの探索半径(要素サイズ比。CAD面の面積重心から節点重心まで、モーメント誤差の許容はこの値×荷重の大きさ。`anchor.position_limit`) | **1.0** | `anchor.DEFAULT_RADIUS_RATIO` | 「境界条件の確定(2026-09-17)」 |
 | 要素サイズを指定しないときの最長軸の要素数 `DEFAULT_ELEMENTS_LONG_AXIS` | **40** | `design_space.DEFAULT_ELEMENTS_LONG_AXIS` | 塊の導出(`derive`) |

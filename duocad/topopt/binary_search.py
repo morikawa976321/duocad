@@ -572,10 +572,11 @@ DEFAULT_STEP_EXPONENT = 0.5
 DEFAULT_MAX_STEP_RATIO = 0.2
 #: 削る順位に使うエネルギーをならす近傍の一辺(セル)。3 は自身と26近傍の材料平均。
 ENERGY_FILTER_SIZE = 3
-#: 削ったセルが1つで安全率が落ちたとき、順位から外して次のセルを試すのを何セル続けたら収束とみなすか(`None` は順位が尽きるまで)。
-#: 16 は hanger 4.8mm で 1・4・16・無制限を測り、最終体積が最小(16 と無制限は同じ試行列で並び、小さい方を採った)だったから。
-#: 段階4のFEMは 1 の 33 回に対し 999 回(予算切れ)まで増える(計画書 §12.7)。
-DEFAULT_SINGLE_CELL_PATIENCE: Optional[int] = 16
+#: 削ったセルが1つで安全率が落ちたとき、順位から外して次のセルを試すのを、採用を挟まず何セル続けたら収束とみなすか
+#: (`None` は順位が尽きるまで)。**8 は本人判断(2026-09-24)で、実測で決めていない。** 16 は、外したセルを採用のたびに順位へ
+#: 戻す旧規則で hanger 4.8mm の 1・4・16・無制限を測って決めた値(計画書 §12.7)。外したセルを採用をまたいで保つ現行規則
+#: (`_reduce_volume` の `poison`)では同じセルが二度数えられないので、同じ値でも意味が変わる。4 や 1 も検討中。
+DEFAULT_SINGLE_CELL_PATIENCE: Optional[int] = 8
 #: 合格形状の安全率が 目標 × (1 + これ) 以下になったら収束とみなす(`None` は見ない)。割合なのは、1回に削る割合 r が
 #: 目標/安全率 だけで決まるから(探索時の目標の係数を掛けても意味が変わらない)。製品経路の 1.87mm の実行では、
 #: 目標の +0.13% に入った後の FEM 81 回で減ったのは 0.27% だった(計画書 §12.12。0.01 は本人判断)。
@@ -963,10 +964,13 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     後退倍率を2倍に戻す(上限1)。不合格・計算失敗なら形状を変えず、その形の内容ハッシュを `rejected` に入れる。
     `conditions.keep_cells` は `peel` の `protected` として渡し、どの候補でも材料のまま残す。
     順位から選んだ手が2つ以上なら後退倍率を半分にして同じ順位から歩き直す(再求解しない)。1つだけなら、
-    その手のセルを**この形状の間だけ**順位から外して次のセルを試す(採用で形が変わったら順位を作り直すので解除)。
-    `rejected` の形がもう一度できたら(順位が尽きて `k` を減らしたとき、別のセルの巻き添えが同じ一口になったとき)
-    FEMを解かずに、同じ手順で次へ進む。安全率で落ちたセルが
-    採用を挟まず `single_cell_patience` 個に達したら `stop_reason='safety_at_single_cell'` で `converged`
+    その手のセルを順位から外して次のセルを試す。**安全率で落ちた1セルは採用をまたいで外したまま**にする(`poison`。
+    採用で順位を作り直すときも入れない)。外したときの合格形状の安全率と不足分 `目標 − 候補の安全率` を覚え、その後の
+    合格形状の安全率が不足分以上に上がったセルだけ順位へ戻す(代表応力がパーセンタイルなので、削るほど合格形状の
+    安全率が上がることがある。不足分が取れないセルは戻さない)。安全率以外で落ちた1セルはその形状の間だけ外す。
+    `rejected` の形がもう一度できたら(順位が尽きて `k` を減らしたとき、別のセルの巻き添えが同じ一口になったとき、
+    採用の後に同じ一口が戻ったとき)FEMを解かずに、同じ手順で次へ進む(`rejected` は採用で空にしない。同じ形は同じ答え)。
+    安全率で落ちたセルが採用を挟まず `single_cell_patience` 個に達したら `stop_reason='safety_at_single_cell'` で `converged`
     (`None` は数えない)。計算失敗・保持の重なりの不合格は数えない。**評価が落ちた候補**(`checks['safety']` が
     `unknown` かつ `reason='evaluation_error'`。`prerequisites_failed` は形状の不合格なので入らない)は
     別に数え、採用を挟まず `evaluation_error_patience` 回続いたら
@@ -977,7 +981,8 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     どの経路でも有限回で止まる: 採用のたびに材料が1セル以上減る。採用の間では、k ≥ 2 の不合格は後退倍率を
     半分にして k を(有限回で k=1 まで)下げ、k=1 の不合格は順位を1セル縮めるので、順位は尽きる。
     止まった理由は `diagnostics['reduction']['stop_reason']`、試行ごとの `peel` の実績・k・r・後退倍率・
-    落ちた条件は `['steps']`、検算で落ちた候補は `['geometry_rejections']`。
+    落ちた条件は `['steps']`、検算で落ちた候補は `['geometry_rejections']`、外したままのセル数と順位へ戻した回数は
+    `['poison_cells']` / `['poison_released']`。
 
     評価予算は両段階を通した1本なので `initial.evaluations` から数える(削る候補1つが1回)。
     評価は bbox キャッシュ無しで行うが、保持・除外の共通体積は前計算(`region_overlaps`)から引く。
@@ -1008,17 +1013,20 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
     exempt = _min_width_exempt(conditions, best.mask.shape, min_width_cells)
     protected = _keep_cells(conditions, best.mask.shape)
     steps: list[dict] = []
+    # 安全率で落ちた1セル → (外したときの合格形状の安全率, 不足分 目標 − 候補の安全率。取れなければ None = 戻さない)。
+    poison: dict[int, tuple[float, Optional[float]]] = {}
     reduction = dict(step_exponent=float(step_exponent), max_step_ratio=float(max_step_ratio),
                      filter_size=ENERGY_FILTER_SIZE, fem_solves=0, min_width_cells=int(min_width_cells),
                      peel_calls=0, peel_seconds=0.0, peel_seconds_max=0.0, repeated_candidates=0,
                      single_cell_patience=single_cell_patience, target_tolerance=target_tolerance,
                      evaluation_error_patience=evaluation_error_patience, evaluation_errors=0,
-                     safety_excluded_cells=0, adopted_after_exclusion=0,
+                     safety_excluded_cells=0, adopted_after_exclusion=0, poison_cells=0, poison_released=0,
                      geometry_rejections=[], stop_reason=None, steps=steps)
 
     def result(termination: str) -> SearchResult:
         final, verdict = _recheck_regions_without_precompute(best, initial.best_feasible, conditions)
         reduction['final_region_recheck'] = verdict
+        reduction['poison_cells'] = len(poison)
         if verdict.startswith('failed'):
             termination = 'evaluation_error'
         return SearchResult(status='feasible', termination=termination, best_feasible=final, history=history,
@@ -1046,8 +1054,18 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
             return result('evaluation_error')
 
     multiplier = 1.0
-    order = ranked_cells(best.mask, energy)
     rejected: set[str] = set()
+
+    def ranking() -> np.ndarray:
+        released = [cell for cell, (base, shortfall) in poison.items()
+                    if shortfall is not None and best.safety_factor - base >= shortfall]
+        for cell in released:
+            del poison[cell]
+        reduction['poison_released'] += len(released)
+        order = ranked_cells(best.mask, energy)
+        return order[~np.isin(order, list(poison))] if poison else order
+
+    order = ranking()
     safety_streak = 0
     error_streak = 0
     while True:
@@ -1120,8 +1138,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
                                  energy=energy)
             step.update(safety_factor=best.safety_factor, material_mm3=best.material_mm3)
             multiplier = min(1.0, 2.0 * multiplier)
-            order = ranked_cells(best.mask, energy)
-            rejected.clear()
+            order = ranking()
             reduction['adopted_after_exclusion'] += int(safety_streak > 0)
             safety_streak = 0
             error_streak = 0
@@ -1150,6 +1167,11 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
                         reduction['stop_reason'] = 'safety_at_single_cell'
                         return result('converged')
                     reduction['safety_excluded_cells'] += 1
+                    candidate_sf = trial.safety_factor
+                    shortfall = (target - float(candidate_sf)
+                                 if candidate_sf is not None and math.isfinite(candidate_sf) and candidate_sf < target
+                                 else None)
+                    poison[int(peeled.picked_cells[0])] = (float(best.safety_factor), shortfall)
                 order = order[~np.isin(order, peeled.picked_cells)]
 
 
