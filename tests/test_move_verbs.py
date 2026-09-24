@@ -774,7 +774,7 @@ def test_the_default_centre_is_the_centroid(session: Session) -> None:
 def test_a_center_vertex_moves_the_axis_to_that_vertex(session: Session) -> None:
     """頂点を中心に指すと、軸の向きはそのままにその点を通る。"""
     body, _sketch_id = _box(session)
-    index = _vertex_at(body, [0.0, 0.0, 0.0])
+    index = _vertex_at(body, [SIDE, 0.0, 0.0])
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     session.move_body(
         mode="rotate",
@@ -783,9 +783,10 @@ def test_a_center_vertex_moves_the_axis_to_that_vertex(session: Session) -> None
         angle=90.0,
     )
 
+    # (20,0) まわりに+90度: (0..20, 0..20) -> (0..20, -20..0)。原点の頂点では「原点を返す」取り違えが見えない
     box = _bbox(session.document.get_body(body.id))
-    assert box["min"][:2] == pytest.approx([-SIDE, 0.0], abs=1e-6)
-    assert box["max"][:2] == pytest.approx([0.0, SIDE], abs=1e-6)
+    assert box["min"][:2] == pytest.approx([0.0, -SIDE], abs=1e-6)
+    assert box["max"][:2] == pytest.approx([SIDE, 0.0], abs=1e-6)
 
 
 def test_rotating_keeps_the_volume_and_the_face_indices(session: Session) -> None:
