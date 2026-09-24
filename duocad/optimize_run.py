@@ -283,13 +283,13 @@ def build_conditions(doc: "Document") -> ConditionBundle:
 
     **`load_n` は合力(ベクトル和の大きさ)ではなく、面ごとの大きさの総和である。** 荷重が
     1つ、または全部同じ向きなら両者は一致するが、向きの違う荷重が混ざると一致しない ——
-    打ち消し合う組(面Aへ下向き50N・面Bへ上向き50N)では合力が0になり、**応力を実単位へ
-    戻す割り算が壊れる**。総和なら打ち消しに影響されない。`stress.load_magnitude_total`
-    が解いた側で同じ量を測っており、**2つの定義が食い違うと応力が黙って定数倍ずれる**。
+    打ち消し合う組(面Aへ下向き50N・面Bへ上向き50N)では合力が0になるが、総和は0にならない。
+    `stress.UnitScale.for_model` に渡すときは同じ定義(`stress.load_magnitude_total`)で割り合わせるので、
+    **2つの定義が食い違うと応力が黙って定数倍ずれる**。
 
-    探索(`binary_search`/`acceptance`)は無次元(荷重の総量1.0)で回り続ける契約
-    (`done/20260904-0143`)。実単位[N]は `load_n` だけが持ち、
-    `stress.UnitScale.for_model` がそれを読む。
+    探索(`binary_search`/`acceptance`)は `forces` を実単位[N]のまま受け、面アンカーが節点へ配る
+    (`acceptance.safety_check` は要素サイズだけを換算する)。`load_n` は応力の換算に使われず、
+    ここでは荷重が全部0の入力を落とすのにだけ使う。
     """
     from . import optimize
     from .topopt import design_space as ds

@@ -586,7 +586,7 @@ DEFAULT_TARGET_TOLERANCE: Optional[float] = 0.01
 #: 条件面が先に落ちて安全率まで進まなかった `prerequisites_failed` とも別に数える —— どちらも形状の判定だが、
 #: こちらは判定そのものが出ていない。**4 は実測で決めていない暫定値**(2026-09-24)。記録の I/O を計算から切り離した後に残る
 #: `evaluation_error` はソルバの発散など形状依存なので次の候補を試す価値がある一方、1候補の求解に 35 秒
-#: かかる実測があり、`DEFAULT_SINGLE_CELL_PATIENCE`(16) と同じだけ費やす理由が無い、という判断。
+#: かかる実測があり、`DEFAULT_SINGLE_CELL_PATIENCE` と同じだけ費やす理由が無い、という判断。
 DEFAULT_EVALUATION_ERROR_PATIENCE: Optional[int] = 4
 _CORNERS = tuple(product(range(2), repeat=3))
 

@@ -178,8 +178,8 @@ def _build_load(nelx: int, nely: int, nelz: int, ndof: int) -> np.ndarray:
 # **丸め誤差が発生する順序は変わらずビット単位で同じ結果になる**(numpyの縮約はここでは
 # 並列化していないので、そちらの再現性はそもそも揺れない)。
 
-# 環境変数 `TOPOPT_THREADS` で上書きできる既定のスレッド数。**呼び出し時に読む**。
-# 値を取れなければ 1(直列。壊れた環境変数で黙って
+# `PARALLEL_THREADS` の初期値。環境変数 `TOPOPT_THREADS` は**import 時に1回だけ読む**
+# (後から変えるなら `PARALLEL_THREADS` へ代入する)。値を取れなければ 1(直列。壊れた環境変数で黙って
 # 並列化が有効になるより、壊れた値は無視して安全側へ倒す)。
 def _default_thread_count() -> int:
     override = os.environ.get("TOPOPT_THREADS")
@@ -198,10 +198,8 @@ PARALLEL_THREADS: int = _default_thread_count()
 
 # プロセスの寿命だけ生存させるスレッドプールのキャッシュ(スレッド数ごとに1つ)。
 # **明示的に閉じない**——閉じても次の solve でまた同じ数だけ要るので、生成コストを
-# 毎回払わせない。デーモンスレッドではないが、プロセス終了時に daemon 属性が無くても
-# インタプリタは残ったワーカーを待たずに終了する(標準ライブラリの `atexit` フックが
-# `shutdown(wait=True)` を試みるので、通常のプロセス終了では待つ。使い切りのCLI
-# 使い切りのCLI(`check_*.py` 等)ではプロセスごと終わるので問題にならない)。
+# 毎回払わせない。ワーカーはデーモンスレッドではなく、プロセス終了時は `concurrent.futures`
+# の終了フックがワーカーを止めて待つ(solve の外ではワーカーは待機しているだけ)。
 _THREAD_POOLS: dict[int, ThreadPoolExecutor] = {}
 
 

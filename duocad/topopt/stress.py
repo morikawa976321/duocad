@@ -8,8 +8,9 @@
 差し替えた瞬間に `u` が黙って古くなる欄になることと、この後処理が**探索を通っていない
 ρ 場**(受入検査の一様な棒・片持ち梁)でも同じ口で動く必要があるため。
 
-無次元と実単位: `fem.Model` は `E=1.0` / 総荷重 1.0 / 要素サイズ 1 の無次元で解く。
-換算は後処理側の責任で、`UnitScale` が持つ(docs/TOPOPT.md「応力の実単位への換算則」)。
+無次元と実単位: `fem.Model` は `E=1.0`・要素サイズ 1 で解く。換算は後処理側の責任で、`UnitScale` が持つ
+(docs/TOPOPT.md「応力の実単位への換算則」)。製品経路(`acceptance.safety_check`)は荷重を実単位[N]のまま
+載せるので、`load_n=1.0`・`solved_load=1.0` として要素サイズだけを換算する。
 """
 
 from __future__ import annotations
@@ -99,8 +100,8 @@ def load_magnitude_total(model: fem.Model) -> float:
     したがってこの定義への切り替えで既存の1荷重の数値は1ビットも動かない
     (`check_stress.py` がこの一致を数字で押さえている)。
 
-    上流の `anchor._assemble_load` が**同じ量で割って**無次元化しているので、通常経路の
-    戻り値は 1.0 である。**2つの定義が食い違うと応力が黙って定数倍ずれる。**
+    `UnitScale.for_model` はこれを `solved_load` にして `load_n` と割り合わせるので、`load_n` も同じ定義
+    (大きさの総和)で渡すこと。**2つの定義が食い違うと応力が黙って定数倍ずれる。**
     """
     f = model.f.reshape(-1, 3)
     return float(np.linalg.norm(f, axis=1).sum())
