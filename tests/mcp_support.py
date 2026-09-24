@@ -16,6 +16,7 @@ ERROR_CODES = {
     "selection_empty",      # 確定選択が**丸ごと空**(要求した種別以前の問題)
     "selection_kind_mismatch",  # 空ではないが要求した種別が無い
     "invalid_predicate",    # 述語が不正(有効なopの一覧を必ず添える)
+    "busy",                 # 形状最適化の実行中に文書を変えようとした(DocumentBusy)
     "internal",             # 上記以外(黙って握りつぶさないための受け皿)
 }
 
