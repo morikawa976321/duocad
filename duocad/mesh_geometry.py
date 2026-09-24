@@ -11,7 +11,7 @@ from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepClass3d import BRepClass3d_SolidClassifier
 from OCP.BRepLib import BRepLib
 from OCP.Precision import Precision
-from OCP.TopAbs import TopAbs_IN, TopAbs_OUT, TopAbs_SHELL, TopAbs_SOLID
+from OCP.TopAbs import TopAbs_IN, TopAbs_OUT, TopAbs_SHELL
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Compound
 from OCP.gp import gp_Pnt

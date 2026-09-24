@@ -108,10 +108,7 @@ def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
     for entity in sketch.entities:
         if entity.id in patterned:
             continue
-        resolved = {
-            key: parameters.resolve(doc, ref)
-            for key, ref in entity.params.items()
-        }
+        resolved = parameters.resolve_all(doc, entity.params)
         entities.append({"kind": entity.kind, "params": resolved})
 
     by_id = {entity.id: entity for entity in sketch.entities}
@@ -134,10 +131,7 @@ def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
                 entity = by_id.get(source_id)
                 if entity is None:  # 元が消えている(docstring)
                     continue
-                base = {
-                    key: parameters.resolve(doc, ref)
-                    for key, ref in entity.params.items()
-                }
+                base = parameters.resolve_all(doc, entity.params)
                 for i in range(count):
                     angle = i * step
                     entities.append({
@@ -156,10 +150,7 @@ def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
             entity = by_id.get(source_id)
             if entity is None:  # 元が消えている(docstring)
                 continue
-            base = {
-                key: parameters.resolve(doc, ref)
-                for key, ref in entity.params.items()
-            }
+            base = parameters.resolve_all(doc, entity.params)
             for j in range(ny):
                 for i in range(nx):
                     entities.append(

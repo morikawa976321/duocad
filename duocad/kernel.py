@@ -1,7 +1,7 @@
 """OCP(OCCT)を直接叩く層。
 
-**duocad配下でOCP.*をimportしてよいのはこのモジュールだけ**(verbが直接OCPを叩き始めるのを
-防ぐための境界)。
+**duocad配下でOCP.*をimportしてよいのはカーネル層だけ**(verbが直接OCPを叩き始めるのを
+防ぐための境界。許可する表の正は README「モジュールとimport境界」)。
 
 戻り値はいずれも **JSON化できる素の値(float/int/str/list/dict)だけ**にする。OCPのオブジェクトを
 kernel の外へ出さないための規律で、境界テスト(importの静的検査)では捕まえられない側の約束。

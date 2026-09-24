@@ -91,3 +91,13 @@ def test_the_solver_chosen_before_a_failing_solve_survives_in_the_report_and_ste
     retried = [t for t in result.history if t.operation.startswith('solver_retry:')]
     other = 'cg' if safety['solver'] == 'direct' else 'direct'
     assert retried and retried[0].operation == f'solver_retry:{other}'
+
+
+@pytest.mark.parametrize('solver', ['cg', 'direct'])
+def test_a_zero_right_hand_side_row_returns_a_zero_solution_next_to_a_loaded_row(solver):
+    """落ちたら、零の右辺を含む多重右辺が docstring の約束(零解を返す)どおりに解けず、残差の 0/0 で落ちている。"""
+    model = fem.Model(6, 3, 3)
+    rho = np.ones((6, 3, 3))
+    both = model.solve_many(rho, 3.0, np.vstack([model.f, np.zeros(model.ndof)]), solver=solver)
+    assert np.array_equal(both[1], np.zeros(model.ndof))
+    assert np.abs(both[0] - model.solve(rho, 3.0, solver=solver)).max() == 0.0

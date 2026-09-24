@@ -32,11 +32,6 @@ VERB_PATTERN_RECTANGULAR = "pattern_rectangular"
 VERB_PATTERN_CIRCULAR = "pattern_circular"
 
 
-#: 個数の検査は `set_parameter` からも使うので parameters 側に置いてある
-#: (作成時だけ検査していると、後から書き込む経路が素通りする)
-_is_positive_int = parameters.is_positive_int
-
-
 def _install_pattern(
     document: Document,
     sketch_id: str,
@@ -72,7 +67,7 @@ def pattern_rectangular(
     ny: int,
 ) -> str:
     """図形群を nx × ny の矩形状に反復し、PatternId を返す。"""
-    if not _is_positive_int(nx) or not _is_positive_int(ny):
+    if not parameters.is_positive_int(nx) or not parameters.is_positive_int(ny):
         raise ValueError(
             f"nx/ny must be integers >= 1, got nx={nx!r}, ny={ny!r}"
         )
@@ -183,7 +178,7 @@ def pattern_circular(
 
     同じ `Pattern` を使い、`kind="circular"` で区別する。
     """
-    if not _is_positive_int(count):
+    if not parameters.is_positive_int(count):
         raise ValueError(f"count must be an integer >= 1, got {count!r}")
     count_i = int(count)
     angle = float(total_angle)
@@ -224,10 +219,7 @@ def pattern_circular(
 
     for entity_id in entity_ids:
         entity = by_id[entity_id]
-        resolved = {
-            key: parameters.resolve(doc, ref)
-            for key, ref in entity.params.items()
-        }
+        resolved = parameters.resolve_all(doc, entity.params)
         ecx, ecy = entity_kind_ops(entity.kind).center_2d(resolved)
         if abs(ecx - cx) <= 1e-9 and abs(ecy - cy) <= 1e-9:
             raise ValueError(
@@ -279,8 +271,8 @@ def _do_pattern_circular(document: Document, operation: Operation) -> None:
     )
 
 
-def _undo_pattern_circular(document: Document, operation: Operation) -> None:
-    """undo: 反復を取り除く(元の図形は残る)。パラメータも文書から消す。"""
+def _undo_pattern(document: Document, operation: Operation) -> None:
+    """undo(矩形・円形の両方): 反復を取り除く(元の図形は残る)。そのパラメータも文書から消す。"""
     args = operation.args
     sketch = get_sketch(document, args["sketch_id"])
     pattern_id = args["pattern_id"]
@@ -296,7 +288,7 @@ def _undo_pattern_circular(document: Document, operation: Operation) -> None:
 register_verb(
     VERB_PATTERN_CIRCULAR,
     do=_do_pattern_circular,
-    undo=_undo_pattern_circular,
+    undo=_undo_pattern,
 )
 
 
@@ -318,22 +310,8 @@ def _do_pattern_rectangular(document: Document, operation: Operation) -> None:
     )
 
 
-def _undo_pattern_rectangular(document: Document, operation: Operation) -> None:
-    """undo: パターンを取り除く(元の図形は残る)。その4つのパラメータも文書から消す。"""
-    args = operation.args
-    sketch = get_sketch(document, args["sketch_id"])
-    pattern_id = args["pattern_id"]
-    remaining = []
-    for pattern in sketch.patterns:
-        if pattern.id == pattern_id:
-            parameters.release_param_refs(document, pattern.params)
-        else:
-            remaining.append(pattern)
-    sketch.patterns = remaining
-
-
 register_verb(
     VERB_PATTERN_RECTANGULAR,
     do=_do_pattern_rectangular,
-    undo=_undo_pattern_rectangular,
+    undo=_undo_pattern,
 )

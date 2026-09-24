@@ -12,7 +12,16 @@
  * **`sketch_id` はここでは付けない**。どのスケッチに描くかは「今どのスケッチモードに居るか」
  * であって、コマンドが集める引数ではない —— `App.svelte` が送信時に足す。
  */
-import { isPlaneArgValue, pickedRefOf, type ArgValues, type CommandDef, type Point2 } from './command'
+import {
+  buildPathArgs,
+  isPlaneArgValue,
+  pathLike,
+  pickedRefOf,
+  positive,
+  type ArgValues,
+  type CommandDef,
+  type Point2,
+} from './command'
 import { MOVE_MODE_OPTIONS, isRotateMode, isTranslateMode, rejectAngle } from './moveMode'
 import {
   arcFromPoints,
@@ -29,16 +38,6 @@ import {
  * ここは元の呼び出し口を保つための再エクスポートだけ。
  */
 export { ghostEntity } from '../entityKinds'
-
-/** 寸法として使えない値(0以下)を弾く。**既定値を入れない**のがここの流儀。 */
-function positive(label: string): (value: number) => string | null {
-  return (value) => (value > 0 ? null : `${label}は0より大きい値`)
-}
-
-/** 空のパスだけ弾く。**それ以上の判定はサーバに任せる**(`import_svg` verbのdocstring)。 */
-function pathLike(label: string): (value: string) => string | null {
-  return (value) => (value.trim() === '' ? `${label}を打つ` : null)
-}
 
 /** 打っていない `fromPoints` の寸法は `undefined`(集めた点から導く合図)。 */
 function typed(values: ArgValues, name: string): number | undefined {
@@ -250,11 +249,7 @@ export const IMPORT_SVG: CommandDef = {
       reject: pathLike('SVGのパス'),
     },
   ],
-  build(values) {
-    const path = values.path
-    if (typeof path !== 'string' || path.trim() === '') return { ok: false, reason: 'パスが空' }
-    return { ok: true, args: { path: path.trim() } }
-  },
+  build: buildPathArgs,
 }
 
 /**

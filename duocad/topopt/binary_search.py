@@ -26,12 +26,8 @@ from scipy import ndimage
 from duocad import kernel
 
 from . import acceptance, anchor, min_width
+from .acceptance import NEIGHBOURHOOD_STRUCTURE
 from .material import DEFAULT_ALLOWABLE_MPA, DEFAULT_YOUNGS_MODULUS_MPA
-
-# `acceptance.connectivity_check` と同じ6近傍の定義(§4.4 冒頭)。島処理の合否と
-# 最終の`connectivity_check`が別の近傍で数えると、ここで生かした成分が向こうで
-# 複数成分に見えることがある —— 定義は1箇所(この値)に揃える。
-NEIGHBOURHOOD_STRUCTURE = ndimage.generate_binary_structure(3, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -586,7 +582,7 @@ DEFAULT_TARGET_TOLERANCE: Optional[float] = 0.01
 #: 条件面が先に落ちて安全率まで進まなかった `prerequisites_failed` とも別に数える —— どちらも形状の判定だが、
 #: こちらは判定そのものが出ていない。**4 は実測で決めていない暫定値**(2026-09-24)。記録の I/O を計算から切り離した後に残る
 #: `evaluation_error` はソルバの発散など形状依存なので次の候補を試す価値がある一方、1候補の求解に 35 秒
-#: かかる実測があり、`DEFAULT_SINGLE_CELL_PATIENCE`(16) と同じだけ費やす理由が無い、という判断。
+#: かかる実測があり、`DEFAULT_SINGLE_CELL_PATIENCE` と同じだけ費やす理由が無い、という判断。
 DEFAULT_EVALUATION_ERROR_PATIENCE: Optional[int] = 4
 _CORNERS = tuple(product(range(2), repeat=3))
 
@@ -946,7 +942,7 @@ def _geometry_rejection_trial(history: list, candidate: np.ndarray, parent: Opti
     return trial
 
 
-def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditions: SearchConditions,
+def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                    *, max_evaluations: int, is_cancelled,
                    step_exponent: float = DEFAULT_STEP_EXPONENT,
                    max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
@@ -1212,7 +1208,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
                                     min_width_cells=min_width_cells, is_cancelled=is_cancelled)
     if initial.status != 'feasible':
         return initial
-    return _reduce_volume(initial, design_space_mask, conditions, max_evaluations=max_evaluations,
+    return _reduce_volume(initial, conditions, max_evaluations=max_evaluations,
                           is_cancelled=is_cancelled, step_exponent=step_exponent, max_step_ratio=max_step_ratio,
                           single_cell_patience=single_cell_patience, target_tolerance=target_tolerance,
                           evaluation_error_patience=evaluation_error_patience,

@@ -7,7 +7,6 @@ python topopt_checks/check_final_shape.py --mesh result.stl --out report.json
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
 import hashlib
 import json
 from pathlib import Path
@@ -18,40 +17,20 @@ import time
 import _bootstrap  # noqa: F401
 import _record
 import numpy as np
-from OCP.BOPAlgo import BOPAlgo_BOP, BOPAlgo_CheckerSI, BOPAlgo_Operation
-from OCP.BRep import BRep_Builder
-from OCP.BRepBuilderAPI import (
-    BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon,
-    BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing,
-)
+from OCP.BOPAlgo import BOPAlgo_BOP, BOPAlgo_Operation
 from OCP.BRepCheck import BRepCheck_Analyzer
-from OCP.BRepClass3d import BRepClass3d_SolidClassifier
-from OCP.BRepLib import BRepLib
-from OCP.Precision import Precision
-from OCP.TopAbs import TopAbs_IN, TopAbs_OUT, TopAbs_SHELL, TopAbs_SOLID
-from OCP.TopExp import TopExp_Explorer
-from OCP.TopoDS import TopoDS, TopoDS_Compound
-from OCP.gp import gp_Pnt
+from OCP.TopAbs import TopAbs_SOLID
 
 from duocad import kernel
+from duocad.mesh_geometry import TOLERANCE_MM, make_material, subshapes, topology
 from duocad.session import Session
 
-TOLERANCE_MM = Precision.Confusion_s()
 LABELS = {
     "preserve": "保持部分をすべて含む",
     "exclude": "除外部分と体積的な重なりがない",
     "watertight": "水密な自己交差のない境界である",
     "single_solid": "材料領域が単一ソリッドである",
 }
-
-
-def subshapes(shape, kind):
-    result = []
-    explorer = TopExp_Explorer(shape, kind)
-    while explorer.More():
-        result.append(explorer.Current())
-        explorer.Next()
-    return result
 
 
 def read_stl(path: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -77,8 +56,6 @@ def read_stl(path: Path) -> tuple[np.ndarray, np.ndarray]:
     vertices, inverse = np.unique(triangles.reshape(-1, 3), axis=0, return_inverse=True)
     return vertices, inverse.reshape(-1, 3)
 
-
-from duocad.mesh_geometry import topology, compound, checked_solid, make_material
 
 def boolean_remainder(left, right, operation):
     boolean = BOPAlgo_BOP()

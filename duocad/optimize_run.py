@@ -170,6 +170,8 @@ def conditions_report(doc: "Document") -> dict:
     **`state_payload()` の `stale` とは別の点検**である。あちらは「いま画面で指せるか」で、
     こちらは「いま最適化に渡せるか」——非表示のボディは指せないが、形はあるので渡せる。
     """
+    from . import optimize
+
     setup = doc.optimize
     problems: List[str] = []
 
@@ -189,10 +191,10 @@ def conditions_report(doc: "Document") -> dict:
                 "大きさ[N]が入っていない(set_loads の magnitude)"
             )
 
-    for role in ("preserve_bodies", "exclude_bodies"):
+    for role in optimize.BODY_ROLES:
         for body_id in getattr(setup, role):
             problems.extend(_body_problem(doc, role, body_id))
-    for role in ("fixtures", "loads"):
+    for role in optimize.FACE_ROLES:
         for condition in getattr(setup, role):
             problems.extend(_face_problem(doc, role, condition))
 
@@ -283,13 +285,13 @@ def build_conditions(doc: "Document") -> ConditionBundle:
 
     **`load_n` は合力(ベクトル和の大きさ)ではなく、面ごとの大きさの総和である。** 荷重が
     1つ、または全部同じ向きなら両者は一致するが、向きの違う荷重が混ざると一致しない ——
-    打ち消し合う組(面Aへ下向き50N・面Bへ上向き50N)では合力が0になり、**応力を実単位へ
-    戻す割り算が壊れる**。総和なら打ち消しに影響されない。`stress.load_magnitude_total`
-    が解いた側で同じ量を測っており、**2つの定義が食い違うと応力が黙って定数倍ずれる**。
+    打ち消し合う組(面Aへ下向き50N・面Bへ上向き50N)では合力が0になるが、総和は0にならない。
+    `stress.UnitScale.for_model` に渡すときは同じ定義(`stress.load_magnitude_total`)で割り合わせるので、
+    **2つの定義が食い違うと応力が黙って定数倍ずれる**。
 
-    探索(`binary_search`/`acceptance`)は無次元(荷重の総量1.0)で回り続ける契約
-    (`done/20260904-0143`)。実単位[N]は `load_n` だけが持ち、
-    `stress.UnitScale.for_model` がそれを読む。
+    探索(`binary_search`/`acceptance`)は `forces` を実単位[N]のまま受け、面アンカーが節点へ配る
+    (`acceptance.safety_check` は要素サイズだけを換算する)。`load_n` は応力の換算に使われず、
+    ここでは荷重が全部0の入力を落とすのにだけ使う。
     """
     from . import optimize
     from .topopt import design_space as ds
@@ -473,9 +475,11 @@ def resolution_limits(doc: "Document") -> dict:
     ので実測が無く、旧SIMP係数を使った桁の見当も出さない —— 実測に基づく見積もりは
     `run()` の進捗イベント(`_ProgressPump`)側で、実際に評価が進んでから出す。
     """
+    from . import optimize
+
     setup = doc.optimize
     faces: List[dict] = []
-    for role in ("fixtures", "loads"):
+    for role in optimize.FACE_ROLES:
         for condition in getattr(setup, role):
             problems = _face_problem(doc, role, condition)
             if problems:
@@ -1162,7 +1166,6 @@ def _run(
     surface = topo_mesh.build_surface_from_mask(best.mask)
     positions = _mesh_to_world(surface.verts_smooth, space.grid)
     _check_mesh_placement(positions, space.grid)
-    indices = surface.faces.ravel().tolist()
     trace.snapshot('selected-result', status=search_result.status, termination=search_result.termination,
                    material_mm3=best.material_mm3, safety_factor=best.safety_factor)
     import numpy as np

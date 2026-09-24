@@ -344,9 +344,8 @@ class Conditions:
     `load_n` は荷重の**実際の大きさ**[N]。荷重が複数のときは**その大きさの総和**であって
     合力(ベクトル和)ではない —— 向きの違う荷重が打ち消し合うと合力は0になりうるが、
     総和なら0にならない(`optimize_run.build_conditions` / `stress.load_magnitude_total`)。
-    最適化そのもの(`optimize_run.build_conditions` が組み立てる荷重)は無次元
-    (荷重の総量が1.0)で回り続ける —— `load_n` はここでは使われず、
-    `stress.UnitScale` が応力を実単位[MPa]へ換算するときにだけ参照する。
+    塊の導出は `load_n` を使わない。探索は面ごとの力ベクトルを実単位[N]のまま受ける
+    (`optimize_run.build_conditions` の `forces`)。
     """
 
     keep: Any

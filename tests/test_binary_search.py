@@ -792,7 +792,7 @@ def test_a_bite_that_two_different_picked_cells_produce_is_not_solved_again_afte
         [top, bottom] + [c for c in range(plate.size) if c not in (top, bottom)]))
     _stub_islands(monkeypatch)
     monkeypatch.setattr(acceptance, 'inspect', lambda material, before, grid, **kwargs: fake_report(material))  # どの候補も不合格
-    result = bs._reduce_volume(_seeded(plate, .5, conditions), plate, conditions, max_evaluations=400, is_cancelled=None,
+    result = bs._reduce_volume(_seeded(plate, .5, conditions), conditions, max_evaluations=400, is_cancelled=None,
                                max_step_ratio=.01, single_cell_patience=None, min_width_cells=2)
     reduction = result.diagnostics['reduction']
     stage4 = result.history[1:]
@@ -973,7 +973,7 @@ def _plate_search(monkeypatch, order, verdict, *, max_evaluations, max_step_rati
                         lambda mask, energy: np.array([c for c in order if mask.ravel()[c]], dtype=np.int64))
     _stub_islands(monkeypatch)
     monkeypatch.setattr(acceptance, 'inspect', inspect)
-    return bs._reduce_volume(_seeded(plate, 10.0, conditions), plate, conditions, max_evaluations=max_evaluations, is_cancelled=None,
+    return bs._reduce_volume(_seeded(plate, 10.0, conditions), conditions, max_evaluations=max_evaluations, is_cancelled=None,
                              max_step_ratio=max_step_ratio, single_cell_patience=None, target_tolerance=None)
 
 
@@ -1380,7 +1380,7 @@ def test_a_failed_final_region_recheck_ends_the_reduction_on_the_verified_stage3
     conditions, design = partial_region_conditions()
     initial = bs.find_initial_feasible(design, conditions, max_evaluations=60)
     monkeypatch.setattr(bs, '_recheck_regions_without_precompute', lambda best, seed, conditions: (seed, 'failed:exclude:fail'))
-    result = bs._reduce_volume(initial, design, conditions, max_evaluations=60, is_cancelled=None)
+    result = bs._reduce_volume(initial, conditions, max_evaluations=60, is_cancelled=None)
     assert result.best_feasible is initial.best_feasible and result.termination == 'evaluation_error'
     assert result.diagnostics['reduction']['final_region_recheck'] == 'failed:exclude:fail'
 
@@ -1393,6 +1393,6 @@ def test_the_best_feasible_mask_is_read_only_and_survives_later_reduction():
     assert not best.mask.flags.writeable and not best.before_mask.flags.writeable
     assert acceptance.material_sha256(best.mask) == best.mask_hash
     snapshot = best.mask.copy()
-    later = bs._reduce_volume(result, design, conditions, max_evaluations=200, is_cancelled=None)
+    later = bs._reduce_volume(result, conditions, max_evaluations=200, is_cancelled=None)
     assert later.best_feasible.material_mm3 <= best.material_mm3
     assert np.array_equal(best.mask, snapshot) and acceptance.material_sha256(best.mask) == best.mask_hash

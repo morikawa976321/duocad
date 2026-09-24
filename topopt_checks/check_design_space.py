@@ -65,7 +65,6 @@
 from __future__ import annotations
 
 import dataclasses
-import inspect
 import json
 import math
 import sys
@@ -82,7 +81,6 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
-from _bootstrap import _REPO_ROOT
 from duocad.topopt import OUTPUT_DIR
 from duocad.topopt import anchor as an
 from duocad.topopt import design_space as ds
@@ -104,19 +102,6 @@ def check(name: str, ok: bool, detail: str) -> None:
         FAILURES.append(f"{name}: {detail}")
 
 
-def box_mask(grid: vx.Grid, lo, hi) -> np.ndarray:
-    """ワールド座標の軸整列箱を、要素中心が入るかどうかで塊のマスクにする。
-
-    **OCCT を通さない。** 塊がソリッド由来でないことがこの検査の要点なので、ここで
-    `occupancy()` を使うと確かめたいことが確かめられなくなる。
-    """
-    lo = np.asarray(lo, dtype=float)
-    hi = np.asarray(hi, dtype=float)
-    axes = [grid.centers_1d(a) for a in range(3)]
-    inside = [(axes[a] >= lo[a]) & (axes[a] <= hi[a]) for a in range(3)]
-    return inside[0][:, None, None] & inside[1][None, :, None] & inside[2][None, None, :]
-
-
 def bracket_grid(margin: float, elements_long_axis: int) -> tuple[vx.Grid, vx.TriangleSoup]:
     """ブラケットの bbox を `margin` mm 広げた格子と、そのブラケットの三角形群。"""
     bracket = demo_bracket()
@@ -134,7 +119,8 @@ def check_mask_is_the_design_space() -> None:
     grid, soup = bracket_grid(6.0, 20)
     # ソリッドの占有とは似ても似つかないマスク(市松に間引いた箱)にして、
     # 「どこかで占有計算に差し替えられていたら必ず落ちる」ようにする。
-    mask = box_mask(grid, DESIGN_BOX_LO, DESIGN_BOX_HI)
+    # OCCT を通さない(`occupancy()` を使うと、塊がソリッド由来でないことを確かめられない)。
+    mask = ds.box_mask(grid, DESIGN_BOX_LO, DESIGN_BOX_HI)
     mask[::2, ::2, ::2] = False
     model = vx.model_from_design_mask(grid, mask, anchor_shape=soup)
 
@@ -206,7 +192,7 @@ def check_anchors_independent_of_design() -> None:
     print("\n[2] 塊を差し替えても面アンカーが変わらない")
     grid, soup = bracket_grid(6.0, 20)
     occupied, _ = vx.occupancy(soup, grid)
-    bigger = box_mask(grid, DESIGN_BOX_LO, DESIGN_BOX_HI)
+    bigger = ds.box_mask(grid, DESIGN_BOX_LO, DESIGN_BOX_HI)
     check(
         "2つの塊が本当に別物",
         not np.array_equal(occupied, bigger),

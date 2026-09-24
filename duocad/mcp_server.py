@@ -61,7 +61,7 @@ import os
 import sys
 import webbrowser
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from websockets.asyncio.server import serve
 
@@ -76,7 +76,7 @@ from . import (
     selection,
     sketch,
 )
-from .document import unknown_id_message
+from .document import Document
 from .server import (
     DEFAULT_WEB_DIST,
     MCP_HTTP_PATH,
@@ -178,14 +178,15 @@ class DocumentTools:
             ) from None
         return handler(**arguments)
 
-    def current_seq(self) -> tuple[int, str]:
+    def current_seq(self) -> tuple[int, str, str]:
         """文書+選択の版。**モデルには見せない** —— `descriptors()` には出てこず、
         `AgentLoop` だけが読む `ToolSurface` の4つ目のメンバー。
 
         `AgentLoop.run()` はモデルへの1往復のたび・ツールを1つ実行するたびにこれを控え、値が
         変わっていたら残りのツール呼び出しを実行せずに構造化エラーへ差し替える(楽観ロック)。
 
-        戻り値は `(len(document.log.entries), selection.fingerprint(document))`。**2つとも要る**:
+        戻り値は `(len(document.log.entries), selection.fingerprint(document),
+        selection.visibility_fingerprint(document))`。**3つとも要る**:
 
         - **ログの本数だけでは足りない**。選択の変更は操作ログに一切乗らないので、「人が辺Aの
           選択を外して辺Bを選び直して確定する」という**入れ替え**(件数も種別も変わらない)を
@@ -296,7 +297,7 @@ class DocumentTools:
         body_id = str(body_id)
         if not isinstance(visible, bool):
             raise ValueError(f"visible must be a boolean, got {type(visible).__name__}")
-        before = self._find_body(body_id)
+        before = self.session.document.get_body(body_id)
         revisions = self._revision_snapshot()
         applied = self.session.set_visible(body_id, visible)
         return {
@@ -312,7 +313,7 @@ class DocumentTools:
 
     def describe_shape(self, body_id: str) -> dict:
         """1ボディの形状(面・辺の数と種別内訳・体積・境界箱)。読み取りのみ。"""
-        body = self._find_body(str(body_id))
+        body = self.session.document.get_body(str(body_id))
         if body.mesh is not None:
             # **面・辺の内訳を作らない**(メッシュには面の種別も辺の同一性も無い)。
             # キーは落とさず0を入れる —— 封筒の形が種別で変わると、読む側が両方の形を
@@ -343,15 +344,6 @@ class DocumentTools:
                 body.shape, cache=self.session.document.bbox_cache
             ),
         }
-
-    def _find_body(self, body_id: str):
-        body = next((b for b in self.session.document.bodies if b.id == body_id), None)
-        if body is None:
-            # **文面は `document.unknown_id_message` に一本化してある**(スケッチ・図形・
-            # パラメータのエラーと同じ形で、有効IDかその出し方を必ず添える)。
-            known = [b.id for b in self.session.document.bodies]
-            raise KeyError(unknown_id_message("body", body_id, known))
-        return body
 
     # ------------------------------------------------------------------ 封筒(成功)
     def _revision_snapshot(self) -> dict[str, int]:
@@ -605,7 +597,7 @@ class DocumentTools:
         for ref in current.items:
             kind = selection.ref_kind(ref)
             if kind == "face":
-                body = self._find_body(ref["body"])
+                body = self.session.document.get_body(ref["body"])
                 described = next(
                     face for face in query.describe_faces(body.shape) if face["index"] == ref["index"]
                 )
@@ -621,7 +613,7 @@ class DocumentTools:
                 )
                 total_area += described["area"]
             elif kind == "edge":
-                body = self._find_body(ref["body"])
+                body = self.session.document.get_body(ref["body"])
                 described = next(
                     edge for edge in query.describe_edges(body.shape) if edge["index"] == ref["index"]
                 )
@@ -653,7 +645,7 @@ class DocumentTools:
                 )
                 total_area += described.area
             elif kind == "vertex":
-                body = self._find_body(ref["body"])
+                body = self.session.document.get_body(ref["body"])
                 described = next(
                     vertex
                     for vertex in query.describe_vertices(body.shape)
@@ -671,7 +663,7 @@ class DocumentTools:
                 # **ソリッドを丸ごと指す種別**(形状最適化の保持/除外)。面積にも長さにも
                 # 足さない —— ボディの「大きさ」は体積であって、面の面積の合計ではない。
                 # 値は `body_meta` から取る(体積はキャッシュ済み。測り直さない)。
-                body = self._find_body(ref["body"])
+                body = self.session.document.get_body(ref["body"])
                 meta = self.session.body_meta(body)
                 items.append(
                     {
@@ -1098,24 +1090,19 @@ class DocumentTools:
         `{"path", "bytes", "body_ids", "skipped_hidden"}` を返す —— AIは自分でファイルを
         確かめられないので、戻り値が唯一の確認手段である。
         """
-        target = Path(path)
-        resolved = io_step.export_body_ids(self.session.document)
-        skipped = io_step.export_skipped_hidden(self.session.document)
-        io_step.export_step(self.session.document, target)
-        return {
-            "path": str(target),
-            "bytes": target.stat().st_size,
-            "body_ids": list(resolved),
-            "skipped_hidden": list(skipped),
-        }
+        return self._export(path, io_step.export_step)
 
     def export_stl(self, path: str) -> dict:
         """STLを書き出す。粗さは `io_step.STL_DEVIATION` 固定(人の画面にも入力欄は無い)。
         対象は export_step と同じ(いま表示中のBodyだけ・引数で選べない)。"""
+        return self._export(path, io_step.export_stl)
+
+    def _export(self, path: str, write: Callable[[Document, Path], Any]) -> dict:
+        document = self.session.document
         target = Path(path)
-        resolved = io_step.export_body_ids(self.session.document)
-        skipped = io_step.export_skipped_hidden(self.session.document)
-        io_step.export_stl(self.session.document, target)
+        resolved = io_step.export_body_ids(document)
+        skipped = io_step.export_skipped_hidden(document)
+        write(document, target)
         return {
             "path": str(target),
             "bytes": target.stat().st_size,

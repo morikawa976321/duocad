@@ -155,7 +155,7 @@
    *
    * トーストにしたことで実機検査から検出力が落ちる経路が1つある: `smoke-files.mjs` は
    * 最後に一度だけ「画面にエラーが出ていないか」を見ており、**通知欄は消えないから**
-   * その1回で走行全体を覆えていた。8秒で消える札を最後に見ても、途中で出て消えたエラーは
+   * その1回で走行全体を覆えていた。時間で消える札を最後に見ても、途中で出て消えたエラーは
    * 拾えない。控えを残して `__duocad.errors` から読ませることで、その検査を弱めずに済む。
    */
   let errorLog = $state<string[]>([])
@@ -520,7 +520,7 @@
   let optimizeRunning = $state(false)
   let optimizeCancelling = $state(false)
   let optimizeProgress = $state<OptimizeProgress | null>(null)
-  /** **次に走らせるまで消えない通知**(トーストは8秒で消えるので、結果の信用度はこちら)。 */
+  /** **次に走らせるまで消えない通知**(トーストは時間で消えるので、結果の信用度はこちら)。 */
   let optimizeNotice = $state<OptimizeNotice | null>(null)
 
   /** いま選ばれている段。目盛りが縮んだときのために毎回丸め直す。 */
@@ -955,9 +955,7 @@
    * (一覧からのクリックは「対象を選ぶ」そのもので、引数収集の状態機械を通す理由が無い)。
    */
   function saveDocumentAs(name: string): void {
-    const op = nextOp()
-    lastFileOp = op
-    session.runVerb('save_document', { name }, op)
+    runFileOp('save_document', { name })
   }
 
   /**
@@ -980,9 +978,7 @@
       void tick().then(() => document.querySelector<HTMLInputElement>('#file-name-input')?.focus())
       return
     }
-    const op = nextOp()
-    lastFileOp = op
-    session.runVerb('save_document', {}, op)
+    runFileOp('save_document', {})
   }
 
   /** ファイル名を渡して開く。応答は `state`(`applied.change === 'document'`)で来る。 */
@@ -1784,7 +1780,7 @@
         }
         const op = nextOp()
         pendingOp = op
-        viewport?.showSketchGhost(sketchId, null) // 本物を頼んだので幽霊は消す
+        viewport?.showSketchGhosts(sketchId, []) // 本物を頼んだので幽霊は消す
         // **引数名はコマンド定義とサーバの宣言で既に揃っている**(p0/p1・center/radius・
         // corner/width/height・center/radius/start_deg/end_deg)。ここで詰め替えない。
         // **`move_sketch_entities` だけは `sketch_id` を足さない** —— どのスケッチかは
@@ -2133,7 +2129,7 @@
     previewId += 1 // 投げてある応答を無効にする(戻ってきても番号が合わない)
     previewing = false
     viewport?.clearPreview()
-    if (sketchId !== null) viewport?.showSketchGhost(sketchId, null)
+    if (sketchId !== null) viewport?.showSketchGhosts(sketchId, [])
   }
 
   function onWindowKeydown(event: KeyboardEvent): void {

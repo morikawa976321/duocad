@@ -325,8 +325,8 @@ report.raw_max_mpa          # 素の max[MPa]。安全率には使わない
 
 ### 応力の実単位への換算則
 
-探索のFEMは**E=1.0/総荷重1.0/要素サイズ1**の無次元で解く。要素サイズL[mm]・実荷重F[N]・
-ヤング率E[MPa]に対して:
+FEMは**E=1.0/要素サイズ1**で解く。要素サイズL[mm]・実荷重F[N]・ヤング率E[MPa]・解いた系の
+荷重の総量F_ndに対して:
 
 ```
 sigma_real[MPa] = sigma_nd * (F / F_nd) / L^2
@@ -337,6 +337,8 @@ u_real[mm]      = u_nd     * (F / F_nd) * (E_nd / E) / L
 `youngs_modulus_mpa`が効くのは変位の側だけ。検査3が「EとFを同時に10倍→応力はちょうど10倍」で
 押さえる)。剛性は要素サイズに比例するので変位はLに反比例する。`F_nd`は
 `stress.UnitScale.for_model`が`Model.f`から読む(手で書くと定数倍ずれる)。
+**探索(`acceptance.safety_check`)は荷重を実単位[N]のまま解く**ので`F / F_nd = 1`
+(`UnitScale(..., load_n=1.0, solved_load=1.0)`)で、要素サイズだけを換算する。
 
 ### 代表応力の規則(黙って max にしない)
 
@@ -381,8 +383,8 @@ u_real[mm]      = u_nd     * (F / F_nd) * (E_nd / E) / L
 材料側の低減、安全率は設計側の余裕。片方に畳み込むと造形法を変えたときどちらを動かせばよいか
 分からなくなる)。
 
-`Conditions.load_n`[N]が`stress.UnitScale.for_model`の実単位換算にだけ参照される(探索そのものの
-合力は無次元のまま)。`fem.reaction_forces`は荷重釣り合いの確認だけに使う——**`fraction`の合計は
+`Conditions.load_n`[N](荷重の大きさの総和)は探索でも応力の換算でも参照されない(荷重は面ごとの
+力ベクトル`forces`としてNのまま節点へ配られる)。`fem.reaction_forces`は荷重釣り合いの確認だけに使う——**`fraction`の合計は
 1にならない**(取付点どうしが引き合っていれば打ち消し合うぶんが乗る)ことに注意。
 
 ## 線形解法とCPU並列化

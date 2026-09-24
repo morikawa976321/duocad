@@ -8,8 +8,9 @@
 差し替えた瞬間に `u` が黙って古くなる欄になることと、この後処理が**探索を通っていない
 ρ 場**(受入検査の一様な棒・片持ち梁)でも同じ口で動く必要があるため。
 
-無次元と実単位: `fem.Model` は `E=1.0` / 総荷重 1.0 / 要素サイズ 1 の無次元で解く。
-換算は後処理側の責任で、`UnitScale` が持つ(docs/TOPOPT.md「応力の実単位への換算則」)。
+無次元と実単位: `fem.Model` は `E=1.0`・要素サイズ 1 で解く。換算は後処理側の責任で、`UnitScale` が持つ
+(docs/TOPOPT.md「応力の実単位への換算則」)。製品経路(`acceptance.safety_check`)は荷重を実単位[N]のまま
+載せるので、`load_n=1.0`・`solved_load=1.0` として要素サイズだけを換算する。
 """
 
 from __future__ import annotations
@@ -27,24 +28,6 @@ from . import fem
 DEFAULT_RHO_MIN = 0.5
 DEFAULT_PERCENTILE = 99.5
 
-# 局所節点 l = 4a+2b+c ↔ 単位立方体の頂点 (a,b,c)。**`fem.element_stiffness` の
-# `lam_nodes` と `fem._build_edof` の l のまわし方に一致していること** ——
-# ここがずれると応力は「もっともらしい別の値」になって落ちない。
-_NODE_SIGNS = np.array(
-    [[2 * a - 1, 2 * b - 1, 2 * c - 1] for a in (0, 1) for b in (0, 1) for c in (0, 1)],
-    dtype=float,
-)
-
-
-def elasticity_matrix(E: float = 1.0, nu: float = 0.3) -> np.ndarray:
-    """弾性行列 D (6,6)。順は [xx, yy, zz, xy, yz, zx] で、せん断は工学ひずみ。"""
-    d = np.zeros((6, 6))
-    c1 = E / ((1.0 + nu) * (1.0 - 2.0 * nu))
-    d[:3, :3] = c1 * (nu * np.ones((3, 3)) + (1.0 - 2.0 * nu) * np.eye(3))
-    d[3:, 3:] = c1 * (1.0 - 2.0 * nu) / 2.0 * np.eye(3)
-    return d
-
-
 def strain_displacement_center(element_size: float = 1.0) -> np.ndarray:
     """要素**中心**(xi=eta=zeta=0)での B 行列 (6,24)。
 
@@ -52,20 +35,7 @@ def strain_displacement_center(element_size: float = 1.0) -> np.ndarray:
     出隅・入隅が要素内でも尖り、拾いたくない離散化のスパイクを1段増やすことになる。
     trilinear hex では中心が最も精度の良い点でもある(検査2で梁理論と 0.2〜0.9% で一致)。
     """
-    b = np.zeros((6, 24))
-    grad = 0.25 * _NODE_SIGNS / float(element_size)
-    for l in range(8):
-        bx, by, bz = grad[l]
-        b[0, 3 * l + 0] = bx
-        b[1, 3 * l + 1] = by
-        b[2, 3 * l + 2] = bz
-        b[3, 3 * l + 0] = by
-        b[3, 3 * l + 1] = bx
-        b[4, 3 * l + 1] = bz
-        b[4, 3 * l + 2] = by
-        b[5, 3 * l + 0] = bz
-        b[5, 3 * l + 2] = bx
-    return b
+    return fem.strain_displacement(0.25 * fem.NODE_SIGNS / float(element_size))
 
 
 def von_mises(tensor: np.ndarray) -> np.ndarray:
@@ -99,8 +69,8 @@ def load_magnitude_total(model: fem.Model) -> float:
     したがってこの定義への切り替えで既存の1荷重の数値は1ビットも動かない
     (`check_stress.py` がこの一致を数字で押さえている)。
 
-    上流の `anchor._assemble_load` が**同じ量で割って**無次元化しているので、通常経路の
-    戻り値は 1.0 である。**2つの定義が食い違うと応力が黙って定数倍ずれる。**
+    `UnitScale.for_model` はこれを `solved_load` にして `load_n` と割り合わせるので、`load_n` も同じ定義
+    (大きさの総和)で渡すこと。**2つの定義が食い違うと応力が黙って定数倍ずれる。**
     """
     f = model.f.reshape(-1, 3)
     return float(np.linalg.norm(f, axis=1).sum())
@@ -210,7 +180,7 @@ def element_stress(model: fem.Model, u: np.ndarray) -> StressField:
     vec = np.asarray(u, dtype=float).ravel()
     if vec.size != model.ndof:
         raise ValueError(f"変位の長さが {vec.size}、期待は ndof={model.ndof}")
-    db = elasticity_matrix(model.E, model.nu) @ strain_displacement_center()
+    db = fem.elasticity_matrix(model.E, model.nu) @ strain_displacement_center()
     tensor = (vec[model.edof] @ db.T).reshape(model.nelx, model.nely, model.nelz, 6)
     return StressField(tensor=tensor, von_mises=von_mises(tensor), unit="1")
 

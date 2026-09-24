@@ -217,6 +217,7 @@
    * verb が実際に走っているか。**無起動(`null`)と、スケッチの既定「選ぶ」は除く** ——
    * 後者も `command !== null` だが、領域を選ぶだけの待機状態なので中断は要らない。
    */
+  // svelte-ignore state_referenced_locally
   const idleCommandId = defaultCommandId ?? null
   const commandActive = $derived(commandId !== null && commandId !== idleCommandId)
 
@@ -582,8 +583,7 @@
    * **確定が実際に成功したとき**は `commandSucceeded()` 経由で呼ばれる。
    */
   function returnToIdle(): void {
-    const idleId = defaultCommandId ?? null
-    if (commandId !== idleId) commandId = idleId
+    if (commandId !== idleCommandId) commandId = idleCommandId
   }
 
   /**

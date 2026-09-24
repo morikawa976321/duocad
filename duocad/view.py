@@ -458,10 +458,7 @@ class DocumentView:
                     "pattern_id": pattern.id,
                     "kind": pattern.kind,
                     "sources": list(pattern.sources),
-                    "params": {
-                        key: parameters.resolve(self.document, ref)
-                        for key, ref in pattern.params.items()
-                    },
+                    "params": parameters.resolve_all(self.document, pattern.params),
                     "refs": {
                         key: ref if isinstance(ref, str) else None
                         for key, ref in pattern.params.items()

@@ -29,6 +29,12 @@ SketchId = str
 EntityId = str
 PatternId = str
 
+
+def new_entity_id() -> EntityId:
+    """新しい図形のID(**再生時は記録済みのIDをそのまま使う**のでここは通らない)。"""
+    return f"entity-{uuid4().hex[:12]}"
+
+
 #: 基準平面の名前(この3つだけ。実装計画書§1「平面(基準3面)」)
 BASE_PLANES = ("XY", "XZ", "YZ")
 
@@ -92,14 +98,8 @@ def _translate_line(params: Dict[str, float], dx: float, dy: float) -> Dict[str,
     }
 
 
-def _translate_circle(params: Dict[str, float], dx: float, dy: float) -> Dict[str, float]:
-    moved = dict(params)
-    moved["cx"] = params["cx"] + dx
-    moved["cy"] = params["cy"] + dy
-    return moved
-
-
-def _translate_arc(params: Dict[str, float], dx: float, dy: float) -> Dict[str, float]:
+def _translate_cxcy(params: Dict[str, float], dx: float, dy: float) -> Dict[str, float]:
+    """中心 `cx`/`cy` だけで位置が決まる種別(円・円弧)の平行移動。"""
     moved = dict(params)
     moved["cx"] = params["cx"] + dx
     moved["cy"] = params["cy"] + dy
@@ -283,11 +283,7 @@ def _center_line(params: Dict[str, float]) -> Tuple[float, float]:
     return ((params["x0"] + params["x1"]) / 2.0, (params["y0"] + params["y1"]) / 2.0)
 
 
-def _center_circle(params: Dict[str, float]) -> Tuple[float, float]:
-    return (float(params["cx"]), float(params["cy"]))
-
-
-def _center_arc(params: Dict[str, float]) -> Tuple[float, float]:
+def _center_cxcy(params: Dict[str, float]) -> Tuple[float, float]:
     return (float(params["cx"]), float(params["cy"]))
 
 
@@ -359,7 +355,7 @@ _ENTITY_KIND_TABLE: Dict[str, EntityKindOps] = {
         points=(("x0", "y0"), ("x1", "y1")),
     ),
     "circle": EntityKindOps(
-        _validate_circle, _translate_circle, _rotate_circle, _center_circle, _mirror_circle,
+        _validate_circle, _translate_cxcy, _rotate_circle, _center_cxcy, _mirror_circle,
         points=(("cx", "cy"),),
     ),
     "rectangle": EntityKindOps(
@@ -368,7 +364,7 @@ _ENTITY_KIND_TABLE: Dict[str, EntityKindOps] = {
         points=(("x", "y"),),
     ),
     "arc": EntityKindOps(
-        _validate_arc, _translate_arc, _rotate_arc, _center_arc, _mirror_arc,
+        _validate_arc, _translate_cxcy, _rotate_arc, _center_cxcy, _mirror_arc,
         points=(("cx", "cy"),),
     ),
     "bezier": EntityKindOps(
@@ -702,10 +698,7 @@ def entity_params(
     sketch = get_sketch(doc, sketch_id)
     for entity in sketch.entities:
         if entity.id == entity_id:
-            return {
-                key: parameters.resolve(doc, ref)
-                for key, ref in entity.params.items()
-            }
+            return parameters.resolve_all(doc, entity.params)
     raise KeyError(
         unknown_id_message(
             "entity",
@@ -798,10 +791,8 @@ def _add_entity(
     """
     require_valid_params(kind, params)
     sketch = get_sketch(doc, sketch_id)
-    entity_id = f"entity-{uuid4().hex[:12]}"
-    refs = {
-        key: parameters.register_value(doc, value) for key, value in params.items()
-    }
+    entity_id = new_entity_id()
+    refs = parameters.register_all(doc, params)
     sketch.entities.append(Entity(id=entity_id, kind=kind, params=refs))
     doc.log.append(
         verb,
@@ -875,10 +866,7 @@ def _do_add_entity(document: Document, operation: Operation) -> None:
     if any(entity.id == entity_id for entity in sketch.entities):
         raise ValueError(f"entity id already exists: {entity_id!r}")
     raw_params = dict(args["params"])
-    refs = {
-        key: parameters.register_value(document, float(value))
-        for key, value in raw_params.items()
-    }
+    refs = parameters.register_all(document, raw_params)
     sketch.entities.append(
         Entity(id=entity_id, kind=args["kind"], params=refs)
     )

@@ -89,7 +89,8 @@ def set_exclude_bodies(doc: Document, body_ids: Sequence[BodyId]) -> Operation:
 def _assign_bodies(doc: Document, verb: str, body_ids: Sequence[BodyId]) -> Operation:
     """ボディの役割を集合代入する(**失敗したら文書にもログにも何も残さない**)。"""
     role = _BODY_VERB_ROLE[verb]
-    wanted = _unique([str(body_id) for body_id in body_ids])
+    # 順序を保ったまま重複を落とす(選択順は画面の一覧の並びでもある)
+    wanted = list(dict.fromkeys(str(body_id) for body_id in body_ids))
     for body_id in wanted:
         body = doc.get_body(body_id)  # 存在しないIDは KeyError(黙って残さない)
         if body.mesh is not None:
@@ -128,15 +129,20 @@ def _apply_bodies(doc: Document, role: str, wanted: Sequence[BodyId]) -> None:
     ]
     if conflicts:
         listed = "、".join(f"{item['name']}({item['body']})" for item in conflicts)
-        raise optimize.RoleConflict(
-            f"{listed} は既に{optimize.ROLE_LABEL[other]}に割り当てられている"
-            f"({optimize.ROLE_LABEL[role]}にはできない)。"
-            f"先に{optimize.ROLE_LABEL[other]}のverbで外してから割り当て直すこと",
-            role,
-            conflicts,
-        )
+        raise _role_conflict(listed, role, other, conflicts)
     setattr(setup, role, list(wanted))
     setup.touch()
+
+
+def _role_conflict(listed: str, role: str, other: str, conflicts: List[dict]) -> "optimize.RoleConflict":
+    """`listed` が既に反対の役割 `other` にあるので `role` にできない、という例外。"""
+    return optimize.RoleConflict(
+        f"{listed} は既に{optimize.ROLE_LABEL[other]}に割り当てられている"
+        f"({optimize.ROLE_LABEL[role]}にはできない)。"
+        f"先に{optimize.ROLE_LABEL[other]}のverbで外してから割り当て直すこと",
+        role,
+        conflicts,
+    )
 
 
 def _body_name(doc: Document, body_id: BodyId) -> str:
@@ -180,7 +186,7 @@ def _require_conditions_stay_on_preserved(doc: Document, wanted: Sequence[BodyId
     keeping = {str(body_id) for body_id in wanted}
     orphans = [
         (role, item)
-        for role in ("fixtures", "loads")
+        for role in optimize.FACE_ROLES
         for item in getattr(doc.optimize, role)
         if item["body"] not in keeping
     ]
@@ -328,27 +334,9 @@ def _apply_faces(doc: Document, role: str, conditions: Sequence[dict]) -> None:
     ]
     if conflicts:
         listed = "、".join(f"{item['body']} の面 #{item['index']}" for item in conflicts)
-        raise optimize.RoleConflict(
-            f"{listed} は既に{optimize.ROLE_LABEL[other]}に割り当てられている"
-            f"({optimize.ROLE_LABEL[role]}にはできない)。"
-            f"先に{optimize.ROLE_LABEL[other]}のverbで外してから割り当て直すこと",
-            role,
-            conflicts,
-        )
+        raise _role_conflict(listed, role, other, conflicts)
     setattr(setup, role, [dict(item) for item in conditions])
     setup.touch()
-
-
-def _unique(values: Sequence[str]) -> List[str]:
-    """順序を保ったまま重複を落とす(選択順は画面の一覧の並びでもある)。"""
-    seen: set = set()
-    ordered: List[str] = []
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        ordered.append(value)
-    return ordered
 
 
 # --------------------------------------------------------------------------------------

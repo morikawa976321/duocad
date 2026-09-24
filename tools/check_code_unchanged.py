@@ -30,8 +30,6 @@ class StripDocstrings(ast.NodeTransformer):
     通常の文字列リテラルは残す —— 落とすとコードの変更を見逃す。
     """
 
-    HOLDERS = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-
     def _strip(self, node: ast.AST) -> ast.AST:
         self.generic_visit(node)
         body = getattr(node, "body", None)

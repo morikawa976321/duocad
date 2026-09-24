@@ -30,6 +30,11 @@ from .material import DEFAULT_ALLOWABLE_MPA, DEFAULT_YOUNGS_MODULUS_MPA
 VOLUME_ATOL = 1e-9
 VOLUME_RTOL = 1e-9
 
+#: 連結の数え方(6近傍。§4.4 冒頭)。島処理(`binary_search`)・最小幅(`min_width`)と最終の
+#: `connectivity_check` が別の近傍で数えると、島処理で生かした成分がここで複数成分に見えることが
+#: ある —— 定義は1箇所(この値)に揃える。
+NEIGHBOURHOOD_STRUCTURE = ndimage.generate_binary_structure(3, 1)
+
 
 def _positive(value, name):
     if not math.isfinite(value) or value <= 0:
@@ -96,7 +101,7 @@ def void_labels(material):
     (満たさないマスクは頂点の検査が別に落とす)。
     """
     empty = np.pad(~np.asarray(material, dtype=bool), 1, constant_values=True)
-    return ndimage.label(empty, structure=ndimage.generate_binary_structure(3, 1))
+    return ndimage.label(empty, structure=NEIGHBOURHOOD_STRUCTURE)
 
 
 def void_components(material) -> int:
@@ -137,7 +142,7 @@ def boundary_check(material):
 
 
 def connectivity_check(material):
-    _, count = ndimage.label(material, structure=ndimage.generate_binary_structure(3, 1))
+    _, count = ndimage.label(material, structure=NEIGHBOURHOOD_STRUCTURE)
     return dict(status='pass' if count == 1 else 'fail', components=int(count), neighbourhood=6)
 
 

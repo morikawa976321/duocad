@@ -432,6 +432,26 @@ export interface CommandDef {
 }
 
 // --------------------------------------------------------------------------------------
+// 引数の検査と組み立て(`commands/*.ts` が共有する)
+// --------------------------------------------------------------------------------------
+/** 寸法として使えない値(0以下)を弾く。**既定値を入れない**のがここの流儀。 */
+export function positive(label: string): (value: number) => string | null {
+  return (value) => (value > 0 ? null : `${label}は0より大きい値`)
+}
+
+/** 空のパスだけ弾く。**それ以上の判定はサーバに任せる**(パスの解釈はサーバの1箇所に置く)。 */
+export function pathLike(label: string): (value: string) => string | null {
+  return (value) => (value.trim() === '' ? `${label}を打つ` : null)
+}
+
+/** パスだけを取るverb(`import_step` / `import_svg`)の引数を作る。 */
+export function buildPathArgs(values: ArgValues): BuildResult {
+  const path = values.path
+  if (typeof path !== 'string' || path.trim() === '') return { ok: false, reason: 'パスが空' }
+  return { ok: true, args: { path: path.trim() } }
+}
+
+// --------------------------------------------------------------------------------------
 // コマンドの定義
 // --------------------------------------------------------------------------------------
 /** 面の押し出し。 */
