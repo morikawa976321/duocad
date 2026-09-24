@@ -16,18 +16,24 @@
    * フローから外れており、開閉してもカメラのアスペクトは変わらない(`Toast.svelte` と同じ
    * 作り。`styles.css` の「ビューポートのサイズを変えるのは .viewport だけ」を守るため)。
    */
-  import type { BodyMeta, SketchState } from './session'
+  import type { BasePlaneName, BodyMeta, SketchState } from './session'
+  import type { SectionState } from './viewport'
 
   let {
     bodies,
     sketches,
     activeSketchId,
     originVisible,
+    section,
     onToggle,
     onShowAll,
     onHideAll,
     onEnterSketch,
     onToggleOrigin,
+    onSectionToggle,
+    onSectionPlane,
+    onSectionPosition,
+    onSectionInvert,
   }: {
     /** ユーザーに見せるボディ(常に `kind==="solid"`)。 */
     bodies: BodyMeta[]
@@ -45,7 +51,37 @@
     onEnterSketch: (sketchId: string) => void
     /** 原点ギズモの表示/非表示(7項目まとめて1つのトグル。本人指定)。 */
     onToggleOrigin: (visible: boolean) => void
+    /** 断面表示(issue #6)。原点と同じく画面側の状態で、App が持つ。 */
+    section: SectionState
+    onSectionToggle: (on: boolean) => void
+    onSectionPlane: (plane: BasePlaneName) => void
+    /** 位置の欄の確定。数式のまま渡す(評価と失敗のトーストは App)。受け付けたら true。 */
+    onSectionPosition: (text: string) => boolean
+    onSectionInvert: (inverted: boolean) => void
   } = $props()
+
+  const SECTION_PLANES: readonly BasePlaneName[] = ['XY', 'XZ', 'YZ']
+
+  /** 位置の欄のラベルは平面の法線軸。 */
+  function sectionAxis(plane: BasePlaneName): string {
+    return plane === 'XY' ? 'Z' : plane === 'XZ' ? 'Y' : 'X'
+  }
+
+  /** ドラッグの端数は見せない(打った値はそのまま残る)。 */
+  function formatPosition(value: number): string {
+    return String(Number(value.toFixed(2)))
+  }
+
+  function commitPosition(event: Event): void {
+    const input = event.target as HTMLInputElement
+    // 同じ値に評価される式(`10/2` → 5 のまま)では Svelte が欄を書き直さないので、自分で戻す。
+    // 失敗したら打った式を残す(直して打ち直せるように)。
+    if (onSectionPosition(input.value)) input.value = formatPosition(section.position)
+  }
+
+  function blurOnEnter(event: KeyboardEvent): void {
+    if (event.key === 'Enter') (event.target as HTMLInputElement).blur()
+  }
 
   /** パネル全体の折りたたみ。ビューポートに重なるので、畳めないと形が隠れる。 */
   let open = $state(true)
@@ -89,6 +125,61 @@
             title={originVisible ? '原点・軸・平面を隠す' : '原点・軸・平面を表示'}
           />
         </div>
+      </div>
+
+      <!-- 区分0b: 断面(issue #6)。ON のあいだだけ平面・位置・反転の操作子を出す。
+           状態は App が持つ画面側のもので、文書には載らない。 -->
+      <div class="group">
+        <div class="group-head">
+          <span class="group-name">断面</span>
+          <input
+            id="section-toggle"
+            type="checkbox"
+            class="visible-toggle"
+            checked={section.on}
+            onchange={(event) => onSectionToggle((event.target as HTMLInputElement).checked)}
+            title={section.on ? '断面をやめる' : '断面で切る'}
+          />
+        </div>
+        {#if section.on}
+          <div class="section-controls">
+            <div class="section-planes">
+              {#each SECTION_PLANES as plane (plane)}
+                <button
+                  id={`section-plane-${plane}`}
+                  class="tag"
+                  class:on={section.plane === plane}
+                  onclick={() => onSectionPlane(plane)}
+                  title={`${plane} 平面で切る`}
+                >
+                  {plane}
+                </button>
+              {/each}
+            </div>
+            <label class="section-row">
+              <span class="dim">{sectionAxis(section.plane)}</span>
+              <input
+                id="section-position"
+                type="text"
+                value={formatPosition(section.position)}
+                onchange={commitPosition}
+                onkeydown={blurOnEnter}
+                title="平面の位置[mm]。数式も打てる"
+              />
+              <span class="dim">mm</span>
+            </label>
+            <label class="section-row section-invert">
+              <input
+                id="section-invert"
+                type="checkbox"
+                class="visible-toggle"
+                checked={section.inverted}
+                onchange={(event) => onSectionInvert((event.target as HTMLInputElement).checked)}
+              />
+              反転
+            </label>
+          </div>
+        {/if}
       </div>
 
       <!-- 区分1: モデル(ボディ)。可視性の切り替えはここが持つ -->
@@ -252,6 +343,37 @@
   .group-bulk button {
     flex: 1 1 auto;
     padding: 2px 4px;
+  }
+
+  .section-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px 8px;
+  }
+
+  .section-planes {
+    display: flex;
+    gap: 4px;
+  }
+
+  .section-planes button {
+    flex: 1 1 auto;
+  }
+
+  .section-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .section-invert {
+    cursor: pointer;
+  }
+
+  .section-row input[type='text'] {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .parts-list,
