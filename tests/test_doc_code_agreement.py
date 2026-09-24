@@ -26,7 +26,6 @@ from pathlib import Path
 
 import pytest
 
-from duocad import sketch
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.session import Session
 

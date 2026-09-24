@@ -55,9 +55,8 @@ import type { BasePlaneName, EdgeGeometry } from './session'
 import {
   bodyGhostMatrix, usableRotation,
   type BodyGeometryUpdate, type BodyGhost, type BodyGhostRotation, type BoxSelectEvent, type EdgeRef, type FaceGeometry,
-  type FaceRef, type GeometryPayload, type OptimizeDebugAnchors, type OptimizeDebugGrid, type OptimizeDebugState,
-  type OptimizeDebugVoxels, type OptimizeLoadVisual, type OptimizeVisualState, type PickEvent, type PickMode, type SketchDraw,
-  type SketchEntityHit, type SketchPlaneRef, type VertexMarker, type VertexRef, type Viewport, type ViewportResolution,
+  type FaceRef, type GeometryPayload, type OptimizeVisualState, type PickEvent, type PickMode, type SketchDraw,
+  type SketchEntityHit, type VertexMarker, type VertexRef, type Viewport, type ViewportResolution,
 } from './viewportTypes'
 import {
   AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR, BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_AXES, BASE_PLANE_HOVER_OPACITY,
@@ -68,11 +67,9 @@ import {
   SKETCH_HANDLE_PIXELS, SKETCH_SELECTED_COLOR, WORLD_UP, isSelectableFov, lighten, withDepthBias, type BodyMeshes,
 } from './viewportConstants'
 
-export { bodyGhostMatrix, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, isSelectableFov }
+export { FOV_DEFAULT, FOV_ORTHO, isSelectableFov }
 export type {
-  BodyGeometryUpdate, BodyGhost, BodyGhostRotation, BoxSelectEvent, EdgeRef, FaceGeometry, FaceRef, GeometryPayload,
-  OptimizeDebugAnchors, OptimizeDebugGrid, OptimizeDebugState, OptimizeDebugVoxels, OptimizeLoadVisual, OptimizeVisualState,
-  PickEvent, PickMode, SketchDraw, SketchEntityHit, SketchPlaneRef, VertexMarker, VertexRef, Viewport, ViewportResolution,
+  BodyGhostRotation, BoxSelectEvent, GeometryPayload, PickEvent, SketchDraw, SketchEntityHit, VertexMarker, Viewport,
 }
 
 export function createViewport(container: HTMLElement): Viewport {

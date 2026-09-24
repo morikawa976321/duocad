@@ -336,7 +336,7 @@ def move_body(
         _do_copy(doc, bodies, transform, new_ids)
     else:
         new_ids = []
-        _do_move(doc, bodies, transform)
+        _do_move(bodies, transform)
 
     return doc.log.append(
         VERB_MOVE_BODY,
@@ -377,7 +377,7 @@ def _inverse_args(args: dict) -> dict:
     }
 
 
-def _do_move(doc: Document, bodies: Sequence[Body], transform: Callable) -> None:
+def _do_move(bodies: Sequence[Body], transform: Callable) -> None:
     """その場で動かす。**全部の形状を作ってから差し替える**(途中で落ちても半分動かない)。"""
     moved = [transform(body.shape, False) for body in bodies]
     for body, shape in zip(bodies, moved):
@@ -416,7 +416,7 @@ def _do_move_body(document: Document, operation: Operation) -> None:
     if args.get("copy"):
         _do_copy(document, bodies, transform, list(args.get("created") or []))
     else:
-        _do_move(document, bodies, transform)
+        _do_move(bodies, transform)
 
 
 def _undo_move_body(document: Document, operation: Operation) -> None:
@@ -441,7 +441,7 @@ def _undo_move_body(document: Document, operation: Operation) -> None:
                 pass
         return
     bodies = [document.get_body(body_id) for body_id in args["bodies"]]
-    _do_move(document, bodies, _shape_transform(_inverse_args(args)))
+    _do_move(bodies, _shape_transform(_inverse_args(args)))
 
 
 register_verb(VERB_MOVE_BODY, do=_do_move_body, undo=_undo_move_body)

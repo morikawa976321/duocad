@@ -7,7 +7,6 @@ python topopt_checks/check_final_shape.py --mesh result.stl --out report.json
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
 import hashlib
 import json
 from pathlib import Path
@@ -18,20 +17,11 @@ import time
 import _bootstrap  # noqa: F401
 import _record
 import numpy as np
-from OCP.BOPAlgo import BOPAlgo_BOP, BOPAlgo_CheckerSI, BOPAlgo_Operation
-from OCP.BRep import BRep_Builder
-from OCP.BRepBuilderAPI import (
-    BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakePolygon,
-    BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing,
-)
+from OCP.BOPAlgo import BOPAlgo_BOP, BOPAlgo_Operation
 from OCP.BRepCheck import BRepCheck_Analyzer
-from OCP.BRepClass3d import BRepClass3d_SolidClassifier
-from OCP.BRepLib import BRepLib
 from OCP.Precision import Precision
-from OCP.TopAbs import TopAbs_IN, TopAbs_OUT, TopAbs_SHELL, TopAbs_SOLID
+from OCP.TopAbs import TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer
-from OCP.TopoDS import TopoDS, TopoDS_Compound
-from OCP.gp import gp_Pnt
 
 from duocad import kernel
 from duocad.session import Session
@@ -78,7 +68,7 @@ def read_stl(path: Path) -> tuple[np.ndarray, np.ndarray]:
     return vertices, inverse.reshape(-1, 3)
 
 
-from duocad.mesh_geometry import topology, compound, checked_solid, make_material
+from duocad.mesh_geometry import topology, make_material
 
 def boolean_remainder(left, right, operation):
     boolean = BOPAlgo_BOP()

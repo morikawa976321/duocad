@@ -65,7 +65,6 @@
 from __future__ import annotations
 
 import dataclasses
-import inspect
 import json
 import math
 import sys
@@ -82,7 +81,6 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
-from _bootstrap import _REPO_ROOT
 from duocad.topopt import OUTPUT_DIR
 from duocad.topopt import anchor as an
 from duocad.topopt import design_space as ds

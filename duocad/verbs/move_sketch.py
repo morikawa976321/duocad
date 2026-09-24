@@ -365,7 +365,7 @@ def _copy(
     断るのと同じ事故(領域検出が同じ辺を2本見る)になる。並進は (0,0) を先に断っているので
     ここへは来ない。
     """
-    plan = _entities_to_copy(doc, targets)
+    plan = _entities_to_copy(targets)
     if len(new_ids) != len(plan):
         raise ValueError(
             f"move_sketch_entities: {len(plan)} copies planned but "
@@ -396,7 +396,7 @@ def _copy(
     return created
 
 
-def _entities_to_copy(doc: Document, targets: Sequence[dict]) -> List[tuple]:
+def _entities_to_copy(targets: Sequence[dict]) -> List[tuple]:
     """複製する図形の `(sketch_id, entity_id)` を**出現順・重複なし**で返す。"""
     plan: List[tuple] = []
     for item in targets:
@@ -483,7 +483,7 @@ def move_sketch_entities(
     transform = _params_transform(args)
 
     if copy:
-        new_ids = [f"entity-{uuid4().hex[:12]}" for _ in _entities_to_copy(doc, normalized)]
+        new_ids = [f"entity-{uuid4().hex[:12]}" for _ in _entities_to_copy(normalized)]
         created = _copy(doc, normalized, transform, new_ids)
     else:
         created = []

@@ -4,7 +4,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import _bootstrap  # noqa: F401
-import numpy as np
 from duocad.session import Session
 from duocad.topopt import trace
 from duocad.topopt.finalize import finalize, solid_mesh

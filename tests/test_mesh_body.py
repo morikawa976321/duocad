@@ -355,7 +355,7 @@ def test_predicates_skip_mesh_bodies_when_no_body_was_named():
 
 def test_predicates_still_see_the_b_rep_bodies_of_a_mixed_document():
     """混在した文書では**B-rep側が今までどおり全部出る**(メッシュのぶんだけ落とす)。"""
-    doc, mesh_id = _tetra_doc()
+    doc, _ = _tetra_doc()
     doc.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
     edges = predicates.evaluate(doc, {"kind": "edge", "where": []})
     faces = predicates.evaluate(doc, {"kind": "face", "where": []})

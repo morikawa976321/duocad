@@ -21,8 +21,6 @@ from duocad.region import region_ref
 from duocad.sketch import add_circle, add_rectangle, base_plane, sketch_create
 from duocad.verbs import chamfer, extrude
 
-#: PCケースの脚の実測
-FEET_KINDS = {"plane": 3, "cylinder_full": 1, "cone": 1}
 #: 円筒の円い縁を1つ面取りしたときの実測
 CYLINDER_CHAMFER_KINDS = {"plane": 2, "cylinder_full": 1, "cone": 1}
 

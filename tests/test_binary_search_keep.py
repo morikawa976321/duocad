@@ -3,7 +3,6 @@ import dataclasses
 
 import numpy as np
 import pytest
-from scipy import ndimage
 
 from duocad.topopt import acceptance
 from duocad.topopt import binary_search as bs

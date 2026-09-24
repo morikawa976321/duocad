@@ -141,13 +141,6 @@ def _fingerprint(session: Session) -> dict:
     }
 
 
-def _drawn(session: Session, sketch_id: str) -> list:
-    sketch = next(
-        item for item in session.state_meta()["sketches"] if item["sketch_id"] == sketch_id
-    )
-    return sketch["drawn"]
-
-
 # --------------------------------------------------------------------------------------
 # 辺を折れ線で配る(kernel)
 # --------------------------------------------------------------------------------------

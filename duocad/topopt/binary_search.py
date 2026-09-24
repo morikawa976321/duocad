@@ -946,7 +946,7 @@ def _geometry_rejection_trial(history: list, candidate: np.ndarray, parent: Opti
     return trial
 
 
-def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditions: SearchConditions,
+def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                    *, max_evaluations: int, is_cancelled,
                    step_exponent: float = DEFAULT_STEP_EXPONENT,
                    max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
@@ -1212,7 +1212,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
                                     min_width_cells=min_width_cells, is_cancelled=is_cancelled)
     if initial.status != 'feasible':
         return initial
-    return _reduce_volume(initial, design_space_mask, conditions, max_evaluations=max_evaluations,
+    return _reduce_volume(initial, conditions, max_evaluations=max_evaluations,
                           is_cancelled=is_cancelled, step_exponent=step_exponent, max_step_ratio=max_step_ratio,
                           single_cell_patience=single_cell_patience, target_tolerance=target_tolerance,
                           evaluation_error_patience=evaluation_error_patience,

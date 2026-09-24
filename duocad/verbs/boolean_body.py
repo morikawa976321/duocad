@@ -6,7 +6,7 @@ Body スナップショット)が1回で戻る。
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, Sequence
 
 from .. import kernel
 from ..document import BodyId, Document

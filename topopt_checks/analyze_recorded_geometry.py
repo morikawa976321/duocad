@@ -5,7 +5,6 @@ from pathlib import Path
 
 import _bootstrap  # noqa: F401
 import _record
-import numpy as np
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.gp import gp_Pnt
 import check_final_shape as check
