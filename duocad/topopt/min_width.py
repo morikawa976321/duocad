@@ -248,14 +248,6 @@ class CoreConnectivity:
 
         need = {int(v) for v in np.unique(labels[ndimage.binary_dilation(lost, structure=_SIX) & core_after])}
         open_labels: set[int] = set()
-        if shape is not None:
-            for axis in range(3):
-                if int(lo[axis]) > 0:
-                    face = tuple(0 if a == axis else slice(None) for a in range(3))
-                    open_labels |= {int(v) for v in np.unique(labels[face])}
-                if int(hi[axis]) < int(shape[axis]):
-                    face = tuple(-1 if a == axis else slice(None) for a in range(3))
-                    open_labels |= {int(v) for v in np.unique(labels[face])}
         crop_shape = tuple(int(b - a) for a, b in zip(lo, hi))
         for link, extends in self._linked_with_extent(lo, crop_shape):
             hit = [int(v) for v in np.unique(labels[link & core_after])]
@@ -269,7 +261,6 @@ class CoreConnectivity:
                 elif extends or shape is None:
                     return None  # 窓の外の芯へまだ結ばれているかもしれない
                 # 結び先が窓の中に無く窓の外にも広がらない E は、もう何も結ばない
-        open_labels.discard(0)
         if not need:
             return True  # 抜かれた芯に隣り合う芯が無い = 残った芯が無い(抜く前は1塊だったので)
         groups = {find(v) for v in need}
@@ -277,6 +268,15 @@ class CoreConnectivity:
             return True
         if shape is None:
             return None
+        # 前線が分かれたときだけ、窓の面(格子の縁でないもの)に触れる塊を数える(つながる手が大半なので、その経路には足さない)。
+        for axis in range(3):
+            if int(lo[axis]) > 0:
+                face = tuple(0 if a == axis else slice(None) for a in range(3))
+                open_labels |= {int(v) for v in np.unique(labels[face])}
+            if int(hi[axis]) < int(shape[axis]):
+                face = tuple(-1 if a == axis else slice(None) for a in range(3))
+                open_labels |= {int(v) for v in np.unique(labels[face])}
+        open_labels.discard(0)
         open_roots = {find(v) for v in open_labels}
         if any(g not in open_roots for g in groups):
             return False
