@@ -3,12 +3,11 @@ import dataclasses
 
 import numpy as np
 import pytest
-from scipy import ndimage
 
 from duocad.topopt import acceptance
 from duocad.topopt import binary_search as bs
-from test_binary_search import (Table, _assert_min_width_invariants, _assert_peel_invariants, appendage_conditions,
-                                bar_conditions)
+from topopt_support import (Table, appendage_conditions, assert_min_width_invariants, assert_peel_invariants,
+                            bar_conditions, slim_bar_conditions)
 
 
 def _column(m):
@@ -26,14 +25,13 @@ def _column(m):
 def test_peel_refuses_a_move_that_cuts_a_protected_cell_off_as_an_island(m):
     """落ちたら、保持セルを含む島が消されている(対照: 保護なしなら同じ手が通り、島 z=7..11 が消える)。"""
     mask, anchors, order = _column(m)
-    exempt = None
     kwargs = dict(min_width_cells=m)
     free, stats = bs.peel(mask, order, 1, anchors, **kwargs)
     assert stats.picked == 1 and stats.islands == 5 * mask.shape[0] * mask.shape[1] and not free[:, :, 7:].any()
 
     protected = np.zeros_like(mask)
     protected[:, :, 10] = True
-    kwargs['exempt'] = protected if m > 1 else exempt
+    kwargs['exempt'] = protected if m > 1 else None
     kept, stats = bs.peel(mask, order, 1, anchors, protected=protected, **kwargs)
     assert np.array_equal(kept, mask) and (stats.picked, stats.islands, stats.skipped_connectivity) == (0, 0, 1)
 
@@ -70,9 +68,9 @@ def test_peel_keeps_every_protected_cell_and_every_invariant_over_random_rounds(
                                    min_width_cells=m, exempt=protected if m > 1 else None, protected=protected)
             assert after[protected].all()
             assert not set(stats.picked_cells.tolist()) & set(np.flatnonzero(protected).tolist())
-            _assert_peel_invariants(after, conditions)
+            assert_peel_invariants(after, conditions)
             if m > 1:
-                _assert_min_width_invariants(after, m, protected)
+                assert_min_width_invariants(after, m, protected)
             moves += stats.picked
             mask = after
     assert moves > 50
@@ -90,12 +88,10 @@ def test_peel_with_a_protected_cell_that_a_cube_move_could_take_needs_it_exempt(
 def _bar_and_island(*, keep_cells):
     """棒(10x2x2)と、どの条件にも触れない孤立した1セル (2,3,3)。固定面・荷重面の節点は棒の断面だけ。"""
     shape = (10, 4, 4)
-    conditions = bar_conditions(shape=shape)
-    nodes = lambda i: [(i * 5 + j) * 5 + k for j in range(3) for k in range(3)]
     keep = np.zeros(shape, bool)
     for cell in keep_cells:
         keep[cell] = True
-    conditions = dataclasses.replace(conditions, table=Table(conditions.grid, {1: nodes(0), 2: nodes(10)}), keep_cells=keep)
+    conditions = dataclasses.replace(slim_bar_conditions(), keep_cells=keep)
     design = np.zeros(shape, bool)
     design[:, :2, :2] = True
     design[2, 3, 3] = True
@@ -178,13 +174,6 @@ def test_the_search_keeps_every_keep_cell_in_every_evaluated_candidate_and_the_a
     assert sum(step['peel']['skipped_connectivity'] for step in reduction['steps']) > 0
 
 
-def test_without_keep_cells_the_appendage_is_stripped_whole():
-    """対照: 保持セルが無ければ、上と同じ題材で付属部分は全部削られる。"""
-    conditions, design, appendage = appendage_conditions()
-    best = bs.find_best_feasible(design, conditions, max_evaluations=300).best_feasible.mask
-    assert not (best & appendage).any()
-
-
 def test_the_search_with_min_width_three_keeps_a_keep_cell_in_a_side_block(monkeypatch):
     """落ちたら、m=3 の段階4が保護セルを渡していない(3×3×4 の付属部の保持セルが削られる)。対照: 保持セルが無ければ付属部は全部削られる。"""
     shape = (14, 6, 3)
@@ -210,7 +199,7 @@ def test_the_search_with_min_width_three_keeps_a_keep_cell_in_a_side_block(monke
     best = result.best_feasible.mask
     assert result.status == 'feasible' and best[keep].all() and all(candidate[keep].all() for candidate in seen)
     assert (best & block).any()
-    _assert_min_width_invariants(best, 3, keep)
+    assert_min_width_invariants(best, 3, keep)
     reduction = result.diagnostics['reduction']
     assert reduction['geometry_rejections'] == []
     assert sum(step['peel']['skipped_connectivity'] for step in reduction['steps']) > 0

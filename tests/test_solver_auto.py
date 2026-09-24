@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from duocad.topopt import acceptance, binary_search as bs, fem, stress
-from test_binary_search import bar_conditions
+from topopt_support import bar_conditions
 
 
 def test_choose_solver_applies_both_thresholds_inclusively():

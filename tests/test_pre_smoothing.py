@@ -1,6 +1,6 @@
+import importlib.util
 import json
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -8,30 +8,18 @@ import pytest
 from build123d import Box, Pos
 
 from duocad import kernel
-from duocad.topopt import anchor, voxelize, fem, stress
+from duocad.topopt import voxelize, fem, stress
 from duocad.topopt.acceptance import (
     active_nodes, boundary_check, closed_voids, condition_check, connectivity_check, void_components,
     inspect, inspect_document, intersection_volume, region_check, safety_check, search_diagnostics,
 )
+from topopt_support import Table
 
-
-class Table:
-    def __init__(self, grid, faces):
-        self.node_grid = anchor.NodeGrid(grid)
-        self.faces = faces
-
-    def node_ids(self, faces):
-        return np.array(self.faces[faces[0]], dtype=int)
-
-    def fixed_dofs(self, faces):
-        ids = self.node_ids(faces)
-        return (ids[:, None] * 3 + np.arange(3)).ravel()
-
-    def load_vector(self, faces, force):
-        out = np.zeros(self.node_grid.ndof)
-        ids = self.node_ids(faces)
-        out.reshape(-1, 3)[ids] = np.asarray(force) / len(ids)
-        return out
+CHECKS = Path(__file__).resolve().parents[1] / 'topopt_checks'
+sys.path.insert(0, str(CHECKS))
+spec = importlib.util.spec_from_file_location('check_pre_smoothing', CHECKS / 'check_pre_smoothing.py')
+check_pre_smoothing = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(check_pre_smoothing)
 
 
 def fixture():
@@ -317,24 +305,17 @@ def test_cli_npz_and_document_without_surface_generation(tmp_path):
     _beam_document(tmp_path)
     np.savez_compressed(tmp_path / 'fields.npz', rho_clean=np.ones((4, 2, 2)),
                         rho_before=np.ones((4, 2, 2)), origin=[0., 0., 0.], spacing=1.)
-    root = Path(__file__).resolve().parents[1]
     output = tmp_path / 'report.json'
-    command = [sys.executable, str(root / 'topopt_checks/check_pre_smoothing.py'),
-               '--fields', str(tmp_path / 'fields.npz'), '--document', str(tmp_path / 'beam.json'),
-               '--target', '.001', '--solver', 'direct', '--out', str(output)]
-    completed = subprocess.run(command, cwd=root, capture_output=True, text=True)
+    code = check_pre_smoothing.main(['--fields', str(tmp_path / 'fields.npz'), '--document', str(tmp_path / 'beam.json'),
+                                     '--target', '.001', '--solver', 'direct', '--out', str(output)])
     report = json.loads(output.read_text(encoding='utf-8'))
-    assert completed.returncode == 0, (report, completed.stderr)
+    assert code == 0, report
     assert report['status'] == 'pass'
     assert report['volumes']['material_mm3'] == 16
     assert report['search']['status'] == 'unknown'
 
 
 def test_cli_invalid_input_is_machine_readable(tmp_path):
-    root = Path(__file__).resolve().parents[1]
     output = tmp_path / 'error.json'
-    completed = subprocess.run([sys.executable, str(root / 'topopt_checks/check_pre_smoothing.py'),
-                                '--fields', str(tmp_path / 'missing.npz'), '--out', str(output)],
-                               cwd=root, capture_output=True, text=True)
-    assert completed.returncode == 2
+    assert check_pre_smoothing.main(['--fields', str(tmp_path / 'missing.npz'), '--out', str(output)]) == 2
     assert json.loads(output.read_text(encoding='utf-8'))['status'] == 'unknown'
