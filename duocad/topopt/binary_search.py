@@ -649,6 +649,10 @@ class PeelStats:
     skipped_core: int = 0
     already_removed: int = 0
     global_checks: int = 0
+    #: 芯の連結(S(m))の判定を、窓で「つながる」/ 窓で「割れる」/ 大域の数え直し、で答えた回数(`min_width.CoreConnectivity.stats`)。
+    core_window_true: int = 0
+    core_window_false: int = 0
+    core_global: int = 0
     seconds: float = 0.0
     #: 順位から選んだセル(手の先頭。巻き添えは含まない)の平坦添字(記録には出さない)。
     picked_cells: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64), repr=False)
@@ -869,6 +873,10 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
         stats.islands += island_cells
         picked.append(cell)
     stats.picked_cells = np.asarray(picked, dtype=np.int64)
+    if core is not None:
+        stats.core_window_true = int(core.stats['window_true'])
+        stats.core_window_false = int(core.stats['window_false'])
+        stats.core_global = int(core.stats['global_count'])
     stats.seconds = time.perf_counter() - started
     return np.ascontiguousarray(inner), stats
 

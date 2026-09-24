@@ -109,6 +109,65 @@ def test_the_window_proof_is_never_wrong_and_the_bite_verdict_equals_the_global_
     assert proven_yes > 20  # 窓で通す経路を試している
 
 
+def _random_skeleton_mask(rng, m, shape, *, walks=4, steps=12):
+    """m 立方を面で重ねながら歩かせた細い骨格(幅 m)。芯は歩いた角の集合で、面で重ねるので 1 塊。
+    枝の先端が多く、「先端が落ちて芯が割れる手」と「割れない手」の両方が出る。"""
+    mask = np.zeros(shape, bool)
+    corners = [np.array([int(rng.integers(0, n - m + 1)) for n in shape])]
+    for _ in range(walks):
+        c = corners[int(rng.integers(len(corners)))].copy()
+        for _ in range(steps):
+            axis = int(rng.integers(3))
+            c[axis] = int(np.clip(c[axis] + rng.choice([-1, 1]) * rng.integers(1, m), 0, shape[axis] - m))
+            mask[c[0]:c[0] + m, c[1]:c[1] + m, c[2]:c[2] + m] = True
+            corners.append(c.copy())
+    return mask
+
+
+def test_the_window_verdict_is_exact_on_grids_larger_than_the_window_and_rarely_needs_the_global_count():
+    """落ちたら、窓を広げて「確実に割れる」と答える経路が大域の数え直しとずれているか、窓が広がらず大域に落ち続けている。
+
+    格子は窓より大きく(28〜36 セル)、細い骨格の先端が落ちる手と、遠回りでつながり直す手の両方が混ざる。"""
+    rng = np.random.default_rng(20260924)
+    checked, truths = 0, set()
+    stats = dict(window_true=0, window_false=0, global_count=0)
+    for _ in range(30):
+        m = int(rng.integers(2, 5))
+        shape = tuple(int(x) for x in rng.integers(28, 37, size=3))
+        mask = _random_skeleton_mask(rng, m, shape)
+        exempt = None
+        if rng.random() < 0.4:
+            exempt = np.zeros(shape, bool)
+            c = np.argwhere(mask)[int(rng.integers(int(mask.sum())))]
+            exempt[c[0]:c[0] + 2, c[1]:c[1] + 2, c[2]] = True
+        if core_groups_oracle(mask, m, exempt) != 1:
+            continue
+        core = min_width.CoreConnectivity(m, exempt)
+        for cell in np.argwhere(mask)[rng.permutation(int(mask.sum()))[:8]]:
+            bite = np.vstack(([list(cell)], min_width.casualties(mask, tuple(int(v) for v in cell), m, exempt)))
+            after = mask.copy()
+            after[tuple(bite.T)] = False
+            truth = core_groups_oracle(after, m, exempt) <= 1
+            assert core.after_bite(after, bite, 0) == truth
+            truths.add(truth)
+            checked += 1
+        for key in stats:
+            stats[key] += core.stats[key]
+    assert checked > 100 and truths == {True, False}
+    assert stats['window_false'] > 0  # 窓の中で「確実に割れる」と言えた手がある
+    assert stats['global_count'] < stats['window_false'] + stats['window_true']  # 大半は窓で決まる
+
+
+def test_the_window_grows_with_the_margin_and_never_leaves_the_grid():
+    core = min_width.CoreConnectivity(3)
+    lo1, hi1, ext1 = core.window((10, 10, 10), (11, 11, 11), (40, 40, 40))
+    lo2, hi2, ext2 = core.window((10, 10, 10), (11, 11, 11), (40, 40, 40), margin=2)
+    assert (lo2 < lo1).all() and (hi2 > hi1).all()
+    assert (lo1 == 10 - 2 - 3).all() and (hi1 == 11 + 3).all() and ext1[0].stop == int(hi1[0]) + 2
+    lo3, hi3, ext3 = core.window((1, 1, 1), (2, 2, 2), (12, 12, 12), margin=8)
+    assert (lo3 == 0).all() and (hi3 == 12).all() and ext3[0].stop == 12
+
+
 def test_peel_refuses_the_moves_that_would_split_the_core_and_every_result_keeps_it_connected():
     """落ちたら、`peel` が芯を割る手を通している(R(m) だけを守る一口は、同じ入力で芯を割る)。"""
     rng = np.random.default_rng(20260927)
