@@ -339,7 +339,8 @@ class Conditions:
     `bodies` は保持ボディと条件面が属するボディを**重複なく**並べたもの(`ConditionBody`)。
     除外だけのボディ・無関係なボディ・以前の最適化結果を入れてはいけない(塊が広がる)。
     `keep` はそれら保持ボディをまとめた形で、`bodies` の保持ボディと同じ集合を指すこと
-    (層をまたぐ契約: 塊が保持を含みきれているかは `keep` で、条件ごとの接続は `bodies` で見る)。
+    (層をまたぐ契約: 格子の外へ出ていないかは `keep` の外接箱で、格子への占有と条件ごとの接続は
+    `bodies` のボディごとに見る)。
 
     `load_n` は荷重の**実際の大きさ**[N]。荷重が複数のときは**その大きさの総和**であって
     合力(ベクトル和)ではない —— 向きの違う荷重が打ち消し合うと合力は0になりうるが、
@@ -704,11 +705,11 @@ def derive(
         grid_lo, grid_hi = grid.world_box()
         obs_lo, obs_hi = obs_soup.bbox
         if np.any(obs_hi < grid_lo) or np.any(obs_lo > grid_hi):
-            # 格子とまったく重ならない除外は引くものが無い(`occupancy` はレイが1本も当たらない
-            # 形を縮退として落とすので、ここで先に見分ける)。格子に重なる除外の縮退は落とす。
             obstacle_stats = {"skipped": "outside_grid"}
         else:
-            obs, obstacle_stats = vx.occupancy(obs_soup, grid)
+            # 重なっていても列の中心を1本も通らない除外(薄い壁・格子の縁をかすめる板)は0セル。
+            # それが表現できていないことは `optimize_run._region_representation` がボディごとに報告する。
+            obs, obstacle_stats = vx.occupancy(obs_soup, grid, allow_empty=True)
             design = candidate & ~obs
     obstacle_elements_removed = int(np.count_nonzero(candidate & ~design))
     if not design.any():
@@ -730,7 +731,7 @@ def derive(
             {"keep": -1},
         )
 
-    bodies_report, keep_seeds, conflicts, unrepresented = _keep_bodies_on_grid(
+    bodies_report, keep_seeds, keep_cells, conflicts, unrepresented = _keep_bodies_on_grid(
         conditions.bodies, grid, design, obs, dev, angular_deflection
     )
     if conflicts:
@@ -763,19 +764,22 @@ def derive(
     )
 
     try:
+        # 保持はボディごとの占有の和を渡す(まとめた形を数え直さない)。まとめた形で数え直すと、
+        # 保持ボディが全部要素サイズより小さいときにレイが1本も当たらず、取りこぼしの報告
+        # (`unrepresented_bodies`)の前に例外になる。
         model = vx.model_from_design_mask(
             grid,
             connected,
             anchor_shape=soup,
-            keep=conditions.keep,
+            keep=keep_cells,
             deviation=dev,
             angular_deflection=angular_deflection,
         )
     except vx.OutsideDesignSpaceError as exc:
         raise DesignSpaceConflictError(
-            f"まとめた保持ソリッド(keep)が塊からはみ出した: {exc} "
-            "ボディごとの占有では衝突が無かったので、keep と bodies が別の形を指しているか、"
-            "保持ボディ同士が重なっていて巻き数が相殺している。",
+            f"保持ボディの占有が塊からはみ出した: {exc} "
+            "ボディごとの占有では除外との衝突が無かったので、保持ボディが条件の凸包の外に"
+            "セルを持っている(bodies の外接箱と形が食い違っている)。",
             bodies={"keep": int(getattr(exc, "outside", {}).get("keep", 0))},
         ) from exc
 
@@ -847,17 +851,20 @@ def _keep_bodies_on_grid(
     obstacle: Optional[np.ndarray],
     deviation: float,
     angular_deflection: float,
-) -> tuple[list, dict, dict, list]:
+) -> tuple[list, dict, np.ndarray, dict, list]:
     """保持ボディを**1つずつ**格子に載せ、占有・除外との衝突・取りこぼしを名前付きで数える。
 
     まとめた形で数えると、大きい保持が1つあれば合計は必ず正になり、小さいほうが1要素も
     掴めていないことが隠れる(`optimize_run._region_representation` と同じ理屈)。
-    戻り値は `(ボディごとの報告, 接続の種 {keep_<名前>: マスク}, 衝突 {名前: セル数}, 取りこぼした名前)`。
+    戻り値は `(ボディごとの報告, 接続の種 {keep_<名前>: マスク}, 全保持ボディの占有の和,
+    衝突 {名前: セル数}, 取りこぼした名前)`。
     取りこぼし(0セル)は解像度不足であって入力矛盾ではないので、ここでは落とさず報告だけする
-    —— `optimize_run` が `unrepresented_regions` として利用者へ返す。
+    —— `optimize_run` が `unrepresented_regions` として利用者へ返す。**閉じていない・向きの壊れた
+    表面は取りこぼしに数えず落とす**(解像度を上げても直らない)。
     """
     report: list = []
     seeds: dict = {}
+    union = np.zeros(tuple(grid.shape), dtype=bool)
     conflicts: dict = {}
     unrepresented: list = []
     for body in bodies:
@@ -869,14 +876,8 @@ def _keep_bodies_on_grid(
         soup = vx.triangles_from_shape(
             vx._unwrap(body.shape), deviation=deviation, angular_deflection=angular_deflection
         )
-        reason = None
-        try:
-            raw, _ = vx.occupancy(soup, grid)
-        except ValueError as exc:
-            # 格子の列(セル中心を通る +z のレイ)が1本もその形状を貫かない = この要素サイズでは
-            # 表現できていない。異常ではなく取りこぼしとして数える。
-            raw = np.zeros(tuple(grid.shape), dtype=bool)
-            reason = str(exc)
+        vx.inspect_soup(soup)
+        raw, occupancy_stats = vx.occupancy(soup, grid, allow_empty=True)
         cells = int(np.count_nonzero(raw))
         in_obstacle = 0 if obstacle is None else int(np.count_nonzero(raw & obstacle))
         in_space = int(np.count_nonzero(raw & design))
@@ -888,13 +889,17 @@ def _keep_bodies_on_grid(
                 "keep_elements": cells,
                 "keep_elements_in_obstacle": in_obstacle,
                 "keep_elements_in_space": in_space,
-                "reason": reason,
+                "reason": (
+                    "格子の列(セル中心を通る +z のレイ)が1本もこの形状を貫かない"
+                    if occupancy_stats.get("empty") else None
+                ),
             }
         )
+        union |= raw
         if in_obstacle:
             conflicts[body.name] = in_obstacle
         if cells == 0:
             unrepresented.append(body.name)
         else:
             seeds[f"keep_{body.name}"] = raw & design
-    return report, seeds, conflicts, unrepresented
+    return report, seeds, union, conflicts, unrepresented

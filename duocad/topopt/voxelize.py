@@ -24,10 +24,13 @@
 `kernel.tessellate` が返す三角形群に対して、各列 (i, j) から **+z 方向のレイ**を飛ばし、
 交点の z を集めて内部区間を塗る。新規依存はゼロで、numpy だけで書ける。
 
-- **偶奇(parity)ではなく巻き数(winding)で数える。** レイが2枚の三角形の共有辺を
-  ちょうど通ると、同じ z に交点が2つ出る。偶奇だとその上の全域で内外が反転して
-  列がまるごと壊れるが、巻き数なら「入る/出る」の符号が相殺して壊れない。
-  符号は三角形の xy 投影の符号付き面積 = 外向き法線の z 成分の符号から取る。
+- **偶奇(parity)ではなく巻き数(winding)で数える。** 向きの違う2枚(稜線の上と下)の
+  共有辺をレイが通ると同じ z に「入る」と「出る」が1つずつ出て相殺する。符号は三角形の
+  xy 投影の符号付き面積 = 外向き法線の z 成分の符号から取る。
+- **ただし同じ向きの2枚の共有辺(平らな面の対角線など)では巻き数でも壊れる。** 両方に数えると
+  入る面と出る面の両方で2回ずつになり、列の巻き数は `2, 1, 2, 0` のように0へ戻ったまま
+  間の空洞が材料になる(どちらにも数えないと材料が抜ける)。したがって**交点が三角形の辺・
+  頂点に `RAY_EDGE_TOLERANCE` 以内で乗ったら縮退として扱い、ずらし幅を変えてやり直す**。
 - **レイの (x, y) をセル中心から `RAY_JITTER` 倍(要素サイズ比)だけ決定的にずらす。**
   格子は bbox の中心から起こすので、軸に整列した箱では面や辺が列の中心と厳密に一致する
   (縮退が偶然ではなく系統的に起きる)。ずらし幅は要素サイズの 1e-4 程度で、
@@ -72,6 +75,11 @@ RAY_JITTER_SEQUENCE: tuple[tuple[float, float], ...] = tuple(
     for k, m in ((1, 1), (3, 5), (7, 11), (13, 17), (19, 23), (29, 31))
 )
 
+# 交点が三角形の辺・頂点に乗ったとみなす重心座標の幅(`_occupancy_once`)。重心座標は三角形の大きさに
+# 対する比なので、既定のずらし(要素サイズの 1e-4)で辺から離れた交点はこれより5桁以上大きい。
+# 小さすぎると浮動小数の誤差で辺の上の点を片側だけ・両側・どちらにも数える形を見逃す。
+RAY_EDGE_TOLERANCE = 1.0e-9
+
 # 既定の三角形分割の細かさ。**要素サイズに比例させる**(格子を細かくすると三角形も
 # 細かくなる)。0.02 は「格子の誤差が支配的で、三角形分割の弦誤差はその20分の1」という
 # 配分。受入検査が曖昧として除外する帯(要素サイズの5%)より細かいことが要る。
@@ -80,8 +88,8 @@ DEFAULT_ANGULAR_DEFLECTION = 0.2
 
 # バウンディングボックスの周囲に取る余白(要素数)。**セル数で一定なので、物理量(mm)は要素サイズに
 # 比例して増える。** 長軸基準で解像度を粗くすると、薄い軸ではパッド2セルが実寸を超えて格子が形状を
-# 覆わなくなり、`occupancy` が「格子が形状をまったく覆っていない」というレイ縮退の `ValueError` に
-# なる(格子範囲は形状より大きいのに、という読み取りにくい出方)。実測: 厚み12mm・長さ182mm の板を
+# 覆わなくなり、`occupancy` が「交点が1つも無い」の `NoRayCrossings` になる(格子範囲は形状より
+# 大きいのに、という読み取りにくい出方)。実測: 厚み12mm・長さ182mm の板を
 # 長辺12要素で切ると spacing 16.68mm、z のパッド2セル = 約33mm で失敗、14要素(14.3mm)なら通る。
 # 粗い解像度を選ぶときは最も薄い軸のパッドに対する余裕も見る(1点で試して通ったら採る、をしない)。
 DEFAULT_PAD = 1
@@ -232,6 +240,9 @@ class TriangleSoup:
     face_kind: dict[int, str] = field(default_factory=dict)
     deviation: float = 0.0
     face_props: dict[int, dict] = field(default_factory=dict)
+    #: (T,) その三角形を含む SOLID の0始まりの番号(-1 はどの SOLID にも無い面)。**SOLID が2つ以上ある
+    #: 形のときだけ入る**(`inspect_soup` はこれでソリッドごとに閉じているかを見る)。
+    solid_index: Optional[np.ndarray] = None
 
     @property
     def triangle_count(self) -> int:
@@ -329,13 +340,17 @@ def triangles_from_shape(
     if not tri_chunks:
         raise ValueError("三角形が1枚も取れなかった")
 
+    face_index = np.concatenate(face_chunks, axis=0)
+    solid_of_face = np.asarray(kernel.face_solid_indices(shape), dtype=np.int64)
+    solid_index = solid_of_face[face_index - 1] if np.unique(solid_of_face).size > 1 else None
     return TriangleSoup(
         positions=np.concatenate(pos_chunks, axis=0),
         triangles=np.concatenate(tri_chunks, axis=0),
-        face_index=np.concatenate(face_chunks, axis=0),
+        face_index=face_index,
         face_kind=face_kind,
         deviation=float(deviation),
         face_props=face_props,
+        solid_index=solid_index,
     )
 
 
@@ -365,14 +380,41 @@ def inspect_soup(soup: TriangleSoup, weld_tolerance: Optional[float] = None) -> 
        同じ向きが2回現れれば向きの不整合。
     2. **符号付き体積が正** — 法線が内向き(裏返った形状)を弾く。
     3. **退化三角形が全部ではない**。
+
+    **SOLID が2つ以上ある形(`solid_index`)はソリッドごとに調べる。** まとめた形では、面で接する
+    ボディの接した辺が同じ向きで2回現れ、重なる・入れ子のボディは殻の入れ子の深さが崩れるが、
+    どちらも入力として正しい(占有は巻き数が0でない区間なので、重なりはそのまま和になる)。
     """
-    positions = soup.positions
     lo, hi = soup.bbox
     diagonal = float(np.linalg.norm(hi - lo))
     if not diagonal > 0:
         raise ValueError("形状の大きさがゼロ(退化した入力)")
     tol = float(weld_tolerance) if weld_tolerance else max(diagonal * 1e-7, 1e-9)
+    solids = None if soup.solid_index is None else np.unique(soup.solid_index)
+    if solids is None or solids.size <= 1:
+        return _inspect_closed(soup, tol)
+    reports = []
+    for solid in solids:
+        members = np.asarray(soup.solid_index) == solid
+        part = TriangleSoup(positions=soup.positions, triangles=soup.triangles[members],
+                            face_index=soup.face_index[members])
+        try:
+            reports.append(_inspect_closed(part, tol))
+        except ValueError as error:
+            label = "どの SOLID にも属さない面" if solid < 0 else f"{int(solid) + 1}番目の SOLID"
+            raise ValueError(f"{label}(全 {solids.size} 個のうち): {error}") from error
+    merged: dict = {"solids": len(reports), "weld_tolerance": tol}
+    for key in ("triangles", "degenerate_triangles", "welded_vertices", "boundary_edges",
+                "duplicated_directed_edges", "mismatched_edges", "signed_volume", "area", "components"):
+        merged[key] = sum(report[key] for report in reports)
+    for key in ("component_volumes", "component_depths"):
+        merged[key] = [value for report in reports for value in report[key]]
+    return merged
 
+
+def _inspect_closed(soup: TriangleSoup, tol: float) -> dict:
+    """`inspect_soup` の本体(1つの閉じた表面として調べる)。"""
+    positions = soup.positions
     labels = weld_vertices(positions, tol)
     tri = labels[soup.triangles]
 
@@ -538,11 +580,24 @@ def _point_is_inside(
 # ---------------------------------------------------------------------------
 # 占有判定(+zレイの巻き数)
 # ---------------------------------------------------------------------------
+class NoRayCrossings(ValueError):
+    """どの列のレイも三角形と交わらなかった(列の中心が形状の xy 投影に1つも入らない)。
+
+    **縮退ではなく「この格子では0セル」**である。格子の列より薄い・小さい形や、格子の縁を
+    かすめるだけの形で起きる。`occupancy(allow_empty=True)` はこれを空のマスクとして返す。
+    """
+
+    def __init__(self, message: str, stats: dict) -> None:
+        super().__init__(message)
+        self.stats = stats
+
+
 def occupancy(
     soup: TriangleSoup,
     grid: Grid,
     *,
     jitter: Optional[tuple[float, float]] = None,
+    allow_empty: bool = False,
 ) -> tuple[np.ndarray, dict]:
     """三角形群と格子から占有マスク (nx,ny,nz) の bool 配列を返す。
 
@@ -559,14 +614,29 @@ def occupancy(
 
     戻り値の2つめは診断。`unbalanced_columns` は最後まで巻き数が 0 に戻らなかった列の数で、
     閉じた表面なら 0 でなければならない(0 でないとき例外)。
+
+    `allow_empty=True` なら、どの列のレイも形状と交わらないとき(`NoRayCrossings`)に例外にせず
+    全 False のマスクを返す(`stats["empty"]` が真)。**呼び出し側が「0セル」を報告できるときだけ**使うこと。
     """
     if jitter is not None:
-        return _occupancy_once(soup, grid, jitter)
+        try:
+            return _occupancy_once(soup, grid, jitter)
+        except NoRayCrossings as exc:
+            if not allow_empty:
+                raise
+            return np.zeros(tuple(grid.shape), dtype=bool), dict(exc.stats, empty=True)
 
     last_error: Optional[ValueError] = None
     for attempt, candidate in enumerate(RAY_JITTER_SEQUENCE, start=1):
         try:
             mask, stats = _occupancy_once(soup, grid, candidate)
+        except NoRayCrossings as exc:
+            # 縮退ではないので、ずらし幅を変えても答えは変わらない(要素サイズの 1e-4 しか動かない)。
+            if not allow_empty:
+                raise
+            return np.zeros(tuple(grid.shape), dtype=bool), dict(
+                exc.stats, jitter_attempts=attempt, empty=True
+            )
         except ValueError as exc:
             last_error = exc
             continue
@@ -632,7 +702,13 @@ def _occupancy_once(
         l0 = ((x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)) * inv
         l1 = ((x0 - x2) * (py - y2) - (y0 - y2) * (px - x2)) * inv
         l2 = ((x1 - x0) * (py - y0) - (y1 - y0) * (px - x0)) * inv
-        inside = (l0 >= 0.0) & (l1 >= 0.0) & (l2 >= 0.0)
+        nearest = np.minimum(np.minimum(l0, l1), l2)
+        if np.any(np.abs(nearest) < RAY_EDGE_TOLERANCE):
+            raise ValueError(
+                "レイが三角形の辺か頂点をちょうど通った(隣の三角形と二重にも0回にも数えうる)。"
+                "ずらし幅を変えてやり直す"
+            )
+        inside = nearest >= 0.0
         if not inside.any():
             continue
         ii, jj = np.nonzero(inside)
@@ -655,12 +731,14 @@ def _occupancy_once(
         "unbalanced_columns": 0,
     }
     if not col_chunks:
-        raise ValueError(
-            "三角形とレイの交点が1つも無い。格子が形状をまったく覆っていない"
+        raise NoRayCrossings(
+            "三角形とレイの交点が1つも無い。格子の列の中心が形状の xy 投影に1つも入らない"
+            "(格子が形状を覆っていないか、形状が列の間に収まるほど薄い・小さい)"
             f"(格子の範囲 {np.round(grid.world_box()[0], 3).tolist()}"
             f" .. {np.round(grid.world_box()[1], 3).tolist()} /"
             f" 形状の範囲 {np.round(soup.bbox[0], 3).tolist()}"
-            f" .. {np.round(soup.bbox[1], 3).tolist()})"
+            f" .. {np.round(soup.bbox[1], 3).tolist()})",
+            stats,
         )
 
     col = np.concatenate(col_chunks)
@@ -866,8 +944,8 @@ def model_from_design_mask(
     `TriangleSoup` のいずれか。**面添字は渡したものの面の並びで決まる**ので、面を選ぶのに
     使った `TriangleSoup` があるならそれをそのまま渡すこと(作り直すと面添字が食い違いうる)。
 
-    `keep` / `obstacle` は同じ格子に載せる。**塊からはみ出したら `OutsideDesignSpaceError`**
-    (黙って切り詰めない)。
+    `keep` / `obstacle` は同じ格子に載せる(形か、既に載せた同じ格子の bool マスク)。
+    **塊からはみ出したら `OutsideDesignSpaceError`**(黙って切り詰めない)。
     """
     started = time.perf_counter()
 
@@ -909,9 +987,16 @@ def model_from_design_mask(
     for name, region, label in (("keep", keep, "保持"), ("obstacle", obstacle, "障害物")):
         if region is None:
             continue
-        raw, sub = _voxelize_region(
-            region, grid, deviation=dev, angular=angular_deflection, label=label
-        )
+        if isinstance(region, np.ndarray):
+            if region.shape != tuple(grid.shape):
+                raise ValueError(
+                    f"{label}のマスクのかたちが格子と違う: {tuple(region.shape)} / 格子 {tuple(grid.shape)}"
+                )
+            raw, sub = np.array(region, dtype=bool), {"source": "mask"}
+        else:
+            raw, sub = _voxelize_region(
+                region, grid, deviation=dev, angular=angular_deflection, label=label
+            )
         raw_of[name] = raw
         stats[f"{name}_surface"] = sub
         stats[f"{name}_dropped_outside"] = int(np.count_nonzero(raw & ~design_mask))

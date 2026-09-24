@@ -314,6 +314,32 @@ def test_min_width_outside_the_bounds_is_refused() -> None:
         optimize_run._resolve_min_width(2.0, float("nan"))
 
 
+def test_a_thin_exclude_body_between_the_columns_is_reported_as_unrepresented(session: Session) -> None:
+    """落ちたら、要素サイズより薄い除外ソリッドが列の中心を1本も通らないとき、塊の導出が「ずらしが全部縮退した」
+    の例外で止まり、`unrepresented_regions` の報告(要素サイズを下げる案内)まで届かない(issue #29)。"""
+    import numpy as np
+
+    from duocad.topopt import design_space as ds
+
+    _setup_four_conditions(session)
+    limits = optimize_run.resolution_limits(session.document)
+    spacing = limits["steps"][1]["element_size_mm"]
+    snapped = optimize_run._snap_to_grid(limits["bbox_min"], limits["bbox_max"], spacing)
+    grid = ds.derive(optimize_run.build_conditions(session.document).conditions, spacing=snapped).grid
+    columns = grid.centers_1d(0)
+    middle = int(np.searchsorted(columns, 35.0))
+    wall_x = (columns[middle - 1] + columns[middle]) / 2 - 0.15
+    wall = _box(session, 0.3, 40.0, 20.0, corner=(wall_x, 0.0))
+    _select(session, [{"body": wall.id, "kind": "body"}])
+    session.set_exclude_bodies()
+    session.clear_selection()
+
+    result = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=spacing))
+    assert result["state"] == "unrepresented_regions"
+    [diagnosis] = [item for item in result["unrepresented_regions"] if item["body"] == wall.id]
+    assert diagnosis["role"] == "exclude_bodies" and diagnosis["elements"] == 0 and diagnosis["reason"]
+
+
 def test_min_width_none_resolves_to_max_of_twice_spacing_and_1mm() -> None:
     """既定は `max(2 × spacing, 1.0mm)`。下限(2×spacing)そのものなので、1.0mm が効くのは
     spacing < 0.5mm のときだけ(spacing 0.4mm → 1.0mm・m=3・保証1.2mm。spacing 0.5mm → 2×spacingのまま・m=2)。"""
