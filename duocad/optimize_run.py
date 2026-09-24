@@ -1605,7 +1605,7 @@ def _full_material_failure_message(search_result: Any, factor: float = 1.0) -> s
                                  f"(= 目標 {searched / factor:.4g} × 係数 {factor:.3g})に届かない")
                 reasons.append(f"安全率 {float(check['safety_factor']):.4g} が{shortfall}")
     if search_result.termination == 'evaluation_error':
-        head = "設計空間の全材料の応力計算が、解法を変えた再試行の後も失敗した"
+        head = "設計空間の全材料の応力計算が失敗した"
     else:
         head = "設計空間の全材料でも6条件に合格しない"
     detail = f": {'、'.join(reasons)}" if reasons else ""

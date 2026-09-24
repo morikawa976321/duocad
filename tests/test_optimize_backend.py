@@ -775,7 +775,7 @@ def test_a_full_material_failure_names_the_failed_check_with_its_numbers_and_nev
     solver = _full_material_failure("evaluation_error", "unknown", dict(
         safety=dict(status="unknown", reason="evaluation_error", error="RuntimeError: singular")))
     warning = optimize_run._search_failure_warning(solver)
-    assert "応力計算が、解法を変えた再試行の後も失敗した" in warning and "RuntimeError: singular" in warning
+    assert "全材料の応力計算が失敗した" in warning and "RuntimeError: singular" in warning
 
 
 def test_a_full_material_failure_under_min_width_says_the_design_space_was_trimmed() -> None:

@@ -1,4 +1,4 @@
-"""`solver='auto'`(自由な自由度と nnz で direct / cg を選ぶ)の選び方と、選んだ解法が報告と再試行に効くこと。"""
+"""`solver='auto'`(自由な自由度と nnz で direct / cg を選ぶ)の選び方と、選んだ解法が報告に残ること。"""
 import numpy as np
 import pytest
 
@@ -56,27 +56,28 @@ def test_the_solver_actually_used_is_reported_next_to_the_policy(monkeypatch):
     assert safety['solver_policy'] == 'auto' and safety['solver'] in ('cg', 'direct')
 
 
-def test_a_failed_auto_solve_is_retried_with_the_solver_it_did_not_use(monkeypatch):
-    """落ちたら、`auto` が選んだ解法が失敗したあと同じ解法で再試行している(§4.5 の再試行が空振りになる)。"""
+def test_a_failed_solve_is_evaluated_once_and_not_retried_with_the_other_solver(monkeypatch):
+    """落ちたら、計算失敗の候補を解法を替えてもう一度解いている(CG は収束しなければ内部で直接解法まで解くので、
+    替えても同じ分解の繰り返しになり、1候補の費用が倍になる。issue #37)。"""
     shape = (4, 2, 2)
     conditions = bar_conditions(shape=shape, solver='auto')
+    calls = []
 
     def fails_after_choosing_direct(model, rho, penal=3.0, *, solver='cg', cg_rtol=1e-9, info=None):
+        calls.append(solver)
         if info is not None:
             info['solver'] = 'direct'
         raise fem.SolveResidualError('injected failure for the test')
 
     monkeypatch.setattr(stress, 'solve_displacement', fails_after_choosing_direct)
     result = bs.find_initial_feasible(np.ones(shape, bool), conditions, max_evaluations=5)
-    assert result.status == 'no_feasible_found'
-    first = result.history[0]
-    retried = [t for t in result.history if t.operation.startswith('solver_retry:')]
-    assert retried and retried[0].operation == 'solver_retry:cg' and retried[0].mask_hash == first.mask_hash
+    assert result.status == 'no_feasible_found' and result.termination == 'evaluation_error'
+    assert calls == ['auto']
+    assert [trial.outcome for trial in result.history] == ['unknown']
 
 
-def test_the_solver_chosen_before_a_failing_solve_survives_in_the_report_and_steers_the_retry(monkeypatch):
-    """落ちたら、解く前に記録した解法が失敗の報告に残っていない、または再試行が「使った解法の反対側」ではなく
-    方針 `auto` から見た固定の側(direct)へ行っている。"""
+def test_the_solver_chosen_before_a_failing_solve_survives_in_the_report(monkeypatch):
+    """落ちたら、解く前に記録した解法が失敗の報告に残っていない(どちらで解いて落ちたか記録から分からない)。"""
     shape = (4, 2, 2)
     conditions = bar_conditions(shape=shape, solver='auto')
     full = np.ones(shape, bool)
@@ -87,10 +88,6 @@ def test_the_solver_chosen_before_a_failing_solve_survives_in_the_report_and_ste
     monkeypatch.setattr(fem.PreparedSystem, 'solve', solve_fails)
     safety = acceptance.inspect(full, full, conditions.grid, **conditions.inspect_kwargs())['checks']['safety']
     assert safety['status'] == 'unknown' and safety['solver_policy'] == 'auto' and safety['solver'] in ('cg', 'direct')
-    result = bs.find_initial_feasible(full, conditions, max_evaluations=5)
-    retried = [t for t in result.history if t.operation.startswith('solver_retry:')]
-    other = 'cg' if safety['solver'] == 'direct' else 'direct'
-    assert retried and retried[0].operation == f'solver_retry:{other}'
 
 
 @pytest.mark.parametrize('solver', ['cg', 'direct'])
