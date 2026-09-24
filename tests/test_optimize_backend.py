@@ -260,7 +260,7 @@ def test_a_thin_exclude_body_between_the_columns_is_reported_as_unrepresented(se
 
     from duocad.topopt import design_space as ds
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     limits = optimize_run.resolution_limits(session.document)
     spacing = limits["steps"][1]["element_size_mm"]
     snapped = optimize_run._snap_to_grid(limits["bbox_min"], limits["bbox_max"], spacing)
@@ -268,7 +268,7 @@ def test_a_thin_exclude_body_between_the_columns_is_reported_as_unrepresented(se
     columns = grid.centers_1d(0)
     middle = int(np.searchsorted(columns, 35.0))
     wall_x = (columns[middle - 1] + columns[middle]) / 2 - 0.15
-    wall = _box(session, 0.3, 40.0, 20.0, corner=(wall_x, 0.0))
+    wall = pad(session, 0.3, 40.0, 20.0, corner=(wall_x, 0.0))
     _select(session, [{"body": wall.id, "kind": "body"}])
     session.set_exclude_bodies()
     session.clear_selection()
