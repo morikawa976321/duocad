@@ -51,6 +51,7 @@ from .verbs import (
     move_sketch_entities as move_sketch_entities_verb,
     pattern_circular as pattern_circular_verb,
     pattern_rectangular as pattern_rectangular_verb,
+    shell as shell_verb,
     clear_loads as clear_loads_verb,
     set_exclude_bodies as set_exclude_bodies_verb,
     set_fixtures as set_fixtures_verb,
@@ -692,6 +693,20 @@ class Session:
         """**確定選択の辺**を面取りする(`fillet` と同じ規律)。"""
         edges, body_id = selection.require_edges(self.document)
         operation = chamfer_verb(self.document, edges, distance, body_id=body_id)
+        changed_body_id = operation.args["body_id"]
+        return self._after_logged_verb({
+            "body_id": changed_body_id,
+            "changed_bodies": [changed_body_id],
+        })
+
+    @_edits_document
+    def shell(self, thickness: float) -> dict:
+        """**確定選択の面**(1枚以上・同じBody)を開口にして中空にする(`fillet` と同じ規律)。
+
+        面と対象Bodyは `selection.require_faces` が選択順のまま返す。
+        """
+        faces, body_id = selection.require_faces(self.document)
+        operation = shell_verb(self.document, faces, float(thickness), body_id=body_id)
         changed_body_id = operation.args["body_id"]
         return self._after_logged_verb({
             "body_id": changed_body_id,

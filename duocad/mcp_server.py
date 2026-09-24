@@ -820,6 +820,16 @@ class DocumentTools:
         applied = self.session.chamfer(distance)
         return self._apply_logged(before, applied)
 
+    def shell(self, thickness: float) -> dict:
+        """**確定選択の面**(1枚以上・同じBody)を開口にして中空にする。
+
+        面と対象Bodyの取り出しは `Session.shell`(`selection.require_faces`)に任せる
+        (`fillet` と同じ規律)。
+        """
+        before = self._revision_snapshot()
+        applied = self.session.shell(float(thickness))
+        return self._apply_logged(before, applied)
+
     def boolean_body(self, target_ref, mode) -> dict:
         """**ターゲット(面参照)に確定選択のツールボディ群**を作用させる。"""
         before = self._revision_snapshot()
