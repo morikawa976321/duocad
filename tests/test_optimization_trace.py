@@ -45,14 +45,8 @@ def test_corrupt_array_is_rejected(recordings):
 
 
 def test_repeated_solves_are_recorded_reproducibly(recordings):
-    """`trace.recording()` は録っても数値を変えず(録ることが計算に影響しない)、同じ
-    `@trace.stage`/`trace.snapshot` の複数回の呼び出しをそれぞれ別スナップショットとして残す。
-
-    旧SIMPの設計反復(`simp.optimize`)を追っていた検査の後継。二値探索
-    (`binary_search`/`acceptance`)は候補ごとにトレースを打たない(段階6の契約)ので、
-    代わりに `fem.Model.solve_many` が1回の呼び出しの中で複数右辺を逐次解く経路
-    (`fem.py` の `linear-solve`/`linear-residual` が右辺ごとに1回出る)で同じ性質を見る。
-    """
+    """落ちたら、記録すると数値が変わるか、同じ段の複数回の呼び出し(`solve_many` の右辺ごとの
+    `linear-solve`/`linear-residual`)が別々のスナップショットとして残っていない。"""
     model=fem.Model(6,3,3)
     rho=np.ones((6,3,3))
     rhs=np.stack([model.f,model.f,model.f])

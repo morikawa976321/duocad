@@ -103,8 +103,8 @@ Dで未被覆の固定節点は、D内での削除・追加・置換では被覆
 回転した平面の解析解・格子細分・平行移動と格子位相・相反する2荷重・所有権競合で空になった面)と
 `tests/test_binary_search.py`(条件固定・入口停止・遅延生成・保持上限・生成中断・探索の継続性・
 最良候補。FEMとCADをスタブに置き換えた候補管理の検査を含み、48³格子で評価回数を8倍にしても実測
-メモリのピークが増えないことを見る)、製品経路の入口停止は
-`tests/test_optimize_backend.py::test_a_load_face_partly_buried_in_an_exclusion_stops_before_any_evaluation`。
+メモリのピークが増えないことを見る)。製品経路では、その入力(保持しない板に載った荷重面)を条件面の門
+`tests/test_optimize_backend.py::test_a_load_face_on_a_body_that_is_not_preserved_is_refused` が入口で断る。
 
 ### hanger の実測(`models/hanger_bar_attachment.json`、sha256 `d531c5ed…f042a5df`、目標安全率 2.0)
 

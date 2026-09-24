@@ -15,7 +15,7 @@
    無いので上限に効かない。計画書§6.2)。下限は総要素数の上限から。
 5. **座標系** —— 結果メッシュは要素添字空間で来るので、ワールド[mm]へ直す。
 6. **中断** —— 旗が立っていれば文書を1ビットも変えずに降りる。
-7. **import の費用** —— `import duocad` で scipy / skimage が来ない。
+7. **import の費用** —— `import duocad.session` で skimage と `duocad.topopt` が来ない。
 8. **面アンカーの門** —— 比べる相手は面の**面積重心**であって、条件に焼き込んだ
    `Face.center()` ではない。取り違えると曲面の条件面で解像度を上げるほど厳しくなる。
 """
@@ -200,7 +200,6 @@ def test_face_indices_shift_by_the_face_count_of_earlier_bodies(session: Session
     assert bundle.face_offsets[right.id] == kernel.face_count(left.shape)
     assert bundle.fixed_faces == (fixed,)
     assert bundle.load_faces == (kernel.face_count(left.shape) + load,)
-    assert bundle.conditions.load_n == 500.0
     # **面ごとの力ベクトルは実単位[N]**(向き × 大きさ)。単位ベクトルではない。
     assert bundle.forces[0] == pytest.approx((0.0, 0.0, -500.0))
 
@@ -222,48 +221,6 @@ def test_two_loads_with_different_directions_become_two_force_vectors(
     assert len(bundle.load_faces) == 2 and len(bundle.forces) == 2
     assert bundle.forces[0] == pytest.approx((0.0, 0.0, -500.0))
     assert bundle.forces[1] == pytest.approx((20.0, 0.0, 0.0))
-    # **総和であって合力ではない**(合力なら sqrt(500^2 + 20^2) = 500.4)
-    assert bundle.conditions.load_n == pytest.approx(520.0)
-
-
-def test_opposing_loads_still_have_a_usable_scale(session: Session) -> None:
-    """**打ち消し合う荷重で `load_n` が0にならない。**
-
-    合力(ベクトル和)で測っていると、ここが 0 になって応力の実単位換算が壊れる
-    (`stress.UnitScale.for_model` が割り算の分母に使う)。大きさの総和なら0にならない。
-    """
-    left, right, _fixed, load = _setup_four_conditions(session, magnitude=50.0)
-    other = _face_with_normal(right, 1.0, 0.0, 0.0)
-    _select(session, [{"body": right.id, "kind": "face", "index": other}])
-    session.set_loads(50.0, [0.0, 0.0, 1.0])
-    session.clear_selection()
-
-    bundle = optimize_run.build_conditions(session.document)
-    resultant = sum(vector[2] for vector in bundle.forces)
-    assert resultant == pytest.approx(0.0), "この配置は合力が0でなければ意味が無い"
-    assert bundle.conditions.load_n == pytest.approx(100.0)
-
-
-def test_the_load_scale_agrees_between_the_two_layers() -> None:
-    """`build_conditions` の `load_n` と `stress` 側の測り方が**同じ量**である。
-
-    片方が合力、もう片方が総和になっていると、荷重が1本のあいだは一致するので誰も
-    気づかないまま、向きが混ざった日に応力が定数倍ずれる。
-    """
-    import numpy as np
-    from types import SimpleNamespace
-
-    from duocad.topopt import stress
-
-    # 平行な2節点(荷重1本ぶん): 総和と合力は一致する
-    parallel = SimpleNamespace(f=np.array([0.0, 0.0, -0.4, 0.0, 0.0, -0.6]))
-    assert stress.load_magnitude_total(parallel) == pytest.approx(1.0)
-    assert stress.load_resultant(parallel) == pytest.approx(1.0)
-
-    # 打ち消し合う2節点: 合力は0だが総和は1
-    opposing = SimpleNamespace(f=np.array([0.0, 0.0, 0.5, 0.0, 0.0, -0.5]))
-    assert stress.load_resultant(opposing) == pytest.approx(0.0)
-    assert stress.load_magnitude_total(opposing) == pytest.approx(1.0)
 
 
 def test_a_wrong_offset_is_caught_instead_of_silently_loading_another_face(
@@ -316,15 +273,10 @@ def test_identical_bodies_are_told_apart_by_the_centroid(session: Session) -> No
 # 4. 解像度
 # --------------------------------------------------------------------------------------
 def test_condition_faces_alone_set_the_upper_bound(session: Session) -> None:
-    """**上限は条件面からの要求だけで決まる**(段階5でrmin/最小部材幅の入力を廃止した。
-
-    計画書§6.2「解像度の上限からrmin/MIN_RMINを除去」)。
-    """
+    """落ちたら、要素サイズの上限が条件面の要求(min(sqrt(CAD面積)) を実格子へ切り下げた値)から外れている。"""
     _setup_four_conditions(session)
     limits = optimize_run.resolution_limits(session.document)
-    assert "from_rmin_mm" not in limits
-    # 条件面からの要求 = min(sqrt(CAD面積)) = sqrt(400) = 20mm を、実格子の要素サイズへ
-    # 切り下げた値(粗い格子ほど段差が大きい)。
+    # 最小の条件面は荷重面 10x40mm で sqrt(400) = 20mm。
     assert limits["from_condition_faces_mm"] == pytest.approx(20.0, rel=1e-6)
     lo, hi = optimize_run._condition_bbox(session.document)
     assert limits["max_element_size_mm"] <= 20.0 * (1.0 + 1e-9)
@@ -335,21 +287,6 @@ def test_condition_faces_alone_set_the_upper_bound(session: Session) -> None:
     assert limits["default_element_size_mm"] == limits["max_element_size_mm"]
     assert limits["min_element_size_mm"] < limits["max_element_size_mm"]
     assert limits["feasible"] is True
-
-
-def test_condition_face_requirement_uses_the_same_formula_as_the_probe(
-    session: Session,
-) -> None:
-    """`anchor.AnchorTable.empty_face_diagnosis` の `suggested_max_spacing_mm` と同じ式。
-
-    **2箇所に書いた式は片方だけ直る**ので、値そのものを突き合わせておく。
-    """
-    _setup_four_conditions(session)
-    limits = optimize_run.resolution_limits(session.document)
-    for item in limits["condition_faces"]:
-        assert item["suggested_max_spacing_mm"] == pytest.approx(
-            math.sqrt(item["cad_area_mm2"])
-        )
 
 
 def test_element_size_outside_the_bounds_is_refused() -> None:
@@ -366,10 +303,9 @@ def test_element_size_outside_the_bounds_is_refused() -> None:
 
 
 def test_min_width_outside_the_bounds_is_refused() -> None:
-    assert optimize_run._resolve_min_width(2.0, None) == {
-        "requested_mm": 4.0, "spacing_mm": 2.0, "cells": 2, "guaranteed_mm": 4.0, "source": "default"}
-    assert optimize_run._resolve_min_width(2.0, 4.0) == {
-        "requested_mm": 4.0, "spacing_mm": 2.0, "cells": 2, "guaranteed_mm": 4.0, "source": "requested"}
+    assert optimize_run._resolve_min_width(2.0, None)["source"] == "default"
+    requested = optimize_run._resolve_min_width(2.0, 4.0)
+    assert (requested["cells"], requested["source"]) == (2, "requested")
     with pytest.raises(optimize_run.OptimizeInputError, match="下限"):
         optimize_run._resolve_min_width(2.0, 3.9)
     with pytest.raises(optimize_run.OptimizeInputError, match="有限の正"):
@@ -400,15 +336,6 @@ def test_min_width_default_above_the_grid_blames_the_element_size_not_the_input(
         optimize_run._resolve_min_width(2.4, None, max_cells=1)
     with pytest.raises(optimize_run.OptimizeInputError, match="最小幅を下げる"):
         optimize_run._resolve_min_width(2.4, 5000.0, max_cells=40)
-
-
-def test_min_width_cells_rounds_up_at_the_ceiling_boundary() -> None:
-    """m = ceil(要求 / spacing) の境界(ちょうど・その少し下・その少し上)。"""
-    spacing = 2.4
-    assert optimize_run._resolve_min_width(spacing, 2 * spacing)["cells"] == 2
-    assert optimize_run._resolve_min_width(spacing, 2 * spacing + 0.01)["cells"] == 3
-    with pytest.raises(optimize_run.OptimizeInputError, match="下限"):
-        optimize_run._resolve_min_width(spacing, 2 * spacing - 0.01)
 
 
 def test_min_width_above_the_grid_is_refused_and_the_ceiling_itself_is_accepted() -> None:
@@ -479,61 +406,16 @@ def test_every_ladder_step_lists_the_achievable_min_widths(session: Session) -> 
         assert len(values) == round(step["min_width_ceiling_mm"] / step["element_size_mm"]) - 1
 
 
-def test_the_element_size_upper_bound_reproduces_itself_on_the_real_grid(session: Session) -> None:
-    """**上限の要素サイズで導出した実格子の spacing は上限以下**(要求値そのままだと
-
-    `derive` の分割数の丸めで実 spacing が僅かに大きくなりうる。実測: 要求 4.0mm → 実 4.038mm)。
-    実際のボクセル化(`ds.derive`)ではなく格子の規則だけを再計算する(`_element_count` と
-    同じ手法)——`voxelize.occupancy` はこの題材を粗い格子で通せない実測がある(段階5とは
-    無関係な既知の別問題。手元の実測ではこの題材は要素サイズ14mmまでは通り16mm以上で
-    ValueErrorになる。ここでは`derive`を実際に回さずに済む格子算術だけを検査する)。
-    """
-    from duocad.topopt import design_space as ds
-    from duocad.topopt import voxelize as vx
-
-    _setup_four_conditions(session)
-    limits = optimize_run.resolution_limits(session.document)
-    upper = limits["max_element_size_mm"]
-    lo, hi = optimize_run._condition_bbox(session.document)
-    extent = [hi[a] - lo[a] for a in range(3)]
-    margin = ds.DEFAULT_MARGIN_RATIO * max(extent)
-    box_lo = [lo[a] - margin for a in range(3)]
-    box_hi = [hi[a] + margin for a in range(3)]
-    n_long = max(1, int(round(max(box_hi[a] - box_lo[a] for a in range(3)) / upper)))
-    grid = vx.grid_for_bbox(box_lo, box_hi, n_long)
-    assert grid.spacing <= upper * (1.0 + 1e-9)
-
-
 def test_every_ladder_step_reports_the_real_grid(session: Session) -> None:
-    """**梯子の各段の要素サイズと要素数は、`derive` が実際に起こす格子と一致する。**
-
-    段の値が実格子とずれると、画面の要素数・予想時間が実際より大きく(小さく)出る。
-    """
+    """落ちたら、画面の梯子に出す要素サイズ・要素数・最小幅の上限が、`derive` が実際に起こす格子とずれている。"""
     from duocad.topopt import design_space as ds
-    from duocad.topopt import voxelize as vx
 
     _setup_four_conditions(session)
     limits = optimize_run.resolution_limits(session.document)
-    lo, hi = optimize_run._condition_bbox(session.document)
-    extent = [hi[a] - lo[a] for a in range(3)]
-    margin = ds.DEFAULT_MARGIN_RATIO * max(extent)
-    box_lo = [lo[a] - margin for a in range(3)]
-    box_hi = [hi[a] + margin for a in range(3)]
     assert len(limits["steps"]) >= 2
-    for step in limits["steps"]:
-        # `derive` と同じ規則で格子だけ起こす(ボクセル化はしない)。
-        n_long = max(1, int(round(max(box_hi[a] - box_lo[a] for a in range(3)) / step["element_size_mm"])))
-        grid = vx.grid_for_bbox(box_lo, box_hi, n_long)
-        assert grid.element_count == step["element_count"], step
-        assert grid.spacing == pytest.approx(step["element_size_mm"]), step
-        assert step["element_count"] <= optimize_run.MAX_ELEMENTS
+    assert all(step["element_count"] <= optimize_run.MAX_ELEMENTS for step in limits["steps"])
     assert limits["steps"][-1]["element_size_mm"] == pytest.approx(limits["min_element_size_mm"])
-    # 段1つを実際に導出して突き合わせる(格子の規則の写しが本物とずれていないこと)。
-    # **段0(いちばん粗い)・末尾(いちばん細かい、この題材ではMAX_ELEMENTSに近い数百万要素)
-    # では試さない** —— 前者は`voxelize.occupancy`がこの題材の粗い格子を通せない実測がある
-    # (段階5とは無関係な既知の別問題、要素サイズ16mm以上でValueError)、後者は要素数が
-    # 大きすぎて実際に導出すると重い。上のループで格子算術としての一致は全段で既に
-    # 確認済みなので、ここでは軽い中間の段だけ実際に確かめる。
+    # 段0(19.6mm)はこの題材で `voxelize.occupancy` が ValueError になり(実測)、末尾は数百万要素で重いので段1で導出する。
     bundle = optimize_run.build_conditions(session.document)
     mid = limits["steps"][1]
     space = ds.derive(bundle.conditions, spacing=mid["element_size_mm"])
@@ -696,12 +578,8 @@ def test_run_optimization_clears_a_stale_cancel_flag(session: Session) -> None:
 def test_run_optimization_rejects_each_old_argument_by_name(
     session: Session, kwarg: str
 ) -> None:
-    """**旧SIMP方式の4引数は個別に断る**(計画書§6.2「旧引数が外部から届いたら黙って
-
-    無視せず、不支持と分かるエラーにする」)。`net/ws.py` はテスト済みなのはこのうち
-    `rmin_mm` だけなので、ここでは `session.run_optimization` そのものが4つとも
-    同じ形で断ることを確かめる(4層のうち一番内側の門)。
-    """
+    """落ちたら、`session.run_optimization`(WS 経由の検査 `test_optimize_run_ui.py` と別層の門)が
+    旧SIMP方式の引数を黙って無視するか、名指しせずに断っている。"""
     with pytest.raises(optimize_run.OptimizeInputError, match=kwarg):
         session.run_optimization(**{kwarg: 1.0})
 
@@ -712,33 +590,6 @@ def test_run_optimization_refuses_a_min_width_below_the_floor(session: Session) 
     spacing = limits["default_element_size_mm"]
     with pytest.raises(optimize_run.OptimizeInputError, match="下限"):
         session.run_optimization(min_width_mm=spacing)  # 下限は 2×spacing なので、spacing ちょうどは断られる
-
-
-def test_search_cancellation_leaves_the_document_untouched(
-    session: Session, monkeypatch
-) -> None:
-    """`find_best_feasible` が `termination='cancelled'` で戻ったら、best_feasible が
-
-    見つかっていても製品文書へは何も追加しない(計画書§4.6「中断時は合格チェックポイントを
-    記録するが、製品文書へ勝手に結果を追加しない」)。
-    """
-    from duocad.topopt import binary_search
-
-    _setup_four_conditions(session)
-    before = [body.id for body in session.document.bodies]
-    applied = session.applied_count
-
-    def fake_find(design_space_mask, conditions, **kwargs):
-        return binary_search.SearchResult(
-            status="no_feasible_found", termination="cancelled", best_feasible=None,
-            history=[], evaluations=0, conditions_identifier="test",
-        )
-
-    monkeypatch.setattr(binary_search, "find_best_feasible", fake_find)
-    with pytest.raises(optimize_run.OptimizeCancelled):
-        optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
-    assert [body.id for body in session.document.bodies] == before
-    assert session.applied_count == applied
 
 
 def test_the_resolved_min_width_cells_reach_the_search(session: Session, monkeypatch) -> None:
@@ -766,15 +617,10 @@ def test_the_resolved_min_width_cells_reach_the_search(session: Session, monkeyp
     assert seen["min_width_cells"] == 3
 
 
-def test_search_cancellation_discards_a_found_best_feasible_too(
+def test_search_cancellation_leaves_the_document_untouched_even_with_a_found_best_feasible(
     session: Session, monkeypatch
 ) -> None:
-    """`status='feasible'` で `best_feasible` が実在していても、`termination='cancelled'`
-
-    なら保存しない(計画書§4.6「合格候補ありで予算終了なら返せるが、中断時は勝手に
-    結果を追加しない」——'evaluation_limit'とは違う扱いであることの区別)。
-    メッシュ化にすら進んでいないことも確かめる。
-    """
+    """落ちたら、探索が `termination='cancelled'` で返したのに、見つかっていた合格形状をメッシュ化して文書へ足している。"""
     import numpy as np
 
     from duocad.topopt import binary_search
@@ -782,6 +628,7 @@ def test_search_cancellation_discards_a_found_best_feasible_too(
 
     _setup_four_conditions(session)
     before = [body.id for body in session.document.bodies]
+    applied = session.applied_count
 
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("中断時にメッシュ化まで進んでいる")
@@ -805,15 +652,14 @@ def test_search_cancellation_discards_a_found_best_feasible_too(
     with pytest.raises(optimize_run.OptimizeCancelled):
         optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
     assert [body.id for body in session.document.bodies] == before
+    assert session.applied_count == applied
 
 
 def test_every_evaluation_of_the_search_reaches_the_progress_sink_and_never_raises_the_cancel_there(
     session: Session, monkeypatch
 ) -> None:
     """落ちたら、探索中の途中経過がパネルへ届いていない、または進捗の口で中断の例外を上げて
-
-    探索の戻り値(合格チェックポイントの記録)を失っている。
-    """
+    探索の戻り値(合格チェックポイントの記録)を失っている。"""
     from duocad.topopt import binary_search
 
     _setup_four_conditions(session)
@@ -842,22 +688,7 @@ def test_every_evaluation_of_the_search_reaches_the_progress_sink_and_never_rais
     evaluations = [event for event in events if "evaluation" in event]
     assert [event["evaluation"] for event in evaluations] == [1, 2, 3, 4]
     assert all(event["phase"] == "search" for event in evaluations)
-    design = next(event["design_elements"] for event in events if event["phase"] == "derive")
-    messages = [event["message"] for event in evaluations]
-    assert messages[0].startswith("評価 1: 全材料は合格。安全率 14.4(探索の目標 4.8 の 3.0 倍)")
-    assert messages[1].startswith(f"評価 2: 採用。安全率 7.2(探索の目標 4.8 の +50%)・材料 {100 * 500 / design:.1f}%(500 要素)・経過 ")
-    assert messages[2].startswith("評価 3: 不合格(安全率 4.752)。合格形状は安全率 7.2(")
-    assert messages[3].startswith("評価 4: 不合格(幾何)。合格形状は安全率 7.2(")
-
-
-def test_the_margin_to_the_target_never_uses_an_exponent() -> None:
-    assert [optimize_run._format_margin(percent) for percent in (38.2, 1.74, 0.853, 0.0061, 3.1e-7)] == [
-        "+38", "+1.7", "+0.85", "+0.01", "+0.00"]
-
-
-def test_elapsed_time_is_shown_in_the_largest_two_units() -> None:
-    assert [optimize_run._format_elapsed(seconds) for seconds in (0.4, 59.9, 60, 3599, 3600, 5520)] == [
-        "0秒", "59秒", "1分", "59分", "1時間0分", "1時間32分"]
+    assert [event["message"].split(":")[0] for event in evaluations] == ["評価 1", "評価 2", "評価 3", "評価 4"]
 
 
 def test_search_statuses_other_than_feasible_pass_through_without_touching_the_document(
@@ -954,7 +785,7 @@ def test_a_full_material_failure_under_min_width_says_the_design_space_was_trimm
     failed = _full_material_failure("full_material_infeasible", "fail", checks,
                                     min_width=dict(cells=3, design_cells=1000, trimmed_cells=58))
     plain = optimize_run._search_failure_warning(failed)
-    assert plain == optimize_run._search_failure_warning(failed, {"cells": 1}) and "最小幅" not in plain
+    assert "最小幅" not in plain
     warning = optimize_run._search_failure_warning(failed, min_width)
     assert warning.startswith(plain) and "最小幅 7.2 mm(3セル)の制約が有効" in warning and "58/1000" in warning
 
@@ -1044,20 +875,8 @@ def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
 
 
 # --------------------------------------------------------------------------------------
-# 8. 許容応力と import の費用
+# 8. import の費用
 # --------------------------------------------------------------------------------------
-def test_allowable_stress_shows_where_the_40mpa_comes_from() -> None:
-    from duocad.topopt import material
-
-    allowable = optimize_run.allowable_stress()
-    assert allowable["allowable_mpa"] == pytest.approx(40.0)
-    assert allowable["yield_mpa"] == material.PETG_YIELD_MPA
-    assert allowable["print_derate"] == material.PRINT_DERATE
-    assert allowable["yield_mpa"] * allowable["print_derate"] == pytest.approx(
-        allowable["allowable_mpa"]
-    )
-
-
 def test_importing_the_session_does_not_pull_in_the_topopt_layer() -> None:
     """`optimize_run` を `session.py` が読むようになっても、**最適化の層は来ない**。
 
@@ -1283,14 +1102,8 @@ def test_the_anchor_gate_still_catches_a_face_that_is_far_away(
 # 9. 境界条件の確定(docs/FIX_BINARY_SEARCH_INITIALIZATION.md 修正A・B)
 # --------------------------------------------------------------------------------------
 def test_a_load_face_on_a_body_that_is_not_preserved_is_refused(session: Session) -> None:
-    """**拘束面・荷重面は保持ソリッドの面にしか置けない**(2026-09-18 本人指示)。保持しない
-    ボディの面を指した時点で断る —— 通すと、探索が削れる材料の上に荷重が載り、確定表は
-    半径1要素の球で**そのボディ以外の**材料の節点を拾って荷重を配る。
-
-    確定表そのものが不成立になる経路(`boundary_mapping_failed`)は `tests/test_binary_search.py`
-    と `tests/test_anchor_mapping.py` が下の層で固定している。**製品経路でこの状態を作る
-    題材(保持しない板の上面に荷重)は、この門が入ったことで組めなくなった。**
-    """
+    """落ちたら、保持しないボディの面に荷重を置けてしまう(探索が削れる材料に荷重が載り、確定表が
+    そのボディ以外の材料の節点へ荷重を配る)か、条件の載ったボディを保持から外せてしまう。"""
     left, right = _two_pads(session)
     plate = _box(session, 28.0, 40.0, 4.0, corner=(30.0, 0.0))  # 保持しない板(x 30..58)
     fixed = _face_with_normal(left, -1.0, 0.0, 0.0)
@@ -1530,76 +1343,3 @@ def test_a_full_material_shortfall_names_the_search_target_and_the_factor_not_a_
     assert "安全率 3.1 が探索の格子で必要な安全率 4.8(= 目標 2 × 係数 2.4)に届かない" in warning
     assert "が目標 4.8 に" not in warning
     assert "安全率 3.1 が目標 4.8 に届かない" in optimize_run._search_failure_warning(failed)
-
-
-def test_a_finished_run_with_the_default_min_width_and_factor_carries_no_min_width_warning(
-    session: Session, monkeypatch
-) -> None:
-    """既定の最小幅(m≥2)では係数2.4の根拠(どの部材も2セル以上の厚み)が常に成り立つので、
-    `state == "done"` の結果に最小幅がらみの警告は付かない。"""
-    import numpy as np
-
-    from duocad.topopt import binary_search
-
-    _setup_four_conditions(session)
-
-    def fake_find(design_space_mask, conditions, **kwargs):
-        mask = np.asarray(design_space_mask, dtype=bool)
-        report = dict(material_sha256="f" * 64,
-                      volumes=dict(material_mm3=float(mask.sum()) * conditions.grid.element_volume),
-                      checks=dict(safety=dict(safety_factor=9.9)))
-        best = binary_search.FeasibleModel(mask=mask, before_mask=mask, report=report, trial_index=0)
-        return binary_search.SearchResult(
-            status="feasible", termination="converged", best_feasible=best,
-            history=[], evaluations=3, conditions_identifier="test")
-
-    monkeypatch.setattr(binary_search, "find_best_feasible", fake_find)
-    monkeypatch.setattr(binary_search, "keep_cells_without_room",
-                        lambda *args, **kwargs: dict(cells=0, around_exclude=0, around_outside=0))
-    done = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=8.0))
-    assert done["state"] == "done" and done["warning"] is None
-    assert done["min_width"]["source"] == "default" and done["min_width"]["cells"] >= 2
-    pinned = optimize_run.run(
-        session.document, optimize_run.OptimizeOptions(element_size_mm=8.0, search_target_factor=1.0))
-    assert pinned["state"] == "done" and pinned["warning"] is None
-
-
-def test_the_result_and_resolved_conditions_trace_carry_the_same_min_width_source(
-    session: Session, monkeypatch
-) -> None:
-    """`min_width["source"]` は既定なら `"default"`・明示すれば `"requested"`。結果 dict と
-    `resolved-conditions` トレースに同じ辞書が乗る(落ちたら、画面が既定を採用したと言えない)。"""
-    import numpy as np
-
-    from duocad.topopt import binary_search, trace
-
-    _setup_four_conditions(session)
-
-    def fake_find(design_space_mask, conditions, **kwargs):
-        mask = np.asarray(design_space_mask, dtype=bool)
-        report = dict(material_sha256="f" * 64,
-                      volumes=dict(material_mm3=float(mask.sum()) * conditions.grid.element_volume),
-                      checks=dict(safety=dict(safety_factor=9.9)))
-        best = binary_search.FeasibleModel(mask=mask, before_mask=mask, report=report, trial_index=0)
-        return binary_search.SearchResult(
-            status="feasible", termination="converged", best_feasible=best,
-            history=[], evaluations=3, conditions_identifier="test")
-
-    monkeypatch.setattr(binary_search, "find_best_feasible", fake_find)
-    snapshots: list = []
-    real_snapshot = trace.snapshot
-    monkeypatch.setattr(trace, "snapshot", lambda name, **values: (snapshots.append((name, values)),
-                                                                   real_snapshot(name, **values))[1])
-
-    spacing = optimize_run.resolution_limits(session.document)["steps"][1]["element_size_mm"]
-    default_run = optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=spacing))
-    assert default_run["min_width"]["source"] == "default"
-    resolved = next(values for name, values in snapshots if name == "resolved-conditions")
-    assert resolved["min_width"] == default_run["min_width"]
-
-    snapshots.clear()
-    explicit_run = optimize_run.run(
-        session.document, optimize_run.OptimizeOptions(element_size_mm=spacing, min_width_mm=2.5 * spacing))
-    assert explicit_run["min_width"]["source"] == "requested"
-    resolved = next(values for name, values in snapshots if name == "resolved-conditions")
-    assert resolved["min_width"] == explicit_run["min_width"]

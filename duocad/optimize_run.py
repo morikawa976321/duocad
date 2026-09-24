@@ -978,8 +978,7 @@ def _run(
     from .topopt import binary_search
 
     keep_room = binary_search.keep_cells_without_room(space.mask, space.keep, min_width["cells"], space.obstacle)
-    if min_width["cells"] > 1:
-        trace.snapshot('min-width-keep-without-room', **keep_room)
+    trace.snapshot('min-width-keep-without-room', **keep_room)
     keep_room_warning = _keep_without_room_warning(min_width, keep_room)
 
     common = {
@@ -1490,7 +1489,7 @@ def _keep_without_room_warning(min_width: dict, keep_room: dict) -> str:
 
 
 def _search_failure_warning(search_result: Any, min_width: Optional[dict] = None, factor: float = 1.0) -> str:
-    """`SearchResult.status` が `'feasible'` 以外のときの一言。最小幅の制約が有効なら、原因の候補を末尾に添える。
+    """`SearchResult.status` が `'feasible'` 以外のときの一言。最小幅で設計空間を絞ったなら、原因の候補を末尾に添える。
     `factor` は探索の目標に掛けた係数で、安全率の不足を言うときに実際の目標との関係を添える。"""
     message = _search_failure_message(search_result, factor)
     note = _min_width_failure_note(search_result, min_width)
@@ -1498,9 +1497,9 @@ def _search_failure_warning(search_result: Any, min_width: Optional[dict] = None
 
 
 def _min_width_failure_note(search_result: Any, min_width: Optional[dict]) -> str:
-    """最小幅が有効(`cells`>1)で、設計空間が絞られたときだけ返す: 入口検査も全材料の評価も、絞った後の設計空間に
+    """最小幅で設計空間が絞られたときだけ返す: 入口検査も全材料の評価も、絞った後の設計空間に
     対する結果であることを添える。合格形状から始まる段階4は `feasible` で返るので、ここへは来ない。"""
-    if not min_width or int(min_width.get("cells", 1)) <= 1:
+    if not min_width:
         return ""
     if search_result.status == 'resolution_insufficient':
         return ""

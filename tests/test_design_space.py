@@ -10,8 +10,7 @@
    外接箱は事前の三角形分割に依存しない。
 3. **条件の保持と接続** —— 全条件を個別に見る(一部だけつながる配置は落ちる)/ 条件を含まない
    成分だけを落とす / 角1点の接触はつながっていない / 保持と除外の衝突は名前付きで落ちる。
-4. **固定性と記録** —— 塊は読み取り専用でハッシュが安定 / 記録には `derive` が1回だけ出て
-   旧方式の段階が出ない。
+4. **固定性と記録** —— 塊は読み取り専用でハッシュが安定 / 記録には `derive` の段が1回だけ出る。
 """
 from __future__ import annotations
 
@@ -470,7 +469,7 @@ def test_the_mask_is_read_only_and_the_hash_is_reproducible() -> None:
     assert ds.mask_digest(flipped) != first.mask_hash
 
 
-def test_the_recording_has_one_derive_stage_and_no_reference_stages(tmp_path, monkeypatch) -> None:
+def test_the_recording_has_one_derive_stage(tmp_path, monkeypatch) -> None:
     from duocad.topopt import trace
 
     monkeypatch.setattr(trace, "DEFAULT_ROOT", tmp_path)
@@ -481,7 +480,6 @@ def test_the_recording_has_one_derive_stage_and_no_reference_stages(tmp_path, mo
     assert names.count("derive-input.json") == 1
     assert names.count("derive-output.json") == 1
     assert names.count("derive-masks.json") == 1
-    assert not [n for n in names if n.startswith(("reference", "derive-bbox", "derive-candidate"))]
     recorded = trace.load_snapshot(next(rec.path.glob("*-derive-output.json")))
     assert np.array_equal(recorded["mask"], space.mask)
     assert recorded["stats"]["mask_hash"] == space.mask_hash

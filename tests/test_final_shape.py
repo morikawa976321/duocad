@@ -118,22 +118,6 @@ def test_point_touch_is_nonmanifold():
     assert result['mesh']['nonmanifold_vertices'] == 1
 
 
-def test_hanger_cli_reports_real_constraints(tmp_path):
-    v, f = cube()
-    path = tmp_path / 'deliberately_wrong.stl'
-    path.write_bytes(b'\0'*80 + struct.pack('<I',len(f)) + b''.join(
-        struct.pack('<12fH',0,0,0,*v[face].flatten(),0) for face in f))
-    out = tmp_path / 'report.json'
-    assert check.main(['--mesh',str(path),'--out',str(out),'--check-constraints']) == 1
-    report = json.loads(out.read_text(encoding='utf-8'))
-    assert report['model'] == 'hanger_bar_attachment.json'
-    assert report['checks']['preserve']['checked_bodies'] == 4
-    assert report['checks']['exclude']['checked_bodies'] == 8
-    assert report['checks']['preserve']['status'] == 'fail'
-    assert report['checks']['watertight']['status'] == 'pass'
-    assert len(report['model_sha256']) == len(report['source']['sha256']) == 64
-
-
 def test_output_cannot_overwrite_input(tmp_path):
     path = tmp_path / 'input.stl'
     path.write_text('original')

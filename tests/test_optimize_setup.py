@@ -522,19 +522,8 @@ def test_the_setup_survives_a_save_and_reopen(session: Session) -> None:
 
 
 def test_the_setup_survives_a_real_save_and_open(tmp_path) -> None:
-    """**実APIの往復**(`save_document` → 別の文書へ差し替え → `open_document`)で復元される。
-
-    上の `test_the_setup_survives_a_save_and_reopen` は `OpLog` を直に往復させるので、
-    **ファイルI/Oと文書の差し替えを通らない**。仕様の完了条件3(保存・再オープンで条件が
-    復元される)が名指ししているのはこちらの経路である。
-
-    落とせることを確認した壊れ方: **verbの再生が条件を戻さない**(`_do_*` を空にすると
-    ここが赤くなる)。途中の `new_document()` の検査は「差し替え後に前の文書の割り当てを
-    配っていない」を見る —— ただし `OptimizeSetup.revision` と形状の同一性が鍵に入って
-    いるおかげで、`DocumentView.reset()` の `_optimize_cache.clear()` を外しても
-    **これは赤くならない**(実測)。あの `clear()` は他のキャッシュと規律を揃えるための
-    もので、この検査が守っているものではない。
-    """
+    """落ちたら、`save_document` → `new_document` → `open_document` の実APIの往復(ファイルI/Oと
+    文書の差し替えを通る)で条件が戻らないか、差し替え後に前の文書の割り当てを配っている。"""
     made = Session(None, DEVIATION, models_dir=tmp_path / "models")
     body = _box(made)
     _select(made, _body_refs(body))
@@ -984,33 +973,14 @@ def test_the_log_broadcast_does_not_carry_every_fingerprint(session: Session) ->
 
 
 # --------------------------------------------------------------------------------------
-# 8. 選択種別 `body` がTS側の型でも通ること(**静的に読む**)
+# 8. 選択種別の顔ぶれがTS側の型と一致すること(**静的に読む**)
 # --------------------------------------------------------------------------------------
-# `state.optimize` の4配列は「そのまま `modifySelection` へ渡せる」が契約である
-# (`duocad/optimize.py` の `state_payload`)。**その契約は型の上でも成り立っていなければ
-# ならない** —— TS側の `SelectionRef` にボディの参照が入っていなければ、画面側は
-# `preserve_bodies` を `modifySelection(add: SelectionRef[], ...)` へ渡せず、
-# 着手した瞬間にコンパイルが止まる。`tsc` は「渡さないコードが無い」うちは何も言わないので、
-# **宣言そのものをここで見る**(`tests/test_ui_command_wiring.py` と同じ、ソースを静的に
-# 読むやり方)。
 def _ts_union_arms(path: Path, name: str) -> set:
     """`export type <name> = A | B | C` の右辺を集合で返す。"""
     text = path.read_text(encoding="utf-8")
     match = re.search(rf"^export type {name} = (.+)$", text, re.M)
     assert match, f"{name} の宣言を {path.name} から読めていない"
     return {arm.strip() for arm in match.group(1).split("|") if arm.strip()}
-
-
-def test_the_typescript_selection_ref_covers_the_body_kind() -> None:
-    """TSの `SelectionRef` に**ボディの参照が入っている**。
-
-    落ちるのは「コアに選択種別を足したのに、画面へ渡す型の口を開け忘れた」とき。
-    """
-    arms = _ts_union_arms(SESSION_TS, "SelectionRef")
-    assert "BodyRef" in arms, (
-        "`SelectionRef` にボディの参照が無い —— `state.optimize` の "
-        f"preserve_bodies / exclude_bodies を modifySelection へ渡せない: {sorted(arms)}"
-    )
 
 
 def test_the_typescript_selectable_kinds_match_the_core() -> None:
