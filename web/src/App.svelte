@@ -1079,8 +1079,8 @@
     const skippedCount = payload.skipped_hidden?.length ?? 0
     const skipped = skippedCount > 0 ? ` ※非表示の${skippedCount}個は除外` : ''
     note(`${payload.action}: ${payload.path}(${size}${extra}${exported}${skipped})`)
-    // **保存/複製/削除の直後に一覧を取り直す**。上書きで更新日時・サイズ・操作数が変わり、
-    // 新規保存・複製では一覧に新しい行が要り、削除では行が消える —— 応答をここで待たず、
+    // **保存/改名/複製/削除の直後に一覧を取り直す**。上書きで更新日時・サイズ・操作数が変わり、
+    // 改名では行の名前が、複製では行そのものが増え、削除では行が消える —— 応答をここで待たず、
     // 次のWS往復に任せる。
     if (['save', 'rename', 'copy', 'delete'].includes(payload.action)) refreshDocuments()
   }
