@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import pytest
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad import kernel, predicates, query, selection
 from duocad.document import Body, Document
@@ -20,22 +19,11 @@ from duocad.region import region_ref
 from duocad.sketch import add_circle, add_rectangle, base_plane, sketch_create
 from duocad.selection import set_visible
 from duocad.verbs import extrude
+from document_support import BOX_X, BOX_Y, BOX_Z, box_shape as _box_shape
 
-BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
 
 #: 長さの比較に使う許容(mm)。STEP由来の形状も同じ述語で扱うので厳密比較にしない。
 LENGTH_TOLERANCE = 1e-6
-
-
-def _box_shape(dx: float = BOX_X, dy: float = BOX_Y, dz: float = BOX_Z):
-    return BRepPrimAPI_MakeBox(dx, dy, dz).Shape()
-
-
-@pytest.fixture()
-def doc() -> Document:
-    document = Document()
-    document.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
-    return document
 
 
 def _top_face_index(shape) -> int:

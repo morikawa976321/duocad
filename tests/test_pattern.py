@@ -6,13 +6,14 @@ import math
 
 import pytest
 
-from duocad import kernel, query
+from duocad import query
 from duocad.document import Document
 from duocad.oplog import OpLog
 from duocad.parameters import parameter_of, set_parameter
 from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, add_rectangle, get_sketch, sketch_create
 from duocad.verbs import extrude, pattern_rectangular
+from document_support import drill_all, hole_axes
 
 PLATE_WIDTH = 40.0
 PLATE_HEIGHT = 30.0
@@ -29,7 +30,6 @@ SPACING_X = 10.0
 SPACING_Y = 10.0
 COLUMNS = 3
 ROWS = 2
-HOLE_DEPTH = 20.0  # 板(z=0..10)を貫く
 
 #: 体積比較の相対許容差(M1・M2と同じ)。面積の比較だけは領域検出の側なので 1e-6 のまま
 VOLUME_REL_TOL = 1.0e-9
@@ -49,20 +49,6 @@ def hole_pattern(document: Document) -> tuple:
         document, sketch_id, [circle], SPACING_X, SPACING_Y, COLUMNS, ROWS
     )
     return sketch_id, circle, pattern_id
-
-
-def drill_all(document: Document, sketch_id: str) -> None:
-    refs = [region_ref(sketch_id, region.index) for region in regions(document, sketch_id)]
-    extrude(document, refs, HOLE_DEPTH, mode="cut")
-
-
-def hole_axes(shape) -> list:
-    """全周円筒面の重心は軸上にある(穴の位置として使える理由)。"""
-    return sorted(
-        (round(face["centroid"][0], 6), round(face["centroid"][1], 6))
-        for face in kernel.tessellate(shape)["faces"]
-        if face["kind"] == "cylinder_full"
-    )
 
 
 # --------------------------------------------------------------------------------------

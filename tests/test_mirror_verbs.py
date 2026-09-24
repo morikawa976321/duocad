@@ -22,31 +22,12 @@ import pytest
 from duocad import kernel, query, sketch
 from duocad.oplog import verb_handler
 from duocad.server import Session
-
-SIDE = 20.0
-
-
-@pytest.fixture()
-def session() -> Session:
-    return Session(None, 0.2)
-
-
-def _select(session: Session, refs: list) -> None:
-    session.clear_selection()
-    session.modify_selection(refs, [])
+from document_support import corner_set as _corner_set
+from session_support import SIDE, box as _box, select as _select
 
 
 def _params(session: Session, sketch_id: str, entity_id: str) -> dict:
     return sketch.entity_params(session.document, sketch_id, entity_id)
-
-
-def _corner_set(params: dict) -> list:
-    """4隅を「順序に依らない集合」として比べられる形へ。
-
-    **`angle` と基準の角の組は一意ではない**(同じ4隅を張る取り方が複数ある)ので、
-    鏡映の検算は隅の集合だけで行う。
-    """
-    return sorted((round(u, 9), round(v, 9)) for u, v in kernel.rectangle_corners(params))
 
 
 def _mirrored_corner_set(params: dict, ax, ay, ux, uy) -> list:
@@ -56,15 +37,6 @@ def _mirrored_corner_set(params: dict, ax, ay, ux, uy) -> list:
         t = (u - ax) * ux + (v - ay) * uy
         mirrored.append((round(2.0 * (ax + t * ux) - u, 9), round(2.0 * (ay + t * uy) - v, 9)))
     return sorted(mirrored)
-
-
-def _box(session: Session):
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(SIDE, mode="join")
-    session.clear_selection()
-    return session.document.bodies[-1], sketch_id
 
 
 def _cylinder(session: Session):

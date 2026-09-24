@@ -25,12 +25,6 @@ from duocad.server import Session
 
 
 @pytest.fixture()
-def session() -> Session:
-    """STEPを読まない空のセッション(土台が無いので最初の操作からundoできる)。"""
-    return Session(None, 0.2)
-
-
-@pytest.fixture()
 def tools(session: Session) -> DocumentTools:
     return DocumentTools(session)
 

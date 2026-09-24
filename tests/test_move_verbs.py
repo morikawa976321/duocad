@@ -15,29 +15,16 @@
 """
 from __future__ import annotations
 
-import asyncio
-import json
-
 import pytest
 
 from duocad import kernel, query, selection, sketch
 from duocad.document import Body, Document
 from duocad.oplog import OpLog, verb_handler
-from duocad.server import Server, Session
+from duocad.server import Session
 from duocad.verbs import move_sketch_entities as move_sketch_entities_verb
+from session_support import SIDE, box as _box, select as _select, send_one
 
 DEVIATION = 0.2
-SIDE = 20.0
-
-
-@pytest.fixture()
-def session() -> Session:
-    return Session(None, DEVIATION)
-
-
-def _select(session: Session, refs: list) -> None:
-    session.clear_selection()
-    session.modify_selection(refs, [])
 
 
 def _line(session: Session):
@@ -48,15 +35,6 @@ def _line(session: Session):
 
 def _params(session: Session, sketch_id: str, entity_id: str) -> dict:
     return sketch.entity_params(session.document, sketch_id, entity_id)
-
-
-def _box(session: Session):
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(SIDE, mode="join")
-    session.clear_selection()
-    return session.document.bodies[-1], sketch_id
 
 
 def _center(body) -> list:
@@ -1355,31 +1333,6 @@ def test_a_degenerate_axis_is_refused() -> None:
 # 入れ替わり中心も省略できるこの2つは置けない。**個別分岐は静かに壊れる** ——
 # 表と違って導出の突き合わせが効かず、引数を1つ書き忘れても `unknown command` にすらならず、
 # 「省略した扱い」で通ってしまう。ここがその受け皿になる。
-class _FakeConnection:
-    """`Server` が使うのは `send` だけ(`test_feature_ui.py` と同じ harness)。"""
-
-    def __init__(self) -> None:
-        self.payloads: list = []
-
-
-    async def send(self, raw: str) -> None:
-        self.payloads.append(json.loads(raw))
-
-
-def _browser(session: Session, command: dict) -> dict:
-    """1コマンドをWebSocketの口へ流し、最後に届いた封筒を返す。"""
-
-    async def scenario():
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        client = _FakeConnection()
-        server.clients.add(client)
-        await server._push(client, applied=None, only=client)
-        client.payloads.clear()
-        await server._dispatch(client, json.dumps(command))
-        return client.payloads[-1]
-
-    return asyncio.run(scenario())
 
 
 def test_the_browser_rotates_a_body_around_a_picked_edge(session: Session) -> None:
@@ -1392,7 +1345,7 @@ def test_the_browser_rotates_a_body_around_a_picked_edge(session: Session) -> No
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     before = _center(body)
 
-    answer = _browser(
+    answer = send_one(
         session,
         {
             "cmd": "move_body",
@@ -1420,7 +1373,7 @@ def test_the_browser_can_move_the_axis_onto_a_picked_vertex(session: Session) ->
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     vertex = kernel.vertex_positions(body.shape)[2]
 
-    answer = _browser(
+    answer = send_one(
         session,
         {
             "cmd": "move_body",
@@ -1443,7 +1396,7 @@ def test_the_browser_still_translates_a_body_without_a_mode(session: Session) ->
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
     before = _center(body)
 
-    answer = _browser(session, {"cmd": "move_body", "dx": 5.0, "dy": 0.0, "dz": 0.0})
+    answer = send_one(session, {"cmd": "move_body", "dx": 5.0, "dy": 0.0, "dz": 0.0})
 
     assert answer["applied"]["mode"] == "translate"
     after = _center(session.document.get_body(body.id))
@@ -1459,7 +1412,7 @@ def test_the_browser_cannot_mix_the_two_modes(session: Session) -> None:
     body, _ = _box(session)
     _select(session, [{"body": body.id, "kind": "face", "index": 1}])
 
-    answer = _browser(
+    answer = send_one(
         session,
         {
             "cmd": "move_body",
@@ -1479,7 +1432,7 @@ def test_the_browser_rotates_sketch_entities_around_a_picked_point(session: Sess
     anchor = session.add_circle(sketch_id, [10.0, 0.0], 2.0)["entity_id"]
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
 
-    answer = _browser(
+    answer = send_one(
         session,
         {
             "cmd": "move_sketch_entities",
@@ -1506,7 +1459,7 @@ def test_the_browser_may_omit_the_sketch_rotation_centre(session: Session) -> No
     sketch_id, entity_id = _line(session)
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": None}])
 
-    answer = _browser(
+    answer = send_one(
         session, {"cmd": "move_sketch_entities", "mode": "rotate", "angle": 90.0}
     )
 

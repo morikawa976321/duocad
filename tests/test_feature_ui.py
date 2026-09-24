@@ -21,7 +21,6 @@ UI(領域押し出し・フィレット・面取り・反復のコマンド)そ�
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import math
 
@@ -29,87 +28,22 @@ import pytest
 
 from duocad import kernel, query
 from duocad.mcp_server import DocumentTools
-from duocad.server import Server, Session
+from duocad.server import Session
+from session_support import SIDE, box as _box, browser as _browser, select as _select
 
 DEVIATION = 0.2
-SIDE = 20.0
 
 #: §7の実測値(20mm立方体の全辺)。**この2つが逆転したら §7 の記述が古い**。
 RADIUS_THAT_FAILS = 10.0
 RADIUS_THAT_WORKS = 3.0
 
 
-@pytest.fixture()
-def session() -> Session:
-    """**STEPを読まない空の文書**(Dは手で作る側の検証なので、参照部品は要らない)。"""
-    return Session(None, DEVIATION)
-
-
-def _select(session: Session, refs: list) -> None:
-    """選択を `refs` で置き換える(人がクリックで選び直すのと同じ入口)。
-
-    **verbの対象集合はここで決まる** —— コマンドの引数には入らない。
-    """
-    session.clear_selection()
-    session.modify_selection(refs, [])
-
-
 def _edges(body, indices) -> list:
     return [{"body": body.id, "kind": "edge", "index": index} for index in indices]
 
 
-def _box(session: Session):
-    """スケッチ→長方形→領域押し出しで 20mm の立方体を1つ作り、そのBodyを返す。
-
-    **人が手でやる順序そのもの**(タスクDの検証1「手だけで板を作る」の最小形)。
-    領域を選んでから押し出すのも人の順序どおり。
-    """
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(SIDE, mode="join")
-    session.clear_selection()
-    return session.document.bodies[-1], sketch_id
-
-
-class FakeConnection:
-    """`Server` が使うのは `send` だけ(配信の出口)。"""
-
-    def __init__(self) -> None:
-        self.payloads: list = []
-
-    async def send(self, raw: str) -> None:
-        self.payloads.append(json.loads(raw))
-
-
-def _browser(session: Session, script):
-    """`script(send)` を1つのイベントループで走らせる。
-
-    **2本つなぐ** —— 1本だけだと「2本目に届かない」実装でも緑になる。`get_edges` が
-    要求した接続にだけ返ることは、2本目に何も来ないことでしか確かめられない。
-    """
-
-    async def scenario():
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        clients = [FakeConnection(), FakeConnection()]
-        for client in clients:
-            server.clients.add(client)
-            await server._push(client, applied=None, only=client)
-        for client in clients:
-            client.payloads.clear()  # 初期配信は数えない(以後に届いたものだけ見る)
-
-        async def send(command: dict) -> dict:
-            await server._dispatch(clients[0], json.dumps(command))
-            return clients[0].payloads[-1]
-
-        return await script(send), clients
-
-    return asyncio.run(scenario())
-
-
 def _fingerprint(session: Session) -> dict:
-    """文書が「変わっていないこと」を1つの値にまとめる(test_preview.py と同じ道具)。"""
+    """文書が「変わっていないこと」を1つの値にまとめる。"""
     return {
         "log": [
             (entry.seq, entry.verb, json.dumps(entry.args, sort_keys=True))

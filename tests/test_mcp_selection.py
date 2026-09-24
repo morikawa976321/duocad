@@ -25,7 +25,6 @@
 """
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
 
@@ -36,8 +35,9 @@ from duocad import kernel, predicates, query
 from duocad.document import Body
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.server import Server, Session
-
-BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
+from document_support import BOX_X, BOX_Y, BOX_Z
+from mcp_support import call, call_error
+from session_support import FakeConnection, session_with_box
 
 #: A1と同じ述語(§5の例 `edges where parallel_to Z and length > 20`)。
 #: 30×30×40 の直方体では**Zに平行で長さ40の辺がちょうど4本**一致する。
@@ -54,48 +54,14 @@ NO_MATCH = {"kind": "edge", "where": [{"op": "length_gt", "value": 1000.0}]}
 # 道具
 # --------------------------------------------------------------------------------------
 @pytest.fixture()
-def session(tmp_path: Path) -> Session:
+def session() -> Session:
     """30×30×40 の直方体を1つ持つセッション(面6・辺12・頂点8)。"""
-    made = Session(None, 0.2)
-    made.document.add_body(
-        Body(id="box", name="box", kind="solid", shape=BRepPrimAPI_MakeBox(BOX_X, BOX_Y, BOX_Z).Shape())
-    )
-    return made
+    return session_with_box()
 
 
 @pytest.fixture()
 def server(session: Session) -> McpServer:
     return McpServer(DocumentTools(session))
-
-
-def request(server: McpServer, method: str, params: dict | None = None) -> dict:
-    message: dict = {"jsonrpc": "2.0", "id": 1, "method": method}
-    if params is not None:
-        message["params"] = params
-    response = server.handle(message)
-    assert response is not None
-    return response
-
-
-def call(server: McpServer, name: str, arguments: dict | None = None) -> dict:
-    response = request(server, "tools/call", {"name": name, "arguments": arguments or {}})
-    assert "error" not in response, response
-    result = response["result"]
-    assert result["isError"] is False, result["content"][0]["text"]
-    return json.loads(result["content"][0]["text"])
-
-
-def call_error(server: McpServer, name: str, arguments: dict | None = None) -> dict:
-    response = request(server, "tools/call", {"name": name, "arguments": arguments or {}})
-    assert "error" not in response, f"実行時エラーをプロトコルエラーにしている: {response}"
-    result = response["result"]
-    assert result["isError"] is True, f"エラーになるはずが成功した: {result}"
-    text = result["content"][0]["text"]
-    try:
-        payload = json.loads(text)
-    except ValueError:
-        pytest.fail(f"失敗が機械可読でない(例外のテキストを素で返している): {text!r}")
-    return payload["error"]
 
 
 def selection_of(server: McpServer) -> dict:
@@ -609,13 +575,6 @@ def test_a_selection_change_from_mcp_reaches_the_browser(session: Session):
     イベントだけ実装して状態に載せないと、人→AIは動くのでテストが無ければ気づけない。
     """
     import asyncio
-
-    class FakeConnection:
-        def __init__(self) -> None:
-            self.payloads: list = []
-
-        async def send(self, raw: str) -> None:
-            self.payloads.append(json.loads(raw))
 
     async def scenario() -> list:
         server = Server(session)

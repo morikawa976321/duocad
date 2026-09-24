@@ -16,13 +16,12 @@
    `can_redo` を必ず返す。自然文だけを返さない。**`changed_bodies` は `Session.body_revision`
    の前後差分**で導くこと(verbごとに数え上げると、新しいverbを足すたびに数え漏れる)。
 4. **構造化された失敗** — 失敗はJSONで返す(`{"error": {"code","message","tool","exception"}}`)。
-   例外のテキストをそのまま投げない。コードは下の `ERROR_CODES` の語彙に限る
+   例外のテキストをそのまま投げない。コードは `tests/mcp_support.py` の `ERROR_CODES` の語彙に限る
    (顔ぶれは `MCP.md`「実装のメモ」が正。一致は `tests/test_doc_code_agreement.py` が見る)。
 """
 from __future__ import annotations
 
 import inspect
-import json
 from pathlib import Path
 
 import pytest
@@ -34,12 +33,14 @@ from duocad.document import Body
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.selection import set_visible
 from duocad.server import Server, Session
+from document_support import BOX_X, BOX_Y, BOX_Z
+from mcp_support import call, call_error, request
+from session_support import FakeConnection
 
 # JSON-RPC 2.0 の標準エラーコード。**実装から import しない**
 # (importすると実装が変わった瞬間にテストも追従して緑になり、契約にならない)。
 INVALID_PARAMS = -32602
 
-BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -48,18 +49,6 @@ SHAPE_VERB_TOOLS = {
     command.name
     for command in COMMANDS
     if command.mcp and command.category in ("sketch", "feature", "file")
-}
-
-#: 失敗コードの語彙。**増やすときはここを直す**(AI側は未知のコードを扱えないので、
-#: 実装が勝手に新しいコードを作れる状態にしない)。
-ERROR_CODES = {
-    "not_found",            # 存在しないBody / sketch / parameter(KeyError)
-    "invalid_argument",     # 形・型・範囲が不正(ValueError)
-    "selection_not_committed",  # 提案のまま verb を呼んだ(A1の門)
-    "selection_empty",      # 確定選択が**丸ごと空**(要求した種別以前の問題)
-    "selection_kind_mismatch",  # 空ではないが要求した種別が無い
-    "invalid_predicate",    # 述語が不正(有効なopの一覧を必ず添える)
-    "internal",             # 上記以外(黙って握りつぶさないための受け皿)
 }
 
 
@@ -73,71 +62,12 @@ def empty_session(tmp_path: Path) -> Session:
 
 
 @pytest.fixture()
-def box_session(tmp_path: Path) -> Session:
-    """30×30×40 の直方体を1つ持つセッション(面6・辺12・頂点8)。
-
-    立方体にしないのは A1 と同じ理由 —— 3辺の長さが違えば、述語やフィレットの
-    対象がたまたま一致して緑になる余地が減る。
-    """
-    made = Session(None, 0.2)
-    made.document.add_body(
-        Body(id="box", name="box", kind="solid", shape=BRepPrimAPI_MakeBox(BOX_X, BOX_Y, BOX_Z).Shape())
-    )
-    return made
-
-
-@pytest.fixture()
 def server(box_session: Session) -> McpServer:
     return McpServer(DocumentTools(box_session))
 
 
-def request(server: McpServer, method: str, params: dict | None = None) -> dict:
-    message: dict = {"jsonrpc": "2.0", "id": 1, "method": method}
-    if params is not None:
-        message["params"] = params
-    response = server.handle(message)
-    assert response is not None, f"{method} はレスポンスを返さなければならない"
-    return response
-
-
 def tool_list(server: McpServer) -> list:
     return request(server, "tools/list")["result"]["tools"]
-
-
-def call(server: McpServer, name: str, arguments: dict | None = None) -> dict:
-    """成功を期待してツールを呼び、返ってきたJSONを辞書で返す。"""
-    response = request(server, "tools/call", {"name": name, "arguments": arguments or {}})
-    assert "error" not in response, response
-    result = response["result"]
-    assert result["isError"] is False, result["content"][0]["text"]
-    return json.loads(result["content"][0]["text"])
-
-
-def call_error(server: McpServer, name: str, arguments: dict | None = None) -> dict:
-    """失敗を期待してツールを呼び、**構造化されたエラー本体**(`payload["error"]`)を返す。
-
-    ここで `json.loads` に成功すること自体が契約である —— 例外のテキストをそのまま
-    投げていれば(`"KeyError: no such body ..."`)ここで落ちる。
-
-    **未知の引数・必須の欠落・型違いにはこのヘルパを使えない** —— それらは
-    `_check_arguments` がツール本体の前に JSON-RPC のトップレベル `error`(-32602)で
-    弾くので、下の assert で落ちる。`request()` を直接呼んで `response["error"]["code"]` を見る。
-    """
-    response = request(server, "tools/call", {"name": name, "arguments": arguments or {}})
-    assert "error" not in response, f"実行時エラーをプロトコルエラーにしている: {response}"
-    result = response["result"]
-    assert result["isError"] is True, f"エラーになるはずが成功した: {result}"
-    text = result["content"][0]["text"]
-    try:
-        payload = json.loads(text)
-    except ValueError:
-        pytest.fail(f"失敗が機械可読でない(例外のテキストを素で返している): {text!r}")
-    assert "error" in payload, payload
-    error = payload["error"]
-    assert error["code"] in ERROR_CODES, f"未知のエラーコード: {error['code']!r}"
-    assert error["tool"] == name
-    assert error["message"].strip()
-    return error
 
 
 def select_refs(server: McpServer, refs: list) -> None:
@@ -1075,13 +1005,6 @@ def test_a_verb_applied_through_mcp_reaches_the_browser(box_session: Session):
     # 「配信タスクは全部あとでまとめて走る」都合で、どの配信に幾何の差分が載るかが
     # 実行順で変わる(このテストが見たいのは verb の配信であって、その順序ではない)。
     select_refs(mcp, [edge_ref(box.id, index) for index in vertical_edge_indices(box.shape)])
-
-    class FakeConnection:
-        def __init__(self) -> None:
-            self.payloads: list = []
-
-        async def send(self, raw: str) -> None:
-            self.payloads.append(json.loads(raw))
 
     async def scenario() -> list:
         server = Server(box_session)

@@ -26,12 +26,12 @@ import pytest
 
 from duocad import kernel
 from duocad.server import Session
+from session_support import SIDE, box as _box, select as _select
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SESSION_TS = REPO_ROOT / "web" / "src" / "session.ts"
 
 DEVIATION = 0.2
-SIDE = 20.0
 #: 20mm立方体の辺に対して**通る**半径(`tests/test_feature_ui.py` の実測値と同じ)。
 RADIUS_THAT_WORKS = 3.0
 
@@ -349,25 +349,8 @@ def _runner(name: str) -> Callable[[Callable[..., dict]], Callable[..., dict]]:
     return register
 
 
-def _select(session: Session, refs: list) -> None:
-    """選択を `refs` で置き換える(人がクリックで選び直すのと同じ入口)。"""
-    session.clear_selection()
-    session.modify_selection(refs, [])
-
-
 def _sketch(session: Session) -> str:
     return session.sketch_create("XY")["sketch_id"]
-
-
-def _box(session: Session):
-    """スケッチ→長方形→領域押し出しで 20mm の立方体を1つ作る
-    (`tests/test_feature_ui.py` の `_box` と同じ手順)。"""
-    sketch_id = _sketch(session)
-    session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(SIDE, mode="join")
-    session.clear_selection()
-    return session.document.bodies[-1], sketch_id
 
 
 def _step_file(tmp_path: Path) -> Path:

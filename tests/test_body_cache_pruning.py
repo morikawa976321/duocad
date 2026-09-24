@@ -4,28 +4,13 @@
 """
 from __future__ import annotations
 
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
-
-from duocad.document import Body
 from duocad.region import region_ref, regions
 from duocad.server import Session
 from duocad.sketch import add_rectangle, sketch_create
 from duocad.verbs import extrude
+from session_support import session_with_box
 
 BOX_X, BOX_Y, BOX_Z = 20.0, 20.0, 20.0
-
-
-def _box_session() -> Session:
-    session = Session(None, 0.2)
-    session.document.add_body(
-        Body(
-            id="box",
-            name="box",
-            kind="solid",
-            shape=BRepPrimAPI_MakeBox(BOX_X, BOX_Y, BOX_Z).Shape(),
-        )
-    )
-    return session
 
 
 def _extrude_a_second_body(session: Session) -> str:
@@ -42,7 +27,7 @@ def _extrude_a_second_body(session: Session) -> str:
 
 
 def test_undo_prunes_the_gone_bodys_entry_from_all_four_caches_but_not_the_revision_counter():
-    session = _box_session()
+    session = session_with_box(BOX_X, BOX_Y, BOX_Z)
     created_id = _extrude_a_second_body(session)
 
     # 4つのキャッシュへ実際に載ることを先に確認する(載る前提が崩れたら以下は空振りする)。
@@ -73,7 +58,7 @@ def test_undo_prunes_the_gone_bodys_entry_from_all_four_caches_but_not_the_revis
 
 def test_pruning_does_not_touch_a_body_that_is_still_alive():
     """生きているBodyのキャッシュは剪定で消えない(過剰に落としていないことの確認)。"""
-    session = _box_session()
+    session = session_with_box(BOX_X, BOX_Y, BOX_Z)
     created_id = _extrude_a_second_body(session)
 
     session.geometry(created_id)

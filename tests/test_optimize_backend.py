@@ -30,70 +30,9 @@ import pytest
 
 from duocad import optimize_run
 from duocad.server import Session
+from session_support import face_with_normal, four_conditions, pad, select as _select, two_pads
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEVIATION = 0.2
-
-
-# --------------------------------------------------------------------------------------
-# 題材(20mm立方体を並べるだけ。OCCT を1回も余計に回さない)
-# --------------------------------------------------------------------------------------
-@pytest.fixture()
-def session() -> Session:
-    return Session(None, DEVIATION)
-
-
-def _select(session: Session, refs: list) -> None:
-    session.clear_selection()
-    session.modify_selection(refs, [])
-
-
-def _box(session: Session, width: float, depth: float, height: float, corner=(0.0, 0.0)):
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_rectangle(sketch_id, list(corner), width, depth)
-    regions = len(session.state_meta()["sketches"][-1]["regions"])
-    _select(session, [{"sketch": sketch_id, "index": regions}])
-    session.extrude(height, mode="new")
-    session.clear_selection()
-    return session.document.bodies[-1]
-
-
-def _face_with_normal(body, nx: float, ny: float, nz: float) -> int:
-    from duocad import query
-
-    for face in query.describe_faces(body.shape):
-        normal = face["normal"]
-        if normal[0] * nx + normal[1] * ny + normal[2] * nz > 0.9:
-            return int(face["index"])
-    raise AssertionError("そのような法線の面が無い")
-
-
-def _two_pads(session: Session):
-    """離れた2つのパッド。**条件面が別々のボディに載る**(compound の経路を必ず通る)。"""
-    left = _box(session, 10.0, 40.0, 40.0)
-    right = _box(session, 10.0, 40.0, 10.0, corner=(60.0, 0.0))
-    _select(session, [{"body": right.id, "kind": "body"}])
-    session.move_body(0.0, 0.0, 30.0)
-    session.clear_selection()
-    right = session.document.get_body(right.id)
-    return left, right
-
-
-def _setup_four_conditions(session: Session, magnitude: float = 500.0):
-    left, right = _two_pads(session)
-    fixed = _face_with_normal(left, -1.0, 0.0, 0.0)
-    load = _face_with_normal(right, 0.0, 0.0, 1.0)
-    _select(
-        session,
-        [{"body": left.id, "kind": "body"}, {"body": right.id, "kind": "body"}],
-    )
-    session.set_preserve_bodies()
-    _select(session, [{"body": left.id, "kind": "face", "index": fixed}])
-    session.set_fixtures()
-    _select(session, [{"body": right.id, "kind": "face", "index": load}])
-    session.set_loads(magnitude, [0.0, 0.0, -1.0])
-    session.clear_selection()
-    return left, right, fixed, load
 
 
 # --------------------------------------------------------------------------------------
@@ -109,7 +48,7 @@ def test_conditions_report_names_every_missing_piece(session: Session) -> None:
 
 
 def test_conditions_report_is_ready_once_all_four_are_set(session: Session) -> None:
-    _setup_four_conditions(session)
+    four_conditions(session)
     report = optimize_run.conditions_report(session.document)
     assert report["ready"] is True
     assert report["problems"] == []
@@ -122,8 +61,8 @@ def test_two_fixture_faces_are_accepted(session: Session) -> None:
 
     落ちるなら `Conditions.fixed_faces` から下のどこかが1枚しか受けていない。
     """
-    left, right, fixed, load = _setup_four_conditions(session)
-    other = _face_with_normal(left, 1.0, 0.0, 0.0)
+    left, right, fixed, load = four_conditions(session)
+    other = face_with_normal(left, 1.0, 0.0, 0.0)
     _select(
         session,
         [
@@ -143,7 +82,7 @@ def test_two_fixture_faces_are_accepted(session: Session) -> None:
 
 def test_stale_condition_face_blocks_the_run(session: Session) -> None:
     """**指紋が合わない条件では走らせない。** 別の面へ荷重が入るのを黙って通さない。"""
-    _setup_four_conditions(session)
+    four_conditions(session)
     # 荷重面の指紋を人為的に壊す(形を変えるのと同じ効果。OCCTを回さない)。
     session.document.optimize.loads[0]["area"] *= 2.0
     report = optimize_run.conditions_report(session.document)
@@ -179,7 +118,7 @@ def test_mesh_body_left_over_from_a_replayed_log_is_refused_at_run_time(
 ) -> None:
     """門は verb の入口にしか無い(再生は落とさない)ので、**走らせる側でも見る**。"""
     body_id = _mesh_body(session)
-    _setup_four_conditions(session)
+    four_conditions(session)
     session.document.optimize.preserve_bodies.append(body_id)  # 再生で入った状態を模す
     report = optimize_run.conditions_report(session.document)
     assert report["ready"] is False
@@ -192,7 +131,7 @@ def test_mesh_body_left_over_from_a_replayed_log_is_refused_at_run_time(
 def test_face_indices_shift_by_the_face_count_of_earlier_bodies(session: Session) -> None:
     from duocad import kernel
 
-    left, right, fixed, load = _setup_four_conditions(session)
+    left, right, fixed, load = four_conditions(session)
     bundle = optimize_run.build_conditions(session.document)
 
     assert bundle.anchor_body_ids == [left.id, right.id]
@@ -211,8 +150,8 @@ def test_two_loads_with_different_directions_become_two_force_vectors(
 
     落ちるなら、どこかが1本の向きを全ての荷重面へ使い回している。
     """
-    left, right, _fixed, load = _setup_four_conditions(session)
-    other = _face_with_normal(right, 1.0, 0.0, 0.0)
+    left, right, _fixed, load = four_conditions(session)
+    other = face_with_normal(right, 1.0, 0.0, 0.0)
     _select(session, [{"body": right.id, "kind": "face", "index": other}])
     session.set_loads(20.0, "normal")
     session.clear_selection()
@@ -227,7 +166,7 @@ def test_a_wrong_offset_is_caught_instead_of_silently_loading_another_face(
     session: Session,
 ) -> None:
     """**検出力の変異検査。** ずれても例外は出ない経路なので、ここが最後の砦である。"""
-    left, right, _fixed, _load = _setup_four_conditions(session)
+    left, right, _fixed, _load = four_conditions(session)
     anchor_shape, offsets = optimize_run._compound_with_offsets(
         session.document, [left.id, right.id]
     )
@@ -248,14 +187,14 @@ def test_a_wrong_offset_is_caught_instead_of_silently_loading_another_face(
 
 def test_identical_bodies_are_told_apart_by_the_centroid(session: Session) -> None:
     """**重心を見ないと通ってしまう**配置(同じ形のボディが2つ)を名指しで押さえる。"""
-    first = _box(session, 20.0, 20.0, 20.0)
-    second = _box(session, 20.0, 20.0, 20.0, corner=(50.0, 0.0))
+    first = pad(session, 20.0, 20.0, 20.0)
+    second = pad(session, 20.0, 20.0, 20.0, corner=(50.0, 0.0))
     anchor_shape, offsets = optimize_run._compound_with_offsets(
         session.document, [first.id, second.id]
     )
     from duocad import query
 
-    index = _face_with_normal(second, 0.0, 0.0, 1.0)
+    index = face_with_normal(second, 0.0, 0.0, 1.0)
     condition = dict(query.face_fingerprint(second.shape, index), body=second.id, index=index)
     optimize_run._verify_face_mapping(
         session.document, anchor_shape, offsets, [condition]
@@ -274,7 +213,7 @@ def test_identical_bodies_are_told_apart_by_the_centroid(session: Session) -> No
 # --------------------------------------------------------------------------------------
 def test_condition_faces_alone_set_the_upper_bound(session: Session) -> None:
     """落ちたら、要素サイズの上限が条件面の要求(min(sqrt(CAD面積)) を実格子へ切り下げた値)から外れている。"""
-    _setup_four_conditions(session)
+    four_conditions(session)
     limits = optimize_run.resolution_limits(session.document)
     # 最小の条件面は荷重面 10x40mm で sqrt(400) = 20mm。
     assert limits["from_condition_faces_mm"] == pytest.approx(20.0, rel=1e-6)
@@ -359,7 +298,7 @@ def test_run_refuses_a_min_width_beyond_the_grid_before_deriving_anything(sessio
     """落ちたら、上限が塊の導出・境界条件の確定の後に効いている(巨大な m は導出後にメモリを使い切る)。"""
     from duocad.topopt import design_space as ds
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     monkeypatch.setattr(ds, "derive", lambda *a, **k: pytest.fail("上限の検査より前に導出へ進んだ"))
     with pytest.raises(optimize_run.OptimizeInputError, match="上限"):
         optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=9.8, min_width_mm=5000.0))
@@ -367,7 +306,7 @@ def test_run_refuses_a_min_width_beyond_the_grid_before_deriving_anything(sessio
 
 def test_every_ladder_step_carries_its_own_min_width_floor(session: Session) -> None:
     """段ごとの `min_width_floor_mm` は、その段の要素サイズの2倍(`_resolve_min_width` の floor と同じ式)。"""
-    _setup_four_conditions(session)
+    four_conditions(session)
     limits = optimize_run.resolution_limits(session.document)
     for step in limits["steps"]:
         assert step["min_width_floor_mm"] == pytest.approx(2.0 * step["element_size_mm"])
@@ -397,7 +336,7 @@ def test_every_min_width_step_resolves_to_its_own_cell_count_and_the_gap_rounds_
 
 def test_every_ladder_step_lists_the_achievable_min_widths(session: Session) -> None:
     """段ごとに、下限(m=2)から上限(格子の最短の辺のセル数)まで `m × 要素サイズ` の段が並ぶ。"""
-    _setup_four_conditions(session)
+    four_conditions(session)
     for step in optimize_run.resolution_limits(session.document)["steps"]:
         values = step["min_width_steps_mm"]
         assert values[0] == step["min_width_floor_mm"]
@@ -410,7 +349,7 @@ def test_every_ladder_step_reports_the_real_grid(session: Session) -> None:
     """落ちたら、画面の梯子に出す要素サイズ・要素数・最小幅の上限が、`derive` が実際に起こす格子とずれている。"""
     from duocad.topopt import design_space as ds
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     limits = optimize_run.resolution_limits(session.document)
     assert len(limits["steps"]) >= 2
     assert all(step["element_count"] <= optimize_run.MAX_ELEMENTS for step in limits["steps"])
@@ -430,7 +369,7 @@ def test_a_requested_element_size_off_the_ladder_is_snapped_to_the_real_grid(
     """梯子の外の要素サイズを渡しても、`derive` が作る格子の要素サイズは要求値以下に揃う。"""
     from duocad.topopt import binary_search
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     limits = optimize_run.resolution_limits(session.document)
     lo, hi = optimize_run._condition_bbox(session.document)
     requested = 0.5 * (limits["max_element_size_mm"] + limits["min_element_size_mm"])
@@ -457,13 +396,13 @@ def test_a_requested_element_size_off_the_ladder_is_snapped_to_the_real_grid(
 
 def test_build_conditions_lists_the_condition_bodies_and_ignores_unrelated_ones(session: Session) -> None:
     """凸包の点群になるのは保持ボディと条件面のボディだけ。無関係なボディを足しても変わらない。"""
-    left, right, _fixed, _load = _setup_four_conditions(session)
+    left, right, _fixed, _load = four_conditions(session)
     before = optimize_run.build_conditions(session.document).conditions.bodies
     assert [(b.name, b.roles) for b in before] == [
         (left.id, ("keep", "fixed")),
         (right.id, ("keep", "load")),
     ]
-    _box(session, 5.0, 5.0, 5.0, corner=(200.0, 200.0))  # 条件に関係ないボディ
+    pad(session, 5.0, 5.0, 5.0, corner=(200.0, 200.0))  # 条件に関係ないボディ
     after = optimize_run.build_conditions(session.document).conditions.bodies
     assert [(b.name, b.bbox_min, b.bbox_max) for b in after] == [
         (b.name, b.bbox_min, b.bbox_max) for b in before
@@ -481,7 +420,7 @@ def test_run_derives_once_and_hands_the_space_to_the_search(
     from duocad.topopt import binary_search
     from duocad.topopt import design_space as ds
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     seen: dict = {}
     derived: list = []
     original_derive = ds.derive
@@ -543,7 +482,7 @@ def test_mesh_vertices_are_converted_to_world_millimetres() -> None:
 # --------------------------------------------------------------------------------------
 def test_cancelling_leaves_the_document_untouched(session: Session) -> None:
     """**旗が立っていれば1つも作らずに降りる。** 塊の導出より手前で見るので費用も掛からない。"""
-    _setup_four_conditions(session)
+    four_conditions(session)
     before = [body.id for body in session.document.bodies]
     applied = session.applied_count
     events: list = []
@@ -585,7 +524,7 @@ def test_run_optimization_rejects_each_old_argument_by_name(
 
 
 def test_run_optimization_refuses_a_min_width_below_the_floor(session: Session) -> None:
-    _setup_four_conditions(session)
+    four_conditions(session)
     limits = optimize_run.resolution_limits(session.document)
     spacing = limits["default_element_size_mm"]
     with pytest.raises(optimize_run.OptimizeInputError, match="下限"):
@@ -597,7 +536,7 @@ def test_the_resolved_min_width_cells_reach_the_search(session: Session, monkeyp
     落ちたら、指定した幅が探索に届かず制約なしで走る。"""
     from duocad.topopt import binary_search
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     seen: dict = {}
 
     def fake_find(design_space_mask, conditions, **kwargs):
@@ -626,7 +565,7 @@ def test_search_cancellation_leaves_the_document_untouched_even_with_a_found_bes
     from duocad.topopt import binary_search
     from duocad.topopt import mesh as topo_mesh
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     before = [body.id for body in session.document.bodies]
     applied = session.applied_count
 
@@ -662,7 +601,7 @@ def test_every_evaluation_of_the_search_reaches_the_progress_sink_and_never_rais
     探索の戻り値(合格チェックポイントの記録)を失っている。"""
     from duocad.topopt import binary_search
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     cancel = {"now": False}
 
     def fake_find(design_space_mask, conditions, *, on_evaluation, **kwargs):
@@ -701,7 +640,7 @@ def test_search_statuses_other_than_feasible_pass_through_without_touching_the_d
     """
     from duocad.topopt import binary_search
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     before = [body.id for body in session.document.bodies]
 
     for status in ("no_feasible_found", "input_contradiction", "resolution_insufficient",
@@ -821,7 +760,7 @@ def test_no_candidate_meshing_and_the_confirmed_mask_reaches_finalize(
     from duocad.topopt import binary_search
     from duocad.topopt import mesh as topo_mesh
 
-    _setup_four_conditions(session)
+    four_conditions(session)
 
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("mesh.write_stl が呼ばれた")
@@ -1061,7 +1000,7 @@ def test_the_anchor_gate_does_not_read_the_baked_center(session: Session) -> Non
     """
     from duocad.topopt import design_space as ds
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     bundle = optimize_run.build_conditions(session.document)
     space = ds.derive(bundle.conditions, elements_long_axis=12)
 
@@ -1082,7 +1021,7 @@ def test_the_anchor_gate_still_catches_a_face_that_is_far_away(
     from duocad import query
     from duocad.topopt import design_space as ds
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     bundle = optimize_run.build_conditions(session.document)
     space = ds.derive(bundle.conditions, elements_long_axis=12)
 
@@ -1096,18 +1035,16 @@ def test_the_anchor_gate_still_catches_a_face_that_is_far_away(
         optimize_run._check_anchor_centroids(session.document, space)
 
 
-
-
 # --------------------------------------------------------------------------------------
 # 9. 境界条件の確定(docs/FIX_BINARY_SEARCH_INITIALIZATION.md 修正A・B)
 # --------------------------------------------------------------------------------------
 def test_a_load_face_on_a_body_that_is_not_preserved_is_refused(session: Session) -> None:
     """落ちたら、保持しないボディの面に荷重を置けてしまう(探索が削れる材料に荷重が載り、確定表が
     そのボディ以外の材料の節点へ荷重を配る)か、条件の載ったボディを保持から外せてしまう。"""
-    left, right = _two_pads(session)
-    plate = _box(session, 28.0, 40.0, 4.0, corner=(30.0, 0.0))  # 保持しない板(x 30..58)
-    fixed = _face_with_normal(left, -1.0, 0.0, 0.0)
-    load = _face_with_normal(plate, 0.0, 0.0, 1.0)
+    left, right = two_pads(session)
+    plate = pad(session, 28.0, 40.0, 4.0, corner=(30.0, 0.0))  # 保持しない板(x 30..58)
+    fixed = face_with_normal(left, -1.0, 0.0, 0.0)
+    load = face_with_normal(plate, 0.0, 0.0, 1.0)
     _select(session, [{"body": left.id, "kind": "body"}, {"body": right.id, "kind": "body"}])
     session.set_preserve_bodies()
     _select(session, [{"body": left.id, "kind": "face", "index": fixed}])
@@ -1127,7 +1064,7 @@ def test_the_search_conditions_carry_the_material_mapped_table_and_its_report(se
     """`_build_search_conditions` を直接呼ぶ検査・CLIでも、製品と同じ確定表と検証結果が付く。"""
     from duocad.topopt import design_space as ds
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     bundle = optimize_run.build_conditions(session.document)
     space = ds.derive(bundle.conditions, spacing=8.0)
     conditions = optimize_run._build_search_conditions(
@@ -1167,7 +1104,7 @@ def test_the_search_conditions_carry_the_keep_cells_and_the_space_keeps_the_excl
     """探索へ渡る `keep_cells` は塊の保持の占有そのもの(CADから作り直さない)。`obstacle` は格子と同じ形。"""
     from duocad.topopt import design_space as ds
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     bundle = optimize_run.build_conditions(session.document)
     space = ds.derive(bundle.conditions, spacing=8.0)
     conditions = optimize_run._build_search_conditions(
@@ -1185,7 +1122,7 @@ def test_the_result_reports_the_keep_cells_without_room_and_only_when_the_count_
     トレース記録も件数に関わらず毎回残る。警告は対象セルが1個以上あるときだけ数が出る。"""
     from duocad.topopt import binary_search, trace
 
-    _setup_four_conditions(session)
+    four_conditions(session)
 
     def fake_find(design_space_mask, conditions, **kwargs):
         return binary_search.SearchResult(
@@ -1227,27 +1164,26 @@ def test_the_keep_cells_without_room_warning_rides_on_every_early_return_too(
     """探索より前に返る3経路(条件面が空・保持/除外が表現できない・確定表が不成立)でも、警告が落ちない。"""
     from duocad.topopt import anchor, binary_search
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     monkeypatch.setattr(binary_search, "keep_cells_without_room",
                         lambda *args, **kwargs: dict(cells=4, around_exclude=9, around_outside=0))
     spacing = optimize_run.resolution_limits(session.document)["steps"][1]["element_size_mm"]
     options = optimize_run.OptimizeOptions(element_size_mm=spacing, min_width_mm=2.5 * spacing)
 
-    monkeypatch.setattr(optimize_run, "_empty_condition_faces", lambda space: [dict(face=0)])
-    monkeypatch.setattr(anchor, "format_condition_face_warning", lambda faces: "FACES-EMPTY")
-    result = optimize_run.run(session.document, options)
-    assert result["state"] == "empty_condition_faces" and result["warning"].startswith("FACES-EMPTY。")
-    assert "保持ソリッドのセルが 4 個" in result["warning"]
+    # `monkeypatch.undo()` は conftest の実行記録の置き場の差し替えまで戻すので、段ごとの差し替えは context で閉じる。
+    with monkeypatch.context() as patch:
+        patch.setattr(optimize_run, "_empty_condition_faces", lambda space: [dict(face=0)])
+        patch.setattr(anchor, "format_condition_face_warning", lambda faces: "FACES-EMPTY")
+        result = optimize_run.run(session.document, options)
+        assert result["state"] == "empty_condition_faces" and result["warning"].startswith("FACES-EMPTY。")
+        assert "保持ソリッドのセルが 4 個" in result["warning"]
 
-    monkeypatch.setattr(optimize_run, "_empty_condition_faces", lambda space: [])
-    monkeypatch.setattr(optimize_run, "_region_representation", lambda doc, bundle, space: [
-        dict(elements=0, role_label="保持", name="x", element_size_mm=spacing)])
-    result = optimize_run.run(session.document, options)
-    assert result["state"] == "unrepresented_regions" and "保持ソリッドのセルが 4 個" in result["warning"]
+        patch.setattr(optimize_run, "_empty_condition_faces", lambda space: [])
+        patch.setattr(optimize_run, "_region_representation", lambda doc, bundle, space: [
+            dict(elements=0, role_label="保持", name="x", element_size_mm=spacing)])
+        result = optimize_run.run(session.document, options)
+        assert result["state"] == "unrepresented_regions" and "保持ソリッドのセルが 4 個" in result["warning"]
 
-    monkeypatch.undo()
-    monkeypatch.setattr(binary_search, "keep_cells_without_room",
-                        lambda *args, **kwargs: dict(cells=4, around_exclude=9, around_outside=0))
     monkeypatch.setattr(optimize_run, "_map_boundary_conditions", lambda space, bundle: (None, {"status": "fail"}))
     monkeypatch.setattr(anchor, "format_mapping_warning", lambda report: "MAPPING-FAILED")
     result = optimize_run.run(session.document, options)
@@ -1262,7 +1198,7 @@ def test_the_search_target_is_the_real_target_times_2_4_unless_the_factor_is_pin
     """落ちたら、探索と6条件の `safety` が、利用者の目標をそのまま(または別の係数で)使っている。"""
     from duocad.topopt import design_space as ds
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     bundle = optimize_run.build_conditions(session.document)
     space = ds.derive(bundle.conditions, spacing=8.0)
 
@@ -1281,7 +1217,7 @@ def test_a_search_target_factor_below_1_or_not_finite_is_refused_at_the_entrance
     """落ちたら、1.0 未満・非有限の係数が探索に入るまで通る(探索を数十分回した後で気づく)。"""
     from duocad.topopt import design_space as ds
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     options = optimize_run.OptimizeOptions(search_target_factor=factor)
     with pytest.raises(optimize_run.OptimizeInputError, match="search_target_factor"):
         optimize_run.run(session.document, options)
@@ -1293,7 +1229,7 @@ def test_a_search_target_factor_below_1_or_not_finite_is_refused_at_the_entrance
 
 def test_a_search_target_that_overflows_is_refused_at_the_entrance(session: Session) -> None:
     """落ちたら、有限の係数でも 目標 × 係数 が inf になる入力が探索まで通る。"""
-    _setup_four_conditions(session)
+    four_conditions(session)
     with pytest.raises(optimize_run.OptimizeInputError, match="有限の数にならない"):
         optimize_run.run(session.document, optimize_run.OptimizeOptions(search_target_factor=1e308))
 
@@ -1303,7 +1239,7 @@ def test_the_result_reports_the_real_target_the_search_target_and_the_factor(ses
     または探索時の目標と係数が報告に出ない。探索が受け取る目標は 実際の目標 × 係数。"""
     from duocad.topopt import binary_search, trace
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     seen: list = []
     resolved: list = []
     real_snapshot = trace.snapshot

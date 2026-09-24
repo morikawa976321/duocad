@@ -21,8 +21,6 @@
 """
 from __future__ import annotations
 
-import asyncio
-import json
 import re
 from pathlib import Path
 
@@ -32,36 +30,19 @@ from duocad import optimize, selection
 from duocad.document import Document
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.oplog import OpLog
-from duocad.server import Server, Session
+from duocad.server import Session
+from session_support import SIDE, pad, select as _select, send_one
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SESSION_TS = REPO_ROOT / "web" / "src" / "session.ts"
 COMMAND_TS = REPO_ROOT / "web" / "src" / "commands" / "command.ts"
 
 DEVIATION = 0.2
-SIDE = 20.0
-
-
-@pytest.fixture()
-def session() -> Session:
-    return Session(None, DEVIATION)
-
-
-def _select(session: Session, refs: list) -> None:
-    """選択を `refs` で置き換える(人がクリックで選び直すのと同じ入口)。"""
-    session.clear_selection()
-    session.modify_selection(refs, [])
 
 
 def _box(session: Session, corner=(0.0, 0.0)):
-    """スケッチ→長方形→領域押し出しで 20mm の立方体を1つ作り、そのBodyを返す。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_rectangle(sketch_id, list(corner), SIDE, SIDE)
-    regions = len(session.state_meta()["sketches"][-1]["regions"])
-    _select(session, [{"sketch": sketch_id, "index": regions}])
-    session.extrude(SIDE, mode="new")
-    session.clear_selection()
-    return session.document.bodies[-1]
+    """一辺 `SIDE` の立方体を新しいボディとして1つ作る。"""
+    return pad(session, SIDE, SIDE, SIDE, corner)
 
 
 def _body_refs(*bodies) -> list:
@@ -96,32 +77,6 @@ def _indices(refs: list) -> list:
 
 def _optimize(session: Session) -> dict:
     return session.state_meta()["optimize"]
-
-
-class FakeConnection:
-    """`Server` が使うのは `send` だけ(`tests/test_feature_ui.py` と同じ形)。"""
-
-    def __init__(self) -> None:
-        self.payloads: list = []
-
-    async def send(self, raw: str) -> None:
-        self.payloads.append(json.loads(raw))
-
-
-def _browser(session: Session, script):
-    async def scenario():
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        client = FakeConnection()
-        server.clients.add(client)
-
-        async def send(command: dict) -> dict:
-            await server._dispatch(client, json.dumps(command))
-            return client.payloads[-1]
-
-        return await script(send)
-
-    return asyncio.run(scenario())
 
 
 # --------------------------------------------------------------------------------------
@@ -216,10 +171,7 @@ def test_a_proposed_selection_is_committed_by_running_the_verb(session: Session)
     session.propose_selection(refs=_body_refs(body))
     assert session.get_selection()["origin"] == "proposed"
 
-    async def script(send):
-        return await send({"cmd": "set_preserve_bodies"})
-
-    answer = _browser(session, script)
+    answer = send_one(session, {"cmd": "set_preserve_bodies"})
     assert answer["type"] == "state", answer
     assert session.get_selection()["origin"] == "user"
     assert _ids(_optimize(session)["preserve_bodies"]) == [body.id]
@@ -856,11 +808,7 @@ def test_the_websocket_and_mcp_paths_both_run_the_verb(verb: str) -> None:
             _body_refs(body) if picker == "body" else _face_refs(body, [1, 2]),
         )
         if use_websocket:
-
-            async def script(send):
-                return await send({"cmd": verb, **arguments})
-
-            answer = _browser(made, script)
+            answer = send_one(made, {"cmd": verb, **arguments})
             assert answer["type"] == "state", answer
         else:
             getattr(DocumentTools(made), verb)(**arguments)

@@ -16,7 +16,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import math
 import subprocess
@@ -25,7 +24,8 @@ from pathlib import Path
 import pytest
 
 from duocad import io_step, kernel, resolution
-from duocad.server import Server, Session
+from duocad.server import Session
+from session_support import browser
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -315,34 +315,6 @@ def test_the_baseline_comes_back_untouched_for_a_fresh_session() -> None:
 # --------------------------------------------------------------------------------------
 # プロトコル(WebSocket)
 # --------------------------------------------------------------------------------------
-class FakeConnection:
-    """`Server` が使うのは `send` だけ(`tests/test_feature_ui.py` と同じ形)。"""
-
-    def __init__(self) -> None:
-        self.payloads: list = []
-
-    async def send(self, raw: str) -> None:
-        self.payloads.append(json.loads(raw))
-
-
-def _browser(session: Session, script):
-    async def scenario():
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        client = FakeConnection()
-        server.clients.add(client)
-        await server._push(client, applied=None, only=client)
-        client.payloads.clear()
-
-        async def send(command: dict) -> None:
-            await server._dispatch(client, json.dumps(command))
-
-        await script(send)
-        return client
-
-    return asyncio.run(scenario())
-
-
 def test_the_websocket_command_redelivers_the_geometry_at_the_new_resolution(
     cylinder_session,
 ) -> None:
@@ -352,7 +324,7 @@ def test_the_websocket_command_redelivers_the_geometry_at_the_new_resolution(
     async def script(send):
         await send({"cmd": "set_view_resolution", "world_per_pixel": 0.002, "size_hint": SIDE})
 
-    client = _browser(session, script)
+    client = browser(session, script, connections=1)[1][0]
     states = [payload for payload in client.payloads if payload.get("type") == "state"]
     assert states, f"状態が配られていない: {[p.get('type') for p in client.payloads]}"
     bodies = states[-1]["delta"]["bodies"]
@@ -372,7 +344,7 @@ def test_the_websocket_command_is_silent_when_nothing_changes(cylinder_session) 
         await send(message)
         await send(dict(message))
 
-    client = _browser(session, script)
+    client = browser(session, script, connections=1)[1][0]
     states = [payload for payload in client.payloads if payload.get("type") == "state"]
     assert len(states) == 1, f"2回目でも配信している: {len(states)}件"
 
@@ -384,7 +356,7 @@ def test_the_size_hint_may_be_omitted(cylinder_session) -> None:
     async def script(send):
         await send({"cmd": "set_view_resolution", "world_per_pixel": 0.002})
 
-    client = _browser(session, script)
+    client = browser(session, script, connections=1)[1][0]
     errors = [payload for payload in client.payloads if payload.get("type") == "error"]
     assert not errors, f"省略できるはずの引数でエラー: {errors}"
     assert session.view.view_deviation < DEVIATION
