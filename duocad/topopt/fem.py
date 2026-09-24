@@ -637,7 +637,8 @@ class PreparedSystem:
             ff = rhs[index][model.free]
             iterations = 0
             fell_back = False
-            if not np.any(ff):
+            zero_rhs = not np.any(ff)
+            if zero_rhs:
                 u_free = np.zeros(model.free.size)
             elif self._solver == "direct":
                 u_free = spla.spsolve(self.kf, ff)
@@ -671,7 +672,8 @@ class PreparedSystem:
                            free_dofs=int(model.free.size), nnz=int(self.kf.nnz), cg_rtol=cg_rtol,
                            cg_iterations=iterations, fallback=fell_back,
                            rhs_index=index, seconds=time.perf_counter()-t_start)
-            model._verify_solution(self.kf, ff, u_free)
+            if not zero_rhs:
+                model._verify_solution(self.kf, ff, u_free)
             out[index, model.free] = u_free
         if stats is not None:
             stats["solve_seconds"] += time.perf_counter() - t_start
