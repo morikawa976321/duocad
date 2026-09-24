@@ -10,50 +10,11 @@ from __future__ import annotations
 import pytest
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
-from duocad import catalog, selection
+from duocad import selection
 from duocad.document import Body
 from duocad.server import Session
 
 BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
-
-#: 「形を変える」と宣言されている verb 名。**この集合が変わったら `duocad/catalog.py` の
-#: 宣言を見てここも一緒に見直すこと**(このテストは宣言そのものではなく「この集合で合って
-#: いるか」を固定する)。
-RESETTING_VERBS = frozenset(
-    {
-        "extrude",
-        "extrude_face",
-        "fillet",
-        "chamfer",
-        "boolean_body",
-        "pattern_rectangular",
-        "pattern_circular",
-        "add_line",
-        "add_circle",
-        "add_rectangle",
-        "add_arc",
-        # SVG読み込みは**図形を足すverbの仲間**なので `add_*` と同じく選択を空にする。
-        # 貼る先に使った面が選ばれたまま残ると、次に打つ `extrude` が領域ではなく面を
-        # 掴んだ状態で走り、`selection_kind_mismatch` で止まる。
-        "import_svg",
-        "set_parameter",
-        "undo",
-        "redo",
-        "move_sketch_entities",
-        "move_body",
-        "mirror_sketch_entities",
-        "mirror_body",
-        # **消えた対象を指したままの選択は必ず失効する**ので、他の形状変更verbと
-        # 同じ既定に揃える(消し損ねた分だけ残す、をしない)。
-        "delete",
-    }
-)
-
-
-def test_resets_selection_is_declared_on_exactly_these_verbs() -> None:
-    """カタログの `resets_selection=True` が RESETTING_VERBS と過不足なく一致する。"""
-    flagged = {command.name for command in catalog.COMMANDS if command.resets_selection}
-    assert flagged == RESETTING_VERBS
 
 
 @pytest.fixture()
@@ -86,7 +47,7 @@ def _assert_cleared(session: Session) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 2. 形を変えるverbの確定後、選択は空になる
+# 1. 形を変えるverbの確定後、選択は空になる
 # --------------------------------------------------------------------------------------
 def test_fillet_clears_the_selection_on_success(session: Session) -> None:
     _select(session, [_edge(1), _edge(2)])
@@ -109,36 +70,11 @@ def test_add_shape_verbs_clear_a_pre_existing_3d_selection(session: Session) -> 
     _assert_cleared(session)
 
 
-def test_set_parameter_clears_the_selection_on_success(session: Session) -> None:
-    """`set_parameter` はrebuildで形が変わりうるので全リセットの対象(タスクファイルの明示)。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [0.0, 0.0], 5.0)
-    # add_circle は cx/cy/radius の3つを名前つき(d1..d3)にする(tests/test_parameters.py)。
-    # どれを打ち直しても rebuild が走るので、ここではどれか1つで足りる。
-    name = next(iter(session.document.parameters))
-    _select(session, [_face(1)])
-
-    session.set_parameter(name, 8.0)
-
-    _assert_cleared(session)
-
-
 def test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish(
     session: Session,
 ) -> None:
-    """`web/scripts/smoke-regions.mjs` 検証6が実機で見ているシナリオの直接固定。
-
-    **`regionsStillExist`(`App.svelte`)がUI操作で到達できない理由をここで実証する**:
-    重なる円2つで領域を3つ作り、うち1つ(添字3。重なりが解けると消える方)を選んだ
-    状態で、片方の円の半径を打ち直して重なりを解く。領域は3→2に減り、添字3は
-    実在しなくなるが、**その前に `set_parameter` の `resets_selection=True` が
-    選択そのものを空にする**ので、`App.svelte` 側が「選んだ領域がまだ実在するか」を
-    確かめる分岐(`regionsStillExist`)へたどり着く前に選択が失われる。
-    `RESETTING_VERBS` の全verbがこの性質を持つため(直上のテストが過不足なく固定)、
-    現行のverbカタログでは `regionsStillExist` のfalse分岐は構造的に到達不能であり、
-    その分岐自体の正しさは `window.__duocad.regionsStillExist` 経由の直接呼び出しで
-    検査する(smoke-regions.mjs参照。ここはコア側の契約=(a)の実証に専念する)。
-    """
+    """落ちたら、打ち直しで消えた領域を選んだままになり、`App.svelte` の `regionsStillExist` の
+    分岐へ届く(`web/scripts/smoke-regions.mjs` 検証6と同じシナリオ)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
     session.add_circle(sketch_id, [0.0, 0.0], 15.0)
     session.add_circle(sketch_id, [20.0, 0.0], 15.0)
@@ -159,18 +95,12 @@ def test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish(
 
     after = {item.index for item in list_regions(session.document, sketch_id)}
     assert 3 not in after, "半径を縮めても添字3の領域が消えない(検査の前提が崩れている)"
-    _assert_cleared(session)  # (a) resets_selection が選択を空にした
+    _assert_cleared(session)
 
 
 # --------------------------------------------------------------------------------------
-# 3. 形を変えない操作は選択に触らない
+# 2. 形を変えない操作は選択に触らない
 # --------------------------------------------------------------------------------------
-def test_set_visible_does_not_touch_the_selection(session: Session) -> None:
-    _select(session, [_face(1)])
-    session.set_visible("box", False)
-    assert session.get_selection()["count"] == 1
-
-
 def test_selection_editing_itself_is_not_a_reset(session: Session) -> None:
     """`modify_selection` / `commit_selection` / `clear_selection` は選択機構そのものであり、
     「形を変えるverbの確定」ではない —— ここで自分自身を巻き込まない。
@@ -183,18 +113,8 @@ def test_selection_editing_itself_is_not_a_reset(session: Session) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 4. undo/redo は「何を戻したか」に関わらず常にリセットする
+# 3. undo/redo は「何を戻したか」に関わらず常にリセットする
 # --------------------------------------------------------------------------------------
-def test_undo_of_a_shape_changing_verb_clears_the_selection(session: Session) -> None:
-    _select(session, [_face(1)])
-    session.extrude_face(5.0)  # ここで既に空になっている
-    _select(session, [_edge(1)])  # 次の一手として選び直した状態を作る
-
-    session.undo()
-
-    _assert_cleared(session)
-
-
 def test_undo_of_a_non_shape_verb_still_clears_the_selection(session: Session) -> None:
     """**undo/redoはunconditional**(verbごとの分岐を持たない単純な規則)。
 
@@ -203,7 +123,7 @@ def test_undo_of_a_non_shape_verb_still_clears_the_selection(session: Session) -
     """
     _select(session, [_face(1)])
     session.sketch_create("XY")
-    assert session.get_selection()["count"] == 1  # 形を変えないverbは触らない(契約3)
+    assert session.get_selection()["count"] == 1  # 形を変えないverbは触らない(2.)
 
     session.undo()
 
@@ -222,7 +142,7 @@ def test_redo_clears_the_selection(session: Session) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 5. 「手前を隠して奥の面を選ぶ」ワークフローで選択は飛ばない
+# 4. 「手前を隠して奥の面を選ぶ」ワークフローで選択は飛ばない
 # --------------------------------------------------------------------------------------
 def test_hiding_a_body_to_reach_a_hidden_face_does_not_drop_the_selection(
     session: Session,

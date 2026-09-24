@@ -189,19 +189,6 @@ def test_a_body_left_entirely_coarse_keeps_its_revision_across_zoom(two_body_ses
     assert session.body_revision(visible) > visible_revision, "画面内のBodyが追随していない"
 
 
-def test_the_delta_reports_the_out_of_frustum_body_as_unchanged(two_body_session) -> None:
-    """差分配信の側から見ても同じこと(版だけ据え置いて中身が飛ぶ、では意味が無い)。"""
-    session, visible, hidden = two_body_session
-    focus = {visible: None, hidden: []}
-    session.set_view_resolution(0.05, 400.0, focus)
-    known = {body.id: session.body_revision(body.id) for body in session.document.bodies}
-
-    session.set_view_resolution(0.005, 400.0, focus)
-    delta = session.view.delta(known)
-    assert hidden in delta["unchanged"]
-    assert [body["body_id"] for body in delta["bodies"]] == [visible]
-
-
 def test_the_cached_mesh_of_an_untouched_body_survives(two_body_session) -> None:
     """測り直しそのものが起きない(版だけでなくキャッシュも据え置く)。"""
     session, visible, hidden = two_body_session

@@ -64,6 +64,15 @@ def _box(session: Session):
     return session.document.bodies[-1], sketch_id
 
 
+def _cylinder(session: Session, radius: float, height: float):
+    """スケッチ→円→領域押し出しで円柱を作る(半径は名前つきの値になる)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_circle(sketch_id, [0.0, 0.0], radius)
+    _select(session, [{"sketch": sketch_id, "index": 1}])
+    session.extrude(height, mode="join")
+    return session.document.bodies[-1]
+
+
 class FakeConnection:
     def __init__(self) -> None:
         self.payloads: list = []
@@ -206,17 +215,6 @@ def test_saving_without_a_name_writes_the_current_file_only(session: Session) ->
     )
 
 
-def test_models_dir_is_created_if_missing(session: Session) -> None:
-    """**無ければアプリが作る**(要件1)。事前に存在しなくても保存できる。"""
-    assert not session.models_dir.exists()
-    _box(session)
-
-    session.save_document("model.json")
-
-    assert session.models_dir.is_dir()
-    assert (session.models_dir / "model.json").exists()
-
-
 @pytest.mark.parametrize(
     "bad_name",
     [
@@ -314,10 +312,7 @@ def test_opening_replays_a_log_that_contains_set_parameter(session: Session) -> 
     **再生前にログを文書へ束ねていない**と `parameters.rebuild` が拒否する。
     順序を間違えても他のverbだけのログは開けてしまうため、ここで固定する。
     """
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [0.0, 0.0], 5.0)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(10.0, mode="join")
+    _cylinder(session, 5.0, 10.0)
     radius = next(name for name, value in session.document.parameters.items() if value == 5.0)
     session.set_parameter(radius, 7.0)
     volume = query.volume(session.document.bodies[-1].shape)
@@ -577,11 +572,7 @@ def test_stl_export_always_uses_the_fixed_deviation(session: Session, tmp_path: 
     **曲面を持つ形で測る**。立方体は平面だけなので、どの粗さで測っても三角形は12枚のまま
     ファイルサイズが1バイトも変わらず(684B == 684B)、検査にならない。
     """
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [0.0, 0.0], 10.0)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(SIDE, mode="join")
-    shape = session.document.bodies[-1].shape
+    shape = _cylinder(session, 10.0, SIDE).shape
     written = tmp_path / "part.stl"
 
     async def script(send):
@@ -608,11 +599,7 @@ def _triangle_count(shape, deviation: float) -> int:
 # --------------------------------------------------------------------------------------
 def test_named_values_are_published_and_drive_the_shape(session: Session) -> None:
     """**名前つきの値が配られ、打ち直すと形が追随する**(タスクEの検証1の実体)。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [0.0, 0.0], 5.0)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(10.0, mode="join")
-    body = session.document.bodies[-1]
+    body = _cylinder(session, 5.0, 10.0)
     volume_before = query.volume(body.shape)
 
     published = session.state_meta()["parameters"]

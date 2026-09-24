@@ -1,4 +1,4 @@
-/** `web/src/minWidth.ts` の純関数を評価する口(`tests/test_min_width_ui.py` が node で走らせる)。失敗したら非ゼロで終了する。 */
+/** `web/src/minWidth.ts` の純関数を評価する口(`tests/test_ts_evaluators.py` が node で走らせる)。失敗したら非ゼロで終了する。 */
 import assert from 'node:assert/strict'
 import { judgeMinWidth, roundUpNotice, shownCeilingMm, shownFloorMm, shownGuaranteedMm, shownStepMm } from '../web/src/minWidth.ts'
 

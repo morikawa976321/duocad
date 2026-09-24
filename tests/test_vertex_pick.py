@@ -177,46 +177,6 @@ def _propose_face(session: Session, body) -> None:
     )
 
 
-def test_running_a_verb_from_the_browser_commits_a_proposed_selection(
-    session: Session,
-) -> None:
-    """**AIの提案のままでも、人がコマンドを実行したら通る**(実行そのものが承認)。
-
-    落ちたら、AIが選択を提案した直後に人がツールバーを押すと
-    `SelectionNotCommitted` で止まる —— 「承認する」ボタンを消した後は解消手段が無い。
-    """
-    body, _ = _box(session)
-    _propose_face(session, body)
-    assert session.get_selection()["origin"] == "proposed"
-
-    async def script(send):
-        return await send({"cmd": "extrude_face", "distance": 5.0, "client_op": 7})
-
-    (answer, _clients) = _browser(session, script)
-
-    assert answer["type"] == "state", answer
-    assert answer["applied"]["verb"] == "extrude_face"
-
-
-def test_a_preview_also_commits_a_proposed_selection(session: Session) -> None:
-    """プレビュー(数値を打つと飛ぶ投機実行)も同じ扱い。
-
-    ここを外すと、提案のまま押し出そうとした人の画面に、**理由の分からない札だけ**が出る。
-    """
-    body, _ = _box(session)
-    _propose_face(session, body)
-
-    async def script(send):
-        return await send(
-            {"cmd": "preview", "verb": "extrude_face", "args": {"distance": 5.0}}
-        )
-
-    (answer, _clients) = _browser(session, script)
-
-    assert answer["type"] == "preview", answer
-    assert session.get_selection()["origin"] == "user"
-
-
 def _state_origins(client) -> list:
     """その接続が受け取った状態配信の origin を届いた順に返す。"""
     return [

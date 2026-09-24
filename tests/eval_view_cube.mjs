@@ -1,9 +1,8 @@
 /**
  * `web/src/viewCube.ts` の純関数(`regionCells` / `cellBox` / `cellDirection` /
- * `upForDirection`)を**実際に評価する**ための小さな口。`tests/test_view_cube.py` が
- * `node` でこれを走らせる(`tests/eval_grid_scale.mjs` と同じやり方 —— ソースの文字列
- * 比較ではなく実行結果で見る)。**Python側の対応物は無い**(ビューキューブはTSにしか
- * 描かれない)ので、ここで直接 assert して失敗したら非ゼロで終わる。**skipしない**。
+ * `upForDirection`)を**実際に評価する**ための小さな口。`tests/test_ts_evaluators.py` が
+ * `node` でこれを走らせる。**Python側の対応物は無い**(ビューキューブはTSにしか
+ * 描かれない)ので、ここで直接 assert して失敗したら非ゼロで終わる。
  *
  * Node は `.ts` をそのまま読める(型注釈の除去。Node 23.6以降は既定で有効)。
  */

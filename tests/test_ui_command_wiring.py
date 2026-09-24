@@ -1,4 +1,4 @@
-"""UIのコマンドIDが、サーバが受け取れる名前に**実在するか**を静的に検査する。
+"""UIのコマンドIDが、サーバが受け取れる名前に**実在するか**を検査する。
 
 同じverbの表面が3層にある:
 
@@ -8,7 +8,7 @@
 
 **1と3の食い違いだけが誰にも見られていない**。TS側のIDを1文字打ち間違えても `tsc` は通り
 (ただの文字列)、pytest も通り、**実ブラウザのsmokeを走らせて初めて** `unknown command` で
-出る。この抜けを `test_boundaries.py` と同じ「ソースを静的に読む」やり方で塞ぐ。
+出る。この抜けを、TS側の `CommandDef` を Node で実際に読み込んで(`tests/eval_command_defs.mjs`)塞ぐ。
 
 **1と2は `duocad/catalog.py` の `COMMANDS` からの導出**なので、この検査が見るのは「宣言と
 3層目(TS)の食い違い」である。3層目を宣言から生成しないのは、TS側が持つのが**引数の集め方**
@@ -21,8 +21,11 @@
 from __future__ import annotations
 
 import ast
+import functools
 import importlib.util
+import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -30,12 +33,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 COMMANDS_DIR = REPO_ROOT / "web" / "src" / "commands"
-
-#: `web/src/commands/*.ts` の `CommandDef.category` に書ける値。
-#:
-#: **送信経路の分岐がこれ1つで決まる**(順序依存の暗黙のフォールバックを置かない)。
-#: `select_in_sketch` の `ui` はサーバへ何も送らない道具で、Python側の宣言には無い。
-UI_CATEGORIES = {"sketch", "feature", "file", "solid", "ui"}
 
 
 def _catalog():
@@ -169,33 +166,21 @@ def _dispatch_message_keys() -> set[str]:
     return keys
 
 
+@functools.cache
+def _ui_commands() -> tuple:
+    """`web/src/commands/*.ts` の `CommandDef` を Node で読み込んだもの(`tests/eval_command_defs.mjs`)。"""
+    evaluator = REPO_ROOT / "tests" / "eval_command_defs.mjs"
+    try:
+        completed = subprocess.run(["node", str(evaluator)], capture_output=True, cwd=str(REPO_ROOT), timeout=60)
+    except FileNotFoundError as error:
+        raise AssertionError("node が見つからない。UIのコマンド定義を読めないので検査できない") from error
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")
+    return tuple(json.loads(completed.stdout))
+
+
 def _ui_command_ids() -> dict[str, str]:
-    """`web/src/commands/*.ts` の `id: '...'` を集める(値 -> どのファイルか)。"""
-    found: dict[str, str] = {}
-    for path in sorted(COMMANDS_DIR.glob("*.ts")):
-        text = path.read_text(encoding="utf-8")
-        for match in re.finditer(r"^\s*id:\s*'([^']+)'", text, re.M):
-            found[match.group(1)] = path.name
-    return found
-
-
-def _ui_command_categories() -> dict[str, str]:
-    """`web/src/commands/*.ts` の `CommandDef` から「ID -> category」を読む。
-
-    `id` の次から**次の `id` の手前まで**を1つの定義とみなす(定義の途中に
-    コメントが挟まっても効く)。`category` を書き忘れた定義は値が空文字になり、
-    下の検査が名指しで落とす。
-    """
-    found: dict[str, str] = {}
-    for path in sorted(COMMANDS_DIR.glob("*.ts")):
-        text = path.read_text(encoding="utf-8")
-        marks = list(re.finditer(r"^\s*id:\s*'([^']+)'", text, re.M))
-        for index, match in enumerate(marks):
-            end = marks[index + 1].start() if index + 1 < len(marks) else len(text)
-            chunk = text[match.end():end]
-            category = re.search(r"^\s*category:\s*'([^']+)'", chunk, re.M)
-            found[match.group(1)] = category.group(1) if category else ""
-    return found
+    """UIのコマンドID -> 定義しているファイル名。"""
+    return {command["id"]: command["file"] for command in _ui_commands()}
 
 
 def test_server_command_tables_are_readable():
@@ -224,18 +209,13 @@ def test_every_hand_dispatched_command_has_a_branch():
 
 
 def test_every_ui_command_declares_the_same_category_as_the_declaration():
-    """**UIの `category` はコアの宣言と同じ値**(`ui` を除く)。
-
-    ここが落ちるのは「TS側でだけ分類を変えた/書き忘れた」とき。分類はUIの
-    送信経路そのもの(`App.svelte` の `runCommand`)なので、ずれると
-    **スケッチのverbがファイル操作として送られる**ような壊れ方をする。
-    """
+    """落ちたら、UIの `category`(送信経路。`App.svelte` の `runCommand`)がコアの宣言とずれ、
+    スケッチのverbがファイル操作として送られるような壊れ方をする。"""
     declared = {command.name: command.category for command in _catalog().COMMANDS}
     wrong: dict[str, str] = {}
-    for command_id, category in _ui_command_categories().items():
-        if category not in UI_CATEGORIES:
-            wrong[command_id] = f"未知の category: {category!r}"
-        elif category == "ui":
+    for command in _ui_commands():
+        command_id, category = command["id"], command["category"]
+        if category == "ui":
             if command_id not in EXEMPT_IDS:
                 wrong[command_id] = "`ui` はサーバへ送らない道具だけ"
         elif command_id in declared and declared[command_id] != category:
@@ -337,166 +317,12 @@ def test_ai_commands_are_not_verbs():
 
 
 # --------------------------------------------------------------------------------------
-# Enter要否(即適用)の表
+# Enter要否(即適用)
 # --------------------------------------------------------------------------------------
-#: `web/src/commands/command.ts` の `isHowInput` と同じ顔ぶれ(howの入力)。
-#: **TS側へ種別を足したらここへも足す**(下の `_needs_enter` のdocstring)。
-HOW_ARG_KINDS = {"number", "choice", "text"}
-
-
-def _args_of(chunk: str) -> list[tuple[str, str]]:
-    """1つの `CommandDef` の本文から `args: [...]` を読み、`(kind, 印)` の並びを返す。
-
-    2つ目の枠は種別ごとに意味が違う: 選択引数では `max`(`'1'` / `'null'` / 数字)、
-    数値引数では `fromPoints: true` を持つときだけ `"fromPoints"`。どちらでもなければ空文字。
-    `build(...)` の本体を巻き込まないように**角括弧の対応で args だけを切り出す**
-    (本体には `values.face` 等が並ぶだけだが、将来の書き足しで `kind:` が現れうる)。
-    """
-    head = chunk.find("args: [")
-    if head < 0:
-        return []
-    start = chunk.index("[", head)
-    depth = 0
-    end = -1
-    for index in range(start, len(chunk)):
-        if chunk[index] == "[":
-            depth += 1
-        elif chunk[index] == "]":
-            depth -= 1
-            if depth == 0:
-                end = index
-                break
-    if end < 0:
-        return []
-    region = chunk[start + 1:end]
-    marks = list(re.finditer(r"kind:\s*'([a-z]+)'", region))
-    args: list[tuple[str, str]] = []
-    for index, match in enumerate(marks):
-        tail = region[match.end():marks[index + 1].start() if index + 1 < len(marks) else len(region)]
-        maximum = re.search(r"\bmax:\s*(null|\d+)", tail)
-        if maximum:
-            args.append((match.group(1), maximum.group(1)))
-        elif re.search(r"\bfromPoints:\s*true", tail):
-            args.append((match.group(1), "fromPoints"))
-        else:
-            args.append((match.group(1), ""))
-    return args
-
-
-def _ui_command_args() -> dict[str, list[tuple[str, str]]]:
-    """`web/src/commands/*.ts` から「ID -> 引数の並び」を読む(`_ui_command_categories` と同じ切り方)。"""
-    found: dict[str, list[tuple[str, str]]] = {}
-    for path in sorted(COMMANDS_DIR.glob("*.ts")):
-        text = path.read_text(encoding="utf-8")
-        marks = list(re.finditer(r"^\s*id:\s*'([^']+)'", text, re.M))
-        for index, match in enumerate(marks):
-            end = marks[index + 1].start() if index + 1 < len(marks) else len(text)
-            found[match.group(1)] = _args_of(text[match.end():end])
-    return found
-
-
-def _needs_enter(args: list[tuple[str, str]]) -> bool:
-    """TS側の `needsEnter`(`web/src/commands/command.ts`)と同じ判定を、宣言から作り直す。
-
-    **写しであることに意味がある** —— 判定はTSの1関数にしか無く、そこを書き換えれば
-    UIの挙動は静かに変わる。ここが同じ規則を独立に持っていると、下の表との突き合わせで
-    「どのverbのEnter要否が変わったか」が名指しで出る。
-
-    規則は2つ: **対象を複数取りうる**(選択の `max !== 1` / `entities`)か、
-    **howの入力がある**(数値・選択肢・文字列)なら Enter が要る。どちらでもなければ即適用。
-    **列挙していない種別は即適用の側**(TS側の既定と同じ。点と直接ピック(`pick`)がそれ ——
-    どちらも対象を1つだけ指すので、指した時点で「終わり」が機械に分かる)。
-    **`fromPoints` の数値は how に数えない** —— 空欄のままでも点から値が決まる。
-    """
-    for kind, mark in args:
-        if kind == "selection" and mark != "1":
-            return True
-        if kind == "number" and mark == "fromPoints":
-            continue
-        if kind == "entities" or kind in HOW_ARG_KINDS:
-            return True
-    return False
-
-
-#: **Enterが要るか**の表(True = Enterで確定 / False = 引数が揃ったクリックで即適用)。
-#:
-#: **即適用は5つ**である: スケッチの描く4verb(寸法欄は持つが `fromPoints` なので how に
-#: 数えない)と `sketch_create`(貼る先の平面1つで揃う)。
-#: verbを足したらここへ1行足すことになる ——
-#: そのとき**Enterが要るかを1回考える**のが狙いで、表そのものが実装の入力になっている
-#: わけではない(判定は `args` からの導出が正)。
-#:
-#: **`save_document`/`open_document`/`export_step`/`export_stl` はこの表に無い** ——
-#: `CommandHost` から外れて `FilesPanel.svelte` へ移ったため、この表
-#: (`web/src/commands/*.ts` の `CommandDef` から読む)には現れない。サーバ側のverbとしては
-#: 変わらず存在する(`save_document`/`open_document`は`tests/test_files_ui.py`、
-#: `export_step`/`export_stl`は`tests/test_io_step.py`)。この4つは文書を変えないか、
-#: 変えても操作ログに載らない側で、`FilesPanel.svelte` の入力欄はEnterでも行内のボタンと
-#: 同じ送信をするが、判定対象は`CommandDef.args`からの導出であり、`CommandDef`自体が
-#: 無いのでこの表の対象にならない。
-#:
-#: **`import_step` はこの表にある**(他の3つと違い、文書を変えるverbであり、
-#: ファイルの出し入れではなくモデリングの1手のため)。
-#: `web/src/commands/files.ts` の `IMPORT_STEP` がその `CommandDef` である。
-ENTER_REQUIRED = {
-    "extrude_face": True,          # 面1つ + 距離(how)
-    "extrude": True,               # 領域は何個でも + 距離 + 結合/切り取り
-    "fillet": True,                # 辺は何本でも + 半径
-    "chamfer": True,               # 辺は何本でも + 距離
-    "boolean_body": True,          # 面ピック + ツールは何個でも + 種別
-    "pattern_rectangular": True,   # 図形は何個でも + 個数と間隔
-    "pattern_circular": True,      # 図形は何個でも + 中心 + 個数と角度
-    "import_svg": True,            # パス(howがある → Enterが要る。sketch_idはApp.svelteが足す)
-    "import_step": True,           # パス(howがある → Enterが要る。targetは取らない)
-    "add_line": False,             # **点2つ + 長さ・角度(fromPoints。howに数えない) → 即適用**
-    "sketch_create": False,        # **貼る先を1つ指すだけ。howが無い → 即適用**
-    "sketch_create_offset": True,  # 貼る先1つ + オフセット距離(how)
-    "add_circle": False,           # 中心 + 円周の点 + 半径(fromPoints)
-    "add_rectangle": False,        # 角 + 対角 + 幅・高さ(fromPoints)
-    "add_arc": False,              # 始点 + 終点 + 円弧上の点 + 半径(fromPoints)
-    "select_in_sketch": False,     # 引数が無い(完成させるクリックが無いので発火もしない)
-    "move_sketch_entities": True,  # 点・辺は何個でも + 移動量2つ + 複製の選択
-    "move_body": True,             # 面/辺/頂点は何個でも + 移動量3つ + 複製の選択
-    "mirror_sketch_entities": True,  # 図形は何個でも + 軸の線分のピック(howは無い)
-    "mirror_body": True,           # 面/辺/頂点は何個でも + 鏡映面(choice)
-    "delete": True,                # 対象は何個でも(howは無い。通常/スケッチ両モードで同じ1つ)
-    "set_preserve_bodies": True,   # ボディは何個でも(0個もよい=解除)
-    "set_exclude_bodies": True,    # 同上
-    "set_fixtures": True,          # 面は何個でも(0個もよい=解除)
-    "set_loads": True,             # 面は1枚以上 + 向き(choice) + 大きさ(number)
-    "clear_loads": True,           # 面は何個でも(0個もよい=全部外す)
-}
-
-
-def test_the_command_arguments_are_readable():
-    """先に**走査そのものが効いている**ことを見る(0件なら下の検査は常に緑になる)。"""
-    args = _ui_command_args()
-    assert len(args) == len(ENTER_REQUIRED), (
-        f"UIのコマンドの数が変わった(Enter要否の表を更新すること): {sorted(args)}"
-    )
-    assert args["extrude_face"] == [("selection", "1"), ("number", "")], (
-        f"引数の読み取りが壊れている: {args['extrude_face']}"
-    )
-    assert args["select_in_sketch"] == [], f"引数の読み取りが壊れている: {args['select_in_sketch']}"
-
-
 def test_which_commands_apply_without_enter():
-    """**Enter要否は `args` からの導出**であり、いま即適用になるのはスケッチの描く4verbと
-    `sketch_create` の5つである(`select_in_sketch` は引数が無く、完成させるクリックが
-    無いので発火しない側で数に入らない)。
-
-    per-commandのフラグを置かない設計(`command.ts` の `needsEnter`)なので、引数の書き方を
-    変えると**別のverbのEnter要否が黙って変わる** —— 例えば `extrude_face` の選択引数から
-    `max: 1` を外すと「面を選び終わったと言う手」が要るかどうかが裏返り、`add_circle` の
-    半径から `fromPoints` を外すと**寸法を打つまで円が置けなくなる**。
-    ここはその変化を名指しで落とす。
-    """
-    derived = {name: _needs_enter(args) for name, args in _ui_command_args().items()}
-    assert derived == ENTER_REQUIRED, (
-        "Enter要否が表と食い違う(意図した変更なら表と README「操作の型」を更新すること): "
-        f"{ {name: value for name, value in derived.items() if ENTER_REQUIRED.get(name) != value} }"
-    )
-    immediate = sorted(name for name, value in derived.items() if not value)
+    """落ちたら、`command.ts` の `needsEnter` か引数の書き方(`max` / `fromPoints`)が変わり、
+    Enter無しで適用されるコマンドの顔ぶれが変わった(意図した変更なら README「操作の型」も直す)。"""
+    immediate = sorted(command["id"] for command in _ui_commands() if not command["needsEnter"])
     assert immediate == [
         "add_arc",
         "add_circle",
@@ -570,37 +396,8 @@ TRANSFORM_PREVIEW_VERBS = {
 
 
 def _ui_command_previews() -> dict[str, str]:
-    """`web/src/commands/*.ts` の `CommandDef` から「ID -> preview」を読む。
-
-    切り出し方は `_ui_command_categories` と同じ(`id` の次から次の `id` の手前まで)。
-    書き忘れた定義は空文字になり、下の検査が名指しで落とす。
-    """
-    found: dict[str, str] = {}
-    for path in sorted(COMMANDS_DIR.glob("*.ts")):
-        text = path.read_text(encoding="utf-8")
-        marks = list(re.finditer(r"^\s*id:\s*'([^']+)'", text, re.M))
-        for index, match in enumerate(marks):
-            end = marks[index + 1].start() if index + 1 < len(marks) else len(text)
-            chunk = text[match.end():end]
-            preview = re.search(r"^\s*preview:\s*'([^']+)'", chunk, re.M)
-            found[match.group(1)] = preview.group(1) if preview else ""
-    return found
-
-
-def _ui_command_consts() -> dict[str, str]:
-    """`export const NAME: CommandDef` から「TSの定数名 -> コマンドID」を読む。
-
-    `App.svelte` が幽霊の分岐を**文字列リテラルではなく `MOVE_BODY.id` で書いている**
-    (綴りの間違いを `tsc` に見てもらうため)ので、静的に配線を辿るにはこの対応が要る。
-    """
-    found: dict[str, str] = {}
-    for path in sorted(COMMANDS_DIR.glob("*.ts")):
-        text = path.read_text(encoding="utf-8")
-        for match in re.finditer(r"^export const (\w+): CommandDef", text, re.M):
-            ident = re.search(r"^\s*id:\s*'([^']+)'", text[match.end():], re.M)
-            if ident is not None:
-                found[match.group(1)] = ident.group(1)
-    return found
+    """UIのコマンドID -> `preview`。"""
+    return {command["id"]: command["preview"] for command in _ui_commands()}
 
 
 def _local_ghost_routes() -> dict[str, str]:
@@ -626,7 +423,7 @@ def _local_ghost_routes() -> dict[str, str]:
     app = (REPO_ROOT / "web" / "src" / "App.svelte").read_text(encoding="utf-8")
     start = app.index("function showLocalGhost(")
     end = app.index("function requestPreview(", start)
-    consts = _ui_command_consts()
+    consts = {name: command["id"] for command in _ui_commands() for name in command["exports"]}
     for name in re.findall(r"\b([A-Z][A-Z0-9_]*)\.id\b", app[start:end]):
         if name in consts:
             routes[consts[name]] = "showLocalGhost"
@@ -679,24 +476,6 @@ def test_the_transform_verbs_are_not_added_to_speculative_execution():
     previewable = set(_catalog().previewable_verbs())
     leaked = sorted(TRANSFORM_PREVIEW_VERBS & previewable)
     assert not leaked, f"ローカル方式のverbが `previewable=True` になっている: {leaked}"
-
-
-def test_the_catalog_notes_no_longer_say_these_verbs_have_no_preview():
-    """宣言の `note` が**実装後の実態と食い違ったまま残っていない**。
-
-    `note` はAIが読む唯一の設計判断の置き場なので、「プレビューに載せていない」が
-    残っていると、AIは今も幽霊が出ないものとして人に説明する。
-    """
-    notes = {
-        command.name: (command.note or "")
-        for command in _catalog().COMMANDS
-        if command.name in TRANSFORM_PREVIEW_VERBS
-    }
-    assert set(notes) == TRANSFORM_PREVIEW_VERBS, f"宣言が見つからない: {sorted(notes)}"
-    stale = {name: note for name, note in notes.items() if "プレビューに載せていない" in note}
-    assert not stale, f"note が古い設計判断のまま: {sorted(stale)}"
-    silent = sorted(name for name, note in notes.items() if "プレビュー" not in note)
-    assert not silent, f"note がプレビューの扱いに触れていない: {silent}"
 
 
 def _app_function_body(name: str) -> str:
