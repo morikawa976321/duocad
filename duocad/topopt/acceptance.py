@@ -407,7 +407,7 @@ def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_m
         return dict(status='pass' if sf >= target else 'fail', safety_factor=sf,
                     target_safety_factor=target, representative_mpa=report.representative_mpa,
                     allowable_mpa=allowable_mpa, youngs_modulus_mpa=youngs_modulus_mpa,
-                    raw_max_mpa=report.raw_max_mpa, percentile=percentile,
+                    material_max_mpa=report.representative.dense_max, percentile=percentile,
                     max_displacement_mm=report.max_displacement_mm, relative_residual=relative,
                     residual_tolerance=fem.SOLVE_RESIDUAL_TOL, solver=solve_info.get('solver', solver),
                     solver_policy=solver,
