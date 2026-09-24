@@ -106,7 +106,7 @@ PR #20 で 85 ファイル（+29,905 行）を追跡から外した。それま�
 - **verb を1つ足すと `web/src/session.ts` の型宣言（`Applied` union と `ServerState`）も直さないと
   `tests/test_applied_type_sync.py` が赤になる。** 「画面には手を付けない」というバックエンドのタスクは自分では緑に
   できない（4 verb と `state_meta` の新キーで7本赤）。**宣言・型・種別の表＝バックエンド／引数の集め方・描画＝フロント**で切る。
-  `tests/test_ui_command_wiring.py` の `ENTER_REQUIRED` は逆に画面側（`CommandDef` からの導出）。
+  `tests/test_ui_command_wiring.py` の即適用の顔ぶれは逆に画面側（`CommandDef` からの導出）。
   `commands/command.ts` の `SelectableKind` / `KIND_COUNTERS` はコアの `SELECTABLE_KINDS` の写しで、足し忘れると
   件数表示が `undefined` になる（`tsc` では出ない。`ref as ShapeRef` のキャストで書かれているため）。
 - **`ws="none"`（MCP 専用）の verb は `test_applied_type_sync.py` の対象外**（対象条件は `ws != "none" and changes_document`）。

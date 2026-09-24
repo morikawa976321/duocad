@@ -14,8 +14,8 @@
  * だけ下げる。`.viewport` の寸法＝カメラのアスペクトは変えない。
  *
  * 設定ダイアログ(SettingsDialog.svelte)はこの不変条件の例外ではなく、
- * **そもそも大きさを持たない側**である — native <dialog> の showModal() で
- * top-layer に出るのでフローの外にいる(ビューポートを覆わず、::backdrop も透明)。
+ * **そもそも大きさを持たない側**である — ブラウザ・トーストと同じく position:absolute で
+ * フローの外にいる(非モーダルの show() で開く理由は SettingsDialog.svelte)。
  *
  * 例外は左サイドバーの開閉だけで、これは意図してビューポートを広げる操作である
  * (flex の配分が変わるだけで .viewport 自身のサイズ指定は動かない。

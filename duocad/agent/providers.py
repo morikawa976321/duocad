@@ -209,10 +209,6 @@ class Provider:
         raise NotImplementedError
 
 
-def _text_of(turn: AssistantTurn) -> str:
-    return turn.text or ""
-
-
 class OpenAICompatProvider(Provider):
     """OpenAI互換(`POST /v1/chat/completions`・非streaming)。llama-server がこれ。
 
@@ -269,7 +265,7 @@ class OpenAICompatProvider(Provider):
             elif isinstance(turn, AssistantTurn):
                 # **生のメッセージは戻さず組み直す**(サーバごとに増える
                 # `reasoning_content` のような欄を送り返すと弾く実装がある)。
-                message: dict = {"role": "assistant", "content": _text_of(turn) or None}
+                message: dict = {"role": "assistant", "content": turn.text or None}
                 if turn.tool_calls:
                     message["tool_calls"] = [
                         {

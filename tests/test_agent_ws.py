@@ -2,8 +2,7 @@
 
 **`ai_*` はverbではない**(文書を直接は変えない・操作ログに載らない・undoの単位でもない)ので、
 `duocad/catalog.py` の `COMMANDS` には入れない。除外そのものは
-`test_ui_command_wiring.py::test_ai_commands_are_not_verbs` と
-`test_mcp_verbs.py::test_ai_commands_have_no_mcp_tool` が固定する。
+`test_ui_command_wiring.py::test_ai_commands_are_not_verbs` が固定する。
 
 固定する6つ:
 

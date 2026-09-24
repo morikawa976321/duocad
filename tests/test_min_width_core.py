@@ -9,7 +9,7 @@ from scipy import ndimage
 from duocad.topopt import binary_search as bs
 from duocad.topopt import min_width
 
-from test_binary_search import _assert_min_width_invariants, _peel_box_until_stuck, core_groups_oracle
+from topopt_support import Table, assert_min_width_invariants, bar_conditions, core_groups_oracle, peel_box_until_stuck
 
 
 def _chain(step, n=4, m=2):
@@ -168,6 +168,15 @@ def test_the_window_grows_with_the_margin_and_never_leaves_the_grid():
     assert (lo3 == 0).all() and (hi3 == 12).all() and ext3[0].stop == 12
 
 
+def test_a_move_that_also_removed_an_island_is_judged_on_the_whole_core_not_in_the_window():
+    """落ちたら、島を一緒に消した手の芯の判定を一口の周りの窓で済ませている(島は一口から離れた材料を消すので、窓では言えない)。"""
+    split = _chain((1, 1, 1))  # 芯は4つに割れている
+    far = (split.shape[0] - 1,) * 3  # どの立方からも離れたセル
+    core = min_width.CoreConnectivity(2)
+    assert core.after_bite(split, far, 0)  # 窓の中では芯は変わらない
+    assert not core.after_bite(split, far, 1)
+
+
 def test_peel_refuses_the_moves_that_would_split_the_core_and_every_result_keeps_it_connected():
     """落ちたら、`peel` が芯を割る手を通している(R(m) だけを守る一口は、同じ入力で芯を割る)。"""
     rng = np.random.default_rng(20260927)
@@ -178,7 +187,7 @@ def test_peel_refuses_the_moves_that_would_split_the_core_and_every_result_keeps
         mask = np.ones(tuple(int(x) for x in rng.integers(7, 11, size=3)), bool)
         for _ in range(12):
             after, stats = bs.peel(mask, rng.permutation(mask.size), max(1, int(mask.sum()) // 4), anchors, min_width_cells=m)
-            _assert_min_width_invariants(after, m)
+            assert_min_width_invariants(after, m)
             refused += stats.skipped_core
             core = min_width.CoreConnectivity(m)
             for cell in np.argwhere(mask)[rng.permutation(int(mask.sum()))[:20]]:
@@ -196,15 +205,13 @@ def test_peel_refuses_the_moves_that_would_split_the_core_and_every_result_keeps
 
 @pytest.mark.parametrize('m,kind', [(2, 'bending'), (3, 'random')])
 def test_peel_with_min_width_carves_a_box_deeply_with_the_core_connected_at_every_step(m, kind):
-    """落ちたら、芯を割る手を断る分だけ削れなくなった(全ステップの不変条件は `_peel_box_until_stuck` が見る)。"""
-    assert _peel_box_until_stuck(m, kind) < 0.3
+    """落ちたら、芯を割る手を断る分だけ削れなくなった(全ステップの不変条件は `peel_box_until_stuck` が見る)。"""
+    assert peel_box_until_stuck(m, kind) < 0.3
 
 
 def test_a_design_space_whose_core_is_split_is_recorded_and_no_candidate_that_keeps_it_split_is_returned():
     """落ちたら、芯が割れた設計空間(斜めの共有1セルで3つの立方をつないだ形)を入口で数えていない、または割れたまま合格を返している。
     両端の条件節点は別々の立方にあるので、芯を1つにするには片方を落とすしかなく、条件が成り立たない。"""
-    from test_binary_search import Table, bar_conditions
-
     design = _chain((1, 1, 1), n=3)[:4, :4, :4]
     assert bs._mask_satisfies_min_width(design, 2) and core_groups_oracle(design, 2) == 3
     conditions = bar_conditions(shape=design.shape)

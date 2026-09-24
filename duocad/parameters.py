@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from .document import Document, unknown_id_message
 from .oplog import Operation, register_verb, verb_handler
@@ -44,11 +44,21 @@ def register_value(doc: Document, value: float) -> str:
     return name
 
 
+def register_all(doc: Document, values: Mapping[str, Any]) -> Dict[str, str]:
+    """`values` の数値を**キーの並びどおりに**登録し、キー -> 名前 を返す(並びが `d<n>` の振り順になる)。"""
+    return {key: register_value(doc, value) for key, value in values.items()}
+
+
 def resolve(doc: Document, ref: Any) -> float:
     """パラメータ名なら現在の値を、素の数値ならそのまま返す。"""
     if isinstance(ref, str):
         return float(doc.parameters[ref])
     return float(ref)
+
+
+def resolve_all(doc: Document, refs: Mapping[str, Any]) -> Dict[str, float]:
+    """図形・反復の `params`(名前つきの値への参照を含む)を、解決済みの数値で返す。"""
+    return {key: resolve(doc, ref) for key, ref in refs.items()}
 
 
 def parameter_of(doc: Document, sketch_id: str, owner_id: str, key: str) -> str:
@@ -74,7 +84,11 @@ def parameter_of(doc: Document, sketch_id: str, owner_id: str, key: str) -> str:
 
 
 def is_positive_int(value: Any) -> bool:
-    """1以上の整数か。boolは除外。floatでも整数値なら受ける(反復の個数の検査)。"""
+    """1以上の整数か。boolは除外。floatでも整数値なら受ける(反復の個数の検査)。
+
+    反復の作成と `set_parameter` の両方が使うのでここに置く(作成時だけ検査していると、
+    後から書き込む経路が素通りする)。
+    """
     if isinstance(value, bool):
         return False
     if isinstance(value, int):
@@ -182,7 +196,7 @@ def rebuild(
     # 失敗しても文書を壊さないための退避。再生は必ず**新しい** Body / Sketch を作るので、
     # ここで持つ参照は再生中に書き換わらない(だから元に戻せる)。退避が無いと、
     # 再生が途中で失敗したときに「ログは5行あるがボディもスケッチも0」という
-    # 不整合な文書が残る(参照STEPを移動しただけでも起きうる)。
+    # 不整合な文書が残る。
     saved_bodies = list(doc.bodies)
     saved_sketches = list(doc.sketches)
     saved_parameters = dict(doc.parameters)

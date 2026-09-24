@@ -37,8 +37,8 @@ UIとAI操作の両方に共通する設計原則。verbを足す・直すとき
    (`set_parameter`)・可視性の切替(`set_visible`)・選択集合の編集は直接操作であり、
    この型の対象外である。
 3. **省けるクリックは徹底的に省く。** Enterが要るのは次のいずれかに当てはまる操作だけで、
-   どちらでもなければ最後のクリックで即適用される（実装は `web/src/commands/command.ts`
-   の `needsEnter`、正は `tests/test_ui_command_wiring.py` の `ENTER_REQUIRED`）:
+   どちらでもなければ最後のクリックで即適用される（正は `web/src/commands/command.ts`
+   の `needsEnter`。即適用になる顔ぶれは `tests/test_ui_command_wiring.py` が固定する）:
    - (1) **対象を複数選べる**（辺を何本でも・図形を何個でも）
    - (2) **howの入力がある**（数値・選択肢・パス）。ただし**点から導ける寸法欄**
      （`NumberArgSpec.fromPoints`。スケッチの長さ・幅・高さ・半径）は how ではない ——
@@ -147,7 +147,7 @@ cd web; npm run dev                                 # 画面(5173)
   FOVは見ながら決める設定なので、背後を
   inert にすると「見る」だけが残って「回して確かめる」が死ぬ。`showModal()` がただで
   付けていた Esc と重なり順は自前で持ち直してある（`SettingsDialog.svelte`）。
-- **Enterが要らないコマンド**は `tests/test_ui_command_wiring.py` の `ENTER_REQUIRED` が正。
+- **Enterが要らないコマンド**は `web/src/commands/command.ts` の `needsEnter` が正（顔ぶれは `tests/test_ui_command_wiring.py` が固定する）。
 - undo/redoは**キーボードのみ**（Ctrl+Z / Ctrl+Y）。
 - **保存できる先は「いま編集しているファイル」1つだけ**。上書きの口は
   ヘッダの保存ボタン（`#file-save`）と **Ctrl+S** で、行き先を選ばせない。ファイルパネルの
@@ -238,7 +238,7 @@ cd web; npm run dev                                 # 画面(5173)
 
 ブラウザは**Chromeを先に見る**（無ければEdge。`DUOCAD_BROWSER` で明示すればそれが最優先）。
 
-**一覧の正は `web/scripts/smoke-*.mjs` のファイル名**（各ファイル先頭のコメントが何を見るかの正）。
+**一覧の正は `web/scripts/smoke*.mjs` のファイル名**（各ファイル先頭のコメントが何を見るかの正）。
 番号付きの固定リストは持たない —— 増減のたびにREADMEが古くなるため。
 
 ```powershell
@@ -248,7 +248,7 @@ cd web
 node scripts/smoke.mjs
 
 # 全部（1本でも❌ならそこで終了コード1）
-Get-ChildItem scripts/smoke-*.mjs | ForEach-Object {
+Get-ChildItem scripts/smoke*.mjs | ForEach-Object {
   node $_.FullName
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
@@ -437,7 +437,7 @@ Svelteは二度と中を触らない。また `viewport.ts` を狭いインタ�
 ### AI側（MCP）
 
 **ツールの一覧は [MCP.md](MCP.md) が正**（ここに写すと、増減のたびに2箇所を直すことになる）。
-機械の正は `tests/test_mcp_verbs.py` の `EXPECTED_TOOLS` で、**顔ぶれを一致で固定**している。
+表と実際の `tools/list` の**顔ぶれの一致**は `tests/test_doc_code_agreement.py` が機械で見る。
 
 設計として押さえるのはこの4点:
 
@@ -493,8 +493,7 @@ AIを選んで繋ぐ**（今あるのは llama-server の1つ）。**MCP経路�
 - **`ai_*` はverbではない**。文書を直接は変えない(操作ログに載らずundoの単位でもない)ので
   `duocad/catalog.py` の `COMMANDS`(「MCPツール名==WSコマンド名==UIコマンドID==verb名」の
   一致規律)には入れない。対応するMCPツールも作らない(AIがAIを起動する口は要らない)。
-  除外は `tests/test_ui_command_wiring.py::test_ai_commands_are_not_verbs` と
-  `tests/test_mcp_verbs.py::test_ai_commands_have_no_mcp_tool` が固定する
+  除外は `tests/test_ui_command_wiring.py::test_ai_commands_are_not_verbs` が固定する
 - **`ai_send` はモデルへのHTTPリクエスト(数十秒かかりうる)を待たずに返る** ——
   `AgentLoop.run()` を `run_in_executor` で実行器スレッドへ逃がし、進捗
   (`ai_tool_call`)と最終応答(`ai_result`)は別イベントとして後から届く

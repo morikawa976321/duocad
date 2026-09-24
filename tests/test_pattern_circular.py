@@ -195,24 +195,28 @@ def test_a_single_copy_needs_no_step():
 # rotate_copies
 # --------------------------------------------------------------------------------------
 def test_rotate_copies_false_keeps_the_original_orientation():
-    """`rotate_copies=False` なら複製の向きは元と同じ。
+    """`rotate_copies=False` の複製は元と同じ向き(中心から見た4隅が元と一致する)。
 
-    **回転非対称な図形（長方形）で確かめる** — 円は回転対称なので、向きを変えても
-    変えなくても同じ形になり、検証にならない。向きが同じなら、各複製の境界箱の
-    幅と高さは元と同じ（回転させると幅と高さが入れ替わる／斜めになって広がる）。
+    落ちたら、複製が回っている。題材は正方形でない長方形(円や正方形は90度回しても区別が付かない)。
     """
     document = Document()
     sketch_id = sketch_create(document, "XY")
-    # 幅と高さが違う長方形（正方形だと回転しても区別が付かない）
     rect = add_rectangle(document, sketch_id, (36.0, 28.0), 8.0, 4.0)
     pattern_circular(
         document, sketch_id, [rect], CENTER, 4, total_angle=360.0, rotate_copies=False
     )
 
-    found = regions(document, sketch_id)
-    assert len(found) == 4
-    for region in found:
-        assert math.isclose(region.area, 8.0 * 4.0, rel_tol=1e-6)
+    expanded = _expanded_entities(document, sketch_id)
+    assert len(expanded) == 4
+    shapes = [_corners_about_centre(item["params"]) for item in expanded]
+    assert all(shape == pytest.approx(shapes[0], abs=1e-9) for shape in shapes)
+
+
+def _corners_about_centre(params: dict) -> list:
+    corners = kernel.rectangle_corners(params)
+    cu = sum(u for u, _ in corners) / len(corners)
+    cv = sum(v for _, v in corners) / len(corners)
+    return sorted((round(u - cu, 9), round(v - cv, 9)) for u, v in corners)
 
 
 def _corner_set(params: dict) -> list:
@@ -225,24 +229,6 @@ def _corner_set(params: dict) -> list:
     return sorted(
         (round(u, 9), round(v, 9)) for u, v in kernel.rectangle_corners(params)
     )
-
-
-def test_rotate_copies_true_actually_rotates_the_rectangle():
-    """`rotate_copies=True`（既定）なら複製は回転する。
-
-    面積が変わっていたら、4隅の張り方が壊れている。
-    """
-    document = Document()
-    sketch_id = sketch_create(document, "XY")
-    rect = add_rectangle(document, sketch_id, (36.0, 28.0), 8.0, 4.0)
-    pattern_circular(
-        document, sketch_id, [rect], CENTER, 4, total_angle=360.0, rotate_copies=True
-    )
-
-    found = regions(document, sketch_id)
-    assert len(found) == 4
-    for region in found:
-        assert math.isclose(region.area, 8.0 * 4.0, rel_tol=1e-6), "回転で面積が変わってはいけない"
 
 
 def test_rotated_copies_of_a_rectangle_are_all_rectangles():
@@ -348,7 +334,7 @@ def test_pattern_survives_save_load_and_replay():
 # --------------------------------------------------------------------------------------
 # 失敗を黙って通さない
 # --------------------------------------------------------------------------------------
-#: 0 / 負 / 非整数の3分岐は `test_pattern.py` が網羅済み(`_is_positive_int` は共有)。
+#: 0 / 負 / 非整数の3分岐は `test_pattern.py` が網羅済み(`parameters.is_positive_int` は共有)。
 #: ここは呼び出し口の配線確認なので境界の 0 だけ通す。
 @pytest.mark.parametrize("count", [0])
 def test_count_must_be_a_positive_integer(count):

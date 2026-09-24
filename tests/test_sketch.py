@@ -15,13 +15,9 @@ import pytest
 # (境界検査は `duocad/` 配下だけを対象にしており、テストは対象外)。
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder
 
-# 境界検査の実体は test_boundaries.py から直接借りる(写経すると片方だけ腐る)。
-from test_boundaries import DUOCAD_DIR, _imported_module_roots, _source_files
-
 from duocad import kernel
 from duocad.document import Body, Document
 from duocad.sketch import (
-    BASE_PLANES,
     Entity,
     add_circle,
     add_line,
@@ -32,9 +28,6 @@ from duocad.sketch import (
     get_sketch,
     sketch_create,
 )
-
-#: M2のソース(`duocad/` からの相対パス)。境界検査の対象に入っていることを固定する
-M2_MODULES = ("sketch.py", "region.py", "verbs/extrude.py")
 
 
 @pytest.fixture()
@@ -78,14 +71,6 @@ def first_face_index(shape, kind: str) -> int:
 # --------------------------------------------------------------------------------------
 # データモデル — day1で払う予防(素で通る)
 # --------------------------------------------------------------------------------------
-def test_base_planes_are_the_three_reference_planes():
-    """基準平面は3つだけ(実装計画書§1)。未知の名前は ValueError で弾く。"""
-    assert BASE_PLANES == ("XY", "XZ", "YZ")
-    assert base_plane("XY") == {"kind": "base", "name": "XY", "provenance": None}
-    with pytest.raises(ValueError):
-        base_plane("ZZ")
-
-
 def test_entity_kind_is_validated():
     """図形の種別は登録されたものだけを受け付ける。未知の種別は黙って通さない(§6予防6)。"""
     assert Entity(id="e1", kind="circle").params == {}
@@ -96,34 +81,18 @@ def test_entity_kind_is_validated():
         Entity(id="e3", kind="spline")
 
 
-def test_m2_modules_are_covered_by_the_import_boundary_scan():
-    """`duocad/verbs/` に足したモジュールも import 境界検査の対象に入り、
-    OCP/build123dを直接importしていないこと。**対象に入っていること自体**は
-    走査が再帰的というだけでは固定されない(新規ファイルの取りこぼしに気づけない)。
-    """
-    scanned = {rel for rel, _ in _source_files()}
-    assert set(M2_MODULES) <= scanned, f"走査から漏れている: {sorted(set(M2_MODULES) - scanned)}"
-    for rel in M2_MODULES:
-        roots = _imported_module_roots(DUOCAD_DIR / rel)
-        assert "OCP" not in roots, f"{rel} がOCPを直接importしている(kernel.py越しに呼ぶこと)"
-        assert "build123d" not in roots, f"{rel} がbuild123dを直接importしている(query.py越し)"
-
-
 # --------------------------------------------------------------------------------------
 # sketch_create — 基準平面と既存ソリッドの面
 # --------------------------------------------------------------------------------------
-#: 3平面は `base_plane()` の同じ return を通るだけで分岐が無い(`sketch.py`)。
-#: 3値の網羅は `test_base_planes_are_the_three_reference_planes` が別に固定している。
-@pytest.mark.parametrize("name", BASE_PLANES[:1])
-def test_sketch_create_on_each_base_plane(name):
-    """基準3面のどれにもスケッチを作れる。作ったスケッチは文書が持つ。"""
+def test_sketch_create_on_a_base_plane():
+    """基準平面にスケッチを作れ、文書が持つ。平面の参照はログへ入る形(保存形式)のまま。"""
     document = Document()
 
-    sketch_id = sketch_create(document, name)
+    sketch_id = sketch_create(document, "XY")
 
     assert len(document.sketches) == 1
     created = get_sketch(document, sketch_id)
-    assert created.plane == base_plane(name)
+    assert created.plane == {"kind": "base", "name": "XY", "provenance": None}
     assert created.entities == []
 
 

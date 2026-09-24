@@ -1,7 +1,6 @@
 /**
  * `web/src/screenPick.ts` の純関数を**実際に評価する**ための小さな口。
- * `tests/test_screen_pick.py` が `node` でこれを走らせる(`tests/eval_grid_scale.mjs` と
- * 同じやり方 —— ソースの文字列比較ではなく実行結果で見る)。
+ * `tests/test_ts_evaluators.py` が `node` でこれを走らせる。
  *
  * このロジックには**Python側の対応物が無い**(当たり判定はTSにしか無い)ので、
  * 2言語を突き合わせる代わりに、ここで直接 assert して失敗したら非ゼロで終了する。

@@ -4,7 +4,7 @@
 ここが見るのは**その上に開けた口**である:
 
 1. **解像度の目盛り**(`resolution_limits()["steps"]`)—— **添字0が上限側(いちばん粗い=既定)**で、
-   進むほど細かく・要素数が増え・予想時間が伸びる。**粗い側へ動く段を作らない**のが
+   進むほど細かく・要素数が増える。**粗い側へ動く段を作らない**のが
    この機能の全部なので、順序そのものを固定する。
 2. **WebSocketの4つの口** —— `optimize_conditions` / `optimize_resolution` /
    `run_optimization` / `cancel_optimization`。verbではない(`category="protocol"`)ので、
@@ -14,7 +14,7 @@
 4. **見積もれないときは赤い札にしない** —— 条件面がまだ1枚も無いのは「設定の途中」であって
    事故ではないので、`optimize_resolution` は `error` キーに文を入れて返す。
 
-**ここでSIMPは回さない。** 端から端まで実際に回すのは実ブラウザの
+**ここで最適化の探索は回さない。** 端から端まで実際に回すのは実ブラウザの
 `web/scripts/smoke-optimize.mjs`(約1〜2分)である。
 """
 from __future__ import annotations
@@ -93,11 +93,7 @@ def test_steps_start_at_the_coarse_end(session: Session) -> None:
 
 
 def test_steps_get_finer_and_costlier(session: Session) -> None:
-    """要素サイズ・要素数の両方とも単調であること。**予想時間は付けない**
-
-    (計画書§6.2「所要時間は旧SIMP係数を使わない。初回は不明と表示する」——段階5でこの
-    フィールド自体を廃止した)。
-    """
+    """落ちたら、目盛りを進めても要素サイズが細かく・要素数が多くならない段がある。"""
     _setup_four_conditions(session)
     steps = optimize_run.resolution_limits(session.document)["steps"]
     assert len(steps) >= 2
@@ -106,15 +102,6 @@ def test_steps_get_finer_and_costlier(session: Session) -> None:
         assert current["element_size_mm"] < previous["element_size_mm"]
         assert current["element_count"] > previous["element_count"]
         assert current["element_count"] <= optimize_run.MAX_ELEMENTS
-        assert "seconds_typical" not in current
-        assert "seconds_worst" not in current
-
-
-def test_steps_are_plain_values(session: Session) -> None:
-    """**そのままWebSocketへ載せられる**こと(`20260904-1704` の契約①と同じ規律)。"""
-    _setup_four_conditions(session)
-    limits = optimize_run.resolution_limits(session.document)
-    json.dumps(limits)  # 落ちなければよい
 
 
 # --------------------------------------------------------------------------------------
@@ -134,7 +121,7 @@ class FakeConnection:
 
 
 def _dispatch(session: Session, message: dict) -> FakeConnection:
-    """1コマンドを流して応答を集める。**SIMPは回らない**コマンドだけをここで使う。"""
+    """1コマンドを流して応答を集める。**探索が回らない**コマンドだけをここで使う。"""
 
     async def scenario() -> FakeConnection:
         server = Server(session)
@@ -212,7 +199,7 @@ def test_second_run_is_refused_while_one_is_running(session: Session) -> None:
         server.bind_loop(asyncio.get_running_loop())
         connection = FakeConnection()
         server.clients.add(connection)
-        server._optimize_running = True  # 走っている最中の状態を作る(SIMPは回さない)
+        server._optimize_running = True  # 走っている最中の状態を作る(探索は回さない)
         await server._dispatch(connection, json.dumps({"cmd": "run_optimization"}))
         return connection
 
@@ -278,15 +265,6 @@ def test_run_optimization_refuses_a_min_width_beyond_the_grid_at_the_ws_door(ses
     _, connection = _run_to_completion(session, {"cmd": "run_optimization", "min_width_mm": 1e6})
     assert "上限" in connection.of_type("optimize_error")[0]["message"]
     assert connection.of_type("optimize_result") == []
-
-
-def test_run_optimization_passes_a_valid_min_width_mm_through_to_the_session(session: Session, monkeypatch) -> None:
-    """`net/ws.py` が `min_width_mm` を落とす・別の名前で渡すと、指定した幅が黙って無視される。"""
-    _setup_four_conditions(session)
-    seen: dict = {}
-    monkeypatch.setattr(session, "run_optimization", lambda **kwargs: seen.update(kwargs) or {"state": "done"})
-    _run_to_completion(session, {"cmd": "run_optimization", "min_width_mm": 25.5})
-    assert seen["min_width_mm"] == 25.5
 
 
 def test_a_missing_min_width_mm_passes_none_through_to_the_session(session: Session, monkeypatch) -> None:

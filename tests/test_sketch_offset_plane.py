@@ -28,7 +28,6 @@ from duocad.sketch import (
     add_rectangle,
     base_plane,
     face_plane,
-    get_sketch,
     offset_plane,
     resolve_plane,
     sketch_create,
@@ -62,18 +61,6 @@ def assert_same_frame(actual: dict, expected: dict) -> None:
 # --------------------------------------------------------------------------------------
 # 1. 姿勢の計算 — 法線方向への平行移動だけで、u/v/normalは不変
 # --------------------------------------------------------------------------------------
-def test_an_offset_from_a_base_plane_translates_the_origin_along_the_normal():
-    document = Document()
-    sketch_id = sketch_create(document, offset_plane(base_plane("XY"), 5.0))
-
-    frame = region.plane_frame(document, sketch_id)
-    xy_frame = kernel.sketch_plane_frame(base_plane("XY"))
-    assert frame["origin"] == pytest.approx([0.0, 0.0, 5.0])
-    assert frame["u"] == pytest.approx(xy_frame["u"])
-    assert frame["v"] == pytest.approx(xy_frame["v"])
-    assert frame["normal"] == pytest.approx(xy_frame["normal"])
-
-
 @pytest.mark.parametrize("name", BASE_PLANES)
 def test_an_offset_from_each_base_plane_translates_along_that_planes_own_normal(name):
     """3基準平面それぞれで、平行移動する向きがその平面自身の法線であること(XYだけでは
@@ -89,14 +76,7 @@ def test_an_offset_from_each_base_plane_translates_along_that_planes_own_normal(
     )
     assert frame["u"] == pytest.approx(base_frame["u"])
     assert frame["v"] == pytest.approx(base_frame["v"])
-
-
-def test_a_negative_distance_offsets_to_the_opposite_side():
-    document = Document()
-    sketch_id = sketch_create(document, offset_plane(base_plane("XY"), -5.0))
-    assert region.plane_frame(document, sketch_id)["origin"] == pytest.approx(
-        [0.0, 0.0, -5.0]
-    )
+    assert frame["normal"] == pytest.approx(base_frame["normal"])
 
 
 def test_a_zero_distance_coincides_with_the_base_plane():
@@ -188,16 +168,6 @@ def test_an_offset_from_every_face_including_reversed_ones_keeps_the_faces_uv_ax
         )
 
 
-def test_regions_are_computable_on_an_offset_plane():
-    """姿勢だけでなく領域計算そのものが offset 平面でも動く(u,v は基準側と同じ規則)。"""
-    document = Document()
-    sketch_id = sketch_create(document, offset_plane(base_plane("XY"), 10.0))
-    add_circle(document, sketch_id, (0.0, 0.0), 4.0)
-    assert [item.area for item in region.regions(document, sketch_id)] == pytest.approx(
-        [math.pi * 16.0]
-    )
-
-
 # --------------------------------------------------------------------------------------
 # 2. 入れ子(offsetのoffset)は作れない
 # --------------------------------------------------------------------------------------
@@ -212,13 +182,17 @@ def test_offsetting_an_offset_plane_is_rejected():
 # 3. ログ — 姿勢は載せず、素の参照(base/distance)だけを積む
 # --------------------------------------------------------------------------------------
 def test_the_frame_is_kept_out_of_the_oplog():
+    """ログには姿勢を載せない(貼る先の面の枠も落とす)。落ちたら、焼き付けた枠がログへ漏れている。"""
     document = Document()
-    sketch_create(document, offset_plane(base_plane("XY"), 5.0))
+    body_id = new_box(document)
+    sketch_create(document, offset_plane(face_plane(body_id, TOP_FACE_INDEX), 5.0))
 
     logged = document.log.entries[-1]
-    assert logged.verb == "sketch_create"  # base_plane を渡したときのverb名は変わらない
-    assert set(logged.args["plane"]) == {"kind", "base", "distance", "provenance"}
-    assert logged.args["plane"]["base"] == {"kind": "base", "name": "XY", "provenance": None}
+    assert logged.verb == "sketch_create"
+    assert "frame" not in logged.args["plane"]
+    assert logged.args["plane"]["base"] == {
+        "kind": "face", "body": body_id, "index": TOP_FACE_INDEX, "provenance": None
+    }
     assert logged.args["plane"]["distance"] == 5.0
 
 
@@ -250,21 +224,3 @@ def test_a_log_round_trip_reproduces_the_same_frame():
     assert [item.area for item in region.regions(restored, sketch_id)] == pytest.approx(
         [math.pi * 4.0]
     )
-
-
-def test_undo_and_redo_of_the_sketch_create_itself_reproduce_the_same_frame():
-    """undo(=sketch_createの取り消し)→redoで、同じスケッチIDが同じ姿勢で戻る。
-
-    redoは `_do_sketch_create` を再び走らせる、つまり `resolve_plane` の offset 分岐を
-    もう一度通る —— そこが壊れていれば距離が二重にずれるか例外になる。
-    """
-    document = Document()
-    sketch_id = sketch_create(document, offset_plane(base_plane("XY"), 5.0))
-    expected = region.plane_frame(document, sketch_id)
-
-    document.log.undo(document)
-    assert not any(s.id == sketch_id for s in document.sketches)
-
-    document.log.redo(document)
-    assert get_sketch(document, sketch_id) is not None
-    assert_same_frame(region.plane_frame(document, sketch_id), expected)

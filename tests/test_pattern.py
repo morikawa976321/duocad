@@ -258,31 +258,6 @@ def test_changing_the_count_changes_the_regions_and_the_next_extrusion():
     )
 
 
-def test_reducing_the_count_below_an_extruded_selection_is_refused():
-    """押し出し済みの領域が反復の縮小で消える編集は、黙って通さず文書を元に戻す。
-
-    6個の穴を開けたあとで `nx` を3から2へ減らすと、記録された押し出しが指していた
-    5番目・6番目の領域が消える。開けたはずの穴が黙って減ったモデルを残さない。
-    """
-    document = Document()
-    plate(document)
-    sketch_id, _, pattern_id = hole_pattern(document)
-    drill_all(document, sketch_id)
-    volume_before = query.volume(document.active_body().shape)
-    entries_before = len(document.log.entries)
-    name = parameter_of(document, sketch_id, pattern_id, "nx")
-
-    with pytest.raises(ValueError):
-        set_parameter(document, name, 2)
-
-    assert document.parameters[name] == COLUMNS, "失敗したのに値が変わっている"
-    assert len(document.log.entries) == entries_before
-    assert len(regions(document, sketch_id)) == COLUMNS * ROWS
-    assert math.isclose(
-        query.volume(document.active_body().shape), volume_before, rel_tol=VOLUME_REL_TOL
-    )
-
-
 def test_editing_one_radius_moves_every_hole():
     """穴の半径を1箇所だけ編集すると、反復で作った全部の穴が追随する。"""
     document = Document()

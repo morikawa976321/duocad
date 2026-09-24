@@ -1,6 +1,7 @@
 """verb層が共有する道具 —— **1 verb 1モジュールを保ったまま、同型の部品だけを1つにする**。
 
-- undo用スナップショット表(`fillet` / `chamfer` / `extrude` / `extrude_face` が使う)
+- undo用スナップショット表(`fillet` / `chamfer` / `extrude` / `extrude_face` が使う)と、
+  形状を差し替えるverbの再適用・undo(`reapply_shape` / `undo_shape`)
 - `editable_body()`(`fillet` / `chamfer` / `extrude_face` が使う)
 
 **スナップショット表を1つにしていることが、この統合の主な利得**である。プレビューは文書を
@@ -15,6 +16,7 @@ from weakref import WeakKeyDictionary
 
 from .. import meshbody
 from ..document import MESH_KIND, Body, BodyId, Document
+from ..oplog import Operation
 
 #: undo用のスナップショット。`(body_id, seq) -> 直前の形状`。
 #:
@@ -43,6 +45,26 @@ def recall(doc: Document, body_id: BodyId, seq: int) -> Any:
             "OpLog.replay(document) してから undo すること"
         )
     return snapshots.pop((body_id, seq))
+
+
+def reapply_shape(doc: Document, body: Body, result: dict, operation: Operation) -> None:
+    """redo / replay: `body` の形状を kernel の結果に差し替え、undo 用に前の形状を覚える。
+
+    **`remember` は do の側でも毎回取り直す** —— `parameters.rebuild()` はログを頭から再生して
+    新しい `Body` を作るので、初回に控えたものは同じ seq でも別の実体になる。
+    `provenance` は初回適用で入っているのが正なので、空のときだけ埋める。
+    """
+    previous_shape = body.shape
+    body.shape = result["shape"]
+    if operation.provenance is None:
+        operation.provenance = result["provenance"]
+    remember(doc, body.id, operation.seq, previous_shape)
+
+
+def undo_shape(doc: Document, operation: Operation) -> None:
+    """形状を差し替えるverbの undo(`args["body_id"]` を覚えていた形状へ戻す)。"""
+    body_id = operation.args["body_id"]
+    doc.get_body(body_id).shape = recall(doc, body_id, operation.seq)
 
 
 def editable_body(

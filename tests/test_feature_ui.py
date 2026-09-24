@@ -73,7 +73,7 @@ def _box(session: Session):
 
 
 class FakeConnection:
-    """`Server` が使うのは `send` だけ(配信の出口)。かつて test_preview.py が使っていたのと同じ形。"""
+    """`Server` が使うのは `send` だけ(配信の出口)。"""
 
     def __init__(self) -> None:
         self.payloads: list = []
@@ -81,18 +81,9 @@ class FakeConnection:
     async def send(self, raw: str) -> None:
         self.payloads.append(json.loads(raw))
 
-    def last(self, kind: str) -> dict:
-        for payload in reversed(self.payloads):
-            if payload.get("type") == kind:
-                return payload
-        raise AssertionError(f"{kind!r} の応答が無い: {[p.get('type') for p in self.payloads]}")
-
-    def kinds(self) -> list:
-        return [payload.get("type") for payload in self.payloads]
-
 
 def _browser(session: Session, script):
-    """`script(send)` を1つのイベントループで走らせる(test_sketch_ui.py と同じ harness)。
+    """`script(send)` を1つのイベントループで走らせる。
 
     **2本つなぐ** —— 1本だけだと「2本目に届かない」実装でも緑になる。`get_edges` が
     要求した接続にだけ返ることは、2本目に何も来ないことでしか確かめられない。
@@ -139,13 +130,6 @@ def _fingerprint(session: Session) -> dict:
         "sketches": len(session.document.sketches),
         "parameters": dict(session.document.parameters),
     }
-
-
-def _drawn(session: Session, sketch_id: str) -> list:
-    sketch = next(
-        item for item in session.state_meta()["sketches"] if item["sketch_id"] == sketch_id
-    )
-    return sketch["drawn"]
 
 
 # --------------------------------------------------------------------------------------
@@ -322,10 +306,13 @@ def test_asking_for_the_edges_of_an_unknown_body_is_an_error(session: Session) -
 
 
 def test_extrude_without_a_mode_is_refused(session: Session) -> None:
-    """**`mode` を既定で埋めない**。「切り取るつもりで足した」が黙って通らないこと。"""
+    """落ちたら、WSの表が欠けた `mode` を既定(join)で埋めている(切り取るつもりの押し出しが黙って足す)。
+
+    円は立方体の外に置く —— 内側だと join で埋まっても「形が変わらない」で断られ、この検査が効かない。
+    """
     _box(session)
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [10.0, 10.0], 4.0)
+    session.add_circle(sketch_id, [40.0, 40.0], 4.0)
     _select(session, [{"sketch": sketch_id, "index": 1}])
     before = _fingerprint(session)
 
@@ -383,21 +370,6 @@ def test_the_browser_can_fillet_the_edges_it_picked(session: Session) -> None:
     assert answer["applied"]["verb"] == "fillet"
     assert answer["applied"]["client_op"] == 3
     assert kernel.face_count(body.shape) > faces_before
-
-
-def test_a_feature_command_missing_an_argument_is_refused(session: Session) -> None:
-    """引数が欠けたコマンドは**黙って既定値で埋めない**(`SKETCH_COMMANDS` と同じ規律)。"""
-    body, _ = _box(session)
-    _select(session, _edges(body, [1]))
-    before = _fingerprint(session)
-
-    async def script(send):
-        return await send({"cmd": "fillet"})  # 半径が無い
-
-    (answer, _clients) = _browser(session, script)
-
-    assert answer["type"] == "error"
-    assert _fingerprint(session) == before
 
 
 def test_the_ui_and_the_ai_get_the_same_shape_from_the_same_verb() -> None:

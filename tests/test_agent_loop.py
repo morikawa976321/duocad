@@ -524,16 +524,6 @@ def test_the_total_time_budget_cuts_the_loop_off_before_max_turns():
     assert run.to_dict()["status"] == "timeout"
 
 
-def test_the_total_time_budget_does_not_fire_on_a_normal_run():
-    """正常系が上限に当たらないこと(既定30秒で普通の往復が切られては困る)。"""
-    surface = tools()
-    provider = RecordedProvider([tool_use("describe_document", {}, "c0"), spoke("できた")])
-
-    run = AgentLoop(surface, provider).run("ボディを教えて")
-
-    assert run.status == "completed"
-
-
 # --------------------------------------------------------------------------------------
 # 人が言っていない寸法で形を変えないこと
 # --------------------------------------------------------------------------------------

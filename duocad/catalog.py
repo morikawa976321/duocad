@@ -1130,8 +1130,9 @@ COMMANDS: tuple[Command, ...] = (
         ws="none",
         mcp=False,
         note=(
-            "**コードからだけ呼ぶverb**(形状最適化が確定した最終CADを文書へ入れる。"
-            "実体は `duocad/verbs/add_solid.py`)。人にもAIにも開けていない —— 引数はB-repの"
+            "**コードからだけ呼ぶverb**(実体は `duocad/verbs/add_solid.py`)。製品は呼ばない(形状最適化の"
+            "結果は `add_mesh_body` のメッシュボディで入る)。この verb を含む保存済み文書の再生と"
+            "`topopt_checks/replay_finalization.py` のために残す。人にもAIにも開けていない —— 引数はB-repの"
             "本文そのもので手で書くものではなく、CADを持ち込む口は `import_step` である。"
             "**それでもここに宣言するのは**、操作ログに載るverbとツールの顔ぶれを突き合わせる"
             "検査(`tests/test_mcp_verbs.py`)が、`mcp=False` かつ `ws=\"none\"` という宣言を"
@@ -1530,8 +1531,7 @@ def agent_instructions() -> str:
 
     - **確認を待たず適用してよい操作** … 対象を何個でも取る引数が無く、how(寸法・選択肢・
       パス)の入力も無いもの。人に聞くことが残っていないので、提案で止める意味が無い。
-      **判定基準は手動UIのEnter要否と同一**(`web/src/commands/command.ts` の `needsEnter`。
-      表は `tests/test_ui_command_wiring.py`)。個々のverb名をこの文に書かない —— verbを
+      **判定基準は手動UIのEnter要否と同一**(`web/src/commands/command.ts` の `needsEnter`)。個々のverb名をこの文に書かない —— verbを
       足した日に古くなるうえ、基準さえ書けばツール定義の引数から導ける。
     - **止まるか進むかをAIが決める操作** … 上以外。依頼の具体性から判断する。
 

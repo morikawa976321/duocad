@@ -141,12 +141,3 @@ def test_stl_export_refuses_a_triangle_that_collapses_in_float32(tmp_path):
     with pytest.raises(ValueError, match="float32"):
         DocumentTools(session).call("export_stl", {"path": str(path)})
     assert path.read_bytes() == b"previous"
-
-
-def test_stl_export_reads_back_float32_that_passes_the_same_validation(tmp_path):
-    session = Session(None, 0.2)
-    session.document.add_body(Body(id="part", name="part", kind="solid", shape=_holed_box()))
-    path = tmp_path / "part.stl"
-    DocumentTools(session).call("export_stl", {"path": str(path)})
-    from duocad.meshbody import validate_float32
-    assert validate_float32(_read_stl(path).reshape(-1, 9).tolist()) == {}

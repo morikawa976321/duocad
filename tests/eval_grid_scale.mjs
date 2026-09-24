@@ -1,7 +1,6 @@
 /**
  * `web/src/gridScale.ts` の純関数を**実際に評価する**ための小さな口。
- * `tests/test_grid_scale.py` が `node` でこれを走らせる(`tests/eval_adaptive_resolution.mjs`
- * と同じやり方 —— ソースの文字列比較ではなく実行結果で見る)。
+ * `tests/test_ts_evaluators.py` が `node` でこれを走らせる。
  *
  * このロジックには**Python側の対応物が無い**(基準グリッドはTSにしか描かれない)ので、
  * 2言語を突き合わせる代わりに、ここで直接 assert して失敗したら非ゼロで終了する。

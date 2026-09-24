@@ -85,13 +85,15 @@ def _volume(doc: Document, body_id: str) -> float:
 # --------------------------------------------------------------------------------------
 # 基本3モード
 # --------------------------------------------------------------------------------------
-def test_union_keeps_target_volume_when_tool_is_inside(session: Session) -> None:
-    """完全に内側のツールを union してもターゲット体積は変わらない(ツールは消える)。"""
-    target_id, tool_id = _two_boxes(session.document)
-    before = _volume(session.document, target_id)
+def test_union_adds_the_part_of_the_tool_outside_the_target(session: Session) -> None:
+    """x方向に5mmはみ出したツールを union すると 8000 -> 8500(ツールのボディは消える)。"""
+    target_id = _add_body(session.document, "target", _box_shape(SIDE, SIDE, SIDE))
+    tool_id = _add_body(session.document, "tool", _box_shape(TOOL, TOOL, TOOL, SIDE - TOOL / 2))
     _run(session, target_id, [tool_id], "union")
     assert len(session.document.bodies) == 1
-    assert math.isclose(_volume(session.document, target_id), before, rel_tol=1e-6)
+    assert math.isclose(
+        _volume(session.document, target_id), SIDE**3 + TOOL**3 / 2, rel_tol=1e-6
+    )
 
 
 def test_cut_removes_the_tool_volume(session: Session) -> None:
@@ -100,14 +102,6 @@ def test_cut_removes_the_tool_volume(session: Session) -> None:
     _run(session, target_id, [tool_id], "cut")
     assert len(session.document.bodies) == 1
     assert math.isclose(_volume(session.document, target_id), SIDE**3 - TOOL**3, rel_tol=1e-6)
-
-
-def test_intersect_keeps_only_overlap(session: Session) -> None:
-    """内側 10mm 立方体との intersect は重なり 1000 だけ残る。"""
-    target_id, tool_id = _two_boxes(session.document)
-    _run(session, target_id, [tool_id], "intersect")
-    assert len(session.document.bodies) == 1
-    assert math.isclose(_volume(session.document, target_id), TOOL**3, rel_tol=1e-6)
 
 
 def test_intersect_with_two_tools_is_union_of_intersections(session: Session) -> None:

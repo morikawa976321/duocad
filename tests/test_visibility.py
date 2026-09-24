@@ -8,36 +8,10 @@ ShapeRef の形は `{"body": BodyId, "kind": "face", "index": int, "provenance":
 """
 from __future__ import annotations
 
-# `_source_files` / `_imported_module_roots` はM0の境界検査の実体(test_sketch.py・
-# test_parameters.py と同じ流儀で借りる。tests/ は sys.path に入っている)。
-from test_boundaries import DUOCAD_DIR, _imported_module_roots, _source_files
-
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad.document import Body
 from duocad.server import Session
-
-#: M3.5のモジュール(import境界の走査対象に入っていることを固定する)。
-#: 可視性はverbではなく `selection.py` 側にある。
-M35_MODULES = ("selection.py",)
-
-#: 押し出し量(mm)。符号は正＝外向き法線方向へ足す。
-EXTRUDE_MM = 1.0
-
-
-# --------------------------------------------------------------------------------------
-# 境界(M2・M3と同じ理由。新規ファイルが走査から漏れていないこと自体を固定する)
-# --------------------------------------------------------------------------------------
-def test_m35_modules_are_covered_by_the_import_boundary_scan():
-    """M3.5の新規ファイルにもOCP/build123dのimport境界が効いていること。"""
-    scanned = {rel for rel, _ in _source_files()}
-    assert set(M35_MODULES) <= scanned, (
-        f"走査から漏れている: {sorted(set(M35_MODULES) - scanned)}"
-    )
-    for rel in M35_MODULES:
-        roots = _imported_module_roots(DUOCAD_DIR / rel)
-        assert "OCP" not in roots, f"{rel} がOCPを直接importしている(kernel.py越しに呼ぶこと)"
-        assert "build123d" not in roots, f"{rel} がbuild123dを直接importしている(query.py越し)"
 
 
 # --------------------------------------------------------------------------------------

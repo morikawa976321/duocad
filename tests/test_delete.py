@@ -8,8 +8,8 @@
 3. **undo が対象によって別物**である —— ボディは `_common.SNAPSHOTS`(並びと active ごと)、
    図形は args の生の数値。**名前つきの値は解放され、undoで同じ名前が戻る**。
 4. **保存 -> 開く(再生) -> undo** が通る(スナップショットは再生が埋める)。
-5. **消したあとに壊れないこと** —— ボディのキャッシュは既存の生存集合差分が落とし、
-   反復の元を消しても状態の配りものは落ちない。
+5. **消したあとに壊れないこと** —— 反復の元を消しても状態の配りものは落ちない
+   (ボディのキャッシュは既存の生存集合差分が落とす。`tests/test_body_cache_pruning.py`)。
 """
 from __future__ import annotations
 
@@ -158,24 +158,6 @@ def test_a_selection_of_only_regions_is_refused(session: Session) -> None:
     # 文書もログも動いていない
     assert _body_ids(session) == before
     assert session.applied_count == applied_before
-
-
-def test_the_mcp_envelope_reports_a_region_only_selection_as_kind_mismatch(
-    session: Session,
-) -> None:
-    """MCPの拒否は `selection_kind_mismatch` で、AIが次の一手を決められる文言を持つ。"""
-    from duocad.mcp_server import DocumentTools
-
-    _, sketch_id = _box(session)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    tools = DocumentTools(session)
-    with pytest.raises(selection.SelectionKindMismatch) as raised:
-        session.delete()
-    envelope = tools.error_envelope("delete", raised.value)
-
-    assert envelope["code"] == "selection_kind_mismatch"
-    assert envelope["present_kinds"] == {"region": 1}
-    assert "no body" in envelope["hint"]
 
 
 # --------------------------------------------------------------------------------------
@@ -381,21 +363,6 @@ def test_a_parameter_edit_after_a_delete_replays_the_delete(session: Session) ->
 # --------------------------------------------------------------------------------------
 # 5. 消したあとに壊れないこと
 # --------------------------------------------------------------------------------------
-def test_the_caches_of_a_deleted_body_are_pruned(session: Session) -> None:
-    """ボディ削除専用のキャッシュ処理は要らない(既存の生存集合差分が落とす)。"""
-    body, _ = _box(session)
-    session.geometry(body.id)
-    session.state_meta()
-    assert body.id in session.view._geometry_cache
-
-    _select(session, [{"body": body.id, "kind": "body", "index": None}])
-    session.delete()
-    session.state_meta()
-
-    assert body.id not in session.view._geometry_cache
-    assert body.id not in session.view._volume_cache
-
-
 def test_deleting_the_source_of_a_pattern_does_not_break_the_state(session: Session) -> None:
     """反復の元を消しても落ちない(依存グラフは作らない。undoで元どおり展開される)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]

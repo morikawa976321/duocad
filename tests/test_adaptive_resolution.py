@@ -7,7 +7,7 @@
 1. **変換式が2つの言語で同じ**こと。スケッチの円はブラウザ側(`web/src/adaptiveResolution.ts`)、
    ソリッドと辺はこちら(`duocad/resolution.py`)で折られるので、**定数が片方だけ動くと
    同じ画面で滑らかさが食い違う** —— 例外もコンソールエラーも出ない壊れ方なので、
-   `test_entity_kind_tables.py` と同じ「TSのソースを静的に読む」やり方で塞ぐ。
+   TS側を Node で実際に評価して突き合わせる(`tests/eval_adaptive_resolution.mjs`)。
 2. **配りもの(`DocumentView`)が目標精度に従う**こと。ソリッド・辺・スケッチ領域の3経路
    すべてで、キャッシュを跨いで効き、版(`body_revision`)が上がって差分配信が届くこと。
 3. **画面の設定が文書に漏れない**こと。`Session.deviation`(画面の土台)はズームで動かない。
@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-import re
 import subprocess
 from pathlib import Path
 
@@ -29,7 +28,6 @@ from duocad import io_step, kernel, resolution
 from duocad.server import Server, Session
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TS_SOURCE = REPO_ROOT / "web" / "src" / "adaptiveResolution.ts"
 
 DEVIATION = 0.2
 SIDE = 20.0
@@ -38,66 +36,6 @@ RADIUS = 10.0
 
 # --------------------------------------------------------------------------------------
 # 1. 変換式が2つの言語で同じ
-# --------------------------------------------------------------------------------------
-#: 一致していなければならない定数(Python側の名前 -> TS側の名前)。
-#:
-#: **`DEFAULT_DEVIATION` / `DEFAULT_ANGULAR_DEFLECTION` も入れる** —— TS側はこの2つを
-#: `kernel.py` から読めないので写している。写しがずれると角度偏差のスケールがずれる。
-MIRRORED_CONSTANTS = {
-    "TOLERANCE_PIXELS": "TOLERANCE_PIXELS",
-    "DEVIATION_MIN_ABS": "DEVIATION_MIN_ABS",
-    "DEVIATION_MAX_ABS": "DEVIATION_MAX_ABS",
-    "DEVIATION_MIN_RELATIVE": "DEVIATION_MIN_RELATIVE",
-    "DEVIATION_MAX_RELATIVE": "DEVIATION_MAX_RELATIVE",
-    "ANGULAR_MIN": "ANGULAR_MIN",
-    "ANGULAR_MAX": "ANGULAR_MAX",
-}
-
-
-def _ts_constants() -> dict:
-    """`export const NAME = <数値>` を拾う(TSを実行せずソースを読む)。"""
-    text = TS_SOURCE.read_text(encoding="utf-8")
-    found: dict = {}
-    for match in re.finditer(
-        r"^export const ([A-Z_][A-Z0-9_]*) = (-?[0-9.]+(?:e-?[0-9]+)?)$", text, re.M
-    ):
-        found[match.group(1)] = float(match.group(2))
-    return found
-
-
-def test_the_ts_side_of_the_formula_is_readable() -> None:
-    """先に**走査そのものが効いている**ことを見る(0件なら下の一致検査は常に緑になる)。"""
-    constants = _ts_constants()
-    assert len(constants) >= len(MIRRORED_CONSTANTS), (
-        f"{TS_SOURCE} から定数を読めていない: {sorted(constants)}。"
-        "書き方を `export const NAME = 0.35` の形から変えていないか"
-    )
-
-
-def test_the_conversion_constants_match_between_python_and_typescript() -> None:
-    """**式の定数がPythonとTSで一致する**(片方だけ動くと同じ画面で滑らかさが食い違う)。"""
-    ts = _ts_constants()
-    # TS側は kernel の既定値2つを写しているので、そこも突き合わせる。
-    expected = {
-        "DEFAULT_DEVIATION": kernel.DEFAULT_DEVIATION,
-        "DEFAULT_ANGULAR_DEFLECTION": kernel.DEFAULT_ANGULAR_DEFLECTION,
-    }
-    for python_name, ts_name in MIRRORED_CONSTANTS.items():
-        expected[ts_name] = getattr(resolution, python_name)
-
-    mismatched = {
-        name: (value, ts.get(name))
-        for name, value in expected.items()
-        if ts.get(name) != pytest.approx(value, rel=0, abs=0)
-    }
-    assert not mismatched, (
-        "duocad/resolution.py と web/src/adaptiveResolution.ts の定数が食い違う"
-        f"(名前 -> (Python, TS)): {mismatched}"
-    )
-
-
-# --------------------------------------------------------------------------------------
-# 1b. 定数だけでなく**式**が2つの言語で同じ
 # --------------------------------------------------------------------------------------
 #: TS側を実際に評価する口(`tests/eval_adaptive_resolution.mjs` のdocstring)。
 TS_EVALUATOR = Path(__file__).resolve().parent / "eval_adaptive_resolution.mjs"
@@ -170,11 +108,8 @@ def _evaluate_in_typescript(cases: list) -> list:
 
 
 def test_the_conversion_formula_matches_between_python_and_typescript() -> None:
-    """**定数ではなく式そのもの**が2つの言語で同じ値を出す。
-
-    定数の一致(上の検査)だけでは、`sqrt` を落とす・掛け算を足し算にする・クランプの
-    向きを入れ替える、といった**式の形の食い違い**が全部素通りする。素通りすると、
-    同じ画面でスケッチの円(ブラウザで折る)とソリッド・辺(サーバで折る)の粗さがずれる。
+    """落ちたら、`resolution.py` と `adaptiveResolution.ts` の式か定数(TS側が写す `kernel` の既定値2つを
+    含む)が食い違い、同じ画面でスケッチの円とソリッド・辺の粗さがずれる。
 
     比較は**厳密一致**。四則と `sqrt` はIEEE754で正しく丸められ、JSONの往復は倍精度を
     そのまま運ぶので、桁が1つでも違えば式が違う。

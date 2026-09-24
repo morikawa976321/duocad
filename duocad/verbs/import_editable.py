@@ -47,7 +47,7 @@ def import_step(doc: Document, path: PathLike) -> list[BodyId]:
     shape = kernel.read_step_text(text)  # 壊れていればここで例外、doc/logは無傷
     solids = kernel.split_solids(shape)
     body_ids = [new_body_id() for _ in solids]
-    names = _names(source_name, len(solids))
+    names = solid_names(source_name, len(solids))
     _apply_to(doc, body_ids, solids, names)
     doc.log.append(
         VERB_IMPORT_STEP,
@@ -58,14 +58,6 @@ def import_step(doc: Document, path: PathLike) -> list[BodyId]:
         },
     )
     return body_ids
-
-
-def _names(source_name: str, count: int) -> list[str]:
-    """編集用ボディの名前 `<ファイル名>_1` … `_N`(**実体は `io_step.solid_names`**)。
-
-    **どの読み込み経路でも同じ命名にそろえてある**。
-    """
-    return solid_names(source_name, count)
 
 
 def _apply_to(
@@ -87,7 +79,7 @@ def _do_import_step(document: Document, operation: Operation) -> None:
     args = operation.args
     shape = kernel.read_step_text(args["step"])
     solids = kernel.split_solids(shape)
-    names = _names(args["source_name"], len(solids))
+    names = solid_names(args["source_name"], len(solids))
     _apply_to(document, args["body_ids"], solids, names)
 
 

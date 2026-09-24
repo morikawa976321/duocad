@@ -88,16 +88,43 @@ def collect_solve_stats() -> Iterator[dict]:
         _SOLVE_STATS = previous
 
 
-def element_stiffness(E: float = 1.0, nu: float = 0.3) -> np.ndarray:
-    """一辺1の8節点六面体(trilinear hex)の要素剛性行列 (24,24) を返す。"""
-    lam_nodes = np.array(
-        [[2 * a - 1, 2 * b - 1, 2 * c - 1] for a in (0, 1) for b in (0, 1) for c in (0, 1)],
-        float,
-    )
+#: 局所節点 l = 4a+2b+c ↔ 単位立方体の頂点 (a,b,c) の符号 (2a-1, 2b-1, 2c-1)。**`_build_edof` の
+#: l のまわし方に一致していること** —— ずれると応力(`stress`)は「もっともらしい別の値」になって落ちない。
+NODE_SIGNS = np.array(
+    [[2 * a - 1, 2 * b - 1, 2 * c - 1] for a in (0, 1) for b in (0, 1) for c in (0, 1)],
+    dtype=float,
+)
+
+
+def elasticity_matrix(E: float = 1.0, nu: float = 0.3) -> np.ndarray:
+    """弾性行列 D (6,6)。順は [xx, yy, zz, xy, yz, zx] で、せん断は工学ひずみ。"""
     d = np.zeros((6, 6))
     c1 = E / ((1.0 + nu) * (1.0 - 2.0 * nu))
     d[:3, :3] = c1 * (nu * np.ones((3, 3)) + (1.0 - 2.0 * nu) * np.eye(3))
     d[3:, 3:] = c1 * (1.0 - 2.0 * nu) / 2.0 * np.eye(3)
+    return d
+
+
+def strain_displacement(grad: np.ndarray) -> np.ndarray:
+    """節点ごとの形状関数の勾配 (8,3) → B 行列 (6,24)(ひずみの順は `elasticity_matrix` と同じ)。"""
+    b = np.zeros((6, 24))
+    for l in range(8):
+        bx, by, bz = grad[l]
+        b[0, 3 * l + 0] = bx
+        b[1, 3 * l + 1] = by
+        b[2, 3 * l + 2] = bz
+        b[3, 3 * l + 0] = by
+        b[3, 3 * l + 1] = bx
+        b[4, 3 * l + 1] = bz
+        b[4, 3 * l + 2] = by
+        b[5, 3 * l + 0] = bz
+        b[5, 3 * l + 2] = bx
+    return b
+
+
+def element_stiffness(E: float = 1.0, nu: float = 0.3) -> np.ndarray:
+    """一辺1の8節点六面体(trilinear hex)の要素剛性行列 (24,24) を返す。"""
+    d = elasticity_matrix(E, nu)
     g = 1.0 / np.sqrt(3.0)
     ke = np.zeros((24, 24))
     for xi in (-g, g):
@@ -105,24 +132,12 @@ def element_stiffness(E: float = 1.0, nu: float = 0.3) -> np.ndarray:
             for zeta in (-g, g):
                 dn = np.empty((8, 3))
                 for l in range(8):
-                    s = lam_nodes[l]
+                    s = NODE_SIGNS[l]
                     dn[l, 0] = 0.125 * s[0] * (1.0 + s[1] * eta) * (1.0 + s[2] * zeta)
                     dn[l, 1] = 0.125 * (1.0 + s[0] * xi) * s[1] * (1.0 + s[2] * zeta)
                     dn[l, 2] = 0.125 * (1.0 + s[0] * xi) * (1.0 + s[1] * eta) * s[2]
-                dndx = dn * 2.0
                 det_j = 0.125
-                b = np.zeros((6, 24))
-                for l in range(8):
-                    bx, by, bz = dndx[l]
-                    b[0, 3 * l + 0] = bx
-                    b[1, 3 * l + 1] = by
-                    b[2, 3 * l + 2] = bz
-                    b[3, 3 * l + 0] = by
-                    b[3, 3 * l + 1] = bx
-                    b[4, 3 * l + 1] = bz
-                    b[4, 3 * l + 2] = by
-                    b[5, 3 * l + 0] = bz
-                    b[5, 3 * l + 2] = bx
+                b = strain_displacement(dn * 2.0)
                 ke += b.T @ d @ b * det_j
     return ke
 
@@ -178,8 +193,8 @@ def _build_load(nelx: int, nely: int, nelz: int, ndof: int) -> np.ndarray:
 # **丸め誤差が発生する順序は変わらずビット単位で同じ結果になる**(numpyの縮約はここでは
 # 並列化していないので、そちらの再現性はそもそも揺れない)。
 
-# 環境変数 `TOPOPT_THREADS` で上書きできる既定のスレッド数。**呼び出し時に読む**。
-# 値を取れなければ 1(直列。壊れた環境変数で黙って
+# `PARALLEL_THREADS` の初期値。環境変数 `TOPOPT_THREADS` は**import 時に1回だけ読む**
+# (後から変えるなら `PARALLEL_THREADS` へ代入する)。値を取れなければ 1(直列。壊れた環境変数で黙って
 # 並列化が有効になるより、壊れた値は無視して安全側へ倒す)。
 def _default_thread_count() -> int:
     override = os.environ.get("TOPOPT_THREADS")
@@ -198,10 +213,8 @@ PARALLEL_THREADS: int = _default_thread_count()
 
 # プロセスの寿命だけ生存させるスレッドプールのキャッシュ(スレッド数ごとに1つ)。
 # **明示的に閉じない**——閉じても次の solve でまた同じ数だけ要るので、生成コストを
-# 毎回払わせない。デーモンスレッドではないが、プロセス終了時に daemon 属性が無くても
-# インタプリタは残ったワーカーを待たずに終了する(標準ライブラリの `atexit` フックが
-# `shutdown(wait=True)` を試みるので、通常のプロセス終了では待つ。使い切りのCLI
-# 使い切りのCLI(`check_*.py` 等)ではプロセスごと終わるので問題にならない)。
+# 毎回払わせない。ワーカーはデーモンスレッドではなく、プロセス終了時は `concurrent.futures`
+# の終了フックがワーカーを止めて待つ(solve の外ではワーカーは待機しているだけ)。
 _THREAD_POOLS: dict[int, ThreadPoolExecutor] = {}
 
 
@@ -637,7 +650,8 @@ class PreparedSystem:
             ff = rhs[index][model.free]
             iterations = 0
             fell_back = False
-            if not np.any(ff):
+            zero_rhs = not np.any(ff)
+            if zero_rhs:
                 u_free = np.zeros(model.free.size)
             elif self._solver == "direct":
                 u_free = spla.spsolve(self.kf, ff)
@@ -671,7 +685,8 @@ class PreparedSystem:
                            free_dofs=int(model.free.size), nnz=int(self.kf.nnz), cg_rtol=cg_rtol,
                            cg_iterations=iterations, fallback=fell_back,
                            rhs_index=index, seconds=time.perf_counter()-t_start)
-            model._verify_solution(self.kf, ff, u_free)
+            if not zero_rhs:
+                model._verify_solution(self.kf, ff, u_free)
             out[index, model.free] = u_free
         if stats is not None:
             stats["solve_seconds"] += time.perf_counter() - t_start

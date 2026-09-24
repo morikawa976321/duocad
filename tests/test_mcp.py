@@ -1,16 +1,8 @@
-"""MCPサーバと「コアが発火し、アプリ層が購読する」上り方向の契約。
+"""MCPのプロトコル層(JSON-RPC 2.0 と stdio トランスポート)の契約。
 
-1. **プロトコル** — `initialize` / `tools/list` / `tools/call` が MCP(JSON-RPC 2.0)として
-   正しく喋れること。**依存を増やさず素で実装した**ので、プロトコルの正しさはここでしか
-   担保されない。
-2. **`describe_document` / `set_visible` / `describe_shape` が名前も振る舞いも変わらず
-   生き残っていること** — ツール全体の顔ぶれの契約は `tests/test_mcp_verbs.py` の
-   `EXPECTED_TOOLS` にひとつだけ置く。
-3. **`set_visible` はコアの verb を経由する** — 操作ログに載り、undoで戻る。
-4. **上り方向** — MCPが文書を変えると `Session` が変更イベントを発火し、購読している
-   WebSocketサーバが**接続している全クライアントへ配信する**。
-
-**実ブラウザでの確認は `web/scripts/smoke-mcp.mjs`** が行う。
+**依存を増やさず素で実装した**ので、プロトコルの正しさはここでしか担保されない。
+ツールの中身は `tests/test_mcp_verbs.py` / `tests/test_mcp_selection.py`、HTTPトランスポートは
+`tests/test_mcp_http.py`、実ブラウザでの確認は `web/scripts/smoke-mcp.mjs` が行う。
 """
 from __future__ import annotations
 
@@ -23,15 +15,52 @@ from pathlib import Path
 
 import pytest
 
-from duocad.mcp_server import DocumentTools, McpServer, serve_stdio
+from duocad.mcp_server import SUPPORTED_PROTOCOL_VERSIONS, DocumentTools, McpServer, serve_stdio
 
-#: M4の3つ。ツール全体の顔ぶれの正は `tests/test_mcp_verbs.py` の `EXPECTED_TOOLS`。
-#: ここではstdio越しでもこの3つが見えることだけを確かめる。
+#: stdio越しの `tools/list` に入っているはずのツールの目印(顔ぶれ全体は
+#: `tests/test_doc_code_agreement.py` が `MCP.md` の表と突き合わせる)。
 M4_TOOLS = {"describe_document", "set_visible", "describe_shape"}
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+
+def _server() -> McpServer:
+    """文書を持たないサーバ(プロトコル層しか叩かない)。"""
+    return McpServer(DocumentTools(session=None))  # type: ignore[arg-type]
+
+
 # --------------------------------------------------------------------------------------
-# 6. stdio トランスポート(実際にプロセスを起動して喋る)
+# JSON-RPC の誤りは標準コードで断る
+# --------------------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("message", "code"),
+    [
+        ({"jsonrpc": "2.0", "id": 1, "method": "resources/list"}, -32601),
+        ({"jsonrpc": "1.0", "id": 1, "method": "ping"}, -32600),
+        ([{"jsonrpc": "2.0", "id": 1, "method": "ping"}], -32600),
+    ],
+    ids=["未知のメソッド", "jsonrpcの版違い", "バッチ"],
+)
+def test_protocol_errors_come_back_with_the_standard_codes(message, code):
+    """落ちたら、JSON-RPC の誤りを標準コード(クライアントが分岐に使う値)で返していない。"""
+    response = _server().handle(message)
+    assert response["error"]["code"] == code
+
+
+def test_an_unknown_protocol_version_is_answered_with_the_server_default():
+    """落ちたら、知らない版をそのまま返している(クライアントは返った版で続けるか切るかを決める)。"""
+    response = _server().handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "1999-01-01"},
+        }
+    )
+    assert response["result"]["protocolVersion"] == SUPPORTED_PROTOCOL_VERSIONS[0]
+
+
+# --------------------------------------------------------------------------------------
+# stdio トランスポート
 # --------------------------------------------------------------------------------------
 def test_stdio_transport_speaks_line_delimited_json_rpc():
     """`serve_stdio` が1行1メッセージで読み書きし、EOFで戻ること(プロセスは起こさない)。"""
@@ -49,11 +78,7 @@ def test_stdio_transport_speaks_line_delimited_json_rpc():
     )
     outgoing = Pipe()
 
-    class Tools(DocumentTools):
-        def __init__(self) -> None:  # 文書を持たないダミー(tools/listしか叩かない)
-            super().__init__(session=None)  # type: ignore[arg-type]
-
-    asyncio.run(serve_stdio(McpServer(Tools()), reader=incoming, writer=outgoing))
+    asyncio.run(serve_stdio(_server(), reader=incoming, writer=outgoing))
 
     lines = [json.loads(line) for line in outgoing.getvalue().decode("utf-8").splitlines()]
     assert [line.get("id") for line in lines] == [1, None, 2], "通知に返事を書いた/壊れた行を飛ばした"
@@ -79,7 +104,6 @@ def test_the_process_starts_and_answers_over_real_stdio():
             sys.executable,
             "-m",
             "duocad.mcp_server",
-            # `--step` / `--no-step` は廃止(常に空の文書で起動する)
             # 既定のポート(8765/8766)は実機のサーバが使っている可能性があるので避ける
             "--port",
             "18765",

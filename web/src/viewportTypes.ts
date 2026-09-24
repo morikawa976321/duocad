@@ -3,7 +3,7 @@ import * as THREE from 'three'
 
 import { type ViewResolution } from './adaptiveResolution'
 import { type UvBounds } from './gridScale'
-import type { BasePlaneName, EdgeGeometry } from './session'
+import type { BasePlaneName, EdgeGeometry, OptimizeDebugGrid } from './session'
 
 /** kernel.tessellate() が返す1面ぶん(サーバのJSONそのまま)。 */
 export interface FaceGeometry {
@@ -85,11 +85,7 @@ export interface OptimizeLoadVisual extends FaceRef {
  * その角の節点 (i,j,k) は `origin + spacing*(i,j,k)`(セル中心の規約。
  * `duocad/topopt/mesh.py:169`)。**サーバ側で足し引きしていない**ので、ここで足す。
  */
-export interface OptimizeDebugGrid {
-  origin: number[]
-  spacing: number
-  shape: number[]
-}
+export type { OptimizeDebugGrid }
 
 /** 立方体で描く要素の集合。`elements` はC順の通し添字 `i*(ny*nz) + j*nz + k`。 */
 export interface OptimizeDebugVoxels {
@@ -648,8 +644,6 @@ export interface Viewport {
    * ボディ(非表示など)は黙って落ちる。空配列で消える。
    */
   showBodyGhosts(entries: BodyGhost[]): void
-  /** `showBodyGhosts` で置いた幽霊だけを消す(サーバ投機実行のほうは残る)。 */
-  clearBodyGhosts(): void
   /**
    * いま出ている幽霊の中身。**実機検査が「値を変えたら幽霊が追随したか」を数値で見る穴**
    * (`getGeometry` と同じ流儀 —— three.jsのバッファは外から読めない)。
@@ -681,18 +675,13 @@ export interface Viewport {
    */
   showSketches(sketches: SketchDraw[]): void
   /**
-   * 確定前の図形(スケッチの幽霊)を1つ描く。`entity` が null で消える。
-   * **`showSketchGhosts([entity])` の薄い衣**(単発の呼び出し側を増やさないため)。
+   * 確定前の図形(スケッチの幽霊)を描く。空配列で消える。
+   * **個々の図形は`buildEntityLine`が失敗しても他は描く**(表に無い種別・
+   * 折れ線化できない図形が1つ混ざっていても、残りの幽霊まで消さない)。
    *
    * **サーバへ投げない**。図形の形はブラウザ側で分かっており、コアで投機実行すると
    * 文書に一度は入る(戻すとはいえ)。Escで中断しても文書が変わらないことを、
    * 「そもそも送らない」で成立させる。
-   */
-  showSketchGhost(sketchId: string, entity: { kind: string; params: Record<string, number> } | null): void
-  /**
-   * 確定前の図形(スケッチの幽霊)を**複数**描く(`move_sketch_entities` 用)。
-   * 空配列で消える。**個々の図形は`buildEntityLine`が失敗しても他は描く**(表に無い種別・
-   * 折れ線化できない図形が1つ混ざっていても、残りの幽霊まで消さない)。
    */
   showSketchGhosts(sketchId: string, entities: Array<{ kind: string; params: Record<string, number> }>): void
   /**

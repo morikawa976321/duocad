@@ -35,8 +35,6 @@ VERB_EXTRUDE = "extrude"
 #: 押し出しの種別(実装計画書§1「mode(join | cut)」＋ new)
 MODES = ("join", "cut", "new")
 
-#: (document) -> {(body_id, seq): 押し出し前の形状 | None(新規作成)}。
-
 
 def extrude(
     doc: Document,

@@ -20,14 +20,9 @@
  * 持っており、幽霊のためにブラウザへ二重実装すると「画面の予想と実際が違う」という最悪の
  * 食い違いを自作することになる。
  */
-import { pickedRefOf, type ArgValues, type CommandDef, type Point2 } from './command'
+import { pickedRefOf, positive, type ArgValues, type CommandDef, type Point2 } from './command'
 import { MOVE_MODE_OPTIONS, isRotateMode, isTranslateMode, rejectAngle } from './moveMode'
 import type { SelectionRef } from '../session'
-
-/** 0以下を弾く(寸法として使えない)。**既定値を入れない**のがここの流儀。 */
-function positive(label: string): (value: number) => string | null {
-  return (value) => (value > 0 ? null : `${label}は0より大きい値`)
-}
 
 /** 1以上の整数だけを通す(個数。コアの `parameters.is_positive_int` と同じ判定)。 */
 function count(label: string, least: number): (value: number) => string | null {

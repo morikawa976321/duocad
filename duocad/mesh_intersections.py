@@ -304,7 +304,7 @@ def triangle_intersections(vertices: np.ndarray, faces: np.ndarray) -> dict:
         if len(sel):
             free_i = np.argmin(shared[sel].any(axis=2), axis=1)
             free_j = np.argmin(shared[sel].any(axis=1), axis=1)
-            fi_sel, fj_sel = fi[sel], fj[sel]
+            fi_sel = fi[sel]
             rows = np.arange(len(sel))
             a = tri[ci[sel]][rows, free_i]
             b = tri[cj[sel]][rows, free_j]

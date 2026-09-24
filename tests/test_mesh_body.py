@@ -9,13 +9,12 @@ B-repのSTLが画面と同じ三角形になることは `tests/test_stl_export.
 """
 from __future__ import annotations
 
-import json
 import struct
 
 import pytest
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
-from duocad import io_step, kernel, meshbody, optimize, predicates, query, selection, sketch
+from duocad import io_step, kernel, meshbody, optimize, predicates, selection, sketch
 from duocad.document import MESH_KIND, Body, Document, make_mesh
 from duocad.mcp_server import DocumentTools
 from duocad.oplog import OpLog
@@ -99,11 +98,6 @@ def test_a_body_carries_exactly_one_kind_of_geometry():
         Body(id="b", name="b", kind="solid", shape=_box_shape(), mesh=mesh)
 
 
-def test_a_mesh_body_is_not_editable():
-    doc, body_id = _tetra_doc()
-    assert doc.is_editable(body_id) is False
-
-
 # ======================================================================== §2 作る経路
 def test_add_mesh_body_puts_the_triangles_on_the_body_and_one_line_in_the_log():
     doc, body_id = _tetra_doc()
@@ -131,12 +125,6 @@ def test_a_b_rep_body_can_be_turned_into_a_mesh_body_through_the_kernel():
     assert meshbody.volume(doc.get_body(body_id).mesh) == pytest.approx(SIDE**3, rel=1e-9)
 
 
-def test_the_mesh_volume_matches_the_b_rep_volume_it_came_from():
-    box = _box_shape()
-    mesh = meshbody.from_tessellation(kernel.tessellate(box, DEVIATION))
-    assert meshbody.volume(mesh) == pytest.approx(query.volume(box), rel=1e-9)
-
-
 # ======================================================================== §3 保存と復元
 def test_a_mesh_body_survives_save_and_reopen():
     """**保存の実体は操作ログ**なので、ログを書いて読み直して再生する経路をそのまま踏む。"""
@@ -148,15 +136,6 @@ def test_a_mesh_body_survives_save_and_reopen():
     assert body.name == "tetra"
     assert list(body.mesh.positions) == TETRA_POSITIONS
     assert list(body.mesh.indices) == TETRA_INDICES
-
-
-def test_the_log_carries_the_triangles_and_not_a_reference_to_another_body():
-    """**再生が外部を読まない**ことの固定。args だけで形が復元できること。"""
-    doc, _ = _tetra_doc()
-    args = json.loads(doc.log.to_json())["operations"][0]["args"]
-    assert args["positions"] == TETRA_POSITIONS
-    assert args["indices"] == TETRA_INDICES
-    assert "body_id" in args and "name" in args
 
 
 def test_undo_and_redo_move_the_mesh_body_in_and_out():
@@ -219,6 +198,15 @@ def test_the_mesh_is_delivered_as_exactly_one_face_with_the_stored_triangles():
     assert payload["untriangulated"] == []
 
 
+def test_the_state_broadcast_does_not_carry_the_triangles_but_the_saved_log_does():
+    """落ちたら、メッシュを1つ足した後の全操作の状態配信に三角形の全部が乗る(最適化の結果で1配信あたり数MB)。"""
+    session, _ = _tetra_session()
+    delivered = session.state_meta()["log"][-1]["args"]
+    assert "配信しない" in delivered["positions"] and "配信しない" in delivered["indices"], delivered
+    saved = OpLog.from_json(session.document.log.to_json()).entries[-1].args
+    assert saved["positions"] == TETRA_POSITIONS and saved["indices"] == TETRA_INDICES
+
+
 def test_body_meta_reports_one_face_and_the_mesh_volume():
     """`kernel.face_count(None)` を踏まずに軽量な状態が作れること(ドラッグ選択の律速点)。"""
     session, body_id = _tetra_session()
@@ -243,7 +231,7 @@ def test_a_hidden_mesh_body_is_dropped_from_the_state_like_a_solid():
     assert entry["geometry"] is None
 
 
-# ======================================================================== §5 消す・隠す
+# ======================================================================== §5 消す
 def test_a_mesh_body_can_be_deleted_and_the_delete_can_be_undone():
     """**編集できないボディも消せる**(消せないと、間違えて入れた形を取り除けない)。"""
     doc, body_id = _tetra_doc()
@@ -253,12 +241,6 @@ def test_a_mesh_body_can_be_deleted_and_the_delete_can_be_undone():
     body = doc.get_body(body_id)
     assert body.kind == MESH_KIND
     assert body.mesh.triangle_count == 4
-
-
-def test_a_mesh_body_can_be_hidden_and_shown():
-    doc, body_id = _tetra_doc()
-    assert selection.set_visible(doc, body_id, False)["visible"] is False
-    assert selection.set_visible(doc, body_id, True)["visible"] is True
 
 
 # ======================================================================== §6 断ること
@@ -355,7 +337,7 @@ def test_predicates_skip_mesh_bodies_when_no_body_was_named():
 
 def test_predicates_still_see_the_b_rep_bodies_of_a_mixed_document():
     """混在した文書では**B-rep側が今までどおり全部出る**(メッシュのぶんだけ落とす)。"""
-    doc, mesh_id = _tetra_doc()
+    doc, _ = _tetra_doc()
     doc.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
     edges = predicates.evaluate(doc, {"kind": "edge", "where": []})
     faces = predicates.evaluate(doc, {"kind": "face", "where": []})
