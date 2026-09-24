@@ -170,6 +170,8 @@ def conditions_report(doc: "Document") -> dict:
     **`state_payload()` の `stale` とは別の点検**である。あちらは「いま画面で指せるか」で、
     こちらは「いま最適化に渡せるか」——非表示のボディは指せないが、形はあるので渡せる。
     """
+    from . import optimize
+
     setup = doc.optimize
     problems: List[str] = []
 
@@ -189,10 +191,10 @@ def conditions_report(doc: "Document") -> dict:
                 "大きさ[N]が入っていない(set_loads の magnitude)"
             )
 
-    for role in ("preserve_bodies", "exclude_bodies"):
+    for role in optimize.BODY_ROLES:
         for body_id in getattr(setup, role):
             problems.extend(_body_problem(doc, role, body_id))
-    for role in ("fixtures", "loads"):
+    for role in optimize.FACE_ROLES:
         for condition in getattr(setup, role):
             problems.extend(_face_problem(doc, role, condition))
 
@@ -283,13 +285,13 @@ def build_conditions(doc: "Document") -> ConditionBundle:
 
     **`load_n` は合力(ベクトル和の大きさ)ではなく、面ごとの大きさの総和である。** 荷重が
     1つ、または全部同じ向きなら両者は一致するが、向きの違う荷重が混ざると一致しない ——
-    打ち消し合う組(面Aへ下向き50N・面Bへ上向き50N)では合力が0になり、**応力を実単位へ
-    戻す割り算が壊れる**。総和なら打ち消しに影響されない。`stress.load_magnitude_total`
-    が解いた側で同じ量を測っており、**2つの定義が食い違うと応力が黙って定数倍ずれる**。
+    打ち消し合う組(面Aへ下向き50N・面Bへ上向き50N)では合力が0になるが、総和は0にならない。
+    `stress.UnitScale.for_model` に渡すときは同じ定義(`stress.load_magnitude_total`)で割り合わせるので、
+    **2つの定義が食い違うと応力が黙って定数倍ずれる**。
 
-    探索(`binary_search`/`acceptance`)は無次元(荷重の総量1.0)で回り続ける契約
-    (`done/20260904-0143`)。実単位[N]は `load_n` だけが持ち、
-    `stress.UnitScale.for_model` がそれを読む。
+    探索(`binary_search`/`acceptance`)は `forces` を実単位[N]のまま受け、面アンカーが節点へ配る
+    (`acceptance.safety_check` は要素サイズだけを換算する)。`load_n` は応力の換算に使われず、
+    ここでは荷重が全部0の入力を落とすのにだけ使う。
     """
     from . import optimize
     from .topopt import design_space as ds
@@ -473,9 +475,11 @@ def resolution_limits(doc: "Document") -> dict:
     ので実測が無く、旧SIMP係数を使った桁の見当も出さない —— 実測に基づく見積もりは
     `run()` の進捗イベント(`_ProgressPump`)側で、実際に評価が進んでから出す。
     """
+    from . import optimize
+
     setup = doc.optimize
     faces: List[dict] = []
-    for role in ("fixtures", "loads"):
+    for role in optimize.FACE_ROLES:
         for condition in getattr(setup, role):
             problems = _face_problem(doc, role, condition)
             if problems:
@@ -978,8 +982,7 @@ def _run(
     from .topopt import binary_search
 
     keep_room = binary_search.keep_cells_without_room(space.mask, space.keep, min_width["cells"], space.obstacle)
-    if min_width["cells"] > 1:
-        trace.snapshot('min-width-keep-without-room', **keep_room)
+    trace.snapshot('min-width-keep-without-room', **keep_room)
     keep_room_warning = _keep_without_room_warning(min_width, keep_room)
 
     common = {
@@ -1163,7 +1166,6 @@ def _run(
     surface = topo_mesh.build_surface_from_mask(best.mask)
     positions = _mesh_to_world(surface.verts_smooth, space.grid)
     _check_mesh_placement(positions, space.grid)
-    indices = surface.faces.ravel().tolist()
     trace.snapshot('selected-result', status=search_result.status, termination=search_result.termination,
                    material_mm3=best.material_mm3, safety_factor=best.safety_factor)
     import numpy as np
@@ -1490,7 +1492,7 @@ def _keep_without_room_warning(min_width: dict, keep_room: dict) -> str:
 
 
 def _search_failure_warning(search_result: Any, min_width: Optional[dict] = None, factor: float = 1.0) -> str:
-    """`SearchResult.status` が `'feasible'` 以外のときの一言。最小幅の制約が有効なら、原因の候補を末尾に添える。
+    """`SearchResult.status` が `'feasible'` 以外のときの一言。最小幅で設計空間を絞ったなら、原因の候補を末尾に添える。
     `factor` は探索の目標に掛けた係数で、安全率の不足を言うときに実際の目標との関係を添える。"""
     message = _search_failure_message(search_result, factor)
     note = _min_width_failure_note(search_result, min_width)
@@ -1498,9 +1500,9 @@ def _search_failure_warning(search_result: Any, min_width: Optional[dict] = None
 
 
 def _min_width_failure_note(search_result: Any, min_width: Optional[dict]) -> str:
-    """最小幅が有効(`cells`>1)で、設計空間が絞られたときだけ返す: 入口検査も全材料の評価も、絞った後の設計空間に
+    """最小幅で設計空間が絞られたときだけ返す: 入口検査も全材料の評価も、絞った後の設計空間に
     対する結果であることを添える。合格形状から始まる段階4は `feasible` で返るので、ここへは来ない。"""
-    if not min_width or int(min_width.get("cells", 1)) <= 1:
+    if not min_width:
         return ""
     if search_result.status == 'resolution_insufficient':
         return ""
@@ -1603,7 +1605,7 @@ def _full_material_failure_message(search_result: Any, factor: float = 1.0) -> s
                                  f"(= 目標 {searched / factor:.4g} × 係数 {factor:.3g})に届かない")
                 reasons.append(f"安全率 {float(check['safety_factor']):.4g} が{shortfall}")
     if search_result.termination == 'evaluation_error':
-        head = "設計空間の全材料の応力計算が、解法を変えた再試行の後も失敗した"
+        head = "設計空間の全材料の応力計算が失敗した"
     else:
         head = "設計空間の全材料でも6条件に合格しない"
     detail = f": {'、'.join(reasons)}" if reasons else ""
@@ -1683,16 +1685,14 @@ def _region_representation(doc: "Document", bundle: ConditionBundle, space) -> L
         for body_id in body_ids:
             body = doc.get_body(body_id)
             soup = vx.triangles_from_shape(body.shape, deviation=deviation)
-            reason = None
-            try:
-                mask, _stats = vx.occupancy(soup, space.grid)
-            except ValueError as error:
-                # **格子の列(セル中心を通る +z のレイ)が1本もその形状を貫かない**と
-                # `occupancy` は縮退として落ちる。この配線ではそれは異常ではなく
-                # 「この解像度ではこの形状を表現できていない」そのもの(実測: 要素サイズ
-                # 4mm の格子に 1mm 角の保持ソリッドを置くと必ずこれになる)。0要素として扱う。
-                mask = np.zeros(space.grid.shape, dtype=bool)
-                reason = str(error)
+            # **格子の列(セル中心を通る +z のレイ)が1本もその形状を貫かない**のは異常ではなく
+            # 「この解像度ではこの形状を表現できていない」そのもの(実測: 要素サイズ 4mm の格子に
+            # 1mm 角の保持ソリッドを置くと必ずこれになる)。0要素として扱う。
+            mask, occupancy_stats = vx.occupancy(soup, space.grid, allow_empty=True)
+            reason = (
+                "格子の列(セル中心を通る +z のレイ)が1本もこの形状を貫かない"
+                if occupancy_stats.get("empty") else None
+            )
             elements = int(np.count_nonzero(mask))
             inside = int(np.count_nonzero(mask & design))
             # **除外は塊から引かれている**ので `inside` は 0 が正しい。表現できているかを

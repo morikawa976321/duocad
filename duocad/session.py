@@ -13,6 +13,7 @@ verbの呼び出し・選択・パラメータ・操作ログ・保存/開くを
 """
 from __future__ import annotations
 
+import functools
 import os
 import threading
 from pathlib import Path
@@ -69,6 +70,35 @@ _RESERVED_WINDOWS_NAMES = frozenset({
 # サーバは常に空の文書で立ち上がり、STEPはアプリ内の「STEP読み込み」かMCPの `import_step`
 # から読む(読み込みのverbは1本だけ)。読み込むSTEPのパスを既定として持つ場所は無いので、smokeスクリプトが使う
 # PCケースのパスは `web/scripts/models.mjs` が持つ。
+class DocumentBusy(RuntimeError):
+    """形状最適化の実行中に、文書を変える操作が来た(`Session._edits_document`)。
+
+    最適化は別スレッドで**開始時の文書を持ったまま**数分〜数時間走り、終わりにその文書へ結果を足して
+    保持・除外の形を読み直す。その間に文書を変える・差し替えると、結果が別の文書へ入る・古い条件の形が
+    足される・Undo した条件のまま結果が入る(issue #26)。選択・表示の切り替え・保存・書き出しは通す。
+    """
+
+
+def _edits_document(method: Any) -> Any:
+    """文書を変える `Session` のメソッドに付ける。**形状最適化の実行中は `DocumentBusy` で断る**。
+
+    ブラウザ・MCP・アプリ内AIのどの経路も `Session` のメソッドを通るので、ここ1箇所で全部が止まる
+    (画面の灰色化だけでは別タブ・AI・キーボードを止められない)。
+    """
+
+    @functools.wraps(method)
+    def guarded(self: "Session", *args: Any, **kwargs: Any) -> Any:
+        if self._optimizing:
+            raise DocumentBusy(
+                f"形状最適化の実行中は文書を変えられない({method.__name__})。"
+                "終わるか中断してから操作すること"
+            )
+        return method(self, *args, **kwargs)
+
+    guarded.edits_document = True  # type: ignore[attr-defined]
+    return guarded
+
+
 #: プレビューできるverb -> (`Session` のメソッド名, 受け取ってよい引数名)。
 #: `Session.preview` の唯一の入口で、**ここに無いverbはプレビューできない**
 #: (載せてよいverbの条件は `catalog.Command.previewable`)。
@@ -110,6 +140,9 @@ class Session:
         #: 形状最適化の中断の旗。**別スレッドから立てられる**(実行はワーカースレッド、
         #: `cancel_optimization` はイベントループのスレッド)ので `Event` にしてある。
         self._optimize_cancel = threading.Event()
+        #: 形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。立っている間は
+        #: 文書を変える操作を断る(`_edits_document`)。**イベントループのスレッドだけが書く**。
+        self._optimizing = False
         if step_path is not None:
             self.load_step(step_path)
 
@@ -189,6 +222,7 @@ class Session:
         return applied
 
     # ---------------------------------------------------------------- 文書の組み立て
+    @_edits_document
     def load_step(self, path: Path) -> list:
         """STEPを読み、ソリッドごとに参照ボディ+編集用コピーを作る(Python APIとして残す)。
 
@@ -313,6 +347,7 @@ class Session:
             selection.clear_selection(self.document)
 
     # ---------------------------------------------------------------- 操作
+    @_edits_document
     def extrude_face(self, distance: float, client_op: Optional[int] = None) -> dict:
         """**確定選択の面**(ちょうど1枚)を押し出す。`applied` を返す。
 
@@ -419,6 +454,7 @@ class Session:
         }
 
     # ---------------------------------------------------------------- B: プレビュー(投機的実行)
+    @_edits_document
     def preview(self, verb: str, args: Optional[dict] = None) -> dict:
         """verbを**投機的に実行して形だけ測り、文書を元へ戻す**。
 
@@ -482,6 +518,7 @@ class Session:
             self._applied_count = applied_count
         return {"verb": verb, "bodies": bodies_out}
 
+    @_edits_document
     def undo(self) -> dict:
         """直前の操作を取り消す。**文書の土台を作った操作は取り消させない**。
 
@@ -502,6 +539,7 @@ class Session:
         self._reset_selection_if_needed("undo")
         return self._emit({"verb": "undo", "seq": operation.seq, "undone": operation.verb})
 
+    @_edits_document
     def redo(self) -> dict:
         operation = self.document.log.redo(self.document)
         if operation is None:
@@ -523,6 +561,7 @@ class Session:
             payload.update(extra)
         return self._emit(payload)
 
+    @_edits_document
     def sketch_create(self, base_plane: Optional[str] = None) -> dict:
         """スケッチを作る。`base_plane`(XY/XZ/YZ)省略時は**確定選択の面**(ちょうど1枚)に貼る。
 
@@ -543,6 +582,7 @@ class Session:
         sketch_id = sketch.sketch_create(self.document, plane)
         return self._after_logged_verb({"sketch_id": sketch_id})
 
+    @_edits_document
     def sketch_create_offset(self, distance: float, base_plane: Optional[str] = None) -> dict:
         """オフセット平面にスケッチを作る。基準は `sketch_create` と同じ
         `base_plane`(XY/XZ/YZ)省略時は確定選択の面(ちょうど1枚)で、そこから法線方向へ
@@ -565,14 +605,17 @@ class Session:
         )
         return self._after_logged_verb({"sketch_id": sketch_id})
 
+    @_edits_document
     def add_line(self, sketch_id: str, p0: Any, p1: Any) -> dict:
         entity_id = sketch.add_line(self.document, sketch_id, p0, p1)
         return self._after_logged_verb({"entity_id": entity_id})
 
+    @_edits_document
     def add_circle(self, sketch_id: str, center: Any, radius: float) -> dict:
         entity_id = sketch.add_circle(self.document, sketch_id, center, radius)
         return self._after_logged_verb({"entity_id": entity_id})
 
+    @_edits_document
     def add_rectangle(
         self,
         sketch_id: str,
@@ -586,6 +629,7 @@ class Session:
         )
         return self._after_logged_verb({"entity_id": entity_id})
 
+    @_edits_document
     def add_arc(
         self,
         sketch_id: str,
@@ -599,6 +643,7 @@ class Session:
         )
         return self._after_logged_verb({"entity_id": entity_id})
 
+    @_edits_document
     def extrude(
         self,
         distance: float,
@@ -627,6 +672,7 @@ class Session:
             "changed_bodies": [changed_body_id],
         })
 
+    @_edits_document
     def fillet(self, radius: Any) -> dict:
         """**確定選択の辺**を丸める。`radius` は数値か辺ごとのリスト。
 
@@ -641,6 +687,7 @@ class Session:
             "changed_bodies": [changed_body_id],
         })
 
+    @_edits_document
     def chamfer(self, distance: Any) -> dict:
         """**確定選択の辺**を面取りする(`fillet` と同じ規律)。"""
         edges, body_id = selection.require_edges(self.document)
@@ -651,6 +698,7 @@ class Session:
             "changed_bodies": [changed_body_id],
         })
 
+    @_edits_document
     def boolean_body(self, target_ref: Any, mode: str) -> dict:
         """**ターゲット(1つ・面参照)に確定選択のツールボディ群**を作用させる。
 
@@ -669,6 +717,7 @@ class Session:
             "changed_bodies": [changed_body_id],
         })
 
+    @_edits_document
     def pattern_rectangular(
         self,
         sketch_id: str,
@@ -683,6 +732,7 @@ class Session:
         )
         return self._after_logged_verb({"pattern_id": pattern_id})
 
+    @_edits_document
     def pattern_circular(
         self,
         sketch_id: str,
@@ -703,6 +753,7 @@ class Session:
         )
         return self._after_logged_verb({"pattern_id": pattern_id})
 
+    @_edits_document
     def move_sketch_entities(
         self,
         dx: Optional[float] = None,
@@ -748,6 +799,7 @@ class Session:
             "sketch_ids": sketch_ids,
         })
 
+    @_edits_document
     def move_body(
         self,
         dx: Optional[float] = None,
@@ -801,6 +853,7 @@ class Session:
             "changed_bodies": list(args["bodies"]) + created,
         })
 
+    @_edits_document
     def mirror_sketch_entities(self, axis: Any) -> dict:
         """**確定選択のスケッチ図形**を、既存の線分1本(`axis`)を軸に鏡映複製する(常に複製)。
 
@@ -819,6 +872,7 @@ class Session:
             "sketch_ids": sketch_ids,
         })
 
+    @_edits_document
     def mirror_body(self, base_plane: Optional[str] = None, plane_face: Any = None) -> dict:
         """**確定選択の面/辺/頂点が属するボディ**を、鏡映面に対して鏡映複製する(常に複製)。
 
@@ -840,6 +894,7 @@ class Session:
             "changed_bodies": created,
         })
 
+    @_edits_document
     def delete(self) -> dict:
         """**確定選択のボディとスケッチ図形**をまとめて消す(1回のundoで全部戻る)。
 
@@ -872,24 +927,28 @@ class Session:
     #
     # `changed_bodies` は**返さない**。形は1つも変わらないので、画面が形を取り直す理由が
     # 無い(役割の色は配信される `state.optimize` から描く)。
+    @_edits_document
     def set_preserve_bodies(self) -> dict:
         """**確定選択のボディ**を保持ソリッドの集合にする(集合代入)。"""
         body_ids = selection.require_committed_bodies(self.document)
         operation = set_preserve_bodies_verb(self.document, body_ids)
         return self._after_logged_verb({"bodies": list(operation.args["bodies"])})
 
+    @_edits_document
     def set_exclude_bodies(self) -> dict:
         """**確定選択のボディ**を除外ソリッドの集合にする(集合代入)。"""
         body_ids = selection.require_committed_bodies(self.document)
         operation = set_exclude_bodies_verb(self.document, body_ids)
         return self._after_logged_verb({"bodies": list(operation.args["bodies"])})
 
+    @_edits_document
     def set_fixtures(self) -> dict:
         """**確定選択の面**を拘束面の集合にする(集合代入)。"""
         faces = selection.require_committed_faces(self.document)
         operation = set_fixtures_verb(self.document, faces)
         return self._after_logged_verb({"face_count": len(operation.args["faces"])})
 
+    @_edits_document
     def set_loads(self, magnitude: Any, direction: Any) -> dict:
         """**確定選択の面だけ**に大きさ[N]と向きを焼く(上書き代入。選択外の荷重面は残る)。
 
@@ -907,6 +966,7 @@ class Session:
             "direction_vector": None if vector is None else list(vector),
         })
 
+    @_edits_document
     def clear_loads(self) -> dict:
         """**確定選択の面**を荷重から外す(選択が空なら全部外す)。"""
         faces = selection.require_committed_faces(self.document)
@@ -939,11 +999,42 @@ class Session:
         """走っている最適化に降りるよう伝える(**旗を立てるだけ**)。
 
         実際に降りるのは次に進捗が出た時点で、`run_optimization` が `OptimizeCancelled` を
-        投げる。**旗は次の `run_optimization` が畳む** —— ここで畳むと、中断の直後に
+        投げる。**旗は次の `begin_optimization` が畳む** —— ここで畳むと、中断の直後に
         立て直された旗を新しい実行が拾ってしまう。
         """
         self._optimize_cancel.set()
         return {"cancelled": True}
+
+    @property
+    def optimizing(self) -> bool:
+        """形状最適化が走っているか(`begin_optimization` 〜 `end_optimization`)。"""
+        return self._optimizing
+
+    def optimization_status(self) -> dict:
+        """走っているか・中断を頼まれているか(`net/ws.py` の `optimize_status` の中身)。
+
+        `cancelling` は**走っている間だけ**載せる —— 旗は次の開始まで立ったままなので、
+        走っていないのに「中断中」と出すと次の実行が中断表示から始まって見える。
+        """
+        status: dict = {"running": self._optimizing}
+        if self._optimizing and self._optimize_cancel.is_set():
+            status["cancelling"] = True
+        return status
+
+    def begin_optimization(self) -> None:
+        """走らせる前に**イベントループのスレッドで**呼ぶ。中断の旗を畳み、文書を変える操作を断り始める。
+
+        **旗はワーカースレッドの中で畳まない** —— 実行を別スレッドへ投げてから走り出すまでの間に届いた
+        中断が、走り出した実行に消されて結果が足される(issue #35)。
+        """
+        if self._optimizing:
+            raise ValueError("最適化が既に走っている(中断してから)")
+        self._optimize_cancel.clear()
+        self._optimizing = True
+
+    def end_optimization(self) -> None:
+        """`begin_optimization` の対。文書を変える操作をまた受け付ける。"""
+        self._optimizing = False
 
     def run_optimization(
         self,
@@ -977,6 +1068,9 @@ class Session:
 
         戻り値は `optimize_run.run()` のものに、成功時だけ `"applied"`(変更イベントの封筒)を
         足したもの。**`state != "done"` のときは文書を1ビットも変えていない**。
+
+        **呼び出し側が `begin_optimization` を済ませていなければ、ここで開始と終了を囲む**(テスト・
+        スクリプトの直呼び)。`net/ws.py` は別スレッドへ投げる前に開始しておく(issue #35)。
         """
         unsupported = {
             "rmin_mm": rmin_mm,
@@ -991,21 +1085,27 @@ class Session:
                 "材料量の直接指定を持たない。目標安全率・要素サイズ・評価予算(max_evaluations)"
                 "を使うこと)"
             )
-        self._optimize_cancel.clear()
         options = optimize_run.OptimizeOptions(
             target_safety_factor=float(target_safety_factor),
             element_size_mm=None if element_size_mm is None else float(element_size_mm),
             min_width_mm=None if min_width_mm is None else float(min_width_mm),
             max_evaluations=None if max_evaluations is None else int(max_evaluations),
         )
-        result = optimize_run.run(
-            self.document,
-            options,
-            progress=progress,
-            should_cancel=self._optimize_cancel.is_set,
-            debug=debug,
-            debug_kinds=debug_kinds,
-        )
+        owned = not self._optimizing
+        if owned:
+            self.begin_optimization()
+        try:
+            result = optimize_run.run(
+                self.document,
+                options,
+                progress=progress,
+                should_cancel=self._optimize_cancel.is_set,
+                debug=debug,
+                debug_kinds=debug_kinds,
+            )
+        finally:
+            if owned:
+                self.end_optimization()
         if result.get("warning"):
             # 既存の警告の口へ載せる(新しい運び方を作らない)。
             self.warnings.append(result["warning"])
@@ -1020,6 +1120,7 @@ class Session:
         )
         return dict(result, applied=applied)
 
+    @_edits_document
     def set_parameter(self, name: str, value: float) -> dict:
         before_shapes = {body.id: id(body.shape) for body in self.document.bodies}
         operation = parameters.set_parameter(self.document, name, float(value))
@@ -1035,6 +1136,7 @@ class Session:
             "changed_bodies": changed_bodies,
         })
 
+    @_edits_document
     def add_mesh_body(
         self, positions: Any, indices: Any, name: Any = None
     ) -> dict:
@@ -1048,6 +1150,7 @@ class Session:
         )
         return self._after_logged_verb({"body_id": body_id})
 
+    @_edits_document
     def import_step(self, path: Any) -> dict:
         """STEPを読み、**編集可能なボディまで作る**(verb `import_step`)。
 
@@ -1059,6 +1162,7 @@ class Session:
         body_ids = import_step_verb(self.document, str(self._resolve(path)))
         return self._after_logged_verb({"body_ids": list(body_ids)})
 
+    @_edits_document
     def import_svg(self, sketch_id: str, path: Any, scale: Any = None) -> dict:
         """SVGの図形を**いま開いているスケッチ(`sketch_id`)へ**取り込む(verb `import_svg`)。
 
@@ -1223,6 +1327,7 @@ class Session:
             "operations": len(self.document.log.entries),
         }
 
+    @_edits_document
     def open_document(self, name: Any) -> dict:
         """保存した操作ログを読み、**再生して**文書を差し替える(§3.1「これが正」)。
 
@@ -1257,6 +1362,7 @@ class Session:
             "operations": len(log.entries),
         })
 
+    @_edits_document
     def new_document(self) -> dict:
         """空の文書へ差し替える(「新規」)。**verbではない**(ログに載らない)。
 

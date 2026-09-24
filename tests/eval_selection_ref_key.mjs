@@ -1,7 +1,6 @@
 /**
  * `web/src/commands/command.ts` の `refKey` / `sameRef` を**実際に評価する**口。
- * `tests/test_selection_ref_key.py` が `node` でこれを走らせる
- * (`tests/eval_grid_scale.mjs` と同じやり方 —— ソースの文字列比較ではなく実行結果で見る)。
+ * `tests/test_ts_evaluators.py` が `node` でこれを走らせる。
  *
  * ここで見るのは**コア(`duocad/selection.py` の `ref_key`)と同じ規則になっているか**。
  * クライアント側は Set 引きで重複を落とすので、鍵がコアとずれると

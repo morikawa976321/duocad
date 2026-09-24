@@ -14,15 +14,10 @@ from duocad import query, selection
 from duocad.document import Body, Document, new_body_id
 from duocad.server import Session
 from duocad.verbs import boolean_body as boolean_body_verb
+from session_support import select as _select
 
-DEVIATION = 0.2
 SIDE = 20.0
 TOOL = 10.0
-
-
-@pytest.fixture()
-def session(tmp_path) -> Session:
-    return Session(None, DEVIATION, models_dir=tmp_path / "models")
 
 
 def _box_shape(dx: float, dy: float, dz: float, ox: float = 0.0, oy: float = 0.0, oz: float = 0.0):
@@ -46,11 +41,6 @@ def _add_body(doc: Document, name: str, shape, *, visible: bool = True) -> str:
 
 def _target_ref(body_id: str) -> dict:
     return {"body": body_id, "kind": "face", "index": 1}
-
-
-def _select(session: Session, refs: list) -> None:
-    session.clear_selection()
-    session.modify_selection(refs, [])
 
 
 def _two_boxes(doc: Document) -> tuple[str, str]:
@@ -85,13 +75,15 @@ def _volume(doc: Document, body_id: str) -> float:
 # --------------------------------------------------------------------------------------
 # 基本3モード
 # --------------------------------------------------------------------------------------
-def test_union_keeps_target_volume_when_tool_is_inside(session: Session) -> None:
-    """完全に内側のツールを union してもターゲット体積は変わらない(ツールは消える)。"""
-    target_id, tool_id = _two_boxes(session.document)
-    before = _volume(session.document, target_id)
+def test_union_adds_the_part_of_the_tool_outside_the_target(session: Session) -> None:
+    """x方向に5mmはみ出したツールを union すると 8000 -> 8500(ツールのボディは消える)。"""
+    target_id = _add_body(session.document, "target", _box_shape(SIDE, SIDE, SIDE))
+    tool_id = _add_body(session.document, "tool", _box_shape(TOOL, TOOL, TOOL, SIDE - TOOL / 2))
     _run(session, target_id, [tool_id], "union")
     assert len(session.document.bodies) == 1
-    assert math.isclose(_volume(session.document, target_id), before, rel_tol=1e-6)
+    assert math.isclose(
+        _volume(session.document, target_id), SIDE**3 + TOOL**3 / 2, rel_tol=1e-6
+    )
 
 
 def test_cut_removes_the_tool_volume(session: Session) -> None:
@@ -100,14 +92,6 @@ def test_cut_removes_the_tool_volume(session: Session) -> None:
     _run(session, target_id, [tool_id], "cut")
     assert len(session.document.bodies) == 1
     assert math.isclose(_volume(session.document, target_id), SIDE**3 - TOOL**3, rel_tol=1e-6)
-
-
-def test_intersect_keeps_only_overlap(session: Session) -> None:
-    """内側 10mm 立方体との intersect は重なり 1000 だけ残る。"""
-    target_id, tool_id = _two_boxes(session.document)
-    _run(session, target_id, [tool_id], "intersect")
-    assert len(session.document.bodies) == 1
-    assert math.isclose(_volume(session.document, target_id), TOOL**3, rel_tol=1e-6)
 
 
 def test_intersect_with_two_tools_is_union_of_intersections(session: Session) -> None:

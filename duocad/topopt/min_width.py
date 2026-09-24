@@ -11,6 +11,7 @@ import numpy as np
 from scipy import ndimage
 
 from . import acceptance
+from .acceptance import NEIGHBOURHOOD_STRUCTURE
 
 
 def cube_opening(mask: np.ndarray, m: int) -> np.ndarray:
@@ -97,9 +98,6 @@ def bite_verdict(padded: np.ndarray, bite: np.ndarray,
     return None, len(np.unique(rest[neighbours])) == 1
 
 
-_SIX = ndimage.generate_binary_structure(3, 1)
-
-
 def core_cells(material: np.ndarray, m: int) -> np.ndarray:
     """芯 K: セル c を最小の角とする m 立方が全部材料のセル(立方が配列に収まらない c は含めない)。"""
     core = np.asarray(material, dtype=bool)
@@ -144,14 +142,16 @@ class CoreConnectivity:
         self.m = int(m)
         self.exempt = None if exempt is None else np.asarray(exempt, dtype=bool)
         self._links: list[tuple[tuple, np.ndarray]] = []
+        #: `after_bite` がどの経路で答えたかの回数(窓で「つながる」/ 窓で「割れる」/ 大域の数え直し)と、窓を広げた最大の倍率。
+        self.stats = dict(window_true=0, window_false=0, global_count=0, max_margin=1)
         if self.exempt is None or not self.exempt.any():
             return
-        labels, count = ndimage.label(self.exempt, structure=_SIX)
+        labels, count = ndimage.label(self.exempt, structure=NEIGHBOURHOOD_STRUCTURE)
         for j, box in enumerate(ndimage.find_objects(labels), start=1):
             lo = tuple(max(s.start - self.m, 0) for s in box)  # E_j の外周1セル + 立方が下へ伸びる m-1
             crop = tuple(slice(l, s.stop + 1) for l, s in zip(lo, box))
             component = labels[crop] == j
-            reach = component | ndimage.binary_dilation(component, structure=_SIX)
+            reach = component | ndimage.binary_dilation(component, structure=NEIGHBOURHOOD_STRUCTURE)
             self._links.append((lo, _spread_down(reach, self.m)))
 
     def _material(self, mask: np.ndarray) -> np.ndarray:
@@ -174,7 +174,7 @@ class CoreConnectivity:
     def groups(self, mask: np.ndarray) -> int:
         """K の6連結成分を E で結んでまとめたときの塊の数(K が空なら 0)。S(m) を満たすのは 1 以下。"""
         core = core_cells(self._material(mask), self.m)
-        labels, count = ndimage.label(core, structure=_SIX)
+        labels, count = ndimage.label(core, structure=NEIGHBOURHOOD_STRUCTURE)
         if count <= 1:
             return count
         parent = list(range(count + 1))
@@ -196,23 +196,34 @@ class CoreConnectivity:
         """`mask`(`exempt` は材料に数える)が S(m) を満たすか(大域判定)。"""
         return self.groups(mask) <= 1
 
-    def window(self, changed_lo, changed_hi, shape: tuple) -> tuple[np.ndarray, np.ndarray, tuple]:
-        """変更したセルの外接箱 `[changed_lo, changed_hi)` に対し、`proven` へ渡す窓を返す: `(原点, 終点, 切り出しの添字)`。
+    def window(self, changed_lo, changed_hi, shape: tuple, margin: int = 1) -> tuple[np.ndarray, np.ndarray, tuple]:
+        """変更したセルの外接箱 `[changed_lo, changed_hi)` に対し、`verdict` へ渡す窓を返す: `(原点, 終点, 切り出しの添字)`。
         切り出し(`ext`)は終点の外に m−1 の余白を持つ(芯は立方の最小の角で数えるので、窓の縁まで正確に出すため)。
-        変更が抜いたセルだけなら、芯が変わるのは箱から −(m−1) までなので、その周り m を見る。"""
+        変更が抜いたセルだけなら、芯が変わるのは箱から −(m−1) までなので、その周り m×`margin` を見る
+        (`after_bite` は `margin` を 1, 2, 4, … と倍にして窓を広げる)。"""
         m = self.m
         shape_arr = np.asarray(shape)
-        lo = np.maximum(np.asarray(changed_lo) - (m - 1) - m, 0)
-        hi = np.minimum(np.asarray(changed_hi) + m, shape_arr)
+        lo = np.maximum(np.asarray(changed_lo) - (m - 1) - m * int(margin), 0)
+        hi = np.minimum(np.asarray(changed_hi) + m * int(margin), shape_arr)
         ext_hi = np.minimum(hi + (m - 1), shape_arr)
         return lo, hi, tuple(slice(int(a), int(b)) for a, b in zip(lo, ext_hi))
 
     def proven(self, before: np.ndarray, after: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> bool:
-        """`before` が S(m) を満たすとき、`after` も満たすと窓の中で言えるか。`before`・`after` は同じ窓(`window` の切り出し)の材料
-        (`exempt` を除く)で、2つは変更範囲の外で一致する。偽は「言えなかった」で、満たさないとは限らない(呼び出し側が大域で数え直す)。
+        """`before` が S(m) を満たすとき、`after` も満たすと窓の中で言えるか(`verdict` が真のときだけ真。偽は「言えなかった」で、
+        満たさないとは限らない)。"""
+        return self.verdict(before, after, lo, hi, None) is True
 
-        抜かれた芯(`before` にあって `after` に無い)のすべての隣と、それが結ばれていた E が、窓の中で1つのつながりに残ること。
-        加えて、増えた芯(`after` だけにある)の塊がどれも、残った芯のどれかとつながっていること(足した立方が孤立しない)。
+    def verdict(self, before: np.ndarray, after: np.ndarray, lo: np.ndarray, hi: np.ndarray,
+                shape: Optional[tuple]) -> Optional[bool]:
+        """`before` が S(m) を満たすとき、`after` も満たすかを窓の中だけで判定する。`before`・`after` は同じ窓(`window` の切り出し)の
+        材料(`exempt` を除く)で、2つは変更範囲の外で一致する。真 = つながる、偽 = 確実に割れる、None = 窓の中では言えない。
+
+        根拠: 抜く前の芯(と E で結ばれたつながり)は1塊なので、残った芯のどのセルも、抜かれた芯に隣り合う残りの芯(前線)の
+        どれかへ窓の外を通らずに達する。だから抜いた後も1塊であることと、**前線どうしが残った芯の中でつながること**は同値。
+        窓の中で前線が1つにつながれば真。前線が2つ以上の塊に分かれ、そのうち1つでも**閉じている**(窓の面のうち格子の縁で
+        ない面に触れず、窓の外へ広がる E の結び先にも触れない)塊があれば、それは他と別の成分なので偽。どの塊も開いていれば
+        None(`after_bite` が窓を広げる)。`shape`(格子の形)が None なら閉じているかを見ず、偽を返さない(`proven`)。
+        増えた芯(`after` だけにある)があれば None(抜くだけの手では起きない)。
         """
         material_before, material_after = self._material_windows(before, after, lo)
         crop = tuple(slice(0, int(b - a)) for a, b in zip(lo, hi))
@@ -222,7 +233,9 @@ class CoreConnectivity:
         gained = core_after & ~core_before
         if not lost.any() and not gained.any():
             return True
-        labels, count = ndimage.label(core_after, structure=_SIX)
+        if gained.any():
+            return None
+        labels, count = ndimage.label(core_after, structure=NEIGHBOURHOOD_STRUCTURE)
         parent = list(range(count + 1))
 
         def find(x: int) -> int:
@@ -231,35 +244,87 @@ class CoreConnectivity:
                 x = parent[x]
             return x
 
-        need = {int(v) for v in np.unique(labels[ndimage.binary_dilation(lost, structure=_SIX) & core_after])}
-        for link in self._linked(lo, tuple(int(b - a) for a, b in zip(lo, hi))):
+        need = {int(v) for v in np.unique(labels[ndimage.binary_dilation(lost, structure=NEIGHBOURHOOD_STRUCTURE) & core_after])}
+        open_labels: set[int] = set()
+        crop_shape = tuple(int(b - a) for a, b in zip(lo, hi))
+        for link, extends in self._linked_with_extent(lo, crop_shape):
             hit = [int(v) for v in np.unique(labels[link & core_after])]
             for other in hit[1:]:
                 parent[find(other)] = find(hit[0])
-            if (link & lost).any():  # 抜かれた芯が結ばれていた E は、残りの芯へ結ばれたままでなければならない
-                if not hit:
-                    return False
-                need.add(hit[0])
-        if lost.any() and (not need or len({find(v) for v in need}) != 1):
+            if extends:
+                open_labels |= set(hit)
+            if (link & lost).any():  # 抜かれた芯が結ばれていた E
+                if hit:
+                    need.add(hit[0])
+                elif extends or shape is None:
+                    return None  # 窓の外の芯へまだ結ばれているかもしれない
+                # 結び先が窓の中に無く窓の外にも広がらない E は、もう何も結ばない
+        if not need:
+            return True  # 抜かれた芯に隣り合う芯が無い = 残った芯が無い(抜く前は1塊だったので)
+        groups = {find(v) for v in need}
+        if len(groups) == 1:
+            return True
+        if shape is None:
+            return None
+        # 前線が分かれたときだけ、窓の面(格子の縁でないもの)に触れる塊を数える(つながる手が大半なので、その経路には足さない)。
+        for axis in range(3):
+            if int(lo[axis]) > 0:
+                face = tuple(0 if a == axis else slice(None) for a in range(3))
+                open_labels |= {int(v) for v in np.unique(labels[face])}
+            if int(hi[axis]) < int(shape[axis]):
+                face = tuple(-1 if a == axis else slice(None) for a in range(3))
+                open_labels |= {int(v) for v in np.unique(labels[face])}
+        open_labels.discard(0)
+        open_roots = {find(v) for v in open_labels}
+        if any(g not in open_roots for g in groups):
             return False
-        if gained.any():
-            kept = {find(int(v)) for v in np.unique(labels[core_before & core_after])}
-            if not {find(int(v)) for v in np.unique(labels[gained])} <= kept:
-                return False
-        return True
+        return None
+
+    def _linked_with_extent(self, origin: np.ndarray, shape: tuple) -> list[tuple[np.ndarray, bool]]:
+        """`_linked` に、その E の結び先の箱が窓 `[origin, origin+shape)` の外へ広がるか(真なら窓の外の芯へも結びうる)を添える。"""
+        out = []
+        origin = np.asarray(origin)
+        for lo, link in self._links:
+            start = np.maximum(np.asarray(lo), origin)
+            stop = np.minimum(np.asarray(lo) + link.shape, origin + np.asarray(shape))
+            if (stop <= start).any():
+                continue
+            clipped = np.zeros(shape, dtype=bool)
+            clipped[tuple(slice(a, b) for a, b in zip(start - origin, stop - origin))] = link[
+                tuple(slice(a, b) for a, b in zip(start - np.asarray(lo), stop - np.asarray(lo)))]
+            extends = bool((np.asarray(lo) < origin).any() or (np.asarray(lo) + link.shape > origin + np.asarray(shape)).any())
+            out.append((clipped, extends))
+        return out
 
     def after_bite(self, inner: np.ndarray, bite, island_cells: int) -> bool:
         """`peel` の1手(`bite`: セルの添字1つ `(i,j,k)` か (n,3) の配列。切り離して一緒に消した島は `island_cells` セル)を抜いた後の
-        `inner` が S(m) を満たすか。抜く前は満たす前提。島を消したときは大域で数える。島が無ければ一口の周りの窓で言えなければ大域で数える。"""
+        `inner` が S(m) を満たすか。抜く前は満たす前提。島を消したときは大域で数える。島が無ければ一口の周りの窓で判定し
+        (`verdict`)、言えなければ窓を倍に広げて繰り返し、窓が格子全体に達したら大域で数える。答えは大域の数え直しと同じ
+        (窓の判定は真も偽も厳密)。hanger 1.875mm・m=4 の終盤では、以前の「窓で言えなければ大域」が 20,401 回・1 回 9 ms
+        の数え直しをしていて、その 99.5% は割れる手だった(`docs/TOPOPT_STOP_RULE.md` §5)。"""
         if island_cells:
+            self.stats['global_count'] += 1
             return self.connected(inner)
         cells = np.atleast_2d(np.asarray(bite))
-        lo, hi, ext = self.window(cells.min(0), cells.max(0) + 1, inner.shape)
-        after = inner[ext]
-        before = after.copy()
-        rel = cells - np.array([s.start for s in ext])
-        before[rel[:, 0], rel[:, 1], rel[:, 2]] = True
-        return self.proven(before, after, lo, hi) or self.connected(inner)
+        shape = inner.shape
+        margin = 1
+        while True:
+            lo, hi, ext = self.window(cells.min(0), cells.max(0) + 1, shape, margin)
+            after = inner[ext]
+            before = after.copy()
+            rel = cells - np.array([s.start for s in ext])
+            before[rel[:, 0], rel[:, 1], rel[:, 2]] = True
+            verdict = self.verdict(before, after, lo, hi, shape)
+            if verdict is not None:
+                self.stats['window_true' if verdict else 'window_false'] += 1
+                self.stats['max_margin'] = max(self.stats['max_margin'], margin)
+                return verdict
+            # 窓が格子の 1/8 を超えたら、これ以上広げるより大域で数えるほうが安い(小さい格子では大域が 1 ms 未満。
+            # 合成題材 52×36×36 で窓を広げ続けると peel が 36 → 47 秒に増えた実測)。
+            if (lo == 0).all() and (hi == np.asarray(shape)).all() or 8 * int(np.prod(hi - lo)) >= int(np.prod(shape)):
+                self.stats['global_count'] += 1
+                return self.connected(inner)
+            margin *= 2
 
     def _material_windows(self, before: np.ndarray, after: np.ndarray, lo: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         if self.exempt is None:

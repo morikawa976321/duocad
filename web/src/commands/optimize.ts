@@ -11,7 +11,7 @@
  * (`missingSelection` を使わない理由)。
  *
  * **4つとも Enter が要る**(`command.ts` の `needsEnter`)——選択の `max` が `null` で
- * 対象を複数取りうるため(`tests/test_ui_command_wiring.py` の `ENTER_REQUIRED`)。
+ * 対象を複数取りうるため。
  *
  * **起動時のプリセレクトは `App.svelte` の役目**(`CommandHost` の `onStart` → 配りもの
  * `state.optimize` の該当配列をそのまま `modifySelection` へ渡す。`duocad/optimize.py` の
@@ -213,6 +213,13 @@ export const OPTIMIZE_PRESET_ROLE: Record<string, 'preserve_bodies' | 'exclude_b
   set_preserve_bodies: 'preserve_bodies',
   set_exclude_bodies: 'exclude_bodies',
   set_fixtures: 'fixtures',
+}
+
+/** 上の3つの役割の呼び名(画面の通知に使う。`duocad/optimize.py` の `ROLE_LABEL` と同じ語)。 */
+export const OPTIMIZE_ROLE_LABEL: Record<'preserve_bodies' | 'exclude_bodies' | 'fixtures', string> = {
+  preserve_bodies: '保持ソリッド',
+  exclude_bodies: '除外ソリッド',
+  fixtures: '拘束面',
 }
 
 /**

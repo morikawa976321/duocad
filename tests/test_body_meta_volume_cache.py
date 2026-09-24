@@ -16,29 +16,15 @@ import math
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad import kernel, query
-from duocad.document import Body
-from duocad.server import Session
 from duocad.verbs import extrude_face
+from session_support import session_with_box
 
 BOX_X, BOX_Y, BOX_Z = 20.0, 20.0, 20.0
 
 
-def _box_session() -> Session:
-    session = Session(None, 0.2)
-    session.document.add_body(
-        Body(
-            id="box",
-            name="box",
-            kind="solid",
-            shape=BRepPrimAPI_MakeBox(BOX_X, BOX_Y, BOX_Z).Shape(),
-        )
-    )
-    return session
-
-
 def test_state_meta_volume_updates_when_the_shape_changes():
     """形状が変われば体積が更新される(面を押し出した後の state_meta が新しい値を返す)。"""
-    session = _box_session()
+    session = session_with_box(BOX_X, BOX_Y, BOX_Z)
     body = session.document.active_body()
     assert body is not None
 
@@ -59,9 +45,9 @@ def test_state_meta_volume_updates_when_the_shape_changes():
 
 def test_state_meta_does_not_recompute_volume_for_an_unchanged_shape(monkeypatch):
     """2回目以降の `state_meta()` では、形状が変わっていないBodyの `query.volume` が
-    呼ばれない(時間ではなく呼び出し回数で見るので、マシン負荷に振れない)。
+    呼ばれない。最後の1回が落ちたら、回数を数える口が実装から外れて何も測っていない。
     """
-    session = _box_session()
+    session = session_with_box(BOX_X, BOX_Y, BOX_Z)
     session.state_meta()  # 初回配信でキャッシュを埋める
 
     calls: list = []
@@ -76,3 +62,7 @@ def test_state_meta_does_not_recompute_volume_for_an_unchanged_shape(monkeypatch
     session.state_meta()
 
     assert calls == [], "形状が変わっていないのに query.volume が呼ばれた"
+
+    session.document.get_body("box").shape = BRepPrimAPI_MakeBox(BOX_X, BOX_Y, 2 * BOX_Z).Shape()
+    session.state_meta()
+    assert len(calls) == 1

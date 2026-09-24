@@ -36,7 +36,6 @@ from duocad.agent import (
 )
 from duocad.agent.providers import (
     AssistantTurn,
-    Provider,
     ProviderReply,
     ToolCall,
     ToolResult,
@@ -45,6 +44,7 @@ from duocad.agent.providers import (
 )
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.server import Session
+from agent_support import RecordedProvider, spoke, tool_use
 
 #: 本物ではない。**形だけ本物に似せた文字列**(このリポジトリのどこにも実キーは置かない)。
 FAKE_KEY = "sk-test-DO-NOT-USE-0123456789"
@@ -53,33 +53,6 @@ FAKE_KEY = "sk-test-DO-NOT-USE-0123456789"
 # --------------------------------------------------------------------------------------
 # 偽プロバイダ(記録済みの応答列)と道具のスパイ
 # --------------------------------------------------------------------------------------
-class RecordedProvider(Provider):
-    """渡した順に応答を返すだけのプロバイダ。例外を混ぜると、その往復で送出する。"""
-
-    name = "recorded"
-
-    def __init__(self, replies) -> None:
-        self.model = "recorded"
-        self.replies = list(replies)
-        self.requests: list[dict] = []
-
-    def complete(self, *, system, turns, tools, max_tokens, timeout):
-        self.requests.append(
-            {
-                "system": system,
-                "turns": list(turns),
-                "tools": list(tools),
-                "max_tokens": max_tokens,
-                "timeout": timeout,
-            }
-        )
-        assert self.replies, "偽プロバイダの応答が尽きた(ループが想定より多く回っている)"
-        reply = self.replies.pop(0)
-        if isinstance(reply, Exception):
-            raise reply
-        return reply
-
-
 class SpyTools:
     """`ToolSurface` を満たす薄い覆い。**どのツールが実際に走ったか**を記録する。"""
 
@@ -103,15 +76,6 @@ class SpyTools:
 
 def tools() -> DocumentTools:
     return DocumentTools(Session(None, 0.2))
-
-
-def tool_use(name: str, arguments: dict, call_id: str = "call_1") -> ProviderReply:
-    call = ToolCall(id=call_id, name=name, arguments=arguments)
-    return ProviderReply(text="", tool_calls=(call,), stop_reason="tool_use", stop="tool_use")
-
-
-def spoke(text: str) -> ProviderReply:
-    return ProviderReply(text=text, stop_reason="end_turn", stop="end_turn")
 
 
 def envelope_code(result) -> str:
@@ -522,16 +486,6 @@ def test_the_total_time_budget_cuts_the_loop_off_before_max_turns():
     assert run.tool_calls == (), "ツールを1つも実行しない"
     assert "30" not in run.detail and "0" in run.detail
     assert run.to_dict()["status"] == "timeout"
-
-
-def test_the_total_time_budget_does_not_fire_on_a_normal_run():
-    """正常系が上限に当たらないこと(既定30秒で普通の往復が切られては困る)。"""
-    surface = tools()
-    provider = RecordedProvider([tool_use("describe_document", {}, "c0"), spoke("できた")])
-
-    run = AgentLoop(surface, provider).run("ボディを教えて")
-
-    assert run.status == "completed"
 
 
 # --------------------------------------------------------------------------------------

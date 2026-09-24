@@ -16,29 +16,13 @@
 """
 from __future__ import annotations
 
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
-
-from duocad.document import Body
 from duocad.region import region_ref, regions
 from duocad.server import Session
 from duocad.sketch import add_rectangle, sketch_create
 from duocad.verbs import extrude
+from session_support import session_with_box
 
 SIDE = 20.0
-
-
-def _box_session(tmp_path) -> Session:
-    """`tests/test_body_cache_pruning.py` と同じ作り(base bodyを1つ直に足すだけ)。"""
-    session = Session(None, 0.2, models_dir=tmp_path)
-    session.document.add_body(
-        Body(
-            id="box",
-            name="box",
-            kind="solid",
-            shape=BRepPrimAPI_MakeBox(SIDE, SIDE, SIDE).Shape(),
-        )
-    )
-    return session
 
 
 def _extrude_a_second_body(session: Session) -> str:
@@ -53,7 +37,7 @@ def _extrude_a_second_body(session: Session) -> str:
 
 def test_the_view_and_the_session_share_one_warnings_list(tmp_path) -> None:
     """`view` が積んだ警告が `Session.take_warnings()` から出る —— **吸い出した後も**。"""
-    session = _box_session(tmp_path)
+    session = session_with_box(SIDE, SIDE, SIDE, models_dir=tmp_path)
     assert session.view.warnings is session.warnings, "最初から別のリストになっている"
 
     session.view.warnings.append("view が積んだ警告")
@@ -68,7 +52,7 @@ def test_the_view_and_the_session_share_one_warnings_list(tmp_path) -> None:
 
 def test_replacing_the_document_repoints_the_view(tmp_path) -> None:
     """文書を差し替えたら `view` も新しい文書を見る(古い文書を配り続けない)。"""
-    session = _box_session(tmp_path)
+    session = session_with_box(SIDE, SIDE, SIDE, models_dir=tmp_path)
     _extrude_a_second_body(session)
     session.save_document("view-boundary.json")
 
@@ -90,7 +74,7 @@ def test_the_view_does_not_prune_while_a_preview_is_running(tmp_path) -> None:
     生存集合でキャッシュを落とすと、戻した後に測り直しが走る(入れた目的そのものが消える)。
     ここは `view` の口を直に叩いて、旗の受け渡しだけを見る。
     """
-    session = _box_session(tmp_path)
+    session = session_with_box(SIDE, SIDE, SIDE, models_dir=tmp_path)
     created_id = _extrude_a_second_body(session)
     session.geometry(created_id)
     session.edges(created_id)
@@ -124,7 +108,7 @@ def test_state_meta_reports_the_sessions_can_undo_not_the_raw_log(tmp_path) -> N
     `_setup_floor_seq` を直に置いているのは `Session.load_step()` がやることと同じ
     (STEPを読む代わり。この検査に部品ファイルは要らない)。
     """
-    session = _box_session(tmp_path)
+    session = session_with_box(SIDE, SIDE, SIDE, models_dir=tmp_path)
     _extrude_a_second_body(session)
     assert session.document.log.can_undo
 

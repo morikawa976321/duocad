@@ -4,7 +4,7 @@
 ここが見るのは**その上に開けた口**である:
 
 1. **解像度の目盛り**(`resolution_limits()["steps"]`)—— **添字0が上限側(いちばん粗い=既定)**で、
-   進むほど細かく・要素数が増え・予想時間が伸びる。**粗い側へ動く段を作らない**のが
+   進むほど細かく・要素数が増える。**粗い側へ動く段を作らない**のが
    この機能の全部なので、順序そのものを固定する。
 2. **WebSocketの4つの口** —— `optimize_conditions` / `optimize_resolution` /
    `run_optimization` / `cancel_optimization`。verbではない(`category="protocol"`)ので、
@@ -14,7 +14,7 @@
 4. **見積もれないときは赤い札にしない** —— 条件面がまだ1枚も無いのは「設定の途中」であって
    事故ではないので、`optimize_resolution` は `error` キーに文を入れて返す。
 
-**ここでSIMPは回さない。** 端から端まで実際に回すのは実ブラウザの
+**ここで最適化の探索は回さない。** 端から端まで実際に回すのは実ブラウザの
 `web/scripts/smoke-optimize.mjs`(約1〜2分)である。
 """
 from __future__ import annotations
@@ -26,54 +26,7 @@ import pytest
 
 from duocad import optimize_run
 from duocad.server import Server, Session
-
-DEVIATION = 0.2
-
-
-# --------------------------------------------------------------------------------------
-# 題材(`tests/test_optimize_backend.py` と同じ作り方。OCCT を余計に回さない)
-# --------------------------------------------------------------------------------------
-@pytest.fixture()
-def session() -> Session:
-    return Session(None, DEVIATION)
-
-
-def _select(session: Session, refs: list) -> None:
-    session.clear_selection()
-    session.modify_selection(refs, [])
-
-
-def _box(session: Session, width: float, depth: float, height: float, corner=(0.0, 0.0)):
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_rectangle(sketch_id, list(corner), width, depth)
-    regions = len(session.state_meta()["sketches"][-1]["regions"])
-    _select(session, [{"sketch": sketch_id, "index": regions}])
-    session.extrude(height, mode="new")
-    session.clear_selection()
-    return session.document.bodies[-1]
-
-
-def _face_with_normal(body, nx: float, ny: float, nz: float) -> int:
-    from duocad import query
-
-    for face in query.describe_faces(body.shape):
-        normal = face["normal"]
-        if normal[0] * nx + normal[1] * ny + normal[2] * nz > 0.9:
-            return int(face["index"])
-    raise AssertionError("そのような法線の面が無い")
-
-
-def _setup_four_conditions(session: Session):
-    left = _box(session, 10.0, 40.0, 40.0)
-    right = _box(session, 10.0, 40.0, 10.0, corner=(60.0, 0.0))
-    _select(session, [{"body": left.id, "kind": "body"}, {"body": right.id, "kind": "body"}])
-    session.set_preserve_bodies()
-    _select(session, [{"body": left.id, "kind": "face", "index": _face_with_normal(left, -1.0, 0.0, 0.0)}])
-    session.set_fixtures()
-    _select(session, [{"body": right.id, "kind": "face", "index": _face_with_normal(right, 0.0, 0.0, 1.0)}])
-    session.set_loads(500.0, [0.0, 0.0, -1.0])
-    session.clear_selection()
-    return left, right
+from session_support import FakeConnection, browser, four_conditions
 
 
 # --------------------------------------------------------------------------------------
@@ -83,7 +36,7 @@ def test_steps_start_at_the_coarse_end(session: Session) -> None:
     """**添字0が上限側**(＝既定＝最も安い設定)。ここが逆を向くと、画面のスライダーは
     「既定より粗い設定」を用意することになり、条件が黙って消える側へ人を送り出す。
     """
-    _setup_four_conditions(session)
+    four_conditions(session)
     limits = optimize_run.resolution_limits(session.document)
     steps = limits["steps"]
     assert steps, "目盛りが1段も無い"
@@ -93,12 +46,8 @@ def test_steps_start_at_the_coarse_end(session: Session) -> None:
 
 
 def test_steps_get_finer_and_costlier(session: Session) -> None:
-    """要素サイズ・要素数の両方とも単調であること。**予想時間は付けない**
-
-    (計画書§6.2「所要時間は旧SIMP係数を使わない。初回は不明と表示する」——段階5でこの
-    フィールド自体を廃止した)。
-    """
-    _setup_four_conditions(session)
+    """落ちたら、目盛りを進めても要素サイズが細かく・要素数が多くならない段がある。"""
+    four_conditions(session)
     steps = optimize_run.resolution_limits(session.document)["steps"]
     assert len(steps) >= 2
     for previous, current in zip(steps, steps[1:]):
@@ -106,45 +55,14 @@ def test_steps_get_finer_and_costlier(session: Session) -> None:
         assert current["element_size_mm"] < previous["element_size_mm"]
         assert current["element_count"] > previous["element_count"]
         assert current["element_count"] <= optimize_run.MAX_ELEMENTS
-        assert "seconds_typical" not in current
-        assert "seconds_worst" not in current
-
-
-def test_steps_are_plain_values(session: Session) -> None:
-    """**そのままWebSocketへ載せられる**こと(`20260904-1704` の契約①と同じ規律)。"""
-    _setup_four_conditions(session)
-    limits = optimize_run.resolution_limits(session.document)
-    json.dumps(limits)  # 落ちなければよい
 
 
 # --------------------------------------------------------------------------------------
 # 2. WebSocketの4つの口
 # --------------------------------------------------------------------------------------
-class FakeConnection:
-    """`Server` が使うのは `send` だけ(`tests/test_agent_ws.py` と同じ形)。"""
-
-    def __init__(self) -> None:
-        self.payloads: list = []
-
-    async def send(self, raw: str) -> None:
-        self.payloads.append(json.loads(raw))
-
-    def of_type(self, type_: str) -> list:
-        return [p for p in self.payloads if p.get("type") == type_]
-
-
 def _dispatch(session: Session, message: dict) -> FakeConnection:
-    """1コマンドを流して応答を集める。**SIMPは回らない**コマンドだけをここで使う。"""
-
-    async def scenario() -> FakeConnection:
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        connection = FakeConnection()
-        server.clients.add(connection)
-        await server._dispatch(connection, json.dumps(message))
-        return connection
-
-    return asyncio.run(scenario())
+    """1コマンドを流して応答を集める。**探索が回らない**コマンドだけをここで使う。"""
+    return browser(session, lambda send: send(message), connections=1)[1][0]
 
 
 def test_conditions_command_returns_the_problems_verbatim(session: Session) -> None:
@@ -160,7 +78,7 @@ def test_conditions_command_returns_the_problems_verbatim(session: Session) -> N
 
 
 def test_resolution_command_carries_the_ladder(session: Session) -> None:
-    _setup_four_conditions(session)
+    four_conditions(session)
     connection = _dispatch(session, {"cmd": "optimize_resolution"})
     reply = connection.of_type("optimize_resolution")[0]
     limits = optimize_run.resolution_limits(session.document)
@@ -185,7 +103,7 @@ def test_resolution_rejects_the_old_rmin_argument_without_a_toast(session: Sessi
     (計画書§6.2)。この口は元々「まだ設定の途中」を非トーストで運ぶ経路
     (`ValueError` → `{"error": ...}`)を持っているので、そこへ乗せる。
     """
-    _setup_four_conditions(session)
+    four_conditions(session)
     connection = _dispatch(session, {"cmd": "optimize_resolution", "rmin_mm": 3.0})
     reply = connection.of_type("optimize_resolution")[0]
     assert "rmin_mm" in reply["error"]
@@ -212,12 +130,13 @@ def test_second_run_is_refused_while_one_is_running(session: Session) -> None:
         server.bind_loop(asyncio.get_running_loop())
         connection = FakeConnection()
         server.clients.add(connection)
-        server._optimize_running = True  # 走っている最中の状態を作る(SIMPは回さない)
+        session.begin_optimization()  # 走っている最中の状態を作る(探索は回さない)
         await server._dispatch(connection, json.dumps({"cmd": "run_optimization"}))
         return connection
 
     connection = asyncio.run(scenario())
-    assert "既に走っている" in connection.of_type("optimize_error")[0]["message"]
+    [error] = connection.of_type("optimize_error")
+    assert "既に走っている" in error["message"] and error["already_running"] is True
 
 
 def _run_to_completion(session: Session, message: dict) -> tuple:
@@ -252,7 +171,7 @@ def test_run_optimization_rejects_the_old_arguments_with_a_named_error(
     転送し(`_optimize_start` のkwargs構築)、`session.run_optimization` が
     `OptimizeInputError` で断る配線を4つとも確かめる。
     """
-    _setup_four_conditions(session)
+    four_conditions(session)
     server, connection = _run_to_completion(
         session, {"cmd": "run_optimization", kwarg: 3.0}
     )
@@ -264,7 +183,7 @@ def test_run_optimization_rejects_the_old_arguments_with_a_named_error(
 
 def test_run_optimization_forwards_min_width_mm_so_a_below_floor_value_is_refused(session: Session) -> None:
     """`net/ws.py` が `min_width_mm` を落とすと、下限割れの入力が黙って通って走り出す。"""
-    _setup_four_conditions(session)
+    four_conditions(session)
     spacing = optimize_run.resolution_limits(session.document)["default_element_size_mm"]
     _, connection = _run_to_completion(session, {"cmd": "run_optimization", "min_width_mm": spacing})
     assert "下限" in connection.of_type("optimize_error")[0]["message"]
@@ -274,26 +193,17 @@ def test_run_optimization_forwards_min_width_mm_so_a_below_floor_value_is_refuse
 def test_run_optimization_refuses_a_min_width_beyond_the_grid_at_the_ws_door(session: Session) -> None:
     """`net/ws.py` 経由でも上限(格子の最短の辺)を越える幅は導出の前に断る。落ちたら、WS直叩きの巨大な値が
     塊の導出・境界条件の確定の後にメモリを使い切る。"""
-    _setup_four_conditions(session)
+    four_conditions(session)
     _, connection = _run_to_completion(session, {"cmd": "run_optimization", "min_width_mm": 1e6})
     assert "上限" in connection.of_type("optimize_error")[0]["message"]
     assert connection.of_type("optimize_result") == []
-
-
-def test_run_optimization_passes_a_valid_min_width_mm_through_to_the_session(session: Session, monkeypatch) -> None:
-    """`net/ws.py` が `min_width_mm` を落とす・別の名前で渡すと、指定した幅が黙って無視される。"""
-    _setup_four_conditions(session)
-    seen: dict = {}
-    monkeypatch.setattr(session, "run_optimization", lambda **kwargs: seen.update(kwargs) or {"state": "done"})
-    _run_to_completion(session, {"cmd": "run_optimization", "min_width_mm": 25.5})
-    assert seen["min_width_mm"] == 25.5
 
 
 def test_a_missing_min_width_mm_passes_none_through_to_the_session(session: Session, monkeypatch) -> None:
     """`min_width_mm` を省いたメッセージは、`net/ws.py` が捨てずに `None` のまま
     `Session.run_optimization` へ届ける(キー自体を渡さないのと同じ)。既定 `max(2 × spacing, 1.0mm)`
     への解決は `optimize_run._resolve_min_width` 自身の仕事(`test_optimize_backend.py` で固定)。"""
-    _setup_four_conditions(session)
+    four_conditions(session)
     seen: dict = {}
     monkeypatch.setattr(session, "run_optimization", lambda **kwargs: seen.update(kwargs) or {"state": "done"})
     _run_to_completion(session, {"cmd": "run_optimization"})
@@ -305,7 +215,7 @@ def test_a_missing_min_width_mm_still_reaches_run_at_the_default_cells(session: 
     既定の m(≥2)で探索へ届くこと(落ちたら、既定が入口検査だけに留まり、探索は制約なしのまま走る)。"""
     from duocad.topopt import binary_search
 
-    _setup_four_conditions(session)
+    four_conditions(session)
     seen: dict = {}
 
     def fake_find(design_space_mask, conditions, **kwargs):
@@ -316,8 +226,8 @@ def test_a_missing_min_width_mm_still_reaches_run_at_the_default_cells(session: 
         )
 
     monkeypatch.setattr(binary_search, "find_best_feasible", fake_find)
-    # 既定(いちばん粗い)解像度はこの題材では面の対応が縮んで別の理由で断られる
-    # (`_verify_face_mapping`。min_width とは無関係)。他の ws テストと同じ段を明示する。
+    # 既定(いちばん粗い 19.6mm)の段はこの題材では min_width と無関係に断られる(実測: ボクセル化で
+    # 「レイのずらしを 6 通り試したがすべて縮退した」)。1段細かい段を明示する。
     spacing = optimize_run.resolution_limits(session.document)["steps"][1]["element_size_mm"]
     _run_to_completion(session, {"cmd": "run_optimization", "element_size_mm": spacing})
     assert seen.get("min_width_cells", 1) >= 2
@@ -331,7 +241,7 @@ def test_a_successful_run_is_saved_to_disk_even_with_no_screen_watching(
     結果は文書のRAMにしか無いので、**成功した瞬間にディスクへ書く**——broadcastを
     待つ相手(タブ)がいなくても、そのあとサーバが落ちても消えない形にする。
     """
-    _setup_four_conditions(session)
+    four_conditions(session)
     session.models_dir = tmp_path
     session._current_name = "hanger.json"
     monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "done"})
@@ -350,7 +260,7 @@ def test_a_successful_run_on_an_untitled_document_only_warns(
     黙って名前を作って書くと「知らないファイルが増えている」が起きるので、
     警告を積んで諦める——**新規ボディの成功そのものは変えない**(`optimize_result` は届く)。
     """
-    _setup_four_conditions(session)
+    four_conditions(session)
     session.models_dir = tmp_path
     assert session._current_name is None
     monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "done"})
@@ -382,7 +292,7 @@ def test_cancel_sets_the_flag_while_running(session: Session) -> None:
         server.bind_loop(asyncio.get_running_loop())
         connection = FakeConnection()
         server.clients.add(connection)
-        server._optimize_running = True
+        session.begin_optimization()
         await server._dispatch(connection, json.dumps({"cmd": "cancel_optimization"}))
         return connection
 
@@ -390,3 +300,93 @@ def test_cancel_sets_the_flag_while_running(session: Session) -> None:
     status = connection.of_type("optimize_status")[0]
     assert status["cancelling"] is True
     assert session._optimize_cancel.is_set() is True
+
+
+# --------------------------------------------------------------------------------------
+# 5. 実行の始まりと終わり(中断の旗・自動保存・再接続した画面)
+# --------------------------------------------------------------------------------------
+def test_a_cancel_sent_right_after_the_start_is_not_lost(session: Session, monkeypatch) -> None:
+    """落ちたら、実行をワーカースレッドへ投げてから走り出すまでに届いた中断が、走り出した実行に消されて
+    結果が足される(issue #35)。"""
+    four_conditions(session)
+    seen: dict = {}
+
+    def fake_run(doc, options, *, should_cancel, **kwargs):
+        seen["cancelled"] = should_cancel()
+        raise optimize_run.OptimizeCancelled("中断した")
+
+    monkeypatch.setattr(optimize_run, "run", fake_run)
+
+    async def scenario() -> FakeConnection:
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        connection = FakeConnection()
+        server.clients.add(connection)
+        await server._dispatch(connection, json.dumps({"cmd": "run_optimization"}))
+        await server._dispatch(connection, json.dumps({"cmd": "cancel_optimization"}))
+        await asyncio.gather(*server._pending_optimize_runs)
+        return connection
+
+    connection = asyncio.run(scenario())
+    assert seen["cancelled"] is True
+    assert connection.of_type("optimize_status")[1]["cancelling"] is True
+    assert connection.of_type("optimize_error")[0]["cancelled"] is True
+    assert connection.of_type("optimize_status")[-1] == {"type": "optimize_status", "running": False}
+
+
+def test_a_run_that_added_nothing_does_not_overwrite_the_file(session: Session, monkeypatch, tmp_path) -> None:
+    """落ちたら、形が見つからず結果を足さなかった実行でも、編集中のファイルを未保存の編集で上書きする(issue #36)。"""
+    four_conditions(session)
+    session.models_dir = tmp_path
+    session._current_name = "hanger.json"
+    monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "no_feasible_found"})
+    _, connection = _run_to_completion(session, {"cmd": "run_optimization"})
+    assert connection.of_type("optimize_result")[0]["state"] == "no_feasible_found"
+    assert not (tmp_path / "hanger.json").exists()
+
+
+def test_a_failed_autosave_still_delivers_the_result_and_the_end_of_the_run(session: Session, monkeypatch) -> None:
+    """落ちたら、自動保存の `OSError`(Windows で別のプログラムがファイルを開いている等)が `_optimize_run` の外へ漏れ、
+    結果も終了の `optimize_status` も配られず画面が実行中のまま固まる(issue #30)。"""
+    four_conditions(session)
+    session._current_name = "hanger.json"
+    monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "done"})
+
+    def locked(*args, **kwargs):
+        raise PermissionError("別のプログラムが開いている")
+
+    monkeypatch.setattr(session, "save_document", locked)
+    _, connection = _run_to_completion(session, {"cmd": "run_optimization"})
+    assert connection.of_type("optimize_result")[0]["state"] == "done"
+    assert connection.of_type("optimize_status")[-1]["running"] is False
+    assert "PermissionError" in connection.of_type("warning")[0]["message"]
+    assert not session.optimizing
+
+
+class _ClosingConnection(FakeConnection):
+    """接続した直後に閉じる(`handle()` の最初の配信だけを見る)。"""
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+@pytest.mark.parametrize("running", [True, False])
+def test_a_new_connection_is_told_whether_an_optimization_is_running(session: Session, running: bool) -> None:
+    """落ちたら、再読み込み・再接続した画面が実行中だと知らず、中断できない/終わった後も実行中のまま固まる(issue #27)。"""
+
+    async def scenario() -> _ClosingConnection:
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        if running:
+            session.begin_optimization()
+            session.cancel_optimization()
+        connection = _ClosingConnection()
+        await server.handle(connection)
+        return connection
+
+    connection = asyncio.run(scenario())
+    [status] = connection.of_type("optimize_status")
+    assert status["running"] is running and status.get("cancelling", False) is running

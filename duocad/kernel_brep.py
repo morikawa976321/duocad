@@ -24,7 +24,7 @@ def boolean(shape, tools, operation):
     """
     builder = BOPAlgo_BOP()
     builder.SetNonDestructive(True)
-    builder.SetFuzzyValue(0.0)      # あいまい判定を入れない(`kernel.common_volume` と同じ)
+    builder.SetFuzzyValue(0.0)      # あいまい判定を入れない(`kernel._common_with_box` と同じ)
     builder.AddArgument(shape)
     for tool in tools:
         builder.AddTool(tool)

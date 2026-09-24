@@ -19,13 +19,19 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Sequence
-from uuid import uuid4
+from typing import Any, List, Sequence
 
 from .. import parameters
 from ..document import Document
 from ..oplog import Operation, register_verb
-from ..sketch import Entity, entity_kind_ops, get_entity, get_sketch, require_valid_params
+from ..sketch import (
+    Entity,
+    entity_kind_ops,
+    get_entity,
+    get_sketch,
+    new_entity_id,
+    require_valid_params,
+)
 
 VERB_MIRROR_SKETCH_ENTITIES = "mirror_sketch_entities"
 
@@ -52,10 +58,6 @@ def _normalize_targets(doc: Document, targets: Sequence[dict]) -> List[tuple]:
     return ordered
 
 
-def _resolved_params(doc: Document, entity: Entity) -> Dict[str, float]:
-    return {key: parameters.resolve(doc, ref) for key, ref in entity.params.items()}
-
-
 def _axis_line(doc: Document, axis: Any) -> tuple:
     """軸への参照を `(sketch_id, entity_id, ax, ay, ux, uy)` にする(点+単位方向は解決済み)。
 
@@ -72,7 +74,7 @@ def _axis_line(doc: Document, axis: Any) -> tuple:
     entity = get_entity(get_sketch(doc, axis_sketch), axis_entity)
     if entity.kind != "line":
         raise ValueError(f"axis must reference a line entity, got kind={entity.kind!r}")
-    values = _resolved_params(doc, entity)
+    values = parameters.resolve_all(doc, entity.params)
     ax, ay = float(values["x0"]), float(values["y0"])
     bx, by = float(values["x1"]), float(values["y1"])
     length = math.hypot(bx - ax, by - ay)
@@ -92,7 +94,7 @@ def _mirrored_plan(
     for sketch_id, entity_id in normalized:
         sketch = get_sketch(doc, sketch_id)
         entity = get_entity(sketch, entity_id)
-        current = _resolved_params(doc, entity)
+        current = parameters.resolve_all(doc, entity.params)
         values = dict(current)
         values.update(entity_kind_ops(entity.kind).mirror(current, ax, ay, ux, uy))
         # **元が持っているキーだけで比べる** —— `angle` を持たない時代のログから再生した
@@ -133,7 +135,7 @@ def _create_mirrors(
     for (sketch, kind, values), new_id in zip(plan, new_ids):
         if any(existing.id == new_id for existing in sketch.entities):
             raise ValueError(f"entity id already exists: {new_id!r}")
-        refs = {key: parameters.register_value(doc, value) for key, value in values.items()}
+        refs = parameters.register_all(doc, values)
         sketch.entities.append(Entity(id=new_id, kind=kind, params=refs))
         created.append(new_id)
     return created
@@ -155,7 +157,7 @@ def mirror_sketch_entities(doc: Document, targets: Sequence[dict], axis: Any) ->
             "mirror_sketch_entities: 対象が鏡映軸自身しか無い"
             "(軸に使った図形は対象から自動的に外れるので、他に対象が要る)"
         )
-    new_ids = [f"entity-{uuid4().hex[:12]}" for _ in normalized]
+    new_ids = [new_entity_id() for _ in normalized]
     created = _create_mirrors(doc, normalized, ax, ay, ux, uy, new_ids)
 
     return doc.log.append(

@@ -176,10 +176,8 @@ class Server:
         #: 実行中のバックグラウンド往復(GCされないよう保持。`_pending_pushes` と同じ理由)。
         self._pending_ai_runs: set = set()
         # -------------------------------------------------- H: 形状最適化を走らせる
-        # **重い(数十秒〜数分)ので別スレッドで回す**(`_optimize_start`)。ここに持つのは
-        # 「いま走っているか」だけで、中断の旗は `Session._optimize_cancel` が持つ
-        # (旗を畳むのは `Session.run_optimization` の入口。`20260904-1704` の契約)。
-        self._optimize_running = False
+        # **重い(数十秒〜数分)ので別スレッドで回す**(`_optimize_start`)。「いま走っているか」と
+        # 中断の旗は `Session` が持つ(`Session.begin_optimization` / `optimization_status`)。
         #: 実行中の最適化タスク(`_pending_ai_runs` と同じ理由で参照を保持する)。
         self._pending_optimize_runs: set = set()
 
@@ -257,6 +255,9 @@ class Server:
         try:
             try:
                 await self._push(connection, applied=None, only=connection)
+                # **最適化が走っているかも最初に知らせる。** 開始・終了・中断のときにしか配らないので、
+                # 再読み込みした画面は中断ボタンを失い、終わる瞬間に切れていた画面は実行中のまま固まる。
+                await _send(connection, {"type": "optimize_status", **self._optimize_status()})
             except Exception as error:
                 # 文書が空(起動直後)等で状態が作れなくても、接続ごと落とさず理由を画面へ返す
                 await _send(
@@ -282,12 +283,12 @@ class Server:
         ときだけ中断する** —— 他の画面がまだ見ている間に片方が閉じても実行は続ける
         (`ai_*` は接続ごとではなく共有の1会話という設計と揃える)。
 
-        **形状最適化(`_optimize_running`)は同じ扱いにしない**。
+        **形状最適化(`Session.optimizing`)は同じ扱いにしない**。
         あちらは**1回で終わる有界な仕事**で、終われば `add_mesh_body` 1行が積まれるだけ
         (要らなければ選んで消せる)。対してAIのループは何回ツールを呼ぶか決まっていない。
         ここで切ると、**画面をリロードしただけで数分の実行が黙って消える** ——
         リロードは日常の操作であり、失うものの方が大きい。再接続した画面には結果が
-        通常の状態配信として届く。
+        通常の状態配信として届き、実行中なら `handle()` が最初に `optimize_status` を送る。
         """
         if not self.clients and self._ai_running:
             self._ai_cancel()
@@ -814,8 +815,8 @@ class Server:
 
     # ------------------------------------------------------------------ H: 形状最適化を走らせる
     def _optimize_status(self) -> dict:
-        """画面が実行ボタンと中断ボタンの出し分けに使う最小限。"""
-        return {"running": self._optimize_running}
+        """画面が実行ボタンと中断ボタンの出し分けに使う最小限(`Session.optimization_status`)。"""
+        return self.session.optimization_status()
 
     async def _optimize_start(self, connection: Any, message: dict) -> None:
         """最適化を1回走らせる。**`run_optimization()` を待たずに返る**(`_ai_start` と同じ形)。
@@ -828,10 +829,15 @@ class Server:
         例外の文言だけが返るが、画面が出したいのは「何が足りないか」の一覧
         (`conditions_report` の `problems`)である。
         """
-        if self._optimize_running:
+        if self.session.optimizing:
             await _send(
                 connection,
-                {"type": "optimize_error", "message": "最適化が既に走っている(中断してから)"},
+                {
+                    "type": "optimize_error",
+                    "message": "最適化が既に走っている(中断してから)",
+                    # 画面はこの印を見て、走っている実行の進捗・通知を消さない。
+                    "already_running": True,
+                },
             )
             return
         report = self.session.optimize_conditions()
@@ -867,11 +873,20 @@ class Server:
             kinds = [str(k) for k in wanted if str(k) in optimize_run.DEBUG_KINDS]
             if kinds:
                 kwargs["debug_kinds"] = kinds
-        self._optimize_running = True
+        # **中断の旗を畳むのも文書を閉じるのもここ(イベントループのスレッド)で済ませる。** ワーカー
+        # スレッドの中で畳むと、走り出すまでに届いた中断が消える(issue #35)。
+        self.session.begin_optimization()
         await self._broadcast({"type": "optimize_status", **self._optimize_status()})
         task = asyncio.get_running_loop().create_task(self._optimize_run(kwargs))
         self._pending_optimize_runs.add(task)
-        task.add_done_callback(self._pending_optimize_runs.discard)
+
+        def finished(done: "asyncio.Task") -> None:
+            self._pending_optimize_runs.discard(done)
+            if not done.cancelled() and done.exception() is not None:
+                error = done.exception()
+                self.session.warnings.append(f"最適化の後始末に失敗: {type(error).__name__}: {error}")
+
+        task.add_done_callback(finished)
 
     async def _optimize_run(self, kwargs: dict) -> None:
         """別スレッドで端から端まで回し、結果を配る。**例外を握り潰さない**。
@@ -884,41 +899,50 @@ class Server:
         その配信が起きない —— **`Session.warnings` に積まれた通知**(条件面が空 /
         保持・除外が表現できていない)を運ぶ経路がそこしか無いので、ここで流し切る。
 
-        **成功したら配る前にディスクへ書く**(2026-09-13実測: 数時間がかりの実行が、
-        結果を見る前にサーバプロセスごと消えた)。結果は文書のRAMにしか無いので、
-        ここを抜けたあと画面が0枚でもサーバごと落ちても、書けてさえいれば残る。
+        **結果を足したら(`state == "done"`)配る前にディスクへ書く**(2026-09-13実測: 数時間がかりの
+        実行が、結果を見る前にサーバプロセスごと消えた)。結果は文書のRAMにしか無いので、
+        ここを抜けたあと画面が0枚でもサーバごと落ちても、書けてさえいれば残る。**結果を足さなかった
+        実行では書かない** —— 書く理由が無く、利用者がまだ保存していない編集でファイルを上書きする。
         編集中のファイル名が無い(無題の文書)ときは `save_document()` が拒否するので、
         名前を作って書く代わりに警告だけ積んで諦める——無題のまま黙って保存すると
-        「知らないファイルが増えている」がその上に乗る。
+        「知らないファイルが増えている」がその上に乗る。**保存の失敗は種類を問わず警告に積む** ——
+        Windows では別のプログラムがファイルを開いているだけで `os.replace` が `PermissionError` になり、
+        ここから例外が漏れると結果も終了の `optimize_status` も配られず画面が実行中のまま固まる。
         """
         payload: dict
         try:
-            if "debug_kinds" in kwargs:
-                kwargs["debug"] = self._optimize_debug
-            result = await asyncio.to_thread(
-                functools.partial(
-                    self.session.run_optimization, progress=self._optimize_progress, **kwargs
-                )
-            )
-            payload = {"type": "optimize_result", **result}
-        except Exception as error:  # noqa: BLE001 - 文面をそのまま画面へ出す
-            payload = {
-                "type": "optimize_error",
-                "message": f"{type(error).__name__}: {error}",
-                # **中断は失敗ではない**(人がそう言ったのだから、赤い札で驚かせる理由が無い)。
-                # 画面はこの印を見て、通知の色とトーストの有無を変える。
-                "cancelled": isinstance(error, optimize_run.OptimizeCancelled),
-            }
-        else:
             try:
-                self.session.save_document()
-            except ValueError as save_error:
-                self.session.warnings.append(f"最適化結果を自動保存できなかった: {save_error}")
+                if "debug_kinds" in kwargs:
+                    kwargs["debug"] = self._optimize_debug
+                result = await asyncio.to_thread(
+                    functools.partial(
+                        self.session.run_optimization, progress=self._optimize_progress, **kwargs
+                    )
+                )
+                payload = {"type": "optimize_result", **result}
+            except Exception as error:  # noqa: BLE001 - 文面をそのまま画面へ出す
+                payload = {
+                    "type": "optimize_error",
+                    "message": f"{type(error).__name__}: {error}",
+                    # **中断は失敗ではない**(人がそう言ったのだから、赤い札で驚かせる理由が無い)。
+                    # 画面はこの印を見て、通知の色とトーストの有無を変える。
+                    "cancelled": isinstance(error, optimize_run.OptimizeCancelled),
+                }
+            else:
+                if result.get("state") == "done":
+                    try:
+                        self.session.save_document()
+                    except Exception as save_error:  # noqa: BLE001 - 結果の配信を止めない
+                        self.session.warnings.append(
+                            f"最適化結果を自動保存できなかった: {type(save_error).__name__}: {save_error}"
+                        )
         finally:
-            self._optimize_running = False
-        await self._broadcast(payload)
-        await self._broadcast({"type": "optimize_status", **self._optimize_status()})
-        await self._push(None, applied=None)
+            self.session.end_optimization()
+        try:
+            await self._broadcast(payload)
+        finally:
+            await self._broadcast({"type": "optimize_status", **self._optimize_status()})
+            await self._push(None, applied=None)
 
     def _optimize_progress(self, event: dict) -> None:
         """`optimize_run.run()` の進捗。**実行器スレッドから呼ばれる**ので `_emit_event` 経由。
@@ -942,16 +966,14 @@ class Server:
         """中断の旗を立てる。**実際に降りるのは次に進捗が出た時点**(進捗を出さない短い処理の途中では止まらない)。
 
         走っていないときに呼ばれても旗は立てない —— `Session.cancel_optimization` の
-        旗を畳むのは `run_optimization` の入口なので実害は無いが、走っていないのに
+        旗を畳むのは次の開始(`Session.begin_optimization`)なので実害は無いが、走っていないのに
         「中断中」と画面へ出すと、次の実行が始まった瞬間に中断表示から始まって見える。
         """
-        if not self._optimize_running:
+        if not self.session.optimizing:
             await _send(connection, {"type": "optimize_status", **self._optimize_status()})
             return
         self.session.cancel_optimization()
-        await self._broadcast(
-            {"type": "optimize_status", **self._optimize_status(), "cancelling": True}
-        )
+        await self._broadcast({"type": "optimize_status", **self._optimize_status()})
 
     def _emit_event(self, payload: dict) -> None:
         """状態配信ではないイベント(AI・形状最適化)を全接続へ配る配信を、

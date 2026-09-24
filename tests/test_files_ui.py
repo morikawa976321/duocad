@@ -27,77 +27,25 @@ UI(パラメータ編集パネル・操作履歴パネル・ファイル操作)�
 """
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 
 import pytest
 
 from duocad import io_step, kernel, query
-from duocad.server import Server, Session
+from duocad.server import Session
+from session_support import SIDE, box as _box, browser as _browser, select as _select, send_one
 
 DEVIATION = 0.2
-SIDE = 20.0
 
 
-@pytest.fixture()
-def session(tmp_path: Path) -> Session:
-    # **`models_dir` はテストごとの使い捨てディレクトリ**。指定しないと
-    # 既定(リポジトリ直下の `duocad/models/`)を触ってしまう —— pytestが実フォルダを
-    # 汚さないための唯一の理由で、テストの意図とは無関係(`Session.__init__` 参照)。
-    return Session(None, DEVIATION, models_dir=tmp_path / "models")
-
-
-def _select(session: Session, refs: list) -> None:
-    """選択を `refs` で置き換える。**verbの対象集合はここで決まる**(引数ではない)。"""
-    session.clear_selection()
-    session.modify_selection(refs, [])
-
-
-def _box(session: Session):
-    """スケッチ→長方形→領域押し出しで 20mm の立方体を作る(D の `_box` と同じ手順)。"""
+def _cylinder(session: Session, radius: float, height: float):
+    """スケッチ→円→領域押し出しで円柱を作る(半径は名前つきの値になる)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
+    session.add_circle(sketch_id, [0.0, 0.0], radius)
     _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(SIDE, mode="join")
-    session.clear_selection()
-    return session.document.bodies[-1], sketch_id
-
-
-class FakeConnection:
-    def __init__(self) -> None:
-        self.payloads: list = []
-
-    async def send(self, raw: str) -> None:
-        self.payloads.append(json.loads(raw))
-
-    def last(self, kind: str) -> dict:
-        for payload in reversed(self.payloads):
-            if payload.get("type") == kind:
-                return payload
-        raise AssertionError(f"{kind!r} の応答が無い: {[p.get('type') for p in self.payloads]}")
-
-
-def _browser(session: Session, script):
-    """`script(send)` を1つのイベントループで走らせる(test_feature_ui.py と同じ harness)。"""
-
-    async def scenario():
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        clients = [FakeConnection(), FakeConnection()]
-        for client in clients:
-            server.clients.add(client)
-            await server._push(client, applied=None, only=client)
-        for client in clients:
-            client.payloads.clear()
-
-        async def send(command: dict) -> dict:
-            await server._dispatch(clients[0], json.dumps(command))
-            return clients[0].payloads[-1]
-
-        return await script(send), clients
-
-    return asyncio.run(scenario())
+    session.extrude(height, mode="join")
+    return session.document.bodies[-1]
 
 
 # --------------------------------------------------------------------------------------
@@ -206,17 +154,6 @@ def test_saving_without_a_name_writes_the_current_file_only(session: Session) ->
     )
 
 
-def test_models_dir_is_created_if_missing(session: Session) -> None:
-    """**無ければアプリが作る**(要件1)。事前に存在しなくても保存できる。"""
-    assert not session.models_dir.exists()
-    _box(session)
-
-    session.save_document("model.json")
-
-    assert session.models_dir.is_dir()
-    assert (session.models_dir / "model.json").exists()
-
-
 @pytest.mark.parametrize(
     "bad_name",
     [
@@ -314,10 +251,7 @@ def test_opening_replays_a_log_that_contains_set_parameter(session: Session) -> 
     **再生前にログを文書へ束ねていない**と `parameters.rebuild` が拒否する。
     順序を間違えても他のverbだけのログは開けてしまうため、ここで固定する。
     """
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [0.0, 0.0], 5.0)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(10.0, mode="join")
+    _cylinder(session, 5.0, 10.0)
     radius = next(name for name, value in session.document.parameters.items() if value == 5.0)
     session.set_parameter(radius, 7.0)
     volume = query.volume(session.document.bodies[-1].shape)
@@ -441,15 +375,7 @@ def test_reopening_the_current_document_is_allowed_with_only_one_connection(
     session.save_document("model.json")
     session.open_document("model.json")
 
-    async def scenario():
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        client = FakeConnection()
-        server.clients.add(client)
-        await server._dispatch(client, json.dumps({"cmd": "open_document", "name": "model.json"}))
-        return client.payloads[-1]
-
-    answer = asyncio.run(scenario())
+    answer = send_one(session, {"cmd": "open_document", "name": "model.json"})
 
     assert answer["type"] == "state"
     assert answer["applied"]["action"] == "open"
@@ -577,11 +503,7 @@ def test_stl_export_always_uses_the_fixed_deviation(session: Session, tmp_path: 
     **曲面を持つ形で測る**。立方体は平面だけなので、どの粗さで測っても三角形は12枚のまま
     ファイルサイズが1バイトも変わらず(684B == 684B)、検査にならない。
     """
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [0.0, 0.0], 10.0)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(SIDE, mode="join")
-    shape = session.document.bodies[-1].shape
+    shape = _cylinder(session, 10.0, SIDE).shape
     written = tmp_path / "part.stl"
 
     async def script(send):
@@ -608,11 +530,7 @@ def _triangle_count(shape, deviation: float) -> int:
 # --------------------------------------------------------------------------------------
 def test_named_values_are_published_and_drive_the_shape(session: Session) -> None:
     """**名前つきの値が配られ、打ち直すと形が追随する**(タスクEの検証1の実体)。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [0.0, 0.0], 5.0)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(10.0, mode="join")
-    body = session.document.bodies[-1]
+    body = _cylinder(session, 5.0, 10.0)
     volume_before = query.volume(body.shape)
 
     published = session.state_meta()["parameters"]

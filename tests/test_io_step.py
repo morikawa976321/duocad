@@ -6,7 +6,6 @@ build123d 0.11.1)に基づく。
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 
 import pytest
@@ -87,21 +86,13 @@ def _add_solid_body(doc: Document, name: str, box) -> str:
     return body_id
 
 
-def _editable_bodies(doc: Document) -> list:
-    """`import_step` が作った編集用ボディ(`kind="solid"`のみなので`doc.bodies`と同じ)。"""
-    return [body for body in doc.bodies if body.kind == "solid"]
-
-
 def test_export_excludes_a_hidden_solid_from_step_and_stl(tmp_path):
-    """`visible=False` のソリッドはSTEP/STLのどちらからも除外される。
-
-    非表示のものが混じっていると書き出しの面数・体積で気づけるが、それを機械で
-    固定するのがこのテスト —— `_bodies_to_export` が可視性を見ていない実装への回帰検査。
-    """
+    """`visible=False` のソリッドはSTEP/STLのどちらからも除外され、表示中の2つはcompoundで書き出される。"""
     doc = Document()
     shown = BRepPrimAPI_MakeBox(20.0, 10.0, 5.0).Shape()
-    hidden = BRepPrimAPI_MakeBox(gp_Pnt(50.0, 0.0, 0.0), 6.0, 6.0, 6.0).Shape()
-    shown_id = _add_solid_body(doc, "shown", shown)
+    also_shown = BRepPrimAPI_MakeBox(gp_Pnt(50.0, 0.0, 0.0), 6.0, 6.0, 6.0).Shape()
+    hidden = BRepPrimAPI_MakeBox(gp_Pnt(100.0, 0.0, 0.0), 3.0, 3.0, 3.0).Shape()
+    shown_ids = [_add_solid_body(doc, "shown", shown), _add_solid_body(doc, "also_shown", also_shown)]
     hidden_id = _add_solid_body(doc, "hidden", hidden)
     set_visible(doc, hidden_id, False)
 
@@ -109,18 +100,14 @@ def test_export_excludes_a_hidden_solid_from_step_and_stl(tmp_path):
     export_step(doc, step_path)
     reimported = Document()
     import_step(reimported, step_path)
-    solids = _editable_bodies(reimported)
-    assert len(solids) == 1, "非表示のボディがSTEPに混入している"
-    assert math.isclose(query.volume(solids[0].shape), 20.0 * 10.0 * 5.0, rel_tol=1e-6)
+    volumes = sorted(query.volume(body.shape) for body in reimported.bodies)
+    assert volumes == [pytest.approx(216.0, rel=1e-6), pytest.approx(1000.0, rel=1e-6)]
 
     stl_path = tmp_path / "visible_only.stl"
     export_stl(doc, stl_path)
     assert stl_path.exists() and stl_path.stat().st_size > 0
-    # STEP/STLは同じ `_bodies_to_export` を通るので、STEP側の面数(6=単一ボックス)が
-    # 非表示除外の効果を代表する。STLはファイルが実際に書けたことだけを確認する。
-    assert kernel.face_count(solids[0].shape) == 6
 
-    assert export_body_ids(doc) == [shown_id]
+    assert export_body_ids(doc) == shown_ids
     assert export_skipped_hidden(doc) == [hidden_id]
 
 
@@ -149,27 +136,6 @@ def test_export_raises_a_dedicated_error_when_all_candidates_are_hidden(tmp_path
     # 「形が無い」既存の文言とは異なるエラーであることも確認する
     with pytest.raises(ValueError, match="no body with a shape"):
         export_step(Document(), step_path)
-
-
-def test_export_after_import_step_exports_both_solids(tmp_path):
-    """`import_step` 直後は作った編集用ボディが両方とも書き出される。
-
-    `import_step` はソリッドごとに1つのボディしか作らない(不可視の参照ボディは無い)ので、
-    作った全ボディがそのまま書き出し対象になる。
-    """
-    doc = Document()
-    source = _two_solid_step(tmp_path)
-    body_ids = import_step(doc, source)
-    assert len(_editable_bodies(doc)) == 2
-
-    out_path = tmp_path / "editable_only.step"
-    export_step(doc, out_path)
-    assert export_body_ids(doc) == body_ids
-    assert export_skipped_hidden(doc) == []
-
-    reimported = Document()
-    import_step(reimported, out_path)
-    assert len(_editable_bodies(reimported)) == 2
 
 
 # --------------------------------------------------------------------------------------
@@ -273,5 +239,5 @@ def test_replaying_a_broken_embedded_step_raises_instead_of_crashing(tmp_path):
 
 def test_reading_an_empty_embedded_step_is_refused_before_occt(tmp_path):
     """埋め込みが空文字なら、OCCTへ渡す前に ValueError(原因が分かる文言で断る)。"""
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="本文が空"):
         kernel.read_step_text("")

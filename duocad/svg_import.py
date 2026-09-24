@@ -282,8 +282,9 @@ def _elliptical_arc_entities(segment: Any, height: float, scale: float) -> List[
         return []
     count = max(1, math.ceil(abs(sweep) / (math.pi / 2)))
     step = sweep / count
-    # 90度以下の弧を3次ベジエで近似するときの接ベクトルの係数(標準形)。
-    alpha = math.sin(step) * (math.sqrt(4.0 + 3.0 * math.tan(step / 2.0) ** 2) - 1.0) / 3.0
+    # 円弧を3次ベジエで近似する標準の係数。`tangent` は t についての微分なので、楕円は円のアフィン像として
+    # 同じ係数で近似できる(90度で半径の0.027%)。Maisonobe の式 sin·(√(4+3tan²)−1)/3 は同じ条件で0.196%(実測)。
+    alpha = 4.0 / 3.0 * math.tan(step / 4.0)
 
     def position(t: float) -> Tuple[float, float]:
         return (

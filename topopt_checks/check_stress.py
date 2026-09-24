@@ -91,7 +91,7 @@ def face_weights(n1: int, n2: int) -> np.ndarray:
 # ---------------------------------------------------------------------------
 def check_b_matrix() -> None:
     print("\n[0] B行列と局所節点順の下支え")
-    d = stress.elasticity_matrix(1.0, 0.3)
+    d = fem.elasticity_matrix(1.0, 0.3)
     b = stress.strain_displacement_center()
 
     coords = np.array(
@@ -135,7 +135,7 @@ def check_b_matrix() -> None:
         m = float(np.abs(got).max())
         check(f"{label}の応力が0", m < 1e-12, f"max|sigma|={m:.3e}")
 
-    # **格子全体での整合。** `_NODE_SIGNS` の並びが `fem._build_edof` の l のまわし方と
+    # **格子全体での整合。** `fem.NODE_SIGNS` の並びが `fem._build_edof` の l のまわし方と
     # ずれていると、要素1つの検査は通っても格子では要素ごとに違う値が出る。
     nelx, nely, nelz = 3, 4, 2
     fixed = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8])

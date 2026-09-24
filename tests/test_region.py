@@ -3,7 +3,7 @@
 **領域は描くものではなく計算されるもの**(実装計画書§3.3)。円を線分で分けて片側だけを
 押し出す、という本人の運用の土台であり、M2の本体はここにある。
 
-期待値は**すべて実測値**(タスクファイル記載・実装計画書§3.3と一致):
+期待値は**すべて実測値**(実装計画書§3.3と一致):
 
     半径20の円          -> 領域1個・面積 1256.637
     それを y=5 の線分で分割 -> 領域2個・面積 826.215 と 430.422(合計が元の円と一致)
@@ -92,19 +92,15 @@ def test_two_lines_split_the_circle_into_three_regions():
     )
 
 
-def test_region_enumeration_order_is_stable():
-    """同じスケッチを2回評価すると、同じ順序・同じ添字・同じ面積が返る。
-
-    選択集合は領域を**添字**で指す(§3.5)ので、評価のたびに順序が揺れると、
-    保存した選択が別の領域を指すことになる。§7の実測でも「領域数と列挙順は安定」と出ている。
-    """
+def test_regions_are_numbered_largest_first():
+    """添字は面積の降順で振られる。落ちたら、保存した選択(領域を**添字**で指す)が別の領域を指す。"""
     document = Document()
     sketch_id = circle_sketch(document, lines=(SPLIT_LINE_Y,))
 
-    first = regions(document, sketch_id)
-    second = regions(document, sketch_id)
+    found = regions(document, sketch_id)
 
-    assert first == second
+    assert [region.index for region in found] == [1, 2]
+    assert math.isclose(found[0].area, LARGER_AREA, rel_tol=AREA_REL_TOL)
 
 
 def test_regions_of_a_sketch_without_entities_is_empty():

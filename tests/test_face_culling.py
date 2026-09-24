@@ -20,13 +20,11 @@
 """
 from __future__ import annotations
 
-import asyncio
-import json
-
 import pytest
 
 from duocad import kernel, resolution
-from duocad.server import Server, Session
+from duocad.server import Session
+from session_support import browser
 
 DEVIATION = 0.2
 SIDE = 20.0
@@ -189,19 +187,6 @@ def test_a_body_left_entirely_coarse_keeps_its_revision_across_zoom(two_body_ses
     assert session.body_revision(visible) > visible_revision, "画面内のBodyが追随していない"
 
 
-def test_the_delta_reports_the_out_of_frustum_body_as_unchanged(two_body_session) -> None:
-    """差分配信の側から見ても同じこと(版だけ据え置いて中身が飛ぶ、では意味が無い)。"""
-    session, visible, hidden = two_body_session
-    focus = {visible: None, hidden: []}
-    session.set_view_resolution(0.05, 400.0, focus)
-    known = {body.id: session.body_revision(body.id) for body in session.document.bodies}
-
-    session.set_view_resolution(0.005, 400.0, focus)
-    delta = session.view.delta(known)
-    assert hidden in delta["unchanged"]
-    assert [body["body_id"] for body in delta["bodies"]] == [visible]
-
-
 def test_the_cached_mesh_of_an_untouched_body_survives(two_body_session) -> None:
     """測り直しそのものが起きない(版だけでなくキャッシュも据え置く)。"""
     session, visible, hidden = two_body_session
@@ -278,32 +263,6 @@ def test_the_edges_of_a_culled_body_stay_coarse(two_body_session) -> None:
 # --------------------------------------------------------------------------------------
 # 5. プロトコル(WebSocket)
 # --------------------------------------------------------------------------------------
-class FakeConnection:
-    def __init__(self) -> None:
-        self.payloads: list = []
-
-    async def send(self, raw: str) -> None:
-        self.payloads.append(json.loads(raw))
-
-
-def _browser(session: Session, script):
-    async def scenario():
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        client = FakeConnection()
-        server.clients.add(client)
-        await server._push(client, applied=None, only=client)
-        client.payloads.clear()
-
-        async def send(command: dict) -> None:
-            await server._dispatch(client, json.dumps(command))
-
-        await script(send)
-        return client
-
-    return asyncio.run(scenario())
-
-
 def test_the_websocket_carries_the_focus_and_only_redelivers_what_changed(
     two_body_session,
 ) -> None:
@@ -315,7 +274,7 @@ def test_the_websocket_carries_the_focus_and_only_redelivers_what_changed(
         await send({**base, "world_per_pixel": 0.05})
         await send({**base, "world_per_pixel": 0.005})
 
-    client = _browser(session, script)
+    client = browser(session, script, connections=1)[1][0]
     states = [payload for payload in client.payloads if payload.get("type") == "state"]
     assert len(states) == 2, f"2回とも配信されるはず: {len(states)}件"
     # 線に乗るのは `delta.bodies` だけ(変わっていないBodyは**現れない**のが「送らない」)。
@@ -331,6 +290,6 @@ def test_the_websocket_still_works_without_a_focus(two_body_session) -> None:
     async def script(send):
         await send({"cmd": "set_view_resolution", "world_per_pixel": 0.005, "size_hint": 400.0})
 
-    client = _browser(session, script)
+    client = browser(session, script, connections=1)[1][0]
     assert not [p for p in client.payloads if p.get("type") == "error"]
     assert session.geometry(visible)["fine_face_count"] == session.geometry(visible)["face_count"]

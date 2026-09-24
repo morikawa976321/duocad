@@ -23,29 +23,15 @@
 """
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad import selection
 from duocad.agent import AgentLoop
 from duocad.agent.providers import Provider, ProviderReply, ToolCall
-from duocad.document import Body
 from duocad.mcp_server import DocumentTools
 from duocad.server import Session
-
-BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
-
-
-@pytest.fixture()
-def box_session(tmp_path: Path) -> Session:
-    """30x30x40 の直方体を1つ持つセッション(面6・辺12)。"""
-    made = Session(None, 0.2)
-    made.document.add_body(
-        Body(id="box", name="box", kind="solid", shape=BRepPrimAPI_MakeBox(BOX_X, BOX_Y, BOX_Z).Shape())
-    )
-    return made
+from agent_support import spoke, tool_use
 
 
 def commit_edge(session: Session, body_id: str = "box", index: int = 1) -> None:
@@ -77,24 +63,6 @@ def test_a_concurrent_shape_change_empties_the_confirmed_selection_and_the_next_
     # 「人」が割り込んで別の操作をする(AIのターンとは無関係)
     commit_face(box_session, index=2)
     box_session.extrude_face(1.0)
-
-    assert len(selection.get_selection(box_session.document).items) == 0
-    with pytest.raises(selection.SelectionEmpty):
-        box_session.fillet(1.0)
-
-
-def test_undo_between_commit_and_the_verb_call_also_empties_the_selection(box_session: Session):
-    """undo/redo とAIターンの競合(タスクH `resets_selection` 対象の1つ)。
-
-    人がAIの計画を先読みして操作を取り消しても、AIが持っていた確定選択は
-    リセットされる —— `undo` は `resets_selection=True`。
-    """
-    commit_face(box_session, index=1)
-    box_session.extrude_face(2.0)  # 何か1つログに積む(取り消せる操作を作る)
-    commit_edge(box_session)
-    assert len(selection.get_selection(box_session.document).items) == 1
-
-    box_session.undo()
 
     assert len(selection.get_selection(box_session.document).items) == 0
     with pytest.raises(selection.SelectionEmpty):
@@ -174,17 +142,10 @@ def test_a_genuinely_empty_selection_keeps_the_short_message(box_session: Sessio
 # ========================================================================================
 # D. AgentLoopの楽観ロック: モデルが考えている間に文書が変わったら実行しない
 # ========================================================================================
-def tool_use(name: str, arguments: dict, call_id: str = "call_1") -> ProviderReply:
-    call = ToolCall(id=call_id, name=name, arguments=arguments)
-    return ProviderReply(text="", tool_calls=(call,), stop_reason="tool_use", stop="tool_use")
-
-
-def spoke(text: str) -> ProviderReply:
-    return ProviderReply(text=text, stop_reason="end_turn", stop="end_turn")
 
 
 class ConcurrentEditProvider(Provider):
-    """`RecordedProvider`(test_agent_loop.py)と同じ形だが、応答を返す**直前**に
+    """`RecordedProvider`(`tests/agent_support.py`)と同じ形だが、応答を返す**直前**に
     副作用(=人の並行編集を模したコールバック)を挟める。
 
     `AgentLoop.run()` は `provider.complete()` の**前後**で文書の版を比べるので、

@@ -1,75 +1,17 @@
-"""TS側の `Applied` 型が、バックエンドが実際に返すdictと**同じ形**であることを機械で検査する。
+"""TS側の `Applied` / `ServerState` 型が、バックエンドが実際に返すdictと**同じ形**であることを見る。
 
-`web/src/session.ts` の `Applied`(discriminated union)は、`Session` が組み立てて
-WebSocketで配る確認応答の形を**手で書き写した主張**である。JSONの境界では `tsc` は何も
-検証しないので、Python側がキー名を1つ変えても・verbを1つ足しても、**TS側は緑のまま静かに
-古くなる**(実機で `undefined` を読むまで誰も気づかない)。`tests/test_entity_kind_tables.py`
-が3つの表に対してやっているのと同じ「ソースを静的に読んで突き合わせる」やり方でその穴を塞ぐ。
+`web/src/session.ts` の型は `Session` の戻り値を**手で書き写した主張**で、JSONの境界では
+`tsc` は何も検証しない。落ちたら、Python側とTS側のどちらかが古い(実機では `undefined` を読む)。
 
-**生成(codegen)はしない**。`catalog` が宣言しているのは**入力**(`params`)だけで、verbが
-**何を返すか**はどこにも宣言が無い(`Session` のラッパが組み立てる戻り値dictが事実上の唯一の
-正)。生成を導入するには先に宣言側へ出力の形を足す必要があり、それは別の設計判断である。
+見るもの: (1) catalog から導いた verb 名の集合と union の `verb:` リテラル
+(2) 実際に走らせた戻り値のキーの在不在 (3) 配列 / `| null` / `?` の要否 (4) スカラの素の型。
+**見ないもの**: 独自型(`SelectionState` 等)の中身、観測できなかった値域(`| null` の付けすぎ)、
+整数と小数の区別、`_after_logged_verb` 経由の verb の `client_op` の型(`net/ws.py` が後から載せる)。
 
---------------------------------------------------------------------------------------
-何を見て、何を見ていないか(**過信しないために先に書く**)
---------------------------------------------------------------------------------------
-
-見ているのは4つ。1は静的な突合、2〜4は**実際にコマンドを走らせた戻り値**との突合である:
-
-1. **verb名の集合** … `catalog.COMMANDS` のうち `Applied` の `verb:` 側として配信される
-   ものと、union の `verb:` リテラル
-2. **フィールド名の在不在** … 実応答に出たキーが全部宣言されていること、宣言した必須
-   フィールドが全部実応答に出ていること
-3. **配列かどうか / null許容か / オプショナルの要否** … 実応答の値が `list` なら宣言も
-   `T[]`、`None` なら宣言も `| null`、**実行で一度も欠けなかったフィールドに `?` を
-   付けていないこと**(逆に、欠けうるフィールドは `?` が要る)
-4. **スカラの素の型** … `string` / `number` / `boolean` と実値の対応(文字列リテラルの
-   union は `string` として見る)。配列は要素の素の型まで見る
-
-**見ていないもの**(ここを直したければ検査を足す必要がある):
-
-- **独自型の中身** … `selection: SelectionState` のように素の型でない宣言は、`null` /
-  配列の判定だけして中身は見ない
-- **観測できなかった値域** … 「1回も `null` にならなかったフィールドが実は `null` に
-  なりうるか」は実行からは分からないので、`| null` の**付けすぎ**は検出しない
-  (付け忘れは、実際に `null` が出るコマンドを走らせている分だけ検出できる)
-- **数値の内訳** … TSの `number` は整数と小数を区別しないので、こちらも区別しない
-- **`client_op` の型** … `_after_logged_verb` を通るverbの戻り値には入っておらず
-  (`net/ws.py` が後から載せる。`TRANSPORT_FIELDS` 参照)、値を観測できない。**在ることだけ**
-  を見る。自分で載せるverb(`extrude_face` など)については普通に型も見る
-
---------------------------------------------------------------------------------------
-検査の対象範囲 —— **`change` 系の3メンバは verb名の突合から外す**
---------------------------------------------------------------------------------------
-
-`Applied` union には verb ではないメンバが混ざっている(`change: 'selection'` /
-`'visibility'` / `'document'`)。これらは**操作ログに載らない変更の通知**であって
-`COMMANDS` の verb と1対1に対応しない:
-
-- `selection` … `modify_selection` / `commit_selection` / `clear_selection` の**3コマンドが
-  同じ1メンバ**を発火する(さらに `propose_selection` はWSに開けていない)
-- `visibility` … `set_visible` が発火する。verbではないのでundoで戻らない
-- `document` … `open_document` / `new_document` の**2コマンドが同じ1メンバ**
-
-したがって「catalogのverb名 == TSの `verb:` リテラル」の集合比較には入れられない。
-ただし**黙って捨てはしない** —— この3メンバも上の2〜4で突き合わせるし、
-`test_the_excluded_commands_really_emit_change_not_verb` が「外した6コマンドが本当に
-`verb` を返さない」ことを実行して確かめる(外す判断が間違っていたら、そこが赤くなる)。
-
-`undo` / `redo` は `verb:` を持つ側にいるので**対象に含まれる**。
-
---------------------------------------------------------------------------------------
-対象verbの導き方 —— **catalogのフラグから導く。名前をここに並べない**
---------------------------------------------------------------------------------------
-
-verb名のハードコードした一覧をこの検査の中に作ると、**検査自身が4つ目の手動同期先**になり、
-verbを足した人がここも直し忘れて緑のまま古くなる(塞ごうとしている穴と同じ穴が増える)。
-`_catalog_applied_verbs()` が `COMMANDS` のフラグだけから導く(その4条件の理由は同関数)。
-
-**走らせ方(`_RUNNERS`)が無いコマンドは `skip` ではなく `fail` にする。** catalogが対象と
-判定したコマンドを走らせられないのは検査の欠落であって、飛ばしてよい状況ではない
-(飛ばすと、verbをcatalogとTSの両方に足して走らせ方だけ忘れた人が緑で通ってしまい、
-実応答と宣言のずれが誰にも見られないまま残る)。
+`change: 'selection' | 'visibility' | 'document'` のメンバは操作ログに載らない通知で、verb と1対1に
+対応しないので verb 名の突合からだけ外す(外した側も走らせて `verb` を返さないことを確かめる)。
+対象は `catalog` のフラグから導き、名前をここに並べない。走らせ方(`_RUNNERS`)の無い対象は
+skip ではなく fail にする。
 """
 from __future__ import annotations
 
@@ -84,12 +26,12 @@ import pytest
 
 from duocad import kernel
 from duocad.server import Session
+from session_support import SIDE, box as _box, select as _select
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SESSION_TS = REPO_ROOT / "web" / "src" / "session.ts"
 
 DEVIATION = 0.2
-SIDE = 20.0
 #: 20mm立方体の辺に対して**通る**半径(`tests/test_feature_ui.py` の実測値と同じ)。
 RADIUS_THAT_WORKS = 3.0
 
@@ -407,25 +349,8 @@ def _runner(name: str) -> Callable[[Callable[..., dict]], Callable[..., dict]]:
     return register
 
 
-def _select(session: Session, refs: list) -> None:
-    """選択を `refs` で置き換える(人がクリックで選び直すのと同じ入口)。"""
-    session.clear_selection()
-    session.modify_selection(refs, [])
-
-
 def _sketch(session: Session) -> str:
     return session.sketch_create("XY")["sketch_id"]
-
-
-def _box(session: Session):
-    """スケッチ→長方形→領域押し出しで 20mm の立方体を1つ作る
-    (`tests/test_feature_ui.py` の `_box` と同じ手順)。"""
-    sketch_id = _sketch(session)
-    session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(SIDE, mode="join")
-    session.clear_selection()
-    return session.document.bodies[-1], sketch_id
 
 
 def _step_file(tmp_path: Path) -> Path:

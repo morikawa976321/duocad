@@ -190,7 +190,7 @@ def main() -> int:
         print("\n全ファイル（行数順）")
 
     if not shown:
-        print(f"  なし")
+        print("  なし")
         return 0
 
     print(f"  {'ファイル':44}{'行':>7}{'コメント':>10}{'率':>8}")

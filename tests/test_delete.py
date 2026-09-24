@@ -8,43 +8,20 @@
 3. **undo が対象によって別物**である —— ボディは `_common.SNAPSHOTS`(並びと active ごと)、
    図形は args の生の数値。**名前つきの値は解放され、undoで同じ名前が戻る**。
 4. **保存 -> 開く(再生) -> undo** が通る(スナップショットは再生が埋める)。
-5. **消したあとに壊れないこと** —— ボディのキャッシュは既存の生存集合差分が落とし、
-   反復の元を消しても状態の配りものは落ちない。
+5. **消したあとに壊れないこと** —— 反復の元を消しても状態の配りものは落ちない
+   (ボディのキャッシュは既存の生存集合差分が落とす。`tests/test_body_cache_pruning.py`)。
 """
 from __future__ import annotations
-
-import asyncio
-import json
 
 import pytest
 
 from duocad import region, selection, sketch
 from duocad.oplog import OpLog
-from duocad.server import Server, Session
+from duocad.server import Session
 from duocad.verbs import delete as delete_verb
+from session_support import SIDE, box as _box, select as _select, send_one
 
 DEVIATION = 0.2
-SIDE = 20.0
-
-
-@pytest.fixture()
-def session(tmp_path) -> Session:
-    return Session(None, DEVIATION, models_dir=tmp_path / "models")
-
-
-def _select(session: Session, refs: list) -> None:
-    session.clear_selection()
-    session.modify_selection(refs, [])
-
-
-def _box(session: Session):
-    """Session経由(人の操作順)で20mmの立方体を1つ作る。verbを直接呼ばない。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(SIDE, mode="join")
-    session.clear_selection()
-    return session.document.bodies[-1], sketch_id
 
 
 def _body_ids(session: Session) -> list:
@@ -158,24 +135,6 @@ def test_a_selection_of_only_regions_is_refused(session: Session) -> None:
     # 文書もログも動いていない
     assert _body_ids(session) == before
     assert session.applied_count == applied_before
-
-
-def test_the_mcp_envelope_reports_a_region_only_selection_as_kind_mismatch(
-    session: Session,
-) -> None:
-    """MCPの拒否は `selection_kind_mismatch` で、AIが次の一手を決められる文言を持つ。"""
-    from duocad.mcp_server import DocumentTools
-
-    _, sketch_id = _box(session)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    tools = DocumentTools(session)
-    with pytest.raises(selection.SelectionKindMismatch) as raised:
-        session.delete()
-    envelope = tools.error_envelope("delete", raised.value)
-
-    assert envelope["code"] == "selection_kind_mismatch"
-    assert envelope["present_kinds"] == {"region": 1}
-    assert "no body" in envelope["hint"]
 
 
 # --------------------------------------------------------------------------------------
@@ -381,21 +340,6 @@ def test_a_parameter_edit_after_a_delete_replays_the_delete(session: Session) ->
 # --------------------------------------------------------------------------------------
 # 5. 消したあとに壊れないこと
 # --------------------------------------------------------------------------------------
-def test_the_caches_of_a_deleted_body_are_pruned(session: Session) -> None:
-    """ボディ削除専用のキャッシュ処理は要らない(既存の生存集合差分が落とす)。"""
-    body, _ = _box(session)
-    session.geometry(body.id)
-    session.state_meta()
-    assert body.id in session.view._geometry_cache
-
-    _select(session, [{"body": body.id, "kind": "body", "index": None}])
-    session.delete()
-    session.state_meta()
-
-    assert body.id not in session.view._geometry_cache
-    assert body.id not in session.view._volume_cache
-
-
 def test_deleting_the_source_of_a_pattern_does_not_break_the_state(session: Session) -> None:
     """反復の元を消しても落ちない(依存グラフは作らない。undoで元どおり展開される)。"""
     sketch_id = session.sketch_create("XY")["sketch_id"]
@@ -432,14 +376,6 @@ def test_deleting_a_body_leaves_a_sketch_pasted_on_its_face_alone(session: Sessi
 # --------------------------------------------------------------------------------------
 # WebSocket 経由(**提案は自動で確定してから走る**)
 # --------------------------------------------------------------------------------------
-class _FakeConnection:
-    def __init__(self) -> None:
-        self.payloads: list = []
-
-    async def send(self, raw: str) -> None:
-        self.payloads.append(json.loads(raw))
-
-
 def test_the_browser_can_delete_and_an_ai_proposal_is_committed_first(session: Session) -> None:
     """`uses_selection=True` なので、提案のままでもブラウザからの実行は通る。
 
@@ -449,17 +385,7 @@ def test_the_browser_can_delete_and_an_ai_proposal_is_committed_first(session: S
     body, _ = _box(session)
     session.propose_selection([{"body": body.id, "kind": "face", "index": 1}])
 
-    async def scenario():
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        client = _FakeConnection()
-        server.clients.add(client)
-        await server._push(client, applied=None, only=client)
-        client.payloads.clear()
-        await server._dispatch(client, json.dumps({"cmd": "delete", "client_op": 7}))
-        return client.payloads[-1]
-
-    answer = asyncio.run(scenario())
+    answer = send_one(session, {"cmd": "delete", "client_op": 7})
     assert answer["type"] == "state", answer
     assert answer["applied"]["verb"] == "delete"
     assert answer["applied"]["bodies"] == [body.id]

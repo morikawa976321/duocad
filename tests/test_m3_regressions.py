@@ -9,7 +9,7 @@
 1. アクティブボディの選択が作り直しで捨てられ、`set_parameter` を1回打つだけで
    **以後の書き出し先と編集先が別のボディへ黙って移った**（選択はログに載らない）。
 2. 作り直しが途中で失敗すると**空の文書が残った**（ログとカーソルは無傷なので、
-   「履歴は5行あるがボディもスケッチも0」という不整合になる）。参照STEPを移動しただけで起きる。
+   「履歴は5行あるがボディもスケッチも0」という不整合になる）。
 3. `set_parameter` が値を検査せず、`add_circle` がその場で弾く値（NaN・半径0以下）を
    後から書き込めた。NaNは**同じスケッチの正常な領域まで黙って消し**、
    `to_json()` が裸のNaNを吐いてJSONとして壊れる。
@@ -156,14 +156,11 @@ def test_set_parameter_keeps_the_active_body():
 
 def test_a_rebuild_that_fails_leaves_the_document_as_it_was():
     """作り直しが途中で失敗したら、bodies / sketches / parameters / アクティブを元へ戻す。
+    落ちたら、ログは無傷なのに文書だけが途中まで作り直された不整合な状態が残る。
 
-    退避が無いと「ログは4行あるがボディもスケッチも0」という**不整合な文書**が残る
-    (ログとカーソルは無傷なので、壊れたことにすら気づけない)。
-
-    ここでは反復の個数を 3×2 から 1×2 へ減らして失敗させる —— 押し出しの対象にした
-    6番目の領域が消えるので、再生中の `extrude` が ValueError で落ちる。値の検査
-    (`_require_usable_value`)は通る値なので、**検査ではなく作り直しの途中**で落ちる
-    という、この後始末が要る唯一の状況を作れる。
+    反復の個数を 3×2 から 1×2 へ減らすと、押し出しの対象にした6番目の領域が消えて
+    再生中の `extrude` が落ちる(値の検査は通る)。スケッチを1つその押し出しより後ろに
+    置くのは意図的 —— 全スケッチを作り直した後で落ちると、退避を戻さなくても値で一致する。
     """
     document = Document()
     sketch_id = sketch_create(document, "XY")
@@ -172,6 +169,8 @@ def test_a_rebuild_that_fails_leaves_the_document_as_it_was():
     found = regions(document, sketch_id)
     assert len(found) == 6
     extrude(document, [region_ref(sketch_id, found[-1].index)], 5.0, mode="new")
+    later = sketch_create(document, "XY")
+    add_circle(document, later, (50.0, 50.0), 1.0)
 
     name = parameter_of(document, sketch_id, pattern_id, "nx")
     bodies_before = list(document.bodies)

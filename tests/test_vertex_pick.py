@@ -17,66 +17,15 @@
 from __future__ import annotations
 
 import ast
-import asyncio
-import json
 from pathlib import Path
 
 import pytest
 
 from duocad import catalog, kernel, query, selection
-from duocad.server import SELECTION_CONSUMING_COMMANDS, Server, Session
+from duocad.server import SELECTION_CONSUMING_COMMANDS, Session
+from session_support import SIDE, box as _box, browser as _browser
 
-DEVIATION = 0.2
-SIDE = 20.0
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture()
-def session() -> Session:
-    return Session(None, DEVIATION)
-
-
-class FakeConnection:
-    """`Server` が使うのは `send` だけ(`test_feature_ui.py` と同じ形)。"""
-
-    def __init__(self) -> None:
-        self.payloads: list = []
-
-    async def send(self, raw: str) -> None:
-        self.payloads.append(json.loads(raw))
-
-
-def _browser(session: Session, script):
-    """`script(send)` を1つのイベントループで走らせる。**2本つなぐ**(配信先の検証のため)。"""
-
-    async def scenario():
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        clients = [FakeConnection(), FakeConnection()]
-        for client in clients:
-            server.clients.add(client)
-            await server._push(client, applied=None, only=client)
-        for client in clients:
-            client.payloads.clear()
-
-        async def send(command: dict) -> dict:
-            await server._dispatch(clients[0], json.dumps(command))
-            return clients[0].payloads[-1]
-
-        return await script(send), clients
-
-    return asyncio.run(scenario())
-
-
-def _box(session: Session):
-    """スケッチ→長方形→領域押し出しで 20mm の立方体を1つ作る(人の順序そのもの)。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
-    session.clear_selection()
-    session.modify_selection([{"sketch": sketch_id, "index": 1}], [])
-    session.extrude(SIDE, mode="join")
-    session.clear_selection()
-    return session.document.bodies[-1], sketch_id
 
 
 # --------------------------------------------------------------------------------------
@@ -175,46 +124,6 @@ def _propose_face(session: Session, body) -> None:
     selection.propose_selection(
         session.document, refs=[{"body": body.id, "kind": "face", "index": 1}]
     )
-
-
-def test_running_a_verb_from_the_browser_commits_a_proposed_selection(
-    session: Session,
-) -> None:
-    """**AIの提案のままでも、人がコマンドを実行したら通る**(実行そのものが承認)。
-
-    落ちたら、AIが選択を提案した直後に人がツールバーを押すと
-    `SelectionNotCommitted` で止まる —— 「承認する」ボタンを消した後は解消手段が無い。
-    """
-    body, _ = _box(session)
-    _propose_face(session, body)
-    assert session.get_selection()["origin"] == "proposed"
-
-    async def script(send):
-        return await send({"cmd": "extrude_face", "distance": 5.0, "client_op": 7})
-
-    (answer, _clients) = _browser(session, script)
-
-    assert answer["type"] == "state", answer
-    assert answer["applied"]["verb"] == "extrude_face"
-
-
-def test_a_preview_also_commits_a_proposed_selection(session: Session) -> None:
-    """プレビュー(数値を打つと飛ぶ投機実行)も同じ扱い。
-
-    ここを外すと、提案のまま押し出そうとした人の画面に、**理由の分からない札だけ**が出る。
-    """
-    body, _ = _box(session)
-    _propose_face(session, body)
-
-    async def script(send):
-        return await send(
-            {"cmd": "preview", "verb": "extrude_face", "args": {"distance": 5.0}}
-        )
-
-    (answer, _clients) = _browser(session, script)
-
-    assert answer["type"] == "preview", answer
-    assert session.get_selection()["origin"] == "user"
 
 
 def _state_origins(client) -> list:

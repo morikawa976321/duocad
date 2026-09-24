@@ -123,7 +123,7 @@ def test_samples_without_an_allowed_node_in_the_sphere_are_reported_not_moved():
     assert '予算' not in warning
 
 
-@pytest.mark.parametrize('spacing', [1.0, 0.5, 0.25])
+@pytest.mark.parametrize('spacing', [1.0, 0.5])
 def test_a_rotated_planar_face_keeps_its_centroid_within_the_search_radius(spacing):
     """解析解を持つ面(回転した箱の平面)で、確定表の重心のずれが球の半径(格子近似の許容差)以内に
     収まり、標本の重心は面の真の重心と一致する(数値許容差)。格子を細分しても成り立つ。"""

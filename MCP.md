@@ -65,8 +65,8 @@ how には数えない（手動UIでも `PlaneArgSpec` / `point` は how では�
 
 **この基準は手動UIのEnter要否と同一のもの**である（人が押すEnterは「まだ足すのか・
 打ち終わったか」を人が言う手であり、AIが確認を待つ理由と同じ）。判定の実物は
-`web/src/commands/command.ts` の `needsEnter`、どのverbがどちらかの表は
-`tests/test_ui_command_wiring.py`（`ENTER_REQUIRED`）が機械で固定している。
+`web/src/commands/command.ts` の `needsEnter`、即適用になるverbの顔ぶれは
+`tests/test_ui_command_wiring.py` が実物を評価して機械で固定している。
 **顔ぶれをここに写さない** —— verbを足した日に古くなるうえ、基準さえ書けばツールの
 引数から導ける。
 
@@ -230,13 +230,15 @@ Claude Desktopのセッションに縛られる。1.2のHTTPのような後付�
   `handle()` はどちらも知らないので**プロトコルの実装は1つ**である。使うのは `initialize` / `tools/list` /
   `tools/call` の3メソッドだけ。対応プロトコル版は `2025-06-18` / `2025-03-26` / `2024-11-05`。
 - **stdoutに出してよいのはJSON-RPCの行だけ**。起動メッセージ・警告はすべてstderrへ出す。
-  OCCTのSTEP書き出しがC++からstdoutへ統計を吐くため、ツール実行中は fd 1 を stderr へ振る。
+  OCCTのSTEP書き出しがC++からstdoutへ統計を吐くため、stdioの待ち受けを始める時点で fd 1 を stderr へ振り替える
+  （ツール実行中だけ囲む形では、人がブラウザから書き出す経路を取り逃す。`_claim_stdout`）。
 - **AIへ渡す手順の文（`initialize` の `instructions`）は `catalog.agent_instructions()` の1本**で、
   アプリ内AIエージェント（`duocad/agent/`・README §4）と共有する。手順を2箇所に書くと
   片方だけ直った状態に気づけない。ツール数も宣言から数えるので、verbを足しても古くならない。
 - ツールの実行時エラーは JSON-RPC エラーではなく `isError: true` の構造化封筒
   （`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
-  `selection_kind_mismatch` / `invalid_predicate` / `internal`）。
+  `selection_kind_mismatch` / `invalid_predicate` / `busy` / `internal`）。
+  `busy` は形状最適化の実行中に文書を変えるツールを呼んだとき（選択・表示の切り替え・書き出しは通る）。
   `selection_empty` は確定選択が**丸ごと空**のとき、`selection_kind_mismatch` は
   **空ではないが要求した種別が無い**とき（例: フィレットを呼んだが面3枚が確定している）。
   後者は実際に確定している種別と件数を `present_kinds` で返すので、選び直す先が引数なしで分かる。

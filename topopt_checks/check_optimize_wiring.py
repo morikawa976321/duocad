@@ -24,8 +24,8 @@
    `on_evaluation`)。`phase="optimize"`(旧SIMPの設計反復)の段は存在しない。
 5. **中断** —— 進捗の途中で旗を立てると `OptimizeCancelled` になり、**文書は1ビットも
    変わらない**。
-6. **応力を測る経路** —— `keep_model` が通っているので安全率が出る。許容応力は
-   40MPa 固定で、その導出(PETG 50MPa × 0.8)が引ける。
+6. **応力を測る経路** —— `keep_model` が通っているので安全率が出る。許容応力の導出
+   (降伏 × 印刷の低減)が結果から引ける。
 7. **事後検出** —— この解像度で1要素も掴めない保持ソリッドがあると、二値探索を呼ぶ前に
    `state == "unrepresented_regions"` で戻り、メッシュボディは足されない。
 8. **条件面からの要求要素サイズ** —— `optimize_run` が使う式が
@@ -376,9 +376,8 @@ def check_stress_path(out) -> None:
         f"(= {out['target_safety_factor']} × {out['search_target_factor']})",
     )
     check(
-        "許容応力 40MPa の導出が引ける",
-        abs(allowable["allowable_mpa"] - 40.0) < 1e-9
-        and abs(allowable["yield_mpa"] * allowable["print_derate"] - 40.0) < 1e-9,
+        "許容応力の導出(降伏 × 印刷の低減)が引ける",
+        abs(allowable["yield_mpa"] * allowable["print_derate"] - allowable["allowable_mpa"]) < 1e-9,
         f"{allowable['material']} 降伏 {allowable['yield_mpa']}MPa x "
         f"{allowable['print_derate']} = {allowable['allowable_mpa']}MPa",
     )

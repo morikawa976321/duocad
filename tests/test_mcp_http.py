@@ -62,9 +62,14 @@ class _Http:
         return status, (json.loads(raw) if raw and status < 300 else None)
 
 
-@pytest.fixture
-def http_mcp(tmp_path):
-    """本番と同じ組み方で立てる —— イベントループは別スレッド、HTTPはさらに別スレッド。"""
+@pytest.fixture(scope="module")
+def http_mcp(tmp_path_factory):
+    """本番と同じ組み方で立てる —— イベントループは別スレッド、HTTPはさらに別スレッド。
+
+    **モジュールで1つだけ立てる**: `httpd.shutdown()` は `serve_forever` の既定の
+    `poll_interval`(0.5秒)まで待つので、テストごとに立て直すとその分だけ遅い(実測 0.50秒/本)。
+    """
+    tmp_path = tmp_path_factory.mktemp("http_mcp")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "index.html").write_text("<!doctype html><title>duocad</title>", encoding="utf-8")
@@ -126,7 +131,6 @@ def test_handshake_and_tool_lineup_do_not_depend_on_the_transport(http_mcp):
     # 同じ `DocumentTools` を直に持たせた `McpServer`(= stdioが使うのと同じ組み方)と比べる。
     direct = McpServer(tools).handle({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
     assert over_http == {tool["name"] for tool in direct["result"]["tools"]}
-    assert len(over_http) >= 28  # 顔ぶれの正は tests/test_mcp_verbs.py の EXPECTED_TOOLS
 
 
 def test_tool_call_from_a_worker_thread_changes_the_same_document(http_mcp):
@@ -136,7 +140,7 @@ def test_tool_call_from_a_worker_thread_changes_the_same_document(http_mcp):
     その場合でも「同じ `Session` を触っている」ことは下の assert が押さえる)。
     """
     http, session, _tools = http_mcp
-    assert session.document.sketches == []
+    before = len(session.document.sketches)
 
     status, response = http.rpc(
         {
@@ -153,7 +157,7 @@ def test_tool_call_from_a_worker_thread_changes_the_same_document(http_mcp):
     assert payload["verb"] == "sketch_create"
 
     # **HTTPのスレッドで呼んだのに、文書はこのプロセスの `Session` のもの**。
-    assert len(session.document.sketches) == 1
+    assert len(session.document.sketches) == before + 1
 
 
 @pytest.mark.parametrize(
@@ -167,6 +171,7 @@ def test_tool_call_from_a_worker_thread_changes_the_same_document(http_mcp):
 def test_browser_reachable_requests_are_refused(http_mcp, headers, why):
     """3. ブラウザから届きうる形のリクエストは403(`WebHandler._mcp_forbidden`)。"""
     http, session, _tools = http_mcp
+    before = len(session.document.sketches)
     status, _ = http.rpc(
         {
             "jsonrpc": "2.0",
@@ -178,7 +183,7 @@ def test_browser_reachable_requests_are_refused(http_mcp, headers, why):
     )
     assert status == 403, why
     # 副作用が起きていないことまで見る(応答を読めなくても書けてしまうのが怖い形なので)。
-    assert session.document.sketches == []
+    assert len(session.document.sketches) == before
 
 
 def test_transport_shape(http_mcp):

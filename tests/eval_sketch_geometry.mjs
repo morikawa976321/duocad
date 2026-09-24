@@ -1,7 +1,6 @@
 /**
  * `web/src/commands/sketchGeometry.ts` を**実際に評価する**口。
- * `tests/test_sketch_geometry.py` が `node` でこれを走らせる
- * (`tests/eval_selection_ref_key.mjs` と同じやり方)。
+ * `tests/test_ts_evaluators.py` が `node` でこれを走らせる。
  *
  * ここで見るのは、スケッチの描く4verbが「クリックで集めた点」と「打った寸法」から出す
  * 形そのもの。とくに円弧は**掃引の向き**(コアは `(end-start) % 360` で必ず反時計回り、

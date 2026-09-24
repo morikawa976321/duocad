@@ -14,7 +14,6 @@
 """
 from __future__ import annotations
 
-
 import pytest
 
 from duocad import query
@@ -22,6 +21,7 @@ from duocad.document import Document
 from duocad.sketch import add_circle, base_plane, sketch_create
 from duocad.verbs import extrude, fillet
 from duocad.region import region_ref
+from document_support import edges_of_kind, kinds_of, new_box
 
 #: 20mm立方体・全辺フィレットの実測（上のdocstring参照）
 CUBE_MM = 20.0
@@ -39,38 +39,12 @@ HOLE_FILLET_KINDS = {"plane": 6, "cylinder_full": 1, "torus": 2}
 # --------------------------------------------------------------------------------------
 # 道具（duocadのverbだけで素材を作る。生のOCPで組み立てない）
 # --------------------------------------------------------------------------------------
-def new_box(doc: Document, size: float = CUBE_MM) -> str:
-    sketch_id = sketch_create(doc, base_plane("XY"))
-    from duocad.sketch import add_rectangle
-
-    add_rectangle(doc, sketch_id, (0.0, 0.0), size, size)
-    operation = extrude(doc, [region_ref(sketch_id, 1)], size, mode="join")
-    return operation.args["body_id"]
-
-
 def new_box_with_hole(doc: Document, size: float = CUBE_MM, radius: float = 4.0) -> str:
     body_id = new_box(doc, size)
     sketch_id = sketch_create(doc, base_plane("XY"))
     add_circle(doc, sketch_id, (size / 2, size / 2), radius)
     extrude(doc, [region_ref(sketch_id, 1)], size, mode="cut", body_id=body_id)
     return body_id
-
-
-def body_of(doc: Document, body_id: str) -> Body:
-    return next(body for body in doc.bodies if body.id == body_id)
-
-
-def kinds_of(doc: Document, body_id: str) -> dict:
-    described = query.describe_shape(body_of(doc, body_id).shape)
-    return {kind: count for kind, count in described["faces_by_type"].items() if count}
-
-
-def edges_of_kind(doc: Document, body_id: str, kind: str) -> list:
-    return [
-        edge["index"]
-        for edge in query.describe_edges(body_of(doc, body_id).shape)
-        if edge["kind"] == kind
-    ]
 
 
 # --------------------------------------------------------------------------------------
@@ -80,7 +54,7 @@ def test_fillet_on_a_box_makes_cylinders_spheres_and_planes():
     """全辺・同一半径なら**円筒 + 球 + 平面**になり、B-splineは出ない(球は `other`)。"""
     doc = Document()
     body_id = new_box(doc)
-    all_edges = [edge["index"] for edge in query.describe_edges(body_of(doc, body_id).shape)]
+    all_edges = [edge["index"] for edge in query.describe_edges(doc.get_body(body_id).shape)]
     assert len(all_edges) == 12, "立方体の辺は12本（重複除去済み）"
 
     fillet(doc, all_edges, RADIUS_OK, body_id=body_id)
@@ -96,7 +70,7 @@ def test_fillet_on_the_vertical_edges_only():
     # **端点で選ぶ**（添字の決め打ちにしない）。`describe_edges` が端点を返すのはこのため。
     vertical = [
         edge["index"]
-        for edge in query.describe_edges(body_of(doc, body_id).shape)
+        for edge in query.describe_edges(doc.get_body(body_id).shape)
         if edge["kind"] == "line" and edge["start"][2] != edge["end"][2]
     ]
     assert len(vertical) == 4, "立方体の縦辺は4本"
@@ -116,7 +90,7 @@ def test_varied_radii_produce_bspline_faces():
     """**半径をバラバラにすると B-spline が出る**(splineはフィレットの副産物であり異常ではない)。"""
     doc = Document()
     body_id = new_box(doc)
-    all_edges = [edge["index"] for edge in query.describe_edges(body_of(doc, body_id).shape)]
+    all_edges = [edge["index"] for edge in query.describe_edges(doc.get_body(body_id).shape)]
     radii = [1.0 + index * 0.25 for index in range(len(all_edges))]
 
     fillet(doc, all_edges, radii, body_id=body_id)
@@ -158,7 +132,7 @@ def test_a_failing_fillet_raises_and_leaves_nothing_behind(radius: float):
     """`IsDone()=False` を例外にし、文書もログも変えない。"""
     doc = Document()
     body_id = new_box(doc)
-    shape_before = body_of(doc, body_id).shape
+    shape_before = doc.get_body(body_id).shape
     kinds_before = kinds_of(doc, body_id)
     log_before = len(doc.log.entries)
     all_edges = [edge["index"] for edge in query.describe_edges(shape_before)]
@@ -168,7 +142,7 @@ def test_a_failing_fillet_raises_and_leaves_nothing_behind(radius: float):
     with pytest.raises(ValueError):
         fillet(doc, all_edges, radius, body_id=body_id)
 
-    assert body_of(doc, body_id).shape is shape_before, "失敗したのに形状が置き換わった"
+    assert doc.get_body(body_id).shape is shape_before, "失敗したのに形状が置き換わった"
     assert kinds_of(doc, body_id) == kinds_before
     assert len(doc.log.entries) == log_before, "失敗したのにログへ積まれた"
 
@@ -182,7 +156,7 @@ def test_radius_10_5_is_reported_as_done_but_is_actually_broken():
     """
     doc = Document()
     body_id = new_box(doc)
-    shape_before = body_of(doc, body_id).shape
+    shape_before = doc.get_body(body_id).shape
     log_before = len(doc.log.entries)
     all_edges = [edge["index"] for edge in query.describe_edges(shape_before)]
 
@@ -192,7 +166,7 @@ def test_radius_10_5_is_reported_as_done_but_is_actually_broken():
     assert "BRepCheck" in str(error.value), (
         "r=10.5 は IsDone では止まらない。止めているのが BRepCheck であること自体が契約"
     )
-    assert body_of(doc, body_id).shape is shape_before
+    assert doc.get_body(body_id).shape is shape_before
     assert len(doc.log.entries) == log_before
 
 
@@ -204,8 +178,8 @@ def test_fillet_is_logged_and_undoable():
     doc = Document()
     body_id = new_box(doc)
     kinds_before = kinds_of(doc, body_id)
-    volume_before = query.volume(body_of(doc, body_id).shape)
-    all_edges = [edge["index"] for edge in query.describe_edges(body_of(doc, body_id).shape)]
+    volume_before = query.volume(doc.get_body(body_id).shape)
+    all_edges = [edge["index"] for edge in query.describe_edges(doc.get_body(body_id).shape)]
 
     operation = fillet(doc, all_edges, RADIUS_OK, body_id=body_id)
 
@@ -217,7 +191,7 @@ def test_fillet_is_logged_and_undoable():
 
     doc.log.undo(doc)
     assert kinds_of(doc, body_id) == kinds_before
-    assert query.volume(body_of(doc, body_id).shape) == pytest.approx(volume_before)
+    assert query.volume(doc.get_body(body_id).shape) == pytest.approx(volume_before)
 
     doc.log.redo(doc)
     assert kinds_of(doc, body_id) == FILLET_R3_KINDS
@@ -230,7 +204,7 @@ def test_fillet_records_provenance_through_the_normalizing_adapter():
     """由来(`Operation.provenance`)が正規化アダプタ経由で埋まり、JSON化できること。"""
     doc = Document()
     body_id = new_box(doc)
-    all_edges = [edge["index"] for edge in query.describe_edges(body_of(doc, body_id).shape)]
+    all_edges = [edge["index"] for edge in query.describe_edges(doc.get_body(body_id).shape)]
 
     operation = fillet(doc, all_edges, RADIUS_OK, body_id=body_id)
 
@@ -249,9 +223,9 @@ def test_fillet_shifts_face_indices():
     """
     doc = Document()
     body_id = new_box(doc)
-    before = query.describe_shape(body_of(doc, body_id).shape)
+    before = query.describe_shape(doc.get_body(body_id).shape)
     assert before["face_count"] == 6
-    all_edges = [edge["index"] for edge in query.describe_edges(body_of(doc, body_id).shape)]
+    all_edges = [edge["index"] for edge in query.describe_edges(doc.get_body(body_id).shape)]
 
     operation = fillet(doc, all_edges[:1], 2.0, body_id=body_id)
 

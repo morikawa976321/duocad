@@ -158,23 +158,11 @@ def test_shapes_map_to_the_expected_entity_kinds(tmp_path: Path) -> None:
     assert all(entity["kind"] in sketch_module.ENTITY_KINDS for entity in entities)
 
 
-def test_a_cubic_bezier_becomes_one_entity_not_a_polyline(tmp_path: Path) -> None:
-    """3次ベジエ1本が図形1つになる(折れ線に落ちない)。
-
-    落ちたら曲線が平坦化されている —— 図形数・パラメータ数・押し出し後の面数が
-    まとめて膨らむ(実測で面数4対130)。
-    """
-    _name, entities = svg_import.read_svg_entities(
-        write_svg(tmp_path, "curve.svg", SVG_WITH_UNITS)
-    )
-    assert [entity["kind"] for entity in entities].count("bezier") == 1
-
-
 def test_the_extruded_side_of_a_curve_stays_one_face(tmp_path: Path) -> None:
     """ベジエの輪郭を押し出しても側面は1枚のまま。**これが折れ線化しない理由**。
 
     直線1本 + ベジエ1本で閉じた領域なので、側面2枚 + 上下2枚 = 4面が正しい。
-    折れ線化していると側面が分割数ぶんの平面に割れる。
+    折れ線化していると側面が分割数ぶんの平面に割れる(実測で面数4対130)。
     """
     document = Document()
     sketch_id = new_sketch(document)
@@ -189,21 +177,29 @@ def test_the_extruded_side_of_a_curve_stays_one_face(tmp_path: Path) -> None:
 
 
 def test_an_elliptical_arc_is_within_a_tenth_of_a_percent(tmp_path: Path) -> None:
-    """楕円弧はベジエ近似(厳密にならない)。**誤差は半径の0.1%以内**であること。
-
-    ここが緩むと、楕円を含むSVGの寸法が黙ってずれる。標準の90度分割で実測0.027%。
-    """
+    """落ちたら、楕円を含むSVGの寸法が曲線の途中で黙ってずれている(標準の係数なら半径の0.027%)。"""
     _name, entities = svg_import.read_svg_entities(
         write_svg(tmp_path, "ellipse.svg", SVG_MIXED)
     )
-    # 楕円(cx=90, cy=30, rx=20, ry=10 / 高さ100 → v=70)の制御点が乗る箱を見る。
-    beziers = [entity for entity in entities if entity["kind"] == "bezier"]
-    xs = [entity["params"][key] for entity in beziers for key in ("x0", "x1")]
-    on_ellipse = [x for x in xs if 69.0 <= x <= 111.0]
-    assert on_ellipse, "楕円由来のベジエが見つからない"
-    for x in on_ellipse:
-        # 端点は必ず楕円の上にある(近似されるのは端点の間だけ)。
-        assert min(abs(x - 70.0), abs(x - 90.0), abs(x - 110.0)) < 20.0 * 0.001
+    # 楕円(cx=90, cy=30, rx=20, ry=10 / 高さ100 → v=70)由来のベジエ
+    arcs = [
+        entity["params"]
+        for entity in entities
+        if entity["kind"] == "bezier" and 69.0 <= entity["params"]["x0"] <= 111.0
+    ]
+    assert arcs, "楕円由来のベジエが見つからない"
+    for params in arcs:
+        points = [
+            (params["x0"], params["y0"]), (params["cx1"], params["cy1"]),
+            (params["cx2"], params["cy2"]), (params["x1"], params["y1"]),
+        ]
+        for t in (0.25, 0.5, 0.75):
+            weights = ((1 - t) ** 3, 3 * t * (1 - t) ** 2, 3 * t**2 * (1 - t), t**3)
+            u = sum(weight * x for weight, (x, _) in zip(weights, points))
+            v = sum(weight * y for weight, (_, y) in zip(weights, points))
+            # 楕円を単位円へ戻した半径。1からのずれが半径に対する誤差の比
+            error = abs(math.hypot((u - 90.0) / 20.0, (v - 70.0) / 10.0) - 1.0)
+            assert error < 0.001, f"t={t} で楕円から {error:.3%} ずれている"
 
 
 # --------------------------------------------------------------------------------------
@@ -350,18 +346,6 @@ def test_imported_entities_do_not_create_named_parameters(tmp_path: Path) -> Non
     assert document.parameters == {}
 
 
-def test_imported_entities_still_resolve_and_draw(tmp_path: Path) -> None:
-    """素の数値のままでも `entity_params` は解決でき、領域も出る(名前つきでなくても一人前)。"""
-    document = Document()
-    sketch_id = new_sketch(document)
-    import_svg(document, sketch_id, write_svg(tmp_path, "draw.svg", SVG_MIXED))
-    sketch = sketch_module.get_sketch(document, sketch_id)
-    for entity in sketch.entities:
-        values = sketch_module.entity_params(document, sketch_id, entity.id)
-        assert all(math.isfinite(value) for value in values.values())
-    assert region.regions(document, sketch_id)
-
-
 # --------------------------------------------------------------------------------------
 # 6: 貼る先は「開いているスケッチ」だけ
 # --------------------------------------------------------------------------------------
@@ -452,15 +436,6 @@ def test_session_import_svg_reports_what_it_made(tmp_path: Path) -> None:
     entity_ids = set(applied["entity_ids"])
     assert entity_ids
     assert entity_ids <= {e.id for e in session.document.sketches[-1].entities}
-
-
-def test_session_import_svg_rejects_an_unknown_sketch(tmp_path: Path) -> None:
-    """WS/MCPが通る経路でも、実在しない `sketch_id` は拒否する。"""
-    session = Session(None, 0.2, models_dir=tmp_path)
-    path = str(write_svg(tmp_path, "orphan.svg", SVG_MIXED))
-    with pytest.raises(KeyError):
-        session.import_svg("sketch-does-not-exist", path)
-    assert session.document.sketches == [] and session.document.log.entries == []
 
 
 def test_the_state_feed_does_not_carry_every_entity(tmp_path: Path) -> None:

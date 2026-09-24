@@ -1,6 +1,6 @@
 /**
  * `web/src/expression.ts` の式評価を**実際に走らせる**ための小さな口。
- * `tests/test_expression.py` が `node` でこれを走らせる(`tests/eval_grid_scale.mjs` と同じやり方)。
+ * `tests/test_ts_evaluators.py` が `node` でこれを走らせる。
  *
  * Node は `.ts` をそのまま読める(型注釈の除去。Node 23.6以降は既定で有効)。
  */

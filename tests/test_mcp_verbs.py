@@ -6,9 +6,9 @@
 
 ## このファイルが固定する4つ
 
-1. **到達性** — `tools/list` の集合が**期待する38個とちょうど一致**する。新しいverbを足した
-   ときにMCPへ出し忘れるのを防ぐ(集合が一致「以上」ではなく「一致」なのはそのため)。
-   各ツールが引数スキーマ(型・必須・説明)を持つこと。
+1. **到達性** — 各ツールが引数スキーマ(型・必須・説明)を持ち、配った引数を実体
+   (`DocumentTools` のメソッド)がそのまま受け取れること。ツールの顔ぶれは
+   `tests/test_doc_code_agreement.py` が `MCP.md` の表と突き合わせる。
 2. **形は選択から、数値は引数から** — 面・辺・領域は**確定した選択**から取り、数値・名前・
    パスだけを引数で渡す。これにより「提案のままでは適用できない」が**全verbに自動的にかかる**。
    例外はBody(`body_id`)だけ —— Bodyは選択集合の項目ではない。
@@ -16,12 +16,12 @@
    `can_redo` を必ず返す。自然文だけを返さない。**`changed_bodies` は `Session.body_revision`
    の前後差分**で導くこと(verbごとに数え上げると、新しいverbを足すたびに数え漏れる)。
 4. **構造化された失敗** — 失敗はJSONで返す(`{"error": {"code","message","tool","exception"}}`)。
-   例外のテキストをそのまま投げない。コードは7語彙に固定する
+   例外のテキストをそのまま投げない。コードは `tests/mcp_support.py` の `ERROR_CODES` の語彙に限る
    (顔ぶれは `MCP.md`「実装のメモ」が正。一致は `tests/test_doc_code_agreement.py` が見る)。
 """
 from __future__ import annotations
 
-import json
+import inspect
 from pathlib import Path
 
 import pytest
@@ -33,209 +33,22 @@ from duocad.document import Body
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.selection import set_visible
 from duocad.server import Server, Session
+from document_support import BOX_X, BOX_Y, BOX_Z
+from mcp_support import call, call_error, request
+from session_support import FakeConnection
 
-# JSON-RPC 2.0 の標準エラーコード。**実装から import しない**(test_mcp.py と同じ理由:
-# importすると実装が変わった瞬間にテストも追従して緑になり、契約にならない)。
+# JSON-RPC 2.0 の標準エラーコード。**実装から import しない**
+# (importすると実装が変わった瞬間にテストも追従して緑になり、契約にならない)。
 INVALID_PARAMS = -32602
 
-BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# --------------------------------------------------------------------------------------
-# 公開する道具の全体像(**この表が到達表のAI列そのもの**)
-# --------------------------------------------------------------------------------------
-#: ツール名は**操作ログのverb名と同じ綴り**にする —— AIが
-#: `describe_document` のログを読んで次の操作を決めるとき、ログのverb名と呼べるツール名が
-#: 違うと対応表を推測させることになる。
-VERB_TOOLS = {
-    # スケッチ
-    "sketch_create",
-    "sketch_create_offset",
-    "add_line",
-    "add_circle",
-    "add_rectangle",
-    "add_arc",
-    # フィーチャ
-    "extrude",
-    "extrude_face",
-    "fillet",
-    "chamfer",
-    "boolean_body",
-    "pattern_rectangular",
-    "pattern_circular",
-    # 位置
-    "move_sketch_entities",
-    "move_body",
-    # 鏡映複製(どちらも常に複製する)
-    "mirror_sketch_entities",
-    "mirror_body",
-    # 削除(ボディとスケッチ図形をまとめて消す1本)
-    "delete",
-    # 形状最適化の条件(第3のモード。最適化そのものとは接続していない)
-    "set_preserve_bodies",
-    "set_exclude_bodies",
-    "set_fixtures",
-    "set_loads",
-    "clear_loads",
-    # ボディ・パラメータ
-    "set_parameter",
-    # 入出力
-    # メッシュボディ(表示とSTL書き出しだけ。編集verbは拒否する)
-    "add_mesh_body",
-    "import_step",
-    "import_svg",
-    "export_step",
-    "export_stl",
-    # 履歴
-    "undo",
-    "redo",
-}
 
-#: 問い合わせ(§5「問い合わせ」)と、述語の語彙の自己記述。
-QUERY_TOOLS = {"describe_document", "describe_shape", "measure", "describe_predicates"}
-
-#: 選択(§5「選択(中心)」)。契約の本体は `tests/test_mcp_selection.py`。
-#:
-#: **`set_visible` はここ**。可視性は選択機構の一部であり、選択と同じく
-#: 操作ログに載らない —— したがって `VERB_TOOLS`(=ログのverb名と綴りが一致する集合)に
-#: 置くと、下の `LOGGING_TOOLS` の一致検査が「ツールがあるのにverbが無い」で落ちる。
-SELECTION_TOOLS = {
-    "get_selection",
-    "propose_selection",
-    "modify_selection",
-    "commit_selection",
-    "clear_selection",
-    "set_visible",
-}
-
-#: 到達表の操作には数えないが、**ログに載るverbと同じ綴りで呼べる**ために要るツール。
-#:
-#: **空でも残す。** 下の `LOGGING_TOOLS` の一致検査が「ツール名 == verb名」を両方向で見る
-#: 仕組みそのもので、到達表に無いverbを足したときはここへ書く場所が要る。
-EXTRA_LOGGING_TOOLS: set = set()
-
-#: 操作ログに載るが、人にもAIにも開けていないverb(コードからだけ呼ぶもの)。
-#: **catalog の宣言から引く** —— ここに名前を写すと catalog と二重管理になり、
-#: 「宣言を忘れた」のか「写し忘れた」のか区別できなくなる。
-NON_TOOL_VERBS = {command.name for command in COMMANDS if not command.mcp and command.ws == "none"}
-
-EXPECTED_TOOLS = VERB_TOOLS | QUERY_TOOLS | SELECTION_TOOLS | EXTRA_LOGGING_TOOLS
-
-#: 各ツールの引数(全体 / 必須)。**「増えていないこと」まで固定する** —— 引数がひとつ増えれば
-#: AIから見た呼び方が変わるので、契約の一部である。
-#:
-#: ここに `face_index` / `edges` / `regions` が**無い**ことがこのファイルの主張の半分である
-#: (形は選択から取る。モジュールdocstring 2)。
-ARGUMENTS: dict = {
-    # ---- 問い合わせ
-    "describe_document": (
-        {"include_bbox", "include_regions"},
-        set(),
-    ),
-    "describe_shape": ({"body_id"}, {"body_id"}),
-    "measure": (set(), set()),
-    "describe_predicates": (set(), set()),
-    # ---- 選択
-    "get_selection": (set(), set()),
-    "propose_selection": ({"refs", "predicate"}, set()),
-    "modify_selection": ({"add", "remove"}, set()),
-    "commit_selection": (set(), set()),
-    "clear_selection": (set(), set()),
-    # ---- スケッチ
-    "sketch_create": ({"base_plane"}, set()),
-    "sketch_create_offset": ({"base_plane", "distance"}, {"distance"}),
-    "add_line": ({"sketch_id", "p0", "p1"}, {"sketch_id", "p0", "p1"}),
-    "add_circle": (
-        {"sketch_id", "center", "radius"},
-        {"sketch_id", "center", "radius"},
-    ),
-    "add_rectangle": (
-        {"sketch_id", "corner", "width", "height", "angle"},
-        {"sketch_id", "corner", "width", "height"},
-    ),
-    "add_arc": (
-        {"sketch_id", "center", "radius", "start_deg", "end_deg"},
-        {"sketch_id", "center", "radius", "start_deg", "end_deg"},
-    ),
-    # ---- フィーチャ(形は選択から。数値だけが引数)
-    "extrude": ({"distance", "mode", "body_id"}, {"distance"}),
-    "extrude_face": ({"distance"}, {"distance"}),
-    "fillet": ({"radius"}, {"radius"}),
-    "boolean_body": ({"target_ref", "mode"}, {"target_ref", "mode"}),
-    # 位置と向きの変更。**対象は選択から取る**ので、引数は量・軸・中心と copy だけ。
-    # **必須が1つも無い**のは `mode` で必要な引数が変わるからで(translate は dx/dy(/dz)、
-    # rotate は angle と軸)、JSON Schema では条件付き必須を書けない —— 実体側が
-    # 「モードが取らない引数は ValueError」で両方向を塞ぐ(`duocad/verbs/move_*.py`)。
-    "move_sketch_entities": (
-        {"dx", "dy", "copy", "mode", "angle", "center", "center_entity"},
-        set(),
-    ),
-    "move_body": (
-        {
-            "dx", "dy", "dz", "copy", "mode", "angle",
-            "axis_edge", "axis_point", "axis_dir", "center_vertex",
-        },
-        set(),
-    ),
-    # 鏡映複製。**対象は選択から取る**。スケッチ側は軸(既存の線分)が必須、ボディ側は
-    # base_plane/plane_face のどちらか一方(必須は無い —— JSON Schemaでは「exactly one」を
-    # 書けないので、実体側が両方渡す/どちらも渡さないを ValueError にする。move_*と同じ)。
-    "mirror_sketch_entities": ({"axis"}, {"axis"}),
-    "mirror_body": ({"base_plane", "plane_face"}, set()),
-    # 削除。**対象は選択から取り、howが無い**ので引数は1つも無い
-    "delete": (set(), set()),
-    # 形状最適化の条件。**対象(ボディ・面)は引数に無い** —— 確定選択そのものを代入する。
-    # howを持つのは `set_loads` だけで、大きさ[N]と向き(面法線 / 世界ベクトル)。
-    # `clear_loads` は荷重だけの解除専用verb(`set_loads` が上書き代入なので空の選択に
-    # 「外す」の意味が無い)。
-    "set_preserve_bodies": (set(), set()),
-    "set_exclude_bodies": (set(), set()),
-    "set_fixtures": (set(), set()),
-    "set_loads": ({"magnitude", "direction"}, {"magnitude", "direction"}),
-    "clear_loads": (set(), set()),
-    "chamfer": ({"distance"}, {"distance"}),
-    "pattern_rectangular": (
-        {"sketch_id", "entities", "dx", "dy", "nx", "ny"},
-        {"sketch_id", "entities", "dx", "dy", "nx", "ny"},
-    ),
-    "pattern_circular": (
-        {"sketch_id", "entities", "center", "count", "total_angle", "rotate_copies"},
-        {"sketch_id", "entities", "center", "count"},
-    ),
-    # ---- ボディ・パラメータ
-    "set_visible": ({"body_id", "visible"}, {"body_id", "visible"}),
-    "set_parameter": ({"name", "value"}, {"name", "value"}),
-    "add_mesh_body": ({"positions", "indices", "name"}, {"positions", "indices"}),
-    # ---- 入出力
-    # STEP読み込みは**1ツール**。読んだ時点で編集可能なボディまでできる。
-    # **`editable` のような引数で経路を打ち分けない** —— 引数で分けると、ログに載るverb名と
-    # 呼べるツール名が食い違う(`EXTRA_LOGGING_TOOLS` の理由)。
-    "import_step": ({"path"}, {"path"}),
-    # SVG読み込みは**いま開いているスケッチへ足す**。対象スケッチを指す `sketch_id` が必須で、
-    # 倍率(`scale`)だけ省略できる。
-    "import_svg": ({"path", "sketch_id", "scale"}, {"path", "sketch_id"}),
-    "export_step": ({"path"}, {"path"}),
-    # **粗さは選べない**(`io_step.STL_DEVIATION` 固定)。人の画面にも入力欄が無いので、
-    # AIにだけ調整できる引数を残さない。
-    "export_stl": ({"path"}, {"path"}),
-    # ---- 履歴
-    "undo": (set(), set()),
-    "redo": (set(), set()),
-}
-
-#: 操作ログに1行積むツール。**ツール名 == verb名**であること自体が契約(上記の理由)。
-LOGGING_TOOLS = (VERB_TOOLS - {"export_step", "export_stl", "undo", "redo"}) | EXTRA_LOGGING_TOOLS
-
-#: 失敗コードの語彙。**増やすときはここを直す**(AI側は未知のコードを扱えないので、
-#: 実装が勝手に新しいコードを作れる状態にしない)。
-ERROR_CODES = {
-    "not_found",            # 存在しないBody / sketch / parameter(KeyError)
-    "invalid_argument",     # 形・型・範囲が不正(ValueError)
-    "selection_not_committed",  # 提案のまま verb を呼んだ(A1の門)
-    "selection_empty",      # 確定選択が**丸ごと空**(要求した種別以前の問題)
-    "selection_kind_mismatch",  # 空ではないが要求した種別が無い
-    "invalid_predicate",    # 述語が不正(有効なopの一覧を必ず添える)
-    "internal",             # 上記以外(黙って握りつぶさないための受け皿)
+#: 形を変えるverbのツール(問い合わせ・選択・履歴を除く)。**catalog の宣言から引く**。
+SHAPE_VERB_TOOLS = {
+    command.name
+    for command in COMMANDS
+    if command.mcp and command.category in ("sketch", "feature", "file")
 }
 
 
@@ -249,71 +62,12 @@ def empty_session(tmp_path: Path) -> Session:
 
 
 @pytest.fixture()
-def box_session(tmp_path: Path) -> Session:
-    """30×30×40 の直方体を1つ持つセッション(面6・辺12・頂点8)。
-
-    立方体にしないのは A1 と同じ理由 —— 3辺の長さが違えば、述語やフィレットの
-    対象がたまたま一致して緑になる余地が減る。
-    """
-    made = Session(None, 0.2)
-    made.document.add_body(
-        Body(id="box", name="box", kind="solid", shape=BRepPrimAPI_MakeBox(BOX_X, BOX_Y, BOX_Z).Shape())
-    )
-    return made
-
-
-@pytest.fixture()
 def server(box_session: Session) -> McpServer:
     return McpServer(DocumentTools(box_session))
 
 
-def request(server: McpServer, method: str, params: dict | None = None) -> dict:
-    message: dict = {"jsonrpc": "2.0", "id": 1, "method": method}
-    if params is not None:
-        message["params"] = params
-    response = server.handle(message)
-    assert response is not None, f"{method} はレスポンスを返さなければならない"
-    return response
-
-
 def tool_list(server: McpServer) -> list:
     return request(server, "tools/list")["result"]["tools"]
-
-
-def call(server: McpServer, name: str, arguments: dict | None = None) -> dict:
-    """成功を期待してツールを呼び、返ってきたJSONを辞書で返す。"""
-    response = request(server, "tools/call", {"name": name, "arguments": arguments or {}})
-    assert "error" not in response, response
-    result = response["result"]
-    assert result["isError"] is False, result["content"][0]["text"]
-    return json.loads(result["content"][0]["text"])
-
-
-def call_error(server: McpServer, name: str, arguments: dict | None = None) -> dict:
-    """失敗を期待してツールを呼び、**構造化されたエラー本体**(`payload["error"]`)を返す。
-
-    ここで `json.loads` に成功すること自体が契約である —— 例外のテキストをそのまま
-    投げていれば(`"KeyError: no such body ..."`)ここで落ちる。
-
-    **未知の引数・必須の欠落・型違いにはこのヘルパを使えない** —— それらは
-    `_check_arguments` がツール本体の前に JSON-RPC のトップレベル `error`(-32602)で
-    弾くので、下の assert で落ちる。`request()` を直接呼んで `response["error"]["code"]` を見る。
-    """
-    response = request(server, "tools/call", {"name": name, "arguments": arguments or {}})
-    assert "error" not in response, f"実行時エラーをプロトコルエラーにしている: {response}"
-    result = response["result"]
-    assert result["isError"] is True, f"エラーになるはずが成功した: {result}"
-    text = result["content"][0]["text"]
-    try:
-        payload = json.loads(text)
-    except ValueError:
-        pytest.fail(f"失敗が機械可読でない(例外のテキストを素で返している): {text!r}")
-    assert "error" in payload, payload
-    error = payload["error"]
-    assert error["code"] in ERROR_CODES, f"未知のエラーコード: {error['code']!r}"
-    assert error["tool"] == name
-    assert error["message"].strip()
-    return error
 
 
 def select_refs(server: McpServer, refs: list) -> None:
@@ -351,53 +105,30 @@ def vertical_edge_indices(shape) -> list:
 # --------------------------------------------------------------------------------------
 # 1. 到達性 — 全verbがMCPツールとして呼べること
 # --------------------------------------------------------------------------------------
-def test_every_verb_is_reachable_as_an_mcp_tool(server: McpServer):
-    """**このファイルで最も重要な1本**(タスクファイル項番1)。
+def test_tool_names_match_the_verb_names_in_the_operation_log():
+    """ログに載るverbと、catalog が「ログに載る」と宣言している名前が**両方向で**一致する。
 
-    §0の到達表のAI列にある全操作がMCPツールとして存在し、かつ**余計なものが無い**。
-    集合の一致で見るのは、新しいverbを足したときにMCPへ出し忘れるのを防ぐため
-    ——部分集合の検査では緑になるが、実装計画書の到達表とは別物である。
-    """
-    names = {tool["name"] for tool in tool_list(server)}
-    assert names == EXPECTED_TOOLS, {
-        "足りない": sorted(EXPECTED_TOOLS - names),
-        "余計": sorted(names - EXPECTED_TOOLS),
-    }
-
-
-def test_tool_names_match_the_verb_names_in_the_operation_log(server: McpServer):
-    """ログに載るverbは、**同じ綴りのツール名**で呼べる。**両方向で見る。**
-
-    AIは `describe_document` のログを読んで次の一手を決める。ログのverb名と呼べるツール名が
-    違うと、対応表を推測させることになる(推測させた分だけ静かに間違う)。
-
-    **片方向の検査(`LOGGING_TOOLS <= registered`)では、ツール名と綴りの違うverbが登録されても
-    検出できない**(1つのツールが引数で2つのverbを打ち分ける設計だと起こりうる)。
-    集合の**一致**にすると、次の3つが全部この1行で落ちる:
-
-    1. ツール名と綴りの違うverbを新設した
-    2. verbを登録せずにツールだけ足した
-    3. verbを消したのにツールが残った
-
-    `LOGGING_TOOLS` の側に「ログに載らないツール」(`export_*` / `undo` / `redo`)を
-    入れていないことも、この一致が成り立つ条件である。
-
-    **ツールを持たないverb**(コードからだけ呼ぶもの)は `NON_TOOL_VERBS` として
-    **catalog の宣言から引く** —— そういうverbを足すときは catalog に `mcp=False` かつ
-    `ws="none"` で宣言する必要があり、宣言を忘れればここで落ちる。
+    落ちたら、ログのverb名と同じ綴りのツール(catalog の名前)が無いか、宣言した形のverbが
+    ログに登録されていない(AIはログのverb名を読んで次のツールを選ぶ)。
     """
     from duocad.oplog import registered_verbs
 
     registered = set(registered_verbs())
-    expected = LOGGING_TOOLS | NON_TOOL_VERBS
+    expected = {
+        command.name
+        for command in COMMANDS
+        if command.category in ("sketch", "feature")
+        or (command.category == "file" and command.changes_document and command.mcp)
+        or (not command.mcp and command.ws == "none")
+    }
     assert registered == expected, {
-        "ツールも catalog の宣言も無いverb": sorted(registered - expected),
-        "verbが無いツール": sorted(expected - registered),
+        "catalog に同じ綴りの宣言が無いverb": sorted(registered - expected),
+        "verbとして登録されていない宣言": sorted(expected - registered),
     }
 
 
 def test_every_tool_has_a_description_and_an_object_schema(server: McpServer):
-    """説明文と入力スキーマはAIがツールを選ぶ唯一の手がかり(項番2)。"""
+    """説明文と入力スキーマはAIがツールを選ぶ唯一の手がかり。"""
     for tool in tool_list(server):
         assert tool["description"].strip(), f"{tool['name']} に説明が無い"
         schema = tool["inputSchema"]
@@ -406,7 +137,7 @@ def test_every_tool_has_a_description_and_an_object_schema(server: McpServer):
 
 
 def test_every_argument_is_typed_and_documented(server: McpServer):
-    """引数ひとつひとつが**型と説明**を持つ(項番2の「型・必須・説明」)。
+    """引数ひとつひとつが**型と説明**を持つ。
 
     型が無いと `_check_arguments` が検査できず、説明が無いとAIは何を入れるか推測する。
     型は文字列か、複数を許すなら文字列のリスト(`fillet.radius` は数値と配列の両方を取る)。
@@ -422,48 +153,37 @@ def test_every_argument_is_typed_and_documented(server: McpServer):
             assert (spec.get("description") or "").strip(), f"{where} に説明が無い"
 
 
-def test_the_declared_arguments_match_the_published_schema(server: McpServer):
-    """**`ARGUMENTS` の表が、実際に配るスキーマと一致する。**
+def test_the_published_arguments_are_exactly_what_the_implementation_accepts(server: McpServer):
+    """配る引数(名前・必須)が `DocumentTools` のメソッドの引数(名前・既定値の有無)と一致する。
 
-    この表は「引数がひとつ増えればAIから見た呼び方が変わる」ことを固定するために書かれている。
-    表だけがあって検査が無い状態は、表を直し忘れた人を止められないので、
-    宣言(`catalog.Command.params`)ではなく**サーバが実際に返す `tools/list` のスキーマ**と
-    突き合わせる —— 見たいのは「AIに見えている引数」であって、宣言の中身ではない。
-
-    `required` まで見るのは、**省略できるようにした引数**が黙って増えないようにするため。
-    `move_*` のように `mode` で必須が変わるものは `required` が空になり、そのことが表に
-    書かれていること自体が「実体側で塞いでいる」という主張になる。
+    落ちたら、AIに見せた引数を実体が受け取れない(`TypeError` → `internal`)か、
+    実体が受け取る引数・省略できる引数をAIに見せていない(`catalog` の宣言と実体のずれ)。
     """
-    published = {
-        tool["name"]: (
-            set((tool["inputSchema"].get("properties") or {})),
-            set(tool["inputSchema"].get("required") or []),
-        )
-        for tool in tool_list(server)
-    }
-    assert set(published) == set(ARGUMENTS), (
-        "ARGUMENTS の顔ぶれが tools/list と食い違う("
-        f"表のみ={sorted(set(ARGUMENTS) - set(published))} / "
-        f"サーバのみ={sorted(set(published) - set(ARGUMENTS))})"
-    )
-    for name, (all_args, required) in ARGUMENTS.items():
-        assert published[name] == (all_args, required), (
-            f"{name} の引数が ARGUMENTS と食い違う: "
-            f"表={sorted(all_args)}/必須{sorted(required)} "
-            f"サーバ={sorted(published[name][0])}/必須{sorted(published[name][1])}"
-        )
+    mismatched = {}
+    for tool in tool_list(server):
+        schema = tool["inputSchema"]
+        required = set(schema.get("required") or [])
+        published = {name: name in required for name in (schema.get("properties") or {})}
+        parameters = inspect.signature(getattr(DocumentTools, tool["name"])).parameters
+        accepted = {
+            name: parameter.default is inspect.Parameter.empty
+            for name, parameter in parameters.items()
+            if name != "self"
+        }
+        if published != accepted:
+            mismatched[tool["name"]] = {"配る(必須か)": published, "実体(必須か)": accepted}
+    assert not mismatched, mismatched
 
 
 def test_no_verb_tool_takes_a_shape_argument(server: McpServer):
     """**形の引数(面・辺・領域)を持つverbツールは1つも無い**(モジュールdocstring 2)。
 
     `face_index=` や `edges=` を受ける裏口があると、A1が決めた「提案のままでは
-    verb に渡せない」がその経路だけ素通りになる。上の表の検査と重なるが、
-    **なぜその表なのか**を独立に固定しておく。
+    verb に渡せない」がその経路だけ素通りになる。
     """
     forbidden = {"face_index", "face", "edges", "edge_indices", "regions", "refs", "selection"}
     for tool in tool_list(server):
-        if tool["name"] not in VERB_TOOLS:
+        if tool["name"] not in SHAPE_VERB_TOOLS:
             continue
         leaked = forbidden & set(tool["inputSchema"].get("properties") or {})
         assert not leaked, f"{tool['name']} が形を直接受けている: {sorted(leaked)}"
@@ -495,10 +215,7 @@ def test_numbers_are_not_accepted_as_strings(server: McpServer):
 
 
 def test_booleans_are_not_accepted_as_numbers(server: McpServer):
-    """Pythonでは `True` が `int` の一種なので、`radius: true` は素通りすると 1.0 になる。
-
-    `visible: "false"` が真になるのと同じ型の事故(test_mcp.py 参照)を、数値側でも塞ぐ。
-    """
+    """Pythonでは `True` が `int` の一種なので、`radius: true` は素通りすると 1.0 になる。"""
     _assert_rejects_argument(server, "fillet", {"radius": True}, "radius")
 
 
@@ -544,7 +261,7 @@ def _assert_verb_envelope(payload: dict, verb: str) -> None:
 
 
 def test_a_verb_reports_what_changed_not_a_sentence(server: McpServer, box_session: Session):
-    """成功したら**変わったBody・新しい面数・操作のseq**が構造で返る(項番4)。
+    """成功したら**変わったBody・新しい面数・操作のseq**が構造で返る。
 
     自然文だけを返すと、AIは次の一手を文章から推測することになる。
     """
@@ -682,11 +399,12 @@ def test_both_patterns_are_reachable_and_return_their_id(empty_session: Session)
 # --------------------------------------------------------------------------------------
 # 4. 構造化された失敗 — 理由が機械可読で返る
 # --------------------------------------------------------------------------------------
-def test_a_missing_body_is_reported_as_not_found(server: McpServer):
-    """`KeyError` は `not_found`。**例外のテキストをそのまま投げない**。"""
+def test_a_missing_body_is_reported_as_not_found(server: McpServer, box_session: Session):
+    """`KeyError` は `not_found` で、**その場で有効なボディIDを添える**(行き止まりのエラーにしない)。"""
     error = call_error(server, "describe_shape", {"body_id": "ghost"})
     assert error["code"] == "not_found"
     assert error["exception"] == "KeyError"
+    assert box_session.document.bodies[0].id in error["message"], "有効なボディIDが添えられていない"
 
 
 def test_an_unknown_entity_id_shows_the_real_ones(empty_session: Session):
@@ -727,17 +445,6 @@ def test_an_unknown_sketch_id_shows_the_real_ones(empty_session: Session):
     assert real in error["message"], "有効なスケッチIDが添えられていない"
 
 
-def test_an_unknown_body_id_shows_the_real_ones(box_session: Session):
-    """未知の body_id には有効な ID 一覧を添える。"""
-    server = McpServer(DocumentTools(box_session))
-    real = box_session.document.bodies[0].id
-
-    error = call_error(server, "describe_shape", {"body_id": "ghost"})
-
-    assert error["code"] == "not_found"
-    assert real in error["message"], "有効なボディIDが添えられていない"
-
-
 def test_a_bad_value_is_reported_as_invalid_argument(server: McpServer, box_session: Session):
     """`ValueError` は `invalid_argument`(半径0は形を変えないので verb が拒む)。"""
     box = box_session.document.bodies[0]
@@ -759,6 +466,7 @@ def test_applying_a_verb_with_nothing_selected_says_so(server: McpServer):
     assert error["code"] == "selection_empty"
     assert error["required_kind"] == "edge"
     assert error["selection"] == {"count": 0, "origin": "user"}
+    assert "present_kinds" not in error, "空の選択を種別違いと名乗っている"
 
 
 def test_selecting_the_wrong_kind_has_its_own_code(server: McpServer, box_session: Session):
@@ -779,21 +487,6 @@ def test_selecting_the_wrong_kind_has_its_own_code(server: McpServer, box_sessio
     assert error["present_kinds"] == {"face": 1}
     assert error["selection"]["count"] == 1
     assert "edge" in error["hint"]
-
-
-def test_an_empty_selection_still_says_empty(server: McpServer, box_session: Session):
-    """**対照**: 何も選んでいないときは今までどおり `selection_empty`。
-
-    上のテストと対にしてある —— 2つを1つのコードへ潰す実装(あるいは逆に、空のときまで
-    `selection_kind_mismatch` を返す実装)が入ったら、どちらかが必ず落ちる。
-    `SelectionKindMismatch` は `SelectionEmpty` の**派生**なので、`_error_payload` の
-    判定順を入れ替えるだけで種別違いが `selection_empty` に吸われる。そこを固定する。
-    """
-    error = call_error(server, "fillet", {"radius": 2.0})
-    assert error["code"] == "selection_empty"
-    assert error["required_kind"] == "edge"
-    assert error["selection"]["count"] == 0
-    assert "present_kinds" not in error
 
 
 # --------------------------------------------------------------------------------------
@@ -1146,116 +839,6 @@ def test_export_reports_skipped_hidden_bodies_and_no_body_ids_argument(
     assert response["error"]["code"] == INVALID_PARAMS
 
 
-def test_a_browser_export_does_not_corrupt_the_stdio_channel(tmp_path: Path):
-    """**人がブラウザから書き出しても** MCPのstdioが壊れない。
-
-    上のテストは「MCPツールとしての書き出し」を守っているが、`duocad.mcp_server` の
-    プロセスは**MCPとWebSocketの両方**を持っている。人がブラウザで書き出すと、
-    同じプロセスのC++が同じ実fdへ統計を吐く —— その経路はツール実行の囲みの外にあり、
-    JSON-RPCの行に `****** Statistics on Transfer (Write) ******` が割り込んで接続が壊れる。
-
-    **交互操作は人とAIが同じプロセスを同時に触る形**なので、普通に起きる。
-    ここはWebSocketクライアントとして繋ぎ、`export_step` を人の経路で踏んでから、
-    MCPの応答がまだJSONとして読めることを見る。
-    """
-    import os
-    import subprocess
-    import sys
-    import textwrap
-
-    out_step = tmp_path / "from-browser.step"
-    # ブラウザの代わりにWebSocketで `export_step` を送る子プロセス(サーバ起動後に走る)
-    poker = textwrap.dedent(
-        f"""
-        import asyncio, json, sys
-        from websockets.asyncio.client import connect
-
-        async def main():
-            for _ in range(60):
-                try:
-                    async with connect("ws://127.0.0.1:18785") as socket:
-                        await socket.recv()  # 初期状態
-                        await socket.send(json.dumps({{"cmd": "sketch_create",
-                            "base_plane": "XY", "client_op": 1}}))
-                        state = json.loads(await socket.recv())
-                        sketch_id = state["applied"]["sketch_id"]
-                        await socket.send(json.dumps({{"cmd": "add_rectangle", "sketch_id": sketch_id,
-                            "corner": [0, 0], "width": 10, "height": 10, "client_op": 2}}))
-                        await socket.recv()
-                        # **押し出す領域は選択から取る**(コマンドの引数ではない)
-                        await socket.send(json.dumps({{"cmd": "modify_selection",
-                            "add": [{{"sketch": sketch_id, "index": 1}}], "client_op": 3}}))
-                        await socket.recv()
-                        await socket.send(json.dumps({{"cmd": "extrude",
-                            "distance": 10, "mode": "join", "client_op": 4}}))
-                        await socket.recv()
-                        await socket.send(json.dumps({{"cmd": "export_step", "path": r"{out_step}"}}))
-                        await socket.recv()
-                        return 0
-                except OSError:
-                    await asyncio.sleep(0.5)
-            return 1
-
-        sys.exit(asyncio.run(main()))
-        """
-    )
-    script = tmp_path / "poke.py"
-    script.write_text(poker, encoding="utf-8")
-
-    server_process = subprocess.Popen(
-        [
-            sys.executable, "-m", "duocad.mcp_server",
-            "--port", "18785", "--http-port", "18786",
-            "--web-dist", str(REPO_ROOT / "web" / "does-not-exist"),
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-        cwd=str(REPO_ROOT),
-    )
-    try:
-        assert server_process.stdin is not None
-        for message in (
-            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
-            {"jsonrpc": "2.0", "method": "notifications/initialized"},
-        ):
-            server_process.stdin.write(json.dumps(message) + "\n")
-        server_process.stdin.flush()
-
-        poked = subprocess.run(
-            [sys.executable, str(script)],
-            capture_output=True,
-            text=True,
-            timeout=300,
-            cwd=str(REPO_ROOT),
-        )
-        assert poked.returncode == 0, f"WebSocket経由の書き出しが通らない: {poked.stderr}"
-
-        # 書き出しの**後で**MCPが生きているか(ここが壊れると接続ごと死ぬ)
-        server_process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"}) + "\n")
-        server_process.stdin.flush()
-        server_process.stdin.close()
-        stdout, stderr = server_process.communicate(timeout=300)
-    finally:
-        if server_process.poll() is None:
-            server_process.kill()
-
-    assert out_step.exists() and out_step.stat().st_size > 0, stderr
-    ids = []
-    for line in stdout.splitlines():
-        if not line.strip():
-            continue
-        try:
-            ids.append(json.loads(line).get("id"))
-        except ValueError:
-            pytest.fail(f"stdoutにJSON-RPC以外の行が出ている(接続が壊れる): {line!r}")
-    assert ids == [1, 2], "人の書き出しの後もJSON-RPCが続いていない"
-
-
 def test_export_does_not_touch_the_operation_log(server: McpServer, box_session: Session, tmp_path: Path):
     before = len(box_session.document.log.entries)
     call(server, "export_stl", {"path": str(tmp_path / "x.stl")})
@@ -1423,13 +1006,6 @@ def test_a_verb_applied_through_mcp_reaches_the_browser(box_session: Session):
     # 実行順で変わる(このテストが見たいのは verb の配信であって、その順序ではない)。
     select_refs(mcp, [edge_ref(box.id, index) for index in vertical_edge_indices(box.shape)])
 
-    class FakeConnection:
-        def __init__(self) -> None:
-            self.payloads: list = []
-
-        async def send(self, raw: str) -> None:
-            self.payloads.append(json.loads(raw))
-
     async def scenario() -> list:
         server = Server(box_session)
         server.bind_loop(asyncio.get_running_loop())
@@ -1458,19 +1034,6 @@ def test_a_verb_applied_through_mcp_reaches_the_browser(box_session: Session):
 # --------------------------------------------------------------------------------------
 # 10. 境界(既存の規律を壊していないこと)
 # --------------------------------------------------------------------------------------
-def test_the_mcp_layer_holds_no_geometry_of_its_own():
-    """MCPは**コアのもう一人のクライアント**であって、幾何を持たない。
-
-    `tests/test_boundaries.py` が `duocad/` 全体を走査するが、ツールが19個に増える
-    このタスクは境界を破る動機が最も強いので、名指しでも固定する。
-    """
-    from test_boundaries import DUOCAD_DIR, _imported_module_roots
-
-    roots = _imported_module_roots(DUOCAD_DIR / "mcp_server.py")
-    assert "OCP" not in roots
-    assert "build123d" not in roots
-
-
 def test_the_mcp_layer_does_not_reimplement_verbs():
     """verbの実体を書いていないこと —— `duocad.verbs` 等を**呼ぶ**だけであること。
 

@@ -1,7 +1,7 @@
 """OCP(OCCT)を直接叩く層。
 
-**duocad配下でOCP.*をimportしてよいのはこのモジュールだけ**(verbが直接OCPを叩き始めるのを
-防ぐための境界)。
+**duocad配下でOCP.*をimportしてよいのはカーネル層だけ**(verbが直接OCPを叩き始めるのを
+防ぐための境界。許可する表の正は README「モジュールとimport境界」)。
 
 戻り値はいずれも **JSON化できる素の値(float/int/str/list/dict)だけ**にする。OCPのオブジェクトを
 kernel の外へ出さないための規律で、境界テスト(importの静的検査)では捕まえられない側の約束。
@@ -642,6 +642,25 @@ def edge_axis(shape: "TopoDS_Shape", edge_index: int) -> tuple:
         [float(point.X()), float(point.Y()), float(point.Z())],
         [float(direction.X()), float(direction.Y()), float(direction.Z())],
     )
+
+
+def face_solid_indices(shape: "TopoDS_Shape") -> List[int]:
+    """面(`face_count` の1始まりの並び)ごとに、それを含む SOLID の0始まりの番号。どの SOLID にも無い面は -1。
+
+    まとめた形(`make_compound`)の三角形群を、ソリッドごとに閉じているかで検査するための対応表
+    (`topopt.voxelize.inspect_soup`)。"""
+    faces = _face_map(shape)
+    solids = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_SOLID, solids)
+    out = [-1] * faces.Extent()
+    for solid in range(1, solids.Extent() + 1):
+        own = TopTools_IndexedMapOfShape()
+        TopExp.MapShapes_s(solids.FindKey(solid), TopAbs_ShapeEnum.TopAbs_FACE, own)
+        for face in range(1, own.Extent() + 1):
+            index = faces.FindIndex(own.FindKey(face))
+            if index > 0 and out[index - 1] == -1:
+                out[index - 1] = solid - 1
+    return out
 
 
 def face_count(shape: "TopoDS_Shape") -> int:

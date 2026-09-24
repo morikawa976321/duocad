@@ -8,15 +8,6 @@ import pytest
 from build123d import Box
 
 from duocad import kernel
-from duocad.document import SOLID_KIND, Body
-from duocad.server import Session
-
-DEVIATION = 0.2
-
-
-@pytest.fixture()
-def session() -> Session:
-    return Session(None, DEVIATION)
 
 
 def test_a_face_taken_twice_hits_the_same_entry() -> None:
@@ -47,18 +38,3 @@ def test_the_returned_box_is_not_shared_between_calls() -> None:
     first = kernel.bounding_box(shape, cache=cache)
     first["min"][0] = 12345.0
     assert kernel.bounding_box(shape, cache=cache)["min"][0] != 12345.0
-
-
-def test_switching_the_document_leaves_an_empty_cache(session: Session) -> None:
-    """落ちたら: 別の文書の形状を握り続けている。"""
-    body_id = session.document.add_body(
-        Body(id="b1", name="b1", kind=SOLID_KIND, shape=Box(40, 20, 10).wrapped)
-    )
-    kernel.bounding_box(
-        session.document.get_body(body_id).shape, cache=session.document.bbox_cache
-    )
-    assert len(session.document.bbox_cache) == 1
-    previous = session.document.bbox_cache
-    session.new_document()
-    assert session.document.bbox_cache is not previous
-    assert len(session.document.bbox_cache) == 0

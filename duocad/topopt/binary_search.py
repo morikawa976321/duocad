@@ -26,12 +26,8 @@ from scipy import ndimage
 from duocad import kernel
 
 from . import acceptance, anchor, min_width
+from .acceptance import NEIGHBOURHOOD_STRUCTURE
 from .material import DEFAULT_ALLOWABLE_MPA, DEFAULT_YOUNGS_MODULUS_MPA
-
-# `acceptance.connectivity_check` と同じ6近傍の定義(§4.4 冒頭)。島処理の合否と
-# 最終の`connectivity_check`が別の近傍で数えると、ここで生かした成分が向こうで
-# 複数成分に見えることがある —— 定義は1箇所(この値)に揃える。
-NEIGHBOURHOOD_STRUCTURE = ndimage.generate_binary_structure(3, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +59,7 @@ class SearchConditions:
     bbox_cache: Any = None
     mapping: Any = None
     #: 保持・除外CADと格子セルの重なり体積の前計算(`acceptance.RegionOverlaps`)。探索1回のあいだ格子と
-    #: 条件は固定なので、この探索が1つ持ち、探索が終わったら捨てる。`None` なら候補ごとにブーリアンを取る旧経路。
+    #: 条件は固定なので、この探索が1つ持ち、探索が終わったら捨てる。`None` なら候補ごとにブーリアンを取る(直接ブーリアン)。
     region_overlaps: Any = field(default_factory=acceptance.RegionOverlaps)
     #: 保持ソリッド由来のセル(設計空間と同じ形の bool 配列、`DesignSpace.keep`。設計空間に含まれること)。
     #: 探索が作るどの候補でも材料のまま(`keep ⊆ mask`): `peel` は削らず、島の除去は全保持セルを含む成分だけを残す。
@@ -351,11 +347,11 @@ def _evaluate_survivor(survivor: np.ndarray, before: np.ndarray, conditions: Sea
                        *, parent: Optional[int], operation: str, history: list,
                        fields: Optional[dict] = None, overrides: Optional[dict] = None,
                        counter: Optional[dict] = None) -> tuple[dict, Trial]:
-    """1個の生存成分を検査し、history に記録する(段階3・4共通、§4.5の解法再試行を含む)。
+    """1個の生存成分を検査し、history に記録する(段階3・4共通)。
 
-    計算失敗(`unknown`、原因`evaluation_error`)は、同じマスク・条件のまま一度だけ
-    別解法で再試行する(§4.5「解法変更による再試行は有限の規則にする」)。それでも
-    `unknown` ならそのまま返す。
+    計算失敗(`unknown`、原因`evaluation_error`)は**解法を変えて再試行しない**。CG は収束すれば
+    残差検算(`fem.SOLVE_RESIDUAL_TOL`)を通る精度まで詰めてあり、収束しなければ `PreparedSystem.solve`
+    がその場で直接解法まで解いている —— 解法を替えた再試行は同じ分解の繰り返しにしかならない。
     `conditions.keep_cells` があれば、`survivor` が全保持セルを含むことをここで確かめる(破れたら例外。黙って塗り直さない)。
     `fields` / `overrides` は `acceptance.inspect` へそのまま渡す。`counter` を渡すと、
     FEMまで進んだ検査の回数を `counter['fem_solves']` に足す。
@@ -363,26 +359,14 @@ def _evaluate_survivor(survivor: np.ndarray, before: np.ndarray, conditions: Sea
     keep = _keep_cells(conditions, survivor.shape)
     if keep is not None and not survivor[keep].all():
         raise RuntimeError(f'評価に回る候補が保持セルを {int((keep & ~survivor).sum())} 個欠いている(探索が保持セルを空にした)')
-    kwargs = {**conditions.inspect_kwargs(), **(overrides or {})}
-
-    def evaluate(solver: str, label: str, parent_index: Optional[int]) -> tuple:
-        if fields is not None:
-            fields.clear()
-        report = acceptance.inspect(survivor, before, conditions.grid, **{**kwargs, 'solver': solver},
-                                    fields=fields)
-        if counter is not None and report['checks']['safety'].get('reason') != 'prerequisites_failed':
-            counter['fem_solves'] += 1
-        trial = _record_trial(history, parent_index, label, report)
-        history.append(trial)
-        return report, trial
-
-    report, trial = evaluate(conditions.solver, operation, parent)
-    if report['status'] == 'unknown' and report['checks']['safety'].get('reason') == 'evaluation_error':
-        # 反対側は方針(`'auto'`)ではなく実際に使った解法から見て決める(`auto` が選んだ解法をもう一度選ばない)。
-        used = report['checks']['safety'].get('solver') or conditions.solver
-        alternate = 'direct' if used != 'direct' else 'cg'
-        report, trial = evaluate(alternate, f'solver_retry:{alternate}', trial.index)
-        trial.note = f'同じマスク・条件で解法を{used}→{alternate}に変えて再試行'
+    if fields is not None:
+        fields.clear()
+    report = acceptance.inspect(survivor, before, conditions.grid,
+                                **{**conditions.inspect_kwargs(), **(overrides or {})}, fields=fields)
+    if counter is not None and report['checks']['safety'].get('reason') != 'prerequisites_failed':
+        counter['fem_solves'] += 1
+    trial = _record_trial(history, parent, operation, report)
+    history.append(trial)
     return report, trial
 
 
@@ -416,7 +400,7 @@ def find_initial_feasible(design_space_mask: np.ndarray, conditions: SearchCondi
 
     全材料が合格しなければ、候補を作らず `no_feasible_found` を返す(§4.2)。`termination` は、島を除いて条件を
     単独で満たす成分が無い・最小幅の規則を満たさない・6条件のどれかが不合格なら `full_material_infeasible`、
-    FEMの計算失敗(解法を変えた再試行の後も)だけなら `evaluation_error`。落ちた検査は
+    FEMの計算失敗だけなら `evaluation_error`。落ちた検査は
     `diagnostics['full_material']`(`islands` と、成分ごとの `attempts`: `trial` / `status` / `failed` / `checks`)。
     評価は bbox キャッシュも保持・除外の前計算も使わない(§3。段階4が戻り先にする合格形状なので)。
 
@@ -586,7 +570,7 @@ DEFAULT_TARGET_TOLERANCE: Optional[float] = 0.01
 #: 条件面が先に落ちて安全率まで進まなかった `prerequisites_failed` とも別に数える —— どちらも形状の判定だが、
 #: こちらは判定そのものが出ていない。**4 は実測で決めていない暫定値**(2026-09-24)。記録の I/O を計算から切り離した後に残る
 #: `evaluation_error` はソルバの発散など形状依存なので次の候補を試す価値がある一方、1候補の求解に 35 秒
-#: かかる実測があり、`DEFAULT_SINGLE_CELL_PATIENCE`(16) と同じだけ費やす理由が無い、という判断。
+#: かかる実測があり、`DEFAULT_SINGLE_CELL_PATIENCE` と同じだけ費やす理由が無い、という判断。
 DEFAULT_EVALUATION_ERROR_PATIENCE: Optional[int] = 4
 _CORNERS = tuple(product(range(2), repeat=3))
 
@@ -649,6 +633,10 @@ class PeelStats:
     skipped_core: int = 0
     already_removed: int = 0
     global_checks: int = 0
+    #: 芯の連結(S(m))の判定を、窓で「つながる」/ 窓で「割れる」/ 大域の数え直し、で答えた回数(`min_width.CoreConnectivity.stats`)。
+    core_window_true: int = 0
+    core_window_false: int = 0
+    core_global: int = 0
     seconds: float = 0.0
     #: 順位から選んだセル(手の先頭。巻き添えは含まない)の平坦添字(記録には出さない)。
     picked_cells: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64), repr=False)
@@ -869,6 +857,10 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
         stats.islands += island_cells
         picked.append(cell)
     stats.picked_cells = np.asarray(picked, dtype=np.int64)
+    if core is not None:
+        stats.core_window_true = int(core.stats['window_true'])
+        stats.core_window_false = int(core.stats['window_false'])
+        stats.core_global = int(core.stats['global_count'])
     stats.seconds = time.perf_counter() - started
     return np.ascontiguousarray(inner), stats
 
@@ -877,8 +869,8 @@ def _recheck_regions_without_precompute(best: FeasibleModel, seed: FeasibleModel
                                         conditions: SearchConditions) -> tuple[FeasibleModel, str]:
     """段階4が更新した `best` の保持・除外を、前計算(`region_overlaps`)を使わずブーリアンで取り直す(§3)。
 
-    段階4の評価は前計算から引くので、報告済みの合格は「前計算が旧経路と同じ答えを出す」ことに
-    乗っている。採用形状だけは旧経路で確かめ、通れば保持・除外の報告を旧経路の値に差し替えて返す。
+    段階4の評価は前計算から引くので、報告済みの合格は「前計算が直接ブーリアンと同じ答えを出す」ことに
+    乗っている。採用形状だけは直接ブーリアンで確かめ、通れば保持・除外の報告をその値に差し替えて返す。
     通らなければ、段階3でキャッシュ無しに再検査済みの `seed` を返す(呼び出し側が `best` との
     同一性で食い違いを見分ける)。`best` が `seed` のままなら何もしない(検査済み)。
     """
@@ -946,7 +938,7 @@ def _geometry_rejection_trial(history: list, candidate: np.ndarray, parent: Opti
     return trial
 
 
-def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditions: SearchConditions,
+def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
                    *, max_evaluations: int, is_cancelled,
                    step_exponent: float = DEFAULT_STEP_EXPONENT,
                    max_step_ratio: float = DEFAULT_MAX_STEP_RATIO,
@@ -986,7 +978,7 @@ def _reduce_volume(initial: SearchResult, design_space_mask: np.ndarray, conditi
 
     評価予算は両段階を通した1本なので `initial.evaluations` から数える(削る候補1つが1回)。
     評価は bbox キャッシュ無しで行うが、保持・除外の共通体積は前計算(`region_overlaps`)から引く。
-    採用形状はこの関数を出る前に前計算を使わない旧経路で取り直す(`_recheck_regions_without_precompute`)。
+    採用形状はこの関数を出る前に前計算を使わない直接ブーリアンで取り直す(`_recheck_regions_without_precompute`)。
 
     `on_evaluation(event: dict)` は出発形状で1回(`outcome='initial'`)、以降は評価に数えた候補ごとに1回、合格形状を更新した後で呼ぶ。
     `event` は素の値だけ: `evaluation`(通算の評価回数)/ `outcome`(`'initial'` / `'accepted'` / `'rejected'`)/ `failed` /
@@ -1212,7 +1204,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
                                     min_width_cells=min_width_cells, is_cancelled=is_cancelled)
     if initial.status != 'feasible':
         return initial
-    return _reduce_volume(initial, design_space_mask, conditions, max_evaluations=max_evaluations,
+    return _reduce_volume(initial, conditions, max_evaluations=max_evaluations,
                           is_cancelled=is_cancelled, step_exponent=step_exponent, max_step_ratio=max_step_ratio,
                           single_cell_patience=single_cell_patience, target_tolerance=target_tolerance,
                           evaluation_error_patience=evaluation_error_patience,

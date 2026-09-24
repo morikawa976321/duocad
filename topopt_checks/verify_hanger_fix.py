@@ -68,7 +68,7 @@ def _safety_summary(report: dict) -> dict:
     safety = report["checks"]["safety"]
     return dict(status=report["status"], checks={k: v["status"] for k, v in report["checks"].items()},
                 safety_factor=safety.get("safety_factor"), representative_mpa=safety.get("representative_mpa"),
-                raw_max_mpa=safety.get("raw_max_mpa"), relative_residual=safety.get("relative_residual"),
+                material_max_mpa=safety.get("material_max_mpa"), relative_residual=safety.get("relative_residual"),
                 max_displacement_mm=safety.get("max_displacement_mm"), solver=safety.get("solver"),
                 reason=safety.get("reason"), error=safety.get("error"),
                 material_mm3=report["volumes"]["material_mm3"], material_sha256=report["material_sha256"],

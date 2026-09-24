@@ -103,8 +103,8 @@ Dで未被覆の固定節点は、D内での削除・追加・置換では被覆
 回転した平面の解析解・格子細分・平行移動と格子位相・相反する2荷重・所有権競合で空になった面)と
 `tests/test_binary_search.py`(条件固定・入口停止・遅延生成・保持上限・生成中断・探索の継続性・
 最良候補。FEMとCADをスタブに置き換えた候補管理の検査を含み、48³格子で評価回数を8倍にしても実測
-メモリのピークが増えないことを見る)、製品経路の入口停止は
-`tests/test_optimize_backend.py::test_a_load_face_partly_buried_in_an_exclusion_stops_before_any_evaluation`。
+メモリのピークが増えないことを見る)。製品経路では、その入力(保持しない板に載った荷重面)を条件面の門
+`tests/test_optimize_backend.py::test_a_load_face_on_a_body_that_is_not_preserved_is_refused` が入口で断る。
 
 ### hanger の実測(`models/hanger_bar_attachment.json`、sha256 `d531c5ed…f042a5df`、目標安全率 2.0)
 
@@ -134,7 +134,7 @@ Dで未被覆の固定節点は、D内での削除・追加・置換では被覆
 |---|---|---|
 | 直接APIで対応付けの不合格を見逃す(節点が材料上に残れば、対応不能標本があっても進む) | `find_initial_feasible` の入口で、`table` が `AnchorTable` なら `condition_mapping` を全設計空間で検証し直す。渡された `conditions.mapping` と再検証のどちらかが不成立なら `boundary_mapping_failed`(候補生成0回・FEM0回、診断に `entry_mapping`) | `test_anchor_mapping.py::test_the_search_entry_rejects_unmapped_samples_even_when_every_node_is_on_material`、`test_binary_search.py::test_a_failed_mapping_report_stops_the_direct_api_even_when_every_node_is_on_material` |
 | 作用位置の精度判定が未完成(モーメントは記録だけ、基準は標本重心、重心の許容は取り違え検出用の3要素) | 基準をCAD面の面積重心へ。許容は `anchor.position_limit` = 対応付けの探索半径 r(重心のずれ ≤ r、モーメント誤差 ≤ r·\|F\|)で、両方を門にする。`_check_anchor_centroids` も同じ許容。根拠は `docs/TOPOPT.md`「境界条件の確定」 | `test_the_position_gate_measures_from_the_cad_centroid_within_the_search_radius`、`test_the_moment_gate_catches_a_load_vector_that_does_not_follow_the_assigned_areas` |
-| 無効候補を探し飛ばす間は中断・生成予算が効かない | `_scan_descriptors` が無効なブロックも None として1つずつ出し、`_pull` がブロックごとに中断と走査予算を見る。予算は調べたブロック数(既定 `max(64, セル数)` × 評価予算。根拠は計画書 §4.3 追記) | `test_binary_search.py::test_a_long_run_of_invalid_blocks_is_bounded_by_the_scan_budget_and_cancellation`(32³ で最後のブロックだけが有効な親: 予算100なら100ブロック、中断50回目なら50ブロックで止まる) |
+| 無効候補を探し飛ばす間は中断・生成予算が効かない | `_scan_descriptors` が無効なブロックも None として1つずつ出し、`_pull` がブロックごとに中断と走査予算を見る。予算は調べたブロック数(既定 `max(64, セル数)` × 評価予算。根拠は計画書 §4.3 追記) | `test_binary_search.py::test_a_long_run_of_invalid_blocks_is_bounded_by_the_scan_budget_and_cancellation`(32³ で最後のブロックだけが有効な親: 予算100なら100ブロック、中断50回目なら50ブロックで止まる)。2026-09-21 に段階3の探索ごと削除(計画書 §13) |
 
 hanger 4.8mm・予算60の再実行は、試行の履歴・採用マスクのハッシュ・終了理由(`evaluation_limit`、
 `ok` 11 / `no_component` 48)とも§9の記録と完全に一致した(走査の順序は変えていない)。作用位置の門は

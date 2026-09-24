@@ -6,54 +6,26 @@
     円筒の円い縁を面取り(距離1mm)     -> IsDone=True / plane 2 + cylinder_full 1 + cone 1 / 面4
 
 円錐は**円い辺**の面取りから生まれる(まっすぐな辺に沿って平らに削るのだから面も平ら)。
-
-`PC_case_feet.step`(PCケースの脚)の実測: 5面 = plane 3 + cylinder_full 1 + cone 1 /
-体積 11538.02 mm^3 / 境界箱 25.0 x 25.0 x 29.0 mm。
 """
 from __future__ import annotations
-
 
 import pytest
 
 from duocad import query
-from duocad.document import Body, Document
+from duocad.document import Document
 from duocad.region import region_ref
-from duocad.sketch import add_circle, add_rectangle, base_plane, sketch_create
+from duocad.sketch import add_circle, base_plane, sketch_create
 from duocad.verbs import chamfer, extrude
+from document_support import edges_of_kind, kinds_of, new_box
 
-#: PCケースの脚の実測
-FEET_KINDS = {"plane": 3, "cylinder_full": 1, "cone": 1}
 #: 円筒の円い縁を1つ面取りしたときの実測
 CYLINDER_CHAMFER_KINDS = {"plane": 2, "cylinder_full": 1, "cone": 1}
-
-
-def body_of(doc: Document, body_id: str) -> Body:
-    return next(body for body in doc.bodies if body.id == body_id)
-
-
-def kinds_of(doc: Document, body_id: str) -> dict:
-    described = query.describe_shape(body_of(doc, body_id).shape)
-    return {kind: count for kind, count in described["faces_by_type"].items() if count}
-
-
-def new_box(doc: Document, size: float = 20.0) -> str:
-    sketch_id = sketch_create(doc, base_plane("XY"))
-    add_rectangle(doc, sketch_id, (0.0, 0.0), size, size)
-    return extrude(doc, [region_ref(sketch_id, 1)], size, mode="join").args["body_id"]
 
 
 def new_cylinder(doc: Document, radius: float = 10.0, height: float = 5.0) -> str:
     sketch_id = sketch_create(doc, base_plane("XY"))
     add_circle(doc, sketch_id, (0.0, 0.0), radius)
     return extrude(doc, [region_ref(sketch_id, 1)], height, mode="join").args["body_id"]
-
-
-def edges_of_kind(doc: Document, body_id: str, kind: str) -> list:
-    return [
-        edge["index"]
-        for edge in query.describe_edges(body_of(doc, body_id).shape)
-        if edge["kind"] == kind
-    ]
 
 
 # --------------------------------------------------------------------------------------
@@ -96,7 +68,7 @@ def test_chamfer_is_logged_and_undoable():
     doc = Document()
     body_id = new_cylinder(doc)
     kinds_before = kinds_of(doc, body_id)
-    volume_before = query.volume(body_of(doc, body_id).shape)
+    volume_before = query.volume(doc.get_body(body_id).shape)
     circular = edges_of_kind(doc, body_id, "circle")
 
     operation = chamfer(doc, circular[:1], 1.0, body_id=body_id)
@@ -108,7 +80,7 @@ def test_chamfer_is_logged_and_undoable():
 
     doc.log.undo(doc)
     assert kinds_of(doc, body_id) == kinds_before
-    assert query.volume(body_of(doc, body_id).shape) == pytest.approx(volume_before)
+    assert query.volume(doc.get_body(body_id).shape) == pytest.approx(volume_before)
 
     doc.log.redo(doc)
     assert kinds_of(doc, body_id) == CYLINDER_CHAMFER_KINDS

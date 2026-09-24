@@ -153,6 +153,4 @@ def test_the_call_scan_actually_finds_the_calls() -> None:
     `bounding_box` を改名した日に上の検査が黙って無効化される。
     """
     calls = _bounding_box_calls()
-    # 2026-09-16 時点で3件(`mcp_server.py` 2件 + `optimize_run._condition_boxes` 1件。
-    # 条件面ごとの bounding_box は固定凸包への移行でボディ全体の箱1件に畳んだ)。
     assert len(calls) >= 3, f"duocad/ の中に bounding_box の呼び出しが {len(calls)} 件しか無い"

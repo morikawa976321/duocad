@@ -21,12 +21,10 @@ def verify_archive(path):
     result=records('result')[0]
     # **塊の導出は実行を通して1回だけ**(`derive`ステージがちょうど1回しか始まらない)。
     # 二値探索(`find_best_feasible`)は同じ `design_space_mask` の上で候補を作って検査する
-    # だけで、候補ごとに塊を作り直さない——旧方式(safety_loop の参照run・
-    # 候補ごとの切り出し)の段階はもう無い。
+    # だけで、候補ごとに塊を作り直さない。
     assert sum(1 for e in events if e['kind']=='begin' and e['name']=='derive')==1
     derived=records('derive-output')
     assert len(derived)==1 and len(records('derive-masks'))==1
-    assert not [e for e in snapshots if e['name'].startswith(('reference','derive-bbox','derive-candidate','candidate-input'))]
     assert derived[0]['stats']['derivation']==design_space.DERIVATION
     mask_hash=derived[0]['stats']['mask_hash']
     assert design_space.mask_digest(derived[0]['mask'])==mask_hash

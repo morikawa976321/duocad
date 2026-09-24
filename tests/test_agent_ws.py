@@ -2,8 +2,7 @@
 
 **`ai_*` はverbではない**(文書を直接は変えない・操作ログに載らない・undoの単位でもない)ので、
 `duocad/catalog.py` の `COMMANDS` には入れない。除外そのものは
-`test_ui_command_wiring.py::test_ai_commands_are_not_verbs` と
-`test_mcp_verbs.py::test_ai_commands_have_no_mcp_tool` が固定する。
+`test_ui_command_wiring.py::test_ai_commands_are_not_verbs` が固定する。
 
 固定する6つ:
 
@@ -30,75 +29,13 @@ import asyncio
 import json
 import time
 
-import pytest
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
-
-from duocad.agent.providers import (
-    Provider,
-    ProviderReply,
-    ToolCall,
-)
-from duocad.document import Body
 from duocad.mcp_server import DocumentTools
 from duocad.server import Server, Session
+from agent_support import RecordedProvider, spoke, tool_use
+from session_support import FakeConnection
 
 #: 本物ではない(`tests/test_agent_loop.py` と同じ形。このリポジトリに実キーは置かない)。
 FAKE_KEY = "sk-test-DO-NOT-USE-0123456789"
-
-BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
-
-
-@pytest.fixture()
-def box_session() -> Session:
-    made = Session(None, 0.2)
-    made.document.add_body(
-        Body(id="box", name="box", kind="solid", shape=BRepPrimAPI_MakeBox(BOX_X, BOX_Y, BOX_Z).Shape())
-    )
-    return made
-
-
-class FakeConnection:
-    """`Server` が使うのは `send` だけ(`test_feature_ui.py` と同じ形)。"""
-
-    def __init__(self) -> None:
-        self.payloads: list = []
-
-    async def send(self, raw: str) -> None:
-        self.payloads.append(json.loads(raw))
-
-    def of_type(self, type_: str) -> list:
-        return [p for p in self.payloads if p.get("type") == type_]
-
-
-def tool_use(name: str, arguments: dict, call_id: str = "call_1") -> ProviderReply:
-    call = ToolCall(id=call_id, name=name, arguments=arguments)
-    return ProviderReply(text="", tool_calls=(call,), stop_reason="tool_use", stop="tool_use")
-
-
-def spoke(text: str) -> ProviderReply:
-    return ProviderReply(text=text, stop_reason="end_turn", stop="end_turn")
-
-
-class RecordedProvider(Provider):
-    """`tests/test_agent_loop.py` と同じ形。任意で `delay` だけ `complete()` を遅らせる
-    (中断のテストが「まだ次のツールを呼んでいない間」に割り込む余地を作るため)。
-    """
-
-    name = "recorded"
-
-    def __init__(self, replies, *, delay: float = 0.0) -> None:
-        self.model = "recorded"
-        self.replies = list(replies)
-        self.delay = delay
-
-    def complete(self, *, system, turns, tools, max_tokens, timeout) -> ProviderReply:
-        if self.delay:
-            time.sleep(self.delay)
-        assert self.replies, "偽プロバイダの応答が尽きた"
-        reply = self.replies.pop(0)
-        if isinstance(reply, Exception):
-            raise reply
-        return reply
 
 
 def build_server(session: Session, loop: asyncio.AbstractEventLoop) -> Server:

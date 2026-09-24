@@ -23,10 +23,10 @@ from duocad.sketch import (
     sketch_create,
 )
 from duocad.verbs import extrude, pattern_circular
+from document_support import corner_set as _corner_set, drill_all, hole_axes
 
 PLATE_SIZE = 60.0
 PLATE_THICKNESS = 10.0
-HOLE_DEPTH = 20.0  # 板(z=0..10)を貫く
 
 #: 反復の中心（板の中央）と、そこから離した最初の穴
 CENTER = (30.0, 30.0)
@@ -53,20 +53,6 @@ def hole_ring(document: Document, count: int = COUNT, total_angle: float = 360.0
         document, sketch_id, [circle], CENTER, count, total_angle=total_angle
     )
     return sketch_id, circle, pattern_id
-
-
-def drill_all(document: Document, sketch_id: str) -> None:
-    refs = [region_ref(sketch_id, region.index) for region in regions(document, sketch_id)]
-    extrude(document, refs, HOLE_DEPTH, mode="cut")
-
-
-def hole_axes(shape) -> list:
-    """全周円筒面の重心は軸上にある（`test_pattern.py` と同じ流儀）。"""
-    return sorted(
-        (round(face["centroid"][0], 6), round(face["centroid"][1], 6))
-        for face in kernel.tessellate(shape)["faces"]
-        if face["kind"] == "cylinder_full"
-    )
 
 
 def angles_from_center(points: list) -> list:
@@ -195,54 +181,28 @@ def test_a_single_copy_needs_no_step():
 # rotate_copies
 # --------------------------------------------------------------------------------------
 def test_rotate_copies_false_keeps_the_original_orientation():
-    """`rotate_copies=False` なら複製の向きは元と同じ。
+    """`rotate_copies=False` の複製は元と同じ向き(中心から見た4隅が元と一致する)。
 
-    **回転非対称な図形（長方形）で確かめる** — 円は回転対称なので、向きを変えても
-    変えなくても同じ形になり、検証にならない。向きが同じなら、各複製の境界箱の
-    幅と高さは元と同じ（回転させると幅と高さが入れ替わる／斜めになって広がる）。
+    落ちたら、複製が回っている。題材は正方形でない長方形(円や正方形は90度回しても区別が付かない)。
     """
     document = Document()
     sketch_id = sketch_create(document, "XY")
-    # 幅と高さが違う長方形（正方形だと回転しても区別が付かない）
     rect = add_rectangle(document, sketch_id, (36.0, 28.0), 8.0, 4.0)
     pattern_circular(
         document, sketch_id, [rect], CENTER, 4, total_angle=360.0, rotate_copies=False
     )
 
-    found = regions(document, sketch_id)
-    assert len(found) == 4
-    for region in found:
-        assert math.isclose(region.area, 8.0 * 4.0, rel_tol=1e-6)
+    expanded = _expanded_entities(document, sketch_id)
+    assert len(expanded) == 4
+    shapes = [_corners_about_centre(item["params"]) for item in expanded]
+    assert all(shape == pytest.approx(shapes[0], abs=1e-9) for shape in shapes)
 
 
-def _corner_set(params: dict) -> list:
-    """4隅を「順序に依らない集合」として比べられる形へ(丸めてソートするだけ)。
-
-    **角度の値そのものは期待値にしない** —— 同じ4隅を張る `angle` と基準の角の組は
-    複数あり(90度ごとにどの隅を基準に取るかの自由度がある)、実装が選んだ組を固定すると
-    形が正しくても落ちるテストになる。
-    """
-    return sorted(
-        (round(u, 9), round(v, 9)) for u, v in kernel.rectangle_corners(params)
-    )
-
-
-def test_rotate_copies_true_actually_rotates_the_rectangle():
-    """`rotate_copies=True`（既定）なら複製は回転する。
-
-    面積が変わっていたら、4隅の張り方が壊れている。
-    """
-    document = Document()
-    sketch_id = sketch_create(document, "XY")
-    rect = add_rectangle(document, sketch_id, (36.0, 28.0), 8.0, 4.0)
-    pattern_circular(
-        document, sketch_id, [rect], CENTER, 4, total_angle=360.0, rotate_copies=True
-    )
-
-    found = regions(document, sketch_id)
-    assert len(found) == 4
-    for region in found:
-        assert math.isclose(region.area, 8.0 * 4.0, rel_tol=1e-6), "回転で面積が変わってはいけない"
+def _corners_about_centre(params: dict) -> list:
+    corners = kernel.rectangle_corners(params)
+    cu = sum(u for u, _ in corners) / len(corners)
+    cv = sum(v for _, v in corners) / len(corners)
+    return sorted((round(u - cu, 9), round(v - cv, 9)) for u, v in corners)
 
 
 def test_rotated_copies_of_a_rectangle_are_all_rectangles():
@@ -348,7 +308,7 @@ def test_pattern_survives_save_load_and_replay():
 # --------------------------------------------------------------------------------------
 # 失敗を黙って通さない
 # --------------------------------------------------------------------------------------
-#: 0 / 負 / 非整数の3分岐は `test_pattern.py` が網羅済み(`_is_positive_int` は共有)。
+#: 0 / 負 / 非整数の3分岐は `test_pattern.py` が網羅済み(`parameters.is_positive_int` は共有)。
 #: ここは呼び出し口の配線確認なので境界の 0 だけ通す。
 @pytest.mark.parametrize("count", [0])
 def test_count_must_be_a_positive_integer(count):

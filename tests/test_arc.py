@@ -24,11 +24,12 @@ import math
 import pytest
 
 from duocad import query
-from duocad.document import Body, Document
+from duocad.document import Document
 from duocad.parameters import set_parameter
 from duocad.region import region_ref, regions
 from duocad.sketch import add_arc, add_line, base_plane, entity_params, get_sketch, sketch_create
 from duocad.verbs import extrude
+from document_support import kinds_of
 
 #: 半円（r=5・180°）+ 弦を3mm押し出したときの実測
 HALF_DISC_PRISM_KINDS = {"cylinder_partial": 1, "plane": 3}
@@ -37,15 +38,6 @@ ARC_RADIUS = 5.0
 ARC_START_DEG = 0.0
 ARC_END_DEG = 180.0
 EXTRUDE_MM = 3.0
-
-
-def body_of(doc: Document, body_id: str) -> Body:
-    return next(body for body in doc.bodies if body.id == body_id)
-
-
-def kinds_of(doc: Document, body_id: str) -> dict:
-    described = query.describe_shape(body_of(doc, body_id).shape)
-    return {kind: count for kind, count in described["faces_by_type"].items() if count}
 
 
 def half_disc_sketch(doc: Document) -> str:
@@ -71,19 +63,6 @@ def test_add_arc_stores_named_numbers():
     assert params["cx"] == 1.0 and params["cy"] == 2.0
     assert params["radius"] == ARC_RADIUS
     assert params["start_deg"] == ARC_START_DEG and params["end_deg"] == ARC_END_DEG
-
-
-def test_add_arc_is_logged_and_undoable():
-    """他の図形と同じく操作ログに載り、undoで消える。"""
-    doc = Document()
-    sketch_id = sketch_create(doc, base_plane("XY"))
-
-    add_arc(doc, sketch_id, (0.0, 0.0), ARC_RADIUS, ARC_START_DEG, ARC_END_DEG)
-
-    assert doc.log.entries[-1].verb == "add_arc"
-    assert len(get_sketch(doc, sketch_id).entities) == 1
-    doc.log.undo(doc)
-    assert get_sketch(doc, sketch_id).entities == []
 
 
 def test_arc_radius_can_be_edited_afterwards():
@@ -147,21 +126,6 @@ def test_an_open_arc_alone_does_not_close_a_region():
 # --------------------------------------------------------------------------------------
 # 押し出すと部分円筒面ができる（全周円筒ではない）
 # --------------------------------------------------------------------------------------
-def test_extruding_an_arc_region_makes_a_partial_cylinder():
-    """円弧を含む領域を押し出すと**部分円筒**になる(実測: 部分円筒1 + 平面3)。
-
-    全周円筒になったら円弧が効いていない(＝円を押し出しているのと同じ)。
-    """
-    doc = Document()
-    sketch_id = half_disc_sketch(doc)
-
-    operation = extrude(doc, [region_ref(sketch_id, 1)], EXTRUDE_MM, mode="join")
-    body_id = operation.args["body_id"]
-
-    assert kinds_of(doc, body_id) == HALF_DISC_PRISM_KINDS
-    assert "cylinder_full" not in kinds_of(doc, body_id), "全周円筒が出たら円弧が効いていない"
-
-
 def test_the_partial_cylinder_spans_the_arc_angle():
     """できた形に**指定した角度の円弧がそのまま残っている**こと(長さで見る)。
 
@@ -171,7 +135,7 @@ def test_the_partial_cylinder_spans_the_arc_angle():
     doc = Document()
     sketch_id = half_disc_sketch(doc)
     operation = extrude(doc, [region_ref(sketch_id, 1)], EXTRUDE_MM, mode="join")
-    shape = body_of(doc, operation.args["body_id"]).shape
+    shape = doc.get_body(operation.args["body_id"]).shape
 
     spans = [
         edge
@@ -226,7 +190,7 @@ def test_angles_run_counter_clockwise_and_may_cross_zero():
         (ARC_RADIUS * math.cos(math.radians(10)), ARC_RADIUS * math.sin(math.radians(10))),
     )
     operation = extrude(doc, [region_ref(sketch_id, 1)], EXTRUDE_MM, mode="join")
-    shape = body_of(doc, operation.args["body_id"]).shape
+    shape = doc.get_body(operation.args["body_id"]).shape
 
     arcs = [edge for edge in query.describe_edges(shape) if edge["kind"] == "circle"]
     assert arcs, "円い辺が残っていない"

@@ -32,8 +32,7 @@
  * 選択(コア側の共有状態)は再入場をまたいで生き残るが、距離・種別の入力(CommandHost
  * ローカルの状態)は失われる。そのため`regionsStillExist`(b)の分岐は**通常のUI操作では
  * 到達できない**ことが構造的に確定しており(領域を変えうる全 `resets_selection` verbが例外なく
- * `resets_selection=True` を持つため。過不足の固定は
- * `tests/test_server_selection_reset.py::test_resets_selection_is_declared_on_exactly_these_verbs`)、
+ * `resets_selection=True` を持つため。宣言は `duocad/catalog.py`)、
  * ロジック自体の正しさは `window.__duocad.regionsStillExist` を直接呼んで検算する
  * (詳細はApp.svelteの同名関数のdocstringとコード中のコメント)。
  *
@@ -609,9 +608,7 @@ async function main() {
     //
     // なぜ通常のUI操作では到達できないか: 領域を変えうる全 `resets_selection` verb(`add_line` 等の作図・
     // `set_parameter`・`pattern_rectangular`/`pattern_circular`・`undo`/`redo`)は
-    // `duocad/catalog.py` で例外なく `resets_selection=True` を持つ
-    // (`tests/test_server_selection_reset.py::test_resets_selection_is_declared_on_exactly_these_verbs`
-    // が過不足なく固定)。したがって「選んだ領域が消える」操作が起きた瞬間、コアの選択は
+    // `duocad/catalog.py` で例外なく `resets_selection=True` を持つ。したがって「選んだ領域が消える」操作が起きた瞬間、コアの選択は
     // 必ず同時に空になる。`CommandHost` は生きた `selection` を見て確定を許すかどうかを
     // 決めるので、選択が空になった時点で `runCommand` 自体が呼ばれなくなり、
     // その内側にある `regionsStillExist` のfalse分岐へ**構造的に到達できない**

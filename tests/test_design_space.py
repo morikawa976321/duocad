@@ -10,8 +10,7 @@
    外接箱は事前の三角形分割に依存しない。
 3. **条件の保持と接続** —— 全条件を個別に見る(一部だけつながる配置は落ちる)/ 条件を含まない
    成分だけを落とす / 角1点の接触はつながっていない / 保持と除外の衝突は名前付きで落ちる。
-4. **固定性と記録** —— 塊は読み取り専用でハッシュが安定 / 記録には `derive` が1回だけ出て
-   旧方式の段階が出ない。
+4. **固定性と記録** —— 塊は読み取り専用でハッシュが安定 / 記録には `derive` の段が1回だけ出る。
 """
 from __future__ import annotations
 
@@ -57,13 +56,14 @@ def _one_box_conditions(at=(0.0, 0.0, 0.0), size=(20.0, 10.0, 10.0)):
     )
 
 
-def _two_pads_conditions(offset=(40.0, 30.0, 0.0), obstacle=None):
-    """離れた2つのパッド。固定側の -x 面が拘束、荷重側の +z 面が荷重。"""
-    left = _box((10.0, 10.0, 10.0), (0.0, 0.0, 0.0))
-    right = _box((10.0, 10.0, 10.0), offset)
+def _two_pads_conditions(offset=(40.0, 30.0, 0.0), obstacle=None, shift=(0.0, 0.0, 0.0)):
+    """離れた2つのパッド(左の中心が `shift`、右はそこから `offset`)。固定側の -x 面が拘束、荷重側の +z 面が荷重。"""
+    at = tuple(s + o for s, o in zip(shift, offset))
+    left = _box((10.0, 10.0, 10.0), shift)
+    right = _box((10.0, 10.0, 10.0), at)
     keep = left + right
-    fixed = _face(keep, (-1, 0, 0), (-5.0, 0.0, 0.0))
-    load = _face(keep, (0, 0, 1), (offset[0], offset[1], offset[2] + 5.0))
+    fixed = _face(keep, (-1, 0, 0), (shift[0] - 5.0, shift[1], shift[2]))
+    load = _face(keep, (0, 0, 1), (at[0], at[1], at[2] + 5.0))
     return ds.Conditions(
         keep=keep,
         fixed_faces=fixed,
@@ -132,28 +132,11 @@ def test_translation_moves_the_space_with_the_bodies() -> None:
     shift = (7.5, -3.25, 11.0)
     base = ds.derive(_two_pads_conditions(), spacing=2.5)
     moved = ds.derive(
-        _two_pads_conditions_shifted(shift), spacing=2.5
+        _two_pads_conditions(shift=shift), spacing=2.5
     )
     assert moved.grid.shape == base.grid.shape
     assert np.allclose(np.asarray(moved.grid.origin) - np.asarray(base.grid.origin), shift)
     assert np.array_equal(moved.mask, base.mask)
-
-
-def _two_pads_conditions_shifted(shift):
-    left = _box((10.0, 10.0, 10.0), shift)
-    right = _box((10.0, 10.0, 10.0), (40.0 + shift[0], 30.0 + shift[1], shift[2]))
-    keep = left + right
-    fixed = _face(keep, (-1, 0, 0), (shift[0] - 5.0, shift[1], shift[2]))
-    load = _face(keep, (0, 0, 1), (40.0 + shift[0], 30.0 + shift[1], shift[2] + 5.0))
-    return ds.Conditions(
-        keep=keep,
-        fixed_faces=fixed,
-        load_faces=load,
-        bodies=(
-            ds.condition_body("left", left, roles=("keep", "fixed")),
-            ds.condition_body("right", right, roles=("keep", "load")),
-        ),
-    )
 
 
 def test_the_margin_is_a_ratio_of_the_longest_edge_of_the_point_cloud() -> None:
@@ -430,6 +413,72 @@ def test_an_obstacle_straddling_the_grid_edge_removes_only_its_inside_part() -> 
     assert cut.stats["obstacle_occupancy"].get("skipped") is None
 
 
+@pytest.mark.parametrize("where", ["between_columns", "grazing_the_grid_edge"])
+def test_an_obstacle_that_no_column_passes_through_is_zero_cells(where) -> None:
+    """落ちたら、格子と重なっているのに列の中心を1本も通らない除外(列の間の薄い壁・格子の縁をかすめる大きな
+    取り付け先)で「ずらしが全部縮退した」の例外になり、塊の導出ごと止まる(issue #29)。"""
+    plain = ds.derive(_one_box_conditions(), spacing=1.75)
+    grid = plain.grid
+    if where == "between_columns":
+        columns = grid.centers_1d(0)
+        wall = _box((0.3 * grid.spacing, 30.0, 30.0), ((columns[1] + columns[2]) / 2, 0.0, 0.0))
+    else:
+        wall = _box((100.0, 40.0, 40.0), (float(grid.world_box()[1][0]) + 50.0 - 0.1 * grid.spacing, 0.0, 0.0))
+    base = _one_box_conditions()
+    conditions = ds.Conditions(keep=base.keep, fixed_faces=base.fixed_faces, load_faces=base.load_faces,
+                               obstacle=wall, bodies=base.bodies)
+    space = ds.derive(conditions, spacing=1.75)
+    assert space.stats["obstacle_occupancy"]["empty"]
+    assert np.array_equal(space.mask, plain.mask)
+
+
+def test_keep_bodies_all_smaller_than_an_element_are_reported_not_raised() -> None:
+    """落ちたら、保持ボディが全部要素サイズより小さいとき、まとめた形を数え直す段で「ずらしが全部縮退した」の
+    例外になり、取りこぼし(`unrepresented_bodies`)の報告まで届かない(issue #34)。"""
+    plate = _box((20.0, 10.0, 10.0), (0.0, 0.0, 0.0))
+    tiny = _box((0.5, 0.5, 0.5), (3.0, 0.0, 0.0))
+    conditions = ds.Conditions(
+        keep=tiny,
+        fixed_faces=_face(plate, (-1, 0, 0), (-10.0, 0.0, 0.0)),
+        load_faces=_face(plate, (1, 0, 0), (10.0, 0.0, 0.0)),
+        anchor_shape=plate,
+        bodies=(ds.condition_body("tiny", tiny, roles=("keep",)),
+                ds.condition_body("plate", plate, roles=("fixed", "load"))),
+    )
+    space = ds.derive(conditions, spacing=1.75)
+    assert space.stats["unrepresented_bodies"] == ["tiny"]
+    assert not space.keep.any()
+
+
+@pytest.mark.parametrize("second", [
+    ((10.0, 10.0, 10.0), (10.0, 0.0, 0.0)),   # 面で接する
+    ((10.0, 10.0, 10.0), (0.0, 0.0, 3.0)),    # 重なる
+    ((4.0, 4.0, 4.0), (0.0, 0.0, 0.0)),       # 入れ子
+], ids=["touching", "overlapping", "nested"])
+def test_keep_and_condition_bodies_that_touch_or_overlap_are_accepted(second) -> None:
+    """落ちたら、保持・条件のボディが面で接する・重なる・入れ子のとき、まとめた形(`make_compound`)を1つの
+    閉じた表面として検査して例外になる(組み立てたモデルでは普通の入力。issue #28)。"""
+    from duocad import kernel
+
+    left = _box((10.0, 10.0, 10.0), (0.0, 0.0, 0.0))
+    right = _box(*second)
+    keep = kernel.make_compound([left.wrapped, right.wrapped])
+    right_lo, right_hi = vx._shape_bbox(right.wrapped)
+    top = ((right_lo[0] + right_hi[0]) / 2, (right_lo[1] + right_hi[1]) / 2, right_hi[2])
+    conditions = ds.Conditions(
+        keep=keep,
+        fixed_faces=_face(keep, (-1, 0, 0), (-5.0, 0.0, 0.0)),
+        load_faces=_face(keep, (0, 0, 1), top),
+        anchor_shape=keep,
+        bodies=(ds.condition_body("left", left, roles=("keep", "fixed")),
+                ds.condition_body("right", right, roles=("keep", "load"))),
+    )
+    space = ds.derive(conditions, elements_long_axis=LONG_AXIS)
+    for body in (left, right):
+        alone, _ = vx.occupancy(vx.triangles_from_shape(body.wrapped, deviation=0.1), space.grid, allow_empty=True)
+        assert np.all(space.keep[alone])
+
+
 def test_an_obstacle_that_eats_a_keep_body_is_a_named_conflict() -> None:
     eater = _box((14.0, 14.0, 14.0), (0.0, 0.0, 0.0))  # 固定側パッドを丸ごと覆う
     with pytest.raises(ds.DesignSpaceConflictError) as caught:
@@ -470,7 +519,7 @@ def test_the_mask_is_read_only_and_the_hash_is_reproducible() -> None:
     assert ds.mask_digest(flipped) != first.mask_hash
 
 
-def test_the_recording_has_one_derive_stage_and_no_reference_stages(tmp_path, monkeypatch) -> None:
+def test_the_recording_has_one_derive_stage(tmp_path, monkeypatch) -> None:
     from duocad.topopt import trace
 
     monkeypatch.setattr(trace, "DEFAULT_ROOT", tmp_path)
@@ -481,7 +530,6 @@ def test_the_recording_has_one_derive_stage_and_no_reference_stages(tmp_path, mo
     assert names.count("derive-input.json") == 1
     assert names.count("derive-output.json") == 1
     assert names.count("derive-masks.json") == 1
-    assert not [n for n in names if n.startswith(("reference", "derive-bbox", "derive-candidate"))]
     recorded = trace.load_snapshot(next(rec.path.glob("*-derive-output.json")))
     assert np.array_equal(recorded["mask"], space.mask)
     assert recorded["stats"]["mask_hash"] == space.mask_hash

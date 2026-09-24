@@ -55,8 +55,11 @@ def _face_count(body) -> int:
 #: 形状最適化の4 verb も**量を持つ引数**を積む(`faces` / `previous*` は面の指紋つきで、
 #: 面を数十枚選べば1操作で数KB)。履歴パネルが要るのは件数だけなので同じ扱いにする ——
 #: **`previous` が数値の操作(`set_parameter`)は素通りする**(下の射影は文字列と配列しか
-#: 置き換えない)。
-_REDACTED_LOG_ARGS = ("step", "entities", "faces", "previous", "previous_faces")
+#: 置き換えない)。`add_mesh_body` の三角形(`positions` / `indices`)も同じ —— 形状最適化の結果は
+#: 約11万面あり、配ると以後の全操作の配信に数MBが乗る(5万三角形で 387 B → 2.29 MB に膨らんだ)。
+_REDACTED_LOG_ARGS = (
+    "step", "entities", "faces", "previous", "previous_faces", "positions", "indices",
+)
 
 
 def _log_args_for_state(args: dict) -> dict:
@@ -458,10 +461,7 @@ class DocumentView:
                     "pattern_id": pattern.id,
                     "kind": pattern.kind,
                     "sources": list(pattern.sources),
-                    "params": {
-                        key: parameters.resolve(self.document, ref)
-                        for key, ref in pattern.params.items()
-                    },
+                    "params": parameters.resolve_all(self.document, pattern.params),
                     "refs": {
                         key: ref if isinstance(ref, str) else None
                         for key, ref in pattern.params.items()

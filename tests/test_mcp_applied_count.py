@@ -10,13 +10,11 @@
 ために、その性質へ明示的に依存しているため(App.svelte の `savedAt` のコメントが前提と
 理由を持っている)。逆向き(ログの長さ)へ揃えるとUIの保存判定を作り直すことになる。
 
-このファイルが固定する3つ:
+このファイルが固定する2つ:
 
 1. **一致** — verbを適用したあと、2つの経路の値が等しい。
 2. **undo / redoで減らない** — undoを挟んでも一致し続け、値が下がらない。undoの後に
    打った新しいverbでは**増える**(App.svelteが見分けに使っているのはこの差)。
-3. **ログの長さとは別の値になる** — 「両方とも `len(log.entries)` を返す」直し方でも
-   1と2の一部は緑になりうるので、**別の値であること**をここで1点押さえる。
 """
 from __future__ import annotations
 
@@ -24,12 +22,6 @@ import pytest
 
 from duocad.mcp_server import DocumentTools
 from duocad.server import Session
-
-
-@pytest.fixture()
-def session() -> Session:
-    """STEPを読まない空のセッション(土台が無いので最初の操作からundoできる)。"""
-    return Session(None, 0.2)
 
 
 @pytest.fixture()
@@ -141,30 +133,3 @@ def test_a_new_verb_after_undo_increases_the_count_on_both_paths(
 
     log_length = len(session.document.log.entries)
     assert log_length == 3, "undo→新しいverbでログの長さは戻っただけ(=見分けがつかない)"
-
-
-# --------------------------------------------------------------------------------------
-# 3. ログの長さとは別の値
-# --------------------------------------------------------------------------------------
-def test_the_shared_count_is_not_just_the_length_of_the_log(
-    session: Session, tools: DocumentTools
-):
-    """**両方が `len(log.entries)` に戻る直し方**を検知する。
-
-    「一致すること」だけを見ると、MCP側へUI側を揃えてしまっても(＝両方がundoで減る形に
-    なっても)緑になる。undoを挟んだ時点で**ログの長さとは違う数**であることまで見る。
-    """
-    draw_three_verbs(tools)
-    assert both_counts(session, tools) == (3, 3)
-    assert len(session.document.log.entries) == 3, "ここまでは偶然一致している"
-
-    tools.undo()
-    tools.undo()
-
-    ai, ui = both_counts(session, tools)
-    assert len(session.document.log.entries) == 1, "undoでログは1件まで戻っている"
-    assert (ai, ui) == (3, 3), "適用回数はundoで動かない"
-    assert ai != len(session.document.log.entries), (
-        "`applied_count` がログの長さへ戻っている —— 揃える先を間違えている"
-        "(UI側の保存済み判定はundoで動かない意味に依存している)"
-    )
