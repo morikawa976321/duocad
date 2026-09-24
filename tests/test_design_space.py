@@ -56,13 +56,14 @@ def _one_box_conditions(at=(0.0, 0.0, 0.0), size=(20.0, 10.0, 10.0)):
     )
 
 
-def _two_pads_conditions(offset=(40.0, 30.0, 0.0), obstacle=None):
-    """離れた2つのパッド。固定側の -x 面が拘束、荷重側の +z 面が荷重。"""
-    left = _box((10.0, 10.0, 10.0), (0.0, 0.0, 0.0))
-    right = _box((10.0, 10.0, 10.0), offset)
+def _two_pads_conditions(offset=(40.0, 30.0, 0.0), obstacle=None, shift=(0.0, 0.0, 0.0)):
+    """離れた2つのパッド(左の中心が `shift`、右はそこから `offset`)。固定側の -x 面が拘束、荷重側の +z 面が荷重。"""
+    at = tuple(s + o for s, o in zip(shift, offset))
+    left = _box((10.0, 10.0, 10.0), shift)
+    right = _box((10.0, 10.0, 10.0), at)
     keep = left + right
-    fixed = _face(keep, (-1, 0, 0), (-5.0, 0.0, 0.0))
-    load = _face(keep, (0, 0, 1), (offset[0], offset[1], offset[2] + 5.0))
+    fixed = _face(keep, (-1, 0, 0), (shift[0] - 5.0, shift[1], shift[2]))
+    load = _face(keep, (0, 0, 1), (at[0], at[1], at[2] + 5.0))
     return ds.Conditions(
         keep=keep,
         fixed_faces=fixed,
@@ -131,28 +132,11 @@ def test_translation_moves_the_space_with_the_bodies() -> None:
     shift = (7.5, -3.25, 11.0)
     base = ds.derive(_two_pads_conditions(), spacing=2.5)
     moved = ds.derive(
-        _two_pads_conditions_shifted(shift), spacing=2.5
+        _two_pads_conditions(shift=shift), spacing=2.5
     )
     assert moved.grid.shape == base.grid.shape
     assert np.allclose(np.asarray(moved.grid.origin) - np.asarray(base.grid.origin), shift)
     assert np.array_equal(moved.mask, base.mask)
-
-
-def _two_pads_conditions_shifted(shift):
-    left = _box((10.0, 10.0, 10.0), shift)
-    right = _box((10.0, 10.0, 10.0), (40.0 + shift[0], 30.0 + shift[1], shift[2]))
-    keep = left + right
-    fixed = _face(keep, (-1, 0, 0), (shift[0] - 5.0, shift[1], shift[2]))
-    load = _face(keep, (0, 0, 1), (40.0 + shift[0], 30.0 + shift[1], shift[2] + 5.0))
-    return ds.Conditions(
-        keep=keep,
-        fixed_faces=fixed,
-        load_faces=load,
-        bodies=(
-            ds.condition_body("left", left, roles=("keep", "fixed")),
-            ds.condition_body("right", right, roles=("keep", "load")),
-        ),
-    )
 
 
 def test_the_margin_is_a_ratio_of_the_longest_edge_of_the_point_cloud() -> None:

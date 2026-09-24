@@ -168,11 +168,17 @@ export function createOptimizeAnnotations(deps: OptimizeAnnotationsDeps): Optimi
             : direction === '-normal'
               ? measured.normal.clone().negate()
               : measured.normal.clone()
-        const arrow = new THREE.ArrowHelper(dir, measured.center, length, OPTIMIZE_LOAD_COLOR, length * 0.3, length * 0.18)
+        // **押す向き(面の内側へ向く荷重)は、矢の先を面に当てて外側から描く。** 面から荷重の向きへ
+        // 伸ばすと矢が固体の中に入って深度テストで隠れ、薄い部品では反対の面から突き出て
+        // そちらへの荷重に見える。引く向きは面から外へ伸ばす。
+        const pushes = dir.dot(measured.normal) < 0
+        const tail = pushes ? measured.center.clone().addScaledVector(dir, -length) : measured.center.clone()
+        const arrow = new THREE.ArrowHelper(dir, tail, length, OPTIMIZE_LOAD_COLOR, length * 0.3, length * 0.18)
         optimizeRoot.add(arrow)
         optimizeDisposables.push(arrow) // `ArrowHelper.dispose()` が線・矢頭の材質を片付ける
         const { sprite, disposables } = makeMagnitudeLabel(labelText, labelHeight)
-        sprite.position.copy(measured.center).addScaledVector(dir, length * 1.15)
+        // ラベルは面から遠い側の端(引く向きは矢の先の先、押す向きは矢の根元の手前)。
+        sprite.position.copy(measured.center).addScaledVector(dir, pushes ? -length * 1.15 : length * 1.15)
         optimizeRoot.add(sprite)
         optimizeDisposables.push(...disposables)
         optimizeAnnotationInfo.loads.push({

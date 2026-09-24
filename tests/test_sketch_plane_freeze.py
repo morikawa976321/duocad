@@ -27,12 +27,12 @@ from duocad.region import region_ref
 from duocad.sketch import (
     add_circle,
     add_rectangle,
-    base_plane,
     face_plane,
     get_sketch,
     sketch_create,
 )
 from duocad.verbs import extrude
+from document_support import all_edges, assert_same_frame, new_box
 
 BOX = 20.0
 #: 直方体の上面(z=BOX・法線+Z)の面添字。`new_box` の直後は必ずこれになる(実測)。
@@ -44,20 +44,6 @@ PLUS_X_FACE_INDEX = 3
 # --------------------------------------------------------------------------------------
 # 道具（duocadのverbだけで素材を作る。生のOCPで組み立てない = tests/test_fillet.py と同じ）
 # --------------------------------------------------------------------------------------
-def new_box(doc: Document, width: float = BOX, depth: float = BOX, height: float = BOX) -> str:
-    """スケッチ(長方形)→押し出しで直方体を1つ作り body_id を返す。
-
-    長方形の名前つきの値は追加順に `d1`=x / `d2`=y / `d3`=width / `d4`=height。
-    """
-    sketch_id = sketch_create(doc, base_plane("XY"))
-    add_rectangle(doc, sketch_id, (0.0, 0.0), width, depth)
-    return extrude(doc, [region_ref(sketch_id, 1)], height, mode="join").args["body_id"]
-
-
-def all_edges(doc: Document, body_id: str) -> list:
-    return [edge["index"] for edge in query.describe_edges(doc.get_body(body_id).shape)]
-
-
 def live_frame(doc: Document, body_id: str, face_index: int) -> dict:
     """**その瞬間の** `body.shape` の面から枠を取る(凍結前の古い解決の再現)。"""
     return kernel.face_frame(doc.get_body(body_id).shape, face_index)
@@ -74,15 +60,6 @@ def top_plane_indices(doc: Document, body_id: str, z: float) -> list:
     return found
 
 
-def assert_same_frame(actual: dict, expected: dict) -> None:
-    for key in ("origin", "u", "v", "normal"):
-        assert len(actual[key]) == 3
-        for got, want in zip(actual[key], expected[key]):
-            assert math.isclose(got, want, rel_tol=0.0, abs_tol=1.0e-9), (
-                f"{key}: {actual[key]} != {expected[key]}"
-            )
-
-
 # --------------------------------------------------------------------------------------
 # 1. 作成後の形状変更は姿勢を動かさない
 # --------------------------------------------------------------------------------------
@@ -94,7 +71,7 @@ def test_a_later_fillet_does_not_move_a_face_sketch_even_when_the_index_now_land
     引き直していたため `ValueError: face is other: ...` で描画ごと落ちていた。
     """
     document = Document()
-    body_id = new_box(document)
+    body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
     add_circle(document, sketch_id, (0.0, 0.0), 4.0)
     frame_before = region.plane_frame(document, sketch_id)
@@ -127,7 +104,7 @@ def test_a_face_sketch_survives_the_referenced_face_disappearing_completely():
     平面が残るので、「面積が完全に0」を作れるのは切削の側である。
     """
     document = Document()
-    body_id = new_box(document)
+    body_id = new_box(document, BOX)
     kept = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
     add_circle(document, kept, (0.0, 0.0), 4.0)
     frame_before = region.plane_frame(document, kept)
@@ -160,7 +137,7 @@ def test_extrude_takes_its_direction_from_the_frozen_frame():
     向きだけ別経路で解いていると、面取り後に**押し出しだけが別の面の法線へ**静かに移る。
     """
     document = Document()
-    body_id = new_box(document)
+    body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
     add_circle(document, sketch_id, (0.0, 0.0), 4.0)
 
@@ -185,7 +162,7 @@ def test_a_face_sketch_follows_a_parameter_edit_that_precedes_it():
     x=20 から x=30 へ**ついていく**(向きは変わらない)。凍結によってここが止まってはいけない。
     """
     document = Document()
-    body_id = new_box(document)
+    body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, PLUS_X_FACE_INDEX))
     add_circle(document, sketch_id, (0.0, 0.0), 3.0)
     before = region.plane_frame(document, sketch_id)
@@ -217,7 +194,7 @@ def test_the_frozen_frame_equals_the_live_resolution_at_creation_time_for_every_
     直方体の6面には反転面が3枚あるので、この検査で両方の系を通る。
     """
     document = Document()
-    body_id = new_box(document)
+    body_id = new_box(document, BOX)
     faces = query.describe_faces(document.get_body(body_id).shape)
     assert len(faces) == 6
 
@@ -247,7 +224,7 @@ def test_the_frame_is_kept_out_of_the_oplog():
     ログが持つのは `kind`/`body`/`index`/`provenance`。姿勢は再生のたびに解き直す。
     """
     document = Document()
-    body_id = new_box(document)
+    body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
 
     logged = [
@@ -264,7 +241,7 @@ def test_a_log_round_trip_reproduces_the_same_frames():
     ではない** —— そこが「作成時点で固定する」の実体である。
     """
     document = Document()
-    body_id = new_box(document)
+    body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
     add_circle(document, sketch_id, (0.0, 0.0), 4.0)
 
@@ -286,7 +263,7 @@ def test_a_log_round_trip_reproduces_the_same_frames():
 def test_undo_and_redo_of_the_fillet_leave_the_sketch_pose_alone():
     """フィレットの取り消し・やり直しでスケッチの姿勢が揺れない。"""
     document = Document()
-    body_id = new_box(document)
+    body_id = new_box(document, BOX)
     sketch_id = sketch_create(document, face_plane(body_id, TOP_FACE_INDEX))
     add_circle(document, sketch_id, (0.0, 0.0), 4.0)
     expected = region.plane_frame(document, sketch_id)
@@ -314,7 +291,7 @@ def test_a_face_plane_without_a_frame_still_resolves_from_the_given_face():
     ValueError —— 黙って基準平面へ落とさない。
     """
     document = Document()
-    body_id = new_box(document)
+    body_id = new_box(document, BOX)
     shape = document.get_body(body_id).shape
     bare = {"kind": "face", "body": body_id, "index": TOP_FACE_INDEX, "provenance": None}
 

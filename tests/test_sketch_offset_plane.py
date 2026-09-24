@@ -21,41 +21,20 @@ import pytest
 from duocad import kernel, query, region
 from duocad.document import Document
 from duocad.oplog import OpLog
-from duocad.region import region_ref
 from duocad.sketch import (
     BASE_PLANES,
     add_circle,
-    add_rectangle,
     base_plane,
     face_plane,
     offset_plane,
     resolve_plane,
     sketch_create,
 )
-from duocad.verbs import extrude
+from document_support import all_edges, assert_same_frame, new_box
 
 BOX = 20.0
 #: 直方体の上面(z=BOX・法線+Z)の面添字。`new_box` の直後は必ずこれになる(実測)。
 TOP_FACE_INDEX = 6
-
-
-def new_box(doc: Document) -> str:
-    """スケッチ(長方形)→押し出しで20mm立方体を1つ作り body_id を返す(duocadのverbだけ)。"""
-    sketch_id = sketch_create(doc, base_plane("XY"))
-    add_rectangle(doc, sketch_id, (0.0, 0.0), BOX, BOX)
-    return extrude(doc, [region_ref(sketch_id, 1)], BOX, mode="join").args["body_id"]
-
-
-def all_edges(doc: Document, body_id: str) -> list:
-    return [edge["index"] for edge in query.describe_edges(doc.get_body(body_id).shape)]
-
-
-def assert_same_frame(actual: dict, expected: dict) -> None:
-    for key in ("origin", "u", "v", "normal"):
-        for got, want in zip(actual[key], expected[key]):
-            assert math.isclose(got, want, rel_tol=0.0, abs_tol=1.0e-9), (
-                f"{key}: {actual[key]} != {expected[key]}"
-            )
 
 
 # --------------------------------------------------------------------------------------
@@ -91,7 +70,7 @@ def test_a_zero_distance_coincides_with_the_base_plane():
 def test_an_offset_from_a_face_stacks_on_top_of_the_frozen_face_frame():
     """面からのオフセットは、まず面参照そのものを凍結してから平行移動する。"""
     document = Document()
-    body_id = new_box(document)
+    body_id = new_box(document, BOX)
     face_frame = kernel.face_frame(document.get_body(body_id).shape, TOP_FACE_INDEX)
 
     sketch_id = sketch_create(
@@ -116,7 +95,7 @@ def test_a_later_fillet_does_not_move_an_offset_from_face_sketch():
     おく価値がある(2026-08-30の事故の再発点そのものであるため)。
     """
     document = Document()
-    body_id = new_box(document)
+    body_id = new_box(document, BOX)
     sketch_id = sketch_create(
         document, offset_plane(face_plane(body_id, TOP_FACE_INDEX), 3.0)
     )
@@ -146,7 +125,7 @@ def test_an_offset_from_every_face_including_reversed_ones_keeps_the_faces_uv_ax
     6面すべて(反転面3枚を含む実測済みの構成)で確かめる。
     """
     document = Document()
-    body_id = new_box(document)
+    body_id = new_box(document, BOX)
     shape = document.get_body(body_id).shape
     faces = query.describe_faces(shape)
     assert len(faces) == 6
@@ -184,7 +163,7 @@ def test_offsetting_an_offset_plane_is_rejected():
 def test_the_frame_is_kept_out_of_the_oplog():
     """ログには姿勢を載せない(貼る先の面の枠も落とす)。落ちたら、焼き付けた枠がログへ漏れている。"""
     document = Document()
-    body_id = new_box(document)
+    body_id = new_box(document, BOX)
     sketch_create(document, offset_plane(face_plane(body_id, TOP_FACE_INDEX), 5.0))
 
     logged = document.log.entries[-1]
@@ -209,7 +188,7 @@ def test_sketch_create_offset_logs_its_own_verb_name():
 
 def test_a_log_round_trip_reproduces_the_same_frame():
     document = Document()
-    body_id = new_box(document)
+    body_id = new_box(document, BOX)
     sketch_id = sketch_create(
         document, offset_plane(face_plane(body_id, TOP_FACE_INDEX), 4.0)
     )

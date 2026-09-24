@@ -4,10 +4,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad import kernel, selection
 from duocad.document import Body, Document
@@ -17,25 +15,11 @@ from duocad.selection import set_visible
 from duocad.server import Session
 from duocad.sketch import add_circle, sketch_create
 from duocad.verbs import extrude_face
-
-#: 立方体ではなく直方体にする。3辺の長さが違えば「Zに平行な辺だけ」を選ぶ述語(test_predicates)が
-#: 長さでも区別でき、添字の偶然の一致でテストが通ってしまう余地が減る。
-BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
+from document_support import box_shape as _box_shape
+from session_support import session_with_box
 
 #: 押し出し量(mm)。文書を実際に変えるために使う。
 EXTRUDE_MM = 5.0
-
-
-def _box_shape(dx: float = BOX_X, dy: float = BOX_Y, dz: float = BOX_Z):
-    return BRepPrimAPI_MakeBox(dx, dy, dz).Shape()
-
-
-@pytest.fixture()
-def doc() -> Document:
-    """直方体のソリッドを1つ持つ文書(面6・辺12・頂点8)。"""
-    document = Document()
-    document.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
-    return document
 
 
 @pytest.fixture()
@@ -61,15 +45,13 @@ def sketch_doc():
 
 
 @pytest.fixture()
-def session(tmp_path: Path) -> Session:
+def session() -> Session:
     """STEPを読まないセッション(選択の契約は形状の中身に依存しない)。"""
-    made = Session(None, 0.2)
-    made.document.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
-    return made
+    return session_with_box()
 
 
 def _first_extrudable_face(shape) -> int:
-    """押し出しに成功する最初の面の1始まり添字(添字の決め打ちを避ける。test_visibility.pyと同じ流儀)。"""
+    """押し出しに成功する最初の面の1始まり添字(添字の決め打ちを避ける)。"""
     for index in range(1, kernel.face_count(shape) + 1):
         try:
             kernel.extrude_face_on_shape(shape, index, EXTRUDE_MM)

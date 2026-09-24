@@ -237,7 +237,8 @@ Claude Desktopのセッションに縛られる。1.2のHTTPのような後付�
   片方だけ直った状態に気づけない。ツール数も宣言から数えるので、verbを足しても古くならない。
 - ツールの実行時エラーは JSON-RPC エラーではなく `isError: true` の構造化封筒
   （`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
-  `selection_kind_mismatch` / `invalid_predicate` / `internal`）。
+  `selection_kind_mismatch` / `invalid_predicate` / `busy` / `internal`）。
+  `busy` は形状最適化の実行中に文書を変えるツールを呼んだとき（選択・表示の切り替え・書き出しは通る）。
   `selection_empty` は確定選択が**丸ごと空**のとき、`selection_kind_mismatch` は
   **空ではないが要求した種別が無い**とき（例: フィレットを呼んだが面3枚が確定している）。
   後者は実際に確定している種別と件数を `present_kinds` で返すので、選び直す先が引数なしで分かる。

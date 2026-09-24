@@ -19,26 +19,12 @@ from __future__ import annotations
 from typing import List
 
 import pytest
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad import selection
 from duocad.document import Body, Document
 from duocad.selection import modify_selection, ref_key, same_ref
 from duocad.sketch import add_circle, sketch_create
-
-BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
-
-
-def _box_shape(dx: float = BOX_X, dy: float = BOX_Y, dz: float = BOX_Z):
-    return BRepPrimAPI_MakeBox(dx, dy, dz).Shape()
-
-
-@pytest.fixture()
-def doc() -> Document:
-    """直方体を1つ持つ文書(面6・辺12・頂点8)。"""
-    document = Document()
-    document.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
-    return document
+from document_support import box_shape as _box_shape
 
 
 @pytest.fixture()

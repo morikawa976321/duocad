@@ -77,6 +77,7 @@ from . import (
     sketch,
 )
 from .document import Document
+from .session import DocumentBusy
 from .server import (
     DEFAULT_WEB_DIST,
     MCP_HTTP_PATH,
@@ -421,6 +422,14 @@ class DocumentTools:
             "tool": tool,
             "exception": type(error).__name__,
         }
+        # 形状最適化の実行中に文書を変えようとした。**引数を直しても通らない**ので `invalid_argument` に
+        # 落とさない(AIが値を変えて打ち直し続ける)。待つか、人に中断を頼むしかない。
+        if isinstance(error, DocumentBusy):
+            return {
+                **base,
+                "code": "busy",
+                "hint": "a shape optimization is running; wait until it finishes or the user cancels it",
+            }
         if isinstance(error, (KeyError, FileNotFoundError)):
             return {**base, "code": "not_found"}
         # 提案のまま verb へ渡した拒否。文言ではなく型で判定する(決定3が禁じた潰し方を防ぐ)。
@@ -487,7 +496,7 @@ class DocumentTools:
     # 3. **失敗も封筒に入れて返す。** `{"error": {"code","message","tool","exception", ...}}`
     #    を `json.dumps` した本文 + `isError: true`。コードは次の語彙に限る
     #    (`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
-    #    `selection_kind_mismatch` / `invalid_predicate` / `internal`)。**例外のテキストを
+    #    `selection_kind_mismatch` / `invalid_predicate` / `busy` / `internal`)。**例外のテキストを
     #    素で返さない。** **`FileNotFoundError` を忘れない** —— パスの間違いは AI が直せる
     #    誤りなので、`internal` に落とすと諦める。
     #

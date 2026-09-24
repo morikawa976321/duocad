@@ -13,24 +13,13 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from duocad import selection
 from duocad.document import Body
 from duocad.server import Session
-
-BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
+from session_support import select as _select, session_with_box
 
 
 @pytest.fixture()
 def session() -> Session:
     """30×30×40の直方体を1つ持つセッション(空の文書に手で立てる。STEPは読まない)。"""
-    made = Session(None, 0.2)
-    made.document.add_body(
-        Body(id="box", name="box", kind="solid", shape=BRepPrimAPI_MakeBox(BOX_X, BOX_Y, BOX_Z).Shape())
-    )
-    return made
-
-
-def _select(session: Session, refs: list) -> None:
-    """選択を `refs` で置き換える(人がクリックで選び直すのと同じ入口)。"""
-    session.clear_selection()
-    session.modify_selection(refs, [])
+    return session_with_box()
 
 
 def _edge(index: int) -> dict:

@@ -23,10 +23,10 @@ from duocad.sketch import (
     sketch_create,
 )
 from duocad.verbs import extrude, pattern_circular
+from document_support import corner_set as _corner_set, drill_all, hole_axes
 
 PLATE_SIZE = 60.0
 PLATE_THICKNESS = 10.0
-HOLE_DEPTH = 20.0  # 板(z=0..10)を貫く
 
 #: 反復の中心（板の中央）と、そこから離した最初の穴
 CENTER = (30.0, 30.0)
@@ -53,20 +53,6 @@ def hole_ring(document: Document, count: int = COUNT, total_angle: float = 360.0
         document, sketch_id, [circle], CENTER, count, total_angle=total_angle
     )
     return sketch_id, circle, pattern_id
-
-
-def drill_all(document: Document, sketch_id: str) -> None:
-    refs = [region_ref(sketch_id, region.index) for region in regions(document, sketch_id)]
-    extrude(document, refs, HOLE_DEPTH, mode="cut")
-
-
-def hole_axes(shape) -> list:
-    """全周円筒面の重心は軸上にある（`test_pattern.py` と同じ流儀）。"""
-    return sorted(
-        (round(face["centroid"][0], 6), round(face["centroid"][1], 6))
-        for face in kernel.tessellate(shape)["faces"]
-        if face["kind"] == "cylinder_full"
-    )
 
 
 def angles_from_center(points: list) -> list:
@@ -217,18 +203,6 @@ def _corners_about_centre(params: dict) -> list:
     cu = sum(u for u, _ in corners) / len(corners)
     cv = sum(v for _, v in corners) / len(corners)
     return sorted((round(u - cu, 9), round(v - cv, 9)) for u, v in corners)
-
-
-def _corner_set(params: dict) -> list:
-    """4隅を「順序に依らない集合」として比べられる形へ(丸めてソートするだけ)。
-
-    **角度の値そのものは期待値にしない** —— 同じ4隅を張る `angle` と基準の角の組は
-    複数あり(90度ごとにどの隅を基準に取るかの自由度がある)、実装が選んだ組を固定すると
-    形が正しくても落ちるテストになる。
-    """
-    return sorted(
-        (round(u, 9), round(v, 9)) for u, v in kernel.rectangle_corners(params)
-    )
 
 
 def test_rotated_copies_of_a_rectangle_are_all_rectangles():

@@ -24,11 +24,12 @@ import math
 import pytest
 
 from duocad import query
-from duocad.document import Body, Document
+from duocad.document import Document
 from duocad.parameters import set_parameter
 from duocad.region import region_ref, regions
 from duocad.sketch import add_arc, add_line, base_plane, entity_params, get_sketch, sketch_create
 from duocad.verbs import extrude
+from document_support import kinds_of
 
 #: 半円（r=5・180°）+ 弦を3mm押し出したときの実測
 HALF_DISC_PRISM_KINDS = {"cylinder_partial": 1, "plane": 3}
@@ -37,15 +38,6 @@ ARC_RADIUS = 5.0
 ARC_START_DEG = 0.0
 ARC_END_DEG = 180.0
 EXTRUDE_MM = 3.0
-
-
-def body_of(doc: Document, body_id: str) -> Body:
-    return next(body for body in doc.bodies if body.id == body_id)
-
-
-def kinds_of(doc: Document, body_id: str) -> dict:
-    described = query.describe_shape(body_of(doc, body_id).shape)
-    return {kind: count for kind, count in described["faces_by_type"].items() if count}
 
 
 def half_disc_sketch(doc: Document) -> str:
@@ -143,7 +135,7 @@ def test_the_partial_cylinder_spans_the_arc_angle():
     doc = Document()
     sketch_id = half_disc_sketch(doc)
     operation = extrude(doc, [region_ref(sketch_id, 1)], EXTRUDE_MM, mode="join")
-    shape = body_of(doc, operation.args["body_id"]).shape
+    shape = doc.get_body(operation.args["body_id"]).shape
 
     spans = [
         edge
@@ -198,7 +190,7 @@ def test_angles_run_counter_clockwise_and_may_cross_zero():
         (ARC_RADIUS * math.cos(math.radians(10)), ARC_RADIUS * math.sin(math.radians(10))),
     )
     operation = extrude(doc, [region_ref(sketch_id, 1)], EXTRUDE_MM, mode="join")
-    shape = body_of(doc, operation.args["body_id"]).shape
+    shape = doc.get_body(operation.args["body_id"]).shape
 
     arcs = [edge for edge in query.describe_edges(shape) if edge["kind"] == "circle"]
     assert arcs, "円い辺が残っていない"

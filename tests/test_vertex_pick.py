@@ -17,66 +17,15 @@
 from __future__ import annotations
 
 import ast
-import asyncio
-import json
 from pathlib import Path
 
 import pytest
 
 from duocad import catalog, kernel, query, selection
-from duocad.server import SELECTION_CONSUMING_COMMANDS, Server, Session
+from duocad.server import SELECTION_CONSUMING_COMMANDS, Session
+from session_support import SIDE, box as _box, browser as _browser
 
-DEVIATION = 0.2
-SIDE = 20.0
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture()
-def session() -> Session:
-    return Session(None, DEVIATION)
-
-
-class FakeConnection:
-    """`Server` が使うのは `send` だけ(`test_feature_ui.py` と同じ形)。"""
-
-    def __init__(self) -> None:
-        self.payloads: list = []
-
-    async def send(self, raw: str) -> None:
-        self.payloads.append(json.loads(raw))
-
-
-def _browser(session: Session, script):
-    """`script(send)` を1つのイベントループで走らせる。**2本つなぐ**(配信先の検証のため)。"""
-
-    async def scenario():
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        clients = [FakeConnection(), FakeConnection()]
-        for client in clients:
-            server.clients.add(client)
-            await server._push(client, applied=None, only=client)
-        for client in clients:
-            client.payloads.clear()
-
-        async def send(command: dict) -> dict:
-            await server._dispatch(clients[0], json.dumps(command))
-            return clients[0].payloads[-1]
-
-        return await script(send), clients
-
-    return asyncio.run(scenario())
-
-
-def _box(session: Session):
-    """スケッチ→長方形→領域押し出しで 20mm の立方体を1つ作る(人の順序そのもの)。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
-    session.clear_selection()
-    session.modify_selection([{"sketch": sketch_id, "index": 1}], [])
-    session.extrude(SIDE, mode="join")
-    session.clear_selection()
-    return session.document.bodies[-1], sketch_id
 
 
 # --------------------------------------------------------------------------------------

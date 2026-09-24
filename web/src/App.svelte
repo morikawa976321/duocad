@@ -41,9 +41,10 @@
     OPTIMIZE_EMPTY_START_VERBS,
     OPTIMIZE_MODE_COMMANDS,
     OPTIMIZE_PRESET_ROLE,
+    OPTIMIZE_ROLE_LABEL,
   } from './commands/optimize'
   import OptimizePanel, { type OptimizeNotice } from './OptimizePanel.svelte'
-  import { judgeMinWidth, minWidthProblem } from './minWidth'
+  import { judgeMinWidth, minWidthProblem, shownMinWidthMm } from './minWidth'
   import {
     DEFAULT_SKETCH_COMMAND_ID,
     SKETCH_COMMANDS,
@@ -264,6 +265,11 @@
    */
   let toggleOnlyOptimizeSet = $state(false)
   /**
+   * 集合 verb の起動時に表示へ戻した非表示ボディの `set_visible` の応答待ち。**全部戻ってから**
+   * 既存の割り当てを選択に並べる(`onCommandStart`)。描画には使わないので普通の変数でよい。
+   */
+  let pendingOptimizePreset: { role: 'preserve_bodies' | 'exclude_bodies' | 'fixtures'; ops: Set<number> } | null = null
+  /**
    * 起動中のコマンドが**基準平面を要求している**か(`CommandHost` が知らせる)。
    * 辺と同じ規律で、要求している間だけビューポートで指せるようにする。
    */
@@ -464,6 +470,9 @@
       if (next !== 'open') {
         edgesAsked.clear()
         verticesAsked.clear()
+        // 実行の押下への返事(`optimize_status` / `optimize_error`)はもう来ない。走っているかは
+        // 繋ぎ直したときにサーバが最初に送る `optimize_status` で取り直す。
+        optimizeStarting = false
       }
     },
     onPreview: handlePreview,
@@ -478,6 +487,7 @@
     onOptimizeResolution: (payload) => (optimizeResolution = payload),
     onOptimizeStatus: (running, cancelling) => {
       optimizeRunning = running
+      optimizeStarting = false
       // **中断中の印は「走っている間」だけ**。走り終わったら畳む —— 畳まないと、
       // 次に実行を押した瞬間に中断表示から始まって見える。
       optimizeCancelling = running && cancelling ? true : running ? optimizeCancelling : false
@@ -485,7 +495,14 @@
     onOptimizeProgress: (event) => (optimizeProgress = event),
     onOptimizeDebug: handleOptimizeDebug,
     onOptimizeResult: handleOptimizeResult,
-    onOptimizeError: (message, problems, cancelled) => {
+    onOptimizeError: (message, problems, cancelled, alreadyRunning) => {
+      optimizeStarting = false
+      // **別の実行が走っているという断りは、その実行の表示を消さない**(進捗の行も通知も
+      // その実行のもの)。トーストで知らせるだけにする。
+      if (alreadyRunning) {
+        fail(`最適化: ${message}`)
+        return
+      }
       optimizeProgress = null
       // **中断はエラーではない**(人がそう言ったのだから、赤いトーストで驚かせない)。
       // パネルには残す —— 「押したのに何も増えていない」の理由が画面から読める必要がある。
@@ -518,6 +535,11 @@
    *  下限割れが続いているあいだ(1文字打つごと等)にトーストを連打しないための状態。 */
   let optimizeMinWidthWasInvalid = false
   let optimizeRunning = $state(false)
+  /** 実行を押してからサーバの返事(`optimize_status` / `optimize_error`)が届くまで。**二度押しを止める**
+   *  —— 返事が戻るまで実行ボタンが押せたままだと、2回目が「既に走っている」の断りになる。 */
+  let optimizeStarting = $state(false)
+  /** 走っている、または走り出すところ。**文書を変える操作を画面から出さない**(サーバも断る)。 */
+  const optimizeBusy = $derived(optimizeRunning || optimizeStarting)
   let optimizeCancelling = $state(false)
   let optimizeProgress = $state<OptimizeProgress | null>(null)
   /** **次に走らせるまで消えない通知**(トーストは時間で消えるので、結果の信用度はこちら)。 */
@@ -531,6 +553,8 @@
   })
 
   function runOptimization(): void {
+    if (optimizeBusy) return
+    optimizeStarting = true
     optimizeProgress = null
     optimizeNotice = null
     // **前の実行のデバッグ表示を捨ててから走らせる。** 残すと、新しい条件を解いている
@@ -574,6 +598,18 @@
     optimizeMinWidthWasInvalid = invalidNow
   }
 
+  /** 文書を差し替えたとき、前の文書について出していた最適化の表示を戻す。 */
+  function resetOptimizeView(): void {
+    optimizeNotice = null
+    optimizeProgress = null
+    optimizeStepIndex = 0
+    optimizeMinWidthMm = null
+    optimizeMinWidthWasInvalid = false
+    optimizeResolution = null
+    optimizeConditions = null
+    clearOptimizeDebug()
+  }
+
   // ---------------------------------------------------------------- H2: 開発用のデバッグ表示
   //
   // **URLパラメータでだけ出る**(`debugFlags.ts`)。フラグが1つも立っていなければ、
@@ -586,9 +622,11 @@
   const debugFlags: DebugFlags = readDebugFlags(
     typeof location === 'undefined' ? '' : location.search,
   )
-  let optimizeDebugSpace = $state<OptimizeDebugPayload | null>(null)
-  let optimizeDebugRho = $state<OptimizeDebugPayload | null>(null)
-  let optimizeDebugAnchors = $state<OptimizeDebugPayload | null>(null)
+  // **`$state.raw`**(丸ごと差し替えるだけ)。深い `$state` にすると最大15万要素の配列が
+  // プロキシで包まれ、下の `$effect` が読むたびに要素ごとの追跡を払う。
+  let optimizeDebugSpace = $state.raw<OptimizeDebugPayload | null>(null)
+  let optimizeDebugRho = $state.raw<OptimizeDebugPayload | null>(null)
+  let optimizeDebugAnchors = $state.raw<OptimizeDebugPayload | null>(null)
   /** `?voxel=1` のときだけ入る、隠す結果ボディ。**表示だけ**(文書には触れない)。 */
   let optimizeDebugHiddenBodyId = $state<string | null>(null)
 
@@ -668,8 +706,9 @@
         `目標 ${short(result.target_safety_factor)} × 係数 ${short(result.search_target_factor)}`
       const material = result.material_mm3 === null ? '—' : Math.round(result.material_mm3).toLocaleString()
       // `result.min_width.source` で既定/明示を見分ける(`duocad/optimize_run._resolve_min_width`)。
+      // **保証値は切り捨てて出す**(`minWidth.ts` の規律。四捨五入だと 4.9998mm が「5mm」になる)。
       const minWidth =
-        `最小幅 ${short(result.min_width.guaranteed_mm)}mm(` +
+        `最小幅 ${shownMinWidthMm(result.min_width.guaranteed_mm)}mm(` +
         (result.min_width.source === 'default' ? '既定: 要素サイズの2倍・1mmの大きい方' : '指定') +
         ')'
       optimizeNotice = {
@@ -805,6 +844,12 @@
       // 「自分が出した操作か」の突き合わせだけ(表示切り替えは `pendingOp` を立てない
       // 経路なので、印は `myClientOps` の側が持っている)。
       if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
+      // 集合 verb の起動時に表示へ戻したボディが全部戻ったら、既存の割り当てを並べる(`onCommandStart`)。
+      const preset = pendingOptimizePreset
+      if (preset !== null && applied.client_op !== null && preset.ops.delete(applied.client_op) && preset.ops.size === 0) {
+        pendingOptimizePreset = null
+        presetSelection(next.optimize[preset.role])
+      }
       return
     }
     if (applied && applied.change === 'document') {
@@ -818,6 +863,9 @@
       // どこにも書かれていないので `null`(＝常に未保存)へ戻す。`next` は上で `model` に
       // 入れた今回の状態で、開いた版の `applied_count` / 操作数がもう入っている。
       savedAt = applied.name === null ? null : [next.applied_count, next.log.length]
+      // **前の文書の最適化の表示を持ち越さない**(結果の通知・解像度の段・最小幅・`?voxel=1` で
+      // 隠した結果ボディ)。段の添字は目盛りが文書ごとに違うので、既定(いちばん粗い)へ戻す。
+      resetOptimizeView()
       // **開いた(`open_document`)ときだけ視点を合わせ直す。** 文書のスケールが不連続に
       // 変わるのは import_step と同じくここだけ(実測: 小さな部品→大きな板を保存し、開き直すと
       // 前の文書の視点のまま端が画面外に出た)。**新規(`new_document`)は空の文書**なので
@@ -1343,10 +1391,32 @@
     return faceRef(bodyId, faceIndex)
   }
 
+  /**
+   * **保持/除外ソリッド・拘束面の集合 verb の間のピックの規則**(クリック `onPick` と矩形選択
+   * `onBoxSelect` で共有する)。
+   *
+   * - 素の操作もトグル(`toggleOnlyOptimizeSet`)。起動した時点で既存の割り当てが選択状態で
+   *   現れる集合代入なので、置き換えのままだと足すたびに他の割り当てを全部外してしまう。
+   *   この3つの間だけ `wantedKinds` が `'body'` 単独か `'face'` 単独になる
+   *   (`commands/optimize.ts` の宣言)ので、他のverbの面ピック(押し出す面等)には効かない。
+   * - 保持/除外ソリッドの間はボディ粒度。`wantedKinds` に `'body'` が立つのは
+   *   `SET_PRESERVE_BODIES` / `SET_EXCLUDE_BODIES` だけ。面の参照を確定すると
+   *   `require_committed_bodies` が面を無視し、**集合が黙って空になる**。
+   */
+  function optimizeSetMode(mode: PickEvent['mode']): PickEvent['mode'] {
+    return toggleOnlyOptimizeSet ? 'toggle' : mode
+  }
+
+  function optimizeSetFaceRef(bodyId: string, faceIndex: number): SelectionRef {
+    if (wantedKinds.includes('body')) return { body: bodyId, kind: 'body', index: null }
+    return pickedRef(bodyId, faceIndex)
+  }
+
   function onBoxSelect(event: BoxSelectEvent): void {
+    const mode = optimizeSetMode(event.mode)
     const picked: SelectionRef[] = [
       // **同じボディの面が何枚囲まれても参照は1つ**(`refKey` で重複を落とす)。
-      ...dedupeRefs(event.faces.map((item) => pickedRef(item.bodyId, item.faceIndex))),
+      ...dedupeRefs(event.faces.map((item) => optimizeSetFaceRef(item.bodyId, item.faceIndex))),
       ...event.edges.map((item) => ({ body: item.bodyId, kind: 'edge' as const, index: item.edgeIndex })),
       ...event.vertices.map((item) => ({ body: item.bodyId, kind: 'vertex' as const, index: item.vertexIndex })),
       ...event.regions.map((item) => ({ sketch: item.sketchId, index: item.index })),
@@ -1354,7 +1424,7 @@
     ]
     const current = selection?.items ?? []
     const currentKeys = new Set(current.map(refKey))
-    if (event.mode === 'toggle') {
+    if (mode === 'toggle') {
       const already = picked.filter((ref) => currentKeys.has(refKey(ref)))
       const fresh = picked.filter((ref) => !currentKeys.has(refKey(ref)))
       modifySelection(fresh, already)
@@ -1419,6 +1489,7 @@
     // 値を持ち越さない)。`model === null` の早期returnより前に置く —— 起動そのものは
     // 文書が無くても起きるので、ここで止めると次のverbが集合代入でも判定が古いまま残る。
     toggleOnlyOptimizeSet = OPTIMIZE_PRESET_ROLE[verb] !== undefined
+    pendingOptimizePreset = null
     if (model === null) return
     // 荷重の2つは**空から始める**(`OPTIMIZE_EMPTY_START_VERBS` の理由を参照)。
     // 「何もしない」ではなく「空を代入する」でなければ、前のverbの選択が残る。
@@ -1428,7 +1499,26 @@
     }
     const role = OPTIMIZE_PRESET_ROLE[verb]
     if (role === undefined) return
-    presetSelection(model.optimize[role])
+    // **非表示のボディに付いた割り当ては選択に並ばない**(`state.optimize` の配列は指せるものだけ)。
+    // 集合 verb は集合全体を置き換えるので、並ばなかった割り当ては確定で黙って消える —— 先に
+    // そのボディを表示へ戻し、戻った状態の配列を並べる(2026-09-24 本人判断。issue #33)。
+    const hidden = [
+      ...new Set(
+        model.optimize.stale.filter((item) => item.role === role && item.code === 'hidden').map((item) => item.body),
+      ),
+    ]
+    if (hidden.length === 0) {
+      presetSelection(model.optimize[role])
+      return
+    }
+    const ops = new Set<number>()
+    for (const bodyId of hidden) {
+      const op = nextOp()
+      ops.add(op)
+      session.setVisible(bodyId, true, op)
+    }
+    pendingOptimizePreset = { role, ops }
+    note(`非表示だった${OPTIMIZE_ROLE_LABEL[role]}のボディ ${hidden.length} 個を表示した(割り当てを選択に並べるため)`)
   }
 
   /**
@@ -1440,7 +1530,10 @@
    */
   function onWantsKinds(kinds: SelectableKind[]): void {
     wantedKinds = kinds
-    if (kinds.length === 0) toggleOnlyOptimizeSet = false
+    if (kinds.length === 0) {
+      toggleOnlyOptimizeSet = false
+      pendingOptimizePreset = null
+    }
   }
 
   /**
@@ -1532,21 +1625,8 @@
       else if (event.mode === 'replace') note('面を外した')
       return
     }
-    // **保持/除外ソリッド・拘束面は素クリックもトグル**(`toggleOnlyOptimizeSet`)。
-    // 起動した時点で既存の割り当てが選択状態で現れる集合代入なので、置き換えのままだと
-    // 1枚足すたびに他の割り当て済みの面を全部外してしまう —— Ctrl無しでも足し引きできる
-    // 必要がある。この3つの間だけ `wantedKinds` が `'body'` 単独か `'face'` 単独になる
-    // (`commands/optimize.ts` の宣言)ので、他のverbの面ピック(押し出す面等)には効かない。
-    const pickMode: PickEvent['mode'] = toggleOnlyOptimizeSet ? 'toggle' : event.mode
-    // **保持/除外ソリッドのverbが起動している間はボディ粒度**(タスク仕様)。
-    // `wantedKinds` に `'body'` が立つのは `commands/optimize.ts` の `SET_PRESERVE_BODIES` /
-    // `SET_EXCLUDE_BODIES` だけなので、面が当たってもクリックした面ではなくその
-    // ボディ全体を選択へ足す。
-    if (wantedKinds.includes('body')) {
-      editSelection({ body: event.hit.bodyId, kind: 'body', index: null }, pickMode)
-      return
-    }
-    editSelection(pickedRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
+    // 集合 verb の間は素クリックもトグル・保持/除外はボディ粒度(`optimizeSetMode` / `optimizeSetFaceRef`)。
+    editSelection(optimizeSetFaceRef(event.hit.bodyId, event.hit.faceIndex), optimizeSetMode(event.mode))
   }
 
   // ---------------------------------------------------------------- C: スケッチ
@@ -1677,6 +1757,16 @@
    */
   function enterSketch(id: string): void {
     setMode({ kind: 'sketch', id, resume: resumeOf(mode) })
+  }
+
+  /** ブラウザパネルのスケッチ名クリック。**最適化が走っている間はモードを抜けさせない** —— 抜けると
+   *  パネルごと中断ボタンが消える(「抜ける」ボタンを止めているのと同じ理由)。 */
+  function enterSketchFromBrowser(id: string): void {
+    if (optimizeBusy) {
+      fail('形状最適化の実行中はスケッチへ入れない(終わるか中断してから)')
+      return
+    }
+    enterSketch(id)
   }
 
   /** スケッチモードを抜ける。**戻り先は入る前のモード**(通常 or 最適化)。 */
@@ -2166,6 +2256,12 @@
       return
     }
     if (isTextEditingField) return
+    // **実行中は送らない**(サーバも `DocumentBusy` で断る)。Undo した条件のまま結果が足される。
+    if (optimizeBusy) {
+      event.preventDefault()
+      fail('形状最適化の実行中は取り消し・やり直しできない(終わるか中断してから)')
+      return
+    }
     if (key === 'z' && !event.shiftKey) {
       event.preventDefault()
       session.undo()
@@ -2314,7 +2410,7 @@
    */
   $effect(() => {
     void optimize
-    if (!optimizeMode || status !== 'open' || optimizeRunning) return
+    if (!optimizeMode || status !== 'open' || optimizeBusy) return
     session.optimizeConditions()
     session.optimizeResolution()
   })
@@ -2705,7 +2801,7 @@
         </span>
         <!-- **走っている間は抜けさせない。** 抜けるとパネルごと消えて中断ボタンが
              画面から無くなる(止める手段がゼロになる)。 -->
-        <button id="optimize-exit" disabled={optimizeRunning} onclick={exitOptimizeMode}>
+        <button id="optimize-exit" disabled={optimizeBusy} onclick={exitOptimizeMode}>
           抜ける
         </button>
       </div>
@@ -2716,7 +2812,7 @@
       <CommandHost
         bind:this={host}
         {selection}
-        busy={pendingOp !== null || optimizeRunning}
+        busy={pendingOp !== null || optimizeBusy}
         {selfSelections}
         commands={mode.kind === 'sketch'
           ? SKETCH_MODE_COMMANDS
@@ -2752,6 +2848,7 @@
           documents={documentList}
           currentName={currentDocumentName}
           onSave={saveDocumentAs}
+          locked={optimizeBusy}
           onOpen={openDocumentByName}
           onNew={newDocument}
           onExportStep={exportStep}
@@ -2775,7 +2872,7 @@
         onToggle={setVisible}
         onShowAll={showAllParts}
         onHideAll={hideAllParts}
-        onEnterSketch={enterSketch}
+        onEnterSketch={enterSketchFromBrowser}
         onToggleOrigin={applyOriginVisible}
       />
 
@@ -2795,7 +2892,7 @@
           resolution={optimizeResolution}
           stepIndex={optimizeStepIndex}
           minWidthMm={optimizeMinWidthMm}
-          running={optimizeRunning}
+          running={optimizeBusy}
           cancelling={optimizeCancelling}
           progress={optimizeProgress}
           notice={optimizeNotice}

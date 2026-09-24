@@ -85,7 +85,7 @@ m=4(最小幅 7.5 mm)で出る。合成題材(§3)は 1.485 mm で m=3 から出
 
 ## 3. 合成題材(2 枚のパッド)での一般性
 
-`tests/test_optimize_backend.py` の `_setup_four_conditions` と同じ題材(保持パッド 2 枚、拘束面と荷重面、荷重 500 N。
+`tests/session_support.py` の `four_conditions` と同じ題材(保持パッド 2 枚、拘束面と荷重面、荷重 500 N。
 全材料の安全率 30〜35 で hanger 1000 N の 33 と同じ水準)を、要素サイズと最小幅 m を変えて予算 1000 で完走させた。
 FEM は 1 回 1〜5 秒なので**時間の絶対値は hanger と比べられない**(評価回数で比べる)。
 

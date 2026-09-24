@@ -14,15 +14,10 @@ from duocad import query, selection
 from duocad.document import Body, Document, new_body_id
 from duocad.server import Session
 from duocad.verbs import boolean_body as boolean_body_verb
+from session_support import select as _select
 
-DEVIATION = 0.2
 SIDE = 20.0
 TOOL = 10.0
-
-
-@pytest.fixture()
-def session(tmp_path) -> Session:
-    return Session(None, DEVIATION, models_dir=tmp_path / "models")
 
 
 def _box_shape(dx: float, dy: float, dz: float, ox: float = 0.0, oy: float = 0.0, oz: float = 0.0):
@@ -46,11 +41,6 @@ def _add_body(doc: Document, name: str, shape, *, visible: bool = True) -> str:
 
 def _target_ref(body_id: str) -> dict:
     return {"body": body_id, "kind": "face", "index": 1}
-
-
-def _select(session: Session, refs: list) -> None:
-    session.clear_selection()
-    session.modify_selection(refs, [])
 
 
 def _two_boxes(doc: Document) -> tuple[str, str]:

@@ -47,6 +47,7 @@
   let {
     documents,
     currentName,
+    locked,
     onSave,
     onOpen,
     onNew,
@@ -65,6 +66,12 @@
      * `BrowserPanel.svelte` が編集中のスケッチを `.sketch-row.active` で示すのと同じ形。
      */
     currentName: string | null
+    /**
+     * **文書を差し替える口(開く・新規)を止める**(形状最適化の実行中)。走っている最適化は
+     * 開始時の文書へ結果を足すので、差し替えると結果が別の文書へ入る(サーバも断る)。
+     * 保存・書き出しは文書を変えないので止めない。
+     */
+    locked: boolean
     /**
      * **新しい名前で**保存する(「名前を付けて保存」)。
      *
@@ -167,7 +174,14 @@
     <!-- **新規は一覧の外にある** —— 開くのが「一覧のどれかを指す」操作なのに対し、こちらは
          指す先が無い(空の文書にする)。名前を打つ欄より前に置いて、ファイル名の入力と
          「新規保存」の組から離してある。 -->
-    <button id="file-new" onclick={onNew} title="今の文書を捨てて空から始める(保存していない編集は消える)">
+    <button
+      id="file-new"
+      onclick={onNew}
+      disabled={locked}
+      title={locked
+        ? '形状最適化の実行中は文書を差し替えられない'
+        : '今の文書を捨てて空から始める(保存していない編集は消える)'}
+    >
       新規
     </button>
   </div>
@@ -197,7 +211,12 @@
     {#each sorted as file (file.name)}
       <!-- **編集中の1行を光らせる**(`BrowserPanel` の `.sketch-row.active` と同じ形)。 -->
       <div class="files-row" class:active={file.name === currentName} data-name={file.name}>
-        <button class="files-open" onclick={() => onOpen(file.name)} title="クリックで開く">
+        <button
+          class="files-open"
+          onclick={() => onOpen(file.name)}
+          disabled={locked}
+          title={locked ? '形状最適化の実行中は文書を差し替えられない' : 'クリックで開く'}
+        >
           {file.name}
         </button>
         <span class="meta dim" title={formatTime(file.mtime)}>

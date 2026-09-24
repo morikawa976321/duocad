@@ -27,41 +27,16 @@ UI(パラメータ編集パネル・操作履歴パネル・ファイル操作)�
 """
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 
 import pytest
 
 from duocad import io_step, kernel, query
-from duocad.server import Server, Session
+from duocad.server import Session
+from session_support import SIDE, box as _box, browser as _browser, select as _select, send_one
 
 DEVIATION = 0.2
-SIDE = 20.0
-
-
-@pytest.fixture()
-def session(tmp_path: Path) -> Session:
-    # **`models_dir` はテストごとの使い捨てディレクトリ**。指定しないと
-    # 既定(リポジトリ直下の `duocad/models/`)を触ってしまう —— pytestが実フォルダを
-    # 汚さないための唯一の理由で、テストの意図とは無関係(`Session.__init__` 参照)。
-    return Session(None, DEVIATION, models_dir=tmp_path / "models")
-
-
-def _select(session: Session, refs: list) -> None:
-    """選択を `refs` で置き換える。**verbの対象集合はここで決まる**(引数ではない)。"""
-    session.clear_selection()
-    session.modify_selection(refs, [])
-
-
-def _box(session: Session):
-    """スケッチ→長方形→領域押し出しで 20mm の立方体を作る(D の `_box` と同じ手順)。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_rectangle(sketch_id, [0.0, 0.0], SIDE, SIDE)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(SIDE, mode="join")
-    session.clear_selection()
-    return session.document.bodies[-1], sketch_id
 
 
 def _cylinder(session: Session, radius: float, height: float):
@@ -71,42 +46,6 @@ def _cylinder(session: Session, radius: float, height: float):
     _select(session, [{"sketch": sketch_id, "index": 1}])
     session.extrude(height, mode="join")
     return session.document.bodies[-1]
-
-
-class FakeConnection:
-    def __init__(self) -> None:
-        self.payloads: list = []
-
-    async def send(self, raw: str) -> None:
-        self.payloads.append(json.loads(raw))
-
-    def last(self, kind: str) -> dict:
-        for payload in reversed(self.payloads):
-            if payload.get("type") == kind:
-                return payload
-        raise AssertionError(f"{kind!r} の応答が無い: {[p.get('type') for p in self.payloads]}")
-
-
-def _browser(session: Session, script):
-    """`script(send)` を1つのイベントループで走らせる(test_feature_ui.py と同じ harness)。"""
-
-    async def scenario():
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        clients = [FakeConnection(), FakeConnection()]
-        for client in clients:
-            server.clients.add(client)
-            await server._push(client, applied=None, only=client)
-        for client in clients:
-            client.payloads.clear()
-
-        async def send(command: dict) -> dict:
-            await server._dispatch(clients[0], json.dumps(command))
-            return clients[0].payloads[-1]
-
-        return await script(send), clients
-
-    return asyncio.run(scenario())
 
 
 # --------------------------------------------------------------------------------------
@@ -436,15 +375,7 @@ def test_reopening_the_current_document_is_allowed_with_only_one_connection(
     session.save_document("model.json")
     session.open_document("model.json")
 
-    async def scenario():
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        client = FakeConnection()
-        server.clients.add(client)
-        await server._dispatch(client, json.dumps({"cmd": "open_document", "name": "model.json"}))
-        return client.payloads[-1]
-
-    answer = asyncio.run(scenario())
+    answer = send_one(session, {"cmd": "open_document", "name": "model.json"})
 
     assert answer["type"] == "state"
     assert answer["applied"]["action"] == "open"

@@ -22,6 +22,7 @@ from duocad.server import Session
 from duocad.speculative import speculative
 from duocad.verbs import add_mesh_body, chamfer, delete, extrude_face, fillet, move_body
 from duocad.verbs.extrude import _resolve_target
+from session_support import session_with_box
 
 SIDE = 20.0
 DEVIATION = 0.2
@@ -38,12 +39,6 @@ EXPECTED_HINT = (
 
 def _box_shape():
     return BRepPrimAPI_MakeBox(SIDE, SIDE, SIDE).Shape()
-
-
-def _box_session() -> Session:
-    session = Session(None, DEVIATION)
-    session.document.add_body(Body(id="box", name="box", kind="solid", shape=_box_shape()))
-    return session
 
 
 def _tetra_doc():
@@ -153,7 +148,7 @@ def test_a_mesh_body_survives_a_parameter_rebuild():
     `OpLog.replay` の検査(上)とは通る道が違い、`set_parameter` を1回打つだけで踏む ——
     ここで復元されないと、寸法をひとつ直しただけで最適化結果が黙って消える。
     """
-    session = _box_session()
+    session = session_with_box(SIDE, SIDE, SIDE)
     tools = DocumentTools(session)
     sketch_id = tools.call("sketch_create", {"base_plane": "XY"})["sketch_id"]
     tools.call(
@@ -381,7 +376,7 @@ def test_a_sketch_cannot_be_pinned_to_a_mesh_body():
 
 def test_measure_reports_a_mesh_body_selected_as_a_whole():
     """選択に入ったメッシュボディを `measure` が測れる(`body_meta` 経由なので落ちない)。"""
-    session = _box_session()
+    session = session_with_box(SIDE, SIDE, SIDE)
     tools = DocumentTools(session)
     added = tools.call("add_mesh_body", {"positions": TETRA_POSITIONS, "indices": TETRA_INDICES})
     tools.call(
@@ -447,7 +442,7 @@ def test_an_empty_mesh_never_reaches_the_stl_writer(tmp_path):
 
 # ======================================================================== §8 MCP
 def test_the_mcp_tool_adds_a_mesh_body():
-    session = _box_session()
+    session = session_with_box(SIDE, SIDE, SIDE)
     tools = DocumentTools(session)
     result = tools.call(
         "add_mesh_body",
@@ -460,7 +455,7 @@ def test_the_mcp_tool_adds_a_mesh_body():
 
 def test_describe_document_survives_a_mesh_body():
     """`describe_document` はB-repを前提に `kernel.face_count` / `query.volume` を叩く。"""
-    session = _box_session()
+    session = session_with_box(SIDE, SIDE, SIDE)
     tools = DocumentTools(session)
     tools.call("add_mesh_body", {"positions": TETRA_POSITIONS, "indices": TETRA_INDICES})
     kinds = {body["kind"] for body in tools.call("describe_document", {})["bodies"]}
