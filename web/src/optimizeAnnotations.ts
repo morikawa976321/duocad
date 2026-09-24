@@ -4,6 +4,7 @@
  */
 import * as THREE from 'three'
 
+import { makeTextSprite } from './textSprite'
 import { OPTIMIZE_FIXTURE_MARK_COLOR, OPTIMIZE_LOAD_COLOR } from './viewportConstants'
 import type { FaceRef, OptimizeVisualState } from './viewportTypes'
 
@@ -105,23 +106,7 @@ export function createOptimizeAnnotations(deps: OptimizeAnnotationsDeps): Optimi
     text: string,
     height: number,
   ): { sprite: THREE.Sprite; disposables: Array<{ dispose(): void }> } {
-    const canvas = document.createElement('canvas')
-    canvas.width = 256
-    canvas.height = 96
-    const ctx = canvas.getContext('2d')
-    if (ctx) {
-      ctx.fillStyle = 'rgba(16, 22, 30, 0.85)'
-      ctx.fillRect(0, 0, canvas.width, canvas.height)
-      ctx.fillStyle = '#ffc857'
-      ctx.font = 'bold 48px sans-serif'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(text, 12, canvas.height / 2)
-    }
-    const texture = new THREE.CanvasTexture(canvas)
-    const material = new THREE.SpriteMaterial({ map: texture, depthTest: false, depthWrite: false, transparent: true })
-    const sprite = new THREE.Sprite(material)
-    sprite.scale.set(height * (canvas.width / canvas.height), height, 1)
-    return { sprite, disposables: [texture, material] }
+    return makeTextSprite(text, height, '#ffc857')
   }
 
   function draw(state: OptimizeVisualState): void {

@@ -52,6 +52,7 @@ import { createOptimizeAnnotations } from './optimizeAnnotations'
 import { createOptimizeDebug } from './optimizeDebug'
 import { createViewCubeOverlay } from './viewCubeOverlay'
 import { createVertexMarkers } from './vertexMarkers'
+import { createMeasureAnnotation } from './measureAnnotation'
 import type { BasePlaneName, EdgeGeometry } from './session'
 import {
   bodyGhostMatrix, usableRotation,
@@ -168,6 +169,12 @@ export function createViewport(container: HTMLElement): Viewport {
   })
   annotations.object.renderOrder = LAYER.optimize
   scene.add(annotations.object)
+
+  // 測定の線と札(issue #10)。装飾で指せない(`root` にも入れない —— 上と同じ理由)。
+  // `showMeasurement` が唯一の書き手。
+  const measureAnnotation = createMeasureAnnotation({ contentDiagonal: () => contentDiagonal })
+  measureAnnotation.object.renderOrder = LAYER.measure
+  scene.add(measureAnnotation.object)
 
   // ------------------------------------------------------------------ 開発用のデバッグ表示
   //
@@ -3861,6 +3868,8 @@ export function createViewport(container: HTMLElement): Viewport {
     highlightEdges,
     projectEdge,
     showVertices: vertexMarkers.show,
+    showMeasurement: measureAnnotation.show,
+    measurementInfo: measureAnnotation.info,
     highlightColors() {
       return { ...highlightColor }
     },

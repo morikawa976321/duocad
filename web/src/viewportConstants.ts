@@ -56,6 +56,10 @@ export const OPTIMIZE_FIXTURE_COLOR = 0x3f7fc2
 /** 拘束の固定記号(四角錐)と、荷重の矢印・ラベルの色。面の塗りとは別に見分ける。 */
 export const OPTIMIZE_FIXTURE_MARK_COLOR = 0x1c3550
 export const OPTIMIZE_LOAD_COLOR = 0xffc857
+/** 測定(issue #10)の線・端点・札。選択(橙)・提案(水色)・幽霊(緑)・荷重(黄)のどれとも
+    見分けがつく色にしてある(同時に画面に出うる)。 */
+export const MEASURE_COLOR = 0xff6ad5
+export const MEASURE_TEXT_COLOR = '#ff8ae0'
 /**
  * **開発用のデバッグ表示の色**(`?debug=space` / `?debug=anchors` / `?voxel=1`)。
  * `shoot-topopt.mjs` と同じ見え方を保つので、勝手に動かさないこと。
@@ -240,8 +244,13 @@ export const LAYER = {
   region: 11,
   sketchLine: 12,
   sketchPoint: 13,
-  /** 断面のハンドル(矢印)。ポインタを最優先で引き取るので、描くのも最前。 */
-  sectionHandle: 14,
+  /** 測定の線と札(`measureAnnotation.ts`)。深度を書かないので、描く順序で全部の手前に出す。 */
+  measure: 14,
+  /**
+   * 断面のハンドル(矢印)。ポインタを最優先で引き取るので、描くのも最前 —— 測定の札より手前に
+   * 置くのは「見えるもの＝指せるもの」のため(札に隠れたハンドルは掴めない)。
+   */
+  sectionHandle: 15,
 } as const
 
 /**

@@ -38,6 +38,9 @@
   import { entityHandles, ghostCopies, snapToSketchEntity, type GhostSource } from './entityKinds'
   import { evaluateExpression } from './expression'
   import { IMPORT_STEP, changesDocument } from './commands/files'
+  import { MEASURE } from './commands/measure'
+  import { measureLabel, measureReadout } from './measureText'
+  import type { MeasurePayload } from './session'
   import {
     OPTIMIZE_EMPTY_START_VERBS,
     OPTIMIZE_MODE_COMMANDS,
@@ -126,6 +129,9 @@
     // 保存/開く/新規は左サイドバーに残るので、`CommandDef` を持たずここにも載らない。
     // `IMPORT_SVG` はスケッチモードのコマンドへ移り、`SKETCH_COMMANDS`(下)側に載っている。
     IMPORT_STEP,
+    // **測定は verb ではない**(`query`。文書もログも変えない)が、verb→target の枠に
+    // そのまま乗るのでここに並ぶ(`commands/measure.ts`)。通常モードだけ。
+    MEASURE,
   ]
   const SKETCH_MODE_COMMANDS = [...SKETCH_COMMANDS, ...SKETCH_FEATURE_COMMANDS]
 
@@ -264,8 +270,11 @@
    * 「置き換え」だと1枚足すたびにCtrlが要り、他の割り当て済みの面を毎回避けて
    * クリックする羽目になる。他のverb(フィレットの辺・押し出す面等)は素のクリック=
    * 置き換えのままでよい —— 起動時に選択が空で始まるので置き換えと足すが一致する。
+   *
+   * **測定(`measure`)も同じ**(2026-09-16)。対象は「ちょうど2つ」で、素のクリックが
+   * 置き換えのままだと2つ目のクリックが1つ目を消して永久に揃わない。
    */
-  let toggleOnlyOptimizeSet = $state(false)
+  let toggleOnlyClicks = $state(false)
   /**
    * 集合 verb の起動時に表示へ戻した非表示ボディの `set_visible` の応答待ち。**全部戻ってから**
    * 既存の割り当てを選択に並べる(`onCommandStart`)。描画には使わないので普通の変数でよい。
@@ -281,6 +290,12 @@
    * 辺・基準平面と同じ規律で、待っている間だけ**その種別を指せるようにする**。
    */
   let wantedPick = $state<PickTarget | null>(null)
+  /**
+   * 起動中のコマンドが**頂点そのものを対象にする**か(`SelectionArgSpec.pickVertices`。測定。
+   * `CommandHost` が知らせる)。回転中心のピック(`wantedPick === 'vertex'`)と同じ扱いで、
+   * 対象ボディの頂点を候補として出し、辺より先に取る。
+   */
+  let wantedVertices = $state(false)
   /** 取り寄せた辺(body_id -> その版の折れ線)。**版が変われば捨てる**。 */
   let edges = $state<Record<string, EdgesPayload>>({})
   /** 取り寄せ中のもの(`${body_id}:${revision}`)。同じ要求を何度も投げないため。 */
@@ -513,6 +528,7 @@
     onPreview: handlePreview,
     onEdges: handleEdges,
     onVertices: handleVertices,
+    onMeasure: handleMeasure,
     onFile: handleFile,
     onAiStatus: handleAiStatus,
     onAiToolCall: (call) => (aiTranscript = [...aiTranscript, { kind: 'tool', call }]),
@@ -980,6 +996,62 @@
     vertices = { ...vertices, [payload.body_id]: payload }
   }
 
+  // ---------------------------------------------------------------- 測定(verbではない)
+  /**
+   * 直近の測定の結果(無ければ null)。**測った選択が変わるまで残る**(下の `$effect`)。
+   * そのほかに消えるのは、次のコマンドの起動(`onCommandStart`)・Esc(`onWindowKeydown`)・
+   * モードの切り替え。読み札(`#measure-result`)と3Dの線(`viewport.showMeasurement`)は
+   * どちらもここから導く。
+   */
+  let measurement = $state<MeasurePayload | null>(null)
+  /** `measurement` を測ったときの選択の印(`refKey` の並び。origin は見ない)。 */
+  let measurementKey = ''
+
+  function selectionKey(): string {
+    return (selection?.items ?? []).map(refKey).join('|')
+  }
+
+  function handleMeasure(payload: MeasurePayload): void {
+    if (payload.client_op !== null && payload.client_op === pendingOp) {
+      pendingOp = null
+      // 測定は成否を待つ入力欄が無いので、返事が来た時点で無起動へ戻してよい
+      host?.commandSucceeded()
+    }
+    if (payload.between_error) {
+      measurement = null
+      fail(payload.between_error)
+      return
+    }
+    if (payload.between === undefined || payload.between === null) {
+      measurement = null
+      return
+    }
+    measurement = payload
+    measurementKey = selectionKey()
+  }
+
+  /** 測った選択が変われば結果は嘘になるので消す(選び直し・undo・AIの提案のどれでも)。 */
+  $effect(() => {
+    if (measurement !== null && selectionKey() !== measurementKey) measurement = null
+  })
+  /** モードが変わったら消す(コマンド層を `{#key mode.kind}` で作り直すのと同じ理由)。 */
+  $effect(() => {
+    void mode.kind
+    measurement = null
+  })
+
+  const measurementText = $derived(measurement?.between ? measureReadout(measurement.between) : '')
+
+  $effect(() => {
+    // 先に読んでから渡す(`?.` の短絡で依存を失わない —— 基準平面の $effect と同じ理由)。
+    const between = measurement?.between ?? null
+    if (between === null || between.from === null || between.to === null) {
+      viewport?.showMeasurement(null)
+      return
+    }
+    viewport?.showMeasurement({ from: between.from, to: between.to, label: measureLabel(between) })
+  })
+
   /**
    * ファイルを書いた/一覧が届いた。**どこへ何バイト書いたかを必ず画面へ出す** ——
    * 書き出しはブラウザの中に痕跡が残らない操作なので、通知が唯一の確認手段になる。
@@ -1270,13 +1342,15 @@
   })
 
   /**
-   * **回転中心の頂点を指させている間**、候補を出すボディ(出さないなら null)。
+   * **回転中心の頂点を指させている間**、または**頂点そのものを対象にするコマンド(測定)を
+   * 起動している間**、候補を出すボディ(出さないなら null)。
    *
    * 対象は辺と同じ1つ(`edgeTargetBody`) —— 全ボディの頂点を出すと、27部品の文書では
    * 数千個の的が画面を覆う。**軸に使う辺と同じボディの頂点**が指せれば足りる。
+   * 測定も同じ1つに絞る(別のボディとの距離は面で測る)。
    */
   const vertexCandidateBody = $derived(
-    sketchId === null && wantedPick === 'vertex' ? edgeTargetBody : null,
+    sketchId === null && (wantedPick === 'vertex' || wantedVertices) ? edgeTargetBody : null,
   )
 
   /** 候補として出す頂点の座標を取りに行く(選択に入った頂点と同じ形の要求)。 */
@@ -1368,7 +1442,7 @@
    * (辺が先)のままだと、角の頂点を狙ったクリックが必ず辺に取られて中心を指せない。
    */
   $effect(() => {
-    const on = wantedPick === 'vertex'
+    const on = wantedPick === 'vertex' || wantedVertices
     viewport?.preferVertices(on)
   })
 
@@ -1428,28 +1502,31 @@
   }
 
   /**
-   * **保持/除外ソリッド・拘束面の集合 verb の間のピックの規則**(クリック `onPick` と矩形選択
+   * **素のクリック・矩形選択をトグルとして読むか**(クリック `onPick` と矩形選択
    * `onBoxSelect` で共有する)。
    *
-   * - 素の操作もトグル(`toggleOnlyOptimizeSet`)。起動した時点で既存の割り当てが選択状態で
-   *   現れる集合代入なので、置き換えのままだと足すたびに他の割り当てを全部外してしまう。
-   *   この3つの間だけ `wantedKinds` が `'body'` 単独か `'face'` 単独になる
-   *   (`commands/optimize.ts` の宣言)ので、他のverbの面ピック(押し出す面等)には効かない。
-   * - 保持/除外ソリッドの間はボディ粒度。`wantedKinds` に `'body'` が立つのは
-   *   `SET_PRESERVE_BODIES` / `SET_EXCLUDE_BODIES` だけ。面の参照を確定すると
-   *   `require_committed_bodies` が面を無視し、**集合が黙って空になる**。
+   * 保持/除外ソリッド・拘束面の集合 verb は、起動した時点で既存の割り当てが選択状態で現れる
+   * 集合代入なので、置き換えのままだと足すたびに他の割り当てを全部外してしまう。測定は対象が
+   * 「ちょうど2つ」なので、2つ目の素のクリックが1つ目を消しては永久に揃わない。
+   * 立つのは `toggleOnlyClicks`(`onCommandStart`)が立っている間だけで、他のverbの
+   * 面ピック(押し出す面等)には効かない。
    */
-  function optimizeSetMode(mode: PickEvent['mode']): PickEvent['mode'] {
-    return toggleOnlyOptimizeSet ? 'toggle' : mode
+  function toggleOnlyMode(mode: PickEvent['mode']): PickEvent['mode'] {
+    return toggleOnlyClicks ? 'toggle' : mode
   }
 
+  /**
+   * **保持/除外ソリッドの間はボディ粒度**。`wantedKinds` に `'body'` が立つのは
+   * `SET_PRESERVE_BODIES` / `SET_EXCLUDE_BODIES` だけ(`commands/optimize.ts` の宣言)。
+   * 面の参照を確定すると `require_committed_bodies` が面を無視し、**集合が黙って空になる**。
+   */
   function optimizeSetFaceRef(bodyId: string, faceIndex: number): SelectionRef {
     if (wantedKinds.includes('body')) return { body: bodyId, kind: 'body', index: null }
     return pickedRef(bodyId, faceIndex)
   }
 
   function onBoxSelect(event: BoxSelectEvent): void {
-    const mode = optimizeSetMode(event.mode)
+    const mode = toggleOnlyMode(event.mode)
     const picked: SelectionRef[] = [
       // **同じボディの面が何枚囲まれても参照は1つ**(`refKey` で重複を落とす)。
       ...dedupeRefs(event.faces.map((item) => optimizeSetFaceRef(item.bodyId, item.faceIndex))),
@@ -1521,10 +1598,11 @@
    * 荷重の2つは**空にする**(`OPTIMIZE_EMPTY_START_VERBS`)。
    */
   function onCommandStart(verb: string): void {
-    // **`toggleOnlyOptimizeSet` は起動するverbが変わるたび毎回書き直す**(前のverbの
+    measurement = null // 次の操作に入ったら、前の測定の札は用済み
+    // **`toggleOnlyClicks` は起動するverbが変わるたび毎回書き直す**(前のverbの
     // 値を持ち越さない)。`model === null` の早期returnより前に置く —— 起動そのものは
     // 文書が無くても起きるので、ここで止めると次のverbが集合代入でも判定が古いまま残る。
-    toggleOnlyOptimizeSet = OPTIMIZE_PRESET_ROLE[verb] !== undefined
+    toggleOnlyClicks = OPTIMIZE_PRESET_ROLE[verb] !== undefined || verb === MEASURE.id
     pendingOptimizePreset = null
     if (model === null) return
     // 荷重の2つは**空から始める**(`OPTIMIZE_EMPTY_START_VERBS` の理由を参照)。
@@ -1561,13 +1639,13 @@
    * `CommandHost` の `onWants`。**verbが無起動へ戻ったことを知る唯一の経路でもある**
    * (`onStart` は起動したときしか呼ばれない)。無起動の `command.args` は常に `[]` なので
    * `kinds` が空になった = 中断/確定成功/モード切替のどれかで降りた、とみなして
-   * `toggleOnlyOptimizeSet` を下ろす —— 下ろさないと、拘束面を確定した直後に
+   * `toggleOnlyClicks` を下ろす —— 下ろさないと、拘束面を確定した直後に
    * フィレットへ移って辺を素クリックしたときトグルのまま残り、選択が置き換わらない。
    */
   function onWantsKinds(kinds: SelectableKind[]): void {
     wantedKinds = kinds
     if (kinds.length === 0) {
-      toggleOnlyOptimizeSet = false
+      toggleOnlyClicks = false
       pendingOptimizePreset = null
     }
   }
@@ -1630,21 +1708,24 @@
         return
       }
     }
-    // **辺が当たったら辺**。フィレット・面取りを起動している間だけ来る。
+    // **素クリックのトグル(`toggleOnlyMode`)は面だけでなく辺・頂点・領域にも効かせる** ——
+    // 測定は辺・頂点でも測るので、下の分岐すべてが同じ `pickMode` を通る。
+    const pickMode: PickEvent['mode'] = toggleOnlyMode(event.mode)
+    // **辺が当たったら辺**。フィレット・面取り・測定を起動している間だけ来る。
     if (event.edge !== null) {
       editSelection(
         { body: event.edge.bodyId, kind: 'edge', index: event.edge.edgeIndex },
-        event.mode,
+        pickMode,
       )
       return
     }
-    // **頂点が当たったら頂点**。選択に入っている頂点だけがマーカーとして出ているので、
-    // ここへ来るのは実質「AIが選んだ頂点を人がCtrl+クリックで外す」経路である
-    // (頂点を選択へ新規追加するコマンドは無い)。参照の形も修飾キーの規則も面・辺と同じ。
+    // **頂点が当たったら頂点**。マーカーが出ているのは選択に入っている頂点と、測定の
+    // 候補(対象ボディの全頂点)だけなので、ここへ来るのは「AIが選んだ頂点を人が
+    // Ctrl+クリックで外す」か「測る頂点を指す」のどちらか。参照の形も修飾キーの規則も面・辺と同じ。
     if (event.vertex !== null) {
       editSelection(
         { body: event.vertex.bodyId, kind: 'vertex', index: event.vertex.vertexIndex },
-        event.mode,
+        pickMode,
       )
       return
     }
@@ -1652,7 +1733,7 @@
     // (`wantsRegions` → `viewport.pickRegions`)。参照の形も修飾キーの規則も
     // スケッチモードの `onSketchPick` と同じ —— 同じものを同じように選ぶ。
     if (event.region !== null) {
-      editSelection({ sketch: event.region.sketchId, index: event.region.index }, event.mode)
+      editSelection({ sketch: event.region.sketchId, index: event.region.index }, pickMode)
       return
     }
     if (event.hit === null) {
@@ -1661,8 +1742,9 @@
       else if (event.mode === 'replace') note('面を外した')
       return
     }
-    // 集合 verb の間は素クリックもトグル・保持/除外はボディ粒度(`optimizeSetMode` / `optimizeSetFaceRef`)。
-    editSelection(optimizeSetFaceRef(event.hit.bodyId, event.hit.faceIndex), optimizeSetMode(event.mode))
+    // 保持/除外ソリッドの間だけボディ粒度へ畳む(`optimizeSetFaceRef`)。素クリックのトグルは
+    // 上の `pickMode` が面・辺・頂点・領域へ一様に効かせる。
+    editSelection(optimizeSetFaceRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
   }
 
   // ---------------------------------------------------------------- C: スケッチ
@@ -1942,6 +2024,16 @@
         // ここで二重化すると「ツールバー経由の import_step だけ応答待ちの解き方が違う」
         // という差が生まれる。
         runFileOp(verb, args)
+        return
+      }
+      // -------------------------------------------------------------- 測定(読み取り専用)
+      case 'query': {
+        // **verb と同じ口で送る**(`{cmd, client_op}`)。返事は状態配信ではなく
+        // `{type:'measure'}` で、`handleMeasure` が `client_op` を突き合わせて
+        // コマンド層を無起動へ戻す(verb なら `applied.client_op` が担う役)。
+        const op = nextOp()
+        pendingOp = op
+        session.runVerb(verb, args, op)
         return
       }
       default: {
@@ -2259,6 +2351,11 @@
   }
 
   function onWindowKeydown(event: KeyboardEvent): void {
+    // Esc は測定の札を消す(コマンドの中断は `CommandHost` が同じキーで別に見る)。
+    if (event.key === 'Escape') {
+      measurement = null
+      return
+    }
     if (!(event.ctrlKey || event.metaKey)) return
     const key = event.key.toLowerCase()
     if (key !== 'z' && key !== 'y' && key !== 's') return
@@ -2666,6 +2763,13 @@
         viewport?.projectEdge(bodyId, edgeIndex) ?? null,
       // 頂点。**実機検査が本物のクリックで頂点を外す**ための穴(出ていなければ null)。
       vertexMarkers,
+      // 測定(issue #10)。直近の結果と、3Dに出している線(出していなければ null)、
+      // 頂点そのものを対象にしているか(候補の頂点が出て、辺より先に取れる)。
+      // **`$state.snapshot` で素のオブジェクトにして出す** —— `$state` のプロキシのままだと
+      // puppeteer の `evaluate` が値を持ち帰れず、実機検査が `{}` を読む(実測)。
+      measurement: measurement === null ? null : $state.snapshot(measurement),
+      wantedVertices,
+      measurementInfo: () => viewport?.measurementInfo() ?? null,
       // **提案(水色)と確定(橙)の区別は3Dの色だけ**になったので、色そのものを読める穴を出す。
       highlightColors: () => viewport?.highlightColors() ?? null,
       // ホバー強調で今明るくしているもの。**「クリックすれば取れるもの」と実際に
@@ -2881,6 +2985,7 @@
         onWantsPlane={(wants) => (wantedPlane = wants)}
         onWantsPoint={(wants) => viewport?.setSketchCursorWanted(wants)}
         onWantsPick={(target) => (wantedPick = target)}
+        onWantsVertices={(wants) => (wantedVertices = wants)}
       />
     {/key}
   </section>
@@ -2910,6 +3015,13 @@
     <div class="stage">
       <!-- canvas はこの div の中で three.js が作る。Svelte はここの中身を触らない -->
       <div class="viewport" bind:this={container}></div>
+
+      <!-- 測定の読み札(issue #10)。**結果があるときだけ**浮く(常設の指標ではない —— docs/UI.md
+           「常設の指標を置かない」)。`.stage` の中の position:absolute なので `.viewport` の
+           寸法＝カメラのアスペクトには触らない(ブラウザ・設定ダイアログと同じ)。 -->
+      {#if measurementText !== ''}
+        <div id="measure-result" class="measure-readout">{measurementText}</div>
+      {/if}
 
       <BrowserPanel
         bodies={partBodies}

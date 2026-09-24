@@ -647,6 +647,32 @@ export interface VerticesPayload {
  * **ClaudeをAPIキーで叩く経路は廃止し、`'anthropic'` は無い**。
  * 型を潰さず union のまま残してあるのは、次のプロバイダの差込口だからである。
  */
+/**
+ * `measure` の**2項目のあいだ**(`duocad/measure.py` の `between`)。
+ * **キーの顔ぶれは組によらず同じ**(無い値は null)—— 距離が出る組は `distance`・`from`・`to`、
+ * 平行でない線・面どうしは `angle_deg` だけ、点と点は `delta` も。
+ */
+export interface MeasureBetween {
+  kind: string
+  parallel: boolean | null
+  distance: number | null
+  angle_deg: number | null
+  from: number[] | null
+  to: number[] | null
+  delta: number[] | null
+}
+
+/** `measure` の返事(要求した接続にだけ届く。状態は変わっていない)。 */
+export interface MeasurePayload {
+  client_op: number | null
+  count: number
+  origin: 'user' | 'proposed'
+  items: unknown[]
+  /** **ちょうど2項目のときだけ**付く(`duocad/measure.py` の `measure_selection`)。 */
+  between?: MeasureBetween | null
+  between_error?: string | null
+}
+
 export type AiProviderKind = 'openai_compat'
 
 /** 画面に出してよい設定の全部。**鍵の類は載らない**(APIキー経路は廃止済み)。 */
@@ -916,6 +942,8 @@ export interface SessionHooks {
   onEdges(payload: EdgesPayload): void
   /** 頼んだ頂点が返ってきた(状態は変わっていない)。 */
   onVertices(payload: VerticesPayload): void
+  /** 測った(状態は変わっていない)。要求した接続にだけ届く。 */
+  onMeasure(payload: MeasurePayload): void
   /** ファイルを書いた(状態は変わっていない)。 */
   onFile(payload: FilePayload): void
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
@@ -1151,6 +1179,13 @@ export function createSession(hooks: SessionHooks): Session {
       cancelled?: boolean
       already_running?: boolean
       problems?: string[]
+      // ---------------------------------------------------------------- 測定
+      client_op?: number | null
+      count?: number
+      origin?: 'user' | 'proposed'
+      items?: unknown[]
+      between?: MeasureBetween | null
+      between_error?: string | null
     }
     try {
       message = JSON.parse(raw)
@@ -1177,6 +1212,15 @@ export function createSession(hooks: SessionHooks): Session {
         body_id: message.body_id ?? '',
         revision: message.revision ?? 0,
         vertices: message.vertices ?? [],
+      })
+    } else if (message.type === 'measure') {
+      hooks.onMeasure({
+        client_op: message.client_op ?? null,
+        count: message.count ?? 0,
+        origin: message.origin ?? 'user',
+        items: message.items ?? [],
+        between: message.between,
+        between_error: message.between_error,
       })
     } else if (message.type === 'file') {
       hooks.onFile({
