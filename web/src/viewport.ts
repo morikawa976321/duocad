@@ -2651,13 +2651,6 @@ export function createViewport(container: HTMLElement): Viewport {
     ghost = { objects, disposables }
   }
 
-  function showSketchGhost(
-    sketchId: string,
-    entity: { kind: string; params: Record<string, number> } | null,
-  ): void {
-    showSketchGhosts(sketchId, entity ? [entity] : [])
-  }
-
   /**
    * スケッチに入る直前の視点(抜けるときに戻す)。**モード外では null**。
    *
@@ -3707,7 +3700,6 @@ export function createViewport(container: HTMLElement): Viewport {
     showPreview,
     clearPreview,
     showBodyGhosts,
-    clearBodyGhosts,
     ghostInfo() {
       return {
         sketch: sketchGhostInfo.map((item) => ({ kind: item.kind, params: { ...item.params } })),
@@ -3723,7 +3715,6 @@ export function createViewport(container: HTMLElement): Viewport {
     },
     project,
     showSketches,
-    showSketchGhost,
     showSketchGhosts,
     setActiveSketch,
     lookAtSketch,

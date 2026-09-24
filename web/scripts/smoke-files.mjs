@@ -236,7 +236,8 @@ async function main() {
         if (!at) fail(`図形 ${entityId} の点が画面の中に無い`)
         await page.mouse.click(at.x, at.y)
       })
-      }
+    }
+
     async function clickPlane(u, v) {
       // **浮いているブラウザを畳んでから**押す —— スケッチ平面の (u,v) は画面の1画素しかなく、
       // そこがパネルの下に来ると逃げ場が無い(理由は `browser.mjs` の `withoutBrowserPanel`)。

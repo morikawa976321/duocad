@@ -238,7 +238,7 @@ cd web; npm run dev                                 # 画面(5173)
 
 ブラウザは**Chromeを先に見る**（無ければEdge。`DUOCAD_BROWSER` で明示すればそれが最優先）。
 
-**一覧の正は `web/scripts/smoke-*.mjs` のファイル名**（各ファイル先頭のコメントが何を見るかの正）。
+**一覧の正は `web/scripts/smoke*.mjs` のファイル名**（各ファイル先頭のコメントが何を見るかの正）。
 番号付きの固定リストは持たない —— 増減のたびにREADMEが古くなるため。
 
 ```powershell
@@ -248,7 +248,7 @@ cd web
 node scripts/smoke.mjs
 
 # 全部（1本でも❌ならそこで終了コード1）
-Get-ChildItem scripts/smoke-*.mjs | ForEach-Object {
+Get-ChildItem scripts/smoke*.mjs | ForEach-Object {
   node $_.FullName
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }

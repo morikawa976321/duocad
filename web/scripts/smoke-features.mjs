@@ -177,7 +177,6 @@ async function main() {
       await page.mouse.click(at.x, at.y)
     }
 
-    /** スケッチ平面の (u,v) を**クリックの直前に射影して**押す(画面が動いても狂わない)。 */
     /**
      * スケッチの図形を**3Dのクリックで選ぶ**(他の実機検査と同じ道具)。
      *
@@ -201,7 +200,9 @@ async function main() {
         if (!at) fail(`図形 ${entityId} の点が画面の中に無い`)
         await page.mouse.click(at.x, at.y)
       })
-      }
+    }
+
+    /** スケッチ平面の (u,v) を**クリックの直前に射影して**押す(画面が動いても狂わない)。 */
     async function clickPlane(u, v) {
       // **浮いているブラウザを畳んでから**押す —— スケッチ平面の (u,v) は画面の1画素しかなく、
       // そこがパネルの下に来ると逃げ場が無い(理由は `browser.mjs` の `withoutBrowserPanel`)。

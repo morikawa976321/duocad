@@ -13,12 +13,7 @@
  * ツールバーに打ち込み欄が居座らない。
  * `commands/sketch.ts` の `IMPORT_SVG` がまったく同じ形をしている。
  */
-import type { CommandDef } from './command'
-
-/** 空文字だけを拒む(パスの解釈はサーバの1箇所に置く。`sketch.ts` の `pathLike` と同じ)。 */
-function pathLike(label: string): (value: string) => string | null {
-  return (value) => (value.trim() === '' ? `${label}を打つ` : null)
-}
+import { buildPathArgs, pathLike, type CommandDef } from './command'
 
 /**
  * STEPを読み込む。**引数はパスだけ**(targetを取らないverb)。
@@ -44,11 +39,7 @@ export const IMPORT_STEP: CommandDef = {
       reject: pathLike('STEPのパス'),
     },
   ],
-  build(values) {
-    const path = values.path
-    if (typeof path !== 'string' || path.trim() === '') return { ok: false, reason: 'パスが空' }
-    return { ok: true, args: { path: path.trim() } }
-  },
+  build: buildPathArgs,
 }
 
 /**

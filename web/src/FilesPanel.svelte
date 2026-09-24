@@ -41,6 +41,7 @@
    * 同じ値へ書き出し直す・同じファイルを読み直すことが多く、毎回打ち直させると手間になる
    * ——「新規保存」が消すのは1回きりの新しい名前だからで、性質が違う。
    */
+  import { pathLike } from './commands/command'
   import type { DocumentInfo } from './session'
 
   let {
@@ -132,9 +133,7 @@
    * 空だけを弾く(**ファイル名の検査`nameProblem`は掛けない**)。STEP/STLは`models/`配下に
    * 閉じない任意パスで、`commands/files.ts`のdocstringが定めたとおり解釈はサーバに任せる。
    */
-  function pathProblem(text: string): string | null {
-    return text.trim() === '' ? 'パスを打つ' : null
-  }
+  const pathProblem = pathLike('パス')
 
   let exportStepPath = $state('')
   const exportStepProblem = $derived(pathProblem(exportStepPath))
@@ -152,7 +151,7 @@
     onExportStl(exportStlPath.trim())
   }
 
-  /** Enterで、その行のボタンと同じことをする(`#file-name-input`と同じ規律)。 */
+  /** Enterで、その行のボタンと同じことをする。 */
   function onRowEnter(event: KeyboardEvent, submit: () => void): void {
     if (event.key !== 'Enter') return
     event.preventDefault()
@@ -181,11 +180,7 @@
       placeholder="model.json"
       value={draftName}
       oninput={(event) => (draftName = (event.target as HTMLInputElement).value)}
-      onkeydown={(event) => {
-        if (event.key !== 'Enter') return
-        event.preventDefault()
-        submitDraft()
-      }}
+      onkeydown={(event) => onRowEnter(event, submitDraft)}
     />
     <button id="file-save-new" onclick={submitDraft} disabled={draftProblem !== null}>
       新規保存
