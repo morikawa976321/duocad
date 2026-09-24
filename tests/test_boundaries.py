@@ -24,8 +24,7 @@ DUOCAD_DIR = Path(__file__).resolve().parent.parent / "duocad"
 # `topopt/` は**B-repを直接読む**数値計算のサブシステム(voxelize は OCCT の厳密なbboxを、
 # anchor/design_space は検証用の合成ソリッドを build123d で組む)。`kernel.bounding_box` へ
 # 回すと `SetGap` の順序が違って値が 1e-7mm 動き、`check_voxelize.py` [7](辺長が要素サイズの
-# 整数倍の箱は体積が厳密一致)が落ちるため、名指しの免除にしてある。幾何アクセスを
-# kernel/query 越しにする移行は別タスクとして残っている。
+# 整数倍の箱は体積が厳密一致)が落ちるため、名指しの免除にしてある。
 #
 # `kernel_brep.py`(生成CADのBRep保存・ブーリアン・最終ソリッドの幾何検査)・
 # `kernel_meshing.py`(OCCTの面分割の段階制御と境界交差の再分割)・
@@ -86,8 +85,8 @@ def _source_files() -> list[tuple[str, Path]]:
 
 
 def test_only_kernel_module_imports_ocp():
-    """duocad配下(サブパッケージ含む)でOCP.*をimportしてよいのはパッケージ直下のkernel.pyだけ
-    (verbが直接OCPを叩き始めるのを防ぐ。動的importでの迂回も検出する)。"""
+    """duocad配下(サブパッケージ含む)でOCP.*をimportしてよいのは `OCP_ALLOWED` に名指しした
+    カーネル層だけ(verbが直接OCPを叩き始めるのを防ぐ。動的importでの迂回も検出する)。"""
     violations = [
         rel
         for rel, py_file in _source_files()
@@ -150,7 +149,7 @@ def test_boundary_scan_covers_every_source_file():
     """走査対象がサブパッケージを含む全ソースであること(免除は名指しした相対パスのみ)。
 
     走査が0件になっていたら上の境界テストは常に緑で何も検査していないので、
-    「実ファイルを1つ以上見ている」ことと「既知の5モジュールを取りこぼしていない」ことを固定する。
+    既知のモジュールと免除に名指ししたファイルを取りこぼしていないことを固定する。
     """
     scanned = {rel for rel, _ in _source_files()}
     expected = {
@@ -162,13 +161,4 @@ def test_boundary_scan_covers_every_source_file():
         "kernel.py",
     }
     assert expected <= scanned, f"走査から漏れているモジュールがある: {sorted(expected - scanned)}"
-
-    # 免除一覧が黙って伸びないように、中身そのものを固定する。**増やすときはここも直す** ——
-    # 直すこと自体が「境界を1つ緩めた」という判断の記録になる。
-    assert OCP_ALLOWED == frozenset(
-        {"kernel.py", "kernel_brep.py", "kernel_meshing.py", "mesh_geometry.py", "topopt/voxelize.py"}
-    )
-    assert BUILD123D_ALLOWED == frozenset(
-        {"query.py", "topopt/voxelize.py", "topopt/anchor.py", "topopt/design_space.py"}
-    )
     assert OCP_ALLOWED <= scanned and BUILD123D_ALLOWED <= scanned

@@ -1,8 +1,7 @@
 """文書に**意図的に残した列挙**が、コード側の正と一致していることを機械で見る。
 
-前段の減量タスク(`20260906-0100` / `-0250` / `-0800`)は「列挙の転記は消して参照へ畳む」を
-原則にしたが、**読み手がそこで引けなくなる列挙は文書側に残した**。残したものは手で同期する
-しかないので、ここがその最後の受け皿になる。
+列挙の転記は消して参照へ畳むのが原則だが、**読み手がそこで引けなくなる列挙は文書側に残して
+ある**。残したものは手で同期するしかないので、ここがその最後の受け皿になる。
 
 **落ちたときの意味**: コードを変えたのに、それを写した文書の行が古いまま。
 **期待値を書き換えて緑にしない** —— 正はコード側にあるので、失敗メッセージが名指しする
@@ -26,7 +25,6 @@ from pathlib import Path
 
 import pytest
 
-from duocad import sketch
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.session import Session
 
@@ -115,8 +113,7 @@ def test_the_mcp_tool_table_matches_the_tools_that_are_actually_published():
     """`MCP.md`「公開ツール」表と `tools/list` の顔ぶれが一致する。
 
     これが落ちたら、**AIが読む一覧と実際に呼べる口がずれている**(無い道具を勧める/
-    ある道具を隠す)。`tests/test_mcp_verbs.py` の `EXPECTED_TOOLS` はコード側の顔ぶれしか
-    固定しておらず、この表との一致は誰も見ていなかった。
+    ある道具を隠す)。ツールの顔ぶれの一致はここ1か所だけで見る。
     """
     documented = _documented_tool_names()
     published = _published_tool_names()
@@ -198,22 +195,6 @@ def test_the_documented_error_vocabulary_matches_the_source(path: Path, heading:
     )
 
 
-def test_the_written_vocabulary_counts_match_the_source():
-    """「N語彙」と書いてある数が実際の語彙数と合う。
-
-    2026-09-05の監査時点でコード側の2箇所が「6語彙」のまま7つを列挙しており、
-    リポジトリ内で6と7が混在していた。**数を書くのは列挙が並記されている場合だけ**という
-    線引き(`20260906-0100` の契約)を残すなら、その数はここで押さえるしかない。
-    """
-    expected = len(_error_codes_from_source())
-    wrong = {}
-    for path in (MCP_MD, MCP_SERVER_PY, REPO_ROOT / "tests" / "test_mcp_verbs.py"):
-        written = {int(n) for n in re.findall(r"(\d+)語彙", path.read_text(encoding="utf-8"))}
-        if written - {expected}:
-            wrong[path.name] = sorted(written - {expected})
-    assert not wrong, f"失敗語彙は {expected} 個だが、そう書いていない箇所がある: {wrong}"
-
-
 # --------------------------------------------------------------------------------------
 # docs/TOPOPT.md 「現在の正」表 —— 既定値の索引。値そのものはコード側が正
 # --------------------------------------------------------------------------------------
@@ -275,8 +256,7 @@ def test_the_current_truth_table_values_match_the_code():
     """索引に書いてある既定値がコードの定数と一致する。
 
     落ちたら、**既定値を変えたのに `docs/TOPOPT.md` の索引が古い**。この文書は節が時系列で
-    並んでいて位置から新旧を判断できないため、**この表が古いと現行値を引く手段が無くなる**
-    (それを解消するために `20260906-0800` が新設した表である)。
+    並んでいて位置から新旧を判断できないため、**この表が古いと現行値を引く手段が無くなる**。
     """
     wrong = []
     for item, numbers, symbols in _current_truth_rows():

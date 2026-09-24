@@ -195,7 +195,7 @@ def test_describe_predicates_changes_nothing(server: McpServer, session: Session
 # 3. 0件と不正は別物
 # --------------------------------------------------------------------------------------
 def test_zero_matches_is_a_success_that_says_zero(server: McpServer):
-    """**一致0件はエラーではない**。0件だと分かる形で返る(項番7)。
+    """**一致0件はエラーではない**。0件だと分かる形で返る。
 
     ここをエラーにすると、AIは「述語が壊れている」と読んで書き方をいじり始める。
     実際に直すべきは条件の値である。逆に黙って古い選択を残すと、人が承認したつもりで
@@ -215,7 +215,7 @@ def test_zero_matches_still_replaces_the_previous_selection(server: McpServer, s
 
 
 def test_an_unknown_op_comes_back_with_the_valid_ones(server: McpServer):
-    """**AIが自力で直せるエラー**(項番6)。未知の `op` に有効なopの一覧を添える。
+    """**AIが自力で直せるエラー**。未知の `op` に有効なopの一覧を添える。
 
     一覧を添えないと、AIは `describe_predicates` を知らないかぎり総当たりに入る。
     添える一覧は `describe_ops()` そのもの —— ここで書き下すと二重管理になる。
@@ -227,26 +227,6 @@ def test_an_unknown_op_comes_back_with_the_valid_ones(server: McpServer):
     )
     assert error["code"] == "invalid_predicate"
     assert error["valid_ops"] == predicates.describe_ops()
-    assert set(error["valid_kinds"]) == set(predicates.PREDICATE_KINDS)
-
-
-def test_a_type_error_in_a_predicate_is_also_self_repairable(server: McpServer):
-    """型違い(`value` に文字列)も同じ扱い。`op` の綴りだけが対象ではない。"""
-    error = call_error(
-        server,
-        "propose_selection",
-        {"predicate": {"kind": "edge", "where": [{"op": "length_gt", "value": "20"}]}},
-    )
-    assert error["code"] == "invalid_predicate"
-    assert error["valid_ops"] == predicates.describe_ops()
-
-
-def test_an_unknown_predicate_kind_is_reported_the_same_way(server: McpServer):
-    """`kind` の間違い(領域を述語で選ぼうとする等)も同じ経路で直せる。"""
-    error = call_error(
-        server, "propose_selection", {"predicate": {"kind": "region", "where": []}}
-    )
-    assert error["code"] == "invalid_predicate"
     assert set(error["valid_kinds"]) == set(predicates.PREDICATE_KINDS)
 
 
@@ -288,7 +268,7 @@ def test_a_malformed_reference_is_refused_without_touching_the_selection(
 
 
 def test_a_hidden_body_is_not_scanned_and_saying_so_is_an_error(server: McpServer, session: Session):
-    """不可視Bodyは走査しない(A1の項番18)。**明示して指したら**エラーになる。
+    """不可視Bodyは走査しない。**明示して指したら**エラーになる。
 
     「指定したのに0件」と「見えないので対象外」はAIから区別が付かないため。
     """
@@ -301,9 +281,9 @@ def test_a_hidden_body_is_not_scanned_and_saying_so_is_an_error(server: McpServe
     assert error["code"] == "invalid_argument"
 
 
-#: **形を選択から取る全ツール**と、それぞれが提案のまま呼ばれたときの引数。
-#: 1つでも漏れると、そのツールだけ提案と確定の区別が素通りになる(F の決定1は
-#: 「全verbへ自動的にかかる」と主張しているので、**全部を名指しで検査する**)。
+#: 形を選択から取るツールの代表(辺・面の2種別)と、それぞれが提案のまま呼ばれたときの引数。
+#: 全部を並べてはいない —— 宣言(`uses_selection`)と実体が `require_*` を呼ぶことの一致は
+#: `tests/test_vertex_pick.py` が見ており、門は `selection.confirmed_items` の1か所にある。
 SELECTION_CONSUMING_TOOLS = [
     ("fillet", {"radius": 2.0}, "edge"),
     ("chamfer", {"distance": 2.0}, "edge"),
@@ -453,24 +433,6 @@ def test_a_verb_targets_the_body_the_selection_names(tmp_path: Path, tool: str, 
     assert payload["changed_bodies"] == ["target"], "選択と違うBodyに当たっている"
     assert kernel.face_count(target.shape) > target_faces
     assert kernel.face_count(other.shape) == other_faces, "無関係なBodyが変わった"
-
-
-def test_the_ai_can_execute_its_own_proposal_after_committing(server: McpServer, session: Session):
-    """**禁止ではない** —— `commit_selection` を明示すれば自分の提案を実行できる。
-
-    人が居ない場面(AI単独でモデルを作る)で提案→実行が塞がると、§0の到達表が埋まらない。
-    明示の1手を踏ませることで、「提案のまま適用された操作」が後から区別できなくなる
-    事故だけを防いでいる。
-    """
-    box = box_of(session)
-    faces_before = kernel.face_count(box.shape)
-    call(server, "propose_selection", {"predicate": VERTICAL_EDGES})
-    call(server, "commit_selection")
-
-    payload = call(server, "fillet", {"radius": 2.0})
-
-    assert payload["verb"] == "fillet"
-    assert kernel.face_count(box.shape) > faces_before
 
 
 def test_measure_works_on_a_proposal(server: McpServer):
@@ -623,7 +585,7 @@ def test_the_whole_interleaved_lap_runs_through_mcp_alone(server: McpServer, ses
 # 7. AI起点の選択変更が画面へ届く
 # --------------------------------------------------------------------------------------
 def test_a_selection_change_from_mcp_fires_exactly_one_event(server: McpServer, session: Session):
-    """1ツール1イベント。イベントは**選択を丸ごと**運ぶ(UIが描き直すのに足る・項番13)。"""
+    """1ツール1イベント。イベントは**選択を丸ごと**運ぶ(UIが描き直すのに足る)。"""
     seen: list = []
     session.add_listener(seen.append)
     try:

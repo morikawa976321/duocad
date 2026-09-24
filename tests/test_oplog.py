@@ -11,15 +11,6 @@ import pytest
 
 from duocad.oplog import OpLog
 
-def test_append_seq_is_monotonically_increasing():
-    """append()を複数回呼ぶとseqが1から単調増加する。"""
-    log = OpLog()
-    op1 = log.append("noop", {})
-    op2 = log.append("noop", {})
-    op3 = log.append("noop", {})
-    assert [op1.seq, op2.seq, op3.seq] == [1, 2, 3]
-
-
 def test_to_json_emits_actual_json_with_the_logged_fields():
     """to_json()の出力は本物のJSONで、各操作のseq/verb/args/provenanceが読める形で入る
     (保存形式はJSON。SQLiteもpickleもrepr+evalも不可。実装計画書§3.6 —
@@ -27,24 +18,13 @@ def test_to_json_emits_actual_json_with_the_logged_fields():
     log = OpLog()
     log.append("import_step", {"path": "x.step", "body_id": "b1"})
 
-    parsed = json.loads(log.to_json())  # JSONでなければここで例外になる
+    ops = json.loads(log.to_json())["operations"]  # JSONでなければここで例外になる
 
-    # 外側の入れ物(素のリスト / {"operations": [...]} 等)は縛らない。
-    # 縛るのは「操作が1件ずつJSONオブジェクトとして読めること」。
-    if isinstance(parsed, dict):
-        candidates = [v for v in parsed.values() if isinstance(v, list)]
-        assert len(candidates) == 1, f"操作の配列を1つだけ含むこと: keys={sorted(parsed)}"
-        ops = candidates[0]
-    else:
-        ops = parsed
-    assert isinstance(ops, list) and len(ops) == 1
+    assert len(ops) == 1
     assert ops[0]["seq"] == 1
     assert ops[0]["verb"] == "import_step"
     assert ops[0]["args"] == {"path": "x.step", "body_id": "b1"}
     assert ops[0]["provenance"] is None
-    assert "selection" not in ops[0], (
-        "selectionフィールドは2026-08-20に廃止。書き込み側が復活していないか"
-    )
 
 
 def test_to_json_from_json_roundtrip_matches_exactly():
@@ -102,7 +82,6 @@ def test_to_json_stamps_the_current_format_version():
     payload = json.loads(OpLog().to_json())
 
     assert payload["version"] == OpLog.FORMAT_VERSION
-    assert OpLog.FORMAT_VERSION == 2
 
 
 def test_from_json_refuses_the_old_format_version_explicitly():

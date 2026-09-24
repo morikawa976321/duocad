@@ -129,7 +129,7 @@ class DocumentTools:
     def __init__(self, session: Session) -> None:
         self.session = session
         #: ツールの顔ぶれは起動中変わらない(`listChanged` を宣言していない)ので**1度だけ組む**。
-        #: `tools/call` は呼び出しのたびにこの表を引くため、都度組み直すと29個のdictを毎回作る。
+        #: `tools/call` は呼び出しのたびにこの表を引くため、都度組み直すとツールの数だけdictを毎回作る。
         self._descriptors = self._build_descriptors()
         #: 名前 → 定義。`tools/call` の線形探索を避けるための索引。
         self._descriptor_by_name = {d["name"]: d for d in self._descriptors}
@@ -445,8 +445,8 @@ class DocumentTools:
         # 「選び直す」ではなく「減らす」で、`selection_empty` とは違う。
         #
         # **`SelectionKindMismatch` を先に見る**。`SelectionEmpty` の
-        # 派生なので、順序を入れ替えると種別違いが `selection_empty` に吸われて7語彙目が
-        # 死ぬ。「空でないのに empty と名乗らない」ためにコードを分けたので、ここが要。
+        # 派生なので、順序を入れ替えると種別違いが `selection_empty` に吸われて
+        # `selection_kind_mismatch` が死ぬ。「空でないのに empty と名乗らない」ためにコードを分けたので、ここが要。
         if isinstance(error, selection.SelectionKindMismatch):
             return {
                 **base,
@@ -493,7 +493,7 @@ class DocumentTools:
     #    **`changed_bodies` は `Session.body_revision` の呼び出し前後の差**から導くこと。
     #    verbごとに「これはbodyを変える」と数え上げると、verbが増えたときに静かに漏れる。
     # 3. **失敗も封筒に入れて返す。** `{"error": {"code","message","tool","exception", ...}}`
-    #    を `json.dumps` した本文 + `isError: true`。コードは7語彙
+    #    を `json.dumps` した本文 + `isError: true`。コードは次の語彙に限る
     #    (`not_found` / `invalid_argument` / `selection_not_committed` / `selection_empty` /
     #    `selection_kind_mismatch` / `invalid_predicate` / `internal`)。**例外のテキストを
     #    素で返さない。** **`FileNotFoundError` を忘れない** —— パスの間違いは AI が直せる

@@ -85,7 +85,7 @@ def _ts_point_keys() -> dict:
     end = text.index("const VERB_TO_KIND")
     block = text[start:end]
     found: dict = {}
-    pattern = "^  (\w+): \{\n    pointKeys: (\[.*\]),$"
+    pattern = r"^  (\w+): \{\n    pointKeys: (\[.*\]),$"
     for kind, body in re.findall(pattern, block, re.M):
         pairs = re.findall(r"\['(\w+)', '(\w+)'\]", body)
         found[kind] = tuple(pairs)

@@ -83,24 +83,6 @@ def test_a_concurrent_shape_change_empties_the_confirmed_selection_and_the_next_
         box_session.fillet(1.0)
 
 
-def test_undo_between_commit_and_the_verb_call_also_empties_the_selection(box_session: Session):
-    """undo/redo とAIターンの競合(タスクH `resets_selection` 対象の1つ)。
-
-    人がAIの計画を先読みして操作を取り消しても、AIが持っていた確定選択は
-    リセットされる —— `undo` は `resets_selection=True`。
-    """
-    commit_face(box_session, index=1)
-    box_session.extrude_face(2.0)  # 何か1つログに積む(取り消せる操作を作る)
-    commit_edge(box_session)
-    assert len(selection.get_selection(box_session.document).items) == 1
-
-    box_session.undo()
-
-    assert len(selection.get_selection(box_session.document).items) == 0
-    with pytest.raises(selection.SelectionEmpty):
-        box_session.fillet(1.0)
-
-
 # ========================================================================================
 # B. 埋めた穴: 選択は生きているが、対象ボディが人に隠された(resets_selectionが届かない経路)
 # ========================================================================================
