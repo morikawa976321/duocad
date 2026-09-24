@@ -198,6 +198,15 @@ def test_the_mesh_is_delivered_as_exactly_one_face_with_the_stored_triangles():
     assert payload["untriangulated"] == []
 
 
+def test_the_state_broadcast_does_not_carry_the_triangles_but_the_saved_log_does():
+    """落ちたら、メッシュを1つ足した後の全操作の状態配信に三角形の全部が乗る(最適化の結果で1配信あたり数MB)。"""
+    session, _ = _tetra_session()
+    delivered = session.state_meta()["log"][-1]["args"]
+    assert "配信しない" in delivered["positions"] and "配信しない" in delivered["indices"], delivered
+    saved = OpLog.from_json(session.document.log.to_json()).entries[-1].args
+    assert saved["positions"] == TETRA_POSITIONS and saved["indices"] == TETRA_INDICES
+
+
 def test_body_meta_reports_one_face_and_the_mesh_volume():
     """`kernel.face_count(None)` を踏まずに軽量な状態が作れること(ドラッグ選択の律速点)。"""
     session, body_id = _tetra_session()
