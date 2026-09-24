@@ -11,7 +11,7 @@
  * (`missingSelection` を使わない理由)。
  *
  * **4つとも Enter が要る**(`command.ts` の `needsEnter`)——選択の `max` が `null` で
- * 対象を複数取りうるため(`tests/test_ui_command_wiring.py` の `ENTER_REQUIRED`)。
+ * 対象を複数取りうるため。
  *
  * **起動時のプリセレクトは `App.svelte` の役目**(`CommandHost` の `onStart` → 配りもの
  * `state.optimize` の該当配列をそのまま `modifySelection` へ渡す。`duocad/optimize.py` の

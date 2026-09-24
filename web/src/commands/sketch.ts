@@ -295,8 +295,7 @@ export const SKETCH_CREATE: CommandDef = {
  * **`sketch_create` とは別verb**(`duocad/sketch.py` の `sketch_create` docstring参照)。
  * 貼る先の指し方(`target`)は `SKETCH_CREATE` と全く同じ2状態(基準平面 / 面は選択にある)
  * だが、`distance` という how を持つので Enter が要る —— 同じverb名に足すと
- * `sketch_create` 自体の即適用まで変わってしまうため、名前を分けてある
- * (`tests/test_ui_command_wiring.py` の `ENTER_REQUIRED` はverb名ごとに1つ)。
+ * `sketch_create` 自体の即適用まで変わってしまうため、名前を分けてある。
  */
 export const SKETCH_CREATE_OFFSET: CommandDef = {
   id: 'sketch_create_offset',

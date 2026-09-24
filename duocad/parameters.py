@@ -196,7 +196,7 @@ def rebuild(
     # 失敗しても文書を壊さないための退避。再生は必ず**新しい** Body / Sketch を作るので、
     # ここで持つ参照は再生中に書き換わらない(だから元に戻せる)。退避が無いと、
     # 再生が途中で失敗したときに「ログは5行あるがボディもスケッチも0」という
-    # 不整合な文書が残る(参照STEPを移動しただけでも起きうる)。
+    # 不整合な文書が残る。
     saved_bodies = list(doc.bodies)
     saved_sketches = list(doc.sketches)
     saved_parameters = dict(doc.parameters)

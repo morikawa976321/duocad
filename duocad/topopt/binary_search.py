@@ -59,7 +59,7 @@ class SearchConditions:
     bbox_cache: Any = None
     mapping: Any = None
     #: 保持・除外CADと格子セルの重なり体積の前計算(`acceptance.RegionOverlaps`)。探索1回のあいだ格子と
-    #: 条件は固定なので、この探索が1つ持ち、探索が終わったら捨てる。`None` なら候補ごとにブーリアンを取る旧経路。
+    #: 条件は固定なので、この探索が1つ持ち、探索が終わったら捨てる。`None` なら候補ごとにブーリアンを取る(直接ブーリアン)。
     region_overlaps: Any = field(default_factory=acceptance.RegionOverlaps)
     #: 保持ソリッド由来のセル(設計空間と同じ形の bool 配列、`DesignSpace.keep`。設計空間に含まれること)。
     #: 探索が作るどの候補でも材料のまま(`keep ⊆ mask`): `peel` は削らず、島の除去は全保持セルを含む成分だけを残す。
@@ -873,8 +873,8 @@ def _recheck_regions_without_precompute(best: FeasibleModel, seed: FeasibleModel
                                         conditions: SearchConditions) -> tuple[FeasibleModel, str]:
     """段階4が更新した `best` の保持・除外を、前計算(`region_overlaps`)を使わずブーリアンで取り直す(§3)。
 
-    段階4の評価は前計算から引くので、報告済みの合格は「前計算が旧経路と同じ答えを出す」ことに
-    乗っている。採用形状だけは旧経路で確かめ、通れば保持・除外の報告を旧経路の値に差し替えて返す。
+    段階4の評価は前計算から引くので、報告済みの合格は「前計算が直接ブーリアンと同じ答えを出す」ことに
+    乗っている。採用形状だけは直接ブーリアンで確かめ、通れば保持・除外の報告をその値に差し替えて返す。
     通らなければ、段階3でキャッシュ無しに再検査済みの `seed` を返す(呼び出し側が `best` との
     同一性で食い違いを見分ける)。`best` が `seed` のままなら何もしない(検査済み)。
     """
@@ -982,7 +982,7 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
 
     評価予算は両段階を通した1本なので `initial.evaluations` から数える(削る候補1つが1回)。
     評価は bbox キャッシュ無しで行うが、保持・除外の共通体積は前計算(`region_overlaps`)から引く。
-    採用形状はこの関数を出る前に前計算を使わない旧経路で取り直す(`_recheck_regions_without_precompute`)。
+    採用形状はこの関数を出る前に前計算を使わない直接ブーリアンで取り直す(`_recheck_regions_without_precompute`)。
 
     `on_evaluation(event: dict)` は出発形状で1回(`outcome='initial'`)、以降は評価に数えた候補ごとに1回、合格形状を更新した後で呼ぶ。
     `event` は素の値だけ: `evaluation`(通算の評価回数)/ `outcome`(`'initial'` / `'accepted'` / `'rejected'`)/ `failed` /

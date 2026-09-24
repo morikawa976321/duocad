@@ -243,8 +243,8 @@ class RegionOverlaps:
     """保持・除外CADと格子セルの重なり体積を、格子 × ソリッドの組ごとに求めて持つメモ。
 
     `region_check(..., overlaps=)` に渡すと、候補マスクごとの共通体積が「材料セルの重なり体積の
-    足し算」になる(旧経路 `intersection_volume` は候補ごとに材料を直方体列へ融着してブーリアンを
-    取っていた)。重なり体積は旧経路と同じく、セル中心近似ではなく**セルとソリッドの共通体積
+    足し算」になる(直接ブーリアン `intersection_volume` は候補ごとに材料を直方体列へ融着してブーリアンを
+    取る)。重なり体積は直接ブーリアンと同じく、セル中心近似ではなく**セルとソリッドの共通体積
     そのもの**(境界のセルは部分的な重なりを持つ)。
 
     **寿命は探索1回**(`binary_search.SearchConditions` が持つ。探索中は格子も条件も固定)。
@@ -253,8 +253,8 @@ class RegionOverlaps:
     探索をまたいで持ち越さない。**スレッド間で共有しない**(計算は遅延して書き込む)。
     メモリは外接箱と格子の共通部分のセル数 × 8 byte(ソリッドごと)。
 
-    前計算を作れない・途中で失敗するソリッドは、そのソリッドだけ旧経路へ戻す(`fallbacks` に理由が残る)。
-    前計算は速さのためだけにあり、旧経路と同じ答えを返せないなら使わない。
+    前計算を作れない・途中で失敗するソリッドは、そのソリッドだけ直接ブーリアンへ戻す(`fallbacks` に理由が残る)。
+    前計算は速さのためだけにあり、直接ブーリアンと同じ答えを返せないなら使わない。
     """
 
     def __init__(self):
@@ -279,7 +279,7 @@ class RegionOverlaps:
         key = (kernel.shape_key(raw), tuple(float(v) for v in grid.origin), float(grid.spacing),
                tuple(int(n) for n in grid.shape))
         if key in self._entries:
-            entry = self._entries[key]  # 旧経路へ戻した項目は None
+            entry = self._entries[key]  # 直接ブーリアンへ戻した項目は None
         else:
             try:
                 entry = self._entries[key] = _CellOverlaps(grid, raw, cache=cache)
@@ -473,7 +473,7 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
     二値化は行わない —— それは読み取りアダプター `inspect_document` に閉じてある。
     `before` は島除去前のboolマスク(除去で材料が増えていないことをここで確認する)。
     `region_overlaps`(`RegionOverlaps`)を渡すと、保持・除外の共通体積を前計算から引く(既定は候補ごとに
-    ブーリアンを取る旧経路。報告の形と数値許容差は同じ)。
+    ブーリアンを取る直接ブーリアン。報告の形と数値許容差は同じ)。
     `fields` に dict を渡すと、安全率を計算できたときだけ要素ごとの `u_eᵀ k₀ u_e`(格子と同じ形、
     材料外は 0)を `fields['element_energy']` に入れる。報告(JSON)には入れない(段階4の削る順位用)。
     `solver` は解法の方針(`'auto'` は `fem.choose_solver` が候補ごとに `cg` / `direct` を選ぶ)。報告の

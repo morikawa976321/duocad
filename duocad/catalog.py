@@ -1531,8 +1531,7 @@ def agent_instructions() -> str:
 
     - **確認を待たず適用してよい操作** … 対象を何個でも取る引数が無く、how(寸法・選択肢・
       パス)の入力も無いもの。人に聞くことが残っていないので、提案で止める意味が無い。
-      **判定基準は手動UIのEnter要否と同一**(`web/src/commands/command.ts` の `needsEnter`。
-      表は `tests/test_ui_command_wiring.py`)。個々のverb名をこの文に書かない —— verbを
+      **判定基準は手動UIのEnter要否と同一**(`web/src/commands/command.ts` の `needsEnter`)。個々のverb名をこの文に書かない —— verbを
       足した日に古くなるうえ、基準さえ書けばツール定義の引数から導ける。
     - **止まるか進むかをAIが決める操作** … 上以外。依頼の具体性から判断する。
 
