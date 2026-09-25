@@ -18,10 +18,8 @@ import pytest
 
 from duocad import query
 from duocad.document import Document
-from duocad.sketch import add_circle, base_plane, sketch_create
-from duocad.verbs import extrude, fillet
-from duocad.region import region_ref
-from document_support import edges_of_kind, kinds_of, new_box
+from duocad.verbs import fillet
+from document_support import edges_of_kind, kinds_of, new_box, new_box_with_hole
 
 #: 20mm立方体・全辺フィレットの実測（上のdocstring参照）
 CUBE_MM = 20.0
@@ -34,17 +32,6 @@ FILLET_R3_KINDS = {"plane": 6, "cylinder_partial": 12, "other": 8}
 #: 半径を 1.0 + 0.25*i でバラバラにしたときの実測
 VARIED_RADII_KINDS = {"plane": 6, "cylinder_partial": 12, "bspline": 8}
 HOLE_FILLET_KINDS = {"plane": 6, "cylinder_full": 1, "torus": 2}
-
-
-# --------------------------------------------------------------------------------------
-# 道具（duocadのverbだけで素材を作る。生のOCPで組み立てない）
-# --------------------------------------------------------------------------------------
-def new_box_with_hole(doc: Document, size: float = CUBE_MM, radius: float = 4.0) -> str:
-    body_id = new_box(doc, size)
-    sketch_id = sketch_create(doc, base_plane("XY"))
-    add_circle(doc, sketch_id, (size / 2, size / 2), radius)
-    extrude(doc, [region_ref(sketch_id, 1)], size, mode="cut", body_id=body_id)
-    return body_id
 
 
 # --------------------------------------------------------------------------------------

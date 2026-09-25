@@ -16,10 +16,9 @@ import json
 import pytest
 
 from duocad import query
-from duocad.document import Body, Document
-from duocad.region import region_ref
-from duocad.sketch import add_circle, add_rectangle, base_plane, sketch_create
-from duocad.verbs import chamfer, extrude, fillet, shell
+from duocad.document import Document
+from duocad.verbs import chamfer, fillet, shell
+from document_support import kinds_of, new_box, new_box_with_hole
 
 CUBE_MM = 20.0
 THICKNESS_OK = 2.0
@@ -32,37 +31,13 @@ VOLUME_ROUNDED_LIP = 3642.5
 
 
 # --------------------------------------------------------------------------------------
-# 道具(duocadのverbだけで素材を作る。生のOCPで組み立てない)
+# 道具(素材は `document_support` の verb だけで作る。生のOCPで組み立てない)
 # --------------------------------------------------------------------------------------
-def new_box(doc: Document, size: float = CUBE_MM) -> str:
-    sketch_id = sketch_create(doc, base_plane("XY"))
-    add_rectangle(doc, sketch_id, (0.0, 0.0), size, size)
-    operation = extrude(doc, [region_ref(sketch_id, 1)], size, mode="join")
-    return operation.args["body_id"]
-
-
-def new_box_with_hole(doc: Document, size: float = CUBE_MM, radius: float = 4.0) -> str:
-    body_id = new_box(doc, size)
-    sketch_id = sketch_create(doc, base_plane("XY"))
-    add_circle(doc, sketch_id, (size / 2, size / 2), radius)
-    extrude(doc, [region_ref(sketch_id, 1)], size, mode="cut", body_id=body_id)
-    return body_id
-
-
-def body_of(doc: Document, body_id: str) -> Body:
-    return next(body for body in doc.bodies if body.id == body_id)
-
-
-def kinds_of(doc: Document, body_id: str) -> dict:
-    described = query.describe_shape(body_of(doc, body_id).shape)
-    return {kind: count for kind, count in described["faces_by_type"].items() if count}
-
-
 def faces_facing(doc: Document, body_id: str, axis: int, sign: float) -> list:
     """外向き法線が `sign * e_axis` の面の添字(**決め打ちしない**)。"""
     return [
         face["index"]
-        for face in query.describe_faces(body_of(doc, body_id).shape)
+        for face in query.describe_faces(doc.get_body(body_id).shape)
         if face["normal"][axis] * sign > 0.9
     ]
 
@@ -75,7 +50,7 @@ def top_face(doc: Document, body_id: str) -> int:
 def edges_at_z(doc: Document, body_id: str, z: float) -> list:
     return [
         edge["index"]
-        for edge in query.describe_edges(body_of(doc, body_id).shape)
+        for edge in query.describe_edges(doc.get_body(body_id).shape)
         if abs(edge["start"][2] - z) < 1e-6 and abs(edge["end"][2] - z) < 1e-6
     ]
 
@@ -88,12 +63,12 @@ def test_shell_opens_the_top_and_leaves_a_wall():
     doc = Document()
     body_id = new_box(doc)
     opening = top_face(doc, body_id)
-    volume_before = query.volume(body_of(doc, body_id).shape)
+    volume_before = query.volume(doc.get_body(body_id).shape)
 
     operation = shell(doc, [opening], THICKNESS_OK, body_id=body_id)
 
     assert kinds_of(doc, body_id) == {"plane": 11}
-    assert query.volume(body_of(doc, body_id).shape) == pytest.approx(VOLUME_TOP_OPEN, rel=1e-6)
+    assert query.volume(doc.get_body(body_id).shape) == pytest.approx(VOLUME_TOP_OPEN, rel=1e-6)
     assert volume_before == pytest.approx(CUBE_MM**3, rel=1e-6)
     assert operation.verb == "shell"
     assert operation.args == {"faces": [opening], "thickness": THICKNESS_OK, "body_id": body_id}
@@ -110,7 +85,7 @@ def test_two_openings_make_a_tube():
     shell(doc, openings, THICKNESS_OK, body_id=body_id)
 
     assert kinds_of(doc, body_id) == {"plane": 10}
-    assert query.volume(body_of(doc, body_id).shape) == pytest.approx(
+    assert query.volume(doc.get_body(body_id).shape) == pytest.approx(
         VOLUME_TOP_AND_BOTTOM_OPEN, rel=1e-6
     )
 
@@ -119,13 +94,13 @@ def test_shell_keeps_a_wall_around_a_through_hole():
     """穴つきの箱を上面開口で中空にすると、穴の円筒の周りにも壁が残る(14面)。"""
     doc = Document()
     body_id = new_box_with_hole(doc)
-    volume_before = query.volume(body_of(doc, body_id).shape)
+    volume_before = query.volume(doc.get_body(body_id).shape)
 
     shell(doc, [top_face(doc, body_id)], THICKNESS_OK, body_id=body_id)
 
-    described = query.describe_shape(body_of(doc, body_id).shape)
+    described = query.describe_shape(doc.get_body(body_id).shape)
     assert described["face_count"] == 14
-    assert 0 < query.volume(body_of(doc, body_id).shape) < volume_before
+    assert 0 < query.volume(doc.get_body(body_id).shape) < volume_before
 
 
 def test_provenance_is_json_serialisable_and_maps_the_opening_to_its_rim():
@@ -154,19 +129,19 @@ def test_shell_is_logged_and_undoable():
     """ログに1行積まれ、undoで元の形状(6面・体積8000)へ戻り、redoで中空に戻る。"""
     doc = Document()
     body_id = new_box(doc)
-    shape_before = body_of(doc, body_id).shape
+    shape_before = doc.get_body(body_id).shape
     log_before = len(doc.log.entries)
 
     shell(doc, [top_face(doc, body_id)], THICKNESS_OK, body_id=body_id)
     assert len(doc.log.entries) == log_before + 1
 
     doc.log.undo(doc)
-    assert body_of(doc, body_id).shape is shape_before
+    assert doc.get_body(body_id).shape is shape_before
     assert kinds_of(doc, body_id) == {"plane": 6}
 
     doc.log.redo(doc)
     assert kinds_of(doc, body_id) == {"plane": 11}
-    assert query.volume(body_of(doc, body_id).shape) == pytest.approx(VOLUME_TOP_OPEN, rel=1e-6)
+    assert query.volume(doc.get_body(body_id).shape) == pytest.approx(VOLUME_TOP_OPEN, rel=1e-6)
 
 
 # --------------------------------------------------------------------------------------
@@ -177,13 +152,13 @@ def test_a_failing_shell_raises_and_leaves_nothing_behind(thickness: float):
     """厚み0以下・半辺に届く厚み(BRepCheck偽)・形が変わらない厚み はすべて例外で、文書もログも変えない。"""
     doc = Document()
     body_id = new_box(doc)
-    shape_before = body_of(doc, body_id).shape
+    shape_before = doc.get_body(body_id).shape
     log_before = len(doc.log.entries)
 
     with pytest.raises(ValueError):
         shell(doc, [top_face(doc, body_id)], thickness, body_id=body_id)
 
-    assert body_of(doc, body_id).shape is shape_before, "失敗したのに形状が置き換わった"
+    assert doc.get_body(body_id).shape is shape_before, "失敗したのに形状が置き換わった"
     assert len(doc.log.entries) == log_before, "失敗したのにログへ積まれた"
 
 
@@ -210,14 +185,14 @@ def test_shell_after_a_full_chamfer_is_rejected_instead_of_silently_doing_nothin
     """全辺を面取りした箱は MakeThickSolid が入力をそのまま返す(実測)。体積検査が捕まえて例外にする。"""
     doc = Document()
     body_id = new_box(doc)
-    all_edges = [edge["index"] for edge in query.describe_edges(body_of(doc, body_id).shape)]
+    all_edges = [edge["index"] for edge in query.describe_edges(doc.get_body(body_id).shape)]
     chamfer(doc, all_edges, 2.0, body_id=body_id)
-    shape_before = body_of(doc, body_id).shape
+    shape_before = doc.get_body(body_id).shape
 
     with pytest.raises(ValueError, match="unchanged"):
         shell(doc, [top_face(doc, body_id)], 1.0, body_id=body_id)
 
-    assert body_of(doc, body_id).shape is shape_before
+    assert doc.get_body(body_id).shape is shape_before
 
 
 # --------------------------------------------------------------------------------------
@@ -235,8 +210,8 @@ def test_a_rounded_lip_is_repaired_and_accepted():
     operation = shell(doc, [top_face(doc, body_id)], THICKNESS_OK, body_id=body_id)
 
     assert operation.provenance["repaired"] is True
-    assert query.volume(body_of(doc, body_id).shape) == pytest.approx(VOLUME_ROUNDED_LIP, rel=1e-3)
-    assert query.describe_shape(body_of(doc, body_id).shape)["face_count"] == 20
+    assert query.volume(doc.get_body(body_id).shape) == pytest.approx(VOLUME_ROUNDED_LIP, rel=1e-3)
+    assert query.describe_shape(doc.get_body(body_id).shape)["face_count"] == 20
 
 
 def test_a_thickness_reaching_the_lip_fillet_is_rejected():

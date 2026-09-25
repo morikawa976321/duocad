@@ -23,7 +23,7 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad import kernel, query
 from duocad.document import Body, Document
-from duocad.oplog import OpLog
+from document_support import replay_through_json
 from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, add_line, add_rectangle, sketch_create
 from duocad.verbs import extrude
@@ -215,9 +215,7 @@ def test_new_is_undoable_and_replays():
     document.log.redo(document)
     assert [body.id for body in document.bodies] == [plate_id, created_id]
 
-    replayed = Document()
-    replayed.log = OpLog.from_json(document.log.to_json())
-    replayed.log.replay(replayed)
+    replayed = replay_through_json(document)
 
     assert [body.id for body in replayed.bodies] == [plate_id, created_id]
     assert math.isclose(
@@ -397,9 +395,7 @@ def test_replay_reproduces_the_split_circle_extrusion():
     target = max(regions(document, sketch_id), key=lambda region: region.area)
     extrude(document, [region_ref(sketch_id, target.index)], 10.0, mode="join")
 
-    replayed = Document()
-    replayed.log = OpLog.from_json(document.log.to_json())
-    replayed.log.replay(replayed)
+    replayed = replay_through_json(document)
 
     body = replayed.active_body()
     assert body is not None
@@ -415,9 +411,7 @@ def test_replay_reproduces_the_plate_with_the_hole():
     expected_volume = query.volume(document.active_body().shape)
     expected_faces = query.describe_shape(document.active_body().shape)
 
-    replayed = Document()
-    replayed.log = OpLog.from_json(document.log.to_json())
-    replayed.log.replay(replayed)
+    replayed = replay_through_json(document)
 
     body = replayed.active_body()
     assert body is not None

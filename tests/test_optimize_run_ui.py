@@ -125,16 +125,8 @@ def test_second_run_is_refused_while_one_is_running(session: Session) -> None:
     どちらの結果が入ったのか分からなくなる(旗も1つしか無い)。
     """
 
-    async def scenario() -> FakeConnection:
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        connection = FakeConnection()
-        server.clients.add(connection)
-        session.begin_optimization()  # 走っている最中の状態を作る(探索は回さない)
-        await server._dispatch(connection, json.dumps({"cmd": "run_optimization"}))
-        return connection
-
-    connection = asyncio.run(scenario())
+    session.begin_optimization()  # 走っている最中の状態を作る(探索は回さない)
+    connection = _dispatch(session, {"cmd": "run_optimization"})
     [error] = connection.of_type("optimize_error")
     assert "既に走っている" in error["message"] and error["already_running"] is True
 
@@ -283,16 +275,8 @@ def test_cancel_does_nothing_when_nothing_is_running(session: Session) -> None:
 
 
 def test_cancel_sets_the_flag_while_running(session: Session) -> None:
-    async def scenario() -> tuple:
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        connection = FakeConnection()
-        server.clients.add(connection)
-        session.begin_optimization()
-        await server._dispatch(connection, json.dumps({"cmd": "cancel_optimization"}))
-        return connection
-
-    connection = asyncio.run(scenario())
+    session.begin_optimization()
+    connection = _dispatch(session, {"cmd": "cancel_optimization"})
     status = connection.of_type("optimize_status")[0]
     assert status["cancelling"] is True
     assert session._optimize_cancel.is_set() is True

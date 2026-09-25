@@ -21,6 +21,7 @@ import pytest
 
 from duocad import kernel, region, sketch as sketch_module, svg_import
 from duocad.document import Document
+from document_support import replay_through_json
 from duocad.region import RegionRef
 from duocad.server import Session
 from duocad.verbs import import_svg
@@ -307,9 +308,7 @@ def test_replay_does_not_read_the_svg_file(tmp_path: Path) -> None:
     ]
     path.unlink()
 
-    restored = Document()
-    restored.log = type(document.log).from_json(document.log.to_json())
-    restored.log.replay(restored)
+    restored = replay_through_json(document)
     after = [
         (entity.kind, dict(entity.params))
         for entity in sketch_module.get_sketch(restored, sketch_id).entities

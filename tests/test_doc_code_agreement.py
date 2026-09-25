@@ -28,7 +28,7 @@ import pytest
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.session import Session
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from duocad.paths import REPO_ROOT
 MCP_MD = REPO_ROOT / "MCP.md"
 ROOT_README = REPO_ROOT / "README.md"
 TOPOPT_MD = REPO_ROOT / "docs" / "TOPOPT.md"

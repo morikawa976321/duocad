@@ -31,11 +31,10 @@ import time
 
 from duocad.mcp_server import DocumentTools
 from duocad.server import Server, Session
-from agent_support import RecordedProvider, spoke, tool_use
+from agent_support import FAKE_KEY, RecordedProvider, spoke, tool_use
 from session_support import FakeConnection
 
 #: 本物ではない(`tests/test_agent_loop.py` と同じ形。このリポジトリに実キーは置かない)。
-FAKE_KEY = "sk-test-DO-NOT-USE-0123456789"
 
 
 def build_server(session: Session, loop: asyncio.AbstractEventLoop) -> Server:

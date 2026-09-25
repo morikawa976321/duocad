@@ -44,10 +44,9 @@ from duocad.agent.providers import (
 )
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.server import Session
-from agent_support import RecordedProvider, spoke, tool_use
+from agent_support import FAKE_KEY, RecordedProvider, spoke, tool_use
 
 #: 本物ではない。**形だけ本物に似せた文字列**(このリポジトリのどこにも実キーは置かない)。
-FAKE_KEY = "sk-test-DO-NOT-USE-0123456789"
 
 
 # --------------------------------------------------------------------------------------

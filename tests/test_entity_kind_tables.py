@@ -14,11 +14,10 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 from duocad import kernel, sketch
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from duocad.paths import REPO_ROOT
 ENTITY_KINDS_TS = REPO_ROOT / "web" / "src" / "entityKinds.ts"
 
 
@@ -29,11 +28,13 @@ def _ts_entity_kind_table_keys() -> set[str]:
     絞ってから、2スペース下げの `<name>: {` 行だけを拾う(内側のメソッド定義は名前の後ろが
     `(` なので混ざらない)。
     """
+    return set(re.findall(r"^  (\w+): \{$", _entity_kind_table_block(), re.M))
+
+
+def _entity_kind_table_block() -> str:
+    """`const ENTITY_KIND_TABLE` の宣言から `const VERB_TO_KIND` の手前までの区間。"""
     text = ENTITY_KINDS_TS.read_text(encoding="utf-8")
-    start = text.index("const ENTITY_KIND_TABLE")
-    end = text.index("const VERB_TO_KIND")
-    block = text[start:end]
-    return set(re.findall(r"^  (\w+): \{$", block, re.M))
+    return text[text.index("const ENTITY_KIND_TABLE"):text.index("const VERB_TO_KIND")]
 
 
 def test_ts_entity_kind_table_is_readable():
@@ -80,10 +81,7 @@ def _ts_point_keys() -> dict:
     `<name>: {` の直後の行が `pointKeys: [...]` である前提で読む(表の書き方の規約)。
     読めなかった種別は入らないので、下の検査が「片方にしか無い」で落ちる。
     """
-    text = ENTITY_KINDS_TS.read_text(encoding="utf-8")
-    start = text.index("const ENTITY_KIND_TABLE")
-    end = text.index("const VERB_TO_KIND")
-    block = text[start:end]
+    block = _entity_kind_table_block()
     found: dict = {}
     pattern = r"^  (\w+): \{\n    pointKeys: (\[.*\]),$"
     for kind, body in re.findall(pattern, block, re.M):

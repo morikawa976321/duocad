@@ -34,10 +34,10 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from duocad import kernel, predicates, query
 from duocad.document import Body
 from duocad.mcp_server import DocumentTools, McpServer
-from duocad.server import Server, Session
+from duocad.server import Session
 from document_support import BOX_X, BOX_Y, BOX_Z
 from mcp_support import call, call_error
-from session_support import FakeConnection, session_with_box
+from session_support import pushed_by_mcp, session_with_box
 
 #: A1と同じ述語(§5の例 `edges where parallel_to Z and length > 20`)。
 #: 30×30×40 の直方体では**Zに平行で長さ40の辺がちょうど4本**一致する。
@@ -574,25 +574,8 @@ def test_a_selection_change_from_mcp_reaches_the_browser(session: Session):
     **`state_meta()["selection"]` に載っていないとAIの提案は画面へ届かない**。
     イベントだけ実装して状態に載せないと、人→AIは動くのでテストが無ければ気づけない。
     """
-    import asyncio
-
-    async def scenario() -> list:
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        browser = FakeConnection()
-        server.clients.add(browser)
-        await server._push(browser, applied=None, only=browser)
-        before = len(browser.payloads)
-
-        mcp = McpServer(DocumentTools(session))
-        call(mcp, "propose_selection", {"predicate": VERTICAL_EDGES})
-        for _ in range(50):
-            await asyncio.sleep(0)
-            if len(browser.payloads) > before:
-                break
-        return browser.payloads
-
-    payloads = asyncio.run(scenario())
+    mcp = McpServer(DocumentTools(session))
+    payloads = pushed_by_mcp(session, lambda: call(mcp, "propose_selection", {"predicate": VERTICAL_EDGES}))
     assert len(payloads) > 1, "AIが選択を書き換えたのにブラウザへ配信されていない"
     pushed = payloads[-1]
     assert pushed["type"] == "state"

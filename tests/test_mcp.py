@@ -11,7 +11,6 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -20,7 +19,7 @@ from duocad.mcp_server import SUPPORTED_PROTOCOL_VERSIONS, DocumentTools, McpSer
 #: stdio越しの `tools/list` に入っているはずのツールの目印(顔ぶれ全体は
 #: `tests/test_doc_code_agreement.py` が `MCP.md` の表と突き合わせる)。
 M4_TOOLS = {"describe_document", "set_visible", "describe_shape"}
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from duocad.paths import REPO_ROOT
 
 
 def _server() -> McpServer:

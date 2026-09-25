@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
 import pytest
 
@@ -25,7 +24,7 @@ from duocad import catalog, kernel, query, selection
 from duocad.server import SELECTION_CONSUMING_COMMANDS, Session
 from session_support import SIDE, box as _box, browser as _browser
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+from duocad.paths import REPO_ROOT
 
 
 # --------------------------------------------------------------------------------------

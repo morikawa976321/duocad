@@ -24,7 +24,6 @@ from __future__ import annotations
 import math
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -32,7 +31,7 @@ from duocad import optimize_run
 from duocad.server import Session
 from session_support import face_with_normal, four_conditions, pad, select as _select, two_pads
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from duocad.paths import REPO_ROOT
 
 
 # --------------------------------------------------------------------------------------

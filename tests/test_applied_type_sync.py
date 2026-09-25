@@ -28,7 +28,7 @@ from duocad import kernel
 from duocad.server import Session
 from session_support import SIDE, box as _box, select as _select
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from duocad.paths import REPO_ROOT
 SESSION_TS = REPO_ROOT / "web" / "src" / "session.ts"
 
 DEVIATION = 0.2

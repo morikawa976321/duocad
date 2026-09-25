@@ -19,18 +19,9 @@ import pytest
 from duocad import region, selection, sketch
 from duocad.oplog import OpLog
 from duocad.server import Session
+from session_support import select as _select
 
 DEVIATION = 0.2
-
-
-@pytest.fixture()
-def session(tmp_path) -> Session:
-    return Session(None, DEVIATION, models_dir=tmp_path / "models")
-
-
-def _select(session: Session, refs: list) -> None:
-    session.clear_selection()
-    session.modify_selection(refs, [])
 
 
 def _sketch_with_pattern(session: Session) -> tuple:

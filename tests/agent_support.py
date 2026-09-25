@@ -5,6 +5,9 @@ import time
 
 from duocad.agent.providers import Provider, ProviderReply, ToolCall
 
+#: 本物に見えるが無効な API キー。「キーが表示・記録・送信に漏れない」を見るテストが使う。
+FAKE_KEY = "sk-test-DO-NOT-USE-0123456789"
+
 
 class RecordedProvider(Provider):
     """渡した順に応答を返すだけのプロバイダ。例外を混ぜると、その往復で送出する。

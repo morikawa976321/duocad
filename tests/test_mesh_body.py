@@ -22,6 +22,7 @@ from duocad.server import Session
 from duocad.speculative import speculative
 from duocad.verbs import add_mesh_body, chamfer, delete, extrude_face, fillet, move_body
 from duocad.verbs.extrude import _resolve_target
+from document_support import replay_through_json
 from session_support import session_with_box
 
 SIDE = 20.0
@@ -124,8 +125,7 @@ def test_a_b_rep_body_can_be_turned_into_a_mesh_body_through_the_kernel():
 def test_a_mesh_body_survives_save_and_reopen():
     """**保存の実体は操作ログ**なので、ログを書いて読み直して再生する経路をそのまま踏む。"""
     doc, body_id = _tetra_doc()
-    restored = Document()
-    OpLog.from_json(doc.log.to_json()).replay(restored)
+    restored = replay_through_json(doc)
     body = restored.get_body(body_id)
     assert body.kind == MESH_KIND
     assert body.name == "tetra"

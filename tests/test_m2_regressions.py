@@ -25,7 +25,7 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad import kernel, query
 from duocad.document import Body, Document
-from duocad.oplog import OpLog
+from document_support import replay_through_json
 from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, add_rectangle, face_plane, sketch_create
 from duocad.verbs import extrude
@@ -84,9 +84,7 @@ def test_sketch_on_a_face_can_be_extruded_and_replayed(sign):
     assert math.isclose(volume, BOX_VOLUME + 100.0, rel_tol=1e-9)
 
     # 再生: 立方体はログの外で作った参照物なので、同じ土台を持つ文書へ再生する
-    replayed = box_document()
-    replayed.log = OpLog.from_json(document.log.to_json())
-    replayed.log.replay(replayed)
+    replayed = replay_through_json(document, into=box_document())
     assert math.isclose(query.volume(replayed.active_body().shape), volume, rel_tol=1e-9)
 
 

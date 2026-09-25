@@ -22,8 +22,8 @@ import pytest
 from duocad import kernel, query, sketch
 from duocad.oplog import verb_handler
 from duocad.server import Session
-from document_support import corner_set as _corner_set
-from session_support import SIDE, box as _box, select as _select
+from document_support import corner_set as _corner_set, replay_through_json
+from session_support import SIDE, box as _box, cylinder, select as _select
 
 
 def _params(session: Session, sketch_id: str, entity_id: str) -> dict:
@@ -40,13 +40,8 @@ def _mirrored_corner_set(params: dict, ax, ay, ux, uy) -> list:
 
 
 def _cylinder(session: Session):
-    """円柱を1つ作って返す(非平面の面を持つボディが要るテスト用)。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [100.0, 100.0], 5.0)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(5.0, mode="new")
-    session.clear_selection()
-    return session.document.bodies[-1]
+    """非平面の面を持つボディ(立方体から離れた小さな円柱)。"""
+    return cylinder(session, 5.0, 5.0, center=(100.0, 100.0), mode="new")
 
 
 def _curved_face_index(shape) -> int:
@@ -456,9 +451,7 @@ def test_a_mirror_survives_save_and_replay(session: Session) -> None:
     from duocad.document import Document
     from duocad.oplog import OpLog
 
-    replayed = Document()
-    replayed.log = OpLog.from_json(session.document.log.to_json())
-    replayed.log.replay(replayed)
+    replayed = replay_through_json(session.document)
 
     volume_after = query.volume(replayed.get_body(created_id).shape)
     assert volume_after == pytest.approx(volume_before)

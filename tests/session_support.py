@@ -47,6 +47,16 @@ def pad(session: Session, width: float, depth: float, height: float, corner=(0.0
     return session.document.bodies[-1]
 
 
+def cylinder(session: Session, radius: float, height: float, *, center=(0.0, 0.0), mode: str = "join"):
+    """スケッチ→円→領域押し出しで円柱を作り、そのBodyを返す(半径は名前つきの値になる)。"""
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    session.add_circle(sketch_id, list(center), radius)
+    select(session, [{"sketch": sketch_id, "index": 1}])
+    session.extrude(height, mode=mode)
+    session.clear_selection()
+    return session.document.bodies[-1]
+
+
 # --------------------------------------------------------------------------------------
 # 形状最適化の題材
 # --------------------------------------------------------------------------------------
@@ -105,10 +115,11 @@ class FakeConnection:
         return found[-1]
 
 
-def browser(session: Session, script, *, connections: int = 2):
+def browser(session: Session, script, *, connections: int = 2, initial_push: bool = True):
     """`script(send)` を1つのイベントループで走らせ、`(script の戻り値, 接続の並び)` を返す。
 
-    `send(command)` は1本目の接続から送り、1本目に最後に届いた封筒を返す。接続直後の配信は数えない。
+    `send(command)` は1本目の接続から送り、1本目に最後に届いた封筒を返す。接続直後の配信
+    (`initial_push`)は数えない —— 数える件数が変わるテストは `initial_push=False` で配信そのものを省く。
     既定で**2本つなぐ** —— 1本だけだと「要求した接続にだけ返す」「全接続へ配る」の区別が付かない。
     """
 
@@ -118,7 +129,8 @@ def browser(session: Session, script, *, connections: int = 2):
         clients = [FakeConnection() for _ in range(connections)]
         for client in clients:
             server.clients.add(client)
-            await server._push(client, applied=None, only=client)
+            if initial_push:
+                await server._push(client, applied=None, only=client)
         for client in clients:
             client.payloads.clear()
 
@@ -134,3 +146,27 @@ def browser(session: Session, script, *, connections: int = 2):
 def send_one(session: Session, command: dict) -> dict:
     """1本だけつないだ接続から1コマンドを送り、最後に届いた封筒を返す。"""
     return browser(session, lambda send: send(command), connections=1)[0]
+
+
+def pushed_by_mcp(session: Session, act) -> list:
+    """接続を1本つないで接続直後の配信を受けた後、`act()`(MCP 起点の変更)が起こす配信を待ち、
+    届いた封筒を**接続直後の分も含めて**返す(`len(payloads) > 1` が「配信された」の印)。
+
+    MCP 起点の配信は別タスクで走るので、`sleep(0)` で最大50回だけループへ番を譲って待つ。
+    """
+
+    async def scenario() -> list:
+        server = Server(session)
+        server.bind_loop(asyncio.get_running_loop())
+        client = FakeConnection()
+        server.clients.add(client)
+        await server._push(client, applied=None, only=client)
+        before = len(client.payloads)
+        act()
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if len(client.payloads) > before:
+                break
+        return client.payloads
+
+    return asyncio.run(scenario())

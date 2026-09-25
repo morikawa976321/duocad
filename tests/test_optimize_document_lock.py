@@ -1,15 +1,13 @@
 """形状最適化の実行中は文書を変える操作を断る(issue #26)。落ちたら、結果が別の文書へ入る・古い条件の形が足される。"""
 from __future__ import annotations
 
-import asyncio
-import json
-
 import pytest
 
 from duocad import catalog
 from duocad.mcp_server import DocumentTools
-from duocad.server import Server, Session
+from duocad.server import Session
 from duocad.session import DocumentBusy
+from session_support import browser
 
 #: 文書を変えるが、実行中も通してよいもの(操作ログに載らず、最適化が読む条件にも形にも触れない)。
 _ALLOWED_WHILE_RUNNING = {"set_visible", "set_sketch_visible", "modify_selection", "commit_selection",
@@ -69,22 +67,8 @@ def test_the_browser_gets_a_named_refusal() -> None:
     """落ちたら、画面(別タブ・キーボードの Ctrl+Z を含む)から送った Undo が実行中に通る。"""
     session = _running_session_with_a_body()
 
-    class Connection:
-        def __init__(self) -> None:
-            self.payloads: list = []
-
-        async def send(self, raw: str) -> None:
-            self.payloads.append(json.loads(raw))
-
-    async def scenario() -> Connection:
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        connection = Connection()
-        server.clients.add(connection)
-        await server._dispatch(connection, json.dumps({"cmd": "undo"}))
-        return connection
-
-    [error] = [p for p in asyncio.run(scenario()).payloads if p["type"] == "error"]
+    _, [connection] = browser(session, lambda send: send({"cmd": "undo"}), connections=1, initial_push=False)
+    [error] = connection.of_type("error")
     assert error["where"] == "undo" and "DocumentBusy" in error["message"]
 
 
