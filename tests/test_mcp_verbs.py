@@ -730,38 +730,6 @@ def test_chamfer_reaches_the_core_verb(server: McpServer, box_session: Session):
     assert box_session.document.log.entries[-1].verb == "chamfer"
 
 
-def test_shell_reaches_the_core_verb(server: McpServer, box_session: Session):
-    """確定選択の面を開口にして中空にする。面6 -> 11(外側5 + 縁1 + 内側5)、体積は減る。"""
-    box = box_session.document.bodies[0]
-    volume_before = kernel.volume(box.shape)
-    select_refs(server, [face_ref(box.id, top_face_index(box.shape))])
-
-    payload = call(server, "shell", {"thickness": 2.0})
-
-    _assert_verb_envelope(payload, "shell")
-    assert kernel.face_count(box.shape) == 11
-    assert kernel.volume(box.shape) < volume_before
-    entry = box_session.document.log.entries[-1]
-    assert entry.verb == "shell"
-    assert entry.args["thickness"] == 2.0
-
-
-def test_shell_rejects_faces_of_two_bodies(server: McpServer, box_session: Session):
-    """2つのBodyの面が混ざった選択は拒否する(どちらを中空にするかを黙って決めない)。"""
-    box = box_session.document.bodies[0]
-    other = Body(
-        id="other", name="other", kind="solid", shape=BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape()
-    )
-    box_session.document.add_body(other)
-    select_refs(server, [face_ref(box.id, 1), face_ref(other.id, 1)])
-    log_before = len(box_session.document.log.entries)
-
-    call_error(server, "shell", {"thickness": 2.0})
-
-    assert len(box_session.document.log.entries) == log_before
-    assert kernel.face_count(box.shape) == 6 and kernel.face_count(other.shape) == 6
-
-
 def test_fillet_accepts_a_radius_per_edge(server: McpServer, box_session: Session):
     """半径は辺ごとにも指定できる(コアの契約)。**順序は選択順**である。
 

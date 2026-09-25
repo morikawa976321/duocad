@@ -456,13 +456,6 @@ def _run_chamfer(session: Session, tmp_path: Path) -> dict:
     return session.chamfer(RADIUS_THAT_WORKS)
 
 
-@_runner("shell")
-def _run_shell(session: Session, tmp_path: Path) -> dict:
-    body, _ = _box(session)
-    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
-    return session.shell(2.0)
-
-
 @_runner("boolean_body")
 def _run_boolean_body(session: Session, tmp_path: Path) -> dict:
     from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox

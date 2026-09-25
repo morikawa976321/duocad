@@ -40,16 +40,13 @@ from OCP.BRepBuilderAPI import (
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
 from OCP.BRepGProp import BRepGProp, BRepGProp_Face
-from OCP.BRepOffset import BRepOffset_Mode
-from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakePrism
 from OCP.BRepTools import BRepTools
 from OCP.GCPnts import GCPnts_AbscissaPoint, GCPnts_TangentialDeflection
 from OCP.Geom import Geom_BezierCurve
-from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_JoinType, GeomAbs_SurfaceType
+from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
 from OCP.GProp import GProp_GProps
 from OCP.IFSelect import IFSelect_ReturnStatus
-from OCP.ShapeFix import ShapeFix_Shape
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.STEPControl import (
     STEPControl_Reader,
@@ -2267,18 +2264,6 @@ def _blend_provenance(
     存在理由**である。アダプタの戻りは `TopoDS_Shape` を含む**メモリ上の形**なので、そのままでは
     `OpLog.to_json()` で落ちる。ここで添字の射影に変換する(`extrude_face_on_shape` と同じ形)。
     """
-    return {
-        "verb": verb,
-        "edges": list(edge_indices),
-        **_face_successors(maker, shape, final),
-    }
-
-
-def _face_successors(maker: Any, shape: "TopoDS_Shape", final: "TopoDS_Shape") -> dict:
-    """入力の各面が結果のどの面になったかの添字の射影(`face_map` / `deleted` / `new_faces`)。
-
-    `BRepBuilderAPI_MakeShape` 系(フィレット・面取り・厚み付け)が共通に使う。
-    """
     normalized = normalize_provenance(maker, [shape]) or {}
     modified = {}
     for entry in normalized.get("modified", []):
@@ -2303,169 +2288,12 @@ def _face_successors(maker: Any, shape: "TopoDS_Shape", final: "TopoDS_Shape") -
 
     mapped = {position for positions in successors.values() for position in positions}
     return {
+        "verb": verb,
+        "edges": list(edge_indices),
         "face_map": successors,
         "deleted": [int(key) for key, value in successors.items() if not value],
         "new_faces": [i for i in range(1, final_map.Extent() + 1) if i not in mapped],
     }
-
-
-# --------------------------------------------------------------------------------------
-# shell の幾何
-# --------------------------------------------------------------------------------------
-#: `BRepOffsetAPI_MakeThickSolid` に渡す許容差(mm)。
-_SHELL_TOLERANCE = 1e-3
-#: 「体積が変わった/一致した」の判定に使う相対誤差。
-_SHELL_VOLUME_EPS = 1e-6
-
-
-def shell_solid(
-    shape: "TopoDS_Shape",
-    opening_faces: Sequence[int],
-    thickness: float,
-) -> dict:
-    """面 `opening_faces`(1始まりの添字・1枚以上)を開口にし、厚み `thickness` の壁だけ残して
-    中空にした**新しい形状**と由来の射影を返す。壁は**内側へ**削って作る(外形は変わらない)。
-    入力の `shape` は変更しない。
-
-    **`BRepOffsetAPI_MakeThickSolid` は例外も `IsDone()=False` も出さずに失敗する**
-    (20mm立方体・上面1枚を開口、で実測):
-
-        厚み 2               valid・11面・体積 8000 -> 3392          (正常)
-        厚み 10              IsDone=True だが BRepCheck が偽・体積 6666   (半辺に届いて壁が干渉)
-        厚み 11              IsDone=True・valid・**体積 8000 のまま**     (入力がそのまま返る)
-        6面すべてを開口       同上(体積 8000 のまま)
-        全辺2mm面取り済み・厚み1〜2  同上(面取り面に厚みが届くと黙って何もしない)
-        開口 0 枚            開口ではなく**内側のオフセット体そのもの**が返る(6面・体積 4096)
-        厚み 0               IsDone=False
-        側面4枚を開口(板2枚に分かれる)  IsDone=False
-
-    そのため `IsDone()` に加えて **体積が実際に減ったこと・ソリッドが1つであること・
-    `BRepCheck_Analyzer` が妥当であること**を毎回検査し、どれか欠ければ例外にする。
-
-    **フィレット済みの形(特に開口面の縁が丸い形)は BRepCheck が偽になる**が、壊れているのは
-    面1枚の向きだけ(面積が負の平面)で、`ShapeFix_Shape` が直し体積も変わらない
-    (全辺 r=3 の立方体・厚み2: 修復前後とも 3385.8。上辺だけ r=3: 3642.5)。
-    妥当でないときに限り ShapeFix を1回かけ、**修復後が妥当・体積が修復前と一致・ソリッド1つ**
-    のときだけ受け取る(`_repaired_once`)。それ以外は例外。
-
-    戻り値(`"shape"` 以外はすべてJSON化できる素の値):
-
-        {"shape": <TopoDS_Shape>, "repaired": bool,
-         "volume_before": float, "volume_after": float,
-         "provenance": {"verb": "shell", "faces": [...], "thickness": float, "repaired": bool,
-                        "face_map": {"<旧添字>": [新添字, ...]}, "deleted": [...],
-                        "new_faces": [...]}}
-    """
-    if shape is None or shape.IsNull():
-        raise ValueError("cannot shell an empty shape")
-    thickness = float(thickness)
-    if not thickness > 0.0 or thickness == float("inf"):
-        raise ValueError(f"shell thickness must be a positive number, got {thickness}")
-    indices = [int(index) for index in opening_faces]
-    if not indices:
-        raise ValueError("shell requires at least one opening face")
-    if len(set(indices)) != len(indices):
-        raise ValueError(f"shell opening faces repeat: {indices}")
-    shape_map = _face_map(shape)
-    for index in indices:
-        if not 1 <= index <= shape_map.Extent():
-            raise ValueError(f"face index out of range: {index} (1..{shape_map.Extent()})")
-    if len(indices) >= shape_map.Extent():
-        raise ValueError("shell cannot open every face of the body (no wall would remain)")
-
-    openings = TopTools_ListOfShape()
-    for index in indices:
-        openings.Append(shape_map.FindKey(index))
-    volume_before = volume(shape)
-
-    maker = BRepOffsetAPI_MakeThickSolid()
-    try:
-        maker.MakeThickSolidByJoin(
-            shape,
-            openings,
-            -thickness,
-            _SHELL_TOLERANCE,
-            BRepOffset_Mode.BRepOffset_Skin,
-            False,
-            False,
-            GeomAbs_JoinType.GeomAbs_Arc,
-            False,
-        )
-    except Exception as error:  # noqa: BLE001  OCCTは例外でも失敗しうる
-        raise ValueError(
-            f"shell failed while building (faces {indices}, thickness {thickness}): {error}"
-        ) from error
-    if not maker.IsDone():
-        raise ValueError(
-            f"shell failed (IsDone is false) for faces {indices} with thickness {thickness}"
-        )
-    final = maker.Shape()
-    if final is None or final.IsNull():
-        raise ValueError(f"shell produced an empty shape (faces {indices})")
-
-    volume_after = volume(final)
-    if volume_after <= 0.0:
-        raise ValueError(f"shell left nothing solid (volume={volume_after})")
-    if volume_after >= volume_before - _SHELL_VOLUME_EPS * max(1.0, volume_before):
-        raise ValueError(
-            f"shell left the shape unchanged (faces {indices}, thickness {thickness}): "
-            "厚みが壁として残せる範囲を超えているか、面取り/フィレット済みの辺に厚みが届いている"
-        )
-    solids = _solid_count(final)
-    if solids != 1:
-        raise ValueError(
-            f"shell produced {solids} solids instead of 1 (faces {indices}, thickness {thickness})"
-        )
-
-    repaired = False
-    if not BRepCheck_Analyzer(final).IsValid():
-        fixed = _repaired_once(final, volume_after)
-        if fixed is None:
-            raise ValueError(
-                f"shell produced an invalid shape (BRepCheck, faces {indices}, thickness {thickness})"
-            )
-        final = fixed
-        repaired = True
-
-    provenance = {
-        "verb": "shell",
-        "faces": list(indices),
-        "thickness": thickness,
-        "repaired": repaired,
-    }
-    provenance.update(_face_successors(maker, shape, final))
-    return {
-        "shape": final,
-        "repaired": repaired,
-        "volume_before": float(volume_before),
-        "volume_after": float(volume_after),
-        "provenance": provenance,
-    }
-
-
-def _solid_count(shape: "TopoDS_Shape") -> int:
-    shape_map = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_SOLID, shape_map)
-    return shape_map.Extent()
-
-
-def _repaired_once(shape: "TopoDS_Shape", expected_volume: float) -> Optional["TopoDS_Shape"]:
-    """`ShapeFix_Shape` を1回かけ、**妥当・体積が一致・ソリッド1つ**のときだけ修復後を返す。
-
-    どれか欠ければ None(修復で形が変わったものは受け取らない)。
-    """
-    fixer = ShapeFix_Shape(shape)
-    fixer.Perform()
-    fixed = fixer.Shape()
-    if fixed is None or fixed.IsNull():
-        return None
-    if not BRepCheck_Analyzer(fixed).IsValid():
-        return None
-    if abs(volume(fixed) - expected_volume) > _SHELL_VOLUME_EPS * max(1.0, abs(expected_volume)):
-        return None
-    if _solid_count(fixed) != 1:
-        return None
-    return fixed
 
 
 def _lookup_by_identity(mapping: dict, key: Any) -> Optional[List[Any]]:
