@@ -44,6 +44,7 @@ import {
 } from './gridScale'
 import { createOriginGizmo } from './originGizmo'
 import { createSectionView } from './sectionView'
+import { createSelectionBand, type BandRect } from './selectionBand'
 import { createPlaneGrid, type PlaneFrame, type PlaneGrid } from './planeGrid'
 import { createBatch, type SceneBatch } from './sceneBatch'
 import { distSq, distSqPointSegment, pickNearestWithinRadius, type ScreenPickCandidate } from './screenPick'
@@ -3139,57 +3140,17 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // ------------------------------------------------------------------ ウィンドウ選択(左ドラッグ)
   //
-  // **矩形に完全包含されたものだけを選ぶ**(交差判定はしない。本人明言。向きも見ない)。
-  // 判定はすべて**画面座標**で行う —— 「囲った」は人が画面で見たとおりの意味であって、
-  // 世界座標の箱ではない(奥行きは関係ない)。
-  //
-  // 何を候補にするかは**クリックのゲートと同じ**にしてある(辺は辺を出している間だけ、
-  // 領域は要求している間だけ、スケッチの図形はスケッチモード中だけ)。ここだけ別の規則に
-  // すると、「クリックでは指せないものがドラッグでだけ選べる」ができてしまう。
-  const bandElement = document.createElement('div')
-  bandElement.style.position = 'absolute'
-  bandElement.style.border = '1px solid #ffb454'
-  bandElement.style.background = 'rgba(255, 180, 84, 0.12)'
-  // **クリックを吸わない**。吸うと `clickable()`(elementFromPoint)が canvas を見失い、
-  // 射影の穴が「その画素は取れない」と答え始める。
-  bandElement.style.pointerEvents = 'none'
-  bandElement.style.display = 'none'
-  // **大きさには影響しない**(position:absolute なのでフローの外)。親を基準にするために
-  // だけ `relative` を入れる —— `.viewport` の寸法指定そのものは動かさない(styles.css の不変条件)。
-  if (getComputedStyle(container).position === 'static') container.style.position = 'relative'
-  container.appendChild(bandElement)
-
-  /** 矩形を引いている最中か(引いていなければ、離したときの扱いはクリック)。 */
-  let boxActive = false
-
-  function boxRect(x: number, y: number): { left: number; top: number; right: number; bottom: number } {
-    return {
-      left: Math.min(downX, x),
-      right: Math.max(downX, x),
-      top: Math.min(downY, y),
-      bottom: Math.max(downY, y),
-    }
-  }
-
-  function showBand(x: number, y: number): void {
-    const rect = boxRect(x, y)
-    bandElement.style.display = 'block'
-    bandElement.style.left = `${rect.left}px`
-    bandElement.style.top = `${rect.top}px`
-    bandElement.style.width = `${rect.right - rect.left}px`
-    bandElement.style.height = `${rect.bottom - rect.top}px`
-  }
-
-  function hideBand(): void {
-    boxActive = false
-    bandElement.style.display = 'none'
-  }
+  // 帯の DOM と包含判定は `selectionBand.ts`。何を候補にするか(`collectInBox`)は
+  // **クリックのゲートと同じ**にしてある(辺は辺を出している間だけ、領域は要求している間だけ、
+  // スケッチの図形はスケッチモード中だけ)。ここだけ別の規則にすると、
+  // 「クリックでは指せないものがドラッグでだけ選べる」ができてしまう。
+  const band = createSelectionBand({ container, projectRaw })
 
   const projectScratch = new THREE.Vector3()
 
   /** 世界座標を**コンテナ内の画素**へ(カメラの裏 —— z が clip の外 —— だけ null)。**当たり判定の射影はこれ** ——
    *  viewport の矩形でも `clickable()` でも切らない(画面の外へ出た端点も、線分までの距離を測るには要る。切るのは `screenOf`)。
-   *  `width`/`height` は呼び出し元から渡す —— `geometryInside` の頂点ループから
+   *  `width`/`height` は呼び出し元から渡す —— `selectionBand.ts` の頂点ループから
    *  頂点ごとに `size()`(= DOM の `clientWidth`/`clientHeight` 読み取り)を呼ぶと、
    *  矩形選択の実測で射影時間の92%を占めるほど遅い。
    *  ここでモジュール側にキャッシュしないこと —— リサイズで寸法が変わるため、
@@ -3205,65 +3166,7 @@ export function createViewport(container: HTMLElement): Viewport {
     }
   }
 
-  function inside(rect: ReturnType<typeof boxRect>, point: { x: number; y: number }): boolean {
-    return point.x >= rect.left && point.x <= rect.right && point.y >= rect.top && point.y <= rect.bottom
-  }
-
-  function polylineWorldInside(
-    worldPoints: readonly THREE.Vector3[],
-    rect: ReturnType<typeof boxRect>,
-    width: number,
-    height: number,
-  ): boolean {
-    for (const point of worldPoints) {
-      const screen = projectRaw(point, width, height)
-      if (screen === null || !inside(rect, screen)) return false
-    }
-    return true
-  }
-
-  /**
-   * そのジオメトリの**全頂点**が矩形の中にあるか。1つでも外れたらその時点で false。
-   *
-   * **早期に打ち切るのが要点**である。27部品(2835面)の全三角形を毎回最後まで見ると
-   * ドラッグを離すたびに数十万点を射影することになるが、実際には矩形の外にある面が
-   * ほとんどで、1点目で落ちる。
-   */
-  function geometryInside(
-    geometry: THREE.BufferGeometry,
-    matrix: THREE.Matrix4,
-    rect: ReturnType<typeof boxRect>,
-    width: number,
-    height: number,
-    keep: ((point: THREE.Vector3) => boolean) | null = null,
-  ): boolean {
-    const position = geometry.getAttribute('position')
-    if (!position || position.count === 0) return false
-    const world = new THREE.Vector3()
-    // 断面で切られた頂点は数に入れない(残る頂点が1つも無ければ見えていない)
-    let kept = false
-    for (let at = 0; at < position.count; at += 1) {
-      world.set(position.getX(at), position.getY(at), position.getZ(at)).applyMatrix4(matrix)
-      if (keep !== null && !keep(world)) continue
-      kept = true
-      const screen = projectRaw(world, width, height)
-      if (screen === null || !inside(rect, screen)) return false
-    }
-    return kept
-  }
-
-  function objectInside(
-    object: THREE.Object3D & { geometry: THREE.BufferGeometry },
-    rect: ReturnType<typeof boxRect>,
-    width: number,
-    height: number,
-    keep: ((point: THREE.Vector3) => boolean) | null = null,
-  ): boolean {
-    object.updateWorldMatrix(true, false)
-    return geometryInside(object.geometry, object.matrixWorld, rect, width, height, keep)
-  }
-
-  function collectInBox(rect: ReturnType<typeof boxRect>): Omit<BoxSelectEvent, 'mode'> {
+  function collectInBox(rect: BandRect): Omit<BoxSelectEvent, 'mode'> {
     const faces: FaceRef[] = []
     const edges: EdgeRef[] = []
     const vertices: VertexRef[] = []
@@ -3281,19 +3184,19 @@ export function createViewport(container: HTMLElement): Viewport {
       for (const [bodyId, entry] of bodies) {
         for (const mesh of entry.faceMeshes) {
           if (!mesh.visible) continue
-          if (!objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect, width, height, keep)) continue
+          if (!band.objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect, width, height, keep)) continue
           const faceIndex = mesh.userData.faceIndex
           if (typeof faceIndex === 'number') faces.push({ bodyId, faceIndex })
         }
       }
       // 辺・頂点は「出している間だけ」(クリックの `edgeAt` / `vertexAt` と同じゲート)
       for (const line of edgeLines) {
-        if (!objectInside(line as THREE.Line & { geometry: THREE.BufferGeometry }, rect, width, height, keep)) continue
+        if (!band.objectInside(line as THREE.Line & { geometry: THREE.BufferGeometry }, rect, width, height, keep)) continue
         const { bodyId, edgeIndex } = line.userData
         if (typeof bodyId === 'string' && typeof edgeIndex === 'number') edges.push({ bodyId, edgeIndex })
       }
       for (const mesh of vertexMarkers.meshes()) {
-        if (!objectInside(mesh as THREE.Points & { geometry: THREE.BufferGeometry }, rect, width, height, keep)) continue
+        if (!band.objectInside(mesh as THREE.Points & { geometry: THREE.BufferGeometry }, rect, width, height, keep)) continue
         const { bodyId, vertexIndex } = mesh.userData
         if (typeof bodyId === 'string' && typeof vertexIndex === 'number') vertices.push({ bodyId, vertexIndex })
       }
@@ -3304,7 +3207,7 @@ export function createViewport(container: HTMLElement): Viewport {
       const whole = new Set<string>()
       for (const line of target?.handleLines ?? []) {
         const worldPoints = line.userData.polylineWorld as readonly THREE.Vector3[] | undefined
-        if (!worldPoints || !polylineWorldInside(worldPoints, rect, width, height)) continue
+        if (!worldPoints || !band.polylineWorldInside(worldPoints, rect, width, height)) continue
         const entityId = line.userData.entityId
         if (typeof entityId !== 'string') continue
         whole.add(entityId)
@@ -3315,14 +3218,14 @@ export function createViewport(container: HTMLElement): Viewport {
         const point = mesh.userData.point
         if (typeof entityId !== 'string' || typeof point !== 'string') continue
         if (whole.has(entityId)) continue
-        if (!objectInside(mesh as THREE.Points & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
+        if (!band.objectInside(mesh as THREE.Points & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
         sketchEntities.push({ sketchId: activeSketchId, entityId, point })
       }
     }
 
     // 領域は**クリックと同じゲート**(`regionPickTargets`)。スケッチモード中はそのスケッチだけ。
     for (const mesh of regionPickTargets()) {
-      if (!objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
+      if (!band.objectInside(mesh as THREE.Mesh & { geometry: THREE.BufferGeometry }, rect, width, height)) continue
       const { sketchId, regionIndex } = mesh.userData
       if (typeof sketchId === 'string' && typeof regionIndex === 'number') {
         regions.push({ sketchId, index: regionIndex })
@@ -3355,7 +3258,7 @@ export function createViewport(container: HTMLElement): Viewport {
     downX = event.offsetX
     downY = event.offsetY
     downValid = true
-    hideBand()
+    band.hide()
   }
 
   function onPointerUp(event: PointerEvent): void {
@@ -3372,16 +3275,16 @@ export function createViewport(container: HTMLElement): Viewport {
     }
     if (cube.pointerUp(event)) return
     if (event.button !== 0 || !downValid) {
-      if (event.button === 0) hideBand()
+      if (event.button === 0) band.hide()
       return
     }
     downValid = false
     const moved = Math.hypot(event.offsetX - downX, event.offsetY - downY)
     const elapsed = performance.now() - downAt
     // **矩形を引いていたならウィンドウ選択**(クリックにはしない)。引いた向きは見ない。
-    if (boxActive) {
-      const rect = boxRect(event.offsetX, event.offsetY)
-      hideBand()
+    if (band.active()) {
+      const rect = band.rect(downX, downY, event.offsetX, event.offsetY)
+      band.hide()
       boxSelectListener?.({ ...collectInBox(rect), mode: modeOf(event) })
       return
     }
@@ -3522,8 +3425,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // **左ボタンを押したまま一定距離を越えたらウィンドウ選択**。`downValid` ではなく
     // `buttons` も見るのは、canvasの外で離されたときに帯が出たままになるのを防ぐため。
     if (downValid && (event.buttons & 1) !== 0 && dragged > BOX_SELECT_MIN_PX) {
-      boxActive = true
-      showBand(event.offsetX, event.offsetY)
+      band.show(downX, downY, event.offsetX, event.offsetY)
     }
     let planePoint: { u: number; v: number } | null = null
     let sketchHit: SketchEntityHit | null = null
@@ -3558,7 +3460,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // ずっと直前の拡大状態が残る。
     updateActiveSketchGridCursor(null)
     // **引きかけの矩形は捨てる**(帯だけが残って画面に貼り付くのを防ぐ)。
-    hideBand()
+    band.hide()
     downValid = false
     // キューブの操作中(クリック判定待ち・ドラッグ中)は無視する —— `setPointerCapture` で
     // 押下中は座標がどこへ行ってもこの要素が受け取り続けるので、`pointerleave` が来ても
@@ -3857,7 +3759,7 @@ export function createViewport(container: HTMLElement): Viewport {
       vertexMarkers.dispose()
       edgeMaterials.dispose()
       for (const sketchId of [...sketches.keys()]) clearSketch(sketchId)
-      bandElement.remove()
+      band.dispose()
       sketchGhostMaterial.dispose()
       sketchLineMaterials.dispose() // `sketchMaterial` は種として入っている(ここで1回だけ捨てる)
       sketchHandleMaterials.dispose()
