@@ -442,6 +442,45 @@ def _fmt(values) -> str:
     return "[" + ", ".join(f"{float(v):.4g}" for v in values) + "]"
 
 
+def _not_done(
+    common: dict,
+    started: float,
+    keep_room_warning,
+    *,
+    state: str,
+    warning: str,
+    unrepresented_regions: list,
+    boundary_mapping,
+    evaluations: int,
+    termination,
+    empty_condition_faces=None,
+) -> dict:
+    """結果を作れずに戻るときの応答(`state="done"` 以外の4経路)。
+
+    値の無い欄(`body_id` / `name` / `safety_factor` / `material_mm3` / `triangle_count` / `vertex_count`)は
+    None に固定し、**`keep_room_warning` はここで繋ぐ**(経路ごとに繋ぐと、どれかで繋ぎ忘れる形になる。
+    `tests/test_optimize_backend.py` の "rides on every early return" が固定する)。経路ごとに違う値は
+    全部引数で明示する(既定値に頼らない)。
+    """
+    return dict(
+        common,
+        state=state,
+        body_id=None,
+        name=None,
+        warning=_join_warnings(warning, keep_room_warning),
+        empty_condition_faces=[] if empty_condition_faces is None else empty_condition_faces,
+        unrepresented_regions=unrepresented_regions,
+        boundary_mapping=boundary_mapping,
+        safety_factor=None,
+        material_mm3=None,
+        evaluations=evaluations,
+        termination=termination,
+        triangle_count=None,
+        vertex_count=None,
+        seconds=time.perf_counter() - started,
+    )
+
+
 # --------------------------------------------------------------------------------------
 # 解像度(要素サイズ)をどう決めるか
 # --------------------------------------------------------------------------------------
@@ -1008,44 +1047,33 @@ def _run(
     if empty_faces:
         from .topopt import anchor as an
 
-        return dict(
+        return _not_done(
             common,
+            started,
+            keep_room_warning,
             state="empty_condition_faces",
-            body_id=None,
-            name=None,
-            warning=_join_warnings(an.format_condition_face_warning(empty_faces), keep_room_warning),
+            warning=an.format_condition_face_warning(empty_faces),
             empty_condition_faces=empty_faces,
             unrepresented_regions=[],
             boundary_mapping=None,
-            safety_factor=None,
-            material_mm3=None,
             evaluations=0,
             termination=None,
-            triangle_count=None,
-            vertex_count=None,
-            seconds=time.perf_counter() - started,
         )
 
     # **事後検出。** 保持・除外ソリッドが、この解像度で1つでも表現できていないなら
     # 最適化を回さずに戻る(同じ運び方)。
     unrepresented = _region_representation(doc, bundle, space)
     if any(item["elements"] == 0 for item in unrepresented):
-        return dict(
+        return _not_done(
             common,
+            started,
+            keep_room_warning,
             state="unrepresented_regions",
-            body_id=None,
-            name=None,
-            warning=_join_warnings(format_region_warning(unrepresented), keep_room_warning),
-            empty_condition_faces=[],
+            warning=format_region_warning(unrepresented),
             unrepresented_regions=unrepresented,
             boundary_mapping=None,
-            safety_factor=None,
-            material_mm3=None,
             evaluations=0,
             termination=None,
-            triangle_count=None,
-            vertex_count=None,
-            seconds=time.perf_counter() - started,
         )
 
     # **境界条件の確定。** 導出出力に接する節点だけへ条件面を対応付け直した確定表を作り、
@@ -1056,22 +1084,16 @@ def _run(
     table, mapping = _map_boundary_conditions(space, bundle)
     pump.check()
     if mapping["status"] != "pass":
-        return dict(
+        return _not_done(
             common,
+            started,
+            keep_room_warning,
             state="boundary_mapping_failed",
-            body_id=None,
-            name=None,
-            warning=_join_warnings(an.format_mapping_warning(mapping), keep_room_warning),
-            empty_condition_faces=[],
+            warning=an.format_mapping_warning(mapping),
             unrepresented_regions=unrepresented,
             boundary_mapping=mapping,
-            safety_factor=None,
-            material_mm3=None,
             evaluations=0,
             termination="boundary_mapping_failed",
-            triangle_count=None,
-            vertex_count=None,
-            seconds=time.perf_counter() - started,
         )
 
     # **荷重・拘束が本当に選んだ面に載ったか**を、確定表の節点で測り直す。
@@ -1130,23 +1152,16 @@ def _run(
     if search_result.status != 'feasible':
         # 段階4の契約「SearchResult.status が 'feasible' 以外なら、この値をそのまま
         # UI/ログへ渡せばよい」——ここではそれに日本語の一言を添えるだけ。
-        return dict(
+        return _not_done(
             common,
+            started,
+            keep_room_warning,
             state=search_result.status,
-            body_id=None,
-            name=None,
-            warning=_join_warnings(
-                _search_failure_warning(search_result, min_width, factor), keep_room_warning),
-            empty_condition_faces=[],
+            warning=_search_failure_warning(search_result, min_width, factor),
             unrepresented_regions=unrepresented,
             boundary_mapping=mapping,
-            safety_factor=None,
-            material_mm3=None,
             evaluations=int(search_result.evaluations),
             termination=search_result.termination,
-            triangle_count=None,
-            vertex_count=None,
-            seconds=time.perf_counter() - started,
         )
 
     best = search_result.best_feasible

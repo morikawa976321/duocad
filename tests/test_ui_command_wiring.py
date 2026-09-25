@@ -143,8 +143,8 @@ def _server_command_args() -> dict[str, tuple]:
 def _dispatch_message_keys() -> set[str]:
     """`Server._dispatch` が `message[...]` / `message.get(...)` で読む名前を集める。
 
-    **表に載らないコマンドを取り逃さないため**(`extrude_face` と `open_document` は
-    個別に捌かれている)。どのコマンドの引数かまでは分岐を追わないと分からないので、
+    **表に載らないコマンドを取り逃さないため**(`open_document` のように個別に捌かれる
+    ものがある)。どのコマンドの引数かまでは分岐を追わないと分からないので、
     ここは「対象集合の名前が1つも出てこない」ことだけを見るのに使う。
     """
     source = (REPO_ROOT / "duocad" / "net" / "ws.py").read_text(encoding="utf-8")

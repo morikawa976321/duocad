@@ -170,14 +170,33 @@ class DocumentTools:
         return {name: getattr(self, name) for name in catalog.tool_names()}
 
     def call(self, name: str, arguments: dict) -> dict:
-        """ツールを実行して結果の辞書を返す。未知の名前は KeyError。"""
+        """ツールを実行して結果の辞書を返す。未知の名前は KeyError。
+
+        **引数はスキーマと突き合わせてから渡す**(必須・未知キー・型)。MCP は `McpServer._call_tool` が
+        同じ検査をプロトコルエラー(-32602)で先に弾くが、アプリ内AIの経路はここが唯一の門 ——
+        通すと `radius: "12"` が1文字ずつ読まれて辺2本に半径1と2が付くように、黙って別の値になる。
+        違反は `invalid_argument` の封筒(引数名つき)で返し、モデルが直せる形にする。
+        """
         try:
             handler = self._handlers[name]
         except KeyError:
             raise KeyError(
                 f"unknown tool: {name!r} (available: {sorted(self._handlers)})"
             ) from None
+        problem = _check_arguments(self._descriptor_by_name[name]["inputSchema"], arguments)
+        if problem is not None:
+            raise ToolError("invalid_argument", problem)
         return handler(**arguments)
+
+    def call_and_seq(self, name: str, arguments: dict) -> tuple:
+        """`call` と、その**直後の** `current_seq` をひとまとまりで返す: `(結果, 例外, 版)`。
+        例外は上げずに返す(版はどちらの場合も読む)。`ToolsOnLoop` はこれを1回の投げ返しで
+        走らせる —— 2回に分けると、間に入った人の操作が版に吸われて検出できない(issue #48)。
+        """
+        try:
+            return self.call(name, arguments), None, self.current_seq()
+        except Exception as error:  # noqa: BLE001 — 封筒にするのは呼び手(`error_envelope`)
+            return None, error, self.current_seq()
 
     def current_seq(self) -> tuple[int, str, str]:
         """文書+選択の版。**モデルには見せない** —— `descriptors()` には出てこず、
@@ -297,8 +316,6 @@ class DocumentTools:
         存在しない `body_id` は KeyError(コアの契約。文書は変更しない)。
         """
         body_id = str(body_id)
-        if not isinstance(visible, bool):
-            raise ValueError(f"visible must be a boolean, got {type(visible).__name__}")
         before = self.session.document.get_body(body_id)
         revisions = self._revision_snapshot()
         applied = self.session.set_visible(body_id, visible)
@@ -1167,7 +1184,11 @@ class McpServer:
         if descriptor is None:
             # 「そんなツールは無い」はプロトコル側の誤り(仕様の例も -32602)。
             raise _RpcError(INVALID_PARAMS, f"unknown tool: {name!r}")
-        _check_arguments(descriptor["inputSchema"], arguments)
+        # **MCP はプロトコルエラー(-32602)で先に弾く**。`DocumentTools.call` にも同じ検査があるが、
+        # そちらは `isError` の封筒になる(アプリ内AIの経路の門)。
+        problem = _check_arguments(descriptor["inputSchema"], arguments)
+        if problem is not None:
+            raise _RpcError(INVALID_PARAMS, problem)
 
         try:
             # stdout は起動時に `_claim_stdout` が fd ごと stderr へ退避済みなので、
@@ -1204,43 +1225,39 @@ def _error(request_id: Any, code: int, message: str) -> dict:
     return {"jsonrpc": JSONRPC_VERSION, "id": request_id, "error": {"code": code, "message": message}}
 
 
-def _check_arguments(schema: dict, arguments: dict) -> None:
-    """入力スキーマとの突き合わせ(必須・未知キー・型)。**黙って通さない**。
+def _check_arguments(schema: dict, arguments: dict) -> Optional[str]:
+    """入力スキーマとの突き合わせ(必須・未知キー・型)。違反の文を返す(無ければ None)。
 
+    **黙って通さない**が、包み方は呼ぶ側が決める —— MCP はプロトコルエラー(-32602)、
+    アプリ内AI(`DocumentTools.call`)は `invalid_argument` の封筒。
     JSON Schemaの完全な検証はしない(依存を増やさないため)。見るのは必須・未知キーと
     `boolean` / `string` / `number` / `integer` / `array` / `object`、および型のリスト
     (例: `fillet.radius` の `["number","array"]`)。いずれも**間違ったまま実行すると
     静かに別のことをする**類の誤りである(例: `visible` に "false" → 真、`True` を
-    数値として通すと 1.0)。エラーメッセージには**引数名を必ず含める**。
+    数値として通すと 1.0)。**任意引数の `null` も型違い**(スキーマに `null` は無い。省略は
+    キーごと落とすこと)。エラーメッセージには**引数名を必ず含める**。
     """
     properties = schema.get("properties") or {}
     required = schema.get("required") or []
 
     missing = [key for key in required if key not in arguments]
     if missing:
-        raise _RpcError(INVALID_PARAMS, f"missing required argument(s): {missing}")
+        return f"missing required argument(s): {missing}"
     if schema.get("additionalProperties") is False:
         unknown = [key for key in arguments if key not in properties]
         if unknown:
-            raise _RpcError(
-                INVALID_PARAMS, f"unknown argument(s): {unknown} (expected: {sorted(properties)})"
-            )
+            return f"unknown argument(s): {unknown} (expected: {sorted(properties)})"
     for key, value in arguments.items():
         expected = (properties.get(key) or {}).get("type")
         if expected is None:
             continue
         if isinstance(expected, list):
             if not any(_value_matches_json_type(value, item) for item in expected):
-                raise _RpcError(
-                    INVALID_PARAMS,
-                    f"argument {key!r} must be one of {expected}, got {value!r}",
-                )
+                return f"argument {key!r} must be one of {expected}, got {value!r}"
             continue
         if not _value_matches_json_type(value, expected):
-            raise _RpcError(
-                INVALID_PARAMS,
-                f"argument {key!r} must be a {expected}, got {value!r}",
-            )
+            return f"argument {key!r} must be a {expected}, got {value!r}"
+    return None
 
 
 def _value_matches_json_type(value: Any, expected: str) -> bool:

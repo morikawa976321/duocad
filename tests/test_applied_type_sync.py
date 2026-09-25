@@ -38,10 +38,9 @@ RADIUS_THAT_WORKS = 3.0
 #: WebSocketが `_apply(...)` の**後から**載せるフィールド。
 #:
 #: `Session._after_logged_verb` を通るverbの戻り値には `client_op` が入っていない ——
-#: `net/ws.py` の `_dispatch` が `applied["client_op"] = message.get("client_op")` で
-#: 足してからブラウザへ送る。ブラウザが受け取る形はこれを含むので、突合するときは
-#: 実行側にこの分を**在るものとして**足す(値は観測できないので型は見ない。
-#: `extrude_face` のように自分で載せるverbでは普通に観測できるので型も見る)。
+#: `net/ws.py` の `_dispatch` が `_push_applied` で足してからブラウザへ送る。
+#: ブラウザが受け取る形はこれを含むので、突合するときは実行側にこの分を
+#: **在るものとして**足す(値は観測できないので型は見ない)。
 TRANSPORT_FIELDS = frozenset({"client_op"})
 
 

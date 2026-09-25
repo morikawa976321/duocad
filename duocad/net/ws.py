@@ -227,16 +227,16 @@ class Server:
                 return
         loop.call_soon_threadsafe(lambda: self._spawn_push())
 
-    def _spawn_push(self) -> None:
+    def _spawn(self, coro, failure: str) -> None:
         """配信タスクを起こし、**参照を持ち続ける**。
 
         `create_task` の戻りを捨てるとタスクは弱参照でしか繋がらず、途中でGCされうる
         (公式ドキュメントの警告)。加えて、配信中の例外を誰も回収しないと
         「Task exception was never retrieved」が出るだけで**ブラウザは古いまま・
         警告も出ない**という、完了条件3が静かに壊れる形になる。集合で保持し、
-        終わったら外し、落ちていたら警告として残す。
+        終わったら外し、落ちていたら `failure` を頭に警告として残す。
         """
-        task = asyncio.get_running_loop().create_task(self._push(None, applied=None))
+        task = asyncio.get_running_loop().create_task(coro)
         self._pending_pushes.add(task)
 
         def finished(done: "asyncio.Task") -> None:
@@ -245,11 +245,12 @@ class Server:
                 return
             error = done.exception()
             if error is not None:
-                self.session.warnings.append(
-                    f"コア変更の配信に失敗: {type(error).__name__}: {error}"
-                )
+                self.session.warnings.append(f"{failure}: {type(error).__name__}: {error}")
 
         task.add_done_callback(finished)
+
+    def _spawn_push(self) -> None:
+        self._spawn(self._push(None, applied=None), "コア変更の配信に失敗")
 
     async def handle(self, connection: Any) -> None:
         self._loop = self._loop or asyncio.get_running_loop()
@@ -295,6 +296,16 @@ class Server:
         if not self.clients and self._ai_running:
             self._ai_cancel()
 
+    async def _push_applied(self, connection: Any, applied: dict, message: dict) -> None:
+        """verb の応答に `client_op`(要求した画面が付けた通し番号)を載せて全接続へ配る。
+
+        載せないものは載せない理由がそれぞれにある: 状態を配り直すだけのもの(`get_state` /
+        `set_view_resolution` / `save_document`)、`file` の封筒で返す書き出し、`_commit_before_verb` の
+        自動確定(docstring)。`change` 系(`set_visible` / 選択の3つ)は `Session` が `_emit` の中で載せる。
+        """
+        applied["client_op"] = message.get("client_op")
+        await self._push(connection, applied=applied)
+
     async def _dispatch(self, connection: Any, raw: Any) -> None:
         try:
             message = json.loads(raw)
@@ -307,19 +318,11 @@ class Server:
             await self._commit_before_verb(connection, command, message)
             if command == "get_state":
                 await self._push(connection, applied=None, only=connection)
-            elif command == "extrude_face":
-                applied = self._apply(
-                    self.session.extrude_face,
-                    message["distance"],
-                    message.get("client_op"),
-                )
-                await self._push(connection, applied=applied)
             elif command in ("undo", "redo"):
                 applied = self._apply(
                     self.session.undo if command == "undo" else self.session.redo
                 )
-                applied["client_op"] = message.get("client_op")
-                await self._push(connection, applied=applied)
+                await self._push_applied(connection, applied, message)
             elif command == "set_visible":
                 applied = self._apply(
                     self.session.set_visible,
@@ -373,8 +376,7 @@ class Server:
                     self.session.sketch_create,
                     message.get("base_plane"),
                 )
-                applied["client_op"] = message.get("client_op")
-                await self._push(connection, applied=applied)
+                await self._push_applied(connection, applied, message)
             # **オフセット平面版も表に載らない**(`sketch_create` と同じ理由 —— `base_plane` が
             # 省略できる)。`distance` は必須なので `message["distance"]` をそのまま渡す。
             elif command == "sketch_create_offset":
@@ -383,8 +385,7 @@ class Server:
                     message["distance"],
                     message.get("base_plane"),
                 )
-                applied["client_op"] = message.get("client_op")
-                await self._push(connection, applied=applied)
+                await self._push_applied(connection, applied, message)
             # **移動の2つは表に載らない**(`catalog` の `ws="special"`)。`mode` で要る引数が
             # 入れ替わり(並進は dx/dy/dz・回転は角度と軸/中心)、しかも回転の中心は
             # 省略できる —— 表は載せた引数を全部必須にする規律なので置けない
@@ -408,8 +409,7 @@ class Server:
                     center=message.get("center"),
                     center_entity=message.get("center_entity"),
                 )
-                applied["client_op"] = message.get("client_op")
-                await self._push(connection, applied=applied)
+                await self._push_applied(connection, applied, message)
             elif command == "move_body":
                 applied = self._apply(
                     self.session.move_body,
@@ -424,8 +424,7 @@ class Server:
                     axis_dir=message.get("axis_dir"),
                     center_vertex=message.get("center_vertex"),
                 )
-                applied["client_op"] = message.get("client_op")
-                await self._push(connection, applied=applied)
+                await self._push_applied(connection, applied, message)
             # **`mirror_body` の鏡映面は2つが排他で、どちらも省略できる**ので表に載せない
             # (`catalog.Param.ws` の規律)。**省略された側は `None` のまま verb へ渡す** ——
             # ここで既定値を埋めると、指していないほうの鏡映面が黙って効く。
@@ -436,29 +435,19 @@ class Server:
                     base_plane=message.get("base_plane"),
                     plane_face=message.get("plane_face"),
                 )
-                applied["client_op"] = message.get("client_op")
-                await self._push(connection, applied=applied)
-            elif command in SKETCH_COMMANDS:
-                method, keys = SKETCH_COMMANDS[command]
-                applied = self._apply(
-                    getattr(self.session, method),
-                    **{key: message[key] for key in keys},
-                )
-                applied["client_op"] = message.get("client_op")
-                await self._push(connection, applied=applied)
-            # -------------------------------------------------- D: フィーチャ(手でかける経路)
-            # スケッチの5コマンドと同じ形。**失敗は握りつぶさず必ず画面へ返す**(下の except)——
-            # とくにフィレットは例外を投げずに `IsDone()=False` で失敗する種類の失敗が
-            # あり、コア側が例外へ変換している(§7)。ここで握ると「押したのに何も
+                await self._push_applied(connection, applied, message)
+            # -------------------------------------------------- C/D: 表に載るスケッチとフィーチャ(手で描く・かける経路)
+            # 表(`catalog.ws_table`)は載せた引数を全部必須にする。**失敗は握りつぶさず必ず画面へ返す**
+            # (下の except)—— とくにフィレットは例外を投げずに `IsDone()=False` で失敗する種類の
+            # 失敗があり、コア側が例外へ変換している(§7)。ここで握ると「押したのに何も
             # 起きない」になり、原因が半径にあることが人に伝わらない。
-            elif command in FEATURE_COMMANDS:
-                method, keys = FEATURE_COMMANDS[command]
+            elif command in SKETCH_COMMANDS or command in FEATURE_COMMANDS:
+                method, keys = (SKETCH_COMMANDS if command in SKETCH_COMMANDS else FEATURE_COMMANDS)[command]
                 applied = self._apply(
                     getattr(self.session, method),
                     **{key: message[key] for key in keys},
                 )
-                applied["client_op"] = message.get("client_op")
-                await self._push(connection, applied=applied)
+                await self._push_applied(connection, applied, message)
             # -------------------------------------------------- D: 辺の折れ線(要るときだけ)
             # **配信しない**(`preview` と同じ扱い)。文書は変わらないので状態を配る理由が無く、
             # 要求した接続にだけ返す。`Session.edges` のdocstringが「常時配らない」理由を持つ。
@@ -515,8 +504,7 @@ class Server:
                     **{key: message[key] for key in keys},
                 )
                 if is_verb:
-                    applied["client_op"] = message.get("client_op")
-                    await self._push(connection, applied=applied)
+                    await self._push_applied(connection, applied, message)
                 else:
                     await _send(connection, {"type": "file", **applied})
             # **保存は表に載らない** —— `name` が任意引数になったため。
@@ -561,13 +549,11 @@ class Server:
                         "(そちらのタブを使うか、閉じてから開き直す)"
                     )
                 applied = self._apply(self.session.open_document, name)
-                applied["client_op"] = message.get("client_op")
-                await self._push(connection, applied=applied)
+                await self._push_applied(connection, applied, message)
             # **新規も文書ごと差し替える**ので開くと同じ扱い(全接続へ配る)。引数は無い。
             elif command == "new_document":
                 applied = self._apply(self.session.new_document)
-                applied["client_op"] = message.get("client_op")
-                await self._push(connection, applied=applied)
+                await self._push_applied(connection, applied, message)
             elif command == "preview":
                 result = self.session.preview(message["verb"], message.get("args") or {})
                 await _send(
@@ -1008,21 +994,7 @@ class Server:
         loop.call_soon_threadsafe(self._spawn_broadcast, payload)
 
     def _spawn_broadcast(self, payload: dict) -> None:
-        """`_spawn_push` と同じ形(タスクの参照を保持し、失敗を警告として拾う)。"""
-        task = asyncio.get_running_loop().create_task(self._broadcast(payload))
-        self._pending_pushes.add(task)
-
-        def finished(done: "asyncio.Task") -> None:
-            self._pending_pushes.discard(done)
-            if done.cancelled():
-                return
-            error = done.exception()
-            if error is not None:
-                self.session.warnings.append(
-                    f"イベントの配信に失敗: {type(error).__name__}: {error}"
-                )
-
-        task.add_done_callback(finished)
+        self._spawn(self._broadcast(payload), "イベントの配信に失敗")
 
     async def _broadcast(self, payload: dict) -> None:
         """イベントを全接続へ配る(進捗・結果はどの画面から見ても同じ1つの出来事)。"""

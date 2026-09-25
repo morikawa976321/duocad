@@ -226,7 +226,7 @@ class Session:
         if self._suppress_events:
             return applied
         # **文書が変わったら、配る前にディスクへ書く**(1操作ごとの自動保存。issue #5)。
-        # verb の応答(`verb` キー。`_after_logged_verb` / `extrude_face` / undo / redo)だけが
+        # verb の応答(`verb` キー。`_after_logged_verb` / undo / redo)だけが
         # 対象で、選択・可視性(`change` キー)はファイルに載らない。ここが WebSocket・MCP・
         # 形状最適化のどの経路も通る唯一の合流点である。配る前に書くのは、配りもの
         # (`state.saved` / `current_name`)が保存の結果を含むため。
@@ -367,7 +367,7 @@ class Session:
 
     # ---------------------------------------------------------------- 操作
     @_edits_document
-    def extrude_face(self, distance: float, client_op: Optional[int] = None) -> dict:
+    def extrude_face(self, distance: float) -> dict:
         """**確定選択の面**(ちょうど1枚)を押し出す。`applied` を返す。
 
         押す面とそのBodyは引数ではなく選択から取る(`selection.require_confirmed`)——
@@ -379,15 +379,10 @@ class Session:
         operation = extrude_face_verb(
             self.document, face_index, float(distance), body_id=face["body"]
         )
-        self._applied_count += 1
         changed_body_id = operation.args["body_id"]
-        self._reset_selection_if_needed(operation.verb)
-        return self._emit({
-            "verb": operation.verb,
-            "seq": operation.seq,
-            "client_op": client_op,
+        return self._after_logged_verb({
             "body_id": changed_body_id,
-            "face_index": int(face_index),
+            "face_index": face_index,
             "distance": float(distance),
             "changed_bodies": [changed_body_id],
         })
