@@ -36,32 +36,22 @@
 
 from __future__ import annotations
 
-import json
-import sys
-import time
 
 import numpy as np
-
-# Windowsの既定コンソール(cp932)で記号1つ落ちるだけで検査が1件も走らず異常終了するのを防ぐ。
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
-    except (AttributeError, ValueError):
-        try:
-            _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
-        except (AttributeError, ValueError):
-            pass
 
 from build123d import Box, Cylinder, Pos, Rotation  # noqa: E402
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from _harness import Checker, run
 from duocad.topopt import anchor as an  # noqa: E402
 from duocad.topopt import fem  # noqa: E402
 from duocad.topopt import voxelize as vx  # noqa: E402
 from _fixtures import voxel_model  # noqa: E402
 
-FAILURES: list[str] = []
-RESULTS: dict[str, object] = {}
+CHECK = Checker()
+check = CHECK.check
+FAILURES = CHECK.failures
+RESULTS = CHECK.results
 
 # 検査に使う形。傾けた箱は「軸に整列していない平面」を、半円柱は「曲面」を持つ。
 TILTED = Rotation(12.0, 31.0, 7.0) * Box(40, 24, 16)
@@ -74,13 +64,6 @@ FULL_CYLINDER = Cylinder(12, 40)
 # 検査[2] 解像度非依存。**3段の比が4倍であること**が検査の前提
 # (「解像度4倍で誤差が半分以下」を見ている)。
 ANCHOR_CONVERGENCE_RESOLUTIONS = (8, 16, 32)
-
-
-def check(name: str, ok: bool, detail: str) -> None:
-    """1件の検査結果を出力する。落ちても即死せず全件出してから終わる。"""
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
-    if not ok:
-        FAILURES.append(f"{name}: {detail}")
 
 
 _TABLES: dict = {}
@@ -97,12 +80,7 @@ def _table(shape, n: int, **kw) -> tuple[vx.VoxelModel, an.AnchorTable]:
 
 
 def _face_of(soup: vx.TriangleSoup, kind: str, normal=None, near=None) -> int:
-    found = an.faces_matching(
-        soup, kind=kind, normal=normal, normal_tol=1e-3, near_point=near, near_tol=1e-3
-    )
-    if len(found) != 1:
-        raise AssertionError(f"面を一意に選べなかった: kind={kind} normal={normal} → {found}")
-    return found[0]
+    return an.the_face_matching(soup, kind=kind, normal=normal, normal_tol=1e-3, near_point=near, near_tol=1e-3)
 
 
 def _tilted_face(soup: vx.TriangleSoup) -> int:
@@ -653,29 +631,20 @@ def check_edge_rule() -> None:
 
 
 def main() -> int:
-    print("=" * 72)
-    print("check_anchor.py : CAD の面 → 格子の節点の対応表(anchor.py)の受入検査")
-    print("=" * 72)
-    started = time.perf_counter()
-    check_node_numbering()
-    check_load_conservation()
-    check_resolution_convergence()
-    check_faces_do_not_mix()
-    check_normals()
-    check_no_false_concentration()
-    check_edge_rule()
-    RESULTS["total_seconds"] = round(time.perf_counter() - started, 1)
-
-    print("\n" + "=" * 72)
-    print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))
-    print("=" * 72)
-    if FAILURES:
-        print(f"NG: {len(FAILURES)}件が不合格")
-        for failure in FAILURES:
-            print(f"  - {failure}")
-        return 1
-    print("OK: 全検査に合格")
-    return 0
+    return run(
+        CHECK,
+        "check_anchor.py : CAD の面 → 格子の節点の対応表(anchor.py)の受入検査",
+        [
+            check_node_numbering,
+            check_load_conservation,
+            check_resolution_convergence,
+            check_faces_do_not_mix,
+            check_normals,
+            check_no_false_concentration,
+            check_edge_rule,
+        ],
+        total_seconds=True,
+    )
 
 
 if __name__ == "__main__":

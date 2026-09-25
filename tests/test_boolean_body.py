@@ -179,3 +179,19 @@ def test_preview_runs_without_logging(session: Session) -> None:
     assert math.isclose(_volume(session.document, target_id), before_volume, rel_tol=1e-9)
     assert result["verb"] == "boolean_body"
     assert result["bodies"][0]["body_id"] == target_id
+
+
+def test_undo_puts_the_tools_back_at_their_original_positions_and_restores_the_active_body(session: Session) -> None:
+    """落ちたら、undo でツールボディが末尾へ足し直されて一覧の順序が変わる、または active が戻らない
+    (`_common.reattach_bodies`。`delete` と同じ退避の形)。"""
+    doc = session.document
+    target_id, tool_a_id, tool_b_id = _three_boxes(doc)
+    order_before = [body.id for body in doc.bodies]
+    doc.set_active_body(tool_a_id)
+
+    _run(session, target_id, [tool_a_id, tool_b_id], "cut")
+    assert [body.id for body in doc.bodies] == [target_id]
+
+    session.undo()
+    assert [body.id for body in doc.bodies] == order_before
+    assert doc.active_body() is not None and doc.active_body().id == tool_a_id

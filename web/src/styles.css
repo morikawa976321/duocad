@@ -45,6 +45,9 @@
   --text: oklch(89% 0.008 95);
   --dim: oklch(62% 0.012 95);
   --dim-2: oklch(46% 0.01 95);
+  /* 通らない理由・失敗(入力欄の赤・結果が信用できない通知・AI のエラー行)。琥珀(--accent)は
+     「人の手が要る」であって失敗ではないので、別の色を1つだけ持つ。 */
+  --bad: oklch(72% 0.14 30);
   --accent: oklch(76% 0.15 68);
   --accent-soft: oklch(76% 0.15 68 / 0.16);
   --accent-line: oklch(76% 0.15 68 / 0.4);
@@ -346,6 +349,61 @@ header .tag.end {
   color: var(--dim);
 }
 
+/* パネルが書き写していた共有の部品(AiPanel / BrowserPanel / FilesPanel / OptimizePanel / SettingsDialog)。
+   位置・幅・z-index は各パネルの ID の規則が持ち、ここは見た目だけ。 */
+/* 畳むボタン。面を持たず、hover で琥珀になる(hover の規則は下、`button:not(:disabled):hover` の後ろ)。 */
+.caret {
+  padding: 0 4px;
+  border: none;
+  background: none;
+  color: var(--dim);
+  line-height: 1;
+}
+
+/* ヘッダーの残り幅を埋めて、後ろのものを右端へ押し出す。 */
+.spacer {
+  flex: 1 1 auto;
+}
+
+/* ラベルと入力を左右に並べる行。**ラベルは折らない** —— 折れると2行目が1文字だけ残って行の高さが
+   跳ねる(「エンドポイント」が「エンドポイン/ト」になった)。詰めるのは欄側の仕事(`min-width: 0`)。 */
+.field-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+/* ビューポートに浮かせたパネルの枠(形状最適化・設定ダイアログ。ブラウザは半透明と影で別物)。 */
+.floating-panel {
+  padding: 8px 10px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+
+/* **行そのものを押すボタン**(ブラウザのスケッチ行・ファイル一覧の行)。押せるものは面で見せるのが
+   既定(`button`)だが、それは「行の中に置かれた操作子」の話で、行が20並ぶと面が20枚並ぶ ——
+   素のまま、hover でだけ光る(hover の規則は下)。 */
+.row-button {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  padding: 2px 4px;
+  background: none;
+  border: 1px solid transparent;
+}
+
+/* いま開いている行(編集中のスケッチ・開いているファイル)。 */
+.row-active {
+  background: var(--accent-soft);
+}
+
 input,
 button {
   font: inherit;
@@ -395,6 +453,18 @@ button:not(:disabled) {
 button:not(:disabled):hover {
   background: var(--control-bg-hover);
   border-color: var(--accent);
+}
+
+/* 上の hover と同じ詳細度 (0,2,1) なので**後ろに置くことで勝つ**(前へ動かすと面と琥珀の枠が付く)。
+   `.caret` は背景を上書きしない(畳むボタンの hover は色と枠だけ変える。背景は上の規則のまま)。 */
+button.caret:not(:disabled):hover {
+  color: var(--accent);
+  border: none;
+}
+
+button.row-button:not(:disabled):hover {
+  background: var(--control-bg);
+  border-color: transparent;
 }
 
 input:focus,

@@ -44,20 +44,33 @@ def triangles(mesh: Mesh) -> Iterator[tuple]:
         )
 
 
+def bbox_payload(lows, highs, *, size: bool = False) -> dict:
+    """外接直方体の配りもの `{"min", "max", "center", ("size",) "diagonal"}`。
+
+    **キーの形はここが唯一の正**(層をまたぐ契約): `kernel.bounding_box` / `kernel.tessellate` の
+    `bbox` / `bbox` が同じ形で組み、画面側が同じ形で読む。`size` は `kernel.bounding_box` だけが付ける。
+    空のときの扱い(退化した箱にするか ValueError にするか)は呼び出し側が決める。
+    """
+    lows = list(lows)
+    highs = list(highs)
+    payload = {
+        "min": lows,
+        "max": highs,
+        "center": [(lows[i] + highs[i]) / 2.0 for i in range(3)],
+    }
+    if size:
+        payload["size"] = [highs[i] - lows[i] for i in range(3)]
+    payload["diagonal"] = math.dist(lows, highs)
+    return payload
+
+
 def bbox(mesh: Mesh) -> dict:
-    """外接直方体。**キーは `kernel.tessellate` の `bbox` と同じ**(画面側が同じ形で読む)。"""
+    """外接直方体(`bbox_payload`。三角形0枚のメッシュは作れないので空は無い)。"""
     positions = mesh.positions
     xs = positions[0::3]
     ys = positions[1::3]
     zs = positions[2::3]
-    low = [min(xs), min(ys), min(zs)]
-    high = [max(xs), max(ys), max(zs)]
-    return {
-        "min": low,
-        "max": high,
-        "center": [(low[i] + high[i]) / 2.0 for i in range(3)],
-        "diagonal": math.dist(low, high),
-    }
+    return bbox_payload([min(xs), min(ys), min(zs)], [max(xs), max(ys), max(zs)])
 
 
 def volume(mesh: Mesh) -> float:
@@ -180,22 +193,18 @@ def validate_float32(rounded: list) -> dict:
     """float32 に丸めた三角形(9値の並び)の不正を数える。空の辞書なら合格。
 
     有限でない値・縮退(面積が厳密に0。座標が一致する頂点を含む)を数え、最初の数枚の番号を添える。
-    縮退の判定は `mesh_geometry.degenerate_triangles` と同じ厳密な向き判定(固定εを使わない)。
+    縮退の判定は `boundary_check.degenerate_mask`(固定εを使わない厳密な向き判定)。
     """
     import numpy as np
 
-    from .boundary_check import orient2d  # 素の numpy 実装。OCCT は使わない
+    from .boundary_check import degenerate_mask  # 素の numpy 実装。OCCT は使わない
 
     tri = np.asarray(rounded, dtype=np.float64).reshape(-1, 3, 3)
     problems = {}
     finite = np.isfinite(tri).all(axis=(1, 2))
     if not finite.all():
         problems["non_finite"] = dict(count=int((~finite).sum()), first=np.flatnonzero(~finite)[:10].tolist())
-    zero = np.ones(len(tri), dtype=bool)
-    for drop in range(3):
-        keep = [axis for axis in range(3) if axis != drop]
-        zero &= orient2d(tri[:, 0, keep], tri[:, 1, keep], tri[:, 2, keep]) == 0
-    zero &= finite
+    zero = degenerate_mask(tri) & finite  # 有限でない三角形は縮退に数えない
     if zero.any():
         problems["degenerate"] = dict(count=int(zero.sum()), first=np.flatnonzero(zero)[:10].tolist())
     return problems

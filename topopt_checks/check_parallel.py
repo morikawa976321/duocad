@@ -24,37 +24,23 @@
 
 from __future__ import annotations
 
-import json
-import sys
-import time
 
 import numpy as np
-
-# **Windowsの既定コンソール(cp932)で落ちないようにする。**
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
-    except (AttributeError, ValueError):
-        pass
 
 import scipy.sparse as sp
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from _harness import Checker, run
 from duocad.topopt import fem
 
-FAILURES: list[str] = []
-RESULTS: dict[str, object] = {}
+CHECK = Checker()
+check = CHECK.check
+FAILURES = CHECK.failures
+RESULTS = CHECK.results
 
 # 検査で使う格子。**受入検査は速さが命**なので、性能の基準線実測より小さい。
 GRID = (24, 12, 12)
 SMALL_GRID = (8, 4, 4)
-
-
-def check(name: str, ok: bool, detail: str) -> None:
-    """1件の検査結果を出力する。**落ちても即死せず全件を出してから終わる。**"""
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
-    if not ok:
-        FAILURES.append(f"{name}: {detail}")
 
 
 def _rho_after(dims: tuple[int, int, int], iters: int = 6) -> np.ndarray:
@@ -299,27 +285,19 @@ def check_small_grid_survives() -> None:
 
 # ---------------------------------------------------------------------------
 def main() -> int:
-    started = time.perf_counter()
-    print("=" * 72)
-    print("check_parallel.py : CPU並列化(疎行列×密ベクトルの行ブロック並列)の受入検査")
-    print("=" * 72)
-    check_blocked_matvec_correctness()
-    check_thread_clamping()
-    check_default_thread_count()
-    check_retreat_path()
-    check_parallel_consistency()
-    check_small_grid_survives()
-
-    print("\n" + "=" * 72)
-    print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))
-    print("=" * 72)
-    if FAILURES:
-        print(f"NG: {len(FAILURES)}件が不合格 / {time.perf_counter() - started:.1f}秒")
-        for f in FAILURES:
-            print(f"  - {f}")
-        return 1
-    print(f"OK: 全検査に合格 / {time.perf_counter() - started:.1f}秒")
-    return 0
+    return run(
+        CHECK,
+        "check_parallel.py : CPU並列化(疎行列×密ベクトルの行ブロック並列)の受入検査",
+        [
+            check_blocked_matvec_correctness,
+            check_thread_clamping,
+            check_default_thread_count,
+            check_retreat_path,
+            check_parallel_consistency,
+            check_small_grid_survives,
+        ],
+        timed=True,
+    )
 
 
 if __name__ == "__main__":

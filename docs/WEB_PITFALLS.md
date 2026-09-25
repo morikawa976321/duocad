@@ -23,7 +23,8 @@
   落ちることを確かめる変異検査で発覚。
 - **シーンから除去すべきオブジェクトの配列と、ピック判定に要る配列を兼用しない。** 面の境界線（`LineSegments`）が
   どの配列にも入っておらず `root.add` されたまま二度と `remove` されなかった（ゴースト線＋リーク）。
-  1つの論理単位が複数のオブジェクトを持つなら除去専用の `sceneObjects` を持ち、`add()` するたび必ず push する。
+  1つの論理単位が複数のオブジェクトを持つなら除去専用の束を持つ —— `web/src/sceneBatch.ts` の `createBatch(parent)` は
+  `add()` が親へ足すのと控えるのを同時に行うので、push 忘れが構造的に起きない（ピック用の配列は `add()` の戻り値を別に push する）。
   cursor-agent の QA レビューで発覚（動作はするが静かにリークする種類）。
 - **`ShaderMaterial` は必ず `#version 300 es` が付く**（`RawShaderMaterial` でなければ）。GLSL1 流儀で書いてよく、
   `gl_FragDepth` / `fwidth` / `inverse` が使える。組み込み材質と同じ見え方にするにはフラグメント末尾に

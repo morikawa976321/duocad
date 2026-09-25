@@ -24,22 +24,13 @@
 
 from __future__ import annotations
 
-import json
-import sys
 import time
 
 import numpy as np
 from scipy import ndimage
 
-# **Windowsの既定コンソール(cp932)で落ちないようにする。** 記号が1つ混ざるだけで
-# `UnicodeEncodeError` になり、検査が1件も走らないまま異常終了する。
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
-    except (AttributeError, ValueError):
-        pass
-
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from _harness import Checker, run
 from duocad.topopt import anchor
 from duocad.topopt import fem
 from duocad.topopt import stress
@@ -52,8 +43,10 @@ STRESS_TAPERED_MULTS = (1, 2, 3)
 # [4b] 剛性差のある密度場を合成する格子。片持ち梁で十分な要素数を確保する。
 STRESS_MIXED_DENSITY_GRID = (20, 10, 10)
 
-FAILURES: list[str] = []
-RESULTS: dict[str, object] = {}
+CHECK = Checker()
+check = CHECK.check
+FAILURES = CHECK.failures
+RESULTS = CHECK.results
 
 # 実材料相当の換算パラメータ(アルミ 6061-T6 のあたり)。値そのものに意味は無く、
 # 「1でない数を通しても式が合う」ことを見るために 1 から離した値を使う。
@@ -61,13 +54,6 @@ E_MPA = 68900.0
 ALLOWABLE_MPA = 275.0 / 1.5
 ELEMENT_MM = 2.5
 LOAD_N = 1234.0
-
-
-def check(name: str, ok: bool, detail: str) -> None:
-    """1件の検査結果を出力する。**落ちても即死せず全件を出してから終わる。**"""
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
-    if not ok:
-        FAILURES.append(f"{name}: {detail}")
 
 
 def node_id(i: int, j: int, k: int, nely: int, nelz: int) -> int:
@@ -166,14 +152,9 @@ def check_b_matrix() -> None:
 # ---------------------------------------------------------------------------
 # 1. 一様な棒の単軸引張
 # ---------------------------------------------------------------------------
-def build_bar(nelx: int, nely: int, nelz: int) -> fem.Model:
-    """密度1で埋めた直方体を x 方向に引く系。
-
-    x=0 / y=0 / z=0 の3面を対称面(その面に垂直な成分だけ拘束)にすると、横方向の
-    収縮が自由になり**厳密に一様な単軸応力**になる。全自由度を固定する片持ち梁式の
-    拘束にすると、拘束面の近傍でポアソン収縮が止められて解析解と合わなくなる。
-    """
-    ndof = 3 * (nelx + 1) * (nely + 1) * (nelz + 1)
+def symmetry_fixed_dofs(nelx: int, nely: int, nelz: int) -> list[int]:
+    """x=0 / y=0 / z=0 の3面を対称面(その面に垂直な成分だけ拘束)にする自由度。横方向の収縮が自由になり、
+    **厳密に一様な単軸応力**になる(全自由度を固定する片持ち梁式だと拘束面の近傍でポアソン収縮が止められる)。"""
     fixed = []
     for j in range(nely + 1):
         for k in range(nelz + 1):
@@ -184,12 +165,29 @@ def build_bar(nelx: int, nely: int, nelz: int) -> fem.Model:
     for i in range(nelx + 1):
         for j in range(nely + 1):
             fixed.append(3 * node_id(i, j, 0, nely, nelz) + 2)
-    weights = face_weights(nely, nelz)
-    f = np.zeros(ndof)
-    for j in range(nely + 1):
+    return fixed
+
+
+def end_face_load(nelx: int, nely: int, nelz: int, *, rows: int, axis: int, sign: float = 1.0) -> np.ndarray:
+    """x=nelx の端面の節点(j = 0..rows)へ `axis` 成分の一様な荷重を `face_weights` で配り、**合力の大きさを 1** にする。"""
+    weights = face_weights(rows, nelz)
+    f = np.zeros(3 * (nelx + 1) * (nely + 1) * (nelz + 1))
+    for j in range(rows + 1):
         for k in range(nelz + 1):
-            f[3 * node_id(nelx, j, k, nely, nelz) + 0] = weights[j, k]
-    f /= f.sum()
+            f[3 * node_id(nelx, j, k, nely, nelz) + axis] = sign * weights[j, k]
+    f /= abs(f.sum())
+    return f
+
+
+def build_bar(nelx: int, nely: int, nelz: int) -> fem.Model:
+    """密度1で埋めた直方体を x 方向に引く系。
+
+    x=0 / y=0 / z=0 の3面を対称面(その面に垂直な成分だけ拘束)にすると、横方向の
+    収縮が自由になり**厳密に一様な単軸応力**になる。全自由度を固定する片持ち梁式の
+    拘束にすると、拘束面の近傍でポアソン収縮が止められて解析解と合わなくなる。
+    """
+    fixed = symmetry_fixed_dofs(nelx, nely, nelz)
+    f = end_face_load(nelx, nely, nelz, rows=nely, axis=0)
     return fem.Model(
         nelx, nely, nelz, fixed_dofs=np.unique(np.array(fixed)), load=f
     )
@@ -243,18 +241,12 @@ def check_uniaxial_bar() -> tuple[fem.Model, np.ndarray, np.ndarray]:
 # ---------------------------------------------------------------------------
 def build_cantilever(nelx: int, nely: int, nelz: int) -> fem.Model:
     """x=0 面を全自由度固定し、x=nelx 面へ -y 方向の合力 1 を一様に配る。"""
-    ndof = 3 * (nelx + 1) * (nely + 1) * (nelz + 1)
     fixed = []
     for j in range(nely + 1):
         for k in range(nelz + 1):
             n = node_id(0, j, k, nely, nelz)
             fixed += [3 * n, 3 * n + 1, 3 * n + 2]
-    weights = face_weights(nely, nelz)
-    f = np.zeros(ndof)
-    for j in range(nely + 1):
-        for k in range(nelz + 1):
-            f[3 * node_id(nelx, j, k, nely, nelz) + 1] = -weights[j, k]
-    f /= -f.sum()
+    f = end_face_load(nelx, nely, nelz, rows=nely, axis=1, sign=-1.0)
     return fem.Model(
         nelx, nely, nelz, fixed_dofs=np.unique(np.array(fixed)), load=f
     )
@@ -379,12 +371,14 @@ def check_unit_scaling(model: fem.Model, rho: np.ndarray, u: np.ndarray) -> None
         f"{both.representative_mpa:.10g} MPa (期待 {base.representative_mpa * 10.0:.10g})",
     )
 
-    # 無次元側の総荷重を読み違えないこと。棒の荷重ベクトルの合力は 1.0。
-    resultant = stress.load_resultant(model)
+    # 無次元側の総荷重を読み違えないこと。棒の荷重は1本なので、`for_model` が分母に読む総量
+    # (`load_magnitude_total`)は合力(`fem.load_resultant` のノルム)と一致し、どちらも 1.0。
+    total = stress.load_magnitude_total(model)
+    resultant = float(np.linalg.norm(fem.load_resultant(model.f)))
     check(
-        "無次元側の合力を Model から読めている",
-        abs(resultant - 1.0) < 1e-12,
-        f"合力={resultant:.12f}",
+        "無次元側の総荷重を Model から読めている(1本の荷重では合力と一致)",
+        abs(total - 1.0) < 1e-12 and abs(resultant - total) < 1e-12,
+        f"総量={total:.12f} 合力={resultant:.12f}",
     )
     RESULTS["base_representative_mpa"] = base.representative_mpa
     RESULTS["base_max_displacement_mm"] = base.max_displacement_mm
@@ -407,33 +401,18 @@ def build_tapered_plate(mult: int) -> tuple[fem.Model, np.ndarray, float]:
         solid[i, :top, :] = True
     rho = solid.astype(float)
 
-    ndof = 3 * (nelx + 1) * (nely + 1) * (nelz + 1)
-    fixed = []
-    for j in range(nely + 1):
-        for k in range(nelz + 1):
-            fixed.append(3 * node_id(0, j, k, nely, nelz) + 0)
-    for i in range(nelx + 1):
-        for k in range(nelz + 1):
-            fixed.append(3 * node_id(i, 0, k, nely, nelz) + 1)
-    for i in range(nelx + 1):
-        for j in range(nely + 1):
-            fixed.append(3 * node_id(i, j, 0, nely, nelz) + 2)
+    fixed = symmetry_fixed_dofs(nelx, nely, nelz)
     narrow = nely // 2
-    weights = face_weights(narrow, nelz)
-    f = np.zeros(ndof)
-    for j in range(narrow + 1):
-        for k in range(nelz + 1):
-            f[3 * node_id(nelx, j, k, nely, nelz) + 0] = weights[j, k]
-    f /= f.sum()
-    # 空要素にしか接していない節点は剛性 emin でしか繋がっていない。`fem.optimize` が
-    # 内部でやっているのと同じ処理を、ここでも通す(通さないと K がほぼ特異になる)。
+    f = end_face_load(nelx, nely, nelz, rows=narrow, axis=0)
+    # 空要素にしか接していない節点は剛性 emin でしか繋がっていない。`acceptance.safety_check` と
+    # 同じく系から外す(通さないと K がほぼ特異になる)。
     model = fem.Model(
         nelx,
         nely,
         nelz,
         fixed_dofs=np.unique(np.array(fixed)),
         load=f,
-        extra_fixed_dofs=np.flatnonzero(~np.repeat(anchor.active_nodes(solid).ravel(), 3)),
+        extra_fixed_dofs=anchor.floating_dofs(solid),
     )
     nominal = 1.0 / (narrow * nelz)  # 細い側の公称応力(無次元)
     return model, rho, nominal
@@ -659,27 +638,24 @@ def check_safety_factor(model: fem.Model, rho: np.ndarray, u: np.ndarray) -> Non
 
 
 def main() -> int:
-    print("=" * 72)
-    print("check_stress.py : von Mises応力と最小安全率の受入検査")
-    print("=" * 72)
-    check_b_matrix()
-    model, rho, u = check_uniaxial_bar()
-    check_cantilever_bending()
-    check_unit_scaling(model, rho, u)
-    check_representative_rule()
-    check_representative_on_mixed_density_field()
-    check_safety_factor(model, rho, u)
+    bar: dict = {}  # `check_uniaxial_bar` の棒(model, rho, u)を後ろの2検査が使う
 
-    print("\n" + "=" * 72)
-    print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))
-    print("=" * 72)
-    if FAILURES:
-        print(f"NG: {len(FAILURES)}件が不合格")
-        for f in FAILURES:
-            print(f"  - {f}")
-        return 1
-    print("OK: 全検査に合格")
-    return 0
+    def uniaxial_bar() -> None:
+        bar["model"], bar["rho"], bar["u"] = check_uniaxial_bar()
+
+    return run(
+        CHECK,
+        "check_stress.py : von Mises応力と最小安全率の受入検査",
+        [
+            check_b_matrix,
+            uniaxial_bar,
+            check_cantilever_bending,
+            lambda: check_unit_scaling(bar["model"], bar["rho"], bar["u"]),
+            check_representative_rule,
+            check_representative_on_mixed_density_field,
+            lambda: check_safety_factor(bar["model"], bar["rho"], bar["u"]),
+        ],
+    )
 
 
 if __name__ == "__main__":

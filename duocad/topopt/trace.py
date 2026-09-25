@@ -362,3 +362,49 @@ def load_snapshot(path):
         if '$float' in value: return float(value['$float'])
         return {k:decode(v) for k,v in value.items()}
     return decode(json.loads(path.read_text(encoding='utf-8')))
+
+
+class RunArchive:
+    """実行フォルダ(`Recorder` の出力)の読み手。検査・分析スクリプトが `events.jsonl` を読む定型はこれ1つにする。
+
+    前提にするのは `events.jsonl` と `manifest.json` だけ —— `final.stl` / `source.zip` / `input.json` /
+    `cad/*.step` は書けなかった記録がありうる(manifest の `write_failures` に回数、書けたときだけ
+    `final_stl_sha256` / `source_sha256` / `<name>_sha256` が入る)。読みは UTF-8 固定(書き手と同じ。
+    Windows の既定 cp932 で読むと壊れる)。**末尾の不完全な行は捨てて `incomplete_event_line` に残す**
+    (実行中・強制終了直後の記録も読めるように)。
+    """
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.manifest = json.loads((self.path / 'manifest.json').read_text(encoding='utf-8'))
+        self.events = []
+        self.incomplete_event_line = False
+        for line in (self.path / 'events.jsonl').read_text(encoding='utf-8').splitlines():
+            try:
+                self.events.append(json.loads(line))
+            except json.JSONDecodeError:
+                self.incomplete_event_line = True
+
+    def snapshots(self, name=None, phase=None):
+        """`kind == 'snapshot'` の event(名前・段階で絞れる)。"""
+        return [e for e in self.events if e['kind'] == 'snapshot'
+                and (name is None or e['name'] == name) and (phase is None or e['phase'] == phase)]
+
+    def begins(self, name=None):
+        return [e for e in self.events if e['kind'] == 'begin' and (name is None or e['name'] == name)]
+
+    def load(self, event):
+        """snapshot の event を `load_snapshot` で読む(配列を復元する)。"""
+        return load_snapshot(self.path / event['file'])
+
+    def raw(self, event):
+        """snapshot の event の素の JSON(配列は `$array` の参照のまま)。"""
+        return json.loads((self.path / event['file']).read_text(encoding='utf-8'))
+
+    def records(self, name, phase=None):
+        return [self.load(e) for e in self.snapshots(name, phase)]
+
+    def last(self, name):
+        """その名前の最後の snapshot(無ければ None)。"""
+        found = self.snapshots(name)
+        return None if not found else self.load(found[-1])

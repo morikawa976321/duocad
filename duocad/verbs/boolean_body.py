@@ -6,46 +6,21 @@ Body スナップショット)が1回で戻る。
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Sequence
+from typing import Any, Sequence
 
 from .. import kernel
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
-from ._common import editable_body, recall, remember
+from ._common import detach_bodies, editable_body, reattach_bodies, recall, remember, resolve_shape_ref
 
 VERB_BOOLEAN_BODY = "boolean_body"
 _SNAPSHOT_KEY = "boolean_body:removed"
 
 
-def _shape_ref(doc: Document, ref: Any, *, kind: str, what: str) -> tuple:
-    """`{"body": BodyId, "index": int}` を (Body, 添字) にする(`mirror_body` と同じ形)。"""
-    if not isinstance(ref, dict):
-        raise ValueError(
-            f"{what} must be a reference like "
-            '{"body": "<body_id>", "index": 1}, got ' + repr(ref)
-        )
-    if "body" not in ref or "index" not in ref:
-        raise ValueError(
-            f'{what} needs both "body" and "index" '
-            '(例: {"body": "<body_id>", "index": 1}), got ' + repr(ref)
-        )
-    declared = ref.get("kind")
-    if declared is not None and str(declared) != kind:
-        raise ValueError(f"{what} must be a {kind!r} reference, got kind={declared!r}")
-    body = doc.get_body(str(ref["body"]))
-    if body.shape is None:
-        raise ValueError(
-            f"{what}: body {body.id!r} has no B-rep shape (メッシュボディには面が無い)"
-        )
-    try:
-        index = int(ref["index"])
-    except (TypeError, ValueError):
-        raise ValueError(f"{what}: index must be an integer, got {ref['index']!r}") from None
-    return body, index
-
-
 def _validate_target_ref(doc: Document, target_ref: Any) -> BodyId:
-    body, index = _shape_ref(doc, target_ref, kind="face", what="target_ref")
+    body, index = resolve_shape_ref(
+        doc, target_ref, kind="face", what="target_ref", mesh_hint="(メッシュボディには面が無い)"
+    )
     if index < 1 or index > kernel.face_count(body.shape):
         raise ValueError(
             f"target_ref: face index {index} is out of range for body {body.id!r} "
@@ -86,19 +61,18 @@ def _validate_participants(
     return target_body, tools
 
 
-def _remove_tools(doc: Document, tools: Sequence) -> Dict[str, Any]:
-    """ツールボディを消す前に undo 用の退避を取る(`delete._remove` と同じ形)。"""
-    positions = {body.id: index for index, body in enumerate(doc.bodies)}
-    removed: Dict[str, Any] = {
-        "bodies": sorted(
-            ((positions[tool.id], tool) for tool in tools),
-            key=lambda item: item[0],
-        ),
-        "active": doc._active_body_id,
-    }
-    for tool in tools:
-        doc.remove_body(tool.id)
-    return removed
+def _apply(doc: Document, target_body, tools: Sequence, mode: str) -> tuple:
+    """演算(kernel)→ ターゲットの形を差し替え → ツールを退避して消す。戻りは `(前の形, 退避)`。
+    幾何の失敗は差し替えより先に上がるので、落ちたときは文書に何も残らない。"""
+    result = kernel.boolean_bodies(target_body.shape, [tool.shape for tool in tools], mode)
+    previous_shape = target_body.shape
+    target_body.shape = result["shape"]
+    return previous_shape, detach_bodies(doc, [tool.id for tool in tools])
+
+
+def _remember_undo(doc: Document, target_id: BodyId, seq: int, previous_shape: Any, detached: dict) -> None:
+    remember(doc, target_id, seq, previous_shape)
+    remember(doc, _SNAPSHOT_KEY, seq, detached)
 
 
 def boolean_body(
@@ -110,14 +84,7 @@ def boolean_body(
     """ターゲットにツール群を作用させる。`target_ref` は面1枚への参照、ツールは BodyId の並び。"""
     target_body_id = _validate_target_ref(doc, target_ref)
     target_body, tools = _validate_participants(doc, target_body_id, tool_body_ids)
-
-    tool_shapes = [tool.shape for tool in tools]
-    result = kernel.boolean_bodies(target_body.shape, tool_shapes, str(mode))
-
-    previous_shape = target_body.shape
-    target_body.shape = result["shape"]
-    removed = _remove_tools(doc, tools)
-
+    previous_shape, detached = _apply(doc, target_body, tools, str(mode))
     operation = doc.log.append(
         VERB_BOOLEAN_BODY,
         {
@@ -126,39 +93,25 @@ def boolean_body(
             "mode": str(mode),
         },
     )
-    remember(doc, target_body.id, operation.seq, previous_shape)
-    remember(doc, _SNAPSHOT_KEY, operation.seq, removed)
+    _remember_undo(doc, target_body.id, operation.seq, previous_shape, detached)
     return operation
 
 
 def _do_boolean_body(document: Document, operation: Operation) -> None:
     """redo / replay: 記録どおりにもう一度演算する(ログには触らない)。"""
     args = operation.args
-    target_body_id = args["target_body_id"]
-    tool_body_ids = [str(body_id) for body_id in args["tool_bodies"]]
-    mode = str(args["mode"])
-    target_body, tools = _validate_participants(document, target_body_id, tool_body_ids)
-    result = kernel.boolean_bodies(
-        target_body.shape, [tool.shape for tool in tools], mode
+    target_body, tools = _validate_participants(
+        document, args["target_body_id"], [str(body_id) for body_id in args["tool_bodies"]]
     )
-    previous_shape = target_body.shape
-    target_body.shape = result["shape"]
-    removed = _remove_tools(document, tools)
-    remember(document, target_body.id, operation.seq, previous_shape)
-    remember(document, _SNAPSHOT_KEY, operation.seq, removed)
+    previous_shape, detached = _apply(document, target_body, tools, str(args["mode"]))
+    _remember_undo(document, target_body.id, operation.seq, previous_shape, detached)
 
 
 def _undo_boolean_body(document: Document, operation: Operation) -> None:
-    """undo: ターゲットの形を戻し、消えたツールボディを復元する(1回の undo で両方)。"""
-    args = operation.args
-    target_body_id = args["target_body_id"]
-    document.get_body(target_body_id).shape = recall(
-        document, target_body_id, operation.seq
-    )
-    removed = recall(document, _SNAPSHOT_KEY, operation.seq)
-    for index, body in removed["bodies"]:
-        document.add_body(body, index=index)
-    document._active_body_id = removed["active"]
+    """undo: ターゲットの形を戻し、消えたツールボディを元の添字と active ごと復元する(1回の undo で両方)。"""
+    target_body_id = operation.args["target_body_id"]
+    document.get_body(target_body_id).shape = recall(document, target_body_id, operation.seq)
+    reattach_bodies(document, recall(document, _SNAPSHOT_KEY, operation.seq))
 
 
 register_verb(VERB_BOOLEAN_BODY, do=_do_boolean_body, undo=_undo_boolean_body)

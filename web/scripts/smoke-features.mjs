@@ -26,16 +26,22 @@
  *   6. すべてのコマンドで Esc中断 と undo が効く
  */
 import { existsSync } from 'node:fs'
-import { findBrowser, launchBrowser, withoutBrowserPanel, pressUndo } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { startServer } from './server.mjs'
-
-const options = parseArgs(process.argv.slice(2))
-// `--url` を渡したときだけ既に立っているサーバへ繋ぐ(既定は自分で立てる)。
-const attachUrl = options.url ?? null
-const wsPort = options.port ?? '8785'
-const httpPort = options['http-port'] ?? '8786'
-const timeout = Number.parseInt(options.timeout ?? '120000', 10)
+import {
+  assertNoAppErrors,
+  openApp,
+  pressUndo,
+  typeInto as typeIntoField,
+  waitOrFail,
+} from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import {
+  clickEdge as clickEdgeOf,
+  clickEntityHandle,
+  clickRegion as clickRegionOf,
+  clickSketchPoint,
+  createSketchOnBasePlane,
+} from './pick.mjs'
 
 
 /** 板の寸法(mm)。体積の検算に使うので、丸い数字にしてある。 */
@@ -44,33 +50,12 @@ const HOLE = { u: 30, v: 20, radius: 4 }
 
 
 
-async function main() {
-  const executablePath = findBrowser()
-  console.log(`smoke-features: ${executablePath}`)
-
-  const server = attachUrl === null ? await startServer({ wsPort, httpPort }) : null
-  const url = server?.url ?? attachUrl
-  console.log(`  server : ${url}${server === null ? ' (既に立っているサーバへ接続)' : ''}`)
-
-  const browser = await launchBrowser(executablePath)
-
-  try {
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-    page.on('response', (response) => {
-      if (response.status() >= 400) consoleErrors.push(`HTTP ${response.status()} ${response.url()}`)
-    })
-
-    await page.goto(url, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad && window.__duocad.ready), {
-      timeout,
-      polling: 100,
-    })
+// `--url` を渡したときだけ既に立っているサーバへ繋ぐ(既定は自分で立てる)。
+runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) => {
+  {
+    const { page, consoleErrors } = await openApp(browser, url, { timeout })
+    /** わざと出させたエラーの札(受け取った文字列そのもの。最後の「エラーは出ていない」から除く)。 */
+    const expectedErrors = []
     const parts = await page.evaluate(() => window.__duocad.parts.length)
     // **サーバは長寿命**(文書は接続より長生きする)。前回の実行が作った板が残っていると
     // 「最初のソリッドが生まれる」経路を通れないので、**毎回サーバを起動し直して**走らせる。
@@ -116,13 +101,8 @@ async function main() {
         }),
       )
 
-    async function waitFor(predicate, what, ...args) {
-      try {
-        await page.waitForFunction(predicate, { timeout, polling: 50 }, ...args)
-      } catch {
-        fail(`${what}: ${JSON.stringify(await look())}`)
-      }
-    }
+    const waitFor = (predicate, what, ...args) =>
+      waitOrFail(page, predicate, what, { args, timeout, dump: look })
 
     /**
      * **今の形の辺**が画面に出るまで待つ。
@@ -140,133 +120,14 @@ async function main() {
       }, what)
     }
 
-    async function typeInto(selector, value) {
-      await page.click(selector)
-      await page.keyboard.down('Control')
-      await page.keyboard.press('KeyA')
-      await page.keyboard.up('Control')
-      await page.keyboard.press('Backspace')
-      await page.type(selector, String(value), { delay: 15 })
-    }
-
-    /**
-     * **スケッチを作る2手**: ツールバーの「スケッチ」を起動 → 貼る先をクリック。
-     *
-     * Enterは無い(`command.ts` の `needsEnter`: 対象1つ・howの入力なし → 即適用)。
-     * 座標は**クリックの直前に射影し直す**(スケッチ平面の点と同じ流儀)。
-     * `projectBasePlane` は「その画素からのレイが本当にその平面に当たり、手前に面が
-     * 無い」ことを確かめてから返すので、部品に隠れている所を押すことはない。
-     */
-    async function createSketchOnBase(name = 'XY') {
-      await page.click('#sketch-create')
-      let at = null
-      try {
-        const handle = await page.waitForFunction(
-          (plane) => {
-            const rect = document.querySelector('.viewport').getBoundingClientRect()
-            const position = window.__duocad.projectBasePlane(plane)
-            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-          },
-          { timeout, polling: 50 },
-          name,
-        )
-        at = await handle.jsonValue()
-      } catch {
-        fail(`基準平面 ${name} を指せる画素が無い(「スケッチ」が起動しているか)`)
-      }
-      await page.mouse.click(at.x, at.y)
-    }
-
-    /**
-     * スケッチの図形を**3Dのクリックで選ぶ**(他の実機検査と同じ道具)。
-     *
-     * 図形の**最初の点**(円・円弧は中心、線分・ベジエは始点、長方形は左下)を狙う ——
-     * 点は必ずその図形の上にあり、当たり判定も点が最優先なので確実に掴める。
-     * 反復の `entities` 引数はこの選択から導かれる(`App.svelte` の `selectedEntities`)。
-     */
-    async function clickEntityHandle(entityId) {
-      return withoutBrowserPanel(page, async () => {
-        const at = await page.evaluate((id) => {
-          const hook = window.__duocad
-          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-          const entity = active?.entities.find((item) => item.entity_id === id)
-          if (!entity) return null
-          const p = entity.params
-          const uv = 'cx' in p ? [p.cx, p.cy] : 'x0' in p ? [p.x0, p.y0] : [p.x, p.y]
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectSketchPoint(uv[0], uv[1])
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        }, entityId)
-        if (!at) fail(`図形 ${entityId} の点が画面の中に無い`)
-        await page.mouse.click(at.x, at.y)
-      })
-    }
-
-    /** スケッチ平面の (u,v) を**クリックの直前に射影して**押す(画面が動いても狂わない)。 */
-    async function clickPlane(u, v) {
-      // **浮いているブラウザを畳んでから**押す —— スケッチ平面の (u,v) は画面の1画素しかなく、
-      // そこがパネルの下に来ると逃げ場が無い(理由は `browser.mjs` の `withoutBrowserPanel`)。
-      return withoutBrowserPanel(page, async () => {
-        const at = await page.evaluate(
-          (uu, vv) => {
-            const rect = document.querySelector('.viewport').getBoundingClientRect()
-            const position = window.__duocad.projectSketchPoint(uu, vv)
-            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-          },
-          u,
-          v,
-        )
-        if (!at) fail(`スケッチ平面の点 (${u}, ${v}) が画面の中に無い`)
-        await page.mouse.click(at.x, at.y)
-      })
-    }
-
-    async function clickRegion(index) {
-      const at = await page.evaluate((idx) => {
-        const rect = document.querySelector('.viewport').getBoundingClientRect()
-        const position = window.__duocad.projectRegion(idx)
-        return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-      }, index)
-      if (!at) fail(`領域 ${index} が画面の中に無い`)
-      await page.mouse.click(at.x, at.y)
-    }
-
-    /**
-     * 辺を本物のクリックで選ぶ(`shift` で追加)。**押す直前に射影し直す**。
-     *
-     * **選択が届くまで待つ**(押した直後に見ない)。選択の正はコアなので、クリックは
-     * `modify_selection` を送るだけで、結果は次の状態配信で返ってくる —— 押してすぐ
-     * `window.__duocad.selection` を読むと、まだ前の状態を見ることになる。
-     */
-    async function clickEdge(bodyId, edgeIndex, shift = false) {
-      const at = await page.evaluate(
-        (id, index) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectEdge(id, index)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        bodyId,
-        edgeIndex,
-      )
-      if (!at) return false
-      if (shift) await page.keyboard.down('Shift')
-      await page.mouse.click(at.x, at.y)
-      if (shift) await page.keyboard.up('Shift')
-      try {
-        await page.waitForFunction(
-          (id, index) =>
-            (window.__duocad.selection?.items ?? []).some(
-              (item) => item.body === id && item.kind === 'edge' && item.index === index,
-            ),
-          { timeout: 5000, polling: 50 },
-          bodyId,
-          edgeIndex,
-        )
-        return true
-      } catch {
-        return false // 狙いが外れた(隣の辺に取られた等)。呼び出し側が次の辺を試す
-      }
-    }
+    // 指す手は `pick.mjs`(射影は押す直前・パネルは畳む)。この本の呼び方に合わせた薄い皮。
+    const typeInto = (selector, value) => typeIntoField(page, selector, value)
+    const createSketchOnBase = (name = 'XY') => createSketchOnBasePlane(page, name, { timeout })
+    const clickPlane = (u, v) => clickSketchPoint(page, u, v)
+    const clickRegion = (index) => clickRegionOf(page, index)
+    /** 辺を本物のクリックで選ぶ(`shift` で追加)。外れたら false(呼び出し側が次の辺を試す)。 */
+    const clickEdge = (bodyId, edgeIndex, shift = false) =>
+      clickEdgeOf(page, bodyId, edgeIndex, { modifier: shift ? 'Shift' : null })
 
     // ================================================================ 検証1: 板と穴
     await createSketchOnBase('XY')
@@ -458,6 +319,7 @@ async function main() {
       '失敗する半径なのに理由がトーストに出ない',
     )
     const afterFailure = await look()
+    expectedErrors.push(afterFailure.errors[0])
     // **エラーがステータスバーへ二重に出ていない**(トースト一本化の実体)。
     // 両方に出すと「気づける場所」がまた2つになり、片方を直し忘れる形へ戻る。
     const strayed = (afterFailure.messages ?? []).filter((message) => message.startsWith('エラー['))
@@ -625,7 +487,7 @@ async function main() {
         (target) => (window.__duocad.selectedEntities ?? []).includes(target),
         id,
       )
-      if (!already) await clickEntityHandle(id)
+      if (!already) await clickEntityHandle(page, id)
       await waitFor(
         (target) => (window.__duocad.selectedEntities ?? []).includes(target),
         '図形を反復の対象に選べない',
@@ -938,20 +800,7 @@ async function main() {
         ` = 15×15×8、元の板は ${plateAfter.volume} のまま融合していない)`,
     )
 
-    if (consoleErrors.length > 0) {
-      fail(`ブラウザのコンソールにエラー: ${consoleErrors.slice(0, 3).join(' | ')}`)
-    }
-    ok('ブラウザのコンソールにエラーなし')
-
-    console.log('')
-    console.log('smoke-features: PASS')
-  } finally {
-    await browser.close()
-    if (server !== null) await server.stop()
+    // わざと失敗させた札(半径1000のフィレット)だけは出ていてよい。
+    await assertNoAppErrors(page, consoleErrors, { allow: expectedErrors })
   }
-}
-
-main().catch((error) => {
-  console.error(`smoke-features: FAIL ${error.message}`)
-  process.exit(1)
 })

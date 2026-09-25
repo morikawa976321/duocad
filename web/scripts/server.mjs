@@ -20,6 +20,8 @@ import { fileURLToPath } from 'node:url'
 const HERE = dirname(fileURLToPath(import.meta.url))
 export const REPO_ROOT = resolve(HERE, '..', '..')
 export const PYTHON = resolve(REPO_ROOT, '.venv', 'Scripts', 'python.exe')
+/** 目で見るためのスクリーンショットの置き場(`.gitignore` 対象)。 */
+export const SCREENSHOTS_DIR = resolve(REPO_ROOT, 'screenshots')
 
 /**
  * サーバを立てて、HTTPが応答するまで待つ。

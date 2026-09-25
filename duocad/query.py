@@ -85,14 +85,10 @@ def face_centroid(shape: Any, face_index: int) -> list:
     12.9mm 離れる。**面の上に material が乗る場所を知りたい側はこちらを使うこと**
     (`optimize_run._check_anchor_centroids`)。平面では両者は一致する。
 
-    添字は1始まり(`face_fingerprint` と同じ体系)。範囲外は ValueError。
+    添字は1始まり(`face_fingerprint` と同じ体系)。範囲外は ValueError(`kernel.face_of` が投げる)。
     """
-    raw = _unwrap(shape)
-    count = kernel.face_count(raw)
     index = int(face_index)
-    if not 1 <= index <= count:
-        raise ValueError(f"face index out of range: {index} (1..{count})")
-    point = Face(kernel.face_of(raw, index)).center(CenterOf.MASS)
+    point = Face(kernel.face_of(_unwrap(shape), index)).center(CenterOf.MASS)
     return [float(point.X), float(point.Y), float(point.Z)]
 
 
@@ -110,14 +106,11 @@ def face_fingerprint(shape: Any, face_index: int) -> dict:
     (`duocad/optimize.py`)。`kind` を含めないのは指紋に使わないためで、種別が要る用途は
     `describe_faces` を使うこと。
 
-    添字は1始まり(`describe_faces` / `selection.select_face` と同じ体系)。範囲外は ValueError。
+    添字は1始まり(`describe_faces` / `selection.select_face` と同じ体系)。範囲外は ValueError
+    (`kernel.face_of` が投げる。ここで数え直さない —— `_face_map` の全走査が2回になる)。
     """
-    raw = _unwrap(shape)
-    count = kernel.face_count(raw)
     index = int(face_index)
-    if not 1 <= index <= count:
-        raise ValueError(f"face index out of range: {index} (1..{count})")
-    wrapped = Face(kernel.face_of(raw, index))
+    wrapped = Face(kernel.face_of(_unwrap(shape), index))
     normal = wrapped.normal_at()
     center = wrapped.center()
     return {

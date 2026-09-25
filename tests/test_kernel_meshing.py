@@ -23,11 +23,10 @@ from OCP.TopTools import TopTools_IndexedMapOfShape
 from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
 
 from duocad import kernel, kernel_meshing
-from duocad.mesh_geometry import topology
+from duocad.mesh_geometry import TOPOLOGY_DEFECTS, topology, weld_exact
 
 FIXTURES = Path(__file__).resolve().parent / 'fixtures'
-CONNECTIVITY = ('boundary_edges', 'nonmanifold_edges', 'inconsistent_edges',
-                'nonmanifold_vertices', 'degenerate_triangles', 'duplicate_triangles')
+CONNECTIVITY = TOPOLOGY_DEFECTS
 
 
 def load(name):
@@ -45,8 +44,7 @@ def welded(shape):
         positions, indices = kernel._face_triangles(TopoDS.Face_s(face_map.FindKey(index)))
         if indices:
             chunks.append(np.asarray(positions).reshape(-1, 3)[np.asarray(indices).reshape(-1, 3)])
-    vertices, inverse = np.unique(np.concatenate(chunks).reshape(-1, 3), axis=0, return_inverse=True)
-    return vertices, inverse.reshape(-1, 3)
+    return weld_exact(np.concatenate(chunks))
 
 
 def connectivity(shape):

@@ -19,11 +19,16 @@
   import CommandHost from './commands/CommandHost.svelte'
   import {
     COMMANDS,
+    bodyRef,
+    edgeRef,
     faceRef,
     refKey,
     refKind,
+    refsOfKind,
+    regionRef,
     sameRef,
     sketchEntityRef,
+    vertexRef,
     type CommandCategory,
     type PickTarget,
     type Point2,
@@ -35,32 +40,35 @@
     SOLID_FEATURE_COMMANDS,
     needsSketchId,
   } from './commands/features'
-  import { entityHandles, ghostCopies, snapToSketchEntity, type GhostSource } from './entityKinds'
+  import { ghostCopies, snapSketchPoint } from './entityKinds'
   import { evaluateExpression } from './expression'
+  import { emptyDebugCounts } from './optimizeDebug'
   import { IMPORT_STEP, changesDocument } from './commands/files'
   import { MEASURE } from './commands/measure'
   import { measureLabel, measureReadout } from './measureText'
-  import type { MeasurePayload } from './session'
+  import type { MeasurePayload, OptimizeResolutionStep } from './session'
   import {
     OPTIMIZE_EMPTY_START_VERBS,
     OPTIMIZE_MODE_COMMANDS,
     OPTIMIZE_PRESET_ROLE,
     OPTIMIZE_ROLE_LABEL,
   } from './commands/optimize'
-  import OptimizePanel, { type OptimizeNotice } from './OptimizePanel.svelte'
-  import { judgeMinWidth, minWidthProblem, shownMinWidthMm } from './minWidth'
+  import OptimizePanel from './OptimizePanel.svelte'
+  import { optimizeNoticeFor, type OptimizeNotice } from './optimizeNotice'
+  import { isOutOfRange, judgeMinWidth, minWidthProblem, stepAt } from './minWidth'
+  import { buildSketchDraws, regionsStillExist } from './sketchDraws'
+  import { bodyGhostRotation, ghostSources, resolvePicksForGhost, type GhostContext } from './ghostArgs'
   import {
     DEFAULT_SKETCH_COMMAND_ID,
     SKETCH_COMMANDS,
     SKETCH_CREATE,
-    MOVE_SKETCH_ENTITIES,
     SKETCH_PENDING_COMMANDS,
     ghostEntity,
     runsOutsideSketch,
     runsWithoutSketchId,
   } from './commands/sketch'
-  import FilesPanel from './FilesPanel.svelte'
-  import BrowserPanel from './BrowserPanel.svelte'
+  import FilesPanel, { formatSize } from './FilesPanel.svelte'
+  import BrowserPanel, { planeLabel } from './BrowserPanel.svelte'
   import Toast, { showToast } from './Toast.svelte'
   import {
     createSession,
@@ -84,7 +92,6 @@
     type SelectionState,
     type ServerState,
     type ShapeRef,
-    type SketchEntity,
     type SketchEntityRef,
     type SketchState,
     type VerticesPayload,
@@ -100,11 +107,9 @@
   import { loadFov, loadOriginVisible, saveFov, saveOriginVisible } from './viewSettings'
   import {
     createViewport,
-    type BodyGhostRotation,
     type BoxSelectEvent,
     type PickEvent,
     type SectionState,
-    type SketchDraw,
     type SketchEntityHit,
     type VertexMarker,
     type Viewport,
@@ -584,12 +589,8 @@
   /** **次に走らせるまで消えない通知**(トーストは時間で消えるので、結果の信用度はこちら)。 */
   let optimizeNotice = $state<OptimizeNotice | null>(null)
 
-  /** いま選ばれている段。目盛りが縮んだときのために毎回丸め直す。 */
-  const optimizeStep = $derived.by(() => {
-    const steps = optimizeResolution?.steps ?? []
-    if (steps.length === 0) return null
-    return steps[Math.min(optimizeStepIndex, steps.length - 1)] ?? null
-  })
+  /** いま選ばれている段。目盛りが縮んだときのために毎回丸め直す(`stepAt`。OptimizePanel と同じ丸め)。 */
+  const optimizeStep = $derived(stepAt(optimizeResolution?.steps ?? [], optimizeStepIndex))
 
   function runOptimization(): void {
     if (optimizeBusy) return
@@ -606,35 +607,39 @@
     })
   }
 
-  /** 最小幅の入力欄が変わった。**下限割れへ新しく入った瞬間だけ**トーストで知らせる
-   *  (タスク仕様「下回ったら...トーストで値の変更を促す」)。割れたまま1文字ずつ打ち直しても
-   *  連打しない —— 赤い入力欄と実行不能ボタンが「いま無効」を常時示しているので、トーストの
-   *  役目は「気づかせる」の1回だけでよい。 */
-  function handleOptimizeMinWidth(value: number | null): void {
-    optimizeMinWidthMm = value
-    const verdict = judgeMinWidth(value, optimizeStep)
-    const invalidNow = verdict.kind === 'below' || verdict.kind === 'above'
-    if (invalidNow && !optimizeMinWidthWasInvalid) {
-      showToast(`最小幅 ${value}mm: ${minWidthProblem(verdict, optimizeStep!)}。値を見直すこと`)
-    }
+  /**
+   * 最小幅の判定を見て、**範囲外へ新しく入った瞬間だけ**トーストで知らせる(タスク仕様「下回ったら...
+   * トーストで値の変更を促す」「解像度を変えると下限も変わる」)。割れたまま1文字ずつ打ち直しても
+   * 連打しない —— 赤い入力欄と実行不能ボタンが「いま無効」を常時示しているので、トーストの役目は
+   * 「気づかせる」の1回だけでよい。`optimizeMinWidthWasInvalid` は入力欄と段の変更の**2経路で共有する
+   * 1つの印**(立ち上がりの判定)で、読み書きはここに閉じる。
+   */
+  function noteMinWidthValidity(
+    value: number | null,
+    step: OptimizeResolutionStep | null,
+    message: (problem: string) => string,
+  ): void {
+    const verdict = judgeMinWidth(value, step)
+    const invalidNow = isOutOfRange(verdict)
+    if (invalidNow && !optimizeMinWidthWasInvalid) showToast(message(minWidthProblem(verdict, step!) ?? ''))
     optimizeMinWidthWasInvalid = invalidNow
   }
 
-  /** 解像度の段を変える。**その時に既に入っている最小幅が新しい下限・上限を外れたら、
-   *  黙って実行可能なまま残さずトーストで知らせる**(タスク仕様「解像度を変えると下限も変わる」)。 */
+  /** 最小幅の入力欄が変わった。 */
+  function handleOptimizeMinWidth(value: number | null): void {
+    optimizeMinWidthMm = value
+    noteMinWidthValidity(value, optimizeStep, (problem) => `最小幅 ${value}mm: ${problem}。値を見直すこと`)
+  }
+
+  /** 解像度の段を変える。既に入っている最小幅が新しい下限・上限を外れたら、黙って実行可能なまま残さない。 */
   function handleOptimizeStep(index: number): void {
     optimizeStepIndex = index
-    const steps = optimizeResolution?.steps ?? []
-    const newStep = steps[Math.min(index, Math.max(steps.length - 1, 0))] ?? null
-    const verdict = judgeMinWidth(optimizeMinWidthMm, newStep)
-    const invalidNow = verdict.kind === 'below' || verdict.kind === 'above'
-    if (invalidNow && !optimizeMinWidthWasInvalid) {
-      showToast(
-        `解像度を変えたので最小幅の範囲が変わった。いまの入力 ${optimizeMinWidthMm}mm: ` +
-          `${minWidthProblem(verdict, newStep!)}。値を見直すこと`,
-      )
-    }
-    optimizeMinWidthWasInvalid = invalidNow
+    noteMinWidthValidity(
+      optimizeMinWidthMm,
+      stepAt(optimizeResolution?.steps ?? [], index),
+      (problem) =>
+        `解像度を変えたので最小幅の範囲が変わった。いまの入力 ${optimizeMinWidthMm}mm: ${problem}。値を見直すこと`,
+    )
   }
 
   /** 文書を差し替えたとき、前の文書について出していた最適化の表示を戻す。 */
@@ -737,30 +742,8 @@
    */
   function handleOptimizeResult(result: OptimizeResultPayload): void {
     optimizeProgress = null
+    optimizeNotice = optimizeNoticeFor(result) // 文の組み立ては `optimizeNotice.ts`
     if (result.state === 'done') {
-      const safety = result.safety_factor === null ? '—' : result.safety_factor.toFixed(2)
-      const short = (value: number): string => String(Number(value.toPrecision(3)))
-      const searched =
-        `探索の格子での値。探索時の目標 ${short(result.search_target_safety_factor)} = ` +
-        `目標 ${short(result.target_safety_factor)} × 係数 ${short(result.search_target_factor)}`
-      const material = result.material_mm3 === null ? '—' : Math.round(result.material_mm3).toLocaleString()
-      // `result.min_width.source` で既定/明示を見分ける(`duocad/optimize_run._resolve_min_width`)。
-      // **保証値は切り捨てて出す**(`minWidth.ts` の規律。四捨五入だと 4.9998mm が「5mm」になる)。
-      const minWidth =
-        `最小幅 ${shownMinWidthMm(result.min_width.guaranteed_mm)}mm(` +
-        (result.min_width.source === 'default' ? '既定: 要素サイズの2倍・1mmの大きい方' : '指定') +
-        ')'
-      optimizeNotice = {
-        kind: result.warning ? 'bad' : 'info',
-        lines: [
-          `結果を「${result.name}」として足した(三角形 ${result.triangle_count} 枚 ・ ` +
-            `安全率 ${safety}(${searched}) ・ 体積 ${material}mm^3 ・ 評価 ${result.evaluations}回 ・ ` +
-            `終了理由 ${result.termination ?? '—'} ・ ${Math.round(result.seconds)}秒)`,
-          minWidth,
-          '元のボディは1つも消えていない。結果は表示とSTL書き出しだけができる(編集はできない)',
-          ...(result.warning ? [result.warning] : []),
-        ],
-      }
       note(`最適化が終わった: ${result.name}`)
       // **`?voxel=1`: 平滑化メッシュへ差し替えず、ボクセルのまま止める。**
       // **数十msだけ両方が見える**(密度場はメッシュ化より前に届き、隠す相手の `body_id` が
@@ -770,17 +753,6 @@
       // 本体の結果は**文書に入るメッシュボディ**なので、代わりに**表示だけ隠す**。
       // 文書は1ビットも変えない(隠すのはビューポートのローカルな見え方だけ)。
       if (debugFlags.voxel && result.body_id) optimizeDebugHiddenBodyId = result.body_id
-      return
-    }
-    // **`warning` は`state`ごとにサーバが作った具体的な一言**(`optimize_run._search_failure_warning`
-    // / `format_condition_face_warning` / `format_region_warning`)なので、ここで
-    // 汎用の言い直しを重ねない —— 「文書は変わっていない」の1点だけ添える。
-    optimizeNotice = {
-      kind: 'bad',
-      lines: [
-        result.warning ?? '結果を作れなかった',
-        '文書は1ビットも変わっていない(結果のボディは足していない)',
-      ],
     }
   }
 
@@ -828,6 +800,23 @@
     opCounter += 1
     myClientOps.add(opCounter) // この番号で返ってきた操作は「自分」(上のdocstring)
     return opCounter
+  }
+
+  /**
+   * 番号を取って応答待ち(`pendingOp`)にし、verb を送る(`runCommand` の sketch / feature / query)。
+   * ファイル操作は `runFileOp`(文書を変える verb のときだけ待つ)で、ここは通さない。
+   */
+  function sendTracked(verb: string, args: Record<string, unknown>): void {
+    const op = nextOp()
+    pendingOp = op
+    session.runVerb(verb, args, op)
+  }
+
+  /** 自分が出して待っている操作の応答なら待ちを解く(解いたら true)。 */
+  function releasePending(clientOp: number | null): boolean {
+    if (clientOp === null || clientOp !== pendingOp) return false
+    pendingOp = null
+    return true
   }
 
   // ---------------------------------------------------------------- コアからの状態
@@ -886,7 +875,7 @@
       if (applied.client_op !== null && myClientOps.has(applied.client_op)) {
         selfSelections += 1
       }
-      if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
+      releasePending(applied.client_op)
       return
     }
     if (applied && applied.change === 'visibility') {
@@ -894,7 +883,7 @@
       // 効果は同じ配信の `state.bodies[].visible` に載っており、ここで見るのは
       // 「自分が出した操作か」の突き合わせだけ(表示切り替えは `pendingOp` を立てない
       // 経路なので、印は `myClientOps` の側が持っている)。
-      if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
+      releasePending(applied.client_op)
       // 集合 verb の起動時に表示へ戻したボディが全部戻ったら、既存の割り当てを並べる(`onCommandStart`)。
       const preset = pendingOptimizePreset
       if (preset !== null && applied.client_op !== null && preset.ops.delete(applied.client_op) && preset.ops.size === 0) {
@@ -929,7 +918,7 @@
         viewport?.resetGrid()
       }
       note(applied.name === null ? '新規の文書にした' : `開いた: ${applied.name}`)
-      if (applied.client_op !== null && applied.client_op === pendingOp) pendingOp = null
+      releasePending(applied.client_op)
       lastApplied = applied
       refreshDocuments()
       return
@@ -952,8 +941,7 @@
         const count = applied.body_ids?.length ?? 0
         note(`STEPを読み込んだ(${count}部品)。そのまま面をクリックして押し出せる`)
       }
-      if (applied.client_op !== null && applied.client_op === pendingOp) {
-        pendingOp = null
+      if (releasePending(applied.client_op)) {
         // **CommandHostが出した確定が、実際に成功したと確認できた**——ここで
         // 初めて無起動へ戻す。`commit()` の時点(`onRun` を呼んだ直後)ではまだ成否が
         // 分からず、先に戻すとOCCTのフィレット失敗時の打ち直し(`CommandHost.commit()`の
@@ -1008,8 +996,7 @@
   }
 
   function handleMeasure(payload: MeasurePayload): void {
-    if (payload.client_op !== null && payload.client_op === pendingOp) {
-      pendingOp = null
+    if (releasePending(payload.client_op)) {
       // 測定は成否を待つ入力欄が無いので、返事が来た時点で無起動へ戻してよい
       host?.commandSucceeded()
     }
@@ -1069,8 +1056,7 @@
     // 直したときに**状態配信を待ち続けて確定が永久に拒否される**経路ができる。
     // 出した番号を控えてあるので、それと一致するときだけ解けばよい(取りすぎない)。
     if (pendingOp !== null && pendingOp === lastFileOp) pendingOp = null
-    const kb = payload.bytes / 1024
-    const size = `${kb.toLocaleString(undefined, { maximumFractionDigits: kb >= 1 ? 0 : 1 })} KB`
+    const size = formatSize(payload.bytes)
     const extra = payload.operations !== undefined ? ` / 操作 ${payload.operations}件` : ''
     // **export_step/export_stlのみ**body_idsが載る。書き出した個数と、非表示で除外した
     // 個数(0件なら文言を出さない)を並べる —— 「隠したつもりが無いのに減っている」を
@@ -1206,8 +1192,7 @@
    */
   const selectedEntities = $derived([
     ...new Set(
-      (selection?.items ?? [])
-        .filter((item): item is SketchEntityRef => refKind(item) === 'sketch_entity')
+      refsOfKind(selection?.items ?? [], 'sketch_entity')
         // **編集中のスケッチのものだけ**(反復verbは `sketch_id` と `entities` を別々に送るので、
         // 混ざると「このスケッチに無い図形ID」をサーバへ渡すことになる)。`enterSketch` が
         // 他のスケッチの選択を外すのが本筋で、ここはそれを二重に守る側である。
@@ -1216,18 +1201,12 @@
     ),
   ])
 
-  const selectedFaces = $derived(
-    (selection?.items ?? []).filter(
-      (item): item is ShapeRef => !('sketch' in item) && (item as ShapeRef).kind === 'face',
-    ),
-  )
+  const selectedFaces = $derived(refsOfKind(selection?.items ?? [], 'face'))
   /**
    * 選択中のボディ(形状最適化の保持/除外を決めているあいだだけ現れる。
    * `refKind` で見分ける —— `BodyRef` は `kind: 'body'` を持つ)。
    */
-  const selectedBodies = $derived(
-    (selection?.items ?? []).filter((item): item is BodyRef => refKind(item) === 'body'),
-  )
+  const selectedBodies = $derived(refsOfKind(selection?.items ?? [], 'body'))
   /**
    * `move_body` の幽霊を出す対象のボディ。**コアの `selection.require_bodies` の写し** ——
    * 面・辺・頂点・ボディの参照から `body` を逆引きし、最初に現れた順で重複を畳む。
@@ -1245,18 +1224,34 @@
     ),
   ])
   /** 選択中の辺(**辺を出している間だけ**3Dで色が変わる)。 */
-  const selectedEdges = $derived(
-    (selection?.items ?? []).filter(
-      (item): item is ShapeRef => !('sketch' in item) && (item as ShapeRef).kind === 'edge',
-    ),
-  )
+  const selectedEdges = $derived(refsOfKind(selection?.items ?? [], 'edge'))
 
   /** 選択中の頂点(**選ばれているものだけ**が3Dにマーカーで出る)。 */
-  const selectedVertices = $derived(
-    (selection?.items ?? []).filter(
-      (item): item is ShapeRef => !('sketch' in item) && (item as ShapeRef).kind === 'vertex',
-    ),
-  )
+  const selectedVertices = $derived(refsOfKind(selection?.items ?? [], 'vertex'))
+
+  /**
+   * 取り寄せた辺・頂点(`edges` / `vertices`)のうち、**ボディの版(`revision`)が今と同じもの**だけを返す(§7)。
+   * 形が変わった後の古い座標・添字は、実物のどこにも無い所にマーカーが浮く・別の辺を指す。
+   * `requireVisible` は頂点の表示・取り寄せの側だけ(隠れたボディの頂点はサーバが断る)。辺と幽霊の解決は見ない。
+   * `$effect` の中から呼ぶと `model` と手元の値の両方が依存に入る(`?.` で短絡する前に読む)。
+   */
+  function freshPayload<T extends { revision: number }>(
+    cache: Record<string, T>,
+    bodyId: string,
+    options: { requireVisible?: boolean } = {},
+  ): T | null {
+    const body = model?.bodies.find((item) => item.body_id === bodyId)
+    const known = cache[bodyId]
+    if (!body || (options.requireVisible === true && !body.visible)) return null
+    return known !== undefined && known.revision === body.revision ? known : null
+  }
+
+  /** 同じ鍵(`${body}:${revision}`)で2度頼まない(`edgesAsked` / `verticesAsked`)。 */
+  function requestOnce(asked: Set<string>, key: string, send: () => void): void {
+    if (asked.has(key)) return
+    asked.add(key)
+    send()
+  }
 
   /**
    * 画面に出す頂点マーカー(参照 + 座標)。
@@ -1268,9 +1263,8 @@
   const vertexMarkers = $derived.by(() => {
     const markers: VertexMarker[] = []
     for (const item of selectedVertices) {
-      const body = model?.bodies.find((candidate) => candidate.body_id === item.body)
-      const known = vertices[item.body]
-      if (!body || !body.visible || known?.revision !== body.revision) continue
+      const known = freshPayload(vertices, item.body, { requireVisible: true })
+      if (known === null) continue
       const point = known.vertices.find((candidate) => candidate.index === item.index)?.point
       if (point) markers.push({ bodyId: item.body, vertexIndex: item.index, point })
     }
@@ -1279,9 +1273,8 @@
     // 1つも無い**(頂点を選択へ足すコマンドが無いので、そもそも出しようがない)。
     // **辺の折れ線と同じ規律** —— 要求しているコマンドを起動している間だけに限る。
     if (vertexCandidateBody !== null) {
-      const body = model?.bodies.find((item) => item.body_id === vertexCandidateBody)
-      const known = vertices[vertexCandidateBody]
-      if (body && body.visible && known?.revision === body.revision) {
+      const known = freshPayload(vertices, vertexCandidateBody, { requireVisible: true })
+      if (known !== null) {
         const shown = new Set(markers.map((marker) => marker.vertexIndex))
         for (const item of known.vertices) {
           if (shown.has(item.index)) continue
@@ -1318,18 +1311,7 @@
    * 無いので、要求の有無ではなく**選択に入っているかどうか**が出す条件になる
    * (`viewport.showVertices` のdocstring)。
    */
-  $effect(() => {
-    for (const item of selectedVertices) {
-      const body = model?.bodies.find((candidate) => candidate.body_id === item.body)
-      // **見えているBodyだけ**に頼む(隠れているものの頂点はサーバが断る。辺と同じ規律)。
-      if (!body || !body.visible) continue
-      if (vertices[item.body]?.revision === body.revision) continue
-      const key = `${item.body}:${body.revision}`
-      if (verticesAsked.has(key)) continue
-      verticesAsked.add(key)
-      session.getVertices(item.body)
-    }
-  })
+  // 取り寄せは候補のボディと1本の `$effect` で行う(`vertexCandidateBody` の下)。
 
   // ---------------------------------------------------------------- D: 辺を取りに行く
   /**
@@ -1368,17 +1350,19 @@
     sketchId === null && (wantedPick === 'vertex' || wantedVertices) ? edgeTargetBody : null,
   )
 
-  /** 候補として出す頂点の座標を取りに行く(選択に入った頂点と同じ形の要求)。 */
+  /**
+   * 選択に入った頂点のボディと、候補として出すボディの頂点の座標を取りに行く。
+   * **見えているBodyだけ**に頼む(隠れているものの頂点はサーバが断る。辺と同じ規律)。
+   */
   $effect(() => {
-    const target = vertexCandidateBody
-    if (target === null) return
-    const body = model?.bodies.find((item) => item.body_id === target)
-    if (!body || !body.visible) return
-    if (vertices[target]?.revision === body.revision) return
-    const key = `${target}:${body.revision}`
-    if (verticesAsked.has(key)) return
-    verticesAsked.add(key)
-    session.getVertices(target)
+    const targets = new Set(selectedVertices.map((item) => item.body))
+    if (vertexCandidateBody !== null) targets.add(vertexCandidateBody)
+    for (const target of targets) {
+      const body = model?.bodies.find((item) => item.body_id === target)
+      if (!body || !body.visible) continue
+      if (vertices[target]?.revision === body.revision) continue
+      requestOnce(verticesAsked, `${target}:${body.revision}`, () => session.getVertices(target))
+    }
   })
 
   /**
@@ -1401,19 +1385,18 @@
       viewport?.showEdges(null, [])
       return
     }
-    const body = model?.bodies.find((item) => item.body_id === edgeTargetBody)
-    const known = edges[edgeTargetBody]
-    // **版が違う辺は使わない**(形が変わった後の古い添字は別の辺を指す。§7)
-    if (body && known?.revision === body.revision) {
+    // **版が違う辺は使わない**(形が変わった後の古い添字は別の辺を指す。§7)。可視性は見ない
+    // (`edgeTargetBody` が見えているボディしか返さない)。
+    const known = freshPayload(edges, edgeTargetBody)
+    if (known !== null) {
       viewport?.showEdges(edgeTargetBody, known.edges)
       drawHighlight()
       return
     }
-    viewport?.showEdges(null, [])
-    const key = `${edgeTargetBody}:${body?.revision ?? '?'}`
-    if (edgesAsked.has(key)) return
-    edgesAsked.add(key)
-    session.getEdges(edgeTargetBody)
+    viewport?.showEdges(null, []) // 古い線を先に消してから頼む
+    // `model.bodies` にボディが見つからないときも `'?'` の鍵で1回だけ頼む。
+    const body = model?.bodies.find((item) => item.body_id === edgeTargetBody)
+    requestOnce(edgesAsked, `${edgeTargetBody}:${body?.revision ?? '?'}`, () => session.getEdges(edgeTargetBody))
   })
 
   /**
@@ -1512,7 +1495,7 @@
    * **押せるのに断られる、を画面から消すのはこの1本**である。
    */
   function pickedRef(bodyId: string, faceIndex: number): SelectionRef {
-    if (meshBodyIds.has(bodyId)) return { body: bodyId, kind: 'body', index: null }
+    if (meshBodyIds.has(bodyId)) return bodyRef(bodyId)
     return faceRef(bodyId, faceIndex)
   }
 
@@ -1536,7 +1519,7 @@
    * 面の参照を確定すると `require_committed_bodies` が面を無視し、**集合が黙って空になる**。
    */
   function optimizeSetFaceRef(bodyId: string, faceIndex: number): SelectionRef {
-    if (wantedKinds.includes('body')) return { body: bodyId, kind: 'body', index: null }
+    if (wantedKinds.includes('body')) return bodyRef(bodyId)
     return pickedRef(bodyId, faceIndex)
   }
 
@@ -1545,9 +1528,9 @@
     const picked: SelectionRef[] = [
       // **同じボディの面が何枚囲まれても参照は1つ**(`refKey` で重複を落とす)。
       ...dedupeRefs(event.faces.map((item) => optimizeSetFaceRef(item.bodyId, item.faceIndex))),
-      ...event.edges.map((item) => ({ body: item.bodyId, kind: 'edge' as const, index: item.edgeIndex })),
-      ...event.vertices.map((item) => ({ body: item.bodyId, kind: 'vertex' as const, index: item.vertexIndex })),
-      ...event.regions.map((item) => ({ sketch: item.sketchId, index: item.index })),
+      ...event.edges.map((item) => edgeRef(item.bodyId, item.edgeIndex)),
+      ...event.vertices.map((item) => vertexRef(item.bodyId, item.vertexIndex)),
+      ...event.regions.map((item) => regionRef(item.sketchId, item.index)),
       ...event.sketchEntities.map((item) => sketchEntityRef(item.sketchId, item.entityId, item.point)),
     ]
     const current = selection?.items ?? []
@@ -1711,11 +1694,11 @@
     if (host !== null && event.mode === 'replace') {
       const wants = host.wantsPick()
       if (wants === 'edge' && event.edge !== null) {
-        host.setPick({ body: event.edge.bodyId, kind: 'edge', index: event.edge.edgeIndex })
+        host.setPick(edgeRef(event.edge.bodyId, event.edge.edgeIndex))
         return
       }
       if (wants === 'vertex' && event.vertex !== null) {
-        host.setPick({ body: event.vertex.bodyId, kind: 'vertex', index: event.vertex.vertexIndex })
+        host.setPick(vertexRef(event.vertex.bodyId, event.vertex.vertexIndex))
         return
       }
       if (wants === 'face' && event.hit !== null) {
@@ -1728,27 +1711,21 @@
     const pickMode: PickEvent['mode'] = toggleOnlyMode(event.mode)
     // **辺が当たったら辺**。フィレット・面取り・測定を起動している間だけ来る。
     if (event.edge !== null) {
-      editSelection(
-        { body: event.edge.bodyId, kind: 'edge', index: event.edge.edgeIndex },
-        pickMode,
-      )
+      editSelection(edgeRef(event.edge.bodyId, event.edge.edgeIndex), pickMode)
       return
     }
     // **頂点が当たったら頂点**。マーカーが出ているのは選択に入っている頂点と、測定の
     // 候補(対象ボディの全頂点)だけなので、ここへ来るのは「AIが選んだ頂点を人が
     // Ctrl+クリックで外す」か「測る頂点を指す」のどちらか。参照の形も修飾キーの規則も面・辺と同じ。
     if (event.vertex !== null) {
-      editSelection(
-        { body: event.vertex.bodyId, kind: 'vertex', index: event.vertex.vertexIndex },
-        pickMode,
-      )
+      editSelection(vertexRef(event.vertex.bodyId, event.vertex.vertexIndex), pickMode)
       return
     }
     // **領域が当たったら領域**。「領域を押し出す」を起動している間だけ来る
     // (`wantsRegions` → `viewport.pickRegions`)。参照の形も修飾キーの規則も
     // スケッチモードの `onSketchPick` と同じ —— 同じものを同じように選ぶ。
     if (event.region !== null) {
-      editSelection({ sketch: event.region.sketchId, index: event.region.index }, pickMode)
+      editSelection(regionRef(event.region.sketchId, event.region.index), pickMode)
       return
     }
     if (event.hit === null) {
@@ -1769,54 +1746,8 @@
     sketches.find((item) => item.sketch_id === sketchId) ?? null,
   )
 
-  /** 描画指示を組み立てる(選択中の領域だけ強調色になる)。 */
-  function sketchDraws(): SketchDraw[] {
-    const selectedRegions = (selection?.items ?? [])
-      // **`sketch` を持つ参照は2種類ある**(領域とスケッチの図形)。`refKind` で分ける ——
-      // `'sketch' in item` だけで拾うと、選んだ点が「領域の添字」として読まれる。
-      .filter((item): item is { sketch: string; index: number } => refKind(item) === 'region')
-    const selectedHandles = (selection?.items ?? []).filter(
-      (item): item is SketchEntityRef => refKind(item) === 'sketch_entity',
-    )
-    return sketches
-      // **隠したスケッチは描かない**(コアの `sketches[].visible`。issue #7)。**編集中の
-      // スケッチだけは可視性に関わらず描く** —— 隠したスケッチの行から入る経路は先に
-      // 表示へ戻す(`enterSketch`)が、その往復を待たずに `lookAtSketch` が枠を要るため。
-      .filter((item) => item.frame !== null && (item.visible || item.sketch_id === sketchId))
-      .map((item) => ({
-        sketchId: item.sketch_id,
-        frame: item.frame as NonNullable<typeof item.frame>,
-        // **`offset` も `base` 扱い**(`SketchPlaneRef` のdocstring参照)。オフセット平面は
-        // 実ジオメトリの面ではない —— 基準が面でも、そこから離れた位置には実物の境界が無い
-        // ので、面の実寸で範囲を絞る `faceUvBoxOnly` の対象にはできない。
-        plane:
-          item.plane.kind === 'face'
-            ? { kind: 'face' as const, bodyId: item.plane.body, faceIndex: item.plane.index }
-            : { kind: 'base' as const },
-        entities: item.drawn,
-        regions: item.regions,
-        selectedRegions: selectedRegions
-          .filter((ref) => ref.sketch === item.sketch_id)
-          .map((ref) => ref.index),
-        // **点・辺を出すのは編集中のスケッチだけ**。全スケッチに出すと、通常モードの
-        // 画面が点だらけになるうえ、指せないもの(モード外のスケッチの図形)が
-        // 指せそうに見える(UI指針: 必要なものだけを出す)。
-        handles:
-          item.sketch_id === sketchId
-            ? item.entities.map((entity) => ({
-                entityId: entity.entity_id,
-                kind: entity.kind as string,
-                params: entity.params,
-              }))
-            : [],
-        selectedHandles: selectedHandles
-          .filter((ref) => ref.sketch === item.sketch_id)
-          .map((ref) => ({ entityId: ref.entity, point: ref.point })),
-      }))
-  }
-
   function drawSketches(): void {
-    viewport?.showSketches(sketchDraws())
+    viewport?.showSketches(buildSketchDraws(sketches, selection, sketchId))
   }
 
   /**
@@ -1893,7 +1824,7 @@
    */
   function enterSketch(id: string): void {
     // **隠したスケッチに入るときは先に表示へ戻す**(拒否ではなく表示に戻して入る。本人判断
-    // 2026-09-16)。編集中のスケッチは `sketchDraws()` が可視性に関わらず描くので、
+    // 2026-09-16)。編集中のスケッチは `buildSketchDraws` が可視性に関わらず描くので、
     // サーバの往復を待たずに入ってよい(抜けた後も表示のまま —— 隠し直しはしない)。
     const target = sketches.find((item) => item.sketch_id === id)
     if (target !== undefined && !target.visible) setSketchVisible(id, true)
@@ -1969,7 +1900,7 @@
       return
     }
     if (event.region) {
-      editSelection({ sketch: event.region.sketchId, index: event.region.index }, event.mode)
+      editSelection(regionRef(event.region.sketchId, event.region.index), event.mode)
       return
     }
     if (event.mode === 'replace' && (selection?.items.length ?? 0) > 0) {
@@ -2000,27 +1931,19 @@
         // 判定を1つ置いて迂回させる: 反復が「分類は feature だが `sketch_id` が要る」で、
         // こちらは「分類は sketch だが `sketch_id` が要らない」という裏返しの位置にいる。
         if (runsOutsideSketch(verb)) {
-          const op = nextOp()
-          pendingOp = op
-          session.runVerb(verb, args, op)
+          sendTracked(verb, args)
           return
         }
         if (sketchId === null) {
           fail('スケッチモードに入っていない')
           return
         }
-        const op = nextOp()
-        pendingOp = op
         viewport?.showSketchGhosts(sketchId, []) // 本物を頼んだので幽霊は消す
         // **引数名はコマンド定義とサーバの宣言で既に揃っている**(p0/p1・center/radius・
         // corner/width/height・center/radius/start_deg/end_deg)。ここで詰め替えない。
         // **`move_sketch_entities` だけは `sketch_id` を足さない** —— どのスケッチかは
         // 選んだ参照(`{sketch, entity, point}`)が持っている(`runsWithoutSketchId`)。
-        session.runVerb(
-          verb,
-          runsWithoutSketchId(verb) ? args : { ...args, sketch_id: sketchId },
-          op,
-        )
+        sendTracked(verb, runsWithoutSketchId(verb) ? args : { ...args, sketch_id: sketchId })
         return
       }
       // -------------------------------------------------------------- D: フィーチャ
@@ -2029,15 +1952,13 @@
           fail('スケッチモードに入っていない(反復はスケッチの図形が対象)')
           return
         }
-        if (verb === 'extrude' && !regionsStillExist()) {
+        if (verb === 'extrude' && !regionsStillExist(selection, sketches)) {
           // **領域はパラメータ編集で分裂・消失しうる**(§7)。消えた領域を送ると
           // サーバは添字が範囲外だと言うだけなので、ここで何が起きたかを画面へ出す。
           fail('選んだ領域が今のスケッチに無い(図形が変わって分裂・消失した可能性)。選び直す')
           return
         }
-        const op = nextOp()
-        pendingOp = op
-        session.runVerb(verb, needsSketchId(verb) ? { ...args, sketch_id: sketchId } : args, op)
+        sendTracked(verb, needsSketchId(verb) ? { ...args, sketch_id: sketchId } : args)
         return
       }
       // -------------------------------------------------------------- F: ファイル
@@ -2054,9 +1975,7 @@
         // **verb と同じ口で送る**(`{cmd, client_op}`)。返事は状態配信ではなく
         // `{type:'measure'}` で、`handleMeasure` が `client_op` を突き合わせて
         // コマンド層を無起動へ戻す(verb なら `applied.client_op` が担う役)。
-        const op = nextOp()
-        pendingOp = op
-        session.runVerb(verb, args, op)
+        sendTracked(verb, args)
         return
       }
       default: {
@@ -2068,235 +1987,38 @@
     }
   }
 
-  /**
-   * これから押し出す領域(=コアの選択にある領域)が、指定したスケッチ一覧に実在するか。
-   *
-   * **選択そのものを見る**。押し出す領域はサーバがコアの選択から取るので、
-   * 送る引数には入っていない —— 引数を見に行くと常に空になり、この検査が
-   * 黙って空振りする。
-   *
-   * **引数を取る形にしてある**(2026-08-27)。呼び出し側(`runCommand`)は既定値の
-   * 現在の `selection`/`sketches` で呼ぶが、テスト(`window.__duocad.regionsStillExist`)は
-   * 合成データを渡して分岐を直接検査できる —— この関数がfalseを返す状況(選んだ領域が
-   * 実際に消えている)は、`duocad/catalog.py` の `resets_selection=True`(17verb全て。
-   * `tests/test_server_selection_reset.py` が過不足なく固定)が領域を変えうるverbの
-   * すべてに掛かっているため、**通常のUI操作では選択が先に空になり到達できない**
-   * (`tests/test_server_selection_reset.py::test_set_parameter_clears_a_selected_region_that_the_edit_makes_vanish`
-   * が実測)。ロジック自体の正しさをpuppeteerから検算するための穴が要る理由はこれ。
-   */
-  function regionsStillExist(
-    sel: SelectionState | null = selection,
-    sks: SketchState[] = sketches,
-  ): boolean {
-    const refs = (sel?.items ?? []).filter(
-      // 領域だけ(スケッチの図形の参照も `sketch` を持つので `refKind` で分ける)
-      (item): item is { sketch: string; index: number } => refKind(item) === 'region',
-    )
-    return refs.every((ref) =>
-      sks.some(
-        (item) =>
-          item.sketch_id === ref.sketch &&
-          item.regions.some((candidate) => candidate.index === ref.index),
-      ),
-    )
-  }
 
-  /**
-   * ローカル幽霊の**対象になる既存の図形**(`ghostCopies` の `sources`)。
-   *
-   * 対象の取り方がverbで違うのでここで分ける —— 反復は**引数の `entities`**、移動は
-   * **共有選択集合**(`selectedEntities`)から取る。この違いは `entityKinds.ts` には
-   * 持ち込まない(あちらは「その図形をどう変換するか」だけを知っていればよい)。
-   *
-   * 編集中のスケッチに実在するIDだけを返す(消えた図形・他のスケッチの図形は落ちる)。
-   */
-  function ghostSources(verb: string, args: Record<string, unknown>): GhostSource[] {
-    const active = activeSketch
-    if (active === null) return []
-    const byId = new Map(active.entities.map((entity) => [entity.entity_id, entity]))
-    if (verb === MOVE_SKETCH_ENTITIES.id) {
-      // **どの点が選ばれているかまで渡す** —— この verb は「図形1つ全体(辺)」と
-      // 「図形の1点」で結果が違う(全体は形を変えずに動き、1点は線分が伸びる)。
-      // 図形IDだけに畳むと、点を1つ選んだだけで図形ごと動く幽霊になる。
-      const grouped = new Map<string, Array<string | null>>()
-      for (const item of selection?.items ?? []) {
-        if (refKind(item) !== 'sketch_entity') continue
-        const ref = item as SketchEntityRef
-        if (ref.sketch !== sketchId) continue
-        const points = grouped.get(ref.entity)
-        if (points === undefined) grouped.set(ref.entity, [ref.point])
-        else if (!points.includes(ref.point)) points.push(ref.point)
-      }
-      return [...grouped].flatMap(([id, points]) => {
-        const entity = byId.get(id)
-        return entity === undefined ? [] : [{ kind: entity.kind, params: entity.params, points }]
-      })
+  /** 幽霊の解決に要る手元の状態(`ghostArgs.ts`)。辺・頂点は版を照合した後の値だけ渡す(`freshPayload`)。 */
+  function ghostContext(): GhostContext {
+    return {
+      sketches,
+      editingId: sketchId,
+      selection,
+      edgesOf: (bodyId) => freshPayload(edges, bodyId),
+      verticesOf: (bodyId) => freshPayload(vertices, bodyId),
     }
-    const ids = Array.isArray(args.entities) ? (args.entities as string[]) : []
-    return ids
-      .map((id) => byId.get(id))
-      .filter((entity): entity is SketchEntity => entity !== undefined)
-      .map((entity) => ({ kind: entity.kind, params: entity.params }))
-  }
-
-  /** `[x, y, z]` の有限な数値3つとして読めるなら返す(読めなければ null)。 */
-  function vector3(value: unknown): [number, number, number] | null {
-    if (!Array.isArray(value) || value.length !== 3) return null
-    if (!value.every((item) => typeof item === 'number' && Number.isFinite(item))) return null
-    return [value[0], value[1], value[2]] as [number, number, number]
-  }
-
-  /**
-   * `move_body(mode="rotate")` の引数から、幽霊に掛ける回転を作る(作れなければ null)。
-   *
-   * **軸が数値で来ているときだけ幽霊を出す。** コアは `axis_edge`(辺への参照)や
-   * 「軸の位置を省略 → 対象の合成重心」も受けるが、**そのどちらもブラウザ側では
-   * 正しく解けない** —— 辺の直線はメッシュからは取れず、体積重心にいたっては
-   * 三角形分割の近似からしか出せない。近似で置いた幽霊は「幽霊と確定結果が別の場所に
-   * 出る」という、プレビューとして最悪の壊れ方をする。**出さないほうが正しい**
-   * (2026-09-06。タスク `20260906-0100` の割り切り)。
-   */
-  function bodyGhostRotation(args: Record<string, unknown>): BodyGhostRotation | null {
-    const point = vector3(args.axis_point)
-    const dir = vector3(args.axis_dir)
-    const angle = args.angle
-    if (point === null || dir === null) return null
-    if (typeof angle !== 'number' || !Number.isFinite(angle)) return null
-    // **360の倍数はコアが ValueError にする**(回っていない姿の幽霊を出さない)。
-    if (angle % 360 === 0) return null
-    if (dir.every((value) => value === 0)) return null
-    return { point, dir, angleDeg: angle }
-  }
-
-  /**
-   * 直接ピックで指した**参照を、幽霊が要る数値へ解決する**(`showLocalGhost` へ渡す前)。
-   *
-   * **`showLocalGhost` に参照を渡さない**のが要点である(2026-09-06。前提タスク
-   * `20260906-0100` の不変条件①) —— あちらは「解決済みの数値でしか描かない」層で、
-   * 参照の解決をあちらへ入れると、省略時の既定(重心・代表点の平均)を写す誘惑が同じ場所に
-   * 生まれる。ここは**コアが配った数値そのもの**(辺の折れ線・頂点の座標・図形の `params`)
-   * だけを読み、読めなければ**その引数を落とす** —— 落ちた引数の分だけ幽霊が出なくなる。
-   *
-   * サーバへ送るのは参照のままである(`build`)。**解決の正はコア**で、ここは画面の写し。
-   */
-  function resolvePicksForGhost(
-    verb: string,
-    args: Record<string, unknown>,
-  ): Record<string, unknown> {
-    if (args.mode !== 'rotate') return args
-    if (verb === MOVE_BODY.id) {
-      const { axis_edge: axisRef, center_vertex: centerRef, ...rest } = args
-      const axis = pickedEdgeAxis(axisRef)
-      if (axis === null) return rest // まっすぐな辺が読めない = 幽霊を出さない
-      const center = centerRef === undefined ? null : pickedVertexPoint(centerRef)
-      // **中心を指したのに読めないときも落とす** —— 軸だけで描くと、確定結果とは
-      // 別の位置に幽霊が出る(コアは指された頂点へ軸を寄せる)。
-      if (centerRef !== undefined && center === null) return rest
-      return { ...rest, axis_point: center ?? axis.point, axis_dir: axis.dir }
-    }
-    if (verb === MOVE_SKETCH_ENTITIES.id) {
-      const { center_entity: centerRef, ...rest } = args
-      if (centerRef === undefined) return rest // 省略 = 既定の中心。幽霊は出さない
-      const center = pickedSketchPoint(centerRef)
-      return center === null ? rest : { ...rest, center }
-    }
-    return args
-  }
-
-  /** 指した辺の「軸が通る点」と「向き」(読めなければ null)。 */
-  function pickedEdgeAxis(
-    value: unknown,
-  ): { point: [number, number, number]; dir: [number, number, number] } | null {
-    const ref = value as { body?: unknown; index?: unknown } | undefined
-    if (!ref || typeof ref.body !== 'string' || typeof ref.index !== 'number') return null
-    const body = model?.bodies.find((item) => item.body_id === ref.body)
-    const known = edges[ref.body]
-    // **版が合っている折れ線しか使わない**(辺の描画と同じ規律 §7)。
-    if (!body || known?.revision !== body.revision) return null
-    const edge = known.edges.find((item) => item.index === ref.index)
-    // **まっすぐな辺だけ**(コアの `kernel.edge_axis` が円・splineを断るのと同じ線)。
-    // `kind` はコアの `classify_edge` がそのまま載せたものなので、判定を写していない。
-    if (!edge || edge.kind !== 'line' || edge.points.length < 6) return null
-    const points = edge.points
-    const start: [number, number, number] = [points[0], points[1], points[2]]
-    const end = points.slice(points.length - 3)
-    // **始点→終点**が `kernel.edge_axis` の向きと一致する(どちらも同じ
-    // `BRepAdaptor_Curve` の媒介変数の順に並ぶ。2026-09-06に立方体・穴あき・フィレット・
-    // 合体・L字の直線辺83本で実測)。ここが逆になると幽霊だけが逆回りに見える。
-    const dir: [number, number, number] = [
-      end[0] - start[0],
-      end[1] - start[1],
-      end[2] - start[2],
-    ]
-    return dir.every((value) => value === 0) ? null : { point: start, dir }
-  }
-
-  /** 指した頂点の座標(読めなければ null)。 */
-  function pickedVertexPoint(value: unknown): [number, number, number] | null {
-    const ref = value as { body?: unknown; index?: unknown } | undefined
-    if (!ref || typeof ref.body !== 'string' || typeof ref.index !== 'number') return null
-    const body = model?.bodies.find((item) => item.body_id === ref.body)
-    const known = vertices[ref.body]
-    if (!body || known?.revision !== body.revision) return null
-    const found = known.vertices.find((item) => item.index === ref.index)?.point
-    return found === undefined ? null : [found[0], found[1], found[2]]
-  }
-
-  /**
-   * 指したスケッチの点の座標 [u, v](読めなければ null)。
-   *
-   * **`point` が null なら、その種別の最初の点**(線の始点・円/弧の中心・長方形の左下・
-   * ベジエの始点)。コアの `move_sketch._point_of` と同じ規則で、並びの正は
-   * `entityKinds.ts` の表 1つである(`entityHandles` がその順に返す)。
-   */
-  function pickedSketchPoint(value: unknown): Point2 | null {
-    const ref = value as { sketch?: unknown; entity?: unknown; point?: unknown } | undefined
-    if (!ref || typeof ref.sketch !== 'string' || typeof ref.entity !== 'string') return null
-    const sketch = sketches.find((item) => item.sketch_id === ref.sketch)
-    const entity = sketch?.entities.find((item) => item.entity_id === ref.entity)
-    if (!entity) return null
-    const handles = entityHandles(entity.kind, entity.params)
-    const handle =
-      ref.point === null || ref.point === undefined
-        ? handles[0]
-        : handles.find((item) => item.key === ref.point)
-    return handle === undefined ? null : [handle.u, handle.v]
   }
 
   /**
    * カーソルの生の (u,v) を、当たっているスケッチの図形か1mmグリッドへ落とす(スナップ)。
    *
    * **クリック(`onSketchPick` の `addPoint`)と幽霊(`hoverPoint`)は必ずこの関数を
-   * 通すこと**(20260906タスクの不変条件) —— 片方だけ直すと、吸い付いて見える位置と
-   * 確定結果がずれる、いちばん困る形の不具合になる。段は3つ、上から順に当たった時点で
-   * 確定する: (1) 点マーカー・角・交点(`hit.snapAt` があればそのまま) (2) 図形の線
-   * (3) どちらにも当たっていなければ1mmグリッド。
-   *
-   * `hit.snapAt` があるとき自身への射影を呼ばないのは `viewport.ts` の `snappedSketchUv`
-   * と同じ理由(`SketchEntityHit.snapAt` のdocstring参照) —— 交点は2つの図形にまたがり、
-   * 片方の図形自身へ射影しても交点には戻らない。
-   *
-   * **`viewport.viewResolution()` を渡す** —— 当たり判定(`sketchEntityAt`)が拾う
-   * `handleLines` はこの解像度で折れているので、bezierのように折れ線近似でスナップする
-   * 種別は、ここがずれると「当たった線」と「落ちる座標」が別になる。
+   * 通すこと**(20260906タスクの不変条件)。段の規則は `entityKinds.snapSketchPoint` の1か所
+   * (viewport のカーソル強調も同じ関数を通る)。図形はサーバの `sketches[].entities` から引き、
+   * 1mm への丸めは点を待っている(`host.wantsPoint()`)ときだけ —— 選択のクリック等では丸めない。
    */
   function snappedPlanePoint(u: number, v: number, hit: SketchEntityHit | null): Point2 {
-    if (hit === null) return snappedToGrid1mm(u, v)
-    if (hit.snapAt) return [hit.snapAt[0], hit.snapAt[1]]
-    const sketch = sketches.find((item) => item.sketch_id === hit.sketchId)
-    const entity = sketch?.entities.find((item) => item.entity_id === hit.entityId)
-    if (!entity) return snappedToGrid1mm(u, v)
-    return snapToSketchEntity(entity, hit.point, u, v, viewport?.viewResolution())
-  }
-
-  /**
-   * 何にも当たっていないときの最後の段。点を待っている(`host.wantsPoint()`)ときだけ
-   * (u,v) をそれぞれ1mmへ丸める —— 選択のクリック等では丸めない。
-   *
-   * 層をまたぐ契約: 丸めの刻み(1mm)は `gridScale.ts` の `TIERS` の最小段と一致させること。
-   */
-  function snappedToGrid1mm(u: number, v: number): Point2 {
-    return host?.wantsPoint() ? [Math.round(u), Math.round(v)] : [u, v]
+    return snapSketchPoint(
+      u,
+      v,
+      hit,
+      (entityId) =>
+        sketches
+          .find((item) => item.sketch_id === hit?.sketchId)
+          ?.entities.find((item) => item.entity_id === entityId),
+      viewport?.viewResolution(),
+      host?.wantsPoint() === true,
+    )
   }
 
   /**
@@ -2344,7 +2066,7 @@
       return
     }
     // **空配列でも呼ぶ** —— 対象が消えた・値が使えないときに古い幽霊を残さない。
-    view.showSketchGhosts(sketchId, ghostCopies(verb, args, ghostSources(verb, args)))
+    view.showSketchGhosts(sketchId, ghostCopies(verb, args, ghostSources(ghostContext(), verb, args)))
   }
 
   /**
@@ -2359,7 +2081,7 @@
     if (mode === 'local') {
       // **参照を数値へ解決してから渡す**(`resolvePicksForGhost`)。`showLocalGhost` は
       // 解決済みの数値しか読まない層のままにしておく。
-      showLocalGhost(verb, resolvePicksForGhost(verb, args))
+      showLocalGhost(verb, resolvePicksForGhost(ghostContext(), verb, args))
       return
     }
     previewId += 1
@@ -2753,17 +2475,7 @@
           anchors: strip(optimizeDebugAnchors),
         }
       },
-      optimizeDebugCounts: () =>
-        viewport?.optimizeDebugCounts() ?? {
-          space: 0,
-          rho: 0,
-          fixed: 0,
-          load: 0,
-          spaceStride: 1,
-          rhoStride: 1,
-          anchorsDepthTest: null,
-          hiddenBodyId: null,
-        },
+      optimizeDebugCounts: () => viewport?.optimizeDebugCounts() ?? emptyDebugCounts(),
       // C: スケッチ。**実機検査が本物のクリックで描く**ための穴
       sketches,
       activeSketch: sketchId,
@@ -2961,11 +2673,7 @@
       <div class="mode-row">
         <span class="label">スケッチ</span>
         <span id="sketch-mode" class="tag on">
-          編集中 {activeSketch.plane.kind === 'base'
-            ? activeSketch.plane.name
-            : activeSketch.plane.kind === 'offset'
-              ? `オフセット ${activeSketch.plane.distance}mm`
-              : '面に貼ったスケッチ'}
+          編集中 {planeLabel(activeSketch.plane, '面に貼ったスケッチ')}
           ・図形 {activeSketch.entities.length} ・領域 {activeSketch.regions.length}
         </span>
         <button id="sketch-look" onclick={() => sketchId && viewport?.lookAtSketch(sketchId)}>

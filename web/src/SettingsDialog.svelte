@@ -71,7 +71,7 @@
 
 <svelte:window onkeydown={onWindowKeydown} />
 
-<dialog id="settings-dialog" bind:this={dialog} onclose={onClose}>
+<dialog id="settings-dialog" class="floating-panel" bind:this={dialog} onclose={onClose}>
   <div class="settings-head">
     <strong>設定</strong>
     <span class="spacer"></span>
@@ -83,7 +83,7 @@
        実用上の差が無い選択肢を61個並べるだけで、Fusion 360もFOVの数値を露出していない。
        戻る先は常に `FOV_DEFAULT` なので「戻る角度を覚える」仕組みは要らない
        (コンソールから内部APIで70等を入れてから正投影を入切すると30に落ちるのは許容する)。 -->
-  <label>
+  <label class="field-row">
     正投影
     <input
       id="settings-ortho"
@@ -123,10 +123,6 @@
     z-index: 10;
     width: 260px;
     margin: 0;
-    padding: 8px 10px;
-    background: var(--panel);
-    color: var(--text);
-    border: 1px solid var(--line);
   }
 
   .settings-head {
@@ -134,21 +130,6 @@
     align-items: center;
     gap: 8px;
     margin-bottom: 6px;
-  }
-
-  .spacer {
-    flex: 1 1 auto;
-  }
-
-  /* AiPanel の `<label>` + input に揃える。 */
-  label {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 6px;
-    color: var(--dim);
-    /* AiPanel と同じ理由でラベルは折らない。 */
-    white-space: nowrap;
   }
 
   /* 幅・面・accent-color は styles.css の `input[type='checkbox']` が持つ。

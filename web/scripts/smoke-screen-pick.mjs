@@ -19,15 +19,18 @@
  * 掴める画素が変わったということなので、`viewport.ts` の `pickPointsAt`/`pickLinesAt` か
  * `projectForPick` を疑う。
  */
-import { findBrowser, launchBrowser, withoutBrowserPanel } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
-
-const options = parseArgs(process.argv.slice(2))
-const wsPort = options.port ?? '8993'
-const httpPort = options['http-port'] ?? '8994'
-const timeout = 60000
+import {
+  assertNoAppErrors,
+  openApp,
+  sleep,
+  viewportCenter,
+  waitFrames,
+  withoutBrowserPanel,
+} from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import { addExtrudedRect } from './mcp-client.mjs'
+import { sketchPointAt } from './pick.mjs'
 
 /** 矩形の寸法[mm]。原点から離してあるのは、原点の軸線と当たりを取り合わないため。 */
 const RECT = { x: 10, y: 10, width: 40, height: 30 }
@@ -55,57 +58,25 @@ async function quiet(page, timeout) {
       break
     }
     if (Date.now() > deadline) break
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await sleep(100)
   }
-  await settle(page)
+  await waitFrames(page, 4)
 }
 
-/** ホバーは描画ループ(`tick`)で解決するので、動かしたあと数フレーム待つ。 */
-async function settle(page) {
-  await page.evaluate(
-    () =>
-      new Promise((resolve) => {
-        let left = 4
-        const step = () => (left-- <= 0 ? resolve() : requestAnimationFrame(step))
-        requestAnimationFrame(step)
-      }),
-  )
-}
-
-async function main() {
-  const executablePath = findBrowser()
-  const server = await startServer({ wsPort, httpPort })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-  try {
-    await mcp.handshake('duocad-smoke-screen-pick')
-    const sketch = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-    await mcp.callTool('add_rectangle', {
-      sketch_id: sketch.sketch_id,
-      corner: [RECT.x, RECT.y],
-      width: RECT.width,
-      height: RECT.height,
-    })
+runSmoke('smoke-screen-pick', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout }) => {
+  {
     // **ソリッドも作る。** 折れ線の読み口はスケッチ(`Line2` の `userData.polylineWorld`)と
     // ソリッドの辺(素の `BufferGeometry` の position)で別物なので、片方だけでは
     // `pickLinesAt` の半分しか通らない。
-    await mcp.callTool('propose_selection', { refs: [{ sketch: sketch.sketch_id, index: 1 }] })
-    await mcp.callTool('commit_selection')
-    await mcp.callTool('extrude', { distance: 20, mode: 'new' })
-    await mcp.callTool('clear_selection')
-    const bodyId = (await mcp.callTool('describe_document')).bodies[0].body_id
+    const { sketchId, bodyId } = await addExtrudedRect(mcp, {
+      corner: [RECT.x, RECT.y],
+      width: RECT.width,
+      height: RECT.height,
+      distance: 20,
+    })
     ok(`矩形(${RECT.width}×${RECT.height}mm)を置いて20mm押し出した: ${bodyId}`)
 
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
+    const { page, consoleErrors } = await openApp(browser, url, { timeout })
 
     // ================================================ A. ソリッドの辺(`bufferPolyline` 経路)
     await mcp.callTool('propose_selection', { refs: [{ kind: 'face', body: bodyId, index: 1 }] })
@@ -168,7 +139,7 @@ async function main() {
       const hoveredEdge = async (x, y) => {
         await page.mouse.move(x, y)
         for (let attempt = 0; attempt < 3; attempt += 1) {
-          await settle(page)
+          await waitFrames(page, 4)
           const hit = await page.evaluate(() => window.__duocad.hoveredRef()?.edge ?? null)
           if (hit !== null) return hit
         }
@@ -188,12 +159,9 @@ async function main() {
 
     const edgeLengths = []
     await withoutBrowserPanel(page, async () => {
-      const viewportCenter = await page.evaluate(() => {
-        const rect = document.querySelector('.viewport').getBoundingClientRect()
-        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
-      })
+      const center = await viewportCenter(page)
       edgeLengths.push(await probeEdge('辺・既定'))
-      await page.mouse.move(viewportCenter.x, viewportCenter.y)
+      await page.mouse.move(center.x, center.y)
       for (let step = 0; step < 10; step += 1) await page.mouse.wheel({ deltaY: 240 })
       await quiet(page, timeout)
       edgeLengths.push(await probeEdge('辺・ズームアウト'))
@@ -215,10 +183,10 @@ async function main() {
     await page.waitForFunction(
       (id) => window.__duocad.activeSketch === id,
       { timeout, polling: 50 },
-      sketch.sketch_id,
+      sketchId,
     )
     // **カメラの再フレーム(`lookAtSketch`)は数フレーム遅れて反映される**(`smoke-hover` と同じ)。
-    await settle(page)
+    await waitFrames(page, 4)
 
     const entities = await page.evaluate(() => {
       const hook = window.__duocad
@@ -232,25 +200,12 @@ async function main() {
     const rectangle = entities.find((item) => item.kind === 'rectangle')
     if (!rectangle) fail(`スケッチに矩形が無い: ${JSON.stringify(entities)}`)
 
-    /** スケッチ平面の (u,v) の画面座標(ページ絶対)。無ければ null。 */
-    async function sketchScreenPoint(u, v) {
-      return page.evaluate(
-        (uu, vv) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectSketchPoint(uu, vv)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        u,
-        v,
-      )
-    }
-
     async function hoveredSketchEntity(x, y) {
       await page.mouse.move(x, y)
       // **null なら数フレーム置いて読み直す。** 当たり側だけが救われる非対称な待ちで、
       // 外れ側(12px)は何度読んでも null のままなので判定は緩まない。
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        await settle(page)
+        await waitFrames(page, 4)
         const hit = await page.evaluate(() => window.__duocad.hoveredRef()?.sketchEntity ?? null)
         if (hit !== null) return hit
       }
@@ -264,9 +219,9 @@ async function main() {
      * 投影で変わるので、両端を射影してから法線を作る。
      */
     async function probe(label) {
-      const bottomLeft = await sketchScreenPoint(RECT.x, RECT.y)
-      const bottomRight = await sketchScreenPoint(RECT.x + RECT.width, RECT.y)
-      const center = await sketchScreenPoint(RECT.x + RECT.width / 2, RECT.y + RECT.height / 2)
+      const bottomLeft = await sketchPointAt(page, RECT.x, RECT.y)
+      const bottomRight = await sketchPointAt(page, RECT.x + RECT.width, RECT.y)
+      const center = await sketchPointAt(page, RECT.x + RECT.width / 2, RECT.y + RECT.height / 2)
       if (!bottomLeft || !bottomRight || !center) {
         fail(`[${label}] 矩形が画面に出ていない(射影できない)`)
       }
@@ -296,7 +251,7 @@ async function main() {
         fail(`[${label}] 辺から${OUTSIDE_PX}px離れているのに取れた: ${JSON.stringify(far)}`)
       }
 
-      const corner = await sketchScreenPoint(RECT.x, RECT.y)
+      const corner = await sketchPointAt(page, RECT.x, RECT.y)
       const onPoint = await hoveredSketchEntity(corner.x, corner.y)
       if (onPoint === null || onPoint.entityId !== rectangle.entityId || onPoint.point === null) {
         fail(`[${label}] 角の点マーカーの真上で点が取れない: ${JSON.stringify(onPoint)}`)
@@ -326,12 +281,12 @@ async function main() {
       // 「寄った状態」を1度も測らないまま通ってしまう。
       for (let step = 0; step < 30; step += 1) {
         await page.mouse.wheel({ deltaY: -240 })
-        await settle(page)
-        const left = await sketchScreenPoint(RECT.x, RECT.y)
-        const right = await sketchScreenPoint(RECT.x + RECT.width, RECT.y)
+        await waitFrames(page, 4)
+        const left = await sketchPointAt(page, RECT.x, RECT.y)
+        const right = await sketchPointAt(page, RECT.x + RECT.width, RECT.y)
         if (!left || !right) {
           await page.mouse.wheel({ deltaY: 240 })
-          await settle(page)
+          await waitFrames(page, 4)
           break
         }
       }
@@ -355,13 +310,6 @@ async function main() {
     }
     ok(`辺の見かけの長さは ${Math.min(...lengths).toFixed(0)}〜${Math.max(...lengths).toFixed(0)}px(${spread.toFixed(1)}倍)動いたのに、掴める画素は同じだった`)
 
-    if (consoleErrors.length > 0) fail(`ブラウザのコンソールにエラー: ${consoleErrors.join(' / ')}`)
-    ok('ブラウザのコンソールにエラーなし')
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
+    await assertNoAppErrors(page, consoleErrors)
   }
-  console.log('\nsmoke-screen-pick: PASS')
-}
-
-main().catch((error) => fail(String(error?.stack ?? error)))
+})

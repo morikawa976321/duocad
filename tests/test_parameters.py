@@ -21,7 +21,7 @@ import pytest
 
 from duocad import query
 from duocad.document import Document
-from duocad.oplog import OpLog
+from document_support import replay_through_json
 from duocad.parameters import parameter_of, set_parameter
 from duocad.region import region_ref, regions
 from duocad.sketch import (
@@ -118,9 +118,7 @@ def test_parameter_names_are_released_by_undo_and_reused():
     name = parameter_of(document, sketch_id, circle, "radius")
     set_parameter(document, name, 7.0)
 
-    replayed = Document()
-    replayed.log = OpLog.from_json(document.log.to_json())
-    replayed.log.replay(replayed)
+    replayed = replay_through_json(document)
     assert replayed.parameters == document.parameters
     assert replayed.parameters[name] == 7.0
 
@@ -238,9 +236,7 @@ def test_parameters_survive_save_load_and_replay():
     set_parameter(document, name, 15.0)
     expected_regions = regions(document, sketch_id)
 
-    replayed = Document()
-    replayed.log = OpLog.from_json(document.log.to_json())
-    replayed.log.replay(replayed)
+    replayed = replay_through_json(document)
 
     assert replayed.parameters == document.parameters
     assert replayed.parameters[name] == 15.0

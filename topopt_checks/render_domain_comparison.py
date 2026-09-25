@@ -16,11 +16,11 @@ import json
 from pathlib import Path
 
 import _bootstrap  # noqa: F401
+from _documents import open_session
 import numpy as np
 from skimage.measure import marching_cubes
 from PIL import Image, ImageDraw, ImageFont
 from duocad import optimize_run
-from duocad.session import Session
 from duocad.topopt import design_space as ds
 from duocad.topopt import voxelize as vx
 from duocad.topopt.trace import load_snapshot
@@ -33,8 +33,7 @@ def main():
     args = parser.parse_args()
     run = args.run
     spacing = float(load_snapshot(next(run.glob('*-resolved-conditions.json')))['spacing'])
-    session = Session(None, .2, models_dir=run)
-    session.open_document('input.json')
+    session = open_session(run / 'input.json')
     bundle = optimize_run.build_conditions(session.document)
     space = ds.derive(bundle.conditions, spacing=spacing)
     grid = space.grid
@@ -43,7 +42,7 @@ def main():
     hull = frame & ds.hull_distance_mask(grid, space.hull_planes, space.hull_triangles, space.margin)
     obstacle = np.zeros(grid.shape, dtype=bool)
     if bundle.conditions.obstacle is not None:
-        soup = vx.triangles_from_shape(vx._unwrap(bundle.conditions.obstacle), deviation=space.stats['deviation'])
+        soup = vx.triangles_from_shape(vx.unwrap(bundle.conditions.obstacle), deviation=space.stats['deviation'])
         obstacle, _ = vx.occupancy(soup, grid)
     keep = space.model.keep
     masks = [frame & ~obstacle, hull & ~obstacle, space.mask]

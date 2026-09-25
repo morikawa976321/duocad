@@ -37,7 +37,7 @@ from typing import List
 
 from ..document import Document
 from ..oplog import Operation, register_verb
-from ..sketch import Entity, EntityId, SketchId, get_sketch, new_entity_id, require_valid_params
+from ..sketch import Entity, EntityId, SketchId, get_sketch, new_entity_id, remove_entities, require_valid_params
 from ..svg_import import PathLike, read_svg_entities
 
 VERB_IMPORT_SVG = "import_svg"
@@ -111,15 +111,10 @@ def _undo_import_svg(document: Document, operation: Operation) -> None:
     """このverbが足した図形だけを取り除く(スケッチごとは消さない —— スケッチは
     このverbが作ったものではなく、他の図形が残っているかもしれない)。
 
-    **パラメータの解放は要らない** —— 取り込んだ図形は名前つきの値を持たないので、
-    `release_param_refs` に渡すものが無い。
+    取り込んだ図形は名前つきの値を持たないので、`remove_entities` が手放すものは無い(そのまま通る)。
     """
     args = operation.args
-    added_ids = {entity["entity_id"] for entity in args["entities"]}
-    sketch = get_sketch(document, args["sketch_id"])
-    sketch.entities = [
-        entity for entity in sketch.entities if entity.id not in added_ids
-    ]
+    remove_entities(document, [entity["entity_id"] for entity in args["entities"]], sketch_id=args["sketch_id"])
 
 
 register_verb(VERB_IMPORT_SVG, do=_do_import_svg, undo=_undo_import_svg)

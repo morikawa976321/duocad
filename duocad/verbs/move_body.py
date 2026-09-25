@@ -34,34 +34,27 @@ import math
 from typing import Any, Callable, List, Optional, Sequence
 
 from .. import kernel
-from ..document import Body, BodyId, Document, new_body_id
+from ..document import Body, BodyId, Document
 from ..oplog import Operation, register_verb
-from ._common import editable_body
+from ._common import (
+    MODE_ROTATE,
+    MODE_TRANSLATE,
+    add_transformed_copies,
+    copy_ids,
+    editable_bodies,
+    finite_numbers,
+    inverse_move_args,
+    is_rotation,
+    reject_foreign_args,
+    remove_created_bodies,
+    require_move_mode,
+    resolve_shape_ref,
+    rotation_degrees,
+)
 
 VERB_MOVE_BODY = "move_body"
-
-#: 並進 / 回転の切り替え。**宣言はここが正**(`catalog.py` の `mode` の説明と `Session` の
-#: 既定値がこれを写す)。`extrude` の join/cut/new と同じく、モードで明示的に分岐させる ——
-#: 「dx が来たら並進、angle が来たら回転」にすると、両方来たときの挙動が呼び出し側から
-#: 見えない。
-MODE_TRANSLATE = "translate"
-MODE_ROTATE = "rotate"
-MOVE_MODES = (MODE_TRANSLATE, MODE_ROTATE)
-
-
-def _targets(doc: Document, body_ids: Sequence[BodyId]) -> List[Body]:
-    """動かすボディを検査して返す。**編集できないもの・隠したものは例外**。
-
-    `require_visible=True` にしてあるのは `fillet` / `chamfer` と同じ理由 —— 選んだ後・
-    verbを呼ぶ前に人がそのボディを隠す順序が、AIと人が並行して動くと実際に起きる
-    (`_common.editable_body` のdocstring)。
-    """
-    if not body_ids:
-        raise ValueError("move_body requires at least one body")
-    bodies: List[Body] = []
-    for body_id in body_ids:
-        bodies.append(editable_body(doc, body_id, what="move", require_visible=True))
-    return bodies
+#: `mode` の宣言(`MODE_TRANSLATE` / `MODE_ROTATE` / `MOVE_MODES`)は `_common` が正。
+_MESH_HINT = "(メッシュボディには軸に使える辺も頂点も無い)"
 
 
 # --------------------------------------------------------------------------------------
@@ -73,62 +66,9 @@ def _targets(doc: Document, body_ids: Sequence[BodyId]) -> List[Body]:
 # (軸が回転対象のボディに属していれば必ずそうなる)。参照を引き直すと undo が別の軸を使い、
 # 形が元へ戻らない。したがって `move_body()` の入口で数値へ潰し、`_do_*` / `_undo_*` は
 # 数値しか見ない —— 保存したログの再生でも同じ理由で数値のほうが正しい。
-def _vector3(values: Any, what: str) -> List[float]:
-    """[x, y, z] を有限な float 3つにする。形が違えば ValueError。"""
-    try:
-        numbers = [float(value) for value in values]
-    except (TypeError, ValueError):
-        raise ValueError(
-            f"{what} must be three numbers [x, y, z], got {values!r}"
-        ) from None
-    if len(numbers) != 3 or not all(math.isfinite(value) for value in numbers):
-        raise ValueError(
-            f"{what} must be three finite numbers [x, y, z], got {values!r}"
-        )
-    return numbers
-
-
-def _shape_ref(doc: Document, ref: Any, *, kind: str, what: str) -> tuple:
-    """`{"body": BodyId, "index": int}`(選択の ShapeRef と同じ形)を (Body, 添字) にする。
-
-    **`commit_selection` を経由しない**。この verb の確定選択は「動かす対象」の解決に
-    既に使われているので、軸や中心を同じ経路へ載せると対象なのか軸なのか区別が付かなくなる。
-    `pattern_circular` の `entities` と同じく、引数でIDを受ける。
-
-    `kind` キーは省略できる(付いていれば要求した種別と一致すること) —— `get_selection` が
-    返す参照をそのまま貼れることと、手で `{"body":.., "index":..}` と書けることの両立。
-    """
-    if not isinstance(ref, dict):
-        raise ValueError(
-            f"{what} must be a reference like "
-            '{"body": "<body_id>", "index": 1}, got ' + repr(ref)
-        )
-    if "body" not in ref or "index" not in ref:
-        raise ValueError(
-            f'{what} needs both "body" and "index" '
-            '(例: {"body": "<body_id>", "index": 1}), got ' + repr(ref)
-        )
-    declared = ref.get("kind")
-    if declared is not None and str(declared) != kind:
-        raise ValueError(f"{what} must be a {kind!r} reference, got kind={declared!r}")
-    body = doc.get_body(str(ref["body"]))  # 存在しないIDは KeyError(document側の契約)
-    if body.shape is None:
-        raise ValueError(
-            f"{what}: body {body.id!r} has no B-rep shape "
-            "(メッシュボディには軸に使える辺も頂点も無い)"
-        )
-    try:
-        index = int(ref["index"])
-    except (TypeError, ValueError):
-        raise ValueError(
-            f"{what}: index must be an integer, got {ref['index']!r}"
-        ) from None
-    return body, index
-
-
 def _vertex_point(doc: Document, ref: Any) -> List[float]:
     """頂点への参照を [x, y, z] にする。範囲外の添字は ValueError。"""
-    body, index = _shape_ref(doc, ref, kind="vertex", what="center_vertex")
+    body, index = resolve_shape_ref(doc, ref, kind="vertex", what="center_vertex", mesh_hint=_MESH_HINT)
     positions = kernel.vertex_positions(body.shape)
     if not 1 <= index <= len(positions):
         raise ValueError(
@@ -189,16 +129,7 @@ def _rotation_args(
     ある。中心が結果を変えるのは 4 と 1 —— 位置を持たない `axis_dir` だけを渡したときに軸を
     対象の重心へ通し、`center_vertex` を渡したときに軸をその頂点へ寄せる。
     """
-    if angle is None:
-        raise ValueError("move_body(mode='rotate') needs `angle` (度)")
-    degrees = float(angle)
-    if not math.isfinite(degrees):
-        raise ValueError(f"angle must be a finite number of degrees, got {angle!r}")
-    if degrees % 360.0 == 0.0:
-        raise ValueError(
-            "move_body(mode='rotate') needs an angle that is not a multiple of 360 "
-            "(0度・360度は copy=False では何も変えず、copy=True では元と重なるボディを作る)"
-        )
+    degrees = rotation_degrees(angle, verb="move_body", noun="ボディ")
 
     if axis_edge is not None and (axis_point is not None or axis_dir is not None):
         raise ValueError(
@@ -211,7 +142,7 @@ def _rotation_args(
             "(どちらも軸の位置を決めるので、片方が黙って無視される形にしない)"
         )
     if axis_edge is not None:
-        axis_body, index = _shape_ref(doc, axis_edge, kind="edge", what="axis_edge")
+        axis_body, index = resolve_shape_ref(doc, axis_edge, kind="edge", what="axis_edge", mesh_hint=_MESH_HINT)
         point, direction = kernel.edge_axis(axis_body.shape, index)
     else:
         if axis_dir is None:
@@ -219,10 +150,10 @@ def _rotation_args(
                 "move_body(mode='rotate') needs an axis: "
                 "axis_edge(直線の辺)か axis_dir(向きのベクトル)のどちらか"
             )
-        direction = _vector3(axis_dir, "axis_dir")
+        direction = finite_numbers(axis_dir, 3, what="axis_dir", form="[x, y, z]")
         if not math.sqrt(sum(value * value for value in direction)) > 0.0:
             raise ValueError("axis_dir must not be the zero vector (軸の向きが決まらない)")
-        point = None if axis_point is None else _vector3(axis_point, "axis_point")
+        point = None if axis_point is None else finite_numbers(axis_point, 3, what="axis_point", form="[x, y, z]")
 
     if center_vertex is not None:
         point = _vertex_point(doc, center_vertex)
@@ -248,16 +179,6 @@ def _translation_args(dx: Any, dy: Any, dz: Any) -> dict:
             "(0,0,0 は copy=False では何も変えず、copy=True では元と重なるボディを作る)"
         )
     return {"dx": delta[0], "dy": delta[1], "dz": delta[2]}
-
-
-def _reject_foreign_args(mode: str, given: dict) -> None:
-    """**別のモードの引数が来たら断る**(黙って無視も、黙って両方適用もしない)。"""
-    foreign = sorted(name for name, value in given.items() if value is not None)
-    if foreign:
-        raise ValueError(
-            f"move_body(mode={mode!r}) does not take {foreign} "
-            "(mode を切り替えるか、その引数を外すこと)"
-        )
 
 
 def move_body(
@@ -295,19 +216,18 @@ def move_body(
     - `created_ids` は**再生用**。省略すると新しいIDを振る(新規呼び出し)。
     - 失敗したときは文書にもログにも何も残さない。
     """
-    if mode not in MOVE_MODES:
-        raise ValueError(f"unknown move_body mode: {mode!r} (one of {list(MOVE_MODES)})")
+    require_move_mode(mode, verb="move_body")
 
     if mode == MODE_ROTATE:
-        _reject_foreign_args(mode, {"dx": dx, "dy": dy, "dz": dz})
+        reject_foreign_args(mode, {"dx": dx, "dy": dy, "dz": dz}, verb="move_body")
         # **対象を先に解決する** —— 既定の回転中心が対象の合成重心なので、
         # 軸の解決にボディが要る(並進側は今までどおり量の検査が先)。
-        bodies = _targets(doc, list(body_ids))
+        bodies = editable_bodies(doc, list(body_ids), verb="move_body", what="move")
         shaped = _rotation_args(
             doc, bodies, axis_edge, axis_point, axis_dir, center_vertex, angle
         )
     else:
-        _reject_foreign_args(
+        reject_foreign_args(
             mode,
             {
                 "angle": angle,
@@ -316,24 +236,17 @@ def move_body(
                 "axis_point": axis_point,
                 "center_vertex": center_vertex,
             },
+            verb="move_body",
         )
         shaped = _translation_args(dx, dy, dz)
-        bodies = _targets(doc, list(body_ids))
+        bodies = editable_bodies(doc, list(body_ids), verb="move_body", what="move")
 
     args = {"bodies": [body.id for body in bodies], "mode": mode, **shaped, "copy": bool(copy)}
     transform = _shape_transform(args)
 
     if copy:
-        new_ids = (
-            [new_body_id() for _ in bodies]
-            if created_ids is None
-            else [str(value) for value in created_ids]
-        )
-        if len(new_ids) != len(bodies):
-            raise ValueError(
-                f"move_body: {len(bodies)} bodies but {len(new_ids)} ids recorded"
-            )
-        _do_copy(doc, bodies, transform, new_ids)
+        new_ids = copy_ids(len(bodies), created_ids, verb="move_body")
+        add_transformed_copies(doc, bodies, lambda shape: transform(shape, True), new_ids)
     else:
         new_ids = []
         _do_move(bodies, transform)
@@ -349,12 +262,9 @@ def move_body(
 
 
 def _shape_transform(args: dict) -> Callable:
-    """ログの `args` から「形状 -> 変換後の形状」を作る。**do も undo も再生もここを通る**。
-
-    **`mode` キーが無いログは並進**として読む —— 2026-09-05より前に保存した文書には
-    `mode` が無く、それらは全部平行移動だからである(保存済みの文書を開けなくしない)。
-    """
-    if args.get("mode", MODE_TRANSLATE) == MODE_ROTATE:
+    """ログの `args` から「形状 -> 変換後の形状」を作る。**do も undo も再生もここを通る**
+    (`mode` の無いログは並進。`_common.is_rotation`)。"""
+    if is_rotation(args):
         point = [float(value) for value in args["axis_point"]]
         direction = [float(value) for value in args["axis_dir"]]
         degrees = float(args["angle"])
@@ -365,44 +275,11 @@ def _shape_transform(args: dict) -> Callable:
     return lambda shape, copy: kernel.translate_shape(shape, *delta, copy=copy)
 
 
-def _inverse_args(args: dict) -> dict:
-    """undo 用に**逆向きの変換**の args を作る(並進は逆ベクトル、回転は逆角度)。"""
-    if args.get("mode", MODE_TRANSLATE) == MODE_ROTATE:
-        return {**args, "angle": -float(args["angle"])}
-    return {
-        **args,
-        "dx": -float(args["dx"]),
-        "dy": -float(args["dy"]),
-        "dz": -float(args["dz"]),
-    }
-
-
 def _do_move(bodies: Sequence[Body], transform: Callable) -> None:
     """その場で動かす。**全部の形状を作ってから差し替える**(途中で落ちても半分動かない)。"""
     moved = [transform(body.shape, False) for body in bodies]
     for body, shape in zip(bodies, moved):
         body.shape = shape
-
-
-def _do_copy(
-    doc: Document,
-    bodies: Sequence[Body],
-    transform: Callable,
-    new_ids: Sequence[BodyId],
-) -> None:
-    """複製を足す(元は動かさない)。名前は元と同じ(`Body.name` は "solid" 固定の運用)。"""
-    prepared = [
-        Body(
-            id=new_id,
-            name=body.name,
-            kind=body.kind,
-            shape=transform(body.shape, True),
-            visible=body.visible,
-        )
-        for body, new_id in zip(bodies, new_ids)
-    ]
-    for body in prepared:
-        doc.add_body(body)  # 同じIDが既にあれば ValueError(黙って重複させない)
 
 
 # --------------------------------------------------------------------------------------
@@ -414,7 +291,8 @@ def _do_move_body(document: Document, operation: Operation) -> None:
     bodies = [document.get_body(body_id) for body_id in args["bodies"]]
     transform = _shape_transform(args)
     if args.get("copy"):
-        _do_copy(document, bodies, transform, list(args.get("created") or []))
+        new_ids = copy_ids(len(bodies), list(args.get("created") or []), verb="move_body")
+        add_transformed_copies(document, bodies, lambda shape: transform(shape, True), new_ids)
     else:
         _do_move(bodies, transform)
 
@@ -433,15 +311,10 @@ def _undo_move_body(document: Document, operation: Operation) -> None:
     """
     args = operation.args
     if args.get("copy"):
-        for body_id in args.get("created") or []:
-            try:
-                document.remove_body(body_id)
-            except KeyError:
-                # 既に消えている(別のundoが先に消した)場合は空振りでよい
-                pass
+        remove_created_bodies(document, args.get("created") or [])
         return
     bodies = [document.get_body(body_id) for body_id in args["bodies"]]
-    _do_move(bodies, _shape_transform(_inverse_args(args)))
+    _do_move(bodies, _shape_transform(inverse_move_args(args, ("dx", "dy", "dz"))))
 
 
 register_verb(VERB_MOVE_BODY, do=_do_move_body, undo=_undo_move_body)

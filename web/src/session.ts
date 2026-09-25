@@ -88,7 +88,7 @@ export type SelectionRef = ShapeRef | BodyRef | RegionRef | SketchEntityRef
  * 人がクリックで触る(`modify_selection`)か、**人が対象集合を食うコマンドを実行する**
  * (サーバが走らせる直前に確定する。`duocad/server.py` の `_commit_before_verb`)。
  *
- * **画面から `commitSelection` を呼ぶ道は無い**(「承認する」ボタンごと廃止した)。
+ * **画面から確定を呼ぶ道は無い**(「承認する」ボタンごと廃止し、`commit_selection` の口も持たない)。
  * 提案と確定を人へ伝えるのは**3Dのハイライト色だけ**なので、この値は必ず配信で追随する。
  */
 export interface SelectionState {
@@ -893,8 +893,8 @@ export interface OptimizeRunOptions {
 /** 開発用の可視化の種類(`duocad/optimize_run.py` の `DEBUG_KINDS`)。 */
 export type OptimizeDebugKind = 'space' | 'anchors' | 'rho'
 
-/** 格子(`duocad/topopt/voxelize.py` の `Grid.as_dict`)。要素 (i,j,k) の中心は
- *  `origin + spacing*(i+0.5, j+0.5, k+0.5)`(セル中心の規約)。 */
+/** 格子(`duocad/topopt/voxelize.py` の `Grid.as_dict`)。要素の中心の規約(セル中心)は
+ *  `optimizeDebug.ts` の `buildDebugVoxels`(唯一の変換点)。 */
 export interface OptimizeDebugGrid {
   origin: number[]
   spacing: number
@@ -1006,10 +1006,9 @@ export interface Session {
    * AIの提案を中身を変えずに承認する。
    *
    * **今は画面から呼んでいない**(「承認する」ボタンを廃止し、verbの実行を
-   * 承認とみなすようサーバ側で自動化した)。口はコアの3つの選択操作の1つとして残る
-   * (`duocad/selection.py` のモジュールdocstring)。
+   * 承認とみなすようサーバ側で自動化した)。確定の口 `commit_selection` はサーバ側
+   * (MCP と WS の表)にだけあり、画面からは持たない。
    */
-  commitSelection(clientOp: number): void
   clearSelection(clientOp: number): void
   /**
    * verbを投機的に実行して形だけ測らせる。**文書は変わらない**(サーバが元へ戻す)。
@@ -1351,9 +1350,6 @@ export function createSession(hooks: SessionHooks): Session {
     },
     modifySelection(add, remove, clientOp) {
       send({ cmd: 'modify_selection', add, remove, client_op: clientOp })
-    },
-    commitSelection(clientOp) {
-      send({ cmd: 'commit_selection', client_op: clientOp })
     },
     clearSelection(clientOp) {
       send({ cmd: 'clear_selection', client_op: clientOp })

@@ -164,7 +164,7 @@ function bezierPoints(
 
 /**
  * 点 (x,y) を中心 (cx,cy) まわりに `angleDeg` 度だけ反時計回りに回す。
- * コアの `duocad/sketch.py` の `_rotate_point` と同じ式。
+ * コアの `duocad/sketch.py` の `rotate_point` と同じ式。
  */
 function rotatePoint(
   x: number,
@@ -800,6 +800,40 @@ export function snapToSketchEntity(
 }
 
 /**
+ * スケッチの点入力のスナップ **3段**。クリック(`App.svelte` の `snappedPlanePoint` → `addPoint`)、
+ * 幽霊(`hoverPoint`)、カーソル強調(`viewport.ts` の `snappedSketchUv`)が**必ずこの1本を通る** ——
+ * 別々に書くと、吸い付いて見える位置とクリックで確定する位置が別になる(いちばん困る形の不具合)。
+ *
+ * 1. `hit.snapAt` があれば**そのまま**(点マーカー・角・交点)。`hit.entityId` の図形へ射影すると、
+ *    交点は連続的な最近傍点になるだけでめったに交点そのものへ戻らない(`SketchEntityHit.snapAt`)。
+ * 2. 当たった図形へ `snapToSketchEntity`(点マーカー上ならその点、線上なら射影)。
+ * 3. 何にも当たっていなければ、`roundGrid` のときだけ (u,v) をそれぞれ 1mm へ丸める。
+ *
+ * 層をまたぐ契約: 3 の刻み(1mm)は `gridScale.ts` の `TIERS` の最小段と一致させること
+ * (`sketchCursorOverlay.GRID_SNAP_TOLERANCE_MM` も同じ刻みを前提にする)。
+ *
+ * `entityOf` は呼び出し側が引く —— App はサーバの `sketches[].entities`、viewport は編集中スケッチの
+ * 描画用 `handles`(編集中のスケッチにしか無い)。`resolution` は当たり判定が使っている折れ線の粗さ
+ * (`snapToSketchEntity` の注意)。`roundGrid` は App では点を待っているとき(`host.wantsPoint()`)だけ
+ * (選択のクリックでは丸めない)、viewport は常に真(カーソル強調を出すのは点を待っている間だけ)。
+ */
+export function snapSketchPoint(
+  u: number,
+  v: number,
+  hit: { entityId: string; point: string | null; snapAt?: readonly [number, number] } | null,
+  entityOf: (entityId: string) => { kind: string; params: Record<string, number> } | undefined,
+  resolution: ViewResolution | undefined,
+  roundGrid: boolean,
+): [number, number] {
+  const fallback = (): [number, number] => (roundGrid ? [Math.round(u), Math.round(v)] : [u, v])
+  if (hit === null) return fallback()
+  if (hit.snapAt) return [hit.snapAt[0], hit.snapAt[1]]
+  const entity = entityOf(hit.entityId)
+  if (!entity) return fallback()
+  return snapToSketchEntity(entity, hit.point, u, v, resolution)
+}
+
+/**
  * 確定前の姿(幽霊)を、コアの `Entity` と同じ `{kind, params}` へ翻訳する。
  *
  * `verb` がどの図形種別の追加でもなければ null(スケッチ以外のverbは幽霊を描かない —
@@ -836,7 +870,7 @@ export const GHOST_COPY_LIMIT = 2000
 /**
  * 円形反復の**刻み角**。全周は `total/count`、全周未満は `total/(count-1)`。
  *
- * **コアの `duocad/region.py` の `_expanded_entities` と同じ場合分け**である ——
+ * **コアの `duocad/region.py` の `expanded_entities` と同じ場合分け**である ——
  * 全周を `count-1` で割ると最後の複製が最初と重なる(`pattern_circular` のdocstring)。
  * 360の判定が厳密等価なのも**コアに合わせている**(こちらだけ許容差を持たせると、
  * 359.9999 で幽霊と確定結果が別の刻みになる)。

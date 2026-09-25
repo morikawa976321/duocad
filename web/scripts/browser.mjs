@@ -10,6 +10,7 @@
  */
 import { existsSync } from 'node:fs'
 import { launch } from 'puppeteer-core'
+import { fail, ok } from './args.mjs'
 
 /**
  * 探す順。**Chromeが先** —— この環境の Edge 151 は headless で起動できず、
@@ -157,4 +158,159 @@ async function setBrowserPanel(page, open) {
     )
   }
   return changed
+}
+
+// ---------------------------------------------------------------------------------- 画面を開く・終わりのエラー確認
+
+/**
+ * ページのエラーを控える(`pageerror`・`console.error`・4xx/5xx 応答)。走行の最後に
+ * `assertNoAppErrors` へ渡す。**サーバのエラーはトーストへ出るだけでコンソールには出ない**ので、
+ * これだけでは足りない(控え `window.__duocad.errors` と合わせて見る)。
+ */
+export function watchErrors(page, { watchHttp = true } = {}) {
+  const errors = []
+  page.on('pageerror', (error) => errors.push(String(error)))
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text())
+  })
+  if (watchHttp) {
+    // どのURLで落ちたかを残す(「404が1件」だけ言われても原因が分からない)
+    page.on('response', (response) => {
+      if (response.status() >= 400) errors.push(`HTTP ${response.status()} ${response.url()}`)
+    })
+  }
+  return errors
+}
+
+/**
+ * 画面を開いて `__duocad.ready` まで待つ。戻り値は `{ page, consoleErrors }`。
+ *
+ * `height` は 860 が既定(900 の本もある)。**高さが変わると掴む画素が変わる**ので本ごとの値は
+ * 揃えない。`until` は ready の後に待つ述語(`page.waitForFunction` に渡す。部品が届いたこと等)。
+ * **`frameAll` はここでは呼ばない** —— 初回フレーミングそのものを見る本と、near/far を作り直すと
+ * 再現条件が壊れる本(`smoke-clip-planes.mjs`)がある。
+ */
+export async function openApp(browser, url, { timeout, height = 860, watchHttp = true, until = null } = {}) {
+  const page = await browser.newPage()
+  await page.setViewport({ width: 1280, height })
+  const consoleErrors = watchErrors(page, { watchHttp })
+  await page.goto(url, { waitUntil: 'load', timeout })
+  await page.waitForFunction(() => Boolean(window.__duocad && window.__duocad.ready), {
+    timeout,
+    polling: 100,
+  })
+  if (until !== null) await page.waitForFunction(until, { timeout, polling: 100 })
+  return { page, consoleErrors }
+}
+
+/**
+ * 走行の終わりに「エラーが1件も出ていない」を見る。
+ *
+ * 読む先は2つ。走行全体の有無は控え(`window.__duocad.errors`。**札は8秒で消える**ので DOM を
+ * 最後に1回見ても取りこぼす)、ブラウザ側の例外・console.error・4xx は `watchErrors` の控え。
+ * **控えが配列で来ることを先に確かめる** —— `undefined` や object に化けると `length > 0` が
+ * 永久に偽になり、赤くならないまま検査が死ぬ(穴を1つ足すたびに起きうる形なので握らずに落とす)。
+ *
+ * `allow` はわざと出させたエラー文言(受け取った文字列との完全一致。種別や前方一致で緩めない)。
+ * **積んだ文言が控えに実在することも見る** —— 出ていないのに除外だけ積むと、「拒否されたはず」の
+ * 検査が空振りしていても緑になる。`expectCount` は文言ではなく件数で見る本のため(`allow` と併用しない)。
+ */
+export async function assertNoAppErrors(page, consoleErrors, { allow = [], expectCount = null } = {}) {
+  // **`$state` のプロキシは構造化複製で `{}` になる**ので、配列かどうかはページの中で見て素の配列にして返す
+  // (`?? []` で読んでいた本は、プロキシが `{}` で届いて `length > 0` が偽のまま緑だった)。
+  const errors = await page.evaluate(() => {
+    const list = window.__duocad.errors
+    return Array.isArray(list) ? JSON.parse(JSON.stringify(list)) : { notArray: String(list) }
+  })
+  if (!Array.isArray(errors)) {
+    fail(`__duocad.errors が配列で来ない(検査が黙って死ぬ): ${JSON.stringify(errors)}`)
+  }
+  if (expectCount !== null) {
+    if (errors.length !== expectCount) {
+      fail(`控えの件数が合わない(想定 ${expectCount} / 実際 ${errors.length}): ${JSON.stringify(errors)}`)
+    }
+  } else {
+    const missing = allow.filter((message) => !errors.includes(message))
+    if (missing.length > 0) fail(`出るはずのエラーが控えに無い: ${missing.join(' | ')}`)
+    const unexpected = errors.filter((message) => !allow.includes(message))
+    if (unexpected.length > 0) fail(`走行中にエラーが出た: ${unexpected.join(' | ')}`)
+  }
+  if (consoleErrors.length > 0) {
+    fail(`ブラウザのコンソールにエラー: ${consoleErrors.slice(0, 3).join(' | ')}`)
+  }
+  if (expectCount !== null) {
+    ok(`走行中のエラーは想定どおり ${expectCount} 件だけ。コンソールにエラーなし`)
+  } else if (allow.length > 0) {
+    ok(`走行中に予期しないエラーは出ていない(わざと出させた ${allow.length} 件を除く)。コンソールにエラーなし`)
+  } else {
+    ok('走行中にエラーは1件も出ていない。コンソールにエラーなし')
+  }
+  return errors
+}
+
+// ---------------------------------------------------------------------------------- 入力と待ち
+
+/** 入力欄へ打つ: クリック → 全選択 → 消す → 打つ。`delay` は打鍵の間隔(ms)。 */
+export async function typeInto(page, selector, value, { delay = 15 } = {}) {
+  await page.click(selector)
+  await page.keyboard.down('Control')
+  await page.keyboard.press('KeyA')
+  await page.keyboard.up('Control')
+  await page.keyboard.press('Backspace')
+  await page.type(selector, String(value), { delay })
+}
+
+/**
+ * 述語が真になるまで待ち、待ちきれなければ **`what` を添えて失敗する**。
+ *
+ * `args` は述語へ渡す引数の**配列**(可変長ではない —— 2つの呼び方が混在すると引数が黙ってずれる)。
+ * `dump` を渡すと落ちたときにその戻り(`look()` 等の画面の中身)を添える —— 「120秒待った」だけでは
+ * 切り分けられない。
+ */
+export async function waitOrFail(
+  page,
+  predicate,
+  what,
+  { args = [], timeout = 60000, polling = 50, dump = null } = {},
+) {
+  try {
+    await page.waitForFunction(predicate, { timeout, polling }, ...args)
+  } catch {
+    const detail = dump === null ? '(タイムアウト)' : `: ${JSON.stringify(await dump())}`
+    fail(`${what}${detail}`)
+  }
+}
+
+export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * 描画ループの `n` フレームを待つ(`requestAnimationFrame` を n 回)。ホバー・段の不透明度・
+ * レイアウトは `tick()` や次のフレームで入れ直されるので、動かした直後に読む前・射影する前に挟む
+ * (2 でレイアウト、4 でホバーの解決を待つのが各本の相場)。
+ */
+export async function waitFrames(page, n) {
+  await page.evaluate(
+    (count) =>
+      new Promise((resolve) => {
+        let left = count
+        const step = () => {
+          if (left <= 0) {
+            resolve()
+            return
+          }
+          left -= 1
+          requestAnimationFrame(step)
+        }
+        step()
+      }),
+    n,
+  )
+}
+
+/** `.viewport` の中央(ページ座標)。ホイールはカーソル位置で発火するので、その前に置く先。 */
+export async function viewportCenter(page) {
+  return page.evaluate(() => {
+    const box = document.querySelector('.viewport').getBoundingClientRect()
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+  })
 }

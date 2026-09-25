@@ -22,7 +22,6 @@ import pytest
 
 from duocad import kernel, parameters, query, region
 from duocad.document import Document
-from duocad.oplog import OpLog
 from duocad.region import region_ref
 from duocad.sketch import (
     add_circle,
@@ -32,7 +31,7 @@ from duocad.sketch import (
     sketch_create,
 )
 from duocad.verbs import extrude
-from document_support import all_edges, assert_same_frame, new_box
+from document_support import all_edges, assert_same_frame, new_box, replay_through_json
 
 BOX = 20.0
 #: 直方体の上面(z=BOX・法線+Z)の面添字。`new_box` の直後は必ずこれになる(実測)。
@@ -250,9 +249,7 @@ def test_a_log_round_trip_reproduces_the_same_frames():
     fillet(document, all_edges(document, body_id), 3.0, body_id=body_id)
     expected = region.plane_frame(document, sketch_id)
 
-    restored = Document()
-    restored.log = OpLog.from_json(document.log.to_json())
-    restored.log.replay(restored)
+    restored = replay_through_json(document)
 
     assert_same_frame(region.plane_frame(restored, sketch_id), expected)
     assert [item.area for item in region.regions(restored, sketch_id)] == pytest.approx(

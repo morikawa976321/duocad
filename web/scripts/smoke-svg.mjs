@@ -21,19 +21,19 @@
  * **サーバはこのスクリプトが自分で立てる**(`web/scripts/server.mjs`)。既に立っている
  * ものへ繋ぐときだけ `--url` を渡す。
  */
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { findBrowser, launchBrowser, withoutBrowserPanel, pressUndo } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { startServer } from './server.mjs'
-
-const options = parseArgs(process.argv.slice(2))
-const attachUrl = options.url ?? null
-const wsPort = options.port ?? '8797'
-const httpPort = options['http-port'] ?? '8798'
-const timeout = Number.parseInt(options.timeout ?? '120000', 10)
-const workdir = options.workdir ?? mkdtempSync(join(tmpdir(), 'duocad-svg-'))
+import {
+  assertNoAppErrors,
+  openApp,
+  pressUndo,
+  sleep,
+  waitOrFail,
+  withoutBrowserPanel,
+} from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import { createSketchOnBasePlane } from './pick.mjs'
 
 /**
  * 検査に使うSVG。**物理単位を持たせない**(viewBoxだけ)ので 1ユーザー単位 = 1mm になる。
@@ -57,34 +57,11 @@ const EXPECTED = {
 }
 const THICKNESS = 5
 
-async function main() {
-  const executablePath = findBrowser()
-  console.log(`smoke-svg: ${executablePath}`)
-  console.log(`  workdir: ${workdir}`)
-
+runSmoke('smoke-svg', { attach: true }, async ({ workdir, browser, url, timeout }) => {
   const svgPath = join(workdir, 'shapes.svg')
   writeFileSync(svgPath, SVG, 'utf8')
-
-  const server =
-    attachUrl === null ? await startServer({ wsPort, httpPort, modelsDir: workdir }) : null
-  const url = server?.url ?? attachUrl
-  console.log(`  server : ${url}${server === null ? ' (既に立っているサーバへ接続)' : ''}`)
-
-  const browser = await launchBrowser(executablePath)
-  try {
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 900 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-
-    await page.goto(url, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad && window.__duocad.ready), {
-      timeout,
-      polling: 100,
-    })
+  {
+    const { page, consoleErrors } = await openApp(browser, url, { timeout, height: 900 })
     if ((await page.evaluate(() => window.__duocad.parts.length)) !== 0) {
       fail('空の文書で起動していない(サーバを起動し直す)')
     }
@@ -115,33 +92,15 @@ async function main() {
         }),
       )
 
-    async function waitFor(predicate, what, ...args) {
-      try {
-        await page.waitForFunction(predicate, { timeout, polling: 50 }, ...args)
-      } catch {
-        fail(`${what}: ${JSON.stringify(await look())}`)
-      }
-    }
+    const waitFor = (predicate, what, ...args) =>
+      waitOrFail(page, predicate, what, { args, timeout, dump: look })
 
     // ============================================================ 1: スケッチを作って入る
     //
     // **座標はクリックの直前に射影し直す**(`projectBasePlane` はその画素から本当にその
     // 平面が取れることを確かめてから返す)。浮いているパネルはレイ検査に見えないので、
     // 指す間だけ畳む(`withoutBrowserPanel`)。
-    await page.click('#sketch-create')
-    await withoutBrowserPanel(page, async () => {
-      const handle = await page.waitForFunction(
-        () => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const at = window.__duocad.projectBasePlane('XY')
-          return at ? { x: at.x + rect.left, y: at.y + rect.top } : null
-        },
-        { timeout, polling: 50 },
-      )
-      const at = await handle.jsonValue()
-      await page.mouse.click(at.x, at.y)
-    })
-    await waitFor(() => window.__duocad.activeSketch !== null, 'XY平面のスケッチに入れない')
+    await createSketchOnBasePlane(page, 'XY', { timeout, hidePanel: true })
     const before = await look()
     if (before.sketches !== 1) fail(`スケッチが1枚できていない: ${JSON.stringify(before)}`)
     ok('スケッチを作って入った')
@@ -208,7 +167,7 @@ async function main() {
     // 「1三角形につき4点試す」サンプリングが実際にクリックできる画素を1つも
     // 見つけられずに`null`を返し続ける。
     await page.click('#sketch-look')
-    await new Promise((resolve) => setTimeout(resolve, 400))
+    await sleep(400)
 
     // **スケッチモード中の領域クリックは常に指せる**(`wantsRegions` のゲートは通常モード
     // 専用。`App.svelte` の `wantsRegions` docstring)。選んでから押し出しを起動する。
@@ -286,18 +245,6 @@ async function main() {
     }
     ok('Ctrl+Z 2回で押し出しと取り込みが戻った(取り込みはログ1行。スケッチ自体は残る)')
 
-    const errors = (await look()).errors
-    if (errors.length > 0) fail(`画面にエラーが出ている: ${JSON.stringify(errors)}`)
-    if (consoleErrors.length > 0) fail(`コンソールにエラー: ${JSON.stringify(consoleErrors)}`)
-    ok('エラーは出ていない')
-    console.log('smoke-svg: OK')
-  } finally {
-    await browser.close()
-    server?.stop()
+    await assertNoAppErrors(page, consoleErrors)
   }
-}
-
-main().catch((error) => {
-  console.error(error)
-  process.exit(1)
 })

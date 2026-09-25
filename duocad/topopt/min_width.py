@@ -65,10 +65,9 @@ def casualties(mask: np.ndarray, cell: tuple, m: int, exempt: Optional[np.ndarra
     return np.argwhere(lost) + np.asarray(origin)
 
 
-def bite_verdict(padded: np.ndarray, bite: np.ndarray,
-                 structure: np.ndarray) -> tuple[Optional[str], bool]:
+def bite_verdict(padded: np.ndarray, bite: np.ndarray) -> tuple[Optional[str], bool]:
     """複数セルの一口 `bite`(添字 (n,3)。`padded` の内側の添字)を抜いてよいかを、一口の外接箱を1セル広げた窓だけで判定する。
-    `padded` は外周に空を1セル足したマスク、`structure` は6近傍。
+    `padded` は外周に空を1セル足したマスク。近傍は6近傍(`NEIGHBOURHOOD_STRUCTURE`)。
 
     `(理由, 窓の中で連結と言えたか)`。理由は落ちた判定の名前(`'surface'`・`'manifold'`・`'connectivity'`)で、通れば `None`。
     - 表面: 一口の6連結成分のそれぞれが、既存の空セルに6近傍で接する(接しなければ閉じた空洞ができる)。
@@ -83,18 +82,18 @@ def bite_verdict(padded: np.ndarray, bite: np.ndarray,
     rel = bite - lo + 1
     inside[rel[:, 0], rel[:, 1], rel[:, 2]] = True
 
-    labels, count = ndimage.label(inside, structure=structure)
-    open_side = np.unique(labels[ndimage.binary_dilation(~window, structure=structure) & inside])
+    labels, count = ndimage.label(inside, structure=NEIGHBOURHOOD_STRUCTURE)
+    open_side = np.unique(labels[ndimage.binary_dilation(~window, structure=NEIGHBOURHOOD_STRUCTURE) & inside])
     if len(open_side) < count:
         return 'surface', False
     window[inside] = False
     irregular, _ = acceptance.irregular_vertices(window)
     if irregular[1:-1, 1:-1, 1:-1].any():
         return 'manifold', False
-    neighbours = ndimage.binary_dilation(inside, structure=structure) & window
+    neighbours = ndimage.binary_dilation(inside, structure=NEIGHBOURHOOD_STRUCTURE) & window
     if not neighbours.any():
         return 'connectivity', False
-    rest, _ = ndimage.label(window, structure=structure)
+    rest, _ = ndimage.label(window, structure=NEIGHBOURHOOD_STRUCTURE)
     return None, len(np.unique(rest[neighbours])) == 1
 
 
@@ -103,20 +102,17 @@ def core_cells(material: np.ndarray, m: int) -> np.ndarray:
     core = np.asarray(material, dtype=bool)
     if min(core.shape) < m:
         return np.zeros_like(core)
-    for axis in range(3):
-        n = core.shape[axis]
-        acc = core.copy()
-        for s in range(1, m):
-            head = tuple(slice(0, n - s) if a == axis else slice(None) for a in range(3))
-            tail = tuple(slice(s, n) if a == axis else slice(None) for a in range(3))
-            acc[head] &= core[tail]
-            acc[tuple(slice(n - s, n) if a == axis else slice(None) for a in range(3))] = False
-        core = acc
-    return core
+    return _fold_along_axes(core, m, np.logical_and, clear_tail=True)
 
 
 def _spread_down(cells: np.ndarray, m: int) -> np.ndarray:
     """`cells` の各セル x から、各軸で −[0,m) へ広げた和集合(x を含む m 立方の最小の角の集合)。"""
+    return _fold_along_axes(cells, m, np.logical_or, clear_tail=False)
+
+
+def _fold_along_axes(cells: np.ndarray, m: int, combine, *, clear_tail: bool) -> np.ndarray:
+    """各軸で s = 1..m−1 ずらした自分を `combine`(and / or)で重ねる(`core_cells` と `_spread_down` の同形部分)。
+    `clear_tail` なら末尾 n−s..n を偽にする(m 立方が配列に収まらないセル)。入力は書き換えない。"""
     out = cells
     for axis in range(3):
         n = out.shape[axis]
@@ -124,7 +120,9 @@ def _spread_down(cells: np.ndarray, m: int) -> np.ndarray:
         for s in range(1, min(m, n)):
             head = tuple(slice(0, n - s) if a == axis else slice(None) for a in range(3))
             tail = tuple(slice(s, n) if a == axis else slice(None) for a in range(3))
-            acc[head] |= out[tail]
+            acc[head] = combine(acc[head], out[tail])
+            if clear_tail:
+                acc[tuple(slice(n - s, n) if a == axis else slice(None) for a in range(3))] = False
         out = acc
     return out
 

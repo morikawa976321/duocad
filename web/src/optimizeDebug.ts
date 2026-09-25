@@ -13,7 +13,12 @@ import {
   DEBUG_SPACE_COLOR,
   LAYER,
 } from './viewportConstants'
-import type { OptimizeDebugState, OptimizeDebugVoxels } from './viewportTypes'
+import type { OptimizeDebugCounts, OptimizeDebugState, OptimizeDebugVoxels } from './viewportTypes'
+
+/** 何も出していないときの数(`counts()` の戻り値の形。`hiddenBodyId` は実機検査フックの既定にだけ要る)。 */
+export function emptyDebugCounts(): OptimizeDebugCounts {
+  return { space: 0, rho: 0, fixed: 0, load: 0, spaceStride: 1, rhoStride: 1, anchorsDepthTest: null, hiddenBodyId: null }
+}
 
 /** 本編(`viewport.ts`)から借りるもの。 */
 export interface OptimizeDebugDeps {
@@ -29,30 +34,13 @@ export interface OptimizeDebug {
   /** 隠している結果ボディの表示を当て直す(`update()` が作り直した後にも要る)。 */
   applyHidden(): void
   /** 実機検査フック専用。 */
-  counts(): {
-    space: number
-    rho: number
-    fixed: number
-    load: number
-    spaceStride: number
-    rhoStride: number
-    anchorsDepthTest: boolean | null
-    hiddenBodyId: string | null
-  }
+  counts(): OptimizeDebugCounts
 }
 
 export function createOptimizeDebug(deps: OptimizeDebugDeps): OptimizeDebug {
   const debugRoot = new THREE.Group()
   let debugDisposables: Array<{ dispose(): void }> = []
-  let debugCounts: {
-    space: number
-    rho: number
-    fixed: number
-    load: number
-    spaceStride: number
-    rhoStride: number
-    anchorsDepthTest: boolean | null
-  } = { space: 0, rho: 0, fixed: 0, load: 0, spaceStride: 1, rhoStride: 1, anchorsDepthTest: null }
+  let debugCounts: Omit<OptimizeDebugCounts, 'hiddenBodyId'> = emptyDebugCounts()
   /** `?voxel=1` で隠している結果ボディ。**表示だけ**(文書には触れない)。 */
   let debugHiddenBodyId: string | null = null
 
@@ -60,23 +48,16 @@ export function createOptimizeDebug(deps: OptimizeDebugDeps): OptimizeDebug {
     debugRoot.clear()
     for (const item of debugDisposables) item.dispose()
     debugDisposables = []
-    debugCounts = {
-      space: 0,
-      rho: 0,
-      fixed: 0,
-      load: 0,
-      spaceStride: 1,
-      rhoStride: 1,
-      anchorsDepthTest: null,
-    }
+    debugCounts = emptyDebugCounts()
   }
 
   /**
    * 要素の通し添字 → 立方体の `InstancedMesh`。
    *
-   * **セル中心の規約**(`duocad/topopt/mesh.py:169`): 要素 (i,j,k) の中心は
-   * `origin + spacing*(i+0.5, j+0.5, k+0.5)`。**半要素ずらすと形が丸ごと動く**ので、
-   * ここが唯一の変換点である(サーバ側は素の添字しか送らない)。
+   * **セル中心の規約**(正は `duocad/topopt/mesh.py` の `run_marching_cubes` の docstring): 要素 (i,j,k) の中心は
+   * `origin + spacing*(i+0.5, j+0.5, k+0.5)`、その角の節点 (i,j,k) は `origin + spacing*(i,j,k)`。
+   * **半要素ずらすと形が丸ごと動く**ので、ここが唯一の変換点である(サーバ側は素の添字しか送らない。
+   * `session.ts` / `viewportTypes.ts` の型の注記はここを指す)。
    */
   function buildDebugVoxels(voxels: OptimizeDebugVoxels, material: THREE.Material): THREE.InstancedMesh {
     const [, ny, nz] = voxels.grid.shape

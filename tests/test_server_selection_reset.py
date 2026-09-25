@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
-from duocad import selection
+from duocad import catalog, selection
 from duocad.document import Body
 from duocad.server import Session
 from session_support import select as _select, session_with_box
@@ -38,6 +38,17 @@ def _assert_cleared(session: Session) -> None:
 # --------------------------------------------------------------------------------------
 # 1. 形を変えるverbの確定後、選択は空になる
 # --------------------------------------------------------------------------------------
+def test_a_shape_changing_verb_must_declare_resets_selection() -> None:
+    """落ちたら、形を変える verb を足すときに `resets_selection` を書き忘れても import が通り、
+    確定後も消えた面の添字を指したまま選択が残る(issue #51)。"""
+    with pytest.raises(ValueError, match="resets_selection"):
+        catalog.Command(name="x", category="feature", session="x")
+    declared = catalog.Command(name="x", category="feature", session="x", resets_selection=False)
+    assert declared.resets_selection is False
+    # 形に触らない分類は省略してよい(false になる)
+    assert catalog.Command(name="y", category="query", ws="none").resets_selection is False
+
+
 def test_fillet_clears_the_selection_on_success(session: Session) -> None:
     _select(session, [_edge(1), _edge(2)])
     session.fillet(1.0)

@@ -7,8 +7,9 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad import kernel, query
 from duocad.document import Body, Document
+from duocad.oplog import OpLog
 from duocad.region import region_ref, regions
-from duocad.sketch import add_rectangle, base_plane, sketch_create
+from duocad.sketch import add_circle, add_rectangle, base_plane, sketch_create
 from duocad.verbs import extrude
 
 #: `box_shape()` の既定の寸法[mm]。3辺が違うので、述語や辺の取り違えがたまたま一致して緑になる余地が減る。
@@ -35,6 +36,34 @@ def new_box(doc: Document, width: float = 20.0, depth: float | None = None, heig
     sketch_id = sketch_create(doc, base_plane("XY"))
     add_rectangle(doc, sketch_id, (0.0, 0.0), width, width if depth is None else depth)
     return extrude(doc, [region_ref(sketch_id, 1)], width if height is None else height, mode="join").args["body_id"]
+
+
+def new_box_with_hole(doc: Document, size: float = 20.0, radius: float = 4.0) -> str:
+    """`new_box` の中央に半径 `radius` の貫通穴を切った立方体(円筒面1・平面6)。"""
+    body_id = new_box(doc, size)
+    sketch_id = sketch_create(doc, base_plane("XY"))
+    add_circle(doc, sketch_id, (size / 2, size / 2), radius)
+    extrude(doc, [region_ref(sketch_id, 1)], size, mode="cut", body_id=body_id)
+    return body_id
+
+
+def second_body(document: Document) -> str:
+    """10×10×5 を `mode="new"` でもう1つ作り body_id を返す(undo すると `document.remove_body` で
+    完全に消える経路。`duocad/verbs/extrude.py` の `_undo_extrude`)。"""
+    sketch_id = sketch_create(document, "XY")
+    add_rectangle(document, sketch_id, (0.0, 0.0), 10.0, 10.0)
+    boss = regions(document, sketch_id)
+    return extrude(document, [region_ref(sketch_id, boss[0].index)], 5.0, mode="new").args["body_id"]
+
+
+def replay_through_json(document: Document, into: Document | None = None) -> Document:
+    """操作ログを JSON へ往復させ、**束ねてから再生**した文書を返す(製品が開くときと同じ順。
+    `Session._replace_document` / `OpLog.replay`)。束ねずに再生すると `set_parameter` を含むログは
+    `ValueError` で止まる(`duocad/parameters.py`)。`into` は再生の土台(既定は空の文書)。"""
+    restored = Document() if into is None else into
+    restored.log = OpLog.from_json(document.log.to_json())
+    restored.log.replay(restored)
+    return restored
 
 
 def kinds_of(doc: Document, body_id: str) -> dict:

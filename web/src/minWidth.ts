@@ -25,6 +25,25 @@ export type MinWidthVerdict =
       lowerStepMm: number | null
     }
 
+/** 段の番号を目盛りの範囲へ丸める(目盛りが縮んだときのため。目盛りが空なら 0)。 */
+export function clampStepIndex(index: number, count: number): number {
+  return Math.min(index, Math.max(count - 1, 0))
+}
+
+/** 目盛り `steps` の `index` 番目の段(範囲へ丸める。目盛りが空なら `null`)。 */
+export function stepAt(steps: readonly OptimizeResolutionStep[], index: number): OptimizeResolutionStep | null {
+  if (steps.length === 0) return null
+  return steps[clampStepIndex(index, steps.length)] ?? null
+}
+
+/**
+ * 下限割れ・上限超え。実行ボタンの可否・入力欄の赤・範囲外のトーストが**同じ判定**を読む ——
+ * どれかだけ別に書くと「実行ボタンが押せるのにトーストは範囲外と言う」(またはその逆)が起きる。
+ */
+export function isOutOfRange(verdict: MinWidthVerdict): boolean {
+  return verdict.kind === 'below' || verdict.kind === 'above'
+}
+
 /**
  * 表示の小数桁数。既定は2桁だが、値が 0.01 に近い・下回る小さい部品では、下限と上限が同じ桁で
  * 区別できるように有効数字3桁分まで増やす。

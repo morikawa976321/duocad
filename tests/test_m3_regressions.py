@@ -26,6 +26,7 @@ import pytest
 from duocad import query
 from duocad.document import Document
 from duocad.oplog import OpLog
+from document_support import replay_through_json
 from duocad.parameters import parameter_of, set_parameter
 from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, sketch_create
@@ -104,9 +105,7 @@ def test_replaying_a_foreign_log_fails_loudly_instead_of_emptying_the_document()
     # 肝心なのは**黙って別物の文書を作らない**ことで、そのために例外で止める。
     assert len(stray.log.entries) == 0, "再生に使ったログが文書のログに化けている"
 
-    proper = Document()
-    proper.log = OpLog.from_json(document.log.to_json())
-    proper.log.replay(proper)
+    proper = replay_through_json(document)
 
     assert math.isclose(query.volume(proper.active_body().shape), expected, rel_tol=1e-9)
     assert math.isclose(expected, math.pi * 10.0**2 * 10.0, rel_tol=1e-9)

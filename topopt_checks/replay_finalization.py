@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import _bootstrap  # noqa: F401
-from duocad.session import Session
+from _documents import open_session
 from duocad.topopt import trace
 from duocad.topopt.finalize import finalize, solid_mesh
 from duocad.verbs import add_solid_body
@@ -23,8 +23,7 @@ def main():
         # (optimize_run.py は finalize 成功後にしか書かない)。finalize への入力(既にワールド座標の
         # vertices/faces)を代わりに読む。'grid'・'raw_vertices' は無いので末尾の final_mesh 記録は省く。
         world = trace.load_snapshot(next(args.run.glob('*-finalize-input.json')))
-    session = Session(None, .2, models_dir=args.run)
-    session.open_document('input.json')
+    session = open_session(args.run / 'input.json')
     doc = session.document
     with trace.recording(doc, root=Path('output/finalization_checks')) as recorder:
         print('Archive:', recorder.path, flush=True)

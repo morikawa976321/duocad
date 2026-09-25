@@ -26,10 +26,10 @@ DUOCAD_DIR = Path(__file__).resolve().parent.parent / "duocad"
 # 回すと `SetGap` の順序が違って値が 1e-7mm 動き、`check_voxelize.py` [7](辺長が要素サイズの
 # 整数倍の箱は体積が厳密一致)が落ちるため、名指しの免除にしてある。
 #
-# `kernel_brep.py`(生成CADのBRep保存・ブーリアン・最終ソリッドの幾何検査)・
+# `kernel_brep.py`(生成CADのBRep保存・ブーリアン・最終ソリッドの幾何検査・箱/格子との共通体積)・
 # `kernel_meshing.py`(OCCTの面分割の段階制御と境界交差の再分割)・
-# `mesh_geometry.py`(三角形境界の接続検査と、向き・空洞を保ったCADソリッド化)は
-# **カーネル層の一部**であって verb 層ではない —— `kernel.py` が2,300行あるので
+# `mesh_geometry.py`(三角形境界の接続検査とCADソリッド化。位相の列挙と compound の定型)は
+# **カーネル層の一部**であって verb 層ではない —— `kernel.py` が大きいので
 # 役割ごとに分けてあるだけである。この4本の外でOCPを叩いたら落ちる。
 OCP_ALLOWED = frozenset(
     {"kernel.py", "kernel_brep.py", "kernel_meshing.py", "mesh_geometry.py", "topopt/voxelize.py"}

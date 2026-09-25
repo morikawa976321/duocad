@@ -43,6 +43,13 @@ class ToolsOnLoop:
     def call(self, name: str, arguments: dict) -> dict:
         return self._run_on_loop(self._tools.call, name, arguments)
 
+    def call_and_seq(self, name: str, arguments: dict) -> tuple:
+        # **実行と直後の版の読み取りを1回の投げ返しで行う。** `call` と `current_seq` を別々に
+        # 投げると、1回目の完了と2回目の読み取りの間にイベントループが人の操作を処理でき、
+        # その変更が「実行直後の版」に吸われて、次のツールの直前チェックで見えなくなる
+        # (楽観ロックの時間窓。issue #48)。
+        return self._run_on_loop(self._tools.call_and_seq, name, arguments)
+
     def error_envelope(self, tool: str, error: Exception) -> dict:
         return self._run_on_loop(self._tools.error_envelope, tool, error)
 

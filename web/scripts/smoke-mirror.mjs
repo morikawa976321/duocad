@@ -22,18 +22,10 @@
  * そのとき見えているものに依るので、後から離れた場所を押そうとすると画面の外になる
  * (実測: 板だけがある状態で `#sketch-look` した後、原点付近の (0,-20) が画面の外だった)。
  */
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { findBrowser, launchBrowser, frameAll, withoutBrowserPanel } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { startServer } from './server.mjs'
-
-const options = parseArgs(process.argv.slice(2))
-const wsPort = options.port ?? '8977'
-const httpPort = options['http-port'] ?? '8978'
-const timeout = 60000
-const workdir = mkdtempSync(join(tmpdir(), 'duocad-mirror-'))
+import { assertNoAppErrors, frameAll, openApp, sleep, typeInto, waitOrFail } from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import { clickFace, clickSketchPoint, createSketchOnBasePlane, sketchPointAt } from './pick.mjs'
 
 /** 鏡映軸に使う線分(u=0 の縦線)。 */
 const AXIS = { x: 0, y0: -20, y1: 20 }
@@ -43,63 +35,17 @@ const OTHER = { cx: 20, cy: 15, r: 3 }
 /** 押し出してボディにする長方形(鏡映する円と重ならない位置)。 */
 const PLATE = { x: 40, y: -20, width: 40, height: 30, depth: 12 }
 
-async function main() {
-  const executablePath = findBrowser()
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  let browser = null
-  try {
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
+runSmoke('smoke-mirror', { timeout: 60000 }, async ({ browser, url, timeout }) => {
+  {
+    const { page, consoleErrors } = await openApp(browser, url, { timeout })
     await frameAll(page).catch(() => {})
 
     // ---------------------------------------------------------------- 道具
-    async function waitFor(check, what, args = []) {
-      try {
-        await page.waitForFunction(check, { timeout, polling: 50 }, ...args)
-      } catch {
-        fail(`${what}(タイムアウト)`)
-      }
-    }
-
-    async function typeInto(selector, value) {
-      await page.click(selector)
-      await page.keyboard.down('Control')
-      await page.keyboard.press('KeyA')
-      await page.keyboard.up('Control')
-      await page.keyboard.press('Backspace')
-      await page.type(selector, String(value), { delay: 15 })
-    }
-
-    async function planeAt(u, v) {
-      return page.evaluate(
-        (uu, vv) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectSketchPoint(uu, vv)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        u,
-        v,
-      )
-    }
-
+    const waitFor = (check, what, args = []) =>
+      waitOrFail(page, check, what, { args, timeout, polling: 50 })
+    const planeAt = (u, v) => sketchPointAt(page, u, v)
     /** スケッチ平面の (u,v) をクリックする(`key` を渡すとその修飾キーを押しながら)。 */
-    async function clickPlane(u, v, key = null) {
-      return withoutBrowserPanel(page, async () => {
-        const at = await planeAt(u, v)
-        if (!at) fail(`スケッチ平面の点 (${u}, ${v}) が画面の中に無い`)
-        if (key) await page.keyboard.down(key)
-        await page.mouse.click(at.x, at.y)
-        if (key) await page.keyboard.up(key)
-      })
-    }
+    const clickPlane = (u, v, key = null) => clickSketchPoint(page, u, v, { modifier: key })
 
     /** いまのスケッチ(図形と選択)。**JSONへ落としてから返す**(Svelteの`$state`は素で渡らない)。 */
     async function sketchNow() {
@@ -128,23 +74,6 @@ async function main() {
       ])
     }
 
-    async function clickFace(bodyId, faceIndex, key = null) {
-      return withoutBrowserPanel(page, async () => {
-        const at = await page.evaluate(
-          (id, index) => {
-            const rect = document.querySelector('.viewport').getBoundingClientRect()
-            const position = window.__duocad.projectFace(id, index)
-            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-          },
-          bodyId,
-          faceIndex,
-        )
-        if (!at) fail(`面 ${faceIndex} が画面の中に無い`)
-        if (key) await page.keyboard.down(key)
-        await page.mouse.click(at.x, at.y)
-        if (key) await page.keyboard.up(key)
-      })
-    }
 
     /**
      * コマンドが**次に何を待っているか**をプロンプトで確かめる。
@@ -185,20 +114,9 @@ async function main() {
     }
 
     // ================================================================ 1. 図形を描く
-    await page.click('#sketch-create')
-    {
-      const at = await page.evaluate(() => {
-        const rect = document.querySelector('.viewport').getBoundingClientRect()
-        const position = window.__duocad.projectBasePlane('XY')
-        return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-      })
-      if (!at) fail('基準平面XYを指せる画素が無い')
-      await page.mouse.click(at.x, at.y)
-    }
-    await waitFor(() => window.__duocad.activeSketch !== null, 'XY平面のスケッチに入れない')
-    const sketchId = await page.evaluate(() => window.__duocad.activeSketch)
+    const sketchId = await createSketchOnBasePlane(page, 'XY', { timeout })
     await page.click('#sketch-look') // 正面から見る((u,v) → 画素が安定する)
-    await new Promise((resolve) => setTimeout(resolve, 400))
+    await sleep(400)
 
     await page.click('#sketch-line')
     await awaitPrompt('始点', '線分の始点の待ち受けが開かない')
@@ -247,8 +165,8 @@ async function main() {
     await awaitPrompt('1つ目の角', '長方形の角の待ち受けが開かない')
     await clickPlane(PLATE.x, PLATE.y)
     await awaitPrompt('対角', '長方形の角のクリックが届いていない')
-    await typeInto('#sketch-width', PLATE.width)
-    await typeInto('#sketch-height', PLATE.height)
+    await typeInto(page, '#sketch-width', PLATE.width)
+    await typeInto(page, '#sketch-height', PLATE.height)
     await page.keyboard.press('Enter')
     await waitFor(
       () => {
@@ -380,7 +298,7 @@ async function main() {
       [plateRegion.index],
     )
     await page.click('#extrude-mode-new')
-    await typeInto('#regions-distance', PLATE.depth)
+    await typeInto(page, '#regions-distance', PLATE.depth)
     await page.keyboard.press('Enter')
     await waitFor(() => (window.__duocad.parts ?? []).length === 1, '領域を押し出してもボディができない')
     await page.evaluate(() => document.activeElement?.blur?.())
@@ -405,7 +323,7 @@ async function main() {
     const targetFace = faces[0]
     const planeFace = faces[1]
 
-    await clickFace(bodyId, targetFace.index)
+    await clickFace(page, bodyId, targetFace.index, { hidePanel: true })
     await waitFor(
       (id, index) =>
         (window.__duocad.selection?.items ?? []).some(
@@ -441,7 +359,7 @@ async function main() {
     ok('mirror_body: 「面を選ぶ」で面のピックが開き、そのあいだ辺は出ない')
 
     // ---- 混同の検査(その1): **待っている間も対象を選び直せる**(修飾キー付きは選択へ行く)
-    await clickFace(bodyId, planeFace.index, 'Shift')
+    await clickFace(page, bodyId, planeFace.index, { modifier: 'Shift', hidePanel: true })
     await waitFor(
       (id, index) =>
         (window.__duocad.selection?.items ?? []).some(
@@ -459,7 +377,7 @@ async function main() {
     }
     ok('mirror_body: 面を待っている間も Shift+クリックで対象を足せる(ピックには食われない)')
 
-    await clickFace(bodyId, planeFace.index, 'Shift') // 足したぶんを外して元へ戻す
+    await clickFace(page, bodyId, planeFace.index, { modifier: 'Shift', hidePanel: true }) // 足したぶんを外して元へ戻す
     await waitFor(
       (id, index) =>
         !(window.__duocad.selection?.items ?? []).some(
@@ -473,7 +391,7 @@ async function main() {
     const selectionBefore = await page.evaluate(() =>
       JSON.parse(JSON.stringify(window.__duocad.selection?.items ?? [])),
     )
-    await clickFace(bodyId, planeFace.index)
+    await clickFace(page, bodyId, planeFace.index, { hidePanel: true })
     await waitFor(
       (index) =>
         (document.querySelector('#mirror-body-plane-face-value')?.textContent ?? '').trim() ===
@@ -522,7 +440,7 @@ async function main() {
     // **XY/XZ/YZ の3択が壊れていない**(既存経路の回帰): 同じ選択のまま YZ で1つ増やす。
     await page.evaluate(() => document.activeElement?.blur?.())
     await page.keyboard.press('Escape')
-    await clickFace(bodyId, targetFace.index)
+    await clickFace(page, bodyId, targetFace.index, { hidePanel: true })
     await waitFor(
       (id) =>
         (window.__duocad.selection?.items ?? []).some(
@@ -544,15 +462,9 @@ async function main() {
     await waitFor(() => (window.__duocad.parts ?? []).length === 3, 'YZ平面での鏡映が壊れている')
     ok('mirror_body: 基準平面(YZ)の経路は今までどおり動く(回帰無し)')
 
-    if (consoleErrors.length > 0) {
-      fail(`ブラウザのコンソールにエラー: ${JSON.stringify(consoleErrors.slice(0, 3))}`)
-    }
-    console.log('\nsmoke-mirror: PASS')
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
+    await assertNoAppErrors(page, consoleErrors)
   }
-}
+})
 
 function distance(a, b) {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
@@ -566,8 +478,3 @@ function mirrorPoint(p, origin, normal) {
     (p[0] - origin[0]) * unit[0] + (p[1] - origin[1]) * unit[1] + (p[2] - origin[2]) * unit[2]
   return p.map((value, index) => value - 2 * gap * unit[index])
 }
-
-main().catch((error) => {
-  console.error(`\nsmoke-mirror: FAIL ${error.message ?? error}`)
-  process.exitCode = 1
-})

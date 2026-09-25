@@ -9,7 +9,7 @@ import { SKETCH_CURSOR_CROSS_COLOR, SKETCH_CURSOR_SNAP_COLOR } from './viewportC
 /** スナップ状態に応じた見た目の種別。 */
 export type SketchSnapVisual = 'free' | 'line' | 'midpoint' | 'point' | 'grid'
 
-/** 1mm格子への吸着とみなす距離[mm]。`App.svelte` の `snappedToGrid1mm` と同じ刻み。 */
+/** 1mm格子への吸着とみなす距離[mm]。`entityKinds.snapSketchPoint` の3段目(1mm への丸め)と同じ刻み。 */
 export const GRID_SNAP_TOLERANCE_MM = 0.5
 
 const CROSS_ARM_PX = 8
@@ -40,7 +40,7 @@ export interface SketchCursorOverlay {
 /**
  * 当たり判定の結果から、カーソル強調の種別を決める。
  *
- * 優先順はクリックのスナップ(`snappedPlanePoint`)と同じ: 点(角・交点を含む) → 中点 →
+ * 優先順はクリックのスナップ(`entityKinds.snapSketchPoint`)と同じ: 点(角・交点を含む) → 中点 →
  * 線 → 格子 → 自由。
  *
  * `isCorner` / `isMidpoint` は呼び出し側(`viewport.ts`)が渡す —— `hit.snapAt` /

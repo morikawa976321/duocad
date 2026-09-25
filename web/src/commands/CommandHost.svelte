@@ -296,7 +296,7 @@
         const ref = picks[spec.name]
         if (ref) collected[spec.name] = ref
       } else {
-        const raw = (numberText[spec.name] ?? '').trim()
+        const raw = rawNumber(spec)
         // 空欄で `default` を持つ引数(move系のdx/dy/dz)は、打っていない軸を0扱いにして
         // 空欄のまま確定できる(`NumberArgSpec.default`のdocstring参照)。
         if (raw === '') {
@@ -374,7 +374,7 @@
    */
   const expressionError = $derived.by<string | null>(() => {
     for (const spec of numberArgs) {
-      const raw = (numberText[spec.name] ?? '').trim()
+      const raw = rawNumber(spec)
       if (raw === '') continue
       const evaluated = evaluateExpression(raw)
       if (!evaluated.ok) return `${spec.label}: ${evaluated.reason}`
@@ -389,7 +389,7 @@
   const expressionEcho = $derived.by(() => {
     const shown: string[] = []
     for (const spec of numberArgs) {
-      const raw = (numberText[spec.name] ?? '').trim()
+      const raw = rawNumber(spec)
       if (raw === '' || isPlainNumber(raw)) continue
       const evaluated = evaluateExpression(raw)
       if (evaluated.ok) shown.push(`${spec.label} = ${round4(evaluated.value)}${spec.unit}`)
@@ -895,18 +895,24 @@
    * 畳まれて名前で引けない寸法)。どちらも数値でなければ従来のプレースホルダ。
    */
   /** 式の評価結果を見せる桁(小数4桁まで。末尾の0は落ちる)。 */
+  /** 数値欄に打ってある文字列(前後の空白を除く。空欄なら空文字)。 */
+  function rawNumber(spec: NumberArgSpec): string {
+    return (numberText[spec.name] ?? '').trim()
+  }
+
   function round4(value: number): string {
     return String(Math.round(value * 1e4) / 1e4)
   }
 
   function placeholderFor(spec: NumberArgSpec): string {
-    if (spec.fromPoints !== true || (numberText[spec.name] ?? '') !== '') return spec.placeholder
+    const resting = spec.placeholder ?? spec.unit
+    if (spec.fromPoints !== true || (numberText[spec.name] ?? '') !== '') return resting
     const named = ghostBuilt?.args[spec.name]
     const live =
       typeof named === 'number' && Number.isFinite(named)
         ? named
         : (ghostBuilt !== null ? (spec.live?.(ghostBuilt.args) ?? null) : null)
-    return typeof live === 'number' && Number.isFinite(live) ? live.toFixed(2) : spec.placeholder
+    return typeof live === 'number' && Number.isFinite(live) ? live.toFixed(2) : resting
   }
 
   function onKeydown(event: KeyboardEvent): void {
@@ -1081,15 +1087,11 @@
     flex-direction: column;
   }
 
-  .dim {
-    color: var(--dim);
-  }
-
   /* ツールバーの「押しているコマンド」を1つだけ強調する。 */
   button.on {
-    border-color: var(--accent, #ffb454);
-    color: var(--accent, #ffb454);
-    background: var(--accent-soft, rgba(255, 180, 84, 0.16));
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-soft);
   }
 
   /* パスは数値より長い(見た目の作り込みではなく、打った先が読めないと確認できない) */

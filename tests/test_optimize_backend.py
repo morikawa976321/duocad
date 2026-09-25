@@ -24,7 +24,6 @@ from __future__ import annotations
 import math
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -32,7 +31,7 @@ from duocad import optimize_run
 from duocad.server import Session
 from session_support import face_with_normal, four_conditions, pad, select as _select, two_pads
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from duocad.paths import REPO_ROOT
 
 
 # --------------------------------------------------------------------------------------
@@ -893,7 +892,7 @@ def test_debug_voxels_carry_the_cell_centre_convention() -> None:
     assert payload["elements"] == [0, 1 * (3 * 4) + 2 * 4 + 3]
     assert payload["total"] == 2 and payload["shown"] == 2 and payload["stride"] == 1
 
-    # 画面がやる復元(`viewport.ts` の `buildDebugVoxels`)と同じ算術で中心へ戻す。
+    # 画面がやる復元(`web/src/optimizeDebug.ts` の `buildDebugVoxels`)と同じ算術で中心へ戻す。
     _, ny, nz = grid.shape
     for flat, want in zip(payload["elements"], [(0, 0, 0), (1, 2, 3)]):
         ex, rest = divmod(flat, ny * nz)

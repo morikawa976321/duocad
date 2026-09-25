@@ -22,22 +22,12 @@
  * サーバはこのスクリプトが空の文書で起動し、板・STEP・立方体ともMCP経由で作る。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
  */
-import { mkdtempSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { findBrowser, launchBrowser } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
-
-const options = parseArgs(process.argv.slice(2))
-const stepPath =
-  options.step ?? 'C:\\Users\\tm976\\mf\\hanger_bar_attatchment.step'
-const wsPort = options.port ?? '8957'
-const httpPort = options['http-port'] ?? '8958'
-const timeout = Number.parseInt(options.timeout ?? '120000', 10)
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+import { existsSync } from 'node:fs'
+import { assertNoAppErrors, openApp, sleep } from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import { addExtrudedRect } from './mcp-client.mjs'
+import { HANGER_BAR_STEP } from './models.mjs'
 
 /** 現在の画面から、文書全体の外接直方体とカメラ姿勢をまとめて読む。 */
 async function probeDocument(page) {
@@ -76,51 +66,28 @@ function sphereOf(min, max) {
 /**
  * 小さな板→大きなSTEPの順で、farが追い越されないことを見る。
  */
-async function checkFarSideRegression(executablePath) {
+async function checkFarSideRegression({ options, mcp, browser, url, timeout }) {
+  const stepPath = options.step ?? HANGER_BAR_STEP
   console.log(`\n[A] 遠端(far): 小さな板 → 大きなSTEP(${stepPath})`)
   if (!existsSync(stepPath)) fail(`STEPが無い: ${stepPath}`)
-  const workdir = mkdtempSync(join(tmpdir(), 'duocad-clip-planes-far-'))
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-  try {
-    await mcp.handshake('duocad-smoke-clip-planes-far')
-
+  {
     // ---------------------------------------------------------------- 1. 小さな板
-    const sketch = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-    await mcp.callTool('add_rectangle', {
-      sketch_id: sketch.sketch_id,
+    const { bodyId: smallBodyId } = await addExtrudedRect(mcp, {
       corner: [0, 0],
       width: 40,
       height: 30,
+      distance: 20,
     })
-    await mcp.callTool('propose_selection', {
-      refs: [{ sketch: sketch.sketch_id, index: 1 }],
-    })
-    await mcp.callTool('commit_selection')
-    await mcp.callTool('extrude', { distance: 20, mode: 'new' })
-    await mcp.callTool('clear_selection')
-    const smallBodyId = (await mcp.callTool('describe_document')).bodies[0].body_id
     ok(`小さな板を作った: ${smallBodyId}(40×30×20mm、対角約53.9mm)`)
 
     // ---------------------------------------------------------------- 2. ブラウザを開く(初回フレーミングを消費)
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
     // **`frameAll` は呼ばない** —— 呼ぶと再フレーミングでnear/farも作り直され、
     // 「初回フレーミングを消費した後、二度と動かない」という再現条件が壊れる。
     // ページ読み込み自体が最初の `update()` を起こし、それが初回フレーミングを消費する。
-    await page.waitForFunction(
-      () => (window.__duocad?.state?.bodies ?? []).length > 0,
-      { timeout, polling: 100 },
-    )
+    const { page, consoleErrors } = await openApp(browser, url, {
+      timeout,
+      until: () => (window.__duocad?.state?.bodies ?? []).length > 0,
+    })
 
     const smallPose = await page.evaluate(() => window.__duocad.cameraPose())
     ok(
@@ -193,13 +160,7 @@ async function checkFarSideRegression(executablePath) {
     }
     ok(`farは小さな板の値(${smallPose.far.toFixed(1)}mm)から実際に広がった(${far.toFixed(1)}mm)`)
 
-    const errors = await page.evaluate(() => window.__duocad.errors ?? [])
-    if (errors.length > 0) fail(`走行中にエラーが出た: ${JSON.stringify(errors)}`)
-    if (consoleErrors.length > 0) fail(`コンソールにエラー: ${consoleErrors.join(' / ')}`)
-    ok('走行中にエラーは1件も出ていない')
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
+    await assertNoAppErrors(page, consoleErrors)
   }
 }
 
@@ -218,15 +179,9 @@ async function checkFarSideRegression(executablePath) {
  * 「初回フレーミング以降どのイベントで引き直るか」という検査したいことそのものを
  * 迂回してしまう)。
  */
-async function checkNearSideRegression(executablePath) {
+async function checkNearSideRegression({ mcp, browser, url, timeout }) {
   console.log('\n[B] 近端(near): 巨大な板(初回フレーミングを消費) → 極小の立方体だけが残る')
-  const workdir = mkdtempSync(join(tmpdir(), 'duocad-clip-planes-near-'))
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-  try {
-    await mcp.handshake('duocad-smoke-clip-planes-near')
-
+  {
     const CENTER = [20000, 20000, 1]
     const SMALL_HALF = 1
     const BIG_HALF = 20000
@@ -270,21 +225,10 @@ async function checkNearSideRegression(executablePath) {
     )
 
     // ---------------------------------------------------------------- 3. ブラウザを開く(合体=巨大な板が支配する対角で初回フレーミングを消費)
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
+    const { page, consoleErrors } = await openApp(browser, url, {
+      timeout,
+      until: () => (window.__duocad?.state?.bodies ?? []).length >= 2,
     })
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
-    await page.waitForFunction(
-      (count) => (window.__duocad?.state?.bodies ?? []).length >= count,
-      { timeout, polling: 100 },
-      2,
-    )
     await sleep(200)
 
     const framedPose = await page.evaluate(() => window.__duocad.cameraPose())
@@ -400,24 +344,13 @@ async function checkNearSideRegression(executablePath) {
     }
     ok(`nearは巨大な板の値(${framedPose.near.toFixed(3)}mm)から実際に縮んだ(${near.toFixed(5)}mm)`)
 
-    const errors = await page.evaluate(() => window.__duocad.errors ?? [])
-    if (errors.length > 0) fail(`走行中にエラーが出た: ${JSON.stringify(errors)}`)
-    if (consoleErrors.length > 0) fail(`コンソールにエラー: ${consoleErrors.join(' / ')}`)
-    ok('走行中にエラーは1件も出ていない')
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
+    await assertNoAppErrors(page, consoleErrors)
   }
 }
 
-async function main() {
-  const executablePath = findBrowser()
-  await checkFarSideRegression(executablePath)
-  await checkNearSideRegression(executablePath)
-  console.log('\nsmoke-clip-planes: 全項目 OK(遠端・近端とも)')
-}
-
-main().catch((error) => {
-  console.error(`\nsmoke-clip-planes: 失敗 — ${error.message}`)
-  process.exitCode = 1
+// 遠端と近端は**別の文書**(空の文書から作る姿勢が前提)なので、間でサーバを立て直す。
+runSmoke('smoke-clip-planes', { mcp: true }, async (ctx) => {
+  await checkFarSideRegression(ctx)
+  await ctx.restart()
+  await checkNearSideRegression(ctx)
 })

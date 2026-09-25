@@ -1,16 +1,5 @@
-<script module lang="ts">
-  /**
-   * パネルに残す通知1件(次に走らせるまで消えない)。**型だけをモジュールへ置く** ——
-   * runesモードのインスタンススクリプトは `export` を持てない(`$props` が入口)。
-   */
-  export interface OptimizeNotice {
-    /** `bad` は「結果が信用できない/走らせられない」、`info` は済んだことの報告。 */
-    kind: 'bad' | 'info'
-    lines: string[]
-  }
-</script>
-
 <script lang="ts">
+  import type { OptimizeNotice } from './optimizeNotice'
   /**
    * 形状最適化を**走らせる**パネル。
    *
@@ -48,7 +37,17 @@
    * **`position: absolute` でフローの外**に置くので、`.viewport` の寸法＝カメラのアスペクトに
    * 触らない(styles.css の不変条件)。
    */
-  import { judgeMinWidth, minWidthProblem, roundUpNotice, shownCeilingMm, shownGuaranteedMm, shownStepMm } from './minWidth'
+  import {
+    clampStepIndex,
+    isOutOfRange,
+    judgeMinWidth,
+    minWidthProblem,
+    roundUpNotice,
+    shownCeilingMm,
+    shownGuaranteedMm,
+    shownStepMm,
+    stepAt,
+  } from './minWidth'
   import type {
     OptimizeConditionsReport,
     OptimizeProgress,
@@ -86,12 +85,12 @@
   } = $props()
 
   const steps = $derived(resolution?.steps ?? [])
-  /** 実際に効いている段の位置。**目盛りが縮んだときのために毎回丸め直す。** */
-  const clamped = $derived(Math.min(stepIndex, Math.max(steps.length - 1, 0)))
-  const step = $derived(steps[clamped] ?? null)
+  /** 実際に効いている段の位置。**目盛りが縮んだときのために毎回丸め直す**(`minWidth.ts`。App と同じ丸め)。 */
+  const clamped = $derived(clampStepIndex(stepIndex, steps.length))
+  const step = $derived(stepAt(steps, stepIndex))
   /** 入力した最小幅の判定(下限・上限はサーバーが段ごとに配る。判定と表示は `minWidth.ts`)。 */
   const minWidthVerdict = $derived(judgeMinWidth(minWidthMm, step))
-  const minWidthInvalid = $derived(minWidthVerdict.kind === 'below' || minWidthVerdict.kind === 'above')
+  const minWidthInvalid = $derived(isOutOfRange(minWidthVerdict))
   const minWidthProblemText = $derived(step === null ? null : minWidthProblem(minWidthVerdict, step))
   const minWidthGuaranteedText = $derived(shownGuaranteedMm(minWidthVerdict))
   const minWidthRoundUpText = $derived(roundUpNotice(minWidthVerdict, minWidthMm))
@@ -133,7 +132,7 @@
   )
 </script>
 
-<div id="optimize-panel">
+<div id="optimize-panel" class="floating-panel">
   <div class="head"><strong>形状最適化を走らせる</strong></div>
 
   <!-- **条件の点検はいちばん上**。走らせられない理由があるなら、入力欄を触る前に読ませる。
@@ -142,7 +141,7 @@
   {#if conditions === null}
     <p id="optimize-conditions" class="hint dim">条件を確認している…</p>
   {:else if conditions.ready}
-    <p id="optimize-conditions" class="hint ok">
+    <p id="optimize-conditions" class="hint ok dim">
       条件はそろっている(保持 {conditions.preserve_bodies.length} ・除外
       {conditions.exclude_bodies.length} ・拘束 {conditions.fixtures.length} ・荷重
       {conditions.loads.length})
@@ -168,7 +167,7 @@
       収まらない。条件面をもっと大きい面に取り直すこと
     </p>
   {:else}
-    <label>
+    <label class="field-row">
       解像度
       <input
         id="optimize-resolution"
@@ -193,7 +192,7 @@
       体積の見積もりが確かになる。<strong>払うもの</strong>: 時間とメモリ。
       <strong>左へは動かない</strong> —— 粗くすると条件面から節点が消える(しかも黙って起きる)。
     </p>
-    <label>
+    <label class="field-row">
       最小幅[mm]
       <!-- **`type="number"` にしない**(上の `minWidthText`)。数字の鍵盤は `inputmode` で出す。 -->
       <input
@@ -293,7 +292,7 @@
   <!-- **消えない通知**(次に走らせるまで残る)。結果が信用できないという意味の文を
        トーストで流さないための場所。 -->
   {#if notice !== null}
-    <ul id="optimize-notice" class={notice.kind === 'bad' ? 'problems' : 'done'}>
+    <ul id="optimize-notice" class={notice.kind === 'bad' ? 'problems' : 'done dim'}>
       {#each notice.lines as line}
         <li>{line}</li>
       {/each}
@@ -323,24 +322,15 @@
     width: var(--browser-panel-w);
     max-height: 62%;
     overflow-y: auto;
-    padding: 8px 10px;
-    background: var(--panel);
-    color: var(--text);
-    border: 1px solid var(--line);
   }
 
   .head {
     margin-bottom: 6px;
   }
 
+  /* 並べ方は styles.css の `.field-row`。ここは行の間隔だけ。 */
   label {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 6px;
     margin-top: 6px;
-    color: var(--dim);
-    white-space: nowrap;
   }
 
   /* 幅・面は styles.css の `input` が持つ。ここは残り幅いっぱいに伸ばすだけ。 */
@@ -348,11 +338,6 @@
     flex: 1 1 auto;
     width: auto;
     min-width: 0;
-  }
-
-  #optimize-resolution {
-    padding: 0;
-    accent-color: var(--accent);
   }
 
   .unit {
@@ -372,10 +357,6 @@
     margin: 6px 0 0;
   }
 
-  .ok {
-    color: var(--dim);
-  }
-
   /* **走らせられない理由・結果が信用できない理由**。トーストと違って消えない。 */
   .problems,
   .done {
@@ -385,15 +366,11 @@
   }
 
   .problems {
-    color: oklch(72% 0.14 30);
-  }
-
-  .done {
-    color: var(--dim);
+    color: var(--bad);
   }
 
   .bad {
-    color: oklch(72% 0.14 30);
+    color: var(--bad);
   }
 
   button.step {
@@ -402,6 +379,6 @@
   }
 
   #optimize-min-width.invalid {
-    border-color: oklch(72% 0.14 30);
+    border-color: var(--bad);
   }
 </style>

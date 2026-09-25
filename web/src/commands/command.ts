@@ -19,7 +19,9 @@
  * 状態機械・DOM・通信は `CommandHost.svelte` の側にある。
  */
 import type {
+  BodyRef,
   Point2,
+  RegionRef,
   SelectionRef,
   SelectionState,
   ShapeKind,
@@ -121,6 +123,38 @@ export function sketchEntityRef(
   return { sketch: sketchId, entity: entityId, point }
 }
 
+/** 辺の参照(添字は1始まり。`describe_edges` / `fillet` と同じ体系)。 */
+export function edgeRef(bodyId: string, edgeIndex: number): ShapeRef {
+  return { body: bodyId, kind: 'edge', index: edgeIndex }
+}
+
+/** 頂点の参照(添字は1始まり)。 */
+export function vertexRef(bodyId: string, vertexIndex: number): ShapeRef {
+  return { body: bodyId, kind: 'vertex', index: vertexIndex }
+}
+
+/** 領域の参照(`kind` を持たない。`sketch` と `index` で見分ける)。 */
+export function regionRef(sketchId: string, index: number): RegionRef {
+  return { sketch: sketchId, index }
+}
+
+/** ボディの参照。添字は無く、コアと同じく `index: null` を明示する(`BodyRef` の docstring)。 */
+export function bodyRef(bodyId: string): BodyRef {
+  return { body: bodyId, kind: 'body', index: null }
+}
+
+/**
+ * 選択から種別ごとに取り出す(判定は `refKind` の1つ。`'sketch' in item` の手書きを持ち込まない ——
+ * `sketch` を持つ参照は領域と図形の2種類あり、それだけで拾うと選んだ点が領域の添字として読まれる)。
+ */
+export function refsOfKind(items: readonly SelectionRef[], kind: ShapeKind): ShapeRef[]
+export function refsOfKind(items: readonly SelectionRef[], kind: 'body'): BodyRef[]
+export function refsOfKind(items: readonly SelectionRef[], kind: 'region'): RegionRef[]
+export function refsOfKind(items: readonly SelectionRef[], kind: 'sketch_entity'): SketchEntityRef[]
+export function refsOfKind(items: readonly SelectionRef[], kind: SelectableKind): SelectionRef[] {
+  return items.filter((item) => refKind(item) === kind)
+}
+
 // --------------------------------------------------------------------------------------
 // 引数の仕様
 // --------------------------------------------------------------------------------------
@@ -189,7 +223,8 @@ export interface NumberArgSpec extends ArgSpecCommon {
   unit: string
   /** 入力欄の `id`(実機検査がここを叩く)。 */
   inputId: string
-  placeholder: string
+  /** 空欄の薄字。省略時は `unit`(`CommandHost.placeholderFor`)。 */
+  placeholder?: string
   /**
    * **空欄なら集めた点から導く寸法**(スケッチの長さ・幅・高さ・半径)。
    *
@@ -478,7 +513,6 @@ const EXTRUDE_FACE: CommandDef = {
       label: '距離',
       unit: 'mm',
       inputId: 'distance',
-      placeholder: 'mm',
       // 既定値を入れないのと同じ理由で0を弾く: 打たずにEnterした結果
       // 意図しない距離で確定するのを防ぐ。正=足す / 負=削る。
       reject: (value) => (value === 0 ? '距離が0(正=足す / 負=削る)' : null),

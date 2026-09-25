@@ -11,19 +11,13 @@ hanger・要素サイズ要求(既定 2.4mm。実 spacing 2.387506mm)・目標(�
 from __future__ import annotations
 
 import argparse
-import sys
 import tempfile
 import time
 from pathlib import Path
 from unittest.mock import patch
 
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(errors="replace")
-    except (AttributeError, ValueError):
-        pass
-
 import _bootstrap  # noqa: F401  (topopt_checks の import 経路を通す)
+from _documents import open_session
 import _record
 import numpy as np
 from scipy import ndimage
@@ -123,8 +117,7 @@ def run(cells: int, budget: int, stl_dir: Path, mask_npz: Path | None,
                  "target_safety_factor": target, "max_evaluations": int(budget)}
     with tempfile.TemporaryDirectory(prefix="topopt-trace-") as trace_root, \
             patch.object(trace, "DEFAULT_ROOT", Path(trace_root)):
-        session = Session(None, 0.2, models_dir=MODEL.resolve().parent)
-        session.open_document(MODEL.name)
+        session = open_session(MODEL)
         document = session.document
         bundle = optimize_run.build_conditions(document)
         limits = optimize_run.resolution_limits(document)

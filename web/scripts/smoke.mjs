@@ -16,11 +16,24 @@
  * ブラウザは**インストール済みのEdge/Chromeを使う**(puppeteer-core なのでブラウザを
  * ダウンロードしない)。`DUOCAD_BROWSER` で明示もできる。WebGLは実GPUで描く(詳細は browser.mjs)。
  */
-import { existsSync } from 'node:fs'
-import { findBrowser, launchBrowser, withoutBrowserPanel, pressUndo } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { startServer } from './server.mjs'
-import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
+import {
+  assertNoAppErrors,
+  openApp,
+  pressUndo,
+  sleep,
+  typeInto as typeIntoField,
+  waitOrFail,
+} from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import { PC_CASE_IMPORT_WARNINGS, PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
+import {
+  clickRegion,
+  clickSketchPoint,
+  createSketchOnBasePlane,
+  faceAt,
+  faceAtWhenStill,
+} from './pick.mjs'
 
 /**
  * 体積が「元と同じ」かを見るときの**相対**許容(Escの中断・undoの復元が使う)。
@@ -44,65 +57,17 @@ import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
  */
 const VOLUME_EPS = 1e-12
 
-const options = parseArgs(process.argv.slice(2))
 // `--url` を渡したときだけ既に立っているサーバへ繋ぐ(既定は自分で立てる)。
-const attachUrl = options.url ?? null
-const wsPort = options.port ?? '8775'
-const httpPort = options['http-port'] ?? '8776'
-const stepPath = options.step ?? PC_CASE_STEP
-const expectedParts = Number.parseInt(options['expect-parts'] ?? String(PC_CASE_SOLIDS), 10)
-const distance = Number.parseFloat(options.distance ?? '1')
-// 既定を長めにしてある: 一括の可視性切り替え(26部品ぶんのWebSocket往復)は、
+// 既定の timeout を長めにしてある: 一括の可視性切り替え(26部品ぶんのWebSocket往復)は、
 // 機械負荷が高いと数十秒かかることを実測した(claude/cursorが60プロセス超
 // 並行していた環境。1回の往復自体は軽いが、混雑時はスケジューリング待ちが積み上がる)。
-const timeout = Number.parseInt(options.timeout ?? '120000', 10)
-
-
-
-
-async function main() {
-  const executablePath = findBrowser()
-  console.log(`smoke: browser ${executablePath}`)
-
-  const server = attachUrl === null ? await startServer({ wsPort, httpPort }) : null
-  const url = server?.url ?? attachUrl
-  console.log(`  server : ${url}${server === null ? ' (既に立っているサーバへ接続)' : ''}`)
-
-  const browser = await launchBrowser(executablePath)
-
-  try {
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-    // どのURLで落ちたかを残す(「404が1件」だけ言われても原因が分からない)
-    page.on('response', (response) => {
-      if (response.status() >= 400) {
-        consoleErrors.push(`HTTP ${response.status()} ${response.url()}`)
-      }
-    })
-
-    await page.goto(url, { waitUntil: 'load', timeout })
-
-    await page.waitForFunction(
-      () => {
-        const hook = window.__duocad
-        return Boolean(hook && hook.ready)
-      },
-      { timeout, polling: 100 },
-    )
-
-    async function typeInto(selector, value) {
-      await page.click(selector)
-      await page.keyboard.down('Control')
-      await page.keyboard.press('KeyA')
-      await page.keyboard.up('Control')
-      await page.keyboard.press('Backspace')
-      await page.type(selector, String(value), { delay: 20 })
-    }
+runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) => {
+  const stepPath = options.step ?? PC_CASE_STEP
+  const expectedParts = Number.parseInt(options['expect-parts'] ?? String(PC_CASE_SOLIDS), 10)
+  const distance = Number.parseFloat(options.distance ?? '1')
+  {
+    const { page, consoleErrors } = await openApp(browser, url, { timeout })
+    const typeInto = (selector, value) => typeIntoField(page, selector, value, { delay: 20 })
 
     // -------------------------------------------------------------- 項番0: 起動直後は無起動
     // **通常モードの既定は「どのコマンドも起動していない」**
@@ -421,35 +386,8 @@ async function main() {
     // **選択の正はコア**なので、ここで見ているのは `state.selection`(コアが返した集合)である。
     // **クリックの直前に射影し直す**(使い回さない)。画面のどこかが伸縮すると
     // ビューポートのアスペクトが変わり、前に測った画素は別の面を指すようになる。
-    async function locateFace(bodyId, faceIndex) {
-      return page.evaluate(
-        (id, index) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectFace(id, index)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        bodyId,
-        faceIndex,
-      )
-    }
-
-    /**
-     * **視点が落ち着いてから**面の画面座標を返す。
-     *
-     * `lookAtSketch` / `sketch-exit` の直後はOrbitControlsのダンピングが効いていて、
-     * カメラが数十msかけて動き続ける —— 射影した座標をそのまま押すと**別の部品の面**に
-     * 当たる(実測で踏んだ)。2回続けて同じ画素に射影できたら止まったとみなす。
-     */
-    async function locateFaceWhenStill(bodyId, faceIndex) {
-      let previous = null
-      for (let attempt = 0; attempt < 40; attempt += 1) {
-        const at = await locateFace(bodyId, faceIndex)
-        if (at && previous && Math.hypot(at.x - previous.x, at.y - previous.y) < 1) return at
-        previous = at
-        await new Promise((resolve) => setTimeout(resolve, 50))
-      }
-      return null
-    }
+    const locateFace = (bodyId, faceIndex) => faceAt(page, bodyId, faceIndex)
+    const locateFaceWhenStill = (bodyId, faceIndex) => faceAtWhenStill(page, bodyId, faceIndex)
 
     const secondIndex = await page.evaluate(
       (bodyId, taken) => {
@@ -569,7 +507,7 @@ async function main() {
     // だけ」を「発火していない」と誤判定しかねない。3秒は伊達ではない —— 実測で
     // undo一往復に2秒近くかかることがあった(この節を書いた最初のバグ入り版で
     // 400ms待ちにしたところ「変わっていない」と誤判定し、退行検知に失敗した)。
-    await new Promise((resolve) => setTimeout(resolve, 3000))
+    await sleep(3000)
     const afterFieldCtrlZ = await opSnapshot()
     if (afterFieldCtrlZ.log !== beforeFieldCtrlZ.log || afterFieldCtrlZ.redo !== beforeFieldCtrlZ.redo) {
       fail(
@@ -636,13 +574,9 @@ async function main() {
       )
     }
 
+    /** 距離を打ち、**打った値を読み返して**確かめる(取りこぼしを黙って通さない)。 */
     async function typeDistance(value) {
-      await page.click('#distance')
-      await page.keyboard.down('Control')
-      await page.keyboard.press('KeyA')
-      await page.keyboard.up('Control')
-      await page.keyboard.press('Backspace')
-      await page.type('#distance', String(value), { delay: 20 })
+      await typeInto('#distance', value)
       const typed = await page.$eval('#distance', (element) => element.value)
       if (typed !== String(value)) fail(`距離の入力が一致しない: "${typed}" != "${value}"`)
     }
@@ -787,60 +721,13 @@ async function main() {
     // **手動操作が一級の操作モードになる**ところ(実装計画書§8b C)。スケッチはM2から
     // コアとMCPにあったが、人からは描けなかった。ここで見るのはタスクCの検証1〜5で、
     // 検証6(MCPから同じ文書に見える)は smoke-mcp.mjs 側にある。
-    async function clickPlane(u, v) {
-      // **浮いているブラウザを畳んでから**押す —— スケッチ平面の (u,v) は画面の1画素しかなく、
-      // そこがパネルの下に来ると逃げ場が無い(理由は `browser.mjs` の `withoutBrowserPanel`)。
-      return withoutBrowserPanel(page, async () => {
-        // **クリックの直前に射影し直す**(使い回さない。面のときと同じ理由)
-        const at = await page.evaluate(
-          (uu, vv) => {
-            const rect = document.querySelector('.viewport').getBoundingClientRect()
-            const position = window.__duocad.projectSketchPoint(uu, vv)
-            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-          },
-          u,
-          v,
-        )
-        if (!at) fail(`スケッチ平面の点 (${u}, ${v}) が画面の中に無い`)
-        await page.mouse.click(at.x, at.y)
-        return at
-      })
-    }
+    const clickPlane = (u, v) => clickSketchPoint(page, u, v)
+    const createSketchOnBase = (name = 'XY') => createSketchOnBasePlane(page, name, { timeout })
 
-    /**
-     * **スケッチを作る2手**: ツールバーの「スケッチ」を起動 → 貼る先をクリック。
-     *
-     * Enterは無い(`command.ts` の `needsEnter`: 対象1つ・howの入力なし → 即適用)。
-     * 座標は**クリックの直前に射影し直す**(スケッチ平面の点と同じ流儀)。
-     * `projectBasePlane` は「その画素からのレイが本当にその平面に当たり、手前に面が
-     * 無い」ことを確かめてから返すので、部品に隠れている所を押すことはない。
-     */
-    async function createSketchOnBase(name = 'XY') {
-      await page.click('#sketch-create')
-      let at = null
-      try {
-        const handle = await page.waitForFunction(
-          (plane) => {
-            const rect = document.querySelector('.viewport').getBoundingClientRect()
-            const position = window.__duocad.projectBasePlane(plane)
-            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-          },
-          { timeout, polling: 50 },
-          name,
-        )
-        at = await handle.jsonValue()
-      } catch {
-        fail(`基準平面 ${name} を指せる画素が無い(「スケッチ」が起動しているか)`)
-      }
-      await page.mouse.click(at.x, at.y)
-    }
-
-    /** 待って落ちたら**画面の中身を添えて**失敗する(「120秒待った」だけでは切り分けられない)。 */
-    async function waitForSketch(predicate, what, ...args) {
-      try {
-        await page.waitForFunction(predicate, { timeout, polling: 50 }, ...args)
-      } catch (error) {
-        const dump = await page.evaluate(() =>
+    /** 落ちたときに添える**画面の中身**(「120秒待った」だけでは切り分けられない)。 */
+    const sketchDump = async () =>
+      JSON.parse(
+        await page.evaluate(() =>
           JSON.stringify({
             activeSketch: window.__duocad.activeSketch,
             sketches: window.__duocad.sketches.map((item) => ({
@@ -854,10 +741,10 @@ async function main() {
             messages: window.__duocad.messages,
             errors: window.__duocad.errors,
           }),
-        )
-        fail(`${what}: ${dump}`)
-      }
-    }
+        ),
+      )
+    const waitForSketch = (predicate, what, ...args) =>
+      waitOrFail(page, predicate, what, { args, timeout, dump: sketchDump })
 
     // **ページの中で JSON.stringify する**(Svelteの状態はプロキシで、そのまま返すと
     // CDPのシリアライズで空オブジェクトになる。既存の `snapshot()` と同じ理由)。
@@ -1415,19 +1302,7 @@ async function main() {
       return [...active.regions[0].centroid]
     })
     // 円の中心の点(`cx`)を本物のクリックで掴む。
-    await withoutBrowserPanel(page, async () => {
-      const at = await page.evaluate(
-        (cx, cy) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectSketchPoint(cx, cy)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        circleBefore.params.cx,
-        circleBefore.params.cy,
-      )
-      if (!at) fail('円の中心が画面の中に無い')
-      await page.mouse.click(at.x, at.y)
-    })
+    await clickSketchPoint(page, circleBefore.params.cx, circleBefore.params.cy)
     await page.waitForFunction(
       (id) =>
         (window.__duocad.selection?.items ?? []).some(
@@ -1495,13 +1370,7 @@ async function main() {
     // 描いたもの全体を画面へ収める(領域を狙うクリックの精度のため)。
     // **描き終わってから呼ぶ** —— 途中で呼ぶと、まだ描いていない位置が画面の外に出る。
     await page.click('#sketch-look')
-    const regionAt = await page.evaluate(() => {
-      const rect = document.querySelector('.viewport').getBoundingClientRect()
-      const position = window.__duocad.projectRegion(1)
-      return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-    })
-    if (!regionAt) fail('領域1の画面上の位置が取れない')
-    await page.mouse.click(regionAt.x, regionAt.y)
+    await clickRegion(page, 1)
     await page.waitForFunction(
       () => {
         const items = window.__duocad.selection?.items ?? []
@@ -1517,20 +1386,12 @@ async function main() {
     )
     ok('領域を本物のクリックで選べた(共有選択集合に領域が入った=Dの押し出しの引数になる)')
 
-    if (consoleErrors.length > 0) {
-      fail(`ブラウザのコンソールにエラー: ${consoleErrors.slice(0, 3).join(' | ')}`)
-    }
-    ok('ブラウザのコンソールにエラーなし')
-
-    console.log('')
-    console.log('smoke: PASS')
-  } finally {
-    await browser.close()
-    if (server !== null) await server.stop()
+    // 出ていてよいのは、平面でない面へのスケッチをわざと断らせた札(上の `refused`)と、
+    // この STEP を読むと必ず出る三角形分割の警告(`PC_CASE_IMPORT_WARNINGS`。実測)だけ。
+    // 既定の STEP 以外を `--step` で読んだときは、その警告は前提にしない。
+    const importWarnings = stepPath === PC_CASE_STEP ? PC_CASE_IMPORT_WARNINGS : []
+    await assertNoAppErrors(page, consoleErrors, {
+      allow: [...importWarnings, ...(refused === null ? [] : [refused.toast])],
+    })
   }
-}
-
-main().catch((error) => {
-  console.error(`smoke: FAIL ${error.message}`)
-  process.exit(1)
 })

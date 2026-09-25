@@ -5,29 +5,22 @@ import json
 from pathlib import Path
 
 import _bootstrap  # noqa: F401
-from duocad.topopt.trace import load_snapshot
+from duocad.topopt.trace import RunArchive
 
 
 def summarize(directory):
     directory = Path(directory)
-    manifest = json.loads((directory/'manifest.json').read_text(encoding='utf-8'))
-    events = []
-    for line in (directory/'events.jsonl').read_text(encoding='utf-8').splitlines():
-        try:
-            events.append(json.loads(line))
-        except json.JSONDecodeError:
-            # 実行中や強制終了直後の末尾の不完全行は、次回読み直せるよう記録して返す。
-            manifest['incomplete_event_line'] = True
-    snapshots = [e for e in events if e['kind']=='snapshot']
-    counts = Counter(e['name'] for e in snapshots)
-    def last(name):
-        found = [e['file'] for e in snapshots if e['name']==name]
-        return None if not found else load_snapshot(directory/found[-1])
-    return dict(manifest=manifest, requested_options=last('requested-options'), result=last('result'),
+    archive = RunArchive(directory)
+    manifest = dict(archive.manifest)
+    if archive.incomplete_event_line:
+        # 実行中や強制終了直後の末尾の不完全行は、次回読み直せるよう記録して返す。
+        manifest['incomplete_event_line'] = True
+    counts = Counter(e['name'] for e in archive.snapshots())
+    return dict(manifest=manifest, requested_options=archive.last('requested-options'), result=archive.last('result'),
                 snapshots=dict(sorted(counts.items())),
                 bytes=sum(p.stat().st_size for p in directory.rglob('*') if p.is_file()),
                 arrays=len(list((directory/'arrays').glob('*.npz'))),
-                phases=[dict(id=e['child'],parent=e['phase'],name=e['name']) for e in events if e['kind']=='begin'])
+                phases=[dict(id=e['child'],parent=e['phase'],name=e['name']) for e in archive.begins()])
 
 
 def main():

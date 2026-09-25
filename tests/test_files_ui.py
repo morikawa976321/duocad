@@ -39,18 +39,9 @@ import pytest
 
 from duocad import io_step, kernel, query
 from duocad.server import Session
-from session_support import SIDE, box as _box, browser as _browser, select as _select, send_one
+from session_support import SIDE, box as _box, browser as _browser, cylinder as _cylinder, select as _select, send_one
 
 DEVIATION = 0.2
-
-
-def _cylinder(session: Session, radius: float, height: float):
-    """スケッチ→円→領域押し出しで円柱を作る(半径は名前つきの値になる)。"""
-    sketch_id = session.sketch_create("XY")["sketch_id"]
-    session.add_circle(sketch_id, [0.0, 0.0], radius)
-    _select(session, [{"sketch": sketch_id, "index": 1}])
-    session.extrude(height, mode="join")
-    return session.document.bodies[-1]
 
 
 # --------------------------------------------------------------------------------------
