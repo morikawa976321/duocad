@@ -658,26 +658,35 @@ def select_face(doc: Document, body_id: BodyId, face_index: int) -> dict:
 
     **メッシュボディは断る**(下記 `_reject_mesh`)。
     """
-    body = _visible_body(doc, body_id)
-    _reject_mesh(body, "面を指す")
-    count = kernel.face_count(body.shape)
-    return _shape_ref(body_id, "face", face_index, count)
+    return _select_shape(doc, body_id, "face", face_index)
 
 
 def select_edge(doc: Document, body_id: BodyId, edge_index: int) -> dict:
     """辺を指す ShapeRef を作る(添字は `query.describe_edges` / `fillet` と同じ1始まり)。"""
-    body = _visible_body(doc, body_id)
-    _reject_mesh(body, "辺を指す")
-    count = kernel.edge_count(body.shape)
-    return _shape_ref(body_id, "edge", edge_index, count)
+    return _select_shape(doc, body_id, "edge", edge_index)
 
 
 def select_vertex(doc: Document, body_id: BodyId, vertex_index: int) -> dict:
     """頂点を指す ShapeRef を作る(添字は `kernel.count_subshapes(shape, "vertex")` の1始まり)。"""
+    return _select_shape(doc, body_id, "vertex", vertex_index)
+
+
+def _select_shape(doc: Document, body_id: BodyId, kind: str, index: int) -> dict:
+    """面・辺・頂点で同じ手順: 可視Bodyを引く → メッシュを断る → 数える → `_shape_ref`。
+    検査の順序(存在 → 可視 → メッシュ → 範囲)は `_coerce_refs` の一括経路と同じにしてある。"""
     body = _visible_body(doc, body_id)
-    _reject_mesh(body, "頂点を指す")
-    count = kernel.count_subshapes(body.shape, "vertex")
-    return _shape_ref(body_id, "vertex", vertex_index, count)
+    _reject_mesh(body, f"{_KIND_LABELS[kind]}を指す")
+    return _shape_ref(body_id, kind, index, _subshape_count(body.shape, kind))
+
+
+def _subshape_count(shape, kind: str) -> int:
+    """`kind` の部分形状の数。**呼ぶ時点で `kernel` の属性から引く**(モジュール読み込み時に表へ束ねると
+    `tests/test_face_count_once_per_body.py` の `kernel.face_count` / `edge_count` の差し替えが効かない)。"""
+    if kind == "face":
+        return kernel.face_count(shape)
+    if kind == "edge":
+        return kernel.edge_count(shape)
+    return kernel.count_subshapes(shape, "vertex")
 
 
 #: 断り文に出す種別の呼び名(`_coerce_refs` が単発の `select_*` と同じ文言を作るために使う)。
@@ -839,13 +848,7 @@ def _coerce_ref(doc: Document, ref: dict) -> dict:
     if "index" not in ref:
         raise ValueError("ShapeRef is missing 'index'")
 
-    body_id = ref["body"]
-    index = ref["index"]
-    if kind == "face":
-        return select_face(doc, body_id, index)
-    if kind == "edge":
-        return select_edge(doc, body_id, index)
-    return select_vertex(doc, body_id, index)
+    return _select_shape(doc, ref["body"], kind, ref["index"])
 
 
 def _coerce_refs(
@@ -906,12 +909,7 @@ def _coerce_refs(
                 # **単発の `select_*` と同じ門番**(このループは数え上げを減らすために
                 # `select_face` 等を通らないので、断りもここへ写す必要がある)。
                 _reject_mesh(body, f"{_KIND_LABELS[kind]}を指す")
-                if kind == "face":
-                    counts[count_key] = kernel.face_count(body.shape)
-                elif kind == "edge":
-                    counts[count_key] = kernel.edge_count(body.shape)
-                else:
-                    counts[count_key] = kernel.count_subshapes(body.shape, "vertex")
+                counts[count_key] = _subshape_count(body.shape, kind)
             out.append(_shape_ref(body_id, kind, ref["index"], counts[count_key]))
         else:
             out.append(_coerce_ref(doc, ref))
@@ -935,9 +933,7 @@ def _visible_body(doc: Document, body_id: BodyId):
     一致0件」と「見えないので対象外」はAIから区別が付かない。黙って0件を返すと、
     存在する面をAIが見失ったと誤読して条件を緩める側へ動く。
     """
-    body = next((b for b in doc.bodies if b.id == body_id), None)
-    if body is None:
-        raise KeyError(f"no such body: {body_id!r}")
+    body = doc.get_body(body_id)
     if not body.visible:
         raise ValueError(f"body {body_id!r} is hidden: 見えないものは指せない")
     return body

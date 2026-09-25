@@ -20,8 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from OCP.Bnd import Bnd_Box
-from OCP.BOPAlgo import BOPAlgo_BOP, BOPAlgo_Operation, BOPAlgo_Splitter
-from OCP.BRep import BRep_Builder, BRep_Tool
+from OCP.BRep import BRep_Tool
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepAlgoAPI import (
@@ -42,7 +41,7 @@ from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFille
 from OCP.BRepGProp import BRepGProp, BRepGProp_Face
 from OCP.BRepOffset import BRepOffset_Mode
 from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakePrism
+from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
 from OCP.BRepTools import BRepTools
 from OCP.GCPnts import GCPnts_AbscissaPoint, GCPnts_TangentialDeflection
 from OCP.Geom import Geom_BezierCurve
@@ -57,14 +56,14 @@ from OCP.STEPControl import (
     STEPControl_Writer,
 )
 from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
-from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
-from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
-from OCP.TopTools import TopTools_IndexedMapOfShape, TopTools_ListOfShape
+from OCP.TopoDS import TopoDS, TopoDS_Shape
+from OCP.TopTools import TopTools_IndexedMapOfShape, TopTools_ListOfShape  # noqa: F401  IndexedMap は型注釈だけ
 from OCP.TColgp import TColgp_Array1OfPnt
-from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec
+from OCP.gp import gp_Ax1, gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
-from . import kernel_meshing
+from . import kernel_meshing, meshbody
+from .mesh_geometry import compound, indexed_map, subshapes
 
 #: describe_shape の faces_by_type が持つキー(この順序が正。query.py が初期化に使う)
 FACE_KINDS = (
@@ -382,15 +381,15 @@ def bounding_box(
         x_min, y_min, z_min, x_max, y_max, z_max = _bounding_box_extents(shape)
     else:
         x_min, y_min, z_min, x_max, y_max, z_max = cache.extents(shape)
-    lows = [x_min, y_min, z_min]
-    highs = [x_max, y_max, z_max]
-    return {
-        "min": lows,
-        "max": highs,
-        "center": [(lows[i] + highs[i]) / 2.0 for i in range(3)],
-        "size": [highs[i] - lows[i] for i in range(3)],
-        "diagonal": math.dist(lows, highs),
-    }
+    return meshbody.bbox_payload([x_min, y_min, z_min], [x_max, y_max, z_max], size=True)
+
+
+#: 部分形状の種別名 → (OCCT の列挙, エラー文で使う複数形)。`count_subshapes` と `_subshape_map` の唯一の表。
+_SUBSHAPE_KINDS = {
+    "face": (TopAbs_ShapeEnum.TopAbs_FACE, "faces"),
+    "edge": (TopAbs_ShapeEnum.TopAbs_EDGE, "edges"),
+    "vertex": (TopAbs_ShapeEnum.TopAbs_VERTEX, "vertices"),
+}
 
 
 def count_subshapes(shape: "TopoDS_Shape", kind: str) -> int:
@@ -398,17 +397,115 @@ def count_subshapes(shape: "TopoDS_Shape", kind: str) -> int:
 
     `TopExp_Explorer` で素朴に列挙すると隣接2面から同じ辺を2回拾う
     (shelf_attachment_GD.step 実測: 重複除去66 / 素朴な列挙132)。
+    null の検査はしない(NULL 形状は 0。`_face_map` 等と違って ValueError にしない)。
     """
-    enum = {
-        "face": TopAbs_ShapeEnum.TopAbs_FACE,
-        "edge": TopAbs_ShapeEnum.TopAbs_EDGE,
-        "vertex": TopAbs_ShapeEnum.TopAbs_VERTEX,
-    }.get(kind)
-    if enum is None:
+    if kind not in _SUBSHAPE_KINDS:
         raise ValueError(f"unknown subshape kind: {kind!r}")
-    shape_map = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, enum, shape_map)
-    return shape_map.Extent()
+    return indexed_map(shape, _SUBSHAPE_KINDS[kind][0]).Extent()
+
+
+# --------------------------------------------------------------------------------------
+# ブーリアンの結果の検証(extrude_face / extrude_regions / boolean_bodies / fillet・chamfer が共有)
+# --------------------------------------------------------------------------------------
+#: 「ブーリアンは成功したのに体積が変わっていない」と見なす相対差。OCCT は「成功したが何も
+#: 起きていない」を返せるので、ここで止めないと静かに空振りする。
+_NO_CHANGE_RTOL = 1e-9
+
+
+def _fuse_all(shapes: Sequence[Any], what: str) -> "TopoDS_Shape":
+    """`shapes` を `BRepAlgoAPI_Fuse` で1つにする。**1つなら Fuse を呼ばずそのまま返す**。"""
+    combined = shapes[0]
+    for other in shapes[1:]:
+        fused = BRepAlgoAPI_Fuse(combined, other)
+        fused.Build()
+        if not fused.IsDone():
+            raise ValueError(f"failed to fuse {what}")
+        combined = fused.Shape()
+        if combined is None or combined.IsNull():
+            raise ValueError(f"fusing {what} produced an empty shape")
+    return combined
+
+
+def _checked_volume(
+    result: Any, label: str, *, volume_before: Optional[float] = None, context: str = ""
+) -> float:
+    """ブーリアンの結果を 空 → 体積>0 → 無変化 の順に検査して体積を返す。
+
+    無変化の検査は `volume_before` を渡したときだけ(押し出しは相手があるときだけ見る。
+    `boolean_bodies` と `_blend_edges` は見ない)。`context` は文の括弧に足す(`face 3, distance=5.0` 等)。
+    """
+    suffix = f", {context}" if context else ""
+    if result is None or result.IsNull():
+        raise ValueError(f"{label} produced an empty shape" + (f" ({context})" if context else ""))
+    volume_after = volume(result)
+    if volume_after <= 0:
+        raise ValueError(f"{label} left nothing solid (volume={volume_after}{suffix})")
+    if volume_before is not None and abs(volume_after - volume_before) <= _NO_CHANGE_RTOL * max(
+        1.0, abs(volume_before)
+    ):
+        raise ValueError(
+            f"{label} did not change the shape (volume {volume_before} -> {volume_after}{suffix})"
+        )
+    return volume_after
+
+
+def _require_valid(shape: "TopoDS_Shape", label: str, context: str = "") -> None:
+    """`BRepCheck_Analyzer` の最後の関門。ここまでの検査を全部通っても壊れていることがある
+    (曲面の掃引で実測)。`_checked_volume` と分けてあるのは、`extrude_face_on_shape` だけ
+    間に `_unify_same_domain` が入るため(統合後の形に対して行う)。"""
+    if not BRepCheck_Analyzer(shape).IsValid():
+        suffix = f", {context}" if context else ""
+        raise ValueError(f"{label} produced an invalid shape (BRepCheck{suffix})")
+
+
+def _check_tessellation_args(
+    shape: Any, deviation: float, angular_deflection: float, *, target: str = "an empty shape"
+) -> None:
+    """`tessellate` 系3本の引数検査(null・`deviation > 0`・`angular_deflection > 0`)。"""
+    if shape is None or shape.IsNull():
+        raise ValueError(f"cannot tessellate {target}")
+    if not deviation > 0:
+        raise ValueError(f"deviation must be positive (mm), got {deviation!r}")
+    if not angular_deflection > 0:
+        raise ValueError(f"angular_deflection must be positive, got {angular_deflection!r}")
+
+
+def _point_and_direction(
+    point: Sequence[float], direction: Sequence[float], *, names: Tuple[str, str], zero_reason: str
+) -> Tuple[List[float], List[float]]:
+    """3要素・有限の点と、零ベクトルでない方向を float のリストにして返す(`rotate_shape` /
+    `mirror_shape` の共通の入口。`gp_Dir` は零ベクトルで例外を投げるが、そこまで持って行かずに手前で断る)。"""
+    first, second = names
+    origin = [float(value) for value in point]
+    axis = [float(value) for value in direction]
+    if len(origin) != 3 or len(axis) != 3:
+        raise ValueError(f"{first} / {second} must have 3 numbers, got {point!r} / {direction!r}")
+    if not all(math.isfinite(value) for value in origin + axis):
+        raise ValueError(f"{first} / {second} must be finite, got {point!r} / {direction!r}")
+    if not math.sqrt(sum(value * value for value in axis)) > 0.0:
+        raise ValueError(f"{second} must not be the zero vector ({zero_reason})")
+    return origin, axis
+
+
+def _face_map_projection(successors: dict, final_count: int) -> dict:
+    """後継の表(旧添字 → 新添字の列)を `face_map` / `deleted` / `new_faces` の射影にする
+    (`extrude_face_on_shape` と `_face_successors` が同じ形で保存する)。"""
+    mapped = {position for positions in successors.values() for position in positions}
+    return {
+        "face_map": successors,
+        "deleted": [int(key) for key, value in successors.items() if not value],
+        "new_faces": [i for i in range(1, final_count + 1) if i not in mapped],
+    }
+
+
+def _positions_in(final_map: "TopTools_IndexedMapOfShape", candidates: Iterable[Any]) -> List[int]:
+    """`candidates` が `final_map` の何番目かを重複なしで(最初に現れた順に)集める。"""
+    resolved: List[int] = []
+    for candidate in candidates:
+        position = final_map.FindIndex(candidate)
+        if position > 0 and position not in resolved:
+            resolved.append(position)
+    return resolved
 
 
 # --------------------------------------------------------------------------------------
@@ -464,8 +561,7 @@ def _iter_faces_and_edges(shape: "TopoDS_Shape") -> List["TopoDS_Shape"]:
     """由来を問い合わせる対象の部分形状(面・辺)を重複なしで列挙する。"""
     out: List[TopoDS_Shape] = []
     for enum in (TopAbs_ShapeEnum.TopAbs_FACE, TopAbs_ShapeEnum.TopAbs_EDGE):
-        shape_map = TopTools_IndexedMapOfShape()
-        TopExp.MapShapes_s(shape, enum, shape_map)
+        shape_map = indexed_map(shape, enum)
         out.extend(shape_map.FindKey(i) for i in range(1, shape_map.Extent() + 1))
     return out
 
@@ -562,18 +658,9 @@ def rotate_shape(
     軸方向が零ベクトル・非有限なら ValueError(`gp_Dir` は零ベクトルで例外を投げるが、
     そこまで持って行かずに手前で断る)。
     """
-    point = [float(value) for value in axis_point]
-    direction = [float(value) for value in axis_dir]
-    if len(point) != 3 or len(direction) != 3:
-        raise ValueError(
-            f"axis_point / axis_dir must have 3 numbers, got {axis_point!r} / {axis_dir!r}"
-        )
-    if not all(math.isfinite(value) for value in point + direction):
-        raise ValueError(
-            f"axis_point / axis_dir must be finite, got {axis_point!r} / {axis_dir!r}"
-        )
-    if not math.sqrt(sum(value * value for value in direction)) > 0.0:
-        raise ValueError("axis_dir must not be the zero vector (軸の向きが決まらない)")
+    point, direction = _point_and_direction(
+        axis_point, axis_dir, names=("axis_point", "axis_dir"), zero_reason="軸の向きが決まらない"
+    )
     if not math.isfinite(float(angle_deg)):
         raise ValueError(f"angle must be a finite number of degrees, got {angle_deg!r}")
 
@@ -609,14 +696,9 @@ def mirror_shape(
 
     点・法線が3要素でない/非有限、または法線が零ベクトルなら ValueError。
     """
-    origin = [float(value) for value in point]
-    axis = [float(value) for value in normal]
-    if len(origin) != 3 or len(axis) != 3:
-        raise ValueError(f"point / normal must have 3 numbers, got {point!r} / {normal!r}")
-    if not all(math.isfinite(value) for value in origin + axis):
-        raise ValueError(f"point / normal must be finite, got {point!r} / {normal!r}")
-    if not math.sqrt(sum(value * value for value in axis)) > 0.0:
-        raise ValueError("normal must not be the zero vector (鏡映面の向きが決まらない)")
+    origin, axis = _point_and_direction(
+        point, normal, names=("point", "normal"), zero_reason="鏡映面の向きが決まらない"
+    )
 
     trsf = gp_Trsf()
     trsf.SetMirror(gp_Ax2(gp_Pnt(*origin), gp_Dir(*axis)))
@@ -653,12 +735,10 @@ def face_solid_indices(shape: "TopoDS_Shape") -> List[int]:
     まとめた形(`make_compound`)の三角形群を、ソリッドごとに閉じているかで検査するための対応表
     (`topopt.voxelize.inspect_soup`)。"""
     faces = _face_map(shape)
-    solids = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_SOLID, solids)
+    solids = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_SOLID)
     out = [-1] * faces.Extent()
     for solid in range(1, solids.Extent() + 1):
-        own = TopTools_IndexedMapOfShape()
-        TopExp.MapShapes_s(solids.FindKey(solid), TopAbs_ShapeEnum.TopAbs_FACE, own)
+        own = indexed_map(solids.FindKey(solid), TopAbs_ShapeEnum.TopAbs_FACE)
         for face in range(1, own.Extent() + 1):
             index = faces.FindIndex(own.FindKey(face))
             if index > 0 and out[index - 1] == -1:
@@ -724,12 +804,7 @@ def tessellate(
     `boundary["unresolved"]` に理由(面・辺・種類)を残す —— 交差した境界を面分割へ渡すと
     穴や非多様体の三角形になり、`untriangulated` にも現れない(docs/TOPOPT_GAP_CAUSALITY.md)。
     """
-    if shape is None or shape.IsNull():
-        raise ValueError("cannot tessellate an empty shape")
-    if not deviation > 0:
-        raise ValueError(f"deviation must be positive (mm), got {deviation!r}")
-    if not angular_deflection > 0:
-        raise ValueError(f"angular_deflection must be positive, got {angular_deflection!r}")
+    _check_tessellation_args(shape, deviation, angular_deflection)
 
     # 既存の三角形分割は `mesh_shape` が捨ててから測り直す(前回の粗いメッシュが残っていると
     # 偏差が効かない。STL書き出しは同じ形状を偏差を変えて何度も測る)。偏差は絶対mm
@@ -776,8 +851,7 @@ def _is_closed_shell(shape: "TopoDS_Shape") -> bool:
     """
     if shape is None or shape.IsNull():
         return False
-    edge_map = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE, edge_map)
+    edge_map = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_EDGE)
     total_edges = edge_map.Extent()
     if total_edges == 0:
         return False
@@ -786,14 +860,13 @@ def _is_closed_shell(shape: "TopoDS_Shape") -> bool:
         return False
     counts = [0] * (total_edges + 1)
     for index in range(1, face_map.Extent() + 1):
-        explorer = TopExp_Explorer(face_map.FindKey(index), TopAbs_ShapeEnum.TopAbs_EDGE)
-        while explorer.More():
-            edge = TopoDS.Edge_s(explorer.Current())
+        # **面ごとの列挙は重複を除かない**(`subshapes`。`indexed_map` にしてはいけない —— シーム辺を2回数えるのが要点)
+        for raw_edge in subshapes(face_map.FindKey(index), TopAbs_ShapeEnum.TopAbs_EDGE):
+            edge = TopoDS.Edge_s(raw_edge)
             if not BRep_Tool.Degenerated_s(edge):
                 slot = edge_map.FindIndex(edge)
                 if slot > 0:
                     counts[slot] += 1
-            explorer.Next()
     return all(count == 0 or count >= 2 for count in counts[1:])
 
 
@@ -848,12 +921,7 @@ def tessellate_selective(
     「視錐台の縁」と「シルエット」で、平面どうしの共有辺(直線)では起きない。
     塞ぐには境界の1リングを細かい側へ含めるなどが要るが、**画面の縁の話**なので入れていない。
     """
-    if shape is None or shape.IsNull():
-        raise ValueError("cannot tessellate an empty shape")
-    if not deviation > 0:
-        raise ValueError(f"deviation must be positive (mm), got {deviation!r}")
-    if not angular_deflection > 0:
-        raise ValueError(f"angular_deflection must be positive, got {angular_deflection!r}")
+    _check_tessellation_args(shape, deviation, angular_deflection)
 
     shape_map = _face_map(shape)
     total = shape_map.Extent()
@@ -913,14 +981,10 @@ def _tessellate_split(
     ):
         if not group_indices:
             continue
-        builder = BRep_Builder()
-        compound = TopoDS_Compound()
-        builder.MakeCompound(compound)
-        for index in sorted(group_indices):
-            builder.Add(compound, shape_map.FindKey(index))
+        group = compound([shape_map.FindKey(index) for index in sorted(group_indices)])
         # **毎パスで形状全体を捨ててから測る**(残っていると「十分細かい」と見なされて測り直さない)。
         BRepTools.Clean_s(shape)
-        passes.append(kernel_meshing.mesh_shape(compound, float(dev), float(angle)))
+        passes.append(kernel_meshing.mesh_shape(group, float(dev), float(angle)))
         # **次のパスで Clean_s する前に**抜き出す。
         for index in sorted(group_indices):
             face = TopoDS.Face_s(shape_map.FindKey(index))
@@ -999,12 +1063,8 @@ def extrude_face_on_shape(
         raise ValueError("distance must not be 0 (押し出し量0は形状を変えない)")
 
     shape_map = _face_map(shape)
-    if not 1 <= int(face_index) <= shape_map.Extent():
-        raise ValueError(
-            f"face index out of range: {face_index} (1..{shape_map.Extent()})"
-        )
+    face = _face_at(shape_map, face_index)
     face_index = int(face_index)
-    face = TopoDS.Face_s(shape_map.FindKey(face_index))
 
     kind = classify_face(face)
     if kind != "plane":
@@ -1036,31 +1096,15 @@ def extrude_face_on_shape(
     )
     builder.Build()
     operation = "fuse" if distance > 0 else "cut"
+    context = f"face {face_index}, distance={distance}"
     if not builder.IsDone():
         raise ValueError(f"{operation} failed for face {face_index} (distance={distance})")
     result = builder.Shape()
-    if result is None or result.IsNull():
-        raise ValueError(f"{operation} produced an empty shape (face {face_index})")
+    volume_result = _checked_volume(result, operation, volume_before=volume_before, context=context)
 
-    volume_result = volume(result)
-    if volume_result <= 0:
-        raise ValueError(
-            f"{operation} left nothing solid (volume={volume_result}, face {face_index})"
-        )
-    if abs(volume_result - volume_before) <= 1e-9 * max(1.0, abs(volume_before)):
-        # OCCTは「成功したが何も起きていない」を返せる。ここで止めないと静かに空振りする。
-        raise ValueError(
-            f"{operation} did not change the shape "
-            f"(volume {volume_before} -> {volume_result}, face {face_index}, distance={distance})"
-        )
-
+    # 順序は 無変化 → 統合 → BRepCheck。統合は入力の形状を壊しうるので、検査は統合後の `final` に対して行う。
     final, history, unified = _unify_same_domain(result, volume_result)
-    if not BRepCheck_Analyzer(final).IsValid():
-        # ここまでの検査を全部通っても壊れていることがある(曲面の掃引で実測)。最後の関門。
-        raise ValueError(
-            f"{operation} produced an invalid shape "
-            f"(BRepCheck, face {face_index}, distance={distance})"
-        )
+    _require_valid(final, operation, context)
     final_map = _face_map(final)
 
     successors: dict = {}
@@ -1069,23 +1113,18 @@ def extrude_face_on_shape(
         candidates = _shape_list(builder, "Modified", old_face)
         if not candidates and not _is_removed(builder, old_face):
             candidates = [old_face]  # ブーリアンが触らなかった面は同じ形状として残る
-        resolved: List[int] = []
-        for candidate in candidates:
-            for survivor in _through_history(history, candidate):
-                position = final_map.FindIndex(survivor)
-                if position > 0 and position not in resolved:
-                    resolved.append(position)
-        successors[str(index)] = resolved
+        successors[str(index)] = _positions_in(
+            final_map,
+            (survivor for candidate in candidates for survivor in _through_history(history, candidate)),
+        )
 
-    mapped = {position for positions in successors.values() for position in positions}
+    # キーの順番は操作ログに保存される(`Operation.provenance`)ので変えない。
     provenance = {
         "verb": "extrude_face",
         "face_index": face_index,
         "distance": distance,
         "unified": unified,
-        "face_map": successors,
-        "deleted": [int(key) for key, value in successors.items() if not value],
-        "new_faces": [i for i in range(1, final_map.Extent() + 1) if i not in mapped],
+        **_face_map_projection(successors, final_map.Extent()),
         "after_face_index": None,
     }
 
@@ -1134,7 +1173,11 @@ def require_planar_face(shape: "TopoDS_Shape", face_index: int) -> Any:
 
 def face_of(shape: "TopoDS_Shape", face_index: int) -> Any:
     """形状の1始まり添字の面を返す。範囲外は ValueError。"""
-    shape_map = _face_map(shape)
+    return _face_at(_face_map(shape), face_index)
+
+
+def _face_at(shape_map: "TopTools_IndexedMapOfShape", face_index: int) -> Any:
+    """既に作った面マップから引く(まとめて引くときにマップを作り直さないため。辺の `_edge_at` と同じ形)。"""
     if not 1 <= int(face_index) <= shape_map.Extent():
         raise ValueError(
             f"face index out of range: {face_index} (1..{shape_map.Extent()})"
@@ -1323,15 +1366,7 @@ def extrude_regions(
             )
         prisms.append(prism_shape)
 
-    combined = prisms[0]
-    for other in prisms[1:]:
-        fused = BRepAlgoAPI_Fuse(combined, other)
-        fused.Build()
-        if not fused.IsDone():
-            raise ValueError("failed to fuse region prisms")
-        combined = fused.Shape()
-        if combined is None or combined.IsNull():
-            raise ValueError("fusing region prisms produced an empty shape")
+    combined = _fuse_all(prisms, "region prisms")
 
     volume_before: Optional[float] = None
     if mode in ("join", "new"):
@@ -1345,7 +1380,6 @@ def extrude_regions(
             if not builder.IsDone():
                 raise ValueError("join (fuse) failed")
             result = builder.Shape()
-            operation = "fuse"
     else:
         volume_before = volume(target_shape)
         builder = BRepAlgoAPI_Cut(target_shape, combined)
@@ -1353,22 +1387,10 @@ def extrude_regions(
         if not builder.IsDone():
             raise ValueError("cut failed")
         result = builder.Shape()
-        operation = "cut"
 
-    if result is None or result.IsNull():
-        raise ValueError(f"{mode} produced an empty shape")
-
-    volume_after = volume(result)
-    if volume_after <= 0:
-        raise ValueError(f"{mode} left nothing solid (volume={volume_after})")
-    if volume_before is not None:
-        if abs(volume_after - volume_before) <= 1e-9 * max(1.0, abs(volume_before)):
-            raise ValueError(
-                f"{operation} did not change the shape "
-                f"(volume {volume_before} -> {volume_after})"
-            )
-    if not BRepCheck_Analyzer(result).IsValid():
-        raise ValueError(f"{mode} produced an invalid shape (BRepCheck)")
+    # 無変化の検査は相手があるときだけ(`volume_before` が None なら飛ぶ)。
+    volume_after = _checked_volume(result, mode, volume_before=volume_before)
+    _require_valid(result, mode)
 
     return {
         "shape": result,
@@ -1381,9 +1403,7 @@ def is_solid(shape: Any) -> bool:
     """形状に SOLID が1個以上含まれるか(`split_solids` と同じ数え方)。"""
     if shape is None or shape.IsNull():
         return False
-    shape_map = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_SOLID, shape_map)
-    return shape_map.Extent() > 0
+    return indexed_map(shape, TopAbs_ShapeEnum.TopAbs_SOLID).Extent() > 0
 
 
 def boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) -> dict:
@@ -1401,15 +1421,7 @@ def boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) -> 
     if mode not in ("union", "cut", "intersect"):
         raise ValueError(f"unknown boolean mode: {mode!r}")
 
-    combined = tool_shapes[0]
-    for other in tool_shapes[1:]:
-        fused = BRepAlgoAPI_Fuse(combined, other)
-        fused.Build()
-        if not fused.IsDone():
-            raise ValueError("failed to fuse tool shapes")
-        combined = fused.Shape()
-        if combined is None or combined.IsNull():
-            raise ValueError("fusing tool shapes produced an empty shape")
+    combined = _fuse_all(tool_shapes, "tool shapes")
 
     volume_before = volume(target_shape)
     if mode == "union":
@@ -1422,210 +1434,15 @@ def boolean_bodies(target_shape: Any, tool_shapes: Sequence[Any], mode: str) -> 
     if not builder.IsDone():
         raise ValueError(f"{mode} failed")
     result = builder.Shape()
-
-    if result is None or result.IsNull():
-        raise ValueError(f"{mode} produced an empty shape")
-
-    volume_after = volume(result)
-    if volume_after <= 0:
-        raise ValueError(f"{mode} left nothing solid (volume={volume_after})")
-    if not BRepCheck_Analyzer(result).IsValid():
-        raise ValueError(f"{mode} produced an invalid shape (BRepCheck)")
+    # 無変化は検査しない(`volume_before` を渡さない): 同じ体積で形だけ変わる intersect がある。
+    volume_after = _checked_volume(result, mode)
+    _require_valid(result, mode)
 
     return {
         "shape": result,
         "volume_before": volume_before,
         "volume_after": volume_after,
     }
-
-
-def require_valid_solid(shape: "TopoDS_Shape") -> None:
-    """`shape` が非空かつ `BRepCheck_Analyzer` 上妥当でなければ `ValueError`。
-
-    `boxes_common_volume` はこの検査を通す前に体積を計算しない(不正な形状から
-    もっともらしい数値を返さない)。呼び出し側が事前に確認する場合も同じ判定に揃えられる。
-    """
-    if shape is None or shape.IsNull() or not BRepCheck_Analyzer(shape).IsValid():
-        raise ValueError("shape is null or not a valid solid")
-
-
-def _common_with_box(shape: "TopoDS_Shape", lo: Sequence[float], hi: Sequence[float]):
-    """`shape` と軸整列直方体1つの共通部分と、その体積。`BOPAlgo_BOP`(`SetFuzzyValue(0.0)`、あいまい判定を
-    入れない)で `BOPAlgo_COMMON` を取り、エラー・警告・不正な結果は例外にする(黙って0を積まない)。"""
-    box = BRepPrimAPI_MakeBox(gp_Pnt(*lo), gp_Pnt(*hi)).Shape()
-    operation = BOPAlgo_BOP()
-    operation.AddArgument(shape)
-    operation.AddTool(box)
-    operation.SetOperation(BOPAlgo_Operation.BOPAlgo_COMMON)
-    operation.SetFuzzyValue(0.0)
-    operation.Perform()
-    if operation.HasErrors() or operation.HasWarnings():
-        raise RuntimeError("common-volume boolean did not finish cleanly")
-    result = operation.Shape()
-    if result is None or result.IsNull() or not BRepCheck_Analyzer(result).IsValid():
-        raise RuntimeError("common-volume boolean produced an invalid shape")
-    piece = volume(result)
-    if not math.isfinite(piece) or piece < 0:
-        raise RuntimeError("common volume is not finite/non-negative")
-    return result, piece
-
-
-def box_common_volume(
-    shape: "TopoDS_Shape", lo: Sequence[float], hi: Sequence[float]
-) -> float:
-    """`shape` と軸整列直方体1つ(`(min, max)` の mm 座標)の共通体積。重ならなければ 0.0。
-    取り方とエラーの扱いは `_common_with_box`。**`shape` の妥当性は見ない** —— 何度も呼ぶ側が
-    `require_valid_solid` を1回だけ通しておく。
-    """
-    return _common_with_box(shape, lo, hi)[1]
-
-
-#: `grid_cell_common_volumes` が「塊の中身が全部ソリッド」とみなす、塊の中の体積 / 塊の体積 の下限。
-#: 届かなければ切り分けに進むだけで、値は変わらない。
-_FULL_BLOCK_RATIO = 1.0 - 1e-12
-
-#: 同じ体積を2つの方法で求めた値(破片の合計と、切る前の塊の中の体積。塊の中の体積を切る方法とブーリアンで
-#: 取ったもの)が、この相対差を超えて食い違ったら失敗にする。**実測**(hanger、要素4.8mm、8セル角の塊):
-#: 相対差は最大 1.1e-6(曲面が斜めに切れた大きな円筒の塊)。既定の積分は曲面の破片で 1e-6 ほど
-#: ずれる(適応積分 `Eps=1e-12` との差)ので、これより厳しくすると正しい切り分けを落とす。一方、
-#: 破片を1つ落とせばこの桁より遥かに大きくずれる。
-_SPLIT_VOLUME_RTOL = 1e-5
-
-#: 切り分けた破片は1セルに収まるはずで、セルの体積を(既定の積分の誤差を見込んで)これ以上の割合で超える破片は、
-#: 平面で切れていない。重心でセルを決めているので、切れていない破片は別のセルへ振り分けられてしまう。
-_FULL_CELL_LIMIT = 1.0 + 1e-6
-
-
-def _axis_planes(lo: Sequence[float], hi: Sequence[float], positions, reach: float) -> "TopTools_ListOfShape":
-    """軸に垂直な平面の面。`positions[axis]` がその軸の平面の座標。面は直方体 `[lo, hi]` の中心から
-    `reach` の半幅で広がる(切りたい形状の端まで届く大きさにすること)。"""
-    center = [(lo[a] + hi[a]) / 2.0 for a in range(3)]
-    half = reach
-    planes = TopTools_ListOfShape()
-    for axis in range(3):
-        normal = [0.0, 0.0, 0.0]
-        normal[axis] = 1.0
-        for coordinate in positions[axis]:
-            origin = list(center)
-            origin[axis] = coordinate
-            plane = gp_Pln(gp_Pnt(*origin), gp_Dir(*normal))
-            planes.Append(BRepBuilderAPI_MakeFace(plane, -half, half, -half, half).Face())
-    return planes
-
-
-def _split_by_planes(argument: "TopoDS_Shape", planes: "TopTools_ListOfShape") -> "TopoDS_Shape":
-    splitter = BOPAlgo_Splitter()
-    splitter.AddArgument(argument)
-    splitter.SetTools(planes)
-    splitter.SetFuzzyValue(0.0)
-    splitter.Perform()
-    # 警告は見ない: 曲面を斜めに切ると `BOPAlgo_AlertFaceBuilderUnusedEdges` が出るが、体積は合っている
-    # (実測: 警告の出た塊で破片の合計は切る前の体積に 1.6e-8 で一致)。取りこぼしは呼び出し側の合計の検算が拾う。
-    if splitter.HasErrors():
-        raise RuntimeError("cell split boolean failed")
-    return splitter.Shape()
-
-
-def _solids(shape: "TopoDS_Shape"):
-    explorer = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_SOLID)
-    while explorer.More():
-        yield explorer.Current()
-        explorer.Next()
-
-
-def _mass_and_center(solid: "TopoDS_Shape"):
-    props = GProp_GProps()
-    BRepGProp.VolumeProperties_s(solid, props)
-    mass = props.Mass()
-    if not math.isfinite(mass) or mass < 0:
-        raise RuntimeError("cell piece volume is not finite/non-negative")
-    point = props.CentreOfMass()
-    return mass, (point.X(), point.Y(), point.Z())
-
-
-def grid_cell_common_volumes(
-    shape: "TopoDS_Shape", lo: Sequence[float], spacing: float, counts: Sequence[int]
-) -> Tuple[str, Dict[Tuple[int, int, int], float]]:
-    """`shape` と、`lo` を最小角とする `counts`(x, y, z)個の立方体セル(一辺 `spacing`)の塊との
-    共通体積を、**セルごとに**求める。
-
-    戻り値は `(kind, volumes)`。`kind` は `'empty'`(塊と重ならない。`volumes` は空)/ `'full'`
-    (塊が全部ソリッドの中。全セルが `spacing³`。`volumes` は空)/ `'partial'`(`volumes` に
-    塊内の添字 `(i, j, k)` → 共通体積。重ならないセルは入れない)。
-
-    やり方は「`shape` を平面で切って、破片を重心のあるセルへ振り分ける」。まず塊の6面で切って塊の中の
-    破片を取り(空・全部の判定はここ)、境界にかかる塊だけをセルの境界面で切り分ける。
-    **セルごとにブーリアン(`box_common_volume` をセル数だけ)を取らない**。理由は2つ。
-    (1) セルの面が形状の継ぎ目(円筒のシームなど)のすぐそばに来ると、共通部分が空という誤った答えを
-    **エラーも警告も出さずに**返す(実測: hanger の円板ソリッド〈体積1048mm³〉でセル単位の合計が
-    1030.58mm³、17.4mm³ を落とした)。平面で切る方法は同じ形状で体積を落とさなかった。
-    (2) 曲面との交線をセルごとに計算し直さないので桁違いに速い(実測: 曲面のソリッドの364セルの塊が、
-    セルごとのブーリアンで約30秒、平面で切って約1秒)。
-    **`shape` の妥当性は見ない**(`require_valid_solid` は呼び出し側が1回だけ通す)。
-    """
-    counts = tuple(int(n) for n in counts)
-    lo = tuple(float(v) for v in lo)
-    hi = tuple(lo[a] + counts[a] * spacing for a in range(3))
-    # 面は形状の端まで届く大きさにする。届かないと、切り口の回り込みで塊の外の残り全部が1つの破片に
-    # つながり、その重心が塊の中に落ちることがある(実測: 853×50×695mm の箱を8セル角の塊で切ったとき、
-    # 残りの破片の重心が塊の中に落ちて、体積を2960万mm³ 余計に数えた)。全部届けば、破片は6面で分けた
-    # 27個の直方体領域のどれか1つに収まり(直方体は凸)、重心はその領域の中にある。
-    span = Bnd_Box()
-    BRepBndLib.Add_s(shape, span, False)
-    extent = span.Get()
-    reach = max(abs(extent[a + side] - (lo[a] + hi[a]) / 2.0) for a in range(3) for side in (0, 3))
-    reach += math.dist(lo, hi)
-    inside, inside_volume = [], 0.0
-    for solid in _solids(_split_by_planes(shape, _axis_planes(lo, hi, [(lo[a], hi[a]) for a in range(3)], reach))):
-        mass, center = _mass_and_center(solid)
-        if all(lo[a] < center[a] < hi[a] for a in range(3)):
-            inside.append(solid)
-            inside_volume += mass
-    block = math.prod(counts) * spacing ** 3
-    # 切る方法だけに頼らない: 塊の中の体積をブーリアンでも取り、食い違えば失敗にする。塊の面が継ぎ目の
-    # すぐそばに来ると、切る方法もブーリアンも黙って体積を落とすことがある(実測: 2セル角の塊で、円板の
-    # 体積が切る方法で1.4%、ブーリアンで20%落ちた)が、落とし方が違うので食い違いで見つかる。
-    common = box_common_volume(shape, lo, hi)
-    if abs(common - inside_volume) > _SPLIT_VOLUME_RTOL * max(common, inside_volume) + 1e-12 * block:
-        raise RuntimeError("block volume inside the shape disagrees between cutting and boolean common")
-    if not inside or inside_volume == 0.0:
-        return "empty", {}
-    if inside_volume >= _FULL_BLOCK_RATIO * block:
-        return "full", {}
-    compound, builder = TopoDS_Compound(), BRep_Builder()
-    builder.MakeCompound(compound)
-    for solid in inside:
-        builder.Add(compound, solid)
-    cells = _split_by_planes(compound, _axis_planes(
-        lo, hi, [[lo[a] + m * spacing for m in range(1, counts[a])] for a in range(3)], math.dist(lo, hi)))
-    volumes: Dict[Tuple[int, int, int], float] = {}
-    for solid in _solids(cells):
-        mass, center = _mass_and_center(solid)
-        if mass > _FULL_CELL_LIMIT * spacing ** 3:
-            raise RuntimeError("cell piece is larger than a cell: a cutting plane did not split it")
-        cell = tuple(min(counts[a] - 1, max(0, math.floor((center[a] - lo[a]) / spacing))) for a in range(3))
-        volumes[cell] = volumes.get(cell, 0.0) + mass
-    if abs(sum(volumes.values()) - inside_volume) > _SPLIT_VOLUME_RTOL * inside_volume:
-        raise RuntimeError("cell pieces do not add up to the block's volume inside the shape")
-    return "partial", volumes
-
-
-def boxes_common_volume(
-    shape: "TopoDS_Shape",
-    boxes: Sequence[Tuple[Sequence[float], Sequence[float]]],
-) -> float:
-    """`shape` と、軸整列直方体群(各要素は `(min, max)` の mm 座標)の共通体積の合計。
-
-    `boxes` は**互いに体積を共有しない**ことを呼び出し側が保証する(重なりがあると
-    合計が二重に数えられる)。トポロジー最適化の平滑化前受入検査が、材料マスクを
-    セル中心の内外近似ではなくOCCTの厳密なブーリアンでCADと比較するために使う
-    ——境界に接するセルを、近似では漏らす/拾いすぎる。各箱の取り方は `box_common_volume`。
-    """
-    require_valid_solid(shape)
-    overlap = 0.0
-    for lo, hi in boxes:
-        overlap += box_common_volume(shape, lo, hi)
-    return overlap
 
 
 def _ax3_from_plane(plane: dict, face: Any = None) -> "gp_Ax3":
@@ -1810,6 +1627,12 @@ def _edges_arc(ax3: "gp_Ax3", params: dict) -> List[Any]:
     return [maker.Edge()]
 
 
+#: 3次ベジエの `params` のキー(**始点・制御点1・制御点2・終点の順**)。**この並びが唯一の正**で、
+#: `sketch.BEZIER_KEYS` / `sketch._bezier_points` / `sketch` の表の `points` はここから導く
+#: (`sketch` が `kernel` を import する向きなので、正は kernel 側に置く)。
+BEZIER_POINT_KEYS = (("x0", "y0"), ("cx1", "cy1"), ("cx2", "cy2"), ("x1", "y1"))
+
+
 def _edges_bezier(ax3: "gp_Ax3", params: dict) -> List[Any]:
     """3次ベジエを**厳密に**1本の辺にする(折れ線へ落とさない)。
 
@@ -1818,9 +1641,7 @@ def _edges_bezier(ax3: "gp_Ax3", params: dict) -> List[Any]:
     曲線は曲線のまま `Geom_BezierCurve` へ渡す。
     """
     points = TColgp_Array1OfPnt(1, 4)
-    for index, (key_x, key_y) in enumerate(
-        (("x0", "y0"), ("cx1", "cy1"), ("cx2", "cy2"), ("x1", "y1")), start=1
-    ):
+    for index, (key_x, key_y) in enumerate(BEZIER_POINT_KEYS, start=1):
         points.SetValue(
             index, _to_pnt(ax3, float(params[key_x]), float(params[key_y]))
         )
@@ -1894,8 +1715,8 @@ def _bbox_bezier(params: dict) -> Tuple[float, float, float, float]:
     ここのbboxが使われるのは `sketch_regions` が分割用の補助面をどれだけ大きく作るかの
     決定だけなので、広い側に外れても結果は変わらない。
     """
-    xs = [float(params[key]) for key in ("x0", "cx1", "cx2", "x1")]
-    ys = [float(params[key]) for key in ("y0", "cy1", "cy2", "y1")]
+    xs = [float(params[key_x]) for key_x, _ in BEZIER_POINT_KEYS]
+    ys = [float(params[key_y]) for _, key_y in BEZIER_POINT_KEYS]
     return (min(xs), max(xs), min(ys), max(ys))
 
 
@@ -1998,8 +1819,7 @@ def _face_vertices_inside_bbox_2d(
     tol: float,
 ) -> bool:
     """面の頂点がすべて 2D bbox(+tol) の内側なら True(補助面の余りを落とす)。"""
-    shape_map = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(TopoDS.Face_s(face), TopAbs_ShapeEnum.TopAbs_VERTEX, shape_map)
+    shape_map = indexed_map(TopoDS.Face_s(face), TopAbs_ShapeEnum.TopAbs_VERTEX)
     if shape_map.Extent() < 1:
         return False
     for index in range(1, shape_map.Extent() + 1):
@@ -2088,12 +1908,9 @@ def tessellate_edges(
     退化した曲線では例外を投げる)。**分割に失敗した辺は端点だけの2点で返す**(黙って
     落とすと、その辺だけ画面から消えて「指せない辺」になり原因が分からない)。
     """
-    if shape is None or shape.IsNull():
-        raise ValueError("cannot tessellate the edges of an empty shape")
-    if not deviation > 0:
-        raise ValueError(f"deviation must be positive (mm), got {deviation!r}")
-    if not angular_deflection > 0:
-        raise ValueError(f"angular_deflection must be positive, got {angular_deflection!r}")
+    _check_tessellation_args(
+        shape, deviation, angular_deflection, target="the edges of an empty shape"
+    )
 
     shape_map = _edge_map(shape)
     described: List[dict] = []
@@ -2143,11 +1960,7 @@ def _edge_at(shape_map: "TopTools_IndexedMapOfShape", edge_index: int) -> Any:
 def _vertex_map(shape: "TopoDS_Shape") -> "TopTools_IndexedMapOfShape":
     """頂点の重複除去済みマップ(1始まり)。**`count_subshapes(shape, "vertex")` と同じ
     数え方**であり、その添字が `selection.select_vertex` の識別子そのものになる。"""
-    if shape is None or shape.IsNull():
-        raise ValueError("cannot map the vertices of an empty shape")
-    shape_map = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_VERTEX, shape_map)
-    return shape_map
+    return _subshape_map(shape, "vertex")
 
 
 def vertex_positions(shape: "TopoDS_Shape") -> List[dict]:
@@ -2237,13 +2050,9 @@ def _blend_edges(shape: "TopoDS_Shape", values: dict, verb: str) -> dict:
         )
 
     final = maker.Shape()
-    if final is None or final.IsNull():
-        raise ValueError(f"{verb} produced an empty shape (edges {edge_indices})")
-    volume_after = volume(final)
-    if volume_after <= 0:
-        raise ValueError(f"{verb} left nothing solid (volume={volume_after})")
-    if not BRepCheck_Analyzer(final).IsValid():
-        raise ValueError(f"{verb} produced an invalid shape (BRepCheck, edges {edge_indices})")
+    context = f"edges {edge_indices}"
+    volume_after = _checked_volume(final, verb, context=context)
+    _require_valid(final, verb, context)
 
     return {
         "shape": final,
@@ -2294,19 +2103,9 @@ def _face_successors(maker: Any, shape: "TopoDS_Shape", final: "TopoDS_Shape") -
         if candidates is None:
             # アダプタが「触っていない」と言った面は、そのまま残っているはず
             candidates = [] if _contains_identity(deleted_inputs, old_face) else [old_face]
-        resolved: List[int] = []
-        for candidate in candidates:
-            position = final_map.FindIndex(candidate)
-            if position > 0 and position not in resolved:
-                resolved.append(position)
-        successors[str(index)] = resolved
+        successors[str(index)] = _positions_in(final_map, candidates)
 
-    mapped = {position for positions in successors.values() for position in positions}
-    return {
-        "face_map": successors,
-        "deleted": [int(key) for key, value in successors.items() if not value],
-        "new_faces": [i for i in range(1, final_map.Extent() + 1) if i not in mapped],
-    }
+    return _face_map_projection(successors, final_map.Extent())
 
 
 # --------------------------------------------------------------------------------------
@@ -2444,9 +2243,7 @@ def shell_solid(
 
 
 def _solid_count(shape: "TopoDS_Shape") -> int:
-    shape_map = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_SOLID, shape_map)
-    return shape_map.Extent()
+    return indexed_map(shape, TopAbs_ShapeEnum.TopAbs_SOLID).Extent()
 
 
 def _repaired_once(shape: "TopoDS_Shape", expected_volume: float) -> Optional["TopoDS_Shape"]:
@@ -2482,11 +2279,7 @@ def _contains_identity(shapes: Sequence[Any], key: Any) -> bool:
 
 def _edge_map(shape: "TopoDS_Shape") -> "TopTools_IndexedMapOfShape":
     """辺の重複除去済みマップ(1始まり)。添字が選択の識別子になるので数え方はここに固定する。"""
-    if shape is None or shape.IsNull():
-        raise ValueError("cannot map the edges of an empty shape")
-    shape_map = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE, shape_map)
-    return shape_map
+    return _subshape_map(shape, "edge")
 
 
 # --------------------------------------------------------------------------------------
@@ -2503,8 +2296,7 @@ def split_solids(shape: "TopoDS_Shape") -> List["TopoDS_Shape"]:
     """
     if shape is None or shape.IsNull():
         raise ValueError("cannot split an empty shape")
-    shape_map = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_SOLID, shape_map)
+    shape_map = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_SOLID)
     if shape_map.Extent() == 0:
         return [shape]
     return [
@@ -2517,24 +2309,24 @@ def make_compound(shapes: Sequence["TopoDS_Shape"]) -> "TopoDS_Shape":
     """複数の形状を1つの TopoDS_Compound へまとめる(複数Bodyを1つのSTEP/STLへ書き出すため)。"""
     if not shapes:
         raise ValueError("cannot build a compound from an empty sequence of shapes")
-    builder = BRep_Builder()
-    compound = TopoDS_Compound()
-    builder.MakeCompound(compound)
-    for shape in shapes:
-        builder.Add(compound, shape)
-    return compound
+    return compound(shapes)
 
 
 # --------------------------------------------------------------------------------------
 # 内部ヘルパ
 # --------------------------------------------------------------------------------------
-def _face_map(shape: "TopoDS_Shape") -> "TopTools_IndexedMapOfShape":
-    """面の重複除去済みマップ(1始まり)。添字が選択の識別子になるので数え方はここに固定する。"""
+def _subshape_map(shape: "TopoDS_Shape", kind: str) -> "TopTools_IndexedMapOfShape":
+    """`kind`("face" | "edge" | "vertex")の重複除去済みマップ(1始まり)。**添字が選択の識別子になる**
+    ので数え方はここ1箇所に固定する。null は ValueError(`count_subshapes` と違って 0 を返さない)。"""
+    enum, plural = _SUBSHAPE_KINDS[kind]
     if shape is None or shape.IsNull():
-        raise ValueError("cannot map the faces of an empty shape")
-    shape_map = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_FACE, shape_map)
-    return shape_map
+        raise ValueError(f"cannot map the {plural} of an empty shape")
+    return indexed_map(shape, enum)
+
+
+def _face_map(shape: "TopoDS_Shape") -> "TopTools_IndexedMapOfShape":
+    """面の重複除去済みマップ(1始まり)。"""
+    return _subshape_map(shape, "face")
 
 
 def _face_normal(face: Any) -> tuple:
@@ -2602,13 +2394,7 @@ def _bounding_box(faces: List[dict]) -> dict:
                 highs[axis] = max(highs[axis], value)
     if any(low == float("inf") for low in lows):
         lows, highs = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
-    diagonal = math.dist(lows, highs)
-    return {
-        "min": lows,
-        "max": highs,
-        "center": [(lows[i] + highs[i]) / 2.0 for i in range(3)],
-        "diagonal": diagonal,
-    }
+    return meshbody.bbox_payload(lows, highs)
 
 
 def _unify_same_domain(shape: "TopoDS_Shape", volume_before: float) -> tuple:

@@ -19,7 +19,7 @@ import math
 import numpy as np
 from scipy import ndimage
 
-from duocad import kernel
+from duocad import kernel, kernel_brep
 
 from . import anchor, fem, stress, voxelize
 from .anchor import active_nodes  # noqa: F401  6条件と探索用の確定表が同じ「材料に接する節点」の定義を使う
@@ -172,19 +172,19 @@ def _material_boxes_within_bbox(material, grid, shape, *, cache=None):
 
 
 def intersection_volume(material, grid, shape, *, cache=None):
-    """セル中心近似を使わず、材料セルとCADの共通体積を合計する(kernel.boxes_common_volume)。
+    """セル中心近似を使わず、材料セルとCADの共通体積を合計する(kernel_brep.boxes_common_volume)。
 
     `cache` に `duocad.kernel.BoundingBoxCache`(既定 `document.bbox_cache`)を渡すと、
     同じCAD形状のbbox測り直しを避ける。**測り方自体は変わらない**ので、`cache=None` と
     渡した場合とで体積は一致する(この一致は検査で固定してある)。
     """
     shape = getattr(shape, 'wrapped', shape)
-    kernel.require_valid_solid(shape)
+    kernel_brep.require_valid_solid(shape)
     total = float(kernel.volume(shape))
     if not np.isfinite(total) or total <= 0:
         raise ValueError('条件CADに正の体積がない')
     boxes = _material_boxes_within_bbox(material, grid, shape, cache=cache)
-    overlap = kernel.boxes_common_volume(shape, boxes)
+    overlap = kernel_brep.boxes_common_volume(shape, boxes)
     return total, overlap
 
 
@@ -203,7 +203,7 @@ class _CellOverlaps:
 
     def __init__(self, grid, shape, *, cache=None):
         self.shape = getattr(shape, 'wrapped', shape)
-        kernel.require_valid_solid(self.shape)
+        kernel_brep.require_valid_solid(self.shape)
         self.total = float(kernel.volume(self.shape))
         if not np.isfinite(self.total) or self.total <= 0:
             raise ValueError('条件CADに正の体積がない')
@@ -228,7 +228,7 @@ class _CellOverlaps:
         stop = np.minimum(start + TILE_CELLS, self.values.shape)
         counts = stop - start
         corner = self.origin + self.spacing * (self.lo + start)
-        kind, volumes = kernel.grid_cell_common_volumes(self.shape, corner.tolist(), self.spacing, counts.tolist())
+        kind, volumes = kernel_brep.grid_cell_common_volumes(self.shape, corner.tolist(), self.spacing, counts.tolist())
         window = tuple(slice(int(a), int(b)) for a, b in zip(start, stop))
         if kind == 'full':
             self.values[window] = self.spacing ** 3

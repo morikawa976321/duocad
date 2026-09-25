@@ -61,7 +61,7 @@ import os
 import sys
 import webbrowser
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from websockets.asyncio.server import serve
 
@@ -76,7 +76,6 @@ from . import (
     selection,
     sketch,
 )
-from .document import Document
 from .session import DocumentBusy
 from .server import (
     DEFAULT_WEB_DIST,
@@ -1034,25 +1033,17 @@ class DocumentTools:
         `{"path", "bytes", "body_ids", "skipped_hidden"}` を返す —— AIは自分でファイルを
         確かめられないので、戻り値が唯一の確認手段である。
         """
-        return self._export(path, io_step.export_step)
+        return self._export(path, "step")
 
     def export_stl(self, path: str) -> dict:
         """STLを書き出す。粗さは `io_step.STL_DEVIATION` 固定(人の画面にも入力欄は無い)。
         対象は export_step と同じ(いま表示中のBodyだけ・引数で選べない)。"""
-        return self._export(path, io_step.export_stl)
+        return self._export(path, "stl")
 
-    def _export(self, path: str, write: Callable[[Document, Path], Any]) -> dict:
-        document = self.session.document
-        target = Path(path)
-        resolved = io_step.export_body_ids(document)
-        skipped = io_step.export_skipped_hidden(document)
-        write(document, target)
-        return {
-            "path": str(target),
-            "bytes": target.stat().st_size,
-            "body_ids": list(resolved),
-            "skipped_hidden": list(skipped),
-        }
+    def _export(self, path: str, fmt: str) -> dict:
+        """**パスは素通し**(`Session` と違って作業ディレクトリ基準に解決せず、ディレクトリも検査しない。
+        相対パスは相対のまま応答に出る)。"""
+        return io_step.export(self.session.document, Path(path), fmt)
 
     # ------------------------------------------------------------------ 履歴
     def undo(self) -> dict:

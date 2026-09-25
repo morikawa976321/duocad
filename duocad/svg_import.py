@@ -156,9 +156,14 @@ def _translate_segment(segment: Any, height: float, scale: float) -> List[dict]:
     return []  # 未知のセグメント種別は落とす(パーサの版が増やしても壊れない)
 
 
+def _flip(x: float, y: float, height: float, scale: float) -> Tuple[float, float]:
+    """SVGの (x, y) をスケッチの (u, v) へ。**ここだけがY反転と倍率を知っている**。"""
+    return (x * scale, (height - y) * scale)
+
+
 def _point(value: Any, height: float, scale: float) -> Tuple[float, float]:
-    """SVGの点をスケッチの (u, v) へ。**ここだけがY反転と倍率を知っている**。"""
-    return (float(value.x) * scale, (height - float(value.y)) * scale)
+    """svgelements の点(`.x` / `.y`)を `_flip` へ。"""
+    return _flip(float(value.x), float(value.y), height, scale)
 
 
 def _line_entity(segment: Any, height: float, scale: float) -> List[dict]:
@@ -299,7 +304,7 @@ def _elliptical_arc_entities(segment: Any, height: float, scale: float) -> List[
         )
 
     def flip(point: Tuple[float, float]) -> Tuple[float, float]:
-        return (point[0] * scale, (height - point[1]) * scale)
+        return _flip(point[0], point[1], height, scale)
 
     entities: List[dict] = []
     for index in range(count):

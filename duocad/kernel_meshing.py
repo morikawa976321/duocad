@@ -42,9 +42,9 @@ from OCP.Precision import Precision
 from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
 from OCP.TopExp import TopExp
 from OCP.TopoDS import TopoDS
-from OCP.TopTools import TopTools_IndexedMapOfShape
 
 from . import boundary_check
+from .mesh_geometry import indexed_map
 
 #: 再分割の反復上限の既定。実測(docs/TOPOPT_GAP_CAUSALITY.md「案Aの実装」)で決める仮置き。
 DEFAULT_MAX_ROUNDS = 12
@@ -90,12 +90,9 @@ class _Model:
     def __init__(self, context: IMeshTools_Context, shape):
         self.context = context
         self.model = context.GetModel()
-        self.face_map = TopTools_IndexedMapOfShape()
-        TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_FACE, self.face_map)
-        edge_map = TopTools_IndexedMapOfShape()
-        TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_EDGE, edge_map)
-        vertex_map = TopTools_IndexedMapOfShape()
-        TopExp.MapShapes_s(shape, TopAbs_ShapeEnum.TopAbs_VERTEX, vertex_map)
+        self.face_map = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+        edge_map = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_EDGE)
+        vertex_map = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_VERTEX)
         self.faces = [self.model.GetFace(i) for i in range(self.model.FacesNb())]
         self.face_ids = [self.face_map.FindIndex(df.GetFace()) for df in self.faces]
         self.edges = [self.model.GetEdge(i) for i in range(self.model.EdgesNb())]

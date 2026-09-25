@@ -1,4 +1,9 @@
-"""三角形境界の接続検査と、向き・空洞を保ったCADソリッド化。"""
+"""三角形境界の接続検査と、向き・空洞を保ったCADソリッド化。
+
+位相の列挙(`subshapes` / `indexed_map`)と compound の組み立て(`compound`)もここに置く ——
+カーネル層の最下位で、`kernel` と `kernel_meshing` のどちらからも循環せずに import できる
+(`kernel_meshing` は `kernel` を import できない)。
+"""
 from collections import defaultdict
 import numpy as np
 from OCP.BOPAlgo import BOPAlgo_CheckerSI
@@ -12,30 +17,24 @@ from OCP.BRepClass3d import BRepClass3d_SolidClassifier
 from OCP.BRepLib import BRepLib
 from OCP.Precision import Precision
 from OCP.TopAbs import TopAbs_IN, TopAbs_OUT, TopAbs_SHELL
-from OCP.TopExp import TopExp_Explorer
+from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.TopoDS import TopoDS, TopoDS_Compound
+from OCP.TopTools import TopTools_IndexedMapOfShape
 from OCP.gp import gp_Pnt
 
-from .boundary_check import orient2d
+from .boundary_check import degenerate_mask
 
 TOLERANCE_MM = Precision.Confusion_s()
 
 
 def degenerate_triangles(vertices, faces):
-    """三角形ごとの縮退(面積が厳密に 0)を返す (T,) bool。
-
-    外積の 3 成分はそれぞれ座標軸への射影の orient2d なので、浮動小数点で確定しない組だけ
-    厳密演算へ落とす `orient2d` を 3 回当てる(`np.cross == 0` は丸めで偽の 0 を出しうる)。
-    """
-    tri = np.asarray(vertices, dtype=np.float64)[np.asarray(faces)]
-    zero = np.ones(len(tri), dtype=bool)
-    for drop in range(3):
-        keep = [axis for axis in range(3) if axis != drop]
-        zero &= orient2d(tri[:, 0, keep], tri[:, 1, keep], tri[:, 2, keep]) == 0
-    return zero
+    """三角形ごとの縮退(面積が厳密に 0)を返す (T,) bool(`boundary_check.degenerate_mask`)。"""
+    return degenerate_mask(np.asarray(vertices, dtype=np.float64)[np.asarray(faces)])
 
 
 def subshapes(shape, kind):
+    """`kind`(`TopAbs_ShapeEnum`)の部分形状を `TopExp_Explorer` の走査順で列挙する。**重複を除かない**
+    (隣接2面から同じ辺を2回拾う。重複なしは `indexed_map`)。"""
     result = []
     explorer = TopExp_Explorer(shape, kind)
     while explorer.More():
@@ -104,7 +103,16 @@ def topology(vertices: np.ndarray, faces: np.ndarray) -> tuple[dict, list[list[i
                 duplicate_triangles=duplicates, boundary_components=len(components)), components
 
 
+def indexed_map(shape, kind):
+    """`kind`(`TopAbs_ShapeEnum`)の部分形状を**重複なし**で1始まりに並べた `TopTools_IndexedMapOfShape`
+    (`TopExp.MapShapes_s`)。null の検査はしない(断る文面は呼び出し側が持つ)。"""
+    result = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, kind, result)
+    return result
+
+
 def compound(shapes):
+    """`shapes` を1つの `TopoDS_Compound` にまとめる(空の列も許す。各形はそのまま `Add` する)。"""
     builder, result = BRep_Builder(), TopoDS_Compound()
     builder.MakeCompound(result)
     for shape in shapes:

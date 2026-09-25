@@ -305,19 +305,13 @@ def _center_bezier(params: Dict[str, float]) -> Tuple[float, float]:
     )
 
 
-#: 3次ベジエの `params` のキー(**始点・制御点1・制御点2・終点の順**)。
-#: `_bezier_points` / `_bezier_params` の往復がこの順序を唯一の正とする。
-BEZIER_KEYS = ("x0", "y0", "cx1", "cy1", "cx2", "cy2", "x1", "y1")
+#: 3次ベジエの `params` のキー(**始点・制御点1・制御点2・終点の順**)。正は `kernel.BEZIER_POINT_KEYS`。
+BEZIER_KEYS = tuple(key for pair in kernel.BEZIER_POINT_KEYS for key in pair)
 
 
 def _bezier_points(params: Dict[str, float]) -> List[Tuple[float, float]]:
     """`params` を制御点4つの (x, y) へ。"""
-    return [
-        (float(params["x0"]), float(params["y0"])),
-        (float(params["cx1"]), float(params["cy1"])),
-        (float(params["cx2"]), float(params["cy2"])),
-        (float(params["x1"]), float(params["y1"])),
-    ]
+    return [(float(params[key_x]), float(params[key_y])) for key_x, key_y in kernel.BEZIER_POINT_KEYS]
 
 
 def _bezier_params(points: List[Tuple[float, float]]) -> Dict[str, float]:
@@ -369,7 +363,7 @@ _ENTITY_KIND_TABLE: Dict[str, EntityKindOps] = {
     ),
     "bezier": EntityKindOps(
         _validate_bezier, _translate_bezier, _rotate_bezier, _center_bezier, _mirror_bezier,
-        points=(("x0", "y0"), ("cx1", "cy1"), ("cx2", "cy2"), ("x1", "y1")),
+        points=kernel.BEZIER_POINT_KEYS,
     ),
 }
 
@@ -734,9 +728,7 @@ def resolve_plane(doc: Document, plane: Any) -> dict:
     if isinstance(plane, dict) and plane.get("kind") == "face":
         body_id = plane["body"]
         face_index = int(plane["index"])
-        body = next((candidate for candidate in doc.bodies if candidate.id == body_id), None)
-        if body is None:
-            raise KeyError(f"no such body: {body_id!r}")
+        body = doc.get_body(body_id)
         if body.mesh is not None:
             # **名指しの面参照なので断る**(断り文は `meshbody.reject` へ一元化)。
             from . import meshbody

@@ -196,6 +196,9 @@ class Command:
 # 宣言(**verbを足すのはここ**)
 # --------------------------------------------------------------------------------------
 #: 並び順は `tools/list` に出る順序でもある(AIが最初に読む順)。
+#: スケッチのverbが共通に受ける `sketch_id`(`Param` は frozen なので共有してよい)。
+_SKETCH_ID = Param("sketch_id", "string", "対象スケッチのID")
+
 COMMANDS: tuple[Command, ...] = (
     # ---------------------------------------------------------------- 問い合わせ
     Command(
@@ -437,7 +440,7 @@ COMMANDS: tuple[Command, ...] = (
         category="sketch",
         description="スケッチに線分を足すときに呼ぶ(平面上の2点)。",
         params=(
-            Param("sketch_id", "string", "対象スケッチのID"),
+            _SKETCH_ID,
             Param("p0", "array", "始点 [u, v]"),
             Param("p1", "array", "終点 [u, v]"),
         ),
@@ -449,7 +452,7 @@ COMMANDS: tuple[Command, ...] = (
         category="sketch",
         description="スケッチに円を足すときに呼ぶ。",
         params=(
-            Param("sketch_id", "string", "対象スケッチのID"),
+            _SKETCH_ID,
             Param("center", "array", "中心 [u, v]"),
             Param("radius", "number", "半径(mm)", dimension=True),
         ),
@@ -461,7 +464,7 @@ COMMANDS: tuple[Command, ...] = (
         category="sketch",
         description="スケッチに長方形を足すときに呼ぶ。",
         params=(
-            Param("sketch_id", "string", "対象スケッチのID"),
+            _SKETCH_ID,
             Param("corner", "array", "基準コーナー [u, v]"),
             Param("width", "number", "幅(mm)", dimension=True),
             Param("height", "number", "高さ(mm)", dimension=True),
@@ -482,7 +485,7 @@ COMMANDS: tuple[Command, ...] = (
         category="sketch",
         description="スケッチに円弧を足すときに呼ぶ(中心・半径・開始角・終了角)。",
         params=(
-            Param("sketch_id", "string", "対象スケッチのID"),
+            _SKETCH_ID,
             Param("center", "array", "中心 [u, v]"),
             Param("radius", "number", "半径(mm)", dimension=True),
             Param("start_deg", "number", "開始角(度・反時計)", dimension=True),
@@ -1158,7 +1161,7 @@ COMMANDS: tuple[Command, ...] = (
             "SVGが物理単位を持たなければ1ユーザー単位=1mm。"
         ),
         params=(
-            Param("sketch_id", "string", "対象スケッチのID"),
+            _SKETCH_ID,
             Param("path", "string", "読み込むSVGファイルのパス"),
             # **UIには出さない**(`ws=False`)。倍率は単位の合わないSVGを直すための逃げ道で、
             # 普段は要らない —— 常に出すと「毎回1.0と打つ欄」が1つ増える。

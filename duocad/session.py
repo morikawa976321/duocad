@@ -605,15 +605,17 @@ class Session:
         2枚選んでいれば `SelectionAmbiguous`、AIの提案のままなら `SelectionNotCommitted` が
         `require_confirmed` から上がり、そのままWS/MCPのエラーになる。
         """
-        if base_plane is not None:
-            plane: Any = str(base_plane)
-        else:
-            face = selection.require_confirmed(
-                self.document, "face", exactly_one=True
-            )[0]
-            plane = sketch.face_plane(face["body"], face["index"])
+        plane = self._plane_from_selection(base_plane)
         sketch_id = sketch.sketch_create(self.document, plane)
         return self._after_logged_verb({"sketch_id": sketch_id})
+
+    def _plane_from_selection(self, base_plane: Optional[str]) -> Any:
+        """`base_plane`(XY/XZ/YZ)があればそれ、無ければ**確定選択の面**(ちょうど1枚)を貼る先にする
+        (`sketch_create` と `sketch_create_offset` が同じ解決を使う。2箇所に持つと片方だけ直る)。"""
+        if base_plane is not None:
+            return str(base_plane)
+        face = selection.require_confirmed(self.document, "face", exactly_one=True)[0]
+        return sketch.face_plane(face["body"], face["index"])
 
     @_edits_document
     def sketch_create_offset(self, distance: float, base_plane: Optional[str] = None) -> dict:
@@ -621,18 +623,11 @@ class Session:
         `base_plane`(XY/XZ/YZ)省略時は確定選択の面(ちょうど1枚)で、そこから法線方向へ
         `distance` だけ離れた平面に貼る。
 
-        **解決は `sketch.offset_plane` に投げるだけ**(基準の解決自体は `sketch_create` と
-        同じ2行)。verb名だけ `sketch_create_offset` にする理由は `sketch.sketch_create` の
+        **解決は `sketch.offset_plane` に投げるだけ**(基準の解決は `_plane_from_selection`)。
+        verb名だけ `sketch_create_offset` にする理由は `sketch.sketch_create` の
         docstring参照(Enter要否がverb名ごとに1つ固定されているため)。
         """
-        if base_plane is not None:
-            base: Any = str(base_plane)
-        else:
-            face = selection.require_confirmed(
-                self.document, "face", exactly_one=True
-            )[0]
-            base = sketch.face_plane(face["body"], face["index"])
-        plane = sketch.offset_plane(base, distance)
+        plane = sketch.offset_plane(self._plane_from_selection(base_plane), distance)
         sketch_id = sketch.sketch_create(
             self.document, plane, verb=sketch.VERB_SKETCH_CREATE_OFFSET
         )
@@ -712,19 +707,17 @@ class Session:
         辺と対象Bodyは `selection.require_edges` が選択順のまま返す。順序が効くのは
         `edges` と `radius` を位置で対応させるため(並べ替えると半径の割り当てがずれる)。
         """
-        edges, body_id = selection.require_edges(self.document)
-        operation = fillet_verb(self.document, edges, radius, body_id=body_id)
-        changed_body_id = operation.args["body_id"]
-        return self._after_logged_verb({
-            "body_id": changed_body_id,
-            "changed_bodies": [changed_body_id],
-        })
+        return self._edge_verb(fillet_verb, radius)
 
     @_edits_document
     def chamfer(self, distance: Any) -> dict:
         """**確定選択の辺**を面取りする(`fillet` と同じ規律)。"""
+        return self._edge_verb(chamfer_verb, distance)
+
+    def _edge_verb(self, verb_fn: Any, value: Any) -> dict:
+        """確定選択の辺に verb を掛ける(`fillet` / `chamfer`。違うのは呼ぶ verb 関数だけ)。"""
         edges, body_id = selection.require_edges(self.document)
-        operation = chamfer_verb(self.document, edges, distance, body_id=body_id)
+        operation = verb_fn(self.document, edges, value, body_id=body_id)
         changed_body_id = operation.args["body_id"]
         return self._after_logged_verb({
             "body_id": changed_body_id,
@@ -1639,19 +1632,14 @@ class Session:
         対象は**いま表示中のBodyだけ**(引数で選べない)。非表示で除外した件数は
         `skipped_hidden` として必ず応答に載る(0件でも載る)。
         """
+        return {"action": "export_step", **io_step.export(self.document, self._export_target(path), "step")}
+
+    def _export_target(self, path: Any) -> Path:
+        """書き出し先を絶対パスにし、親ディレクトリが無ければ ValueError(ファイルを作らない)。"""
         target = self._resolve(path)
         if not target.parent.exists():
             raise ValueError(f"書き出し先のディレクトリが無い: {target.parent}")
-        resolved = io_step.export_body_ids(self.document)
-        skipped = io_step.export_skipped_hidden(self.document)
-        io_step.export_step(self.document, target)
-        return {
-            "action": "export_step",
-            "path": str(target),
-            "bytes": target.stat().st_size,
-            "body_ids": list(resolved),
-            "skipped_hidden": list(skipped),
-        }
+        return target
 
     def export_stl_file(self, path: Any) -> dict:
         """STLを書き出す。粗さは `io_step.STL_DEVIATION` 固定で、人にもAIにも選ばせない。
@@ -1660,19 +1648,15 @@ class Session:
         `skipped_hidden` として必ず応答に載る(0件でも載る)。応答の `deviation` は
         **書いた粗さの記録**であって入力ではない。
         """
-        target = self._resolve(path)
-        if not target.parent.exists():
-            raise ValueError(f"書き出し先のディレクトリが無い: {target.parent}")
-        resolved = io_step.export_body_ids(self.document)
-        skipped = io_step.export_skipped_hidden(self.document)
-        io_step.export_stl(self.document, target)
+        exported = io_step.export(self.document, self._export_target(path), "stl")
+        # `deviation` は `bytes` の次(末尾に回すと画面やログの見た目が変わる)。
         return {
             "action": "export_stl",
-            "path": str(target),
-            "bytes": target.stat().st_size,
+            "path": exported["path"],
+            "bytes": exported["bytes"],
             "deviation": io_step.STL_DEVIATION,
-            "body_ids": list(resolved),
-            "skipped_hidden": list(skipped),
+            "body_ids": exported["body_ids"],
+            "skipped_hidden": exported["skipped_hidden"],
         }
 
     def take_warnings(self) -> list[str]:
