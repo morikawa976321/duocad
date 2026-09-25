@@ -43,7 +43,7 @@ def main():
     hull = frame & ds.hull_distance_mask(grid, space.hull_planes, space.hull_triangles, space.margin)
     obstacle = np.zeros(grid.shape, dtype=bool)
     if bundle.conditions.obstacle is not None:
-        soup = vx.triangles_from_shape(vx._unwrap(bundle.conditions.obstacle), deviation=space.stats['deviation'])
+        soup = vx.triangles_from_shape(vx.unwrap(bundle.conditions.obstacle), deviation=space.stats['deviation'])
         obstacle, _ = vx.occupancy(soup, grid)
     keep = space.model.keep
     masks = [frame & ~obstacle, hull & ~obstacle, space.mask]

@@ -91,7 +91,7 @@ def check(name: str, ok: bool, detail: str) -> None:
 
 
 def _faces_of(shape) -> list:
-    solid = vx._unwrap(shape)
+    solid = vx.unwrap(shape)
     out = []
     explorer = TopExp_Explorer(solid, TopAbs_FACE)
     while explorer.More():
@@ -179,7 +179,7 @@ def check_against_occt_oracle() -> None:
         excluded_band = int(np.count_nonzero(~usable))
 
         fast = model.design[cells[:, 0], cells[:, 1], cells[:, 2]]
-        classifier = BRepClass3d_SolidClassifier(vx._unwrap(shape))
+        classifier = BRepClass3d_SolidClassifier(vx.unwrap(shape))
         oracle = np.zeros(len(cells), dtype=bool)
         excluded_on = 0
         t0 = time.perf_counter()
@@ -326,7 +326,7 @@ def check_broken_input_raises() -> None:
     cases = [
         ("開いたシェル(1面欠け)", _shell_of(faces[:-1])),
         ("向きを裏返した面を含むシェル", _shell_of(faces[:-1] + [faces[-1].Reversed()])),
-        ("裏返したソリッド(法線が内向き)", vx._unwrap(box).Reversed()),
+        ("裏返したソリッド(法線が内向き)", vx.unwrap(box).Reversed()),
     ]
     for label, broken in cases:
         try:
@@ -351,7 +351,7 @@ def check_broken_input_raises() -> None:
     # なので、全体を1つの数で見る判定では見抜けず、空洞が材料として埋まる。
     hollow = Box(40, 40, 40) - Box(20, 20, 20)
     shells = []
-    explorer = TopExp_Explorer(vx._unwrap(hollow), TopAbs_SHELL)
+    explorer = TopExp_Explorer(vx.unwrap(hollow), TopAbs_SHELL)
     while explorer.More():
         shells.append(TopoDS.Shell_s(explorer.Current()))
         explorer.Next()
@@ -395,7 +395,7 @@ def check_broken_input_raises() -> None:
     # `inspect_soup` が先に落とすので、占有判定側の守り(巻き数が0に戻らない列を
     # 見つけたら落ちる)は素通りしている。stage2 が `occupancy` を直に呼ぶことは
     # ありうるので、ここだけ切り出して確かめる。
-    good = vx.triangles_from_shape(vx._unwrap(Box(30, 20, 10)), deviation=0.05)
+    good = vx.triangles_from_shape(vx.unwrap(Box(30, 20, 10)), deviation=0.05)
     grid = vx.grid_for_bbox(*good.bbox, 12)
     open_soup = vx.TriangleSoup(
         positions=good.positions,
@@ -520,7 +520,7 @@ def check_deterministic() -> None:
     # 62264 → 62168 → 62138 と動いた)。曲面のある形でないと露見しないので円筒を使い、
     # **別の解像度を1回挟んでから**同じ解像度をやり直す。三角形群まで比べるのは、
     # 占有マスクが同じでも stage2 が使う面添字つき三角形が変われば再現しないため。
-    curved = vx._unwrap(Cylinder(10, 30))
+    curved = vx.unwrap(Cylinder(10, 30))
     runs = []
     for n in (37, 61, 37, 37):
         model = voxel_model(curved, n)
@@ -604,7 +604,7 @@ def check_cell_center_convention() -> None:
     for shape, name in ((Cylinder(10, 30), "円筒"), (Cone(10, 0, 20), "円錐"), (Box(40, 20, 10), "箱")):
         for n in (17, 37, 64):
             model_n = voxel_model(shape, n)
-            brep_lo, brep_hi = vx._shape_bbox(vx._unwrap(shape))
+            brep_lo, brep_hi = vx._shape_bbox(vx.unwrap(shape))
             grid_lo, grid_hi = model_n.grid.world_box()
             margin = float(
                 np.concatenate([brep_lo - grid_lo, grid_hi - brep_hi]).min()
@@ -623,7 +623,7 @@ def check_cell_center_convention() -> None:
     volumes = []
     for offset in (0.0, 1e4, 1e6, 1e8, 1e10):
         far = vx.triangles_from_shape(
-            vx._unwrap(Pos(offset, offset, offset) * Box(40, 20, 10)), deviation=0.5
+            vx.unwrap(Pos(offset, offset, offset) * Box(40, 20, 10)), deviation=0.5
         )
         volumes.append(far.signed_volume())
     check(
@@ -638,7 +638,7 @@ def check_cell_center_convention() -> None:
     #      軸整列した箱では三重積が偶然きれいに相殺してしまうので、**傾けた**小箱で見る。
     far_shells = []
     for source in (Box(40, 40, 40) - Box(20, 20, 20), Pos(1e7, 1e7, 1e7) * (Rotation(17, 23, 31) * Box(4, 4, 4))):
-        explorer = TopExp_Explorer(vx._unwrap(source), TopAbs_SHELL)
+        explorer = TopExp_Explorer(vx.unwrap(source), TopAbs_SHELL)
         while explorer.More():
             far_shells.append(TopoDS.Shell_s(explorer.Current()))
             explorer.Next()
@@ -705,7 +705,7 @@ def check_degenerate_rays() -> None:
     # 内外が反転し(実測15200 mm^3 / 正解16000 mm^3)、巻き数でも「両方に数える」と空洞のある形で
     # 空洞が材料になる(`tests/test_voxelize_occupancy.py`)。辺に乗った交点は縮退として検知し、
     # 既定のずらしの列でやり直す。ずらしを切ると検知で落ちることも見る(検知が空振りでない確認)。
-    soup = vx.triangles_from_shape(vx._unwrap(Box(40, 40, 10)), deviation=0.04)
+    soup = vx.triangles_from_shape(vx.unwrap(Box(40, 40, 10)), deviation=0.04)
     grid = vx.grid_for_bbox(*soup.bbox, 20)
     jittered, stats_j = vx.occupancy(soup, grid)
     exact = 40.0 * 40.0 * 10.0
@@ -733,7 +733,7 @@ def check_degenerate_rays() -> None:
     # ことをこの2件で示す(2026-08-31、円錐+板がずらし無しでは n=6〜40 の全解像度で
     # 落ちることを実測して発見)。
     apex = Cone(10, 0, 20) + Box(30, 30, 4)
-    apex_soup = vx.triangles_from_shape(vx._unwrap(apex), deviation=0.02)
+    apex_soup = vx.triangles_from_shape(vx.unwrap(apex), deviation=0.02)
     apex_grid = vx.grid_for_bbox(*apex_soup.bbox, 20)
     try:
         with_jitter, stats_w = vx.occupancy(apex_soup, apex_grid)
@@ -835,7 +835,7 @@ def check_closest_triangle() -> None:
     # (b) 三角形の上を細かく標本化した距離と突き合わせる(実装とは独立な参照)。
     #     自前の値は必ず標本の最小値以下(標本は必ず三角形上の点なので上界)で、
     #     標本の刻みぶんの誤差より小さいところまで一致していること。
-    soup = vx.triangles_from_shape(vx._unwrap(Cylinder(10, 30) - Box(6, 40, 40)), deviation=0.4)
+    soup = vx.triangles_from_shape(vx.unwrap(Cylinder(10, 30) - Box(6, 40, 40)), deviation=0.4)
     rng = np.random.default_rng(31)
     probes = rng.uniform(-22.0, 22.0, (300, 3))
     mine, tri = vx.closest_triangle(soup, probes)
@@ -905,7 +905,7 @@ def _bbox_outward_mm(shape, deviation: float) -> np.ndarray:
     正しい bbox はそれを必ず包み(6面とも0以上)、弦が内側へ入るぶん(≤ deviation)より
     大きくは膨らまない。
     """
-    solid = vx._unwrap(shape)
+    solid = vx.unwrap(shape)
     low, high = vx._shape_bbox(solid)
     tri_low, tri_high = vx.triangles_from_shape(solid, deviation=deviation).bbox
     return np.concatenate([tri_low - low, high - tri_high])

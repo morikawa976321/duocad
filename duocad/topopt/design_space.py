@@ -318,7 +318,7 @@ def condition_body(name: str, shape: Any, *, roles: Sequence[str]) -> ConditionB
     製品(`optimize_run.build_conditions`)は文書側のキャッシュ付き `kernel.bounding_box` で
     同じ B-rep の箱を取る。どちらも `useTriangulation=False` の `BRepBndLib.AddOptimal`。
     """
-    lo, hi = vx._shape_bbox(vx._unwrap(shape))
+    lo, hi = vx._shape_bbox(vx.unwrap(shape))
     return ConditionBody(
         name=str(name),
         roles=tuple(roles),
@@ -342,10 +342,7 @@ class Conditions:
     (層をまたぐ契約: 格子の外へ出ていないかは `keep` の外接箱で、格子への占有と条件ごとの接続は
     `bodies` のボディごとに見る)。
 
-    `load_n` は荷重の**実際の大きさ**[N]。荷重が複数のときは**その大きさの総和**であって
-    合力(ベクトル和)ではない —— 向きの違う荷重が打ち消し合うと合力は0になりうるが、
-    総和なら0にならない(`optimize_run.build_conditions` / `stress.load_magnitude_total`)。
-    塊の導出は `load_n` を使わない。探索は面ごとの力ベクトルを実単位[N]のまま受ける
+    荷重の大きさはここに無い。探索は面ごとの力ベクトルを実単位[N]のまま受ける
     (`optimize_run.build_conditions` の `forces`)。
     """
 
@@ -354,7 +351,6 @@ class Conditions:
     load_faces: Any
     obstacle: Any = None
     anchor_shape: Any = None
-    load_n: float = 1.0
     bodies: tuple = field(kw_only=True)
 
     def __post_init__(self) -> None:
@@ -700,7 +696,7 @@ def derive(
     design = candidate
     if conditions.obstacle is not None:
         obs_soup = vx.triangles_from_shape(
-            vx._unwrap(conditions.obstacle), deviation=dev, angular_deflection=angular_deflection
+            vx.unwrap(conditions.obstacle), deviation=dev, angular_deflection=angular_deflection
         )
         grid_lo, grid_hi = grid.world_box()
         obs_lo, obs_hi = obs_soup.bbox
@@ -721,7 +717,7 @@ def derive(
     # **格子の外は voxelize が見ていない。** 外枠は保持ボディの箱から起こしているので通常は
     # 出ないが、渡された外接箱と `keep` の形が食い違っていると黙って消える —— 先に落とす。
     grid_lo, grid_hi = grid.world_box()
-    k_lo, k_hi = vx._shape_bbox(vx._unwrap(conditions.keep))
+    k_lo, k_hi = vx._shape_bbox(vx.unwrap(conditions.keep))
     if np.any(k_lo < grid_lo - 1e-9) or np.any(k_hi > grid_hi + 1e-9):
         raise DesignSpaceTooSmallError(
             f"保持ソリッド {np.round(k_lo, 3).tolist()} .. {np.round(k_hi, 3).tolist()} が"
@@ -744,7 +740,7 @@ def derive(
         )
 
     soup = vx.triangles_from_shape(
-        vx._unwrap(conditions.anchor), deviation=dev, angular_deflection=angular_deflection
+        vx.unwrap(conditions.anchor), deviation=dev, angular_deflection=angular_deflection
     )
     # アンカーの表は**全面・既定の半径**で作る。`faces=` で対象の面を絞ると稜線の規則
     # (節点は最も面積を配った面が持つ)の競争相手が減り、**絞らずに作った表とは別の
@@ -874,7 +870,7 @@ def _keep_bodies_on_grid(
             )
             continue
         soup = vx.triangles_from_shape(
-            vx._unwrap(body.shape), deviation=deviation, angular_deflection=angular_deflection
+            vx.unwrap(body.shape), deviation=deviation, angular_deflection=angular_deflection
         )
         vx.inspect_soup(soup)
         raw, occupancy_stats = vx.occupancy(soup, grid, allow_empty=True)

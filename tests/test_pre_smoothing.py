@@ -9,6 +9,7 @@ from build123d import Box, Pos
 
 from duocad import kernel
 from duocad.topopt import voxelize, fem, stress
+from duocad.topopt.anchor import floating_dofs
 from duocad.topopt.acceptance import (
     active_nodes, boundary_check, closed_voids, condition_check, connectivity_check, void_components,
     inspect, inspect_document, intersection_volume, region_check, safety_check, search_diagnostics,
@@ -204,7 +205,7 @@ def test_unused_elements_are_not_weak_material(monkeypatch):
     solve = stress.solve_displacement
     def spy(model, density, **kwargs):
         assert len(model.active) == int(rho.sum())
-        assert np.all(np.isin(np.flatnonzero(~np.repeat(live, 3)), model.fixed))
+        assert np.all(np.isin(floating_dofs(rho.astype(bool)), model.fixed))
         return solve(model, density, **kwargs)
     monkeypatch.setattr(stress, 'solve_displacement', spy)
     result = safety_check(rho.astype(bool), grid, fixed, load, target=.001, allowable_mpa=40,

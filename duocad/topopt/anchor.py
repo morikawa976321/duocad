@@ -134,6 +134,34 @@ def active_nodes(material: np.ndarray) -> np.ndarray:
     return nodes
 
 
+def floating_dofs(material: np.ndarray) -> np.ndarray:
+    """空要素にしか接していない(材料に接しない)節点の自由度番号(昇順)。
+
+    `fem.Model` の `extra_fixed_dofs` と `active_mask` は**同じ `material` から作る**(層をまたぐ契約。
+    `fem.Model` の docstring)。ここが唯一の作り方で、`acceptance.safety_check` と検査が共有する。
+    """
+    return np.flatnonzero(~np.repeat(active_nodes(material).ravel(), 3))
+
+
+def face_node_ids(table: Any, face: int) -> np.ndarray:
+    """条件面 `face` の節点(**空の面は空配列**。`AnchorTable.node_ids` は空の面で例外を出すので
+    `empty_faces` を先に見る)。`table` は `node_ids` / `empty_faces` を持てばよい(テストの代用表も通る)。"""
+    face = int(face)
+    if face in {int(f) for f in table.empty_faces()}:
+        return np.zeros(0, dtype=np.int64)
+    return np.asarray(table.node_ids([face]), dtype=np.int64)
+
+
+def face_coverage(table: Any, face: int, live: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """条件面 `face` の節点 `ids` と、そのうち材料に接しない `uncovered`(`live` は `active_nodes(...).ravel()`)。
+
+    接しない節点だけを返さないのは、「空の面」と「全部接している面」を呼び出し側が区別するため
+    (どちらも uncovered は空)。空の面は `face_node_ids` のとおり両方とも空配列。
+    """
+    ids = face_node_ids(table, face)
+    return ids, ids[~live[ids]]
+
+
 def _candidate_offsets(radius_ratio: float) -> np.ndarray:
     """半径 `radius_ratio * spacing` の球に入りうる節点の、格子添字のずれ。
 
@@ -830,7 +858,7 @@ def condition_mapping(
             if anchor.unmapped_samples:
                 reasons.append("unmapped_samples")
             if live is not None and anchor.node_count:
-                lost = anchor.node_ids[~live[anchor.node_ids]]
+                _, lost = face_coverage(table, face, live)
                 row["uncovered_nodes"] = int(lost.size)
                 row["uncovered_node_ids"] = lost[:UNMAPPED_SAMPLE_RECORD].tolist()
                 if lost.size:

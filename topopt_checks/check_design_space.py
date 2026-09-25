@@ -335,9 +335,9 @@ def check_case1_end_to_end() -> None:
     # 根拠を「渡さなかった」という自己申告に置かない。
     field_names = {f.name for f in dataclasses.fields(ds.Conditions)}
     check(
-        "条件は4条件 + 荷重の大きさ + ボディの外接箱だけ(設計空間ソリッドを受け取る口が無い)",
+        "条件は4条件 + ボディの外接箱だけ(設計空間ソリッドを受け取る口も荷重の大きさも無い)",
         field_names
-        == {"keep", "fixed_faces", "load_faces", "obstacle", "anchor_shape", "load_n", "bodies"},
+        == {"keep", "fixed_faces", "load_faces", "obstacle", "anchor_shape", "bodies"},
         f"{sorted(field_names)}",
     )
     cells = space.stats["cells"]
@@ -373,7 +373,7 @@ def check_case1_end_to_end() -> None:
         fixed_faces=search_space.fixed_faces,
         load_faces=search_space.load_faces,
         forces=[(0.0, 0.0, -1.0)] * len(search_space.load_faces),
-        preserves=[("keep", vx._unwrap(cond.keep))],
+        preserves=[("keep", vx.unwrap(cond.keep))],
         excludes=[],
         # 収束や安全率の質を見る検査ではない(それは check_optimize_wiring.py / check_stress.py
         # の役目)ので、初期合格が速く見つかるよう目標安全率は緩く取る。
@@ -406,7 +406,7 @@ def check_case1_end_to_end() -> None:
     # かつ探索の初期合格モデルがその中で自由に形を持てる。ここが0だと「保持ソリッドを
     # 塗っただけ」になる。
     keep_occ, _ = vx.occupancy(
-        vx.triangles_from_shape(vx._unwrap(cond.keep), deviation=search_space.stats["deviation"]),
+        vx.triangles_from_shape(vx.unwrap(cond.keep), deviation=search_space.stats["deviation"]),
         search_space.grid,
     )
     grown = search.best_feasible.mask & ~keep_occ
@@ -455,7 +455,7 @@ def check_case1_keep_inside() -> None:
         f"{ {k: v['keep_elements'] for k, v in bodies.items()} }",
     )
     g_lo, g_hi = space.grid.world_box()
-    k_lo, k_hi = vx._shape_bbox(vx._unwrap(_cond.keep))
+    k_lo, k_hi = vx._shape_bbox(vx.unwrap(_cond.keep))
     check(
         "保持ソリッドが格子そのものの内側にある(格子の外は誰も数えていない)",
         bool(np.all(k_lo >= g_lo - 1e-9) and np.all(k_hi <= g_hi + 1e-9)),
@@ -530,7 +530,7 @@ def check_case1_anchors_not_empty() -> None:
 
     remote = Pos(70, 0, 0) * Box(6, 20, 20)  # 保持ではない、拘束面だけを提供する板
     anchor_shape = _cond.keep + remote
-    a_soup = vx.triangles_from_shape(vx._unwrap(anchor_shape), deviation=0.2)
+    a_soup = vx.triangles_from_shape(vx.unwrap(anchor_shape), deviation=0.2)
     far_fixed = an.faces_matching(
         a_soup, kind="plane", normal=(1, 0, 0), near_point=(73, 0, 0), near_tol=1e-4
     )
@@ -581,7 +581,7 @@ def check_case1_obstacle() -> None:
     cond, space = case1_space()
     # 塊の中の除外領域を**独立に**計算し直す(design_space.py が引いた結果を再利用しない)。
     obs_soup = vx.triangles_from_shape(
-        vx._unwrap(cond.obstacle), deviation=space.stats["deviation"]
+        vx.unwrap(cond.obstacle), deviation=space.stats["deviation"]
     )
     obs, _ = vx.occupancy(obs_soup, space.grid)
     overlap = int(np.count_nonzero(space.mask & obs))

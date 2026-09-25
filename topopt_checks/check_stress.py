@@ -379,12 +379,14 @@ def check_unit_scaling(model: fem.Model, rho: np.ndarray, u: np.ndarray) -> None
         f"{both.representative_mpa:.10g} MPa (期待 {base.representative_mpa * 10.0:.10g})",
     )
 
-    # 無次元側の総荷重を読み違えないこと。棒の荷重ベクトルの合力は 1.0。
-    resultant = stress.load_resultant(model)
+    # 無次元側の総荷重を読み違えないこと。棒の荷重は1本なので、`for_model` が分母に読む総量
+    # (`load_magnitude_total`)は合力(`fem.load_resultant` のノルム)と一致し、どちらも 1.0。
+    total = stress.load_magnitude_total(model)
+    resultant = float(np.linalg.norm(fem.load_resultant(model.f)))
     check(
-        "無次元側の合力を Model から読めている",
-        abs(resultant - 1.0) < 1e-12,
-        f"合力={resultant:.12f}",
+        "無次元側の総荷重を Model から読めている(1本の荷重では合力と一致)",
+        abs(total - 1.0) < 1e-12 and abs(resultant - total) < 1e-12,
+        f"総量={total:.12f} 合力={resultant:.12f}",
     )
     RESULTS["base_representative_mpa"] = base.representative_mpa
     RESULTS["base_max_displacement_mm"] = base.max_displacement_mm
@@ -425,15 +427,15 @@ def build_tapered_plate(mult: int) -> tuple[fem.Model, np.ndarray, float]:
         for k in range(nelz + 1):
             f[3 * node_id(nelx, j, k, nely, nelz) + 0] = weights[j, k]
     f /= f.sum()
-    # 空要素にしか接していない節点は剛性 emin でしか繋がっていない。`fem.optimize` が
-    # 内部でやっているのと同じ処理を、ここでも通す(通さないと K がほぼ特異になる)。
+    # 空要素にしか接していない節点は剛性 emin でしか繋がっていない。`acceptance.safety_check` と
+    # 同じく系から外す(通さないと K がほぼ特異になる)。
     model = fem.Model(
         nelx,
         nely,
         nelz,
         fixed_dofs=np.unique(np.array(fixed)),
         load=f,
-        extra_fixed_dofs=np.flatnonzero(~np.repeat(anchor.active_nodes(solid).ravel(), 3)),
+        extra_fixed_dofs=anchor.floating_dofs(solid),
     )
     nominal = 1.0 / (narrow * nelz)  # 細い側の公称応力(無次元)
     return model, rho, nominal

@@ -25,7 +25,7 @@ from scipy import ndimage
 
 from duocad import kernel
 
-from . import acceptance, anchor, min_width
+from . import acceptance, anchor, min_width, voxelize
 from .acceptance import NEIGHBOURHOOD_STRUCTURE
 from .material import DEFAULT_ALLOWABLE_MPA, DEFAULT_YOUNGS_MODULUS_MPA
 
@@ -94,18 +94,11 @@ class SearchConditions:
 
 
 def _body_signature(shape: Any, *, cache: Any) -> dict:
-    raw = getattr(shape, 'wrapped', shape)
+    raw = voxelize.unwrap(shape)
     bounds = kernel.bounding_box(raw, cache=cache)
     return dict(min=[round(float(v), 9) for v in bounds['min']],
                 max=[round(float(v), 9) for v in bounds['max']],
                 volume=round(float(kernel.volume(raw)), 9))
-
-
-def _face_node_ids(table: Any, face: int) -> np.ndarray:
-    """面の節点(空の面は空配列。`AnchorTable.node_ids` は空の面で例外を出すので先に見る)。"""
-    if int(face) in set(int(f) for f in table.empty_faces()):
-        return np.zeros(0, dtype=np.int64)
-    return np.asarray(table.node_ids([int(face)]), dtype=np.int64)
 
 
 def _boundary_signature(conditions: SearchConditions) -> dict:
@@ -116,14 +109,14 @@ def _boundary_signature(conditions: SearchConditions) -> dict:
     table = conditions.table
     faces: dict = {}
     for face in conditions.fixed_faces:
-        ids = _face_node_ids(table, face)
+        ids = anchor.face_node_ids(table, face)
         entry = dict(nodes=hashlib.sha256(ids.tobytes()).hexdigest(), count=int(ids.size))
         if ids.size:
             dofs = np.asarray(table.fixed_dofs([int(face)]), dtype=np.int64)
             entry['dofs'] = hashlib.sha256(dofs.tobytes()).hexdigest()
         faces[f'fixed_{int(face)}'] = entry
     for face, force in zip(conditions.load_faces, conditions.forces):
-        ids = _face_node_ids(table, face)
+        ids = anchor.face_node_ids(table, face)
         entry = dict(nodes=hashlib.sha256(ids.tobytes()).hexdigest(), count=int(ids.size))
         if ids.size:
             vector = np.asarray(table.load_vector([int(face)], force), dtype=float)
@@ -181,11 +174,10 @@ def uncovered_condition_nodes(material: np.ndarray, conditions: SearchConditions
     rows = []
     for side, faces in (('fixed', conditions.fixed_faces), ('load', conditions.load_faces)):
         for face in faces:
-            ids = _face_node_ids(conditions.table, face)
-            lost = ids[~live[ids]] if ids.size else ids
+            ids, lost = anchor.face_coverage(conditions.table, face, live)
             rows.append(dict(condition=f'{side}_face_{int(face)}', side=side, face=int(face),
                              nodes=int(ids.size), uncovered_nodes=int(lost.size),
-                             uncovered_node_ids=lost[:20].tolist()))
+                             uncovered_node_ids=lost[:anchor.UNMAPPED_SAMPLE_RECORD].tolist()))
     return rows
 
 
@@ -214,8 +206,8 @@ def _holds_all_conditions(component: np.ndarray, conditions: SearchConditions) -
         return False
     live = acceptance.active_nodes(component).ravel()
     for face in conditions.fixed_faces + conditions.load_faces:
-        ids = conditions.table.node_ids([face])
-        if ids.size == 0 or not bool(live[ids].all()):
+        ids, lost = anchor.face_coverage(conditions.table, face, live)
+        if ids.size == 0 or lost.size:
             return False
     report = acceptance.region_check(component, conditions.grid, conditions.preserves, preserve=True,
                                       cache=conditions.bbox_cache, overlaps=conditions.region_overlaps)
@@ -226,8 +218,8 @@ def _touches_any_condition(component: np.ndarray, conditions: SearchConditions) 
     """`_holds_all_conditions` と違い、一部の条件に触れているだけで真(除去した島の記録用)。"""
     live = acceptance.active_nodes(component).ravel()
     for face in conditions.fixed_faces + conditions.load_faces:
-        ids = conditions.table.node_ids([face])
-        if ids.size and bool(live[ids].any()):
+        ids, lost = anchor.face_coverage(conditions.table, face, live)
+        if ids.size > lost.size:
             return True
     return False
 
@@ -602,7 +594,7 @@ def ranked_cells(mask: np.ndarray, energy: np.ndarray) -> np.ndarray:
 
 
 def _anchor_node_ids(conditions: SearchConditions) -> np.ndarray:
-    ids = [_face_node_ids(conditions.table, face) for face in conditions.fixed_faces + conditions.load_faces]
+    ids = [anchor.face_node_ids(conditions.table, face) for face in conditions.fixed_faces + conditions.load_faces]
     return np.unique(np.concatenate(ids)) if ids else np.zeros(0, dtype=np.int64)
 
 
@@ -809,7 +801,7 @@ def peel(mask: np.ndarray, order: np.ndarray, count: int, anchor_ids: np.ndarray
                 if any(support_flat[n] <= d for n, d in dropped.items()):
                     stats.skipped_support += 1
                     continue
-            reason, connected = min_width.bite_verdict(work, bite, NEIGHBOURHOOD_STRUCTURE)
+            reason, connected = min_width.bite_verdict(work, bite)
             if reason is not None:
                 setattr(stats, f'skipped_{reason}', getattr(stats, f'skipped_{reason}') + 1)
                 continue
@@ -891,8 +883,8 @@ def _missing_conditions(mask: np.ndarray, conditions: SearchConditions) -> list[
     missing = []
     for side, faces in (('fixed', conditions.fixed_faces), ('load', conditions.load_faces)):
         for face in faces:
-            ids = _face_node_ids(conditions.table, face)
-            if ids.size == 0 or not bool(live[ids].all()):
+            ids, lost = anchor.face_coverage(conditions.table, face, live)
+            if ids.size == 0 or lost.size:
                 missing.append(f'{side}_face_{int(face)}')
     report = acceptance.region_check(mask, conditions.grid, conditions.preserves, preserve=True,
                                      cache=conditions.bbox_cache, overlaps=conditions.region_overlaps)
@@ -936,6 +928,22 @@ def _geometry_rejection_trial(history: list, candidate: np.ndarray, parent: Opti
                   note=f'FEMの前に幾何で不合格(成分 {rejection["components"]}・欠けた条件 {rejection["missing"]})')
     history.append(trial)
     return trial
+
+
+def _check_stage4_options(single_cell_patience, target_tolerance, evaluation_error_patience) -> None:
+    """段階4の引数を検査する。`find_best_feasible` の入口(段階3の前)と `_reduce_volume` の両方が呼ぶ ——
+    段階3の後にしか無いと、全材料の FEM を1回解いてから落ちる上、段階3が不合格なら不正な値が黙って通る。"""
+    if single_cell_patience is not None and not (
+            isinstance(single_cell_patience, int) and not isinstance(single_cell_patience, bool) and single_cell_patience >= 1):
+        raise ValueError(f'single_cell_patience は 1 以上の整数か None(無制限): {single_cell_patience!r}')
+    if target_tolerance is not None and not (
+            isinstance(target_tolerance, (int, float)) and not isinstance(target_tolerance, bool)
+            and math.isfinite(target_tolerance) and target_tolerance >= 0):
+        raise ValueError(f'target_tolerance は 0 以上の有限の数か None(見ない): {target_tolerance!r}')
+    if evaluation_error_patience is not None and not (
+            isinstance(evaluation_error_patience, int) and not isinstance(evaluation_error_patience, bool)
+            and evaluation_error_patience >= 1):
+        raise ValueError(f'evaluation_error_patience は 1 以上の整数か None(数えない): {evaluation_error_patience!r}')
 
 
 def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
@@ -985,17 +993,7 @@ def _reduce_volume(initial: SearchResult, conditions: SearchConditions,
     `candidate_safety_factor`(FEMを解かなかった候補は `None`)/ `candidate_cells` / `safety_factor`・`cells`(その時点の合格形状)/
     `target_safety_factor`。**例外を投げれば探索ごと落ちる**ので、呼び出し側で握ること。
     """
-    if single_cell_patience is not None and not (
-            isinstance(single_cell_patience, int) and not isinstance(single_cell_patience, bool) and single_cell_patience >= 1):
-        raise ValueError(f'single_cell_patience は 1 以上の整数か None(無制限): {single_cell_patience!r}')
-    if target_tolerance is not None and not (
-            isinstance(target_tolerance, (int, float)) and not isinstance(target_tolerance, bool)
-            and math.isfinite(target_tolerance) and target_tolerance >= 0):
-        raise ValueError(f'target_tolerance は 0 以上の有限の数か None(見ない): {target_tolerance!r}')
-    if evaluation_error_patience is not None and not (
-            isinstance(evaluation_error_patience, int) and not isinstance(evaluation_error_patience, bool)
-            and evaluation_error_patience >= 1):
-        raise ValueError(f'evaluation_error_patience は 1 以上の整数か None(数えない): {evaluation_error_patience!r}')
+    _check_stage4_options(single_cell_patience, target_tolerance, evaluation_error_patience)
     identifier = initial.conditions_identifier
     history = list(initial.history)
     best = initial.best_feasible
@@ -1196,6 +1194,7 @@ def find_best_feasible(design_space_mask: np.ndarray, conditions: SearchConditio
 
     `on_evaluation` は段階4へそのまま渡す(`_reduce_volume` docstring)。全材料が不合格なら1回も呼ばれない。
     """
+    _check_stage4_options(single_cell_patience, target_tolerance, evaluation_error_patience)
     identifier = evaluation_identifier(conditions)
     if is_cancelled is not None and is_cancelled():
         return SearchResult(status='no_feasible_found', termination='cancelled', best_feasible=None,

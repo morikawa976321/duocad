@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from . import trace
+from .material import POISSON_RATIO
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
@@ -96,7 +97,7 @@ NODE_SIGNS = np.array(
 )
 
 
-def elasticity_matrix(E: float = 1.0, nu: float = 0.3) -> np.ndarray:
+def elasticity_matrix(E: float = 1.0, nu: float = POISSON_RATIO) -> np.ndarray:
     """弾性行列 D (6,6)。順は [xx, yy, zz, xy, yz, zx] で、せん断は工学ひずみ。"""
     d = np.zeros((6, 6))
     c1 = E / ((1.0 + nu) * (1.0 - 2.0 * nu))
@@ -122,7 +123,7 @@ def strain_displacement(grad: np.ndarray) -> np.ndarray:
     return b
 
 
-def element_stiffness(E: float = 1.0, nu: float = 0.3) -> np.ndarray:
+def element_stiffness(E: float = 1.0, nu: float = POISSON_RATIO) -> np.ndarray:
     """一辺1の8節点六面体(trilinear hex)の要素剛性行列 (24,24) を返す。"""
     d = elasticity_matrix(E, nu)
     g = 1.0 / np.sqrt(3.0)
@@ -322,7 +323,7 @@ class Model:
         nely: int,
         nelz: int,
         E: float = 1.0,
-        nu: float = 0.3,
+        nu: float = POISSON_RATIO,
         emin: float = 1e-9,
         fixed_dofs: np.ndarray | None = None,
         load: np.ndarray | None = None,
@@ -338,7 +339,7 @@ class Model:
         黙って別の場所に入る。
 
         `extra_fixed_dofs` は**置き換えではなく追加**。`acceptance.py` が「空要素にしか
-        接していない浮いた節点」を系から外すのに使う。**置き換えの口(`fixed_dofs`)に
+        接していない浮いた節点」(`anchor.floating_dofs`)を系から外すのに使う。**置き換えの口(`fixed_dofs`)に
         混ぜてはいけない** —— それだと `active_mask` だけを渡して拘束は既定のままにしたい
         呼び出しで、片持ち梁の拘束が黙って消える。
 
@@ -448,8 +449,8 @@ class Model:
         **解いた後に残差で検算し、通らなければ落とす。** 拘束が足りない系(剛体運動が
         止まっていない)を渡されると K は特異になるが、`Model.__init__` の検査は
         「拘束が非空で範囲内」しか見ないので通ってしまう。そのまま解くと CG は収束せず、
-        直接解法へ落ちた先で**有限だが桁違いの解**が返り、最適化はその値を信じて進んだ末に
-        別の場所(OC更新)で落ちる。**原因から遠い場所で落ちるのが最悪**なのでここで名指しする
+        直接解法へ落ちた先で**有限だが桁違いの解**が返り、探索はその値を信じて進んだ末に
+        別の場所(応力の評価・安全率の比較)で落ちる。**原因から遠い場所で落ちるのが最悪**なのでここで名指しする
         (実測は docs/TOPOPT.md「CADの面 → 格子の節点」の「SIMP側に足した口」節)。
         剛体運動の完全な検出はしない —— 残差が通らなければ落とす、それだけでよい。
 
@@ -543,8 +544,8 @@ class Model:
         """K @ vec を、K を組み立てずに要素ループで計算する (ndof,)。
 
         **`assemble` と同じ要素の範囲**(`active`)で足す —— 範囲が違えば別の行列を掛けた
-        ことになる(層をまたぐ契約)。反力 `R = (K u - f)|_fixed` と、その随伴の右辺
-        `K_fs c` を作るための口で、どちらも K を持っていない場所から呼ばれる。
+        ことになる(層をまたぐ契約)。反力 `R = (K u - f)|_fixed`(`reaction_forces`)と残差の検算
+        (`acceptance.safety_check`)のための口で、どちらも K を持っていない場所から呼ばれる。
         """
         flat = np.asarray(rho).ravel()
         edof = self.edof
@@ -588,8 +589,8 @@ class Model:
         **`c` は組み立てに載せた要素だけで足す**(層をまたぐ契約) —— `assemble` が
         `active` だけで K を作るので、`c = F・U` はこの範囲で足したときにだけ成り立つ。
         全要素で足すと、解いた系に無い emin 媒質のひずみエネルギーが目的値に混ざる。
-        `ce` のほうは感度に使うので**全要素ぶん返す**(`optimize` が `x_phys**(penal-1)`
-        と `live` で空要素を落とす)。
+        `ce` のほうは**全要素ぶん返す**(要素エネルギーの場。`acceptance.safety_check` が
+        空セルを 0 にして `fields['element_energy']` に載せる)。
         """
         ue = u[self.edof]
         ce = np.einsum("ij,jk,ik->i", ue, self.ke, ue).reshape(self.nelx, self.nely, self.nelz)
@@ -636,8 +637,7 @@ class PreparedSystem:
     def solve(self, rhs: np.ndarray, *, cg_rtol: float = 1e-9) -> np.ndarray:
         """`rhs` (nrhs, ndof) を解いて (nrhs, ndof) を返す。拘束DOFの成分はきっかり 0.0。
 
-        **右辺が零ベクトルの本は CG を回さず零解を返す** —— 残差の相対判定が 0/0 に
-        なるため(随伴の右辺は感度が全部消えた配置で 0 になりうる)。
+        **右辺が零ベクトルの本は CG を回さず零解を返す** —— 残差の相対判定が 0/0 になるため。
         """
         model = self.model
         rhs = np.atleast_2d(np.asarray(rhs, dtype=float))

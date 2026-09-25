@@ -238,8 +238,8 @@ def check_global_system() -> None:
 # 3. 移設前一致(4題材)
 # ---------------------------------------------------------------------------
 def _floating_dofs(void: np.ndarray) -> np.ndarray:
-    """空要素にしか接していない節点の自由度番号。組み立ては `acceptance.safety_check` と同じ。"""
-    return np.flatnonzero(~np.repeat(anchor.active_nodes(~void).ravel(), 3))
+    """空要素にしか接していない節点の自由度番号(`acceptance.safety_check` と同じ `anchor.floating_dofs`)。"""
+    return anchor.floating_dofs(~void)
 
 
 def _make_model(nelx: int, nely: int, nelz: int, void_blocks: list[tuple[int, ...]]):

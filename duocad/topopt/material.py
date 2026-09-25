@@ -25,3 +25,7 @@ DEFAULT_ALLOWABLE_MPA = PETG_YIELD_MPA * PRINT_DERATE  # 40.0
 # (`stress.py` の契約。E が効くのは変位だけ)。ここでは表示用の変位を出すためだけの
 # 名目値(PETG のヤング率はおよそ1.5〜2.1GPa)を既定にしてある。安全率の結果には影響しない。
 DEFAULT_YOUNGS_MODULUS_MPA = 2000.0
+
+# ポアソン比。`fem.elasticity_matrix` / `element_stiffness` / `Model` の既定値で、製品は既定のまま `Model` を作る
+# (`acceptance.safety_check`)。安全率は E に依存しないが、ポアソン比は応力場の形に効く。
+POISSON_RATIO = 0.3

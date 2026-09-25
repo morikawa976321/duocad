@@ -27,7 +27,7 @@ def voxel_model(
     格子は **B-rep の bbox** から起こす(三角形分割の bbox からではない。弦は真の面より内側に来るので、
     仕様の「B-repの周囲に1要素分の余白」が満たせなくなる)。占有は `stats["occupancy"]` に入れる。
     """
-    solid = vx._unwrap(shape)
+    solid = vx.unwrap(shape)
     if grid is None:
         lo, hi = vx._shape_bbox(solid)
         grid = vx.grid_for_bbox(lo, hi, elements_long_axis)
@@ -95,7 +95,7 @@ def demo_conditions(angle_deg: float = 0.0) -> ds.Conditions:
     keep = rot * ((Pos(-30, 0, 0) * Box(6, 24, 24)) + (Pos(26, 0, 15) * Box(8, 8, 6)))
     obstacle = rot * (Pos(0, 0, 0) * Rot(90, 0, 0) * Cylinder(radius=5, height=40))
 
-    soup = vx.triangles_from_shape(vx._unwrap(keep), deviation=0.2)
+    soup = vx.triangles_from_shape(vx.unwrap(keep), deviation=0.2)
     fixed = _rotated_face(soup, angle_deg, normal=(-1, 0, 0), point=(-33, 0, 0))
     load = _rotated_face(soup, angle_deg, normal=(0, 0, 1), point=(26, 0, 18))
     bodies = (

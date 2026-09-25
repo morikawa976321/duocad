@@ -37,7 +37,7 @@ def _box(size, at):
 
 
 def _face(shape, normal, point) -> int:
-    soup = vx.triangles_from_shape(vx._unwrap(shape), deviation=0.2)
+    soup = vx.triangles_from_shape(vx.unwrap(shape), deviation=0.2)
     hits = an.faces_matching(soup, kind="plane", normal=normal, near_point=point, near_tol=1e-4)
     assert len(hits) == 1, hits
     return hits[0]
@@ -242,13 +242,13 @@ def test_the_bounding_box_does_not_depend_on_an_earlier_tessellation() -> None:
 
     shape = Cylinder(radius=10.0, height=30.0)
     before = ds.condition_body("cyl", shape, roles=("keep",))
-    vx.triangles_from_shape(vx._unwrap(shape), deviation=2.0)  # 粗い三角形分割を付ける
+    vx.triangles_from_shape(vx.unwrap(shape), deviation=2.0)  # 粗い三角形分割を付ける
     after = ds.condition_body("cyl", shape, roles=("keep",))
     assert after.bbox_min == before.bbox_min and after.bbox_max == before.bbox_max
     assert np.allclose(before.bbox_min, (-10.0, -10.0, -15.0), atol=1e-6)
     assert np.allclose(before.bbox_max, (10.0, 10.0, 15.0), atol=1e-6)
     # 製品(`optimize_run.build_conditions`)が使う `kernel.bounding_box` も同じ箱を返す。
-    product = kernel.bounding_box(vx._unwrap(shape))
+    product = kernel.bounding_box(vx.unwrap(shape))
     assert np.allclose(product["min"], before.bbox_min, atol=1e-6)
     assert np.allclose(product["max"], before.bbox_max, atol=1e-6)
 

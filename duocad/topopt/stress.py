@@ -47,30 +47,21 @@ def von_mises(tensor: np.ndarray) -> np.ndarray:
     )
 
 
-def load_resultant(model: fem.Model) -> float:
-    """荷重ベクトルの**合力**(ベクトル和)の大きさ(無次元)。
-
-    **換算則の分母には使わない**(`load_magnitude_total` を使う)。自己釣り合いの荷重系で
-    0になるので、実荷重[N]との対応が決まらないからである。診断・検査のために残してある。
-    """
-    f = model.f.reshape(-1, 3)
-    return float(np.linalg.norm(f.sum(axis=0)))
+#: SIMP 補間の指数 `penal`。製品は二値の場しか解かない(値は効かない)が、**解くとき(`solve_displacement`)と
+#: 検算するとき(`acceptance.safety_check` の残差・要素エネルギー)は同じ値でなければならない**。
+PENAL = 3.0
 
 
 def load_magnitude_total(model: fem.Model) -> float:
-    """荷重ベクトルの**総量**(節点力の大きさの総和・無次元)。**換算則の分母はこれ**。
+    """荷重ベクトルの**総量**(節点力の大きさの総和・無次元)。`UnitScale.for_model` の分母(検査専用)。
 
-    合力(`load_resultant`)ではなく総和を取るのは、向きの違う荷重が同じ系に載りうるため。
+    合力(`fem.load_resultant` のノルム)ではなく総和を取るのは、向きの違う荷重が同じ系に載りうるため。
     打ち消し合う組(面Aへ下向き50N・面Bへ上向き50N)では合力が0になり、それで割ると
     応力の実単位換算が壊れる —— 総和なら0にならない。
 
     **荷重が1つ(または全部同じ向き)のときは合力と厳密に一致する。** `anchor.load_vector` は
-    `重み × 力ベクトル` を配るので全節点の力が平行になり、`Σ|f_i| = |Σf_i|` が成り立つ。
-    したがってこの定義への切り替えで既存の1荷重の数値は1ビットも動かない
+    `重み × 力ベクトル` を配るので全節点の力が平行になり、`Σ|f_i| = |Σf_i|` が成り立つ
     (`check_stress.py` がこの一致を数字で押さえている)。
-
-    `UnitScale.for_model` はこれを `solved_load` にして `load_n` と割り合わせるので、`load_n` も同じ定義
-    (大きさの総和)で渡すこと。**2つの定義が食い違うと応力が黙って定数倍ずれる。**
     """
     f = model.f.reshape(-1, 3)
     return float(np.linalg.norm(f, axis=1).sum())
@@ -112,15 +103,12 @@ class UnitScale:
         load_n: float,
         youngs_modulus_mpa: float,
     ) -> "UnitScale":
-        """解いた `Model` から無次元側(総荷重・E)を読んで換算則を作る。
+        """解いた `Model` から無次元側(総荷重・E)を読んで換算則を作る(**検査専用**。`anchor.faces_matching` と同じ扱い)。
 
-        **こちらを既定の作り方にすること。** `solved_load` を手で書くと、荷重ベクトルの
-        総量が 1.0 でない系(`anchor.load_vector` に `force` を渡した場合など)で応力が
-        黙って定数倍ずれる。
-
-        読むのは `load_magnitude_total`(節点力の大きさの総和)であって合力ではない ——
-        **自己釣り合いの荷重系(向きの違う荷重が打ち消し合う)もここを通る**。
-        荷重が1本のときは両者が一致するので、既存の数値は動かない。
+        製品(`acceptance.safety_check`)は荷重を実単位[N]のまま解くので、`UnitScale(..., solved_load=1.0)` を
+        直接作って要素サイズだけを換算する。`check_stress` / `check_fem` が無次元の荷重で解いた系に
+        実荷重 `load_n` を割り当てるのがこの口で、`solved_load` は `load_magnitude_total`(節点力の
+        大きさの総和)。合力ではないので、自己釣り合いの荷重系(向きの違う荷重が打ち消し合う)も通る。
         """
         resultant = load_magnitude_total(model)
         if not resultant > 0.0:
@@ -188,7 +176,7 @@ def element_stress(model: fem.Model, u: np.ndarray) -> StressField:
 def solve_displacement(
     model: fem.Model,
     rho: np.ndarray,
-    penal: float = 3.0,
+    penal: float = PENAL,
     *,
     solver: str = "cg",
     cg_rtol: float = 1e-9,

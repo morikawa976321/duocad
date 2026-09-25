@@ -1057,9 +1057,12 @@ def test_a_prerequisite_failure_is_not_counted_as_an_evaluation_error(monkeypatc
     ('target_tolerance', True), ('target_tolerance', float('inf')),
 ])
 def test_stage4_options_refuse_a_bool_and_an_out_of_range_value(name, value):
-    """落ちたら、段階4の引数が bool(int の部分型)や範囲外の値を黙って受け付けている。"""
+    """落ちたら、段階4の引数が bool(int の部分型)や範囲外の値を黙って受け付けている ——
+    または、検査が段階3(全材料の FEM)の後にしか無く、全材料が不合格の題材では不正な値が黙って通る。"""
     with pytest.raises(ValueError, match=name):
         bs.find_best_feasible(np.ones((4, 2, 2), bool), bar_conditions(), max_evaluations=10, **{name: value})
+    with pytest.raises(ValueError, match=name):
+        bs.find_best_feasible(np.zeros((4, 2, 2), bool), bar_conditions(), max_evaluations=10, **{name: value})
 
 
 def _full_material_safety_factor():

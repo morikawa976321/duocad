@@ -966,7 +966,7 @@ def model_from_design_mask(
         soup = anchor_shape
     else:
         soup = triangles_from_shape(
-            _unwrap(anchor_shape), deviation=dev, angular_deflection=angular_deflection
+            unwrap(anchor_shape), deviation=dev, angular_deflection=angular_deflection
         )
     report = inspect_soup(soup)
 
@@ -1047,7 +1047,7 @@ def _voxelize_region(region: Any, grid: Grid, deviation: float, angular: float, 
     言われた領域が1要素も掴めないまま最適化が走ると、支えの無い構造がもっともらしく
     出てくる。座標系や単位の取り違えがいちばんありそうな原因なので、範囲を出して落とす。
     """
-    solid = _unwrap(region)
+    solid = unwrap(region)
     soup = triangles_from_shape(solid, deviation=deviation, angular_deflection=angular)
     report = inspect_soup(soup)
     grid_lo, grid_hi = grid.world_box()
@@ -1069,8 +1069,8 @@ def _voxelize_region(region: Any, grid: Grid, deviation: float, angular: float, 
     return mask, report
 
 
-def _unwrap(shape: Any) -> Any:
-    """build123d のオブジェクトなら `.wrapped` を取り出す。"""
+def unwrap(shape: Any) -> Any:
+    """build123d のオブジェクトなら `.wrapped` を取り出す(`None` は拒む。`wrapped` が `None` なら元のオブジェクト)。"""
     if shape is None:
         raise ValueError("shape is None")
     inner = getattr(shape, "wrapped", None)

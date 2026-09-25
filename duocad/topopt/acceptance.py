@@ -150,13 +150,33 @@ def connectivity_check(material):
 # CAD: 保持・除外条件との体積の重なり。OCPには触らず duocad.kernel を呼ぶだけ。
 # ---------------------------------------------------------------------------
 
+def _cell_window(bounds, grid, shape):
+    """外接箱 `bounds`(`kernel.bounding_box`)と重なるセル範囲 `(lo, hi)`(格子 `shape` に切り詰める)。"""
+    origin, h = np.asarray(grid.origin, dtype=float), float(grid.spacing)
+    lo = np.maximum(0, np.floor((np.array(bounds['min']) - origin) / h).astype(int))
+    hi = np.minimum(shape, np.ceil((np.array(bounds['max']) - origin) / h).astype(int))
+    return lo, hi
+
+
+def _positive_volume(shape) -> float:
+    """妥当なソリッドの正の体積。不正な形状・正でない体積は例外(もっともらしい数値を返さない)。"""
+    kernel_brep.require_valid_solid(shape)
+    total = float(kernel.volume(shape))
+    if not np.isfinite(total) or total <= 0:
+        raise ValueError('条件CADに正の体積がない')
+    return total
+
+
+def _overall_status(statuses) -> str:
+    """個々の判定の集約: 1つでも fail なら fail、無ければ unknown があれば unknown、全部 pass なら pass。"""
+    return 'fail' if 'fail' in statuses else 'unknown' if 'unknown' in statuses else 'pass'
+
+
 def _material_boxes_within_bbox(material, grid, shape, *, cache=None):
     """材料セルのうち `shape` のbboxと重なる範囲だけを、x方向に融着した直方体列
     (world座標の(min, max)ペア)へ変換する。互いに体積を共有しない列になる。"""
-    bounds = kernel.bounding_box(shape, cache=cache)
+    lo, hi = _cell_window(kernel.bounding_box(shape, cache=cache), grid, material.shape)
     origin, h = np.asarray(grid.origin), float(grid.spacing)
-    lo = np.maximum(0, np.floor((np.array(bounds['min']) - origin) / h).astype(int))
-    hi = np.minimum(material.shape, np.ceil((np.array(bounds['max']) - origin) / h).astype(int))
     boxes = []
     for j in range(lo[1], hi[1]):
         for k in range(lo[2], hi[2]):
@@ -178,11 +198,8 @@ def intersection_volume(material, grid, shape, *, cache=None):
     同じCAD形状のbbox測り直しを避ける。**測り方自体は変わらない**ので、`cache=None` と
     渡した場合とで体積は一致する(この一致は検査で固定してある)。
     """
-    shape = getattr(shape, 'wrapped', shape)
-    kernel_brep.require_valid_solid(shape)
-    total = float(kernel.volume(shape))
-    if not np.isfinite(total) or total <= 0:
-        raise ValueError('条件CADに正の体積がない')
+    shape = voxelize.unwrap(shape)
+    total = _positive_volume(shape)
     boxes = _material_boxes_within_bbox(material, grid, shape, cache=cache)
     overlap = kernel_brep.boxes_common_volume(shape, boxes)
     return total, overlap
@@ -202,15 +219,10 @@ class _CellOverlaps:
     """
 
     def __init__(self, grid, shape, *, cache=None):
-        self.shape = getattr(shape, 'wrapped', shape)
-        kernel_brep.require_valid_solid(self.shape)
-        self.total = float(kernel.volume(self.shape))
-        if not np.isfinite(self.total) or self.total <= 0:
-            raise ValueError('条件CADに正の体積がない')
-        bounds = kernel.bounding_box(self.shape, cache=cache)
+        self.shape = voxelize.unwrap(shape)
+        self.total = _positive_volume(self.shape)
         self.origin, self.spacing = np.asarray(grid.origin, dtype=float), float(grid.spacing)
-        self.lo = np.maximum(0, np.floor((np.array(bounds['min']) - self.origin) / self.spacing).astype(int))
-        hi = np.minimum(grid.shape, np.ceil((np.array(bounds['max']) - self.origin) / self.spacing).astype(int))
+        self.lo, hi = _cell_window(kernel.bounding_box(self.shape, cache=cache), grid, grid.shape)
         self.values = np.full(tuple(np.maximum(hi, self.lo) - self.lo), np.nan)
 
     def overlap_of(self, material):
@@ -275,7 +287,7 @@ class RegionOverlaps:
 
     def overlap_volume(self, material, grid, shape, *, cache=None):
         """`intersection_volume` と同じ `(ソリッドの体積, 材料との共通体積)`。"""
-        raw = getattr(shape, 'wrapped', shape)
+        raw = voxelize.unwrap(shape)
         key = (kernel.shape_key(raw), tuple(float(v) for v in grid.origin), float(grid.spacing),
                tuple(int(n) for n in grid.shape))
         if key in self._entries:
@@ -317,8 +329,7 @@ def region_check(material, grid, bodies, *, preserve, cache=None, overlaps=None)
                              empty_volume_mm3=max(0.0, total - overlap), tolerance_mm3=tolerance))
         except Exception as error:
             rows.append(dict(body=name, status='unknown', error=f'{type(error).__name__}: {error}'))
-    statuses = [row['status'] for row in rows]
-    status = 'fail' if 'fail' in statuses else 'unknown' if 'unknown' in statuses else 'pass'
+    status = _overall_status([row['status'] for row in rows])
     if preserve and not rows:
         status = 'fail'
     return dict(status=status, bodies=rows, rule='intersection > tolerance' if preserve else 'CAD minus material > tolerance')
@@ -341,8 +352,9 @@ def condition_check(material, table, fixed_faces, load_faces, forces):
     fixed = []
     for kind, faces in (('fixed', fixed_faces), ('load', load_faces)):
         for index, face in enumerate(faces):
-            ids = table.node_ids([face])
-            lost = ids[~live[ids]]
+            # 空の面は fail の行(`nodes=0`)になる(`anchor.face_coverage`)。製品の経路は
+            # `find_initial_feasible` が先に `resolution_insufficient` で止めるので届かない。
+            ids, lost = anchor.face_coverage(table, face, live)
             row = dict(condition=f'{kind}_face_{face}', nodes=int(ids.size),
                        lost_nodes=int(lost.size), status='pass' if ids.size and not lost.size else 'fail')
             if kind == 'fixed':
@@ -371,9 +383,8 @@ def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_m
                  percentile, solver, fields=None):
     solve_info = {}
     try:
-        live = active_nodes(material).ravel()
-        active_dofs = np.repeat(live, 3)
-        physical_fixed = np.intersect1d(fixed, np.flatnonzero(active_dofs))
+        floating = anchor.floating_dofs(material)
+        physical_fixed = np.setdiff1d(fixed, floating)
         node_indices = np.array(np.unravel_index(physical_fixed // 3, tuple(n + 1 for n in material.shape))).T
         positions = node_indices - node_indices.mean(axis=0)
         rigid = np.zeros((len(physical_fixed), 6))
@@ -386,10 +397,11 @@ def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_m
             return dict(status='fail', reason='rigid_body_modes', message='剛体運動を拘束できない',
                         solver=None, solver_policy=solver)
         model = fem.Model(*material.shape, fixed_dofs=fixed, load=load,
-                          extra_fixed_dofs=np.flatnonzero(~active_dofs), active_mask=material)
+                          extra_fixed_dofs=floating, active_mask=material)
         density = material.astype(float)
         displacement = stress.solve_displacement(model, density, solver=solver, info=solve_info)
-        residual = model.stiffness_apply(density, 3.0, displacement) - model.f
+        # 検算は解いたときと同じ `penal`(二値の場では値が効かないが、違う値では別の行列になる)。
+        residual = model.stiffness_apply(density, stress.PENAL, displacement) - model.f
         relative = float(np.linalg.norm(residual[model.free]) / np.linalg.norm(model.f[model.free]))
         if not np.isfinite(displacement).all() or not math.isfinite(relative) or relative > fem.SOLVE_RESIDUAL_TOL:
             raise RuntimeError(f'残差検算に失敗: {relative}')
@@ -402,7 +414,7 @@ def safety_check(material, grid, fixed, load, *, target, allowable_mpa, youngs_m
             raise RuntimeError('安全率が非有限')
         if fields is not None:
             # 同じ変位から取る u_eᵀ k₀ u_e(単位剛性。空セルは節点を共有しても 0 にする)。
-            _, element_energy = model.compliance(density, 3.0, displacement)
+            _, element_energy = model.compliance(density, stress.PENAL, displacement)
             fields['element_energy'] = np.where(material, element_energy, 0.0)
         return dict(status='pass' if sf >= target else 'fail', safety_factor=sf,
                     target_safety_factor=target, representative_mpa=report.representative_mpa,
@@ -504,8 +516,7 @@ def inspect(material, before, grid, *, table, fixed_faces, load_faces, forces,
                                        percentile=percentile, solver=solver, fields=fields)
     else:
         checks['safety'] = dict(status='unknown', reason='prerequisites_failed')
-    statuses = [check['status'] for check in checks.values()]
-    status = 'fail' if 'fail' in statuses else 'unknown' if 'unknown' in statuses else 'pass'
+    status = _overall_status([check['status'] for check in checks.values()])
     return dict(schema_version=1, status=status, exit_code={'pass': 0, 'fail': 1, 'unknown': 2}[status],
                 stage='post-island-removal, pre-smoothing',
                 material_sha256=material_sha256(material),
@@ -536,7 +547,7 @@ def inspect_document(document, rho_clean, rho_before, grid, *, level=0.5, **kwar
     from duocad.optimize_run import build_conditions
     kwargs.setdefault('bbox_cache', document.bbox_cache)
     bundle = build_conditions(document)
-    soup = voxelize.triangles_from_shape(voxelize._unwrap(bundle.conditions.anchor),
+    soup = voxelize.triangles_from_shape(voxelize.unwrap(bundle.conditions.anchor),
                                          deviation=grid.spacing * voxelize.DEFAULT_DEVIATION_RATIO)
     # 「元の条件」は材料に対応付けた確定表(`docs/TOPOPT_PRE_SMOOTHING_CHECKS.md`)。過去記録には
     # 設計空間が無いので、島除去前の材料(候補が使えた材料の上限)に接する節点へ対応付ける。
@@ -555,8 +566,7 @@ def inspect_document(document, rho_clean, rho_before, grid, *, level=0.5, **kwar
         report['checks']['conditions']['status'] = 'fail'
         report['checks']['conditions']['mapping_reasons'] = {
             row['condition']: row['reasons'] for row in mapping['faces'] if row['reasons']}
-        statuses = [check['status'] for check in report['checks'].values()]
-        report['status'] = 'fail' if 'fail' in statuses else 'unknown' if 'unknown' in statuses else 'pass'
+        report['status'] = _overall_status([check['status'] for check in report['checks'].values()])
         report['exit_code'] = {'pass': 0, 'fail': 1, 'unknown': 2}[report['status']]
     report['level'] = level
     report['threshold_rule'] = 'rho > level'
