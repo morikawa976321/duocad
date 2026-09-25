@@ -288,7 +288,7 @@ runSmoke('smoke-grid-scale', { timeout: 60000, mcp: true }, async ({ mcp, browse
     if ((await extentNow()) !== 100) {
       fail(
         `文書が空の状態でframeAllを呼んでもピック範囲が縮まない` +
-          `(frameToContentの早期returnがapplyGridScaleより前にあると起きる回帰)`,
+          `(frameToContentの早期returnがgrid.rescaleより前にあると起きる回帰)`,
       )
     }
     ok('[E] 内容が空でもframeAllでピック範囲は縮む(BASE_EXTENTへ戻った)')

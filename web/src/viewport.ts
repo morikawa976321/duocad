@@ -30,23 +30,13 @@ import {
 import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOverlay'
 import { sampleFaces, type BodySamples } from './faceCulling'
 import { createResolutionTracker } from './resolutionTracker'
-import {
-  BASE_EXTENT,
-  TIERS,
-  boundingSquare,
-  extendUvBoxToPoint,
-  extentFor,
-  mmPerPixel,
-  tierAlphas,
-  type CameraProjection,
-  type UvBounds,
-  type UvBox,
-} from './gridScale'
+import { BASE_EXTENT, mmPerPixel, type CameraProjection } from './gridScale'
 import { createOriginGizmo } from './originGizmo'
 import { createGhostLayer } from './ghostLayer'
 import { createSectionView } from './sectionView'
 import { createSelectionBand, type BandRect } from './selectionBand'
-import { createPlaneGrid, type PlaneFrame, type PlaneGrid } from './planeGrid'
+import { createGridPlanes } from './gridPlanes'
+import { frameVector, planePoint } from './planeMath'
 import { createBatch, type SceneBatch } from './sceneBatch'
 import { distSq, distSqPointSegment, pickNearestWithinRadius, type ScreenPickCandidate } from './screenPick'
 import { variantCache } from './viewportMaterials'
@@ -64,12 +54,11 @@ import {
   type SketchDraw, type SketchEntityHit, type VertexMarker, type VertexRef, type Viewport,
 } from './viewportTypes'
 import {
-  AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR, BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_AXES, BASE_PLANE_HOVER_OPACITY,
-  BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS, DEPTH_BIAS_LAYER, DEPTH_BIAS_UNIT, EDGE_COLOR,
-  EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, GRID_ARMED_COLOR, GRID_COLOR, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET,
-  HOVER_LIGHTEN, LAYER, OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_EDGE_COLOR, PREVIEW_COLOR,
-  PROPOSED_COLOR, REGION_COLOR, REGION_SELECTED_COLOR, SKETCH_COLOR, SKETCH_FIT_MARGIN, SKETCH_GHOST_COLOR, SKETCH_HANDLE_COLOR,
-  SKETCH_HANDLE_PIXELS, SKETCH_SELECTED_COLOR, WORLD_UP, isSelectableFov, lighten, withDepthBias, type BodyMeshes,
+  BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS,
+  EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET, HOVER_LIGHTEN, LAYER,
+  OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_EDGE_COLOR, PREVIEW_COLOR, PROPOSED_COLOR,
+  REGION_COLOR, REGION_SELECTED_COLOR, SKETCH_COLOR, SKETCH_FIT_MARGIN, SKETCH_GHOST_COLOR, SKETCH_HANDLE_COLOR,
+  SKETCH_HANDLE_PIXELS, SKETCH_SELECTED_COLOR, WORLD_UP, isSelectableFov, lighten, type BodyMeshes,
 } from './viewportConstants'
 
 export { FOV_DEFAULT, FOV_ORTHO, isSelectableFov }
@@ -109,8 +98,8 @@ export function createViewport(container: HTMLElement): Viewport {
   const orthographic = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10000)
   let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = perspective
   // 空の文書でも原点まわりが見える位置。部品が届いたら `frameToContent` が上書きする。
-  // **`BASE_EXTENT` を使う**(可変の `gridExtent` ではない) —— ここは起動直後の1回きりで、
-  // `gridExtent` はまだ宣言されておらず(下の平面グリッドの節より前)、その初期値は
+  // **`BASE_EXTENT` を使う**(可変の `grid.extent()` ではない) —— ここは起動直後の1回きりで、
+  // `grid` はまだ作られておらず(下の平面グリッドの節より前)、その初期値は
   // 常に `BASE_EXTENT` だから同じ値になる。
   //
   // **距離は `fitDistance` で求める**。決め打ちの `diagonal * 1.2` のような定数は
@@ -154,7 +143,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // **スケッチのグループもここで作る**(使うのは下の「C: スケッチ」節だが、宣言だけ先に置く)。
   // グリッドの描く範囲が**すべてのスケッチとソリッド**から決まる(`contentBoxForGrid`)ので、
-  // 初期化中の `applyGridPlanes()` が既にこれを読む。宣言をC節に置いたままにすると
+  // 初期化中の `createGridPlanes()` が既にこれを読む。宣言をC節に置いたままにすると
   // **TDZで落ちる**(`Cannot access 'sketchRoot' before initialization`) —— 例外は
   // `createViewport` の途中で投げられ、`window.__duocad.ready` が永久に立たないので、
   // 症状は「画面が出ない・実機smokeが60秒待って死ぬ」という原因から遠い形で出る。
@@ -191,21 +180,25 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // ------------------------------------------------------------------ 平面グリッド(3段固定・無限)
   //
-  // **「ある平面frame(原点・u軸・v軸)を受け取って描くもの」**(`planeGrid.ts`)。XY床は
-  // その一利用者にすぎず、どの平面を出すかは状態が決める(`desiredGridPlanes`)。
+  // 描く平面・基準平面のピック範囲・ホバー板・面外の軸線は `gridPlanes.ts`。
   // `root` には入れない —— 入れると初回の `frameToContent` がグリッドの箱に引っ張られる。
-  // ピック対象にもしない(判定は `basePlaneAt` の解析交差が別に持つ)。
-  const gridRoot = new THREE.Group()
-  /** 基準平面のホバー板(除去と破棄の束。ピックは `basePlaneHoverMeshes` から)。 */
-  const basePlaneHoverBatch = createBatch(gridRoot)
-  // Group の `renderOrder` は three.js では groupOrder として子全体に効く。中身どうしの
-  // 前後は各オブジェクトの `LAYER.*` が決める。
-  gridRoot.renderOrder = -1
-  scene.add(gridRoot)
+  // ピック対象にもしない(判定は `basePlaneAt` の解析交差が別に持ち、範囲の半幅は `grid.extent()`)。
+  // **`root` / `sketchRoot` を作った後で呼ぶ**(最初の描画で `contentBoxForGrid` を読む)。
+  const grid = createGridPlanes({
+    contentBox: contentBoxForGrid,
+    faceMesh: (bodyId, faceIndex) =>
+      allFaceMeshes.find(
+        (candidate) => candidate.userData.bodyId === bodyId && candidate.userData.faceIndex === faceIndex,
+      ),
+    worldPerPixel,
+    camera: () => camera,
+    onExtentChange: updateClipPlanes,
+  })
+  scene.add(grid.object)
 
   // ------------------------------------------------------------------ 常設の原点ギズモ(issue #8)
   //
-  // 原点・軸・平面の7項目を1つのGroupにまとめた装飾(`originGizmo.ts`)。**`gridRoot` には
+  // 原点・軸・平面の7項目を1つのGroupにまとめた装飾(`originGizmo.ts`)。**`grid.object` には
   // 入れない** —— あちらは `groupOrder` を -1 に固定しており、中に入れると個々の
   // `LAYER.originGizmo` が効かなくなる。理由は `root` にも入れない(初回フレーミングを
   // 歪めない、既存装飾群と同じ規律)。既定は表示。
@@ -229,400 +222,6 @@ export function createViewport(container: HTMLElement): Viewport {
   })
   scene.add(section.object)
 
-  /**
-   * 基準平面のピック範囲の半幅[mm]。**描画範囲ではない**(格子は無限) ——
-   * `basePlaneAt` のピック範囲・`updateClipPlanes` のnear/far下限・面外の軸線の長さが
-   * ここを見る。`applyGridScale` だけが動かす。
-   */
-  let gridExtent = BASE_EXTENT
-
-  /** 基準3平面を指せるか(`showBasePlanes`)。**出していない間は当たり判定を回さない**。 */
-  let basePlanesOn = false
-
-  /**
-   * スケッチ中のスケッチ平面のframe(モード外は null)。**書き手は `setGridSketchFrame`
-   * だけ**で、`setActiveSketch` と `showSketches` の両方から呼ぶ —— モードに入った時点では
-   * まだ描画指示が届いておらず、frameを知らないことがある。
-   */
-  let sketchGridFrame: PlaneFrame | null = null
-
-  /**
-   * `sketchGridFrame` が非nullの間、実際にグリッドへ渡している描く正方形(カーソル追従で
-   * 広がった後の値も含む)。面スケッチで `faceUvBoxOnly` が測れなかったときは `null`
-   * (無制限描画。`updateActiveSketchGridCursor` のnullガード参照)。**書き手は
-   * `setGridSketchFrame` / `desiredGridPlanes`(基準平面スケッチ側)/
-   * `updateActiveSketchGridCursor`(カーソル追従の軽量経路)の3箇所**
-   * (`sketchGridFrame` と対で更新する)。
-   */
-  let sketchGridBounds: UvBounds | null = null
-
-  /**
-   * `sketchGridFrame` が非nullの間(=スケッチで実際に描画中)の「内容だけ」のUV矩形
-   * (カーソル合成前・`boundingSquare` の余白/丸め前)。**カーソル追従の軽量経路
-   * (`updateActiveSketchGridCursor`)専用のキャッシュ** —— pointermoveのたびに
-   * `contentBoxForGrid`/面メッシュの頂点走査をやり直さないための分離で、書き手は
-   * `desiredGridPlanes`(基準平面スケッチ側)と `refreshGridSketchFrame`(面スケッチ側)の
-   * 「内容が変わったときだけ」通る箇所だけ(タスク仕様のパフォーマンス上の注意)。
-   */
-  let sketchContentUvBox: UvBox | null = null
-  /** `sketchContentUvBox` と対で持つ、`boundingSquare` へ渡す `includeOrigin`。 */
-  let sketchContentIncludeOrigin = false
-
-  /**
-   * いまのスケッチが**実ジオメトリの面(`plane.kind === 'face'`)へ貼られているか**。
-   * **`basePlaneForFrame(sketchGridFrame)` のframe一致だけでは判定できない** ——
-   * 「XY床にスケッチ→押し出し→その底面に再度スケッチ」のように**実ジオメトリの面でも
-   * frame が数値的に基準平面と一致する**ことがあり(原点(0,0,0)・u/vが基準平面と同じ)、
-   * frame一致だけで判定すると任意面のグリッド(深度バイアス層・extentの有限化・直交軸なし)が
-   * 不発になる。**その面は実ソリッドのメッシュと完全同一平面**なので、本来はz-fighting対策が
-   * 最も要る場面である。判定は `plane.kind` を正とし、`basePlaneForFrame` は
-   * `plane.kind==='base'` のときにXY/XZ/YZのどれかを選ぶ用途にしか使わない。
-   */
-  let sketchGridIsFacePlane = false
-
-  /** 実機検査フック(`gridTiers`)へ出す、いま表示している平面の名前。 */
-  let gridPlanesShown: string[] = []
-  /**
-   * `gridPlanesShown` と対で持つ、各グリッドに適用中の深度バイアス層番号
-   * (`DEPTH_BIAS_LAYER`)。**実機検査フック専用** —— 任意面のグリッドが
-   * 本当に `sketchFaceGrid` 層(基準平面の `planeGrid` 層とは別)を使っているかは、
-   * z-fightingの有無を静止画のスクリーンショットだけでは機械的に見分けられないため、
-   * 数値そのものを検査できるようにする。
-   */
-  let gridDepthBiasLayers: number[] = []
-
-  /** `gridPlanesShown` と対で持つ、各グリッドに適用中の描画範囲(実機検査フック `gridTiers`)。 */
-  let gridPlaneBounds: Array<UvBounds | null> = []
-
-  /**
-   * 同時に出しうる平面は最大3枚(対象待ちの XY/XZ/YZ)。**作り直さず使い回す** ——
-   * frameを差し替えるだけで別の平面になる。
-   */
-  const planeGrids: PlaneGrid[] = [createPlaneGrid(), createPlaneGrid(), createPlaneGrid()]
-  for (const grid of planeGrids) {
-    grid.object.renderOrder = LAYER.planeGrid
-    // 深度バイアスは `applyGridPlanes()`(直後に必ず呼ぶ)が状態ごとに入れ直す
-    // (`GridPlaneSpec.depthBiasLayer`) —— ここでは初期化しない。
-    grid.setVisible(false)
-    gridRoot.add(grid.object)
-  }
-
-  /** 面外の軸(1本)。面内の軸はグリッドのシェーダーが描くので、線にするのはこれだけ。 */
-  const gridAxisMaterial = withDepthBias(
-    new THREE.LineBasicMaterial({
-      color: AXIS_Z_COLOR,
-      // 不透明だが**透明パスへ入れる** —— 実体より後に描かないと、共平面の面に隠れる。
-      transparent: true,
-      depthWrite: false,
-    }),
-    DEPTH_BIAS_LAYER.gridAxisLine,
-  )
-  let gridAxisLine: THREE.Line | null = null
-  let gridAxisShown: 'X' | 'Y' | 'Z' | null = null
-
-  /**
-   * ホバー中の基準平面に重ねる板(**同時に見えるのは多くても1枚**)。ピック範囲が変わる
-   * たびに作り直す(`rebuildBasePlaneHover`)。
-   *
-   * 平面ごとの色分けを線でやる代わりに半透明の板を重ねて「今カーソルが指しているのは
-   * この平面」を出す。**当たり判定には使わない** —— 判定は
-   * 今までどおり `basePlaneAt` の解析交差である。
-   */
-  const basePlaneHoverMeshes = new Map<BasePlaneName, THREE.Mesh>()
-
-  function basePlaneSpec(name: BasePlaneName): (typeof BASE_PLANES)[number] {
-    const found = BASE_PLANES.find((spec) => spec.name === name)
-    if (found === undefined) throw new Error(`基準平面が表に無い: ${name}`)
-    return found
-  }
-
-  function baseFrame(name: BasePlaneName): PlaneFrame {
-    const spec = basePlaneSpec(name)
-    return { origin: [0, 0, 0], u: spec.u, v: spec.v }
-  }
-
-  /**
-   * frameがどの基準平面のものか(u/vの一致で見る)。基準平面でなければ null。
-   *
-   * **これは「基準平面か任意面か」の判定には使わない** ——
-   * 実ジオメトリの面(`plane.kind==='face'`)でも、frameが基準平面と数値的に一致することが
-   * ある(「XY床にスケッチ→押し出し→その底面に再度スケッチ」が典型例。原点(0,0,0)・u/vが
-   * 基準平面と同じになる)。その判定は `sketchGridIsFacePlane`(`plane.kind` を正とする)が
-   * 持つ。ここが答えるのは「`plane.kind==='base'` のとき、XY/XZ/YZのどれを表示するか」だけ。
-   */
-  function basePlaneForFrame(frame: PlaneFrame): BasePlaneName | null {
-    const same = (a: readonly number[], b: readonly number[]): boolean =>
-      Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6 && Math.abs(a[2] - b[2]) < 1e-6
-    if (!same(frame.origin, [0, 0, 0])) return null
-    for (const spec of BASE_PLANES) {
-      if (same(frame.u, spec.u) && same(frame.v, spec.v)) return spec.name
-    }
-    return null
-  }
-
-  interface GridPlaneSpec {
-    /** 実機検査フック(`gridTiers`)へ出す名前。 */
-    name: string
-    frame: PlaneFrame
-    /** 面内の軸の色。`null` の側は描かない(同じ世界軸を2枚が二重に描かないため)。 */
-    uColor: number | null
-    vColor: number | null
-    /** 描く正方形(frame上の中心と半径[mm])。`null` は範囲が測れなかったときだけ。 */
-    bounds: UvBounds | null
-    /** 深度バイアスの層番号(`DEPTH_BIAS_LAYER`)。 */
-    depthBiasLayer: number
-  }
-
-  /**
-   * いま出す平面と、面外に線で描く軸(完了条件4の表そのもの)。
-   *
-   * | 状態 | 表示 |
-   * |---|---|
-   * | 通常(スケッチ外) | XY平面 + Z軸 |
-   * | スケッチ起動中(対象待ち・`showBasePlanes(true)`) | 3平面すべて |
-   * | 基準平面へのスケッチ中 | その平面 + それに直交する軸 |
-   * | 任意面へのスケッチ中 | その面のframeのグリッドのみ(直交軸なし。本人指定) |
-   *
-   * 対象待ちを3平面のままにするのは、基準平面も**クリックして指す**から。
-   * ここでXZ/YZを隠すと
-   * 指せなくなる。3枚のときは3本の軸が全部どれかの面内に出るので、面外の軸は要らない。
-   */
-  function desiredGridPlanes(): {
-    planes: GridPlaneSpec[]
-    axis: (typeof BASE_PLANE_AXES)[BasePlaneName]['outOfPlane'] | null
-  } {
-    if (basePlanesOn) {
-      return {
-        planes: [
-          { name: 'XY', frame: baseFrame('XY'), uColor: AXIS_X_COLOR, vColor: AXIS_Y_COLOR, bounds: contentBoundsForPlane(baseFrame('XY')), depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid },
-          { name: 'XZ', frame: baseFrame('XZ'), uColor: null, vColor: AXIS_Z_COLOR, bounds: contentBoundsForPlane(baseFrame('XZ')), depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid },
-          { name: 'YZ', frame: baseFrame('YZ'), uColor: null, vColor: null, bounds: contentBoundsForPlane(baseFrame('YZ')), depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid },
-        ],
-        axis: null,
-      }
-    }
-    if (sketchGridFrame !== null && sketchGridIsFacePlane) {
-      // 実ジオメトリの面(`plane.kind==='face'`)へのスケッチ中。その面のframeへそのまま
-      // 乗せる —— 原点・u/v軸はスケッチ平面のもの(完了条件4)。直交軸は出さない
-      // (完了条件3・本人指定)。**frameが基準平面と数値的に一致していてもここへ来る**
-      // (`sketchGridIsFacePlane` が `plane.kind` を正として判定するため —— frame一致だけでは
-      // 判別できない事情は `sketchGridIsFacePlane` のdocstring参照)。貼り付けた面
-      // (A群のソリッド)と完全同一平面になるので、バイアスの層番号は別枠(`sketchFaceGrid`)を使う
-      // (B群・タスク指示)。
-      return {
-        planes: [
-          {
-            name: 'sketch-face',
-            frame: sketchGridFrame,
-            uColor: null,
-            vColor: null,
-            bounds: sketchGridBounds,
-            depthBiasLayer: DEPTH_BIAS_LAYER.sketchFaceGrid,
-          },
-        ],
-        axis: null,
-      }
-    }
-    // ここへ来るのは「スケッチ外(通常表示)」か「`plane.kind==='base'` のスケッチ中」だけ。
-    // 後者の平面名は frame一致で解決する(基準平面のframeは常に3つのどれかと一致するので
-    // `sketchPlane` は通常 null にならないが、万一の不一致は安全側の既定 'XY' へ落とす)。
-    const sketchPlane = sketchGridFrame === null ? null : basePlaneForFrame(sketchGridFrame)
-    const name: BasePlaneName = sketchPlane ?? 'XY'
-    const axes = BASE_PLANE_AXES[name]
-    // **基準平面スケッチ中(`sketchGridFrame !== null`)だけ、カーソル追従の
-    // キャッシュ(`sketchContentUvBox`)を入れ直す** —— このブランチは内容が変わるたびに
-    // 呼ばれる(`applyGridScale`/`setGridSketchFrame` 経由)ので、ここが
-    // 「内容が変わったときだけ計算する」場所そのもの(タスク仕様のパフォーマンス上の注意)。
-    // 通常表示(`sketchGridFrame === null`)は追従の対象外(完了条件4)なのでキャッシュに触らない。
-    let bounds: UvBounds
-    if (sketchGridFrame !== null) {
-      sketchContentUvBox = contentUvBoxForFrame(baseFrame(name))
-      sketchContentIncludeOrigin = true
-      bounds = boundingSquare(sketchContentUvBox, { includeOrigin: true })
-      sketchGridBounds = bounds
-    } else {
-      bounds = contentBoundsForPlane(baseFrame(name))
-    }
-    return {
-      planes: [
-        {
-          name,
-          frame: baseFrame(name),
-          uColor: axes.uColor,
-          vColor: axes.vColor,
-          bounds,
-          depthBiasLayer: DEPTH_BIAS_LAYER.planeGrid,
-        },
-      ],
-      axis: axes.outOfPlane,
-    }
-  }
-
-  function rebuildGridAxisLine(
-    axis: (typeof BASE_PLANE_AXES)[BasePlaneName]['outOfPlane'] | null,
-    halfLength: number,
-  ): void {
-    if (gridAxisLine !== null) {
-      gridRoot.remove(gridAxisLine)
-      gridAxisLine.geometry.dispose()
-      gridAxisLine = null
-    }
-    gridAxisShown = axis === null ? null : axis.name
-    if (axis === null) return
-    gridAxisMaterial.color.setHex(axis.color)
-    const geometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(-axis.dir[0], -axis.dir[1], -axis.dir[2]).multiplyScalar(halfLength),
-      new THREE.Vector3(axis.dir[0], axis.dir[1], axis.dir[2]).multiplyScalar(halfLength),
-    ])
-    const line = new THREE.Line(geometry, gridAxisMaterial)
-    line.renderOrder = LAYER.gridAxisLine
-    line.raycast = () => {}
-    gridRoot.add(line)
-    gridAxisLine = line
-  }
-
-  /**
-   * ホバー板をいまのピック範囲で作り直す。**`basePlaneAt` の判定範囲と同じ `gridExtent`
-   * から作る** —— ここを取りこぼすと「板は見えているのに指せない(逆も)」という原因の
-   * 遠い壊れ方をする。
-   *
-   * `applyBasePlaneHover()` はここでは呼ばない —— 初回呼び出しはまだ `hoverPlane` が
-   * 宣言される前(TDZ)に走るため。作り直し後にホバー状態を反映するのは呼び出し元
-   * (`applyGridScale`)の仕事にしてある。
-   */
-  function rebuildBasePlaneHover(extent: number): void {
-    basePlaneHoverBatch.clear()
-    basePlaneHoverMeshes.clear()
-
-    const hoverMaterial = withDepthBias(
-      new THREE.MeshBasicMaterial({
-        color: GRID_ARMED_COLOR,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: BASE_PLANE_HOVER_OPACITY,
-        // 半透明どうしで真っ黒にならないように奥行きは書かない(`previewMaterial` と同じ)。
-        depthWrite: false,
-      }),
-      DEPTH_BIAS_LAYER.basePlaneHover,
-    )
-    basePlaneHoverBatch.own(hoverMaterial)
-    for (const spec of BASE_PLANES) {
-      const corners = ([[-1, -1], [1, -1], [1, 1], [-1, 1]] as const).map(([su, sv]) =>
-        planePoint(null, spec.u, spec.v, su * extent, sv * extent),
-      )
-      const geometry = new THREE.BufferGeometry().setFromPoints([
-        corners[0], corners[1], corners[2],
-        corners[0], corners[2], corners[3],
-      ])
-      const mesh = new THREE.Mesh(geometry, hoverMaterial)
-      mesh.renderOrder = LAYER.basePlaneHover
-      mesh.visible = false
-      basePlaneHoverBatch.add(mesh, geometry)
-      basePlaneHoverMeshes.set(spec.name, mesh)
-    }
-  }
-
-  /** 出す平面・面内の軸・色・面外の軸線を、いまの状態から入れ直す。 */
-  function applyGridPlanes(): void {
-    const wanted = desiredGridPlanes()
-    const color = basePlanesOn ? GRID_ARMED_COLOR : GRID_COLOR
-    planeGrids.forEach((grid, index) => {
-      const spec: GridPlaneSpec | undefined = wanted.planes[index]
-      if (spec === undefined) {
-        grid.setVisible(false)
-        return
-      }
-      grid.setFrame(spec.frame)
-      grid.setAxisColors(spec.uColor, spec.vColor)
-      grid.setColor(color)
-      // **常に内容を一回り大きく包む正方形で切る**。
-      // 基準平面は「すべてのスケッチとソリッド ∪ 原点」、任意面はその面自身の範囲が正。
-      grid.setBounds(spec.bounds)
-      // 任意面は貼り付けた面と同一平面になるので、バイアスの層番号を別枠にする
-      // (`desiredGridPlanes` が選ぶ)。他の状態は従来どおり `planeGrid` のまま。
-      grid.setDepthBias(spec.depthBiasLayer * DEPTH_BIAS_UNIT)
-      grid.setVisible(true)
-    })
-    gridPlanesShown = wanted.planes.map((spec) => spec.name)
-    gridDepthBiasLayers = wanted.planes.map((spec) => spec.depthBiasLayer)
-    gridPlaneBounds = wanted.planes.map((spec) => spec.bounds)
-    // 面外の軸線は**格子の枠と同じ長さ**にする(枠より長いと1本だけ飛び出して見える)。
-    rebuildGridAxisLine(wanted.axis, wanted.planes[0]?.bounds?.half ?? gridExtent)
-  }
-
-  /**
-   * スケッチ平面のframeを差し替える(モード外は null)。表示する平面がこれで決まる。
-   * `isFacePlane` は `plane.kind==='face'` かどうか(基準平面か任意面かの判定そのもの)。
-   * `bounds` は `isFacePlane` のときだけ
-   * 効く(基準平面・モード外は `desiredGridPlanes` が無視する)。
-   */
-  function setGridSketchFrame(
-    frame: PlaneFrame | null,
-    bounds: UvBounds | null,
-    isFacePlane: boolean,
-  ): void {
-    sketchGridFrame = frame
-    sketchGridBounds = bounds
-    sketchGridIsFacePlane = isFacePlane
-    applyGridPlanes()
-  }
-
-  /**
-   * カーソル追従の軽量経路(`sketchContentUvBox` のdocstring参照)。`applyGridPlanes()` は
-   * 呼ばない —— `sketchGridFrame !== null` のとき `desiredGridPlanes()` は常に単一平面
-   * (`planes.length===1`)を返すので、`planeGrids[0]` だけを直接書き換えれば足りる
-   * (`basePlanesOn` の3平面とは同時に立たない。`App.svelte` の `wantsBasePlanes` が
-   * `sketchId === null` を条件に入れている)。
-   *
-   * **`sketchContentUvBox === null` のときは、面スケッチか基準平面スケッチかを問わず
-   * 何もしない**。面スケッチでは `faceUvBoxOnly` が「面を測れない」を表す契約上のnullで、
-   * `desiredGridPlanes` はこれを `setBounds(null)`(無制限描画。`planeGrid.ts` の
-   * `uBoundsHalf<=0`)として渡している。ここで `boundingSquare(null, ...)` を呼ぶと
-   * `BASE_EXTENT`(100mm)の**有限**な既定へ縮んでしまい、「測れないときは無制限に描いて
-   * 安全側へ倒す」という契約をpointermoveのたびに壊す。基準平面スケッチでは
-   * `sketchContentUvBox===null` は「空の文書」を表し、`desiredGridPlanes` が
-   * `boundingSquare(null, { includeOrigin: true })` で既に `BASE_EXTENT` の固定正方形を
-   * `sketchGridBounds` に入れている——**ここで早期returnせず `extendUvBoxToPoint(null, point)`
-   * へ進むと、カーソル1点だけの矩形が作られ、原点とカーソルの両方を含む可変な正方形に
-   * 化けてしまう**(空スケッチなのにグリッドがカーソル位置へ追従して伸縮する見た目)。
-   */
-  function updateActiveSketchGridCursor(point: { u: number; v: number } | null): void {
-    if (sketchGridFrame === null) return
-    if (sketchContentUvBox === null) return
-    const merged = extendUvBoxToPoint(sketchContentUvBox, point)
-    const bounds = boundingSquare(merged, { includeOrigin: sketchContentIncludeOrigin })
-    sketchGridBounds = bounds
-    gridPlaneBounds = [bounds]
-    planeGrids[0].setBounds(bounds)
-  }
-
-  /**
-   * 段ごとの不透明度とカメラ行列を毎フレーム入れ直す。**CPUの仕事はこれだけ**で、
-   * ジオメトリには一切触らない(格子はシェーダーが作る)。
-   *
-   * 不透明度は `gridScale.ts` の `tierAlpha`(＝Nodeから検査できる純関数)が決める。
-   * シェーダーはそれを上限に、1画素ごとの局所的な線間隔でさらに落とす。
-   */
-  let gridMmPerPixel = 0
-  let gridTierAlphaValues: [number, number, number] = [0, 0, 0]
-  const gridViewProjection = new THREE.Matrix4()
-  const gridInverseViewProjection = new THREE.Matrix4()
-
-  function updateGridUniforms(): void {
-    gridMmPerPixel = worldPerPixel()
-    gridTierAlphaValues = tierAlphas(gridMmPerPixel)
-    camera.updateMatrixWorld()
-    gridViewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
-    gridInverseViewProjection.copy(gridViewProjection).invert()
-    for (const grid of planeGrids) {
-      grid.setTierAlphas(gridTierAlphaValues)
-      grid.setCamera(gridViewProjection, gridInverseViewProjection)
-    }
-  }
-
-  rebuildBasePlaneHover(gridExtent)
-  applyGridPlanes()
-
   const cube = createViewCubeOverlay({
     renderer,
     camera: () => camera,
@@ -637,7 +236,7 @@ export function createViewport(container: HTMLElement): Viewport {
   let sketchCursorWanted = false
 
   function applyBasePlaneHover(): void {
-    for (const [name, mesh] of basePlaneHoverMeshes) mesh.visible = hoverPlane === name
+    grid.setHoverPlane(hoverPlane)
   }
 
   /**
@@ -685,7 +284,7 @@ export function createViewport(container: HTMLElement): Viewport {
       }
       return pick(entry?.handleLines.find((line) => line.userData.entityId === sketchEntity.entityId))
     }
-    if (hoverPlane !== null) return pick(basePlaneHoverMeshes.get(hoverPlane))
+    if (hoverPlane !== null) return pick(grid.hoverMesh(hoverPlane))
     return null
   }
 
@@ -1143,14 +742,14 @@ export function createViewport(container: HTMLElement): Viewport {
    * 小さくなければならない)。far は既存の `対角 × 20` の保守性をそのまま保ちつつ、
    * 距離が伸びた場合の下限も持つ(`frameToContent` の元のガードコメントの理由と同じ)。
    *
-   * `span` の下限に `gridExtent * 2` を置くのは、空の文書やグリッドしか無い場面でも
+   * `span` の下限に `grid.extent() * 2` を置くのは、空の文書やグリッドしか無い場面でも
    * 視錐台がグリッド全体を収める大きさを保つため(`contentDiagonal` はボディが無いと0)。
-   * **`gridExtent` は固定ではない**(`applyGridScale`)ので、グリッドが
+   * **ピック範囲の半幅は固定ではない**(`grid.rescale`)ので、グリッドが
    * 広がればここの下限も一緒に広がる —— 取りこぼすと、グリッドは見えているのに
    * その外側でnear/farが詰まる、という遠い壊れ方をする。
    */
   function updateClipPlanes(): void {
-    const span = Math.max(contentDiagonal, gridExtent * 2)
+    const span = Math.max(contentDiagonal, grid.extent() * 2)
     const distance = camera.position.distanceTo(controls.target)
     camera.near = Math.max(Math.min(span, distance) / 1000, 0.01)
     camera.far = Math.max(span * 20, distance * 4)
@@ -1158,85 +757,15 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * グリッド計算専用の外接直方体。**`root` + `sketchRoot` だけ**から作る —— `gridRoot`
+   * グリッド計算専用の外接直方体。**`root` + `sketchRoot` だけ**から作る —— `grid.object`
    * (グリッド自身)を含めると「グリッドが伸びる→箱が大きくなる→グリッドが伸びる」の
-   * 発散フィードバックループになる(`gridRoot` は元々 `root` に入れていない。上のコメント
-   * 参照)。`refreshContentDiagonal` の箱と同じもの(そちらは対角の長さだけを取り出す)。
+   * 発散フィードバックループになる(`grid.object` は `root` に入れていない。平面グリッドの節の
+   * コメント参照)。`refreshContentDiagonal` の箱と同じもの(そちらは対角の長さだけを取り出す)。
    */
   function contentBoxForGrid(): THREE.Box3 {
     const box = new THREE.Box3().setFromObject(root)
     box.union(new THREE.Box3().setFromObject(sketchRoot))
     return box
-  }
-
-  /**
-   * 基準平面グリッドの「内容だけ」のUV矩形(`boundingSquare` の余白/丸め前)。
-   * **すべてのスケッチとソリッドの外接直方体**を、その平面の u/v へ射影して求める。
-   *
-   * 射影するのは**箱の8隅**である。箱は軸並行なので、どの向きのframeでも8隅の射影の
-   * 最小・最大が射影像の外接矩形になる(面の頂点を全部回す `faceUvBoxOnly` と違い、内容が
-   * 何万頂点あっても8点で済む)。
-   *
-   * `boundingSquare` を呼ばず生の矩形を返すのは、カーソル追従(`extendUvBoxToPoint`)が
-   * 余白・丸めより**前**に合成する必要があるため(`contentBoundsForPlane` 参照)。
-   */
-  function contentUvBoxForFrame(frame: PlaneFrame): UvBox | null {
-    const box = contentBoxForGrid()
-    if (box.isEmpty()) return null
-    const origin = frameVector(frame.origin)
-    const axisU = frameVector(frame.u).normalize()
-    const axisV = frameVector(frame.v).normalize()
-    const corner = new THREE.Vector3()
-    let uv: UvBox | null = null
-    for (let i = 0; i < 8; i++) {
-      corner
-        .set(
-          i & 1 ? box.max.x : box.min.x,
-          i & 2 ? box.max.y : box.min.y,
-          i & 4 ? box.max.z : box.min.z,
-        )
-        .sub(origin)
-      uv = extendUvBoxToPoint(uv, { u: corner.dot(axisU), v: corner.dot(axisV) })
-    }
-    return uv
-  }
-
-  /**
-   * 基準平面のグリッドを描く正方形。`contentUvBoxForFrame` を丸ごと包むだけの薄い覆い
-   * (カーソル追従が要らない呼び出し側 —— 3平面対象待ち・スケッチ外の通常表示 —— 専用)。
-   *
-   * `includeOrigin: true` —— モデルが原点から遠いとき、原点が枠の外へ出ると
-   * 「原点がどこか読める」というグリッド本来の役割が失われる。
-   */
-  function contentBoundsForPlane(frame: PlaneFrame): UvBounds {
-    return boundingSquare(contentUvBoxForFrame(frame), { includeOrigin: true })
-  }
-
-  /**
-   * **基準平面のピック範囲**の半幅を内容の大きさへ合わせる(`gridScale.ts` の `extentFor`)。
-   * **格子の見た目には効かない** —— 刻みは3段固定で、格子はシェーダーが無限に描く。
-   *
-   * **広げるのは常に即座**(`allowShrink` に関係なく)。**縮めるのは `allowShrink` が
-   * 立っているときだけ** —— `frameToContent` が実際に合わせたとき(＝`frameAll`)と、
-   * 新規文書にしたとき(`resetGrid`)に限る。ふつうの編集(`refreshContentDiagonal` からの
-   * 呼び出し)は常に `allowShrink: false` で、内容がしきい値付近で揺れても指せる範囲が
-   * 前後に揺れることはない。
-   *
-   * 範囲が変わったら、ホバー板(`rebuildBasePlaneHover`)と面外の軸線の長さ
-   * (`applyGridPlanes`)を組み直し、near/farの下限(`updateClipPlanes`)も引き直す。
-   */
-  function applyGridScale(box: THREE.Box3, allowShrink: boolean): void {
-    const extent = extentFor(box)
-    const changed = extent !== gridExtent && !(extent < gridExtent && !allowShrink)
-    if (changed) {
-      gridExtent = extent
-      rebuildBasePlaneHover(gridExtent)
-      applyBasePlaneHover() // 組み直した新しいメッシュへ、いまのホバー状態を反映し直す
-      updateClipPlanes()
-    }
-    // **ピック範囲が動かなくても描画の枠は入れ直す** —— 枠は内容そのもの(`contentBoxForGrid`)
-    // から引くので、`extentFor` の1-2-5の丸めやヒステリシスに載らない変化でも動く。
-    applyGridPlanes()
   }
 
   /** シーンに今ある全メッシュの外接直方体にカメラを合わせる(初回だけ)。
@@ -1261,8 +790,8 @@ export function createViewport(container: HTMLElement): Viewport {
     // (`contentBoxForGrid()`は`sketchRoot`も見るので、ボディだけ消してスケッチが残る
     // 場合も同じ早期returnを通る)。**姿勢(戻り値・カメラの位置/向き)の扱いは変えない**
     // —— これは「実際に合わせたか」を表す契約のままで、グリッドの縮小はそれとは独立に
-    // 判定する(`applyGridScale`はその一手だけを担う)。
-    applyGridScale(contentBoxForGrid(), true)
+    // 判定する(`grid.rescale`はその一手だけを担う)。
+    grid.rescale(contentBoxForGrid(), true)
     if (box.isEmpty()) return false
     const center = new THREE.Vector3()
     box.getCenter(center)
@@ -1399,44 +928,6 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   /**
-   * 貼った面の「内容だけ」のUV矩形(`boundingSquare` の余白/丸め前、`setBounds` へ渡す枠の元)を、
-   * スケッチのframe(u,v)で測る。
-   *
-   * **基準平面の `extentFor` を使い回さない** —— あれの `BASE_EXTENT`(100mm)下限は
-   * 「空の文書でもこれより狭くしない」という文書スケールの前提で、実測で40×20mmの面に
-   * 対して100mmを返し、面の何倍もの大きさでグリッドが描かれて背景が線で埋まる破綻を
-   * 起こした(スクリーンショットで発見)。
-   *
-   * **原点対称の半幅ではなく実測の min/max を返す** —— 面のframeの原点は
-   * 面の中心ではなく**面の隅(OCCTのUVパラメータ化の原点)のことが多く**、対称な枠だと
-   * 枠が面の片側へ大きく偏る(実測: u:0-40 / v:-20-0 の面に ±50mm の枠が出た)。
-   *
-   * 見つからなければ `null`(=範囲で切らずに描く。面が消えた・非表示等で測れないときに
-   * 装飾が消えるより、広めに描いて残る方が安全)。**面の実際の輪郭では切らない**
-   * (トリム境界のマスクはステンシルが要り費用に見合わない)。
-   */
-  function faceUvBoxOnly(bodyId: string, faceIndex: number, frame: PlaneFrame): UvBox | null {
-    const mesh = allFaceMeshes.find(
-      (candidate) => candidate.userData.bodyId === bodyId && candidate.userData.faceIndex === faceIndex,
-    )
-    if (!mesh) return null
-    const position = mesh.geometry.getAttribute('position') as THREE.BufferAttribute
-    if (!position || position.count === 0) return null
-    const origin = frameVector(frame.origin)
-    const axisU = frameVector(frame.u).normalize()
-    const axisV = frameVector(frame.v).normalize()
-    const rel = new THREE.Vector3()
-    let uv: UvBox | null = null
-    for (let i = 0; i < position.count; i++) {
-      rel.set(position.getX(i), position.getY(i), position.getZ(i)).sub(origin)
-      uv = extendUvBoxToPoint(uv, { u: rel.dot(axisU), v: rel.dot(axisV) })
-    }
-    if (uv === null) return null
-    if (!(uv.uMax - uv.uMin > 0) && !(uv.vMax - uv.vMin > 0)) return null
-    return uv
-  }
-
-  /**
    * 形状最適化(第3のモード)の見た目を作り直す。**`null` は全部消すだけ**
    * (モードを抜けた・そもそも入っていない)。
    *
@@ -1457,26 +948,6 @@ export function createViewport(container: HTMLElement): Viewport {
     fixtureFaceKeys = new Set(state.fixtures.map((ref) => refKey(ref.bodyId, ref.faceIndex)))
     applyFaceMaterials()
     annotations.draw(state)
-  }
-
-  /** `frame.origin` / `u` / `v` / `normal` のような数値3つの配列から `Vector3` を作る(正規化はしない。要る側が `.normalize()` を付ける)。 */
-  function frameVector(values: readonly number[]): THREE.Vector3 {
-    return new THREE.Vector3(values[0], values[1], values[2])
-  }
-
-  /** 平面上の点 `origin + u·U + v·V`(`origin` が null なら原点。コアの `kernel_sketch._to_pnt` と同じ規則)。 */
-  function planePoint(
-    origin: readonly number[] | null,
-    axisU: readonly number[],
-    axisV: readonly number[],
-    u: number,
-    v: number,
-  ): THREE.Vector3 {
-    return new THREE.Vector3(
-      (origin?.[0] ?? 0) + u * axisU[0] + v * axisV[0],
-      (origin?.[1] ?? 0) + u * axisU[1] + v * axisV[1],
-      (origin?.[2] ?? 0) + u * axisU[2] + v * axisV[2],
-    )
   }
 
   /** その画素を通るレイ(`raycaster.ray` を今のカメラで作り直して返す。断面のハンドル判定も借りる)。 */
@@ -1554,14 +1025,13 @@ export function createViewport(container: HTMLElement): Viewport {
 
   // ------------------------------------------------------------------ 基準3平面(スケッチを貼る先)
   //
-  // 「指せるか」の旗(`basePlanesOn`)は平面グリッドの節で宣言してある —— **どの平面を
-  // 出すかがその旗で決まる**(`desiredGridPlanes`)ので、表示側と同じ場所に置く。
+  // 「指せるか」の旗はグリッドが持つ(`grid.armed()`) —— **どの平面を出すかがその旗で決まる**ので、
+  // 表示側と同じ場所に置く。
 
   function showBasePlanes(on: boolean): void {
-    if (basePlanesOn === on) return
-    basePlanesOn = on
+    if (grid.armed() === on) return
+    grid.setArmed(on)
     pickChanged()
-    applyGridPlanes() // 出す平面(1枚 ⇄ 3枚)と色(通常 ⇄ 起動中)がこの旗で変わる
     // 指せなくなった平面の板を残さない(`basePlaneAt` が null を返すので次のフレームでも
     // 消えるが、ゲートを閉じた瞬間に消えるほうが「もう指せない」が伝わる)。
     if (!on) {
@@ -1575,18 +1045,19 @@ export function createViewport(container: HTMLElement): Viewport {
    *
    * **描いているグリッドは判定に使わない**(格子はシェーダーが無限に描くので、そもそも
    * 当たれるジオメトリが無い)。`planePointAt` と同じ解析交差を3枚ぶん回し、**ピック範囲**
-   * の外(|u| か |v| が `gridExtent` 超)は捨て、**レイ距離が最小の1枚**を採る。
+   * の外(|u| か |v| が `grid.extent()` 超)は捨て、**レイ距離が最小の1枚**を採る。
    *
    * **描画が無限になってもピック範囲は無限にしない**。
-   * ホバー板(`rebuildBasePlaneHover`)も同じ `gridExtent` から作る —— ここだけずれると
+   * ホバー板(`gridPlanes.ts`)も同じ `grid.extent()` から作る —— ここだけずれると
    * 「板は見えているのに指せない」という遠い壊れ方をする。
    */
   function basePlaneAt(
     offsetX: number,
     offsetY: number,
   ): { name: BasePlaneName; distance: number } | null {
-    if (!basePlanesOn) return null
+    if (!grid.armed()) return null
     const ray = rayAt(offsetX, offsetY)
+    const extent = grid.extent()
     let best: { name: BasePlaneName; distance: number } | null = null
     const hit = new THREE.Vector3()
     for (const spec of BASE_PLANES) {
@@ -1594,7 +1065,7 @@ export function createViewport(container: HTMLElement): Viewport {
       if (ray.intersectPlane(plane, hit) === null) continue // 平行 / カメラの裏
       const u = hit.dot(frameVector(spec.u))
       const v = hit.dot(frameVector(spec.v))
-      if (Math.abs(u) > gridExtent || Math.abs(v) > gridExtent) continue
+      if (Math.abs(u) > extent || Math.abs(v) > extent) continue
       const distance = ray.origin.distanceTo(hit)
       if (best === null || distance < best.distance) best = { name: spec.name, distance }
     }
@@ -1603,7 +1074,7 @@ export function createViewport(container: HTMLElement): Viewport {
 
   function projectBasePlane(name: BasePlaneName): { x: number; y: number } | null {
     const spec = BASE_PLANES.find((candidate) => candidate.name === name)
-    if (!spec || !basePlanesOn) return null
+    if (!spec || !grid.armed()) return null
     for (const [u, v] of BASE_PLANE_PROBES) {
       const screen = toScreen(planePoint(null, spec.u, spec.v, u, v))
       if (screen === null) continue
@@ -1784,8 +1255,8 @@ export function createViewport(container: HTMLElement): Viewport {
     section.setContent(new THREE.Box3().setFromObject(root))
     contentDiagonal = box.isEmpty() ? 0 : box.getSize(new THREE.Vector3()).length()
     // **広げるのは即座、縮めない**(`allowShrink: false`) —— ふつうの編集で内容がしきい値
-    // 付近で揺れても、グリッドが縮んで点滅することはない(`applyGridScale` のdocstring)。
-    applyGridScale(box, false)
+    // 付近で揺れても、グリッドが縮んで点滅することはない(`gridPlanes.ts` の `rescale` のdocstring)。
+    grid.rescale(box, false)
   }
 
   // 「カメラが止まったか」と採用した解像度は `resolutionTracker.ts`(式と定数は `adaptiveResolution.ts`)。
@@ -2053,7 +1524,7 @@ export function createViewport(container: HTMLElement): Viewport {
   //
   // ソリッドとは別のグループ(`sketchRoot`)に持つ。`update()`/`prune()` はソリッド側の
   // `root` しか触らないので、押し出しでスケッチが消えることがない。
-  // **`sketchRoot` の宣言は `root` の隣へ上げてある**(初期化中の `applyGridPlanes()` が
+  // **`sketchRoot` の宣言は `root` の隣へ上げてある**(初期化中の `createGridPlanes()` が
   // 読むため。あちらのコメント参照)。
 
   const sketchLineResolution = new THREE.Vector2(1, 1)
@@ -2368,20 +1839,11 @@ export function createViewport(container: HTMLElement): Viewport {
    */
   function refreshGridSketchFrame(): void {
     const target = activeSketchId === null ? undefined : sketches.get(activeSketchId)
-    const frame = target?.frame ?? null
-    const isFacePlane = target !== undefined && target.plane.kind === 'face'
-    let bounds: UvBounds | null = null
-    if (frame !== null && target !== undefined && target.plane.kind === 'face') {
-      // 面スケッチの「内容だけ」のUV矩形をここでキャッシュする(カーソル追従の軽量経路
-      // `updateActiveSketchGridCursor` が読む)。ここは `setActiveSketch`/`showSketches` からしか
-      // 呼ばれない = 「内容が変わったときだけ」通る箇所(タスク仕様のパフォーマンス上の注意)。
-      sketchContentUvBox = faceUvBoxOnly(target.plane.bodyId, target.plane.faceIndex, frame)
-      sketchContentIncludeOrigin = false
-      // `faceUvBoxOnly` が null(測れない)なら bounds も null のまま
-      // (範囲で切らずに描く。`faceUvBoxOnly` のdocstring参照)。
-      bounds = sketchContentUvBox === null ? null : boundingSquare(sketchContentUvBox, { includeOrigin: false })
-    }
-    setGridSketchFrame(frame, bounds, isFacePlane)
+    const face =
+      target !== undefined && target.plane.kind === 'face'
+        ? { bodyId: target.plane.bodyId, faceIndex: target.plane.faceIndex }
+        : null
+    grid.setSketchFrame(target?.frame ?? null, face)
   }
 
   function clearGhost(): void {
@@ -2444,7 +1906,7 @@ export function createViewport(container: HTMLElement): Viewport {
     if (activeSketchId !== sketchId) pickChanged() // モードの出入りで優先順位ごと変わる
     // **`hoverAt`(画面座標)を捨てる** —— 入る/出る/切り替えのどれでもカメラが飛ぶことがある
     // (`lookAtSketch` の正対・退出時の視点復元)。飛んだ直後は同じ画面座標が指す3D点が
-    // 別物になるので、そのままカーソル追従(`updateActiveSketchGridCursor` の毎フレーム経路)
+    // 別物になるので、そのままカーソル追従(`grid.followCursor` の毎フレーム経路)
     // に食わせると、切り替え前の位置が新しい平面の外側へ再投影されて縁のグリッドが
     // 意味なく広がる(実測: 面スケッチへの切替直後、直前のクリック位置が新しい面の外へ
     // 再投影されて内容だけの範囲より広い値が一瞬出た)。次の実際のポインタ移動まで
@@ -3163,7 +2625,7 @@ export function createViewport(container: HTMLElement): Viewport {
         planePoint = planePointAt(event.offsetX, event.offsetY)
         sketchHit = sketchEntityAt(event.offsetX, event.offsetY)
         planeMoveListener(planePoint, sketchHit)
-        updateActiveSketchGridCursor(planePoint)
+        grid.followCursor(planePoint)
       }
     }
     updateSketchCursor(event.offsetX, event.offsetY, planePoint, sketchHit)
@@ -3182,7 +2644,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // カーソルがcanvas外に出た=いま追従すべき位置が無い。`sketchCursor` と同じく
     // 「カーソル無し」(`point: null`)へ戻す —— そのままだと、キャンバスの外へ出ている間
     // ずっと直前の拡大状態が残る。
-    updateActiveSketchGridCursor(null)
+    grid.followCursor(null)
     // **引きかけの矩形は捨てる**(帯だけが残って画面に貼り付くのを防ぐ)。
     band.hide()
     downValid = false
@@ -3313,11 +2775,11 @@ export function createViewport(container: HTMLElement): Viewport {
     // ホイールでズームすると `hoverAt`(画面座標)は動かないが、レイと平面frameの交点
     // (`planePointAt`)はカメラが動いた分だけ変わる —— `onPointerMove` 経由だけでは
     // 「カーソルを動かさずホイールで寄せる/引く」だけの操作でグリッドが追従しない
-    // (本人報告2026-09-11)。`planePointAt`/`updateActiveSketchGridCursor` は
+    // (本人報告2026-09-11)。`planePointAt`/`grid.followCursor` は
     // どちらもスケッチ非活性なら即 `null`/no-opで返るので、素通りの費用は無視できる。
-    updateActiveSketchGridCursor(hoverAt === null ? null : planePointAt(hoverAt.x, hoverAt.y))
+    grid.followCursor(hoverAt === null ? null : planePointAt(hoverAt.x, hoverAt.y))
     // グリッドは毎フレームここだけを更新する(段の不透明度とカメラ行列。ジオメトリは無い)。
-    updateGridUniforms()
+    grid.updateUniforms()
     section.update()
     renderer.render(scene, camera)
     cube.render()
@@ -3424,25 +2886,12 @@ export function createViewport(container: HTMLElement): Viewport {
       frameToContent()
     },
     resetGrid() {
-      applyGridScale(contentBoxForGrid(), true)
+      grid.rescale(contentBoxForGrid(), true)
     },
     gridScale() {
-      return { extent: gridExtent }
+      return { extent: grid.extent() }
     },
-    gridTiers() {
-      return {
-        mmPerPixel: gridMmPerPixel,
-        tiers: TIERS.map((step, index) => ({ step, alpha: gridTierAlphaValues[index] })),
-        planes: [...gridPlanesShown],
-        axis: gridAxisShown,
-        // `sketchGridIsFacePlane` が判定の正(`plane.kind`ベース。frame一致だけでは見分けが
-        // つかない場合がある —— その宣言のdocstring参照)。
-        sketchFaceExtent:
-          sketchGridFrame !== null && sketchGridIsFacePlane ? (sketchGridBounds?.half ?? null) : null,
-        depthBiasLayers: [...gridDepthBiasLayers],
-        planeBounds: gridPlaneBounds.map((bounds) => (bounds === null ? null : { ...bounds })),
-      }
-    },
+    gridTiers: grid.info,
     setFov,
     cameraPose,
     projectPoint,
@@ -3473,11 +2922,7 @@ export function createViewport(container: HTMLElement): Viewport {
       sketchHandleMaterials.dispose()
       regionMaterials.dispose()
       for (const bodyId of [...bodies.keys()]) clearBody(bodyId)
-      basePlaneHoverBatch.clear()
-      for (const grid of planeGrids) grid.dispose()
-      gridAxisLine?.geometry.dispose()
-      gridAxisMaterial.dispose()
-      gridRoot.clear()
+      grid.dispose()
       originGizmo.dispose()
       section.dispose()
       controls.dispose()

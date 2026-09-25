@@ -194,7 +194,7 @@ runSmoke('smoke-face-grid', { timeout: 60000, mcp: true }, async ({ mcp, browser
     const tiersA = await tiersNow()
     assertFaceGridShape(tiersA, '[1]')
     // **原点・u/v はサーバの `SketchFrame` をコードが変形せずそのまま渡している**
-    // (`App.svelte` の `sketchDraws()` → `setGridSketchFrame` → `desiredGridPlanes` の
+    // (`App.svelte` の `sketchDraws()` → `gridPlanes.ts` の `setSketchFrame` → `desiredGridPlanes` の
     // `sketch-face` 分岐は `frame: sketchGridFrame` を素通しするだけで、コピーも計算もしない)。
     const frameA = onFaceA.plane.frame
     if (!frameA || !Array.isArray(frameA.origin) || !Array.isArray(frameA.u) || !Array.isArray(frameA.v)) {
