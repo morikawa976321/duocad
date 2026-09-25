@@ -11,17 +11,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import tempfile
 import time
 from pathlib import Path
 from unittest.mock import patch
-
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(errors="replace")
-    except (AttributeError, ValueError):
-        pass
 
 import _bootstrap  # noqa: F401  (topopt_checks の import 経路を通す)
 import _record

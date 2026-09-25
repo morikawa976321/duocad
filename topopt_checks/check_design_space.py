@@ -65,41 +65,27 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 import math
-import sys
 import time
 
 import numpy as np
 
-# **Windowsの既定コンソール(cp932)で落ちないようにする。** 記号が1つ混ざるだけで
-# `UnicodeEncodeError` になり、検査が1件も走らないまま異常終了する。
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
-    except (AttributeError, ValueError):
-        pass
-
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from _harness import Checker, expect_raises, run
 from duocad.topopt import OUTPUT_DIR
 from duocad.topopt import anchor as an
 from duocad.topopt import design_space as ds
 from duocad.topopt import voxelize as vx
 from _fixtures import demo_bracket, demo_conditions, severed_conditions, voxel_model
 
-FAILURES: list[str] = []
-RESULTS: dict[str, object] = {}
+CHECK = Checker()
+check = CHECK.check
+FAILURES = CHECK.failures
+RESULTS = CHECK.results
 
 # 塊にする箱(ワールド座標)。ブラケットの bbox は x -30..30 / y -12..12 / z -12..18。
 DESIGN_BOX_LO = (-31.0, -13.0, -13.0)
 DESIGN_BOX_HI = (31.0, 13.0, 25.0)
-
-
-def check(name: str, ok: bool, detail: str) -> None:
-    """1件の検査結果を出力する。**落ちても即死せず全件を出してから終わる。**"""
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
-    if not ok:
-        FAILURES.append(f"{name}: {detail}")
 
 
 def bracket_grid(margin: float, elements_long_axis: int) -> tuple[vx.Grid, vx.TriangleSoup]:
@@ -174,15 +160,7 @@ def check_mask_is_the_design_space() -> None:
     )
 
 
-def _raises(fn, exc, *args, **kwargs) -> bool:
-    try:
-        fn(*args, **kwargs)
-    except exc:
-        return True
-    except Exception as e:  # noqa: BLE001 — 別の例外なら不合格として扱う
-        print(f"      (想定外の例外 {type(e).__name__}: {e})")
-        return False
-    return False
+_raises = expect_raises
 
 
 # ---------------------------------------------------------------------------
@@ -1162,11 +1140,6 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    print("=" * 72)
-    print("check_design_space.py : 塊(設計空間)の受入検査")
-    print("  [1]-[3] 分離 / [5]-[9] 固定凸包(外接箱の頂点の凸包 + 余白) / [10] 連結性")
-    print("  [11] 実物の基準実行(--run) / [14] 空の条件面のメッセージ")
-    print("=" * 72)
     sections = [
         check_mask_is_the_design_space,
         check_anchors_independent_of_design,
@@ -1181,28 +1154,16 @@ def main() -> int:
     ]
     if args.run:
         sections.append(lambda: check_hanger_run(args.run))
-    # **1件が例外で落ちても残りを走らせる。** 実装を壊したときに最初の1件で止まると、
+    # **1件が例外で落ちても残りを走らせる**(`catch=True`)。実装を壊したときに最初の1件で止まると、
     # 何がどこまで壊れているかが1周では分からない(`check()` と同じ方針を関数の粒度でも取る)。
-    for section in sections:
-        try:
-            section()
-        except Exception as exc:  # noqa: BLE001 — 検査中の例外も不合格として記録する
-            import traceback
-
-            traceback.print_exc()
-            name = getattr(section, "__name__", "check_hanger_run")
-            check(f"{name} が例外で落ちた", False, f"{type(exc).__name__}: {exc}")
-
-    print("\n" + "=" * 72)
-    print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))
-    print("=" * 72)
-    if FAILURES:
-        print(f"NG: {len(FAILURES)}件が不合格")
-        for f in FAILURES:
-            print(f"  - {f}")
-        return 1
-    print("OK: 全検査に合格")
-    return 0
+    return run(
+        CHECK,
+        "check_design_space.py : 塊(設計空間)の受入検査\n"
+        "  [1]-[3] 分離 / [5]-[9] 固定凸包(外接箱の頂点の凸包 + 余白) / [10] 連結性\n"
+        "  [11] 実物の基準実行(--run) / [14] 空の条件面のメッセージ",
+        sections,
+        catch=True,
+    )
 
 
 if __name__ == "__main__":

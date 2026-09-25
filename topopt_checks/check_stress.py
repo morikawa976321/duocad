@@ -24,22 +24,13 @@
 
 from __future__ import annotations
 
-import json
-import sys
 import time
 
 import numpy as np
 from scipy import ndimage
 
-# **Windowsの既定コンソール(cp932)で落ちないようにする。** 記号が1つ混ざるだけで
-# `UnicodeEncodeError` になり、検査が1件も走らないまま異常終了する。
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
-    except (AttributeError, ValueError):
-        pass
-
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from _harness import Checker, run
 from duocad.topopt import anchor
 from duocad.topopt import fem
 from duocad.topopt import stress
@@ -52,8 +43,10 @@ STRESS_TAPERED_MULTS = (1, 2, 3)
 # [4b] 剛性差のある密度場を合成する格子。片持ち梁で十分な要素数を確保する。
 STRESS_MIXED_DENSITY_GRID = (20, 10, 10)
 
-FAILURES: list[str] = []
-RESULTS: dict[str, object] = {}
+CHECK = Checker()
+check = CHECK.check
+FAILURES = CHECK.failures
+RESULTS = CHECK.results
 
 # 実材料相当の換算パラメータ(アルミ 6061-T6 のあたり)。値そのものに意味は無く、
 # 「1でない数を通しても式が合う」ことを見るために 1 から離した値を使う。
@@ -61,13 +54,6 @@ E_MPA = 68900.0
 ALLOWABLE_MPA = 275.0 / 1.5
 ELEMENT_MM = 2.5
 LOAD_N = 1234.0
-
-
-def check(name: str, ok: bool, detail: str) -> None:
-    """1件の検査結果を出力する。**落ちても即死せず全件を出してから終わる。**"""
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
-    if not ok:
-        FAILURES.append(f"{name}: {detail}")
 
 
 def node_id(i: int, j: int, k: int, nely: int, nelz: int) -> int:
@@ -661,27 +647,24 @@ def check_safety_factor(model: fem.Model, rho: np.ndarray, u: np.ndarray) -> Non
 
 
 def main() -> int:
-    print("=" * 72)
-    print("check_stress.py : von Mises応力と最小安全率の受入検査")
-    print("=" * 72)
-    check_b_matrix()
-    model, rho, u = check_uniaxial_bar()
-    check_cantilever_bending()
-    check_unit_scaling(model, rho, u)
-    check_representative_rule()
-    check_representative_on_mixed_density_field()
-    check_safety_factor(model, rho, u)
+    bar: dict = {}  # `check_uniaxial_bar` の棒(model, rho, u)を後ろの2検査が使う
 
-    print("\n" + "=" * 72)
-    print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))
-    print("=" * 72)
-    if FAILURES:
-        print(f"NG: {len(FAILURES)}件が不合格")
-        for f in FAILURES:
-            print(f"  - {f}")
-        return 1
-    print("OK: 全検査に合格")
-    return 0
+    def uniaxial_bar() -> None:
+        bar["model"], bar["rho"], bar["u"] = check_uniaxial_bar()
+
+    return run(
+        CHECK,
+        "check_stress.py : von Mises応力と最小安全率の受入検査",
+        [
+            check_b_matrix,
+            uniaxial_bar,
+            check_cantilever_bending,
+            lambda: check_unit_scaling(bar["model"], bar["rho"], bar["u"]),
+            check_representative_rule,
+            check_representative_on_mixed_density_field,
+            lambda: check_safety_factor(bar["model"], bar["rho"], bar["u"]),
+        ],
+    )
 
 
 if __name__ == "__main__":

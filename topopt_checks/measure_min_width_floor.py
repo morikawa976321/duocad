@@ -11,17 +11,10 @@ hanger・要素サイズ要求(既定 2.4mm。実 spacing 2.387506mm)・目標(�
 from __future__ import annotations
 
 import argparse
-import sys
 import tempfile
 import time
 from pathlib import Path
 from unittest.mock import patch
-
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(errors="replace")
-    except (AttributeError, ValueError):
-        pass
 
 import _bootstrap  # noqa: F401  (topopt_checks の import 経路を通す)
 import _record

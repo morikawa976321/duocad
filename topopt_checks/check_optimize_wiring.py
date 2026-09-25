@@ -36,26 +36,21 @@
 from __future__ import annotations
 
 import json
-import sys
 import time
 
 import numpy as np
 
-# Windowsの既定コンソール(cp932)で記号1つ落ちるだけで検査が1件も走らず異常終了する。
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
-    except (AttributeError, ValueError):
-        pass
-
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from _harness import Checker, run
 from duocad import optimize_run, query
 from duocad.server import Session
 from duocad.topopt import anchor as an
 from _fixtures import voxel_model
 
-FAILURES: list[str] = []
-RESULTS: dict[str, object] = {}
+CHECK = Checker()
+check = CHECK.check
+FAILURES = CHECK.failures
+RESULTS = CHECK.results
 
 DEVIATION = 0.2
 # 検証用に縮めた設定。**本番の既定ではない** —— 既定(`max_evaluations=1000`)の
@@ -66,12 +61,6 @@ CHECK_MAX_EVALUATIONS = 3
 # (`20260917-0444`の契約④。段階5・このタスクの担当範囲外)。4mmは以前rminが実質作っていた
 # 上限(6/1.5)を引き継いだだけの値で、この題材では安全に通る(14mmまでは実測で成功)。
 CHECK_ELEMENT_SIZE_MM = 4.0
-
-
-def check(name: str, ok: bool, detail: str) -> None:
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
-    if not ok:
-        FAILURES.append(f"{name}: {detail}")
 
 
 # ---------------------------------------------------------------------------
@@ -462,25 +451,21 @@ def check_face_requirement_formula() -> None:
 
 def main() -> int:
     session, left, right, out, events, before_ids, before_shapes, _limits = run_once()
-    check_end_to_end(session, out, before_ids, before_shapes)
-    check_placement(session, left, right, out)
-    check_load_lands_on_the_chosen_face(session, out)
-    check_progress(events)
-    check_cancel()
-    check_stress_path(out)
-    check_unrepresented_regions()
-    check_face_requirement_formula()
-
-    print("\n" + "=" * 72)
-    print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))
-    print("=" * 72)
-    if FAILURES:
-        print(f"NG: {len(FAILURES)}件が不合格")
-        for failure in FAILURES:
-            print(f"  - {failure}")
-        return 1
-    print("OK: 全検査に合格")
-    return 0
+    # 見出しは出さない(`title=None`)。
+    return run(
+        CHECK,
+        None,
+        [
+            lambda: check_end_to_end(session, out, before_ids, before_shapes),
+            lambda: check_placement(session, left, right, out),
+            lambda: check_load_lands_on_the_chosen_face(session, out),
+            lambda: check_progress(events),
+            check_cancel,
+            lambda: check_stress_path(out),
+            check_unrepresented_regions,
+            check_face_requirement_formula,
+        ],
+    )
 
 
 if __name__ == "__main__":

@@ -14,7 +14,6 @@ import argparse
 import hashlib
 import json
 import subprocess
-import sys
 import time
 import tracemalloc
 from pathlib import Path
@@ -246,11 +245,6 @@ def main() -> int:
                         help="設計空間・採用マスク・条件面の節点座標を npz に書く(撮影用)")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(errors="replace")  # type: ignore[union-attr]
-        except (AttributeError, ValueError):
-            pass
     record = verify(args.model, args.spacing, args.target, args.max_evaluations, skip_search=args.skip_search,
                     step_exponent=args.step_exponent, max_step_ratio=args.max_step_ratio,
                     single_cell_patience=args.single_cell_patience, target_tolerance=args.target_tolerance,

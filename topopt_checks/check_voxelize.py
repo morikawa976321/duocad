@@ -44,22 +44,10 @@
 
 from __future__ import annotations
 
-import json
 import math
-import sys
 import time
 
 import numpy as np
-
-# Windowsの既定コンソール(cp932)で記号1つ落ちるだけで検査が1件も走らず異常終了するのを防ぐ。
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
-    except (AttributeError, ValueError):
-        try:
-            _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
-        except (AttributeError, ValueError):
-            pass
 
 from build123d import Box, Cone, Cylinder, Pos, Rotation  # noqa: E402
 from scipy.spatial import cKDTree  # noqa: E402
@@ -73,21 +61,17 @@ from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shell  # noqa: E402
 from OCP.TopAbs import TopAbs_SHELL  # noqa: E402
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from _harness import Checker, run
 from duocad.topopt import voxelize as vx  # noqa: E402
 from _fixtures import voxel_model  # noqa: E402
 
-FAILURES: list[str] = []
-RESULTS: dict[str, object] = {}
+CHECK = Checker()
+check = CHECK.check
+FAILURES = CHECK.failures
+RESULTS = CHECK.results
 
 # 曖昧と見なす帯(要素サイズに対する比)。三角形分割の既定の弦誤差(2%)より大きく取る。
 AMBIGUOUS_BAND = 0.05
-
-
-def check(name: str, ok: bool, detail: str) -> None:
-    """1件の検査結果を出力する。落ちても即死せず全件出してから終わる。"""
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
-    if not ok:
-        FAILURES.append(f"{name}: {detail}")
 
 
 def _faces_of(shape) -> list:
@@ -946,32 +930,23 @@ def check_trimmed_curved_bbox() -> None:
 
 
 def main() -> int:
-    print("=" * 72)
-    print("check_voxelize.py : B-repソリッド → 規則格子(voxelize.py)の受入検査")
-    print("=" * 72)
-    started = time.perf_counter()
-    check_against_occt_oracle()
-    check_volume_converges()
-    check_through_hole()
-    check_broken_input_raises()
-    check_keep_and_obstacle()
-    check_deterministic()
-    check_cell_center_convention()
-    check_degenerate_rays()
-    check_closest_triangle()
-    check_trimmed_curved_bbox()
-    RESULTS["total_seconds"] = round(time.perf_counter() - started, 1)
-
-    print("\n" + "=" * 72)
-    print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))
-    print("=" * 72)
-    if FAILURES:
-        print(f"NG: {len(FAILURES)}件が不合格")
-        for failure in FAILURES:
-            print(f"  - {failure}")
-        return 1
-    print("OK: 全検査に合格")
-    return 0
+    return run(
+        CHECK,
+        "check_voxelize.py : B-repソリッド → 規則格子(voxelize.py)の受入検査",
+        [
+            check_against_occt_oracle,
+            check_volume_converges,
+            check_through_hole,
+            check_broken_input_raises,
+            check_keep_and_obstacle,
+            check_deterministic,
+            check_cell_center_convention,
+            check_degenerate_rays,
+            check_closest_triangle,
+            check_trimmed_curved_bbox,
+        ],
+        total_seconds=True,
+    )
 
 
 if __name__ == "__main__":

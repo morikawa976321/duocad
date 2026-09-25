@@ -2,38 +2,25 @@
 
 from __future__ import annotations
 
-import json
-import sys
 import time
 
 import numpy as np
 from scipy import ndimage
 
-# Windowsの既定コンソール(cp932)で記号1つ落ちるだけで検査が1件も走らず異常終了する。
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
-    except (AttributeError, ValueError):
-        pass
-
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from _harness import Checker, run
 from duocad.topopt import OUTPUT_DIR
 from duocad.topopt import mesh
 from duocad.topopt import voxelize as vx
 
-FAILURES: list[str] = []
-RESULTS: dict[str, object] = {}
+CHECK = Checker()
+check = CHECK.check
+FAILURES = CHECK.failures
+RESULTS = CHECK.results
 
 # 準備で使う合成マスクの格子。marching cubes の体積誤差は要素の大きさで決まり、粗すぎると
 # 検査[2](メッシュ体積 = sum(mask) が5%以内)を割る。
 MESH_MATERIAL_GRID = (35, 14, 14)
-
-
-def check(name: str, ok: bool, detail: str) -> None:
-    """1件の検査結果を出力する。落ちても即死せず全件出してから終わる。"""
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
-    if not ok:
-        FAILURES.append(f"{name}: {detail}")
 
 
 # ---------------------------------------------------------------------------
@@ -342,29 +329,26 @@ def check_spike_and_cavity() -> None:
 
 
 def main() -> int:
-    print("=" * 72)
-    print("check_mesh.py : marching cubes + Taubin平滑化の受入検査")
-    print("=" * 72)
-    _result, mr = run_pipeline()
-    check_watertight(mr)
-    check_volume_matches_density(mr)
-    check_taubin_preserves_volume(mr)
-    check_min_wall_thickness(mr)
-    check_stl_roundtrip(mr)
-    check_bounding_box_alignment()
-    check_face_winding(mr)
-    check_spike_and_cavity()
+    shared: dict = {}
 
-    print("\n" + "=" * 72)
-    print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))
-    print("=" * 72)
-    if FAILURES:
-        print(f"NG: {len(FAILURES)}件が不合格")
-        for f in FAILURES:
-            print(f"  - {f}")
-        return 1
-    print("OK: 全検査に合格")
-    return 0
+    def prepare() -> None:
+        shared["mr"] = run_pipeline()[1]
+
+    return run(
+        CHECK,
+        "check_mesh.py : marching cubes + Taubin平滑化の受入検査",
+        [
+            prepare,
+            lambda: check_watertight(shared["mr"]),
+            lambda: check_volume_matches_density(shared["mr"]),
+            lambda: check_taubin_preserves_volume(shared["mr"]),
+            lambda: check_min_wall_thickness(shared["mr"]),
+            lambda: check_stl_roundtrip(shared["mr"]),
+            check_bounding_box_alignment,
+            lambda: check_face_winding(shared["mr"]),
+            check_spike_and_cavity,
+        ],
+    )
 
 
 if __name__ == "__main__":
