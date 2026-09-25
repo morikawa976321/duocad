@@ -542,9 +542,10 @@ duocad/
   tests/                 pytest。README.md はモジュール単位のAPI契約リファレンス
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
-    scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。共有部品は
-                         server.mjs（サーバの起動・停止）／browser.mjs（ブラウザ選択・起動）／
-                         mcp-client.mjs（MCPクライアント）／args.mjs／models.mjs（STEPのパス）
+    scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）と撮影（screenshot.mjs:
+                         空の文書とモデルを読んだ画面を --tag 付きで撮る。見た目の前後比較用）。共有部品は
+                         harness.mjs（骨格）／server.mjs（サーバの起動・停止）／browser.mjs（ブラウザ選択・起動）／
+                         pick.mjs（指す手）／mcp-client.mjs（MCPクライアント）／args.mjs／models.mjs（STEPのパス）
     dist/                ビルド成果物（**Pythonサーバが配信するのはこちら**・git管理外）
   .venv/                 Python 3.11（git管理外）
   pyproject.toml         依存はバージョン固定（ローカル専用なので上げなければ壊れない）

@@ -14,7 +14,7 @@ from duocad import kernel, query
 from duocad.document import Document
 from duocad.oplog import OpLog
 from duocad.parameters import parameter_of, set_parameter
-from duocad.region import _expanded_entities, region_ref, regions
+from duocad.region import expanded_entities, region_ref, regions
 from duocad.sketch import (
     add_circle,
     add_rectangle,
@@ -192,7 +192,7 @@ def test_rotate_copies_false_keeps_the_original_orientation():
         document, sketch_id, [rect], CENTER, 4, total_angle=360.0, rotate_copies=False
     )
 
-    expanded = _expanded_entities(document, sketch_id)
+    expanded = expanded_entities(document, sketch_id)
     assert len(expanded) == 4
     shapes = [_corners_about_centre(item["params"]) for item in expanded]
     assert all(shape == pytest.approx(shapes[0], abs=1e-9) for shape in shapes)
@@ -218,7 +218,7 @@ def test_rotated_copies_of_a_rectangle_are_all_rectangles():
         document, sketch_id, [source], CENTER, 4, total_angle=360.0, rotate_copies=True
     )
 
-    expanded = _expanded_entities(document, sketch_id)
+    expanded = expanded_entities(document, sketch_id)
     assert [item["kind"] for item in expanded] == ["rectangle"] * 4
 
     base = expanded[0]["params"]

@@ -227,6 +227,11 @@ def grid_cell_common_volumes(
     (2) 曲面との交線をセルごとに計算し直さないので桁違いに速い(実測: 曲面のソリッドの364セルの塊が、
     セルごとのブーリアンで約30秒、平面で切って約1秒)。
     **`shape` の妥当性は見ない**(`require_valid_solid` は呼び出し側が1回だけ通す)。
+
+    (1) の罠(継ぎ目の近くで黙って体積を落とす)を**値で検知するテストは無い** —— 再現に私物の hanger が要り、
+    合成の題材では再現できなかった(2026-09-24)。**「切る方法」と「ブーリアン」の2通りの突き合わせ
+    (下の `_SPLIT_VOLUME_RTOL` の検査)が唯一の防具**で、食い違えば RuntimeError にして呼び出し側が
+    直接ブーリアンへ戻す(`topopt.acceptance._CellOverlaps`)。
     """
     counts = tuple(int(n) for n in counts)
     lo = tuple(float(v) for v in lo)

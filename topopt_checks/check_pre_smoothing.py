@@ -13,6 +13,9 @@ from duocad.topopt.acceptance import inspect_document
 
 
 def read_run(run):
+    """**旧SIMP記録(2026-09-16 以前の密度場の記録)専用。** 今の記録の `selected-result` は `status` /
+    `termination` / `material_mm3` / `safety_factor` だけで(`optimize_run.py`)、`['result']['run']` が無いので
+    KeyError → 終了コード 2(判定不能)になる。今の記録には `--fields` で NPZ を渡す。"""
     selected = list(run.glob('*-selected-result.json'))
     if len(selected) != 1:
         raise ValueError('採用候補を示すselected-result記録が一意でない。--fieldsで明示すること')

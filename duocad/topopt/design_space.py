@@ -506,58 +506,6 @@ def offset_hull_mask(grid: vx.Grid, planes: np.ndarray, margin: float) -> np.nda
     return inside
 
 
-def _closest_points_on_triangle(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
-    """点群 `p (N,3)` それぞれに最も近い三角形 `abc` 上の点 (N,3)(Ericson の領域分け)。"""
-    ab = b - a
-    ac = c - a
-    ap = p - a
-    d1 = ap @ ab
-    d2 = ap @ ac
-    bp = p - b
-    d3 = bp @ ab
-    d4 = bp @ ac
-    cp = p - c
-    d5 = cp @ ab
-    d6 = cp @ ac
-    vc = d1 * d4 - d3 * d2
-    vb = d5 * d2 - d1 * d6
-    va = d3 * d6 - d5 * d4
-    q = np.empty_like(p)
-    done = np.zeros(p.shape[0], dtype=bool)
-
-    def take(mask: np.ndarray, value: np.ndarray) -> None:
-        nonlocal done
-        mask = mask & ~done
-        q[mask] = value if value.ndim == 1 else value
-        done |= mask
-
-    take((d1 <= 0) & (d2 <= 0), a)  # 頂点 A の領域
-    take((d3 >= 0) & (d4 <= d3), b)  # 頂点 B
-    take((d6 >= 0) & (d5 <= d6), c)  # 頂点 C
-    m = (vc <= 0) & (d1 >= 0) & (d3 <= 0) & ~done  # 辺 AB
-    if m.any():
-        v = d1[m] / (d1[m] - d3[m])
-        q[m] = a + v[:, None] * ab
-        done |= m
-    m = (vb <= 0) & (d2 >= 0) & (d6 <= 0) & ~done  # 辺 AC
-    if m.any():
-        w = d2[m] / (d2[m] - d6[m])
-        q[m] = a + w[:, None] * ac
-        done |= m
-    m = (va <= 0) & (d4 - d3 >= 0) & (d5 - d6 >= 0) & ~done  # 辺 BC
-    if m.any():
-        w = (d4[m] - d3[m]) / ((d4[m] - d3[m]) + (d5[m] - d6[m]))
-        q[m] = b + w[:, None] * (c - b)
-        done |= m
-    m = ~done  # 面の内側
-    if m.any():
-        denom = 1.0 / (va[m] + vb[m] + vc[m])
-        v = vb[m] * denom
-        w = vc[m] * denom
-        q[m] = a + ab * v[:, None] + ac * w[:, None]
-    return q
-
-
 def distance_to_hull(points: np.ndarray, planes: np.ndarray, triangles: np.ndarray) -> np.ndarray:
     """点群 `(N,3)` から凸包までのユークリッド距離(内側は 0)。
 
@@ -571,12 +519,11 @@ def distance_to_hull(points: np.ndarray, planes: np.ndarray, triangles: np.ndarr
     out = np.zeros(pts.shape[0], dtype=float)
     outside = np.flatnonzero(~inside)
     if outside.size:
-        q = pts[outside]
-        best = np.full(outside.size, np.inf)
-        for a, b, c in np.asarray(triangles, dtype=float):
-            closest = _closest_points_on_triangle(q, a, b, c)
-            np.minimum(best, np.linalg.norm(q - closest, axis=1), out=best)
-        out[outside] = best
+        # 距離は `voxelize.distance_to_triangles`(7候補の最小)で取る。Ericson の領域分けは退化した三角形
+        # (3頂点が一直線)で NaN や大きすぎる距離を返し、NaN は `np.minimum` を通って**そのセルを黙って
+        # 塊から落とす**(`distance <= margin` が偽になる)。
+        tri = np.asarray(triangles, dtype=float).reshape(-1, 3, 3)
+        out[outside] = vx.distance_to_triangles(tri[:, 0], tri[:, 1], tri[:, 2], pts[outside])[0]
     return out
 
 

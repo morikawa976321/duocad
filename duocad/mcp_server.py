@@ -1082,9 +1082,6 @@ class McpServer:
         self.tools = tools
         self.name = name
         self.version = version
-        self.initialized = False
-        self.client_info: Optional[dict] = None
-        self.protocol_version: Optional[str] = None
 
     # ------------------------------------------------------------------ 入口
     def handle(self, message: Any) -> Optional[dict]:
@@ -1124,8 +1121,7 @@ class McpServer:
     # ------------------------------------------------------------------ メソッド
     def _handle_notification(self, method: str) -> None:
         """通知(idなし)。返事を書いてはいけない。"""
-        if method == "notifications/initialized":
-            self.initialized = True
+        # `notifications/initialized` を含めて何も控えない(握手の状態を使う処理が無い)。
         # 未知の通知は無視する(仕様どおり。エラーを返すとプロトコル違反になる)
 
     def _handle_request(self, method: str, params: dict) -> dict:
@@ -1147,9 +1143,6 @@ class McpServer:
             if requested in SUPPORTED_PROTOCOL_VERSIONS
             else SUPPORTED_PROTOCOL_VERSIONS[0]
         )
-        self.protocol_version = version
-        client = params.get("clientInfo")
-        self.client_info = client if isinstance(client, dict) else None
         return {
             "protocolVersion": version,
             # ツールしか持たない。**変更通知は出さない**(ツールの顔ぶれは起動中変わらない)ので
@@ -1379,9 +1372,9 @@ async def _run(session: Session, args: argparse.Namespace) -> None:
     ws_url = f"ws://127.0.0.1:{args.port}"
     page_url = f"http://127.0.0.1:{args.http_port}/"
     mcp_url = f"http://127.0.0.1:{args.http_port}{MCP_HTTP_PATH}"
-    # **HTTPトランスポート用のMCPは別インスタンスにする**。stdioと同じ
-    # `McpServer` を共有すると `initialized` や `protocol_version` が混ざる —— 別の
-    # トランスポートに繋いだ相手は別のクライアントなので、握手も別に持つのが正しい。
+    # **HTTPトランスポート用のMCPは別インスタンスにする**。別のトランスポートに繋いだ
+    # 相手は別のクライアントなので、握手(initialize / initialized の往復)も別に持つ。
+    # `McpServer` は握手の状態を控えないが、控えるようになっても混ざらない形にしておく。
     # 道具は `ToolsOnLoop` で包む(HTTPはワーカースレッドで走るため。下記 `start_http_server`)。
     http_mcp = McpServer(ToolsOnLoop(tools, asyncio.get_running_loop()))
     try:

@@ -164,7 +164,7 @@ function bezierPoints(
 
 /**
  * 点 (x,y) を中心 (cx,cy) まわりに `angleDeg` 度だけ反時計回りに回す。
- * コアの `duocad/sketch.py` の `_rotate_point` と同じ式。
+ * コアの `duocad/sketch.py` の `rotate_point` と同じ式。
  */
 function rotatePoint(
   x: number,
@@ -836,7 +836,7 @@ export const GHOST_COPY_LIMIT = 2000
 /**
  * 円形反復の**刻み角**。全周は `total/count`、全周未満は `total/(count-1)`。
  *
- * **コアの `duocad/region.py` の `_expanded_entities` と同じ場合分け**である ——
+ * **コアの `duocad/region.py` の `expanded_entities` と同じ場合分け**である ——
  * 全周を `count-1` で割ると最後の複製が最初と重なる(`pattern_circular` のdocstring)。
  * 360の判定が厳密等価なのも**コアに合わせている**(こちらだけ許容差を持たせると、
  * 359.9999 で幽霊と確定結果が別の刻みになる)。

@@ -83,8 +83,11 @@ def regions(doc: Document, sketch_id: SketchId) -> List[Region]:
     ]
 
 
-def _expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
-    """パラメータを解決し、反復を展開した素の図形リストを返す。
+def expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
+    """パラメータを解決し、反復を展開した**画面に描くべき図形の全量**(素の図形リスト)。
+
+    公開しているのは、アプリ層が描くものと領域の計算が食うものを同じにするため
+    (別々に組み立てると、反復した図形が画面に出ないのに領域だけ増える、が起きる)。
 
     反復に参照されている図形は単独では出さない(格子の (0,0) / 円形の i=0 が元の位置)。
     kernel は名前を知らないので、ここですべて素の数値にする。
@@ -177,15 +180,6 @@ def plane_frame(doc: Document, sketch_id: SketchId) -> dict:
     return kernel.sketch_plane_frame(sketch.plane)
 
 
-def expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
-    """反復を展開しパラメータを解決した、**画面に描くべき図形の全量**。
-
-    公開しているのは、アプリ層が描くものと領域の計算が食うものを同じにするため
-    (別々に組み立てると、反復した図形が画面に出ないのに領域だけ増える、が起きる)。
-    """
-    return _expanded_entities(doc, sketch_id)
-
-
 def regions_with_geometry(doc: Document, sketch_id: SketchId, deviation: float) -> List[dict]:
     """領域を**画面へ描ける三角形つき**で返す。
 
@@ -222,7 +216,7 @@ def _regions_detailed(doc: Document, sketch_id: SketchId) -> List[dict]:
     sketch = get_sketch(doc, sketch_id)
     if not sketch.entities:
         return []
-    entities = _expanded_entities(doc, sketch_id)
+    entities = expanded_entities(doc, sketch_id)
     if not entities:
         return []
     # 面に貼ったスケッチでも実際の面(`TopoDS_Face`)は渡さない —— `sketch_regions` が面から

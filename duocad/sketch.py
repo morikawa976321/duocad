@@ -119,8 +119,13 @@ def _translate_bezier(params: Dict[str, float], dx: float, dy: float) -> Dict[st
     )
 
 
-def _rotate_point(x: float, y: float, cx: float, cy: float, angle_deg: float) -> Tuple[float, float]:
-    """点 (x, y) を中心 (cx, cy) まわりに angle_deg 度だけ反時計回りに回す。"""
+def rotate_point(x: float, y: float, cx: float, cy: float, angle_deg: float) -> Tuple[float, float]:
+    """点 (x, y) を中心 (cx, cy) まわりに angle_deg 度だけ反時計回りに回す。
+
+    **2D回転の式はこの1本しかない。** 種別の表(`EntityKindOps.rotate`)は「図形1つを回す」単位で、
+    点1つを回す `move_sketch_entities` もここを使う。**別に式を書き起こさない**(符号や度/ラジアンの
+    取り違えが、円形反復と移動で食い違う形で出る)。画面側は `web/src/entityKinds.ts` の `rotatePoint`。
+    """
     rad = math.radians(angle_deg)
     cos_a = math.cos(rad)
     sin_a = math.sin(rad)
@@ -129,40 +134,30 @@ def _rotate_point(x: float, y: float, cx: float, cy: float, angle_deg: float) ->
     return (cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
 
 
-def rotate_point(x: float, y: float, cx: float, cy: float, angle_deg: float) -> Tuple[float, float]:
-    """`_rotate_point` の公開名。**2D回転の式はこの1本しかない**ことを保つための入口である。
-
-    `move_sketch_entities`(点を1つだけ回す経路)が使う —— 種別の表(`EntityKindOps.rotate`)は
-    「図形1つを回す」単位なので、点1つを回すにはこちらが要る。**別に式を書き起こさない**
-    (符号や度/ラジアンの取り違えが、円形反復と移動で食い違う形で出る)。
-    """
-    return _rotate_point(x, y, cx, cy, angle_deg)
-
-
 def _rotate_line(
     params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
 ) -> Dict[str, float]:
     if rotate_copies:
-        x0, y0 = _rotate_point(params["x0"], params["y0"], cx, cy, angle_deg)
-        x1, y1 = _rotate_point(params["x1"], params["y1"], cx, cy, angle_deg)
+        x0, y0 = rotate_point(params["x0"], params["y0"], cx, cy, angle_deg)
+        x1, y1 = rotate_point(params["x1"], params["y1"], cx, cy, angle_deg)
         return {"x0": x0, "y0": y0, "x1": x1, "y1": y1}
     mx = (params["x0"] + params["x1"]) / 2.0
     my = (params["y0"] + params["y1"]) / 2.0
-    nmx, nmy = _rotate_point(mx, my, cx, cy, angle_deg)
+    nmx, nmy = rotate_point(mx, my, cx, cy, angle_deg)
     return _translate_line(params, nmx - mx, nmy - my)
 
 
 def _rotate_circle(
     params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
 ) -> Dict[str, float]:
-    nx, ny = _rotate_point(params["cx"], params["cy"], cx, cy, angle_deg)
+    nx, ny = rotate_point(params["cx"], params["cy"], cx, cy, angle_deg)
     return {"cx": nx, "cy": ny, "radius": params["radius"]}
 
 
 def _rotate_arc(
     params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
 ) -> Dict[str, float]:
-    nx, ny = _rotate_point(params["cx"], params["cy"], cx, cy, angle_deg)
+    nx, ny = rotate_point(params["cx"], params["cy"], cx, cy, angle_deg)
     start_deg = params["start_deg"]
     end_deg = params["end_deg"]
     if rotate_copies:
@@ -181,14 +176,14 @@ def _rotate_rectangle(
     params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
 ) -> Dict[str, float]:
     if rotate_copies:
-        nx, ny = _rotate_point(params["x"], params["y"], cx, cy, angle_deg)
+        nx, ny = rotate_point(params["x"], params["y"], cx, cy, angle_deg)
         turned = dict(params)
         turned["x"] = nx
         turned["y"] = ny
         turned["angle"] = kernel.rectangle_angle(params) + angle_deg
         return turned
     ecx, ecy = _center_rectangle(params)
-    ncx, ncy = _rotate_point(ecx, ecy, cx, cy, angle_deg)
+    ncx, ncy = rotate_point(ecx, ecy, cx, cy, angle_deg)
     return _translate_rectangle(params, ncx - ecx, ncy - ecy)
 
 
@@ -197,10 +192,10 @@ def _rotate_bezier(
 ) -> Dict[str, float]:
     """**ベジエはアフィン不変**なので、制御点を回すだけで曲線が厳密に回る。"""
     if rotate_copies:
-        rotated = [_rotate_point(px, py, cx, cy, angle_deg) for px, py in _bezier_points(params)]
+        rotated = [rotate_point(px, py, cx, cy, angle_deg) for px, py in _bezier_points(params)]
         return _bezier_params(rotated)
     mx, my = _center_bezier(params)
-    nmx, nmy = _rotate_point(mx, my, cx, cy, angle_deg)
+    nmx, nmy = rotate_point(mx, my, cx, cy, angle_deg)
     return _translate_bezier(params, nmx - mx, nmy - my)
 
 

@@ -188,8 +188,9 @@ def test_a_flat_point_cloud_is_rejected_instead_of_being_perturbed() -> None:
     assert np.allclose(np.linalg.norm(planes[:, :3], axis=1), 1.0)
 
 
-def test_the_closest_point_on_a_triangle_covers_all_seven_regions() -> None:
-    """Ericson の領域分け(頂点3・辺3・面1)を1つの三角形で全部踏み、最近点を手計算と突き合わせる。"""
+def test_the_distance_to_a_triangle_covers_all_seven_regions() -> None:
+    """頂点3・辺3・面1の7領域を1つの三角形で全部踏み、最近点までの距離を手計算と突き合わせる
+    (`distance_to_hull` が使う `voxelize.distance_to_triangles`)。"""
     a = np.array([0.0, 0.0, 0.0])
     b = np.array([4.0, 0.0, 0.0])
     c = np.array([0.0, 4.0, 0.0])
@@ -215,11 +216,26 @@ def test_the_closest_point_on_a_triangle_covers_all_seven_regions() -> None:
             [1.0, 1.0, 0.0],
         ]
     )
-    closest = ds._closest_points_on_triangle(points, a, b, c)
-    assert np.allclose(closest, expected)
+    distance, which = vx.distance_to_triangles(a[None], b[None], c[None], points)
+    assert np.allclose(distance, np.linalg.norm(points - expected, axis=1)) and (which == 0).all()
     # 三角形の上の点はその点自身が最近点(距離0)。
     on = np.array([[1.0, 2.0, 0.0], [0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [2.0, 2.0, 0.0]])
-    assert np.allclose(ds._closest_points_on_triangle(on, a, b, c), on)
+    assert np.allclose(vx.distance_to_triangles(a[None], b[None], c[None], on)[0], 0.0)
+
+
+def test_a_degenerate_hull_triangle_does_not_drop_the_cell_silently() -> None:
+    """落ちたら、2頂点が重なる(または3頂点が一直線の)三角形で凸包までの距離が NaN か大きすぎる値になり、
+    `hull_distance_mask` がそのセルを黙って落とす(Ericson の領域分けの反例。正解は線分への距離)。"""
+    a = np.array([0.0, 0.0, 0.0])
+    c = np.array([5.0, 4.0, 4.0])
+    point = np.array([[10.0, 4.0, -8.0]])
+    expected = 12.638010059
+    for tri in ([a, a, c], [a, c, a], [c, a, a]):
+        triangles = np.array([tri])
+        got = vx.distance_to_triangles(triangles[:, 0], triangles[:, 1], triangles[:, 2], point)[0]
+        assert np.isfinite(got).all() and np.isclose(got[0], expected, atol=1e-6), tri
+    planes = np.array([[1.0, 0.0, 0.0, -5.0]])  # 点(x=10)が支持平面の外側になる向き(距離の経路を通す)
+    assert np.isclose(ds.distance_to_hull(point, planes, np.array([[a, a, c]])), expected, atol=1e-6)
 
 
 def test_the_distance_to_the_hull_matches_closed_forms() -> None:
