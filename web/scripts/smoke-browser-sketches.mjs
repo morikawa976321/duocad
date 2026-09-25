@@ -18,41 +18,15 @@
  *
  * **サーバはこのスクリプトが自分で立てる**(`web/scripts/server.mjs`)。
  */
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { findBrowser, launchBrowser, pressUndo, pressRedo } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
+import { assertNoAppErrors, openApp, pressUndo, pressRedo, waitOrFail } from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
 
-const options = parseArgs(process.argv.slice(2))
-const wsPort = options.port ?? '8805'
-const httpPort = options['http-port'] ?? '8806'
-const timeout = Number.parseInt(options.timeout ?? '120000', 10)
-const workdir = options.workdir ?? mkdtempSync(join(tmpdir(), 'duocad-bs-'))
-
-async function main() {
-  const executablePath = findBrowser()
-  console.log(`smoke-browser-sketches: ${executablePath}`)
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  const mcp = new McpClient(server.child, { timeout })
-  const browser = await launchBrowser(executablePath)
-
-  try {
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 900 })
-    const consoleErrors = []
+// 握手は材料を作る節で打つ(`handshake: false`)。
+runSmoke('smoke-browser-sketches', { mcp: true, handshake: false }, async ({ mcp, browser, url, timeout }) => {
+  {
+    const { page, consoleErrors } = await openApp(browser, url, { timeout, height: 900 })
     const expectedErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-    await page.goto(server.url, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad && window.__duocad.ready), {
-      timeout,
-      polling: 100,
-    })
     ok('空の文書で起動した')
 
     const look = async () =>
@@ -75,13 +49,8 @@ async function main() {
           }),
         ),
       )
-    async function waitFor(predicate, what, ...args) {
-      try {
-        await page.waitForFunction(predicate, { timeout, polling: 50 }, ...args)
-      } catch {
-        fail(`${what}: ${JSON.stringify(await look())}`)
-      }
-    }
+    const waitFor = (predicate, what, ...args) =>
+      waitOrFail(page, predicate, what, { args, timeout, dump: look })
     const rowOf = (sketchId) => `#browser-sketches li.sketch-row[data-sketch-id="${sketchId}"]`
     const rowState = (sketchId) =>
       page.$eval(rowOf(sketchId), (li) => ({
@@ -256,20 +225,6 @@ async function main() {
     ok('undoでAも戻った(2枚とも健在)')
 
     // ------------------------------------------------------------------ 最後
-    const unexpected = consoleErrors.filter((line) => !expectedErrors.includes(line))
-    const errors = (await look()).errors.filter((line) => !expectedErrors.includes(line))
-    if (unexpected.length > 0 || errors.length > 0) {
-      fail(`エラーが出ている: console=${JSON.stringify(unexpected)} / toast=${JSON.stringify(errors)}`)
-    }
-    ok('エラーは1枚も出ていない')
-    console.log('smoke-browser-sketches: PASS')
-  } finally {
-    await browser.close()
-    await server.stop()
+    await assertNoAppErrors(page, consoleErrors, { allow: expectedErrors })
   }
-}
-
-main().catch((error) => {
-  console.error(`smoke-browser-sketches: FAIL\n${error.stack ?? error}`)
-  process.exit(1)
 })

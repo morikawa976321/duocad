@@ -23,21 +23,12 @@
  * **サーバはこのスクリプトが自分で立てる**(`web/scripts/server.mjs`)。
  * 既に立っているものへ繋ぐときだけ `--url` を渡す(そのときは `--port` も合わせること)。
  */
-import { readFileSync, rmSync } from 'node:fs'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
-import { fail, ok, parseArgs } from './args.mjs'
-import { findBrowser, launchBrowser } from './browser.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
-
-const options = parseArgs(process.argv.slice(2))
-const attachUrl = options.url ?? null
-const wsPort = options.port ?? '8985'
-const httpPort = options['http-port'] ?? '8986'
-const timeout = Number.parseInt(options.timeout ?? '120000', 10)
+import { fail, ok } from './args.mjs'
+import { assertNoAppErrors, openApp } from './browser.mjs'
+import { runSmoke } from './harness.mjs'
 
 /**
  * 一辺10mmの正八面体。**画面で見える大きさ**にしてある(四面体1mmだと描けていても
@@ -52,18 +43,11 @@ const OCTA_INDICES = [
 const OCTA_VOLUME = (4 / 3) * 10 ** 3
 const OCTA_TRIANGLES = OCTA_INDICES.length / 3
 
-async function main() {
-  const executablePath = findBrowser()
-  console.log(`smoke-mesh-body: ${executablePath}`)
-
-  if (attachUrl !== null) fail('--url には未対応(MCPのstdioが要るのでサーバを自分で立てる)')
-  const server = await startServer({ wsPort, httpPort })
-  const mcp = new McpClient(server.child, { timeout })
-  const outDir = mkdtempSync(path.join(tmpdir(), 'duocad-smoke-mesh-'))
-  let browser = null
-
-  try {
-    await mcp.handshake('duocad-smoke-mesh-body')
+// `--url` には対応しない(MCPのstdioが要るのでサーバを自分で立てる。渡すと harness が断る)。
+runSmoke('smoke-mesh-body', { mcp: true }, async ({ mcp, browser, url, timeout, workdir }) => {
+  {
+    // 書き出し先は文書の置き場と同じ使い捨てディレクトリ(走行後に harness が消す)。
+    const outDir = workdir
 
     // ------------------------------------------------------------ 1. 足す
     const added = await mcp.callTool('add_mesh_body', {
@@ -86,26 +70,10 @@ async function main() {
     ok(`describe_document: kind=mesh / face_count=1 / volume=${meshEntry.volume.toFixed(2)}mm^3`)
 
     // ------------------------------------------------------------ ブラウザを開く
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
+    const { page, consoleErrors } = await openApp(browser, url, {
+      timeout,
+      until: () => (window.__duocad.parts ?? []).length > 0,
     })
-    page.on('response', (response) => {
-      if (response.status() >= 400) consoleErrors.push(`HTTP ${response.status()} ${response.url()}`)
-    })
-
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(
-      () => {
-        const hook = window.__duocad
-        return Boolean(hook && hook.ready && hook.parts && hook.parts.length > 0)
-      },
-      { timeout, polling: 100 },
-    )
 
     // ------------------------------------------------------------ 2. 部品一覧に出る
     const parts = JSON.parse(
@@ -219,21 +187,6 @@ async function main() {
     }
     ok('メッシュボディを消せる')
 
-    if (consoleErrors.length > 0) {
-      fail(`ブラウザのコンソールにエラー: ${consoleErrors.slice(0, 3).join(' | ')}`)
-    }
-    ok('ブラウザのコンソールにエラーなし')
-
-    console.log('')
-    console.log('smoke-mesh-body: PASS')
-  } finally {
-    if (browser !== null) await browser.close()
-    await server.stop()
-    rmSync(outDir, { recursive: true, force: true })
+    await assertNoAppErrors(page, consoleErrors)
   }
-}
-
-main().catch((error) => {
-  console.error(`smoke-mesh-body: FAIL ${error.message}`)
-  process.exit(1)
 })

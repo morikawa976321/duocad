@@ -21,20 +21,11 @@
  * サーバはこのスクリプトが空の文書で起動し、STEPはMCPの `import_step` で読む。
  */
 import { existsSync } from 'node:fs'
-import { findBrowser, launchBrowser, frameAll } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
+import { assertNoAppErrors, frameAll, openApp, sleep, viewportCenter } from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
 import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
 
-const options = parseArgs(process.argv.slice(2))
-const stepPath = options.step ?? PC_CASE_STEP
-const wsPort = options.port ?? '8967'
-const httpPort = options['http-port'] ?? '8968'
-const timeout = Number.parseInt(options.timeout ?? '600000', 10)
-const expectedBodies = Number.parseInt(options['expect-bodies'] ?? String(PC_CASE_SOLIDS), 10)
-/** 深いズームの段数(ホイールの刻み)。engineの実測(30段)に合わせてある。 */
-const ZOOM_STEPS = Number.parseInt(options['zoom-steps'] ?? '30', 10)
 const POLL_MS = 100
 /**
  * 状態配信が**この時間だけ止まったら**往復が終わったと見なす[ms]。
@@ -56,40 +47,24 @@ const QUIET_MS = 2000
  */
 const NO_CHANGE_MS = 120000
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-
-async function main() {
-  const executablePath = findBrowser()
+runSmoke('smoke-face-culling', { timeout: 600000, mcp: true }, async ({ options, mcp, browser, url, timeout }) => {
+  const stepPath = options.step ?? PC_CASE_STEP
+  const expectedBodies = Number.parseInt(options['expect-bodies'] ?? String(PC_CASE_SOLIDS), 10)
+  /** 深いズームの段数(ホイールの刻み)。engineの実測(30段)に合わせてある。 */
+  const ZOOM_STEPS = Number.parseInt(options['zoom-steps'] ?? '30', 10)
   if (!existsSync(stepPath)) fail(`STEPが無い: ${stepPath}`)
   console.log(`smoke-face-culling: ${stepPath}`)
-
-  const server = await startServer({ wsPort, httpPort })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-  try {
-    await mcp.handshake('duocad-smoke-face-culling')
+  {
     const imported = await mcp.callTool('import_step', { path: stepPath })
     if (imported.body_ids.length !== expectedBodies) {
       fail(`ボディが ${expectedBodies} 個でない: ${imported.body_ids.length}`)
     }
     ok(`STEPを読んだ: ${imported.body_ids.length}部品`)
 
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
+    const { page, consoleErrors } = await openApp(browser, url, { timeout })
     await frameAll(page)
 
-    const center = await page.evaluate(() => {
-      const box = document.querySelector('.viewport').getBoundingClientRect()
-      return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
-    })
+    const center = await viewportCenter(page)
     await page.mouse.move(center.x, center.y)
 
     /** いま画面が持っている形を丸ごと数える(**GPUに載っている量そのもの**)。 */
@@ -129,7 +104,7 @@ async function main() {
      * 落ち着きの判定は `stateEpoch`(状態が1通届くたびに増える)で行う。画面の値の
      * 変化では判定しない —— 上の `QUIET_MS` のコメントの理由による。
      */
-    async function settle(label, startedAt) {
+    async function waitQuiet(label, startedAt) {
       const deadline = Date.now() + timeout
       const first = await probe()
       const baseEpoch = first.stateEpoch
@@ -173,23 +148,23 @@ async function main() {
     }
 
     // ---------------------------------------------------------------- 全体表示
-    const farOn = await settle('全体表示・カリング入り', Date.now())
+    const farOn = await waitQuiet('全体表示・カリング入り', Date.now())
     const farOffAt = await setCulling(false)
-    const farOff = await settle('全体表示・カリング切り', farOffAt)
+    const farOff = await waitQuiet('全体表示・カリング切り', farOffAt)
     await setCulling(true)
-    await settle('全体表示・カリング入りへ戻す', Date.now())
+    await waitQuiet('全体表示・カリング入りへ戻す', Date.now())
 
     // ---------------------------------------------------------------- 深いズーム
     let startedAt = Date.now()
     await wheel(-240, ZOOM_STEPS)
     startedAt = Date.now()
-    const nearOn = await settle(`${ZOOM_STEPS}段ズーム・カリング入り`, startedAt)
+    const nearOn = await waitQuiet(`${ZOOM_STEPS}段ズーム・カリング入り`, startedAt)
 
     const nearOffAt = await setCulling(false)
-    const nearOff = await settle(`${ZOOM_STEPS}段ズーム・カリング切り`, nearOffAt)
+    const nearOff = await waitQuiet(`${ZOOM_STEPS}段ズーム・カリング切り`, nearOffAt)
 
     const backOnAt = await setCulling(true)
-    const nearOn2 = await settle(`${ZOOM_STEPS}段ズーム・カリング入りへ戻す`, backOnAt)
+    const nearOn2 = await waitQuiet(`${ZOOM_STEPS}段ズーム・カリング入りへ戻す`, backOnAt)
 
     // ---------------------------------------------------------------- 判定
     console.log('')
@@ -227,19 +202,6 @@ async function main() {
         `切り ${farOff.triangles.toLocaleString()} 三角形)`,
     )
 
-    const errors = await page.evaluate(() => window.__duocad.errors ?? [])
-    if (errors.length > 0) fail(`走行中にエラーが出た: ${JSON.stringify(errors)}`)
-    if (consoleErrors.length > 0) fail(`コンソールにエラー: ${consoleErrors.join(' / ')}`)
-    ok('走行中にエラーは1件も出ていない')
-
-    console.log('\nsmoke-face-culling: 全項目 OK')
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
+    await assertNoAppErrors(page, consoleErrors)
   }
-}
-
-main().catch((error) => {
-  console.error(`\nsmoke-face-culling: 失敗 — ${error.message}`)
-  process.exitCode = 1
 })

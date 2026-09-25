@@ -260,10 +260,16 @@ Get-ChildItem scripts/smoke*.mjs | ForEach-Object {
 ```
 
 形状最適化まわりは `smoke-optimize.mjs` / `smoke-optimize-mode.mjs` / `smoke-optimize-debug.mjs`。
-STEPを読む smoke は `web/scripts/models.mjs` の `PC_CASE_STEP` が指すパスを使う。
+STEPを読む smoke は `web/scripts/models.mjs` の `PC_CASE_STEP` / `HANGER_BAR_STEP` が指すパスを使う。
+
+**骨格は全本共通**（`web/scripts/harness.mjs` の `runSmoke`）: 使い捨ての `--models-dir` でサーバを立て、
+ブラウザを開き、終わったら止めて temp を消す。既定ポートは本ごとに一意（`SMOKE_PORTS` の表）なので
+複数本を並列に回してよい。`--port` / `--http-port` / `--timeout` は全本が読む。
 
 既に立てているサーバへ繋ぎたいときだけ `--url http://127.0.0.1:8766/` を渡す
-（その場合スクリプトはサーバを立てず、止めもしない）。
+（その場合スクリプトはサーバを立てず、止めもしない）。**対応しているのは `smoke.mjs` /
+`smoke-features` / `smoke-files` / `smoke-regions` / `smoke-svg` / `smoke-toast` だけ**で、
+MCP の stdio が要る本に渡すと harness が断る（MCP が要る節は `smoke-files` / `smoke-regions` でも失敗になる）。
 
 ### 一括受入チェック（人間/AI ＋ 交互操作）
 

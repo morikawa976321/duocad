@@ -29,33 +29,16 @@
  *      「罠」の面が実際に作れる(実測で確認済み)。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
  */
-import { mkdirSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { findBrowser, launchBrowser } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
+import { assertNoAppErrors, openApp, sleep, waitFrames } from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import { addExtrudedRect } from './mcp-client.mjs'
+import { faceAt } from './pick.mjs'
+import { SCREENSHOTS_DIR } from './server.mjs'
 
-const options = parseArgs(process.argv.slice(2))
-const wsPort = options.port ?? '8991'
-const httpPort = options['http-port'] ?? '8992'
-const timeout = Number.parseInt(options.timeout ?? '60000', 10)
-const screenshotDir = 'C:\\Users\\tm976\\mf\\duocad\\screenshots'
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-
-/** 段の不透明度・グリッドの状態は描画ループ(`tick`)で入れ直すので、読む前に数フレーム待つ。 */
-async function settle(page) {
-  await page.evaluate(
-    () =>
-      new Promise((resolve) => {
-        let left = 4
-        const step = () => (left-- <= 0 ? resolve() : requestAnimationFrame(step))
-        requestAnimationFrame(step)
-      }),
-  )
-}
+const screenshotDir = SCREENSHOTS_DIR
 
 /**
  * 完了条件1・2・3・6の共通アサーション(sketch-face専用のグリッドが出ている・XY床が
@@ -94,23 +77,10 @@ function assertFaceGridShape(tiers, label) {
   ok(`${label}: 深度バイアス層がsketchFaceGrid(=${SKETCH_FACE_GRID_DEPTH_BIAS_LAYER})になっている(基準平面のplaneGrid層と分離。完了条件6)`)
 }
 
-async function main() {
-  const executablePath = findBrowser()
-  const workdir = mkdtempSync(join(tmpdir(), 'duocad-face-grid-'))
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-  try {
-    await mcp.handshake('duocad-smoke-face-grid')
-
+runSmoke('smoke-face-grid', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout }) => {
+  {
     // ---------------------------------------------------------------- 準備A: 素直な任意面用の箱
-    const sketchA = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-    await mcp.callTool('add_rectangle', { sketch_id: sketchA.sketch_id, corner: [0, 0], width: 40, height: 30 })
-    await mcp.callTool('propose_selection', { refs: [{ sketch: sketchA.sketch_id, index: 1 }] })
-    await mcp.callTool('commit_selection')
-    const extrudedA = await mcp.callTool('extrude', { distance: 20, mode: 'new' })
-    await mcp.callTool('clear_selection')
-    const bodyIdA = extrudedA.bodies[0].body_id
+    const { bodyId: bodyIdA } = await addExtrudedRect(mcp, { corner: [0, 0], width: 40, height: 30, distance: 20 })
     ok(`[準備A] 40×30×20mmの箱を作った(body=${bodyIdA})`)
 
     // ---------------------------------------------------------------- 準備B: 罠(底面がXYと完全一致)の箱
@@ -119,49 +89,21 @@ async function main() {
     // (実測で確認済み。`_ax3_from_face` の原点は面ごとに違う基準を取るため、これは狙って
     // 作った偶然の一致であり毎回同じ面で起きるとは限らない——次にこの検査を触るときは
     // 実測し直すこと)。
-    const sketchB = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-    await mcp.callTool('add_rectangle', {
-      sketch_id: sketchB.sketch_id,
+    const { bodyId: bodyIdB } = await addExtrudedRect(mcp, {
       corner: [-20, -15],
       width: 40,
       height: 30,
+      distance: 20,
     })
-    await mcp.callTool('propose_selection', { refs: [{ sketch: sketchB.sketch_id, index: 1 }] })
-    await mcp.callTool('commit_selection')
-    const extrudedB = await mcp.callTool('extrude', { distance: 20, mode: 'new' })
-    await mcp.callTool('clear_selection')
-    const bodyIdB = extrudedB.bodies[0].body_id
     ok(`[準備B] 原点中心の40×30×20mmの箱を作った(body=${bodyIdB}、底面の罠を試す用)`)
 
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
-    await page.waitForFunction(() => (window.__duocad?.state?.bodies ?? []).length >= 2, {
+    const { page, consoleErrors } = await openApp(browser, url, {
       timeout,
-      polling: 100,
+      until: () => (window.__duocad?.state?.bodies ?? []).length >= 2,
     })
     await sleep(200)
 
     const tiersNow = () => page.evaluate(() => window.__duocad.gridTiers())
-
-    async function locateFace(id, index) {
-      return page.evaluate(
-        (bodyId, faceIndex) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectFace(bodyId, faceIndex)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        id,
-        index,
-      )
-    }
 
     // **ページの中で JSON.stringify する**(Svelteの状態はProxyで、そのまま返すと
     // CDPの構造化複製でプロパティが運ばれず `{}` になる。engine
@@ -189,7 +131,7 @@ async function main() {
 
     // ====================================================================== 通常表示の確認(復帰の比較対象)
     console.log('\n[0] 通常表示(スケッチ外)はXY平面+Z軸')
-    await settle(page)
+    await waitFrames(page, 4)
     const plain = await tiersNow()
     if (JSON.stringify(plain.planes) !== JSON.stringify(['XY']) || plain.axis !== 'Z') {
       fail(`[0] 通常はXY平面+Z軸のはず: ${JSON.stringify(plain)}`)
@@ -217,7 +159,7 @@ async function main() {
       ) {
         await page.click('#sketch-create')
       }
-      const at = await locateFace(bodyIdA, faceIndex)
+      const at = await faceAt(page, bodyIdA, faceIndex)
       if (!at) {
         attemptLogA.push(`面${faceIndex}: 射影できない`)
         continue
@@ -232,7 +174,7 @@ async function main() {
         await page.keyboard.press('Escape')
         continue
       }
-      await settle(page)
+      await waitFrames(page, 4)
       const plane = await sketchPlane()
       // **`plane.kind==='face'` だけを条件にする**(フィルタで避けない)。
       // 基準平面のグリッド/ピック優先度に取られて `plane.kind==='base'` になった場合だけ
@@ -311,7 +253,7 @@ async function main() {
       { timeout, polling: 100 },
       sketchOnTrap.sketch_id,
     )
-    await settle(page)
+    await waitFrames(page, 4)
 
     const planeTrap = await sketchPlane()
     if (planeTrap?.kind !== 'face') {
@@ -351,24 +293,13 @@ async function main() {
     console.log('\n[3] 完了条件5: スケッチを抜けると通常表示(XY+Z軸)へ戻る')
     await page.click('#sketch-exit')
     await page.waitForFunction(() => window.__duocad.activeSketch === null, { timeout, polling: 50 })
-    await settle(page)
+    await waitFrames(page, 4)
     const backToPlain = await tiersNow()
     if (JSON.stringify(backToPlain.planes) !== JSON.stringify(['XY']) || backToPlain.axis !== 'Z') {
       fail(`[3] スケッチを抜けたら通常(XY+Z軸)へ戻るはず: ${JSON.stringify(backToPlain)}`)
     }
     ok('[3] スケッチを抜けると通常(XY平面+Z軸)へ戻る')
 
-    const errors = await page.evaluate(() => window.__duocad.errors ?? [])
-    if (errors.length > 0) fail(`走行中にエラーが出た: ${JSON.stringify(errors)}`)
-    if (consoleErrors.length > 0) fail(`コンソールにエラー: ${consoleErrors.join(' / ')}`)
-    ok('走行中にエラーは1件も出ていない')
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
+    await assertNoAppErrors(page, consoleErrors)
   }
-}
-
-main().catch((error) => {
-  console.error(`\nsmoke-face-grid: 失敗 — ${error.message}`)
-  process.exitCode = 1
 })

@@ -31,80 +31,37 @@
  * **サーバはこのスクリプトが自分で立てる**(`--models-dir` に使い捨てを渡すので、
  * リポジトリ直下の実 `models/` は触らない)。
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
-import { fail, ok, parseArgs } from './args.mjs'
-import { findBrowser, launchBrowser, frameAll } from './browser.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
+import { fail, ok } from './args.mjs'
+import { assertNoAppErrors, frameAll, openApp, sleep, typeInto, waitOrFail } from './browser.mjs'
+import { runSmoke } from './harness.mjs'
+import { addExtrudedRect } from './mcp-client.mjs'
+import { clickFace } from './pick.mjs'
 
-const options = parseArgs(process.argv.slice(2))
-const wsPort = options.port ?? '8905'
-const httpPort = options['http-port'] ?? '8906'
-const timeout = Number.parseInt(options.timeout ?? '60000', 10)
-/** 最適化1回ぶんの待ち。**既定の60秒では足りない**(実測 約60秒 + 機械の熱状態で1.7倍)。 */
-const runTimeout = Number.parseInt(options['run-timeout'] ?? '420000', 10)
-const workdir = mkdtempSync(path.join(tmpdir(), 'duocad-optimize-run-'))
-
-async function main() {
-  const executablePath = findBrowser()
-  console.log(`smoke-optimize: ${executablePath}`)
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  const mcp = new McpClient(server.child, { timeout })
-  const outDir = mkdtempSync(path.join(tmpdir(), 'duocad-smoke-optimize-'))
-  let browser = null
-
-  try {
-    await mcp.handshake('duocad-smoke-optimize')
-
+runSmoke('smoke-optimize', { timeout: 60000, mcp: true }, async ({ options, workdir, mcp, browser, url, timeout }) => {
+  /** 最適化1回ぶんの待ち。**既定の60秒では足りない**(実測 約60秒 + 機械の熱状態で1.7倍)。 */
+  const runTimeout = Number.parseInt(options['run-timeout'] ?? '420000', 10)
+  /** 画像と STL の書き出し先(文書の置き場と同じ使い捨て。走行後に harness が消す)。 */
+  const outDir = workdir
+  {
     /** 一辺 `size` の立方体。**離して置く**ので、あいだを繋ぐ材料を最適化が起こす。 */
-    async function addBox(corner, size, distance) {
-      const sketch = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-      await mcp.callTool('add_rectangle', {
-        sketch_id: sketch.sketch_id,
-        corner,
-        width: size,
-        height: size,
-      })
-      await mcp.callTool('propose_selection', { refs: [{ sketch: sketch.sketch_id, index: 1 }] })
-      await mcp.callTool('commit_selection')
-      const extruded = await mcp.callTool('extrude', { distance, mode: 'new' })
-      await mcp.callTool('clear_selection')
-      return extruded.bodies[0].body_id
-    }
+    const addBox = async (corner, size, distance) =>
+      (await addExtrudedRect(mcp, { corner, width: size, height: size, distance })).bodyId
 
     const bodyA = await addBox([0, 0], 12, 12)
     const bodyB = await addBox([48, 0], 12, 12)
     ok(`12mm立方体を2つ、48mm離して作った(A=${bodyA} / B=${bodyB})`)
 
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-    page.on('response', (response) => {
-      if (response.status() >= 400) consoleErrors.push(`HTTP ${response.status()} ${response.url()}`)
-    })
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
-    await page.waitForFunction(() => (window.__duocad?.parts ?? []).length >= 2, {
+    const { page, consoleErrors } = await openApp(browser, url, {
       timeout,
-      polling: 100,
+      until: () => (window.__duocad?.parts ?? []).length >= 2,
     })
     await frameAll(page)
 
-    async function waitFor(check, what, args = [], limit = timeout) {
-      try {
-        await page.waitForFunction(check, { timeout: limit, polling: 100 }, ...args)
-      } catch {
-        fail(`${what}(タイムアウト)`)
-      }
-    }
+    const waitFor = (check, what, args = [], limit = timeout) =>
+      waitOrFail(page, check, what, { args, timeout: limit, polling: 100 })
 
     /** 画面から指せる面を1枚(`exclude` に載る添字は避ける)。 */
     async function pickAnyFace(bodyId, exclude = []) {
@@ -123,30 +80,6 @@ async function main() {
       )
       if (found === null) fail(`ボディ ${bodyId} に画面から指せる面が無い`)
       return found
-    }
-
-    /** 押す直前に射影し直してクリックする。 */
-    async function clickFace(bodyId, faceIndex) {
-      const at = await page.evaluate(
-        (id, index) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectFace(id, index)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        bodyId,
-        faceIndex,
-      )
-      if (!at) fail(`ボディ ${bodyId} の面 ${faceIndex} が画面の中に無い`)
-      await page.mouse.click(at.x, at.y)
-    }
-
-    async function typeInto(selector, value) {
-      await page.click(selector)
-      await page.keyboard.down('Control')
-      await page.keyboard.press('KeyA')
-      await page.keyboard.up('Control')
-      await page.keyboard.press('Backspace')
-      await page.type(selector, String(value), { delay: 15 })
     }
 
     const text = (selector) =>
@@ -175,8 +108,8 @@ async function main() {
     console.log('\n[2] 4条件を本物のクリックで置く')
     await page.click('#set-preserve-bodies')
     await waitFor(() => window.__duocad.wantedKinds.includes('body'), 'ボディ粒度にならない')
-    await clickFace(bodyA, await pickAnyFace(bodyA))
-    await clickFace(bodyB, await pickAnyFace(bodyB))
+    await clickFace(page, bodyA, await pickAnyFace(bodyA))
+    await clickFace(page, bodyB, await pickAnyFace(bodyB))
     await page.keyboard.press('Enter')
     await waitFor(
       () => (window.__duocad.state.optimize.preserve_bodies ?? []).length === 2,
@@ -190,7 +123,7 @@ async function main() {
       '拘束面のverbで面粒度にならない',
     )
     const fixtureFace = await pickAnyFace(bodyA)
-    await clickFace(bodyA, fixtureFace)
+    await clickFace(page, bodyA, fixtureFace)
     await page.keyboard.press('Enter')
     await waitFor(
       () => (window.__duocad.state.optimize.fixtures ?? []).length === 1,
@@ -204,8 +137,8 @@ async function main() {
     const loadFaceB = await pickAnyFace(bodyB, [loadFaceA])
 
     await page.click('#set-loads')
-    await clickFace(bodyB, loadFaceA)
-    await typeInto('#load-magnitude', 200)
+    await clickFace(page, bodyB, loadFaceA)
+    await typeInto(page, '#load-magnitude', 200)
     await page.click('#load-direction-down')
     await page.keyboard.press('Enter')
     await waitFor(
@@ -223,8 +156,8 @@ async function main() {
     if (preselected !== 0) {
       fail(`荷重verbの起動時に ${preselected} 個が選択されている(既存の荷重を巻き込んで上書きする)`)
     }
-    await clickFace(bodyB, loadFaceB)
-    await typeInto('#load-magnitude', 50)
+    await clickFace(page, bodyB, loadFaceB)
+    await typeInto(page, '#load-magnitude', 50)
     await page.click('#load-direction-normal')
     await page.keyboard.press('Enter')
     await waitFor(
@@ -259,7 +192,7 @@ async function main() {
 
     // ---------------------------------------------------------------- 1枚だけ外す
     await page.click('#clear-loads')
-    await clickFace(bodyB, loadFaceB)
+    await clickFace(page, bodyB, loadFaceB)
     await page.keyboard.press('Enter')
     await waitFor(
       () => (window.__duocad.state.optimize.loads ?? []).length === 1,
@@ -466,7 +399,7 @@ async function main() {
     await page.click('#optimize-exit')
     await waitFor(() => window.__duocad.mode === 'idle', '最適化モードから抜けられない')
     await page.evaluate(() => window.__duocad.frameAll())
-    await clickFace(mesh.bodyId, 1)
+    await clickFace(page, mesh.bodyId, 1)
     await waitFor(
       (id) =>
         (window.__duocad.selection?.items ?? []).some(
@@ -490,7 +423,7 @@ async function main() {
     const opsBefore = await page.evaluate(() => window.__duocad.state.applied_count)
     await page.click('#move-body')
     await page.keyboard.press('Enter')
-    await new Promise((resolve) => setTimeout(resolve, 400))
+    await sleep(400)
     const opsAfter = await page.evaluate(() => window.__duocad.state.applied_count)
     if (opsAfter !== opsBefore) fail('メッシュボディに move_body が通ってしまった')
     const prompt = await text('#command-prompt')
@@ -499,23 +432,7 @@ async function main() {
     }
     ok(`[9] 編集verbは確定できず、足りないものを言う(「${prompt.slice(0, 30)}…」)`)
 
-    // ================================================================== 10. コンソール
-    if (consoleErrors.length > 0) {
-      fail(`ブラウザのコンソールにエラー: ${consoleErrors.slice(0, 3).join(' | ')}`)
-    }
-    ok('[10] ブラウザのコンソールにエラーなし')
-
-    console.log('')
-    console.log('smoke-optimize: PASS')
-  } finally {
-    if (browser !== null) await browser.close()
-    await server.stop()
-    rmSync(outDir, { recursive: true, force: true })
-    rmSync(workdir, { recursive: true, force: true })
+    // ================================================================== 10. エラー
+    await assertNoAppErrors(page, consoleErrors)
   }
-}
-
-main().catch((error) => {
-  console.error(`smoke-optimize: FAIL ${error.message}`)
-  process.exit(1)
 })

@@ -31,39 +31,11 @@
  * サーバはこのスクリプトが空の文書で起動し、形はMCP経由で作る。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
  */
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { findBrowser, launchBrowser } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
-
-const options = parseArgs(process.argv.slice(2))
-const wsPort = options.port ?? '8987'
-const httpPort = options['http-port'] ?? '8988'
-const timeout = Number.parseInt(options.timeout ?? '60000', 10)
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-
-/** 段の不透明度は描画ループ(`tick`)で入れ直すので、読む前に数フレーム待つ。 */
-async function settle(page) {
-  await page.evaluate(
-    () =>
-      new Promise((resolve) => {
-        let left = 4
-        const step = () => (left-- <= 0 ? resolve() : requestAnimationFrame(step))
-        requestAnimationFrame(step)
-      }),
-  )
-}
-
-async function assertNoErrors(page, consoleErrors) {
-  const errors = await page.evaluate(() => window.__duocad.errors ?? [])
-  if (errors.length > 0) fail(`走行中にエラーが出た: ${JSON.stringify(errors)}`)
-  if (consoleErrors.length > 0) fail(`コンソールにエラー: ${consoleErrors.join(' / ')}`)
-  ok('走行中にエラーは1件も出ていない')
-}
+import { assertNoAppErrors, openApp, sleep, viewportCenter, waitFrames } from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import { addExtrudedRect } from './mcp-client.mjs'
+import { createSketchOnBasePlane, zoomOutUntilVisible } from './pick.mjs'
 
 /** 3段の刻みが固定で、不透明度が [0,1] かつ粗い段ほど濃いこと(どの姿勢でも成り立つ)。 */
 function assertTierShape(tiers, where) {
@@ -80,45 +52,21 @@ function assertTierShape(tiers, where) {
   }
 }
 
-async function main() {
-  const executablePath = findBrowser()
-  const workdir = mkdtempSync(join(tmpdir(), 'duocad-grid-scale-'))
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-  try {
-    await mcp.handshake('duocad-smoke-grid-scale')
-
+runSmoke('smoke-grid-scale', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout }) => {
+  {
     // ---------------------------------------------------------------- 準備: 原点近くの小さな立方体(常駐)
     // 大きな箱をundoで消しても文書が完全には空にならないようにしておく(完全に空だと
     // `frameToContent`が早期returnし、`frameAll`が縮小を試す機会そのものが無くなって
     // Eの検査の切り分けができない)。
-    async function addBox(corner, width, height, distance) {
-      const sketch = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-      await mcp.callTool('add_rectangle', { sketch_id: sketch.sketch_id, corner, width, height })
-      await mcp.callTool('propose_selection', { refs: [{ sketch: sketch.sketch_id, index: 1 }] })
-      await mcp.callTool('commit_selection')
-      const extruded = await mcp.callTool('extrude', { distance, mode: 'new' })
-      await mcp.callTool('clear_selection')
-      return { sketchId: sketch.sketch_id, bodyId: extruded.bodies[0].body_id }
-    }
+    const addBox = (corner, width, height, distance) =>
+      addExtrudedRect(mcp, { corner, width, height, distance })
 
     await addBox([0, 0], 10, 10, 10)
     ok('原点近くの小さな立方体を作った(10×10×10mm、以後ずっと残す)')
 
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
-    await page.waitForFunction(() => (window.__duocad?.state?.bodies ?? []).length >= 1, {
+    const { page, consoleErrors } = await openApp(browser, url, {
       timeout,
-      polling: 100,
+      until: () => (window.__duocad?.state?.bodies ?? []).length >= 1,
     })
     await sleep(200)
 
@@ -127,10 +75,7 @@ async function main() {
 
     /** ビューポート中央へカーソルを置く(ホイールはカーソル位置で発火する)。 */
     async function centerCursor() {
-      const center = await page.evaluate(() => {
-        const box = document.querySelector('.viewport').getBoundingClientRect()
-        return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
-      })
+      const center = await viewportCenter(page)
       await page.mouse.move(center.x, center.y)
       return center
     }
@@ -179,7 +124,7 @@ async function main() {
     const fineAlphas = []
     const midAlphas = []
     for (let i = 0; i < 200; i += 1) {
-      await settle(page)
+      await waitFrames(page, 4)
       const tiers = await tiersNow()
       assertTierShape(tiers, `[B] 引きの途中(${i})`)
       fineAlphas.push(tiers.tiers[0].alpha)
@@ -231,7 +176,7 @@ async function main() {
       timeout,
       polling: 50,
     })
-    await settle(page)
+    await waitFrames(page, 4)
     const armed = await tiersNow()
     if (JSON.stringify(armed.planes) !== JSON.stringify(['XY', 'XZ', 'YZ'])) {
       fail(`[D] 対象待ちなのに3平面が出ていない(基準平面を指せなくなる): ${JSON.stringify(armed.planes)}`)
@@ -241,24 +186,9 @@ async function main() {
     }
     ok('[D] 対象待ちでは3平面すべてが出ている(基準平面をクリックして指せる)')
 
-    /**
-     * **`frameAll`は内容(bodyの外接箱、約252mm)に合わせるだけで、500mmのピック範囲全体は
-     * 画面に入らない。** 実際のホイール操作で、指定したワールド座標が画面内に映るまで引く。
-     */
-    async function zoomOutUntilVisible(worldPoint, maxNotches = 200) {
-      await centerCursor()
-      for (let i = 0; i < maxNotches; i += 1) {
-        const rect = await page.evaluate(() => {
-          const box = document.querySelector('.viewport').getBoundingClientRect()
-          return { width: box.width, height: box.height }
-        })
-        const at = await page.evaluate((point) => window.__duocad.projectPoint(point), worldPoint)
-        if (at && at.x >= 0 && at.x <= rect.width && at.y >= 0 && at.y <= rect.height) return true
-        await page.mouse.wheel({ deltaY: 480 }) // 正で引く(ズームアウト)
-        await sleep(40)
-      }
-      return false
-    }
+    // **`frameAll`は内容(bodyの外接箱、約252mm)に合わせるだけで、500mmのピック範囲全体は
+    // 画面に入らない。** 実際のホイール操作で、指定したワールド座標が画面内に映るまで引く
+    // (`pick.mjs` の `zoomOutUntilVisible`)。
 
     /** ワールド座標をXY平面上でホバーし、`hoveredRef().plane` を返す(座標は使う直前に測る)。 */
     async function hoverPlaneAt(worldPoint) {
@@ -269,14 +199,14 @@ async function main() {
       const at = await page.evaluate((point) => window.__duocad.projectPoint(point), worldPoint)
       if (!at) return { screen: null, plane: null }
       await page.mouse.move(rect.left + at.x, rect.top + at.y)
-      await settle(page)
+      await waitFrames(page, 4)
       const hovered = await page.evaluate(() => window.__duocad.hoveredRef())
       return { screen: at, plane: hovered ? hovered.plane : null }
     }
 
     const insideExtent = grownExtent - 30 // 旧来の固定100mmを大きく超えるが、いまの範囲の内側
     const outsideExtent = grownExtent + 30
-    if (!(await zoomOutUntilVisible([outsideExtent, 0, 0]))) {
+    if (!(await zoomOutUntilVisible(page, [outsideExtent, 0, 0]))) {
       fail(`ズームアウトを繰り返しても extent+30(${outsideExtent}mm)が画面に映らない`)
     }
     ok(`ズームアウトして外側の判定点(u=${outsideExtent})が画面に映るところまで引いた`)
@@ -400,7 +330,7 @@ async function main() {
 
     // ====================================================================== F. 表示する平面は状態で決まる
     console.log('\n[F] 表示する平面: 通常=XY+Z軸 / 基準平面へのスケッチ中=その平面+直交する軸')
-    await settle(page)
+    await waitFrames(page, 4)
     const plain = await tiersNow()
     if (JSON.stringify(plain.planes) !== JSON.stringify(['XY']) || plain.axis !== 'Z') {
       fail(`[F] 通常はXY平面+Z軸のはず: ${JSON.stringify({ planes: plain.planes, axis: plain.axis })}`)
@@ -410,19 +340,7 @@ async function main() {
     // **スケッチを作る2手**: 「スケッチ」を起動 → 貼る先(XZ平面)をクリック
     // (`smoke.mjs` の `createSketchOnBase` と同じ流儀。MCPから作っても画面側は
     // スケッチモードへ入らないので、人と同じ経路で入る)。
-    await page.click('#sketch-create')
-    const xzAt = await (
-      await page.waitForFunction(
-        () => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectBasePlane('XZ')
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        { timeout, polling: 50 },
-      )
-    ).jsonValue()
-    await page.mouse.click(xzAt.x, xzAt.y)
-    await page.waitForFunction(() => window.__duocad.activeSketch !== null, { timeout, polling: 50 })
+    await createSketchOnBasePlane(page, 'XZ', { timeout })
     await page.waitForFunction(
       () => {
         const tiers = window.__duocad.gridTiers()
@@ -439,21 +357,13 @@ async function main() {
 
     await page.click('#sketch-exit')
     await page.waitForFunction(() => window.__duocad.activeSketch === null, { timeout, polling: 50 })
-    await settle(page)
+    await waitFrames(page, 4)
     const backToPlain = await tiersNow()
     if (JSON.stringify(backToPlain.planes) !== JSON.stringify(['XY']) || backToPlain.axis !== 'Z') {
       fail(`[F] スケッチを抜けたら通常(XY+Z軸)へ戻るはず: ${JSON.stringify(backToPlain)}`)
     }
     ok('[F] スケッチを抜けると通常(XY平面+Z軸)へ戻る')
 
-    await assertNoErrors(page, consoleErrors)
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
+    await assertNoAppErrors(page, consoleErrors)
   }
-}
-
-main().catch((error) => {
-  console.error(`\nsmoke-grid-scale: 失敗 — ${error.message}`)
-  process.exitCode = 1
 })

@@ -96,3 +96,38 @@ export class McpClient {
     return JSON.parse(response.result.content[0].text)
   }
 }
+
+/**
+ * MCP で矩形を押し出して箱を作る: `sketch_create` → `add_rectangle` → `propose_selection`(領域1)
+ * → `commit_selection` → `extrude` →(`clear_selection`)。戻り値は `{ sketchId, bodyId }`。
+ *
+ * `bodyId` は `extrude` の応答の `bodies[0].body_id`(版が変わった Body の一覧。空の文書での最初の
+ * 押し出しなら `describe_document().bodies[0]` と同じ Body)。fixture の寸法は呼び手が持つ ——
+ * 寸法そのものが検査の条件になる本がある(原点中心の箱、極小と巨大の板)。
+ */
+export async function addExtrudedRect(
+  mcp,
+  { corner, width, height, distance, mode = 'new', clear = true, basePlane = 'XY' },
+) {
+  const sketch = await mcp.callTool('sketch_create', { base_plane: basePlane })
+  await mcp.callTool('add_rectangle', { sketch_id: sketch.sketch_id, corner, width, height })
+  return extrudeFirstRegion(mcp, sketch.sketch_id, { distance, mode, clear })
+}
+
+/** 円を押し出す(`addExtrudedRect` の円版)。 */
+export async function addExtrudedCircle(
+  mcp,
+  { center, radius, distance, mode = 'new', clear = true, basePlane = 'XY' },
+) {
+  const sketch = await mcp.callTool('sketch_create', { base_plane: basePlane })
+  await mcp.callTool('add_circle', { sketch_id: sketch.sketch_id, center, radius })
+  return extrudeFirstRegion(mcp, sketch.sketch_id, { distance, mode, clear })
+}
+
+async function extrudeFirstRegion(mcp, sketchId, { distance, mode, clear }) {
+  await mcp.callTool('propose_selection', { refs: [{ sketch: sketchId, index: 1 }] })
+  await mcp.callTool('commit_selection')
+  const extruded = await mcp.callTool('extrude', { distance, mode })
+  if (clear) await mcp.callTool('clear_selection')
+  return { sketchId, bodyId: extruded.bodies[0].body_id }
+}

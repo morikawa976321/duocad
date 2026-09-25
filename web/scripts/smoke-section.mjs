@@ -12,25 +12,15 @@
  * 形は2つ: A=40×30×20 の箱(原点の隅から)、B=40×30×5 の低い箱(A の奥 y=50..80)。
  * 断面の既定位置は外接箱の中心 z=10 なので、A は上半分が消え、B(高さ5)は丸ごと残る。
  */
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { inflateSync } from 'node:zlib'
-import { findBrowser, frameAll, launchBrowser } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
-
-const options = parseArgs(process.argv.slice(2))
-const wsPort = options.port ?? '9015'
-const httpPort = options['http-port'] ?? '9016'
-const timeout = 60000
+import { assertNoAppErrors, frameAll, openApp, sleep, waitFrames } from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import { addExtrudedRect } from './mcp-client.mjs'
 
 // `viewportConstants.ts` と揃える(変えたらここも変える)
 const BASE_COLOR = 0x9aa6b2
 const SECTION_CAP_COLOR = 0x6b7682
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** 1×1 の PNG の画素。1×1 は左・上の画素が無いので、どのフィルタ型でも生の値がそのまま入っている。 */
 function decodeSinglePixelPng(png) {
@@ -56,39 +46,18 @@ const toLinear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
 const toSrgb = (c) => (c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055)
 const channels = (hex) => [(hex >> 16) & 255, (hex >> 8) & 255, hex & 255].map((c) => toLinear(c / 255))
 
-async function main() {
-  const executablePath = findBrowser()
-  const workdir = mkdtempSync(join(tmpdir(), 'duocad-section-'))
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-  try {
-    await mcp.handshake('duocad-smoke-section')
-
-    async function box(corner, width, height, distance) {
-      const sketch = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-      await mcp.callTool('add_rectangle', { sketch_id: sketch.sketch_id, corner, width, height })
-      await mcp.callTool('propose_selection', { refs: [{ sketch: sketch.sketch_id, index: 1 }] })
-      await mcp.callTool('commit_selection')
-      const extruded = await mcp.callTool('extrude', { distance, mode: 'new' })
-      await mcp.callTool('clear_selection')
-      return extruded.bodies[0].body_id
-    }
+runSmoke('smoke-section', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout }) => {
+  {
+    const box = async (corner, width, height, distance) =>
+      (await addExtrudedRect(mcp, { corner, width, height, distance })).bodyId
     const bodyA = await box([0, 0], 40, 30, 20)
     const bodyB = await box([0, 50], 40, 30, 5)
     ok(`箱A(40×30×20, body=${bodyA})と低い箱B(40×30×5, body=${bodyB})を作った`)
 
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
+    const { page, consoleErrors } = await openApp(browser, url, {
+      timeout,
+      until: () => window.__duocad.state.bodies.length === 2,
     })
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
-    await page.waitForFunction(() => window.__duocad.state.bodies.length === 2, { timeout, polling: 100 })
     await frameAll(page)
 
     /** 状態配信(カメラを動かすと可変解像度で形が配り直される)が止まるまで待つ。 */
@@ -100,7 +69,7 @@ async function main() {
         if (next === epoch) break
         epoch = next
       }
-      await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))))
+      await waitFrames(page, 2)
     }
     await settle()
 
@@ -291,16 +260,6 @@ async function main() {
     if ((await page.$('#section-position')) !== null) fail('やめたのに位置の欄が出ている')
     ok('やめると判定メッシュ・ハンドル・操作子が消え、上面がまた指せる')
 
-    if (consoleErrors.length) fail(`ブラウザのコンソールにエラー: ${consoleErrors.join(' / ')}`)
-    ok('ブラウザのコンソールにエラーなし')
-    console.log('\nsmoke-section: PASS')
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
+    await assertNoAppErrors(page, consoleErrors)
   }
-}
-
-main().catch((error) => {
-  console.error(`\nsmoke-section: FAIL ${error.message ?? error}`)
-  process.exitCode = 1
 })

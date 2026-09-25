@@ -37,41 +37,12 @@
  * サーバはこのスクリプトが空の文書で起動し、板・STEP・立方体ともMCP経由で作る。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
  */
-import { mkdtempSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { findBrowser, launchBrowser } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
-
-const options = parseArgs(process.argv.slice(2))
-const stepPath = options.step ?? 'C:\\Users\\tm976\\mf\\hanger_bar_attatchment.step'
-const wsPort = options.port ?? '8975'
-const httpPort = options['http-port'] ?? '8976'
-const timeout = Number.parseInt(options.timeout ?? '120000', 10)
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-
-/** ページ内のエラー(pageerror・console.error・4xx/5xx応答)を控えて、最後にまとめて見る。 */
-function watchErrors(page) {
-  const errors = []
-  page.on('pageerror', (error) => errors.push(String(error)))
-  page.on('console', (message) => {
-    if (message.type() === 'error') errors.push(message.text())
-  })
-  page.on('response', (response) => {
-    if (response.status() >= 400) errors.push(`HTTP ${response.status()} ${response.url()}`)
-  })
-  return errors
-}
-
-async function assertNoErrors(page, consoleErrors) {
-  const errors = await page.evaluate(() => window.__duocad.errors ?? [])
-  if (errors.length > 0) fail(`走行中にエラーが出た: ${JSON.stringify(errors)}`)
-  if (consoleErrors.length > 0) fail(`コンソールにエラー: ${consoleErrors.join(' / ')}`)
-  ok('走行中にエラーは1件も出ていない')
-}
+import { existsSync } from 'node:fs'
+import { assertNoAppErrors, openApp, sleep, typeInto } from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import { addExtrudedRect } from './mcp-client.mjs'
+import { HANGER_BAR_STEP } from './models.mjs'
 
 /** 1つのBodyの外接直方体8頂点を全て投影し、ビューポート矩形内にあるかを返す。 */
 async function projectedCornersInsideViewport(page, bodyId) {
@@ -105,35 +76,19 @@ async function projectedCornersInsideViewport(page, bodyId) {
 }
 
 // ====================================================================== A. import_step での再フレーミング
-async function checkImportReframes(executablePath) {
+async function checkImportReframes({ options, mcp, browser, url, timeout }) {
+  const stepPath = options.step ?? HANGER_BAR_STEP
   console.log(`\n[A] import_stepでの再フレーミング: 小さな板(初回フレーミングを消費) → 大きなSTEP(${stepPath})`)
   if (!existsSync(stepPath)) fail(`STEPが無い: ${stepPath}`)
-  const workdir = mkdtempSync(join(tmpdir(), 'duocad-reframe-import-'))
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-  try {
-    await mcp.handshake('duocad-smoke-reframe-import')
-
+  {
     // ---------------------------------------------------------------- 1. 小さな板(初回フレーミングを消費)
-    const sketch = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-    await mcp.callTool('add_rectangle', { sketch_id: sketch.sketch_id, corner: [0, 0], width: 40, height: 30 })
-    await mcp.callTool('propose_selection', { refs: [{ sketch: sketch.sketch_id, index: 1 }] })
-    await mcp.callTool('commit_selection')
-    await mcp.callTool('extrude', { distance: 20, mode: 'new' })
-    await mcp.callTool('clear_selection')
+    await addExtrudedRect(mcp, { corner: [0, 0], width: 40, height: 30, distance: 20 })
     ok('小さな板を作った(40×30×20mm)')
 
     // ---------------------------------------------------------------- 2. ブラウザを開く(初回フレーミングを消費)
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = watchErrors(page)
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
-    await page.waitForFunction(() => (window.__duocad?.state?.bodies ?? []).length > 0, {
+    const { page, consoleErrors } = await openApp(browser, url, {
       timeout,
-      polling: 100,
+      until: () => (window.__duocad?.state?.bodies ?? []).length > 0,
     })
     await sleep(200)
     const poseBeforeImport = await page.evaluate(() => window.__duocad.cameraPose())
@@ -149,18 +104,10 @@ async function checkImportReframes(executablePath) {
     // 恐れがある。**本物のUI操作(ファイルパネルの入力+クリック)で、ブラウザ自身のWS接続
     // から読む**(`smoke-files.mjs` と同じ作法。これなら `applied` がこの接続に付く)。
     const idsBefore = await page.evaluate(() => window.__duocad.parts.map((body) => body.body_id))
-    async function typeInto(selector, value) {
-      await page.click(selector)
-      await page.keyboard.down('Control')
-      await page.keyboard.press('KeyA')
-      await page.keyboard.up('Control')
-      await page.keyboard.press('Backspace')
-      await page.type(selector, String(value), { delay: 15 })
-    }
     // **STEP読み込みはツールバーのコマンド**(起動して初めてパス欄が現れる。
     // 詳細は `smoke-files.mjs` 参照)。
     await page.click('#file-import-step')
-    await typeInto('#file-import-path', stepPath)
+    await typeInto(page, '#file-import-path', stepPath)
     await page.keyboard.press('Enter')
     await page.waitForFunction(
       (before) => window.__duocad.parts.length > before,
@@ -201,53 +148,32 @@ async function checkImportReframes(executablePath) {
     }
     ok(`インポートした${importedIds.length}部品全ての外接箱8頂点がビューポート内に投影される`)
 
-    await assertNoErrors(page, consoleErrors)
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
+    await assertNoAppErrors(page, consoleErrors)
   }
 }
 
 // ====================================================================== B. framedフラグの空振り消費
-async function checkFramedFlagNotWastedByHiddenBody(executablePath) {
+async function checkFramedFlagNotWastedByHiddenBody({ mcp, browser, url, timeout }) {
   console.log('\n[B] framedフラグの空振り消費: 隠したBodyだけの初回配信 → 素のextrudeで実際にフレーミングされるか')
-  const workdir = mkdtempSync(join(tmpdir(), 'duocad-reframe-hidden-'))
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-  try {
-    await mcp.handshake('duocad-smoke-reframe-hidden')
-
+  {
     // ---------------------------------------------------------------- 1. 原点近くの小さな立方体を作って隠す
     // **ブラウザはまだ開いていない** —— この時点で隠しておけば、これから開く接続にとっては
     // 「geometry: null のBodyだけが載った最初の1通」が自然にできる(接続直後の初期配信は
     // そのクライアントがまだ知らない全Bodyを含むので、隠したBodyしか無い文書を開けば
     // 必ずこの形になる)。
-    const sketchHidden = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-    await mcp.callTool('add_rectangle', {
-      sketch_id: sketchHidden.sketch_id,
+    const { bodyId: hiddenBodyId } = await addExtrudedRect(mcp, {
       corner: [0, 0],
       width: 10,
       height: 10,
+      distance: 10,
     })
-    await mcp.callTool('propose_selection', { refs: [{ sketch: sketchHidden.sketch_id, index: 1 }] })
-    await mcp.callTool('commit_selection')
-    const hiddenExtrude = await mcp.callTool('extrude', { distance: 10, mode: 'new' })
-    await mcp.callTool('clear_selection')
-    const hiddenBodyId = hiddenExtrude.bodies[0].body_id
     await mcp.callTool('set_visible', { body_id: hiddenBodyId, visible: false })
     ok(`原点近くの立方体を作って隠した: ${hiddenBodyId}(10×10×10mm)`)
 
     // ---------------------------------------------------------------- 2. ブラウザを開く(隠したBodyだけの初回配信)
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = watchErrors(page)
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
-    await page.waitForFunction(() => (window.__duocad?.state?.bodies ?? []).length >= 1, {
+    const { page, consoleErrors } = await openApp(browser, url, {
       timeout,
-      polling: 100,
+      until: () => (window.__duocad?.state?.bodies ?? []).length >= 1,
     })
     const initialBodies = JSON.parse(
       await page.evaluate(() =>
@@ -280,18 +206,12 @@ async function checkFramedFlagNotWastedByHiddenBody(executablePath) {
     // ここで実際に画面へ収まるなら、それは `update()` 自身の一回きりの機会がまだ
     // 生きていたということである。
     const FAR = 5000
-    const sketchFar = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-    await mcp.callTool('add_rectangle', {
-      sketch_id: sketchFar.sketch_id,
+    const { bodyId: farBodyId } = await addExtrudedRect(mcp, {
       corner: [FAR, FAR],
       width: 10,
       height: 10,
+      distance: 10,
     })
-    await mcp.callTool('propose_selection', { refs: [{ sketch: sketchFar.sketch_id, index: 1 }] })
-    await mcp.callTool('commit_selection')
-    const farExtrude = await mcp.callTool('extrude', { distance: 10, mode: 'new' })
-    await mcp.callTool('clear_selection')
-    const farBodyId = farExtrude.bodies[0].body_id
     ok(`原点から離れた立方体を素のextrudeで作った: ${farBodyId}(中心付近 (${FAR},${FAR},5))`)
 
     await page.waitForFunction(() => (window.__duocad?.state?.bodies ?? []).length >= 2, {
@@ -327,21 +247,13 @@ async function checkFramedFlagNotWastedByHiddenBody(executablePath) {
     }
     ok('離れた立方体の外接箱8頂点が全てビューポート内に投影される(空振りに機会を奪われていない)')
 
-    await assertNoErrors(page, consoleErrors)
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
+    await assertNoAppErrors(page, consoleErrors)
   }
 }
 
-async function main() {
-  const executablePath = findBrowser()
-  await checkImportReframes(executablePath)
-  await checkFramedFlagNotWastedByHiddenBody(executablePath)
-  console.log('\nsmoke-reframe-on-import: 全項目 OK(A・Bとも)')
-}
-
-main().catch((error) => {
-  console.error(`\nsmoke-reframe-on-import: 失敗 — ${error.message}`)
-  process.exitCode = 1
+// A と B は**別の文書**(初回フレーミングを消費する前の姿勢が前提)なので、間でサーバを立て直す。
+runSmoke('smoke-reframe-on-import', { mcp: true }, async (ctx) => {
+  await checkImportReframes(ctx)
+  await ctx.restart()
+  await checkFramedFlagNotWastedByHiddenBody(ctx)
 })

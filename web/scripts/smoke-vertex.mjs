@@ -15,52 +15,24 @@
  * サーバはこのスクリプトが空の文書で起動し、板はMCP経由で作る。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
  */
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { findBrowser, launchBrowser, frameAll } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
+import { assertNoAppErrors, frameAll, openApp, sleep, viewportCenter } from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import { addExtrudedRect } from './mcp-client.mjs'
 
-const options = parseArgs(process.argv.slice(2))
-const wsPort = options.port ?? '8965'
-const httpPort = options['http-port'] ?? '8966'
-const timeout = 60000
-const workdir = mkdtempSync(join(tmpdir(), 'duocad-vertex-'))
-
-async function main() {
-  const executablePath = findBrowser()
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-  try {
-    await mcp.handshake('duocad-smoke-vertex')
-    const sketch = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-    await mcp.callTool('add_rectangle', {
-      sketch_id: sketch.sketch_id,
+runSmoke('smoke-vertex', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout }) => {
+  {
+    const { bodyId } = await addExtrudedRect(mcp, {
       corner: [0, 0],
       width: 40,
       height: 30,
+      distance: 20,
+      mode: 'join',
+      clear: false,
     })
-    await mcp.callTool('propose_selection', {
-      refs: [{ sketch: sketch.sketch_id, index: 1 }],
-    })
-    await mcp.callTool('commit_selection')
-    await mcp.callTool('extrude', { distance: 20, mode: 'join' })
-    const bodyId = (await mcp.callTool('describe_document')).bodies[0].body_id
     ok(`板を作った: ${bodyId}`)
 
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
+    const { page, consoleErrors } = await openApp(browser, url, { timeout })
     await frameAll(page).catch(() => {})
 
     // ---------------------------------------------------------------- 1. 頂点マーカー
@@ -90,20 +62,17 @@ async function main() {
     // **見た目の大きさはここでは見ていない** —— マーカーは `sizeAttenuation: false` で
     // 画素固定にしてあるが、それが効いているかは目で見るしかない(当たり判定は
     // `viewport.ts` の `pickPointsAt` が screen 距離で決めており、描画とは別の経路)。
-    const viewportBox = await page.evaluate(() => {
-      const box = document.querySelector('.viewport').getBoundingClientRect()
-      return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
-    })
+    const viewportBox = await viewportCenter(page)
     await page.mouse.move(viewportBox.x, viewportBox.y)
     await page.mouse.wheel({ deltaY: 900 }) // 引く
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    await sleep(300)
     const reachableZoomedOut = await page.evaluate(
       (markers) => markers.filter((m) => window.__duocad.projectVertex(m.bodyId, m.vertexIndex)).length,
       markerState.markers,
     )
     if (reachableZoomedOut === 0) fail('引いたら頂点マーカーが1つも指せなくなった(画素固定が効いていない)')
     await page.mouse.wheel({ deltaY: -900 }) // 戻す
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    await sleep(300)
     ok(`引いた状態でも ${reachableZoomedOut}/4 個のマーカーを指せる(大きさは画素で固定)`)
 
     // ---------------------------------------------------------------- 2. Ctrl+クリックで外す
@@ -195,16 +164,6 @@ async function main() {
         `SelectionNotCommitted は0件)`,
     )
 
-    if (consoleErrors.length) fail(`ブラウザのコンソールにエラー: ${consoleErrors.join(' / ')}`)
-    ok('ブラウザのコンソールにエラーなし')
-    console.log('\nsmoke-vertex: PASS')
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
+    await assertNoAppErrors(page, consoleErrors)
   }
-}
-
-main().catch((error) => {
-  console.error(`\nsmoke-vertex: FAIL ${error.message ?? error}`)
-  process.exitCode = 1
 })
