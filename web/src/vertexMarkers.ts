@@ -27,6 +27,7 @@ export interface VertexMarkersDeps {
     radiusPx: number,
     meshes: readonly THREE.Points[],
     readItem: (mesh: THREE.Points) => T | null,
+    keep?: ((point: THREE.Vector3) => boolean) | null,
   ): T | null
   /** 世界座標 → コンテナ内のCSSピクセル(画面外なら null)。 */
   toScreen(point: THREE.Vector3): { x: number; y: number } | null
@@ -34,6 +35,10 @@ export interface VertexMarkersDeps {
   pickChanged(): void
   /** 実機検査フックが読む強調色の表。`vertex` だけをここが書く。 */
   highlightColor: { vertex: number | null }
+  /** 断面のクリップ平面(共有配列。`sectionView.ts`)。マーカーもボディと一緒に切る。 */
+  clipPlanes: THREE.Plane[]
+  /** その点が断面で残る側か(OFF なら常に true)。切られたマーカーは指せない。 */
+  sectionKeeps(point: THREE.Vector3): boolean
 }
 
 export interface VertexMarkers {
@@ -51,7 +56,7 @@ export interface VertexMarkers {
 }
 
 export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
-  const { pickPointsAt, toScreen, pickChanged, highlightColor } = deps
+  const { pickPointsAt, toScreen, pickChanged, highlightColor, clipPlanes, sectionKeeps } = deps
 
   const vertexRoot = new THREE.Group()
 
@@ -62,12 +67,14 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
     // 辺と同じく**深度検査をしない**(奥のマーカーも見え、奥のマーカーも指せる)。
     // 見た目だけ隠すと「見えない頂点が外れる」になる。
     depthTest: false,
+    clippingPlanes: clipPlanes,
   })
   const vertexProposedMaterial = new THREE.PointsMaterial({
     color: PROPOSED_COLOR,
     size: VERTEX_PIXELS * 2,
     sizeAttenuation: false,
     depthTest: false,
+    clippingPlanes: clipPlanes,
   })
 
   /** 今出している頂点マーカー。空なら選択に頂点が入っていない。 */
@@ -120,11 +127,18 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
 
   function vertexAt(offsetX: number, offsetY: number): VertexRef | null {
     // 当たり半径は**画面上の画素**(辺の `edgeAt` と同じ)。描いている大きさと揃えておく。
-    return pickPointsAt(offsetX, offsetY, VERTEX_PIXELS, vertexMeshes, (mesh) => {
-      const { bodyId, vertexIndex } = mesh.userData
-      if (typeof bodyId !== 'string' || typeof vertexIndex !== 'number') return null
-      return { bodyId, vertexIndex }
-    })
+    return pickPointsAt(
+      offsetX,
+      offsetY,
+      VERTEX_PIXELS,
+      vertexMeshes,
+      (mesh) => {
+        const { bodyId, vertexIndex } = mesh.userData
+        if (typeof bodyId !== 'string' || typeof vertexIndex !== 'number') return null
+        return { bodyId, vertexIndex }
+      },
+      sectionKeeps,
+    )
   }
 
   function projectVertex(bodyId: string, vertexIndex: number): { x: number; y: number } | null {

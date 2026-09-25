@@ -15,7 +15,7 @@
    * 1. **ピック → コアの選択への翻訳**(修飾キーで追加・除去・置き換えを決める)
    * 2. **プレビューの往復**(コマンド層が「何を試すか」を決め、ここが投げて幽霊を描く)
    */
-  import { onMount, tick } from 'svelte'
+  import { onMount } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
   import {
     COMMANDS,
@@ -36,7 +36,11 @@
     needsSketchId,
   } from './commands/features'
   import { entityHandles, ghostCopies, snapToSketchEntity, type GhostSource } from './entityKinds'
+  import { evaluateExpression } from './expression'
   import { IMPORT_STEP, changesDocument } from './commands/files'
+  import { MEASURE } from './commands/measure'
+  import { measureLabel, measureReadout } from './measureText'
+  import type { MeasurePayload } from './session'
   import {
     OPTIMIZE_EMPTY_START_VERBS,
     OPTIMIZE_MODE_COMMANDS,
@@ -99,6 +103,7 @@
     type BodyGhostRotation,
     type BoxSelectEvent,
     type PickEvent,
+    type SectionState,
     type SketchDraw,
     type SketchEntityHit,
     type VertexMarker,
@@ -124,6 +129,9 @@
     // 保存/開く/新規は左サイドバーに残るので、`CommandDef` を持たずここにも載らない。
     // `IMPORT_SVG` はスケッチモードのコマンドへ移り、`SKETCH_COMMANDS`(下)側に載っている。
     IMPORT_STEP,
+    // **測定は verb ではない**(`query`。文書もログも変えない)が、verb→target の枠に
+    // そのまま乗るのでここに並ぶ(`commands/measure.ts`)。通常モードだけ。
+    MEASURE,
   ]
   const SKETCH_MODE_COMMANDS = [...SKETCH_COMMANDS, ...SKETCH_FEATURE_COMMANDS]
 
@@ -262,8 +270,11 @@
    * 「置き換え」だと1枚足すたびにCtrlが要り、他の割り当て済みの面を毎回避けて
    * クリックする羽目になる。他のverb(フィレットの辺・押し出す面等)は素のクリック=
    * 置き換えのままでよい —— 起動時に選択が空で始まるので置き換えと足すが一致する。
+   *
+   * **測定(`measure`)も同じ**(2026-09-16)。対象は「ちょうど2つ」で、素のクリックが
+   * 置き換えのままだと2つ目のクリックが1つ目を消して永久に揃わない。
    */
-  let toggleOnlyOptimizeSet = $state(false)
+  let toggleOnlyClicks = $state(false)
   /**
    * 集合 verb の起動時に表示へ戻した非表示ボディの `set_visible` の応答待ち。**全部戻ってから**
    * 既存の割り当てを選択に並べる(`onCommandStart`)。描画には使わないので普通の変数でよい。
@@ -279,6 +290,12 @@
    * 辺・基準平面と同じ規律で、待っている間だけ**その種別を指せるようにする**。
    */
   let wantedPick = $state<PickTarget | null>(null)
+  /**
+   * 起動中のコマンドが**頂点そのものを対象にする**か(`SelectionArgSpec.pickVertices`。測定。
+   * `CommandHost` が知らせる)。回転中心のピック(`wantedPick === 'vertex'`)と同じ扱いで、
+   * 対象ボディの頂点を候補として出し、辺より先に取る。
+   */
+  let wantedVertices = $state(false)
   /** 取り寄せた辺(body_id -> その版の折れ線)。**版が変われば捨てる**。 */
   let edges = $state<Record<string, EdgesPayload>>({})
   /** 取り寄せ中のもの(`${body_id}:${revision}`)。同じ要求を何度も投げないため。 */
@@ -304,38 +321,26 @@
   /**
    * 直近に保存/開いたファイル名(画面に「今どれを触っているか」を出す)。
    *
-   * **持つのは名前だけ**。名前と保存状態は別の問い(どれを触っているか /
-   * それが書けているか)なので、後者は `savedAt` が持つ。**自動保存はスコープ外**である。
+   * **持つのは名前だけ**。保存状態はサーバが持つ(`state.saved`) —— 1操作ごとに自動保存
+   * される(issue #5、2026-09-16)ので、画面が履歴の位置を数えて「未保存」を導く理由が無い。
    */
   let currentDocumentName = $state<string | null>(null)
   /**
-   * **最後に書けた/読み込んだ時点の文書の位置** `[applied_count, 操作数]`。
-   * `null` は「この画面ではまだ一度もファイルにしていない」(＝常に未保存)。
-   *
-   * **内容は比べない**。比べるのは「あれから文書が動いたか」だけで、それには
-   * `applied_count`(verbを適用した回数。**undo/redoでは動かない**)と操作数
-   * (`log.length`。undoで減りredoで戻る)の2つが要る —— 片方だけでは
-   * 「undoで保存時点へ戻した文書」(操作数は一致・applied_countも不変)と
-   * 「undoしてから別のverbを打った文書」(操作数は一致・applied_countが増える)が
-   * 見分けられず、後者を保存済みと言ってしまう。
-   *
-   * **偽るとしたら「未保存」の側だけ**、という非対称になっている。保存後にverbを打って
-   * からundoで同じ形へ戻した文書は、中身は保存済みと同じでも `applied_count` が増えた
-   * ままなので「未保存」と出る。逆(書けていないのに保存済みと出る)は起こらない ——
-   * `applied_count` が動いていないなら新しいverbは1つも適用されておらず、そのうえで
-   * 操作数まで一致するなら履歴の位置も同じだからである。
-   *
-   * 可視性の切り替えはverbではなくファイルにも載らないので、どちらも動かない
-   * (＝保存済みのまま。これは正しい)。
+   * 今の文書がそのままファイルに載っているか(ヘッダの `#save-state`)。**サーバの写し**
+   * (`Session.saved`)。自動保存が書けなかったときだけ false になる —— 無題で何も変えていない
+   * 文書は true(書くものが無い)で、最初の変更で `untitled-<n>.json` が自動で付く。
    */
-  let savedAt = $state<[number, number] | null>(null)
-  /** 今の文書がそのままファイルに載っているか(ヘッダの `#save-state`)。 */
-  const saved = $derived(
-    savedAt !== null &&
-      model !== null &&
-      model.applied_count === savedAt[0] &&
-      model.log.length === savedAt[1],
-  )
+  const saved = $derived(model?.saved ?? true)
+  /**
+   * 一覧を取り直す予約(`scheduleDocumentRefresh`)。自動保存のたびに一覧の操作数・サイズが
+   * 変わり、無題の文書は最初の変更で新しい行が要る —— ただし `list_documents` は全ファイルの
+   * ログを読むので、配信のたびに素で呼ばず**少し待ってまとめ、パネルを出しているときだけ**
+   * 取りに行く(畳んでいる間は「古い」印だけ立て、開いたときに1回取る)。
+   */
+  let documentRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  let documentListStale = false
+  let lastSeenAppliedCount: number | null = null
+  let lastSeenLogLength: number | null = null
   /**
    * 左サイドバー(ファイル一覧)を出しているか。**見た目だけの状態**で、コアには送らない
    * (モデルの状態ではないので操作ログにも残さない)。
@@ -390,6 +395,39 @@
   /** 常設の原点ギズモ(原点・3軸・3平面)を出しているか。ブラウザパネルの「原点」トグル
    * (7項目まとめて1つ、本人指定)が読み書きする。 */
   let originVisible = $state(savedOriginVisible)
+
+  /**
+   * 断面表示(issue #6)。**その場限りの画面状態**(文書にも localStorage にも載せない。
+   * 起動時と文書の差し替えで OFF)。位置は平面の法線軸上の座標[mm]。
+   */
+  let section = $state<SectionState>({ on: false, plane: 'XY', position: 0, inverted: false })
+
+  /** 内容の外接箱の中心の、その平面の法線軸成分(ON にした瞬間・平面を替えた瞬間の位置)。 */
+  function sectionCenter(plane: BasePlaneName): number {
+    const center = viewport?.contentCenter() ?? null
+    if (center === null) return 0
+    return plane === 'XY' ? center[2] : plane === 'XZ' ? center[1] : center[0]
+  }
+  function toggleSection(on: boolean): void {
+    section = on
+      ? { ...section, on: true, position: sectionCenter(section.plane) }
+      : { ...section, on: false }
+  }
+  function setSectionPlane(plane: BasePlaneName): void {
+    section = { ...section, plane, position: sectionCenter(plane) }
+  }
+  function setSectionPosition(text: string): boolean {
+    const evaluated = evaluateExpression(text)
+    if (!evaluated.ok) {
+      fail(`断面の位置: ${evaluated.reason}`)
+      return false
+    }
+    section = { ...section, position: evaluated.value }
+    return true
+  }
+  function setSectionInverted(inverted: boolean): void {
+    section = { ...section, inverted }
+  }
 
   function applyOriginVisible(visible: boolean): void {
     originVisible = visible
@@ -478,6 +516,7 @@
     onPreview: handlePreview,
     onEdges: handleEdges,
     onVertices: handleVertices,
+    onMeasure: handleMeasure,
     onFile: handleFile,
     onAiStatus: handleAiStatus,
     onAiToolCall: (call) => (aiTranscript = [...aiTranscript, { kind: 'tool', call }]),
@@ -798,6 +837,18 @@
     // 拾い直さない —— 正は `Session._current_name` 1つで、こちらは配信のたびに映すだけ。
     // これでリロードしても名前が戻る(以前は文書だけサーバに残って名前が失われた)。
     currentDocumentName = next.current_name
+    // **文書が変わったら一覧を取り直す**(自動保存の結果を一覧へ映す。issue #5)。verbと
+    // 開く/新規は `applied_count` を、undo/redo は操作数(`log.length`)を動かす —— 
+    // **`applied_count` は undo/redo で動かない**ので両方を見る。経路(WS/MCP/最適化)を
+    // 問わずここ1箇所で拾える。
+    if (
+      lastSeenAppliedCount !== null &&
+      (next.applied_count !== lastSeenAppliedCount || next.log.length !== lastSeenLogLength)
+    ) {
+      scheduleDocumentRefresh()
+    }
+    lastSeenAppliedCount = next.applied_count
+    lastSeenLogLength = next.log.length
     // **状態が1通届くたびに1つ増える番号**(実機検査のための穴。`__duocad.stateEpoch`)。
     // これが無いと「サーバの往復がまだ終わっていない」と「もう何も変わらない」を
     // 外から区別できず、**要求が出ていく前の画面を『落ち着いた』と読む**検査になる
@@ -859,13 +910,10 @@
       // 否定できない)。**新規は `name` が `null`** で来るので、触っているファイルの表示は
       // 「(無題)」へ戻る —— ただし表示そのものを更新するのは上の `next.current_name` で、
       // ここが見るのは「開いたのか新規にしたのか」の区別だけである。
-      // **開いた直後の文書はファイルの中身そのもの**なので保存済みから始める。新規は
-      // どこにも書かれていないので `null`(＝常に未保存)へ戻す。`next` は上で `model` に
-      // 入れた今回の状態で、開いた版の `applied_count` / 操作数がもう入っている。
-      savedAt = applied.name === null ? null : [next.applied_count, next.log.length]
       // **前の文書の最適化の表示を持ち越さない**(結果の通知・解像度の段・最小幅・`?voxel=1` で
       // 隠した結果ボディ)。段の添字は目盛りが文書ごとに違うので、既定(いちばん粗い)へ戻す。
       resetOptimizeView()
+      section = { ...section, on: false } // 断面はその場限り(文書が替わったら切らない状態へ)
       // **開いた(`open_document`)ときだけ視点を合わせ直す。** 文書のスケールが不連続に
       // 変わるのは import_step と同じくここだけ(実測: 小さな部品→大きな板を保存し、開き直すと
       // 前の文書の視点のまま端が画面外に出た)。**新規(`new_document`)は空の文書**なので
@@ -944,6 +992,62 @@
     vertices = { ...vertices, [payload.body_id]: payload }
   }
 
+  // ---------------------------------------------------------------- 測定(verbではない)
+  /**
+   * 直近の測定の結果(無ければ null)。**測った選択が変わるまで残る**(下の `$effect`)。
+   * そのほかに消えるのは、次のコマンドの起動(`onCommandStart`)・Esc(`onWindowKeydown`)・
+   * モードの切り替え。読み札(`#measure-result`)と3Dの線(`viewport.showMeasurement`)は
+   * どちらもここから導く。
+   */
+  let measurement = $state<MeasurePayload | null>(null)
+  /** `measurement` を測ったときの選択の印(`refKey` の並び。origin は見ない)。 */
+  let measurementKey = ''
+
+  function selectionKey(): string {
+    return (selection?.items ?? []).map(refKey).join('|')
+  }
+
+  function handleMeasure(payload: MeasurePayload): void {
+    if (payload.client_op !== null && payload.client_op === pendingOp) {
+      pendingOp = null
+      // 測定は成否を待つ入力欄が無いので、返事が来た時点で無起動へ戻してよい
+      host?.commandSucceeded()
+    }
+    if (payload.between_error) {
+      measurement = null
+      fail(payload.between_error)
+      return
+    }
+    if (payload.between === undefined || payload.between === null) {
+      measurement = null
+      return
+    }
+    measurement = payload
+    measurementKey = selectionKey()
+  }
+
+  /** 測った選択が変われば結果は嘘になるので消す(選び直し・undo・AIの提案のどれでも)。 */
+  $effect(() => {
+    if (measurement !== null && selectionKey() !== measurementKey) measurement = null
+  })
+  /** モードが変わったら消す(コマンド層を `{#key mode.kind}` で作り直すのと同じ理由)。 */
+  $effect(() => {
+    void mode.kind
+    measurement = null
+  })
+
+  const measurementText = $derived(measurement?.between ? measureReadout(measurement.between) : '')
+
+  $effect(() => {
+    // 先に読んでから渡す(`?.` の短絡で依存を失わない —— 基準平面の $effect と同じ理由)。
+    const between = measurement?.between ?? null
+    if (between === null || between.from === null || between.to === null) {
+      viewport?.showMeasurement(null)
+      return
+    }
+    viewport?.showMeasurement({ from: between.from, to: between.to, label: measureLabel(between) })
+  })
+
   /**
    * ファイルを書いた/一覧が届いた。**どこへ何バイト書いたかを必ず画面へ出す** ——
    * 書き出しはブラウザの中に痕跡が残らない操作なので、通知が唯一の確認手段になる。
@@ -960,13 +1064,6 @@
     // **ここでファイル名を控えない**(2026-08-30) —— 編集中のファイルはサーバが持ち
     // (`state.current_name`)、保存の直後にはサーバが状態も配り直す(`net/ws.py` の
     // `save_document` 分岐)。応答から拾い直すと真実源が2つになる。
-    // **書けた時点の位置を控える**(ヘッダの `#save-state` が「保存済み」を言う根拠)。
-    // 数えるのは `save` だけ —— `export_step`/`export_stl` は形を別形式で吐くだけで、
-    // 文書(操作ログ)を書いてはいない。操作数はサーバが実際に書いた件数を返してくるので
-    // それを使う(こちらで数え直さない)。
-    if (payload.action === 'save' && model !== null) {
-      savedAt = [model.applied_count, payload.operations ?? model.log.length]
-    }
     // **応答が `file` で返ったなら、その操作の待ちはここで解く**。
     // 「文書を変えるか」の判定はブラウザとサーバで別々に持っているので、片方だけ
     // 直したときに**状態配信を待ち続けて確定が永久に拒否される**経路ができる。
@@ -982,9 +1079,45 @@
     const skippedCount = payload.skipped_hidden?.length ?? 0
     const skipped = skippedCount > 0 ? ` ※非表示の${skippedCount}個は除外` : ''
     note(`${payload.action}: ${payload.path}(${size}${extra}${exported}${skipped})`)
-    // **保存/開いた直後に一覧を取り直す**。上書きで更新日時・サイズ・操作数が変わり、
-    // 新規保存では一覧に新しい行が要る —— 応答をここで待たず、次のWS往復に任せる。
-    if (payload.action === 'save') refreshDocuments()
+    // **保存/改名/複製/削除の直後に一覧を取り直す**。上書きで更新日時・サイズ・操作数が変わり、
+    // 改名では行の名前が、複製では行そのものが増え、削除では行が消える —— 応答をここで待たず、
+    // 次のWS往復に任せる。
+    if (['save', 'rename', 'copy', 'delete'].includes(payload.action)) refreshDocuments()
+  }
+
+  /** 一覧の取り直しを少し待ってまとめる(理由は `documentRefreshTimer` のdocstring)。 */
+  function scheduleDocumentRefresh(): void {
+    if (!dataPanelOpen) {
+      documentListStale = true
+      return
+    }
+    if (documentRefreshTimer !== null) clearTimeout(documentRefreshTimer)
+    documentRefreshTimer = setTimeout(() => {
+      documentRefreshTimer = null
+      refreshDocuments()
+    }, 300)
+  }
+
+  // パネルを畳んでいる間に文書が変わっていたら、開いたときに1回取り直す。
+  $effect(() => {
+    if (dataPanelOpen && documentListStale) {
+      documentListStale = false
+      refreshDocuments()
+    }
+  })
+
+  /**
+   * 一覧の行から**別名で複製**する / **ディスクから削除**する(issue #17)。どちらも文書を
+   * 変えないファイル操作で、保存と同じく `FilesPanel` から直接送る(`CommandHost` を通さず、
+   * `pendingOp` も立てない)。拒否(複製先が在る・編集中のファイルの削除)はサーバが言い、
+   * `onError` → `fail()` でトースト1枚になる。
+   */
+  function copyDocument(source: string, dest: string): void {
+    runFileOp('copy_document', { source, dest })
+  }
+
+  function deleteDocument(name: string): void {
+    runFileOp('delete_document', { name })
   }
 
   /** `duocad/models/` の一覧をサーバへ取り直しに行く(`FilesPanel.svelte` が描く)。 */
@@ -993,39 +1126,29 @@
   }
 
   /**
-   * **新しい名前で**保存する(「名前を付けて保存」。`FilesPanel` の名前欄だけが呼ぶ)。
+   * **いま編集しているファイルを改名する**(`FilesPanel` の名前欄だけが呼ぶ。issue #5)。
    *
-   * **既存名は送っても通らない** —— サーバが拒否してトースト1枚になる
-   * (`Session.save_document`)。ここで `documentList` を見た実在チェックは**足さない**:
+   * 保存は1操作ごとに自動で走り、無題の文書は最初の変更で `untitled-<n>.json` が付くので、
+   * 人が決めるのは名前だけ。**既存名は送っても通らない** —— サーバが拒否してトースト1枚に
+   * なる(`Session.rename_document`)。ここで `documentList` を見た実在チェックは**足さない**:
    * パス解釈の正を2箇所に持たないという既存の規律(`FilesPanel.nameProblem` のdocstring)。
    *
    * **`pendingOp` は立てない** —— `FilesPanel.svelte` は `CommandHost` の応答待ちの外にいる
    * (一覧からのクリックは「対象を選ぶ」そのもので、引数収集の状態機械を通す理由が無い)。
    */
-  function saveDocumentAs(name: string): void {
-    runFileOp('save_document', { name })
+  function renameDocument(name: string): void {
+    runFileOp('rename_document', { name })
   }
 
   /**
-   * **編集中のファイルへ上書き保存する**(ヘッダの `#file-save` と Ctrl+S。2026-08-30)。
-   *
-   * 引数を送らない —— 書き込み先を決めるのはサーバ(`Session._current_name`)であって、
-   * 画面が名前を送り返す形だと「表示されている名前」と「実際に開いているファイル」が
-   * ずれた瞬間に別のファイルを潰す。
-   *
-   * **編集中のファイルが無いとき(起動直後・`new` の直後)は押せないボタンにしない。**
-   * 新規の文書では必ず通る道なので、`disabled` にすると**なぜ押せないかを言わないまま
-   * 死んでいる札**になる(本人決定)。代わりにファイルパネルを開いて名前欄へ入れる ——
-   * 「保存したい」に対する答えは「名前を付けろ」であり、その場所まで連れて行く。
+   * **今の文書を手で書き直す**(Ctrl+S)。保存は自動で済んでいるので普段は何も変わらない ——
+   * 残してあるのは、自動保存が書けなかった(`#save-state` が出ている)ときに人が押し直す
+   * ためと、Ctrl+S でブラウザの「ページを保存」を止めるため。引数を送らない(書き込み先を
+   * 決めるのはサーバの `Session._current_name`)。無題で何も変えていない文書は書くものが
+   * 無いので何も送らない。
    */
-  function saveCurrentDocument(): void {
-    if (currentDocumentName === null) {
-      dataPanelOpen = true
-      note('まだファイル名が無い。名前を打って「新規保存」すると、以後はここへ上書きできる')
-      // パネルを開いた直後は入力欄がまだDOMに無い(Svelteの更新は非同期)。
-      void tick().then(() => document.querySelector<HTMLInputElement>('#file-name-input')?.focus())
-      return
-    }
+  function saveNow(): void {
+    if (currentDocumentName === null) return
     runFileOp('save_document', {})
   }
 
@@ -1234,13 +1357,15 @@
   })
 
   /**
-   * **回転中心の頂点を指させている間**、候補を出すボディ(出さないなら null)。
+   * **回転中心の頂点を指させている間**、または**頂点そのものを対象にするコマンド(測定)を
+   * 起動している間**、候補を出すボディ(出さないなら null)。
    *
    * 対象は辺と同じ1つ(`edgeTargetBody`) —— 全ボディの頂点を出すと、27部品の文書では
    * 数千個の的が画面を覆う。**軸に使う辺と同じボディの頂点**が指せれば足りる。
+   * 測定も同じ1つに絞る(別のボディとの距離は面で測る)。
    */
   const vertexCandidateBody = $derived(
-    sketchId === null && wantedPick === 'vertex' ? edgeTargetBody : null,
+    sketchId === null && (wantedPick === 'vertex' || wantedVertices) ? edgeTargetBody : null,
   )
 
   /** 候補として出す頂点の座標を取りに行く(選択に入った頂点と同じ形の要求)。 */
@@ -1332,7 +1457,7 @@
    * (辺が先)のままだと、角の頂点を狙ったクリックが必ず辺に取られて中心を指せない。
    */
   $effect(() => {
-    const on = wantedPick === 'vertex'
+    const on = wantedPick === 'vertex' || wantedVertices
     viewport?.preferVertices(on)
   })
 
@@ -1392,28 +1517,31 @@
   }
 
   /**
-   * **保持/除外ソリッド・拘束面の集合 verb の間のピックの規則**(クリック `onPick` と矩形選択
+   * **素のクリック・矩形選択をトグルとして読むか**(クリック `onPick` と矩形選択
    * `onBoxSelect` で共有する)。
    *
-   * - 素の操作もトグル(`toggleOnlyOptimizeSet`)。起動した時点で既存の割り当てが選択状態で
-   *   現れる集合代入なので、置き換えのままだと足すたびに他の割り当てを全部外してしまう。
-   *   この3つの間だけ `wantedKinds` が `'body'` 単独か `'face'` 単独になる
-   *   (`commands/optimize.ts` の宣言)ので、他のverbの面ピック(押し出す面等)には効かない。
-   * - 保持/除外ソリッドの間はボディ粒度。`wantedKinds` に `'body'` が立つのは
-   *   `SET_PRESERVE_BODIES` / `SET_EXCLUDE_BODIES` だけ。面の参照を確定すると
-   *   `require_committed_bodies` が面を無視し、**集合が黙って空になる**。
+   * 保持/除外ソリッド・拘束面の集合 verb は、起動した時点で既存の割り当てが選択状態で現れる
+   * 集合代入なので、置き換えのままだと足すたびに他の割り当てを全部外してしまう。測定は対象が
+   * 「ちょうど2つ」なので、2つ目の素のクリックが1つ目を消しては永久に揃わない。
+   * 立つのは `toggleOnlyClicks`(`onCommandStart`)が立っている間だけで、他のverbの
+   * 面ピック(押し出す面等)には効かない。
    */
-  function optimizeSetMode(mode: PickEvent['mode']): PickEvent['mode'] {
-    return toggleOnlyOptimizeSet ? 'toggle' : mode
+  function toggleOnlyMode(mode: PickEvent['mode']): PickEvent['mode'] {
+    return toggleOnlyClicks ? 'toggle' : mode
   }
 
+  /**
+   * **保持/除外ソリッドの間はボディ粒度**。`wantedKinds` に `'body'` が立つのは
+   * `SET_PRESERVE_BODIES` / `SET_EXCLUDE_BODIES` だけ(`commands/optimize.ts` の宣言)。
+   * 面の参照を確定すると `require_committed_bodies` が面を無視し、**集合が黙って空になる**。
+   */
   function optimizeSetFaceRef(bodyId: string, faceIndex: number): SelectionRef {
     if (wantedKinds.includes('body')) return { body: bodyId, kind: 'body', index: null }
     return pickedRef(bodyId, faceIndex)
   }
 
   function onBoxSelect(event: BoxSelectEvent): void {
-    const mode = optimizeSetMode(event.mode)
+    const mode = toggleOnlyMode(event.mode)
     const picked: SelectionRef[] = [
       // **同じボディの面が何枚囲まれても参照は1つ**(`refKey` で重複を落とす)。
       ...dedupeRefs(event.faces.map((item) => optimizeSetFaceRef(item.bodyId, item.faceIndex))),
@@ -1485,10 +1613,11 @@
    * 荷重の2つは**空にする**(`OPTIMIZE_EMPTY_START_VERBS`)。
    */
   function onCommandStart(verb: string): void {
-    // **`toggleOnlyOptimizeSet` は起動するverbが変わるたび毎回書き直す**(前のverbの
+    measurement = null // 次の操作に入ったら、前の測定の札は用済み
+    // **`toggleOnlyClicks` は起動するverbが変わるたび毎回書き直す**(前のverbの
     // 値を持ち越さない)。`model === null` の早期returnより前に置く —— 起動そのものは
     // 文書が無くても起きるので、ここで止めると次のverbが集合代入でも判定が古いまま残る。
-    toggleOnlyOptimizeSet = OPTIMIZE_PRESET_ROLE[verb] !== undefined
+    toggleOnlyClicks = OPTIMIZE_PRESET_ROLE[verb] !== undefined || verb === MEASURE.id
     pendingOptimizePreset = null
     if (model === null) return
     // 荷重の2つは**空から始める**(`OPTIMIZE_EMPTY_START_VERBS` の理由を参照)。
@@ -1525,13 +1654,13 @@
    * `CommandHost` の `onWants`。**verbが無起動へ戻ったことを知る唯一の経路でもある**
    * (`onStart` は起動したときしか呼ばれない)。無起動の `command.args` は常に `[]` なので
    * `kinds` が空になった = 中断/確定成功/モード切替のどれかで降りた、とみなして
-   * `toggleOnlyOptimizeSet` を下ろす —— 下ろさないと、拘束面を確定した直後に
+   * `toggleOnlyClicks` を下ろす —— 下ろさないと、拘束面を確定した直後に
    * フィレットへ移って辺を素クリックしたときトグルのまま残り、選択が置き換わらない。
    */
   function onWantsKinds(kinds: SelectableKind[]): void {
     wantedKinds = kinds
     if (kinds.length === 0) {
-      toggleOnlyOptimizeSet = false
+      toggleOnlyClicks = false
       pendingOptimizePreset = null
     }
   }
@@ -1594,21 +1723,24 @@
         return
       }
     }
-    // **辺が当たったら辺**。フィレット・面取りを起動している間だけ来る。
+    // **素クリックのトグル(`toggleOnlyMode`)は面だけでなく辺・頂点・領域にも効かせる** ——
+    // 測定は辺・頂点でも測るので、下の分岐すべてが同じ `pickMode` を通る。
+    const pickMode: PickEvent['mode'] = toggleOnlyMode(event.mode)
+    // **辺が当たったら辺**。フィレット・面取り・測定を起動している間だけ来る。
     if (event.edge !== null) {
       editSelection(
         { body: event.edge.bodyId, kind: 'edge', index: event.edge.edgeIndex },
-        event.mode,
+        pickMode,
       )
       return
     }
-    // **頂点が当たったら頂点**。選択に入っている頂点だけがマーカーとして出ているので、
-    // ここへ来るのは実質「AIが選んだ頂点を人がCtrl+クリックで外す」経路である
-    // (頂点を選択へ新規追加するコマンドは無い)。参照の形も修飾キーの規則も面・辺と同じ。
+    // **頂点が当たったら頂点**。マーカーが出ているのは選択に入っている頂点と、測定の
+    // 候補(対象ボディの全頂点)だけなので、ここへ来るのは「AIが選んだ頂点を人が
+    // Ctrl+クリックで外す」か「測る頂点を指す」のどちらか。参照の形も修飾キーの規則も面・辺と同じ。
     if (event.vertex !== null) {
       editSelection(
         { body: event.vertex.bodyId, kind: 'vertex', index: event.vertex.vertexIndex },
-        event.mode,
+        pickMode,
       )
       return
     }
@@ -1616,7 +1748,7 @@
     // (`wantsRegions` → `viewport.pickRegions`)。参照の形も修飾キーの規則も
     // スケッチモードの `onSketchPick` と同じ —— 同じものを同じように選ぶ。
     if (event.region !== null) {
-      editSelection({ sketch: event.region.sketchId, index: event.region.index }, event.mode)
+      editSelection({ sketch: event.region.sketchId, index: event.region.index }, pickMode)
       return
     }
     if (event.hit === null) {
@@ -1625,8 +1757,9 @@
       else if (event.mode === 'replace') note('面を外した')
       return
     }
-    // 集合 verb の間は素クリックもトグル・保持/除外はボディ粒度(`optimizeSetMode` / `optimizeSetFaceRef`)。
-    editSelection(optimizeSetFaceRef(event.hit.bodyId, event.hit.faceIndex), optimizeSetMode(event.mode))
+    // 保持/除外ソリッドの間だけボディ粒度へ畳む(`optimizeSetFaceRef`)。素クリックのトグルは
+    // 上の `pickMode` が面・辺・頂点・領域へ一様に効かせる。
+    editSelection(optimizeSetFaceRef(event.hit.bodyId, event.hit.faceIndex), pickMode)
   }
 
   // ---------------------------------------------------------------- C: スケッチ
@@ -1646,7 +1779,10 @@
       (item): item is SketchEntityRef => refKind(item) === 'sketch_entity',
     )
     return sketches
-      .filter((item) => item.frame !== null)
+      // **隠したスケッチは描かない**(コアの `sketches[].visible`。issue #7)。**編集中の
+      // スケッチだけは可視性に関わらず描く** —— 隠したスケッチの行から入る経路は先に
+      // 表示へ戻す(`enterSketch`)が、その往復を待たずに `lookAtSketch` が枠を要るため。
+      .filter((item) => item.frame !== null && (item.visible || item.sketch_id === sketchId))
       .map((item) => ({
         sketchId: item.sketch_id,
         frame: item.frame as NonNullable<typeof item.frame>,
@@ -1756,6 +1892,11 @@
    * 戻り先(`resume`)を持って移るので、抜ければ最適化モードへ戻る。
    */
   function enterSketch(id: string): void {
+    // **隠したスケッチに入るときは先に表示へ戻す**(拒否ではなく表示に戻して入る。本人判断
+    // 2026-09-16)。編集中のスケッチは `sketchDraws()` が可視性に関わらず描くので、
+    // サーバの往復を待たずに入ってよい(抜けた後も表示のまま —— 隠し直しはしない)。
+    const target = sketches.find((item) => item.sketch_id === id)
+    if (target !== undefined && !target.visible) setSketchVisible(id, true)
     setMode({ kind: 'sketch', id, resume: resumeOf(mode) })
   }
 
@@ -1906,6 +2047,16 @@
         // ここで二重化すると「ツールバー経由の import_step だけ応答待ちの解き方が違う」
         // という差が生まれる。
         runFileOp(verb, args)
+        return
+      }
+      // -------------------------------------------------------------- 測定(読み取り専用)
+      case 'query': {
+        // **verb と同じ口で送る**(`{cmd, client_op}`)。返事は状態配信ではなく
+        // `{type:'measure'}` で、`handleMeasure` が `client_op` を突き合わせて
+        // コマンド層を無起動へ戻す(verb なら `applied.client_op` が担う役)。
+        const op = nextOp()
+        pendingOp = op
+        session.runVerb(verb, args, op)
         return
       }
       default: {
@@ -2223,6 +2374,11 @@
   }
 
   function onWindowKeydown(event: KeyboardEvent): void {
+    // Esc は測定の札を消す(コマンドの中断は `CommandHost` が同じキーで別に見る)。
+    if (event.key === 'Escape') {
+      measurement = null
+      return
+    }
     if (!(event.ctrlKey || event.metaKey)) return
     const key = event.key.toLowerCase()
     if (key !== 'z' && key !== 'y' && key !== 's') return
@@ -2237,9 +2393,9 @@
     const isTextEditingField =
       target?.tagName === 'TEXTAREA' ||
       (target?.tagName === 'INPUT' && !['checkbox', 'radio'].includes((target as HTMLInputElement).type))
-    // **Ctrl+S はヘッダの保存ボタン(`#file-save`)と同じ操作**(2026-08-30)。編集中の
-    // ファイルへ上書きし、まだ無ければファイルパネルの名前欄へ連れて行く
-    // (`saveCurrentDocument`)。
+    // **Ctrl+S は今の文書を手で書き直す**(`saveNow`)。保存は自動で済んでいる(issue #5)ので
+    // 普段は何も変わらないが、キーは残す —— 自動保存が書けなかったときの押し直しと、
+    // ブラウザの「ページを保存」を止めるため。
     //
     // **`preventDefault()` はフォーカスがどこにあっても必ず通す** —— 止めないと
     // ブラウザの「ページを保存」ダイアログが開き、こちらの保存が起きたのかどうかが
@@ -2252,7 +2408,7 @@
     // (判定式そのものは undo/redo と同じものを使い、意味の違いだけをここに書く)。
     if (key === 's') {
       event.preventDefault()
-      saveCurrentDocument()
+      saveNow()
       return
     }
     if (isTextEditingField) return
@@ -2303,6 +2459,22 @@
     for (const body of partBodies) if (body.visible) setVisible(body.body_id, false)
   }
 
+  /** スケッチの表示/非表示(ボディの `setVisible` と同じ経路。コアの `set_sketch_visible`)。 */
+  function setSketchVisible(id: string, visible: boolean): void {
+    session.setSketchVisible(id, visible, nextOp())
+  }
+
+  function showAllSketches(): void {
+    for (const item of sketches) if (!item.visible) setSketchVisible(item.sketch_id, true)
+  }
+
+  /** 編集中のスケッチは残す(行のトグルが無効なのと同じ線。`BrowserPanel.svelte`)。 */
+  function hideAllSketches(): void {
+    for (const item of sketches) {
+      if (item.visible && item.sketch_id !== sketchId) setSketchVisible(item.sketch_id, false)
+    }
+  }
+
   onMount(() => {
     viewport = createViewport(container)
     // **ここで1回明示的に呼ぶ**。`viewport` は `$state` ではないただの `let` なので、
@@ -2319,6 +2491,10 @@
     // 可変解像度 —— ズームで見え方が変わったらサーバへ知らせ、ソリッド・辺・領域を
     // その粗さで測り直させる。**スケッチの折れ線はビューポート側が自分で折り直す**
     // (ブラウザ内で完結するので往復が要らない)。連打の抑制も向こうが持っている。
+    // 断面のハンドルをドラッグしたら位置だけを書き戻す(状態の正は `section`)
+    viewport.onSectionDrag((position) => {
+      section = { ...section, position }
+    })
     viewport.onResolutionChange(sendViewResolution)
     session.start()
     return () => {
@@ -2451,6 +2627,11 @@
     viewport?.setOriginVisible(originVisible)
   })
 
+  // 断面。初回は OFF なので `onMount` での反映は要らない。
+  $effect(() => {
+    viewport?.setSection({ ...section })
+  })
+
   /** 状態配信を受けた回数。**実機検査が往復の完了を知るための穴**(`handleState` が増やす)。 */
   let stateEpoch = $state(0)
 
@@ -2499,6 +2680,8 @@
       // 文書の状態ではないので、ここを叩いてもコアへは何も飛ばない。
       fov,
       setFov: (deg: number) => applyFov(deg),
+      // 断面(issue #6)。`handle` は画面座標なので、実機検査は決め打ちせずここから読んでドラッグする。
+      section: () => viewport?.sectionInfo() ?? null,
       // **視点の向きそのものを見るための穴**(2026-08-28のZ-up化で足した)。カメラの姿勢と
       // 「この世界座標が画面のどこに写るか」を返す。`projectFace` では測れない ——
       // あちらは遮蔽された面に null を返すので、**上面と下面のどちらが画面で上か**のように
@@ -2619,6 +2802,13 @@
         viewport?.projectEdge(bodyId, edgeIndex) ?? null,
       // 頂点。**実機検査が本物のクリックで頂点を外す**ための穴(出ていなければ null)。
       vertexMarkers,
+      // 測定(issue #10)。直近の結果と、3Dに出している線(出していなければ null)、
+      // 頂点そのものを対象にしているか(候補の頂点が出て、辺より先に取れる)。
+      // **`$state.snapshot` で素のオブジェクトにして出す** —— `$state` のプロキシのままだと
+      // puppeteer の `evaluate` が値を持ち帰れず、実機検査が `{}` を読む(実測)。
+      measurement: measurement === null ? null : $state.snapshot(measurement),
+      wantedVertices,
+      measurementInfo: () => viewport?.measurementInfo() ?? null,
       // **提案(水色)と確定(橙)の区別は3Dの色だけ**になったので、色そのものを読める穴を出す。
       highlightColors: () => viewport?.highlightColors() ?? null,
       // ホバー強調で今明るくしているもの。**「クリックすれば取れるもの」と実際に
@@ -2664,20 +2854,12 @@
          まだ保存も読み込みもしていない文書には名前が無いので「(無題)」と置く。
          書けているかどうかは隣の `#save-state` が言う。 -->
     <span id="current-file" class="dim">{currentDocumentName ?? '(無題)'}</span>
-    <!-- **今の文書がファイルに載っているか**(`savedAt` 参照)。**目立たせるのは
-         「未保存」の側** —— 人の手が要るのはこちらだけで、保存済みは黙っていてよい。 -->
-    <span id="save-state" class="tag" class:on={!saved}>{saved ? '保存済み' : '未保存'}</span>
-    <!-- **保存は1箇所だけ**(2026-08-30本人決定)。押すと**編集中のファイルへ上書き**する。
-         一覧の行にあった「上書き」ボタンは撤去した —— A を編集中に B の行を押せば B が
-         今の文書で潰れ、操作ログが唯一の正である以上それは復旧できなかった。
-         **`.toolbar` には置かない** —— あちらはverbの行で、保存はverbではない
-         (操作ログに載らず、undoの対象でもない)。ここが `#current-file` /
-         `#save-state` と同じ行なのは、指しているのが同じもの(編集中のファイル)だから。
-         **編集中のファイルが無くても `disabled` にしない** —— 理由は
-         `saveCurrentDocument` のdocstring(押せない札より、名前欄へ連れて行く)。 -->
-    <button id="file-save" class="tag" onclick={saveCurrentDocument} title="編集中のファイルへ上書き保存(Ctrl+S)">
-      保存
-    </button>
+    <!-- **自動保存が書けなかったときだけ出る札**(`state.saved`。issue #5)。保存は1操作ごとに
+         自動で走るので「保存済み」は黙っていてよく、人の手が要る「未保存」だけを出す
+         (Ctrl+S で書き直せる)。**明示の保存ボタンは無い**(2026-09-16本人判断で撤去)。 -->
+    {#if !saved}
+      <span id="save-state" class="tag on" title="自動保存が書けなかった(Ctrl+Sで書き直す)">未保存</span>
+    {/if}
     <!-- **常設の指標はこれで全部**(2026-08-27に本人裁定で4つ外した)。外したものと行き先:
          - **接続状態** → 常時光らせず、**操作したのに送れなかった瞬間**にトーストで言う
            (`session.ts` の `send`)。見ても何もしなくてよい間ずっと視線を取るのをやめた。
@@ -2834,6 +3016,7 @@
         onWantsPlane={(wants) => (wantedPlane = wants)}
         onWantsPoint={(wants) => viewport?.setSketchCursorWanted(wants)}
         onWantsPick={(target) => (wantedPick = target)}
+        onWantsVertices={(wants) => (wantedVertices = wants)}
       />
     {/key}
   </section>
@@ -2847,10 +3030,12 @@
         <FilesPanel
           documents={documentList}
           currentName={currentDocumentName}
-          onSave={saveDocumentAs}
+          onRename={renameDocument}
           locked={optimizeBusy}
           onOpen={openDocumentByName}
           onNew={newDocument}
+          onCopy={copyDocument}
+          onDelete={deleteDocument}
           onExportStep={exportStep}
           onExportStl={exportStl}
         />
@@ -2864,16 +3049,31 @@
       <!-- canvas はこの div の中で three.js が作る。Svelte はここの中身を触らない -->
       <div class="viewport" bind:this={container}></div>
 
+      <!-- 測定の読み札(issue #10)。**結果があるときだけ**浮く(常設の指標ではない —— docs/UI.md
+           「常設の指標を置かない」)。`.stage` の中の position:absolute なので `.viewport` の
+           寸法＝カメラのアスペクトには触らない(ブラウザ・設定ダイアログと同じ)。 -->
+      {#if measurementText !== ''}
+        <div id="measure-result" class="measure-readout">{measurementText}</div>
+      {/if}
+
       <BrowserPanel
         bodies={partBodies}
         {sketches}
         activeSketchId={sketchId}
         {originVisible}
+        {section}
         onToggle={setVisible}
         onShowAll={showAllParts}
         onHideAll={hideAllParts}
         onEnterSketch={enterSketchFromBrowser}
+        onToggleSketch={setSketchVisible}
+        onShowAllSketches={showAllSketches}
+        onHideAllSketches={hideAllSketches}
         onToggleOrigin={applyOriginVisible}
+        onSectionToggle={toggleSection}
+        onSectionPlane={setSectionPlane}
+        onSectionPosition={setSectionPosition}
+        onSectionInvert={setSectionInverted}
       />
 
       <!-- 設定ダイアログ。**`.stage` の中に置くのは「ブラウザの右」に出すため**(2026-09-04

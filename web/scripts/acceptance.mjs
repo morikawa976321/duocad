@@ -1847,12 +1847,15 @@ async function main() {
       const centerX = rect.left + rect.width / 2
       const swing = Math.min(220, rect.width / 3)
       // **右ボタンで回す**(左ドラッグはウィンドウ選択、中ドラッグはパン、回転は右)。
-      await page.mouse.move(centerX - swing, midY)
-      await page.mouse.down({ button: 'right' })
-      for (let i = 1; i <= 10; i += 1) {
-        await page.mouse.move(centerX - swing + (2 * swing * i) / 10, midY)
-      }
-      await page.mouse.up({ button: 'right' })
+      // 始点が浮いているブラウザの下に入らないよう、畳んでから引く(ブラウザの高さは行数で変わる)。
+      await withoutBrowserPanel(page, async () => {
+        await page.mouse.move(centerX - swing, midY)
+        await page.mouse.down({ button: 'right' })
+        for (let i = 1; i <= 10; i += 1) {
+          await page.mouse.move(centerX - swing + (2 * swing * i) / 10, midY)
+        }
+        await page.mouse.up({ button: 'right' })
+      })
       const turned = await settledPose()
       const turnedOffset = turned.position.map((value, i) => value - turned.target[i])
       const azimuthBefore = Math.atan2(offset[1], offset[0])

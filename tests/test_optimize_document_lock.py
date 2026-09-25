@@ -12,7 +12,8 @@ from duocad.server import Server, Session
 from duocad.session import DocumentBusy
 
 #: 文書を変えるが、実行中も通してよいもの(操作ログに載らず、最適化が読む条件にも形にも触れない)。
-_ALLOWED_WHILE_RUNNING = {"set_visible", "modify_selection", "commit_selection", "clear_selection",
+_ALLOWED_WHILE_RUNNING = {"set_visible", "set_sketch_visible", "modify_selection", "commit_selection",
+                          "clear_selection",
                           "propose_selection"}
 
 

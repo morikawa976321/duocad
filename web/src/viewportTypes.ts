@@ -155,6 +155,16 @@ export interface VertexMarker extends VertexRef {
 }
 
 /**
+ * 画面に出す測定1件(issue #10)—— 測った2点(世界座標)と札の文字。
+ * `from` / `to` はコアの `measure` の `between.from` / `between.to` そのもの(垂線の足を含む)。
+ */
+export interface MeasurementVisual {
+  from: number[]
+  to: number[]
+  label: string
+}
+
+/**
  * ボディの幽霊の**回転**(`move_body` の `mode="rotate"`)。
  *
  * **コアが解決した後の数値と同じ形**である(`duocad/verbs/move_body.py` の
@@ -372,6 +382,31 @@ export interface SketchDraw {
   selectedHandles: Array<{ entityId: string; point: string | null }>
 }
 
+/**
+ * 断面表示(issue #6)の状態。**App が持ち、viewport は写す**(文書の状態でも画面設定でもない
+ * その場限りの値。起動時と文書の差し替えで OFF)。`position` は平面の法線軸上の座標[mm]
+ * (XY なら Z)。
+ */
+export interface SectionState {
+  on: boolean
+  plane: BasePlaneName
+  position: number
+  inverted: boolean
+}
+
+/** 実機検査フックが読む断面の情報(`Viewport.sectionInfo`)。 */
+export interface SectionInfo extends SectionState {
+  /** 残す側(+1: 法線軸の正側 / -1: 負側)。 */
+  keepSign: 1 | -1
+  /**
+   * ハンドル(矢印)の掴める画素と、法線軸の正方向が画面でどちらを向くか(単位ベクトル)。
+   * OFF・カメラの裏なら null。実機検査はここから読んでドラッグする(決め打ちの座標を使わない)。
+   */
+  handle: { x: number; y: number; dir: { x: number; y: number } } | null
+  /** 切り口の判定メッシュを持つボディの数(OFF では 0)。 */
+  stencilBodies: number
+}
+
 export interface Viewport {
   /**
    * Bodyの形状をまとめて反映する。**初回(まだ何も描いていない状態)だけ、反映後の
@@ -509,6 +544,17 @@ export interface Viewport {
    */
   setOriginVisible(visible: boolean): void
   /**
+   * 断面表示(issue #6)。状態は App が持ち、ここは写すだけ。ON のあいだボディの面・境界線・
+   * 選べる辺・頂点マーカー・幽霊は平面で切られ、**切られた側は指せない**(`resolveHit` と
+   * `collectInBox` が同じ平面で判定する)。スケッチ・領域・グリッド・原点ギズモ・注記は切らない。
+   */
+  setSection(state: SectionState): void
+  /** ハンドルのドラッグで位置が動いた(App が状態を更新し `setSection` で書き戻す)。 */
+  onSectionDrag(listener: (position: number) => void): void
+  sectionInfo(): SectionInfo
+  /** 表示中のボディ(幽霊を含む)の外接箱の中心。空なら null。断面を入れた瞬間の位置に使う。 */
+  contentCenter(): [number, number, number] | null
+  /**
    * **頂点を辺より先に見る**(`false` で既定の順序へ戻す)。
    *
    * 既定は辺が先である —— 頂点は必ず辺の端点に乗っているので、先に見るとフィレットを
@@ -550,6 +596,15 @@ export interface Viewport {
    * **奥のマーカーも見え、奥のマーカーも指せる**(辺と同じく深度検査をしない)。
    */
   showVertices(markers: VertexMarker[], origin: 'user' | 'proposed'): void
+  // ------------------------------------------------------------------ 測定(issue #10)
+  /**
+   * 測った2点を結ぶ線・両端の点・数値の札を出す(`null` で消す)。**指せない**(装飾。
+   * `allFaceMeshes` は変わらない)。奥にあっても見える(深度検査をしない)—— 点から面へ
+   * 下ろした垂線の足は面の裏やソリッドの内側に落ちうる。
+   */
+  showMeasurement(visual: MeasurementVisual | null): void
+  /** いま出している測定の線(実機検査用。出していなければ null)。 */
+  measurementInfo(): MeasurementVisual | null
   /**
    * 今そのハイライトに使っている色(16進)。出していない種別は null。
    *

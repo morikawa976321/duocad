@@ -8,6 +8,12 @@
   どの venv にも無い（図が要るなら標準ライブラリだけで PNG/SVG を書く）。実行は `.\.venv\Scripts\python.exe`。
 - **`.venv` は `uv sync --frozen` で `uv.lock` から作り直せる。** 依存は `uv add` で `pyproject.toml` と
   `uv.lock` に入れる。`uv pip install` で手入れしたものは作り直すと消え、そのときは収集エラー（`No module named ...`）で初めて気づく。
+- **git worktree で作業するときは `.venv` を本体からジャンクションで引く**（2026-09-16 実測）。`web/scripts/server.mjs` は
+  `REPO_ROOT/.venv/Scripts/python.exe` を決め打ちなので、無いと実機 smoke が「venvのpythonが無い」で1本も走らない。
+  `New-Item -ItemType Junction -Path <worktree>\.venv -Target C:\Users\tm976\mf\duocad\.venv`（管理者権限不要。git は
+  `.venv` を無視するので混ざらない）。`python -m pytest` は cwd の `duocad` を先に読むのでワークツリー側のコードで走る。
+  `web/node_modules` はワークツリーごとに `npm ci`。ブラウザペインの `preview_start` は本体の `launch.json` しか読まないので、
+  ワークツリーの画面を見るときは Python サーバを立てて `http://127.0.0.1:8766/`（`web/dist`）を開く。
 - **同じリポジトリ内でも行末はファイルごとに違う。** `core.autocrlf=true` で git の blob は LF だが、作業ツリーは
   ツールが直接書いたファイル（`web/src/viewport.ts` 等）が LF、checkout を経たファイル（`App.svelte` / `viewCube.ts` 等）が
   CRLF。`git diff` も `git status` も差分を出さないので目視では分からない。踏んだ形:

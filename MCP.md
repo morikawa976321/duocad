@@ -12,12 +12,12 @@
 
 | 群 | ツール |
 |---|---|
-| 問い合わせ | `describe_document` / `describe_shape` / `measure` |
+| 問い合わせ | `describe_document` / `describe_shape` / `measure` —— 最後の1つは選択の各項目の寸法に加え、**ちょうど2項目なら** `between`（点・直線・平面のあいだの距離。平行でない線・面どうしは角度）を返す。画面の「測定」と同じ計算 |
 | 述語の自己記述 | `describe_predicates` |
 | 選択 | `get_selection` / `propose_selection` / `modify_selection` / `commit_selection` / `clear_selection` |
 | スケッチ | `sketch_create` / `sketch_create_offset` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` / `import_svg` / `move_sketch_entities` / `mirror_sketch_entities` |
 | フィーチャ | `extrude` / `extrude_face` / `fillet` / `chamfer` / `boolean_body` / `pattern_rectangular` / `pattern_circular` / `move_body` / `mirror_body` / `delete` |
-| ボディ・パラメータ | `set_visible` / `set_parameter` |
+| 可視性・パラメータ | `set_visible` / `set_sketch_visible` / `set_parameter` —— 可視性の2つはボディ/スケッチで対。どちらも操作ログに載らず undo では戻らない |
 | 形状最適化 | `set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` / `clear_loads` — 保持/除外ソリッド・拘束面・荷重面の条件を置く(ボディと拘束は集合代入。荷重だけは大きさ・向きを面ごとに持つので上書き代入で、外すのは `clear_loads`) |
 | 入出力 | `import_step` / `export_step` / `export_stl` / `add_mesh_body` — 最後の1つは**計算で作った三角形メッシュ**をボディとして足す(表示とSTL書き出しだけ。編集verbは断られる) |
 | 履歴 | `undo` / `redo` |
@@ -26,6 +26,10 @@
 
 1. `describe_document` で `body_id` / スケッチ / パラメータ名を知る
 2. `propose_selection`（`refs` か `predicate`）→ 必要なら `measure` で確認 → `commit_selection`
+   - `measure` は**測るだけ**（verb ではない）。頂点・直線の辺・平らな面を2つ置くと `between.distance`
+     （直線・平面は無限に延ばす）、平行でない線・面どうしは `between.angle_deg` が返る。測れない組
+     （円い辺・曲面・ボディそのもの・スケッチの図形）は `between_error` に理由が入り、各項目の寸法は
+     そのまま読める
    （**AIが自分で踏む**。人に見せて止めるときだけ踏まない）
    - `sketch_create_offset(distance, base_plane=?)` は `sketch_create` の兄弟。
      `base_plane` 省略時は確定選択の面（ちょうど1枚）を基準にし、その法線方向へ

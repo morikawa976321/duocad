@@ -252,26 +252,22 @@ def test_a_successful_run_is_saved_to_disk_even_with_no_screen_watching(
     assert not session.warnings
 
 
-def test_a_successful_run_on_an_untitled_document_only_warns(
+def test_a_successful_run_on_an_untitled_document_is_saved_under_an_automatic_name(
     session: Session, monkeypatch, tmp_path
 ) -> None:
-    """無題の文書(一度も保存していない)は保存先の名前が無い。
-
-    黙って名前を作って書くと「知らないファイルが増えている」が起きるので、
-    警告を積んで諦める——**新規ボディの成功そのものは変えない**(`optimize_result` は届く)。
+    """無題の文書(一度も名前を付けていない)でも結果は消えない —— 自動保存が
+    `untitled-<n>.json` の名前を付けて書く(issue #5、2026-09-16)。警告は積まない。
     """
-    four_conditions(session)
     session.models_dir = tmp_path
-    assert session._current_name is None
+    four_conditions(session)  # 条件を置く verb が最初の変更 = ここで名前が付く
+    assert session._current_name == "untitled-1.json"
     monkeypatch.setattr(session, "run_optimization", lambda **_: {"state": "done"})
 
     _, connection = _run_to_completion(session, {"cmd": "run_optimization"})
 
     assert connection.of_type("optimize_result")[0]["state"] == "done"
-    assert list(tmp_path.iterdir()) == []
-    # `session.warnings` は `_push` の中の `take_warnings()` で配信済みに drain されるので、
-    # 配信された側(`connection`)で確かめる。
-    assert "自動保存できなかった" in connection.of_type("warning")[0]["message"]
+    assert (tmp_path / "untitled-1.json").exists()
+    assert connection.of_type("warning") == []
 
 
 def test_cancel_does_nothing_when_nothing_is_running(session: Session) -> None:

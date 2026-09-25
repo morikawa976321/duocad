@@ -176,6 +176,14 @@ def test_the_error_vocabulary_is_readable_from_the_source():
     )
 
 
+def test_the_vocabulary_accepted_by_call_error_matches_the_source():
+    """落ちたら、テストの `call_error` が受け付ける語彙(`tests/mcp_support.py` の `ERROR_CODES`)が
+    `error_envelope` とずれていて、新しいコードを返すツールのテストが「未知のエラーコード」で落ちる。"""
+    from mcp_support import ERROR_CODES
+
+    assert ERROR_CODES == _error_codes_from_source()
+
+
 @pytest.mark.parametrize(
     ("path", "heading", "anchor"),
     [(MCP_MD, "## 実装のメモ", "構造化封筒")],

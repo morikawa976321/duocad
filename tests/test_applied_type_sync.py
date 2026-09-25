@@ -66,12 +66,12 @@ def _catalog():
 def _ws_document_changing_commands() -> set[str]:
     """ブラウザから踏めて、応答が**状態配信**(`{"type":"state", "applied": ...}`)になるもの。
 
-    - `ws != "none"` … WebSocketに開けていないもの(`describe_*` / `measure` /
+    - `ws != "none"` … WebSocketに開けていないもの(`describe_*` /
       `get_selection` / `propose_selection`)は `Applied` の経路に居ない
     - `changes_document` … 偽のものは要求した接続へ結果だけ返る別の封筒である
       (`export_step` / `export_stl` / `save_document` / `list_documents` は
-      `{"type":"file"}`、`get_state` / `preview` / `get_edges` / `get_vertices` は
-      それぞれ専用のtype)
+      `{"type":"file"}`、`get_state` / `preview` / `get_edges` / `get_vertices` /
+      `measure` はそれぞれ専用のtype)
 
     **`add_mesh_body` のように、`ws="none"`(MCP専用)でも実際には操作ログに載る本物の
     verbが残っている**(UIから三角形を手で打つ操作が無いため)。このテストは「ブラウザから
@@ -598,6 +598,13 @@ def _run_redo(session: Session, tmp_path: Path) -> dict:
 def _run_set_visible(session: Session, tmp_path: Path) -> dict:
     body, _ = _box(session)
     return session.set_visible(body.id, False)
+
+
+@_runner("set_sketch_visible")
+def _run_set_sketch_visible(session: Session, tmp_path: Path) -> dict:
+    """`change: 'visibility'` の `sketch_id` 側(`body_id` と対で、どちらも欠けうる)。"""
+    _, sketch_id = _box(session)
+    return session.set_sketch_visible(sketch_id, False)
 
 
 @_runner("modify_selection")

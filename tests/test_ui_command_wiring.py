@@ -328,6 +328,7 @@ def test_which_commands_apply_without_enter():
         "add_circle",
         "add_line",
         "add_rectangle",
+        "measure",
         "select_in_sketch",
         "sketch_create",
     ], f"即適用になるコマンドの顔ぶれが変わった: {immediate}"

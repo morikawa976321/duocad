@@ -235,6 +235,23 @@ COMMANDS: tuple[Command, ...] = (
         note="WSでは `client_op`(どのクライアントの操作か)を添えるので `_dispatch` が個別に捌く",
     ),
     Command(
+        name="set_sketch_visible",
+        category="selection",
+        description=(
+            "スケッチの表示・非表示を切り替える(set_visible のスケッチ版)。隠したスケッチの"
+            "領域・図形は選べず、開いているブラウザにも描かれない。操作ログには載らず undo では"
+            "戻らないので、戻すには visible=true でもう一度呼ぶこと。"
+            "押し出し済みのボディには影響しない(ボディの可視性は set_visible)。"
+        ),
+        params=(
+            Param("sketch_id", "string", "describe_document が返した sketch_id"),
+            Param("visible", "boolean", "true で表示、false で非表示"),
+        ),
+        session="set_sketch_visible",
+        ws="special",
+        note="`set_visible` と同じく WS では `client_op` を添えるので `_dispatch` が個別に捌く",
+    ),
+    Command(
         name="describe_shape",
         category="query",
         description=(
@@ -258,9 +275,17 @@ COMMANDS: tuple[Command, ...] = (
         category="query",
         description=(
             "いまの選択(提案のままでよい)の長さ・面積・法線などを測るときに呼ぶ。"
-            "verb ではないので commit 前に提案を確かめる往復に使う。"
+            "ちょうど2項目(頂点・直線の辺・平らな面)なら、そのあいだの距離が `between` に"
+            "返る(直線・平面は無限に延ばして測る。平行でない線・面どうしは距離の代わりに"
+            "角度)。verb ではないので commit 前に提案を確かめる往復に使う。"
         ),
-        ws="none",
+        session="measure",
+        ws="special",
+        changes_document=False,
+        note=(
+            "画面の「測定」コマンドの実体。WSは要求した接続へ `{type:'measure', client_op, ...}` を"
+            "返す(状態配信ではない。`get_edges` と同じ扱い)。"
+        ),
     ),
     # ---------------------------------------------------------------- 選択
     Command(
@@ -1217,7 +1242,31 @@ COMMANDS: tuple[Command, ...] = (
             "`_dispatch` の個別分岐へ移した** —— 表は載せた引数を全部必須にする規律なので"
             "(`Param.ws` のdocstring)、省略を許すコマンドは表に置けない。"
             "契約は `Session.save_document`: 引数なし=編集中のファイルへ上書き / "
-            "`name` あり=**新しい名前でのみ**保存(既存名は拒否)"
+            "`name` あり=**新しい名前でのみ**保存(既存名は拒否)。"
+            "**2026-09-16の自動保存化(issue #5)以後、UIが送るのは引数なし(Ctrl+S)だけ** —— "
+            "名前を付けるのは `rename_document`、無題の初回は `Session.autosave` が `name` を渡す"
+        ),
+    ),
+    Command(
+        name="rename_document",
+        category="file",
+        description="",
+        params=(
+            Param(
+                "name",
+                "string",
+                "いま編集しているファイルの**新しい**名前(models/ 配下に固定。既に在れば拒否)",
+            ),
+        ),
+        session="rename_document",
+        ws="special",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**編集中のファイルをディスク上で改名する**(issue #5、2026-09-16)。1操作ごとの自動保存が"
+            "無題の文書に `untitled-<n>.json` を付けるので、人が名前を決める口はこれ1つになった"
+            "(パネルの名前欄)。応答は `save_document` と同じく `file` の封筒 + 状態の配り直し"
+            "(現在ファイル名が変わる)なので表から外して `_dispatch` で個別に捌く。人だけの操作"
         ),
     ),
     Command(
@@ -1252,6 +1301,37 @@ COMMANDS: tuple[Command, ...] = (
             "2026-08-22まではディレクトリ列挙のコードがリポジトリに1つも無かった。"
             "`save_document`/`open_document` と同じく人だけの操作(`mcp=False`)。"
             "文書は変えない(`changes_document=False`)"
+        ),
+    ),
+    Command(
+        name="copy_document",
+        category="file",
+        description="",
+        params=(
+            Param("source", "string", "複製元のファイル名(models/ 配下)"),
+            Param("dest", "string", "複製先のファイル名(models/ 配下。既に在れば拒否)"),
+        ),
+        session="copy_document",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**一覧の行から別名で複製する**(issue #17)。ディスク上のJSONを写すだけで、"
+            "いま編集している文書は変わらない。ファイルの出し入れは人の操作(`mcp=False`)。"
+            "表に載る(`ws=\"table\"`)ので応答は `file` の封筒で要求した接続にだけ返る"
+        ),
+    ),
+    Command(
+        name="delete_document",
+        category="file",
+        description="",
+        params=(Param("name", "string", "削除するファイル名(models/ 配下。編集中のファイルは拒否)"),),
+        session="delete_document",
+        mcp=False,
+        changes_document=False,
+        note=(
+            "**一覧の行からディスク上のファイルを削除する**(issue #17)。編集中のファイルは"
+            "拒否(どうすればできるかを言う)。確認は画面側が行内の2段階で聞く。"
+            "不可逆な操作なので人だけ(`mcp=False`)"
         ),
     ),
     # ---------------------------------------------------------------- 履歴

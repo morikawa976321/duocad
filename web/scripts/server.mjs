@@ -11,9 +11,10 @@
  * プロセスごと終了する**(`serve_stdio` が戻る)。`spawn` の既定はパイプなので開いたままになるが、
  * `stdio: 'ignore'` や `< /dev/null` で起動すると**立ち上がった直後に落ちる**。
  */
-import { existsSync } from 'node:fs'
+import { existsSync, mkdtempSync } from 'node:fs'
 import { spawn } from 'node:child_process'
-import { dirname, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -26,9 +27,11 @@ export const PYTHON = resolve(REPO_ROOT, '.venv', 'Scripts', 'python.exe')
  * 戻り値の `child` は**MCPで叩く側のため**(`smoke-mcp` / `acceptance` が stdio に
  * `McpClient` を繋ぐ)。ブラウザだけの検査は使わない。
  *
- * `modelsDir` を渡すと保存/開く/一覧の置き場をそこへ差し替える(`--models-dir`)。
- * **実ブラウザ検査は必ず渡すこと** —— 渡さないとリポジトリ直下の実 `models/` を
- * 検査が書き換えてしまう(既定は `duocad/server.py` の `DEFAULT_MODELS_DIR`)。
+ * `modelsDir` は保存/開く/一覧の置き場(`--models-dir`)。**渡さなければ使い捨ての一時
+ * ディレクトリを作って渡す** —— 1操作ごとの自動保存(issue #5)が最初の変更で
+ * `untitled-<n>.json` を書くので、既定(リポジトリ直下の実 `models/`)のまま立てると
+ * どの検査もそこへファイルを増やす。保存/開くを検査するスクリプトは、実在確認のために
+ * 自分の workdir を明示して渡す。
  *
  * @param {{wsPort: number|string, httpPort: number|string, timeout?: number,
  *          modelsDir?: string}} options
@@ -39,7 +42,7 @@ export async function startServer({ wsPort, httpPort, timeout = 60000, modelsDir
   if (!existsSync(PYTHON)) throw new Error(`venvのpythonが無い: ${PYTHON}`)
 
   const args = ['-m', 'duocad.mcp_server', '--port', String(wsPort), '--http-port', String(httpPort)]
-  if (modelsDir) args.push('--models-dir', modelsDir)
+  args.push('--models-dir', modelsDir ?? mkdtempSync(join(tmpdir(), 'duocad-models-')))
   const child = spawn(PYTHON, args, {
     cwd: REPO_ROOT,
     env: { ...process.env, PYTHONIOENCODING: 'utf-8' },

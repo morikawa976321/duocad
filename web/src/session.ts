@@ -182,6 +182,8 @@ export interface SketchPattern {
 export interface SketchState {
   sketch_id: string
   plane: PlaneRef
+  /** 表示/非表示(`BodyMeta.visible` と同じくコアのセッション状態。保存されない)。 */
+  visible: boolean
   /** 平面が壊れている(貼った面が消えた等)ときだけ null。 */
   frame: SketchFrame | null
   /** 反復を展開した**実際に見えるもの**。描画は必ずこちらを使う。 */
@@ -285,6 +287,11 @@ export interface ServerState {
    */
   current_name: string | null
   /**
+   * 今の文書がそのままファイルに載っているか(`Session.saved`)。**自動保存が書けなかった
+   * ときだけ false**(issue #5)。無題で何も変えていない文書は true(書くものが無い)。
+   */
+  saved: boolean
+  /**
    * 形状最適化の条件(第3のモード)。**verb起動時のプリセレクトと役割の色はここが正**で、
    * ブラウザは自前に溜めない(選択集合と同じ扱い)。
    */
@@ -309,6 +316,8 @@ export interface FilePayload {
   path: string
   bytes: number
   name?: string
+  /** 複製元のファイル名(`copy_document` のみ)。 */
+  source?: string
   operations?: number
   deviation?: number
   body_ids?: string[]
@@ -543,7 +552,9 @@ export type Applied =
    */
   | (AppliedChangeBase & {
       change: 'visibility'
-      body_id: string
+      /** ボディ(`set_visible`)なら `body_id`、スケッチ(`set_sketch_visible`)なら `sketch_id`。 */
+      body_id?: string
+      sketch_id?: string
       visible: boolean
       previous: boolean
       changed: boolean
@@ -646,6 +657,32 @@ export interface VerticesPayload {
  * **ClaudeをAPIキーで叩く経路は廃止し、`'anthropic'` は無い**。
  * 型を潰さず union のまま残してあるのは、次のプロバイダの差込口だからである。
  */
+/**
+ * `measure` の**2項目のあいだ**(`duocad/measure.py` の `between`)。
+ * **キーの顔ぶれは組によらず同じ**(無い値は null)—— 距離が出る組は `distance`・`from`・`to`、
+ * 平行でない線・面どうしは `angle_deg` だけ、点と点は `delta` も。
+ */
+export interface MeasureBetween {
+  kind: string
+  parallel: boolean | null
+  distance: number | null
+  angle_deg: number | null
+  from: number[] | null
+  to: number[] | null
+  delta: number[] | null
+}
+
+/** `measure` の返事(要求した接続にだけ届く。状態は変わっていない)。 */
+export interface MeasurePayload {
+  client_op: number | null
+  count: number
+  origin: 'user' | 'proposed'
+  items: unknown[]
+  /** **ちょうど2項目のときだけ**付く(`duocad/measure.py` の `measure_selection`)。 */
+  between?: MeasureBetween | null
+  between_error?: string | null
+}
+
 export type AiProviderKind = 'openai_compat'
 
 /** 画面に出してよい設定の全部。**鍵の類は載らない**(APIキー経路は廃止済み)。 */
@@ -915,6 +952,8 @@ export interface SessionHooks {
   onEdges(payload: EdgesPayload): void
   /** 頼んだ頂点が返ってきた(状態は変わっていない)。 */
   onVertices(payload: VerticesPayload): void
+  /** 測った(状態は変わっていない)。要求した接続にだけ届く。 */
+  onMeasure(payload: MeasurePayload): void
   /** ファイルを書いた(状態は変わっていない)。 */
   onFile(payload: FilePayload): void
   // ---------------------------------------------------------------- G: アプリ内AIエージェント
@@ -960,6 +999,7 @@ export interface Session {
    */
   runVerb(verb: string, args: Record<string, unknown>, clientOp: number): void
   setVisible(bodyId: string, visible: boolean, clientOp: number): void
+  setSketchVisible(sketchId: string, visible: boolean, clientOp: number): void
   /** 人が直す経路。差分編集で `origin` は `"user"` になる(触ること自体が承認)。 */
   modifySelection(add: SelectionRef[], remove: SelectionRef[], clientOp: number): void
   /**
@@ -1120,6 +1160,7 @@ export function createSession(hooks: SessionHooks): Session {
       vertices?: VertexGeometry[]
       action?: string
       path?: string
+      source?: string
       bytes?: number
       operations?: number
       deviation?: number
@@ -1150,6 +1191,13 @@ export function createSession(hooks: SessionHooks): Session {
       cancelled?: boolean
       already_running?: boolean
       problems?: string[]
+      // ---------------------------------------------------------------- 測定
+      client_op?: number | null
+      count?: number
+      origin?: 'user' | 'proposed'
+      items?: unknown[]
+      between?: MeasureBetween | null
+      between_error?: string | null
     }
     try {
       message = JSON.parse(raw)
@@ -1177,12 +1225,22 @@ export function createSession(hooks: SessionHooks): Session {
         revision: message.revision ?? 0,
         vertices: message.vertices ?? [],
       })
+    } else if (message.type === 'measure') {
+      hooks.onMeasure({
+        client_op: message.client_op ?? null,
+        count: message.count ?? 0,
+        origin: message.origin ?? 'user',
+        items: message.items ?? [],
+        between: message.between,
+        between_error: message.between_error,
+      })
     } else if (message.type === 'file') {
       hooks.onFile({
         action: message.action ?? '',
         path: message.path ?? '',
         bytes: message.bytes ?? 0,
         name: message.name,
+        source: message.source,
         operations: message.operations,
         deviation: message.deviation,
         body_ids: message.body_ids,
@@ -1287,6 +1345,9 @@ export function createSession(hooks: SessionHooks): Session {
     },
     setVisible(bodyId, visible, clientOp) {
       send({ cmd: 'set_visible', body_id: bodyId, visible, client_op: clientOp })
+    },
+    setSketchVisible(sketchId, visible, clientOp) {
+      send({ cmd: 'set_sketch_visible', sketch_id: sketchId, visible, client_op: clientOp })
     },
     modifySelection(add, remove, clientOp) {
       send({ cmd: 'modify_selection', add, remove, client_op: clientOp })
