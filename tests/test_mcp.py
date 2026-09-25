@@ -11,7 +11,6 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -20,7 +19,7 @@ from duocad.mcp_server import SUPPORTED_PROTOCOL_VERSIONS, DocumentTools, McpSer
 #: stdio越しの `tools/list` に入っているはずのツールの目印(顔ぶれ全体は
 #: `tests/test_doc_code_agreement.py` が `MCP.md` の表と突き合わせる)。
 M4_TOOLS = {"describe_document", "set_visible", "describe_shape"}
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from duocad.paths import REPO_ROOT
 
 
 def _server() -> McpServer:
@@ -140,3 +139,35 @@ def test_the_process_starts_and_answers_over_real_stdio():
     assert "warning" in completed.stderr
 
 
+
+
+def test_fd1_noise_outside_a_tool_call_never_reaches_the_rpc_channel(tmp_path) -> None:
+    """落ちたら、fd 1 の振り替え(`_claim_stdout`)がツール実行の間だけになっていて、人がブラウザから
+    STEP を書き出したときに OCCT の C++ が fd 1 へ吐く統計が JSON-RPC の行に混ざる。
+
+    実プロセスは起こさず、`_claim_stdout` を通した後に**ツール実行の外で** fd 1 へ書く(C++ と同じ経路)。
+    JSON-RPC の書き口には JSON だけが、fd 1 への書き込みは stderr 側に出ること。
+    """
+    from duocad.mcp_server import _claim_stdout
+
+    rpc_path = tmp_path / "rpc.txt"
+    noise_path = tmp_path / "stderr.txt"
+    saved = os.dup(1), os.dup(2)
+    try:
+        with open(rpc_path, "wb") as rpc_file, open(noise_path, "wb") as noise_file:
+            os.dup2(rpc_file.fileno(), 1)
+            os.dup2(noise_file.fileno(), 2)
+            writer = _claim_stdout()
+            try:
+                os.write(1, b"****** Statistics on Transfer (Write) ******\n")
+                writer.write(b'{"jsonrpc": "2.0", "id": 1, "result": {}}\n')
+            finally:
+                writer.close()
+    finally:
+        os.dup2(saved[0], 1)
+        os.dup2(saved[1], 2)
+        os.close(saved[0])
+        os.close(saved[1])
+
+    assert rpc_path.read_bytes() == b'{"jsonrpc": "2.0", "id": 1, "result": {}}\n'
+    assert b"Statistics on Transfer" in noise_path.read_bytes()

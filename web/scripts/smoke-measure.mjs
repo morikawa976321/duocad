@@ -16,19 +16,11 @@
  * サーバはこのスクリプトが空の文書で起動し、板はMCP経由で作る。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
  */
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { findBrowser, launchBrowser, frameAll } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
+import { assertNoAppErrors, frameAll, openApp } from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import { addExtrudedRect } from './mcp-client.mjs'
 
-const options = parseArgs(process.argv.slice(2))
-const wsPort = options.port ?? '8975'
-const httpPort = options['http-port'] ?? '8976'
-const timeout = 60000
-const workdir = mkdtempSync(join(tmpdir(), 'duocad-measure-'))
 const WIDTH = 40
 const DEPTH = 30
 const HEIGHT = 20
@@ -36,37 +28,18 @@ const HEIGHT = 20
 /** 数値どうしの一致(どちらかが数値でなければ**不一致**。`Math.abs(undefined - x)` は NaN で素通りする)。 */
 const near = (a, b, tol = 1e-6) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) <= tol
 
-async function main() {
-  const executablePath = findBrowser()
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-  try {
-    await mcp.handshake('duocad-smoke-measure')
-    const sketch = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-    await mcp.callTool('add_rectangle', {
-      sketch_id: sketch.sketch_id,
+runSmoke('smoke-measure', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout }) => {
+  {
+    const { bodyId } = await addExtrudedRect(mcp, {
       corner: [0, 0],
       width: WIDTH,
       height: DEPTH,
+      distance: HEIGHT,
+      mode: 'join',
     })
-    await mcp.callTool('propose_selection', { refs: [{ sketch: sketch.sketch_id, index: 1 }] })
-    await mcp.callTool('commit_selection')
-    await mcp.callTool('extrude', { distance: HEIGHT, mode: 'join' })
-    await mcp.callTool('clear_selection')
-    const bodyId = (await mcp.callTool('describe_document')).bodies[0].body_id
     ok(`板を作った: ${bodyId}`)
 
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
+    const { page, consoleErrors } = await openApp(browser, url, { timeout })
     await frameAll(page).catch(() => {})
 
     const clickAt = async (position) => {
@@ -287,16 +260,11 @@ async function main() {
     if (logBeforeRefusal !== logAfterRefusal) fail('断られた測定が操作ログを増やした')
     ok('測れない組(円筒面と平面)はトーストで断られ、札は出ない(ログも増えない)')
 
-    if (consoleErrors.length) fail(`ブラウザのコンソールにエラー: ${consoleErrors.join(' / ')}`)
-    ok('ブラウザのコンソールにエラーなし')
-    console.log('\nsmoke-measure: PASS')
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
+    // 「平面ではない」の札は 5節でわざと出させたもの(測れない組を断る検査)。
+    const refusals = await page.evaluate(() =>
+      JSON.parse(JSON.stringify(window.__duocad.errors)).filter((item) => String(item).includes('平面ではない')),
+    )
+    if (refusals.length !== 1) fail(`断りの札が1件ではない: ${JSON.stringify(refusals)}`)
+    await assertNoAppErrors(page, consoleErrors, { allow: refusals })
   }
-}
-
-main().catch((error) => {
-  console.error(`\nsmoke-measure: FAIL ${error.message ?? error}`)
-  process.exitCode = 1
 })

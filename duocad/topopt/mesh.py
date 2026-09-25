@@ -55,7 +55,7 @@ def run_marching_cubes(
     """`rho_padded`(連続値・パッド済み)から (verts, faces, interpolation_ratios) を返す。
 
     座標は「パディングしていない元の格子」の**セル中心規約**に戻す。`rho[ex]` は要素 `ex` の
-    **中心**の値であり(画面側のボクセル描画 —— `web/src/viewport.ts` の `buildDebugVoxels` ——
+    **中心**の値であり(画面側のボクセル描画 —— `web/src/optimizeDebug.ts` の `buildDebugVoxels` ——
     もこの規約に合わせてある。**変換点はあそこ1箇所だけ**で、サーバは素の添字を送る)、
     パッド済み配列の添字 `i` は元の添字 `ex = i - pad_width` に対応する。
     `marching_cubes` は添字 `i` をそのまま `i*spacing` の位置とみなして頂点を置くので、

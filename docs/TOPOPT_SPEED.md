@@ -65,10 +65,11 @@
 失敗は1e-14の座標の違いで出たり消えたりし、再現が不安定。
 
 そこで前計算は「ソリッドを平面で切って、破片を重心のあるセルへ振り分ける」方式にした
-(`kernel.grid_cell_common_volumes`)。ただしこの方法も、塊の面が継ぎ目に近づくと体積を落とす
+(`kernel_brep.grid_cell_common_volumes`)。ただしこの方法も、塊の面が継ぎ目に近づくと体積を落とす
 (2セル角の塊で円板の1.4%。ブーリアンで取る方法は20%落とす)。**塊の中の体積を「切る方法」と
 「ブーリアン」の2通りで求めて突き合わせ、食い違えば失敗としてそのソリッドを直接ブーリアンへ戻す**
-(落とし方が違うので食い違いで見つかる)。もう1つの罠: 破片の重心振り分けは、切る平面を形状の端まで
+(落とし方が違うので食い違いで見つかる)。この罠を値で見る自動テストは無く(hanger が要る。合成の題材では
+再現しなかった)、**この実行時の突き合わせが唯一の防具**である。もう1つの罠: 破片の重心振り分けは、切る平面を形状の端まで
 届かせないと、塊の外の残り全部が1つの破片につながり、その重心が塊の中に落ちて体積を大きく誤カウントする
 (実測で2,960万mm³の誤差)。
 
@@ -254,7 +255,7 @@ nnz・充填率・帯幅)の帯に集まった。自由度だけの規則は、h
 | `duocad/topopt/binary_search.py` | `find_initial_feasible`・`find_best_feasible`・候補生成 |
 | `duocad/optimize_run.py` | `run()`・`MAX_ELEMENTS` |
 | `duocad/topopt/acceptance.py` | `RegionOverlaps`(保持・除外の前計算)・`region_check(overlaps=)` |
-| `duocad/kernel.py` | `grid_cell_common_volumes`(平面で切ってセルごとの共通体積)・`box_common_volume` |
+| `duocad/kernel_brep.py` | `grid_cell_common_volumes`(平面で切ってセルごとの共通体積)・`box_common_volume` |
 
 この文書の実測に使った測定スクリプト(`topopt_checks/measure_*.py`・`_hanger_setup.py`)はいずれも
 一度きりの調査用で、削除済み。再現する場合は同等のスクリプトを新たに書く。

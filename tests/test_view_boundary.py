@@ -16,23 +16,10 @@
 """
 from __future__ import annotations
 
-from duocad.region import region_ref, regions
-from duocad.server import Session
-from duocad.sketch import add_rectangle, sketch_create
-from duocad.verbs import extrude
+from document_support import second_body
 from session_support import session_with_box
 
 SIDE = 20.0
-
-
-def _extrude_a_second_body(session: Session) -> str:
-    sketch_id = sketch_create(session.document, "XY")
-    add_rectangle(session.document, sketch_id, (0.0, 0.0), 10.0, 10.0)
-    boss = regions(session.document, sketch_id)
-    operation = extrude(
-        session.document, [region_ref(sketch_id, boss[0].index)], 5.0, mode="new"
-    )
-    return operation.args["body_id"]
 
 
 def test_the_view_and_the_session_share_one_warnings_list(tmp_path) -> None:
@@ -53,7 +40,7 @@ def test_the_view_and_the_session_share_one_warnings_list(tmp_path) -> None:
 def test_replacing_the_document_repoints_the_view(tmp_path) -> None:
     """文書を差し替えたら `view` も新しい文書を見る(古い文書を配り続けない)。"""
     session = session_with_box(SIDE, SIDE, SIDE, models_dir=tmp_path)
-    _extrude_a_second_body(session)
+    second_body(session.document)
     session.save_document("view-boundary.json")
 
     first = session.document
@@ -75,7 +62,7 @@ def test_the_view_does_not_prune_while_a_preview_is_running(tmp_path) -> None:
     ここは `view` の口を直に叩いて、旗の受け渡しだけを見る。
     """
     session = session_with_box(SIDE, SIDE, SIDE, models_dir=tmp_path)
-    created_id = _extrude_a_second_body(session)
+    created_id = second_body(session.document)
     session.geometry(created_id)
     session.edges(created_id)
     session.vertices(created_id)
@@ -109,7 +96,7 @@ def test_state_meta_reports_the_sessions_can_undo_not_the_raw_log(tmp_path) -> N
     (STEPを読む代わり。この検査に部品ファイルは要らない)。
     """
     session = session_with_box(SIDE, SIDE, SIDE, models_dir=tmp_path)
-    _extrude_a_second_body(session)
+    second_body(session.document)
     assert session.document.log.can_undo
 
     session._setup_floor_seq = session.document.log.entries[-1].seq

@@ -1,7 +1,9 @@
 # duocad — 実機検査（puppeteer smoke / acceptance）の書き方
 
 **読むとき**: `web/scripts/smoke-*.mjs` / `acceptance.mjs` を書く・直す・赤の原因を切り分けるとき。
-走らせ方は README §3。共有部品（`server.mjs` / `browser.mjs` / `mcp-client.mjs`）の使い方は各ファイル冒頭。
+走らせ方は README §3。共有部品の使い方は各ファイル冒頭 —— 骨格は `harness.mjs`（`runSmoke`）、
+画面を開く・エラーの確認・入力・待ちは `browser.mjs`（`openApp` / `assertNoAppErrors` / `typeInto` /
+`waitOrFail` / `waitFrames`）、射影してクリックする手は `pick.mjs`、MCP で箱を作る手は `mcp-client.mjs`。
 ここは**座標・待機・fixture・環境の落とし穴**と、それに対する作法。
 
 ## 大前提
@@ -45,7 +47,7 @@
   同じ面なのに画面座標が数十px 跳ぶ（画角 45→60 で 27.3px。重心を射影すれば 3.5px）。**視点・画角の違いを比べる
   測定点に `projectFace` を使わない** —— `projectPoint(face.centroid)`。`projectFace` が要るのは実際にクリックする手だけ。
 - **`projectPoint` は z だけを見て x/y はクリップしない。** 戻り値が非 null でも画面外（NDC 7.5 のような値）のことが
-  ある。「映ったか」の判定は `.viewport` の rect と突き合わせる（`smoke-grid-scale.mjs` の `zoomOutUntilVisible`）。
+  ある。「映ったか」の判定は `.viewport` の rect と突き合わせる（`pick.mjs` の `zoomOutUntilVisible`）。
   画面外へ `page.mouse.move` しても例外は出ず、`pointermove` が canvas に届かないだけ。
 - **カメラと同じ象限の部品を選ぶ。** 基準平面の当たり範囲がモデルを覆うので、原点をまたいだ反対側（ホームビューが
   −Y 側なら Y>0 側）の面へのレイは先に座標平面をくぐり、基準平面が勝つ（[VIEWPORT.md](VIEWPORT.md)）。
@@ -81,14 +83,16 @@
   誘発し、届いた配信で `clearEdges()` が走ってループの途中で辺が消えうる）。修正後6回連続緑（修正前 5回中2回）。
   製品側の「起動直後は辺が指せない窓がある」は実挙動として残る。
 - **再入場直後の `lookAtSketch` は数フレーム遅れる。** `activeSketch === id` が解決した直後に `projectSketchPoint` を
-  呼ぶとまれに null。`settle()` を挟む。**視野はそのとき存在する図形にしか合わない**ので、スケッチへ入った直後に
+  呼ぶとまれに null。数フレーム待つ（`browser.mjs` の `waitFrames`。同じ名前の `settle` が本によって「フレームを待つ」
+  「固定時間の猶予」「状態配信が止まるまで待つ」の別物だったので、意味ごとに名前を分けてある）。
+  **視野はそのとき存在する図形にしか合わない**ので、スケッチへ入った直後に
   その検査で使う図形を全部描く（後から離れた場所を足すと視野の外へ出る）。`smoke-svg.mjs` は取り込みで図形が増えても
   再フレームされず、丘の領域の三角形が画面上で数px しかなくて `projectRegion` が恒久的に null だった —— 取り込み直後に
   `#sketch-look` を押して寄り直す（3回連続 PASS）。
 - **`page.click()` は disabled ボタンに黙って何もしない。** 非同期で有効化される UI は、クリックの前に
   「クリック可能になったこと」を `waitForFunction` で待つ。15分のタイムアウトいっぱいまでハングしてから失敗した実例。
-- **`page.waitForTimeout` は puppeteer-core 25 に無い。** 固定時間待ちは
-  `page.evaluate(() => new Promise((r) => setTimeout(r, ms)))`。既存スクリプトは `waitForFunction` と `waitTwoFrames` を優先。
+- **`page.waitForTimeout` は puppeteer-core 25 に無い。** 固定時間待ちは `browser.mjs` の `sleep(ms)`。
+  既存スクリプトは `waitForFunction`（落ちたら中身を添える `waitOrFail`）と `waitFrames(page, 2)` を優先。
 - **`__duocad` に Svelte の `$state` オブジェクトをそのまま出すと、`page.evaluate` の戻り値では `{}` になる**
   （2026-09-16、`smoke-measure.mjs` で実測。プロキシは CDP の値の持ち帰りで中身が落ちる）。数値の比較が
   `Math.abs(undefined - x) > tol` だと NaN で**素通り**するので、二重に気づけない。フック側は
@@ -177,7 +181,10 @@
   を付けるので画面が無くても 60fps で回る。実 GPU なら費用はほぼ無い。
 - **`getBoundingClientRect()` を `page.evaluate` 単体で返すとフィールドが消える**（DOMRect のプロパティはプロトタイプの
   getter で構造化複製に乗らない）。`rect.left` が `undefined` → `page.mouse.click(NaN, NaN)` で落ちる。rect の取得と
-  それを使う計算を同じ `page.evaluate` の中で行い、プレーンオブジェクトで返す（`smoke-move.mjs` の `clickFace()`）。
+  それを使う計算を同じ `page.evaluate` の中で行い、プレーンオブジェクトで返す（`pick.mjs` の `screenOf`）。
+- **`window.__duocad.errors` も `$state` のプロキシで、`page.evaluate` の戻り値では `{}` になる。** `?? []` で読んで
+  `length > 0` を見ていた本は、`{}` が届いて永久に偽のまま緑だった（2026-09-25 に8本で実測）。`assertNoAppErrors` は
+  ページの中で配列かどうかを見てから素の配列にして返す。
 - **ビューポートの寸法を変える変更（サイドバー・パネル・ボタンの増減・ツールバーの行数）は実機検査を全部回す。**
   掴むものが黙って入れ替わり、落ちるのは数手あとの `cut did not change the shape` のような無関係な文言
   （履歴パネルを外しただけで基準平面が手前の板の面に化けた実例がある）。`npm run check` も pytest もこの壊れ方を見ない。

@@ -130,10 +130,33 @@ def export_body_ids(doc: Document) -> list[BodyId]:
 def export_skipped_hidden(doc: Document) -> list[BodyId]:
     """書き出し候補のうち非表示(`visible=False`)で除外されたBodyのID一覧(除外0件なら空リスト)。
 
-    `export_body_ids` と対で使う想定 —— 呼び出し側(server.py / mcp_server.py)が
-    応答へ両方載せて「何を書き出し、何を除外したか」を必ず見えるようにする。
+    `export_body_ids` と対で使う —— `export` が応答へ両方載せて「何を書き出し、何を除外したか」を
+    必ず見えるようにする。
     """
     return [b.id for b in _export_candidates(doc) if not b.visible]
+
+
+#: `export` の `fmt` → 書く関数。
+EXPORTERS = {"step": export_step, "stl": export_stl}
+
+
+def export(doc: Document, path: Path, fmt: str) -> dict:
+    """`fmt`("step" | "stl")で `path` へ書き、`{"path", "bytes", "body_ids", "skipped_hidden"}` を返す
+    (Session と MCP の書き出しが共有する応答の芯。パスの解決・親ディレクトリの検査は呼び出し側)。
+
+    **対象の ID を先に取ってから書く**: 「書き出すものが無い」「全部非表示」の ValueError はファイルを
+    作る前に出す。`bytes` は書いた後の `stat()`。
+    """
+    write = EXPORTERS[fmt]
+    body_ids = export_body_ids(doc)
+    skipped = export_skipped_hidden(doc)
+    write(doc, path)
+    return {
+        "path": str(path),
+        "bytes": path.stat().st_size,
+        "body_ids": list(body_ids),
+        "skipped_hidden": list(skipped),
+    }
 
 
 def _export_candidates(doc: Document) -> list[Body]:

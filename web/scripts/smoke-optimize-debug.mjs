@@ -24,50 +24,23 @@
  * リポジトリ直下の実 `models/` は触らない)。**本物のSIMPを1回通す**(実測 60〜120秒) ——
  * 塊も節点も密度場も、走らせなければ1つも生まれない。
  */
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 
-import { fail, ok, parseArgs } from './args.mjs'
-import { findBrowser, launchBrowser, frameAll } from './browser.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
+import { fail, ok } from './args.mjs'
+import { assertNoAppErrors, frameAll, openApp, waitOrFail } from './browser.mjs'
+import { runSmoke } from './harness.mjs'
+import { addExtrudedRect } from './mcp-client.mjs'
 
-const options = parseArgs(process.argv.slice(2))
-const wsPort = options.port ?? '8907'
-const httpPort = options['http-port'] ?? '8908'
-const timeout = Number.parseInt(options.timeout ?? '60000', 10)
-/** 最適化1回ぶんの待ち(`smoke-optimize.mjs` と同じ理由で既定の60秒では足りない)。 */
-const runTimeout = Number.parseInt(options['run-timeout'] ?? '420000', 10)
-const workdir = mkdtempSync(path.join(tmpdir(), 'duocad-optimize-debug-'))
-/** 目で見るための控え(`/screenshots/` は `.gitignore` 対象)。**合否には使わない。** */
-const shotDir = options.shots ?? path.join(path.dirname(workdir), 'duocad-debug-shots')
-
-async function main() {
-  const executablePath = findBrowser()
-  console.log(`smoke-optimize-debug: ${executablePath}`)
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-
-  try {
-    await mcp.handshake('duocad-smoke-optimize-debug')
-
+runSmoke('smoke-optimize-debug', { timeout: 60000, mcp: true }, async ({ options, workdir, mcp, browser, url, timeout }) => {
+  /** 最適化1回ぶんの待ち(`smoke-optimize.mjs` と同じ理由で既定の60秒では足りない)。 */
+  const runTimeout = Number.parseInt(options['run-timeout'] ?? '420000', 10)
+  /** 目で見るための控え(`/screenshots/` は `.gitignore` 対象)。**合否には使わない**し、消さない。 */
+  const shotDir = options.shots ?? path.join(path.dirname(workdir), 'duocad-debug-shots')
+  {
     /** 一辺 `size` の立方体。**離して置く**ので、あいだを繋ぐ材料を最適化が起こす。 */
-    async function addBox(corner, size, distance) {
-      const sketch = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-      await mcp.callTool('add_rectangle', {
-        sketch_id: sketch.sketch_id,
-        corner,
-        width: size,
-        height: size,
-      })
-      await mcp.callTool('propose_selection', { refs: [{ sketch: sketch.sketch_id, index: 1 }] })
-      await mcp.callTool('commit_selection')
-      const extruded = await mcp.callTool('extrude', { distance, mode: 'new' })
-      await mcp.callTool('clear_selection')
-      return extruded.bodies[0].body_id
-    }
+    const addBox = async (corner, size, distance) =>
+      (await addExtrudedRect(mcp, { corner, width: size, height: size, distance })).bodyId
 
     async function selectFaces(refs) {
       await mcp.callTool('propose_selection', { refs })
@@ -85,25 +58,14 @@ async function main() {
     await mcp.callTool('set_preserve_bodies')
     await mcp.callTool('clear_selection')
 
-    browser = await launchBrowser(executablePath)
-
-    /** ページを1枚開いて、共通の穴が立つまで待つ。 */
+    /** ページを1枚開いて、共通の穴が立つまで待つ(`query` はデバッグ表示のフラグ)。 */
     async function openPage(query) {
-      const page = await browser.newPage()
-      await page.setViewport({ width: 1280, height: 860 })
-      const consoleErrors = []
-      page.on('pageerror', (error) => consoleErrors.push(String(error)))
-      page.on('console', (message) => {
-        if (message.type() === 'error') consoleErrors.push(message.text())
-      })
-      await page.goto(`http://127.0.0.1:${httpPort}/${query}`, { waitUntil: 'load', timeout })
-      await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
-      await page.waitForFunction(() => (window.__duocad?.parts ?? []).length >= 2, {
+      const opened = await openApp(browser, `${url}${query}`, {
         timeout,
-        polling: 100,
+        until: () => (window.__duocad?.parts ?? []).length >= 2,
       })
-      await frameAll(page)
-      return { page, consoleErrors }
+      await frameAll(opened.page)
+      return opened
     }
 
     // ================================================================== 1. フラグ無し
@@ -119,7 +81,7 @@ async function main() {
         fail(`フラグ無しなのに描かれている: ${JSON.stringify(counts)}`)
       }
       if (counts.hiddenBodyId !== null) fail('フラグ無しなのにボディを隠している')
-      if (consoleErrors.length > 0) fail(`コンソールにエラー: ${consoleErrors[0]}`)
+      await assertNoAppErrors(page, consoleErrors)
 
       // ついでに、拘束面・荷重面をここで決める(面の添字は押し出しの結果で決まるので、
       // **画面が持っている実際の面**から選ぶ —— 添字を決め打ちしない)。
@@ -165,13 +127,8 @@ async function main() {
       fail(`フラグが読めていない: ${JSON.stringify(flags)}`)
     }
 
-    async function waitFor(check, what, args = [], limit = timeout) {
-      try {
-        await page.waitForFunction(check, { timeout: limit, polling: 100 }, ...args)
-      } catch {
-        fail(`${what}(タイムアウト)`)
-      }
-    }
+    const waitFor = (check, what, args = [], limit = timeout) =>
+      waitOrFail(page, check, what, { args, timeout: limit, polling: 100 })
 
     await page.click('#optimize-enter')
     await waitFor(() => window.__duocad.optimizeMode === true, 'モードに入らない')
@@ -251,19 +208,7 @@ async function main() {
     await page.screenshot({ path: shot })
     ok(`控えを撮った: ${shot}`)
 
-    // ================================================================== 5. コンソール
-    if (consoleErrors.length > 0) fail(`コンソールにエラー: ${consoleErrors[0]}`)
-    ok('[5] コンソールにエラーは出ていない')
-
-    console.log('\nsmoke-optimize-debug: PASS')
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
-    rmSync(workdir, { recursive: true, force: true })
+    // ================================================================== 5. エラー
+    await assertNoAppErrors(page, consoleErrors)
   }
-}
-
-main().catch((error) => {
-  console.error(`\nsmoke-optimize-debug: FAIL\n${error.stack ?? error}`)
-  process.exitCode = 1
 })

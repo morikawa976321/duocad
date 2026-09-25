@@ -28,7 +28,7 @@ import pytest
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.session import Session
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from duocad.paths import REPO_ROOT
 MCP_MD = REPO_ROOT / "MCP.md"
 ROOT_README = REPO_ROOT / "README.md"
 TOPOPT_MD = REPO_ROOT / "docs" / "TOPOPT.md"
@@ -130,16 +130,25 @@ def test_the_mcp_tool_table_matches_the_tools_that_are_actually_published():
 def _error_codes_from_source() -> set[str]:
     """`duocad/mcp_server.py` が実際に返しうる `code` の語彙をソースから読む。
 
-    2経路ある: `error_envelope` が直に置くリテラルと、`ToolError(code, ...)` の
-    第1引数(封筒は `error.code` をそのまま通す)。**実行時に集められない** —— 全語彙を
-    出す例外を並べる検査は、その並びがまた手動同期になる。
+    3経路ある: `error_envelope` が直に置くリテラルと、`ToolError(code, ...)` の
+    第1引数(封筒は `error.code` をそのまま通す)と、アプリ内AIのループが自分で作る封筒
+    `_failure(tool, code, ...)`(`duocad/agent/loop.py`)の第2引数。**実行時に集められない** ——
+    全語彙を出す例外を並べる検査は、その並びがまた手動同期になる。
     """
+    codes = set()
+    loop_tree = ast.parse((REPO_ROOT / "duocad" / "agent" / "loop.py").read_text(encoding="utf-8"))
+    for node in ast.walk(loop_tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name) and node.func.id == "_failure"
+            and len(node.args) > 1 and isinstance(node.args[1], ast.Constant)
+        ):
+            codes.add(node.args[1].value)
     tree = ast.parse(MCP_SERVER_PY.read_text(encoding="utf-8"))
     envelope = next(
         node for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == "error_envelope"
     )
-    codes = set()
     for node in ast.walk(envelope):
         if not isinstance(node, ast.Dict):
             continue
@@ -171,8 +180,8 @@ def test_the_error_vocabulary_is_readable_from_the_source():
     """先に**走査そのものが効いている**ことを見る(0件なら下の検査は常に緑になる)。"""
     codes = _error_codes_from_source()
     assert len(codes) >= 6, f"error_envelope の語彙を読めていない: {sorted(codes)}"
-    assert "internal" in codes and "invalid_predicate" in codes, (
-        f"2経路(封筒のリテラルと ToolError)の片方しか読めていない: {sorted(codes)}"
+    assert "internal" in codes and "invalid_predicate" in codes and "dimension_not_given" in codes, (
+        f"3経路(封筒のリテラル・ToolError・ループの _failure)のどれかが読めていない: {sorted(codes)}"
     )
 
 

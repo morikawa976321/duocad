@@ -25,11 +25,12 @@ from .. import parameters
 from ..document import Document
 from ..oplog import Operation, register_verb
 from ..sketch import (
-    Entity,
+    add_entities,
     entity_kind_ops,
     get_entity,
     get_sketch,
     new_entity_id,
+    remove_entities,
     require_valid_params,
 )
 
@@ -131,14 +132,7 @@ def _create_mirrors(
             f"mirror_sketch_entities: {len(plan)} copies planned but "
             f"{len(new_ids)} ids recorded"
         )
-    created: List[str] = []
-    for (sketch, kind, values), new_id in zip(plan, new_ids):
-        if any(existing.id == new_id for existing in sketch.entities):
-            raise ValueError(f"entity id already exists: {new_id!r}")
-        refs = parameters.register_all(doc, values)
-        sketch.entities.append(Entity(id=new_id, kind=kind, params=refs))
-        created.append(new_id)
-    return created
+    return add_entities(doc, [(sketch, new_id, kind, values) for (sketch, kind, values), new_id in zip(plan, new_ids)])
 
 
 def mirror_sketch_entities(doc: Document, targets: Sequence[dict], axis: Any) -> Operation:
@@ -182,15 +176,7 @@ def _do_mirror_sketch_entities(document: Document, operation: Operation) -> None
 
 def _undo_mirror_sketch_entities(document: Document, operation: Operation) -> None:
     """undo: 作った複製を消す(元の図形・軸は触らない)。"""
-    created = set(operation.args.get("created") or [])
-    for sketch in document.sketches:
-        remaining = []
-        for entity in sketch.entities:
-            if entity.id in created:
-                parameters.release_param_refs(document, entity.params)
-            else:
-                remaining.append(entity)
-        sketch.entities = remaining
+    remove_entities(document, operation.args.get("created") or [])
 
 
 register_verb(

@@ -14,18 +14,17 @@ import argparse
 import hashlib
 import json
 import subprocess
-import sys
 import time
 import tracemalloc
 from pathlib import Path
 from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
+from _documents import open_session
 import _record
 import numpy as np
 
 from duocad import optimize_run
-from duocad.session import Session
 from duocad.topopt import acceptance, anchor, binary_search, design_space, mesh
 
 REPO = Path(__file__).resolve().parents[1]
@@ -95,8 +94,7 @@ def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, 
            single_cell_patience: int | None = binary_search.DEFAULT_SINGLE_CELL_PATIENCE,
            target_tolerance: float | None = binary_search.DEFAULT_TARGET_TOLERANCE, trace_memory: bool = True,
            save_masks: Path | None = None) -> dict:
-    session = Session(None, 0.2, models_dir=model.resolve().parent)
-    session.open_document(model.name)
+    session = open_session(model)
     document = session.document
     record: dict = dict(
         model=str(model), model_sha256=_sha256(model), git_head=_git("rev-parse", "HEAD"),
@@ -246,11 +244,6 @@ def main() -> int:
                         help="設計空間・採用マスク・条件面の節点座標を npz に書く(撮影用)")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(errors="replace")  # type: ignore[union-attr]
-        except (AttributeError, ValueError):
-            pass
     record = verify(args.model, args.spacing, args.target, args.max_evaluations, skip_search=args.skip_search,
                     step_exponent=args.step_exponent, max_step_ratio=args.max_step_ratio,
                     single_cell_patience=args.single_cell_patience, target_tolerance=args.target_tolerance,

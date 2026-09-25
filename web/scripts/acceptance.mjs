@@ -23,21 +23,31 @@
  *
  * 結果はJSONで stdout の末尾へ出す。
  */
-import { existsSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { findBrowser, launchBrowser, withoutBrowserPanel, pressUndo, pressRedo, frameAll } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
+import {
+  frameAll,
+  openApp,
+  pressRedo,
+  pressUndo,
+  sleep,
+  typeInto as typeIntoField,
+  waitFrames,
+  waitOrFail,
+  withoutBrowserPanel,
+} from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { SMOKE_PORTS, runSmoke } from './harness.mjs'
 import { McpClient } from './mcp-client.mjs'
+import {
+  clickEdge as clickEdgeOf,
+  clickEntityHandle,
+  clickFace,
+  clickRegion as clickRegionOf,
+  clickSketchPoint,
+  createSketchOnBasePlane,
+} from './pick.mjs'
 import { startServer } from './server.mjs'
-
-
-const options = parseArgs(process.argv.slice(2))
-const wsPort = options.port ?? '8885'
-const httpPort = options['http-port'] ?? '8886'
-const timeout = Number.parseInt(options.timeout ?? '120000', 10)
-const workdir = options.workdir ?? mkdtempSync(join(tmpdir(), 'duocad-g-'))
-
 
 
 /**
@@ -110,6 +120,10 @@ function failedLabels(collected) {
     if (entry === null || entry === undefined) failed.push(`${name}(未実行)`)
     else if (!entry.ok) failed.push(name)
   }
+  // 走行中に出たエラー(画面の控え・ブラウザのコンソール)も合否に入れる。**例外で止めない**
+  // (途中で止めない設計)ので、記録に載せた上でここで数える。
+  if ((collected.screenErrors ?? []).length > 0) failed.push('screenErrors(走行中にエラーの札)')
+  if ((collected.consoleErrors ?? []).length > 0) failed.push('consoleErrors(ブラウザのコンソールにエラー)')
   return failed
 }
 
@@ -123,21 +137,19 @@ async function attempt(side, verb, fn) {
   }
 }
 
-async function main() {
-  const executablePath = findBrowser()
-
-  console.log(`acceptance: ws=${wsPort} http=${httpPort} workdir=${workdir}`)
-  // **`modelsDir: workdir`** —— 渡さないとリポジトリ直下の実 `models/` を受入が触る
-  // (`server.mjs` の `startServer` 参照)。他の実機検査も同様に渡している。
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  // 受入は落ちても最後まで走る作りなので、混入行は**記録して続ける**。
-  const mcp = new McpClient(server.child, {
-    timeout,
+// 受入は落ちても最後まで走る作りなので、MCP の stdout への混入行は**記録して続ける**(`onNoise`)。
+// 握手も自前で打つ(`handshake: false`。応答の中身を見る)。文書の置き場は harness の使い捨て `workdir`
+// (渡さないとリポジトリ直下の実 `models/` を受入が触る)。
+runSmoke(
+  'acceptance',
+  {
+    mcp: true,
+    handshake: false,
     onNoise: (line) => {
       results.stdoutNoise = [...(results.stdoutNoise ?? []), line.slice(0, 120)]
     },
-  })
-  let browser = null
+  },
+  async ({ options, workdir, mcp, browser, url, timeout }) => {
   /** 人間側が最初に作ったスケッチのID(`set_parameter` が再開に使う)。 */
   let humanSketchId = null
   /** 最初にスケッチを抜けた直後の `camera.up`(下の「座標系」の節が判定する)。 */
@@ -154,19 +166,7 @@ async function main() {
     const tools = (await mcp.send('tools/list')).result.tools.map((tool) => tool.name)
     console.log(`  MCP: ${tools.length} tools`)
 
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 900 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad && window.__duocad.ready), {
-      timeout,
-      polling: 100,
-    })
+    const { page, consoleErrors } = await openApp(browser, url, { timeout, height: 900 })
 
     // ------------------------------------------------------------------ 道具(人間側)
     const look = async () =>
@@ -200,106 +200,17 @@ async function main() {
         }),
       )
 
-    async function waitFor(predicate, what, ...args) {
-      try {
-        await page.waitForFunction(predicate, { timeout: 30000, polling: 50 }, ...args)
-      } catch {
-        throw new Error(`${what}: ${JSON.stringify(await look())}`)
-      }
-    }
-
-    async function typeInto(selector, value) {
-      await page.click(selector)
-      await page.keyboard.down('Control')
-      await page.keyboard.press('KeyA')
-      await page.keyboard.up('Control')
-      await page.keyboard.press('Backspace')
-      await page.type(selector, String(value), { delay: 12 })
-    }
-
-    /**
-     * スケッチの図形を**3Dのクリックで選ぶ**(他の実機検査と同じ道具)。
-     *
-     * 図形の**最初の点**(円・円弧は中心、線分・ベジエは始点、長方形は左下)を狙う ——
-     * 点はその図形の上にあり、当たり判定も点が最優先なので確実に掴める。
-     */
-    async function clickEntityHandle(entityId) {
-      return withoutBrowserPanel(page, async () => {
-        const at = await page.evaluate((id) => {
-          const hook = window.__duocad
-          const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
-          const entity = active?.entities.find((item) => item.entity_id === id)
-          if (!entity) return null
-          const p = entity.params
-          const uv = 'cx' in p ? [p.cx, p.cy] : 'x0' in p ? [p.x0, p.y0] : [p.x, p.y]
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectSketchPoint(uv[0], uv[1])
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        }, entityId)
-        if (!at) throw new Error(`図形 ${entityId} の点が画面の中に無い`)
-        await page.mouse.click(at.x, at.y)
-      })
-    }
-
-    async function clickPlane(u, v) {
-      // **浮いているブラウザを畳んでから**押す —— スケッチ平面の (u,v) は画面の1画素しかなく、
-      // そこがパネルの下に来ると逃げ場が無い(理由は `browser.mjs` の `withoutBrowserPanel`)。
-      return withoutBrowserPanel(page, async () => {
-        const at = await page.evaluate(
-          (uu, vv) => {
-            const rect = document.querySelector('.viewport').getBoundingClientRect()
-            const position = window.__duocad.projectSketchPoint(uu, vv)
-            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-          },
-          u,
-          v,
-        )
-        if (!at) throw new Error(`平面上の点 (${u}, ${v}) が画面の中に無い`)
-        await page.mouse.click(at.x, at.y)
-      })
-    }
-
-    async function clickRegion(index, shift = false) {
-      const at = await page.evaluate((idx) => {
-        const rect = document.querySelector('.viewport').getBoundingClientRect()
-        const position = window.__duocad.projectRegion(idx)
-        return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-      }, index)
-      if (!at) throw new Error(`領域 ${index} が画面の中に無い`)
-      if (shift) await page.keyboard.down('Shift')
-      await page.mouse.click(at.x, at.y)
-      if (shift) await page.keyboard.up('Shift')
-    }
-
-    async function clickEdge(bodyId, edgeIndex, shift = false) {
-      const at = await page.evaluate(
-        (id, index) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectEdge(id, index)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        bodyId,
-        edgeIndex,
-      )
-      if (!at) return false
-      if (shift) await page.keyboard.down('Shift')
-      await page.mouse.click(at.x, at.y)
-      if (shift) await page.keyboard.up('Shift')
-      try {
-        await page.waitForFunction(
-          (id, index) =>
-            (window.__duocad.selection?.items ?? []).some(
-              (item) => item.body === id && item.kind === 'edge' && item.index === index,
-            ),
-          { timeout: 5000, polling: 50 },
-          bodyId,
-          edgeIndex,
-        )
-        return true
-      } catch {
-        return false
-      }
-    }
+    // 待ちは 30 秒固定(受入は1手ごとに短く見切る)。落ちたら画面の中身を添える。
+    const waitFor = (predicate, what, ...args) =>
+      waitOrFail(page, predicate, what, { args, timeout: 30000, dump: look })
+    // 指す手は `pick.mjs`(射影は押す直前・パネルは畳む)。この本の呼び方に合わせた薄い皮。
+    const typeInto = (selector, value) => typeIntoField(page, selector, value, { delay: 12 })
+    const clickPlane = (u, v) => clickSketchPoint(page, u, v)
+    const clickRegion = (index, shift = false) =>
+      clickRegionOf(page, index, { modifier: shift ? 'Shift' : null })
+    /** 辺を本物のクリックで選ぶ(`shift` で追加)。外れたら false(呼び出し側が次の辺を試す)。 */
+    const clickEdge = (bodyId, edgeIndex, shift = false) =>
+      clickEdgeOf(page, bodyId, edgeIndex, { modifier: shift ? 'Shift' : null })
 
     async function waitForEdges(bodyId) {
       await waitFor(
@@ -320,19 +231,7 @@ async function main() {
 
     await attempt('human', 'sketch_create', async () => {
       // **2手**(「スケッチ」を起動 → 貼る先の基準平面グリッドをクリック)。Enterは無い。
-      await page.click('#sketch-create')
-      const at = await page
-        .waitForFunction(
-          () => {
-            const rect = document.querySelector('.viewport').getBoundingClientRect()
-            const position = window.__duocad.projectBasePlane('XY')
-            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-          },
-          { timeout, polling: 50 },
-        )
-        .then((handle) => handle.jsonValue())
-      await page.mouse.click(at.x, at.y)
-      await waitFor(() => window.__duocad.activeSketch !== null, 'スケッチに入れない')
+      await createSketchOnBasePlane(page, 'XY', { timeout })
       // **後段の `set_parameter` が使う**: このスケッチは `#sketch-exit` の後に一度
       // 抜けるので、SketchPanelで図形を打ち直すには「再開」(=BrowserPanelの名前クリック)で
       // 戻る必要がある(ParametersPanel廃止に伴う受け入れた損失)。
@@ -431,7 +330,7 @@ async function main() {
         const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
         return active.entities.find((entity) => entity.kind === 'circle').entity_id
       })
-      await clickEntityHandle(circleId)
+      await clickEntityHandle(page, circleId)
       await waitFor(
         (id) => (window.__duocad.selectedEntities ?? []).includes(id),
         '図形を反復の対象に選べない',
@@ -473,7 +372,7 @@ async function main() {
         (id) => (window.__duocad.selectedEntities ?? []).includes(id),
         circleId,
       )
-      if (!picked) await clickEntityHandle(circleId)
+      if (!picked) await clickEntityHandle(page, circleId)
       await page.click('#pattern-circular')
       await clickPlane(20, 45)
       await typeInto('#pattern-count', 4)
@@ -671,7 +570,7 @@ async function main() {
       // **正面から見る**。再入場の視点は「入る前」に戻る作りなので、
       // 図形が画面の外に居ることがある —— 点を1画素で狙う操作には寄せ直しが要る。
       await page.click('#sketch-look')
-      await new Promise((resolve) => setTimeout(resolve, 500))
+      await sleep(500)
       const target = await page.evaluate(() => {
         const hook = window.__duocad
         const active = hook.sketches.find((item) => item.sketch_id === hook.activeSketch)
@@ -679,7 +578,7 @@ async function main() {
         return rectangle ? { entityId: rectangle.entity_id, params: { ...rectangle.params } } : null
       })
       if (!target) throw new Error('長方形が見つからない')
-      await clickEntityHandle(target.entityId)
+      await clickEntityHandle(page, target.entityId)
       await waitFor(
         (id) =>
           (window.__duocad.selection?.items ?? []).some(
@@ -745,17 +644,7 @@ async function main() {
         return null
       }, bodyId)
       if (faceIndex === null) throw new Error('画面から指せる面が1つも無い')
-      const at = await page.evaluate(
-        (id, index) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectFace(id, index)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        bodyId,
-        faceIndex,
-      )
-      if (!at) throw new Error(`面 ${faceIndex} が画面の中に無い`)
-      await page.mouse.click(at.x, at.y)
+      await clickFace(page, bodyId, faceIndex)
       await waitFor(
         (id, index) =>
           (window.__duocad.selection?.items ?? []).some(
@@ -1340,11 +1229,7 @@ async function main() {
      * スクリーンショットを撮ると更新前のcanvasを拾う恐れがある(`tick`のrAFループが
      * 実際に1回まわったことを保証するため2回分待つ)。
      */
-    async function waitTwoFrames() {
-      await page.evaluate(
-        () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
-      )
-    }
+    const waitTwoFrames = () => waitFrames(page, 2)
 
     /**
      * ビューキューブの矩形(ページ絶対座標・CSSピクセル)。`viewCubeRect()` は
@@ -1744,7 +1629,7 @@ async function main() {
           return pose
         }
         previous = pose
-        await new Promise((resolve) => setTimeout(resolve, 30))
+        await sleep(30)
       }
       throw new Error('カメラが止まらない(減衰が終わらない)')
     }
@@ -1960,7 +1845,11 @@ async function main() {
     // 独立した円筒が作れない(1回目の実行で実際に踏んだ)。
     console.log('\n--- 副次: 手だけで実物相当(全周円筒+円錐。空の文書で) ---')
     // 副次の別プロセスも実 `models/` を向かせない(上の本体と同じ理由)。
-    const solo = await startServer({ wsPort: '8887', httpPort: '8888', modelsDir: workdir })
+    const solo = await startServer({
+      wsPort: String(options['solo-port'] ?? SMOKE_PORTS['acceptance-solo'][0]),
+      httpPort: String(options['solo-http-port'] ?? SMOKE_PORTS['acceptance-solo'][1]),
+      modelsDir: workdir,
+    })
     const soloMcp = new McpClient(solo.child, { timeout })
     try {
       await soloMcp.handshake('duocad-acceptance-solo')
@@ -1999,31 +1888,18 @@ async function main() {
     results.screenMessages = screen.messages
     // **エラーは別に記録する。** ステータスバーに残るのは情報だけになったので、
     // `screenMessages` だけを受入記録に載せると「エラーは1件も出ていない」ように読める。
-    results.screenErrors = screen.errors ?? []
+    // 控えが配列で来ないのも異常(`$state` のプロキシが `{}` で届く形)なので、その旨を記録に残す。
+    results.screenErrors = Array.isArray(screen.errors) ? screen.errors : [`__duocad.errors が配列で来ない: ${JSON.stringify(screen.errors)}`]
     // **合否そのものも記録に残す**(終了コードだけだと、ログを後から読む人には見えない)。
     results.failed = failedLabels(results)
     console.log('\n=== RESULT_JSON ===')
     console.log(JSON.stringify(results, null, 2))
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
-  }
-}
-
-main()
-  .then(() => {
-    // **後始末(ブラウザとサーバの停止)が終わってから**落とす —— `main()` の中で
-    // `process.exit` すると `finally` を飛ばして子プロセスが残る。
-    const failed = failedLabels(results)
-    if (failed.length > 0) {
-      console.error(`\nacceptance: FAIL ${failed.length}件 — ${failed.join(' / ')}`)
-      process.exit(1)
-    }
-    console.log('\nacceptance: PASS')
-  })
-  .catch((error) => {
-    console.error(`acceptance: FAIL ${error.message}`)
+  } catch (error) {
     console.log('\n=== RESULT_JSON ===')
     console.log(JSON.stringify(results, null, 2))
-    process.exit(1)
-  })
+    throw error
+  }
+  // 合否は ❌ の一覧で決める(harness が FAIL / PASS を出す)。後始末は harness の finally。
+  return failedLabels(results)
+  },
+)

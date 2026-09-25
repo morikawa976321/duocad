@@ -17,65 +17,27 @@
  * サーバはこのスクリプトが空の文書で起動し、円柱はMCP経由で作る。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
  */
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { findBrowser, launchBrowser, frameAll } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
-
-const options = parseArgs(process.argv.slice(2))
-const wsPort = options.port ?? '8977'
-const httpPort = options['http-port'] ?? '8978'
-const timeout = 60000
-const workdir = mkdtempSync(join(tmpdir(), 'duocad-resolution-'))
+import { assertNoAppErrors, frameAll, openApp, sleep, viewportCenter } from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import { addExtrudedCircle } from './mcp-client.mjs'
 
 const RADIUS = 10
 const HEIGHT = 20
 
-async function main() {
-  const executablePath = findBrowser()
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-  try {
-    await mcp.handshake('duocad-smoke-resolution')
-    const sketch = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-    await mcp.callTool('add_circle', {
-      sketch_id: sketch.sketch_id,
-      center: [0, 0],
-      radius: RADIUS,
-    })
-    await mcp.callTool('propose_selection', { refs: [{ sketch: sketch.sketch_id, index: 1 }] })
-    await mcp.callTool('commit_selection')
-    await mcp.callTool('extrude', { distance: HEIGHT, mode: 'new' })
-    await mcp.callTool('clear_selection')
-    const bodyId = (await mcp.callTool('describe_document')).bodies[0].body_id
+runSmoke('smoke-resolution', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout }) => {
+  {
+    const { bodyId } = await addExtrudedCircle(mcp, { center: [0, 0], radius: RADIUS, distance: HEIGHT })
     ok(`半径${RADIUS}mmの円柱を作った: ${bodyId}(曲面1・円い辺2・スケッチの円1)`)
 
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
+    const { page, consoleErrors } = await openApp(browser, url, { timeout })
     await frameAll(page)
 
     // 辺オーバーレイを出す(フィレットを起動している間だけ辺が届く契約)。
     await page.click('#fillet')
 
-    const center = await page.evaluate(() => {
-      const box = document.querySelector('.viewport').getBoundingClientRect()
-      return { x: box.left + box.width / 2, y: box.top + box.height / 2 }
-    })
+    const center = await viewportCenter(page)
     await page.mouse.move(center.x, center.y)
-
-    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
     /** 今の画面から、判定に要る値をまとめて読む。 */
     function probe(id) {
@@ -223,19 +185,6 @@ async function main() {
     }
     ok(`ズームの後も辺は今の版(revision ${stale.current})—— 古い添字を指したままにならない`)
 
-    const errors = await page.evaluate(() => window.__duocad.errors ?? [])
-    if (errors.length > 0) fail(`走行中にエラーが出た: ${JSON.stringify(errors)}`)
-    if (consoleErrors.length > 0) fail(`コンソールにエラー: ${consoleErrors.join(' / ')}`)
-    ok('走行中にエラーは1件も出ていない')
-
-    console.log('\nsmoke-resolution: 全項目 OK')
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
+    await assertNoAppErrors(page, consoleErrors)
   }
-}
-
-main().catch((error) => {
-  console.error(`\nsmoke-resolution: 失敗 — ${error.message}`)
-  process.exitCode = 1
 })

@@ -221,9 +221,7 @@ class Document:
 
         存在しないIDは KeyError(取り消しや再生が空振りしたことを黙って見逃さない)。
         """
-        body = self._find(body_id)
-        if body is None:
-            raise KeyError(f"no such body: {body_id!r}")
+        body = self.get_body(body_id)
         self.bodies.remove(body)
         if self._active_body_id == body_id:
             self._active_body_id = None
@@ -234,17 +232,13 @@ class Document:
         return self._find(self._active_body_id)
 
     def set_active_body(self, body_id: BodyId) -> None:
-        if self._find(body_id) is None:
-            raise KeyError(f"no such body: {body_id!r}")
+        self.get_body(body_id)
         self._active_body_id = body_id
 
     def is_editable(self, body_id: BodyId) -> bool:
         """編集verbを掛けてよいボディか。**"mesh" は False**(拒否の入口は
         `duocad.verbs._common.editable_body`。理由は `duocad/meshbody.py` のdocstring)。"""
-        body = self._find(body_id)
-        if body is None:
-            raise KeyError(f"no such body: {body_id!r}")
-        return body.kind == SOLID_KIND
+        return self.get_body(body_id).kind == SOLID_KIND
 
     def get_body(self, body_id: BodyId) -> Body:
         """IDでボディを引く。**無ければ KeyError**(黙ってNoneを返さない)。

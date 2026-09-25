@@ -260,10 +260,16 @@ Get-ChildItem scripts/smoke*.mjs | ForEach-Object {
 ```
 
 形状最適化まわりは `smoke-optimize.mjs` / `smoke-optimize-mode.mjs` / `smoke-optimize-debug.mjs`。
-STEPを読む smoke は `web/scripts/models.mjs` の `PC_CASE_STEP` が指すパスを使う。
+STEPを読む smoke は `web/scripts/models.mjs` の `PC_CASE_STEP` / `HANGER_BAR_STEP` が指すパスを使う。
+
+**骨格は全本共通**（`web/scripts/harness.mjs` の `runSmoke`）: 使い捨ての `--models-dir` でサーバを立て、
+ブラウザを開き、終わったら止めて temp を消す。既定ポートは本ごとに一意（`SMOKE_PORTS` の表）なので
+複数本を並列に回してよい。`--port` / `--http-port` / `--timeout` は全本が読む。
 
 既に立てているサーバへ繋ぎたいときだけ `--url http://127.0.0.1:8766/` を渡す
-（その場合スクリプトはサーバを立てず、止めもしない）。
+（その場合スクリプトはサーバを立てず、止めもしない）。**対応しているのは `smoke.mjs` /
+`smoke-features` / `smoke-files` / `smoke-regions` / `smoke-svg` / `smoke-toast` だけ**で、
+MCP の stdio が要る本に渡すと harness が断る（MCP が要る節は `smoke-files` / `smoke-regions` でも失敗になる）。
 
 ### 一括受入チェック（人間/AI ＋ 交互操作）
 
@@ -380,7 +386,7 @@ README に残すのはアーキテクチャ上の要点だけ:
 
 ### モジュールとimport境界
 
-**`duocad/` 配下で `OCP` を import してよいのはカーネル層の4本(`kernel.py` / `kernel_brep.py` / `kernel_meshing.py` / `mesh_geometry.py`)と `topopt/voxelize.py` だけ、
+**`duocad/` 配下で `OCP` を import してよいのはカーネル層の5本(`kernel.py` / `kernel_brep.py` / `kernel_meshing.py` / `kernel_sketch.py` / `mesh_geometry.py`)と `topopt/voxelize.py` だけ、
 `build123d` は `query.py` と `topopt/` の3本だけ。**
 `tests/test_boundaries.py` がソースを再帰的に静的走査して機械的に検査する（動的importも検出）。
 **verbがカーネルを直接叩き始めるのを防ぐ唯一の安全網。**
@@ -400,8 +406,9 @@ README に残すのはアーキテクチャ上の要点だけ:
 | `duocad/svg_import.py` | SVG → スケッチの図形（**パーサはbuild123dの推移依存で既に入っている** svgelements） | ✗ | ✗ |
 | `duocad/query.py` | 問い合わせ層のインタフェース | ✗ | **○ここだけ** |
 | `duocad/kernel.py` | OCCTを直接叩く層（テセレーションもここ） | **○** | ✗ |
-| `duocad/kernel_brep.py` | 同じカーネル層。生成CADのBRep保存・ブーリアン・最終ソリッドの幾何検査 | **○** | ✗ |
-| `duocad/mesh_geometry.py` | 同じカーネル層。三角形境界の接続検査と、向き・空洞を保ったCADソリッド化 | **○** | ✗ |
+| `duocad/kernel_brep.py` | 同じカーネル層。生成CADのBRep保存・ブーリアン・最終ソリッドの幾何検査と、箱・格子との共通体積(形状最適化の受入検査) | **○** | ✗ |
+| `duocad/mesh_geometry.py` | 同じカーネル層。三角形境界の接続検査と、向き・空洞を保ったCADソリッド化。位相の列挙と compound の定型(`subshapes` / `indexed_map` / `compound`)もここ | **○** | ✗ |
+| `duocad/kernel_sketch.py` | 同じカーネル層。スケッチ平面の枠(`face_frame` / `sketch_plane_frame` / `offset_plane_frame`)、図形種別ごとの辺と2D bbox(`_KERNEL_ENTITY_KIND_TABLE`)、閉領域の検出(`sketch_regions`)。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_meshing.py` | 同じカーネル層。OCCTの面分割を段階制御し、面分割の直前に境界折れ線の交差を検査して共有辺を再分割する(`tessellate` の実体) | **○** | ✗ |
 | `duocad/boundary_check.py` | 境界折れ線(pcurve の離散点列)の交差・接触・重なりの判定。固定εを使わず、確定しない組だけ整数演算 | ✗ | ✗ |
 | `duocad/mesh_intersections.py` | 三角形メッシュの自己交差(正当な共有辺・共有頂点の接触を除く)。最終成果物の検査 | ✗ | ✗ |
@@ -536,9 +543,10 @@ duocad/
   tests/                 pytest。README.md はモジュール単位のAPI契約リファレンス
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
-    scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）。共有部品は
-                         server.mjs（サーバの起動・停止）／browser.mjs（ブラウザ選択・起動）／
-                         mcp-client.mjs（MCPクライアント）／args.mjs／models.mjs（STEPのパス）
+    scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）と撮影（screenshot.mjs:
+                         空の文書とモデルを読んだ画面を --tag 付きで撮る。見た目の前後比較用）。共有部品は
+                         harness.mjs（骨格）／server.mjs（サーバの起動・停止）／browser.mjs（ブラウザ選択・起動）／
+                         pick.mjs（指す手）／mcp-client.mjs（MCPクライアント）／args.mjs／models.mjs（STEPのパス）
     dist/                ビルド成果物（**Pythonサーバが配信するのはこちら**・git管理外）
   .venv/                 Python 3.11（git管理外）
   pyproject.toml         依存はバージョン固定（ローカル専用なので上げなければ壊れない）

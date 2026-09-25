@@ -30,44 +30,17 @@
  * **サーバはこのスクリプトが自分で立てる**（`web/scripts/server.mjs`）。
  * 既に立っているものへ繋ぐときだけ `--url` を渡す。
  */
-import { findBrowser, launchBrowser } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { startServer } from './server.mjs'
-
-const options = parseArgs(process.argv.slice(2))
-const attachUrl = options.url ?? null
-const wsPort = options.port ?? '8805'
-const httpPort = options['http-port'] ?? '8806'
-const timeout = Number.parseInt(options.timeout ?? '120000', 10)
+import { assertNoAppErrors, openApp, typeInto } from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
 
 /** 出しても消えても構わない、存在しないパス（サーバが断ることだけが要る）。 */
 const MISSING_EXPORT_DIR = 'C:/nowhere/duocad-smoke-toast-does-not-exist.step'
 const MISSING_STEP = 'C:/nowhere/duocad-smoke-toast-does-not-exist-2.step'
 
-async function main() {
-  const executablePath = findBrowser()
-  console.log(`smoke-toast: ${executablePath}`)
-
-  const server = attachUrl === null ? await startServer({ wsPort, httpPort }) : null
-  const url = server?.url ?? attachUrl
-  console.log(`  server : ${url}${server === null ? ' (既に立っているサーバへ接続)' : ''}`)
-
-  const browser = await launchBrowser(executablePath)
-
-  try {
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-
-    await page.goto(url, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad && window.__duocad.ready), {
-      timeout,
-      polling: 100,
-    })
+runSmoke('smoke-toast', { attach: true }, async ({ browser, url, timeout }) => {
+  {
+    const { page, consoleErrors } = await openApp(browser, url, { timeout })
 
     /** 今出ている札（本文と回数）。**文言の正はDOM** —— 人間が見るのはこちらである。 */
     const toasts = async () =>
@@ -108,12 +81,7 @@ async function main() {
       // 無ければ先にボタンを押して起こす。書き出しは左サイドバーの常設の欄なので、
       // この分岐は素通りする。
       if ((await page.$(`#${inputId}`)) === null) await page.click(`#${buttonId}`)
-      await page.click(`#${inputId}`)
-      await page.keyboard.down('Control')
-      await page.keyboard.press('KeyA')
-      await page.keyboard.up('Control')
-      await page.keyboard.press('Backspace')
-      await page.type(`#${inputId}`, path, { delay: 10 })
+      await typeInto(page, `#${inputId}`, path, { delay: 10 })
       await page.click(`#${buttonId}`)
     }
 
@@ -309,20 +277,7 @@ async function main() {
     if (strayed.length > 0) fail(`エラーがステータスバーにも出ている: ${strayed.join(' | ')}`)
     ok('**一本化**: エラーはステータスバー(通知欄)へ1件も漏れていない')
 
-    if (consoleErrors.length > 0) {
-      fail(`ブラウザのコンソールにエラー: ${consoleErrors.slice(0, 3).join(' | ')}`)
-    }
-    ok('ブラウザのコンソールにエラーなし')
-
-    console.log('')
-    console.log('smoke-toast: PASS')
-  } finally {
-    await browser.close()
-    if (server !== null) await server.stop()
+    // わざと出させた3件(上で件数まで見た)以外は出ていないこと。
+    await assertNoAppErrors(page, consoleErrors, { expectCount: 3 })
   }
-}
-
-main().catch((error) => {
-  console.error(`smoke-toast: FAIL ${error.message}`)
-  process.exit(1)
 })

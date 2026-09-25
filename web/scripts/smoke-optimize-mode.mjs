@@ -31,20 +31,25 @@
  * 画面上で別々の画素になる)。**`--models-dir` に使い捨てディレクトリを渡す**
  * (リポジトリ直下の実 `models/` を触らない)。
  */
-import { mkdirSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { findBrowser, launchBrowser, frameAll, pressUndo } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
+import {
+  assertNoAppErrors,
+  frameAll,
+  openApp,
+  pressUndo,
+  sleep,
+  typeInto,
+  waitFrames,
+  waitOrFail,
+} from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import { addExtrudedRect } from './mcp-client.mjs'
+import { clickFace } from './pick.mjs'
+import { SCREENSHOTS_DIR } from './server.mjs'
 
-const options = parseArgs(process.argv.slice(2))
-const wsPort = options.port ?? '8955'
-const httpPort = options['http-port'] ?? '8956'
-const timeout = Number.parseInt(options.timeout ?? '60000', 10)
-const workdir = mkdtempSync(join(tmpdir(), 'duocad-optimize-mode-'))
-const screenshotDir = 'C:\\Users\\tm976\\mf\\duocad\\screenshots'
+const screenshotDir = SCREENSHOTS_DIR
 
 // `viewport.ts` の役割色(16進)。**このスクリプトが正の写しを持つと事故る**ので、
 // 値そのものは `viewport.ts` の定数と一致しているかを最後にひとつ確かめる
@@ -57,55 +62,25 @@ const COLOR = {
   fixture: 0x3f7fc2,
 }
 
-async function main() {
-  const executablePath = findBrowser()
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-  try {
-    await mcp.handshake('duocad-smoke-optimize-mode')
-
+runSmoke('smoke-optimize-mode', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout }) => {
+  {
     /** 板(領域を押し出してボディを作る)。離して置くので画面で別々の画素になる。 */
-    async function addBox(corner, size, distance) {
-      const sketch = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-      await mcp.callTool('add_rectangle', {
-        sketch_id: sketch.sketch_id,
-        corner,
-        width: size,
-        height: size,
-      })
-      await mcp.callTool('propose_selection', { refs: [{ sketch: sketch.sketch_id, index: 1 }] })
-      await mcp.callTool('commit_selection')
-      const extruded = await mcp.callTool('extrude', { distance, mode: 'new' })
-      await mcp.callTool('clear_selection')
-      return extruded.bodies[0].body_id
-    }
+    const addBox = async (corner, size, distance) =>
+      (await addExtrudedRect(mcp, { corner, width: size, height: size, distance })).bodyId
 
     const bodyA = await addBox([0, 0], 20, 20)
     const bodyB = await addBox([60, 0], 20, 20)
     ok(`2つの立方体を作った(A=${bodyA} / B=${bodyB})`)
 
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
+    const { page, consoleErrors } = await openApp(browser, url, {
+      timeout,
+      until: () => (window.__duocad?.parts ?? []).length >= 2,
     })
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
-    await page.waitForFunction(() => (window.__duocad?.parts ?? []).length >= 2, { timeout, polling: 100 })
     await frameAll(page)
-    await new Promise((resolve) => setTimeout(resolve, 200))
+    await sleep(200)
 
-    async function waitFor(check, what, args = []) {
-      try {
-        await page.waitForFunction(check, { timeout, polling: 50 }, ...args)
-      } catch {
-        fail(`${what}(タイムアウト)`)
-      }
-    }
+    const waitFor = (check, what, args = []) =>
+      waitOrFail(page, check, what, { args, timeout, polling: 50 })
 
     /** **画面から指せる面を1つ見つける**(`exclude` に載る添字は避ける)。 */
     async function pickAnyFace(bodyId, exclude = []) {
@@ -126,42 +101,6 @@ async function main() {
       return found
     }
 
-    /** その面を**押し直前に射影し直して**クリックする(コマンドが変わるとツールバーの高さが
-     *  動くので、画素は持ち越さない)。 */
-    async function clickFace(bodyId, faceIndex) {
-      const at = await page.evaluate(
-        (id, index) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectFace(id, index)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        bodyId,
-        faceIndex,
-      )
-      if (!at) fail(`ボディ ${bodyId} の面 ${faceIndex} が画面の中に無い`)
-      await page.mouse.click(at.x, at.y)
-    }
-
-    async function typeInto(selector, value) {
-      await page.click(selector)
-      await page.keyboard.down('Control')
-      await page.keyboard.press('KeyA')
-      await page.keyboard.up('Control')
-      await page.keyboard.press('Backspace')
-      await page.type(selector, String(value), { delay: 15 })
-    }
-
-    /** ホバーは描画ループ(`tick`)で解決するので、動かしたあと数フレーム待つ(`smoke-hover.mjs`と同じ)。 */
-    async function settle() {
-      await page.evaluate(
-        () =>
-          new Promise((resolve) => {
-            let left = 4
-            const step = () => (left-- <= 0 ? resolve() : requestAnimationFrame(step))
-            requestAnimationFrame(step)
-          }),
-      )
-    }
 
     /**
      * その面の色。**先にポインタを画面の外へ逃がす** —— ホバーは色相を変えず明度だけ足すので
@@ -171,7 +110,7 @@ async function main() {
      */
     async function faceColor(bodyId, faceIndex) {
       await page.mouse.move(2, 2)
-      await settle()
+      await waitFrames(page, 4)
       return page.evaluate((id, index) => window.__duocad.faceColor(id, index), bodyId, faceIndex)
     }
 
@@ -187,7 +126,7 @@ async function main() {
     await page.click('#set-preserve-bodies')
     await waitFor(() => window.__duocad.wantedKinds.includes('body'), '保持ソリッドのverbでボディ粒度にならない')
     const faceA_preserve = await pickAnyFace(bodyA)
-    await clickFace(bodyA, faceA_preserve)
+    await clickFace(page, bodyA, faceA_preserve)
     await waitFor(
       (id) => (window.__duocad.selection?.items ?? []).some((item) => item.kind === 'body' && item.body === id),
       '面をクリックしてもボディ(BodyRef)が選ばれない',
@@ -228,7 +167,7 @@ async function main() {
     ok(`[3] 保持ソリッドAが緑で見える(${preserveColor.toString(16)})`)
 
     const faceB_exclude = await pickAnyFace(bodyB)
-    await clickFace(bodyB, faceB_exclude)
+    await clickFace(page, bodyB, faceB_exclude)
     await waitFor(
       (id) => (window.__duocad.selection?.items ?? []).some((item) => item.kind === 'body' && item.body === id),
       'Bをクリックしても選ばれない',
@@ -259,7 +198,7 @@ async function main() {
     // 緑のまま」の検査が、拘束にした当の面(=保持の検査に使った面)を見てしまい、
     // 役割が面単位で効いているかどうかを実際には確かめないまま緑になる誤検査になる。
     const faceA_fixture = await pickAnyFace(bodyA, [faceA_preserve])
-    await clickFace(bodyA, faceA_fixture)
+    await clickFace(page, bodyA, faceA_fixture)
     await waitFor(
       (id, index) =>
         (window.__duocad.selection?.items ?? []).some(
@@ -294,7 +233,7 @@ async function main() {
     ok('[5] 拘束にした面以外は保持ソリッドの緑のまま(役割は面単位)')
 
     const faceA_load = await pickAnyFace(bodyA, [faceA_fixture])
-    await clickFace(bodyA, faceA_load)
+    await clickFace(page, bodyA, faceA_load)
     await waitFor(
       (id, index) =>
         (window.__duocad.selection?.items ?? []).some(
@@ -304,7 +243,7 @@ async function main() {
       [bodyA, faceA_load],
     )
     await page.click('#load-direction-normal')
-    await typeInto('#load-magnitude', 250)
+    await typeInto(page, '#load-magnitude', 250)
     await page.keyboard.press('Enter')
     await waitFor(
       (id, index) =>
@@ -418,7 +357,7 @@ async function main() {
     console.log('\n[8] スクリーンショット')
     await page.evaluate(() => document.activeElement?.blur?.())
     await frameAll(page)
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    await sleep(300)
     mkdirSync(screenshotDir, { recursive: true })
     const screenshotPath = join(screenshotDir, 'optimize-mode.png')
     await page.screenshot({ path: screenshotPath })
@@ -446,7 +385,7 @@ async function main() {
     )
     // 唯一選ばれているものを再クリック = 解除(`editSelection`の「置き換えで1件だけ選んで
     // いれば外す」規則。`App.svelte`の`editSelection`docstring)。
-    await clickFace(bodyA, faceA_preserve)
+    await clickFace(page, bodyA, faceA_preserve)
     await waitFor(
       () => (window.__duocad.selection?.items ?? []).length === 0,
       '再クリックしても選択が空にならない',
@@ -476,7 +415,7 @@ async function main() {
     // A/Bのために合わせたカメラのままだと、離して置いたCが画角の外で `pickAnyFace` が
     // 使える面を1つも見つけられない。
     await frameAll(page)
-    await new Promise((resolve) => setTimeout(resolve, 200))
+    await sleep(200)
     // **`d#`は登録順の連番**(`duocad/parameters.py`)なので、Cの作成前後の差集合が
     // Cの角(x, y)・幅・高さ・傾きの5パラメータ(この順。`duocad/sketch.py` の
     // `add_rectangle`)になる。ハードコードしない —— 直前の検査がパラメータを
@@ -563,22 +502,6 @@ async function main() {
     // **「新しいエラーが1件も出ていない」ではない** —— 10節でわざと1件トーストを出させている
     // (再通知の検査そのもの)。ここで見るのは`__duocad.errors`が想定外の追加をしていないこと
     // (10節までの想定件数と一致すること)と、コンソールに素通ししたエラーが無いこと。
-    const finalErrorCount = await page.evaluate(() => window.__duocad.errors.length)
-    if (finalErrorCount !== errorsAfterFingerprint) {
-      fail(
-        `想定していないエラーが追加で出た(想定=${errorsAfterFingerprint} / 実際=${finalErrorCount}): ` +
-          `${JSON.stringify(await page.evaluate(() => window.__duocad.errors))}`,
-      )
-    }
-    if (consoleErrors.length > 0) fail(`コンソールにエラー: ${consoleErrors.join(' / ')}`)
-    ok(`走行中のトーストは想定どおり${finalErrorCount}件だけ(10節の再通知検査ぶん)。コンソールにエラーなし`)
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
+    await assertNoAppErrors(page, consoleErrors, { expectCount: errorsAfterFingerprint })
   }
-}
-
-main().catch((error) => {
-  console.error(`\nsmoke-optimize-mode: FAIL ${error.message ?? error}`)
-  process.exitCode = 1
 })

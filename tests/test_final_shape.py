@@ -5,6 +5,8 @@ import json
 import struct
 
 import numpy as np
+
+from duocad.mesh_geometry import weld_exact
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.gp import gp_Pnt
 import pytest
@@ -112,8 +114,7 @@ def test_stl_roundtrip(tmp_path, binary):
 def test_point_touch_is_nonmanifold():
     v, f = cube()
     triangles = np.vstack([v[f],(v+1)[f]])
-    vertices, inverse = np.unique(triangles.reshape(-1,3), axis=0, return_inverse=True)
-    result = run(vertices,inverse.reshape(-1,3))
+    result = run(*weld_exact(triangles))
     assert result['checks']['watertight']['status'] == 'fail', result
     assert result['mesh']['nonmanifold_vertices'] == 1
 

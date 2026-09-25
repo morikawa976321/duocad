@@ -12,7 +12,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import math
 
@@ -23,7 +22,8 @@ from duocad import kernel, query
 from duocad.document import Body
 from duocad.measure import PARALLEL_SIN_TOLERANCE, Line, Plane, Point, between
 from duocad.mcp_server import DocumentTools, McpServer
-from duocad.server import Server, Session
+from duocad.server import Session
+from session_support import browser
 
 BOX_X, BOX_Y, BOX_Z = 30.0, 30.0, 40.0
 
@@ -288,30 +288,11 @@ def test_the_mcp_tool_returns_the_same_between_as_the_session(session: Session):
     assert payload["between"]["distance"] == pytest.approx(BOX_Z)
 
 
-class FakeConnection:
-    """`Server` が使うのは `send` だけ(`tests/test_vertex_pick.py` と同じ形)。"""
-
-    def __init__(self) -> None:
-        self.payloads: list = []
-
-    async def send(self, raw: str) -> None:
-        self.payloads.append(json.loads(raw))
-
-
 def test_the_websocket_answers_only_the_asking_connection_with_the_client_op(session: Session):
     shape = _shape(session, "box")
     select(session, [ref("vertex", vertex_at(shape, (0, 0, 0))), ref("vertex", vertex_at(shape, (30, 0, 0)))])
 
-    async def scenario():
-        server = Server(session)
-        server.bind_loop(asyncio.get_running_loop())
-        clients = [FakeConnection(), FakeConnection()]
-        for client in clients:
-            server.clients.add(client)
-        await server._dispatch(clients[0], json.dumps({"cmd": "measure", "client_op": 77}))
-        return clients
-
-    clients = asyncio.run(scenario())
+    _, clients = browser(session, lambda send: send({"cmd": "measure", "client_op": 77}), initial_push=False)
     answer = clients[0].payloads[-1]
     assert answer["type"] == "measure" and answer["client_op"] == 77
     assert answer["between"]["distance"] == pytest.approx(BOX_X)

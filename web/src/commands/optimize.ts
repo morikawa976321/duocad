@@ -22,7 +22,10 @@
  * 宣言すると `CommandHost` が `onWants(['body'])` を出すので、`App.svelte` の `onPick` は
  * それを見て面ではなくボディ全体を選択へ足す。
  */
-import type { CommandDef } from './command'
+import type { BuildResult, CommandDef } from './command'
+
+/** **対象はサーバへ送らない**(コアが確定選択から取る。`duocad-target-set-taken-only-from-selection`)。 */
+const sendNothing = (): BuildResult => ({ ok: true, args: {} })
 
 /** 荷重の向きの選択肢。**`down` はUI専用の言い回し**で、送るのは `[0, 0, -1]`
  *  (`duocad/optimize.py` のdocstring「世界軸は vector で表す」に合わせ、
@@ -56,10 +59,7 @@ export const SET_PRESERVE_BODIES: CommandDef = {
       max: null,
     },
   ],
-  build() {
-    // **対象はサーバへ送らない**(コアが確定選択から取る。`duocad-target-set-taken-only-from-selection`)。
-    return { ok: true, args: {} }
-  },
+  build: sendNothing,
 }
 
 /** **除外ソリッド**を決める。`SET_PRESERVE_BODIES` と対(役割が違うだけ)。 */
@@ -79,9 +79,7 @@ export const SET_EXCLUDE_BODIES: CommandDef = {
       max: null,
     },
   ],
-  build() {
-    return { ok: true, args: {} }
-  },
+  build: sendNothing,
 }
 
 /** **拘束面**を決める。howは無い(面を選ぶだけ)。 */
@@ -101,9 +99,7 @@ export const SET_FIXTURES: CommandDef = {
       max: null,
     },
   ],
-  build() {
-    return { ok: true, args: {} }
-  },
+  build: sendNothing,
 }
 
 /**
@@ -142,7 +138,6 @@ export const SET_LOADS: CommandDef = {
       label: '大きさ',
       unit: 'N',
       inputId: 'load-magnitude',
-      placeholder: 'N',
       // **AIが勝手に決めてよい数ではない**(`duocad/catalog.py` の `dimension` の注)。
       // 0以下は「荷重が無い」を面の非選択で表す既定の外にあるので弾く。
       reject: (value) => (value > 0 ? null : '大きさは0より大きい値(N)'),
@@ -176,9 +171,7 @@ export const CLEAR_LOADS: CommandDef = {
       max: null,
     },
   ],
-  build() {
-    return { ok: true, args: {} }
-  },
+  build: sendNothing,
 }
 
 /**

@@ -345,10 +345,10 @@ u_real[mm]      = u_nd     * (F / F_nd) * (E_nd / E) / L
 
 **応力はEに依存しない**(σ = E εでEが落ちる。したがって安全率もEで動かない——
 `youngs_modulus_mpa`が効くのは変位の側だけ。検査3が「EとFを同時に10倍→応力はちょうど10倍」で
-押さえる)。剛性は要素サイズに比例するので変位はLに反比例する。`F_nd`は
-`stress.UnitScale.for_model`が`Model.f`から読む(手で書くと定数倍ずれる)。
+押さえる)。剛性は要素サイズに比例するので変位はLに反比例する。
 **探索(`acceptance.safety_check`)は荷重を実単位[N]のまま解く**ので`F / F_nd = 1`
-(`UnitScale(..., load_n=1.0, solved_load=1.0)`)で、要素サイズだけを換算する。
+(`UnitScale(..., load_n=1.0, solved_load=1.0)`)で、要素サイズだけを換算する。無次元の荷重で解いた系に
+実荷重を割り当てる`stress.UnitScale.for_model`(`F_nd`を`Model.f`の総量から読む)は検査専用。
 
 ### 代表応力の規則(黙って max にしない)
 
@@ -393,8 +393,8 @@ u_real[mm]      = u_nd     * (F / F_nd) * (E_nd / E) / L
 材料側の低減、安全率は設計側の余裕。片方に畳み込むと造形法を変えたときどちらを動かせばよいか
 分からなくなる)。
 
-`Conditions.load_n`[N](荷重の大きさの総和)は探索でも応力の換算でも参照されない(荷重は面ごとの
-力ベクトル`forces`としてNのまま節点へ配られる)。`fem.reaction_forces`は荷重釣り合いの確認だけに使う——**`fraction`の合計は
+荷重の大きさの総和は条件に持たない(荷重は面ごとの力ベクトル`forces`としてNのまま節点へ配られる。
+`optimize_run.build_conditions`は「全部0」の門にだけ総和を見る)。`fem.reaction_forces`は荷重釣り合いの確認だけに使う——**`fraction`の合計は
 1にならない**(取付点どうしが引き合っていれば打ち消し合うぶんが乗る)ことに注意。
 
 ## 線形解法とCPU並列化

@@ -160,7 +160,7 @@
     {#if settingsOpen}
       <div class="ai-settings">
         {#if canPickProvider}
-          <label>
+          <label class="field-row">
             プロバイダ
             <!-- `bind:value` にしない —— 束縛の更新と `onchange` の順序に依存せず、
                  切り替えを1か所(`selectProvider`)で扱うため。
@@ -176,14 +176,14 @@
             </select>
           </label>
         {/if}
-        <label>
+        <label class="field-row">
           モデル
           <input id="ai-model" type="text" placeholder="既定値" bind:value={modelDraft} />
         </label>
         <!-- **エンドポイントは常に出す** —— 今あるプロバイダは鍵を持たないので、
              どこを指しても飛ぶのはキーの無いリクエストだけである。鍵を持つプロバイダを
              足すときは、ここと `Server._ai_configure` の両方に制限を書き戻すこと。 -->
-        <label>
+        <label class="field-row">
           エンドポイント
           <input
             id="ai-base-url"
@@ -271,24 +271,6 @@
     flex: 0 0 auto;
   }
 
-  /* BrowserPanel.svelteの `.caret` と同じ見た目(新しい畳み方を発明しない)。 */
-  .caret {
-    padding: 0 4px;
-    border: none;
-    background: none;
-    color: var(--dim);
-    line-height: 1;
-  }
-
-  .caret:not(:disabled):hover {
-    color: var(--accent);
-    border: none;
-  }
-
-  .spacer {
-    flex: 1 1 auto;
-  }
-
   .badge.running {
     font-size: var(--fs-meta);
     padding: 1px 6px;
@@ -304,18 +286,6 @@
     padding: 6px 0;
     border-bottom: 1px solid var(--line-soft);
     flex: 0 0 auto;
-  }
-
-  .ai-settings label {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 6px;
-    color: var(--dim);
-    /* **ラベルは折らない。** 折れると2行目が1文字だけ残って行の高さが跳ねる
-       (「エンドポイント」が「エンドポイン/ト」になった)。詰めるのは欄側の仕事で、
-       下の `min-width: 0` がそれを許している。 */
-    white-space: nowrap;
   }
 
   /* **幅は残りに合わせる**。「エンドポイント」の行が 300px のサイドバーから
@@ -360,7 +330,7 @@
   }
 
   .line.tool-fail {
-    color: #e08a8a;
+    color: var(--bad);
   }
 
   .line.result {
@@ -368,7 +338,7 @@
   }
 
   .line.error {
-    color: #e08a8a;
+    color: var(--bad);
   }
 
   .ai-input {
@@ -382,9 +352,5 @@
     flex: 1 1 auto;
     width: auto;
     text-align: left;
-  }
-
-  .dim {
-    color: var(--dim);
   }
 </style>

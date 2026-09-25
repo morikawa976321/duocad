@@ -37,70 +37,33 @@
  * サーバはこのスクリプトが空の文書で起動し、板はMCP経由で作る。
  * **`--models-dir` に使い捨てディレクトリを渡す**(リポジトリ直下の実 `models/` を触らない)。
  */
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { findBrowser, launchBrowser, frameAll, withoutBrowserPanel } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
+import { assertNoAppErrors, frameAll, openApp, waitFrames, withoutBrowserPanel } from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import { addExtrudedRect } from './mcp-client.mjs'
+import { sketchPointAt } from './pick.mjs'
 
-const options = parseArgs(process.argv.slice(2))
-const wsPort = options.port ?? '8975'
-const httpPort = options['http-port'] ?? '8976'
-const timeout = 60000
-const workdir = mkdtempSync(join(tmpdir(), 'duocad-hover-'))
-
-/** ホバーは描画ループ(`tick`)で解決するので、動かしたあと数フレーム待つ。 */
-async function settle(page) {
-  await page.evaluate(
-    () =>
-      new Promise((resolve) => {
-        let left = 4
-        const step = () => (left-- <= 0 ? resolve() : requestAnimationFrame(step))
-        requestAnimationFrame(step)
-      }),
-  )
-}
-
-async function main() {
-  const executablePath = findBrowser()
-  const server = await startServer({ wsPort, httpPort, modelsDir: workdir })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-  try {
-    await mcp.handshake('duocad-smoke-hover')
-    const sketch = await mcp.callTool('sketch_create', { base_plane: 'XY' })
-    await mcp.callTool('add_rectangle', {
-      sketch_id: sketch.sketch_id,
+runSmoke('smoke-hover', { timeout: 60000, mcp: true }, async ({ mcp, browser, url, timeout }) => {
+  {
+    const { sketchId, bodyId } = await addExtrudedRect(mcp, {
       corner: [0, 0],
       width: 40,
       height: 30,
+      distance: 20,
+      mode: 'join',
+      clear: false,
     })
-    await mcp.callTool('propose_selection', { refs: [{ sketch: sketch.sketch_id, index: 1 }] })
-    await mcp.callTool('commit_selection')
-    await mcp.callTool('extrude', { distance: 20, mode: 'join' })
-    const bodyId = (await mcp.callTool('describe_document')).bodies[0].body_id
     ok(`板を作った: ${bodyId}`)
     // **押し出しの後に足す**(先に足すと `index:1` の領域選択が矩形と食い違う)。
     // 同じスケッチへの追加なので押し出し済みのBodyには影響しない —— 6以降の
     // スケッチ図形ホバー・スナップの検査が使う円。
-    await mcp.callTool('add_circle', { sketch_id: sketch.sketch_id, center: [60, 10], radius: 10 })
+    await mcp.callTool('add_circle', { sketch_id: sketchId, center: [60, 10], radius: 10 })
     // 検証10が使う**傾いた長方形**。他の図形の輪郭から十分離す(近すぎるとスナップの
     // 当たり判定が先に別の図形を拾う)。
     const TILTED = { corner: [85, 0], width: 24, height: 10, angle: 35 }
-    await mcp.callTool('add_rectangle', { sketch_id: sketch.sketch_id, ...TILTED })
+    await mcp.callTool('add_rectangle', { sketch_id: sketchId, ...TILTED })
 
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad?.ready), { timeout, polling: 100 })
+    const { page, consoleErrors } = await openApp(browser, url, { timeout })
     await frameAll(page)
 
     // **使い回さず、使う直前に測り直す**(smoke.mjsの`locateFace`と同じ流儀)。
@@ -132,7 +95,7 @@ async function main() {
       if (!found) fail('画面上で指せる面が1つも無い')
       const box = await viewportBox()
       await page.mouse.move(box.left + found.x, box.top + found.y)
-      await settle(page)
+      await waitFrames(page, 4)
       const hovered = await page.evaluate(() => window.__duocad.hoveredRef())
       if (hovered === null) fail('hoveredRef が無い(フックが出ていない)')
       if (hovered.face === null) fail(`面をホバーしたのに強調されない: ${JSON.stringify(hovered)}`)
@@ -170,7 +133,7 @@ async function main() {
 
     // ---------------------------------------------------------------- 2. 外へ出たら消える
     await page.mouse.move(8, 8) // ビューポートの外(上部バー)へ抜ける
-    await settle(page)
+    await waitFrames(page, 4)
     const afterLeave = await page.evaluate(() => window.__duocad.hoveredRef())
     if (afterLeave.face !== null || afterLeave.color !== null) {
       fail(`ビューポートを出たのに強調が残った: ${JSON.stringify(afterLeave)}`)
@@ -181,7 +144,7 @@ async function main() {
     await withoutBrowserPanel(page, async () => {
       const box = await viewportBox()
       await page.mouse.move(box.left + spot.x, box.top + spot.y)
-      await settle(page)
+      await waitFrames(page, 4)
       const state = await page.evaluate(() => ({
         hovered: window.__duocad.hoveredRef(),
         colors: window.__duocad.highlightColors(),
@@ -220,7 +183,7 @@ async function main() {
       if (!found) fail('丸めるを起動したのに、画面上で指せる辺が1本も無い')
       const box = await viewportBox() // **#fillet起動後の高さで測る**(起動前の`box`は使い回さない)
       await page.mouse.move(box.left + found.x, box.top + found.y)
-      await settle(page)
+      await waitFrames(page, 4)
       const hovered = await page.evaluate(() => window.__duocad.hoveredRef())
       if (hovered.edge === null) {
         fail(`辺をホバーしたのに辺が返らない: ${JSON.stringify(hovered)}`)
@@ -270,7 +233,7 @@ async function main() {
       // 領域ではなく別の面を掴んだ)。
       const box = await viewportBox()
       await page.mouse.move(box.left + region.x, box.top + region.y)
-      await settle(page)
+      await waitFrames(page, 4)
       const hovered = await page.evaluate(() => window.__duocad.hoveredRef())
       if (hovered.region === null || hovered.region.index !== region.index) {
         fail(`領域をホバーしたのに領域が返らない: ${JSON.stringify(hovered)}`)
@@ -283,7 +246,7 @@ async function main() {
         timeout,
         polling: 50,
       })
-      await settle(page)
+      await waitFrames(page, 4)
       const after = await page.evaluate(() => window.__duocad.hoveredRef())
       if (after.region !== null) {
         fail(
@@ -320,12 +283,12 @@ async function main() {
     await page.waitForFunction(
       (id) => window.__duocad.activeSketch === id,
       { timeout, polling: 50 },
-      sketch.sketch_id,
+      sketchId,
     )
     // **カメラの再フレーム(`lookAtSketch`)が数フレーム遅れて反映される**(実測)。
     // `activeSketch` が変わった直後に射影すると、まだ前のモードの視点のままで
     // 図形が画面の外に出ていることがある。
-    await settle(page)
+    await waitFrames(page, 4)
     ok('板を作ったスケッチへ入り直した(部品は隠した。円も1つ足してある)')
 
     /**
@@ -349,22 +312,8 @@ async function main() {
       })
     }
 
-    /**
-     * スケッチ平面の (u,v) の画面座標(ページ絶対)。無ければ null。
-     * **`withoutBrowserPanel` の中でだけ呼ぶこと** —— 覆われた画素は逃げ場が無い
-     * (`browser.mjs` の `withoutBrowserPanel` docstring参照)。
-     */
-    async function sketchScreenPoint(u, v) {
-      return page.evaluate(
-        (uu, vv) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectSketchPoint(uu, vv)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        u,
-        v,
-      )
-    }
+    // スケッチ平面の点の画面座標(`sketchPointAt`)は **`withoutBrowserPanel` の中でだけ使う** ——
+    // 覆われた画素は逃げ場が無い(`browser.mjs` の `withoutBrowserPanel` docstring参照)。
 
     const entitiesBeforeDrawing = await activeSketchEntities()
     const rectangle = entitiesBeforeDrawing.find((item) => item.kind === 'rectangle')
@@ -376,10 +325,10 @@ async function main() {
     // ------------------------------------------------- 6a. 図形の線: 予告と結果の一致
     await withoutBrowserPanel(page, async () => {
       const mid = { u: rectangle.params.x + rectangle.params.width / 2, v: rectangle.params.y }
-      const at = await sketchScreenPoint(mid.u, mid.v)
+      const at = await sketchPointAt(page, mid.u, mid.v)
       if (!at) fail(`矩形の辺の中点が画面上で指せない: ${JSON.stringify(mid)}`)
       await page.mouse.move(at.x, at.y)
-      await settle(page)
+      await waitFrames(page, 4)
       const hovered = await page.evaluate(() => window.__duocad.hoveredRef())
       if (hovered.sketchEntity === null) {
         fail(`矩形の辺をホバーしたのに強調されない: ${JSON.stringify(hovered)}`)
@@ -406,10 +355,10 @@ async function main() {
 
     // ------------------------------------------------- 6b. 点マーカー: 点だけが光る
     await withoutBrowserPanel(page, async () => {
-      const at = await sketchScreenPoint(rectangle.params.x, rectangle.params.y)
+      const at = await sketchPointAt(page, rectangle.params.x, rectangle.params.y)
       if (!at) fail('矩形の頂点マーカーが画面上で指せない')
       await page.mouse.move(at.x, at.y)
-      await settle(page)
+      await waitFrames(page, 4)
       const hovered = await page.evaluate(() => window.__duocad.hoveredRef())
       if (hovered.sketchEntity === null || hovered.sketchEntity.point === null) {
         fail(`頂点マーカーをホバーしたのに点として返らない: ${JSON.stringify(hovered)}`)
@@ -436,7 +385,7 @@ async function main() {
 
     // ------------------------------------------------- 6c. ビューポートの外へ出たら消える
     await page.mouse.move(8, 8)
-    await settle(page)
+    await waitFrames(page, 4)
     const afterLeaveSketch = await page.evaluate(() => window.__duocad.hoveredRef())
     if (afterLeaveSketch.sketchEntity !== null) {
       fail(`ビューポートを出たのにスケッチの強調が残った: ${JSON.stringify(afterLeaveSketch)}`)
@@ -450,12 +399,12 @@ async function main() {
     // **わざと格子から外した画素を狙う**(ちょうど交点を叩くと丸めの有無を区別できない)。
     await page.click('#sketch-line')
     await withoutBrowserPanel(page, async () => {
-      const start = await sketchScreenPoint(73.4, 5.35)
+      const start = await sketchPointAt(page, 73.4, 5.35)
       if (!start) fail('グリッドスナップ検査: 始点用の空き地が画面上で指せない')
       // **クリックする前に、幽霊(hoverPoint)が同じ丸めを見せているかを確かめる**
       // (確定結果だけ丸めて幽霊がずれると、ゴムひもの端が飛んで見える)。
       await page.mouse.move(start.x, start.y)
-      await settle(page)
+      await waitFrames(page, 4)
       // **スプレッドで写す**(Svelte 5 proxy対策。`activeSketchEntities` と同じ理由)。
       const ghost = await page.evaluate(() => {
         const point = window.__duocad.hoverPoint
@@ -466,7 +415,7 @@ async function main() {
       }
       ok(`幽霊も1mmグリッドへ丸まっている(狙い (73.4, 5.35) → 幽霊 (${ghost[0]}, ${ghost[1]}))`)
       await page.mouse.click(start.x, start.y)
-      const end = await sketchScreenPoint(75.6, 27.8)
+      const end = await sketchPointAt(page, 75.6, 27.8)
       if (!end) fail('グリッドスナップ検査: 終点用の空き地が画面上で指せない')
       await page.mouse.click(end.x, end.y)
     })
@@ -504,12 +453,12 @@ async function main() {
     // 生の座標のままなら頂点の値とは一致しないはずで、一致すればスナップが効いた証拠になる。
     await page.click('#sketch-line')
     await withoutBrowserPanel(page, async () => {
-      const anchor = await sketchScreenPoint(rectangle.params.x, rectangle.params.y)
+      const anchor = await sketchPointAt(page, rectangle.params.x, rectangle.params.y)
       if (!anchor) fail('スナップ検査: 矩形の頂点が画面上で指せない')
       await page.mouse.click(anchor.x + 2, anchor.y + 2)
       // **矩形と円の間の隙間**(x=45)。`frameAll`/`lookAtSketch` が写す範囲の外に
       // 出ないよう、既存図形の外接矩形の中に収める。
-      const far = await sketchScreenPoint(45, 15)
+      const far = await sketchPointAt(page, 45, 15)
       if (!far) fail('スナップ検査: 終点用の逃げ場所が画面上で指せない')
       await page.mouse.click(far.x, far.y)
     })
@@ -543,12 +492,12 @@ async function main() {
     await page.click('#sketch-line')
     await withoutBrowserPanel(page, async () => {
       const boundary = { u: circle.params.cx + circle.params.radius, v: circle.params.cy }
-      const anchor = await sketchScreenPoint(boundary.u, boundary.v)
+      const anchor = await sketchPointAt(page, boundary.u, boundary.v)
       if (!anchor) fail('スナップ検査: 円周上の点が画面上で指せない')
       // **斜めにずらす**(カメラの向きに関わらず、円の接線と厳密には重ならない方向にする)。
       await page.mouse.click(anchor.x + 3, anchor.y + 3)
       // 検証8が置いた点(45,15)とは別の隙間の点にする(2本の線分の的が重ならないように)。
-      const far = await sketchScreenPoint(45, 25)
+      const far = await sketchPointAt(page, 45, 25)
       if (!far) fail('スナップ検査: 終点用の逃げ場所が画面上で指せない')
       await page.mouse.click(far.x, far.y)
     })
@@ -596,13 +545,13 @@ async function main() {
     await page.click('#sketch-line')
     await withoutBrowserPanel(page, async () => {
       // **辺の中ほど**を狙う(隅に寄せると点マーカーの側が先に取られる)。
-      const anchor = await sketchScreenPoint(
+      const anchor = await sketchPointAt(page, 
         (edgeStart[0] + edgeEnd[0]) / 2,
         (edgeStart[1] + edgeEnd[1]) / 2,
       )
       if (!anchor) fail('スナップ検査: 傾いた長方形の辺の中点が画面上で指せない')
       await page.mouse.click(anchor.x + 3, anchor.y - 3)
-      const far = await sketchScreenPoint(95, 35)
+      const far = await sketchPointAt(page, 95, 35)
       if (!far) fail('スナップ検査: 傾いた長方形用の逃げ場所が画面上で指せない')
       await page.mouse.click(far.x, far.y)
     })
@@ -639,16 +588,6 @@ async function main() {
         `(辺からの距離 ${offEdge.toExponential(1)}mm)`,
     )
 
-    if (consoleErrors.length > 0) fail(`ブラウザにエラーが出た: ${consoleErrors.join(' / ')}`)
-    ok('コンソールにエラーなし')
-    console.log('\nsmoke-hover: PASS')
-  } finally {
-    if (browser) await browser.close()
-    await server.stop()
+    await assertNoAppErrors(page, consoleErrors)
   }
-}
-
-main().catch((error) => {
-  console.error(`\nsmoke-hover: FAIL ${error.message ?? error}`)
-  process.exitCode = 1
 })

@@ -8,12 +8,11 @@ import pytest
 
 from duocad import query
 from duocad.document import Document
-from duocad.oplog import OpLog
 from duocad.parameters import parameter_of, set_parameter
 from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, add_rectangle, get_sketch, sketch_create
 from duocad.verbs import extrude, pattern_rectangular
-from document_support import drill_all, hole_axes
+from document_support import drill_all, hole_axes, replay_through_json
 
 PLATE_WIDTH = 40.0
 PLATE_HEIGHT = 30.0
@@ -279,9 +278,7 @@ def test_pattern_survives_save_load_and_replay():
     expected_volume = query.volume(document.active_body().shape)
     expected_axes = hole_axes(document.active_body().shape)
 
-    replayed = Document()
-    replayed.log = OpLog.from_json(document.log.to_json())
-    replayed.log.replay(replayed)
+    replayed = replay_through_json(document)
 
     body = replayed.active_body()
     assert body is not None

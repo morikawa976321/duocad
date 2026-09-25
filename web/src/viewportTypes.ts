@@ -81,11 +81,22 @@ export interface OptimizeLoadVisual extends FaceRef {
  * 契約の正は `duocad/optimize_run.py` の `_DebugSink`。**製品の既定の画面には出ない** ——
  * `setOptimizeDebug(null)`(既定)のあいだ、ここのオブジェクトは1つも生まれない。
  *
- * 座標は**ワールドmm**。要素 (i,j,k) の中心は `origin + spacing*(i+0.5, j+0.5, k+0.5)`、
- * その角の節点 (i,j,k) は `origin + spacing*(i,j,k)`(セル中心の規約。
- * `duocad/topopt/mesh.py:169`)。**サーバ側で足し引きしていない**ので、ここで足す。
+ * 座標は**ワールドmm**。要素の中心・角の節点の位置(セル中心の規約)は `optimizeDebug.ts` の
+ * `buildDebugVoxels` が唯一の変換点(サーバ側は素の添字を送る)。
  */
 export type { OptimizeDebugGrid }
+
+/** 実機検査フック(`optimizeDebugCounts`)が読む、デバッグ表示の数。 */
+export interface OptimizeDebugCounts {
+  space: number
+  rho: number
+  fixed: number
+  load: number
+  spaceStride: number
+  rhoStride: number
+  anchorsDepthTest: boolean | null
+  hiddenBodyId: string | null
+}
 
 /** 立方体で描く要素の集合。`elements` はC順の通し添字 `i*(ny*nz) + j*nz + k`。 */
 export interface OptimizeDebugVoxels {
@@ -498,16 +509,7 @@ export interface Viewport {
    * 切って最前面に描く決まりで、これを落とすと「見えているつもりで見えていない」になる。
    * 目視では気づけないので `false` であることを実機検査が確かめる。
    */
-  optimizeDebugCounts(): {
-    space: number
-    rho: number
-    fixed: number
-    load: number
-    spaceStride: number
-    rhoStride: number
-    anchorsDepthTest: boolean | null
-    hiddenBodyId: string | null
-  }
+  optimizeDebugCounts(): OptimizeDebugCounts
   // ------------------------------------------------------------------ D: 辺
   /**
    * 辺の折れ線を出す(`bodyId` に null を渡すと消える)。**出している間だけ辺を指せる**。
@@ -829,7 +831,7 @@ export interface Viewport {
    * 種類の不具合で、画面の見た目からは分からない。
    *
    * `near`/`far` も返す。こちらも実機検査の穴で、文書の状態ではないので
-   * コアへは何も飛ばさない(`App.svelte` の `window.__duocad` と同じ方針)。
+   * コアへは何も飛ばさない(`testHooks.svelte.ts` の `window.__duocad` と同じ方針)。
    */
   cameraPose(): {
     position: [number, number, number]

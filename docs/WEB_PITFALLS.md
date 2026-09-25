@@ -23,7 +23,8 @@
   落ちることを確かめる変異検査で発覚。
 - **シーンから除去すべきオブジェクトの配列と、ピック判定に要る配列を兼用しない。** 面の境界線（`LineSegments`）が
   どの配列にも入っておらず `root.add` されたまま二度と `remove` されなかった（ゴースト線＋リーク）。
-  1つの論理単位が複数のオブジェクトを持つなら除去専用の `sceneObjects` を持ち、`add()` するたび必ず push する。
+  1つの論理単位が複数のオブジェクトを持つなら除去専用の束を持つ —— `web/src/sceneBatch.ts` の `createBatch(parent)` は
+  `add()` が親へ足すのと控えるのを同時に行うので、push 忘れが構造的に起きない（ピック用の配列は `add()` の戻り値を別に push する）。
   cursor-agent の QA レビューで発覚（動作はするが静かにリークする種類）。
 - **`ShaderMaterial` は必ず `#version 300 es` が付く**（`RawShaderMaterial` でなければ）。GLSL1 流儀で書いてよく、
   `gl_FragDepth` / `fwidth` / `inverse` が使える。組み込み材質と同じ見え方にするにはフラグメント末尾に
@@ -52,7 +53,7 @@
 - **`$state` のオブジェクト・配列を `page.evaluate` の戻り値にすると中身が欠ける**（Proxy が CDP のディープシリアライズに
   乗らない）。配列は `{}`、ネストしたプロキシはそのプロパティだけ `{}`、新しいプレーンオブジェクトに包んでも駄目。
   **例外も警告も出ず**、`Math.abs(undefined - 8) > 0.05` は `NaN > 0.05 === false` で素通りする。
-  第一選択は `$state.snapshot()`（ページ側の hook で包む。`App.svelte` の `__duocad`）。`JSON.stringify` を挟んで
+  第一選択は `$state.snapshot()`（ページ側の hook で包む。`web/src/testHooks.svelte.ts` の `__duocad`）。`JSON.stringify` を挟んで
   文字列で返す・スプレッドで素の配列にする・primitive だけ返す、でもよいが落とし忘れが起きる。
   **既存の検査が `JSON.stringify` を挟んでいたら様式ではなく必要。**
 - **条件付きレンダリングは DOM を消すが状態は消さない**（AI パネルのエンドポイント欄。[AI_INTEGRATION.md](AI_INTEGRATION.md)）。

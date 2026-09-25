@@ -1,28 +1,25 @@
 """製品入口から診断記録を作り、単一導出・全候補の塊一致・途中表面の再現・最終JSON/STLの一致を検査する。"""
-import json
 from pathlib import Path
 
 import numpy as np
 import _bootstrap  # noqa: F401
+from _documents import open_session
 import check_optimize_wiring as wiring
-from duocad.session import Session
 from duocad.topopt import trace, design_space, mesh
 from check_final_shape import read_stl
 
 
 def verify_archive(path):
     path=Path(path)
-    events=[json.loads(line) for line in (path/'events.jsonl').read_text(encoding='utf-8').splitlines()]
-    snapshots=[e for e in events if e['kind']=='snapshot']
-    def records(name):
-        return [trace.load_snapshot(path/e['file']) for e in snapshots if e['name']==name]
-    manifest=json.loads((path/'manifest.json').read_text(encoding='utf-8'))
-    assert manifest['status']=='done'
+    archive=trace.RunArchive(path)
+    assert not archive.incomplete_event_line
+    records=archive.records
+    assert archive.manifest['status']=='done'
     result=records('result')[0]
     # **塊の導出は実行を通して1回だけ**(`derive`ステージがちょうど1回しか始まらない)。
     # 二値探索(`find_best_feasible`)は同じ `design_space_mask` の上で候補を作って検査する
     # だけで、候補ごとに塊を作り直さない。
-    assert sum(1 for e in events if e['kind']=='begin' and e['name']=='derive')==1
+    assert len(archive.begins('derive'))==1
     derived=records('derive-output')
     assert len(derived)==1 and len(records('derive-masks'))==1
     assert derived[0]['stats']['derivation']==design_space.DERIVATION
@@ -33,7 +30,7 @@ def verify_archive(path):
     assert records('resolved-conditions')
     # **候補中はメッシュ化を呼ばない**(段階5の契約)。`build_surface_from_mask` は
     # 確定した採用マスクに対して1回だけ呼ばれる——旧方式の候補ごとのメッシュ化は無い。
-    assert sum(1 for e in events if e['kind']=='begin' and e['name']=='surface-from-mask')==1
+    assert len(archive.begins('surface-from-mask'))==1
     surface_inputs=records('surface-from-mask-input')
     surface_outputs=records('surface-from-mask-output')
     assert len(surface_inputs)==len(surface_outputs)==1
@@ -46,8 +43,7 @@ def verify_archive(path):
     assert len(records('taubin-lambda'))==len(records('taubin-mu'))
     assert len(records('stress-output'))>=1
     final=records('final-mesh-world')[0]
-    saved=Session(None,.2,models_dir=path)
-    saved.open_document('document_after.json')
+    saved=open_session(path/'document_after.json')
     body=saved.document.get_body(result['body_id'])
     # 結果は `solid_mesh` が合格させた三角形のメッシュボディ(docs/TOPOPT.md「結果は編集可能ソリッドとして持たない」)。
     # 文書の三角形と記録の final-mesh-world が一致し、ブーリアン後の B-rep は final-solid スナップショットが持つ。

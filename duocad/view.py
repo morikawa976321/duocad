@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from . import (
     kernel,
@@ -76,6 +76,21 @@ def _log_args_for_state(args: dict) -> dict:
     return projected
 
 
+def _memo(cache: dict, body_id: str, source: Any, key: Any, compute: Callable[[], Any]) -> Any:
+    """`cache[body_id]` が `(source, key, result)` で、`source` が同一かつ `key` が一致なら `result` を返す。
+    違えば `compute()` して入れる。
+
+    同一性は **`is`** で見る(版ではない。可視性だけ変えたときに測り直さないため)。`id()` の整数だけを
+    控えると、旧 shape が解放された後に同じアドレスが再利用されて偽ヒットしうるので、source そのものを保持する。
+    """
+    cached = cache.get(body_id)
+    if cached is not None and cached[0] is source and cached[1] == key:
+        return cached[2]
+    result = compute()
+    cache[body_id] = (source, key, result)
+    return result
+
+
 class DocumentView:
     """1つの文書の「配りもの」。**文書を変えない読み取り + キャッシュ**だけを持つ。
 
@@ -119,10 +134,12 @@ class DocumentView:
         self._revision_counter: dict = {}  # body_id -> 現在の版(int)
         # sketch_id -> (署名, 領域つきペイロード)。領域の計算が重いので内容で引く(C)
         self._sketch_cache: dict = {}
-        self._geometry_cache: dict = {}    # body_id -> (shape, tessellate結果)
-        self._edge_cache: dict = {}        # body_id -> (shape, tessellate_edges結果)(D)
-        self._vertex_cache: dict = {}      # body_id -> (shape, vertex_positions結果)
-        self._volume_cache: dict = {}      # body_id -> (shape, query.volume結果)
+        # 4つとも body_id -> (source, key, result)(`_memo`)。source は shape か mesh、key は
+        # geometry が `body_recipe`、edges が (偏差, 角度偏差)、他は None
+        self._geometry_cache: dict = {}    # tessellate結果
+        self._edge_cache: dict = {}        # tessellate_edges結果(D)
+        self._vertex_cache: dict = {}      # vertex_positions結果
+        self._volume_cache: dict = {}      # query.volume結果
         #: 形状最適化の条件の配りもの(`optimize.state_payload`)の増分維持。
         #: **配信のたびに作り直さない** —— 作り直しは「条件が変わった」か
         #: 「条件が指しているボディの形が差し替わった」ときだけで、他のボディは見ない。
@@ -511,17 +528,13 @@ class DocumentView:
             # 呼ばれ、`meshbody.geometry` は毎回 positions/indices をリストへ写す。
             # 数万三角形では1回あたり十数万要素の複製になる。鍵はB-rep側と同じ規律で
             # **メッシュの同一性**(`is`)。
-            cached = self._geometry_cache.get(body_id)
-            if cached is not None and cached[0] is body.mesh:
-                return cached[2]
-            result = meshbody.geometry(body.mesh)
-            self._geometry_cache[body_id] = (body.mesh, None, result)
-            return result
+            return _memo(self._geometry_cache, body_id, body.mesh, None, lambda: meshbody.geometry(body.mesh))
         recipe = self.body_recipe(body_id)
-        cached = self._geometry_cache.get(body_id)
-        if cached is not None and cached[0] is body.shape and cached[1] == recipe:
-            return cached[2]
-        fine, deviation, angular, coarse_deviation, coarse_angular = self._tessellation_args(body_id)
+        return _memo(self._geometry_cache, body_id, body.shape, recipe, lambda: self._tessellate_body(body))
+
+    def _tessellate_body(self, body) -> dict:
+        """B-rep を測り、取れなかった面・解消できなかった境界の警告を積む(**測ったときだけ**出す)。"""
+        fine, deviation, angular, coarse_deviation, coarse_angular = self._tessellation_args(body.id)
         result = kernel.tessellate_selective(
             body.shape, fine, deviation, angular, coarse_deviation, coarse_angular
         )
@@ -536,7 +549,6 @@ class DocumentView:
             self.warnings.append(
                 f"境界の交差を解消できなかった面({body.name}): {described}(画面に出ません)"
             )
-        self._geometry_cache[body_id] = (body.shape, recipe, result)
         return result
 
     def edges(self, body_id: str) -> dict:
@@ -552,24 +564,13 @@ class DocumentView:
         するため。押し出しで形が変われば版が上がるので、古い辺を指したままフィレットをかける
         (＝別の辺が丸まる)経路が閉じる。
         """
-        body = self.document.get_body(body_id)
-        if body.mesh is not None:
-            meshbody.reject(body, "辺を数える")
-        if body.shape is None:
-            raise ValueError(f"body {body_id!r} has no shape (辺を数えられない)")
-        # **不可視Bodyの辺は配らない**(`geometry()` と同じ規律)。
-        # 配ると、隠したはずの部品の辺だけが宙に浮いて見え、しかも指せる ——
-        # 見えているものと指せるものを一致させる、という辺のピッキングの前提が崩れる。
-        if not body.visible:
-            raise ValueError(f"body {body_id!r} is not visible: 隠れているものの辺は指せない")
+        body = self._visible_brep(body_id, "辺")
         revision = self.body_revision(body_id)
         edge_deviation, edge_angular = self.body_view_resolution(body_id)
-        cached = self._edge_cache.get(body_id)
-        if cached is not None and cached[0] is body.shape and cached[1] == (edge_deviation, edge_angular):
-            described = cached[2]
-        else:
-            described = kernel.tessellate_edges(body.shape, edge_deviation, edge_angular)
-            self._edge_cache[body_id] = (body.shape, (edge_deviation, edge_angular), described)
+        described = _memo(
+            self._edge_cache, body_id, body.shape, (edge_deviation, edge_angular),
+            lambda: kernel.tessellate_edges(body.shape, edge_deviation, edge_angular),
+        )
         return {"body_id": body_id, "revision": revision, "edges": described}
 
     def vertices(self, body_id: str) -> dict:
@@ -586,22 +587,28 @@ class DocumentView:
         `revision` を返す理由も辺と同じ —— 形が変われば版が上がるので、古い座標を
         描き続ける経路が閉じる。
         """
+        body = self._visible_brep(body_id, "頂点")
+        revision = self.body_revision(body_id)
+        described = _memo(
+            self._vertex_cache, body_id, body.shape, None, lambda: query.describe_vertices(body.shape)
+        )
+        return {"body_id": body_id, "revision": revision, "vertices": described}
+
+    def _visible_brep(self, body_id: str, what: str):
+        """辺・頂点(`what`)を配ってよい Body。存在 → B-rep → 形あり → 可視の順で断る。
+
+        **不可視Bodyの辺・頂点は配らない**(`geometry()` と同じ規律)。配ると、隠したはずの部品の辺だけが
+        宙に浮いて見え、しかも指せる —— 見えているものと指せるものを一致させる、というピッキングの前提が崩れる。
+        `geometry()` はこれを使わない(不可視を先に断り、メッシュは断らずに配る)。
+        """
         body = self.document.get_body(body_id)
         if body.mesh is not None:
-            meshbody.reject(body, "頂点を数える")
+            meshbody.reject(body, f"{what}を数える")
         if body.shape is None:
-            raise ValueError(f"body {body_id!r} has no shape (頂点を数えられない)")
-        # **不可視Bodyの頂点は配らない**(`geometry()` / `edges()` と同じ規律)。
+            raise ValueError(f"body {body_id!r} has no shape ({what}を数えられない)")
         if not body.visible:
-            raise ValueError(f"body {body_id!r} is not visible: 隠れているものの頂点は指せない")
-        revision = self.body_revision(body_id)
-        cached = self._vertex_cache.get(body_id)
-        if cached is not None and cached[0] is body.shape:
-            described = cached[1]
-        else:
-            described = query.describe_vertices(body.shape)
-            self._vertex_cache[body_id] = (body.shape, described)
-        return {"body_id": body_id, "revision": revision, "vertices": described}
+            raise ValueError(f"body {body_id!r} is not visible: 隠れているものの{what}は指せない")
+        return body
 
     def _prune_body_caches(self, previewing: bool) -> None:
         """undoで消えたBodyのキャッシュを4つのdictから落とす(セッション寿命で溜め込まない)。
@@ -671,25 +678,13 @@ class DocumentView:
     def _body_volume(self, body) -> float:
         """bodyの体積(キャッシュ付き)。
 
-        `geometry()` と同じ規律 —— キャッシュは**形状の同一性**(`is`)で判定する(版ではない)。
-        `id()` の整数だけを控えると、旧shapeが解放された後に同じアドレスが再利用されて
-        偽ヒットしうるので、shapeそのものを保持して比べる(`geometry()` のキャッシュと同じ代償)。
+        `geometry()` と同じ規律(`_memo`)。
         `query.volume` は面ごとの数値積分でここにだけキャッシュが無く、可視性を切り替えた
         だけでも全ボディぶん測り直していた(PCケースで693ms/回)。
         """
         if body.mesh is not None:
-            cached = self._volume_cache.get(body.id)
-            if cached is not None and cached[0] is body.mesh:
-                return cached[1]
-            result = meshbody.volume(body.mesh)
-            self._volume_cache[body.id] = (body.mesh, result)
-            return result
-        cached = self._volume_cache.get(body.id)
-        if cached is not None and cached[0] is body.shape:
-            return cached[1]
-        result = query.volume(body.shape)
-        self._volume_cache[body.id] = (body.shape, result)
-        return result
+            return _memo(self._volume_cache, body.id, body.mesh, None, lambda: meshbody.volume(body.mesh))
+        return _memo(self._volume_cache, body.id, body.shape, None, lambda: query.volume(body.shape))
 
     def body_state(self, body) -> dict:
         """1Bodyぶんの状態(stateとdeltaが共有する)。`body_meta` にgeometryを足したもの。"""

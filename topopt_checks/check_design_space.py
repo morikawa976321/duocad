@@ -65,41 +65,28 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 import math
-import sys
 import time
 
 import numpy as np
 
-# **Windowsの既定コンソール(cp932)で落ちないようにする。** 記号が1つ混ざるだけで
-# `UnicodeEncodeError` になり、検査が1件も走らないまま異常終了する。
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
-    except (AttributeError, ValueError):
-        pass
-
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from _documents import open_session
+from _harness import Checker, expect_raises, run
 from duocad.topopt import OUTPUT_DIR
 from duocad.topopt import anchor as an
 from duocad.topopt import design_space as ds
 from duocad.topopt import voxelize as vx
 from _fixtures import demo_bracket, demo_conditions, severed_conditions, voxel_model
 
-FAILURES: list[str] = []
-RESULTS: dict[str, object] = {}
+CHECK = Checker()
+check = CHECK.check
+FAILURES = CHECK.failures
+RESULTS = CHECK.results
 
 # 塊にする箱(ワールド座標)。ブラケットの bbox は x -30..30 / y -12..12 / z -12..18。
 DESIGN_BOX_LO = (-31.0, -13.0, -13.0)
 DESIGN_BOX_HI = (31.0, 13.0, 25.0)
-
-
-def check(name: str, ok: bool, detail: str) -> None:
-    """1件の検査結果を出力する。**落ちても即死せず全件を出してから終わる。**"""
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
-    if not ok:
-        FAILURES.append(f"{name}: {detail}")
 
 
 def bracket_grid(margin: float, elements_long_axis: int) -> tuple[vx.Grid, vx.TriangleSoup]:
@@ -174,15 +161,7 @@ def check_mask_is_the_design_space() -> None:
     )
 
 
-def _raises(fn, exc, *args, **kwargs) -> bool:
-    try:
-        fn(*args, **kwargs)
-    except exc:
-        return True
-    except Exception as e:  # noqa: BLE001 — 別の例外なら不合格として扱う
-        print(f"      (想定外の例外 {type(e).__name__}: {e})")
-        return False
-    return False
+_raises = expect_raises
 
 
 # ---------------------------------------------------------------------------
@@ -335,9 +314,9 @@ def check_case1_end_to_end() -> None:
     # 根拠を「渡さなかった」という自己申告に置かない。
     field_names = {f.name for f in dataclasses.fields(ds.Conditions)}
     check(
-        "条件は4条件 + 荷重の大きさ + ボディの外接箱だけ(設計空間ソリッドを受け取る口が無い)",
+        "条件は4条件 + ボディの外接箱だけ(設計空間ソリッドを受け取る口も荷重の大きさも無い)",
         field_names
-        == {"keep", "fixed_faces", "load_faces", "obstacle", "anchor_shape", "load_n", "bodies"},
+        == {"keep", "fixed_faces", "load_faces", "obstacle", "anchor_shape", "bodies"},
         f"{sorted(field_names)}",
     )
     cells = space.stats["cells"]
@@ -373,7 +352,7 @@ def check_case1_end_to_end() -> None:
         fixed_faces=search_space.fixed_faces,
         load_faces=search_space.load_faces,
         forces=[(0.0, 0.0, -1.0)] * len(search_space.load_faces),
-        preserves=[("keep", vx._unwrap(cond.keep))],
+        preserves=[("keep", vx.unwrap(cond.keep))],
         excludes=[],
         # 収束や安全率の質を見る検査ではない(それは check_optimize_wiring.py / check_stress.py
         # の役目)ので、初期合格が速く見つかるよう目標安全率は緩く取る。
@@ -406,7 +385,7 @@ def check_case1_end_to_end() -> None:
     # かつ探索の初期合格モデルがその中で自由に形を持てる。ここが0だと「保持ソリッドを
     # 塗っただけ」になる。
     keep_occ, _ = vx.occupancy(
-        vx.triangles_from_shape(vx._unwrap(cond.keep), deviation=search_space.stats["deviation"]),
+        vx.triangles_from_shape(vx.unwrap(cond.keep), deviation=search_space.stats["deviation"]),
         search_space.grid,
     )
     grown = search.best_feasible.mask & ~keep_occ
@@ -455,7 +434,7 @@ def check_case1_keep_inside() -> None:
         f"{ {k: v['keep_elements'] for k, v in bodies.items()} }",
     )
     g_lo, g_hi = space.grid.world_box()
-    k_lo, k_hi = vx._shape_bbox(vx._unwrap(_cond.keep))
+    k_lo, k_hi = vx._shape_bbox(vx.unwrap(_cond.keep))
     check(
         "保持ソリッドが格子そのものの内側にある(格子の外は誰も数えていない)",
         bool(np.all(k_lo >= g_lo - 1e-9) and np.all(k_hi <= g_hi + 1e-9)),
@@ -530,7 +509,7 @@ def check_case1_anchors_not_empty() -> None:
 
     remote = Pos(70, 0, 0) * Box(6, 20, 20)  # 保持ではない、拘束面だけを提供する板
     anchor_shape = _cond.keep + remote
-    a_soup = vx.triangles_from_shape(vx._unwrap(anchor_shape), deviation=0.2)
+    a_soup = vx.triangles_from_shape(vx.unwrap(anchor_shape), deviation=0.2)
     far_fixed = an.faces_matching(
         a_soup, kind="plane", normal=(1, 0, 0), near_point=(73, 0, 0), near_tol=1e-4
     )
@@ -581,7 +560,7 @@ def check_case1_obstacle() -> None:
     cond, space = case1_space()
     # 塊の中の除外領域を**独立に**計算し直す(design_space.py が引いた結果を再利用しない)。
     obs_soup = vx.triangles_from_shape(
-        vx._unwrap(cond.obstacle), deviation=space.stats["deviation"]
+        vx.unwrap(cond.obstacle), deviation=space.stats["deviation"]
     )
     obs, _ = vx.occupancy(obs_soup, space.grid)
     overlap = int(np.count_nonzero(space.mask & obs))
@@ -979,8 +958,7 @@ def check_hanger_run(run_dir: str) -> None:
 
     run = Path(run_dir)
     print(f"\n[11] 実物(hanger)の基準実行との突き合わせ: {run.name}")
-    session = Session(None, 0.2, models_dir=run)
-    session.open_document("input.json")
+    session = open_session(run / "input.json")
     resolved = load_snapshot(next(run.glob("*-resolved-conditions.json")))
     spacing = float(resolved["spacing"])
     bundle = optimize_run.build_conditions(session.document)
@@ -1162,11 +1140,6 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    print("=" * 72)
-    print("check_design_space.py : 塊(設計空間)の受入検査")
-    print("  [1]-[3] 分離 / [5]-[9] 固定凸包(外接箱の頂点の凸包 + 余白) / [10] 連結性")
-    print("  [11] 実物の基準実行(--run) / [14] 空の条件面のメッセージ")
-    print("=" * 72)
     sections = [
         check_mask_is_the_design_space,
         check_anchors_independent_of_design,
@@ -1181,28 +1154,16 @@ def main() -> int:
     ]
     if args.run:
         sections.append(lambda: check_hanger_run(args.run))
-    # **1件が例外で落ちても残りを走らせる。** 実装を壊したときに最初の1件で止まると、
+    # **1件が例外で落ちても残りを走らせる**(`catch=True`)。実装を壊したときに最初の1件で止まると、
     # 何がどこまで壊れているかが1周では分からない(`check()` と同じ方針を関数の粒度でも取る)。
-    for section in sections:
-        try:
-            section()
-        except Exception as exc:  # noqa: BLE001 — 検査中の例外も不合格として記録する
-            import traceback
-
-            traceback.print_exc()
-            name = getattr(section, "__name__", "check_hanger_run")
-            check(f"{name} が例外で落ちた", False, f"{type(exc).__name__}: {exc}")
-
-    print("\n" + "=" * 72)
-    print("MEASURED " + json.dumps(RESULTS, ensure_ascii=False, default=float))
-    print("=" * 72)
-    if FAILURES:
-        print(f"NG: {len(FAILURES)}件が不合格")
-        for f in FAILURES:
-            print(f"  - {f}")
-        return 1
-    print("OK: 全検査に合格")
-    return 0
+    return run(
+        CHECK,
+        "check_design_space.py : 塊(設計空間)の受入検査\n"
+        "  [1]-[3] 分離 / [5]-[9] 固定凸包(外接箱の頂点の凸包 + 余白) / [10] 連結性\n"
+        "  [11] 実物の基準実行(--run) / [14] 空の条件面のメッセージ",
+        sections,
+        catch=True,
+    )
 
 
 if __name__ == "__main__":

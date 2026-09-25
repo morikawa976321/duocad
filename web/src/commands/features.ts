@@ -21,7 +21,7 @@
  * 食い違いを自作することになる。
  */
 import { pickedRefOf, positive, type ArgValues, type CommandDef, type Point2 } from './command'
-import { MOVE_MODE_OPTIONS, isRotateMode, isTranslateMode, rejectAngle } from './moveMode'
+import { angleArg, buildMove, copyOptions, isRotateMode, modeOptions, offsetArg } from './moveMode'
 import type { SelectionRef } from '../session'
 
 /** 1以上の整数だけを通す(個数。コアの `parameters.is_positive_int` と同じ判定)。 */
@@ -80,7 +80,6 @@ export const EXTRUDE_REGIONS: CommandDef = {
       label: '距離',
       unit: 'mm',
       inputId: 'regions-distance',
-      placeholder: 'mm',
       reject: (value) => (value === 0 ? '距離が0(形が変わらない)' : null),
     },
     {
@@ -129,7 +128,6 @@ export const FILLET: CommandDef = {
       label: '半径',
       unit: 'mm',
       inputId: 'fillet-radius',
-      placeholder: 'mm',
       reject: positive('半径'),
     },
   ],
@@ -157,7 +155,6 @@ export const CHAMFER: CommandDef = {
       label: '長さ',
       unit: 'mm',
       inputId: 'chamfer-distance',
-      placeholder: 'mm',
       reject: positive('長さ'),
     },
   ],
@@ -245,7 +242,6 @@ export const PATTERN_RECTANGULAR: CommandDef = {
       label: 'X間隔',
       unit: 'mm',
       inputId: 'pattern-dx',
-      placeholder: 'mm',
       reject: () => null, // 0 は「その方向には並べない」で正当(dx=0 の1列は普通に使う)
     },
     {
@@ -254,7 +250,6 @@ export const PATTERN_RECTANGULAR: CommandDef = {
       label: 'Y間隔',
       unit: 'mm',
       inputId: 'pattern-dy',
-      placeholder: 'mm',
       reject: () => null,
     },
     {
@@ -263,7 +258,6 @@ export const PATTERN_RECTANGULAR: CommandDef = {
       label: 'X個数',
       unit: '個',
       inputId: 'pattern-nx',
-      placeholder: '個',
       reject: count('X個数', 1),
     },
     {
@@ -272,7 +266,6 @@ export const PATTERN_RECTANGULAR: CommandDef = {
       label: 'Y個数',
       unit: '個',
       inputId: 'pattern-ny',
-      placeholder: '個',
       reject: count('Y個数', 1),
     },
   ],
@@ -328,7 +321,6 @@ export const PATTERN_CIRCULAR: CommandDef = {
       label: '個数',
       unit: '個',
       inputId: 'pattern-count',
-      placeholder: '個',
       reject: count('個数', 2),
     },
     {
@@ -337,7 +329,6 @@ export const PATTERN_CIRCULAR: CommandDef = {
       label: '全角度',
       unit: '度',
       inputId: 'pattern-angle',
-      placeholder: '度',
       reject: (value) =>
         value > 0 && value <= 360 ? null : '全角度は 0より大きく360以下',
     },
@@ -397,58 +388,12 @@ export const MOVE_BODY: CommandDef = {
       min: 1,
       max: null,
     },
-    {
-      kind: 'choice',
-      name: 'copy',
-      label: '複製',
-      options: [
-        { value: 'move', label: '動かす', buttonId: 'move-body-move' },
-        { value: 'copy', label: '複製する', buttonId: 'move-body-copy' },
-      ],
-    },
-    {
-      kind: 'choice',
-      name: 'mode',
-      label: '種別',
-      options: MOVE_MODE_OPTIONS.map((option) => ({
-        ...option,
-        buttonId: `move-body-${option.value}`,
-      })),
-    },
-    {
-      kind: 'number',
-      name: 'dx',
-      label: 'X',
-      unit: 'mm',
-      inputId: 'move-body-dx',
-      placeholder: 'mm',
-      reject: finite('X'),
-      // 空欄はこの軸を動かさない(=0)扱い。3軸とも空欄(=全部0)は`build`が別途弾く。
-      default: 0,
-      when: isTranslateMode,
-    },
-    {
-      kind: 'number',
-      name: 'dy',
-      label: 'Y',
-      unit: 'mm',
-      inputId: 'move-body-dy',
-      placeholder: 'mm',
-      reject: finite('Y'),
-      default: 0,
-      when: isTranslateMode,
-    },
-    {
-      kind: 'number',
-      name: 'dz',
-      label: 'Z',
-      unit: 'mm',
-      inputId: 'move-body-dz',
-      placeholder: 'mm',
-      reject: finite('Z'),
-      default: 0,
-      when: isTranslateMode,
-    },
+    { kind: 'choice', name: 'copy', label: '複製', options: copyOptions('move-body') },
+    { kind: 'choice', name: 'mode', label: '種別', options: modeOptions('move-body') },
+    // 移動量は非有限だけ拒否する(0も負も正当。スケッチ側は拒否しない)。
+    { kind: 'number', ...offsetArg('dx', 'move-body', finite('X')) },
+    { kind: 'number', ...offsetArg('dy', 'move-body', finite('Y')) },
+    { kind: 'number', ...offsetArg('dz', 'move-body', finite('Z')) },
     {
       kind: 'pick',
       name: 'axis_edge',
@@ -467,57 +412,26 @@ export const MOVE_BODY: CommandDef = {
       optional: true,
       when: isRotateMode,
     },
-    {
-      kind: 'number',
-      name: 'angle',
-      label: '角度',
-      unit: '度',
-      inputId: 'move-body-angle',
-      placeholder: '度',
-      // **既定値を置かない**(dx/dy/dz と違い「空欄=回さない」が成立しない ——
-      // 0度はコアが断る値であって、無指定の代わりにはならない)。
-      reject: rejectAngle,
-      when: isRotateMode,
-    },
+    { kind: 'number', ...angleArg('move-body') },
   ],
   build(values) {
-    const empty = missingSelection(values, 'target', 'ボディ(面/辺/頂点)')
-    if (empty !== null) return { ok: false, reason: empty }
-    const copy = values.copy === 'copy'
-    if (values.mode === 'rotate') {
-      const angle = values.angle
-      if (typeof angle !== 'number') return { ok: false, reason: '角度が数値でない' }
-      const reason = rejectAngle(angle)
-      if (reason !== null) return { ok: false, reason }
-      // **軸は参照のまま送る。** 辺が乗る直線を厳密に出せるのはコアだけで(ブラウザが
-      // 持っているのは配られた折れ線)、まっすぐでない辺の拒否もコア側の規則が効く。
-      const axis = pickedRefOf(values.axis_edge)
-      if (axis === null) return { ok: false, reason: '回転軸にする辺が指されていない' }
-      const center = pickedRefOf(values.center_vertex)
-      // **指していない中心は引数ごと送らない**(既定=対象の合成重心はコアが決める)。
-      return {
-        ok: true,
-        args: {
-          mode: 'rotate',
-          angle,
-          axis_edge: axis,
-          ...(center === null ? {} : { center_vertex: center }),
-          copy,
-        },
-      }
-    }
-    const dx = values.dx
-    const dy = values.dy
-    const dz = values.dz
-    if (typeof dx !== 'number' || typeof dy !== 'number' || typeof dz !== 'number') {
-      return { ok: false, reason: '移動量が数値でない' }
-    }
-    // **0,0,0 はコアも弾く**(移動なら何も起きず、複製なら元と完全に重なる)。
-    // ここで先に断るのは、理由を人の近くで出すため。
-    if (dx === 0 && dy === 0 && dz === 0) return { ok: false, reason: '移動量が全部0' }
-    // **`mode` を明示的に載せる** —— コア側の既定も `translate` だが、モードを人に
-    // 選ばせた結果を送らないと、画面の「並進」ボタンが何も意味しないことになる。
-    return { ok: true, args: { mode: 'translate', dx, dy, dz, copy } }
+    return buildMove(values, {
+      missingTarget: (given) => missingSelection(given, 'target', 'ボディ(面/辺/頂点)'),
+      axes: ['dx', 'dy', 'dz'],
+      zeroReason: '移動量が全部0',
+      rotateArgs: (angle, given) => {
+        // **軸は参照のまま送る。** 辺が乗る直線を厳密に出せるのはコアだけで(ブラウザが
+        // 持っているのは配られた折れ線)、まっすぐでない辺の拒否もコア側の規則が効く。
+        const axis = pickedRefOf(given.axis_edge)
+        if (axis === null) return { ok: false, reason: '回転軸にする辺が指されていない' }
+        const center = pickedRefOf(given.center_vertex)
+        // **指していない中心は引数ごと送らない**(既定=対象の合成重心はコアが決める)。
+        return {
+          ok: true,
+          args: { mode: 'rotate', angle, axis_edge: axis, ...(center === null ? {} : { center_vertex: center }) },
+        }
+      },
+    })
   },
 }
 

@@ -1,3 +1,12 @@
+<script module lang="ts">
+  /** KB 表示。`App.svelte` のファイル応答の文言も同じ式を使う(`Toast.svelte` と同じく module script で公開)。 */
+  export function formatSize(bytes: number): string {
+    const kb = bytes / 1024
+    const maximumFractionDigits = kb >= 1 ? 0 : 1
+    return `${kb.toLocaleString(undefined, { maximumFractionDigits })} KB`
+  }
+</script>
+
 <script lang="ts">
   /**
    * ファイルパネル — **保存先が固定フォルダになったことをUIに落とす場所**。
@@ -135,12 +144,6 @@
     if (draftProblem !== null) return
     onRename(draftName.trim())
     draftName = ''
-  }
-
-  function formatSize(bytes: number): string {
-    const kb = bytes / 1024
-    const maximumFractionDigits = kb >= 1 ? 0 : 1
-    return `${kb.toLocaleString(undefined, { maximumFractionDigits })} KB`
   }
 
   function formatTime(epochSeconds: number): string {
@@ -284,9 +287,15 @@
     {/if}
     {#each sorted as file (file.name)}
       <!-- **編集中の1行を光らせる**(`BrowserPanel` の `.sketch-row.active` と同じ形)。 -->
-      <div class="files-row" class:active={file.name === currentName} data-name={file.name}>
+      <!-- `active` は実機検査が行の印として読む。見た目は `row-active`(styles.css)。 -->
+      <div
+        class="files-row"
+        class:active={file.name === currentName}
+        class:row-active={file.name === currentName}
+        data-name={file.name}
+      >
         <button
-          class="files-open"
+          class="files-open row-button"
           onclick={() => onOpen(file.name)}
           disabled={locked}
           title={locked ? '形状最適化の実行中は文書を差し替えられない' : 'クリックで開く'}
@@ -447,31 +456,6 @@
     gap: 6px;
   }
 
-  /* いま開いているファイル(`BrowserPanel` の `.sketch-row.active` と同じ見せ方)。 */
-  .files-row.active {
-    background: var(--accent-soft);
-  }
-
-  /* **一覧の行はボタンの面を持たない**。押せるものは面で見せる(styles.css の
-     `button`)のが既定だが、それは「行の中に置かれた操作子」の話で、**行そのものが
-     押せる**ときに面を敷くと、ファイルが20個あれば面が20枚並ぶ。ブラウザ側の
-     `.sketch-name` と同じ「素のまま、hoverでだけ光る」形に揃える。 */
-  .files-open {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    text-align: left;
-    padding: 2px 4px;
-    background: none;
-  }
-
-  .files-open:hover {
-    background: var(--control-bg);
-    border-color: transparent;
-  }
-
   /* 行内の操作子(複製・削除・やめる)。面は持たず、大きさは添え物(`--fs-meta`)に揃える。 */
   .row-action,
   .files-row-cancel,
@@ -501,10 +485,6 @@
 
   .meta {
     flex: 0 0 auto;
-  }
-
-  .dim {
-    color: var(--dim);
   }
 
   /* `.list`は伸縮する(flex:1)のでスクロールを持つ。この区切りから下は

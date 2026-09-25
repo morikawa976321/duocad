@@ -13,23 +13,23 @@ from pathlib import Path
 from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
+from _documents import open_session
 import _record
 import numpy as np
 
 from duocad import optimize_run
-from duocad.session import Session
-from duocad.topopt import acceptance, binary_search, design_space
+from duocad.topopt import acceptance, anchor as anchor_module, binary_search, design_space
 
 
 def _faces_by_stage(table, faces, stages):
     out = {}
     for face in faces:
         anchor = table[int(face)]
-        ids = anchor.node_ids
         out[str(face)] = dict(
-            nodes=int(ids.size), unmapped_samples=int(anchor.unmapped_samples),
-            lost_by_stage={name: int((~acceptance.active_nodes(stages[name]).ravel()[ids]).sum())
-                           for name in ('frame', 'hull', 'minus_obstacle', 'connected')},
+            nodes=int(anchor.node_count), unmapped_samples=int(anchor.unmapped_samples),
+            lost_by_stage={name: int(anchor_module.face_coverage(
+                table, face, acceptance.active_nodes(stages[name]).ravel())[1].size)
+                for name in ('frame', 'hull', 'minus_obstacle', 'connected')},
         )
     return out
 
@@ -93,8 +93,7 @@ def main():
     parser.add_argument('--spacing', type=float, nargs='+', default=[4.8, 2.4])
     parser.add_argument('--out', type=Path, required=True)
     args = parser.parse_args()
-    session = Session(None, .2, models_dir=args.model.resolve().parent)
-    session.open_document(args.model.name)
+    session = open_session(args.model)
     rows = []
     for spacing in args.spacing:
         rows.append(diagnose(session.document, spacing))

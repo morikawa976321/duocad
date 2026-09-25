@@ -27,7 +27,7 @@ def voxel_model(
     格子は **B-rep の bbox** から起こす(三角形分割の bbox からではない。弦は真の面より内側に来るので、
     仕様の「B-repの周囲に1要素分の余白」が満たせなくなる)。占有は `stats["occupancy"]` に入れる。
     """
-    solid = vx._unwrap(shape)
+    solid = vx.unwrap(shape)
     if grid is None:
         lo, hi = vx._shape_bbox(solid)
         grid = vx.grid_for_bbox(lo, hi, elements_long_axis)
@@ -62,13 +62,10 @@ def demo_bracket():
 
 def demo_faces(soup: vx.TriangleSoup) -> tuple[int, int]:
     """`demo_bracket()` の (固定面, 荷重面) の面添字を、位置から決定的に選ぶ。"""
-    fixed = an.faces_matching(soup, kind="plane", normal=(-1, 0, 0), near_point=(-30, 0, 0), near_tol=1e-6)
-    load = an.faces_matching(soup, kind="plane", normal=(0, 0, 1), near_point=(26, 0, 18), near_tol=1e-6)
-    if len(fixed) != 1 or len(load) != 1:
-        raise ValueError(
-            f"デモの面を一意に選べなかった(固定={fixed} 荷重={load})。demo_bracket を変えたら見直すこと"
-        )
-    return fixed[0], load[0]
+    hint = "。demo_bracket を変えたら見直すこと"
+    fixed = an.the_face_matching(soup, kind="plane", normal=(-1, 0, 0), near_point=(-30, 0, 0), near_tol=1e-6, hint=hint)
+    load = an.the_face_matching(soup, kind="plane", normal=(0, 0, 1), near_point=(26, 0, 18), near_tol=1e-6, hint=hint)
+    return fixed, load
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +92,7 @@ def demo_conditions(angle_deg: float = 0.0) -> ds.Conditions:
     keep = rot * ((Pos(-30, 0, 0) * Box(6, 24, 24)) + (Pos(26, 0, 15) * Box(8, 8, 6)))
     obstacle = rot * (Pos(0, 0, 0) * Rot(90, 0, 0) * Cylinder(radius=5, height=40))
 
-    soup = vx.triangles_from_shape(vx._unwrap(keep), deviation=0.2)
+    soup = vx.triangles_from_shape(vx.unwrap(keep), deviation=0.2)
     fixed = _rotated_face(soup, angle_deg, normal=(-1, 0, 0), point=(-33, 0, 0))
     load = _rotated_face(soup, angle_deg, normal=(0, 0, 1), point=(26, 0, 18))
     bodies = (
@@ -143,12 +140,7 @@ def _rotated_face(
     rot = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
     n = rot @ np.asarray(normal, dtype=float)
     p = rot @ np.asarray(point, dtype=float)
-    hits = an.faces_matching(
-        soup, kind="plane", normal=n, near_point=p, normal_tol=1e-6, near_tol=1e-4
+    return an.the_face_matching(
+        soup, kind="plane", normal=np.round(n, 4).tolist(), near_point=np.round(p, 4).tolist(),
+        normal_tol=1e-6, near_tol=1e-4, hint="。demo_conditions を変えたら見直すこと",
     )
-    if len(hits) != 1:
-        raise ValueError(
-            f"デモの面を一意に選べなかった(法線={np.round(n, 4).tolist()}"
-            f" 重心={np.round(p, 4).tolist()} → {hits})。demo_conditions を変えたら見直すこと"
-        )
-    return hits[0]

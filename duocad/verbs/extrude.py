@@ -23,10 +23,10 @@ from __future__ import annotations
 
 from typing import Any, List, Optional, Sequence
 
-from .. import kernel, meshbody
-from ..document import MESH_KIND, Body, BodyId, Document, new_body_id
+from .. import kernel, kernel_sketch
+from ..document import Body, BodyId, Document, new_body_id
 from ..oplog import Operation, register_verb
-from ._common import recall, remember
+from ._common import editable_body, recall, remember
 from ..region import RegionRef, _regions_detailed
 from ..sketch import get_sketch
 
@@ -65,14 +65,7 @@ def extrude(
     previous_shape: Any = None
     if target_body is None:
         resolved_body_id = new_body_id()
-        doc.add_body(
-            Body(
-                id=resolved_body_id,
-                name="solid",
-                kind="solid",
-                shape=result["shape"],
-            )
-        )
+        _add_new_body(doc, resolved_body_id, result["shape"])
         created_new = True
     else:
         previous_shape = target_body.shape
@@ -125,28 +118,20 @@ def _resolve_target(
             raise ValueError("cut requires a target body")
         return None, None
 
-    if not doc.is_editable(body_id):
-        # ここは `_common.editable_body()` を経由しない専用の解決関数なので、
-        # **メッシュボディの断りを写す**(断り文の中身は1箇所 `meshbody.reject`)。
-        target = doc.get_body(body_id)
-        if target.kind == MESH_KIND:
-            meshbody.reject(target, "押し出しの対象にする")
-        raise ValueError(
-            f"body {body_id!r} is not editable (kind={target.kind!r})"
-        )
-    body = doc.get_body(body_id)
-    if body.shape is None:
-        raise ValueError(f"body {body_id!r} has no shape to extrude")
-    if not body.visible:
-        # 領域は選択から取るが、足す/引く**対象ボディ**(既定はアクティブ)は
-        # 選択の外から来る。人がこのボディを隠した後にAIが押し出すと、見えなくなった
-        # ボディが黙って変わる(`fillet`/`chamfer` と同じ穴。`_common.editable_body` の
-        # docstring参照)。ここは `editable_body()` を経由しない専用の解決関数なので、
-        # 同じ検査をここにも書く。
-        raise ValueError(
-            f"body {body_id!r} is hidden: 見えないものは指せない(set_visible で表示すること)"
-        )
-    return body, body_id
+    # 領域は選択から取るが、足す/引く**対象ボディ**(既定はアクティブ)は選択の外から来る。
+    # 人がこのボディを隠した後にAIが押し出すと、見えなくなったボディが黙って変わる
+    # (`fillet`/`chamfer` と同じ穴)ので `require_visible=True`。
+    return _editable_target(doc, body_id), body_id
+
+
+def _editable_target(doc: Document, body_id: BodyId) -> Body:
+    """押し出しの対象にできるボディ(編集可・可視・形状あり。メッシュは「押し出しの対象にする」ことを断る)。"""
+    return editable_body(doc, body_id, what="extrude", require_visible=True, reject_as="押し出しの対象にする")
+
+
+def _add_new_body(doc: Document, body_id: BodyId, shape: Any) -> None:
+    """押し出した形を新しいソリッドとして足す(`join` で対象が無いとき・`new`・その再生)。"""
+    doc.add_body(Body(id=body_id, name="solid", kind="solid", shape=shape))
 
 
 def _resolve_faces_and_normal(
@@ -180,10 +165,10 @@ def _resolve_faces_and_normal(
 
     sketch = get_sketch(doc, sketch_id)
     # 面に貼ったスケッチでも**ライブの面は引かない**。押し出しの向きはスケッチ平面の法線で
-    # 決まり、その法線は作成時に `plane["frame"]` へ焼き付けてある(`kernel.face_frame`)。
+    # 決まり、その法線は作成時に `plane["frame"]` へ焼き付けてある(`kernel_sketch.face_frame`)。
     # 添字で引き直していた頃は、貼った先のボディを後から面取りしただけで押し出し方向が
     # 別の面の法線へ静かに移りえた。
-    normal = kernel.sketch_plane_normal(sketch.plane)
+    normal = kernel_sketch.sketch_plane_normal(sketch.plane)
     return faces, normal
 
 
@@ -206,43 +191,23 @@ def _do_extrude(document: Document, operation: Operation) -> None:
         (candidate for candidate in document.bodies if candidate.id == body_id), None
     )
 
-    if mode == "new":
-        # **常に作る**(`join` のように既存へ合流しない)。同じIDが既にいるなら再生の
-        # 前提が壊れているので、黙って上書き・融合させずに落とす。
-        if existing is not None:
-            raise ValueError(
-                f"cannot replay new: body {body_id!r} already exists"
-            )
+    # `new` は**常に作る**(`join` のように既存へ合流しない)。同じIDが既にいるなら再生の
+    # 前提が壊れているので、黙って上書き・融合させずに落とす。`join` で対象が無ければ作る
+    # (最初の板)。`cut` に対象が無いのは失敗。
+    if mode == "new" and existing is not None:
+        raise ValueError(f"cannot replay new: body {body_id!r} already exists")
+    if existing is None and mode == "cut":
+        raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
+    if mode == "new" or existing is None:
         result = kernel.extrude_regions(faces, distance, mode, normal, target_shape=None)
-        document.add_body(
-            Body(id=body_id, name="solid", kind="solid", shape=result["shape"])
-        )
+        _add_new_body(document, body_id, result["shape"])
         remember(document, body_id, operation.seq, None)
         return
 
-    if existing is None:
-        if mode != "join":
-            raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
-        result = kernel.extrude_regions(
-            faces, distance, mode, normal, target_shape=None
-        )
-        document.add_body(
-            Body(id=body_id, name="solid", kind="solid", shape=result["shape"])
-        )
-        remember(document, body_id, operation.seq, None)
-        return
-
-    if not document.is_editable(body_id):
-        raise ValueError(f"body {body_id!r} is not editable")
-    if not existing.visible:
-        raise ValueError(
-            f"body {body_id!r} is hidden: 見えないものは指せない(set_visible で表示すること)"
-        )
-    previous_shape = existing.shape
-    result = kernel.extrude_regions(
-        faces, distance, mode, normal, target_shape=existing.shape
-    )
-    existing.shape = result["shape"]
+    target = _editable_target(document, body_id)
+    previous_shape = target.shape
+    result = kernel.extrude_regions(faces, distance, mode, normal, target_shape=target.shape)
+    target.shape = result["shape"]
     remember(document, body_id, operation.seq, previous_shape)
 
 

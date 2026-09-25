@@ -11,19 +11,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import tempfile
 import time
 from pathlib import Path
 from unittest.mock import patch
 
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(errors="replace")
-    except (AttributeError, ValueError):
-        pass
-
 import _bootstrap  # noqa: F401  (topopt_checks の import 経路を通す)
+from _documents import open_session
 import _record
 import numpy as np
 
@@ -40,8 +34,7 @@ def refine(mask: np.ndarray, origin: np.ndarray, spacing: float, ks: list[int], 
     rows: list[dict] = []
     with tempfile.TemporaryDirectory(prefix="topopt-trace-") as trace_root, \
             patch.object(trace, "DEFAULT_ROOT", Path(trace_root)):
-        session = Session(None, 0.2, models_dir=model.resolve().parent)
-        session.open_document(model.name)
+        session = open_session(model)
         document = session.document
         bundle = optimize_run.build_conditions(document)
         space = ds.derive(bundle.conditions, spacing=spacing)

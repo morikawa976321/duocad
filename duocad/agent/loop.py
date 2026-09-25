@@ -116,15 +116,20 @@ ProgressCallback = Callable[[str, dict, Any, bool], None]
 class ToolSurface(Protocol):
     """ループが道具に要求する面(`DocumentTools` がこれを満たす)。
 
-    **公開APIの4つだけ**に依存する —— 内部(`_build_descriptors` 等)には触らない。
+    **公開APIの5つだけ**に依存する —— 内部(`_build_descriptors` 等)には触らない。
     `current_seq` は `!=` で比較するだけの不透明な値(`DocumentTools.current_seq()` は
     `(ログの本数, 選択の指紋, 可視性の指紋)` のタプルを返す。可視性は操作ログに載らないので
     指紋を持たないと「AIが考えている間に人がボディを隠した」が版に出ない)。
+    `call_and_seq` は実行と**直後の**版をひとまとまりで返す(`(結果, 例外, 版)`。例外は上げない) ——
+    本番の覆い(`ToolsOnLoop`)はこれをイベントループへの1回の投げ返しで走らせるので、実行の完了と
+    版の読み取りの間に人の操作が挟まらない。
     """
 
     def descriptors(self) -> list: ...
 
     def call(self, name: str, arguments: dict) -> dict: ...
+
+    def call_and_seq(self, name: str, arguments: dict) -> tuple: ...
 
     def error_envelope(self, tool: str, error: Exception) -> dict: ...
 
@@ -278,13 +283,7 @@ class AgentLoop:
             # **次の往復を始める前**に見る(往復の途中で切ると、実行済みのツールの
             # 結果を積まないまま抜けることになる。中断と同じ扱いで境界を揃える)。
             if monotonic() >= deadline:
-                return self._result(
-                    "timeout",
-                    f"合計時間が上限({self.limits.max_total_seconds:g}秒)に達した",
-                    turn,
-                    outcomes,
-                    usage,
-                )
+                return self._timeout_result(turn, outcomes, usage)
 
             turn += 1
             # **楽観ロックの版はここで控える** —— これから始まる
@@ -319,13 +318,7 @@ class AgentLoop:
                 # 画面には「プロバイダの障害」と出る —— 原因はこちらの予算であって
                 # 相手側ではないので、直す場所を見誤らせる。
                 if capped_by_budget and isinstance(error, ProviderTimeout):
-                    return self._result(
-                        "timeout",
-                        f"合計時間が上限({self.limits.max_total_seconds:g}秒)に達した",
-                        turn,
-                        outcomes,
-                        usage,
-                    )
+                    return self._timeout_result(turn, outcomes, usage)
                 return self._result("provider_error", str(error), turn, outcomes, usage)
 
             usage = _merge_usage(usage, reply.usage)
@@ -397,7 +390,7 @@ class AgentLoop:
                     stale_at = index
                     stale_seq = observed_seq
                     break
-                payload, ok = self._execute(call)
+                payload, ok, seq_after = self._execute(call, expected_seq)
                 outcomes.append(
                     ToolOutcome(name=call.name, arguments=call.arguments, result=payload, ok=ok)
                 )
@@ -412,7 +405,10 @@ class AgentLoop:
                 )
                 # 自分がいま実行した呼び出しの結果を、次の呼び出し前チェックの基準にする
                 # (=「自分の行動で版が動いた」ことを「よそからの変更」と誤検出しない)。
-                expected_seq = self.tools.current_seq()
+                # **基準は実行と同じ1手で読んだ版**(`call_and_seq`)。ここで改めて
+                # `current_seq()` を読むと、実行の完了からこの読み取りまでの間に入った人の操作が
+                # 基準に吸われ、次の直前チェックで見えなくなる(issue #48)。
+                expected_seq = seq_after
 
             if cancelled_at is not None:
                 # 走らせなかったぶんは中断した旨で埋める(下の `_unrun_results` 参照)。
@@ -473,36 +469,20 @@ class AgentLoop:
             ToolResult(
                 call_id=call.id,
                 name=call.name,
-                content=json.dumps(
-                    {
-                        "error": {
-                            "code": "internal",
-                            "message": why,
-                            "tool": call.name,
-                            "exception": "NotExecuted",
-                        }
-                    },
-                    ensure_ascii=False,
-                ),
+                content=json.dumps(_failure(call.name, "internal", why, "NotExecuted"), ensure_ascii=False),
                 ok=False,
             )
             for call in calls
         )
 
-    def _execute(self, call: ToolCall) -> tuple[Any, bool]:
-        """ツールを1つ実行する。**失敗しても例外を上げない**(封筒にして返す)。"""
+    def _execute(self, call: ToolCall, seq_before: Any) -> tuple[Any, bool, Any]:
+        """ツールを1つ実行する。**失敗しても例外を上げない**(封筒にして返す)。
+
+        戻りは `(結果, 成否, 実行直後の版)`。走らせなかったとき(引数が壊れている・寸法の捏造)の
+        版は `seq_before` のまま(文書は触っていない)。
+        """
         if call.parse_error:
-            return (
-                {
-                    "error": {
-                        "code": "invalid_argument",
-                        "message": call.parse_error,
-                        "tool": call.name,
-                        "exception": "ValueError",
-                    }
-                },
-                False,
-            )
+            return _failure(call.name, "invalid_argument", call.parse_error, "ValueError"), False, seq_before
         invented = self._dimensions_nobody_asked_for(call)
         if invented:
             # **人が言っていない寸法で形を変えない**。
@@ -515,40 +495,32 @@ class AgentLoop:
             # **失敗として返す**(例外にしない) —— モデルはこの封筒を読んで、
             # 提案を出して人に尋ねる側へ回れる。往復が1つ増えるだけで、
             # 適用してしまった形をundoで戻すより安い。
+            # **`dimension_not_given` はアプリ内AIの経路だけの語**(MCP にはこのガードが無い。
+            # 語彙の一覧は `MCP.md`「実装のメモ」、一致は `tests/test_doc_code_agreement.py`)。
             return (
-                {
-                    "error": {
-                        "code": "dimension_not_given",
-                        "message": (
-                            f"{', '.join(invented)} の値を人が指示していない。"
-                            "寸法を自分で決めて形を変えてはいけない。"
-                            "propose_selection で対象だけ提案し、"
-                            "何を選んだかと、どの寸法が要るかを述べて尋ねること。"
-                        ),
-                        "tool": call.name,
-                        "exception": "DimensionNotGiven",
-                    }
-                },
+                _failure(
+                    call.name,
+                    "dimension_not_given",
+                    (
+                        f"{', '.join(invented)} の値を人が指示していない。"
+                        "寸法を自分で決めて形を変えてはいけない。"
+                        "propose_selection で対象だけ提案し、"
+                        "何を選んだかと、どの寸法が要るかを述べて尋ねること。"
+                    ),
+                    "DimensionNotGiven",
+                ),
                 False,
+                seq_before,
             )
-        try:
-            return self.tools.call(call.name, call.arguments), True
-        except TypeError as error:
-            # 引数の名前・数の食い違い。`internal` に落とすとモデルが諦めるので
+        payload, error, seq_after = self.tools.call_and_seq(call.name, call.arguments)
+        if error is None:
+            return payload, True, seq_after
+        if isinstance(error, TypeError):
+            # ハンドラの中での引数の食い違い(必須・未知キー・型はスキーマ検査が先に
+            # `invalid_argument` の封筒にする)。`internal` に落とすとモデルが諦めるので
             # 「直せる誤り」として返す(封筒の語彙は `error_envelope` と同じ)。
-            return (
-                {
-                    "error": {
-                        "code": "invalid_argument",
-                        "message": str(error),
-                        "tool": call.name,
-                        "exception": type(error).__name__,
-                    }
-                },
-                False,
-            )
-        except Exception as error:
-            return {"error": self.tools.error_envelope(call.name, error)}, False
+            return _failure(call.name, "invalid_argument", str(error), type(error).__name__), False, seq_after
+        return {"error": self.tools.error_envelope(call.name, error)}, False, seq_after
 
     def _notify(self, name: str, arguments: dict, result: Any, ok: bool) -> None:
         """進捗を購読者へ渡す。**購読者の失敗でループを落とさない**(モジュールdocstring規律3)。
@@ -563,6 +535,11 @@ class AgentLoop:
             self.progress(name, arguments, result, ok)
         except Exception:
             _logger.warning("progress callback failed for tool %r", name, exc_info=True)
+
+    def _timeout_result(self, turns: int, outcomes: Sequence[ToolOutcome], usage: dict) -> AgentRun:
+        return self._result(
+            "timeout", f"合計時間が上限({self.limits.max_total_seconds:g}秒)に達した", turns, outcomes, usage
+        )
 
     def _result(
         self,
@@ -582,6 +559,16 @@ class AgentLoop:
             tool_calls=tuple(outcomes),
             usage=usage,
         )
+
+
+def _failure(tool: str, code: str, message: str, exception: str) -> dict:
+    """ループ自身が作る失敗の封筒(`{"error": {...}}`)。形は `DocumentTools.error_envelope` と同じ。
+
+    `error_envelope` を通さないのは、それが `ToolsOnLoop` 越しにイベントループへ往復するだけで
+    ここには例外が無いため。`code` の語彙は `MCP.md`「実装のメモ」が正(`dimension_not_given` だけが
+    アプリ内AIの経路の語)。
+    """
+    return {"error": {"code": code, "message": message, "tool": tool, "exception": exception}}
 
 
 #: 識別子らしいかたまり(`body_1` / `sketch-1c72a3c7` / `entity-75aa`)。

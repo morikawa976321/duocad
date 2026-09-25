@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
 import pytest
 
@@ -25,7 +24,7 @@ from duocad import catalog, kernel, query, selection
 from duocad.server import SELECTION_CONSUMING_COMMANDS, Session
 from session_support import SIDE, box as _box, browser as _browser
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+from duocad.paths import REPO_ROOT
 
 
 # --------------------------------------------------------------------------------------
@@ -280,17 +279,33 @@ def test_the_declaration_matches_which_verbs_read_the_selection() -> None:
     人がそのverbを実行すると詰む)か、逆に選択を読まないverbが余計に確定させている。
     """
     tree = ast.parse((REPO_ROOT / "duocad" / "session.py").read_text(encoding="utf-8"))
-    reads_selection: set[str] = set()
+    direct: set[str] = set()
+    helpers_of: dict[str, set[str]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef):
             continue
+        helpers_of[node.name] = set()
         for inner in ast.walk(node):
             if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Attribute):
                 continue
             # `selection.require_*` が確定選択を読む唯一の入口である(種別ごとに増える)。
             # 綴りではなく接頭辞で見るのは、verbを足すたびにこの表を直し忘れるのを避けるため。
             if inner.func.attr.startswith("require_"):
-                reads_selection.add(node.name)
+                direct.add(node.name)
+            elif (
+                isinstance(inner.func.value, ast.Name)
+                and inner.func.value.id == "self"
+                and inner.func.attr.startswith("_")
+            ):
+                # 非公開ヘルパ(`_plane_from_selection` / `_edge_verb`)に寄せた読みも、呼ぶ側のverbの読みとして数える。
+                helpers_of[node.name].add(inner.func.attr)
+
+    def reads(name: str, seen: frozenset = frozenset()) -> bool:
+        return name in direct or any(
+            reads(helper, seen | {name}) for helper in helpers_of.get(name, ()) if helper not in seen
+        )
+
+    reads_selection = {name for name in helpers_of if not name.startswith("_") and reads(name)}
 
     declared = {
         catalog.BY_NAME[name].session for name in SELECTION_CONSUMING_COMMANDS

@@ -58,6 +58,8 @@
 - 線引き: **プロンプトで頼んでよいのは「間違えても直せること」だけ。undo でしか戻せない副作用が絡む規律は
   実装で止める。** 文章は守られたか後から検証できないが、コードは検査で固定できる。
 - 実装は `Param.dimension`（`catalog.py`）＋ `AgentLoop._dimensions_nobody_asked_for`（`agent/loop.py`）。
+  止めたときの失敗コードは `dimension_not_given`（アプリ内AIの経路だけの語。`MCP.md`「実装のメモ」の
+  語彙に載せてあり、`tests/test_doc_code_agreement.py` が `agent/loop.py` も読んで一致を見る）。
   実機: 曖昧な依頼3回は適用 **0/3**（1回はガードが fillet を阻止、2回は打ち切り）、寸法を明示した依頼は
   **3/3** 完走で誤発火なし。
 - 散文の規範（`agent_instructions()`）が骨抜きにされていないことを文字列検査で守る試みは、QA が2ラウンド続けて
@@ -81,6 +83,9 @@
 - **未知の引数はプロトコルエラー**: `McpServer._call_tool` はツール本体を呼ぶ前に `_check_arguments` で
   スキーマ突合し、未知キーは JSON-RPC のトップレベル `error`（-32602）で返す。`tests/test_mcp_verbs.py` の
   `call_error()`（`isError` 封筒を期待）では拾えず、`request()` を直接呼んで `response["error"]["code"]` を見る。
+  **アプリ内AIの経路（`DocumentTools.call`）にも同じ検査がかかり、こちらは `invalid_argument` の封筒**
+  （引数名つき）で返る。かけていなかった頃は `radius: "12"` が1文字ずつ読まれて辺2本に半径1と2が付いた。
+  任意引数の `null` も型違い（省略はキーごと落とす。MCP と同じ）。
 - **MCP 起点の変更は `applied` を付けずに全接続へ配信される**（`duocad/net/ws.py` `_on_core_change`）。
   `applied.verb` で分岐する画面の挙動を実機で検査するときは、MCP からではなく本物の DOM 操作で起こす
   （[SMOKE_TESTING.md](SMOKE_TESTING.md)）。

@@ -50,16 +50,24 @@
  * **サーバはこのスクリプトが自分で立てる**(`web/scripts/server.mjs`)。
  * 既に立っているものへ繋ぐときだけ `--url` を渡す。
  */
-import { findBrowser, launchBrowser, withoutBrowserPanel } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
-
-const options = parseArgs(process.argv.slice(2))
-const attachUrl = options.url ?? null
-const wsPort = options.port ?? '8815'
-const httpPort = options['http-port'] ?? '8816'
-const timeout = Number.parseInt(options.timeout ?? '120000', 10)
+import {
+  assertNoAppErrors,
+  openApp,
+  sleep,
+  typeInto as typeIntoField,
+  waitFrames,
+  waitOrFail,
+} from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
+import {
+  clickAt as clickAtOf,
+  clickRegion as clickRegionOf,
+  clickSketchPoint,
+  createSketchOnBasePlane,
+  regionAt,
+  sketchPointAt,
+} from './pick.mjs'
 
 /** 板の寸法(mm)。体積の検算に使うので丸い数字にしてある。 */
 const PLATE = { width: 40, height: 30, thickness: 10 }
@@ -81,33 +89,11 @@ const DISC = { u: -15, v: 15, radius: 5 }
  */
 const DISC_B = { u: -30, v: 15, radius: 13, shrunk: 1.5 }
 
-async function main() {
-  const executablePath = findBrowser()
-  console.log(`smoke-regions: ${executablePath}`)
-
-  const server = attachUrl === null ? await startServer({ wsPort, httpPort }) : null
-  // **MCPの口**(`set_parameter` の1手だけをMCP側から打つ。詳細は `smoke-files.mjs` 参照)。
-  // `--attach` で外のサーバへ繋いだときは子プロセスを持たないので `null` になる。
-  const mcp = server === null ? null : new McpClient(server.child, { timeout })
-  const url = server?.url ?? attachUrl
-  console.log(`  server : ${url}${server === null ? ' (既に立っているサーバへ接続)' : ''}`)
-
-  const browser = await launchBrowser(executablePath)
-
-  try {
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 900 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
-    })
-
-    await page.goto(url, { waitUntil: 'load', timeout })
-    await page.waitForFunction(() => Boolean(window.__duocad && window.__duocad.ready), {
-      timeout,
-      polling: 100,
-    })
+// **MCPの口**(`mcp`)は `set_parameter` の1手だけをMCP側から打つ(詳細は `smoke-files.mjs` 参照)。
+// `--url` で外のサーバへ繋いだときは `null` になる。握手は使う節で打つ(`handshake: false`)。
+runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async ({ mcp, browser, url, timeout }) => {
+  {
+    const { page, consoleErrors } = await openApp(browser, url, { timeout, height: 900 })
     if ((await page.evaluate(() => window.__duocad.parts.length)) !== 0) {
       fail('空の文書で起動していない(サーバを起動し直す)')
     }
@@ -136,160 +122,36 @@ async function main() {
         }),
       )
 
-    async function waitFor(predicate, what, ...args) {
-      try {
-        await page.waitForFunction(predicate, { timeout, polling: 50 }, ...args)
-      } catch {
-        fail(`${what}: ${JSON.stringify(await look())}`)
-      }
-    }
+    const waitFor = (predicate, what, ...args) =>
+      waitOrFail(page, predicate, what, { args, timeout, dump: look })
 
     /**
      * **描画が落ち着くまで待つ**。コマンドを起動したり引数が1つ埋まったりすると
      * ツールバーの行が変わり、ビューポートの高さ＝射影が動く。射影して即クリックすると
-     * 狙いと違う場所を押すので、射影の前に必ず挟む。
+     * 狙いと違う場所を押すので、射影の前に必ず挟む(`pick.mjs` の `settle: true` が同じ2フレーム)。
      */
-    const settleLayout = () =>
-      page.evaluate(
-        () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
-      )
+    const settleLayout = () => waitFrames(page, 2)
 
     /**
      * **起きないことを見る前の猶予**。適用が走るなら「キー入力 → WS往復 → 状態配信」で
      * 済む時間を過ぎてから数える —— 待たずに数えると、走っていても
      * 「まだ返ってきていないだけ」を緑と読んでしまう(`smoke-files` と同じ道具)。
      */
-    const settle = () => new Promise((resolve) => setTimeout(resolve, 1000))
+    const graceForNothingToHappen = () => sleep(1000)
 
-    async function typeInto(selector, value) {
-      await page.click(selector)
-      await page.keyboard.down('Control')
-      await page.keyboard.press('KeyA')
-      await page.keyboard.up('Control')
-      await page.keyboard.press('Backspace')
-      await page.type(selector, String(value), { delay: 15 })
-    }
-
-    async function clickAt(at, modifier = null) {
-      if (modifier) await page.keyboard.down(modifier)
-      await page.mouse.click(at.x, at.y)
-      if (modifier) await page.keyboard.up(modifier)
-    }
-
-    /** そのスケッチの平面(法線と原点)。**貼る先を取り違えていないかの検算に使う**。 */
-    const frameOf = async (sketchId) =>
-      JSON.parse(
-        await page.evaluate(
-          (id) =>
-            JSON.stringify(
-              window.__duocad.sketches.find((item) => item.sketch_id === id)?.frame ?? null,
-            ),
-          sketchId,
-        ),
-      )
-
-    /**
-     * **スケッチを作る2手**: ツールバーの「スケッチ」を起動 → 貼る先をクリック(Enterは無い)。
-     *
-     * 貼れた先が本当にその基準平面かを**毎回検算する** —— 外すと部品の面に貼れてしまい、
-     * それでも後続のアサーションは通る(=検査が黙って別の状況を見る)。
-     */
-    async function createSketchOnBase(name = 'XY') {
-      const before = await page.evaluate(() => window.__duocad.sketches.length)
-      await page.click('#sketch-create')
-      await waitFor(() => window.__duocad.wantsBasePlanes === true, '「スケッチ」が起動しない')
-      await settleLayout()
-      const at = await page.evaluate((plane) => {
-        const rect = document.querySelector('.viewport').getBoundingClientRect()
-        const position = window.__duocad.projectBasePlane(plane)
-        return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-      }, name)
-      if (!at) fail(`基準平面 ${name} を指せる画素が無い(「スケッチ」が起動しているか)`)
-      await clickAt(at)
-      await waitFor(
-        (want) => window.__duocad.sketches.length === want,
-        `基準平面 ${name} にスケッチを貼れない`,
-        before + 1,
-      )
-      const created = await page.evaluate(() => window.__duocad.activeSketch)
-      const frame = await frameOf(created)
-      const axis = { XY: 2, XZ: 1, YZ: 0 }[name]
-      if (
-        !frame ||
-        frame.origin.some((value) => Math.abs(value) > 1e-6) ||
-        Math.abs(Math.abs(frame.normal[axis]) - 1) > 1e-6
-      ) {
-        fail(`基準平面 ${name} ではない所に貼れた: ${JSON.stringify(frame)}`)
-      }
-      return created
-    }
-
-    async function clickPlane(u, v) {
-      // **浮いているブラウザを畳んでから**押す —— スケッチ平面の (u,v) は画面の1画素しかなく、
-      // そこがパネルの下に来ると逃げ場が無い(理由は `browser.mjs` の `withoutBrowserPanel`)。
-      return withoutBrowserPanel(page, async () => {
-        await settleLayout()
-        const at = await page.evaluate(
-          (uu, vv) => {
-            const rect = document.querySelector('.viewport').getBoundingClientRect()
-            const position = window.__duocad.projectSketchPoint(uu, vv)
-            return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-          },
-          u,
-          v,
-        )
-        if (!at) fail(`スケッチ平面の点 (${u}, ${v}) が画面の中に無い`)
-        await clickAt(at)
-      })
-    }
-
-    /**
-     * 領域の画素。**`sketchId` を渡すと通常モードでも射影できる**(スケッチモードの外では
-     * 「今のスケッチ」が無い)。指せない状態なら null が返る —— それ自体がゲートの検査になる。
-     */
-    const regionPixel = async (index, sketchId = null) =>
-      page.evaluate(
-        (idx, sid) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectRegion(idx, sid ?? undefined)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        index,
-        sketchId,
-      )
-
-    /**
-     * 領域を本物のクリックで指す(**射影はクリックの直前にやり直す**)。浮いているブラウザは
-     * `clickPlane` と同じく畳んでから押す(ブラウザの行が増えると、領域の画素がその下に入る)。
-     */
-    async function clickRegion(sketchId, index, modifier = null) {
-      return withoutBrowserPanel(page, async () => {
-        await settleLayout()
-        const at = await regionPixel(index, sketchId)
-        if (!at) fail(`領域 ${sketchId}:${index} に当たる画素が無い`)
-        await clickAt(at, modifier)
-        return at
-      })
-    }
-
-    /**
-     * スケッチ平面上の点 (u,v) の画素。**スケッチを指定すれば通常モードでも取れる**。
-     * 画面の寸法が変わっても**同じ世界座標**を指し直せるので、コマンドを移った前後で
-     * 「同じ場所」を押し比べられる(画素そのものは持ち越せない)。
-     */
-    const sketchPixel = async (sketchId, u, v) => {
-      await settleLayout()
-      return page.evaluate(
-        (sid, uu, vv) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectSketchPoint(uu, vv, sid)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        sketchId,
-        u,
-        v,
-      )
-    }
+    // 指す手は `pick.mjs`(射影は押す直前・レイアウトの2フレーム待ち・パネルは畳む・貼れた
+    // 平面の検算)。この本の呼び方(`sketchId` を先に渡す等)に合わせた薄い皮。
+    const typeInto = (selector, value) => typeIntoField(page, selector, value)
+    const clickAt = (at, modifier = null) => clickAtOf(page, at, { modifier })
+    const createSketchOnBase = (name = 'XY') =>
+      createSketchOnBasePlane(page, name, { timeout, settle: true, verifyFrame: true })
+    const clickPlane = (u, v) => clickSketchPoint(page, u, v, { settle: true })
+    /** 領域の画素。指せない状態なら null —— それ自体がゲートの検査になる。 */
+    const regionPixel = (index, sketchId = null) => regionAt(page, index, { sketchId })
+    const clickRegion = (sketchId, index, modifier = null) =>
+      clickRegionOf(page, index, { sketchId, modifier, hidePanel: true, settle: true })
+    /** スケッチ平面上の点の画素(スケッチを指定すれば通常モードでも取れる)。 */
+    const sketchPixel = (sketchId, u, v) => sketchPointAt(page, u, v, { sketchId, settle: true })
 
     /** 選択にある領域だけを `sketch:index` の形で並べる。 */
     const pickedRegions = async () =>
@@ -669,7 +531,7 @@ async function main() {
     // ボタンを押すとその操作が始まってしまう。
     await page.click('#current-file')
     await page.keyboard.press('Enter')
-    await settle()
+    await graceForNothingToHappen()
 
     const after = await look()
     const afterVolume = after.bodies.reduce((sum, body) => sum + body.volume, 0)
@@ -688,25 +550,6 @@ async function main() {
     // ============================================== 走行中にエラーが出ていないこと
     // **札(DOM)ではなく控えを見る** —— トーストは8秒で消えるので、最後に画面を見ると
     // 途中で出て消えたエラーを取りこぼす(`App.svelte` の `errorLog`)。
-    const errors = (await look()).errors
-    if (!Array.isArray(errors)) fail(`__duocad.errors が配列で渡らない: ${JSON.stringify(errors)}`)
-    if (errors.length > 0) fail(`走行中にエラーが出た: ${errors.join(' | ')}`)
-    ok('走行中にエラーが1件も出ていない')
-
-    if (consoleErrors.length > 0) {
-      fail(`ブラウザのコンソールにエラー: ${consoleErrors.slice(0, 3).join(' | ')}`)
-    }
-    ok('ブラウザのコンソールにエラーなし')
-
-    console.log('')
-    console.log('smoke-regions: PASS')
-  } finally {
-    await browser.close()
-    if (server !== null) await server.stop()
+    await assertNoAppErrors(page, consoleErrors)
   }
-}
-
-main().catch((error) => {
-  console.error(`smoke-regions: FAIL ${error.message}`)
-  process.exit(1)
 })

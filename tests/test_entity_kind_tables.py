@@ -4,7 +4,7 @@
 
 1. `duocad/sketch.py` の `_ENTITY_KIND_TABLE`(純幾何 — 検査・平行移動・回転・中心)。
    `sketch.ENTITY_KINDS` はここのキーから導出される**唯一の正**。
-2. `duocad/kernel.py` の `_KERNEL_ENTITY_KIND_TABLE`(OCP依存 — 辺生成・2D bbox)。
+2. `duocad/kernel_sketch.py` の `_KERNEL_ENTITY_KIND_TABLE`(OCP依存 — 辺生成・2D bbox)。
 3. `web/src/entityKinds.ts` の `ENTITY_KIND_TABLE`(TS — 描画用折れ線・幽霊生成)。
 
 **新しい図形種別を1つ足すとき、3つのうち1つにだけ行を足しても、テストでも型でも止まらない**
@@ -14,11 +14,10 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-from duocad import kernel, sketch
+from duocad import kernel_sketch, sketch
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from duocad.paths import REPO_ROOT
 ENTITY_KINDS_TS = REPO_ROOT / "web" / "src" / "entityKinds.ts"
 
 
@@ -29,11 +28,13 @@ def _ts_entity_kind_table_keys() -> set[str]:
     絞ってから、2スペース下げの `<name>: {` 行だけを拾う(内側のメソッド定義は名前の後ろが
     `(` なので混ざらない)。
     """
+    return set(re.findall(r"^  (\w+): \{$", _entity_kind_table_block(), re.M))
+
+
+def _entity_kind_table_block() -> str:
+    """`const ENTITY_KIND_TABLE` の宣言から `const VERB_TO_KIND` の手前までの区間。"""
     text = ENTITY_KINDS_TS.read_text(encoding="utf-8")
-    start = text.index("const ENTITY_KIND_TABLE")
-    end = text.index("const VERB_TO_KIND")
-    block = text[start:end]
-    return set(re.findall(r"^  (\w+): \{$", block, re.M))
+    return text[text.index("const ENTITY_KIND_TABLE"):text.index("const VERB_TO_KIND")]
 
 
 def test_ts_entity_kind_table_is_readable():
@@ -46,9 +47,9 @@ def test_ts_entity_kind_table_is_readable():
 
 def test_python_kernel_entity_kind_table_is_readable():
     """先に**走査そのものが効いている**ことを見る(TS側と対にする)。"""
-    keys = set(kernel._KERNEL_ENTITY_KIND_TABLE.keys())
+    keys = set(kernel_sketch._KERNEL_ENTITY_KIND_TABLE.keys())
     assert len(keys) >= 4, (
-        f"duocad/kernel.py の _KERNEL_ENTITY_KIND_TABLE を読めていない: {sorted(keys)}"
+        f"duocad/kernel_sketch.py の _KERNEL_ENTITY_KIND_TABLE を読めていない: {sorted(keys)}"
     )
 
 
@@ -57,12 +58,12 @@ def test_the_three_entity_kind_tables_agree_on_their_key_set():
     canonical = set(sketch.ENTITY_KINDS)
     assert canonical, "sketch.ENTITY_KINDS が空(表そのものが読めていない)"
 
-    kernel_keys = set(kernel._KERNEL_ENTITY_KIND_TABLE.keys())
+    kernel_keys = set(kernel_sketch._KERNEL_ENTITY_KIND_TABLE.keys())
     assert kernel_keys == canonical, (
-        "duocad/kernel.py の _KERNEL_ENTITY_KIND_TABLE が sketch.ENTITY_KINDS と食い違う"
+        "duocad/kernel_sketch.py の _KERNEL_ENTITY_KIND_TABLE が sketch.ENTITY_KINDS と食い違う"
         f"(kernelのみ={sorted(kernel_keys - canonical)} / "
         f"sketchのみ={sorted(canonical - kernel_keys)})。"
-        "新しい図形種別は kernel.py にも1行(辺生成・2D bbox)足すこと。"
+        "新しい図形種別は kernel_sketch.py にも1行(辺生成・2D bbox)足すこと。"
     )
 
     ts_keys = _ts_entity_kind_table_keys()
@@ -80,10 +81,7 @@ def _ts_point_keys() -> dict:
     `<name>: {` の直後の行が `pointKeys: [...]` である前提で読む(表の書き方の規約)。
     読めなかった種別は入らないので、下の検査が「片方にしか無い」で落ちる。
     """
-    text = ENTITY_KINDS_TS.read_text(encoding="utf-8")
-    start = text.index("const ENTITY_KIND_TABLE")
-    end = text.index("const VERB_TO_KIND")
-    block = text[start:end]
+    block = _entity_kind_table_block()
     found: dict = {}
     pattern = r"^  (\w+): \{\n    pointKeys: (\[.*\]),$"
     for kind, body in re.findall(pattern, block, re.M):

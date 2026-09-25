@@ -27,13 +27,12 @@ from pathlib import Path
 import pytest
 
 from duocad import optimize, selection
-from duocad.document import Document
 from duocad.mcp_server import DocumentTools, McpServer
-from duocad.oplog import OpLog
 from duocad.server import Session
+from document_support import replay_through_json
 from session_support import SIDE, pad, select as _select, send_one
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from duocad.paths import REPO_ROOT
 SESSION_TS = REPO_ROOT / "web" / "src" / "session.ts"
 COMMAND_TS = REPO_ROOT / "web" / "src" / "commands" / "command.ts"
 
@@ -467,8 +466,7 @@ def test_the_setup_survives_a_save_and_reopen(session: Session) -> None:
     session.set_loads(120.0, [1.0, 0.0, 0.0])
     before = _optimize(session)
 
-    reopened = Document()
-    OpLog.from_json(session.document.log.to_json()).replay(reopened)
+    reopened = replay_through_json(session.document)
 
     assert optimize.state_payload(reopened) == before
 

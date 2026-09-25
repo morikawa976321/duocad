@@ -112,7 +112,7 @@ def pack(faces: Iterable[Sequence[Sequence[dict]]], face_ids: Sequence[int] | No
 # --------------------------------------------------------------------------------------
 # 向き判定
 # --------------------------------------------------------------------------------------
-def _integers(values: Sequence[float]) -> list:
+def exact_integers(values: Sequence[float]) -> list:
     """float の列を共通の 2 冪分母に揃えた整数の列にする(float は 2 進有理数なので損失なし)。"""
     ratios = [float(v).as_integer_ratio() for v in values]
     common = max(d for _, d in ratios)
@@ -121,7 +121,7 @@ def _integers(values: Sequence[float]) -> list:
 
 def orient2d_exact(ax, ay, bx, by, cx, cy) -> int:
     """(a, b, c) の向きの符号を整数演算で厳密に求める(+1 反時計回り / -1 時計回り / 0 共線)。"""
-    ax, ay, bx, by, cx, cy = _integers((ax, ay, bx, by, cx, cy))
+    ax, ay, bx, by, cx, cy = exact_integers((ax, ay, bx, by, cx, cy))
     det = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
     return (det > 0) - (det < 0)
 
@@ -144,6 +144,39 @@ def orient2d(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
     for row in np.flatnonzero(~certain):
         sign[row] = orient2d_exact(a[row, 0], a[row, 1], b[row, 0], b[row, 1], c[row, 0], c[row, 1])
     return sign
+
+
+def segment_contacts(p1, p2, p3, p4):
+    """2D 線分 (p1, p2) と (p3, p4) の組ごとの接触を `(cross, touch, collinear)` の bool 配列で返す。
+
+    cross は互いを貫く、touch は一方の端点が相手の線分(閉区間)の上にある、collinear は 4 点が共線。
+    畳み方(共線の組を overlap / touch に振り分ける、接触を 1 種にまとめる等)は呼び出し側が持つ
+    (`check` と `mesh_intersections._segment_segment_2d`)。
+    """
+    o1 = orient2d(p3, p4, p1)
+    o2 = orient2d(p3, p4, p2)
+    o3 = orient2d(p1, p2, p3)
+    o4 = orient2d(p1, p2, p4)
+    cross = (o1 * o2 < 0) & (o3 * o4 < 0)
+    collinear = (o1 == 0) & (o2 == 0) & (o3 == 0) & (o4 == 0)
+    inside = lambda pt, a, b: (pt >= np.minimum(a, b)).all(axis=1) & (pt <= np.maximum(a, b)).all(axis=1)
+    touch = ((o1 == 0) & inside(p1, p3, p4)) | ((o2 == 0) & inside(p2, p3, p4)) \
+        | ((o3 == 0) & inside(p3, p1, p2)) | ((o4 == 0) & inside(p4, p1, p2))
+    return cross, touch, collinear
+
+
+def degenerate_mask(tri: np.ndarray) -> np.ndarray:
+    """三角形 (T, 3, 3) ごとの縮退(面積が厳密に 0)を返す (T,) bool。
+
+    外積の 3 成分はそれぞれ座標軸への射影の orient2d なので、浮動小数点で確定しない組だけ
+    厳密演算へ落とす `orient2d` を 3 回当てる(`np.cross == 0` は丸めで偽の 0 を出しうる)。
+    """
+    tri = np.asarray(tri, dtype=np.float64)
+    zero = np.ones(len(tri), dtype=bool)
+    for drop in range(3):
+        keep = [axis for axis in range(3) if axis != drop]
+        zero &= orient2d(tri[:, 0, keep], tri[:, 1, keep], tri[:, 2, keep]) == 0
+    return zero
 
 
 # --------------------------------------------------------------------------------------
@@ -356,15 +389,7 @@ def check(packed: Packed, faces: Iterable[int] | None = None) -> dict:
     ni, nj = i[~legit], j[~legit]
     if len(ni):
         p1, p2, p3, p4 = P[ni], Q[ni], P[nj], Q[nj]
-        o1 = orient2d(p3, p4, p1)
-        o2 = orient2d(p3, p4, p2)
-        o3 = orient2d(p1, p2, p3)
-        o4 = orient2d(p1, p2, p4)
-        cross = (o1 * o2 < 0) & (o3 * o4 < 0)
-        collinear = (o1 == 0) & (o2 == 0) & (o3 == 0) & (o4 == 0)
-        inside = lambda pt, a, b: (pt >= np.minimum(a, b)).all(axis=1) & (pt <= np.maximum(a, b)).all(axis=1)
-        touch = ((o1 == 0) & inside(p1, p3, p4)) | ((o2 == 0) & inside(p2, p3, p4)) \
-            | ((o3 == 0) & inside(p3, p1, p2)) | ((o4 == 0) & inside(p4, p1, p2))
+        cross, touch, collinear = segment_contacts(p1, p2, p3, p4)
         for row in np.flatnonzero(cross):
             issues.append(_issue('cross', packed, seg_use, seg_index, ni[row], nj[row],
                                  _crossing_point(p1[row], p2[row], p3[row], p4[row])))

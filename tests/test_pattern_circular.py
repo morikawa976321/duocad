@@ -10,11 +10,11 @@ import math
 
 import pytest
 
-from duocad import kernel, query
+from duocad import kernel_sketch, query
 from duocad.document import Document
 from duocad.oplog import OpLog
 from duocad.parameters import parameter_of, set_parameter
-from duocad.region import _expanded_entities, region_ref, regions
+from duocad.region import expanded_entities, region_ref, regions
 from duocad.sketch import (
     add_circle,
     add_rectangle,
@@ -192,14 +192,14 @@ def test_rotate_copies_false_keeps_the_original_orientation():
         document, sketch_id, [rect], CENTER, 4, total_angle=360.0, rotate_copies=False
     )
 
-    expanded = _expanded_entities(document, sketch_id)
+    expanded = expanded_entities(document, sketch_id)
     assert len(expanded) == 4
     shapes = [_corners_about_centre(item["params"]) for item in expanded]
     assert all(shape == pytest.approx(shapes[0], abs=1e-9) for shape in shapes)
 
 
 def _corners_about_centre(params: dict) -> list:
-    corners = kernel.rectangle_corners(params)
+    corners = kernel_sketch.rectangle_corners(params)
     cu = sum(u for u, _ in corners) / len(corners)
     cv = sum(v for _, v in corners) / len(corners)
     return sorted((round(u - cu, 9), round(v - cv, 9)) for u, v in corners)
@@ -218,7 +218,7 @@ def test_rotated_copies_of_a_rectangle_are_all_rectangles():
         document, sketch_id, [source], CENTER, 4, total_angle=360.0, rotate_copies=True
     )
 
-    expanded = _expanded_entities(document, sketch_id)
+    expanded = expanded_entities(document, sketch_id)
     assert [item["kind"] for item in expanded] == ["rectangle"] * 4
 
     base = expanded[0]["params"]
@@ -227,7 +227,7 @@ def test_rotated_copies_of_a_rectangle_are_all_rectangles():
             (round(u, 9), round(v, 9))
             for u, v in (
                 rotate_point(cu, cv, CENTER[0], CENTER[1], index * 90.0)
-                for cu, cv in kernel.rectangle_corners(base)
+                for cu, cv in kernel_sketch.rectangle_corners(base)
             )
         ]
         assert _corner_set(item["params"]) == pytest.approx(sorted(turned), abs=1e-9)

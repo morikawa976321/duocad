@@ -17,11 +17,12 @@ from __future__ import annotations
 
 import pytest
 
-from duocad import kernel, query, selection, sketch
-from duocad.document import Body, Document
-from duocad.oplog import OpLog, verb_handler
+from duocad import kernel, kernel_sketch, query, selection, sketch
+from duocad.document import Body
+from duocad.oplog import verb_handler
 from duocad.server import Session
 from duocad.verbs import move_sketch_entities as move_sketch_entities_verb
+from document_support import replay_through_json
 from session_support import SIDE, box as _box, select as _select, send_one
 
 DEVIATION = 0.2
@@ -404,9 +405,7 @@ def test_the_move_survives_save_and_replay(session: Session) -> None:
     _select(session, [{"sketch": sketch_id, "entity": entity_id, "point": "x0"}])
     session.move_sketch_entities(3.0, 4.0, copy=True)
 
-    replayed = Document()
-    replayed.log = OpLog.from_json(session.document.log.to_json())
-    replayed.log.replay(replayed)
+    replayed = replay_through_json(session.document)
 
     assert [entity.id for entity in replayed.sketches[0].entities] == [
         entity.id for entity in session.document.sketches[0].entities
@@ -606,9 +605,7 @@ def test_the_body_move_survives_save_and_replay(session: Session) -> None:
     session.move_body(0.0, 0.0, 5.0, copy=True)
     expected = [(b.id, _center(b)) for b in session.document.bodies]
 
-    replayed = Document()
-    replayed.log = OpLog.from_json(session.document.log.to_json())
-    replayed.log.replay(replayed)
+    replayed = replay_through_json(session.document)
 
     assert [b.id for b in replayed.bodies] == [body_id for body_id, _ in expected]
     for (_body_id, center), rebuilt in zip(expected, replayed.bodies):
@@ -886,9 +883,7 @@ def test_a_rotation_survives_save_and_replay(session: Session) -> None:
     session.move_body(mode="rotate", axis_dir=[0.0, 1.0, 0.0], angle=20.0, copy=True)
     expected = [(b.id, kernel.centroid(b.shape)) for b in session.document.bodies]
 
-    replayed = Document()
-    replayed.log = OpLog.from_json(session.document.log.to_json())
-    replayed.log.replay(replayed)
+    replayed = replay_through_json(session.document)
 
     assert [b.id for b in replayed.bodies] == [body_id for body_id, _ in expected]
     for (_body_id, center), rebuilt in zip(expected, replayed.bodies):
@@ -1123,10 +1118,10 @@ def test_a_whole_rectangle_can_be_rotated(session: Session) -> None:
     assert (after["width"], after["height"]) == pytest.approx((10.0, 4.0))
     expected = sorted(
         tuple(round(value, 9) for value in sketch.rotate_point(u, v, 0.0, 0.0, 45.0))
-        for u, v in kernel.rectangle_corners(before)
+        for u, v in kernel_sketch.rectangle_corners(before)
     )
     actual = sorted(
-        (round(u, 9), round(v, 9)) for u, v in kernel.rectangle_corners(after)
+        (round(u, 9), round(v, 9)) for u, v in kernel_sketch.rectangle_corners(after)
     )
     assert actual == pytest.approx(expected, abs=1e-9)
 
@@ -1253,9 +1248,7 @@ def test_a_sketch_rotation_survives_save_and_replay(session: Session) -> None:
     session.move_sketch_entities(mode="rotate", angle=25.0, center=[1.0, 2.0])
     expected = _params(session, sketch_id, entity_id)
 
-    replayed = Document()
-    replayed.log = OpLog.from_json(session.document.log.to_json())
-    replayed.log.replay(replayed)
+    replayed = replay_through_json(session.document)
     assert sketch.entity_params(replayed, sketch_id, entity_id) == pytest.approx(expected)
 
 

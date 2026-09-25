@@ -16,9 +16,7 @@
 """
 from __future__ import annotations
 
-import json
 import math
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -27,7 +25,7 @@ from duocad import io_step, kernel, resolution
 from duocad.server import Session
 from session_support import browser
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from node_support import run_node
 
 DEVIATION = 0.2
 SIDE = 20.0
@@ -81,30 +79,8 @@ def _equivalence_cases() -> list:
 
 
 def _evaluate_in_typescript(cases: list) -> list:
-    """TS側の実装を **node で実際に走らせて** 評価する(ソースの文字列比較はしない)。
-
-    **skipしない** —— 足場が無いときのskipは無人実行では緑と区別が付かず、
-    「式の一致を誰も見ていない」状態をそのまま通してしまう。
-    """
-    assert TS_EVALUATOR.exists(), f"評価の口が無い: {TS_EVALUATOR}"
-    try:
-        completed = subprocess.run(
-            ["node", str(TS_EVALUATOR)],
-            input=json.dumps(cases).encode("utf-8"),
-            capture_output=True,
-            cwd=str(REPO_ROOT),
-            timeout=120,
-        )
-    except FileNotFoundError as error:  # noqa: PERF203
-        raise AssertionError(
-            "node が見つからない。TS側の式を評価できないので、両言語の一致を検査できない"
-        ) from error
-    if completed.returncode != 0:
-        raise AssertionError(
-            "TS側の評価に失敗した(Nodeが .ts を読めない可能性がある。23.6以降なら既定で読める):"
-            + completed.stderr.decode("utf-8", "replace")
-        )
-    return json.loads(completed.stdout.decode("utf-8"))
+    """TS側の実装を **node で実際に走らせて** 評価する(ソースの文字列比較はしない)。"""
+    return run_node(TS_EVALUATOR, "両言語の式の一致", stdin=cases, json_out=True, timeout=120)
 
 
 def test_the_conversion_formula_matches_between_python_and_typescript() -> None:

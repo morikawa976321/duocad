@@ -28,8 +28,8 @@ undo の仕組みが対象によって別物になる(**ここがこのモジュ
 - **スケッチ図形** … `kind` と**解決済みの生の数値**を args へ積めば足りる(スナップショットは
   要らない)。`sketch._do_add_entity` / `_undo_add_entity` が**ちょうど鏡像**になっており、
   **削除の do は「追加の undo」・削除の undo は「追加の do」**である。
-  **`parameters.release_param_refs` を消す側で必ず呼ぶ** —— 忘れると名前つきの値が
-  誰にも参照されないまま文書に残り、`d1 d2 …` の連番が飛ぶ(=保存して再生したときに
+  消す側は **`sketch.remove_entities` を通す**(名前つきの値を手放す。直接外すと値が誰にも
+  参照されないまま文書に残り、`d1 d2 …` の連番が飛ぶ=保存して再生したときに
   `set_parameter` の記録した名前が別の値を指す)。
 
 **素の数値のまま持つ図形がある**(`import_svg` の取り込んだベジエ。制御点は人が打ち直す
@@ -50,7 +50,7 @@ undo の仕組みが対象によって別物になる(**ここがこのモジュ
   選択が**領域だけ**なら削除できる対象が無いので、その場合は従来どおり拒否する。
 - **反復(`Pattern`)の元になっている図形を消しても、反復そのものは消さない**。消えた元は
   展開されなくなるだけで、undoで元が戻れば反復も戻る(`duocad/region.py` の
-  `_expanded_entities`)。図形どうしの依存グラフは作らない(本人判断)。
+  `expanded_entities`)。図形どうしの依存グラフは作らない(本人判断)。
 - **ボディを消してもスケッチ側は何もしない**。スケッチ平面は作成時点で焼き付けてある
   ので、貼った面のボディが消えても姿勢の計算は
   壊れない。ボディ側のキャッシュは `DocumentView.state_meta()` の生存集合差分が汎用的に
@@ -65,8 +65,8 @@ from typing import Any, Dict, List, Sequence
 from .. import parameters
 from ..document import Document
 from ..oplog import Operation, register_verb
-from ..sketch import Entity, get_entity, get_sketch
-from ._common import deletable_body, recall, remember
+from ..sketch import Entity, get_entity, get_sketch, remove_entities
+from ._common import deletable_body, detach_bodies, reattach_bodies, recall, remember
 
 VERB_DELETE = "delete"
 
@@ -162,31 +162,9 @@ def _remove(
 
     ボディを先に消しても図形を先に消しても結果は同じ(互いを参照しない)。
     """
-    positions = {body.id: index for index, body in enumerate(document.bodies)}
-    removed: Dict[str, Any] = {
-        # **消す前の並びの昇順**。undoはこの順に元の添字へ差し戻すと元の並びが再現する。
-        "bodies": sorted(
-            ((positions[body_id], document.get_body(body_id)) for body_id in body_ids),
-            key=lambda item: item[0],
-        ),
-        # `Document.remove_body` は消したのが active だったときだけ active を None へ落とす。
-        # **消さなかったボディが active のままの場合もある**ので、消す前の値をそのまま控える
-        # (`add_body` は足したボディを必ず active にするので、戻すときに上書きされる)。
-        "active": document._active_body_id,
-    }
-    for _, body in removed["bodies"]:
-        document.remove_body(body.id)
-
+    removed = detach_bodies(document, list(body_ids))
     for spec in entity_specs:
-        sketch = get_sketch(document, spec["sketch_id"])
-        remaining: List[Entity] = []
-        for entity in sketch.entities:
-            if entity.id == spec["entity_id"]:
-                # **名前つきの値を手放すのを忘れると leak する**(`_undo_add_entity` と同じ)
-                parameters.release_param_refs(document, entity.params)
-            else:
-                remaining.append(entity)
-        sketch.entities = remaining
+        remove_entities(document, [spec["entity_id"]], sketch_id=spec["sketch_id"])
     return removed
 
 
@@ -242,12 +220,7 @@ def _undo_delete(document: Document, operation: Operation) -> None:
     #    元に戻っていない」という説明のつかない差が残る)。
     if not args["bodies"]:
         return
-    removed = recall(document, _SNAPSHOT_KEY, operation.seq)
-    for index, body in removed["bodies"]:
-        document.add_body(body, index=index)
-    # `set_active_body` は None を受け付けない(存在しないIDとして KeyError)ので直接戻す
-    # (`parameters.rebuild` が同じ理由で同じことをしている)。
-    document._active_body_id = removed["active"]
+    reattach_bodies(document, recall(document, _SNAPSHOT_KEY, operation.seq))
 
 
 register_verb(VERB_DELETE, do=_do_delete, undo=_undo_delete)

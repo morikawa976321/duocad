@@ -806,9 +806,19 @@ def _occupancy_once(
 def closest_triangle(
     soup: TriangleSoup, points: np.ndarray, chunk: Optional[int] = None
 ) -> tuple[np.ndarray, np.ndarray]:
-    """各点について、三角形群までの**厳密な**最短距離とその三角形の添字を返す。
+    """各点について、`soup` の三角形群までの**厳密な**最短距離とその三角形の添字(`distance_to_triangles`)。
 
-    面添字が要るときは `soup.face_index[tri]` で引ける(stage2「面アンカー」の素材)。
+    面添字が要るときは `soup.face_index[tri]` で引ける。
+    """
+    return distance_to_triangles(*soup.triangle_vertices(), points, chunk=chunk)
+
+
+def distance_to_triangles(
+    a: np.ndarray, b: np.ndarray, c: np.ndarray, points: np.ndarray, *, chunk: Optional[int] = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """各点について、三角形群 `(a, b, c)`(それぞれ (T,3))までの**厳密な**最短距離とその三角形の添字を返す。
+
+    `design_space.distance_to_hull`(凸包までの距離)と `closest_triangle` が同じ計算を使う。
 
     **候補点の最小値で求める(領域分けの優先順位では求めない)。** 三角形上の最近傍点は
     「3頂点 / 3辺への射影(端で打ち切る) / 面への射影(重心座標が三角形の内側のときだけ)」の
@@ -825,7 +835,9 @@ def closest_triangle(
     pts = np.asarray(points, dtype=float)
     if pts.ndim != 2 or pts.shape[1] != 3:
         raise ValueError(f"points must be (N,3), got {pts.shape}")
-    a, b, c = soup.triangle_vertices()
+    a = np.asarray(a, dtype=float).reshape(-1, 3)
+    b = np.asarray(b, dtype=float).reshape(-1, 3)
+    c = np.asarray(c, dtype=float).reshape(-1, 3)
     ab = b - a
     ac = c - a
     bc = c - b
@@ -966,7 +978,7 @@ def model_from_design_mask(
         soup = anchor_shape
     else:
         soup = triangles_from_shape(
-            _unwrap(anchor_shape), deviation=dev, angular_deflection=angular_deflection
+            unwrap(anchor_shape), deviation=dev, angular_deflection=angular_deflection
         )
     report = inspect_soup(soup)
 
@@ -1047,7 +1059,7 @@ def _voxelize_region(region: Any, grid: Grid, deviation: float, angular: float, 
     言われた領域が1要素も掴めないまま最適化が走ると、支えの無い構造がもっともらしく
     出てくる。座標系や単位の取り違えがいちばんありそうな原因なので、範囲を出して落とす。
     """
-    solid = _unwrap(region)
+    solid = unwrap(region)
     soup = triangles_from_shape(solid, deviation=deviation, angular_deflection=angular)
     report = inspect_soup(soup)
     grid_lo, grid_hi = grid.world_box()
@@ -1069,8 +1081,8 @@ def _voxelize_region(region: Any, grid: Grid, deviation: float, angular: float, 
     return mask, report
 
 
-def _unwrap(shape: Any) -> Any:
-    """build123d のオブジェクトなら `.wrapped` を取り出す。"""
+def unwrap(shape: Any) -> Any:
+    """build123d のオブジェクトなら `.wrapped` を取り出す(`None` は拒む。`wrapped` が `None` なら元のオブジェクト)。"""
     if shape is None:
         raise ValueError("shape is None")
     inner = getattr(shape, "wrapped", None)

@@ -12,6 +12,9 @@
  */
 import * as THREE from 'three'
 
+import { createBatch } from './sceneBatch'
+import { variantCache } from './viewportMaterials'
+
 import { HIGHLIGHT_COLOR, LAYER, PROPOSED_COLOR, VERTEX_PIXELS } from './viewportConstants'
 import type { VertexMarker, VertexRef } from './viewportTypes'
 
@@ -60,33 +63,28 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
 
   const vertexRoot = new THREE.Group()
 
-  const vertexMaterial = new THREE.PointsMaterial({
-    color: HIGHLIGHT_COLOR,
-    size: VERTEX_PIXELS * 2,
-    sizeAttenuation: false,
-    // 辺と同じく**深度検査をしない**(奥のマーカーも見え、奥のマーカーも指せる)。
-    // 見た目だけ隠すと「見えない頂点が外れる」になる。
-    depthTest: false,
-    clippingPlanes: clipPlanes,
-  })
-  const vertexProposedMaterial = new THREE.PointsMaterial({
-    color: PROPOSED_COLOR,
-    size: VERTEX_PIXELS * 2,
-    sizeAttenuation: false,
-    depthTest: false,
-    clippingPlanes: clipPlanes,
-  })
+  /** マーカーの材質は選択の出所(user / proposed)ごと(`variantCache`)。辺と同じく**深度検査をしない**
+   *  (奥のマーカーも見え、奥のマーカーも指せる。見た目だけ隠すと「見えない頂点が外れる」になる)。 */
+  const vertexMaterials = variantCache(
+    (origin: 'user' | 'proposed') => origin,
+    (origin) =>
+      new THREE.PointsMaterial({
+        color: origin === 'proposed' ? PROPOSED_COLOR : HIGHLIGHT_COLOR,
+        size: VERTEX_PIXELS * 2,
+        sizeAttenuation: false,
+        depthTest: false,
+        clippingPlanes: clipPlanes,
+      }),
+  )
 
   /** 今出している頂点マーカー。空なら選択に頂点が入っていない。 */
   let vertexMeshes: THREE.Points[] = []
-  const vertexDisposables: Array<{ dispose(): void }> = []
+  const vertexBatch = createBatch(vertexRoot)
   /** 直前に描いた印(**同じものを渡されたら作り直さない**ため)。 */
   let vertexKey = ''
 
   function clearVertices(): void {
-    for (const mesh of vertexMeshes) vertexRoot.remove(mesh)
-    for (const item of vertexDisposables) item.dispose()
-    vertexDisposables.length = 0
+    vertexBatch.clear()
     vertexMeshes = []
     vertexKey = ''
   }
@@ -101,7 +99,7 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
     clearVertices()
     vertexKey = key
     pickChanged() // 頂点マーカーは面より先に取られるので、増減で「指せるもの」が変わる
-    const material = origin === 'proposed' ? vertexProposedMaterial : vertexMaterial
+    const material = vertexMaterials.get(origin)
     highlightColor.vertex = markers.length === 0 ? null : material.color.getHex()
     if (markers.length === 0) return
     for (const marker of markers) {
@@ -119,9 +117,7 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
       mesh.userData.bodyId = marker.bodyId
       mesh.userData.vertexIndex = marker.vertexIndex
       mesh.userData.point = marker.point
-      vertexRoot.add(mesh)
-      vertexMeshes.push(mesh)
-      vertexDisposables.push(geometry)
+      vertexMeshes.push(vertexBatch.add(mesh, geometry))
     }
   }
 
@@ -167,8 +163,7 @@ export function createVertexMarkers(deps: VertexMarkersDeps): VertexMarkers {
     project: projectVertex,
     dispose() {
       clearVertices()
-      vertexMaterial.dispose()
-      vertexProposedMaterial.dispose()
+      vertexMaterials.dispose()
     },
   }
 }

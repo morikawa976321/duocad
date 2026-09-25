@@ -11,16 +11,16 @@ face_index)` が返す既存ソリッドの**平面状の**面への参照(平�
 (`duocad/verbs/import_svg.py` のdocstring)。
 
 **OCP / build123d を直接importしない**。領域検出の幾何は `duocad.region` 経由で
-`duocad.kernel` が持つ。
+`duocad.kernel_sketch` が持つ。
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 
-from . import kernel
+from . import kernel_sketch
 from . import parameters
 from .document import BodyId, Document, unknown_id_message
 from .oplog import Operation, register_verb
@@ -48,9 +48,9 @@ PATTERN_KINDS = ("rectangular", "circular")
 #
 # **図形種別ごとに1行**(`EntityKindOps`)へ検査・平行移動・回転・中心をまとめる。
 #
-# OCPに依存する処理(辺の生成・2D bbox)はここに置けない(import境界。`kernel.py` だけが
-# OCPをimportしてよい)。そちらは `kernel.py` 内に姉妹の表を持つ。**表は2つに分かれるが、
-# 新しい種別を足すときに触るのは「ここへ1行」と「kernel.pyへ1行」の2箇所だけ**(+TS側1箇所)。
+# OCPに依存する処理(辺の生成・2D bbox)はここに置けない(import境界。カーネル層だけが
+# OCPをimportしてよい)。そちらは `kernel_sketch.py` 内に姉妹の表を持つ。**表は2つに分かれるが、
+# 新しい種別を足すときに触るのは「ここへ1行」と「kernel_sketch.pyへ1行」の2箇所だけ**(+TS側1箇所)。
 #
 # **表に無い種別は即時 ValueError**(`entity_kind_ops` が投げる)。silent defaultは無い。
 def _validate_line(params: Dict[str, float]) -> None:
@@ -119,8 +119,13 @@ def _translate_bezier(params: Dict[str, float], dx: float, dy: float) -> Dict[st
     )
 
 
-def _rotate_point(x: float, y: float, cx: float, cy: float, angle_deg: float) -> Tuple[float, float]:
-    """点 (x, y) を中心 (cx, cy) まわりに angle_deg 度だけ反時計回りに回す。"""
+def rotate_point(x: float, y: float, cx: float, cy: float, angle_deg: float) -> Tuple[float, float]:
+    """点 (x, y) を中心 (cx, cy) まわりに angle_deg 度だけ反時計回りに回す。
+
+    **2D回転の式はこの1本しかない。** 種別の表(`EntityKindOps.rotate`)は「図形1つを回す」単位で、
+    点1つを回す `move_sketch_entities` もここを使う。**別に式を書き起こさない**(符号や度/ラジアンの
+    取り違えが、円形反復と移動で食い違う形で出る)。画面側は `web/src/entityKinds.ts` の `rotatePoint`。
+    """
     rad = math.radians(angle_deg)
     cos_a = math.cos(rad)
     sin_a = math.sin(rad)
@@ -129,40 +134,30 @@ def _rotate_point(x: float, y: float, cx: float, cy: float, angle_deg: float) ->
     return (cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)
 
 
-def rotate_point(x: float, y: float, cx: float, cy: float, angle_deg: float) -> Tuple[float, float]:
-    """`_rotate_point` の公開名。**2D回転の式はこの1本しかない**ことを保つための入口である。
-
-    `move_sketch_entities`(点を1つだけ回す経路)が使う —— 種別の表(`EntityKindOps.rotate`)は
-    「図形1つを回す」単位なので、点1つを回すにはこちらが要る。**別に式を書き起こさない**
-    (符号や度/ラジアンの取り違えが、円形反復と移動で食い違う形で出る)。
-    """
-    return _rotate_point(x, y, cx, cy, angle_deg)
-
-
 def _rotate_line(
     params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
 ) -> Dict[str, float]:
     if rotate_copies:
-        x0, y0 = _rotate_point(params["x0"], params["y0"], cx, cy, angle_deg)
-        x1, y1 = _rotate_point(params["x1"], params["y1"], cx, cy, angle_deg)
+        x0, y0 = rotate_point(params["x0"], params["y0"], cx, cy, angle_deg)
+        x1, y1 = rotate_point(params["x1"], params["y1"], cx, cy, angle_deg)
         return {"x0": x0, "y0": y0, "x1": x1, "y1": y1}
     mx = (params["x0"] + params["x1"]) / 2.0
     my = (params["y0"] + params["y1"]) / 2.0
-    nmx, nmy = _rotate_point(mx, my, cx, cy, angle_deg)
+    nmx, nmy = rotate_point(mx, my, cx, cy, angle_deg)
     return _translate_line(params, nmx - mx, nmy - my)
 
 
 def _rotate_circle(
     params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
 ) -> Dict[str, float]:
-    nx, ny = _rotate_point(params["cx"], params["cy"], cx, cy, angle_deg)
+    nx, ny = rotate_point(params["cx"], params["cy"], cx, cy, angle_deg)
     return {"cx": nx, "cy": ny, "radius": params["radius"]}
 
 
 def _rotate_arc(
     params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
 ) -> Dict[str, float]:
-    nx, ny = _rotate_point(params["cx"], params["cy"], cx, cy, angle_deg)
+    nx, ny = rotate_point(params["cx"], params["cy"], cx, cy, angle_deg)
     start_deg = params["start_deg"]
     end_deg = params["end_deg"]
     if rotate_copies:
@@ -181,14 +176,14 @@ def _rotate_rectangle(
     params: Dict[str, float], cx: float, cy: float, angle_deg: float, rotate_copies: bool
 ) -> Dict[str, float]:
     if rotate_copies:
-        nx, ny = _rotate_point(params["x"], params["y"], cx, cy, angle_deg)
+        nx, ny = rotate_point(params["x"], params["y"], cx, cy, angle_deg)
         turned = dict(params)
         turned["x"] = nx
         turned["y"] = ny
-        turned["angle"] = kernel.rectangle_angle(params) + angle_deg
+        turned["angle"] = kernel_sketch.rectangle_angle(params) + angle_deg
         return turned
     ecx, ecy = _center_rectangle(params)
-    ncx, ncy = _rotate_point(ecx, ecy, cx, cy, angle_deg)
+    ncx, ncy = rotate_point(ecx, ecy, cx, cy, angle_deg)
     return _translate_rectangle(params, ncx - ecx, ncy - ecy)
 
 
@@ -197,10 +192,10 @@ def _rotate_bezier(
 ) -> Dict[str, float]:
     """**ベジエはアフィン不変**なので、制御点を回すだけで曲線が厳密に回る。"""
     if rotate_copies:
-        rotated = [_rotate_point(px, py, cx, cy, angle_deg) for px, py in _bezier_points(params)]
+        rotated = [rotate_point(px, py, cx, cy, angle_deg) for px, py in _bezier_points(params)]
         return _bezier_params(rotated)
     mx, my = _center_bezier(params)
-    nmx, nmy = _rotate_point(mx, my, cx, cy, angle_deg)
+    nmx, nmy = rotate_point(mx, my, cx, cy, angle_deg)
     return _translate_bezier(params, nmx - mx, nmy - my)
 
 
@@ -260,13 +255,13 @@ def _mirror_rectangle(
     元の基準の角をそのまま基準にすると `width`/`height` が負の側へ伸びる形になり、
     正の幅高さで同じ4隅を張れない。
     """
-    corners = kernel.rectangle_corners(params)
+    corners = kernel_sketch.rectangle_corners(params)
     bx, by = _mirror_point(corners[3][0], corners[3][1], ax, ay, ux, uy)
     axis_angle_deg = math.degrees(math.atan2(uy, ux))
     mirrored = dict(params)
     mirrored["x"] = bx
     mirrored["y"] = by
-    mirrored["angle"] = 2.0 * axis_angle_deg - kernel.rectangle_angle(params)
+    mirrored["angle"] = 2.0 * axis_angle_deg - kernel_sketch.rectangle_angle(params)
     return mirrored
 
 
@@ -288,7 +283,7 @@ def _center_cxcy(params: Dict[str, float]) -> Tuple[float, float]:
 
 
 def _center_rectangle(params: Dict[str, float]) -> Tuple[float, float]:
-    corners = kernel.rectangle_corners(params)
+    corners = kernel_sketch.rectangle_corners(params)
     return (
         (corners[0][0] + corners[2][0]) / 2.0,
         (corners[0][1] + corners[2][1]) / 2.0,
@@ -305,19 +300,13 @@ def _center_bezier(params: Dict[str, float]) -> Tuple[float, float]:
     )
 
 
-#: 3次ベジエの `params` のキー(**始点・制御点1・制御点2・終点の順**)。
-#: `_bezier_points` / `_bezier_params` の往復がこの順序を唯一の正とする。
-BEZIER_KEYS = ("x0", "y0", "cx1", "cy1", "cx2", "cy2", "x1", "y1")
+#: 3次ベジエの `params` のキー(**始点・制御点1・制御点2・終点の順**)。正は `kernel_sketch.BEZIER_POINT_KEYS`。
+BEZIER_KEYS = tuple(key for pair in kernel_sketch.BEZIER_POINT_KEYS for key in pair)
 
 
 def _bezier_points(params: Dict[str, float]) -> List[Tuple[float, float]]:
     """`params` を制御点4つの (x, y) へ。"""
-    return [
-        (float(params["x0"]), float(params["y0"])),
-        (float(params["cx1"]), float(params["cy1"])),
-        (float(params["cx2"]), float(params["cy2"])),
-        (float(params["x1"]), float(params["y1"])),
-    ]
+    return [(float(params[key_x]), float(params[key_y])) for key_x, key_y in kernel_sketch.BEZIER_POINT_KEYS]
 
 
 def _bezier_params(points: List[Tuple[float, float]]) -> Dict[str, float]:
@@ -369,7 +358,7 @@ _ENTITY_KIND_TABLE: Dict[str, EntityKindOps] = {
     ),
     "bezier": EntityKindOps(
         _validate_bezier, _translate_bezier, _rotate_bezier, _center_bezier, _mirror_bezier,
-        points=(("x0", "y0"), ("cx1", "cy1"), ("cx2", "cy2"), ("x1", "y1")),
+        points=kernel_sketch.BEZIER_POINT_KEYS,
     ),
 }
 
@@ -679,7 +668,7 @@ def add_arc(
     反時計回り・スケッチ平面のX軸から測る。
 
     **0度をまたいでよい**(例: `start_deg=350, end_deg=10` は20度の円弧)。掃引量は
-    `sweep = (end_deg - start_deg) % 360` で解決される(`kernel` 側の実装)ので、常に
+    `sweep = (end_deg - start_deg) % 360` で解決される(`kernel_sketch` 側の実装)ので、常に
     `start_deg` から反時計回りに `end_deg` まで進む弧として扱われる。
     """
     params = {
@@ -717,7 +706,7 @@ def resolve_plane(doc: Document, plane: Any) -> dict:
     """引数の平面指定を PlaneRef のdictへ正規化する。失敗時は文書を触らない。
 
     **面参照・offset参照はここで姿勢まで解決して `frame` に焼き付ける**
-    (`kernel.face_frame` / `kernel.offset_plane_frame`)。これが「姿勢をライブに引き直さない」
+    (`kernel_sketch.face_frame` / `kernel_sketch.offset_plane_frame`)。これが「姿勢をライブに引き直さない」
     の唯一の入口であり、解決を2箇所に持つと平面かどうかの検査も焼き付けも片方だけ抜ける。
     offset参照は `base` を再帰的にこの関数で解決してから平行移動するので、base側が面参照
     であれば面の平面性検査もそのままここを通る。
@@ -734,9 +723,7 @@ def resolve_plane(doc: Document, plane: Any) -> dict:
     if isinstance(plane, dict) and plane.get("kind") == "face":
         body_id = plane["body"]
         face_index = int(plane["index"])
-        body = next((candidate for candidate in doc.bodies if candidate.id == body_id), None)
-        if body is None:
-            raise KeyError(f"no such body: {body_id!r}")
+        body = doc.get_body(body_id)
         if body.mesh is not None:
             # **名指しの面参照なので断る**(断り文は `meshbody.reject` へ一元化)。
             from . import meshbody
@@ -749,7 +736,7 @@ def resolve_plane(doc: Document, plane: Any) -> dict:
             "body": body_id,
             "index": face_index,
             "provenance": plane.get("provenance"),
-            "frame": kernel.face_frame(body.shape, face_index),
+            "frame": kernel_sketch.face_frame(body.shape, face_index),
         }
     if isinstance(plane, dict) and plane.get("kind") == "offset":
         base_ref = resolve_plane(doc, plane["base"])
@@ -759,7 +746,7 @@ def resolve_plane(doc: Document, plane: Any) -> dict:
             # 実際の位置が分からなくなる。
             raise ValueError("offset plane base must not itself be an offset plane")
         distance = float(plane["distance"])
-        frame = kernel.offset_plane_frame(kernel.sketch_plane_frame(base_ref), distance)
+        frame = kernel_sketch.offset_plane_frame(kernel_sketch.sketch_plane_frame(base_ref), distance)
         return {
             "kind": "offset",
             "base": {key: value for key, value in base_ref.items() if key != "frame"},
@@ -859,34 +846,59 @@ def _undo_sketch_create(document: Document, operation: Operation) -> None:
     document.sketches = [s for s in document.sketches if s.id != sketch_id]
 
 
+def add_entities(document: Document, planned: Sequence[tuple]) -> List[EntityId]:
+    """図形を足す。`planned` は `(Sketch, EntityId, 種別, 解決済みの params)` の並びで、作った ID の並びを返す。
+
+    **全部の ID を先に検査してから**(既存との重複と、並びの中での重複の両方)、1件ずつ名前つきの値を
+    登録(`parameters.register_all`。キーの並びが `d<n>` の振り順)して足す —— 足しながら検査すると、
+    2件目で重複したときに1件目だけ書いた文書が残る。
+    """
+    seen: set = set()
+    for sketch, entity_id, _kind, _values in planned:
+        if entity_id in seen or any(existing.id == entity_id for existing in sketch.entities):
+            raise ValueError(f"entity id already exists: {entity_id!r}")
+        seen.add(entity_id)
+    created: List[EntityId] = []
+    for sketch, entity_id, kind, values in planned:
+        refs = parameters.register_all(document, dict(values))
+        sketch.entities.append(Entity(id=entity_id, kind=kind, params=refs))
+        created.append(entity_id)
+    return created
+
+
+def remove_entities(document: Document, entity_ids, *, sketch_id: Optional[SketchId] = None) -> None:
+    """図形を取り除き、名前つきの値を手放す(`parameters.release_param_refs`)。
+
+    **手放すのを忘れると leak する** —— 値が誰にも参照されないまま文書に残り、`d1 d2 …` の連番が
+    飛ぶ(=保存して再生したときに `set_parameter` の記録した名前が別の値を指す)。素の数値のまま持つ
+    図形(`import_svg` のベジエ)は手放すものが無いので、そのまま通る。
+    `sketch_id` があればそのスケッチだけ(無ければ KeyError)、無ければ全スケッチを走査する。
+    """
+    wanted = set(entity_ids)
+    sketches = document.sketches if sketch_id is None else [get_sketch(document, sketch_id)]
+    for sketch in sketches:
+        remaining = []
+        for entity in sketch.entities:
+            if entity.id in wanted:
+                parameters.release_param_refs(document, entity.params)
+            else:
+                remaining.append(entity)
+        sketch.entities = remaining
+
+
 def _do_add_entity(document: Document, operation: Operation) -> None:
     """3つの図形追加verbで共有する再適用(記録された種別とparamsで図形を作り直す)。
 
-    ログの `params` は素の数値。再生時に `register_value` し直し、Entity には参照を入れる。
+    ログの `params` は素の数値。再生時に登録し直し、Entity には参照を入れる。
     """
     args = operation.args
     sketch = get_sketch(document, args["sketch_id"])
-    entity_id = args["entity_id"]
-    if any(entity.id == entity_id for entity in sketch.entities):
-        raise ValueError(f"entity id already exists: {entity_id!r}")
-    raw_params = dict(args["params"])
-    refs = parameters.register_all(document, raw_params)
-    sketch.entities.append(
-        Entity(id=entity_id, kind=args["kind"], params=refs)
-    )
+    add_entities(document, [(sketch, args["entity_id"], args["kind"], dict(args["params"]))])
 
 
 def _undo_add_entity(document: Document, operation: Operation) -> None:
     args = operation.args
-    sketch = get_sketch(document, args["sketch_id"])
-    entity_id = args["entity_id"]
-    remaining = []
-    for entity in sketch.entities:
-        if entity.id == entity_id:
-            parameters.release_param_refs(document, entity.params)
-        else:
-            remaining.append(entity)
-    sketch.entities = remaining
+    remove_entities(document, [args["entity_id"]], sketch_id=args["sketch_id"])
 
 
 register_verb(VERB_SKETCH_CREATE, do=_do_sketch_create, undo=_undo_sketch_create)

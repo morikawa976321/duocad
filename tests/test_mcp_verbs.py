@@ -27,22 +27,22 @@ from pathlib import Path
 import pytest
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
-from duocad import kernel, query
+from duocad import kernel, kernel_sketch, query
 from duocad.catalog import COMMANDS
 from duocad.document import Body
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.selection import set_visible
-from duocad.server import Server, Session
+from duocad.server import Session
 from document_support import BOX_X, BOX_Y, BOX_Z
 from mcp_support import call, call_error, request
-from session_support import FakeConnection
+from session_support import pushed_by_mcp
 
 # JSON-RPC 2.0 の標準エラーコード。**実装から import しない**
 # (importすると実装が変わった瞬間にテストも追従して緑になり、契約にならない)。
 INVALID_PARAMS = -32602
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from duocad.paths import REPO_ROOT
 
 #: 形を変えるverbのツール(問い合わせ・選択・履歴を除く)。**catalog の宣言から引く**。
 SHAPE_VERB_TOOLS = {
@@ -646,7 +646,7 @@ def test_sketch_create_offset_can_sit_on_a_selected_face(
         "index": face_index,
         "provenance": None,
     }
-    face_frame = kernel.face_frame(box.shape, face_index)
+    face_frame = kernel_sketch.face_frame(box.shape, face_index)
     assert sketch.plane["frame"]["origin"] == pytest.approx(
         [face_frame["origin"][i] + face_frame["normal"][i] * 3.0 for i in range(3)]
     )
@@ -1006,22 +1006,7 @@ def test_a_verb_applied_through_mcp_reaches_the_browser(box_session: Session):
     # 実行順で変わる(このテストが見たいのは verb の配信であって、その順序ではない)。
     select_refs(mcp, [edge_ref(box.id, index) for index in vertical_edge_indices(box.shape)])
 
-    async def scenario() -> list:
-        server = Server(box_session)
-        server.bind_loop(asyncio.get_running_loop())
-        browser = FakeConnection()
-        server.clients.add(browser)
-        await server._push(browser, applied=None, only=browser)  # 接続直後の絵
-        before = len(browser.payloads)
-
-        call(mcp, "fillet", {"radius": 2.0})
-        for _ in range(50):
-            await asyncio.sleep(0)
-            if len(browser.payloads) > before:
-                break
-        return browser.payloads
-
-    payloads = asyncio.run(scenario())
+    payloads = pushed_by_mcp(box_session, lambda: call(mcp, "fillet", {"radius": 2.0}))
     assert len(payloads) > 1, "MCPで形を変えたのにWebSocketへ配信されていない"
     pushed = payloads[-1]
     assert pushed["type"] == "state"

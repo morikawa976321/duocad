@@ -32,22 +32,16 @@
 from __future__ import annotations
 
 import hashlib
-import sys
-import time
 
 import numpy as np
 
-# **Windowsの既定コンソール(cp932)で落ちないようにする。**
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(errors="replace")  # type: ignore[union-attr]
-    except (AttributeError, ValueError):
-        pass
-
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from _harness import Checker, run
 from duocad.topopt import anchor, fem, stress
 
-FAILURES: list[str] = []
+CHECK = Checker()
+check = CHECK.check
+FAILURES = CHECK.failures
 
 # --- 弾性論から出る参照値(E=1, nu=0.3) --------------------------------------
 E_REF, NU_REF = 1.0, 0.3
@@ -127,13 +121,6 @@ BASELINE = {
         "fixed_dofs": 285,
     },
 }
-
-
-def check(name: str, ok: bool, detail: str) -> None:
-    """1件の検査結果を出力する。**落ちても即死せず全件を出してから終わる。**"""
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}", flush=True)
-    if not ok:
-        FAILURES.append(f"{name}: {detail}")
 
 
 def _sha(arr: np.ndarray) -> str:
@@ -238,8 +225,8 @@ def check_global_system() -> None:
 # 3. 移設前一致(4題材)
 # ---------------------------------------------------------------------------
 def _floating_dofs(void: np.ndarray) -> np.ndarray:
-    """空要素にしか接していない節点の自由度番号。組み立ては `acceptance.safety_check` と同じ。"""
-    return np.flatnonzero(~np.repeat(anchor.active_nodes(~void).ravel(), 3))
+    """空要素にしか接していない節点の自由度番号(`acceptance.safety_check` と同じ `anchor.floating_dofs`)。"""
+    return anchor.floating_dofs(~void)
 
 
 def _make_model(nelx: int, nely: int, nelz: int, void_blocks: list[tuple[int, ...]]):
@@ -496,31 +483,22 @@ def check_reactions_and_multi_rhs() -> None:
     )
 
 
-def main() -> int:
-    started = time.perf_counter()
-    print("=" * 72)
-    print("check_fem.py : 二値FEM(fem.py)の受入検査")
-    print("=" * 72)
-
-    check_element_stiffness()
-    check_global_system()
-
+def check_baseline_cases() -> None:
     for name, spec in BASELINE.items():
         print(f"\n[3] {name}: grid={spec['grid']} void_blocks={spec['void_blocks']} "
               f"solver={spec['solver']} threads={spec['threads']}")
         run_case(name, spec)
 
-    check_void_assembly()
-    check_reactions_and_multi_rhs()
 
-    print("\n" + "=" * 72)
-    if FAILURES:
-        print(f"NG: {len(FAILURES)}件が不合格 / {time.perf_counter() - started:.1f}秒")
-        for f in FAILURES:
-            print(f"  - {f}")
-        return 1
-    print(f"OK: 全検査に合格 / {time.perf_counter() - started:.1f}秒")
-    return 0
+def main() -> int:
+    # RESULTS(MEASURED 行)は持たない。NG/OK 行に経過秒数を出す。
+    return run(
+        CHECK,
+        "check_fem.py : 二値FEM(fem.py)の受入検査",
+        [check_element_stiffness, check_global_system, check_baseline_cases, check_void_assembly, check_reactions_and_multi_rhs],
+        timed=True,
+        measured=False,
+    )
 
 
 if __name__ == "__main__":

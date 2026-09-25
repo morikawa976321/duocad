@@ -44,10 +44,9 @@ from duocad.agent.providers import (
 )
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.server import Session
-from agent_support import RecordedProvider, spoke, tool_use
+from agent_support import FAKE_KEY, RecordedProvider, spoke, tool_use
 
 #: 本物ではない。**形だけ本物に似せた文字列**(このリポジトリのどこにも実キーは置かない)。
-FAKE_KEY = "sk-test-DO-NOT-USE-0123456789"
 
 
 # --------------------------------------------------------------------------------------
@@ -66,6 +65,10 @@ class SpyTools:
     def call(self, name, arguments):
         self.calls.append((name, dict(arguments)))
         return self.inner.call(name, arguments)
+
+    def call_and_seq(self, name, arguments):
+        self.calls.append((name, dict(arguments)))
+        return self.inner.call_and_seq(name, arguments)
 
     def error_envelope(self, tool, error):
         return self.inner.error_envelope(tool, error)
@@ -507,6 +510,35 @@ def test_a_dimension_nobody_asked_for_is_refused_before_the_verb_runs():
     assert envelope_code(run.tool_calls[0].result) == "dimension_not_given"
     assert run.tool_calls[0].ok is False
     assert "radius" in run.tool_calls[0].result["error"]["message"]
+
+
+def test_a_string_where_a_number_is_expected_is_refused_before_the_handler_runs():
+    """落ちたら、アプリ内AIが `radius: "12"` のような型違いを渡したとき、`normalize_values` が
+    文字列を1文字ずつ読んで辺2本に半径1と2を付けるように**黙って別の値**で形が変わる(issue #64)。
+    MCP は同じ検査を -32602 で先に弾いているので、封筒で返るのはこの経路だけ。"""
+    surface = tools()
+    provider = RecordedProvider([tool_use("fillet", {"radius": "12"}, "c0"), spoke("直します")])
+
+    run = AgentLoop(surface, provider).run("R12でフィレットして")
+
+    assert envelope_code(run.tool_calls[0].result) == "invalid_argument"
+    assert run.tool_calls[0].ok is False
+    assert "radius" in run.tool_calls[0].result["error"]["message"]
+    assert surface.session.document.log.entries == [], "型違いの引数で形が変わっている"
+
+
+def test_a_string_where_a_boolean_is_expected_is_refused(box_session: Session):
+    """落ちたら、`visible: "false"` が真として通ってボディが隠れない(または隠れたまま戻らない)。"""
+    surface = DocumentTools(box_session)
+    provider = RecordedProvider(
+        [tool_use("set_visible", {"body_id": "box", "visible": "false"}, "c0"), spoke("隠しました")]
+    )
+
+    run = AgentLoop(surface, provider).run("boxを隠して")
+
+    assert envelope_code(run.tool_calls[0].result) == "invalid_argument"
+    assert "visible" in run.tool_calls[0].result["error"]["message"]
+    assert box_session.document.get_body("box").visible is True
 
 
 def test_a_dimension_the_person_gave_passes_through():

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .boundary_check import _integers, orient2d
+from .boundary_check import exact_integers, orient2d, segment_contacts
 
 _EPS = np.finfo(np.float64).eps
 #: Shewchuk, orient3d の o3derrboundA。
@@ -29,7 +29,7 @@ KINDS = ('cross', 'touch', 'coplanar', 'fold', 'duplicate')
 
 def orient3d_exact(a, b, c, d) -> int:
     """d が平面 (a, b, c) のどちら側かの符号を整数演算で厳密に求める。"""
-    ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz = _integers(
+    ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz = exact_integers(
         (a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2], d[0], d[1], d[2]))
     adx, ady, adz = ax - dx, ay - dy, az - dz
     bdx, bdy, bdz = bx - dx, by - dy, bz - dz
@@ -127,15 +127,8 @@ def _project(points: np.ndarray, axis: np.ndarray) -> np.ndarray:
 
 
 def _segment_segment_2d(p1, p2, p3, p4) -> np.ndarray:
-    """2D 線分の接触: 0 なし / 1 接触(端点が相手の上・共線の重なり) / 2 交差。"""
-    o1 = orient2d(p3, p4, p1)
-    o2 = orient2d(p3, p4, p2)
-    o3 = orient2d(p1, p2, p3)
-    o4 = orient2d(p1, p2, p4)
-    cross = (o1 * o2 < 0) & (o3 * o4 < 0)
-    inside = lambda pt, a, b: (pt >= np.minimum(a, b)).all(axis=1) & (pt <= np.maximum(a, b)).all(axis=1)
-    touch = ((o1 == 0) & inside(p1, p3, p4)) | ((o2 == 0) & inside(p2, p3, p4)) \
-        | ((o3 == 0) & inside(p3, p1, p2)) | ((o4 == 0) & inside(p4, p1, p2))
+    """2D 線分の接触: 0 なし / 1 接触(端点が相手の上・共線の重なり) / 2 交差(`boundary_check.segment_contacts`)。"""
+    cross, touch, _collinear = segment_contacts(p1, p2, p3, p4)
     return np.where(cross, 2, np.where(touch, 1, 0)).astype(np.int8)
 
 

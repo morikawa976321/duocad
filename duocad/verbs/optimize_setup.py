@@ -360,10 +360,15 @@ def _do_fixtures(document: Document, operation: Operation) -> None:
     _apply_faces(document, "fixtures", list(operation.args.get("faces") or []))
 
 
-def _undo_fixtures(document: Document, operation: Operation) -> None:
+def _restore_faces(document: Document, role: str, previous) -> None:
+    """条件面(`fixtures` / `loads`)を undo で元の並びへ戻す。"""
     setup = document.optimize
-    setup.fixtures = [dict(item) for item in operation.args.get("previous") or []]
+    setattr(setup, role, [dict(item) for item in previous or []])
     setup.touch()
+
+
+def _undo_fixtures(document: Document, operation: Operation) -> None:
+    _restore_faces(document, "fixtures", operation.args.get("previous"))
 
 
 def _do_loads(document: Document, operation: Operation) -> None:
@@ -371,9 +376,8 @@ def _do_loads(document: Document, operation: Operation) -> None:
 
 
 def _undo_loads(document: Document, operation: Operation) -> None:
-    setup = document.optimize
-    setup.loads = [dict(item) for item in operation.args.get("previous_faces") or []]
-    setup.touch()
+    # 鍵名は `previous_faces`(保存した文書の操作ログにこの名前で載っている。理由は `_do_loads` の上)。
+    _restore_faces(document, "loads", operation.args.get("previous_faces"))
 
 
 register_verb(VERB_SET_PRESERVE_BODIES, do=_do_bodies, undo=_undo_bodies)

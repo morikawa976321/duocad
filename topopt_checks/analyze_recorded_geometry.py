@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import _bootstrap  # noqa: F401
+from _documents import open_session
 import _record
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from OCP.gp import gp_Pnt
@@ -19,8 +20,7 @@ def main():
     out = run/'analysis'
     out.mkdir(exist_ok=True)
     world = load_snapshot(next(run.glob('*-final-mesh-world.json')))
-    session = check.Session(None, .2, models_dir=run)
-    session.open_document('input.json')
+    session = open_session(run / 'input.json')
     doc = session.document
     def save(name, data):
         _record.write(out / name, data)

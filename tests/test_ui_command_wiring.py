@@ -23,15 +23,13 @@ from __future__ import annotations
 import ast
 import functools
 import importlib.util
-import json
 import re
-import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from duocad.paths import REPO_ROOT
+from node_support import run_node
 COMMANDS_DIR = REPO_ROOT / "web" / "src" / "commands"
 
 
@@ -145,8 +143,8 @@ def _server_command_args() -> dict[str, tuple]:
 def _dispatch_message_keys() -> set[str]:
     """`Server._dispatch` が `message[...]` / `message.get(...)` で読む名前を集める。
 
-    **表に載らないコマンドを取り逃さないため**(`extrude_face` と `open_document` は
-    個別に捌かれている)。どのコマンドの引数かまでは分岐を追わないと分からないので、
+    **表に載らないコマンドを取り逃さないため**(`open_document` のように個別に捌かれる
+    ものがある)。どのコマンドの引数かまでは分岐を追わないと分からないので、
     ここは「対象集合の名前が1つも出てこない」ことだけを見るのに使う。
     """
     source = (REPO_ROOT / "duocad" / "net" / "ws.py").read_text(encoding="utf-8")
@@ -169,13 +167,7 @@ def _dispatch_message_keys() -> set[str]:
 @functools.cache
 def _ui_commands() -> tuple:
     """`web/src/commands/*.ts` の `CommandDef` を Node で読み込んだもの(`tests/eval_command_defs.mjs`)。"""
-    evaluator = REPO_ROOT / "tests" / "eval_command_defs.mjs"
-    try:
-        completed = subprocess.run(["node", str(evaluator)], capture_output=True, cwd=str(REPO_ROOT), timeout=60)
-    except FileNotFoundError as error:
-        raise AssertionError("node が見つからない。UIのコマンド定義を読めないので検査できない") from error
-    assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")
-    return tuple(json.loads(completed.stdout))
+    return tuple(run_node(REPO_ROOT / "tests" / "eval_command_defs.mjs", "UIのコマンド定義", json_out=True))
 
 
 def _ui_command_ids() -> dict[str, str]:

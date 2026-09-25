@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from build123d import Box, Cylinder, Pos, Rot
 
-from duocad import kernel
+from duocad import kernel, kernel_brep
 from duocad.topopt import acceptance, voxelize
 from duocad.topopt.acceptance import RegionOverlaps, intersection_volume, region_check
 
@@ -65,13 +65,13 @@ def test_only_cells_touched_by_the_mask_are_computed_and_each_is_computed_once(m
     grid = voxelize.Grid((0., 0., 0.), 1., (20, 20, 20))
     shape = (Pos(10.3, 10.3, 10.3) * Box(18.4, 18.4, 18.4)).wrapped
     calls = []
-    original = kernel.grid_cell_common_volumes
+    original = kernel_brep.grid_cell_common_volumes
 
     def spy(*args):
         calls.append(args[1])
         return original(*args)
 
-    monkeypatch.setattr(kernel, 'grid_cell_common_volumes', spy)
+    monkeypatch.setattr(kernel_brep, 'grid_cell_common_volumes', spy)
     overlaps = RegionOverlaps()
     corner = np.zeros(grid.shape, bool)
     corner[:3, :3, :3] = True
@@ -118,7 +118,7 @@ def test_solids_the_precompute_cannot_handle_go_back_to_the_direct_boolean(monke
         calls.append(1)
         raise RuntimeError('boom')
 
-    monkeypatch.setattr(kernel, 'grid_cell_common_volumes', broken)
+    monkeypatch.setattr(kernel_brep, 'grid_cell_common_volumes', broken)
     overlaps = RegionOverlaps()
     mask = masks['half']
     assert overlaps.overlap_volume(mask, grid, shape) == intersection_volume(mask, grid, shape)
@@ -139,9 +139,9 @@ def test_solid_without_positive_volume_is_reported_the_same_way():
 
 def test_grid_cell_common_volumes_kinds_and_cell_volumes():
     shape = (Pos(5, 5, 5) * Box(10, 10, 10)).wrapped  # [0, 10]^3
-    assert kernel.grid_cell_common_volumes(shape, [20., 20., 20.], 1.0, [4, 4, 4]) == ('empty', {})
-    assert kernel.grid_cell_common_volumes(shape, [2., 2., 2.], 1.0, [4, 4, 4]) == ('full', {})
-    kind, volumes = kernel.grid_cell_common_volumes(shape, [8.5, 1., 1.], 1.0, [4, 2, 2])
+    assert kernel_brep.grid_cell_common_volumes(shape, [20., 20., 20.], 1.0, [4, 4, 4]) == ('empty', {})
+    assert kernel_brep.grid_cell_common_volumes(shape, [2., 2., 2.], 1.0, [4, 4, 4]) == ('full', {})
+    kind, volumes = kernel_brep.grid_cell_common_volumes(shape, [8.5, 1., 1.], 1.0, [4, 2, 2])
     assert kind == 'partial'
     assert set(volumes) == {(i, j, k) for i in range(2) for j in range(2) for k in range(2)}
     assert volumes[(0, 0, 0)] == pytest.approx(1.0) and volumes[(1, 0, 0)] == pytest.approx(0.5)
@@ -151,12 +151,12 @@ def test_grid_cell_common_volumes_kinds_and_cell_volumes():
 def test_a_piece_the_cutting_planes_did_not_split_is_rejected(monkeypatch):
     """破片は重心でセルへ振り分けるので、切れていない破片(複数セルにまたがる)は黙って別のセルへ入る。それを通さない。"""
     shape = (Pos(5, 5, 5) * Box(10, 10, 10)).wrapped
-    real, calls = kernel._split_by_planes, []
+    real, calls = kernel_brep._split_by_planes, []
 
     def split(argument, planes):
         calls.append(1)
         return real(argument, planes) if len(calls) == 1 else argument  # 2回目(セルの面で切る)を素通しにする
 
-    monkeypatch.setattr(kernel, '_split_by_planes', split)
+    monkeypatch.setattr(kernel_brep, '_split_by_planes', split)
     with pytest.raises(RuntimeError, match='did not split'):
-        kernel.grid_cell_common_volumes(shape, [8.5, 1., 1.], 1.0, [4, 2, 2])
+        kernel_brep.grid_cell_common_volumes(shape, [8.5, 1., 1.], 1.0, [4, 2, 2])

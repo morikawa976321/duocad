@@ -22,23 +22,13 @@
  * **別のサーバを先に立てておく必要はない**(むしろポートがぶつかる)。
  * ブラウザはインストール済みのEdge/Chromeを使う(`smoke.mjs` と同じ。`DUOCAD_BROWSER` で明示可)。
  */
-import { existsSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { findBrowser, launchBrowser, frameAll } from './browser.mjs'
-import { fail, ok, parseArgs } from './args.mjs'
-import { McpClient } from './mcp-client.mjs'
-import { startServer } from './server.mjs'
+import { assertNoAppErrors, frameAll, openApp, sleep } from './browser.mjs'
+import { fail, ok } from './args.mjs'
+import { runSmoke } from './harness.mjs'
 import { PC_CASE_STEP, PC_CASE_SOLIDS } from './models.mjs'
-
-
-const options = parseArgs(process.argv.slice(2))
-const stepPath = options.step ?? PC_CASE_STEP
-// 既定のポート(8765/8766)をわざと避ける: 本人が実機で開いているサーバを壊さないため。
-const wsPort = options.port ?? '8865'
-const httpPort = options['http-port'] ?? '8866'
-const timeout = Number.parseInt(options.timeout ?? '180000', 10)
-const expectedBodies = Number.parseInt(options['expect-bodies'] ?? String(PC_CASE_SOLIDS), 10)
+import { clickSketchPoint, createSketchOnBasePlane, faceAt, screenOf } from './pick.mjs'
 
 /** 3Dハイライトの色(`viewport.ts` の `HIGHLIGHT_COLOR` / `PROPOSED_COLOR`)。
     **選択パネルを廃した後、提案と確定を区別する唯一の手段**なので、値で検査する。 */
@@ -48,18 +38,13 @@ const PROPOSED_HIGHLIGHT = 0x36d1ff
 
 
 
-async function main() {
-  const executablePath = findBrowser()
+// 握手はこの本が自分で打つ(`handshake: false`) —— 応答の中身(protocol / serverInfo)を検査に使う。
+runSmoke('smoke-mcp', { timeout: 180000, mcp: true, handshake: false }, async ({ options, workdir, mcp, browser, url, timeout }) => {
+  const stepPath = options.step ?? PC_CASE_STEP
+  const expectedBodies = Number.parseInt(options['expect-bodies'] ?? String(PC_CASE_SOLIDS), 10)
   if (!existsSync(stepPath)) fail(`STEPが無い: ${stepPath}`)
-
   console.log(`smoke-mcp: ${stepPath}`)
-  console.log(`  browser: ${executablePath}`)
-
-  const server = await startServer({ wsPort, httpPort })
-  const mcp = new McpClient(server.child, { timeout })
-  let browser = null
-
-  try {
+  {
     // ---------------------------------------------------------------- MCPの握手
     const info = await mcp.handshake('duocad-smoke-mcp')
     ok(`MCP接続: protocol ${info.protocolVersion} / ${info.serverInfo.name} ${info.serverInfo.version}`)
@@ -91,32 +76,16 @@ async function main() {
     ok(`describe_document: ${document.body_count} 件のBody / units=${document.units}`)
 
     // ---------------------------------------------------------------- ブラウザを開く
-    browser = await launchBrowser(executablePath)
-    const page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 860 })
-    const consoleErrors = []
-    page.on('pageerror', (error) => consoleErrors.push(String(error)))
-    page.on('console', (message) => {
-      if (message.type() === 'error') consoleErrors.push(message.text())
+    const { page, consoleErrors } = await openApp(browser, url, {
+      timeout,
+      until: () => (window.__duocad.parts ?? []).length > 0,
     })
-    page.on('response', (response) => {
-      if (response.status() >= 400) consoleErrors.push(`HTTP ${response.status()} ${response.url()}`)
-    })
-
-    await page.goto(`http://127.0.0.1:${httpPort}/`, { waitUntil: 'load', timeout })
-    await page.waitForFunction(
-      () => {
-        const hook = window.__duocad
-        return Boolean(hook && hook.ready && hook.parts && hook.parts.length > 0)
-      },
-      { timeout, polling: 100 },
-    )
     /**
      * **起きないことを見る前の猶予**。適用が走るなら「選択の配信 → 適用 → 状態配信」で
      * 済む時間を過ぎてから数える —— 待たずに数えると、走っていても
      * 「まだ返ってきていないだけ」を緑と読んでしまう。
      */
-    const settle = () => new Promise((resolve) => setTimeout(resolve, 1500))
+    const graceForNothingToHappen = () => sleep(1500)
 
     const partCount = await page.evaluate(() => window.__duocad.parts.length)
     if (partCount !== expectedBodies) fail(`画面のパーツ数が合わない: ${partCount}`)
@@ -251,7 +220,7 @@ async function main() {
       },
       { timeout, polling: 50 },
     )
-    await settle()
+    await graceForNothingToHappen()
     const afterAiSelection = await page.evaluate(() => {
       const host = document.querySelector('.command-host')
       return {
@@ -312,15 +281,7 @@ async function main() {
       if (await page.evaluate(() => document.querySelector('.command-host').dataset.command !== 'sketch_create')) {
         await page.click('#sketch-create')
       }
-      const at = await page.evaluate(
-        (bodyId, faceIndex) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectFace(bodyId, faceIndex)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        target.body_id,
-        index,
-      )
+      const at = await faceAt(page, target.body_id, index)
       if (!at) {
         attemptLog.push(`${index}: 射影できない`)
         continue
@@ -391,7 +352,7 @@ async function main() {
     // STEPをそのまま読み直せば軽い1操作になる。**読み込みは何部品でもログ1行・undo1回**
     // という粒度を、実機のCtrl+Z 1回で裏取りする形でもある。
     const lastHidden = others[others.length - 1]
-    const roundTripStep = join(tmpdir(), `duocad-smoke-mcp-${process.pid}.step`)
+    const roundTripStep = join(workdir, 'round-trip.step')
     await mcp.callTool('export_step', { path: roundTripStep })
     const partsBeforeImport = await page.evaluate(() => window.__duocad.parts.length)
     const reimported = await mcp.callTool('import_step', { path: roundTripStep })
@@ -414,7 +375,6 @@ async function main() {
       { timeout, polling: 50 },
       partsBeforeImport,
     )
-    rmSync(roundTripStep, { force: true })
     ok(
       `ブラウザのCtrl+Z **1回**で、AIが読み込んだ ${reimported.body_ids.length} 部品が` +
         `まとめて消えた(AIと人間が同じ操作ログを共有していて、読み込みはundo1回)`,
@@ -493,15 +453,7 @@ async function main() {
       .map((item) => item.index)
     let droppedIndex = null
     for (const index of proposedIndices) {
-      const at = await page.evaluate(
-        (id, edgeIndex) => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectEdge(id, edgeIndex)
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        target.body_id,
-        index,
-      )
+      const at = await screenOf(page, 'projectEdge', target.body_id, index)
       if (!at) continue
       await page.keyboard.down('Control')
       await page.mouse.click(at.x, at.y)
@@ -563,32 +515,9 @@ async function main() {
 
     // **スケッチを作るのは2手**(「スケッチ」を起動 → 貼る先のグリッドをクリック)。
     // Enterは無い —— 対象が1つに定まり how の入力が無いコマンドは即適用になる。
-    await page.click('#sketch-create')
-    const basePlane = await page
-      .waitForFunction(
-        () => {
-          const rect = document.querySelector('.viewport').getBoundingClientRect()
-          const position = window.__duocad.projectBasePlane('XY')
-          return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-        },
-        { timeout, polling: 50 },
-      )
-      .then((handle) => handle.jsonValue())
-      .catch(() => null)
-    if (!basePlane) fail('基準平面XYを指せる画素が無い(「スケッチ」が起動しているか)')
-    await page.mouse.click(basePlane.x, basePlane.y)
-    await page.waitForFunction(() => window.__duocad.activeSketch !== null, {
-      timeout,
-      polling: 50,
-    })
+    await createSketchOnBasePlane(page, 'XY', { timeout })
     await page.click('#sketch-circle')
-    const center = await page.evaluate(() => {
-      const rect = document.querySelector('.viewport').getBoundingClientRect()
-      const position = window.__duocad.projectSketchPoint(0, 0)
-      return position ? { x: position.x + rect.left, y: position.y + rect.top } : null
-    })
-    if (!center) fail('スケッチ平面の原点が画面の中に無い(手で描けない)')
-    await page.mouse.click(center.x, center.y)
+    await clickSketchPoint(page, 0, 0)
     await page.click('#sketch-radius')
     await page.type('#sketch-radius', '15', { delay: 20 })
     await page.keyboard.press('Enter')
@@ -622,17 +551,9 @@ async function main() {
         `(半径 ${drawnCircle.params.radius} / 領域 ${seenByAi.region_count} 個)`,
     )
 
-    if (consoleErrors.length > 0) {
-      fail(`ブラウザのコンソールにエラー: ${consoleErrors.slice(0, 3).join(' | ')}`)
-    }
-    ok('ブラウザのコンソールにエラーなし')
-
-    console.log('smoke-mcp: PASS')
-  } finally {
-    if (browser) await browser.close()
-    await server.stop() // stdinを閉じる = MCPクライアントが切断したときと同じ終わり方
+    await assertNoAppErrors(page, consoleErrors)
   }
-}
+})
 
 /** 各パーツについて「いま画面で選べる面の数」を数える(`projectFace` が null なら選べない)。 */
 async function countPickable(page) {
@@ -658,8 +579,3 @@ async function setAllVisible(mcp, bodies, visible) {
     await mcp.callTool('set_visible', { body_id: body.body_id, visible })
   }
 }
-
-main().catch((error) => {
-  console.error(`smoke-mcp: FAIL — ${error.message}`)
-  process.exitCode = 1
-})

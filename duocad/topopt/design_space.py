@@ -318,7 +318,7 @@ def condition_body(name: str, shape: Any, *, roles: Sequence[str]) -> ConditionB
     製品(`optimize_run.build_conditions`)は文書側のキャッシュ付き `kernel.bounding_box` で
     同じ B-rep の箱を取る。どちらも `useTriangulation=False` の `BRepBndLib.AddOptimal`。
     """
-    lo, hi = vx._shape_bbox(vx._unwrap(shape))
+    lo, hi = vx._shape_bbox(vx.unwrap(shape))
     return ConditionBody(
         name=str(name),
         roles=tuple(roles),
@@ -342,10 +342,7 @@ class Conditions:
     (層をまたぐ契約: 格子の外へ出ていないかは `keep` の外接箱で、格子への占有と条件ごとの接続は
     `bodies` のボディごとに見る)。
 
-    `load_n` は荷重の**実際の大きさ**[N]。荷重が複数のときは**その大きさの総和**であって
-    合力(ベクトル和)ではない —— 向きの違う荷重が打ち消し合うと合力は0になりうるが、
-    総和なら0にならない(`optimize_run.build_conditions` / `stress.load_magnitude_total`)。
-    塊の導出は `load_n` を使わない。探索は面ごとの力ベクトルを実単位[N]のまま受ける
+    荷重の大きさはここに無い。探索は面ごとの力ベクトルを実単位[N]のまま受ける
     (`optimize_run.build_conditions` の `forces`)。
     """
 
@@ -354,7 +351,6 @@ class Conditions:
     load_faces: Any
     obstacle: Any = None
     anchor_shape: Any = None
-    load_n: float = 1.0
     bodies: tuple = field(kw_only=True)
 
     def __post_init__(self) -> None:
@@ -510,58 +506,6 @@ def offset_hull_mask(grid: vx.Grid, planes: np.ndarray, margin: float) -> np.nda
     return inside
 
 
-def _closest_points_on_triangle(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
-    """点群 `p (N,3)` それぞれに最も近い三角形 `abc` 上の点 (N,3)(Ericson の領域分け)。"""
-    ab = b - a
-    ac = c - a
-    ap = p - a
-    d1 = ap @ ab
-    d2 = ap @ ac
-    bp = p - b
-    d3 = bp @ ab
-    d4 = bp @ ac
-    cp = p - c
-    d5 = cp @ ab
-    d6 = cp @ ac
-    vc = d1 * d4 - d3 * d2
-    vb = d5 * d2 - d1 * d6
-    va = d3 * d6 - d5 * d4
-    q = np.empty_like(p)
-    done = np.zeros(p.shape[0], dtype=bool)
-
-    def take(mask: np.ndarray, value: np.ndarray) -> None:
-        nonlocal done
-        mask = mask & ~done
-        q[mask] = value if value.ndim == 1 else value
-        done |= mask
-
-    take((d1 <= 0) & (d2 <= 0), a)  # 頂点 A の領域
-    take((d3 >= 0) & (d4 <= d3), b)  # 頂点 B
-    take((d6 >= 0) & (d5 <= d6), c)  # 頂点 C
-    m = (vc <= 0) & (d1 >= 0) & (d3 <= 0) & ~done  # 辺 AB
-    if m.any():
-        v = d1[m] / (d1[m] - d3[m])
-        q[m] = a + v[:, None] * ab
-        done |= m
-    m = (vb <= 0) & (d2 >= 0) & (d6 <= 0) & ~done  # 辺 AC
-    if m.any():
-        w = d2[m] / (d2[m] - d6[m])
-        q[m] = a + w[:, None] * ac
-        done |= m
-    m = (va <= 0) & (d4 - d3 >= 0) & (d5 - d6 >= 0) & ~done  # 辺 BC
-    if m.any():
-        w = (d4[m] - d3[m]) / ((d4[m] - d3[m]) + (d5[m] - d6[m]))
-        q[m] = b + w[:, None] * (c - b)
-        done |= m
-    m = ~done  # 面の内側
-    if m.any():
-        denom = 1.0 / (va[m] + vb[m] + vc[m])
-        v = vb[m] * denom
-        w = vc[m] * denom
-        q[m] = a + ab * v[:, None] + ac * w[:, None]
-    return q
-
-
 def distance_to_hull(points: np.ndarray, planes: np.ndarray, triangles: np.ndarray) -> np.ndarray:
     """点群 `(N,3)` から凸包までのユークリッド距離(内側は 0)。
 
@@ -575,12 +519,11 @@ def distance_to_hull(points: np.ndarray, planes: np.ndarray, triangles: np.ndarr
     out = np.zeros(pts.shape[0], dtype=float)
     outside = np.flatnonzero(~inside)
     if outside.size:
-        q = pts[outside]
-        best = np.full(outside.size, np.inf)
-        for a, b, c in np.asarray(triangles, dtype=float):
-            closest = _closest_points_on_triangle(q, a, b, c)
-            np.minimum(best, np.linalg.norm(q - closest, axis=1), out=best)
-        out[outside] = best
+        # 距離は `voxelize.distance_to_triangles`(7候補の最小)で取る。Ericson の領域分けは退化した三角形
+        # (3頂点が一直線)で NaN や大きすぎる距離を返し、NaN は `np.minimum` を通って**そのセルを黙って
+        # 塊から落とす**(`distance <= margin` が偽になる)。
+        tri = np.asarray(triangles, dtype=float).reshape(-1, 3, 3)
+        out[outside] = vx.distance_to_triangles(tri[:, 0], tri[:, 1], tri[:, 2], pts[outside])[0]
     return out
 
 
@@ -700,7 +643,7 @@ def derive(
     design = candidate
     if conditions.obstacle is not None:
         obs_soup = vx.triangles_from_shape(
-            vx._unwrap(conditions.obstacle), deviation=dev, angular_deflection=angular_deflection
+            vx.unwrap(conditions.obstacle), deviation=dev, angular_deflection=angular_deflection
         )
         grid_lo, grid_hi = grid.world_box()
         obs_lo, obs_hi = obs_soup.bbox
@@ -721,7 +664,7 @@ def derive(
     # **格子の外は voxelize が見ていない。** 外枠は保持ボディの箱から起こしているので通常は
     # 出ないが、渡された外接箱と `keep` の形が食い違っていると黙って消える —— 先に落とす。
     grid_lo, grid_hi = grid.world_box()
-    k_lo, k_hi = vx._shape_bbox(vx._unwrap(conditions.keep))
+    k_lo, k_hi = vx._shape_bbox(vx.unwrap(conditions.keep))
     if np.any(k_lo < grid_lo - 1e-9) or np.any(k_hi > grid_hi + 1e-9):
         raise DesignSpaceTooSmallError(
             f"保持ソリッド {np.round(k_lo, 3).tolist()} .. {np.round(k_hi, 3).tolist()} が"
@@ -744,7 +687,7 @@ def derive(
         )
 
     soup = vx.triangles_from_shape(
-        vx._unwrap(conditions.anchor), deviation=dev, angular_deflection=angular_deflection
+        vx.unwrap(conditions.anchor), deviation=dev, angular_deflection=angular_deflection
     )
     # アンカーの表は**全面・既定の半径**で作る。`faces=` で対象の面を絞ると稜線の規則
     # (節点は最も面積を配った面が持つ)の競争相手が減り、**絞らずに作った表とは別の
@@ -874,7 +817,7 @@ def _keep_bodies_on_grid(
             )
             continue
         soup = vx.triangles_from_shape(
-            vx._unwrap(body.shape), deviation=deviation, angular_deflection=angular_deflection
+            vx.unwrap(body.shape), deviation=deviation, angular_deflection=angular_deflection
         )
         vx.inspect_soup(soup)
         raw, occupancy_stats = vx.occupancy(soup, grid, allow_empty=True)

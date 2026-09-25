@@ -3,29 +3,31 @@ import numpy as np
 
 from .. import kernel
 from ..kernel_brep import boolean, encode_brep, inspect_solid, is_valid
-from ..mesh_geometry import topology, make_material, degenerate_triangles
+from ..mesh_geometry import TOPOLOGY_DEFECTS, degenerate_triangles, make_material, topology, weld_exact
 from ..mesh_intersections import triangle_intersections
 from . import trace
 
 
-def solid_mesh(shape):
-    """最終CADを偏差0.2 mmで三角形分割し、成果物として合格した (vertices, faces) を返す。
+#: 最終CADを三角形分割する偏差[mm]。結果はメッシュボディとして文書に入り、画面も STL もその三角形を
+#: そのまま使う(`optimize_run` / `io_step`)ので、画面の偏差(`kernel.DEFAULT_DEVIATION`)とは結びつかない。
+FINAL_MESH_DEVIATION_MM = 0.2
 
-    画面とSTLは同じ `kernel.tessellate` を同じ偏差で呼ぶので、ここで合格したものがそのまま配られる。
+
+def solid_mesh(shape):
+    """最終CADを `FINAL_MESH_DEVIATION_MM` で三角形分割し、成果物として合格した (vertices, faces) を返す。
+
     合格条件は `final_mesh_checks`。不合格は例外(黙って穴の空いたメッシュを返さない)。
     """
-    payload = kernel.tessellate(shape, deviation=0.2)
+    payload = kernel.tessellate(shape, deviation=FINAL_MESH_DEVIATION_MM)
     boundary = payload['boundary']
     if payload['untriangulated'] or boundary['unresolved']:
         raise ValueError(
             f"最終CADに三角形分割できない面がある: untriangulated={payload['untriangulated'][:20]}, "
             f"boundary={boundary['termination']}, unresolved={boundary['unresolved'][:5]}")
-    triangles = np.concatenate([
+    vertices, faces = weld_exact(np.concatenate([
         np.asarray(face['positions']).reshape(-1, 3)[np.asarray(face['indices']).reshape(-1, 3)]
         for face in payload['faces']
-    ])
-    vertices, inverse = np.unique(triangles.reshape(-1, 3), axis=0, return_inverse=True)
-    faces = inverse.reshape(-1, 3)
+    ]))
     checks = final_mesh_checks(vertices, faces)
     trace.snapshot('final-mesh-checks', boundary=dict(termination=boundary['termination'], rounds=boundary['rounds'],
                                                      amplified_edges=boundary['amplified_edges'],
@@ -46,8 +48,7 @@ def final_mesh_checks(vertices, faces):
       重い検査なので消費される float32 側だけで 1 回行う。
     """
     stats, _ = topology(vertices, faces)
-    failed = [key for key in ('boundary_edges', 'nonmanifold_edges', 'inconsistent_edges',
-                              'nonmanifold_vertices', 'degenerate_triangles', 'duplicate_triangles') if stats[key]]
+    failed = [key for key in TOPOLOGY_DEFECTS if stats[key]]
     rounded = np.asarray(vertices, dtype=np.float64).astype(np.float32).astype(np.float64)
     merged = int(len(rounded) - len(np.unique(rounded, axis=0)))
     degenerate = int(degenerate_triangles(rounded, faces).sum())
@@ -110,8 +111,7 @@ def finalize(vertices, faces, preserve, exclude, progress=None):
     vertices, faces = np.asarray(vertices), np.asarray(faces)
     preserve, exclude = list(preserve), list(exclude)
     stats, components = topology(vertices, faces)
-    if any(stats[k] for k in ('boundary_edges', 'nonmanifold_edges', 'inconsistent_edges',
-                              'nonmanifold_vertices', 'degenerate_triangles', 'duplicate_triangles')):
+    if any(stats[k] for k in TOPOLOGY_DEFECTS):
         raise ValueError('平滑化後の表面に開口または不正な接続がある')
     if progress:
         progress('平滑化後の表面をCADに変換')

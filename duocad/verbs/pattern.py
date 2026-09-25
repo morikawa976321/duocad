@@ -20,16 +20,52 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Sequence
+from typing import Any, Dict, Optional, Sequence
 from uuid import uuid4
 
 from .. import parameters
 from ..document import Document, unknown_id_message
 from ..oplog import Operation, register_verb
-from ..sketch import Pattern, entity_kind_ops, get_sketch
+from ..sketch import Entity, Pattern, entity_kind_ops, get_sketch
 
 VERB_PATTERN_RECTANGULAR = "pattern_rectangular"
 VERB_PATTERN_CIRCULAR = "pattern_circular"
+
+
+def _check_sources(sketch, sketch_id: str, entity_ids: Sequence[str]) -> Dict[str, Entity]:
+    """反復の元にする図形の検査(同じスケッチにあるか → 既に別の反復に使われていないか)。
+    未知の図形は KeyError、使用済みは ValueError。戻りは ID → 図形(円形反復が中心の一致検査に使う)。"""
+    by_id = {entity.id: entity for entity in sketch.entities}
+    for entity_id in entity_ids:
+        if entity_id not in by_id:
+            raise KeyError(
+                unknown_id_message("entity", entity_id, [entity.id for entity in sketch.entities], where=f"sketch {sketch_id!r}")
+            )
+    already_used = {source for pattern in sketch.patterns for source in pattern.sources}
+    for entity_id in entity_ids:
+        if entity_id in already_used:
+            raise ValueError(f"entity {entity_id!r} is already used by another pattern")
+    return by_id
+
+
+def _append_pattern(
+    document: Document,
+    sketch_id: str,
+    pattern_id: str,
+    entities: Sequence[str],
+    values: Dict[str, float],
+    *,
+    kind: str = "rectangular",
+    options: Optional[dict] = None,
+) -> None:
+    """Pattern をスケッチへ足し、`values` を名前つきの値として登録する(**キーの並び**が `d<n>` の振り順。
+    矩形は `dx, dy, nx, ny`、円形は `cx, cy, count, total_angle`)。ログには触らない。"""
+    sketch = get_sketch(document, sketch_id)
+    if any(pattern.id == pattern_id for pattern in sketch.patterns):
+        raise ValueError(f"pattern id already exists: {pattern_id!r}")
+    refs = parameters.register_all(document, {key: float(value) for key, value in values.items()})
+    extra = {} if kind == "rectangular" else {"kind": kind, "options": dict(options or {})}
+    sketch.patterns.append(Pattern(id=pattern_id, sources=list(entities), params=refs, **extra))
 
 
 def _install_pattern(
@@ -42,19 +78,7 @@ def _install_pattern(
     nx: int,
     ny: int,
 ) -> None:
-    """Pattern をスケッチへ足し、4つの数値を名前つきの値として登録する。ログには触らない。"""
-    sketch = get_sketch(document, sketch_id)
-    if any(pattern.id == pattern_id for pattern in sketch.patterns):
-        raise ValueError(f"pattern id already exists: {pattern_id!r}")
-    refs = {
-        "dx": parameters.register_value(document, float(dx)),
-        "dy": parameters.register_value(document, float(dy)),
-        "nx": parameters.register_value(document, float(nx)),
-        "ny": parameters.register_value(document, float(ny)),
-    }
-    sketch.patterns.append(
-        Pattern(id=pattern_id, sources=list(entities), params=refs)
-    )
+    _append_pattern(document, sketch_id, pattern_id, entities, {"dx": dx, "dy": dy, "nx": nx, "ny": ny})
 
 
 def pattern_rectangular(
@@ -77,29 +101,7 @@ def pattern_rectangular(
     if not entity_ids:
         raise ValueError("pattern_rectangular requires at least one entity")
 
-    sketch = get_sketch(doc, sketch_id)
-    known = {entity.id for entity in sketch.entities}
-    for entity_id in entity_ids:
-        if entity_id not in known:
-            raise KeyError(
-                unknown_id_message(
-                    "entity",
-                    entity_id,
-                    [entity.id for entity in sketch.entities],
-                    where=f"sketch {sketch_id!r}",
-                )
-            )
-
-    already_used = {
-        source
-        for pattern in sketch.patterns
-        for source in pattern.sources
-    }
-    for entity_id in entity_ids:
-        if entity_id in already_used:
-            raise ValueError(
-                f"entity {entity_id!r} is already used by another pattern"
-            )
+    _check_sources(get_sketch(doc, sketch_id), sketch_id, entity_ids)
 
     pattern_id = f"pattern-{uuid4().hex[:12]}"
     _install_pattern(
@@ -134,24 +136,14 @@ def _install_pattern_circular(
     total_angle: float,
     rotate_copies: bool,
 ) -> None:
-    """Pattern をスケッチへ足し、寸法4つを名前つきの値として登録する。ログには触らない。"""
-    sketch = get_sketch(document, sketch_id)
-    if any(pattern.id == pattern_id for pattern in sketch.patterns):
-        raise ValueError(f"pattern id already exists: {pattern_id!r}")
-    refs = {
-        "cx": parameters.register_value(document, float(cx)),
-        "cy": parameters.register_value(document, float(cy)),
-        "count": parameters.register_value(document, float(count)),
-        "total_angle": parameters.register_value(document, float(total_angle)),
-    }
-    sketch.patterns.append(
-        Pattern(
-            id=pattern_id,
-            sources=list(entities),
-            params=refs,
-            kind="circular",
-            options={"rotate_copies": bool(rotate_copies)},
-        )
+    _append_pattern(
+        document,
+        sketch_id,
+        pattern_id,
+        entities,
+        {"cx": cx, "cy": cy, "count": count, "total_angle": total_angle},
+        kind="circular",
+        options={"rotate_copies": bool(rotate_copies)},
     )
 
 
@@ -192,30 +184,7 @@ def pattern_circular(
     if not entity_ids:
         raise ValueError("pattern_circular requires at least one entity")
 
-    sketch = get_sketch(doc, sketch_id)
-    by_id = {entity.id: entity for entity in sketch.entities}
-    known = set(by_id)
-    for entity_id in entity_ids:
-        if entity_id not in known:
-            raise KeyError(
-                unknown_id_message(
-                    "entity",
-                    entity_id,
-                    [entity.id for entity in sketch.entities],
-                    where=f"sketch {sketch_id!r}",
-                )
-            )
-
-    already_used = {
-        source
-        for pattern in sketch.patterns
-        for source in pattern.sources
-    }
-    for entity_id in entity_ids:
-        if entity_id in already_used:
-            raise ValueError(
-                f"entity {entity_id!r} is already used by another pattern"
-            )
+    by_id = _check_sources(get_sketch(doc, sketch_id), sketch_id, entity_ids)
 
     for entity_id in entity_ids:
         entity = by_id[entity_id]

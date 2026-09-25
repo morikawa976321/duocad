@@ -40,6 +40,11 @@ from typing import Any, Optional
 #: - `protocol`  … WebSocketだけの口(verbではない。状態の要求・プレビュー・辺の折れ線)
 CATEGORIES = ("query", "selection", "sketch", "feature", "file", "history", "protocol")
 
+#: 形(面・辺・領域の添字)を変えうる verb のカテゴリ。ここに属し文書を変える宣言は、
+#: `resets_selection` を**明示しないと import 時点で落ちる**(既定に頼ると、形を変える verb を
+#: 足すときの付け忘れがどこにも現れない。issue #51)。
+SHAPE_CATEGORIES = ("sketch", "feature", "history")
+
 #: `Command.ws` に書ける値。
 #:
 #: - `table`   … `server.py` の表(`SKETCH_COMMANDS` 等)に載り、`_dispatch` が機械的に捌く
@@ -118,8 +123,9 @@ class Command:
     #: `Session._reset_selection_if_needed` がここを見て1箇所で発火するので、UI経由・MCP経由の
     #: どちらでも同じに効く。**失敗したverb(ログに積まれない)には効かない**。
     #: **`undo`/`redo` も true**(添字が壊れていない可能性があっても、何を戻した/やり直したかで
-    #: 場合分けしない単純な規則を優先する)。
-    resets_selection: bool = False
+    #: 場合分けしない単純な規則を優先する)。**`SHAPE_CATEGORIES` の verb は書くこと**(`None` のままなら
+    #: `__post_init__` が落とす)。それ以外は省略すると false。
+    resets_selection: Optional[bool] = None
     #: **対象集合をコアの確定選択から取るか**。`Session` の実体が
     #: `selection.require_confirmed` / `require_edges` を呼ぶverbだけが true。
     #:
@@ -141,6 +147,12 @@ class Command:
             raise ValueError(f"{self.name}: WSに開けるなら `session` が要る")
         if self.previewable and self.session is None:
             raise ValueError(f"{self.name}: プレビューは `Session` のメソッドを呼ぶ")
+        if self.resets_selection is None:
+            if self.category in SHAPE_CATEGORIES and self.changes_document:
+                raise ValueError(
+                    f"{self.name}: 形を変えうる verb は `resets_selection` を宣言する(既定に頼らない)"
+                )
+            object.__setattr__(self, "resets_selection", False)
 
     @property
     def ws_params(self) -> tuple[str, ...]:
@@ -184,6 +196,9 @@ class Command:
 # 宣言(**verbを足すのはここ**)
 # --------------------------------------------------------------------------------------
 #: 並び順は `tools/list` に出る順序でもある(AIが最初に読む順)。
+#: スケッチのverbが共通に受ける `sketch_id`(`Param` は frozen なので共有してよい)。
+_SKETCH_ID = Param("sketch_id", "string", "対象スケッチのID")
+
 COMMANDS: tuple[Command, ...] = (
     # ---------------------------------------------------------------- 問い合わせ
     Command(
@@ -363,6 +378,7 @@ COMMANDS: tuple[Command, ...] = (
     # ---------------------------------------------------------------- スケッチ
     Command(
         name="sketch_create",
+        resets_selection=False,
         category="sketch",
         description=(
             "新しいスケッチを作るときに呼ぶ。"
@@ -388,6 +404,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="sketch_create_offset",
+        resets_selection=False,
         category="sketch",
         description=(
             "オフセット平面に新しいスケッチを作るときに呼ぶ。"
@@ -423,7 +440,7 @@ COMMANDS: tuple[Command, ...] = (
         category="sketch",
         description="スケッチに線分を足すときに呼ぶ(平面上の2点)。",
         params=(
-            Param("sketch_id", "string", "対象スケッチのID"),
+            _SKETCH_ID,
             Param("p0", "array", "始点 [u, v]"),
             Param("p1", "array", "終点 [u, v]"),
         ),
@@ -435,7 +452,7 @@ COMMANDS: tuple[Command, ...] = (
         category="sketch",
         description="スケッチに円を足すときに呼ぶ。",
         params=(
-            Param("sketch_id", "string", "対象スケッチのID"),
+            _SKETCH_ID,
             Param("center", "array", "中心 [u, v]"),
             Param("radius", "number", "半径(mm)", dimension=True),
         ),
@@ -447,7 +464,7 @@ COMMANDS: tuple[Command, ...] = (
         category="sketch",
         description="スケッチに長方形を足すときに呼ぶ。",
         params=(
-            Param("sketch_id", "string", "対象スケッチのID"),
+            _SKETCH_ID,
             Param("corner", "array", "基準コーナー [u, v]"),
             Param("width", "number", "幅(mm)", dimension=True),
             Param("height", "number", "高さ(mm)", dimension=True),
@@ -468,7 +485,7 @@ COMMANDS: tuple[Command, ...] = (
         category="sketch",
         description="スケッチに円弧を足すときに呼ぶ(中心・半径・開始角・終了角)。",
         params=(
-            Param("sketch_id", "string", "対象スケッチのID"),
+            _SKETCH_ID,
             Param("center", "array", "中心 [u, v]"),
             Param("radius", "number", "半径(mm)", dimension=True),
             Param("start_deg", "number", "開始角(度・反時計)", dimension=True),
@@ -522,7 +539,6 @@ COMMANDS: tuple[Command, ...] = (
         params=(Param("distance", "number", "押し出し量(mm)", dimension=True),),
         uses_selection=True,
         session="extrude_face",
-        ws="special",
         previewable=True,
         resets_selection=True,
     ),
@@ -898,6 +914,7 @@ COMMANDS: tuple[Command, ...] = (
     # WSの表・`_dispatch` の分岐・UIの送信経路がverbの中身と関係なく増える。
     Command(
         name="set_preserve_bodies",
+        resets_selection=False,
         category="feature",
         description=(
             "形状最適化で**削ってはいけないソリッド**を決めるときに呼ぶ。"
@@ -914,6 +931,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="set_exclude_bodies",
+        resets_selection=False,
         category="feature",
         description=(
             "形状最適化で**材料を置いてはいけないソリッド**(逃げ・干渉物)を決めるときに呼ぶ。"
@@ -927,6 +945,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="set_fixtures",
+        resets_selection=False,
         category="feature",
         description=(
             "形状最適化で**固定される面**(拘束)を決めるときに呼ぶ。確定選択の面**そのもの**を"
@@ -942,6 +961,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="set_loads",
+        resets_selection=False,
         category="feature",
         description=(
             "形状最適化で**力がかかる面**(荷重)を決めるときに呼ぶ。確定選択の面**だけ**に"
@@ -978,6 +998,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="clear_loads",
+        resets_selection=False,
         category="feature",
         description=(
             "形状最適化で**荷重を外す**ときに呼ぶ。確定選択の面を荷重面から落とす"
@@ -1101,7 +1122,7 @@ COMMANDS: tuple[Command, ...] = (
             "SVGが物理単位を持たなければ1ユーザー単位=1mm。"
         ),
         params=(
-            Param("sketch_id", "string", "対象スケッチのID"),
+            _SKETCH_ID,
             Param("path", "string", "読み込むSVGファイルのパス"),
             # **UIには出さない**(`ws=False`)。倍率は単位の合わないSVGを直すための逃げ道で、
             # 普段は要らない —— 常に出すと「毎回1.0と打つ欄」が1つ増える。

@@ -21,7 +21,7 @@ CSSの丸めた定数(3.7795296。厳密には 96/25.4 = 3.77952755…)を使う
 **曲線は曲線のまま渡す。** 3次ベジエ(C/S)は1:1、2次ベジエ(Q/T)は次数上げで**厳密に**3次へ。
 楕円弧(rx≠ry)だけはベジエで厳密に表せないので90度以下に割って近似する
 (**最大誤差は半径の0.027%**。半径50mmで13.6um)。折れ線には落とさない —— 落とすと
-押し出した側面が線分の数だけ平面に割れる(`kernel._edges_bezier` のdocstring)。
+押し出した側面が線分の数だけ平面に割れる(`kernel_sketch._edges_bezier` のdocstring)。
 
 **見た目は捨てる。** fill / stroke / 色 / text / image / clip-path はスケッチに意味が無い。
 `<text>` を図形として取り込みたいなら、SVG側でアウトライン化してから読ませること。
@@ -156,9 +156,14 @@ def _translate_segment(segment: Any, height: float, scale: float) -> List[dict]:
     return []  # 未知のセグメント種別は落とす(パーサの版が増やしても壊れない)
 
 
+def _flip(x: float, y: float, height: float, scale: float) -> Tuple[float, float]:
+    """SVGの (x, y) をスケッチの (u, v) へ。**ここだけがY反転と倍率を知っている**。"""
+    return (x * scale, (height - y) * scale)
+
+
 def _point(value: Any, height: float, scale: float) -> Tuple[float, float]:
-    """SVGの点をスケッチの (u, v) へ。**ここだけがY反転と倍率を知っている**。"""
-    return (float(value.x) * scale, (height - float(value.y)) * scale)
+    """svgelements の点(`.x` / `.y`)を `_flip` へ。"""
+    return _flip(float(value.x), float(value.y), height, scale)
 
 
 def _line_entity(segment: Any, height: float, scale: float) -> List[dict]:
@@ -299,7 +304,7 @@ def _elliptical_arc_entities(segment: Any, height: float, scale: float) -> List[
         )
 
     def flip(point: Tuple[float, float]) -> Tuple[float, float]:
-        return (point[0] * scale, (height - point[1]) * scale)
+        return _flip(point[0], point[1], height, scale)
 
     entities: List[dict] = []
     for index in range(count):

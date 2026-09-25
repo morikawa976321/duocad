@@ -307,6 +307,11 @@ class InterferingTools:
     def call(self, name, arguments):
         return self.inner.call(name, arguments)
 
+    def call_and_seq(self, name, arguments):
+        # 直後の版の読み取りもこの覆いの `current_seq` を通す(呼び出し回数の数え方を保つ)。
+        payload, error, _ = self.inner.call_and_seq(name, arguments)
+        return payload, error, self.current_seq()
+
     def error_envelope(self, tool, error):
         return self.inner.error_envelope(tool, error)
 
@@ -323,8 +328,10 @@ def test_a_concurrent_edit_between_two_tool_calls_in_the_same_reply_is_detected(
     """1つの応答に束ねられた複数のツール呼び出しの**間**も見る。
 
     本番経路(`ToolsOnLoop._run_on_loop`)は呼び出しのたびにイベントループへ制御を返すので、
-    1件目の実行後・2件目の実行前にも人の操作が挟まりうる。`current_seq()` の4回目の呼び出し
-    (=2件目の直前チェック)の直前に人の操作を割り込ませ、2件目が実行されないことを固定する。
+    1件目の実行後(版の取り直しの後)・2件目の実行前にも人の操作が挟まりうる。`current_seq()` の
+    4回目の呼び出し(=2件目の直前チェック)の直前に人の操作を割り込ませ、2件目が実行されないことを
+    固定する。実行の完了と版の取り直しの**間**に挟まる操作は、本番では1手にまとめてあるので起きない
+    (`ToolsOnLoop.call_and_seq`。下の `test_a_human_edit_landing_right_after_a_tool_call_...`)。
     """
     inner = DocumentTools(box_session)
     commit_face(box_session, index=1)
@@ -333,7 +340,7 @@ def test_a_concurrent_edit_between_two_tool_calls_in_the_same_reply_is_detected(
         box_session.set_visible("box", False)
 
     # current_seq() の呼び出し順: ①往復前の基準値 → ②1件目の直前チェック →
-    # ③1件目実行後の基準値更新 → ④2件目の直前チェック。④の直前で割り込む。
+    # ③1件目実行と同じ手での基準値更新(`call_and_seq`) → ④2件目の直前チェック。④の直前で割り込む。
     tools = InterferingTools(inner, trigger_at_call=4, side_effect=hide_the_box)
 
     reply = ProviderReply(
@@ -357,3 +364,42 @@ def test_a_concurrent_edit_between_two_tool_calls_in_the_same_reply_is_detected(
     assert box_session.document.bodies[0].visible is False, (
         "2件目は実行されていない(人が隠したままのはず。実行されていたら再びTrueになる)"
     )
+
+
+def test_a_human_edit_landing_right_after_a_tool_call_is_not_absorbed_into_the_next_baseline(
+    box_session: Session,
+):
+    """落ちたら、ツール実行の完了と「実行直後の版」の読み取りが別々にイベントループへ投げられ、
+    その間にループが処理した人の操作が次の直前チェックの基準に吸われて AI に見えない(issue #48)。
+
+    本番の覆い(`ToolsOnLoop`)で、ツールの実行中に「直後に人が箱を隠す」をループへ予約する。
+    1手で読んでいれば、返った版はその操作を含まず、次に読む版と食い違う(=次の直前チェックで検出できる)。
+    """
+    import asyncio
+
+    from duocad.server import ToolsOnLoop
+
+    inner = DocumentTools(box_session)
+
+    async def scenario() -> tuple:
+        loop = asyncio.get_running_loop()
+        on_loop = ToolsOnLoop(inner, loop)
+        original_call = inner.call
+
+        def call_and_schedule_a_human_edit(name, arguments):
+            loop.call_soon(lambda: box_session.set_visible("box", False))  # ループの次の番で走る
+            return original_call(name, arguments)
+
+        inner.call = call_and_schedule_a_human_edit
+        # 実行器スレッドから(=`AgentLoop.run()` が走る側から)呼ぶ
+        payload, error, seq_after = await loop.run_in_executor(
+            None, on_loop.call_and_seq, "describe_document", {}
+        )
+        await asyncio.sleep(0)  # 予約した人の操作を走らせる
+        return payload, error, seq_after, inner.current_seq()
+
+    payload, error, seq_after, seq_now = asyncio.run(scenario())
+
+    assert error is None and payload["body_count"] == 1
+    assert box_session.document.get_body("box").visible is False, "人の操作が走っていない(検査の前提)"
+    assert seq_after != seq_now, "実行直後の版に、その後に入った人の操作が吸われている"
