@@ -184,6 +184,12 @@ finalize の `material-cut` が `SolidBuilderUnusedFaces` 2件だけを出し、
 どの保持・除外の外にあり、finalize は `make_material(check_intersections=False)` で通すので、
 material-cut を直しても最後の `inspect_solid` で `self_intersections=4` として落ちる。
 
+交差の形(2026-09-25 実測、`rho_clean` と `derive-output` の `design` / `obstacle` から): 4枚は同じ細い溝の
+対向する壁で、**探索が設計空間の中に残した幅1要素(1.87 mm)の空隙**(x 方向に少なくとも14要素、格子添字 y=73・z=90。
+外とつながる溝で、閉じた空洞ではない。除外・障害物の外)。Taubin の頂点移動は p99 0.57 要素・最大 0.73 要素で、
+溝の両壁がそれぞれ約0.5要素ずつ寄り、断面が潰れて貫通した(平滑化後の頂点は y 73.45〜73.55・z 90.44〜90.51 に集まる)。
+この文書で「ある軸方向に両隣が材料の空セル」は164個あり、すべて設計空間の中。4実行の `verts_smooth` は同一。
+
 **試した回避策(同じ保存データで実測)**:
 
 | 案 | 結果 |
