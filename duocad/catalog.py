@@ -892,7 +892,7 @@ COMMANDS: tuple[Command, ...] = (
             "1回でまとめて削除する(1回のundoで全部戻る)。対象は選択から取る"
             "(引数では受けない)。**領域(region)は削除できない** —— 領域は図形の配置から"
             "計算されるものなので、選択に混ざっているとエラーになる(その領域を作っている"
-            "図形を選び直すこと)。スケッチを丸ごと消すのは delete_sketch。"
+            "図形を選び直すこと)。スケッチを丸ごと消す口は無い。"
         ),
         uses_selection=True,
         session="delete",
@@ -903,25 +903,6 @@ COMMANDS: tuple[Command, ...] = (
             "`uses_selection=True` かつ `previewable=False` の組み合わせは形状最適化の4 verb"
             "が先例で、WSの自動 commit(`selection_consuming_commands`)だけが効く。"
             "**howが無い**ので引数は1つも取らない —— 消し方に選択肢は無い"
-        ),
-    ),
-    Command(
-        name="delete_sketch",
-        category="sketch",
-        description=(
-            "スケッチを入れ物ごと消すときに呼ぶ(図形・反復・その名前つきの値も一緒に消える。"
-            "1回のundoで全部戻る)。対象は sketch_id で指す —— スケッチは選択集合の種別に"
-            "無いので delete では消せない。そのスケッチから押し出したボディは残る。"
-        ),
-        params=(Param("sketch_id", "string", "describe_document が返した sketch_id"),),
-        session="delete_sketch",
-        resets_selection=True,
-        note=(
-            "**`previewable=False`**(`delete` と同じ理由: 消える前の姿を見せる幽霊が作れない)。"
-            "人の口はブラウザのスケッチ行の削除ボタン(`BrowserPanel.svelte`。`CommandHost` を"
-            "通らず `App.svelte` が直接送る —— 行のクリックが対象の指定そのもので、引数収集の"
-            "状態機械を通す理由が無い。`set_sketch_visible` と同じ)。"
-            "`category=\"sketch\"` なので WS の表(`SKETCH_COMMANDS`)に `sketch_id` 必須で載る"
         ),
     ),
     # ---------------------------------------------------------------- 形状最適化の条件(第3のモード)

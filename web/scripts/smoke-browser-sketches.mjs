@@ -1,6 +1,5 @@
 /**
- * 実ブラウザでの**ブラウザ(BrowserPanel)のスケッチ行**の検査 —— 表示/非表示(issue #7)と
- * スケッチ丸ごとの削除(issue #4)。
+ * 実ブラウザでの**ブラウザ(BrowserPanel)のスケッチ行**の検査 —— 表示/非表示(issue #7)。
  *
  * 図形はMCPで作る(描く操作の検査は `smoke-features.mjs` 等が持つ。ここで見たいのは
  * 行の操作なので、材料は最短で用意する)。見るのは:
@@ -11,8 +10,6 @@
  *   3. **隠したスケッチの行をクリックすると表示に戻してから入る**(拒否しない)。
  *      編集中のスケッチのトグルは無効
  *   4. 可視性は undo で戻らない(ボディと同じ契約)
- *   5. 行の削除ボタンでスケッチが丸ごと消え(図形・反復・パラメータ名ごと)、undo 1回で戻る。
- *      編集中のスケッチを消すとスケッチモードを抜ける
  *
  *   web> node scripts/smoke-browser-sketches.mjs
  *
@@ -180,80 +177,6 @@ async function main() {
     ok('undo は直前のverb(円)を戻し、スケッチの可視性は動かなかった')
     await page.click('#sketches-show-all')
     await waitFor(() => window.__duocad.sketches.every((item) => item.visible), '全表示が効かない(2回目)')
-
-    // ------------------------------------------------------------------ 5. 削除(issue #4)
-    // Bに反復を足して「図形・反復・パラメータ名ごと戻る」を見る材料にする。
-    const circleId = (await look()).sketches.find((item) => item.id === sketchB) && (await page.evaluate(
-      (id) => window.__duocad.sketches.find((item) => item.sketch_id === id).entities[0].entity_id,
-      sketchB,
-    ))
-    await mcp.callTool('pattern_rectangular', {
-      sketch_id: sketchB,
-      entities: [circleId],
-      dx: 15,
-      dy: 0,
-      nx: 3,
-      ny: 1,
-    })
-    await waitFor(
-      (id) => window.__duocad.sketches.find((item) => item.sketch_id === id)?.patterns.length === 1,
-      '反復が届かない',
-      sketchB,
-    )
-    const before = await look()
-    const parametersBefore = Object.keys(before.parameters).sort()
-    const regionsBefore = before.sketches.find((item) => item.id === sketchB).regions
-    if (regionsBefore !== 3) fail(`反復で領域が3つにならない: ${regionsBefore}`)
-
-    await page.click(`${rowOf(sketchB)} .sketch-delete`)
-    await waitFor(
-      (id) => !window.__duocad.sketches.some((item) => item.sketch_id === id),
-      '削除ボタンでスケッチが消えない',
-      sketchB,
-    )
-    const deleted = await look()
-    if (deleted.log !== before.log + 1) fail(`削除が操作ログ1行になっていない: ${before.log} -> ${deleted.log}`)
-    const parametersAfterDelete = Object.keys(deleted.parameters).sort()
-    if (parametersAfterDelete.length >= parametersBefore.length) {
-      fail(`消したスケッチのパラメータ名が文書に残っている: ${parametersAfterDelete}`)
-    }
-    if (sketchB in (await page.evaluate(() => window.__duocad.sketchPolylineCounts() ?? {}))) {
-      fail('消したスケッチがビューポートに残っている')
-    }
-    ok(`**行の削除ボタンでスケッチが丸ごと消えた**(ログ+1 / パラメータ ${parametersBefore.length}->${parametersAfterDelete.length} / 確認ダイアログは無い)`)
-
-    await pressUndo(page)
-    await waitFor(
-      (id) => window.__duocad.sketches.some((item) => item.sketch_id === id),
-      'undoでスケッチが戻らない',
-      sketchB,
-    )
-    const restored = await look()
-    const restoredB = restored.sketches.find((item) => item.id === sketchB)
-    if (restoredB.entities !== 1 || restoredB.patterns !== 1 || restoredB.regions !== 3) {
-      fail(`undoで図形・反復・領域が戻っていない: ${JSON.stringify(restoredB)}`)
-    }
-    const parametersRestored = Object.keys(restored.parameters).sort()
-    if (JSON.stringify(parametersRestored) !== JSON.stringify(parametersBefore)) {
-      fail(`undoでパラメータ名が元と違う: ${parametersBefore} -> ${parametersRestored}`)
-    }
-    if (restored.log !== before.log) fail(`undo後のログ長が違う: ${restored.log}`)
-    ok('**undo 1回でスケッチが図形・反復・パラメータ名ごと戻った**')
-
-    // 編集中のスケッチを消すとモードを抜ける
-    await page.click(`${rowOf(sketchA)} .sketch-name`)
-    await waitFor((id) => window.__duocad.activeSketch === id, 'Aに入れない', sketchA)
-    await page.click(`${rowOf(sketchA)} .sketch-delete`)
-    await waitFor(
-      (id) => !window.__duocad.sketches.some((item) => item.sketch_id === id) && window.__duocad.activeSketch === null,
-      '編集中のスケッチを消してもモードを抜けない',
-      sketchA,
-    )
-    if ((await look()).mode !== 'idle') fail(`消した後のモードが通常でない: ${(await look()).mode}`)
-    ok('編集中のスケッチを消すとスケッチモードを抜けた')
-    await pressUndo(page)
-    await waitFor(() => window.__duocad.sketches.length === 2, '2枚目のundoでAが戻らない')
-    ok('undoでAも戻った(2枚とも健在)')
 
     // ------------------------------------------------------------------ 最後
     const unexpected = consoleErrors.filter((line) => !expectedErrors.includes(line))

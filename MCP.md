@@ -15,7 +15,7 @@
 | 問い合わせ | `describe_document` / `describe_shape` / `measure` —— 最後の1つは選択の各項目の寸法に加え、**ちょうど2項目なら** `between`（点・直線・平面のあいだの距離。平行でない線・面どうしは角度）を返す。画面の「測定」と同じ計算 |
 | 述語の自己記述 | `describe_predicates` |
 | 選択 | `get_selection` / `propose_selection` / `modify_selection` / `commit_selection` / `clear_selection` |
-| スケッチ | `sketch_create` / `sketch_create_offset` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` / `import_svg` / `move_sketch_entities` / `mirror_sketch_entities` / `delete_sketch` —— 最後の1つは**スケッチを入れ物ごと**消す(図形・反復・名前つきの値も。1回のundoで戻る)。対象は `sketch_id`(選択集合にスケッチという種別は無い) |
+| スケッチ | `sketch_create` / `sketch_create_offset` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` / `import_svg` / `move_sketch_entities` / `mirror_sketch_entities` |
 | フィーチャ | `extrude` / `extrude_face` / `fillet` / `chamfer` / `shell` / `boolean_body` / `pattern_rectangular` / `pattern_circular` / `move_body` / `mirror_body` / `delete` |
 | 可視性・パラメータ | `set_visible` / `set_sketch_visible` / `set_parameter` —— 可視性の2つはボディ/スケッチで対。どちらも操作ログに載らず undo では戻らない |
 | 形状最適化 | `set_preserve_bodies` / `set_exclude_bodies` / `set_fixtures` / `set_loads` / `clear_loads` — 保持/除外ソリッド・拘束面・荷重面の条件を置く(ボディと拘束は集合代入。荷重だけは大きさ・向きを面ごとに持つので上書き代入で、外すのは `clear_loads`) |

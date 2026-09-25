@@ -541,15 +541,6 @@ def _preserve(session: Session, body) -> None:
     session.set_preserve_bodies()
 
 
-@_runner("delete_sketch")
-def _run_delete_sketch(session: Session, tmp_path: Path) -> dict:
-    """図形と反復を両方持つスケッチで走らせる(`entities` / `patterns` が空のまま緑にならない)。"""
-    _, sketch_id = _box(session)
-    entity_id = session.add_circle(sketch_id, [5.0, 5.0], 2.0)["entity_id"]
-    session.pattern_rectangular(sketch_id, [entity_id], 6.0, 0.0, 2, 1)
-    return session.delete_sketch(sketch_id)
-
-
 @_runner("set_preserve_bodies")
 def _run_set_preserve_bodies(session: Session, tmp_path: Path) -> dict:
     body, _ = _box(session)
