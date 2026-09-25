@@ -17,6 +17,13 @@
  * clamp の式は `entityKinds.ts` の `projectToSegment`(UV空間)と同じもの。**用途が違う**
  * (あちらは当たった後にスナップ座標を作る)ので共通化していない。
  */
+/** 画面上の2点の距離の2乗(ピック統合の候補の並べ替え用。平方根を取らない)。 */
+export function distSq(ax: number, ay: number, bx: number, by: number): number {
+  const dx = ax - bx
+  const dy = ay - by
+  return dx * dx + dy * dy
+}
+
 export function distSqPointSegment(
   px: number,
   py: number,

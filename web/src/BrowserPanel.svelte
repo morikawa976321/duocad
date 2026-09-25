@@ -1,3 +1,14 @@
+<script module lang="ts">
+  import type { SketchState } from './session'
+
+  /** スケッチの平面の表示名。面に貼ったものの文言だけ場所で違う(ブラウザは「面」、ツールバーは「面に貼ったスケッチ」)。 */
+  export function planeLabel(plane: SketchState['plane'], faceLabel = '面'): string {
+    if (plane.kind === 'base') return plane.name
+    if (plane.kind === 'offset') return `オフセット ${plane.distance}mm`
+    return faceLabel
+  }
+</script>
+
 <script lang="ts">
   /**
    * ブラウザ — **ビューポートの左上に浮かぶ、モデルの中身の一覧**(Fusion 360の
@@ -16,7 +27,7 @@
    * フローから外れており、開閉してもカメラのアスペクトは変わらない(`Toast.svelte` と同じ
    * 作り。`styles.css` の「ビューポートのサイズを変えるのは .viewport だけ」を守るため)。
    */
-  import type { BasePlaneName, BodyMeta, SketchState } from './session'
+  import type { BasePlaneName, BodyMeta } from './session'
   import type { SectionState } from './viewport'
 
   let {
@@ -99,11 +110,6 @@
   const visibleCount = $derived(bodies.filter((body) => body.visible).length)
   const visibleSketchCount = $derived(sketches.filter((sketch) => sketch.visible).length)
 
-  function planeLabel(sketch: SketchState): string {
-    if (sketch.plane.kind === 'base') return sketch.plane.name
-    if (sketch.plane.kind === 'offset') return `オフセット ${sketch.plane.distance}mm`
-    return '面'
-  }
 </script>
 
 <aside class="browser-panel" class:collapsed={!open}>
@@ -244,6 +250,7 @@
             <li
               class="sketch-row"
               class:active={sketch.sketch_id === activeSketchId}
+              class:row-active={sketch.sketch_id === activeSketchId}
               class:hidden-row={!sketch.visible}
               data-sketch-id={sketch.sketch_id}
             >
@@ -263,13 +270,13 @@
                     : 'このスケッチを表示'}
               />
               <button
-                class="sketch-name"
+                class="sketch-name row-button"
                 onclick={() => onEnterSketch(sketch.sketch_id)}
                 title={sketch.visible
                   ? 'クリックでこのスケッチに入る'
                   : 'クリックで表示に戻してこのスケッチに入る'}
               >
-                スケッチ({planeLabel(sketch)})
+                スケッチ({planeLabel(sketch.plane)})
               </button>
               {#if sketch.sketch_id === activeSketchId}
                 <span class="tag on">編集中</span>
@@ -328,19 +335,6 @@
 
   .browser-panel.collapsed .browser-header {
     border-bottom: none;
-  }
-
-  .caret {
-    padding: 0 4px;
-    border: none;
-    background: none;
-    color: var(--dim);
-    line-height: 1;
-  }
-
-  .caret:not(:disabled):hover {
-    color: var(--accent);
-    border: none;
   }
 
   .browser-body {
@@ -462,10 +456,6 @@
     font-size: var(--fs-meta);
   }
 
-  .sketch-row.active {
-    background: var(--accent-soft);
-  }
-
   .sketch-delete {
     flex: 0 0 auto;
     padding: 0 4px;
@@ -479,30 +469,8 @@
     color: var(--text);
   }
 
-  .sketch-name {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    text-align: left;
-    padding: 2px 4px;
-    background: none;
-    border: 1px solid transparent;
-  }
-
-  /* 一覧の行は素のまま、hoverでだけ光る(FilesPanel の `.files-open` と同じ形)。 */
-  .sketch-name:hover {
-    background: var(--control-bg);
-    border-color: transparent;
-  }
-
   /* 大きさは styles.css の `.empty` が持つ(--fs-meta)。 */
   .empty {
     padding: 3px 8px;
-  }
-
-  .dim {
-    color: var(--dim);
   }
 </style>

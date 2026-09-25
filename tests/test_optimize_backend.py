@@ -892,7 +892,7 @@ def test_debug_voxels_carry_the_cell_centre_convention() -> None:
     assert payload["elements"] == [0, 1 * (3 * 4) + 2 * 4 + 3]
     assert payload["total"] == 2 and payload["shown"] == 2 and payload["stride"] == 1
 
-    # 画面がやる復元(`viewport.ts` の `buildDebugVoxels`)と同じ算術で中心へ戻す。
+    # 画面がやる復元(`web/src/optimizeDebug.ts` の `buildDebugVoxels`)と同じ算術で中心へ戻す。
     _, ny, nz = grid.shape
     for flat, want in zip(payload["elements"], [(0, 0, 0), (1, 2, 3)]):
         ex, rest = divmod(flat, ny * nz)

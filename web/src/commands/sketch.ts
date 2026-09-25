@@ -22,7 +22,7 @@ import {
   type CommandDef,
   type Point2,
 } from './command'
-import { MOVE_MODE_OPTIONS, isRotateMode, isTranslateMode, rejectAngle } from './moveMode'
+import { angleArg, buildMove, copyOptions, isRotateMode, modeOptions, offsetArg } from './moveMode'
 import {
   arcFromPoints,
   circleFromPoints,
@@ -66,7 +66,6 @@ export const ADD_LINE: CommandDef = {
       label: '長さ',
       unit: 'mm',
       inputId: 'sketch-line-length',
-      placeholder: 'mm',
       reject: positive('長さ'),
       fromPoints: true,
       // `build` は p0/p1 だけを送るので、長さは名前で引けない(NumberArgSpec.live)。
@@ -82,7 +81,6 @@ export const ADD_LINE: CommandDef = {
       label: '角度',
       unit: '度',
       inputId: 'sketch-line-angle',
-      placeholder: '度',
       // 0度は正当な向き(X軸方向)なので弾かない。
       reject: () => null,
       fromPoints: true,
@@ -118,7 +116,6 @@ export const ADD_CIRCLE: CommandDef = {
       label: '半径',
       unit: 'mm',
       inputId: 'sketch-radius',
-      placeholder: 'mm',
       reject: positive('半径'),
       fromPoints: true,
     },
@@ -152,7 +149,6 @@ export const ADD_RECTANGLE: CommandDef = {
       label: '幅',
       unit: 'mm',
       inputId: 'sketch-width',
-      placeholder: 'mm',
       reject: positive('幅'),
       fromPoints: true,
     },
@@ -162,7 +158,6 @@ export const ADD_RECTANGLE: CommandDef = {
       label: '高さ',
       unit: 'mm',
       inputId: 'sketch-height',
-      placeholder: 'mm',
       reject: positive('高さ'),
       fromPoints: true,
     },
@@ -198,7 +193,6 @@ export const ADD_ARC: CommandDef = {
       label: '半径',
       unit: 'mm',
       inputId: 'sketch-arc-radius',
-      placeholder: 'mm',
       reject: positive('半径'),
       fromPoints: true,
     },
@@ -312,7 +306,6 @@ export const SKETCH_CREATE_OFFSET: CommandDef = {
       label: 'オフセット距離',
       unit: 'mm',
       inputId: 'sketch-create-offset-distance',
-      placeholder: 'mm',
       // 0は基準平面と同じ位置になるだけで、禁止する理由が無い(`pattern`のdx/dyと同じ)。
       reject: () => null,
     },
@@ -383,48 +376,11 @@ export const MOVE_SKETCH_ENTITIES: CommandDef = {
       min: 1,
       max: null,
     },
-    {
-      kind: 'choice',
-      name: 'copy',
-      label: '複製',
-      options: [
-        { value: 'move', label: '動かす', buttonId: 'sketch-move-move' },
-        { value: 'copy', label: '複製する', buttonId: 'sketch-move-copy' },
-      ],
-    },
-    {
-      kind: 'choice',
-      name: 'mode',
-      label: '種別',
-      options: MOVE_MODE_OPTIONS.map((option) => ({
-        ...option,
-        buttonId: `sketch-move-${option.value}`,
-      })),
-    },
-    {
-      kind: 'number',
-      name: 'dx',
-      label: 'X',
-      unit: 'mm',
-      inputId: 'sketch-move-dx',
-      placeholder: 'mm',
-      // 片方の軸だけ動かすのは普通なので0は弾かない(両方0だけを `build` が断る)。
-      reject: () => null,
-      // 空欄はこの軸を動かさない(=0)扱い。両軸とも空欄(=両方0)は`build`が別途弾く。
-      default: 0,
-      when: isTranslateMode,
-    },
-    {
-      kind: 'number',
-      name: 'dy',
-      label: 'Y',
-      unit: 'mm',
-      inputId: 'sketch-move-dy',
-      placeholder: 'mm',
-      reject: () => null,
-      default: 0,
-      when: isTranslateMode,
-    },
+    { kind: 'choice', name: 'copy', label: '複製', options: copyOptions('sketch-move') },
+    { kind: 'choice', name: 'mode', label: '種別', options: modeOptions('sketch-move') },
+    // 片方の軸だけ動かすのは普通なので0は弾かない(両方0だけを `buildMove` が断る)。
+    { kind: 'number', ...offsetArg('dx', 'sketch-move', () => null) },
+    { kind: 'number', ...offsetArg('dy', 'sketch-move', () => null) },
     {
       kind: 'pick',
       name: 'center_entity',
@@ -435,44 +391,21 @@ export const MOVE_SKETCH_ENTITIES: CommandDef = {
       optional: true,
       when: isRotateMode,
     },
-    {
-      kind: 'number',
-      name: 'angle',
-      label: '角度',
-      unit: '度',
-      inputId: 'sketch-move-angle',
-      placeholder: '度',
-      // 符号は u->v の反時計回りが正(`pattern_circular` の `total_angle` と同じ向き)。
-      reject: rejectAngle,
-      when: isRotateMode,
-    },
+    { kind: 'number', ...angleArg('sketch-move') },
   ],
   build(values) {
-    const targets = (values.target ?? []) as unknown[]
-    if (targets.length === 0) return { ok: false, reason: '点も辺も選ばれていない' }
-    const copy = values.copy === 'copy'
-    if (values.mode === 'rotate') {
-      const angle = values.angle
-      if (typeof angle !== 'number') return { ok: false, reason: '角度が数値でない' }
-      const reason = rejectAngle(angle)
-      if (reason !== null) return { ok: false, reason }
-      // **中心は参照のまま送る**(`move_body` の軸と同じ規律)。図形の点の座標を出す
-      // 規則(`point` 省略ならその種別の最初の点)はコアの `_point_of` が正で、
-      // 数値へ潰して送ると同じ規則がもう1つ増える。
-      const center = pickedRefOf(values.center_entity)
-      return {
-        ok: true,
-        args: { mode: 'rotate', angle, ...(center === null ? {} : { center_entity: center }), copy },
-      }
-    }
-    const dx = values.dx
-    const dy = values.dy
-    if (typeof dx !== 'number' || typeof dy !== 'number') {
-      return { ok: false, reason: '移動量が数値でない' }
-    }
-    if (dx === 0 && dy === 0) return { ok: false, reason: '移動量が両方0' }
-    // **対象そのものは送らない**(サーバがコアの確定選択から取る)。
-    return { ok: true, args: { mode: 'translate', dx, dy, copy } }
+    return buildMove(values, {
+      missingTarget: (given) => (((given.target ?? []) as unknown[]).length === 0 ? '点も辺も選ばれていない' : null),
+      axes: ['dx', 'dy'],
+      zeroReason: '移動量が両方0',
+      rotateArgs: (angle, given) => {
+        // **中心は参照のまま送る**(`move_body` の軸と同じ規律)。図形の点の座標を出す
+        // 規則(`point` 省略ならその種別の最初の点)はコアの `_point_of` が正で、
+        // 数値へ潰して送ると同じ規則がもう1つ増える。
+        const center = pickedRefOf(given.center_entity)
+        return { ok: true, args: { mode: 'rotate', angle, ...(center === null ? {} : { center_entity: center }) } }
+      },
+    })
   },
 }
 

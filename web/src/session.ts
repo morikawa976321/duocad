@@ -901,8 +901,8 @@ export interface OptimizeRunOptions {
 /** 開発用の可視化の種類(`duocad/optimize_run.py` の `DEBUG_KINDS`)。 */
 export type OptimizeDebugKind = 'space' | 'anchors' | 'rho'
 
-/** 格子(`duocad/topopt/voxelize.py` の `Grid.as_dict`)。要素 (i,j,k) の中心は
- *  `origin + spacing*(i+0.5, j+0.5, k+0.5)`(セル中心の規約)。 */
+/** 格子(`duocad/topopt/voxelize.py` の `Grid.as_dict`)。要素の中心の規約(セル中心)は
+ *  `optimizeDebug.ts` の `buildDebugVoxels`(唯一の変換点)。 */
 export interface OptimizeDebugGrid {
   origin: number[]
   spacing: number
