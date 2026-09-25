@@ -141,7 +141,7 @@ function arcPoints(
 }
 
 /** 3次ベジエを折れ線へ。**描画と当たり判定だけの話**で、
- *  コア側(`kernel._edges_bezier`)は曲線のままOCCTへ渡すので形は近似されない。 */
+ *  コア側(`kernel_sketch._edges_bezier`)は曲線のままOCCTへ渡すので形は近似されない。 */
 function bezierPoints(
   x0: number, y0: number,
   cx1: number, cy1: number,
@@ -279,7 +279,7 @@ function translateBezier(params: Record<string, number>, dx: number, dy: number)
 
 /**
  * 長方形の傾き(度・反時計)。**キーが無ければ 0** —— `angle` を持たない時代に保存された
- * 操作ログを再生した図形は `params` にこのキーを持たない(コアの `kernel.rectangle_angle`)。
+ * 操作ログを再生した図形は `params` にこのキーを持たない(コアの `kernel_sketch.rectangle_angle`)。
  */
 function rectangleAngle(params: Record<string, number>): number {
   return params.angle ?? 0
@@ -288,7 +288,7 @@ function rectangleAngle(params: Record<string, number>): number {
 /**
  * 長方形の4隅を、基準の角 `(x, y)` から反時計回りに返す。
  *
- * **コアの `duocad/kernel.py` の `rectangle_corners` と同じ規則でなければならない** ——
+ * **コアの `duocad/kernel_sketch.py` の `rectangle_corners` と同じ規則でなければならない** ——
  * ここがずれると、幽霊(確定前の姿)と確定した形が別の場所に出る。
  */
 function rectangleCorners(params: Record<string, number>): Array<[number, number]> {

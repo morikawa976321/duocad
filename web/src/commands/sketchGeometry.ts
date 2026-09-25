@@ -112,7 +112,7 @@ function circumcenter(a: Point2, b: Point2, c: Point2): Point2 | null {
 /**
  * 始点・終点・円弧上の点(と、打っていれば半径)から `add_arc` の引数を出す。
  *
- * **層をまたぐ契約**: `duocad/kernel.py` の弧は `sweep = (end_deg - start_deg) % 360` で
+ * **層をまたぐ契約**: `duocad/kernel_sketch.py` の弧は `sweep = (end_deg - start_deg) % 360` で
  * **必ず反時計回り**に掃くが、ブラウザ側の幽霊(`entityKinds.ts` の `arcPoints`)は差の
  * 符号どおりに描く。負の掃引を送ると幽霊と確定結果が食い違うので、ここは常に
  * `start_deg <= end_deg` を出す(時計回りの弧は始点と終点を入れ替えて表す。同じ弧なので

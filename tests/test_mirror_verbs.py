@@ -19,7 +19,7 @@ import math
 
 import pytest
 
-from duocad import kernel, query, sketch
+from duocad import kernel, kernel_sketch, query, sketch
 from duocad.oplog import verb_handler
 from duocad.server import Session
 from document_support import corner_set as _corner_set, replay_through_json
@@ -33,7 +33,7 @@ def _params(session: Session, sketch_id: str, entity_id: str) -> dict:
 def _mirrored_corner_set(params: dict, ax, ay, ux, uy) -> list:
     """元の4隅を1点ずつ軸へ映した集合(期待値の作り方)。"""
     mirrored = []
-    for u, v in kernel.rectangle_corners(params):
+    for u, v in kernel_sketch.rectangle_corners(params):
         t = (u - ax) * ux + (v - ay) * uy
         mirrored.append((round(2.0 * (ax + t * ux) - u, 9), round(2.0 * (ay + t * uy) - v, 9)))
     return sorted(mirrored)

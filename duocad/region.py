@@ -1,7 +1,7 @@
 """領域 —— **描くものではなく計算されるもの**。
 
 スケッチの図形群から閉領域を求めるのがこのモジュールで、幾何そのもの
-(`BRepAlgoAPI_Splitter`)は `duocad.kernel` が持つ(OCPを直接importできるのは kernel.py だけ)。
+(`BRepAlgoAPI_Splitter`)は `duocad.kernel_sketch` が持つ(OCPを直接importできるのはカーネル層だけ)。
 
 `regions(doc, sketch_id)` の `index` は**1始まり**の連番で、**列挙順は同じスケッチに対して
 安定**であること(2回評価して同じ順序。選択集合が添字で領域を指す以上、順序が揺れると選択が
@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
-from . import kernel
+from . import kernel, kernel_sketch
 from . import parameters
 from .document import Document
 from .sketch import SketchId, entity_kind_ops, get_sketch
@@ -166,7 +166,7 @@ def expanded_entities(doc: Document, sketch_id: SketchId) -> List[dict]:
 
 
 def plane_frame(doc: Document, sketch_id: SketchId) -> dict:
-    """スケッチ平面の3Dの枠(`kernel.sketch_plane_frame`)。
+    """スケッチ平面の3Dの枠(`kernel_sketch.sketch_plane_frame`)。
 
     アプリ層が「画面のクリック → 平面上の (u, v)」と「図形 → 3Dの線」を行き来するために
     要る。**同じ計算をアプリ層に持たせない**(基準3面の軸の取り方と、面に貼ったときの
@@ -174,10 +174,10 @@ def plane_frame(doc: Document, sketch_id: SketchId) -> dict:
 
     **面に貼ったスケッチでも `body.shape` を見ない**。姿勢はスケッチ作成時に
     `sketch.resolve_plane` が `plane["frame"]` へ焼き付けており、ここはそれを読むだけである
-    (`kernel.face_frame` のdocstring)。
+    (`kernel_sketch.face_frame` のdocstring)。
     """
     sketch = get_sketch(doc, sketch_id)
-    return kernel.sketch_plane_frame(sketch.plane)
+    return kernel_sketch.sketch_plane_frame(sketch.plane)
 
 
 def regions_with_geometry(doc: Document, sketch_id: SketchId, deviation: float) -> List[dict]:
@@ -187,7 +187,7 @@ def regions_with_geometry(doc: Document, sketch_id: SketchId, deviation: float) 
 
     領域はスケッチ平面上の面なので、実体(`TopoDS_Face`)を持っているのはコア側だけ。
     アプリ層で図形から領域を組み直すと、コアが選択集合で指している添字と食い違う
-    (領域の順序は面積とu,vで決まる。`kernel.sketch_regions`)。**描くものも添字も
+    (領域の順序は面積とu,vで決まる。`kernel_sketch.sketch_regions`)。**描くものも添字も
     コアが配る**。
     """
     out: List[dict] = []
@@ -207,7 +207,7 @@ def regions_with_geometry(doc: Document, sketch_id: SketchId, deviation: float) 
 
 
 def _regions_detailed(doc: Document, sketch_id: SketchId) -> List[dict]:
-    """`kernel.sketch_regions` の結果をそのまま返す(面つき。`verbs/extrude.py` が使う)。
+    """`kernel_sketch.sketch_regions` の結果をそのまま返す(面つき。`verbs/extrude.py` が使う)。
 
     **verb層と共有する内部API**であり、`regions()`(公開API)は面を落として `Region` だけを
     返す。押し出しには領域の `TopoDS_Face` そのものが要る一方、選択集合や操作ログへ
@@ -222,4 +222,4 @@ def _regions_detailed(doc: Document, sketch_id: SketchId) -> List[dict]:
     # 面に貼ったスケッチでも実際の面(`TopoDS_Face`)は渡さない —— `sketch_regions` が面から
     # 取っていたのは**無限平面としての姿勢だけ**で、トリムされた境界は使っていない。姿勢は
     # `plane["frame"]` が持っている(`plane_frame` のdocstring)。
-    return kernel.sketch_regions(sketch.plane, entities)
+    return kernel_sketch.sketch_regions(sketch.plane, entities)

@@ -20,7 +20,7 @@ import math
 
 import pytest
 
-from duocad import kernel, parameters, query, region
+from duocad import kernel, kernel_sketch, parameters, query, region
 from duocad.document import Document
 from duocad.region import region_ref
 from duocad.sketch import (
@@ -45,7 +45,7 @@ PLUS_X_FACE_INDEX = 3
 # --------------------------------------------------------------------------------------
 def live_frame(doc: Document, body_id: str, face_index: int) -> dict:
     """**その瞬間の** `body.shape` の面から枠を取る(凍結前の古い解決の再現)。"""
-    return kernel.face_frame(doc.get_body(body_id).shape, face_index)
+    return kernel_sketch.face_frame(doc.get_body(body_id).shape, face_index)
 
 
 def top_plane_indices(doc: Document, body_id: str, z: float) -> list:
@@ -83,7 +83,7 @@ def test_a_later_fillet_does_not_move_a_face_sketch_even_when_the_index_now_land
     shape = document.get_body(body_id).shape
     assert kernel.classify_face(kernel.face_of(shape, TOP_FACE_INDEX)) != "plane"
     with pytest.raises(ValueError):
-        kernel.face_frame(shape, TOP_FACE_INDEX)
+        kernel_sketch.face_frame(shape, TOP_FACE_INDEX)
 
     assert_same_frame(region.plane_frame(document, sketch_id), frame_before)
     assert [item.area for item in region.regions(document, sketch_id)] == pytest.approx(
@@ -293,11 +293,11 @@ def test_a_face_plane_without_a_frame_still_resolves_from_the_given_face():
     bare = {"kind": "face", "body": body_id, "index": TOP_FACE_INDEX, "provenance": None}
 
     assert_same_frame(
-        kernel.sketch_plane_frame(bare, face=kernel.face_of(shape, TOP_FACE_INDEX)),
-        kernel.face_frame(shape, TOP_FACE_INDEX),
+        kernel_sketch.sketch_plane_frame(bare, face=kernel.face_of(shape, TOP_FACE_INDEX)),
+        kernel_sketch.face_frame(shape, TOP_FACE_INDEX),
     )
     with pytest.raises(ValueError):
-        kernel.sketch_plane_frame(bare)
+        kernel_sketch.sketch_plane_frame(bare)
 
 
 @pytest.mark.parametrize(
@@ -336,4 +336,4 @@ def test_a_broken_frame_is_rejected_instead_of_silently_mirroring_the_plane(fram
     """
     plane = {"kind": "face", "body": "b", "index": 1, "provenance": None, "frame": frame}
     with pytest.raises(ValueError):
-        kernel.sketch_plane_frame(plane)
+        kernel_sketch.sketch_plane_frame(plane)

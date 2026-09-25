@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
-from duocad import kernel, query
+from duocad import kernel, kernel_sketch, query
 from duocad.catalog import COMMANDS
 from duocad.document import Body
 from duocad.mcp_server import DocumentTools, McpServer
@@ -646,7 +646,7 @@ def test_sketch_create_offset_can_sit_on_a_selected_face(
         "index": face_index,
         "provenance": None,
     }
-    face_frame = kernel.face_frame(box.shape, face_index)
+    face_frame = kernel_sketch.face_frame(box.shape, face_index)
     assert sketch.plane["frame"]["origin"] == pytest.approx(
         [face_frame["origin"][i] + face_frame["normal"][i] * 3.0 for i in range(3)]
     )

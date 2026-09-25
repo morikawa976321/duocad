@@ -129,7 +129,7 @@ export type BasePlaneName = 'XY' | 'XZ' | 'YZ'
 
 /**
  * スケッチ平面の3Dの枠。`p = origin + u*uAxis + v*vAxis` が (u,v) と3Dの往復の規則で、
- * **コアが配る**(`kernel.sketch_plane_frame`)。アプリ層で同じ計算を持たない —— 基準3面の
+ * **コアが配る**(`kernel_sketch.sketch_plane_frame`)。アプリ層で同じ計算を持たない —— 基準3面の
  * 軸の取り方と、面に貼ったときの法線反転の扱いが必ずずれる。
  */
 export interface SketchFrame {

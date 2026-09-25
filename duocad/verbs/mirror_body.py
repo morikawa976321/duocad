@@ -7,12 +7,12 @@
 鏡映面は次のどちらか一方(**両方渡す/どちらも渡さないのは ValueError**):
 
 - `base_plane` … XY/XZ/YZ(原点通過)。**`sketch_create` と同じ座標定義を流用する**
-  (`sketch.base_plane` + `kernel.sketch_plane_frame`)。別々に定義すると同じ"XY"の意味が
+  (`sketch.base_plane` + `kernel_sketch.sketch_plane_frame`)。別々に定義すると同じ"XY"の意味が
   食い違う。
 - `plane_face` … 既存ソリッドの平面な面への参照 `{"body": body_id, "index": 面の1始まりの
   添字}`。**対象の確定選択とは別引数で受ける**(`move_body.axis_edge` と同じ理由 ——
   対象集合に混ぜると、それが鏡映される側か基準かをコアが区別できない)。この面自身が
-  対象ボディに属していてもよい。非平面の面は `kernel.face_frame`(内部で
+  対象ボディに属していてもよい。非平面の面は `kernel_sketch.face_frame`(内部で
   `require_planar_face` を通す)が ValueError にする。
 
 ログには解決済みの数値 `{"plane_point", "plane_normal"}` だけを載せる(`move_body` の軸と
@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
-from .. import kernel
+from .. import kernel, kernel_sketch
 from .. import sketch
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
@@ -59,10 +59,10 @@ def _mirror_plane(doc: Document, base_plane: Any, plane_face: Any) -> dict:
         )
     if base_plane is not None:
         plane_ref = sketch.base_plane(str(base_plane))
-        frame = kernel.sketch_plane_frame(plane_ref)
+        frame = kernel_sketch.sketch_plane_frame(plane_ref)
     elif plane_face is not None:
         body, index = resolve_shape_ref(doc, plane_face, kind="face", what="plane_face", mesh_hint=_MESH_HINT)
-        frame = kernel.face_frame(body.shape, index)
+        frame = kernel_sketch.face_frame(body.shape, index)
     else:
         raise ValueError(
             "mirror_body needs a mirror plane: base_plane(XY/XZ/YZ) か "

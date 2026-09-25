@@ -923,7 +923,7 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
 
     // -------------------------------------------------------------- 平面でない面は「札」で断られる
     //
-    // **クライアントは先回りしない**(判定はコアの `kernel.require_planar_face` 1箇所)。
+    // **クライアントは先回りしない**(判定はコアの `kernel_sketch.require_planar_face` 1箇所)。
     // 見るのは**人が理由に気づけるか**で、そこは札の文言でしか確かめられない ——
     // `#toasts .toast-text` を読むのは T1(Toast.svelte)が決めた検査の穴である。
     // **カメラから見てY=0の向こう側にある部品を隠す**(基準グリッドが

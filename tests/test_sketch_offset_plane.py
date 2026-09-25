@@ -3,7 +3,7 @@
 `sketch_create_offset` は `sketch_create` の兄弟verbで、貼る先(基準平面 or 面)から法線
 方向へ `distance` だけ離れた平面にスケッチを貼る。実体は `sketch.offset_plane` が組み立てる
 PlaneRef(`{"kind":"offset","base":..,"distance":..,"provenance":None}`)を
-`sketch.resolve_plane` が姿勢まで解決するだけで、`duocad/kernel.py` の `_ax3_from_plane` が
+`sketch.resolve_plane` が姿勢まで解決するだけで、`duocad/kernel_sketch.py` の `_ax3_from_plane` が
 「`frame` を持つ参照はkindを問わずそれを使う」よう一般化してあるので、面参照(`face_plane`)と
 まったく同じ「作成時に1回だけ焼き付けて以後動かさない」規律に自動で乗る
 (`tests/test_sketch_plane_freeze.py` と同じ不変条件)。
@@ -18,7 +18,7 @@ import math
 
 import pytest
 
-from duocad import kernel, query, region
+from duocad import kernel, kernel_sketch, query, region
 from duocad.document import Document
 from duocad.sketch import (
     BASE_PLANES,
@@ -48,7 +48,7 @@ def test_an_offset_from_each_base_plane_translates_along_that_planes_own_normal(
     sketch_id = sketch_create(document, offset_plane(base_plane(name), 7.0))
 
     frame = region.plane_frame(document, sketch_id)
-    base_frame = kernel.sketch_plane_frame(base_plane(name))
+    base_frame = kernel_sketch.sketch_plane_frame(base_plane(name))
     assert frame["origin"] == pytest.approx(
         [base_frame["origin"][i] + base_frame["normal"][i] * 7.0 for i in range(3)]
     )
@@ -61,7 +61,7 @@ def test_a_zero_distance_coincides_with_the_base_plane():
     """0は「基準平面と同じ位置になる」だけで、禁止する理由が無い(UI側の `reject` と同じ判断)。"""
     document = Document()
     sketch_id = sketch_create(document, offset_plane(base_plane("XY"), 0.0))
-    assert region.plane_frame(document, sketch_id) == kernel.sketch_plane_frame(
+    assert region.plane_frame(document, sketch_id) == kernel_sketch.sketch_plane_frame(
         base_plane("XY")
     )
 
@@ -70,7 +70,7 @@ def test_an_offset_from_a_face_stacks_on_top_of_the_frozen_face_frame():
     """面からのオフセットは、まず面参照そのものを凍結してから平行移動する。"""
     document = Document()
     body_id = new_box(document, BOX)
-    face_frame = kernel.face_frame(document.get_body(body_id).shape, TOP_FACE_INDEX)
+    face_frame = kernel_sketch.face_frame(document.get_body(body_id).shape, TOP_FACE_INDEX)
 
     sketch_id = sketch_create(
         document, offset_plane(face_plane(body_id, TOP_FACE_INDEX), 3.0)
@@ -130,7 +130,7 @@ def test_an_offset_from_every_face_including_reversed_ones_keeps_the_faces_uv_ax
     assert len(faces) == 6
 
     for face in faces:
-        expected_face_frame = kernel.face_frame(shape, face["index"])
+        expected_face_frame = kernel_sketch.face_frame(shape, face["index"])
         sketch_id = sketch_create(
             document, offset_plane(face_plane(body_id, face["index"]), 2.0)
         )

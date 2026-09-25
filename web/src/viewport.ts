@@ -1569,7 +1569,7 @@ export function createViewport(container: HTMLElement): Viewport {
     return new THREE.Vector3(values[0], values[1], values[2])
   }
 
-  /** 平面上の点 `origin + u·U + v·V`(`origin` が null なら原点。コアの `kernel._to_pnt` と同じ規則)。 */
+  /** 平面上の点 `origin + u·U + v·V`(`origin` が null なら原点。コアの `kernel_sketch._to_pnt` と同じ規則)。 */
   function planePoint(
     origin: readonly number[] | null,
     axisU: readonly number[],
@@ -2426,7 +2426,7 @@ export function createViewport(container: HTMLElement): Viewport {
    */
   let regionPickWanted = false
 
-  /** スケッチ平面上の (u,v) を3Dの点へ(コアの `kernel._to_pnt` と同じ規則)。 */
+  /** スケッチ平面上の (u,v) を3Dの点へ(コアの `kernel_sketch._to_pnt` と同じ規則)。 */
   function toWorld(frame: SketchDraw['frame'], u: number, v: number): THREE.Vector3 {
     return planePoint(frame.origin, frame.u, frame.v, u, v)
   }

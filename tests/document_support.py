@@ -5,7 +5,7 @@ import math
 
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
-from duocad import kernel, query
+from duocad import kernel, kernel_sketch, query
 from duocad.document import Body, Document
 from duocad.oplog import OpLog
 from duocad.region import region_ref, regions
@@ -110,4 +110,4 @@ def corner_set(params: dict) -> list:
 
     **`angle` と基準の角の組は一意ではない**(同じ4隅を張る取り方が複数ある)ので、値そのものを期待値にしない。
     """
-    return sorted((round(u, 9), round(v, 9)) for u, v in kernel.rectangle_corners(params))
+    return sorted((round(u, 9), round(v, 9)) for u, v in kernel_sketch.rectangle_corners(params))

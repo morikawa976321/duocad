@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from duocad import kernel, query, selection, sketch
+from duocad import kernel, kernel_sketch, query, selection, sketch
 from duocad.document import Body
 from duocad.oplog import verb_handler
 from duocad.server import Session
@@ -1118,10 +1118,10 @@ def test_a_whole_rectangle_can_be_rotated(session: Session) -> None:
     assert (after["width"], after["height"]) == pytest.approx((10.0, 4.0))
     expected = sorted(
         tuple(round(value, 9) for value in sketch.rotate_point(u, v, 0.0, 0.0, 45.0))
-        for u, v in kernel.rectangle_corners(before)
+        for u, v in kernel_sketch.rectangle_corners(before)
     )
     actual = sorted(
-        (round(u, 9), round(v, 9)) for u, v in kernel.rectangle_corners(after)
+        (round(u, 9), round(v, 9)) for u, v in kernel_sketch.rectangle_corners(after)
     )
     assert actual == pytest.approx(expected, abs=1e-9)
 

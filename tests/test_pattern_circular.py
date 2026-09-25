@@ -10,7 +10,7 @@ import math
 
 import pytest
 
-from duocad import kernel, query
+from duocad import kernel_sketch, query
 from duocad.document import Document
 from duocad.oplog import OpLog
 from duocad.parameters import parameter_of, set_parameter
@@ -199,7 +199,7 @@ def test_rotate_copies_false_keeps_the_original_orientation():
 
 
 def _corners_about_centre(params: dict) -> list:
-    corners = kernel.rectangle_corners(params)
+    corners = kernel_sketch.rectangle_corners(params)
     cu = sum(u for u, _ in corners) / len(corners)
     cv = sum(v for _, v in corners) / len(corners)
     return sorted((round(u - cu, 9), round(v - cv, 9)) for u, v in corners)
@@ -227,7 +227,7 @@ def test_rotated_copies_of_a_rectangle_are_all_rectangles():
             (round(u, 9), round(v, 9))
             for u, v in (
                 rotate_point(cu, cv, CENTER[0], CENTER[1], index * 90.0)
-                for cu, cv in kernel.rectangle_corners(base)
+                for cu, cv in kernel_sketch.rectangle_corners(base)
             )
         ]
         assert _corner_set(item["params"]) == pytest.approx(sorted(turned), abs=1e-9)

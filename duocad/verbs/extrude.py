@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional, Sequence
 
-from .. import kernel
+from .. import kernel, kernel_sketch
 from ..document import Body, BodyId, Document, new_body_id
 from ..oplog import Operation, register_verb
 from ._common import editable_body, recall, remember
@@ -165,10 +165,10 @@ def _resolve_faces_and_normal(
 
     sketch = get_sketch(doc, sketch_id)
     # 面に貼ったスケッチでも**ライブの面は引かない**。押し出しの向きはスケッチ平面の法線で
-    # 決まり、その法線は作成時に `plane["frame"]` へ焼き付けてある(`kernel.face_frame`)。
+    # 決まり、その法線は作成時に `plane["frame"]` へ焼き付けてある(`kernel_sketch.face_frame`)。
     # 添字で引き直していた頃は、貼った先のボディを後から面取りしただけで押し出し方向が
     # 別の面の法線へ静かに移りえた。
-    normal = kernel.sketch_plane_normal(sketch.plane)
+    normal = kernel_sketch.sketch_plane_normal(sketch.plane)
     return faces, normal
 
 

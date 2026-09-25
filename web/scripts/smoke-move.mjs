@@ -495,7 +495,7 @@ runSmoke('smoke-move', { timeout: 60000 }, async ({ browser, url, timeout }) => 
       // ---------------------------------------------------------------- 長方形をまるごと回す
       // 長方形は `params.angle` で向きを持つので、まるごと回しても**長方形1つのまま**である。
       // 幽霊の4隅を、元の4隅を三角関数で回した点と直接突き合わせる(TS側の
-      // `rectangleCorners` がコアの `kernel.rectangle_corners` と同じ規則かを見る)。
+      // `rectangleCorners` がコアの `kernel_sketch.rectangle_corners` と同じ規則かを見る)。
       // 長方形をまるごと囲む(**完全包含された図形は `point: null` = 図形まるごと**で
       // 選択に入る。辺の1本をクリックで指す道もあるが、内側の領域と重なって不安定)。
       await dragBox([-5, -5], [PLATE.width + 5, PLATE.height + 5])

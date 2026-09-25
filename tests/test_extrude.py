@@ -102,7 +102,7 @@ def test_extruding_one_half_of_a_split_circle_gives_area_times_distance():
 def test_a_tilted_rectangle_gives_a_region_and_extrudes():
     """**実測**: 傾いた長方形からも領域が1つ出て、面積×距離ぶんの体積に押し出せる。
 
-    落ちたら、`kernel.rectangle_corners` が張る辺か `_bbox_rectangle`(領域を割る補助面の
+    落ちたら、`kernel_sketch.rectangle_corners` が張る辺か `_bbox_rectangle`(領域を割る補助面の
     大きさ)のどちらかが `angle` を見落としている。
     """
     document = Document()

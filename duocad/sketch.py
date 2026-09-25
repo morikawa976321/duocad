@@ -11,7 +11,7 @@ face_index)` が返す既存ソリッドの**平面状の**面への参照(平�
 (`duocad/verbs/import_svg.py` のdocstring)。
 
 **OCP / build123d を直接importしない**。領域検出の幾何は `duocad.region` 経由で
-`duocad.kernel` が持つ。
+`duocad.kernel_sketch` が持つ。
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 
-from . import kernel
+from . import kernel_sketch
 from . import parameters
 from .document import BodyId, Document, unknown_id_message
 from .oplog import Operation, register_verb
@@ -48,9 +48,9 @@ PATTERN_KINDS = ("rectangular", "circular")
 #
 # **図形種別ごとに1行**(`EntityKindOps`)へ検査・平行移動・回転・中心をまとめる。
 #
-# OCPに依存する処理(辺の生成・2D bbox)はここに置けない(import境界。`kernel.py` だけが
-# OCPをimportしてよい)。そちらは `kernel.py` 内に姉妹の表を持つ。**表は2つに分かれるが、
-# 新しい種別を足すときに触るのは「ここへ1行」と「kernel.pyへ1行」の2箇所だけ**(+TS側1箇所)。
+# OCPに依存する処理(辺の生成・2D bbox)はここに置けない(import境界。カーネル層だけが
+# OCPをimportしてよい)。そちらは `kernel_sketch.py` 内に姉妹の表を持つ。**表は2つに分かれるが、
+# 新しい種別を足すときに触るのは「ここへ1行」と「kernel_sketch.pyへ1行」の2箇所だけ**(+TS側1箇所)。
 #
 # **表に無い種別は即時 ValueError**(`entity_kind_ops` が投げる)。silent defaultは無い。
 def _validate_line(params: Dict[str, float]) -> None:
@@ -180,7 +180,7 @@ def _rotate_rectangle(
         turned = dict(params)
         turned["x"] = nx
         turned["y"] = ny
-        turned["angle"] = kernel.rectangle_angle(params) + angle_deg
+        turned["angle"] = kernel_sketch.rectangle_angle(params) + angle_deg
         return turned
     ecx, ecy = _center_rectangle(params)
     ncx, ncy = rotate_point(ecx, ecy, cx, cy, angle_deg)
@@ -255,13 +255,13 @@ def _mirror_rectangle(
     元の基準の角をそのまま基準にすると `width`/`height` が負の側へ伸びる形になり、
     正の幅高さで同じ4隅を張れない。
     """
-    corners = kernel.rectangle_corners(params)
+    corners = kernel_sketch.rectangle_corners(params)
     bx, by = _mirror_point(corners[3][0], corners[3][1], ax, ay, ux, uy)
     axis_angle_deg = math.degrees(math.atan2(uy, ux))
     mirrored = dict(params)
     mirrored["x"] = bx
     mirrored["y"] = by
-    mirrored["angle"] = 2.0 * axis_angle_deg - kernel.rectangle_angle(params)
+    mirrored["angle"] = 2.0 * axis_angle_deg - kernel_sketch.rectangle_angle(params)
     return mirrored
 
 
@@ -283,7 +283,7 @@ def _center_cxcy(params: Dict[str, float]) -> Tuple[float, float]:
 
 
 def _center_rectangle(params: Dict[str, float]) -> Tuple[float, float]:
-    corners = kernel.rectangle_corners(params)
+    corners = kernel_sketch.rectangle_corners(params)
     return (
         (corners[0][0] + corners[2][0]) / 2.0,
         (corners[0][1] + corners[2][1]) / 2.0,
@@ -300,13 +300,13 @@ def _center_bezier(params: Dict[str, float]) -> Tuple[float, float]:
     )
 
 
-#: 3次ベジエの `params` のキー(**始点・制御点1・制御点2・終点の順**)。正は `kernel.BEZIER_POINT_KEYS`。
-BEZIER_KEYS = tuple(key for pair in kernel.BEZIER_POINT_KEYS for key in pair)
+#: 3次ベジエの `params` のキー(**始点・制御点1・制御点2・終点の順**)。正は `kernel_sketch.BEZIER_POINT_KEYS`。
+BEZIER_KEYS = tuple(key for pair in kernel_sketch.BEZIER_POINT_KEYS for key in pair)
 
 
 def _bezier_points(params: Dict[str, float]) -> List[Tuple[float, float]]:
     """`params` を制御点4つの (x, y) へ。"""
-    return [(float(params[key_x]), float(params[key_y])) for key_x, key_y in kernel.BEZIER_POINT_KEYS]
+    return [(float(params[key_x]), float(params[key_y])) for key_x, key_y in kernel_sketch.BEZIER_POINT_KEYS]
 
 
 def _bezier_params(points: List[Tuple[float, float]]) -> Dict[str, float]:
@@ -358,7 +358,7 @@ _ENTITY_KIND_TABLE: Dict[str, EntityKindOps] = {
     ),
     "bezier": EntityKindOps(
         _validate_bezier, _translate_bezier, _rotate_bezier, _center_bezier, _mirror_bezier,
-        points=kernel.BEZIER_POINT_KEYS,
+        points=kernel_sketch.BEZIER_POINT_KEYS,
     ),
 }
 
@@ -668,7 +668,7 @@ def add_arc(
     反時計回り・スケッチ平面のX軸から測る。
 
     **0度をまたいでよい**(例: `start_deg=350, end_deg=10` は20度の円弧)。掃引量は
-    `sweep = (end_deg - start_deg) % 360` で解決される(`kernel` 側の実装)ので、常に
+    `sweep = (end_deg - start_deg) % 360` で解決される(`kernel_sketch` 側の実装)ので、常に
     `start_deg` から反時計回りに `end_deg` まで進む弧として扱われる。
     """
     params = {
@@ -706,7 +706,7 @@ def resolve_plane(doc: Document, plane: Any) -> dict:
     """引数の平面指定を PlaneRef のdictへ正規化する。失敗時は文書を触らない。
 
     **面参照・offset参照はここで姿勢まで解決して `frame` に焼き付ける**
-    (`kernel.face_frame` / `kernel.offset_plane_frame`)。これが「姿勢をライブに引き直さない」
+    (`kernel_sketch.face_frame` / `kernel_sketch.offset_plane_frame`)。これが「姿勢をライブに引き直さない」
     の唯一の入口であり、解決を2箇所に持つと平面かどうかの検査も焼き付けも片方だけ抜ける。
     offset参照は `base` を再帰的にこの関数で解決してから平行移動するので、base側が面参照
     であれば面の平面性検査もそのままここを通る。
@@ -736,7 +736,7 @@ def resolve_plane(doc: Document, plane: Any) -> dict:
             "body": body_id,
             "index": face_index,
             "provenance": plane.get("provenance"),
-            "frame": kernel.face_frame(body.shape, face_index),
+            "frame": kernel_sketch.face_frame(body.shape, face_index),
         }
     if isinstance(plane, dict) and plane.get("kind") == "offset":
         base_ref = resolve_plane(doc, plane["base"])
@@ -746,7 +746,7 @@ def resolve_plane(doc: Document, plane: Any) -> dict:
             # 実際の位置が分からなくなる。
             raise ValueError("offset plane base must not itself be an offset plane")
         distance = float(plane["distance"])
-        frame = kernel.offset_plane_frame(kernel.sketch_plane_frame(base_ref), distance)
+        frame = kernel_sketch.offset_plane_frame(kernel_sketch.sketch_plane_frame(base_ref), distance)
         return {
             "kind": "offset",
             "base": {key: value for key, value in base_ref.items() if key != "frame"},
