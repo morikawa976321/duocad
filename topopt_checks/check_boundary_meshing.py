@@ -28,7 +28,7 @@ from OCP.TopoDS import TopoDS, TopoDS_Shape
 
 from _record import dumps
 from duocad import kernel
-from duocad.mesh_geometry import topology
+from duocad.mesh_geometry import topology, weld_exact
 from duocad.topopt.finalize import final_mesh_checks
 
 
@@ -71,8 +71,7 @@ def load_shape(args) -> TopoDS_Shape:
 def welded(payload):
     chunks = [np.asarray(f['positions']).reshape(-1, 3)[np.asarray(f['indices']).reshape(-1, 3)]
               for f in payload['faces'] if f['indices']]
-    vertices, inverse = np.unique(np.concatenate(chunks).reshape(-1, 3), axis=0, return_inverse=True)
-    return vertices, inverse.reshape(-1, 3)
+    return weld_exact(np.concatenate(chunks))
 
 
 def standard(shape, deviation):
@@ -87,8 +86,7 @@ def standard(shape, deviation):
             missing.append(index)
             continue
         chunks.append(np.asarray(positions).reshape(-1, 3)[np.asarray(indices).reshape(-1, 3)])
-    vertices, inverse = np.unique(np.concatenate(chunks).reshape(-1, 3), axis=0, return_inverse=True)
-    stats, _ = topology(vertices, inverse.reshape(-1, 3))
+    stats, _ = topology(*weld_exact(np.concatenate(chunks)))
     return dict(seconds=time.perf_counter() - started, untriangulated=missing, topology=stats)
 
 

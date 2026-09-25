@@ -3,8 +3,8 @@ from pathlib import Path
 
 import numpy as np
 import _bootstrap  # noqa: F401
+from _documents import open_session
 import check_optimize_wiring as wiring
-from duocad.session import Session
 from duocad.topopt import trace, design_space, mesh
 from check_final_shape import read_stl
 
@@ -43,8 +43,7 @@ def verify_archive(path):
     assert len(records('taubin-lambda'))==len(records('taubin-mu'))
     assert len(records('stress-output'))>=1
     final=records('final-mesh-world')[0]
-    saved=Session(None,.2,models_dir=path)
-    saved.open_document('document_after.json')
+    saved=open_session(path/'document_after.json')
     body=saved.document.get_body(result['body_id'])
     # 結果は `solid_mesh` が合格させた三角形のメッシュボディ(docs/TOPOPT.md「結果は編集可能ソリッドとして持たない」)。
     # 文書の三角形と記録の final-mesh-world が一致し、ブーリアン後の B-rep は final-solid スナップショットが持つ。

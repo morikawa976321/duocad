@@ -32,6 +32,20 @@ def degenerate_triangles(vertices, faces):
     return degenerate_mask(np.asarray(vertices, dtype=np.float64)[np.asarray(faces)])
 
 
+#: 接続検査(`topology`)の6項目。**1つでも 0 でなければ成果物にできない**(`topopt.finalize` と検査が同じ並びで読む)。
+TOPOLOGY_DEFECTS = ('boundary_edges', 'nonmanifold_edges', 'inconsistent_edges',
+                    'nonmanifold_vertices', 'degenerate_triangles', 'duplicate_triangles')
+
+
+def weld_exact(triangles):
+    """三角形 (N,3,3) を、**座標が完全一致する頂点だけ**を共有した (vertices, faces) にする。
+
+    近い頂点は融着しない(亀裂を隠さない)。三角形の無い面を除くかどうかは呼び出し側が決める。
+    """
+    vertices, inverse = np.unique(np.asarray(triangles).reshape(-1, 3), axis=0, return_inverse=True)
+    return vertices, inverse.reshape(-1, 3)
+
+
 def subshapes(shape, kind):
     """`kind`(`TopAbs_ShapeEnum`)の部分形状を `TopExp_Explorer` の走査順で列挙する。**重複を除かない**
     (隣接2面から同じ辺を2回拾う。重複なしは `indexed_map`)。"""

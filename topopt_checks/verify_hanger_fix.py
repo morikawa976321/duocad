@@ -20,11 +20,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
+from _documents import open_session
 import _record
 import numpy as np
 
 from duocad import optimize_run
-from duocad.session import Session
 from duocad.topopt import acceptance, anchor, binary_search, design_space, mesh
 
 REPO = Path(__file__).resolve().parents[1]
@@ -94,8 +94,7 @@ def verify(model: Path, spacing: float, target: float, max_evaluations: int, *, 
            single_cell_patience: int | None = binary_search.DEFAULT_SINGLE_CELL_PATIENCE,
            target_tolerance: float | None = binary_search.DEFAULT_TARGET_TOLERANCE, trace_memory: bool = True,
            save_masks: Path | None = None) -> dict:
-    session = Session(None, 0.2, models_dir=model.resolve().parent)
-    session.open_document(model.name)
+    session = open_session(model)
     document = session.document
     record: dict = dict(
         model=str(model), model_sha256=_sha256(model), git_head=_git("rev-parse", "HEAD"),

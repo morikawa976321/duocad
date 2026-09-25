@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import _bootstrap  # noqa: F401  (topopt_checks の import 経路を通す)
+from _documents import open_session
 import _record
 import numpy as np
 
@@ -33,8 +34,7 @@ def refine(mask: np.ndarray, origin: np.ndarray, spacing: float, ks: list[int], 
     rows: list[dict] = []
     with tempfile.TemporaryDirectory(prefix="topopt-trace-") as trace_root, \
             patch.object(trace, "DEFAULT_ROOT", Path(trace_root)):
-        session = Session(None, 0.2, models_dir=model.resolve().parent)
-        session.open_document(model.name)
+        session = open_session(model)
         document = session.document
         bundle = optimize_run.build_conditions(document)
         space = ds.derive(bundle.conditions, spacing=spacing)

@@ -62,36 +62,41 @@ def run_pipeline() -> tuple[np.ndarray, mesh.MeshResult]:
 # ---------------------------------------------------------------------------
 # 1. 水密
 # ---------------------------------------------------------------------------
+def watertight_counts(verts: np.ndarray, faces: np.ndarray) -> tuple[int, int, np.ndarray]:
+    """(縮退三角形(頂点番号の重複)の数, 孤立頂点の数, 辺ごとの共有枚数の配列)。`mesh.py` から独立した照合役。"""
+    degenerate = int(
+        np.sum((faces[:, 0] == faces[:, 1]) | (faces[:, 1] == faces[:, 2]) | (faces[:, 0] == faces[:, 2]))
+    )
+    used = np.zeros(len(verts), dtype=bool)
+    used[faces.ravel()] = True
+    edge_count: dict[tuple[int, int], int] = {}
+    for a, b, c in faces:
+        for u, v in ((a, b), (b, c), (c, a)):
+            key = (int(u), int(v)) if u < v else (int(v), int(u))
+            edge_count[key] = edge_count.get(key, 0) + 1
+    return degenerate, int(np.sum(~used)), np.array(list(edge_count.values()))
+
+
+def signed_volume(verts: np.ndarray, faces: np.ndarray) -> float:
+    """発散定理の符号付き体積(閉曲面が外向きに巻かれていれば正)。"""
+    tri = verts[faces]
+    return float(np.einsum("ij,ij->i", tri[:, 0], np.cross(tri[:, 1], tri[:, 2])).sum() / 6.0)
+
+
 def check_watertight(mr: mesh.MeshResult) -> None:
     print("\n[1] 水密")
     faces = mr.faces
     verts = mr.verts_raw
 
-    # 縮退三角形(頂点番号の重複)
-    degenerate = int(
-        np.sum(
-            (faces[:, 0] == faces[:, 1])
-            | (faces[:, 1] == faces[:, 2])
-            | (faces[:, 0] == faces[:, 2])
-        )
-    )
+    degenerate, n_isolated, counts = watertight_counts(verts, faces)
     check("縮退三角形が無い(頂点番号重複)", degenerate == 0, f"件数={degenerate}")
 
     areas2 = np.linalg.norm(mesh.face_normals(verts, faces), axis=1)
     zero_area = int(np.sum(areas2 < 1e-12))
     check("面積0の三角形が無い", zero_area == 0, f"件数={zero_area}")
 
-    used = np.zeros(len(verts), dtype=bool)
-    used[faces.ravel()] = True
-    n_isolated = int(np.sum(~used))
     check("孤立頂点が無い", n_isolated == 0, f"未使用頂点数={n_isolated}")
 
-    edge_count: dict[tuple[int, int], int] = {}
-    for a, b, c in faces:
-        for u, v in ((a, b), (b, c), (c, a)):
-            key = (int(u), int(v)) if u < v else (int(v), int(u))
-            edge_count[key] = edge_count.get(key, 0) + 1
-    counts = np.array(list(edge_count.values()))
     bad = int(np.sum(counts != 2))
     check(
         "すべての辺がちょうど2枚の三角形に共有される",
@@ -232,10 +237,7 @@ def check_face_winding(mr: mesh.MeshResult) -> None:
     print("\n[9] 面の向き(巻き順が外向き)")
     verts = mr.verts_raw
     faces = mr.faces
-    tri = verts[faces]
-    signed = float(
-        np.einsum("ij,ij->i", tri[:, 0], np.cross(tri[:, 1], tri[:, 2])).sum() / 6.0
-    )
+    signed = signed_volume(verts, faces)
     check(
         "発散定理の符号付き体積が正(閉曲面が外向きに巻かれている)",
         signed > 0.0,
@@ -305,26 +307,14 @@ def check_spike_and_cavity() -> None:
 
     # (b) 水密・面の向き(検査1・9と同じ観点をこの合成場でも)
     verts, faces = mr.verts_raw, mr.faces
-    degenerate = int(
-        np.sum(
-            (faces[:, 0] == faces[:, 1]) | (faces[:, 1] == faces[:, 2]) | (faces[:, 0] == faces[:, 2])
-        )
-    )
-    used = np.zeros(len(verts), dtype=bool)
-    used[faces.ravel()] = True
-    edge_count: dict[tuple[int, int], int] = {}
-    for a, b, c in faces:
-        for u, v in ((a, b), (b, c), (c, a)):
-            key = (int(u), int(v)) if u < v else (int(v), int(u))
-            edge_count[key] = edge_count.get(key, 0) + 1
-    bad_edges = int(np.sum(np.array(list(edge_count.values())) != 2))
+    degenerate, isolated, counts = watertight_counts(verts, faces)
+    bad_edges = int(np.sum(counts != 2))
     check(
         "水密(縮退三角形・孤立頂点・共有辺2枚がこの合成場でも保たれる)",
-        degenerate == 0 and bool(np.all(used)) and bad_edges == 0,
-        f"縮退={degenerate} 孤立頂点={int(np.sum(~used))} 2枚でない辺={bad_edges}",
+        degenerate == 0 and isolated == 0 and bad_edges == 0,
+        f"縮退={degenerate} 孤立頂点={isolated} 2枚でない辺={bad_edges}",
     )
-    tri = verts[faces]
-    signed = float(np.einsum("ij,ij->i", tri[:, 0], np.cross(tri[:, 1], tri[:, 2])).sum() / 6.0)
+    signed = signed_volume(verts, faces)
     check("面の向き(符号付き体積が正)がこの合成場でも保たれる", signed > 0.0, f"符号付き体積={signed:.3f}")
 
 

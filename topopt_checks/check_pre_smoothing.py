@@ -4,10 +4,10 @@ import json
 from pathlib import Path
 
 import _bootstrap  # noqa: F401
+from _documents import open_session
 import _record
 import numpy as np
 
-from duocad.session import Session
 from duocad.topopt import trace, voxelize
 from duocad.topopt.acceptance import inspect_document
 
@@ -70,8 +70,7 @@ def main(argv=None):
                                percentile=args.percentile).items():
             if value is not None:
                 options[key] = value
-        session = Session(None, 0.2, models_dir=document.resolve().parent)
-        session.open_document(document.name)
+        session = open_session(document)
         report = inspect_document(session.document, clean, before, grid, solver=args.solver, **options)
         report['source'] = dict(document=str(document.resolve()),
                               run=str(args.run.resolve()) if args.run else None,

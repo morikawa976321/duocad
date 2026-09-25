@@ -1013,6 +1013,15 @@ def faces_matching(
     return out
 
 
+def the_face_matching(soup: vx.TriangleSoup, *, hint: str = "", **criteria) -> int:
+    """`faces_matching` で**ちょうど1面**拾えたらその添字。0面・複数面は ValueError(`hint` を文末に添える)。
+    検査が「あの面」を名指しする道具で、実運用の経路では使わない(`faces_matching` と同じ)。"""
+    found = faces_matching(soup, **criteria)
+    if len(found) != 1:
+        raise ValueError(f"面を一意に選べなかった({criteria} → {found}){hint}")
+    return found[0]
+
+
 def format_condition_face_warning(diagnoses: list[dict]) -> str:
     """`AnchorTable.condition_face_diagnoses` の結果を利用者向けの1メッセージにする。
 

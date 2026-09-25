@@ -38,9 +38,7 @@ def _box(size, at):
 
 def _face(shape, normal, point) -> int:
     soup = vx.triangles_from_shape(vx.unwrap(shape), deviation=0.2)
-    hits = an.faces_matching(soup, kind="plane", normal=normal, near_point=point, near_tol=1e-4)
-    assert len(hits) == 1, hits
-    return hits[0]
+    return an.the_face_matching(soup, kind="plane", normal=normal, near_point=point, near_tol=1e-4)
 
 
 def _one_box_conditions(at=(0.0, 0.0, 0.0), size=(20.0, 10.0, 10.0)):

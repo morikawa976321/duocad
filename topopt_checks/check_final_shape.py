@@ -21,9 +21,10 @@ from OCP.BOPAlgo import BOPAlgo_BOP, BOPAlgo_Operation
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.TopAbs import TopAbs_SOLID
 
+from _documents import open_session
+from duocad.paths import DEFAULT_MODELS_DIR
 from duocad import kernel
-from duocad.mesh_geometry import TOLERANCE_MM, make_material, subshapes, topology
-from duocad.session import Session
+from duocad.mesh_geometry import TOLERANCE_MM, TOPOLOGY_DEFECTS, make_material, subshapes, topology, weld_exact
 
 LABELS = {
     "preserve": "保持部分をすべて含む",
@@ -52,9 +53,7 @@ def read_stl(path: Path) -> tuple[np.ndarray, np.ndarray]:
         triangles = np.asarray(points).reshape(-1, 3, 3)
     if not triangles.size or not np.isfinite(triangles).all():
         raise ValueError('STLが空、または非有限座標を含む')
-    # 完全一致する座標だけを共有する。近い頂点の融着によって亀裂を隠さない。
-    vertices, inverse = np.unique(triangles.reshape(-1, 3), axis=0, return_inverse=True)
-    return vertices, inverse.reshape(-1, 3)
+    return weld_exact(triangles)  # 完全一致する座標だけを共有する(近い頂点の融着で亀裂を隠さない)
 
 
 def boolean_remainder(left, right, operation):
@@ -88,8 +87,7 @@ def evaluate(vertices, faces, preserve=(), exclude=(), *, progress=None, check_c
         vertices, faces = np.asarray(vertices), np.asarray(faces)
         stats, components = topology(vertices, faces)
         report['mesh'] = stats
-        invalid = any(stats[k] for k in ('boundary_edges','nonmanifold_edges','inconsistent_edges',
-                                         'nonmanifold_vertices','degenerate_triangles','duplicate_triangles'))
+        invalid = any(stats[k] for k in TOPOLOGY_DEFECTS)
         if invalid:
             checks['watertight']['status'] = 'fail'
             return finish(report)
@@ -153,13 +151,13 @@ def main(argv=None):
                              'ブーリアン後の B-rep を直接検査するときはこちら')
     parser.add_argument('--out', type=Path, required=True, help='判定JSONの保存先')
     args = parser.parse_args(argv)
-    session = Session(None, 0.2, models_dir=args.model_dir)
-    model_path = session.models_dir / args.model
+    # `--model-dir` 省略時は `Session` の既定と同じ `DEFAULT_MODELS_DIR`。
+    model_path = (Path(args.model_dir).resolve() if args.model_dir else DEFAULT_MODELS_DIR) / args.model
     if args.out.resolve() == model_path.resolve() or (args.mesh and args.out.resolve() == args.mesh.resolve()):
         parser.error('--out は入力ファイルと別のパスにしてください')
     started = time.perf_counter()
     try:
-        session.open_document(args.model)
+        session = open_session(model_path)
         document = session.document
         preserve = [(bid, document.get_body(bid).shape) for bid in document.optimize.preserve_bodies]
         exclude = [(bid, document.get_body(bid).shape) for bid in document.optimize.exclude_bodies]
@@ -185,8 +183,7 @@ def main(argv=None):
             if body.mesh is None:
                 raise ValueError('指定ボディはメッシュではない')
             triangles = np.asarray(body.mesh.positions).reshape(-1,3)[np.asarray(body.mesh.indices).reshape(-1,3)]
-            vertices, inverse = np.unique(triangles.reshape(-1,3), axis=0, return_inverse=True)
-            faces = inverse.reshape(-1,3)
+            vertices, faces = weld_exact(triangles)
             source_info = dict(body=args.mesh_body, sha256=hashlib.sha256(triangles.tobytes()).hexdigest())
         if not (args.solid_body or args.solid_snapshot):
             report = evaluate(vertices, faces, preserve, exclude, check_constraints=args.check_constraints,

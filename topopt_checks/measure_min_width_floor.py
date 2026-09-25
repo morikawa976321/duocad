@@ -17,6 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import _bootstrap  # noqa: F401  (topopt_checks の import 経路を通す)
+from _documents import open_session
 import _record
 import numpy as np
 from scipy import ndimage
@@ -116,8 +117,7 @@ def run(cells: int, budget: int, stl_dir: Path, mask_npz: Path | None,
                  "target_safety_factor": target, "max_evaluations": int(budget)}
     with tempfile.TemporaryDirectory(prefix="topopt-trace-") as trace_root, \
             patch.object(trace, "DEFAULT_ROOT", Path(trace_root)):
-        session = Session(None, 0.2, models_dir=MODEL.resolve().parent)
-        session.open_document(MODEL.name)
+        session = open_session(MODEL)
         document = session.document
         bundle = optimize_run.build_conditions(document)
         limits = optimize_run.resolution_limits(document)

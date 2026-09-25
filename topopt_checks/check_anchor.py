@@ -80,12 +80,7 @@ def _table(shape, n: int, **kw) -> tuple[vx.VoxelModel, an.AnchorTable]:
 
 
 def _face_of(soup: vx.TriangleSoup, kind: str, normal=None, near=None) -> int:
-    found = an.faces_matching(
-        soup, kind=kind, normal=normal, normal_tol=1e-3, near_point=near, near_tol=1e-3
-    )
-    if len(found) != 1:
-        raise AssertionError(f"面を一意に選べなかった: kind={kind} normal={normal} → {found}")
-    return found[0]
+    return an.the_face_matching(soup, kind=kind, normal=normal, normal_tol=1e-3, near_point=near, near_tol=1e-3)
 
 
 def _tilted_face(soup: vx.TriangleSoup) -> int:

@@ -152,14 +152,9 @@ def check_b_matrix() -> None:
 # ---------------------------------------------------------------------------
 # 1. 一様な棒の単軸引張
 # ---------------------------------------------------------------------------
-def build_bar(nelx: int, nely: int, nelz: int) -> fem.Model:
-    """密度1で埋めた直方体を x 方向に引く系。
-
-    x=0 / y=0 / z=0 の3面を対称面(その面に垂直な成分だけ拘束)にすると、横方向の
-    収縮が自由になり**厳密に一様な単軸応力**になる。全自由度を固定する片持ち梁式の
-    拘束にすると、拘束面の近傍でポアソン収縮が止められて解析解と合わなくなる。
-    """
-    ndof = 3 * (nelx + 1) * (nely + 1) * (nelz + 1)
+def symmetry_fixed_dofs(nelx: int, nely: int, nelz: int) -> list[int]:
+    """x=0 / y=0 / z=0 の3面を対称面(その面に垂直な成分だけ拘束)にする自由度。横方向の収縮が自由になり、
+    **厳密に一様な単軸応力**になる(全自由度を固定する片持ち梁式だと拘束面の近傍でポアソン収縮が止められる)。"""
     fixed = []
     for j in range(nely + 1):
         for k in range(nelz + 1):
@@ -170,12 +165,29 @@ def build_bar(nelx: int, nely: int, nelz: int) -> fem.Model:
     for i in range(nelx + 1):
         for j in range(nely + 1):
             fixed.append(3 * node_id(i, j, 0, nely, nelz) + 2)
-    weights = face_weights(nely, nelz)
-    f = np.zeros(ndof)
-    for j in range(nely + 1):
+    return fixed
+
+
+def end_face_load(nelx: int, nely: int, nelz: int, *, rows: int, axis: int, sign: float = 1.0) -> np.ndarray:
+    """x=nelx の端面の節点(j = 0..rows)へ `axis` 成分の一様な荷重を `face_weights` で配り、**合力の大きさを 1** にする。"""
+    weights = face_weights(rows, nelz)
+    f = np.zeros(3 * (nelx + 1) * (nely + 1) * (nelz + 1))
+    for j in range(rows + 1):
         for k in range(nelz + 1):
-            f[3 * node_id(nelx, j, k, nely, nelz) + 0] = weights[j, k]
-    f /= f.sum()
+            f[3 * node_id(nelx, j, k, nely, nelz) + axis] = sign * weights[j, k]
+    f /= abs(f.sum())
+    return f
+
+
+def build_bar(nelx: int, nely: int, nelz: int) -> fem.Model:
+    """密度1で埋めた直方体を x 方向に引く系。
+
+    x=0 / y=0 / z=0 の3面を対称面(その面に垂直な成分だけ拘束)にすると、横方向の
+    収縮が自由になり**厳密に一様な単軸応力**になる。全自由度を固定する片持ち梁式の
+    拘束にすると、拘束面の近傍でポアソン収縮が止められて解析解と合わなくなる。
+    """
+    fixed = symmetry_fixed_dofs(nelx, nely, nelz)
+    f = end_face_load(nelx, nely, nelz, rows=nely, axis=0)
     return fem.Model(
         nelx, nely, nelz, fixed_dofs=np.unique(np.array(fixed)), load=f
     )
@@ -229,18 +241,12 @@ def check_uniaxial_bar() -> tuple[fem.Model, np.ndarray, np.ndarray]:
 # ---------------------------------------------------------------------------
 def build_cantilever(nelx: int, nely: int, nelz: int) -> fem.Model:
     """x=0 面を全自由度固定し、x=nelx 面へ -y 方向の合力 1 を一様に配る。"""
-    ndof = 3 * (nelx + 1) * (nely + 1) * (nelz + 1)
     fixed = []
     for j in range(nely + 1):
         for k in range(nelz + 1):
             n = node_id(0, j, k, nely, nelz)
             fixed += [3 * n, 3 * n + 1, 3 * n + 2]
-    weights = face_weights(nely, nelz)
-    f = np.zeros(ndof)
-    for j in range(nely + 1):
-        for k in range(nelz + 1):
-            f[3 * node_id(nelx, j, k, nely, nelz) + 1] = -weights[j, k]
-    f /= -f.sum()
+    f = end_face_load(nelx, nely, nelz, rows=nely, axis=1, sign=-1.0)
     return fem.Model(
         nelx, nely, nelz, fixed_dofs=np.unique(np.array(fixed)), load=f
     )
@@ -395,24 +401,9 @@ def build_tapered_plate(mult: int) -> tuple[fem.Model, np.ndarray, float]:
         solid[i, :top, :] = True
     rho = solid.astype(float)
 
-    ndof = 3 * (nelx + 1) * (nely + 1) * (nelz + 1)
-    fixed = []
-    for j in range(nely + 1):
-        for k in range(nelz + 1):
-            fixed.append(3 * node_id(0, j, k, nely, nelz) + 0)
-    for i in range(nelx + 1):
-        for k in range(nelz + 1):
-            fixed.append(3 * node_id(i, 0, k, nely, nelz) + 1)
-    for i in range(nelx + 1):
-        for j in range(nely + 1):
-            fixed.append(3 * node_id(i, j, 0, nely, nelz) + 2)
+    fixed = symmetry_fixed_dofs(nelx, nely, nelz)
     narrow = nely // 2
-    weights = face_weights(narrow, nelz)
-    f = np.zeros(ndof)
-    for j in range(narrow + 1):
-        for k in range(nelz + 1):
-            f[3 * node_id(nelx, j, k, nely, nelz) + 0] = weights[j, k]
-    f /= f.sum()
+    f = end_face_load(nelx, nely, nelz, rows=narrow, axis=0)
     # 空要素にしか接していない節点は剛性 emin でしか繋がっていない。`acceptance.safety_check` と
     # 同じく系から外す(通さないと K がほぼ特異になる)。
     model = fem.Model(

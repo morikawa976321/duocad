@@ -71,6 +71,7 @@ import time
 import numpy as np
 
 import _bootstrap  # noqa: F401  リポジトリ直下を sys.path へ足す(理由はそのモジュール)
+from _documents import open_session
 from _harness import Checker, expect_raises, run
 from duocad.topopt import OUTPUT_DIR
 from duocad.topopt import anchor as an
@@ -957,8 +958,7 @@ def check_hanger_run(run_dir: str) -> None:
 
     run = Path(run_dir)
     print(f"\n[11] 実物(hanger)の基準実行との突き合わせ: {run.name}")
-    session = Session(None, 0.2, models_dir=run)
-    session.open_document("input.json")
+    session = open_session(run / "input.json")
     resolved = load_snapshot(next(run.glob("*-resolved-conditions.json")))
     spacing = float(resolved["spacing"])
     bundle = optimize_run.build_conditions(session.document)
