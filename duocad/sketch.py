@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from uuid import uuid4
 
 from . import kernel
@@ -859,34 +859,59 @@ def _undo_sketch_create(document: Document, operation: Operation) -> None:
     document.sketches = [s for s in document.sketches if s.id != sketch_id]
 
 
+def add_entities(document: Document, planned: Sequence[tuple]) -> List[EntityId]:
+    """図形を足す。`planned` は `(Sketch, EntityId, 種別, 解決済みの params)` の並びで、作った ID の並びを返す。
+
+    **全部の ID を先に検査してから**(既存との重複と、並びの中での重複の両方)、1件ずつ名前つきの値を
+    登録(`parameters.register_all`。キーの並びが `d<n>` の振り順)して足す —— 足しながら検査すると、
+    2件目で重複したときに1件目だけ書いた文書が残る。
+    """
+    seen: set = set()
+    for sketch, entity_id, _kind, _values in planned:
+        if entity_id in seen or any(existing.id == entity_id for existing in sketch.entities):
+            raise ValueError(f"entity id already exists: {entity_id!r}")
+        seen.add(entity_id)
+    created: List[EntityId] = []
+    for sketch, entity_id, kind, values in planned:
+        refs = parameters.register_all(document, dict(values))
+        sketch.entities.append(Entity(id=entity_id, kind=kind, params=refs))
+        created.append(entity_id)
+    return created
+
+
+def remove_entities(document: Document, entity_ids, *, sketch_id: Optional[SketchId] = None) -> None:
+    """図形を取り除き、名前つきの値を手放す(`parameters.release_param_refs`)。
+
+    **手放すのを忘れると leak する** —— 値が誰にも参照されないまま文書に残り、`d1 d2 …` の連番が
+    飛ぶ(=保存して再生したときに `set_parameter` の記録した名前が別の値を指す)。素の数値のまま持つ
+    図形(`import_svg` のベジエ)は手放すものが無いので、そのまま通る。
+    `sketch_id` があればそのスケッチだけ(無ければ KeyError)、無ければ全スケッチを走査する。
+    """
+    wanted = set(entity_ids)
+    sketches = document.sketches if sketch_id is None else [get_sketch(document, sketch_id)]
+    for sketch in sketches:
+        remaining = []
+        for entity in sketch.entities:
+            if entity.id in wanted:
+                parameters.release_param_refs(document, entity.params)
+            else:
+                remaining.append(entity)
+        sketch.entities = remaining
+
+
 def _do_add_entity(document: Document, operation: Operation) -> None:
     """3つの図形追加verbで共有する再適用(記録された種別とparamsで図形を作り直す)。
 
-    ログの `params` は素の数値。再生時に `register_value` し直し、Entity には参照を入れる。
+    ログの `params` は素の数値。再生時に登録し直し、Entity には参照を入れる。
     """
     args = operation.args
     sketch = get_sketch(document, args["sketch_id"])
-    entity_id = args["entity_id"]
-    if any(entity.id == entity_id for entity in sketch.entities):
-        raise ValueError(f"entity id already exists: {entity_id!r}")
-    raw_params = dict(args["params"])
-    refs = parameters.register_all(document, raw_params)
-    sketch.entities.append(
-        Entity(id=entity_id, kind=args["kind"], params=refs)
-    )
+    add_entities(document, [(sketch, args["entity_id"], args["kind"], dict(args["params"]))])
 
 
 def _undo_add_entity(document: Document, operation: Operation) -> None:
     args = operation.args
-    sketch = get_sketch(document, args["sketch_id"])
-    entity_id = args["entity_id"]
-    remaining = []
-    for entity in sketch.entities:
-        if entity.id == entity_id:
-            parameters.release_param_refs(document, entity.params)
-        else:
-            remaining.append(entity)
-    sketch.entities = remaining
+    remove_entities(document, [args["entity_id"]], sketch_id=args["sketch_id"])
 
 
 register_verb(VERB_SKETCH_CREATE, do=_do_sketch_create, undo=_undo_sketch_create)

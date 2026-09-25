@@ -391,13 +391,13 @@ class Server:
             # 省略できる —— 表は載せた引数を全部必須にする規律なので置けない
             # (`catalog.Param.ws`)。**省略された引数は `None` のまま verb へ渡す**:
             # ここで既定値を埋めると、モードが取らない引数が黙って効く側へ倒れる
-            # (verb側の `_reject_foreign_args` は `None` を「渡していない」と読む)。
+            # (verb側の `_common.reject_foreign_args` は `None` を「渡していない」と読む)。
             #
             # **軸・中心の参照は対象集合ではない。** 動かす対象はいままでどおりコアの確定選択
             # から取り(`selection.require_bodies` / `require_sketch_entities`)、ここで受ける
             # `axis_edge` / `center_vertex` / `center_entity` は「どこを軸・中心にするか」を
             # 指す名前である。同じ集合へ載せると、軸に使った辺のボディまで対象に数えられる
-            # (`duocad/verbs/move_body.py` の `_shape_ref`)。
+            # (`duocad/verbs/_common.py` の `resolve_shape_ref`)。
             elif command == "move_sketch_entities":
                 applied = self._apply(
                     self.session.move_sketch_entities,

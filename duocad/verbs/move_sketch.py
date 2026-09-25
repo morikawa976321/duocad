@@ -43,25 +43,30 @@ from .. import parameters
 from ..document import Document
 from ..oplog import Operation, register_verb
 from ..sketch import (
-    Entity,
+    add_entities,
     entity_kind_ops,
     entity_point_pair,
     entity_point_keys,
     get_entity,
     get_sketch,
     new_entity_id,
+    remove_entities,
     require_valid_params,
     rotate_point,
 )
+from ._common import (
+    MODE_ROTATE,
+    MODE_TRANSLATE,
+    finite_numbers,
+    inverse_move_args,
+    is_rotation,
+    reject_foreign_args,
+    require_move_mode,
+    rotation_degrees,
+)
 
 VERB_MOVE_SKETCH_ENTITIES = "move_sketch_entities"
-
-#: 並進 / 回転の切り替え。**`move_body.MOVE_MODES` と同じ綴り**にしてある(AIとUIから見て
-#: 「移動の2つのverbは同じ mode を取る」であること自体が契約)。値をここで別に持つのは、
-#: verb 同士が互いをimportしない方針(1 verb 1モジュール)を崩さないためである。
-MODE_TRANSLATE = "translate"
-MODE_ROTATE = "rotate"
-MOVE_MODES = (MODE_TRANSLATE, MODE_ROTATE)
+#: `mode` の宣言(`MODE_TRANSLATE` / `MODE_ROTATE`)は `_common` が正(`move_body` と同じ値を取ることが契約)。
 
 
 def _normalize_targets(doc: Document, targets: Sequence[dict]) -> List[dict]:
@@ -185,16 +190,7 @@ def _rotation_args(
     **対象の代表点の平均**(`_center_of_targets`)。前2つを同時に渡すのは ValueError
     (どちらが勝つかを暗黙にしない)。
     """
-    if angle is None:
-        raise ValueError("move_sketch_entities(mode='rotate') needs `angle` (度)")
-    degrees = float(angle)
-    if not math.isfinite(degrees):
-        raise ValueError(f"angle must be a finite number of degrees, got {angle!r}")
-    if degrees % 360.0 == 0.0:
-        raise ValueError(
-            "move_sketch_entities(mode='rotate') needs an angle that is not a multiple "
-            "of 360 (0度・360度は copy=False では何も変えず、copy=True では元と重なる図形を作る)"
-        )
+    degrees = rotation_degrees(angle, verb="move_sketch_entities", noun="図形")
 
     if center is not None and center_entity is not None:
         raise ValueError("center と center_entity は同時に渡せない")
@@ -217,16 +213,7 @@ def _rotation_args(
             center_entity.get("point"),
         )
     elif center is not None:
-        try:
-            numbers = [float(value) for value in center]
-        except (TypeError, ValueError):
-            raise ValueError(
-                f"center must be two numbers [u, v], got {center!r}"
-            ) from None
-        if len(numbers) != 2 or not all(math.isfinite(value) for value in numbers):
-            raise ValueError(
-                f"center must be two finite numbers [u, v], got {center!r}"
-            )
+        numbers = finite_numbers(center, 2, what="center", form="[u, v]")
         resolved = (numbers[0], numbers[1])
     else:
         resolved = _center_of_targets(doc, targets)
@@ -266,10 +253,9 @@ def _rotated_params(
 def _params_transform(args: dict) -> Callable:
     """ログの `args` から「(種別, params, 点) -> 変換後の params」を作る。
 
-    **do も undo も再生もここを通る**。**`mode` キーが無いログは並進**として読む ——
-    2026-09-05より前に保存した文書には `mode` が無く、それらは全部平行移動だからである。
+    **do も undo も再生もここを通る**(`mode` の無いログは並進。`_common.is_rotation`)。
     """
-    if args.get("mode", MODE_TRANSLATE) == MODE_ROTATE:
+    if is_rotation(args):
         cx, cy = float(args["center"][0]), float(args["center"][1])
         degrees = float(args["angle"])
         return lambda kind, current, point: _rotated_params(
@@ -278,13 +264,6 @@ def _params_transform(args: dict) -> Callable:
     dx = float(args["dx"])
     dy = float(args["dy"])
     return lambda kind, current, point: _moved_params(kind, current, point, dx, dy)
-
-
-def _inverse_args(args: dict) -> dict:
-    """undo 用に**逆向きの変換**の args を作る(並進は逆ベクトル、回転は逆角度・同じ中心)。"""
-    if args.get("mode", MODE_TRANSLATE) == MODE_ROTATE:
-        return {**args, "angle": -float(args["angle"])}
-    return {**args, "dx": -float(args["dx"]), "dy": -float(args["dy"])}
 
 
 def _moved_params(
@@ -366,12 +345,9 @@ def _copy(
             f"move_sketch_entities: {len(plan)} copies planned but "
             f"{len(new_ids)} ids recorded"
         )
-    created: List[str] = []
     prepared: List[tuple] = []
     for (sketch_id, entity_id), new_id in zip(plan, new_ids):
         sketch = get_sketch(doc, sketch_id)
-        if any(existing.id == new_id for existing in sketch.entities):
-            raise ValueError(f"entity id already exists: {new_id!r}")
         entity = get_entity(sketch, entity_id)
         current = parameters.resolve_all(doc, entity.params)
         values = transform(entity.kind, current, None)
@@ -382,11 +358,8 @@ def _copy(
             )
         require_valid_params(entity.kind, values)
         prepared.append((sketch, new_id, entity.kind, values))
-    for sketch, new_id, kind, values in prepared:
-        refs = parameters.register_all(doc, values)
-        sketch.entities.append(Entity(id=new_id, kind=kind, params=refs))
-        created.append(new_id)
-    return created
+    # ID の重複(既存・並びの中)は `add_entities` が全部検査してから足す
+    return add_entities(doc, prepared)
 
 
 def _entities_to_copy(targets: Sequence[dict]) -> List[tuple]:
@@ -418,16 +391,6 @@ def _translation_args(dx: Any, dy: Any) -> dict:
     return {"dx": delta_x, "dy": delta_y}
 
 
-def _reject_foreign_args(mode: str, given: dict) -> None:
-    """**別のモードの引数が来たら断る**(黙って無視も、黙って両方適用もしない)。"""
-    foreign = sorted(name for name, value in given.items() if value is not None)
-    if foreign:
-        raise ValueError(
-            f"move_sketch_entities(mode={mode!r}) does not take {foreign} "
-            "(mode を切り替えるか、その引数を外すこと)"
-        )
-
-
 def move_sketch_entities(
     doc: Document,
     targets: Sequence[dict],
@@ -452,18 +415,15 @@ def move_sketch_entities(
     - 数値が非有限なら ValueError。動かした結果が使えない図形(長さ0の線分など)になっても
       ValueError で、**文書にもログにも何も残さない**。
     """
-    if mode not in MOVE_MODES:
-        raise ValueError(
-            f"unknown move_sketch_entities mode: {mode!r} (one of {list(MOVE_MODES)})"
-        )
+    require_move_mode(mode, verb="move_sketch_entities")
     normalized = _normalize_targets(doc, targets)
 
     if mode == MODE_ROTATE:
-        _reject_foreign_args(mode, {"dx": dx, "dy": dy})
+        reject_foreign_args(mode, {"dx": dx, "dy": dy}, verb="move_sketch_entities")
         shaped = _rotation_args(doc, normalized, angle, center, center_entity)
     else:
-        _reject_foreign_args(
-            mode, {"angle": angle, "center": center, "center_entity": center_entity}
+        reject_foreign_args(
+            mode, {"angle": angle, "center": center, "center_entity": center_entity}, verb="move_sketch_entities"
         )
         shaped = _translation_args(dx, dy)
 
@@ -519,20 +479,12 @@ def _undo_move_sketch_entities(document: Document, operation: Operation) -> None
     """
     args = operation.args
     if args.get("copy"):
-        created = set(args.get("created") or [])
-        for sketch in document.sketches:
-            remaining = []
-            for entity in sketch.entities:
-                if entity.id in created:
-                    parameters.release_param_refs(document, entity.params)
-                else:
-                    remaining.append(entity)
-            sketch.entities = remaining
+        remove_entities(document, args.get("created") or [])
         return
     _apply(
         document,
         [dict(item) for item in args["targets"]],
-        _params_transform(_inverse_args(args)),
+        _params_transform(inverse_move_args(args, ("dx", "dy"))),
     )
 
 

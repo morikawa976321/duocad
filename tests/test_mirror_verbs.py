@@ -455,3 +455,55 @@ def test_a_mirror_survives_save_and_replay(session: Session) -> None:
 
     volume_after = query.volume(replayed.get_body(created_id).shape)
     assert volume_after == pytest.approx(volume_before)
+
+
+def test_redo_of_a_two_body_mirror_leaves_nothing_behind_when_the_second_copy_fails(
+    session: Session, monkeypatch
+) -> None:
+    """落ちたら、2体の鏡映の再生で2体目の `mirror_shape` が落ちたときに1体目だけ足された文書が残る
+    (`_common.add_transformed_copies` は全部の形状を作ってから足す)。"""
+    body_a, _ = _box(session)
+    body_b = _cylinder(session)
+    _select(
+        session,
+        [
+            {"body": body_a.id, "kind": "face", "index": 1},
+            {"body": body_b.id, "kind": "face", "index": 1},
+        ],
+    )
+    session.mirror_body(base_plane="YZ")
+    session.undo()
+    count_before = len(session.document.bodies)
+
+    real_mirror = kernel.mirror_shape
+    calls = {"n": 0}
+
+    def flaky_mirror(shape, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("2体目で落ちる")
+        return real_mirror(shape, *args, **kwargs)
+
+    monkeypatch.setattr(kernel, "mirror_shape", flaky_mirror)
+    with pytest.raises(RuntimeError):
+        session.redo()
+    assert len(session.document.bodies) == count_before, "1体目だけ足された文書が残っている"
+
+
+def test_a_duplicate_copy_id_leaves_no_entity_and_no_parameter_behind(session: Session) -> None:
+    """落ちたら、鏡映の複製2件のうち2件目の ID が既存と重なるときに1件目だけ足され、名前つきの値も
+    増えたまま残る(`sketch.add_entities` は全部の ID を先に検査する)。"""
+    from duocad.verbs import mirror_sketch as verb
+
+    sketch_id = session.sketch_create("XY")["sketch_id"]
+    first = session.add_circle(sketch_id, [1.0, 2.0], 1.0)["entity_id"]
+    second = session.add_circle(sketch_id, [3.0, 4.0], 1.0)["entity_id"]
+    doc = session.document
+    entities_before = len(doc.sketches[0].entities)
+    parameters_before = len(doc.parameters)
+
+    with pytest.raises(ValueError, match="already exists"):
+        verb._create_mirrors(doc, [(sketch_id, first), (sketch_id, second)], 0.0, 0.0, 1.0, 0.0, ["fresh", first])
+
+    assert len(doc.sketches[0].entities) == entities_before
+    assert len(doc.parameters) == parameters_before
