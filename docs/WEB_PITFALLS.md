@@ -53,7 +53,7 @@
 - **`$state` のオブジェクト・配列を `page.evaluate` の戻り値にすると中身が欠ける**（Proxy が CDP のディープシリアライズに
   乗らない）。配列は `{}`、ネストしたプロキシはそのプロパティだけ `{}`、新しいプレーンオブジェクトに包んでも駄目。
   **例外も警告も出ず**、`Math.abs(undefined - 8) > 0.05` は `NaN > 0.05 === false` で素通りする。
-  第一選択は `$state.snapshot()`（ページ側の hook で包む。`App.svelte` の `__duocad`）。`JSON.stringify` を挟んで
+  第一選択は `$state.snapshot()`（ページ側の hook で包む。`web/src/testHooks.svelte.ts` の `__duocad`）。`JSON.stringify` を挟んで
   文字列で返す・スプレッドで素の配列にする・primitive だけ返す、でもよいが落とし忘れが起きる。
   **既存の検査が `JSON.stringify` を挟んでいたら様式ではなく必要。**
 - **条件付きレンダリングは DOM を消すが状態は消さない**（AI パネルのエンドポイント欄。[AI_INTEGRATION.md](AI_INTEGRATION.md)）。

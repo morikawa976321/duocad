@@ -831,7 +831,7 @@ export interface Viewport {
    * 種類の不具合で、画面の見た目からは分からない。
    *
    * `near`/`far` も返す。こちらも実機検査の穴で、文書の状態ではないので
-   * コアへは何も飛ばさない(`App.svelte` の `window.__duocad` と同じ方針)。
+   * コアへは何も飛ばさない(`testHooks.svelte.ts` の `window.__duocad` と同じ方針)。
    */
   cameraPose(): {
     position: [number, number, number]
