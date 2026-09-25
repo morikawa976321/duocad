@@ -28,8 +28,8 @@ import {
   snapSketchPoint,
 } from './entityKinds'
 import { classifySketchSnap, createSketchCursorOverlay } from './sketchCursorOverlay'
-import { DEFAULT_RESOLUTION, viewResolution } from './adaptiveResolution'
-import { sampleFaces, selectFineFaces, type BodySamples } from './faceCulling'
+import { sampleFaces, type BodySamples } from './faceCulling'
+import { createResolutionTracker } from './resolutionTracker'
 import {
   BASE_EXTENT,
   TIERS,
@@ -61,7 +61,7 @@ import type { BasePlaneName, EdgeGeometry } from './session'
 import {
   type BodyGeometryUpdate, type BodyGhostRotation, type BoxSelectEvent, type EdgeRef, type FaceGeometry,
   type FaceRef, type GeometryPayload, type OptimizeVisualState, type PickEvent, type PickMode, type SectionState,
-  type SketchDraw, type SketchEntityHit, type VertexMarker, type VertexRef, type Viewport, type ViewportResolution,
+  type SketchDraw, type SketchEntityHit, type VertexMarker, type VertexRef, type Viewport,
 } from './viewportTypes'
 import {
   AXIS_X_COLOR, AXIS_Y_COLOR, AXIS_Z_COLOR, BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_AXES, BASE_PLANE_HOVER_OPACITY,
@@ -763,7 +763,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * (型も漏らさない設計)。`bodies` と寿命を揃える(build/clear/pruneで同時に出し入れする)。
    */
   const rawGeometry = new Map<string, GeometryPayload>()
-  /** `rawGeometry` と寿命を揃える可視判定用サンプル(`computeFocus` が2835面を毎フレーム走査しない)。 */
+  /** `rawGeometry` と寿命を揃える可視判定用サンプル(`resolutionTracker` の `computeFocus` が2835面を毎フレーム走査しない)。 */
   const faceSamples = new Map<string, BodySamples>()
   /** `faceSamples` が変わった印。姿勢が止まっていても形が届けば `computeFocus` をやり直す。 */
   let focusGeneration = 0
@@ -1136,7 +1136,7 @@ export function createViewport(container: HTMLElement): Viewport {
    * —— 後から大きなSTEPが届けばfarを追い越して手前が切り取られ(farはズーム・オービットでは
    * 一切広がらない)、逆に小さな細部へ深く寄ればnearが大きいまま手前が切れる。**内容が変わる
    * たび**(`refreshContentDiagonal` の呼び出し元)**とカメラが意味のある幅で動くたび**
-   * (`cameraMoved` 判定に相乗り)の両方で呼ぶことで、視錐台を常時追随させる。
+   * (`resolutionTracker` の `cameraMoved` 判定に相乗り)の両方で呼ぶことで、視錐台を常時追随させる。
    *
    * near は**距離側からも**導く —— コンテンツの大きさだけで決めると、大きなモデルの中の
    * 小さな面へ深く寄ったときに手前が切れる(near は「いま見ている距離」に対しても十分
@@ -1771,53 +1771,6 @@ export function createViewport(container: HTMLElement): Viewport {
   }
 
   // ------------------------------------------------------------------ 可変解像度(ズーム連動)
-  //
-  // **寄ったら細かく、引いたら粗く。** 曲線が多角形に見えるのは弦と弧の乖離が数画素に
-  // なったときなので、目標精度は世界座標のmmではなく**画面の画素**で決める
-  // (式と定数は `adaptiveResolution.ts`。同じものが `duocad/resolution.py` にもある)。
-
-  /** カメラが止まったと見なすまでの待ち[ms]。**減衰(`dampingFactor`)が収まる時間も含む。** */
-  const RESOLUTION_SETTLE_MS = 180
-  /** 目標偏差がこの比だけ動いて初めて作り直す(1割程度の揺れでは測り直さない)。 */
-  const RESOLUTION_CHANGE_RATIO = 1.25
-  /** `worldPerPixel` が「まだ動いている」と見なす相対差。減衰の収束判定。 */
-  const RESOLUTION_STILL_EPSILON = 1.0e-4
-  /** カメラが「まだ動いている」と見なす移動量[画素]。減衰の収束判定(`cameraMoved`)。 */
-  const CAMERA_STILL_PIXELS = 0.5
-  /** 同・向きの収束判定(四元数の内積が `1 - これ` を下回ったら動いている)。 */
-  const CAMERA_STILL_ANGLE = 1.0e-7
-  /**
-   * **いま細かく測っている面が粗い側へ落ちるまでの余裕[画素]**(`faceCulling.ts` の
-   * `selectFineFaces`)。0にすると、視錐台の縁にある面が「入った/出た」を往復し、
-   * そのたびに27部品ぶんの測り直しがサーバへ飛ぶ。**画素で決める**のは、
-   * 縁の余裕が寄り引きで変わってはいけないため(当たり判定の太さと同じ流儀)。
-   */
-  const FOCUS_HYSTERESIS_PIXELS = 16
-
-  /** 直近に採用した解像度(スケッチの折れ線と `viewResolution()` が読む)。 */
-  let appliedResolution: ViewportResolution = {
-    ...DEFAULT_RESOLUTION,
-    worldPerPixel: 0,
-    sizeHint: 0,
-    focus: null,
-  }
-  let resolutionListener: ((resolution: ViewportResolution) => void) | null = null
-  let resolutionApplied = false
-  let lastWorldPerPixel = -1
-  let lastSizeHint = -1
-  /** 直近に「止まっている」と記録したカメラ(位置・姿勢・倍率)。**下記の閾値で比べる。** */
-  const lastCameraPosition = new THREE.Vector3(NaN, NaN, NaN)
-  const lastCameraQuaternion = new THREE.Quaternion(0, 0, 0, 1)
-  let lastCameraZoom = -1
-  /** カメラが**意味のある幅で**動くたびに増える番号(`computeFocus` の再計算の鍵)。 */
-  let cameraEpoch = 0
-  let steadySince = 0
-  /** 直近に `computeFocus` したときの姿勢と世代(同じなら再走査しない)。 */
-  let lastFocusComputeEpoch = -1
-  let lastFocusComputeGeneration = -1
-  /** face単位の高精度化を使うか。**切れるのは実機検査のためだけ**(既定は入り)。 */
-  let faceCullingEnabled = true
-  let lastAppliedFocus: Record<string, number[] | null> | null = null
   /**
    * いま見えているものの外接対角[mm]。**毎フレーム測らない** —— `Box3.setFromObject` は
    * 全メッシュを走査するので、中身が変わったとき(`update` / `prune` / `showSketches`)に
@@ -1835,139 +1788,16 @@ export function createViewport(container: HTMLElement): Viewport {
     applyGridScale(box, false)
   }
 
-  /**
-   * カメラが**意味のある幅で**動いたか(位置・姿勢・正投影の倍率)。
-   *
-   * **一致ではなく閾値で見る。** `OrbitControls` の減衰は指数で近づくので、カメラは
-   * いつまでも「完全には」止まらない —— 値の一致を「止まった」の条件にすると
-   * `steadySince` が毎フレーム振り出しに戻り、**解像度が二度と採り直されない**
-   * (実測: ホイールを回しても目標偏差が動かなくなった)。
-   * 閾値は `worldPerPixel` と同じ流儀で**画面の画素**で決める —— 世界座標のmmで決めると、
-   * 20mmの立方体と600mmの筐体で「止まった」の意味が変わる。
-   */
-  function cameraMoved(): boolean {
-    if (!Number.isFinite(lastCameraPosition.x)) return true
-    if (camera.position.distanceTo(lastCameraPosition) > worldPerPixel() * CAMERA_STILL_PIXELS) {
-      return true
-    }
-    // 四元数の内積は向きの近さ(1で一致)。符号は向きに影響しないので絶対値で見る。
-    if (Math.abs(camera.quaternion.dot(lastCameraQuaternion)) < 1 - CAMERA_STILL_ANGLE) return true
-    return Math.abs(camera.zoom - lastCameraZoom) > Math.abs(lastCameraZoom) * RESOLUTION_STILL_EPSILON
-  }
-
-  /** 「ここで止まっている」を記録する(次のフレームの `cameraMoved` の基準)。 */
-  function rememberCamera(): void {
-    lastCameraPosition.copy(camera.position)
-    lastCameraQuaternion.copy(camera.quaternion)
-    lastCameraZoom = camera.zoom
-  }
-
-  function focusEqual(
-    a: Record<string, number[] | null> | null,
-    b: Record<string, number[] | null> | null,
-  ): boolean {
-    if (a === b) return true
-    if (a === null || b === null) return false
-    const keysA = Object.keys(a).sort()
-    const keysB = Object.keys(b).sort()
-    if (keysA.length !== keysB.length) return false
-    for (let i = 0; i < keysA.length; i++) {
-      if (keysA[i] !== keysB[i]) return false
-      const va = a[keysA[i]]
-      const vb = b[keysB[i]]
-      if (va === null && vb === null) continue
-      if (va === null || vb === null) return false
-      if (va.length !== vb.length) return false
-      for (let j = 0; j < va.length; j++) {
-        if (va[j] !== vb[j]) return false
-      }
-    }
-    return true
-  }
-
-  /** 視錐台とバックフェイスから、サーバへ送る `focus` を組み立てる(落ち着いた後だけ呼ぶ)。 */
-  function computeFocus(): Record<string, number[] | null> | null {
-    // 切ってあるときは**何も指定しない** = 全Body全面が細かい側(導入前と同じ)。
-    if (!faceCullingEnabled || faceSamples.size === 0) return null
-    const frustum = new THREE.Frustum()
-    camera.updateMatrixWorld()
-    frustum.setFromProjectionMatrix(
-      new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse),
-    )
-    const viewDirection = camera.getWorldDirection(new THREE.Vector3())
-    const viewpoint = (camera as THREE.PerspectiveCamera).isPerspectiveCamera
-      ? camera.getWorldPosition(new THREE.Vector3())
-      : null
-    const hysteresis = worldPerPixel() * FOCUS_HYSTERESIS_PIXELS
-    const result: Record<string, number[] | null> = {}
-    let anySpecified = false
-    for (const [bodyId, samples] of faceSamples) {
-      const selected = selectFineFaces(samples, frustum, viewpoint, viewDirection, hysteresis)
-      if (selected !== null) {
-        result[bodyId] = selected
-        anySpecified = true
-      }
-    }
-    return anySpecified ? result : null
-  }
-
-  /**
-   * カメラが落ち着いていれば解像度を採り直す(毎フレーム `tick` から呼ばれる)。
-   *
-   * **門**はズームに加え**姿勢**も見る —— 寄りだけでは `worldPerPixel` が動かず、
-   * 視錐台が変わっても気づけない。落ち着いたあと `computeFocus` は2835面を走査するので、
-   * 姿勢と `focusGeneration` が同じなら再走査しない。
-   *
-   * **`moved` の分岐に `updateClipPlanes()` を相乗りさせてある**。near/farは
-   * カメラ距離が変わるたびに引き直すべきだが、毎フレーム呼ぶ必要は無い —— この分岐は
-   * 既存の画素基準の閾値判定(`cameraMoved()`)で門が閉じているので、オービット/パン/ドリーの
-   * 減衰が画素以下に収まった時点で自然に呼ばれなくなる(動いている間は毎フレーム呼ばれるが、
-   * `updateProjectionMatrix()` は毎フレームでも安い)。
-   */
-  function updateResolution(now: number): void {
-    const perPixel = worldPerPixel()
-    const moved =
-      lastWorldPerPixel < 0 ||
-      Math.abs(perPixel - lastWorldPerPixel) > lastWorldPerPixel * RESOLUTION_STILL_EPSILON ||
-      contentDiagonal !== lastSizeHint ||
-      cameraMoved()
-    if (moved) {
-      lastWorldPerPixel = perPixel
-      lastSizeHint = contentDiagonal
-      rememberCamera()
-      cameraEpoch += 1
-      steadySince = now
-      updateClipPlanes()
-      return
-    }
-    if (now - steadySince < RESOLUTION_SETTLE_MS) return
-    // **同じカメラ・同じ形なら判定もやり直さない**(`computeFocus` は2835面を走査する)。
-    if (cameraEpoch === lastFocusComputeEpoch && focusGeneration === lastFocusComputeGeneration) {
-      return
-    }
-
-    const focus = computeFocus()
-    lastFocusComputeEpoch = cameraEpoch
-    lastFocusComputeGeneration = focusGeneration
-
-    const target = viewResolution(perPixel, contentDiagonal)
-    const ratio = target.deviation / appliedResolution.deviation
-    const focusChanged = !focusEqual(focus, lastAppliedFocus)
-    if (
-      resolutionApplied &&
-      ratio < RESOLUTION_CHANGE_RATIO &&
-      ratio > 1 / RESOLUTION_CHANGE_RATIO &&
-      !focusChanged
-    ) {
-      return
-    }
-    resolutionApplied = true
-    lastAppliedFocus = focus
-    appliedResolution = { ...target, worldPerPixel: perPixel, sizeHint: contentDiagonal, focus }
-    // **スケッチはここで描き直す**(ブラウザ内で完結する経路。サーバ往復が要らない)。
-    redrawSketches()
-    resolutionListener?.(appliedResolution)
-  }
+  // 「カメラが止まったか」と採用した解像度は `resolutionTracker.ts`(式と定数は `adaptiveResolution.ts`)。
+  const resolution = createResolutionTracker({
+    camera: () => camera,
+    worldPerPixel,
+    contentDiagonal: () => contentDiagonal,
+    faceSamples,
+    focusGeneration: () => focusGeneration,
+    onMoved: updateClipPlanes,
+    onApplied: redrawSketches,
+  })
 
   // ------------------------------------------------ 当たり判定の共有部品(screen pick)
   //
@@ -2331,9 +2161,9 @@ export function createViewport(container: HTMLElement): Viewport {
     entity: { kind: string; params: Record<string, number> },
     material: SketchLineMaterial,
   ): { object: SketchFatLine; geometry: THREE.BufferGeometry; points: Array<[number, number]> } | null {
-    // **今の画面の粗さで折る**(`appliedResolution`)。固定分割だった頃は、寄ると
+    // **今の画面の粗さで折る**(`resolution.applied()`)。固定分割だった頃は、寄ると
     // 円が多角形に見え、引くと使われない点をGPUへ送っていた。
-    const points = entityPoints(entity.kind, entity.params, appliedResolution)
+    const points = entityPoints(entity.kind, entity.params, resolution.applied())
     if (points.length < 2) return null
     const worldPoints = points.map(([u, v]) => toWorld(frame, u, v))
     const built = buildSketchLine(worldPoints, material)
@@ -2355,7 +2185,7 @@ export function createViewport(container: HTMLElement): Viewport {
    */
   let lastSketchDraws: SketchDraw[] = []
 
-  /** 控えた指示で描き直す(`updateResolution` が呼ぶ)。中身が無ければ何もしない。 */
+  /** 控えた指示で描き直す(`resolutionTracker` が解像度を採り直したときに呼ぶ)。中身が無ければ何もしない。 */
   function redrawSketches(): void {
     if (lastSketchDraws.length > 0) showSketches(lastSketchDraws)
   }
@@ -2928,7 +2758,7 @@ export function createViewport(container: HTMLElement): Viewport {
       rawV,
       hit,
       (entityId) => sketch.handles.find((item) => item.entityId === entityId),
-      appliedResolution,
+      resolution.applied(),
       true,
     )
   }
@@ -3476,7 +3306,7 @@ export function createViewport(container: HTMLElement): Viewport {
     // **描画ループで見る**(`OrbitControls` の 'change' ではない) —— 減衰つきのドリーは
     // イベントが止まった後も数十フレーム動き続けるので、「止まったか」はフレーム側でしか
     // 分からない。中身は算術数本で、当たったときだけ作り直しが走る。
-    updateResolution(performance.now())
+    resolution.update(performance.now())
     updateHover()
     cube.updateHover()
     // **カーソル追従もフレームごとに引き直す**(`onPointerMove` だけに任せない)。
@@ -3517,24 +3347,15 @@ export function createViewport(container: HTMLElement): Viewport {
       if (!wanted) sketchCursor.update(null, 'free', null)
     },
     viewResolution() {
-      return { ...appliedResolution }
+      return { ...resolution.applied() }
     },
-    setFaceCulling(enabled) {
-      if (faceCullingEnabled === enabled) return
-      faceCullingEnabled = enabled
-      // **次のフレームで必ず採り直す**。カメラが止まったままでも判定が変わるので、
-      // 直前に計算した印を捨てないと「姿勢も世代も同じ」で早期returnしてしまう。
-      lastFocusComputeEpoch = -1
-      lastFocusComputeGeneration = -1
-    },
+    setFaceCulling: resolution.setFaceCulling,
     sketchPolylineCounts() {
       const counts: Record<string, number[]> = {}
       for (const [sketchId, entry] of sketches) counts[sketchId] = [...entry.polylineCounts]
       return counts
     },
-    onResolutionChange(listener) {
-      resolutionListener = listener
-    },
+    onResolutionChange: resolution.onChange,
     highlight,
     highlightBodies,
     setOptimizeState,
