@@ -217,7 +217,7 @@ runSmoke('smoke-optimize', { timeout: 60000, mcp: true }, async ({ options, work
       return {
         max: resolution.max_element_size_mm,
         min: resolution.min_element_size_mm,
-        steps: resolution.steps.map((s) => [s.element_size_mm, s.element_count]),
+        steps: resolution.steps.map((s) => [s.element_size_mm, s.design_elements_estimate]),
       }
     })
     if (ladder.steps.length < 2) fail(`目盛りの段が足りない: ${ladder.steps.length}`)

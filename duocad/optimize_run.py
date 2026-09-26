@@ -24,26 +24,19 @@ if TYPE_CHECKING:  # pragma: no cover - 型注釈のためだけ
 #: (改名のverbがどの種別にも無いため。`done/20260904-1703` の契約③)。
 RESULT_NAME = "optimized"
 
-#: **総要素数の上限**(= 要素サイズの下限を決める)。
+#: **設計空間の要素数(塊。空要素は `simp.Model(active_mask=...)` で外れる)の上限**(= 要素サイズの下限を決める)。
 #:
-#: **実物が通るための政策上の上限であって、メモリの安全域ではない。**
-#: `models/hanger_bar_attachment.json` は薄い部品(5.00mm)があり、粗いと事前検出
-#: (`_region_representation`)で止まる。**通るかどうかは要素サイズに対して単調でない**
+#: 格子の箱の数では上限にしない —— ピークメモリを決めるのは箱ではなく組み立てに載る塊の数で、hanger は
+#: 箱の約42%しか塊にならず、箱の数の上限では同じ値でもモデルの形でメモリが約2.4倍振れる。
+#: 実行前(`resolution_limits`)は幾何からの見積もり(`_design_element_estimate`)、実行時は `derive` 後の
+#: 実数(`space.element_count`)で判定する。130万は本人判断(2026-09-26: 「1.6mm が通る130万」)。
+#: 実測と見積もりの誤差は docs/TOPOPT.md「要素サイズの下限」。
+#:
+#: **これより粗ければ通る、とは限らない。** `models/hanger_bar_attachment.json` は薄い部品(5.00mm)があり、
+#: 粗いと事前検出(`_region_representation`)で止まる。通るかどうかは要素サイズに対して単調でない
 #: (2026-09-09 実測: 4.2mm 止まる / 4.4 通る / 4.6 止まる / 4.8 通る / 5.333 止まる。格子の
-#: 原点と刻みが要素サイズごとに引き直され、薄い部品にセル中心が入るかが偶然で決まる)——
-#: 「N mm 以下なら通る」とは書けない。
-#: **ピークメモリを決めるのは箱の要素数ではなく、組み立てに載る要素数(= 塊。空要素は
-#: `simp.Model(active_mask=...)` で外れる)である。** この機械(RAM 約32GB)で hanger を `run` で
-#: 回したときのプロセスのピーク(ワーキングセット。平滑化以降は回していない):
-#:
-#:   2.387506mm  塊  377,075(箱 約91万)  → 7.5GB   (2026-09-25 実測。200N・最小幅2セル)
-#:   1.797652mm  塊  882,233(箱 約208万) → 16.7GB  (2026-09-25 実測。2000N・最小幅2セル。実行 50分)
-#:
-#: 塊1要素あたり約19〜20kB(この2点)。
-#: 1.875mm(旧上限いっぱい)の hanger は 2026-09-24〜25 に4回完走している(1条件65〜100分)。
-#: 上限を 3,000,000(下限 約1.634mm)にしたのは、1.8mm(箱 約208万)が下限に対して余裕を持つため。
-#: 下限いっぱい(箱300万)のピークは実測していない(1.8mm からの外挿で約22GBだが未確認)。
-MAX_ELEMENTS = 3_000_000
+#: 原点と刻みが要素サイズごとに引き直され、薄い部品にセル中心が入るかが偶然で決まる)。
+MAX_DESIGN_ELEMENTS = 1_300_000
 
 #: 保持/除外ソリッドが「この解像度では表現できていない」と見なす要素数の境目。
 #: **0 は必ず止める**(その条件が黙って消える)。0 より多く これ未満は警告して続ける。
@@ -481,12 +474,12 @@ def resolution_limits(doc: "Document") -> dict:
     """要素サイズの**上限**(これより粗いと間違う)と**下限**(これより細かくはできない)。
 
         {"max_element_size_mm": float,        # 条件面からの要求
-         "min_element_size_mm": float,        # 総要素数の上限から
+         "min_element_size_mm": float,        # 設計空間の要素数の上限(見積もり)から
          "default_element_size_mm": float,    # 既定 = 上限側(いちばん粗くて安い)
          "from_condition_faces_mm": float,    # min(sqrt(条件面のCAD面積))
          "condition_faces": [{...}, ...],
          "bbox_min"/"bbox_max": [x,y,z],      # 条件の外接直方体(余白なし)
-         "max_elements": int}
+         "max_design_elements": int}
 
     **上限は条件面からの要求で決まる**(拘束面・荷重面に格子節点が付く大きさ)。
     **密度フィルタ半径(rmin)は上限に効かない**(解像度の上限からrmin/MIN_RMINを
@@ -497,7 +490,7 @@ def resolution_limits(doc: "Document") -> dict:
     では過大にも過小にもなる。厳密に確かめる手段は「その要素サイズで実際に `empty_faces()` を
     取り直す」しかない。
 
-    **下限は暫定の固定値**(`MAX_ELEMENTS`)。根拠はその定数のところにある。
+    **下限は設計空間の要素数の上限**(`MAX_DESIGN_ELEMENTS`)を幾何の見積もりで割り戻した値。根拠はその定数のところにある。
 
     保持・除外ソリッドからは**上限を厳密に計算できない**(細い通路を取りこぼす)ので、
     ここでは見ない —— ボクセル化したあとに数えて通知する(`run()` の事後検出)。
@@ -533,6 +526,7 @@ def resolution_limits(doc: "Document") -> dict:
     upper = from_faces
 
     lo, hi = _condition_bbox(doc)
+    volume = _design_volume(doc)
     if not upper > 0.0:
         raise OptimizeInputError("条件面の面積が0で要素サイズの上限を決められない")
     # **上限は実際の格子の要素サイズに揃える。** `derive` は最長辺を要求値で割った数を丸めるので、
@@ -540,26 +534,26 @@ def resolution_limits(doc: "Document") -> dict:
     upper = _snap_to_grid(lo, hi, upper)
     # 下限も実格子の要素サイズへ揃える(梯子の最後の段 = `min_element_size_mm` を画面が送り返しても
     # `_resolve_element_size` が「下限より細かい」と断らないため)。分割数は変わらないので要素数も変わらない。
-    lower = _snap_to_grid(lo, hi, _min_element_size(lo, hi))
+    lower = _snap_to_grid(lo, hi, _min_element_size(lo, hi, volume))
 
     return {
         "max_element_size_mm": upper,
         "min_element_size_mm": lower,
         "default_element_size_mm": upper,
         # **粗い側の端から細かい方向へだけ**動く目盛り(添字0が既定=上限側)。
-        "steps": _resolution_steps(lo, hi, upper, lower),
+        "steps": _resolution_steps(lo, hi, upper, lower, volume),
         "from_condition_faces_mm": from_faces,
         "condition_faces": faces,
         "bbox_min": [float(v) for v in lo],
         "bbox_max": [float(v) for v in hi],
-        "max_elements": MAX_ELEMENTS,
-        # **上限側が下限を下回る**(部品に対して条件面が小さすぎる)ときは、要素数の上限に
+        "max_design_elements": MAX_DESIGN_ELEMENTS,
+        # **上限側が下限を下回る**(部品に対して条件面が小さすぎる)ときは、設計空間の要素数の上限に
         # 引っかかって「間違わない解像度」が作れない。画面はここを見て断る。
         "feasible": lower <= upper,
     }
 
 
-def _resolution_steps(lo, hi, upper: float, lower: float) -> List[dict]:
+def _resolution_steps(lo, hi, upper: float, lower: float, volume: float) -> List[dict]:
     """要素サイズの梯子。**添字0が上限側(いちばん粗くて安い=既定)**で、進むほど細かい。
 
     **粗い側へ動く目盛りを作らない。** 粗い側の端は「正しさ」の境界(割ると条件面から
@@ -570,7 +564,8 @@ def _resolution_steps(lo, hi, upper: float, lower: float) -> List[dict]:
     段は上限から下限までの**等比**で刻む(要素数は要素サイズの3乗に反比例するので、
     等差にすると最後の1段だけで要素数が桁で跳ねる)。**予想時間は付けない**
     (所要時間は旧SIMP係数を使わない。初回は不明と表示する——走らせる前は
-    実測が無いので、要素数だけを見せて時間は語らない)。
+    実測が無いので、要素数だけを見せて時間は語らない)。**見せる要素数は設計空間の見積もり**
+    (`_design_element_estimate`)で、実数ではない。
 
     上限が下限以下(部品に対して条件面が小さすぎる)のときは**空**を返す ——
     「間違わない解像度」が作れないので、選ばせる目盛りが無い(`feasible` が偽になる)。
@@ -587,7 +582,7 @@ def _resolution_steps(lo, hi, upper: float, lower: float) -> List[dict]:
         # 各段も実格子の要素サイズへ揃える(画面に出す値と `derive` が作る格子を一致させる)。
         size = lower if index == count - 1 else _snap_to_grid(lo, hi, upper * (ratio ** index))
         shape = _grid_shape(lo, hi, size)
-        elements = shape[0] * shape[1] * shape[2]
+        elements = _design_element_estimate(volume, size)
         if elements in seen:
             continue
         seen.add(elements)
@@ -595,7 +590,7 @@ def _resolution_steps(lo, hi, upper: float, lower: float) -> List[dict]:
             {
                 "index": len(steps),
                 "element_size_mm": float(size),
-                "element_count": int(elements),
+                "design_elements_estimate": int(elements),
                 "min_width_floor_mm": float(2.0 * size),
                 "min_width_ceiling_mm": float(min(shape) * size),
                 "min_width_steps_mm": min_width_steps_mm(size, min(shape)),
@@ -681,44 +676,63 @@ def _snap_to_grid(lo, hi, spacing: float) -> float:
 
 
 def _grid_shape(lo, hi, spacing: float) -> tuple:
-    """`derive(spacing=...)` が起こす格子のセル数(x, y, z)。`_element_count` と最小幅の上限が共有する。"""
+    """`derive(spacing=...)` が起こす格子のセル数(x, y, z)。最小幅の上限と梯子が使う。"""
     from .topopt import design_space as ds
 
     return tuple(int(n) for n in ds.grid_for_frame(*ds.frame_box(lo, hi), spacing=float(spacing)).shape)
 
 
-def _element_count(lo, hi, spacing: float) -> int:
-    """`derive(spacing=...)` が実際に起こす格子の要素数。
+def _design_volume(doc: "Document") -> float:
+    """設計空間の体積の見積もり[mm³] = 領域(条件の点群の凸包 + 余白 m の球)の連続体積 × 除外に食われない割合。
 
-    格子そのものを `design_space.grid_for_frame`(`derive` と同じ規則)で1つ起こして数える ——
-    ボクセル化も導出も走らせないので安い。要求した要素サイズではなく**丸めた後の実 spacing** の
-    格子になるので、梯子に出す要素数が実格子と一致する。
+    `derive` と同じ点群(`_condition_boxes` の箱の頂点)・同じ余白(点群の最長辺 × `DEFAULT_MARGIN_RATIO`)。
     """
-    shape = _grid_shape(lo, hi, spacing)
-    return int(shape[0] * shape[1] * shape[2])
+    import numpy as np
 
-
-def _min_element_size(lo, hi) -> float:
-    """総要素数が `MAX_ELEMENTS` を超えない、いちばん小さい要素サイズ。
-
-    `_element_count` は単調(要素サイズを下げると増える)なので、解析的な当たりから
-    上へ詰める(切り上げとパッドがあるので閉じた式にはならない)。
-    """
     from .topopt import design_space as ds
 
+    boxes = [box for _body_id, _roles, box in _condition_boxes(doc)]
+    if not boxes:
+        raise OptimizeInputError("条件が1つも無いので設計空間の大きさが取れない")
+    bits = np.array([[i, j, k] for i in (0, 1) for j in (0, 1) for k in (0, 1)], dtype=float)
+    corners = np.unique(
+        np.concatenate(
+            [np.asarray(box["min"], dtype=float) + bits * (np.asarray(box["max"], dtype=float) - np.asarray(box["min"], dtype=float)) for box in boxes]
+        ),
+        axis=0,
+    )
+    longest = float(np.max(corners.max(axis=0) - corners.min(axis=0)))
+    volume = ds.offset_hull_volume(corners, ds.DEFAULT_MARGIN_RATIO * longest)
+    exclude_ids = list(doc.optimize.exclude_bodies)
+    if not exclude_ids:
+        return volume
+    obstacle, _offsets = _compound_with_offsets(doc, exclude_ids)
+    return volume * ds.obstacle_free_fraction(corners, obstacle)
+
+
+def _design_element_estimate(volume: float, spacing: float) -> int:
+    """設計空間の要素数の見積もり = 領域の連続体積 ÷ 要素の体積。
+
+    **実数ではない。** 除外の分は粗い格子で数えた割合(`obstacle_free_fraction`)で、揺れる。
+    「条件を含まない連結成分」は引かないので実数より多く出る向きの誤差は残る(誤差の実測は docs/TOPOPT.md)。
+    """
+    return int(round(float(volume) / float(spacing) ** 3))
+
+
+def _min_element_size(lo, hi, volume: float) -> float:
+    """設計空間の要素数の見積もりが `MAX_DESIGN_ELEMENTS` を超えない、いちばん小さい要素サイズ。
+
+    格子の要素サイズは `最長辺 / n`(n は整数)しか取れないので、閉じた式 `(体積/上限)^(1/3)` を
+    **要求より粗い側へ**格子に揃える(`n` を切り捨てる)。細かい側へ丸めると見積もりが上限を超える。
+    """
     if not max(float(hi[a]) - float(lo[a]) for a in range(3)) > 0.0:
         raise OptimizeInputError("条件の外接直方体が1点に潰れている")
-    box_lo, box_hi = ds.frame_box(lo, hi)
-    volume = 1.0
-    for axis in range(3):
-        volume *= float(box_hi[axis] - box_lo[axis])
-    guess = (volume / MAX_ELEMENTS) ** (1.0 / 3.0) if volume > 0 else _box_longest_edge(lo, hi)
-    spacing = max(guess, _box_longest_edge(lo, hi) * 1e-6)
-    for _ in range(200):
-        if _element_count(lo, hi, spacing) <= MAX_ELEMENTS:
-            return spacing
-        spacing *= 1.05
-    return spacing
+    if not volume > 0.0:
+        raise OptimizeInputError("設計空間の体積が0で要素サイズの下限を決められない")
+    box_long = _box_longest_edge(lo, hi)
+    wanted = (float(volume) / MAX_DESIGN_ELEMENTS) ** (1.0 / 3.0)
+    n = max(1, int(math.floor(box_long / wanted * (1.0 + 1e-12))))
+    return box_long / n
 
 
 # --------------------------------------------------------------------------------------
@@ -1002,6 +1016,7 @@ def _run(
     # ここで測る。導出は材料量を受け取らないので「量を決めるために量が要る」堂々巡りは無い。
     space = ds.derive(bundle.conditions, spacing=spacing)
     pump.check()
+    _require_design_elements_within_limit(space.element_count, float(space.grid.spacing))
     pump.emit(
         phase="derive",
         message=f"塊 {space.element_count} 要素(格子 {space.grid.shape})",
@@ -1292,13 +1307,29 @@ def _empty_condition_faces(space) -> List[dict]:
     return list(table.condition_face_diagnoses(space.fixed_faces, space.load_faces))
 
 
+def _require_design_elements_within_limit(count: int, spacing: float) -> None:
+    """`derive` 後の設計空間の要素数(実数)が上限を超えていたら、探索を始める前に止める。
+
+    実行前の見積もり(`resolution_limits`)は実数と食い違いうるので、拒否の最終判断はここ。
+    要素数は要素サイズの3乗に反比例するので、上限に収まる要素サイズを比で逆算して示す
+    (概算。切り上げて示すが、その値でもう一度超えることはありうる)。
+    """
+    if count <= MAX_DESIGN_ELEMENTS:
+        return
+    suggested = spacing * (count / MAX_DESIGN_ELEMENTS) ** (1.0 / 3.0)
+    raise OptimizeInputError(
+        f"設計空間の要素数 {count:,} が上限 {MAX_DESIGN_ELEMENTS:,} を超えている"
+        f"(要素サイズ {spacing:.4g} mm)。要素サイズを {math.ceil(suggested * 1000) / 1000:.4g} mm 以上にすること"
+    )
+
+
 def _resolve_element_size(limits: dict, requested: Optional[float]) -> float:
     upper = float(limits["max_element_size_mm"])
     lower = float(limits["min_element_size_mm"])
     if not limits["feasible"]:
         raise OptimizeInputError(
             f"要素サイズの上限 {upper:.4g} mm が下限 {lower:.4g} mm を下回っている"
-            f"(総要素数の上限 {MAX_ELEMENTS} に収まらない)。条件面をもっと大きい面に取り直すこと"
+            f"(設計空間の要素数の上限 {MAX_DESIGN_ELEMENTS} に収まらない)。条件面をもっと大きい面に取り直すこと"
         )
     if requested is None:
         return upper
@@ -1313,7 +1344,7 @@ def _resolve_element_size(limits: dict, requested: Optional[float]) -> float:
     if value < lower:
         raise OptimizeInputError(
             f"要素サイズ {value:.4g} mm は下限 {lower:.4g} mm より細かい"
-            f"(総要素数が {MAX_ELEMENTS} を超える)"
+            f"(設計空間の要素数の見積もりが {MAX_DESIGN_ELEMENTS} を超える)"
         )
     return value
 

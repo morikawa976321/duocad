@@ -6,7 +6,7 @@ import {
 } from '../web/src/minWidth.ts'
 
 const stepOf = (size, cells) => ({
-  index: 0, element_size_mm: size, element_count: 1, min_width_floor_mm: 2 * size, min_width_ceiling_mm: cells * size,
+  index: 0, element_size_mm: size, design_elements_estimate: 1, min_width_floor_mm: 2 * size, min_width_ceiling_mm: cells * size,
   // サーバーの `min_width_steps_mm` と同じく、入力するとちょうどその m になる値(m × size / size が丸めで m を超えるときは下げる)。
   min_width_steps_mm: Array.from({ length: cells - 1 }, (_, i) => {
     let value = (i + 2) * size

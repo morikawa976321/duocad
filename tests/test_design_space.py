@@ -551,3 +551,13 @@ def test_the_recording_has_one_derive_stage(tmp_path, monkeypatch) -> None:
     masks = trace.load_snapshot(next(rec.path.glob("*-derive-masks.json")))
     assert np.array_equal(masks["connected"], space.mask)
     assert masks["hull"].sum() >= masks["minus_obstacle"].sum() >= masks["connected"].sum()
+
+
+def test_the_offset_hull_volume_matches_the_steiner_closed_form_for_a_box() -> None:
+    """落ちたら、設計空間の見積もりの土台(凸包+球の体積)が式からずれている。立方体は閉じた式がある。"""
+    import math
+
+    bits = np.array([[i, j, k] for i in (0, 1) for j in (0, 1) for k in (0, 1)], dtype=float)
+    a, m = 10.0, 2.0
+    expected = a**3 + 6 * a * a * m + 3 * math.pi * a * m * m + 4.0 / 3.0 * math.pi * m**3
+    assert ds.offset_hull_volume(bits * a, m) == pytest.approx(expected, rel=1e-12)

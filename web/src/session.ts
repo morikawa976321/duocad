@@ -787,7 +787,8 @@ export interface OptimizeConditionsReport {
 export interface OptimizeResolutionStep {
   index: number
   element_size_mm: number
-  element_count: number
+  /** 設計空間の要素数の**見積もり**(領域の体積 ÷ 要素の体積。実数ではない)。 */
+  design_elements_estimate: number
   /** この段を選んだときの最小幅の下限[mm](= 要素サイズの2倍)。サーバーが計算する
    *  (画面は要素数の数え方を持たない、という既存方針と同じ)。 */
   min_width_floor_mm: number
@@ -811,7 +812,7 @@ export interface OptimizeResolutionPayload {
   min_element_size_mm?: number
   default_element_size_mm?: number
   from_condition_faces_mm?: number
-  max_elements?: number
+  max_design_elements?: number
   feasible?: boolean
   steps?: OptimizeResolutionStep[]
 }
