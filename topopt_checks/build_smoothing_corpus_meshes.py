@@ -49,19 +49,43 @@ def read_stl(path: Path) -> np.ndarray:
     return np.frombuffer(raw, _ID, count, 84)["verts"]
 
 
+def _boundary_face_count(mask: np.ndarray) -> int:
+    padded = np.pad(mask, 1)
+    return int(sum((padded[1:-1, 1:-1, 1:-1] & ~np.roll(padded, shift, axis)[1:-1, 1:-1, 1:-1]).sum()
+                   for axis in range(3) for shift in (1, -1)))
+
+
 def _check_voxel_stl(name: str, mask: np.ndarray, origin: np.ndarray, spacing: float) -> dict:
-    """ボクセルSTL と npz が同じマスクを表すこと: 体積が材料セル数×要素体積、外接箱が材料セルの外接箱。"""
+    """ボクセルSTL と npz が同じマスクを表すこと。三角形数が境界面数の2倍で、全三角形が
+    「法線の内側が材料セル・外側が空セル」の面の上にあり(重心で照合)、体積が材料セル数×要素体積。"""
     tri = read_stl(OUT / "voxel" / f"{name}.stl").astype(np.float64)
     volume = float(np.einsum("ij,ij->", tri[:, 0], np.cross(tri[:, 1], tri[:, 2])) / 6.0)
     cells = int(mask.sum())
     expected = cells * spacing ** 3
-    idx = np.argwhere(mask)
-    lo, hi = origin + idx.min(axis=0) * spacing, origin + (idx.max(axis=0) + 1) * spacing
-    box_error = float(max(np.abs(tri.reshape(-1, 3).min(axis=0) - lo).max(),
-                          np.abs(tri.reshape(-1, 3).max(axis=0) - hi).max()))
-    ok = abs(volume - expected) <= 1e-4 * expected and box_error <= 1e-3 * spacing
+    normal = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    axis = np.abs(normal).argmax(axis=1)
+    rows = np.arange(len(tri))
+    sign = np.sign(normal[rows, axis]).astype(int)
+    grid = (tri.mean(axis=1) - origin) / spacing
+    on_plane = np.abs(grid[rows, axis] - np.round(grid[rows, axis])) < 1e-3
+    inside = np.floor(grid).astype(int)
+    inside[rows, axis] = np.round(grid[rows, axis]).astype(int) - (sign > 0)
+    outside = inside.copy()
+    outside[rows, axis] += sign
+
+    def material(cell):
+        ok = ((cell >= 0) & (cell < mask.shape)).all(axis=1)
+        out = np.zeros(len(cell), bool)
+        out[ok] = mask[tuple(cell[ok].T)]
+        return out
+
+    faces_ok = on_plane & material(inside) & ~material(outside)
+    count_ok = len(tri) == 2 * _boundary_face_count(mask)
+    ok = bool(faces_ok.all() and count_ok and abs(volume - expected) <= 1e-4 * expected)
     return dict(mask_cells=cells, voxel_stl_volume_mm3=volume, expected_volume_mm3=expected,
-                volume_rel_error=(volume - expected) / expected, bbox_max_error_mm=box_error, same_mask=bool(ok))
+                volume_rel_error=(volume - expected) / expected, triangles=int(len(tri)),
+                triangles_off_boundary=int((~faces_ok).sum()), triangle_count_matches=bool(count_ok),
+                same_mask=ok)
 
 
 def _intersections(verts: np.ndarray, faces: np.ndarray) -> dict:
