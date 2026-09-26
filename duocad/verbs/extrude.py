@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional, Sequence
 
-from .. import kernel, kernel_sketch
+from .. import kernel_extrude, kernel_sketch
 from ..document import Body, BodyId, Document, new_body_id
 from ..oplog import Operation, register_verb
 from ._common import editable_body, recall, remember
@@ -57,7 +57,7 @@ def extrude(
     target_body, resolved_body_id = _resolve_target(doc, mode, body_id)
     target_shape = None if target_body is None else target_body.shape
 
-    result = kernel.extrude_regions(
+    result = kernel_extrude.extrude_regions(
         faces, distance, mode, normal, target_shape=target_shape
     )
 
@@ -199,14 +199,14 @@ def _do_extrude(document: Document, operation: Operation) -> None:
     if existing is None and mode == "cut":
         raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
     if mode == "new" or existing is None:
-        result = kernel.extrude_regions(faces, distance, mode, normal, target_shape=None)
+        result = kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=None)
         _add_new_body(document, body_id, result["shape"])
         remember(document, body_id, operation.seq, None)
         return
 
     target = _editable_target(document, body_id)
     previous_shape = target.shape
-    result = kernel.extrude_regions(faces, distance, mode, normal, target_shape=target.shape)
+    result = kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=target.shape)
     target.shape = result["shape"]
     remember(document, body_id, operation.seq, previous_shape)
 

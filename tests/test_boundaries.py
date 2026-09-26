@@ -29,15 +29,17 @@ DUOCAD_DIR = Path(__file__).resolve().parent.parent / "duocad"
 # `kernel_brep.py`(生成CADのBRep保存・ブーリアン・最終ソリッドの幾何検査・箱/格子との共通体積)・
 # `kernel_meshing.py`(OCCTの面分割の段階制御と境界交差の再分割)・
 # `mesh_geometry.py`(三角形境界の接続検査とCADソリッド化。位相の列挙と compound の定型)・
-# `kernel_sketch.py`(スケッチ平面の枠・図形の辺・領域検出)は
+# `kernel_sketch.py`(スケッチ平面の枠・図形の辺・領域検出)・
+# `kernel_extrude.py`(面と領域の押し出し)は
 # **カーネル層の一部**であって verb 層ではない —— `kernel.py` が大きいので
-# 役割ごとに分けてあるだけである。この5本の外でOCPを叩いたら落ちる。
+# 役割ごとに分けてあるだけである。この6本の外でOCPを叩いたら落ちる。
 OCP_ALLOWED = frozenset(
     {
         "kernel.py",
         "kernel_brep.py",
         "kernel_meshing.py",
         "kernel_sketch.py",
+        "kernel_extrude.py",
         "mesh_geometry.py",
         "topopt/voxelize.py",
     }

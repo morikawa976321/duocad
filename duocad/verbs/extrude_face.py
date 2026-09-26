@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .. import kernel
+from .. import kernel_extrude
 from ..document import BodyId, Document
 from ..oplog import Operation, register_verb
 from ._common import editable_body, reapply_shape, remember, undo_shape
@@ -33,7 +33,7 @@ def extrude_face(
     **document にもログにも変更を残さない** — 失敗しうる幾何計算を append より先に済ませる。
     """
     body = editable_body(doc, body_id, what="extrude", require_visible=True)
-    result = kernel.extrude_face_on_shape(body.shape, face_index, distance)
+    result = kernel_extrude.extrude_face_on_shape(body.shape, face_index, distance)
 
     previous_shape = body.shape
     body.shape = result["shape"]
@@ -50,7 +50,7 @@ def _do_extrude_face(document: Document, operation: Operation) -> None:
     """redo / replay: 記録された添字と距離で押し出し直す。**ログには触らない**(二重記録になる)。"""
     args = operation.args
     body = editable_body(document, args["body_id"], what="extrude", require_visible=True)
-    result = kernel.extrude_face_on_shape(body.shape, args["face_index"], args["distance"])
+    result = kernel_extrude.extrude_face_on_shape(body.shape, args["face_index"], args["distance"])
     reapply_shape(document, body, result, operation)
 
 
