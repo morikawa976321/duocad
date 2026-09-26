@@ -216,6 +216,26 @@ material-cut を直しても最後の `inspect_solid` で `self_intersections=4`
 | 12個の道具を先に1回のfuseで1つにしてからcut | fuse は警告なし・有効。cut は `AcquiredSelfIntersection` 2件で有効、体積 255,329。保持fuse後は1ソリッドだが上の自己交差4件が残り、さらに保持1付近 (-27.4, -0.5, 62.6) の面1枚が三角形分割できない |
 | 除外だけcut→保持だけcut(2回) | 体積 255,329(上と一致)、`AcquiredSelfIntersection` 7件・`FaceBuilderUnusedEdges` 6件 |
 
+## 検証材料64条件での最終処理の合格率(2026-09-26 実測)
+
+平滑化の検証材料(`output/smoothing_corpus/`。hanger_bar_attachment を荷重4 × 要素サイズ4 × 最小幅4で最適化したもの)の
+平滑化後メッシュ64個に、製品の `finalize` → `solid_mesh` をそのままかけた(`topopt_checks/finalize_smoothing_corpus.py`。
+保持・除外は文書のボディで全条件共通)。**合格は 7/64**。1条件 131〜1,300 秒。
+
+| 落ちた段 | 条件数 |
+|---|---:|
+| material-cut: 警告(`BOPAlgo_AlertTooSmallEdge`)があり、検査で水密・単一ソリッドに不合格(5〜35ソリッド) | 21 |
+| `solid_mesh`: 三角形分割できない面がある(`cross` の境界) | 17 |
+| material-cut: 演算結果が不正 | 7 |
+| 最終ソリッドの自己干渉検査が完了しなかった | 6 |
+| preserve-fuse: 演算結果が(空または)不正 | 3 |
+| ブーリアン後の形状が水密に不合格(自己干渉 1・4件。F1000_h2.4_w2 は平滑化の交差4組の条件) | 2 |
+| `solid_mesh`: 成果物の条件に不合格(`boundary_edges`・`nonmanifold_vertices`) | 1 |
+
+合格したのは F0200_h2.2_w2・F0200_h2.4_w2・F0200_h2.4_w4・F0500_h2.2_w5・F1000_h2.2_w5・F2000_h2.2_w4・F2000_h2.4_w5。
+平滑化の自己交差がある4条件はすべて不合格だが、不合格の大半(53条件)は平滑化の交差が無い条件で、B-rep のブーリアンと
+その後の分割で落ちている。各条件の失敗の全文は `output/smoothing_corpus/final_records/<条件名>.json`。
+
 ## ビューア表示とSTLエクスポートの同一性（解決）
 
 三角形分割の経路は3つある:
