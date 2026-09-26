@@ -65,6 +65,16 @@
   1e-6 のファジー値を付ける（`_ENVELOPE_TOLERANCE`）。ベジエ辺の領域は、オフセットが元の曲線の近似曲線を返し
   線分・円弧だけという指定を満たせないので拒む。
 
+## 複数面の押し出し（`kernel_extrude.extrude_faces`）
+
+- **法線の平行判定は内積ではなく外積の大きさで見る。** OCCT の `Precision::Angular`(1e-12) を許容値に
+  使うと、`1 - cos` は倍精度で 1e-16 未満を区別できないので内積では判定にならない。同一平面の判定は
+  先頭の面の重心からの法線方向の距離を `Precision::Confusion`(1e-7 mm) と比べる。STEP 由来で
+  法線に微小なずれがある面は弾かれうる（エラー文に何番目の面がどの条件に反したかが出る）。
+- 柱を `_fuse_all` で束ねてから1回だけ join / cut し、同一平面の統合（`_unify_same_domain`）は
+  コピーで試して採否を決める（`extrude_face_on_shape` と同じ）。1面の結果は `extrude_face_on_shape` と
+  体積・面数・統合の採否が一致することをテストで固定している（`tests/test_extrude_faces.py`）。
+
 ## STEP ファイル
 
 - **Fusion 360 のジェネレーティブデザイン結果を STEP で出すと長さ単位が `SI_UNIT(.CENTI.,.METRE.)`(cm)**

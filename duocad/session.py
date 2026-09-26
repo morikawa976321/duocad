@@ -45,6 +45,7 @@ from .verbs import (
     delete as delete_verb,
     envelope_regions as envelope_regions_verb,
     extrude as extrude_verb,
+    extrude_faces as extrude_faces_verb,
     extrude_face as extrude_face_verb,
     fillet as fillet_verb,
     import_step as import_step_verb,
@@ -682,20 +683,23 @@ class Session:
         mode: str = "join",
         body_id: Optional[str] = None,
     ) -> dict:
-        """**確定選択の領域**を押し出す(`verbs.extrude`)。面を押す `extrude_face` とは別。
+        """**確定選択の領域、または同一平面・同一ボディの面**を押し出す(`verbs.extrude`)。
 
-        押し出す領域は引数ではなく選択から取る。**`body_id` だけは引数のまま** ——
-        これは「どのBodyへ足す/から引くか」であって対象集合ではない(Bodyは選択集合の
-        項目ではない。MCPの `extrude` も同じ形)。`mode="new"` は行き先を持たないので
-        `body_id` を渡すと ValueError(ブラウザからは元々送れない)。
+        押す対象は引数ではなく選択から取る(領域と面の混在は ValueError)。**`body_id` だけは
+        引数のまま** —— これは「どのBodyへ足す/から引くか」であって対象集合ではない(Bodyは選択集合の
+        項目ではない。MCPの `extrude` も同じ形)。面のときの既定はその面を持つBody。
+        `mode="new"` は行き先を持たないので `body_id` を渡すと ValueError(ブラウザからは元々送れない)。
         """
-        refs = [
-            region.RegionRef.from_dict(item)
-            for item in selection.require_confirmed(self.document, "region")
-        ]
-        operation = extrude_verb(
-            self.document, refs, float(distance), mode=mode, body_id=body_id
-        )
+        kind, items = selection.require_extrude_targets(self.document)
+        if kind == "face":
+            operation = extrude_faces_verb(
+                self.document, items, float(distance), mode=mode, body_id=body_id
+            )
+        else:
+            refs = [region.RegionRef.from_dict(item) for item in items]
+            operation = extrude_verb(
+                self.document, refs, float(distance), mode=mode, body_id=body_id
+            )
         changed_body_id = operation.args["body_id"]
         return self._after_logged_verb({
             "body_id": changed_body_id,

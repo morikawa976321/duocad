@@ -1,13 +1,17 @@
-"""verb `extrude` — スケッチの**領域**を押し出す。
+"""verb `extrude` — スケッチの**領域**、または**同一平面・同一ボディのソリッドの面群**を押し出す。
 
-`extrude_face`(既存ソリッドの面を押す)とは別のverbである。こちらは**領域の集合**を対象に
-取り、`mode="join"` で足し、`mode="cut"` で引き、`mode="new"` で独立したボディにする。
+領域は `extrude(doc, regions, ...)`、面は `extrude_faces(doc, faces, ...)`。どちらも同じ verb
+`extrude` として記録し、ログの args が `regions` か `faces` かで再生を分ける。`extrude_face`
+(面1枚・別verb)は再生専用へ移るまで残っている。`mode="join"` で足し、`mode="cut"` で引き、
+`mode="new"` で独立したボディにする。
 
 - `"join"` … 対象ボディへ足す。**対象が無ければ新しいソリッドを1つ作る**(最初の板はこれで
   生まれる)。作った場合も `args["body_id"]` にそのIDを記録する(再生で同じIDが再現できないと
   選択が壊れるため)。
 - `"cut"` … 対象ボディから引く。**対象が無ければ ValueError**(引く相手が無いのに成功した
   ことにしない)。
+- 面のとき、行き先の既定は**その面を持つボディ**(領域のようなアクティブボディではない)。
+  距離の正は面の外向き法線側なので、面から削るには**負の距離で `cut`**。
 - `"new"` … **対象が何であっても、常に新しいソリッドを1つ作る**。`join` の「対象が無ければ
   作る」という**落ち方**を、種別として言えるようにしたもの —— これが無いと、既存部品がいる
   文書では2つ目の板が作れず(`join` が黙って融合する)、最初の板は空の文書でしか生まれない。
@@ -26,7 +30,7 @@ from typing import Any, List, Optional, Sequence
 from .. import kernel_extrude, kernel_sketch
 from ..document import Body, BodyId, Document, new_body_id
 from ..oplog import Operation, register_verb
-from ._common import editable_body, recall, remember
+from ._common import editable_body, recall, remember, resolve_shape_ref
 from ..region import RegionRef, _regions_detailed
 from ..sketch import get_sketch
 
@@ -82,6 +86,83 @@ def extrude(
     )
     remember(doc, resolved_body_id, operation.seq, None if created_new else previous_shape)
     return operation
+
+
+def extrude_faces(
+    doc: Document,
+    faces: Sequence[dict],
+    distance: float,
+    mode: str = "join",
+    body_id: Optional[BodyId] = None,
+) -> Operation:
+    """同一ボディの平面の面群(`{"body", "index"}` の並び)を押し出す。
+
+    失敗時は例外を送出し、**documentにもログにも変更を残さない**(幾何計算をログの append より先に済ませる)。
+    """
+    distance = float(distance)
+    if distance == 0.0:
+        raise ValueError("distance must not be 0 (押し出し量0は形状を変えない)")
+    if mode not in MODES:
+        raise ValueError(f"unknown extrude mode: {mode!r} (one of {list(MODES)})")
+
+    source, indices = _resolve_face_source(doc, faces)
+    if mode != "new" and body_id is None:
+        body_id = source.id
+    target_body, resolved_body_id = _resolve_target(doc, mode, body_id)
+    target_shape = None if target_body is None else target_body.shape
+
+    result = kernel_extrude.extrude_faces(
+        source.shape, indices, distance, mode, target_shape=target_shape
+    )
+
+    previous_shape: Any = None
+    if target_body is None:
+        resolved_body_id = new_body_id()
+        _add_new_body(doc, resolved_body_id, result["shape"])
+    else:
+        previous_shape = target_body.shape
+        target_body.shape = result["shape"]
+
+    operation = doc.log.append(
+        VERB_EXTRUDE,
+        {
+            "faces": [{"body": source.id, "index": index} for index in indices],
+            "distance": distance,
+            "mode": mode,
+            "body_id": resolved_body_id,
+        },
+    )
+    operation.provenance = result["provenance"]
+    remember(doc, resolved_body_id, operation.seq, previous_shape)
+    return operation
+
+
+def _resolve_face_source(doc: Document, faces: Sequence[Any]) -> tuple[Body, List[int]]:
+    """面の参照から (面を持つボディ, 添字の並び) を取る。**別のボディにまたがる選択は ValueError**。
+    面の持ち主は「見えないものは指せない」を課す(`editable_body` と同じ理由)。"""
+    refs = list(faces)
+    if not refs:
+        raise ValueError("extrude requires at least one face")
+    source: Optional[Body] = None
+    indices: List[int] = []
+    for position, ref in enumerate(refs, start=1):
+        body, index = resolve_shape_ref(
+            doc, ref, kind="face", what="extrude face", mesh_hint="(メッシュボディの面は押し出せない)"
+        )
+        if source is None:
+            source = body
+        elif body.id != source.id:
+            raise ValueError(
+                f"selected face #{position} belongs to body {body.id!r} but #1 belongs to "
+                f"{source.id!r}: 別のボディにまたがる面は押し出せない(同一ボディの面だけ)"
+            )
+        indices.append(index)
+    assert source is not None
+    if not source.visible:
+        raise ValueError(
+            f"body {source.id!r} is hidden: 見えないものは指せない(set_visible で表示すること)"
+        )
+    return source, indices
 
 
 def _resolve_target(
@@ -179,11 +260,14 @@ def _resolve_faces_and_normal(
 def _do_extrude(document: Document, operation: Operation) -> None:
     """redo / replay 時の再適用。**ログには触らない**(触ると二重記録になる)。"""
     args = operation.args
-    refs = [RegionRef.from_dict(item) for item in args["regions"]]
-    faces, normal = _resolve_faces_and_normal(document, refs)
     body_id = args["body_id"]
     mode = args["mode"]
     distance = float(args["distance"])
+    if "faces" in args:
+        _redo_faces(document, operation, args["faces"], distance, mode, body_id)
+        return
+    refs = [RegionRef.from_dict(item) for item in args["regions"]]
+    faces, normal = _resolve_faces_and_normal(document, refs)
 
     # **ここは存在検査**(無いことが「新しく作る」への分岐条件で、失敗ではない)。
     # `get_body` は無ければ KeyError なので使わない。
@@ -209,6 +293,32 @@ def _do_extrude(document: Document, operation: Operation) -> None:
     result = kernel_extrude.extrude_regions(faces, distance, mode, normal, target_shape=target.shape)
     target.shape = result["shape"]
     remember(document, body_id, operation.seq, previous_shape)
+
+
+def _redo_faces(
+    document: Document, operation: Operation, faces: Sequence[Any], distance: float, mode: str, body_id: BodyId
+) -> None:
+    """面のログの再適用。記録した添字で面を引き直す(形が決定的なので同じ面を指す)。"""
+    source, indices = _resolve_face_source(document, faces)
+    existing = next((body for body in document.bodies if body.id == body_id), None)
+    if mode == "new":
+        if existing is not None:
+            raise ValueError(f"cannot replay new: body {body_id!r} already exists")
+        result = kernel_extrude.extrude_faces(source.shape, indices, distance, mode)
+        _add_new_body(document, body_id, result["shape"])
+        remember(document, body_id, operation.seq, None)
+    else:
+        if existing is None:
+            raise ValueError(f"cannot replay {mode} without target body {body_id!r}")
+        target = _editable_target(document, body_id)
+        previous_shape = target.shape
+        result = kernel_extrude.extrude_faces(
+            source.shape, indices, distance, mode, target_shape=previous_shape
+        )
+        target.shape = result["shape"]
+        remember(document, body_id, operation.seq, previous_shape)
+    if operation.provenance is None:
+        operation.provenance = result["provenance"]
 
 
 def _undo_extrude(document: Document, operation: Operation) -> None:

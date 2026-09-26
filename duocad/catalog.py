@@ -505,11 +505,17 @@ COMMANDS: tuple[Command, ...] = (
         name="extrude",
         category="feature",
         description=(
-            "確定選択の領域を押し出して、ソリッドを足す/切る/新しいボディにするときに呼ぶ。"
-            "領域は選択から取る(引数では受けない)。"
+            "確定選択の領域、または同一平面・同一ボディのソリッドの面(何枚でも)を押し出して、"
+            "ソリッドを足す/切る/新しいボディにするときに呼ぶ。"
+            "対象は選択から取る(引数では受けない)。領域と面の混在は不可。"
         ),
         params=(
-            Param("distance", "number", "押し出し量(mm・法線方向)", dimension=True),
+            Param(
+                "distance",
+                "number",
+                "押し出し量(mm・法線方向)。面のときは外向き法線が正(面から削る cut は負の距離)",
+                dimension=True,
+            ),
             Param(
                 "mode",
                 "string",
@@ -519,7 +525,7 @@ COMMANDS: tuple[Command, ...] = (
             Param(
                 "body_id",
                 "string",
-                "対象ボディ。省略時はアクティブ(無ければ新規作成)。"
+                "対象ボディ。省略時は、領域ならアクティブ(無ければ新規作成)、面ならその面を持つボディ(面の選択は同一ボディだが、別のボディを指定すればそこへ足す/引く)。"
                 "mode='new' では指定できない(行き先を持たない)",
                 required=False,
                 ws=False,
@@ -532,7 +538,7 @@ COMMANDS: tuple[Command, ...] = (
         note=(
             "**`mode` はWSでだけ必須**(既定の join に落ちると「切るつもりで足した」が"
             "黙って通る。UIは人に選ばせてから送る)。**`body_id` はWSのコマンドには無い** —— "
-            "行き先を指せるのは MCP と `preview` だけで、WSはアクティブなBodyへ足す"
+            "行き先を指せるのは MCP と `preview` だけで、WSは領域ならアクティブなBody、面ならその面を持つBodyへ足す"
         ),
     ),
     Command(
