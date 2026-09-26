@@ -80,9 +80,6 @@ def _write_atomic(path: Path, data: bytes | str) -> None:
     os.replace(tmp, path)
 
 
-# ---------------------------------------------------------------------------------------------
-# 1条件(子プロセス)
-# ---------------------------------------------------------------------------------------------
 class _Captured(BaseException):
     """平滑化の直前で降りる合図(`except Exception` に飲まれないよう BaseException)。"""
 
@@ -231,9 +228,6 @@ def one(name: str) -> int:
     return 0 if record["status"] in ("ok", "no_solution") else 1
 
 
-# ---------------------------------------------------------------------------------------------
-# manifest・検証
-# ---------------------------------------------------------------------------------------------
 def load_records() -> dict:
     records = {}
     for path in sorted((OUT / "records").glob("*.json")):
@@ -321,9 +315,6 @@ def verify(name: str) -> int:
     return 0 if out["winding_outward"] and out["marching_cubes_raw"]["within_half_cell"] else 1
 
 
-# ---------------------------------------------------------------------------------------------
-# ドライバ(ロック・再開・切り離し)
-# ---------------------------------------------------------------------------------------------
 LOCK = OUT / "sweep.lock"
 LOG = OUT / "sweep.log"
 
@@ -346,7 +337,7 @@ _LOCK_BYTE = 1 << 20
 
 def _acquire_lock() -> bool:
     """OS の排他ロック(`msvcrt.locking`)を握る。持ち主が死ねば OS が放すので、死んだ錠の回収も競合も無い。
-    ファイルの中身(pid)は `--detach` と待つ側が読むための表示にすぎない。"""
+    ファイルは消さない(消すと後続の取得と競合する)。中身(pid)は `--detach` と待つ側が読むための表示にすぎない。"""
     import msvcrt
 
     global _LOCK_HANDLE
@@ -372,7 +363,6 @@ def _release_lock() -> None:
     if _LOCK_HANDLE is not None:
         _LOCK_HANDLE.close()
         _LOCK_HANDLE = None
-    LOCK.unlink(missing_ok=True)
 
 
 def _running_children() -> dict:
