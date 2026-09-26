@@ -89,8 +89,11 @@ def _check_voxel_stl(name: str, mask: np.ndarray, origin: np.ndarray, spacing: f
     lower = np.where(np.eye(3, dtype=bool)[axis], plane[:, None], inside)
     in_cell = ((vertex_grid >= (lower - 1e-3)[:, None, :]) & (vertex_grid <= (lower + span + 1e-3)[:, None, :])).all(axis=(1, 2))
     faces_ok = lattice & axis_parallel & on_plane & in_cell & material(inside) & ~material(outside)
-    face_ids, per_face = np.unique(np.column_stack([inside, axis, sign]), axis=0, return_counts=True)
-    count_ok = len(tri) == 2 * _boundary_face_count(mask) == 2 * len(face_ids) and bool((per_face == 2).all())
+    face_ids, face_of, per_face = np.unique(np.column_stack([inside, axis, sign]), axis=0,
+                                            return_inverse=True, return_counts=True)
+    corners = np.unique(np.column_stack([face_of.repeat(3), np.round(vertex_grid.reshape(-1, 3)).astype(int)]), axis=0)
+    four_corners = bool((np.bincount(corners[:, 0], minlength=len(face_ids)) == 4).all())  # 2枚が単位正方形の4隅を被覆
+    count_ok = len(tri) == 2 * _boundary_face_count(mask) == 2 * len(face_ids) and bool((per_face == 2).all()) and four_corners
     ok = bool(faces_ok.all() and count_ok and abs(volume - expected) <= 1e-4 * expected)
     return dict(mask_cells=cells, voxel_stl_volume_mm3=volume, expected_volume_mm3=expected,
                 volume_rel_error=(volume - expected) / expected, triangles=int(len(tri)),
