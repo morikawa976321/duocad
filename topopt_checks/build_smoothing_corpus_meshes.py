@@ -97,6 +97,8 @@ def build_one(name: str) -> dict:
     data = np.load(OUT / "voxel" / f"{name}.npz")
     mask, origin, spacing = data["mask"], np.asarray(data["origin"], float), float(data["spacing"])
     voxel = _check_voxel_stl(name, mask, origin, spacing)
+    if not voxel["same_mask"]:
+        raise ValueError(f"ボクセルSTLと npz のマスクが一致しない: {voxel}")
 
     t0 = time.perf_counter()
     surface = mesh.build_surface_from_mask(mask)
@@ -139,7 +141,8 @@ def build_one(name: str) -> dict:
 
 
 def _done(name: str) -> bool:
-    return (OUT / "mesh_records" / f"{name}.json").exists()
+    return all((OUT / part).exists() for part in (
+        f"mesh_records/{name}.json", f"marching_cubes/{name}.stl", f"smoothed/{name}.stl"))
 
 
 def _work(name: str) -> tuple[str, str | None]:
@@ -208,6 +211,8 @@ def main() -> int:
         m = build_manifest()
         print(f"built {m['built']}/{m['conditions_total']} missing={m['missing']}")
         return 0 if not m["missing"] else 1
+    if args.one and args.one not in _names():
+        parser.error(f"{args.one} は voxel/manifest.json の ok 条件にない")
     names = [args.one] if args.one else [n for n in _names() if not _done(n)]
     print(f"{len(names)} 条件を作る", flush=True)
     failed = []
@@ -218,7 +223,7 @@ def main() -> int:
                 failed.append(name)
     m = build_manifest()
     print(f"built {m['built']}/{m['conditions_total']} missing={m['missing']} failed={failed}")
-    return 0 if not m["missing"] else 1
+    return 0 if not m["missing"] and not failed else 1
 
 
 if __name__ == "__main__":
