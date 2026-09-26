@@ -14,23 +14,28 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Sequence, Tuple
 
 from OCP.BRep import BRep_Tool
-from OCP.BRepAdaptor import BRepAdaptor_Surface
-from OCP.BRepAlgoAPI import BRepAlgoAPI_Splitter
+from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse, BRepAlgoAPI_Splitter
 from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeEdge,
     BRepBuilderAPI_MakeFace,
     BRepBuilderAPI_MakeWire,
 )
+from OCP.BRepBndLib import BRepBndLib
+from OCP.BRepClass import BRepClass_FaceClassifier
+from OCP.Bnd import Bnd_Box
+from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeOffset
 from OCP.Geom import Geom_BezierCurve
-from OCP.GeomAbs import GeomAbs_SurfaceType
-from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum
+from OCP.GeomAbs import GeomAbs_Arc, GeomAbs_CurveType, GeomAbs_SurfaceType
+from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
+from OCP.TopAbs import TopAbs_Orientation, TopAbs_ShapeEnum, TopAbs_State
 from OCP.TopoDS import TopoDS, TopoDS_Shape  # noqa: F401  TopoDS_Shape は型注釈だけ
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TColgp import TColgp_Array1OfPnt
-from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pnt
+from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pln, gp_Pnt
 
 from .kernel import _BASE_PLANE_AXES, _face_map, _face_props, classify_face, face_of
-from .mesh_geometry import indexed_map
+from .mesh_geometry import compound, indexed_map
 
 
 def require_planar_face(shape: "TopoDS_Shape", face_index: int) -> Any:
@@ -181,6 +186,219 @@ def sketch_regions(
             }
         )
     return regions
+
+
+#: 包み込みの面の結合・境界判定に使う許容差[mm]。OCCTの既定(1e-7)では、R と d の円弧が
+#: 同じ点で接するオフセット結果の結合を取りこぼしうるので、その10倍にする。
+_ENVELOPE_TOLERANCE = 1.0e-6
+
+
+def envelope_faces(
+    plane: dict, faces: Sequence[Any], radius: float, offset: float
+) -> List[Any]:
+    """選択領域の面 `faces` を D(offset)( D(-radius)( D(radius)(和集合) ) ) で包んだ面の並び。
+
+    D(r) は半径 r の円とのミンコフスキー和(r<0 は縮小)。角の接続は円弧(`GeomAbs_Arc`)で、
+    出力の辺は元の直線・円弧と、radius・offset による円弧だけになる(近似はしない)。
+    戻り値は**単一とは限らない**(分裂した数を判定するのは呼び出し側)。空リストはオフセットで
+    領域が消えたこと。`radius` は 0 以上、`offset` は負も許す。
+    """
+    if not faces:
+        return []
+    ax3 = _ax3_from_plane(plane)
+    pieces = list(faces)
+    if radius > 0.0:
+        pieces = _dilate_faces(ax3, pieces, radius)
+        pieces = _erode_faces(ax3, pieces, radius)
+    else:
+        pieces = _union_faces(pieces)
+    if offset > 0.0:
+        pieces = _dilate_faces(ax3, pieces, offset)
+    elif offset < 0.0:
+        pieces = _erode_faces(ax3, pieces, -offset)
+    return _shape_faces(_unified(compound(pieces)))
+
+
+def _shape_faces(shape: Any) -> List[Any]:
+    shape_map = _face_map(shape)
+    return [TopoDS.Face_s(shape_map.FindKey(i)) for i in range(1, shape_map.Extent() + 1)]
+
+
+def _unified(shape: Any) -> Any:
+    """同一平面・同一曲線上で隣り合う面・辺を1つにまとめる(共線の線分や同心の円弧の分割を消す)。"""
+    unify = ShapeUpgrade_UnifySameDomain(shape, True, True, False)
+    unify.Build()
+    return unify.Shape()
+
+
+def _union_faces(faces: Sequence[Any]) -> List[Any]:
+    """面を和集合にして、つながった成分ごとの面の並びにする(辺で接するだけの面も1枚に結合する)。"""
+    if len(faces) <= 1:
+        return list(faces)
+    return _shape_faces(_boolean(BRepAlgoAPI_Fuse(), faces[:1], faces[1:]))
+
+
+def _boolean(operation: Any, arguments: Sequence[Any], tools: Sequence[Any]) -> Any:
+    """`arguments` と `tools` で2Dのブーリアンを取る(許容差つき)。"""
+    argument_list = TopTools_ListOfShape()
+    for shape in arguments:
+        argument_list.Append(shape)
+    tool_list = TopTools_ListOfShape()
+    for shape in tools:
+        tool_list.Append(shape)
+    operation.SetArguments(argument_list)
+    operation.SetTools(tool_list)
+    operation.SetFuzzyValue(_ENVELOPE_TOLERANCE)
+    operation.Build()
+    if not operation.IsDone():
+        raise ValueError("領域のブーリアン演算に失敗した")
+    return operation.Shape()
+
+
+def _erode_faces(ax3: "gp_Ax3", faces: Sequence[Any], distance: float) -> List[Any]:
+    """面の和集合を `distance` だけ縮める(補集合を広げて引く)。消えたら空リスト。
+
+    **負のオフセットを OCCT に直接頼まない**: 同心円で囲まれた面(座金の形)の内向きオフセットは
+    どの距離でも `IsDone()=False` で失敗し、円が完全に潰れる距離(r 以上)でも同じ失敗になる。
+    正のオフセットは同じ形で通るので、`縮小 = 十分大きな箱 − (箱 − 面) の拡大` で取る。
+    """
+    box_3d = Bnd_Box()
+    for face in faces:
+        BRepBndLib.Add_s(face, box_3d)
+    x0, y0, z0, x1, y1, z1 = box_3d.Get()
+    corners = [_to_uv(ax3, x, y, z) for x in (x0, x1) for y in (y0, y1) for z in (z0, z1)]
+    u_min, u_max = min(c[0] for c in corners), max(c[0] for c in corners)
+    v_min, v_max = min(c[1] for c in corners), max(c[1] for c in corners)
+    margin = 2.0 * distance + 1.0
+    box = _plane_face(ax3, u_min - margin, u_max + margin, v_min - margin, v_max + margin)
+    complement = _shape_faces(_boolean(BRepAlgoAPI_Cut(), [box], list(faces)))
+    grown = _dilate_faces(ax3, complement, distance)
+    return _shape_faces(_boolean(BRepAlgoAPI_Cut(), [box], grown))
+
+
+def _dilate_faces(ax3: "gp_Ax3", faces: Sequence[Any], distance: float) -> List[Any]:
+    """面の和集合を `distance`(正)だけ広げ、つながった成分ごとの面の並びにする。
+
+    面ごとに広げてから結合する(ミンコフスキー和は和集合に分配する)。`BRepOffsetAPI_MakeOffset` は
+    面を渡してもワイヤの並びしか返さないので、ワイヤの入れ子(外周と穴)から面を組み直す
+    (`_faces_from_wires`)。
+    """
+    result: List[Any] = []
+    for face in faces:
+        maker = BRepOffsetAPI_MakeOffset(face, GeomAbs_Arc)
+        maker.Perform(distance)
+        if not maker.IsDone():
+            raise ValueError(f"2Dオフセット(距離 {distance} mm)に失敗した")
+        shape = maker.Shape()
+        if shape is None or shape.IsNull():
+            raise ValueError(f"2Dオフセット(距離 {distance} mm)が空の結果を返した")
+        wire_map = indexed_map(shape, TopAbs_ShapeEnum.TopAbs_WIRE)
+        wires = [TopoDS.Wire_s(wire_map.FindKey(i)) for i in range(1, wire_map.Extent() + 1)]
+        # 入れ子の数え上げは**入力の面ごと**にする(別の面のオフセット結果どうしは重なりうるので、
+        # 混ぜると片方の外周がもう片方の穴に数えられる)。
+        result.extend(_faces_from_wires(ax3, wires))
+    return _union_faces(result)
+
+
+def _faces_from_wires(ax3: "gp_Ax3", wires: Sequence[Any]) -> List[Any]:
+    """ワイヤの集まりを、入れ子の深さ(偶数=外周・奇数=穴)で面(外周+穴)へ組む。
+
+    `BRepBuilderAPI_MakeFace` はワイヤの向きによらず有界な面を作る(時計回りでも面積は正)ので、
+    向きでは外周と穴を区別できない —— 他のワイヤの面が、上のワイヤの1点を含むかで数える。
+    """
+    pln = gp_Pln(ax3)
+    entries: List[dict] = []
+    for wire in wires:
+        made = BRepBuilderAPI_MakeFace(pln, wire, True)
+        if not made.IsDone():
+            continue
+        face = made.Face()
+        edge = TopoDS.Edge_s(indexed_map(wire, TopAbs_ShapeEnum.TopAbs_EDGE).FindKey(1))
+        curve = BRepAdaptor_Curve(edge)
+        point = curve.Value((curve.FirstParameter() + curve.LastParameter()) / 2.0)
+        entries.append({"face": face, "point": point, "area": _face_props(face)[0]})
+
+    for entry in entries:
+        entry["containers"] = [
+            other
+            for other in entries
+            if other is not entry
+            and BRepClass_FaceClassifier(other["face"], entry["point"], _ENVELOPE_TOLERANCE).State()
+            == TopAbs_State.TopAbs_IN
+        ]
+        entry["depth"] = len(entry["containers"])
+
+    holes_of: Dict[int, List[dict]] = {}
+    for hole in (e for e in entries if e["depth"] % 2 == 1):
+        owners = [c for c in hole["containers"] if c["depth"] % 2 == 0]
+        if owners:
+            owner = min(owners, key=lambda c: c["area"])
+            holes_of.setdefault(id(owner), []).append(hole)
+
+    faces: List[Any] = []
+    for entry in sorted((e for e in entries if e["depth"] % 2 == 0), key=lambda e: -e["area"]):
+        face = entry["face"]
+        for hole in holes_of.get(id(entry), []):
+            face = _shape_faces(_boolean(BRepAlgoAPI_Cut(), [face], [hole["face"]]))[0]
+        faces.append(face)
+    return faces
+
+
+def face_boundary_entities(plane: dict, face: Any) -> List[dict]:
+    """面の境界(外周と穴)を、スケッチ図形 `{"kind", "params"}` の並びにする。**線分・円弧・円だけ**。
+
+    辺がそれ以外(ベジエなど)なら ValueError。ベジエの領域を包むと、オフセットは元の曲線の
+    近似曲線を返し、線分と円弧だけという指定を満たせないため。
+    """
+    ax3 = _ax3_from_plane(plane)
+    entities: List[dict] = []
+    edge_map = indexed_map(face, TopAbs_ShapeEnum.TopAbs_EDGE)
+    for i in range(1, edge_map.Extent() + 1):
+        curve = BRepAdaptor_Curve(TopoDS.Edge_s(edge_map.FindKey(i)))
+        first, last = curve.FirstParameter(), curve.LastParameter()
+        kind = curve.GetType()
+
+        def uv(parameter: float, curve: Any = curve) -> Tuple[float, float]:
+            point = curve.Value(parameter)
+            return _to_uv(ax3, point.X(), point.Y(), point.Z())
+
+        if kind == GeomAbs_CurveType.GeomAbs_Line:
+            (x0, y0), (x1, y1) = uv(first), uv(last)
+            entities.append({"kind": "line", "params": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}})
+        elif kind == GeomAbs_CurveType.GeomAbs_Circle:
+            circle = curve.Circle()
+            centre = circle.Location()
+            cx, cy = _to_uv(ax3, centre.X(), centre.Y(), centre.Z())
+            radius = circle.Radius()
+            (sx, sy), (ex, ey) = uv(first), uv(last)
+            if math.hypot(ex - sx, ey - sy) <= _ENVELOPE_TOLERANCE:
+                entities.append({"kind": "circle", "params": {"cx": cx, "cy": cy, "radius": radius}})
+                continue
+            mx, my = uv((first + last) / 2.0)
+            start = math.degrees(math.atan2(sy - cy, sx - cx))
+            end = math.degrees(math.atan2(ey - cy, ex - cx))
+            middle = math.degrees(math.atan2(my - cy, mx - cx))
+            # 辺の向きと円の軸の向きは独立なので、始点→中点→終点の回り方から反時計回りの端点を決める。
+            if (middle - start) % 360.0 > (end - start) % 360.0:
+                start, end = end, start
+            entities.append(
+                {
+                    "kind": "arc",
+                    "params": {
+                        "cx": cx,
+                        "cy": cy,
+                        "radius": radius,
+                        "start_deg": start,
+                        "end_deg": end,
+                    },
+                }
+            )
+        else:
+            raise ValueError(
+                f"包んだ結果に線分・円弧以外の辺({kind.name})が出る"
+                "(ベジエ曲線を含む領域は包めない)"
+            )
+    return entities
 
 
 def _ax3_from_plane(plane: dict, face: Any = None) -> "gp_Ax3":

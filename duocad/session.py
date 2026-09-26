@@ -41,6 +41,7 @@ from .verbs import (
     boolean_body as boolean_body_verb,
     chamfer as chamfer_verb,
     delete as delete_verb,
+    envelope_regions as envelope_regions_verb,
     extrude as extrude_verb,
     extrude_face as extrude_face_verb,
     fillet as fillet_verb,
@@ -894,6 +895,26 @@ class Session:
             "axis_dir": args["axis_dir"],
             "created": list(args["created"]),
             "sketch_ids": sketch_ids,
+        })
+
+    @_edits_document
+    def envelope_regions(self, radius: float = 0.0, offset: float = 0.0) -> dict:
+        """**確定選択の領域**を包む単一の領域線を、同じスケッチへ足す(`verbs.envelope_regions`)。
+
+        対象は引数ではなく選択から取る。`radius` は追従半径(0以上)、`offset` は包んだ線の
+        オフセット(負で内へ)で、どちらも空は 0 mm。分裂・消失は ValueError(文面は verb 側)。
+        """
+        refs = [
+            region.RegionRef.from_dict(item)
+            for item in selection.require_confirmed(self.document, "region")
+        ]
+        operation = envelope_regions_verb(self.document, refs, float(radius), float(offset))
+        args = operation.args
+        return self._after_logged_verb({
+            "radius": args["radius"],
+            "offset": args["offset"],
+            "created": list(args["created"]),
+            "sketch_ids": [args["sketch_id"]],
         })
 
     @_edits_document

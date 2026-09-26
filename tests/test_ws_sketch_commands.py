@@ -141,3 +141,27 @@ def test_mirror_sketch_entities_is_reachable_from_the_socket(session: Session) -
     assert answer["applied"]["verb"] == "mirror_sketch_entities" and answer["applied"]["client_op"] == 4
     circles = [item for item in _sketches(clients[0])[0]["entities"] if item["kind"] == "circle"]
     assert sorted(round(item["params"]["cx"], 9) for item in circles) == [-15.0, 15.0]
+
+
+def test_envelope_regions_is_reachable_from_the_socket_and_a_split_result_is_refused(session: Session) -> None:
+    """`envelope_regions` が表の口を通る: 1枚になれば線が足され、分裂なら個数つきの拒否が届いて何も足されない。"""
+
+    async def script(send):
+        sketch_id = await _new_sketch(send)
+        for client_op, x in ((2, 0.0), (3, 15.0)):
+            await send(
+                {"cmd": "add_rectangle", "sketch_id": sketch_id, "corner": [x, 0.0], "width": 10.0, "height": 10.0, "client_op": client_op}
+            )
+        await send({"cmd": "modify_selection", "add": [{"sketch": sketch_id, "index": 1}, {"sketch": sketch_id, "index": 2}], "remove": []})
+        await send({"cmd": "commit_selection"})
+        refused = await send({"cmd": "envelope_regions", "radius": 2.0, "offset": 0.0, "client_op": 4})
+        count_after_refusal = len(session.document.sketches[0].entities)
+        done = await send({"cmd": "envelope_regions", "radius": 3.0, "offset": 0.0, "client_op": 5})
+        return refused, count_after_refusal, done
+
+    (refused, count_after_refusal, done), _clients = browser(session, script)
+
+    assert refused["type"] == "error" and "2 個に分かれます" in refused["message"]
+    assert count_after_refusal == 2
+    assert done["applied"]["verb"] == "envelope_regions" and done["applied"]["client_op"] == 5
+    assert len(done["applied"]["created"]) > 0

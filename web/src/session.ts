@@ -461,6 +461,18 @@ export type Applied =
       sketch_ids: string[]
     })
   /**
+   * 領域の包み(`envelope_regions`)。選択領域を包んだ単一の領域線を**同じスケッチへ足す**
+   * (元の領域の線は残る)ので、`created` は足した線分・円弧・円のID、`sketch_ids` は
+   * そのスケッチ1つだけ。`radius` / `offset` は空欄が 0 に解決された後の値。
+   */
+  | (AppliedVerbBase & {
+      verb: 'envelope_regions'
+      radius: number
+      offset: number
+      created: string[]
+      sketch_ids: string[]
+    })
+  /**
    * ボディの鏡映複製(`mirror_body`)。**常に複製を作る**(move_bodyと違い、動かす経路は
    * 無い)。元は動かないので `changed_bodies` は複製で増えたボディだけ。
    *

@@ -840,6 +840,12 @@ class DocumentTools:
         applied = self.session.mirror_sketch_entities(axis)
         return self._apply_logged(before, applied, created=applied["created"])
 
+    def envelope_regions(self, radius: float = 0.0, offset: float = 0.0) -> dict:
+        """**確定選択の領域**を包む単一の領域線を、同じスケッチへ足す(実体は `Session.envelope_regions`)。"""
+        before = self._revision_snapshot()
+        applied = self.session.envelope_regions(radius, offset)
+        return self._apply_logged(before, applied, created=applied["created"])
+
     def mirror_body(self, base_plane: Optional[str] = None, plane_face: Any = None) -> dict:
         """**確定選択の面/辺/頂点が属するボディ**を、鏡映面に対して鏡映複製する。
 

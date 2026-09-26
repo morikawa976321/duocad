@@ -839,6 +839,41 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
+        name="envelope_regions",
+        category="sketch",
+        description=(
+            "確定選択の複数の領域を、へこみに沿って包む**単一の閉じた領域線**を、同じスケッチへ足すときに呼ぶ。"
+            "元の領域の線は残る。結果は線分と円弧だけ。結果が1つの領域にならない(何個かに分かれる・"
+            "オフセットで消える)と失敗して何も変わらない。対象は選択から取る(引数では受けない)。"
+            "選択が複数のスケッチにまたがるのも失敗する。"
+        ),
+        params=(
+            Param(
+                "radius",
+                "number",
+                "追従半径 R(mm・0以上)。幅 2R 未満の隙間とへこみを埋め、それより広いへこみには沿う。"
+                "省略は 0",
+                required=False,
+                dimension=True,
+            ),
+            Param(
+                "offset",
+                "number",
+                "包んだ線のオフセット d(mm)。正で外へ広がり、負で内へ縮む。省略は 0",
+                required=False,
+                dimension=True,
+            ),
+        ),
+        uses_selection=True,
+        session="envelope_regions",
+        resets_selection=True,
+        note=(
+            "**WSでは R・d ともに必須**(表は載せた引数を全部必須にする)。UIは空欄を 0 として送る"
+            "(`NumberArgSpec.default`)ので、人が空欄のまま確定しても届く。MCPは省略=0。"
+            "**必要な R・d の最小値は計算しない**(本人の決定。分裂したら個数を添えて失敗するだけ)"
+        ),
+    ),
+    Command(
         name="mirror_body",
         category="feature",
         description=(
