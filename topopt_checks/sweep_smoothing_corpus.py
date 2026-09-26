@@ -339,37 +339,40 @@ def _pid_is_sweep(pid: int) -> bool:
         return True  # 読めないだけで生きている。死んだ錠と誤認して二重起動しない側に倒す
 
 
+_LOCK_HANDLE = None
+#: 排他ロックを掛けるバイトの位置。先頭の pid の記述は他のプロセスが読める(ロックの外)。
+_LOCK_BYTE = 1 << 20
+
+
 def _acquire_lock() -> bool:
-    """pid 入りの錠を**中身ごと**作る(一時ファイルを書いてから `os.link`。pid 未記入の錠は存在しない)。"""
+    """OS の排他ロック(`msvcrt.locking`)を握る。持ち主が死ねば OS が放すので、死んだ錠の回収も競合も無い。
+    ファイルの中身(pid)は `--detach` と待つ側が読むための表示にすぎない。"""
+    import msvcrt
+
+    global _LOCK_HANDLE
     OUT.mkdir(parents=True, exist_ok=True)
-    mine = LOCK.with_name(f"sweep.lock.{os.getpid()}.tmp")
-    mine.write_text(f"{os.getpid()} {_now()}\n")
+    handle = open(LOCK, "a+b")
     try:
-        for _ in range(2):
-            try:
-                os.link(mine, LOCK)
-                return True
-            except FileExistsError:
-                pass
-            try:
-                pid = int(LOCK.read_text().split()[0])
-            except (ValueError, IndexError):
-                pid = -1
-            except OSError:
-                continue
-            if pid > 0 and _pid_is_sweep(pid):
-                print(f"別のスイープが走っている(pid {pid})。何もしない", flush=True)
-                return False
-            # 死んだ持ち主の錠。名前を付け替えて奪う(同時に回収しようとした片方だけが成功する)。
-            grave = LOCK.with_name(f"sweep.lock.stale.{os.getpid()}")
-            try:
-                os.replace(LOCK, grave)
-            except OSError:
-                continue
-            grave.unlink(missing_ok=True)
+        handle.seek(_LOCK_BYTE)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        handle.close()
+        print("別のスイープが走っている。何もしない", flush=True)
         return False
-    finally:
-        mine.unlink(missing_ok=True)
+    handle.seek(0)
+    handle.truncate(0)
+    handle.write(f"{os.getpid()} {_now()}\n".encode())
+    handle.flush()
+    _LOCK_HANDLE = handle
+    return True
+
+
+def _release_lock() -> None:
+    global _LOCK_HANDLE
+    if _LOCK_HANDLE is not None:
+        _LOCK_HANDLE.close()
+        _LOCK_HANDLE = None
+    LOCK.unlink(missing_ok=True)
 
 
 def _running_children() -> dict:
@@ -423,7 +426,7 @@ def drive() -> int:
         print(f"[{_now()}] sweep finished: {manifest['counts']}", flush=True)
         return 0
     finally:
-        LOCK.unlink(missing_ok=True)
+        _release_lock()
 
 
 def detach() -> int:
