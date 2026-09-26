@@ -607,7 +607,7 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
           const state = window.__duocad.state
           if (!state || state.applied_count <= sinceCount) return false
           const applied = window.__duocad.lastApplied
-          if (!applied || applied.verb !== 'extrude_face' || applied.body_id !== id) return false
+          if (!applied || applied.verb !== 'extrude' || applied.body_id !== id) return false
           const body = window.__duocad.parts.find((entry) => entry.body_id === id)
           return Boolean(body && Math.abs(body.volume - beforeVolume) > 1e-9)
         },
@@ -635,6 +635,8 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
       applied: window.__duocad.state.applied_count,
       log: window.__duocad.state.log.length,
     }))
+    // 種別は人が1回選ぶまで引数が揃わない(既定値を持たない)ので、プレビューの前に結合を選ぶ。
+    await page.click('#extrude-mode-join')
     await typeDistance(distance)
     await page.waitForFunction(() => window.__duocad.previewing === true, {
       timeout,
@@ -683,6 +685,7 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
     // 面は選択済みのまま(Escは選択を消さない)なので、起動するだけで#distanceが戻る。
     await page.click('#extrude')
     await page.waitForSelector('#distance')
+    await page.click('#extrude-mode-join')
     await typeDistance(distance)
     await page.keyboard.press('Enter')
     const after = await waitForExtrude(extrudeTarget.body_id, volumeBefore)

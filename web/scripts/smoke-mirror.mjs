@@ -266,16 +266,14 @@ runSmoke('smoke-mirror', { timeout: 60000 }, async ({ browser, url, timeout }) =
     // ================================================================ 3. 板を1枚作る
     await page.evaluate(() => document.activeElement?.blur?.())
     await page.keyboard.press('Escape')
-    await page.click('#sketch-exit')
-    await waitFor(() => window.__duocad.activeSketch === null, 'スケッチを抜けられない')
-    await frameAll(page)
+    await page.click('#sketch-look')
 
     // **長方形の領域は面積で選ぶ**(円も領域を作るので、添字1が長方形とは限らない)。
     const plateRegion = afterMirror.regions.reduce((best, item) =>
       best === null || item.area > best.area ? item : best,
     null)
     if (!plateRegion) fail('領域が1つも無い')
-    await page.click('#extrude-regions')
+    await page.click('#extrude')
     {
       const at = await page.evaluate(
         (id, index) => {
@@ -298,12 +296,14 @@ runSmoke('smoke-mirror', { timeout: 60000 }, async ({ browser, url, timeout }) =
       [plateRegion.index],
     )
     await page.click('#extrude-mode-new')
-    await typeInto(page, '#regions-distance', PLATE.depth)
+    await typeInto(page, '#distance', PLATE.depth)
     await page.keyboard.press('Enter')
     await waitFor(() => (window.__duocad.parts ?? []).length === 1, '領域を押し出してもボディができない')
     await page.evaluate(() => document.activeElement?.blur?.())
     await page.keyboard.press('Escape')
-    await waitFor(() => window.__duocad.wantsRegions === false, '領域のピックが閉じない')
+    // 通常モードの「押し出す」は面版になったので、領域はスケッチを抜ける前(スケッチ編集中)に押し出す。
+    await page.click('#sketch-exit')
+    await waitFor(() => window.__duocad.activeSketch === null, 'スケッチを抜けられない')
     await frameAll(page)
     ok('板を1枚作った(ソリッドの鏡映の題材)')
 

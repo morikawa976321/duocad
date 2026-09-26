@@ -218,7 +218,7 @@ def test_every_ui_command_declares_the_same_category_as_the_declaration():
 def test_ui_command_ids_are_readable():
     ids = _ui_command_ids()
     assert len(ids) >= 10, f"UIのコマンド定義を読めていない: {sorted(ids)}"
-    assert "extrude_face" in ids
+    assert "extrude" in ids
 
 
 def test_every_ui_command_id_exists_in_a_server_table():

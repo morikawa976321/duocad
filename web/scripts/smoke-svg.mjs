@@ -185,9 +185,9 @@ runSmoke('smoke-svg', { attach: true }, async ({ workdir, browser, url, timeout 
       await page.mouse.click(at.x, at.y)
     })
 
-    await page.click('#extrude-regions')
-    await page.click('#regions-distance')
-    await page.type('#regions-distance', String(THICKNESS))
+    await page.click('#extrude')
+    await page.click('#distance')
+    await page.type('#distance', String(THICKNESS))
     await page.click('#extrude-mode-join')
     await page.keyboard.press('Enter')
 

@@ -14,8 +14,7 @@
  *   4. 丸めるを起動して辺をホバー → **辺が返り、同じ画素のクリックでその辺が選ばれる**。
  *      ホバーがクリックと同じゲート(`showEdges` している間だけ辺を指せる)と
  *      同じ優先順位(辺→面)を通っている
- *   5. 領域をホバーしたまま**ポインタを動かさずに**コマンドを解除 → 強調が消える
- *      (指せるものが変わったことを、ポインタの動き以外の経路で知れているか)
+ *   5. (欠番)領域を要求するコマンドが通常モードから無くなったので、ゲートが閉じる検査は外した
  *
  * 6〜10は同じスケッチの図形・点への強調と、**そこへ吸い付いて点を置く**スナップ
  * (`20260906-1420` タスク)。強調とスナップは同じ当たり判定(`sketchEntityAt`)の
@@ -207,54 +206,6 @@ runSmoke('smoke-hover', { timeout: 60000, mcp: true }, async ({ mcp, browser, ur
       ok(`辺${found.index}: ホバーの予告どおり、同じ画素のクリックでその辺が選ばれた`)
     })
     await page.keyboard.press('Escape')
-
-    // ---------------------------------------------------------------- 5. ゲートが閉じたら消える
-    // **ポインタを動かさずに**コマンドを解除する。ホバーの解決は「ポインタ位置+視点」が
-    // 同じなら省くので、**指せるものが変わったことを別途知る仕組み**が無いと、
-    // 取れなくなった領域が明るいまま「クリックすれば取れる」と嘘をつく。
-    await withoutBrowserPanel(page, async () => {
-      await page.click('#extrude-regions')
-      await page.waitForFunction(() => window.__duocad.wantsRegions === true, {
-        timeout,
-        polling: 50,
-      })
-      const region = await page.evaluate(() => {
-        for (const sketch of window.__duocad.sketches ?? []) {
-          for (let index = 1; index <= 4; index += 1) {
-            const at = window.__duocad.projectRegion(index, sketch.sketch_id)
-            if (at) return { sketchId: sketch.sketch_id, index, x: at.x, y: at.y }
-          }
-        }
-        return null
-      })
-      if (!region) fail('「領域を押し出す」を起動したのに、画面上で指せる領域が無い')
-      // **#extrude-regions起動後の高さで測る**(実測: 起動前の`box`を使い回すと、
-      // 選択肢の行(結合/切り取り/新規)ぶんツールバーが伸びて`.viewport`が動き、
-      // 領域ではなく別の面を掴んだ)。
-      const box = await viewportBox()
-      await page.mouse.move(box.left + region.x, box.top + region.y)
-      await waitFrames(page, 4)
-      const hovered = await page.evaluate(() => window.__duocad.hoveredRef())
-      if (hovered.region === null || hovered.region.index !== region.index) {
-        fail(`領域をホバーしたのに領域が返らない: ${JSON.stringify(hovered)}`)
-      }
-      ok(`領域${region.index}をホバー: 領域が返る(要求中だけ指せるゲートを共有している)`)
-
-      // **ここでマウスを1画素も動かさない。**
-      await page.keyboard.press('Escape')
-      await page.waitForFunction(() => window.__duocad.wantsRegions === false, {
-        timeout,
-        polling: 50,
-      })
-      await waitFrames(page, 4)
-      const after = await page.evaluate(() => window.__duocad.hoveredRef())
-      if (after.region !== null) {
-        fail(
-          `ゲートが閉じたのに領域が明るいまま(ポインタを動かさないと消えない): ${JSON.stringify(after)}`,
-        )
-      }
-      ok('**ポインタを動かさずにコマンドを解除しても、取れなくなった領域の強調は消える**')
-    })
 
     // ---------------------------------------------------------------- 6. スケッチの図形・点
     //

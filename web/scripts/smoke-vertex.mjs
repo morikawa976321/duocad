@@ -143,6 +143,7 @@ runSmoke('smoke-vertex', { timeout: 60000, mcp: true }, async ({ mcp, browser, u
     await page.click('#extrude')
     const promptAfterStart = await page.$eval('#command-prompt', (el) => el.textContent.trim())
     if (promptAfterStart.includes('承認')) fail(`起動しただけで承認を求められた: ${promptAfterStart}`)
+    await page.click('#extrude-mode-join')
     await page.click('#distance')
     await page.type('#distance', '5')
     await page.keyboard.press('Enter')

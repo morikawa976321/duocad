@@ -18,7 +18,6 @@
   import { onMount } from 'svelte'
   import CommandHost from './commands/CommandHost.svelte'
   import {
-    COMMANDS,
     bodyRef,
     edgeRef,
     faceRef,
@@ -125,7 +124,6 @@
    * 入って `SKETCH_PENDING_COMMANDS` が起動済みで現れる(下の `mode` のdocstring)。
    */
   const SOLID_COMMANDS = [
-    ...COMMANDS,
     ...SOLID_FEATURE_COMMANDS,
     // **`file` 分類はこの1つだけ**(理由は `commands/files.ts` のモジュールdocstring)。
     // 書き出し(`export_step`/`export_stl`)と
@@ -1420,8 +1418,9 @@
   })
 
   /**
-   * 通常モードで領域を指せるのは、**領域を要求しているコマンド(「領域を押し出す」)を
-   * 起動している間だけ**(辺・基準平面と同じ規律。2026-08-23の本人裁定5)。
+   * 通常モードで領域を指せるのは、**領域を要求しているコマンドを起動している間だけ**
+   * (辺・基準平面と同じ規律。2026-08-23の本人裁定5)。通常モードの「押し出す」は面版なので、
+   * 今は通常モードで領域を要求するコマンドは無い。
    *
    * 常時指せると、スケッチ平面と重なる面(領域から押し出した板の底面など)を狙う
    * クリックが、手前に浮いている領域に取られる。**スケッチモード中はゲートを立てない**

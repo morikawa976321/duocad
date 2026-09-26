@@ -163,8 +163,8 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
     ok('領域を本物のクリックで選んだ')
 
     // 領域押し出し(結合)。**空の文書なので、ここで最初のソリッドが生まれる**
-    await page.click('#extrude-regions')
-    await typeInto('#regions-distance', PLATE.thickness)
+    await page.click('#extrude')
+    await typeInto('#distance', PLATE.thickness)
     await page.click('#extrude-mode-join')
     await page.keyboard.press('Enter')
     await waitFor(() => window.__duocad.parts.length === 1, '領域押し出しでソリッドができない')
@@ -208,8 +208,8 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
         ),
       '穴の領域を選べない',
     )
-    await page.click('#extrude-regions')
-    await typeInto('#regions-distance', PLATE.thickness)
+    await page.click('#extrude')
+    await typeInto('#distance', PLATE.thickness)
     await page.click('#extrude-mode-cut')
     await page.keyboard.press('Enter')
     const holeVolume = Math.PI * HOLE.radius * HOLE.radius * PLATE.thickness
@@ -400,8 +400,8 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
     await page.keyboard.press('Escape')
     await page.click('#sketch-look')
     await clickRegion(1)
-    await page.click('#extrude-regions')
-    await typeInto('#regions-distance', 20)
+    await page.click('#extrude')
+    await typeInto('#distance', 20)
     await page.click('#extrude-mode-join')
     await page.keyboard.press('Enter')
     await waitFor(
@@ -773,8 +773,8 @@ runSmoke('smoke-features', { attach: true }, async ({ browser, url, timeout }) =
     await page.keyboard.press('Escape')
     await page.click('#sketch-look')
     await clickRegion(1)
-    await page.click('#extrude-regions')
-    await typeInto('#regions-distance', 8)
+    await page.click('#extrude')
+    await typeInto('#distance', 8)
     await page.click('#extrude-mode-new')
     await page.keyboard.press('Enter')
     await waitFor(

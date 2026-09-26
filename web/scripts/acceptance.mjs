@@ -87,6 +87,15 @@ const VERBS = [
  */
 const AI_ONLY = new Set(['set_parameter'])
 
+/**
+ * **人間側が別の名前の口に統合された操作**。面の押し出しはUIの「押し出す」(verb `extrude`)に
+ * まとまり、人間側は `extrude_face` を呼べない。面を押す人間側の手は `HUMAN_FACE_EXTRUDE` の名前で
+ * 別に試す(`failedLabels` が数える)。AI側は `extrude_face` をまだ持つので列は残る
+ * (サーバから消える段で、この集合と `VERBS` の該当行も消える)。
+ */
+const HUMAN_MERGED = new Set(['extrude_face'])
+const HUMAN_FACE_EXTRUDE = 'extrude(面)'
+
 const results = { human: {}, ai: {}, interleaved: null, physical: null, fov: null, zup: null }
 
 function record(side, verb, ok, note) {
@@ -108,13 +117,16 @@ function failedLabels(collected) {
   for (const side of ['human', 'ai']) {
     for (const verb of VERBS) {
       // 人間側の口を持たないと**決めた**操作は、人間列を見ない(上記 `AI_ONLY`)。
-      if (side === 'human' && AI_ONLY.has(verb)) continue
+      if (side === 'human' && (AI_ONLY.has(verb) || HUMAN_MERGED.has(verb))) continue
       const entry = collected[side][verb]
       // **未実行も失敗として数える。** 黙って飛ばされた操作は ❌ より始末が悪い。
       if (entry === undefined) failed.push(`${side}/${verb}(未実行)`)
       else if (!entry.ok) failed.push(`${side}/${verb}`)
     }
   }
+  const faceExtrude = collected.human[HUMAN_FACE_EXTRUDE]
+  if (faceExtrude === undefined) failed.push(`human/${HUMAN_FACE_EXTRUDE}(未実行)`)
+  else if (!faceExtrude.ok) failed.push(`human/${HUMAN_FACE_EXTRUDE}`)
   for (const name of ['interleaved', 'physical', 'fov', 'zup']) {
     const entry = collected[name]
     if (entry === null || entry === undefined) failed.push(`${name}(未実行)`)
@@ -418,8 +430,8 @@ runSmoke(
           ),
         '領域を選べない',
       )
-      await page.click('#extrude-regions')
-      await typeInto('#regions-distance', 10)
+      await page.click('#extrude')
+      await typeInto('#distance', 10)
       await page.click('#extrude-mode-join')
       await page.keyboard.press('Enter')
       await waitFor(() => window.__duocad.parts.length === 1, '領域押し出しでソリッドができない')
@@ -442,7 +454,7 @@ runSmoke(
     await frameAll(page)
     const bodyId = (await look()).parts[0].id
 
-    await attempt('human', 'extrude_face', async () => {
+    await attempt('human', HUMAN_FACE_EXTRUDE, async () => {
       const before = (await look()).parts[0].volume
       // **押す面は法線で名指しする**(手前=−Y の壁)。**面を「平面のうち最初に射影できた
       // もの」で選ぶと、どの面を押したかが視点で変わってしまう** —— カメラの向きが
@@ -473,6 +485,7 @@ runSmoke(
       // 面は選択済みのまま(起動は選択を触らない)なので、#distanceだけがここで出る。
       await page.click('#extrude')
       await waitFor(() => document.querySelector('#distance') !== null, '#extrudeを押しても#distanceが出ない')
+      await page.click('#extrude-mode-join')
       await typeInto('#distance', 2)
       await waitFor(() => window.__duocad.previewing === true, 'プレビューが出ない')
       await page.keyboard.press('Enter')
@@ -483,7 +496,7 @@ runSmoke(
       )
       const after = (await look()).parts[0].volume
       return (
-        `面をクリック →「押し出す」を起動 → 距離2 → プレビューが出てからEnter` +
+        `面をクリック →「押し出す」を起動 → 結合 → 距離2 → プレビューが出てからEnter` +
         `(体積 ${before.toFixed(2)} → ${after.toFixed(2)})`
       )
     })
