@@ -504,6 +504,14 @@ def _run_mirror_sketch_entities(session: Session, tmp_path: Path) -> dict:
     return session.mirror_sketch_entities({"sketch": sketch_id, "entity": axis_id})
 
 
+@_runner("envelope_regions")
+def _run_envelope_regions(session: Session, tmp_path: Path) -> dict:
+    sketch_id = _sketch(session)
+    session.add_rectangle(sketch_id, [0.0, 0.0], 10.0, 10.0)
+    _select(session, [{"sketch": sketch_id, "index": 1}])
+    return session.envelope_regions(1.0, 2.0)
+
+
 @_runner("mirror_body")
 def _run_mirror_body(session: Session, tmp_path: Path) -> dict:
     body, _ = _box(session)

@@ -309,6 +309,10 @@ def test_the_declaration_matches_which_verbs_read_the_selection() -> None:
 
     declared = {
         catalog.BY_NAME[name].session for name in SELECTION_CONSUMING_COMMANDS
+    } | {
+        catalog.BY_NAME[name].preview_session
+        for name in SELECTION_CONSUMING_COMMANDS
+        if catalog.BY_NAME[name].preview_session is not None
     }
     assert declared == reads_selection, (
         f"宣言 {sorted(declared)} と実体 {sorted(reads_selection)} がずれている"

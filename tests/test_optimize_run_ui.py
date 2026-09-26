@@ -53,8 +53,8 @@ def test_steps_get_finer_and_costlier(session: Session) -> None:
     for previous, current in zip(steps, steps[1:]):
         assert current["index"] == previous["index"] + 1
         assert current["element_size_mm"] < previous["element_size_mm"]
-        assert current["element_count"] > previous["element_count"]
-        assert current["element_count"] <= optimize_run.MAX_ELEMENTS
+        assert current["design_elements_estimate"] > previous["design_elements_estimate"]
+        assert current["design_elements_estimate"] <= optimize_run.MAX_DESIGN_ELEMENTS
 
 
 # --------------------------------------------------------------------------------------

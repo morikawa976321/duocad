@@ -34,6 +34,8 @@ export const HIGHLIGHT_COLOR = 0xffb454
 /** スケッチの線・確定前の線・領域。ソリッドの色と混ざらない色にする。 */
 export const SKETCH_COLOR = 0xe8eef6
 export const SKETCH_GHOST_COLOR = 0x7ee081
+/** 確定すると拒まれる形の幽霊(`envelope_regions` の分裂)。選択の橙・提案の水色と色相で離す。 */
+export const SKETCH_GHOST_WARN_COLOR = 0xff5c5c
 //: スケッチの点マーカー(未選択)。線(`SKETCH_COLOR`)より暗くして線を主役に保つ。
 export const SKETCH_HANDLE_COLOR = 0x9fb3c8
 //: 選択中のスケッチの点・辺。**選択の色は1つ**(面・辺・領域と同じ `HIGHLIGHT_COLOR`)。

@@ -10,6 +10,7 @@ from .add_solid import add_solid_body  # noqa: F401
 from .boolean_body import boolean_body  # noqa: F401
 from .chamfer import chamfer  # noqa: F401
 from .delete import delete  # noqa: F401
+from .envelope_regions import envelope_regions  # noqa: F401
 from .extrude import extrude  # noqa: F401
 from .extrude_face import extrude_face  # noqa: F401
 from .fillet import fillet  # noqa: F401
@@ -34,6 +35,7 @@ __all__ = [
     "boolean_body",
     "chamfer",
     "delete",
+    "envelope_regions",
     "extrude",
     "extrude_face",
     "fillet",

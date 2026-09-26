@@ -967,7 +967,12 @@
     viewport?.showPreview(
       payload.bodies.map((body) => ({ bodyId: body.body_id, geometry: body.geometry })),
     )
-    previewing = payload.bodies.length > 0
+    const ghost = payload.sketch_ghost
+    if (ghost !== null) {
+      // 分裂は確定時にトーストで拒まれる形。入力中はトーストを出さず色だけで知らせる(本人決定)。
+      viewport?.showSketchGhosts(ghost.sketch_id, ghost.entities, ghost.pieces === 1 ? 'normal' : 'warn')
+    }
+    previewing = payload.bodies.length > 0 || (ghost?.entities.length ?? 0) > 0
   }
 
   function handleEdges(payload: EdgesPayload): void {
@@ -2090,7 +2095,9 @@
     previewId += 1 // 投げてある応答を無効にする(戻ってきても番号が合わない)
     previewing = false
     viewport?.clearPreview()
-    if (sketchId !== null) viewport?.showSketchGhosts(sketchId, [])
+    // 空配列なら宛先のスケッチによらず消える。サーバの幽霊は選んだ領域のスケッチに出るので、
+    // 開いているスケッチ(`sketchId`)が無いときも消す。
+    viewport?.showSketchGhosts(sketchId ?? '', [])
   }
 
   function onWindowKeydown(event: KeyboardEvent): void {

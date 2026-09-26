@@ -487,6 +487,64 @@ def convex_hull(corners: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
     return equations, triangles, info
 
 
+def offset_hull_volume(corners: np.ndarray, margin: float) -> float:
+    """凸包と半径 `margin` の球のミンコフスキー和の体積[mm³](シュタイナーの公式)。
+
+    `V = V_凸包 + A·m + m²·Σ(稜長 × 外角)/2 + 4π/3·m³`。`derive` の塊(`hull_distance_mask`)の
+    **格子に載せる前の連続体積**で、除外ソリッドと「条件を含まない連結成分」を引く前の値。除外の分は
+    `obstacle_free_fraction` が別に見積もる。見積もり全体の誤差は docs/TOPOPT.md「要素サイズの下限」。
+    外角は隣り合う三角形の外向き法線のなす角(同一平面の三角形どうしは 0)。
+    """
+    _planes, _triangles, info = convex_hull(corners)  # 退化(平面・直線・1点)はここで断る
+    points = np.asarray(corners, dtype=float).reshape(-1, 3)
+    hull = ConvexHull(points)
+    normals = hull.equations[:, :3]
+    edge_term = 0.0
+    for i, neighbours in enumerate(hull.neighbors):
+        for slot, j in enumerate(neighbours):
+            if j <= i:
+                continue
+            # 三角形 i の頂点 slot の向かいの辺 = 隣 j との共有辺
+            a, b = [v for s, v in enumerate(hull.simplices[i]) if s != slot]
+            length = float(np.linalg.norm(points[a] - points[b]))
+            cosine = float(np.clip(np.dot(normals[i], normals[j]), -1.0, 1.0))
+            edge_term += length * math.acos(cosine)
+    m = float(margin)
+    return float(hull.volume + hull.area * m + 0.5 * edge_term * m * m + 4.0 / 3.0 * math.pi * m ** 3)
+
+
+def obstacle_free_fraction(corners: np.ndarray, obstacle: Any, *, margin_ratio: float = DEFAULT_MARGIN_RATIO,
+                           elements_long_axis: int = 60) -> float:
+    """余白付き凸包のセルのうち、除外ソリッドに食われずに残る割合(粗い格子で数えた値)。
+
+    `derive` と同じ外枠・同じ距離の判定を `elements_long_axis` 分割の粗い格子へ載せて数える。
+    粗いので値は揺れる(hanger で分割数 40〜240 の実測 0.810〜0.828)。除外が無ければ 1。
+    """
+    if obstacle is None:
+        return 1.0
+    pts = np.asarray(corners, dtype=float).reshape(-1, 3)
+    lo, hi = pts.min(axis=0), pts.max(axis=0)
+    margin = float(margin_ratio) * float(np.max(hi - lo))
+    box_lo, box_hi = frame_box(lo, hi, margin_ratio=margin_ratio)
+    planes, triangles, _info = convex_hull(pts)
+    grid = grid_for_frame(box_lo, box_hi, elements_long_axis=elements_long_axis)
+    candidate = box_mask(grid, box_lo, box_hi) & offset_hull_mask(grid, planes, margin)
+    candidate &= hull_distance_mask(grid, planes, triangles, margin)
+    total = int(np.count_nonzero(candidate))
+    if total == 0:
+        return 1.0
+    soup = vx.triangles_from_shape(
+        vx.unwrap(obstacle), deviation=max(grid.spacing * vx.DEFAULT_DEVIATION_RATIO, 1e-6),
+        angular_deflection=vx.DEFAULT_ANGULAR_DEFLECTION,
+    )
+    grid_lo, grid_hi = grid.world_box()
+    obs_lo, obs_hi = soup.bbox
+    if np.any(obs_hi < grid_lo) or np.any(obs_lo > grid_hi):
+        return 1.0
+    occupied, _stats = vx.occupancy(soup, grid, allow_empty=True)
+    return float(np.count_nonzero(candidate & ~occupied)) / total
+
+
 def offset_hull_mask(grid: vx.Grid, planes: np.ndarray, margin: float) -> np.ndarray:
     """セル中心が、各支持平面を `margin` だけ外へ押し出した半空間の全てに入るセル。
 

@@ -163,7 +163,7 @@
     <p id="optimize-resolution-note" class="hint bad">{resolution.error}</p>
   {:else if steps.length === 0}
     <p id="optimize-resolution-note" class="hint bad">
-      この部品と条件面では、間違わない解像度が総要素数の上限({resolution.max_elements ?? '—'})に
+      この部品と条件面では、間違わない解像度が設計空間の要素数の上限({resolution.max_design_elements?.toLocaleString() ?? '—'})に
       収まらない。条件面をもっと大きい面に取り直すこと
     </p>
   {:else}
@@ -182,8 +182,9 @@
       <span class="unit">{clamped === 0 ? '既定(粗い)' : `+${clamped}`}</span>
     </label>
     <p id="optimize-estimate" class="hint dim">
-      要素 {step ? step.element_size_mm.toFixed(2) : '—'}mm ・ 格子
-      {step ? step.element_count.toLocaleString() : '—'} 要素。
+      要素 {step ? step.element_size_mm.toFixed(2) : '—'}mm ・ 設計空間 約
+      {step ? step.design_elements_estimate.toLocaleString() : '—'} 要素(見積もり。上限
+      {resolution.max_design_elements?.toLocaleString() ?? '—'})。
       所要時間は事前に見積もらない(実測が無い段階では出さない。走らせると進捗に出る)。
     </p>
     <p class="hint dim">

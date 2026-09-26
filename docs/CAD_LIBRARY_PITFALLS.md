@@ -55,6 +55,15 @@
   `duocad/kernel_meshing.py` のモジュール docstring と `_Model.close()`。`BRepMesh_Context` は OCP に無いので
   標準の6部品を `IMeshTools_Context` に自分で組む(同ファイル `mesh_shape`)。OCCT 自身の境界交差検査が
   5度未満・小面積の交差を捨てる話は [TOPOPT_GAP_CAUSALITY.md](TOPOPT_GAP_CAUSALITY.md)。
+- **`BRepOffsetAPI_MakeOffset` は面を渡してもワイヤの並びしか返さない**（`GeomAbs_Arc` で角は円弧）。外周と穴の
+  区別は向きに無い（`BRepBuilderAPI_MakeFace` はどちら回りでも有界な面を作る）ので、ワイヤの入れ子の深さ
+  （他のワイヤの面が1点を含むか）で外周と穴に分けて面を組み直す（`kernel_sketch._faces_from_wires`）。
+- **負のオフセットは OCCT に直接頼めない**: 同心円で囲まれた面（座金の形）の内向きオフセットは距離によらず
+  `IsDone()=False` で失敗し、円が完全に潰れる距離でも同じ失敗になる。正のオフセットは同じ形で通るので、
+  縮小は「十分大きな箱 − (箱 − 面) の拡大」で取る（`_erode_faces`）。面が消えるときは空の結果になる。
+- **R と d の円弧が同じ点で接する結果の結合は、既定の許容差(1e-7)だと取りこぼしうる**ので、ブーリアンに
+  1e-6 のファジー値を付ける（`_ENVELOPE_TOLERANCE`）。ベジエ辺の領域は、オフセットが元の曲線の近似曲線を返し
+  線分・円弧だけという指定を満たせないので拒む。
 
 ## STEP ファイル
 

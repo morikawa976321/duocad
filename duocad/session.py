@@ -23,6 +23,7 @@ from . import (
     catalog,
     io_step,
     kernel,
+    kernel_sketch,
     optimize,
     optimize_run,
     parameters,
@@ -36,11 +37,13 @@ from .measure import measure_selection
 from .oplog import OpLog
 from .paths import DEFAULT_MODELS_DIR
 from .speculative import speculative
+from .verbs.envelope_regions import envelope_pieces
 from .verbs import (
     add_mesh_body as add_mesh_body_verb,
     boolean_body as boolean_body_verb,
     chamfer as chamfer_verb,
     delete as delete_verb,
+    envelope_regions as envelope_regions_verb,
     extrude as extrude_verb,
     extrude_face as extrude_face_verb,
     fillet as fillet_verb,
@@ -518,6 +521,9 @@ class Session:
         unknown = sorted(set(values) - set(allowed))
         if unknown:
             raise ValueError(f"verb {verb!r} が受け取らない引数: {unknown}(受け取るのは {list(allowed)})")
+        if catalog.BY_NAME[verb].preview_session is not None:
+            # 文書を変えずに結果だけ計算するメソッドなので投機実行で包まない。
+            return {"verb": verb, "bodies": [], **getattr(self, method_name)(**values)}
 
         before = {id(body): body.shape for body in self.document.bodies}
         applied_count = self._applied_count
@@ -895,6 +901,45 @@ class Session:
             "created": list(args["created"]),
             "sketch_ids": sketch_ids,
         })
+
+    @_edits_document
+    def envelope_regions(self, radius: float = 0.0, offset: float = 0.0) -> dict:
+        """**確定選択の領域**を包む単一の領域線を、同じスケッチへ足す(`verbs.envelope_regions`)。
+
+        対象は引数ではなく選択から取る。`radius` は追従半径(0以上)、`offset` は包んだ線の
+        オフセット(負で内へ)で、どちらも空は 0 mm。分裂・消失は ValueError(文面は verb 側)。
+        """
+        refs = [
+            region.RegionRef.from_dict(item)
+            for item in selection.require_confirmed(self.document, "region")
+        ]
+        operation = envelope_regions_verb(self.document, refs, float(radius), float(offset))
+        args = operation.args
+        return self._after_logged_verb({
+            "radius": args["radius"],
+            "offset": args["offset"],
+            "created": list(args["created"]),
+            "sketch_ids": [args["sketch_id"]],
+        })
+
+    def preview_envelope_regions(self, radius: float = 0.0, offset: float = 0.0) -> dict:
+        """`envelope_regions` の確定前の姿。**文書を変えない**(`Session.preview` の経路)。
+
+        分裂しても失敗にせず、全部の面の境界と面の数(`pieces`)を返す —— 分裂を知らせるのは
+        確定時のトーストで、プレビューは線の色で見せる(本人決定)。消えたときは `pieces=0`。
+        """
+        refs = [
+            region.RegionRef.from_dict(item)
+            for item in selection.require_confirmed(self.document, "region")
+        ]
+        sketch_id, pieces = envelope_pieces(self.document, refs, float(radius), float(offset))
+        plane = sketch.get_sketch(self.document, sketch_id).plane
+        entities = [
+            {"kind": entity["kind"], "params": dict(entity["params"])}
+            for piece in pieces
+            for entity in kernel_sketch.face_boundary_entities(plane, piece)
+        ]
+        return {"sketch_ghost": {"sketch_id": sketch_id, "entities": entities, "pieces": len(pieces)}}
 
     @_edits_document
     def mirror_body(self, base_plane: Optional[str] = None, plane_face: Any = None) -> dict:

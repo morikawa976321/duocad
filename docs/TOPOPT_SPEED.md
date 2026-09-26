@@ -253,7 +253,7 @@ nnz・充填率・帯幅)の帯に集まった。自由度だけの規則は、h
 |---|---|
 | `duocad/topopt/fem.py` | `Model.solve`・`collect_solve_stats`・組立・CG・`choose_solver` |
 | `duocad/topopt/binary_search.py` | `find_initial_feasible`・`find_best_feasible`・候補生成 |
-| `duocad/optimize_run.py` | `run()`・`MAX_ELEMENTS` |
+| `duocad/optimize_run.py` | `run()`・`MAX_DESIGN_ELEMENTS` |
 | `duocad/topopt/acceptance.py` | `RegionOverlaps`(保持・除外の前計算)・`region_check(overlaps=)` |
 | `duocad/kernel_brep.py` | `grid_cell_common_volumes`(平面で切ってセルごとの共通体積)・`box_common_volume` |
 

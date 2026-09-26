@@ -115,6 +115,10 @@ class Command:
     #: する —— `set_parameter` のような操作ログを頭から再生するverbは `speculative` では戻らない
     #: (`speculative.py` の「戻さないもの」)。
     previewable: bool = False
+    #: プレビューを投機実行でなく、**文書を変えずに結果だけ計算する** `Session` のメソッドで出すときの
+    #: 名前(`previewable=True` と組で使う)。投機実行は verb が失敗すると何も返せないので、失敗の手前の
+    #: 形(`envelope_regions` の分裂)も見せたい verb はこちら。
+    preview_session: Optional[str] = None
     #: 文書を変えるか(= 操作ログに載り、応答が状態配信になるか)。保存・書き出しは文書を
     #: 変えないので、応答は書いた先のパスとバイト数だけを要求した接続へ返す。
     changes_document: bool = True
@@ -147,6 +151,8 @@ class Command:
             raise ValueError(f"{self.name}: WSに開けるなら `session` が要る")
         if self.previewable and self.session is None:
             raise ValueError(f"{self.name}: プレビューは `Session` のメソッドを呼ぶ")
+        if self.preview_session is not None and not self.previewable:
+            raise ValueError(f"{self.name}: `preview_session` は `previewable=True` と組で使う")
         if self.resets_selection is None:
             if self.category in SHAPE_CATEGORIES and self.changes_document:
                 raise ValueError(
@@ -836,6 +842,45 @@ COMMANDS: tuple[Command, ...] = (
             "`PickArgSpec`。`move_body.axis_edge` と同じ規律)である。載せてしまうと"
             "`require_sketch_entities` が軸の線分まで対象に数える(軸は自分自身へ映るので"
             "verb側は黙って外すが、画面の対象の件数と結果が食い違う)。"
+        ),
+    ),
+    Command(
+        name="envelope_regions",
+        category="sketch",
+        description=(
+            "確定選択の複数の領域を、へこみに沿って包む**単一の閉じた領域線**を、同じスケッチへ足すときに呼ぶ。"
+            "元の領域の線は残る。結果は線分と円弧だけ。結果が1つの領域にならない(何個かに分かれる・"
+            "オフセットで消える)と失敗して何も変わらない。対象は選択から取る(引数では受けない)。"
+            "選択が複数のスケッチにまたがるのも失敗する。"
+        ),
+        params=(
+            Param(
+                "radius",
+                "number",
+                "追従半径 R(mm・0以上)。幅 2R 未満の隙間とへこみを埋め、それより広いへこみには沿う。"
+                "省略は 0",
+                required=False,
+                dimension=True,
+            ),
+            Param(
+                "offset",
+                "number",
+                "包んだ線のオフセット d(mm)。正で外へ広がり、負で内へ縮む。省略は 0",
+                required=False,
+                dimension=True,
+            ),
+        ),
+        uses_selection=True,
+        session="envelope_regions",
+        previewable=True,
+        preview_session="preview_envelope_regions",
+        resets_selection=True,
+        note=(
+            "**WSでは R・d ともに必須**(表は載せた引数を全部必須にする)。UIは空欄を 0 として送る"
+            "(`NumberArgSpec.default`)ので、人が空欄のまま確定しても届く。MCPは省略=0。"
+            "**必要な R・d の最小値は計算しない**(本人の決定。分裂したら個数を添えて失敗するだけ)。"
+            "プレビューは投機実行でなく `preview_envelope_regions` で、分裂しても失敗にせず全部の線と"
+            "個数を返す(トーストは確定時だけ。本人決定)"
         ),
     ),
     Command(
@@ -1559,7 +1604,7 @@ if len(BY_NAME) != len(COMMANDS):
 def previewable_verbs() -> dict:
     """`server.PREVIEWABLE_VERBS`: verb名 -> (`Session` のメソッド名, 受け取ってよい引数名)。"""
     return {
-        command.name: (command.session, command.preview_params)
+        command.name: (command.preview_session or command.session, command.preview_params)
         for command in COMMANDS
         if command.previewable
     }

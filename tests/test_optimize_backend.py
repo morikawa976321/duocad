@@ -371,20 +371,20 @@ def test_every_ladder_step_lists_the_achievable_min_widths(session: Session) -> 
 
 
 def test_every_ladder_step_reports_the_real_grid(session: Session) -> None:
-    """落ちたら、画面の梯子に出す要素サイズ・要素数・最小幅の上限が、`derive` が実際に起こす格子とずれている。"""
+    """落ちたら、梯子の要素サイズ・最小幅の上限が `derive` の格子とずれている(設計空間の要素数は見積もりで実数と数%ずれる)。"""
     from duocad.topopt import design_space as ds
 
     four_conditions(session)
     limits = optimize_run.resolution_limits(session.document)
     assert len(limits["steps"]) >= 2
-    assert all(step["element_count"] <= optimize_run.MAX_ELEMENTS for step in limits["steps"])
+    assert all(step["design_elements_estimate"] <= optimize_run.MAX_DESIGN_ELEMENTS for step in limits["steps"])
     assert limits["steps"][-1]["element_size_mm"] == pytest.approx(limits["min_element_size_mm"])
     # 段0(19.6mm)はこの題材で `voxelize.occupancy` が ValueError になり(実測)、末尾は数百万要素で重いので段1で導出する。
     bundle = optimize_run.build_conditions(session.document)
     mid = limits["steps"][1]
     space = ds.derive(bundle.conditions, spacing=mid["element_size_mm"])
-    assert space.grid.element_count == mid["element_count"]
     assert space.grid.spacing == pytest.approx(mid["element_size_mm"])
+    assert mid["design_elements_estimate"] == pytest.approx(space.element_count, rel=0.3)
     assert mid["min_width_ceiling_mm"] == pytest.approx(min(space.grid.shape) * mid["element_size_mm"])
 
 
@@ -417,6 +417,41 @@ def test_a_requested_element_size_off_the_ladder_is_snapped_to_the_real_grid(
     space = ds.derive(bundle.conditions, spacing=spacing)
     assert space.grid.spacing <= requested * (1.0 + 1e-9)
     assert seen["mask"].shape == space.mask.shape
+
+
+def test_a_derived_space_over_the_limit_stops_before_the_search(session: Session, monkeypatch) -> None:
+    """落ちたら、実行前の見積もりを通った要求でも、`derive` 後の実数が上限を超えたのに探索へ進んでいる。
+
+    見積もりは実数とずれうるので、拒否の最終判断は `derive` の後の `space.element_count` に置く。
+    見積もり側の門(`_min_element_size`)を素通しにして、実数の門だけを効かせる。
+    """
+    from duocad.topopt import binary_search
+
+    four_conditions(session)
+    limits = optimize_run.resolution_limits(session.document)
+    mid = limits["steps"][1]
+    monkeypatch.setattr(optimize_run, "MAX_DESIGN_ELEMENTS", 10)
+    monkeypatch.setattr(optimize_run, "_min_element_size", lambda lo, hi, volume: mid["element_size_mm"] * 0.5)
+
+    def never(*args, **kwargs):
+        raise AssertionError("上限超えなのに探索が始まった")
+
+    monkeypatch.setattr(binary_search, "find_best_feasible", never)
+    with pytest.raises(optimize_run.OptimizeInputError, match=r"設計空間の要素数 [\d,]+ が上限 10 を超えている.*mm 以上にすること"):
+        optimize_run.run(session.document, optimize_run.OptimizeOptions(element_size_mm=mid["element_size_mm"]))
+
+
+def test_the_element_size_lower_bound_comes_from_design_elements_not_the_box(session: Session) -> None:
+    """下限の要素サイズでの設計空間の見積もりが上限に収まり、1段だけ細かい格子だと超える。"""
+    four_conditions(session)
+    doc = session.document
+    lo, hi = optimize_run._condition_bbox(doc)
+    volume = optimize_run._design_volume(doc)
+    lower = optimize_run.resolution_limits(doc)["min_element_size_mm"]
+    box_long = optimize_run._box_longest_edge(lo, hi)
+    assert optimize_run._design_element_estimate(volume, lower) <= optimize_run.MAX_DESIGN_ELEMENTS
+    finer = box_long / (round(box_long / lower) + 1)
+    assert optimize_run._design_element_estimate(volume, finer) > optimize_run.MAX_DESIGN_ELEMENTS
 
 
 def test_build_conditions_lists_the_condition_bodies_and_ignores_unrelated_ones(session: Session) -> None:

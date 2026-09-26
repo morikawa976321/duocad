@@ -57,7 +57,7 @@ import {
   BACKGROUND_COLOR, BASE_COLOR, BASE_PLANES, BASE_PLANE_PROBES, BOX_SELECT_MIN_PX, CLICK_MOVE_LIMIT_PX, CLICK_TIME_LIMIT_MS,
   EDGE_COLOR, EDGE_PICK_PIXELS, FOV_DEFAULT, FOV_MAX, FOV_MIN, FOV_ORTHO, HIGHLIGHT_COLOR, HOME_VIEW_OFFSET, HOVER_LIGHTEN, LAYER,
   OPTIMIZE_EXCLUDE_COLOR, OPTIMIZE_FIXTURE_COLOR, OPTIMIZE_PRESERVE_COLOR, PICK_EDGE_COLOR, PREVIEW_COLOR, PROPOSED_COLOR,
-  REGION_COLOR, REGION_SELECTED_COLOR, SKETCH_COLOR, SKETCH_FIT_MARGIN, SKETCH_GHOST_COLOR, SKETCH_HANDLE_COLOR,
+  REGION_COLOR, REGION_SELECTED_COLOR, SKETCH_COLOR, SKETCH_FIT_MARGIN, SKETCH_GHOST_COLOR, SKETCH_GHOST_WARN_COLOR, SKETCH_HANDLE_COLOR,
   SKETCH_HANDLE_PIXELS, SKETCH_SELECTED_COLOR, WORLD_UP, isSelectableFov, lighten, type BodyMeshes,
 } from './viewportConstants'
 
@@ -1530,6 +1530,7 @@ export function createViewport(container: HTMLElement): Viewport {
   const sketchLineResolution = new THREE.Vector2(1, 1)
   const sketchMaterial = createSketchLineMaterial(SKETCH_COLOR, sketchLineResolution)
   const sketchGhostMaterial = createSketchLineMaterial(SKETCH_GHOST_COLOR, sketchLineResolution)
+  const sketchGhostWarnMaterial = createSketchLineMaterial(SKETCH_GHOST_WARN_COLOR, sketchLineResolution)
 
   /**
    * スケッチの線・点の材質は **(選択状態 × ホバー)** をキーにした遅延生成のキャッシュから取る
@@ -1856,13 +1857,15 @@ export function createViewport(container: HTMLElement): Viewport {
   function showSketchGhosts(
     sketchId: string,
     entities: Array<{ kind: string; params: Record<string, number> }>,
+    tone: 'normal' | 'warn' = 'normal',
   ): void {
     clearGhost()
     const target = sketches.get(sketchId)
     if (entities.length === 0 || !target) return
     const batch = createBatch(sketchRoot)
+    const material = tone === 'warn' ? sketchGhostWarnMaterial : sketchGhostMaterial
     for (const entity of entities) {
-      const built = buildEntityLine(target.frame, entity, sketchGhostMaterial)
+      const built = buildEntityLine(target.frame, entity, material)
       if (!built) continue
       batch.add(built.object, built.geometry)
       // **実際に描けたものだけ**を控える(`ghostInfo`)。折れ線化できなかった図形を
@@ -2918,6 +2921,7 @@ export function createViewport(container: HTMLElement): Viewport {
       for (const sketchId of [...sketches.keys()]) clearSketch(sketchId)
       band.dispose()
       sketchGhostMaterial.dispose()
+      sketchGhostWarnMaterial.dispose()
       sketchLineMaterials.dispose() // `sketchMaterial` は種として入っている(ここで1回だけ捨てる)
       sketchHandleMaterials.dispose()
       regionMaterials.dispose()

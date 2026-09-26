@@ -458,17 +458,76 @@ export const MIRROR_SKETCH_ENTITIES: CommandDef = {
 }
 
 /**
+ * 選んだ複数の領域を、へこみに沿って包む**単一の領域線**を同じスケッチへ足す。
+ *
+ * **R(追従半径)と d(オフセット)の両方を打たせる**。どちらも空欄は 0 mm(`default: 0`)で、
+ * R = d = 0 なら選択領域の和集合そのものになる。R は幅 2R 未満の隙間とへこみを埋め、d は正で外へ・
+ * 負で内へ動かす。**必要な R・d の最小値は出さない** —— 結果が1つの領域にならないときは
+ * コアが個数を添えて拒み、トーストで見える(確定時だけ)。入力中の幽霊はサーバが文書を変えずに
+ * 計算し(`preview_envelope_regions`)、分裂している間は警告色で描く。
+ *
+ * 対象の領域は確定選択から取る(サーバが取るので引数に載せない)。どのスケッチかは選んだ領域が
+ * 持っているので `sketch_id` は足さない(`runsWithoutSketchId`)。
+ */
+export const ENVELOPE_REGIONS: CommandDef = {
+  id: 'envelope_regions',
+  category: 'sketch',
+  label: '包む',
+  buttonId: 'sketch-envelope',
+  preview: 'server',
+  args: [
+    {
+      kind: 'selection',
+      name: 'regions',
+      label: '包む領域',
+      shapeKind: 'region',
+      min: 1,
+      max: null,
+    },
+    {
+      kind: 'number',
+      name: 'radius',
+      label: '追従半径 R',
+      unit: 'mm',
+      inputId: 'sketch-envelope-radius',
+      reject: (value) => (value < 0 ? '追従半径 R は 0 以上' : null),
+      default: 0,
+    },
+    {
+      kind: 'number',
+      name: 'offset',
+      label: 'オフセット d',
+      unit: 'mm',
+      inputId: 'sketch-envelope-offset',
+      // 負は内へ縮める正当な値で、0 は「オフセットしない」。
+      reject: () => null,
+      default: 0,
+    },
+  ],
+  build(values) {
+    const regions = (values.regions ?? []) as unknown[]
+    const radius = values.radius
+    const offset = values.offset
+    if (regions.length === 0) return { ok: false, reason: '領域が選ばれていない' }
+    if (typeof radius !== 'number') return { ok: false, reason: 'R が数値でない' }
+    if (typeof offset !== 'number') return { ok: false, reason: 'd が数値でない' }
+    return { ok: true, args: { radius, offset } }
+  },
+}
+
+/**
  * そのverbは**スケッチモードの中で走るのに `sketch_id` を取らない**か。
  *
  * `runsOutsideSketch`(モードの外で走る)のちょうど半分だけ違う位置にいる ——
- * `move_sketch_entities` / `mirror_sketch_entities` はモードに入っていることを要求するが、
- * どのスケッチかは選んだ参照(`{sketch, entity, point}`)が持っているので引数に要らない。
+ * `move_sketch_entities` / `mirror_sketch_entities` / `envelope_regions` はモードに入っていることを
+ * 要求するが、どのスケッチかは選んだ参照(`{sketch, entity, point}` / `{sketch, index}`)が
+ * 持っているので引数に要らない。
  *
  * **列挙にしてある**(引数の形から導出しない)ので、スケッチverbを新しく足しても既定は
  * 変わらない —— 足したverbは今までどおり `sketch_id` が付く。
  */
 export function runsWithoutSketchId(verb: string): boolean {
-  return verb === MOVE_SKETCH_ENTITIES.id || verb === MIRROR_SKETCH_ENTITIES.id
+  return verb === MOVE_SKETCH_ENTITIES.id || verb === MIRROR_SKETCH_ENTITIES.id || verb === ENVELOPE_REGIONS.id
 }
 
 /**
@@ -503,6 +562,7 @@ export const SKETCH_COMMANDS: CommandDef[] = [
   ADD_ARC,
   MOVE_SKETCH_ENTITIES,
   MIRROR_SKETCH_ENTITIES,
+  ENVELOPE_REGIONS,
   IMPORT_SVG,
 ]
 export const DEFAULT_SKETCH_COMMAND_ID = SELECT_IN_SKETCH.id

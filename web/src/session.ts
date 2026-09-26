@@ -461,6 +461,18 @@ export type Applied =
       sketch_ids: string[]
     })
   /**
+   * 領域の包み(`envelope_regions`)。選択領域を包んだ単一の領域線を**同じスケッチへ足す**
+   * (元の領域の線は残る)ので、`created` は足した線分・円弧・円のID、`sketch_ids` は
+   * そのスケッチ1つだけ。`radius` / `offset` は空欄が 0 に解決された後の値。
+   */
+  | (AppliedVerbBase & {
+      verb: 'envelope_regions'
+      radius: number
+      offset: number
+      created: string[]
+      sketch_ids: string[]
+    })
+  /**
    * ボディの鏡映複製(`mirror_body`)。**常に複製を作る**(move_bodyと違い、動かす経路は
    * 無い)。元は動かないので `changed_bodies` は複製で増えたボディだけ。
    *
@@ -590,6 +602,15 @@ export interface PreviewPayload {
     volume: number
     geometry: GeometryPayload
   }>
+  /**
+   * スケッチに足される線の確定前の姿(`catalog.Command.preview_session` の verb だけが載せる)。
+   * `pieces` は結果の領域の数で、1 以外は確定すると拒まれる形。
+   */
+  sketch_ghost: {
+    sketch_id: string
+    entities: Array<{ kind: string; params: Record<string, number> }>
+    pieces: number
+  } | null
 }
 
 /**
@@ -775,7 +796,8 @@ export interface OptimizeConditionsReport {
 export interface OptimizeResolutionStep {
   index: number
   element_size_mm: number
-  element_count: number
+  /** 設計空間の要素数の**見積もり**(領域の体積 ÷ 要素の体積。実数ではない)。 */
+  design_elements_estimate: number
   /** この段を選んだときの最小幅の下限[mm](= 要素サイズの2倍)。サーバーが計算する
    *  (画面は要素数の数え方を持たない、という既存方針と同じ)。 */
   min_width_floor_mm: number
@@ -799,7 +821,7 @@ export interface OptimizeResolutionPayload {
   min_element_size_mm?: number
   default_element_size_mm?: number
   from_condition_faces_mm?: number
-  max_elements?: number
+  max_design_elements?: number
   feasible?: boolean
   steps?: OptimizeResolutionStep[]
 }
@@ -1153,6 +1175,7 @@ export function createSession(hooks: SessionHooks): Session {
       preview_id?: number | null
       verb?: string
       bodies?: PreviewPayload['bodies']
+      sketch_ghost?: PreviewPayload['sketch_ghost']
       body_id?: string
       revision?: number
       edges?: EdgeGeometry[]
@@ -1211,6 +1234,7 @@ export function createSession(hooks: SessionHooks): Session {
         preview_id: message.preview_id ?? null,
         verb: message.verb ?? '',
         bodies: message.bodies ?? [],
+        sketch_ghost: message.sketch_ghost ?? null,
       })
     } else if (message.type === 'edges') {
       hooks.onEdges({
