@@ -17,6 +17,7 @@ intersection_synthetic.json・intersection_locality.json・intersection_sensitiv
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import time
@@ -283,10 +284,21 @@ def _cluster_sites(inter, faces, verts_raw, verts_smooth, tables, padded, shape,
     return sites
 
 
+def _mask_sha256(name: str) -> str:
+    return hashlib.sha256(np.ascontiguousarray(np.load(OUT / "voxel" / f"{name}.npz")["mask"]).tobytes()).hexdigest()
+
+
+def _stale(name: str) -> bool:
+    """記録が無い、または入力のマスクが記録の後で変わっている。分析コードの変更は検出しない(--force で作り直す)。"""
+    path = RECORDS / f"{name}.json"
+    return not path.is_file() or json.loads(path.read_text(encoding="utf-8")).get("mask_sha256") != _mask_sha256(name)
+
+
 def analyze_condition(name: str) -> dict:
     data = np.load(OUT / "voxel" / f"{name}.npz")
     mask, origin, spacing = data["mask"], data["origin"], float(data["spacing"])
     t0 = time.perf_counter()
+    mask_sha256 = _mask_sha256(name)
     result = analyze_mask(mask)
     load, size, width = _parse(name)
     manifest_row = next(r for r in json.loads((OUT / "mesh_manifest.json").read_text(encoding="utf-8"))["rows"] if r["name"] == name)
@@ -295,12 +307,15 @@ def analyze_condition(name: str) -> dict:
         site["centre_world_mm"] = [round(float(x), 3) for x in origin + np.asarray(site["centre_cell"]) * spacing]
         site["move_max_mm"] = round(site["move_max_cells"] * spacing, 4)
     return dict(
-        name=name, load_n=load, element_size_mm=size, min_width_cells=width, spacing_mm=spacing, origin=[float(x) for x in origin],
+        name=name, mask_sha256=mask_sha256, load_n=load, element_size_mm=size, min_width_cells=width, spacing_mm=spacing, origin=[float(x) for x in origin],
         counts_match_mesh_manifest=result["intersections"] == expected, seconds=round(time.perf_counter() - t0, 1), **result)
 
 
 def _load_records() -> list[dict]:
     records = [json.loads((RECORDS / f"{n}.json").read_text(encoding="utf-8")) for n in _names()]
+    stale = [r["name"] for r in records if r.get("mask_sha256") != _mask_sha256(r["name"])]
+    if stale:
+        raise ValueError(f"入力のマスクが記録の後で変わっている(--force で作り直す): {stale}")
     for record in records:
         hit = {i for site in record["sites"] for i in site["run_ids"]}
         for i, run in enumerate(record["runs"]):
@@ -374,7 +389,7 @@ def report() -> None:
 
 
 def local_crossings(mask: np.ndarray, centre, radius: float = 3.5) -> tuple[int, int]:
-    """centre(添字座標)から radius 要素以内の交差の組数と、全体の組数。"""
+    """交差した2三角形の頂点の重心が centre(添字座標)から radius 要素以内の組数と、全体の組数。"""
     from duocad.mesh_intersections import triangle_intersections
     from duocad.topopt import mesh
 
@@ -425,6 +440,17 @@ def groove_mask(thickness: int, size: int = 15) -> tuple[np.ndarray, np.ndarray]
     return m, np.array([MARGIN + h / 2 + .5, MARGIN + h + .5, MARGIN + thickness / 2])
 
 
+def grooved_mask(t: int, lo: int, hi: int, size: int = 21) -> tuple[np.ndarray, np.ndarray]:
+    """板厚 t の 1x1 貫通穴の両面の外に、穴が +x 側へ開いた溝として lo / hi セル続く形(穴の側面のうち3方向が材料)。"""
+    m = np.zeros((size, size, lo + t + hi + 2 * MARGIN), bool)
+    m[:, :, MARGIN:MARGIN + lo + t + hi] = True
+    h = size // 2
+    m[h, h, MARGIN:MARGIN + lo + t + hi] = False
+    m[h:, h, MARGIN:MARGIN + lo] = False
+    m[h:, h, MARGIN + lo + t:MARGIN + lo + t + hi] = False
+    return m, np.array([h + .5, h + .5, MARGIN + lo + t / 2])
+
+
 def _thin_gap(mask: np.ndarray) -> float | None:
     """マスク内の細い空隙(管・溝)すべての壁の間隔の最小。細い空隙が無ければ None。"""
     result = analyze_mask(mask)
@@ -461,6 +487,15 @@ def synthetic() -> dict:
             controls.append(dict(kind=name, size=d, pairs=near, thin_void_gap_min=thin))
             print(f"対照 {name} {d}: 交差の組 {near}・細い空隙の間隔の最小 {'なし' if thin is None else format(thin, '.3f')}", flush=True)
     out["controls"] = controls
+    extension = []
+    for t in range(2, 7):
+        for lo in range(4):
+            for hi in range(4):
+                m, c = grooved_mask(t, lo, hi)
+                extension.append(dict(thickness=t, groove_lo=lo, groove_hi=hi, pairs=local_crossings(m, c)[0]))
+        print(f"開-開 板厚 {t} の穴の両面に溝(0〜3セル)を足す: 交差した組み合わせ "
+              f"{[(e['groove_lo'], e['groove_hi'], e['pairs']) for e in extension if e['thickness'] == t and e['pairs']]}", flush=True)
+    out["through_1x1_with_grooves"] = extension
     rng = np.random.default_rng(0)
     perturbed = []
     for t in range(2, 9):
@@ -612,7 +647,7 @@ def write_sites() -> dict:
 
 def run_all(workers: int, force: bool) -> int:
     names = _names()
-    todo = [n for n in names if force or not (RECORDS / f"{n}.json").is_file()]
+    todo = [n for n in names if force or _stale(n)]
     print(f"{len(names)} 条件のうち {len(todo)} 件を解析", flush=True)
     failed = []
     with ProcessPoolExecutor(max_workers=workers) as pool:
