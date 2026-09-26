@@ -17,8 +17,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -82,9 +84,13 @@ def _check_voxel_stl(name: str, mask: np.ndarray, origin: np.ndarray, spacing: f
     vertex_grid = (tri - origin) / spacing
     lattice = (np.abs(vertex_grid - np.round(vertex_grid)) < 1e-3).all(axis=(1, 2))
     axis_parallel = (np.abs(normal).sum(axis=1) - np.abs(normal[rows, axis])) < 1e-6 * np.abs(normal[rows, axis])
-    faces_ok = lattice & axis_parallel & on_plane & material(inside) & ~material(outside)
-    face_ids = np.unique(np.column_stack([inside, axis, sign]), axis=0)
-    count_ok = len(tri) == 2 * _boundary_face_count(mask) == 2 * len(face_ids)
+    plane = np.round(grid[rows, axis])
+    span = np.where(np.eye(3, dtype=bool)[axis], 0.0, 1.0)  # 面の軸は平面上、他の軸はセル1つぶんの幅
+    lower = np.where(np.eye(3, dtype=bool)[axis], plane[:, None], inside)
+    in_cell = ((vertex_grid >= (lower - 1e-3)[:, None, :]) & (vertex_grid <= (lower + span + 1e-3)[:, None, :])).all(axis=(1, 2))
+    faces_ok = lattice & axis_parallel & on_plane & in_cell & material(inside) & ~material(outside)
+    face_ids, per_face = np.unique(np.column_stack([inside, axis, sign]), axis=0, return_counts=True)
+    count_ok = len(tri) == 2 * _boundary_face_count(mask) == 2 * len(face_ids) and bool((per_face == 2).all())
     ok = bool(faces_ok.all() and count_ok and abs(volume - expected) <= 1e-4 * expected)
     return dict(mask_cells=cells, voxel_stl_volume_mm3=volume, expected_volume_mm3=expected,
                 volume_rel_error=(volume - expected) / expected, triangles=int(len(tri)),
@@ -122,6 +128,7 @@ def build_one(name: str) -> dict:
 
     t_start = time.perf_counter()
     started = datetime.now().astimezone().isoformat(timespec="seconds")
+    npz_sha = _npz_sha(name)
     data = np.load(OUT / "voxel" / f"{name}.npz")
     mask, origin, spacing = data["mask"], np.asarray(data["origin"], float), float(data["spacing"])
     voxel = _check_voxel_stl(name, mask, origin, spacing)
@@ -146,7 +153,7 @@ def build_one(name: str) -> dict:
     inter = dict(raw=_intersections(raw_w, faces), smooth=_intersections(smooth_w, faces))
     inter_seconds = time.perf_counter() - t0
     record = dict(
-        name=name, status="ok", started_at=started,
+        name=name, status="ok", started_at=started, input_npz_sha256=npz_sha, product_commit=_git_head(),
         finished_at=datetime.now().astimezone().isoformat(timespec="seconds"),
         grid=dict(origin=origin.tolist(), spacing=spacing, shape=list(mask.shape)),
         voxel_check=voxel,
@@ -168,7 +175,19 @@ def build_one(name: str) -> dict:
     return record
 
 
+def _npz_sha(name: str) -> str:
+    return hashlib.sha256((OUT / "voxel" / f"{name}.npz").read_bytes()).hexdigest()
+
+
+def _git_head() -> str:
+    return subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "--short", "HEAD"],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
 def _done(name: str) -> bool:
+    record = OUT / "mesh_records" / f"{name}.json"
+    if not record.exists() or json.loads(record.read_text(encoding="utf-8")).get("input_npz_sha256") != _npz_sha(name):
+        return False
     return all((OUT / part).exists() for part in (
         f"mesh_records/{name}.json", f"marching_cubes/{name}.stl", f"smoothed/{name}.stl"))
 
