@@ -333,8 +333,10 @@ def _pid_is_sweep(pid: int) -> bool:
 
     try:
         return "sweep_smoothing_corpus" in " ".join(psutil.Process(pid).cmdline())
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
+    except psutil.NoSuchProcess:
         return False
+    except psutil.AccessDenied:
+        return True  # 読めないだけで生きている。死んだ錠と誤認して二重起動しない側に倒す
 
 
 def _acquire_lock() -> bool:
