@@ -162,6 +162,8 @@ hanger に直方体の除外(`solid`、853×695×50 mm、保持 `_2` の面に�
 すべて同じところで止まった: 探索は4回とも同じ結果(feasible・converged・材料 273,277 mm³・安全率 4.84)で、
 finalize の `material-cut` が `SolidBuilderUnusedFaces` 2件だけを出し、結果が `BRepCheck_Analyzer` で不正
 (`material-cut: 演算結果が不正`)。探索は決定的なので、同じ文書を回し直しても同じ失敗になる。
+実行記録は `20260925T035538-4eba5fbaf3f8` だけ残してある(git 管理外)。他の3実行は平滑化後の表面の配列が内容ハッシュまで
+同じ重複だったので削除した(2026-09-26)。
 
 保存済みの `before-boolean`(メッシュのB-rep)と文書のボディで cut を組み替えて切り分けた(`BOPAlgo_BOP` cut・fuzzy 0):
 
