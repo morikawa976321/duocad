@@ -1001,6 +1001,27 @@ node scripts/shoot-topopt.mjs --model hanger_bar_attachment.json `
 6. **稜線の扱いが宣言どおり** — 全面の節点集合が互いに排他で、競合した節点がすべて「最も多く
    配った面」へ行っている。
 
+## 平滑化の検証材料(smoothing_corpus。2026-09-25〜26)
+
+平滑化ロジックを改良するための使い回す材料。hanger を **荷重 200/500/1000/2000 N × 要素サイズ 1.8/2.0/2.2/2.4 mm ×
+最小幅 2/3/4/5 セル = 64 条件**で製品の `optimize_run.run` に通し、`mesh.build_surface_from_mask` に渡る直前の
+二値マスクを `output/smoothing_corpus/`(git 管理外)へ保存した。再生成は `topopt_checks/sweep_smoothing_corpus.py --detach`
+(再開可。使い方と出力は先頭の docstring)。
+
+- **マスクは製品の実行の中で捕まえる**(`build_surface_from_mask` を差し替えて渡された配列を控え、例外で降りる。探索・島除去は
+  製品のもので、平滑化・finalize は回さない)。`voxel/<条件名>.npz`(mask・origin・spacing・shape)と、同じマスクの材料セルの
+  境界面を1面2三角形にした `voxel/<条件名>.stl`(ワールド mm・外向き。座標は `optimize_run._mesh_to_world` と同じ規約)。
+- **STL と製品の面の突き合わせ(64条件すべて)**: 巻き順は外向き。同じマスクの marching cubes の頂点(平滑化前)はボクセル境界から
+  最大 4.4e-6 セル(=境界上。二値の場なので辺の中点がセル面の中心に来る)、Taubin 平滑化後は 0.48〜0.63 セルに離れる
+  (`--verify <条件名>`)。
+- **64 条件すべてが `converged` で完走した(解なし 0)**。評価回数は 13〜323。安全率の窓(目標×2.4 の +1%)に入るまでの間、
+  最小幅が太い(4〜5 セル)・荷重が軽い条件は採用が1手ずつ進んで数時間かかる(最長 F0200_h1.8_w4 の 5.8 時間・203 評価)。
+  1条件のピークメモリは 2.4 mm 7.5 GB・2.2 mm 9.4 GB・2.0 mm 12.4 GB・1.8 mm 16.7 GB(上記の表の続き)。
+  ピークは探索の最初の評価(全材料)で立ち、その後の削減は 1 GB 未満・1コアなので、起動から10分空けて順に上げれば
+  RAM 約32GB で最大10条件を並べられた。子プロセス時間の合計は 約67 時間(全体の経過は約21時間)。
+- 完全な実行記録(`output/optimization_runs/`)は条件ごとに一時フォルダへ書いて消したので、64条件分は残していない
+  (残したのは `output/smoothing_corpus/` の 143 MB)。
+
 ## ファイル
 
 **コードは`duocad/topopt/`、受入検査は`topopt_checks/`にある**(`duocad/`の外)。2026-09-17
@@ -1033,6 +1054,7 @@ node scripts/shoot-topopt.mjs --model hanger_bar_attachment.json `
 | `topopt_checks/check_trace.py` | **受入検査**。途中記録(導出1回・全候補の塊一致・表面の再現・最終文書/STLの一致) |
 | `topopt_checks/check_pre_smoothing.py` | **受入検査**。島除去後・平滑化前の6条件 |
 | `topopt_checks/check_final_shape.py` | **受入検査**。最終形状の水密・単一ソリッド |
+| `topopt_checks/sweep_smoothing_corpus.py` | **受入検査ではない。** 平滑化の検証材料 64 条件の生成(上「平滑化の検証材料」) |
 | `topopt_checks/inspect_optimization_run.py`ほか分析ツール | 保存済み実行を読む分析・可視化・再生(受入検査ではない) |
 | `web/scripts/shoot-topopt.mjs` | **受入検査ではない。** 比較画像の撮影台(上「比較スクリーンショットの撮影台」) |
 | `topopt_checks/_fixtures.py` | 検査・測定・pytestが共有する合成題材(`demo_bracket`/`demo_conditions`/`severed_conditions`/`voxel_model`) |

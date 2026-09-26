@@ -27,7 +27,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -45,8 +44,11 @@ LOAD_DIRECTION = [0.0, 0.0, -1.0]
 LOAD_BODY = "body-48c2ba06938d"
 LOAD_FACE_INDEX = 7
 #: 探索の結果が「目標の安全率を満たす形が無い」を意味する状態(`SearchResult.status`)。
-#: 要素サイズごとの同時実行数。1条件のピークメモリ(2.4mm 7.5GB・1.8mm 16.7GB。docs/TOPOPT.md)と RAM 約32GB から決めた。
-JOBS_BY_SIZE = {2.4: 3, 2.2: 2, 2.0: 1, 1.8: 1}
+MAX_PARALLEL = 10
+EARLY_SECONDS = 10 * 60
+START_FRACTION = 0.85  # 空きメモリが実測ピークのこの割合を超えたら起動する(ピークは短く、他のアプリの分は Windows が押し出す)
+#: 要素サイズごとの1条件のピークメモリ[GB]。2.4・1.8 は実測(docs/TOPOPT.md)、2.2 は実測 9.4、2.0 は (2.4/2.0)^3 倍の見積もり。
+PEAK_GB = {2.4: 7.5, 2.2: 9.5, 2.0: 13.0, 1.8: 16.7}
 NO_SOLUTION_STATES = ("no_feasible_found", "input_contradiction", "resolution_insufficient")
 
 
@@ -323,7 +325,6 @@ def verify(name: str) -> int:
 # ---------------------------------------------------------------------------------------------
 # ドライバ(ロック・再開・切り離し)
 # ---------------------------------------------------------------------------------------------
-_MANIFEST_LOCK = threading.Lock()
 LOCK = OUT / "sweep.lock"
 LOG = OUT / "sweep.log"
 
@@ -358,27 +359,53 @@ def _acquire_lock() -> bool:
     return False
 
 
-def _run_child(spec: dict) -> None:
-    print(f"[{_now()}] start {spec['name']}", flush=True)
-    subprocess.run([sys.executable, str(Path(__file__).resolve()), "--one", spec["name"]], cwd=REPO_ROOT)
-    with _MANIFEST_LOCK:
-        manifest = write_manifest()
-        _write_atomic(OUT / "progress.json", json.dumps(dict(
-            updated_at=_now(), counts=manifest["counts"], settled=manifest["settled"], last=spec["name"]),
-            ensure_ascii=False, indent=1))
+def _running_children() -> dict:
+    """走っている `--one` 子プロセスの {条件名: 起動からの秒数}(前のドライバが残した子も数える)。"""
+    import psutil
+
+    found = {}
+    for proc in psutil.process_iter(["cmdline", "create_time"]):
+        cmd = proc.info["cmdline"] or []
+        if "--one" in cmd and any("sweep_smoothing_corpus" in part for part in cmd):
+            found[cmd[cmd.index("--one") + 1]] = time.time() - proc.info["create_time"]
+    return found
 
 
 def drive() -> int:
-    from concurrent.futures import ThreadPoolExecutor
+    """粗い順に、子プロセスを**メモリの許す範囲で並べて**回す。
+
+    実測(docs/TOPOPT.md): 1条件のピークメモリは探索の最初の評価(全材料)で立ち、その後の長い削減は 1GB 未満・1コア。
+    そこで、起動から `EARLY_SECONDS` 以内の子が居ない間だけ次を起動し(ピーク同士を重ねない)、空きメモリが
+    その要素サイズの実測ピークの `START_FRACTION` 倍を超えるときだけ起動する。
+    """
+    import psutil
 
     if not _acquire_lock():
         return 3
+    attempted: set = set()
     try:
-        records = load_records()
-        for size in SIZES_MM:
-            pending = [s for s in all_conditions() if s["element_size_mm"] == size and not is_settled(records.get(s["name"]))]
-            with ThreadPoolExecutor(max_workers=JOBS_BY_SIZE[size]) as pool:
-                list(pool.map(_run_child, pending))
+        while True:
+            records = load_records()
+            running = _running_children()
+            pending = [s for s in all_conditions()
+                       if not is_settled(records.get(s["name"])) and s["name"] not in running and s["name"] not in attempted]
+            if not pending and not running:
+                break
+            if pending and len(running) < MAX_PARALLEL and all(age > EARLY_SECONDS for age in running.values()):
+                spec = pending[0]
+                need = PEAK_GB[spec["element_size_mm"]] * START_FRACTION
+                if psutil.virtual_memory().available / 2**30 > need:
+                    attempted.add(spec["name"])
+                    print(f"[{_now()}] start {spec['name']}", flush=True)
+                    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--one", spec["name"]],
+                                     cwd=REPO_ROOT, stdin=subprocess.DEVNULL)
+                    time.sleep(20)
+                    continue
+            manifest = write_manifest()
+            _write_atomic(OUT / "progress.json", json.dumps(dict(
+                updated_at=_now(), counts=manifest["counts"], settled=manifest["settled"], running=sorted(running)),
+                ensure_ascii=False, indent=1))
+            time.sleep(30)
         manifest = write_manifest()
         print(f"[{_now()}] sweep finished: {manifest['counts']}", flush=True)
         return 0
