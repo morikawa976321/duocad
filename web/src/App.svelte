@@ -1723,7 +1723,7 @@
       editSelection(vertexRef(event.vertex.bodyId, event.vertex.vertexIndex), pickMode)
       return
     }
-    // **領域が当たったら領域**。「領域を押し出す」を起動している間だけ来る
+    // **領域が当たったら領域**。領域を要求しているコマンドの起動中(スケッチ編集中を除く)だけ来る
     // (`wantsRegions` → `viewport.pickRegions`)。参照の形も修飾キーの規則も
     // スケッチモードの `onSketchPick` と同じ —— 同じものを同じように選ぶ。
     if (event.region !== null) {

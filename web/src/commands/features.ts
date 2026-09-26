@@ -79,7 +79,7 @@ function makeExtrude(kind: 'region' | 'face'): CommandDef {
         label: isFace ? '距離(正=面の外向き)' : '距離',
         unit: 'mm',
         inputId: 'distance',
-        reject: (value) => (value === 0 ? '距離が0(形が変わらない)' : null),
+        reject: (value) => (value === 0 ? (isFace ? '距離が0(正=面の外向き / 負=削る)' : '距離が0(形が変わらない)') : null),
       },
       {
         kind: 'choice',
@@ -354,10 +354,6 @@ export const PATTERN_CIRCULAR: CommandDef = {
 }
 
 /**
- * ソリッドを触るモードの一覧(押し出し・丸める・面取り)。**反復はスケッチの
- * 図形を対象にするのでここには入らない**(下の `SKETCH_FEATURE_COMMANDS`)。
- */
-/**
  * ボディの平行移動 / 回転 / 複製。**面でも辺でも頂点でもボディを指せる** ——
  * コアの `selection.require_bodies` が `ShapeRef.body` から逆引きするので、
  * この引数は3種を全部食う(`kinds`)。複数のボディにまたがる選択なら全部が同じ量だけ動く。
@@ -553,6 +549,10 @@ export const DELETE_SELECTION: CommandDef = {
   },
 }
 
+/**
+ * 通常モードのフィーチャ一覧。**反復はスケッチの図形を対象にするのでここには入らない**
+ * (下の `SKETCH_FEATURE_COMMANDS`)。
+ */
 export const SOLID_FEATURE_COMMANDS: CommandDef[] = [
   EXTRUDE_FACES,
   FILLET,
