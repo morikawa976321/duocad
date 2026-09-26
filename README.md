@@ -15,6 +15,7 @@
 | [MCP.md](MCP.md) | **MCPツール一覧の正**と登録手順 | AI側から触るとき |
 | [docs/TOPOPT.md](docs/TOPOPT.md) | **形状最適化**（実測の記録・設計と画面・受入検査の意味） | 数字の根拠・topopt配線を疑うとき |
 | [docs/TOPOPT_SPEED.md](docs/TOPOPT_SPEED.md) | **形状探索の時間短縮**（1回のFEM評価の内訳・候補評価の費用） | 探索を速くしたいとき |
+| [docs/TOPOPT_SMOOTHING_INTERSECTIONS.md](docs/TOPOPT_SMOOTHING_INTERSECTIONS.md) | **平滑化後の自己交差が起きるボクセルの形**（64条件の全数集計・管の潰れと交差の規則・合成での再現） | 平滑化の自己交差・潰れを疑うとき |
 | [docs/TOPOPT_TARGET_FACTOR.md](docs/TOPOPT_TARGET_FACTOR.md) | **探索に渡す目標安全率 = 実際の目標 × 2.4** の決定・根拠・実測（細分すると目標を割る問題の受け方） | 探索時の目標・報告の「探索の格子での値」を疑うとき |
 
 ---
