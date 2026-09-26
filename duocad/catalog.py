@@ -542,19 +542,6 @@ COMMANDS: tuple[Command, ...] = (
         ),
     ),
     Command(
-        name="extrude_face",
-        category="feature",
-        description=(
-            "確定選択の面(ちょうど1枚)を押し出すときに呼ぶ。"
-            "既存ソリッドの面を伸ばす経路。"
-        ),
-        params=(Param("distance", "number", "押し出し量(mm)", dimension=True),),
-        uses_selection=True,
-        session="extrude_face",
-        previewable=True,
-        resets_selection=True,
-    ),
-    Command(
         name="fillet",
         category="feature",
         description=(

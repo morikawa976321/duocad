@@ -1,6 +1,6 @@
 """verb `extrude` が確定選択の**面群**(同一平面・同一ボディ)を押し出せること(join / cut / new)。
 
-領域の押し出しは `test_extrude.py`。1面の結果は `extrude_face_on_shape` と体積・面数・妥当性が一致する。
+領域の押し出しは `test_extrude.py`。1面の結果は、保存済みの `extrude_face` のログ(`test_extrude_face_replay.py`)と体積・面数が一致する。
 """
 from __future__ import annotations
 
@@ -101,18 +101,15 @@ def test_new_makes_a_separate_pillar_and_leaves_the_source_body():
     assert math.isclose(kernel.volume(pillar.shape), 400.0 * 5.0, rel_tol=REL)
 
 
-@pytest.mark.parametrize("distance, mode", [(10.0, "join"), (-7.0, "cut")])
-def test_one_face_matches_extrude_face_on_shape(distance, mode):
-    """1面の結果が `extrude_face_on_shape` と食い違う(4/4で再生専用へ回す根拠が崩れる)。"""
+@pytest.mark.parametrize("distance, mode, expected", [(10.0, "join", 12000.0), (-7.0, "cut", 5200.0)])
+def test_one_face_join_and_cut_keep_the_box_a_box(distance, mode, expected):
+    """1面の join(正)/cut(負)の体積・面数・妥当性は、従来の `extrude_face` の結果(20mm立方体の上面)と一致する。"""
     shape = _box(20.0, 20.0, 20.0)
-    top = _top(shape)
-    old = kernel_extrude.extrude_face_on_shape(shape, top, distance)
-    new = kernel_extrude.extrude_faces(shape, [top], distance, mode, target_shape=shape)
+    result = kernel_extrude.extrude_faces(shape, [_top(shape)], distance, mode, target_shape=shape)
 
-    assert math.isclose(new["volume_after"], old["volume_after"], rel_tol=REL)
-    assert kernel.face_count(new["shape"]) == kernel.face_count(old["shape"])
-    assert BRepCheck_Analyzer(new["shape"]).IsValid()
-    assert new["unified"] == old["unified"]
+    assert math.isclose(result["volume_after"], expected, rel_tol=REL)
+    assert kernel.face_count(result["shape"]) == 6
+    assert BRepCheck_Analyzer(result["shape"]).IsValid()
 
 
 @pytest.mark.parametrize("distance, mode, expected", [(3.0, "join", 6000.0 + 2000.0 + 2 * 200.0 * 3.0), (-3.0, "cut", 8000.0 - 2 * 200.0 * 3.0)])

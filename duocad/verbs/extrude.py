@@ -1,8 +1,7 @@
 """verb `extrude` — スケッチの**領域**、または**同一平面・同一ボディのソリッドの面群**を押し出す。
 
 領域は `extrude(doc, regions, ...)`、面は `extrude_faces(doc, faces, ...)`。どちらも同じ verb
-`extrude` として記録し、ログの args が `regions` か `faces` かで再生を分ける。`extrude_face`
-(面1枚・別verb)は再生専用へ移るまで残っている。`mode="join"` で足し、`mode="cut"` で引き、
+`extrude` として記録し、ログの args が `regions` か `faces` かで再生を分ける。`mode="join"` で足し、`mode="cut"` で引き、
 `mode="new"` で独立したボディにする。
 
 - `"join"` … 対象ボディへ足す。**対象が無ければ新しいソリッドを1つ作る**(最初の板はこれで

@@ -12,4 +12,4 @@
 """
 from . import parameters as _parameters  # noqa: F401  verb "set_parameter" を登録する
 from . import sketch as _sketch  # noqa: F401  スケッチの4 verb を登録する
-from . import verbs as _verbs  # noqa: F401  extrude_face / import_step / extrude / pattern_rectangular / move_* を登録する
+from . import verbs as _verbs  # noqa: F401  extrude / import_step / pattern_rectangular / move_* を登録する

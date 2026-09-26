@@ -5,7 +5,7 @@
 
 戻り値はいずれも **JSON化できる素の値(float/int/str/list/dict)だけ**にする。OCPのオブジェクトを
 kernel の外へ出さないための規律で、境界テスト(importの静的検査)では捕まえられない側の約束。
-唯一の例外は `kernel_extrude.extrude_face_on_shape` / `kernel_extrude.extrude_regions` / `face_of`
+唯一の例外は `kernel_extrude.extrude_faces` / `kernel_extrude.extrude_regions` / `face_of`
 (と `kernel_sketch.sketch_regions`)の戻りに含まれる TopoDS_*(document.Body.shape や領域押し出しの入力になる値)。
 
 **ocp_tessellate は使わない**(この venv に入っておらず、かつ面ピッキングには面ごとの
@@ -391,7 +391,7 @@ def count_subshapes(shape: "TopoDS_Shape", kind: str) -> int:
 
 
 # --------------------------------------------------------------------------------------
-# ブーリアンの結果の検証(extrude_face / extrude_regions / boolean_bodies / fillet・chamfer が共有)
+# ブーリアンの結果の検証(extrude_faces / extrude_regions / boolean_bodies / fillet・chamfer が共有)
 # --------------------------------------------------------------------------------------
 #: 「ブーリアンは成功したのに体積が変わっていない」と見なす相対差。OCCT は「成功したが何も
 #: 起きていない」を返せるので、ここで止めないと静かに空振りする。
@@ -437,7 +437,7 @@ def _checked_volume(
 
 def _require_valid(shape: "TopoDS_Shape", label: str, context: str = "") -> None:
     """`BRepCheck_Analyzer` の最後の関門。ここまでの検査を全部通っても壊れていることがある
-    (曲面の掃引で実測)。`_checked_volume` と分けてあるのは、`extrude_face_on_shape` だけ
+    (曲面の掃引で実測)。`_checked_volume` と分けてあるのは、`extrude_faces` の join / cut だけ
     間に `_unify_same_domain` が入るため(統合後の形に対して行う)。"""
     if not BRepCheck_Analyzer(shape).IsValid():
         suffix = f", {context}" if context else ""
@@ -475,7 +475,7 @@ def _point_and_direction(
 
 def _face_map_projection(successors: dict, final_count: int) -> dict:
     """後継の表(旧添字 → 新添字の列)を `face_map` / `deleted` / `new_faces` の射影にする
-    (`extrude_face_on_shape` と `_blend_provenance` が同じ形で保存する)。"""
+    (`extrude_faces` と `_blend_provenance` が同じ形で保存する)。"""
     mapped = {position for positions in successors.values() for position in positions}
     return {
         "face_map": successors,
@@ -763,7 +763,7 @@ def tessellate(
 
     面ごとに分けるのは、当たった三角形から面へ戻れるようにするため(1つの塊にまとめると
     戻れない)。添字は `face_count` と同じ `TopExp.MapShapes_s` の1始まりで、
-    `extrude_face_on_shape` の `face_index` とも一致する。
+    `extrude` の面の参照(`faces[].index`)とも一致する。
 
     三角形の巻き方向は、面の向きが `TopAbs_REVERSED` のとき入れ替える(外向きに揃える)。
     これをやらないと、アプリ側で法線が内側を向いた面が黒く落ちる。
@@ -1296,7 +1296,7 @@ def _blend_provenance(
     フィレット系は `History()` を持たず `Modified()` / `Generated()` / `IsDeleted()` だけを
     持ち、ブーリアンは `History()` を持つ ——**その差を吸収するのが `normalize_provenance` の
     存在理由**である。アダプタの戻りは `TopoDS_Shape` を含む**メモリ上の形**なので、そのままでは
-    `OpLog.to_json()` で落ちる。ここで添字の射影に変換する(`extrude_face_on_shape` と同じ形)。
+    `OpLog.to_json()` で落ちる。ここで添字の射影に変換する(`extrude_faces` と同じ形)。
     """
     normalized = normalize_provenance(maker, [shape]) or {}
     modified = {}

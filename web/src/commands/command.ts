@@ -313,7 +313,7 @@ export interface TextArgSpec extends ArgSpecCommon {
  * *どちらか*であって、選択集合から導出できないため —— 選択が空でも基準平面なら揃う。
  *
  * `build` が送るのは基準平面のときの `{base_plane}` だけで、**面は送らない**
- * (`extrude_face` と同じ流儀。面はサーバがコアの確定選択から取る)。
+ * (面はサーバがコアの確定選択から取る)。
  */
 export interface PlaneArgSpec extends ArgSpecCommon {
   kind: 'plane'

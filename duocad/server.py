@@ -72,7 +72,6 @@ from .speculative import speculative  # noqa: F401
 from .verbs import (  # noqa: F401
     chamfer as chamfer_verb,
     extrude as extrude_verb,
-    extrude_face as extrude_face_verb,
     fillet as fillet_verb,
     import_step as import_step_verb,
     import_svg as import_svg_verb,

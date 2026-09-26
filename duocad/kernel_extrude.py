@@ -1,6 +1,6 @@
 """押し出しの幾何(OCPを触るカーネル層)。
 
-面の押し出し(`extrude_face_on_shape`・複数面の `extrude_faces`)と、スケッチの領域の押し出し(`extrude_regions`)を持つ。
+面の押し出し(`extrude_faces`)と、スケッチの領域の押し出し(`extrude_regions`)を持つ。
 面の数え方(`_face_map` の1始まりの添字)・ブーリアンの検査(`_checked_volume` / `_require_valid`)・
 由来の射影(`_positions_in` / `_face_map_projection`)は `kernel` の側にあり、ここはそれを読むだけ ——
 依存は kernel_extrude → kernel の一方向。
@@ -39,151 +39,6 @@ from .kernel import (
 
 #: 面の同一性を「重心の一致」で判定するときの相対許容差(after_face_index の探索)。
 _MATCH_TOL = 1.0e-6
-
-
-# --------------------------------------------------------------------------------------
-# extrude_face の幾何(実装計画書§1.1)
-# --------------------------------------------------------------------------------------
-def extrude_face_on_shape(
-    shape: "TopoDS_Shape",
-    face_index: int,
-    distance: float,
-) -> dict:
-    """面 `face_index` を `distance` だけ押し出した**新しい形状**と、由来の射影を返す。
-
-    符号の意味: `distance > 0` は面の**外向き法線方向へ肉を足す**(Fuse)、`distance < 0` は
-    同じ向きへ**削る**(Cut)。どちらも面から直接プリズムを作ってブーリアンする。入力の
-    `shape` は変更しない。
-
-    **平面の面だけ押し出せる**(それ以外は ValueError)。曲面は「面の中央の法線」方向へ
-    掃引しても意味のある操作にならず、**成功したまま壊れた形状を返す**
-    (穴の円筒面を+1mm押し出すと `IsDone()` は真・体積も変わるが
-    `BRepCheck_Analyzer.IsValid()` が偽になる。-1mmでは体積が 91018→38597 と激減する
-    「有効だが無意味な」形状になる)。曲面の押し出し(オフセット)には対応しない。
-
-    **黙って失敗させない**(OCCTのブーリアンは例外を投げずに失敗する):
-    プリズム生成とブーリアンの `IsDone()`、結果が空でないこと、**体積が実際に変わったこと**、
-    **最後に `BRepCheck_Analyzer` で形状が妥当であること**を毎回検査し、
-    どれか1つでも欠ければ例外にして操作ごと捨てる。
-
-    同一平面の面は `ShapeUpgrade_UnifySameDomain` で統合する。統合しないと押し出すたびに
-    面が分裂して増え(実測: 20mm立方体の上面を+10 → 統合なし10面 / 統合後6面)、
-    **同じ面を続けて押し出す**という計測の手続き自体が成立しなくなる。ただし統合は
-    **入力の形状を壊す**うえ利得が無い場合があるので、コピーで試してから採否を決める
-    (機序と実測値は `_unify_same_domain` のdocstring)。
-
-    戻り値(`"shape"` 以外はすべてJSON化できる素の値):
-        {
-          "shape": <TopoDS_Shape>, "unified": bool,
-          "face_index": int, "distance": float, "normal": [nx,ny,nz],
-          "after_face_index": int | None,   # 押し出した面が新形状のどれになったか
-          "volume_before": float, "volume_after": float,
-          "provenance": {...}               # 下記
-        }
-
-    `provenance` は `Operation.provenance` にそのまま入れられる**JSON化可能な射影**
-    (`normalize_provenance` の戻りは TopoDS_Shape を含むメモリ上の形なので `to_json()` で
-    落ちる):
-
-        {"verb": "extrude_face", "face_index": int, "distance": float, "unified": bool,
-         "face_map": {"<旧添字>": [新添字, ...]}, "deleted": [旧添字, ...],
-         "new_faces": [新添字, ...], "after_face_index": int | None}
-    """
-    if shape is None or shape.IsNull():
-        raise ValueError("cannot extrude a face of an empty shape")
-    distance = float(distance)
-    if distance == 0.0:
-        raise ValueError("distance must not be 0 (押し出し量0は形状を変えない)")
-
-    shape_map = _face_map(shape)
-    face = _face_at(shape_map, face_index)
-    face_index = int(face_index)
-
-    kind = classify_face(face)
-    if kind != "plane":
-        raise ValueError(
-            f"face {face_index} is {kind}: M1で押し出せるのは平面の面だけ"
-            "(曲面は掃引しても壊れた形状になることを実測済み)"
-        )
-
-    normal = _face_normal(face)
-    _, centroid_before = _face_props(face)
-    volume_before = volume(shape)
-
-    prism = BRepPrimAPI_MakePrism(
-        face, gp_Vec(normal[0] * distance, normal[1] * distance, normal[2] * distance)
-    )
-    if not prism.IsDone():
-        raise ValueError(
-            f"failed to build the prism for face {face_index} (distance={distance})"
-        )
-    prism_shape = prism.Shape()
-    if prism_shape is None or prism_shape.IsNull():
-        raise ValueError(f"prism for face {face_index} is empty (distance={distance})")
-
-    # 正なら足す / 負なら削る。負のときプリズムは内側を向いているので、そのまま引けばよい。
-    builder = (
-        BRepAlgoAPI_Fuse(shape, prism_shape)
-        if distance > 0
-        else BRepAlgoAPI_Cut(shape, prism_shape)
-    )
-    builder.Build()
-    operation = "fuse" if distance > 0 else "cut"
-    context = f"face {face_index}, distance={distance}"
-    if not builder.IsDone():
-        raise ValueError(f"{operation} failed for face {face_index} (distance={distance})")
-    result = builder.Shape()
-    volume_result = _checked_volume(result, operation, volume_before=volume_before, context=context)
-
-    # 順序は 無変化 → 統合 → BRepCheck。統合は入力の形状を壊しうるので、検査は統合後の `final` に対して行う。
-    final, history, unified = _unify_same_domain(result, volume_result)
-    _require_valid(final, operation, context)
-    final_map = _face_map(final)
-
-    successors: dict = {}
-    for index in range(1, shape_map.Extent() + 1):
-        old_face = shape_map.FindKey(index)
-        candidates = _shape_list(builder, "Modified", old_face)
-        if not candidates and not _is_removed(builder, old_face):
-            candidates = [old_face]  # ブーリアンが触らなかった面は同じ形状として残る
-        successors[str(index)] = _positions_in(
-            final_map,
-            (survivor for candidate in candidates for survivor in _through_history(history, candidate)),
-        )
-
-    # キーの順番は操作ログに保存される(`Operation.provenance`)ので変えない。
-    provenance = {
-        "verb": "extrude_face",
-        "face_index": face_index,
-        "distance": distance,
-        "unified": unified,
-        **_face_map_projection(successors, final_map.Extent()),
-        "after_face_index": None,
-    }
-
-    after_face_index = _find_translated_face(
-        final_map,
-        target=(
-            centroid_before[0] + normal[0] * distance,
-            centroid_before[1] + normal[1] * distance,
-            centroid_before[2] + normal[2] * distance,
-        ),
-        normal=normal,
-        scale=abs(distance),
-    )
-    provenance["after_face_index"] = after_face_index
-
-    return {
-        "shape": final,
-        "unified": unified,
-        "face_index": face_index,
-        "distance": distance,
-        "normal": list(normal),
-        "after_face_index": after_face_index,
-        "volume_before": volume_before,
-        "volume_after": volume(final),
-        "provenance": provenance,
-    }
 
 
 def extrude_regions(
@@ -275,10 +130,8 @@ def extrude_faces(
     """`source_shape` の**同一平面・同じ向きの平面の面**を `face_indices`(1始まり・選択順)で
     まとめて法線方向へ押し出し、`target_shape` へ join / cut する(`new` は柱だけを返す)。
 
-    符号は `extrude_face_on_shape` と同じで、`distance > 0` が面の外向き法線方向。`mode` は符号と
-    独立なので、面から削るには**負の距離で `cut`**(正で cut すると外側を削るだけで何も変わらず、
-    「変化なし」の例外になる)。1面の正の `join` / 負の `cut` は `extrude_face_on_shape` と
-    体積・面数・妥当性が一致する。
+    `distance > 0` が面の外向き法線方向。`mode` は符号と独立なので、面から削るには**負の距離で `cut`**
+    (正で cut すると外側を削るだけで何も変わらず、「変化なし」の例外になる)。
 
     許容値は OCCT の `Precision`(kernel に押し出し用の定数は無い。`_MATCH_TOL` は重心の突き合わせ用で
     桁が緩い): 法線のずれは `Precision.Angular_s`、平面までの距離は `Precision.Confusion_s`。
@@ -360,7 +213,7 @@ def extrude_faces(
     if mode == "new":
         final, history, unified = result, None, False
     else:
-        # 順序は 無変化 → 統合 → BRepCheck(`extrude_face_on_shape` と同じ)。
+        # 順序は 無変化 → 統合 → BRepCheck(統合は入力の形状を壊しうるので、検査は統合後の形に対して行う)。
         final, history, unified = _unify_same_domain(result, volume_result)
     _require_valid(final, mode, context)
     final_map = _face_map(final)
@@ -422,7 +275,7 @@ def _check_coplanar_planes(faces: Sequence[Any], indices: Sequence[int]) -> tupl
         if kind != "plane":
             raise ValueError(
                 f"selected face #{position} (index {index}) is {kind}: 押し出せるのは平面の面だけ"
-                "(曲面は掃引すると壊れた形状になることを実測済み。`extrude_face_on_shape` 参照)"
+                "(曲面は掃引すると壊れた形状になることを実測済み。docs/CAD_LIBRARY_PITFALLS.md)"
             )
         normals.append(_face_normal(face))
         centroids.append(_face_props(face)[1])

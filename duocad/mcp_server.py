@@ -706,16 +706,6 @@ class DocumentTools:
         )
         return self._apply_logged(before, applied)
 
-    def extrude_face(self, distance: float) -> dict:
-        """**確定選択の面**(ちょうど1枚)を押し出す。対象Bodyは参照が持っている。
-
-        2枚以上選ばれていたら黙ってどれかを選ばない —— AIから見て指示と結果がずれる
-        唯一の経路になる(拒否は `selection.require_confirmed` が行う)。
-        """
-        before = self._revision_snapshot()
-        applied = self.session.extrude_face(float(distance))
-        return self._apply_logged(before, applied)
-
     def fillet(self, radius) -> dict:
         """**確定選択の辺**を丸める。`radius` は数値か辺ごとのリスト。
 

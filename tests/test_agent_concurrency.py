@@ -53,7 +53,7 @@ def test_a_concurrent_shape_change_empties_the_confirmed_selection_and_the_next_
     """AIが辺を確定した後、別の主体(人)が**無関係な**形状変更を挟むと、
     AIの次のverb呼び出しは対象を黙って変えず `SelectionEmpty` で止まる。
 
-    `extrude_face` は `resets_selection=True`(`duocad/catalog.py`)なので、確定した
+    `extrude` は `resets_selection=True`(`duocad/catalog.py`)なので、確定した
     面を1つ押し出すだけで確定選択が全リセットされる —— AIが辺を選んでいたことは
     もう関係なくなる。
     """
@@ -62,7 +62,7 @@ def test_a_concurrent_shape_change_empties_the_confirmed_selection_and_the_next_
 
     # 「人」が割り込んで別の操作をする(AIのターンとは無関係)
     commit_face(box_session, index=2)
-    box_session.extrude_face(1.0)
+    box_session.extrude(1.0, mode="join")
 
     assert len(selection.get_selection(box_session.document).items) == 0
     with pytest.raises(selection.SelectionEmpty):
@@ -219,7 +219,7 @@ def test_the_loop_refuses_a_tool_call_decided_before_a_concurrent_edit_and_the_m
 def test_the_optimistic_lock_does_not_trip_on_the_loops_own_actions(box_session: Session):
     """自分自身が同じ往復で積んだ変更を「よそからの変更」と誤認しない。
 
-    1つの応答に2つのツール呼び出し(`extrude_face` → `describe_document`)が入っている。
+    1つの応答に2つのツール呼び出し(`extrude` → `describe_document`)が入っている。
     チェックは**呼び出しごと**(1件実行するたびに次の基準値を取り直す)なので、
     1件目が版を動かしても2件目の直前チェックはその動いた後の値を基準にする ——
     どちらも実行される。誤検出しないことを確かめる回帰。
@@ -229,7 +229,7 @@ def test_the_optimistic_lock_does_not_trip_on_the_loops_own_actions(box_session:
     reply = ProviderReply(
         text="",
         tool_calls=(
-            ToolCall(id="c1", name="extrude_face", arguments={"distance": 2.0}),
+            ToolCall(id="c1", name="extrude", arguments={"distance": 2.0, "mode": "join"}),
             ToolCall(id="c2", name="describe_document", arguments={}),
         ),
         stop_reason="tool_use",
@@ -240,7 +240,7 @@ def test_the_optimistic_lock_does_not_trip_on_the_loops_own_actions(box_session:
     run = AgentLoop(tools, provider).run("面を10mm押し出して教えて")
 
     assert run.status == "completed"
-    assert [outcome.name for outcome in run.tool_calls] == ["extrude_face", "describe_document"]
+    assert [outcome.name for outcome in run.tool_calls] == ["extrude", "describe_document"]
     assert all(outcome.ok for outcome in run.tool_calls)
 
 
@@ -346,7 +346,7 @@ def test_a_concurrent_edit_between_two_tool_calls_in_the_same_reply_is_detected(
     reply = ProviderReply(
         text="",
         tool_calls=(
-            ToolCall(id="c1", name="extrude_face", arguments={"distance": 2.0}),
+            ToolCall(id="c1", name="extrude", arguments={"distance": 2.0, "mode": "join"}),
             ToolCall(id="c2", name="set_visible", arguments={"body_id": "box", "visible": True}),
         ),
         stop_reason="tool_use",
@@ -357,9 +357,9 @@ def test_a_concurrent_edit_between_two_tool_calls_in_the_same_reply_is_detected(
     run = AgentLoop(tools, provider).run("面を10mm押し出してからboxを表示して")
 
     assert run.status == "completed"
-    # 1件目(extrude_face)は実行される。2件目(set_visible)は、その直前に人がboxを
+    # 1件目(extrude)は実行される。2件目(set_visible)は、その直前に人がboxを
     # 隠したこと(=版が動いたこと)を検出して実行されない。
-    assert [outcome.name for outcome in run.tool_calls] == ["extrude_face"]
+    assert [outcome.name for outcome in run.tool_calls] == ["extrude"]
     assert run.tool_calls[0].ok is True
     assert box_session.document.bodies[0].visible is False, (
         "2件目は実行されていない(人が隠したままのはず。実行されていたら再びTrueになる)"

@@ -84,8 +84,8 @@ AI: 述語で候補集合を作る  →  ユーザー: 過不足をクリック�
 ## 1. スコープ
 
 **入れるもの** — スケッチ: `sketch_create` / `add_line` / `add_circle` / `add_rectangle` / `add_arc` /
-`pattern_rectangular` / `pattern_circular` / `import_svg`。3D: `extrude`(領域の集合を `join`/`cut`/
-`new`) / `extrude_face`(既存ソリッドの面を押し出す。別verb) / `fillet` / `chamfer`(辺ごとの配列も可)。
+`pattern_rectangular` / `pattern_circular` / `import_svg`。3D: `extrude`(領域の集合、または既存
+ソリッドの同一平面の面群を `join`/`cut`/`new`) / `fillet` / `chamfer`(辺ごとの配列も可)。
 各verbの引数は [../MCP.md](../MCP.md) が正。横断機能は寸法の数値入力(名前つきの値として保持し編集で
 追随)・領域検出(閉領域を自動計算)・undo/redo・入出力(STEP読み書き／STL書き出し)。AI側はMCPサーバ
 (§5)と選択集合の提案・修正・確定。

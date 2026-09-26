@@ -15,7 +15,7 @@
  *   2. **部品一覧に出る**(種別で濾されていない)
  *   3. **viewportが三角形を持っている**(`getGeometry` の positions/indices が渡した通り)
  *   4. **画面に投影できる**(`projectFace` が座標を返す = THREE.Mesh が実在して描かれている)
- *   5. **編集は断られる**(`extrude_face` がメッセージ付きのエラーになる)
+ *   5. **編集は断られる**(`move_body` がメッセージ付きのエラーになる)
  *   6. **表示の切り替えが効く**(隠すと geometry が消える)
  *   7. **B-repと混在したままSTLへ書ける**(両方の三角形が1本に入る)
  *   8. ブラウザのコンソールにエラーが出ていない
@@ -125,7 +125,7 @@ runSmoke('smoke-mesh-body', { mcp: true }, async ({ mcp, browser, url, timeout, 
 
     // ------------------------------------------------------------ 5. 編集は断られる
     //
-    // **`move_body` で叩く。** 他の編集verb(`extrude_face` / `fillet` / `chamfer`)は
+    // **`move_body` で叩く。** 他の編集verb(`extrude` の面 / `fillet` / `chamfer`)は
     // 面・辺の確定選択を要求し、メッシュボディは面も辺も選べない(`select_face` が断る)ので、
     // AIの側からはそもそも到達できない —— 断りの実体(`_common.editable_body`)へ届く
     // 唯一の外からの経路が、**ボディ単位の選択を取る `move_body`** である。

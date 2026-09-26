@@ -16,7 +16,7 @@ import math
 from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 
 from duocad import kernel, query
-from duocad.verbs import extrude_face
+from duocad.verbs import extrude_faces
 from session_support import session_with_box
 
 BOX_X, BOX_Y, BOX_Z = 20.0, 20.0, 20.0
@@ -36,7 +36,7 @@ def test_state_meta_volume_updates_when_the_shape_changes():
         for face in kernel.tessellate(body.shape)["faces"]
         if face["normal"][2] > 0.999 and face["centroid"][2] > BOX_Z - 0.1
     )
-    extrude_face(session.document, top["index"], 10.0)
+    extrude_faces(session.document, [{"body": body.id, "index": top["index"]}], 10.0)
 
     after = session.state_meta()["bodies"][0]
     assert math.isclose(after["volume"], BOX_X * BOX_Y * (BOX_Z + 10.0), rel_tol=1e-9)

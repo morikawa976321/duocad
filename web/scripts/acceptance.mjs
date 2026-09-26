@@ -60,7 +60,6 @@ const VERBS = [
   'add_rectangle',
   'add_arc',
   'extrude',
-  'extrude_face',
   'fillet',
   'chamfer',
   'pattern_rectangular',
@@ -88,13 +87,10 @@ const VERBS = [
 const AI_ONLY = new Set(['set_parameter'])
 
 /**
- * **人間側が別の名前の口に統合された操作**。面の押し出しはUIの「押し出す」(verb `extrude`)に
- * まとまり、人間側は `extrude_face` を呼べない。面を押す人間側の手は `HUMAN_FACE_EXTRUDE` の名前で
- * 別に試す(`failedLabels` が数える)。AI側は `extrude_face` をまだ持つので列は残る
- * (サーバから消える段で、この集合と `VERBS` の該当行も消える)。
+ * verb `extrude` は領域と面の両方を押す。`VERBS` の `extrude` は領域(スケッチ中)で、面を押す手は
+ * この名前で人間側・AI側それぞれ別に試す(`failedLabels` が数える)。
  */
-const HUMAN_MERGED = new Set(['extrude_face'])
-const HUMAN_FACE_EXTRUDE = 'extrude(面)'
+const FACE_EXTRUDE = 'extrude(面)'
 
 const results = { human: {}, ai: {}, interleaved: null, physical: null, fov: null, zup: null }
 
@@ -117,16 +113,18 @@ function failedLabels(collected) {
   for (const side of ['human', 'ai']) {
     for (const verb of VERBS) {
       // 人間側の口を持たないと**決めた**操作は、人間列を見ない(上記 `AI_ONLY`)。
-      if (side === 'human' && (AI_ONLY.has(verb) || HUMAN_MERGED.has(verb))) continue
+      if (side === 'human' && AI_ONLY.has(verb)) continue
       const entry = collected[side][verb]
       // **未実行も失敗として数える。** 黙って飛ばされた操作は ❌ より始末が悪い。
       if (entry === undefined) failed.push(`${side}/${verb}(未実行)`)
       else if (!entry.ok) failed.push(`${side}/${verb}`)
     }
   }
-  const faceExtrude = collected.human[HUMAN_FACE_EXTRUDE]
-  if (faceExtrude === undefined) failed.push(`human/${HUMAN_FACE_EXTRUDE}(未実行)`)
-  else if (!faceExtrude.ok) failed.push(`human/${HUMAN_FACE_EXTRUDE}`)
+  for (const side of ['human', 'ai']) {
+    const faceExtrude = collected[side][FACE_EXTRUDE]
+    if (faceExtrude === undefined) failed.push(`${side}/${FACE_EXTRUDE}(未実行)`)
+    else if (!faceExtrude.ok) failed.push(`${side}/${FACE_EXTRUDE}`)
+  }
   for (const name of ['interleaved', 'physical', 'fov', 'zup']) {
     const entry = collected[name]
     if (entry === null || entry === undefined) failed.push(`${name}(未実行)`)
@@ -454,7 +452,7 @@ runSmoke(
     await frameAll(page)
     const bodyId = (await look()).parts[0].id
 
-    await attempt('human', HUMAN_FACE_EXTRUDE, async () => {
+    await attempt('human', FACE_EXTRUDE, async () => {
       const before = (await look()).parts[0].volume
       // **押す面は法線で名指しする**(手前=−Y の壁)。**面を「平面のうち最初に射影できた
       // もの」で選ぶと、どの面を押したかが視点で変わってしまう** —— カメラの向きが
@@ -851,7 +849,7 @@ runSmoke(
     })
 
     let aiBody = null
-    await attempt('ai', 'extrude_face', async () => {
+    await attempt('ai', FACE_EXTRUDE, async () => {
       const document = await mcp.callTool('describe_document', {})
       aiBody = document.bodies.filter((body) => body.kind === 'solid').slice(-1)[0].body_id
       const proposed = await mcp.callTool('propose_selection', {
@@ -861,7 +859,7 @@ runSmoke(
       if (!face) throw new Error(`このボディの平面が述語で1枚も選べない: ${JSON.stringify(proposed.selection.items.slice(0, 3))}`)
       await mcp.callTool('propose_selection', { refs: [face] })
       await mcp.callTool('commit_selection')
-      const result = await mcp.callTool('extrude_face', { distance: 3 })
+      const result = await mcp.callTool('extrude', { distance: 3, mode: 'join' })
       return `述語で平面を選び直し、3mm押し出した(seq ${result.seq})`
     })
 

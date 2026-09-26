@@ -434,13 +434,6 @@ def _run_extrude(session: Session, tmp_path: Path) -> dict:
     return session.extrude(SIDE, mode="join")
 
 
-@_runner("extrude_face")
-def _run_extrude_face(session: Session, tmp_path: Path) -> dict:
-    body, _ = _box(session)
-    _select(session, [{"body": body.id, "kind": "face", "index": 1}])
-    return session.extrude_face(5.0)
-
-
 @_runner("fillet")
 def _run_fillet(session: Session, tmp_path: Path) -> dict:
     body, _ = _box(session)

@@ -1,8 +1,8 @@
 """verb層が共有する道具 —— **1 verb 1モジュールを保ったまま、同型の部品だけを1つにする**。
 
-- undo用スナップショット表(`fillet` / `chamfer` / `extrude` / `extrude_face` が使う)と、
+- undo用スナップショット表(`fillet` / `chamfer` / `extrude` が使う)と、
   形状を差し替えるverbの再適用・undo(`reapply_shape` / `undo_shape`)
-- `editable_body()`(`fillet` / `chamfer` / `extrude` / `extrude_face` が使う)
+- `editable_body()`(`fillet` / `chamfer` / `extrude` が使う)
 - ボディを複製するverbの部品(`resolve_shape_ref` / `editable_bodies` / `copy_ids` /
   `add_transformed_copies` / `remove_created_bodies`。`move_body` / `mirror_body` / `boolean_body`)
 - ボディを消す前の退避と undo での復元(`detach_bodies` / `reattach_bodies`。`delete` / `boolean_body`)
@@ -91,7 +91,7 @@ def editable_body(
     起きうる —— 選択に入った時点では可視でも、使う時点では不可視というずれが生じ、選択側の
     門番はもう働かない。実測(`tests/test_agent_concurrency.py`)で `fillet`/`chamfer` が
     この順序で隠したボディを黙って丸めることを確認したため、**面・辺どちらを取るverbも
-    True にする**(`fillet` / `chamfer` / `extrude_face`)。
+    True にする**(`fillet` / `chamfer`)。
     """
     if body_id is None:
         active = doc.active_body()
