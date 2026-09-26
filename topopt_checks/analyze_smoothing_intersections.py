@@ -1,26 +1,18 @@
-"""平滑化後の自己交差が、平滑化前のボクセルのどんな局所形で起きるかを、検証材料の全条件で集計する。
+"""平滑化後の自己交差が起きるボクセルの局所形を、検証材料の全条件で集計する。用語・結果は docs/TOPOPT_SMOOTHING_INTERSECTIONS.md。
 
-    .\\.venv\\Scripts\\python.exe -X utf8 topopt_checks\\analyze_smoothing_intersections.py            # 全条件(再開可・並列)
-    .\\.venv\\Scripts\\python.exe -X utf8 topopt_checks\\analyze_smoothing_intersections.py --one F1000_h2.4_w2
-    .\\.venv\\Scripts\\python.exe -X utf8 topopt_checks\\analyze_smoothing_intersections.py --report    # 集計表(markdown)
-    .\\.venv\\Scripts\\python.exe -X utf8 topopt_checks\\analyze_smoothing_intersections.py --synthetic # 合成マスクでの再現・対照
+    .venv/Scripts/python.exe -X utf8 topopt_checks/analyze_smoothing_intersections.py            # 全条件(再開可・並列)
+    ... --one F1000_h2.4_w2 / --force / --workers N
+    ... --report        # 集計表(markdown)
+    ... --synthetic     # 合成マスクでの再現・対照
+    ... --locality      # 実データの管を切り出して交差が残るか
+    ... --sensitivity   # 管の周りのセルを1個ずつ反転して結果が変わる数
 
-入力: `output/smoothing_corpus/voxel/<条件名>.npz` の `mask`。メッシュは `mesh.build_surface_from_mask(mask)` を既定値のまま呼んで作り直す
-(決定的。`mesh_manifest.json` の交差件数と一致することを条件ごとに確かめる)。座標は要素添字空間(セル `i` は `[i, i+1]`、中心 `i+0.5`)で扱い、
-ワールド座標は `origin + 添字座標 * spacing`。長さ「要素」はセル1個分。
+入力は `output/smoothing_corpus/voxel/<条件名>.npz` の `mask`。`mesh.build_surface_from_mask` を既定値のまま呼び、要素添字空間
+(セル `i` は `[i, i+1]`)で扱う。ワールド座標は `origin + 添字座標 * spacing`。
+出力(`output/smoothing_corpus/`。gitignore 済み): intersection_records/<条件名>.json(1条件の原本)・intersection_sites.json(交差箇所1件1行)・
+intersection_synthetic.json・intersection_locality.json・intersection_sensitivity.json。
 
-出力(`output/smoothing_corpus/`。gitignore 済み):
-  intersection_records/<条件名>.json  1条件の原本(箇所・幅1セルの空隙の全件。最後に書く)
-  intersection_sites.json             全条件の交差箇所を1件1行で並べたもの
-
-用語(この文書とJSONで共通):
-  細い空隙   空セルで、ある軸の両隣(±1セル)が材料であるもの。その軸を「挟まれた軸」と呼ぶ。
-  管         挟まれた軸がちょうど2つ、残る1軸(管の軸)に沿って連なる空セルの列。断面(管の軸に垂直な4方向)が四方とも材料で閉じている。
-             列の両端の外側が材料なら「止」、空セルなら「開」。長さ L = 列のセル数。板を貫く穴は 開-開 で L が板厚に当たる。
-  溝(スリット) 挟まれた軸がちょうど1つの空セル。断面のうち残る4方向に材料が k 個(0,1,2=隣り合う)ある。
-  空洞       3軸とも挟まれた空セル(材料に完全に囲まれた1セル)。
-  壁の間隔   挟まれた軸 a について、そのセルの両面(a方向の低い面と高い面)に立つ平滑化後の頂点どうしの a 座標の差。平滑化前は 1.0 要素。負なら壁が入れ替わった。
-             marching cubes は二値マスクでは境界面の中心に頂点を1つずつ置くので、頂点と境界面が1対1に対応する。
+二値マスクの marching cubes は境界面の中心に頂点を1つずつ置くので、境界面と頂点が1対1に対応する(`_face_vertex_tables` が検査する)。
 """
 from __future__ import annotations
 
@@ -64,7 +56,6 @@ def _parse(name: str) -> tuple[int, float, int]:
 
 
 def _neighbour(padded: np.ndarray, shape: tuple, axis: int, sign: int) -> np.ndarray:
-    """`padded`(マスクを1層パディングしたもの)から、各セルの axis 方向 sign 側の隣のセルの値を切り出す。"""
     sl = tuple(slice(1 + (sign if ax == axis else 0), 1 + (sign if ax == axis else 0) + shape[ax]) for ax in range(3))
     return padded[sl]
 
@@ -92,7 +83,6 @@ def _face_vertex_tables(verts_raw: np.ndarray, shape: tuple) -> list[np.ndarray]
 
 
 def _material_run(padded: np.ndarray, shape: tuple, cells: np.ndarray, axis: int, sign: int, cap: int) -> np.ndarray:
-    """cells(N,3)の各セルから axis 方向 sign 側へ続く材料の連続セル数(上限 cap)。cells 自身は数えない。"""
     count = np.zeros(len(cells), dtype=int)
     alive = np.ones(len(cells), dtype=bool)
     for step in range(1, cap + 1):
@@ -107,7 +97,7 @@ def _material_run(padded: np.ndarray, shape: tuple, cells: np.ndarray, axis: int
 
 
 def _open_extension(padded: np.ndarray, shape: tuple, cell: np.ndarray, axis: int, sign: int) -> int:
-    """管の開いた端の外へ、側面4方向のうち3方向以上が材料の空セルが何個続くか(管が溝として延びている長さ)。"""
+    """管の開いた端の外へ、側面4方向のうち3方向以上が材料の空セルが何個続くか。"""
     side = [ax for ax in range(3) if ax != axis]
     count = 0
     pos = cell.copy()
@@ -127,7 +117,6 @@ def _open_extension(padded: np.ndarray, shape: tuple, cell: np.ndarray, axis: in
 
 
 def analyze_mask(mask: np.ndarray) -> dict:
-    """マスク1個の解析。交差箇所・管の全列・溝と空洞の分布を返す。"""
     from duocad.mesh_intersections import triangle_intersections
     from duocad.topopt import mesh
 
@@ -143,7 +132,6 @@ def analyze_mask(mask: np.ndarray) -> dict:
     pin = [empty & _neighbour(padded, shape, a, -1) & _neighbour(padded, shape, a, 1) for a in range(3)]
 
     def gap(a: int, cells: np.ndarray) -> np.ndarray:
-        """cells(N,3) を軸 a で挟む2面の平滑化後の頂点の a 座標の差。"""
         other = [ax for ax in range(3) if ax != a]
         lo = tables[a][cells[:, a], cells[:, other[0]], cells[:, other[1]]]
         hi = tables[a][cells[:, a] + 1, cells[:, other[0]], cells[:, other[1]]]
@@ -151,9 +139,8 @@ def analyze_mask(mask: np.ndarray) -> dict:
             raise ValueError("挟まれたセルの面に頂点が無い")
         return verts_smooth[hi, a] - verts_smooth[lo, a]
 
-    # --- 管の列 ---
     runs = []
-    cell_run = {}  # (x,y,z) -> 管の列の番号
+    cell_run = {}
     for a in range(3):
         b, c = [ax for ax in range(3) if ax != a]
         tube = pin[b] & pin[c] & ~pin[a]
@@ -203,7 +190,6 @@ def analyze_mask(mask: np.ndarray) -> dict:
             for cell in cells:
                 cell_run[tuple(int(v) for v in cell)] = index
 
-    # --- 溝・空洞 ---
     npin = sum(p.astype(int) for p in pin)
     slit_cells = np.argwhere(npin == 1)
     cavity_cells = np.argwhere(npin == 3)
@@ -221,7 +207,6 @@ def analyze_mask(mask: np.ndarray) -> dict:
     slit_hist = {str(k): np.bincount(_bin(slit_gap[slit_class == k]), minlength=len(GAP_LABELS)).tolist() for k in (0, 1, 2)}
     slit_min = {str(k): (float(slit_gap[slit_class == k].min()) if (slit_class == k).any() else None) for k in (0, 1, 2)}
 
-    # --- 交差の塊 ---
     sites = _cluster_sites(inter, faces, verts_raw, verts_smooth, tables, padded, shape, move, runs, cell_run, pin)
     return dict(
         shape=list(shape), material_cells=int(mask.sum()), intersections=inter["counts"], intersection_pairs=len(inter["pairs"]),
@@ -230,7 +215,6 @@ def analyze_mask(mask: np.ndarray) -> dict:
 
 
 def _empty_side_cell(verts_raw: np.ndarray, padded: np.ndarray, v: int) -> tuple:
-    """頂点(境界面の中心)の、空セル側のセル添字。"""
     p = verts_raw[v]
     a = int(np.argmin(np.abs(p - np.rint(p))))
     n = int(np.rint(p[a]))
@@ -315,9 +299,6 @@ def analyze_condition(name: str) -> dict:
         counts_match_mesh_manifest=result["intersections"] == expected, seconds=round(time.perf_counter() - t0, 1), **result)
 
 
-# ---------------------------------------------------------------------------
-# 集計表
-# ---------------------------------------------------------------------------
 def _load_records() -> list[dict]:
     records = [json.loads((RECORDS / f"{n}.json").read_text(encoding="utf-8")) for n in _names()]
     for record in records:
@@ -392,11 +373,8 @@ def report() -> None:
     print(f"空洞(3軸とも挟まれた1セル): {sum(r['cavity_cells'] for r in records)} セル。管の列に触れていない交差箇所: {other} 件。")
 
 
-# ---------------------------------------------------------------------------
-# 局所性・合成マスク
-# ---------------------------------------------------------------------------
 def local_crossings(mask: np.ndarray, centre, radius: float = 3.5) -> tuple[int, int]:
-    """マスクを製品と同じ経路でメッシュ化し、centre(添字座標)から radius 要素以内の交差の組数と全体の組数を返す。"""
+    """centre(添字座標)から radius 要素以内の交差の組数と、全体の組数。"""
     from duocad.mesh_intersections import triangle_intersections
     from duocad.topopt import mesh
 
@@ -408,7 +386,6 @@ def local_crossings(mask: np.ndarray, centre, radius: float = 3.5) -> tuple[int,
 
 
 def _tube_gap(mask: np.ndarray, centre) -> tuple[float | None, dict | None]:
-    """centre を含む管の列の壁の間隔の最小と、その列(無ければ None)。"""
     best = None
     for run in analyze_mask(mask)["runs"]:
         axis = "xyz".index(run["axis"])
@@ -425,8 +402,7 @@ MARGIN = 4
 
 
 def plate_mask(thickness: int, hole: tuple, size: tuple = (PLATE, PLATE)) -> tuple[np.ndarray, np.ndarray]:
-    """板(厚さ thickness・平面 size)。hole=((x0,x1),(y0,y1)) は板の座標で板を貫く空隙(半開区間)。z が板厚方向。
-    戻り値は (マスク, 穴の中心の添字座標)。"""
+    """hole=((x0,x1),(y0,y1)) は板の座標の半開区間。z が板厚方向。戻り値は (マスク, 穴の中心の添字座標)。"""
     m = np.zeros((size[0] + 2 * MARGIN, size[1] + 2 * MARGIN, thickness + 2 * MARGIN), bool)
     m[MARGIN:MARGIN + size[0], MARGIN:MARGIN + size[1], MARGIN:MARGIN + thickness] = True
     (x0, x1), (y0, y1) = hole
@@ -435,7 +411,6 @@ def plate_mask(thickness: int, hole: tuple, size: tuple = (PLATE, PLATE)) -> tup
 
 
 def blind_mask(depth: int, size: int = 15) -> tuple[np.ndarray, np.ndarray]:
-    """止まり穴: 厚さ depth+3 の板に、上面から深さ depth の 1x1 の穴。"""
     thickness = depth + 3
     m, _ = plate_mask(thickness, ((0, 0), (0, 0)), (size, size))
     h = size // 2
@@ -444,20 +419,25 @@ def blind_mask(depth: int, size: int = 15) -> tuple[np.ndarray, np.ndarray]:
 
 
 def groove_mask(thickness: int, size: int = 15) -> tuple[np.ndarray, np.ndarray]:
-    """片側が開いた溝: 板の縁から中へ入る幅1の切れ込みが板を貫く。"""
     m, _ = plate_mask(thickness, ((0, 0), (0, 0)), (size, size))
     h = size // 2
     m[MARGIN:MARGIN + h + 1, MARGIN + h, MARGIN:MARGIN + thickness] = False
     return m, np.array([MARGIN + h / 2 + .5, MARGIN + h + .5, MARGIN + thickness / 2])
 
 
+def _thin_gap(mask: np.ndarray) -> float | None:
+    """マスク内の細い空隙(管・溝)すべての壁の間隔の最小。細い空隙が無ければ None。"""
+    result = analyze_mask(mask)
+    gaps = [run["gap_min"] for run in result["runs"]] + [g for g in result["slit_min_gap"].values() if g is not None]
+    return min(gaps) if gaps else None
+
+
 def _bars(t: int) -> list:
-    return [plate_mask(t, ((ox, ox + 1), (oy, oy + 1)), (wx, wy)) for wx in (3, 4, 5, 6, 7) for wy in (3, 5, 7)
+    return [plate_mask(t, ((ox, ox + 1), (oy, oy + 1)), (wx, wy)) for wx in (3, 4, 5, 6, 7) for wy in (3, 4, 5, 6, 7)
             for ox in range(1, wx - 1) for oy in range(1, wy - 1)]
 
 
 def synthetic() -> dict:
-    """合成マスクでの再現と対照。板は平面が板厚より十分大きい平板か、細い棒(3〜7 x 3〜7 セル)で、穴は 1x1。"""
     out: dict = {}
     rows = []
     for t in range(1, 13):
@@ -477,9 +457,9 @@ def synthetic() -> dict:
         for d in range(1, 9):
             m, c = build(d)
             near, _ = local_crossings(m, c)
-            gap, run = _tube_gap(m, c)
-            controls.append(dict(kind=name, size=d, pairs=near, tube_gap_min=gap, tube_ends=None if run is None else run["end_lo"] + run["end_hi"]))
-            print(f"対照 {name} {d}: 交差の組 {near}・管の間隔 {'-' if gap is None else format(gap, '.3f')}", flush=True)
+            thin = _thin_gap(m)
+            controls.append(dict(kind=name, size=d, pairs=near, thin_void_gap_min=thin))
+            print(f"対照 {name} {d}: 交差の組 {near}・細い空隙の間隔の最小 {'なし' if thin is None else format(thin, '.3f')}", flush=True)
     out["controls"] = controls
     rng = np.random.default_rng(0)
     perturbed = []
@@ -502,7 +482,6 @@ def synthetic() -> dict:
 
 
 def locality(flips: int = 40, seed: int = 0) -> dict:
-    """実データの 開-開 の管(長さ3以上)の周りを切り出して交差が残るか、周りのセル1個を反転して交差が変わるか。"""
     rng = np.random.default_rng(seed)
     rows = []
     for record in _load_records():
@@ -567,7 +546,6 @@ def _sensitivity_job(args: tuple) -> dict:
 
 
 def sensitivity(radius: int = 4, workers: int = DEFAULT_WORKERS) -> dict:
-    """開-開 の管(長さ3・4)の周り radius セルの窓で、管の周囲1層を除く全セルを1個ずつ反転し、交差の有無が変わる個数を数える。"""
     tasks = [(r["name"], i, radius) for r in _load_records() for i, run in enumerate(r["runs"]) if run["ends"] == "開開" and run["length"] in (3, 4)]
     with ProcessPoolExecutor(max_workers=workers) as pool:
         rows = list(pool.map(_sensitivity_job, tasks))
@@ -580,6 +558,8 @@ def sensitivity(radius: int = 4, workers: int = DEFAULT_WORKERS) -> dict:
 def _work(name: str) -> tuple[str, str | None]:
     try:
         record = analyze_condition(name)
+        if not record["counts_match_mesh_manifest"]:
+            return name, "平滑化後の交差件数が mesh_manifest.json と一致しない"
         RECORDS.mkdir(parents=True, exist_ok=True)
         tmp = RECORDS / f"{name}.json.tmp"
         tmp.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
@@ -593,6 +573,8 @@ def build_sites() -> dict:
     rows, per = [], []
     for name in _names():
         record = json.loads((RECORDS / f"{name}.json").read_text(encoding="utf-8"))
+        if not record["counts_match_mesh_manifest"]:
+            raise ValueError(f"{name}: 平滑化後の交差件数が mesh_manifest.json と一致しない")
         per.append(record)
         for n, site in enumerate(record["sites"]):
             runs = [record["runs"][i] for i in site["run_ids"]]
