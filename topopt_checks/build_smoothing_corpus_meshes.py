@@ -56,8 +56,8 @@ def _boundary_face_count(mask: np.ndarray) -> int:
 
 
 def _check_voxel_stl(name: str, mask: np.ndarray, origin: np.ndarray, spacing: float) -> dict:
-    """ボクセルSTL と npz が同じマスクを表すこと。三角形数が境界面数の2倍で、全三角形が
-    「法線の内側が材料セル・外側が空セル」の面の上にあり(重心で照合)、体積が材料セル数×要素体積。"""
+    """ボクセルSTL と npz が同じマスクを表すこと。三角形数が境界面数の2倍で各境界面がちょうど1つ、全三角形が
+    軸に平行で頂点が格子点にあり「法線の内側が材料セル・外側が空セル」の面の上にあり、体積が材料セル数×要素体積。"""
     tri = read_stl(OUT / "voxel" / f"{name}.stl").astype(np.float64)
     volume = float(np.einsum("ij,ij->", tri[:, 0], np.cross(tri[:, 1], tri[:, 2])) / 6.0)
     cells = int(mask.sum())
@@ -79,8 +79,12 @@ def _check_voxel_stl(name: str, mask: np.ndarray, origin: np.ndarray, spacing: f
         out[ok] = mask[tuple(cell[ok].T)]
         return out
 
-    faces_ok = on_plane & material(inside) & ~material(outside)
-    count_ok = len(tri) == 2 * _boundary_face_count(mask)
+    vertex_grid = (tri - origin) / spacing
+    lattice = (np.abs(vertex_grid - np.round(vertex_grid)) < 1e-3).all(axis=(1, 2))
+    axis_parallel = (np.abs(normal).sum(axis=1) - np.abs(normal[rows, axis])) < 1e-6 * np.abs(normal[rows, axis])
+    faces_ok = lattice & axis_parallel & on_plane & material(inside) & ~material(outside)
+    face_ids = np.unique(np.column_stack([inside, axis, sign]), axis=0)
+    count_ok = len(tri) == 2 * _boundary_face_count(mask) == 2 * len(face_ids)
     ok = bool(faces_ok.all() and count_ok and abs(volume - expected) <= 1e-4 * expected)
     return dict(mask_cells=cells, voxel_stl_volume_mm3=volume, expected_volume_mm3=expected,
                 volume_rel_error=(volume - expected) / expected, triangles=int(len(tri)),
