@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import math
-from typing import List, Sequence
+from typing import List, Sequence, Tuple
 
 from .. import kernel_sketch
 from ..document import Document
@@ -36,15 +36,15 @@ from ..sketch import (
 VERB_ENVELOPE_REGIONS = "envelope_regions"
 
 
-def envelope_regions(
+def envelope_pieces(
     doc: Document,
     regions: Sequence[RegionRef],
     radius: float = 0.0,
     offset: float = 0.0,
-) -> Operation:
-    """`regions`(1つのスケッチの領域)を包んだ単一の領域線を、同じスケッチへ足す。
+) -> Tuple[str, List]:
+    """`regions` を包んだ面の並びと、それが属するスケッチIDを返す。文書は変えない。
 
-    失敗したときは文書にもログにも何も残さない。
+    面の数は判定しない(分裂・消失の判定は呼び出し側。プレビューは分裂した形も見せる)。
     """
     radius, offset = float(radius), float(offset)
     if not (math.isfinite(radius) and math.isfinite(offset)):
@@ -71,12 +71,28 @@ def envelope_regions(
         faces.append(match["face"])
 
     sketch = get_sketch(doc, sketch_id)
-    pieces = kernel_sketch.envelope_faces(sketch.plane, faces, radius, offset)
+    return sketch_id, kernel_sketch.envelope_faces(sketch.plane, faces, radius, offset)
+
+
+def envelope_regions(
+    doc: Document,
+    regions: Sequence[RegionRef],
+    radius: float = 0.0,
+    offset: float = 0.0,
+) -> Operation:
+    """`regions`(1つのスケッチの領域)を包んだ単一の領域線を、同じスケッチへ足す。
+
+    失敗したときは文書にもログにも何も残さない。
+    """
+    radius, offset = float(radius), float(offset)
+    refs = list(regions)
+    sketch_id, pieces = envelope_pieces(doc, refs, radius, offset)
     if not pieces:
         raise ValueError("オフセットで領域が消えます。d を 0 に近づけてください")
     if len(pieces) > 1:
         raise ValueError(f"{len(pieces)} 個に分かれます。R か d を大きくしてください")
 
+    sketch = get_sketch(doc, sketch_id)
     entities = kernel_sketch.face_boundary_entities(sketch.plane, pieces[0])
     for entity in entities:
         require_valid_params(entity["kind"], entity["params"])

@@ -115,6 +115,10 @@ class Command:
     #: する —— `set_parameter` のような操作ログを頭から再生するverbは `speculative` では戻らない
     #: (`speculative.py` の「戻さないもの」)。
     previewable: bool = False
+    #: プレビューを投機実行でなく、**文書を変えずに結果だけ計算する** `Session` のメソッドで出すときの
+    #: 名前(`previewable=True` と組で使う)。投機実行は verb が失敗すると何も返せないので、失敗の手前の
+    #: 形(`envelope_regions` の分裂)も見せたい verb はこちら。
+    preview_session: Optional[str] = None
     #: 文書を変えるか(= 操作ログに載り、応答が状態配信になるか)。保存・書き出しは文書を
     #: 変えないので、応答は書いた先のパスとバイト数だけを要求した接続へ返す。
     changes_document: bool = True
@@ -147,6 +151,8 @@ class Command:
             raise ValueError(f"{self.name}: WSに開けるなら `session` が要る")
         if self.previewable and self.session is None:
             raise ValueError(f"{self.name}: プレビューは `Session` のメソッドを呼ぶ")
+        if self.preview_session is not None and not self.previewable:
+            raise ValueError(f"{self.name}: `preview_session` は `previewable=True` と組で使う")
         if self.resets_selection is None:
             if self.category in SHAPE_CATEGORIES and self.changes_document:
                 raise ValueError(
@@ -866,11 +872,15 @@ COMMANDS: tuple[Command, ...] = (
         ),
         uses_selection=True,
         session="envelope_regions",
+        previewable=True,
+        preview_session="preview_envelope_regions",
         resets_selection=True,
         note=(
             "**WSでは R・d ともに必須**(表は載せた引数を全部必須にする)。UIは空欄を 0 として送る"
             "(`NumberArgSpec.default`)ので、人が空欄のまま確定しても届く。MCPは省略=0。"
-            "**必要な R・d の最小値は計算しない**(本人の決定。分裂したら個数を添えて失敗するだけ)"
+            "**必要な R・d の最小値は計算しない**(本人の決定。分裂したら個数を添えて失敗するだけ)。"
+            "プレビューは投機実行でなく `preview_envelope_regions` で、分裂しても失敗にせず全部の線と"
+            "個数を返す(トーストは確定時だけ。本人決定)"
         ),
     ),
     Command(
@@ -1594,7 +1604,7 @@ if len(BY_NAME) != len(COMMANDS):
 def previewable_verbs() -> dict:
     """`server.PREVIEWABLE_VERBS`: verb名 -> (`Session` のメソッド名, 受け取ってよい引数名)。"""
     return {
-        command.name: (command.session, command.preview_params)
+        command.name: (command.preview_session or command.session, command.preview_params)
         for command in COMMANDS
         if command.previewable
     }

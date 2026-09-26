@@ -463,7 +463,8 @@ export const MIRROR_SKETCH_ENTITIES: CommandDef = {
  * **R(追従半径)と d(オフセット)の両方を打たせる**。どちらも空欄は 0 mm(`default: 0`)で、
  * R = d = 0 なら選択領域の和集合そのものになる。R は幅 2R 未満の隙間とへこみを埋め、d は正で外へ・
  * 負で内へ動かす。**必要な R・d の最小値は出さない** —— 結果が1つの領域にならないときは
- * コアが個数を添えて拒み、トーストで見える(確定時だけ。プレビューは無い)。
+ * コアが個数を添えて拒み、トーストで見える(確定時だけ)。入力中の幽霊はサーバが文書を変えずに
+ * 計算し(`preview_envelope_regions`)、分裂している間は警告色で描く。
  *
  * 対象の領域は確定選択から取る(サーバが取るので引数に載せない)。どのスケッチかは選んだ領域が
  * 持っているので `sketch_id` は足さない(`runsWithoutSketchId`)。
@@ -473,7 +474,7 @@ export const ENVELOPE_REGIONS: CommandDef = {
   category: 'sketch',
   label: '包む',
   buttonId: 'sketch-envelope',
-  preview: 'none',
+  preview: 'server',
   args: [
     {
       kind: 'selection',

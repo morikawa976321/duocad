@@ -602,6 +602,15 @@ export interface PreviewPayload {
     volume: number
     geometry: GeometryPayload
   }>
+  /**
+   * スケッチに足される線の確定前の姿(`catalog.Command.preview_session` の verb だけが載せる)。
+   * `pieces` は結果の領域の数で、1 以外は確定すると拒まれる形。
+   */
+  sketch_ghost: {
+    sketch_id: string
+    entities: Array<{ kind: string; params: Record<string, number> }>
+    pieces: number
+  } | null
 }
 
 /**
@@ -1166,6 +1175,7 @@ export function createSession(hooks: SessionHooks): Session {
       preview_id?: number | null
       verb?: string
       bodies?: PreviewPayload['bodies']
+      sketch_ghost?: PreviewPayload['sketch_ghost']
       body_id?: string
       revision?: number
       edges?: EdgeGeometry[]
@@ -1224,6 +1234,7 @@ export function createSession(hooks: SessionHooks): Session {
         preview_id: message.preview_id ?? null,
         verb: message.verb ?? '',
         bodies: message.bodies ?? [],
+        sketch_ghost: message.sketch_ghost ?? null,
       })
     } else if (message.type === 'edges') {
       hooks.onEdges({

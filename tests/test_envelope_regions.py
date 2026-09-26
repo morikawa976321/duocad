@@ -198,3 +198,32 @@ def test_enveloping_again_over_earlier_envelopes_terminates(session: Session) ->
     for offset in (0.0, 3.0, -3.0):
         applied = _envelope(session, sketch_id, 10.0, offset)
         assert applied["created"]
+
+
+def _preview(session: Session, sketch_id: str, radius: float, offset: float) -> dict:
+    _select(session, [{"sketch": sketch_id, "index": index} for index in range(1, _region_count(session, sketch_id) + 1)])
+    return session.preview("envelope_regions", {"radius": radius, "offset": offset})
+
+
+def test_preview_shows_split_pieces_without_failing_or_touching_the_document(session: Session) -> None:
+    """プレビューは分裂しても拒まず全部の線と個数を返し、文書を変えない。落ちたら入力中にトーストが出るか幽霊が文書に残る。"""
+    sketch_id = _sketch_with_rects(session, [(0, 0, 10, 10), (15, 0, 10, 10)])
+    before = _snapshot(session, sketch_id)
+
+    split = _preview(session, sketch_id, 2.0, 0.0)["sketch_ghost"]
+    assert split["sketch_id"] == sketch_id and split["pieces"] == 2
+    joined = _preview(session, sketch_id, 3.0, 0.0)["sketch_ghost"]
+    assert joined["pieces"] == 1
+    assert {entity["kind"] for entity in joined["entities"]} <= {"line", "arc", "circle"}
+    assert [entity["kind"] for entity in split["entities"]] == ["line"] * 8, "2枚の長方形の辺がそのまま全部出る"
+    assert "arc" in {entity["kind"] for entity in joined["entities"]}
+    assert _preview(session, sketch_id, 0.0, -30.0)["sketch_ghost"] == {"sketch_id": sketch_id, "entities": [], "pieces": 0}
+    assert _snapshot(session, sketch_id) == before
+
+
+def test_preview_draws_what_the_verb_would_add(session: Session) -> None:
+    """単一領域のときプレビューの線は確定で足される線と同じ。落ちたら幽霊と結果が食い違う。"""
+    sketch_id = _sketch_with_rects(session, U_SHAPE)
+    ghost = _preview(session, sketch_id, 10.0, 2.0)["sketch_ghost"]
+    applied = _envelope(session, sketch_id, 10.0, 2.0)
+    assert ghost["entities"] == _created_entities(session, sketch_id, applied["created"])

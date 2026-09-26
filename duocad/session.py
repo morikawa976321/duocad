@@ -23,6 +23,7 @@ from . import (
     catalog,
     io_step,
     kernel,
+    kernel_sketch,
     optimize,
     optimize_run,
     parameters,
@@ -36,6 +37,7 @@ from .measure import measure_selection
 from .oplog import OpLog
 from .paths import DEFAULT_MODELS_DIR
 from .speculative import speculative
+from .verbs.envelope_regions import envelope_pieces
 from .verbs import (
     add_mesh_body as add_mesh_body_verb,
     boolean_body as boolean_body_verb,
@@ -519,6 +521,9 @@ class Session:
         unknown = sorted(set(values) - set(allowed))
         if unknown:
             raise ValueError(f"verb {verb!r} が受け取らない引数: {unknown}(受け取るのは {list(allowed)})")
+        if catalog.BY_NAME[verb].preview_session is not None:
+            # 文書を変えずに結果だけ計算するメソッドなので投機実行で包まない。
+            return {"verb": verb, "bodies": [], **getattr(self, method_name)(**values)}
 
         before = {id(body): body.shape for body in self.document.bodies}
         applied_count = self._applied_count
@@ -916,6 +921,25 @@ class Session:
             "created": list(args["created"]),
             "sketch_ids": [args["sketch_id"]],
         })
+
+    def preview_envelope_regions(self, radius: float = 0.0, offset: float = 0.0) -> dict:
+        """`envelope_regions` の確定前の姿。**文書を変えない**(`Session.preview` の経路)。
+
+        分裂しても失敗にせず、全部の面の境界と面の数(`pieces`)を返す —— 分裂を知らせるのは
+        確定時のトーストで、プレビューは線の色で見せる(本人決定)。消えたときは `pieces=0`。
+        """
+        refs = [
+            region.RegionRef.from_dict(item)
+            for item in selection.require_confirmed(self.document, "region")
+        ]
+        sketch_id, pieces = envelope_pieces(self.document, refs, float(radius), float(offset))
+        plane = sketch.get_sketch(self.document, sketch_id).plane
+        entities = [
+            {"kind": entity["kind"], "params": dict(entity["params"])}
+            for piece in pieces
+            for entity in kernel_sketch.face_boundary_entities(plane, piece)
+        ]
+        return {"sketch_ghost": {"sketch_id": sketch_id, "entities": entities, "pieces": len(pieces)}}
 
     @_edits_document
     def mirror_body(self, base_plane: Optional[str] = None, plane_face: Any = None) -> dict:

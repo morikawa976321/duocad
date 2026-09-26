@@ -736,11 +736,16 @@ export interface Viewport {
    * **個々の図形は`buildEntityLine`が失敗しても他は描く**(表に無い種別・
    * 折れ線化できない図形が1つ混ざっていても、残りの幽霊まで消さない)。
    *
-   * **サーバへ投げない**。図形の形はブラウザ側で分かっており、コアで投機実行すると
-   * 文書に一度は入る(戻すとはいえ)。Escで中断しても文書が変わらないことを、
-   * 「そもそも送らない」で成立させる。
+   * 描く図形は、ブラウザで分かるもの(ローカル方式)か、サーバが**文書を変えずに**計算した
+   * もの(`envelope_regions`)だけ。投機実行の結果は渡さない —— 文書に一度は入るので、
+   * Escで中断しても文書が変わらないことが巻き戻し頼みになる。
+   * `tone: 'warn'` は確定すると拒まれる形(分裂など)。
    */
-  showSketchGhosts(sketchId: string, entities: Array<{ kind: string; params: Record<string, number> }>): void
+  showSketchGhosts(
+    sketchId: string,
+    entities: Array<{ kind: string; params: Record<string, number> }>,
+    tone?: 'normal' | 'warn',
+  ): void
   /**
    * スケッチモードの対象を決める。`null` でモードを抜ける。
    *
