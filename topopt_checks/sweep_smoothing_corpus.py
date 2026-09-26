@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -43,12 +42,12 @@ WIDTH_CELLS = (2, 3, 4, 5)
 LOAD_DIRECTION = [0.0, 0.0, -1.0]
 LOAD_BODY = "body-48c2ba06938d"
 LOAD_FACE_INDEX = 7
-#: 探索の結果が「目標の安全率を満たす形が無い」を意味する状態(`SearchResult.status`)。
 MAX_PARALLEL = 10
 EARLY_SECONDS = 10 * 60
 START_FRACTION = 0.85  # 空きメモリが実測ピークのこの割合を超えたら起動する(ピークは短く、他のアプリの分は Windows が押し出す)
-#: 要素サイズごとの1条件のピークメモリ[GB]。2.4・1.8 は実測(docs/TOPOPT.md)、2.2 は実測 9.4、2.0 は (2.4/2.0)^3 倍の見積もり。
-PEAK_GB = {2.4: 7.5, 2.2: 9.5, 2.0: 13.0, 1.8: 16.7}
+#: 要素サイズごとの1条件のピークメモリ[GB](実測。docs/TOPOPT.md)。
+PEAK_GB = {2.4: 7.5, 2.2: 9.5, 2.0: 12.5, 1.8: 16.7}
+#: 探索の結果が「目標の安全率を満たす形が無い」を意味する状態(`SearchResult.status`)。
 NO_SOLUTION_STATES = ("no_feasible_found", "input_contradiction", "resolution_insufficient")
 
 
@@ -346,12 +345,22 @@ def _acquire_lock() -> bool:
         except FileExistsError:
             try:
                 pid = int(LOCK.read_text().split()[0])
-            except (ValueError, IndexError, OSError):
-                pid = -1
+            except (ValueError, IndexError):
+                pid = -1  # 作成直後で pid が未記入かもしれない: 十分古くなければ触らない
+                if time.time() - LOCK.stat().st_mtime < 5:
+                    return False
+            except OSError:
+                continue
             if pid > 0 and _pid_is_sweep(pid):
                 print(f"別のスイープが走っている(pid {pid})。何もしない", flush=True)
                 return False
-            LOCK.unlink(missing_ok=True)  # 死んだ持ち主の錠
+            # 死んだ持ち主の錠。名前を付け替えて奪う(同時に回収しようとした片方だけが成功する)。
+            grave = LOCK.with_name(f"sweep.lock.stale.{os.getpid()}")
+            try:
+                os.replace(LOCK, grave)
+            except OSError:
+                continue
+            grave.unlink(missing_ok=True)
             continue
         with os.fdopen(fd, "w") as handle:
             handle.write(f"{os.getpid()} {_now()}\n")
