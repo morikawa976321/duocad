@@ -17,7 +17,7 @@
 いずれでも例外を送出し、**documentにもログにも変更を残さない**。とくに「切り取ったのに穴が
 1つも開いていない」を成功として通さないこと。
 
-**OCP を直接importしない**。幾何は `duocad.kernel` 越しに呼ぶ。
+**OCP を直接importしない**。幾何は `duocad.kernel` / `duocad.kernel_extrude` 越しに呼ぶ。
 """
 from __future__ import annotations
 

@@ -276,7 +276,6 @@ def _through_history(history: Any, sub: "TopoDS_Shape") -> List["TopoDS_Shape"]:
     return [sub]
 
 
-
 def _find_translated_face(
     shape_map: "TopTools_IndexedMapOfShape",
     target: tuple,
