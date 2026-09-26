@@ -45,7 +45,7 @@ LOAD_FACE_INDEX = 7
 MAX_PARALLEL = 10
 EARLY_SECONDS = 10 * 60
 START_FRACTION = 0.85  # 空きメモリが実測ピークのこの割合を超えたら起動する(ピークは短く、他のアプリの分は Windows が押し出す)
-#: 要素サイズごとの1条件のピークメモリ[GB](実測。docs/TOPOPT.md)。
+#: 要素サイズごとの1条件のピークメモリ[GB](docs/TOPOPT.md の実測 7.5/9.4/12.4/16.7 の切り上げ)。
 PEAK_GB = {2.4: 7.5, 2.2: 9.5, 2.0: 12.5, 1.8: 16.7}
 #: 探索の結果が「目標の安全率を満たす形が無い」を意味する状態(`SearchResult.status`)。
 NO_SOLUTION_STATES = ("no_feasible_found", "input_contradiction", "resolution_insufficient")
@@ -338,17 +338,21 @@ def _pid_is_sweep(pid: int) -> bool:
 
 
 def _acquire_lock() -> bool:
+    """pid 入りの錠を**中身ごと**作る(一時ファイルを書いてから `os.link`。pid 未記入の錠は存在しない)。"""
     OUT.mkdir(parents=True, exist_ok=True)
-    for _ in range(2):
-        try:
-            fd = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
+    mine = LOCK.with_name(f"sweep.lock.{os.getpid()}.tmp")
+    mine.write_text(f"{os.getpid()} {_now()}\n")
+    try:
+        for _ in range(2):
+            try:
+                os.link(mine, LOCK)
+                return True
+            except FileExistsError:
+                pass
             try:
                 pid = int(LOCK.read_text().split()[0])
             except (ValueError, IndexError):
-                pid = -1  # 作成直後で pid が未記入かもしれない: 十分古くなければ触らない
-                if time.time() - LOCK.stat().st_mtime < 5:
-                    return False
+                pid = -1
             except OSError:
                 continue
             if pid > 0 and _pid_is_sweep(pid):
@@ -361,11 +365,9 @@ def _acquire_lock() -> bool:
             except OSError:
                 continue
             grave.unlink(missing_ok=True)
-            continue
-        with os.fdopen(fd, "w") as handle:
-            handle.write(f"{os.getpid()} {_now()}\n")
-        return True
-    return False
+        return False
+    finally:
+        mine.unlink(missing_ok=True)
 
 
 def _running_children() -> dict:
