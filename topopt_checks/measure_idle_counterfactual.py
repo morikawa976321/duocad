@@ -2,6 +2,7 @@
 
     python topopt_checks/measure_idle_counterfactual.py <荷重N> <要素サイズmm> <最小幅セル> <R(-1 なら差し替えない=製品どおり)> <出力名>
 
+環境変数 MAX_STEP で1回に削る割合の上限(`binary_search.DEFAULT_MAX_STEP_RATIO`、既定 0.2)も差し替えられる。
 製品コードは変えない(このプロセスの中だけで stress.representative_stress を包む)。探索の後で止める(平滑化・finalize は回さない)。
 """
 import json
@@ -21,6 +22,8 @@ from duocad.topopt import binary_search, design_space as ds, mesh, stress, trace
 from _documents import open_session  # noqa: E402
 from sweep_smoothing_corpus import MODEL, _set_load  # noqa: E402
 
+import os
+MAX_STEP = float(os.environ["MAX_STEP"]) if os.environ.get("MAX_STEP") else None  # 1回に削る割合の上限を差し替える(既定 0.2)
 load_n, size, cells, radius, name = int(sys.argv[1]), float(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
 out = REPO / "output" / "idle_study"
 out.mkdir(parents=True, exist_ok=True)
@@ -55,6 +58,8 @@ def rep(field, rho, **k):
 
 
 def search(*a, **k):
+    if MAX_STEP is not None:
+        k["max_step_ratio"] = MAX_STEP
     t0 = time.perf_counter()
     r = real_search(*a, **k)
     captured["search"], captured["seconds"] = r, time.perf_counter() - t0
@@ -75,7 +80,7 @@ with patch.object(trace, "DEFAULT_ROOT", out / "_trace"), patch.object(ds, "deri
 r = captured["search"]
 best = r.best_feasible
 space = captured["space"]
-rec = dict(name=name, load_n=load_n, size=size, cells=cells, radius=radius, status=r.status, termination=r.termination,
+rec = dict(max_step_ratio=MAX_STEP, name=name, load_n=load_n, size=size, cells=cells, radius=radius, status=r.status, termination=r.termination,
            evaluations=r.evaluations, seconds=captured["seconds"], spacing=float(space.grid.spacing),
            material_mm3=None if best is None else float(best.material_mm3),
            cells_final=None if best is None else int(best.mask.sum()),
