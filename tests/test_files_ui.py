@@ -23,7 +23,8 @@ UI(パラメータ編集パネル・操作履歴パネル・ファイル操作)�
 - 版(revision)は開いた後に必ず上がる —— 同じidのBodyを知っているクライアントに
   古い形を描き続けさせない
 - STEP/STL を書き出せ、**STEPは読み戻して体積が一致する**(相対許容差 1e-6)
-  (書き出し/読み込みは `path` のまま。ファイル名だけの制約は保存/開くだけの契約)
+  (書き出し/読み込みは `path`。相対の書き出しは `exports_dir` 基準。読み込みは作業ディレクトリ基準。
+  ファイル名だけの制約は保存/開くだけの契約)
 - STLは**偏差を指定できる**(細かくすると必ずファイルが大きくなる)
 - `state.parameters` に名前つきの値が出て、`set_parameter` で形が追随する
 - **`list_documents` が `models_dir` の中身(名前/更新日時/サイズ/操作数)を返す**
@@ -702,6 +703,35 @@ def test_list_documents_creates_the_folder_and_skips_unreadable_files(session: S
 
     (answer, _clients) = _browser(session, script)
     assert [item["name"] for item in answer["files"]] == ["good.json", "untitled-1.json"]
+
+
+def test_relative_export_paths_go_under_exports_dir(session: Session) -> None:
+    """相対の書き出し先は起動ディレクトリではなく `exports_dir` へ解決される。"""
+    _box(session)
+
+    async def script(send):
+        return await send({"cmd": "export_step", "path": "nested/part.step"})
+
+    (answer, _clients) = _browser(session, script)
+    target = session.exports_dir / "nested" / "part.step"
+    assert Path(answer["path"]) == target
+    assert target.is_file() and target.stat().st_size > 0
+
+
+def test_relative_export_paths_cannot_escape_exports_dir(session: Session) -> None:
+    """`..` と別ドライブのドライブ相対パス(`Z:x.step`)が `exports_dir` の外へ書けてしまう。
+
+    後者は `exports_dir / "Z:x.step"` が別ドライブへ解決される経路で、`resolve()` の後に
+    包含を判定する順序が崩れると通る。
+    """
+    _box(session)
+    escapes = ["../outside.step"]
+    if session.exports_dir.drive:
+        other = "Z" if session.exports_dir.drive.upper() != "Z:" else "Y"
+        escapes.append(f"{other}:outside.step")
+    for path in escapes:
+        with pytest.raises(ValueError, match="export/の外"):
+            session.export_step_file(path)
 
 
 def test_stl_export_always_uses_the_fixed_deviation(session: Session, tmp_path: Path) -> None:

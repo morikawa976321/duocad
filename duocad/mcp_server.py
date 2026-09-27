@@ -1007,17 +1007,17 @@ class DocumentTools:
         `{"path", "bytes", "body_ids", "skipped_hidden"}` を返す —— AIは自分でファイルを
         確かめられないので、戻り値が唯一の確認手段である。
         """
-        return self._export(path, "step")
+        return self._export_file_response(self.session.export_step_file(path))
 
     def export_stl(self, path: str) -> dict:
         """STLを書き出す。粗さは `io_step.STL_DEVIATION` 固定(人の画面にも入力欄は無い)。
         対象は export_step と同じ(いま表示中のBodyだけ・引数で選べない)。"""
-        return self._export(path, "stl")
+        return self._export_file_response(self.session.export_stl_file(path))
 
-    def _export(self, path: str, fmt: str) -> dict:
-        """**パスは素通し**(`Session` と違って作業ディレクトリ基準に解決せず、ディレクトリも検査しない。
-        相対パスは相対のまま応答に出る)。"""
-        return io_step.export(self.session.document, Path(path), fmt)
+    @staticmethod
+    def _export_file_response(payload: dict) -> dict:
+        """`Session.export_*_file` の応答から `action` だけ落とす(WebSocket専用の印)。"""
+        return {key: value for key, value in payload.items() if key != "action"}
 
     # ------------------------------------------------------------------ 履歴
     def undo(self) -> dict:
