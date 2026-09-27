@@ -35,7 +35,7 @@ from . import (
 from .document import Document
 from .measure import measure_selection
 from .oplog import OpLog
-from .paths import DEFAULT_MODELS_DIR
+from .paths import DEFAULT_EXPORTS_DIR, DEFAULT_MODELS_DIR
 from .speculative import speculative
 from .verbs.envelope_regions import envelope_pieces
 from .verbs import (
@@ -116,6 +116,7 @@ class Session:
         step_path: Optional[Path],
         deviation: float,
         models_dir: Optional[Path] = None,
+        exports_dir: Optional[Path] = None,
     ) -> None:
         self.document = Document()
         self.deviation = float(deviation)
@@ -123,6 +124,10 @@ class Session:
         #: (リポジトリ直下の `models/`)。テストが実フォルダを汚さないよう差し替えられる。
         self.models_dir: Path = (
             DEFAULT_MODELS_DIR if models_dir is None else Path(models_dir)
+        ).resolve()
+        #: STEP/STL書き出しの既定の置き場(`DEFAULT_EXPORTS_DIR` = リポジトリ直下の `export/`)。
+        self.exports_dir: Path = (
+            DEFAULT_EXPORTS_DIR if exports_dir is None else Path(exports_dir)
         ).resolve()
         #: `geometry()` や `_sketch_state` が積む警告。**`view` と同じリストオブジェクトを
         #: 共有する**(吸い出す口は `take_warnings()` だけ。2つの持ち主を作らない)。
@@ -1628,14 +1633,33 @@ class Session:
         対象は**いま表示中のBodyだけ**(引数で選べない)。非表示で除外した件数は
         `skipped_hidden` として必ず応答に載る(0件でも載る)。
         """
-        return {"action": "export_step", **io_step.export(self.document, self._export_target(path), "step")}
+        return {"action": "export_step", **io_step.export(self.document, self._resolve_export_path(path), "step")}
 
-    def _export_target(self, path: Any) -> Path:
-        """書き出し先を絶対パスにし、親ディレクトリが無ければ ValueError(ファイルを作らない)。"""
-        target = self._resolve(path)
-        if not target.parent.exists():
-            raise ValueError(f"書き出し先のディレクトリが無い: {target.parent}")
-        return target
+    def _resolve_export_path(self, path: Any) -> Path:
+        """書き出し先を絶対パスにする。
+
+        **相対は `exports_dir` 基準**(起動ディレクトリに依存しない)。絶対パスはそのまま
+        (テスト・MCPの明示パス用)。相対で `exports_dir` の外へ逃げる経路は拒否する。
+        """
+        text = str(path)
+        stripped = text.strip()
+        if stripped == "":
+            raise ValueError("書き出し先が空")
+        if text != stripped:
+            raise ValueError(f"前後の空白は不可: {text!r}")
+        candidate = Path(text).expanduser()
+        if candidate.is_absolute():
+            target = candidate.resolve()
+            if not target.parent.exists():
+                raise ValueError(f"書き出し先のディレクトリが無い: {target.parent}")
+            return target
+        self.exports_dir.mkdir(parents=True, exist_ok=True)
+        root = self.exports_dir.resolve()
+        resolved = (root / text).resolve()
+        if not resolved.is_relative_to(root):
+            raise ValueError(f"export/の外を指している: {text!r} -> {resolved}")
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        return resolved
 
     def export_stl_file(self, path: Any) -> dict:
         """STLを書き出す。粗さは `io_step.STL_DEVIATION` 固定で、人にもAIにも選ばせない。
@@ -1644,7 +1668,7 @@ class Session:
         `skipped_hidden` として必ず応答に載る(0件でも載る)。応答の `deviation` は
         **書いた粗さの記録**であって入力ではない。
         """
-        exported = io_step.export(self.document, self._export_target(path), "stl")
+        exported = io_step.export(self.document, self._resolve_export_path(path), "stl")
         # `deviation` は `bytes` の次(末尾に回すと画面やログの見た目が変わる)。
         return {
             "action": "export_stl",

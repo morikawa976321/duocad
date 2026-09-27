@@ -59,14 +59,8 @@ AI側の対応する規則は [MCP.md](MCP.md)「AIはどこまで自分でや�
 
 **前提**: 以下のコマンドは **リポジトリ直下** をカレントにして実行する（`cd web` などはそこからの相対パス）。
 
-前提はどちらも導入済みなので、**通常は起動コマンド1本だけでよい**。作り直しが要るときだけ:
-
-```powershell
-cd web; npm install; npm run build
-```
-
 > **`web/dist` を作り直さないとUIの変更は画面に出ない。** Pythonサーバが配信するのは
-> `web/src` ではなく `web/dist`（ビルド成果物）。`web/src` を触ったら `npm run build`。
+> `web/src` ではなく `web/dist`（ビルド成果物）。
 
 **立て方は1つ。** MCPとWebSocketと静的配信を1プロセスで兼ねるので、手で触るだけの日も
 AIに頼む日も同じもので立てる。**先にアプリを立てて、Claude Codeが後から繋ぎに来る**（1.2）。
@@ -80,11 +74,17 @@ AIに頼む日も同じもので立てる。**先にアプリを立てて、Clau
 
 ### 1.1 立てる
 
+リポジトリ直下で、次の2行を順に実行する:
+
 ```powershell
-.\.venv\Scripts\python.exe -m duocad.mcp_server --open
+npm run build --prefix web
+.\.venv\Scripts\python.exe -m duocad.mcp_server
 ```
 
-`--open` でブラウザが開く（省略時は開かない）。**ターミナルのstdinが開いている限り生きる**（`Ctrl+C` で終了）。
+初回や `web/package.json` を更新したときだけ、上の1行目の前に
+`npm install --prefix web` を1回足す。
+
+`--open` でブラウザが開く。**ターミナルのstdinが開いている限り生きる**（`Ctrl+C` で終了）。
 **ブラウザで開くURLと待ち受けているポートは、立った時点で stderr に出る。**
 
 ### 1.2 Claude Codeを繋ぐ（登録は要らない）

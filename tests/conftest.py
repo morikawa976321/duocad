@@ -20,6 +20,7 @@ def _default_models_dir_in_tmp(tmp_path, monkeypatch):
     from duocad import session as session_module
 
     monkeypatch.setattr(session_module, "DEFAULT_MODELS_DIR", tmp_path / "default-models")
+    monkeypatch.setattr(session_module, "DEFAULT_EXPORTS_DIR", tmp_path / "default-export")
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +33,7 @@ def _optimization_runs_go_to_a_temporary_directory(tmp_path_factory, monkeypatch
 @pytest.fixture()
 def session(tmp_path) -> Session:
     """STEPを読まない空の文書。`models_dir` を使い捨てにしないと、保存がリポジトリの `duocad/models/` を汚す。"""
-    return Session(None, 0.2, models_dir=tmp_path / "models")
+    return Session(None, 0.2, models_dir=tmp_path / "models", exports_dir=tmp_path / "export")
 
 
 @pytest.fixture()

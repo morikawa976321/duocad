@@ -1244,7 +1244,7 @@ COMMANDS: tuple[Command, ...] = (
             "文書は変えないのでログには載らない。戻り値でパス・バイト数・"
             "非表示で除外した件数(skipped_hidden)を確認する。"
         ),
-        params=(Param("path", "string", "書き出し先パス"),),
+        params=(Param("path", "string", "書き出し先パス(相対ならリポジトリ直下の export/ 基準)"),),
         session="export_step_file",
         changes_document=False,
     ),
@@ -1257,7 +1257,7 @@ COMMANDS: tuple[Command, ...] = (
             "メッシュの粗さは固定で選べない(人の画面にも入力欄は無い)。文書は変えない。"
             "戻り値の skipped_hidden で非表示で除外した件数を確認できる。"
         ),
-        params=(Param("path", "string", "書き出し先パス"),),
+        params=(Param("path", "string", "書き出し先パス(相対ならリポジトリ直下の export/ 基準)"),),
         session="export_stl_file",
         changes_document=False,
     ),

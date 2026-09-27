@@ -212,8 +212,8 @@
 
   // ---------------------------------------------------------------- STEP/STL(入出力)
   /**
-   * 空だけを弾く(**ファイル名の検査`nameProblem`は掛けない**)。STEP/STLは`models/`配下に
-   * 閉じない任意パスで、`commands/files.ts`のdocstringが定めたとおり解釈はサーバに任せる。
+   * 空だけを弾く(**ファイル名の検査`nameProblem`は掛けない**)。相対パスはサーバが
+   * `export/` 基準に解決する(保存の `models/` とは別の置き場)。
    */
   const pathProblem = pathLike('パス')
 
@@ -360,7 +360,7 @@
         type="text"
         autocomplete="off"
         spellcheck="false"
-        placeholder="out.step"
+        placeholder="part.step"
         value={exportStepPath}
         oninput={(event) => (exportStepPath = (event.target as HTMLInputElement).value)}
         onkeydown={(event) => onRowEnter(event, submitExportStep)}
@@ -379,7 +379,7 @@
         type="text"
         autocomplete="off"
         spellcheck="false"
-        placeholder="out.stl"
+        placeholder="part.stl"
         value={exportStlPath}
         oninput={(event) => (exportStlPath = (event.target as HTMLInputElement).value)}
         onkeydown={(event) => onRowEnter(event, submitExportStl)}
