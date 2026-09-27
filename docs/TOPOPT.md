@@ -14,6 +14,7 @@
 | **探索目標係数2.4の根拠** | [TOPOPT_TARGET_FACTOR.md](TOPOPT_TARGET_FACTOR.md) |
 | **段階4の打ち切り(issue #22)の判断材料**(終盤の力学の実測・候補規則の後付け試算) | [TOPOPT_STOP_RULE.md](TOPOPT_STOP_RULE.md) |
 | **仕事をしていない材料が残る原因**(代表応力の母数と保持リング・大きな一歩による局所解) | [TOPOPT_IDLE_MATERIAL.md](TOPOPT_IDLE_MATERIAL.md) |
+| **2026-09-25〜28 の対話セッションの引継ぎ**(平滑化・最終処理・上限・(4)の調査と、残っている問題・判断待ちの全部) | [TOPOPT_HANDOFF_2026-09-28.md](TOPOPT_HANDOFF_2026-09-28.md) |
 
 **コードは `duocad/topopt/`、受入検査は `topopt_checks/`(`duocad/` の外)、画面と撮影は `web/` にある。**
 
