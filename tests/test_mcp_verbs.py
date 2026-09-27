@@ -113,7 +113,8 @@ def test_tool_names_match_the_verb_names_in_the_operation_log():
     """
     from duocad.oplog import registered_verbs
 
-    registered = set(registered_verbs())
+    # `extrude_face` は古い保存ログの再生のためだけに登録が残る(公開ツールではない)
+    registered = set(registered_verbs()) - {"extrude_face"}
     expected = {
         command.name
         for command in COMMANDS
@@ -569,31 +570,25 @@ def test_extrude_can_make_a_new_body(empty_session: Session):
     assert query.volume(created.shape) == pytest.approx(10.0 * 10.0 * BOX_Z, rel=1e-9)
 
 
-def test_extrude_face_takes_its_face_from_the_selection(server: McpServer, box_session: Session):
-    """`extrude_face` は**選択された面**を押す(添字を引数で受けない)。"""
+def test_extrude_takes_its_face_from_the_selection(server: McpServer, box_session: Session):
+    """`extrude` は**選択された面**を押す(添字を引数で受けない)。"""
     box = box_session.document.bodies[0]
     volume_before = query.volume(box.shape)
     select_refs(server, [face_ref(box.id, top_face_index(box.shape))])
 
-    payload = call(server, "extrude_face", {"distance": 5.0})
+    payload = call(server, "extrude", {"distance": 5.0, "mode": "join"})
 
-    _assert_verb_envelope(payload, "extrude_face")
+    _assert_verb_envelope(payload, "extrude")
     assert payload["changed_bodies"] == [box.id]
     assert query.volume(box.shape) == pytest.approx(volume_before + BOX_X * BOX_Y * 5.0, rel=1e-6)
 
 
-def test_extrude_face_refuses_an_ambiguous_selection(server: McpServer, box_session: Session):
-    """面が2枚選ばれていたら**どちらを押すか黙って決めない**。
-
-    「1枚だけ」を要求するのは `extrude_face` がコア側で1枚しか取らないためで、
-    ここで先頭を勝手に選ぶと、AIから見て**指示と結果がずれる**唯一の経路になる。
-    """
+def test_extrude_refuses_faces_that_are_not_coplanar(server: McpServer, box_session: Session):
+    """同一平面でない面が混ざる選択は**どれを押すか黙って決めず**、操作を積まずに断る。"""
     box = box_session.document.bodies[0]
     select_refs(server, [face_ref(box.id, 1), face_ref(box.id, 2)])
-    error = call_error(server, "extrude_face", {"distance": 5.0})
+    error = call_error(server, "extrude", {"distance": 5.0, "mode": "join"})
     assert error["code"] == "invalid_argument"
-    assert error["required_kind"] == "face"
-    assert error["selection"]["count"] == 2
     assert box_session.document.log.entries == [], "拒否したのに操作が積まれた"
 
 
@@ -860,14 +855,14 @@ def test_undo_through_mcp_undoes_the_ui_operation(box_session: Session):
     # 人の操作(アプリ層の経路)。**材料に可視性は使えない** —— `set_visible` は操作ログに
     # 乗らず、undoの対象ではない(`duocad.selection.set_visible`)。
     select_refs(server, [face_ref(box.id, 1)])
-    box_session.extrude_face(5.0)
+    box_session.extrude(5.0, mode="join")
     extruded = call(server, "describe_shape", {"body_id": box.id})["volume"]
     log_length = len(box_session.document.log.entries)
 
     payload = call(server, "undo")
 
     assert payload["verb"] == "undo"
-    assert payload["undone"] == "extrude_face"
+    assert payload["undone"] == "extrude"
     assert call(server, "describe_shape", {"body_id": box.id})["volume"] != pytest.approx(extruded)
     assert len(box_session.document.log.entries) == log_length - 1
     assert payload["changed_bodies"] == [box.id]
@@ -877,13 +872,13 @@ def test_redo_through_mcp_replays_it(box_session: Session):
     box = box_session.document.bodies[0]
     server = McpServer(DocumentTools(box_session))
     select_refs(server, [face_ref(box.id, 1)])
-    box_session.extrude_face(5.0)
+    box_session.extrude(5.0, mode="join")
     extruded = call(server, "describe_shape", {"body_id": box.id})["volume"]
     call(server, "undo")
 
     payload = call(server, "redo")
 
-    assert payload["verb"] == "redo" and payload["redone"] == "extrude_face"
+    assert payload["verb"] == "redo" and payload["redone"] == "extrude"
     assert call(server, "describe_shape", {"body_id": box.id})["volume"] == pytest.approx(extruded)
 
 
@@ -1030,6 +1025,6 @@ def test_the_mcp_layer_does_not_reimplement_verbs():
     source = (Path(__file__).resolve().parent.parent / "duocad" / "mcp_server.py").read_text(
         encoding="utf-8"
     )
-    for forbidden in ("kernel.fillet_edges", "kernel.chamfer_edges", "kernel.extrude_regions",
-                      "kernel.extrude_face_on_shape", "kernel.write_step"):
+    for forbidden in ("kernel.fillet_edges", "kernel.chamfer_edges", "kernel_extrude.extrude_regions",
+                      "kernel_extrude.extrude_faces", "kernel.write_step"):
         assert forbidden not in source, f"MCP層が幾何を直接叩いている: {forbidden}"

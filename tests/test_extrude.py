@@ -1,6 +1,6 @@
 """M2契約: 領域の押し出し(`duocad.verbs.extrude`)。
 
-M1の `extrude_face`(既存ソリッドの面を押す)とは別のverbで、こちらは**スケッチの領域**を
+同じ verb の面を受ける側(面群)は `test_extrude_faces.py`。こちらは**スケッチの領域**を
 `join`(足す)/`cut`(引く)する。
 
 検算はすべて**実測または算術で決まる値**:
@@ -26,8 +26,7 @@ from duocad.document import Body, Document
 from document_support import replay_through_json
 from duocad.region import region_ref, regions
 from duocad.sketch import add_circle, add_line, add_rectangle, sketch_create
-from duocad.verbs import extrude
-from duocad.verbs.extrude_face import extrude_face
+from duocad.verbs import extrude, extrude_faces
 
 #: 板＋穴の構成を最小で作るための寸法
 PLATE_WIDTH = 40.0
@@ -262,8 +261,7 @@ def test_extrude_is_logged_and_undoable():
 
 def test_undo_restores_the_shape_for_fuse_and_cut():
     """既存ボディへの `join`(fuse)と `cut` も undo で元の形状に戻る(「作ったものを
-    消す」経路とは別に「形状を戻す」経路があり、こちらはその検証。`extrude_face` の
-    undoと同じ)。
+    消す」経路とは別に「形状を戻す」経路があり、こちらはその検証)。
     """
     document = plate_document()
     body_id = document.active_body().id
@@ -421,10 +419,10 @@ def test_replay_reproduces_the_plate_with_the_hole():
 
 
 # ---------------------------------------------------------------------------------
-# 面の統合(`extrude_face`)。実STEPを使わない唯一の押し出し検査。
+# 面の統合(面を受ける `extrude`)。実STEPを使わない唯一の押し出し検査。
 # ---------------------------------------------------------------------------------
 
-def test_extrude_face_adopts_face_merging_when_it_helps():
+def test_extrude_faces_adopt_face_merging_when_it_helps():
     """統合が効く場合は採用され、面が増えっぱなしにならない(20mm立方体の上面を+10)。
 
     実測: 統合なし10面 / 統合後6面。**統合を採用する経路**(`BRepTools_History` を通した
@@ -444,11 +442,12 @@ def test_extrude_face_adopts_face_merging_when_it_helps():
         if face["normal"][2] > 0.999 and face["centroid"][2] > 19.9
     )
 
-    operation = extrude_face(document, top["index"], 10.0)
+    operation = extrude_faces(document, [{"body": "box", "index": top["index"]}], 10.0)
 
     assert math.isclose(query.volume(body.shape), 12000.0, rel_tol=1e-9)
     assert kernel.face_count(body.shape) == 6, "同一平面の面が統合されていない"
     assert operation.provenance["unified"] is True
-    assert isinstance(operation.provenance["after_face_index"], int)
+    assert isinstance(operation.provenance["after_face_indices"][0], int)
     assert BRepCheck_Analyzer(body.shape).IsValid()
-    # 履歴経由でも旧添字が新添字へ張れている(全部が「消えた」になっていない)
+    # 履歴経由でも旧添字が新添字へ張れている(押した面以外の5面が「消えた」になっていない)
+    assert sum(1 for new in operation.provenance["face_map"].values() if new) == 5

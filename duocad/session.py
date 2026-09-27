@@ -45,7 +45,7 @@ from .verbs import (
     delete as delete_verb,
     envelope_regions as envelope_regions_verb,
     extrude as extrude_verb,
-    extrude_face as extrude_face_verb,
+    extrude_faces as extrude_faces_verb,
     fillet as fillet_verb,
     import_step as import_step_verb,
     import_svg as import_svg_verb,
@@ -197,7 +197,7 @@ class Session:
         `web/src/App.svelte` の保存済み判定は、この2つを見分けるために**動かないほう**の意味に
         依存している(そちらへ揃える。逆向きに揃えない)。
 
-        書き換える側(`extrude_face` 等の各verb / `_after_logged_verb` / 文書を開く)は
+        書き換える側(`extrude` 等の各verb / `_after_logged_verb` / 文書を開く)は
         従来どおり `_applied_count` を直に動かす。**`preview()` は投機実行のあいだ
         `_applied_count` を退避して戻す**ので、プレビューでこの値は動かない。
         """
@@ -367,27 +367,6 @@ class Session:
             selection.clear_selection(self.document)
 
     # ---------------------------------------------------------------- 操作
-    @_edits_document
-    def extrude_face(self, distance: float) -> dict:
-        """**確定選択の面**(ちょうど1枚)を押し出す。`applied` を返す。
-
-        押す面とそのBodyは引数ではなく選択から取る(`selection.require_confirmed`)——
-        どのBodyの面かは参照が持っているので、27部品のうち1つを選ぶのに引数は要らない。
-        `applied` は `"changed_bodies": [BodyId, ...]` を持つ(差分送信の対象)。
-        """
-        face = selection.require_confirmed(self.document, "face", exactly_one=True)[0]
-        face_index = int(face["index"])
-        operation = extrude_face_verb(
-            self.document, face_index, float(distance), body_id=face["body"]
-        )
-        changed_body_id = operation.args["body_id"]
-        return self._after_logged_verb({
-            "body_id": changed_body_id,
-            "face_index": face_index,
-            "distance": float(distance),
-            "changed_bodies": [changed_body_id],
-        })
-
     def set_visible(self, body_id: str, visible: bool, client_op: Optional[int] = None) -> dict:
         """パーツ一覧からの表示・非表示切り替え。**コアの `selection.set_visible` を呼ぶだけ**
         (アプリ層に可視性の状態を持たせない。実装計画書§2)。
@@ -682,20 +661,23 @@ class Session:
         mode: str = "join",
         body_id: Optional[str] = None,
     ) -> dict:
-        """**確定選択の領域**を押し出す(`verbs.extrude`)。面を押す `extrude_face` とは別。
+        """**確定選択の領域、または同一平面・同一ボディの面**を押し出す(`verbs.extrude`)。
 
-        押し出す領域は引数ではなく選択から取る。**`body_id` だけは引数のまま** ——
-        これは「どのBodyへ足す/から引くか」であって対象集合ではない(Bodyは選択集合の
-        項目ではない。MCPの `extrude` も同じ形)。`mode="new"` は行き先を持たないので
-        `body_id` を渡すと ValueError(ブラウザからは元々送れない)。
+        押す対象は引数ではなく選択から取る(領域と面の混在は ValueError)。**`body_id` だけは
+        引数のまま** —— これは「どのBodyへ足す/から引くか」であって対象集合ではない(Bodyは選択集合の
+        項目ではない。MCPの `extrude` も同じ形)。面のときの既定はその面を持つBody。
+        `mode="new"` は行き先を持たないので `body_id` を渡すと ValueError(ブラウザからは元々送れない)。
         """
-        refs = [
-            region.RegionRef.from_dict(item)
-            for item in selection.require_confirmed(self.document, "region")
-        ]
-        operation = extrude_verb(
-            self.document, refs, float(distance), mode=mode, body_id=body_id
-        )
+        kind, items = selection.require_extrude_targets(self.document)
+        if kind == "face":
+            operation = extrude_faces_verb(
+                self.document, items, float(distance), mode=mode, body_id=body_id
+            )
+        else:
+            refs = [region.RegionRef.from_dict(item) for item in items]
+            operation = extrude_verb(
+                self.document, refs, float(distance), mode=mode, body_id=body_id
+            )
         changed_body_id = operation.args["body_id"]
         return self._after_logged_verb({
             "body_id": changed_body_id,

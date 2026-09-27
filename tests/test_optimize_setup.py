@@ -890,13 +890,13 @@ def test_the_state_is_not_rebuilt_on_every_broadcast(session: Session) -> None:
 
         # **条件と関係の無いボディ**を変えても測り直さない
         _select(session, _face_refs(other, [1]))
-        session.extrude_face(3.0)
+        session.extrude(3.0, mode="join")
         session.state_meta()
         assert calls == [], f"無関係なボディの変更で測り直している: {calls}"
 
         # 条件が指しているボディの形が変われば、そこだけ測り直す
         _select(session, _face_refs(body, [2]))
-        session.extrude_face(3.0)
+        session.extrude(3.0, mode="join")
         session.state_meta()
         assert [item[0] for item in calls] == [body.id], calls
     finally:

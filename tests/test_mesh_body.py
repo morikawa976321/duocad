@@ -20,7 +20,7 @@ from duocad.mcp_server import DocumentTools
 from duocad.oplog import OpLog
 from duocad.server import Session
 from duocad.speculative import speculative
-from duocad.verbs import add_mesh_body, chamfer, delete, extrude_face, fillet, move_body
+from duocad.verbs import add_mesh_body, chamfer, delete, extrude_faces, fillet, move_body
 from duocad.verbs.extrude import _resolve_target
 from document_support import replay_through_json
 from session_support import session_with_box
@@ -243,10 +243,6 @@ def test_a_mesh_body_can_be_deleted_and_the_delete_can_be_undone():
     "call",
     [
         pytest.param(
-            lambda doc, body_id: extrude_face(doc, face_index=1, distance=1.0, body_id=body_id),
-            id="extrude_face",
-        ),
-        pytest.param(
             lambda doc, body_id: fillet(doc, edges=[1], radius=1.0, body_id=body_id),
             id="fillet",
         ),
@@ -275,6 +271,14 @@ def test_edit_verbs_refuse_a_mesh_body_and_say_what_is_possible(call):
     message = str(error.value)
     assert "is a mesh body" in message
     assert EXPECTED_HINT in message
+    assert [op.verb for op in doc.log.entries] == ["add_mesh_body"], "断ったのにログが伸びた"
+
+
+def test_extrude_refuses_the_faces_of_a_mesh_body():
+    """面を受ける `extrude` も、メッシュボディの面は押し出せないと断る(面の解決は `resolve_shape_ref`)。"""
+    doc, body_id = _tetra_doc()
+    with pytest.raises(ValueError, match="メッシュボディの面は押し出せない"):
+        extrude_faces(doc, [{"body": body_id, "index": 1}], 1.0)
     assert [op.verb for op in doc.log.entries] == ["add_mesh_body"], "断ったのにログが伸びた"
 
 

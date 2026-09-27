@@ -371,6 +371,24 @@ def require_confirmed(
     return items
 
 
+def require_extrude_targets(doc: Document) -> tuple[str, List[dict]]:
+    """確定選択から押し出す対象を取る: `("region", 領域の参照)` か `("face", 面の参照)`。
+
+    領域と面が**両方**確定していたら ValueError(どちらを押すつもりか黙って決めない)。どちらも
+    無ければ領域を代表にして `require_confirmed` の拒否(`SelectionEmpty` / `SelectionKindMismatch`)。
+    """
+    regions = confirmed_items(doc, kind=REGION_KIND)
+    faces = confirmed_items(doc, kind="face")
+    if regions and faces:
+        raise ValueError(
+            f"extrude needs regions or faces, not both (selection has {len(regions)} region(s) "
+            f"and {len(faces)} face(s)): 選び直すこと"
+        )
+    if faces:
+        return "face", faces
+    return REGION_KIND, require_confirmed(doc, REGION_KIND)
+
+
 def require_edges(doc: Document) -> tuple[List[int], BodyId]:
     """確定選択の辺の添字と対象Bodyを**選択順のまま**返す(`fillet` / `chamfer` 用)。
 

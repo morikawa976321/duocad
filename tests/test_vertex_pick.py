@@ -151,7 +151,7 @@ def test_the_automatic_commit_reaches_every_client(session: Session) -> None:
 
     async def script(send):
         return await send(
-            {"cmd": "preview", "verb": "extrude_face", "args": {"distance": 5.0}}
+            {"cmd": "preview", "verb": "extrude", "args": {"distance": 5.0, "mode": "join"}}
         )
 
     (answer, clients) = _browser(session, script)
@@ -177,7 +177,7 @@ def test_the_automatic_commit_is_not_counted_as_a_human_selection(session: Sessi
     _propose_face(session, body)
 
     async def script(send):
-        return await send({"cmd": "extrude_face", "distance": 5.0, "client_op": 7})
+        return await send({"cmd": "extrude", "distance": 5.0, "mode": "join", "client_op": 7})
 
     (answer, clients) = _browser(session, script)
 
@@ -190,7 +190,7 @@ def test_the_automatic_commit_is_not_counted_as_a_human_selection(session: Sessi
     assert len(selections) == 1, selections
     assert selections[0]["client_op"] is None
     # verbのほうは今までどおり自分の `client_op` を持って返る
-    assert answer["applied"]["verb"] == "extrude_face"
+    assert answer["applied"]["verb"] == "extrude"
     assert answer["applied"]["client_op"] == 7
 
 

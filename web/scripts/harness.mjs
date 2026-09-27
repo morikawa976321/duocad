@@ -31,6 +31,7 @@ export const SMOKE_PORTS = {
   'smoke-toast': [8805, 8806],
   'smoke-browser-sketches': [8807, 8808],
   'smoke-regions': [8815, 8816],
+  'smoke-extrude-faces': [9017, 9018],
   'smoke-mcp': [8865, 8866],
   acceptance: [8885, 8886],
   'acceptance-solo': [8887, 8888],

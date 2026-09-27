@@ -5,7 +5,7 @@
 1始まりの添字)は `kernel` の側にあり、ここはそれを読むだけ —— 依存は kernel_sketch → kernel の一方向。
 
 戻り値の規律は kernel と同じ(JSON化できる素の値だけ)。例外は `sketch_regions` の戻りに含まれる
-領域の面(`kernel.extrude_regions` の入力になる TopoDS_Face)。
+領域の面(`kernel_extrude.extrude_regions` の入力になる TopoDS_Face)。
 """
 from __future__ import annotations
 

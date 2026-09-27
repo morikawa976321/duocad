@@ -15,7 +15,7 @@
 | STL の偏差は `isRelative=False` で渡す(相対だと偏差を1/20にしても1バイトも変わらない) | `duocad/kernel.py` `tessellate` |
 | 角度偏差の単位はラジアン(`DEFAULT_ANGULAR_DEFLECTION = 0.35` ≈ 20°) | `duocad/kernel.py` `DEFAULT_ANGULAR_DEFLECTION` |
 | `gp_Ax3.ZReverse()` は X/Y を据え置く(左手系)。枠を3ベクトルで保存すると反転面で v 軸だけ鏡像になる | `duocad/kernel_sketch.py` `_ax3_from_frame` |
-| 曲面から `MakePrism` すると `IsDone()` は真でも `BRepCheck_Analyzer` が偽(または体積が激減) | `duocad/kernel.py` `extrude_face` 系 docstring |
+| 曲面から `MakePrism` すると `IsDone()` は真でも `BRepCheck_Analyzer` が偽(または体積が激減) | `duocad/kernel_extrude.py` `_check_coplanar_planes` |
 | `ShapeUpgrade_UnifySameDomain` は入力そのものを壊す(コピーで試してから本番) | `duocad/kernel.py` `_unify_same_domain` |
 | フィレット/面取りは例外を投げず失敗し、半径に対して単調でない | `duocad/kernel.py` `fillet_edges` / `chamfer_edges` |
 | 由来(provenance)の取り出し方は操作ごとに違う(`History()` / `Modified()`、`IsRemoved` / `IsDeleted`) | `duocad/kernel.py` `normalize_provenance` |
@@ -64,6 +64,16 @@
 - **R と d の円弧が同じ点で接する結果の結合は、既定の許容差(1e-7)だと取りこぼしうる**ので、ブーリアンに
   1e-6 のファジー値を付ける（`_ENVELOPE_TOLERANCE`）。ベジエ辺の領域は、オフセットが元の曲線の近似曲線を返し
   線分・円弧だけという指定を満たせないので拒む。
+
+## 複数面の押し出し（`kernel_extrude.extrude_faces`）
+
+- **法線の平行判定は内積ではなく外積の大きさで見る。** OCCT の `Precision::Angular`(1e-12) を許容値に
+  使うと、`1 - cos` は倍精度で 1e-16 未満を区別できないので内積では判定にならない。同一平面の判定は
+  先頭の面の重心からの法線方向の距離を `Precision::Confusion`(1e-7 mm) と比べる。STEP 由来で
+  法線に微小なずれがある面は弾かれうる（エラー文に何番目の面がどの条件に反したかが出る）。
+- 柱を `_fuse_all` で束ねてから1回だけ join / cut し、同一平面の統合（`_unify_same_domain`）は
+  コピーで試して採否を決める。1面の結果は、廃止した verb `extrude_face` の保存済みログの再生結果と
+  体積・面数が一致することをテストで固定している（`tests/test_extrude_face_replay.py`）。
 
 ## STEP ファイル
 

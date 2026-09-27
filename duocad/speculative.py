@@ -1,7 +1,7 @@
 """投機的実行 — verbを試しに実行して**文書を元へ戻す**(プレビューの土台)。
 
     with speculative(doc):
-        extrude_face(doc, face_index=3, distance=5.0)
+        fillet(doc, [3], 1.0)
         payload = kernel.tessellate(body.shape, 0.2)
     # 抜けた時点で文書は with に入る前と完全に同じ
 
@@ -11,7 +11,7 @@
 戻さないもの(意図的):
 
 - `duocad.verbs._common.SNAPSHOTS` の undo用スナップショット。**同一seqの再適用しか
-  起こさないverb**(`extrude_face` / `fillet` / `chamfer` / 領域の `extrude`)なら、確定時に
+  起こさないverb**(`fillet` / `chamfer` / `extrude`)なら、確定時に
   正しい値で上書きされるので誤ったundoにはならない。`set_parameter` のように
   `parameters.rebuild` が**操作ログを頭から再生する**verbは、過去のseqのスナップショットを
   別の値で作り直すため、中断したプレビューの形状が後の実undoで復元されうる。

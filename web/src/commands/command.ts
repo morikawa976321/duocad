@@ -313,7 +313,7 @@ export interface TextArgSpec extends ArgSpecCommon {
  * *どちらか*であって、選択集合から導出できないため —— 選択が空でも基準平面なら揃う。
  *
  * `build` が送るのは基準平面のときの `{base_plane}` だけで、**面は送らない**
- * (`extrude_face` と同じ流儀。面はサーバがコアの確定選択から取る)。
+ * (面はサーバがコアの確定選択から取る)。
  */
 export interface PlaneArgSpec extends ArgSpecCommon {
   kind: 'plane'
@@ -498,49 +498,7 @@ export function buildPathArgs(values: ArgValues): BuildResult {
 // --------------------------------------------------------------------------------------
 // コマンドの定義
 // --------------------------------------------------------------------------------------
-/** 面の押し出し。 */
-const EXTRUDE_FACE: CommandDef = {
-  id: 'extrude_face',
-  category: 'feature',
-  label: '押し出す',
-  buttonId: 'extrude',
-  preview: 'server',
-  args: [
-    { kind: 'selection', name: 'face', label: '押し出す面', shapeKind: 'face', min: 1, max: 1 },
-    {
-      kind: 'number',
-      name: 'distance',
-      label: '距離',
-      unit: 'mm',
-      inputId: 'distance',
-      // 既定値を入れないのと同じ理由で0を弾く: 打たずにEnterした結果
-      // 意図しない距離で確定するのを防ぐ。正=足す / 負=削る。
-      reject: (value) => (value === 0 ? '距離が0(正=足す / 負=削る)' : null),
-    },
-  ],
-  build(values) {
-    // **面そのものは送らない。** 押す面とそのBodyはサーバがコアの確定選択から取る
-    // (`duocad/selection.py` の `require_confirmed`)。ここで見るのは、人がまだ
-    // 選んでいないことを画面へ出すためだけ。
-    const faces = (values.face ?? []) as SelectionRef[]
-    const distance = values.distance
-    if (faces.length === 0) return { ok: false, reason: '面が選ばれていない' }
-    if (typeof distance !== 'number' || !Number.isFinite(distance)) {
-      return { ok: false, reason: '距離が数値でない' }
-    }
-    return { ok: true, args: { distance } }
-  },
-}
-
-/**
- * ソリッドを触るモードの一覧のうち、**このファイルが定義するぶん**(押し出し1つ)。
- * `App.svelte` が `SOLID_FEATURE_COMMANDS`(features.ts)と `SKETCH_CREATE`(sketch.ts)を
- * 後ろに繋いで1つの並びにする(`file` 分類の `CommandDef` は `commands/files.ts` にある ——
- * そちらのモジュールdocstring参照)。スケッチモードの一覧は `commands/sketch.ts`。
- */
-export const COMMANDS: CommandDef[] = [EXTRUDE_FACE]
-
-export function findCommand(id: string, list: CommandDef[] = COMMANDS): CommandDef {
+export function findCommand(id: string, list: CommandDef[]): CommandDef {
   const found = list.find((command) => command.id === id)
   if (!found) throw new Error(`unknown command: ${id}`)
   return found

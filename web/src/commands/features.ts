@@ -48,61 +48,67 @@ function missingSelection(values: ArgValues, name: string, label: string): strin
 }
 
 /**
- * 領域の押し出し。**手だけで板に穴を開けられるようになる1本**。
- *
- * `extrude_face`(面を押す)とは別のverbである。こちらはスケッチの領域を取り、
- * `join` で足し `cut` で引き、`new` で独立したボディにする。**種別を人に選ばせる**のは、
- * 既定の `join` に落ちると「切り取るつもりで足した」が黙って通り、しかも形が増えるので
- * 失敗に見えないため。
+ * 押し出し。**スケッチ編集中は閉領域、通常モードはソリッドの面**を選ぶ1本のverb(`extrude`)。
+ * どちらもサーバは確定選択の種別で分岐する(領域と面の混在は断られる)ので、UI は
+ * 選ぶ対象の違いだけを持つ2つの定義を作る。`join` で足し `cut` で引き、`new` で独立した
+ * ボディにする。**種別を人に選ばせる**のは、既定の `join` に落ちると「切り取るつもりで
+ * 足した」が黙って通り、しかも形が増えるので失敗に見えないため。
  *
  * **`new`(新規ボディ)を明示的に選べることが要る**のは、`join` が「行き先が無ければ作る」
  * という**落ち方**でしか新しいボディを作れなかったから —— 既存のボディがいる文書では
  * 2つ目の板が作れず、黙って融合していた。
+ *
+ * 面の距離は**面の外向きが正**なので、面から削る(`cut`)には負の距離を打つ。
+ * 領域の距離は0だけが無効(符号は領域の向きに対する押し出し方向)。
  */
-export const EXTRUDE_REGIONS: CommandDef = {
-  id: 'extrude',
-  category: 'feature',
-  label: '領域を押し出す',
-  buttonId: 'extrude-regions',
-  preview: 'server',
-  args: [
-    {
-      kind: 'selection',
-      name: 'regions',
-      label: '押し出す領域',
-      shapeKind: 'region',
-      min: 1,
-      max: null,
+function makeExtrude(kind: 'region' | 'face'): CommandDef {
+  const isFace = kind === 'face'
+  const selectionName = isFace ? 'faces' : 'regions'
+  const selectionLabel = isFace ? '押し出す面' : '押し出す領域'
+  return {
+    id: 'extrude',
+    category: 'feature',
+    label: '押し出す',
+    buttonId: 'extrude',
+    preview: 'server',
+    args: [
+      { kind: 'selection', name: selectionName, label: selectionLabel, shapeKind: kind, min: 1, max: null },
+      {
+        kind: 'number',
+        name: 'distance',
+        label: isFace ? '距離(正=面の外向き)' : '距離',
+        unit: 'mm',
+        inputId: 'distance',
+        reject: (value) => (value === 0 ? (isFace ? '距離が0(正=面の外向き / 負=削る)' : '距離が0(形が変わらない)') : null),
+      },
+      {
+        kind: 'choice',
+        name: 'mode',
+        label: '種別',
+        options: [
+          { value: 'join', label: '結合', buttonId: 'extrude-mode-join' },
+          { value: 'cut', label: '切り取り', buttonId: 'extrude-mode-cut' },
+          { value: 'new', label: '新規ボディ', buttonId: 'extrude-mode-new' },
+        ],
+      },
+    ],
+    build(values) {
+      const empty = missingSelection(values, selectionName, isFace ? '面' : '領域')
+      const distance = values.distance
+      const mode = values.mode
+      if (empty !== null) return { ok: false, reason: empty }
+      if (typeof distance !== 'number') return { ok: false, reason: '距離が数値でない' }
+      if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
+      return { ok: true, args: { distance, mode } }
     },
-    {
-      kind: 'number',
-      name: 'distance',
-      label: '距離',
-      unit: 'mm',
-      inputId: 'regions-distance',
-      reject: (value) => (value === 0 ? '距離が0(形が変わらない)' : null),
-    },
-    {
-      kind: 'choice',
-      name: 'mode',
-      label: '種別',
-      options: [
-        { value: 'join', label: '結合', buttonId: 'extrude-mode-join' },
-        { value: 'cut', label: '切り取り', buttonId: 'extrude-mode-cut' },
-        { value: 'new', label: '新規ボディ', buttonId: 'extrude-mode-new' },
-      ],
-    },
-  ],
-  build(values) {
-    const empty = missingSelection(values, 'regions', '領域')
-    const distance = values.distance
-    const mode = values.mode
-    if (empty !== null) return { ok: false, reason: empty }
-    if (typeof distance !== 'number') return { ok: false, reason: '距離が数値でない' }
-    if (typeof mode !== 'string') return { ok: false, reason: '種別が選ばれていない' }
-    return { ok: true, args: { distance, mode } }
-  },
+  }
 }
+
+/** スケッチモードの押し出し(閉領域を選ぶ)。 */
+export const EXTRUDE_REGIONS: CommandDef = makeExtrude('region')
+
+/** 通常モードの押し出し(ソリッドの面を選ぶ。同一平面・同一ボディなら何枚でも)。 */
+export const EXTRUDE_FACES: CommandDef = makeExtrude('face')
 
 /**
  * フィレット。**辺を複数選べることが前提**(複数選択と辺のピッキングの両方が要る)。
@@ -348,12 +354,6 @@ export const PATTERN_CIRCULAR: CommandDef = {
 }
 
 /**
- * ソリッドを触るモードで足すぶん(押し出し・丸める・面取り)。
- *
- * `App.svelte` が `COMMANDS`(`extrude_face`)の後ろへ繋ぐ。**反復はスケッチの
- * 図形を対象にするのでここには入らない**(下の `SKETCH_FEATURE_COMMANDS`)。
- */
-/**
  * ボディの平行移動 / 回転 / 複製。**面でも辺でも頂点でもボディを指せる** ——
  * コアの `selection.require_bodies` が `ShapeRef.body` から逆引きするので、
  * この引数は3種を全部食う(`kinds`)。複数のボディにまたがる選択なら全部が同じ量だけ動く。
@@ -508,7 +508,7 @@ export const MIRROR_BODY: CommandDef = {
  * `CommandDef` を2つに割らないのは、コアの verb が1つだから ——
  * `selection.require_deletable` がボディ由来(面/辺/頂点/ボディ)と図形の**両方**を1回で
  * 畳むので、UI側で分けると「どちらのボタンを押したか」でサーバの挙動が変わるように見える
- * (実際には変わらない)。`EXTRUDE_REGIONS` が既に両方の一覧に居るのと同じ形で、
+ * (実際には変わらない)。`EXTRUDE_REGIONS`/`EXTRUDE_FACES` が同じ id で両方の一覧に居るのと同じ形で、
  * この1つを `SOLID_FEATURE_COMMANDS` と `commands/sketch.ts` の一覧の両方へ入れる。
  *
  * `kinds` に **`region` を入れていない**のは、コアが領域を削除できないからである
@@ -549,8 +549,12 @@ export const DELETE_SELECTION: CommandDef = {
   },
 }
 
+/**
+ * 通常モードのフィーチャ一覧。**反復はスケッチの図形を対象にするのでここには入らない**
+ * (下の `SKETCH_FEATURE_COMMANDS`)。
+ */
 export const SOLID_FEATURE_COMMANDS: CommandDef[] = [
-  EXTRUDE_REGIONS,
+  EXTRUDE_FACES,
   FILLET,
   CHAMFER,
   BOOLEAN_BODY,
@@ -560,12 +564,8 @@ export const SOLID_FEATURE_COMMANDS: CommandDef[] = [
 ]
 
 /**
- * スケッチモードで足すぶん。**領域押し出しは両方に居る** —— 描いた直後にそのまま
- * 押し出せることと、モードを抜けてから領域を選んで押し出せることの両方が要る。
- *
- * **通常モードの側で領域を指す道は3Dクリックだけである** —— このコマンドを起動している
- * 間だけ全スケッチの領域が3Dで指せる(`App.svelte` の `wantsRegions` →
- * `viewport.pickRegions`。辺と同じ規律)。
+ * スケッチモードで足すぶん。**押し出しは領域版**(通常モードは面版。同じ id `extrude`・
+ * 同じボタン `#extrude` で、選ぶ対象だけが違う)。
  */
 export const SKETCH_FEATURE_COMMANDS: CommandDef[] = [
   EXTRUDE_REGIONS,

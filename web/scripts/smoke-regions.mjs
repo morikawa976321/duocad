@@ -1,51 +1,36 @@
 /**
- * 実ブラウザでの領域ピック検査 — **通常モードで領域を指せることの機械検査**。
+ * 実ブラウザでの領域ピック検査 — **領域を押し出せるのはスケッチ編集中だけ**であることの機械検査。
  *
- * 押し出しは両モードに表示し、選択可能対象だけを変える(スケッチモードでは領域、
- * 通常モードでは領域も面も選べる)。領域一覧UIは無いので、**通常モードで領域を指す道は
- * 3Dクリックだけ**である。
+ * 「押し出す」は1つで、スケッチ編集中は閉領域を、通常モードはソリッドの面を選ぶ(通常モードで
+ * 領域を指す道は無い)。領域一覧UIは無いので、領域は編集中のスケッチを3Dでクリックして選ぶ。
  *
  *   web> node scripts/smoke-regions.mjs
  *
- * 見るのは6つで、5つめまではどれも「辺は要求しているコマンドを起動している間だけ指せる」と同型:
+ * 見るのは5つ:
  *
- *   1. **要求していない間は指せない** — 領域に当たる画素が1つも無い
- *   2. **要求している間は指せる** — 「領域を押し出す」を起動すると、**全スケッチ**の領域に
- *      当たる画素ができる(スケッチモードのように1枚に縛られない)
- *   3. **修飾キーの規則が面と同じ** — 置換 / Shift追加(別スケッチと同時) / Ctrl除去
- *   4. **一巡して形が変わる** — 領域クリック → 距離 → 結合 → Enter で板が生まれる(完了条件2)
- *   5. **領域が面より先に取られる / 外すと面に戻る** — 板に隠れた領域の画素が、
- *      起動中は領域になり、別のコマンドへ移ると同じ視界のクリックが面になる
- *   6. **消えた領域は押し出せない** — 添字3の領域を選んだ状態でSketchPanelから
- *      2つめの円の径を縮めると、コアが選択を空にし(a)、領域も3→2に減る。
- *      通常モードで「領域を押し出す」を起動してもその添字にはもう画素が当たらず、
- *      押し出しても文書が変わらない。あわせて `regionsStillExist`(b)のロジックも
- *      合成データで直接検算する
+ *   1. **通常モードで領域は指せない** — 領域に当たる画素が1つも無い
+ *   2. **通常モードの「押し出す」も領域を要求しない** — 起動しても領域に当たる画素はできない
+ *   3. **スケッチ編集中は一巡して形が変わる** — 領域クリック → 距離 → 結合 → Enter で板が生まれ、
+ *      確定した操作が「距離10の結合」である
+ *   4. **修飾キーの規則が面と同じ** — 置換 / Shift追加 / Ctrl除去(編集中のスケッチの領域)
+ *   5. **消えた領域は押し出せない** — 添字3の領域を選んだ状態で2つめの円の径を縮めると、
+ *      コアが選択を空にし(a)、領域も3→2に減る。押し出しを起動しても文書は変わらない。
+ *      あわせて `regionsStillExist`(b)のロジックも合成データで直接検算する
  *
- * 検証6は**添字3を先に選んでから**縮める順序で、選択が1件→0件になる瞬間を
+ * 検証5は**添字3を先に選んでから**縮める順序で、選択が1件→0件になる瞬間を
  * 直接観測する((a)。`tests/test_server_selection_reset.py` に同じ筋のpytestがある)。
  * 先に値を打ち直して領域を消すだけの形だと、選ぶものが最初から無いため
  * `resets_selection` も `regionsStillExist` も実行されない「骨抜き」の検査になる。
- * ただし「引数(距離・種別)まで揃えた状態のままその場でパラメータを差し替える」という
- * 元の順序は、非アクティブな `discSketch` への再入場が `{#key sketchId === null}` で
- * `CommandHost` を作り直す(`App.svelte`)ため再現できない(受け入れた損失) ——
- * 選択(コア側の共有状態)は再入場をまたいで生き残るが、距離・種別の入力(CommandHost
- * ローカルの状態)は失われる。そのため`regionsStillExist`(b)の分岐は**通常のUI操作では
- * 到達できない**ことが構造的に確定しており(領域を変えうる全 `resets_selection` verbが例外なく
- * `resets_selection=True` を持つため。宣言は `duocad/catalog.py`)、
- * ロジック自体の正しさは `window.__duocad.regionsStillExist` を直接呼んで検算する
- * (詳細はApp.svelteの同名関数のdocstringとコード中のコメント)。
+ * `regionsStillExist`(b)の分岐は**通常のUI操作では到達できない**ことが構造的に確定しており
+ * (領域を変えうる全 `resets_selection` verbが例外なく `resets_selection=True` を持つため。
+ * 宣言は `duocad/catalog.py`)、ロジック自体の正しさは `window.__duocad.regionsStillExist`
+ * を直接呼んで検算する(詳細はApp.svelteの同名関数のdocstringとコード中のコメント)。
  *
  * **順序に意味がある**: スケッチ2枚を**ソリッドが1つも無いうちに**作る。基準平面の画素は
  * 「部品に隠れていない所」を探して返すが、**部品の輪郭のすぐ外側**が返ることがあり、
  * クリックが1画素ずれるだけで平面ではなく面に当たる(この検査を書く過程で実際に踏み、
  * 「XY平面に貼ったつもりが板の側面に貼れていた」まま緑になっていた)。
  * `createSketchOnBase` は貼れた平面を毎回検算するので、同じ取り違えは以後**赤で出る**。
- *
- * 検証5が「板に隠れた領域」を見られるのは、板が**その領域そのものから押し出したもの**で、
- * 領域(z=0)の真上に厚み10の板が載るからである。初回のソリッド到着でカメラが
- * `+x/+y/+z` 側へ自動フレームされる(`viewport.update` の初回だけの視点合わせ)ので、
- * 領域の点へ向かうレイは必ず板の上面を通る。
  *
  * **サーバはこのスクリプトが自分で立てる**(`web/scripts/server.mjs`)。
  * 既に立っているものへ繋ぐときだけ `--url` を渡す。
@@ -234,60 +219,41 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
 
     // ============================================== 検証1: 要求していない間は領域を指せない
     if ((await look()).wantsRegions !== false) {
-      fail('起動していないのに領域を要求している(既定のコマンドは「押し出す」=面)')
+      fail('起動していないのに領域を要求している')
     }
     if ((await regionPixel(1, plateSketch)) !== null || (await regionPixel(1, discSketch)) !== null) {
       fail('領域を要求していないのに、領域へ当たる画素がある(常時ピック可能になっている)')
     }
     ok('**要求していない間は指せない**: 通常モードで領域へ当たる画素が1つも無い')
 
-    // ============================================== 検証2: 起動中は全スケッチの領域が指せる
-    await page.click('#extrude-regions')
-    await waitFor(() => window.__duocad.wantsRegions === true, '「領域を押し出す」で領域を要求しない')
+    // ============================================== 検証2: 通常モードの「押し出す」は領域を要求しない
+    await page.click('#extrude')
     await settleLayout()
-    if ((await regionPixel(1, plateSketch)) === null) fail('起動中なのに1枚目の領域を指せない')
-    if ((await regionPixel(1, discSketch)) === null) {
-      fail('起動中なのに2枚目の領域を指せない(active固定のままになっている)')
+    if ((await look()).wantsRegions !== false) {
+      fail('通常モードの「押し出す」が領域を要求している(面版のはず)')
     }
-    ok('**起動している間は指せる**: 全スケッチ(2枚)の領域に当たる画素ができた')
+    if ((await regionPixel(1, plateSketch)) !== null || (await regionPixel(1, discSketch)) !== null) {
+      fail('通常モードの「押し出す」を起動したら、領域へ当たる画素ができた')
+    }
+    await page.keyboard.press('Escape')
+    ok('**通常モードの「押し出す」は面を選ぶ**: 起動しても領域は要求されず、指せる画素も無い')
 
-    // ============================================== 検証3: 修飾キーの規則が面と同じ
-    await clickRegion(discSketch, 1)
+    // ============================================== 検証3: スケッチ編集中に一巡して形が変わる
+    await page.click(`[data-sketch-id="${plateSketch}"] .sketch-name`)
+    await waitFor((id) => window.__duocad.activeSketch === id, 'plateSketchへ入れない', plateSketch)
+    await page.keyboard.press('Escape')
+    await page.click('#sketch-look')
+    await clickRegion(plateSketch, 1)
     await waitFor(
       (sketch) => {
         const items = window.__duocad.selection?.items ?? []
         return items.length === 1 && items[0].sketch === sketch && items[0].index === 1
       },
-      '素のクリックで領域が選べない',
-      discSketch,
-    )
-    await clickRegion(plateSketch, 1, 'Shift')
-    await waitFor(
-      () => (window.__duocad.selection?.items ?? []).length === 2,
-      'Shift+クリックで領域が追加されない',
-    )
-    const both = await pickedRegions()
-    if (!both.includes(`${plateSketch}:1`) || !both.includes(`${discSketch}:1`)) {
-      fail(`2枚のスケッチの領域が同時に選べない: ${JSON.stringify(both)}`)
-    }
-    await clickRegion(discSketch, 1, 'Control')
-    await waitFor(
-      (sketch) => {
-        const items = window.__duocad.selection?.items ?? []
-        return items.length === 1 && items[0].sketch === sketch
-      },
-      'Ctrl+クリックで領域が外れない',
+      'スケッチ編集中に領域を選べない',
       plateSketch,
     )
-    const left = await pickedRegions()
-    if (left.length !== 1 || left[0] !== `${plateSketch}:1`) {
-      fail(`Ctrl除去の後に残る領域が違う: ${JSON.stringify(left)}`)
-    }
-    ok('**修飾キーは面と同じ**: 置換 / Shift追加(別スケッチと同時) / Ctrl除去')
-
-    // ============================================== 検証4: 一巡して形が変わる(完了条件2)
-    // ここで残っている選択は1枚目(長方形)の領域だけ。距離と向きを打って Enter。
-    await typeInto('#regions-distance', PLATE.thickness)
+    await page.click('#extrude')
+    await typeInto('#distance', PLATE.thickness)
     await page.click('#extrude-mode-join')
     await page.keyboard.press('Enter')
     const plateVolume = PLATE.width * PLATE.height * PLATE.thickness
@@ -296,7 +262,7 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
         const parts = window.__duocad.parts
         return parts.length === 1 && Math.abs(parts[0].volume - expected) < expected * 1e-3
       },
-      '通常モードの「領域を押し出す」で板ができない',
+      'スケッチ編集中の「押し出す」で板ができない',
       plateVolume,
     )
     // **送られた操作そのものを見る**。体積だけでは「向きが結合として渡ったか」を分けられない
@@ -315,58 +281,48 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
     ) {
       fail(`確定した操作が「距離10の結合の領域押し出し」ではない: ${JSON.stringify(applied)}`)
     }
-    ok(`**一巡して形が変わった**: 通常モードで 領域クリック → 距離 → 結合 → Enter (体積 ${plateVolume})`)
+    ok(`**一巡して形が変わった**: スケッチ編集中に 領域クリック → 距離 → 結合 → Enter (体積 ${plateVolume})`)
+    await page.evaluate(() => document.activeElement?.blur?.())
+    await page.keyboard.press('Escape')
+    await page.click('#sketch-exit')
+    await waitFor(() => window.__duocad.activeSketch === null, 'plateSketchを抜けられない')
 
-    // ============================================== 検証5: 領域が面より先 / 外すと面に戻る
-    // 板は**その領域から押し出したもの**なので、領域(z=0)の真上に厚み10の板が載っている。
-    // 初回のソリッド到着でカメラは +x/+y/+z 側へ自動フレームされる(`viewport.update`)ので、
-    // 領域の点へ向かうレイは必ず板の上面を通る ——「板に隠れている領域」を押す状況になる。
-    // **確定成功でコマンドは無起動へ戻る**(`commandSucceeded()`)ので、
-    // 検証4のEnterで既に降りている。ここで改めて起動し直す(:377/:533と同じ形)。
-    await page.click('#extrude-regions')
-    await waitFor(() => window.__duocad.wantsRegions === true, '「領域を押し出す」で領域を要求しない')
-    // **指す場所は板の真ん中**(スケッチ座標で (20,15) = 長方形の中心)。領域の内側であり、
-    // かつ真上に厚み10の板が載っている ——「面と領域が同じ場所で競合する」1点である。
-    const middle = [PLATE.width / 2, PLATE.height / 2]
-    const withGate = await sketchPixel(plateSketch, middle[0], middle[1])
-    if (!withGate) fail('板の中心が画面の中に無い(視点が外れている)')
-    await clickAt(withGate)
+    // ============================================== 検証4: 修飾キーの規則が面と同じ
+    await page.click(`[data-sketch-id="${discSketch}"] .sketch-name`)
+    await waitFor((id) => window.__duocad.activeSketch === id, 'discSketchへ入れない', discSketch)
+    await page.keyboard.press('Escape')
+    await page.click('#sketch-look')
+    await clickRegion(discSketch, 1)
     await waitFor(
       (sketch) => {
         const items = window.__duocad.selection?.items ?? []
         return items.length === 1 && items[0].sketch === sketch && items[0].index === 1
       },
-      '板に隠れた領域の場所で領域が取れない(面に取られている)',
-      plateSketch,
+      '素のクリックで領域が選べない',
+      discSketch,
     )
-    ok('**領域が面より先**: 板に隠れている領域の場所で、面ではなく領域が入った')
-
-    await page.keyboard.press('Escape')
-    await page.click('#extrude')
+    await clickRegion(discSketch, 2, 'Shift')
     await waitFor(
-      () => window.__duocad.wantsRegions === false,
-      '面のコマンドへ移っても領域を要求したままになる',
+      () => (window.__duocad.selection?.items ?? []).length === 2,
+      'Shift+クリックで領域が追加されない',
     )
-    if ((await regionPixel(1, plateSketch)) !== null) {
-      fail('面のコマンドへ移ったのに領域へ当たる画素が残っている(ゲートが閉じない)')
+    const both = await pickedRegions()
+    if (!both.includes(`${discSketch}:1`) || !both.includes(`${discSketch}:2`)) {
+      fail(`2つの領域が同時に選べない: ${JSON.stringify(both)}`)
     }
-    // **同じ世界座標をもう一度押す**。これが「領域が面より先」の対で、2つ揃って初めて
-    // 「そこには面も居た(=競合していた)」が言える。コマンドを移るとツールバーの高さが
-    // 変わって画素は動くので、画素ではなくスケッチ座標を持ち越して射影し直す。
-    const withoutGate = await sketchPixel(plateSketch, middle[0], middle[1])
-    if (!withoutGate) fail('板の中心が画面の中に無い(視点が外れている)')
-    await clickAt(withoutGate)
+    await clickRegion(discSketch, 1, 'Control')
     await waitFor(
-      () => {
-        const items = window.__duocad.selection?.items ?? []
-        return items.length === 1 && !('sketch' in items[0])
-      },
-      'ゲートを閉じた後、同じ場所のクリックで面が取れない',
+      () => (window.__duocad.selection?.items ?? []).length === 1,
+      'Ctrl+クリックで領域が外れない',
     )
-    ok('**外すと面に戻る**: 同じ場所が、要求中は領域・外すと面になった(=そこで競合していた)')
+    const left = await pickedRegions()
+    if (left.length !== 1 || left[0] !== `${discSketch}:2`) {
+      fail(`Ctrl除去の後に残る領域が違う: ${JSON.stringify(left)}`)
+    }
+    ok('**修飾キーは面と同じ**: 置換 / Shift追加 / Ctrl除去')
 
-    // ============================================== 検証6: 消えた領域は押し出せない
-    // 「既存の防具(`regionsStillExist`)が通常モードでも効くこと」の対。
+    // ============================================== 検証5: 消えた領域は押し出せない
+    // 「既存の防具(`regionsStillExist`)の対」。
     //
     // 先に消してから選べないことを見るだけの形だと、`resets_selection`(コア)も
     // `regionsStillExist`(`App.svelte`)もどちらも実行されない(選ぶものが最初から
@@ -393,15 +349,11 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
     )
     if (!circleBEntityId) fail('2つめの円のentity_idを引けない')
 
-    // **(a-1) 先に添字3を選ぶ**(まだ実在する領域を、通常モードで本物のクリックで選ぶ)。
-    // **距離・種別はあえて打たない** —— `EXTRUDE_REGIONS` は `preview: 'server'` で、
-    // 引数が揃うとデバウンス後にプレビュー要求を自動で投げる。直後にSketchPanelへ
-    // 再入場して選択を空にすると、飛んでいる途中のプレビュー要求が空の選択で
-    // サーバに届いて `SelectionEmpty` の警告トーストを出す(実測)。ここで見たいのは
-    // 「選択が1件→0件になること」だけなので、プレビューを誘発する残り2つの引数は
-    // 埋めずに済ませる。
-    await page.click('#extrude-regions')
-    await waitFor(() => window.__duocad.wantsRegions === true, '「領域を押し出す」で領域を要求しない')
+    // **(a-1) 先に添字3を選ぶ**(まだ実在する領域を、編集中のスケッチで本物のクリックで選ぶ)。
+    // **距離・種別はあえて打たない** —— 「押し出す」は `preview: 'server'` で、
+    // 引数が揃うとデバウンス後にプレビュー要求を自動で投げる。直後に選択が空になると、
+    // 飛んでいる途中のプレビュー要求が空の選択でサーバに届いて `SelectionEmpty` の
+    // 警告トーストを出す(実測)。ここで見たいのは「選択が1件→0件になること」だけ。
     await clickRegion(discSketch, 3)
     await waitFor(
       (sketch) => {
@@ -416,20 +368,7 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
     )
     if (selectedBeforeShrink !== 1) fail(`縮める前の選択が1件でない: ${selectedBeforeShrink}`)
 
-    // **(a-2) 再入場してSketchPanelから縮める**(人間の実際の手順=「再開」。
-    // BrowserPanelの名前クリック)。再入場は `{#key sketchId === null}` で
-    // `CommandHost` を作り直すので、起動していた `extrude-regions` コマンド自体は
-    // ここで失われる(受け入れた損失。SketchPanelへの統合タスクの帰結)。
-    // **失われないのはコアが持つ共有選択集合**(`selection`)であり、添字3への参照は
-    // ここでもまだ生きている ——だからこそ直後の `set_parameter` がそれを空にする
-    // 瞬間を観測できる。
-    await page.click(`[data-sketch-id="${discSketch}"] .sketch-name`)
-    await waitFor(
-      (id) => window.__duocad.activeSketch === id,
-      'discSketchへ再入場できない',
-      discSketch,
-    )
-    // **径の打ち直しはAI(MCP)の口だけである**。
+    // **(a-2) 径を縮める**。**径の打ち直しはAI(MCP)の口だけである**。
     // ここで見たいのは「選んだ領域が消える形の変更で `resets_selection` が効くか」で、
     // それは**どの経路から打っても同じコアの契約**である(MCPもWSも `Session` を通る)。
     const radiusName = await page.evaluate((id) => {
@@ -467,9 +406,6 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
       '**(a) resets_selection**: 添字3を選んだ状態で径を縮めたら、' +
         'コアが選択を1件→0件に空にした(領域は3→2、添字3は実在しなくなった)',
     )
-
-    await page.click('#sketch-exit')
-    await waitFor(() => window.__duocad.activeSketch === null, 'discSketchを抜けられない')
 
     // **(b) regionsStillExist のロジックを合成データで直接検査する。**
     //
@@ -513,13 +449,13 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
         '本体のロジックを直接呼んで確認した(通常操作では(a)が先回りするため到達しない分岐)',
     )
 
-    // ============================================== 仕上げ: 通常モードでも消えた領域は押し出せない
+    // ============================================== 仕上げ: 消えた領域は押し出せない
     const before = await look()
     const beforeVolume = before.bodies.reduce((sum, body) => sum + body.volume, 0)
     const beforeOps = await page.evaluate(() => window.__duocad.state.log.length)
 
-    await page.click('#extrude-regions')
-    await waitFor(() => window.__duocad.wantsRegions === true, '「領域を押し出す」で領域を要求しない')
+    await page.click('#extrude')
+    await settleLayout()
     if ((await regionPixel(3, discSketch)) !== null) {
       fail('消えたはずの添字3の領域にまだ画素が当たる')
     }
@@ -543,9 +479,11 @@ runSmoke('smoke-regions', { attach: true, mcp: true, handshake: false }, async (
       )
     }
     ok(
-      '**消えた領域は押し出せない**: 添字3が消えた後は通常モードでもその領域へ当たる画素が無く、' +
+      '**消えた領域は押し出せない**: 添字3が消えた後はその領域へ当たる画素が無く、' +
         '押し出しを起動しても文書は不変だった',
     )
+    await page.keyboard.press('Escape')
+    await page.click('#sketch-exit')
 
     // ============================================== 走行中にエラーが出ていないこと
     // **札(DOM)ではなく控えを見る** —— トーストは8秒で消えるので、最後に画面を見ると

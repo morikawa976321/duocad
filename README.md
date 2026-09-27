@@ -387,7 +387,7 @@ README に残すのはアーキテクチャ上の要点だけ:
 
 ### モジュールとimport境界
 
-**`duocad/` 配下で `OCP` を import してよいのはカーネル層の5本(`kernel.py` / `kernel_brep.py` / `kernel_meshing.py` / `kernel_sketch.py` / `mesh_geometry.py`)と `topopt/voxelize.py` だけ、
+**`duocad/` 配下で `OCP` を import してよいのはカーネル層の6本(`kernel.py` / `kernel_brep.py` / `kernel_meshing.py` / `kernel_sketch.py` / `kernel_extrude.py` / `mesh_geometry.py`)と `topopt/voxelize.py` だけ、
 `build123d` は `query.py` と `topopt/` の3本だけ。**
 `tests/test_boundaries.py` がソースを再帰的に静的走査して機械的に検査する（動的importも検出）。
 **verbがカーネルを直接叩き始めるのを防ぐ唯一の安全網。**
@@ -410,6 +410,7 @@ README に残すのはアーキテクチャ上の要点だけ:
 | `duocad/kernel_brep.py` | 同じカーネル層。生成CADのBRep保存・ブーリアン・最終ソリッドの幾何検査と、箱・格子との共通体積(形状最適化の受入検査) | **○** | ✗ |
 | `duocad/mesh_geometry.py` | 同じカーネル層。三角形境界の接続検査と、向き・空洞を保ったCADソリッド化。位相の列挙と compound の定型(`subshapes` / `indexed_map` / `compound`)もここ | **○** | ✗ |
 | `duocad/kernel_sketch.py` | 同じカーネル層。スケッチ平面の枠(`face_frame` / `sketch_plane_frame` / `offset_plane_frame`)、図形種別ごとの辺と2D bbox(`_KERNEL_ENTITY_KIND_TABLE`)、閉領域の検出(`sketch_regions`)。kernel を読むだけの一方向 | **○** | ✗ |
+| `duocad/kernel_extrude.py` | 同じカーネル層。押し出しの幾何(`extrude_faces` = 既存ソリッドの同一平面の面群を join/cut/new、`extrude_regions` = スケッチ領域を join/cut/new)。kernel を読むだけの一方向 | **○** | ✗ |
 | `duocad/kernel_meshing.py` | 同じカーネル層。OCCTの面分割を段階制御し、面分割の直前に境界折れ線の交差を検査して共有辺を再分割する(`tessellate` の実体) | **○** | ✗ |
 | `duocad/boundary_check.py` | 境界折れ線(pcurve の離散点列)の交差・接触・重なりの判定。固定εを使わず、確定しない組だけ整数演算 | ✗ | ✗ |
 | `duocad/mesh_intersections.py` | 三角形メッシュの自己交差(正当な共有辺・共有頂点の接触を除く)。最終成果物の検査 | ✗ | ✗ |

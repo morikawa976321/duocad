@@ -348,7 +348,7 @@ export interface DocumentInfo {
  * (実際、`.svelte` 側だけが `body_ids` を読んでいて宣言が無いまま素通りしていたことがある)。
  * `verb`(verbの適用)と `change`(`"selection"` = 選択の変更、`"document"` = ファイルを開いて
  * 文書ごと差し替わった。どちらも操作ログには載らない)をdiscriminantにしてあるので、
- * `applied.verb === "extrude_face"` で絞り込めば `body_id` / `face_index` / `distance` が
+ * `applied.verb === "extrude"` で絞り込めば `body_id` / `distance` / `mode` が
  * **必須**として見える(他のverbのキーは見えない)。
  *
  * `duocad/session.py` の `Session` が実際に組み立てている形と1:1。**新しいverbを足すときは
@@ -381,13 +381,6 @@ interface AppliedChangeBase {
 }
 
 export type Applied =
-  | (AppliedVerbBase & {
-      verb: 'extrude_face'
-      body_id: string
-      face_index: number
-      distance: number
-      changed_bodies: string[]
-    })
   | (AppliedVerbBase & {
       verb: 'extrude'
       body_id: string

@@ -253,7 +253,7 @@ def test_a_hidden_body_is_not_scanned_and_saying_so_is_an_error(server: McpServe
 SELECTION_CONSUMING_TOOLS = [
     ("fillet", {"radius": 2.0}, "edge"),
     ("chamfer", {"distance": 2.0}, "edge"),
-    ("extrude_face", {"distance": 5.0}, "face"),
+    ("extrude", {"distance": 5.0, "mode": "join"}, "face"),
     ("sketch_create", {}, "face"),
 ]
 
@@ -375,7 +375,7 @@ def test_a_verb_targets_the_body_the_selection_names(tmp_path: Path, tool: str, 
     辺の参照は `body` と `index` の両方を持つ。MCPが `index` だけを取り出して
     `body_id` を渡さないと、コアのverbは**アクティブなBody**を対象にする ——
     27部品のPCケースでは「同じ添字の別部品の辺」を黙って丸める。例外も出ない。
-    `extrude_face` は面の参照から `body` を渡していて、辺の側だけが抜けていた。
+    `extrude` の面の経路は面の参照から `body` を渡していて、辺の側だけが抜けていた。
     """
     session = Session(None, 0.2)
     # **選択する側を先に足す** —— `add_body` は足したBodyをアクティブにするので、

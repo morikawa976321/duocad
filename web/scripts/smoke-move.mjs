@@ -806,24 +806,28 @@ runSmoke('smoke-move', { timeout: 60000 }, async ({ browser, url, timeout }) => 
     await page.click('#sketch-exit')
     await waitFor(() => window.__duocad.activeSketch === null, 'ツールバーの「抜ける」でスケッチを抜けられない')
     ok('ツールバーの「抜ける」でスケッチモードを抜けた(移設先が機能している)')
+    // 通常モードの「押し出す」は面版なので、領域の押し出しはスケッチ編集中に行う。
+    await page.click(`[data-sketch-id="${sketchA}"] .sketch-name`)
+    await waitFor((a) => window.__duocad.activeSketch === a, '押し出しのためAへ入れない', [sketchA])
+    await page.click('#sketch-look')
     await frameAll(page)
 
     const sketchId = await page.evaluate(() => window.__duocad.sketches[0].sketch_id)
-    await page.click('#extrude-regions')
+    await page.click('#extrude')
     await clickRegion(page, 1, { sketchId })
     await waitFor(
       () => (window.__duocad.selection?.items ?? []).some((item) => item.index === 1 && item.entity === undefined),
       '領域を選べない',
     )
     await page.click('#extrude-mode-new')
-    await typeInto(page, '#regions-distance', PLATE.depth)
+    await typeInto(page, '#distance', PLATE.depth)
     await page.keyboard.press('Enter')
     await waitFor(() => (window.__duocad.parts ?? []).length === 1, '領域を押し出してもボディができない')
-    // **Escで無起動へ戻す**。確定してもコマンドは構えたままなので(`CommandHost` の契約)、
-    // 領域のピックが開いたままだと次の面クリックが**手前に浮いている領域に取られる**。
+    // **Escで無起動へ戻し、スケッチを抜ける**(確定してもコマンドは構えたままなので)。
     await page.evaluate(() => document.activeElement?.blur?.())
     await page.keyboard.press('Escape')
-    await waitFor(() => window.__duocad.wantsRegions === false, '領域のピックが閉じない')
+    await page.click('#sketch-exit')
+    await waitFor(() => window.__duocad.activeSketch === null, '押し出し後にスケッチを抜けられない')
     await frameAll(page)
     ok('領域を押し出してボディを1つ作った')
 

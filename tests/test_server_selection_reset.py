@@ -132,7 +132,7 @@ def test_undo_of_a_non_shape_verb_still_clears_the_selection(session: Session) -
 
 def test_redo_clears_the_selection(session: Session) -> None:
     _select(session, [_face(1)])
-    session.extrude_face(5.0)
+    session.extrude(5.0, mode="join")
     session.undo()
     _select(session, [_edge(1)])
 

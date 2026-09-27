@@ -11,8 +11,8 @@ from .boolean_body import boolean_body  # noqa: F401
 from .chamfer import chamfer  # noqa: F401
 from .delete import delete  # noqa: F401
 from .envelope_regions import envelope_regions  # noqa: F401
-from .extrude import extrude  # noqa: F401
-from .extrude_face import extrude_face  # noqa: F401
+from .extrude import extrude, extrude_faces  # noqa: F401
+from . import extrude_face as _extrude_face_replay  # noqa: F401  再生専用verbの登録
 from .fillet import fillet  # noqa: F401
 from .import_editable import import_step  # noqa: F401
 from .import_svg import import_svg  # noqa: F401
@@ -37,7 +37,7 @@ __all__ = [
     "delete",
     "envelope_regions",
     "extrude",
-    "extrude_face",
+    "extrude_faces",
     "fillet",
     "import_step",
     "import_svg",

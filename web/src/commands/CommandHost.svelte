@@ -74,7 +74,6 @@
    */
   import { onDestroy, onMount } from 'svelte'
   import {
-    COMMANDS,
     argApplies,
     argKinds,
     argSatisfied,
@@ -106,7 +105,7 @@
     selection,
     busy,
     selfSelections = 0,
-    commands = COMMANDS,
+    commands,
     defaultCommandId,
     startCommandId,
     hover = null,
@@ -140,11 +139,11 @@
      */
     selfSelections?: number
     /**
-     * このモードで使えるコマンド。既定はソリッドを触るぶん。
-     * スケッチモードでは `commands/sketch.ts` の一覧が渡る —— **状態機械は同じ1つ**で、
-     * 変わるのは一覧と既定だけ(モードごとにUIを作り直さない)。
+     * このモードで使えるコマンド(モードごとの一覧を `App.svelte` が渡す)。**状態機械は同じ1つ**で、
+     * 変わるのは一覧と既定だけ(モードごとにUIを作り直さない)。`extrude` のように
+     * 同じ id が複数のモードに居ても、`findCommand` はこの一覧の中だけで引く。
      */
-    commands?: CommandDef[]
+    commands: CommandDef[]
     /** 起動していない状態を表すには渡さない(`undefined`)。渡さなければ `null`(無起動)になる。 */
     defaultCommandId?: string
     /**

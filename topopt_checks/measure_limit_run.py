@@ -71,16 +71,33 @@ def main() -> int:
 
     stop = threading.Event()
     aborted = threading.Event()
+    OUT.mkdir(parents=True, exist_ok=True)
+    progress_path = OUT / f"{name}.progress.jsonl"
+    started = time.perf_counter()
+
+    def write_record() -> None:
+        record.update(seconds=time.perf_counter() - started, **_peak_memory_mb(),
+                      finished_at=datetime.now().astimezone().isoformat(timespec="seconds"))
+        (OUT / f"{name}.json").write_text(_record.dumps(record, default=float) + "\n", encoding="utf-8")
 
     def watchdog() -> None:
+        # 途中で降りても(PC ごと落ちても)そこまでのピークが残るように、30秒ごとに追記する。
+        last = 0.0
         while not stop.wait(2.0):
+            if time.perf_counter() - last >= 30.0:
+                last = time.perf_counter()
+                with progress_path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(dict(at=datetime.now().astimezone().isoformat(timespec="seconds"),
+                                            seconds=round(last - started), available_gb=round(_available_gb(), 2),
+                                            **_peak_memory_mb())) + "\n")
             if _available_gb() < args.abort_free_gb:
                 aborted.set()
                 print("空きメモリが下限を割ったので降りる", flush=True)
+                record.update(status="aborted_low_memory", available_gb_at_abort=round(_available_gb(), 2))
+                write_record()
                 os._exit(3)
 
     threading.Thread(target=watchdog, daemon=True).start()
-    started = time.perf_counter()
     try:
         if args.derive_only:
             bundle = optimize_run.build_conditions(doc)
@@ -96,10 +113,7 @@ def main() -> int:
     except Exception as error:  # noqa: BLE001 - 失敗も記録する
         record.update(status="error", error=f"{type(error).__name__}: {error}")
     stop.set()
-    record.update(seconds=time.perf_counter() - started, **_peak_memory_mb(),
-                  finished_at=datetime.now().astimezone().isoformat(timespec="seconds"))
-    OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / f"{name}.json").write_text(_record.dumps(record, default=float) + "\n", encoding="utf-8")
+    write_record()
     print(json.dumps(record, ensure_ascii=False, indent=1, default=float))
     return 0 if record["status"] == "ok" else 1
 

@@ -7,14 +7,14 @@ import json
 
 import pytest
 
-from duocad import kernel, selection
+from duocad import kernel, kernel_extrude, selection
 from duocad.document import Body, Document
 from duocad.oplog import OpLog
 from duocad.region import region_ref, regions
 from duocad.selection import set_visible
 from duocad.server import Session
 from duocad.sketch import add_circle, sketch_create
-from duocad.verbs import extrude_face
+from duocad.verbs import extrude_faces
 from document_support import box_shape as _box_shape
 from session_support import session_with_box
 
@@ -54,7 +54,7 @@ def _first_extrudable_face(shape) -> int:
     """押し出しに成功する最初の面の1始まり添字(添字の決め打ちを避ける)。"""
     for index in range(1, kernel.face_count(shape) + 1):
         try:
-            kernel.extrude_face_on_shape(shape, index, EXTRUDE_MM)
+            kernel_extrude.extrude_faces(shape, [index], EXTRUDE_MM, "join", target_shape=shape)
         except Exception:  # noqa: BLE001  曲面・退化など押せない面は飛ばす
             continue
         return index
@@ -237,7 +237,7 @@ def test_operating_the_raw_verb_function_does_not_touch_selection(doc: Document)
     before = selection.modify_selection(doc, add=[selection.select_face(doc, "box", face_index)])
     kept = [dict(item) for item in before.items]
 
-    extrude_face(doc, face_index, EXTRUDE_MM)
+    extrude_faces(doc, [{"body": "box", "index": face_index}], EXTRUDE_MM)
 
     assert selection.get_selection(doc).items == kept
 
