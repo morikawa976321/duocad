@@ -156,8 +156,6 @@ def run_bending(levels: list[int]) -> list[dict]:
     records = []
     stress_levels = []
     defl_levels = []
-    ratios = []
-    prev_el = None
     for level in levels:
         # 基準比 length:width:height = 100:10:20 = 10:1:2 に要素数を揃える(等方格子なので
         # tension側と同じ理由で3軸とも同じ比率で細分しないと物理寸法がlevelごとに動く。
@@ -167,9 +165,6 @@ def run_bending(levels: list[int]) -> list[dict]:
         nely = 1 * level
         nelz = 2 * level
         element_mm = BEND_LENGTH_MM / nelx
-        if prev_el is not None:
-            ratios.append(prev_el / element_mm)
-        prev_el = element_mm
         fixed, load = _bending_fixed_load(nelx, nely, nelz, BENDING_LOAD_N)
         model = fem.Model(
             nelx, nely, nelz, fixed_dofs=fixed, load=load, active_mask=np.ones((nelx, nely, nelz), bool)
@@ -186,9 +181,26 @@ def run_bending(levels: list[int]) -> list[dict]:
         # を仮定)との比較が細分するほど不利になる(level間で比較の物理位置がずれる実装ミスを
         # ここで避けている)。BEND_PROBE_X_MMはlevel=1のindex=2(=20mm)と同じ物理位置に揃えてある。
         i_probe = min(max(1, round(BEND_PROBE_X_MM / element_mm)), nelx - 1)
+        probe_x_actual_mm = (i_probe + 0.5) * element_mm
+        probe_z_half_actual_mm = BEND_HEIGHT_MM / 2.0 - element_mm / 2.0
+        moment_arm_actual_mm = BEND_LENGTH_MM - probe_x_actual_mm
+        position_correction_invalid = probe_z_half_actual_mm <= 0.0
+        if position_correction_invalid:
+            sigma_theory_position_corrected = None
+            relative_error_stress_position_corrected = None
+        else:
+            sigma_theory_position_corrected = (
+                BENDING_LOAD_N * moment_arm_actual_mm * probe_z_half_actual_mm / I
+            )
+            relative_error_stress_position_corrected = None
         top = field.tensor[i_probe, :, -1, 0]
         bot = field.tensor[i_probe, :, 0, 0]
         sigma_fem = float(max(abs(top.max()), abs(bot.min())))
+        if sigma_theory_position_corrected is not None:
+            relative_error_stress_position_corrected = (
+                abs(sigma_fem - sigma_theory_position_corrected)
+                / sigma_theory_position_corrected
+            )
         stress_levels.append(sigma_fem)
         ny1 = nely + 1
         nz1 = nelz + 1
@@ -202,14 +214,28 @@ def run_bending(levels: list[int]) -> list[dict]:
                 sigma_max_fem_mpa=sigma_fem,
                 sigma_max_theory_mpa=sigma_theory,
                 relative_error_stress=abs(sigma_fem - sigma_theory) / sigma_theory,
+                sigma_theory_position_corrected_mpa=sigma_theory_position_corrected,
+                relative_error_stress_position_corrected=relative_error_stress_position_corrected,
+                probe_x_actual_mm=float(probe_x_actual_mm),
+                probe_z_half_actual_mm=float(probe_z_half_actual_mm),
+                position_correction_invalid=position_correction_invalid,
                 tip_deflection_fem_mm=tip_defl,
                 tip_deflection_theory_mm=tip_theory,
                 relative_error_deflection=abs(abs(tip_defl) - tip_theory) / tip_theory,
                 residual=rel,
             )
         )
-    rich_stress = _fem_probe.richardson_extrapolate(stress_levels, ratios) if len(stress_levels) >= 2 else None
-    rich_defl = _fem_probe.richardson_extrapolate(defl_levels, ratios) if len(defl_levels) >= 2 else None
+    element_mm_list = [rec["element_mm"] for rec in records]
+    rich_stress = (
+        _fem_probe.richardson_extrapolate_general(stress_levels, element_mm_list)
+        if len(stress_levels) >= 2
+        else None
+    )
+    rich_defl = (
+        _fem_probe.richardson_extrapolate_general(defl_levels, element_mm_list)
+        if len(defl_levels) >= 2
+        else None
+    )
     for i, rec in enumerate(records):
         rec["richardson_stress"] = rich_stress
         rec["richardson_deflection"] = rich_defl

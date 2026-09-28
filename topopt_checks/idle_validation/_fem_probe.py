@@ -384,6 +384,116 @@ def richardson_extrapolate(values: list[float], ratios: list[float]) -> dict | N
     return dict(order_estimates=order_estimates, extrapolated=extrapolated)
 
 
+def _richardson_rhs(p: float, ratio_a: float, ratio_b: float) -> float:
+    rb = ratio_b ** p
+    ra = ratio_a ** p
+    denom = rb - 1.0
+    if abs(denom) < 1e-30:
+        return float("nan")
+    return rb * (ra - 1.0) / denom
+
+
+def _richardson_solve_order(
+    d0: float, d1: float, ratio_a: float, ratio_b: float
+) -> float | None:
+    if d0 * d1 <= 0.0:
+        return None
+    target = d0 / d1
+    if target <= 0.0:
+        return None
+
+    p_lo, p_hi = 1e-3, 10.0
+    rhs_lo = _richardson_rhs(p_lo, ratio_a, ratio_b)
+    rhs_hi = _richardson_rhs(p_hi, ratio_a, ratio_b)
+    if not math.isfinite(rhs_lo) or not math.isfinite(rhs_hi):
+        return None
+    f_lo = target - rhs_lo
+    f_hi = target - rhs_hi
+    if f_lo * f_hi > 0.0:
+        return None
+
+    for _ in range(200):
+        p_mid = (p_lo + p_hi) / 2.0
+        rhs_mid = _richardson_rhs(p_mid, ratio_a, ratio_b)
+        if not math.isfinite(rhs_mid):
+            return None
+        f_mid = target - rhs_mid
+        if abs(f_mid) < 1e-10:
+            return p_mid
+        if f_lo * f_mid <= 0.0:
+            p_hi = p_mid
+            f_hi = f_mid
+        else:
+            p_lo = p_mid
+            f_lo = f_mid
+    return (p_lo + p_hi) / 2.0
+
+
+def richardson_extrapolate_general(values: list[float], spacings: list[float]) -> dict | None:
+    if len(values) < 2:
+        return None
+    if len(spacings) != len(values):
+        raise ValueError("values と spacings の長さが一致すること")
+    order_estimates: list[float | None] = []
+    extrapolated: list[float | None] = []
+    window_diagnostics: list[dict] = []
+    n = len(values)
+    for i in range(n - 2):
+        h1, h2, h3 = spacings[i], spacings[i + 1], spacings[i + 2]
+        if h2 <= 0.0 or h3 <= 0.0 or h1 <= 0.0:
+            raise ValueError("spacing は正であること")
+        ratio_a = h1 / h2
+        ratio_b = h2 / h3
+        if ratio_a <= 1.0 or ratio_b <= 1.0:
+            raise ValueError("spacings は粗い順(各隣接比>1)であること")
+        d0 = values[i] - values[i + 1]
+        d1 = values[i + 1] - values[i + 2]
+        diag: dict = dict(
+            ratio_a=float(ratio_a),
+            ratio_b=float(ratio_b),
+            converged_no_extrapolation_needed=False,
+            no_solution=False,
+        )
+        if abs(d0) < 1e-12 or abs(d1) < 1e-12:
+            diag["converged_no_extrapolation_needed"] = True
+            order_estimates.append(None)
+            extrapolated.append(None)
+            window_diagnostics.append(diag)
+            continue
+        target = d0 / d1
+        rhs_lo = _richardson_rhs(1e-3, ratio_a, ratio_b)
+        if not math.isfinite(rhs_lo) or (target > 0.0) != (rhs_lo > 0.0):
+            diag["no_solution"] = True
+            order_estimates.append(None)
+            extrapolated.append(None)
+            window_diagnostics.append(diag)
+            continue
+        p = _richardson_solve_order(d0, d1, ratio_a, ratio_b)
+        if p is None or not math.isfinite(p) or p <= 0.0:
+            diag["no_solution"] = True
+            order_estimates.append(None)
+            extrapolated.append(None)
+            window_diagnostics.append(diag)
+            continue
+        order_estimates.append(float(p))
+        denom = ratio_b ** p - 1.0
+        if abs(denom) < 1e-30:
+            extrapolated.append(None)
+        else:
+            v_inf = values[i + 2] + (values[i + 2] - values[i + 1]) / denom
+            extrapolated.append(float(v_inf) if math.isfinite(v_inf) else None)
+        window_diagnostics.append(diag)
+    while len(order_estimates) < max(0, n - 2):
+        order_estimates.append(None)
+    while len(extrapolated) < max(0, n - 2):
+        extrapolated.append(None)
+    return dict(
+        order_estimates=order_estimates,
+        extrapolated=extrapolated,
+        window_diagnostics=window_diagnostics,
+    )
+
+
 def face_world_boxes(table, faces: Sequence[int]) -> list[tuple]:
     """拘束/荷重面の節点座標からワールドAABBを作る。"""
     boxes = []

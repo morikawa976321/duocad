@@ -46,6 +46,71 @@ def _set_load_doc(doc, newtons: float) -> None:
             load["vector"] = [c * float(newtons) for c in load["direction"]]
 
 
+def _project_mask_exact_subdivide(
+    src_mask: np.ndarray, level: int, fine_space, src_origin, src_spacing: float
+) -> tuple[np.ndarray, dict]:
+    """元マスクの各セルを level^3 個の同一の子セルへ厳密に分割し(体積保存)、
+    fine_space.grid の実際の外枠(origin・shape)に合わせて配置する。
+    """
+    if level < 1:
+        raise ValueError(f"level must be >= 1, got {level}")
+    src_mask = np.asarray(src_mask, dtype=bool)
+    fine_spacing = np.asarray(fine_space.grid.spacing, dtype=float)
+    fine_origin = np.asarray(fine_space.grid.origin, dtype=float)
+    src_origin_arr = np.asarray(src_origin, dtype=float)
+    fine_shape = tuple(int(x) for x in fine_space.grid.shape)
+
+    delta = fine_origin - src_origin_arr
+    offset_float = delta / fine_spacing
+    offset_cells = np.rint(offset_float).astype(int)
+    residual = delta - offset_cells.astype(float) * fine_spacing
+    if not np.all(np.abs(residual) <= 1e-6):
+        raise ValueError(
+            "fine_space.grid.origin が src_origin から細格子 spacing の整数倍だけずれていない: "
+            f"delta_mm={delta.tolist()} spacing_mm={fine_spacing.tolist()}"
+        )
+
+    full_mask = src_mask.repeat(level, axis=0).repeat(level, axis=1).repeat(level, axis=2)
+    full_shape = full_mask.shape
+    cell_vol = float(np.prod(fine_spacing))
+    volume_before_crop_mm3 = float(full_mask.sum()) * cell_vol
+
+    fine_mask = np.zeros(fine_shape, dtype=bool)
+    full_start = []
+    full_end = []
+    fine_start = []
+    fine_end = []
+    for d in range(3):
+        fs = max(0, int(offset_cells[d]))
+        fe = min(full_shape[d], int(offset_cells[d]) + fine_shape[d])
+        gs = max(0, -int(offset_cells[d]))
+        ge = gs + (fe - fs)
+        full_start.append(fs)
+        full_end.append(fe)
+        fine_start.append(gs)
+        fine_end.append(ge)
+
+    sl_full = tuple(slice(full_start[d], full_end[d]) for d in range(3))
+    sl_fine = tuple(slice(fine_start[d], fine_end[d]) for d in range(3))
+    fine_mask[sl_fine] = full_mask[sl_full]
+
+    cropped = full_mask.copy()
+    cropped[sl_full] = False
+    cropped_material_cells = int(cropped.sum())
+    overlap_cells = int(np.prod([full_end[d] - full_start[d] for d in range(3)]))
+    padded_cells = int(np.prod(fine_shape) - overlap_cells)
+    volume_after_crop_mm3 = float(fine_mask.sum()) * cell_vol
+
+    diagnostics = dict(
+        volume_before_crop_mm3=volume_before_crop_mm3,
+        volume_after_crop_mm3=volume_after_crop_mm3,
+        cropped_material_cells=cropped_material_cells,
+        padded_cells=padded_cells,
+        origin_offset_fine_cells=offset_cells.astype(float).tolist(),
+    )
+    return fine_mask, diagnostics
+
+
 def _project_mask(src_mask: np.ndarray, src_origin, src_spacing: float, space) -> np.ndarray:
     idx = np.indices(space.grid.shape).reshape(3, -1).T
     world = np.asarray(space.grid.origin) + (idx + 0.5) * space.grid.spacing
@@ -160,6 +225,8 @@ def _run_one(
     level: int,
     distance_base: float | None,
     out_dir: Path,
+    *,
+    exact_subdivide: bool = False,
 ) -> dict:
     src_mask = np.asarray(shape_cfg["mask"], dtype=bool)
     src_origin = np.asarray(shape_cfg["origin"], dtype=float)
@@ -180,7 +247,23 @@ def _run_one(
         mapping=mapping,
     )
 
-    mask = _project_mask(src_mask, src_origin, src_spacing, space) & space.mask
+    exact_subdivide_diagnostics = None
+    if exact_subdivide:
+        projected, exact_subdivide_diagnostics = _project_mask_exact_subdivide(
+            src_mask, level, space, src_origin, src_spacing
+        )
+        mask = projected & space.mask
+        # 整数分割マスクは体積保存(diagnostics参照)でも、`space.mask`(design_space.deriveが
+        # spacingごとに独立再計算する設計空間の外枠)との積で材料セルが失われることがある
+        # (03A_REFERENCE_REPAIR.md 3節: dilution_r-1 level2で355セル)。投影方式に関わらず起きる
+        # 外枠の後退なので、exact_subdivideのときだけ生じる問題と誤解されないよう明示的に記録する。
+        lost_outside_space = projected & ~space.mask
+        exact_subdivide_diagnostics["cells_lost_to_design_space_mask"] = int(lost_outside_space.sum())
+        exact_subdivide_diagnostics["volume_lost_to_design_space_mask_mm3"] = (
+            int(lost_outside_space.sum()) * float(np.prod(space.grid.spacing))
+        )
+    else:
+        mask = _project_mask(src_mask, src_origin, src_spacing, space) & space.mask
     keep = shape_cfg.get("keep")
     if keep is not None:
         keep_f = _project_mask(np.asarray(keep, dtype=bool), src_origin, src_spacing, space) & space.mask
@@ -307,6 +390,9 @@ def _run_one(
         generated_at=_common.now_iso(),
         timing=timing,
     )
+    if exact_subdivide:
+        record["exact_subdivide"] = True
+        record["exact_subdivide_diagnostics"] = exact_subdivide_diagnostics
     rel_json = str(json_path.relative_to(REPO))
     record["files"] = {json_name: rel_json}
     _common.write_atomic(json_path, json.dumps(_record_strip_internal(record), ensure_ascii=False, indent=1, default=float) + "\n")
@@ -326,6 +412,11 @@ def main() -> int:
     parser.add_argument("--distance-mm", type=float, default=None)
     parser.add_argument("--hanger-condition", default=None)
     parser.add_argument("--out-dir", type=Path, default=OUT)
+    parser.add_argument(
+        "--exact-subdivide",
+        action="store_true",
+        help="材料マスクを整数分割(体積保存)で細分格子へ配置する",
+    )
     args = parser.parse_args()
 
     shape_cfg = _resolve_shape(args.shape, args.hanger_condition)
@@ -337,7 +428,14 @@ def main() -> int:
     for load_n in loads:
         for level in args.levels:
             try:
-                record = _run_one(shape_cfg, load_n, level, args.distance_mm, out_dir)
+                record = _run_one(
+                    shape_cfg,
+                    load_n,
+                    level,
+                    args.distance_mm,
+                    out_dir,
+                    exact_subdivide=args.exact_subdivide,
+                )
             except Exception as exc:
                 record = dict(
                     status="failed",
