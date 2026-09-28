@@ -441,7 +441,9 @@ def _relative_increase(before: Optional[float], after: float) -> float:
 
 def run_adaptive(ctx: SearchContext, config: AdaptiveConfig = AdaptiveConfig(), *,
                  checkpoint_path: Optional[Path] = None, is_cancelled: Optional[Callable[[], bool]] = None,
-                 resume_from: Optional[dict] = None) -> MethodRecord:
+                 resume_from: Optional[dict] = None,
+                 extra_protected: Optional[np.ndarray] = None,
+                 on_accept: Optional[Callable[[int, np.ndarray, "CandidateScore"], None]] = None) -> MethodRecord:
     """安全率余裕・部位別応力・実削除体積の一次予測・compliance/変位の急変検知で歩幅を決め、
     予測誤差/急変でロールバック(小さい候補を同じ基点から再評価)、`stagnation_patience` 手
     best_ever が改善しなければ最軽量合格形へ復帰し、tie-break の乱数順序を変えて再開する
@@ -452,6 +454,15 @@ def run_adaptive(ctx: SearchContext, config: AdaptiveConfig = AdaptiveConfig(), 
     比較できるようにした対照(完了条件「元の停止条件との対照」)。`resume_from` は `load_checkpoint`
     の戻り値をそのまま渡す(再開)。ループ本体は `_run_adaptive_impl`(段0=`find_initial_feasible`の
     後を切り出した実体。`_run_adaptive_from_mask` も同じ実体を呼ぶ——重複実装しない)。
+
+    `extra_protected`(04a追加。既定`None`=既存呼び出しは無変更)は `conditions.keep_cells` と同じ
+    `peel`の`protected`集合へOR結合するセル集合。`gate="percentile"`・`stop_policy="legacy"`・
+    `sudden_*`/`prediction_error_multiplier`を実質無効化する値・`stagnation_patience`を大きい値にすると、
+    このループは製品の`binary_search._reduce_volume`(固定`max_step_ratio`)と同じ受理条件・同じ
+    `peel`/`ranked_cells`/`step_ratio`を辿る対照実験(「該当経路の再導入」因果検査)になる——
+    `extra_protected`はその対照の一方だけへ特定セルの保護を追加する目的で導入した。
+    `on_accept(evaluations, working_mask, working_score)`(既定`None`)は受理した手ごとに1回、次の候補を
+    作る前に呼ぶ(「途中マスク」を経路で追わず外部から観測する目的。呼び出し側で例外を投げれば探索ごと落ちる)。
     """
     initial = binary_search.find_initial_feasible(ctx.space.mask, ctx.cond, max_evaluations=config.max_evaluations,
                                                    min_width_cells=ctx.min_width_cells, is_cancelled=is_cancelled)
@@ -462,7 +473,7 @@ def run_adaptive(ctx: SearchContext, config: AdaptiveConfig = AdaptiveConfig(), 
                             best_ever_score=None, working_mask=None, initial_material_mm3=None, steps=[],
                             mechanism_events=[], config=dataclasses.asdict(config))
     return _run_adaptive_impl(ctx, initial, config, checkpoint_path=checkpoint_path, is_cancelled=is_cancelled,
-                              resume_from=resume_from)
+                              resume_from=resume_from, extra_protected=extra_protected, on_accept=on_accept)
 
 
 # ---------------------------------------------------------------------------
@@ -703,12 +714,16 @@ class _SeedResult:
 
 def run_adaptive_from_mask(ctx: SearchContext, start_mask: np.ndarray, config: AdaptiveConfig = AdaptiveConfig(), *,
                            checkpoint_path: Optional[Path] = None,
-                           is_cancelled: Optional[Callable[[], bool]] = None) -> MethodRecord:
+                           is_cancelled: Optional[Callable[[], bool]] = None,
+                           extra_protected: Optional[np.ndarray] = None,
+                           on_accept: Optional[Callable[[int, np.ndarray, "CandidateScore"], None]] = None
+                           ) -> MethodRecord:
     """既存の合格形状(製品の保存済み形状・別方式の結果)から `run_adaptive` の削減ループを続ける
     公開入口。`start_mask` は `ctx.space.mask` と同じ形の bool 配列で、呼び出し側が構造的妥当性
-    (単一成分・水密・保持/除外・アンカー到達・最小幅)を保証すること。"""
+    (単一成分・水密・保持/除外・アンカー到達・最小幅)を保証すること。`extra_protected`/`on_accept`は
+    `run_adaptive` と同じ(04a追加、既定`None`=無変更)。"""
     return _run_adaptive_impl(ctx, _SeedResult(start_mask), config, checkpoint_path=checkpoint_path,
-                              is_cancelled=is_cancelled)
+                              is_cancelled=is_cancelled, extra_protected=extra_protected, on_accept=on_accept)
 
 
 def _run_adaptive_from_mask(ctx: SearchContext, start_mask: np.ndarray, config: AdaptiveConfig) -> MethodRecord:
@@ -718,7 +733,9 @@ def _run_adaptive_from_mask(ctx: SearchContext, start_mask: np.ndarray, config: 
 
 
 def _run_adaptive_impl(ctx: SearchContext, initial, config: AdaptiveConfig, *,
-                       checkpoint_path: Optional[Path], is_cancelled, resume_from: Optional[dict] = None
+                       checkpoint_path: Optional[Path], is_cancelled, resume_from: Optional[dict] = None,
+                       extra_protected: Optional[np.ndarray] = None,
+                       on_accept: Optional[Callable[[int, np.ndarray, "CandidateScore"], None]] = None
                        ) -> MethodRecord:
     """`run_adaptive`/`_run_adaptive_from_mask` が共有するループ本体(段階3=`find_initial_feasible`の
     後を受け取る)。開始形状の違い(全材料 or 再配置の仮追加形)は呼び出し側が `initial.best_feasible.mask`
@@ -753,6 +770,13 @@ def _run_adaptive_impl(ctx: SearchContext, initial, config: AdaptiveConfig, *,
     anchor_ids = binary_search._anchor_node_ids(cond)
     exempt = binary_search._min_width_exempt(cond, working.shape, ctx.min_width_cells)
     protected = binary_search._keep_cells(cond, working.shape)
+    if extra_protected is not None:
+        protected = extra_protected.copy() if protected is None else (protected | extra_protected)
+        # `peel`の不変条件(m>1では`protected`⊆`exempt`。docstring参照)を満たすため、追加保護セルも
+        # 最小幅の規則対象外に含める(`extra_protected`は既に別経路で最小幅確認済みの既存構造の一部を
+        # 想定しているので、個別の m立方被覆チェックを免除しても不変条件は壊れない)。
+        if ctx.min_width_cells > 1:
+            exempt = extra_protected.copy() if exempt is None else (exempt | extra_protected)
     multiplier = 1.0
     stagnation_counter = 0
     calibrated_k: Optional[float] = None
@@ -896,6 +920,8 @@ def _run_adaptive_impl(ctx: SearchContext, initial, config: AdaptiveConfig, *,
             if calibrated_k is None and removed_energy > 0 and actual_jump > 0:
                 calibrated_k = actual_jump / (removed_energy / max(total_energy, 1e-12))
             working, working_score = survivor, cand_score
+            if on_accept is not None:
+                on_accept(evaluations, working, working_score)
             energy = cand_score.element_energy
             multiplier = min(1.0, 2.0 * multiplier)
             best_ever_improved = working_score.material_mm3 < best_ever_mm3
