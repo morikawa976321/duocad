@@ -2407,7 +2407,6 @@
     lastFile: () => lastFile,
     documentList: () => documentList,
     currentDocumentName: () => currentDocumentName,
-    regionsStillExist,
   })
 </script>
 
