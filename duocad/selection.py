@@ -16,7 +16,7 @@
     commit_selection()       -> origin="user"       中身を変えずに承認する経路
 
 **verbの対象集合は `require_confirmed` / `require_edges` からしか取れない**。MCPもWebSocketも
-対象集合を引数で受ける口を持たず、`Session` のverbラッパがこの2つを呼ぶ ——**AIの経路と人の
+対象集合を引数で受ける口を持たず、verbの入口(`duocad/entry.py`)がこの2つを呼ぶ ——**AIの経路と人の
 経路が同じ規則を通る**のはここで担保されている。**`origin="proposed"` のままでは verb に
 渡せない**(`confirmed_items` が `SelectionNotCommitted`)。禁止ではなく**黙って通さない**で、
 AIは `commit_selection()` を明示的に呼べば自分の提案を実行できる。

@@ -751,10 +751,9 @@ def test_every_verb_is_reachable_from_all_three_surfaces(verb: str) -> None:
 #:
 #: **4 verb 全部をWSとMCPの両方で実際に走らせる**ための表。宣言の照合(下の
 #: `test_every_verb_is_reachable_from_all_three_surfaces`)だけでは、
-#: **引数の受け渡しが繋がっているか**は分からない —— WSの表は
-#: `**{key: message[key] for key in keys}` で機械的に渡すので、宣言の引数名と
-#: `Session` のラッパの引数名が食い違えば `TypeError` になり、MCPのラッパは手書きなので
-#: 綴りを間違えれば同じく落ちる。どちらも**その経路を1回走らせるまで誰も気づかない**。
+#: **引数の受け渡しが繋がっているか**は分からない —— WSもMCPも、宣言の引数名のまま
+#: 入口(`duocad/entry.py`)へ渡すので、宣言と入口の引数名が食い違えば `TypeError` になる。
+#: **その経路を1回走らせるまで誰も気づかない**。
 #: 読み取りは**セッションに依らない値**へ均す(`body_id` は毎回振り直されるので、
 #: 「選んだボディか」に置き換えてから2経路を突き合わせる)。
 def _assigned_bodies(role):

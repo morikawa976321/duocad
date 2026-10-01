@@ -300,10 +300,13 @@ MCP の stdio が要る本に渡すと harness が断る（MCP が要る節は `
   どちらもこの集合から取るので、「対象集合の指定方法」は1つしかない。
 - **verbのメタ情報は1箇所にしか書かない。** 名前・引数・カテゴリ・プレビュー可否・
   MCPのスキーマは `duocad/catalog.py` の `COMMANDS` が唯一の宣言で、WebSocketの許可リストも
-  MCPのツール定義も導出である。**verbを1つ足すときメタ情報を書くのは宣言1エントリだけ**。
-  **ただし実行の薄いラッパ2本
-  （`Session` と `DocumentTools`）は依然verbごとに要る** —— 手順の正は `catalog.py`
-  冒頭docstringの5ステップ。ここを1本化するには汎用ディスパッチャが要る（未着手）。frontendだけは別に持つ ——
+  MCPのツール定義も導出である。**verbを1つ足すときに書くのは、verbのモジュールと宣言1エントリの
+  2箇所だけ**（手順の正は `catalog.py` 冒頭docstring）。
+- **verbを掛ける経路は1本。** verbのモジュールは純関数（対象を引数で受ける）と**入口**
+  （`@entry`。対象を確定選択から取って純関数へ渡す）を持ち、`Session.apply(verb, args)` が入口を名前で
+  引いて呼ぶ。WebSocket・MCP・アプリ内AIはどれも `apply` を通るので、実行中の断り・選択のリセット・
+  自動保存・配信はどの経路でも同じに効き、verbごとの配線は無い。届いた引数の検査（必須・未知・型）も
+  宣言からの導出で、WebSocketとMCPに同じものが効く。frontendだけは別に持つ ——
   TS側が持つのは**引数の集め方**（どのクリックを待つか・入力欄のid）で、宣言には無い情報だから。
   名前と分類が一致することは `tests/test_ui_command_wiring.py` が機械で見る。
 - **verbの粒度の定義は [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) §2「verbの粒度」が起点。**
@@ -393,7 +396,8 @@ README に残すのはアーキテクチャ上の要点だけ:
 | `duocad/selection.py` | 選択集合（人のクリック側。可視性を含む「何が選べるか」） | ✗ | ✗ |
 | `duocad/predicates.py` | **述語による選択（AI側）**。構造化JSONでDSL文字列ではない | ✗ | ✗ |
 | `duocad/speculative.py` | プレビュー（確定前にverbを投機的に走らせて捨てる） | ✗ | ✗ |
-| `duocad/verbs/*.py` | verb層（1 verb 1モジュール・純関数） | ✗ | ✗ |
+| `duocad/verbs/*.py` | verb層（1 verb 1モジュール。純関数と、対象を確定選択から取る入口） | ✗ | ✗ |
+| `duocad/entry.py` | verbの入口の登録表（`@entry`）。`Session.apply` がここから名前で引く | ✗ | ✗ |
 | `duocad/catalog.py` | **verbの単一宣言**（名前・引数・カテゴリ・プレビュー可否・MCPスキーマ）。下の2つが持つ表はここからの導出 | ✗ | ✗ |
 | `duocad/svg_import.py` | SVG → スケッチの図形（**パーサはbuild123dの推移依存で既に入っている** svgelements） | ✗ | ✗ |
 | `duocad/query.py` | 問い合わせ層のインタフェース | ✗ | **○ここだけ** |
@@ -405,7 +409,7 @@ README に残すのはアーキテクチャ上の要点だけ:
 | `duocad/kernel_meshing.py` | 同じカーネル層。OCCTの面分割を段階制御し、面分割の直前に境界折れ線の交差を検査して共有辺を再分割する(`tessellate` の実体) | **○** | ✗ |
 | `duocad/boundary_check.py` | 境界折れ線(pcurve の離散点列)の交差・接触・重なりの判定。固定εを使わず、確定しない組だけ整数演算 | ✗ | ✗ |
 | `duocad/mesh_intersections.py` | 三角形メッシュの自己交差(正当な共有辺・共有頂点の接触を除く)。最終成果物の検査 | ✗ | ✗ |
-| `duocad/session.py` | `Session`（1つの文書を持つサーバ側の状態。verbの呼び出し・選択・保存/開く。**配りものは持たず `view` へ委譲**） | ✗ | ✗ |
+| `duocad/session.py` | `Session`（1つの文書を持つサーバ側の状態。verbを掛ける唯一の口 `apply`・選択・保存/開く。**配りものは持たず `view` へ委譲**） | ✗ | ✗ |
 | `duocad/view.py` | `DocumentView`（**配りもの**＝状態配信・版・テセレーション/辺/頂点/体積/スケッチのキャッシュ。文書を変えない） | ✗ | ✗ |
 | `duocad/paths.py` | `REPO_ROOT` と、そこから出る既定の置き場（`web/dist` / `models`） | ✗ | ✗ |
 | `duocad/net/ws.py` | `Server`（WebSocketの配信と `_dispatch`）＋ソケットから踏めるコマンドの表 | ✗ | ✗ |

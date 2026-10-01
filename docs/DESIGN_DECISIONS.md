@@ -206,7 +206,9 @@ MCPにも無い**（人ができることとAIができることを一致させ�
 
 ## コード調査で「積まない」と決めたもの
 
-汎用ディスパッチャ（verb 追加手順の一本化）・`kernel.py` の分割・`_dispatch` の表駆動化は**積まない**。
+`kernel.py` の分割は**積まない**。汎用ディスパッチャ（verb 追加手順の一本化）と `_dispatch` の verb の
+表駆動化は、当初は積まないと決めていたが、2026-10-01 に本人の指示で実施した（`Session.apply` と
+`duocad/entry.py`。verb ごとに `Session`・`DocumentTools`・`_dispatch` の3箇所へ書いていた配線が無くなった）。
 `server.py` の分割は2段構え（クラス境界→ `DocumentView` の切り出し）で実施済み。`Applied` 型の同期は
 **生成ではなく突合の機械検査**（`tests/test_applied_type_sync.py`）。
 

@@ -31,7 +31,7 @@
 **入れない**し、対応するMCPツールも作らない(AIがAIを起動する口は要らない)。
 
 **verbコマンドは対象集合(面・辺・領域)を引数で受けない**。数値・名前・パスだけを送り、押す面も
-丸める辺も押し出す領域も `Session` のverbラッパがコアの確定選択から取る
+丸める辺も押し出す領域もverbの入口(`duocad/entry.py`)がコアの確定選択から取る
 (`selection.require_confirmed` / `require_edges`)。`body_id` が残っているのは対象集合ではない
 ものだけ(`set_visible` / `get_edges` の対象、`extrude` の行き先)。
 
