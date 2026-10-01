@@ -91,13 +91,14 @@ from .tools_on_loop import ToolsOnLoop
 # verb本体と宣言1箇所だけである。
 #
 # 導出しても**登録制であることは変わらない**: ここに現れない名前はソケットから呼べない
-# (届いた文字列で `Session` の任意のメソッドを呼べる作りにしない)。表に載る引数は
-# **1つでも欠けたら KeyError にする** —— 既定値で補うと、打ち忘れた寸法や `mode` が
-# 黙って既定で入る。**並ぶのは数値・名前・パスだけで、面・辺・領域は1つも無い**。
-#: ブラウザから踏めるスケッチのコマンド -> (`Session` のメソッド名, 必須の引数名)。
+# (届いた文字列で `Session` の任意のメソッドを呼べる作りにしない)。届いた引数は宣言と
+# 突き合わせる(`catalog.Command.ws_arguments`。必須・未知・型) —— 既定値で補うと、
+# 打ち忘れた寸法や `mode` が黙って既定で入る。**並ぶのは数値・名前・パスだけで、
+# 面・辺・領域は1つも無い**。
+#: ブラウザから踏めるスケッチの verb -> (`Session` のメソッド名, 受け取る引数名)。
 SKETCH_COMMANDS: dict = catalog.ws_table("sketch")
 
-#: ブラウザから踏めるフィーチャのコマンド -> (`Session` のメソッド名, 必須の引数名)。
+#: ブラウザから踏めるフィーチャの verb -> (`Session` のメソッド名, 受け取る引数名)。
 FEATURE_COMMANDS: dict = catalog.ws_table("feature")
 
 #: ブラウザから踏めるファイル操作 -> (`Session` のメソッド名, 必須の引数名, 文書を変えるか)。
@@ -359,93 +360,18 @@ class Server:
                     message.get("client_op"),
                 )
                 await self._push(connection, applied=applied)
-            # -------------------------------------------------- B: プレビュー(投機的実行)
-            # **配信しない**。文書は変わらない(`Session.preview` が元へ戻す)ので、状態を配る
-            # 理由が無く、他のクライアントに見せる中間状態も存在しない。要求した接続にだけ返す。
+            # -------------------------------------------------- C/D: スケッチとフィーチャの verb
+            # 引数は宣言(`catalog.Command.ws_arguments`)に従って取り出し、検査してから
+            # `Session.apply` へ渡す —— MCP とアプリ内AIが通るのと同じ1本で、verb ごとの分岐は無い。
+            # **省略された引数は渡さない**(ここで既定値を埋めると、`move_body` のようにモードで
+            # 要る引数が入れ替わる verb で、モードが取らない引数が黙って効く側へ倒れる)。
             #
-            # **`_apply` で囲まない**(2つの止め方を重ねない)。プレビュー中の発火は
-            # `Session._suppress_events` が経路によらず止めており、ここで `_dispatching` まで
-            # 立てると、**プレビューの計算中(押し出しなら約1秒)にMCPから届いた本物の変更まで
-            # 「WebSocket経由だから配信不要」と誤判定して黙って捨てる**。
-            # -------------------------------------------------- C: スケッチ(手で描く経路)
-            # **スケッチを作るのは表に載らない** —— `base_plane` が省略できる引数だからで
-            # (表は載せた引数を全部必須にする)、省略は「コアの確定選択の面に貼る」を意味する。
-            # `catalog` の `ws="special"` がその宣言で、ここがその実体である。
-            elif command == "sketch_create":
-                applied = self._apply(
-                    self.session.sketch_create,
-                    message.get("base_plane"),
-                )
-                await self._push_applied(connection, applied, message)
-            # **オフセット平面版も表に載らない**(`sketch_create` と同じ理由 —— `base_plane` が
-            # 省略できる)。`distance` は必須なので `message["distance"]` をそのまま渡す。
-            elif command == "sketch_create_offset":
-                applied = self._apply(
-                    self.session.sketch_create_offset,
-                    message["distance"],
-                    message.get("base_plane"),
-                )
-                await self._push_applied(connection, applied, message)
-            # **移動の2つは表に載らない**(`catalog` の `ws="special"`)。`mode` で要る引数が
-            # 入れ替わり(並進は dx/dy/dz・回転は角度と軸/中心)、しかも回転の中心は
-            # 省略できる —— 表は載せた引数を全部必須にする規律なので置けない
-            # (`catalog.Param.ws`)。**省略された引数は `None` のまま verb へ渡す**:
-            # ここで既定値を埋めると、モードが取らない引数が黙って効く側へ倒れる
-            # (verb側の `_common.reject_foreign_args` は `None` を「渡していない」と読む)。
-            #
-            # **軸・中心の参照は対象集合ではない。** 動かす対象はいままでどおりコアの確定選択
-            # から取り(`selection.require_bodies` / `require_sketch_entities`)、ここで受ける
-            # `axis_edge` / `center_vertex` / `center_entity` は「どこを軸・中心にするか」を
-            # 指す名前である。同じ集合へ載せると、軸に使った辺のボディまで対象に数えられる
-            # (`duocad/verbs/_common.py` の `resolve_shape_ref`)。
-            elif command == "move_sketch_entities":
-                applied = self._apply(
-                    self.session.move_sketch_entities,
-                    dx=message.get("dx"),
-                    dy=message.get("dy"),
-                    copy=message.get("copy", False),
-                    mode=message.get("mode", "translate"),
-                    angle=message.get("angle"),
-                    center=message.get("center"),
-                    center_entity=message.get("center_entity"),
-                )
-                await self._push_applied(connection, applied, message)
-            elif command == "move_body":
-                applied = self._apply(
-                    self.session.move_body,
-                    dx=message.get("dx"),
-                    dy=message.get("dy"),
-                    dz=message.get("dz"),
-                    copy=message.get("copy", False),
-                    mode=message.get("mode", "translate"),
-                    angle=message.get("angle"),
-                    axis_edge=message.get("axis_edge"),
-                    axis_point=message.get("axis_point"),
-                    axis_dir=message.get("axis_dir"),
-                    center_vertex=message.get("center_vertex"),
-                )
-                await self._push_applied(connection, applied, message)
-            # **`mirror_body` の鏡映面は2つが排他で、どちらも省略できる**ので表に載せない
-            # (`catalog.Param.ws` の規律)。**省略された側は `None` のまま verb へ渡す** ——
-            # ここで既定値を埋めると、指していないほうの鏡映面が黙って効く。
-            # `plane_face` の面は対象集合ではない(どこを鏡に使うかを指す名前である)。
-            elif command == "mirror_body":
-                applied = self._apply(
-                    self.session.mirror_body,
-                    base_plane=message.get("base_plane"),
-                    plane_face=message.get("plane_face"),
-                )
-                await self._push_applied(connection, applied, message)
-            # -------------------------------------------------- C/D: 表に載るスケッチとフィーチャ(手で描く・かける経路)
-            # 表(`catalog.ws_table`)は載せた引数を全部必須にする。**失敗は握りつぶさず必ず画面へ返す**
-            # (下の except)—— とくにフィレットは例外を投げずに `IsDone()=False` で失敗する種類の
-            # 失敗があり、コア側が例外へ変換している(§7)。ここで握ると「押したのに何も
-            # 起きない」になり、原因が半径にあることが人に伝わらない。
+            # **失敗は握りつぶさず必ず画面へ返す**(下の except)—— とくにフィレットは例外を
+            # 投げずに `IsDone()=False` で失敗する種類の失敗があり、コア側が例外へ変換している(§7)。
+            # ここで握ると「押したのに何も起きない」になり、原因が半径にあることが人に伝わらない。
             elif command in SKETCH_COMMANDS or command in FEATURE_COMMANDS:
-                method, keys = (SKETCH_COMMANDS if command in SKETCH_COMMANDS else FEATURE_COMMANDS)[command]
                 applied = self._apply(
-                    getattr(self.session, method),
-                    **{key: message[key] for key in keys},
+                    self.session.apply, command, catalog.BY_NAME[command].ws_arguments(message)
                 )
                 await self._push_applied(connection, applied, message)
             # -------------------------------------------------- D: 辺の折れ線(要るときだけ)
@@ -498,14 +424,13 @@ class Server:
             # **verbかどうかで応答が違う**(`FILE_COMMANDS` の3つ目の値)。文書を変えるものは
             # 状態を全接続へ配り、書き出すだけのものは要求した接続へ結果だけ返す。
             elif command in FILE_COMMANDS:
-                method, keys, is_verb = FILE_COMMANDS[command]
-                applied = self._apply(
-                    getattr(self.session, method),
-                    **{key: message[key] for key in keys},
-                )
+                method, _keys, is_verb = FILE_COMMANDS[command]
+                arguments = catalog.BY_NAME[command].ws_arguments(message)
                 if is_verb:
+                    applied = self._apply(self.session.apply, command, arguments)
                     await self._push_applied(connection, applied, message)
                 else:
+                    applied = self._apply(getattr(self.session, method), **arguments)
                     await _send(connection, {"type": "file", **applied})
             # **保存は表に載らない** —— `name` が任意引数になったため。
             # 表(`FILE_COMMANDS`)は載せた引数を全部必須にする規律なので、省略を許す
@@ -554,6 +479,14 @@ class Server:
             elif command == "new_document":
                 applied = self._apply(self.session.new_document)
                 await self._push_applied(connection, applied, message)
+            # -------------------------------------------------- B: プレビュー(投機的実行)
+            # **配信しない**。文書は変わらない(`Session.preview` が元へ戻す)ので、状態を配る
+            # 理由が無く、他のクライアントに見せる中間状態も存在しない。要求した接続にだけ返す。
+            #
+            # **`_apply` で囲まない**(2つの止め方を重ねない)。プレビュー中の発火は
+            # `Session._suppress_events` が経路によらず止めており、ここで `_dispatching` まで
+            # 立てると、**プレビューの計算中(押し出しなら約1秒)にMCPから届いた本物の変更まで
+            # 「WebSocket経由だから配信不要」と誤判定して黙って捨てる**。
             elif command == "preview":
                 result = self.session.preview(message["verb"], message.get("args") or {})
                 await _send(

@@ -196,7 +196,7 @@ class DocumentTools:
             raise KeyError(
                 f"unknown tool: {name!r} (available: {sorted(self._handlers)})"
             ) from None
-        problem = _check_arguments(self._descriptor_by_name[name]["inputSchema"], arguments)
+        problem = catalog.check_arguments(self._descriptor_by_name[name]["inputSchema"], arguments)
         if problem is not None:
             raise ToolError("invalid_argument", problem)
         return handler(**arguments)
@@ -825,7 +825,7 @@ class McpServer:
             raise _RpcError(INVALID_PARAMS, f"unknown tool: {name!r}")
         # **MCP はプロトコルエラー(-32602)で先に弾く**。`DocumentTools.call` にも同じ検査があるが、
         # そちらは `isError` の封筒になる(アプリ内AIの経路の門)。
-        problem = _check_arguments(descriptor["inputSchema"], arguments)
+        problem = catalog.check_arguments(descriptor["inputSchema"], arguments)
         if problem is not None:
             raise _RpcError(INVALID_PARAMS, problem)
 
@@ -862,58 +862,6 @@ class _RpcError(Exception):
 
 def _error(request_id: Any, code: int, message: str) -> dict:
     return {"jsonrpc": JSONRPC_VERSION, "id": request_id, "error": {"code": code, "message": message}}
-
-
-def _check_arguments(schema: dict, arguments: dict) -> Optional[str]:
-    """入力スキーマとの突き合わせ(必須・未知キー・型)。違反の文を返す(無ければ None)。
-
-    **黙って通さない**が、包み方は呼ぶ側が決める —— MCP はプロトコルエラー(-32602)、
-    アプリ内AI(`DocumentTools.call`)は `invalid_argument` の封筒。
-    JSON Schemaの完全な検証はしない(依存を増やさないため)。見るのは必須・未知キーと
-    `boolean` / `string` / `number` / `integer` / `array` / `object`、および型のリスト
-    (例: `fillet.radius` の `["number","array"]`)。いずれも**間違ったまま実行すると
-    静かに別のことをする**類の誤りである(例: `visible` に "false" → 真、`True` を
-    数値として通すと 1.0)。**任意引数の `null` も型違い**(スキーマに `null` は無い。省略は
-    キーごと落とすこと)。エラーメッセージには**引数名を必ず含める**。
-    """
-    properties = schema.get("properties") or {}
-    required = schema.get("required") or []
-
-    missing = [key for key in required if key not in arguments]
-    if missing:
-        return f"missing required argument(s): {missing}"
-    if schema.get("additionalProperties") is False:
-        unknown = [key for key in arguments if key not in properties]
-        if unknown:
-            return f"unknown argument(s): {unknown} (expected: {sorted(properties)})"
-    for key, value in arguments.items():
-        expected = (properties.get(key) or {}).get("type")
-        if expected is None:
-            continue
-        if isinstance(expected, list):
-            if not any(_value_matches_json_type(value, item) for item in expected):
-                return f"argument {key!r} must be one of {expected}, got {value!r}"
-            continue
-        if not _value_matches_json_type(value, expected):
-            return f"argument {key!r} must be a {expected}, got {value!r}"
-    return None
-
-
-def _value_matches_json_type(value: Any, expected: str) -> bool:
-    """JSON Schemaの型名1つと Python 値の突き合わせ。**bool は number/integer にしない**。"""
-    if expected == "boolean":
-        return isinstance(value, bool)
-    if expected == "string":
-        return isinstance(value, str)
-    if expected == "number":
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
-    if expected == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
-    if expected == "array":
-        return isinstance(value, list)
-    if expected == "object":
-        return isinstance(value, dict)
-    return True
 
 
 def _exception_message(error: Exception) -> str:

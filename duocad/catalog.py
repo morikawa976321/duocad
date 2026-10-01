@@ -3,19 +3,22 @@
 **このファイルが正**で、以下はすべてここからの導出である:
 
 - `duocad/server.py` … `PREVIEWABLE_VERBS` / `SKETCH_COMMANDS` / `FEATURE_COMMANDS` /
-  `FILE_COMMANDS`(WebSocketの許可リスト)
-- `duocad/mcp_server.py` … `tools/list` が返すツール定義と `tools/call` のハンドラ表
+  `FILE_COMMANDS`(WebSocketの許可リスト)と、WebSocket が受け取る引数とその検査
+- `duocad/mcp_server.py` … `tools/list` が返すツール定義と `tools/call` の引数の検査
 
 frontend(`web/src/commands/*.ts`)だけは別に持つ —— TS側が持つのは**引数の集め方**
 (どのクリックを待つか・入力欄のid・ボタンのid)であって、ここには無い情報だからである。
 
 verbを1つ足すとき:
 
-1. `duocad/verbs/` にverb本体を書き、`duocad/__init__.py` に登録の1行を足す
-2. `Session` にラッパを書く(対象集合は `selection.require_*` から取る。引数は数値・名前・パスだけ)
-3. `DocumentTools` にMCP側のラッパを書く(名前はverb名と同じ綴りにする)
-4. **このファイルの `COMMANDS` に1エントリ足す**
-5. UIから踏むなら `web/src/commands/*.ts` に引数の集め方を書く(`category` を忘れない)
+1. `duocad/verbs/` にverbのモジュールを書く —— 純関数(対象を引数で受ける)と `register_verb`、
+   それに入口(`@entry`。対象を `selection.require_*` から取って純関数へ渡す。引数は数値・名前・
+   パスだけ)。`duocad/verbs/__init__.py` に import の1行を足す
+2. **このファイルの `COMMANDS` に1エントリ足す**(引数名は入口の引数と同じ綴り)
+3. UIから踏むなら `web/src/commands/*.ts` に引数の集め方を書く(`category` を忘れない)
+
+WebSocket・MCP・アプリ内AIはどれも `Session.apply` を通って入口を呼ぶので、verbごとに書く
+配線は無い。
 
 **対象集合は引数ではない** —— 面・辺・領域はどの層でも引数で受けず、コアの確定選択から取る
 (`selection.require_confirmed` / `require_edges`)。したがってここに並ぶ引数は**数値・名前・
@@ -47,11 +50,11 @@ SHAPE_CATEGORIES = ("sketch", "feature", "history")
 
 #: `Command.ws` に書ける値。
 #:
-#: - `table`   … `server.py` の表(`SKETCH_COMMANDS` 等)に載り、`_dispatch` が機械的に捌く
-#: - `special` … WebSocketから踏めるが `_dispatch` が個別に捌く。**表の規約に合わない
-#:               もの**がここへ来る —— 応答の形が他と違う(`open_document`)か、
-#:               **省略できる引数がある**(`sketch_create` の `base_plane`)かのどちらか。
-#:               表の「載せた引数は全部必須」はそのまま保つ(`Param.ws` 参照)
+#: - `table`   … `server.py` の表(`SKETCH_COMMANDS` 等)に載り、`_dispatch` が機械的に捌く。
+#:               verb は `Session.apply` へ、verb でないファイル操作は `Session` のメソッドへ行く
+#: - `special` … WebSocketから踏めるが `_dispatch` が個別に捌く。**verb ではないもの**
+#:               (選択・可視性・履歴・状態の要求)と、応答の形が他と違うファイル操作
+#:               (`open_document` / `save_document`)がここへ来る
 #: - `none`    … WebSocketには開けていない(`propose_selection` はAIが書く経路)
 WS_SURFACES = ("table", "special", "none")
 
@@ -70,10 +73,12 @@ class Param:
     description: str
     #: MCPで必須か。省略できる引数は実体側にも既定値があること。
     required: bool = True
-    #: WebSocketのコマンドが受け取るか。**表(`Command.ws == "table"`)は載せたものを
-    #: 全部必須にする**(既定値で補うと、打ち忘れた寸法や `mode` が黙って既定で入る)。
-    #: 省略を許したい引数があるコマンドは表に載せず `ws="special"` にすること。
-    ws: bool = True
+    #: WebSocketのコマンドが受け取るか。`True` は受け取る(必須かどうかは `required` と同じ)、
+    #: `False` は受け取らない(届いても渡さない)、**`"required"` は MCP では省略できても
+    #: WebSocket では必ず送らせる** —— 画面は人が選んだ値・打った値をそのまま送る口なので、
+    #: 既定値で補うと、打ち忘れた寸法や `mode` が黙って既定で入る(`extrude` の `mode` が
+    #: `join` に落ちると「切るつもりで足した」が通る)。
+    ws: Any = True
     #: **形の寸法を決める値か**。`agent_instructions()` の言う how のうち、
     #: **数値の分だけ**をここで印す —— 半径・距離・間隔・個数・角度。
     #:
@@ -162,8 +167,29 @@ class Command:
 
     @property
     def ws_params(self) -> tuple[str, ...]:
-        """WebSocketのコマンドが受け取る引数名(**すべて必須**)。"""
+        """WebSocketのコマンドが受け取る引数名。"""
         return tuple(p.name for p in self.params if p.ws)
+
+    def ws_schema(self) -> dict:
+        """WebSocket が受け取る引数の JSON Schema(`input_schema` の WebSocket 版)。"""
+        return _schema(
+            [p for p in self.params if p.ws],
+            [p.name for p in self.params if p.ws == "required" or (p.ws and p.required)],
+        )
+
+    def ws_arguments(self, message: dict) -> dict:
+        """WebSocket のメッセージから、入口へ渡す引数を取り出して検査する。違反は ValueError。
+
+        **`null` は「送っていない」と読む** —— 画面はモードが取らない欄を `null` のまま送る
+        (`move_body` の並進での `angle`)。受け取らないと決めた引数(`ws=False`)は届いても渡さない。
+        """
+        arguments = {
+            p.name: message[p.name] for p in self.params if p.ws and message.get(p.name) is not None
+        }
+        problem = check_arguments(self.ws_schema(), arguments)
+        if problem is not None:
+            raise ValueError(problem)
+        return arguments
 
     @property
     def preview_params(self) -> tuple[str, ...]:
@@ -176,18 +202,7 @@ class Command:
 
     def input_schema(self) -> dict:
         """MCPの `inputSchema`(JSON Schema)。"""
-        properties = {
-            p.name: {"type": p.type, "description": p.description} for p in self.params
-        }
-        required = [p.name for p in self.params if p.required]
-        # **必須が1つも無いときは `required` を書かない**(空配列を出すと、
-        # クライアントによっては「必須が指定されている」と読まれうる)。
-        return {
-            "type": "object",
-            "properties": properties,
-            **({"required": required} if required else {}),
-            "additionalProperties": False,
-        }
+        return _schema(self.params, [p.name for p in self.params if p.required])
 
     def descriptor(self) -> dict:
         """MCPの `tools/list` が返す1件。"""
@@ -196,6 +211,71 @@ class Command:
             "description": self.description,
             "inputSchema": self.input_schema(),
         }
+
+
+def _schema(params: Any, required: list) -> dict:
+    properties = {p.name: {"type": p.type, "description": p.description} for p in params}
+    # **必須が1つも無いときは `required` を書かない**(空配列を出すと、
+    # クライアントによっては「必須が指定されている」と読まれうる)。
+    return {
+        "type": "object",
+        "properties": properties,
+        **({"required": required} if required else {}),
+        "additionalProperties": False,
+    }
+
+
+def check_arguments(schema: dict, arguments: dict) -> Optional[str]:
+    """入力スキーマとの突き合わせ(必須・未知キー・型)。違反の文を返す(無ければ None)。
+
+    **黙って通さない**が、包み方は呼ぶ側が決める —— MCP はプロトコルエラー(-32602)、
+    アプリ内AI(`DocumentTools.call`)は `invalid_argument` の封筒、WebSocket は画面のエラーの札。
+    JSON Schemaの完全な検証はしない(依存を増やさないため)。見るのは必須・未知キーと
+    `boolean` / `string` / `number` / `integer` / `array` / `object`、および型のリスト
+    (例: `fillet.radius` の `["number","array"]`)。いずれも**間違ったまま実行すると
+    静かに別のことをする**類の誤りである(例: `visible` に "false" → 真、`True` を
+    数値として通すと 1.0、`radius: "12"` は1文字ずつ読まれて辺2本に半径1と2が付く)。
+    **任意引数の `null` も型違い**(スキーマに `null` は無い。省略はキーごと落とすこと)。
+    エラーメッセージには**引数名を必ず含める**。
+    """
+    properties = schema.get("properties") or {}
+    required = schema.get("required") or []
+
+    missing = [key for key in required if key not in arguments]
+    if missing:
+        return f"missing required argument(s): {missing}"
+    if schema.get("additionalProperties") is False:
+        unknown = [key for key in arguments if key not in properties]
+        if unknown:
+            return f"unknown argument(s): {unknown} (expected: {sorted(properties)})"
+    for key, value in arguments.items():
+        expected = (properties.get(key) or {}).get("type")
+        if expected is None:
+            continue
+        if isinstance(expected, list):
+            if not any(_value_matches_json_type(value, item) for item in expected):
+                return f"argument {key!r} must be one of {expected}, got {value!r}"
+            continue
+        if not _value_matches_json_type(value, expected):
+            return f"argument {key!r} must be a {expected}, got {value!r}"
+    return None
+
+
+def _value_matches_json_type(value: Any, expected: str) -> bool:
+    """JSON Schemaの型名1つと Python 値の突き合わせ。**bool は number/integer にしない**。"""
+    if expected == "boolean":
+        return isinstance(value, bool)
+    if expected == "string":
+        return isinstance(value, str)
+    if expected == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected == "array":
+        return isinstance(value, list)
+    if expected == "object":
+        return isinstance(value, dict)
+    return True
 
 
 # --------------------------------------------------------------------------------------
@@ -400,12 +480,9 @@ COMMANDS: tuple[Command, ...] = (
         ),
         uses_selection=True,
         session="sketch_create",
-        ws="special",
         note=(
             "**MCPとWSで引数が同じ**。どちらも `base_plane` だけを取り、省略時は"
-            "コアの確定選択の面(ちょうど1枚)に貼る。"
-            "省略できる引数があるので表には載せられず(表は全引数必須)、"
-            '`ws="special"` で `_dispatch` が個別に捌く'
+            "コアの確定選択の面(ちょうど1枚)に貼る"
         ),
     ),
     Command(
@@ -433,7 +510,6 @@ COMMANDS: tuple[Command, ...] = (
         ),
         uses_selection=True,
         session="sketch_create_offset",
-        ws="special",
         note=(
             "**`sketch_create` とは別verb**(`sketch.sketch_create` のdocstring参照)。"
             "貼る先(target)は同じ2状態(基準平面名 / 確定選択の面)だが、`distance` という"
@@ -521,6 +597,7 @@ COMMANDS: tuple[Command, ...] = (
                 "string",
                 "join(足す・既定) / cut(切る) / new(独立した新しいボディを作る)",
                 required=False,
+                ws="required",
             ),
             Param(
                 "body_id",
@@ -676,7 +753,6 @@ COMMANDS: tuple[Command, ...] = (
         ),
         uses_selection=True,
         session="move_sketch_entities",
-        ws="special",
         resets_selection=True,
         note=(
             "**押し出し済みのソリッドは追従しない**(本人が許容済み)。"
@@ -782,7 +858,6 @@ COMMANDS: tuple[Command, ...] = (
         ),
         uses_selection=True,
         session="move_body",
-        ws="special",
         resets_selection=True,
         note=(
             "**投機実行(`previewable`)には載せない** —— 動かす前後で形は同じなので、"
@@ -853,6 +928,7 @@ COMMANDS: tuple[Command, ...] = (
                 "追従半径 R(mm・0以上)。幅 2R 未満の隙間とへこみを埋め、それより広いへこみには沿う。"
                 "省略は 0",
                 required=False,
+                ws="required",
                 dimension=True,
             ),
             Param(
@@ -860,6 +936,7 @@ COMMANDS: tuple[Command, ...] = (
                 "number",
                 "包んだ線のオフセット d(mm)。正で外へ広がり、負で内へ縮む。省略は 0",
                 required=False,
+                ws="required",
                 dimension=True,
             ),
         ),
@@ -903,11 +980,9 @@ COMMANDS: tuple[Command, ...] = (
         ),
         uses_selection=True,
         session="mirror_body",
-        ws="special",
         resets_selection=True,
         note=(
-            "**どちらの鏡映面もWSに開いている**(2026-09-06。`ws=\"special\"` なのは"
-            "2つが排他で**どちらも省略できる**ため。表は載せた引数を全部必須にする)。"
+            "**どちらの鏡映面もWSに開いている**(2つは排他で、どちらも省略できる)。"
             "画面は「鏡映面」の4択で、XY/XZ/YZ は `base_plane`、「面を選ぶ」を押すと"
             "3Dの面を1つクリックして `plane_face` の参照で送る ——"
             "**共有選択集合には入れない別チャンネル**(`web/src/commands/command.ts` の"
@@ -1108,6 +1183,7 @@ COMMANDS: tuple[Command, ...] = (
                 "number",
                 "全角度(度)。既定 360",
                 required=False,
+                ws="required",
                 dimension=True,
             ),
             Param(

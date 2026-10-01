@@ -140,8 +140,9 @@ def _dispatch_message_keys() -> set[str]:
     """`Server._dispatch` が `message[...]` / `message.get(...)` で読む名前を集める。
 
     **表に載らないコマンドを取り逃さないため**(`open_document` のように個別に捌かれる
-    ものがある)。どのコマンドの引数かまでは分岐を追わないと分からないので、
-    ここは「対象集合の名前が1つも出てこない」ことだけを見るのに使う。
+    ものがある。verb は宣言から引数を取り出すので、ここには現れない)。どのコマンドの
+    引数かまでは分岐を追わないと分からないので、ここは「対象集合の名前が1つも出てこない」
+    ことだけを見るのに使う。
     """
     source = (REPO_ROOT / "duocad" / "net" / "ws.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -240,7 +241,8 @@ def test_the_argument_tables_are_readable():
     args = _server_command_args()
     assert {"fillet", "extrude", "add_line", "export_stl"} <= set(args)
     assert args["add_line"] == ("p0", "p1", "sketch_id")
-    assert "distance" in _dispatch_message_keys()
+    # verb の引数は宣言から取り出すので `_dispatch` には現れない。現れるのは個別に捌く口の引数。
+    assert "body_id" in _dispatch_message_keys()
 
 
 def test_no_websocket_command_takes_a_target_set():
