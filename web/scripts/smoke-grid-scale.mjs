@@ -206,12 +206,16 @@ runSmoke('smoke-grid-scale', { timeout: 60000, mcp: true }, async ({ mcp, browse
 
     const insideExtent = grownExtent - 30 // 旧来の固定100mmを大きく超えるが、いまの範囲の内側
     const outsideExtent = grownExtent + 30
-    if (!(await zoomOutUntilVisible(page, [outsideExtent, 0, 0]))) {
+    // **判定点はX軸の上に置かない。** X軸はXY平面とXZ平面の交線で、そこを指すと2枚が同じレイ距離で
+    // 競い、どちらが勝つかは浮動小数の誤差で決まる(実測: (470,0,0) で XZ が返った)。カメラの側
+    // (−Y)へずらせば、レイは XZ 平面(y=0)を横切る前に XY 平面へ当たる。
+    const offAxis = -40
+    if (!(await zoomOutUntilVisible(page, [outsideExtent, offAxis, 0]))) {
       fail(`ズームアウトを繰り返しても extent+30(${outsideExtent}mm)が画面に映らない`)
     }
     ok(`ズームアウトして外側の判定点(u=${outsideExtent})が画面に映るところまで引いた`)
 
-    const inside = await hoverPlaneAt([insideExtent, 0, 0])
+    const inside = await hoverPlaneAt([insideExtent, offAxis, 0])
     if (inside.plane !== 'XY') {
       fail(
         `拡張後のextent(${grownExtent}mm)の内側(u=${insideExtent})なのにXY平面がホバーできない: ` +
@@ -220,7 +224,7 @@ runSmoke('smoke-grid-scale', { timeout: 60000, mcp: true }, async ({ mcp, browse
     }
     ok(`[D] 旧来の固定100mmを大きく超えた u=${insideExtent} でXY平面をホバーできる(pick範囲がgridExtentに追随)`)
 
-    const outside = await hoverPlaneAt([outsideExtent, 0, 0])
+    const outside = await hoverPlaneAt([outsideExtent, offAxis, 0])
     if (outside.plane === 'XY') {
       fail(`いまのextent(${grownExtent}mm)の外側(u=${outsideExtent})なのにXY平面がホバーできてしまう`)
     }
