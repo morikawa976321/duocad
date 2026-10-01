@@ -1,7 +1,7 @@
 /**
  * 実機での確認 — **当たり半径が画面上のCSSピクセルで一定**であること。
  *
- *   node scripts/smoke-screen-pick.mjs [--port 8993] [--http-port 8994]
+ *   node scripts/smoke-screen-pick.mjs
  *
  * 受入条件1(「ズーム・画角変更・正投影切替後も、同じ px 定数で
  * 体感が大きく変わらない」)は**pytestでは判定できない** —— 純関数テスト

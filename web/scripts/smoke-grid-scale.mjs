@@ -2,7 +2,7 @@
  * 実機での確認 — グリッドの3段(1/10/100mm)が固定で、線間隔pxで連続にフェードし、
  * 表示する平面が状態で決まり、**ピック範囲だけ**が内容の大きさへ追随する。
  *
- *   node scripts/smoke-grid-scale.mjs [--port 8987] [--http-port 8988]
+ *   node scripts/smoke-grid-scale.mjs
  *
  * 完了条件を6つの姿勢で見る(A〜Fは互いに独立):
  *

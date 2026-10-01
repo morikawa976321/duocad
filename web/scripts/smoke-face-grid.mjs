@@ -2,7 +2,7 @@
  * 実機での確認 — 任意面(3基準平面のいずれでもない面)へのスケッチ中、その面にグリッドが
  * 張られること(`20260903-0357-duocad-sketch-face-grid`)。
  *
- *   node scripts/smoke-face-grid.mjs [--port 8991] [--http-port 8992]
+ *   node scripts/smoke-face-grid.mjs
  *
  * 完了条件を実機で見る:
  *

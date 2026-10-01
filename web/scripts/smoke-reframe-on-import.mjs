@@ -2,7 +2,7 @@
  * 実機での確認 — STEPインポート直後にビューポートがモデル全体へ合わせ直され、
  * かつ「初回フレーミングの一回きりの機会」が空振りで焼き切れない。
  *
- *   node scripts/smoke-reframe-on-import.mjs [--step <STEPのパス>] [--port 8975] [--http-port 8976]
+ *   node scripts/smoke-reframe-on-import.mjs [--step <STEPのパス>]
  *
  * 2つの完了条件を別々の姿勢で見る(A/Bは互いに独立した欠陥なので、片方の修正だけでは
  * もう片方の姿勢は緑にならない):

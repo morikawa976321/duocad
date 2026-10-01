@@ -1,7 +1,7 @@
 /**
  * 実機での確認 — 形状最適化(第3のモード)を画面から使い切れる。
  *
- *   node scripts/smoke-optimize-mode.mjs [--port 8955] [--http-port 8956]
+ *   node scripts/smoke-optimize-mode.mjs
  *
  * タスク `20260831-0109-duocad-optimize-mode-frontend` の完了条件を実ブラウザで見る:
  *

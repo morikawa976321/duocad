@@ -1,7 +1,7 @@
 /**
  * 実機での確認 — **選択パネルを消した後も、人が選択を直せて、AIの提案をそのまま実行できる**。
  *
- *   node scripts/smoke-vertex.mjs [--port 8965] [--http-port 8966]
+ *   node scripts/smoke-vertex.mjs
  *
  * `SelectionPanel.svelte`(一覧・「外す」・「全解除」・「承認する」)は無い。
  * その代替が本当に機能することを、**本物のMCPと本物のブラウザ**で見る:

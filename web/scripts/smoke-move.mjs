@@ -1,7 +1,7 @@
 /**
  * 実機での確認 — **スケッチパラメータパネルの後継**が、本物のブラウザで端から端まで動く。
  *
- *   node scripts/smoke-move.mjs [--port 8975] [--http-port 8976]
+ *   node scripts/smoke-move.mjs
  *
  * 右サイドバーの `SketchPanel.svelte`(数値入力欄・モード表示・「正面から見る」・
  * 「抜ける」)は廃止済みで、位置の打ち直しは**3Dの直接選択 + move verb**に置き換わっている。

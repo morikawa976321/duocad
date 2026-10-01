@@ -2,7 +2,7 @@
  * 実ブラウザでの**開発用デバッグ表示**の検査(20260905-1700) ——
  * `?debug=space` / `?debug=anchors` / `?voxel=1` が本体で出ることを見る。
  *
- *   web> node scripts/smoke-optimize-debug.mjs [--port 8907] [--http-port 8908]
+ *   web> node scripts/smoke-optimize-debug.mjs
  *
  * **守るべき最重要の性質は「デモ題材に固定されていないこと」**である —— この検査は
  * **その場で押し出して作った箱2つ**(組み込みの合成題材のどれでもない)を題材にする。

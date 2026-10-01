@@ -1,7 +1,7 @@
 /**
  * 実機での確認 — **カメラ**(画角と座標系)。three.js の描画結果でしか分からないものだけを見る。
  *
- *   node scripts/smoke-camera.mjs [--port 8885] [--http-port 8886]
+ *   node scripts/smoke-camera.mjs
  *
  * 1. **画角(FOV)**: どの画角でも `frameAll` が図形を画面に収める / 画角を変えても注視点付近の
  *    見かけの大きさが変わらない(距離補正) / 0度が本物の正投影である / 正投影でも寄り引きと

@@ -1,7 +1,7 @@
 /**
  * 実ブラウザでの形状最適化の**実行**検査(20260904-1705) —— 条件を置く → 走らせる → 結果が出る。
  *
- *   web> node scripts/smoke-optimize.mjs [--port 8905] [--http-port 8906]
+ *   web> node scripts/smoke-optimize.mjs
  *
  * `smoke-optimize-mode.mjs` は「条件を**置ける**」までを見る。ここはその続きで、
  * **本物のSIMPを端から端まで回して、結果のメッシュボディが画面に出るところまで**を見る。

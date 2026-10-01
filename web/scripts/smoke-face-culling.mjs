@@ -1,7 +1,7 @@
 /**
  * 実機での確認 — **face単位の視錐台+バックフェイスカリングが、深いズームを実際に軽くする**。
  *
- *   node scripts/smoke-face-culling.mjs [--step <STEPのパス>] [--port 8967] [--http-port 8968]
+ *   node scripts/smoke-face-culling.mjs [--step <STEPのパス>]
  *
  * `smoke-resolution.mjs`(円柱1個で「寄ったら細かくなる」を見る)の続きで、こちらは
  * **大きなアセンブリで「寄っても重くならない」**を見る。判定に使うのは
