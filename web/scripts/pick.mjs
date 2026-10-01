@@ -252,6 +252,25 @@ export async function createSketchOnBasePlane(
 }
 
 /**
+ * 編集中のスケッチの (u,v) が**押せる画素**になるまで、実際にホイールでズームアウトする。
+ *
+ * 空のスケッチへ入った直後のカメラは前の視点の距離を引き継ぐので、原点から離れた点は画面の外か、
+ * 右上のビューキューブの下に来ることがある(キューブの矩形は押下を引き取るので
+ * `projectSketchPoint` が null を返す)。スケッチの視点は原点を画面中央に置くので、引けば点は
+ * 中央へ寄ってキューブから外れる。
+ */
+export async function zoomOutUntilSketchPointClickable(page, u, v, { maxNotches = 40, delay = 40 } = {}) {
+  for (let i = 0; i < maxNotches; i += 1) {
+    if (await sketchPointAt(page, u, v, { settle: true })) return
+    const center = await viewportCenter(page)
+    await page.mouse.move(center.x, center.y)
+    await page.mouse.wheel({ deltaY: 120 }) // 正で引く(ズームアウト)
+    await sleep(delay)
+  }
+  fail(`スケッチ平面の点 (${u}, ${v}) が、ズームアウトしても押せる画素にならない`)
+}
+
+/**
  * 指定のワールド座標が画面に映るまで実際にホイールでズームアウトする(`frameAll` は内容の外接箱に
  * 合わせるだけで、ピック範囲全体は画面に入らない)。**`projectPoint` は z だけを見て x/y は
  * クリップしない**ので、映ったかは `.viewport` の rect と突き合わせる。カーソルは刻みごとに
