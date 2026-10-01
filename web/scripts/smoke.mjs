@@ -1288,7 +1288,7 @@ runSmoke('smoke', { attach: true }, async ({ options, browser, url, timeout }) =
     // **3Dで図形を選んで `move_sketch_entities`** に一本化されている。
     // 寸法(半径・幅高さ・角度)の打ち直しは**人間側の口を持たない**ことになり、
     // `set_parameter` はAI(MCP)だけの操作になっている —— そちらの検証は
-    // `tests/test_parameters.py` と `acceptance.mjs` のAI側が持つ。
+    // `tests/test_parameters.py` が持つ。
     //
     // ここで見るのは**位置の直し**である: 円を選んで動かし、領域の重心が同じだけ動くこと
     // (= コアが作り直したものが画面へ届いている)。

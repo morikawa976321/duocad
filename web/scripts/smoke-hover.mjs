@@ -248,8 +248,7 @@ runSmoke('smoke-hover', { timeout: 60000, mcp: true }, async ({ mcp, browser, ur
      * **`params` はスプレッドで写す**(`{ ...item.params }`) —— Svelte 5の`$state`は
      * 入れ子までProxyにするので、そのまま返すとpuppeteerのCDPシリアライズで
      * 入れ子のオブジェクトだけ `{}` に落ちる(engine
-     * `puppeteer-evaluate-drops-nested-svelte5-proxy-fields`。`acceptance.mjs` の
-     * `target.params` と同じ手当て)。
+     * `puppeteer-evaluate-drops-nested-svelte5-proxy-fields`)。
      */
     async function activeSketchEntities() {
       return page.evaluate(() => {

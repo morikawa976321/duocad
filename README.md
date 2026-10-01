@@ -175,7 +175,7 @@ cd web; npm run dev                                 # 画面(5173)
 
 ## 3. 自動検査の走らせ方
 
-**読むとき**: 変更後に検査を選んで実行するとき(pytest・形状最適化受入・実ブラウザsmoke・一括受入チェックの4小節から該当するものだけ)。
+**読むとき**: 変更後に検査を選んで実行するとき(pytest・形状最適化受入・実ブラウザsmokeの3小節から該当するものだけ)。
 
 ### pytest（コア・MCPの契約）
 
@@ -272,18 +272,9 @@ STEPを読む smoke は `web/scripts/models.mjs` の `PC_CASE_STEP` / `HANGER_BA
 `smoke-features` / `smoke-files` / `smoke-regions` / `smoke-svg` / `smoke-toast` だけ**で、
 MCP の stdio が要る本に渡すと harness が断る（MCP が要る節は `smoke-files` / `smoke-regions` でも失敗になる）。
 
-### 一括受入チェック（人間/AI ＋ 交互操作）
-
-```powershell
-node web\scripts\acceptance.mjs
-```
-
-MCPとWebSocketを1プロセスで持つサーバを自分で起動し、**人間側はブラウザの本物のクリックとキー、
-AI側は本物のJSON-RPC**で `acceptance.mjs` の `VERBS` を叩く（`set_parameter` の人間側だけは口が無いので空欄）。結果はJSONでstdout末尾に出る。
-**形状最適化の条件verbは `web/scripts/smoke-optimize-mode.mjs` が個別の実機smokeで見る**（到達表は [docs/INITIAL_PLAN.md](docs/INITIAL_PLAN.md) §0 参照）。
-
-**❌ が1つでもあれば終了コード1で終わる。** ただし**途中では止めない** ——
-全セクションを最後まで走らせて RESULT_JSON を出し切ってから、`failed[]` を見て終了コードだけを決める。
+**verbごとの「人間側/AI側の両方で動く」を1本で通す検査は持たない。** AI側（MCP）の契約は pytest
+（`tests/test_mcp_verbs.py` ほか）、人間側のUIは verb 別の smoke、交互操作（AIが提案 → 人が直す → AIが読む）は
+`smoke-mcp.mjs`、カメラ（画角・Z-up）は `smoke-camera.mjs` が持つ。
 
 ---
 
@@ -545,7 +536,7 @@ duocad/
   tests/                 pytest。README.md はモジュール単位のAPI契約リファレンス
   web/                   frontend（Svelte 5 + Vite）
     src/                 画面
-    scripts/             実ブラウザの検査（smoke*.mjs / acceptance.mjs）と撮影（screenshot.mjs:
+    scripts/             実ブラウザの検査（smoke*.mjs）と撮影（screenshot.mjs:
                          空の文書とモデルを読んだ画面を --tag 付きで撮る。見た目の前後比較用）。共有部品は
                          harness.mjs（骨格）／server.mjs（サーバの起動・停止）／browser.mjs（ブラウザ選択・起動）／
                          pick.mjs（指す手）／mcp-client.mjs（MCPクライアント）／args.mjs／models.mjs（STEPのパス）
