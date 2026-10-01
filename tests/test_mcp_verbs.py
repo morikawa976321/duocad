@@ -30,6 +30,7 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from duocad import kernel, kernel_sketch, query
 from duocad.catalog import COMMANDS
 from duocad.document import Body
+from duocad.entry import entry_for
 from duocad.mcp_server import DocumentTools, McpServer
 from duocad.selection import set_visible
 from duocad.server import Session
@@ -155,7 +156,8 @@ def test_every_argument_is_typed_and_documented(server: McpServer):
 
 
 def test_the_published_arguments_are_exactly_what_the_implementation_accepts(server: McpServer):
-    """配る引数(名前・必須)が `DocumentTools` のメソッドの引数(名前・既定値の有無)と一致する。
+    """配る引数(名前・必須)が実体の引数(名前・既定値の有無)と一致する。実体は `DocumentTools` に
+    同じ綴りのメソッドがあればそれ、無ければ verb の入口(`duocad/entry.py`)。
 
     落ちたら、AIに見せた引数を実体が受け取れない(`TypeError` → `internal`)か、
     実体が受け取る引数・省略できる引数をAIに見せていない(`catalog` の宣言と実体のずれ)。
@@ -165,11 +167,10 @@ def test_the_published_arguments_are_exactly_what_the_implementation_accepts(ser
         schema = tool["inputSchema"]
         required = set(schema.get("required") or [])
         published = {name: name in required for name in (schema.get("properties") or {})}
-        parameters = inspect.signature(getattr(DocumentTools, tool["name"])).parameters
+        own = getattr(DocumentTools, tool["name"], None)
+        parameters = list(inspect.signature(own or entry_for(tool["name"])).parameters.items())[1:]
         accepted = {
-            name: parameter.default is inspect.Parameter.empty
-            for name, parameter in parameters.items()
-            if name != "self"
+            name: parameter.default is inspect.Parameter.empty for name, parameter in parameters
         }
         if published != accepted:
             mismatched[tool["name"]] = {"配る(必須か)": published, "実体(必須か)": accepted}

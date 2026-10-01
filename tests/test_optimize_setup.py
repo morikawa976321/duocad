@@ -244,10 +244,10 @@ def test_the_conflict_is_an_invalid_argument_over_mcp(session: Session) -> None:
     body = _box(session)
     tools = DocumentTools(session)
     _select(session, _body_refs(body))
-    tools.set_preserve_bodies()
+    tools.call("set_preserve_bodies", {})
 
     with pytest.raises(optimize.RoleConflict) as caught:
-        tools.set_exclude_bodies()
+        tools.call("set_exclude_bodies", {})
     envelope = tools.error_envelope("set_exclude_bodies", caught.value)
     assert envelope["code"] == "invalid_argument", envelope
 
@@ -809,7 +809,7 @@ def test_the_websocket_and_mcp_paths_both_run_the_verb(verb: str) -> None:
             answer = send_one(made, {"cmd": verb, **arguments})
             assert answer["type"] == "state", answer
         else:
-            getattr(DocumentTools(made), verb)(**arguments)
+            DocumentTools(made).call(verb, arguments)
         assert made.document.log.entries[-1].verb == verb, "操作ログに載っていない"
         return read(_optimize(made), body)
 

@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import json
 import os
 import sys
@@ -76,6 +77,7 @@ from . import (
     selection,
     sketch,
 )
+from .entry import entry_for
 from .session import DocumentBusy
 from .server import (
     DEFAULT_WEB_DIST,
@@ -96,6 +98,11 @@ SERVER_VERSION = "0.0.1"
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
 JSONRPC_VERSION = "2.0"
+
+#: verb の成功封筒のうち、入口の返したもので上書きしないキー。`verb` / `seq` は封筒が持ち、
+#: `changed_bodies` は版の前後差から導き(`DocumentTools._changed_bodies`)、`client_op` は
+#: 画面への確認応答で AI には意味が無い。
+_ENVELOPE_OWNED_KEYS = frozenset({"verb", "seq", "changed_bodies", "client_op"})
 
 # JSON-RPC 2.0 の標準エラーコード
 PARSE_ERROR = -32700
@@ -159,14 +166,21 @@ class DocumentTools:
         return catalog.tool_descriptors()
 
     def _build_handlers(self) -> dict:
-        """ツール名 -> 実体のメソッド(`__init__` から1度だけ組む)。
+        """ツール名 -> 実体(`__init__` から1度だけ組む)。
 
-        **宣言に載っている名前と同じ綴りのメソッドを引く**(「ツール名 == verb名」の規律が
-        あるので対応表は導出で足りる)。**`__init__` の時点で組む**ので、宣言に足したのに
-        メソッドを書き忘れると `DocumentTools` を作った瞬間に AttributeError になる ——
-        AIがそのツールを呼ぶまで気づかない、という失敗の仕方をしない。
+        **同じ綴りのメソッドがここにあればそれ**(問い合わせ・選択・可視性・書き出し・履歴と、
+        応答に何かを足す verb)。無ければ verb の入口(`duocad/entry.py`)へ渡す `_apply_verb`。
+        **`__init__` の時点で組む**ので、宣言に足したのに入口もメソッドも無ければ `DocumentTools` を
+        作った瞬間に KeyError になる —— AIがそのツールを呼ぶまで気づかない、という失敗の仕方をしない。
         """
-        return {name: getattr(self, name) for name in catalog.tool_names()}
+        handlers = {}
+        for name in catalog.tool_names():
+            own = getattr(self, name, None)
+            if own is None:
+                entry_for(name)
+                own = functools.partial(self._apply_verb, name)
+            handlers[name] = own
+        return handlers
 
     def call(self, name: str, arguments: dict) -> dict:
         """ツールを実行して結果の辞書を返す。未知の名前は KeyError。
@@ -632,374 +646,41 @@ class DocumentTools:
         """
         return self.session.measure()
 
-    def _apply_logged(self, before: dict[str, int], applied: dict, **extra: Any) -> dict:
-        """`Session` が返した applied から封筒を作り、作ったもののID等を足す。"""
+    # ------------------------------------------------------------------ verb(ログに1行積むツール)
+    def _apply_verb(self, verb: str, **arguments: Any) -> dict:
+        """verb を掛けて成功封筒を返す。**専用メソッドを持たない verb のツールは全部ここを通る。**
+
+        実体は `Session.apply`(= verb のモジュールの入口。`duocad/entry.py`)で、ブラウザが
+        WebSocket から掛けるのと同じ1本である。封筒には入口が返したもの(作ったものの ID・
+        解決後の数値など)をそのまま足す。**`changed_bodies` だけは入口の申告を使わず**、
+        `Session.body_revision` の前後差から導く(契約2)。
+        """
+        before = self._revision_snapshot()
+        applied = self.session.apply(verb, arguments)
         envelope = self._verb_envelope(applied["verb"], int(applied["seq"]), before)
-        envelope.update(extra)
+        envelope.update(
+            {key: value for key, value in applied.items() if key not in _ENVELOPE_OWNED_KEYS}
+        )
         return envelope
 
-    # ------------------------------------------------------------------ スケッチ
-    def sketch_create(self, base_plane: Optional[str] = None) -> dict:
-        """スケッチを作る。`base_plane` 省略時は**確定選択の面**(ちょうど1枚)に貼る。
-
-        **解決は `Session.sketch_create` が持つ** —— 2箇所に同じ「省略時は確定選択の面」を
-        持つと、片方だけ直したときにAIと人で貼る先が食い違う。
+    def import_svg(self, sketch_id: str, path: str, scale: Optional[float] = None) -> dict:
+        """SVG の取り込み。**`hint` で領域の数を知らせる** —— SVG は1枚で複数の輪郭を持つのが普通で
+        (文字の内側の穴、離れた図形)、黙って結果だけ返すと、AI は領域が1つだけのつもりで押し出しに進む。
         """
-        before = self._revision_snapshot()
-        applied = self.session.sketch_create(
-            None if base_plane is None else str(base_plane)
-        )
-        return self._apply_logged(before, applied, sketch_id=applied["sketch_id"])
-
-    def sketch_create_offset(
-        self, distance: float, base_plane: Optional[str] = None
-    ) -> dict:
-        """オフセット平面にスケッチを作る。`base_plane` 省略時は**確定選択の面**(ちょうど1枚)
-        を基準に、その法線方向へ `distance` だけ離れた平面に貼る。
-
-        **解決は `Session.sketch_create_offset` が持つ**(`sketch_create` と同じ理由)。
-        """
-        before = self._revision_snapshot()
-        applied = self.session.sketch_create_offset(
-            float(distance), None if base_plane is None else str(base_plane)
-        )
-        return self._apply_logged(before, applied, sketch_id=applied["sketch_id"])
-
-    def add_line(self, sketch_id: str, p0: list, p1: list) -> dict:
-        before = self._revision_snapshot()
-        applied = self.session.add_line(str(sketch_id), p0, p1)
-        return self._apply_logged(before, applied, entity_id=applied["entity_id"])
-
-    def add_circle(self, sketch_id: str, center: list, radius: float) -> dict:
-        before = self._revision_snapshot()
-        applied = self.session.add_circle(str(sketch_id), center, float(radius))
-        return self._apply_logged(before, applied, entity_id=applied["entity_id"])
-
-    def add_rectangle(
-        self, sketch_id: str, corner: list, width: float, height: float, angle: float = 0.0
-    ) -> dict:
-        before = self._revision_snapshot()
-        applied = self.session.add_rectangle(
-            str(sketch_id), corner, float(width), float(height), float(angle)
-        )
-        return self._apply_logged(before, applied, entity_id=applied["entity_id"])
-
-    def add_arc(
-        self, sketch_id: str, center: list, radius: float, start_deg: float, end_deg: float
-    ) -> dict:
-        before = self._revision_snapshot()
-        applied = self.session.add_arc(
-            str(sketch_id), center, float(radius), float(start_deg), float(end_deg)
-        )
-        return self._apply_logged(before, applied, entity_id=applied["entity_id"])
-
-    # ------------------------------------------------------------------ フィーチャ
-    def extrude(self, distance: float, mode: str = "join", body_id: Optional[str] = None) -> dict:
-        """**確定選択の領域**を押し出す(選択から取るのは `Session.extrude`)。
-
-        `body_id` だけは引数のまま —— 「どのBodyへ足す/から引くか」は対象集合ではない。
-        `mode="new"` は行き先を持たないので `body_id` を受け付けない。
-        """
-        before = self._revision_snapshot()
-        applied = self.session.extrude(
-            float(distance), mode=str(mode), body_id=body_id
-        )
-        return self._apply_logged(before, applied)
-
-    def fillet(self, radius) -> dict:
-        """**確定選択の辺**を丸める。`radius` は数値か辺ごとのリスト。
-
-        辺と対象Bodyの取り出しは `Session.fillet`(`selection.require_edges`)に任せる。
-        WebSocket側も同じラッパを通るので、選択→辺の変換はコアに1つしかない。
-        """
-        before = self._revision_snapshot()
-        applied = self.session.fillet(radius)
-        return self._apply_logged(before, applied)
-
-    def chamfer(self, distance) -> dict:
-        """**確定選択の辺**を面取りする(`fillet` と同じ規律)。"""
-        before = self._revision_snapshot()
-        applied = self.session.chamfer(distance)
-        return self._apply_logged(before, applied)
-
-    def boolean_body(self, target_ref, mode) -> dict:
-        """**ターゲット(面参照)に確定選択のツールボディ群**を作用させる。"""
-        before = self._revision_snapshot()
-        applied = self.session.boolean_body(target_ref, mode)
-        return self._apply_logged(before, applied)
-
-    def pattern_rectangular(
-        self, sketch_id: str, entities: list, dx: float, dy: float, nx: int, ny: int
-    ) -> dict:
-        """図形の矩形反復。**スケッチの図形は選択集合の項目ではない**ので引数で受ける。"""
-        before = self._revision_snapshot()
-        applied = self.session.pattern_rectangular(
-            str(sketch_id), entities, float(dx), float(dy), int(nx), int(ny)
-        )
-        return self._apply_logged(before, applied, pattern_id=applied["pattern_id"])
-
-    def pattern_circular(
-        self,
-        sketch_id: str,
-        entities: list,
-        center: list,
-        count: int,
-        total_angle: float = 360.0,
-        rotate_copies: bool = True,
-    ) -> dict:
-        before = self._revision_snapshot()
-        applied = self.session.pattern_circular(
-            str(sketch_id),
-            entities,
-            center,
-            int(count),
-            total_angle=float(total_angle),
-            rotate_copies=bool(rotate_copies),
-        )
-        return self._apply_logged(before, applied, pattern_id=applied["pattern_id"])
-
-    def move_sketch_entities(
-        self,
-        dx: Optional[float] = None,
-        dy: Optional[float] = None,
-        copy: bool = False,
-        mode: str = "translate",
-        angle: Optional[float] = None,
-        center: Any = None,
-        center_entity: Any = None,
-    ) -> dict:
-        """**確定選択のスケッチの点・辺**を動かす / 複製する(選択から取るのは `Session`)。
-
-        **数値へ潰さずそのまま渡す** —— `mode="rotate"` では dx/dy が省かれるので、
-        ここで `float(None)` にすると「モードが取らない引数を断る」検査より先に落ちる。
-        """
-        before = self._revision_snapshot()
-        applied = self.session.move_sketch_entities(
-            dx,
-            dy,
-            copy=bool(copy),
-            mode=str(mode),
-            angle=angle,
-            center=center,
-            center_entity=center_entity,
-        )
-        return self._apply_logged(
-            before, applied, copy=applied["copy"], created=applied["created"]
-        )
-
-    def move_body(
-        self,
-        dx: Optional[float] = None,
-        dy: Optional[float] = None,
-        dz: Optional[float] = None,
-        copy: bool = False,
-        mode: str = "translate",
-        angle: Optional[float] = None,
-        axis_edge: Any = None,
-        axis_point: Any = None,
-        axis_dir: Any = None,
-        center_vertex: Any = None,
-    ) -> dict:
-        """**確定選択の面/辺/頂点が属するボディ**を動かす / 複製する(逆引きは `Session`)。
-
-        **数値へ潰さずそのまま渡す**(`move_sketch_entities` と同じ理由)。
-        """
-        before = self._revision_snapshot()
-        applied = self.session.move_body(
-            dx,
-            dy,
-            dz,
-            copy=bool(copy),
-            mode=str(mode),
-            angle=angle,
-            axis_edge=axis_edge,
-            axis_point=axis_point,
-            axis_dir=axis_dir,
-            center_vertex=center_vertex,
-        )
-        return self._apply_logged(
-            before, applied, copy=applied["copy"], created=applied["created"]
-        )
-
-    def mirror_sketch_entities(self, axis: Any) -> dict:
-        """**確定選択のスケッチ図形**を、既存の線分1本(`axis`)を軸に鏡映複製する。
-
-        常に複製する(対象・軸の解決は `Session.mirror_sketch_entities`)。
-        """
-        before = self._revision_snapshot()
-        applied = self.session.mirror_sketch_entities(axis)
-        return self._apply_logged(before, applied, created=applied["created"])
-
-    def envelope_regions(self, radius: float = 0.0, offset: float = 0.0) -> dict:
-        """**確定選択の領域**を包む単一の領域線を、同じスケッチへ足す(実体は `Session.envelope_regions`)。"""
-        before = self._revision_snapshot()
-        applied = self.session.envelope_regions(radius, offset)
-        return self._apply_logged(before, applied, created=applied["created"])
-
-    def mirror_body(self, base_plane: Optional[str] = None, plane_face: Any = None) -> dict:
-        """**確定選択の面/辺/頂点が属するボディ**を、鏡映面に対して鏡映複製する。
-
-        常に複製する(逆引き・鏡映面の検査は `Session.mirror_body`)。
-        """
-        before = self._revision_snapshot()
-        applied = self.session.mirror_body(base_plane=base_plane, plane_face=plane_face)
-        return self._apply_logged(before, applied, created=applied["created"])
-
-    def delete(self) -> dict:
-        """**確定選択のボディとスケッチ図形**をまとめて消す(逆引きと畳み込みは `Session`)。
-
-        混ざった選択でも1回で処理し、undoは1回で全部戻る。領域が混ざっていると
-        `selection_kind_mismatch`(黙って残りだけ消さない)。
-        """
-        before = self._revision_snapshot()
-        applied = self.session.delete()
-        return self._apply_logged(
-            before,
-            applied,
-            bodies=applied["bodies"],
-            entities=applied["entities"],
-        )
-
-    # ------------------------------------------------------------------ 形状最適化の条件
-    #
-    # **4つとも集合代入**で、対象は確定選択から取る(引数はhowだけ)。**確定選択が空でも
-    # 通る** —— 空の代入が「その役割を全部外す」を意味するので、解除専用のツールが要らない。
-    # 排他は先勝ちで、衝突すると `invalid_argument`(`optimize.RoleConflict` は ValueError の
-    # 派生)。どのボディ・面が衝突したかは例外の文面が名指しする。
-    def set_preserve_bodies(self) -> dict:
-        """**確定選択のボディ**を保持ソリッドの集合にする(集合代入は `Session`)。"""
-        before = self._revision_snapshot()
-        applied = self.session.set_preserve_bodies()
-        return self._apply_logged(before, applied, bodies=applied["bodies"])
-
-    def set_exclude_bodies(self) -> dict:
-        """**確定選択のボディ**を除外ソリッドの集合にする(集合代入は `Session`)。"""
-        before = self._revision_snapshot()
-        applied = self.session.set_exclude_bodies()
-        return self._apply_logged(before, applied, bodies=applied["bodies"])
-
-    def set_fixtures(self) -> dict:
-        """**確定選択の面**を拘束面の集合にする(集合代入は `Session`)。"""
-        before = self._revision_snapshot()
-        applied = self.session.set_fixtures()
-        return self._apply_logged(before, applied, face_count=applied["face_count"])
-
-    def set_loads(self, magnitude: float, direction: Any) -> dict:
-        """**確定選択の面だけ**に大きさ[N]と向きを焼く(上書き代入。選択外の荷重面は残る)。
-
-        向きは `"normal"` / `"-normal"` / `[x, y, z]`。**ベクトルは単位化して控える**ので、
-        返る `direction_vector` は打った値と長さが違うことがある(向きだけを使う)。
-
-        `face_count` は**確定後の荷重面の総数**、`applied_count` はこの呼び出しで焼いた枚数。
-        """
-        before = self._revision_snapshot()
-        applied = self.session.set_loads(magnitude, direction)
-        return self._apply_logged(
-            before,
-            applied,
-            face_count=applied["face_count"],
-            applied_count=applied["applied_count"],
-            magnitude=applied["magnitude"],
-            direction=applied["direction"],
-            direction_vector=applied["direction_vector"],
-        )
-
-    def clear_loads(self) -> dict:
-        """**確定選択の面**を荷重から外す(選択が空なら全部外す)。"""
-        before = self._revision_snapshot()
-        applied = self.session.clear_loads()
-        return self._apply_logged(before, applied, face_count=applied["face_count"])
-
-    # ------------------------------------------------------------------ ボディ・パラメータ
-    def set_parameter(self, name: str, value: float) -> dict:
-        """名前つきの寸法を書き換える(形が追随する)。
-
-        **どの名前がどの寸法か**は `describe_document` の
-        `sketches[].entities[].parameters` から辿れること —— 辿れないとAIは
-        `d1` `d2` … を総当たりするしかない。
-        """
-        before = self._revision_snapshot()
-        applied = self.session.set_parameter(str(name), float(value))
-        return self._apply_logged(
-            before,
-            applied,
-            name=applied["name"],
-            value=applied["value"],
-            previous=applied["previous"],
-        )
-
-    # ------------------------------------------------------------------ 入出力
-    def add_mesh_body(
-        self, positions: list, indices: list, name: Optional[str] = None
-    ) -> dict:
-        """三角形メッシュのボディを1つ足す(verb `add_mesh_body`)。
-
-        **足したメッシュは編集できない**(押し出し・フィレット・面取りは断られる)。
-        できるのは 表示 / STLへの書き出し / 削除 / 表示の切り替え だけである
-        —— 理由は `duocad/meshbody.py` のモジュールdocstring。
-
-        **三角形をそのまま操作ログへ積む**ので、数万三角形を渡すとモデルのJSONが数MBになる。
-        AIが手で三角形を並べるための口ではなく、**計算した結果を入れる**ための口である。
-        """
-        before = self._revision_snapshot()
-        applied = self.session.add_mesh_body(positions, indices, name)
-        return self._apply_logged(before, applied, body_id=applied["body_id"])
-
-    def import_step(self, path: str) -> dict:
-        """STEPを読み、**編集可能なボディまで作る**(verb `import_step`)。
-
-        読み込んだらそのまま編集できる —— **STEPの読み込みはこの1本だけ**で、読んだ後に
-        編集可能化を部品ごとに打つ手は無い(PCケースなら27回になっていた)。何部品あっても
-        ログ1行・undo1回・MCP1呼び出しである。
-
-        **ツール名は verb 名と同じ綴りにしてある。** `describe_document` のログに出る
-        verb 名と呼べるツール名が違うと、AIに対応表を推測させることになる ——
-        したがって**1つのツールを引数で複数のverbに打ち分けてはならない**。verbが1本に
-        なった今もこの規律は同じで、読み込みのverbを増やすならツールも同じ綴りで増やす。
-        """
-        before = self._revision_snapshot()
-        applied = self.session.import_step(path)
-        return self._apply_logged(before, applied, body_ids=list(applied["body_ids"]))
-
-    def import_svg(
-        self,
-        sketch_id: str,
-        path: str,
-        scale: Optional[float] = None,
-    ) -> dict:
-        """SVGの図形を**`sketch_id` が指す既存のスケッチへ**取り込む(verb `import_svg`)。
-
-        **新しいスケッチは作らない** —— 貼る先は `sketch_id` が指すスケッチの
-        平面で決まる。スケッチが無ければ先に `sketch_create` で作ること。
-
-        取り込んだ図形はその時点で領域として使えるので、続けて `propose_selection` →
-        `commit_selection` → `extrude` を打てる。**`hint` で領域の数を知らせる** ——
-        SVGは1枚で複数の輪郭を持つのが普通で(文字の内側の穴、離れた図形)、
-        黙って結果だけ返すと、AIは領域が1つだけのつもりで押し出しに進む。
-        """
-        before = self._revision_snapshot()
-        applied = self.session.import_svg(
-            str(sketch_id),
-            path,
-            None if scale is None else float(scale),
-        )
-        entity_ids = applied["entity_ids"]
+        arguments = {"sketch_id": sketch_id, "path": path}
+        if scale is not None:
+            arguments["scale"] = scale
+        envelope = self._apply_verb("import_svg", **arguments)
         region_count = len(region.regions(self.session.document, str(sketch_id)))
-        return self._apply_logged(
-            before,
-            applied,
-            sketch_id=str(sketch_id),
-            entity_ids=list(entity_ids),
-            source_name=applied["source_name"],
-            entity_count=applied["entity_count"],
-            region_count=region_count,
-            hint=(
-                f"領域が {region_count} 個ある。押し出す前に describe_document の "
-                "include_regions で面積を見て、対象を propose_selection で選ぶこと"
-                "(文字の内側の穴も1つの領域として数える)"
-            ),
+        envelope["region_count"] = region_count
+        envelope["hint"] = (
+            f"領域が {region_count} 個ある。押し出す前に describe_document の "
+            "include_regions で面積を見て、対象を propose_selection で選ぶこと"
+            "(文字の内側の穴も1つの領域として数える)"
         )
+        return envelope
 
+    # ------------------------------------------------------------------ 書き出し
     def export_step(self, path: str) -> dict:
         """STEPを書き出す。**ログに載らない**(文書を変えないので verb ではない)。
 
