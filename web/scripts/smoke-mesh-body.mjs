@@ -15,15 +15,15 @@
  *   2. **部品一覧に出る**(種別で濾されていない)
  *   3. **viewportが三角形を持っている**(`getGeometry` の positions/indices が渡した通り)
  *   4. **画面に投影できる**(`projectFace` が座標を返す = THREE.Mesh が実在して描かれている)
- *   5. **編集は断られる**(`move_body` がメッセージ付きのエラーになる)
- *   6. **表示の切り替えが効く**(隠すと geometry が消える)
- *   7. **B-repと混在したままSTLへ書ける**(両方の三角形が1本に入る)
- *   8. ブラウザのコンソールにエラーが出ていない
+ *   5. **表示の切り替えが効く**(隠すと geometry が消える)
+ *   6. ブラウザのコンソールにエラーが出ていない
+ *
+ * 編集が断られること・STLへ書けること・消せることはブラウザに現れないので、ここでは見ない
+ * (`tests/test_mesh_body.py`)。
  *
  * **サーバはこのスクリプトが自分で立てる**(`web/scripts/server.mjs`)。
  * 既に立っているものへ繋ぐときだけ `--url` を渡す(そのときは `--port` も合わせること)。
  */
-import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
 import { fail, ok } from './args.mjs'
@@ -123,33 +123,7 @@ runSmoke('smoke-mesh-body', { mcp: true }, async ({ mcp, browser, url, timeout, 
     ok(`画面に出ている(投影先 x=${projected.x.toFixed(0)} y=${projected.y.toFixed(0)})`)
     await page.screenshot({ path: path.join(outDir, 'mesh-body.png') })
 
-    // ------------------------------------------------------------ 5. 編集は断られる
-    //
-    // **`move_body` で叩く。** 他の編集verb(`extrude` の面 / `fillet` / `chamfer`)は
-    // 面・辺の確定選択を要求し、メッシュボディは面も辺も選べない(`select_face` が断る)ので、
-    // AIの側からはそもそも到達できない —— 断りの実体(`_common.editable_body`)へ届く
-    // 唯一の外からの経路が、**ボディ単位の選択を取る `move_body`** である。
-    await mcp.callTool('propose_selection', {
-      refs: [{ body: meshBodyId, kind: 'body', index: null }],
-    })
-    await mcp.callTool('commit_selection')
-    // `callTool` は失敗を例外にするので、断り文はそこから読む(生の応答を返す口は無い)。
-    let refusedText = ''
-    try {
-      await mcp.callTool('move_body', { dx: 1.0, dy: 0.0, dz: 0.0 })
-    } catch (error) {
-      refusedText = String(error.message)
-    }
-    if (refusedText === '') fail('メッシュボディに move_body が通ってしまった')
-    if (!refusedText.includes('mesh body')) {
-      fail(`編集が断られない(または文言が違う): ${refusedText.slice(0, 400)}`)
-    }
-    if (!refusedText.includes('export_stl')) {
-      fail(`断り文に「次に何ができるか」が無い: ${refusedText.slice(0, 400)}`)
-    }
-    ok('編集verbはメッセージ付きで断られる(できることも書いてある)')
-
-    // ------------------------------------------------------------ 6. 表示の切り替え
+    // ------------------------------------------------------------ 5. 表示の切り替え
     const epochBefore = await page.evaluate(() => window.__duocad.stateEpoch)
     await mcp.callTool('set_visible', { body_id: meshBodyId, visible: false })
     await page.waitForFunction((before) => window.__duocad.stateEpoch > before, { timeout }, epochBefore)
@@ -160,32 +134,6 @@ runSmoke('smoke-mesh-body', { mcp: true }, async ({ mcp, browser, url, timeout, 
     if (hidden !== false) fail('隠したのに可視のまま')
     await mcp.callTool('set_visible', { body_id: meshBodyId, visible: true })
     ok('表示の切り替えが効く')
-
-    // ------------------------------------------------------------ 7. 混在でSTLへ書ける
-    await mcp.callTool('sketch_create', { base_plane: 'XY' })
-    const stlPath = path.join(outDir, 'mixed.stl')
-    const exported = await mcp.callTool('export_stl', { path: stlPath })
-    if (!exported.path) fail(`export_stl の応答にパスが無い: ${JSON.stringify(exported)}`)
-    const stl = readFileSync(stlPath)
-    const triangles = stl.readUInt32LE(80)
-    if (stl.length !== 84 + 50 * triangles) fail('STLの宣言した三角形数とファイル長が合わない')
-    if (triangles !== OCTA_TRIANGLES) {
-      fail(`STLの三角形数が合わない(期待 ${OCTA_TRIANGLES}): ${triangles}`)
-    }
-    ok(`STLに書ける(${triangles}三角形・${stl.length}バイト。テッセレーションを通していない)`)
-
-    // ------------------------------------------------------------ 8. 消せる
-    // **編集できないボディも消せる**(消せないと、間違えて入れた形を取り除けない)。
-    await mcp.callTool('propose_selection', {
-      refs: [{ body: meshBodyId, kind: 'body', index: null }],
-    })
-    await mcp.callTool('commit_selection')
-    await mcp.callTool('delete')
-    const afterDelete = await mcp.callTool('describe_document')
-    if (afterDelete.bodies.some((body) => body.body_id === meshBodyId)) {
-      fail('メッシュボディが消えていない')
-    }
-    ok('メッシュボディを消せる')
 
     await assertNoAppErrors(page, consoleErrors)
   }
