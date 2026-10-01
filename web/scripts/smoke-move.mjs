@@ -1353,23 +1353,30 @@ runSmoke('smoke-move', { timeout: 60000 }, async ({ browser, url, timeout }) => 
       )
       // **候補が出ていなければ指しようがない** —— 頂点マーカーは既定では選択に入った分しか
       // 出ないので、待ち受けている間だけ候補を出す配線がここで効く。
-      // **このボディの候補が届くまで待つ**(1つでも出ていれば、では足りない。頂点の座標は
-      // ボディごとにサーバから届くので、負荷が高いと別のボディのぶんだけが先に出ている瞬間があり、
-      // そこで控えを取ると、後で指した頂点の座標が控えに無い)。
       await waitFor(
         (id) => (window.__duocad.vertexMarkers ?? []).some((marker) => marker.bodyId === id),
         '中心を指せるのに、このボディの頂点マーカーが出ない(指せる的が画面に無い)',
         [bodyId],
       )
-      // **指す前に控える。** 指した瞬間に待ち受けが降り、候補のマーカーは消える
-      // (出しているのは「待っている間だけ」という規律そのもの)。
-      const candidates = await page.evaluate(() =>
-        JSON.parse(JSON.stringify(window.__duocad.vertexMarkers)),
-      )
+      // **座標は、指す頂点ごとに押す直前に控える。** 指した瞬間に待ち受けが降り、候補のマーカーは
+      // 消える(出しているのは「待っている間だけ」という規律そのもの)。先にまとめて控えると、
+      // 候補が届ききる前の一覧を掴むことがある(実測: 並列で流したとき、指せた頂点が控えに無かった)。
       let centreVertex = null
+      let vertexPoint = null
       for (const vertexIndex of [1, 2, 3, 4, 5, 6, 7, 8]) {
         const at = await screenOf(page, 'projectVertex', bodyId, vertexIndex)
         if (!at) continue
+        const point = await page.evaluate(
+          (id, index) => {
+            const marker = (window.__duocad.vertexMarkers ?? []).find(
+              (item) => item.bodyId === id && item.vertexIndex === index,
+            )
+            return marker ? [...marker.point] : null
+          },
+          bodyId,
+          vertexIndex,
+        )
+        if (point === null) continue // 候補として出ていない頂点は指せない
         await page.mouse.click(at.x, at.y)
         try {
           await page.waitForFunction(
@@ -1380,16 +1387,13 @@ runSmoke('smoke-move', { timeout: 60000 }, async ({ browser, url, timeout }) => 
             vertexIndex,
           )
           centreVertex = vertexIndex
+          vertexPoint = point
           break
         } catch {
           // その頂点は取れなかった(裏に回っている)。次を試す
         }
       }
       if (centreVertex === null) fail('回転中心の頂点を1つもクリックで指せない')
-      const vertexPoint = candidates.find(
-        (marker) => marker.bodyId === bodyId && marker.vertexIndex === centreVertex,
-      )?.point
-      if (!vertexPoint) fail(`指した頂点 ${centreVertex} の座標が控えの中に無い`)
       const withCentre = await page.evaluate(() =>
         JSON.parse(JSON.stringify(window.__duocad.ghostInfo().bodies[0])),
       )
